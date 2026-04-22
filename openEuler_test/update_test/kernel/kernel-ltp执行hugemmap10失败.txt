@@ -1,0 +1,59 @@
+# 标题
+kernel "ltp执行hugemmap10失败"
+
+# 基本信息
+- 测试用例: hugemmap10
+- 系统版本: openEuler-24.03-LTS-SP3(aarch64)
+- 是否问题：否
+- 关联issue：https://gitee.com/src-openeuler/kernel/issues/IC0BUB
+- 是否必现：否
+
+# 问题现象
+ltp执行过程中报错：Bad HugePages_Total: expected 1, actual 2
+
+# 错误日志
+
+'''
+<<<test start>>>
+tag=hugemmap10 stime=1744419570
+cmdline="hugemmap10"
+contacts=""
+analysis=exit
+<<<test_output>>>
+incrementing stop
+tst hugepage.c:84: TINFO: 3 hugepage(s) reserved
+tst_test.c:1049: TINFO: Mounting none to /tmp/ltp-6gN5QjoNWb/LTP_hugkmesS5/hugetlbfs fstyp=hugetlbfs flags=0
+tst test.c:1709: TINFO: LTP version: 20240129
+tst test.c:1593: TINFO: Timeout per run is 0h 00m 30s
+hugemmap10.c:388:TINFO: Base pool size: 0
+hugemmap10.c:315: TINFO: Clean...
+hugemmap10.c:366: TINFO:OK
+hugemmap10.c:315: TINFO: Untouched, shared...
+hugemmap10.c:366: TINFO:OK
+hugemmap10.c:315: TINFO: Untouched, private...
+hugemmap10.c:366: TINFO:OK
+hugemmap10.c:315: TINFO: Touched, shared...hugemmap10.c:366: TINFO: OK
+hugemmap10.c:315: TINFO: Touched, private...hugemmap10.c:366: TINFO:OK
+hugemmap10.c:388: TINFO: Base pool size: 1hugemmap10.c:315: TINFO: Clean...
+hugemmap10.c:366: TINFO:OK
+hugemmap10.c:315: TINFO:Untouched,shared...
+hugemmap10.c:333: TFAIL: While doing munmap shared after touch: Bad HugePages_ Total: expected 1, actual 2hugemmap10.c:333: TFAIL: While doing munmap shared after touch: Bad HugePages Free: expected 1, actual 2hugemmap10.c:333: TFAIL: While doing munmap shared after touch: Bad HugePages Surp: expected 0, actual 1Summary:
+passed0
+failed3
+broken0
+skipped0
+warnings0
+<<<execution status>>>
+initiation status="ok"
+duration=0 termination type=exited termination id=1 corefile=no
+cutime=0 cstime=35
+<<<test end>>>
+'''
+
+# 问题根因
+1. 用例成功时，是在node0上申请了两个页，一个预留大页，一个surplus大页。释放一个页后，surplus大页计数减少。
+用例失败时，是在node1上申请了一个预留大页，在node0上申请了一个surplus大页，释放的是node1的页，非node0，所以surplus计数无法减少。
+分配大页未指定节点，因此无法限制分配在哪个节点的，用例失败情形是正常现象。
+
+# 解决方案
+1. 在用例初始化时通过numa_bind()将进程绑定到单个NUMA节点，确保所有大页分配在同一节点。
