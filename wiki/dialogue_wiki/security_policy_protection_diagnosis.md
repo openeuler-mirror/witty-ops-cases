@@ -1,11 +1,14 @@
 ---
 name: security_policy_protection_diagnosis
-description: >
-  来源于 Skill: linux-security-diagnosis 的参考文档。
+description: 安全策略与防护诊断参考，涵盖SELinux故障定位、AppArmor分析、AVC拒绝事件解读、seccomp阻断排查方法。
+
 keywords:
-  - security_policy_protection_diagnosis.md
-references:
-  - /home/witty-ops-cases/wiki/linux-security-diagnosis/references/security_policy_protection_diagnosis.md
+  - 安全策略
+  - SELinux
+  - AppArmor
+  - AVC
+  - seccomp
+  - 防护
 ---
 
 # S5 — 安全策略与防护：诊断参考

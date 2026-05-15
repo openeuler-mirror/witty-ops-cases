@@ -1,11 +1,14 @@
 ---
 name: resource_oom
-description: >
-  来源于 Skill: docker-fault-analysis 的参考文档。
+description: OOM/资源限制故障诊断经验，涵盖OOM Killer触发分析、磁盘空间不足、文件描述符限制等诊断方法。
+
 keywords:
-  - resource_oom.md
-references:
-  - /home/witty-ops-cases/wiki/docker-fault-analysis/references/resource_oom.md
+  - OOM
+  - 资源限制
+  - 磁盘空间
+  - 文件描述符
+  - fd限制
+  - ExitCode
 ---
 
 # OOM / 资源限制故障诊断经验

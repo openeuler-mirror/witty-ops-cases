@@ -1,11 +1,15 @@
 ---
 name: FS_scenario_analysis
-description: >
-  来源于 Skill: offline-file-system-fault-diagnosis 的参考文档。
+description: 文件系统六大故障场景的专项分析流程，包括XFS/ext4/NFS损坏修复、只读恢复、权限修复等详细诊断步骤。
+
 keywords:
-  - FS_scenario_analysis.md
-references:
-  - /home/witty-ops-cases/wiki/offline-file-system-fault-diagnosis/references/FS_scenario_analysis.md
+  - 文件系统
+  - 场景分析
+  - XFS
+  - ext4
+  - NFS
+  - 损坏修复
+  - 只读
 ---
 
 # 文件系统故障场景专项分析指南

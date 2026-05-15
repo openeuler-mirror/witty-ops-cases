@@ -1,11 +1,14 @@
 ---
 name: permission_control_diagnosis
-description: >
-  来源于 Skill: linux-security-diagnosis 的参考文档。
+description: 权限控制诊断参考，涵盖Linux三层权限叠加（DAC/ACL/MAC）检查优先级、UID/GID映射、文件权限修复方法。
+
 keywords:
-  - permission_control_diagnosis.md
-references:
-  - /home/witty-ops-cases/wiki/linux-security-diagnosis/references/permission_control_diagnosis.md
+  - 权限控制
+  - ACL
+  - 文件权限
+  - UID
+  - GID
+  - 权限诊断
 ---
 
 # S2 — 权限控制：诊断参考

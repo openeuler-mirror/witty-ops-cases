@@ -1,11 +1,14 @@
 ---
 name: NPU_scenario_analysis
-description: >
-  来源于 Skill: offline-NPU-fault-diagnosis 的参考文档。
+description: NPU五大故障场景的专项分析流程，包括HCCS链路检测、固件状态诊断、设备离线恢复、性能降级定位等。
+
 keywords:
-  - NPU_scenario_analysis.md
-references:
-  - /home/witty-ops-cases/wiki/offline-NPU-fault-diagnosis/references/NPU_scenario_analysis.md
+  - NPU
+  - 场景分析
+  - 硬件故障
+  - 链路
+  - 固件
+  - HCCS
 ---
 
 # NPU 故障场景专项分析指南

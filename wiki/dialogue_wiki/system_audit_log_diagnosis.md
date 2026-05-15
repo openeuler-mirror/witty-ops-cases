@@ -1,11 +1,13 @@
 ---
 name: system_audit_log_diagnosis
-description: >
-  来源于 Skill: linux-security-diagnosis 的参考文档。
+description: 系统审计/日志安全诊断参考，涵盖auditd故障层次、审计规则检查、日志完整性验证、审计事件分析方法。
+
 keywords:
-  - system_audit_log_diagnosis.md
-references:
-  - /home/witty-ops-cases/wiki/linux-security-diagnosis/references/system_audit_log_diagnosis.md
+  - 审计日志
+  - auditd
+  - 系统审计
+  - 日志安全
+  - audit
 ---
 
 # S4 — 系统审计/日志安全：诊断参考

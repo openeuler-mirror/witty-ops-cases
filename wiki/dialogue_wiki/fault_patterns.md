@@ -1,11 +1,12 @@
 ---
 name: fault_patterns
-description: >
-  来源于 Skill: X-diagnosis-network-analysis 的参考文档。
+description: 典型故障案例与根因速查表，按故障现象索引，给出优先检查方向、常见根因和对应诊断工具。
+
 keywords:
-  - fault_patterns.md
-references:
-  - /home/witty-ops-cases/wiki/X-diagnosis-network-analysis/references/fault_patterns.md
+  - 故障案例
+  - 根因速查
+  - 典型故障
+  - 故障模式
 ---
 
 # 典型故障案例与根因速查表

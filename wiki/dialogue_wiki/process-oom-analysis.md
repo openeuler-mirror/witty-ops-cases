@@ -1,11 +1,13 @@
 ---
 name: process-oom-analysis
-description: >
-  来源于 Skill: linux-oom-analyzer 的参考文档。
+description: 进程级OOM分析参考手册，涵盖特定进程被OOM killer杀死的判定、ExitCode 137解读、进程内存增长追踪方法。
+
 keywords:
-  - process-oom-analysis.md
-references:
-  - /home/witty-ops-cases/wiki/linux-oom-analyzer/references/process-oom-analysis.md
+  - 进程OOM
+  - OOM killer
+  - ExitCode 137
+  - 内存增长
+  - ENOMEM
 ---
 
 # 进程级 OOM 分析参考手册

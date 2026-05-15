@@ -1,11 +1,14 @@
 ---
 name: cgroup-oom-analysis
-description: >
-  来源于 Skill: linux-oom-analyzer 的参考文档。
+description: cgroup OOM分析参考手册，涵盖容器/Docker/K8s环境下的cgroup内存限制触发OOM的判定方法、memory.failcnt追踪和根因定位。
+
 keywords:
-  - cgroup-oom-analysis.md
-references:
-  - /home/witty-ops-cases/wiki/linux-oom-analyzer/references/cgroup-oom-analysis.md
+  - cgroup
+  - OOM
+  - 容器
+  - 内存限制
+  - memory.failcnt
+  - Docker
 ---
 
 # cgroup OOM 分析参考手册

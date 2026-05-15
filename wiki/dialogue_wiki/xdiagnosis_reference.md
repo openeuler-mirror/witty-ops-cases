@@ -1,11 +1,14 @@
 ---
 name: xdiagnosis_reference
-description: >
-  来源于 Skill: X-diagnosis-network-analysis 的参考文档。
+description: x-diagnosis运维工具使用规范，涵盖安装、内核问题定位、系统巡检、ftrace增强、一键日志收集等功能说明。
+
 keywords:
-  - xdiagnosis_reference.md
-references:
-  - /home/witty-ops-cases/wiki/X-diagnosis-network-analysis/references/xdiagnosis_reference.md
+  - x-diagnosis
+  - 运维工具
+  - 内核诊断
+  - ftrace
+  - 日志收集
+  - EulerOS
 ---
 
 # x-diagnosis 使用规范

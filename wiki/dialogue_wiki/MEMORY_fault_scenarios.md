@@ -1,11 +1,15 @@
 ---
 name: MEMORY_fault_scenarios
-description: >
-  来源于 Skill: offline-memory-fault-diagnosis 的参考文档。
+description: 内存故障场景分类表，涵盖ECC错误、UCE故障、MCE异常、内存热拔插、CE风暴、内存泄漏、配置错误七大场景的核心特征。
+
 keywords:
-  - MEMORY_fault_scenarios.md
-references:
-  - /home/witty-ops-cases/wiki/offline-memory-fault-diagnosis/references/MEMORY_fault_scenarios.md
+  - 内存
+  - 故障场景
+  - ECC
+  - UCE
+  - CE
+  - MCE
+  - 内存故障
 ---
 
 # 内存故障场景分类

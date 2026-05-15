@@ -1,11 +1,15 @@
 ---
 name: DISK_scenario_analysis
-description: >
-  来源于 Skill: offline-disk-fault-diagnosis 的参考文档。
+description: 磁盘六大故障场景的专项分析流程，包括核心日志文件、关键证据提取、根因判定和修复建议。
+
 keywords:
-  - DISK_scenario_analysis.md
-references:
-  - /home/witty-ops-cases/wiki/offline-disk-fault-diagnosis/references/DISK_scenario_analysis.md
+  - 磁盘
+  - 场景分析
+  - 坏道
+  - SMART
+  - RAID
+  - 硬件故障
+  - 固件
 ---
 
 # 磁盘故障场景专项分析指南

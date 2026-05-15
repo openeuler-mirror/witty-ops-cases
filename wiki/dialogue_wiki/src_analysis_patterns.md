@@ -1,11 +1,14 @@
 ---
 name: src_analysis_patterns
-description: >
-  来源于 Skill: vmcore-analysis 的参考文档。
+description: 源码分析常见缺陷模式速查，按故障类型索引空指针解引用、use-after-free、死锁等内核崩溃的源码特征和搜索策略。
+
 keywords:
-  - src_analysis_patterns.md
-references:
-  - /home/witty-ops-cases/wiki/vmcore-analysis/references/src_analysis_patterns.md
+  - 源码分析
+  - 缺陷模式
+  - 空指针
+  - vmcore
+  - 内核崩溃
+  - 代码缺陷
 ---
 
 # 源码分析常见缺陷模式速查

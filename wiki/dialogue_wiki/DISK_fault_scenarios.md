@@ -1,11 +1,15 @@
 ---
 name: DISK_fault_scenarios
-description: >
-  来源于 Skill: offline-disk-fault-diagnosis 的参考文档。
+description: 磁盘故障场景分类表，涵盖硬件故障、SMART预警、RAID失效、IO错误、固件异常、介质异常六大场景的主要特征与案例。
+
 keywords:
-  - DISK_fault_scenarios.md
-references:
-  - /home/witty-ops-cases/wiki/offline-disk-fault-diagnosis/references/DISK_fault_scenarios.md
+  - 磁盘
+  - 故障场景
+  - 坏道
+  - SMART
+  - 写保护
+  - 硬件故障
+  - 介质异常
 ---
 
 # 磁盘故障场景分类

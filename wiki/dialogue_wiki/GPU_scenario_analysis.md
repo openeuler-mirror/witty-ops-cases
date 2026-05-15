@@ -1,11 +1,15 @@
 ---
 name: GPU_scenario_analysis
-description: >
-  来源于 Skill: offline-GPU-fault-diagnosis 的参考文档。
+description: GPU五大故障场景的专项分析流程，包括XID错误解读、掉卡诊断、显存ECC分析、NVLink链路检测、驱动状态排查。
+
 keywords:
-  - GPU_scenario_analysis.md
-references:
-  - /home/witty-ops-cases/wiki/offline-GPU-fault-diagnosis/references/GPU_scenario_analysis.md
+  - GPU
+  - 场景分析
+  - XID
+  - 掉卡
+  - 显存
+  - 驱动
+  - NVLink
 ---
 
 # GPU 故障场景专项分析指南

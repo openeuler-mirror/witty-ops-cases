@@ -1,11 +1,13 @@
 ---
 name: account_abuse_anomaly_diagnosis
-description: >
-  来源于 Skill: linux-security-diagnosis 的参考文档。
+description: 账户滥用与异常行为诊断参考，包括异常登录检测、暴力破解分析、账户提权行为检测的判断标准和日志取证方法。
+
 keywords:
-  - account_abuse_anomaly_diagnosis.md
-references:
-  - /home/witty-ops-cases/wiki/linux-security-diagnosis/references/account_abuse_anomaly_diagnosis.md
+  - 账户滥用
+  - 异常登录
+  - 暴力破解
+  - 提权
+  - 安全诊断
 ---
 
 # S6 — 账户滥用与异常行为：诊断参考

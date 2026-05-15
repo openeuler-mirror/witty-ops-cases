@@ -1,11 +1,15 @@
 ---
 name: Power_scenario_analysis
-description: >
-  来源于 Skill: offline-power-fault-diagnosis 的参考文档。
+description: 电源六大故障场景的专项分析流程，包括AC丢失判定、PSU健康检查、电压阈值监控、过流保护日志分析等。
+
 keywords:
-  - Power_scenario_analysis.md
-references:
-  - /home/witty-ops-cases/wiki/offline-power-fault-diagnosis/references/Power_scenario_analysis.md
+  - 电源
+  - 场景分析
+  - 掉电
+  - PSU
+  - 电压
+  - AC丢失
+  - 过流
 ---
 
 # Power 故障场景专项分析指南

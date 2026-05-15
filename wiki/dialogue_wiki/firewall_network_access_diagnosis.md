@@ -1,11 +1,14 @@
 ---
 name: firewall_network_access_diagnosis
-description: >
-  来源于 Skill: linux-security-diagnosis 的参考文档。
+description: 防火墙与网络访问诊断参考，涵盖firewalld与iptables共存问题、规则冲突定位、端口拦截排查等诊断方法。
+
 keywords:
-  - firewall_network_access_diagnosis.md
-references:
-  - /home/witty-ops-cases/wiki/linux-security-diagnosis/references/firewall_network_access_diagnosis.md
+  - 防火墙
+  - 网络访问
+  - firewalld
+  - iptables
+  - nftables
+  - 共存问题
 ---
 
 # S3 — 防火墙与网络访问：诊断参考

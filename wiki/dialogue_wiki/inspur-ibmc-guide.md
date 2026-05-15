@@ -1,6 +1,7 @@
 ---
 name: inspur-ibmc-guide
 description: 浪潮（Inspur）服务器iBMC日志深度分析指南，涵盖日志体系架构、关键模块分析、故障定位方法及与华为/H3C iBMC的对比。
+
 keywords:
   - 浪潮
   - Inspur

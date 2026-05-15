@@ -1,11 +1,13 @@
 ---
 name: crash_commands
-description: >
-  来源于 Skill: vmcore-analysis 的参考文档。
+description: crash工具命令速查手册，涵盖vmcore分析中常用的系统信息、进程追踪、内存检测、死锁分析等命令及用法示例。
+
 keywords:
-  - crash_commands.md
-references:
-  - /home/witty-ops-cases/wiki/vmcore-analysis/references/crash_commands.md
+  - crash
+  - vmcore
+  - 内核调试
+  - 命令速查
+  - kdump
 ---
 
 # crash 工具命令速查手册

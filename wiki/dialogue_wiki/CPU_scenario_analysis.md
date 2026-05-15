@@ -1,11 +1,16 @@
 ---
 name: CPU_scenario_analysis
-description: >
-  来源于 Skill: offline-CPU-fault-diagnosis 的参考文档。
+description: CPU七大故障场景的专项分析流程，包括根因推理框架、错误指纹模型、关键日志提取路径和判定逻辑。
+
 keywords:
-  - CPU_scenario_analysis.md
-references:
-  - /home/witty-ops-cases/wiki/offline-CPU-fault-diagnosis/references/CPU_scenario_analysis.md
+  - CPU
+  - 场景分析
+  - 硬件故障
+  - MCE
+  - 降频
+  - 高负载
+  - 温度异常
+  - 死锁
 ---
 
 # CPU 故障场景专项分析指南

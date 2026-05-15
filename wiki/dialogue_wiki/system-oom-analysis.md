@@ -1,11 +1,13 @@
 ---
 name: system-oom-analysis
-description: >
-  来源于 Skill: linux-oom-analyzer 的参考文档。
+description: 系统级OOM分析参考手册，涵盖整机OOM、系统变慢无响应、大量进程被杀、可用内存持续下降的根因定位方法。
+
 keywords:
-  - system-oom-analysis.md
-references:
-  - /home/witty-ops-cases/wiki/linux-oom-analyzer/references/system-oom-analysis.md
+  - 系统OOM
+  - 整机OOM
+  - 内存耗尽
+  - OOM killer
+  - 可用内存
 ---
 
 # 系统级 OOM 分析参考手册

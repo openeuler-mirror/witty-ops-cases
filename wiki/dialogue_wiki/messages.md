@@ -1,11 +1,14 @@
 ---
 name: messages
-description: >
-  来源于 Skill: offline-CPU-fault-diagnosis 的参考文档。
+description: openEuler /var/log/messages深度分析指南，涵盖日志格式结构、关键字过滤、常见错误模式识别和故障定位方法。
+
 keywords:
-  - messages.md
-references:
-  - /home/witty-ops-cases/wiki/offline-CPU-fault-diagnosis/references/messages.md
+  - messages
+  - 系统日志
+  - openEuler
+  - rsyslog
+  - journald
+  - 日志分析
 ---
 
 # openEuler `/var/log/messages` 深度分析指南

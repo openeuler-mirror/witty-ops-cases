@@ -1,6 +1,7 @@
 ---
 name: ibmc-paths-reference
 description: 华为、H3C、浪潮三厂商iBMC日志路径对照表，包含各厂商日志包解压后的目录结构、关键文件路径及用途说明。
+
 keywords:
   - iBMC
   - 日志路径

@@ -1,11 +1,15 @@
 ---
 name: GPU_fault_scenarios
-description: >
-  来源于 Skill: offline-GPU-fault-diagnosis 的参考文档。
+description: GPU故障场景分类表，涵盖硬件致命故障、显存错误、NVLink故障、驱动异常、功耗过载五大场景的核心特征与XID错误。
+
 keywords:
-  - GPU_fault_scenarios.md
-references:
-  - /home/witty-ops-cases/wiki/offline-GPU-fault-diagnosis/references/GPU_fault_scenarios.md
+  - GPU
+  - 故障场景
+  - XID
+  - 掉卡
+  - 硬件故障
+  - NVLink
+  - 显存
 ---
 
 # GPU 故障场景分类

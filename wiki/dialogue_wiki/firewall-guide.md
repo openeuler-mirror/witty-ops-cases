@@ -1,11 +1,13 @@
 ---
 name: firewall-guide
-description: >
-  来源于 Skill: network-diagnosis 的参考文档。
+description: 防火墙规则解读指南，提供iptables和nftables规则的解读方法，用于判断防火墙是否导致丢包或连接拒绝。
+
 keywords:
-  - firewall-guide.md
-references:
-  - /home/witty-ops-cases/wiki/network-diagnosis/references/firewall-guide.md
+  - 防火墙
+  - iptables
+  - nftables
+  - 规则解读
+  - 丢包
 ---
 
 # 防火墙规则解读指南
