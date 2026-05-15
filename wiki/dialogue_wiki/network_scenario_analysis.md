@@ -1,11 +1,15 @@
 ---
 name: network_scenario_analysis
-description: >
-  来源于 Skill: offline-network-hardware-fault-diagnosis 的参考文档。
+description: 网络硬件故障场景专项分析指南，提供从物理到逻辑的推导逻辑，包括PCIe AER、光模块诊断、链路检测、驱动排查等。
+
 keywords:
-  - network_scenario_analysis.md
-references:
-  - /home/witty-ops-cases/wiki/offline-network-hardware-fault-diagnosis/references/network_scenario_analysis.md
+  - 网络
+  - 场景分析
+  - 网卡
+  - 光模块
+  - PCIe
+  - 驱动
+  - 链路
 ---
 
 # 网络硬件故障场景专项分析指南

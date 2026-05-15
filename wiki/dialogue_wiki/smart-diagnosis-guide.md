@@ -1,8 +1,17 @@
 ---
 name: smart-diagnosis-guide
-description: SMART磁盘健康诊断详细指南，涵盖华为iBMC、H3C iBMC和OS Infocollect三种日志场景的SMART指标分析方法、核心指标速查及故障判断标准。
+description: SMART磁盘健康诊断详细指南，涵盖华为iBMC、H3C iBMC和OS Infocollect三种日志场景的SMART指标分析方法。
+
 keywords:
   - SMART
+  - 磁盘健康
+  - SMART阈值
+  - iBMC
+  - 磁盘诊断
+  - 磁盘健康
+  - SMART阈值
+  - iBMC
+  - 磁盘诊断
   - 磁盘健康
   - 诊断指南
   - iBMC

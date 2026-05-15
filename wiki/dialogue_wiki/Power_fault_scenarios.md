@@ -1,11 +1,14 @@
 ---
 name: Power_fault_scenarios
-description: >
-  来源于 Skill: offline-power-fault-diagnosis 的参考文档。
+description: 电源故障场景分类表，涵盖掉电、PSU故障、电压异常、过流保护、UPS切换、电源策略六大场景的核心特征与案例。
+
 keywords:
-  - Power_fault_scenarios.md
-references:
-  - /home/witty-ops-cases/wiki/offline-power-fault-diagnosis/references/Power_fault_scenarios.md
+  - 电源
+  - 故障场景
+  - 掉电
+  - PSU
+  - 电压异常
+  - UPS
 ---
 
 # Power 故障场景分类

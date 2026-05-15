@@ -1,11 +1,14 @@
 ---
 name: log_time
-description: >
-  来源于 Skill: docker-fault-analysis 的参考文档。
+description: 日志/时间漂移故障诊断经验，涵盖容器日志故障、NTP/chrony时间漂移、证书校验失败等诊断方法。
+
 keywords:
-  - log_time.md
-references:
-  - /home/witty-ops-cases/wiki/docker-fault-analysis/references/log_time.md
+  - 日志
+  - 时间漂移
+  - NTP
+  - 证书校验
+  - 容器日志
+  - chrony
 ---
 
 # 日志 / 时间漂移故障诊断经验

@@ -1,11 +1,14 @@
 ---
 name: network_iptables
-description: >
-  来源于 Skill: docker-fault-analysis 的参考文档。
+description: 网络/iptables故障诊断经验，涵盖iptables与Docker冲突、容器间通信失败、端口映射失败、NAT规则丢失等诊断方法。
+
 keywords:
-  - network_iptables.md
-references:
-  - /home/witty-ops-cases/wiki/docker-fault-analysis/references/network_iptables.md
+  - 网络
+  - iptables
+  - Docker
+  - NAT
+  - MASQUERADE
+  - 端口映射
 ---
 
 # 网络 / iptables 故障诊断经验

@@ -1,6 +1,7 @@
 ---
 name: disk-health-thresholds
 description: 磁盘健康诊断中SMART字段的完整阈值标准与评分细则，包含SAS/SATA HDD和SSD/NVMe的各类指标预警与高危条件。
+
 keywords:
   - SMART
   - 阈值

@@ -1,11 +1,14 @@
 ---
 name: hardware_analysis
-description: >
-  来源于 Skill: vmcore-analysis 的参考文档。
+description: 硬件故障分析方法论，涵盖MCE机器检查异常解析、PCIe AER错误分析、硬件故障定位的标准化流程。
+
 keywords:
-  - hardware_analysis.md
-references:
-  - /home/witty-ops-cases/wiki/vmcore-analysis/references/hardware_analysis.md
+  - 硬件故障
+  - MCE
+  - 机器检查
+  - PCIe
+  - AER
+  - 硬件分析方法论
 ---
 
 # 硬件故障分析方法论

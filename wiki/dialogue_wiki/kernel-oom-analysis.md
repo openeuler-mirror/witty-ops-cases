@@ -1,11 +1,14 @@
 ---
 name: kernel-oom-analysis
-description: >
-  来源于 Skill: linux-oom-analyzer 的参考文档。
+description: 内核态OOM分析参考手册，涵盖Slab内存异常、Shmem/tmpfs占用、内核内存泄漏等内核层面OOM的定位方法。
+
 keywords:
-  - kernel-oom-analysis.md
-references:
-  - /home/witty-ops-cases/wiki/linux-oom-analyzer/references/kernel-oom-analysis.md
+  - 内核OOM
+  - Slab
+  - Shmem
+  - tmpfs
+  - 内存泄漏
+  - 内核态
 ---
 
 # 内核态 OOM 分析参考手册

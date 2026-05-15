@@ -1,6 +1,7 @@
 ---
 name: h3c-ibmc-guide
 description: H3C服务器iBMC日志深度分析指南，涵盖10大模块目录、特有组件、SMART/RAID/PHY分析、故障案例及与华为iBMC的差异对比。
+
 keywords:
   - H3C
   - iBMC

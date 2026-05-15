@@ -1,11 +1,14 @@
 ---
 name: storage_overlay
-description: >
-  来源于 Skill: docker-fault-analysis 的参考文档。
+description: overlay2/文件系统故障诊断经验，涵盖overlay2常见故障、卷挂载失败、I/O性能瓶颈、CoW写时复制问题等诊断方法。
+
 keywords:
-  - storage_overlay.md
-references:
-  - /home/witty-ops-cases/wiki/docker-fault-analysis/references/storage_overlay.md
+  - overlay2
+  - 文件系统
+  - 卷挂载
+  - I/O性能
+  - CoW
+  - Docker存储
 ---
 
 # overlay2 / 文件系统故障诊断经验

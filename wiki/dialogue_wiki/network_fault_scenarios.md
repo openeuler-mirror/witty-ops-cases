@@ -1,11 +1,14 @@
 ---
 name: network_fault_scenarios
-description: >
-  来源于 Skill: offline-network-hardware-fault-diagnosis 的参考文档。
+description: 网络硬件故障场景分类表，涵盖总线硬件故障、光模块故障、链路层故障、驱动层故障、配置错误、性能降级六大场景。
+
 keywords:
-  - network_fault_scenarios.md
-references:
-  - /home/witty-ops-cases/wiki/offline-network-hardware-fault-diagnosis/references/network_fault_scenarios.md
+  - 网络
+  - 故障场景
+  - 网卡
+  - PCIe
+  - 光模块
+  - 链路异常
 ---
 
 # 网络硬件故障场景分类

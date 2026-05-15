@@ -1,6 +1,7 @@
 ---
 name: huawei-ibmc-guide
 description: 华为服务器iBMC带外管理日志深度分析指南，涵盖7大类日志模块、错误分类、SMART/RAID/PHY分析要点及故障定位方法。
+
 keywords:
   - 华为
   - iBMC

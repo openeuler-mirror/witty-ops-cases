@@ -1,11 +1,14 @@
 ---
 name: security_selinux
-description: >
-  来源于 Skill: docker-fault-analysis 的参考文档。
+description: SELinux/AppArmor/权限故障诊断经验，涵盖SELinux深度分析、AppArmor配置检查、Docker用户权限问题等诊断方法。
+
 keywords:
-  - security_selinux.md
-references:
-  - /home/witty-ops-cases/wiki/docker-fault-analysis/references/security_selinux.md
+  - SELinux
+  - AppArmor
+  - 权限
+  - AVC
+  - Docker用户
+  - 安全上下文
 ---
 
 # SELinux / AppArmor / 权限故障诊断经验

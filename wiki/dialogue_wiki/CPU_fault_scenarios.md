@@ -1,11 +1,16 @@
 ---
 name: CPU_fault_scenarios
-description: >
-  来源于 Skill: offline-CPU-fault-diagnosis 的参考文档。
+description: CPU故障场景分类表，涵盖硬件故障、降频保护、高负载死锁、微码异常、虚拟化故障、RAS特性、频率绑定七大场景的核心证据与指纹。
+
 keywords:
-  - CPU_fault_scenarios.md
-references:
-  - /home/witty-ops-cases/wiki/offline-CPU-fault-diagnosis/references/CPU_fault_scenarios.md
+  - CPU
+  - 故障场景
+  - 硬件故障
+  - MCE
+  - CATERR
+  - IERR
+  - 降频
+  - 高负载
 ---
 
 # CPU 故障场景分类

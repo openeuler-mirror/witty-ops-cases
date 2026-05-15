@@ -1,11 +1,14 @@
 ---
 name: FS_fault_scenarios
-description: >
-  来源于 Skill: offline-file-system-fault-diagnosis 的参考文档。
+description: 文件系统故障场景分类表，涵盖文件系统损坏、磁盘故障、NFS异常、只读挂载、权限错误、容量耗尽六大场景的主要特征。
+
 keywords:
-  - FS_fault_scenarios.md
-references:
-  - /home/witty-ops-cases/wiki/offline-file-system-fault-diagnosis/references/FS_fault_scenarios.md
+  - 文件系统
+  - 故障场景
+  - 文件系统损坏
+  - 磁盘故障
+  - NFS
+  - 只读
 ---
 
 # 文件系统故障场景分类

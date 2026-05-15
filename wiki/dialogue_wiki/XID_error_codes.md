@@ -1,11 +1,13 @@
 ---
 name: XID_error_codes
-description: >
-  来源于 Skill: offline-GPU-fault-diagnosis 的参考文档。
+description: NVIDIA GPU XID错误码完整对照表，涵盖常见XID代码的错误名称、故障倾向、详细描述和建议动作。
+
 keywords:
-  - XID_error_codes.md
-references:
-  - /home/witty-ops-cases/wiki/offline-GPU-fault-diagnosis/references/XID_error_codes.md
+  - GPU
+  - XID
+  - 错误码
+  - NVIDIA
+  - 驱动错误
 ---
 
 # NVIDIA XID 错误对照表

@@ -1,11 +1,14 @@
 ---
 name: user_auth_login_diagnosis
-description: >
-  来源于 Skill: linux-security-diagnosis 的参考文档。
+description: 用户认证/登录安全诊断参考，涵盖PAM配置诊断、SSSD/LDAP故障、SSH认证失败的排查方法。
+
 keywords:
-  - s1_auth.md
-references:
-  - /home/witty-ops-cases/wiki/linux-security-diagnosis/references/user_auth_login_diagnosis.md
+  - 用户认证
+  - 登录
+  - PAM
+  - SSSD
+  - LDAP
+  - SSH
 ---
 
 # S1 — 用户认证/登录安全：诊断参考

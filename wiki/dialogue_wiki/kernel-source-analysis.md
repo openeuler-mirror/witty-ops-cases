@@ -1,11 +1,13 @@
 ---
 name: kernel-source-analysis
-description: >
-  来源于 Skill: linux-oom-analyzer 的参考文档。
+description: Linux内核OOM源码分析参考，提供OOM killer完整执行路径的代码级追踪，用于深度根因分析。
+
 keywords:
-  - kernel-source-analysis.md
-references:
-  - /home/witty-ops-cases/wiki/linux-oom-analyzer/references/kernel-source-analysis.md
+  - 内核源码
+  - OOM
+  - 代码分析
+  - 源码追踪
+  - 内核路径
 ---
 
 # Linux 内核 OOM 源码分析参考手册

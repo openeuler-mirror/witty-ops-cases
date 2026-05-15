@@ -1,11 +1,15 @@
 ---
 name: kernel_syscall
-description: >
-  来源于 Skill: docker-fault-analysis 的参考文档。
+description: 内核/系统调用故障诊断经验，涵盖overlay挂载失败、cgroup问题、SELinux/AppArmor/seccomp阻断、namespace异常等诊断方法。
+
 keywords:
-  - kernel_syscall.md
-references:
-  - /home/witty-ops-cases/wiki/docker-fault-analysis/references/kernel_syscall.md
+  - 内核
+  - 系统调用
+  - overlay
+  - cgroup
+  - SELinux
+  - seccomp
+  - namespace
 ---
 
 # 内核/系统调用故障诊断经验

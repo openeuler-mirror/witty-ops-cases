@@ -1,11 +1,14 @@
 ---
 name: NPU_fault_scenarios
-description: >
-  来源于 Skill: offline-NPU-fault-diagnosis 的参考文档。
+description: NPU故障场景分类表，涵盖硬件故障、链路异常、固件错误、性能降级、配置错误五大场景的核心特征与指纹。
+
 keywords:
-  - NPU_fault_scenarios.md
-references:
-  - /home/witty-ops-cases/wiki/offline-NPU-fault-diagnosis/references/NPU_fault_scenarios.md
+  - NPU
+  - 故障场景
+  - 硬件故障
+  - 神经网络处理器
+  - 链路异常
+  - 固件
 ---
 
 # NPU 故障场景分类
