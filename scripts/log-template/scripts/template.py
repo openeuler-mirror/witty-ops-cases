@@ -2,6 +2,7 @@
 import argparse
 import base64
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -26,6 +27,20 @@ def load_config():
 def load_prompt():
     with open(PROMPT_PATH, encoding="utf-8") as f:
         return f.read()
+
+
+def strip_thinking(text: str) -> str:
+    """移除模型返回中的思考过程，只保留正式案例内容。"""
+    text = text.strip()
+    lt, gt = chr(60), chr(62)
+    for name in ("think", "redacted_thinking"):
+        closing = f"{lt}/{name}{gt}"
+        pos = text.lower().rfind(closing.lower())
+        if pos != -1:
+            text = text[pos + len(closing):]
+    block = lt + r"(?:think|redacted_thinking)" + gt + r"[\s\S]*?" + lt + r"/(?:think|redacted_thinking)" + gt + r"\s*"
+    text = re.sub(block, "", text, flags=re.IGNORECASE)
+    return text.strip()
 
 
 def should_skip(result: str) -> bool:
@@ -103,7 +118,9 @@ def generate_template(client, config, prompt_template, case: ParsedCase) -> str:
             extra_body={"enable_thinking": config.get("enable_thinking", False)},
             timeout=config.get("timeout", 180),
         )
-        return resp.choices[0].message.content.strip()
+        msg = resp.choices[0].message
+        content = (msg.content or "").strip()
+        return strip_thinking(content)
     except Exception as e:
         return f"# 错误\n无法生成模板: {e}"
 
