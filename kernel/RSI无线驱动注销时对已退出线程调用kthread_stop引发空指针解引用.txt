@@ -1,0 +1,15 @@
+#标题
+RSI无线驱动注销时对已退出线程调用kthread_stop引发空指针解引用
+
+#内核版本
+4.9.41 (rsi驱动源自 backports 4.14-rc2)
+
+#问题现象
+执行 `modprobe -r rsi_usb` 卸载驱动模块时触发 NULL pointer dereference（空指针解引用）。
+
+#问题根因
+在 `rsi_usb` 注销过程中，`rsi_kill_thread()` 函数对一个已经执行 `do_exit()` 且其 `task_struct` 结构体已释放的线程调用了 `kthread_stop()`。
+RSI 驱动实现违反了 `kernel/kthread.c` 中的 API 要求：若线程函数 `threadfn()` 内部调用了 `do_exit()`（例如 `complete_and_exit()`），调用者必须确保 `task_struct` 不会消失。驱动在 `threadfn` 中调用 `complete_and_exit()` 后，未做特殊处理直接调用 `kthread_stop()`，导致访问已释放的内存。
+
+#解决方案
+暂无官方修复。建议改进 RSI 线程逻辑，或移除冗余的 `kthread_stop` 调用。

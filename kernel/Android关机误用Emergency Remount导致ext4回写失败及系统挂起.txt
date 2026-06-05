@@ -1,0 +1,17 @@
+#标题
+Android关机误用Emergency Remount导致ext4回写失败及系统挂起
+
+#内核版本
+3.10.20（另有用户在3.10.65复现）
+
+#问题现象
+- 系统关机过程中出现挂起或耗时过长。
+- 内核日志持续报错：`EXT4-fs (mmcblk0p15): ext4_da_writepages: jbd2_start: 8192 pages, ino 131067; err -30`（错误码 -30 对应 -EROFS）。
+- 严重情况下导致内核崩溃，大量进程处于 UN 状态。
+- 进程堆栈显示 `init` 阻塞在 `mmc_bus_shutdown`，`kworker` 阻塞在 `ext4_commit_super` -> `__sync_dirty_buffer`。
+
+#问题根因
+Android 关机流程使用了 `echo u > /proc/sysrq-trigger` 触发 Emergency Remount R/O。该机制设计用于系统不稳定的紧急情况，调用 `do_remount_sb` 时传入 `force=1`，跳过了 `sb_prepare_remount_readonly()` 调用。跳过该步骤导致文件系统被强制标记为只读，但未完成脏数据回写。后续 writeback 机制尝试向只读设备写入数据时返回 -EROFS 错误，且若应用程序未干净退出，可能导致关机流程阻塞或 I/O 死锁。
+
+#解决方案
+建议修改 Android 关机逻辑，避免在正常关机流程中使用 Emergency Remount（sysrq-u）。推荐流程为：先尝试正常 `umount`；若失败则尝试 `remount ro`；若仍失败则调用 `syncfs()` 强制回写脏数据，最后再执行紧急重新挂载作为兜底。

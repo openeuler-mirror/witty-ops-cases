@@ -1,0 +1,19 @@
+#标题
+XFS在kswapd回收内存时检测到可能的循环锁定依赖
+
+#内核版本
+v4.19-rc5
+
+#问题现象
+- 运行 xfstests 测试集 shared/010 用例时，内核日志报告 "WARNING: possible circular locking dependency detected"。
+- Lockdep 检测到潜在的死锁场景：`kswapd1` 进程在持有 `fs_reclaim` 锁的情况下试图获取 `sb_internal#2` 锁，而这两个锁之间存在反向依赖关系。
+- 内核日志显示 "Possible unsafe locking scenario" 并标记 "*** DEADLOCK ***"。
+
+#问题根因
+XFS 文件系统在内存回收路径与事务处理路径中存在锁获取顺序不一致的问题：
+1. 在 `xfs_xattr_set` 路径中，先获取 `sb_internal` 锁，后在内存分配时获取 `fs_reclaim` 锁。
+2. 在 `kswapd` 内存回收路径中，先持有 `fs_reclaim` 锁，调用 `xfs_fs_destroy_inode` -> `xfs_free_eofblocks` 时试图获取 `sb_internal` 锁。
+这种锁顺序的冲突导致 Lockdep 检测到潜在的循环锁定依赖并发出告警。
+
+#解决方案
+暂无（Bug 状态为 NEW，尚未提供修复补丁）。

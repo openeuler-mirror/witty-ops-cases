@@ -1,0 +1,16 @@
+#标题
+Netfilter 模块 getsockopt 路径 socket 锁双重获取导致死锁
+
+#内核版本
+4.16.0-rc1-64-00034
+
+#问题现象
+- 升级内核至 4.16.0-rc1 后，使用 iptables REDIRECT 功能的代理进程在处理连接请求时发生死锁
+- 进程在调用 `getsockopt(fd, SOL_IP, SO_ORIGINAL_DST)` 时阻塞，内核日志显示 "task proxy blocked for more than 120 seconds"
+- 调用栈显示进程处于 D 状态，堆栈路径为 `SyS_getsockopt` -> `ip_getsockopt` -> `nf_getsockopt` -> `getorigdst` -> `lock_sock_nested` -> `__lock_sock`
+
+#问题根因
+补丁 commit 3f34cfae1238848 ("netfilter: on sockopt() acquire sock lock only in the required scope") 引入回归问题。该补丁将 `lock_sock()` 移入 `getorigdst()` 函数内部，但仅修改了 `ip_setsockopt` 移除锁操作，未同步修改 `ip_getsockopt`。导致 `getorigdst` 作为 `getsockopt` 操作被调用时，socket 锁在 `ip_getsockopt` 层和 `getorigdst` 层被先后获取，造成双重锁死锁。
+
+#解决方案
+开发者已提交修复补丁，链接为 http://patchwork.ozlabs.org/patch/870827/，该补丁已进入 netfilter tree，等待合入主线内核。

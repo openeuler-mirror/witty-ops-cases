@@ -1,0 +1,16 @@
+#标题
+JFS readdir回归导致hostfs陷入死循环
+
+#内核版本
+3.19.1（UML内核），受影响主机内核为 3.2.0-4-amd64 (Debian Wheezy)
+
+#问题现象
+- UML (User Mode Linux) 使用 hostfs 挂载主机上的 JFS 分区时，执行 `ls -l` 或目录读取操作会陷入死循环。
+- 调试发现 `hostfs_readdir()` 不断循环调用 `read_dir()`，目录项位置指针 `*pos` 始终停留在第一个条目无法前进。
+- 该问题仅在主机文件系统为 JFS 时触发，ext4 和 btrfs 无此现象。
+
+#问题根因
+JFS 文件系统驱动存在回归问题。主线上游提交 `44512449c0ab368889dd13ae0031fba74ee7e1d2` 在回溯移植到 3.2 stable 树时引入错误。具体原因为：传递给 `filldir()` 函数的位置参数（position）未正确递增。由于主线内核中 `dir_emit()` 函数不接收位置参数，导致该遗漏在回溯移植时未被及时发现。
+
+#解决方案
+应用 JFS 维护者提供的补丁 "jfs: fix readdir regression in stable trees"，修正 `filldir()` 中位置参数的递增逻辑；或升级主机内核至 3.19.1 及以上版本。

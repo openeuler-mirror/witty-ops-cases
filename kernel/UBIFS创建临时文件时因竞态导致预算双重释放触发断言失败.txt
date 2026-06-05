@@ -1,0 +1,21 @@
+#标题
+UBIFS创建临时文件时因竞态导致预算双重释放触发断言失败
+
+#内核版本
+5.15-rc5
+
+#问题现象
+- 内核日志报错：`UBIFS assert failed: c->bi.dd_growth >= 0, in fs/ubifs/budget.c:554`
+- UBIFS 文件系统自动切换为只读模式
+- 调用栈显示错误发生在 `wb_workfn` 回写线程的 `ubifs_write_inode` -> `ubifs_release_dirty_inode_budget` 流程中
+- 运行 generic/476 测试用例或特定复现程序可稳定触发
+
+#问题根因
+在 `do_tmpfile()` 函数中，`ui->dirty` 标志位未受 `ui_mutex` 锁保护，导致创建临时文件的流程与回写线程 `wb_workfn`（执行 `ubifs_write_inode`）发生竞态。
+具体竞态过程如下：
+1. `do_tmpfile` 调用 `ubifs_jnl_update`，其中 `mark_inode_clean` 检测到 `ui->dirty` 为真，执行 `ubifs_release_dirty_inode_budget` 释放预算。
+2. 同时，`ubifs_write_inode` 也检测到 `ui->dirty` 为真，同样执行 `ubifs_release_dirty_inode_budget` 释放预算。
+3. 脏空间预算被双重释放，导致 `c->bi.dd_growth` 变为负值，从而触发断言失败。
+
+#解决方案
+暂无（Bug状态为NEW，尚未合并修复补丁）

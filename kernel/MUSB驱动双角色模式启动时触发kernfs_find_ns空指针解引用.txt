@@ -1,0 +1,18 @@
+#标题
+MUSB驱动双角色模式启动时触发kernfs_find_ns空指针解引用
+
+#内核版本
+5.4.115
+
+#问题现象
+- 内核启动过程中发生 Oops，日志显示 "Unable to handle kernel NULL pointer dereference at virtual address 00000050"。
+- 故障发生在 `kworker/0:1` 进程执行 `deferred_probe_work_func` 时。
+- 触发条件：将 USB 驱动配置项 "Inventra Highspeed Dual Role Controller" 的 "MUSB Mode Selection" 设置为 "Dual Role Mode"。
+- 若设置为 "Host only mode" 则不会触发崩溃。
+- 关键 Call Trace：`kernfs_find_ns` -> `kernfs_find_and_get_ns` -> `sysfs_unmerge_group` -> `dpm_sysfs_remove` -> `device_del` -> `device_unregister` -> `musb_gadget_setup` -> `musb_probe`。
+
+#问题根因
+MUSB 驱动在双角色模式初始化过程中，`musb_gadget_setup` 函数调用 `device_unregister`，后续在 `sysfs_unmerge_group` 处理流程中，向 `kernfs_find_ns` 传递了无效的 parent kernfs node（NULL 指针），导致访问偏移地址 0x50 时触发空指针解引用。
+
+#解决方案
+暂无修复补丁；可通过将 MUSB 驱动模式配置为 "Host only mode" 规避此问题。

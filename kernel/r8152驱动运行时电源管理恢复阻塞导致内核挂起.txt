@@ -1,0 +1,18 @@
+#标题
+r8152驱动运行时电源管理恢复阻塞导致内核挂起
+
+#内核版本
+4.8.0-994-generic
+
+#问题现象
+- 系统运行随机时间后发生内核挂起，阻塞网络资源。
+- 内核日志显示多个任务（kworker/0:2, wpa_supplicant, skype, Qt bearer thread等）阻塞超过 120 秒。
+- 关键堆栈显示 `kworker/0:2` 在 `rtl_work_func_t [r8152]` -> `usb_autopm_get_interface` -> `rpm_resume` 处阻塞。
+- 其他网络相关任务在 `rtnetlink_rcv` 或 `nl80211_pre_doit` 中等待 `mutex_lock`。
+- 用户反馈持续进行 ping 操作可避免此问题发生。
+
+#问题根因
+r8152 驱动在执行运行时电源管理恢复时，通过 `usb_autopm_get_interface` 调用 `rpm_resume` 过程发生阻塞。该阻塞导致持有相关锁，进而阻塞了其他试图访问网络资源的进程，造成系统挂起。
+
+#解决方案
+暂无官方修复。临时规避方法为保持网络流量活跃（如持续 ping），避免网络设备进入空闲休眠状态。

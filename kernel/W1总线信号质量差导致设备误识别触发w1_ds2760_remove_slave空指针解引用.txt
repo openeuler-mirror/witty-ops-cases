@@ -1,0 +1,17 @@
+#标题
+W1总线信号质量差导致设备误识别触发w1_ds2760_remove_slave空指针解引用
+
+#内核版本
+6.1.21-v7+
+
+#问题现象
+- 树莓派3连接DS18B20传感器时，因线路过长导致信号质量差，传感器被误识别为ds2760电池设备。
+- 内核日志报错 "sysfs: cannot create duplicate filename '/class/power_supply/ds2760-battery.0'"。
+- 驱动加载失败后触发 kernel Oops：Unable to handle kernel NULL pointer dereference at virtual address 00000060。
+- 堆栈信息显示崩溃发生在 `destroy_workqueue` 函数中，调用路径为 `w1_ds2760_remove_slave` -> `destroy_workqueue`。
+
+#问题根因
+由于信号干扰导致w1总线设备ID误识别，内核加载了错误的驱动程序 ds2760_battery。驱动在 `w1_ds2760_add_slave` 阶段注册 power_supply 设备失败（返回错误码 -17，即文件已存在），但在后续执行 `w1_ds2760_remove_slave` 移除操作时，未对 workqueue 指针进行有效性检查，直接向 `destroy_workqueue` 传递了 NULL 指针（寄存器 r0 为 0），从而触发空指针解引用崩溃。
+
+#解决方案
+暂无官方修复补丁。规避措施为缩短连接线缆长度或改善信号质量，防止设备被误识别。

@@ -1,0 +1,20 @@
+#标题
+Elkhart Lake AHCI LPM策略导致网络吞吐量严重下降
+
+#内核版本
+6.5.4（问题复现于 6.6.130, 6.19.10, 7.0.0_rc2）
+
+#问题现象
+- 网络吞吐量严重下降：TCP 吞吐量从正常的 15-25 Mbit/s 降至 500 Kbit/s - 1 Mbit/s
+- UDP 丢包率高达 30-35%
+- ethtool 统计显示 mmc_rx_fifo_overflow 计数器快速增长
+- 故障发生在 Intel Elkhart Lake SoC 平台，且 SATA AHCI 与 Ethernet MAC 集成在同一 SoC 上
+- 存储 I/O 功能正常，仅网络功能受损
+
+#问题根因
+二分定位到 commit 247d2f1f5a3c ("ata: ahci: Add Elkhart Lake AHCI controller")。该提交为 Elkhart Lake 添加了 AHCI 控制器支持，改变了默认的 LPM (Link Power Management) 行为。由于 SATA AHCI 控制器与 Ethernet MAC 集成在同一 SoC 上，AHCI 的 LPM 策略（推测为 policy=3）产生的干扰导致以太网控制器接收 FIFO 溢出，进而引发网络吞吐量崩溃。
+
+#解决方案
+临时规避方法：在内核启动参数中设置 ahci.mobile_lpm_policy=0 或 ahci.mobile_lpm_policy=2 可恢复正常网络性能。
+注意：使用 ahci.mobile_lpm_policy=2 虽可恢复网络性能，但会导致 SSD 运行温度升高（测试中升高约 7°C）。
+目前上游尚未合并正式修复补丁。

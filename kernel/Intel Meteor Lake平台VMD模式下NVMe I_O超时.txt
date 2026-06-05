@@ -1,0 +1,17 @@
+#标题
+Intel Meteor Lake平台VMD模式下NVMe I/O超时
+
+#内核版本
+6.4, 6.5, mainline 3f86ed6ec0b3 (6.6-rc1)
+
+#问题现象
+- 在 Intel Meteor Lake (MTL-H) 平台上，BIOS 开启 VMD 模式后，KIOXIA NVMe SSD 频繁出现 I/O 超时错误。
+- 内核日志报错：`nvme nvme0: I/O XXX QID X timeout, completion polled`。
+- 问题在 v6.4、v6.5 及 mainline 内核上均复现，禁用 APST 无效。
+
+#问题根因
+硬件 Erratum (Intel MTL016)。VMD 模式下，中断可能在 NVMe Completion Queue Entry (CQE) 数据写入内存并对 CPU 可见之前到达。这导致中断处理程序读取 CQE 状态时数据尚未更新，从而触发超时。调试发现 `nvme_cqe_pending()` 函数中连续两次读取 `hcqe->status` 的值不一致（0x0000 -> 0x0001），证实了内存可见性延迟问题。
+
+#解决方案
+- 临时规避：在 BIOS 中禁用 CPU C-State 可消除该问题。
+- 补丁修复：社区已提交针对此 Erratum 的修复补丁（参考链接：https://lore.kernel.org/r/20240903025544.286223-1-kai.heng.feng@canonical.com），通过在读取 CQE 前添加内存屏障或读操作来刷新 I/O。

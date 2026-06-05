@@ -1,0 +1,16 @@
+#标题
+ReiserFS setxattr 操作触发 reiserfs_get_block 空指针解引用导致内核崩溃
+
+#内核版本
+4.18.0-rc1+
+
+#问题现象
+- 挂载特制的 reiserfs 镜像并调用 setxattr 设置扩展属性时触发内核崩溃（Oops）。
+- 内核日志报错："BUG: KASAN: null-ptr-deref in reiserfs_get_block" 以及 "BUG: unable to handle kernel NULL pointer dereference at 000000000000000c"。
+- 调用栈显示崩溃发生在 `reiserfs_xattr_set_handle` 调用链中的 `reiserfs_get_block` 函数。
+
+#问题根因
+在 `fs/reiserfs/inode.c` 的 `reiserfs_get_block` 函数中存在逻辑缺陷：当 `blocks_needed` 为 0 时，`kcalloc` 返回 `ZERO_SIZE_PTR`（值为 0x10）。后续代码未检查该边界条件，尝试访问数组元素 `un[blocks_needed - 1]`（即 `un[-1]`），导致向非法地址 `0x0c`（0x10 - 4）写入数据，从而触发空指针解引用。
+
+#解决方案
+暂无（Bug 状态为 NEW，未提及修复补丁）。

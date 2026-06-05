@@ -1,0 +1,17 @@
+#标题
+ext4文件系统mbcache锁竞争导致系统Soft Lockup
+
+#内核版本
+4.2.3, 3.19, 3.16
+
+#问题现象
+- 系统在进行大量扩展属性操作时发生挂起，无法响应。
+- 内核日志报错 "BUG: soft lockup - CPU#X stuck for 22s!"。
+- Call Trace 显示进程阻塞在 `mb_cache_entry_get` 或 `mb_cache_entry_alloc` 函数，调用链涉及 `ext4_xattr_block_set`。
+- 该问题常见于 Ceph 恢复过程或 Samba4 等大量使用 xattr 的场景。
+
+#问题根因
+mbcache 模块的可扩展性设计存在缺陷。在处理大量唯一的 xattr 条目时，mbcache 的 LRU 链表变得非常长，导致扫描耗时过长；同时全局锁竞争导致 `mb_cache_entry_alloc` 与其他 LRU 操作发生竞争并不断重启，引发 CPU 长时间自旋无法调度，最终触发 Soft Lockup。
+
+#解决方案
+升级内核至 4.6-rc1 或更高版本，该版本包含 mbcache 重写及性能优化补丁（如 commit f9a61eb4e2471c56a63cd804c7474128138c38ac 等一系列提交）。若无法升级，可尝试应用禁用 mbcache 的补丁（如 "no_mbcache" 挂载选项补丁）进行规避。

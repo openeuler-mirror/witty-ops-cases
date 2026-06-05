@@ -1,0 +1,19 @@
+#标题
+PCIe ASPM公共时钟配置导致下游设备探测失败
+
+#内核版本
+4.17-rc1
+
+#问题现象
+- 系统启动过程中，PCI-to-PCIe桥接设备下游的设备（如网卡）偶发性无法被探测到。
+- 内核日志中出现 "bridge configuration invalid ([bus ff-ff]), reconfiguring" 错误。
+- lspci 显示缺失设备的版本号为 "rev ff"（即读取配置空间返回全1）。
+- 启动过程中内核在ASPM初始化阶段出现约1秒的卡顿。
+- 使用 `pcie_aspm=off` 启动参数可规避此问题。
+
+#问题根因
+问题出在 `drivers/pci/pcie/aspm.c` 中的 `pcie_aspm_configure_common_clock()` 函数。当PCI-to-PCIe桥（02:0e.0）与下游设备（03:00.0）均报告支持 "Slot Clock Configuration" 时，内核尝试设置 "Common Clock Configuration" 位。在该特定硬件环境下，设置此位导致链路状态异常（设备可能错误进入D3状态或停止响应），致使配置空间读取返回 0xFFFFFFFF，设备无法被正常枚举。
+
+#解决方案
+- 临时规避：在GRUB启动参数中添加 `pcie_aspm=off`。
+- 修复方案：测试补丁（见Bug附件276577）禁用了公共时钟配置逻辑，验证可解决该问题。

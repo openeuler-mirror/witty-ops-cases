@@ -1,0 +1,19 @@
+#标题
+SocketCAN接口关闭过程中释放SKB触发内核WARNING
+
+#内核版本
+4.1.19
+
+#问题现象
+- 系统日志输出内核 WARNING：`WARNING: at net/core/skbuff.c:693 skb_release_head_state+0x64/0x78()`
+- 故障复现条件：在用户空间重复打开/关闭 SocketCAN 测试应用程序，或执行脚本循环进行 `ifconfig can0 up` 和 `ifconfig can0 down` 操作。
+- 故障现场堆栈显示调用路径包括 `flexcan_irq` -> `can_get_echo_skb` -> `netif_rx` -> `kfree_skb` 以及 `can_sock_destruct` -> `skb_queue_purge`。
+
+#问题根因
+故障发生在释放 SKB（socket buffer）资源时，触发了 `skb_release_head_state` 函数内部的校验警告。根据堆栈信息，问题出现在以下两条执行路径中：
+1. CAN 控制器中断处理：`flexcan_irq` 调用 `can_get_echo_skb` 处理回显 SKB 时，通过 `netif_rx` 提交报文，后续释放过程中触发异常。
+2. Socket 析构：`can_sock_destruct` 在销毁 socket 时调用 `skb_queue_purge` 清理 SKB 队列时触发异常。
+具体代码层面的根因（如并发竞争或状态不一致）在原始报告中未明确分析。
+
+#解决方案
+暂无

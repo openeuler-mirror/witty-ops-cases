@@ -1,0 +1,17 @@
+#标题
+rtl8723bs驱动误用ether_addr_equal导致WiFi信号弱及断连
+
+#内核版本
+4.19
+
+#问题现象
+- 在内核版本 4.17/4.18/4.19 上，rtl8723bs WiFi 信号极弱，扫描显示信号强度从正常的 -45dBm 降至 -90dBm 左右。
+- 路由器在极近距离（50cm）情况下仍显示信号弱，并导致频繁断开连接。
+- 该问题为回归问题，在 4.14.78 内核版本上表现正常。
+
+#问题根因
+在 `drivers/staging/rtl8723bs/hal/rtl8723bs_recv.c` 文件的 `update_recvframe_phyinfo` 函数中，重构补丁 "staging: rtl8723bs: Fix lines too long in update_recvframe_attrib()" 错误地处理了 BSSID 匹配逻辑。
+原代码使用 `!memcmp(...)` 判断 BSSID 是否相等（相等时 memcmp 返回 0，取反为真）；重构后替换为 `!ether_addr_equal(rx_bssid, my_bssid)`。由于 `ether_addr_equal` 在地址相等时返回真，保留取反运算符 `!` 导致逻辑反转，使得 `pkt_info.bssid_match` 在 BSSID 匹配时被错误地判定为假。
+
+#解决方案
+修改 `drivers/staging/rtl8723bs/hal/rtl8723bs_recv.c` 文件，移除 `ether_addr_equal` 前的取反运算符，将 `!ether_addr_equal(rx_bssid, my_bssid)` 修改为 `ether_addr_equal(rx_bssid, my_bssid)`。该修复已提交等待合入。

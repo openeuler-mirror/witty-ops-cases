@@ -1,0 +1,17 @@
+#标题
+NFS挂载过程中sunrpc模块空指针解引用导致Oops
+
+#内核版本
+4.9-rc2
+
+#问题现象
+- 系统在进行 NFS 回归测试时触发内核 Oops，日志显示 "BUG: unable to handle kernel NULL pointer dereference at 000000000000017a"。
+- 故障指令指针 RIP 位于 `rpc_clnt_xprt_switch_has_addr+0x6/0x20 [sunrpc]`。
+- 调用栈显示异常发生在 `nfs_get_client` -> `nfs4_set_client` -> `nfs4_create_server` 的挂载路径中。
+- 在双 NFS 服务器环境下快速连续执行 mount 操作可 100% 复现该问题。
+
+#问题根因
+由 commit 04ea1b3e 引入的代码缺陷。代码在未进行有效性检查的情况下直接解引用 `cl_rpcclient` 字段，而该字段初始化时被设置为 `ERR_PTR(-EINVAL)`（即无效指针），并非指向有效的内存对象。直接对该指针进行解引用操作导致访问非法内存地址，从而触发 Oops。
+
+#解决方案
+开发者提供了修复补丁，建议在解引用 `cl_rpcclient` 前增加有效性检查，避免对 `ERR_PTR` 类型错误指针的非法访问。

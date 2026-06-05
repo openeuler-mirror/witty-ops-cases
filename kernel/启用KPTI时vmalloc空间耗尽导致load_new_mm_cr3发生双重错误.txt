@@ -1,0 +1,20 @@
+#标题
+启用KPTI时vmalloc空间耗尽导致load_new_mm_cr3发生双重错误
+
+#内核版本
+4.13.0-26-generic, 4.14.14, 4.15.rc8, 4.15.rc9
+
+#问题现象
+- 在大内存系统（如 768GB RAM）上启用 KPTI 时，系统触发 Double Fault（双重错误）。
+- 故障可通过以下步骤复现：使用 vmalloc 分配约 1/2 内存大小，随后生成大量线程。
+- 故障现场 Call Trace 指向 `load_new_mm_cr3` 函数，反汇编显示故障指令位于 `pop %rbp`。
+- 使用 `nopti` 启动参数可规避该问题；使用 `nopcid` 参数无法规避。
+
+#问题根因
+在大内存系统中，vmalloc 地址空间耗尽或严重碎片化，导致 `find_vm_area()` 返回 NULL。这使得进程任务结构体中的 `tsk->stack_vm_area` 为 NULL，但 `tsk->stack` 指针有效。内核后续尝试对该栈地址执行 `virt_to_page()` 操作时，访问了无效的 vmemmap 区域，触发页错误。由于此时上下文无法处理页错误，进而升级为双重错误。
+
+#解决方案
+应用以下修复补丁：
+1. https://git.kernel.org/pub/scm/linux/kernel/git/luto/linux.git/commit/?h=x86/fixes&id=e427f8713ac026aafac9f37285765a06d1ccc820
+2. https://git.kernel.org/pub/scm/linux/kernel/git/luto/linux.git/commit/?h=x86/fixes&id=d9b92ca301271eb62acca09429914a87ff80e951
+临时规避方案：在内核启动参数中添加 `nopti`（会降低安全性）。

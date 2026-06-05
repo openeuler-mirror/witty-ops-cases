@@ -1,0 +1,20 @@
+#标题
+内存压力下读取 /proc/pid/smaps_rollup 触发空指针解引用导致内核 BUG
+
+#内核版本
+4.19-rc7（问题最早可追溯至 4.18-rc4）
+
+#问题现象
+- 系统在内存压力下运行 ps_mem 脚本时触发内核 BUG，dmesg 显示 "BUG: unable to handle kernel NULL pointer dereference at 00000000000000f0"
+- 故障发生时 CPU 卡死，系统性能严重下降，部分软件无法打开或关闭，bash 自动补全功能失效
+- Call Trace 指向：smaps_pte_range -> __walk_page_range -> walk_page_vma -> smap_gather_stats -> show_smaps_rollup
+
+#问题根因
+在 mm/proc/task_mmu.c 的 smaps_rollup 处理逻辑中，函数 smap_gather_stats() 会为某个 VMA 设置 mss->check_shmem_swap 标志为 true，但在处理后续的 VMA 时未将该标志重置为 false。
+当后续 VMA 的 vma->vm_file 为 NULL 时，smaps_pte_range() 代码路径仍会因 check_shmem_swap 为 true 而尝试访问 vma->vm_file->f_mapping，从而引发空指针解引用。此外，mss->swap 的赋值逻辑也存在覆盖累积值的错误。
+
+#解决方案
+应用补丁 "mm: /proc/pid/smaps_rollup: fix NULL pointer deref in smaps_pte_range"：
+1. 在 smap_gather_stats() 函数开头重置 mss->check_shmem_swap 为 false。
+2. 将 mss->swap 的赋值操作改为累加操作（mss->swap += shmem_swapped）。
+经测试验证，该补丁可有效修复此问题。

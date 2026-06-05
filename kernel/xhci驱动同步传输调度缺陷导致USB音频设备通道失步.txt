@@ -1,0 +1,23 @@
+#标题
+xhci驱动同步传输调度缺陷导致USB音频设备通道失步
+
+#内核版本
+未明确 (测试环境为 7.1.0-rc2)
+
+#问题现象
+- MOTU AVB 系列专业音频接口在 Linux 下发生通道同步丢失，音频被路由到错误的输出通道。
+- 设备要求严格的同步传输间隔，一旦服务间隔缺失，设备内部解复用器即失步，必须重置 altsetting 才能恢复。
+- 系统日志或监控显示 URB (USB Request Block) 的 start_frame 出现不连续或跳跃。
+- 在低延迟全双工操作场景下，可能出现音频流反复断开重连的现象。
+
+#问题根因
+xHCI 驱动程序在处理同步传输时存在逻辑缺陷：
+1. `xhci_queue_isoc_tx_prepare` 函数总是假设 `URB_ISO_ASAP` 标志被设置，忽略了 `urb->start_frame` 字段，导致调度器总是尽快调度而非遵循预期的帧间隔。
+2. `xhci_get_isoc_frame_id()` 函数在某些条件下（如队列欠载或 URB 提交延迟）会静默地重新调度 URB，导致帧 ID 不连续。
+3. 当队列出现空隙时，驱动未能维持连续的帧调度，导致硬件层面的同步传输中断。
+
+#解决方案
+已提出两套修复补丁方案并在测试中：
+1. ALSA usb-audio 层修复：引入 `QUIRK_FLAG_STREAM_RESTART_ON_GAP` 标志，当检测到同步间隔缺口（收到 -EXDEV 错误）时，自动重置接口并通知用户空间进行 XRUN 恢复。
+2. xHCI 驱动层修复：修正 `frame_id` 的对齐和校验逻辑，确保帧 ID 的连续性，并正确处理 `URB_ISO_ASAP` 未设置时的调度行为。
+补丁链接：https://lore.kernel.org/linux-usb/20260504233143.10242-2-nick83ola@gmail.com/

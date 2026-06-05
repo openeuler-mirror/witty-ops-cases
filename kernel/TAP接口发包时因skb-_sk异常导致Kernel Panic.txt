@@ -1,0 +1,17 @@
+#标题
+TAP接口发包时因skb->sk异常导致Kernel Panic
+
+#内核版本
+3.11及更高版本（受影响版本包括3.12.40, 3.14.9, 3.16.7, 3.17.7, 3.18.14）
+
+#问题现象
+- 系统在特定网络拓扑（Bridge -> VLAN -> TAP -> VM -> Bridge -> VLAN -> GRE）下发送网络包时触发 Kernel Panic。
+- 日志显示 "general protection fault: 0000 [#1]"，RIP 位于 `skb_queue_tail+0x2e`。
+- 调用栈显示：`tun_net_xmit` -> `skb_tstamp_tx` -> `sock_queue_err_skb` -> `skb_queue_tail`。
+- 最终报错 "Kernel panic - not syncing: Fatal exception in interrupt"。
+
+#问题根因
+引入 commit `eda29772` ("tun: Support software transmit time stamping") 后，`tun_net_xmit` 调用了 `skb_tstamp_tx`。在特定场景下（如 TPROXY 分配了 time-wait socket 且策略路由配置错误），转发的数据包携带了异常的 `skb->sk`（指向 time-wait socket）。当代码尝试将 skb 加入错误队列时，访问了无效内存，触发 general protection fault。
+
+#解决方案
+升级内核至包含 commit `7aca2472093e` ("ip_forward: Drop frames with attached skb->sk") 的版本。该补丁通过在转发路径中丢弃带有 attached socket 的数据包来规避此崩溃。

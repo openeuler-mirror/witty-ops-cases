@@ -1,0 +1,17 @@
+#标题
+writeback与f2fs_drop_inode在inode->i_lock上发生自旋锁死锁
+
+#内核版本
+6.18.0-pre-rc1
+
+#问题现象
+- 系统日志报告 RCU stall 和 soft lockup，CPU 核心长时间处于停滞状态。
+- CPU 7 (kworker/u64:2) 在执行回写任务 `wb_workfn` 时，于 `writeback_sb_inodes` 函数中卡在 `_raw_spin_lock`，无法获取锁。
+- CPU 4 (git 进程) 在执行 `do_unlinkat` 系统调用时，经由 `iput` 进入 `f2fs_drop_inode`，同样卡在 `_raw_spin_lock`。
+- 内核报错信息包含 "rcu_preempt kthread starved" 和 "BUG: soft lockup - CPU#4 stuck for 27s!"。
+
+#问题根因
+`writeback_sb_inodes` 函数与 `f2fs_drop_inode` 函数在操作过程中竞争 `inode->i_lock` 自旋锁，导致死锁（spinlock deadlock），进而引发系统挂起。
+
+#解决方案
+暂无

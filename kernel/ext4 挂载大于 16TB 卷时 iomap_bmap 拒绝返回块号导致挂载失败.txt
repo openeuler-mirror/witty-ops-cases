@@ -1,0 +1,20 @@
+#标题
+ext4 挂载大于 16TB 卷时 iomap_bmap 拒绝返回块号导致挂载失败
+
+#内核版本
+5.7-rc2
+
+#问题现象
+- 在内核 5.7-rc 版本下，无法挂载大于 16TB 的 ext4 文件系统卷。
+- 系统日志中出现内核警告：`WARNING: CPU: 0 PID: 640 at fs/iomap/fiemap.c:121 iomap_bmap_actor+0x3a/0x40`，并提示 "would truncate bmap result"。
+- 随后报错 "jbd2_journal_init_inode: Cannot locate journal superblock" 以及 "EXT4-fs (dm-1): Could not load journal inode"。
+- Call Trace 指向：`iomap_bmap_actor -> iomap_apply -> iomap_bmap -> bmap -> jbd2_journal_init_inode -> ext4_fill_super`。
+- 降级至内核 5.6 版本可正常挂载。
+
+#问题根因
+在 5.7 开发周期中，ext4 将 bmap 操作迁移至 `iomap_bmap` 实现。`iomap_bmap` 函数内部对块号进行了检查，如果块号超过 `INT_MAX`（即文件系统大于 16TB），函数会打印警告 "would truncate bmap result" 并拒绝返回物理块地址。此检查原本是为了防止通过 `FIBMAP` ioctl 向用户空间返回截断的错误地址。然而，JBD2 日志模块在初始化日志 inode 时通过 `bmap()` 内核接口调用 `iomap_bmap`，当日志所在的块号超过 32 位限制时，该检查导致 JBD2 无法获取日志超级块位置，从而引发挂载失败。
+
+#解决方案
+暂无已合并的修复补丁。
+规避措施：降级使用内核 5.6 或更早版本。
+社区讨论的修复方向包括：将 `INT_MAX` 检查逻辑从 `iomap_bmap` 移至 `ioctl_fibmap` 用户态接口层，以允许内核内部调用者正常获取大块号；或者重构 JBD2 使其通过回调函数或 iomap 机制直接映射块，不再依赖 `bmap` 接口。

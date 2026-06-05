@@ -1,0 +1,18 @@
+#标题
+XFS CIL throttle机制缺陷导致进程D状态阻塞
+
+#内核版本
+5.10.70
+
+#问题现象
+系统运行过程中出现大量进程处于 D 状态（不可中断睡眠）超过 122 秒，导致 I/O 全面停滞。
+受影响进程包括 kworker、nix-daemon、qemu-ga 等。
+内核日志显示调用栈停滞在 `xfs_log_commit_cil`、`rwsem_down_read_slowpath` 或 `rwsem_down_write_slowpath` 处。
+部分故障现场观察到 `thaw_super` 相关的阻塞，可能与文件系统冻结/解冻操作并发有关。
+
+#问题根因
+XFS 日志提交（CIL）的 throttle 机制存在缺陷。当 CIL 空间使用量出现回退（going backwards）时，进程在 `xfs_log_commit_cil` 函数中陷入硬限流等待状态无法被正确唤醒，从而导致死锁或长时间阻塞。
+
+#解决方案
+应用补丁 19f4e7cc8197 ("xfs: Fix CIL throttle hang when CIL space used going backwards")。
+该修复已合入 Linux 5.14 版本，对于 5.10 等早期版本需进行反向移植。

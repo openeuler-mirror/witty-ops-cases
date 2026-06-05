@@ -1,0 +1,19 @@
+#标题
+Realtek 8821CE 驱动在启用 NAPI 后导致系统死锁
+
+#内核版本
+mainline, linux-next
+
+#问题现象
+- 使用 Realtek 8821CE 无线网卡时系统发生死锁
+- 死锁前内核日志大量打印 "pci bus timeout, check dma status" 警告
+- 数据结构出现不同步：`total_pkt_size` 从 0 重新开始，与 `rtwpci->rx_tag` 失配
+- 问题出现在 commit 9e2fd29864c5 ("rtw88: add napi support") 之后
+
+#问题根因
+引入 NAPI 支持的 commit 9e2fd29864c5 暴露了一个底层 Bug。问题与 CPU 电源管理状态（ASPM）有关，当 CPU 进入深度节能状态时，无法足够快地从 RX ring 读取数据，导致 DMA 状态异常（RX tag 不匹配）。在 `rtw_pci_dma_check` 函数中检测到 `total_pkt_size` 与预期的 `rx_tag` 不一致，进而引发系统冻结。
+
+#解决方案
+- 临时规避方案 1：添加内核启动参数 `rtw88_pci.disable_aspm=1`，但这会显著增加功耗。
+- 临时规避方案 2：在 RX 处理期间禁用链路电源管理（Link PS）。
+- 官方建议：将“禁用 Link PS”的修复作为 quirk 仅应用于受影响的特定平台，以避免在其他平台（如部分 AMD 平台）上造成功耗回退。

@@ -1,0 +1,22 @@
+#标题
+f2fs_gc线程死循环导致CPU占用100%及系统挂起
+
+#内核版本
+5.18
+
+#问题现象
+- f2fs_gc 内核线程长时间占用 100% CPU 资源。
+- 系统出现挂起，日志显示 "INFO: task f2fs_ckpt blocked for more than 122 seconds"。
+- 调用栈显示进程阻塞在 `rwsem_down_write_slowpath`，涉及 `f2fs_gc` 和 `f2fs_get_lock_data_page` 函数。
+- 该问题为回归问题，自内核 5.18 版本引入，5.17 版本未复现。
+
+#问题根因
+在 `fs/f2fs/data.c` 文件的 `f2fs_get_lock_data_page` 函数中，当 `f2fs_get_read_data_page` 返回的页面 `page->mapping` 与预期的 `inode->i_mapping` 不匹配时，代码逻辑会释放页面并跳转回 `repeat` 标签重试。由于该异常状态未被消除，导致函数陷入无限循环。此循环导致 `f2fs_gc` 线程持续占用 CPU 且持有信号量，阻塞了后续的 checkpoint 操作，最终导致系统挂起。
+
+#解决方案
+暂无官方合并的修复补丁。
+规避方案：
+1. 在挂载 f2fs 分区时添加 `background_gc=off` 参数以禁用后台垃圾回收。
+2. 降级内核版本至 5.17.x。
+调试方案：
+开发者提供了临时补丁，在循环中添加 `f2fs_io_schedule_timeout` 以让出 CPU 或强制跳出循环，但这并非正式修复方案。

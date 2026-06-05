@@ -1,0 +1,17 @@
+#标题
+cachefiles模块空指针解引用导致内核Oops
+
+#内核版本
+v4.6, 4.7-rc3
+
+#问题现象
+- 在挂载 NFS 共享（使用 fsc 选项）并运行 iozone 测试时，系统触发 Kernel Oops。
+- 日志报错："BUG: unable to handle kernel NULL pointer dereference at 0000000000000098"。
+- RIP 寄存器指向函数 `cachefiles_mark_object_inactive+0x5e/0xb0 [cachefiles]`。
+- 调用栈显示：`cachefiles_mark_object_inactive` <- `cachefiles_drop_object` <- `fscache_drop_object` <- `fscache_object_work_func`。
+
+#问题根因
+在 `cachefiles_mark_object_inactive` 函数中，代码逻辑尝试获取 `d_backing_inode(object->dentry)->i_blocks`。反汇编分析确认，此时 `object->dentry->d_inode` 为 NULL，导致 `d_backing_inode()` 返回空指针。后续指令 `mov 0x98(%rax),%rax` 尝试访问该空指针偏移 0x98 处的成员（即 `i_blocks`）时触发空指针解引用异常。
+
+#解决方案
+暂无明确修复方案。开发者分析指出问题由 commit a5b3a80b899bda0f456f1246c4c5a1191ea01519 引入，虽然社区讨论了相关补丁（如 patchwork.kernel.org/patch/9261623），但用户反馈在 4.7.2 版本中问题仍复现，Bug 状态仍为 NEW。

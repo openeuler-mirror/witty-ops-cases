@@ -1,0 +1,18 @@
+#标题
+GPU直通解绑设备时因引用计数非零触发内核WARNING并导致libvirt冻结
+
+#内核版本
+4.15, 4.17-rc1
+
+#问题现象
+- 内核日志报错："NVRM: Attempting to remove minor device 0 with non-zero usage count!"
+- 触发 WARNING：`WARNING: CPU: 0 PID: 1281 at ... nvidia/nv.c:4027 nvidia_remove+0x2ee/0x310 [nvidia]`
+- 调用栈显示路径为 `unbind_store` -> `device_release_driver` -> `pci_device_remove` -> `nvidia_remove`。
+- 宿主机上的 libvirt 进程冻结，无法正常重启系统。
+- 当驱动已加载且设备被占用（如运行 nvidia-smi）时，问题 100% 复现。
+
+#问题根因
+在 GPU 直通场景下，宿主机上的进程（如 nvidia-smi 脚本）占用了 GPU 设备，导致设备引用计数非零。当执行虚拟机关机或设备解绑操作时，内核尝试移除设备驱动，调用 `nvidia_remove` 函数。由于检测到使用计数不为零，Nvidia 驱动触发了 WARNING 并导致后续操作卡死。
+
+#解决方案
+暂无官方修复。建议在解绑 GPU 设备或关闭虚拟机前，确保宿主机上无进程（如 nvidia-smi）正在占用该设备。

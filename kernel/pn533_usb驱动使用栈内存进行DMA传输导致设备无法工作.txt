@@ -1,0 +1,18 @@
+#标题
+pn533_usb驱动使用栈内存进行DMA传输导致设备无法工作
+
+#内核版本
+4.14.3（评论中也提及 4.9.x、4.16.8）
+
+#问题现象
+- 插入 ACS ACR122 NFC 读卡器时，dmesg 显示 "transfer buffer not dma capable" 警告。
+- 内核触发 WARNING，堆栈指向 `usb_hcd_map_urb_for_dma` 和 `pn533_usb_probe`。
+- 驱动探测失败，日志显示 "pn533_usb: probe of 3-1:1.0 failed with error -11"。
+- nfctool 无法发现设备，设备不可用。
+
+#问题根因
+`pn533_usb` 驱动程序在 `pn533_usb_probe` 函数中调用 `usb_submit_urb` 时，使用了栈上分配的缓冲区进行 DMA 传输。栈内存不具备 DMA 能力，导致 `usb_hcd_map_urb_for_dma` 检测失败并报错。该问题在较新的内核版本中由于栈内存处理机制的变更（如 VMAP 栈）而暴露。
+
+#解决方案
+规避方案：卸载 `pn533`、`pn533_usb` 等内核模块，使用用户态的 `ccid` 驱动配合 `pcscd` 服务运行设备。
+根本修复：需修改驱动代码，将栈内存分配改为使用 `kmalloc` 进行动态内存分配，以确保缓冲区具备 DMA 能力。

@@ -1,0 +1,19 @@
+#标题
+VM_SOFTDIRTY标志位阻碍VMA合并导致进程因超出vm.max_map_count而崩溃
+
+#内核版本
+3.12.5
+
+#问题现象
+- GIMP 在打开或创建大图像（如 16000x16000 像素）时崩溃，报错 "GLib-ERROR **: gmem.c:110: failed to allocate 16384 bytes"。
+- 系统日志显示 "traps: gimp[844] trap int3 ip:7fdb67e07289 sp:7fffcd30c7d0 error:0"。
+- 进程的 VMA（虚拟内存区域）数量激增，超过 vm.max_map_count 限制（默认 65530）；在内核 3.11 下相同操作仅产生约 1200 个 VMA，而在 3.12 下产生超过 70000 个。
+- 设置环境变量 MALLOC_MMAP_MAX_=0 可规避此问题。
+
+#问题根因
+内核引入 commit d9104d1ca9662498339c0de975b4666c30485f4e ("mm: track vma changes with VM_SOFTDIRTY bit") 后，VMA 合并逻辑受到影响。
+在函数 is_mergeable_vma 和 anon_vma_compatible 中，如果相邻 VMA 的 VM_SOFTDIRTY 标志位不一致，内核会拒绝合并这些 VMA。这导致本应合并的 VMA 变得高度碎片化，VMA 数量急剧增加，最终触及 vm.max_map_count 上限，导致 mmap 分配失败，进而引发应用程序崩溃。
+
+#解决方案
+修改 mm/mmap.c 中的 VMA 合并逻辑，在判断是否可合并时忽略 VM_SOFTDIRTY 标志位差异；若合并成功，则将合并后的 VMA 标记为 VM_SOFTDIRTY。
+具体补丁为 "mm: Ignore VM_SOFTDIRTY on VMA merging"，涉及修改 is_mergeable_vma 和 anon_vma_compatible 函数。

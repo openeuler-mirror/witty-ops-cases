@@ -1,0 +1,16 @@
+#标题
+Samsung SSD 固件错误报告支持 NCQ Send/Recv 导致内核日志报错
+
+#内核版本
+3.12x - 4.0x
+
+#问题现象
+- 系统启动时内核日志（dmesg）持续输出报错信息：`ata1.00: failed to get NCQ Send/Recv Log Emask 0x1`。
+- 受影响设备主要为 Samsung 840 EVO/Pro 及 850 EVO/Pro 系列 SSD。
+- 部分用户反馈在特定固件版本下，该错误可能伴随 I/O 错误导致文件系统重新挂载为只读。
+
+#问题根因
+根因为 SSD 固件 Bug。内核从 3.12 版本开始引入对 SATA 3.1 SEND/RECEIVE FPDMA QUEUED 的支持（Commit `ed36911c`）。驱动程序在初始化时检查设备的 IDENTIFY DEVICE 数据 Word 77 bit 6，受影响的 Samsung SSD 错误地将该位置 1，声明支持 RECEIVE/SEND FPDMA QUEUED 功能。根据 SATA 规范，若支持该功能，设备必须支持 Log Page 13h。内核尝试读取该日志页时，设备返回错误（Emask 0x1），导致内核打印失败信息。
+
+#解决方案
+临时规避：在 GRUB 启动参数中添加 `libata.force=noncq` 可消除报错，但这会禁用 NCQ 功能，影响性能。根本修复：内核社区已讨论针对受影响的 Samsung SSD 型号添加 quirk 补丁，禁用其 Queued TRIM 功能（而非完全禁用 NCQ），以避免内核尝试读取不支持的 Log Page。

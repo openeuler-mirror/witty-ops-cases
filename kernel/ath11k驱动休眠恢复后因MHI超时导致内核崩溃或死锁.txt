@@ -1,0 +1,18 @@
+#标题
+ath11k驱动休眠恢复后因MHI超时导致内核崩溃或死锁
+
+#内核版本
+5.14 及更高版本（受影响版本包括 6.1, 6.10, 6.13 等）
+
+#问题现象
+- 系统从休眠恢复时加载镜像后冻结，无法交还控制权。
+- 内核触发 panic，日志显示 PM watchdog 超时。
+- ath11k 无线网卡在恢复后无法工作，尝试执行 `rmmod ath11k_pci` 会导致系统死锁或崩溃。
+- 日志中出现 MHI bus timeout 相关信息，例如 "Last interrupt received for each CE... ms before"。
+
+#问题根因
+休眠过程中 WLAN 电源被切断，导致 MHI 总线在恢复时卡住约 90 秒。若 PM core watchdog 配置的超时时间（如 openSUSE 默认的 60 秒）短于 MHI 超时时间，内核会触发 panic。即使未触发 panic，驱动状态异常也会导致设备不可用。此前合入的休眠支持补丁因引入其他问题已被回退。
+
+#解决方案
+- 临时规避：通过 debugfs 调整 MHI timeout 参数使其小于 PM watchdog 超时时间，或通过 systemd 服务在休眠前后卸载/加载 `ath11k_pci` 模块。
+- 补丁修复：v6.3 合入了降低 MHI timeout 的补丁；针对完整的休眠支持，新的补丁系列（v2）已提交并在 ath.git 分支中测试，等待合入主线。

@@ -1,0 +1,23 @@
+#标题
+NTFS3文件系统在USB接口高负载I/O下触发内核崩溃
+
+#内核版本
+6.11.6, 6.12-rc6, 6.13.5, 6.14.1-zen1
+
+#问题现象
+- 在USB外接硬盘的NTFS分区上执行高负载I/O操作（如运行rdfind查找重复文件）时触发内核BUG或Oops。
+- 故障表现多样，包括：
+  - "BUG: unable to handle page fault for address: ffffffffffffffe8" (RIP: folio_wait_bit_common)
+  - "kernel BUG at include/linux/highmem.h:275!" (RIP: ntfs_get_block_vbo)
+  - "BUG: kernel NULL pointer dereference" (RIP: mpage_readahead)
+  - "Oops: general protection fault" (RIP: __list_del_entry_valid_or_report)
+  - "list_del corruption"
+- 调用栈主要集中在 `filemap_get_pages`、`filemap_read`、`mpage_readahead` 及 `ntfs3` 模块相关函数。
+- 问题仅在USB接口连接的NTFS文件系统上复现，在同一磁盘的ext4分区或SATA直连模式下未复现。
+
+#问题根因
+怀疑为 `ntfs3` 驱动程序在高I/O负载场景下处理页缓存或块层请求时存在内存管理缺陷。具体表现为在 `filemap_get_pages` 或 `mpage_readahead` 执行路径中访问了无效地址或破坏了内核链表结构，导致系统崩溃。问题与USB存储栈和NTFS3驱动的交互有关，非硬件故障。
+
+#解决方案
+暂无官方修复补丁（Bug状态为 NEW）。
+规避措施：避免在USB接口的NTFS文件系统上进行高负载I/O操作，或改用ext4文件系统。

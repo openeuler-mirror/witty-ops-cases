@@ -1,0 +1,17 @@
+#标题
+Btrfs挂载重放日志时触发空指针解引用导致内核Oops
+
+#内核版本
+5.4（日志显示实例为 5.3.7-301.fc31.x86_64）
+
+#问题现象
+- 系统在强制断电后挂载 Btrfs 文件系统时触发 kernel NULL pointer dereference
+- 内核日志显示 RIP 指向 `write_extent_buffer+0xa0/0x160 [btrfs]`，访问地址为 `0000000000000008`
+- Call Trace 显示调用链为：`btrfs_recover_log_trees` -> `replay_one_buffer` -> `add_inode_ref` -> `__btrfs_commit_inode_delayed_items`
+- 文件系统无法正常挂载，需使用 `btrfs rescue zero-log` 工具才能恢复使用
+
+#问题根因
+在 Btrfs 挂载过程中执行日志重放（log replay）时，`write_extent_buffer` 函数访问了空指针地址（偏移 0x8）。故障发生在 `add_inode_ref` 处理流程中，可能由于强制断电导致文件系统元数据处于不一致状态，重放逻辑在处理延迟项或 extent buffer 时未正确处理空指针情况。
+
+#解决方案
+暂无内核补丁修复。临时规避方法为使用 `btrfs rescue zero-log` 命令清零日志树，但这会导致断电前未提交的数据丢失。

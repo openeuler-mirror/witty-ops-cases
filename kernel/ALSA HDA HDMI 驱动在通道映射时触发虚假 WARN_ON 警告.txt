@@ -1,0 +1,17 @@
+#标题
+ALSA HDA HDMI 驱动在通道映射时触发虚假 WARN_ON 警告
+
+#内核版本
+6.19.13（亦见于 mainline 6.19 / next）
+
+#问题现象
+- 当 wireplumber/PipeWire 准备 HDMI codec 上的 PCM 流时，内核触发 WARN_ON 警告，污染 dmesg 日志。
+- 日志显示：`WARNING: sound/hda/core/hdmi_chmap.c:357 at snd_hdac_setup_channel_mapping+0x217/0x5d0 [snd_hda_core]`。
+- Call Trace 包含：`snd_hda_hdmi_setup_audio_infoframe`、`snd_hda_hdmi_generic_pcm_prepare`、`snd_pcm_prepare` 等。
+- 音频播放功能正常，该警告为非致命错误。
+
+#问题根因
+在 `hdmi_std_setup_channel_mapping()` 函数中，当设备返回无效的通道插槽映射（例如全为零）时，`ch_alloc->speakers[]` 表中的非零扬声器插槽数量少于 `ch_alloc->channels`。导致代码中的 while 循环遍历越过插槽 7（slot 7），从而触发 `WARN_ON(hdmi_slot >= 8)`。实际上映射逻辑随后能正确完成，该 WARN_ON 检查过于激进，属于误报。
+
+#解决方案
+开发者已提供测试修复补丁，旨在处理无效通道映射情况并移除过激的 WARN_ON。补丁目前处于测试验证阶段。

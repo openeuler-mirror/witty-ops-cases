@@ -1,0 +1,21 @@
+#标题
+TTM模块释放页面时因double free触发Bad page state错误
+
+#内核版本
+5.3.0-rc2-00013
+
+#问题现象
+- 内核日志报告 "BUG: Bad page state in process Xorg pfn:2a300"
+- 故障页面状态显示 refcount:0 mapcount:-128，页面标志位为空，触发原因为 "nonzero mapcount"
+- 调用栈显示错误发生在内存释放路径：__free_pages_ok -> __ttm_dma_free_page -> ttm_dma_unpopulate -> ttm_bo_vm_close -> __do_munmap
+- 系统同时出现用户态进程（如 iscons.py, in.telnetd）崩溃，怀疑与内存管理异常有关
+
+#问题根因
+- 故障页面的 mapcount 值为 -128，对应内核宏 PAGE_MAPCOUNT_RESERVE，表示该页面已被 buddy 系统接管（即 PageBuddy 标志已设置）。
+- 根据分析，这是典型的 double free 场景：某处代码多调用了一次 put_page()，导致页面第一次被错误地释放回 buddy 系统；第二次释放操作检测到页面状态异常（已是 buddy 页面），从而触发 bad_page 报错。
+- 异常释放路径指向 TTM（Translation Table Manager）子系统的 ttm_dma_unpopulate 函数。
+
+#解决方案
+- 该问题在后续内核版本（包含 5.3-rc5 相关补丁）中无法复现，推测已在主线开发中修复。
+- 调试建议：可开启 CONFIG_DEBUG_PAGEALLOC 和 CONFIG_PAGE_OWNER 选项，配合相关调试补丁以捕获首次释放的调用栈信息。
+- 规避措施：回退至 5.2 内核版本可避免此问题。

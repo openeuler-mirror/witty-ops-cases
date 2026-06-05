@@ -1,0 +1,19 @@
+#标题
+Radeon驱动挂起过程中因fence等待超时触发dpm_watchdog导致内核Panic
+
+#内核版本
+3.19.0-rc2-219-g693a30b8
+
+#问题现象
+- 系统在KDE会话下执行挂起操作时发生内核Panic。
+- 日志显示 "radeon 0000:02:00.0: **** DPM device timeout ****"。
+- 调用栈显示进程阻塞在 `radeon_fence_default_wait` -> `schedule_timeout`，随后触发 `dpm_watchdog_handler` 导致系统重启或停止。
+- 报错信息："Kernel panic - not syncing: radeon 0000:02:00.0: unrecoverable failure"。
+
+#问题根因
+问题由 commit f2c24b83ae90 ("drm/ttm: flip the switch, and convert to dma_fence") 引入。
+在挂起流程中，`radeon_fence_enable_signaling` 函数处理 DMA ring 的 fence 时，中断使能（`irq_get`）与硬件状态同步存在竞争或时序问题，导致 fence 信号未能及时触发，使得挂起流程一直等待直至触发 dpm_watchdog 超时。在 `irq_get` 后添加短暂延迟（如 `udelay(50)`）可规避此问题。
+
+#解决方案
+该问题已通过 commit b6610101718d ("drm/radeon: fix fence signaling race") 修复，补丁已合入 v4.4 及后续版本。
+修复补丁链接：https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b6610101718d4ab90d793c482625e98eb1262cad

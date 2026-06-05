@@ -1,0 +1,16 @@
+#标题
+ext4挂载选项journal_async_commit导致启动时根文件系统变为只读
+
+#内核版本
+3.18.5
+
+#问题现象
+- 系统启动后根文件系统变为只读模式，无法正常写入。
+- dmesg 日志显示报错："EXT4-fs (sdb1): changing journal_checksum during remount not supported"。
+- 该问题为回归问题，内核 3.17.x 版本未出现此异常。
+
+#问题根因
+从内核 3.18 开始，ext4 代码逻辑发生变更，开始禁止在 remount（重新挂载）过程中修改 journal_checksum 选项。系统启动流程中，根文件系统首先以只读方式挂载，随后根据 /etc/fstab 配置尝试 remount 为读写模式。若 fstab 中配置了 journal_async_commit 选项（该选项隐含启用 journal_checksum），remount 操作会因检测到 journal_checksum 状态变更被拒绝而失败，导致根文件系统保持只读状态。
+
+#解决方案
+将 journal_async_commit 选项从 /etc/fstab 中移除，改为添加到内核启动参数 rootflags=journal_async_commit 中；或直接移除该选项。社区曾提议修改代码逻辑为“忽略选项变更并告警”而非直接失败，但维护者建议使用上述启动参数方式规避。

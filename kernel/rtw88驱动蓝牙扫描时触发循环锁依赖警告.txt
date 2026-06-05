@@ -1,0 +1,16 @@
+#标题
+rtw88驱动蓝牙扫描时触发循环锁依赖警告
+
+#内核版本
+6.1.7
+
+#问题现象
+- 执行 `bluetoothctl scan on` 开启蓝牙扫描时，内核日志报出 "WARNING: possible circular locking dependency detected"。
+- Lockdep 检测到潜在的死锁风险：`kworker` 进程在持有 `(work_completion)(&(&coex->bt_remain_work)->work)` 锁的情况下，试图获取 `&rtwdev->mutex`，而该锁依赖链存在反转。
+- 涉及的调用栈包括 `rtw_coex_bt_remain_work` 和 `rtw_coex_bt_info_notify`。
+
+#问题根因
+在 `rtw_coex_bt_info_notify` 函数中，代码在持有 `rtwdev->mutex` 的情况下调用了 `cancel_delayed_work_sync(&coex->bt_remain_work)`。由于 `bt_remain_work` 工作队列处理函数执行时也需要获取 `rtwdev->mutex`，这导致了锁顺序反转：一个上下文持有 mutex 等待 work 完成，而 work 执行时又需要获取同一个 mutex，从而形成死锁条件，触发 Lockdep 警告。
+
+#解决方案
+开发者建议修改 `drivers/net/wireless/realtek/rtw88/coex.c` 中的 `rtw_coex_bt_info_notify` 函数：在调用 `cancel_delayed_work_sync` 前临时释放 `rtwdev->mutex`，操作完成后再重新获取，以打破锁的循环依赖。目前 Bug 状态为 NEW，补丁尚在讨论中。

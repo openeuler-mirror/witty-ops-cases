@@ -1,0 +1,21 @@
+#标题
+UBIFS文件系统layout_in_gaps函数内存越界写入导致内核崩溃
+
+#内核版本
+5.2.0
+
+#问题现象
+- 系统触发 kernel oops，提示 "BUG: unable to handle page fault for address: ffffffff00000140"
+- Call Trace 显示崩溃路径为 `rb_next_postorder` -> `destroy_old_idx` -> `ubifs_tnc_start_commit`
+- KASAN 检测到 `tnc_commit.c` 中发生 slab-out-of-bounds 访问
+- 故障发生在 UBIFS 文件系统执行写回或提交操作期间
+
+#问题根因
+位于 `fs/ubifs/tnc_commit.c` 的 `layout_in_gaps` 函数存在内存管理逻辑错误：
+1. 函数根据 `c->lst.idx_lebs` 的当前值分配 `c->gap_lebs` 数组内存。
+2. 在 do-while 循环执行过程中，调用链 `layout_leb_in_gaps` -> `ubifs_find_dirty_idx_leb` -> `ubifs_change_lp` 会动态增加 `c->lst.idx_lebs` 的计数值。
+3. 循环次数可能超过初始分配的数组大小，导致指针 `p` 越界写入。
+4. 越界写入破坏了相邻的 slab 对象（具体为 `ubifs_old_idx` 结构体中的 `rb_node` 成员），导致后续在 `destroy_old_idx` 中遍历红黑树时访问到被破坏的节点指针，触发 page fault。
+
+#解决方案
+暂无（Bug状态为NEW，报告中未提及已合并的修复补丁）

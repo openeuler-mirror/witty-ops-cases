@@ -1,0 +1,19 @@
+#标题
+ath11k驱动VHT能力集组合无效导致AP拒绝关联请求
+
+#内核版本
+6.2（回归引入版本：5.16）
+
+#问题现象
+- 使用 ath11k_pci 驱动的 QCN9074 网卡在连接 Synology RT6600AX AP 时，认证成功但关联请求被拒绝。
+- AP 端日志报错："deny assoc request, Invalid supported ch width and ext nss combination"。
+- 客户端 dmesg 显示关联响应状态码为 18（denied association）。
+- 该问题为回归问题，内核 5.15 版本正常，从 5.16 版本开始出现。
+
+#问题根因
+commit `f552d6fd2f27ce9430c74482c46272838e2de688` ("ath11k: add support for 80P80 and 160 MHz bandwidth") 移除了对 VHT160 和 80+80 模式能力位的屏蔽。这导致驱动向 AP 声明支持 160MHz/80+80MHz (Supported Channel Width = 2)，同时声明 Extended NSS BW Support = 1。根据 `net/wireless/util.c` 中的校验逻辑，该组合被视为无效配置，严格的 AP 因此拒绝关联。
+
+#解决方案
+暂无官方合并修复。可通过以下临时方案规避：
+1. 回退 commit `f552d6fd...` 中移除 VHT160/80+80 屏蔽代码的改动。
+2. 在 `ath11k_create_vht_cap` 函数中清除 `IEEE80211_VHT_CAP_EXT_NSS_BW_MASK` 标志位，可解决关联问题并保留 160MHz 连接能力。

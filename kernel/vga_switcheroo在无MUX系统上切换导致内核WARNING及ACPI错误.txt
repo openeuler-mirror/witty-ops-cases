@@ -1,0 +1,19 @@
+#标题
+vga_switcheroo在无MUX系统上切换导致内核WARNING及ACPI错误
+
+#内核版本
+4.5.0
+
+#问题现象
+- 用户尝试使用 vga_switcheroo 将显示切换到独立显卡时，系统挂起约 60 秒，屏幕空白。
+- 内核日志报出 WARNING：`hsw_enable_pc8+0x4f6/0x750`，调用栈包含 `i915_switcheroo_set_state` 和 `vga_switchto_stage2`。
+- 系统日志中出现 ACPI 错误：`ACPI Error: No handler for Region [EC81]` 以及 `failed to evaluate ATPX got AE_NOT_EXIST`。
+- X Server 无法在 Radeon 显卡上启动，报错 "No screens found" 或 "No modes"。
+
+#问题根因
+故障机器为无 MUX (muxless) 架构的笔记本电脑，显示器物理连接仅限于集成显卡 (IGP)，不支持 vga_switcheroo 的硬件切换功能。用户在不支持的硬件上执行切换操作触发了 i915 驱动的异常路径。同时，BIOS 在处理 ATPX 电源控制方法时存在缺陷，导致 ACPI 解析执行失败。
+
+#解决方案
+- 对于无 MUX 系统，不应使用 vga_switcheroo 进行显卡切换，应使用 PRIME 机制进行 GPU 渲染卸载。
+- 可通过添加内核启动参数 `radeon.runpm=0` 规避 Radeon 驱动的运行时电源管理问题及相关的 ACPI 错误。
+- 建议移除自定义 xorg.conf 配置文件，依赖驱动自动检测。

@@ -1,0 +1,17 @@
+#标题
+KASAN报告打印过程触发LOCKDEP死锁警告导致关键调试信息丢失
+
+#内核版本
+4.20.0-rc7-next-20181224
+
+#问题现象
+- KASAN 检测到内存错误（如 stack-out-of-bounds）并开始打印报告
+- 在 KASAN 打印完基本信息前，LOCKDEP 突然介入并报告 "possible circular locking dependency detected"
+- 若系统配置了 panic_on_warn，内核将直接 panic 重启
+- 原始 KASAN 报告中的 Allocated/Free/Stack 等关键调试信息被截断或丢失，导致无法定位原始故障
+
+#问题根因
+KASAN 在某些持有特定锁（如 hrtimer_bases.lock）的上下文中调用 printk 打印错误报告时，printk 内部尝试获取 console_sem.lock。这一行为触发了 LOCKDEP 的锁依赖检查，LOCKDEP 判定 report_lock、hrtimer_bases.lock 与 console_sem.lock 之间存在潜在的循环依赖链，从而触发警告。
+
+#解决方案
+已通过补丁修复，补丁链接：https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c32caa267b927b744610f4214bfde7ce7d55df1c

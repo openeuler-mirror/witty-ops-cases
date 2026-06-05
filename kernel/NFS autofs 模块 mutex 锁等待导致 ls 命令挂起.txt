@@ -1,0 +1,17 @@
+#标题
+NFS autofs 模块 mutex 锁等待导致 ls 命令挂起
+
+#内核版本
+3.13.0-37-generic
+
+#问题现象
+- 用户执行 ls 命令列出 autofs 挂载目录时随机性挂起。
+- 系统日志 dmesg 输出 "INFO: task ls:26370 blocked for more than 120 seconds"。
+- Call Trace 显示进程阻塞在 D 状态，堆栈路径为：schedule_preempt_disabled -> __mutex_lock_slowpath -> mutex_lock -> autofs4_notify_daemon。
+- 日志中伴随 "RPC: AUTH_GSS upcall failed. Please check user daemon is running." 报错。
+
+#问题根因
+根据 Call Trace 分析，进程阻塞在 autofs4_notify_daemon 函数的 mutex_lock 处。开发人员分析认为，这可能与 automount daemon 状态异常有关：当日志中出现 RPC AUTH_GSS upcall 失败时，可能导致 automount daemon 无响应或崩溃，进而导致内核向 daemon 发送请求的写入操作阻塞，长时间持有 waitq mutex 锁无法释放。
+
+#解决方案
+暂无（Bug 状态为 ASSIGNED，未提供最终修复补丁；建议排查 automount daemon 是否崩溃，或尝试配置 NEED_GSSD=yes 及调整 MOUNT_WAIT 参数进行测试）。

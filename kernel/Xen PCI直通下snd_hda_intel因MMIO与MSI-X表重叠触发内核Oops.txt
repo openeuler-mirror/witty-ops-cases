@@ -1,0 +1,17 @@
+#标题
+Xen PCI直通下snd_hda_intel因MMIO与MSI-X表重叠触发内核Oops
+
+#内核版本
+5.10.27
+
+#问题现象
+- 在 Xen 环境下将 C-Media CM8888 声卡直通给 Guest OS 时，加载 snd_hda_intel 驱动触发内核 Oops。
+- 内核日志显示：`BUG: unable to handle page fault for address: ffffc9004059400e`，错误码为 `permissions violation`。
+- 调用栈指向 `snd_hdac_bus_reset_link` 函数。
+- Xen Hypervisor 日志显示拒绝写入操作：`d1: Forcing read-only access to MFN fbdf0`。
+
+#问题根因
+该声卡硬件设计存在缺陷，其 STATESTS 寄存器（位于 BAR 0 偏移量 0xe）与 MSI-X 表（位于 BAR 0 偏移量 0x0-0xf）存在内存重叠。Xen Hypervisor 出于安全考虑，禁止 Guest 内核直接写入 MSI-X 表所在的内存页，将其强制设为只读。当 snd_hda_intel 驱动尝试在 `snd_hdac_bus_reset_link` 中写入 STATESTS 寄存器以复位 HDAC 总线时，触发页面权限错误导致 Oops。
+
+#解决方案
+暂无上游内核修复。用户通过修改 Xen Hypervisor 代码隐藏该设备的 MSI-X 功能能力后可正常使用。建议更换符合规范的声卡硬件。

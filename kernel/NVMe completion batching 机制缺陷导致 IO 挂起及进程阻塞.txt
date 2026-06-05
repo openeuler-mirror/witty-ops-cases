@@ -1,0 +1,17 @@
+#标题
+NVMe completion batching 机制缺陷导致 IO 挂起及进程阻塞
+
+#内核版本
+5.17.0-rc7（受影响版本包括 5.16 至 6.0-rc1）
+
+#问题现象
+- 系统挂起/恢复后文件系统 IO 停滞，dmesg 报告 "kworker blocked for more than 30 seconds"（指向 wb_workfn）。
+- 出现高 iowait（可达 99%），进程处于 D 状态无法响应 `kill -9`。
+- 在特定环境（如 GCP n2d-standard-2）下，设置 `nr_requests` 为 128 且 `iodepth` >= 128 时极易复现 fio 卡死。
+- 调用栈显示进程阻塞在 `blk_mq_get_tag` -> `sbitmap_queue_wake_up`。
+
+#问题根因
+由提交 `4f5022453acd` ("nvme: wire up completion batching for the IRQ path") 引入。该提交在实现 IRQ 路径的 completion batching 时，`sbitmap` 的批量 `wait_cnt` 计算逻辑存在错误，导致唤醒丢失，使得请求 tag 无法释放，进而引发 IO 挂起。
+
+#解决方案
+临时规避方案为回退提交 `4f5022453acd`。正式修复需应用 `sbitmap` 相关补丁集（包含 `sbitmap: fix possible io hung due to lost wakeup`、`sbitmap: Avoid leaving waitqueue in invalid state in __sbq_wake_up()` 及 `sbitmap: fix batched wait_cnt accounting`），相关修复已合入 Linux 6.1。

@@ -1,0 +1,17 @@
+#标题
+KVM 嵌套虚拟化 mmu_reload 与事件注入冲突导致内核 Panic
+
+#内核版本
+3.4
+
+#问题现象
+- 系统日志报错 "BUG: unable to handle kernel paging request at ffff87ffffffffff"
+- 触发 Kernel Oops (0000 [#1])，RIP 指向 `__direct_map.clone.86` 函数
+- 调用栈显示 `gfn_to_pfn_prot` -> `tdp_page_fault` -> `handle_ept_violation`
+- 故障发生在运行 KVM 虚拟机且涉及嵌套虚拟化的环境中
+
+#问题根因
+在 `vcpu_enter_guest` 执行流程中，首先通过 `kvm_mmu_reload` 加载了有效的 `root_hpa`，随后在 `inject_pending_event` -> `vmx_interrupt_allowed` -> `nested_vmx_vmexit` -> `load_vmcs12_host_state` -> `kvm_mmu_reset_context` 的调用链中，`root_hpa` 被重置为无效值（INVALID_PAGE/-1）。后续发生 EPT violation 时，代码尝试使用该无效的 `root_hpa` 进行地址翻译，导致访问非法地址触发 Panic。
+
+#解决方案
+该问题已在 Linux v3.5-rc1 中修复，补丁 Commit ID 为 d8368af8b46b904def42a0f341d2f4f29001fa77（KVM: Fix mmu_reload() clash with nested vmx event injection）。

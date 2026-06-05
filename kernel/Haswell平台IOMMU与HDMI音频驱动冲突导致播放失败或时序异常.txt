@@ -1,0 +1,21 @@
+#标题
+Haswell平台IOMMU与HDMI音频驱动冲突导致播放失败或时序异常
+
+#内核版本
+3.11-rc5（问题复现于 3.10 至 6.1 多个版本）
+
+#问题现象
+- HDMI音频无法正常播放，使用 aplay 播放时卡顿、挂起或仅播放第一段后停止。
+- 内核日志报错："playback write error (DMA or IRQ trouble?)"。
+- 开启 IOMMU (`intel_iommu=on`) 时，可能出现音视频严重不同步、音频延迟数秒或播放中断。
+- 受影响平台主要为 Intel Haswell 架构（如 H87, Z87 芯片组主板）。
+
+#问题根因
+Haswell HDMI 音频控制器与 IOMMU (VT-d) 存在兼容性问题：
+1. 驱动未针对 Haswell HDMI 控制器设置正确的缓冲区对齐（早期内核中 `AZX_DCAPS_BUFSIZE` 标志处理不当），导致 DMA 传输异常。
+2. 当 IOMMU 开启时，集成显卡的 DMA 操作映射存在缺陷，导致音频中断丢失或时序错误。
+
+#解决方案
+1. **临时规避**：在内核启动参数中添加 `intel_iommu=on,igfx_off snd_hda_intel.align_buffer_size=1`，禁用集成显卡的 IOMMU 映射并强制缓冲区对齐。
+2. **代码修复**：应用补丁 "Fix buffer alignment for Haswell HDMI controllers"（已合入 Linux 3.14-rc7），为 Haswell HDMI 控制器添加正确的缓冲区对齐属性。
+3. **遗留问题说明**：即使应用补丁，部分场景下 IOMMU 仍可能导致时序漂移，需结合 `igfx_off` 参数使用。

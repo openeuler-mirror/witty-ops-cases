@@ -1,0 +1,18 @@
+#标题
+scsi_debug模块加载与卸载竞争导致rmmod失败
+
+#内核版本
+5.12.0 linux-next 20210304
+
+#问题现象
+- 执行 `modprobe scsi_debug` 后立即执行 `rmmod scsi_debug` 经常失败。
+- 终端报错：`rmmod: ERROR: Module scsi_debug is in use`。
+- 该问题导致依赖 scsi_debug 模块的 fstests 和 blktests 测试集出现大量误报。
+
+#问题根因
+这是一个模块加载与卸载的竞争问题。scsi_debug 模块在初始化过程中暴露设备，用户态进程（如 systemd-udevd、multipath）会立即异步探测这些设备，导致模块引用计数（refcnt）增加。如果在用户态进程完成探测并释放引用之前执行 rmmod，内核会因检测到 refcnt 大于 1 而拒绝卸载。驱动层缺乏机制来等待用户态操作完成或阻止此类竞争。
+
+#解决方案
+- 规避措施：在 `modprobe scsi_debug` 后、`rmmod scsi_debug` 前执行 `udevadm settle` 命令，等待用户态设备事件处理完成。
+- 修复方案（讨论中）：开发者提议增加 sysfs 属性（如 `rm_all_hosts`）以安全地管理模块状态转换，防止竞争。
+- 相关补丁：针对旧版本内核的相关修复尝试可参考补丁链接 http://lkml.kernel.org/r/20210508230745.27923-1-dgilbert@interlog.com。

@@ -1,0 +1,17 @@
+#标题
+CIFS 模块 reconn_set_ipaddr_from_hostname 函数竞态条件引发 UAF 崩溃
+
+#内核版本
+6.6.0
+
+#问题现象
+系统在 CIFS 模块处理过程中发生 Use After Free (UAF) 故障导致崩溃。故障现场显示 `cifsd` 线程在 `reconn_set_ipaddr_from_hostname` 函数中访问 `server->hostname[0]` 时触发异常。
+
+#问题根因
+该问题为 CVE-2023-1195 的变体，由竞态条件引起。
+1. 任务 A（如 mount 流程）在 `cifs_put_tcp_session` 中调用 `kfree(server->hostname)` 释放内存。
+2. 任务 B（cifsd 线程）同时在 `reconn_set_ipaddr_from_hostname` 中访问该指针。
+3. 由于 `kfree` 操作与将 `server->hostname` 置为 `NULL` 的操作之间存在时间窗口，任务 B 检测到指针非空（`if (!server->hostname)` 检查通过），随即尝试访问已释放的内存（`server->hostname[0]`），导致 UAF。
+
+#解决方案
+暂无（截至报告提交时，Bug 状态为 NEW，尚未合并修复补丁）。

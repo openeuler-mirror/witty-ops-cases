@@ -1,0 +1,20 @@
+#标题
+megaraid_sas驱动错误处理不当导致空指针解引用
+
+#内核版本
+5.10.0
+
+#问题现象
+在故障注入测试（模拟内存分配失败）场景下，系统可能触发空指针解引用，具体表现为：
+- 内核在 `megasas_slave_alloc()` 函数中访问 `instance->pd_list_not_supported` 时发生崩溃。
+- 若对上述空指针进行防护，后续 `megasas_fault_detect_work()` 线程访问已销毁的 `instance` 结构体成员时可能触发页面错误。
+
+#问题根因
+驱动程序 `megasas_probe_one()` 初始化过程中的错误处理路径存在竞态条件：
+1. `megasas_get_seq_num()` 内调用 `dma_alloc_coherent()` 失败，错误向上传播。
+2. `megasas_probe_one()` 错误处理分支将 `instance` 从全局数组 `megasas_mgmt_info.instance` 中移除，但未清除 `pci_set_drvdata()` 设置的驱动私有数据指针。
+3. 并发线程调用 `megasas_slave_alloc()`，通过 `megasas_lookup_instance()` 查找 `instance` 时返回 NULL（因已从全局数组移除）。
+4. 代码未对返回值进行非空检查，直接解引用 `instance` 指针导致崩溃。
+
+#解决方案
+暂无（该 Bug 处于 NEW 状态，报告者未提供修复补丁）。

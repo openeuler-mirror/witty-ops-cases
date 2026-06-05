@@ -1,0 +1,18 @@
+#标题
+aacraid驱动aac_send_raw_srb函数DMA映射泄漏导致系统崩溃
+
+#内核版本
+5.14.x - 6.14.9 (ELRepo kernel-ml)
+
+#问题现象
+- 系统运行一段时间后出现 I/O 操作失败，内核日志报错 "aac_read: aac_fib_send failed with status: -12"。
+- 持续的 DMA 资源泄漏导致内存分配失败 (-ENOMEM)，最终引发系统不稳定或崩溃。
+- 日志中可能出现 "Host adapter abort request"、"Host bus reset request" 及 "IOP reset" 信息。
+- 通过 bpftrace 监控可观察到 aac_send_raw_srb() 函数作用域内分配与释放数量持续失衡。
+
+#问题根因
+驱动源码 `drivers/scsi/aacraid/commctrl.c` 中的 `aac_send_raw_srb()` 函数存在缺陷。在处理 scatter/gather (SG) 列表时，代码调用 `dma_map_single` 进行 DMA 映射，但在所有代码路径（包括成功返回和错误处理清理路径）中均缺失对应的 `dma_unmap_single` 调用，导致每次 ioctl 调用都会泄漏 DMA 映射资源。
+
+#解决方案
+规避措施：启用 aacraid 驱动的 `expose_physicals` 参数，使 smartctl 无需使用 `-d aacraid` 参数，从而避开触发泄漏的代码路径。
+正式修复：暂无官方合并补丁，Bug 状态为 NEW。报告者提供了实验性补丁供参考，需等待维护者确认。

@@ -1,0 +1,17 @@
+#标题
+ext4执行unlink操作时jbd2事务状态异常触发kernel BUG
+
+#内核版本
+5.19-rc6
+
+#问题现象
+- 系统触发 kernel BUG，日志显示 "kernel BUG at fs/jbd2/transaction.c:1629!"。
+- 触发 invalid opcode (0000 [#1])，导致进程 unlink 崩溃。
+- 调用栈显示：`jbd2_journal_dirty_metadata` <- `__ext4_handle_dirty_metadata` <- `ext4_handle_dirty_dirblock` <- `ext4_delete_entry` <- `__ext4_unlink`。
+- 故障前日志显示 EXT4-fs 请求关机并中止日志。
+
+#问题根因
+在 ext4 执行 unlink 操作期间，jbd2 日志事务处理流程出现竞态条件。日志显示，在 `jbd2_journal_dirty_metadata` 等待事务变更期间，文件系统触发了 shutdown 和 journal abort。随后，当事务状态变更完成时，`jbd2_journal_dirty_metadata` 检测到异常状态（可能涉及事务已中止或 frozen data 处理冲突），导致 `fs/jbd2/transaction.c:1629` 处触发断言失败（BUG）。
+
+#解决方案
+暂无

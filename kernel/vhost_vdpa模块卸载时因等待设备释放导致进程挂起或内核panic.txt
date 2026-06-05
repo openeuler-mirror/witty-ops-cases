@@ -1,0 +1,19 @@
+#标题
+vhost_vdpa模块卸载时因等待设备释放导致进程挂起或内核panic
+
+#内核版本
+5.11 及以上版本（测试环境为 5.11.15）
+
+#问题现象
+- 在 QEMU (VM) 正在使用 vhost_vdpa 设备的情况下，执行 `rmmod` 卸载底层驱动（如 sfc 驱动）时，命令卡死不返回。
+- 内核日志报错 "INFO: task rmmod:... blocked for more than 122 seconds"。
+- 若配置了 `hung_task_timeout_secs`，系统将触发 Kernel Panic。
+- 堆栈信息显示进程处于 D 状态（不可中断睡眠），阻塞在 `vhost_vdpa_remove` 函数的 `wait_for_completion` 处。
+
+#问题根因
+`vhost_vdpa` 模块使用原子变量 `opened` 追踪字符设备的打开状态。当 QEMU 打开设备时 `opened` 置 1，关闭设备时（VM 关机）`vhost_vdpa_release` 将其减 0 并发送完成信号。
+当卸载驱动调用 `vdpa_device_unregister()` 时，会触发 `vhost_vdpa_remove`，该函数调用 `wait_for_completion` 等待 `opened` 变为 0。
+由于 VM 仍在运行，字符设备保持打开状态，`vhost_vdpa_release` 未被调用，导致完成信号永远不会发送，`vhost_vdpa_remove` 无限等待，进而导致卸载进程挂起。
+
+#解决方案
+暂无已合并的修复补丁。社区讨论中提出，需修改 vhost-vdpa 模块，使其在 `vhost_vdpa_remove()` 等待完成事件时，能够通知 QEMU 关闭对应的 vhost-vdpa 字符设备文件描述符，从而打破死锁。

@@ -1,0 +1,19 @@
+#标题
+OverlayFS在RCU-walk模式下因竞态条件触发空指针解引用
+
+#内核版本
+6.3.0
+
+#问题现象
+- 系统触发 Kernel Panic，日志显示 "BUG: kernel NULL pointer dereference, address: 0000000000000002"。
+- Call Trace 指向 `inode_permission` -> `ovl_permission`。
+- 日志中显示 `dentry->inode 0000000000000000`，表明访问了空指针。
+
+#问题根因
+在 RCU-walk 模式下，`ovl_permission` 函数获取 `realpath.dentry` 后，未持有 `d_lock` 锁直接访问 `d_inode`。存在如下竞态条件：
+1. 进程 P1 在 `ovl_permission` 中检查 dentry 状态。
+2. 进程 P2 并发执行 `drop_cache` -> `__dentry_kill`，将 dentry 标记为 `DCACHE_DENTRY_KILLED` 并将 `dentry->d_inode` 置为 NULL。
+3. 进程 P1 随后解引用 `realinode`（即 `d_inode`）时触发空指针异常。
+
+#解决方案
+讨论中提出的修复方向是在 `ovl_permission` 中增加对 `DCACHE_DENTRY_KILLED` 状态的检查。但必须确保在持有 `dentry->d_lock` 的情况下进行检查和 inode 获取，以消除竞态窗口。截止报告时间，补丁尚在讨论中，未正式合入主线。

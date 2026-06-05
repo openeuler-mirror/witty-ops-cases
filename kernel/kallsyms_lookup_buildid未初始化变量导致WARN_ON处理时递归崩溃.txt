@@ -1,0 +1,18 @@
+#标题
+kallsyms_lookup_buildid未初始化变量导致WARN_ON处理时递归崩溃
+
+#内核版本
+未明确
+
+#问题现象
+- 系统在处理 WARN_ON() 异常时，内核尝试打印栈回溯信息（通过 %pBb 格式化符号和 buildid）。
+- 触发 "Trap# 12 Stack Segment Fault"，导致系统陷入递归陷阱并最终崩溃。
+- 崩溃调用栈显示在 `hex_string+0x91` 处触发异常，调用链包含 `__sprint_symbol` -> `sprint_backtrace_build_id`。
+
+#问题根因
+函数 `kallsyms_lookup_buildid()` 在查找特定类型地址（如 ftrace 模块地址或 BPF 地址）时，虽然成功返回了符号名，但未正确初始化输出参数 `modbuildid`。
+具体而言，`ftrace_mod_address_lookup()` 函数设置了 `modname` 但遗漏了设置 `modbuildid`。调用者 `__sprint_symbol()` 假设若查找成功则 `buildid` 指针有效，直接使用该未初始化指针进行内存访问（sprintf 格式化 buildid），导致非法内存访问触发陷阱。由于陷阱处理路径再次尝试打印栈回溯，该问题会递归触发。
+
+#解决方案
+开发者已提交修复补丁，修改 `ftrace_mod_address_lookup` 函数以正确设置 `modbuildid` 参数。
+补丁参考链接：https://lore.kernel.org/all/20251210170347.28053-1-mhi@mailbox.org/

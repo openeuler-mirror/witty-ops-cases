@@ -1,0 +1,18 @@
+#标题
+开启透明大页(THP)导致内存压缩过度引发系统无响应
+
+#内核版本
+3.6.2
+
+#问题现象
+- 在高负载编译场景（如编译 icedtea-7）下，系统变得无响应，无法启动新进程。
+- 多个 javac 进程 CPU 占用率总和极高（约 1000%），系统曾发生一次自动重启。
+- 监控数据显示内存压缩指标异常：在 4 分钟内 `compact_blocks_moved` 激增至 2.7 亿以上，但 `compact_success` 极低。
+- 将透明大页策略设置为 `madvise` 后问题消失。
+
+#问题根因
+内核在 3.4 到 3.5 版本间移除了 lumpy reclaim 机制，导致内存压缩逻辑出现缺陷。具体表现为 `compact_zone()` 函数陷入死循环，不断调用 `migrate_pages()` 进行无效扫描。即使 `cc->nr_migratepages` 为 0，`compact_finished()` 仍错误地返回 `COMPACT_CONTINUE`，导致系统在尝试分配透明大页时消耗大量 CPU 资源并引发锁竞争。
+
+#解决方案
+规避措施：将透明大页配置改为 `madvise` 模式（执行 `echo madvise > /sys/kernel/mm/transparent_hugepage/enabled`）。
+修复方案：应用 Mel Gorman 提供的一系列内存压缩补丁（如 `mm: compaction: abort compaction loop if lock is contended or run too long`、`mm: compaction: cache if a pageblock was scanned and no pages were isolated` 等）以修正压缩逻辑。

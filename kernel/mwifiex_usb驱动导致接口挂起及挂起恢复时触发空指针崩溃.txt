@@ -1,0 +1,20 @@
+#标题
+mwifiex_usb驱动导致接口挂起及挂起恢复时触发空指针崩溃
+
+#内核版本
+3.10.9（问题亦存在于 3.11.x 等版本）
+
+#问题现象
+- WiFi 接口随机挂起，无法收发数据帧，ping 操作返回 ENOBUFS 错误。
+- 系统日志中出现 "usb 3-3: data: -ENOSR is returned" 及 Tx timeout 信息。
+- 系统挂起至内存（STR）并恢复时触发 Kernel Panic，日志显示 "BUG: unable to handle kernel NULL pointer dereference at 0000000000000048"，调用栈指向 pfifo_fast_enqueue。
+- 伴随蓝牙功能异常及意外的 RF-kill 激活。
+
+#问题根因
+1. 挂起恢复崩溃：mwifiex_usb_suspend 函数中调用 usb_kill_urb 导致 pfifo_fast_enqueue 出现空指针解引用。
+2. 接口挂起：Tx AMSDU 逻辑存在缺陷导致 USB 总线挂起；tx_info/rx_info 控制缓冲区缺少 memset 初始化导致随机故障。
+
+#解决方案
+1. 针对挂起恢复崩溃：应用补丁移除 suspend/resume 流程中的 carrier on/off 操作（对应补丁 0002-mwifiex-fix-NULL-pointer-dereference-in-usb-suspend-.patch）。
+2. 针对 Tx AMSDU 缺陷：应用补丁修复 USB 芯片组挂起问题（对应补丁 0001-mwifiex-fix-hang-issue-for-USB-chipsets.patch）。
+3. 综合方案：升级内核至 3.13.2 及以上版本（包含 memset 修复补丁 d76744a93246eccdca1106037e8ee29debf48277）并更新 Marvell 固件。

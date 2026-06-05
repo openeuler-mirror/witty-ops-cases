@@ -1,0 +1,16 @@
+#标题
+MMC/SD驱动sdhci_cmu_set_clock函数触发scheduling while atomic
+
+#内核版本
+3.17.0-rc6-00247-g005f800
+
+#问题现象
+- 系统日志报错："BUG: scheduling while atomic: kworker/u8:0/6/0x00000002"
+- 内核提示 "Preemption disabled"，系统虽能启动但出现原子上下文调度异常。
+- 调用栈显示：mmc_rescan -> sdhci_get_cd -> rpm_resume -> sdhci_runtime_resume_host -> sdhci_do_set_ios -> sdhci_cmu_set_clock -> clk_set_rate -> clk_prepare_lock -> mutex_lock。
+
+#问题根因
+在 sdhci_cmu_set_clock 函数执行过程中，系统处于原子上下文（持有自旋锁或禁用抢占），此时代码调用了 clk_set_rate 函数。该函数内部通过 clk_prepare_lock 尝试获取互斥锁（mutex），因 mutex_lock 可能引发睡眠调度，从而触发 "scheduling while atomic" 错误。
+
+#解决方案
+建议修改 drivers/mmc/host/sdhci-s3c.c 文件中的 sdhci_cmu_set_clock 函数，移除 clk_set_rate 调用前后的 spin_unlock_irq 和 spin_lock_irq 操作，调整锁保护逻辑以避免在原子上下文中调用可能睡眠的函数。

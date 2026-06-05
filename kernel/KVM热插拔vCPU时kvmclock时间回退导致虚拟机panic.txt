@@ -1,0 +1,19 @@
+#标题
+KVM热插拔vCPU时kvmclock时间回退导致虚拟机panic
+
+#内核版本
+ALL
+
+#问题现象
+- 虚拟机在运行较长时间（如超过10小时）后，进行 vCPU 热插拔操作时触发 panic。
+- 故障发生在 `timekeeping_get_ns` 函数中，出现时间回退，即 `cycle_now` 小于 `clock->cycle_last`。
+
+#问题根因
+- vCPU 热插拔导致 `use_master_clock` 变为 false，KVM 随之周期性更新所有 vCPU 的 base tsc 和 ns。
+- 此时 KVM 使用 `clocksource_tsc` 获取当前 ns，而 VM 使用 `kvm_clock` 获取当前 ns。对于相同的 `delta_tsc`，两者的计算结果不一致。
+- 这种计算差异导致 VM 内部观察到时间回退，进而触发 panic。
+
+#解决方案
+- 规避措施：在 VM 内核中开启 `CONFIG_CLOCKSOURCE_VALIDATE_LAST_CYCLE=y` 配置项（如 Redhat 6.7），该配置会将负的时间增量处理为 0，从而避免 panic。
+- 修复建议：在 KVM 侧修改 kvmclock 更新逻辑，在更改 base tsc 和 ns 时使用 `kvm_clock` 算术进行计算，确保不会产生时间回退。
+- 截止报告时间，Bug 状态为 NEW，暂无已合并的修复补丁。

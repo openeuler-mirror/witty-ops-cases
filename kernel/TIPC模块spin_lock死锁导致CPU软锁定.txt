@@ -1,0 +1,17 @@
+#标题
+TIPC模块spin_lock死锁导致CPU软锁定
+
+#内核版本
+4.4.0
+
+#问题现象
+- 系统运行过程中出现无响应，触发 NMI watchdog 报警。
+- 内核日志显示 "NMI watchdog: BUG: soft lockup - CPU#3 stuck for 22s!"，多个 CPU (CPU 0, 2, 3) 均出现软锁定。
+- 伴随出现 "rcu_sched detected stalls" 以及 ixgbe 网卡 "tx timeout" 触发复位。
+- Call Trace 显示进程卡在 `queued_spin_lock_slowpath`，调用栈为 `tipc_send_work` -> `kernel_sendmsg` -> `tipc_send_stream` -> `lock_sock_nested` -> `_raw_spin_lock_bh`。
+
+#问题根因
+TIPC 模块在发送数据流时，进程在 `tipc_send_stream` 函数中尝试获取 socket 锁 (`lock_sock_nested`)，进入自旋锁慢速路径 (`queued_spin_lock_slowpath`) 后长时间无法获取锁，导致 CPU 空转。结合其他 CPU 堆栈中出现的 `tipc_sk_rcv` 调用链，推测可能存在锁竞争或死锁逻辑。
+
+#解决方案
+开发者建议尝试包含用户提及补丁的新版内核进行验证，暂无明确的官方修复补丁确认。

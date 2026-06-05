@@ -1,0 +1,16 @@
+#标题
+Pipe 机制在写端关闭时未发送 POLL_HUP 信号导致应用挂起
+
+#内核版本
+v6.9.4
+
+#问题现象
+- 当 Pipe 写端关闭且输入缓冲区为空时，读端收到 SIGIO 信号的 si_code 为 POLL_IN 而非预期的 POLL_HUP。
+- 依赖 SIGIO 事件判断 Pipe 状态的应用无法区分“暂无数据”与“写端已断开”，可能导致应用在 pause() 中无限等待挂起。
+- 测试程序 t_sigio 显示，在写端进程被杀死后，读端收到 POLL_IN 但 ioctl(FIONREAD) 返回 0 字节。
+
+#问题根因
+fs/pipe.c 中的信号发送逻辑存在缺陷。在 pipe_release 和 pipe_read 函数中，当检测到 Pipe 无写端且缓冲区为空时，内核未触发 kill_fasync(..., POLL_HUP)，而是发送了 POLL_IN 或未发送正确的断开信号，违反了 sigaction 手册中关于 POLL_HUP 用于“设备断开”的语义。
+
+#解决方案
+提交者提供了修复补丁，修改 fs/pipe.c 以在 Pipe 无写端且缓冲区为空时发送 POLL_HUP。但上游维护者拒绝合并该补丁，认为修改长期存在的行为可能破坏现有应用的兼容性，且 SIGIO 的 si_code 机制本身设计不够完善。建议应用层避免仅依赖 SIGIO 的 si_code，改用 poll()/select() 或结合 ioctl(FIONREAD) 来准确判断 Pipe 状态。

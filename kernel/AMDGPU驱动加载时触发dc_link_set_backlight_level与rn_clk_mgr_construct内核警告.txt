@@ -1,0 +1,18 @@
+#标题
+AMDGPU驱动加载时触发dc_link_set_backlight_level与rn_clk_mgr_construct内核警告
+
+#内核版本
+5.8.7, 5.8.8, 5.9.0-rc4
+
+#问题现象
+- 系统每次启动时内核抛出 Oops (WARNING)。
+- 现象一：systemd-backlight 尝试恢复亮度时，在 `dc_link_set_backlight_level` 函数触发 WARNING，调用栈包含 `amdgpu_dm_backlight_update_status`。
+- 现象二：若使用内核参数 `systemd.restore_state=0` 禁用 systemd-backlight，驱动初始化阶段会在 `rn_clk_mgr_construct` 函数触发 WARNING。
+- 硬件环境：MSI Bravo 17 笔记本，CPU 为 AMD Ryzen 7 4800H，GPU 为 AMD Radeon RX 5500M (Navi 14)。
+
+#问题根因
+针对 `rn_clk_mgr_construct` 触发的 WARNING，原因位于 `drivers/gpu/drm/amd/display/dc/clk_mgr/dcn21/rn_clk_mgr.c` 文件中的 `rn_clk_mgr_helper_populate_bw_params` 函数。代码遍历 `clock_table->FClocks` 查找有效的频率和电压条目，若表中所有条目均为 0（即变量 `j` 等于 -1），代码执行 `ASSERT(0)` 并返回，从而触发内核警告。
+
+#解决方案
+暂无官方修复。用户测试了 AMD Display Core v3.2.102 相关补丁，但未能解决问题。
+临时规避措施：添加内核参数 `amdgpu.runpm=0` 可防止立即崩溃，但无法消除内核警告。

@@ -1,0 +1,16 @@
+#标题
+NVMe over RoCE网络故障时控制器重置流程死锁导致挂起
+
+#内核版本
+4.18.0-80.el8.x86_64
+
+#问题现象
+- 在NVMe over RoCE环境下，拔掉光纤导致网络故障后，尝试进行控制器重置（controller reset）时系统发生挂起。
+- 内核线程 `kworker/u65:0+nvme-reset-wq` 处于 D 状态（不可中断睡眠），堆栈显示阻塞在 `blk_execute_rq` -> `nvmf_reg_write32` -> `nvme_disable_ctrl` 流程中。
+- 用户态进程 `bash` 阻塞超过 120 秒，触发 hung_task 检测告警。
+
+#问题根因
+在控制器重置流程中，驱动尝试通过同步命令写入 CC 寄存器以禁用控制器。由于网络故障，该命令无法完成并超时。此时，超时处理函数 `nvme_rdma_timeout` 未能成功将状态机切换至 `NVME_CTRL_RESETTING` 状态，导致重置流程无法继续推进，形成死锁。teardown 序列不应依赖其他线程来取得进展，其发出的命令必须能够自行超时处理。
+
+#解决方案
+暂无。开发者 Keith Busch 已确认逻辑缺陷，表示将提出修复方案，但截至报告时间尚未合并补丁。

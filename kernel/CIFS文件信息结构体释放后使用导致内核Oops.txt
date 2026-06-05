@@ -1,0 +1,17 @@
+#标题
+CIFS文件信息结构体释放后使用导致内核Oops
+
+#内核版本
+5.4.0-rc3+
+
+#问题现象
+- 在 ppc64le 机器上使用 fsstress 测试 CIFS 文件系统时触发内核 panic。
+- 日志显示 "list_del corruption"，提示链表指针 prev 指向 LIST_POISON2。
+- 随后触发 "BUG: Unable to handle kernel data access" 及 "Oops: Kernel access of bad area, sig: 7"。
+- Call Trace 指向 `_cifsFileInfo_put+0x350/0x640 [cifs]` 和 `cifs_writepages`。
+
+#问题根因
+在 `_cifsFileInfo_put` 函数处理过程中，代码在检查文件信息结构的引用计数时未持有 inode 列表锁。这导致出现竞态条件：当一个线程正在删除文件（引用计数降为 0）时，另一个线程可能再次引用该结构并开始使用它，从而引发 Use After Free，导致链表损坏和非法内存访问。
+
+#解决方案
+该问题已在 v5.4-rc5 中通过 commit `1a67c41596575` ("CIFS: Fix use after free of file info structures") 修复。修复方法是在检查引用计数时持有正确的锁。建议升级内核至 5.4-rc5 或更高版本。

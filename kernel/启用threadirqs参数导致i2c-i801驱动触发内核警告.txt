@@ -1,0 +1,14 @@
+#标题
+启用threadirqs参数导致i2c-i801驱动触发内核警告
+
+#内核版本
+5.0.0-rc4
+
+#问题现象
+在内核启动命令行添加 threadirqs 参数后，系统运行时触发 WARNING。日志显示 "irq 31 handler irq_default_primary_handler+0x0/0x10 enabled interrupts"，Call Trace 指向 i801_isr -> i2c_handle_smbus_host_notify -> generic_handle_irq。
+
+#问题根因
+i2c-i801 驱动的中断处理函数 i801_isr 调用 i2c_handle_smbus_host_notify，进而调用 generic_handle_irq。该函数假定调用时处于硬中断上下文（中断已关闭），但自 Linux 2.6.39 引入强制中断线程化后，若启用 threadirqs，中断处理函数会在中断开启的线程上下文中运行。此时调用 generic_handle_irq 违反了中断处理的核心约束，导致 __handle_irq_event_percpu 触发警告。
+
+#解决方案
+开发者 Thomas Gleixner 提供了修复补丁 "genirq, i2c: Provide and use generic_dispatch_irq()"。方案是新增 generic_dispatch_irq() 封装函数，在调用 generic_handle_irq() 前后使用 local_irq_save() 和 local_irq_restore() 确保中断处于关闭状态，并修改 I2C 核心代码使用该安全封装。

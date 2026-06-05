@@ -1,0 +1,21 @@
+#标题
+Dell Latitude 笔记本 i801_smbus 因 IRQ 资源冲突导致探测失败
+
+#内核版本
+4.9.8（问题复现于 4.14、4.19、5.2.4、5.3-rc3 及 6.12.9）
+
+#问题现象
+系统启动过程中，内核日志报错：
+- i801_smbus 0000:00:1f.3: PCI INT C: failed to register GSI
+- i801_smbus 0000:00:1f.3: Failed to enable SMBus PCI device (-16)
+- i801_smbus: probe of 0000:00:1f.3 failed with error -16
+受影响机型包括 Dell Latitude E5550、E7450、E5450 等，涉及 Intel Wildcat Point-LP SMBus Controller。
+
+#问题根因
+i801_smbus 设备与 dell_smo8800（自由落体传感器）驱动存在 IRQ 资源冲突。两者均尝试使用 GSI 18。
+内核日志显示 "Flags mismatch irq 18. 00002001 (smo8800) vs. 00000080 (i801_smbus)"，表明中断标志位不匹配。
+ACPI 在启动阶段为 smo8800 注册 GSI 18 时占用了该资源，导致 i801_smbus 在调用 pci_enable_device() 时无法注册 GSI，从而探测失败。推测与 BIOS ACPI DSDT 表定义或内核 ACPI 资源分配逻辑有关。
+
+#解决方案
+暂无官方修复补丁。
+临时规避方法：修改内核代码 arch/x86/kernel/acpi/boot.c 中的 acpi_register_gsi_ioapic 函数，强制跳过 GSI 18 的注册（针对 smo8800 设备），但这仅为调试用的 Hack 方案，会导致自由落体传感器功能失效。

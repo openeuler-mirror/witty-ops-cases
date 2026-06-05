@@ -1,0 +1,18 @@
+#标题
+KVM虚拟机使用e1000e网卡触发ip_do_fragment空指针解引用导致panic
+
+#内核版本
+5.3.6（评论提及5.3.9）
+
+#问题现象
+- 启动 Windows 10 KVM 客户机时触发 Kernel Panic。
+- 日志显示 "BUG: kernel NULL pointer dereference, address: 0000000000000006"。
+- 崩溃位置位于 ip_do_fragment 函数：RIP: 0010:ip_do_fragment+0x252/0x500。
+- Call Trace 路径：ip_output -> ip_forward -> ip_rcv -> br_pass_frame_up -> tun_get_user。
+- 该问题仅在使用 e1000e 作为虚拟网卡型号时复现，更换为 virtio 后消失。
+
+#问题根因
+在网络报文处理流程中，内核函数 ip_do_fragment 执行指令 `orw $0x40,0x6(%rax)` 时，RAX 寄存器值为 0（NULL），导致访问非法地址 0x6 触发空指针解引用。根据反汇编分析，对应源码逻辑为操作 `state->iph->frag_off`，即 `state->iph` 指针为空。该故障由 e1000e 网卡驱动路径触发的特定网络包处理场景引起。
+
+#解决方案
+暂无修复补丁。规避方案：将虚拟机网卡设备模型由 e1000e 替换为 virtio。

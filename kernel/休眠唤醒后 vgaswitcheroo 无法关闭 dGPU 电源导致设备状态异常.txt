@@ -1,0 +1,18 @@
+#标题
+休眠唤醒后 vgaswitcheroo 无法关闭 dGPU 电源导致设备状态异常
+
+#内核版本
+5.13, 5.14, 5.15.2
+
+#问题现象
+- 笔记本从休眠唤醒后，vgaswitcheroo 机制无法正确关闭独立显卡（dGPU），状态显示 DynOff 但实际仍在耗电。
+- 访问 `/sys/kernel/debug/dri/1/amdgpu_pm_info` 报错 "Connection timed out" 或 "Invalid argument"。
+- 内核日志报错：`atombios stuck in loop`，`amdgpu asic init failed`，`ring gfx test failed (-110)`。
+- 触发多处内核 WARNING：`pci_disable_device+0xa1` (disabling already-disabled device)、`kthread_park+0x75`、`amdgpu_bo_unpin+0x54`。
+- 设备恢复失败：`can't change power state from D3cold to D0`。
+
+#问题根因
+系统休眠唤醒后，amdgpu 驱动在执行 vgaswitcheroo 运行时挂起流程时出现状态不一致。具体表现为：驱动尝试对已禁用的设备调用 `pci_disable_device`；AtomBIOS 执行陷入死循环导致初始化失败；GPU 无法从 D3cold 状态正确恢复至 D0。该问题被标记为回归问题。
+
+#解决方案
+暂无内核补丁修复。用户发现可通过手动执行 ACPI 调用 `\_SB.PCI0.PEG0.PEGP._OFF` 强制关闭 dGPU 电源作为临时规避手段。

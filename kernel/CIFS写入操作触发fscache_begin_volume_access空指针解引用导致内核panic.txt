@@ -1,0 +1,17 @@
+#标题
+CIFS写入操作触发fscache_begin_volume_access空指针解引用导致内核panic
+
+#内核版本
+6.8.0-rc7.kasan+
+
+#问题现象
+- 内核触发 general protection fault 并 panic
+- KASAN 报告在范围 [0x0000000000000038-0x000000000000003f] 发生空指针解引用
+- 故障发生在 `fscache_begin_volume_access+0x4d/0x140 [netfs]` 函数中
+- 调用链显示路径为：`cifs_write_end` -> `netfs_dirty_folio` -> `__fscache_use_cookie` -> `fscache_begin_volume_access`
+
+#问题根因
+在 CIFS 文件系统执行写入操作（配合 drop_caches）时，尽管用户未显式配置 fscache 挂载选项，内核仍进入了 fscache 相关代码路径。在 `fscache_begin_volume_access` 函数内部访问了非法内存地址（空指针偏移 0x38），导致 general protection fault。具体触发条件与 CIFS 模块在特定配置下错误调用 netfs/fscache 接口有关。
+
+#解决方案
+暂无（Bug 状态为 NEW，尚未提交修复补丁）

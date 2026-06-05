@@ -1,0 +1,17 @@
+#标题
+控制台 vt_waitactive 竞态条件导致系统挂起流程死锁
+
+#内核版本
+6.13.0
+
+#问题现象
+- 在执行 S2idle 压力测试时，系统挂起操作卡死，无法完成。
+- 调用链显示进程卡在 `pm_prepare_console` -> `vt_move_to_console` -> `vt_waitactive` -> `__vt_event_wait_part.0` 循环中。
+- 由于 `system_transition_mutex` 锁未释放，后续所有挂起尝试均失败，日志显示 `PM: suspend system_transition_mutex FAILED`。
+- 系统必须重启才能恢复挂起功能。
+
+#问题根因
+`vt_move_to_console` 调用与 `Xorg` 发出的事件之间存在竞态条件。挂起流程调用 `vt_move_to_console` 后约 73us，`Xorg` 发出事件，但挂起流程阻止了 `Xorg` 完成该事件处理，导致 `vt_waitactive` 永远无法等到预期的 active 状态。由于 `vt_waitactive` 缺少超时机制，导致挂起流程永久阻塞。
+
+#解决方案
+暂无正式修复。建议方案：为 `vt_waitactive` 添加超时机制（如 20 秒），使其在异常情况下能返回错误并允许挂起流程优雅失败。

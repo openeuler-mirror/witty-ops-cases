@@ -1,0 +1,17 @@
+#标题
+Serial子系统n_tty_write与process_echoes检测到递归锁定风险
+
+#内核版本
+3.10.63-rt65
+
+#问题现象
+在启用死锁检测机制的 RT 内核（PREEMPT RT）环境下，通过 SSH（Dropbear）连接并执行 dmesg 操作时，内核日志报告 "possible recursive locking detected"。具体表现为：
+- 进程 dropbear 已持有锁 `(&ldata->output_lock)`（位于 `n_tty_write` 函数），随后又试图获取同一锁（位于 `process_echoes` 函数）。
+- 内核检测到潜在的死锁场景并打印警告信息：`[ INFO: possible recursive locking detected ]`。
+- 用户观察到在警告产生前，高优先级实时线程的定时器抖动巨大，警告打印后抖动消失。
+
+#问题根因
+在 TTY 驱动的处理路径中，存在非预期的锁嵌套调用。`n_tty_write` 函数首先获取了 `ldata->output_lock` 锁，随后在调用链中经过 `pty_write` -> `tty_flip_buffer_push` -> `flush_to_ldisc` -> `n_tty_receive_buf`，最终调用到 `process_echoes` 函数。`process_echoes` 函数内部再次尝试获取 `ldata->output_lock` 锁，导致递归锁定检测机制触发。该问题仅在完全抢占配置下复现。
+
+#解决方案
+暂无

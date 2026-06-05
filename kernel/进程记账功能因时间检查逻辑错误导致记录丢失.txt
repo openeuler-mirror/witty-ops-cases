@@ -1,0 +1,18 @@
+#标题
+进程记账功能因时间检查逻辑错误导致记录丢失
+
+#内核版本
+3.3-rc1 及更高版本
+
+#问题现象
+- 进程记账文件无法追加已终止进程的记录。
+- 监控工具 atop 因获取不到记账数据触发 SIGFPE 崩溃。
+- 问题触发条件：调用 acct() 开启记账后，若经过一个 jiffy 以上才有进程退出，记账功能将一直处于非活动状态，直到重启记账。
+
+#问题根因
+kernel/acct.c 中 check_free_space() 函数的时间判断逻辑错误。代码使用了 if (time_is_before_jiffies(acct->needcheck)) 来判断是否需要检查磁盘空间。
+当 acct() 开启记账时，acct->needcheck 被初始化为当前 jiffies。如果之后 jiffies 增加且大于 acct->needcheck，time_is_before_jiffies 返回真（过去的时间早于当前时间），导致代码直接跳转至 out 分支，跳过了磁盘空间检查。这使得 acct->active 保持为 0，记账功能实际上未激活。
+
+#解决方案
+已通过提交 ae04ca35247af576999da5ef726d1a03fc65de09 修复。
+修改 kernel/acct.c 中的判断条件，将 time_is_before_jiffies(acct->needcheck) 改为 time_is_after_jiffies(acct->needcheck)，确保仅在预定检查时间未到时才跳过检查。

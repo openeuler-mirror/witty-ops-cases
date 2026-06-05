@@ -1,0 +1,17 @@
+#标题
+stress-ng原始套接字压力测试触发内核Soft Lockup
+
+#内核版本
+5.17 (日志显示为 5.15.0-23-generic)
+
+#问题现象
+- 执行 `sudo stress-ng --rawsock 20 -t 60` 压力测试时，系统触发 soft lockup。
+- 内核日志报错：`watchdog: BUG: soft lockup - CPU#X stuck for 22s! [stress-ng:...]`。
+- 在200+线程的系统上可能导致 SSH 连接丢失，构成 DoS 攻击向量。
+- 堆栈信息显示进程卡在 `native_queued_spin_lock_slowpath`，调用链为 `inet_create` -> `raw_hash_sk` -> `_raw_write_lock_bh`。
+
+#问题根因
+在高并发创建 raw socket 的场景下，`raw_hash_sk` 函数中获取哈希桶写锁（`_raw_write_lock_bh`）的竞争极其激烈，导致 CPU 长时间处于自旋等待状态无法调度，从而触发 soft lockup 检测机制。
+
+#解决方案
+暂无内核层面的修复补丁。stress-ng 工具侧已通过提交 commit 69328da97f04 规避该问题（让客户端等待服务端启动），以降低并发冲击。

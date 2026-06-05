@@ -1,0 +1,22 @@
+#标题
+ideapad_acpi驱动因固件ACPI互斥锁缺陷导致charge_types日志刷屏与系统卡顿
+
+#内核版本
+6.19.0（问题引入版本）
+
+#问题现象
+- 系统日志（dmesg）频繁刷屏，报错信息为：`ideapad_acpi VPC2004:00: unexpected charge_types: both [Fast] and [Long_Life] are enabled`。
+- 伴随 ACPI 互斥锁错误：`ACPI Error: Thread ... cannot release Mutex [ECMT] acquired by thread ...`。
+- 系统出现周期性卡顿（约每 7 分钟一次，持续约 1 秒），GUI 界面无响应。
+- 受影响机型包括 Lenovo Yoga Pro 7 14ASP9、IdeaPad 5 2-in-1 14AHP9 等。
+
+#问题根因
+根本原因为 BIOS 固件中的 ACPI 表（DSDT）存在缺陷，导致 ECMT 互斥锁处理异常：
+1. **互斥锁竞争与超时**：`ideapad_acpi` 和 `ucsi_acpi` 驱动调用的 ACPI 方法（如 ECCC, RPAM 等）需获取 ECMT 互斥锁。由于 `ucsi_acpi` 处理单个命令会调用辅助方法多达 25 次，导致互斥锁竞争激烈，部分请求超时。
+2. **固件错误处理缺陷**：ACPI 辅助方法在获取互斥锁超时后，错误地尝试释放并未持有的锁，导致 `AE_AML_NOT_OWNER` 错误。
+3. **驱动误判**：当 ACPI 方法超时时，返回全 1 的错误码（如 0xFF）。`ideapad_acpi` 驱动未正确过滤此错误值，将其误读为有效的充电模式（Fast 和 Long_Life 同时置位），从而触发告警日志。
+
+#解决方案
+- **临时规避**：通过黑名单禁用相关模块以减少互斥锁竞争和日志刷屏。在 `/etc/modprobe.d/` 中添加 `blacklist ucsi_acpi` 或 `blacklist ideapad_laptop`，然后执行 `update-initramfs -u` 并重启。注意禁用 `ideapad_laptop` 会失去部分 ACPI 平台功能控制。
+- **内核修复**：开发者已提交 PoC 补丁（见 Bug ID 221065 附件 309348），用于识别并忽略固件返回的错误值，防止驱动误判。
+- **固件修复**：需联想发布 BIOS 更新以修复 ACPI 表中 ECMT 互斥锁及错误处理逻辑。

@@ -1,0 +1,19 @@
+#标题
+ATA驱动中断与LED触发器锁顺序反转触发lockdep警告
+
+#内核版本
+5.10.8
+
+#问题现象
+- 系统启动过程中内核日志输出 "WARNING: possible irq lock inversion dependency detected"。
+- Lockdep 检测到潜在的死锁风险，报告锁 `&host->lock` 与 `&trig->leddev_list_lock` 之间存在反转依赖。
+- 系统环境为 Hyper-V 虚拟机上的 RHEL 8.3。
+
+#问题根因
+Lockdep 检测到锁类别冲突：
+1. `&host->lock` 在硬中断上下文中被 `ata_bmdma_interrupt` 函数获取。
+2. `&trig->leddev_list_lock` 在进程上下文（如 `ata_sff_pio_task` 工作队列）中被 `ledtrig_disk_activity` -> `led_trigger_blink_oneshot` 调用链获取。
+3. 由于 `ledtrig_disk_activity` 可能在持有 `host->lock` 的中断上下文中被调用，而该锁在进程上下文中也被获取，导致锁的依赖顺序反转，触发了 lockdep 的死锁检测警告。
+
+#解决方案
+暂无（Bug 状态为 NEW，开发者建议进行 bisect 定位引入问题的提交）。

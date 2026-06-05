@@ -1,0 +1,18 @@
+#标题
+XFS回写错误处理竞态导致xfs_bmapi_convert_delalloc触发WARNING
+
+#内核版本
+v6.2-rc7
+
+#问题现象
+- 内核日志中触发 WARNING：`WARNING: CPU: 0 PID: 550 at fs/xfs/libxfs/xfs_bmap.c:4544 xfs_bmapi_convert_delalloc+0x793/0xf20`
+- 调用栈显示异常发生在 `xfs_map_blocks` -> `xfs_bmapi_convert_delalloc` 路径中。
+- 该问题由 Syzkaller 在 v6.2-rc7 版本复现。
+
+#问题根因
+- 初步二分定位到提交 `7348b322332d8602a4133f0b861334ea021b134a`，但深层分析表明该提交仅改变了参数传递单位，非直接诱因。
+- 实际根因是一个长期存在的竞态条件，被提交 `e9c3a8e820ed0eeb2be05072f29f80d1b79f053b`（iomap: don't invalidate folios after writeback errors）暴露。
+- 触发流程：文件系统元数据损坏（如 bnobt 块 CRC 错误）导致块分配失败 -> 回写路径调用 `->discard_folio` 移除了 delalloc extent -> 但该提交移除了 folio invalidation 逻辑，导致 folio 仍处于 dirty 且 uptodate 状态 -> 后续 DIO 写入触发回写时，尝试转换该 delalloc extent，发现其已被 punch out -> 触发 `WARN_ON`。
+
+#解决方案
+目前 Bug 状态为 NEW，尚无正式修复补丁。回退提交 `7348b322332d8602a4133f0b861334ea021b134a` 可规避此问题，但非正确修复方案，开发者指出需进一步调查。

@@ -1,0 +1,20 @@
+#标题
+MacBook Pro 16" 2019 上 apple_gmux 初始化失败导致 iGPU 未被认领
+
+#内核版本
+5.14.17+
+
+#问题现象
+- iGPU（集成显卡）未被 i915 驱动认领，设备处于 unclaimed 状态。
+- 内核日志显示 apple_gmux 初始化失败，报错 "Failed to find gmux I/O resource"。
+- EFI runtime services 在启动过程中因固件 Page fault 被禁用，导致无法使用 gpu-switch 工具进行 GPU 切换。
+
+#问题根因
+1. **硬件接口变更**：MacBook Pro 2019 的 GMUX 设备资源定义发生变化，ACPI 表中资源由旧款的 256 字节 IO 区域变为 8 字节的 Memory32Fixed 区域。当前驱动代码未适配此新接口，导致无法获取 I/O 资源而初始化失败。
+2. **驱动探测逻辑限制**：由于 apple_gmux 初始化失败，未注册 vgaswitcheroo 服务，i915 驱动在调用 `vga_switcheroo_client_probe_defer` 时判定当前 GPU 非活跃且无法切换，导致探测流程中止。
+
+#解决方案
+暂无官方修复。开发者指出需要对新款 GMUX 的 8 字节内存接口进行逆向工程以更新驱动。
+临时规避方法：
+1. 注释掉内核代码中 `vga_switcheroo_client_probe_defer` 相关逻辑，可使 iGPU 工作，但会失去 GPU 切换功能。
+2. 若 EFI runtime 服务正常，可在 macOS 或 Windows 下使用 gpu-switch 工具切换至 iGPU 后再启动 Linux。

@@ -1,0 +1,15 @@
+#标题
+fchmodat通过/proc/self/fd修改符号链接权限导致状态不一致
+
+#内核版本
+5.19.11-1rodete1-amd64, 5.15.41-android13-8-00205-gf1bf82c3dacd-ab8747247
+
+#问题现象
+- 通过 fchmodat 系统调用操作 `/proc/self/fd/<nr>` 路径（指向 O_PATH 打开的符号链接）时，系统调用返回 ENOTSUP 错误，但符号链接的权限位实际上被修改。
+- 该问题存在于 ext4、btrfs、xfs 文件系统；f2fs 未受影响（返回错误且权限未变）。
+
+#问题根因
+符号链接不支持 POSIX ACLs。在 ext4、btrfs、xfs 等文件系统中，inode 权限位的修改和事务提交发生在 `posix_acl_chmod()` 调用之前。当 `posix_acl_chmod()` 尝试更新 ACL 时，因符号链接不支持 ACL 而返回 `-EOPNOTSUPP`，导致系统调用最终返回错误码，但此时权限位已在事务中修改成功，造成“返回错误但修改生效”的不一致状态。
+
+#解决方案
+开发者建议修改 `fs/posix_acl.c` 中的 `posix_acl_chmod()` 函数，针对符号链接直接返回 0 忽略 ACL 更新错误，而非返回 `-EOPNOTSUPP`。目前补丁尚未合并。

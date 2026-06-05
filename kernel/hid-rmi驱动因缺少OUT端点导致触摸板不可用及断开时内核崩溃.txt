@@ -1,0 +1,16 @@
+#标题
+hid-rmi驱动因缺少OUT端点导致触摸板不可用及断开时内核崩溃
+
+#内核版本
+3.19.3（亦见于 4.16.x）
+
+#问题现象
+- 触摸板无法正常工作，系统启动或设备连接时 dmesg 报错：`hid-rmi ... failed to write hid report (-38)`、`rmi_set_page: set page failed: -38`。
+- 断开键盘盖（USB设备）时触发内核空指针解引用，导致 Oops：`BUG: unable to handle kernel NULL pointer dereference at 0000000000000000`，`RIP: device_del+0x26/0x560`。
+
+#问题根因
+`usbhid` 模块假设设备存在 OUT 端点（对应 `urbout` 字段），但受影响的设备（如 Lenovo Miix 2 11, Acer Switch 5）的 USB 接口描述符仅包含 IN 端点而无 OUT 端点。
+缺少 OUT 端点导致 `usbhid_output_report` 返回 `-ENOSYS` (-38)，致使 `hid-rmi` 驱动配置失败。设备断开连接时，`rmi_unregister_transport_device` 调用链中访问了空指针，触发崩溃。
+
+#解决方案
+暂无修复。

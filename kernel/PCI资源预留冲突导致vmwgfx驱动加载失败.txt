@@ -1,0 +1,18 @@
+#标题
+PCI资源预留冲突导致vmwgfx驱动加载失败
+
+#内核版本
+5.17-rc7
+
+#问题现象
+- 系统日志显示 vmwgfx 驱动无法预留 BAR 空间：`vmwgfx 0000:00:0f.0: BAR 1: can't reserve [mem 0xf0000000-0xf7ffffff pref]`
+- 驱动探测失败：`vmwgfx: probe of 0000:00:0f.0 failed with error -16`
+- 该问题为回归问题，在内核版本 5.16 上工作正常，升级到 5.17-rc7 后出现故障。
+
+#问题根因
+这是一个 PCI 资源预留 bug。由于 `drivers/video/fbdev/core/fbmem.c` 中的逻辑问题，平台 fb 驱动在卸载或切换时未能正确释放 PCI 资源（BAR 空间），导致 DRM 驱动 vmwgfx 在加载时无法预留所需的内存区域，从而返回 -EBUSY (error -16) 导致探测失败。
+
+#解决方案
+应用补丁修复 fbmem 中的资源释放逻辑：
+https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/drivers/video/fbdev/core/fbmem.c?id=27599aacbaefcbf2af7b06b0029459bbf682000d
+该补丁使平台 fb 驱动能够正确释放 PCI 资源，从而允许 vmwgfx 等 DRM 驱动正常加载。

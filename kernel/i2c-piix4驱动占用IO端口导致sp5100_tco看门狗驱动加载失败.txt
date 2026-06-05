@@ -1,0 +1,19 @@
+#标题
+i2c-piix4驱动占用IO端口导致sp5100_tco看门狗驱动加载失败
+
+#内核版本
+4.6.4
+
+#问题现象
+- 系统启动时 sp5100_tco 看门狗驱动加载失败，内核日志报错："sp5100_tco: I/O address 0x0cd6 already in use"。
+- /dev/watchdog 设备节点无法生成，看门狗功能失效。
+- 该问题影响 AMD SB800 芯片组平台（如 AMD Turion N40L），在内核升级或新部署时触发。
+
+#问题根因
+引入 commit 2fee61d22e606fc99ade9079fda15fdee83ec33e 后，i2c-piix4 驱动在初始化过程中通过 request_region() 独占申请了 IO 端口 0xcd6 (SB800_IO_PM_INDEX_REG)。sp5100_tco 驱动在初始化时同样需要访问该端口对（0xcd6/0xcd7）以配置看门狗硬件。由于 i2c-piix4 驱动已占用该资源且未释放，导致 sp5100_tco 驱动申请资源失败，无法加载。
+
+#解决方案
+临时规避方案为将 i2c-piix4 驱动加入黑名单（blacklist），但会牺牲 I2C 功能。
+正式修复方案是修改 i2c-piix4 驱动使用 request_muxed_region() 替代 request_region()，允许在互斥锁保护下共享 IO 端口访问，相关补丁已合入主线内核：
+- 04b6fcaba346 ("i2c: piix4: Use request_muxed_region")
+- 0e89b2fec748 ("i2c: piix4: Use usleep_range()")

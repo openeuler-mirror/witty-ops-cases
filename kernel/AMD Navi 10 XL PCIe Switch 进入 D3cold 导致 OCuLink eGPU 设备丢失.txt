@@ -1,0 +1,17 @@
+#标题
+AMD Navi 10 XL PCIe Switch 进入 D3cold 导致 OCuLink eGPU 设备丢失
+
+#内核版本
+6.19.14
+
+#问题现象
+- eGPU 在系统运行过程中从总线丢失，报错 "amdgpu 0000:66:00.0: device lost from bus!"
+- SMU 通信失败："SMU: response:0xFFFFFFFF for index:18"
+- 系统日志显示 "Failed to export SMU metrics table!"
+- 故障后可能出现 ring reset 超时、display pipeline flip_done timed out，导致系统不可用需重启
+
+#问题根因
+OCuLink 为被动 PCIe 线缆标准，无 hotplug 控制器支持。Root port (00:03.1) 默认 d3cold_allowed=1 且 ACPI _PR3 启用 D3cold，当 root port 进入 D3cold 时切断整个下游链路电源，链路无法在电源恢复后重建。设备报告 PME(D3cold+) 使内核误判支持 D3cold，但实际 SltCap/LnkCap 均为 Surprise-（无热插拔支持）。此外，ATPX 检测逻辑存在缺陷：iGPU 设置全局 atpx_detected=true 后，eGPU 也被误判为支持 ATPX，从而错误启用 BOCO 运行时电源管理而非 BACO。
+
+#解决方案
+临时规避方案：通过 udev 规则将 eGPU 链路所有设备（root port、switch upstream/downstream、GPU、audio）的 d3cold_allowed 设为 0。开发者已提交补丁：PCI 层面根据 SltCap.HPS / LnkCap.SDERC 能力位禁用 D3cold；drm/amd 层面要求 d3cold_allowed=1 才允许启用 BOCO。但测试显示即使应用补丁后 BACO 模式下仍有设备丢失问题，当前稳定运行需添加内核参数 amdgpu.runpm=0 完全禁用运行时电源管理。

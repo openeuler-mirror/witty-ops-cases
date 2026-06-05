@@ -1,0 +1,16 @@
+#标题
+Fanotify监控CIFS卷时Oplock竞争导致写入操作长时间阻塞
+
+#内核版本
+3.0
+
+#问题现象
+使用 Fanotify 监控 CIFS 挂载卷并监听 FAN_OPEN_PERM 事件时，执行写操作（如 touch 或 echo）会阻塞约 10-40 秒。
+进程堆栈显示 touch 进程处于 D 状态（不可中断睡眠），调用链为 fanotify_handle_event -> schedule；同时 fanotify_test 进程阻塞在 cifs_open -> SendReceive -> wait_for_response。
+
+#问题根因
+Fanotify 在处理 FAN_OPEN_PERM 时会对文件进行额外的打开操作。当 CIFS 客户端请求 oplock（机会锁）时，第二个打开请求在第一个请求的回复处理完成前介入，导致服务器请求打断 oplock。由于第一个打开操作被阻塞在 Fanotify 代码路径中等待用户空间响应，客户端尚未记录该 oplock，无法响应服务器的打断请求。服务器最终超时并撤销 oplock，导致操作延迟完成。该问题由 commit 8b0192a5f478da1c1ae906bf3ffff53f26204f56 引入。
+
+#解决方案
+规避方法：通过设置 /sys/module/cifs/parameters 中的 enable_oplocks 为 0 禁用 oplock。
+修复状态：该问题在 SMB2+ 协议中已修复（相关 commit 233839b1df65a），SMB1 协议仍受影响。

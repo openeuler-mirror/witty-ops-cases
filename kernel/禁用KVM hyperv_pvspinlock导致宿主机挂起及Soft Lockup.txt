@@ -1,0 +1,18 @@
+#标题
+禁用KVM hyperv/pvspinlock导致宿主机挂起及Soft Lockup
+
+#内核版本
+4.7.3-4.13.1
+
+#问题现象
+- 宿主机完全挂起无响应，系统负载异常。
+- 内核日志大量报告 RCU 相关异常：`rcu_sched kthread starved for XXX jiffies`、`INFO: rcu_sched self-detected stall on CPU`。
+- 网络设备 watchdog 超时：`NETDEV WATCHDOG: eno1 (e1000e): transmit queue 0 timed out`，触发网卡重置。
+- 多个进程（如 systemd-logind, kworker, coredump）处于不可中断睡眠状态（D状态）。
+- 若开启 panic_on_lockup，系统触发 `Kernel panic - not syncing: softlockup: hung tasks`，堆栈显示 CPU 卡在 `usbdev_poll` 或 idle 循环中。
+
+#问题根因
+用户报告在禁用 KVM 的 `hyperv/pvspinlock` 参数后触发故障。故障发生时，`rcu_sched` 内核线程长时间处于饥饿状态（starved），无法完成 RCU 宽限期，导致系统出现 RCU Stall。同时部分 CPU 在 idle 状态或 `usbdev_poll` 函数中卡死，引发 Soft Lockup。具体的代码级根因在报告中未明确分析。
+
+#解决方案
+暂无官方修复。用户发现通过完全断电重启（而非软件 reboot）可暂时恢复系统，但问题仍会复现。

@@ -1,0 +1,17 @@
+#标题
+dell-laptop驱动误判键盘背光支持导致系统启动挂起
+
+#内核版本
+4.1.3 及以上版本（4.0.8 未出现）
+
+#问题现象
+- Dell 笔记本电脑（如 Inspiron Mini 1012, Studio 14Z, Latitude E6430, Precision 3530）在启动过程中完全挂起。
+- 故障由 systemd-backlight 服务尝试恢复键盘背光状态触发。
+- 系统无响应，无法记录日志；调试发现 `dell_smbios_call` 函数中的 SMBIOS 调用未返回，导致 mutex 永久锁死。
+
+#问题根因
+Dell SMBIOS 固件错误地报告硬件支持键盘背光，而实际上硬件并不具备该功能。`dell-laptop` 驱动程序（引入于 commit 6cff8d60aa0aba5583ecda09984dbcb2f24cc28d）信任此固件响应，创建了对应的 sysfs 接口。当用户空间尝试操作此接口时，SMBIOS 调用未正确返回错误而是陷入死循环或崩溃，导致内核挂起。
+
+#解决方案
+- 临时规避：执行 `systemctl mask systemd-backlight@leds\:dell\:\:kbd_backlight.service` 屏蔽相关服务，或在内核启动参数添加 `systemd.restore_state=0`。
+- 代码修复：在 `dell-laptop.c` 中为受影响的机型添加 `kbd_led_not_present` quirk 标记以禁用该功能（参考 commit 10b65e2915b2fcc606d173e98a972850101fb4c4）。

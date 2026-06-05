@@ -1,0 +1,20 @@
+#标题
+启用VMD导致s2idle挂起时CPU无法进入深层C状态引发耗电过快
+
+#内核版本
+6.7
+
+#问题现象
+- ASUS B1400CEAE 笔记本在 BIOS 启用 Intel RST VMD 后，s2idle 挂起期间电池电量消耗极快，数小时内耗尽。
+- 监控工具显示 CPU Package C-state 停留在 PC2，无法进入 PC8 或 PC10 深层休眠状态，S0ix residency 为 0。
+- 关闭 VMD 时系统可正常进入 PC10 和 S0ix 状态，电池续航正常。
+- 启用 VMD 时，SATA 控制器的 LTR (Latency Tolerance Reporting) 值异常低（0x880a），而关闭 VMD 时为 0x9001。
+
+#问题根因
+问题由两个因素共同导致：
+1. SATA 控制器 LTR 配置异常：内核 commit `6210038aeaf4` 为了修复回归问题，移除了 Tiger Lake 平台 AHCI 控制器的 "low power" 标记。这导致 SATA 控制器报告的 LTR 值过低（Snoop 10240ns），限制了 CPU 进入深层 Package C-state。
+2. VMD 下 NVMe 电源管理缺陷：VMD 启用后，NVMe 设备的父 PCI 桥（10000:e0:06.0）无法从 D3cold 状态恢复；且在初始化阶段，因设备未处于 D0 状态导致 L1 PM Substates（特别是 L1.2）未能正确启用，影响了链路层电源管理。
+
+#解决方案
+1. 针对 SATA LTR 问题：Revert commit `6210038aeaf4`，恢复 Tiger Lake AHCI 控制器的低功耗支持；或手动调整 `/sys/class/scsi_host/*/link_power_management_policy`。
+2. 针对 NVMe D3cold 问题：对 NVMe 设备的父 PCI 桥设置 `d3cold_allowed=0` 以禁止进入 D3cold 状态，或通过 quirk 禁止 NVMe 设备在挂起时切换电源状态。

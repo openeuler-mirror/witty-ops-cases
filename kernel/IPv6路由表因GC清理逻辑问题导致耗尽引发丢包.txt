@@ -1,0 +1,17 @@
+#标题
+IPv6路由表因GC清理逻辑问题导致耗尽引发丢包
+
+#内核版本
+3.2.29
+
+#问题现象
+- 在进行高负载IPv6 TCP流量测试（Gbps级，100个客户端/服务端）时，运行一段时间（约10小时）后流量中断。
+- 系统日志报错："IPv6: Maximum number of routes reached, consider increasing route/max"。
+- SYN包能到达，但SYN-ACK包被丢弃。
+
+#问题根因
+内核版本3.2中，`net/ipv6/ip6_fib.c`中的`fib6_age`函数使用`dst_get_neighbour_noref_raw`获取邻居信息，该方式在v3.5之前存在固有的不安全性。在使用TPROXY/tap接口转发数据包时，内核可能创建带有网关标志（RTF_GATEWAY）但邻居标记为非路由器（non-router）的路由条目。`fib6_age`中的清理逻辑检查到这种不一致状态后尝试清理，但由于引用计数问题或清理逻辑本身的竞争条件，导致路由条目未被正确释放，最终耗尽路由表空间。
+
+#解决方案
+- 官方修复：升级内核至3.5或更高版本，该版本重构了邻居引用的处理方式（commit 887c95cc1da5）。
+- 临时规避：修改`net/ipv6/ip6_fib.c`中的`fib6_age`函数，移除对`RTF_GATEWAY`且非`NTF_ROUTER`路由条目的强制清理逻辑（即注释掉相关`else if`分支），经测试可稳定运行。

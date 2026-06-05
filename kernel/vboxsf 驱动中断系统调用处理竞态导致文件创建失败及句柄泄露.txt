@@ -1,0 +1,19 @@
+#标题
+vboxsf 驱动中断系统调用处理竞态导致文件创建失败及句柄泄露
+
+#内核版本
+5.9.6-1~bpo10+1 (2020-11-19) x86_64 GNU/Linux (Debian)
+
+#问题现象
+- 在 VirtualBox 共享文件夹中执行 git clone 等大量文件创建操作时，随机报错 "File exists" 或 "Text file busy"，导致克隆失败。
+- 当系统调用（如 open、mkdir）被信号中断（如 Ctrl-Z）后，后续恢复操作失败，且故障文件句柄被 VirtualBoxVM.exe 进程持久占用，无法从 Host 或 Guest 删除。
+- 若 Host 为 Linux，git clone 创建临时文件时可能因权限问题返回 -EPERM 错误。
+
+#问题根因
+存在两个独立问题：
+1. **竞态条件**：vboxsf 驱动中 wait_on 逻辑存在竞态，可能被中断信号打断，导致原本应在内核态完成的 vbox ipc 调用异常，Host 端残留陈旧文件描述符。
+2. **atomic_open 缺失**：vboxsf 驱动未实现 atomic_open 操作。创建文件时被拆分为两步：先以 0444 权限创建 inode，随后尝试以 O_RDWR 方式打开。当 Host 为 Linux 时，以读写模式打开只读权限文件会失败返回 -EPERM。
+
+#解决方案
+针对竞态条件问题，上游已通过 commit c35901b39ddc20077f4ae7b9f7bf344487f62212 修复。
+针对 atomic_open 缺失问题，开发者已提交补丁系列以添加 atomic_open 支持（当时处于等待审核状态）。

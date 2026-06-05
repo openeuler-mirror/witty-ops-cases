@@ -1,0 +1,16 @@
+#标题
+pipe_write在冻结文件系统上触发ext4 journal警告
+
+#内核版本
+3.11.9-gentoo
+
+#问题现象
+- 内核日志打印 WARNING：`WARNING: CPU: 3 PID: 4273 at fs/ext4/ext4_jbd2.c:48 ext4_journal_check_start+0x24/0x67()`
+- Call Trace 显示调用链为 `pipe_write` -> `file_update_time` -> `ext4_dirty_inode` -> `__ext4_journal_start_sb`。
+- 复现路径：创建 fifo，后台写入，执行 `fsfreeze -f` 冻结文件系统，然后读取 fifo。
+
+#问题根因
+`pipe_write()` 函数在写入管道时会尝试更新文件时间，但未获取 `sb_start_write()` 锁。当文件系统处于冻结状态时，`ext4_journal_check_start` 检测到非法的事务启动请求，从而触发警告。
+
+#解决方案
+开发者已提交修复补丁，修改 `pipe_write` 逻辑，使其调用 `sb_start_write_try()`：若文件系统已冻结则跳过时间更新，避免触发 journal 检查警告。

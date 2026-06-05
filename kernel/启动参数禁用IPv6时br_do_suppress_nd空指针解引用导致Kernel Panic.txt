@@ -1,0 +1,16 @@
+#标题
+启动参数禁用IPv6时br_do_suppress_nd空指针解引用导致Kernel Panic
+
+#内核版本
+未明确
+
+#问题现象
+- 系统在启动参数包含 ipv6.disable=1 且网桥端口开启 neigh_suppress 特性时，收到 ICMPv6 Neighbor Solicitation 报文后立即崩溃。
+- 触发 Kernel Panic，RIP 指向 neigh_lookup+0x16。
+- Call Trace 显示调用路径为：br_do_suppress_nd -> br_handle_frame_finish。
+
+#问题根因
+函数 br_do_suppress_nd() 试图通过 ipv6_stub->nd_tbl 获取 IPv6 邻居表进行查询。当内核启动参数设置 ipv6.disable=1 时，ipv6_stub 结构体虽已存在，但其内部的 nd_tbl 指针未被初始化（为 NULL）。代码路径未对该指针进行有效性检查即调用 neigh_lookup()，导致发生空指针解引用。
+
+#解决方案
+建议在 net/bridge/br_arp_nd_proxy.c 文件中增加防护检查，在调用 neigh_lookup 前判断指针有效性：if (!ipv6_stub || !ipv6_stub->nd_tbl) return;。目前上游尚未合并修复补丁。

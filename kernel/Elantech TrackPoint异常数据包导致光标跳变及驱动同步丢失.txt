@@ -1,0 +1,17 @@
+#标题
+Elantech TrackPoint异常数据包导致光标跳变及驱动同步丢失
+
+#内核版本
+5.9.8（受影响版本包括 5.8.x 至 5.14.x，5.15.3 已修复）
+
+#问题现象
+- 使用 Thinkpad X13/T14s (AMD) 的 TrackPoint 时，鼠标光标偶尔瞬间跳至屏幕边缘或角落，仿佛速度瞬间无限大。
+- dmesg 日志中频繁出现 "psmouse serio1: Touchpad at isa0060/serio1/input0 lost sync at byte 6" 以及 "driver resynced" 信息。
+- 故障发生频率较高（如每分钟数次），严重影响正常使用。
+
+#问题根因
+Elantech 硬件/固件偶尔发送包含极大相对位移值的 PS/2 数据包（Native relative mode 6-byte packet），例如数据包中包含 `packet[4] == 0x80` 等特征。驱动程序 `drivers/input/mouse/elantech.c` 中的 `elantech_report_trackpoint` 函数将这些异常数据包视为有效移动进行处理，导致光标位置突变。此外，部分异常数据包后的数据不符合协议规范，导致驱动报错 "lost sync" 并触发重连机制。
+
+#解决方案
+- 临时规避：在内核启动参数中添加 `psmouse.proto=imps` 或 `psmouse.proto=bare`，但这会导致触摸板手势功能失效。
+- 官方修复：该问题已在 Linux 5.15.3 版本通过补丁修复（Commit ID: 4f43e1c69280313f121283cb5c16e5e0b1036b3a），补丁在 `elantech.c` 中增加了对异常数据包的过滤逻辑，丢弃包含非正常相对移动的数据包。

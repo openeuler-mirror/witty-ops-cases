@@ -1,0 +1,14 @@
+#标题
+GRE组播处理导致ip_tunnel_rcv空指针解引用引发Oops
+
+#内核版本
+3.13.2
+
+#问题现象
+配置GRE隧道使用组播地址（如 remote 224.66.66.66）时，系统立即触发 Kernel Oops 并导致 Panic。日志显示 "BUG: unable to handle kernel NULL pointer dereference at 00000000000000a2"，崩溃位置位于 `ip_tunnel_rcv+0x35/0x3d7`，Call Trace 包含 `ipgre_rcv`、`gre_cisco_rcv` 等函数。
+
+#问题根因
+在 `ip_tunnel_rcv` 函数中，代码尝试通过 `rt_is_output_route(skb_rtable(skb))` 检查组播数据包是否为环回包。然而，此时 `skb->_skb_refdst` 已在之前的 `iptunnel_pull_header` 函数中被 `skb_dst_drop` 释放并置空，导致后续访问 `skb_rtable(skb)` 时发生空指针解引用。
+
+#解决方案
+将组播环回包的检测逻辑前移至 `gre_cisco_rcv` 函数中执行（在调用 `iptunnel_pull_header` 释放 dst 之前），若检测到是环回包则直接丢弃。该修复涉及修改 `net/ipv4/gre_demux.c` 增加检测逻辑，移除 `net/ipv4/ip_tunnel.c` 中的原有检测，并恢复 `net/ipv4/ip_tunnel_core.c` 中 `iptunnel_pull_header` 里的 `skb_dst_drop` 调用。

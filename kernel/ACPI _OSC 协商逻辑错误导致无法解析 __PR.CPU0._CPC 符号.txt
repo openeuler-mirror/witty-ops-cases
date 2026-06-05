@@ -1,0 +1,20 @@
+#标题
+ACPI _OSC 协商逻辑错误导致无法解析 \_PR.CPU0._CPC 符号
+
+#内核版本
+5.12.2（初始报告），影响 5.12.x, 5.15.x, 5.17.x 等版本
+
+#问题现象
+- 系统启动时内核日志报错：`ACPI BIOS Error (bug): Could not resolve symbol [\_PR.CPU0._CPC], AE_NOT_FOUND`。
+- 错误导致 ACPI 方法 `\_PR.CPU1._CPC` 等中止执行。
+- 部分用户反馈系统休眠失败或出现随机关机现象。
+
+#问题根因
+问题源于内核 commit `719e1f561afb` ("ACPI: Execute platform _OSC also with query bit clear") 修改了 `_OSC` 协商逻辑。在某些 Intel 平台上，固件在 `_OSC` 协商过程中屏蔽了 CPPC (Collaborative Processor Performance Control) 相关支持位。内核因此误判系统不支持 CPPC，未加载 `Cpu0Hwp` 和 `HwpLvt` 等 SSDT 表，导致后续解析 `_CPC` 对象时找不到符号。该问题曾在 5.15.33 版本因修复补丁被 revert 而再次回归。
+
+#解决方案
+- **临时规避：** Revert 引入问题的 commit `719e1f561afb` 及其依赖 `5a6a2c0f0f43676df`。
+- **正式修复：**
+  1. 针对 5.12.x 问题，应用补丁 "ACPI: Pass the same capabilities to the _OSC regardless of the query flag"。
+  2. 针对 5.15.33+ 回归，应用 commit `c42fa24b44751c62c86e98430ef915c0609a2ab8` 及相关 CPPC 修复补丁（如 `fbd74d16`），修正 CPPCv2 支持检测逻辑。
+  3. 升级至 5.19-rc8 或更新版本内核。

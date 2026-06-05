@@ -1,0 +1,18 @@
+#标题
+Acer AO725 笔记本声卡驱动 COEF 读写错误导致音频异常
+
+#内核版本
+3.7.1
+
+#问题现象
+- 声卡设备被识别为 "HD-Audio Generic"，播放音频测试时出现无限循环或无声。
+- 系统日志频繁报错：`hda-intel: azx_get_response timeout, switching to polling mode`。
+- 系统日志报错：`hda-codec: out of range cmd 0:20:400:ffffffff`。
+- 系统挂起到内存后恢复时音频功能失效。
+- 故障在电池供电模式下复现，连接交流电源时可能正常。
+
+#问题根因
+ALSA 驱动模块 `snd_hda_codec_realtek` 中的 `alc269_fill_coef` 函数在初始化 ALC269 编解码器变体时，未对 `alc_read_coef_idx` 读取的 COEF 系数返回值进行有效性检查。在特定电源状态（如电池供电）下，读取操作返回无效数据（如 `0xffffffff`），驱动据此构造并写入了非法的编解码器命令，导致通信超时及后续音频功能异常。
+
+#解决方案
+在 `alc269_fill_coef` 函数中增加对读取返回值的有效性检查，若返回无效值则跳过后续写入操作，避免发送非法命令。相关修复补丁已提交至上游（见 Bugzilla 附件 146581）。临时规避方案可尝试加载 `snd-hda-intel` 模块时添加参数 `enable_msi=0`。

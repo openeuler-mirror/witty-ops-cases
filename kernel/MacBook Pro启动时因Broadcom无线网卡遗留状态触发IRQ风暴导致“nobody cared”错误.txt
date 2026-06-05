@@ -1,0 +1,19 @@
+#标题
+MacBook Pro启动时因Broadcom无线网卡遗留状态触发IRQ风暴导致“nobody cared”错误
+
+#内核版本
+4.0.0-0.rc4.git2.1.fc22.x86_64（受影响版本包括 3.6.11 至 4.6.x）
+
+#问题现象
+- 系统启动过程中出现内核报错："irq 17: nobody cared (try booting with the 'irqpoll' option)"。
+- Call Trace 指向 `__report_bad_irq`、`note_interrupt`、`handle_irq_event_percpu` 等中断处理函数。
+- 故障机型包括 MacBook Pro 8,2 (2011)、9,2 (2012)、10,1 等。
+- 可能导致触控板、键盘无响应或系统不稳定。
+
+#问题根因
+Apple EFI 固件在启动过程中启用了 Broadcom BCM4331 无线网卡（用于 Internet Recovery 功能），但在移交控制权给操作系统时未将其复位或禁用。该网卡持续发送中断请求（IRQ 17），但此时无线驱动（如 b43）尚未加载，导致中断无人处理。由于 SDHCI 控制器（Broadcom BCM57765 SDXC/MMC Card Reader）共享 IRQ 17，内核检测到中断风暴并误报 "nobody cared"，实际上根源在于无线网卡的遗留状态。
+
+#解决方案
+- 临时规避：将 `b43` 模块加入 initramfs 或编译进内核，使其尽早加载以接管中断。
+- 官方修复：Linux 4.7 合并了补丁（commit `447d29d1d3ae` 等），通过 x86 early quirk 机制在内核初始化早期复位 Apple AirPort (BCM4331) 网卡，阻止中断风暴。
+- 该修复已回溯至稳定版本 4.6.6, 4.4.17, 4.1.30, 3.18.39, 3.16.39, 3.2.84。

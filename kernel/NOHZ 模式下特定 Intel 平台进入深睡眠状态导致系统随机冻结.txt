@@ -1,0 +1,22 @@
+#标题
+NOHZ 模式下特定 Intel 平台进入深睡眠状态导致系统随机冻结
+
+#内核版本
+3.7.6 (报告版本，问题影响范围涵盖 2.6.24 至 3.7.6)
+
+#问题现象
+- 系统运行过程中出现随机冻结，持续时间从数秒到数分钟不等。
+- 冻结期间系统完全无响应，通常需要外部硬件中断（如移动鼠标、键盘输入或网络活动）才能恢复。
+- 部分情况下系统时间在冻结后会出现偏差。
+- 内核日志中可能包含 "MP-BIOS bug: 8254 timer not connected to IO-APIC" 或 "Marking TSC unstable due to TSC halts in idle" 信息。
+- 受影响硬件主要集中在搭载 Intel Core 2 Duo 处理器及 PM965/GM965 芯片组的笔记本电脑（如 Fujitsu Siemens Amilo 系列、Clevo M720R、Lenovo S12）。
+
+#问题根因
+问题源于 Tickless (NOHZ) 特性与 CPU 深度睡眠状态的交互机制。在 NOHZ 模式下，当 CPU 进入 C2 或更深层的睡眠状态时，外部 I/O 控制器可能会阻塞发往处理器的中断。如果此时 HPET 是唯一待处理的计时器中断源，处理器将无法被唤醒，从而导致无限期睡眠（即系统冻结）。这通常是由于 BIOS 对 C-state 和中断路由的配置存在缺陷（如 IO-APIC 连接问题）所致。
+
+#解决方案
+目前暂无内核补丁修复，可通过以下内核启动参数规避问题：
+1. `nohz=off`：禁用 Tickless 特性（最有效的规避方案）。
+2. `processor.max_cstate=1`：限制 CPU 仅使用 C0 和 C1 状态，避免进入深度睡眠。
+3. `nolapic_timer` (或 `noapictimer`)：禁用 LAPIC 计时器，改用其他计时源。
+4. `acpi_skip_timer_override`：跳过 ACPI 计时器覆盖配置（对部分机型有效）。

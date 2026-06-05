@@ -1,0 +1,22 @@
+#标题
+SCSI 子系统持有自旋锁时调用 printk 导致串口输出阻塞引发 Hard Lockup
+
+#内核版本
+3.10.0-514.26.2.el7.x86_64
+
+#问题现象
+- 系统触发 Kernel panic，提示 "Hard LOCKUP"。
+- NMI watchdog 检测到 CPU 16 硬锁死。
+- 日志中出现大量 "sd 0:1:0:0: rejecting I/O to offline device" 打印（短时间内超过 3000 次）。
+- 故障现场堆栈显示：
+  - CPU 16 在 `blkcg_print_blkgs` 函数中等待 `blkg->q->queue_lock` 自旋锁。
+  - CPU 7 (kworker) 持有 `queue_lock`，并在 `serial8250_console_write` -> `wait_for_xmitr` 中阻塞，等待串口硬件就绪。
+
+#问题根因
+SCSI 设备处于离线状态时，`scsi_request_fn` 函数在持有 `queue_lock` 自旋锁的情况下循环处理请求。对于每个请求，它都调用 `sdev_printk` 打印错误日志。由于串口控制台输出（`serial8250_console_write`）非常缓慢（`wait_for_xmitr` 需等待硬件状态），导致 CPU 7 长时间（约 11 秒）持有 `queue_lock`。其他 CPU（如 CPU 16）在尝试获取该锁时长时间自旋等待，最终触发 NMI watchdog 导致 Hard Lockup。
+
+#解决方案
+讨论中提出的修复建议包括：
+1. 在 `scsi_prep_state_check` 或 `scsi_request_fn` 中使用 `printk_ratelimited` 或 `printk_deferred`，避免在持有自旋锁时进行耗时的控制台输出。
+2. 或者在打印日志前临时释放 `queue_lock`。
+临时规避措施：应用补丁 `54f19b4a6791` ("tty/serial/8250: Touch NMI watchdog in wait_for_xmitr") 可防止 watchdog 触发 panic，但无法解决锁竞争导致的阻塞问题。

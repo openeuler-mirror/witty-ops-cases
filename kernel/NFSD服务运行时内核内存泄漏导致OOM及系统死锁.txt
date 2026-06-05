@@ -1,0 +1,18 @@
+#标题
+NFSD服务运行时内核内存泄漏导致OOM及系统死锁
+
+#内核版本
+6.1.119-1.el9.elrepo.x86_64（受影响版本包括 5.14.0-427.40.1.el9_4, 5.14.0-503.14.1.el9_5, 6.1.115-1.el9.elrepo.x86_64）
+
+#问题现象
+- 服务器运行 NFS 服务（启用 NFSoRDMA）约 1-2 天后内存耗尽，触发 OOM。
+- `sar` 监控显示内存使用量呈线性增长，呈现典型内存泄漏特征。
+- 系统日志报错 "Out of memory and no killable processes..."，随后触发 Kernel panic："System is deadlocked on memory"。
+- Call Trace 显示 `nfsd` 线程在 `svc_alloc_arg` -> `__alloc_pages_bulk` 分配内存时触发 OOM。
+- 部分崩溃实例中出现 `WARNING at mm/slab_common.c:957 free_large_kmalloc+0x5a/0x80`。
+
+#问题根因
+系统存在内核内存泄漏（非 slab 泄漏，因 slabinfo 占用正常），导致可用内存持续减少。当内存耗尽时，`nfsd` 线程尝试分配接收缓冲区（最多 256 页）时进入慢速路径并触发 OOM Killer。由于内核内存不可交换且无用户空间进程可被杀死，最终导致系统死锁并 panic。具体的代码级泄露点在报告中未明确界定，但确认问题在 6.1.119 版本存在，在 6.12.4 版本已修复。
+
+#解决方案
+升级内核至 6.12.4 或更高版本，经测试可稳定运行超过 30 天无复发现象。暂无针对受影响旧版本的具体补丁回溯信息。

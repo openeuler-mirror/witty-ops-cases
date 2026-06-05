@@ -1,0 +1,14 @@
+#标题
+Cachefiles模块readpages空指针检查触发Kernel Panic
+
+#内核版本
+5.8.0-rc7+
+
+#问题现象
+在使用 fsc 选项挂载 CIFS 或 NFS 共享并执行文件读取操作时，系统触发 kernel panic。日志显示 "kernel BUG at fs/cachefiles/rdwr.c:715!"，错误码为 "invalid opcode: 0000 [#1]"。Call Trace 显示调用路径为 cachefiles_read_or_alloc_pages -> __fscache_read_or_alloc_pages -> __cifs_readpages_from_fscache。
+
+#问题根因
+内核 5.8 版本将 readpages aops 转换为 readahead 机制，但 cachefiles 模块中遗留了针对旧机制的 ASSERT() 空指针检查。该检查在新的 readahead 调用路径下条件判断错误，导致非预期地触发断言失败（Assertion failed），进而引发 kernel BUG。
+
+#解决方案
+删除 fs/cachefiles/rdwr.c 中冗余的 readpages aops 空指针检查代码。修复补丁已合入上游 commit db58465f1121 ("cachefiles: Drop superfluous readpages aops NULL check")，该修复包含在内核 5.11 及之后的版本中。

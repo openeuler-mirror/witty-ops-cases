@@ -1,0 +1,16 @@
+#标题
+NFS fscache 重新挂载后因 Key 包含指针导致缓存失效
+
+#内核版本
+5.5（问题引入于 4.17）
+
+#问题现象
+- 重新挂载 NFS v3 共享（使用 `-o fsc` 选项）后，fscache 无法复用已存在的磁盘缓存数据。
+- 每次重新挂载并访问文件时，系统会重新写入缓存数据，导致 `/var/cache/fscache` 目录下生成重复的缓存文件，缓存空间持续增长。
+- 该行为在 v4.15 正常，升级至 v4.17 后出现，RHEL8 受影响而 RHEL7 正常。
+
+#问题根因
+由内核提交 402cb8dda949d9b ("fscache: Attach the index key and aux data to the cookie") 引入。在 `fs/nfs/fscache.c` 的 `nfs_fscache_get_super_cookie` 函数中，传递给 `fscache_acquire_cookie` 的 key 参数包含了 `struct nfs_fscache_key` 结构体。该结构体内部包含 `nfs_client` 指针和 `rb_node` 成员，这些值在每次挂载时会发生变化，导致计算出的 cookie 哈希值改变，进而无法匹配磁盘上已有的缓存索引。
+
+#解决方案
+暂无已合并的修复补丁。根据分析，修复方案应修改 `nfs_fscache_get_super_cookie` 函数，仅传递 `key.key` 部分（即不包含指针和 rb_node 的结构体成员）给 `fscache_acquire_cookie`，以确保 key 内容在挂载间保持稳定。

@@ -1,0 +1,20 @@
+#标题
+pvrusb2驱动空指针解引用导致内核Oops
+
+#内核版本
+4.9.75
+
+#问题现象
+- 系统日志报错："Unable to handle kernel NULL pointer dereference at virtual address 00000018"
+- 触发内核 Oops：Internal error: Oops: 5 [#1] SMP ARM
+- 故障调用栈指向 `tveeprom_hauppauge_analog+0x6d8/0x9c0 [tveeprom]`
+
+#问题根因
+补丁回退过程中遗漏依赖项导致的不一致。Commit `6830733d53a4` ("[media] pvrusb2: reduce stack usage pvr2_eeprom_analyze()") 在设计上依赖于 commit `6037b3ca28f4` ("[media] tveeprom: print log messages using pr_foo()")。当该补丁被回退到 v4.9 内核时，v4.9 版本缺少后者，导致 `drivers/media/usb/pvrusb2/pvrusb2-eeprom.c` 中调用 `tveeprom_hauppauge_analog` 时传入了 NULL 指针，从而触发空指针解引用。
+
+#解决方案
+向 v4.9 内核回退缺失的依赖补丁，具体包括：
+1. commit `2a3edc5d55c2` (前置补丁)
+2. commit `7cda4c5bae46`
+3. commit `6037b3ca28f4` ("[media] tveeprom: print log messages using pr_foo()")
+经测试，应用上述补丁后问题解决。

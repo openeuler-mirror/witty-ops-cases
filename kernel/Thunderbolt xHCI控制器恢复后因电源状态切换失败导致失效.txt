@@ -1,0 +1,20 @@
+#标题
+Thunderbolt xHCI控制器恢复后因电源状态切换失败导致失效
+
+#内核版本
+6.1-rc
+
+#问题现象
+- Intel CometLake平台笔记本在Thunderbolt USB控制器（8086:15ec）下，系统挂起后插入Type-C设备再唤醒，USB设备无法被检测。
+- 内核日志显示 `xhci_hcd 0000:38:00.0: Unable to change power state from D3cold to D0, device inaccessible`。
+- 随后报错 `xhci_hcd 0000:38:00.0: Controller not ready at resume -19` 及 `HC died; cleaning up`，控制器失效。
+
+#问题根因
+xHCI控制器从 D3cold 状态恢复到 D0 状态时，PCIe 链路训练完成后，控制器需要较长时间才能响应配置空间访问。内核中 `pci_bridge_wait_for_secondary_bus()` 函数的默认等待时间（约100ms）不足以让某些 Titan Ridge 控制器准备好，导致驱动程序判定设备不可访问并触发错误处理。
+
+#解决方案
+- 修复补丁：修改 PCI 核心代码，使用 `pci_dev_wait()` 在链路激活后轮询检查 xHCI 是否响应，替代固定延迟。补丁详见：https://www.spinics.net/lists/linux-pci/msg138650.html。
+- 临时规避：
+  1. 添加内核启动参数 `pcie_aspm=off`。
+  2. 在 BIOS 中禁用 "Wake on Dell USB-C dock" 功能。
+  3. 通过 udev 规则或手动设置 `power/control` 为 `on`，禁止控制器进入 D3 状态。

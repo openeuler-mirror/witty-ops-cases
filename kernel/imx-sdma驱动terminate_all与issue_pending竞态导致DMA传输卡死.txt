@@ -1,0 +1,15 @@
+#标题
+imx-sdma驱动terminate_all与issue_pending竞态导致DMA传输卡死
+
+#内核版本
+5.4.49
+
+#问题现象
+- 音频播放发生 underrun 后，DMA 传输卡死，系统无法继续播放，直至重启设备。
+- 若尝试回退引入问题的提交 b8603d2a5795，会出现 `warn_slowpath_fmt` 内核警告，堆栈指向 `dma_free_attrs` -> `sdma_desc_free` -> `vchan_dma_desc_free_list`。
+
+#问题根因
+imx-sdma 驱动中存在竞态条件。当 ALSA 触发 underrun 时，调用 `dmaengine_terminate_async()` 启动工作队列进行终止处理，该工作线程会睡眠 1-2ms 后才清理 `sdmac->desc`。若用户空间应用快速检测到 underrun 并重新启动传输，`sdma_issue_pending()` 会在工作线程唤醒前执行。此时因 `sdmac->desc` 尚未被清理（仍指向旧值），驱动误判通道忙碌，导致新的 DMA 传输未启动，从而卡死。
+
+#解决方案
+目前暂无正式修复补丁合并。提交者提供了一个规避补丁，虽然修复了卡死现象，但会在可能的原子上下文中重新引入 1ms 延迟，且存在连续终止事件的竞态风险。

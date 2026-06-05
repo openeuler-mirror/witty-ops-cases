@@ -1,0 +1,18 @@
+#标题
+netfs子请求全失败时传输量计算错误导致iter_file_splice_write空指针崩溃
+
+#内核版本
+6.17.0-rc1+
+
+#问题现象
+- 在CIFS文件系统上运行xfstests generic/750测试用例时触发内核崩溃。
+- 触发条件为挂载选项包含 `cache=none`，移除该选项后不会崩溃。
+- 日志显示 `BUG: kernel NULL pointer dereference, address: 0000000000000008`。
+- 崩溃位置（RIP）位于 `iter_file_splice_write` 函数。
+- 故障前伴随 `CIFS: VFS: Send error in write = -28` (ENOSPC) 错误信息。
+
+#问题根因
+问题出在 `netfs` 模块中。当所有 `subrequests` 都失败时，`netfs` 未能正确确定已传输的数据量。由于传输量默认为 `LONG_MAX`，函数未返回错误，导致 `splice` 逻辑尝试从 pipe 中清理该大小的数据，进而引发空指针解引用。
+
+#解决方案
+已有修复补丁，详见：https://lore.kernel.org/linux-fsdevel/915443.1755207950@warthog.procyon.org.uk/T/#u

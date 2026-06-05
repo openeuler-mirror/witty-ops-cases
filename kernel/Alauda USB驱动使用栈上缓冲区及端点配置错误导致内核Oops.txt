@@ -1,0 +1,19 @@
+#标题
+Alauda USB驱动使用栈上缓冲区及端点配置错误导致内核Oops
+
+#内核版本
+6.5
+
+#问题现象
+- 连接 Fujifilm DPC-R1 读卡器并插入存储卡时，系统触发 kernel Oops。
+- 内核日志显示 "transfer buffer is on stack" 警告，调用栈指向 `usb_hcd_map_urb_for_dma`。
+- 随后触发 "BUG: kernel NULL pointer dereference"，位于 `alauda_transport` 函数。
+- 设备无法正常挂载或读写数据。
+
+#问题根因
+1. **栈缓冲区违规**：`ums_alauda` 驱动将栈上的变量地址直接用作 USB 传输缓冲区，违反了内核 DMA 映射规则，导致 `usb_hcd_map_urb_for_dma` 检测失败并报错。
+2. **空指针解引用**：函数 `alauda_ensure_map_for_zone` 调用 `alauda_read_map` 后未检查返回值，若该函数执行失败（如命令超时），后续代码直接访问未初始化或空的指针导致 Oops。
+3. **端点配置错误**：通过对比 Windows 抓包，发现该设备需使用端点 3 (EP 3 OUT) 进行 Bulk OUT 传输，而 Linux 驱动默认使用端点 1 (EP 1 OUT)，导致设备无法识别命令。
+
+#解决方案
+开发者在 Bug 讨论中提供了针对栈缓冲区问题的修复补丁（Attachment 305027）及端点覆盖补丁（Attachment 305064）。截止报告归档时，问题尚未在上游完全解决，开发者建议联系原作者或对比旧版本代码以进一步排查。

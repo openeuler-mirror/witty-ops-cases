@@ -1,0 +1,17 @@
+#标题
+tty_ioctl调用链中paste_selection函数mutex锁竞争导致RCU stall
+
+#内核版本
+v6.0-rc4 (ce888220d5c7a805e0e155302a318d5d23e62950)
+
+#问题现象
+- 内核日志报告 "INFO: rcu_preempt self-detected stall on CPU"，提示 RCU stall。
+- RCU grace-period kthread 饥饿超过 20975 jiffies。
+- CPU 0 在 `mutex_spin_on_owner` 中自旋，调用栈显示路径为 `tty_ioctl` -> `vt_ioctl` -> `tioclinux` -> `paste_selection`。
+- CPU 1 同样停留在 `paste_selection` 函数中。
+
+#问题根因
+在 `tty_ioctl` 处理流程中，调用 `paste_selection` 函数时尝试获取 mutex 锁（`mutex_lock`）。由于该锁被长时间持有或存在竞争，导致 CPU 在 `mutex_spin_on_owner` 中长时间自旋无法调度，进而触发 RCU stall 检测告警。
+
+#解决方案
+暂无（Bug 状态为 NEW，尚未修复）。

@@ -1,0 +1,17 @@
+#标题
+CephFS高负载下触发空指针解引用导致Kernel Panic
+
+#内核版本
+6.15.1
+
+#问题现象
+- 在 Kubernetes 环境下使用 CephFS (rook-ceph) 进行中高 I/O 压力测试时触发 Kernel Panic。
+- 日志显示 "BUG: kernel NULL pointer dereference, address: 0000000000000000"。
+- 崩溃发生在回写工作队列处理中，RIP 指向 `folios_put_refs+0x198/0x310`，调用链包含 `wb_workfn -> writeback_sb_inodes -> do_writepages -> ceph_writepages_start -> folios_put_refs`。
+- 寄存器 RBX 为 0，系统最终因致命异常重启。
+
+#问题根因
+在内核 6.15 版本中，Ceph 模块的 `ceph_writepages_start` 函数在处理回写操作时，向 `folios_put_refs` 函数传递了空指针（RBX 寄存器值为 0），导致访问非法地址触发 Oops。该问题为 6.15 版本引入的回归问题，在 6.14 及更早版本中未出现。
+
+#解决方案
+暂无官方修复补丁。根据用户反馈，升级至内核 6.17.1 版本后问题不再复现，建议尝试升级内核以规避该问题。

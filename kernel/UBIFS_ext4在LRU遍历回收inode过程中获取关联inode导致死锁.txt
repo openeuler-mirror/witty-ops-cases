@@ -1,0 +1,19 @@
+#标题
+UBIFS/ext4在LRU遍历回收inode过程中获取关联inode导致死锁
+
+#内核版本
+6.10.0-rc7
+
+#问题现象
+- 系统检测到 hung task，进程状态为 D (Blocked)，阻塞时间超过 15 秒。
+- UBIFS 场景：进程在 `__wait_on_freeing_inode` 和 `mutex_lock` (`make_reservation`) 处阻塞，触发 ABBA 死锁。
+- ext4 场景：进程在 `__wait_on_freeing_inode` 处阻塞。
+- 触发条件：并发执行 `echo 2 > /proc/sys/vm/drop_caches` 和删除带有扩展属性的文件。
+
+#问题根因
+问题源于 inode 回收流程（`prune_icache_sb` -> `inode_lru_isolate`）与文件系统 inode 驱逐逻辑的交互：
+1. **UBIFS ABBA 死锁**：进程 A（执行 rm 操作）在 `ubifs_jnl_write_inode` 中持有 `wbuf->io_mutex` 锁，并尝试获取 xattr inode（该 inode 已被进程 B 标记为 `I_FREEING`），从而进入等待；进程 B（执行 drop_caches）持有该 xattr inode 的 `I_FREEING` 状态，在处理关联的 regular inode 驱逐时，尝试获取 `wbuf->io_mutex` 锁。两者形成环路等待。
+2. **ext4 自死锁**：进程（执行 drop_caches）在 LRU 遍历中将 ea inode 标记为 `I_FREEING`，随后在处理关联的 regular inode 驱逐（`ext4_evict_inode` -> `ext4_xattr_inode_iget`）时，尝试获取该 ea inode，因发现其处于 `I_FREEING` 状态而进入 `__wait_on_freeing_inode` 等待。由于回收流程被阻塞，无法执行后续的 `dispose_list` 来唤醒等待者，导致死锁。
+
+#解决方案
+暂无（Bug 状态为 NEW，尚未合并修复补丁）

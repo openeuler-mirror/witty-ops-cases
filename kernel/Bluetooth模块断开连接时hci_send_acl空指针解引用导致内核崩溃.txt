@@ -1,0 +1,17 @@
+#标题
+Bluetooth模块断开连接时hci_send_acl空指针解引用导致内核崩溃
+
+#内核版本
+6.0.0, 6.0.3, 6.0.8, 6.1-rc3
+
+#问题现象
+- 内核日志报错：`BUG: kernel NULL pointer dereference, address: 0000000000000680`，伴随 `RIP: 0010:hci_send_acl+0x21/0x2f0 [bluetooth]`。
+- 触发场景：系统从挂起状态恢复、重新连接已配对的蓝牙耳机，或在蓝牙设备断开连接过程中。
+- 故障发生时 Call Trace 显示路径为：`rfcomm_sock_release` -> `__rfcomm_dlc_close` -> `rfcomm_send_disc` -> `l2cap_chan_send` -> `hci_send_acl`。
+- 系统可能出现冻结、无响应，或触发 general protection fault。
+
+#问题根因
+在蓝牙 RFCOMM socket 释放路径中，`hci_send_acl` 函数试图访问一个空指针（具体为访问地址 `0x680` 偏移处的数据）。该问题发生在 `rfcomm_sock_release` 调用链尝试发送断开连接帧时，此时底层蓝牙设备可能已断开或相关数据结构无效，导致内核崩溃。
+
+#解决方案
+暂无。Bug 状态为 NEW，用户测试 bluetooth-next 分支发现问题仍存在，尚未有修复补丁合并。

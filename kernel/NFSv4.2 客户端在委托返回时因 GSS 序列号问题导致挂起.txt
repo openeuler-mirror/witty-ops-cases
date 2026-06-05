@@ -1,0 +1,18 @@
+#标题
+NFSv4.2 客户端在委托返回时因 GSS 序列号问题导致挂起
+
+#内核版本
+6.12.x, 6.18.x
+
+#问题现象
+- NFS 客户端发生间歇性挂起，所有 I/O 请求进入 D 状态（不可中断睡眠），只能通过重启客户端恢复。
+- 故障期间进程堆栈显示卡在 `rpc_wait_bit_killable` 等待服务器响应。
+- 客户端观测到 `delegreturn` 调用异常增加（从正常 2-3次/秒升至 40-50次/秒），但服务端未收到相关流量。
+- 追踪数据显示出现 `NFS4ERR_SEQ_MISORDERED` (error=-10063) 错误。
+- 环境涉及 NFSv4.2 over IPv6，使用 `sec=krb5p` 认证并开启了 Delegation。
+
+#问题根因
+根据开发者分析，疑似 NFSD 内部存在消息重排序问题。该问题对非 GSS 工作负载无害，但在使用 GSS 完整性或隐私服务（如 krb5p）的高负载场景下，会导致 GSS 序列号窗口下溢或上溢。NFSD 依据 RFC 2203 丢弃违规的 RPC 请求，导致客户端请求无响应从而挂起。
+
+#解决方案
+暂无修复补丁。建议在服务端开启追踪点 `rpcgss_svc_seqno_low`、`rpcgss_svc_seqno_seen`、`rpcgss_svc_seqno_large` 以确认是否为 GSS 序列号窗口违规导致。

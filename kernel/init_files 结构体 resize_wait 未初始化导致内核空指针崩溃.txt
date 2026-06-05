@@ -1,0 +1,16 @@
+#标题
+init_files 结构体 resize_wait 未初始化导致内核空指针崩溃
+
+#内核版本
+4.14.41
+
+#问题现象
+- 在内核线程中调用 `get_unused_fd_flags` 获取文件描述符时触发内核崩溃。
+- 系统日志显示 "BUG: unable to handle kernel NULL pointer dereference at (null)"。
+- 故障调用栈为：`__wake_up_common` <- `__wake_up` <- `expand_files` <- `__alloc_fd` <- `get_unused_fd_flags`。
+
+#问题根因
+`init_files` 结构体中的成员 `resize_wait` 在使用前未被初始化。当 `expand_files` 函数执行扩容操作并调用 `__wake_up` 唤醒等待队列时，访问了该未初始化的指针，从而触发空指针解引用。
+
+#解决方案
+修改 `fs/file.c` 文件，在 `init_files` 结构体定义中显式初始化 `resize_wait` 成员（添加 `.resize_wait = __WAIT_QUEUE_HEAD_INITIALIZER(init_files.resize_wait)`）。该补丁已被维护者接收。

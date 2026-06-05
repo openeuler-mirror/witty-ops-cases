@@ -1,0 +1,18 @@
+#标题
+ACPI FACP表Hardware Reduced标志位错误导致内核启动空指针崩溃
+
+#内核版本
+5.0.9（受影响版本包括 4.19 至 5.1-rc4）
+
+#问题现象
+- Dell Inspiron 5485/5585 及 HP Envy x360（AMD Ryzen 3700U）笔记本在启动过程中发生内核崩溃。
+- 日志显示空指针解引用，调用栈指向 `setup_boot_APIC_clock` 函数。
+- 使用 `acpi=off` 或 `nolapic` 参数可启动，但仅识别单核或功能受限。
+
+#问题根因
+BIOS 在 FACP 表中错误地设置了 "Hardware Reduced (V5)" 标志位。当该标志位被设置时，内核的 clocksources 初始化异常，导致 `global_clock_event->event_handler` 为空指针。在 `apic.c` 的 `calibrate_APIC_clock` 函数中访问该空指针时触发崩溃。
+
+#解决方案
+1. 临时规避（BIOS设置）：若 BIOS 提供选项，将 "Sleep Mode" 设置为 "Force S3"，这会清除 Hardware Reduced 标志位。
+2. 临时规避（ACPI覆盖）：提取 FACP 表，将 "Hardware Reduced (V5)" 字段修改为 0，提高 OEM Revision 版本号，重新编译后通过 initramfs 加载覆盖原始表。
+3. 内核修复：开发者正在制作补丁以修正内核对 Hardware Reduced 模式的处理逻辑；高版本内核（如 5.3）可能已改善此问题。

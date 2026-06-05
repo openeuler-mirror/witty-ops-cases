@@ -1,0 +1,17 @@
+#标题
+SCSI命令重排队时请求状态不一致触发blk-core内核BUG
+
+#内核版本
+3.10.0-123.el7.x86_64
+
+#问题现象
+- 系统日志显示 I/O 错误，qla2xxx 驱动频繁发出 Abort command 和 Device Reset 指令。
+- 触发 kernel BUG，日志打印 "kernel BUG at block/blk-core.c:1217!"。
+- 系统发生 panic，提示 "invalid opcode: 0000 [#1]"。
+- 调用栈显示路径为：`blk_requeue_request` <- `__scsi_queue_insert` <- `scsi_softirq_done`。
+
+#问题根因
+在 `blk_requeue_request` 函数中，代码执行 `BUG_ON(blk_queued_rq(rq))` 检查。该检查期望请求（request）处于已排队状态（即 `cmd_flags` 包含 `REQ_QUEUED` 标志且位于 `tag_busy_list` 中）。实际故障发生时，请求被添加到了 `queue_head` 而非 `tag_busy_list`，且 `cmd_flags` 未包含 `REQ_QUEUED` 标志，导致断言失败触发 BUG。这表明在 SCSI 错误处理或命令重排队路径中存在请求状态不一致的问题。
+
+#解决方案
+暂无

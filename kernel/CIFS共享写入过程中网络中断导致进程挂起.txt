@@ -1,0 +1,18 @@
+#标题
+CIFS共享写入过程中网络中断导致进程挂起
+
+#内核版本
+3.8（评论提及3.0、3.2均受影响）
+
+#问题现象
+- 在向 CIFS 共享写入文件（如使用 rsync 或 sendfile）时，若发生网络中断（如拔掉网线），进程会陷入不可中断的睡眠状态（D状态）。
+- 进程无法通过 `kill -9` 终止，系统无法正常关机或重启，必须强制断电。
+- 内核日志报错："CIFS VFS: Error -111 sending data on socket to server" 或 "CIFS VFS: No writable handles for inode"。
+- 内核日志显示 "INFO: task ... blocked for more than 120 seconds"。
+- 堆栈信息显示进程卡在 `cifs_reopen_file` 中的 `mutex_lock` 或 `cifs_strict_fsync` 中的 `wait_on_page_bit`。
+
+#问题根因
+在使用 cache=strict 挂载选项且启用 oplocks 的情况下，当网络连接中断并恢复后，CIFS 模块在处理文件句柄恢复或页面回写等待时发生死锁或资源等待超时。具体表现为进程在 `cifs_reopen_file` 函数获取互斥锁时阻塞，或在 `cifs_strict_fsync` 函数等待页面写入完成时阻塞，导致无法正确返回错误码并一直挂起。
+
+#解决方案
+暂无正式修复。用户反馈使用 `forcedirectio` 挂载选项可规避此问题，但会降低写入性能。

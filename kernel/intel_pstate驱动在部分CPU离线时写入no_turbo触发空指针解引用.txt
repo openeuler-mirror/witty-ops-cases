@@ -1,0 +1,17 @@
+#标题
+intel_pstate驱动在部分CPU离线时写入no_turbo触发空指针解引用
+
+#内核版本
+6.18.8
+
+#问题现象
+- 执行 `echo 1 > /sys/devices/system/cpu/intel_pstate/no_turbo` 时触发 kernel oops
+- 日志显示 "#PF: supervisor read access in kernel mode" 及 "Oops: 0000 [#1]"
+- CR2 寄存器值为 0x0000000000000000，表明空指针解引用
+- 故障发生在 store_no_turbo+0x100/0x1f0 函数中
+
+#问题根因
+当系统存在离线 CPU（如通过 nosmt 参数禁用超线程）时，intel_pstate 驱动的 `store_no_turbo()` 调用 `intel_pstate_update_limits_for_all()`，该函数使用 `for_each_possible_cpu()` 遍历所有 possible CPU。但 `all_cpu_data[cpu]` 数组仅对已初始化的在线 CPU 分配了有效指针，离线 CPU 对应条目为 NULL。后续 `intel_pstate_update_max_freq()` 直接解引用 `cpudata->cpu` 而未进行 NULL 检查，导致空指针解引用触发页面错误。该回归由 commit 973207ae3d7c 引入。
+
+#解决方案
+开发者已提供修复补丁（attachment 309452），用户确认补丁有效。补丁通过在遍历 possible CPU 时增加 NULL 检查或改用 online/present CPU 掩码来规避此问题。

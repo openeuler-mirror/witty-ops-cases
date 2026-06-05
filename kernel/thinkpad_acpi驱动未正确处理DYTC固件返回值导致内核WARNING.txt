@@ -1,0 +1,19 @@
+#标题
+thinkpad_acpi驱动未正确处理DYTC固件返回值导致内核WARNING
+
+#内核版本
+6.5.4（受影响版本 6.3+）
+
+#问题现象
+- 系统日志中反复出现内核 WARNING：`WARNING: CPU: 14 PID: 962 at drivers/acpi/platform_profile.c:74 platform_profile_show+0xb1/0x100`
+- 触发条件为 `WARN_ON((profile < 0) || (profile >= ARRAY_SIZE(profile_names)))`，检测到无效的 profile 值（如 -1883022368）。
+- 故障机型为 Lenovo T14s G3 AMD。
+
+#问题根因
+`thinkpad_acpi` 驱动中的 `dytc_profile_refresh` 函数在调用 `convert_dytc_to_profile` 时未检查返回值。当固件返回 `DYTC_FUNCTION_STD` 模式（funcmode=0）且 perfmode=15 时，`convert_dytc_to_profile` 无法处理该组合导致返回错误，但调用者忽略了该错误，导致未初始化或无效的 profile 变量被传递给 `platform_profile_show`，从而触发 WARNING。
+
+#解决方案
+需修改内核驱动代码：
+1. 在 `dytc_profile_refresh` 中增加对 `convert_dytc_to_profile` 返回值的检查，若出错则提前返回。
+2. 在 `convert_dytc_to_profile` 函数中增加对 `DYTC_MODE_MMC_BALANCE` 的处理分支。
+截至报告时间，厂商正在确认固件行为，暂无正式上游补丁合并。

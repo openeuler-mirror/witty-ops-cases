@@ -1,0 +1,17 @@
+#标题
+tpm_tis驱动中断处理导致部分机型从挂起恢复时崩溃重启
+
+#内核版本
+4.19.67+、5.1+
+
+#问题现象
+- ASUS C302、Acer C720P 等机型在从挂起（S3）恢复时系统崩溃并重启，直接显示 BIOS 启动画面
+- 故障发生时内核日志中断于挂起操作，无后续错误记录
+- 部分情况下伴随固件设置丢失（如 Legacy Boot 被禁用）或音频功能异常
+- 系统日志中可能出现 `tpm tpm0: tpm_try_transmit: send(): error -5` 等 TPM 通信错误
+
+#问题根因
+经二分排查，问题引入于提交 `a3fbfae82b4cb3ff9928e29f34c64d0507cad874` ("tpm: take TPM chip power gating out of tpm_transmit()")。该提交修改了 TPM 芯片的电源门控逻辑。受影响设备使用 Infineon IFX0102 TPM 芯片，`tpm_tis` 驱动通过 ACPI ID `PNP0C31` 或 HID `IFX0102` 接管设备，但在新的电源管理逻辑下，中断处理流程异常导致系统在恢复阶段崩溃。
+
+#解决方案
+临时规避方案：在内核启动参数中添加 `tpm_tis.interrupts=0` 以禁用 TPM 中断（改为轮询模式）。社区开发者提议从 `tpm_tis` 驱动中移除 `IFX0102` 设备 ID 以避免驱动冲突，相关修复补丁尚在讨论中。

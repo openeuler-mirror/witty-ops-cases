@@ -1,0 +1,20 @@
+#标题
+mvsas驱动处理SAS扩展器端口时因PHY索引越界触发内核崩溃
+
+#内核版本
+3.17.1
+
+#问题现象
+- 系统连接 SAS expander 并挂载 SATA 硬盘时触发 kernel oops。
+- 日志显示 "general protection fault" 或 "unable to handle kernel NULL pointer dereference"。
+- 崩溃 RIP 指向 `mvs_task_prep_ata+0x80/0x3a0 [mvsas]` 或 `mvs_task_prep`。
+- Call Trace 包含 `mvs_queue_command` -> `mvs_task_exec` -> `mvs_task_prep` -> `mvs_task_prep_ata`。
+
+#问题根因
+由 commit `7c237c5f6d5c62724ccd82aecdcd1fd9bd71dc75` 引入的回归问题。在 `mvs_task_prep_ata` 函数中，代码尝试通过 `dev->phy->number` 索引 HBA 的 PHY 表（`mvi->sas->sas_phy[]`）来获取 `sas_phy` 结构。当使用 SAS expander 时，`dev->phy->number` 可能是扩展器上的 PHY 编号（例如大于 15），该值超出了 HBA 本地 PHY 表的数组边界。导致数组越界访问，读取到无效指针，随后在访问 `sas_phy->id` 时触发 General Protection Fault 或空指针解引用。
+
+#解决方案
+James Bottomley 提供了修复补丁，修改 `drivers/scsi/mvsas/mv_sas.c`：
+移除通过 `MVS_PHY_ID` 宏（依赖越界索引）计算 PHY ID 的逻辑，改为直接使用 `sas_port->phy_mask`：
+将 `(MVS_PHY_ID << TXQ_PHY_SHIFT)` 替换为 `((sas_port->phy_mask & TXQ_PHY_MASK) << TXQ_PHY_SHIFT)`。
+回退 commit `7c237c5f6d5c62724ccd82aecdcd1fd9bd71dc75` 亦可临时规避。

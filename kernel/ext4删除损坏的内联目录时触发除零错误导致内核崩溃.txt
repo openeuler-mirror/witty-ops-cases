@@ -1,0 +1,18 @@
+#标题
+ext4删除损坏的内联目录时触发除零错误导致内核崩溃
+
+#内核版本
+4.18
+
+#问题现象
+挂载特制的 ext4 文件系统镜像并执行 rmdir 操作时，内核触发除零错误。具体表现为：
+- 内核日志报错 "divide error: 0000 [#1]"
+- RIP 寄存器指向 `__ext4_check_dir_entry+0x1aa`
+- 调用栈显示路径为 `empty_inline_dir` -> `ext4_empty_dir` -> `ext4_rmdir`
+- KASAN 报告检测到栈越界访问
+
+#问题根因
+函数 `empty_inline_dir` 在检查内联目录是否为空时，错误地依赖 `dir->i_size` 作为边界依据。特制的文件系统镜像中 `i_size` 值被设置得比实际内联数据大，导致函数读取越界，碰到了 xattr 结束标记（该标记的目录项大小 rec_len 为 0）。随后在 `__ext4_check_dir_entry` 函数中对该目录项大小进行除法运算时，触发了除零错误。
+
+#解决方案
+修改 `empty_inline_dir` 函数，使用内联目录的实际大小替代 `dir->i_size` 进行边界检查；同时修复 `__ext4_check_dir_entry` 中的错误报告逻辑以避免除零陷阱。相关补丁链接：http://patchwork.ozlabs.org/patch/962516/

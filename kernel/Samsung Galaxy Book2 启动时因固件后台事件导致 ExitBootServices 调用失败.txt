@@ -1,0 +1,20 @@
+#标题
+Samsung Galaxy Book2 启动时因固件后台事件导致 ExitBootServices 调用失败
+
+#内核版本
+v5.19
+
+#问题现象
+- Samsung Galaxy Book2 (SDM850 ARM64) 设备无法启动 Linux 内核。
+- 启动过程中 EFI stub 报错：`EFI stub: ERROR: Exit boot services failed`。
+- `efi_bs_call(exit_boot_services)` 返回错误码 `EFI_INVALID_PARAMETER`。
+- 调试日志显示内存映射键值在调用 `exit_boot_services` 前后持续快速增加，无法匹配。
+
+#问题根因
+设备固件存在后台事件（推测为定时器中断或硬件相关事件），在内核调用 `get_memory_map` 和 `exit_boot_services` 期间频繁修改 EFI 内存映射。
+这导致传入 `exit_boot_services` 的 MapKey 在校验时已失效，固件返回 `EFI_INVALID_PARAMETER`。
+即使尝试通过禁用中断（`msr daifset, #3`）或提升 TPL 级别（`EFI_TPL_HIGH_LEVEL`）来阻止并发，问题依然存在，表明固件实现可能未遵循规范或存在缺陷。
+
+#解决方案
+暂无官方修复方案。该问题源于特定设备固件缺陷。
+有用户反馈移除内核调试打印可能因改变执行时序而规避此问题，但属于非稳定 workaround。

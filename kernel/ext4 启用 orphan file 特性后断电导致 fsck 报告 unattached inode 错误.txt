@@ -1,0 +1,22 @@
+#标题
+ext4 启用 orphan file 特性后断电导致 fsck 报告 unattached inode 错误
+
+#内核版本
+未明确
+
+#问题现象
+- 运行 generic/475 测试（文件系统一致性测试）模拟断电场景
+- 重启后执行 fsck 检查报错：`Unattached zero-length inode 13. Clear? no` 及 `Unattached inode 13`
+- 内核日志显示：`orphan replay: reserve 13`
+- 文件系统处于不一致状态，存在未被目录树引用的 inode
+
+#问题根因
+在 `ext4_create` 流程中，若 `ext4_add_entry` 因 ENOSPC 失败，处理流程如下：
+1. `ext4_new_inode_start_handle` 已将 inode 写入 itable，此时磁盘上 `nlink=1`
+2. 内存中执行 `drop_nlink(inode)`，但该修改尚未写回磁盘
+3. 调用 `ext4_orphan_file_add` 将 inode 加入 orphan 列表
+4. 事务提交成功后发生断电
+重启恢复时，`ext4_orphan_cleanup` 调用 `ext4_process_orphan`，检查 `inode->i_nlink` 发现其值为 1（读取自磁盘），判定 inode 有效从而跳过删除操作。最终导致该 inode 既未链接到目录树，也未被 orphan 清理机制删除，引发文件系统不一致。
+
+#解决方案
+暂无

@@ -1,0 +1,23 @@
+#标题
+USB存储设备从挂起恢复时因链路状态竞争导致断开重连
+
+#内核版本
+6.12
+
+#问题现象
+- 系统从挂起状态恢复时，USB 3.0 接口的 SD 卡读卡器发生断开并重连，导致已挂载的文件系统被卸载。
+- 日志中显示 "usb 3-4: USB disconnect, device number..." 以及 "Can't queue urb, port error, link inactive" 错误信息。
+- 在特定硬件（如 Samsung Ativ9 笔记本、emb-qm77 主板）上复现，部分机器表现为偶发性，部分机器表现为必现。
+- 尝试禁用 LPM (Link Power Management) 特性未能解决问题。
+
+#问题根因
+- 设备在挂起期间可能因断电或固件问题导致链路断开，恢复时 USB 3.0 链路重新训练与 `usbcore` 的 reset-resume 处理流程存在竞争条件。
+- `xhci_hcd` 驱动在链路处于 `ss.Inactive` 状态时设置了错误标志，导致设备复位后驱动仍错误地阻止 URB 传输。
+- `hub.c` 中的 `port_event()` 函数在处理 warm reset 时逻辑存在缺陷：当链路处于 `ss.Inactive` 状态时，端口状态寄存器可能不显示 "connected"，导致代码仅复位端口而非整个设备；且在复位成功后，函数使用了过时的 `portstatus` 值调用 `hub_port_connect_change()`，触发了错误的断开流程。
+
+#解决方案
+暂无正式合并的修复方案。开发者提供了多个调试补丁进行尝试：
+- 修复 `xhci` 驱动中因链路非活动状态导致无法排队 URB 的问题。
+- 尝试在 reset-resume 流程中增加可配置的延时（`reset_resume_delay` 模块参数），等待链路状态稳定。
+- 尝试提前检测断开的 USB3 设备并立即复位。
+目前问题仍在进一步分析和验证中。

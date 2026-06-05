@@ -1,0 +1,17 @@
+#标题
+ext4在data=ordered模式下删除文件时因等待回写导致进程阻塞
+
+#内核版本
+3.12.9 (3.12-1-rt-amd64)
+
+#问题现象
+- 执行 rm 删除文件或关闭已打开文件的进程（如 mplayer）时，进程阻塞超过 120 秒。
+- 内核日志打印 "INFO: task rm:... blocked for more than 120 seconds"。
+- Call Trace 显示阻塞点在 `truncate_inode_pages_range` -> `wait_on_page_bit` -> `io_schedule`。
+- 系统关机时 umount 该分区也可能发生阻塞，Call Trace 指向 `sync_inodes_sb` -> `filemap_fdatawait_range`。
+
+#问题根因
+文件系统使用 `data=ordered` 日志模式。在删除文件（unlink）过程中，`ext4_evict_inode` 调用 `ext4_begin_ordered_truncate()` 触发脏数据回写，随后 `truncate_inode_pages()` 需等待回写完成。在 I/O 负载较重或存储设备响应较慢（如 USB 驱动器）时，该等待过程超时触发 hung task 检测。
+
+#解决方案
+规避方法：挂载文件系统时添加 `noauto_da_alloc` 选项，或将日志模式切换为 `data=writeback`。暂无明确的内核补丁修复信息。

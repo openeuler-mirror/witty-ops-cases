@@ -1,0 +1,17 @@
+#标题
+TCP高负载下tun接口触发tcp_fragment警告或skb_over_panic
+
+#内核版本
+3.11.10, 3.12.4
+
+#问题现象
+- 系统日志中出现内核警告：`WARNING: CPU: 1 PID: 1977 at net/ipv4/tcp_output.c:1061 tcp_fragment+0x32e/0x340()`。
+- 故障触发条件为服务器存在大量 TCP 负载且流量涉及 tun 接口（如 OpenVPN 运行于 TAP 模式）。
+- 在旧版本内核（如 3.2.23）中，相同场景曾导致 `skb_over_panic` 并触发 kernel BUG (`kernel BUG at net/core/skbuff.c:207`)。
+
+#问题根因
+问题发生在 TCP 协议栈的重传或分片处理流程中，具体位于 `net/ipv4/tcp_output.c` 文件的 `tcp_fragment` 函数。在高负载且涉及 tun 设备的场景下，内核触发了 sanity check 警告。由于关闭 `tcp_fack` 参数可消除警告，推测问题与 FACK（Forward Acknowledgment）拥塞控制逻辑在特定条件下的处理有关。
+
+#解决方案
+临时规避方案：将参数 `/proc/sys/net/ipv4/tcp_fack` 设置为 0 可消除警告。
+截止报告时间，该 Bug 状态为 NEW，尚未有官方修复补丁合并。

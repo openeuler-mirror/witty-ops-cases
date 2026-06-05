@@ -1,0 +1,17 @@
+#标题
+CacheFiles 模块 cachefiles_write_page 函数断言失败导致 Kernel Panic
+
+#内核版本
+2.6.32-504.16.2.el6.x86_64
+
+#问题现象
+- 系统在使用 NFS 挂载（带 fsc 标志）并运行 cachefilesd 数小时后触发 Kernel Panic。
+- 控制台输出 "kernel BUG at fs/cachefiles/rdwr.c:962!" 及 "invalid opcode: 0000 [#1]"。
+- 日志显示 CacheFiles 断言失败："Assertion failed b2000 < b17b6 is false"。
+- 堆栈信息指向 `cachefiles_write_page+0x273/0x2d0 [cachefiles]`。
+
+#问题根因
+在 `fs/cachefiles/rdwr.c` 文件的 `cachefiles_write_page` 函数中，存在断言检查 `ASSERTCMP(pos, <, eof)`。由于 `internal.h` 中使用了 `#if 1` 强制开启了调试宏，导致该断言在生产模式下依然生效。当写入位置 `pos` 超过文件结束位置 `eof` 时，断言失败触发 `BUG()`，导致内核崩溃。实际上 `pos >= eof` 属于正常的边界条件，不应导致系统崩溃。
+
+#解决方案
+修改 `fs/cachefiles/rdwr.c` 源码，将强制断言替换为常规错误处理逻辑：将 `ASSERTCMP(pos, <, eof)` 替换为条件判断 `if (pos >= eof) { return -ENOBUFS; }`。经测试验证，修改后系统运行稳定。

@@ -1,0 +1,27 @@
+#标题
+SATA总线因大块I/O命令或LPM问题导致设备离线
+
+#内核版本
+6.16.x, 6.17.x, 6.18-rc
+
+#问题现象
+- 系统运行一段时间或在高负载下，SATA设备从总线消失，导致I/O错误，文件系统不可用。
+- dmesg日志显示ATA异常：`ataX.00: exception Emask 0x10 SAct ... action 0xe frozen`，`irq_stat 0x00000040, connection status changed`。
+- 命令执行失败：`failed command: WRITE FPDMA QUEUED` 或 `READ FPDMA QUEUED`，伴随 `Emask 0x10 (ATA bus error)` 或 `Emask 0x4 (timeout)`。
+- 部分系统在启动阶段即触发错误，导致无法正常启动；部分系统在执行大块读写（如 4MB）时触发故障。
+
+#问题根因
+该问题主要由提交 `459779d04ae8` ("block: Improve read ahead size for rotational devices") 引入的回归导致：
+1. **大块I/O处理缺陷**：该提交增加了旋转设备的预读大小，导致块层向SATA设备下发更大的I/O命令（如 4MB）。部分SATA控制器（如 Marvell 88SE9230）或驱动器固件（如 DELLBOSS VD）无法正确处理 4MB 大小的 NCQ 命令，导致总线错误或超时。测试表明将 `max_sectors_kb` 限制在 4095 可规避问题，4096 则必现。
+2. **LPM兼容性问题**：部分硬盘（如 Seagate ST2000DM008）在新内核下触发链路电源管理（LPM）异常，导致连接状态改变（`SError: { CommWake DevExch }`）进而掉盘。
+3. **其他因素**：个别用户反馈禁用 IOMMU 后问题解决，推测可能与特定平台的 DMA 映射处理有关。
+
+#解决方案
+- **规避措施（大块I/O问题）**：
+  - 通过内核参数限制最大扇区数：`libata.force=maxsec1024`。
+  - 运行时动态调整：`echo 1280 > /sys/block/sdX/queue/max_sectors_kb`。
+  - 配置 udev 规则持久化设置：`ACTION=="add|change", SUBSYSTEM=="block", ENV{ID_MODEL}=="DELLBOSS_VD", ATTR{queue/max_sectors_kb}="1280"`。
+- **规避措施（LPM问题）**：
+  - 添加内核参数禁用 LPM：`libata.force=nolpm` 或针对特定端口 `libata.force=6:nolpm`。
+- **规避措施（IOMMU问题）**：在 BIOS 或内核参数中禁用 Intel IOMMU。
+- **补丁状态**：Linux v6.19 已针对 DELLBOSS VD 设备添加 quirk 补丁（提交 `2e983271363108b3813b38754eb96d9b1cb252bb`）以限制其最大扇区数。

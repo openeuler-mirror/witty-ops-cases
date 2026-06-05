@@ -1,0 +1,16 @@
+#标题
+高负载UDP流量下inet_fragment分片处理引发内核panic
+
+#内核版本
+3.18-rc1
+
+#问题现象
+- 系统在进行高负载 UDP 吞吐量测试（使用 netperf）时触发 kernel panic。
+- 故障环境包含 6 个 ixgbe 接口配置为 3 个 bonded 对。
+- 日志显示内核被污染（Tainted: G W），panic 前可能伴随 Warning 信息。
+
+#问题根因
+问题位于 `net/ipv4/inet_fragment.c` 模块的 `fq_unlink` 函数中。代码在移除分片队列节点时，无条件执行 `hlist_del(&fq->list)`，未检查 `INET_FRAG_EVICTED` 标志位。当分片队列已被标记为驱逐状态时，重复删除链表节点导致内核崩溃。
+
+#解决方案
+根据邮件列表建议的补丁，在 `fq_unlink` 函数中增加判断逻辑：仅当 `fq->flags` 未设置 `INET_FRAG_EVICTED` 标志时，才执行 `hlist_del(&fq->list)` 操作。

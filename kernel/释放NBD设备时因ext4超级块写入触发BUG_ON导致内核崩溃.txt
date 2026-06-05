@@ -1,0 +1,17 @@
+#标题
+释放NBD设备时因ext4超级块写入触发BUG_ON导致内核崩溃
+
+#内核版本
+4.3.0, 4.4.3
+
+#问题现象
+- 在 OpenStack/LXC 环境下使用 NBD 设备挂载 rootfs 卷，释放（deallocate）NBD 设备时系统变得无响应。
+- NBD 进程无法终止，对 SIGKILL 信号无反应，只能通过硬复位恢复。
+- 系统出现 CPU 使用率飙升至 100% 的现象。
+- 内核发生崩溃。
+
+#问题根因
+当块设备（如 NBD）在 I/O 写入过程中被移除或释放时，ext4 文件系统尝试将超级块写入已不存在的设备。调用链为 `ext4_commit_super()` -> `__sync_dirty_buffer()` -> `submit_bh()` -> `submit_bh_wbc()`。由于设备已消失，buffer head 处于未映射状态，代码执行至 `submit_bh_wbc()` 中的 `BUG_ON(!buffer_mapped(bh))` 时触发内核崩溃。
+
+#解决方案
+该问题已在 commit a17712c8e4be4fa5404d20e9cd3b2b21eae7bc56 中修复。该补丁在提交超级块前检查 buffer head 是否已映射，从而避免了 BUG_ON 的触发。建议升级至包含该补丁的内核版本。

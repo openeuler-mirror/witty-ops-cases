@@ -1,0 +1,29 @@
+#标题
+Realtek ALC3661 驱动 Pin Configuration 缺失导致 Alienware 18 低音炮无法工作
+
+#内核版本
+4.2.3-040203-generic
+
+#问题现象
+- Alienware 18 笔记本在 Linux 下内置低音炮无法工作，系统声音设置中无法识别低音炮设备。
+- 系统音量小、音质差，声音输出仅显示 Analog Stereo Output 或 Analog Surround 4.0，但测试时仅能输出立体声。
+- 耳机接口功能正常。
+- 内核日志显示声卡被识别为 Realtek ALC3661，但 `hdaudioC0D0` 自动配置未正确识别低音炮节点。
+
+#问题根因
+声卡编解码器为 Realtek ALC3661，驱动程序 `patch_realtek.c` 缺少针对 Dell Alienware 18 (PCI SSID: 1028:05ab) 的特定初始化配置。
+1. 默认解析逻辑错误地将音量控制资源分配给了两个耳机插孔（Node 0x15 和 Node 0x16）。由于 ALC668/ALC3661 硬件限制仅有三个音量控制资源，导致内置扬声器（Node 0x14）和低音炮（Node 0x1a）无法获得独立的音量控制或 DAC 映射。
+2. 低音炮节点 Node 0x1a 的默认 Pin Default 值为 `0x411111f0`（表示未连接/N/A），导致驱动在自动配置阶段忽略了该物理存在的硬件。
+
+#解决方案
+**临时规避方案：**
+使用 `hdajackretask` 工具手动重写 Pin Configuration 并安装固件：
+1. 将 Node 0x1a 配置为 Internal Speaker (LFE)，设置 Pin Default 为 `0x90170111`。
+2. 禁用 Node 0x16（设置为 N/A），释放音量控制资源供低音炮使用。
+3. 在 `/etc/modprobe.d/alsa-base.conf` 中添加参数 `options snd-hda-intel patch=hda-jack-retask.fw` 并重启。
+
+**内核补丁方案：**
+在 `sound/pci/hda/patch_realtek.c` 中添加针对该机型的修复代码：
+1. 新增 `ALC668_FIXUP_DELL_ALIENWARE` 修复函数，配置 Pin 表：`{ 0x1a, 0x99130112 }` (subwoofer) 和 `{ 0x1b, 0x03a1113c }` (headset mic)。
+2. 设置 `preferred_dacs` 数组以强制指定 DAC 映射关系。
+3. 添加 SSID 匹配项：`SND_PCI_QUIRK(0x1028, 0x05ab, "Dell Alienware 18", ALC668_FIXUP_DELL_ALIENWARE)`。

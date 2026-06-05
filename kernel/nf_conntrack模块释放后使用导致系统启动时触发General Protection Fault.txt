@@ -1,0 +1,18 @@
+#标题
+nf_conntrack模块释放后使用导致系统启动时触发General Protection Fault
+
+#内核版本
+3.18.0-0.rc6.git0.1
+
+#问题现象
+- 系统启动过程中发生 Kernel panic，提示 "Fatal exception in interrupt"。
+- 日志记录显示 "general protection fault: 0000 [#1]"。
+- RIP 指针指向 `nf_ct_del_from_dying_or_unconfirmed_list+0x46/0x80 [nf_conntrack]`。
+- RAX 寄存器值为 `dead000000200200`，表明访问了已被标记为删除的列表节点（列表毒值）。
+- Call Trace 显示调用链为：`destroy_conntrack` -> `nf_conntrack_destroy` -> `skb_release_head_state` -> `kfree_skb` -> `nf_hook_slow` -> `ip_local_deliver`。
+
+#问题根因
+在 `nf_conntrack` 模块处理网络数据包时，`nf_ct_del_from_dying_or_unconfirmed_list` 函数试图操作一个已经无效的链表节点。RAX 寄存器显示的 `dead000000200200` 是内核用于检测列表删除错误的特殊值（LIST_POISON），表明发生了释放后使用或链表破坏。
+
+#解决方案
+该问题已在内核 net 分支中修复，修复补丁 ID 为 commit 43612d7c04f1a4f5e60104143918fcdf018b66ee。

@@ -1,0 +1,21 @@
+#标题
+Asus GU605 笔记本扬声器音量极低因 BIOS ACPI 缺失 SPI cs-gpios 属性
+
+#内核版本
+6.14.8
+
+#问题现象
+- Asus Zephyrus G16 (GU605CR/CP) 笔记本扬声器音量极低，即使调至 100% 音量仍然很小，耳机输出正常
+- 内核日志报错：`pxa2xx-spi pxa2xx-spi.3: cs1 >= max 1`
+- 内核日志报错：`spi_master spi0: error -EINVAL: failed to add SPI device CSC3556:00 from ACPI`
+- 系统日志显示 Serial bus multi instantiate 驱动加载失败：`probe with driver ... failed with error -22`
+
+#问题根因
+BIOS 提供的 ACPI 表中缺失了 SPI 控制器的 `cs-gpios` 属性。该机型硬件设计使用一个 GPIO 作为第二个 Cirrus Logic CS35L56 功放的 SPI 片选（CS）信号，但由于 BIOS 未在 ACPI 中正确描述该属性，导致 `pxa2xx-spi` 驱动无法正确实例化第二个 SPI 设备，进而导致功放配置异常，扬声器音量极低。
+
+#解决方案
+1. 官方修复：升级 BIOS 至 v310 版本（ASUS 已发布修复版 BIOS）。
+2. 临时规避方案：
+   - 通过 initrd 加载实验性 SSDT overlay（如 `gu605c-spi-cs-gpio.asl`）补全缺失的 `cs-gpios` 属性。
+   - 应用内核补丁增加 quirk：`SND_PCI_QUIRK(0x1043, 0x1034, "ASUS GU605C", ALC285_FIXUP_ASUS_GU605_SPI_SPEAKER2_TO_DAC1)`。
+   - 确保内核开启 `CONFIG_SND_HDA_SCODEC_CS35L56_SPI` 和 `CONFIG_SERIAL_MULTI_INSTANTIATE` 选项。

@@ -1,0 +1,18 @@
+#标题
+NFS模块nfs_d_automount函数访问negative dentry触发空指针解引用
+
+#内核版本
+3.17.1
+
+#问题现象
+- 内核日志报错：BUG: unable to handle kernel NULL pointer dereference at 0000000000000028
+- 触发位置：IP: nfs_d_automount+0x1d/0x173
+- 调用栈：follow_managed -> lookup_fast -> path_lookupat -> SyS_newlstat
+- 用户在访问 NFSv4 挂载的主目录时遇到 Stale NFS file handle 错误，无法访问内容。
+- 卸载文件系统时可能出现 "BUG: Dentry ... still in use" 及 "VFS: Busy inodes after unmount" 警告。
+
+#问题根因
+->d_automount() 钩子函数在一个 negative dentry（即没有关联 inode 的目录项）上被调用。该 dentry 保留了 DCACHE_NEED_AUTOMOUNT 标志，但其 inode 已被移除（如通过 dentry_unlink_inode），导致 nfs_d_automount 函数解引用空指针。此问题可能与特定提交（f39c01047994... 和 4fa2c54b5198...）中 d_delete() 的调用上下文不当，或 nfs_atomic_open 中 ENOENT 路径缺少 nfs_set_verifier() 调用有关。
+
+#解决方案
+开发者建议回退提交 f39c01047994e66e7f3d89ddb4c6141f23349d8d 和 4fa2c54b5198d09607a534e2fd436581064587ed 进行测试；另有建议在 nfs_kill_super 函数中添加 nfs_umount_begin(s) 调用。截止报告时间，Bug 状态为 ASSIGNED，暂无明确的正式修复补丁信息。

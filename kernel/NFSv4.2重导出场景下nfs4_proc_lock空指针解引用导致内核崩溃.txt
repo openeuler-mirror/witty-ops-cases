@@ -1,0 +1,17 @@
+#标题
+NFSv4.2重导出场景下nfs4_proc_lock空指针解引用导致内核崩溃
+
+#内核版本
+5.13（问题复现于 5.11、5.12）
+
+#问题现象
+- 系统日志打印 `BUG: kernel NULL pointer dereference, address: 0000000000000028`，触发 Oops。
+- 故障发生在 NFSv4.2 客户端挂载点被重新导出给 NFSv3 客户端使用的场景下，重导出服务器频繁崩溃。
+- RIP 寄存器指向 `nfs4_proc_lock+0xd5/0x540 [nfsv4]`。
+- Call Trace 流程：`nlmsvc_lock` -> `vfs_lock_file` -> `nfs_lock` -> `do_setlk` -> `nfs4_proc_lock`。
+
+#问题根因
+在 NFS 重导出场景下，lockd 服务端代码错误地设置了 `fl_ops` 结构体指针。当 NFSv3 客户端发起文件锁请求时，内核在 `nfs4_proc_lock` 函数中访问了无效的 `fl_ops` 成员，导致空指针解引用并触发系统崩溃。
+
+#解决方案
+应用补丁 "lockd: lockd server-side shouldn't set fl_ops" 可修复该崩溃问题。用户反馈在 5.13-rc6 版本上应用该补丁后，系统运行稳定且未再复现崩溃。

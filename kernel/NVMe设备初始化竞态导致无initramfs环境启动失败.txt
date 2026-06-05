@@ -1,0 +1,17 @@
+#标题
+NVMe设备初始化竞态导致无initramfs环境启动失败
+
+#内核版本
+4.9.0
+
+#问题现象
+- 内核启动时发生 Kernel panic，提示 "VFS:Unable to mount root fs on unknown-block(0,0)"。
+- 故障发生在未使用 initramfs/initrd 且根文件系统位于 NVMe 设备的场景。
+- 修改内核配置（如将 DRM/I915 改为模块）或应用特定提交后更容易复现。
+
+#问题根因
+启动过程中的时序竞态问题。内核尝试挂载根文件系统时，NVMe 设备尚未完成初始化。
+经 Bisect 定位，首次引入问题的提交为 d79e141c1c6ea7cb70c169971d522b88c8d5b419 ("Input: i8042 - Trust firmware a bit more when probing on X86")。该提交移除了 i8042 驱动中的端口探测回退逻辑，导致启动过程中少了一段延迟。此前该段延迟恰好为 NVMe 设备初始化提供了足够的时间。移除后启动速度加快，导致 NVMe 设备未及时就绪。
+
+#解决方案
+在内核启动参数中添加 rootwait 选项，等待根设备就绪后再挂载。

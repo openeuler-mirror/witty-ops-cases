@@ -1,0 +1,16 @@
+#标题
+Bluetooth子系统bt_accept_poll函数竞争条件导致Use-After-Free
+
+#内核版本
+6.7-rc2
+
+#问题现象
+- KASAN 检测到 "slab-use-after-free in bt_sock_poll+0x233/0x9d0 [bluetooth]"
+- 故障发生在蓝牙配对过程中，触发进程为 bluetoothd
+- 读取已释放内存地址时触发异常
+
+#问题根因
+在 `bt_sock_poll` 函数中存在竞争条件。代码逻辑先检查 `sk->sk_state == BT_LISTEN`，随后调用 `bt_accept_poll(sk)`。在此时间窗口内，socket 对象 `sk` 可能被另一执行流（通过 `l2cap_sock_close_cb` -> `l2cap_sock_kill` -> `sock_put` 路径）释放。导致 `bt_accept_poll` 内部执行 `list_for_each_entry_safe` 遍历 `bt_sk(parent)->accept_q` 时，访问了已释放的 `sk` 内存。
+
+#解决方案
+暂无

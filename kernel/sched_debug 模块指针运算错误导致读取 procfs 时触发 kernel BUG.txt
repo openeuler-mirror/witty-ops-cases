@@ -1,0 +1,18 @@
+#标题
+sched/debug 模块指针运算错误导致读取 procfs 时触发 kernel BUG
+
+#内核版本
+5.10.0-rc1
+
+#问题现象
+- 运行 stress-ng procfs 压测或读取 `/proc/sys/kernel/sched_domain/cpu0/domain0/flags` 文件时触发 kernel BUG
+- 日志报错：`kernel BUG at mm/usercopy.c:99!`
+- 日志提示：`usercopy: Kernel memory exposure attempt detected from SLUB object 'kmalloc-128' (offset 127, size 3)!`
+- 调用栈包含：`usercopy_abort` -> `__check_heap_object` -> `__check_object_size` -> `proc_sys_call_handler`
+- 该问题在 x86_64、aarch64、s390x 架构上均可复现
+
+#问题根因
+由提交 `5b9f8ff7b320a34af3dbcf04edb40d9b04f22f4a` 引入。在函数 `sd_ctl_doflags` 中，代码对 `kcalloc` 分配的指针 `tmp` 执行了 `tmp += *ppos` 运算，导致指针偏移至 slab 对象内部。后续使用该偏移后的指针进行 `memcpy` 操作时，触发了内核 hardening 机制（usercopy）的越界检查，检测到访问超出对象边界（如 offset 127 + size 3 超出 kmalloc-128 对象大小），从而调用 `usercopy_abort` 触发 BUG。此外，该逻辑错误也会导致后续 `kfree` 尝试释放无效的指针地址。
+
+#解决方案
+已提交修复补丁，通过引入独立变量 `buf` 保存 `kcalloc` 返回的原始指针，使用 `tmp` 进行偏移运算，最终 `kfree(buf)` 释放原始内存，修复了指针运算导致的越界访问和内存释放错误。补丁链接：https://lkml.org/lkml/2020/10/29/848

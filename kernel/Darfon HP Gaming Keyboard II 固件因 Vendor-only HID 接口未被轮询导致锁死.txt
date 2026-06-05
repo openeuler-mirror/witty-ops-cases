@@ -1,0 +1,16 @@
+#标题
+Darfon HP Gaming Keyboard II 固件因 Vendor-only HID 接口未被轮询导致锁死
+
+#内核版本
+6.19.7
+
+#问题现象
+- HP Omen Max 16 笔记本内置 USB 键盘在正常使用过程中锁死，持续重复最后一次 HID 报告，忽略所有后续物理按键
+- 触发条件：按住 Super（或任意修饰键）并快速按方向键，1-2 秒内键盘锁死
+- 键盘锁死后需要执行 USB 设备复位（USBDEVFS_RESET ioctl）才能恢复
+
+#问题根因
+该键盘暴露 5 个 HID 接口，其中接口 0、3、4 为 vendor-specific 类型，无关联的 input 设备。usbhid 驱动仅在进程打开 hidraw/hiddev 节点时（hid_hw_open -> usbhid_open -> usbhid_start_in）才开始轮询这些接口的中断 IN 端点。由于无进程打开这些 vendor-only 接口，其端点从未被轮询，导致键盘固件内部 USB TX 缓冲区填满，控制器固件锁死。
+
+#解决方案
+临时规避方案：通过 systemd 服务运行脚本，持续打开并丢弃 vendor-only hidraw 接口的报告数据，防止固件缓冲区溢出。内核层面可能的修复方向：1) 在 hid-quirks.c 中为该设备添加 HID_QUIRK_ALWAYS_POLL；2) 修改 usbhid 使其在 HID_OPENED 未设置时仍提交中断 IN URB。

@@ -1,0 +1,17 @@
+#标题
+重复打开 /dev/snapshot 触发 efivarfs 空指针解引用导致内核 Oops
+
+#内核版本
+6.14.0+
+
+#问题现象
+- 在内核 6.14 上，连续两次打开 `/dev/snapshot` 设备（或使用 stress-ng 进行 dev 压力测试）触发内核 Oops。
+- 日志显示 `BUG: kernel NULL pointer dereference, address: 0000000000000028`。
+- RIP 寄存器指向 `alloc_fs_context+0xf7`。
+- 随后系统报告 `Fixing recursive fault but reboot is needed!` 及 `BUG: scheduling while atomic`。
+
+#问题根因
+这是一个 6.14 内核引入的回归问题。当进程释放 `/dev/snapshot` 时（`snapshot_release`），会调用电源管理通知链（`pm_notifier_call_chain`）。`efivarfs` 模块注册的回调函数 `efivarfs_pm_notify` 在处理通知时尝试挂载文件系统（调用 `vfs_kern_mount` -> `fs_context_for_mount` -> `alloc_fs_context`）。在 `alloc_fs_context` 函数中，由于 RAX 寄存器为 0，访问偏移量 0x28 时触发空指针解引用。
+
+#解决方案
+暂无（问题为新提交的回归问题，目前处于 NEW 状态）。

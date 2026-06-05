@@ -1,0 +1,17 @@
+#标题
+MD RAID1阵列在fsync期间RAM磁盘设备异常掉线
+
+#内核版本
+3.0（评论提及2.6.35）
+
+#问题现象
+- 创建包含RAM磁盘（/dev/ram0）和loop/物理设备的MD RAID1阵列后，执行fsync或mkfs操作时，RAM磁盘设备被标记为故障并从阵列中移除。
+- 内核日志显示："md/raid1:md1: Disk failure on ram0, disabling device."
+- 阵列降级运行，仅剩单个设备。
+
+#问题根因
+用户分析指出，MD层可能向RAM磁盘发送了0字节的I/O请求。在 `drivers/block/brd.c` 的 `brd_make_request` 函数中，错误变量 `err` 被初始化为 `-EIO`。当收到0字节请求时，`bio_for_each_segment` 循环体不执行，函数直接以 `err = -EIO` 调用 `bio_endio`，导致RAM磁盘驱动错误地返回I/O失败。
+维护者审查用户提供的调试信息后，发现 `bio` 结构体存在异常（如 `bi_bdev` 为 NULL，`bi_idx` 和 `bi_vcnt` 数值异常），怀疑存在内存损坏，具体根因尚未确认。
+
+#解决方案
+暂无修复。建议在 `brd_make_request` 中添加调试代码（如打印 `bi_flags` 或 `WARN()`）以追踪0字节请求的来源及堆栈信息。

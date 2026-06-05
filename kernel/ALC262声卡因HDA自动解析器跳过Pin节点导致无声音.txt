@@ -1,0 +1,16 @@
+#标题
+ALC262声卡因HDA自动解析器跳过Pin节点导致无声音
+
+#内核版本
+3.13-1-amd64 (Debian 3.13.5-1)
+
+#问题现象
+- Tyan S7025 主板上的 Realtek ALC262 声卡无声音输出
+- `aplay -l` 能识别设备，但播放无声
+- 内核 3.2 及更早版本可通过 `model=hp-rp5700` 参数正常工作，内核 3.3 之后特定补丁被移除导致失效
+
+#问题根因
+硬件有两个 Line Out 插孔（Node 0x14 后置，Node 0x1b 前置），BIOS 配置的 Pin Default 中 `DefAssociation` 不同（分别为 0x1 和 0x2）。HDA 驱动的自动解析器逻辑（`hda_auto_parser.c`）在处理 Line Out 时，会跳过 `DefAssociation` 与主 Line Out 不同的节点。代码逻辑 `else if (assoc_line_out != assoc) continue;` 导致 Node 0x1b 被忽略，且未输出警告信息，导致音频路径配置错误或缺失。
+
+#解决方案
+临时规避：使用工具 `hda-jack-retask` 将 Node 0x1b 的功能重定义为 "headphone"，即可在 alsamixer 中出现对应控制项并恢复声音。上游改进：开发者计划在内核代码中添加 `dev_info()` 日志，当自动解析器跳过 Pin 节点时输出警告信息，以便用户排查。

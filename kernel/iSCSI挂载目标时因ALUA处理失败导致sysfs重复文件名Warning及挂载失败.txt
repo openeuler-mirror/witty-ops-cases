@@ -1,0 +1,18 @@
+#标题
+iSCSI挂载目标时因ALUA处理失败导致sysfs重复文件名Warning及挂载失败
+
+#内核版本
+4.4.0-1
+
+#问题现象
+- iSCSI尝试挂载远程目标时失败，`lsscsi`输出显示设备类型为`type?`而非正常的`disk`。
+- dmesg日志中出现内核Warning：`sysfs: cannot create duplicate filename '/bus/scsi/devices/8:0:0:0'`，调用栈指向`sysfs_warn_dup`和`bus_add_device`。
+- 另有Warning指向`block/genhd.c:626 add_disk`。
+- 日志显示SCSI设备处理失败：`sd X:X:X:X: alua: Attach failed (-22)`及`failed to add device handler: -22`。
+
+#问题根因
+内核版本4.4引入的代码变更在`scsi_sysfs_add_sdev`中调用`scsi_dh_add_device`。当目标设备声明支持ALUA但未正确提供target port descriptors时，`scsi_dh_alua`附加失败并返回错误（-22）。
+错误处理路径存在缺陷：`scsi_dh_add_device`失败后，代码直接返回错误，未调用`device_del`清理已注册的设备对象，导致后续操作触发sysfs重复文件名错误。此外，新代码将设备处理器附加失败视为致命错误，而旧内核允许忽略此类错误继续加载设备。
+
+#解决方案
+该问题已在内核4.5中修复，关键提交为`scsi: ignore errors from scsi_dh_add_device()`。对于4.4版本，需应用Mike Christie提供的补丁以正确处理`device_del`或忽略`scsi_dh_add_device`的错误返回值。

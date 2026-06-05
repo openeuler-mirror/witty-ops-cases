@@ -1,0 +1,21 @@
+#标题
+aoe驱动移除设备时函数调用顺序错误触发内核页错误
+
+#内核版本
+4.20-rc1 - 5.13-rc1
+
+#问题现象
+执行 `rmmod aoe` 或 `aoe-flush` 强制移除 aoe 设备时，内核立即触发 page fault (Oops)。
+系统日志显示：
+- BUG: unable to handle page fault for address: ffff9ca947342bd0
+- Oops: 0000 [#1]
+- RIP 寄存器指向 sbitmap_queue_wake_all+0x21/0x60
+- Call Trace: blk_mq_wake_waiters -> blk_set_queue_dying -> blk_cleanup_queue -> flush [aoe]
+
+#问题根因
+在 drivers/block/aoe/aoedev.c 的 freedev() 函数中，资源释放顺序错误。代码先调用了 blk_mq_free_tag_set() 释放了 tag_set 及相关内存，随后调用 blk_cleanup_queue()。
+在 blk_cleanup_queue() 执行过程中，调用链 blk_set_queue_dying -> blk_mq_wake_waiters -> sbitmap_queue_wake_all 会尝试访问已释放的 sbitmap_queue 结构体，导致访问非法内存地址引发 page fault。
+
+#解决方案
+修改 freedev() 函数中的调用顺序，先执行 blk_cleanup_queue()，再执行 blk_mq_free_tag_set()。
+上游已在 commit 6560ec9 ("aoe: use blk_mq_alloc_disk and blk_cleanup_disk") 中修复此问题。对于未包含该补丁的内核版本，可参考评论中的 patch 手动调整代码顺序。

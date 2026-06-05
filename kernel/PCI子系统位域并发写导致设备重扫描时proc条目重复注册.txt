@@ -1,0 +1,21 @@
+#标题
+PCI子系统位域并发写导致设备重扫描时proc条目重复注册
+
+#内核版本
+4.12.0-rc7
+
+#问题现象
+- 对 PCIe NVMe 设备多次执行 remove 和 rescan 操作后，控制台持续打印 "proc_dir_entry '0000:01/00.0' already registered" 错误。
+- 内核触发 WARNING，调用栈显示：`proc_register+0x11c/0x158` <- `pci_proc_attach_device` <- `pci_bus_add_device`。
+- 尽管报错，设备看似重新初始化成功，但后续每次 rescan 均会触发该错误。
+
+#问题根因
+`pci_dev` 结构体中的 `is_added` 和 `is_busmaster` 位域共享同一内存地址，并发修改导致竞态条件：
+1. 进程 A (`pci_bus_add_device`) 调用 `device_attach` 激活 NVMe 驱动，随后设置 `dev->is_added = 1`。
+2. NVMe 驱动初始化 workqueue 调用 `pci_set_master()` 设置 `dev->is_busmaster = enable`。
+3. 由于位域操作非原子，并发写入导致 Read-Modify-Write 冲突，`is_busmaster` 的写入操作覆盖了 `is_added` 位，将其错误重置为 0。
+4. 设备移除时，`pci_stop_dev()` 检查 `is_added` 为 0，跳过 proc/sysfs 条目的清理。
+5. 再次扫描设备时，因旧条目残留，触发 "already registered" 错误。
+
+#解决方案
+提议修复方案包括：使用自旋锁保护位域更新操作，或将相关位域字段分离为独立的布尔变量以避免并发冲突。当前 Bug 状态为 NEW，暂无已合并的主线修复补丁。

@@ -1,0 +1,14 @@
+#标题
+9p文件系统切换至netfslib后DIO读取因inode大小过期导致挂起
+
+#内核版本
+6.8, 6.10-rc1, 6.10-rc2
+
+#问题现象
+在使用 QEMU 虚拟机通过 9p 共享目录进行文件传输（如 autopkgtest copydown）时，若主机端文件正在增长，客户机端读取操作会挂起或陷入忙等待。内核日志显示 `v9fs_file_read_iter()` 在未达到实际文件末尾时反复重试读取，读取偏移量停滞在旧的文件大小位置，无法获取主机端新增的数据。
+
+#问题根因
+引入回归的提交 80105ed2fd2715fb09a8fdb0655a8bdc86c120db 将 9p 切换至 netfslib 库。在 `cache=none` 模式（默认模式）下，`netfs_begin_read()` 函数错误地依据内存中过期的 `i_size` 截断了读取请求长度。当主机端文件大小增加而客户机端 inode 元数据未更新时，`netfs_rreq_prepare_read` 会将请求长度限制在旧的文件大小边界内，导致读取返回 0 字节，进而引发用户态进程陷入重试循环。
+
+#解决方案
+该问题已在内核 v6.11-rc4 中通过提交 e3786b29c54cdae3490b07180a54e2461f42144c ("9p: Fix DIO read through netfs") 修复。修复方案是在 `fs/netfs/io.c` 中针对 `NETFS_DIO_READ` 类型请求移除基于 `i_size` 的长度截断限制，允许读取请求越过缓存的 inode 大小发送至服务器，并在 `fs/9p/vfs_addr.c` 中调整 `NETFS_SREQ_CLEAR_TAIL` 标志位的设置逻辑。

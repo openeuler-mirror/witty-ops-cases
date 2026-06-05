@@ -1,0 +1,16 @@
+#标题
+Terratec DMX 6Fire USB声卡URB包长度越界导致系统死机
+
+#内核版本
+6.13.0
+
+#问题现象
+- 连接或首次访问 Terratec DMX 6Fire USB 声卡时系统完全死机。
+- 通过 kdump 抓取的崩溃转储显示异常发生在 `usb6fire_pcm_in_urb_handler+0x2e2/0x5d0`。
+- 应用修复补丁后系统不再死机，但在特定启动顺序下设备仍可能出现 "could not start pcm stream" 错误。
+
+#问题根因
+在 `sound/usb/6fire/pcm.c` 文件的 `usb6fire_pcm_in_urb_handler` 函数中，计算输出 URB 包长度的逻辑存在缺陷。计算公式 `(in_urb->packets[i].actual_length - 4) / (rt->in_n_analog << 2) * (rt->out_n_analog << 2) + 4` 可能计算出超过缓冲区限制的长度值，导致内存越界访问，进而引发系统崩溃。
+
+#解决方案
+开发者提供了修复补丁，在计算 `out_urb->packets[i].length` 后增加边界检查：若长度超过 `PCM_MAX_PACKET_SIZE`，则将其强制限制为 `PCM_MAX_PACKET_SIZE`。该补丁经验证可修复系统死机问题，但该 Bug 报告目前状态为 NEW，补丁尚未确认合入主线。

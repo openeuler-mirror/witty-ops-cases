@@ -1,0 +1,18 @@
+#标题
+KVM宿主机内核缺陷导致客户机EXT4文件系统元数据不一致
+
+#内核版本
+3.16 (Host)
+
+#问题现象
+- KVM虚拟机内EXT4文件系统（含EXT3挂载为EXT4）频繁报错并切换为只读模式。
+- 内核日志显示元数据不一致错误，如：`EXT4-fs error (device dm-2): ext4_mb_release_inode_pa:3773: group 603, free 449, pa_free 448`。
+- 另一种错误形式：`ext4_mb_generate_buddy:757: group 434, block bitmap and bg descriptor inconsistent`。
+- 随后触发 `Aborting journal`，文件系统重新挂载为只读。
+- 该问题同样影响BTRFS文件系统，导致I/O错误。
+
+#问题根因
+问题根因并非EXT4文件系统本身，而是宿主机内核（3.16版本）在特定旧款Intel CPU上的KVM虚拟化实现存在缺陷。该缺陷导致虚拟机磁盘I/O行为异常，破坏了数据完整性，进而触发文件系统的一致性校验失败。通过git bisect定位到修复补丁为 commit `7dec5603b6b8dc4c3e1c65d318bd2a5a8c62a424`。
+
+#解决方案
+升级宿主机内核至4.1或更高版本（该修复补丁已合入3.17及以上主线）。对于Debian用户，需避免使用3.16内核作为KVM宿主机，或回溯相关补丁。

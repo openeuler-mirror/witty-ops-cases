@@ -1,0 +1,16 @@
+#标题
+SPI驱动spidev_write未校验指针导致内核崩溃
+
+#内核版本
+5.15.74-android13-8-g86a682f0fb5d-ab881
+
+#问题现象
+- 多进程同时打开 spidev 设备时，若其中一个进程关闭设备后，另一个进程执行写操作会导致内核崩溃。
+- 内核日志报错："usercopy: Kernel memory overwrite attempt detected to null address"。
+- 触发 kernel BUG at mm/usercopy.c:99，Call trace 显示路径为 usercopy_abort -> __check_object_size -> spidev_write。
+
+#问题根因
+spidev_write() 函数在调用 copy_from_user() 进行数据拷贝前，未对 spidev->tx_buffer 指针进行有效性检查。当多个文件描述符打开同一个 spidev 设备时存在竞态条件，若某处逻辑导致 tx_buffer 指针为空（NULL），后续的拷贝操作会尝试向空地址写入，触发内核硬拷贝保护机制（usercopy safeguard）导致 BUG。
+
+#解决方案
+暂无已合并的修复补丁。建议在 spidev_write() 函数中调用 copy_from_user() 之前，增加对 spidev->tx_buffer 指针的非空检查。

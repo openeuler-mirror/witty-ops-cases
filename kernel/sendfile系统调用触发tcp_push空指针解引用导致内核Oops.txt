@@ -1,0 +1,17 @@
+#标题
+sendfile系统调用触发tcp_push空指针解引用导致内核Oops
+
+#内核版本
+4.14.25, 4.14.28 - 4.14.31
+
+#问题现象
+- 使用 minidlna 进行视频流传输时，系统触发内核 Oops
+- 日志显示 "BUG: unable to handle kernel NULL pointer dereference at 0000000000000078"
+- 故障指令指针 RIP 位于 `tcp_push+0x70/0xeb`
+- 调用栈显示异常路径：`SyS_sendfile64` -> `do_sendfile` -> `tcp_sendpage` -> `tcp_push`
+
+#问题根因
+4.14.x 稳定版内核引入回归，`tcp_write_queue_purge` 函数中未正确重置 `sk_send_head` 指针，导致在执行 sendfile 相关操作时，`tcp_push` 函数访问了无效的空指针地址（偏移 0x78）。
+
+#解决方案
+升级内核至 4.14.32 或更高版本，该版本已合并修复补丁 "tcp: reset sk_send_head in tcp_write_queue_purge"。

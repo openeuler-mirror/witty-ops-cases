@@ -1,0 +1,17 @@
+#标题
+Thunderbolt 3 接口热插拔设备无法识别
+
+#内核版本
+4.4.3
+
+#问题现象
+- Dell XPS 15 (9550) 等机型上，Thunderbolt 3 (Alpine Ridge) 设备在系统启动后连接无法被内核识别。
+- 若设备在开机时已连接则工作正常；热插拔时 dmesg 无任何输出，lspci 显示 PCIe 端口状态为 CommClk-，且 /proc/interrupts 中 acpi 中断计数无增加。
+- 应用特定补丁后，冷启动状态下的热插拔功能恢复，但系统经挂起/恢复后，热插拔依然失效，dmesg 出现 `AE_ALREADY_EXISTS` 等 ACPI 错误。
+
+#问题根因
+ACPI 子系统在执行方法时，互斥锁的线程 ID（thread_id）未正确初始化，导致方法序列化失败，进而阻塞了热插拔事件的处理流程。具体位于 `drivers/acpi/acpica/dsmethod.c` 中的 `acpi_ds_begin_method_execution` 函数。此外，BIOS 中 Thunderbolt 安全等级若非 "No Security"，Linux 当前版本亦不支持，会导致类似热插拔失效。
+
+#解决方案
+1. 应用修复补丁：在 `drivers/acpi/acpica/dsmethod.c` 中添加 `obj_desc->method.mutex->mutex.thread_id = acpi_os_get_thread_id();`（该修复已提交至 ACPICA 上游）。
+2. BIOS 设置：更新 BIOS 固件，并将 Thunderbolt Security Level 设置为 "No Security" 以规避安全等级不支持问题。

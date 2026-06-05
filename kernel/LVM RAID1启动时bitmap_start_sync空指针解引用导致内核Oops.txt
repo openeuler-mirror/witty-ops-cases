@@ -1,0 +1,19 @@
+#标题
+LVM RAID1启动时bitmap_start_sync空指针解引用导致内核Oops
+
+#内核版本
+4.1.0
+
+#问题现象
+- 系统启动过程中触发 Kernel Oops，显示 "BUG: unable to handle kernel NULL pointers dereference at 0000000000000100"。
+- Call Trace 显示调用链为 `_raw_spin_lock_irq` <- `bitmap_start_sync` [md_mod] <- `bitmap_load` [md_mod] <- `raid_resume` [dm_raid]。
+- 日志中出现 "mdX: invalid bitmap file superblock: bad magic" 以及 "md-cluster module not found" 报错。
+- 系统无法正常引导，在 4.0.x 版本内核中虽可启动但每次均触发 RAID 重新同步。
+
+#问题根因
+用户环境中的 MD bitmap 超级块存在损坏（magic 错误），且超级块中原有的 padding 字段被新代码用于存储集群节点数（nodes）。损坏的数据导致节点数被读取为非零值，错误地激活了集群模式代码路径。
+`drivers/md/bitmap.c` 中的逻辑缺陷：在 bitmap 超级块读取失败（`err != 0`）的情况下，代码未正确检查错误返回值即尝试执行集群设置（调用 `md_setup_cluster`），导致后续 `bitmap_start_sync` 函数中访问了未初始化或空的指针，引发 Oops。
+
+#解决方案
+内核补丁修复：在 `drivers/md/bitmap.c` 的 `bitmap_create` 函数中，在调用 `md_setup_cluster` 前增加 `err == 0` 的判断，确保仅在 bitmap 加载成功时才进行集群设置。
+临时规避：若因元数据损坏导致，可通过 `lvconvert` 拆解并重建 RAID1 镜像以修复损坏的 bitmap 元数据。该问题在后续内核版本（如 4.2）中已修复。

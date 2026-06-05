@@ -1,0 +1,23 @@
+#标题
+Android make_ext4s 工具生成损坏位图导致 EXT4 校验失败并重挂载只读
+
+#内核版本
+4.4 to 4.11
+
+#问题现象
+- 系统日志频繁报错：`EXT4-fs error (device sda1): ext4_validate_block_bitmap:395: comm Binder:1454_E: bg 17: block 557056: invalid block bitmap`
+- 随后日志记录日志中止：`Aborting journal on device sda1-8`
+- 文件系统被强制重挂载为只读：`EXT4-fs (sda1): Remounting filesystem read-only`
+- 在 Android 系统中，此故障会导致系统因无法写入数据而陷入启动循环。
+- 问题在物理硬盘和虚拟机环境中均能复现，且在不同设备上出现完全相同的块组（bg 17）和块号（block 557056）错误。
+
+#问题根因
+该问题根因并非 Linux 内核缺陷，而是 Android 用户态工具 `make_ext4fs` 在格式化分区时生成了错误的元数据。
+- `make_ext4fs` 工具（特定 AOSP 版本）在创建 EXT4 文件系统时，计算或写入了错误的块位图和空闲块计数。
+- 内核在挂载文件系统后进行校验时，正确地检测到了元数据不一致，从而触发错误处理流程，中止日志并将文件系统置为只读模式以防止数据进一步损坏。
+- 使用 `e2fsck -fn` 对未挂载的新建镜像进行检查，可确认存在 "Block bitmap differences" 和 "Free blocks count wrong" 错误。
+
+#解决方案
+- 更新 AOSP 中的 `make_ext4fs` 工具代码，应用相关修复补丁（如 commit c71eaf37486bed9163ad528f51de29dd56b34fd2）。
+- 建议使用标准的 `mke2fs` 工具替代 `make_ext4fs` 进行分区格式化，以避免此类元数据生成错误。
+- 对于已损坏的分区，可尝试使用 `e2fsck -fy` 进行修复，但需注意数据风险。

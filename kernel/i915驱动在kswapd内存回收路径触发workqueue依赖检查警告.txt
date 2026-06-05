@@ -1,0 +1,15 @@
+#标题
+i915驱动在kswapd内存回收路径触发workqueue依赖检查警告
+
+#内核版本
+Ubuntu 5.3.0-13.14-generic 5.3.0
+
+#问题现象
+- 系统日志中打印内核 WARNING：`workqueue: PF_MEMALLOC task 173(kswapd0) is flushing !WQ_MEM_RECLAIM events:gen6_pm_rps_work [i915]`
+- 堆栈信息显示警告位于 `check_flush_dependency` 函数，调用链经过 `kswapd` -> `i915_gem_shrinker_scan` -> `gen6_disable_rps_interrupts` -> `cancel_work_sync`。
+
+#问题根因
+kswapd 内核线程在执行内存回收时带有 `PF_MEMALLOC` 标志。在此上下文中，i915 驱动的 shrinker 接口 `i915_gem_shrinker_scan` 被调用，进而触发了 `gen6_disable_rps_interrupts` 中的 `cancel_work_sync` 操作。该操作尝试刷新（flush）一个未设置 `WQ_MEM_RECLAIM` 标志的 workqueue 事件（`gen6_pm_rps_work`），违反了 workqueue 的依赖检查规则，从而触发警告。
+
+#解决方案
+该问题已通过提交 `c7302f204490 ("drm/i915: Defer final intel_wakeref_put to process context")` 修复。该补丁将 `intel_wakeref_put` 操作延迟到进程上下文中执行，避免了在内存回收原子上下文中触发不安全的 workqueue 刷新操作。
