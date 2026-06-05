@@ -1,0 +1,16 @@
+#标题
+mv643xx_eth 驱动在 bonding enslaving 时触发 atomic context 调度崩溃
+
+#内核版本
+3.7.9
+
+#问题现象
+- 在 ARM 平台上使用 mv643xx_eth 驱动时，执行 `ifenslave bond0 eth0` 命令将接口加入 bonding 组时内核崩溃。
+- 系统日志输出：`BUG: scheduling while atomic: ifenslave/826/0x00000002`。
+- 调用栈显示崩溃发生在 `smi_wait_ready` -> `schedule_timeout` 路径上。
+
+#问题根因
+bonding 驱动在执行 enslaving 操作时处于 atomic context（原子上下文），此时它会调用 `mv643xx_eth_get_settings` 获取网口的速率和双工模式。该操作最终调用 `smi_wait_ready` 函数读取 SMI 寄存器，而 `smi_wait_ready` 内部调用了 `wait_event_timeout` 或 sleep 函数。在 atomic context 中执行睡眠调度违反了内核规则，从而触发 "scheduling while atomic" 错误导致内核崩溃。
+
+#解决方案
+暂无

@@ -1,0 +1,16 @@
+#标题
+ext4处理非内联system.data扩展属性时缺少校验导致越界memcpy
+
+#内核版本
+v4.17-rc4+
+
+#问题现象
+- 读取特定构造的ext4文件系统上的文件时触发KASAN告警："BUG: KASAN: use-after-free in ext4_read_inline_data"。
+- 调用栈显示在 `ext4_read_inline_data` 函数中执行 `memcpy` 时发生越界写入。
+- 可能导致不相关的用户空间进程发生段错误或内存损坏。
+
+#问题根因
+自内核v4.13引入提交 e50e5129f384 ("ext4: xattr-in-inode support") 后，ext4支持将扩展属性值存储在专用inode中。当文件系统镜像被恶意构造，将 `system.data` 扩展属性标记为存储在外部inode（即 `entry->e_value_inum != 0`）时，`xattr_check_inode()` 会跳过对该属性长度和偏移的校验。函数 `ext4_find_inline_data_nolock()` 错误地假定 `system.data` 始终内联存储，未经验证直接将属性长度写入 `EXT4_I(inode)->i_inline_size`。后续 `ext4_read_inline_data()` 信任该长度值执行 `memcpy`，导致越界内存写入。
+
+#解决方案
+暂无（报告状态为NEW，分配了CVE-2018-11412，但未提及已合并的修复补丁）

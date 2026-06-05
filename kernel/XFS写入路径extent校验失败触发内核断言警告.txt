@@ -1,0 +1,18 @@
+#标题
+XFS写入路径extent校验失败触发内核断言警告
+
+#内核版本
+v6.3-rc0（复现于 v6.3-rc2+）
+
+#问题现象
+- 运行 xfstests 测试集（如 generic/270、generic/476、generic/650）时触发内核断言失败。
+- 内核日志输出：`XFS: Assertion failed: xfs_bmap_validate_extent(ip, whichfork, &rec) == NULL, file: fs/xfs/libxfs/xfs_inode_fork.c, line: 557`。
+- 触发 WARNING 并打印调用栈，关键路径包含 `xfs_iextents_copy` -> `xfs_inode_item_format_data_fork` -> `xfs_inode_item_format`。
+- 调试信息显示存在异常的 bmbt_rec：`startoff=11594, startblock=11594, blockcount=0, state=0x0`。
+- 部分测试用例（如 generic/650）会导致文件系统不一致及用户态进程 Segmentation fault。
+
+#问题根因
+在 XFS 文件系统的写入或回写路径中，`xfs_iextents_copy` 函数在复制 extent 前调用 `xfs_bmap_validate_extent` 进行校验时失败。日志显示 extent 记录的 `blockcount` 为 0，这违反了 XFS 元数据的有效性约束，导致断言 `xfs_bmap_validate_extent(...) == NULL` 不成立。该问题在 PMEM DAX 模式及普通块设备回写路径中均可能触发。
+
+#解决方案
+暂无

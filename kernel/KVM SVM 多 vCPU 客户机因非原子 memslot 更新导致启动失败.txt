@@ -1,0 +1,18 @@
+#标题
+KVM SVM 多 vCPU 客户机因非原子 memslot 更新导致启动失败
+
+#内核版本
+5.19.0-rc1+
+
+#问题现象
+- 在 AMD 平台上，使用 QEMU 参数 `-overcommit cpu-pm=on` 启动 vCPU 数量大于 1 的客户机时，客户机无法启动。
+- QEMU 报告内部错误："KVM internal error. Suberror: 1" 以及 "emulation failure"。
+- 内核跟踪显示指令模拟失败：`kvm_emulate_insn: ... failed`，错误发生在 SeaBIOS 的 `entry_smp` 代码段（EIP=0xfc95a）。
+
+#问题根因
+根本原因是 QEMU 对 memslot 的更新操作是非原子的。当用户空间通过 `kvm_vm_ioctl_set_memory_region` 更新内存槽时，与内核态的指令获取操作（`__do_insn_fetch_bytes`）发生竞争条件。这导致客户机在执行代码获取时遇到不存在的 memslot，从而触发指令模拟失败。
+
+#解决方案
+暂无已合并的修复补丁。解决方案需要 KVM 和 QEMU 双方修改：
+1. KVM 层需新增 API 以支持原子地更新一组 memslot。
+2. QEMU 层需修改代码，在处理 SMM 相关 memslot 更新时进行批量操作。

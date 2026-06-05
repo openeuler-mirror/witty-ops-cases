@@ -1,0 +1,18 @@
+#标题
+pstore/ramoops模块缓冲区计算下溢导致copy_from_user触发panic
+
+#内核版本
+5.4
+
+#问题现象
+- 系统发生 kernel panic
+- Call trace 显示：`write_pmsg` -> `ramoops_pstore_write_user` -> `persistent_ram_write_user` -> `persistent_ram_update_user` -> `__copy_from_user` -> `usercopy_abort` -> `panic`
+- 触发场景为写入 /dev/pmsg 设备
+
+#问题根因
+在函数 `persistent_ram_write_user` 中，计算剩余缓冲区长度 `rem` 时发生整数下溢：
+- 代码执行 `rem = prz->buffer_size - start`，由于 `start` (2097152) 大于 `prz->buffer_size` (2097140)，导致 `rem` 结果为负数 (-12，无符号表示为 4294967284)。
+- 该非法长度参数随后传递给 `persistent_ram_update_user`，在 `__copy_from_user` 中触发 `check_bogus_address` 校验失败，调用 `usercopy_abort` 引发 panic。
+
+#解决方案
+暂无

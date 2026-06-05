@@ -1,0 +1,19 @@
+#标题
+Navi显卡多显示器连接导致SMU通信失败引发系统卡顿
+
+#内核版本
+5.8.1, 5.7.15
+
+#问题现象
+- 连接多台显示器时系统启动缓慢、屏幕闪烁、操作卡顿，终端输出响应迟钝。
+- 内核日志（dmesg）中大量报错："amdgpu: Msg issuing pre-check failed and SMU may be not in the right state!"。
+- 单显示器连接时系统运行正常；系统启动后再连接第二台显示器也能正常工作。
+- 电源管理模式设置为 "auto" 时容易复现闪烁和卡顿，切换性能级别时也会触发问题。
+
+#问题根因
+amdgpu 驱动在多显示器环境下与 SMU (System Management Unit) 通信时，`smu_cmn_wait_for_response` 函数的等待超时时间（`adev->usec_timeout * 10`）可能不足，导致消息发送预检查失败。该问题与 DPM (Dynamic Power Management) 状态切换逻辑相关，特定显卡（如 PowerColor Red Devil 5600 XT）在多显示器的初始化或性能级别切换过程中对响应延迟更为敏感。
+
+#解决方案
+- 临时规避：在 GRUB 内核启动参数中添加 `amdgpu.ppfeaturemask=0xffffbffd` 或 `amdgpu.dpm=0`。
+- 临时规避：运行时强制锁定电源性能级别，避免自动切换：`echo high > /sys/class/drm/card0/device/power_dpm_force_performance_level`。
+- 代码尝试：修改 `drivers/gpu/drm/amd/powerplay/smu_cmn.c` 中的超时阈值（如将 `timeout` 系数从 10 增加到 20），但该补丁在重启后可能失效，未彻底解决问题。

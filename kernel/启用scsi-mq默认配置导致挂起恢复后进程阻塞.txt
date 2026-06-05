@@ -1,0 +1,18 @@
+#标题
+启用scsi-mq默认配置导致挂起恢复后进程阻塞
+
+#内核版本
+4.12.0-rc7-next-20170629
+
+#问题现象
+- 运行 IGT 图形测试中的挂起-恢复测试时，系统发生挂起。
+- 内核日志报告 "INFO: task ... blocked for more than 120 seconds"，进程处于 D 状态。
+- 受影响进程包括 jbd2/sda2-8、systemd、NetworkManager 等。
+- 堆栈信息显示进程阻塞在 `jbd2_journal_commit_transaction`、`wait_on_page_bit_common`、`ext4_find_entry` 或 `__wait_on_buffer` 等函数中。
+- 部分机器出现 NVMe I/O timeout 或 MCE 错误，最终触发 kernel panic："hung_task: blocked tasks"。
+
+#问题根因
+经二分排查，定位到引入问题的 commit 为 `5c279bd9e40624f4ab6e688671026d6005b066fa` ("scsi: default to scsi-mq")。该提交将 SCSI 的默认 I/O 路径改为 blk-mq。在执行挂起-恢复操作后，blk-mq 路径出现异常，导致 I/O 无法完成，进而导致文件系统层等待 I/O 的进程永久阻塞。
+
+#解决方案
+临时规避方法：在内核启动参数中添加 `scsi_mod.use_blk_mq=0` 禁用 scsi-mq 功能。该问题需提交至 linux-block 邮件列表进一步处理。

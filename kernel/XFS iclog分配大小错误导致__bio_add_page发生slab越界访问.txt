@@ -1,0 +1,17 @@
+#标题
+XFS iclog分配大小错误导致__bio_add_page发生slab越界访问
+
+#内核版本
+5.2.0-rc4 with xfs-5.3-merge-2
+
+#问题现象
+- 内核日志报告 KASAN 检测到 slab-out-of-bounds 错误：`BUG: KASAN: slab-out-of-bounds in __bio_add_page+0x1ec/0x2b0`
+- 故障发生在 XFS 文件系统挂载过程中，具体为写入 unmount record 阶段
+- 调用栈显示：`xfs_log_write_unmount_record` -> `xlog_write_iclog` -> `bio_add_page` -> `__bio_add_page`
+- KASAN 报告指出越界写入大小为 4 字节，发生在 `kmalloc-1k` 缓存对象内部偏移 716 字节处
+
+#问题根因
+XFS 模块在分配 iclog（inode change log）缓冲区时，分配的内存大小不足以容纳后续操作所需的数据结构。当 `xlog_write_iclog` 调用 `bio_add_page` 尝试向 bio 中添加页面时，发生了越界内存访问。
+
+#解决方案
+开发者确认该问题通过补丁 "xfs: fix iclog allocation size" 修复，该补丁将合入 for-next 分支。

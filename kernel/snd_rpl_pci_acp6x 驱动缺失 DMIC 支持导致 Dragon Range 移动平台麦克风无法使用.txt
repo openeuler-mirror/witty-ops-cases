@@ -1,0 +1,21 @@
+#标题
+snd_rpl_pci_acp6x 驱动缺失 DMIC 支持导致 Dragon Range 移动平台麦克风无法使用
+
+#内核版本
+6.8.0-107-generic, 6.12.80
+
+#问题现象
+- AMD Dragon Range 平台（如 MSI Vector A16 HX）笔记本内置数字麦克风（DMIC）无法工作，Windows 下正常。
+- `arecord -l` 仅显示 ALC274 模拟捕获设备，无 DMIC 设备。
+- `dmesg` 日志显示 `snd_rpl_pci_acp6x` 驱动仅执行了 PCI 设备启用，无后续 ACP/DMIC 初始化信息。
+- 系统中缺失 `acp_yc_pdm_dma`、`dmic-codec` 及 `acp_yc_mach` 平台设备。
+
+#问题根因
+`snd_rpl_pci_acp6x` 驱动（对应 ACP revision 0x62）当前仅为最小化桩实现，仅包含 PCI 初始化、MMIO 映射及电源管理逻辑，未实现 DMIC/PDM 所需的平台设备注册功能。该驱动原为无 DMIC 的桌面版 Raphael 开发，未适配同样使用 rev 0x62 但物理连接 DMIC 的 Dragon Range 移动平台。相比之下，Yellow Carp 驱动 (`snd_pci_acp6x`) 针对 rev 0x60/0x6f 包含了完整的 DMIC 支持。
+
+#解决方案
+暂无官方补丁，可通过以下变通方案修复：
+1. 黑名单禁用 `snd_rpl_pci_acp6x` 驱动。
+2. 修改 `sound/soc/amd/yc/pci-acp6x.c`，在 revision 检查 switch 语句中增加 `case 0x62`。
+3. 修改 `sound/soc/amd/yc/acp6x-mach.c`，在 DMI quirk 表中增加对应机型（如 MSI Vector A16 HX）的匹配项。
+修改后重新编译内核，DMIC 设备可正常识别并工作。

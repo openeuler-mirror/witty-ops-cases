@@ -1,0 +1,19 @@
+#标题
+BPF模糊测试触发percpu分配器扩展性问题导致RCU Stall
+
+#内核版本
+4.6 to 4.11
+
+#问题现象
+- 内核日志报错："INFO: rcu_sched self-detected stall on CPU"。
+- 若系统仅有单颗 CPU，会导致内核完全挂起。
+- 触发条件：对 bpf 系统调用进行模糊测试，通常需 3-5 分钟复现。
+- 故障堆栈显示进程卡在 `free_percpu` -> `pcpu_free_area` -> `memmove` 路径中，调用链为 `SyS_bpf` -> `array_map_free` -> `free_percpu`。
+
+#问题根因
+percpu 内存分配器在频繁进行大量分配和释放操作（如 BPF maps 操作）时存在严重的扩展性问题。具体原因为：当 `contig_hint` 大小合适但对齐错误时，代码会触发对所有 chunks 的迭代查找，导致长时间持锁或 CPU 耗尽，从而引发 RCU stall。
+
+#解决方案
+该问题已在后续内核版本中通过重构 percpu 分配器解决。
+修复补丁：commit 40064aeca35c5c ("percpu: replace area map allocator with bitmap")。
+建议升级至内核 4.17-rc3 或更高版本。

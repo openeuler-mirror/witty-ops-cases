@@ -1,0 +1,18 @@
+#标题
+ath11k驱动接收无效VHT MCS数据导致WiFi连接不可用
+
+#内核版本
+5.14.2（问题在 5.11 至 6.3 版本中复现）
+
+#问题现象
+- WiFi 连接初始正常，数秒后完全不可用，表现为高丢包或无法通信。
+- 故障仅发生在 5GHz 频段，禁用路由器 5GHz 后使用 2.4GHz 正常。
+- 内核日志频繁打印：`ath11k_pci 0000:71:00.0: Received with invalid mcs in VHT mode 10`。
+- 触发内核 WARNING：`WARNING: CPU: 4 PID: 6189 at net/mac80211/rx.c:4855 ieee80211_rx_list+0x237/0x300 [mac80211]`，提示 `Rate marked as a VHT rate but data is invalid: MCS: 10, NSS: 0`。
+- 堆栈信息包含：`ieee80211_rx_napi` -> `ath11k_dp_rx_deliver_msdu` -> `ath11k_dp_process_rx`。
+
+#问题根因
+ath11k 驱动（涉及 QCA6390 硬件）向 mac80211 子系统传递了非标准的 VHT MCS 索引值 10（标准 IEEE 802.11ac VHT MCS 范围为 0-9）。mac80211 在 `ieee80211_rx_list` 函数中校验速率数据时发现 MCS 值越界，判定数据无效并触发 WARNING，导致接收路径异常。
+
+#解决方案
+暂无有效修复方案。社区曾尝试应用补丁 `04be6d337d37` ("mac80211: allow non-standard VHT MCS-10/11")，但用户反馈在 v5.17-rc2 上测试无效。临时规避方法为在路由器端关闭 5GHz 频段。

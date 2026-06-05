@@ -1,0 +1,19 @@
+#标题
+KASAN检测到bt_iter函数中存在use-after-free问题
+
+#内核版本
+4.18.5
+
+#问题现象
+- 系统发生罕见的间歇性崩溃，启用 KASAN 后捕获到内存错误。
+- KASAN 报告在 `bt_iter` 函数中发生 use-after-free。
+- 故障堆栈指向 `block/blk-mq-tag.c:234`，具体代码行为 `if (rq && rq->q == hctx->queue)`。
+- 运行环境使用 DM multipath 挂载 XFS 卷，底层设备使用 kyber I/O 调度器，DM 设备使用 mq-deadline 调度器。
+
+#问题根因
+在 `bt_iter` 函数遍历请求统计 busy count 时，KASAN 报告访问了已释放内存。该函数以非加锁方式访问请求结构（`rq->q`），其设计依赖于 `blk-mq` 核心层不会释放请求的特性。问题出现在 DM multipath 结合 blk-mq 的场景下，开发者推测可能是 DM 层违反了请求持久性的假设，或者 KASAN 存在误报，具体根因在报告中尚未定论。
+
+#解决方案
+暂无正式修复补丁。建议尝试以下规避方案：
+1. 禁用 DM multipath 的 mq 功能进行测试。
+2. 切换使用 bio-based multipath（在 DM 表特性中添加 `queue_mode bio`）。

@@ -1,0 +1,14 @@
+#标题
+mvneta驱动在crash kernel环境下因CPU映射逻辑错误导致中断无法接收
+
+#内核版本
+未明确
+
+#问题现象
+在 Marvell SOC 的 crash kernel 环境中（SMP 系统仅启动一个逻辑 CPU），mvneta 网卡中断计数始终为 0，网络功能不可用。通过 `/proc/interrupts` 查看发现 eth0 中断计数未增加。
+
+#问题根因
+驱动中 `MVNETA_CPU_MAP(cpu)` 基于**物理 CPU 编号**构建，而 txq/rxq 队列访问基于**逻辑 CPU 编号**。在 crash kernel 场景下，系统存在多个 present CPUs（例如 4 个），但仅有一个 online CPU（逻辑 CPU 0，映射到物理 CPU 2）。`mvneta_defaults_set` 函数遍历 present CPUs 配置硬件映射时，未检查 CPU 是否 online，导致硬件队列映射配置与实际逻辑 CPU 状态不匹配，中断无法被正确接收。
+
+#解决方案
+建议修改 `drivers/net/ethernet/marvell/mvneta.c` 中的 `mvneta_defaults_set` 函数，在遍历 present CPUs 时增加 `cpu_online(cpu)` 判断条件，确保仅对在线 CPU 进行配置。目前该补丁尚未合并。

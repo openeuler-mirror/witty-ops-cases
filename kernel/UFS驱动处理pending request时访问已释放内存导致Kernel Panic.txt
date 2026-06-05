@@ -1,0 +1,16 @@
+#标题
+UFS驱动处理pending request时访问已释放内存导致Kernel Panic
+
+#内核版本
+6.18.1-android17-0-g9a61812733ee-4k
+
+#问题现象
+- 系统触发 Kernel panic，日志显示 "KASAN: panic_on_warn set ..."。
+- KASAN 检测到 invalid-access 错误，发生在函数 `ufshcd_mcq_compl_pending_transfer+0x10c/0x21c`。
+- 报错信息显示 "Pointer tag: [09], memory tag: [90]"，表明访问了已被释放且可能被重新分配的内存区域。
+
+#问题根因
+UFS 驱动中 `lrbp->cmd` 指针管理不当。在 IO 命令完成后，cmd 内存被释放，但 `lrbp->cmd` 指针未置空，仍保留已释放内存的地址。当系统调用 `ufshcd_mcq_compl_pending_transfer` 处理 pending request 时，访问了该悬空指针，触发 Use-After-Free 错误。
+
+#解决方案
+暂无修复。报告者观察到 kernel-6.20 版本代码已变更并移除了 `lrbp->cmd`，但针对当前版本尚未提供补丁。

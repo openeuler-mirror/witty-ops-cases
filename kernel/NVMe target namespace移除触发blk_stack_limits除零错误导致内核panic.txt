@@ -1,0 +1,17 @@
+#标题
+NVMe target namespace移除触发blk_stack_limits除零错误导致内核panic
+
+#内核版本
+6.5.12-200.fc38.x86_64
+
+#问题现象
+- 系统触发 Kernel panic，显示 "Fatal exception" 并自动重启
+- 内核日志记录 "divide error: 0000 [#1]"，RIP 寄存器指向 `blk_stack_limits+0x19e/0x4d0`
+- 故障发生前日志显示 "nvme0n1: detected capacity change from 131072 to 0" 及 NVMe I/O Error
+- 故障场景为对 NVMe-oF target 执行 fio 工作负载期间移除 namespace 设备
+
+#问题根因
+在 NVMe namespace 被移除或容量突变为 0 的过程中，内核执行 `nvme_scan_work` -> `nvme_update_ns_info_block` 调用链。在此过程中，`blk_stack_limits` 函数接收到了无效的参数（可能与 capacity 变为 0 或无效的 block size 有关），导致内部计算发生除零错误，从而触发 panic。
+
+#解决方案
+应用补丁 d8b90d600aff181936457f032d116dbd8534db06（该补丁预计合入 6.7-rc4 版本）。

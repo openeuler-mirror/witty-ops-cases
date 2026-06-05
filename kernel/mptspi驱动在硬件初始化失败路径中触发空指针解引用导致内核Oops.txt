@@ -1,0 +1,16 @@
+#标题
+mptspi驱动在硬件初始化失败路径中触发空指针解引用导致内核Oops
+
+#内核版本
+4.3.0-7
+
+#问题现象
+- 系统启动过程中发生内核 Oops，日志显示 "BUG: unable to handle kernel NULL pointer dereference at 0000000000000060"。
+- 故障 IP 位于 `mutex_lock+0x12/0x30`，Call Trace 显示调用链为 `mptspi_probe` -> `mptscsih_remove` -> `scsi_remove_host`。
+- 系统启动过程出现严重延迟，dmesg 显示 mptbase 模块多次尝试复位 IOC 并最终失败："WARNING - Cannot recover ioc0"。
+
+#问题根因
+LSI53C1030 SCSI 控制器硬件初始化失败（可能由硬件故障引起），驱动进入错误处理流程。在 `mptspi_probe` 函数中，当检测到 IOC 不可操作时调用 `mptscsih_remove` 进行清理。该清理函数调用 `scsi_remove_host` 时传入了一个无效指针（寄存器 RDI 显示为 0x60），导致在 `mutex_lock` 访问该指针时触发空指针解引用。这是驱动在异常处理路径中缺乏指针有效性检查所致。
+
+#解决方案
+暂无官方修复补丁。临时规避方法：在系统配置中将 mpt* 相关模块加入黑名单，阻止其加载以避免触发故障。

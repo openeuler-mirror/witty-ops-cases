@@ -1,0 +1,17 @@
+#标题
+RAID1执行O_DIRECT读取触发blk-mq模块BUG导致内核崩溃
+
+#内核版本
+7.0.7-200.fc44.x86_64, 7.0.8-200.fc44.x86_64
+
+#问题现象
+- 用户在 MD RAID1 (LVM mirror) 上运行 QEMU iotests 或执行 O_DIRECT 读取操作时，系统日志报错 "md/raid1:mdX: rescheduling sector..." 并标记设备故障。
+- 用户态程序执行 `pread` 返回 I/O 错误。
+- 内核触发 `kernel BUG at block/blk-mq.c:1179!`，导致 Oops (invalid opcode)，系统崩溃。
+- 堆栈信息显示崩溃发生在 `blk_mq_dispatch_rq_list` 调用链中，此前伴有 `scsi_alloc_sgtables` 的 WARNING。
+
+#问题根因
+在 MD RAID1 设备上使用 O_DIRECT 进行 4096 字节及以上大小的读取操作时，SCSI 层 `scsi_alloc_sgtables` 分配失败，导致块层在结束请求时 `blk_update_request` 返回非零值（表示请求未完全完成），进而触发 `blk_mq_end_request` 中的 `BUG()` 断言失败。
+
+#解决方案
+暂无

@@ -1,0 +1,21 @@
+#标题
+Radeon驱动Runtime PM导致Atombios死循环及系统挂起
+
+#内核版本
+3.6.9（初始报告），回归引入于 3.13（commit 10ebc0bc09344ab6310309169efc73dfe6c23d72）
+
+#问题现象
+- 系统在挂起恢复或通过 vgaswitcheroo 切换 GPU 时出现严重卡顿或假死。
+- dmesg 日志中大量报错：`[drm:atom_op_jump] *ERROR* atombios stuck in loop for more than 5secs aborting`。
+- 日志显示 DPM 恢复失败：`[drm:radeon_pm_resume_dpm] *ERROR* radeon: dpm resume failed`。
+- X Server 可能失去响应，键盘输入无效，只能通过 SysRq 或 SSH 重启。
+- 受影响硬件多为双显卡笔记本，如 Asus K73TA、K53TK 等。
+
+#问题根因
+问题由 commit `10ebc0bc09344ab6310309169efc73dfe6c23d72` 引入，该提交为 Radeon 驱动添加了 Runtime PM 支持。
+根本原因在于特定型号笔记本（如 Asus K73TA）的 ATPX 版本不支持 dGPU 电源关闭功能（ATPX functions bit 1 未置位）。驱动在 Runtime PM 启用后尝试访问已下电或未正确上电的硬件，导致 AtomBIOS 命令执行陷入死循环，进而引发系统挂起。
+
+#解决方案
+- 临时规避：在内核启动参数中添加 `radeon.runpm=0` 以禁用 Runtime PM。
+- 代码修复：针对受影响的特定机型，在驱动中添加 `RADEON_PX_QUIRK_DISABLE_PX` quirk 标志，默认禁用其 Runtime PM 功能。
+- 用户侧脚本：使用 vgaswitcheroo 相关 systemd 脚本在挂起前恢复 GPU 电源状态作为临时解决方案。

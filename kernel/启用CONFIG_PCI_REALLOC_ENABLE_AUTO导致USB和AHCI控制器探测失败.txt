@@ -1,0 +1,18 @@
+#标题
+启用CONFIG_PCI_REALLOC_ENABLE_AUTO导致USB和AHCI控制器探测失败
+
+#内核版本
+6.14.2
+
+#问题现象
+- 升级内核后，连接在 USB Hub 以及部分直连主板的 USB 设备（如键盘、鼠标）无法识别和使用。
+- 内核日志显示 xhci_hcd 驱动加载失败，报错 "init ... fail, -16" (EBUSY) 及 "probe ... failed with error -16"。
+- ahci 驱动加载失败，报错 "probe ... failed with error -12" (ENOMEM)。
+- 该问题在内核配置项 CONFIG_PCI_REALLOC_ENABLE_AUTO=y 或启动参数 pci=realloc=on 时复现，关闭该选项或设置 pci=realloc=off 则恢复正常。
+
+#问题根因
+Fedora 42 内核（6.14版本）默认开启了 CONFIG_PCI_REALLOC_ENABLE_AUTO 选项，触发了 PCI 资源自动重分配机制。受影响主板的固件在根 IOMEM 窗口中未预留额外空间（zero extra tail room），而内核的 PCI 资源分配算法在处理此类情况时过于贪婪，试图预留超出实际需求的空间，导致资源分配冲突。这致使 devm_request_mem_region() 在 usb_hcd_pci_probe() 等函数中调用失败，设备无法获取内存资源从而初始化失败。
+
+#解决方案
+临时规避方案：在 GRUB 启动参数中添加 pci=realloc=off 以禁用 PCI 资源重分配。
+Fedora 已在后续内核版本（6.14.5+）中回退了 CONFIG_PCI_REALLOC_ENABLE_AUTO 的默认开启设置。上游开发者正在针对 6.15 内核优化资源适配算法以彻底修复该问题。

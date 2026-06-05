@@ -1,0 +1,16 @@
+#标题
+libahci驱动在处理SCSI命令分发时触发Soft Lockup导致内核Panic
+
+#内核版本
+4.14.3-1.el6.elrepo.x86_64
+
+#问题现象
+- 系统日志报错 "watchdog: BUG: soft lockup - CPU#0 stuck for 22s!"，随后触发 Kernel Panic："Kernel panic - not syncing: softlockup: hung tasks"。
+- 故障前伴随大量 ATA 设备错误：`failed command: WRITE FPDMA QUEUED`、`Emask 0x4 (timeout)`、`device reported invalid CHS sector 0`，并最终导致 NCQ 被禁用。
+- Call Trace 显示 CPU 在中断上下文（IRQ）的 `ata_scsi_queuecmd` 函数中长时间阻塞，调用链为 `blk_done_softirq` -> `scsi_softirq_done` -> `scsi_run_queue` -> `ata_scsi_queuecmd`。
+
+#问题根因
+在处理磁盘 I/O 超时错误及后续命令重调度过程中，CPU 0 在 softirq 上下文内陷入长时间循环或阻塞状态。堆栈信息显示阻塞点位于 `ata_scsi_queuecmd` 函数（RIP 指向 `_raw_spin_unlock_irqrestore`），导致 CPU 无法调度其他任务，触发 soft lockup 看门狗机制并引发系统 panic。
+
+#解决方案
+暂无。Bug 报告状态为 NEW，且维护者指出该内核版本为第三方构建版本，建议向发行版提供商报告。

@@ -1,0 +1,20 @@
+#标题
+MacBook 三星 PCIe SSD 控制器 NCQ/MSI 冲突导致启动失败及 I/O 性能问题
+
+#内核版本
+3.11.0-rc4
+
+#问题现象
+- MacBook Air 6,2 及 MacBook Pro 11,1/11,3 等机型启动时频繁失败，日志显示 "ata command timeout"。
+- 系统启动后磁盘 I/O 性能严重下降，执行写入密集型任务（如 apt-get、chromium 启动）时系统卡顿。
+- `iostat` 显示磁盘 `%util` 持续 100%，`await` 时间高达数百毫秒至数秒，`fsync()` 调用耗时极长。
+
+#问题根因
+Samsung PCIe SSD (Device ID [144d:1600]) 控制器在 Linux AHCI 驱动下存在兼容性缺陷：
+1. 开启 NCQ (Native Command Queuing) 时会导致命令超时，阻止系统启动。
+2. 开启 MSI (Message Signaled Interrupts) 会引发 NCQ 功能异常。
+3. 控制器执行 `FLUSH CACHE` 指令异常缓慢（耗时可达 1.2 秒），导致写入性能瓶颈。
+
+#解决方案
+- 临时规避：内核启动参数添加 `libata.force=noncq` 禁用 NCQ，或添加 `device_nomsi=0x1600144d` 禁用 MSI；文件系统挂载选项添加 `barrier=0` 可缓解写入卡顿（有数据损坏风险）。
+- 官方修复：开发者 Tejun Heo 提交补丁 `ahci: disable MSI on Samsung PCIe SSDs on macbooks`，针对该设备 ID 禁用 MSI，已合入 libata/for-3.18-fixes 分支。

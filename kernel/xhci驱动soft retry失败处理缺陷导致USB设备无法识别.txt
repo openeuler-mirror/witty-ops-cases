@@ -1,0 +1,19 @@
+#标题
+xhci驱动soft retry失败处理缺陷导致USB设备无法识别
+
+#内核版本
+>= 4.20
+
+#问题现象
+- 升级内核至 4.20 及以上版本后，USB 设备（如 WiFi 网卡、鼠标、键盘、存储设备）连接到 USB 3.0 端口时无法正常工作或频繁断开。
+- 系统日志中出现报错：`xhci_hcd 0000:xx:xx.x: WARN Set TR Deq Ptr cmd failed due to incorrect slot or ep state`。
+- 部分场景下伴随报错：`xhci_hcd ... WARN Cannot submit Set TR Deq Ptr` 或 `A Set TR Deq Ptr command is pending`。
+- 该问题为回归问题，在 4.19 版本中未出现。
+
+#问题根因
+问题由 commit `f8f80be501aa` ("xhci: Use soft retry to recover faster from transaction errors") 引入，具体位于 `drivers/usb/host/xhci-ring.c` 文件的 `process_bulk_intr_td` 函数中。
+当 USB 传输发生错误时，xhci 驱动发起 Reset Endpoint 命令，端点进入 stopped 状态。驱动随后响铃（ring doorbell）尝试重启端点，但硬件可能因状态错误将端点置为 halted 状态。驱动在处理 soft retry 失败流程时，未检查端点是否已处于 halted 状态，直接尝试设置新的 dequeue 指针，导致命令失败并触发警告。
+
+#解决方案
+应用补丁 `xhci: fix soft retry failure handling`。该补丁在设置 dequeue 指针前增加了对端点 halted 状态的检查逻辑。
+临时规避方案：回退 commit `f8f80be501aa` 或降级至 4.19 内核。

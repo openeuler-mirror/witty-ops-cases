@@ -1,0 +1,16 @@
+#标题
+amdgpu驱动释放后访问job->entity导致use-after-free
+
+#内核版本
+4.15.7
+
+#问题现象
+- 系统出现完全或部分死锁。
+- KASAN 检测到 use-after-free 错误：BUG: KASAN: use-after-free in amdgpu_job_free_cb+0x26/0xb0 [amdgpu]。
+- 触发错误的上下文为 kworker 进程，调用栈包含 amd_sched_job_finish。
+
+#问题根因
+在 amdgpu_job_free_cb 函数中访问 s_job->s_entity 时，对应的 amdgpu_ctx（以及其中的 entity）已经通过 amdgpu_cs_parser_fini 被释放，导致访问了已释放的内存。
+
+#解决方案
+已通过补丁 d1f6dc1a9a106a73510181cfad9b4a7a0b140990 修复。修改策略为在 job 创建时保存其优先级，而不是在后续流程中从 s_entity 获取，从而避免访问可能已释放的 entity 结构。

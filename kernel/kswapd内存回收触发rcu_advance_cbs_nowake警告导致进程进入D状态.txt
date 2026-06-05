@@ -1,0 +1,17 @@
+#标题
+kswapd内存回收触发rcu_advance_cbs_nowake警告导致进程进入D状态
+
+#内核版本
+5.4.51
+
+#问题现象
+- 系统升级至 5.4.51 后，部分进程进入不可中断睡眠状态（D state）。
+- 内核日志显示 WARNING：`WARNING: CPU: 22 PID: 434 at kernel/rcu/tree.c:1358 rcu_advance_cbs_nowake+0x53/0x60`。
+- 故障调用栈显示 `kswapd0` 进程在执行 `shrink_slab` -> `shadow_lru_isolate` -> `xas_free_nodes` -> `__call_rcu` 时触发警告。
+- 随后出现 hung task 检测告警，显示 `python` 进程在 `packet_release` -> `synchronize_rcu` 处阻塞超过 122 秒。
+
+#问题根因
+在 `kswapd` 执行 slab 收缩（shrink_slab）过程中，`shadow_lru_isolate` 函数调用 `xas_free_nodes` 释放节点时触发了 `__call_rcu`。该调用链在 `rcu_advance_cbs_nowake` 中触发了内核警告（可能是 RCU 回调唤醒逻辑违规），导致 RCU 同步机制异常，进而阻塞了调用 `synchronize_rcu` 的用户进程。
+
+#解决方案
+暂无官方修复补丁。临时规避方案为回退内核版本至 5.3.x。相关讨论见 LKML：https://lkml.org/lkml/2021/9/17/1048

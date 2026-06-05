@@ -1,0 +1,20 @@
+#标题
+mt7921e驱动休眠唤醒时Message timeout导致Wi-Fi不可用
+
+#内核版本
+6.1.26（初始报告），问题复现于 6.1.43、6.8.x、6.9.x、6.10.x、6.12.x 等版本
+
+#问题现象
+- 系统从休眠或挂起状态唤醒后，Wi-Fi 功能失效，无法正常使用。
+- 内核日志报错：`mt7921e 0000:01:00.0: Message 00020007 (seq X) timeout`。
+- 电源管理回调失败：`PM: dpm_run_callback(): pci_pm_restore+0x0/0x90 returns -110`，随后提示 `PM: failed to restore async: error -110`。
+- 部分场景下执行 `rmmod mt7921e` 卸载模块会卡死（进程处于 D 状态），导致系统无法正常关机或重启。
+- 部分日志显示 PCIe 链路重训练失败：`pcieport ... retraining failed`，设备无法从 D3cold 切换到 D0 状态，提示 `Unable to change power state from D3cold to D0, device inaccessible`。
+
+#问题根因
+mt7921e 驱动在系统唤醒过程中与固件通信超时（Message timeout），导致恢复流程失败。深层原因可能与 PCIe 电源管理状态（ASPM 或 D3cold）有关，设备在唤醒时链路未正确恢复或设备未就绪，导致驱动无法获取设备所有权（driver own failed）或固件响应超时。
+
+#解决方案
+- 临时规避方案 1：创建 systemd 休眠脚本，在挂起前执行 `rmmod mt7921e`，唤醒后执行 `modprobe mt7921e`。
+- 临时规避方案 2：添加内核启动参数 `mt7921e.disable_aspm=y` 禁用 ASPM（部分用户反馈有效）。
+- 官方修复：暂无，Bug 状态为 NEW，上游仍在分析中。

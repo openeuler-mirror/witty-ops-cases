@@ -1,0 +1,26 @@
+#标题
+r8169驱动使用fq_codel队列规则时触发transmit queue timed out导致网络中断
+
+#内核版本
+5.1.4（报告中提及，用户亦在5.2、5.9.1版本复现）
+
+#问题现象
+- 系统运行一段时间后网络连接中断，报 "network unreachable"。
+- 内核日志出现 "NETDEV WATCHDOG: enp4s0 (r8169): transmit queue 0 timed out"。
+- 触发内核 WARNING：`WARNING: CPU: 1 PID: 0 at net/sched/sch_generic.c:461 dev_watchdog+0x21a/0x220`。
+- 更换 qdisc 为 `pfifo_fast` 可暂时恢复，但使用 `fq_codel` 或 `cake` 时问题复现。
+
+#问题根因
+根因未完全确定，涉及多个潜在因素：
+1. 在开启强制中断线程化（`CONFIG_PREEMPT_RT` 或 `threadirqs` 启动参数）时，`napi_schedule_irqoff()` 存在已知问题，可能影响中断处理。
+2. 内核参数 `net.core.netdev_budget_usecs`、`net.core.netdev_budget`、`net.core.dev_weight` 设置过低可能诱发此故障。
+3. PCIe ASPM（主动状态电源管理）可能导致设备异常。
+4. 驱动差异：内核自带 `r8169` 驱动使用 MSI-X，而第三方 `r8168` 驱动使用 Legacy MSI，后者表现更稳定。
+
+#解决方案
+暂无官方修复，可通过以下方式规避：
+1. 更改队列规则：执行 `tc qdisc replace dev ${interface} root pfifo_fast`。
+2. 调整内核参数：增大 `net.core.netdev_budget_usecs`（如设为 751）、`net.core.netdev_budget`（如设为 117）、`net.core.dev_weight`（如设为 39）。
+3. 禁用 ASPM：在内核启动参数中添加 `pcie_aspm=off`。
+4. 替换驱动：使用 Realtek 官方提供的 `r8168` 驱动替代内核自带的 `r8169` 驱动。
+5. 尝试补丁：应用 commit `424a646e072a887aa87283b53aa6f8b19c2a7bef` 修复 forced irq threading 问题（部分用户反馈未完全解决）。

@@ -1,0 +1,17 @@
+#标题
+RAID-6 reshape过程中触发kernel warning与general protection fault导致挂起
+
+#内核版本
+4.7.0
+
+#问题现象
+- 用户执行 `mdadm --grow` 对 RAID-6 阵列进行扩容时，reshape 进度卡在 0.0%，速度显示为 0K/sec。
+- 手动尝试 `mdadm --grow --continue` 后，内核日志报出 WARNING：`WARNING: CPU: 4 PID: 845 at drivers/md/raid5.c:548 raid5_get_active_stripe`。
+- 随后触发 `general protection fault: 0000 [#1]`，RIP 位于 `async_memcpy+0x89/0x10c`，Call Trace 涉及 `handle_stripe_expansion`、`raid5d`。
+- 系统出现 I/O 挂起，无法继续 reshape 操作。
+
+#问题根因
+未明确。故障现场显示在 reshape 请求处理过程中，`raid5_get_active_stripe` 函数触发了内核警告，随后在处理 stripe 扩展（`handle_stripe_expansion`）调用 `async_memcpy` 时发生一般保护性错误。开发者曾推测可能与 `stripe_cache_size` 设置有关，但用户反馈该值已设为最大值 32768。
+
+#解决方案
+重启系统并修正 initramfs 中的 mdadm.conf 配置后，reshape 恢复正常执行。暂无内核层面的修复补丁。

@@ -1,0 +1,16 @@
+#标题
+KVM嵌套虚拟化运行FreeDOS导致L0宿主机kvm_mmu_load空指针解引用
+
+#内核版本
+5.1.0
+
+#问题现象
+- 在AMD Athlon平台上运行嵌套虚拟机（L1为i686-pae，L2为FreeDOS）时，L0宿主机内核触发Oops。
+- 日志报错："BUG: unable to handle kernel NULL pointer dereference at 00000000"。
+- 崩溃位置位于 `kvm_mmu_load+0x292/0x4c0 [kvm]`，错误代码为 #PF error: [WRITE]。
+
+#问题根因
+SVM初始化嵌套vcpus时，将 `->arch.mmu` 指针指向了 `->arch.guest_mmu`。后续 `mmu.c` 代码在处理PAE根页表时访问 `->arch.mmu->pae_root`，由于 `guest_mmu` 结构中未分配该成员（为NULL），导致空指针解引用。
+
+#解决方案
+开发者提交了初步修复补丁，但在该Bug报告中用户指出初步补丁无效。用户提供了临时修复补丁（附件283393），通过为 `guest_mmu` 显式分配 `pae_root` 解决了该问题。后续相关修复合入内核版本 v5.4-rc1，但截至报告最后更新，用户反馈在 5.4.28 版本上仍存在类似崩溃现象，Bug状态为 REOPENED。

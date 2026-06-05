@@ -1,0 +1,17 @@
+#标题
+页面分配器检测到页面引用计数异常导致 Bad page state
+
+#内核版本
+4.1.8-5.clearsky.el7.centos.x86_64
+
+#问题现象
+- 内核日志报告 "BUG: Bad page state in process DiskQ@0x2e7a000 pfn:1ede196"
+- 页面状态显示引用计数异常：count:-1 mapcount:0
+- 触发原因为 nonzero _count
+- 调用栈显示异常发生在 `get_page_from_freelist` 内存分配路径，当时正在进行 ext4 Direct IO 操作
+
+#问题根因
+页面分配器在 `get_page_from_freelist` 函数中检测到即将分配的页面引用计数 `_count` 为 -1（正常应为 0 或正值），表明该页面在释放回空闲列表后状态未正确重置或被非法修改。故障触发路径涉及 `ext4_direct_IO`、`bio_alloc_bioset` 及 `bvec_alloc`，可能与特定存储栈（Docker + RAID10 + SSD）下的内存管理竞争或释放逻辑错误有关。
+
+#解决方案
+暂无（Bug 状态为 NEW，尚未修复）

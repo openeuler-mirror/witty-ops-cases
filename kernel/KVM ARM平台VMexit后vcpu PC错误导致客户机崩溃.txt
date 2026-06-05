@@ -1,0 +1,20 @@
+#标题
+KVM ARM平台VMexit后vcpu PC错误导致客户机崩溃
+
+#内核版本
+4.19.26
+
+#问题现象
+- ARM架构KVM客户机在运行过程中崩溃。
+- Guest内部触发 "Undefined Instruction" 异常（Exception Vec: 1），PC寄存器指向 0x7004b528。
+- 故障发生在处理MMIO VMexit后的重新进入阶段，导致客户机执行了错误的指令地址。
+
+#问题根因
+在处理MMIO VMexit（指令地址 0x7004b518）时，流程出现异常：
+1. `kvm_handle_mmio_return` 首次执行成功，将 vcpu PC 更新为 0x7004b51c。
+2. 此时检测到 `run->immediate_exit` 被置位，流程返回。
+3. 再次调用 `kvm_arch_vcpu_ioctl_run` 重入时，`kvm_handle_mmio_return` 再次执行，错误地将 vcpu PC 更新为 0x7004b520。
+4. 导致 VM entry 时跳过了本应执行的 `ldm` 指令（位于 0x7004b51c），直接运行到了数据区，引发崩溃。
+
+#解决方案
+用户在附件中提供了修复补丁（Attachment 284069）。

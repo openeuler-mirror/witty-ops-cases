@@ -1,0 +1,18 @@
+#标题
+DRM FB helper计算bpp不一致导致空指针解引用引发Kernel Panic
+
+#内核版本
+5.15-rc6 and 5.17-rc2
+
+#问题现象
+当DRM驱动仅支持DRM_FORMAT_RGB565格式时，系统触发Kernel Panic，具体表现如下：
+- 内核日志显示 bpp 计算异常："requested bpp 32, scaled depth down to 16"
+- 触发 WARNING：位于 drivers/gpu/drm/drm_fourcc.c:303
+- 发生缺页异常："Unable to handle kernel paging request at virtual address 00000006"
+- 最终导致系统崩溃："Kernel panic - not syncing: Fatal exception"
+
+#问题根因
+函数 `drm_fb_helper_single_fb_probe` 在处理仅支持 16bpp 格式的驱动时，错误地计算出 `surface_depth = 16` 但 `surface_bpp = 32`。该不一致参数传递给 `drm_mode_legacy_fb_format` 后无法匹配有效模式，返回 `DRM_MODE_INVALID`。后续函数 `drm_client_buffer_create` 对该无效模式调用 `drm_format_info` 获得空指针，且未进行校验直接解引用，导致空指针访问触发 Panic。
+
+#解决方案
+暂无（Bug状态为NEW，尚无官方修复补丁）。开发者建议可能需要修正 surface_bpp 的计算逻辑，或在传递格式前增加有效性校验。

@@ -1,0 +1,19 @@
+#标题
+SMI SM2262控制器MSI-X表重叠导致PCI直通失败
+
+#内核版本
+4.19.12-arch1-1-ARCH
+
+#问题现象
+尝试将搭载SMI SM2262控制器的Intel SSD 760p进行PCI直通时，QEMU启动失败并报错：`vfio 0000:06:00.0: failed to add PCI capability 0x11[0x50]@0xb0: table & pba overlap, or they don't fit in BARs, or don't align`。
+检查设备配置空间发现MSI-X Count值不稳定：在NVMe驱动绑定或特定操作后变为22，而在设备重置后恢复为16。当Count为22时，Vector Table与PBA区域发生重叠。
+
+#问题根因
+SMI SM2262控制器存在硬件缺陷。该控制器根据NVMe驱动配置的队列数量动态调整MSI-X向量数量。
+当NVMe驱动配置了较多队列（如22个）时，MSI-X Count变为22。此时Vector Table大小为22*16=0x160字节，起始地址为0x2000，结束地址为0x2160；而PBA起始地址固定为0x2100，导致两者重叠。
+此外，标准的PCI Function Level Reset (FLR) 无法将该计数重置回默认值（16），导致VFIO在检查PCI能力时因区域重叠而失败。
+
+#解决方案
+1. **内核补丁**：应用补丁（如Bug附件280913），针对SM2262/SM2263设备优先使用Secondary Bus Reset或NVMe subsystem reset替代FLR，以强制设备恢复正常的MSI-X状态。
+2. **QEMU规避方案**：在QEMU v2.12及以上版本，可通过参数 `-set device.<alias>.x-msix-relocation=bar2` 将MSI-X表重定位到其他BAR空间以绕过重叠检查（注意：此方案下Guest vCPU数量建议不超过15个）。
+3. **固件升级**：部分相关型号（如Intel SSD 660p）可通过升级固件解决此问题。

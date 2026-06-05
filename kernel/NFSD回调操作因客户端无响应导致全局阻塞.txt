@@ -1,0 +1,14 @@
+#标题
+NFSD回调操作因客户端无响应导致全局阻塞
+
+#内核版本
+v6.9-rc
+
+#问题现象
+当某个 NFS 客户端无响应时，NFSD 的回调工作队列（callback_wq）发生阻塞，导致所有客户端的回调操作无法执行，系统服务出现挂起。
+
+#问题根因
+引入的 commit c1ccfcf1a9bf ("NFSD: Reschedule CB operations when backchannel rpc_clnt is shut down") 在 `nfsd4_run_cb_work()` 函数中增加了重试循环。由于 NFSD 的 `callback_wq` 是单线程且全局共享的，当某个客户端无响应时，该重试逻辑会阻塞工作队列，导致后续所有客户端的回调操作发生队头阻塞。
+
+#解决方案
+已从 v6.9-rc 回退引入问题的 commit c1ccfcf1a9bf；长期修复方案计划将重试逻辑从工作队列层上移至各个回调操作（如 CB_RECALL, CB_OFFLOAD 等）的具体实现中，以避免全局阻塞。

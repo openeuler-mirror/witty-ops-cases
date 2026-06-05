@@ -1,0 +1,17 @@
+#标题
+do_swap_page处理过程中因PTE损坏导致__radix_tree_lookup空指针解引用
+
+#内核版本
+4.14.13-rh10-20180115190010.xenU.i386 (及其他 4.14.x 32位版本)
+
+#问题现象
+- 系统触发 Kernel Oops，日志显示 "BUG: unable to handle kernel NULL pointer dereference at 00000008"。
+- 调用栈显示崩溃发生在 `__radix_tree_lookup`，调用链为 `lookup_swap_cache` -> `swap_readahead_detect` -> `do_swap_page` -> `handle_mm_fault`。
+- 故障主要出现在 32 位 PAE 内核环境（包括 Xen Dom0/DomU 和非 Xen 物理机）。
+- 使用调试补丁后发现 PTE 数据异常，日志打印 "Bad swp_entry" 及错误的 PTE 值（例如 `8000000100000000`）。
+
+#问题根因
+`do_swap_page` 从页表项（PTE）中读取到的 `swp_entry_t` 数据已损坏。损坏的 PTE 在高位（bit 32、33 或 34）被错误置位，导致 `swap_address_space(entry)` 计算结果为 NULL，进而引发 `__radix_tree_lookup` 解引用空指针。开发者推测原因可能是在 32 位内核上对 64 位 PTE 进行非原子写入（`pte_clear` 分高低位两次写入）时存在竞态条件，Xen 虚拟化环境下的模拟写入操作较慢，增加了触发该竞态的概率。
+
+#解决方案
+暂无官方合并的修复补丁。可应用开发者提供的临时补丁（在 `mm/swap_state.c` 的 `lookup_swap_cache` 函数中增加对 `swapper_space` 的非空检查），通过返回 NULL 并打印告警来规避系统崩溃。

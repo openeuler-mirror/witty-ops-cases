@@ -1,0 +1,17 @@
+#标题
+移除 PPP 接口时触发内核非法地址访问导致系统崩溃
+
+#内核版本
+4.1.2（问题亦见于 3.14.44）
+
+#问题现象
+- PPPoE BRAS 服务器运行一段时间后发生随机崩溃， uptime 从数天到数周不等。
+- 崩溃时系统未完全死机，SSH 仍可连接，但任何与网络子系统交互的命令（如获取接口列表、删除 shaper 规则）会挂起。
+- 内核日志报错 "BUG: unable to handle kernel paging request" 或 "NULL pointer dereference"。
+- 触发 Oops 的调用栈包含 `unregister_sysctl_table`、`pppoe_release`、`leaf_walk_rcu` 或 `__kernfs_remove`，典型路径为 `ppp_shutdown_interface` -> `unregister_netdev`。
+
+#问题根因
+故障发生在移除 PPP 网络设备的过程中。内核在执行 `unregister_netdev` 相关的注销流程时，访问了无效的内存地址（如 0x05040214 或 NULL 指针）。用户怀疑在接口关闭时并发执行 shaper（流量整形）去配置操作引发了竞态条件，导致内存结构被破坏或访问了已释放的内存。
+
+#解决方案
+暂无官方修复补丁。用户尝试移除接口关闭时的 shaper 配置清除逻辑以规避该问题。

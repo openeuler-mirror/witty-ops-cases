@@ -1,0 +1,16 @@
+#标题
+ReiserFS写文件时因块已在当前事务中触发kernel BUG
+
+#内核版本
+4.18
+
+#问题现象
+- 挂载 crafted ReiserFS 镜像并执行文件写入操作时，内核触发 BUG() 导致系统异常。
+- 日志显示：`kernel BUG at fs/reiserfs/journal.c:509!`，伴随 `invalid opcode: 0000 [#1]` 错误。
+- 调用栈显示：`reiserfs_in_journal` <- `scan_bitmap_block` <- `reiserfs_allocate_blocknrs` <- `reiserfs_get_block` <- `reiserfs_write_begin`。
+
+#问题根因
+在 `fs/reiserfs/journal.c` 的第 509 行，函数 `reiserfs_in_journal` 检查指定块是否存在于当前事务的哈希表中。根据代码注释，这种情况 "should never happen"（不应发生）。当 `get_journal_hash_dev` 在 `journal->j_hash_table` 中找到该块时，内核直接调用 `BUG()` 终止运行。这是由于文件系统镜像数据异常或块分配逻辑缺陷，导致分配器试图分配一个已被记录在当前事务中的块，违反了预期的不变量。
+
+#解决方案
+暂无

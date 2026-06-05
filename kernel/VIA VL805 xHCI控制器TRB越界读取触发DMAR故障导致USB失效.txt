@@ -1,0 +1,17 @@
+#标题
+VIA VL805 xHCI控制器TRB越界读取触发DMAR故障导致USB失效
+
+#内核版本
+5.15.0-27, 5.17.0
+
+#问题现象
+- 连接USB Hub后不久设备停止工作，系统日志显示 xhci_hcd 控制器报告 "WARNING: Host System Error" 并最终判定 "HC died; cleaning up"。
+- dmesg 出现 DMAR 故障信息：`DMAR: [DMA Read NO_PASID] Request device [04:00.0] fault addr 0xfffca000 [fault reason 0x06] PTE Read access is not set`。
+- 控制器停止响应，Host halt 失败（-110），USB 设备断开连接。
+
+#问题根因
+VIA VL805 xHCI 控制器存在硬件缺陷，会在 DMA 操作中越界读取（overfetch）Transfer Ring Buffer（TRB）。当系统启用 IOMMU 时，该越界访问触及未映射或无读取权限的内存区域，触发 DMAR 页错误，导致控制器进入错误状态并停止工作。
+
+#解决方案
+上游已合并修复补丁：commit `c133ec0e5717` ("usb: xhci: Enable the TRB overfetch quirk on VIA VL805")。
+临时规避方法：加载 xhci_hcd 模块时添加 quirks 参数：`modprobe xhci_hcd quirks=0x200000000000`（启用 XHCI_ZHAOXIN_TRB_FETCH 逻辑，为每个 4KB 段分配 8KB 空间以防止越界访问命中无效内存）。

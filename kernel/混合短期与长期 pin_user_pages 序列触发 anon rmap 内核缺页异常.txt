@@ -1,0 +1,23 @@
+#标题
+混合短期与长期 pin_user_pages 序列触发 anon rmap 内核缺页异常
+
+#内核版本
+6.8.0-65-generic, 6.8.0-90-generic (Ubuntu 22.04)
+
+#问题现象
+- 内核触发 BUG / page fault，日志显示：`BUG: unable to handle page fault for address: ffffffffffffffe9`
+- 异常类型为 `#PF: supervisor read access in kernel mode`，错误码 `error_code(0x0000) - not-present page`
+- 崩溃发生在内存管理子系统的 anon rmap / GUP 路径中（例如 `folio_add_new_anon_rmap()`）
+- 问题可通过特定操作序列 100% 复现
+
+#问题根因
+问题由 `pin_user_pages()` 的特定混合调用序列触发，具体步骤如下：
+1. 先运行压力负载，反复 pin 和 unpin 大量短期页面（使用 FOLL_WRITE）；
+2. 随后执行大规模长期 pin 操作（使用 FOLL_WRITE | FOLL_LONGTERM，约 491k 页）；
+3. 之后再次进行短期 pin 操作。
+单独执行上述任一步骤不会崩溃，但按此顺序执行会导致内核崩溃。分析显示 pin 计数器已归零，推测是内存管理子系统（MM）中存在陈旧状态而非 pin 泄露。
+
+#解决方案
+暂无正式修复。
+临时规避方案：在驱动中添加保护逻辑，若近期存在短期 pin 活动，则拒绝长期 pin 请求并返回 `-EOPNOTSUPP`。
+社区反馈：维护者建议在当前上游内核版本验证问题是否仍存在，并通过邮件列表（linux-mm@kvack.org）提交报告。

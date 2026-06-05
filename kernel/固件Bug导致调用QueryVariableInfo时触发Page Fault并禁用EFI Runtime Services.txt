@@ -1,0 +1,17 @@
+#标题
+固件Bug导致调用QueryVariableInfo时触发Page Fault并禁用EFI Runtime Services
+
+#内核版本
+6.5.2
+
+#问题现象
+- 内核日志报错：`[Firmware Bug]: Page fault caused by firmware at PA: 0x66059210`
+- 触发调用栈：`efi_crash_gracefully_on_page_fault` -> `page_fault_oops`
+- 内核自动冻结 `efi_rts_wq` 并禁用 EFI Runtime Services，日志显示 "efi: Froze efi_rts_wq and disabled EFI Runtime Services"
+- 用户态工具 `efibootmgr` 执行失败，提示 "EFI variables are not supported on this system"；`bootctl` 读取 EFI 变量时报 Input/output error
+
+#问题根因
+该问题由固件 Bug 引起（HP ProBook x360 11 G1 EE BIOS 01.27）。在内核 6.5 版本中，`efibootmgr` 对 efivarfs 挂载点调用 `statfs()` 时，内核会调用 EFI 运行时服务 `QueryVariableInfo()`。该固件在处理此调用时访问了非法物理地址（PA: 0x66059210）触发 Page Fault。内核捕获该错误后，为防止系统崩溃，执行了 `efi_crash_gracefully_on_page_fault` 并永久禁用了 EFI 运行时服务。
+
+#解决方案
+开发者提供了测试补丁用于修复此问题，补丁链接：https://lore.kernel.org/linux-efi/20230911081024.3489875-2-ardb@google.com/T/#u。截至报告时间，问题仍在确认中，建议受影响用户测试该补丁。

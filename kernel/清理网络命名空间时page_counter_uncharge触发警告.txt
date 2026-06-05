@@ -1,0 +1,16 @@
+#标题
+清理网络命名空间时page_counter_uncharge触发警告
+
+#内核版本
+5.9.5
+
+#问题现象
+- 系统启动过程中内核触发 WARNING：`WARNING: CPU: 4 PID: 133 at mm/page_counter.c:57 page_counter_uncharge+0x34/0x40`
+- 异常发生在 `kworker/u16:9` 进程的 `cleanup_net` 工作队列处理中
+- 调用栈显示路径为：`cleanup_net` -> `sock_release` -> `inet_release` -> `__sk_destruct` -> `kmem_cache_free` -> `refill_obj_stock` -> `drain_obj_stock` -> `__memcg_kmem_uncharge` -> `page_counter_uncharge`
+
+#问题根因
+开发者分析认为该问题可能与 commit f2fe7b09 ("mm: memcg/slab: charge individual slab objects instead of pages") 引入的 slab 对象计费机制变更有关。在 socket 销毁路径中，`sk_prot_free` 调用的 `mem_cgroup_sk_free` 与 `kmem_cache_free` 调用的 `memcg_slab_free_hook` 可能导致对内存控制组资源的重复释放（double uncharge）。
+
+#解决方案
+升级内核版本至 5.9.9，用户确认问题已消失；或暂时回退至 5.8 内核版本规避。

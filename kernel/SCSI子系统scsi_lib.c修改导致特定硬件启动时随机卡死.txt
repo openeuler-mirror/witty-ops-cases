@@ -1,0 +1,14 @@
+#标题
+SCSI子系统scsi_lib.c修改导致特定硬件启动时随机卡死
+
+#内核版本
+3.17.x 3.18.x
+
+#问题现象
+系统启动过程中随机出现卡死现象（约每5-10次启动发生一次），通常发生在内核加载后不久、udev触发事件或systemd启动阶段。日志显示特定SATA/ATA设备（如光驱）的worker进程耗时过长（"worker [...] is taking a long time"），系统无响应需强制重启，但键盘指示灯仍可切换。
+
+#问题根因
+经Git Bisect定位，问题由提交 045065d8a300a37218c548e9aa7becd581c6a0e8 引入。该提交修改了 drivers/scsi/scsi_lib.c 中的 scsi_request_fn 函数，将条件判断 `if (atomic_read(&sdev->device_busy) && ...)` 错误地修改为 `if (!atomic_read(&sdev->device_busy) && ...)`，导致在特定硬件配置下（如ICH7控制器上混合连接SATA硬盘和光驱）触发逻辑错误，引发启动卡死。
+
+#解决方案
+应用开发者Christoph Hellwig提供的修复补丁（见Bug附件158411）。临时规避方案包括：回退上述问题提交、断开SATA光驱设备，或将光驱连接至其他非受影响的控制器（如JMicron PCIe卡）。

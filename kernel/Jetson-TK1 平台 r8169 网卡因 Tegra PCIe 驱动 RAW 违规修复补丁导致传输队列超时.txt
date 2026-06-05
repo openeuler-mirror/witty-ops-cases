@@ -1,0 +1,18 @@
+#标题
+Jetson-TK1 平台 r8169 网卡因 Tegra PCIe 驱动 RAW 违规修复补丁导致传输队列超时
+
+#内核版本
+5.3+（受影响版本），5.2.18（最后已知正常版本）
+
+#问题现象
+- 系统日志报错：`pcieport 0000:00:02.0: AER: Uncorrected (Non-Fatal) error received`，`r8169 0000:01:00.0: AER: PCIe Bus Error: severity=Uncorrected (Non-Fatal), type=Transaction Layer`，错误状态显示 `CmpltTO`（Completion Timeout）。
+- 内核触发 Warning：`WARNING: CPU: 0 PID: 0 at net/sched/sch_generic.c:447 dev_watchdog+0x114/0x1f0`。
+- 网络设备告警：`NETDEV WATCHDOG: enp1s0 (r8169): transmit queue 0 timed out`。
+- 故障发生后网卡停止工作，无法发送数据包，AER 恢复失败（`Device recovery failed`）。
+- 复现条件：在 Jetson-TK1 平台使用 5.3+ 内核，通过 scp 复制大文件到 MMC 存储或执行 dnf/yum update 时触发。
+
+#问题根因
+经 git bisect 定位，问题由提交 `191cd6fb5d2cf184a3010c55ca290b2fe5a3d727` ("PCI: tegra: Add SW fixup for RAW violations") 引入。该补丁导致 PCIe 内存读取完成超时，r8169 驱动程序读取到错误数据（全 F 或 0），进而调用 `netif_stop_queue()` 停止发送队列，最终触发 `dev_watchdog` 超时告警。
+
+#解决方案
+暂无官方修复。临时规避方案为回退提交 `191cd6fb5d2cf184a3010c55ca290b2fe5a3d727`，或禁用 r8169 内核模块改用 USB 网卡。

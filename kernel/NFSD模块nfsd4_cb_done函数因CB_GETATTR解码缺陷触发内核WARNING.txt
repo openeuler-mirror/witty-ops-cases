@@ -1,0 +1,22 @@
+#标题
+NFSD模块nfsd4_cb_done函数因CB_GETATTR解码缺陷触发内核WARNING
+
+#内核版本
+6.12.11
+
+#问题现象
+- 内核日志报告 WARNING：`WARNING: CPU: 16 PID: 1670626 at fs/nfsd/nfs4callback.c:1339 nfsd4_cb_done+0x171/0x180 [nfsd]`
+- 日志中显示异常状态码：`cb_status=-521 tk_status=-10036`（分别对应 EBADHANDLE 和 NFS4ERR_BADXDR）
+- 调用栈指向 RPC callback 处理路径：`rpc_async_schedule` -> `rpc_exit_task` -> `nfsd4_cb_done`
+
+#问题根因
+问题源于 `nfs4_xdr_dec_cb_getattr` 函数中 CB_GETATTR 回复解码逻辑的缺陷：
+1. 当 callback 操作收到 NFS4ERR_DELAY 并重启任务时，`cb_status` 未被正确清除，导致后续处理中状态混乱。
+2. 解码器未正确处理回复中的非零状态码，且在解码失败时错误地使用了 NFS4ERR_BAD_XDR（应使用 EIO）。
+3. 上述逻辑错误导致 `nfsd4_cb_done` 中检测到 `cb_status` 和 `tk_status` 同时非零，从而触发 `WARN_ONCE` 告警。
+
+#解决方案
+上游已合并修复补丁，需升级内核或手动移植补丁：
+1. 补丁 `1b3e26a5ccbf` ("NFSD: fix decoding in nfs4_xdr_dec_cb_getattr")：修复解码逻辑。
+2. 补丁 `4990d098433d` ("NFSD: Fix CB_GETATTR status fix")：修正前一个补丁的遗留问题。
+建议升级至 6.14-rc 及以上版本。

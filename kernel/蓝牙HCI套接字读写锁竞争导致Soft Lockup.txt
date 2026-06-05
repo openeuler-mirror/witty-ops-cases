@@ -1,0 +1,16 @@
+#标题
+蓝牙HCI套接字读写锁竞争导致Soft Lockup
+
+#内核版本
+4.10（报告版本），4.9.60（受影响版本）
+
+#问题现象
+- 系统执行蓝牙管理操作时触发 Soft Lockup，CPU 核心卡死，内核日志报错："NMI watchdog: BUG: soft lockup - CPU#0 stuck for 22s!"
+- 复现路径：循环执行打开 management socket -> 发送 Set Powered off -> 发送 Set Powered on -> 关闭 management socket。
+- Call Trace 显示两个 CPU 互相阻塞：CPU0 卡在 `queued_write_lock_slowpath`（调用链：`hci_sock_release` -> `bt_sock_unlink` -> `_raw_write_lock`），CPU3 卡在 `queued_read_lock_slowpath`（调用链：`hci_dev_do_close` -> `__mgmt_power_off` -> `hci_send_monitor_ctrl_event` -> `hci_send_to_channel` -> `_raw_read_lock`）。
+
+#问题根因
+函数 `hci_send_monitor_ctrl_event` 首先获取 read_lock，随后调用 `hci_send_to_channel` 再次尝试获取 read_lock。若此时另一 CPU 进入 `hci_sock_release` 并尝试获取 write_lock，会设置 waiting writer 标志。第二次 read_lock 获取检测到有 writer 在等待，于是进入阻塞状态；而 writer 等待所有 reader 退出。由于当前线程已持有第一次 read_lock 且被阻塞无法释放，导致 reader 计数无法归零，形成死锁。
+
+#解决方案
+该问题已在 Linux 4.15 内核版本中修复，修复补丁地址：https://patchwork.kernel.org/patch/9963977/。旧版本内核（如 4.9）需合入该补丁以解决问题。

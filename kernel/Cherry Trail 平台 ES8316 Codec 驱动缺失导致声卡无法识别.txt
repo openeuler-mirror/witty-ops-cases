@@ -1,0 +1,21 @@
+#标题
+Cherry Trail 平台 ES8316 Codec 驱动缺失导致声卡无法识别
+
+#内核版本
+4.8
+
+#问题现象
+- Chuwi hi10/hi12 平板电脑声卡无法被系统识别。
+- 内核日志报错：`intel_sst_acpi 808622A8:00: No matching machine driver found`。
+- 仅 HDMI 音频输出正常，扬声器与耳机接口无声音。
+- ACPI 设备检查显示 Realtek ID (10EC*) 状态为 0，但存在 Everest Semiconductor ID (ESSX8316) 且状态正常。
+
+#问题根因
+硬件实际搭载的是 Everest Semiconductor ES8316 Codec，而非 DSDT 中可能误报的 Realtek rt5640。当时内核主线缺乏对 ES8316 的驱动支持。此外，在驱动开发调试过程中发现，若沿用其他平台（如 RT5645）的 DSP_B 模式音频路由路径 `pcm0_in -> codec_out1 -> ssp2 Tx`，会导致 I2S 模式下 SSP2_TXD 引脚无数据输出（静音）。这是由于固件限制或 Bug，`codec_out1` 无法用于 I2S 模式，必须使用 `codec_out0`。
+
+#解决方案
+开发并提交了 ES8316 Codec 驱动及 Intel BYT/CHT + ES8316 机器驱动。
+针对 I2S 模式下的静音问题，修正音频路由路径：将 SSP2 Tx 的源从 `codec_out1` 改为 `codec_out0`（即路由路径设为 `pcm0_in -> codec_out0 -> ssp2 Tx`）。
+相关补丁包括：
+[PATCH 1/2] ASoC: add es8316 codec driver
+[PATCH 2/2] ASoC: Intel: add machine driver for BYT/CHT + ES8316

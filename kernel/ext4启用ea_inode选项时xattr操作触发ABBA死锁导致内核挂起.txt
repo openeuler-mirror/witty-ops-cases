@@ -1,0 +1,22 @@
+#标题
+ext4启用ea_inode选项时xattr操作触发ABBA死锁导致内核挂起
+
+#内核版本
+6.10, 6.11.0-7（依据comments）
+
+#问题现象
+- 在使用 `-O ea_inode` 选项创建的 ext4 文件系统上执行 xattr 压力测试（如 stress-ng）时，系统发生内核挂起。
+- 必须在多 CPU 线程环境下才能触发。
+- 内核日志显示任务阻塞超过 122 秒，例如："INFO: task jbd2/vdb1-8:1548 blocked for more than 122 seconds"。
+- 进程无法通过 Ctrl+C 终止，处于 D 状态。
+
+#问题根因
+- 引入问题的 Commit：`0a46ef234756dca04623b7591e8ebb3440622f0b` ("ext4: do not create EA inode under buffer lock")。
+- 根本原因：ABBA 死锁。
+  1. 任务 1（设置 xattr）：持有 mbcache entry 引用，等待 xattr inode 被逐出内存（调用栈包含 `__wait_on_freeing_inode` -> `ext4_xattr_inode_cache_find`）。
+  2. 任务 2（逐出 inode）：正在释放 xattr inode，等待 mbcache entry 变为 unused 状态（调用栈包含 `mb_cache_entry_wait_unused` -> `ext4_evict_ea_inode`）。
+- 该 Commit 移除了 buffer lock 的同步保护，使得原本存在的潜在竞态条件更容易被触发。
+
+#解决方案
+- 临时规避：回退 Commit `0a46ef234756dca04623b7591e8ebb3440622f0b` 可解决问题。
+- 上游状态：开发者已确认死锁原因，正在制定修复方案，暂无正式补丁合并。

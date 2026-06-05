@@ -1,0 +1,16 @@
+#标题
+内核升级后SD卡启动无法识别因pinctrl_cherryview模块缺失
+
+#内核版本
+4.10.2
+
+#问题现象
+- 系统启动过程中 SD 卡设备（mmcblk1）无法被检测到。
+- 内核日志中无 mmcblk1 相关注册信息，导致依赖 SD 卡分区的系统无法正常引导。
+- 回退引入问题的 commit 后，日志显示 "failed to setup card detect gpio" 但 SD 卡可正常识别。
+
+#问题根因
+Commit e28d6f048799acb0014491e6b74e580d84bd7916 修改了 sdhci-acpi 驱动的探测逻辑。当 `mmc_gpiod_request_cd()` 因 GPIO 资源未就绪返回 `-EPROBE_DEFER` 时，新逻辑直接退出并等待重试，而不再像之前那样打印警告并继续注册主控。由于 `pinctrl_cherryview` 驱动未包含在内核镜像或 initrd 中，GPIO 依赖无法满足，导致探测无限期延迟，SD 卡无法被识别。
+
+#解决方案
+将 `pinctrl_cherryview` 驱动添加到 initrd 中或将其编译进内核（CONFIG_PINCTRL_CHERRYVIEW=y），确保在启动早期 GPIO 资源可用。

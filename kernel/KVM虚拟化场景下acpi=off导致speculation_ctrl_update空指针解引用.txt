@@ -1,0 +1,16 @@
+#标题
+KVM虚拟化场景下acpi=off导致speculation_ctrl_update空指针解引用
+
+#内核版本
+6.1.20
+
+#问题现象
+- 内核日志报错：BUG: kernel NULL pointer dereference, address: 000000000000000c
+- 触发 Oops，RIP 位于 do_raw_spin_lock，Call Trace 显示路径为 speculation_ctrl_update -> svm_vcpu_run [kvm_amd] -> kvm_arch_vcpu_ioctl_run [kvm]
+- 故障发生在运行 qemu-kvm 进程时，系统启动参数包含 acpi=off
+
+#问题根因
+使用 acpi=off 启动参数时，APIC 模式被判定为 APIC_VIRTUAL_WIRE_NO_CONFIG。native_smp_prepare_cpus() 函数针对该模式直接返回，跳过了 speculative_store_bypass_ht_init() 的调用，导致 ssb_state.shared_state 指针未被初始化（为 NULL）。KVM 模块在运行虚拟机时调用 speculation_ctrl_update，进而调用 amd_set_core_ssb_state 尝试获取 ssb_state.shared_state.lock 自旋锁，引发空指针解引用。
+
+#解决方案
+开发者提供了针对 arch/x86/kernel/smpboot.c 的补丁，修改 native_smp_prepare_cpus() 逻辑：在 APIC_PIC 或 APIC_VIRTUAL_WIRE_NO_CONFIG 模式下不再直接 return，而是继续执行必要的初始化流程（如 x86_init.timers.setup_percpu_clockev 和 smp_get_logical_apicid），确保相关状态正确初始化。用户确认在 6.1.22 上应用该补丁后问题解决。

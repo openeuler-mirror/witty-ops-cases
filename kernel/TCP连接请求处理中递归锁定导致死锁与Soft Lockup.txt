@@ -1,0 +1,17 @@
+#标题
+TCP连接请求处理中递归锁定导致死锁与Soft Lockup
+
+#内核版本
+4.1.10
+
+#问题现象
+- 系统无响应，控制台与网络均无反应，仅SysRq串口响应正常。
+- 内核日志报错 "INFO: possible recursive locking detected"，指出 swapper 进程试图重复获取锁 `(&req->rsk_timer)`。
+- 触发 "RCU stall" 和 "NMI watchdog: BUG: soft lockup"，CPU#5 卡死 22 秒。
+- Call Trace 显示调用链为 `del_timer_sync` <- `inet_csk_reqsk_queue_drop` <- `reqsk_timer_handler`。
+
+#问题根因
+在 `reqsk_timer_handler` 定时器回调函数执行过程中，调用了 `inet_csk_reqsk_queue_drop` 函数，该函数内部调用 `del_timer_sync` 试图删除并同步定时器。由于此时定时器回调正在执行，定时器基锁（timer base lock）已被持有，`del_timer_sync` 再次尝试获取同一把锁，导致递归锁定检测报错，进而引发死锁和 soft lockup。
+
+#解决方案
+应用上游补丁修复该问题（Commit ID: 83fccfc3940c4a2db90fd7e7079f5b465cd8c6af），该补丁已合入后续内核版本。

@@ -1,0 +1,20 @@
+#标题
+mv643xx_eth驱动处理TSO数据包导致内核崩溃及网络中断
+
+#内核版本
+4.4.6
+
+#问题现象
+- 在Marvell Kirkwood平台上，内核升级至4.4.6后，通过网络复制大文件时出现连接中断。
+- 系统日志频繁报错：`mv643xx_eth_port mv643xx_eth_port.0 eth0: failed to linearize skb with tiny unaligned fragment`。
+- 接收大文件正常，但发送大文件时系统无响应或直接重启。
+- 应用部分调试补丁后，触发Kernel Panic或Oops，日志显示 `Kernel BUG at txq_deinit` 或 `Unable to handle kernel paging request at virtual address ... in mv643xx_eth_xmit`。
+- 部分测试场景下出现 `NETDEV WATCHDOG: eth0 (mv643xx_eth_port): transmit queue 0 timed out` 以及 `txq_reclaim` 中的 WARNING。
+
+#问题根因
+mv643xx_eth 驱动在处理 TSO (TCP Segmentation Offload) 及微小非对齐片段时存在逻辑缺陷。
+具体表现为驱动中的描述符管理错误，例如 `tx_curr_desc` 指针处理不当，导致在发送数据包路径上访问无效内存地址或触发内核BUG。涉及的函数包括 `txq_deinit`、`mv643xx_eth_xmit`、`txq_put_hdr_tso` 等。
+
+#解决方案
+暂无已确认的修复方案。
+开发者提供了多个测试补丁尝试修复 `txq_put_data`、`txq_submit_frag_skb` 等函数中的逻辑顺序，但测试反馈显示仍存在系统挂起或崩溃问题。最后的建议是尝试修改 `txq_put_hdr_tso` 函数中的 `tx_curr_desc` 赋值逻辑，但未确认有效。

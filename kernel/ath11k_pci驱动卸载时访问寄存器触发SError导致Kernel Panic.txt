@@ -1,0 +1,16 @@
+#标题
+ath11k_pci驱动卸载时访问寄存器触发SError导致Kernel Panic
+
+#内核版本
+5.15.5（复现于 6.2）
+
+#问题现象
+- 执行 `rmmod ath11k_pci` 或系统重启时触发 Kernel Panic。
+- 日志显示 "SError Interrupt on CPUx, code 0xbf000002 -- SError"。
+- Call trace 指向 `ath11k_pci_read32` 或 `ath11k_pci_window_read32`，调用链为 `ath11k_pci_clear_dbg_registers` -> `ath11k_pci_sw_reset` -> `ath11k_pci_power_down`。
+
+#问题根因
+在驱动卸载流程中，`ath11k_pci_sw_reset` 函数调用 `ath11k_pci_clear_dbg_registers` 尝试读取 PCIe 寄存器（如 `PCIE_Q6_COOKIE_ADDR`）。此时设备链路可能已断开或因特定 SoC（如 NXP LX2162）PCIe 实现差异导致访问不可用地址，从而触发异步 SError 中断。
+
+#解决方案
+用户验证的临时规避方案：修改 `ath11k_pci_sw_reset` 函数，将 `ath11k_pci_clear_dbg_registers(ab)` 调用置于 `if (power_on)` 条件判断内，避免在断电流程中访问寄存器。上游社区尚未发布正式补丁。

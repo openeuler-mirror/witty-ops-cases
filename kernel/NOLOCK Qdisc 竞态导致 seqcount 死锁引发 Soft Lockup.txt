@@ -1,0 +1,18 @@
+#标题
+NOLOCK Qdisc 竞态导致 seqcount 死锁引发 Soft Lockup
+
+#内核版本
+4.9.151-015.ali3000.alios7.x86_64
+
+#问题现象
+- 系统触发 soft lockup，NMI watchdog 报告 CPU#80 卡死 23s
+- 内核日志显示 "BUG: soft lockup - CPU#80 stuck for 23s! [tc:12076]"，随后触发 "Kernel panic - not syncing: softlockup: hung tasks"
+- 进程 `tc` 在执行 `tc qd show dev bond0` 时持有 `rtnl_mutex` 锁并在 `__gnet_stats_copy_basic` 函数中无限循环
+- Call Trace: `tc_dump_qdisc` -> `tc_fill_qdisc` -> `gnet_stats_copy_basic` -> `__gnet_stats_copy_basic`
+
+#问题根因
+在 `__dev_xmit_skb` 函数处理 `NOLOCK` 类型的 Qdisc（如 `pfifo_fast` 且设置了 `TCQ_F_NOLOCK`）时存在竞态条件。
+`qdisc_run_begin` 成功将 `qdisc->running` seqcount 最低位置 1（写者持有）后，若因并发操作（如 `qdisc_reset`）导致后续条件检查失败，代码路径可能跳过 `qdisc_run_end` 的调用。这导致 `qdisc->running` 序列计数器一直处于活跃状态（最低位为 1）。当用户空间执行 `tc` 命令读取统计信息时，`__gnet_stats_copy_basic` 函数检测到 seqcount 处于更新状态，进入忙等待循环无法退出，最终触发 soft lockup。
+
+#解决方案
+应用补丁 d518d2ed8640 ("net/sched: fix race between deactivation and dequeue for NOLOCK qdisc") 或升级至包含该修复的内核版本。

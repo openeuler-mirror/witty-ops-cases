@@ -1,0 +1,18 @@
+#标题
+RCU NOCB模式下调用rcu_advance_cbs_nowake触发内核警告及任务阻塞
+
+#内核版本
+5.4.47
+
+#问题现象
+- 内核触发 WARNING：`WARNING: CPU: 0 PID: 173774 at kernel/rcu/tree.c:1358 rcu_advance_cbs_nowake+0x59/0x60`
+- 调用栈显示：`__call_rcu` -> `task_work_run` -> `exit_to_usermode_loop`
+- 随后多个 `kworker` 线程（如 `kworker/2:3`）阻塞超过 122 秒，堆栈显示阻塞在 `synchronize_rcu` -> `kern_unmount`
+- 系统配置了启动参数 `rcu_nocbs=all rcu_nocb_poll`，且开启了 `CONFIG_RCU_NOCB_CPU`
+- 相同配置下内核版本 4.19.128 运行正常，5.4.47 版本出现异常
+
+#问题根因
+在启用 `rcu_nocbs=all` 参数的配置下，RCU 子系统在 `rcu_advance_cbs_nowake` 函数中触发了 `WARN_ON_ONCE(rcu_advance_cbs(rnp, rdp))` 检查失败。该警告表明 RCU 回调推进逻辑在特定条件下返回了非预期值，导致 RCU 状态异常，进而引发后续 `synchronize_rcu` 无法完成等待而阻塞。具体的代码逻辑缺陷在报告中未明确界定。
+
+#解决方案
+暂无

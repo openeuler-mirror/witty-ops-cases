@@ -1,0 +1,17 @@
+#标题
+XFS合并ioend时错误取消空事务导致内核崩溃
+
+#内核版本
+5.2.0-rc4 (xfs-linux xfs-5.3-merge-1)
+
+#问题现象
+- 运行 xfstests generic/475 测试用例时触发内核崩溃。
+- 日志显示 "general protection fault: 0000 [#1]" 或 "Kernel NULL pointer dereference"。
+- RIP 寄存器指向 `xfs_setfilesize_ioend+0xb1/0x220 [xfs]`。
+- 调用栈包含 `xfs_ioend_try_merge` 和 `xfs_end_io`。
+
+#问题根因
+在 `xfs_ioend_try_merge` 函数中合并 ioend A 和 B 时存在逻辑缺陷。代码假定如果 ioend A 拥有 `setfilesize` 事务，则 ioend B 也必须拥有该事务。然而，如果 ioend B 描述的写入操作位于磁盘 inode 大小范围内，则不会为其分配事务。此时，代码尝试取消 ioend B 不存在的事务，导致在 `xfs_setfilesize_ioend` 中访问空指针，引发 General Protection Fault。
+
+#解决方案
+应用补丁 "xfs: allow merging ioends over append boundaries" 以修复 ioend 合并逻辑。测试验证合并该补丁后问题未再复现。

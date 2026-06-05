@@ -1,0 +1,22 @@
+#标题
+i2c-designware驱动共享中断线触发中断风暴导致IRQ被禁用
+
+#内核版本
+5.0+ (复现版本含 5.14, 6.1, 6.2, 6.14, 7.0-rc4)
+
+#问题现象
+- 系统启动后产生严重中断风暴，IRQ 16 每秒触发次数高达 13000 至 18000 次。
+- 内核日志报错 "irq 16: nobody cared (try booting with the 'irqpoll' option)"，随后内核调用栈指向 `note_interrupt.cold` 并最终禁用该 IRQ (Disabling IRQ #16)。
+- 故障触发条件通常涉及 BIOS 设定为独立显卡模式、加载 nvidia 驱动与 elan_i2c 驱动，或在笔记本断电放置一晚后首次启动时。
+- 触摸板（ELAN）功能异常，表现为光标不动或点击行为错乱（如单击变双击）。
+- 受影响中断线由 idma64.0、i2c_designware.0、i801_smbus 等设备共享。
+
+#问题根因
+IRQ 16 为共享中断线，挂载了 I2C 控制器、SMBus、DMA 及 NVMe 等多个设备。故障发生时，所有注册的中断处理函数（如 `i2c_dw_isr`、`i801_isr`）均未认领该中断（返回 IRQ_NONE）。日志显示 `i2c_designware` 设备处于 Runtime PM 关闭状态（enabled=0xffffffff），本不应产生中断，推测为 BIOS 对 IOxAPIC 配置错误，导致在特定电源状态或硬件初始化序列下产生虚假或错误路由的中断信号。
+
+#解决方案
+暂无官方修复补丁。
+临时规避方案：
+1. 黑名单（blacklist）`elan_i2c` 或 `nvidia_drm` 模块（会影响触摸板或显卡功能）。
+2. 使用开源 `nouveau` 驱动替代 `nvidia` 私有驱动。
+3. 编写脚本监控 dmesg 日志，检测到 "nobody cared" 时自动重载 `i2c_designware` 模块。

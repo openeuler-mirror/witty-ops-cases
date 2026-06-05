@@ -1,0 +1,16 @@
+#标题
+ALSA HDA驱动auto_mic功能导致无法手动切换麦克风输入源
+
+#内核版本
+4.18+
+
+#问题现象
+- Acer AIO 桌面机（Realtek ALC269VC 编解码器）插入耳机后，若启用 auto-mic 自动检测功能，系统强制切换至耳机麦克风。
+- 用户在 PulseAudio/GNOME 界面手动选择 "Internal Mic"（内置麦克风）作为输入源无效，系统仍仅从耳机麦克风获取声音，内置麦克风无声音输入。
+- amixer 工具中缺少 "Capture Source" 控件，导致用户空间无法通过标准混音器接口切换输入源。
+
+#问题根因
+驱动代码逻辑中，当检测到支持插孔检测的外置麦克风和固定的内置麦克风时，会自动设置 `auto_mic` 标志。在 `sound/pci/hda/hda_generic.c` 的 `create_capture_mixers()` 函数中，判断条件 `if (!spec->auto_mic && imux->num_items > 1)` 导致在 auto-mic 模式下跳过了 "Capture Source" 混音器控件的创建。由于缺少该控件，内核完全接管了输入源选择策略（耳机插入即用耳机麦），忽略了用户空间的手动选择请求。
+
+#解决方案
+可通过传递驱动提示参数 `auto_mic=0` 禁用 auto-mic 功能，从而允许用户空间手动控制输入源切换。该问题涉及内核策略设计，报告中暂无合并的内核补丁修复。

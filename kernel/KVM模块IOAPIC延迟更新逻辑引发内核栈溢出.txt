@@ -1,0 +1,19 @@
+#标题
+KVM模块IOAPIC延迟更新逻辑引发内核栈溢出
+
+#内核版本
+5.6 至 5.7.11
+
+#问题现象
+- 主机内核日志报错 "BUG: stack guard page was hit at ... kernel stack overflow (double-fault)"。
+- 调用栈显示 `kvm_set_irq` 与 `irqfd_resampler_ack` 等函数形成无限递归调用，导致栈溢出。
+- 在 GPU 直通场景下（如 macOS 或 Linux 客户机），触发该问题导致客户机挂起，宿主机 libvirt 服务无响应。
+
+#问题根因
+引入 `ioapic_lazy_update_eoi` 函数后，在特定中断处理路径下触发了递归调用。调用链为：`kvm_set_irq` -> `irqfd_resampler_ack` -> `kvm_notify_acked_irq` -> `kvm_ioapic_update_eoi_one` -> `ioapic_set_irq` -> `kvm_ioapic_set_irq` -> `kvm_set_irq`，该循环导致内核栈空间耗尽并触发 double-fault。
+
+#解决方案
+暂无官方修复补丁合并（Bug 状态为 REOPENED）。
+临时规避方法：
+1. 注释掉 `ioapic.c` 中 `ioapic_lazy_update_eoi(ioapic, irq)` 的调用并重编译内核。
+2. 在内核启动参数中添加 `kvm_intel.enable_apicv=0` 禁用 APICv。

@@ -1,0 +1,17 @@
+#标题
+AMD IOMMU 休眠与恢复过程中因 GA Log 重复初始化触发 WARNING 导致系统挂起
+
+#内核版本
+6.18.5+deb14-amd64, 6.19.0-rc8
+
+#问题现象
+- 在 Asrock Deskmini X600 (Ryzen 7 8700G) 平台上，执行休眠操作时系统挂起约一分钟才断电。
+- 从休眠或挂起恢复后，系统有时会挂起约半分钟。
+- 内核日志中出现 WARNING：`drivers/iommu/amd/init.c:952 at amd_iommu_enable_interrupts+0x4c8/0x550`。
+
+#问题根因
+该硬件平台不支持 x2APIC 但支持 GA-log。在恢复流程中 `iommu_ga_log_enable()` 被调用两次：第一次来自 `lapic_resume()` 调用链，第二次来自 `amd_iommu_resume()` 调用链。第二次调用失败导致 WARNING。此外，代码中 `iommu_init_ga_log()` 在 `enable_iommus_vapic()` 中每次都会重新分配 `ga_log` 和 `ga_log_tail` 缓冲区，但未释放之前的分配，可能存在内存泄漏或状态混乱。
+
+#解决方案
+临时规避方案：在内核启动参数中添加 `amd_iommu_intr=legacy`。
+根本修复方案：暂无（Bug 仍处于 NEW 状态）。

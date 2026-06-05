@@ -1,9 +1,9 @@
 from . import register
+from .models import ParsedCase
 
 
 @register(".txt")
-def parse_txt(file_path: str) -> list[str]:
-    """解析 txt 文件：全文作为一个案例"""
-    with open(file_path, 'r', encoding='utf-8') as f:
+def parse_txt(file_path: str) -> list[ParsedCase]:
+    with open(file_path, encoding="utf-8") as f:
         content = f.read()
-    return [content] if content.strip() else []
+    return [ParsedCase(content)] if content.strip() else []

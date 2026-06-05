@@ -1,0 +1,18 @@
+#标题
+PCIe反向桥接场景下ASPM初始化触发空指针解引用导致panic
+
+#内核版本
+v4.9-rc5（受影响版本包括 4.9.6）
+
+#问题现象
+- 系统启动过程中发生 Kernel Panic，提示无法处理内核空指针解引用。
+- 日志显示崩溃地址为 `0000000000000090`，指令指针位于 `pcie_aspm_init_link_state+0x170/0x820`。
+- 故障发生在包含 PCI-to-PCIe 反向桥接的硬件拓扑中（如 Gigabyte D525TUD 或 Intel S5520SC）。
+
+#问题根因
+这是一个由 commit `51ebfc92b72b` ("PCI: Enumerate switches below PCI-to-PCIe bridges") 引入的回归问题。
+在函数 `alloc_pcie_link_state` 中，代码尝试访问 `pdev->bus->parent->self->link_state`。当设备 `pdev` 为 PCI-to-PCIe bridge（如 03:00.0）时，其上层总线（bus 00）为传统 PCI 总线。此时 `pdev->bus->parent->self` 可能为 NULL，或者即使不为 NULL，其 `link_state` 成员也为 NULL（因为上层是传统 PCI 设备而非 PCIe 设备），从而导致空指针解引用。
+
+#解决方案
+- 临时规避：回退 commit `51ebfc92b72b`。
+- 修复方案：应用针对该问题的测试补丁（见 Bug 报告附件 253351），该补丁在 v4.10-rc5 基础上修复了此逻辑缺陷。

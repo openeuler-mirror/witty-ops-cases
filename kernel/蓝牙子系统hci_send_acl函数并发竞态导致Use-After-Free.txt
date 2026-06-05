@@ -1,0 +1,17 @@
+#标题
+蓝牙子系统hci_send_acl函数并发竞态导致Use-After-Free
+
+#内核版本
+6.7-rc2
+
+#问题现象
+- KASAN 检测到 "slab-use-after-free" 错误，发生在 hci_send_acl+0x54/0x770。
+- 故障发生在蓝牙配对过程中，涉及并发执行环境。
+- 调用栈显示进程 kworker/0:0 在执行 l2cap_conn_start -> l2cap_send_cmd -> hci_send_acl 时，访问了已释放的内存地址。
+- KASAN 日志显示该内存对象由 hci_chan_create 分配，由 hci_chan_list_flush 释放。
+
+#问题根因
+在 l2cap_conn_start 函数中，虽然代码对 l2cap_conn 和 l2cap_chan 变量进行了加锁保护，但 hci_chan (conn->hchan) 可能被其他线程释放。具体释放路径为 hci_chan_list_flush -> hci_conn_del。当线程执行到 hci_send_acl 函数内的 `struct hci_dev *hdev = chan->conn->hdev;` (net/bluetooth/hci_core.c:3234) 时，访问了已被释放的 hci_chan 对象，触发 Use-After-Free 漏洞。这是一个微妙的时序竞态问题。
+
+#解决方案
+暂无

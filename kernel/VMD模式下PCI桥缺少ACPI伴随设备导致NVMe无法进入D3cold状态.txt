@@ -1,0 +1,16 @@
+#标题
+VMD模式下PCI桥缺少ACPI伴随设备导致NVMe无法进入D3cold状态
+
+#内核版本
+5.12（问题持续存在于6.1.1）
+
+#问题现象
+- VMD模式下创建的PCI设备（如NVMe根端口）在sysfs中缺少`firmware_node`路径，即缺少ACPI companion device。
+- NVMe设备无法支持D3cold电源状态。
+- 部分受影响系统（如笔记本）无法进入s0ix低功耗状态，导致功耗增加。
+
+#问题根因
+VMD驱动创建的新主桥下的设备使用了非标准的`_ADR`编码格式（例如PCIe设备为`8xyzFFFF`），不符合ACPI规范中的标准格式。内核函数`pci_acpi_find_companion()`无法根据这种非标准`_ADR`找到对应的ACPI对象，导致设备无法关联ACPI companion，进而无法利用ACPI电源资源进入D3cold。
+
+#解决方案
+暂无正式修复补丁。根本解决方案需VMD驱动实现自定义的`acpi_bus_type`以处理非标准`_ADR`搜索匹配。临时规避方法（针对s0ix问题）：执行`echo 8 > /sys/kernel/debug/pmc_core/ltr_ignore`（需关闭Secure Boot）。

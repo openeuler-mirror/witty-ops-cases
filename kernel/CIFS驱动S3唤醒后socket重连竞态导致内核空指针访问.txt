@@ -1,0 +1,17 @@
+#标题
+CIFS驱动S3唤醒后socket重连竞态导致内核空指针访问
+
+#内核版本
+3.10.0
+
+#问题现象
+- 系统从 S3 状态恢复且网络连接不可用时触发 Kernel Oops。
+- 日志显示 "unable to handle kernel paging request at ffffffffffffffd8"。
+- Call Trace 涉及 `cifs_call_async`、`SMB2_echo`、`cifs_echo_request` 及 `sock_sendmsg`。
+- RIP 寄存器指向 `kthread_data+0x11/0x20`。
+
+#问题根因
+CIFS 模块底层代码存在竞态条件。`server->ssocket` 指针在操作时未持有 `srv_mutex` 锁保护。当一个线程正在通过 socket 发送数据时，另一个线程可能在进行 socket 重连处理时将该指针置为 NULL，导致当前线程访问无效内存地址（CR2: ffffffffffffffd8）从而触发 Oops。
+
+#解决方案
+开发者已提出修复补丁，确保在操作 `ssocket` 指针时持有 `srv_mutex` 锁，以防止并发修改。建议升级至包含该修复的内核版本。

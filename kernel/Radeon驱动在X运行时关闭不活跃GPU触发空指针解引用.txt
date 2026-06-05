@@ -1,0 +1,17 @@
+#标题
+Radeon驱动在X运行时关闭不活跃GPU触发空指针解引用
+
+#内核版本
+3.7.0-rc2+（另有报告称 3.8-rc7 受影响）
+
+#问题现象
+- 在混合图形系统中，X Server 运行期间通过 vgaswitcheroo 关闭不活跃 GPU 时，系统崩溃。
+- 内核日志显示 "BUG: unable to handle kernel NULL pointer dereference at (null)"。
+- 触发 Oops 的指令指针（IP）位于 `r600_pcie_gart_tlb_flush+0xeb/0x110 [radeon]`。
+- Call Trace 显示调用链为：`radeon_crtc_cursor_set` -> `radeon_bo_pin_restricted` -> `ttm_bo_validate` -> `ttm_bo_move_memcpy` -> `radeon_ttm_backend_unbind` -> `radeon_gart_unbind` -> `r600_pcie_gart_tlb_flush`。
+
+#问题根因
+在 GPU 处于关闭状态时，X Server 进程执行光标设置操作（`radeon_crtc_cursor_set`），该操作触发了 TTM（Translation Table Manager）层面的 buffer 迁移与解绑操作。驱动尝试调用 `r600_pcie_gart_tlb_flush` 刷新 TLB 时，访问了空指针（寄存器 RBX 为 0），导致内核崩溃。这表明在 GPU 已断电或未正确初始化的情况下，驱动代码缺乏必要的保护检查。
+
+#解决方案
+暂无（Bug 状态为 NEW，尚未提供修复补丁）。

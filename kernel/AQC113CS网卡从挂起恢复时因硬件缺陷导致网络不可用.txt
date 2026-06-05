@@ -1,0 +1,17 @@
+#标题
+AQC113CS网卡从挂起恢复时因硬件缺陷导致网络不可用
+
+#内核版本
+6.2.8（评论中亦涉及 6.1.37、6.1.42 等）
+
+#问题现象
+- 系统从挂起状态恢复后，AQC113CS 网卡网络功能不可用
+- 内核日志报错 "atlantic: Boot code hanged" 及 "Unable to change power state from D3hot to D0, device inaccessible"
+- 触发内核 WARNING，调用栈显示位于 `aq_a2_fw_deinit`，路径为 `aq_nic_deinit` -> `atl_resume_common`
+- 尝试执行 `if down/up` 操作可能导致系统挂起
+
+#问题根因
+该问题由硬件缺陷引起。Asus XG-C100C V2 网卡（使用 AQC113CS 芯片）在从挂起恢复时，有时无法重新出现在 PCI 总线上，导致驱动无法将设备电源状态从 D3hot 切换到 D0。驱动在 `atl_resume_common` 函数中调用 `pci_set_power_state` 失败，无法重置固件并重新初始化设备。此问题在 Windows 系统上同样存在，确认为硬件/固件层面的问题。
+
+#解决方案
+开发者曾尝试在 `drivers/net/ethernet/aquantia/atlantic/aq_pci_func.c` 的 `atl_resume_common` 函数中增加重试循环（最长等待 2 秒）作为 workaround，但测试表明该补丁并不稳定，无法保证完全恢复设备功能。鉴于该问题确认为硬件缺陷且无可用固件更新，目前暂无有效的内核软件修复方案。

@@ -1,0 +1,19 @@
+#标题
+RTC驱动 rtc-ds1374 在无硬件中断引脚时无法正常使用 wakealarm 功能
+
+#内核版本
+4.19
+
+#问题现象
+- 硬件环境为 RTC ds-1371 连接 I2C 总线，但未连接 GPIO 中断引脚至 CPU。
+- 在设备树中未定义中断说明符的情况下，驱动默认不启用 wakealarm 功能。
+- 用户尝试通过修改驱动代码绕过中断检查后，写入 wakealarm 接口（如 `echo +20 > /sys/class/rtc/rtc0/wakealarm`）返回 "Invalid argument" 错误。
+- 若进一步注释掉 `ds1374_set_alarm` 和 `ds1374_read_alarm` 中的中断检查代码，写入 wakealarm 成功，但执行 `hwclock` 命令时报错 "select() to /dev/rtc0 to wait for clock tick timed out"。
+
+#问题根因
+驱动程序 `rtc-ds1374.c` 的逻辑强依赖于硬件中断：
+1. 函数 `ds1374_set_alarm` 和 `ds1374_read_alarm` 中包含硬性检查 `if (client->irq <= 0) return -EINVAL;`，导致在无中断时直接返回错误。
+2. 驱动内部机制（如 `hwclock` 使用的 tick 中断等待）依赖中断信号，若无物理中断引脚连接，相关操作会因等待超时而失败。
+
+#解决方案
+暂无（Bug 状态为 NEW，目前无官方补丁或有效的 workaround 方案）。

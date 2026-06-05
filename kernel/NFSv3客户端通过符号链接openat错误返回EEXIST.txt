@@ -1,0 +1,17 @@
+#标题
+NFSv3客户端通过符号链接openat错误返回EEXIST
+
+#内核版本
+v6.10 及以上版本（测试涉及 6.10.1、6.13.8、6.17.5）
+
+#问题现象
+- 在 NFSv3 挂载点上，通过符号链接写入文件失败，系统调用返回 -EEXIST (File exists)。
+- strace 跟踪显示 `openat(..., O_WRONLY|O_CREAT|O_TRUNC) = -1 EEXIST`。
+- 抓包分析发现客户端未发送 READLINK 或 LOOKUP 请求即返回错误。
+- 若先执行 `ls -l` 触发缓存查找，后续写入操作可成功。
+
+#问题根因
+Linux v6.10 引入的 commit `7c6c5249f061` 导致回归，具体原因为 `nfs_atomic_open_v23()` 函数中的错误处理逻辑存在缺陷。在处理符号链接打开操作时，未能正确触发 READLINK/LOOKUP 流程，错误地返回了 EEXIST。
+
+#解决方案
+修复 `nfs_atomic_open_v23()` 中的错误处理逻辑。维护者已提供修复补丁并提交至邮件列表，用户测试验证补丁有效。

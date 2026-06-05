@@ -1,0 +1,21 @@
+#标题
+Btrfs文件系统fsync时inode锁断言失败触发kernel BUG
+
+#内核版本
+6.10.5-1-default (openSUSE Tumbleweed)
+
+#问题现象
+- 系统在运行KVM虚拟机或数据库服务且磁盘负载较重时触发 kernel panic，导致系统崩溃。
+- 内核日志显示：`assertion failed: inode_is_locked(&inode->vfs_inode), in fs/btrfs/ordered-data.c:983`。
+- 随后触发 `kernel BUG at fs/btrfs/ordered-data.c:983!` 及 `Oops: invalid opcode`。
+- Call Trace 指向 `btrfs_get_ordered_extents_for_logging.cold` 和 `btrfs_sync_file`。
+- 该问题为 6.10.5 版本引入的回归问题，6.10.4 版本未出现。
+
+#问题根因
+在 `btrfs_sync_file` 调用路径中，函数 `btrfs_get_ordered_extents_for_logging` 内部执行断言检查时发现 inode 锁未被持有（断言 `inode_is_locked(&inode->vfs_inode)` 失败），触发了 `fs/btrfs/ordered-data.c:983` 处的 BUG()。
+
+#解决方案
+开发者已发布修复补丁：
+- 针对 6.11-rc 版本的补丁：https://lore.kernel.org/linux-btrfs/717029440fe379747b9548a9c91eb7801bc5a813.1724972507.git.fdmanana@suse.com/
+- 针对 6.10 稳定版的补丁：https://gist.githubusercontent.com/fdmanana/e032236302bf5e65fb9728fca98c5eb0/raw/456f1c2c30c338964085d6ba016dcf330aa10fb4/gistfile1.txt
+临时规避措施：降级内核至 6.10.4 版本。

@@ -1,0 +1,23 @@
+#标题
+内核 4.20 引入回归导致 gre6 隧道上 DHCP 请求失败
+
+#内核版本
+4.20.0
+
+#问题现象
+- 在 gre6 隧道接口上运行 DHCP 客户端（如 udhcpc）时，`sendto` 系统调用失败，返回 `EINVAL` 错误。
+- 故障复现后，尝试删除隧道接口时 `ip` 命令无限期挂起。
+- dmesg 日志显示：`unregister_netdevice: waiting for testgre1 to become free. Usage count = 3`。
+
+#问题根因
+该问题由 commit `99137b7888f4058087895d035d81c6b2d31015c5` 引入。
+在 `net/packet/af_packet.c` 的 `packet_snd` 函数中，新增了地址长度校验逻辑：
+`if (dev && msg->msg_namelen < dev->addr_len + offsetof(struct sockaddr_ll, sll_addr))`
+对于 ip6gre 设备，驱动程序将 `dev->addr_len` 设置为 16（IPv6 地址长度），而非标准的硬件地址长度。
+用户态传递的 `sockaddr_ll` 结构体大小通常为 20 字节。内核校验计算为 `20 < 16 + 12`（即 `20 < 28`），条件成立导致误判参数无效并返回 `EINVAL`。
+GRE 驱动使用 `dev->addr_len` 存储网络地址长度的做法与 AF_PACKET 协议栈的预期不一致，导致兼容性问题。
+
+#解决方案
+暂无官方合并修复。
+临时规避方案：回退 commit `99137b7888f4058087895d035d81c6b2d31015c5` 可恢复功能。
+潜在修复方向：修改 `packet_snd` 中的校验逻辑以适配 GRE 隧道，或修正 GRE 驱动中 `dev->addr_len` 的设置。

@@ -1,0 +1,17 @@
+#标题
+KVM虚拟机中rte_kni模块引发refcount下溢与空指针崩溃
+
+#内核版本
+5.4.286
+
+#问题现象
+- KVM虚拟机启动后约30-40分钟发生内核崩溃。
+- 内核日志报错 "refcount_t: underflow; use-after-free"，调用栈显示在软中断处理 IPv6 接收流程（tcp_v6_rcv）中，涉及外部模块 rte_kni。
+- 随后出现 "refcount_t: saturated; leaking memory" 警告，发生在 __tcp_close 流程。
+- 最终触发 "BUG: kernel NULL pointer dereference"，位于 ipv6_sock_mc_close 函数，导致 Oops。
+
+#问题根因
+内核日志明确检测到 refcount_t 下溢，提示存在 use-after-free 漏洞。故障调用栈指向 DPDK 相关的内核模块 rte_kni。推测该模块在处理网络数据包时错误操作了 socket 引用计数，导致对象被提前释放，后续在 socket 关闭流程（ipv6_sock_mc_close）中访问已释放内存引发空指针解引用。
+
+#解决方案
+暂无官方确认的修复补丁。社区建议尝试升级内核至 5.4.294 或参考 Flatcar issue #427 中提及的 netfilter 相关修复，但用户反馈调用栈不完全匹配，问题仍在排查中。

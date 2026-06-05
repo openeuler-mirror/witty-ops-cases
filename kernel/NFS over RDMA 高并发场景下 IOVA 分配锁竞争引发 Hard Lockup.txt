@@ -1,0 +1,16 @@
+#标题
+NFS over RDMA 高并发场景下 IOVA 分配锁竞争引发 Hard Lockup
+
+#内核版本
+6.13.6+
+
+#问题现象
+- 在 NFS over RDMA 环境下执行高并发 I/O 测试（如 fio randwrite 4k 块大小）时，系统触发 Hard Lockup。
+- 内核日志报错："watchdog: Watchdog detected hard LOCKUP on cpu"。
+- 故障 CPU 堆栈显示进程处于 `native_queued_spin_lock_slowpath`，调用链涉及 `alloc_iova`、`iommu_dma_map_sg` 及 `svc_rdma_send_write_list`。
+
+#问题根因
+在高并发（如 256 个 nfsd 线程）且 I/O 块较小（4KB）的场景下，IOVA（I/O Virtual Address）缓存快速耗尽，导致分配请求频繁进入慢速路径。大量线程在 `alloc_iova` 函数内的 `iova_rbtree_lock` 自旋锁上发生严重竞争，导致某些 CPU 长时间等待锁释放，超过了硬锁死检测阈值（watchdog threshold），从而触发 Hard Lockup 报警。堆栈分析确认阻塞点位于 `__alloc_and_insert_iova_range`。
+
+#解决方案
+开发者认为这是一个长期存在的结构性问题，目前暂无彻底的内核修复补丁。建议通过减少 NFSD 线程数来降低锁竞争压力，作为临时规避措施。

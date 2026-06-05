@@ -1,0 +1,18 @@
+#标题
+amdgpu驱动解绑后残留I2C引用导致重启崩溃或空指针异常
+
+#内核版本
+4.17.0
+
+#问题现象
+- 系统重启随机失败，dmesg 显示 "kobject: '(null)' ... is not initialized, yet kobject_get() is being called" 警告。
+- 调用栈指向 `device_shutdown` -> `get_device` -> `kobject_get`。
+- 在解绑 GPU 后执行 `ddcutil` 操作触发内核空指针解引用（Oops），崩溃点位于 `dal_i2caux_submit_i2c_command`。
+- 解绑 amdgpu 设备后，`/sys/class/i2c-dev/` 下仍残留指向该设备的 i2c 节点（如 i2c-7 至 i2c-13），且重新绑定驱动会创建新的节点而非复用旧节点。
+
+#问题根因
+`amdgpu` 驱动在执行 unbind 操作（例如将 GPU 直通给 VFIO）时，未正确清理 I2C adapter 相关资源。
+驱动解绑后残留的 i2c 设备节点引用了已释放或未初始化的内存对象。当系统执行关机流程（`device_shutdown`）或用户态工具尝试访问这些残留节点时，触发了 `kobject` 引用计数错误或空指针访问。
+
+#解决方案
+暂无（Bug 状态为 NEW，AMD 开发团队已确认问题并介入分析）。

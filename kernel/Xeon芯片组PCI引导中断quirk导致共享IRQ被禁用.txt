@@ -1,0 +1,18 @@
+#标题
+Xeon芯片组PCI引导中断quirk导致共享IRQ被禁用
+
+#内核版本
+5.7.1 及以上版本（引入问题版本），测试版本包括 5.11.17、5.14.13
+
+#问题现象
+- 特定硬件（Symmetricom bc635pcie时间卡）在共享IRQ 16时无法接收中断
+- 内核日志报错 "irq 16: nobody cared (try booting with the 'irqpoll' option)"
+- 系统自动禁用故障IRQ："Disabling IRQ #16"
+- 共享该IRQ的USB设备（ehci_hcd）同时失效
+- 故障平台为HP ProLiant DL580 Gen9（Xeon E7-8867 v4）
+
+#问题根因
+通过git bisect定位到引入问题的提交为 b88bf6c3b6ff ("PCI: Add boot interrupt quirk mechanism for Xeon chipsets")。该补丁引入的IO-APIC quirk机制改变了Xeon平台的中断路由行为，导致使用PLX PEX8112桥接芯片的Legacy PCI设备在共享IRQ时，中断处理逻辑异常，内核误判中断无人处理从而将其禁用。
+
+#解决方案
+临时规避方案：在GRUB内核启动参数中添加 `pci=noioapicquirk` 可恢复正常。开发者建议亦可尝试 `pci=ioapicreroute` 参数。截止报告时间，上游尚未发布正式修复补丁。

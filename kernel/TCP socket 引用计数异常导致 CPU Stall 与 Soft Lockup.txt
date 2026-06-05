@@ -1,0 +1,17 @@
+#标题
+TCP socket 引用计数异常导致 CPU Stall 与 Soft Lockup
+
+#内核版本
+5.4.286-x86-64
+
+#问题现象
+- 内核日志频繁打印 "IPv4: Attempt to release TCP socket in state 10" 警告
+- 触发 WARNING：`refcount_t: saturated; leaking memory.`，RIP 分别位于 `inet_csk_destroy_sock` 和 `refcount_warn_saturate`
+- RCU 检测到 CPU 37 发生 self-detected stall
+- Watchdog 报告 Soft Lockup，CPU#37 卡死 134 秒，进程 dhmgr 卡在 `inet_csk_bind_conflict`
+
+#问题根因
+系统在释放 TCP socket 时处于异常状态（state 10），触发了 `refcount_t` 饱和保护机制，表明 socket 引用计数管理出现严重问题（如泄漏或错误释放）。随后在执行 `inet_csk_bind_conflict` 时陷入死循环或长时间阻塞，最终导致 CPU Stall 和 Soft Lockup。该问题是在内核从 2.6.38 升级至 5.4.286 后出现的。
+
+#解决方案
+暂无

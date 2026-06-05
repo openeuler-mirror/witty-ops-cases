@@ -1,0 +1,17 @@
+#标题
+VLAN与Bonding场景下开启LRO/SG导致skb_warn_bad_offload内核告警
+
+#内核版本
+3.16.1 (报告中涉及 3.16.x, 3.10.x, 4.0.4)
+
+#问题现象
+- 内核日志频繁打印 WARNING：`at net/core/dev.c:2246 skb_warn_bad_offload+0xc8/0xd5()`。
+- 堆栈信息显示调用路径包含 `tcp_transmit_skb` -> `ip_queue_xmit` -> `dev_hard_start_xmit` -> `vlan_dev_hard_start_xmit` -> `skb_checksum_help`。
+- 日志中包含 `caps=(...), len=..., gso_size=..., ip_summed=3` 等信息。
+- 系统配置包含 Bonding (802.3ad 或 active-backup)、VLAN 叠加，部分场景涉及 KVM 虚拟化网桥。
+
+#问题根因
+在 VLAN 叠加 Bonding 的网络拓扑中，网卡驱动（如 `ixgbe`, `igb`）开启了 Scatter-Gather (SG) 或 Large Receive Offload (LRO) 功能。当网卡作为路由或网桥接口时，LRO 功能与路由/桥接转发逻辑不兼容，导致 GSO/Checksum Offload 特性在数据包发送路径上校验失败，触发 `skb_warn_bad_offload` 告警。
+
+#解决方案
+规避措施：通过 `ethtool` 关闭物理网卡的 Scatter-Gather 或 LRO 功能，例如执行 `ethtool -K eth0 sg off` 或 `ethtool -K eth0 lro off`。有用户反馈升级至 3.16.7 后问题消失，但未得到内核开发者确认具体的修复补丁。

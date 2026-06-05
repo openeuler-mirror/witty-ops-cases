@@ -1,0 +1,21 @@
+#标题
+页缓存迭代器在large folios场景下死锁导致系统卡死及RCU Stall
+
+#内核版本
+6.1.31 - 6.1.57, 6.5.5
+
+#问题现象
+- 系统在进行高IO压力操作（如PostgreSQL备份、RocksDB压缩）时，出现大量任务阻塞，进程状态为 D (blocked for more than 122 seconds)。
+- 内核日志报错 "rcu: INFO: rcu_preempt self-detected stall on CPU" 以及 "watchdog: BUG: soft lockup"。
+- 调用栈显示进程陷在 `xas_load` -> `filemap_get_read_batch` -> `filemap_get_pages` 路径中，涉及 `xfs_file_buffered_read`。
+- 系统SYS CPU时间飙升，最终导致近乎完全的系统锁死，可能伴随数据库数据不一致或损坏。
+
+#问题根因
+页缓存迭代器基础设施在处理 large folios 时存在活锁问题。该问题位于内存管理子系统（MM），而非XFS文件系统本身，但由于XFS默认启用 large folios 特性，因此容易触发此问题。进程在 `xas_load` 相关循环中无法正常退出，导致CPU停滞和系统锁死。
+
+#解决方案
+暂无官方修复补丁（Bug状态为 NEW）。
+可用的规避方案：
+1. 将文件系统从 XFS 更换为 ext4，可避免触发此问题。
+2. 降级内核至 5.15 系列。
+注：补丁 `cbc02854331e ("XArray: Do not return sibling entries from xa_load()")` 曾被视为潜在修复，但用户反馈在 6.5.5 版本中问题仍然复现。

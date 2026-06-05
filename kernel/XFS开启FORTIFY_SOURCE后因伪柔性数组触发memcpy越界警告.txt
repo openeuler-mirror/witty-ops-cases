@@ -1,0 +1,18 @@
+#标题
+XFS开启FORTIFY_SOURCE后因伪柔性数组触发memcpy越界警告
+
+#内核版本
+v6.1-rc0
+
+#问题现象
+运行 xfstests generic/113 测试用例时，内核触发 WARNING 并打印如下日志：
+- "memcpy: detected field-spanning write (size 32) of single field \"efdp->efd_format.efd_extents\" at fs/xfs/xfs_extfree_item.c:693 (size 16)"
+- 调用栈显示在 xfs_efi_item_relog 函数中触发了 xfs_defer_relog 相关逻辑。
+- 该问题在 XFS 使用 64k 目录块大小时容易复现。
+
+#问题根因
+内核配置开启 CONFIG_FORTIFY_SOURCE 后，其运行时检测机制（commit 54d9469bc515 引入）将结构体中声明的伪柔性数组（例如 `efd_extents[1]`）误判为固定大小数组。
+在 XFS 的 xfs_efd_log_format 结构定义中，`efd_extents` 字段声明为 `array[1]` 但实际作为变长数组（VLA）使用。当 `ef[id]_nextents` 大于 1 时，memcpy 写入长度超过声明的单个元素大小，从而触发 "field-spanning write" 警告。这是 FORTIFY_SOURCE 对旧式伪柔性数组实现方式的误报。
+
+#解决方案
+暂无已合并的修复补丁。开发者讨论建议使用 unsafe_memcpy() 作为临时规避方案，或将相关结构体定义修改为标准的 C99 柔性数组（`[]`）以适配 FORTIFY_SOURCE 检测逻辑。

@@ -1,0 +1,17 @@
+#标题
+ib_srpt 取消配置时访问已释放内存触发 general protection fault
+
+#内核版本
+v4.6.2
+
+#问题现象
+- 执行命令 `rmdir /sys/kernel/config/target/srpt/*/*/acls/*` 时触发内核崩溃。
+- 控制台打印 "general protection fault: 0000 [#1] SMP"。
+- 寄存器 RAX 值为 `6b6b6b6b6b6b6b6b`，表明访问了已释放的内存区域。
+- Call Trace: `__list_del_entry` -> `list_del` -> `core_tpg_del_initiator_node_acl` -> `target_fabric_nacl_base_release` -> `configfs_rmdir`。
+
+#问题根因
+在通过 configfs 删除 initiator node ACL 时，`core_tpg_del_initiator_node_acl` 函数调用 `list_del` 操作链表节点。由于 RAX 寄存器指向的地址包含 `6b6b6b6b6b6b6b6b`（POISON_FREE），说明该链表节点所在的内存已被释放，导致释放后使用并触发 general protection fault。
+
+#解决方案
+在 v4.6.2 上应用补丁系列 "fix and simplify session shutdown" 可修复此问题；该问题在内核 v4.7-rc4 版本中未复现。

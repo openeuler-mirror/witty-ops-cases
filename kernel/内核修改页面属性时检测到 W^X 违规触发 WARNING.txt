@@ -1,0 +1,18 @@
+#标题
+内核修改页面属性时检测到 W^X 违规触发 WARNING
+
+#内核版本
+6.2.1（评论中亦见于 6.5.7、6.6.21）
+
+#问题现象
+- 内核日志打印 WARNING：`CPA detected W^X violation`，并显示具体的页面地址范围和 PFN。
+- 触发警告的调用栈位于 `arch/x86/mm/pat/set_memory.c` 中的 `__change_page_attr_set_clr` 函数。
+- 场景一：VMware 虚拟机启动阶段，调用栈涉及 `efi_update_mappings` -> `kernel_map_pages_in_pgd`。
+- 场景二：Xen Dom0 环境，调用栈涉及 `module_memfree` -> `vfree` -> `set_direct_map_default_noflush`。
+- 系统在打印警告后仍可继续运行，未直接触发崩溃。
+
+#问题根因
+内核在执行页面属性变更（Change Page Attribute, CPA）操作时，检测到违反了 W^X（Write XOR Execute，写互斥执行）安全策略。具体表现为 `__change_page_attr_set_clr` 函数发现页面属性试图转换为同时具备可写与可执行权限（或相关权限位设置冲突，如日志中显示的 PTE 变更），这触发了内核的防御性检查并打印警告。该问题涉及 EFI 内存映射更新及模块内存释放路径。
+
+#解决方案
+暂无（Bug 状态为 NEW，尚未修复）。

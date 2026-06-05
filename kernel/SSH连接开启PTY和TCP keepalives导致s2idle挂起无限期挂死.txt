@@ -1,0 +1,14 @@
+#标题
+SSH连接开启PTY和TCP keepalives导致s2idle挂起无限期挂死
+
+#内核版本
+6.17.0-14-generic
+
+#问题现象
+系统执行 s2idle 挂起操作时发生无限期挂起，无法正常唤醒，必须强制断电重启。该问题仅在同时满足以下条件时触发：存在活动的 SSH 连接、分配了 PTY（伪终端）、启用了内核级 TCP keepalives（SSH 默认配置）。若禁用 TCP keepalives 或不分配 PTY（如使用 ssh -T），则挂起功能正常。
+
+#问题根因
+根据分析，内核 TCP keepalive 探测在 s2idle 挂起过程中触发，唤醒了网络栈（涉及 mt7921e WiFi 驱动）。当 SSH 客户端进程拥有处于 raw 模式的 PTY 时，此唤醒级联阻止了系统重新进入或完成冻结流程，从而导致系统死锁。应用层 SSH keepalives（ServerAliveInterval）不会触发此问题，因为进程在 s2idle 期间处于冻结状态。
+
+#解决方案
+暂无内核修复补丁。可通过修改 SSH 客户端配置规避此问题：在 ~/.ssh/config 中设置 `TCPKeepAlive no` 以禁用内核级 TCP keepalives。建议同时配置 `ServerAliveInterval` 以维持连接状态。

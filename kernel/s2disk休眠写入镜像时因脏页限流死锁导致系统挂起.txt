@@ -1,0 +1,20 @@
+#标题
+s2disk休眠写入镜像时因脏页限流死锁导致系统挂起
+
+#内核版本
+v3.14
+
+#问题现象
+- 执行 s2disk 休眠时，系统在 "Saving ... image data pages ... 0%" 阶段卡死无响应。
+- 系统未完全崩溃，SysRq 键仍可响应。
+- 通过填充内存（如使用 tmpfs 写入大文件）增加内存压力后极易复现。
+- 进程堆栈显示 s2disk 处于 D 状态（Uninterruptible），卡在 `balance_dirty_pages_ratelimited` 函数。
+
+#问题根因
+该问题由内核 commit `a1c3bfb2` ("mm/page-writeback.c: do not count anon pages as dirtyable memory") 引入。该提交修改了脏页内存计算逻辑，降低了系统的脏页阈值。
+s2disk 在休眠过程中使用缓冲 IO（buffered IO）写入镜像数据。当脏页数量达到降低后的阈值时，内核通过 `balance_dirty_pages()` 限流，等待后台回写线程（flusher threads, `bdi_wq`）刷新脏页。然而，此时 s2disk 已将系统冻结，包括回写线程在内的所有任务均已停止，导致无人执行回写操作，s2disk 陷入无限等待，形成死锁。
+
+#解决方案
+- 内核规避：回退 commit `a1c3bfb2` 可解决此问题。
+- 用户态修复：修改 `suspend-utils` 工具，在写入镜像前将 `/proc/sys/vm/dirty_bytes` 设置为极大值（如 `void*(-1)`）以禁用脏页限流，恢复后再还原设置；或在打开镜像文件时使用 `O_SYNC` 标志（此方法会显著降低写入速度）。
+- 配置规避：尝试在 `/etc/suspend.conf` 中设置 `early writeout = n`。

@@ -1,0 +1,17 @@
+#标题
+插入SD卡时Intel IOMMU代码触发BUG导致内核崩溃
+
+#内核版本
+4.3
+
+#问题现象
+- 插入 SDHC/MMC 卡后立即触发 kernel panic，复现率 100%。
+- 若启动时卡已插入，加载 `sdhci_pci` 模块时系统崩溃。
+- 日志显示 `kernel BUG at drivers/iommu/intel-iommu.c:3485!`，错误码为 `invalid opcode: 0000 [#1]`。
+- 调用栈显示：`intel_unmap` -> `intel_unmap_sg` -> `sdhci_finish_data` -> `sdhci_irq`。
+
+#问题根因
+4.3 版本引入的回归问题。在 Intel IOMMU 代码（`intel-iommu.c`）的 `intel_unmap` 函数中，`dmar_domain` 结构体指针为 NULL，导致触发了 `BUG_ON` 检查失败。分析指出，该版本中 `iommu_flush_iotlb_psi` 函数的调用参数由 `domain->id` 变更为 `domain`，可能导致了空指针引用或域分配逻辑错误。
+
+#解决方案
+暂无官方合并修复。评论中建议检查 `drivers/iommu/intel-iommu.c` 中 `intel_unmap` 函数内 `iommu_flush_iotlb_psi` 的调用参数变更是否正确处理了 domain 指针。

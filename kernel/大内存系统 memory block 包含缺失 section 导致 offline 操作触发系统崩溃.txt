@@ -1,0 +1,15 @@
+#标题
+大内存系统 memory block 包含缺失 section 导致 offline 操作触发系统崩溃
+
+#内核版本
+4.3
+
+#问题现象
+- 在大容量内存系统（>=64GB）上执行 memory offline 操作（如 `echo 0 > /sys/devices/system/memory/memory16/online`）时，系统掉入 kdb（kernel debugger）或发生崩溃。
+- 故障现场显示 `pfn_valid_within` 返回 1，导致无效 pfn 进入后续处理流程。
+
+#问题根因
+系统内存大于 64GB 时，内核将 memory block size 设为 2GB。函数 `init_memory_block` 在初始化 memory block 时，强制设定 `end_section_nr` 为 `start_section_nr + sections_per_block - 1`，这导致 memory block 可能包含物理上不存在（missing/non-present）的 memory sections。当尝试 offline 此类 block 时，由于 `CONFIG_HOLES_IN_ZONE` 未配置，`pfn_valid_within` 无法正确识别缺失 section 中的无效 pfn，导致系统崩溃。
+
+#解决方案
+讨论中提供了修复补丁：在 `drivers/base/memory.c` 的 `memory_subsys_offline` 函数中增加检查，若 `mem->section_count != sections_per_block` 则返回 `-EINVAL`，禁止 offline 包含非 present sections 的 memory block，以此规避崩溃。

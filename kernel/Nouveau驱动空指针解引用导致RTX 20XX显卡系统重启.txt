@@ -1,0 +1,16 @@
+#标题
+Nouveau驱动空指针解引用导致RTX 20XX显卡系统重启
+
+#内核版本
+5.4.X（评论提及 4.19.X 和 5.3.X 亦受影响）
+
+#问题现象
+- 在 Qubes OS (Xen 虚拟化环境) 下使用 NVIDIA RTX 2080TI/2070 显卡时，系统频繁发生即时重启。
+- 内核日志显示 `BUG: kernel NULL pointer dereference, address: 0000000000000020`。
+- 日志中出现 `nouveau 0000:26:00.0: disp: chid 73 stat 00001080 reason 1 [PUSHBUFFER_ERR]` 以及 `MMIO read of 00000000 FAULT at 611390 [ IBUS ]` 错误。
+
+#问题根因
+位于 `drivers/gpu/drm/nouveau/nvkm/engine/disp/channv50.c` 文件中的 `nv50_disp_chan_mthd` 函数存在逻辑缺陷。在处理显示中断异常（如 `gv100_disp_intr_exc_other` 触发的路径）时，传入或获取的 `mthd` 指针为 NULL。代码未检查 `mthd` 是否为空即访问 `mthd->data[i].mthd`，导致空指针解引用，进而引发内核崩溃和系统重启。
+
+#解决方案
+临时修复方案：在 `nv50_disp_chan_mthd` 函数开头添加 `if (!mthd) return;` 判断，跳过空指针处理流程，可恢复系统稳定性。上游状态为 NEW，暂无官方合并修复记录。

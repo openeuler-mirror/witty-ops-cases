@@ -1,0 +1,17 @@
+#标题
+Intel SPR处理器Erratum 141导致KVM虚拟机异常挂起
+
+#内核版本
+6.7.0-rc1
+
+#问题现象
+在 Intel Sapphire Rapids 平台上启动多个 Windows 虚拟机（vCPU 总数超过 pCPU）并运行负载时，部分虚拟机发生挂起。控制台输出 "KVM internal error. Suberror: 3" 错误日志，KVM 因检测到内部状态不一致（VM-Exit 原因为 WRMSR，但 IDT Vectoring Information 显示正在传递中断）而退出。
+
+#问题根因
+该问题由 Intel Sapphire Rapids 处理器的 Erratum SPR141 引起。根据勘误说明，MOV to CR8 指令后的 VM Exit 可能错误地设置 VMCS 中 IDT Vectoring Information Field 的 Valid 位。这导致 KVM 在处理本应仅发生在指令边界的 VM-Exit（如 WRMSR）时，误判为正在处理中断事件，从而触发内部错误检查失败。
+
+#解决方案
+1. 硬件修复：更新 CPU Microcode 以修复 SPR141 Erratum。
+2. 软件规避：
+   - 移除 QEMU 启动参数中的 `hv-vapic` 选项（若启用了 APICv）。
+   - 应用内核补丁：在 VM-Exit 处理流程中，针对不可能发生在中断传递期间的 Exit Reason（如 WRMSR、CPUID 等），强制清除 IDT Vectoring Info 的 Valid 位，忽略硬件错误报告。该补丁需针对 SPR、EMR 及 RaptorLake 平台启用。

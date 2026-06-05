@@ -1,0 +1,17 @@
+#标题
+ath5k驱动中断处理变更引发中断风暴导致系统卡死
+
+#内核版本
+3.11.0-*
+
+#问题现象
+- 无线网络连接建立后，系统立即变得极度迟钝直至完全卡死，需强制断电重启。
+- 内核日志疯狂打印 "ath5k: phy0: too many interrupts, giving up for now"，表明发生了中断风暴。
+- 调试信息显示 ISR 寄存器值为 0x00000400，IMR 寄存器值为 0x80081035。
+
+#问题根因
+问题由 commit 7ff7c82ee4339af277cface9071f81c5c10a9283 ("ath5k: Switch from read-and-clear to write-to-clear method when handling PISR/SISR registers") 引入。
+该提交修改了中断状态寄存器的清除方式。在函数 `ath5k_hw_get_isr` 中，代码 `pisr_clear = pisr & ~AR5K_ISR_BITS_FROM_SISRS;` 错误地过滤了需要清除的中断位。当 ISR 中的中断位（如 0x400）在 IMR 中被屏蔽时，该中断在掩码更改前已触发，由于清除逻辑未正确写入 PISR 寄存器以清除该状态，导致中断持续触发，引发中断风暴。
+
+#解决方案
+修改 `drivers/net/wireless/ath/ath5k/dma.c` 文件中的 `ath5k_hw_get_isr` 函数，将 `pisr_clear = pisr & ~AR5K_ISR_BITS_FROM_SISRS;` 修改为 `pisr_clear = pisr;`，确保正确清除中断状态。该修复经用户测试验证有效。

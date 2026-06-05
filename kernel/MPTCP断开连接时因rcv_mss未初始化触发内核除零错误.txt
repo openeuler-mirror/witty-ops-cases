@@ -1,0 +1,17 @@
+#标题
+MPTCP断开连接时因rcv_mss未初始化触发内核除零错误
+
+#内核版本
+6.18.0-rc7
+
+#问题现象
+- 系统调用 shutdown 时触发内核 Oops，UBSAN 捕获到除法溢出错误
+- 日志显示 "UBSAN: division-overflow in net/ipv4/tcp_output.c:3333:13 division by zero"
+- 触发 "Oops: divide error: 0000 [#1]"
+- Call Trace: __tcp_select_window -> tcp_send_active_reset -> mptcp_do_fastclose -> mptcp_disconnect -> inet_shutdown
+
+#问题根因
+在 MPTCP 子系统的 `mptcp_do_fastclose` 函数中，调用 `tcp_send_active_reset()` 之前未初始化 `rcv_mss` 字段。当 TCP 协议栈执行 `__tcp_select_window` 计算窗口大小时，使用了未初始化的 `rcv_mss`（值为 0）作为除数，导致除零异常。
+
+#解决方案
+该问题已在 commit f07f4ea53e22 ("mptcp: Initialise rcv_mss before calling tcp_send_active_reset() in mptcp_do_fastclose().") 中修复，确保在发送 reset 前正确初始化相关参数。

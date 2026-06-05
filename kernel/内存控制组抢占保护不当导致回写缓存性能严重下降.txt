@@ -1,0 +1,17 @@
+#标题
+内存控制组抢占保护不当导致回写缓存性能严重下降
+
+#内核版本
+4.14.214
+
+#问题现象
+- 系统运行数天后出现大规模回写缓存性能严重下降
+- /proc/dmstat 中 nr_writeback 持续缓慢增长
+- balance_dirty_pages() 函数对所有写操作进行限流
+- 在多 CPU 且并发写入的场景下故障更为频繁
+
+#问题根因
+特定补丁在 memcontrol.h 中使用 preempt_disable() 和 preempt_enable() 来保护变量操作，但这不足以提供完整的并发保护。应当像 4.19 内核那样使用 local_irq_save() 和 local_irq_restore() 来防止中断干扰，否则会导致变量操作异常，进而引发 writeback 计数错误和性能下降。
+
+#解决方案
+将 memcontrol.h 中所有的 preempt_disable() 和 preempt_enable() 调用替换为 local_irq_save() 和 local_irq_restore()，可恢复回写缓存的正常行为。

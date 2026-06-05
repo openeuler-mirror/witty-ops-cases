@@ -1,0 +1,19 @@
+#标题
+宿主机高IO负载导致KVM客户机CPU软锁死
+
+#内核版本
+3.x, 4.x, 5.x, 6.x
+
+#问题现象
+- 宿主机进行备份、恢复或大文件读写等高 IO 操作时，KVM 客户机出现严重卡顿。
+- 客户机内核日志报错："BUG: soft lockup - CPU#X stuck for XXs!"、"rcu_sched detected stalls"、"task blocked for more than 120 seconds"。
+- 网络服务出现巨大延迟或连接中断（如 ping 超时数秒、RDP 断开）。
+- 问题影响多种存储类型（LVM/ext4, ZFS, HDD, SSD），在 Proxmox 等虚拟化环境中尤为明显。
+
+#问题根因
+QEMU 默认配置下，I/O 请求由 QEMU 主线程处理，该线程持有 `qemu_global_mutex`。当使用 `aio=native` 模式时，底层系统调用 `io_submit(2)` 在处理元数据 I/O 或页缓存回写等操作时可能发生阻塞。由于主线程被阻塞，`qemu_global_mutex` 长时间无法释放，导致 vCPU 线程无法被及时调度执行，从而在客户机内部引发 CPU soft lockup 和 RCU stall。
+
+#解决方案
+- 推荐方案：修改 QEMU 虚拟机配置，启用独立的 I/O 线程并设置 `aio=threads`。例如配置参数 `-object iothread,id=iothread0 -device virtio-scsi-pci,iothread=iothread0 ... -drive ...,aio=threads`。此方案将 I/O 处理移至不持有 `qemu_global_mutex` 的工作线程，避免阻塞 vCPU 线程。
+- 缓解措施：将宿主机内核参数 `vm.dirty_ratio` 和 `vm.dirty_background_ratio` 设置为较低值（如 2 和 1）。
+- 注意事项：`aio=io_uring` 理论上支持真正的异步 I/O，但在部分内核版本中仍存在稳定性问题，需视具体情况测试使用。

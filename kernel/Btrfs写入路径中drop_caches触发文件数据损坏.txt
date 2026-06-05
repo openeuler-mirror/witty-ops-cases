@@ -1,0 +1,23 @@
+#标题
+Btrfs写入路径中drop_caches触发文件数据损坏
+
+#内核版本
+4.14.33 (报告版本)，5.4.3 (回归复现版本)
+
+#问题现象
+- 执行 `echo 3 > /proc/sys/vm/drop_caches` 后触发文件数据损坏。
+- systemd journal 校验失败，`journalctl --verify` 报错。
+- rtorrent 下载文件哈希校验失败。
+- 损坏特征表现为文件中出现约 100-3000 字节的零字节片段，结束偏移量通常 4K 对齐。
+- 在 5.4.3 内核上，执行 `drop_caches` 配合 `compact_memory` 可复现该问题。
+
+#问题根因
+Btrfs 在文件写入路径处理 stable pages 时存在竞态条件缺陷。具体流程为：
+1. `write` 系统调用触发 `btrfs prefaults the userland page`。
+2. 调用 `lock_and_cleanup_extent_if_need()` 等待回写并执行 `clear_page_dirty_for_io()`，此时页面脏位被清除。
+3. 执行 `iov_iter_copy_from_user_atomic()` 失败（例如页面不在 RAM 中）。
+4. 内核释放锁并准备重试，但此时页面已处于非脏状态且丢失了脏数据。
+5. 若此时 `drop_caches` 清除该页面，数据写入将丢失，重试时读取到陈旧数据或零。
+
+#解决方案
+开发者已定位根因并计划提交修复补丁。根据 Bug 状态历史，问题曾被视为修复，但在 5.4.3 版本上被用户确认回归，目前 Bug 状态为 REOPENED，暂无明确的最终修复补丁信息。

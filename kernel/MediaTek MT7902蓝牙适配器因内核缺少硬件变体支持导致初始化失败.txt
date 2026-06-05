@@ -1,0 +1,23 @@
+#标题
+MediaTek MT7902蓝牙适配器因内核缺少硬件变体支持导致初始化失败
+
+#内核版本
+6.18.5-200.fc43.x86_64
+
+#问题现象
+- MediaTek MT7902 蓝牙适配器（USB ID 13d3:3596）无法初始化，蓝牙功能完全不可用
+- 内核日志报错："Direct firmware load for mediatek/mt7902/BT_RAM_CODE_MT7902_1_1_hdr.bin failed with error -2"
+- 尝试加载固件后出现 HCI_Reset 超时："Bluetooth: hci0: Opcode 0x0c03 failed: -110"
+- WiFi 部分功能正常（通过 mt7925 驱动），但蓝牙控制器不可用
+
+#问题根因
+btmtk 驱动从芯片读取到硬件变体 0x7902，但驱动代码中缺少对该变体的支持：
+1. btusb.c 未包含 USB ID 13d3:3596 的设备匹配
+2. btmtk.c 的 switch 语句中缺少 case 0x7902 分支处理
+3. linux-firmware 仓库中缺少 MT7902 蓝牙固件文件（BT_RAM_CODE_MT7902_1_1_hdr.bin）
+
+#解决方案
+需进行以下内核修改：
+1. 在 drivers/bluetooth/btusb.c 中添加 USB 设备 ID：{ USB_DEVICE(0x13d3, 0x3596), .driver_info = BTUSB_MEDIATEK | BTUSB_WIDEBAND_SPEECH }
+2. 在 drivers/bluetooth/btmtk.c 中添加硬件变体支持：case 0x7902（与现有 0x7922、0x7925、0x7961 并列）
+3. 在 linux-firmware 中添加 MT7902 蓝牙固件文件

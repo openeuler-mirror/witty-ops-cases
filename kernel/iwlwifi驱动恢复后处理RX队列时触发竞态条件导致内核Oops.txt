@@ -1,0 +1,17 @@
+#标题
+iwlwifi驱动恢复后处理RX队列时触发竞态条件导致内核Oops
+
+#内核版本
+7.0.0-rc1, 7.0.0-rc2
+
+#问题现象
+- 系统从挂起状态恢复后不久随机发生内核崩溃。
+- 日志中出现 "Oops: general protection fault" 或 "BUG: kernel NULL pointer dereference"。
+- KASAN 报告可能存在野内存访问。
+- Call Trace 涉及 `iwl_pcie_rx_handle`、`dma_unmap_phys`、`__mod_timer` 或 `iwl_trans_pcie_gen2_stop_device`、`kfree` 等函数。
+
+#问题根因
+推测为 RX 分配器工作队列（`iwl_pcie_rx_allocator_work` / `iwl_pcie_rx_alloc_page`）与恢复序列（`iwl_pcie_rx_handle` / `iwl_pcie_rxmq_restock`）之间存在竞态条件。设备上电并启用中断时，RX 队列可能尚未完全重新初始化或内存管理结构未就绪，导致驱动尝试重用 RBD（接收缓冲区描述符）时访问了无效或已释放的 `struct page` 指针。
+
+#解决方案
+暂无官方修复。该问题复现困难，目前仍处于调查阶段。

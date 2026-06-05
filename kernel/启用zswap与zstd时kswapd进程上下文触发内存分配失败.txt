@@ -1,0 +1,16 @@
+#标题
+启用zswap与zstd时kswapd进程上下文触发内存分配失败
+
+#内核版本
+4.19.60
+
+#问题现象
+- 内核日志报错：`kswapd0: page allocation failure: order:0, mode:0x480020(GFP_ATOMIC)`
+- 网络接口报错：`meson8b-dwmac c9410000.ethernet: packet dropped`
+- 调用栈显示 `kswapd` 进程在执行 `zswap_frontswap_store` -> `zstd_compress` 时，嵌套发生了网络中断，中断处理函数 `stmmac_napi_poll` 尝试分配内存失败。
+
+#问题根因
+系统配置了 zswap 并使用 zstd 压缩算法。在内存回收路径（kswapd）中，`zstd` 压缩操作期间触发了网络硬件中断。网络驱动在中断上下文中尝试使用 `GFP_ATOMIC` 标志分配内存（`__netdev_alloc_skb`），此时由于内存碎片化或内存不足导致分配失败，进而触发 `warn_alloc` 告警并导致丢包。
+
+#解决方案
+暂无

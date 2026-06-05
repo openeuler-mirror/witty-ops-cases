@@ -1,0 +1,22 @@
+#标题
+未卸载直接拔出USB设备时sysfs目录重复删除触发WARNING
+
+#内核版本
+3.13.0-rc3 g3f02ff5c
+
+#问题现象
+- 在未执行卸载操作的情况下直接拔出USB驱动器，内核日志中触发WARNING。
+- 日志显示：`WARNING: CPU: 1 PID: 8051 at fs/sysfs/group.c:214 device_del+0x39/0x185()`
+- 日志提示：`sysfs group ffffffff816608e0 not found for kobject 'target6:0:0'`
+- 该问题在内核版本 3.12 中未出现，属于回归问题。
+
+#问题根因
+由提交 `bcdde7e221a8750f9b62b6d0bd31b72ea4ad9309` (`sysfs: make __sysfs_remove_dir() recursive`) 引入。该提交使 `__sysfs_remove_dir()` 变为递归删除。
+触发流程如下：
+1. 物理弹出USB设备时，sysfs 目录（例如 `/sys/devices/pci0000:00/.../1-2`）被递归删除。
+2. 用户随后执行 `umount` 操作。
+3. `scsi_mod.ko` 释放设备时，调用 `dpm_sysfs_remove` -> `sysfs_remove_group` 尝试移除 sysfs "power" 目录。
+4. 此时相关目录已在步骤1中被删除，导致 `sysfs group not found` 并触发 WARNING。
+
+#解决方案
+开发者确认为已知问题，将在 SCSI 子系统树中修复。

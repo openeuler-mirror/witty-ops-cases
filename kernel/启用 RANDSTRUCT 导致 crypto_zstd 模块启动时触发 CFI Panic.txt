@@ -1,0 +1,18 @@
+#标题
+启用 RANDSTRUCT 导致 crypto/zstd 模块启动时触发 CFI Panic
+
+#内核版本
+6.16
+
+#问题现象
+- 内核在启动阶段发生 panic，无法正常进入系统
+- 故障堆栈指向 crypto/zstd.c
+- 现象表现为 CFI（Control Flow Integrity）校验失败或空指针解引用
+- 使用 Clang + ThinLTO 编译，且开启 CONFIG_RANDSTRUCT_FULL 时触发
+
+#问题根因
+引入 commit 42d9f6c774790d290c175e8775ce9f1366438098 后，struct scomp_alg 中使用了联合体（union）。当开启 CONFIG_RANDSTRUCT_FULL 时，结构体随机化布局导致联合体成员 streams 与内部函数指针内存重叠错位。在 crypto_scomp_init_tfm 调用 crypto_acomp_alloc_streams 时，CFI 机制检测到函数指针类型不匹配（或访问到无效地址），从而触发 panic。该问题具有概率性，取决于 randstruct.seed 生成的具体布局。
+
+#解决方案
+暂无上游合并修复。
+临时规避方法：关闭 CONFIG_RANDSTRUCT_FULL 配置选项，或更换 scripts/basic/randstruct.seed 为已知可用的种子重新编译。

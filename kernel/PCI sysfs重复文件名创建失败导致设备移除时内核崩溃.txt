@@ -1,0 +1,16 @@
+#标题
+PCI sysfs重复文件名创建失败导致设备移除时内核崩溃
+
+#内核版本
+5.14（评论中提及 5.16, 5.17.1, 6.2.0-rc8 仍受影响）
+
+#问题现象
+- 内核日志报错：sysfs: cannot create duplicate filename '/devices/.../resourceX'
+- 系统崩溃：Unable to handle kernel paging request at virtual address 6f736572
+- 在设备移除过程中触发 NULL pointer dereference，导致内核 panic
+
+#问题根因
+当 `sysfs_add_bin_file_mode_ns()` 因文件名重复返回 `-EEXIST` 时，`pci_create_resource_files()` 的错误处理路径调用 `pci_remove_resource_files()` 释放了 `pdev->res_attr[i]` 内存。由于 `pci_bus_add_device()` 忽略了 `pci_create_sysfs_dev_files()` 的错误返回值，设备仍被添加到系统中。后续设备移除流程（如 `hv_eject_device_work`）再次调用 `pci_remove_resource_files()` 时，试图访问已释放的 `pdev->res_attr[i]` 指针，导致 `kernfs_remove_by_name_ns()` 内部发生 NULL 指针解引用。
+
+#解决方案
+暂无官方合并修复。社区已提出修复补丁（如 Alexander Stein 提出的 v2 版本），旨在修正 `pci_create_attr` 中的错误处理逻辑，防止在 sysfs 文件创建失败时错误释放资源。补丁参考链接：https://lore.kernel.org/lkml/6131694.LvFx2qVVIh@steina-w/T/#m66224780b7c2d96dbb06708ab6fd54b188041d80

@@ -1,0 +1,16 @@
+#标题
+VT selection模块竞争条件导致n_tty_receive_buf_common发生Use-After-Free
+
+#内核版本
+5.4.7
+
+#问题现象
+- 内核触发 KASAN use-after-free 报警：`BUG: KASAN: use-after-free in n_tty_receive_buf_common+0x2481/0x2940 drivers/tty/n_tty.c:1741`
+- 故障类型为 UAF Read，读取大小为 1 byte。
+- 调用栈显示故障路径为：`paste_selection` -> `tty_ldisc_receive_buf` -> `n_tty_receive_buf_common`。
+
+#问题根因
+`set_selection_kernel` 与 `paste_selection` 函数之间存在竞争条件。`set_selection_kernel` 受 `console_lock` 保护，但 `paste_selection` 访问 `sel_buffer` 时未持有该锁。因此，当 `paste_selection` 正在读取 `sel_buffer` 时，并发的 `set_selection` 调用可能释放该缓冲区，导致 Use-After-Free。
+
+#解决方案
+已通过 commit 07e6124a1a46b4b5a9b3cacc0c306b50da87abf5 ("vt: selection, close sel_buffer race") 修复该竞争条件。

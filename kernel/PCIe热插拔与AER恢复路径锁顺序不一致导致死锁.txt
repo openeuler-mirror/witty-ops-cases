@@ -1,0 +1,19 @@
+#标题
+PCIe热插拔与AER恢复路径锁顺序不一致导致死锁
+
+#内核版本
+v5.0
+
+#问题现象
+- 移除多个 NVMe 设备时，若其中至少一个设备触发了 AER 恢复流程，系统会发生死锁。
+- 系统日志显示 `hung_task_timeout_secs` 告警，相关进程处于 D 状态。
+- 堆栈跟踪显示 `aer_recover_work_func` 线程阻塞在 `pciehp_reset_slot` -> `call_rwsem_down_write_failed`；`irq/xx-pciehp` 线程阻塞在 `pciehp_unconfigure_device` -> `device_release_driver_internal`。
+
+#问题根因
+AER 恢复路径与 PCIe 热插拔处理路径对锁的获取顺序不一致，导致 ABBA 死锁：
+1. AER 恢复路径：先获取 `device_lock(&dev->dev)`，随后尝试获取 `ctrl->reset_lock` (down_read)。
+2. 热插拔处理路径：先获取 `ctrl->reset_lock` (down_read)，随后尝试获取 `device_lock(&dev->dev)`。
+当两个路径并发执行时，形成循环等待。
+
+#解决方案
+暂无上游正式修复。测试验证可通过修改 `drivers/pci/hotplug/pciehp_ctrl.c` 规避：在调用 `pciehp_configure_device` 和 `pciehp_unconfigure_device` 前后分别释放和重新获取 `ctrl->reset_lock`，以打破锁依赖。

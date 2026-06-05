@@ -1,0 +1,17 @@
+#标题
+模块内存 kmemleak 注解错误导致误报内存泄漏
+
+#内核版本
+6.3.0-rc1 (commit ac3b43283923)
+
+#问题现象
+- 系统启动过程中 kmemleak 报告 19 处内存泄漏。
+- 泄漏对象主要分为两类：模块参数字符串（`mod->args`）和模块名称字符串（`mod->name`）。
+- 调用栈显示泄漏分别发生在 `load_module` -> `strndup_user` 和 `mod_sysfs_setup` -> `kobject_init_and_add` -> `kstrdup`。
+- Hexdump 显示泄漏内存包含 `crc32_pclmul`、`video` 等模块名称。
+
+#问题根因
+提交 `ac3b43283923` ("module: replace module_layout with module_memory") 重构了模块内存分配逻辑，但在 `move_module` 函数中对模块内存块统一使用了 `kmemleak_ignore(ptr)` 注解。该注解会将内存块标记为“黑色”（忽略扫描），导致 kmemleak 无法扫描 `struct module` 结构体内部的指针。由于指向 `mod->args` 和 `mod->name` 的指针存储在该结构体内部，kmemleak 无法发现这些引用，从而将上述内存误判为泄漏。
+
+#解决方案
+修改 `kernel/module/main.c` 中的 `move_module` 函数，将 `kmemleak_ignore(ptr)` 替换为 `kmemleak_not_leak(ptr)`。该注解将内存块标记为“灰色”（非泄漏但可扫描），允许 kmemleak 扫描模块结构体内部，从而正确识别子对象的引用关系，消除误报。

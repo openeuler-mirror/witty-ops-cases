@@ -1,0 +1,21 @@
+#标题
+ext4延迟分配写入部分失败导致i_disksize大于i_size触发WARNING
+
+#内核版本
+6.3.0-rc2
+
+#问题现象
+系统在进行文件写入操作时触发内核 WARNING，日志显示：
+- WARNING: CPU: 2 PID: 2609 at fs/ext4/file.c:319 ext4_file_write_iter+0xbc7/0xd10
+- Call Trace 包含：vfs_write, ksys_write, ext4_file_write_iter
+
+#问题根因
+在 ext4 延迟分配写入路径中，当发生部分写入失败时，处理流程存在逻辑缺陷：
+1. `generic_perform_write` 调用 `iov_iter_copy_from_user_atomic` 返回 `copied < len`。
+2. `ext4_da_write_end` 调用 `ext4_update_i_disksize` 更新了 `i_disksize`。
+3. 随后 `generic_write_end` 调用 `block_write_end`，因 PageUptodate 检查失败返回 `copied = 0`。
+4. 此时 `i_disksize` 已被更新，但 `i_size` 未更新，导致 `i_disksize` 超过 `i_size`。
+5. 后续执行 Direct I/O 写入时，在 `ext4_handle_inode_extension` 函数中检查到 `i_size_read(inode) < EXT4_I(inode)->i_disksize`，触发 WARN_ON_ONCE。
+
+#解决方案
+暂无（Bug 状态为 NEW，尚未修复）

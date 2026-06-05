@@ -1,0 +1,17 @@
+#标题
+网络连接重置后Bluetooth L2CAP模块释放后使用导致Kernel Panic
+
+#内核版本
+4.0.4-2
+
+#问题现象
+- 网络连接被 ISP 重置数秒后，系统触发 Kernel Panic。
+- 日志显示 "BUG: unable to handle kernel paging request at ffffffffffffffd8"。
+- 崩溃发生在指令 `kthread_data+0x10/0x20`。
+- 寄存器 `r13` 指向已释放的内存地址 `dead0000001000e8`（SLAB poison 值）。
+
+#问题根因
+问题发生在 Bluetooth 子系统的 L2CAP 模块中。调用链为 `l2cap_chan_del` -> `__clear_chan_timer` -> `l2cap_clear_timer` -> `cancel_delayed_work`。当 `cancel_delayed_work` 返回非零值时，代码路径继续执行 `l2cap_chan_put` -> `l2cap_chan_destroy` -> `kfree(chan)`，导致 `chan` 结构体被释放。随后代码试图通过寄存器 `r13` 访问已释放的 `chan` 对象（指令 `mov 0x18(%r13),%rax`），引发释放后使用错误。
+
+#解决方案
+暂无

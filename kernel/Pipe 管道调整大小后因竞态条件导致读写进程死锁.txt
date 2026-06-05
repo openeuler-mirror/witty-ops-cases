@@ -1,0 +1,17 @@
+#标题
+Pipe 管道调整大小后因竞态条件导致读写进程死锁
+
+#内核版本
+5.8-latest
+
+#问题现象
+进程在管道操作中卡住，发生死锁。具体表现为：
+- 子进程卡在 pipe_read 调用栈
+- 父进程卡在 pipe_write 调用栈
+该问题仅在管道进行 resize 操作（如调用 fcntl F_SETPIPE_SZ）时触发，移除 resize 操作后死锁消失。
+
+#问题根因
+该问题由 commit c73be61cede5882f9605a852414db559c0ebedfd ("pipe: Add general notification queue support") 引入。根因是管道调整大小逻辑中存在竞态条件：在发出 pipe_write 唤醒信号之前，未正确设置 pipe 的 max_usage 值。如果管道在调整大小前已满，这种错误的唤醒顺序会导致死锁。
+
+#解决方案
+修复补丁 "[PATCH] fs/pipe: wakeup wr_wait after setting max_usage" 已合入 vfs.misc 分支，预计在 Linux v6.8 合并窗口期间合并到主线。该补丁通过调整代码顺序，确保在设置 max_usage 之后再唤醒 wr_wait，从而修复竞态条件。

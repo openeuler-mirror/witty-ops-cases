@@ -1,0 +1,14 @@
+#标题
+TLS模块sendpage路径因竞态条件导致record双重释放引发内核崩溃
+
+#内核版本
+v5.3-rc4
+
+#问题现象
+在使用 Nitrox5 加密卡运行 SSL 记录加密性能测试（uperf 工具，4 线程，sendfile）时，内核数秒后崩溃。日志显示 "list_del corruption" 错误，检测到 `LIST_POISON2` 标记，堆栈调用链为 `tls_tx_records` -> `tls_sw_sendpage`。
+
+#问题根因
+在 `tls_sw_sendpage` 流程中，当发生 skb 内存短缺时，线程调用 `sk_stream_wait_memory` 等待内存。该函数内部通过 `sk_wait_event` 释放 socket 锁（`release_sock`）并随后重新获取。在此锁释放窗口期内，工作队列线程（`work_handler`）被调度进入临界区，导致入队线程与工作队列线程并发操作 TLS record 链表，引发 record 结构体的双重释放。
+
+#解决方案
+暂无（Bug 状态为 NEW，尚未合并修复补丁）。

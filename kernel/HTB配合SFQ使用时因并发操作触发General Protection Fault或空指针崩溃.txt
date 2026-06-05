@@ -1,0 +1,16 @@
+#标题
+HTB配合SFQ使用时因并发操作触发General Protection Fault或空指针崩溃
+
+#内核版本
+Linux 3.10.41-1.el6.elrepo.x86_64, Linux 3.14.13 vanilla
+
+#问题现象
+- 系统日志报错 "general protection fault: 0000 [#1] SMP" 或 "BUG: unable to handle kernel NULL pointer dereference at 0000000000000002"。
+- 故障发生在 HTB 配合 SFQ qdisc 使用的场景下，非高负载环境。
+- 在频繁执行 `tc class change` 命令调整 HTB 速率限制时更容易触发崩溃。
+
+#问题根因
+SFQ qdisc 的 `perturb` 参数启用了定时器进行 rehash 操作。当调用 `sfq_rehash()` 时，根 qdisc 被正确持有，但 `sfq_reset()` 可能通过 `qdisc_destroy()` 被调用而未持有 qdisc 锁。这种并发执行路径导致了竞争条件，进而引发 GPF 或空指针解引用。
+
+#解决方案
+暂无正式修复。开发者曾建议移除 SFQ 的 `perturb` 选项以禁用 rehash 定时器，但测试表明移除该选项后，若频繁执行 `tc class change` 修改配置，仍可能触发崩溃。

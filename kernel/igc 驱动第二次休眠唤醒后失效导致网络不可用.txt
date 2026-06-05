@@ -1,0 +1,19 @@
+#标题
+igc 驱动第二次休眠唤醒后失效导致网络不可用
+
+#内核版本
+6.10
+
+#问题现象
+- 系统第二次从待机状态恢复后，Intel I225-V/I226-V 网卡失去连接，网络不可用
+- 网卡 LED 指示灯熄灭，`ethtool -i <interface>` 报错 "Cannot get driver information: No such device"
+- 该问题在内核 6.10 版本引入，具有可复现性
+
+#问题根因
+Bisected 定位到提交 `6f31d6b643a32cc126cf86093fca1ea575948bf0` 引入的回归。根据调试日志分析，在第二次挂起流程中 `netif_running` 返回 false，导致 `__igc_close` 未被调用，进而导致后续恢复流程中驱动状态异常。开发者怀疑 `igc_resume` 函数中存在竞态条件或时序问题，用户测试发现在 `igc_resume` 中添加延迟可解决问题。此外，该问题可能与 NetworkManager 的交互有关，部分环境切换至 systemd-networkd 后未复现。
+
+#解决方案
+暂无官方合并修复补丁。
+临时规避方案：
+1. 执行 `rmmod igc; modprobe igc` 重载驱动模块可恢复网络。
+2. 有用户反馈在 `igc_resume` 函数中添加短暂延迟可规避此问题。

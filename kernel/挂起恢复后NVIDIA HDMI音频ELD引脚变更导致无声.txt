@@ -1,0 +1,18 @@
+#标题
+挂起恢复后NVIDIA HDMI音频ELD引脚变更导致无声
+
+#内核版本
+5.2
+
+#问题现象
+- 系统挂起前 HDMI 音频正常工作，ELD 数据位于 Pin#5。
+- 从挂起模式恢复后，HDMI 音频失效，PulseAudio 显示为 "Dummy Output"。
+- 内核日志显示 `snd_hda_intel` 出现 `azx_get_response timeout`，驱动依次切换至 polling mode 和 single_cmd mode。
+- 恢复后 ELD 数据节点异常变更为 Pin#4，并伴随 `HDMI: invalid ELD buf size -1` 错误。
+
+#问题根因
+HD-audio 驱动在恢复过程中因通信超时（`azx_get_response timeout`）而回退至 `single_cmd` 模式。超时的根本原因是缺少设备恢复依赖：HD-audio 驱动在 NVIDIA 闭源驱动恢复之前或同时开始恢复。NVIDIA 驱动在挂起/恢复流程中会切换 VT（Virtual Terminal），导致音频硬件状态在内核音频驱动恢复阶段尚未就绪。相比于 Intel/AMD 通过 audio component 机制处理此类依赖，NVIDIA 闭源驱动缺乏相应支持。
+
+#解决方案
+暂无上游正式修复。
+变通方案：向 `snd-hda-intel` 模块传递参数 `single_cmd=0`，禁止驱动在通信错误时切换到 single_cmd 模式，待 NVIDIA 驱动完全恢复后音频功能可自动恢复正常。

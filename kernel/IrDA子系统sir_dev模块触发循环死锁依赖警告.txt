@@ -1,0 +1,20 @@
+#标题
+IrDA子系统sir_dev模块触发循环死锁依赖警告
+
+#内核版本
+3.3-rc2+
+
+#问题现象
+- 系统启动时内核日志报告 "INFO: possible circular locking dependency detected"。
+- 涉及锁 `port_lock_key` 与 `dev->tx_lock` 的循环依赖。
+- 报错触发点位于 `sirdev_write_complete` 函数，调用栈显示 `serial8250_handle_irq` -> `irtty_write_wakeup` 路径。
+- 用户反馈系统虽能继续启动，但怀疑后续发生的系统假死（softlockup）与此问题相关。
+
+#问题根因
+IrDA驱动（sir_dev/irtty_sir）与串口驱动（serial8250）之间存在锁获取顺序冲突（AB-BA死锁）：
+1. 路径一：`sirdev_hard_xmit` 流程中，先持有 `dev->tx_lock`，随后调用 `uart_write_room` 尝试获取 `port_lock_key`。
+2. 路径二：`serial8250_handle_irq` 中断处理流程中，先持有 `port_lock_key`，随后调用 `sirdev_write_complete` 尝试获取 `dev->tx_lock`。
+这种锁顺序反转被内核 lockdep 机制检测并报警。
+
+#解决方案
+暂无（Bug状态为ASSIGNED，报告中未提及已合并的修复补丁）。

@@ -1,0 +1,19 @@
+#标题
+AMD Strix Halo平台加载ISP固件后导致系统无法进入s2idle睡眠
+
+#内核版本
+6.17 及更高版本
+
+#问题现象
+- 系统无法正常进入 s2idle 睡眠状态，使用 amd-s2idle 工具测试显示 Hardware Sleep 为 0%。
+- 内核日志报错："amdgpu 0000:c3:00.0: SMU uninitialized but power gate requested for 16!"。
+- 触发 WARNING：`WARNING: CPU: 6 PID: 4234 at drivers/gpu/drm/amd/amdgpu/../pm/swsmu/amdgpu_smu.c:398 smu_dpm_set_power_gate+0x1eb/0x210 [amdgpu]`。
+- Call Trace 指向 `amdgpu_dpm_set_powergating_by_smu` -> `_genpd_power_off` -> `suspend_enter`。
+
+#问题根因
+回归由 commit `857ccfc19f9be1269716f3d681650c1bd149a656` 引入。该提交使得 `isp_4_1_1.bin` 固件得以加载，激活了 ISP（摄像头）设备。若内核未启用 `CONFIG_AMD_ISP4` 配置项，ISP 设备在挂起过程中无法被正确关闭电源，导致 amdgpu 驱动在 SMU 未初始化状态下尝试执行 power gate 操作失败，进而阻塞系统睡眠流程。
+
+#解决方案
+- 启用内核配置 `CONFIG_AMD_ISP4` 并应用补丁系列 `https://lore.kernel.org/lkml/20251024090643.271883-1-Bin.Du@amd.com/`。
+- 部分场景可能需要额外补丁：`https://github.com/torvalds/linux/commit/3925683515e93844be204381d2d5a1df5de34f31`。
+- 临时规避方法：删除 `isp_4_1_1.bin.xz` 固件文件并重建 initramfs，或在 BIOS 中禁用摄像头。

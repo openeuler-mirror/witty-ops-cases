@@ -1,0 +1,18 @@
+#标题
+AMD SFH驱动延迟初始化引发内存错误与页错误
+
+#内核版本
+6.9
+
+#问题现象
+- 系统启动后数分钟内出现内核崩溃或 Oops，日志显示 "BUG: unable to handle page fault for address: 00000002ffffffe3"。
+- 调用栈显示错误发生在 `unlink_anon_vmas` 函数中。
+- dmesg 中出现 "bad page map errors" 以及 "pcie_mp2_amd ... amd_sfh_hid_client_init failed err -95" 错误信息。
+- 可能伴随文件系统错误导致系统变为只读模式。
+
+#问题根因
+该问题由 commit `2105e8e00da4673266e217653292fef6acefde03` 引入。该提交为了改善系统启动时间，将 AMD SFH 驱动的初始化代码进行了拆分和延迟处理。然而，当 SFH 传感器未启用或初始化失败时，修改后的代码未能正确执行内存清理操作，导致后续进程退出时访问了无效的内存地址，从而触发 Page Fault。
+
+#解决方案
+临时规避方案：在 GRUB 启动参数中添加 `module_blacklist=amd_sfh` 禁用该驱动。
+正式修复方案：应用开发者提供的修复补丁（参考 Bugzilla 附件 306974 或 LKML 邮件列表），修正延迟初始化逻辑中的内存管理问题。

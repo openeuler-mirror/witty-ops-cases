@@ -1,0 +1,20 @@
+#标题
+Braswell平台声卡驱动初始化竞态导致空指针解引用及设备无法识别
+
+#内核版本
+4.7 (测试涉及 4.8-rc1, 4.9, 4.16, 5.4)
+
+#问题现象
+- Acer Chromebook R11 (CYAN) 设备上声音功能不可用，Pulseaudio 启动失败，报错 "failed to detect any sound hardware"。
+- 内核日志报错：`cht-bsw-max98090 cht-bsw-max98090: snd_soc_register_card failed -517` 以及 `ASoC: i2c-104C227E:00 not registered`。
+- 在尝试应用修复补丁后，内核触发空指针解引用，日志显示 `CHT_MAX98090_HEADSET_INIT` 在 `CHT_CODEC_INIT` 之前调用，导致 `jack` 指针为 NULL。
+
+#问题根因
+问题由两方面原因导致：
+1. **BIOS/ACPI 缺失**：SeaBIOS 未像 ChromeOS 的 depthcharge payload 那样进行硬件初始化，未创建 I2C 设备 `104C227E`，导致内核无法加载 TI ts3a227e codec 驱动。
+2. **内核驱动竞态条件**：在 `soc-core` 框架中，`aux_dev` 的初始化回调 (`cht_max98090_headset_init`) 在 codec DAI 初始化 (`cht_codec_init`) 之前被调用。由于 `cht_codec_init` 负责初始化 `snd_soc_jack` 结构体，而 `cht_max98090_headset_init` 试图访问该结构体，从而引发空指针解引用。
+
+#解决方案
+- **内核修复**：需要为 `ts3a227e` codec 添加 ACPI 匹配表支持，并修改初始化顺序（例如使用 `late_probe` 机制）以确保 aux codecs 在 DAIs 初始化完成后再进行初始化。
+- **临时规避**：用户可通过应用社区提供的内核补丁（添加 ACPI 支持及修复 I2S 配置）、部署 ChromiumOS 的 ALSA UCM 配置文件以及手动恢复 `asound.state` 来启用声音功能。
+- **后续状态**：在内核 5.4 版本配合正确的用户态 UCM 配置下，该问题已得到解决。

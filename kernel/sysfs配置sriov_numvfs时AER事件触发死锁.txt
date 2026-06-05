@@ -1,0 +1,19 @@
+#标题
+sysfs配置sriov_numvfs时AER事件触发死锁
+
+#内核版本
+5.1.0-rc1
+
+#问题现象
+- 系统在执行 SR-IOV 虚拟功能（VF）创建操作时发生死锁，进程处于 D 状态。
+- 内核日志报错 "task blocked for more than 120 seconds"。
+- 涉及进程：kworker/0:1 (AER 恢复工作队列) 和 flr.sh (用户态配置脚本)。
+
+#问题根因
+SR-IOV 配置流程与 AER 错误恢复流程之间存在 AB-BA 死锁：
+1. sriov_numvfs_store 流程：先持有 device_lock，随后在 pci_device_add 中尝试获取 pci_bus_sem 写锁。
+2. AER 恢复流程 (pcie_do_recovery)：先在 pci_walk_bus 中持有 pci_bus_sem 读锁，随后在 report_resume 中尝试获取 device_lock。
+两个路径锁请求顺序相反，导致互相等待。
+
+#解决方案
+暂无

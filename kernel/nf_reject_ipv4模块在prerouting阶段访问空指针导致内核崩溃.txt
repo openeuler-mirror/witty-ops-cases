@@ -1,0 +1,16 @@
+#标题
+nf_reject_ipv4模块在prerouting阶段访问空指针导致内核崩溃
+
+#内核版本
+4.1.0-rc1-g6c3c1eb
+
+#问题现象
+- 加载 nftables 防火墙规则（执行 `nft -f`）后系统无响应，键盘指示灯闪烁，触发内核 panic。
+- 内核日志报错："unable to handle kernel NULL pointer dereference at 000000000000009c"。
+- 崩溃点位于 `nf_send_reset+0x3a/0x140 [nf_reject_ipv4]`，调用栈显示由 `nft_reject_ipv4_eval` 调用进入。
+
+#问题根因
+在 `net/ipv4/netfilter/nf_reject_ipv4.c` 第 114 行，代码逻辑尝试访问 `skb_rtable(oldskb)->rt_flags` 以检查广播或多播标志。根因是在 prerouting 链上配置了 REJECT 动作（tcp-reset），此时数据包尚未完成路由决策，`skb_rtable(oldskb)` 返回 NULL，直接访问其成员导致空指针解引用。
+
+#解决方案
+已通过 commit 89e1f6d2b956649fbe0704d543a90b8e0cf872b0 修复。该补丁限制了 `nf_reject` 仅在具备路由信息的上下文中运行，禁止在不具备路由信息的 prerouting 阶段执行此类操作。

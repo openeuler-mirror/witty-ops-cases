@@ -1,0 +1,14 @@
+#标题
+PCI ASPM L1.2子状态配置错误导致iwlwifi网卡挂起恢复后失效
+
+#内核版本
+4.18rc1
+
+#问题现象
+Intel Wireless 7265 网卡在系统从挂起状态唤醒后无法工作，dmesg 日志显示 "Timeout waiting for hardware access (CSR_GP_CNTRL 0xffffffff)"；使用 lspci 工具查看时，网卡配置空间读取异常；该问题在 Dell Venue 11 Pro 7140 和 Latitude 7350 等机型上复现，属于回归问题。
+
+#问题根因
+问题由 commit 9ab105deb60f ("PCI/ASPM: Disable ASPM L1.2 Substate if we don't have LTR") 引入。该补丁在 OS 未通过 ACPI `_OSC` 获得 LTR 控制权时禁用了 ASPM L1.2 子状态，但未正确处理平台固件已启用 LTR 的情况。同时，内核在挂起/恢复流程中缺乏对 LTR Capability 中 Max Latency 值的保存与恢复支持，导致恢复后延迟值归零。ASPM L1.2 与 LTR 状态的不一致致使网卡在恢复后无法正常访问配置空间。
+
+#解决方案
+修复补丁已提交至 pci/aspm 分支并合入 Linux v5.1 版本，主要修复了 LTR 状态的保存恢复逻辑及 ASPM 配置处理。临时规避措施包括回退 commit 9ab105deb60f，或在支持 S3 的机型上通过 `echo deep > /sys/power/mem_sleep` 切换至传统挂起模式。

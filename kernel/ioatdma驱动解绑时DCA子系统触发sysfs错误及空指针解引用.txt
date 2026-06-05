@@ -1,0 +1,17 @@
+#标题
+ioatdma驱动解绑时DCA子系统触发sysfs错误及空指针解引用
+
+#内核版本
+5.7.9-100.fc31.x86_64
+
+#问题现象
+- 尝试将 ioatdma PCI 设备绑定到 uio_pci_generic 驱动时，内核日志报错：`sysfs group 'power' not found for kobject 'sequester'`
+- 触发 WARNING：`WARNING: CPU: 44 PID: 1124753 at fs/sysfs/group.c:279 sysfs_remove_group+0x74/0x80`
+- 触发内核空指针解引用：`BUG: kernel NULL pointer dereference, address: 0000000000000020`，位于 `klist_put+0x16/0x80`
+- 执行绑定操作的 bash 进程冻结并完全无响应
+
+#问题根因
+问题发生在 ioatdma 驱动移除流程中。调用链 `ioat_remove` -> `unregister_dca_provider` -> `dca_remove_requester` -> `device_destroy` -> `device_del` 执行时，内核尝试移除 kobject 'sequester' 的 sysfs 属性组失败，随后在 `device_del` 调用 `klist_put` 时访问了无效地址（偏移 0x20），导致空指针解引用。这表明 DCA 子系统在移除 requester 设备对象时，对象生命周期管理或初始化状态存在不一致。
+
+#解决方案
+暂无

@@ -1,0 +1,16 @@
+#标题
+KVM设置内存区域时高阶内存分配失败导致客户机重启后挂起
+
+#内核版本
+3.19.0
+
+#问题现象
+- QEMU-KVM客户机在执行重启命令后随机挂起，无法正常运行
+- 宿主机内核日志报告页面分配失败：`qemu-system-x86: page allocation failure: order:4, mode:0x40d0`
+- Call Trace 显示调用链为 `kvm_vm_ioctl` -> `kvm_set_memory_region` -> `__kvm_set_memory_region` -> `kmemdup` -> `kmalloc_order`
+
+#问题根因
+Commit 1d4e7e3c 增加了 `struct kvm_memslots` 结构体的大小，导致其所需的内存分配阶数从 order 2 上升至 order 4。由于高阶内存分配对物理内存连续性要求更高，在内存碎片化较严重时极易分配失败。`__kvm_set_memory_region` 在调用 `kmemdup` 复制内存槽位数据时尝试分配 order 4 的连续物理内存失败，进而导致客户机挂起。
+
+#解决方案
+该问题已在内核 v4.0 中通过 commit `744961341d472db6272ed9b42319a90f5a2aa7c4` 修复，修改了 `kvm_set_memory_region` 的内存分配策略以避免此类高阶内存分配失败。对于受影响的旧版本，可尝试回退 commit `1d4e7e3c0bca747d0fc54069a6ab8393349431c0` 作为临时规避措施。

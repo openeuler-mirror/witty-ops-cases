@@ -1,0 +1,16 @@
+#标题
+PCI Resizable BAR恢复计算错误导致系统挂起后无法唤醒
+
+#内核版本
+4.18
+
+#问题现象
+- Dell 7920 工作站在进入 S3 挂起状态后无法唤醒。
+- 内核日志显示 megaraid_sas 设备 (0000:17:00.0) 恢复失败，报错 "PM: Device 0000:17:00.0 failed to resume async: error -19"。
+- 日志中出现 "Waiting for FW to come to ready state"，表明设备固件无法进入就绪状态。
+
+#问题根因
+内核 PCI 子系统中的 `pci_restore_rebar_state` 函数存在计算逻辑错误（由 commit d3252ace0bc652a1a244455556b6a549f969bf99 引入）。对于 1MB 的 BAR 空间，代码中的计算公式 `size = order_base_2((resource_size(res) >> 20) | 1) - 1` 返回值为 -1，导致向 Resizable BAR 控制寄存器的 BAR size 字段（bits 8-12）写入了错误的值 0xff，进而导致设备恢复失败。
+
+#解决方案
+Broadcom 提交了修复补丁（参考：https://patchwork.kernel.org/patch/11045839/）。临时规避方案为回退引入该问题的 commit d3252ace0bc652a1a244455556b6a549f969bf99。

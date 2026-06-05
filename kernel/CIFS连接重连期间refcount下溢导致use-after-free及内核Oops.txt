@@ -1,0 +1,17 @@
+#标题
+CIFS连接重连期间refcount下溢导致use-after-free及内核Oops
+
+#内核版本
+6.12.9
+
+#问题现象
+- 在CIFS挂载点进行备份时，若网络连接（VPN）中断后恢复，内核触发 "refcount_t: underflow; use-after-free" 警告。
+- 随后系统发生 Oops (Page Fault)，导致进程卡在不可中断睡眠状态，必须重启系统。
+- 内核日志显示 CIFS 重连失败 (`reconnect tcon failed rc = -11`) 及发送数据错误 (`Error -14 sending data on socket`)。
+- Call Trace 指向 `cifs_call_async` -> `smb2_async_writev` -> `netfs_advance_write`。
+
+#问题根因
+在网络连接不稳定导致 CIFS 需要重连的场景下，`cifs_call_async` 函数处理异步请求时引用计数管理异常，发生 refcount 下溢。这导致了后续的 use-after-free 及内存访问错误。
+
+#解决方案
+暂无正式修复。开发者建议尝试 6.13-rc7 版本（包含重要的 netfs 修复）以验证问题是否已解决，或等待进一步调试补丁。

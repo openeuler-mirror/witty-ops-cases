@@ -1,0 +1,14 @@
+#标题
+OverlayFS缺少ATTR_KILL处理导致notify_change触发kernel BUG
+
+#内核版本
+4.4.16
+
+#问题现象
+在OverlayFS文件系统上安装包含setuid权限文件的Slackware软件包时，系统触发kernel BUG，导致进程崩溃。日志显示错误信息为“kernel BUG at fs/attr.c:238!”及“invalid opcode: 0000 [#1]”。Call Trace指向 `notify_change` 函数，调用链为 `ovl_setattr` -> `notify_change`。
+
+#问题根因
+内核版本4.4.16引入了提交 `c12dada5f28a` ("ovl: Copy up underlying inode's ->i_mode to overlay inode")，但未同步引入依赖提交 `b99c2d913810` ("ovl: handle ATTR_KILL*")。当对setuid文件执行chown操作时，`ATTR_KILL_SUID` 标志被置位，但由于缺少相应处理，`ovl_setattr` 传递给 `notify_change` 的参数中同时保留了 `ATTR_MODE` 标志。`notify_change` 函数检测到 `ATTR_MODE` 与 `ATTR_KILL_SUID/SGID` 同时存在，触发断言失败（BUG()）。
+
+#解决方案
+补充提交 `b99c2d913810e56682a538c9f2394d76fca808f8`，在 `ovl_setattr` 中增加判断：若 `attr->ia_valid` 包含 `ATTR_KILL_SUID` 或 `ATTR_KILL_SGID`，则清除 `ATTR_MODE` 标志。该修复已合入4.4.y稳定分支。

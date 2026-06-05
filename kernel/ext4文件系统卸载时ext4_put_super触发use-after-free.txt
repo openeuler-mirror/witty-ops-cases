@@ -1,0 +1,17 @@
+#标题
+ext4文件系统卸载时ext4_put_super触发use-after-free
+
+#内核版本
+5.0.21
+
+#问题现象
+- 挂载特制ext4镜像并执行特定程序后，执行umount卸载操作时触发KASAN告警。
+- 内核日志显示：EXT4-fs (loop0): Inode 16 (000000009852d438): orphan list check failed!
+- KASAN报告：BUG: KASAN: use-after-free in ext4_put_super+0xb1d/0xd80，显示在地址 ffff8880667e3bf4 处发生了释放后读取。
+- 调用栈指向 ext4_put_super -> generic_shutdown_super -> kill_block_super 等卸载相关流程。
+
+#问题根因
+在处理 i_nlink == 0 的文件删除操作时，导致ext4文件系统的orphan list（孤立列表）状态异常。在文件系统卸载过程中，`ext4_put_super` 函数访问了已被释放的内存，触发use-after-free错误。
+
+#解决方案
+开发者已提供修复补丁：ext4: work around deleting a file with i_nlink == 0 safely。

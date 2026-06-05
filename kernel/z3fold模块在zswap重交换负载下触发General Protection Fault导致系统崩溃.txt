@@ -1,0 +1,18 @@
+#标题
+z3fold模块在zswap重交换负载下触发General Protection Fault导致系统崩溃
+
+#内核版本
+5.2.8-200.fc30.x86_64（亦见于 5.3.0-rc6）
+
+#问题现象
+- 系统在进行大量内存交换操作（如编译 webkit）时触发 General Protection Fault (GPF)。
+- 内核日志显示 RIP 指向 `z3fold_zpool_map` 或 `handle_to_buddy` 函数。
+- 故障发生时系统完全冻结，GUI 和 SSH 连接均无响应。
+- 该问题仅在启用 zswap 且 zpool 参数设置为 z3fold 时复现，使用 zbud 时正常。
+
+#问题根因
+z3fold 模块中 `z3fold_reclaim_page()` 函数对重试（retries）的处理逻辑不当，导致在内存回收路径上访问无效内存。Git bisect 定位到引入问题的 commit 为 `7c2b8baa61fe578af905342938ad12f8dbaeae79`。
+
+#解决方案
+临时规避：禁用 zswap（`echo 0 > /sys/module/zswap/parameters/enabled`）或启动参数使用 `zswap.zpool=zbud`。
+修复补丁：开发者已提交修复补丁（见 Bug ID 204563 附件 284883），修正了 `z3fold_reclaim_page` 中的重试处理逻辑。

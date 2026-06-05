@@ -1,0 +1,17 @@
+#标题
+ASUS Zenbook S16 音频功能失效因 ACPI acp-audio-config-flag 配置错误
+
+#内核版本
+6.19.6, 6.19.14, 7.1-rc4（评论提及）
+
+#问题现象
+- ASUS Zenbook S16 (UM5606GA) 笔记本内部音频（扬声器及耳机孔）无法工作，系统音频输出显示为 "Dummy Output"。
+- 内核日志显示 "platform acp_asoc_acp70.0: warning: No matching ASoC machine driver found"。
+- snd_acp_pci 驱动绑定设备但无法创建有效的 ALSA 声卡，SoundWire 驱动 snd_pci_ps 未加载。
+
+#问题根因
+BIOS 提供的 ACPI 表（SSDT10 或 SSDT8）中 acp-audio-config-flag 属性值错误，被设置为 0x10 (FLAG_AMD_LEGACY_ONLY_DMIC)。该错误标志导致 SoundWire 驱动拒绝设备，而 Legacy 驱动加载后无法找到匹配的 ASoC machine driver。正确值应为 0x00 (FLAG_AMD_SOUNDWIRE) 以启用 SoundWire 总线。
+
+#解决方案
+临时规避：通过 ACPI SSDT override 机制，将 acp-audio-config-flag 修改为 0x00 并更新 Revision，可恢复音频功能。
+代码修复：需在内核 sound/soc/amd/acp-config.c 中添加 DMI quirk，针对该机型强制使用 FLAG_AMD_SOUNDWIRE 模式。评论中已提供针对 6.19.x 内核的补丁示例，但截至报告时尚未合入主线。

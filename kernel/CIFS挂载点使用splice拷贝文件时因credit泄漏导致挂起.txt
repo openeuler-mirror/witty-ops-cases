@@ -1,0 +1,21 @@
+#标题
+CIFS挂载点使用splice拷贝文件时因credit泄漏导致挂起
+
+#内核版本
+4.14.11（受影响版本包括 4.15, 4.16, 4.20, 5.0 等）
+
+#问题现象
+- 在CIFS挂载点使用图形界面工具（如Nautilus）或`gio copy`拷贝多个文件时，操作随机性挂起。
+- 使用`strace`追踪发现进程卡在`splice()`系统调用无法返回。
+- 查看进程堆栈，显示处于`D`状态（不可中断睡眠），调用栈停留在`wait_for_response.isra.12` -> `cifs_send_recv` -> `SMB2_open`。
+- 内核日志中出现报错：`CIFS VFS: Send error in Close = -512`。
+- 使用命令行`cp`命令通常能正常工作。
+
+#问题根因
+- 经Git bisect定位，问题由提交`82c156f85384` ("switch generic_file_splice_read() to use of ->read_iter()") 引入，该提交改变了splice读取路径。
+- 根本原因为CIFS模块在处理oplock/lease中断时存在credit（信用点/活动请求计数）泄漏，每个oplock break泄漏一个credit，最终导致客户端无可用credit发送新请求而挂起。
+- 提交`7b9b9edb49ad377b1e06abf14354c227e9ac4b06` ("CIFS: Do not reset lease state to NONE on lease break") 修复了lease状态错误重置的问题，从而缓解了开启oplocks时的故障表现。
+
+#解决方案
+- 临时规避：使用命令行`cp`替代图形界面工具进行文件拷贝；或尝试挂载时指定SMB协议版本为`vers=2.0`或`vers=2.1`（部分场景有效）。
+- 代码修复：提交`7b9b9edb49ad377b1e06abf14354c227e9ac4b06`已合入内核，修复了lease break处理逻辑；开发者指出针对SMB1 oplock regression的credit处理修复计划合入Linux 5.2版本。

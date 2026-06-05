@@ -1,0 +1,14 @@
+#标题
+zswap解压缩失败触发kernel BUG导致进程崩溃
+
+#内核版本
+4.9.2（其他受影响版本包括 5.4.17、5.7.7、5.9.1 等）
+
+#问题现象
+系统在高内存压力或频繁进行 swap 操作时触发 kernel BUG，日志显示 "kernel BUG at mm/zswap.c:1108!"（不同内核版本行号可能不同），错误类型为 "invalid opcode: 0000 [#1]"。Call Trace 指向 `zswap_frontswap_load` 函数。故障会导致当前访问 swap 的进程（如 syncthing、java、chromium）崩溃，严重时可能导致系统不可用。
+
+#问题根因
+在 `zswap_frontswap_load` 函数中，调用 `crypto_comp_decompress` 对存储在 zpool 中的页面进行解压缩时返回了错误码。代码逻辑中针对解压缩失败的情况直接调用了 `BUG_ON(ret)`，导致内核触发 panic。解压缩失败通常由底层 zpool 后端（如 z3fold 或 zsmalloc）的数据损坏或并发处理缺陷引起，导致压缩数据无法正确还原。
+
+#解决方案
+升级内核至 5.10.4 或更高版本。开发者提供的针对 z3fold 后端的修复补丁已合并入该版本，解决了导致解压缩失败的数据损坏问题。若使用 zsmalloc 作为 zpool 后端，在 5.11.2 版本中仍有报告存在问题，建议暂时避免使用该组合或关注后续内核修复。

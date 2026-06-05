@@ -1,0 +1,18 @@
+#标题
+QEMU环境中加载UIO模块后systemd-journald触发Soft lockup
+
+#内核版本
+6.6.0
+
+#问题现象
+- 内核日志持续报错：`watchdog: BUG: soft lockup - CPU#1 stuck for 144s!`，CPU#1 长时间卡死。
+- 故障发生时 RIP 指针位于 `__put_user_nocheck_4+0x7/0x20`，卡死指令为 `<89 01>`。
+- 受影响进程为 `systemd-journal` (PID 111)，调用栈显示卡在 `do_epoll_wait` 和 `hrtimer_interrupt` 上下文中。
+- 最终导致 systemd-journald 服务因看门狗超时被 SIGKILL 终止并重启。
+- 该问题在 QEMU 虚拟机中加载/卸载自定义 UIO PCI 设备模块（uio_aec）后可稳定复现。
+
+#问题根因
+故障发生时 CPU 在执行 `__put_user_nocheck_4` 向用户空间写入数据时停顿。具体根因尚未明确，可能与加载/卸载自定义 UIO PCI 设备模块后触发的 IRQ 饥饿、QEMU 模拟边缘情况或 VM 时序同步问题有关。
+
+#解决方案
+暂无修复方案。开发者建议在受支持的内核版本（如 6.6.118 或 6.18.0）上尝试复现以排除旧版本已知问题。

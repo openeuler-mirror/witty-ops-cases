@@ -1,0 +1,20 @@
+#标题
+高频打开关闭USB设备触发死锁导致进程阻塞
+
+#内核版本
+4.0 至 4.10.0-rc5
+
+#问题现象
+- 在 128 线程 Power8 机器上运行 stress-ng 进行 fstat 压力测试时，系统触发死锁。
+- 多个内核线程和用户进程阻塞超过 120 秒，内核打印 "blocked for more than 120 seconds" 告警。
+- 涉及设备：American Megatrends, Inc. Virtual Keyboard and Mouse (ID 046b:ff10)。
+- Call Trace 显示：
+  - kworker/112:1 阻塞在 `__usb_queue_reset_device` -> `usb_kill_urb` 流程。
+  - kworker/112:2 阻塞在 `hub_event` -> `__mutex_lock` 流程。
+  - stress-ng-fstat 进程阻塞在 `mousedev_release` -> `usbhid_close` -> `usb_kill_urb` 流程。
+
+#问题根因
+多进程并发快速打开、关闭 USB 设备时触发竞态条件，导致内核死锁。堆栈信息显示 `usb_reset_device` 重置路径与 `hub_event` 事件处理路径之间存在锁竞争，相关线程在 `usb_kill_urb` 或互斥锁处陷入不可中断睡眠。
+
+#解决方案
+暂无修复补丁，维护者建议将问题提交至 linux-usb@vger.kernel.org 邮件列表进行跟进。

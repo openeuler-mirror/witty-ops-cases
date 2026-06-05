@@ -1,0 +1,21 @@
+#标题
+Btrfs使用copy_page处理kmalloc内存导致SLUB对象填充越界
+
+#内核版本
+5.3.0-rc3
+
+#问题现象
+- 启用 SLUB_DEBUG_ON 的内核在启动或卸载 Btrfs 分区时，触发内核报错："BUG kmalloc-4k (Tainted: G W ): Object padding overwritten" 或 "Poison overwritten"。
+- 故障主要复现于 PPC-32 架构（PowerMac G4/G5），在 x86_64 架构的压力测试中也曾出现。
+- 日志显示 SLUB 分配器检测到对象填充字节被覆写，调用栈涉及 `__load_free_space_cache`、`btrfs_read_tree_root` 等函数。
+
+#问题根因
+由 Commit 69d2480456d1 ("btrfs: use copy_page for copying pages instead of memcpy") 引入。
+该提交将 `memcpy` 替换为 `copy_page` 以优化性能。然而，相关数据结构（如 `entry->bitmap`）是通过 `kzalloc(PAGE_SIZE, GFP_NOFS)` 分配的。
+在开启 SLUB 调试选项时，`kmalloc` 分配的内存地址不保证页对齐（或缓存行对齐）。PPC32 架构的 `copy_page` 实现要求目标地址必须对齐，当传入未对齐地址时，会导致写入越界，破坏 Slab 对象的 padding 区域，从而触发 SLUB 调试告警。
+
+#解决方案
+修改 `fs/btrfs/free-space-cache.c`，将 bitmap 的内存分配方式由 Slab 分配器改为页分配器以确保对齐：
+1. 将 `kzalloc(PAGE_SIZE, GFP_NOFS)` 替换为 `(void *)get_zeroed_page(GFP_NOFS)`。
+2. 将对应的 `kfree(bitmap)` 替换为 `free_page((unsigned long)bitmap)`。
+涉及函数包括 `__load_free_space_cache`、`free_bitmap`、`insert_into_bitmap`、`btrfs_alloc_from_cluster` 及 `test_add_free_space_entry`。

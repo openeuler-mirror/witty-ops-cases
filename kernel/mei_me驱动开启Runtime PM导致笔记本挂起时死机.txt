@@ -1,0 +1,20 @@
+#标题
+mei_me驱动开启Runtime PM导致笔记本挂起时死机
+
+#内核版本
+>3.14 (报告中涉及 4.1 至 4.18)
+
+#问题现象
+- 笔记本电脑在执行挂起操作时随机出现死机，屏幕变黑，风扇全速运转，电源指示灯状态异常，必须强制关机重启。
+- 该问题与开启 PCI 设备的 Runtime Power Management 有关，特别是针对 `mei_me` 设备 (Intel 8 Series HECI)。
+- 内核日志显示错误信息：`genirq: Flags mismatch irq 0. 00000080 (mei_me) vs. 00015a00 (timer)`，随后出现 `mei_me 0000:00:16.0: request_threaded_irq failed: irq = 0` 以及 `BUG: Unable to handle kernel NULL pointer dereference`。
+- 部分情况下日志显示 `mei_me 0000:00:16.0: timer: init clients timeout` 和 `unexpected reset`。
+
+#问题根因
+当 `mei_me` 设备开启运行时电源管理时，驱动在挂起/恢复流程中处理中断请求失败，导致 IRQ 0 冲突（与 timer 冲突），进而引发空指针解引用或设备状态错误，最终导致系统死机。该问题多见于 Haswell 平台，且与 Intel ME 固件版本有关。
+
+#解决方案
+- 临时规避：禁用 `mei_me` 设备的 Runtime PM。执行命令 `echo 'on' > /sys/bus/pci/devices/0000:00:16.0/power/control`，或在 TLP 等电源管理工具中将该设备加入排除列表。
+- 模块屏蔽：黑名单 `mei_me` 模块（会失去相关功能）。
+- 固件升级：部分用户通过将 Intel ME 固件升级至 9.5.60.1952 版本解决了该问题。
+- 补丁：针对内核 4.12 及以上版本，可尝试应用补丁 https://patchwork.kernel.org/patch/9967845/。

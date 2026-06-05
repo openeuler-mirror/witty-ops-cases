@@ -1,0 +1,19 @@
+#标题
+Asus EeeBook X205TA 因 RT5648 驱动支持缺失导致无声
+
+#内核版本
+4.1.1（报告版本），问题在 4.0.4 至 4.5.0-rc5 版本中持续存在
+
+#问题现象
+- Asus EeeBook X205TA 笔记本电脑无法播放声音，声卡未被系统检测到。
+- 手动加载测试驱动后，声卡虽被识别，但播放音频时报错 "aplay: set_params:1297: Unable to install hw params"。
+- 内核日志显示 "ASoC: no backend DAIs enabled for Audio Port" 或 "rt5645 i2c-10EC5648:00: Failed to set DMIC clock"。
+
+#问题根因
+该机型使用 Intel Baytrail (Z3735F) 平台搭配 Realtek RT5648 codec。RT5648 与 RT5645 功能相似但需要特定配置。问题根因在于内核 ASoC 驱动未正确支持该硬件配置：
+1. 缺少针对 Baytrail-CR 平台的 SSP0-AIF1/2 硬件路由配置（默认尝试使用 SSP2 导致失败）。
+2. 缺少 MCLK（主时钟）支持，导致时钟频率设置错误（如 Base clock rate 1536000 is too low）。
+3. `sst-acpi.c` 中缺少对应的 ACPI ID 映射。
+
+#解决方案
+开发人员提供了修复补丁分支（例如 https://github.com/plbossart/sound/tree/topic/bytrtclocks）。修复涉及修改 `byt-rt5645` 机器驱动以支持 MCLK，并添加针对 Baytrail-CR 的 quirk 以强制使用 SSP0 路由。用户需编译该分支内核，并配合正确的 ALSA UCM (Use Case Manager) 配置文件设置 DSP mixer 路由。

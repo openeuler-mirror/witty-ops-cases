@@ -1,0 +1,16 @@
+#标题
+bcache日志空间耗尽导致注册进程死锁
+
+#内核版本
+4.15.0-143-generic
+
+#问题现象
+- 系统重启后，bcache 存储设备无法正常恢复。
+- 内核日志报错 "INFO: task bcache-register blocked for more than 120 seconds"。
+- 进程处于 D 状态（Blocked），调用栈显示阻塞路径为 `closure_sync` -> `bch_journal` -> `bch_journal_meta` -> `bch_btree_set_root` -> `register_bcache`。
+
+#问题根因
+bcache 在缓存设备注册阶段需要写入日志。如果日志空间已满，注册进程会等待日志空间释放，但在该初始化阶段系统无法进行日志回收，从而导致死锁。维护者确认这是由于 full journal 导致的死锁问题。
+
+#解决方案
+修复方法是在运行时预留一个 journal bucket，仅在设备注册阶段使用，确保注册时有可用的日志空间，避免死锁。相关补丁为 "bcache: avoid journal no-space deadlock by reserving 1 journal bucket"。

@@ -1,0 +1,14 @@
+#标题
+io_uring执行IORING_OP_READ_MULTISHOT时因async_size为0触发空指针解引用
+
+#内核版本
+6.6.0
+
+#问题现象
+执行 IORING_OP_READ_MULTISHOT 操作时，内核发生空指针解引用错误导致崩溃。
+
+#问题根因
+调用链为 io_read_mshot -> __io_read -> io_setup_async_rw -> io_alloc_async_data。由于 io_cold_defs[IORING_OP_READ_MULTISHOT].async_size 定义为 0，io_alloc_async_data 调用 kmalloc(0, GFP_KERNEL) 返回 ZERO_SIZE_PTR (0x10)。后续代码将该值作为有效指针访问时触发空指针解引用。io_setup_async_rw 函数中因 force 标志为 true 跳过了 prep_async 检查，导致直接进入分配逻辑。
+
+#解决方案
+在 io_setup_async_rw 函数中增加检查：若 io_cold_defs[req->opcode].async_size 为 0 则直接返回，避免无效内存分配。补丁已提交至 git.kernel.dk 的 io_uring-6.7 分支，计划在 6.7-rc1 前合入主线。

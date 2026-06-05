@@ -1,0 +1,16 @@
+#标题
+KVM开启GPU透传时avic初始化引发空指针解引用导致虚拟机崩溃
+
+#内核版本
+5.6 rc2
+
+#问题现象
+- 在内核 5.6 rc1 和 rc2 版本中，启动配置了 GPU、USB 和 SATA 透传的 Windows 10 虚拟机时，宿主机内核报错 "BUG: kernel NULL pointer dereference"。
+- 虚拟机随即崩溃，KVM 模块无法继续运行，导致宿主机必须重启。
+- 该问题为回归问题，在 4.19.x 至 5.5.4 内核版本中运行正常。
+
+#问题根因
+问题由 KVM 5.6-2 合并引入，涉及 AMD SVM 的 AVIC (Advanced Virtual Interrupt Controller) 初始化逻辑。在函数 `avic_init_vcpu` 中，原有的判断条件 `if (!kvm_vcpu_apicv_active(&svm->vcpu))` 不足以覆盖所有异常情况。当 AVIC 未启用或 irqchip 不在内核中运行时，代码路径错误地继续执行 `avic_init_backing_page`，此时由于 APIC 结构体未完全初始化，访问 `svm->vcpu.arch.apic->regs` 时触发了空指针解引用。
+
+#解决方案
+修改 `arch/x86/kvm/svm.c` 中的 `avic_init_vcpu` 函数，将判断条件修改为 `if (!avic || !irqchip_in_kernel(vcpu->kvm)) return 0;`。此修改确保在 AVIC 禁用或内核未处理 irqchip 时直接返回，避免访问未初始化的 APIC 指针。

@@ -1,0 +1,18 @@
+#标题
+CephFS内核客户端读取文件时因readahead处理缺陷导致数据损坏
+
+#内核版本
+6.11-rc6（回归引入于 commit 92b6cc5d）
+
+#问题现象
+- 通过内核 CephFS 客户端读取文件时发生数据损坏，SHA256 校验和不匹配。
+- 使用 `cmp -b` 对比发现，文件前 4MB 数据正确，后续 4MB 数据被读取为全零。
+- 使用 FUSE 客户端或未包含引入问题 commit 的旧内核（如 v6.5）读取正常。
+- 故障与 readahead size 设置有关：默认值（8MB）触发故障，设置为 `rasize=0` 或小于等于 128k 时故障消失。
+
+#问题根因
+二分定位发现回归由 commit `92b6cc5d` ("netfs: Add iov_iters to (sub)requests to describe various buffers") 引入。该提交在处理大 readahead 请求时，对缓冲区（iov_iters）的处理存在逻辑错误，导致部分数据被错误地填充为零。
+
+#解决方案
+- 临时规避：挂载 CephFS 时指定参数 `rasize=0` 或 `rasize=128k` 以限制 readahead 大小。
+- 代码修复：Mainline 已通过 commit `ee4cdf7b` ("netfs: Speed up buffered reading") 修复此问题，相关补丁可回移植至 stable 版本（如 6.11.1）。

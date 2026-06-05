@@ -1,0 +1,20 @@
+#标题
+SSD热拔除触发竞态导致pci_dev_wait阻塞及FLR 65秒超时
+
+#内核版本
+v5.1.0
+
+#问题现象
+- SSD设备热拔除后，内核日志持续打印 "vfio-pci ... not ready ... after FLR; waiting" 信息
+- 最终打印 "giving up"，整个过程持续约 65 秒超时
+- 系统在设备移除过程中出现锁死现象
+
+#问题根因
+存在 DPDK 的 eal-intr-thread 线程与内核 pciehp 线程之间的竞态条件：
+1. DPDK 线程调用 pci_try_reset_function() 获取设备锁，进入 __pci_reset_function_locked() -> pci_dev_wait()。
+2. 由于设备已物理移除，pci_dev_wait() 内的 pci_read_config_dword() 读取到全 1，函数未识别设备已不存在，持续等待直到 65 秒超时，期间一直持有设备锁。
+3. 内核 pciehp 线程尝试调用 pci_dev_set_disconnected() 标记设备断开，但因无法获取设备锁而阻塞。
+4. 根本原因在于 pci_dev_wait() 未检查 pci_read_config_dword() 的返回值是否为 PCIBIOS_DEVICE_NOT_FOUND，导致在设备消失时仍盲目等待 FLR 完成状态。
+
+#解决方案
+暂无官方修复。报告者建议修改 drivers/pci/pci.c 中的 pci_dev_wait() 函数，检查 pci_read_config_dword() 返回值是否为 PCIBIOS_DEVICE_NOT_FOUND，若是则立即返回 -ENODEV 以避免长时间等待。此外，可能需要优化 pci_dev_set_disconnected() 的锁机制以避免死锁。

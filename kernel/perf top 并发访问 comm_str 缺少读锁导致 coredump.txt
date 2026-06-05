@@ -1,0 +1,17 @@
+#标题
+perf top 并发访问 comm_str 缺少读锁导致 coredump
+
+#内核版本
+stable-5.10, stable-6.6
+
+#问题现象
+- 执行 `perf top --fields overhead,cpu,com,symbol` 命令时低概率触发 coredump
+- GDB 回溯显示崩溃发生在 `__strcmp_evex` -> `sort.comm_collapse` -> `hist_entry__collapse` 调用链中
+- 寄存器 `rdi` (对应 `right->comm->comm_str->str`) 包含无效地址
+
+#问题根因
+`perf top` 工具存在并发访问问题。`display_thread` 线程在读取 `comm_str` 进行排序时缺少必要的读锁保护，而 `process_thread` 线程可能同时通过 `__thread__set_comm` -> `comm__override` 修改该数据，导致竞争条件引发内存访问错误或 use-after-free。
+
+#解决方案
+开发者 Ian Rogers 提交了修复补丁，为相关代码路径添加了缺失的读锁。
+补丁链接：https://lore.kernel.org/lkml/20250519224645.1810891-1-irogers@google.com/

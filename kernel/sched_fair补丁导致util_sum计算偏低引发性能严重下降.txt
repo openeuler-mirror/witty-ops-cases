@@ -1,0 +1,17 @@
+#标题
+sched/fair补丁导致util_sum计算偏低引发性能严重下降
+
+#内核版本
+5.10.51
+
+#问题现象
+- 升级内核后出现严重性能下降，例如视频录制帧率下降约 10%（Non-error FPS 从约 53-55 降至 46-47）。
+- CPU 运行频率明显低于升级前水平。
+- 通过内核跟踪发现 `load_sum`、`util_sum`、`runnable_sum` 数值显著降低。
+- Schedutil 调频器因获取到较低的 `util_avg` 值而选择了较低的 CPU 频率。
+
+#问题根因
+问题由补丁 `1c35b07e6d39` ("sched/fair: Ensure _sum and _avg values stay consistent") 引入。该补丁在 `update_cfs_rq_load_avg()` 函数中强制将 `util_sum` 同步为 `util_avg * divider`。当处理被移除的任务（`cfs_rq->removed.nr`）时，这种强制同步会移除 `util_sum` 中尚未反映到 `util_avg` 的部分（即 `period_contrib` 窗口期间积累的负载）。由于该函数可能被频繁调用，导致 `util_avg` 计算结果持续偏低，进而误导 Schedutil 调频器选择了较低的 CPU 运行频率。
+
+#解决方案
+开发者提供了修复补丁，修改了 `kernel/sched/fair.c` 中的计算逻辑：不再强制赋值 `util_sum = util_avg * divider`，而是先执行减法操作，随后通过 `max_t(u32, sa->util_sum, sa->util_avg * divider)` 确保 `util_sum` 不低于基于 `util_avg` 的估算值。该修复补丁已验证可恢复性能且不触发 `cfs_rq_is_decayed` 中的 `SCHED_WARN_ON` 告警，相关补丁集已提交至邮件列表（ID: 20211221094653.10776-1-vincent.guittot@linaro.org）。

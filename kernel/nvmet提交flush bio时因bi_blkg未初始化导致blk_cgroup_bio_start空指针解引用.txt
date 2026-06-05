@@ -1,0 +1,20 @@
+#标题
+nvmet提交flush bio时因bi_blkg未初始化导致blk_cgroup_bio_start空指针解引用
+
+#内核版本
+6.12.50 / 6.12.63
+
+#问题现象
+- 内核触发 NULL pointer dereference 导致 Oops，系统崩溃。
+- 日志显示：`BUG: kernel NULL pointer dereference, address: 0000000000000028`。
+- 故障发生在 `blk_cgroup_bio_start+0x19/0xe0`。
+- 调用栈显示：`nvme_loop_execute_work` -> `nvmet_bdev_execute_flush` -> `submit_bio` -> `blk_cgroup_bio_start`。
+- 故障上下文为 `kworker` 进程，工作队列 `nvmet-wq`。
+
+#问题根因
+`nvmet` 模块通过 `nvme_loop` 提交 flush bio 时，该 bio 的 `bio->bi_blkg` 指针为 NULL。在 `submit_bio_noacct_nocheck` 函数中，代码调用 `blk_cgroup_bio_start` 进行 cgroup 统计，但该函数未对 `bi_blkg` 进行空指针检查即解引用，导致崩溃。此问题可能与内核提交 `bf4c89fc8797` ("block: don't call bio_uninit from bio_endio") 后 bio 生命周期管理变更有关，`nvmet` 的 flush bio 在提交前未正确关联 blkg。
+
+#解决方案
+目前 Bug 状态为 NEW，暂无官方合并补丁。根据分析，可通过以下修改规避或修复：
+1. 在 `block/blk-core.c` 的 `submit_bio_noacct` 函数中，调用 `submit_bio_noacct_nocheck` 前检查 `bio->bi_blkg`，若为空则调用 `bio_associate_blkg(bio)` 进行关联。
+2. 或在 `block/blk-cgroup.c` 的 `blk_cgroup_bio_start` 函数开头增加 `if (unlikely(!bio->bi_blkg)) return;` 判空处理，跳过无 blkg 关联的 bio 统计。

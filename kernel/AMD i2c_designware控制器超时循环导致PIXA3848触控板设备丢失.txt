@@ -1,0 +1,21 @@
+#标题
+AMD i2c_designware控制器超时循环导致PIXA3848触控板设备丢失
+
+#内核版本
+6.18.7-76061807-generic
+
+#问题现象
+- 系统启动后短时间内触控板工作正常，但在闲置或挂起/恢复后出现性能下降，表现为光标跳跃、冻结、跟踪不完整。
+- 最终触控板从输入子系统完全消失，在 /proc/bus/input/devices 和 /sys/bus/hid/devices/ 中均不可见。
+- dmesg 日志持续报错：`i2c_designware AMDI0010:03: controller timed out`。
+- 伴随出现 `i2c_hid_acpi i2c-PIXA3848:01: failed to change power setting` 以及 `i2c_hid_get_input: incomplete report` 错误。
+- 日志中出现 `i2c_dw_handle_tx_abort: lost arbitration` 仲裁丢失错误。
+
+#问题根因
+`i2c_designware` 控制器进入不可恢复的超时循环。HID 驱动尝试更改触控板电源设置失败，导致设备从 I2C 总线掉线。日志中损坏的报告长度（如 65296, 8192）暗示可能存在电气噪声或时序问题。尽管设置了 `disable_runtime_pm=1`，系统仍尝试进行电源状态转换，这触发了不可恢复的超时级联。
+
+#解决方案
+临时规避方法：解绑并重新绑定 `i2c_designware` 平台驱动以重置控制器状态，命令如下：
+`echo "AMDI0010:03" > /sys/bus/platform/drivers/i2c_designware/unbind`
+`echo "AMDI0010:03" > /sys/bus/platform/drivers/i2c_designware/bind`
+目前 Bug 状态为 NEW，暂无官方修复补丁。

@@ -1,0 +1,17 @@
+#标题
+SELinux模块selinux_task_kill函数空指针解引用触发General Protection Fault
+
+#内核版本
+v5.2-rc6
+
+#问题现象
+- 内核触发 general protection fault，错误码 0000，KASAN 报告可能由空指针解引用引起。
+- RIP 寄存器指向 `selinux_task_kill+0x229/0x2a0` (security/selinux/hooks.c:4096)，内联函数 `current_sid` (security/selinux/include/objsec.h:47)。
+- 故障发生时 RBX 寄存器值为 0，导致访问非法内存地址。
+- 调用路径：`__x64_sys_kill` -> `kill_something_info` -> `group_send_sig_info` -> `check_kill_permission` -> `security_task_kill` -> `selinux_task_kill`。
+
+#问题根因
+在 SELinux 钩子函数 `selinux_task_kill` 执行过程中，调用 `current_sid` 获取当前进程安全 ID 时，试图解引用一个空指针（对应汇编指令 `mov rbx, QWORD PTR [rbx+0x78]`，此时 RBX 为 0）。该空指针极有可能是任务的安全结构指针（task_struct->security）未正确初始化或被错误清空导致。
+
+#解决方案
+暂无

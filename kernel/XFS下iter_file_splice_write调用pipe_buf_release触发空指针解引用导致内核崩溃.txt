@@ -1,0 +1,21 @@
+#标题
+XFS下iter_file_splice_write调用pipe_buf_release触发空指针解引用导致内核崩溃
+
+#内核版本
+5.4.0-rc3+, 5.5.0-rc4
+
+#问题现象
+- 运行 xfstests generic/475 或 generic/461 测试用例时触发 General Protection Fault。
+- KASAN 报告 "GPF could be caused by NULL-ptr deref"。
+- 崩溃发生在 `iter_file_splice_write` 函数中，RIP 指向 `iter_file_splice_write+0x668/0xa00`（偏移量随内核版本略有不同）。
+- 调用栈显示：`vfs_copy_file_range` -> `do_splice_direct` -> `splice_direct_to_actor` -> `direct_splice_actor` -> `iter_file_splice_write`。
+- 故障发生前，系统日志显示 XFS 文件系统出现 writeback error 和 log I/O error，并触发了文件系统 shutdown。
+
+#问题根因
+- 根据崩溃现场代码分析，故障点位于 `fs/splice.c:773` 行调用的 `pipe_buf_release(pipe, buf)`。
+- `pipe_buf_release` 函数（位于 `include/linux/pipe_fs_i.h:187`）执行逻辑为：`const struct pipe_buf_operations *ops = buf->ops; buf->ops = NULL; ops->release(pipe, buf);`。
+- 故障发生时，`buf->ops` 指针为 NULL（对应寄存器 RDX 为 0），导致在调用 `ops->release` 时发生空指针解引用，触发 General Protection Fault。
+- 这表明 pipe buffer 在被处理时其操作函数指针集已丢失，可能存在状态异常或重复释放。
+
+#解决方案
+暂无

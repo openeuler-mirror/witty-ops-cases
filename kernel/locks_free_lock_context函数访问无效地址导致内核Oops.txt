@@ -1,0 +1,19 @@
+#标题
+locks_free_lock_context函数访问无效地址导致内核Oops
+
+#内核版本
+5.14.17（问题始于 5.13.4）
+
+#问题现象
+- 系统发生 Kernel Oops 并冻结，无法通过 VT 登录，SysRq 键仍有效。
+- 日志显示 "BUG: unable to handle page fault for address: 0000000094a89fb8"。
+- RIP 寄存器指向 `locks_free_lock_context+0x20/0x70`。
+- 故障常发生在高内存占用场景（如 flatpak 下载更新）后的内存回收阶段，或系统关机卸载文件系统时。
+- 典型 Call Trace 1（内存回收）：`kswapd` -> `shrink_node` -> `prune_icache_sb` -> `__destroy_inode` -> `locks_free_lock_context`。
+- 典型 Call Trace 2（关机）：`umount` -> `generic_shutdown_super` -> `evict_inodes` -> `__destroy_inode` -> `locks_free_lock_context`。
+
+#问题根因
+在 inode 销毁流程中，`locks_free_lock_context` 函数试图解引用无效的内存地址（如 0000000094a89fb8），触发 Supervisor read access 页面错误。该问题为 5.13.4 版本引入的回归问题，具体代码缺陷未明确。
+
+#解决方案
+暂无

@@ -1,0 +1,14 @@
+#标题
+NFSv3驱动错误处理get_acl返回值导致内核崩溃
+
+#内核版本
+3.16.0-rc6-00104
+
+#问题现象
+在执行带有保留 ACLs 选项的 rsync 操作时触发内核崩溃，日志显示 "BUG: unable to handle kernel paging request at ffffffffffffffa1"，指令指针位于 `nfs3_list_one_acl` 函数。
+
+#问题根因
+NFSv3 模块中的 `nfs3_list_one_acl` 函数错误地假设 `get_acl()` 在失败时返回 0，实际上该函数返回 `PTR_ERR()` 错误指针。代码随后调用 `posix_acl_release()` 尝试解引用该错误指针（具体为 `-EOPNOTSUPP` 对应的指针地址），导致 paging request 异常。
+
+#解决方案
+已提交修复补丁 "nfs3_list_one_acl(): check get_acl() result with IS_ERR_OR_NULL"，需使用 `IS_ERR_OR_NULL` 宏正确检查 `get_acl()` 返回值。

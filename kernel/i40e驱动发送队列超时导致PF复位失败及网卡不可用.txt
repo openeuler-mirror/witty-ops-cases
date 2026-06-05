@@ -1,0 +1,19 @@
+#标题
+i40e驱动发送队列超时导致PF复位失败及网卡不可用
+
+#内核版本
+4.14.0-rc4（问题亦见于 4.12.14、4.13.x 等版本）
+
+#问题现象
+- 系统日志频繁报告 NETDEV WATCHDOG 超时：`NETDEV WATCHDOG: enp2s0f3 (i40e): transmit queue X timed out`
+- 内核调用栈显示 `WARNING: CPU: X PID: 0 at net/sched/sch_generic.c:320 dev_watchdog`
+- i40e 驱动尝试恢复但失败：`tx_timeout recovery level 1`，随后出现 `PF reset failed, -15`
+- 网卡链路断开，尝试重新启用接口时报错：`RTNETLINK answers: Cannot allocate memory` 或 `Device or resource busy`
+- 日志中出现 `Error I40E_AQ_RC_ENOSPC adding RX filters on PF, promiscuous mode forced on`
+
+#问题根因
+Intel X710 网卡使用的 i40e 驱动在进行 TCP 分段卸载（TSO）或通用接收卸载（GRO）操作时触发 Tx hang（发送挂起），导致传输队列超时。驱动尝试进行 PF 复位恢复时失败，并伴随资源分配错误（I40E_AQ_RC_ENOSPC），最终导致网卡功能失效。
+
+#解决方案
+临时规避方案：关闭网卡的 TSO 功能（`ethtool -K <interface> tso off`）或 GRO 功能可恢复网络稳定性。
+官方修复：暂无（开发人员提供了调试补丁用于分析描述符环，Bug 状态为 NEW）。

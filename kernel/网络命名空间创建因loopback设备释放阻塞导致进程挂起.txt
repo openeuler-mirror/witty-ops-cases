@@ -1,0 +1,17 @@
+#标题
+网络命名空间创建因loopback设备释放阻塞导致进程挂起
+
+#内核版本
+4.0.1（受影响版本包括 4.0.x 至 4.8.x）
+
+#问题现象
+- 执行 "ip netns create" 命令时进程永久挂起，处于 D 状态
+- 控制台持续打印 "unregister_netdevice: waiting for lo to become free"
+- 内核日志报错 "INFO: task ip:... blocked for more than 120 seconds"
+- 堆栈信息显示 "ip" 进程阻塞在 copy_net_ns -> mutex_lock_nested，kworker 阻塞在 netdev_run_todo -> msleep
+
+#问题根因
+网络命名空间销毁过程中，loopback (lo) 设备的引用计数未归零（疑似 dst refcnt leak 或 TCP socket 未正确关闭），导致 netdev_run_todo 无法完成。销毁流程持有 net_mutex 并长时间等待，阻塞了后续创建新命名空间的进程获取 net_mutex，从而导致 ip netns create 挂起。
+
+#解决方案
+升级内核至包含补丁 4ee806d51176ba7b8ff1efd81f271d7252e03a1d ("net: tcp: close sock if net namespace is exiting") 的版本，该补丁修复了命名空间退出时 TCP socket 未关闭导致的引用泄漏问题。补丁 7281a66590cbc284272e18cb4acbfb88ddaa4cd8 允许杀死处于 D 状态等待锁的进程，可作为临时规避手段。

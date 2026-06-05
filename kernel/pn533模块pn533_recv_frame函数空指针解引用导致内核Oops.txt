@@ -1,0 +1,17 @@
+#标题
+pn533模块pn533_recv_frame函数空指针解引用导致内核Oops
+
+#内核版本
+6.8
+
+#问题现象
+- 系统触发 Kernel Oops，日志显示 "BUG: kernel NULL pointer dereference, address: 0000000000000014"
+- KASAN 检测到空指针解引用错误
+- Call Trace 指向 `pn533_recv_frame` 函数
+- 内核日志显示在 `pn533_send_async_complete` 将 `dev->cmd` 置空后，`pn533_recv_frame` 随即访问了空指针
+
+#问题根因
+`drivers/nfc/pn533/pn533.c` 中存在并发竞态条件。当执行 `NFC_CMD_START_POLL` 命令并收到不匹配的响应帧时，处理流程会调用 `pn533_autopoll_complete`，该函数会释放 `dev->cmd` 并将其置为 NULL。若此时并发收到另一个错误帧，`pn533_recv_frame` 函数虽然在开始处检查了 `dev->cmd`，但在后续使用前可能因并发流程将 `dev->cmd` 置空，从而导致访问空指针触发崩溃。
+
+#解决方案
+暂无已合并的修复。维护者建议参考邮件列表中的补丁提案：https://lore.kernel.org/all/20240422080408.1639247-1-20373622@buaa.edu.cn/

@@ -1,0 +1,24 @@
+#标题
+BFQ调度器在容器销毁或高I/O负载下触发Kernel Panic及系统死锁
+
+#内核版本
+5.3.8（受影响版本包括 5.3.x 至 5.6.x，修复于 5.7-rc1）
+
+#问题现象
+- 系统频繁死锁或无响应，无法触发 Magic SysRq。
+- 内核日志显示 Kernel Oops 或 Panic，错误类型包括 "general protection fault"、"invalid opcode" 和 "use-after-free"。
+- 触发场景包括执行 CPU 密集型任务、停止 Podman 容器、执行 `dnf update` 或 Oracle DB 检查点进程。
+- 典型 Call Trace：`bfq_insert`、`bfq_find_set_group`、`bfq_put_queue`、`bfq_init_rq`、`bfq_bfqq_move`。
+- KASAN 报告：`BUG: KASAN: use-after-free in rb_erase`。
+
+#问题根因
+BFQ I/O 调度器在处理 cgroup 销毁或请求队列实体移动时存在逻辑缺陷。具体表现为：
+1. 在 `bfq_put_queue` 等函数中触发了 `BUG()` 检查（如 `block/bfq-iosched.c:5381`）。
+2. 存在 Use-After-Free 漏洞，`rb_erase` 操作访问了已释放的内存。
+3. `bfq_bfqq_move` 中出现空指针解引用。
+这些缺陷导致在特定 I/O 负载或容器操作（cgroup_destroy）下内核状态崩溃。
+
+#解决方案
+- 临时规避：将 I/O 调度器切换为 `mq-deadline`。
+- 正式修复：升级内核至 5.7.0 或更高版本，该版本包含了针对 BFQ 调度器的完整修复补丁系列。
+- 补丁链接：修复补丁集已提交至上游（参考 `https://lkml.org/lkml/2020/2/3/321`），需确认是否已回溯至 5.6.x 等稳定版分支。

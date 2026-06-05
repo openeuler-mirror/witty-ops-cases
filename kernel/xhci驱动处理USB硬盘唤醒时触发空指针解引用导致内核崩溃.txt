@@ -1,0 +1,21 @@
+#标题
+xhci驱动处理USB硬盘唤醒时触发空指针解引用导致内核崩溃
+
+#内核版本
+3.17.0（受影响版本含 3.16、3.17.1，回归始于 3.15-rc5）
+
+#问题现象
+- WD 1230 USB3 外置硬盘更新固件后，从自动待机模式唤醒时触发内核崩溃。
+- 系统完全死机，必须硬重启。
+- 日志显示 "BUG: unable to handle kernel NULL pointer dereference"。
+- 堆栈信息指向 `xhci_check_streams_endpoint` 和 `xhci_alloc_streams` 函数。
+- 调用链显示 `uas_eh_abort_handler` 和 `uas_eh_bus_reset_handler` 被调用后随即发生 oops。
+
+#问题根因
+- 触发场景为 UAS (USB Attached SCSI) 协议下的设备唤醒流程。
+- 二分查找定位问题引入于内核版本 3.15-rc4 至 3.15-rc5 之间。
+- 具体原因为 xhci 驱动在处理 streams 分配或检查时访问了空指针（具体代码逻辑未在报告中明确）。
+
+#解决方案
+- 规避方法：禁用该设备的 UAS 功能。在 `/etc/modprobe.d/usb-storage.conf` 中添加参数 `options usb-storage quirks=1058:1230:u`。
+- 官方修复：暂无（Bug 状态为 NEW）。

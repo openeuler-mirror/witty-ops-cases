@@ -1,0 +1,18 @@
+#标题
+Realtek ALC3661 驱动 Pin Config 缺失导致低音炮与耳麦麦克风无法工作
+
+#内核版本
+4.8.0-41-generic
+
+#问题现象
+- Realtek ALC3661 声卡在 Alienware 笔记本上无法识别低音炮和耳麦麦克风。
+- 系统声音设置中缺少低音炮输出和耳麦麦克风输入选项。
+- 用户在 `alsamixer` 中无法看到 "Bass Speaker" 或 "Headset Mic" 相关的控制项。
+
+#问题根因
+该硬件的 BIOS 默认 Pin Configuration 将 Node 0x1a (Subwoofer) 和 Node 0x1b (Headset Mic) 设置为未连接状态（0x411111f0），导致驱动程序未加载对应功能。同时，驱动程序 `sound/pci/hda/patch_realtek.c` 缺少针对该特定硬件（Subsystem ID: 0x102805A9）的 Fixup。此外，由于该声卡 DAC 资源数量限制，若不正确配置 Pin 0x16 (Headphone) 和 Pin 0x1a 的优先级映射（preferred_dacs），驱动无法为低音炮分配独立的音量控制通道。
+
+#解决方案
+可通过手动覆盖 Pin 配置或修改内核驱动代码解决：
+1. **临时规避**：使用 `hdajackretask` 或编辑 firmware 文件，在 `/etc/modprobe.d/alsa-base.conf` 中添加参数 `options snd-hda-intel model=,dell-headset-multi patch=,/lib/firmware/hdajackretask.fw`。需将 Pin 0x1a 配置为低音炮（如 0x90100111），Pin 0x1b 配置为耳麦麦克风（如 0x03a1113c），并根据 DAC 资源情况适当禁用 Pin 0x16。
+2. **代码修复**：在内核源码 `patch_realtek.c` 中添加 `ALC668_FIXUP_DELL_ALIENWARE` 修复项，包含正确的 Pin Configuration 表和 `preferred_dacs` 数组映射，以确保低音炮和耳麦麦克风被正确识别并分配资源。

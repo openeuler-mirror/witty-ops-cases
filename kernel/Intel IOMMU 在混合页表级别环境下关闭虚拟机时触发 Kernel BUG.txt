@@ -1,0 +1,15 @@
+#标题
+Intel IOMMU 在混合页表级别环境下关闭虚拟机时触发 Kernel BUG
+
+#内核版本
+3.14.4
+
+#问题现象
+在使用 VFIO 同时直通 GPU 和音频设备并关闭虚拟机时，宿主机内核触发 BUG，日志显示 "kernel BUG at drivers/iommu/intel-iommu.c:844!" 及 "invalid opcode: 0000 [#1]"。Call Trace 指向 `dma_pte_clear_range` 函数。
+
+#问题根因
+系统硬件中存在两个 IOMMU 单元，分别支持不同的 AGAW（Adjusted Guest Address Width）：一个支持 39 位（3 级页表），另一个支持 48 位（4 级页表）。
+内核代码在向域添加设备时，错误地将 `domain->gaw` 设置为当前设备的地址宽度，而非取所有已添加设备的最小值。当先添加 39 位设备、后添加 48 位设备时，`last_pfn` 被计算为 48 位宽度的值，而 `addr_width` 仍为 39 位，导致 `dma_pte_clear_range` 中的 `BUG_ON(addr_width < BITS_PER_LONG && last_pfn >> addr_width)` 检查失败。
+
+#解决方案
+修改 `intel-iommu.c` 中的代码，将 `dmar_domain->gaw = addr_width;` 修改为 `dmar_domain->gaw = min(dmar_domain->gaw, addr_width);`。用户已验证该补丁有效。

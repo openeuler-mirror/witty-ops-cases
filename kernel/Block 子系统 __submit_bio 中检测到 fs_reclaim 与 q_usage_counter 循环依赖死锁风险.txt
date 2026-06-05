@@ -1,0 +1,19 @@
+#标题
+Block 子系统 __submit_bio 中检测到 fs_reclaim 与 q_usage_counter 循环依赖死锁风险
+
+#内核版本
+6.12.0-rc5-next-20241029
+
+#问题现象
+- Syzkaller 测试中触发 Lockdep 警告，报告 "possible deadlock in __submit_bio"。
+- 内核日志输出 "possible unsafe locking scenario" 与 "*** DEADLOCK ***"。
+- 进程 repro 在持有 fs_reclaim 锁的情况下尝试获取 q_usage_counter 锁，而系统中已存在相反的锁获取顺序，形成循环依赖。
+
+#问题根因
+二分定位结果显示问题由提交 f1be1788a32e ("block: model freeze & enter queue as lock for supporting lockdep") 引入。该提交为块层队列冻结与进入机制建立了 lockdep 模型，暴露了以下两条锁获取路径的顺序冲突：
+1. 初始化路径：sd_probe -> blk_mq_init_tags -> kmalloc (持有 fs_reclaim) -> 获取 q_usage_counter。
+2. IO 提交与内存回收路径：__submit_bio (持有 q_usage_counter) -> shmem_writepage -> shrink_folio_list -> __alloc_pages_slowpath (尝试获取 fs_reclaim)。
+这种 ABBA 锁序冲突导致 Lockdep 报告潜在死锁。
+
+#解决方案
+暂无（Bug 状态为 NEW，尚未合并修复补丁）。

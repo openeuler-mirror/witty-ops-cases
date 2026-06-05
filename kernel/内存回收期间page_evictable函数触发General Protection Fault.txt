@@ -1,0 +1,17 @@
+#标题
+内存回收期间page_evictable函数触发General Protection Fault
+
+#内核版本
+3.2.6, 3.14.4
+
+#问题现象
+- 系统日志报告 general protection fault，RIP 位于 `page_evictable` 函数（不同版本偏移量不同）。
+- 故障常发生在内存回收路径，涉及进程包括 `kswapd0`、`mysqld` 以及 `rdiff-backup`。
+- 调用栈显示调用链为 `shrink_active_list`/`shrink_page_list` -> `shrink_zone` -> `kswapd`。
+- 部分情况下故障会导致 Kernel Panic，提示 "Attempted to kill the idle task!" 或 "Fatal exception in interrupt"。
+
+#问题根因
+故障发生在 `page_evictable` 函数内部执行 `mapping_unevictable(page_mapping(page))` 时。根据寄存器分析，`page_mapping` 返回的指针（存储于 RAX 寄存器）地址值异常（例如 `01ff8800d757da00`），导致后续解引用访问 `mapping->flags` 时触发 General Protection Fault。报告者推测可能为 `swapper_space` 结构损坏或 `page->mapping` 指针被错误赋值。
+
+#解决方案
+暂无（Bug 状态为 NEW，报告中未提供修复补丁）

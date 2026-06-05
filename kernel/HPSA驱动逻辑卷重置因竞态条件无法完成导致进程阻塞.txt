@@ -1,0 +1,17 @@
+#标题
+HPSA驱动逻辑卷重置因竞态条件无法完成导致进程阻塞
+
+#内核版本
+4.11.0-14-generic（问题亦见于 4.16.3、4.19.13、5.7.1）
+
+#问题现象
+- HPSA 控制器（如 P420i）在进行逻辑卷重置（resetting logical Direct-Access）时无法完成，导致系统负载急剧升高（可达 3000）。
+- 多个进程（如 cmaeventd、jbd2、kworker、scsi_eh_0）处于 D 状态（Blocked）超过 120 秒。
+- 内核日志显示 "hpsa ... resetting logical ..." 后长时间无响应，或报 "Controller lockup detected"。
+- 堆栈信息显示阻塞点位于 `scsi_block_when_processing_errors`、`hpsa_scsi_do_simple_cmd` 或 `wait_for_completion_io`。
+
+#问题根因
+hpsa 驱动内部存在竞态条件。重置处理程序（reset handler）与完成处理程序（completion handler）之间存在竞争，具体表现为 `reset_pending` 字段检查与设置的时序错误，导致 `wait_event` 的唤醒条件永远无法满足，重置操作永久挂起。
+
+#解决方案
+开发者提供了修复补丁 "hpsa: correct device resets"，修正了重置处理程序与完成处理程序之间的竞态条件。该补丁计划提交至 kernel.org。临时规避方案包括将控制器切换为 HBA 模式。

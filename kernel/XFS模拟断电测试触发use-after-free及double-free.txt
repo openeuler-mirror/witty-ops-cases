@@ -1,0 +1,17 @@
+#标题
+XFS模拟断电测试触发use-after-free及double-free
+
+#内核版本
+v5.3-rc2 + xfs-5.3-fixes-1
+
+#问题现象
+- 使用 `XFS_IOC_GOINGDOWN` ioctl 模拟断电进行压力测试时触发 KASAN 报警。
+- 内核日志报告 "BUG: KASAN: use-after-free in do_raw_spin_lock"，调用栈显示在 `xfs_buf_item_unpin` 函数中调用 `__wake_up` 时访问了已释放的内存。
+- 随后连续报告 "BUG: KASAN: double-free or invalid-free"，分别位于 `kvfree` 和 `xfs_buf_free` 函数中。
+- 最终触发断言失败："XFS: Assertion failed: atomic_read(&pag->pag_ref) > 0"。
+
+#问题根因
+在 XFS 文件系统执行 shutdown 操作期间，`xfs_buf` 对象的生命周期管理存在缺陷。根据 KASAN 日志，`xfs_buf` 对象已由 `xfs_buf_rele` -> `xfs_buf_free` 路径释放，但 `xfs_buf_item_unpin` 函数仍试图访问该 buffer 的自旋锁（位于结构体偏移 196 字节处），导致 use-after-free；同时日志显示该 buffer 关联的内存还被重复释放。
+
+#解决方案
+暂无。Bug 处于 NEW 状态，尚未合并修复补丁。

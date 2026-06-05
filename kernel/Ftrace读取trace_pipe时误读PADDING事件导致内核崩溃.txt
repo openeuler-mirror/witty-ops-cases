@@ -1,0 +1,18 @@
+#标题
+Ftrace读取trace_pipe时误读PADDING事件导致内核崩溃
+
+#内核版本
+4.19、5.10
+
+#问题现象
+系统触发 kernel panic/oops。dmesg 日志显示：
+1. 在 `ring_buffer_event_data` 中检测到 event type_len 大于 `RINGBUF_TYPE_DATA_TYPE_LEN_MAX`，触发 WARNING。
+2. 随后在 `string` 函数中访问非法虚拟地址 `0031154100000006`，导致 "Unable to handle kernel paging request"。
+3. Call trace 显示崩溃路径为 `tracing_read_pipe` -> `print_trace_line` -> `trace_raw_output_ipi_handler`。
+
+#问题根因
+`ring_buffer_peek` 错误地将 RINGBUF_TYPE_PADDING 类型的事件返回给调用者。由于 PADDING 事件的 `array[0]` 数据（如 0x18）恰好与 IPI trace 事件的类型值相同，导致 `print_trace_line` 错误地调用 `trace_raw_output_ipi_handler` 去打印该 PADDING 事件，进而将无效的内存数据作为指针访问，引发崩溃。
+深层原因可能为 CPU 乱序执行导致的竞态条件：在 `ring_buffer_peek` 读取事件数据时，该事件尚未被写入者更新为 PADDING 类型，导致读取到过期数据。
+
+#解决方案
+暂无官方修复。用户建议在 `kernel/trace/ring_buffer.c` 的 `rb_move_tail` 函数中添加 `smp_wb()` 内存屏障，确保 PADDING 类型被优先设置，以规避 CPU 乱序执行问题。

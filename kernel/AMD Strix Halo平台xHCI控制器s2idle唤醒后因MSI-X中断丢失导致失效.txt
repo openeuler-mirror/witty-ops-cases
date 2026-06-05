@@ -1,0 +1,23 @@
+#标题
+AMD Strix Halo平台xHCI控制器s2idle唤醒后因MSI-X中断丢失导致失效
+
+#内核版本
+6.12.63 - 6.19.6（问题在6.12上偶发，6.18后变为必现）
+
+#问题现象
+- 系统从s2idle状态唤醒后，xHCI控制器失效，所有连接该控制器的USB设备丢失
+- dmesg显示：xhci_hcd: "xHCI host not responding to stop endpoint command"、"xHCI host controller not responding, assume dead"、"HC died; cleaning up"
+- 唤醒过程耗时约10秒
+- 影响硬件包括Framework Desktop（AMD Ryzen AI Max 300）、ASUS Z13、Lenovo ThinkPad T14 Gen 6 AMD等搭载Strix Halo的平台
+
+#问题根因
+xHCI控制器在s2idle唤醒后硬件正常工作（事件环显示控制器已完成所有事件，USBSTS寄存器EINT位已置位），但MSI-X中断未能正确传递至CPU，导致驱动程序中断处理程序未被调用、命令超时。debugfs分析确认事件环dequeue指针停滞，驱动未感知到已完成的事件。强制使用MSI（禁用MSI-X）或使用传统INTx中断可规避问题，表明根因位于PCI子系统的MSI-X中断在s2idle唤醒后的恢复路径。
+
+#解决方案
+临时规避方案：
+1. 使用内核参数 xhci_hcd.quirks=0x40 禁用MSI-X，改用传统INTx中断
+2. 唤醒后手动解绑重绑驱动恢复功能：
+   echo -n "0000:c1:00.4" > /sys/bus/pci/drivers/xhci_hcd/unbind
+   sleep 2
+   echo -n "0000:c1:00.4" > /sys/bus/pci/drivers/xhci_hcd/bind
+3. 或修改xhci-pci.c强制使用MSI而非MSI-X（需重新编译内核）

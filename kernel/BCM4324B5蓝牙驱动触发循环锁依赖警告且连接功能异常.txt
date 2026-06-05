@@ -1,0 +1,16 @@
+#标题
+BCM4324B5蓝牙驱动触发循环锁依赖警告且连接功能异常
+
+#内核版本
+4.16-rc4（问题在 4.17-rc1 仍存在）
+
+#问题现象
+- BCM4324B5 蓝牙芯片仅在开启 discovery/scan 功能时才能连接已配对设备，否则连接无法建立。
+- 系统启动时内核日志打印 "WARNING: possible circular locking dependency detected"。
+- 告警堆栈显示 `kworker` 进程在 `bcm_recv` 函数中试图获取 `bcm_device_lock` 时检测到潜在死锁风险。
+
+#问题根因
+`hci_uart` 模块中的 `bcm_recv` 函数存在循环锁定依赖问题。锁定链路为：`&buf->lock` -> `&tty->ldisc_sem` -> `&tty->legacy_mutex` -> `bcm_device_lock`。当前上下文（`flush_to_ldisc` -> `ttyport_receive_buf` -> `hci_uart_receive_buf` -> `bcm_recv`）持有 `&buf->lock` 并试图获取 `bcm_device_lock`，而系统中存在反向获取锁的路径，导致内核锁验证器报警。
+
+#解决方案
+暂无

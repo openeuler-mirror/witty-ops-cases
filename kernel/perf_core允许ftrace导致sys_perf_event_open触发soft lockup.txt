@@ -1,0 +1,16 @@
+#标题
+perf/core允许ftrace导致sys_perf_event_open触发soft lockup
+
+#内核版本
+v6.3-rc4
+
+#问题现象
+- 内核日志报错 "watchdog: BUG: soft lockup - CPU#0 stuck for 26s!"
+- 系统触发 Kernel panic："softlockup: hung tasks"
+- Call Trace 显示在 `sys_perf_event_open` 调用链中出现 `perf_ftrace_function_call` 与 `text_poke` 相关的循环调用
+
+#问题根因
+由提交 `79df45731da68772d2285265864a52c900b8c65f` ("perf/core: Allow ftrace for functions in kernel/event/core.c") 引入。该提交允许对 `kernel/event/core.c` 中的函数进行 ftrace 跟踪。在 `sys_perf_event_open` 注册 ftrace 事件时，`text_poke` 修改代码触发了 `perf_ftrace_function_call`，而后者又调用了需要 `text_poke` 的路径，形成递归调用或死循环，导致 CPU 无法调度进而触发 soft lockup。
+
+#解决方案
+回退提交 `79df45731da68772d2285265864a52c900b8c65f` 可解决此问题；截止报告时间，上游尚未合并正式修复补丁。

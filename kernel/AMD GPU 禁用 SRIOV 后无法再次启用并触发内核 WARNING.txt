@@ -1,0 +1,20 @@
+#标题
+AMD GPU 禁用 SRIOV 后无法再次启用并触发内核 WARNING
+
+#内核版本
+v4.3.5 至 4.5.0-rc3
+
+#问题现象
+- 在 AMD GPU 上禁用 SRIOV 后再次启用时失败，dmesg 报告内核 WARNING。
+- 日志信息：`WARNING: CPU: 1 PID: 3390 at drivers/pci/ats.c:85 pci_disable_ats+0x26/0xa4()`。
+- 触发点：`drivers/pci/ats.c` 中 `WARN_ON(!dev->ats_enabled)` 判定为真。
+
+#问题根因
+IOMMU attach/detach 调用流程不对称导致状态残留。
+1. 禁用 SRIOV 时（`pci_disable_sriov`），未调用 `amd_iommu_detach_device`，导致设备销毁后其 `dev_data` 仍残留在 iommu 列表中。
+2. 再次启用 SRIOV 时（`pci_enable_sriov`），新创建的 Virtual Function (VF) 设备通过 `iommu_init_device` 查找到了残留的旧 `dev_data`。
+3. 后续调用 `amd_iommu_attach_device` 时，因旧 `dev_data->domain` 非空，错误触发了 `detach_device` 流程，进而调用 `pci_disable_ats`。
+4. 此时新设备的 `ats_enabled` 标志位为 0，触发 `WARN_ON` 告警。
+
+#解决方案
+暂无

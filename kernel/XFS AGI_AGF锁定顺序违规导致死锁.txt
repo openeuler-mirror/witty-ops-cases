@@ -1,0 +1,21 @@
+#标题
+XFS AGI/AGF锁定顺序违规导致死锁
+
+#内核版本
+v6.6-rc5
+
+#问题现象
+执行 xfstests 测试集 xfs/538 用例时系统挂起，内核日志显示多个任务阻塞超过 120 秒（D 状态）：
+- kcompactd0 进程阻塞在 `folio_wait_bit_common` -> `migrate_pages_batch`
+- kworker/5:0 进程阻塞在 `xfs_buf_lock` -> `xfs_inodegc_worker`
+日志中伴随大量 XFS 错误注入信息。
+
+#问题根因
+XFS 分配组（AG）锁的获取顺序违反了既定规则（AGI/AGF 必须按 AG 编号递增顺序锁定，且同一 AG 内 AGI 须先于 AGF 锁定），导致死锁。
+死锁涉及三个任务形成的循环等待：
+1. Task A 持有 AG 1 的 AGF 锁，等待 AG 3 的 AGF 锁。
+2. Task B（symlink 操作）持有 AG 2 的 AGI 锁，等待 AG 1 的 AGF 锁。原因是 `xfs_bmap_exact_minlen_extent_alloc` 从 AG 0 开始迭代分配数据块，导致反向依赖。
+3. Task C（mkdir 操作）持有 AG 3 的 AGF 锁，等待 AG 2 的 AGI 锁。原因是分配 inode 时找到的 extent 跨越了 `max_agbno`，导致 AG 列表回绕搜索。
+
+#解决方案
+暂无（开发者曾尝试编写补丁但发现不正确，目前仅完成根因分析，尚未提交有效修复）。

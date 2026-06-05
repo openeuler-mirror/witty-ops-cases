@@ -1,0 +1,16 @@
+#标题
+Btrfs锁反转导致内核报告irq lock inversion依赖检测告警
+
+#内核版本
+3.14.4（日志显示 4.3.5 版本亦受影响）
+
+#问题现象
+- 内核日志输出 "INFO: possible irq lock inversion dependency detected" 告警信息。
+- Lockdep 检测到 `delayed_node->mutex` 与 `groups_sem`（或 `commit_root_sem`）之间存在潜在的逆向锁依赖关系，可能导致死锁。
+- 触发进程包括 htop 和 kswapd0，调用栈涉及 `shrink_slab`、`btrfs_evict_inode` 等函数。
+
+#问题根因
+Btrfs 驱动中存在锁顺序冲突。在进程上下文中，代码路径先获取 `groups_sem` 再获取 `delayed_node->mutex`；而在中断上下文中，尝试获取 `delayed_node->mutex`。Lockdep 分析指出，若 CPU0 持有 `groups_sem` 时发生中断，中断处理程序试图获取 `delayed_node->mutex`，同时 CPU1 已持有 `delayed_node->mutex` 并等待 `groups_sem`，将形成死锁闭环。
+
+#解决方案
+暂无（Bug 状态为 NEW，报告中未提供修复补丁或规避方案）。

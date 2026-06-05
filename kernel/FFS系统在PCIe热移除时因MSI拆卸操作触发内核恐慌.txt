@@ -1,0 +1,17 @@
+#标题
+FFS系统在PCIe热移除时因MSI拆卸操作触发内核恐慌
+
+#内核版本
+5.0.0-rc7
+
+#问题现象
+- 在启用 Firmware-first (FFS) 的系统上，当 PCIe 设备链路断开（如热插拔移除或执行 `nvme subsystem-reset`）时，系统触发 Kernel Panic。
+- 日志显示 "Hardware error from APEI Generic Hardware Error Source"，严重级别为 fatal。
+- 终端输出 "Kernel panic - not syncing: Fatal hardware error!"。
+- 底层硬件错误类型为 PCIe Unsupported Request (UR)。
+
+#问题根因
+在 PCIe 设备移除过程中，内核尝试禁用该设备的 MSI（Message Signaled Interrupts）。此操作需要通过 MMIO 访问设备寄存器。由于设备链路已经断开，下游端口接收到 MMIO 请求后返回 Unsupported Request (UR) 错误。在 FFS 系统上，固件捕获此错误并通过 NMI 以“致命硬件错误”的形式报告给操作系统，导致内核恐慌。根本原因是 MSI teardown 代码路径未检查设备连接状态，对已断开链路的设备进行了非法 MMIO 访问。
+
+#解决方案
+在 MSI 拆卸路径中增加对 `pci_dev_is_disconnected()` 状态的检查，若设备已断开连接则跳过 MMIO 操作。开发者已在讨论中确认重新提交了包含该修复逻辑的补丁。

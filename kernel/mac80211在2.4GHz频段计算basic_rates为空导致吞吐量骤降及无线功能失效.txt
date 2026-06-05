@@ -1,0 +1,20 @@
+#标题
+mac80211在2.4GHz频段计算basic_rates为空导致吞吐量骤降及无线功能失效
+
+#内核版本
+6.18.7（受影响版本，6.17.9未复现）
+
+#问题现象
+- MT7922网卡（驱动mt7921e）连接2.4 GHz AP时，dmesg日志持续打印："No basic rates, using min rate instead"。
+- 2.4 GHz频段下吞吐量下降约5倍。
+- 若AP发送WNM BSS Transition（Disassociation Imminent）帧，无线网卡会完全失去响应（无法扫描到任何AP），必须重新加载驱动模块或重启系统才能恢复。
+- 强制使用5 GHz频段连接时一切正常。
+
+#问题根因
+在函数 ieee80211_mgd_setup_link_sta() 调用 ieee80211_get_rates() 时，针对2.4 GHz频段的AP，计算出的 basic_rates 结果为0（空）。
+ieee80211_get_rates() 遍历 bss->supp_rates 并通过检查 (supp_rate & 0x80) 来标记基本速率，但在2.4 GHz环境下未能正确识别AP广播的基本速率，导致内核回退使用最小速率。该问题在内核版本6.17.9中未出现，在6.17.0和6.18.7中出现，具体引入问题的代码变更尚未定位，可能与mac80211模块内部变更或频段速率注册逻辑有关。
+
+#解决方案
+暂无官方补丁。
+临时规避方法：通过NetworkManager强制网卡仅使用5 GHz频段，命令如下：
+nmcli connection modify <ssid> 802-11-wireless.band a

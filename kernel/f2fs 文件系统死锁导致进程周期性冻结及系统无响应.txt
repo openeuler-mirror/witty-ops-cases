@@ -1,0 +1,20 @@
+#标题
+f2fs 文件系统死锁导致进程周期性冻结及系统无响应
+
+#内核版本
+4.14 - 4.19 (at least)
+
+#问题现象
+- 使用 f2fs 作为根分区时，系统长时间运行后出现进程（主要是 systemd-journal）周期性冻结。
+- 内核日志打印 "INFO: task systemd-journal:260 blocked for more than 120 seconds"。
+- 进程堆栈显示调用链为 `f2fs_vm_page_mkwrite` -> `down_read` -> `rwsem_down_read_failed`，处于 D 状态（不可中断睡眠）。
+- 系统最终完全无响应，必须进行硬复位。
+
+#问题根因
+f2fs 模块在处理 cached bio 提交及 PageWriteback 状态时存在逻辑缺陷，导致潜在的死锁或无限等待问题。
+
+#解决方案
+该问题已在 Linux 4.20-rc1 中修复，涉及以下关键补丁：
+1. Revert "f2fs: check last page index in cached bio to decide submission" (commit bab475c5414e)
+2. f2fs: submit cached bio to avoid endless PageWriteback (commit 48018b4cfd07)
+建议升级内核至 4.20 或后续版本，或将上述补丁合入受影响的稳定版内核。

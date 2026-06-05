@@ -1,0 +1,21 @@
+#标题
+Clevo X170KM 独立 Thunderbolt 控制器 DMAR 错误与 ICM 超时导致启动延迟及功能异常
+
+#内核版本
+5.13.12, 5.14-rc7 (测试版本含 5.15, 6.0, 6.1-rc)
+
+#问题现象
+- 系统启动时出现大量 DMAR 错误日志：`DMAR: [DMA Write NO_PASID] Request device [04:00.0] fault addr ... [fault reason 0x05] PTE Write access is not set`。
+- Thunderbolt Dock 连接后仅部分功能可用（DP 输出正常，USB 端口不可用）。
+- 启动过程出现约 80 秒延迟，dmesg 显示 `thunderbolt 0000:07:00.0: failed to send driver ready to ICM` 错误，伴随多次 20 秒超时重试。
+- 系统日志伴随 XHCI 错误。
+
+#问题根因
+该 Bug 包含两个层面的问题：
+1. **资源分配问题（已定位并修复）：** 系统 BIOS 将 PCI 主桥窗口标记为 E820 reserved 区域（EFI_MEMORY_MAPPED_IO 转换错误），导致内核无法为 Thunderbolt 控制器正确分配 BAR 资源，影响设备初始化。
+2. **ICM 通信超时（未彻底定位）：** IOMMU 故障导致驱动无法执行 DMA 操作，进而无法与 Thunderbolt 固件（ICM）建立通信。开发者推测此为特定机型（Clevo X170KM-G）的 BIOS/Firmware 问题，因为在相同控制器的其他硬件平台上无法复现。
+
+#解决方案
+- **资源分配修复：** 升级至包含 E820 reserved region 处理补丁的内核版本（v5.19 及以上），相关补丁包括 commit `fa6dae5d8208`、`d341838d776a` 等。
+- **临时规避方案：** 在内核启动参数中添加 `modprobe.blacklist=thunderbolt`，可消除启动延迟并恢复 Dock 基本功能，但会导致 Thunderbolt 控制器无法进入低功耗状态（D3），增加能耗。
+- **其他尝试：** 使用 `intel_iommu=off` 可消除 DMAR 报错，但无法解决 ICM 超时问题。

@@ -1,0 +1,19 @@
+#标题
+写入3ware RAID阵列时因SCSI host_busy原子化操作触发Kernel Panic
+
+#内核版本
+3.16 及以上版本
+
+#问题现象
+- 系统在向 3ware RAID 阵列写入数据时触发 Kernel Panic。
+- 可通过命令 `dd if=/dev/zero of=test bs=1G count=10` 稳定复现。
+- 启用 CONFIG_DMA_API_DEBUG 后，日志中出现告警：`WARNING: CPU: 6 PID: 1736 at lib/dma-debug.c:601 debug_dma_assert_idle`，提示 `DMA-API: cpu touching an active dma mapped cacheline`。
+- 崩溃堆栈指向 `intel_unmap_sg` 函数，具体崩溃发生在访问 `sglist[0].dma_address` 时。
+
+#问题根因
+- 经 Git bisect 定位，问题由提交 `74665016086615bbaa3fa6f83af410a0a4e029ee` 引入，该提交标题为 "scsi: convert host_busy to atomic_t"。
+- 该修改将 `host_busy` 转换为原子变量以减少锁竞争，但引入了竞态条件。
+- 在 `intel_unmap_sg` 函数中，`sglist[0]` 指针为 NULL，当尝试访问结构体成员 `dma_address`（偏移量 0x10）时触发崩溃。
+
+#解决方案
+升级至 4.x.y 或更高版本的内核，该问题在后续版本中已无法复现。

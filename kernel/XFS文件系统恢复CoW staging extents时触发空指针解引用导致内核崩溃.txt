@@ -1,0 +1,18 @@
+#标题
+XFS文件系统恢复CoW staging extents时触发空指针解引用导致内核崩溃
+
+#内核版本
+v6.3-rc3
+
+#问题现象
+- 内核触发 NULL pointer dereference，访问地址为 000000000000022b，导致 Oops (0000 [#1])
+- 故障发生在 xfs_btree_lookup_get_block+0xc4/0x300 处
+- XFS 报告元数据损坏：Metadata corruption detected at xfs_btree_lookup_get_block, xfs_refcountbt block 0x28
+- 日志显示 "Failed to recover leftover CoW staging extents, err -117"
+- 调用栈显示故障路径为 xfs_mountfs -> xfs_log_mount_finish -> xfs_reflink_recover_cow -> xfs_refcount_recover_cow_leftovers -> xfs_btree_lookup
+
+#问题根因
+经 Bisect 分析，怀疑问题由提交 7993f1a431bc5271369d359941485a9340658ac3 ("xfs: only run COW extent recovery when there are no live extents") 引入。该提交修改了 COW extent 恢复逻辑，导致在特定条件下（如挂载文件系统进行日志恢复时）xfs_btree_lookup_get_block 函数访问了非法内存地址。
+
+#解决方案
+暂无。Bug 处于 NEW 状态，尚未合并修复补丁。

@@ -1,0 +1,17 @@
+#标题
+Sparc架构下PCI BAR分配因VGA帧缓冲区预留冲突导致设备初始化失败
+
+#内核版本
+4.3（问题在 4.8、4.9-rc、4.16、4.17、4.18-rc 等版本中持续存在）
+
+#问题现象
+- 系统启动时内核日志大量报错：`pci ...: can't claim BAR ...: address conflict with Video RAM area`
+- 部分设备报错：`pci ...: can't claim BAR ...: no compatible bridge window`
+- 驱动加载失败，例如 `qla1280` 报错：`Unable to map I/O memory`，无法映射 BAR 空间
+- 故障涉及多种 Sparc 机型（如 V100, V210, V240, T2000, Netra X1 等）及部分 x86 机型（Dell PE 1650）
+
+#问题根因
+Sparc 架构代码在 PCI 设备扫描前，通过 `pci_register_legacy_regions` 函数无条件预留了 legacy VGA 帧缓冲区内存区域（地址范围 0xa0000-0xbffff）。部分 PCI 设备（如网卡 Expansion ROM）的 BAR 空间恰好落在该预留区域内。当内核后续执行 `pci_claim_bus_resources` 尝试声明 PCI 设备资源时，因地址已被 VGA 预留区域占用而触发冲突，导致 BAR 分配失败。
+
+#解决方案
+开发者提出了修复补丁 "Reserve VGA framebuffer only if VGA device is present"。该方案修改了资源预留逻辑，仅在系统中检测到 VGA 设备时才预留帧缓冲区区域，从而避免与非 VGA 设备的 BAR 空间发生冲突。测试反馈显示，在包含该修复的内核版本中问题已消失。

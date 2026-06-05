@@ -1,0 +1,17 @@
+#标题
+AMD IOMMU环境下PCI桥接设备直通失败导致qemu-kvm崩溃
+
+#内核版本
+3.1（评论中提及 3.1.10、3.3）
+
+#问题现象
+- 在AMD平台上尝试将PCI桥接器后方的设备（如RaLink RT2800网卡）直通给KVM虚拟机时失败，报错：`Failed to assign device "hostdev0" : Device or resource busy`。
+- 若尝试将PCI桥接器本身加入虚拟机配置，报错：`Unable to reset PCI device 0000:00:14.4: no FLR, PM reset or bus reset available`。
+- 虚拟机关机时qemu-kvm进程崩溃并变为僵尸进程。
+- 相比之下，PCIe设备直通功能正常，仅传统PCI设备（位于桥接器后方）存在问题。
+
+#问题根因
+故障设备位于PCIe-to-PCI桥接器（如00:14.4）后方。AMD-Vi（IOMMU）在初始化时，将桥接器后方的所有设备别名化为桥接器本身的设备ID（dmesg日志显示`DEV_ALIAS_RANGE`）。当进行设备直通分配时，系统尝试对桥接器设备进行复位操作，但该桥接器不支持FLR（Function Level Reset）、PM reset或Bus reset，导致复位失败，进而引发直通分配失败或关机时的内核崩溃。
+
+#解决方案
+暂无官方修复补丁。用户尝试将桥接器后方所有设备同时加入虚拟机或使用pci-stub隔离，均未解决问题。同类环境测试表明Xen虚拟化平台可正常处理此场景，推测为KVM或AMD IOMMU驱动在处理桥接设备别名与复位逻辑上的缺陷。

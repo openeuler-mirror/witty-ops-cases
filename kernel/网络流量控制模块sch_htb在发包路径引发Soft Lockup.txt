@@ -1,0 +1,17 @@
+#标题
+网络流量控制模块sch_htb在发包路径引发Soft Lockup
+
+#内核版本
+5.15.79-1-virt #2-Alpine
+
+#问题现象
+- 系统停止响应，ACPI重启与关机操作均失效，需强制断电重启。
+- 内核日志报告 "watchdog: BUG: soft lockup"。
+- CPU#0 在 idle 进程中卡死 288 秒。
+- CPU#1 在处理网络软中断时卡死 63 秒。
+
+#问题根因
+故障发生在虚拟机环境中。CPU#1 在处理网络接收软中断（`net_rx_action`）时，调用链为 `virtnet_poll` -> `ip_local_deliver` -> `ipt_REJECT` -> `__icmp_send` -> `htb_dequeue`。系统在执行 iptables 的 REJECT 动作并发送 ICMP 消息时，数据包经过 HTB（Hierarchical Token Bucket）流控队列，在 `sch_htb` 模块的 `htb_dequeue` 函数中长时间占用 CPU 无法释放（超过 60 秒），导致 soft lockup。
+
+#解决方案
+暂无（Bug 状态为 NEW，报告中未提供修复方案）。

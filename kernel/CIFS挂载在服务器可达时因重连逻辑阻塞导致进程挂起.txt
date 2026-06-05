@@ -1,0 +1,17 @@
+#标题
+CIFS挂载在服务器可达时因重连逻辑阻塞导致进程挂起
+
+#内核版本
+4.8.0-54-generic
+
+#问题现象
+- CIFS挂载点每天数次挂起，持续数分钟。
+- 受影响进程处于不可中断睡眠状态（D状态），无法被杀死，严重时导致桌面卡死。
+- 内核日志打印 "INFO: task git blocked for more than 120 seconds"。
+- Call Trace显示进程阻塞在 `cifs_reconnect_tcon` 函数的 `mutex_lock` 处。
+
+#问题根因
+进程在执行路径查找时调用 `cifs_reconnect_tcon` 尝试重连，但在获取互斥锁（`mutex_lock`）时阻塞，导致进程进入 `D` 状态超过 120 秒。尽管服务器端可达，客户端仍触发了重连逻辑并陷入锁等待。
+
+#解决方案
+暂无官方修复。临时规避方法为使用 `sudo umount --all --types cifs --lazy` 卸载挂载点，但挂起的进程需等待内部 CIFS 超时后才会恢复。
