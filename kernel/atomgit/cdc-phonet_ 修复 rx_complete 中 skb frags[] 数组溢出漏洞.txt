@@ -1,0 +1,20 @@
+#标题
+cdc-phonet: 修复 rx_complete 中 skb frags[] 数组溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当插入一个恶意 USB 设备并伪装为 CDC Phonet 调制解调器时，通过发送大量全页（full-page）批量传输，可导致内核 `skb_shared_info->frags[]` 数组发生溢出，可能引发内核 panic 或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+恶意 USB 设备可以发送无限制的全页批量传输序列。在 `rx_complete` 函数处理逻辑中，原代码未对 `skb` 的 frag 数量进行检查，直接调用 `skb_add_rx_frag` 添加片段，导致 `frags[]` 数组越界溢出。
+
+#解决方案
+在 `rx_complete` 函数中添加 `frags` 数量检查。在调用 `skb_add_rx_frag` 之前，判断 `skb_shinfo(skb)->nr_frags` 是否小于 `MAX_SKB_FRAGS`。若达到限制，则丢弃当前 `skb` 并增加 `rx_length_errors` 统计计数，从而防止数组溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8219ec8dde841a4988b04a26a4858acdcfcba64f

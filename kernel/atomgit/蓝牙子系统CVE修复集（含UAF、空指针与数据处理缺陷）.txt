@@ -1,0 +1,31 @@
+#标题
+蓝牙子系统CVE修复集（含UAF、空指针与数据处理缺陷）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 蓝牙连接删除过程中，若存在待处理的延时工作队列（info_timer/id_addr_timer），可能导致释放后使用或内核崩溃。
+2. 在特定配置流程中，通道状态不一致可能导致 `l2cap_ertm_init` 初始化失败或不必要的断开连接。
+3. 处理异常或恶意构造的L2CAP数据包时，可能出现内核空指针引用或内存访问越界。
+4. 蓝牙广播监控添加过程中，在取消操作状态下可能发生空指针引用。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **连接删除时序问题**：`l2cap_conn_del` 函数中，延时工作队列的取消操作位于互斥锁之后或条件判断中，未在持有连接对象引用前彻底禁止，存在竞争条件导致的UAF风险。
+2. **数据处理缺乏校验**：`l2cap_segment_sdu` 未对 `pdu_len` 进行零值检查，`l2cap_ecred_data_rcv` 未检查数据包长度是否足以包含SDU长度字段，可能导致后续计算或内存访问错误。
+3. **状态检查缺失**：`l2cap_config_req` 在调用 `l2cap_ertm_init` 前未检查通道是否已处于 `BT_CONNECTED` 状态，导致配置流程异常；`l2cap_sock_ready_cb` 未检查 socket 指针是否存在。
+4. **逻辑判断错误**：`mgmt_add_adv_patterns_monitor_complete` 错误地使用了 `&&` 逻辑，导致在某些取消场景下未能正确返回，继续访问已无效的数据。
+
+#解决方案
+1. 在 `l2cap_conn_del` 函数开头、持有锁之前，调用 `disable_delayed_work_sync` 提前禁止 `info_timer` 和 `id_addr_timer`，确保安全回收。
+2. 在 `l2cap_segment_sdu` 中增加 `pdu_len` 为零的检查，直接返回 `-EINVAL`。
+3. 在 `l2cap_config_req` 中增加 `chan->state != BT_CONNECTED` 的状态判断，仅在非连接状态下执行初始化流程。
+4. 在 `l2cap_ecred_data_rcv` 中增加 `pskb_may_pull` 校验，确保数据包包含足够的头部信息。
+5. 在 `l2cap_sock_ready_cb` 中增加 `sk` 指针非空检查。
+6. 修正 `mgmt_add_adv_patterns_monitor_complete` 中的逻辑运算符，将 `&&` 改为 `||`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/23ecc0d77ca08ce00813601e1405f70177a45701

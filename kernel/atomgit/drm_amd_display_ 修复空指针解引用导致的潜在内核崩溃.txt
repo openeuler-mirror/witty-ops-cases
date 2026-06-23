@@ -1,0 +1,24 @@
+#标题
+drm/amd/display: 修复空指针解引用导致的潜在内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD 显示驱动进行显示模式设置或 HDCP（高带宽数字内容保护）相关操作时，若特定指针（如 `dm_state` 或 `dc_link`）未正确初始化或为空，内核可能发生空指针解引用错误，导致系统崩溃或显示功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+代码逻辑存在缺陷，未对关键数据结构指针进行有效性检查：
+1. 在 `create_validate_stream_for_sink` 函数中，未检查 `dm_state` 指针是否为空即直接将其作为参数传递给 `create_stream_for_sink` 函数使用。
+2. 在 `amdgpu_dm_atomic_commit_tail` 函数的 HDCP 更新流程中，未检查 `aconnector->dc_link` 是否为空即直接访问其 `link_index` 成员。
+
+#解决方案
+在访问指针变量前增加非空检查：
+1. 在 `create_validate_stream_for_sink` 函数入口处增加 `if (!dm_state) return NULL;` 判断，若指针为空则直接返回。
+2. 在调用 `hdcp_update_display` 前，增加 `if (aconnector->dc_link)` 条件判断，确保仅在该指针有效时才执行 HDCP 更新操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f31f3a824efcb0d5a1597909c98269904a9f660c

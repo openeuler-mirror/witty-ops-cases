@@ -1,0 +1,21 @@
+#标题
+drm/amd/display: DCE 编码器缺失能力信息导致内核日志告警误报
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在部分 GPU 上，VBIOS 未提供 encoder caps（编码器能力信息）或仅部分编码器缺失该信息。此时内核日志会持续打印警告信息 "Failed to get encoder_cap_info from VBIOS"，干扰日志查看，实际上这并非功能性故障，系统能够正常处理该情况。
+
+#主要错误日志
+DC_LOG_WARNING("%s: Failed to get encoder_cap_info from VBIOS with error code %d!\n", __func__, result);
+（注：错误代码对应 BP_RESULT_NORECORD）
+
+#问题根因
+在 `dce110_link_encoder_construct` 和 `dce60_link_encoder_construct` 函数中，代码逻辑错误地将获取 VBIOS encoder caps 失败（返回值非 BP_RESULT_OK）全部视为异常并打印警告。实际上，当返回值为 `BP_RESULT_NORECORD` 时，表示 VBIOS 中仅仅是缺少记录，属于部分 GPU 的正常情况，不应该触发警告日志。
+
+#解决方案
+修改判断逻辑，仅当获取 encoder caps 的结果既不是成功（BP_RESULT_OK）也不是无记录（BP_RESULT_NORECORD）时，才打印警告日志。具体改动是在打印警告的 `else` 分支中增加条件判断 `if (result != BP_RESULT_NORECORD)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/55c8ac4a48ed02b131fddbeea360b38c8f770ab1

@@ -1,0 +1,20 @@
+#标题
+ext4 move extent操作对配额文件的检查逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 ext4 文件系统执行 move extent 操作时，若仅源 inode 或仅目标 inode 为配额文件，操作未被正确拦截且未返回 -EOPNOTSUPP，导致配额文件的数据一致性受到潜在影响。
+
+#主要错误日志
+ext4 debug: ext4 move extent: The argument files should not be quota files [ino:orig %lu, donor %lu]
+
+#问题根因
+在 `mext_check_arguments` 函数中，判断是否为配额文件的逻辑使用了逻辑与（&&）操作符。原代码要求源 inode 和目标 inode **同时**为配额文件才返回错误，这违背了设计意图：只要**任意一方**是配额文件，move extent 操作就不应该被支持。
+
+#解决方案
+修改 `fs/ext4/move_extent.c` 文件中的判断逻辑，将条件判断符由逻辑与（&&）修正为逻辑或（||），确保只要源 inode 或目标 inode 中任意一个是配额文件，即返回 -EOPNOTSUPP 阻止操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f197737f85c25182a826d348b5cbb8c5bfe59021

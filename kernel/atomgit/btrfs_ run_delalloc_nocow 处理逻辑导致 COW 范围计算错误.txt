@@ -1,0 +1,24 @@
+#标题
+btrfs: run_delalloc_nocow 处理逻辑导致 COW 范围计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Btrfs 文件系统执行写入操作时，如果文件存在空洞或Extent之间有间隙，`run_delalloc_nocow` 函数在处理非COW（No-COW）逻辑时会发生错误。具体表现为：当检测到下一个 Extent 的起始位置与当前处理位置存在间隙时，代码错误地跳转至 `must_cow` 标签，导致跳过了对当前 Extent item 的正确处理。这会导致系统高估需要回退到 COW（写时复制）模式的数据范围，可能引发不必要的 COW 操作，影响文件系统的空间利用效率和写入性能。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `run_delalloc_nocow` 函数中，当发现下一个 `btrfs_key` 的 offset 大于当前的 `cur_offset`（即检测到间隙）时，原代码逻辑直接跳转到 `must_cow` 标签。该跳转行为会递增 slot 并强制回退到 COW 模式，从而跳过了当前的 extent item。这导致逻辑错误地将间隙部分以及后续可能不需要 COW 的范围都纳入了 COW 处理区域，造成 COW 回退范围的高估。
+
+#解决方案
+修改 `run_delalloc_nocow` 函数中间隙检测的处理逻辑：
+1. 当检测到间隙（`found_key.offset > cur_offset`）时，不再直接跳转到 `must_cow`。
+2. 如果当前未记录 COW 范围（`cow_start` 未设置），则将 `cow_start` 设置为当前的 `cur_offset`。
+3. 将 `cur_offset` 更新为下一个 extent 的起始位置（`found_key.offset`）。
+4. 跳转到 `next_slot` 标签，以便重新检查当前的 extent item，确保正确处理间隙并避免错误扩大 COW 范围。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5a689bb93c95d311c582a791037116ae0ee45ffd

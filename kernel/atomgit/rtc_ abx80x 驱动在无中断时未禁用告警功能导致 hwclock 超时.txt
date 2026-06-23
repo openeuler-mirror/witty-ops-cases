@@ -1,0 +1,20 @@
+#标题
+rtc: abx80x 驱动在无中断时未禁用告警功能导致 hwclock 超时
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在没有指定中断或中断无法挂载的情况下，rtc-abx80x 驱动未清除告警功能位，导致用户态程序（如 hwclock）调用 `RTC_UIE_ON` 等 ioctl 时错误地返回成功，随后在等待时钟滴答时发生超时。具体表现为执行 `hwclock` 命令时输出：`hwclock: select() to /dev/rtc0 to wait for clock tick timed out`。
+
+#主要错误日志
+hwclock: select() to /dev/rtc0 to wait for clock tick timed out
+
+#问题根因
+驱动程序 `rtc-abx80x` 在未关联中断时未清除 `RTC_FEATURE_ALARM` 特性位，而是依赖 `set_alarm` 操作返回错误来阻止告警设置。内核提交 795cda8338ea ("rtc: interface: Fix long-standing race when setting alarm") 修复了设置告警时的竞态条件，但这导致在特性校验阶段本应中止的操作继续执行到 `rtc_timer_enqueue()`，并最终向调用者返回成功状态，引发后续的等待超时。
+
+#解决方案
+在驱动探测函数 `abx80x_probe` 中增加判断：若 `client->irq` 小于等于 0（即无有效中断），则调用 `clear_bit(RTC_FEATURE_ALARM, priv->rtc->features)` 显式清除告警特性位，确保在没有中断支持时禁用告警功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/84afd7338bba5b7817c5f41ba0bfe3f57b3ecee2

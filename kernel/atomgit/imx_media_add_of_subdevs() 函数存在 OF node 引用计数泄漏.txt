@@ -1,0 +1,20 @@
+#标题
+imx_media_add_of_subdevs() 函数存在 OF node 引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `imx_media_add_of_subdevs()` 函数解析设备树节点时，由于未正确释放 `of_node` 的引用计数，导致内核对象引用计数泄漏。若系统长时间运行或频繁触发该逻辑，可能导致内存泄漏（Memory Leak），设备树节点对象无法被正常释放。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `imx_media_add_of_subdevs()` 调用 `of_parse_phandle()` 获取节点指针 `csi_np`，随后将其传递给 `imx_media_of_add_csi()`。在 `imx_media_of_add_csi()` 内部调用的 `v4l2_async_nf_add_fwnode()` 中会增加该节点的引用计数。原有逻辑仅在 `imx_media_of_add_csi()` 失败时释放节点，但在函数成功执行时未调用 `of_node_put()` 进行释放，导致节点引用计数泄漏。
+
+#解决方案
+在 `imx_media_of_add_csi()` 调用结束后，无论返回值是否成功，都应立即调用 `of_node_put()` 释放 `csi_np` 节点引用。同时移除错误处理路径中的冗余 `of_node_put()` 调用及 `err_out` 标签，直接返回错误码以简化逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/937c02489ea5156e0f0850b20b424ecfde47bbf2

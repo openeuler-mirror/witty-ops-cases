@@ -1,0 +1,22 @@
+#标题
+drm/amd/display: DML 局部变量空指针访问缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 显示模块（drm/amd/display）的 DCN32 架构 DML 计算逻辑中，函数 `subvp_drr_schedulable` 和 `subvp_vblank_schedulable` 存在空指针解引用风险。若不满足特定条件导致指针（如 `drr_timing` 或 `subvp_pipe`）未正确赋值（保持初始化时的 NULL 状态），后续代码直接访问该指针成员将引发内核空指针访问错误（Oops/Panic），导致显示功能异常或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 在 `subvp_drr_schedulable` 函数中，变量 `drr_timing` 初始化为 NULL，代码逻辑在未检查其是否有效的情况下，直接访问 `drr_timing->min_refresh_in_uhz` 成员进行运算。
+2. 在 `subvp_vblank_schedulable` 函数中，变量 `subvp_pipe` 初始化为 NULL，虽然在循环中可能被赋值，但当 `found` 为真但 `subvp_pipe` 仍为 NULL 时，条件判断 `if (found)` 会通过，随即访问 `subvp_pipe->stream->timing` 导致空指针解引用。
+
+#解决方案
+1. 在 `subvp_drr_schedulable` 函数的条件判断中增加 `drr_timing` 的非空检查，确保指针有效后才进行后续计算。
+2. 在 `subvp_vblank_schedulable` 函数的条件判断中将 `if (found)` 修改为 `if (found && subvp_pipe)`，确保在访问指针成员前 `subvp_pipe` 已正确赋值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0e3b97c14b66060828f5914becf6586acebbefd7

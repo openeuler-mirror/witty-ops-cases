@@ -1,0 +1,21 @@
+#标题
+ASoC: fsl_easrc: IEC958 控制变更事件未生成
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ALSA mixer-test 工具测试时，发现 fsl_easrc 驱动的 IEC958 控制接口存在缺陷。当修改控制值时，系统无法生成相应的变更事件（change events），导致用户空间无法感知控件状态的改变。测试工具输出大量告警信息，指示控件值虽已写入但未触发事件通知。
+
+#主要错误日志
+- No event generated for Context 3 IEC958 CS5
+- Context 3 IEC958 CS5.0 orig 5224 read 5225, is_volatile 0
+
+#问题根因
+函数 `fsl_easrc_iec958_put_bits()` 的实现违反了 ALSA 控制接口规范。根据规范，控件 put 操作应在控制值发生改变时返回 1，否则返回 0。但该函数无条件返回 0，导致 ALSA 核心层误判为值未改变，从而不生成任何变更事件。
+
+#解决方案
+修改 `fsl_easrc_iec958_put_bits()` 函数，在更新 `bps_iec958` 数组前先比较新值与旧值是否相等。若不相等，函数返回 1 表示值已变更；若相等则返回 0。以此确保在数据实际发生变化时，ALSA 核心层能正确生成变更事件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/256887b83814f906d2ae55e2a7116abbd98f76b0

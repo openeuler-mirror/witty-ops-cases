@@ -1,0 +1,33 @@
+#标题
+ubus: 消息工作队列空指针引用及处理逻辑缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 内核在初始化或卸载UBUS消息模块时，可能出现并发竞争导致的异常访问，甚至引发内核崩溃。
+2. 在处理端口复位或链路状态变化时，因逻辑判断错误导致事件通知流程被错误跳过。
+3. 解码器页表操作在不支持的设备上执行导致权限错误。
+
+#主要错误日志
+- `decoder or map info is null`
+- `unmap mmio decoder ptr is null`
+- `decoder_unmap ops not exist`
+- `decoder_map ops not exist`
+- `ub bus controller can't create decoder table`
+- `ub bus controller can't free decoder table`
+- `port%u is already up` (原先为 err 级别，修复后改为 warn)
+- `port%u is already down` (原先为 err 级别，修复后改为 warn)
+
+#问题根因
+1. **并发隐患**：`msg_rx_flag` 变量使用普通 bool 类型，在多核并发场景下，`message_rx_init` 和 `message_rx_uninit` 对该变量的修改与读取存在竞争条件，导致状态不一致。
+2. **控制流逻辑错误**：在 `ublc_link_up_handle` 和 `ublc_link_down_handle` 函数中，当检测到端口状态已经处于目标状态（如已 up 或已 down）时，代码直接 return，导致后续必要的 `ub_notify_share_port` 事件通知流程被跳过。
+3. **架构设计缺陷**：解码器的页表创建、释放及映射操作原先直接在通用层实现，缺乏针对特定厂商硬件的实现抽象，导致在不支持的硬件上执行非法操作，且通用层代码与硬件实现耦合度高。
+
+#解决方案
+1. **原子变量修复**：将 `msg_rx_flag` 变量类型修改为 `atomic_t`，使用 `atomic_set` 和 `atomic_read` 进行操作，并配合写内存屏障确保多核可见性，消除并发竞争。
+2. **修复事件通知跳过问题**：调整链路状态处理逻辑，将“端口状态已存在”的错误处理改为警告打印，并利用 `goto` 语句跳转至事件通知入口 `link_up_notify` 或 `link_down_notify`，确保链路变化事件能正确通知到共享端口。
+3. **解码器操作抽象化**：将解码器页表相关操作移动至 vendor/hisilicon 目录下的厂商实现文件中，通过 `ub_bus_controller_ops` 结构体注册回调函数，通用层仅调用回调接口，实现了代码解耦与功能抽象。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6b57e8d10794661104812acf779cc732e7faf890

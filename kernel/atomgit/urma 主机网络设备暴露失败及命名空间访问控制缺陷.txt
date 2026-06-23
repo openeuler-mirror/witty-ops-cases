@@ -1,0 +1,28 @@
+#标题
+urma 主机网络设备暴露失败及命名空间访问控制缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在主机网络环境下，将 URMA 设备暴露到指定的网络命名空间时功能失效，无法正确创建逻辑设备。同时，在设备分配上下文时，对非初始命名空间的访问权限检查不完善，可能导致非法访问或权限校验失败。
+
+#主要错误日志
+- `ubcore_log_err("Device or EID not accessible.\n");`
+- `ubcore_log_err("failed to find ldev for dev_name:%s, net_fd:%u.\n", device_name, ns_fd);`
+- `ubcore_log_err("failed to get ns by fd.\n");`
+
+#问题根因
+1. **设备可访问性判断不完整**：`ubcore_dev_accessible` 函数仅检查了主逻辑设备的网络命名空间，未遍历检查设备已创建的其他逻辑设备列表，导致在非初始命名空间下误判设备不可访问。
+2. **EID 命名空间重置错误**：在 `ubcore_reset_eid_ns` 中，错误地将 EID 的网络命名空间重置为 `init_net`，而实际上应重置为设备所属的命名空间。
+3. **设备暴露逻辑缺陷**：`ubcore_expose_dev_ns` 和 `ubcore_set_dev_eid_ns` 未正确处理目标命名空间与设备当前命名空间相同的情况，导致查找逻辑设备失败或重复添加。
+4. **资源管理缺陷**：存在多处 `goto` 跳转时未释放引用计数的问题，如 `put_net` 和 `ubcore_put_device`。
+
+#解决方案
+1. **修正设备可访问性检查**：修改 `ubcore_dev_accessible`，增加对 `dev->ldev_list` 的遍历，只要设备的任一逻辑设备属于目标命名空间即视为可访问。
+2. **修复 EID 重置逻辑**：在 `ubcore_reset_eid_ns` 中，使用读取到的设备网络命名空间 `dev_net` 替代硬编码的 `init_net` 进行重置。
+3. **优化设备暴露流程**：在 `ubcore_expose_dev_ns` 和 `ubcore_set_dev_eid_ns` 中，先检查目标命名空间是否与设备当前命名空间一致，若一致则直接返回成功或标记存在，避免不必要的查找或错误返回。
+4. **修复资源泄漏**：调整错误处理路径，确保在 `ubcore_set_dev_eid_ns` 失败时正确调用 `put_net` 和 `ubcore_put_device` 释放资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cc1e97087d019f01612a28c90e718a758a5fa8c1

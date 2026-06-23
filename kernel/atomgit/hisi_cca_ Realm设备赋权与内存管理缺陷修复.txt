@@ -1,0 +1,39 @@
+#标题
+hisi_cca: Realm设备赋权与内存管理缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在创建或销毁Realm虚拟机时，可能出现内存泄漏或内核崩溃，因为隔离的folio页面引用计数管理不当。
+2. 在对Realm设备进行操作时，因MMIO读写hook函数定义不全（如缺少8bit、16bit、64bit读写接口），可能导致设备访问异常或内核崩溃。
+3. PCI设备的MSI-X表区域地址计算可能发生溢出，导致内存共享设置错误，进而引发设备故障。
+4. SMMUv3在处理Realm设备时，若未正确初始化或检查状态，可能导致IOMMU操作失败或内存访问违规。
+5. Realm设备切换安全状态前未解绑原生驱动，导致设备状态冲突或功能异常。
+6. 设备验证流程存在缺陷，导致数据传递不完整或时序错误。
+
+#主要错误日志
+- "pci dev msi start overflow."
+- "pci dev msi end overflow."
+- "Failed to delegate"
+- "Failed to unbind drivers"
+- "CCA data destroy with level fail:%d."
+- "realm smmu has not enabled."
+
+#问题根因
+1. **内存管理缺陷**：`rmi_granule_delegate` 和相关内存隔离函数在处理folio时，引用计数处理逻辑存在遗漏（如错误路径下未处理put_page或get_page），且未将隔离的页面纳入Realm的管理列表中，导致页面泄漏。
+2. **PCI配置空间访问不全**：内核未提供完整的ECAM保护下的MMIO读写Hook函数，导致特定宽度的寄存器访问无法正确拦截和处理。
+3. **MSI-X地址计算溢出**：`set_msix_region_shared`函数在进行地址相加时，未检查是否发生整型溢出，导致计算出的物理地址错误。
+4. **SMMU初始化检查缺失**：在 attaching 设备时，未检查 `smmu_domain->smmu` 是否为空，且在 realm 场景下缺少必要的 domain finalize 操作。
+5. **设备状态管理不完善**：设备进入Realm保护模式前，未强制解绑主机侧驱动，可能导致主机驱动与Realm环境同时操作设备。
+
+#解决方案
+1. **修复内存泄漏**：引入 `realm_add_hugetlb_folios` 和 `realm->page_list` 机制，将隔离的folio纳入Realm管理；修正 `rmi_granule_delegate` 系列函数的引用计数处理逻辑，确保在 delegate 和 undelegate 过程中引用计数正确配对，并在销毁 Realm 时通过 `realm_put_folios` 统一释放。
+2. **完善MMIO Hook**：在 `hisi_cca_da.h` 中补充定义 `rme_read8_hook`, `rme_read16be_hook`, `rme_writeq_hook` 等全系列读写接口，确保所有宽度的寄存器访问都能被正确拦截。
+3. **增加溢出检查**：在 `set_msix_region_shared` 中增加对 `start` 和 `end` 地址计算的溢出检查，若溢出则直接返回 `-EINVAL` 并打印错误日志。
+4. **加强SMMU检查**：在 `arm_smmu_attach_dev` 中增加对 `smmu_domain->smmu` 为空的检查，并在 Realm 场景下正确执行 `arm_smmu_domain_finalise`。
+5. **强制解绑驱动**：新增 `realm_unbind_drivers` 函数，在设备赋权流程 `kvm_rme_assign_device` 中调用，确保设备在进入 Realm 前解绑主机侧非 VFIO 驱动。
+6. **优化流程与数据结构**：删除废弃的 ioctl `KVM_ARM_VCPU_RME_DEV_VALIDATE`，改用 `kvm_complete_dev_op` 在 vCPU 进入时完成设备状态同步；调整 `kvm_run` 结构体中的数据布局以适配新的通信机制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c18aa136928ca636d84e0295389af29c086c5730

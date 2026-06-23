@@ -1,0 +1,20 @@
+#标题
+urma: 初始化过程中潜在的参数溢出修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 IPoURMA 的发送和接收完成事件时，若完成记录中的 `local_id` 小于 `IPOURMA_WELL_KNOWN_JETTY_ID`，计算 `eid_idx`（`cr->local_id - IPOURMA_WELL_KNOWN_JETTY_ID`）时会发生整型下溢。该无效的 `eid_idx` 随后被用于数组索引访问（如 `priv->tx_ring[eid_idx]`），可能导致内核内存越界访问，引发 Oops 或内核崩溃。
+
+#主要错误日志
+- "IPoURMA incorrect WQE jetty id in the completion record"（注：修复补丁同时修正了错误描述字符串）
+
+#问题根因
+在 `ipourma_handle_tx_wc` 和 `ipourma_handle_rx_wc` 函数中，代码先执行了减法运算 `eid_idx = cr->local_id - IPOURMA_WELL_KNOWN_JETTY_ID`，随后才对 `cr->local_id` 进行边界校验。如果 `cr->local_id` 小于 `IPOURMA_WELL_KNOWN_JETTY_ID`，减法结果会发生下溢变成一个极大的无符号整数值，此时边界检查逻辑（`cr->local_id < IPOURMA_WELL_KNOWN_JETTY_ID`）虽然在判断后能拦截，但拦截前 `eid_idx` 的计算已经发生，且该值可能在后续逻辑中被错误使用，从而引发内存访问异常。
+
+#解决方案
+调整代码执行顺序，将 `eid_idx` 的计算逻辑移动到 `cr->local_id` 边界校验通过之后。确保只有在 `local_id` 合法的前提下才计算索引值，从而避免整型下溢带来的潜在风险。同时修正了错误日志中的描述信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a1f6052a33f76ab075b219791598dca93215e20b

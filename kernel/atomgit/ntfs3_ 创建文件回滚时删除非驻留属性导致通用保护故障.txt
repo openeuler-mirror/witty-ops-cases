@@ -1,0 +1,20 @@
+#标题
+ntfs3: 创建文件回滚时删除非驻留属性导致通用保护故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NTFS3 文件系统中执行创建文件操作失败并进入回滚流程时，如果存在非驻留的 ATTR_EA 属性，系统触发通用保护故障，导致内核崩溃。
+
+#主要错误日志
+general protection fault in run_is_mapped_full
+
+#问题根因
+在 `ntfs_create_inode` 函数的回滚路径中，删除非驻留的 ATTR_EA 属性时，调用 `attr_set_size` 函数使用了 NULL 指针作为 run tree 参数（第5个参数）。由于此时属性是非驻留的（`attr->non_res` 为真），底层逻辑需要操作 run tree，传入 NULL 指针导致了非法内存访问。
+
+#解决方案
+在 `ntfs_create_inode` 的回滚代码段中，引入临时的 `struct runs_tree run` 变量。在调用 `attr_set_size` 删除非驻留属性前初始化该 run tree，将其指针传入函数，并在操作完成后调用 `run_close` 进行清理，确保函数操作有效的内存地址而非 NULL 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f1e03c2d44713024d76a811219562984bf107f8e

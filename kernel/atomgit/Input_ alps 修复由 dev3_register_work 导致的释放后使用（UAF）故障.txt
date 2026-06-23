@@ -1,0 +1,29 @@
+#标题
+Input: alps 修复由 dev3_register_work 导致的释放后使用（UAF）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 ALPS 触摸板设备的过程中，若此时正在处理外部 PS/2 设备的数据包，内核可能发生释放后使用。该问题由静态分析工具发现，可能导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在设备断开连接流程中，psmouse_disconnect() 调用 flush_workqueue() 仅能确保调用前已排队的工作项执行完毕，无法阻止或等待调用后新提交的工作项。psmouse_state 设置为 PSMOUSE_CMD_MODE 并不影响 dev3_register_work 的调度。
+竞态条件如下：
+CPU 0 (清理路径)                  | CPU 1 (延迟工作项)
+psmouse_disconnect()              |
+  psmouse_set_state()             |
+  flush_workqueue()               | alps_report_bare_ps2_packet()
+  alps_disconnect()               |   psmouse_queue_work()
+    kfree(priv); // 释放内存 FREE | alps_register_bare_ps2_mouse()
+                                  |   priv = container_of(work...); // 使用已释放内存 USE
+                                  |   priv->dev3 // 使用已释放内存 USE
+
+#解决方案
+在 alps_disconnect() 函数中调用 disable_delayed_work_sync(&priv->dev3_register_work)。这能确保 dev3_register_work 被正确取消，并防止其在 alps_data 结构体内存释放后执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e98597332f33382c528d003ac19f2a2076acfff8

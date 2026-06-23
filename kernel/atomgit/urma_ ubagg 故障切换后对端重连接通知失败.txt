@@ -1,0 +1,27 @@
+#标题
+urma: ubagg 故障切换后对端重连接通知失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ubagg 模块发生故障切换后，系统无法向对端发送用户自定义的重连接通知消息，导致对端无法及时感知链路恢复或重建连接，影响业务连续性。
+
+#主要错误日志
+- `ubagg_log_err("create ubagg netlink fail.\n")`
+- `ubagg_log_err("Failed to register ubagg genl family, ret:%d\n", ret)`
+- `ubagg_log_err("No bonding user msg handler registered, " MSG_FMT, ...)`
+- `ubagg_log_err("Invalid net msg len, expected: %u, " MSG_FMT, desc->msg_len, MSG_ARG(msg))`
+- `ubcore_log_err("Unrecognized msg type %u\n", msg->type);`
+
+#问题根因
+ubagg 模块原先缺少 netlink 通信机制，无法处理和发送 `UBCORE_NET_BONDING_USER_MSG` 类型的用户自定义消息。同时，ubcore 协议层对消息长度的校验逻辑过于严格，不支持可变长度的用户消息，导致故障切换后的重连接通知功能缺失。
+
+#解决方案
+1. 在 ubagg 模块中新增 `ubagg_netlink.c`，实现 generic netlink 通信框架，支持用户消息的收发。
+2. 注册 `UBCORE_NET_BONDING_USER_MSG` 类型的消息处理回调函数，处理对端发送的重连接通知。
+3. 修改 ubcore 协议层 `ubcore_comm.c` 中的消息校验逻辑，允许 `msg_len` 为 0 时跳过长度校验，以支持可变长度的用户消息。
+4. 在 `ubcore_connect_bonding.c` 中增加发送接口 `ubcore_net_send_bonding_user_msg`，供 ubagg 模块调用以发送通知。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1fe3ca274fdd89aa7e27cfb046578d8962d9ccf4

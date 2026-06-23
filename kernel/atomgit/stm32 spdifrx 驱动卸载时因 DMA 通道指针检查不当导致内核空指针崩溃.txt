@@ -1,0 +1,26 @@
+#标题
+stm32 spdifrx 驱动卸载时因 DMA 通道指针检查不当导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 stm32 spdifrx 驱动初始化过程中，若请求 DMA 控制通道（ctrl_chan）失败，驱动会继续执行但在后续移除（remove）阶段触发内核 NULL 指针解引用错误，导致系统崩溃。
+
+#主要错误日志
+[    4.879000] st,stm32-spdifrx 500d0000.audio-controller: dma_request_slave_channel error -19
+[    4.888975] Unable to handle kernel NULL pointer dereference at virtual address 000000000000003d
+[...]
+[    5.096577] Call trace:
+[    5.099099]  dma_release_channel+0x24/0x100
+[    5.103235]  stm32_spdifrx_remove+0x24/0x60 [snd_soc_stm32_spdifrx]
+[    5.109494]  stm32_spdifrx_probe+0x320/0x4c4 [snd_soc_stm32_spdifrx]
+
+#问题根因
+当请求 DMA 控制通道（`dma_request_slave_channel`）失败时，函数返回的是错误指针（如 ERR_PTR），而非 NULL。但在 `stm32_spdifrx_remove` 函数中，代码仅检查了 `if (spdifrx->ctrl_chan)` 是否为真。由于错误指针（如 -19 对应的地址）在逻辑判断中为真，导致驱动错误地调用 `dma_release_channel` 释放该无效指针，从而引发内核 NULL 指针解引用崩溃。
+
+#解决方案
+修改 `stm32_spdifrx_remove` 函数中的判断逻辑，将 `if (spdifrx->ctrl_chan)` 修改为 `if (!IS_ERR(spdifrx->ctrl_chan))`。确保只有在 DMA 通道指针是有效指针时才执行释放操作，避免对错误指针进行解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/33b380a9be2cb5968aad9013aaf32abed50e9261

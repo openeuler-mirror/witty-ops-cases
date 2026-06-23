@@ -1,0 +1,20 @@
+#标题
+Bluetooth: hci_conn: 修复 set_cig_params_sync 中的潜在 UAF 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下，`set_cig_params_sync` 函数中通过 `hci_conn_hash_lookup_cig` 查找到的 `hci_conn` 对象可能正在被其他线程释放或修改。如果未持有锁保护直接访问该对象字段，会导致 Use-After-Free（UAF）漏洞，引发内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `set_cig_params_sync` 函数中，对 `hci_conn` 的查找和字段访问未在 `hdev` 锁的保护下进行。仅依赖 RCU 锁无法防止对象被并发删除或修改，导致在访问对象字段时对象可能已被释放，从而引发 UAF。
+
+#解决方案
+在 `set_cig_params_sync` 函数中调用 `hci_conn_hash_lookup_cig` 进行查找前，先调用 `hci_dev_lock(hdev)` 获取设备锁；在查找失败返回或处理完数据后，调用 `hci_dev_unlock(hdev)` 释放锁。确保整个查找和访问过程处于临界区，防止并发操作导致对象释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3fab6dbaf6ee4b3f448a83b8cf8ad993c67f3847

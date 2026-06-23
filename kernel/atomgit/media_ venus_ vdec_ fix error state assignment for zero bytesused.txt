@@ -1,0 +1,20 @@
+#标题
+media: venus: vdec: fix error state assignment for zero bytesused
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Venus 视频解码器执行 drain（排空）操作期间，当调用 hfi_session_flush 时，驱动程序会将所有排队的缓冲区返回给 V4L2 调用者。其中部分缓冲区未经实际处理，其 bytesused 值为 0。当前驱动逻辑错误地将这些 bytesused 为 0 的缓冲区标记为 VB2_BUF_STATE_ERROR，导致 EOS（End of Stream，流结束）缓冲区被错误地标记为错误状态，可能导致上层应用误判解码流异常结束。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `vdec_buf_done` 中，判断 `bytesused` 是否为 0 并将缓冲区状态置为 `VB2_BUF_STATE_ERROR` 的逻辑位置不当。原代码在处理 EOS 标志之外独立检查 `bytesused`，这导致在 drain 操作期间，即使是携带 EOS 标志的正常结束缓冲区，只要 `bytesused` 为 0 就会被错误地标记为错误状态。根本原因是未能区分“未处理的空缓冲区”与“EOS 伴随的空缓冲区”。
+
+#解决方案
+修改 `drivers/media/platform/qcom/venus/vdec.c` 中的 `vdec_buf_done` 函数逻辑。将 `bytesused` 为 0 的检查逻辑移至非 EOS（`!VENUS_DEC_STATE_EOS`）处理的分支内部。这确保了只有非 EOS 的捕获缓冲区在 payload 为 0 时才会被标记为 `VB2_BUF_STATE_ERROR`，而 EOS 缓冲区不再被错误标记。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/78e2daadeeed2cf2aad7ff3ee76fdd9cfe9d9269

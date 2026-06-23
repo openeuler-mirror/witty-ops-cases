@@ -1,0 +1,20 @@
+#标题
+tcp_cubic: HyStart 轮次起始检测错误导致性能下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TCP 慢启动阶段，HyStart 机制错误地标记了轮次的开始，导致提前终止拥塞窗口的指数增长。在高延迟（如 150ms RTT）瓶颈带宽场景下测试发现，补丁修复前，cwnd 在链路未饱和时（如 cwnd=516 < 619 BDP）就停止了指数增长；修复后，cwnd 能够增长至饱和链路（如 cwnd=632 > 619 BDP）。此问题导致 TCP 吞吐量降低，测试中传输数据量减少了约 300 KB。
+
+#主要错误日志
+未知
+
+#问题根因
+由 Commit 4e1fddc98d25 引入的修改将 `bictcp_hystart_reset` 函数的调用位置移动到了 `hystart_update` 函数内部，并在调用前增加了一个条件判断：`tcp_snd_cwnd(tp) >= hystart_low_window`。这导致当拥塞窗口小于 `hystart_low_window` 时，`bictcp_hystart_reset` 不会被调用，从而错误地标记了 HyStart 轮次的开始。这进而导致 ACK train 长度测量不准确，`ca->sample_cnt` 变量被错误重置，最终导致 HyStart 在慢启动阶段过早退出指数增长。
+
+#解决方案
+将条件判断 `tcp_snd_cwnd(tp) >= hystart_low_window` 从 `bictcp_hystart_reset` 调用之前移动到调用之后。这确保了无论拥塞窗口大小如何，`bictcp_hystart_reset` 都能在新的一轮开始时被正确调用，从而保证 HyStart 机制测量的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f8529884835b6c4739cf38aa339438f1ecb7bcbb

@@ -1,0 +1,31 @@
+#标题
+[drm/msm/gpu] 启动期间 GPU 过热节流导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统启动过程中，若 GPU 已经处于高温状态，GPU 驱动初始化时会立即触发 devfreq 冷却机制尝试降温。由于此时 GMU（Graphics Management Unit）尚未完成初始化，导致在访问 GMU 寄存器时引发内核缺页异常，造成系统崩溃。
+
+#主要错误日志
+Unable to handle kernel paging request at virtual address 0000000000014110
+pc : a6xx_gpu_busy+0x1c/0x58 [msm]
+lr : msm_devfreq_get_dev_status+0xbc/0x140 [msm]
+Call trace:
+ a6xx_gpu_busy+0x1c/0x58 [msm] (P)
+ devfreq_simple_ondemand_func+0x3c/0x150
+ devfreq_update_target+0x44/0xd8
+ qos_max_notifier_call+0x30/0x84
+ ...
+ of_devfreq_cooling_register+0x14/0x20
+ msm_devfreq_init+0xc4/0x1a0 [msm]
+
+#问题根因
+在 `msm_devfreq_init()` 初始化流程中，代码调用了 `devfreq_suspend_device()` 挂起了 devfreq 设备，但没有设置 `df->suspended` 标志位。
+这导致标志位状态与实际 devfreq 设备状态不一致。当启动期间触发热节流时，`msm_devfreq_get_dev_status()` 误判设备未挂起，尝试调用 `a6xx_gpu_busy()` 读取尚未初始化的 GMU 寄存器，从而触发崩溃。
+
+#解决方案
+在 `msm_devfreq_init()` 函数中初始化互斥锁之后，显式将 `df->suspended` 标志位设置为 `true`，确保其状态与已挂起的 devfreq 设备状态保持一致，防止在 GMU 未初始化完成时错误访问寄存器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f6eb60cc05ad9efa988166bb767038a8e1907004

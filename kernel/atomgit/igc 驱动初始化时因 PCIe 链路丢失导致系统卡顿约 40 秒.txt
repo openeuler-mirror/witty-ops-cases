@@ -1,0 +1,22 @@
+#标题
+igc 驱动初始化时因 PCIe 链路丢失导致系统卡顿约 40 秒
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在连接扩展坞启动时，若初始化过程中 PCIe 链路丢失，igc 驱动会卡住约 40 秒，导致系统启动时间显著变长。系统日志显示设备分离后，驱动仍尝试访问设备并最终加载失败。
+
+#主要错误日志
+[    1.571098] igc 0000:70:00.0 (unnamed net_device) (uninitialized): PCIe link lost, device now detached
+[   43.449095] igc_get_hw_semaphore_i225: igc 0000:70:00.0 (unnamed net_device) (uninitialized): Driver can't access device - SMBI bit is set.
+[   43.449186] igc 0000:70:00.0: probe with driver igc failed with error -13
+
+#问题根因
+当 PCIe 链路在初始化期间丢失时，EECD 寄存器读取返回全 F's（0xFFFFFFFF），表明读取失败。驱动程序未能及时检测到此失败情况，继续使用无效的 `hw->hw_addr` 进行后续的 `rd32()` 读取操作，导致驱动在 `igc_get_hw_semaphore_i225()` 函数中陷入循环等待，引发约 40 秒的挂起。
+
+#解决方案
+在 `igc_init_nvm_params_base` 函数中增加对 EECD 寄存器读取结果的校验。如果读取值为全 F's（`!(~eecd)`），立即返回 `-ENXIO` 错误码，并在上层调用逻辑中处理该返回值，从而避免后续无效的硬件访问和长时间挂起。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a911a4333c69ca1444ed23c8f8e1f683f1a4ec26

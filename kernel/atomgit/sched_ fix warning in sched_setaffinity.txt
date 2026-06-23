@@ -1,0 +1,22 @@
+#标题
+sched: fix warning in sched_setaffinity
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `sched_setaffinity` 系统调用设置进程 CPU 亲和性时，内核日志中会打印 WARNING 调用栈信息。该现象通常发生在特定的 CPU 亲和性掩码设置场景下，触发内核中的 `WARN_ON_ONCE` 检查点。
+
+#主要错误日志
+```
+WARNING: CPU: X PID: Y at kernel/sched/core.c:XXXX __sched_setaffinity+0xXXX/0xXXX
+```
+
+#问题根因
+在 `__sched_setaffinity` 函数中，代码逻辑对 `cpumask_and` 结果为空（`empty`）的情况进行了校验。原代码使用 `WARN_ON_ONCE(empty)` 来标记掩码为空的状态。然而，掩码为空属于该逻辑分支下预期可能发生的正常处理流程（当结果为空时会回退使用 `cpus_allowed`），不应触发内核的 WARNING 告警机制，误报导致了不必要的日志噪音。
+
+#解决方案
+将 `kernel/sched/core.c` 中的 `WARN_ON_ONCE(empty)` 修改为普通的 `empty` 条件判断。移除 `WARN_ON_ONCE` 宏包装，仅保留布尔值的逻辑判断。这样既保留了“掩码为空时回退到默认掩码”的正确逻辑，又避免了在正常流程中触发内核告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8fdcce9d1a241a6e2bd4882601c7b37b2daad4d6

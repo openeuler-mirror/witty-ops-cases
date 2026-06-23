@@ -1,0 +1,24 @@
+#标题
+btrfs: 特性检查错误信息打印掩码错误导致日志信息冗余
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 btrfs 文件系统包含不支持的不兼容特性或只读兼容特性时，挂载失败打印的错误日志信息不准确。现象表现为错误日志中打印的特性掩码包含了内核已支持的特性标志位，而非仅包含未知/不支持的特性标志位，导致用户无法直观定位具体是哪些特性不被支持。
+
+#主要错误日志
+- "cannot mount because of unknown incompat features (0x%llx)"
+- "cannot mount read-write because of unknown compat_ro features (0x%llx)"
+- "cannot replay dirty log with unsupported compat_ro features (0x%llx), try rescue=nologreplay"
+
+#问题根因
+提交 d7f67ac9a928 ("btrfs: relax block-group-tree feature dependency checks") 引入了回归问题。在 `btrfs_check_features` 函数中，处理不支持的 incompat 或 compat_ro 标志位时，错误打印逻辑直接使用了变量 `incompat` 或 `compat_ro`，而未对已知支持的特性进行掩码过滤。这导致日志输出了所有特性标志（包括已知和未知的），而非按照设计仅输出未知特性标志，降低了错误信息的可读性和有效性。
+
+#解决方案
+修改 `fs/btrfs/disk-io.c` 中的错误打印逻辑，确保仅打印不支持的特性标志位：
+1. 对于 incompat 特性，将打印参数从 `incompat` 修改为 `incompat & ~BTRFS_FEATURE_INCOMPAT_SUPP`。
+2. 对于 compat_ro 特性相关的两处打印，将打印参数从 `compat_ro` 修改为 `compat_ro_unsupp`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/104aabca140ffc48eb6361364a1b07590e77c48f

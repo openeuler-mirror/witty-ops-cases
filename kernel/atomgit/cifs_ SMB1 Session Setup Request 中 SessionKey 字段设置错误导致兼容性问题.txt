@@ -1,0 +1,24 @@
+#标题
+cifs: SMB1 Session Setup Request 中 SessionKey 字段设置错误导致兼容性问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Linux SMB 客户端在发送 SMB1 `SMB_COM_SESSION_SETUP_ANDX` 请求时，将 `SessionKey` 字段错误地设置为 0。虽然该问题不影响与 Windows NT SMB 服务器的连接（因为 Windows NT 忽略该字段），但违反了 [MS-CIFS] 协议规范，可能导致与其他严格遵循协议规范的 SMB 服务器实现出现连接失败或协议协商异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 [MS-CIFS] 规范第 2.2.4.53.1 节关于 `SMB_COM_SESSION_SETUP_ANDX` 请求的描述，客户端必须将 `SessionKey` 字段设置为该 SMB 连接的 `SMB_COM_NEGOTIATE` 响应中返回的 `SessionKey` 值。
+Linux SMB 客户端代码逻辑存在缺陷，在构造会话设置请求时未保存并使用协商响应中的值，而是直接将该字段初始化为 0。
+
+#解决方案
+1. 在 `TCP_Server_Info` 结构体中新增 `session_key_id` 成员变量，用于存储协商响应中返回的 SessionKey。
+2. 修改 `CIFSSMBNegotiate` 函数，解析协商响应报文时，将响应中的 `SessionKey` 保存到 `server->session_key_id`。
+3. 修改 `cifs_ssetup_hdr` 函数，在构造会话设置请求时，将 `pSMB->req.SessionKey` 设置为服务器保存的 `server->session_key_id`，而非默认值。
+4. 同时修正了 `SessionKey` 字段的类型定义，由 `__u32` 更正为 `__le32` 以符合网络字节序规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/de74fe1656b415e8c6f2fc6f70018109e3bdf0d6

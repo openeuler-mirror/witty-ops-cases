@@ -1,0 +1,20 @@
+#标题
+ath10k: DMA 内存释放指针错误导致内存管理混乱
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ath10k 无线驱动卸载或关闭过程中，因 `dma_free_coherent` 函数传入的虚拟地址与 DMA 地址参数不匹配，导致内核 DMA 映射管理混乱。这可能引发内核警告、内存泄漏或系统崩溃，特别是在启用了 DMA 调试特性的系统中。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在分配 DMA 缓冲区时使用了 `dma_alloc_coherent()`，该函数将分配的原始地址存储在 `XXX_unaligned` 字段中，而经对齐处理后的地址存储在 `base_addr_owner_space` 等字段中。在释放内存时，代码错误地使用了经过对齐调整后的地址（`base_addr_owner_space` 和 `base_addr_ce_space`）调用 `dma_free_coherent()`，而非分配时返回的原始地址（`base_addr_owner_space_unaligned` 和 `base_addr_ce_space_unaligned`）。传入错误的虚拟地址和 DMA 地址破坏了 DMA 一致性内存的释放逻辑。
+
+#解决方案
+修正 `_ath10k_ce_free_pipe` 和 `_ath10k_ce_free_pipe_64` 函数中的内存释放逻辑。在调用 `dma_free_coherent()` 时，将传入的参数从对齐后的地址字段修改为原始未对齐的地址字段（即使用 `base_addr_owner_space_unaligned` 和 `base_addr_ce_space_unaligned`），确保释放时的指针与分配时返回的指针完全一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad7ea85ad3aa43876ef3e61e781ebc787b3faee7

@@ -1,0 +1,24 @@
+#标题
+ping发送ICMP报文时ICMP_MIB_OUTMSGS计数重复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用ping程序通过IPPROTO_ICMP类型的套接字发送ICMP_ECHO报文时，内核统计信息中的ICMP_MIB_OUTMSGS（发出的ICMP消息总数）被重复计数，导致统计数据比实际发送数量多出一倍；而使用IPPROTO_RAW套接字发送时计数正常。
+
+#主要错误日志
+未知
+
+#问题根因
+在ping_v4_sendmsg函数的调用链中，ICMP_MIB_OUTMSGS被统计了两次。
+第一次统计发生在报文发送路径的底层：
+ping_v4_push_pending_frames -> ip_push_pending_frames -> ip_finish_skb -> __ip_make_skb -> icmp_out_count。
+第二次统计发生在ping_v4_sendmsg函数返回前，显式调用了icmp_out_count(sock_net(sk), user_icmph.type)。
+这导致对于IPPROTO_ICMP套接字，统计计数被错误地累加了两次。
+
+#解决方案
+删除ping_v4_sendmsg函数中显式调用的icmp_out_count统计代码。报文的统计应当统一在__ip_make_skb中进行，以避免重复计数，确保IPPROTO_ICMP套接字与IPPROTO_RAW套接字的统计行为一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b87cd22072f179be51105f502f253c4c0d4bd5c6

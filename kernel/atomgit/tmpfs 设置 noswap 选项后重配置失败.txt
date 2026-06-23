@@ -1,0 +1,29 @@
+#标题
+tmpfs 设置 noswap 选项后重配置失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用新挂载 API（fsconfig）对设置了 `noswap` 选项的 tmpfs 文件系统执行重配置（FSCONFIG_CMD_RECONFIGURE）操作时，系统调用持续返回 `-EINVAL` 错误，导致挂载参数更新失败。
+可通过以下代码片段复现：
+```c
+int fs_fd = fsopen("tmpfs", 0);
+fsconfig(fs_fd, FSCONFIG_SET_FLAG, "noswap", NULL, 0);
+fsconfig(fs_fd, FSCONFIG_CMD_CREATE, NULL, NULL, 0);
+fsmount(fs_fd, 0, 0);
+fsconfig(fs_fd, FSCONFIG_CMD_RECONFIGURE, NULL, NULL, 0);  // 返回 EINVAL
+```
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `shmem_reconfigure()` 函数中的逻辑判断错误。代码检查 `!(ctx->seen & SHMEM_SEEN_NOSWAP) && sbinfo->noswap` 条件，试图阻止在挂载时禁用了 swap 的情况下，在重配置时重新启用 swap。
+然而，`ctx->seen` 仅用于标记某个选项是否在当前配置过程中被触碰过。当进行重配置时，如果用户未显式修改 `noswap` 选项，`ctx->seen` 中不会包含 `SHMEM_SEEN_NOSWAP` 标记，导致上述条件成立，错误地拒绝了合法的重配置操作。此外，`noswap` 选项没有对应的 `fsparam_flag_no` 定义，实际上也不存在“重新启用 swap”的操作路径，因此该检查是多余且错误的。
+
+#解决方案
+删除 `shmem_reconfigure()` 中关于 `SHMEM_SEEN_NOSWAP` 的错误检查逻辑，并移除冗余的 `SHMEM_SEEN_NOSWAP` 宏定义。修复后的逻辑仅检查“当前配置请求禁用 swap”且“原挂载未禁用 swap”的情况，不再错误拦截保持原 `noswap` 设置的重配置操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f16f0667fd369604a2809b9d2dfce15749db0fd0

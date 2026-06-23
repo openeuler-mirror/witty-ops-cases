@@ -1,0 +1,24 @@
+#标题
+net_sched: hfsc: 修复类处理中的 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HFSC qdisc 类处理过程中，当配合 netem 或 codel 等特定子 qdisc 使用时，存在 Use-After-Free（UAF）漏洞。由于 Time-of-check/Time-of-use 条件竞争，导致 HFSC 调度器错误地将空队列类加入到 vttree 中，破坏了调度器假设（vttree 仅包含非空类），最终在类销毁时触发 UAF。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hfsc_change_class()` 函数中存在 Time-of-check/Time-of-use 问题：
+1. 代码首先检查类的队列长度是否非零 (`q.qlen != 0`)。
+2. 随后调用 `qdisc_peek_len()`，对于 netem 或 codel 等特定 qdisc 实现，该操作可能会丢弃数据包并清空队列。
+3. 代码继续执行时假设队列仍为非空，将该类添加到 vttree 中。
+4. 这破坏了 HFSC 调度器关于 vttree 仅包含非空类的假设，导致后续类销毁时发生 Use-After-Free。
+
+#解决方案
+在调用 `qdisc_peek_len()` 之后，再次检查队列长度 (`cl->qdisc->q.qlen != 0`)。如果在 peek 操作期间队列被清空，则不再将该类加入到 vttree 或进行后续处理，从而修复 UAF 漏洞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6bfa04deb7d0eb08d50bb5a1534d8d8a5a7e4b27

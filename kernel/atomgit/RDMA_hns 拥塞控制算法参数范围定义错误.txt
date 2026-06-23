@@ -1,0 +1,29 @@
+#标题
+RDMA/hns 拥塞控制算法参数范围定义错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+配置 HNS RoCE 驱动的 DCQCN、LDCP 或 HC3 拥塞控制算法参数时，部分参数允许设置的值超出了硬件或协议规定的有效范围（例如设置值过大或过小），导致配置行为不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码中定义各拥塞控制算法参数最大值（MAX）和最小值（MIN）的宏不正确。
+1. DCQCN 算法的 `TKP` 参数上限原本定义为 15，实际应为 10。
+2. LDCP 算法的 `GAMMA`、`BETA`、`ETA` 参数上限原本定义为 `((u8)(~0U))`（即 255），实际应为 7。
+3. HC3 算法的 `QLEN_SHIFT` 参数上限原本定义为 `((u8)(~0U))`，实际应为 31；`PORT_USAGE_SHIFT` 参数上限原本定义为 `((u8)(~0U))`，实际应为 100。
+4. HC3 算法部分参数（如 `BANDWIDTH`、`INITIAL_WINDOW` 等）缺少最小值（MIN）定义，导致 sysfs 接口校验时下限可能未正确生效。
+
+#解决方案
+修正头文件（hns_roce_hw_v2.h）中相关参数的边界值宏定义，并更新 sysfs 属性定义逻辑：
+1. 将 `HNS_ROCE_DCQCN_TKP_MAX` 从 15 修正为 10；`HNS_ROCE_DIP_TKP_MAX` 同步修正。
+2. 将 `HNS_ROCE_LDCP_GAMMA_MAX`、`BETA_MAX`、`ETA_MAX` 从 `((u8)(~0U))` 修正为 7。
+3. 将 `HNS_ROCE_HC3_QLEN_SHIFT_MAX` 从 `((u8)(~0U))` 修正为 31。
+4. 将 `HNS_ROCE_HC3_PORT_USAGE_SHIFT_MAX` 从 `((u8)(~0U))` 修正为 100。
+5. 补充 HC3 算法各参数的 `MIN` 宏定义（如 `HNS_ROCE_HC3_BANDWIDTH_MIN` 设为 1000，其他多数设为 0），并在 sysfs 文件（hns_roce_sysfs.c）中传入正确的 MIN 值进行范围校验。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c244828aa90785e6d29fbc92e90dff6f24045a7e

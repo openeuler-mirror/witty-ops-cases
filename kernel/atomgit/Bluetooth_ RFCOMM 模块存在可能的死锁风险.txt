@@ -1,0 +1,31 @@
+#标题
+Bluetooth: RFCOMM 模块存在可能的死锁风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核检测到可能的循环锁定依赖，触发 `WARNING` 并打印调用栈跟踪信息，表明系统存在死锁风险。该问题由 syzbot 自动化测试发现。
+
+#主要错误日志
+```text
+======================================================
+WARNING: possible circular locking dependency detected
+6.8.0-syzkaller-08951-gfe46a7dd189e #0 Not tainted
+------------------------------------------------------
+syz-executor386/5093 is trying to acquire lock:
+ffff88807c396258 (sk_lock-AF_BLUETOOTH-BTPROTO_RFCOMM){+.+.}-{0:0}, at: lock_sock include/net/sock.h:1671 [inline]
+ffff88807c396258 (sk_lock-AF_BLUETOOTH-BTPROTO_RFCOMM){+.+.}-{0:0}, at: rfcomm_sk_state_change+0x5b/0x310 net/bluetooth/rfcomm/sock.c:73
+
+but task is already holding lock:
+ffff88807badfd28 (&d->lock){+.+.}-{3:3}, at: __rfcomm_dlc_close+0x226/0x6a0 net/bluetooth/rfcomm/core.c:491
+```
+
+#问题根因
+在 `rfcomm_sock_ioctl` 函数中，代码路径在已持有 `sk_lock` 的情况下调用 `rfcomm_dev_ioctl`。而在内部调用链中，`rfcomm_sk_state_change` 尝试再次获取 `sk_lock`（此时可能已持有另一个锁 `d->lock`），这违反了锁的获取顺序，导致了循环锁定依赖。
+
+#解决方案
+移除 `rfcomm_sock_ioctl` 函数中对 `sk_lock` 的 `lock_sock` 和 `release_sock` 调用，以避免在调用 `rfcomm_dev_ioctl` 时持有该锁，从而打破可能导致死锁的锁依赖链。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9295ad6ce96eedcec8ae86d0492f36b788d9e6b8

@@ -1,0 +1,24 @@
+#标题
+LoongArch EFI 子系统虚拟地址映射重复建立及初始化失败处理缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在特定场景下（如固件已建立映射或重复调用），EFI 虚拟地址映射可能被错误地重复建立，导致内核运行异常。
+2. 当 EFI 虚拟地址映射设置失败时，系统无任何错误提示，可能导致后续 EFI 运行时服务调用异常或不可用，且问题难以定位。
+
+#主要错误日志
+- "EFI: Virtual mapping already established. Skipping SVAM.\n"
+- "Set virtual address map failed, EFI runtime services will not be available.\n"
+
+#问题根因
+1. **重复映射问题**：原代码逻辑中，每次调用 `set_virtual_map` 都会直接修改 `in->virt_addr` 并执行映射操作，未检查目标虚拟地址与当前虚拟地址是否一致。若映射已存在，重复调用会导致不必要的或错误的映射更新。
+2. **静默失败问题**：在 `efi_runtime_init` 函数中，调用 `set_virtual_map` 失败时仅直接返回，未打印任何日志信息，导致无法通过 dmesg 确认 EFI 运行时服务初始化失败的原因。
+
+#解决方案
+1. **增加映射检查逻辑**：在 `set_virtual_map` 中引入 `target_virt` 变量计算目标虚拟地址，并在执行映射前比较当前 `in->virt_addr` 与 `target_virt`。若两者相等，说明映射已建立，打印日志 "EFI: Virtual mapping already established..." 并直接返回 `EFI_SUCCESS`，避免重复映射。
+2. **完善错误日志打印**：在 `efi_runtime_init` 中，当 `set_virtual_map` 返回值小于 0 时，增加打印日志 "Set virtual address map failed..."，明确提示用户 EFI 运行时服务不可用的原因。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2ed8dc1e8af60eaf5f882bcc8e05f6e567efa9ce

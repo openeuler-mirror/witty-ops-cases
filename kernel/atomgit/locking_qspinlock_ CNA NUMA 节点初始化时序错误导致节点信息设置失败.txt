@@ -1,0 +1,20 @@
+#标题
+locking/qspinlock: CNA NUMA 节点初始化时序错误导致节点信息设置失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统启动过程中，CNA（Compact NUMA-Aware）自旋锁机制在初始化 NUMA 节点信息时，由于 `cna_init_nodes` 调用时机过早，早于 `numa_store_cpu_info` 的执行，导致无法正确获取或设置 CPU 的 NUMA 节点信息。这可能引发内核 Panic 或导致锁性能严重下降、功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根本原因是初始化函数 `cna_init_nodes` 的调用时机错误。该函数依赖于 `numa_store_cpu_info` 所提供的 CPU NUMA 信息，但在原有代码流程中，`cna_init_nodes`（推测为 `core_initcall` 或更早阶段）在 `numa_store_cpu_info` 之前被调用。由于底层依赖尚未就绪，导致 NUMA 节点设置失败或读取到错误数据。
+
+#解决方案
+将 `cna_init_nodes` 的初始化注册为 `late_initcall`。通过降低其启动优先级，推迟调用时机，确保在执行 CNA NUMA 节点初始化之前，`numa_store_cpu_info` 已完成相关 CPU 信息的存储与设置，从而保证初始化流程的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ea189b4e7ad204847104b2b386878f1c14b702e3

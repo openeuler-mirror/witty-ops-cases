@@ -1,0 +1,23 @@
+#标题
+net/sched: 特定 qdisc 配置下 backlog 统计下溢导致显示异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TBF 作为父 qdisc，hhf/fq/fq_codel/fq_pie 作为子 qdisc 的特定配置场景下，当调整子 qdisc 的 limit 参数时，backlog 统计计数出现错误。
+具体表现为：通过 `tc -s -d qdisc show` 查看队列状态，在 limit 调整并触发丢包后，子 qdisc 显示 0 数据包但 backlog 字节数为正值；随后进行 graft 操作时，该正值 backlog 被传递给父 qdisc 导致其 backlog 发生下溢，显示为极大的数值（如 4096 Mb），而不是正常的 0。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 `qdisc_dequeue_internal` 函数在处理 `gso_skb` 队列（以及 direct 模式下的 `sch->q` 队列）时，仅对 `qlen` 进行了递减操作，而遗漏了 `backlog` 的递减操作。
+当 TBF 父队列耗尽令牌时，相关子 qdisc 的 skb 会被放入 `gso_skb`。这些子 qdisc 的 peek 处理函数会同时统计 qlen 和 backlog，但 `qdisc_dequeue_internal` 从 `gso_skb` 拉取报文时仅扣减 qlen。因此，当 change 处理函数调用 `qdisc_dequeue_internal` 丢弃报文以满足新的 limit 限制时，backlog 未被正确扣减，导致统计数据不一致和后续的下溢问题。
+
+#解决方案
+1. 修改 `qdisc_dequeue_internal` 函数，在从 `gso_skb` 队列取出报文时增加 `qdisc_qstats_backlog_dec` 调用；同时在 `direct` 模式下从 `sch->q` 取出报文时也增加相应的 backlog 递减操作。
+2. 统一并简化 codel, pie, hhf, fq, fq_pie, fq_codel 等队列调度器的 change 处理函数逻辑：移除之前手动计算差值或依赖中间变量的做法，改为在丢包循环中直接统计丢弃的包数（dropped_pkts）和字节数（dropped_bytes），并在循环结束后调用 `qdisc_tree_reduce_backlog` 进行精确的统计更新。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/813882272426a33d4252258d1a74bc200c339882

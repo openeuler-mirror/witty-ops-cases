@@ -1,0 +1,20 @@
+#标题
+wifi: ath12k: 修复内存释放后访问导致的Use-After-Free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 Wi-Fi 接收数据包聚合时，系统可能发生 Use-After-Free 错误。具体表现为内核在释放了 skb 内存后，仍尝试访问该内存区域中的数据，可能导致内核崩溃、内存数据损坏或不可预测的驱动行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ath12k_dp_rx_msdu_coalesce()` 中，代码通过 `rxcb = ATH12K_SKB_RXCB(skb)` 获取了 skb 的控制块指针。在调用 `dev_kfree_skb_any(skb)` 释放 skb 内存后，代码紧接着又访问了 `rxcb->is_continuation` 成员。由于 `rxcb` 指向的内存已经随 skb 被释放，此时访问属于非法内存访问，导致 Use-After-Free 风险。
+
+#解决方案
+在释放 skb 之前，预先将 `rxcb->is_continuation` 的值保存到一个局部布尔变量 `is_continuation` 中。后续逻辑判断改为使用该局部变量，从而避免在释放 skb 后访问已失效的内存地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b6245e9baa797c872c4278c7db74c466b462ec99

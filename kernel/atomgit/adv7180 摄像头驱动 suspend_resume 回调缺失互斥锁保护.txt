@@ -1,0 +1,20 @@
+#标题
+adv7180 摄像头驱动 suspend/resume 回调缺失互斥锁保护
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统挂起或恢复过程中，adv7180 驱动程序触发 lockdep_assert_held() 锁断言失败警告。这是因为在 suspend 和 resume 回调函数中调用 adv7180_set_power() 时，未持有驱动内部必需的 state->mutex 互斥锁。
+
+#主要错误日志
+lockdep_assert_held() 断言失败相关内核警告日志（推断）。
+
+#问题根因
+函数 adv7180_set_power() 内部调用 adv7180_write() 时，要求必须持有 state->mutex 互斥锁（通过 lockdep_assert_held() 检查）。然而，在 adv7180_suspend() 和 adv7180_resume() 函数中，直接调用了 adv7180_set_power() 却未提前获取该互斥锁，导致锁检查失败。
+
+#解决方案
+在 adv7180_suspend() 和 adv7180_resume() 函数中，调用 adv7180_set_power() 之前，使用 guard(mutex) 宏获取 state->mutex 互斥锁，确保满足底层函数对锁的持有要求，防止并发访问冲突和锁断言失败。同时补丁也修正了 adv7180_set_pad_format() 中类似的遗漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/765216bcd41c61b0e83298df84bced2d086e9690

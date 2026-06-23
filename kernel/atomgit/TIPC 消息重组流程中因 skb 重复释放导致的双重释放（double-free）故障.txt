@@ -1,0 +1,20 @@
+#标题
+TIPC 消息重组流程中因 skb 重复释放导致的双重释放（double-free）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 TIPC 消息分片重组时，如果 `tipc_msg_validate()` 校验失败且涉及到 skb 内存重分配，内核会发生双重释放。该问题可能导致内核内存管理结构破坏，引发系统崩溃、panic 或内存污染。
+
+#主要错误日志
+未知
+
+#问题根因
+`tipc_msg_validate()` 函数在校验过程中可能会重新分配 skb 并释放旧的 skb。在 `tipc_buf_append()` 函数中，调用该校验函数时传入的是局部变量 `head`（即调用者传入的 `*headbuf` 的副本）。如果在校验过程中 skb 被重新分配且随后校验失败，错误处理路径会直接释放 `*headbuf` 指向的内存。然而，该内存指针指向的旧 skb 已经在校验函数内部被释放过了，从而导致双重释放。
+
+#解决方案
+在 `tipc_buf_append()` 的错误处理路径中增加指针检查。在校验失败后，检查局部变量 `head` 是否指向了新分配的 skb（即 `head != *headbuf`）。如果条件成立，说明原有的 `*headbuf` 已失效且被释放，此时将 `*headbuf` 更新为 `head`，确保后续释放操作针对的是新分配的 skb，避免对已释放内存的重复操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/daf6af7d8fb71f4787d07291fccbc9b9f20d6173

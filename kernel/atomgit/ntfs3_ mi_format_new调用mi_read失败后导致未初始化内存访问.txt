@@ -1,0 +1,20 @@
+#标题
+ntfs3: mi_format_new调用mi_read失败后导致未初始化内存访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+KMSAN 检测到使用未初始化内存的 Bug。在 `ntfs_get_bh` 函数中，从 `sb_getblk()` 获取的 buffer 可能未处于 uptodate（最新）状态，如果直接将其标记为 uptodate 并加入到 mi 记录中，后续加载该记录时会触发对未初始化数据的访问。
+
+#主要错误日志
+未知
+
+#问题根因
+`ntfs_get_bh()` 期望从 `sb_getblk()` 获取 buffer，但该 buffer 此时可能尚未更新。原代码在未检查 buffer 是否已 uptodate 的情况下，直接调用 `set_buffer_uptodate(bh)` 将其标记为最新。如果 buffer 实际上并未包含有效数据（未初始化），将其标记为最新会导致将包含未初始化数据的 buffer 加入到 mi 记录中，从而在后续操作中触发 KMSAN 报警或造成数据不一致。
+
+#解决方案
+在 `fs/ntfs3/fsntfs.c` 中修改 `ntfs_get_bh` 函数逻辑：在设置 buffer 为 uptodate 状态前，先锁定 buffer (`lock_buffer`)，检查其是否已经处于 uptodate 状态。若未处于该状态，则使用 `memset` 将 buffer 数据清零，然后再将其标记为 uptodate。这确保了即使 buffer 原本未初始化，在被标记为有效前也被填充了确定的数据（全零），避免了未初始化内存的访问风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e8e6bc0cd40bb3388f1d61806419bf1c2492e966

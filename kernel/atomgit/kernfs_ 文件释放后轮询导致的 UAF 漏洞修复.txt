@@ -1,0 +1,39 @@
+#标题
+kernfs: 文件释放后轮询导致的 UAF 漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PSI（Pressure Stall Information）监控机制中触发 KASAN 检测到的 slab-use-after-free 错误。具体表现为 systemd 进程在执行轮询操作时读取了已释放的内存地址，导致内核崩溃或内存破坏。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in psi_trigger_poll+0x3c/0x140
+Read of size 8 at addr ffff3de3d50bd308 by task systemd/1
+
+Call trace:
+psi_trigger_poll+0x3c/0x140
+cgroup_pressure_poll+0x70/0xa0
+cgroup_file_poll+0x8c/0x100
+kernfs_fop_poll+0x11c/0x1c0
+ep_item_poll.isra.0+0x188/0x2c0
+
+Freed by task 8462:
+cgroup_file_release+0x130/0x1f8
+kernfs_drain_open_files+0x17c/0x440
+kernfs_drain+0x2dc/0x360
+kernfs_show+0x1b8/0x288
+cgroup_pressure_write+0x1dc/0x340
+
+#问题根因
+该故障由竞态条件引起：
+1. 当禁用 cgroup.pressure（写入 0）时，系统会通过 `cgroup_file_release()` 释放 PSI triggers，并通过 `kernfs_drain_open_files()` 释放 `of->priv` 内存。
+2. 此时 epoll 仍然持有该文件的引用并进行轮询操作。
+3. 当重新启用 cgroup.pressure（写入 1）时，代码尝试访问已被释放的 `of->priv` 指针，触发 UAF。
+根本原因是 `kernfs_fop_poll` 等文件操作接口仅检查了 kernfs 节点的活跃引用，未检查文件是否已被释放。
+
+#解决方案
+在 `kernfs_get_active()` 的基础上引入 `kernfs_get_active_of()` 函数。该函数在获取 kernfs 节点活跃引用前，会先检查 open file 的 `released` 标志位。如果文件已被释放，则直接返回失败，从而阻止对已释放内存的访问。将 `kernfs_fop_poll`、`kernfs_file_read_iter`、`kernfs_fop_write_iter` 等函数中的 `kernfs_get_active()` 调用替换为 `kernfs_get_active_of()`，以防止对已释放文件描述符进行后续操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/87c622b3e569ca28b540c0f56605d221cb4f50aa

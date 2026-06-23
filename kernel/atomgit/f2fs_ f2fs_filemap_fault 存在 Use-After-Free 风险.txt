@@ -1,0 +1,26 @@
+#标题
+f2fs: f2fs_filemap_fault 存在 Use-After-Free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中触发 KASAN 检测报告，显示在 `f2fs_filemap_fault` 函数中发生 slab-use-after-free 错误。具体表现为进程在处理缺页异常（page fault）时，访问了已被释放的内存地址。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in f2fs_filemap_fault+0xd1/0x2c0 fs/f2fs/file.c:49
+Read of size 8 at addr ffff88807bb22680 by task syz-executor184/5058
+Call Trace:
+ f2fs_filemap_fault+0xd1/0x2c0 fs/f2fs/file.c:49
+ __do_fault+0x131/0x450 mm/memory.c:4376
+ ...
+ handle_mm_fault+0x27e/0x770 mm/memory.c:5450
+
+#问题根因
+在 `f2fs_filemap_fault` 函数中，调用 `filemap_fault(vmf)` 后，`vmf->vma` 指向的结构体可能已不再有效（已被释放）。随后代码在 `trace_f2fs_filemap_fault` 追踪点中直接访问 `vmf->vma->vm_flags`，导致访问已释放内存，引发 use-after-free 问题。
+
+#解决方案
+在调用 `filemap_fault` 之前，将 `vmf->vma->vm_flags` 的值保存到一个临时局部变量中。在后续的 tracepoint 调用中，使用该局部变量代替直接对 `vmf->vma` 成员的访问，从而避免潜在的 UAF 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c8847434ead24e116190ac93f50b9e7bbe10f05

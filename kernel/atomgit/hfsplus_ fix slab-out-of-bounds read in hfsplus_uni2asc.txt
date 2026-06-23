@@ -1,0 +1,23 @@
+#标题
+hfsplus: fix slab-out-of-bounds read in hfsplus_uni2asc
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在挂载或操作 HFS+ 文件系统时（如执行 `readdir` 或 `listxattr`），可能触发内核地址消毒剂（KASAN）报告的 slab-out-of-bounds read 错误。该漏洞被收录为 CVE-2025-38713，攻击者可能利用特制的文件系统镜像导致内核信息泄露或崩溃。
+
+#主要错误日志
+- `pr_err("invalid length %u has been corrected to %d\n", be16_to_cpu(ustr->length), ustrlen);`
+- `pr_err("unicode conversion failed\n");`
+
+#问题根因
+`hfsplus_uni2asc()` 函数在处理 Unicode 字符串转换时，未对传入的字符串长度 `ustr->length` 进行有效性校验。如果磁盘上存储的字符串长度超过了预定义的最大值（如 `HFSPLUS_MAX_STRLEN` 或 `HFSPLUS_ATTR_MAX_STRLEN`），函数会继续处理越界的数据，导致读取越界（slab-out-of-bounds read）。
+
+#解决方案
+1. **重构函数接口**：将原 `hfsplus_uni2asc()` 设为静态内部函数，增加 `max_len` 参数用于限制最大处理长度。
+2. **增加边界校验**：在内部函数中增加判断，若 `ustr->length` 超过 `max_len`，则将其截断并打印错误日志，防止越界读取。
+3. **封装调用接口**：新增 `hfsplus_uni2asc_str()` 和 `hfsplus_uni2asc_xattr_str` 两个封装函数，分别针对目录项和扩展属性场景传入对应的最大长度限制（`HFSPLUS_MAX_STRLEN` 和 `HFSPLUS_ATTR_MAX_STRLEN`），替换原有的直接调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d9e70e962d921c2e67895394e71d3ce70c8a53ee

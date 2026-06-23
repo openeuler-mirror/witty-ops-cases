@@ -1,0 +1,23 @@
+#标题
+[urma: SL资源查询信息缺失及设备属性查询失败]
+
+#内核版本
+OLK-6.6
+
+#问题现象
+查询 URMA 设备属性时，用户态无法获取到正确的 SL（Service Level）资源信息以及设备的能力属性（如 order_cap, tp_cap, tp_feature 等）。在查询过程中，若底层设备属性获取失败，系统可能返回无效参数错误，导致设备查询功能异常。
+
+#主要错误日志
+- "Invalid parameter with error dev_name.\n"
+- "Failed to query device attr, dev_name: %s.\n"
+
+#问题根因
+在 `uburma_cmd_query_device_attr` 函数中，未调用 `ubcore_query_device_attr` 从底层驱动同步最新的设备属性数据，导致 `ubc_dev->attr` 中的数据可能过时或不完整。同时，`uburma_fill_device_attr` 函数中缺失了对 `dev_cap` 结构体中关键成员（如 `rm_order_cap`、`rc_order_cap`、`priority_info` 等）的赋值操作，导致用户态查询到的设备能力信息为空或默认值，引发 SL 资源查询错误。
+
+#解决方案
+1. 在 `uburma_cmd_query_device_attr` 函数中，增加对 `ubcore_query_device_attr` 的调用，确保在填充属性前从底层设备获取最新的设备属性数据；若查询失败则记录错误日志并返回 `-EINVAL`。
+2. 在 `uburma_fill_device_attr` 函数中，补充对 `dev_cap` 结构体中缺失成员的赋值逻辑，包括 `rm_order_cap`、`rc_order_cap`、`rm_tp_cap`、`rc_tp_cap`、`um_tp_cap`、`tp_feature` 以及 `priority_info`，确保设备能力信息完整传递给用户态。
+3. 同步更新 `uburma_cmd_device_cap` 结构体定义及 TLV（Type-Length-Value）解析逻辑，以支持新增的属性字段传递。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75d7dd9dcefa3cf2d721ca5c8ff5055b49229eec

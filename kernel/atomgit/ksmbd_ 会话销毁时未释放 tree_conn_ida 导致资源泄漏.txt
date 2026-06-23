@@ -1,0 +1,21 @@
+#标题
+ksmbd: 会话销毁时未释放 tree_conn_ida 导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ksmbd 模块在销毁会话（ksmbd_session）时，未正确释放内部嵌入的 `tree_conn_ida` 结构。虽然该问题主要违反内核 IDA API 的生命周期配对规则，且在测试中未观察到明显的内存泄漏报错，但会导致会话对象销毁后 IDA 的后备 xarray 仍然残留，造成潜在的内存资源泄漏风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在历史提交中，`tree_conn_ida` 从动态分配的 `ksmbd_ida` 改为嵌入在会话结构体中的 `struct ida`。修改时删除了原有的 `ksmbd_ida_free()` 调用，但遗漏了添加对应的 `ida_destroy()` 调用。根据内核 IDA API 规则，`ida_init()` 必须与 `ida_destroy()` 成对使用，否则会话释放时 IDA 的后备存储（xarray）未被清理。此外，`ida_init()` 原本位于会话创建过程的后半段，若在初始化文件表或 SMB2 会话时失败，跳转到错误处理分支销毁会话时，IDA 处于未初始化状态就被调用了 destroy，存在逻辑隐患。
+
+#解决方案
+1. 在 `ksmbd_session_destroy()` 函数中，在释放会话内存前添加 `ida_destroy(&sess->tree_conn_ida)` 调用，确保 IDA 资源被正确释放。
+2. 将 `ida_init()` 的调用位置从会话创建流程的靠后位置移动到会话分配成功之后立即执行。这确保了即使在后续初始化步骤（如 `ksmbd_init_file_table` 或 `__init_smb2_session`）失败并触发错误处理流程时，`ida_destroy()` 也能安全地与 `ida_init()` 配对调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/963d5f9c6105fec5b4a97f05d8c3c48154003a4c

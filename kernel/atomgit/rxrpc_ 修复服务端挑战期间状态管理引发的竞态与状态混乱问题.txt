@@ -1,0 +1,26 @@
+#标题
+rxrpc: 修复服务端挑战期间状态管理引发的竞态与状态混乱问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 应用层在 rxrpc 连接进行挑战握手阶段过早看到数据包，导致 recvmsg() 接收数据异常。
+2. 在连接挑战完成前，应用层可能错误地感知到最后一个数据包，而此时 rxrpc 尚未结束接收阶段，导致协议状态不一致。
+3. 服务端在处理请求连接的安全挑战时，状态机逻辑不符合预期，阻碍了正常的 Rx/Tx 阶段转换。
+
+#主要错误日志
+未知
+
+#问题根因
+RXRPC_CALL_SERVER_SECURING 状态被错误地包含在调用状态机中。该状态并不适合用于控制数据包的接收/发送阶段转换，它实际上只用于标识“挑战/响应”交换是否完成，以决定是否可以将数据包转发给应用层。原有的实现导致在该状态下数据包处理逻辑混乱，且存在竞态条件：应用层在 rxrpc 结束接收阶段并切换到可回复状态之前就看到了最后一个数据包。
+
+#解决方案
+1. 从枚举 `rxrpc_call_state` 中移除 `RXRPC_CALL_SERVER_SECURING` 状态，将其从状态机中剥离。
+2. 新增标志位 `RXRPC_CALL_CONN_CHALLENGING`，用于替代原状态来跟踪连接是否正在进行挑战，从而控制是否通知应用层数据就绪。
+3. 调整 `rxrpc_incoming_call` 函数逻辑：初始状态直接设置为 `RXRPC_CALL_SERVER_RECV_REQUEST`，若连接处于挑战中则置位 `RXRPC_CALL_CONN_CHALLENGING`。
+4. 修复 `input.c` 中的通知逻辑：仅当 `RXRPC_CALL_CONN_CHALLENGING` 标志未置位时才通知 socket，防止挑战期间数据过早暴露给应用层。
+5. 修复 `call_is_secure` 函数：挑战完成时清除该标志位并通知 socket。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ee3de1cd07720dc0506a48d81272006e4d2dd7ce

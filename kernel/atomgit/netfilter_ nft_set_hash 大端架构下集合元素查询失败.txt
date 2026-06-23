@@ -1,0 +1,28 @@
+#标题
+netfilter: nft_set_hash 大端架构下集合元素查询失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Big Endian（大端）架构系统中，执行 nftables 测试用例 `tests/shell/testcases/packetpath/set_match_nomatch_hash_fast` 失败。
+具体表现为执行 `reset element` 或 `get element` 操作时，报错提示无法找到已存在的元素，导致规则处理失败。
+
+#主要错误日志
+Error: Could not process rule: No such file or directory
+reset element ip test s { 244.147.90.126 }
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Fatal: Cannot fetch element "244.147.90.126"
+
+#问题根因
+在 `nft_hash_get` 函数中，计算哈希值用于查找 bucket 时使用的哈希算法与数据插入时的算法不一致。
+代码针对 `set->klen == 4` 的场景使用了 `jhash_1word`，而在其他场景（或插入路径）使用了 `jhash`。由于 `jhash()` 和 `jhash_1_word` 在 Big Endian 架构上不可互换，导致计算出的哈希值不同，系统在错误的 bucket 中查找元素，从而导致查找失败。
+
+#解决方案
+修改 `nft_set_hash.c` 中的 `nft_hash_get` 函数，使其哈希计算逻辑与插入逻辑保持一致：
+1. 统一哈希计算入口，将 `elem->key.val` 强制转换为 `const u32 *key`。
+2. 移除针对 `set->klen == 4` 的特殊 `jhash_1word` 处理分支。
+3. 无论 key 长度如何，统一使用 `jhash(key, set->klen, priv->seed)` 进行哈希计算，确保查找与插入时定位到相同的 bucket。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7791b2f5bc386dd9a94c4db1e232eadde0b65eb0

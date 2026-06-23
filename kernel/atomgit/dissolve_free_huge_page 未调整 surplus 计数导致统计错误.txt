@@ -1,0 +1,20 @@
+#标题
+dissolve_free_huge_page 未调整 surplus 计数导致统计错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定内存热插拔场景下（Node1 初始无内存 -> 热添加 -> 在线 -> 创建 Huge Pages -> 释放 -> Node0 创建 Huge Pages -> Node1 离线），大页统计信息出现不一致。Node1 的 `surplus_huge_pages` 计数非零（显示为 61），但该 Node 实际上已经没有大页（total 和 free 均为 0），导致内核对 surplus 大页的管理状态混乱。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dissolve_free_huge_page()` 函数中，释放（dissolve）空闲大页时未检查并调整 surplus 计数。实际上，空闲大页可能被标记为 surplus 页，如果在销毁这些页时不调整 `surplus_huge_pages` 计数，会导致 surplus 计数无法归零，造成统计信息泄漏。
+
+#解决方案
+修改 `dissolve_free_hugetlb_folio()` 逻辑，在调用 `remove_hugetlb_folio` 销毁大页前，检查当前节点是否存在 surplus 大页（`h->surplus_huge_pages_node[folio_nid(folio)]`）。若存在，则将 `adjust_surplus` 标记为 true，并在移除和回滚添加（restore vmemmap 失败时）操作时传入该标记，确保 surplus 计数被正确递减。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b047fa94f941034f1db399af834b04e08eae4b61

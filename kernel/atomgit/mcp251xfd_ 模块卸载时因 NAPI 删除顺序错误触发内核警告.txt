@@ -1,0 +1,21 @@
+#标题
+mcp251xfd: 模块卸载时因 NAPI 删除顺序错误触发内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mcp251xfd 驱动模块被移除（rmmod）时，如果网络接口处于 "up" 状态，内核会触发 WARNING 警告。调用栈显示问题发生在 `__netif_napi_del_locked` 函数中，原因是试图删除一个仍然处于活动状态的 NAPI 实例。
+
+#主要错误日志
+WARNING: CPU: 0 PID: 352 at net/core/dev.c:7342 __netif_napi_del_locked+0xc8/0xd8
+
+#问题根因
+在驱动的 `mcp251xfd_remove` 函数中，调用顺序错误。原代码先调用 `can_rx_offload_del` 删除 NAPI，再调用 `mcp251xfd_unregister` 注销网络接口。
+当接口处于 "up" 状态时，`mcp251xfd_unregister` 内部会调用 `net_device_ops::ndo_stop`，该函数会尝试禁用（disable）NAPI。然而，此时 NAPI 已经被 `can_rx_offload_del` 删除了，导致内核检测到试图操作已删除或仍处于活动状态的 NAPI，从而触发警告。
+
+#解决方案
+调整 `mcp251xfd_remove` 函数中的调用顺序。先执行 `mcp251xfd_unregister` 注销网络接口，这会触发 `ndo_stop` 禁用 NAPI；然后再执行 `can_rx_offload_del` 删除 NAPI。确保 NAPI 在被删除前已正确停止活动。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bc8bc92b21de4cc0bb26f711d197cc28f721d5c3

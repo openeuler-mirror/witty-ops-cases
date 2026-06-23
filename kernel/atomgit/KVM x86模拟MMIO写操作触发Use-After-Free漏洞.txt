@@ -1,0 +1,51 @@
+#标题
+KVM x86模拟MMIO写操作触发Use-After-Free漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在KVM虚拟化场景下，当模拟MMIO（Memory-Mapped I/O）写操作时，如果写操作跨越了两个MMIO页边界，且数据源位于栈上的局部变量中，内核会触发Use-After-Free漏洞。最明显的现象是KASAN（Kernel Address Sanitizer）检测到非法内存访问并报告“use-after-free”错误，通常伴随着内核栈信息的打印。该问题在通过KVM_RUN ioctl处理第二个MMIO分段时尤为明显，可能导致虚拟机进程崩溃或内核不稳定。
+
+#主要错误日志
+```text
+==================================================================
+BUG: KASAN: use-after-free in complete_emulated_mmio+0x305/0x420
+Read of size 1 at addr ffff888009c378d1 by task syz-executor417/984
+
+CPU: 1 PID: 984 Comm: syz-executor417 Not tainted 5.10.0-182.0.0.95.h2627.eulerosv2r13.x86_64 #3
+...
+Call Trace:
+ dump_stack+0xbe/0xfd
+ print_address_description.constprop.0+0x19/0x170
+ __kasan_report.cold+0x6c/0x84
+ kasan_report+0x3a/0x50
+ check_memory_region+0xfd/0x1f0
+ memcpy+0x20/0x60
+ complete_emulated_mmio+0x305/0x420
+ kvm_arch_vcpu_ioctl_run+0x63f/0x6d0
+ kvm_vcpu_ioctl+0x413/0xb20
+ __se_sys_ioctl+0x111/0x160
+ do_syscall_64+0x30/0x40
+ entry_SYSCALL_64_after_hwframe+0x67/0xd1
+...
+The buggy address belongs to the page:
+page:0000000029f6a428 refcount:0 mapcount:0 mapping:0000000000000000 index:0x0 pfn:0x9c37
+...
+==================================================================
+```
+
+#问题根因
+根本原因在于KVM处理跨越页边界的MMIO写操作时的内存管理机制存在缺陷。
+1.  **跨页分段处理**：当MMIO写操作跨越页边界且两页均为MMIO页时，KVM将其拆分为两个片段分两次通过`KVM_RUN`退出到用户空间处理。
+2.  **栈变量引用**：模拟器在发起写操作时，有时会使用栈上的局部变量作为数据源。KVM的ABI将MMIO请求的`frag->data`指针直接指向了该栈变量。
+3.  **Use-After-Free触发**：在处理完第一个片段后，若再次调用`KVM_RUN`处理第二个片段，内核会引用`frag->data`指向的地址。如果第一次调用和第二次调用由不同的任务执行，或者栈帧已经失效，原来栈上的数据源地址将变成“已释放”状态，导致内核读取到无效数据，触发Use-After-Free漏洞。
+
+#解决方案
+修改MMIO片段的数据存储机制，避免直接引用栈变量：
+1.  **引入Scratch字段**：在`kvm_mmio_fragment`结构体中增加`u64 val`字段作为暂存区。
+2.  **数据复制代替指针引用**：对于8字节及以下的小尺寸写操作，不再将`frag->data`指向源变量，而是将数据复制到`frag->val`中，并让`frag->data`指向该结构体内部的`val`字段。这确保了即使源栈变量失效，数据依然有效。
+3.  **增加安全检查**：在`emulator_read_write`中添加`WARN_ON_ONCE`检查，如果访问大于8字节或非写操作且对象位于栈上，直接返回不可处理，防止类似问题；同时在`complete_emulated_mmio`中添加检查，防止逻辑错误导致的数据访问异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2bda130e14e112f537e63420068ac555738789db

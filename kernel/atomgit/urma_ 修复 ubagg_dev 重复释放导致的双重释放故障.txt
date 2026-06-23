@@ -1,0 +1,20 @@
+#标题
+urma: 修复 ubagg_dev 重复释放导致的双重释放故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `add_dev_by_uvs` 函数添加设备过程中，若 `init_ubagg_ubcore_dev` 初始化失败，会触发 `ubagg_dev` 的双重释放，导致内核内存管理错误或系统崩溃。
+
+#主要错误日志
+ubcore register device fail, name:%s
+
+#问题根因
+在 `init_ubagg_ubcore_dev` 函数的错误处理路径中，当 `ubcore_register_device` 失败时，代码调用了 `free_ubagg_dev_bitmap` 释放资源。此时函数返回错误码，上层调用者（`add_dev_by_uvs`）会再次调用 `ubagg_dev_ref_put` 进行释放。这导致 `ubagg_dev` 的引用计数被多减了一次，引发了双重释放。
+
+#解决方案
+删除 `init_ubagg_ubcore_dev` 函数中 `ubcore_register_device` 失败分支下的 `ubagg_dev_ref_put` 调用，避免在上层调用者释放引用前提前释放，从而修正引用计数逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/46e78b4429233b3c82007a43d351ea8f3ec58be7

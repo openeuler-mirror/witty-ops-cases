@@ -1,0 +1,38 @@
+#标题
+drm/i915/gt: 引擎心跳停车逻辑竞态导致引用计数下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 heartbeat worker 与 intel_engine_park_heartbeat() 发生竞态时，可能引发内核引用计数下溢，导致内核警告并打印调用栈。具体表现为在工作队列 `i915-unordered` 处理请求退休时触发 `refcount_warn_saturate`。
+
+#主要错误日志
+```
+[487.221889] Workqueue: i915-unordered engine_retire [i915]
+[487.222640] RIP: 0010:refcount_warn_saturate+0x68/0xb0
+...
+[487.222716]  intel_engine_park_heartbeat.part.0+0x6f/0x80 [i915]
+[487.222711]  <TASK>
+[487.223115]  intel_engine_park_heartbeat+0x25/0x40 [i915]
+[487.223566]  __engine_park+0xb9/0x650 [i915]
+[487.223973]  ____intel_wakeref_put_last+0x2e/0xb0 [i915]
+[487.224408]  __intel_wakeref_put_last+0x72/0x90 [i915]
+[487.224797]  intel_context_exit_engine+0x7c/0x80 [i915]
+[487.225238]  intel_context_exit+0xf1/0x1b0 [i915]
+[487.226178]  i915_request_retire+0x1c/0x40 [i915]
+[487.227037]  engine_retire+0x122/0x180 [i915]
+```
+
+#问题根因
+问题源于 `engine->heartbeat.systole` 请求释放时的竞态条件。
+Heartbeat worker 在读取 `engine->heartbeat.systole` 指针后，调用 `i915_request_put()` 释放请求，但清空指针是在非原子的单独步骤中完成的。
+与此同时，另一个 CPU 上的请求退休操作可能导致引擎唤醒引用计数降为零，触发 `__engine_park()` -> `intel_engine_park_heartbeat()`。如果此时 heartbeat 定时器处于 pending 状态，`cancel_delayed_work()` 返回 true，`intel_engine_park_heartbeat()` 会读取到过期的非 NULL `systole` 指针，并再次调用 `i915_request_put()`。
+这导致同一个请求被释放两次，从而引发引用计数下溢。
+
+#解决方案
+将非原子的指针读取与清空操作替换为原子的 `xchg()` 操作。
+`xchg()` 是单一不可分割的硬件指令，能够原子性地读取旧指针值并写入 NULL。这保证了在两个并发路径中，只有一个能获取到非 NULL 指针并执行 put 操作，另一个则获取到 NULL 并跳过，从而避免重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2364124931b1e5bbc581137c603e2a45fcffda16

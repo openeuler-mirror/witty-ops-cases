@@ -1,0 +1,20 @@
+#标题
+cpupower: mperf_monitor 中 C0 状态占用率计算偏低
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CPU 处于 100% 繁忙状态时，使用 cpupower 工具监测 CPU 状态，发现 C0 residency（C0 状态驻留时间）被错误地低估。计算公式 `delta_mperf * 100 / delta_tsc` 的结果低于实际值。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mperf_start()` 函数中，采集快照的顺序依次为时间、TSC（时间戳计数器）、最后是 aperf/mperf 寄存器。然而在 `mperf_stop()` 函数中，该采集顺序被颠倒了（先采集 aperf/mperf，后采集 TSC 和时间）。这种快照顺序的不一致导致在计算差值时引入了额外的时间偏差，从而导致 C0 状态占用率计算结果偏低。
+
+#解决方案
+修改 `mperf_stop()` 函数中的快照采集顺序，使其与 `mperf_start()` 保持一致。调整代码执行顺序为：先调用 `clock_gettime` 获取时间，再调用 `mperf_get_tsc` 获取 TSC，最后调用 `mperf_measure_stats` 获取 aperf/mperf 数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/07610c843210415a52ace229bb016b5cd5770ba1

@@ -1,0 +1,23 @@
+#标题
+selftests/ftrace: kprobe语法错误测试用例因偏移量设置不当导致误判
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 64-bit powerpc 架构上运行 ftrace 的 kprobe 语法错误测试集时，`NOFENTRY_ARGS` 测试用例未能按预期捕获错误。测试本意是构造一个“非函数入口偏移”的场景以触发语法错误，但由于偏移量（offset）设置过小，在某些架构下被内核视为有效的“函数入口”范围，导致测试无法复现预期的错误行为，从而导致测试用例失败或结果不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `NOFENTRY_ARGS` 测试用例中，使用 `vfs_read+8` 作为探测点来模拟非函数入口偏移。然而，内核函数 `arch_kprobe_on_func_entry()` 的实现在不同架构上有差异：
+1. 在 x86 架构上，受 "ENDBR64" 指令影响，偏移量 4 被视为函数入口，因此测试将偏移量调整为 8。
+2. 在 64-bit powerpc 架构上，根据编译配置不同，小于等于 16 的偏移量均可能被视为函数入口。
+因此，使用偏移量 8 在 powerpc 上无法满足“非函数入口”的测试前提，导致测试逻辑失效。
+
+#解决方案
+修改测试脚本 `tools/testing/selftests/ftrace/test.d/kprobe/kprobe_syntax_errors.tc`，将 `NOFENTRY_ARGS` 测试用例中的探测点偏移量从 `vfs_read+8` 修改为 `vfs_read+20`。该值超过了 x86 和 powerpc 架构定义的函数入口偏移范围，确保在所有相关架构上均能正确触发预期错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f8cc59dde04fb270f16d772bcf38c8c6f5b8fff1

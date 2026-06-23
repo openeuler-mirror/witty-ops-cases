@@ -1,0 +1,27 @@
+#标题
+ext4: inode内扩展属性越界读取导致KASAN告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在执行 ext4 文件系统相关操作（如清理孤儿 inode 或删除 inode）时，触发 KASAN (Kernel Address Sanitizer) 检测到 use-after-free（实为越界读取）错误，导致内核报错并打印调用栈。具体场景为访问 inode 内部的扩展属性时发生了内存越界读取。
+
+#主要错误日志
+BUG: KASAN: use-after-free in ext4_xattr_inode_dec_ref_all+0x6ff/0x790
+Read of size 4 at addr ffff88807b003000 by task syz-executor.0/15172
+CPU: 3 PID: 15172 Comm: syz-executor.0
+Call Trace:
+ ext4_xattr_inode_dec_ref_all+0x6ff/0x790 fs/ext4/xattr.c:1137
+ ext4_xattr_delete_inode+0x4c7/0xda0 fs/ext4/xattr.c:2896
+ ext4_evict_inode+0xb3b/0x1670 fs/ext4/inode.c:323
+...
+
+#问题根因
+当扩展属性存储在 inode 内部时，`ext4_xattr_delete_inode()` 函数未检查扩展属性是否有效。如果属性数据损坏或布局异常，代码在后续处理中会访问到非法内存区域，导致越界读取。
+
+#解决方案
+在 `ext4_iget_extra_inode()` 函数中增加对 inode 内部扩展属性的合法性校验（调用 `xattr_check_inode`）。这样可以在早期阶段发现并处理无效的扩展属性，避免后续代码路径（如删除 inode 时）访问无效内存。同时，移除了 `ext4_xattr_ibody_get`、`ext4_xattr_ibody_list` 等多个函数中的冗余校验代码，统一验证入口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/11b8ea4e6ec7d676c82765a4458b9c21f64c9708

@@ -1,0 +1,24 @@
+#标题
+CWF PMU支持引入的kABI兼容性破坏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核合入上游 Commit ec980e4facef、4dfe3232cc04 及 0e102ce3d413 后，因在核心结构体 `struct hw_perf_event` 中新增了 `config1` 和 `dyn_constraint` 字段，并修改了 `struct kvm_pmu` 中的成员变量命名，导致内核核心数据结构布局发生变化，破坏了 kABI（内核应用程序二进制接口）兼容性。这会导致依赖原有结构体布局的内核模块（如驱动程序）无法正常加载或运行，引发系统稳定性风险。
+
+#主要错误日志
+未知
+
+#问题根因
+上游提交为了支持 CWF PMU 功能（如 Auto Counter Reload），直接在 `struct hw_perf_event` 中新增字段，以及将 `struct kvm_pmu` 中的 `_mask` 后缀成员改为 `_rsvd`，导致结构体大小或成员偏移量改变，破坏了内核对外导出符号的二进制兼容性。
+
+#解决方案
+采用 kABI 修复技术，保持核心结构体布局不变：
+1.  **结构体分离**：从 `struct hw_perf_event` 中移除新增的 `config1` 和 `dyn_constraint` 字段，定义一个新的扩展结构体 `struct hw_perf_event_ext` 来存放这些字段。
+2.  **利用预留空间**：使用 `struct perf_event` 中预留的 `KABI_RESERVE(1)` 字段作为指针，指向新创建的 `struct hw_perf_event_ext` 扩展结构体。
+3.  **内存管理**：创建专用的 kmem_cache（`perf_hw_event_cache`）用于分配 `hw_perf_event_ext` 结构体，并在 `perf_event` 初始化与销毁流程中同步管理其生命周期。
+4.  **字段重命名修复**：针对 `struct kvm_pmu` 中的字段名变更，使用 `KABI_REPLACE` 宏来兼容新旧名称，确保成员偏移不变。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a15492eff48341cd744c66143fc7f735484a36ed

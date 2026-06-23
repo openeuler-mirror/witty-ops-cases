@@ -1,0 +1,33 @@
+#标题
+drm/i915: 修复 shmem scatterlist 长度潜在溢出问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当分配大小为 4GB 或以上的 GEM shmem 对象，且其 scatterlist 表中使用 folio 分配的页面总字节长度达到或超过 4GB 限制时，scatterlist 的 `.length` 属性（unsigned int 类型）发生溢出。导致用户在使用该对象时，遭遇对象后备存储页面意外提前终止，触发内核 WARNING 告警。
+
+#主要错误日志
+[278.780187] ------------[ cut here ]------------
+[278.780377] WARNING: CPU: 1 PID: 2326 at drivers/gpu/drm/i915/i915_mm.c:55 remap_sg+0x199/0x1d0 [i915]
+[278.780654] CPU: 1 UID: 0 PID: 2326 Comm: gem_mmap_offset Tainted: G S   U              6.17.0-rc1-CI_DRM_16981-ged823aaa0607+ #1 PREEMPT(voluntary)
+[278.780659] RIP: 0010:remap_sg+0x199/0x1d0 [i915]
+[278.780786] Call Trace:
+[278.780787]  <TASK>
+[278.780906]  apply_to_page_range+0x14/0x30
+[278.781013]  vm_fault_cpu+0xd2/0x330 [i915]
+[278.781137]  __do_fault+0x3a/0x1b0
+[278.781143]  __handle_mm_fault+0x938/0xfd0
+[278.781152]  ? lock_mm_and_find_vma+0x4b/0x760
+[278.781165]  asm_exc_page_fault+0x27/0x30
+
+#问题根因
+在向 scatterlist 表添加 folio 页面时，如果 folio 中的页面总字节长度达到或超过 4GB，unsigned int 类型的 scatterlist `.length` 属性会发生溢出。该风险在引入 folio_batch 的修改中已存在并被注释标记（/* XXX: could overflow? */），但此前未进行处理。
+
+#解决方案
+在构建 scatterlist 时，限制单个 scatterlist 条目的字节长度不超过 `max_segment`。具体修改包括：
+1. 在计算 `nr_pages` 时，增加对 `max_segment / PAGE_SIZE` 的限制，确保新分配的段大小受控。
+2. 在合并 scatterlist 条目时，根据 `max_segment - sg->length` 限制当前可追加的页面数量，防止长度累加溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/be68c1aa116499a998257ad296994a2832342a34

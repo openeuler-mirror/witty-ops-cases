@@ -1,0 +1,20 @@
+#标题
+KVM: arm64: TLBI 初始化中的内存泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 KVM 虚拟化场景下，初始化 VCPU 调度亲和性时，若第一个 cpumask 变量分配成功但第二个 cpumask 变量分配失败，会导致第一个已分配的变量未被释放，从而造成内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `kvm_sched_affinity_vcpu_init` 中，代码使用 `zalloc_cpumask_var` 分别为 `sched_cpus` 和 `pre_sched_cpus` 分配内存。原代码逻辑将两次分配放在同一个条件判断语句中（使用 `||` 连接）。当 `sched_cpus` 分配成功但 `pre_sched_cpus` 分配失败时，函数直接返回 `-ENOMEM`，此时 `sched_cpus` 已分配的内存未被释放，导致内存泄漏。
+
+#解决方案
+修改内存分配逻辑，将两次 `zalloc_cpumask_var` 调用分开处理。先分配 `sched_cpus`，若失败则直接返回错误；随后分配 `pre_sched_cpus`，若此次分配失败，则调用 `free_cpumask_var` 释放已分配的 `sched_cpus` 内存，最后再返回错误码，确保无内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/18c863e221099a80a33658a439f177107aa19f68

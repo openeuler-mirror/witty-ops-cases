@@ -1,0 +1,27 @@
+#标题
+perf/aux: AUX环形缓冲区溢出时pending disable流程处理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在AUX环形缓冲区发生溢出 overrun 时，由于 `pending_disable` 变量赋值逻辑存在竞争条件，导致后续通过 `perf_event_disable_inatomic` 触发的 `irq_work_queue` 操作失败。这会导致在该场景下性能事件无法按预期被正确禁用，可能引发后续数据记录异常或状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根源在于 `pending_disable` 标志位的处理方式不当。
+原代码直接将 `smp_processor_id()`（CPU编号）赋值给 `pending_disable`。这导致了竞争窗口：
+1. CPU-A 调用 `perf_event_disable_inatomic`，将 `pending_disable` 设为 CPU-A。
+2. 此时发生 sched-out（调度切换），`pending_disable` 被重置为 -1（代码注释显示实际逻辑为重置为 0）。
+3. CPU-B 发生 sched-in，再次调用 `perf_event_disable_inatomic`，将 `pending_disable` 设为 CPU-B。
+4. 随后 CPU-A 尝试执行 `irq_work_queue` 失败（FAILS），因为状态已被 CPU-B 覆盖或因竞争条件不满足执行条件。
+根本原因是将用于原子禁用判断的标志位错误地用于存储 CPU ID，而非遵循标准的禁用流程接口。
+
+#解决方案
+修正 `pending_disable` 的赋值逻辑，不再直接存储 CPU ID，而是统一调用 `perf_event_disable_inatomic(handle->event)` 函数。
+该函数内部会正确处理状态转换，将 `pending_disable` 设置为 1，并安全地触发 `irq_work_queue`，从而修复了上述竞争条件导致的禁用失败问题。修改涉及 `perf_aux_output_begin` 和 `perf_aux_output_end` 两个函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f2f11788fbb4578c555010d0e9d2d59d2be0da4f

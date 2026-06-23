@@ -1,0 +1,50 @@
+#标题
+sched_ext: scx_dump_state 在 PREEMPT_RT 内核中触发锁校验失败与死锁警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_PREEMPT_RT=y 的内核中，调用 scx_dump_state 函数时触发 lockdep 锁一致性校验失败。内核报告 "inconsistent {IN-HARDIRQ-W} -> {HARDIRQ-ON-W} usage" 错误，并提示可能的死锁风险（DEADLOCK）。系统检测到在持有可休眠自旋锁（sleepable spinlock）时，中断上下文与进程上下文的锁使用状态冲突。
+
+#主要错误日志
+inconsistent {IN-HARDIRQ-W} -> {HARDIRQ-ON-W} usage.
+irq_work/0/27 [HC0[0]:SC0[0]:HE1:SE1] takes:
+(&rq->__lock){?...}-{2:2}, at: raw_spin_rq_lock_nested+0x2b/0x40
+{IN-HARDIRQ-W} state was registered at:
+   lock_acquire+0x1e1/0x510
+   _raw_spin_lock_nested+0x42/0x80
+   raw_spin_rq_lock_nested+0x2b/0x40
+   sched_tick+0xae/0x7b0
+   ...
+ Possible unsafe locking scenario:
+
+        CPU0
+        ----
+   lock(&rq->__lock);
+   <Interrupt>
+     lock(&rq->__lock);
+
+  *** DEADLOCK ***
+
+ stack backtrace:
+ CPU: 0 UID: 0 PID: 27 Comm: irq_work/0
+ Call Trace:
+  <TASK>
+  dump_stack_lvl+0x8c/0xd0
+  print_usage_bug+0x42e/0x690
+  mark_lock.part.44+0x867/0xa70
+  __lock_acquire+0xc4b/0x62b0
+  lock_acquire+0x1e1/0x510
+  raw_spin_rq_lock_nested+0x2b/0x40
+  scx_dump_state+0x3b3/0x1270
+  </TASK>
+
+#问题根因
+在开启 CONFIG_PREEMPT_RT 的内核中，dump_lock 被转换为可休眠自旋锁，该类锁不会禁止中断。scx_dump_state() 函数内部使用 `rq_lock()` 和 `rq_unlock()` 进行锁保护，但这组锁操作在 RT 内核下未能正确处理中断状态。由于 dump_lock 的特性，在执行流程中可能出现锁状态不一致：即在硬中断上下文（如 sched_tick）中持有 rq 锁，而在进程上下文（scx_dump_state）中未屏蔽中断的情况下再次获取同一把锁，导致锁校验机制检测到“中断中持锁”与“开中断持锁”的冲突，进而报错并警告死锁风险。
+
+#解决方案
+在 scx_dump_state() 函数中，将原有的 `rq_lock(rq, &rf)` 替换为 `rq_lock_irqsave(rq, &rf)`，将 `rq_unlock(rq, &rf)` 替换为 `rq_unlock_irqrestore(rq, &rf)`。通过使用带有保存和恢复中断状态功能的锁接口，确保在持有 rq 锁期间正确处理中断，避免在 PREEMPT_RT 内核环境下出现锁状态不一致和潜在死锁问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1224a1ec76583e4d0844b3d73442be29576779ed

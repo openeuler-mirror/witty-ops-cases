@@ -1,0 +1,20 @@
+#标题
+urma: 修复 uobj 分配失败时的空指针解引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 urma 模块中，当调用 `type->type_class->alloc_begin` 分配 jfce uobj 失败并返回空指针（NULL）时，内核尝试对该空指针进行解引用操作（`uobj->class_id = class_id`），导致系统发生空指针解引用错误。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `uobj_alloc_begin` 在调用 `type->type_class->alloc_begin` 获取 uobj 后，仅使用 `IS_ERR()` 检查了错误指针，未涵盖返回值为 NULL 的情况。当分配函数返回 NULL 时，代码跳过了错误检查逻辑，直接执行了 `uobj->class_id = class_id`，从而引发空指针解引用。
+
+#解决方案
+修改指针有效性检查逻辑，将 `IS_ERR(uobj)` 修改为 `IS_ERR_OR_NULL(uobj)`，以同时捕获错误指针和空指针情况。若指针无效，则释放读写信号量（`up_read`）并返回错误；仅在指针有效时才进行赋值操作（`uobj->class_id = class_id`），从而避免对空指针的解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d3536f4f7e60343ef92b10c74cda8f8d6865e04a

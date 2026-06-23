@@ -1,0 +1,22 @@
+#标题
+自动清理机制 kfree 对 error pointer 处理不当导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 `__free(kfree)` 自动清理机制处理包含错误指针（error pointer，如 `gpiochip_dup_line_label` 返回的 `ERR_PTR`）的变量时，会导致内核崩溃。
+
+#主要错误日志
+- 推断：内核 Oops 或 Panic，通常伴随无效内存访问或无法处理页错误地址的堆栈信息。
+- 代码上下文中的 dev_err 日志：
+  `dev_err(wm831x->dev, "Failed to duplicate label\n");`
+
+#问题根因
+`__free(kfree)` 自动清理函数的定义仅检查指针是否为空（`if (_T)`），未检查指针是否为错误指针（`IS_ERR`）。当自动释放的变量指向错误指针时（例如函数返回 `ERR_PTR(-ENOMEM)`），清理逻辑错误地尝试对该无效地址调用 `kfree`，从而触发内核崩溃。
+
+#解决方案
+修改 `include/linux/slab.h` 中的 `DEFINE_FREE` 定义，将条件判断从 `if (_T)` 修改为 `if (!IS_ERR_OR_NULL(_T))`。该修改确保在自动清理阶段，如果指针是 `NULL` 或 `ERR_PTR`，则跳过 `kfree` 调用，从而避免非法内存释放导致的崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/67958b2799762d36364fa78b095567aca63a36df

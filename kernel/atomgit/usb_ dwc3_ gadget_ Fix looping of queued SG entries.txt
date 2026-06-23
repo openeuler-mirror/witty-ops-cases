@@ -1,0 +1,20 @@
+#标题
+usb: dwc3: gadget: Fix looping of queued SG entries
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 USB DWC3 控制器的 Gadget 功能进行 SG（Scatter-Gather）传输时，若请求数据量较大触发分片处理（非一次性处理完所有 SG 条目），后续再次调用 `dwc3_prepare_trbs_sg` 继续处理剩余 SG 条目时，代码逻辑发生错误。系统会错误地遍历已经处理过的 SG 条目，导致计算出的剩余数据长度不正确，可能引发数据传输错误、I/O 请求失败或相关的内核异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dwc3_prepare_trbs_sg` 函数中，计算剩余待处理 SG 条目数 `remaining` 和已排队 SG 条目数的逻辑存在错误。原代码直接使用 `req->request.num_mapped_sgs - req->num_queued_sgs` 来计算剩余条目，并在遍历跳过已处理条目时使用了 `req->num_queued_sgs`。这导致在函数多次调用以处理同一请求的不同片段时，循环起始位置计算偏差，程序重复遍历了部分已处理的 SG 条目，从而引发逻辑错误。
+
+#解决方案
+修正 SG 条目处理的循环逻辑与变量计算。引入 `num_queued_sgs` 变量用于记录当前已处理的 SG 条目数，确保 `remaining` 准确表示待处理的条目数，并让 `for_each_sg` 循环使用正确的计数值跳过已处理部分，避免重复遍历。具体修改为：将 `remaining` 赋值为 `req->num_pending_sgs`，并计算 `num_queued_sgs` 为总映射条目数减去剩余条目数，随后在循环中使用该局部变量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fbb22bb90f26f781ddf53daaf1dca6a8f9a5fa19

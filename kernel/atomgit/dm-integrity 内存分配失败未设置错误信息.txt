@@ -1,0 +1,20 @@
+#标题
+dm-integrity 内存分配失败未设置错误信息
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 dm-integrity 目标时，若内核内存不足导致位图相关内存分配失败，设备映射器无法返回具体的错误原因字符串。这会导致用户在加载或构建 dm-integrity 设备失败时，无法看到明确的错误提示（如 "Could not allocate memory for bitmap"），从而增加故障排查难度。
+
+#主要错误日志
+"Could not allocate memory for bitmap"
+
+#问题根因
+dm-integrity 模块在 `dm_integrity_ctr` 函数中，针对 `recalc_bitmap`、`may_write_bitmap` 和 `bbs` 三个数据结构的内存分配失败路径，仅设置了返回错误码 `-ENOMEM`，但遗漏了对 `ti->error` 指针的赋值。按照 Device Mapper 框架要求，构造函数失败时应设置 `ti->error` 指向具体的错误描述字符串，否则上层无法获取详细的失败原因。
+
+#解决方案
+在内存分配失败的错误处理分支中（`!ic->recalc_bitmap`、`!ic->may_write_bitmap` 以及 `!ic->bbs` 判断成立时），增加对 `ti->error` 的赋值操作，将其设置为字符串 "Could not allocate memory for bitmap"，确保错误信息能正确回传给用户态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4739b0b9fa2fa0b6abf0d61cc5bf28f9765286dc

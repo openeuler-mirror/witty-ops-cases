@@ -1,0 +1,28 @@
+#标题
+mlx5 网卡 eswitch 模式切换时 devlink 锁与工作队列死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 eswitch 模式设置（如切换到 offloads 模式）过程中，系统发生死锁，导致操作挂起无响应。
+
+#主要错误日志
+未知
+
+#问题根因
+这是一个典型的 AB-BA 死锁问题：
+1. 锁竞争路径一：`esw->work_queue` 的工作线程执行 `esw_functions_changed_event_handler` -> `esw_vfs_changed_event_handler` 时会尝试获取 `devlink` 锁。
+2. 锁竞争路径二：用户态调用 `.eswitch_mode_set` 接口，在 `devlink_nl_pre_doit` 中先获取了 `devlink` 锁，随后调用链 `mlx5_devlink_eswitch_mode_set` -> `mlx5_eswitch_disable_locked` -> `mlx5_eswitch_event_handler_unregister` 中执行 `flush_workqueue` 等待工作队列完成。
+3. 死锁形成：路径一持有工作队列资源等待 devlink 锁，路径二持有 devlink 锁等待工作队列资源，导致死锁。
+
+#解决方案
+移除 `mlx5_eswitch_event_handler_unregister` 中的 `flush_workqueue` 调用以打破死锁链条，引入代际计数器（generation counter）机制来确保工作队列处理程序的时效性：
+1. 在 `mlx5_esw_functions` 结构体中增加原子变量 `generation`。
+2. 在注销处理程序时递增 `generation` 计数。
+3. 工作队列任务调度时读取当前 `generation` 值并传递给处理函数。
+4. 处理函数执行时先获取 `devlink` 锁，随后检查当前 `generation` 是否与调度时一致，若不一致（说明期间发生了模式切换或注销）则直接退出，避免操作已失效的 esw 上下文。
+5. 最终的资源清理与工作队列销毁在 `mlx5_eswitch_cleanup` 中统一进行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8ad86e65fd6939d1ef4851939d661ffbd22fe09a

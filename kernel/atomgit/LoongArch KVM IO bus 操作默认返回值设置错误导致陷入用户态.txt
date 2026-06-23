@@ -1,0 +1,26 @@
+#标题
+LoongArch KVM IO bus 操作默认返回值设置错误导致陷入用户态
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使能内核态 irqchip 时，MMIO/IOCSR 寄存器访问模拟异常。当地址处于已注册的 KVM IO bus 范围内时，KVM 应在内核态处理模拟，但实际上错误地返回用户态 VMM，导致用户态 VMM 无法处理该访问，进而引发虚拟机运行异常。
+
+#主要错误日志
+未知
+
+#问题根因
+当使能内核态 irqchip 时，其寄存器区域通过 API `kvm_io_bus_register_dev()` 注册在 KVM IO bus 列表中。在 MMIO/IOCSR 寄存器访问模拟过程中，会先调用 `kvm_io_bus_read()` 或 `kvm_io_bus_write()`。
+若这些函数返回 0，表示内核态 irqchip 已处理该模拟；若返回非 0，则返回用户态 VMM 进行模拟。
+根因在于：LoongArch 的 KVM IO bus 操作函数（如 `kvm_eiointc_read`、`kvm_eiointc_write` 等）在遇到错误或默认分支时返回 `-EINVAL` 等负值。由于地址已在内核 IO bus 注册范围内，返回非 0 值导致错误地回退到用户态处理，而用户态 VMM 并不知道如何处理这些由内核 irqchip 管理的寄存器访问。
+
+#解决方案
+修改 LoongArch KVM 中 eiointc、ipi、pch_pic 等模块的 IO bus 操作回调函数，将默认返回值从错误码（如 `-EINVAL`）修改为 0。
+具体修改包括：
+1. 在 `kvm_eiointc_read`、`kvm_eiointc_write` 等函数中，删除错误分支中的 `return -EINVAL`，改为 `return 0`。
+2. 移除局部变量 `ret` 的错误状态传递逻辑，直接在函数末尾返回 0。
+这确保了一旦地址在 KVM IO bus 范围内，内核模拟器将“吞掉”该操作（即使遇到未定义地址也不抛出错误给用户态），保证 in-kernel irqchip 行为的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e9f0e25582c04725a3be42bf458fed0f723fa0e8

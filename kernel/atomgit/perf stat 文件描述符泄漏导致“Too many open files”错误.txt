@@ -1,0 +1,22 @@
+#标题
+perf stat 文件描述符泄漏导致“Too many open files”错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `perf stat` 命令时，若 `create_perf_stat_counter()` 函数执行失败，此前打开的 `workload.cork_fd` 未被正确关闭。当 `__run_perf_stat()` 在循环中被反复调用或重试时，会导致文件描述符累积泄漏，最终触发系统限制报错，出现“Too many open files”错误，阻碍后续操作。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__run_perf_stat()` 函数的错误处理路径中，代码直接返回了错误码，而没有调用清理逻辑来关闭由 `evlist__prepare_workload()` 打开的 `workload.cork_fd`。这导致在计数器创建失败的场景下，文件描述符未被释放，随着重试次数增加产生累积泄漏。
+
+#解决方案
+1. 新增 `evlist__cancel_workload()` 函数，用于在错误路径下关闭 `workload.cork_fd` 并通过 `waitpid` 清理子进程资源。
+2. 修改 `__run_perf_stat()` 中的错误处理逻辑，将原有的直接 `return -1` 修改为 `goto err_out`，在 `err_out` 标签处根据 `forks` 变量判断是否调用 `evlist__cancel_workload()` 进行资源回收。
+3. 在 `evlist__prepare_workload()` 中初始化 `cork_fd` 为 -1，并在 `evlist__start_workload()` 成功执行后将其重置为 -1，以防止重复关闭或错误关闭。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5ead1ced3f0c316af6695a1c3b1a4afad56de9db

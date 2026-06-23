@@ -1,0 +1,23 @@
+#标题
+[scsi: ufs: mediatek] 修复休眠退出失败导致系统挂起或恢复异常的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+MediaTek UFS 设备在休眠退出阶段发生失败时，系统未能有效触发错误处理流程，可能导致设备无法正常恢复，系统处于无响应或不可预期的状态。
+
+#主要错误日志
+exit h8 state fail, ret=%d
+
+#问题根因
+在 `ufs_mtk_auto_hibern8_disable` 函数中，当检测到休眠退出失败（`ufs_mtk_wait_link_state` 返回错误）时，原有的处理逻辑仅打印警告日志，既没有触发 UFS 错误恢复机制，也没有向调用者返回错误状态。这导致挂起流程继续执行，无法从异常状态中恢复。
+
+#解决方案
+1. 修改 `ufs_mtk_auto_hibern8_disable` 函数返回值为 `int` 类型。
+2. 在休眠退出失败时，调用 `ufshcd_force_error_recovery` 强制触发错误处理并调度错误处理工作队列。
+3. 向上层返回 `-EBUSY` 错误码，打断挂起流程。
+4. 导出 `ufshcd_force_error_recovery` 符号，供 MediaTek 主机驱动调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/29db2dbb99e7b2288c3cd26e530334368906a6e9

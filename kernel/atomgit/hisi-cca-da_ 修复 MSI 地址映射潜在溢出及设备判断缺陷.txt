@@ -1,0 +1,26 @@
+#标题
+hisi-cca-da: 修复 MSI 地址映射潜在溢出及设备判断缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RME (Realm Management Extentions) 环境下，当设备使用多个 MSI (Message Signaled Interrupt) 页或 MSI 地址非基准地址（REALM_MSI_ORIG_IOVA）时，中断映射可能发生数据溢出，导致中断路由错误或设备功能异常。此外，在特定 CVM 类型下可能误判 RME 支持状态，以及 PCI 配置空间读写操作可能因参数错误导致访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **MSI 映射溢出**：代码原逻辑仅保存并匹配单一的 `msi_iova`，且 `realm_mmio_map` 仅处理 `iova == REALM_MSI_ORIG_IOVA` 的情况。当设备使用超过一个 MSI 页或 iova 偏移较大时，计算 `rme_get_msi_addr` 中的相对偏移 `(addr - REALM_MSI_ORIG_IOVA)` 会产生溢出或错误，导致中断地址计算错误。
+2. **RME 支持判断不完整**：`is_support_rme` 函数仅检查了 `kvm_rme_is_available`，未结合具体的 CVM 类型（如 `ARMCCA_CVM`）进行判断，导致在某些不支持的场景下错误返回 true。
+3. **设备标识参数错误**：`is_dev_ecam_protected` 函数调用时传入的参数仅为 `devfn`，缺少 `bus->number`，导致 BDF（Bus Device Function）构造错误，无法正确识别受保护的 ECAM 设备。
+
+#解决方案
+1. **扩展 MSI 页管理**：在 `realm_dev_entry` 结构体中新增 `msi_page_index` 字段，引入 `MSI_PAGE_SIZE` 和 `MAX_MSI_PAGE` 宏定义。修改 `rme_update_msi_iova` 接口增加 `iova` 参数，计算并保存页索引；修改 `rme_get_msi_iova` 接口支持根据页索引查找正确的 `msi_iova`，从而支持多 MSI 页映射。
+2. **放宽映射范围检查**：修改 `realm_mmio_map` 和 `realm_mmio_unmap` 中的条件判断，将原来的单点相等判断改为范围判断（`REALM_MSI_ORIG_IOVA` 到 `REALM_MSI_ORIG_IOVA + MAX_MSI_PAGE * MSI_PAGE_SIZE`），确保所有合法 MSI 页都能被处理。
+3. **完善 RME 判定条件**：在 `is_support_rme` 函数中增加对 `kvm_get_cvm_type() == ARMCCA_CVM` 的检查。
+4. **修正设备 BDF 构造**：修改 `pci_generic_config_read` 和 `pci_generic_config_write` 中调用 `is_dev_ecam_protected` 的参数，使用 `PCI_DEVID(bus->number, devfn)` 正确构造 BDF。
+5. **修复返回值截断**：修正 `ccada_pci_generic_config_read` 中 `rmi_dev_mmio_read` 的调用，防止返回值截断，确保数据正确写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5690f67499508897d172b3fd8cea85e5eb227778

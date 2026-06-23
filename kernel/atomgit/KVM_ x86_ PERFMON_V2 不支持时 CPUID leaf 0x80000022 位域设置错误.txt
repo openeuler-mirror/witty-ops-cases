@@ -1,0 +1,20 @@
+#标题
+KVM: x86: PERFMON_V2 不支持时 CPUID leaf 0x80000022 位域设置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 KVM 不支持 PERFMON_V2 功能时，CPUID leaf 0x80000022 的 EAX 寄存器被错误地设置为 EBX 的值，而非正确的 0。在 PMU 被禁用（!enable_pmu）的场景下，如果 VMM 将 KVM 支持的 CPUID 信息直接透传给客户机，可能会因为向客户机通告了 KVM 实际拒绝模拟的 MSR 支持，导致客户机在访问这些 MSR 时触发 #GP（General Protection）异常。
+
+#主要错误日志
+未知
+
+#问题根因
+KVM 代码逻辑失误，在处理 CPUID.0x80000022 时，若检测到不支持 PERFMON_V2，本应将 EAX 和 EBX 清零，但原代码错误地将 `entry->eax` 赋值为 `entry->ebx`，即 `entry->eax = entry->ebx`，导致 EAX 获取了错误的值。
+
+#解决方案
+修改 `arch/x86/kvm/cpuid.c` 文件中的逻辑，当 PMU 未启用或 KVM 不支持 PERFMON_V2 特性时，显式将 `entry->eax` 和 `entry->ebx` 均设置为零。修复代码变更为：`entry->eax = entry->ebx = 0;`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce95a2cc30c567af38f2386c8415b170bddd22f7

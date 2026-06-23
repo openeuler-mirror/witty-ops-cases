@@ -1,0 +1,20 @@
+#标题
+can: gs_usb: 修复 gs_usb_receive_bulk_callback 中的 URB 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 gs_usb CAN 设备驱动时，在关闭设备（调用 gs_can_close）后发生 URB（USB Request Block）内存泄漏。具体表现为系统内存资源被持续占用且无法释放，长时间运行或频繁启停设备可能导致系统内存耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+在 gs_can_open() 中分配并提交了用于 USB 输入传输的 URB，这些 URB 被添加到 parent->rx_submitted 锚点。然而，USB 核心框架在调用完成回调函数 gs_usb_receive_bulk_callback() 之前会自动将 URB 从锚点取消锚定（unanchor）。这意味着一旦 in-URB 完成了一次传输并进入回调函数，它就不再处于锚点链表中。随后在 gs_can_close() 中调用 usb_kill_anchored_urbs() 时，无法找到并释放这些已经取消锚定的 URB，从而导致内存泄漏。
+
+#解决方案
+在 gs_usb_receive_bulk_callback() 函数中重新提交 URB 之前，调用 usb_anchor_urb() 将其重新锚定到 parent->rx_submitted 锚点上。这样确保了 URB 在整个生命周期内都由锚点管理，使得 gs_can_close() 能够正确追踪并释放所有 URB，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d5afc0d80d49b83ec8581480bcebea262e17bff3

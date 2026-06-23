@@ -1,0 +1,21 @@
+#标题
+VLAN 接口存根函数错误使用 BUG() 导致内核崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译配置关闭 CONFIG_VLAN_8021Q 的情况下，若代码逻辑错误调用了 `vlan_dev_real_dev`、`vlan_dev_vlan_id` 或 `vlan_dev_vlan_proto` 等存根函数，内核会直接触发 panic，导致系统崩溃重启。修复后，此类错误调用将不再导致系统宕机，而是打印警告信息并安全返回。
+
+#主要错误日志
+推断：内核日志中可能会出现如下 WARN_ON_ONCE 触发的调用栈警告（修复后）：
+`WARNING: CPU: ... PID: ... at include/linux/if_vlan.h:...`
+
+#问题根因
+当 CONFIG_VLAN_8021Q=n 时，内核使用一组 stub（存根）函数实现 VLAN 相关接口。其中三个存根函数在实现中无条件调用了 `BUG()`。虽然正常流程下调用者应先检查 `is_vlan_dev()` 从而避免执行到此路径，但一旦代码逻辑出现偏差进入此路径，`BUG()` 会导致系统直接崩溃，这种处理方式过于激进，不符合内核编程的最佳实践。
+
+#解决方案
+将 `vlan_dev_real_dev`、`vlan_dev_vlan_id` 和 `vlan_dev_vlan_proto` 三个存根函数中的 `BUG()` 替换为 `WARN_ON_ONCE(1)`。此举在保留错误检测能力的同时，避免了不必要的系统崩溃，提升了内核的健壮性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/738b6533853a0efccc8872a3c6c9318b47dc4470

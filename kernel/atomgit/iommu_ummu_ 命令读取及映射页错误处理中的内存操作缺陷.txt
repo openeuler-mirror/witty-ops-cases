@@ -1,0 +1,23 @@
+#标题
+iommu/ummu: 命令读取及映射页错误处理中的内存操作缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在执行 `check_pa_continuity_nop_exec` 函数时，可能读取到错误的命令值，导致命令操作码（OP）或子操作码（SUB_OP）判断错误，进而引发 IOMMU 命令处理流程异常。
+2. 在 IOMMU 映射页操作失败进行回滚卸载（unmap）时，会擦除错误的 xarray 索引条目，导致元数据管理不一致，可能引发内存泄漏或后续映射操作异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **命令读取错误**：在 `drivers/iommu/hisilicon/queue.c` 中，获取命令时使用了错误的强制类型转换 `(u64)le64_to_cpu(Q_ENT(q, prod))`。`le64_to_cpu` 期望的参数是 `__le64` 类型，而 `Q_ENT` 返回的指针直接被强转，导致读取的并非预期地址的数据，解析出的命令值错误。
+2. **回滚索引计算错误**：在 `drivers/iommu/hisilicon/ummu-core/core_iova.c` 的 `map_pages` 错误处理路径中，`xa_erase` 直接使用循环变量 `j` 作为索引，未加上 `iova_bitmap_offset` 的偏移量，导致回滚时擦除了错误的 xarray 条目。
+
+#解决方案
+1. 修正 `queue.c` 中的读取方式，改为 `cmd = le64_to_cpu(*(Q_ENT(q, prod)));`，先对指针解引用获取 `__le64` 数据，再转换为 CPU 字节序。
+2. 修正 `core_iova.c` 中的卸载索引计算，改为 `xa_erase(&slot->xa, iova_bitmap_offset(slot, iova) + j);`，确保在错误回滚时擦除正确的 xarray 条目。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/785d5b56cf96ad82fedeb57b4897dc3d770e6d01

@@ -1,0 +1,23 @@
+#标题
+usb: gadget: f_ncm: 断开连接时因 net_device 生命周期管理缺陷导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB gadget NCM 功能断开连接的过程中，网络设备的生命周期长于其父设备，导致 sysfs 中出现悬空链接并引发空指针引用问题。
+
+#主要错误日志
+未知
+
+#问题根因
+网络设备在 USB 断开连接期间比其父 gadget 设备存活时间更长，导致悬空的 sysfs 链接和空指针解引用。此问题源于之前尝试修复时引入的回归：若移除 SET_NETDEV_DEV 会导致电源管理排序问题；若延迟 net_device 分配到 bind 阶段则会破坏功能实例与网络设备的 1:1 映射，导致 configfs 无法报告接口名称，进而引发 DHCP 服务失败。
+
+#解决方案
+引入 `device_move` 机制，在 bind/unbind 周期中动态调整 net_device 的父子层级关系（在 gadget 设备与 `/sys/devices/virtual/` 之间移动），以在网络接口跨 USB 重连时保持其存在性。具体措施包括：
+1. 新增 `gether_attach_gadget()` 和 `gether_detach_gadget()` 辅助函数，用于处理网络设备的挂载与卸载。
+2. 使用 `__free(detach_gadget)` 宏确保在 bind 失败时自动撤销挂载操作。
+3. 将 `f_ncm_opts` 结构体中的 `bound` 布尔字段改为 `bind_count` 计数器，确保 `device_move` 仅在首次绑定时执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b6d37fae9af59b24e664c6e986ba91b1d9351743

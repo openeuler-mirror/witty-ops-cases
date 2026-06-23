@@ -1,0 +1,20 @@
+#标题
+ksmbd: oplock_info 结构体释放后访问（UAF）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 内核服务器模块运行过程中，当释放 oplock_info 结构体时，若此时其他线程正处于 RCU 读侧临界区（如调用 opinfo_get() 或 proc_show_files()），可能会访问到已释放的内存地址。这会导致内核发生 Use-After-Free（UAF）故障，具体表现为内核崩溃、Oops 或内存数据损坏。特别是在 opinfo_get() 函数中，对已释放内存执行 atomic_inc_not_zero() 操作时极易触发该问题。
+
+#主要错误日志
+未知
+
+#问题根因
+ksmbd 在释放 oplock_info 结构体时直接使用了 kfree() 进行立即释放。然而，代码中存在 RCU 读侧临界区（如 opinfo_get() 和 proc_show_files()）访问该结构体的情况。由于在置空指针和释放内存之间没有 RCU 宽限期延迟，读线程可能在内存被释放后、但仍在 RCU 临界区执行时访问该结构体，从而引发 Use-After-Free。
+
+#解决方案
+将 oplock_info 结构体的释放方式从直接调用 kfree() 修改为使用 call_rcu() 进行延迟释放。这确保了在所有潜在的 RCU 读侧临界区完成之前，该结构体占用的内存不会被回收，从而避免了竞争条件导致的释放后访问问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58698006c7c0be841dbf2b5002024b650ac39868

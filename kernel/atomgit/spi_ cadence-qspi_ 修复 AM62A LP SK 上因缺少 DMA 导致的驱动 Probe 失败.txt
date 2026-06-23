@@ -1,0 +1,20 @@
+#标题
+spi: cadence-qspi: 修复 AM62A LP SK 上因缺少 DMA 导致的驱动 Probe 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+TI AM62A LP SK 开发板的 Octo-SPI 节点在启动过程中驱动加载失败（Probe 失败），导致 SPI 设备无法正常工作。该问题出现在设备树未配置 DMA 通道且硬件不支持 DMA 的情况下，驱动不应因缺少 DMA 而完全加载失败。
+
+#主要错误日志
+No Rx DMA available
+
+#问题根因
+2020 年的一个代码变更修改了 `dma_request_chan_by_mask()` 的返回值处理逻辑。该变更将 `dma_request_chan_by_mask()` 返回的所有错误码（包括 `-ENODEV`）都直接上报给调用者，导致驱动在找不到 Rx DMA 通道时直接终止 Probe 流程。然而，许多硬件实现并不原生支持 DMA，这种情况下驱动应当忽略 DMA 缺失并继续运行，而不是直接报错退出。
+
+#解决方案
+在 `cqspi_request_mmap_dma` 函数中增加对 `dma_request_chan_by_mask()` 返回值的判断：如果返回值为 `-ENODEV`（表示设备不支持 DMA），则将其视为正常情况，打印 info 级别日志并返回 0，允许驱动继续初始化；仅在其他错误类型或需要延迟探测时才上报错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5b159e0a8ec158f9924d726bcb398c5ee266ff4a

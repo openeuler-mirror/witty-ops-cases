@@ -1,0 +1,33 @@
+#标题
+Bluetooth: L2CAP: 修复 l2cap_send_cmd 中的 slab-use-after-free 读漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在处理蓝牙 L2CAP 数据包时触发 KASAN 检测错误，报错 "slab-use-after-free"，导致内核崩溃。该问题出现在 `l2cap_send_cmd` 函数中，具体表现为 `hci_rx_work` 工作队列在处理接收数据时，访问了已被释放的 `l2cap_conn` 对象内存。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in l2cap_send_cmd+0x187/0x8d0 net/bluetooth/l2cap_core.c:954
+Read of size 8 at addr ffff8880271a4000 by task kworker/u9:2/5837
+CPU: 0 UID: 0 PID: 5837 Comm: kworker/u9:2 Not tainted 6.13.0-rc5-syzkaller-00163-gab75170520d4 #0
+Workqueue: hci1 hci_rx_work
+Call Trace:
+ l2cap_build_cmd net/bluetooth/l2cap_core.c:2964 [inline]
+ l2cap_send_cmd+0x187/0x8d0 net/bluetooth/l2cap_core.c:954
+ l2cap_sig_send_rej net/bluetooth/l2cap_core.c:5502 [inline]
+ l2cap_sig_channel net/bluetooth/l2cap_core.c:5538 [inline]
+ l2cap_recv_frame+0x221f/0x10db0 net/bluetooth/l2cap_core.c:6817
+ hci_rx_work+0x508/0xdb0 net/bluetooth/hci_core.c:4040
+
+#问题根因
+这是一个并发竞态问题。当 `hci sync` 命令执行完毕释放 `l2cap_conn` 对象后，`hci receive data` 工作队列（`hci_rx_work`）仍尝试引用该已释放的连接对象向协议栈上层发送数据。具体而言，`l2cap_conn_del` 函数释放连接与 `l2cap_recv_acldata` 处理接收数据之间缺乏有效的同步锁保护，导致 Use-After-Free 风险。
+
+#解决方案
+1. 在 `l2cap_recv_acldata` 函数中引入 `hci_dev_lock` 锁保护，在访问 `hcon->l2cap_data` 前加锁，以同步 `l2cap_conn_del` 中的释放操作。
+2. 新增 `l2cap_conn_hold_unless_zero` 函数，利用引用计数机制（`kref_get_unless_zero`）确保在数据处理期间连接对象不会被释放。
+3. 调整 `hci_chan_del` 的调用位置，将其从 `l2cap_conn_del` 移动到 `l2cap_conn_free` 中，确保对象生命周期管理正确。
+4. 新增 `l2cap_send_acl` 封装函数，在发送 ACL 数据前调用 `hci_conn_valid` 检查连接有效性，防止向无效连接发送数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/952a43ca68d152b693075d94f94d920cb1236959

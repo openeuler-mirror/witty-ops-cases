@@ -1,0 +1,23 @@
+#标题
+perf/core: max_samples_per_tick=1 时节流机制失效导致中断风暴
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当设置 max_samples_per_tick=1 时，perf 节流机制失效。在一个 tick 周期内，throttle 检查会被跳过，直到第二个中断到达时才执行，导致 PMU 中断数量远超预期（例如 X86 架构下每秒允许中断数可达 200，而非预期的 1），可能引发系统负载过高或性能抖动。
+
+#主要错误日志
+未知
+
+#问题根因
+根据节流机制设计，PMU 中断数在一个 tick 内不应超过 max_samples_per_tick。然而在代码逻辑中，中断计数 `hwc->interrupts` 的增加与节流判断被包裹在同一个 `else` 分支中。
+当 `hwc->interrupts` 初始化为 1 时，代码直接进入了 `else` 分支执行 `hwc->interrupts++`（变为 2），随后才进行判断。这导致第一次中断（中断数为 1）时条件 `hwc->interrupts > max_samples_per_tick`（即 `1 > 1`）不满足，从而跳过了节流检查。
+修正前的逻辑缺陷在于：当 max_samples_per_tick 设为 1 时，只有当第 2 个中断到来时才会触发检查，这违反了每个 tick 最多允许 1 个样本的限制，导致中断抑制功能完全失效。
+
+#解决方案
+将节流判断逻辑从中断计数的 `else` 分支中移出，消除对前置条件的依赖。
+修改判断条件为 `hwc->interrupts >= max_samples_per_tick`，并将该判断置于计数逻辑之外独立执行。这确保了当 max_samples_per_tick=1 时，第一次中断（interrupts=1）就能正确触发节流机制，限制 PMU 中断频率在预期范围内。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/adf741539923a9f4f63caf260e1c434e6e5c0bf8

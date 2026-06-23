@@ -1,0 +1,23 @@
+#标题
+selftests/alsa编译出现循环依赖告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译内核 selftests/alsa 测试集时，Make 构建过程检测到循环依赖并打印告警信息。具体表现为构建日志中出现 "Circular ... dependency dropped" 警告，提示 global-timer 目标存在自引用依赖。
+
+#主要错误日志
+make[4]: Entering directory 'tools/testing/selftests/alsa'
+make[4]: Circular default_modconfig/kselftest/alsa/global-timer <- default_modconfig/kselftest/alsa/global-timer dependency dropped.
+make[4]: Nothing to be done for 'all'.
+make[4]: Leaving directory 'tools/testing/selftests/alsa'
+
+#问题根因
+Makefile 中的模式规则 `$(OUTPUT)/%: %.c` 将 `$(TEST_GEN_PROGS_EXTENDED)` 作为依赖项。由于 `global-timer` 目标本身包含在 `$(TEST_GEN_PROGS_EXTENDED)` 变量中，导致该规则变为 `global-timer` 依赖于其自身，从而引发循环依赖。
+
+#解决方案
+修改 `tools/testing/selftests/alsa/Makefile`，将模式规则中的 `$(TEST_GEN_PROGS_EXTENDED)` 依赖替换为明确的 `$(OUTPUT)/libatest.so` 依赖。此举确保了 libatest.so 在其他目标之前构建，消除了循环依赖问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e03d62df039b54d41c23f14ecf6d6327e9e7a3ee

@@ -1,0 +1,22 @@
+#标题
+intel-uncore-freq 模块在 plat_info 为空时引发静态检查警告及 sysfs 重复项问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. Smatch 静态检查工具报出警告，提示在调用 `set_cdie_id` 函数时存在未检查的空指针解引用风险。
+2. 在双路（two package）系统中，若 `plat_info` 为 NULL，会导致 Package ID 始终为零，进而引发 sysfs 条目重复的警告。
+
+#主要错误日志
+dev_info(&auxdev->dev, "Platform information is NULL\n");
+（推断）sysfs: cannot create duplicate filename '/sys/devices/...'
+
+#问题根因
+`plat_info` 指针来自 TPMI ID TPMI_BUS_INFO，是核心 TPMI 设计的一部分，正常生产环境下不应为空。但在代码逻辑中，`uncore_probe` 函数未对 `tpmi_get_platform_data` 返回的 `plat_info` 进行有效性校验即进行解引用或传递。当 `plat_info` 为 NULL 时，不仅触发静态检查警告，还会因 Package ID 获取错误导致 sysfs 节点创建冲突。
+
+#解决方案
+在 `uncore_probe` 函数中增加对 `plat_info` 指针的判断。如果指针为 NULL，打印提示信息 "Platform information is NULL"，并返回 `-ENODEV` 错误码直接终止模块加载，跳转到错误处理标签 `err_rem_common`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7e263c92edc782a582d50dd60d59890c4f45e5dc

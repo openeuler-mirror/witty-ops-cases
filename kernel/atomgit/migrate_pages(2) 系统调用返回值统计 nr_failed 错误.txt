@@ -1,0 +1,23 @@
+#标题
+migrate_pages(2) 系统调用返回值统计 nr_failed 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+`migrate_pages(2)` 系统调用返回值不符合文档预期。根据 man 手册，该系统调用成功时应返回“无法移动的页面数量”，但在实际运行中，当部分页面在隔离阶段失败时，系统调用未将这些页面计入返回值，导致返回的失败计数偏小，无法正确反映实际未迁移的页面总数。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在统计迁移失败页面数时存在逻辑遗漏。`migrate_pages(2)` 的实现分为“页面隔离”和“页面迁移”两个阶段，之前的修复仅关注了 `mbind(MPOL_MF_STRICT|MPOL_MF_MOVE*)` 的场景，而 `migrate_pages(2)` 系统调用仅统计了“迁移阶段”失败的页面数，遗漏了在“隔离阶段”就已经失败的页面。此外，对于大页 folio 的处理，由于一个大页可能映射到多个 PTE，在遍历过程中可能被重复计数，或者因隔离逻辑竞争导致计数不准。
+
+#解决方案
+修改 `mm/mempolicy.c`，在 `struct queue_pages` 结构体中新增 `nr_failed` 字段，用于累计隔离阶段失败的页面数：
+1. 在 `queue_pages_range()` 及相关回调函数（如 `queue_folios_pte_range`、`queue_folios_hugetlb`、`queue_folios_pmd`）中，当页面无法隔离或处于迁移临时状态时，增加 `nr_failed` 计数。
+2. 处理大页 folio 的重复计数问题，通过在 `struct queue_pages` 中记录当前遇到的 `large` folio，避免对同一个大页的多个 PTE 重复计数。
+3. 调整返回值逻辑，将隔离阶段的 `nr_failed` 与迁移阶段的失败计数相加，确保系统调用返回正确的失败总数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/faf7251ac4f8d1b3cfba36de43cb45e1882784f4

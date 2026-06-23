@@ -1,0 +1,31 @@
+#标题
+[PPS子系统释放后使用导致内核崩溃]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+在运行 ntpd 和 gpsd 的设备上重启时，系统调用退出过程中触发 use-after-free。具体表现为内核打印 "kobject: '(null)' ... is not initialized, yet kobject_put() is being called" 警告，随后出现 refcount_t 下溢、链表损坏，最终触发 Kernel panic。故障路径位于 gpsd 进程退出时的 `cdev_put` 调用链中。
+
+#主要错误日志
+- pps pps1: removed
+- ------------[ cut here ]------------
+- kobject: '(null)' (00000000db4bec24): is not initialized, yet kobject_put() is being called.
+- WARNING: CPU: 2 PID: 440 at lib/kobject.c:734 kobject_put+0x120/0x150
+- Call trace:
+  kobject_put+0x120/0x150
+  cdev_put+0x20/0x3c
+  __fput+0x2c4/0x2d8
+  ...
+- refcount_t: underflow; use-after-free.
+- kernel BUG at lib/list_debug.c:62!
+- Kernel panic - not syncing: Oops - BUG: Fatal exception
+
+#问题根因
+在 `pps_device_destruct()` 中，代码在调用 `cdev_del()` 后立即释放了包含 `cdev` 结构的 `pps_device` 内存。然而，根据内核 cdev 机制，`cdev_del()` 返回后，已打开的文件描述符的操作（fops）仍然可能被调用，此时 `cdev_put()` 会尝试访问已经被释放的 `pps_device` 及其内部的 `cdev` 对象，导致 use-after-free。
+
+#解决方案
+移除 `pps_device` 结构体中嵌入的 `cdev` 成员，改为使用 `__register_chrdev()` 接口。同时，将 `pps_device` 中的 `dev` 指针改为内嵌的 `struct device` 对象，并让 `pps_idr` 作为设备查找的唯一真实来源。通过在 `pps_unregister_cdev()` 中调用 `idr_remove()` 并由 `pps_idr` 持有对 `pps->dev` 的引用，确保在用户空间仍可见时设备结构体不会被释放，从而修复生命周期管理问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/08472dc3701eddc87679038c9cfc0e29d9196768

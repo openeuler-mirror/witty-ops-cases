@@ -1,0 +1,33 @@
+#标题
+bonding: alb模式快速启停触发rlb_arp_recv UAF导致内核Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 bonding ALB 模式下，反复执行 `ip link set bond0 up/down` 操作并发接收 ARP 报文时，触发内核通用保护故障。KASAN 检测到空指针解引用，系统打印 Oops 日志并打印调用栈。根因是 rlb_arp_recv 在处理接收到的 ARP 报文时，访问了已被 rlb_deinitialize 释放的 rx_hashtbl，属于典型的 UAF（Use-After-Free）问题。
+
+#主要错误日志
+[  214.174138] Oops: general protection fault, probably for non-canonical address 0xdffffc000000001d: 0000 [#1] SMP KASAN PTI
+[  214.186478] KASAN: null-ptr-deref in range [0x00000000000000e8-0x00000000000000ef]
+[  214.205907] Hardware name: Dell Inc. PowerEdge R730/0WCJNT, BIOS 2.14.0 01/14/2022
+[  214.220320] RIP: 0010:rlb_arp_recv+0x505/0xab0 [bonding]
+[  214.320975]  bond_handle_frame+0x166/0xb60 [bonding]
+[  214.326537]  __netif_receive_skb_core.constprop.0+0x576/0x2710
+[  214.374518]  process_backlog+0x3f1/0x13a0
+[  214.399233]  net_rx_action+0x8c1/0xe60
+[  214.426302]  handle_softirqs+0x1fd/0x860
+
+#问题根因
+ALB 接收路径与 bond 卸载流程存在并发竞争。在 bond 进行 up/down 快速切换时，`bond_close` 调用 `bond_alb_deinitialize()` 释放了 `rx_hashtbl`，但此时 RX 处理器（如 `rlb_arp_recv`）仍在运行并试图访问该哈希表。
+此外，原代码中 `recv_probe` 被设置为 NULL 的时机太晚，导致在 `rlb_deinitialize()` 释放内存后，RX 处理函数仍能被调用，从而引发空指针解引用或 UAF。
+
+#解决方案
+调整 `bond_close` 函数中的清理顺序，在释放 ALB 资源前先禁用接收处理器并等待其执行完毕。
+具体修改：
+1. 在调用 `bond_alb_deinitialize()` 之前，先将 `bond->recv_probe` 设置为 NULL（使用 `WRITE_ONCE` 保证原子性）。
+2. 调用 `synchronize_net()` 等待所有正在执行的 RX 处理器（如 `rlb_arp_recv`）完成处理。
+这确保了在释放 `rx_hashtbl` 之前，不会有新的 RX 处理器进入临界区，也不会有正在运行的处理器访问已释放的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0301c56f45e23752d21d54ca4d519cc2d4cbde1b

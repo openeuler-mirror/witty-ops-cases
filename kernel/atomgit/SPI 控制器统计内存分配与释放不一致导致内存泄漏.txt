@@ -1,0 +1,22 @@
+#标题
+SPI 控制器统计内存分配与释放不一致导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SPI 控制器在注册过程中若后续步骤初始化失败，或者控制器被释放时，此前分配的 per-cpu 统计内存无法被释放，导致内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在原有代码逻辑中，`ctlr->pcpu_statistics` 的内存分配是在 `spi_register_controller` 函数中进行的，但内存释放却在 `spi_controller_release` 函数中。这导致两个问题：
+1. 若 `spi_register_controller` 在分配内存后的后续初始化步骤中失败（如 `device_add` 失败），代码直接跳转到错误处理分支，此时并未释放刚分配的 `pcpu_statistics`，造成内存泄漏。
+2. 内存分配与释放的生命周期管理不一致，分配在注册阶段，释放在设备释放阶段。
+
+#解决方案
+将 `pcpu_statistics` 的内存分配逻辑从 `spi_register_controller` 移至 `__spi_alloc_controller` 函数中。这样确保了内存分配在控制器对象创建时完成，且在 `spi_controller_release` 中调用 `free_percpu` 进行释放，使得分配与释放逻辑对称，避免了因注册失败路径导致的内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b800655cacc6cc920550578968ebc9512e9f9e5e

@@ -1,0 +1,25 @@
+#标题
+fuse: passthrough模式下并行DIO写入返回EBUSY错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在FUSE文件系统中，当文件已以passthrough模式打开时，对该文件执行并行Direct I/O (DIO) 写入操作会失败，系统调用返回 `-EBUSY` 错误。
+
+#主要错误日志
+未知
+
+#问题根因
+并行DIO写入与passthrough模式打开文件时，都会对 `fi->iocachectr` 进行负引用计数操作。
+在 `fuse_inode_uncached_io_start` 函数中，原有的逻辑仅检查 `oldfb`（当前附加的backing对象）是否与传入的 `fb` 相同，若不同则返回 `-EBUSY`。
+并行DIO写入操作传入的 `fuse_backing` 对象为 `NULL`（因为其不需要backing file），而此时如果文件已通过passthrough模式打开（即 `oldfb` 不为 `NULL`），代码会判定 `oldfb != NULL` 且 `oldfb != fb`（因为 `fb` 为 `NULL`），从而错误地触发 `-EBUSY` 冲突判断。实际上，并行DIO写入使用 `NULL` 的backing对象并不会与已附加的 `fuse_backing` 对象产生实际冲突。
+
+#解决方案
+修改 `fs/fuse/iomode.c` 中的 `fuse_inode_uncached_io_start` 函数逻辑：
+1. 在冲突检查中增加对传入参数 `fb` 的判断，仅当 `fb` 不为 `NULL` 时才进行 `oldfb != fb` 的冲突检查。
+2. 在设置backing file引用计数时，同样增加 `fb && !oldfb` 的判断，确保只有在传入有效的 `fuse_backing` 对象且尚未附加时才进行设置。
+此修复允许并行DIO写入在传入 `NULL` fuse_backing 的情况下，与已处于passthrough模式的文件共存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7d148e7581d3d835b9ee47df658d18089499f066

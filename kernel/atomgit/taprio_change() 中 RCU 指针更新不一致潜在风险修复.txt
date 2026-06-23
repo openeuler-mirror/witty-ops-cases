@@ -1,0 +1,20 @@
+#标题
+taprio_change() 中 RCU 指针更新不一致潜在风险修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 taprio_change() 函数的处理流程中，对 `q->admin_sched` 指针的更新使用了 `rcu_assign_pointer`，这与代码其他部分使用 `rcu_replace_pointer` 的模式不一致。虽然经分析该 txtime 分支不会与 `advance_sched()` 发生竞争，但这种不一致的 RCU 更新方式可能引入难以察觉的并发风险或内存屏障缺失问题。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，`taprio_change()` 的 txtime 分支原本使用 `rcu_assign_pointer` 来更新 `admin_sched` 指针，而代码的其他分支或类似场景中推荐使用 `rcu_replace_pointer`。这种不一致性不符合 RCU 指针更新的最佳实践，可能导致潜在的并发问题。
+
+#解决方案
+将 `taprio_change()` 函数中的 `rcu_assign_pointer(q->admin_sched, new_admin)` 替换为 `rcu_replace_pointer(q->admin_sched, new_admin, lockdep_rtnl_is_held())`。这样可以确保代码逻辑的一致性，并利用 `rcu_replace_pointer` 正确处理旧指针的返回与后续的 RCU 回调释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/91dfae0388251ed85abee3911d9dd01e5f6ab6c4

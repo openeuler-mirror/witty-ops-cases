@@ -1,0 +1,20 @@
+#标题
+sched/task_stack: KASAN tagged pointers 导致 object_is_on_stack() 判断失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 KASAN 的内核配置下，调用 `object_is_on_stack()` 函数检查对象是否位于栈上时，函数返回错误的判断结果（即本应在栈上的对象被判定为不在栈上）。这可能导致依赖该检查结果的内核逻辑发生异常行为，例如栈对象的合法性校验失败或非预期的执行路径。
+
+#主要错误日志
+未知
+
+#问题根因
+当 KASAN 功能开启时，指针可能被标记有 KASAN 的 tag（tagged pointers）。函数 `object_is_on_stack()` 在进行地址范围比较时，直接使用了带有 tag 的指针 `obj`，而 `stack` 指针是通过 `task_stack_page(current)` 获取的不带 tag 的地址。由于地址高位 tag 的存在，直接进行大小比较会导致逻辑判断错误，无法正确识别栈对象。
+
+#解决方案
+在 `include/linux/sched/task_stack.h` 文件中的 `object_is_on_stack()` 函数里，引入 `linux/kasan.h` 头文件，并在地址比较前调用 `kasan_reset_tag(obj)` 去除指针的 tag 标签，确保比较的是真实的内存地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c84b7df5155bee6ef283fbe6286ec110a8304b01

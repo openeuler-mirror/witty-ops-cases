@@ -1,0 +1,29 @@
+#标题
+ub: hisi-ubus: 修复代码静态检查（smatch）缺陷及错误处理缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动代码存在多处静态检查缺陷，包括逻辑运算符使用错误、错误分支未设置返回值、变量未初始化及输入参数校验不当等。这些缺陷可能导致驱动初始化异常、错误处理流程不正确或潜在的内核崩溃风险。
+
+#主要错误日志
+- `pr_err("decoder_map or decoder_unmap ops not exist\n");`
+- `dev_err(dev, "tlv si/pi/pn/ci NULL\n");`
+- `ub_err(uent, "alloc dev uent_num failed, ret=%d\n", uent_num);`
+- `pr_err("eu table query bit(%d) invalid\n", bit);`
+
+#问题根因
+1. **逻辑运算符误用**：`ub_decoder_map` 函数中检查 ops 是否存在时，本意是两个指针都不存在才报错，但代码逻辑使用了 `&&`，导致只要存在一个即跳过检查，修正为 `||`。
+2. **错误处理路径缺失返回值赋值**：在 `ub_enum_ent`、`ub_host_probe` 和 `ub_setup_ent` 函数中，跳转到错误处理标签 `goto err` 前未将 `ret` 变量赋值为负数错误码（如 `-EINVAL` 或 `-EFAULT`），导致函数返回时可能返回 0（成功），掩盖了错误状态。
+3. **输入校验逻辑错误**：`hi_eu_table_info_write` 函数中，本应校验 `kstrtoint` 的返回值 `ret`，却错误地校验了未初始化或无关的变量 `fields`。
+4. **变量未初始化风险**：`handle_table` 函数中局部变量 `ret` 未初始化，若循环条件不满足或逻辑跳过，可能返回随机值。
+
+#解决方案
+1. 修正 `ub_decoder_map` 中的逻辑判断，将 `&&` 修改为 `||`，确保任一 ops 缺失均报错。
+2. 在相关 `goto` 跳转前补全 `ret` 的赋值操作，确保错误路径返回正确的错误码。
+3. 修正 `hi_eu_table_info_write` 中的校验逻辑，改为判断 `ret < 0`。
+4. 初始化 `handle_table` 中的 `ret` 变量为 0，规避未初始化返回风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b889080ef7b6035d229e0250725138b62f2a4102

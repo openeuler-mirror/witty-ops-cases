@@ -1,0 +1,28 @@
+#标题
+hisi_uncore_cpa_pmu: CPA 事件 sysfs 接口位掩码限制错误导致输入校验失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+用户在使用 perf 工具指定 CPA PMU 事件（event）进行性能统计时，若输入的事件值在 0x1ff 到 0xffff 范围内，驱动程序未按预期返回错误，而是错误地显示 "<not supported>"，导致功能异常且提示信息不明确。
+
+#主要错误日志
+修复前：
+```
+<not supported>      hisi_sicl0_cpa0/event=0x1FF/
+```
+修复后（预期行为）：
+```
+event syntax error: '..cpa0/event=0x1FF/'
+                                  \___ value too big for format, maximum is 255
+```
+
+#问题根因
+CPA PMU 驱动程序中定义事件格式的属性 `hisi_cpa_pmu_format_attr` 错误地将 event 的位掩码范围设置为 "config:0-15"（即 16 位），而硬件实际支持的事件范围仅为 0-7（即 8 位，最大值 255）。这导致 sysfs 接口对输入值的校验范围过大，无法正确拒绝超出硬件支持范围的无效输入。
+
+#解决方案
+修改 `drivers/perf/hisilicon/hisi_uncore_cpa_pmu.c` 文件中的 `hisi_cpa_pmu_format_attr` 定义，将 event 的配置位掩码从 "config:0-15" 修正为 "config:0-7"，以确保输入校验与硬件实际能力一致，正确拒绝越界值并返回明确的错误提示。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2548d13070513efd7a79120d69f54ff19798ef17

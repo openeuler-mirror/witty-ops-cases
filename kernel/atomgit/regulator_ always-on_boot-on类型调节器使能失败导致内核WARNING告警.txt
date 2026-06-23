@@ -1,0 +1,25 @@
+#标题
+regulator: always-on/boot-on类型调节器使能失败导致内核WARNING告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在注册具有“always-on”或“boot-on”属性的调节器时，如果使能主调节器失败，内核会触发WARNING告警。该告警出现在`_regulator_put`函数中，导致调用栈打印，表明调节器资源释放不平衡。
+
+#主要错误日志
+[    1.603889] WARNING: CPU: 2 PID: 44 at _regulator_put+0x8c/0xa0
+[    1.603926] CPU: 2 UID: 0 PID: 44 Comm: kworker/u16:3 Not tainted 6.18.0-rc4 #0 NONE
+[    1.603945] Hardware name: Qualcomm Technologies, Inc. IPQ9574/AP-AL02-C7 (DT)
+[    1.603976] lr : _regulator_put+0x7c/0xa0
+[    1.604145]  _regulator_put+0x8c/0xa0 (P)
+[    1.604156]  regulator_register+0x2ec/0xbf0
+
+#问题根因
+对于“always-on”和“boot-on”调节器，`set_machine_constraints()`函数会在使能主调节器之前先使能供电电源。如果随后使能主调节器失败，函数会直接返回错误，但供电电源仍处于使能状态。这导致`regulator_register()`在错误处理路径中释放供电调节器时，由于使能计数不平衡（缺少对应的disable操作），从而在`_regulator_put()`中触发WARNING。
+
+#解决方案
+修改`set_machine_constraints()`函数，增加对供电电源使能状态的跟踪。当使能主调节器失败时，检查供电电源是否已被使能；如果是，则调用`regulator_disable()`关闭供电电源，确保资源状态一致，避免释放时的引用计数警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/53c37c1af51117e687d675634610ce57e53dff3e

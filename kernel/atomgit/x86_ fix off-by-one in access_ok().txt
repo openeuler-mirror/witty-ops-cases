@@ -1,0 +1,20 @@
+#标题
+x86: fix off-by-one in access_ok()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在进行用户空间地址合法性检查时，`access_ok()` 函数存在差一错误。当缓冲区大小非小常数时，`__access_ok()` 会使用缓冲区末尾地址的后一个字节地址调用 `valid_user_address()` 进行校验。这导致合法的用户缓冲区如果恰好结束于最后一个有效的用户地址，地址检查可能会错误地判定为无效，从而引发内存访问权限检查异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 commit 86e6b1547b3d0 ("x86: fix user address masking non-canonical speculation issue") 中，`USER_PTR_MAX` 被定义为 `TASK_SIZE_MAX-1`。这导致 `valid_user_address()` 在校验地址范围时，未考虑到缓冲区可能合法地结束于最后一个有效用户地址的情况。实际上，地址检查应当允许访问到保护页的基址，因此 `USER_PTR_MAX` 应当是 `TASK_SIZE_MAX` 而非 `TASK_SIZE_MAX-1`。
+
+#解决方案
+修改 `arch/x86/kernel/cpu/common.c` 文件中的 `USER_PTR_MAX` 定义。将其初始化值从 `TASK_SIZE_MAX-1` 修正为 `TASK_SIZE_MAX`；对于 LAM（Linear Address Masking）场景，将其值从 `(1ul << 63) - PAGE_SIZE - 1` 修正为 `(1ul << 63) - PAGE_SIZE`。此修复确保地址范围检查允许缓冲区合法结束于用户空间边界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31ffead7678b93946458d5f0c03847cd335e74ee

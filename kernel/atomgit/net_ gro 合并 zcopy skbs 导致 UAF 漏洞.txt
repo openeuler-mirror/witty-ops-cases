@@ -1,0 +1,20 @@
+#标题
+net: gro 合并 zcopy skbs 导致 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当启用了 zerocopy（零拷贝）且设置了 SKBFL_MANAGED_FRAG_REFS 标志的 skb 参与 GRO（Generic Receive Offload）合并时，内核可能发生 UAF（Use-After-Free）漏洞，导致系统崩溃或内存被非法篡改。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `skb_gro_receive()` 函数中，代码未检查参与合并的 skb 是否为零拷贝状态。当 skb 设置了 `SKBFL_MANAGED_FRAG_REFS` 标志时，该 skb 并不持有 `shinfo->frags` 中页面的引用计数。如果将这些 frags 直接追加到另一个 skb 中而不修正页面引用计数，会导致页面被提前释放，从而引发 UAF（Use-After-Free）。
+
+#解决方案
+在 `net/core/gro.c` 的 `skb_gro_receive()` 函数中增加检查逻辑：如果 GRO 链中的最后一个 skb（`p`）或源 skb（`skb`）任意一方处于 zerocopy 状态，则直接返回 `-ETOOMANYREFS` 阻止合并操作，避免因引用计数管理不当引发的 UAF。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31f78491762ad180c1e0368f6024fcbcdfbcc6f5

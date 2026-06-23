@@ -1,0 +1,31 @@
+#标题
+bnxt_en: XDP激活状态下修改MTU导致内存崩溃与空指针异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载了XDP multi-buffer程序的情况下修改网卡MTU值，会导致系统出现随机内存破坏，进而引发内核崩溃。具体表现为内核空指针解引用，地址指向非法内存区域，导致系统Oops。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 00000000000003c0
+PGD 0 P4D 0
+Oops: 0000 [#1] PREEMPT SMP NOPTI
+CPU: 17 PID: 0 Comm: swapper/17 Kdump: loaded Tainted: G S         OE      6.1.0-226bf9805506 #1
+Hardware name: Wiwynn Delta Lake PVT BZA.02601.0150/Delta Lake-Class1, BIOS F0E_3A12 08/26/2021
+RIP: 0010:bnxt_rx_pkt+0xe97/0x1ae0 [bnxt_en]
+Call Trace:
+ <IRQ>
+ __bnxt_poll_work+0x1c2/0x3e0 [bnxt_en]
+
+#问题根因
+在XDP multi-buffer程序附着时，驱动根据当时的MTU值决定是否启用聚合环并设置相应的rx_skb_func处理函数。
+如果在XDP程序运行期间修改MTU，驱动未重新评估聚合环的配置需求，导致聚合环设置与初始状态不同步。
+硬件可能基于新的MTU配置DMA传输大于分配缓冲区大小的数据，从而引发随机内存破坏和内核崩溃。
+
+#解决方案
+在bnxt_change_mtu()函数中，当检测到有XDP程序附着时，调用bnxt_set_rx_skb_mode()重新配置AGG rings并更新rx_skb_func，确保配置与新的MTU值匹配。
+同时，在bnxt_set_rx_skb_mode()函数开头清除BNXT_FLAG_NO_AGG_RINGS标志，确保该标志位能根据当前MTU值正确置位或清除，避免状态残留。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a27f9d63eaa337ecf47a8763156af63771cb0071

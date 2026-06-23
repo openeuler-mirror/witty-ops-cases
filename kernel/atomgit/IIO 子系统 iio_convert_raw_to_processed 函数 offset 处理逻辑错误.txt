@@ -1,0 +1,20 @@
+#标题
+IIO 子系统 iio_convert_raw_to_processed 函数 offset 处理逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+对于没有 scale 属性的 IIO 通道，调用 `iio_convert_raw_to_processed` 函数进行数据转换时，先前计算的 offset 值未被正确应用到最终结果中，导致转换后的处理值计算错误，即 offset 实际上被忽略。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `iio_convert_raw_to_processed_unlocked` 中，当通道没有 scale 属性时，代码逻辑进入 "apply consumer scale to raw value" 分支。此时原代码错误地使用了初始的 `raw` 变量进行乘法运算 (`*processed = raw * scale`)。由于在此之前 offset 已经被加到了 `raw64` 变量上（`raw64 = raw + offset`），使用未包含 offset 的原始 `raw` 值导致 offset 丢失。
+
+#解决方案
+修改 `drivers/iio/inkern.c` 文件中的计算逻辑，将无 scale 属性分支下的计算公式从 `*processed = raw * scale` 修改为 `*processed = raw64 * scale`，确保计算时使用的是已经包含 offset 的 `raw64` 值，从而正确处理偏移量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e1ac16bdde58deb54db4ca8bac56c54e36dfe9e3

@@ -1,0 +1,27 @@
+#标题
+dm cache policy smq: passthrough模式下并发写入导致数据竞争与潜在UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 dm-cache 使用 smq 策略的 passthrough（透传）模式下，当多个工作线程并发执行写入操作时，会同时调用策略的 invalidate_mapping 接口。由于缺乏锁保护，会导致数据竞争，表现为缓存块计数器数据不一致，严重时可能引发内部数据结构的 use-after-free（释放后使用）问题。
+
+复现步骤摘要：
+1. 创建包含 1024 个缓存条目的 cache 设备。
+2. 使用 fio 填充缓存，记录已缓存块的数量（nr_cached）。
+3. 将 cache 设备重新加载为 passthrough 模式。
+4. 使用 fio 启动多个 jobs（如 2 个）并发写入，触发缓存块并发失效。
+5. 检查 dmsetup status 输出，发现 demoted 计数与步骤 2 记录的 cached 块数量不匹配，验证了数据竞争的存在。
+
+#主要错误日志
+未知
+
+#问题根因
+在 passthrough 模式下，策略的 `invalidate_mapping` 操作会由多个工作线程同时调用。该函数内部对共享资源（如已分配块计数器、队列和哈希表等内部数据结构）进行操作，但原实现未持有锁（`mq->lock`）。这导致了数据竞争，不仅影响计数器的准确性，还可能在并发写入导致内部数据结构管理混乱，引发 use-after-free 风险。
+
+#解决方案
+在 `smq_invalidate_mapping` 函数中，对临界区操作添加自旋锁保护。具体修改是在执行队列删除（`del_queue`）、哈希表移除（`h_remove`）和条目释放（`free_entry`）等操作前，调用 `spin_lock_irqsave` 获取锁，操作完成后调用 `spin_unlock_irqrestore` 释放锁，确保在并发环境下对这些共享数据结构的操作互斥进行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9f62d4062ddcf50af6b12f3a121b4954d83188d

@@ -1,0 +1,32 @@
+#标题
+SMB客户端加密通信场景下并发读写触发kernel BUG导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启加密的 SMB 挂载场景下，当并发读写请求过多时，内核触发 `kernel BUG` 导致系统崩溃（Oops: invalid opcode）。具体表现为在进行大量并行写入操作时，内核调用栈经过 `crypto_gcm_init_common` 函数时触发 `BUG()` 断言失败。
+
+#主要错误日志
+```
+[  945.272081] ------------[ cut here ]------------
+[  945.272774] kernel BUG at include/linux/scatterlist.h:209!
+[  945.273520] Oops: invalid opcode: 0000 [#1] SMP DEBUG_PAGEALLOC NOPTI
+[  945.287719]  crypto_gcm_encrypt+0x36/0xe0
+[  945.288152]  crypt_message+0x54a/0xad0 [cifs]
+[  945.289300]  smb3_init_transform_rq+0x277/0x300 [cifs]
+[  945.289944]  cifs_call_async+0x178/0x340 [cifs]
+[  945.291177]  smb2_async_writev+0x3e3/0x670 [cifs]
+[  945.298472]  process_one_work+0x1fe/0x590
+[  945.300729]  ret_from_fork+0x119/0x1b0
+```
+
+#问题根因
+SMB 客户端的 `crypt_message()` 函数使用 `kvzalloc()` 分配 AEAD request 缓冲区（`creq`）。在 `CONFIG_VMAP_STACK=y` 的配置下，随着系统并发任务数增加，任务栈的地址空间不断增长，可能导致 `vmalloc` 分配的内存超出线性内存范围。
+Crypto API 的 scatterlist 机制要求输入缓冲区必须位于线性内存区域（linear memory）。当 `kvzalloc()` 分配的内存不在线性区域时，AEAD 算法内部调用 `sg_set_buf()` 会触发 `virt_addr_valid()` 检查失败，进而执行 `BUG()` 导致内核崩溃。
+
+#解决方案
+将 `smb2_aead_req_alloc()` 函数中的内存分配方式从 `kvzalloc()` 修改为 `kzalloc()`，强制在线性内存区域分配 AEAD request 缓冲区，确保 scatterlist API 的前置条件得到满足。同时移除了不再需要的 `sensitive_size` 变量及相关参数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7b2c80f9a4d5f213eb57167afa838fcc92b1b85a

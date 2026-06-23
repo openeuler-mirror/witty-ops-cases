@@ -1,0 +1,30 @@
+#标题
+MIPS内核使用LLVM编译后重定位阶段早期崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在MIPS架构下使用LLVM编译内核时，内核在重定位（relocate）完成后启动早期发生崩溃。具体表现为在`init_idle`函数中触发“Unable to handle kernel paging request”，导致内核无法正常启动。
+
+#主要错误日志
+[    0.000000] CPU 0 Unable to handle kernel paging request at virtual address 0000000000000000, epc == ffffffff81afada8, ra == ffffffff81afad90
+[    0.000000] Oops[#1]:
+[    0.000000] CPU: 0 UID: 0 PID: 0 Comm: swapper Tainted: G        W           6.19.0-rc5-00262-gd3eeb99bbc99-dirty #188 VOLUNTARY
+[    0.000000] epc   : ffffffff81afada8 init_idle+0x130/0x270
+[    0.000000] ra    : ffffffff81afad90 init_idle+0x118/0x270
+[    0.000000] Call Trace:
+[    0.000000] [<ffffffff81afada8>] init_idle+0x130/0x270
+[    0.000000] [<ffffffff81afb6c0>] sched_init+0x5c8/0x6c0
+[    0.000000] [<ffffffff81ae86dc>] start_kernel+0x27c/0x7a8
+
+#问题根因
+在MIPS架构中，`__current_thread_info`被定义为位于`$gp`寄存器的全局寄存器变量。在内核重定位过程中，代码会直接对`$gp`赋值以更新其地址。
+LLVM编译器存在Bug（Issue #176546），当发现`$gp`寄存器被以任何形式修改（包括通过全局寄存器变量 intentionally 修改）时，会在函数尾声自动恢复`$gp`的原值。这违反了GCC关于“被用作全局寄存器变量的被调用者保存寄存器若被修改不应被恢复”的文档约定。
+结果导致在`relocate_kernel()`函数返回后，`$gp`仍指向未重定位的旧内核地址，进而导致后续`init_idle`访问空指针或错误地址引发崩溃。
+
+#解决方案
+针对LLVM编译器的Bug实施规避策略。在`relocate_kernel()`函数中更新`__current_thread_info`（即`$gp`）时，不再直接使用C语言赋值，而是改用内联汇编（`asm volatile`）直接执行`move $28, %0`指令。同时，在内联汇编中不将`$gp`列为输出或破坏描述，防止LLVM生成恢复指令，从而确保`$gp`在函数调用结束后依然指向重定位后的正确地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0f9d5a7bd6f7cd026549d145c6ea8e0a05544802

@@ -1,0 +1,20 @@
+#标题
+qcom-camss 驱动加载时因 PM runtime 启用顺序错误导致流水线加电失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在将 qcom-camss 模块加入黑名单（modules.d）并在系统启动后手动执行 modprobe 加载该模块时，能够稳定复现驱动初始化失败。内核日志显示摄像头子系统流水线加电失败，错误码为 -13（EACCES），导致驱动无法正常工作。
+
+#主要错误日志
+qcom-camss ac5a000.camss: Failed to power up pipeline: -13
+
+#问题根因
+`pm_runtime_enable()` 的调用位置滞后于 `vfe_get()`。在 `camss_probe` 流程中，代码先调用了 `vfe_get()`，而该函数内部会调用 `pm_runtime_resume_and_get()`。由于此时 `pm_runtime_enable()` 尚未执行，电源管理核心层拒绝该设备的电源恢复请求，导致返回 -EACCES 错误。这是一个典型的初始化顺序竞争条件。
+
+#解决方案
+调整 `camss_probe` 函数中的初始化顺序，将 `pm_runtime_enable(dev)` 的调用移至 `camss_of_parse_ports` 和相关子设备初始化之前，确保在调用任何需要电源管理的子功能（如 vfe_get）前，设备的 runtime PM 已正确使能。同时在错误处理路径中添加 `pm_runtime_disable(dev)` 以保证资源正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/753966b74a6f0cdeefcced23918eb5d0e5ab62d0

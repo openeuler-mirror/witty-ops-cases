@@ -1,0 +1,38 @@
+#标题
+vmalloc: show_numa_info 存在数据竞争导致 KCSAN 报警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读取 /proc/vmallocinfo 时，KCSAN（Kernel Concurrency Sanitizer）检测到数据竞争。具体表现为并发读取该文件时触发 BUG 提示，指出在 `vmalloc_info_show` 函数中存在对同一内存地址的并发读写冲突。
+
+#主要错误日志
+==================================================================
+BUG: KCSAN: data-race in vmalloc_info_show / vmalloc_info_show
+
+read to 0xffff88800971fe30 of 4 bytes by task 8289 on cpu 0:
+ show_numa_info mm/vmalloc.c:4936 [inline]
+ vmalloc_info_show+0x5a8/0x7e0 mm/vmalloc.c:5016
+ seq_read_iter+0x373/0xb40 fs/seq_file.c:230
+ proc_reg_read_iter+0x11e/0x170 fs/proc/inode.c:299
+....
+
+write to 0xffff88800971fe30 of 4 bytes by task 8287 on cpu 1:
+ show_numa_info mm/vmalloc.c:4934 [inline]
+ vmalloc_info_show+0x38f/0x7e0 mm/vmalloc.c:5016
+ seq_read_iter+0x373/0xb40 fs/seq_file.c:230
+ proc_reg_read_iter+0x11e/0x170 fs/proc/inode.c:299
+....
+
+value changed: 0x0000008f -> 0x00000000
+==================================================================
+
+#问题根因
+`m->private` 指向的内存区域在 `proc_vmalloc_init()` 中统一分配，被多个并发的 `vmalloc_info_show` 实例共享使用。当多个 CPU 同时读取 /proc/vmallocinfo 时，不同实例会并发读写该共享内存区域（用于存储 numa 计数器），导致数据竞争。
+
+#解决方案
+修改内存分配策略，将计数器内存的分配从初始化阶段（`proc_vmalloc_init`）移至运行时阶段（`vmalloc_info_show`）。在 `vmalloc_info_show` 函数内部调用 `kmalloc` 为每次读取操作独立分配计数器内存，并在函数结束时释放，从而避免多进程共享同一内存区域引发的数据竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/50778cd7f5fdbf83d9ce72c8d1ba2e3d5800a9e2

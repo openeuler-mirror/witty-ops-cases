@@ -1,0 +1,24 @@
+#标题
+xHCI 控制传输在 Etron 主控上因 Link TRB 分割导致传输错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+对挂载在 Etron xHCI 主控下的 USB3.0 2.5G 网卡适配器执行稳定性压测时，系统日志大量报错。r8152 驱动在周期性获取硬件寄存器状态（执行控制 IN 请求）时失败，导致设备功能异常。
+
+#主要错误日志
+[   91.441469] r8152 2-3:1.0 eth3: get_registers -71
+[   91.458659] r8152 2-3:1.0 eth3: get_registers -71
+[   91.475911] r8152 2-3:1.0 eth3: get_registers -71
+[   91.493203] r8152 2-3:1.0 eth3: get_registers -71
+[   91.510421] r8152 2-3:1.0 eth3: get_registers -71
+
+#问题根因
+当 xHCI 驱动在端点 0 的传输环上排队一个控制 TD（Transfer Descriptor）时，如果该 TD 跨越了两个环段之间的 Link TRB（即 Setup Stage TRB 和 Data Stage TRB 被 Link TRB 分隔开），Etron xHCI 主控无法正确处理这种跨段的 TD 结构，从而导致 USB 传输错误发生。
+
+#解决方案
+针对 Etron xHCI 主控（XHCI_ETRON_HOST quirk）且设备速度为 USB_SPEED_SUPER 及以上的场景，在 `xhci_queue_ctrl_tx` 函数中增加检查逻辑：如果下一个可用的 TRB 是 Link TRB，则先入队一个 No Op TRB 填充该位置。此举可防止 Setup Stage 和 Data Stage TRB 被 Link TRB 打断（分隔），从而规避主控硬件处理缺陷。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8cb1d0155c777dbd0d134501b9a24014b811e9b9

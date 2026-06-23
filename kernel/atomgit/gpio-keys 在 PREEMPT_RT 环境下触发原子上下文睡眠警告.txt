@@ -1,0 +1,20 @@
+#标题
+gpio-keys 在 PREEMPT_RT 环境下触发原子上下文睡眠警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 PREEMPT_RT 的实时内核环境下，gpio-keys 驱动在处理按键去抖动逻辑时，于中断上下文中调用 hrtimer_start 启动定时器。由于使用了 `HRTIMER_MODE_REL_HARD` 模式，导致定时器回调函数在硬中断上下文执行，进而触发了 "sleep while atomic" 或类似的原子上下文睡眠错误告警，影响系统实时性稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码中强制使用了 `HRTIMER_MODE_REL_HARD` 标志初始化和启动 hrtimer。在 PREEMPT_RT 配置下，硬中断上下文无法睡眠，但定时器回调函数可能涉及睡眠操作（如获取锁或调用调度器），从而引发原子上下文睡眠问题。
+
+#解决方案
+将 `gpio_keys_setup_key` 函数中的 `hrtimer_init` 参数以及 `gpio_keys_irq_isr` 函数中的 `hrtimer_start` 参数从 `HRTIMER_MODE_REL_HARD` 修改为 `HRTIMER_MODE_REL`。此修改允许 hrtimer 在非硬中断上下文中运行，避免了在实时内核环境下的原子上下文睡眠冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/845af645a01104f29983cc8d2dcf9df95e7a9e66

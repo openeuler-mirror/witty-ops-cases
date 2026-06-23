@@ -1,0 +1,29 @@
+#标题
+btrfs: 设置 last_dir_index_offset 与 inode 日志记录间的竞态条件导致目录项丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发进行目录操作和日志记录（如 fsync）时，存在一个竞态窗口，导致目录日志操作跳过本应记录的目录索引键。这会导致文件系统日志状态不一致，可能在后续恢复或检查中导致目录项丢失或数据不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `inode_logged()` 中，当发现 inode 之前未被记录时，会尝试将 `last_dir_index_offset` 设置为 `(u64)-1`，目的是让下一次目录日志操作去检查并更新最后一个已记录的 dir index。
+然而，该操作与 `log_directory_changes()` 中的 `update_last_dir_index_offset()` 存在竞态条件。具体流程如下：
+1. 任务 B 在 `btrfs_log_inode()` 中调用 `inode_logged()` 并将 `last_dir_index_offset` 设为 `(u64)-1`。
+2. 任务 B 随后进入 `log_directory_changes()` 并调用 `update_last_dir_index_offset()`，该函数检测到值为 `(u64)-1` 且之前已记录过，于是搜索日志树并将值更新为 N。
+3. 任务 A 此时调用 `inode_logged()`，在检查完 inode item 后，强行将 `last_dir_index_offset` 再次设置为 `(u64)-1`，覆盖了任务 B 刚刚更新的正确值 N。
+4. 任务 B 继续执行到 `process_dir_items_leaf()` 时，因 `last_dir_index_offset` 被篡改为 `(u64)-1`，导致其跳过所有小于等于 `(u64)-1` 的索引键，即跳过了本应处理的目录项。
+
+#解决方案
+修改 `last_dir_index_offset` 的初始化与检查逻辑，移除竞态代码：
+1. 在 `inode_logged()` 中移除设置 `last_dir_index_offset` 为 `(u64)-1` 的代码，不再在此处修改该值。
+2. 在 `btrfs_alloc_inode()` 中将 `last_dir_index_offset` 初始化为 0（利用 union 特性）。
+3. 在 `update_last_dir_index_offset()` 中，将判断条件从检查 `(u64)-1` 改为检查 `0`。当值为 0 时，视为不知道最后索引值，需从日志树中搜索并更新。
+4. 由于 `last_dir_index_offset` 的最小有效值为 1，使用 0 作为未初始化/需查找的标志是安全的，且所有访问均在 `log_mutex` 保护下进行，解决了竞态问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c3e0add2233d0e8907d078f5df9f65e47dc68b91

@@ -1,0 +1,28 @@
+#标题
+NFS automount 未正确继承父挂载点的块大小及读写尺寸参数
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 NFS 自动挂载（automount）子目录时，子挂载点未能正确继承父挂载点显式指定的块大小、读尺寸和写尺寸参数。这导致自动挂载的文件系统使用了默认或错误的 I/O 参数配置，可能引发性能下降或应用 I/O 行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的内核实现中，NFS 自动挂载逻辑在继承父挂载点参数时存在缺陷：
+1. 代码无条件地从父挂载点的 superblock 中读取 `s_blocksize_bits` 并将其应用于新的挂载点，无论该参数是否由用户显式指定。
+2. 对于 `rsize` 和 `wsize`，代码在 `nfs_server_copy_userdata` 中进行了无条件复制，未区分这些值是来自用户显式配置还是内核默认计算。
+这导致自动挂载可能覆盖了用户指定的配置，或者继承了非预期的默认值。根本原因是缺少一种机制来标记和传递哪些参数是“显式指定并需要继承的”。
+
+#解决方案
+通过引入 `automount_inherit` 位掩码标志位来精确控制参数继承行为：
+1. 在 `nfs_server` 结构体中新增 `automount_inherit` 字段，定义 `NFS_AUTOMOUNT_INHERIT_BSIZE`、`RSIZE`、`WSIZE` 标志。
+2. 在初始化服务器（`nfs_init_server` 和 `nfs4_init_server`）时，仅当用户通过挂载参数显式指定了 `bsize`、`rsize` 或 `wsize` 时，才设置对应的继承标志位。
+3. 在 `nfs_server_copy_userdata` 函数中，仅当源服务器设置了相应的继承标志位时，才将 `bsize`、`rsize` 或 `wsize` 复制到目标服务器。
+4. 在自动挂载流程（`nfs_d_automount`）中，检查父服务器的继承标志，若设置了 `NFS_AUTOMOUNT_INHERIT_BSIZE`，则将父服务器的 `bsize` 传递给子挂载的上下文。
+5. 移除旧的、无条件继承 `s_blocksize_bits` 的逻辑，确保只有用户显式配置的参数才会被继承。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2b0ba68f324c1c35bd7e726a389389f1c63dc5b5

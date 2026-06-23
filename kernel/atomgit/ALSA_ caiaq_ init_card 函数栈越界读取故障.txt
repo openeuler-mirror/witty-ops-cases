@@ -1,0 +1,23 @@
+#标题
+ALSA: caiaq: init_card 函数栈越界读取故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当插入的 USB 设备产品名包含大量非空格字符（例如多字节 UTF-8 字符）时，触发内核 KASAN 检测机制，报栈越界读取错误，可能导致内核不稳定或崩溃。
+
+#主要错误日志
+BUG: KASAN: stack-out-of-bounds in copy_valid_id_string
+     sound/core/init.c:696 [inline]
+BUG: KASAN: stack-out-of-bounds in snd_card_set_id_no_lock+0x698/0x74c
+     sound/core/init.c:718
+
+#问题根因
+在 `init_card` 函数中，循环生成空白剔除后的 card shortname 副本时，边界检查条件使用 `len < sizeof(card->id)`（即 16）。由于本地 id 缓冲区大小为 16 字节，当写入 16 个非空格字符时，缓冲区被完全填满，覆盖了原本应存在的终止空字节（null terminator）。随后该非空终止字符串被传递给 `snd_card_set_id()` -> `copy_valid_id_string()`，函数在扫描字符串时越界读取栈缓冲区之外的内容。
+
+#解决方案
+修改 `sound/usb/caiaq/device.c` 中循环的边界检查条件，将 `len < sizeof(card->id)` 改为 `len < sizeof(card->id) - 1`，确保缓冲区至少保留一个字节用于存储空终止符。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3482ebbef32f955d57e0a88d23cd23dac6de89e4

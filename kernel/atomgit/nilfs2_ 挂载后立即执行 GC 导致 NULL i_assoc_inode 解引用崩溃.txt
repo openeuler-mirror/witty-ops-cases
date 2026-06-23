@@ -1,0 +1,21 @@
+#标题
+nilfs2: 挂载后立即执行 GC 导致 NULL i_assoc_inode 解引用崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统挂载 nilfs2 文件系统后，若在未进行任何 btree 操作的情况下立即调用 `NILFS_IOCTL_CLEAN_SEGMENTS` ioctl 接口（触发 GC 操作），内核将发生通用保护错误，导致内核崩溃或 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+DAT inode 的 btree 节点缓存（`i_assoc_inode`）采用惰性初始化策略，即在 btree 操作期间才进行初始化。然而，函数 `nilfs_mdt_save_to_shadow_map()` 在 GC 期间将脏页拷贝到影子映射时，预设 `i_assoc_inode` 已经完成初始化。
+如果在挂载文件系统后、尚未对 DAT inode 执行任何 btree 操作时就触发 GC，此时 `i_assoc_inode` 为 NULL，导致内核尝试解引用空指针从而引发崩溃。
+
+#解决方案
+在 `nilfs_dat_read()` 函数中显式调用 `nilfs_attach_btree_node_cache(dat)`，强制在挂载阶段初始化 DAT inode 的 btree 节点缓存，确保在任何 GC 操作开始前 `i_assoc_inode` 已被正确赋值，从而避免空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1ed0b31865d39aa637d7f5b2daafdc989db3a48

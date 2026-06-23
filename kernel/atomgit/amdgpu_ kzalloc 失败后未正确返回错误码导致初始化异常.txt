@@ -1,0 +1,20 @@
+#标题
+amdgpu: kzalloc 失败后未正确返回错误码导致初始化异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 驱动初始化过程中（`psp_sw_init` 阶段），若 `kzalloc` 分配内存失败，驱动虽然打印了错误日志，但函数并未立即返回错误，而是继续向下执行。这导致驱动使用空指针继续进行初始化，可能引发后续的空指针访问错误或驱动初始化状态不一致。
+
+#主要错误日志
+[   10.123456] amdgpu: Failed to allocate memory to command buffer!
+
+#问题根因
+在 `psp_sw_init` 函数中，`psp->cmd` 的内存分配失败检查逻辑存在缺陷。代码在 `kzalloc` 失败时仅将 `ret` 变量赋值为 `-ENOMEM`，但并未紧接着执行 `return` 语句，导致程序流并未退出函数，而是继续向下执行，使得错误处理失效。
+
+#解决方案
+修改 `drivers/gpu/drm/amd/amdgpu/amdgpu_psp.c` 文件中的错误处理逻辑。在 `kzalloc` 失败的分支中，将 `ret = -ENOMEM;` 修改为直接 `return -ENOMEM;`，确保内存分配失败时函数立即终止并返回错误码，防止后续代码使用空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd7415707469be18b365a61adb99d0df403283b6

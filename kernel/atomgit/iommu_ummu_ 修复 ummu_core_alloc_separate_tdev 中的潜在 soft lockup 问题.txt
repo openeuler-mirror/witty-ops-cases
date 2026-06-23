@@ -1,0 +1,24 @@
+#标题
+iommu/ummu: 修复 ummu_core_alloc_separate_tdev 中的潜在 soft lockup 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ummu_core_alloc_separate_tdev` 函数分配设备时，若并发线程已创建过对应的 tdev 设备，当前线程在持有互斥锁 `mm_tid_xa_lock` 的情况下调用 `ummu_core_alloc_tdev` 分配新设备，若分配过程中发生阻塞（如内存分配），将导致调度器无法调度其他线程，触发内核 soft lockup（软死锁）现象，导致 CPU 长时间卡死。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ummu_core_alloc_separate_tdev` 在初次检查 `xa_load` 未找到 tdev 后释放了锁，但在随后的 `ummu_core_alloc_tdev` 调用成功后，未重新检查并发竞争条件。代码逻辑在持有互斥锁 `mm_tid_xa_lock` 的情况下进行了设备分配，且未考虑到其他线程可能在此期间已创建并插入了相同 tdev 的场景。这导致锁被长时间持有（潜在阻塞），且可能出现重复插入或逻辑异常，最终引发 soft lockup。
+
+#解决方案
+重构锁的保护范围，确保锁仅在访问共享资源 `mm_tid_xa` 时持有：
+1. 在调用 `ummu_core_alloc_tdev` 前释放互斥锁 `mm_tid_xa_lock`，避免在可能阻塞的内存分配过程中持锁。
+2. 设备分配完成后，重新获取互斥锁，并再次使用 `xa_load` 检查并发线程是否已插入了相同的 tdev 设备。
+3. 若发现已存在（竞争发生），则增加已存在设备的引用计数 `kref_get`，释放新分配的设备，并返回已存在的设备。
+4. 若不存在，则将新设备存入 `mm_tid_xa` 并释放锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cd4fc9ee2ea1983133804504ae56855f3e4592c7

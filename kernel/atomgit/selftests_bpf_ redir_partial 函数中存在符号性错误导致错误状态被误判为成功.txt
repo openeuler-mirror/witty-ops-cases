@@ -1,0 +1,21 @@
+#标题
+selftests/bpf: redir_partial 函数中存在符号性错误导致错误状态被误判为成功
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BPF 的 sockmap_listen 自测式程序 `redir_partial` 函数中，当 `xsend()` 函数返回 `-1`（即发送出错）时，程序未能正确识别该错误状态。由于后续的条件判断逻辑缺陷，错误返回值被错误地视为成功，或者触发了不正确的 "incomplete write"（写入不完整）失败报告，掩盖了真实的发送失败原因。
+
+#主要错误日志
+incomplete write
+
+#问题根因
+变量 `n` 用于接收 `xsend()` 的返回值。当 `xsend()` 返回 `-1` 表示错误时，后续代码执行 `if (n < sizeof(buf))` 判断。由于 `n` 被隐式地作为无符号数进行比较（无符号提升），`-1` 被转换为一个极大的无符号正整数。这导致 `n < sizeof(buf)` 判断为假，程序未进入错误处理分支，错误地将发送失败误判为成功，或在其他逻辑分支中产生误报。
+
+#解决方案
+在 `tools/testing/selftests/bpf/prog_tests/sockmap_listen.c` 文件的 `redir_partial` 函数中，在调用 `xsend()` 后、判断写入长度之前，显式增加对返回值 `-1` 的判断。
+若 `n == -1`，直接跳转至 `close` 标签进行清理和退出，从而正确处理发送失败的情况，避免无符号比较带来的逻辑错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c5fca305982a17c3fe6ae278918e3e503e470edc

@@ -1,0 +1,26 @@
+#标题
+urma: ubcm 模块存在 UAF 及 double free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ubcm 设备添加流程中，若 `ubcm_get_ubc_dev` 或 `ubmad_register_agent` 执行失败，错误处理路径会导致内存释放错误。具体表现为：
+1. 内存被释放后仍被访问（UAF）。
+2. 同一内存对象被重复释放（double free）。
+此外，在设备移除流程中，若传入参数无效，可能导致空指针解引用风险。
+
+#主要错误日志
+ubcore_log_err("Invalid parameter.\n");
+
+#问题根因
+1. **错误处理路径逻辑缺陷**：在 `ubcm_add_device` 函数中，`ubcore_set_client_ctx_data` 调用位置过早。当后续步骤（如 `ubmad_register_agent`）失败时，错误处理代码未能正确解引用设备上下文，直接调用 `kfree` 释放了 `cm_dev`，但设备上下文仍与 client 关联，导致后续访问或移除操作引发 UAF 或 double free。
+2. **空指针检查缺失**：在 `ubcm_remove_device` 函数中，未对 `client_ctx` 参数（即 `cm_dev`）进行 NULL 校验，若传入 NULL 会导致内核空指针解引用。
+
+#解决方案
+1. **调整上下文设置时机**：将 `ubcore_set_client_ctx_data` 的调用移动至设备添加流程成功返回前，确保只有完全初始化成功的设备才会被设置到 client context 中。
+2. **修正错误处理标签**：删除错误的 `free_dev` 标签，在失败路径中统一通过 `put_dev` 标签调用 `ubcm_put_device` 来正确释放资源，避免直接 kfree 导致的引用计数错误。
+3. **增加空指针校验**：在 `ubcm_remove_device` 函数中增加 `if (cm_dev == NULL)` 判断，防止空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab1d014e852f86cd337f6f904ec05c55958fba4e

@@ -1,0 +1,22 @@
+#标题
+x86/uaccess: 修复 Sparse 静态检查中地址空间丢失的警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Sparse 工具对内核代码进行静态分析检查时，`__access_ok()` 和 `valid_user_address()` 函数中的强制类型转换触发了警告信息。Sparse 报告称转换操作丢失了变量的 `__user` 地址空间属性。
+
+#主要错误日志
+uaccess_64.h:88:24: sparse: warning: cast removes address space '__user' of expression
+
+#问题根因
+在 `valid_user_address(x)` 宏定义和 `__access_ok()` 函数中，代码将 `__user` 指针强制转换为 `long` 或 `unsigned long` 类型。由于转换过程中未使用 `__force` 注解，Sparse 静态分析工具无法识别这是有意为之的地址空间跨度操作，因此误报了“丢失地址空间”的警告。
+
+#解决方案
+在相关强制类型转换中添加 `__force` 注解，明确告知 Sparse 工具该地址空间转换是有意为之的，从而消除误报警告。具体修改包括：
+1. `valid_user_address(x)` 宏中，将 `(long)(x)` 修改为 `(__force long)(x)`。
+2. `__access_ok()` 函数中，将 `(unsigned long)ptr` 修改为 `(__force unsigned long)ptr`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1501d7cbf643b2677cdbdcd54407fbcdb25e9cc

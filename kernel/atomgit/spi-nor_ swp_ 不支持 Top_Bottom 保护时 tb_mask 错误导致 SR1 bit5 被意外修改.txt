@@ -1,0 +1,20 @@
+#标题
+spi-nor: swp: 不支持 Top/Bottom 保护时 tb_mask 错误导致 SR1 bit5 被意外修改
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SPI NOR 芯片不支持 Top/Bottom block protect 功能时，驱动仍会错误地计算出非零的 tb_mask 掩码。这导致在后续对状态寄存器（SR1）进行写保护相关操作时，SR1 的 bit5 被意外修改，改变了芯片原本预期的写保护配置状态。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `spi_nor_get_sr_tb_mask` 中，判断 `tb_mask` 的逻辑不完整。原代码逻辑下，当芯片不支持 SR_TB_BIT6 时，直接默认返回 `SR_TB_BIT5`。这忽略了芯片可能既不支持 BIT6 也不支持 Top/Bottom 保护（即 `SNOR_F_HAS_SR_TB` 标志未置位）的情况。当芯片不支持该功能时，本应返回 0，但由于缺少对 `SNOR_F_HAS_SR_TB` 标志的检查，导致返回了错误的掩码值。
+
+#解决方案
+在 `spi_nor_get_sr_tb_mask` 函数中增加对 `SNOR_F_HAS_SR_TB` 标志位的检查。修改逻辑为：若支持 BIT6 则返回对应掩码；若不支持 BIT6 但支持 Top/Bottom 保护（`SNOR_F_HAS_SR_TB` 置位），则返回 `SR_TB_BIT5`；若两者均不支持，则返回 0。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d0d89bbb25933643588c541c47873bea9ac0c499

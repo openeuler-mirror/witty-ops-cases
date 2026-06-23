@@ -1,0 +1,29 @@
+#标题
+urma: main_ue_eid查询表配置路径错误导致拓扑配置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用三倍绑定设备（triple bonding）场景下进行拓扑配置时，由于内核缺少对 main_ue_eid 查询表的编程接口支持，导致用户空间无法正确下发 EID 到 main UE EID 的映射关系。系统在尝试解析 EID 或发送数据时，因无法查找正确的 main_ue_eid 而导致功能异常。若重复进行配置和测试流程，可能因旧映射未清除而复用过期数据。
+
+#主要错误日志
+- `ubcore_log_err_rl("Invalid eid "EID_FMT".\n", EID_ARGS(eid_info->eid));`（推断上下文：EID 查找失败时打印）
+- `ubcore_log_err("get primary eid failed\n");`（推断上下文：发送操作中获取主 EID 失败时打印）
+- `ubcore_log_err("invalid main ue eid batch num: %u.\n", *eid_num);`
+- `ubcore_log_err("invalid eid list len: %u/%zu.\n", ...);`
+- `ubcore_log_err("invalid main ue eid batch.\n");`
+
+#问题根因
+在引入三倍绑定设备支持的补丁（ab56883d71a2）后，内核未提供相应的用户空间接口来编程 main_ue_eid 查询表。`ubcore_get_main_primary_eid()` 函数原有的实现依赖本地拓扑遍历，无法处理用户空间预计算的 EID 映射关系，且缺乏清除机制导致重复配置时存在过期映射，从而引发配置路径错误和功能异常。
+
+#解决方案
+修复 main_ue_eid 查询表的编程路径，具体措施包括：
+1. 新增一组 UVS 全局命令及 TLV 描述符，支持 main_ue_eid 的插入、批量插入、删除、查找、清空（flush）以及删除拓扑处理。
+2. 实现 delete-topo 处理逻辑，在清除 ubcore 拓扑图的同时清空 main_ue_eid 表，防止复用过期映射。
+3. 实现批量插入逻辑，在编程表前校验条目计数，通过 trie 接口写入数据。
+4. 保留 `ubcore_get_main_primary_eid()` 接口名称不变，但改为从 main_ue_eid trie 中解析条目，避免影响现有调用者；将原有的拓扑遍历辅助函数重命名为 `ubcore_get_main_primary_eid_by_topo()` 供对比调试使用。
+5. 修正相关调用点，使用新的 `ubcore_lookup_main_ue_eid()` 函数进行查询。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a0efc6dc6bc2bd43d97548934702ac0268e8e884

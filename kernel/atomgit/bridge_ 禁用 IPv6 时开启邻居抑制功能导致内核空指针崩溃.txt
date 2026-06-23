@@ -1,0 +1,37 @@
+#标题
+bridge: 禁用 IPv6 时开启邻居抑制功能导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核启动参数包含 `ipv6.disable=1` 时，若网桥设备启用了邻居抑制（neigh_suppress）功能，在收到 ICMPv6 邻居发现报文后，系统触发 NULL 指针解引用，导致内核崩溃。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000268
+Oops: 0000 [#1] PREEMPT SMP NOPTI
+[...]
+RIP: 0010:neigh_lookup+0x16/0xe0
+[...]
+Call Trace:
+ <IRQ>
+ ? neigh_lookup+0x16/0xe0
+ br_do_suppress_nd+0x160/0x290 [bridge]
+ br_handle_frame_finish+0x500/0x620 [bridge]
+ br_handle_frame+0x353/0x440 [bridge]
+ __netif_receive_skb_core.constprop.0+0x298/0x1110
+ __netif_receive_skb_one_core+0x3d/0xa0
+ process_backlog+0xa0/0x140
+ __napi_poll+0x2c/0x170
+ net_rx_action+0x2c4/0x3a0
+ handle_softirqs+0xd0/0x270
+ do_softirq+0x3f/0x60
+
+#问题根因
+在启动参数设置 `ipv6.disable=1` 的情况下，内核初始化流程中 `inet6_init()` 会提前退出，导致 `ndisc_init()` 未被调用，`nd_tbl` 未初始化（为 NULL）。此时，若网桥开启了 `neigh_suppress` 功能，代码仅通过 `IS_ENABLED(CONFIG_IPV6)` 判断编译时配置而非运行时状态，导致代码路径进入 `br_do_suppress_nd()`。该函数调用 `neigh_lookup()` 时传入了 `ipv6_stub->nd_tbl`（此时为 NULL），从而引发空指针解引用崩溃。
+
+#解决方案
+在 `br_dev_xmit` 和 `br_handle_frame_finish` 函数中，将处理 IPv6 邻居抑制报文的判断条件从编译时检查 `IS_ENABLED(CONFIG_IPV6)` 修改为运行时检查 `ipv6_mod_enabled()`。该修改确保了在 IPv6 被禁用的运行环境中，内核不会尝试处理 NS/NA 抑制逻辑，从而避免访问未初始化的 `nd_tbl` 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fc0039718fb88bda7c94f5e00754cd4292bb4c5b

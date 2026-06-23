@@ -1,0 +1,20 @@
+#标题
+regulator: core: 解绑时因耦合数据未清理导致的空指针解引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载或解绑 regulator 设备（如 'reg-dummy' 平台设备）后，若系统进行运行时电源管理（runtime PM）或其他依赖耦合元数据的 regulator 操作，会触发内核空指针解引用。在 ridesx4 平台上，解绑 'reg-dummy' 设备时，由于耦合状态数据陈旧，导致在 `regulator_lock_recursive()` 函数中发生 panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `regulator_remove_coupling` 函数中，释放 `coupled_rdevs` 内存指针后，未将 `coupling_desc.n_coupled` 计数重置为 0。这导致后续的 regulator 操作仍认为存在有效的耦合设备，试图访问已释放的指针，从而引发 NULL pointer dereference。
+
+#解决方案
+在 `regulator_remove_coupling` 函数中，释放 `coupled_rdevs` 指针前，显式将 `rdev->coupling_desc.n_coupled` 设置为 0，确保耦合描述符状态同步更新，防止后续操作访问无效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1bebfc10b64017c5302b1fb47acb2a585c0e1c8c

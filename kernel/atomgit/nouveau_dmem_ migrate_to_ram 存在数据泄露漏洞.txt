@@ -1,0 +1,20 @@
+#标题
+nouveau/dmem: migrate_to_ram 存在数据泄露漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Nvidia GPU 设备内存迁移到系统内存的过程中，若发生复制错误（如固件或硬件故障），驱动程序未能正确检测到失败，而是向用户空间返回了一个“脏”页面。该页面可能包含敏感数据或损坏的数据，导致潜在的信息泄露漏洞。
+
+#主要错误日志
+未知
+
+#问题根因
+`nouveau_dmem_copy_one` 函数在向设备固件发送复制命令后，未追踪命令是否执行成功。当发生复制错误时，该函数仍可能报告成功，导致 `migrate_to_ram` 函数将一个未初始化且标记为 dirty 的 HIGH_USER 页面返回给用户。
+
+#解决方案
+在 `nouveau_dmem_migrate_to_ram` 函数中，将目标页面的分配标志由 `GFP_HIGHUSER` 修改为 `GFP_HIGHUSER | __GFP_ZERO`。确保分配的页面被初始化为零，这样即便发生复制错误，返回给用户的也是干净的非脏页面，从而避免敏感数据泄露。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dd2d2ac6ebfeeaedd95e02360716e2e4af26a882

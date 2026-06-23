@@ -1,0 +1,21 @@
+#标题
+gpio: tegra186 ACPI 探测路径下资源处理错误导致打印无效资源告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 Tegra186 GPIO 控制器通过 ACPI 匹配进行探测时，驱动在探测过程中会打印两条“invalid resource (null)”的错误信息，表明资源获取流程存在逻辑缺陷。
+
+#主要错误日志
+- tegra186-gpio NVDA0508:00: invalid resource (null)
+- tegra186-gpio NVDA0508:00: invalid resource (null)
+
+#问题根因
+驱动在 ACPI 探测路径下调用 `devm_platform_ioremap_resource_byname` 获取资源时，该函数内部会先获取资源再进行映射。如果资源不存在（返回 NULL），驱动代码逻辑错误地尝试将 NULL 传递给后续的处理函数（如 `devm_platform_ioremap_resource`），导致触发“invalid resource (null)”错误。根本原因是代码未正确处理资源获取失败的情况，直接对 NULL 资源进行了操作。
+
+#解决方案
+修改资源获取逻辑，先调用 `platform_get_resource_byname` 或 `platform_get_resource` 显式获取 `struct resource *res`，检查资源指针的有效性。若获取失败则回退到备用索引获取资源，最后再调用 `devm_ioremap_resource` 进行映射。此举确保了在调用映射函数前资源指针有效，避免了无效指针的处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/580eb12247d600066c25d39f9881be3684b4ee8f

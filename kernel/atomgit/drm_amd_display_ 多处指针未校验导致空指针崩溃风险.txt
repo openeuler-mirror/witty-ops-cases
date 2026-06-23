@@ -1,0 +1,30 @@
+#标题
+drm/amd/display: 多处指针未校验导致空指针崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD 显示驱动模块的特定代码路径中，若指针（如 `stream_enc`、`dc->bw_vbios`、`hwseq`、`phantom_plane` 等）为空值，代码未进行校验即进行解引用或成员访问，可能导致内核空指针解引用，进而引发内核崩溃或显示功能异常。静态代码分析工具 Coverity 报告了 10 处 FORWARD_NULL 问题。
+
+#主要错误日志
+未知
+
+#问题根因
+代码逻辑中存在多处防御性编程缺失：
+1. 在 `dc_hw_sequencer.c` 中，访问 `current_mpc_pipe->plane_state` 及其成员前未检查指针是否为空。
+2. 在 `dce112_resource.c` 中，直接访问 `dc->bw_vbios->memory_type` 前未检查 `dc->bw_vbios` 是否为空。
+3. 在 `dcn20_hwseq.c` 中，函数 `dcn20_post_unlock_program_front_end` 和 `dcn20_wait_for_blank_complete` 分别在使用 `hwseq` 和 `opp` 指针前未进行非空校验。
+4. 在 `dcn32_resource.c` 中，调用 `dc_create_plane_state` 创建 `phantom_plane` 后未检查返回值是否为空即进行 `memcpy` 操作。
+5. 在 `link_dp_cts.c` 和 `link_hwss_dio.c` 中，对 `pipe_ctx->stream` 和 `stream_enc` 指针的使用缺乏适当的非空检查。
+
+#解决方案
+在相应的代码路径中增加指针非空校验：
+1. 在 `dc_hw_sequencer.c` 中，增加 `if (current_mpc_pipe->plane_state)` 判断，确保仅在指针有效时访问其成员。
+2. 在 `dce112_resource.c` 中，函数入口处增加 `if (!dc->bw_vbios) return;` 校验。
+3. 在 `dcn20_hwseq.c` 中，使用 `hwseq` 前增加 `if (!hwseq) return;` 校验；使用 `opp` 前增加 `if (!opp) return false;` 校验。
+4. 在 `dcn32_resource.c` 中，`dc_create_plane_state` 调用后增加 `if (!phantom_plane) continue;` 校验。
+5. 在 `link_dp_cts.c` 和 `link_hwss_dio.c` 中，分别增加对 `pipe_ctx->stream` 和 `stream_enc` 的非空检查，若为空则提前返回或跳过当前逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/942151fc782cbd48530546c25ebc72250f42999d

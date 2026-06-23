@@ -1,0 +1,20 @@
+#标题
+trusted: tpm2_load_cmd 函数内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 TPM2 密钥时，若 `tpm2_load_cmd` 函数执行过程中发生错误（如 TPM 命令执行失败），之前通过 `tpm2_key_decode` 分配的临时内存 blob 无法被释放，导致内核内存泄漏。长期运行或频繁触发该错误路径可能导致系统可用内存逐渐减少。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `tpm2_load_cmd` 通过调用 `tpm2_key_decode` 间接分配了一个临时的 blob 内存。在代码的错误处理路径中，原有的 `kfree(blob)` 释放逻辑仅针对非 `payload->blob` 的情况，且在某些失败跳转路径中未被执行，导致该临时 blob 无法被正确释放，从而引起内存泄漏。
+
+#解决方案
+引入 `__free(kfree)` 自动清理机制。定义一个自动释放指针 `blob_ref`，当 blob 不是直接引用 `payload->blob`（即为新分配的临时内存）时，将其绑定到 `blob_ref`。利用 GCC 扩展的 cleanup 属性，确保在函数退出或作用域结束时自动释放该内存，从而修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c33fcf91246624be46b58b912a96bffa2d0c2683

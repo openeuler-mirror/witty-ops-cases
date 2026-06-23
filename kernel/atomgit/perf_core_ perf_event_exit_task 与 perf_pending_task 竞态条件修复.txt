@@ -1,0 +1,20 @@
+#标题
+perf/core: perf_event_exit_task 与 perf_pending_task 竞态条件修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进程退出期间，`perf_sigtrap` 函数可能因与 `perf_pending_task` 或 `perf_pending_irq` 发生竞态，导致访问已释放的资源或触发内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+`perf_sigtrap` 函数中仅检查了 `current->flags & PF_EXITING` 来防止竞态，这不足以覆盖所有风险场景。当 `perf_pending_task()` 或 `perf_pending_irq()` 与任务退出流程并发执行时，如果 `event->ctx->task` 已被置为 `TASK_TOMBSTONE`（表示任务上下文已失效/被回收），当前代码仍会继续执行后续逻辑，从而引发 UAF（Use-After-Free）或其他内存安全问题。
+
+#解决方案
+在 `kernel/events/core.c` 的 `perf_sigtrap` 函数中增加对 `TASK_TOMBSTONE` 状态的检查。修改判断条件为：`if (current->flags & PF_EXITING || event->ctx->task == TASK_TOMBSTONE)`，当进程正在退出或上下文任务已处于 TOMBSTONE 状态时，直接返回以避免处理无效信号，从而规避竞态风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8dc2a333ff8ef40ab7a7b157ab2eb779c2fa5dab

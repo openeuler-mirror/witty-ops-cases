@@ -1,0 +1,22 @@
+#标题
+RDMA/hns: DCA mmap 区域存在 PUAF（释放后使用）安全漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核 RDMA 子系统在处理 hns 驱动的 DCA（Dynamic Context Allocation）mmap 操作时，存在释放后使用（PUAF）漏洞。该问题可能导致内核内存被非法访问或篡改，潜在引发内核 panic 或系统不稳定，同时存在安全隐患。
+
+#主要错误日志
+未知
+
+#问题根因
+在 DCA 机制初始化状态区域时，`hns_roce_user_mmap_entry_insert` 函数错误地传入了内核虚拟地址 `kaddr`，而非对应的物理地址。这导致 mmap 映射机制未能正确建立映射关系。
+此外，原有的 `mmap_dca` 实现通过 `vm_insert_pages` 手动插入页面，其处理流程与通用的 mmap entry 机制不一致，导致内存生命周期管理混乱，最终引发了释放后使用（PUAF）问题。
+
+#解决方案
+1. 修正地址传入类型：在 `init_udca_status` 函数中，调用 `hns_roce_user_mmap_entry_insert` 时，将参数从内核虚拟地址 `(u64)kaddr` 修改为物理地址 `(u64)virt_to_phys(kaddr)`，确保 mmap 机制能正确处理物理内存映射。
+2. 重构 mmap 处理逻辑：删除了有缺陷的 `mmap_dca` 函数，将其逻辑合并到 `hns_roce_mmap` 主处理函数中。针对 `HNS_ROCE_MMAP_TYPE_DCA` 类型，移除了手动插入页面的代码，改为设置正确的 `vm_flags`（如 `VM_DONTEXPAND`）和页保护属性，统一使用标准的 mmap entry 流程进行映射。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f831558e462bd129df1cc6155511c71b136f2596

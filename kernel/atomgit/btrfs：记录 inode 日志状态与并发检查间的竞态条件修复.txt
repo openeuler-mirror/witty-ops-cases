@@ -1,0 +1,22 @@
+#标题
+btrfs：记录 inode 日志状态与并发检查间的竞态条件修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BTRFS 文件系统中，当进行 rename、unlink 或 link 操作时，由于并发竞态导致系统误判 inode 未被记录日志。具体表现为：一个并发任务已将 inode 记录到日志树中，但另一个任务随后错误地将其标记为“未记录”，导致后续的 rename/link/unlink 操作未能正确更新日志（如新名称未记录、旧名称未从日志中删除）。这可能导致文件系统在崩溃恢复后出现元数据不一致或丢失的问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `inode_logged()` 中存在一个竞态窗口。当检查一个从未被记录过（`logged_trans` 为 0）的 inode 时，如果发现有日志树存在，代码会在树中搜索该 inode。如果搜索不到，代码准备将 `logged_trans` 设置为 `transid - 1` 以标记其“不在当前事务中记录”。
+然而，就在此操作之前，另一个任务（Task B）可能并发调用了 `btrfs_log_inode()` 成功记录了该 inode 并将 `logged_trans` 设置为当前事务 ID（`transid`）。
+此时，原任务（Task A）继续执行，无锁地将 `logged_trans` 覆盖为 `transid - 1`。结果是：该 inode 实际上已被记录，但其状态却被标记为未记录（`logged_trans < transid`），导致后续操作跳过必要的日志更新步骤。
+
+#解决方案
+引入一个新的辅助函数 `mark_inode_as_not_logged()`，在该函数内部通过获取 `inode->lock` 自旋锁来保护 `logged_trans` 的更新操作。修复逻辑为：在更新 `logged_trans` 之前加锁，并重新检查其值是否仍为 0。只有在值仍为 0 时才将其设置为 `transid - 1`；如果值已经变为当前事务 ID（说明已被并发任务记录），则保持其值不变并返回相应状态。这确保了并发日志记录操作不会被错误的状态覆盖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd74e16cf6d4257dd4c5c1ad4a7457bb006e0acf

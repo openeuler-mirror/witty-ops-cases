@@ -1,0 +1,37 @@
+#标题
+bpf: bpf_sk_select_reuseport() 函数内存泄漏故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行 BPF 测试程序（如 test_progs）时，发生内核内存泄漏。通过 kmemleak 检测到大小为 2048 字节的 `reuseport` 相关对象未被释放。
+
+#主要错误日志
+unreferenced object 0xffff888101911800 (size 2048):
+  comm "test_progs", pid 44109, jiffies 4297131437
+  hex dump (first 32 bytes):
+    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+    80 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+  backtrace (crc 9336483b):
+    __kmalloc_noprof+0x3bf/0x560
+    __reuseport_alloc+0x1d/0x40
+    reuseport_alloc+0xca/0x150
+    reuseport_attach_prog+0x87/0x140
+    sk_reuseport_attach_bpf+0xc8/0x100
+    sk_setsockopt+0x1181/0x1990
+    do_sock_setsockopt+0x12b/0x160
+    __sys_setsockopt+0x7b/0xc0
+    __x64_sys_setsockopt+0x1b/0x30
+    do_syscall_64+0x93/0x180
+    entry_SYSCALL_64_after_hwframe+0x76/0x7e
+
+#问题根因
+在 `bpf_sk_select_reuseport()` 函数中，当通过 sockmap 查找 socket 时，可能返回处于 TCP ESTABLISHED 状态的 socket。此类 socket 可能此前已设置过 `SO_ATTACH_REUSEPORT_EBPF`，拥有非 NULL 的 `sk_reuseport_cb` 指针，但这并不代表其没有引用计数。
+原代码逻辑在错误处理路径上（如 `!reuse` 或 `reuseport_id` 不匹配时）未正确释放 socket 的引用计数。具体来说，当 `sk_is_refcounted(selected_sk)` 为真时，代码在返回错误码前遗漏了调用 `sock_put(selected_sk)` 来丢弃引用，从而导致内存泄漏。
+
+#解决方案
+修改 `net/core/filter.c` 中的 `bpf_sk_select_reuseport()` 函数，统一错误处理路径。将 `sock_put(selected_sk)` 的调用移至函数末尾的 `error` 标签处，确保无论是 `!reuse` 还是协议/家庭不匹配等错误场景，只要 socket 是引用计数的，均能正确释放引用，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4919e974e7bf96dfb955f0f8465f9d756bf6ea5d

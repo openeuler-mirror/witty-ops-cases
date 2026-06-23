@@ -1,0 +1,21 @@
+#标题
+rt5665 codec 驱动 probe 阶段资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+rt5665 codec 驱动在加载（probe）过程中，如果成功获取并启用了稳压器后，后续初始化步骤（如 gpiod 获取等）失败，驱动将直接返回错误并退出，但未关闭已启用的稳压器。这导致稳压器资源处于持续开启状态，造成资源泄漏，可能影响设备功耗管理或导致后续重新加载驱动时的异常。
+
+#主要错误日志
+Failed to request supplies: %d
+Failed to enable supplies: %d
+
+#问题根因
+在 rt5665_i2c_probe 函数中，代码使用 devm_regulator_bulk_get 和 regulator_bulk_enable 成功启用电源供应后，如果在后续的代码路径中发生错误（例如 gpio 初始化失败），函数直接 return 返回错误码，没有调用对应的 regulator_bulk_disable 进行清理。而在 rt5665_remove 函数中是有对应的 disable 操作的，probe 错误处理路径缺失导致不对称。
+
+#解决方案
+将 devm_regulator_bulk_get() 和 regulator_bulk_enable() 替换为 devm_regulator_bulk_get_enable()。该函数结合了获取和启用稳压器的作用，且由 devm 机制管理，在驱动卸载或 probe 失败时能自动释放和关闭稳压器。同时移除了 struct rt5665_priv 中的 supplies 数组定义以及 rt5665_remove 中手动调用 regulator_bulk_disable 的代码，简化了资源管理逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f505861ade46d475fbd8c19e349ba0fe8b3068f0

@@ -1,0 +1,20 @@
+#标题
+spi-fsl-lpspi: CONT模式下传输中断处理错误导致通信失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 CONT（连续传输）模式进行 SPI 通信时，传输过程会卡死或无法完成。当发送传输尚未结束，但中断处理程序因需要接收数据而被调用时，TDIE（发送数据中断使能）被错误地完全禁用并替换为 FCIE。这导致当传输最终完成、SR_TDF 状态位置位时，中断处理程序无法再次被调用，从而导致传输无法结束。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit 6a130448498c ("spi: lpspi: Fix wrong transmission when don't use CONT") 引入的修改破坏了 CONT 模式下的正常工作逻辑。在中断处理函数 `fsl_lpspi_isr` 中，当检测到 SR_MBF 或 FSR_TXCOUNT 存在时，代码直接将中断控制设置为 `IER_FCIE`，清除了原本可能已使能的 `IER_TDIE`。在 CONT 模式下，如果发送传输尚未完成，TDIE 应当保持使能状态，否则后续的发送数据请求将无法触发中断，导致传输停滞。
+
+#解决方案
+修改 `drivers/spi/spi-fsl-lpspi.c` 中的 `fsl_lpspi_isr` 函数。在设置 `IER_FCIE` 时，通过或运算保留当前 `temp_IER` 中原本的 `IER_TDIE` 位，即将 `fsl_lpspi_intctrl(fsl_lpspi, IER_FCIE);` 修改为 `fsl_lpspi_intctrl(fsl_lpspi, IER_FCIE | (temp_IER & IER_TDIE));`。这确保了在 CONT 模式下，即使进入了处理接收或忙碌状态的分支，发送数据中断使能位也不会被意外清除。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/35e844833226e5201712ba7891940fb5423aa6a1

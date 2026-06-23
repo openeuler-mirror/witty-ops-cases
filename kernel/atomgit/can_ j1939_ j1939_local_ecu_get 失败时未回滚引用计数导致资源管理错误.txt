@@ -1,0 +1,20 @@
+#标题
+can: j1939: j1939_local_ecu_get 失败时未回滚引用计数导致资源管理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SAE J1939 协议中使用 socket 进行 bind 操作时，如果 `j1939_local_ecu_get()` 函数执行失败（例如创建 ECU 实例失败），先前代码未正确回滚已增加的引用计数 `nusers`。由于 `j1939_sk_bind` 的错误处理路径在 `j1939_local_ecu_get` 失败时不会设置 `J1939_SOCK_BOUND` 标志，导致后续 `j1939_sk_release()` 不会调用 `j1939_local_ecu_put()` 进行配对的计数递减操作。这将导致 `priv->ents[sa].nusers` 引用计数泄漏，使得该地址永远无法被正确释放或重复绑定。
+
+#主要错误日志
+未知
+
+#问题根因
+`j1939_local_ecu_get()` 函数在检查或创建 ECU 实例之前，对于单播地址（unicast sa）会先行执行 `priv->ents[sa].nusers++` 操作。然而，如果后续获取或创建 ECU 实例失败（`PTR_ERR_OR_ZERO(ecu)` 返回错误），函数直接跳转到 `done` 处返回，遗漏了将 `priv->ents[sa].nusers--` 的回滚步骤。这打破了 `j1939_local_ecu_get()` 和 `j1939_local_ecu_put()` 的调用配对约定。
+
+#解决方案
+在 `j1939_local_ecu_get()` 函数中，当 `PTR_ERR_OR_ZERO(ecu)` 判定为错误并跳转到 `done` 标签之前，增加对单播地址 `sa` 的检查。如果是单播地址，执行 `priv->ents[sa].nusers--` 操作以撤销之前的计数增加，确保错误路径下的状态一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bd256da8507b8414ab750f1d2f68fd73cb2b4b46

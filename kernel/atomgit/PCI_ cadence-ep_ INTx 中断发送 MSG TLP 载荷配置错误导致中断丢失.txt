@@ -1,0 +1,23 @@
+#标题
+PCI: cadence-ep: INTx 中断发送 MSG TLP 载荷配置错误导致中断丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Cadence PCIe Endpoint 驱动在发送传统中断（INTx）时，主机端无法接收到中断信号，导致依赖 INTx 的功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Cadence PCIe 控制器用户手册（Version 1.04, Section 9.1.7.1, Table 9.4），AXI Subordinate Address 的 Bit 16 设置为 1 时对应“带数据的 MSG”，设置为 0 时对应“不带数据的 MSG”。
+驱动代码中宏定义与文档规定相反：原代码将 `CDNS_PCIE_MSG_NO_DATA` 定义为 `BIT(16)`，并在发送 INTx 时设置了该位。这导致控制器错误地发送了“带数据的 MSG”，而 INTx 应发送“不带数据的 MSG”，从而导致主机端无法正确接收 INTx 中断。
+
+#解决方案
+修正驱动代码以符合硬件文档规范：
+1. 将宏定义 `CDNS_PCIE_MSG_NO_DATA` 重命名为 `CDNS_PCIE_MSG_DATA`，保持值为 `BIT(16)`。
+2. 在 `cdns_pcie_ep_assert_intx` 函数构造 MSG TLP 时，移除 `CDNS_PCIE_MSG_NO_DATA` 标志位的设置（即保持 Bit 16 为 0），确保发送的是不带数据载荷的 MSG TLP，从而修复 INTx 中断传递问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/32a6ad2e787562d58de0b364b107c97c8dbf9f0b

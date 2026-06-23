@@ -1,0 +1,20 @@
+#标题
+IMU inv_icm42600 关闭缓冲区时 ODR 切换阻塞导致状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 FIFO 开启状态下进行 ODR（Output Data Rate）切换，并紧接着关闭缓冲区时，系统会丢失 FIFO ODR 变更标志。这导致 ODR 切换流程无法完成，ODR 切换机制被阻塞，后续可能影响传感器数据的准确采集或设备状态一致性。
+
+#主要错误日志
+未知
+
+#问题根因
+当 FIFO 开启时，ODR 切换设计为两步操作：先更改 ODR 寄存器值，随后在读取 FIFO ODR 变更标志时确认变更。如果在切换 ODR 后立即关闭缓冲区，FIFO ODR 变更标志会丢失，导致系统无法收到确认信号，从而使 ODR 切换流程陷入阻塞状态。
+
+#解决方案
+在关闭缓冲区的流程中（`inv_icm42600_buffer_postdisable` 函数），强制应用任何挂起的 ODR 变更。具体修改是在获取锁之后、禁用 FIFO 之前，调用 `inv_sensors_timestamp_apply_odr(ts, 0, 0, 0)` 函数来处理并完成挂起的 ODR 切换，确保状态机正常流转。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bde1a4caf75b28385c0e1fd224cd2e2407596ddc

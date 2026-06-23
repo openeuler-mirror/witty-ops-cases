@@ -1,0 +1,21 @@
+#标题
+JFS 事务管理器未初始化等待队列导致系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当挂载 JFS 只读文件系统时，触发 `txEnd(0)` 调用，因访问未初始化的等待队列导致系统崩溃。系统会打印 lockdep 警告信息 "INFO: trying to register non-static key in txEnd"，随后发生 crash。
+
+#主要错误日志
+INFO: trying to register non-static key in txEnd
+
+#问题根因
+在 `txInit()` 函数中，事务块（TxBlock）的初始化循环从索引 1 开始（`for (k = 1; ...`），导致 `TxBlock[0]` 的 `waitor` 等待队列未被初始化。
+当文件系统以只读模式挂载时，`txBegin()` 返回 `tid=0` 表示无事务，但后续 `txEnd(0)` 仍会被调用并通过 `tid_to_tblock(0)` 访问 `TxBlock[0].waitor`。由于该等待队列未初始化，从而引发“non-static key”错误及系统崩溃。
+
+#解决方案
+修改 `txInit()` 函数中的循环逻辑，将初始化等待队列的循环起始索引从 1 改为 0（`for (k = 0; ...`），确保包括 `TxBlock[0]` 在内的所有事务块的 `gcwait` 和 `waitor` 等待队列都在初始化阶段被正确初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/adc7b58ae6afc722bf395bb6981bbc24a59a87cd

@@ -1,0 +1,22 @@
+#标题
+tracing: probes: Fix a possible race in trace_probe_log APIs
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 trace_kprobe 或 trace_uprobe 创建动态事件时，若发生并发操作，trace_probe_log 相关 API（trace_probe_log_init, trace_probe_log_clear 等）存在竞态条件。这可能导致内核日志信息错乱、内核 WARNING（若开启了 LOCKDEP），甚至引发内核 Panic。
+
+#主要错误日志
+未知
+
+#问题根因
+trace_probe_log 结构体是一个全局静态变量，在创建探测事件时被用作临时日志缓冲区。原代码流程中，trace_kprobe_create 和 trace_uprobe_create 函数直接被调用，未持有 dyn_event_ops_mutex 互斥锁。这导致多个线程并发创建事件时，会同时修改全局 trace_probe_log 变量，造成数据竞争。
+
+#解决方案
+1. 新增带锁保护的接口函数 dyn_event_create，在其内部获取 dyn_event_ops_mutex 互斥锁后再调用具体的 type->create 回调函数，确保创建过程互斥。
+2. 将 dyn_event_ops_mutex 的定义从 static 修改为 extern 可见，并在 trace_probe_log 的相关操作函数（trace_probe_log_init、trace_probe_log_clear、trace_probe_log_set_index、__trace_probe_log_err）中增加 lockdep_assert_held 锁断言，确保调用路径持有锁，从而修复竞态问题。
+3. 修改 trace_kprobe.c 和 trace_uprobe.c 中的调用点，将原先直接调用 trace_*probe_create 改为调用封装后的 dyn_event_create 接口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2f6f3ba6c2e5bc4fc03049af08695a99b26539a6

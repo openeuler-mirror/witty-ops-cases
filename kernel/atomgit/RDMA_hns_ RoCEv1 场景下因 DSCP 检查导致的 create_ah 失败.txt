@@ -1,0 +1,24 @@
+#标题
+RDMA/hns: RoCEv1 场景下因 DSCP 检查导致的 create_ah 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 RoCEv1 协议时，调用 `create_ah` 接口创建地址句柄失败，导致 RoCEv1 功能不可用。
+
+#主要错误日志
+推断：创建 AH 失败，可能伴随内核日志：
+`failed to get dscp, ret = %d.\n`
+
+#问题根因
+DSCP 功能在 RoCEv1 中不被支持，但内核代码在 RoCEv1 场景下仍然调用了 `get_dscp()` 函数。当 `get_dscp()` 返回错误码时，错误处理逻辑未正确区分协议类型，导致错误向上传递，最终引起 `create_ah` 失败。
+
+#解决方案
+修改代码逻辑，在调用 `get_dscp()` 前增加对 GID 类型的判断：
+1. 仅当 GID 类型为 `IB_GID_TYPE_ROCE_UDP_ENCAP`（即 RoCEv2）时才调用 `get_dscp()`。
+2. 对于 RoCEv1，直接使用 `rdma_ah_get_sl()` 获取 SL 值，跳过 DSCP 相关处理。
+同时修正了变量初始化逻辑，确保在非 RoCEv2 场景下返回值正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/65fd29ef14021059b68a7b0dbf0f6361a1b1ba3a

@@ -1,0 +1,20 @@
+#标题
+serial: 8250 修复 PSLVERR 导致的内核恐慌
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在使用 8250 串口驱动启动或运行过程中触发内核恐慌（panic），具体表现为访问串口寄存器时引发总线错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `serial8250_do_startup` 中，对寄存器 UART_LCR 的写操作 `serial_port_out(port, UART_LCR, UART_LCR_WLEN8)` 是在未持有自旋锁 `port->lock` 的情况下执行的。这种未同步的寄存器访问导致了 PSLVERR（协议从机错误）响应，进而引发内核恐慌。
+
+#解决方案
+调整代码执行顺序，将 `serial_port_out(port, UART_LCR, UART_LCR_WLEN8)` 操作移至获取自旋锁 `spin_lock_irqsave(&port->lock, flags)` 之后执行，确保对 UART 寄存器的访问受到锁保护，从而避免竞争条件和硬件错误响应。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/98f17172674fc0fba61906d66d7b75b1054545ac

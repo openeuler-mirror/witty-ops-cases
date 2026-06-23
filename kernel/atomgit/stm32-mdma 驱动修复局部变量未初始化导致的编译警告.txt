@@ -1,0 +1,24 @@
+#标题
+stm32-mdma 驱动修复局部变量未初始化导致的编译警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译 stm32-mdma 驱动时，GCC 编译器报出局部变量可能未初始化的警告，具体表现为：
+1. 变量 `m2m_hw_period` 在部分条件下未初始化即可能被使用；
+2. 变量 `ccr` 在 sg 列表为空时可能未初始化即被使用。
+
+#主要错误日志
+‘m2m_hw_period’ may be used uninitialized [-Wmaybe-uninitialized]
+‘ccr’ may be used uninitialized [-Wmaybe-uninitialized]
+
+#问题根因
+1. 变量 `m2m_hw_period` 仅在 `chan_config->m2m_hw` 为真时被初始化，但在声明时未赋初值，导致编译器检测到在非 m2m_hw 场景下可能存在使用未初始化值的风险。
+2. 变量 `ccr` 依赖于 `stm32_mdma_set_xfer_param()` 函数调用进行赋值，若 sg 列表为空，该函数可能不被调用或未正确赋值，导致 `ccr` 处于未初始化状态。
+
+#解决方案
+在函数 `stm32_mdma_setup_xfer` 的变量声明处，直接将 `m2m_hw_period` 和 `ccr` 初始化为 0，消除编译器警告及潜在风险。代码修改为：`u32 m2m_hw_period = 0, ccr = 0, ctcr, ctbr;`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/43e4e1b74b98a466353e57cad348aad18e5bcd24

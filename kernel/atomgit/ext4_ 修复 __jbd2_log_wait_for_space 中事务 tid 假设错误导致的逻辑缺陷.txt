@@ -1,0 +1,20 @@
+#标题
+ext4: 修复 __jbd2_log_wait_for_space 中事务 tid 假设错误导致的逻辑缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 EXT4 文件系统使用 JBD2 日志系统时，若日志空间不足，函数 `__jbd2_log_wait_for_space()` 可能因错误的逻辑判断未能正确等待事务提交，可能导致相关事务处理流程异常或阻塞。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `__jbd2_log_wait_for_space()` 错误地假设事务 ID（tid）为 '0' 是无效值。实际上，'0' 是一个合法的事务 ID。原代码逻辑使用 `tid` 变量是否非零来判断是否需要调用 `jbd2_log_wait_commit()`，这导致当 `j_committing_transaction` 存在但其事务 ID 恰好为 0 时，条件判断失效，不会执行等待提交的操作。
+
+#解决方案
+修改 `fs/jbd2/checkpoint.c` 中的逻辑，不再依赖 tid 是否为 0 进行判断。引入一个布尔类型变量 `has_transaction`，当 `journal->j_committing_transaction` 不为空时将其置为 true，随后使用 `has_transaction` 作为条件来决定是否调用 `jbd2_log_wait_commit()`，从而确保只要存在正在提交的事务，就会正确执行等待逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6db964cad30ba0eb4ad56fbd7c03fa333175c4a1

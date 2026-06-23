@@ -1,0 +1,25 @@
+#标题
+hfs 文件系统 bnode 读写越界访问导致内存越界或崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+HFS 文件系统在解析或操作 bnode 时，若传入的偏移量或长度参数异常，可能导致内核内存越界访问，进而引发系统崩溃或内核数据损坏。
+
+#主要错误日志
+- `pr_err("requested invalid offset: NODE: id %u, type %#x, height %u, node_size %u, offset %d\n", ...)`
+- `pr_err("requested length has been corrected: NODE: id %u, type %#x, height %u, node_size %u, offset %d, requested_len %d, corrected_len %d\n", ...)`
+- `pr_err("requested zero length: NODE: id %u, type %#x, height %u, node_size %u, offset %d, len %d\n", ...)`
+
+#问题根因
+HFS 文件系统的 `hfs_bnode_read`、`hfs_bnode_write`、`hfs_bnode_clear`、`hfs_bnode_copy` 和 `hfs_bnode_move` 等函数在执行操作前，未校验传入的偏移量和长度是否超出 bnode 的实际大小（`node_size`）。这导致在处理畸形文件系统镜像或特定边界条件时，可能发生越界读写。
+
+#解决方案
+在相关 bnode 操作函数入口处增加边界检查逻辑：
+1. 新增 `is_bnode_offset_valid` 函数，校验偏移量是否小于 `node_size`。
+2. 新增 `check_and_correct_requested_length` 函数，校验 `offset + length` 是否越界，若越界则修正长度为剩余可用长度。
+3. 在读写、清除、复制和移动操作中统一调用上述检查函数，阻止越界访问或修正越界长度，并打印错误日志以便排查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac7daa4329786c381ee8ad8bdc6c3d47ff5be2de

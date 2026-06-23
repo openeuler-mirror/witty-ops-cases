@@ -1,0 +1,25 @@
+#标题
+usb: dwc3: Remove WARN_ON for device endpoint command timeouts
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DWC3 USB 控制器驱动处理端点命令超时或传输启动失败时，内核调用 `WARN_ON` 或 `WARN_ON_ONCE` 触发警告栈回溯。这通常发生在 USB 设备通信异常、控制传输阶段（setup/data/status）启动失败、或清除端点 STALL 状态失败时，导致内核日志中出现大量 Call Trace 警告信息，影响系统日志的可读性，并可能引发不必要的系统告警。
+
+#主要错误日志
+- ep0 out start transfer failed: %d
+- ep0 data phase start transfer failed: %d
+- ep0 status phase start transfer failed: %d
+- ep0 data phase end transfer failed: %d
+- end transfer failed: %d
+- failed to clear STALL on %s
+
+#问题根因
+驱动程序在处理 USB 端点命令（如启动传输、结束传输、清除 STALL）时，若返回值表示失败，代码逻辑中使用了 `WARN_ON` 宏进行断言报错。由于设备端点命令超时或失败属于硬件交互层面的异常情况，虽然需要记录错误，但并不构成内核代码逻辑的严重缺陷，不应触发 `WARN_ON` 导致内核产生警告栈回溯。
+
+#解决方案
+移除驱动中 `dwc3_ep0_out_start`、`__dwc3_ep0_do_control_data`、`__dwc3_ep0_do_control_status`、`dwc3_ep0_end_control_data`、`__dwc3_stop_active_transfer` 以及 `dwc3_clear_stall_all_ep` 函数中的 `WARN_ON` 和 `WARN_ON_ONCE` 调用。改为使用 `dev_err` 或 `dev_err_ratelimited` 打印错误日志，仅记录具体的命令执行失败信息及错误码，避免触发内核警告栈。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aed9f01e790c536ddb6b4097177791167f972782

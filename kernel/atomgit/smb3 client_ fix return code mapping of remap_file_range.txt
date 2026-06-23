@@ -1,0 +1,22 @@
+#标题
+smb3 client: fix return code mapping of remap_file_range
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SMB3 客户端在进行文件复制/重映射操作（如调用 `copy_file_range` 系统调用）时，对于不支持的特定场景（如源偏移超出文件末尾、或同文件内源与目标范围重叠）错误地返回了 `-EOPNOTSUPP`。这导致 xfstest 测试集 `generic/157` 用例失败，该测试期望此类操作应返回 `-EINVAL`。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在 `cifs_remap_file_range` 函数中，对部分特定非法场景（如源文件偏移量大于文件大小、或源和目标为同一文件且范围重叠）的处理逻辑不完善，直接透传了底层返回的 `-EOPNOTSUPP` 错误码，而根据 `copy_file_range` 系统调用手册规范，这些场景应当返回 `-EINVAL`。
+
+#解决方案
+在 `cifs_remap_file_range` 函数中增加对 `-EOPNOTSUPP` 返回值的判断逻辑：
+1. 若源文件偏移量（`off`）大于等于源文件大小（`i_size`），将错误码修正为 `-EINVAL`。
+2. 若源文件与目标文件是同一个文件，且源范围与目标范围存在重叠（即 `off + len > destoff`），将错误码修正为 `-EINVAL`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6f3f529ad4c26124c9b2984772dd3271ab62011f

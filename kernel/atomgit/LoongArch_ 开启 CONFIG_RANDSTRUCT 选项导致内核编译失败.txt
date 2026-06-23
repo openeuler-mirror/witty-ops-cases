@@ -1,0 +1,20 @@
+#标题
+LoongArch: 开启 CONFIG_RANDSTRUCT 选项导致内核编译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构下开启 CONFIG_RANDSTRUCT 配置项进行内核编译时，构建过程报错中断。具体表现为汇编阶段出现立即数越界错误，导致内核无法成功编译。
+
+#主要错误日志
+未知（Commit 信息仅提及 "build errors"，未提供具体的编译错误日志原文）
+
+#问题根因
+当开启 CONFIG_RANDSTRUCT 选项时，task_struct 结构体的成员位置会被随机化。这导致 TASK_STACK_CANARY 的偏移量可能超出 LoongArch 指令集中 12 位立即数的寻址范围（即 ±2048），从而在汇编指令编码时产生越界错误。
+
+#解决方案
+修改 `arch/loongarch/kernel/switch.S` 汇编代码，将访问 TASK_STACK_CANARY 的指令从 `LONG_L`/`LONG_S`（受限于 12 位立即数）替换为 `ldptr.d`/`stptr.d` 指令。由于 TASK_STACK_CANARY 是自然对齐的，新指令支持 14 位立即数偏移，能够覆盖随机化后的偏移范围，从而修复编译错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2cb0e7eef25be7d58389af473aded8cdad43fb20

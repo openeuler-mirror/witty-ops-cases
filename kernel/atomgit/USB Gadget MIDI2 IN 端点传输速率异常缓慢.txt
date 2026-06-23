@@ -1,0 +1,20 @@
+#标题
+USB Gadget MIDI2 IN 端点传输速率异常缓慢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 USB Gadget MIDI 2.0 功能驱动时，MIDI2 IN 端点（altset 1）的数据传输速率极慢。这是由于该端点的 `wMaxPacketSize` 未根据 USB 速度（High Speed 或 Super Speed）进行正确初始化，导致其一直保持默认值，无法达到预期的传输性能。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `f_midi2_create_usb_configs()` 中，针对 USB_SPEED_HIGH 和 USB_SPEED_SUPER 两种速度模式的处理逻辑存在遗漏。代码在循环中仅设置了 MIDI2 OUT 端点描述符的 `wMaxPacketSize`，却遗漏了对 MIDI2 IN 端点描述符（`midi2_midi2_ep_in_desc[i]`）的相应赋值。由于 MIDI2 IN 端点属于中断类型，此前未被包含在批量端点的初始化逻辑中，导致其最大包大小未随总线速度调整，从而引发性能瓶颈。
+
+#解决方案
+在 `f_midi2_create_usb_configs` 函数中，针对 High Speed 和 Super Speed 两种情况，在循环设置 MIDI2 OUT 端点 `wMaxPacketSize` 的同时，补充对 MIDI2 IN 端点描述符 `wMaxPacketSize` 的设置（High Speed 设为 512，Super Speed 设为 1024），确保 IN 端点拥有与 OUT 端点匹配的正确最大包大小，从而恢复正常传输速率。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/231e9edd04dae79fbeef91601b2e04310a64749a

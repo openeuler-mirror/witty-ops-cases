@@ -1,0 +1,26 @@
+#标题
+mTHP分裂与zap_nonpresent_ptes并发导致folio锁状态检查失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ARM64服务器环境下，当mTHP（multi-size THP）分裂操作与`zap_nonpresent_ptes()`并发执行时，触发`VM_WARN_ON_ONCE`警告。警告信息表明通过migration entry获取的folio处于未锁定状态，这违反了内核关于migration entry使用时必须持有folio锁的约束。在v6.19-rc1之前的内核版本中，该竞态条件会直接触发`BUG_ON`导致内核崩溃。
+
+#主要错误日志
+VM_WARN_ON_ONCE(!folio_test_locked(folio))
+（推断上下文：位于 `pfn_swap_entry_folio` 或 `softleaf_to_folio` 函数中）
+
+#问题根因
+问题根因是`softleaf_to_folio()`函数中缺少内存屏障，导致在处理migration entry时出现竞态条件。
+具体竞态过程如下：
+1. CPU0 执行`deferred_split_scan`进行folio分裂，在`__split_folio_to_order()`中设置tail pages的标志（含PG_locked），执行`smp_wmb()`，然后初始化tail pages。
+2. CPU1 执行`zap_nonpresent_ptes()`，调用`softleaf_to_folio()`读取migration entry。
+由于`softleaf_to_folio()`缺少与CPU0中`smp_wmb()`配对的`smp_rmb()`，CPU1可能先观察到更新后的`compound_head`（识别为folio），而后才观察到`page->flags`。此时CPU0尚未完成flags设置，导致CPU1读取到的folio标志位未包含`PG_locked`，从而触发警告或BUG。
+
+#解决方案
+在`softleaf_to_folio()`（对应补丁中的`pfn_swap_entry_folio`）及相关函数中增加`smp_rmb()`内存屏障。
+修复逻辑：对于migration entry类型的softleaf entry，在检查folio锁状态之前调用新增的`migration_entry_sync()`函数，该函数内部执行`smp_rmb()`，确保能正确观察到`__split_folio_to_order()`中设置的page flags，从而保证folio锁状态检查的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bd38c22fc59e8de64b320e42b9c6cbcfc2ecce41

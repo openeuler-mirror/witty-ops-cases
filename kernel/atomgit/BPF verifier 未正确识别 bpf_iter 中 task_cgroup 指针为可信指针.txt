@@ -1,0 +1,22 @@
+#标题
+BPF verifier 未正确识别 bpf_iter 中 task/cgroup 指针为可信指针
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BPF 程序中使用新引入的 `bpf_iter_css_task` kfunc 或 bpf_iter 迭代 task/cgroup 时，BPF 校验器未能正确识别 `bpf_iter__task -> task` 和 `bpf_iter__cgroup -> cgroup` 为可信指针（trusted pointer）。这导致校验器错误地限制了对这些指针的访问权限，影响了用户程序的正常编写与功能实现，阻碍了对内核对象的安全访问操作。
+
+#主要错误日志
+未知
+
+#问题根因
+BTF_TYPE_SAFE_TRUSTED 机制虽然意图告知 BPF 校验器相关指针是可信的，但在实际处理 `bpf_iter__task -> task` 访问时，代码流程经过 `btf_ctx_access()` 函数，该函数强制将寄存器类型（reg_type）设置为 `ctx_arg_info->reg_type`。
+而在 `task_iter.c` 和 `cgroup_iter.c` 的定义中，`ctx_arg_info->reg_type` 被显式声明为 `PTR_TO_BTF_ID_OR_NULL`，缺少了 `PTR_TRUSTED` 标记。这导致校验器认为该指针可能为空或不可信，从而拒绝了本应合法的操作。
+
+#解决方案
+修改 `task_iter.c` 与 `cgroup_iter.c` 中的 `ctx_arg_info` 定义，在 `reg_type` 字段中添加 `PTR_TRUSTED` 标记（即修改为 `PTR_TO_BTF_ID_OR_NULL | PTR_TRUSTED`）。
+对于 cgroup 指针，由于代码在 `cgroup_mutex` 保护下运行且在 `__cgroup_iter_seq_show()` 中检查了 `cgroup_is_dead()`，因此它是安全可信的；对于 task 指针，同样通过添加标记告知校验器其可信属性，从而修复校验器的行为并改善用户体验。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7075e3068b37308e70f367dbc8df54295f47d95b

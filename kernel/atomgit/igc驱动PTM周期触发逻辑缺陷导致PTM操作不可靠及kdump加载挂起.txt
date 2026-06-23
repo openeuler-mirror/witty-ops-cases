@@ -1,0 +1,26 @@
+#标题
+igc驱动PTM周期触发逻辑缺陷导致PTM操作不可靠及kdump加载挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在支持PTM（Precision Time Measurement）的系统上使用phc2sys高频同步时，工具退出并报错 "ioctl PTP_OFFSET_PRECISE: Connection timed out"，PTM事务失败。
+2. 在kdump内核中加载igc驱动时，如果之前的基础内核启用了PTM触发模式，驱动探测过程（igc_probe）会在访问NIC寄存器时挂起，导致kdump功能失效。
+
+#主要错误日志
+- `ioctl PTP_OFFSET_PRECISE: Connection timed out`
+- `Timeout reading IGC_PTM_STAT register`
+
+#问题根因
+问题根因在于PTM状态寄存器的操作顺序错误。原代码在PTM周期被触发的同时，写入清除PTM状态 'valid' 位，这导致PTM操作变得不可靠。
+此外，驱动在 `igc_probe()` 阶段默认保持PTM 'trigger' 位为启用状态。当系统发生崩溃并重启进入kdump内核时，NIC处于复位状态但PTM trigger仍使能。由于硬件问题，NIC此时处于错误的busmaster状态，无法正确处理寄存器读写，导致kdump内核中的驱动探测挂起。
+
+#解决方案
+修改PTM触发与复位逻辑，将PTM 'trigger' 和状态清除操作调整为事务性处理：
+1. 新增 `igc_ptm_trigger` 和 `igc_ptm_reset` 辅助函数。
+2. 在每次PTM事务中，先触发PTM周期，等待完成后立即通过 `igc_ptm_reset` 清除 trigger 位并重置所有状态位（使用新增的 `IGC_PTM_STAT_ALL` 掩码）。
+3. 在 `igc_ptp_reset` 初始化流程中，执行一次强制PTM周期后立即调用 `igc_ptm_reset` 关闭trigger，确保绝大多数时间内PTM trigger处于禁用状态，仅在进行手动触发时短暂开启（10-100微秒），从而极大降低崩溃发生在trigger开启期间的概率。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce58c9dd170a935d0db93bbc3f7957e9eb516725

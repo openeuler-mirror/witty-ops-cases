@@ -1,0 +1,21 @@
+#标题
+NFS 挂载或重挂载时因 SB_RDONLY 标志处理不当导致冗余超级块生成
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFS 挂载场景下，若未设置 NFS_MOUNT_UNSHARED，同一个导出根路径下的子目录被多次挂载且挂载选项（rw/ro）不同时，内核会错误地创建多个冗余的超级块，而非按预期共享同一个超级块。该问题同样发生在对已挂载目录进行 remount（重挂载）操作时，导致系统资源浪费及挂载行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 NFS 共享超级块逻辑中（`nfs_get_tree_common`），当未设置 `NFS_MOUNT_UNSHARED` 时，NFS 强制在挂载同一导出根路径的子目录时共享超级块。然而，挂载逻辑在比较超级块时未屏蔽 `SB_RDONLY` 标志，导致挂载选项中只读属性的差异干扰了超级块的匹配与复用，造成本应共享的超级块被重复创建。同理，在重挂载流程（`nfs_reconfigure`）中，也因未忽略 `SB_RDONLY` 标志导致类似问题。
+
+#解决方案
+1. 在 `nfs_get_tree_common` 函数中，当允许共享超级块时（非 `NFS_MOUNT_UNSHARED`），清除 `fc->sb_flags` 中的 `SB_RDONLY` 标志，防止只读属性干扰超级块的匹配逻辑。
+2. 在 `nfs_reconfigure` 函数中，清除 `fc->sb_flags_mask` 中的 `SB_RDONLY` 标志，确保重挂载时忽略该标志，避免因此产生冗余超级块。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/69a109e0ddee32a83bc49b98ed1c6d291d69af75

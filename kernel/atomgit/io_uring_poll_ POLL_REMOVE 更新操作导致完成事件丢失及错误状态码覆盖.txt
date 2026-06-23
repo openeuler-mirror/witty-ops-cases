@@ -1,0 +1,26 @@
+#标题
+io_uring/poll: POLL_REMOVE 更新操作导致完成事件丢失及错误状态码覆盖
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 io_uring 的 `POLL_REMOVE` 操作更新一个 pending 状态的 `POLL_ADD` 请求时，存在两个故障现象：
+1. 若更新操作触发了 `POLL_ADD` 的完成，该完成事件会丢失，导致对应的 CQE（Completion Queue Entry）永远不会被提交。
+2. 在更新触发完成的场景下，结果状态码被错误地强制覆盖为 `-ECANCELED`，而不是保留 `io_poll_add()` 返回的正确结果。
+
+#主要错误日志
+未知
+
+#问题根因
+在内核核心代码重构以统一处理 completions 和固定返回码时（Commit 97b388d70b53），`io_poll_remove` 函数中对 `io_poll_add()` 的返回值处理逻辑存在缺陷：
+1. 未处理 `IOU_OK` 返回值：当 `io_poll_add()` 返回 `IOU_OK`（表示请求已完成）时，代码未跳转至完成处理路径，而是直接退出，导致完成事件丢失。
+2. 错误地覆盖结果：在部分更新场景下，代码无条件执行 `req_set_fail(preq)` 和设置结果为 `-ECANCELED`，覆盖了 `io_poll_add()` 已设置的正确结果，导致用户态收到错误的完成状态。
+
+#解决方案
+修改 `io_poll_remove` 函数中的返回值处理逻辑：
+1. 增加对 `IOU_OK` 返回值的判断，若返回 `IOU_OK` 则跳转至 `complete` 标签进行处理，确保完成事件正确提交。
+2. 将 `io_req_set_res(preq, -ECANCELED, 0)` 移至 `complete` 标签之前，并调整逻辑：仅在请求结果为负值时才调用 `req_set_fail`，避免无条件覆盖已设置的正确结果，确保完成状态码的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5af56930791bcb2c77c59b26f0375bf3b9774427

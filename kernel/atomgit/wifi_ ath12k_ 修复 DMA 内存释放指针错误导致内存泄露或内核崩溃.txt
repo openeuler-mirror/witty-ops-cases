@@ -1,0 +1,20 @@
+#标题
+wifi: ath12k: 修复 DMA 内存释放指针错误导致内存泄露或内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载或重置 ath12k 无线网卡驱动时，由于 `dma_free_coherent` 函数传入的虚拟地址和 DMA 地址指针错误，可能导致内核内存管理混乱。具体表现为驱动卸载过程中内核崩溃或内存泄露，影响系统稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ath12k_ce_free_pipes` 函数中，`dma_alloc_coherent()` 分配内存时将地址存储在 `base_addr_owner_space_unaligned` 和 `base_addr_ce_space_unaligned` 字段中，并返回对齐后的地址指针。但在释放内存时，代码错误地使用了对齐后的地址指针（`base_addr_owner_space` 和 `base_addr_ce_space`），而非分配时保存的原始地址指针。这违反了 DMA 一致性内存分配的接口契约，即释放时传入的地址必须与分配时返回的地址完全一致。
+
+#解决方案
+修改 `drivers/net/wireless/ath/ath12k/ce.c` 文件中的 `ath12k_ce_free_pipes` 函数，将 `dma_free_coherent()` 的第二个参数（虚拟地址）和第三个参数（总线地址）从对齐后的字段（`base_addr_owner_space`、`base_addr_ce_space`）修正为未对齐的原始字段（`base_addr_owner_space_unaligned`、`base_addr_ce_space_unaligned`），确保内存释放时传入的指针与分配时获取的指针一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/90aba3431ad69d602d4ca6089de616f20bbfd778

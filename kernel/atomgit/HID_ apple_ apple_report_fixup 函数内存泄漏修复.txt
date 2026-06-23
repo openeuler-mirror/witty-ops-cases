@@ -1,0 +1,20 @@
+#标题
+HID: apple: apple_report_fixup 函数内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Apple Magic Keyboard 等受影响的 HID 设备时，内核在处理报告描述符修复过程中会发生内存泄漏。由于该泄漏发生在模块初始化或设备连接时的修复路径中，长期或频繁操作可能导致内核内存资源被逐渐耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `apple_report_fixup()` 函数中，代码使用 `kmemdup()` 分配了新的内存缓冲区并赋值给 `rdesc` 指针，但函数返回时调用者并不会接管该指针的所有权（caller does not take ownership），导致该内存块无法被释放，从而造成内存泄漏。
+
+#解决方案
+移除 `kmemdup()` 内存分配调用，直接使用指针偏移操作（`rdesc = rdesc + 1`）。根据 HID 框架约定，`report_fixup()` 钩子允许返回输入参数 `rdesc` 的子部分，其生命周期由调用者管理，因此直接返回偏移后的指针即可避免内存泄漏并保持原有功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ebb652325203b19902f672060ce5d565df7847e

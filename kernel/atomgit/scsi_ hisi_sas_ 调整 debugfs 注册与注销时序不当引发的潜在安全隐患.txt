@@ -1,0 +1,23 @@
+#标题
+scsi: hisi_sas: 调整 debugfs 注册与注销时序不当引发的潜在安全隐患
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动初始化阶段 debugfs 注册过早，或驱动卸载阶段 debugfs 注销过晚，导致在驱动核心资源未完全就绪或已释放的时间窗口内，用户态仍可访问 debugfs 接口。这违反了安全编程规范，可能导致内核空指针访问或内存越界访问等不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在初始化时，在 `interrupt_preinit_v3_hw`、`scsi_add_host`、`sas_register_ha` 等关键步骤完成之前即注册了 debugfs；在卸载时，在 `sas_unregister_ha`、`scsi_remove_host` 等资源释放之后才注销 debugfs。这种时序上的不当安排导致存在资源状态与访问接口不匹配的风险窗口。
+
+#解决方案
+调整 debugfs 初始化与注销的代码位置，确保资源访问的安全性：
+1. **初始化阶段**：将 `debugfs_init_v3_hw` 移至 `scsi_scan_host` 之后执行，确保 debugfs 注册在驱动初始化的最后阶段完成，此时所有资源已就绪。
+2. **卸载阶段**：将 `debugfs_exit_v3_hw` 移至 `pm_runtime_get_noresume` 之后、`sas_unregister_ha` 之前执行，确保 debugfs 在驱动卸载的最开始阶段即被注销，防止后续资源释放后仍被访问。
+3. 同时移除了错误处理路径中多余的 `err_out_undo_debugfs` 标签，简化了错误处理逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/55c81df5ea58f44e48b1053e3737baf9f1ea05af

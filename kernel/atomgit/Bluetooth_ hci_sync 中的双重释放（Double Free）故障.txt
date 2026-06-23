@@ -1,0 +1,35 @@
+#标题
+Bluetooth: hci_sync 中的双重释放（Double Free）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在蓝牙服务运行过程中，由于 `hci_discovery_filter_clear()` 函数存在并发竞争风险，可能导致内核发生 Double Free 错误。该故障触发时，内核会报告 `kernel BUG at mm/slub.c`，并引发 Oops/Panic，导致系统不稳定或崩溃。
+
+#主要错误日志
+```
+[ ] ------------[ cut here ]------------
+[ ] kernel BUG at mm/slub.c:547!
+[ ] Internal error: Oops - BUG: 00000000f2000800 [#1] PREEMPT SMP
+[ ] CPU: 3 UID: 0 PID: 246 Comm: bluetoothd Tainted: G O 6.12.19-kernel #1
+[ ] pstate: 60400005 (nZCv daif +PAN -UAO -TCO -DIT -SSBS BTYPE=--)
+[ ] pc : __slab_free+0xf8/0x348
+[ ] lr : __slab_free+0x48/0x348
+...
+[ ] Call trace:
+[ ]  __slab_free+0xf8/0x348
+[ ]  kfree+0x164/0x27c
+[ ]  start_service_discovery+0x1d0/0x2c0
+[ ]  hci_sock_sendmsg+0x518/0x924
+```
+
+#问题根因
+函数 `hci_discovery_filter_clear()` 在释放 `uuids` 数组并将其置为 NULL 之间存在微小的竞争窗口。
+当 `hci_cmd_sync_work()` 执行路径（如 `update_passive_scan_sync` -> `hci_discovery_filter_clear`）调用 `kfree(uuids)` 后，若此时发生抢占，另一条路径（如 `start_service_discovery` -> `hci_discovery_filter_clear`）可能并发进入，再次对同一指针调用 `kfree(uuids)`，从而导致双重释放。
+
+#解决方案
+在 `struct discovery_state` 结构体中新增 `spinlock_t lock` 成员，并在 `discovery_init()` 中初始化该锁。在 `hci_discovery_filter_clear()` 函数中，使用自旋锁保护 `kfree(hdev->discovery.uuids)` 操作及随后的指针置空操作（`hdev->discovery.uuids = NULL`），确保释放与置空操作的原子性，消除竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5b70b93fc768bd7dd788ed3139250e2b82356296

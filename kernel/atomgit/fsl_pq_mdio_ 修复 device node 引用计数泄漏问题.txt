@@ -1,0 +1,22 @@
+#标题
+fsl_pq_mdio: 修复 device node 引用计数泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 fsl_pq_mdio_probe 函数中，通过 for_each_child_of_node 遍历获取的设备节点 tbi 在使用完毕后未释放，导致设备节点引用计数泄漏，可能造成内存泄漏或设备卸载异常。
+
+#主要错误日志
+"missing 'reg' property in node %pOF\n"
+
+#问题根因
+在 `fsl_pq_mdio_probe` 函数中，代码使用 `for_each_child_of_node` 循环遍历子节点并获取 `tbi` 节点指针。在循环内部，无论是遇到错误分支（`goto error`）还是正常处理完毕，都缺少 `of_node_put(tbi)` 调用来释放该节点的引用计数。这违背了引用计数的使用规则，导致了资源泄漏。该问题自提交 `afae5ad78b342 ("net/fsl_pq_mdio: streamline probing of MDIO nodes")` 引入。
+
+#解决方案
+在 `fsl_pq_mdio_probe` 函数的两个退出路径处补充 `of_node_put(tbi)` 调用：
+1. 在检查到 `reg` 属性缺失的错误分支中，在 `goto error` 之前增加 `of_node_put(tbi)`。
+2. 在正常处理完 tbi 节点后（设置完 tbipa 后），增加 `of_node_put(tbi)`，确保每次循环中获取的节点引用都能被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/47edd1449ce423ba19b217ceb2315ead753bf176

@@ -1,0 +1,20 @@
+#标题
+EDAC/i3200 驱动 probe 阶段内存资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 i3200_edac 驱动过程中，若 `edac_mc_alloc()` 分配内存失败，驱动初始化流程未正确释放此前已映射的 I/O 内存窗口（window），导致内存资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `i3200_probe1` 函数中，代码逻辑先前已经通过 `ioremap` 成功映射了设备窗口。后续调用 `edac_mc_alloc()` 分配 EDAC 控制结构体时，如果分配失败，函数直接返回 `-ENOMEM`，跳过了 `iounmap(window)` 的清理步骤，从而导致 I/O 内存映射资源泄漏。
+
+#解决方案
+修改 `i3200_probe1` 函数的错误处理路径。当 `edac_mc_alloc()` 失败时，不再直接 return，而是跳转至统一的 `unmap` 标签处执行 `iounmap(window)` 操作，确保在内存分配失败时能正确解除地址映射，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f79f74085999dd32b27e42792361a8fc1021a578

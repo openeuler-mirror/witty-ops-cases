@@ -1,0 +1,20 @@
+#标题
+nvmem: imx-ocotp-ele 读取 MAC 地址字节序错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i.MX93 平台上读取 OCOTP 中存储的 MAC 地址时，获取到的地址字节序与实际物理地址相反。例如，实际 MAC 地址应为 `00:d0:93:6b:27:b8`，但系统读取到的地址却显示为 `b8:27:6b:93:d0:00`，导致网络接口 MAC 地址配置错误，可能引发网络通信异常或 MAC 地址冲突。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 i.MX93 Fusemap 定义，MAC 地址存储在 words 315 至 317 中，且是以反序存储的（例如 MAC1_ADDR_31_0 对应低位字节）。当前驱动程序 `imx-ocotp-ele` 在读取这些数据时，未对字节序进行处理，直接将原始数据传递给上层，导致读取出的 MAC 地址字节顺序与实际逻辑顺序相反。该存储格式与 i.MX6 的 `imx-ocotp` 驱动所处理的格式一致，但当前驱动缺失了相应的字节交换处理逻辑。
+
+#解决方案
+在驱动程序中增加 `.read_post_process` 回调函数（`imx_ocotp_cell_pp`）。当读取的数据单元 ID 为 "mac-address" 时，对读取到的数据缓冲区进行字节序反转（swap）操作，确保上报给上层的 MAC 地址字节序正确。同时通过 `imx_ocotp_fixup_dt_cell_info` 将该后处理函数注册到 nvmem 配置中。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3433b6a43635242f1ff33667a222c675b92235f6

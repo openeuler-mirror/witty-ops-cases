@@ -1,0 +1,21 @@
+#标题
+LoongArch KVM 虚拟机 LL/SC 原子指令因二级 MMU 映射变更导致数据破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构 KVM 虚拟机场景下，当多个 VCPU 并发执行原子操作（如 `atomic64_fetch_add_unless`）时，如果发生二级 MMU 映射变更（如缺页导致 GPA 到 HPA 的映射被替换），正在执行的 LL/SC（Load-Linked/Store-Conditional）指令对可能出现状态判断错误。具体表现为：SC 指令错误地认为内存未被修改从而直接写入数据，破坏了原子操作的语义，导致数据不一致或逻辑错误。
+
+#主要错误日志
+未知
+
+#问题根因
+LoongArch 架构下 LLBCTL 寄存器在 Host 与 Guest 之间是分离的。Host 态的 `eret` 指令会清空 Host 的 LLBCTL 寄存器，Guest 态的异常处理会清空 Guest 的 LLBCTL 寄存器。
+根因在于：当 Guest 正在执行 LL/SC 指令序列中间，发生二级 MMU 映射变更（例如 VCPU0 执行 LL 指令加载旧 HPA 页面后，映射被替换为新页面），此时 LLBCTL 寄存器仍处于置位状态（表示监控生效）。由于 VCPU1 可能在新页面上修改了内存，而 VCPU0 的 SC 指令执行时，LLBCTL 依然有效，导致 SC 指令错误地判定内存未被修改并成功写入新地址。这违反了 LL/SC 的原子性语义（即 LL 加载旧地址，SC 存入新地址但未被检测到冲突）。
+
+#解决方案
+在 KVM 处理 VPID 更新或 TLB 刷新的时机（即检测到映射变更时），主动清除 Guest 的 LLBCTL 寄存器（写 `LOONGARCH_CSR_LLBCTL`）。这强制让 Guest 的 LL/SC 状态失效，确保在映射发生变更后，SC 指令不会因为残留的监控状态而错误执行写入操作，从而保证原子指令的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/60cbf8ea52f28e3267bb452df421e89d889a3277

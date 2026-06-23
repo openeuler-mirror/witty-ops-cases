@@ -1,0 +1,20 @@
+#标题
+USB BDC 驱动在原子上下文中睡眠导致告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在原子上下文执行 `bdc_run()` 函数时，系统检测到睡眠行为并触发 "sleep during atomic" 警告，导致内核抛出调度错误信息。
+
+#主要错误日志
+BUG: sleeping function called from invalid context
+
+#问题根因
+`bdc_run()` 函数可能在原子上下文中被调用，但其内部调用的 `poll_oip()` 函数使用了 `readl_poll_timeout()` 宏。该宏在等待超时过程中可能会睡眠，从而违反了原子上下文禁止睡眠的规则。
+
+#解决方案
+将 `poll_oip()` 函数中的 `readl_poll_timeout()` 替换为 `readl_poll_timeout_atomic()`。后者专为原子上下文设计，使用忙等待方式轮询寄存器状态，避免了睡眠调用，从而修复了该问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/64c1753230a91ff425abf463d1d9ef076595dc54

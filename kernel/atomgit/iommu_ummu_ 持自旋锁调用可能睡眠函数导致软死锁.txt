@@ -1,0 +1,20 @@
+#标题
+iommu/ummu: 持自旋锁调用可能睡眠函数导致软死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ummu_core_alloc_separate_tdev` 函数时，系统可能发生 soft lockup（软死锁），导致当前进程无法调度，系统响应受阻。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ummu_core_alloc_separate_tdev` 函数中，持有 `mm_tid_xa_lock` 互斥锁的情况下调用了 `ummu_core_alloc_tdev()` 函数。该分配函数可能睡眠（may sleep），而在某些上下文中（如临界区或原子上下文）持有锁进行睡眠操作会导致 soft lockup。
+
+#解决方案
+修复方案是调整锁的持有范围。在调用可能睡眠的 `ummu_core_alloc_tdev()` 之前先释放 `mm_tid_xa_lock` 锁，待分配完成后再重新获取锁。同时，重新获取锁后增加双重检查（double-check）逻辑，检查是否已有其他并发路径插入了相同的 mm entry，从而保证并发安全性并修复潜在的软死锁问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/926f6df3a07968cdded545f6ee21ce945a04d6e8

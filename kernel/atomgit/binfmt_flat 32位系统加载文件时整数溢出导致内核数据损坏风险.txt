@@ -1,0 +1,20 @@
+#标题
+binfmt_flat 32位系统加载文件时整数溢出导致内核数据损坏风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在32位系统上加载损坏或特制的 flat 格式可执行文件时，若 `relocs`（重定位数）值过大，可绕过现有的二进制头完整性检查。这会导致在计算 `full_data` 大小时发生整数溢出，进而可能引发内核内存损坏或非预期的内核行为。
+
+#主要错误日志
+pr_err("bad header\n");
+
+#问题根因
+在 `load_flat_file` 函数中，变量 `text_len`、`data_len`、`bss_len` 和 `stack_len` 均进行了大小限制检查（最大256MB），防止因数值过大导致问题。然而，`relocs` 变量未包含在该检查中。在32位系统上，若 `relocs` 值过大，计算 `full_data = data_len + relocs * sizeof(unsigned long)` 时会发生整数溢出，导致 `full_data` 计算结果错误（变小），从而绕过安全检查，造成潜在的内核损坏风险。
+
+#解决方案
+在头文件完整性检查的位运算判断条件中，增加对 `relocs` 变量的检查。具体修改是将 `relocs` 加入到位移检查逻辑中：`if ((text_len | data_len | bss_len | stack_len | relocs | full_data) >> 28)`，确保 `relocs` 值同样被限制在合理范围内（不超过256MB），从而防止整数溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/04d0fed11f593ecad24b8c06c4966cccbfa49fb3

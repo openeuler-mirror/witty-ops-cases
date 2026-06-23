@@ -1,0 +1,35 @@
+#标题
+urma: well-known jetty 资源创建与销毁未随主 EID 事件正确联动导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 URMA 子系统中，well-known jetty 资源的创建和销毁未能正确挂钩到主 UE EID 事件上。
+1. 在没有主 EID 的情况下，系统尝试初始化 jetty 资源导致失败或异常流程。
+2. 当主 EID 被删除时，相关的 jetty 资源未能及时销毁，导致资源残留或后续访问异常。
+3. 系统日志中可能出现 "Failed to handle main ue eid event" 或 "Failed to register main ue eid event cb" 的错误记录。
+
+#主要错误日志
+- `ubcore_log_err("Failed to handle main ue eid event, eid " EID_FMT ", event_type: %d, ret: %d.\n", ...)`
+- `ubcore_log_err("Failed to register main ue eid event cb, ret: %d.\n", ret)`
+- `ubcore_log_err("Failed to register main ue eid event cb, ret: %d.\n", ret)` (在 ubmgr_ping 初始化中)
+
+#问题根因
+原先的实现中，well-known jetty 资源的管理依赖于旧的事件通知机制（`ubmgr_event_notifier`），该机制未与核心的 `main_ue_eid` 事件处理流程正确对接。
+具体表现：
+1. **创建时机错误**：在设备添加（`open_device`）阶段直接尝试创建 jetty 资源，而此时主 EID 可能尚未就绪，导致资源创建失败或无效。
+2. **销毁缺失**：缺少对 `UBCORE_MAIN_UE_EID_LAST_DEL` 事件的处理逻辑，导致主 EID 删除时，对应的 jetty 资源未被清理。
+3. **架构缺陷**：旧代码通过 `ubmgr_notify_mgmt_event` 和 `ubmgr_notify_set_topo` 进行事件传递，流程繁琐且不可靠，现已废弃。
+
+#解决方案
+重构了 jetty 资源的生命周期管理，将其直接挂钩到 `ubcore_main_ue_eid` 事件回调机制上：
+1. **注册事件回调**：在 `ubmad_init` 和 `ubmgr_ping_init` 中注册 `ubmad_on_main_ue_eid_event` 和 `ping_on_main_ue_eid_event` 回调函数。
+2. **事件驱动管理**：
+   - 收到 `UBCORE_MAIN_UE_EID_FIRST_ADD` 事件时，触发 jetty 资源的创建和初始化。
+   - 收到 `UBCORE_MAIN_UE_EID_LAST_DEL` 事件时，触发 jetty 资源的销毁和反初始化。
+3. **移除冗余代码**：删除了旧的 `ubmgr_topo.c`、`ubmgr_topo.h` 及相关的事件通知链机制，简化了调用链。
+4. **延迟初始化**：修改 `ubmad_open_device`，移除在设备打开时立即创建资源的逻辑，改为等待 EID 事件触发。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/74c324f78645ec93e961271a1418af505396ad33

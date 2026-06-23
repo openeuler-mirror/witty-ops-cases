@@ -1,0 +1,20 @@
+#标题
+ASoC: Intel: bytcr_wm5102: 平台时钟控制错误路径导致 MCLK 泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel BYT/WM5102 音频平台上，当尝试开启音频流（SND_SOC_DAPM_EVENT_ON）时，若 PLL1 配置（`byt_wm5102_prepare_and_enable_pll1`）失败，驱动程序未正确关闭已开启的主时钟（MCLK）。这导致 MCLK 的使能引用计数泄漏，每次失败的上电尝试都会累积泄漏，可能导致后续音频功能异常或资源无法释放。
+
+#主要错误日志
+dev_err(card->dev, "Error setting codec sysclk: %d\n", ret);
+
+#问题根因
+在 `platform_clock_control` 函数的 `SND_SOC_DAPM_EVENT_ON` 处理路径中，代码先调用了 `clk_prepare_enable(priv->mclk)` 开启 MCLK，随后调用 `byt_wm5102_prepare_and_enable_pll1`。当该函数返回错误时，代码直接 `return ret` 返回，遗漏了 `clk_disable_unprepare(priv->mclk)` 的调用，导致 MCLK 时钟未被关闭，引用计数泄漏。
+
+#解决方案
+在 `byt_wm5102_prepare_and_enable_pll1` 失败的错误处理分支中，增加调用 `clk_disable_unprepare(priv->mclk)`，确保在 PLL1 配置失败时正确关闭已开启的 MCLK 时钟，修复引用计数泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c54f3e008566b3f496cbd9fc4d80b1e8c96c1b37

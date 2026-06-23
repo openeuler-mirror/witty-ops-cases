@@ -1,0 +1,42 @@
+#标题
+fuseblk worker 同步文件释放导致死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 fuseblk 文件系统上运行 generic/323 测试用例时系统挂起（hang）。
+具体表现为：客户端进程开启大量 AIO 写操作并在完成前关闭文件描述符，导致所有 fuseblk 服务端线程被困在 `delayed_fput` 流程中等待释放响应。由于没有剩余线程处理队列中的 FUSE 命令，系统陷入活锁状态。
+
+#主要错误日志
+服务端线程堆栈显示在等待自身的请求响应：
+[<0>] request_wait_answer+0x1fe/0x2a0 [fuse]
+[<0>] __fuse_simple_request+0xd3/0x2b0 [fuse]
+[<0>] fuse_file_put+0x9a/0xd0 [fuse]
+[<0>] fuse_release+0x36/0x50 [fuse]
+[<0>] __fput+0xec/0x2b0
+[<0>] task_work_run+0x55/0x90
+[<0>] syscall_exit_to_user_mode+0xe9/0x100
+[<0>] do_syscall_64+0x43/0xf0
+[<0>] entry_SYSCALL_64_after_hwframe+0x4b/0x53
+
+客户端线程堆栈显示在等待服务端响应：
+[<0>] request_wait_answer+0x1fe/0x2a0 [fuse]
+[<0>] __fuse_simple_request+0xd3/0x2b0 [fuse]
+[<0>] fuse_do_getattr+0xfc/0x1f0 [fuse]
+[<0>] fuse_file_read_iter+0xbe/0x1c0 [fuse]
+[<0>] aio_read+0x130/0x1e0
+[<0>] io_submit_one+0x542/0x860
+[<0>] __x64_sys_io_submit+0x98/0x1a0
+[<0>] do_syscall_64+0x37/0xf0
+[<0>] entry_SYSCALL_64_after_hwframe+0x4b/0x53
+
+#问题根因
+AIO 机制会在排队 ioctx 时获取 struct file 的新引用，IO 完成时释放该引用。当客户端进程在 AIO 完成前关闭文件描述符时，最后一个 put 操作会在中断上下文（IO 完成时）执行。
+对于 fuseblk 挂载，原代码逻辑信任服务端并在 `fuse_file_release` 中使用同步模式调用 `fuse_file_put`。若 IO 完成发生在 FUSE 服务端线程上下文中，服务端线程会执行 `delayed_fput` 并同步发送 `FUSE_RELEASE` 命令，导致服务端线程等待自己处理该请求，从而阻塞。恶意或特定负载的客户端可以发起足够的并发 AIO 占用所有服务端线程，导致无线程处理新请求，引发死锁。
+
+#解决方案
+修改 `fuse_file_release` 函数，强制使用异步模式（参数传 false）调用 `fuse_file_put`，不再对 fuseblk 使用同步释放。这避免了 FUSE 服务端线程在处理客户端关闭请求时阻塞在自身的同步等待上，从而打破死锁条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1837f7b9f73c511c0cdd0282e4428c33e7c21a97

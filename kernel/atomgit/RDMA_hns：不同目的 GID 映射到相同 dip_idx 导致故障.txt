@@ -1,0 +1,23 @@
+#标题
+RDMA/hns：不同目的 GID 映射到相同 dip_idx 导致故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hns_roce 驱动中，多个不同的目标 GID（dgids）被错误地映射到了同一个 dip_idx（Destination IP index）。该缺陷会导致 RDMA 连接配置错误，可能引发数据传输异常、连接失败或硬件配置不一致等问题。
+
+#主要错误日志
+未知
+
+#问题根因
+原有的实现使用 `spare_idx` 数组配合 FIFO 队列（head/tail）来管理 dip_idx 的分配与回收。当一个 QP 被销毁时，其 dip_idx 立即回收到队尾供后续分配使用。这种机制存在缺陷：硬件在 QP 销毁后可能仍保留该 dip_idx 的上下文信息，若该 idx 被快速重新分配给具有不同 dgid 的新 QP，会导致不同 dgid 映射到同一个 dip_idx，从而引发冲突。
+
+#解决方案
+重构 dip_idx 的管理机制，将原来的 FIFO 队列替换为 xarray 结构。
+1.  引入引用计数 `qp_cnt`，一个 dip_idx 可以被多个具有相同 dgid 的 QP 共享。
+2.  在 QP 销毁时，减少引用计数，只有当引用计数减为 0 时才清除 dgid 映射，将 dip_idx 条目标记为可用，而不是立即回收 idx 值。
+3.  分配时优先复用 `qp_cnt` 为 0 的空闲条目，确保 dgid 与 dip_idx 的唯一且正确映射，避免硬件上下文残留导致的冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22331c57308c2695396118353a7486778934fffd

@@ -1,0 +1,20 @@
+#标题
+sched: Fix race between yield_to() and try_to_wake_up()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核调度子系统存在竞争条件，`yield_to()` 函数与 `try_to_wake_up()` 函数并发执行时可能引发数据竞争，导致内核状态不一致或系统异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+`yield_to()` 函数中使用 `local_irq_save/local_irq_restore` 进行保护不足，无法有效阻止与 `try_to_wake_up()` 之间的竞争，需要通过持有目标任务的 `pi_lock` 来正确同步对任务调度相关字段的访问。
+
+#解决方案
+修改 `kernel/sched/core.c` 中的 `yield_to()` 函数，将临界区的保护机制从 `local_irq_save` 替换为 `raw_spin_lock_irqsave(&p->pi_lock, flags)`，对应解锁部分替换为 `raw_spin_unlock_irqrestore(&p->pi_lock, flags)`，从而消除竞争风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d1829e9df31b5d727ac1e363aaa1caaa673c504b

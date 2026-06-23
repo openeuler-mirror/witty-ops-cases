@@ -1,0 +1,22 @@
+#标题
+IPv6 IOAM 预分配追踪头校验不一致导致潜在安全问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在处理 IPv6 IOAM（In-situ Operations, Administration, and Maintenance）预分配追踪头时，接收端路径与封装端对 `nodelen` 的计算逻辑不一致。这可能导致构造特定报文绕过校验，或内核对畸形报文处理异常，影响网络协议栈的稳定性与安全性。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `IOAM6_MASK_SHORT_FIELDS` 宏定义在接收端与封装端不一致。封装端定义为 `0xff100000`，而计算逻辑中实际生效掩码应为 `0xff1ffc00`。这导致在处理包含特定比特位（如 bit12-bit21 范围内的部分字段）的 Trace 头时，发送端与接收端计算出的 `nodelen` 不同。接收端缺乏对预分配 Trace 头一致性的严格校验，可能引发安全问题。
+
+#解决方案
+1. 修正掩码定义，统一 `IOAM6_MASK_SHORT_FIELDS` 为 `0xff1ffc00`，`IOAM6_MASK_WIDE_FIELDS` 为 `0x00e00000`，确保计算逻辑符合协议标准。
+2. 新增公共函数 `ioam6_trace_compute_nodelen` 用于统一计算节点长度。
+3. 在接收处理函数 `ipv6_hop_ioam` 中增加校验逻辑，检查报文中携带的 `trace->nodelen` 是否与根据 `trace_type` 计算出的期望值一致，若不一致则直接丢包。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d8ea184ff2d5e001f24264ceff1938cb96c1c4fd

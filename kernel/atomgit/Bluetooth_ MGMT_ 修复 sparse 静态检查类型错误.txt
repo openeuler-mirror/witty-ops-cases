@@ -1,0 +1,22 @@
+#标题
+Bluetooth: MGMT: 修复 sparse 静态检查类型错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核代码静态检查工具 sparse 在编译检查 `net/bluetooth/mgmt.c` 时报告类型不一致错误，指出在第 5400 行（diff 上下文推断为 `mgmt_adv_monitor_removed` 函数调用处）传递的参数类型不正确：期望 `unsigned short` 类型，但实际传入了 `restricted __le16` 类型。这属于代码质量问题，可能导致潜在的字节序处理隐患。
+
+#主要错误日志
+net/bluetooth/mgmt.c:5400:59: sparse: sparse: incorrect type in argument 3 (different base types) @@     expected unsigned short [usertype] handle @@     got restricted __le16 [usertype] monitor_handle @@
+net/bluetooth/mgmt.c:5400:59: sparse:     expected unsigned short [usertype] handle
+net/bluetooth/mgmt.c:5400:59: sparse:     got restricted __le16 [usertype] monitor_handle
+
+#问题根因
+函数 `mgmt_adv_monitor_removed` 的参数 `handle` 定义为 `u16` 类型（原生字节序），而在调用该函数时传入的是 `__le16` 类型（小端序）的变量 `monitor_handle`。这种类型不匹配导致了 sparse 检查报错。此外，函数内部原本对 `handle` 执行 `cpu_to_le16` 转换也是多余的，因为输入参数本应保持小端序格式以直接赋值给事件结构体。
+
+#解决方案
+修改 `mgmt_adv_monitor_removed` 函数的参数类型，将 `u16 handle` 更改为 `__le16 handle`，使其与传入参数及内部使用时的字节序类型保持一致。同时，移除函数内部冗余的 `cpu_to_le16(handle)` 转换操作，直接将 `handle` 赋值给 `ev.monitor_handle`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bc00e49f685eaa442a6d3e19fabe9e07755eac09

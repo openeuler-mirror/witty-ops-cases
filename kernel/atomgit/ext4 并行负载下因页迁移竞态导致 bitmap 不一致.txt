@@ -1,0 +1,23 @@
+#标题
+ext4 并行负载下因页迁移竞态导致 bitmap 不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行混合大页压力测试时，观测到 ext4 bitmap 不一致问题。系统报告 e4b bitmap 检查失败，显示组信息中的空闲簇数与实际获取的块数不匹配。同时，在开启 DOUBLE_CHECK 宏进行检测时，可能触发 bitmap 校验误报，提示磁盘数据与内存拷贝不一致。
+
+#主要错误日志
+- ext4_mb_complex_scan_group:2508: group 350, 8179 free clusters as per group info. But got 8192 blocks
+- corruption in group 324 at byte 784(6272): f in copy != ff on disk/prealloc
+
+#问题根因
+问题根因是 `ext4_mb_load_buddy` 的快速路径与页迁移及并发访问存在竞态条件：
+1. **页迁移竞态**：`load_buddy` 快速路径仅增加 folio 的引用计数，无法阻止并发的 folio 迁移。迁移过程会持有 folio lock，但快速路径未检查锁状态，导致在迁移过程中读取到不一致的 bitmap 状态。
+2. **并发访问误报**：当 `mb_cmp_bitmaps` 检查 bitmap 时，另一个进程可能发现 folio 处于 uptodate 状态便直接使用（未持锁），导致 bitmap 与 group descriptor 瞬时不一致，从而触发误报。
+
+#解决方案
+在 `ext4_mb_load_buddy_gfp` 函数的快速路径检查中增加 `PageLocked(page)` 判断。如果页面已被锁定（表明正在进行迁移或其他操作），则放弃快速路径，转而进入获取页面锁的慢速路径，从而消除竞态窗口，保证 bitmap 读取的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a3f90354c4db7ac2195ca93869ea61ea4893e7d8

@@ -1,0 +1,20 @@
+#标题
+QFQ调度器类移除逻辑可能引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核编译选项开启 CONFIG_NET_CLS_ACT 的情况下，使用 QFQ（Quick Fair Queueing）队列调度器时，若系统处理特定网络流量控制场景（如 cls_act 逻辑下的无队列 class），可能会触发内核空指针引用异常，导致系统崩溃或复位。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `qfq_deact_rm_from_agg` 函数中，原代码直接使用 `cl->qdisc->q.qlen > 0` 来判断 class 是否处于活跃状态。然而，当内核配置了 `CONFIG_NET_CLS_ACT` 时，class 的 qdisc 指针可能指向特殊的 noop_qdisc（无队列），此时访问 `cl->qdisc->q.qlen` 会引发空指针引用错误。实际上，该条件下 class 的活跃状态应通过 `cl_is_active(cl)` 接口进行判断，而非直接解引用 qdisc 成员。
+
+#解决方案
+修改 `net/sched/sch_qfq.c` 文件中的 `qfq_deact_rm_from_agg` 函数，将判断 class 是否活跃的逻辑从直接访问 `cl->qdisc->q.qlen` 修改为调用封装好的 `cl_is_active(cl)` 函数。该修正规避了对 qdisc 结构体的直接依赖，正确处理了 noop_qdisc 场景，从而修复了 CVE-2026-23105。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5828698067977784823bed2b9c3bfc13c62ec8b0

@@ -1,0 +1,23 @@
+#标题
+Bluetooth: SCO: Fix use-after-free in sco_recv_frame()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下，当 SCO 连接正在接收数据帧时，若另一线程并发执行 close() 操作关闭 socket，会导致 `sco_recv_frame()` 函数访问已释放的 socket 内存，引发 use-after-free（释放后使用）漏洞。这可能造成内核恐慌、内存损坏或潜在权限提升。
+
+#主要错误日志
+未知
+
+#问题根因
+`sco_recv_frame()` 函数在持有 `sco_conn_lock()` 锁期间读取 `conn->sk`，但在访问 `sk->sk_state` 之前立即释放了锁，且未增加 socket 的引用计数。这导致在锁释放后、访问 socket 成员前，一个并发的 `close()` 调用可能释放该 socket，从而引发 use-after-free。
+
+#解决方案
+修复方案是引用计数管理：
+1. 在锁内获取 socket 时，调用 `sco_sock_hold()` 增加引用计数，确保即使并发 close 释放了该 socket，其内存也不会被回收。
+2. 将原有的 `sk = conn->sk` 修改为 `sk = sco_sock_hold(conn)`。
+3. 在函数的所有退出路径（包括正常接收路径和异常丢弃路径）添加 `sock_put(sk)` 调用，以正确释放引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/662fbc4e43c211e956c91f49326fdfc4d7fc2f5f

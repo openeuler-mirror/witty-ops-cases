@@ -1,0 +1,20 @@
+#标题
+wifi: carl9170 设备固件加载失败后触发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 carl9170 无线网卡设备固件加载失败时，驱动程序仍尝试向未完全初始化的设备发送 ping 命令。由于设备未通过 `ieee80211_register_hw()` 注册，内部工作队列尚未初始化，导致在调用 `ieee80211_queue_work` 时引发内核崩溃或设备行为不可预测。
+
+#主要错误日志
+device %s is not registered\n
+
+#问题根因
+在 `carl9170_usb_rx_complete` 函数中，当接收 URB 耗尽时，代码无条件调用 `ieee80211_queue_work(ar->hw, &ar->ping_work)`。若设备固件加载失败，设备处于未注册状态（`ar->registered` 为假），内部工作队列不存在，此时调用该函数会引发内核崩溃。
+
+#解决方案
+在调用 `ieee80211_queue_work` 前增加 `ar->registered` 状态检查。若设备已注册，则继续调度 ping 工作；若设备未注册，则通过 `pr_warn_once` 打印警告信息，避免对未初始化的设备进行非法操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/38e468f3d3d755aa22f09eb97000b52f0f1a9716

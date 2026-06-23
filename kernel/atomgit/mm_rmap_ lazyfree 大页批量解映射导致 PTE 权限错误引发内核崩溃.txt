@@ -1,0 +1,26 @@
+#标题
+mm/rmap: lazyfree 大页批量解映射导致 PTE 权限错误引发内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 lazyfree 状态的大页执行内存回收时，内核触发 BUG_ON 检查失败导致崩溃。具体表现为进程在执行 MADV_FREE 后触发回收，内核在 `page_table_check.c` 中报告 "kernel BUG"，系统 panic。复现路径为：故障注入 64K 大页 -> 修改 VMA 权限 -> 合并 VMA -> 标记 lazyfree -> 写内存 -> 触发回收。
+
+#主要错误日志
+[   21.134473] kernel BUG at mm/page_table_check.c:118!
+[   21.134497] Internal error: Oops - BUG: 00000000f2000800 [#1]  SMP
+[   21.137308] pc : page_table_check_set+0x28c/0x2a8
+[   21.137607] lr : page_table_check_set+0x134/0x2a8
+[   21.142093]  page_table_check_set+0x28c/0x2a8 (P)
+[   21.142265]  __page_table_check_ptes_set+0x144/0x1e8
+[   21.142907]  try_to_unmap_one+0x10c4/0x10d0
+
+#问题根因
+在 `folio_unmap_pte_batch` 函数处理匿名 lazyfree 大页的批量解映射时，底层调用 `folio_pte_batch` 未正确处理页表项（PTE）的权限位。当一个批量处理的 PTE 组中混合了可写和不可写页表项时，代码错误地将整个批量的页表项设置为可写。这导致在解映射失败后的 PTE 恢复路径中，内核试图将一个本应为只读的页面以可写权限映射到页表中，从而违反了匿名内存的 CoW（写时复制）语义，触发 `page_table_check` 的 BUG_ON 检查。同时，该问题还导致了 soft-dirty 位的丢失。
+
+#解决方案
+修改 `mm/rmap.c` 中的 `folio_unmap_pte_batch` 函数，将调用 `folio_pte_batch` 改为 `folio_pte_batch_flags`，并传入 `FPB_RESPECT_WRITE | FPB_RESPECT_SOFT_DIRTY` 标志。这确保了在批量处理 PTE 时，能够正确保留原始 PTE 的可写权限位和 soft-dirty 位，避免在解映射失败恢复 PTE 时错误提升权限或丢失状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3cb5c05d579d6a408b825c9d4a4a98d89f83c3a0

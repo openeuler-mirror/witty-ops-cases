@@ -1,0 +1,20 @@
+#标题
+cgroup_mutex 未导出导致内核模块编译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能 CONFIG_LOCKDEP 但未开启 CONFIG_PROVE_RCU 的编译环境下，编译引用了 folio_memcg 函数的 zram 内核模块（zram.ko）时失败。
+
+#主要错误日志
+ERROR: modpost: "cgroup_mutex" [../soc-repo/zram.ko] undefined!
+
+#问题根因
+导出符号 `cgroup_mutex` 的条件仅受 `CONFIG_PROVE_RCU` 宏控制。而在特定配置下（开启 `CONFIG_LOCKDEP`），`folio_memcg` 函数内部会间接调用 `lockdep_is_held(&cgroup_mutex)`，从而引用 `cgroup_mutex`。若此时 `CONFIG_PROVE_RCU` 未定义，则 `cgroup_mutex` 不会被导出（EXPORT_SYMBOL_GPL），导致模块编译时找不到该符号定义。
+
+#解决方案
+修改 `kernel/cgroup/cgroup.c` 文件中的宏判断逻辑，将导出 `cgroup_mutex` 的条件由 `#ifdef CONFIG_PROVE_RCU` 修改为 `#if (defined CONFIG_PROVE_RCU || defined CONFIG_LOCKDEP)`，确保在开启 CONFIG_LOCKDEP 时也能正确导出该符号，修复编译依赖问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9df3b87e0442004602f6517f1ed80f9c1c613f6

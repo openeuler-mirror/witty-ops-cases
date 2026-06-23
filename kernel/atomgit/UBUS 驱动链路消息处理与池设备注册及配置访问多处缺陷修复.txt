@@ -1,0 +1,43 @@
+#标题
+UBUS 驱动链路消息处理与池设备注册及配置访问多处缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 当 UBUS 设备断链或复位时，驱动未能有效阻止配置空间访问，可能导致内核访问已断开设备引发超时或异常。
+2. 池设备初始化过程中，若 GUID 不匹配或未初始化，驱动未进行有效校验，导致设备注册逻辑异常。
+3. 实体注册时缺少对 `ueid` 存在性的校验，可能接受非法注册请求。
+4. 消息队列初始化逻辑顺序错误，内存分配失败时的回滚路径不完整。
+5. 默认总线实例初始化失败时仅触发 `WARN_ON`，未正确处理错误流程。
+
+#主要错误日志
+- `read guid failed, ret=%d\n`（推断：GUID 读取失败）
+- `entity reg u_eid=%#x not exist\n`
+- `entity reg guid type %u is invalid\n`
+- `fad idx[%u] add failed\n`
+- `pool pld guid is not equal entity guid %s\n`
+- `default bi init failed, ret=%d\n`
+- `cqe state memory failed\n`
+- `pue add msg user eid[%#x] not exist\n`
+- `ue add msg user eid[%#x] not exist\n`
+
+#问题根因
+1. **配置访问失控**：驱动缺少对设备断连状态的标记与检查机制，在设备断链或复位后，同步配置访问函数 `ub_sync_cfg` 仍允许对设备进行读写操作。
+2. **GUID 校验缺失**：在池设备注册流程中，`ub_get_guid` 未对比读取的 GUID 与预期的 `pld.guid` 是否一致，且 `ub_entity_reg_check` 未校验 GUID 类型。
+3. **实体校验不严**：实体注册处理函数 `ub_entity_reg_check` 及 VDM 处理函数未校验 `ueid` 是否在总线实例中存在。
+4. **初始化顺序与错误处理不当**：`hi_msg_queue_init` 中内存分配晚于核心初始化，且内存释放顺序颠倒；`ub_start_ent` 对初始化失败仅报警未返回错误；`ub_entity_reg_handle` 错误码转换错误。
+5. **标志位设置遗漏**：链路断开处理 `ublc_link_down_handle` 和设备复位 `ub_device_reset` 未设置 `UB_ENTITY_DISCONNECTED` 标志。
+
+#解决方案
+1. **增加断连状态检查**：引入 `UB_ENTITY_DISCONNECTED` 标志位，在 `ublc_link_down_handle` 和 `ub_device_reset` 中设置该标志，并在 `ub_sync_cfg` 中通过 `ub_entity_is_disconnected` 检查该标志，若已断连则直接返回 `-ETIMEDOUT`。
+2. **完善 GUID 校验**：在 `ub_entity_reg_check` 中增加 GUID 类型校验（必须为 `UB_TYPE_CONTROLLER`）；在 `ub_get_guid` 中增加池设备 GUID 一致性比对，不匹配则返回 `-EINVAL`。
+3. **增加 ueid 存在性校验**：新增 `ub_bus_instance_exist` 接口，在实体注册及 VDM 消息处理流程中调用该接口验证 `ueid` 有效性。
+4. **修正初始化与错误处理逻辑**：
+   - 调整 `hi_msg_queue_init` 顺序，先分配内存后初始化核心，修正 `uninit` 时的释放顺序。
+   - 修正 `ub_entity_reg_handle` 返回值，使用 `err_to_msg_rsp` 转换错误码。
+   - 修正 `ub_start_ent` 中的错误处理，`ub_default_bus_instance_init` 失败时打印错误日志并返回。
+5. **修正 mgmt 字段逻辑**：在 `ub_msg_pkt_header_init` 中，对于未初始化的池设备控制器，强制 `mgmt` 值为 0。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/177750a35904a7b0b88df48ed3a21e05c2c57753

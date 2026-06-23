@@ -1,0 +1,20 @@
+#标题
+usb: typec: tcpm/tcpci_maxim: 修复 max_contaminant_read_resistance_kohm 函数错误码返回值问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB TypeC 接口污染物检测过程中，若 ADC 电压读取函数 `max_contaminant_read_adc_mv` 执行失败，调用者 `max_contaminant_read_resistance_kohm` 错误地返回了 0（成功）而非实际的错误码。这导致上层调用逻辑无法正确感知底层硬件读取失败的情况，可能导致污染物检测机制失效或状态判断错误。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `max_contaminant_read_resistance_kohm` 在检查 `max_contaminant_read_adc_mv` 的返回值时，虽然判断了返回值小于 0 的错误情况，但在 return 语句中错误地返回了变量 `ret`。此时变量 `ret` 并未被赋值为该错误码（可能仍为初始化的 0 或上一次操作的成功状态），导致函数在失败路径下返回了 0，掩盖了真实的错误状态。
+
+#解决方案
+修改 `drivers/usb/typec/tcpm/maxim_contaminant.c` 文件中 `max_contaminant_read_resistance_kohm` 函数的实现。当 `max_contaminant_read_adc_mv` 返回值小于 0 时，直接将该返回值（即错误码）返回给调用者，确保错误能够正确向上传递。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eb787f83c92bc1ccb0351a3ac581f5f03a442324

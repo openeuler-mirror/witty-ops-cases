@@ -1,0 +1,24 @@
+#标题
+bpf: bpf_iter_task_new 接口拒绝传入空指针导致验证失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 BPF task_iter 遍历系统所有进程或线程（使用 BPF_TASK_ITER_ALL_PROCS 或 BPF_TASK_ITER_ALL_THREADS 标志）时，由于不需要指定特定的 task 指针，用户尝试传入空指针（nullptr）。然而，BPF 验证器强制要求参数必须为有效指针，导致 BPF 程序加载失败并被拒绝，提示参数类型错误，影响了接口的易用性与逻辑合理性。
+
+#主要错误日志
+"arg#x pointer type xx xx must point to scalar, or struct with scalar"
+
+#问题根因
+BPF 验证器在处理 kfunc 参数时，通过 `get_kfunc_ptr_arg_type()` 函数进行检查。对于传入的空指针，寄存器类型被标记为 `SCALAR_VALUE`，若参数未标记为可选，验证器会校验其 BTF 类型是否为标量或标量结构体。由于不满足条件，验证器直接拒绝该参数。虽然遍历所有进程/线程时传入空指针在逻辑上是合法的，但验证器缺乏对“可选参数”的支持机制，导致误判。
+
+#解决方案
+1. 在内核代码中引入 `__nullable` 注解支持。在 `verifier.c` 中新增 `KF_ARG_PTR_TO_NULL` 类型，并实现 `is_kfunc_arg_nullable()` 检查逻辑。
+2. 修改 `bpf_iter_task_new` 函数签名，将 `struct task_struct *task` 参数修改为 `struct task_struct *task__nullable`，显式声明该参数可接受空指针。
+3. 在 `get_kfunc_ptr_arg_type()` 中增加判断：若参数具有 `__nullable` 后缀且寄存器值为空，则返回 `KF_ARG_PTR_TO_NULL` 类型，并在后续检查流程中跳过对该参数的类型强制校验。
+4. 在 `check_kfunc_args()` 中增加例外逻辑：当参数为 nullable 且值为空时，允许通过受信参数检查。
+5. 在 `task_iter.c` 中调整逻辑，对于 `BPF_TASK_ITER_PROC_THREADS` 场景，显式检查空指针并返回 `-EINVAL`，其他场景允许空指针传入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bb20d53b3da27471d802ad69919f1f3c66b285a9

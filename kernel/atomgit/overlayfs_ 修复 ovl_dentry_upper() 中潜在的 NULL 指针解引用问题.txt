@@ -1,0 +1,28 @@
+#标题
+overlayfs: 修复 ovl_dentry_upper() 中潜在的 NULL 指针解引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+GCC 15 开启 `-Warray-bounds` 编译选项时，编译内核报错，提示在 `ovl_dentry_upper` 函数中存在数组越界访问风险。编译器推断在 `OVL_E()` 宏处理过程中，`d_inode(dentry)` 可能返回 NULL，导致后续通过 `container_of()` 访问内存时发生越界读取。报错信息显示 "array subscript 0 is outside array bounds"。
+
+#主要错误日志
+```text
+include/asm-generic/rwonce.h:44:26: error: array subscript 0 is outside array bounds of 'struct inode[7486503276667837]' [-Werror=array-bounds=]
+   44 | #define __READ_ONCE(x)  (*(const volatile __unqual_scalar_typeof(x) *)&(x))
+      |                         ~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+...
+fs/overlayfs/ovl_entry.h:195:16: note: in expansion of macro 'READ_ONCE'
+  195 |         return READ_ONCE(oi->__upperdentry);
+      |                ^~~~~~~~~
+```
+
+#问题根因
+在 `ovl_dentry_upper()` 函数中，代码直接对 `d_inode(dentry)` 的返回值进行解引用操作（通过 `OVL_I` 宏）。编译器静态分析指出 `d_inode(dentry)` 有可能返回 NULL，此时 `OVL_I(NULL)` 会通过 `container_of` 宏计算出一个无效的地址偏移，从而触发编译器的数组越界警告。虽然这不是一个已触发的运行时故障，但代码逻辑上未对 NULL inode 进行防御性检查。
+
+#解决方案
+在 `ovl_dentry_upper()` 函数中增加对 `d_inode(dentry)` 返回值的判断。如果 inode 为 NULL，函数直接返回 NULL，否则才继续执行 `ovl_upperdentry_dereference` 操作。此修复消除了编译器的静态检查警告，并增加了代码的健壮性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/16ed9ad77f4302222b4ff0d6d600297bc007f8ef

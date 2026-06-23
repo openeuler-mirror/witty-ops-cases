@@ -1,0 +1,20 @@
+#标题
+vsock: connect() 失败后 Socket 无法重试连接
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当面向 VM Sockets (VSOCK) 的 connect() 系统调用失败后，Socket 进入 SS_UNCONNECTED 状态，但内核保留了失败的错误状态（sk_err）。这导致该 Socket 在后续尝试重新建立连接时无法成功，即便网络环境或对端状态已恢复正常，该 Socket 也无法被复用，必须关闭并重新创建 Socket 才能恢复。
+
+#主要错误日志
+未知
+
+#问题根因
+VSOCK 协议实现在 connect() 失败时会设置 sk_err。该错误状态未被及时清理，导致后续对该 Socket 的操作（如再次调用 connect()）会立即因存在 pending error 而返回失败，阻止了连接重试机制。
+
+#解决方案
+在 vsock_connect() 函数中，尝试建立新连接之前显式将 sk->sk_err 清零，确保之前的失败状态不会影响新的连接请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/436e9f8940bcb2cbcc1eddfb039122a8b86b5b3d

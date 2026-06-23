@@ -1,0 +1,20 @@
+#标题
+I3C 主控制器驱动因空指针访问导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+I3C 主控制器在设备驱动尚未完成探针（probe）流程之前，若收到目标设备发出的带内中断（IBI），会调用 `i3c_master_queue_ibi()` 函数。此时由于设备结构体中的 `dev->ibi` 尚未初始化（为 NULL），直接访问该指针会导致内核发生空指针解引用错误，触发 kernel panic，系统崩溃不可用。
+
+#主要错误日志
+Unable to handle kernel read from unreadable memory
+
+#问题根因
+I3C 目标设备的事件是异步于 I3C probe 序列的。典型的 IBI 处理流程中，设备驱动 probe 并调用 `i3c_device_request_ibi()` 赋值 `dev->ibi`（步骤 2）可能晚于 I3C master 接收到 IBI 并调用 `i3c_master_queue_ibi()`（步骤 3）。当步骤 3 先于步骤 2 发生时，`dev->ibi` 指针为 NULL，函数内部未做检查直接访问该指针成员（如 `dev->ibi->pending_ibis`），导致空指针访问异常。
+
+#解决方案
+在 `drivers/i3c/master.c` 文件的 `i3c_master_queue_ibi()` 函数入口处增加防御性检查。若检测到 `dev->ibi` 或 `slot` 指针为 NULL，则直接返回，不进行后续的队列操作，从而避免空指针解引用导致的内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1f82b14ba7b238f0bcc6fabf851ddeccb718bdd1

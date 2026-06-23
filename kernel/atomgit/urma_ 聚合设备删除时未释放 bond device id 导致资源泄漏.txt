@@ -1,0 +1,20 @@
+#标题
+urma: 聚合设备删除时未释放 bond device id 导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除 URMA 聚合设备时，对应的 bond device ID 资源未被释放。随着设备增删操作的持续进行，可用的 bond device ID 逐渐耗尽，导致后续无法创建新的 bonding 设备。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ubagg_delete_dev` 的删除流程中，代码逻辑遗漏了对 `release_bond_device_id_with_name` 的调用。这导致虽然设备被注销且资源被清理，但设备占用的 ID 资源未归还给 IDA 或位图管理器，造成 ID 泄漏。
+
+#解决方案
+在 `ubagg_delete_dev` 函数中，于设备注销和资源反初始化之后、引用计数释放之前，显式调用 `release_bond_device_id_with_name(dev->master_dev_name)` 以确保 ID 资源被正确释放。同时，补丁将 `UBAGG_MAX_BONDING_DEV_NUM` 从 256 调整为 1024（虽然此调整属于容量扩展，但在同一补丁中提交）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c1f522bec90cc427aa807b52e26374ef64fd4060

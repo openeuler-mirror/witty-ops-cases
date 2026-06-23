@@ -1,0 +1,21 @@
+#标题
+scsi: ufs: core: 查询响应处理缺少错误返回机制
+
+#内核版本
+OLK-6.6
+
+#问题现象
+UFS 设备在处理查询响应时，如果固件返回了非预期的响应码，内核未将其识别为错误并进行处理，而是继续执行后续流程。这可能导致查询命令的错误状态被忽略，上层调用者无法感知底层发生的故障，进而引发功能异常或逻辑错误。
+
+#主要错误日志
+[驱动打印的错误日志]
+ufshcd_dev_cmd_completion: unexpected response in Query RSP: %x
+
+#问题根因
+在 `ufshcd_dev_cmd_completion` 函数处理 `UPIU_TRANSACTION_QUERY_RSP` 分支时，代码仅判断 `response == 0` 的成功情况并拷贝数据，但缺失针对 `response != 0`（非成功响应）的异常处理分支。这导致异常响应被漏报，函数未返回错误码（err），无法将错误传递给上层调用者。
+
+#解决方案
+修改 `ufshcd_dev_cmd_completion` 函数，增加 `else` 分支处理非预期的查询响应。当 `response` 不为 0 时，将错误码 `err` 设置为 `-EINVAL`，并通过 `dev_err` 打印包含具体响应码的错误日志，确保错误能够被正确捕获和记录。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae82bd55b401101d89e71f12c30964d520326fb6

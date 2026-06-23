@@ -1,0 +1,25 @@
+#标题
+sctp: avoid NULL dereference when chunk data buffer is missing
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SCTP 协议的 GSO（Generic Segmentation Offload）数据包时，内核可能触发空指针解引用错误。具体表现为在 `sctp_inq_pop` 函数处理流程中，代码逻辑错误地对预期为空的 `chunk->skb` 指针进行了解引用访问，可能导致内核 panic 或 Oops。
+
+#主要错误日志
+推断日志（基于代码中的 WARN_ON 触发）：
+WARNING: CPU: ... PID: ... at net/sctp/inqueue.c:... sctp_inq_pop+0x.../0x...
+
+#问题根因
+在函数 `sctp_inq_pop` 中，原代码逻辑试图在 `chunk->skb` 指针为 NULL 的情况下对其进行解引用。
+具体而言，当 `chunk->head_skb` 非空时，代码意图进入特定分支处理 "cover letter" 数据包。原代码在执行 `if (WARN_ON(!chunk->skb))` 检查时，若条件成立（即 `chunk->skb` 为 NULL），随后的 `dev_net(chunk->skb->dev)` 操作会直接解引用该空指针，导致内核崩溃。根本原因是检查逻辑与后续处理逻辑存在矛盾，且对 `frag_list` 的检查缺失。
+
+#解决方案
+修改 `net/sctp/inqueue.c` 中的逻辑，将空指针检查提前并修正：
+1. 移除会导致空指针解引用的 `if (WARN_ON(!chunk->skb))` 检查。
+2. 在赋值替换 `chunk->skb` 之前，增加对 `skb_shinfo(chunk->skb)->frag_list` 的有效性检查。
+3. 如果 `frag_list` 为空，则通过 `WARN_ON` 记录警告，增加丢包统计（SCTP_MIB_IN_PKT_DISCARDS），释放 chunk 并跳过后续处理，从而避免解引用空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8aabc3178166bcb76605ed587923c349a89ad6f8

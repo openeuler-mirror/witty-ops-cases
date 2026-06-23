@@ -1,0 +1,22 @@
+#标题
+net_sched: sch_hhf 存在数据竞争导致统计数据读取不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读取 HHF（Heavy-Hitter Filter）队列规则的统计信息时（例如通过 `tc -s qdisc show` 命令），由于读取操作（`hhf_dump_stats`）与数据包处理路径中的写入操作未做同步保护，可能触发内核数据竞争告警（KCSAN 报警），或者导致用户态获取到的统计计数器（如丢包数、流数量）数值瞬间不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+根据提交信息，问题根因在于 `hhf_dump_stats()` 函数在读取统计字段时仅持有 RTNL 锁，而被读取的字段（如 `drop_overlimit`、`hh_flows_current_cnt` 等）在 Qdisc 快速路径中会被频繁修改。由于读操作没有使用 `READ_ONCE()`，写操作没有使用 `WRITE_ONCE()`，导致编译器可能进行优化拆分访问，从而在并发场景下产生数据竞争。
+
+#解决方案
+参照上游补丁，在 `net/sched/sch_hhf.c` 中对相关统计字段添加数据竞争注解：
+1. 在 `hhf_dump_stats()` 函数中，使用 `READ_ONCE()` 读取 `drop_overlimit`、`hh_flows_overlimit`、`hh_flows_total_cnt` 和 `hh_flows_current_cnt` 字段。
+2. 在数据包处理路径的相关函数中，使用 `WRITE_ONCE()` 对上述统计字段进行更新操作，确保读写访问的原子性，消除潜在的数据竞争风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/71c4b37c96cfa25b9560299826d3946ee6f678fe

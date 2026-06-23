@@ -1,0 +1,20 @@
+#标题
+xfrm隧道模式GSO分段查找内部模式错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行IPsec隧道模式的GSO（Generic Segmentation Offload）分段时，内核选择了错误的内部模式（inner mode）并获取了错误的地址簇（address family），导致网络传输功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在commit 61fafbee6cfe中，代码尝试通过读取 `XFRM_MODE_SKB_CB(skb)->protocol` 来确定GSO分段的内部协议，这是不正确的。该字段保存的是内部L4协议（如TCP/UDP），而非所需的隧道协议。此外，该内存位置由 `XFRM_SKB_CB(skb)` 共享，可能被 `xfrm_replay_overflow()` 覆盖，容易导致数据损坏。这种错误的数据读取导致内核无法正确识别内部包的地址簇。
+
+#解决方案
+修正内部协议的获取方式，不再读取不可靠的 `XFRM_MODE_SKB_CB(skb)->protocol`，而是从 `xfrm_offload(skb)->proto` 获取正确的值。该字段由 `esp[4|6]_gso_encap()` 根据外部隧道头的协议域设置，并由 `xfrm[4|6]_tunnel_encap_add()` 初始化为 `IPPROTO_IPIP` 或 `IPPROTO_IPV6`，能够正确反映内部包的地址簇。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9492910e0db1756a5090341b0f58712b3d0c354d

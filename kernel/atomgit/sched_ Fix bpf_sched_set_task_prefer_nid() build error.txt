@@ -1,0 +1,20 @@
+#标题
+sched: Fix bpf_sched_set_task_prefer_nid() build error
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 BPF 调度功能但未配置 CONFIG_QOS_SCHED_DYNAMIC_AFFINITY 选项的编译环境下，编译内核时出现构建错误，提示函数 `bpf_sched_set_task_prefer_nid` 定义未找到或符号未定义，导致内核编译失败。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `bpf_sched_set_task_prefer_nid` 及其相关底层调用（如 `set_prefer_cpus_ptr`）的实现逻辑依赖于 CONFIG_QOS_SCHED_DYNAMIC_AFFINITY 配置项。但在原代码中，该函数的定义与 BTF（BPF Type Format）ID 注册列表未受该配置项宏保护。当内核编译时未开启该配置项，函数定义不会被编译进去，但 BTF ID 列表中仍保留了对该函数的引用，从而导致构建失败。
+
+#解决方案
+在 `kernel/sched/bpf_sched.c` 中使用 `#ifdef CONFIG_QOS_SCHED_DYNAMIC_AFFINITY` 预处理宏，将 `bpf_sched_set_task_prefer_nid` 函数的定义代码块以及 `BTF_KFUNCS_START` 列表中对应的 `BTF_ID_FLAGS(func, bpf_sched_set_task_prefer_nid)` 注册项包裹起来。确保只有在配置项开启时，该函数及其符号才被编译和注册，从而修复编译错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c5b9256d36588fd25bfb77d1a8c30c8fdf608d0d

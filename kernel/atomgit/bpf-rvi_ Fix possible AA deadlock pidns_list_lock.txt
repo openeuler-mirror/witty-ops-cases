@@ -1,0 +1,24 @@
+#标题
+bpf-rvi: Fix possible AA deadlock pidns_list_lock
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在操作 PID namespace 的 loadavg 列表时可能触发 AA（Double Lock）死锁，导致系统挂起或相关进程无法调度。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中 `pidns_list_lock` 自旋锁在部分路径（如 `pidns_calc_avenrun` 等由工作队列触发的函数）中是在禁用软中断的上下文下持有的（隐式或显式），而在 `create_pid_namespace`、`destroy_pid_namespace` 和 `pidns_list_reset` 等函数中，使用普通的 `spin_lock` 和 `spin_unlock` 进行加锁。
+当软中断上下文持有该锁，且进程上下文尝试获取该锁时，会因为锁类型不匹配或锁竞争导致 AB-BA 或 AA 类型的死锁。具体为锁验证系统检测到上下文不匹配或实际发生死锁阻塞。
+
+#解决方案
+将 `kernel/pid_namespace.c` 中所有涉及 `pidns_list_lock` 的锁操作从普通自旋锁修改为禁用软中断的自旋锁，即：
+- 将 `spin_lock(&pidns_list_lock)` 替换为 `spin_lock_bh(&pidns_list_lock)`
+- 将 `spin_unlock(&pidns_list_lock)` 替换为 `spin_unlock_bh(&pidns_list_lock)`
+涉及的函数包括 `create_pid_namespace`、`destroy_pid_namespace`、`pidns_list_reset` 和 `pidns_calc_avenrun`，以确保在进程上下文中禁用软中断，避免与软中断上下文发生锁竞争死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fea8b7bfa337592f9d475669da5d402849dd6367

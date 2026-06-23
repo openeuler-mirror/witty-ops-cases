@@ -1,0 +1,21 @@
+#标题
+dmaengine: qcom: bam_dma: 修复设备树属性读取失败后的错误处理缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 bam_dma 驱动加载过程中，若设备树（DT）节点缺少 `num-channels` 或 `qcom,num-ees` 属性，驱动虽会打印错误日志，但并未终止探测流程。这导致驱动继续使用未初始化或默认错误的数值进行后续配置，可能引发后续内存访问异常或功能失效，且用户难以通过加载结果直接定位是设备树配置缺失的问题。
+
+#主要错误日志
+- num-channels unspecified in dt
+- num-ees unspecified in dt
+
+#问题根因
+在 `bam_dma_probe` 函数中，调用 `of_property_read_u32` 读取设备树属性 `num-channels` 和 `qcom,num-ees` 失败时，代码逻辑虽然打印了错误信息（dev_err），但紧接着并未执行 `return ret` 操作。这导致程序在属性读取失败的情况下继续向下执行，忽略了错误状态，使得 bdev 结构体中的相关成员处于无效状态。
+
+#解决方案
+修改 `bam_dma_probe` 函数的错误处理逻辑，在 `of_property_read_u32` 读取 `num-channels` 和 `qcom,num-ees` 属性失败并打印错误日志后，立即添加 `return ret` 语句，确保在设备树属性缺失或错误时，驱动能正确终止探测过程并返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a074cb18cca75b2926ddb7d7fef93261456f296d

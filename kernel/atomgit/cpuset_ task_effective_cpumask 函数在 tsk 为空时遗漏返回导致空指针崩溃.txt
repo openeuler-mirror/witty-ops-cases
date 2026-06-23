@@ -1,0 +1,20 @@
+#标题
+cpuset: task_effective_cpumask 函数在 tsk 为空时遗漏返回导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用 `task_effective_cpumask` 函数时，若传入的任务指针 `tsk` 为 NULL，内核未在该函数内正确返回，而是继续执行后续逻辑尝试访问空指针，导致发生空指针引用（null pointer dereference），引发内核 panic 或 oops。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `task_effective_cpumask` 中，代码逻辑虽然包含对 `!tsk` 的检查并执行了 `cpumask_clear(pmask)`，但遗漏了 `return` 语句。这导致在清空掩码后，程序继续向下执行进入 `rcu_read_lock()` 并调用 `task_cs(tsk)`，由于 `tsk` 此时为 NULL，从而触发了空指针引用错误。
+
+#解决方案
+在 `task_effective_cpumask` 函数中，针对 `!tsk` 的判断分支，在执行完 `cpumask_clear(pmask)` 后立即添加 `return` 语句，确保函数在输入参数为空时直接退出，避免后续代码访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f73fb489bb3d40bb921124da6366a7ff15e71cf1

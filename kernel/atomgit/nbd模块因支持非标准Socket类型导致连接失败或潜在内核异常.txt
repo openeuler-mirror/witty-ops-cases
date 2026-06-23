@@ -1,0 +1,20 @@
+#标题
+nbd模块因支持非标准Socket类型导致连接失败或潜在内核异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 Network Block Device (nbd) 设备时，若使用非 TCP 或非 UNIX 流式类型的 Socket 文件描述符进行连接，内核将拒绝该连接请求。用户会观测到 nbd 设备连接设置失败，内核日志中打印 "Unsupported socket" 错误信息，相关系统调用返回无效参数错误（EINVAL）。
+
+#主要错误日志
+dev_err(disk_to_dev(nbd->disk), "Unsupported socket: should be TCP or UNIX.\n");
+
+#问题根因
+nbd（网络块设备）模块在处理传入的 Socket 连接时，原有代码缺乏对 Socket 协议类型的有效校验。这允许传入非 TCP 或非 UNIX 流式的 Socket（如 UDP 或其他不支持预期传输语义的类型），可能导致后续块设备读写操作出现不可预期的行为或稳定性问题。
+
+#解决方案
+在 `nbd_get_socket` 函数中增加 Socket 类型校验逻辑。通过调用 `sk_is_tcp` 和 `sk_is_stream_unix` 接口检查传入的 Socket 是否为标准的 TCP Socket 或 UNIX 流式 Socket。若校验不通过，则打印错误日志 "Unsupported socket: should be TCP or UNIX."，释放 Socket 引用并返回 EINVAL 错误，从而阻止不支持的连接类型进入 nbd 处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5fbff312766cccbe69b33ef625e720c49e8cc866

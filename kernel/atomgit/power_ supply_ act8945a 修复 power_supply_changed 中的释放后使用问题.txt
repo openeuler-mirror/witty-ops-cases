@@ -1,0 +1,20 @@
+#标题
+power: supply: act8945a 修复 power_supply_changed 中的释放后使用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动移除（remove）过程中，系统可能发生崩溃或内存被静默破坏；在驱动探测（probe）过程中，可能出现使用未初始化句柄的风险。
+
+#主要错误日志
+未知
+
+#问题根因
+使用 `devm_` 变体申请 IRQ 的操作位于 `devm_` 分配/注册 `power_supply` 句柄之前。由于 `devm_` 机制按反向分配顺序释放资源，导致 `power_supply` 句柄在 IRQ 处理程序注销之前就被释放。这引发了竞态条件：在移除时，中断可能在句柄释放后、IRQ 注销前触发，导致 IRQ 处理程序调用 `power_supply_changed()` 时访问已释放的句柄。类似地，在探测期间，中断可能在注册句柄之前触发，导致使用未初始化的句柄。
+
+#解决方案
+调整代码执行顺序，确保在注册 `power_supply` 句柄之后再请求 IRQ，从而保证资源释放顺序正确并避免竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa53682f2e3cffb11a409fa743b69ebe58ed9650

@@ -1,0 +1,30 @@
+#标题
+LoongArch KVM send_ipi_data 函数栈溢出导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构下启用 KVM 虚拟化且开启 `CONFIG_STACKPROTECTOR` 配置时，触发 IPI（处理器间中断）相关的数据读写操作后，内核检测到栈被破坏并引发 Panic，导致宿主机崩溃。
+
+#主要错误日志
+Kernel panic - not syncing: stack-protector: Kernel stack is corrupted in: send_ipi_data+0x194/0x1a0 [kvm]
+CPU: 11 UID: 107 PID: 2692 Comm: CPU 0/KVM Not tainted 6.17.0-rc1+ #102
+Call Trace:
+[<9000000003af3734>] show_stack+0x5c/0x180
+[<9000000003aed168>] dump_stack_lvl+0x6c/0x9c
+[<9000000003ad0ab0>] vpanic+0x108/0x2c4
+[<9000000003ad0ca8>] panic+0x3c/0x40
+[<9000000004eb0a1c>] __stack_chk_fail+0x14/0x18
+[<ffff8000023473f8>] send_ipi_data+0x190/0x1a0 [kvm]
+
+#问题根因
+在 `send_ipi_data()` 函数中，局部变量 `val` 被定义为 `uint32_t` 类型，仅分配了 4 字节的栈空间。然而，调用的 `kvm_io_bus_read()` 函数底层实现（如 `loongarch_ipi_readl()` 和 `kvm_eiointc_read()`）会忽略传入的长度参数，强制进行 8 字节的符号扩展写入。这导致写入 `val` 缓冲区时发生了 4 字节的栈溢出，覆盖了栈上的保护金丝雀，从而触发了 stack-protector 机制导致内核 Panic。
+
+#解决方案
+修复栈溢出问题，具体措施如下：
+1. 将 `send_ipi_data()` 函数中的局部变量 `val` 的类型从 `uint32_t` 修改为 `uint64_t`，确保缓冲区大小至少为 8 字节以容纳底层模拟函数的写入。
+2. 相应地将 `kvm_io_bus_read()` 和 `kvm_io_bus_write()` 调用时的长度参数显式指定为 4，明确仅读写低 32 位数据，防止高 32 位垃圾数据干扰业务逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e00e77085d0bd13cfa1bb0810acf77f26213d832

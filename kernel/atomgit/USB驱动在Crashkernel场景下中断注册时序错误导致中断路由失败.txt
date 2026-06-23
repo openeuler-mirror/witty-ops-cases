@@ -1,0 +1,23 @@
+#标题
+USB驱动在Crashkernel场景下中断注册时序错误导致中断路由失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核触发 panic 并进入 crash kernel 场景下，DWC USB 驱动加载过程中，在中断处理程序注册尚未完成时收到 GINTSTS_SOF 中断，触发 GIC 框架内的 misroute_irq 流程。导致中断被错误的中断处理程序处理，系统调用栈显示出现 misrouted_irq 相关的错误路径。
+
+#主要错误日志
+[    5.882335][    T1] dwc2 JMIC0010:01: before devm_request_irq  irq: [71], gintmsk[0xf300080e], gintsts[0x04200009]
+[    5.924387][    C0]  pcie_xxx_handler+0x3c/0x1d8
+[    5.944365][    C0]  misrouted_irq+0x134/0x140
+[    5.953311][    C0]  note_interrupt+0x1d0/0x30c
+
+#问题根因
+进入 crash kernel 前，DWC USB 控制器未执行重置中断掩码位等操作。进入 crash kernel 后，在 DWC USB 驱动加载、中断处理程序注册完成之前，控制器已使能的中断掩码允许了 GINTSTS_SOF 中断上报。此时 CPU 收到中断但无法找到正确的处理程序，导致中断路由错误。根本原因是在中断注册完成前，中断掩码位处于未可控的使能状态。
+
+#解决方案
+调整 `dwc2_driver_probe` 函数中中断注册（`devm_request_irq`）的时机，将其移至 `dwc2_hsotg_init` 函数调用之后。确保在注册中断处理程序之前，控制器已通过初始化函数将中断掩码位置于可控状态，避免在中断处理程序就绪前响应无效中断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d2d4ac7d0d930548131be412145954a3aa2e3eb1

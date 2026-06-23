@@ -1,0 +1,21 @@
+#标题
+RDMA/irdma: 注册大容量内存区域时因 SD 索引计算错误导致命令执行失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在注册海量内存区域时，RDMA 驱动程序命令队列处理器（CQP）命令执行失败，导致内存注册流程无法正常完成。
+
+#主要错误日志
+[  447.227494] (NULL ib_device): cqp opcode = 0x1f maj_err_code = 0xffff min_err_code = 0x800c
+[  447.227505] (NULL ib_device): [Update PE SDs Cmd Error][op_code=21] status=-5 waiting=1 completion_err=1 maj=0xffff min=0x800c
+
+#问题根因
+在 PBLE 资源管理模块的 `get_sd_pd_idx` 函数中，计算 `sd_idx` 时对 `pble_rsrc->next_fpm_addr` 进行了 `u32` 强制类型转换。在处理大容量内存区域时，`next_fpm_addr` 的值可能超过 `u32` 的最大值，强制转换导致数值被意外截断，从而计算出错误的 SD 索引，引发硬件命令错误。
+
+#解决方案
+移除 `drivers/infiniband/hw/irdma/pble.c` 文件中 `get_sd_pd_idx` 函数里计算 `sd_idx` 时的 `(u32)` 强制类型转换，保留 `next_fpm_addr` 的原始类型（64位）进行除法运算，以防止地址高位被截断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c24c1059f6efb2fa50f2accb4744b239a3fc260

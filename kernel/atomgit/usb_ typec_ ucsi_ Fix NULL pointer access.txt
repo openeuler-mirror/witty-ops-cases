@@ -1,0 +1,23 @@
+#标题
+usb: typec: ucsi: Fix NULL pointer access
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 UCSI 设备或初始化失败时，内核发生空指针访问异常。这是由于资源释放顺序不当，workqueue 在销毁时，关联的 work 仍可能访问已释放的资源。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ucsi_unregister` 和 `ucsi_init` 的错误处理路径中，代码先销毁了 workqueue（`destroy_workqueue`），随后才调用 `ucsi_unregister_partner` 等函数清理相关资源。这导致如果 workqueue 中的任务仍在运行或被调度，其访问相关资源时会出现空指针访问。
+
+#解决方案
+调整资源释放顺序，确保在销毁 workqueue 之前，先完成所有相关资源的清理工作。
+具体修改如下：
+1. 在 `ucsi_init` 的错误处理路径 `err_unregister` 中，将 `destroy_workqueue(con->wq)` 移至 `ucsi_unregister_partner` 调用之前，确保 workqueue 先被销毁，再清理 partner 等资源。
+2. 在 `ucsi_unregister` 函数中，将 `ucsi_unregister_partner`、`ucsi_unregister_altmodes` 和 `ucsi_unregister_port_psy` 的调用移至 `destroy_workqueue` 之后，确保资源在使用中的 workqueue 销毁前保持有效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1bd521e4bd8312e76c00b27da0fbd49baf3cf19a

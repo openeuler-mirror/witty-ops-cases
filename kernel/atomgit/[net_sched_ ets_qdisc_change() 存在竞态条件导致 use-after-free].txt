@@ -1,0 +1,20 @@
+#标题
+[net_sched: ets_qdisc_change() 存在竞态条件导致 use-after-free]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[在修改 ETS (Enhanced Transmission Selection) qdisc 配置时，若并发进行队列调度操作，可能触发内核 panic 或内存访问错误（use-after-free）。具体表现为系统崩溃或相关的 KASAN/SLUB 错误报告。]
+
+#主要错误日志
+[未知]
+
+#问题根因
+[在 ets_qdisc_change() 函数中，当减少 bands 数量时，代码先调用 list_del_init() 将队列从活动列表移除，随后调用 flush_backlog 清理积压数据。这之间存在竞态窗口：若另一 CPU 上的队列调度在 list_del_init 之后、flush_backlog 之前运行，可能会重新发现该队列并将其加入活动列表，导致后续对已销毁队列的访问，引发 use-after-free。]
+
+#解决方案
+[将 qdisc_tree_flush_backlog() 替换为 qdisc_purge_queue()。qdisc_purge_queue() 内部会在清理积压数据前通过 qdisc_deactivate() 正确去活队列，从而消除了竞态窗口，确保在变更配置期间队列状态的一致性。]
+
+#来源
+[https://atomgit.com/openeuler/kernel/commit/6d5c0a6435201bb5bb244727b271431cab5a8265]

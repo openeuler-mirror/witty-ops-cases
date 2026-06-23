@@ -1,0 +1,34 @@
+#标题
+VMCI: vmci_host_setup_notify与vmci_ctx_unset_notify竞争导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 VMCI 相关测试时，触发内核 WARNING。具体表现为在 `try_grab_folio` 函数中产生警告日志，调用栈显示经由 `vmci_host_unlocked_ioctl` -> `get_user_pages_fast` 路径触发。
+
+#主要错误日志
+```
+------------[ cut here ]------------
+WARNING: CPU: 0 PID: 1678 at mm/gup.c:147 try_grab_folio+0x106/0x130
+...
+RIP: 0010:try_grab_folio+0x106/0x130
+Call Trace:
+ <TASK>
+ follow_huge_pmd+0x240/0x8e0
+ follow_pmd_mask.constprop.0.isra.0+0x40b/0x5c0
+ ...
+ get_user_pages_fast+0x5f/0x80
+ vmci_host_unlockled_ioctl+0x21c/0xf80
+---[ end trace 0000000000000000 ]---
+```
+
+#问题根因
+`vmci_host_setup_notify` 函数与 `vmci_ctx_unset_notify` 函数之间存在竞争条件。
+根因在于 `get_user_pages_fast` 将获取的页指针直接写入 `context->notify_page`。在 `get_user_pages_fast` 执行过程中（如 `gup_huge_pmd` 更新了 `notify_page`），另一个 CPU 可能并发执行 `vmci_ctx_unset_notify`，读取到该半初始化状态的 `notify_page` 并调用 `put_page` 释放页面。随后原 CPU 继续执行 `__gup_longterm_locked` -> `try_grab_folio` 时，操作已被释放的页面，从而触发 WARNING。
+
+#解决方案
+修改 `vmci_host_setup_notify` 函数实现，引入局部变量 `page` 接收 `get_user_pages_fast` 的返回结果。确保 `get_user_pages_fast` 完全执行成功后，再将页指针赋值给 `context->notify_page`，从而避免并发场景下的状态不一致问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bd6ef4453d6343319a5f597c1b680fa13c96d884

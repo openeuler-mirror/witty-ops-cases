@@ -1,0 +1,20 @@
+#标题
+powerpc/512x: 修复 dma_unmap_single 作用于未初始化指针的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PowerPC 512x 平台上，当 DMA 设备配置步骤（`dma_dev->device_config()`）执行失败时，驱动程序错误地跳转到错误处理标签 `err_dma_prep`。由于此时 Scatter/Gather 表项（`sg`）尚未通过 `sg_init_table` 进行初始化，导致后续错误处理流程中调用 `dma_unmap_single()` 时传入了一个未初始化的指针（`sg_dma_address(&sg)`），可能导致内核崩溃或不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `mpc512x_lpbfifo_kick` 中，代码逻辑处理 `device_config` 失败的情况时存在缺陷。当 `device_config` 失败时，代码跳转至 `err_dma_prep` 标签执行资源清理。然而，`sg_init_table(&sg, 1)` 的初始化操作位于该跳转判断之后，导致在跳转到错误处理流程时，`sg` 结构体（特别是 `sg_dma_address`）处于未初始化状态，进而引发了 `dma_unmap_single` 操作非法指针的问题。
+
+#解决方案
+修改 `dma_dev->device_config()` 失败时的处理逻辑，不再跳转至 `err_dma_prep` 标签，而是直接返回错误码 `-EINVAL`。这确保了在设备配置失败时，程序直接退出函数，避免执行后续依赖 `sg` 初始化的错误处理代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0a7e913da82825790f5534493d2f636575c010e3

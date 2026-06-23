@@ -1,0 +1,22 @@
+#标题
+mctp 初始化时未处理 rtnl_register_module 失败导致模块状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+MCTP 模块初始化过程中，若 `rtnl_register_module()` 函数调用失败（例如在系统内存不足 OOM 场景下），模块未检测到该错误并继续执行初始化流程。这导致模块处于部分初始化的状态，rtnetlink 功能不全，且 syzkaller 等测试工具会报告虚假错误。
+
+#主要错误日志
+未知
+
+#问题根因
+自 MCTP 功能引入以来，代码中一直忽略 `rtnl_register_module()` 的返回值。由于该函数可能静默失败，导致内核无法将模块视为一个在 rtnetlink 功能上“全有或全无”（all-or-nothing）的完整实体。在 OOM 或其他异常情况下，这种处理方式会导致模块加载状态不一致。
+
+#解决方案
+1. 将 `mctp_device_init`、`mctp_neigh_init` 和 `mctp_routes_init` 中的 rtnetlink 注册逻辑从多次单独调用 `rtnl_register_module()` 改为调用封装好的 `rtnl_register_many()` 函数。
+2. 检查 `rtnl_register_many()` 的返回值，若失败则进行回滚操作（注销已注册的 notifier、pernet 子系统等）并向上层返回错误码，确保模块初始化的原子性。
+3. 在模块退出函数中，相应地使用 `rtnl_unregister_many()` 进行资源释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a8fbfd652394b5f2148dcc74897164a804e86482

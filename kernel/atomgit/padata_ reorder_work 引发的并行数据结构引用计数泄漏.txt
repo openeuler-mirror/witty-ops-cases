@@ -1,0 +1,33 @@
+#标题
+padata: reorder_work 引发的并行数据结构引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中出现内存泄漏，kmemleak 检测到未释放的内核对象。该问题发生在 `cryptomgr_probe` 内核线程执行路径中，具体表现为 `padata_alloc_pd` 函数分配的内存对象（size 192）引用计数未正确减少，导致内存无法回收。
+
+#主要错误日志
+Unreferenced object 0xffff9d9f421e3d80 (size 192):
+  comm "cryptomgr_probe", pid 157, jiffies 4294694003
+  hex dump (first 32 bytes):
+    80 8b cf 41 9f 9d ff ff b8 97 e0 89 ff ff ff ff  ...A............
+    d0 97 e0 89 ff ff ff ff 19 00 00 00 1f 88 23 00  ..............#.
+  backtrace (crc 838fb36):
+    __kmalloc_cache_noprof+0x284/0x320
+    padata_alloc_pd+0x20/0x1e0
+    padata_alloc_shell+0x3b/0xa0
+    0xffffffffc040a54d
+    cryptomgr_probe+0x43/0xc0
+    kthread+0xf6/0x1f0
+    ret_from_fork+0x2f/0x50
+    ret_from_fork_asm+0x1a/0x30
+
+#问题根因
+近期修复 UAF（Use-After-Free）问题的补丁引入了引用计数泄漏缺陷。在 `padata_reorder` 函数中，代码无条件地增加了 `parallel_data` 结构的引用计数，但没有检查 `queue_work()` 的返回值。如果工作项（work item）已经被排队（处于 pending 状态），`queue_work()` 会返回 false 且不会执行该工作项，导致之前增加的引用计数永远不会被减少，从而造成内存泄漏。
+
+#解决方案
+修改 `padata_reorder` 函数中的工作队列处理逻辑，检查 `queue_work()` 的返回值。如果 `queue_work()` 返回失败（即工作项已在队列中），立即调用 `padata_put_pd(pd)` 减少引用计数，抵消之前的增加操作，确保引用计数的平衡。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9fc69b7db78791e67366ff0201d55e4d8b096b75

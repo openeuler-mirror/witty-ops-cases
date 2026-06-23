@@ -1,0 +1,20 @@
+#标题
+sched_ext: 延迟回调标志位检查错误导致回调调度逻辑异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sched_ext 调度器类中，当尝试调度延迟的 balance 回调时，由于标志位检查错误，系统无法正确识别当前是否已存在待处理的 `queue_balance_callback()` 请求。这会导致 `schedule_deferred()` 函数在应当跳过时未跳过，或者在应当执行时错误跳过，破坏了 `.balance()` 结束时的回调调度逻辑，可能导致调度状态不一致或回调处理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `schedule_deferred()` 函数中，检查“是否已存在延迟操作”的逻辑使用了错误的标志位。代码原本检查的是 `SCX_RQ_BAL_PENDING`，但根据逻辑应当检查 `SCX_RQ_BAL_CB_PENDING`。这导致判断条件与实际意图不符，无法正确探测 `queue_balance_callback()` 是否已被挂起。
+
+#解决方案
+修改 `kernel/sched/ext.c` 文件中 `schedule_deferred()` 函数内的标志位判断逻辑，将 `rq->scx.flags & SCX_RQ_BAL_PENDING` 修正为 `rq->scx.flags & SCX_RQ_BAL_CB_PENDING`，确保正确判断是否存在待处理的 balance 回调请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/094c7fe681981d60959e0cd409e3e4842359ad89

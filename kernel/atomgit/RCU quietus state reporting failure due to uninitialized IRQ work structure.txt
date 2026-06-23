@@ -1,0 +1,25 @@
+#标题
+RCU quietus state reporting failure due to uninitialized IRQ work structure
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在RCU读侧临界区嵌套或中断处理场景下，RCU无法正确报告延迟的静默状态。具体表现为：当IRQ work handler在一个新的RCU读侧临界区中间运行时，由于状态机管理缺陷（状态未正确重置），导致后续的延迟静默状态报告机制失效，系统无法及时感知任务已退出临界区，可能导致RCU宽限期延长或阻塞。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **初始化缺失**：`defer_qs_iw`（irq_work 结构体）仅在需要时才进行初始化，而非在 CPU 准备阶段进行。这可能导致结构体状态不一致。
+2. **状态管理逻辑漏洞**：`defer_qs_iw_pending` 被定义为 `bool` 类型，且在 `rcu_preempt_deferred_qs_handler` 处理函数中，仅在处理成功时清除状态。如果 IRQ work handler 恰好在新的 RCU 读侧临界区执行（`rcu_preempt_depth() > 0`），它无法报告静默状态，但也没有重置状态标志。这导致后续的 `rcu_read_unlock` 认为工作已排队（状态仍为 true/pending），从而不再重新触发 IRQ work，造成静默状态报告永久丢失。
+
+#解决方案
+1. **类型重构**：将 `defer_qs_iw_pending` 从 `bool` 类型改为整型枚举状态（`DEFER_QS_IDLE` 和 `DEFER_QS_PENDING`），以更清晰地表达状态机。
+2. **完善状态转换逻辑**：
+   - 在 `rcu_preempt_deferred_qs_irqrestore` 入口处，如果检测到状态为 `DEFER_QS_PENDING`，立即将其重置为 `DEFER_QS_IDLE`，确保状态及时清理。
+   - 在 `rcu_preempt_deferred_qs_handler` 中，若检测到当前处于 RCU 读侧临界区（`rcu_preempt_depth() > 0`），将状态重置为 `DEFER_QS_IDLE`，允许后续解锁时重新排队 IRQ work。
+3. **提前初始化**：新增 `rcu_preempt_deferred_qs_init` 函数，在 `rcutree_prepare_cpu` 阶段对 `defer_qs_iw` 进行硬中断初始化（`IRQ_WORK_INIT_HARD`），确保在 CPU 上线时该结构体已准备好。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5631b224275bb1e2bd68429c2c691abacd3ab266

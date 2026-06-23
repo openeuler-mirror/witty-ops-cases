@@ -1,0 +1,23 @@
+#标题
+md: RCU保护失效导致的md_thread释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在 MD (Multiple Device) 模块运行过程中，尝试使用 RCU 机制保护 `md_thread` 指针时，因在获取 RCU 指针值之后才进行 `rcu_read_lock()`，导致 RCU 保护失效。这会引发潜在的 Use-After-Free（释放后使用）故障，可能在访问已释放的线程结构时触发内核崩溃或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `md_wakeup_thread` 函数调用链中，代码尝试使用 RCU 保护 `thread` 指针，但直接将指针值传递给了 `md_wakeup_thread()`。这意味着在 `rcu_read_lock()` 执行之前，RCU 指针已经被读取并解引用，导致临界区保护失效，无法阻止并发情况下的对象释放，从而可能导致 Use-After-Free。
+
+#解决方案
+修改 RCU 保护实现方式：
+1. 将 `md_wakeup_thread` 重命名为 `__md_wakeup_thread`，并移除其内部的 RCU 锁操作。
+2. 定义 `md_wakeup_thread` 为宏，在宏内部先调用 `rcu_read_lock()`，然后调用 `__md_wakeup_thread`，最后调用 `rcu_read_unlock()`，确保 RCU 锁在指针解引用前生效。
+3. 针对 `md_wakeup_thread_directly` 函数，将参数类型从 `struct md_thread __rcu *thread` 修改为 `struct md_thread __rcu **thread`，并在函数内部通过 `rcu_dereference(*thread)` 获取指针，确保在 RCU 读锁保护下正确获取指针值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b4ff557c6c0a1967d605e740d1e09ecde4293bc8

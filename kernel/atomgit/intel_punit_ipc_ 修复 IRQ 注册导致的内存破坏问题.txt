@@ -1,0 +1,22 @@
+#标题
+intel_punit_ipc: 修复 IRQ 注册导致的内存破坏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel P-Unit IPC 驱动加载并注册中断处理程序后，当触发中断处理函数 `intel_punit_ioc` 执行 `complete(&ipcdev->cmd_complete)` 时，系统会发生内存破坏。该问题可能导致内核数据结构损坏、驱动功能异常或不可预测的系统崩溃。
+
+#主要错误日志
+[推断] 当内存破坏导致严重后果时，可能伴随通用内核错误日志，如：
+Unable to handle kernel paging request at ...
+或是无关内存区域被覆写后的异常行为日志。
+
+#问题根因
+在 `intel_punit_ipc_probe` 函数中调用 `devm_request_irq` 注册中断时，错误地传递了指针的地址 `&punit_ipcdev`（即二级指针），而实际意图是传递指针本身 `punit_ipcdev`。这导致在中断处理函数 `intel_punit_ioc` 中，参数 `ipcdev` 接收到的是错误的地址，进而导致 `complete(&ipcdev->cmd_complete)` 操作向错误的内存地址写入数据，引发内存破坏。
+
+#解决方案
+修正 `devm_request_irq` 调用时的参数传递错误，将 `&punit_ipcdev` 修改为 `punit_ipcdev`，确保中断处理函数接收到正确的设备数据结构指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9ee0d95abfe06eacccef86f9eae72ceedf826d03

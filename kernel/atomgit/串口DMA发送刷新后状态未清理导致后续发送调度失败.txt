@@ -1,0 +1,20 @@
+#标题
+串口DMA发送刷新后状态未清理导致后续发送调度失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用串口发送缓冲区刷新接口（如 `uart_flush_buffer`）时，若使用 DMA 方式进行数据发送，DMA 通道被终止后，其回调函数可能因为持有自旋锁等原因无法同步执行。这导致 `tx_running` 标志位未被清零，系统误认为 DMA 传输仍在进行，从而阻止后续新的 DMA 发送事务调度，导致串口发送功能失效或阻塞。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `serial8250_tx_dma_flush` 函数中，代码使用 `dmaengine_terminate_async` 异步终止 DMA 传输。由于调用上下文（`uart_flush_buffer`）持有 UART 端口的自旋锁（spinlock），因此无法使用同步终止接口（`dmaengine_terminate_sync`）。然而，异步终止意味着 DMA 回调函数可能不会立即执行或根本不执行。原代码逻辑仅清除了 `tx_size`，遗漏了对 `tx_running` 状态位的清理。这导致后续发送逻辑检测到 `tx_running` 仍为 1，误判 DMA 繁忙而拒绝调度新的传输任务。
+
+#解决方案
+在 `serial8250_tx_dma_flush` 函数中，调用 `dmaengine_terminate_async` 之后，手动将 `dma->tx_running` 标志位清零。此举确保了无论 DMA 回调是否执行，传输状态都能被正确重置，从而允许后续新的 DMA 事务正常调度。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d48da4033bdf02aed62afb4e9f41bf379afe83e5

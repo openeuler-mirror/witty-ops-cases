@@ -1,0 +1,23 @@
+#标题
+perf intel-pt: 修复 PEBS-via-PT data_src 解码缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 PEBS-via-PT 功能的处理器（如 Alder Lake N、Sierra Forest、Grand Ridge）上，使用 `perf record` 结合 `-F data_src` 选项分析内存负载时，输出的 `data_src` 信息全部显示为无效值（`OP No`, `LVL N/A` 等），导致无法获取真实的内存访问层级、Snoop 状态等数据。
+
+#主要错误日志
+Intel PT missing data_src info
+
+#问题根因
+之前的内核提交（Fixes: 975846eddf907297）在添加 PEBS 样本合成功能时，遗漏了对 `data_src`（数据来源）字段的解码支持。这导致 Intel PT 工具在处理 PEBS 数据时，无法正确解析硬件提供的 `mem_aux_info` 寄存器值，进而无法转换为标准的 `perf_mem_data_src` 格式。
+
+#解决方案
+在 Intel PT 解码逻辑中增加对 `data_src` 的支持：
+1. 引入针对 Gracemont (GRT) 和 Crestmont (CMT) 微架构的 `data_src` 解码表，定义了从硬件编码到标准内存层级（如 L1 hit, L2 hit, RAM hit 等）的映射关系。
+2. 实现 `intel_pt_get_data_src` 函数，根据处理器微架构类型解析 `mem_aux_info` 中的 DSE（Data Source Encoding）、TLB 和 Lock 位。
+3. 在合成 PEBS 样本时，调用新增的解码逻辑填充 `sample.data_src` 字段，确保 `perf script` 能正确显示内存访问信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a10fdf49e17e4167988d9883a83d12a0c5f3f2e6

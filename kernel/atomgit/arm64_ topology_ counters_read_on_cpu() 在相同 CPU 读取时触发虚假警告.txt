@@ -1,0 +1,24 @@
+#标题
+arm64: topology: counters_read_on_cpu() 在相同 CPU 读取时触发虚假警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 架构下，当 CPPC 频率不变性引擎（FIE）在调度器 tick 上下文中（中断禁用状态）直接读取 AMU 计数器时，内核会触发虚假警告。该警告原本旨在防止死锁，但在读取本地 CPU 计数器时属于误报，导致不必要的日志打印和可能的错误返回。
+
+#主要错误日志
+- 触发路径：sched_tick -> topology_scale_freq_tick 或 cppc_scale_freq_tick -> counters_read_on_cpu
+- 警告位置：`WARN_ON_ONCE(irqs_disabled())` 触发
+
+#问题根因
+`counters_read_on_cpu()` 函数在中断禁用（IRQs disabled）时会无条件触发警告并返回错误，旨在防止 `smp_call_function_single()` 发生死锁。然而，当读取目标是当前 CPU（same-CPU reads）时，并不需要触发 IPI（处理器间中断），因此不会发生死锁。由于提交 997c021abc6e 修改了 CPPC FIE 的处理逻辑，使其在中断禁用的 tick 处理器中直接读取计数器，导致了该虚假警告被错误触发。
+
+#解决方案
+重构 `counters_read_on_cpu()` 函数的逻辑：
+1. 移除中断禁用时无条件报警告的逻辑。
+2. 增加判断条件：如果中断被禁用，仅允许读取本地 CPU（`cpu == smp_processor_id()`）的计数器；若是读取远程 CPU 则触发警告并返回错误。
+3. 对于中断禁用状态下的本地 CPU 读取，直接调用函数 `func(val)` 执行，避免使用 `smp_call_function_single()`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8c79a951a4b0b666bf3583ae0716fb94e7b3f0f1

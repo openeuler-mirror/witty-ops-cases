@@ -1,0 +1,20 @@
+#标题
+ACPI: processor: acpi_object 初始化不完整导致 PBLK 长度校验失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动或 ACPI 处理器驱动加载过程中，内核日志显示处理器 PBLK（Processor Block）长度校验失败的错误信息，报告的长度值为无效的随机值（如 166288104）。
+
+#主要错误日志
+acpi ACPI0007:be: Invalid PBLK length [166288104]
+
+#问题根因
+在 `acpi_processor_get_info()` 函数中，局部变量 `union acpi_object object` 的初始化方式不正确。原代码 `{ 0 }` 仅将该联合体（union）的前 4 个字节初始化为 0，而未覆盖整个结构体。当内核后续访问该联合体中的 `processor` 成员并读取其内容时，未初始化的字节包含垃圾数据，导致解析出错误的 PBLK 长度。
+
+#解决方案
+修改 `drivers/acpi/acpi_processor.c` 中的初始化代码，将 `union acpi_object object = { 0 };` 修改为 `union acpi_object object = { .processor = { 0 } };`。通过指定初始化 `.processor` 成员，确保整个 16 字节的处理器结构体区域被正确初始化为全零，从而避免垃圾数据干扰后续的数值解析。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/917f5ccc8731bc400a4ac1f869de231341e1282b

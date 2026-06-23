@@ -1,0 +1,26 @@
+#标题
+slab 分配器热路径引入不必要的 should_failslab 函数调用开销
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在未开启 CONFIG_SHOULD_FAILSLAB 配置项的内核中，slab 分配热路径上存在额外的 `should_failslab()` 函数调用开销。
+2. 性能分析显示该函数调用占用可见的 CPU 时间，特别是在开启 CPU 安全漏洞缓解措施的情况下，开销更为明显。
+3. 相关的错误注入功能在当前 gcc 版本编译下实际上处于失效状态（函数被编译为 `.constprop` 克隆体并被调用，而 BPF 错误注入钩子挂载在未被调用的原始函数上），即产生了无效的性能损耗。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit 4f6923fbb352 ("mm: make should_failslab always available for fault injection") 为了支持错误注入，将 `should_failslab()` 变成了一个 `noinline` 函数，使其在 slab 分配的热路径中总是被调用。即使 `CONFIG_SHOULD_FAILSLAB` 未启用，该函数体为空，调用依然发生，引入了不必要的函数调用开销。此外，由于编译器优化生成了函数克隆体，导致原本设计的错误注入机制失效，使得该开销完全成为无用损耗。
+
+#解决方案
+主要通过还原部分代码变更，将 `should_failslab()` 函数重新置于 `CONFIG_SHOULD_FAILSLAB` 宏定义的保护之下：
+1. 修改 `include/linux/fault-inject.h` 与 `mm/failslab.c`，将 `should_failslab()` 的定义与声明移回 `#ifdef CONFIG_FAILSLAB` 代码块中。
+2. 在 `mm/slab_common.c` 中移除无条件编译的 `should_failslab()` 定义。
+3. 在 `kernel/bpf/verifier.c` 中，将 `should_failslab` 的 BTF_ID 记录也用 `CONFIG_FAILSLAB` 宏包裹，确保只在功能启用时注册。
+此举确保在未启用相关功能的内核中，分配热路径完全跳过该函数调用，从而恢复性能基准。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bff1da4f3aeb321949e41f18d70d4171f1e315bd

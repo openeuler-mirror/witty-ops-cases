@@ -1,0 +1,23 @@
+#标题
+scx_central: Fix smatch static checker null pointer warning
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 smatch 静态代码检查工具扫描 `tools/sched_ext/scx_central.bpf.c` 文件时，触发空指针解引用告警。工具报错指出在第 205 行解引用指针 `gimme` 之前，第 201 行的代码逻辑已经假设该指针可能为空，存在逻辑不一致。
+
+#主要错误日志
+./tools/sched_ext/scx_central.bpf.c:205 ____central_dispatch()
+error: we previously assumed 'gimme' could be null (see line 201)
+
+#问题根因
+在 `scx_central.bpf.c::central_dispatch()` 函数中，`ARRAY_ELEM_PTR()` 宏返回的指针 `gimme` 用于辅助 BPF 验证器进行内存访问检查。代码第 201 行使用了 `if (gimme && !*gimme)` 进行判断，这意味着如果 `gimme` 为 NULL，条件判断会直接跳过（不执行后续代码）。然而，在第 205 行代码 `*gimme = false` 中，直接对 `gimme` 进行了解引用。
+虽然实际上 `gimme` 指针在该场景下永远不会为 NULL（BPF 验证器也能识别这一点），但代码逻辑上没有在解引用前排除 NULL 的情况，导致 smatch 检查器认为存在“先假设为空，后又解引用”的潜在风险。
+
+#解决方案
+修改 `central_dispatch()` 函数中的 NULL 检查逻辑。将条件判断从 `if (gimme && !*gimme)` 修改为 `if (!gimme || !*gimme)`。
+修改后，当 `gimme` 为 NULL 时，条件成立并执行 `continue`，从而确保只有在 `gimme` 非 NULL 的情况下，后续代码（包括第 205 行的解引用操作）才会被执行。此修复消除了静态检查工具的告警，且不改变代码的实际运行行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7273fa82a5730117028b23694735bed6c43083be

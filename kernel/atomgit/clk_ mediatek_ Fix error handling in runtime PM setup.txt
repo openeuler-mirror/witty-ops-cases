@@ -1,0 +1,22 @@
+#标题
+clk: mediatek: Fix error handling in runtime PM setup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MediaTek 时钟控制器驱动探测过程中，若 `devm_pm_runtime_enable()` 因内存分配失败返回错误，代码未做处理将继续执行后续流程；若 `pm_runtime_resume_and_get()` 执行失败，驱动直接返回错误码，导致先前映射的 `shared_io` 内存区域未被解除映射，造成内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动忽略了 `devm_pm_runtime_enable()` 的返回值，且在 `pm_runtime_resume_and_get()` 失败时的退出路径上，未调用 `iounmap` 来释放已映射的 IO 内存资源。同时，原有的错误处理标签顺序不当，导致资源清理逻辑未被执行。
+
+#解决方案
+1. 检查 `devm_pm_runtime_enable()` 的返回值，若失败则跳转至 `unmap_io` 标签进行清理。
+2. 修改 `pm_runtime_resume_and_get()` 失败时的处理逻辑，由直接返回改为跳转至 `unmap_io` 标签。
+3. 调整错误处理标签 `unmap_io` 与 `free_base` 的顺序，确保在需要时先执行 `pm_runtime_put` 操作，再执行 `iounmap` 操作，从而正确释放资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/04af52bd31600566f7c531e752d1069b674e8d38

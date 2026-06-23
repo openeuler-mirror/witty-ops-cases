@@ -1,0 +1,23 @@
+#标题
+UDMA 驱动 JFR ID 处理逻辑及初始化缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 UDMA 驱动创建或激活 JFR (Job File Ring) 时，由于 ID 分配与使用逻辑不一致，可能导致内核内存或寄存器访问异常，进而引发系统 panic 或数据路径功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **ID 分配逻辑冗余与冲突**：原代码在 `udma_k_set_jfr_param` 中通过 `udma_set_jfr_id` 尝试分配 ID，随后在 `udma_active_jfr` 中判断若 ID 未初始化则再次分配。这种分散的分配逻辑导致 ID 管理混乱，且 `udma_set_jfr_id` 包含复杂的边界检查与锁操作，与后续激活流程中的分配逻辑存在冲突。
+2. **关键数据结构未初始化**：`jfc` 的 `ci` 字段以及 `jfr` 的 `rq.pi`、`rq.ci` 字段在初始化路径中未被清零，残留随机值导致后续硬件读写指针错误。
+
+#解决方案
+1. **简化 ID 分配逻辑**：移除冗余的 `udma_set_jfr_id` 函数及其在 `udma_k_set_jfr_param` 中的调用，直接赋值配置 ID；将 ID 的最终分配统一收敛至 `udma_active_jfr` 函数中执行，确保 ID 分配的唯一性与正确性。
+2. **补全初始化流程**：在 `udma_init_jfc_param` 中显式初始化 `jfc->ci = 0`；在 `set_jfr_param` 中显式初始化 `jfr->rq.pi = 0` 和 `jfr->rq.ci = 0`，消除未初始化隐患。
+3. **修复内存属性**：在 `udma_mmap` 中修正 `vm_page_prot` 属性，确保页表项属性设置正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dd67dc05dcad11259d75bb029add29a39dc2748c

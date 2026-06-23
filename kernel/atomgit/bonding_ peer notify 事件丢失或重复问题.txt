@@ -1,0 +1,29 @@
+#标题
+bonding: peer notify 事件丢失或重复问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 bonding 驱动且开启 MII 监控的场景下，系统可能出现 peer notify 事件丢失或重复发送的异常行为。具体表现为：
+1. 当 `should_notify_peers` 为真且对 `send_peer_notif` 计数器减锁失败时，peer 事件可能会在下一次 mii_monitor 循环中再次发送，导致事件重复。
+2. 当 `should_notify_peers` 为真且对 `send_peer_notif` 计数器减锁成功，但对 peer 事件发送加锁失败时，peer 事件将丢失。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bond_mii_monitor` 函数中，`send_peer_notif` 计数器的递减操作与 peer 事件的发送逻辑未在同一个锁临界区内同步进行。
+原代码逻辑中，`send_peer_notif` 的递减尝试（`rtnl_trylock`）与后续 peer 事件发送的加锁尝试是分离的。这种分离导致了竞态条件：
+1. 若计数器递减未获取到锁，`should_notify_peers` 状态未被清除，导致下一次循环重复发送通知。
+2. 若计数器递减成功但后续发送通知未获取到锁，计数器已减但通知未发，导致事件丢失。
+
+#解决方案
+修改 `bond_mii_monitor` 函数的锁逻辑，将 `send_peer_notif` 计数器的递减操作与 peer notify 事件的发送操作统一在同一个 RTNL 锁临界区内执行。
+具体变更包括：
+1. 移除原来独立的 `send_peer_notif` 递减和 peer notify 发送的分散锁逻辑。
+2. 将 `commit` 和 `send_peer_notif` 的判断合并，统一尝试获取 RTNL 锁。
+3. 在持有 RTNL 锁期间，按顺序执行 `bond_miimon_commit` 和 `send_peer_notif` 递减及 `call_netdevice_notifiers` 调用，确保状态更新与事件发送的原子性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/33a6d0992f6b62b215c84bd01405f1e5e34d8e16

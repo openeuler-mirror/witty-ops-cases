@@ -1,0 +1,29 @@
+#标题
+riscv: KVM: SBI IPI 错误状态码生成错误及潜在的无效循环处理修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V KVM 虚拟化环境中，当 Guest 调用 SBI IPI 扩展功能时出现以下异常行为：
+1. 当使用无效的 SBI function ID 时，错误码返回 `SBI_ERR_INVALID_PARAM`，而根据规范应返回 `SBI_ERR_NOT_SUPPORTED`。
+2. 当传入的 `hmask` 和 `hbase` 参数构造出的 hartid 无效（例如位偏移溢出）时，系统未返回 `SBI_ERR_INVALID_PARAM` 错误。
+3. 在处理位偏移溢出（`hart_bit >= __riscv_xlen`）的情况时，代码依赖移位溢出归零的特性进行判断，导致循环不必要地继续执行而非立即退出。
+
+#主要错误日志
+未知
+
+#问题根因
+`kvm_sbi_ext_ipi_handler` 函数对 SBI 规范的实现存在偏差：
+1. 对无效 function ID 的处理逻辑错误，错误地返回了 `INVALID_PARAM` 而非 `NOT_SUPPORTED`。
+2. 缺少对 `hart_bit`（由 `vcpu_id - hbase` 计算得出）是否超过系统位宽（`__riscv_xlen`）的显式检查，导致移位溢出，且未正确识别无效的 hartid 参数。
+3. 未通过 `sentmask` 记录已发送 IPI 的目标，导致无法在处理结束后比对 `hmask` 与 `sentmask`，从而无法发现是否有未匹配的有效目标（即参数无效的情况）。
+
+#解决方案
+修改 `arch/riscv/kvm/vcpu_sbi_replace.c` 文件中的 `kvm_sbi_ext_ipi_handler` 函数：
+1. 修正 function ID 校验逻辑，当 `cp->a6 != SBI_EXT_IPI_SEND_IPI` 时，返回 `SBI_ERR_NOT_SUPPORTED`。
+2. 新增 `hart_bit` 变量计算位偏移，并显式判断 `hart_bit >= __riscv_xlen`，若成立则直接跳转至 `done` 标签退出循环，避免溢出和不必要的循环。
+3. 引入 `sentmask` 变量记录已发送 IPI 的 CPU 位图，在处理结束时，若 `hbase` 不为 -1UL 且 `hmask` 与 `sentmask` 不一致，则返回 `SBI_ERR_INVALID_PARAM` 以正确指示参数错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/980f9ce4b72526684000c38dedfd9392912d41b2

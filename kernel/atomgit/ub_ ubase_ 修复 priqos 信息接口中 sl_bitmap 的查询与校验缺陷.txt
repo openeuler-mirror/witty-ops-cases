@@ -1,0 +1,23 @@
+#标题
+ub: ubase: 修复 priqos 信息接口中 sl_bitmap 的查询与校验缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ubase_get_priqos_info` 函数查询 QoS 信息时，调用者因无法预知哪些 SL（Service Level）可用，导致传入的 `sl_bitmap` 参数无效或不准确，进而导致查询功能异常或返回错误（-EINVAL）。同时，在设置 QoS 信息（`ubase_set_priqos_info`）时，缺乏对传入的 `sl_bitmap` 参数的有效性校验，可能导致配置了硬件不支持的 SL。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **查询逻辑缺陷**：`ubase_get_priqos_info` 函数错误地假设调用者会提供有效的 `sl_priqos->sl_bitmap` 输入参数，但实际上调用者并不清楚底层硬件（UNIC 或 UDMA）支持哪些 SL，导致查询接口无法正确工作。
+2. **设置逻辑缺陷**：`ubase_set_priqos_info` 函数未对输入参数 `sl_priqos->sl_bitmap` 进行合法性校验，无法确保请求的 SL 是硬件支持的 SL。
+
+#解决方案
+1. **新增辅助函数**：增加 `ubase_get_sl_bitmap` 函数，用于获取 UNIC 和 UDMA 支持的 SL 的并集（union），生成有效的 sl_bitmap；增加 `ubase_check_sl_bitmap` 函数，用于校验目标 sl_bitmap 是否在硬件支持的范围内。
+2. **修复查询接口**：在 `ubase_get_priqos_info` 中，移除对输入 `sl_bitmap` 的依赖检查，改为主动调用 `ubase_get_sl_bitmap` 获取并填充 `sl_priqos->sl_bitmap`，确保返回给调用者的是有效的 SL 位图。
+3. **增强设置校验**：在 `ubase_set_priqos_info` 中，调用 `ubase_check_sl_bitmap` 对输入的 `sl_bitmap` 进行校验，若包含不支持的 SL 则直接返回 `-EINVAL`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a2e12d759c3b3669b6318ab54457559d2cd1679e

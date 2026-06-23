@@ -1,0 +1,22 @@
+#标题
+lmedm04: lme2510_int_read 函数缺少错误处理导致潜在内存泄漏与异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 lmedm04 驱动的 DVB USB 设备时，若内核在 `lme2510_int_read` 函数中获取 USB endpoint 失败或提交 URB 请求失败，驱动未进行错误处理与资源释放，可能导致内存泄漏（struct lme_int->lme_urb 未释放）或后续引用无效指针引发异常。同时，错误场景下中断读取服务未正确停止。
+
+#主要错误日志
+未知
+
+#问题根因
+`lme2510_int_read` 函数在调用 `usb_pipe_endpoint()` 和 `usb_submit_urb()` 时，未检查返回值。当 `usb_pipe_endpoint()` 返回 NULL（设备不存在或端口无效）或 `usb_submit_urb()` 提交失败时，代码继续执行未进行回退处理，导致之前分配的 URB 内存泄漏。
+
+#解决方案
+在 `lme2510_int_read` 函数中增加对 `usb_pipe_endpoint()` 和 `usb_submit_urb()` 返回值的检查：
+1. 调用 `usb_pipe_endpoint()` 后，判断返回值是否为 NULL，若为 NULL 则释放已分配的 URB 并返回 -ENODEV。
+2. 调用 `usb_submit_urb()` 后，判断返回值是否非 0，若失败则释放已分配的 URB 并返回对应的错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/007c86df7b2c1cdb808ba1940782c7955a057236

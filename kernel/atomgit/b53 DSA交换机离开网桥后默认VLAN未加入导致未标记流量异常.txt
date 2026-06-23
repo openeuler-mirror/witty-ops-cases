@@ -1,0 +1,20 @@
+#标题
+b53 DSA交换机离开网桥后默认VLAN未加入导致未标记流量异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Broadcom B53系列DSA交换机在离开网桥（bridge leave）操作后，默认VLAN（PVID）配置丢失。这导致端口无法正确处理未标记流量，可能出现网络通信中断或VLAN tagging行为异常，即原本应保持未标记状态的流量被错误处理。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `b53_br_leave` 函数中，对于支持 `JOIN_ALL_VLAN` 特性的交换机，代码逻辑错误地跳过了默认VLAN（PVID）的重加入操作。原代码仅在 `else` 分支（即不支持 `JOIN_ALL_VLAN` 时）执行 `b53_get_vlan_entry` 和 `b53_set_vlan_entry` 来更新默认VLAN成员。这导致支持该特性的设备在离开网桥时，默认VLAN未重新加入，破坏了未标记流量的正常转发路径。
+
+#解决方案
+修改 `drivers/net/dsa/b53/b53_common.c` 中的 `b53_br_leave` 函数逻辑，将默认VLAN的重加入操作（`b53_get_vlan_entry`、设置 members/untag 位、`b53_set_vlan_entry`）移至条件判断块之外。确保无论是支持还是不支持 `JOIN_ALL_VLAN` 的设备，在离开网桥时都会重新加入默认VLAN，从而保证未标记流量保持未标记状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ffd7a817475294589f2e9da4381d02d17c7b47b7

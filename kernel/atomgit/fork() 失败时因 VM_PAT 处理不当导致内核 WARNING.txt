@@ -1,0 +1,36 @@
+#标题
+fork() 失败时因 VM_PAT 处理不当导致内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当执行 fork() 系统调用并在 copy_page_range() 阶段失败（如 track_pfn_copy() 失败或后续页表拷贝失败）时，内核在清理进程内存（exit_mmap -> untrack_pfn）过程中触发 WARNING。调用栈显示在 get_pat_info 函数中触发警告，随后导致系统异常。
+
+#主要错误日志
+WARNING: CPU: 26 PID: 11650 at arch/x86/mm/pat/memtype.c:983 get_pat_info+0xf6/0x110
+...
+Call Trace:
+ <TASK>
+ ...
+ untrack_pfn+0x52/0x110
+ unmap_single_vma+0xa6/0xe0
+ unmap_vmas+0x105/0x1f0
+ exit_mmap+0xf6/0x460
+ __mmput+0x4b/0x120
+ copy_process+0x1bf6/0x2aa0
+ kernel_clone+0xab/0x440
+ __do_sys_clone+0x66/0x90
+ do_syscall_64+0x95/0x180
+
+#问题根因
+在 fork() 过程中，目标 VMA（dst VMA）被预先添加到 maple tree 并设置了 VM_PAT 标志，但随后的页表拷贝（track_pfn_copy 或 copy_p4d_range）失败了。由于此时 dst VMA 仍保留 VM_PAT 标志，但并未成功执行 PAT 预留（reservation）或页表拷贝，导致 fork() 失败进行清理时，untrack_pfn() 尝试从页表中获取 PAT 信息失败（因为页表未拷贝），从而触发 WARNING。先前的修复仅简单清除 VM_PAT 标志，未正确处理已进行的 PAT 预留回滚，导致状态不一致。
+
+#解决方案
+修改 VM_PAT 标志的设置时机与错误处理逻辑：
+1. 在 vm_area_dup 阶段，如果是 VM_PFNMAP 映射，先调用 untrack_pfn_clear 清除 VM_PAT 标志，避免预置错误状态。
+2. 在 copy_page_range 中，仅在 track_pfn_copy 成功执行 PAT 预留后才设置 dst VMA 的 VM_PAT 标志。
+3. 新增 untrack_pfn_copy 函数，用于在 copy_page_range 后续流程失败时，正确回滚 PAT 预留并清除 VM_PAT 标志，确保资源释放路径的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae659c3dbe256e2aaf9cddacdc126ed4b9851489

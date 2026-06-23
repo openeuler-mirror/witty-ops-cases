@@ -1,0 +1,20 @@
+#标题
+cls_u32 模块 IDR 条目释放失败导致无法新增过滤器
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对网络接口执行 tc filter 的删除与添加循环操作时，系统无法成功添加新的过滤器，命令行报错 "Filter already exists"。具体表现为：在循环执行约 2048 次 `tc filter del` 和 `tc filter add` 操作后，后续的添加操作均失败，提示过滤器已存在，仿佛资源耗尽。
+
+#主要错误日志
+"Filter already exists"
+
+#问题根因
+u32 分类器在生成 hnode 句柄时使用 IDR 分配 ID，并通过 `id2handle` 将 ID 编码进 32 位句柄中。但在销毁 hnode 或处理错误路径时，调用 `idr_remove` 前未对句柄进行相应的解码操作（即未转换回原始 ID）。这导致 `idr_remove` 无法正确找到并释放对应的 IDR 条目，造成 IDR 空间泄漏。由于 IDR 的大小限制为 2048，泄漏累积填满后，系统无法分配新的 ID，进而导致创建过滤器失败。
+
+#解决方案
+在代码中新增 `handle2id` 解码辅助函数，负责将 32 位句柄转换回 IDR 的原始 ID。在 `u32_destroy_hnode` 函数销毁节点时，以及 `u32_change` 函数的错误处理路径中，调用 `handle2id` 对句柄进行解码后，再传递给 `idr_remove`，确保 IDR 条目能被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/82bff16ab3cb3fb3877bc0782479bbe13fe21f95

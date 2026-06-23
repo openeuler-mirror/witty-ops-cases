@@ -1,0 +1,40 @@
+#标题
+memstick: rtsx_usb_ms驱动移除时发生slab-use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 rtsx_usb_ms 驱动（设备断开连接或模块移除）时，内核触发 KASAN 检测到的 "slab-use-after-free" 错误。系统调用栈显示 `kworker` 进程正在执行 `rtsx_usb_ms_poll_card` 函数，访问了已经被释放的内存区域。这通常导致内核崩溃或系统不稳定。
+
+#主要错误日志
+```
+BUG: KASAN: slab-use-after-free in rtsx_usb_ms_poll_card+0x159/0x200 [rtsx_usb_ms]
+Read of size 8 at addr ffff888136335380 by task kworker/6:0/140241
+...
+Call Trace:
+ <TASK>
+ ...
+ rtsx_usb_ms_poll_card+0x159/0x200 [rtsx_usb_ms]
+ process_one_work+0x357/0x660
+ worker_thread+0x390/0x4c0
+ ...
+</TASK>
+
+Freed by task 161506:
+ ...
+ kfree+0x1fd/0x3b0
+ device_release+0x56/0xf0
+ kobject_cleanup+0x73/0x1c0
+ rtsx_usb_ms_drv_remove+0x13d/0x220 [rtsx_usb_ms]
+ ...
+```
+
+#问题根因
+在 `rtsx_usb_ms_drv_remove` 函数执行过程中，驱动会释放相关资源，但并未取消正在运行的延时工作队列 `poll_card`。当驱动移除操作完成后，`rtsx_usb_ms_poll_card` 工作项可能仍在运行或被调度执行，尝试访问已经被释放的内存对象，从而触发 slab-use-after-free 故障。
+
+#解决方案
+在 `rtsx_usb_ms_drv_remove` 函数中，设置 `host->eject` 标志并取消 `handle_req` 工作队列之后，增加对延时工作队列 `host->poll_card` 的同步取消操作（调用 `cancel_delayed_work_sync`）。这确保了在释放资源前，所有与该设备相关的定时任务都已停止，避免访问已释放内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/610b12d1a6bb727da6c832ff772092609e57f694

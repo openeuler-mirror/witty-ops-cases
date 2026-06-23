@@ -1,0 +1,20 @@
+#标题
+pci_endpoint_test: request_irq 错误后中断残留导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `pci_endpoint_test` 设备驱动加载或运行过程中，若 `request_irq` 请求中断失败，驱动未能正确释放已成功申请的中断资源，导致中断句柄泄漏。该问题可能导致后续设备操作异常、资源耗尽或驱动重新探测失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `pci_endpoint_test_request_irq` 中，使用循环申请中断时，若中间某次 `request_irq` 失败，代码逻辑直接跳出循环并返回错误（false），但此时之前迭代中已成功申请的中断并未被释放（`num_irqs` 未更新为实际成功申请的数量，也未调用释放函数），导致中断资源泄漏。
+
+#解决方案
+在 `request_irq` 失败后的错误处理路径中，首先更新 `test->num_irqs` 为当前已成功申请的中断计数 `i`，随后显式调用 `pci_endpoint_test_release_irq(test)` 释放已申请的资源，最后返回 false，确保资源正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/27e849d39a91d08ee5e7dc0a9cebe82f41a18d37

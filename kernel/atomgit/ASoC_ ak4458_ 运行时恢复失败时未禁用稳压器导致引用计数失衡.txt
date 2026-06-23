@@ -1,0 +1,20 @@
+#标题
+ASoC: ak4458: 运行时恢复失败时未禁用稳压器导致引用计数失衡
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ak4458 音频编解码器驱动的运行时恢复过程中，若 `regcache_sync` 执行失败，驱动未能正确禁用已启用的稳压器。这导致稳压器的引用计数失去平衡，可能引发后续电源管理流程异常或资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ak4458_runtime_resume` 在执行 `regcache_sync` 失败时直接返回了错误码，遗漏了错误处理路径。由于在函数入口处已通过 `regulator_bulk_enable` 启用了稳压器，失败时未调用 `regulator_bulk_disable` 进行回滚，导致稳压器引用计数无法平衡。
+
+#解决方案
+在 `ak4458_runtime_resume` 函数中增加对 `regcache_sync` 返回值的检查。若返回非零（即失败），则跳转到错误处理标签 `err`，在错误处理路径中依次执行 `regcache_cache_only` 设置并调用 `regulator_bulk_disable` 关闭稳压器，确保资源状态回滚，最后返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dff32441178e0cad971a511bd3a460c5b4234a97

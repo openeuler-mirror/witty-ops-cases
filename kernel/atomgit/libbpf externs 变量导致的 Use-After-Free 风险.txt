@@ -1,0 +1,23 @@
+#标题
+libbpf externs 变量导致的 Use-After-Free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 libbpf 进行 BPF 程序开发时，若在打开BPF对象后、加载前调用了如 `bpf_map__set_value_size` 等可能改变 BTF 数据的函数，会导致 `obj->externs` 中的 `name` 字段指向已释放的内存地址。这将引发未定义行为，可能导致程序崩溃或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`obj->externs` 结构体中的 `name` 字段在初始打开阶段直接指向了 BTF 数据段中的字符串偏移。当用户在加载前调用某些函数（例如 `bpf_map__set_value_size`）调整 map 大小时，会触发 BTF 数据的变动或重建，使得原先的 BTF 数据被释放。此时，`name` 指针变成了悬垂指针，继续访问该指针即构成 use-after-free。
+
+#解决方案
+修改 `libbpf.c` 中的 `extern_desc` 结构体定义与处理逻辑：
+1. 将 `extern_desc` 结构体中的 `name` 字段类型从 `const char *` 修改为 `char *`。
+2. 在 `bpf_object__collect_externs` 函数收集 extern 变量信息时，使用 `strdup` 将 BTF 中的名称字符串拷贝一份独立内存进行存储，而不是直接引用 BTF 原始数据偏移。
+3. 在 `bpf_object__close` 函数中增加对应的内存释放逻辑，确保 `externs[i].name` 被正确释放，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a09e3a98494c3a777385c2f86babb1a70853211e

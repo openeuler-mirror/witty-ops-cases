@@ -1,0 +1,20 @@
+#标题
+ALSA: PCM: 链接流在 snd_pcm_drain 中释放后使用(UAF)导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `snd_pcm_drain` 处理链接的音频流时，若并发执行 `close()` 操作关闭链接流，内核可能发生 Use-After-Free 错误，进而引发 Oops 或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `snd_pcm_drain` 的循环中，局部变量 `runtime` 被重新赋值为链接流的 `runtime`。在释放流锁后，代码仍访问 `runtime->no_period_wakeup`、`runtime->rate` 和 `runtime->buffer_size` 等字段。此时，若并发线程对链接流执行 `close()` 操作，将触发 `snd_pcm_release_substream` → `snd_pcm_unlink` → `snd_pcm_detach_substream` → `kfree(runtime)`，导致该 runtime 内存被释放。由于缺乏同步机制，drain 路径随后解引用了已释放的悬空指针。
+
+#解决方案
+在持有流锁期间，将需要访问的 runtime 字段（`no_period_wakeup`、`rate`、`buffer_size`）缓存到局部变量中；在释放锁后，使用这些缓存后的局部变量值进行后续判断，从而避免访问可能已被并发释放的 runtime 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c87b5d3bc0cfd85f37f57a0ab7a88b3b1229e754

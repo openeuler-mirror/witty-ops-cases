@@ -1,0 +1,20 @@
+#标题
+sched/deadline: migrate_enable 对 boosted 任务触发警告修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核调度器处理 Deadline 任务时，若任务处于 boosted 状态（优先级提升），在迁移过程中可能触发内核警告或异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `enqueue_dl_entity` 函数中，当处理 `ENQUEUE_RESTORE` 标志时，代码未检查当前调度实体是否处于 `is_dl_boosted` 状态。对于被 boosted 的任务，其 deadline 已经被修改以反映提升后的优先级，不应再执行 `setup_new_dl_entity` 重置 deadline。若不检查 boosted 状态直接进行 `dl_time_before` 判断并调用 `setup_new_dl_entity`，会导致 deadline 逻辑错误，进而引发后续 migrate_enable 流程中的警告。
+
+#解决方案
+在 `kernel/sched/deadline.c` 的 `enqueue_dl_entity` 函数中，增加对 `!is_dl_boosted(dl_se)` 的判断条件。确保只有当任务未被 boosted 时，才在 `ENQUEUE_RESTORE` 场景下执行 `setup_new_dl_entity` 操作，从而避免对 boosted 任务的 deadline 进行错误重置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/99e9f72032b67a28be4c899eda39021fff4ffd5e

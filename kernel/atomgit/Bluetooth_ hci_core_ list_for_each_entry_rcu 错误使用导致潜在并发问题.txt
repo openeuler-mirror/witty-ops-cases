@@ -1,0 +1,26 @@
+#标题
+Bluetooth: hci_core: list_for_each_entry_rcu 错误使用导致潜在并发问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Bluetooth 设备进行数据传输出现超时（link tx timeout）时，系统尝试断开卡死的连接。由于 `hci_link_tx_to` 函数在 RCU 读锁临界区内错误地释放并重新获取锁（为了调用可能休眠的 `hci_disconnect`），违反了 RCU 锁的使用规范，可能导致内核状态不一致或引发其他不可预知的并发错误。
+
+#主要错误日志
+bt_dev_err(hdev, "link tx timeout");
+bt_dev_err(hdev, "killing stalled connection %pMR", &c->dst);
+
+#问题根因
+在 `hci_link_tx_to` 函数中，代码使用 `list_for_each_entry_rcu` 遍历列表并在循环体内调用 `hci_disconnect`。由于 `hci_disconnect` 可能会休眠，无法在 RCU 读临界区内执行，原代码尝试在循环体内临时释放 RCU 锁 (`rcu_read_unlock`) 调用函数后再重新加锁 (`rcu_read_lock`)。这种在 `list_for_each_entry_rcu` 循环体中释放并重新获取 RCU 锁的做法是不正确的，破坏了遍历的原子性和并发保护机制。
+
+#解决方案
+将锁机制从 RCU 读锁更改为设备互斥锁。具体修改为：
+1. 将函数开始处的 `rcu_read_lock()` 替换为 `hci_dev_lock(hdev)`。
+2. 将函数结束处的 `rcu_read_unlock()` 替换为 `hci_dev_unlock(hdev)`。
+3. 将遍历宏从 `list_for_each_entry_rcu(c, &h->list, list)` 改为 `list_for_each_entry(c, &h->list, list)`。
+4. 移除循环体内为了调用 `hci_disconnect` 而插入的临时解锁/加锁代码。
+此修改确保了在调用可能休眠的函数时持有正确的锁，并避免了错误的 RCU 锁用法。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/48f396cdc097b8db3c399e0de9ab4e3bd4063262

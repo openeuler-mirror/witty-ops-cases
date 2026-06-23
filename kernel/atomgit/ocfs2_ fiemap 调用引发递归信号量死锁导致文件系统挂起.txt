@@ -1,0 +1,33 @@
+#标题
+ocfs2: fiemap 调用引发递归信号量死锁导致文件系统挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `FS_IOC_FIEMAP` ioctl 调用以获取特定构造的 mmap 文件的 extent 列表时，系统发生挂起。内核调度器显示任务处于 `rwsem_down_write_slowpath` 状态，导致文件系统锁定无法继续操作。
+
+#主要错误日志
+```
+syzbot detected a OCFS2 hang due to a recursive semaphore on a
+FS_IOC_FIEMAP of the extent list on a specially crafted mmap file.
+
+context_switch kernel/sched/core.c:5357 [inline]
+   __schedule+0x1798/0x4cc0 kernel/sched/core.c:6961
+   ...
+   rwsem_down_write_slowpath+0x872/0xfe0 kernel/locking/rwsem.c:1185
+   down_write+0x1ab/0x1f0 kernel/locking/rwsem.c:1591
+   ocfs2_page_mkwrite+0x2ff/0xc40 fs/ocfs2/mmap.c:142
+   ...
+   fiemap_fill_next_extent+0x1c0/0x390 fs/ioctl.c:145
+   ocfs2_fiemap+0x888/0xc90 fs/ocfs2/extent_map.c:806
+```
+
+#问题根因
+`ocfs2_fiemap()` 函数持有 `ip_alloc_sem` 信号量的读锁，随后调用 `fiemap_fill_next_extent()` 将数据拷贝到用户态缓冲区。若用户缓冲区触发缺页中断，将调用 `ocfs2_page_mkwrite()`，该函数试图获取同一个 `ip_alloc_sem` 信号量的写锁。由于信号量已被当前线程持有（读锁），再次请求写锁导致递归死锁，进而持有关键文件系统锁导致挂起。
+
+#解决方案
+在 `ocfs2_fiemap()` 和 `ocfs2_fiemap_inline()` 函数中，调用可能引发缺页中断的 `fiemap_fill_next_extent()` 之前，临时释放 `ip_alloc_sem` 读锁；调用返回后，重新获取该读锁。虽然这会导致最后一次 extent 处理时有一次不必要的锁释放/获取操作，但能避免死锁并简化错误处理路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/709841819c6b43496d40b749e5a28761f6076808

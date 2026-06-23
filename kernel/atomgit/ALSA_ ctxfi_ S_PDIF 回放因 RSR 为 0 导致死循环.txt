@@ -1,0 +1,20 @@
+#标题
+ALSA: ctxfi: S/PDIF 回放因 RSR 为 0 导致死循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Sound Blaster X-Fi 显卡上进行 S/PDIF passthrough 回放设置时，如果采样率为 32000 Hz，内核会陷入无限循环状态，导致该进程挂起或系统响应异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 spdif_passthru_playback_get_resources() 使用 atc->pll_rate 作为 RSR（参考采样率）进行 MSR 计算循环。然而，pll_rate 仅在 atc_pll_init() 中更新，在 hw_pll_init() 中未更新，导致声卡初始化后 pll_rate 值仍为 0。当 spdif_passthru_playback_setup() 针对 32000 Hz 采样率跳过 atc_pll_init() 时，rsr 变量值为 0，导致计算循环条件 (rsr * desc.msr) 始终为 0，引发无限循环。
+
+#解决方案
+在 spdif_passthru_playback_get_resources() 函数中增加容错逻辑：当 atc->pll_rate 为 0 时，回退使用 atc->rsr 作为 RSR 值。这符合硬件实际状态，因为 hw_card_init() 已经将 PLL 配置为默认 RSR。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5ee191acb7ea615dfb353af01ce8f0da501efd5c

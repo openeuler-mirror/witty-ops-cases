@@ -1,0 +1,23 @@
+#标题
+BPF verifier 绕过只读 map 限制导致数据被篡改
+
+#内核版本
+OLK-6.6
+
+#问题现象
+尽管 BPF map 在用户态和 BPF 侧已被冻结或设置为只读（如 `.rodata` 类型），BPF 程序仍能通过特定的 helper 函数（参数类型为 `ARG_PTR_TO_{LONG,INT}`）成功向该 map 写入数据，破坏了只读 map 的数据完整性与安全性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `check_func_arg()` 处理 `ARG_PTR_TO_{LONG,INT}` 类型参数时，未设置 `meta->raw_mode`。随后的 `check_helper_mem_access()` 检查在处理 `PTR_TO_MAP_VALUE` 时，默认假定操作类型为 `BPF_READ`，导致跳过了对只读 map 的写权限检查。因此，verifier 错误地允许了 BPF 程序通过这些 helper 函数向只读 map 写入数据。
+
+#解决方案
+移除 `ARG_PTR_TO_{INT,LONG}` 这类特殊的参数类型定义，将其统一转换为 `ARG_PTR_TO_FIXED_SIZE_MEM | MEM_UNINIT | MEM_ALIGNED` 组合类型。
+1. 新增 `MEM_ALIGNED` 标志用于确保内存对齐要求（因为相关 helper 直接执行 `*<ptr> = val` 操作）。
+2. 在 `check_func_arg()` 中，对于 `MEM_FIXED_SIZE` 类型参数，增加对 `MEM_ALIGNED` 标志的对齐检查逻辑。
+3. 修改相关 helper 函数（如 `bpf_strtol`, `bpf_strtoul`, `bpf_kallsyms_lookup_name` 等）的参数定义，使用新的类型标志并指定正确的参数大小，确保 verifier 能正确识别写入行为并执行相应的权限检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8c4d3c42503600816aaf1d08c06002f64d0ad5f5

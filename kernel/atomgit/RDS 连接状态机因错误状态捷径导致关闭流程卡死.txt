@@ -1,0 +1,26 @@
+#标题
+RDS 连接状态机因错误状态捷径导致关闭流程卡死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+RDS（Reliable Datagram Sockets）连接在经历异常状态转换后，关闭流程（shutdown path）无法正常完成。连接卡死在 `RDS_SHUTDOWN_WORK_QUEUED` 状态，导致资源无法释放，相关连接处于僵死状态。
+
+#主要错误日志
+shutdown called in state %d
+（推断：该日志由 `rds_conn_path_error` 函数在 `rds_conn_shutdown` 中检测到非法状态时打印，原文未给出完整行）
+
+#问题根因
+RDS/TCP 多路径代码引入了一个状态机缺陷：
+1. **违规捷径**：在 `rds_tcp_accept_one_path` 函数中，代码允许直接从 `RDS_CONN_ERROR` 状态跳转回 `RDS_CONN_CONNECTING` 状态，绕过了标准的关闭处理路径。
+2. **竞争触发**：若随后发生 `rds_tcp_reset_callbacks`，状态会转换至 `RDS_CONN_RESETTING` 并排队关闭工作队列。
+3. **状态未覆盖**：`rds_conn_init_shutdown` 函数未处理 `RDS_CONN_RESETTING` 状态，导致其报错并退出（日志显示 "DR_INV_CONN_STATE"），使得 `RDS_SHUTDOWN_WORK_QUEUED` 标志位无法被清除，连接永久卡死。
+
+#解决方案
+修改内核代码以修正状态机逻辑：
+1. **移除捷径**：在 `net/rds/tcp_listen.c` 的 `rds_tcp_accept_one_path` 中，删除允许从 `RDS_CONN_ERROR` 直接转换到 `RDS_CONN_CONNECTING` 的逻辑，强制连接走完整的关闭流程。
+2. **扩展状态处理**：在 `net/rds/connection.c` 的 `rds_conn_shutdown` 中，将 `RDS_CONN_RESETTING` 加入合法的初始状态判断列表，允许其转换到 `RDS_CONN_DISCONNECTING`，防止后续异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/227f1ec910b87663a9d3fa917b193a741cbdaa66

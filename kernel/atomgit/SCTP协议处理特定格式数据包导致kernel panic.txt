@@ -1,0 +1,21 @@
+#标题
+SCTP协议处理特定格式数据包导致kernel panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理SCTP协议数据包时，若skb结构体的`data_len`与`len`相等且`frag_list`为空（非预期状态），内核会触发空指针引用导致panic。此时系统调用栈可能指向`sctp_inq_pop`函数。
+
+#主要错误日志
+[  123.456789] WARNING: CPU: 0 PID: 123 at net/sctp/inqueue.c:172 sctp_inq_pop+0xXX/0xXX [sctp]
+（注：日志原文未提供，依据diff中`WARN_ON`逻辑推断）
+
+#问题根因
+在`net/sctp/inqueue.c`的`sctp_inq_pop`函数中，当处理带有“cover letter”的数据块时，代码仅检查了`chunk->skb`是否为空，但在此之前已经假设`frag_list`存在并进行了赋值。如果`data_len`等于`len`但`skb_shinfo(chunk->skb)->frag_list`为NULL，代码会将`chunk->skb`置为NULL，随后触发的`WARN_ON(!chunk->skb)`检查导致系统报错或崩溃，逻辑处理不够健壮。
+
+#解决方案
+修改`sctp_inq_pop`函数中的检查逻辑，在访问`frag_list`之前先通过`WARN_ON`判断其是否为空。如果`frag_list`为空，则增加丢弃包的统计计数，释放当前chunk并跳过处理，从而避免空指针引用导致的panic。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eb16f84b67345fb6c3377bca9e0800dc843c17fe

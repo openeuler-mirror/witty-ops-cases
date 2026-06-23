@@ -1,0 +1,20 @@
+#标题
+ubase驱动ctrlq crq任务调度延迟导致高并发场景性能下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在高并发任务场景下，ubase驱动的 ctrlq crq 消息处理存在不必要的调度延迟（约 4ms），导致消息处理响应不及时，系统性能显著下降（相比优化方案有 10 倍以上的性能差距）。
+
+#主要错误日志
+未知
+
+#问题根因
+ubase 驱动在 workqueue 中处理 ctrlq crq 消息时，若检测到仍有消息待处理，会重新添加一个延时调度任务。原代码将该延时设置为 1 个 jiffies。在当前 OS 默认配置 `CONFIG_HZ=250` 的情况下，1 个 jiffies 对应 4ms，这导致任务必须等待 4ms 后才能被执行，人为引入了处理延迟，阻碍了消息的快速吞吐。
+
+#解决方案
+将 `ubase_ctrlq_task_schedule` 函数的延时参数从 1 修改为 0，移除人为设定的调度等待时间，确保 ctrlq crq 任务能够被尽快调度执行，从而提升高并发场景下的处理性能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a6d26ff82d2b93d71c996c5304ec281ed4fc65ff

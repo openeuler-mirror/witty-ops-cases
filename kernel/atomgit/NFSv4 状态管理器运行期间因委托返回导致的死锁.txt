@@ -1,0 +1,36 @@
+#标题
+NFSv4 状态管理器运行期间因委托返回导致的死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFSv4 客户端执行文件解链操作期间，若服务端重启触发客户端状态管理器运行，会导致状态管理器线程陷入死锁。具体表现为通过 `cat /proc/[pid]/stack` 查看线程堆栈时，进程长时间处于 `rpc_wait_bit_killable` 状态，堆栈显示调用链经过 `nfs4_proc_delegreturn` 等函数。
+
+#主要错误日志
+[<0>] rpc_wait_bit_killable+0x1a/0x90
+[<0>] _nfs4_proc_delegreturn+0x60f/0x760
+[<0>] nfs4_proc_delegreturn+0x13d/0x2a0
+[<0>] nfs_do_return_delegation+0xba/0x110
+[<0>] nfs_end_delegation_return+0x32c/0x620
+[<0>] nfs_complete_unlink+0xc7/0x290
+[<0>] nfs_dentry_iput+0x36/0x50
+[<0>] __dentry_kill+0xaa/0x250
+[<0>] dput.part.0+0x26c/0x4d0
+[<0>] __put_nfs_open_context+0x1d9/0x260
+[<0>] nfs4_open_reclaim+0x77/0xa0
+[<0>] nfs4_do_reclaim+0x385/0xf40
+[<0>] nfs4_state_manager+0x762/0x14e0
+[<0>] nfs4_run_state_manager+0x181/0x330
+[<0>] kthread+0x1a7/0x1f0
+[<0>] ret_from_fork+0x34/0x60
+[<0>] ret_from_fork_asm+0x1a/0x30
+
+#问题根因
+当 NFS 客户端处于 `NFS4CLNT_RECLAIM_REBOOT` 状态（服务端重启后进行状态回收）时，槽位表被标记为 `NFS4_SLOT_TBL_DRAINING`（排空状态）。此时，如果在 `nfs4_open_reclaim` 过程中触发委托返回，由于 `sa_privileged` 为 0，委托返回任务会被放入等待队列排队。一方面，状态管理器被阻塞等待委托返回完成，无法执行 `nfs4_end_drain_session` 来清除 `NFS4_SLOT_TBL_DRAINING` 标志并唤醒任务；另一方面，因为该标志未清除，委托返回任务只能一直等待，从而形成死锁。
+
+#解决方案
+在 `_nfs4_proc_delegreturn` 函数中增加对客户端状态 `NFS4CLNT_RECLAIM_REBOOT` 的检查。如果检测到客户端处于该状态，则将委托返回操作初始化为特权操作，使其能够在槽位表处于排空状态时正常执行，从而打破死锁条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14c2e16f9ebde06cb2949e983b1c427811b50251

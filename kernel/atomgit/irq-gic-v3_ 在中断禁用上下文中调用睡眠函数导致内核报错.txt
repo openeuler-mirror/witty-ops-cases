@@ -1,0 +1,46 @@
+#标题
+irq-gic-v3: 在中断禁用上下文中调用睡眠函数导致内核报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `xint_proc_write` 接口进行 Xint 转换操作时，内核检测到在无效上下文（中断被禁用）中调用了可能睡眠的函数，从而触发 BUG。系统栈回溯显示调用链经过 `disable_irq` 或 `debugfs_create_symlink`，导致进程（如 bash）无法继续执行并打印调用栈信息。
+
+#主要错误日志
+```
+BUG: sleeping function called from invalid context at kernel/irq/manage.c:737
+in_atomic(): 0, irqs_disabled(): 1, non_block: 0, pid: 1033, name: bash
+preempt_count: 0, expected: 0
+CPU: 1 PID: 1033 Comm: bash Not tainted 6.6.0+ #1
+...
+Call trace:
+ __might_sleep+0xc8/0x1d8
+ disable_irq+0x48/0xb8
+ xint_proc_write+0x1b0/0x3f8
+ ...
+
+BUG: sleeping function called from invalid context at mm/slab.h:494
+in_atomic(): 0, irqs_disabled(): 128, non_block: 0, pid: 414, name: bash
+...
+Call trace:
+ __might_sleep+0x7c/0x114
+ debugfs_create_symlink+0x3c/0x250
+ xint_add_debugfs_entry+0xd4/0x140
+ xint_proc_write+0x26c/0x344
+ ...
+```
+
+#问题根因
+在 `xint_proc_write` 函数中，代码逻辑先调用了 `local_irq_disable()` 禁用了本地 CPU 中断，随后在临界区内调用了 `disable_irq()` 和 `xint_add_debugfs_entry`（内部调用 `debugfs_create_symlink`）。
+根据内核规则，中断被禁用时不允许发生睡眠调度。然而 `disable_irq()` 可能会等待中断处理完成，`debugfs_create_symlink` 内部会调用内存分配，两者均为可能睡眠的函数。因此在 `local_irq_disable()` 保护区域内执行这些操作触发了 "sleeping function called from invalid context" 错误。
+
+#解决方案
+调整代码执行顺序，将可能睡眠的操作移至 `local_irq_disable()` 临界区之外。具体修改为：
+1. 将 `xint_add_debugfs_entry` 和 `xint_remove_debugfs_entry` 的调用从 `xint_transform` 函数内部移出，并在执行 `local_irq_disable()` 之前完成。
+2. 将 `disable_irq(irq)` 的调用移至 `local_irq_disable()` 之前执行。
+3. 相应地，将 `enable_irq(irq)` 移至 `local_irq_enable()` 之后执行。
+由此确保在本地中断禁用期间，系统仅执行非睡眠操作（如位图操作），避免上下文冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/030f4b3eac30c78c04fee587382b9db2def18f8c

@@ -1,0 +1,35 @@
+#标题
+shmem_getattr() 调用 generic_fillattr() 时引发数据竞争
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发环境下执行文件操作（如 shmem_mknod 创建文件）并同时调用 stat 类系统调用（如 fstatat）获取文件属性时，内核 KCSAN（Kernel Concurrency Sanitizer）检测到发生数据竞争。竞争发生在 inode 的 ctime 字段写入与读取操作之间，可能导致用户空间程序获取到不一致或非预期的文件属性信息，严重时可能引发不可预见的内核行为。
+
+#主要错误日志
+BUG: KCSAN: data-race in generic_fillattr / inode_set_ctime_current
+
+write to 0xffff888102eb3260 of 4 bytes by task 6565 on cpu 1:
+ inode_set_ctime_to_ts include/linux/fs.h:1638 [inline]
+ inode_set_ctime_current+0x169/0x1d0 fs/inode.c:2626
+ shmem_mknod+0x117/0x180 mm/shmem.c:3443
+ ...
+
+read to 0xffff888102eb3260 of 4 bytes by task 3498 on cpu 0:
+ inode_get_ctime_nsec include/linux/fs.h:1623 [inline]
+ inode_get_ctime include/linux/fs.h:1629 [inline]
+ generic_fillattr+0x1dd/0x2f0 fs/stat.c:62
+ shmem_getattr+0x17b/0x200 mm/shmem.c:1157
+ ...
+
+value changed: 0x2755ae53 -> 0x27ee44d3
+
+#问题根因
+在 `shmem_getattr()` 函数中调用 `generic_fillattr()` 填充 inode 属性时，未持有任何锁保护。与此同时，其他线程可能通过 `shmem_unlink()` 或 `shmem_mknod()` 等函数修改同一个 inode 的成员变量（如 ctime）。由于缺乏读锁保护，导致 `generic_fillattr()` 读取 inode 属性与 inode 更新操作之间发生数据竞争。
+
+#解决方案
+在 `shmem_getattr()` 函数调用 `generic_fillattr()` 前后，分别加上 `inode_lock_shared()` 和 `inode_unlock_shared()` 锁。这确保了在读取 inode 属性期间持有共享锁，防止与持写锁的 inode 更新操作发生并发冲突，从而消除数据竞争隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e863dfdc3176fecaddbe2ce738a49ad55fa3d223

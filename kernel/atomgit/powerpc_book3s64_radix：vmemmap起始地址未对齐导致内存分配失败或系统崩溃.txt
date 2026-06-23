@@ -1,0 +1,24 @@
+#标题
+powerpc/book3s64/radix：vmemmap起始地址未对齐导致内存分配失败或系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PowerPC book3s64 架构使用 Radix 页表进行 vmemmap 映射时，若起始地址未对齐到 PAGE_SIZE，会导致 altmap 边界检查计算错误的 start_pfn。这可能导致内核错误地决定使用 altmap 还是 RAM 进行内存分配，或者在 set_pte 操作时引发对齐异常，进而导致内存分配失败、系统 Panic 或 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+vmemmap_populate 函数在处理起始地址时，未将其对齐到 PAGE_SIZE。这导致了两个问题：
+1. 在进行 altmap 边界检查以决定是使用 altmap 还是 RAM 分配后备内存时，计算出的 start_pfn 不正确，导致判断逻辑失误。
+2. set_pte 操作要求地址必须对齐，未对齐的地址会导致操作失败或异常。
+此外，原有的代码逻辑在判断是否使用 PMD 映射时过于激进，在 addr 未对齐的情况下错误地触发了特定分支。
+
+#解决方案
+1. 在 `radix__vmemmap_populate` 函数循环开始前，增加 `start = ALIGN_DOWN(start, PAGE_SIZE);` 操作，确保起始地址按页大小对齐，从而保证后续边界检查和页表操作的准确性。
+2. 调整 PMD 映射的判断逻辑条件，防止因地址对齐问题导致的错误分配行为，确保只有在条件满足时才使用 PMD 映射。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d2a50e12ae28a24ecab12311c5ccf50471f02c9c

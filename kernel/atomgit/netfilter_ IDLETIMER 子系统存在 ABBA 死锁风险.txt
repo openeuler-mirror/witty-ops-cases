@@ -1,0 +1,25 @@
+#标题
+netfilter: IDLETIMER 子系统存在 ABBA 死锁风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 IDLETIMER 规则时，系统可能发生死锁，导致相关进程挂起（D 状态），无法正常完成规则销毁操作，进而可能影响系统其他部分的正常调度与运行。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `idletimer_tg_destroy` 和 `idletimer_tg_destroy_v1` 函数中，代码在持有 `list_mutex` 锁的情况下调用 `cancel_work_sync`。由于 work 回调函数中同样会尝试获取 `list_mutex`，这导致了 ABBA 类型的死锁：销毁路径持有 mutex 等待 work 完成，而 work 处理函数尝试获取同一个 mutex 却被阻塞，从而形成死锁循环。
+
+#解决方案
+调整锁的持有范围，避免在持有 `list_mutex` 时进行可能导致睡眠或死锁的同步等待操作。
+具体修改如下：
+1. 将引用计数的判断逻辑提前，若引用计数未降至 0，直接释放锁并返回。
+2. 在确认需要删除定时器时，先将定时器从链表中移除（`list_del`），随后立即释放 `list_mutex`。
+3. 在释放锁之后，再依次执行 `timer_shutdown_sync`、`cancel_work_sync`、`sysfs_remove_file` 及内存释放操作。
+此举确保了 `cancel_work_sync` 等耗时或可能产生锁竞争的同步操作在互斥锁临界区外执行，从而消除了死锁风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a1cff93a699e2dd82b68e500920b1afce57a1c82

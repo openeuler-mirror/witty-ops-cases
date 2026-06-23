@@ -1,0 +1,29 @@
+#标题
+CXL端口解码器非顺序关闭导致Use-After-Free及内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在CXL测试环境（cxl_test）中，当模拟内存设备在根端口/总线设备之后注册时，触发了解码器关闭顺序检查失败。系统在尝试清理区域时触发通用保护故障，导致内核崩溃。具体表现为：
+1. 解码器销毁时日志显示“out of order reset”（非顺序重置），导致区域清理流程中止。
+2. 随后内核发生 Oops，RIP 指向 `to_cxl_port` 函数，调用栈显示在 `cxl_region_decode_reset` 过程中访问了已释放的内存对象。
+
+#主要错误日志
+- `mock_decoder_reset: cxl_port port3: decoder3.0: out of order reset, expected decoder3.1`
+- `Oops: general protection fault, probably for non-canonical address 0x6b6b6b6b6b6b6bc3: 0000 [#1] PREEMPT SMP PTI`
+- `RIP: 0010:to_cxl_port+0x8/0x60 [cxl_core]`
+- `Call Trace: cxl_region_decode_reset+0x69/0x190 [cxl_core]`
+
+#问题根因
+CXL 规范并未强制要求交换机解码器按特定顺序关闭，但驱动程序此前强制要求按顺序关闭。当多个端点共享一个交换机解码器时，如果解码器销毁顺序与分配顺序不一致（例如 decoder14.0 先于 decoder7.0 被移除），驱动会检测到“非顺序重置”并返回错误（-EBUSY），导致区域清理流程中止。
+此时，区域对象仍保留着对已销毁解码器对象的引用，随后尝试再次清理该区域时，访问了已释放的解码器内存对象，从而触发 Use-After-Free 导致内核崩溃。
+
+#解决方案
+修改解码器重置逻辑，允许非顺序关闭解码器，确保清理流程总是能够成功执行：
+1. 移除 `cxl_decoder_reset` 和 `mock_decoder_reset` 函数中的顺序检查失败返回值，将其改为 `void` 类型，确保关闭操作不会因顺序问题而中止。
+2. 新增 `device_for_each_child_reverse_from` 和 `cxl_port_commit_reap` 函数，用于在当前解码器关闭后，正确更新 `port->commit_end` 状态，清理因非顺序释放而挂起的资源。
+3. 将 `cxl_region_invalidate_memregion` 失败时的处理从返回错误改为发出警告，确保在缓存管理失败时不阻断区域销毁流程，以维护系统完整性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d054433095e6c24ce9a7a77a5a00733653793965

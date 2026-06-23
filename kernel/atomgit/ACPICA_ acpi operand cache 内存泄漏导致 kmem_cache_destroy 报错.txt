@@ -1,0 +1,30 @@
+#标题
+ACPICA: acpi operand cache 内存泄漏导致 kmem_cache_destroy 报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动过程中，若因恶意或异常的 ACPI 表导致 ACPI 初始化提前终止，内核在销毁 ACPI 缓存时检测到 "Acpi-Operand" 对象泄漏，打印 "Slab cache still has objects" 警告，系统继续启动。此泄露在旧版本内核（<= 4.9）中可能泄露内核函数地址，破坏 KASLR 安全机制。
+
+#主要错误日志
+[    0.591534] ACPI Error: Illegal I/O port address/length above 64K: C806E00000004002/0x2 (20170303/hwvalid-155)
+[    0.594351] ACPI Exception: AE_LIMIT, Unable to initialize fixed events (20170303/evevent-88)
+[    0.597858] ACPI: Unable to start the ACPI Interpreter
+[    0.599162] ACPI Error: Could not remove SCI handler (20170303/evmisc-281)
+[    0.601836] kmem_cache_destroy Acpi-Operand: Slab cache still has objects
+[    0.603556] CPU: 0 PID: 1 Comm: swapper/0 Not tainted 4.12.0-rc5 #26
+[    0.611118]  ? kmem_cache_destroy+0x1aa/0x1c0
+[    0.617986]  ? acpi_ut_delete_caches+0x3f/0x7b
+
+#问题根因
+`acpi_ds_create_operands` 函数在创建操作数失败时，调用 `acpi_ds_obj_stack_pop_and_delete` 进行清理。由于该函数对栈顶位置的计算与 `acpi_ds_obj_stack_push` 函数不一致（push 使用 `walk_state->operand_index` 作为起始位置，而 pop 误用了 index 0），导致清理时未能正确释放所有压入栈的对象，造成 acpi operand cache 内存泄漏。
+
+#解决方案
+修复 `dsutils.c` 中的栈清理逻辑：
+1. 在创建操作数前保存当前的 `num_operands`。
+2. 在错误处理路径中，临时将 `walk_state->num_operands` 设置为当前已处理的操作数数量，并传入正确的操作数总数给 `acpi_ds_obj_stack_pop_and_delete` 进行删除。
+3. 删除完成后恢复原 `num_operands` 值，确保所有对象被正确弹出和释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f2b7b60020301f7bbf72192d84354d02f1025d62

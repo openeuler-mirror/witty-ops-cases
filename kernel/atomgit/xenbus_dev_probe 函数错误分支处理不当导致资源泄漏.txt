@@ -1,0 +1,20 @@
+#标题
+xenbus_dev_probe 函数错误分支处理不当导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Xen 环境下，当 xenbus_dev_probe 函数中的 watch_otherend 操作失败时，驱动程序直接返回错误码，未释放此前 probe 操作已分配的资源。这导致设备引用计数泄漏及资源无法回收，可能引发内存泄漏或设备状态异常。
+
+#主要错误日志
+dev_warn(&dev->dev, "watch_otherend on %s failed.\n", dev->nodename);
+
+#问题根因
+在 xenbus_dev_probe 函数中，当 `drv->probe` 成功执行但后续的 `watch_otherend` 失败（err 非零）时，代码逻辑直接返回了错误变量，跳过了资源释放步骤。由于 probe 操作已经分配了资源，而失败处理路径中缺少对应的 remove 回调调用，导致上层调用者虽然感知到失败，但底层资源未被正确清理。
+
+#解决方案
+在函数中新增 `fail_remove` 标签块，当 `watch_otherend` 失败时，不再直接返回，而是通过 `goto fail_remove` 跳转执行资源释放逻辑。该逻辑参考了 xenbus_dev_remove 函数的处理方式：检查驱动是否存在 remove 回调，若存在则在持有 `reclaim_sem` 信号量的情况下调用 `drv->remove(dev)`，确保 probe 阶段分配的资源被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0765d9f65638c0dc78a1600f3ce7ceacad955eb1

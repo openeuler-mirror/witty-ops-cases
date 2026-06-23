@@ -1,0 +1,25 @@
+#标题
+vxlan: Fix NPD in {arp,neigh}_reduce() when using nexthop objects
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 VXLAN 设备处理 ARP 或 IPv6 Neighbor Reduction 逻辑时，若 FDB 条目使用了 nexthop 对象，调用 `first_remote_rcu(f)` 可能返回 NULL。代码在未做判空处理的情况下直接对其成员 `remote_ip` 进行取地址操作，导致内核发生空指针解引用，引发系统 panic 或 oops。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address...
+Call trace:
+ arp_reduce+0x.../0x... [vxlan]
+ neigh_reduce+0x.../0x... [vxlan]
+
+#问题根因
+在函数 `arp_reduce` 和 `neigh_reduce` 中，代码原逻辑为：
+`if (f && vxlan_addr_any(&(first_remote_rcu(f)->remote_ip)))`
+这里 `first_remote_rcu(f)` 在 FDB 条目引用 nexthop 对象时可能返回 NULL。原代码直接对返回值解引用访问 `remote_ip`（即 `&(NULL->remote_ip)`），从而触发了空指针解引用故障。
+
+#解决方案
+修改 `vxlan_core.c` 中的 `arp_reduce` 和 `neigh_reduce` 函数逻辑，引入临时变量 `rdst` 接收 `first_remote_rcu(f)` 的返回值。在访问 `remote_ip` 成员前，增加对 `rdst` 指针的有效性检查，确保仅在 `rdst` 非 NULL 时才进行后续操作，从而避免空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d4d14befee8df380ae600aea2e82b1dbf932b0cc

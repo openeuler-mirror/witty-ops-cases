@@ -1,0 +1,32 @@
+#标题
+rnp 驱动在 Hygon 平台运行时 dmesg 显示错误信息
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hygon 平台运行 OS 时，dmesg 日志中显示 rnp 网卡驱动相关的错误信息：
+- 显示 "Error: Invalid input arg nt value =0"
+- 显示 "dev attr show: queue_mapping show+0x0/0x200 [rnp] returned bad count"
+- 显示 "filT read buffer: dev attr show+0x0/0x50 returned bad count"
+
+#主要错误日志
+[ 20.171106] rnp 0000:43:00.0 ens107f0: Error: Invalid input arg nt value =0
+[ 20.183394] dev attr show: queue mapping show+0x0/0x200 [rnp] returned bad count
+[ 20.183441] filT read buffer: dev attr show+0x0/0x50 returned bad count
+
+#问题根因
+驱动代码中存在多处缺陷导致错误日志打印及潜在风险：
+1. `rnp_sysfs.c` 中的 `queue_mapping_show` 函数实现在某些情况下（如 Hygon 平台特定环境）返回值或格式不正确，导致 "returned bad count" 错误。
+2. `rnp_ethtool.c` 中对 flow type 的判断逻辑不完整，遗漏了对 `RNP_ATR_FLOW_TYPE_ETHER` 类型的处理，直接进入 default 分支或错误处理逻辑导致报错 "Invalid input arg nt value =0"。
+3. 驱动代码中大量 mailbox 交互及硬件操作函数（如 `rnp_down`, `rnp_remove` 等）未检查 PCI 设备是否已 offline（`pci_channel_offline`），在设备拔出或故障状态下仍尝试读写硬件寄存器或 mailbox，导致错误打印或系统异常。
+4. 内存管理方面，mailbox 通信使用的 cookie 结构体动态分配可能失败，且缺乏超时回收机制。
+
+#解决方案
+1. 移除 `queue_mapping_show` 及相关 sysfs 接口，避免产生错误的 dmesg 输出。
+2. 在 `rnp_add_ethtool_fdir_entry` 函数中增加对 `RNP_ATR_FLOW_TYPE_ETHER` 类型的判断分支，正确处理 Layer2 协议流类型。
+3. 在驱动的 mailbox 读写（`rnp_write_posted_mbx`, `rnp_check_for_msg_pf` 等）、固件命令发送（`rnp_mbx_fw_post_req`）、硬件状态更新（`rnp_set_mac_rx_hw_ops_n10`）等关键路径增加 `pci_channel_offline` 检查，若设备已离线则直接返回错误（如 -EIO），避免无效硬件访问。
+4. 优化 mailbox cookie 内存管理机制，将动态分配改为静态内存池（`mbx_req_cookie_pool`），并增加超时自动释放机制，防止内存泄漏或分配失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e6ffd454acd9b4432dfee6868f3c00be7df0b6c

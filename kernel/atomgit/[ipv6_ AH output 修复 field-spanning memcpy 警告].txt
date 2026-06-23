@@ -1,0 +1,23 @@
+#标题
+[ipv6: AH output 修复 field-spanning memcpy 警告]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[在使能了相关调试选项（如 FORTIFY_SOURCE）的内核中，处理 IPv6 AH（Authentication Header）协议输出数据包且存在扩展头时，触发编译时警告或运行时 memcpy 内存越界检测警告，提示 `field-spanning memcpy`。这可能导致内核拒绝该内存操作，影响 AH 协议数据包的正常发送流程。]
+
+#主要错误日志
+[未知]
+
+#问题根因
+[在 `ah6_output` 和 `ah6_output_done` 函数中，代码试图使用 `memcpy` 在结构体 `ipv6hdr` 的特定字段（如 `saddr` 或 `daddr`）与缓冲区 `iph_ext` 之间进行数据拷贝。根据 `CONFIG_IPV6_MIP6` 配置的不同，拷贝的起始位置不同，且长度 `extlen` 包含了 IPv6 地址和扩展头的内容。
+这种直接从结构体中间字段开始跨越多个字段进行 `memcpy` 的写法，破坏了结构体的内存布局完整性，被现代内核的 FORTIFY_SOURCE 机制识别为潜在的越界访问，从而引发 `field-spanning memcpy` 警告。]
+
+#解决方案
+[重构数据保存与恢复的逻辑，引入 `ah6_save_hdrs` 和 `ah6_restore_hdrs` 两个辅助函数。
+1. 显式地单独处理 IPv6 地址字段（`saddr` 和 `daddr`）的赋值操作，避免跨越字段拷贝。
+2. 对于扩展头部分，明确使用 `top_iph + 1` 指向 IPv6 头之后的内存区域进行 `memcpy` 操作，确保源和目标的内存地址均符合结构体定义的边界规范，从而消除警告并保证功能正确。]
+
+#来源
+[https://atomgit.com/openeuler/kernel/commit/ea25e7ddcf1940cd73b316f98c8dec4791a5dc25]

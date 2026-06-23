@@ -1,0 +1,20 @@
+#标题
+netfilter: nf_reject 错误响应 ICMP 差错报文导致流量风暴
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 netdev 链（如 attached to 'lo'）中配置 `ip protocol icmp reject` 规则时，系统会响应 ICMP Destination Unreachable 差错报文，导致数据包循环或双机之间的流量风暴。该现象会持续直到相关规则被修改（如增加限速或检查 ICMP 类型）。
+
+#主要错误日志
+未知
+
+#问题根因
+netdev 家族的 ICMP reject 实现与 inet 家族（及内部 REJECT target）不一致。`nf_reject_skb_v4_unreach` 和 `nf_reject_skb_v6_unreach` 函数在处理入站报文时，未检查报文类型是否为 ICMP/ICMPv6 差错报文（如 Destination Unreachable）。这导致系统在收到 ICMP 差错报文时，仍会尝试发送回复，从而引发报文循环。
+
+#解决方案
+在 IPv4 和 IPv6 的 reject 处理函数中新增辅助函数 `nf_skb_is_icmp_unreach` 和 `nf_skb_is_icmp6_unreach`，用于检测入站报文是否为 ICMP Destination Unreach 类型。如果检测到该类型报文，函数直接返回 NULL，不再发送回复报文，从而避免对差错报文的重复响应。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/52d4e10b45c577c9de67c5a6fcfefb7f079f2376

@@ -1,0 +1,27 @@
+#标题
+arm64/ptrace: regs_get_kernel_stack_nth() 函数栈越界读取问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+KASAN 检测到内核在 `regs_get_kernel_stack_nth()` 函数中发生栈越界读取。该问题在通过 kprobe 追踪 `kernel_clone` 等系统调用时触发，导致内核报告 KASAN 异常，影响内核地址消毒器的正常运行。
+
+#主要错误日志
+[   97.283505] BUG: KASAN: stack-out-of-bounds in regs_get_kernel_stack_nth+0xa8/0xc8
+[   97.284677] Read of size 8 at addr ffff800089277c10 by task 1.sh/2550
+[   97.293042]  __asan_load8+0x9c/0xc0
+[   97.293835]  regs_get_kernel_stack_nth+0xa8/0xc8
+[   97.294562]  kprobe_trace_func+0x254/0x3b0
+[   97.310749] The buggy address belongs to the virtual mapping at
+[   97.310749]  [ffff800089270000, ffff800089279000) created by:
+[   97.310749]  dup_task_struct+0xc0/0x2e8
+
+#问题根因
+`regs_get_kernel_stack_nth()` 函数在读取栈上的值时，虽然已经通过 `regs_within_kernel_stack()` 校验确认了地址 `addr` 位于栈上，但直接使用 `*addr` 进行解引用读取时，部分 GCC 编译器版本下的代码生成行为可能会触发 KASAN 的栈越界检查，从而导致误报。
+
+#解决方案
+使用 `READ_ONCE_NOCHECK(*addr)` 替代原有的 `*addr` 读取操作。该宏在确保原子读取的同时，会显式跳过 KASAN 的检查，从而避免此处的误报问题。此修复方案参考了 s390 架构上针对同类问题的修复提交 d93a855c31b7。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6c04291493a3e5bec83e424ced3da31dcd5040f4

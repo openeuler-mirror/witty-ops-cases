@@ -1,0 +1,27 @@
+#标题
+net/sched: cls_flow 在共享块上创建过滤器时引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在共享块上创建流过滤器且未指定完整 baseclass 时，触发内核空指针引用，导致 KASAN 报告 null-ptr-deref 并引发内核崩溃。
+
+#主要错误日志
+=======================================================================
+KASAN: null-ptr-deref in range [0x0000000000000038-0x000000000000003f]
+RIP: 0010:flow_change (net/sched/cls_flow.c:508)
+Call Trace:
+ tc_new_tfilter (net/sched/cls_api.c:2432)
+ rtnetlink_rcv_msg (net/core/rtnetlink.c:6980)
+ [...]
+=======================================================================
+
+#问题根因
+函数 flow_change() 调用 tcf_block_q() 并直接解引用 q->handle 来派生默认 baseclass。然而，共享块的 block->q 为 NULL，当在共享块上创建未完全限定 baseclass 的流过滤器时，导致了 NULL 指针解引用。
+
+#解决方案
+在访问 block->q 之前增加对 tcf_block_shared() 的检查。如果检测到是共享块，则通过 NL_SET_ERR_MSG 返回 -EINVAL 错误，提示用户必须指定 baseclass，从而避免空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3e8d2e98e60608b54085e81a634190670c519895

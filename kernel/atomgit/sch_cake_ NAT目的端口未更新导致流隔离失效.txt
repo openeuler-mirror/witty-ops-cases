@@ -1,0 +1,20 @@
+#标题
+sch_cake: NAT目的端口未更新导致流隔离失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CAKE 队列纪律开启 "nat" 模式时，当多个连接被 NAT 到同一个目的地址时，CAKE 将它们视为不同的流，导致 NAT 感知的流隔离功能失效。原本应属于同一连接的流量被错误地分散处理。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `cake_update_flowkeys()` 中，更新目的端口的赋值方向写反了。代码错误地写成了 `port = keys->ports.dst;`（将旧值赋给临时变量），而不是正确的 `keys->ports.dst = port;`（将 NAT 转换后的端口更新到流关键字中）。这导致 NAT 后的目的端口从未被更新到流散列键中。该缺陷是在提交 b0c19ed6088a ("sch_cake: Take advantage of skb->hash where appropriate") 重构代码时引入的。
+
+#解决方案
+修正赋值语句的方向，将 `port = keys->ports.dst;` 修改为 `keys->ports.dst = port;`，确保 NAT 转换后的目的端口能正确更新到流关键字中，从而修复流隔离逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01f7ce069f230c1215003a048d2dbcc372140a34

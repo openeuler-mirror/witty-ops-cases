@@ -1,0 +1,20 @@
+#标题
+md-bitmap: dm-raid max_write_behind 设置值校验错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 dm-raid 的 max_write_behind 参数时，若设定的值超过 COUNTER_MAX，系统会将其强制截断为 COUNTER_MAX。这违背了代码注释与设计预期，导致 write_behind 的实际生效值可能超出合理范围（应为 COUNTER_MAX / 2），影响阵列的写回行为与可靠性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `md_bitmap_new_disk_sb` 函数中，校验 `write_behind` 值的逻辑有误。代码原本的设计意图是将最大值限制为 `COUNTER_MAX / 2`（代码注释明确指出 "We choose COUNTER_MAX / 2 arbitrarily"），但条件判断语句错误地写成了 `if (write_behind > COUNTER_MAX)`，导致只有当值超过 `COUNTER_MAX` 时才会被截断为 `COUNTER_MAX / 2`，从而允许了介于 `COUNTER_MAX / 2` 和 `COUNTER_MAX` 之间的不合规值通过校验。
+
+#解决方案
+修正 `drivers/md/md-bitmap.c` 中的条件判断逻辑，将 `if (write_behind > COUNTER_MAX)` 修改为 `if (write_behind > COUNTER_MAX / 2)`。这确保了任何大于 `COUNTER_MAX / 2` 的设定值都会被正确截断为 `COUNTER_MAX / 2`，符合设计预期。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f9480446a3b5d0866962c62940a619291d38911

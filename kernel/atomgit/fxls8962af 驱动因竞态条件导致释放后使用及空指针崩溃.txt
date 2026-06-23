@@ -1,0 +1,27 @@
+#标题
+fxls8962af 驱动因竞态条件导致释放后使用及空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 fxls8962af 传感器中断刷新 FIFO 时发生崩溃，具体表现为无法处理内核空指针解引用，导致系统异常。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address 00000000 when read
+[...]
+_find_first_bit_le from fxls8962af_fifo_flush+0x17c/0x290
+fxls8962af_fifo_flush from fxls8962af_interrupt+0x80/0x178
+fxls8962af_interrupt from irq_thread_fn+0x1c/0x7c
+irq_thread_fn from irq_thread+0x110/0x1f4
+irq_thread from kthread+0xe0/0xfc
+kthread from ret_from_fork+0x14/0x2c
+
+#问题根因
+fxls8962af_fifo_flush() 函数在使用 indio_dev->active_scan_mask（通过 iio_for_each_active_channel() 调用）时，未确保 indio_dev 处于缓冲模式。当 indio_dev 在中断刷新 FIFO 的过程中退出缓冲模式时，存在竞态条件，导致访问了已释放或无效的内存地址，从而引发 Use After Free 或空指针解ference。
+
+#解决方案
+在 fxls8962af_buffer_predisable 函数中，禁用缓冲模式前调用 synchronize_irq(data->irq)。这确保了在禁用缓冲模式时，当前没有中断处理程序正在运行，从而避免了竞态条件导致的 Use After Free 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/50937bfa7f0806f8dea82dcc1f2789333a722008

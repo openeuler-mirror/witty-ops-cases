@@ -1,0 +1,20 @@
+#标题
+yt6801网卡在关闭后执行kexec触发内核panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 NetworkManager 将网卡置为 down 状态（调用 ndo_stop/fxgmac_close）后，执行 kexec 重启命令加载新内核时触发内核 panic。具体报错为 "Unable to handle kernel paging request at virtual address 0000000000000398"。
+
+#主要错误日志
+Unable to handle kernel paging request at virtual address 0000000000000398
+
+#问题根因
+在执行 `kexec -e` 重启流程时，内核会调用 `fxgmac_shutdown`，该函数内部调用 `fxgmac_disable_rx` 时触发了空指针或非法地址访问。根本原因是网卡已经被 `ndo_stop` (fxgmac_close) 关闭，相关资源或状态已释放/重置，但 `fxgmac_shutdown` 未检查设备关闭状态，仍尝试执行硬件操作（如 disable rx），导致访问非法内存地址引发 panic。
+
+#解决方案
+在 `fxgmac_net_powerdown` 函数中增加对设备状态 `priv->dev_state` 的判断。如果检测到设备状态已为 `FXGMAC_DEV_CLOSE`，则直接返回，不再执行后续的硬件关闭操作，从而避免重复操作引发的 panic。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/976745ebc0d2a4858b4dd60bd25e043975c7640c

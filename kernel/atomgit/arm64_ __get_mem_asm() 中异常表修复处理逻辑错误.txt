@@ -1,0 +1,20 @@
+#标题
+arm64: __get_mem_asm() 中异常表修复处理逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 架构下开启 CONFIG_CC_HAS_ASM_GOTO_OUTPUT=y 编译选项时，`__get_mem_asm()` 函数在发生用户空间访问错误时，异常表修复处理程序会错误地将 `-EFAULT` 错误码写入存储加载结果的寄存器中。虽然这在大多数标准路径下是良性问题（因为结果通常会被显式清零或不被使用），但在某些情况下（特别是结合特定 GCC 版本的编译行为），可能导致错误路径处理逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 Commit 86a6a68febfcf57b ("arm64: start using 'asm goto' for get_user() when available") 中，移除 'err' 变量时错误地更新了异常表条目。代码错误地使用了 `_ASM_EXTABLE_##type##ACCESS_ERR()`，导致发生故障时修复处理程序将 `-EFAULT` 写入了包含加载结果 'x' 的寄存器 "%w0"，而不是原本设计的零寄存器。正确的逻辑应使用 `_ASM_EXTABLE_##type##ACCESS()`，在发生故障时保持值寄存器不变。
+
+#解决方案
+将 `__get_mem_asm()` 中的 `_ASM_EXTABLE_##type##ACCESS_ERR(1b, %l2, %w0)` 替换为 `_ASM_EXTABLE_##type##ACCESS(1b, %l2)`。这确保了在发生访问错误时，异常处理程序不再错误地修改值寄存器，使其行为与其他架构及 `__put_mem_asm()` 保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c7090e7a94a779f09de89659ed4391d21472f90

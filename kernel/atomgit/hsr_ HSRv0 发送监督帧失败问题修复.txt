@@ -1,0 +1,24 @@
+#标题
+hsr: HSRv0 发送监督帧失败问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HSRv0（高可用无缝冗余协议版本 0）网络环境中，节点无法发送监督帧。尽管监督帧数据包已成功生成，但在后续处理流程中会因校验失败而被丢弃，导致 HSRv0 链路无法维持正常的监督通信。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hsr_fill_frame_info()` 函数中存在校验逻辑，要求数据包的 MAC 头部长度至少为 `sizeof(struct hsr_ethhdr)`。
+根因在于 `send_hsr_supervision_frame()` 函数构建 HSR 监督帧时，MAC 头部仅包含了以太网头，未包含 HSR 头部。这导致 MAC 头部长度不足，无法通过 `hsr_fill_frame_info()` 的长度校验，最终导致发送失败。
+
+#解决方案
+在 `net/hsr/hsr_device.c` 的 `send_hsr_supervision_frame()` 函数中，添加设置网络头部偏移和重置 MAC 长度的逻辑：
+1. 调用 `skb_set_network_header(skb, ETH_HLEN + HSR_HLEN)`，将网络头指针设置在以太网头和 HSR 头之后。
+2. 调用 `skb_reset_mac_len(skb)` 重新计算并设置 MAC 头长度。
+此修改使得 MAC 头部包含了 HSR 头部（以及 TLV 字段），符合 `hsr_fill_frame_info()` 的校验要求，修复了 HSRv0 监督帧发送失败的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad08277e7c2469b06e28ed11f03957d09b7fe0f8

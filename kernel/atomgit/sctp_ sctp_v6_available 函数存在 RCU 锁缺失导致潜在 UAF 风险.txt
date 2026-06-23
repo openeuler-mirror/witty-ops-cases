@@ -1,0 +1,48 @@
+#标题
+sctp: sctp_v6_available 函数存在 RCU 锁缺失导致潜在 UAF 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_PROVE_RCU_LIST 编译选项的内核中，当用户态程序（如 sctp_hello）调用 bind 系统调用绑定 SCTP 套接字时，内核触发 lockdep 警告。系统提示 "suspicious RCU usage"，指出 RCU-list 在非 reader section 中被遍历，存在潜在的 Use-After-Free 风险。
+
+#主要错误日志
+```
+=============================
+WARNING: suspicious RCU usage
+6.12.0-rc5-virtme #1216 Tainted: G        W
+-----------------------------
+net/core/dev.c:876 RCU-list traversed in non-reader section!!
+
+other info that might help us debug this:
+rcu_scheduler_active = 2, debug_locks = 1
+1 lock held by sctp_hello/31495:
+ #0: ffff9f1ebbdb7418 (sk_lock-AF_INET6){+.+.}-{0:0}, at: sctp_bind (./arch/x86/include/asm/jump_label.h:27 net/sctp/socket.c:315) sctp
+
+stack backtrace:
+ CPU: 7 UID: 0 PID: 31495 Comm: sctp_hello Tainted: G        W          6.12.0-rc5-virtme #1216
+ Tainted: [W]=WARN
+ ...
+ Call Trace:
+  <TASK>
+ dump_stack_lvl (lib/dump_stack.c:123)
+ lockdep_rcu_suspicious (kernel/locking/lockdep.c:6822)
+ dev_get_by_index_rcu (net/core/dev.c:876 (discriminator 7))
+ sctp_v6_available (net/sctp/ipv6.c:701) sctp
+ sctp_do_bind (net/sctp/socket.c:400 (discriminator 1)) sctp
+ sctp_bind (net/sctp/socket.c:320) sctp
+ ...
+```
+
+#问题根因
+函数 `sctp_v6_available()` 在调用 `dev_get_by_index_rcu()` 和 `ipv6_chk_addr()` 时，未持有 RCU 读锁（rcu_read_lock）。这违反了 RCU 读取临界区的规则，导致在读取过程中可能发生并发更新或释放，引发内核警告及潜在的 Use-After-Fault (UAF) 安全隐患。
+
+#解决方案
+在 `net/sctp/ipv6.c` 的 `sctp_v6_available` 函数中添加 RCU 锁保护。具体修改为：
+1. 在访问 RCU 保护的资源前调用 `rcu_read_lock()`。
+2. 使用 `READ_ONCE` 安全读取 `sk->sk_bound_dev_if`。
+3. 在逻辑判断完成后，统一在函数返回前调用 `rcu_read_unlock()` 释放锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e505be2caba56910361e9c7b6b130e47c1be03c3

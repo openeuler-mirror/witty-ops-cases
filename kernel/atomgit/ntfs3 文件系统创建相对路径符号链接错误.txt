@@ -1,0 +1,27 @@
+#标题
+ntfs3 文件系统创建相对路径符号链接错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ntfs3 文件系统中创建相对路径的符号链接（例如 `ln -s "relative/path/to/file" symlink`）时，创建失败或生成的链接无法被正确解析，导致链接指向错误或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+ntfs3 驱动在构建 `REPARSE_DATA_BUFFER` 时，未区分绝对路径与相对路径，统一按绝对路径处理。
+1. 计算缓冲区大小时，错误地为相对路径包含了一个固定的装饰前缀长度（4 个 Unicode 字符 "\??\"）。
+2. 在设置 `SubstituteNameLength` 时，错误地加上了该前缀的长度。
+3. `Flags` 字段被硬编码为 0（表示绝对路径），未根据路径类型设置 `SYMLINK_FLAG_RELATIVE` 标志位。
+4. 代码强制将 "\??\" 前缀插入到相对路径中，破坏了相对路径的结构。
+
+#解决方案
+修改 `fs/ntfs3/inode.c` 中的 `ntfs_create_reparse_buffer` 函数，增加对绝对路径的判断逻辑（通过检查路径是否包含盘符如 "C:"），针对相对路径进行如下修复：
+1. 调整 `ntfs_reparse_bytes` 计算逻辑，仅对绝对路径计算额外的装饰前缀空间。
+2. 仅对绝对路径执行 "\??\" 前缀的插入和 `SubstituteNameLength` 的追加，相对路径跳过此步骤。
+3. 正确设置 `rs->Flags`，绝对路径设为 0，相对路径设为 `SYMLINK_FLAG_RELATIVE`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d0a47334dde7f5112071b3cedbfd86fa776f7a45

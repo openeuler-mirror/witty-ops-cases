@@ -1,0 +1,20 @@
+#标题
+ksmbd 会话查找时因无效状态导致的引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 模块处理会话查找时，若找到的会话状态不为 SMB2_SESSION_VALID，虽然会话被判定为无效，但未释放查找时增加的引用计数。这会导致会话对象的引用计数持续增加无法归零，造成内存泄漏（对象无法释放），长期运行可能导致内存耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ksmbd_session_lookup_all` 中，当查找到会话（`sess`）但其状态不是 `SMB2_SESSION_VALID` 时，代码逻辑直接将 `sess` 指针置为 NULL 并返回，遗漏了对该会话引用计数的减少操作（`ksmbd_user_session_put`）。由于查找过程获取了引用，未释放导致引用计数泄漏。
+
+#解决方案
+在判定会话状态无效的分支中，在将 `sess` 指针置为 NULL 之前，显式调用 `ksmbd_user_session_put(sess)` 来释放对该会话的引用，修复引用计数泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b3a9f6ecb2fd32738674faa76df3d77a2dde4ef2

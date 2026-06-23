@@ -1,0 +1,20 @@
+#标题
+sw64 架构 set_huge_pte_at 函数 TLB 刷新缺失导致内存不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构（C4 芯片）下使用 HugeTLB 功能时，由于 `set_huge_pte_at` 函数在更新页表项时未正确刷新 TLB，导致 TLB 中驻留的旧映射与内存中更新的新映射不一致。这可能引发数据损坏、进程访问错误页面或系统异常行为，特别是在进行大页内存映射更新操作时表现明显。
+
+#主要错误日志
+未知
+
+#问题根因
+`set_huge_pte_at` 函数在更新页表项之前，错误地调用了 `get_and_clear` 函数。该函数仅清除页表项但未刷新 TLB，导致 TLB 中保留了过时的映射条目。在更新页表项后，TLB 未同步导致内存一致性维护失败。
+
+#解决方案
+将 `arch/sw_64/mm/hugetlbpage_c4.c` 文件中 `set_huge_pte_at` 函数内的 `get_and_clear` 调用替换为 `clear_flush`。该修改确保在清除页表项的同时立即刷新 TLB，从而保证页表更新前后 TLB 与内存映射的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d23a6be7626fbfd51ef8e952df0466a02e9546f2

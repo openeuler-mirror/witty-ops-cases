@@ -1,0 +1,20 @@
+#标题
+dm: add missing unlock on in dm_keyslot_evict()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 dm_keyslot_evict() 函数中，当 dm_get_live_table() 返回 NULL 时，函数直接返回 0，导致遗漏调用 dm_put_live_table() 进行解锁或引用计数释放。这可能导致内核内部的 SRCU 锁或引用计数泄露，进而引发潜在的死锁、资源无法释放或设备移除阻塞等问题。
+
+#主要错误日志
+未知
+
+#问题根因
+代码逻辑遗漏。在 `dm_keyslot_evict` 函数中，如果 `dm_get_live_table()` 返回 NULL，原代码直接 `return 0` 跳过了后续的 `dm_put_live_table(md, srcu_idx)` 调用。根据提交信息说明，即使 `dm_get_live_table()` 返回 NULL，也必须调用 `dm_put_live_table()` 进行清理。
+
+#解决方案
+修改 `dm_keyslot_evict()` 函数的退出路径。当 `dm_get_live_table()` 返回 NULL 时，不再直接返回 0，而是跳转（goto）到 `put_live_table` 标签处，确保执行 `dm_put_live_table(md, srcu_idx)` 以正确释放资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0d0c6a270eaa3fc4a591c138fb28c0bd21fa7270

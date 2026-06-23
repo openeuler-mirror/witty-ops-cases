@@ -1,0 +1,22 @@
+#标题
+mailbox-test驱动初始化时序问题导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mailbox-test 驱动探测过程中，由于 `waitqueue`、`drvdata` 及 `spinlock` 初始化晚于 debugfs 文件创建或通道请求，用户空间请求或挂起的 IRQ 可能访问未初始化的资源，导致内核发生空指针异常。
+
+#主要错误日志
+NULL pointer exception
+
+#问题根因
+驱动在 `mbox_test_probe` 函数中的初始化顺序不当。
+1. `waitqueue` 在 debugfs 文件创建之后才初始化，导致用户空间在创建后立即发起请求时访问未初始化的等待队列。
+2. `drvdata` 和 `spinlock` 在请求通道之后才初始化，导致此时若产生挂起的 IRQ（dangling irqs），IRQ 处理程序可能访问空指针引发异常。
+
+#解决方案
+调整 `mbox_test_probe` 函数中的初始化顺序，将关键数据结构的初始化前移。具体包括：将 `tdev->dev` 赋值、`spin_lock_init`、`mutex_init`、`init_waitqueue_head` 以及 `platform_set_drvdata` 操作移至获取内存资源后、创建 debugfs 文件和请求通道之前执行，确保资源在被外部访问（通过 debugfs 或 IRQ）前已完全初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/500eff1d9dc8521a99ac3ea46d82a13fb29b3c28

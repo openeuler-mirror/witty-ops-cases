@@ -1,0 +1,20 @@
+#标题
+squashfs_fill_super 函数因 sb_min_blocksize 失败导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载 Squashfs 文件系统时，如果底层设备的 `sb_min_blocksize` 设置块大小失败（返回 0），内核会在 `squashfs_fill_super` 函数中直接返回 `-EINVAL` 错误码退出，导致此前已经通过 `kzalloc` 分配的 `sb->s_fs_info` 内存结构体未被释放，从而造成内存泄漏。
+
+#主要错误日志
+squashfs: unable to set blocksize
+
+#问题根因
+在函数 `squashfs_fill_super` 中，代码逻辑先执行了 `sb->s_fs_info = kzalloc(...)` 分配内存，随后调用 `sb_min_blocksize` 设置块大小。当 `sb_min_blocksize` 返回 0（表示设置失败）时，函数直接返回 `-EINVAL`，但未调用 `kfree` 释放已分配的 `sb->s_fs_info` 内存。根据 Commit 描述，这是在引入检查 `sb_min_blocksize` 返回值的补丁（Fixes: 734aa85390ea）时引入的缺陷。
+
+#解决方案
+调整代码执行顺序，将 `sb_min_blocksize` 的调用移至内存分配（`kzalloc`）之前。如果在设置块大小阶段就失败，则直接返回错误，不再进行后续的内存分配，从而避免了内存泄漏的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7325326b5397dd7d3aaca0736f152a45faf94e34

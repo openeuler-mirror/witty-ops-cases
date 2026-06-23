@@ -1,0 +1,20 @@
+#标题
+ice 驱动 LACP Bond 模式下接口 Aggregator ID 不一致导致链路聚合故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 SRIOV LAG DDP 包的环境中，当 Bond 配置为 802.3ad (LACP) 模式且不支持 SRIOV VF LAG 时，若同时将两个接口加入 Bond，会导致两个接口被分配不同的 LACP Aggregator ID。这将导致 LACP 控制协议失效，Bond 无法正常工作。通过 `/proc/net/bonding/bond0` 查询可见 Aggregator ID 不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在处理 LAG netdev 事件时，驱动程序未检查 primary 接口是否处于 switchdev 模式。在 SRIOV LAG DDP 包已启用但环境实际上不支持 SRIOV VF LAG 的场景下，如果接口被同时加入 Bond，驱动逻辑错误地继续执行了后续配置流程，导致两个接口被分配了不同的 LACP Aggregator ID。
+
+#解决方案
+在 `ice_lag_changeupper_event` 函数中增加对 switchdev 模式的检查。在设置 primary 接口的 SWID 或同步 secondary 接口的 SWID 之前，调用 `ice_is_switchdev_running` 判断 primary 接口是否处于 switchdev 模式，若非 switchdev 模式则直接退出配置流程，从而避免 Aggregator ID 分配错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/202162f82f13471aa32dd01efdee14d98e63a326

@@ -1,0 +1,23 @@
+#标题
+coresight: 锁类型不匹配导致潜在并发问题及配置移除缺锁保护
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Coresight 子系统中，由于 `cscfg_csdev_lock` 锁类型定义与实际使用场景不匹配，以及在移除配置时缺乏锁保护，可能导致并发访问冲突，进而引发内核数据竞争或系统不稳定。该问题关联 Issue ICJT8C 及 CVE-2025-38132。
+
+#主要错误日志
+未知
+
+#问题根因
+1. `coresight_device` 结构体中的 `cscfg_csdev_lock` 定义为 `spinlock_t` 类型，但在实际代码路径中可能涉及需要 `raw_spinlock_t` 的上下文（如实时内核或特定原子上下文），存在类型不匹配风险。
+2. 函数 `cscfg_remove_owned_csdev_configs` 在遍历并删除 `config_csdev_list` 链表节点时，未持有 `cscfg_csdev_lock` 锁，导致链表操作存在并发竞争隐患。
+
+#解决方案
+1. 将 `coresight_device` 结构体中的 `cscfg_csdev_lock` 成员类型从 `spinlock_t` 修改为 `raw_spinlock_t`。
+2. 全局替换该锁相关的初始化、加锁和解锁函数调用，将 `spin_lock_irqsave` / `spin_unlock_irqrestore` / `spin_lock_init` 替换为对应的 `raw_spin_lock_irqsave` / `raw_spin_unlock_irqrestore` / `raw_spin_lock_init`。
+3. 在 `cscfg_remove_owned_csdev_configs` 函数中，增加 `guard(raw_spinlock_irqsave)(&csdev->cscfg_csdev_lock)` 保护，确保在删除链表节点时持有锁，防止并发修改。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/adef372a65376cbe0940d5647a9a46bde45cfd33

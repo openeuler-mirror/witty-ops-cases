@@ -1,0 +1,20 @@
+#标题
+CAN USB 驱动 (etas_es58x) 因 MTU 校验缺失导致缓冲区溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+由于驱动未实现 `ndo_change_mtu` 接口，攻击者可以通过用户态命令（如 `ip link set can0 mtu 9999`）将 CAN 接口的 MTU 设置为非法的较大值。随后通过 PF_PACKET 套接字注入特制的 CAN XL 帧，驱动误将其视为 CAN(FD) 帧处理。在 `es581_4_tx_can_msg` 函数执行 memcpy 操作时，错误的长度计算导致发生内核缓冲区溢出。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序 `etas_es58x` 未填充 `net_device_ops->ndo_change_mtu()` 函数指针，导致系统允许将接口 MTU 设置为超过设备实际处理能力的值（如 9999）。这使得恶意构造的数据包绕过了 PF_PACKET 层的 skb->len 校验，并成功通过 `can_dev_dropped_skb()` 的检查。最终在驱动内部处理时，将 CAN XL 帧误判为 CAN(FD) 帧，导致 `memcpy(tx_can_msg->data, cf->data, cf->len)` 拷贝长度超出预期缓冲区大小，引发溢出。
+
+#解决方案
+在驱动的 `net_device_ops` 结构体中填充 `ndo_change_mtu` 回调函数为 `can_change_mtu`。该函数会根据设备能力限制 MTU 只能设置为 CAN_MTU 或 CANFD_MTU，从根源上阻止非法 MTU 的设置，从而防止后续的缓冲区溢出发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f0ede9064883fa6219ec1a22bf9cb5ad49822171

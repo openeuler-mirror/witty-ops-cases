@@ -1,0 +1,20 @@
+#标题
+RDMA/irdma: 修复 rereg_user_mr 中的 double free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 RDMA irdma 驱动进行内存区域重注册（rereg_user_mr）操作时，若设置了 `IB_MR_REREG_TRANS` 标志且重注册过程中发生错误，会导致内核发生 double free（双重释放）错误，进而引发内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `irdma_rereg_mr_trans` 函数中，当 `IB_MR_REREG_TRANS` 被设置时，原有的 umem 会被释放并分配新的 umem。如果分配新 umem 后的步骤失败，函数会进入错误处理路径调用 `ib_umem_release(region)` 释放新分配的 umem，但未将 `iwmr->region` 置为 NULL。失败返回用户态后，用户调用 `ibv_dereg_mr` 进行清理，此时内核的 dereg_mr 路径检测到 `iwmr->region` 非空，试图再次调用 `ib_umem_release`，导致对同一块内存区域进行双重释放。
+
+#解决方案
+在 `irdma_rereg_mr_trans` 函数的错误处理路径中，在调用 `ib_umem_release(region)` 释放内存后，立即将 `iwmr->region` 设置为 NULL，防止后续的 dereg_mr 流程再次释放该指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/639e9a4489f4a96ec96ae059e01a2d116f775b55

@@ -1,0 +1,28 @@
+#标题
+UB/hisi-ubus: 代码同步与逻辑修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **设备移除流程异常**：在 UB 链路 Down 处理过程中，当所有端口链路均 Down 时，设备移除后未执行后续的 `link_down_notify` 通知流程，可能导致系统状态与硬件实际状态不一致。
+2. **日志信息误导**：内存校验失败时，内核日志打印错误的函数名称（显示 `mem_drain_state` 而非 `memory_validate_pa`），干扰故障定位。
+3. **资源管理缺陷**：Page Table 和 Range Table 在释放回 DMA 内存池前未清零，可能导致敏感数据残留或下次分配时的状态污染；解除映射时未重置 `token_value`。
+4. **功能逻辑错误**：`ub_vdm_create_bi_bypass_ummu` 函数中对 `type` 类型的判断逻辑反转，导致 Bypass 模式下 EID 类型设置错误。
+
+#主要错误日志
+- `dev_warn(mem_device->dev, "ub memory decoder ops memory_validate_pa is null.\n");`（修复前日志错误打印为 `mem_drain_state`）
+- `ub_err(ubc->uent, "read ub cfg1 support feature failed, ret=%d\n", ret);`（新增功能分支中的错误日志）
+
+#问题根因
+1. **流程缺失**：`ublc_link_down_handle` 函数在处理“所有端口链路 Down”分支时，直接 `return` 返回，遗漏了必须执行的 `link_down_notify` 步骤。
+2. **代码不同步**：内核版本合入过程中缺失部分关键逻辑代码，包括日志打印错误、条件判断逻辑取反、内存释放未清零以及解码器映射条件检查缺失等问题。
+
+#解决方案
+1. **修复控制流**：修改 `ublc_link_down_handle`，将 `return` 改为 `goto link_down_notify`，确保通知流程执行。
+2. **修正日志与逻辑**：修正 `ub_memory_validate_pa` 中的告警字符串；修正 `ub_vdm_create_bi_bypass_ummu` 中的 `if-else` 判断逻辑。
+3. **增强安全性**：在 `rgtlb_free_page`、`pgtlb_free_page` 及 `rgtlb_unmap_to_range` 中调用 `dmam_free_coherent` 释放内存前，先调用 `memset` 将内存区域清零，并重置相关 `token_value`。
+4. **完善功能逻辑**：新增 `map_by_ubus` 函数并在 `ub_entity_decoder_map_mmio` 中调用，以检查硬件特性支持情况，决定是否执行映射操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b42267b3b2041dde155a2a11f44ae91206912b95

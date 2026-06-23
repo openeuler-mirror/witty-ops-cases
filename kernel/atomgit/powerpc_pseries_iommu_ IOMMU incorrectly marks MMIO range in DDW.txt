@@ -1,0 +1,22 @@
+#标题
+powerpc/pseries/iommu: IOMMU incorrectly marks MMIO range in DDW
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 powerpc pseries 平台上使用动态 DMA 窗口（DDW）功能时，IOMMU 初始化逻辑存在错误。系统将 MMIO（Memory Mapped I/O）地址范围错误地标记到了 IOMMU 表中。由于 IOMMU 页表的索引计算错误，导致原本应作为 DMA 映射的地址空间被误判或错误保留，进而引发设备 DMA 操作异常或相关的内核警告。
+
+#主要错误日志
+未知
+
+#问题根因
+问题出在 `arch/powerpc/platforms/pseries/iommu.c` 文件的 `enable_ddw` 函数中。在调用 `iommu_init_table` 初始化 IOMMU 表时，传入的参数 `start` 和 `end` 是绝对地址值，但函数期望接收的是 IOMMU 表的索引（页号）。
+由于缺少右移 `page_shift` 位的操作，导致传入的索引值远远超出了 IOMMU 表的实际范围，进而导致 IOMMU 错误地标记了 MMIO 范围。此外，文件 `arch/powerpc/kernel/iommu.c` 中的循环变量 `i` 也被修正为 `unsigned long`，以防止在处理大地址范围时发生整型溢出。
+
+#解决方案
+1. 修正 `enable_ddw` 函数中 `iommu_init_table` 的调用参数，将 `start` 和 `end` 地址右移 `page_shift` 位，确保传入的是正确的 IOMMU 表索引而非绝对地址。
+2. 将 `iommu_table_reserve_pages` 函数中的循环变量 `i` 的类型从 `int` 修改为 `unsigned long`，以适配 64 位地址空间的处理，避免潜在的溢出风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f902feb08aa3a1f8e53b9af622021830abde9a09

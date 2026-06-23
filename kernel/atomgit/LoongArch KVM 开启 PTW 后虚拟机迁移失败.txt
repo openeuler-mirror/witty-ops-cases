@@ -1,0 +1,23 @@
+#标题
+LoongArch KVM 开启 PTW 后虚拟机迁移失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构下开启 PTW（Page Table Walk）硬件功能后，进行 KVM 虚拟机热迁移时，由于内存脏页标记丢失，导致迁移数据不完整，最终造成虚拟机迁移失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在未开启 PTW 前，虚拟机写物理页会触发“页修改异常”，内核在异常处理中设置 pte 的 dirty 位并更新 KVM 的脏页位图，从而正确迁移脏页。开启 PTW 后，硬件直接写入 pte 的 dirty 位，不再触发“页修改异常”，导致 KVM 无法正确设置脏页位图，进而导致部分内存数据丢失和迁移失败。
+
+#解决方案
+通过软件模拟脏页标记机制解决该问题：
+1. 修改 `kvm_pte_mkclean` 实现，在迁移开始清理脏页时，同时清除 pte 的 write 和 dirty 位，强制后续写操作触发页修改异常。
+2. 利用 pte 的第 50 位（`KVM_RECORD_PAGE_WRITE_ABLE`）记录页表项原始的写权限属性。
+3. 在快速路径处理（如 `kvm_map_page_fast`）中，检测到标记位后恢复 pte 的写权限，确保在完成脏页标记流程后正确恢复内存访问属性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce9cb8920f4df347137e0644c4d7e1c55952207b

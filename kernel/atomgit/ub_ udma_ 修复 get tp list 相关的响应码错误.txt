@@ -1,0 +1,24 @@
+#标题
+ub: udma: 修复 get tp list 相关的响应码错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 UDMA（User DMA）相关的用户态请求或响应消息时，特别是涉及 "get tp list" 的场景下，内核模块可能向用户态发送错误的响应状态码（例如错误地将响应消息的返回值固定为 EINVAL），导致用户态驱动或应用程序无法正确获取操作结果，引发功能异常或状态不一致。
+
+#主要错误日志
+- "udma send mue2ue msg failed, opcode = %u.\n"
+- "from ue req msg is error, len = %u. opcode = %u\n"
+
+#问题根因
+函数 `udma_send_ue_msg` 在处理消息响应时，未区分“请求处理失败”与“响应处理失败”两种场景。代码逻辑直接将发送给对端的错误码硬编码为 `EINVAL`，导致在 `err_and_send_ue_msg` 标签处处理响应消息（rsp msg）的错误时，未能将解析出的实际错误码（`msg_info.ret`）传递给用户态，而是覆盖为了 `EINVAL`，导致上层无法获知真实的错误原因。
+
+#解决方案
+修改 `udma_send_ue_msg` 函数接口，增加 `bool is_resp` 参数以标识当前处理的是否为响应消息。
+1. 若 `is_resp` 为 true，调用 `ubase_ctrlq_parse_ue_msg` 解析消息获取实际的错误码 `result`，并将其传递给底层发送接口。
+2. 若 `is_resp` 为 false（如处理请求消息错误），则维持原有的 `EINVAL` 错误码。
+以此确保响应消息能够携带真实的执行结果返回给用户态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aa5b6489aaedfe2b6f4e2fcd8063555bb31d1c39

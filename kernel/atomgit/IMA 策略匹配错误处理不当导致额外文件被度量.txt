@@ -1,0 +1,39 @@
+#标题
+IMA 策略匹配错误处理不当导致额外文件被度量
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 SELinux 策略模块（执行 `semodule -d`）后，若在 ima_lsm_rules 更新前触发 IMA 度量，IMA 会错误地将 LSM 规则判定为匹配成功，导致额外的文件被度量。
+
+#主要错误日志
+Call trace:
+  selinux_audit_rule_match+0x310/0x3b8
+  security_audit_rule_match+0x60/0xa0
+  ima_match_rules+0x2e4/0x4a0
+  ima_match_policy+0x9c/0x1e8
+  ima_get_action+0x48/0x60
+  process_measurement+0xf8/0xa98
+  ima_bprm_check+0x98/0xd8
+  security_bprm_check+0x5c/0x78
+  search_binary_handler+0x6c/0x318
+  exec_binprm+0x58/0x1b8
+  bprm_execve+0xb8/0x130
+  do_execveat_common.isra.0+0x1a8/0x258
+  __arm64_sys_execve+0x48/0x68
+  invoke_syscall+0x50/0x128
+  el0_svc_common.constprop.0+0xc8/0xf0
+  do_el0_svc+0x24/0x38
+  el0_svc+0x44/0x200
+  el0t_64_sync_handler+0x100/0x130
+  el0t_64_sync+0x3c8/0x3d0
+
+#问题根因
+在 `ima_match_rules()` 函数中，当 `ima_filter_rule_match()` 返回 `-ENOENT`（例如由于 SELinux 模块被移除导致规则为 NULL）时，代码中原有的 `if (!rc)` 判断条件未生效，导致逻辑跳过了错误检查，错误地将 `result` 设置为 `true`，使得 LSM 规则被误判为匹配成功。具体流程为：首次调用返回 `-ESTALE` 触发重试，重试时因 SELinux 模块缺失导致规则为 NULL，第二次调用返回 `-ENOENT`，该错误码绕过了检查导致虚假匹配。
+
+#解决方案
+修改 `ima_match_rules()` 中的判断逻辑，将 `if (!rc)` 修改为 `if (rc <= 0)`。这样当 `ima_filter_rule_match()` 返回 0（不匹配）或负数错误码（如 -ENOENT）时，均能正确跳过匹配检查并将结果设为不匹配，防止错误码导致虚假匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/50a6d69ec3da675b4a4cf2ef1dbb15ab45254ab3

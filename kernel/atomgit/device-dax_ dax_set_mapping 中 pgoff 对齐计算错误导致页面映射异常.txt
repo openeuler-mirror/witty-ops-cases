@@ -1,0 +1,20 @@
+#标题
+device-dax: dax_set_mapping 中 pgoff 对齐计算错误导致页面映射异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 device-dax 模块进行内存映射时，若触发大页故障（fault_size 大于 PAGE_SIZE），`dax_set_mapping` 函数计算出错误的页面偏移（pgoff）。这会导致内核将页面关联到错误的映射文件偏移位置，进而引发用户态访问内存数据不一致、寻址错误或相关的内存损坏问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dax_set_mapping` 函数中，计算 `pgoff` 时使用了 `ALIGN` 宏对故障地址进行向上对齐。当故障大小（fault_size）大于页面大小时，向上对齐导致计算出的地址比实际故障起始地址大，进而导致 `linear_page_index` 计算出的页面索引（pgoff）偏大，指向了错误的文件映射位置。正确的逻辑应对故障地址进行向下对齐以获取起始页偏移。
+
+#解决方案
+将 `dax_set_mapping` 函数中计算 `pgoff` 时的 `ALIGN` 宏修改为 `ALIGN_DOWN`，确保根据故障起始地址向下对齐，从而计算出正确的线性页面索引。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0a6dbdab0613898238b4cd5d38305cd6ef13cd2a

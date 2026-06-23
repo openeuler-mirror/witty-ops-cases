@@ -1,0 +1,20 @@
+#标题
+vchiq_shutdown 函数调用者普遍忽略返回值导致潜在资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+大部分 `vchiq_shutdown` 的调用者忽略了其返回值。由于原函数实现中可能在获取互斥锁失败时返回错误码（如 `-EAGAIN`），这导致函数执行失败但调用者无感知，进而可能引发资源泄漏问题。
+
+#主要错误日志
+未知
+
+#问题根因
+原 `vchiq_shutdown` 函数使用 `mutex_lock_killable` 获取互斥锁，该函数在特定情况下（如收到信号）会返回失败，导致 `vchiq_shutdown` 提前返回错误码 `-EAGAIN`。然而，绝大多数调用者并未检查该返回值，导致shutdown流程未真正完成，从而引起资源泄漏。
+
+#解决方案
+将 `vchiq_shutdown` 函数中的 `mutex_lock_killable` 替换为 `mutex_lock`。这使得互斥锁获取操作变为不可中断的等待，确保函数执行不会因锁竞争而提前失败，从而保证 `vchiq_shutdown` 永远成功执行，避免因调用者忽略返回值而导致的资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf30a57da8f7fbda26ac0193ce48dbe421dc46a8

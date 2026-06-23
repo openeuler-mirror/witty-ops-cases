@@ -1,0 +1,23 @@
+#标题
+dmaengine: ti: k3-udma: Add missing locking 导致的数据竞争风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+K3 UDMA 驱动在处理 TX 完成检查（tx_completion）工作队列时，由于缺少必要的锁保护，可能导致对 `uc->desc` 等关键数据结构的并发访问冲突。在多核或中断并发场景下，这可能引发内核崩溃、数据损坏或 DMA 传输状态判断异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`udma_check_tx_completion` 函数在主循环中访问和操作 `uc->desc` 及相关残留数据时，未持有 `uc->vc.lock` 自旋锁。该函数运行在工作队列上下文中，而其他上下文（如中断处理程序）可能同时操作该临界资源，导致竞态条件。
+
+#解决方案
+在 `udma_check_tx_completion` 函数的主循环中添加锁保护。
+1. 定义 `unsigned long flags` 变量。
+2. 在循环开始处（访问临界资源前）调用 `spin_lock_irqsave(&uc->vc.lock, flags)` 获取锁。
+3. 在循环内的 `continue` 路径（休眠重试前）以及循环结束的 `break` 路径处，调用 `spin_unlock_irqrestore(&uc->vc.lock, flags)` 释放锁，确保临界区操作的安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b233f9edeb8873e489f7becd9d91e00a6208a4c5

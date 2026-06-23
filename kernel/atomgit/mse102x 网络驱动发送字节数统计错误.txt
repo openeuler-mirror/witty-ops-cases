@@ -1,0 +1,20 @@
+#标题
+mse102x 网络驱动发送字节数统计错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统通过网络接口统计（如 `ifconfig` 或 `ip -s link`）查看 MSE102x SPI 网络设备的流量统计时，`tx_bytes` 计数值小于实际发送的数据量。该问题导致网络流量监控数据不准确，无法正确反映包含以太网填充的帧的实际传输开销。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在计算 `tx_bytes` 时，直接使用了 `skb->len`（即 `txb->len`），该长度仅包含实际数据载荷长度，未将以太网最小帧长（ETH_ZLEN）要求的填充部分计入。根据网络统计规范，发送字节数应基于实际在线路上传输的以太网帧大小（包含必要的 Padding），而非去除 SPI 封装前的内部数据长度。
+
+#解决方案
+修改 `drivers/net/ethernet/vertexcom/mse102x.c` 文件中的 `mse102x_tx_work` 函数。在更新统计信息前，先计算实际发送长度，取 `skb->len` 与 `ETH_ZLEN` 中的较大值，确保当数据帧长度小于以太网最小帧长时，统计值包含填充字节数，从而修正 `tx_bytes` 的统计逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3ba3b8fdf2db0bce92b9deb887264a3a7c5523c5

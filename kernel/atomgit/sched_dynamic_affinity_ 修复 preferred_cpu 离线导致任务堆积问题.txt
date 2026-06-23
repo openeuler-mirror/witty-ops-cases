@@ -1,0 +1,21 @@
+#标题
+sched/dynamic_affinity: 修复 preferred_cpu 离线导致任务堆积问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统的 preferred_cpu（首选 CPU）下线后，动态亲和性机制在选择核心时未校验 preferred_cpu 的有效性，导致相关的动态亲和性进程全部堆积在 shared_cpu 上，造成负载不均衡。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `set_task_select_cpus` 函数中，遍历 `p->prefer_cpus` 时使用的是 `for_each_cpu` 宏，该宏未结合 `cpu_online_mask` 进行判断。当 preferred_cpu 下线后，代码依然将其作为有效 CPU 参与运算与比较，导致调度选核逻辑出错，任务无法正确分散。
+
+#解决方案
+1. 将遍历 `prefer_cpus` 的宏从 `for_each_cpu` 修改为 `for_each_cpu_and`，增加 `cpu_online_mask` 过滤条件，确保只处理在线的有效 CPU。
+2. 调整负载阈值判断逻辑，移除了原先强制要求 `tg_capacity > cpumask_weight(p->prefer_cpus)` 的前置条件，确保在 preferred_cpu 离线等场景下，只要满足 `util_avg_sum` 阈值条件即可正常设置 `select_cpus`，避免任务错误收拢。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5ebce7edb721538e99a6dc732dada83e3206646c

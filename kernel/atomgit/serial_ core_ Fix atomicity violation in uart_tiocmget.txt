@@ -1,0 +1,20 @@
+#标题
+serial: core: Fix atomicity violation in uart_tiocmget
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `uart_tiocmget` 函数中读取串口调制解调器控制状态时存在原子性违规。由于读取 `uport->mctrl` 的操作未在锁保护范围内进行，可能导致读取到的状态值与随后在锁内读取的 `uport->ops->get_mctrl(uport)` 值不一致，从而使 `tiocmget` 返回的结果包含过时或错误的状态信息，影响上层应用对串口流控状态的判断。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `uart_tiocmget` 函数中，读取 `uport->mctrl` 的操作位于 `spin_lock_irq` 之前，未受锁保护。这违反了并发访问的原子性要求，因为 `uport->mctrl` 可能在无锁读取后、获取锁前被其他执行线程（如中断处理程序或 set_termios 流程）修改，导致最终合并计算的结果出现数据不一致。
+
+#解决方案
+将 `result = uport->mctrl;` 赋值语句移动到 `spin_lock_irq(&uport->lock)` 之后，确保对 `uport->mctrl` 的读取操作受到自旋锁的保护，从而保证其与 `uport->ops->get_mctrl(uport)` 的读取在同一原子上下文中完成，避免竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7c475d6c6e186b64a092571cbf48ce9d2d3a8209

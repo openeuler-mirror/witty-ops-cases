@@ -1,0 +1,20 @@
+#标题
+ethtool: verbose no_mask bitset 模式下 mod 状态判断错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ethtool 进行 _SET 请求时，如果使用 verbose 格式且设置了 no_mask bitset，`mod` 变量的状态判断错误。具体表现为：由于之前的修复补丁会先清空目标 bitmap，导致旧值与新值必然不同，从而使得 `mod` 变量在内容未实际改变的情况下被错误地置为 true，可能触发不必要的配置更新或重置操作。
+
+#主要错误日志
+未知
+
+#问题根因
+commit 6699170376ab ("ethtool: fix application of verbose no_mask bitset") 为了修复 verbose no_mask 模式下未清除多余比特的问题，在迭代前强制清空了整个目标 bitmap。这导致随后的逻辑在比较新旧值时，原始 bitmap 已被清空，使得比较结果总是显示“发生了修改”，从而导致 `mod` 变量状态异常。
+
+#解决方案
+引入临时变量 `saved_bitmap` 用于保存旧 bitmap 的状态，并新增 `ethnl_bitmap32_equal` 函数。在处理 verbose no_mask 请求时，先保存旧 bitmap，清空目标 bitmap 并设置请求的比特位后，通过对比 `saved_bitmap` 与修改后的 bitmap 来正确判断 `mod` 状态，最后释放临时变量内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6df568cd5ce8d57bb34ad8f4af0c7f3a114776cf

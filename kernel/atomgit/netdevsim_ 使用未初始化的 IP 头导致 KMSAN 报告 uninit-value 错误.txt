@@ -1,0 +1,20 @@
+#标题
+netdevsim: 使用未初始化的 IP 头导致 KMSAN 报告 uninit-value 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+KMSAN（Kernel Memory Sanitizer）检测到内核使用了未初始化的值。该问题由 Syzbot 自动化测试工具报告，触发点位于 `nsim_dev_trap_skb_build` 函数中。
+
+#主要错误日志
+KMSAN: uninit-value in nsim_dev_trap_skb_build
+
+#问题根因
+在 `nsim_dev_trap_skb_build` 函数构建 dummy sk_buff 时，代码使用 `skb_put` 函数为 IP 头部（`struct iphdr`）分配空间。`skb_put` 仅调整 skb 的尾部指针并返回指针，不会对分配的内存区域进行初始化。这导致 IP 头部结构体中的某些字段（如 `ihl`、`tos`、`id`、`frag_off` 等）包含栈上或内存分配器留下的随机脏数据，进而触发 KMSAN 的未初始化值使用警告。
+
+#解决方案
+将 `nsim_dev_trap_skb_build` 函数中的 `skb_put` 调用替换为 `skb_put_zero`。`skb_put_zero` 在扩展 skb 缓冲区的同时会将新分配的内存区域清零，从而确保 IP 头部结构体完全初始化，消除未初始化内存使用的隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/35e8358ea4cbecb747e50d2e76966e6622166b90

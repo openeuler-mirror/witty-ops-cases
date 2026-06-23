@@ -1,0 +1,21 @@
+#标题
+KVM 在 Intel Sierra Forest CPU 上因 MAXPHYADDR 处理不当导致无限循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel Sierra Forest 平台上启动虚拟机时，若 Guest BIOS 将内存或 64 位 PCI BAR 放置在高物理地址区域，会导致 KVM 陷入无限循环。此外，KVM selftests 测试用例因缺少 `KVM_STATS_TYPE_DFX` 定义而失败。
+
+#主要错误日志
+未知
+
+#问题根因
+Intel Sierra Forest CPU 不支持 5 级 EPT（Extended Page Tables），但支持 52 位物理地址（MAXPHYADDR）。KVM 未能正确处理这种组合，向 Guest 暴露的物理地址位宽超过了硬件通过 TDP（Two-Dimensional Paging）实际可寻址的范围。当 Guest 访问高于 48 位的物理地址时，由于硬件无法正确映射，触发了 KVM 的无限循环处理逻辑。另外，KVM debugfs 接口新增 stat 类型时未同步更新 `KVM_STATS_TYPE_MAX` 宏定义及 tools 目录下的头文件。
+
+#解决方案
+1. 修改 `cpuid.c` 中的 `0x80000008` 处理逻辑，引入 `g_phys_as`（GuestPhysAddrSize）。当启用 TDP 但不支持 5 级 TDP 时，将 Guest 可寻址的最大 GPA 限制在 48 位，防止 Guest 使用硬件无法映射的高位地址。
+2. 在 `include/uapi/linux/kvm.h` 和 `tools/include/uapi/linux/kvm.h` 中将 `KVM_STATS_TYPE_MAX` 更新为 `KVM_STATS_TYPE_DFX`，修复 selftests 编译与运行错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/771dc6367e5d975cd18948624ba512491e9f7ce9

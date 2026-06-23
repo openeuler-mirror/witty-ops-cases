@@ -1,0 +1,28 @@
+#标题
+配置过小 gso_max_size 导致内核 BUG_ON crash
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户配置较小的 gso_max_size 或 gso_ipv4_max_size 时，会导致 `sk_dst_gso_max_size()` 函数发生下溢，进而触发内核 `BUG_ON` 崩溃。具体表现为在 TCP 发送路径中，因 mss_now 过小导致 tso_segs 计算结果为 0，触发内核 panic。
+
+#主要错误日志
+Call Trace:
+tcp_write_xmit
+    tso_segs = tcp_init_tso_segs(skb, mss_now);
+        tcp_set_skb_tso_segs
+            tcp_skb_pcount_set
+                // skb->len = 524288, mss_now = 8
+                // u16 tso_segs = 524288/8 = 65535 -> 0
+                tso_segs = DIV_ROUND_UP(skb->len, mss_now)
+    BUG_ON(!tso_segs)
+
+#问题根因
+系统未对配置参数 `gso_max_size` 和 `gso_ipv4_max_size` 设置最小值校验。当配置的值过小时，会导致 `sk->sk_gso_max_size` 远大于设备限制，在 `tcp_write_xmit` 流程中计算 tso_segs 时发生整数下溢（u16 类型的 65535 加 1 变为 0），最终触发 `BUG_ON(!tso_segs)`。
+
+#解决方案
+在 `net/core/rtnetlink.c` 中增加对 `IFLA_GSO_MAX_SIZE` 和 `IFLA_GSO_IPV4_MAX_SIZE` 属性的最小值策略校验，限制其最小值为 `MAX_TCP_HEADER + 1`，防止用户配置过小的数值引发下溢崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8615d2e1fb7dc6570b463d893aad1cfd82e65329

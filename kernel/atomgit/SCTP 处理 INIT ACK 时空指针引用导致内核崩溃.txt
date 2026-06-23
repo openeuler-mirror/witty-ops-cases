@@ -1,0 +1,20 @@
+#标题
+SCTP 处理 INIT ACK 时空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SCTP 连接建立（INIT ACK 处理）过程中，若新关联的 `adaptation_ind` 为 0 且 `sctp_ulpevent_make_authkey` 返回 0，内核在错误处理路径中会解引用空指针，导致系统发生 panic 或 oops。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `sctp_sf_do_5_1D_ce` 的错误处理标签 `nomem_authev` 中，变量 `ai_ev` 可能为 NULL（当 `new_asoc->peer.adaptation_ind=0` 且 `sctp_ulpevent_make_authkey()=0` 时）。原代码直接调用 `sctp_ulpevent_free(ai_ev)` 未进行非空检查，导致在 `sctp_ulpevent_free()` 函数内部发生空指针解引用。
+
+#解决方案
+在 `nomem_authev` 标签处的错误处理路径中，增加对 `ai_ev` 指针的非空判断。仅当 `ai_ev` 不为 NULL 时才调用 `sctp_ulpevent_free(ai_ev)`，从而避免对空指针的解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d58ec0150bbe760d12326a9f36b9af9107b65d58

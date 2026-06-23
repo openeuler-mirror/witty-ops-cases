@@ -1,0 +1,26 @@
+#标题
+be2net: be_xmit 函数潜在内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 be2net 驱动的数据包发送过程中，若 `be_xmit_enqueue` 函数执行失败（例如在 OS2BMC 功能开启并尝试第二次入队时），驱动程序会直接返回 `NETDEV_TX_OK` 而未释放 `sk_buff` 结构体。这导致网络数据包缓冲区内存发生泄漏，随着故障持续发生可能耗尽系统内存资源。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `be_xmit` 函数的错误处理路径逻辑缺失。具体表现为：
+1. 在原有代码逻辑中，当 OS2BMC 功能开启且数据包需要第二次调用 `be_xmit_enqueue` 时，如果该次调用失败，代码直接跳转至 `drop` 标签。
+2. `drop` 标签处的处理仅增加了统计计数并执行刷新操作，遗漏了 `dev_kfree_skb_any(skb)` 的调用。
+3. 相比之下，第一次 `be_xmit_enqueue` 失败时原代码显式调用了 `dev_kfree_skb_any`，但第二次失败路径遗漏了该释放动作，导致内存泄漏。
+
+#解决方案
+修改 `be_xmit` 函数中的错误处理跳转逻辑：
+1. 移除第一次 `be_xmit_enqueue` 失败时内联的 `dev_kfree_skb_any(skb)` 调用，统一改为跳转至 `drop_skb` 标签。
+2. 新增 `drop_skb` 标签，在该标签下统一执行 `dev_kfree_skb_any(skb)` 操作，随后自然流转至 `drop` 标签完成统计与清理。
+此修复确保了无论是首次入队失败还是 OS2BMC 第二次入队失败，`sk_buff` 均能被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/29dab14d6262c3c4fe153e04a21d3be4f05921c0

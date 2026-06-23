@@ -1,0 +1,20 @@
+#标题
+SSI协议驱动存在竞态条件导致释放后使用（UAF）漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除（remove）ssi_protocol驱动模块时，若此时恰好有工作队列任务（ssip_xmit_work）正在执行，将触发释放后使用。该故障可导致内核崩溃或内存数据破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在ssi_protocol_probe()函数中，&ssi->work绑定了ssip_xmit_work()。在模块移除流程中，ssi_protocol_remove()调用kfree(ssi)释放了ssi结构体内存。然而，如果此时绑定的work尚未执行完毕或正在执行，它会在CPU1上继续访问已释放的ssi指针（如执行struct hsi_client *cl = ssi->cl）。这是一个典型的竞态条件引发的UAF漏洞。
+
+#解决方案
+在ssi_protocol_remove()调用的清理流程（ssip_reset函数）中，于释放内存前增加cancel_work_sync(&ssi->work)调用。该修改确保在清理资源前，工作队列中的任务已被取消且执行完毕，从而避免UAF问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/474f2cc4e1df26f9d28e74b6169538edb1869674

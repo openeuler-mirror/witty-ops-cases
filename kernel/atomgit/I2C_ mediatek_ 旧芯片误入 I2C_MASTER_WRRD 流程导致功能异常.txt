@@ -1,0 +1,22 @@
+#标题
+I2C: mediatek: 旧芯片误入 I2C_MASTER_WRRD 流程导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在不支持 I2C_MASTER_WRRD (write-then-read) 功能的老版本 MediaTek I2C 控制器上，特定 I2C 传输场景下会错误地进入 I2C_MASTER_WRRD 软件处理流程，导致 I2C 传输行为不符合预期，引发未定义的系统错误或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中对 `i2c->auto_restart` 标志的处理逻辑存在缺陷。对于不支持 I2C_MASTER_WRRD 功能的旧芯片，原本的判断逻辑可能误判并进入 WRRD 流程；同时，代码复用 `auto_restart` 标志来处理写后读逻辑，导致逻辑混淆。此外，在处理消息指针偏移时，未针对 WRRD 操作进行正确的双消息偏移处理，导致逻辑不一致。
+
+#解决方案
+1. 新增独立的布尔标志 `write_then_read_en` 来明确标识写后读操作，替代原先对 `auto_restart` 的复用判断，避免逻辑混淆。
+2. 仅当 `write_then_read_en` 为真时，才将 `i2c->op` 设置为 `I2C_MASTER_WRRD`，防止旧芯片误入该流程。
+3. 修正消息指针偏移逻辑：若操作类型为 `I2C_MASTER_WRRD`，消息指针增加 2；否则增加 1，确保消息处理索引正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b82e672ae192de3fbbc6f2965dc7116f87a6c4b8

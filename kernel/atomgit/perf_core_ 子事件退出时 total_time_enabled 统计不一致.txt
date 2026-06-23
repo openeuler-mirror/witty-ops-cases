@@ -1,0 +1,25 @@
+#标题
+perf/core: 子事件退出时 total_time_enabled 统计不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM big.LITTLE 系统上使用 `perf stat` 监控不同 CPU PMU 的事件时，同时开启和关闭的事件，其 `total_time_enabled`（含子事件）统计值不一致。理论上这些事件的启用时间应该相同，但实际测量显示存在明显差异。例如，两个不同 cluster 的事件统计结果分别为 2289429840 和 1950025700。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于任务退出时，子事件的时间统计逻辑顺序错误。
+在 `perf_event_exit_event()` 调用链中：
+1. `perf_child_detach()` 先执行了时间累加（将子事件时间加到父事件）。
+2. `list_del_event()` 随后才更新子事件的最终时间。
+由于累加发生在更新之前，导致如果事件处于 INACTIVE 状态，其最后一段时间的启用时长未被计入 `child_total_time_enabled`。
+
+#解决方案
+修改 `__perf_remove_from_context()` 函数，引入 `DETACH_EXIT` 标志位。
+在处理任务退出场景时，通过 `perf_event_set_state()` 先将事件状态设置为 `PERF_EVENT_STATE_EXIT`，这会触发正确的时间更新逻辑，确保时间统计在状态变更时完成。随后再进行 `perf_child_detach()` 操作，从而保证 `total_time_enabled` 统计数据的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/089e78d49ab41e5cd396274093fea25a662397b6

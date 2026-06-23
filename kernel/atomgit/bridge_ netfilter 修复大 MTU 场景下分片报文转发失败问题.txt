@@ -1,0 +1,20 @@
+#标题
+bridge: netfilter 修复大 MTU 场景下分片报文转发失败问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在桥接环境中启用了 netfilter defrag 钩子（如配置了 conntrack 规则），且网桥 MTU 设置较大（如 9k）时，收到的大分片报文在经过重组与再次分片过程中会被内核错误丢弃，导致无法正常转发。
+
+#主要错误日志
+未知
+
+#问题根因
+网桥的 fake_rtable 条目中使用的 metrics 被标记为只读（read-only）。当网桥 MTU 发生变化时，`br_change_mtu` 无法更新该 metrics 中的 MTU 值，导致 `ip_skb_dst_mtu()` 在查询目的 MTU 时始终返回初始值 1500。因此，当处理大于 1500 字节的分片报文时，内核误判 MTU 限制而将报文丢弃。
+
+#解决方案
+将 fake_rtable 的 metrics 从全局静态只读变量改为网桥设备结构体（`net_bridge`）内部的成员变量，并将其标记为可写。在初始化时直接使用网桥设备的当前 MTU 值进行设置，确保后续 MTU 变更能正确反映到路由度量值中。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5e7f2c5fca8f7e94515c98a113214b34c1e4a73d

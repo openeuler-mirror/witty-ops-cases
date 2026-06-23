@@ -1,0 +1,20 @@
+#标题
+iommu/arm-smmu-v3: 修复全局越界访问故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `arm_smmu_group_get_mpam` 或 `arm_smmu_group_set_mpam` 接口时，若 IOMMU group 对应的 domain 类型为 `IOMMU_DOMAIN_IDENTITY`（直通）或 `IOMMU_DOMAIN_BLOCKED`（阻塞），内核会发生全局越界访问。此故障可能导致内核 panic 或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在处理 MPAM（Memory System Resource Partitioning and Monitoring）配置时，代码未对 `iommu_get_domain_for_group` 返回的 domain 类型进行有效性检查。当 domain 类型为 `IOMMU_DOMAIN_IDENTITY` 或 `IOMMU_DOMAIN_BLOCKED` 时，该 domain 并非标准的 `arm_smmu_domain` 结构，但代码未做判断直接通过 `to_smmu_domain(domain)` 进行强制类型转换并访问其成员（如 `smmu` 指针），导致访问了无效的内存地址，引发全局越界访问。
+
+#解决方案
+在 `arm_smmu_group_get_mpam` 和 `arm_smmu_group_set_mpam` 函数中增加 domain 类型检查逻辑。通过 `domain->type & IOMMU_DOMAIN_ALLOC_FLAGS` 获取分配类型，若类型为 `IOMMU_DOMAIN_IDENTITY` 或 `IOMMU_DOMAIN_BLOCKED`，则直接返回错误码（`set` 接口返回 `-EINVAL`）或成功（`get` 接口返回 0），避免后续不合法的指针转换与内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/279f9554646b3daa0b215da7b222a3b5b48029d5

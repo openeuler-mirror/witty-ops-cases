@@ -1,0 +1,20 @@
+#标题
+drm/vmwgfx: 修复验证阶段资源过早销毁导致的释放后使用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 vmwgfx 显卡驱动执行 execbuf 过程中，当资源被过早销毁时，验证机制中的重复哈希表节点未能被正确清理。该节点来源于 arena 分配器，在 `vmw_execbuf_process` 结束时会被统一清空，但由于节点未从哈希表中移除，导致后续访问该哈希表时发生 Use-after-free（释放后使用）漏洞，可能引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+存储在验证重复哈希表中的节点来自于 arena 分配器，该分配器在 `vmw_execbuf_process` 结束时会被清空。通常所有节点都应在 `vmw_validation_drop_ht` 中被清理，但如果 `vmw_resource_reference_unless_doomed` 返回 NULL（即资源已被标记为销毁），函数直接返回 `-ESRCH` 错误，却未先将该节点从哈希表中删除。这导致节点虽被释放或失效，但仍留在哈希表中，造成了 Use-after-free。
+
+#解决方案
+在 `vmw_validation_add_resource` 函数中，当 `vmw_resource_reference_unless_doomed(res)` 返回 NULL 时，在返回 `-ESRCH` 错误码之前，先调用 `hash_del_rcu(&node->hash.head)` 将该节点从哈希表中删除，确保不会留下悬空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db148961f46a2d5a1dae109e572f7d9e1fccf30d

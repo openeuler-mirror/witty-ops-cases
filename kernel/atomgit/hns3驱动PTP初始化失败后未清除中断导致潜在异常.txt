@@ -1,0 +1,22 @@
+#标题
+hns3驱动PTP初始化失败后未清除中断导致潜在异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hns3 网卡驱动加载过程中，若 PTP（精确时间协议）模块初始化失败（如频率初始化、时间戳模式配置或时间设置阶段出错），驱动未能正确清理现场。随后在驱动尝试再次探测或重新初始化时，可能会收到未预期的中断信号，导致中断处理异常或错误的中断上报。
+
+#主要错误日志
+- "failed to init freq, ret = %d\n"
+- "failed to init ts mode, ret = %d\n"
+- "failed to init ts time, ret = %d\n"
+
+#问题根因
+hns3 驱动的 `hclge_ptp_init` 函数在处理初始化错误分支时，直接跳转至 `out` 标签销毁时钟并退出，遗漏了关键的清理步骤：未清除 `HCLGE_PTP_FLAG_EN` 标志位，且未调用 `hclge_ptp_int_en(hdev, false)` 禁用中断。这导致 PTP 初始化失败后，中断仍处于可能被触发的状态，在下次 probe 时引发误报。
+
+#解决方案
+修改 `hclge_ptp_init` 函数的错误处理路径，新增 `out_clear_int` 标签。当 PTP 初始化过程中出现错误时，先执行清理动作：调用 `clear_bit(HCLGE_PTP_FLAG_EN, &hdev->ptp->flags)` 清除使能标志，并调用 `hclge_ptp_int_en(hdev, false)` 显式禁用中断，最后再执行销毁时钟和返回错误码的操作，确保初始化失败后硬件状态恢复洁净。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d67093df645ee068a26241e9171fcdc1bf6bffd9

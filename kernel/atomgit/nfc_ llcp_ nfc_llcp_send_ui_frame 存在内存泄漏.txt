@@ -1,0 +1,34 @@
+#标题
+nfc: llcp: nfc_llcp_send_ui_frame 存在内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行 NFC 相关业务时，发生内存泄漏。kmemleak 检测报告显示存在多个疑似内存泄漏的对象，包括 `nfc_llcp_sock` 和 `sk_buff` 结构体。同时内核日志中出现 "Could not allocate PDU (error=-6)" 错误提示，伴随大量 "unreferenced object" 的内存泄漏回溯信息。
+
+#主要错误日志
+- `[   56.074943][ T6096] llcp: nfc_llcp_send_ui_frame: Could not allocate PDU (error=-6)`
+- `[   64.318868][ T5813] kmemleak: 6 new suspected memory leaks (see /sys/kernel/debug/kmemleak)`
+- `BUG: memory leak`
+- `unreferenced object 0xffff8881272f6800 (size 1024):`
+- `unreferenced object 0xffff88810fbd9800 (size 240):`
+
+#问题根因
+问题根因在于 `nfc_llcp_send_ui_frame()` 与 `local_cleanup()` 之间缺乏同步机制。
+当 `nfc_llcp_send_ui_frame()` 正在分配和发送 skb 时，`local_cleanup()` 可能并发执行并销毁 `struct nfc_llcp_local` 结构体。具体流程如下：
+1. `local_cleanup()` 调用 `nfc_llcp_socket_release()` 设置错误码 ENXIO，并调用 `skb_queue_purge(&local->tx_queue)` 清空发送队列。
+2. 此时 `nfc_llcp_send_ui_frame()` 刚好分配了新的 skb，但由于没有持有锁，它不知道 `local` 结构体即将销毁。
+3. `nfc_llcp_send_ui_frame()` 将新分配的 skb 通过 `skb_queue_tail` 加入到已被清空的 `local->tx_queue` 中。
+4. 由于 `local` 结构体后续被销毁，该队列中的 skb 永远无法被消费或释放，导致内存泄漏。
+
+#解决方案
+在 `nfc_llcp_send_ui_frame()` 向 `tx_queue` 加入 skb 之前，引入 `local->tx_queue.lock` 自旋锁进行保护。
+1. 在 `nfc_llcp_send_ui_frame()` 中，获取 `local->tx_queue.lock` 锁。
+2. 检查 `local->list` 是否为空（即检查 local 结构体是否已从设备列表中移除）。
+3. 如果列表为空，说明设备正在销毁，则释放锁，释放当前分配的 pdu skb，并返回错误。
+4. 如果列表不为空，则使用 `__skb_queue_tail` 将 skb 加入队列（因已持有锁故使用内部版本），随后释放锁。
+此修复确保了 skb 入队操作与设备移除/队列清空操作的互斥，防止了 skb 在队列被清空后入队导致的泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5d72d0d027e31436222fe6053d07d753101bb644

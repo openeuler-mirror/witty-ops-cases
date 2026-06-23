@@ -1,0 +1,36 @@
+#标题
+macvlan: macvlan_common_newlink 错误路径存在竞态条件导致 slab-use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建 macvlan 设备时，若 `macvlan_common_newlink()` 在设备已对系统可见后才检测到错误并退出，调用者直接调用 `free_netdev(dev)` 释放内存。此时若恰好有网络流量触发 `macvlan_handle_frame`，会引发竞态条件，导致内核报告 KASAN slab-use-after-free 错误。
+
+复现步骤如下：
+1. 创建 veth 对 p1 和 p2，配置 p1 的 MAC 地址并启动。
+2. 在 p2 上创建 source 模式的 macvlan 设备 mv0。
+3. 在后台尝试创建一个非法的 macvlan 设备（带有无效参数），同时在另一个进程通过 p1 发送 ping 包。
+4. 系统触发 BUG，打印 KASAN 错误信息。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in macvlan_forward_source
+Read of size 8 at addr ffff888016bb89c0 by task e/175
+Call Trace:
+ <IRQ>
+ dump_stack_lvl
+ print_report
+ ? macvlan_forward_source
+ kasan_report
+ ? macvlan_forward_source
+ macvlan_forward_source
+ macvlan_handle_frame
+
+#问题根因
+`macvlan_common_newlink()` 函数在处理错误流程时存在缺陷。该函数可能已经将 `@dev` 设备注册或对系统可见，随后才检测到错误并返回。其调用者（`rtnl_newlink`）在收到错误返回值后，会直接调用 `free_netdev(dev)` 释放该网络设备结构体。然而，由于没有遵守 RCU 宽限期，此时系统中可能仍有正在处理的报文引用该内存区域，从而导致释放后使用。
+
+#解决方案
+在 `macvlan_common_newlink()` 函数的错误返回路径中添加 `synchronize_net()` 函数调用。这确保在调用者释放 `net_device` 结构体之前，已经过了一个 RCU 宽限期，所有潜在的读者（如报文处理路径）均已退出，从而避免竞态条件和 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c3489fe6fcd7e23618d9009b393b4f1696fe37b3

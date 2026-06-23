@@ -1,0 +1,25 @@
+#标题
+classmate-laptop 驱动空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Classmate 笔记本驱动加载和初始化过程中，如果 sysfs 属性文件（如 accel_sensitivity 或 accel_g_select）在对应的输入设备或驱动数据初始化完成之前被访问，将导致内核发生空指针引用，进而引发内核 panic 或 oops。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码中存在多处竞态条件（Race Condition）：
+1. 在 `cmpc_accel_add_v4()` 函数中，sysfs 属性（如 `cmpc_accel_sensitivity_attr_v4`）在调用 `dev_set_drvdata()` 设置驱动数据之前就已添加。如果此时用户空间访问该属性，回调函数中调用 `dev_get_drvdata()` 会返回 NULL，后续直接使用该指针导致空指针引用。
+2. `cmpc_accel_sensitivity_show_v4()` 等函数在调用 `cmpc_add_acpi_notify_device()` 初始化输入设备之前就已暴露给 sysfs，过早访问会导致 `dev_get_drvdata(&acpi->dev)` 返回 NULL。
+3. `cmpc_accel_open_v4()` 函数中未校验 `accel` 指针有效性。
+
+#解决方案
+在驱动的相关回调函数中增加 NULL 指针检查，防止在驱动数据未初始化完成时发生空指针引用：
+1. 在 `cmpc_accel_sensitivity_show_v4`、`cmpc_accel_sensitivity_store_v4`、`cmpc_accel_g_select_show_v4`、`cmpc_accel_g_select_store_v4` 以及 `cmpc_accel_sensitivity_show`、`cmpc_accel_sensitivity_store` 等 sysfs 接口函数中，增加对 `inputdev` 和 `accel` 指针的 NULL 判断，若为 NULL 则返回 `-ENXIO`。
+2. 在 `cmpc_accel_open_v4` 函数中，增加对 `accel` 指针的 NULL 判断，若为 NULL 则返回 `-ENXIO`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/095aea6a0db7de721c23e7aa95735ed5ba5be005

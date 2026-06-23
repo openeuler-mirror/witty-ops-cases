@@ -1,0 +1,20 @@
+#标题
+phy: rockchip: naneng-combphy 修复 phy reset 导致 USB 端口无法工作
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RK3528/RK3588 SoC 上，通过 combophy 连接的 USB 端口功能异常，无法正常启用。
+
+#主要错误日志
+usb usb8-port1: Cannot enable. Maybe the USB cable is bad?
+
+#问题根因
+RK3528/RK3588 SoC 的 combophy 包含多个复位信号（multiple resets），包括 "phy resets" 和 "apb resets"。驱动程序之前使用 `devm_reset_control_array_get_exclusive` 获取并操作了所有复位信号，但实际上只需对 "phy resets" 进行 assert 和 deassert 操作，"apb resets" 不需要被操作。错误的复位操作顺序导致了 USB 端口无法正常工作。
+
+#解决方案
+修改驱动代码，将获取复位控制的方式从获取整个复位数组（`devm_reset_control_array_get_exclusive`）改为通过名称专门获取 "phy" 复位信号（`devm_reset_control_get(dev, "phy")`），确保仅对指定的 phy reset 进行控制，从而修复 USB 端口故障。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/94aea5fe87f68e94ab4f5dfc472f6fa3bc83f1e9

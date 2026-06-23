@@ -1,0 +1,23 @@
+#标题
+comedi: poll与detach竞争导致use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当进程正在对comedi子设备的等待队列进行poll操作时，若此时通过`COMEDI_DEVCONFIG` ioctl触发设备分离，系统将发生Use-After-Free故障。这是因为异步区域被释放后，poll请求仍试图访问已释放内存中的等待队列头，导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+comedi子系统在处理设备分离时，未检查子设备的异步等待队列中是否仍有睡眠的任务。进程在poll时会将自己加入子设备等待队列，而设备分离流程会释放包含该等待队列头的async内存区域。这导致了典型的Use-After-Free问题：poll机制后续触发或移除等待项时访问了已释放的内存。
+
+#解决方案
+在`COMEDI_DEVCONFIG` ioctl处理设备分离逻辑时，引入写锁保护并增加状态检查：
+1. 在执行分离前获取`dev->attach_lock`的写锁。
+2. 在`is_device_busy`检查中增加对`wq_has_sleeper`的判断，确保子设备的等待队列中无睡眠任务。
+3. 若检查通过，在持有写锁的状态下调用重构后的`comedi_device_detach_locked`执行分离操作，防止poll与detach发生竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4681162e7165eccdbfc74efe0c9a54406a6228ca

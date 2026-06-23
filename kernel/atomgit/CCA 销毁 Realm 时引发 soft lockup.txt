@@ -1,0 +1,26 @@
+#标题
+CCA 销毁 Realm 时引发 soft lockup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在销毁 CCA Realm 实例的过程中，内核发生 soft lockup（软死锁）。该问题主要出现在 `kvm_free_stage2_pgd` 或相关的 unmap 路径中，由于在长时间持有 `mmu_lock` 的情况下进行大量 unmap 操作且未主动调度，导致 CPU 长时间无法释放锁，触发内核看门狗的 soft lockup 告警。
+
+#主要错误日志
+未知
+
+#问题根因
+在销毁 Realm 的内存解映射流程中（如 `realm_unmap_shared_range` 和 `realm_unmap_private_range` 函数），代码在持有读写锁 `kvm->mmu_lock` 的情况下进行循环操作，但未正确处理调度点。
+具体原因为：
+1. `realm_unmap_shared_range` 函数原先无条件调用 `cond_resched_rwlock_write`，但在某些调用路径下可能不安全或被移除。
+2. `realm_unmap_private_range` 函数在循环处理过程中完全缺少 `cond_resched` 调度点，且 `kvm_realm_unmap_range` 接口未传递是否允许阻塞（`may_block`）的标志，导致在销毁大范围内存映射时（如销毁整个 Realm 地址空间），内核无法进行任务调度，从而触发 soft lockup。
+
+#解决方案
+1. 为 `kvm_realm_unmap_range` 及相关底层函数（`realm_unmap_shared_range`、`realm_unmap_private_range`）增加 `may_block` 参数，用于指示当前上下文是否允许进行调度。
+2. 在 `realm_unmap_private_range` 的循环中增加调度点判断：若 `may_block` 为真，则调用 `cond_resched_rwlock_write(&kvm->mmu_lock)` 释放锁并主动调度，避免长时间占用 CPU。
+3. 在 `realm_unmap_shared_range` 中将原先无条件的调度改为仅当 `may_block` 为真时才执行，确保调度行为的安全性。
+4. 修正调用链传参，确保在 `kvm_free_stage2_pgd`（销毁流程）中传入 `true`（允许阻塞），而在 `realm_set_ipa_state` 等特定路径中传入 `false`（禁止阻塞）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/02c51f0f646ddc4a218fd1c8bb2af29eb339360f

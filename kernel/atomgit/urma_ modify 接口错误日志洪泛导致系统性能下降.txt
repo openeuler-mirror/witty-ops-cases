@@ -1,0 +1,34 @@
+#标题
+urma: modify 接口错误日志洪泛导致系统性能下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 uburma 和 ubcore 子系统中，当频繁调用 modify 接口（如 modify_jfs, modify_jfr, modify_jfc, modify_jetty）失败时，内核会无限制地打印错误日志。这种高频的日志输出会导致日志洪泛，消耗大量磁盘 I/O 和 CPU 资源，进而导致系统性能下降或控制台响应缓慢。
+
+#主要错误日志
+- [DRV_ERROR]Failed to modify jfc, jfc_id:%u, ret: %d.
+- [DRV_ERROR]Failed to modify jfs, jfs_id:%u, ret: %d.
+- [DRV_ERROR]Failed to modify jfr, jfr_id:%u.
+- [DRV_ERROR]Failed to modify jetty, id:%u, ret: %d.
+- failed to find jfs.
+- modify jfs failed, ret:%d.
+- failed to find jfr.
+- modify jfr failed, ret:%d.
+- failed to find jfc.
+- modify jfc failed, ret:%d.
+- failed to find jetty.
+- modify jetty failed, ret:%d.
+
+#问题根因
+在 ubcore_jetty.c 和 uburma_cmd.c 中，modify 相关接口的错误处理路径使用了普通的错误日志打印函数（ubcore_log_err 和 uburma_log_err）。这些函数不具备速率限制功能，若底层硬件或驱动层持续返回错误，内核将重复高速打印错误信息，引发日志洪泛。
+
+#解决方案
+将涉及 modify 操作错误路径的日志打印函数替换为带速率限制的版本。具体修改包括：
+1. 在 drivers/ub/urma/ubcore/ubcore_jetty.c 中，将 ubcore_log_err 替换为 ubcore_log_err_rl。
+2. 在 drivers/ub/urma/uburma/uburma_cmd.c 中，将 uburma_log_err 替换为 uburma_log_err_rl。
+通过速率限制机制，防止高频错误场景下的日志爆炸，保障系统稳定性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bd9981dad88bf2f8149e15bb856ddb18df0108c8

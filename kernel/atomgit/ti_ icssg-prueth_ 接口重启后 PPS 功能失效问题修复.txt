@@ -1,0 +1,23 @@
+#标题
+ti: icssg-prueth: 接口重启后 PPS 功能失效问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 ICSSG 网络接口关闭后再次启动，调用 PPS（Pulse Per Second）使能功能失效。驱动程序误认为 PPS 已经处于使能状态（`iep->pps_enabled` 标志位未被清除），接口函数直接返回 true，但实际上硬件并无信号输出。此外，IEP_CMP_CFG 寄存器的残留配置可能导致 SYNC0_OUT 信号行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **状态变量未清理**：在接口关闭（bring down）时，PRU 核心被关闭并重启，清空了内存，但驱动程序中的软件状态变量 `iep->pps_enabled` 和 `iep->perout_enabled` 未被重置。
+2. **硬件寄存器残留**：`iep_init()` 过程中未清除 IEP_CMP_CFG 寄存器，导致再次启动时硬件保留了上一次的配置（如 CMP1 配置），干扰了正常的 SYNC0_OUT 信号。
+3. **逻辑冲突**：接口重新启动后，软件状态与硬件实际状态不一致，导致 PPS 使能请求被错误跳过。
+
+#解决方案
+1. 在 `icss_iep_exit` 函数中增加清理逻辑：检查 `iep->pps_enabled` 或 `iep->perout_enabled` 状态，并显式调用 `icss_iep_pps_enable(iep, false)` 或 `icss_iep_perout_enable(iep, NULL, false)` 以禁用功能并清理状态。
+2. 在 `icss_iep_enable_shadow_mode` 函数中，遍历所有比较器时，通过 `regmap_update_bits` 显式清除 `ICSS_IEP_CMP_CFG_REG` 寄存器中的 `IEP_CMP_CFG_CMP_EN` 位，确保硬件配置处于干净的初始状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5af16aee74b53ca3d1be4c164fdcee52fde5635a

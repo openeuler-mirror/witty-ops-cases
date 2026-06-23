@@ -1,0 +1,23 @@
+#标题
+wifi: wfx: 模块初始化时 SDIO 驱动注册失败导致资源泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 wfx 无线驱动模块时，若 `sdio_register_driver()` 注册失败，模块初始化函数 `wfx_core_init()` 未正确检查返回值并处理错误。这导致模块初始化失败，但之前已成功注册的 SPI 驱动（`wfx_spi_driver`）未被注销，造成驱动资源泄露，模块处于不一致状态。
+
+#主要错误日志
+未知
+
+#问题根因
+`wfx_core_init()` 函数在调用 `sdio_register_driver()` 时，未对其返回值进行有效性检查。当 SDIO 驱动注册失败时，函数未执行回滚操作（即注销已注册的 SPI 驱动），直接返回，导致了资源泄露。
+
+#解决方案
+在 `wfx_core_init()` 函数中增加对 `spi_register_driver()` 和 `sdio_register_driver()` 返回值的检查逻辑：
+1. 若 SPI 驱动注册失败，直接跳转至错误处理分支返回错误码。
+2. 若 SDIO 驱动注册失败，先调用 `spi_unregister_driver()` 注销已注册的 SPI 驱动，再返回错误码。
+这确保了在初始化过程中任何一步失败，都能正确清理已分配的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fda249acefb24e0c3a0277b48f8bc66c76a041db

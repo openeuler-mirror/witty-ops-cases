@@ -1,0 +1,20 @@
+#标题
+RDMA/hns: 创建QP时错误路径缺少回滚导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hns RoCE 驱动创建 QP（Queue Pair）的过程中，若 `ib_copy_to_udata()` 拷贝数据失败，错误处理路径未正确调用 `hns_roce_qp_remove()` 进行资源清理，导致 `hns_roce_qp_store()` 中存储的资源无法释放，造成资源泄漏。
+
+#主要错误日志
+ibdev_err(ibdev, "copy qp resp failed!\n")
+
+#问题根因
+在函数 `hns_roce_create_qp_common()` 中，当 `ib_copy_to_udata()` 执行失败时，代码跳转至 `err_store` 标签。然而，该标签并未包含对 `hns_roce_qp_store()` 所存储资源的清理操作（即缺少 `hns_roce_qp_remove()` 调用），导致资源泄漏。
+
+#解决方案
+修改错误处理跳转标签，将 `ib_copy_to_udata()` 失败后的跳转目标从 `err_store` 改为 `err_flow_ctrl`。`err_flow_ctrl` 标签对应的处理流程中包含了 `hns_roce_qp_remove()` 调用，从而确保在拷贝失败时能正确回滚并释放已存储的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2112ebfb01bb64fb55f13a96c3dfef5ae27e65d1

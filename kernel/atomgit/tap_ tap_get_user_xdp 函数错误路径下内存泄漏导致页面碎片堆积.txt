@@ -1,0 +1,25 @@
+#标题
+tap: tap_get_user_xdp 函数错误路径下内存泄漏导致页面碎片堆积
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 tap 设备进行 XDP 发送时，若发送的数据帧长度小于 ETH_HLEN（以太网头长度），或 build_skb() 分配失败，内核不会释放已分配的内存页。由于 tap_sendmsg() 总是向调用者返回成功（0），上层调用者（如 vhost_tx_batch()）无法感知错误并释放内存，导致每个被拒绝的帧泄漏一个 page-frag chunk。在批量发送场景下，大量错误帧将导致系统内存持续泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 tap_get_user_xdp() 函数中存在两个错误处理路径存在缺陷：
+1. 当检测到帧长度小于 ETH_HLEN 时，直接跳转到 err 标签，未释放页面。
+2. 当 build_skb() 分配失败返回 NULL 时，直接跳转到 err 标签，未释放页面。
+由于 vhost_net_build_xdp() 已经为该帧分配了内存页，而 tap_sendmsg() 丢弃了返回值并总是返回 0，导致上层调用者误认为发送成功，从而未执行释放内存的操作，最终导致内存泄漏。
+
+#解决方案
+在 tap_get_user_xdp() 函数的两个错误路径中，跳转到 err 标签前，显式调用 put_page(virt_to_head_page(xdp->data)) 释放已分配的内存页。具体修改包括：
+1. 在帧长度检查失败的分支中添加 put_page 调用。
+2. 在 build_skb 失败的分支中添加 put_page 调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab8b5f38ecc21cb3a62a3b7915f882f5ef802720

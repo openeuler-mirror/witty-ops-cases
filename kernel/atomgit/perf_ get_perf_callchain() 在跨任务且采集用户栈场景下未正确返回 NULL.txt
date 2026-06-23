@@ -1,0 +1,20 @@
+#标题
+perf: get_perf_callchain() 在跨任务且采集用户栈场景下未正确返回 NULL
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `get_perf_callchain()` 函数进行性能调用链分析时，若同时设置了 `crosstask`（跨任务）和 `user`（用户态栈）参数，函数不支持跨任务的用户态栈回溯，但未能正确处理该非法输入场景，可能导致后续流程处理异常或获取到无效的调用链数据。
+
+#主要错误日志
+未知
+
+#问题根因
+`get_perf_callchain()` 函数本身不支持跨任务的用户态栈回溯。在之前的代码逻辑中，虽然存在针对 `crosstask` 的判断（`goto exit_put`），但处理流程不够清晰，且未在函数入口处直接拦截这种不支持的参数组合。当 `crosstask` 和 `user` 同时被设置时，函数应直接返回 NULL，而非继续执行后续逻辑或仅通过跳转清理资源。
+
+#解决方案
+在 `get_perf_callchain()` 函数入口处增加参数合法性检查：如果 `crosstask` 和 `user` 均为真，直接返回 NULL。同时清理了代码内部冗余的判断逻辑，移除了原先的 `exit_put` 标签和相关跳转，简化了控制流。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b2a16ce6bbbd3354f573a244528d4d728f5fd404

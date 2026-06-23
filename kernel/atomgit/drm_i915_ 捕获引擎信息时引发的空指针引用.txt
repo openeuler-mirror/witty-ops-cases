@@ -1,0 +1,21 @@
+#标题
+drm/i915: 捕获引擎信息时引发的空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel GPU 驱动处理引擎挂起过程中，调用 `capture_engine` 函数记录错误信息时，若存在活跃请求但上下文 `context` 为空，访问 `ce->guc_id.id` 会导致内核空指针引用，引发内核 panic 或 oops。
+
+#主要错误日志
+推断日志格式：
+`Got hung context on [engine_name] with active request [context_id]:[seqno] [0x[guc_id]] not yet started`
+
+#问题根因
+在 `capture_engine` 函数中，`intel_engine_get_hung_entity` 可能会返回有效的 `rq`（请求指针）但 `ce`（上下文指针）为 NULL。原代码在打印日志时未检查 `ce` 是否为空，直接访问了 `ce->guc_id.id`，从而触发了空指针引用。
+
+#解决方案
+在访问 `ce->guc_id.id` 成员前增加对 `ce` 指针的非空检查。若 `ce` 不为空，则打印包含 `guc_id` 的完整日志；若 `ce` 为空，则跳过 `guc_id` 的打印，输出不包含该字段的日志信息，从而避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/856e5fa65ba68add2e366f8465e3e54397d585c6

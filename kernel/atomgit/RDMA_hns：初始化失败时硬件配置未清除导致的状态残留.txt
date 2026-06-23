@@ -1,0 +1,20 @@
+#标题
+RDMA/hns：初始化失败时硬件配置未清除导致的状态残留
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hns RoCE 驱动初始化过程中，如果 `get_hem_table` 阶段失败，驱动会跳过硬件清除流程直接退出。这导致此前通过 `hns_roce_clear_extdb_list_info()` 配置的硬件状态未被清除，造成设备状态残留。
+
+#主要错误日志
+未知
+
+#问题根因
+错误处理路径跳转标签设置错误。`get_hem_table` 失败时跳转至 `err_clear_extdb_failed` 标签，该路径仅释放了页面资源，却遗漏了调用 `hns_roce_function_clear()` 来清除通过 FW 配置的硬件状态。正确的逻辑应是在释放资源前先执行硬件清除操作。
+
+#解决方案
+修正错误处理路径的跳转逻辑。在 `get_hem_table` 失败时，使其跳转至新增的 `err_get_hem_table_failed` 标签，在此处调用 `hns_roce_function_clear(hr_dev)` 确保硬件配置被正确清除，随后再跳转至后续的资源释放流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca64b641105314b7dec6906b7a20fea4e21c1857

@@ -1,0 +1,20 @@
+#标题
+HID: appleir: 修复 raw event 处理中的潜在空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 Apple IR 设备的原始事件时，若 `hid->claimed` 未设置 `HID_CLAIMED_INPUT` 标志，驱动程序会继续执行后续的数据处理逻辑。此时若访问相关的 input 子系统结构体，将引发内核空指针引用，可能导致内核崩溃或设备功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `appleir_raw_event` 函数中，检查数据长度的条件 `if (len != 5)` 不足以覆盖所有异常情况。当 `hid->claimed` 未包含 `HID_CLAIMED_INPUT` 时，驱动内部关联的 input 设备可能尚未初始化或不可用，此时继续处理数据会触发空指针引用。
+
+#解决方案
+在 `appleir_raw_event` 函数的入口检查处增加对 `hid->claimed` 标志的验证。修改判断条件为 `if (len != 5 || !(hid->claimed & HID_CLAIMED_INPUT))`，若数据长度不为 5 或者 Input 设备未被正确 Claim，则直接跳过处理，从而避免潜在的空指针引用风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4d2e6044ebec51fe08e0e33595facd68f2446576

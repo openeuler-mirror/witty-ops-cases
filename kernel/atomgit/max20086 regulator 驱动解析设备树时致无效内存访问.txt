@@ -1,0 +1,21 @@
+#标题
+max20086 regulator 驱动解析设备树时致无效内存访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 max20086 设备探测失败（例如读取 DEVICE_ID 寄存器失败）时，驱动注销流程中会访问已失效的栈内存指针，导致内核崩溃并打印堆栈跟踪。具体表现为系统检测到未初始化的 kobject 正在被释放。
+
+#主要错误日志
+max20086 6-0028: Failed to read DEVICE_ID reg: -121
+kobject: '\xc0$\xa5\x03' (000000002cebcb7a): is not initialized, yet kobject_put() is being called.
+
+#问题根因
+驱动在函数 max20086_parse_regulators_dt() 中将 `struct of_regulator_match` 数组分配在栈上，并将该数组传递给 of_regulator_match() 函数。后续流程中，`devm_of_regulator_put_matches()` 被注册用于清理资源，该函数内部持有并试图操作之前栈上分配的 matches 数组指针。当设备探测失败时，驱动的资源管理机制触发该清理函数，此时栈帧已经销毁，导致访问无效的栈内存地址，引发非法内存访问错误。
+
+#解决方案
+将 `struct of_regulator_match` 数组的分配方式从栈分配改为使用 `devm_kcalloc()` 进行动态分配。这样可以确保该数组在设备生命周期内有效，避免了探测失败时清理函数访问已失效栈指针的问题，同时也修复了多个 max20086 设备实例可能存在的全局数据覆盖隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/79a444a5bb5ed0c4fe4f483d0bdf81427b36abc9

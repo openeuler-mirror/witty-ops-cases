@@ -1,0 +1,20 @@
+#标题
+scsi: qla2xxx: Fix bsg_done() causing double free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 qla2xxx 驱动执行某些 BSG（Berkeley Packet Filter SCSI Generic）操作时，若底层函数返回错误，驱动仍会调用 `bsg_job_done()` 完成任务。由于上层框架或调用者在检测到返回值非零时也会清理或完成该任务，导致该 BSG job 被完成两次，引发“double free”问题，造成内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `qla2x00_update_optrom`、`qla2x00_manage_host_stats`、`qla2x00_get_host_stats`、`qla2x00_get_tgt_stats`、`qla2x00_manage_host_port` 以及 `qla2x00_mailbox_passthru` 等函数中，代码逻辑未正确处理底层调用的返回值（`rval` 或 `ret`）。无论操作成功与否，代码均强制调用 `bsg_job_done()`。当操作失败（返回值非零）时，函数向上层返回错误，上层调用者可能会执行错误处理流程并再次释放或完成该 BSG job，从而导致双重释放。
+
+#解决方案
+在上述受影响的函数中，增加对返回值的检查。仅当返回值为 0（表示操作成功）时，才调用 `bsg_job_done()`；若返回值非 0（表示操作失败），则不调用 `bsg_job_done()`，由错误处理流程统一管理资源，从而避免双重释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f45761ccca04ea9d336ecb4a43e32716765df6d9

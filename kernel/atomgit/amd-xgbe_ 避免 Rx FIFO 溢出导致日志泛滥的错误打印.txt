@@ -1,0 +1,22 @@
+#标题
+amd-xgbe: 避免 Rx FIFO 溢出导致日志泛滥的错误打印
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 AMD xgbe 网卡驱动接收数据时，若发生 Rx FIFO 缓冲区溢出导致数据包损坏，内核日志会大量打印 "error in received packet" 错误信息，导致日志被刷屏。同时，统计信息中将 FIFO 溢出错误错误地归类为 `rx_fifo_errors`，可能误导运维人员的判断。
+
+#主要错误日志
+error in received packet
+
+#问题根因
+在接收路径中，当数据包因 Rx FIFO 缓冲区溢出而损坏时，`packet->errors` 标志位被置位。驱动程序在 `xgbe_rx_poll` 函数中针对每个错误数据包都调用了 `netif_err` 打印错误日志。由于网络流量大时此类错误可能频繁发生，这种 "per-packet"（逐包）级别的日志打印会导致系统日志泛滥。此外，驱动将 `rxfifooverflow` 统计值映射到了不恰当的统计字段。
+
+#解决方案
+1. 删除 `xgbe_rx_poll` 函数中对 `packet->errors` 的逐包 `netif_err` 打印逻辑，避免日志刷屏。
+2. 依赖标准的 `rtnl_link_stats64` 统计接口来反映错误情况。
+3. 修正统计字段映射，将 `rxfifooverflow` 从 `rx_fifo_errors` 改为 `rx_over_errors`，以更准确地反映溢出错误类型。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/04d3d25ec0013b4401c347b7912e6d1fadbb998f

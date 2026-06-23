@@ -1,0 +1,24 @@
+#标题
+cifs: 重放路径下局部变量未初始化导致潜在故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CIFS/SMB3 文件系统中，当请求发生故障需要执行重试（replay）逻辑时，由于部分局部变量（如 `used_len`、`buffer`、`pc_buf`）未重新初始化，导致重试流程使用了上次失败请求遗留的脏数据。这可能导致内核崩溃、内存状态异常或文件操作不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中存在 `replay_again` 标签用于标记请求重试的入口点，但在跳转至该标签重试代码路径时，部分关键局部变量（`used_len`、`buffer`、`pc_buf`）未被执行初始化操作，保留了之前的值，破坏了重试逻辑应有的初始状态。
+
+#解决方案
+在 `replay_again` 标签后立即对相关变量进行初始化归零处理：
+1. 在 `smb2_set_ea` 函数中添加 `used_len = 0;`。
+2. 在 `smb2_ioctl_query_info` 函数中添加 `buffer = NULL;`。
+3. 在 `smb311_posix_mkdir` 函数中添加 `pc_buf = NULL;`。
+确保每次进入重试路径时，这些变量均处于已知的初始状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/16b2c7472ee0cf39eb87b0473fadbc96f3168c7d

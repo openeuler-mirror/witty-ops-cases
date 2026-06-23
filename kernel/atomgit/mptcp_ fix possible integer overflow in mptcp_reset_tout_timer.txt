@@ -1,0 +1,20 @@
+#标题
+mptcp: fix possible integer overflow in mptcp_reset_tout_timer
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MPTCP（多路径 TCP）协议处理中，`mptcp_reset_tout_timer` 函数在计算关闭超时时间（close_timeout）时，因变量类型转换不当，可能引发整型溢出问题，导致超时计算结果错误，进而影响连接关闭或探测定时的正确性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mptcp_reset_tout_timer` 函数中，表达式 `inet_csk(sk)->icsk_mtup.probe_timestamp - tcp_jiffies32 + jiffies + mptcp_close_timeout(sk)` 的计算过程中，`probe_timestamp` 和 `tcp_jiffies32` 均为 32 位无符号整型（unsigned int）。在 32 位减法运算中，如果 `probe_timestamp` 小于 `tcp_jiffies32`（例如时间戳回绕或更新延迟），运算结果会产生负值并下溢为一个极大的 32 位无符号整数。随后该结果在与 `jiffies`（通常为 unsigned long 类型）相加提升为长整型之前，已经发生了溢出截断，导致最终计算出的 `close_timeout` 值不正确。
+
+#解决方案
+通过显式类型转换，将 `inet_csk(sk)->icsk_mtup.probe_timestamp` 强制转换为 `unsigned long` 类型。这强制整个减法运算在 64 位（或 long 对应的位宽）空间中进行，避免了中间结果的 32 位整型溢出，确保了超时时间计算的数学正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a4a4f90106836b6a55f0e5efc0f0785c6aec34d8

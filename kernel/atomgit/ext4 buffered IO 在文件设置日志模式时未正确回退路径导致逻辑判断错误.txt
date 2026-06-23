@@ -1,0 +1,20 @@
+#标题
+ext4 buffered IO 在文件设置日志模式时未正确回退路径导致逻辑判断错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户对特定文件动态设置 `EXT4_INODE_JOURNAL_DATA` 标志（即针对单个文件开启日志模式）时，该文件本应回退使用常规的 buffer head 路径进行 IO，但由于逻辑判断缺失，系统仍错误地使用 iomap 路径。这导致文件的数据模式设置未生效，可能引发数据一致性问题或 IO 行为异常。若需使修复生效，需执行 drop cache 操作清除内存中已有的 inode 状态标记。
+
+#主要错误日志
+未知
+
+#问题根因
+当前的 `ext4_should_use_buffered_iomap()` 函数逻辑仅检查了挂载参数中的 `EXT4_MOUNT_JOURNAL_DATA` 标志，遗漏了对 inode 级别的 `EXT4_INODE_JOURNAL_DATA` 标志的检查。当用户针对单个文件动态设置该标志时，函数仍错误地返回 true，导致文件继续使用 iomap 路径而非预期的日志模式路径。
+
+#解决方案
+在 `ext4_should_use_buffered_iomap()` 函数中增加对 `EXT4_INODE_JOURNAL_DATA` 标志的判断条件。如果检测到 inode 设置了该标志，函数应返回 false，强制文件回退到常规 buffer head 路径，从而确保数据日志模式的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01a457538e5687467c329642acca40c569691d1e

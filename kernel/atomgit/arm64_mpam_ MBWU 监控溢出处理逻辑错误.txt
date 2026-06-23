@@ -1,0 +1,25 @@
+#标题
+arm64/mpam: MBWU 监控溢出处理逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+MPAM（Memory System Resource Partitioning and Monitoring）模块的 MBWU（Memory Bandwidth Usage）监控计数器在发生溢出时，内核未能正确处理溢出状态。这导致带宽使用量的统计计算出现偏差，具体表现为：当寄存器值发生回绕时，溢出值计算逻辑被错误触发或数值计算错误，导致用户读取到的带宽监控数据不准确，无法反映真实的内存带宽使用情况。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__ris_msmon_read` 函数中，MBWU 溢出处理逻辑存在两处缺陷：
+1. 代码仅通过比较 `mbwu_state->prev_val` 和当前读取值 `now` 来判断是否发生溢出（即 `if (mbwu_state->prev_val > now)`），这种简单的数值大小判断在特定场景下可能失效，且未真正检查硬件溢出状态位。
+2. 未读取并清除 `MSMON_CFG_MBWU_CTL` 寄存器中的 `OFLOW_STATUS` 位。如果不清除该状态位，硬件可能无法正常更新或维持正确的监控状态，导致后续监控统计错误。
+
+#解决方案
+1. 新增 `read_msmon_mbwu_is_overflow` 函数，用于读取 MBWU 控制寄存器（`CFG_MBWU_CTL`），检查 `MSMON_CFG_x_CTL_OFLOW_STATUS` 位来判断是否溢出，并在检测到溢出时写回清除该状态位。
+2. 修改 `__ris_msmon_read` 主逻辑，使用新增的函数 `read_msmon_mbwu_is_overflow` 替代原有的数值大小比较逻辑来判断溢出。
+3. 修正溢出值计算：当确认发生溢出时，直接调用 `mpam_msmon_overflow_val(ris)` 获取完整的溢出数值，不再进行错误的差值计算。
+4. 增加了相关寄存器读写操作的 `pr_debug` 调试日志，便于后续问题定位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9094437bec1ace7378abfe84597e722209d03f85

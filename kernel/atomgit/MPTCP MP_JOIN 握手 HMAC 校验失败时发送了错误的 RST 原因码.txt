@@ -1,0 +1,20 @@
+#标题
+MPTCP MP_JOIN 握手 HMAC 校验失败时发送了错误的 RST 原因码
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MPTCP 连接建立过程中，当服务端收到 ACK + MP_JOIN 报文但 HMAC 校验失败时，发送给对端的 RST 报文中携带了错误的原因码 MPTCP_RST_EPROHIBIT（Administratively prohibited），导致对端收到“管理禁止”的错误提示，而非准确的 MPTCP 协议错误提示，影响了故障定位的准确性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `subflow_syn_recv_sock()` 函数中，当处理接收到的 ACK + MP_JOIN 报文时，如果 HMAC 校验失败，代码错误地使用了 `MPTCP_RST_EPROHIBIT` 作为重置原因。这导致将 MPTCP 协议级别的 HMAC 校验错误误报为“管理禁止”错误，与客户端侧 `subflow_finish_connect()` 处理同类错误时使用 `MPTCP_RST_EMPTCP` 的逻辑不一致。
+
+#解决方案
+修改 `net/mptcp/subflow.c` 文件中 `subflow_syn_recv_sock()` 函数的错误处理逻辑。在 HMAC 校验失败的分支中，将 `subflow_add_reset_reason` 的参数从 `MPTCP_RST_EPROHIBIT` 修改为 `MPTCP_RST_EMPTCP`，以确保服务端发送的 RST 原因码准确反映 MPTCP 协议错误，并与客户端侧行为保持对称一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/46a429c1895e366c3dd78fb687ca922e80fa498f

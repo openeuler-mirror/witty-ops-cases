@@ -1,0 +1,24 @@
+#标题
+EDAC/i10nm: Emerald Rapids 部分内存 DIMM 缺失错误报告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定的 Intel Emerald Rapids 服务器上进行内存 DIMM 错误注入测试时，i10nm_edac 驱动程序未能报告部分内存 DIMM 的错误，导致内存错误事件丢失或未被正确记录。
+
+#主要错误日志
+未知
+
+#问题根因
+特定 BIOS 配置可能会隐藏部分内存控制器，导致 i10nm_edac 驱动程序未枚举这些隐藏的内存控制器（逻辑索引缺失）。然而，ADXL（Advanced Error Logging）组件在解码内存错误时始终使用内存控制器物理索引，即使存在被隐藏的控制器。这导致 ADXL 报告的内存控制器物理索引与 i10nm_edac 枚举的逻辑索引不匹配，从而在错误处理过程中无法定位到正确的内存控制器，最终导致错误报告丢失。
+
+#解决方案
+在驱动程序中建立从内存控制器物理索引（ADXL 使用）到逻辑索引（i10nm_edac 使用）的映射表（mc_mapping）。
+1. 在 `skx_dev` 结构体中新增 `mc_mapping` 数组用于存储映射关系。
+2. 在设备初始化时默认将物理索引映射为相同的逻辑索引。
+3. 在枚举内存控制器时（针对 SPR 类型），如果发现控制器存在，调用 `skx_set_mc_mapping` 更新映射表，记录物理索引到逻辑索引的对应关系。
+4. 在错误解码函数 `skx_adxl_decode` 中，使用 `skx_get_mc_mapping` 将 ADXL 报告的物理索引转换为驱动枚举的逻辑索引，确保错误能被正确关联和上报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d1144e1b3598e5dbb07408e2dfea9ef6e95c29ae

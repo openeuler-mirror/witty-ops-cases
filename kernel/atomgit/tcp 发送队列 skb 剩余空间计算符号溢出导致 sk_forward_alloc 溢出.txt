@@ -1,0 +1,20 @@
+#标题
+tcp 发送队列 skb 剩余空间计算符号溢出导致 sk_forward_alloc 溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在发送大量数据（如 2GB）时，若 TCP 写队列尾部的 skb 已有数据长度大于 size_goal（可能由 TCP_REPAIR 或 tcp_bound_to_half_wnd 调整引起），内核变量 `copy` 的计算结果因类型转换问题变为极大的正值。该值随后用于更新 `sk->sk_forward_alloc`，导致该值溢出甚至变为负数。Syzkaller 报告了此 bug，系统可能出现内存分配逻辑异常或崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在进行 skb 剩余空间计算 `copy = size_goal - skb->len` 时，由于 `size_goal` 为 `int` 类型，`skb->len` 为 `unsigned int` 类型，根据 C 语言类型提升规则，`size_goal` 被转换为无符号数参与运算，导致减法结果为无符号类型。当 `size_goal` 小于 `skb->len` 时，数学结果本应为负，但无符号运算导致结果变为极大的正整数。该结果被赋值给 `ssize_t` 类型的 `copy` 变量时进行了零扩展，使其保持为极大的正值，进而导致后续 `sk->sk_forward_alloc` 更新时发生溢出。
+
+#解决方案
+将变量 `copy` 的类型从 `ssize_t` 修改为 `int`。这使得计算表达式 `size_goal - skb->len` 的结果在赋值时能够正确保留其有符号性，从而允许 `copy` 正确存储负值，随后的逻辑判断能够正确处理空间不足的情况，防止越界计算导致的溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dea7fb5c3a5e486cbcaed49018ffe3dddec593cb

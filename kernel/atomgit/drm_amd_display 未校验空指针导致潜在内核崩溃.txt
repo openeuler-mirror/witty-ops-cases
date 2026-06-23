@@ -1,0 +1,20 @@
+#标题
+drm/amd/display 未校验空指针导致潜在内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD 显示驱动处理图形管线更新时，若 `pipe_ctx->plane_state` 为空指针，代码逻辑仍可能尝试对其进行解引用访问（如访问 `update_flags` 成员），导致内核发生空指针引用错误，进而引发内核崩溃或显示功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `dcn20_program_pipe` 中，代码在调用 `hws->funcs.set_hdr_multiplier` 和 `hws->funcs.set_input_transfer_func` 前，判断条件逻辑存在缺陷。部分分支仅检查了 `pipe_ctx->update_flags.bits.enable` 而未检查 `pipe_ctx->plane_state` 是否为空，导致在 `plane_state` 为 NULL 时，函数内部尝试访问 `pipe_ctx->plane_state->update_flags` 从而触发空指针解引用。
+
+#解决方案
+修改 `drivers/gpu/drm/amd/display/dc/dcn20/dcn20_hwseq.c` 中的条件判断逻辑，确保在访问 `plane_state` 成员之前先验证其非空。具体修改为将 `pipe_ctx->plane_state` 的非空检查置于条件逻辑的前位，保证所有解引用操作都在指针安全的前提下进行，同时清理了冗余的重复代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/827c517595c561029e6a21000e7616ce7b24d91d

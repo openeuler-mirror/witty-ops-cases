@@ -1,0 +1,20 @@
+#标题
+dwc2 HCD 端口电源重启后无法重新使能导致 USB 端口不可用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在没有板载 USB 集线器的 Raspberry Pi 设备上，当进行电源连接初始化时的电源重置过程中，USB 端口被关闭后无法再次使能，导致端口功能异常。内核日志显示端口尝试电源循环，但随后端口未能正常恢复工作。
+
+#主要错误日志
+usb usb1-port1: attempt power cycle
+
+#问题根因
+在 `dwc2_hcd_hub_control()` 函数中，原逻辑通过检查 `port_connect_status == 0` 来判断是否跳过端口相关操作，假定此时核心处于或即将处于设备模式。但该假定是错误的：在执行 `ClearPortFeature(USB_PORT_FEAT_POWER)` 关闭端口电源后，`port_connect_status` 也会变为 0，导致后续尝试开启电源的 `SetPortFeature` 操作被错误跳过，端口无法重新使能。
+
+#解决方案
+修改 `dwc2_hcd_hub_control()` 中的判断逻辑，将 `!hsotg->flags.b.port_connect_status` 的检查替换为 `dwc2_is_device_mode(hsotg)`。这样可以准确判断核心是否处于设备模式，避免因端口连接状态标志位变化导致电源控制操作被错误跳过，确保端口电源能够正常重新使能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/87cdd3dc411afb44056888f47e32634fbee05545

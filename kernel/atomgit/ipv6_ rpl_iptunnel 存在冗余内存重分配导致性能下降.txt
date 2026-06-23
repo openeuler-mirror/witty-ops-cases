@@ -1,0 +1,27 @@
+#标题
+ipv6: rpl_iptunnel 存在冗余内存重分配导致性能下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IPv6 RPL（Routing Protocol for Low-Power and Lossy Networks）隧道的报文转发过程中，`rpl_iptunnel` 模块会触发两次不必要的 `skb` 内存重分配（realloc）。这导致网络吞吐量下降，增加了报文处理的 CPU 开销。在缓存命中的后续迭代中本应只需一次重分配，但实际上仍触发了额外的内存拷贝操作。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `rpl_output` 和 `rpl_input` 函数的处理流程中，代码逻辑顺序不当导致了双重重分配问题：
+1. 首先，`rpl_do_srh_inline` 函数内部调用 `skb_cow_head()` 时，未传入准确的 dst 开销信息，而是仅使用了 `hdrlen + skb->mac_len`，这导致无法预知最终输出设备所需的 headroom 空间。
+2. 随后，在获取到 dst 并设置到 skb 后，代码又调用了一次 `skb_cow_head(skb, LL_RESERVED_SPACE(dst->dev))`。
+由于第一次调用时未预留足够的空间（LL_RESERVED_SPACE 通常比 mac_len 大），导致 skb 的数据区指针在第一次调用后被调整，而在第二次调用时又因空间不足触发真正的内存重分配和数据拷贝。这意味着每个报文都经历了两次内存重分配操作，而非理论上的一次。
+
+#解决方案
+调整 `skb_cow_head` 的调用时机和参数，合并两次操作以消除冗余的重分配：
+1. 将 `dst_cache_get` 获取缓存 dst 的操作提前，在调用 `rpl_do_srh` 之前完成。
+2. 修改 `rpl_do_srh_inline` 函数接口，新增 `cache_dst` 参数。将获取到的 dst 传入该函数，并在内部调用 `skb_cow_head` 时直接使用 `dst_dev_overhead(cache_dst, skb)` 计算所需开销。
+3. 移除 `rpl_output` 和 `rpl_input` 流程中后续冗余的 `skb_cow_head(skb, LL_RESERVED_SPACE(dst->dev))` 调用。
+通过上述修改，第一次调用 `skb_cow_head` 时即预留了足够的空间（包含了 dst 设备的 reserved space），从而避免了后续的第二次重分配，仅保留第一次迭代（缓存为空）时可能出现的额外开销，后续迭代均为单次重分配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7b8a8505e0f783c5a8249bc7d6095f588da12c05

@@ -1,0 +1,24 @@
+#标题
+ocfs2 在 64K 页大小环境下导致虚拟机磁盘数据意外清零
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在虚拟机环境下，XFS 文件系统偶发元数据 CRC 校验错误，导致内存数据损坏，文件系统强制关闭。具体表现为元数据缓冲区内容被意外清零（全 00），触发 I/O 错误并导致虚拟机磁盘不可用。
+
+#主要错误日志
+XFS (vdb): Metadata CRC error detected at xfs_refcountbt_read_verify+0x2c/0xf0, xfs_refcountbt block 0x200028
+XFS (vdb): First 128 bytes of corrupted metadata buffer:
+00000000e0cd2f5e: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+XFS (vdb): metadata I/O error in "xfs_trans_read_buf_map" at daddr 0x200028 len 8 error 74
+XFS (vdb): Corruption of in-memory data detected.  Shutting down filesystem
+
+#问题根因
+当系统页大小为 64K 时，ocfs2 在处理 Direct I/O 写入页簇时逻辑存在错误。在遍历页簇中非目标页（w_pages[i] == NULL）时，物理块号仅递增 1（p_blkno++），而未考虑页大小与块大小的比例关系。正确的逻辑应当是将块号前进 16（即 1 << (PAGE_SHIFT - blocksize_bits)）。该错误导致页到磁盘的映射计算错误，进而将磁盘上相邻区域的数据意外清零。
+
+#解决方案
+修改 `fs/ocfs2/aops.c` 文件中的 `ocfs2_write_cluster` 函数，将非目标页的块号递增逻辑修正为：`p_blkno += (1 << (PAGE_SHIFT - inode->i_sb->s_blocksize_bits))`，确保物理块号根据页大小与块大小的比例正确递增。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c88fc8825300a28170f0329dc00d812ebabba01d

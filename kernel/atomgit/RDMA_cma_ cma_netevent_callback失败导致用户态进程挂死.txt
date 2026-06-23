@@ -1,0 +1,20 @@
+#标题
+RDMA/cma: cma_netevent_callback失败导致用户态进程挂死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `cma_netevent_callback` 函数尝试处理同一个 cma_id 的并发事件时，如果上一个事件的工作项尚处于 pending 状态未开始执行，新的事件将无法成功加入工作队列。此时，由于引用计数未正确释放，导致对应的用户态进程挂起，变为僵尸进程。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复提交 45f5dcdd0497 引入的逻辑中，为了防止崩溃，对工作项进行了重新初始化检查。但是，当 `queue_work` 失败时（因为工作项已在队列中等待），代码直接跳过了处理，未能调用 `cma_id_put` 来释放之前通过 `cma_id_get` 获取的引用计数。而在工作处理函数中会调用 `cma_id_put`，若 `queue_work` 失败导致工作项未执行，引用计数将永远不会被减少，从而导致资源泄漏和用户态进程挂死。
+
+#解决方案
+在 `cma_netevent_callback` 函数中，增加对 `queue_work` 返回值的检查。如果 `queue_work` 返回失败（即返回 0，表示工作项已在队列中），立即调用 `cma_id_put(current_id)` 释放之前获取的引用计数，防止因引用计数泄漏导致的进程挂死。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5ab3f75dde25142e7d8c34639dec191bca9793d4

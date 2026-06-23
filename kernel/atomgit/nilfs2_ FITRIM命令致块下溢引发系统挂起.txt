@@ -1,0 +1,25 @@
+#标题
+nilfs2: FITRIM命令致块下溢引发系统挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+用户执行 FITRIM 命令时，若传入的 range 范围过小，会触发系统挂起。具体表现为 segctord 内核线程长时间处于 D 状态（不可中断睡眠），导致系统无响应。
+
+#主要错误日志
+task:segctord state:D stack:28968 pid:6093 tgid:6093  ppid:2 task_flags:0x200040 flags:0x00080000
+Call Trace:
+ rwbase_write_lock+0x3dd/0x750 kernel/locking/rwbase_rt.c:272
+ nilfs_transaction_lock+0x253/0x4c0 fs/nilfs2/segment.c:357
+ nilfs_segctor_thread_construct fs/nilfs2/segment.c:2569 [inline]
+ nilfs_segctor_thread+0x6ec/0xe00 fs/nilfs2/segment.c:2684
+
+#问题根因
+在执行 FITRIM 命令计算 nblocks 时，如果 end_block 过小（小于文件系统的第一个数据块），计算过程会发生下溢。由于 nblocks 类型为 sector_t (u64)，负值会转化为极大的正整数。这导致块层函数 __blkdev_issue_discard() 耗费极长时间处理 bio 链，且长时间持有 ns_segctor_sem 锁，阻止其他任务获取该锁，最终导致系统挂起。
+
+#解决方案
+在 nilfs_sufile_trim_fs 函数中增加边界检查。如果计算出的 end_block 小于 ns_first_data_block，则直接跳过 discard 操作并退出，将丢弃大小置为 0 返回，避免因下溢导致的长时间锁持有和系统挂起。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/27967ffbc2288f94ec1320be6de28d11d10e7981

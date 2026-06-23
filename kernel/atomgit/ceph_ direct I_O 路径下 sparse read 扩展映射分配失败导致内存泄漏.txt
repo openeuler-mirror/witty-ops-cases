@@ -1,0 +1,20 @@
+#标题
+ceph: direct I/O 路径下 sparse read 扩展映射分配失败导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用稀疏读功能的 CephFS direct I/O 读写路径中，当 `ceph_alloc_sparse_ext_map()` 分配失败时，会导致内核内存泄漏。此前在 `ceph_direct_read_write()` 函数中，若 sparse_ext map 分配失败，此前已通过 `iter_get_bvecs_alloc()` 分配的 bvecs 数组未被释放，且相关页面保持 pinned 状态无法回收。长期运行可能导系统内存耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ceph_direct_read_write()` 函数中，代码逻辑存在资源释放顺序问题。原逻辑先调用 `iter_get_bvecs_alloc()` 分配 bvecs 数组并 pin 住页面，随后调用 `ceph_alloc_sparse_ext_map()` 分配稀疏读扩展映射。如果 `ceph_alloc_sparse_ext_map()` 分配失败，代码直接跳转退出，但未对已分配的 bvecs 数组进行释放操作，从而导致内存泄漏和页面泄漏。
+
+#解决方案
+调整代码执行顺序，将 sparse_ext map 的分配操作提前至 `iter_get_bvecs_alloc()` 调用之前。这样在分配 bvecs 数组之前就处理完可能失败的操作，确保如果内存分配失败，不会遗留需要清理的资源，从而彻底避免内存泄漏。同时对 `__ceph_sync_read()` 进行了类似的一致性调整。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/79a7ff565c9161918b491b004602861c1b7c1d0a

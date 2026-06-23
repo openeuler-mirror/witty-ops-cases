@@ -1,0 +1,24 @@
+#标题
+regulator: sy7636a 修复 power good GPIO 生命周期管理问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动模块执行 rmmod/insmod 操作，或因依赖未满足导致 probe 探测过程被多次执行（延迟重试）时，系统出现功能异常，具体表现为 power good GPIO 资源管理混乱，可能导致驱动加载失败或资源泄露。
+
+#主要错误日志
+Power good GPIO fault %ld
+
+#问题根因
+驱动在获取 power good GPIO 时，错误地将其挂载到父设备（`pdev->dev.parent`）的 devres 资源管理列表中，而非挂载到 regulator 设备自身（`&pdev->dev`）。由于 GPIO 的生命周期绑定到了父设备，当 regulator 设备经历多次 probe（如模块重加载或探测延迟）时，GPIO 资源无法被正确释放和重新获取，导致生命周期管理错误。
+
+#解决方案
+将 power good GPIO 的 devres 绑定对象从父设备修改为 regulator 设备本身，确保资源生命周期与驱动实例一致。
+具体代码修改：
+1. 使用 `devm_gpiod_get(&pdev->dev, ...)` 替代 `devm_gpiod_get(pdev->dev.parent, ...)`。
+2. 相应调整错误日志打印对象为 `&pdev->dev`。
+3. 显式调用 `device_set_of_node_from_dev` 从父设备继承设备树节点，替代原先直接赋值 `of_node` 的方式，以确保设备模型一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e40c5ef67783e904f277d17416a51f314d6f453d

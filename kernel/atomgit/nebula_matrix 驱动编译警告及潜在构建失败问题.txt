@@ -1,0 +1,26 @@
+#标题
+nebula_matrix 驱动编译警告及潜在构建失败问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定内核配置下编译 nebula_matrix 网卡驱动时，编译器报出警告。主要涉及 `nbl_ethtool.c` 中未使用变量、指针类型不匹配以及函数作用域问题，同时 `nbl_hwmon.c` 在未启用 HWMON 配置时可能出现头文件依赖缺失导致的编译错误。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 代码中存在定义但未使用的变量（如 `priv`、`net_priv`、`phy_state`、`phy_caps`、`autoneg` 等）。
+2. `ethtool` 相关接口函数中，字符串拷贝使用 `snprintf` 且指针类型定义为 `char *`，与内核新版本中 `ethtool_sprintf` 接口要求的 `u8 *` 类型不匹配。
+3. `nbl_serv_adjust_interrpt_param` 等函数缺少 `static` 修饰符，导致作用域不明确。
+4. `nbl_hwmon.c` 中条件编译逻辑不严谨，头文件包含顺序未考虑 HWMON 配置关闭的情况。
+
+#解决方案
+1. 清理冗余代码，删除所有定义但未使用的局部变量。
+2. 替换 `snprintf` 为专用的 `ethtool_sprintf` 接口，并将相关指针变量类型修正为 `u8 *`。
+3. 为非导出的内部函数添加 `static` 修饰符，修复符号作用域。
+4. 调整 `nbl_hwmon.c` 文件结构，将本地头文件 `nbl_hwmon.h` 包含移至顶部，并增加 `#if defined(CONFIG_HWMON)` 条件编译保护，确保在不支持 HWMON 的配置下代码能正确编译。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2d861e6888256771288076b36aa9beba46c7af67

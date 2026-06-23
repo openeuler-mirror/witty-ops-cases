@@ -1,0 +1,24 @@
+#标题
+PCI: histb: 修复 probe 流程中的 PHY 资源释放缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HiSilicon STB SoC PCIe 控制器驱动加载过程中，若 `histb_pcie_host_enable` 或 `dw_pcie_host_init` 执行失败，驱动会直接返回错误码退出 probe 函数，导致之前已初始化的 PHY 模块未被正确反初始化（phy_exit 未被调用）。这可能造成 PHY 资源泄漏，影响后续设备操作或系统电源管理状态。
+
+#主要错误日志
+- dev_err(dev, "failed to enable host\n");
+- dev_err(dev, "failed to initialize host\n");
+
+#问题根因
+驱动在 `histb_pcie_probe` 函数的错误处理路径中逻辑不完整。代码先前已经成功调用了 `phy_init()`，但在后续步骤（如 `histb_pcie_host_enable` 或 `dw_pcie_host_init`）失败时，直接 return 返回，遗漏了调用 `phy_exit()` 进行清理的步骤。这与 `histb_pcie_remove` 函数中完善的清理逻辑不一致。
+
+#解决方案
+修改 `histb_pcie_probe` 函数的错误处理流程：
+1. 将 `histb_pcie_host_enable` 和 `dw_pcie_host_init` 失败后的直接返回改为跳转至新增的 `err_exit_phy` 标签。
+2. 在 `err_exit_phy` 标签处补充调用 `phy_exit(hipcie->phy)` 以确保 PHY 资源被正确释放。
+3. 同时移除了 `histb_pcie_remove` 函数中对 `hipcie->phy` 的多余 NULL 检查，因为 `phy_exit` 函数内部已具备处理 NULL 参数的能力，保持了代码的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d4f9e3d3fd9cad237b301c877d17c76a065a031c

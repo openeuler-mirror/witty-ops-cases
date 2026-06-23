@@ -1,0 +1,20 @@
+#标题
+DAMON KUnit 测试未处理内存分配失败导致潜在非法内存访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 DAMON 模块的 `damon_test_split_evenly_fail` KUnit 测试用例时，若遇到动态内存分配失败（如 `damon_new_target` 或 `damon_new_region` 返回 NULL），测试代码未进行错误处理而继续执行，导致非法内存访问。
+
+#主要错误日志
+推断：若分配失败且未修复，可能触发 NULL pointer dereference 或 slab corruption 相关的内核 Oops 日志。
+
+#问题根因
+`damon_test_split_evenly_fail()` 函数假设其内部所有的动态内存分配（`damon_new_target` 和 `damon_new_region`）都会成功。虽然这些分配在实际场景中因内存需求很小而很少失败，但在理论上的内存不足情况下，分配可能失败。原代码未对分配返回值进行 NULL 检查，在分配失败时继续执行后续代码，导致对非法内存区域的访问。
+
+#解决方案
+在 `damon_test_split_evenly_fail()` 函数中增加对 `damon_new_target()` 和 `damon_new_region()` 返回值的检查。若 `damon_new_target()` 失败，直接调用 `kunit_skip` 跳过测试；若 `damon_new_region()` 失败，先调用 `damon_free_target(t)` 清理已分配的目标内存，再调用 `kunit_skip` 跳过测试，从而防止非法内存访问并正确处理资源释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1a08e965b505230e2880216e875f955254f46f9e

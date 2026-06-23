@@ -1,0 +1,31 @@
+#标题
+hugetlb: 替换空闲大页时引发的内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行替换空闲 hugetlb folios 的操作时（如 CMA 分配测试），内核发生空指针解引用并触发 Oops，导致系统崩溃。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000028
+PGD 0 P4D 0
+Oops: Oops: 0000 [#1] SMP NOPTI
+CPU: 28 UID: 0 PID: 29639 Comm: test_cma.sh Tainted 6.15.0-rc6-zp #41 PREEMPT(voluntary)
+RIP: 0010:alloc_and_dissolve_hugetlb_folio+0x1d/0x1f0
+...
+Call Trace:
+ replace_free_hugepage_folios+0xb6/0x100
+ alloc_contig_range_noprof+0x18a/0x590
+ cma_range_alloc.constprop.0+0x131/0x290
+ __cma_alloc+0xcf/0x2c0
+ ...
+
+#问题根因
+`replace_free_hugepage_folios()` 与 `__update_and_free_hugetlb_folio()` 之间存在竞争条件。当 CPU1 执行 `__update_and_free_hugetlb_folio()` 清除 folio 的 hugetlb 标志并释放时，CPU2 同时在 `replace_free_hugepage_folios()` 中判断该 folio 仍为 hugetlb 类型，随即调用 `folio_hstate(folio)`。此时因 folio 已被清除 hugetlb 标志，`folio_hstate()` 返回 NULL，后续对该指针的访问导致了空指针解引用崩溃。
+
+#解决方案
+在 `replace_free_hugepage_folios()` 函数中引入 `hugetlb_lock` 锁保护。在检查 `folio_test_hugetlb(folio)` 和获取 `h = folio_hstate(folio)` 的过程中持有自旋锁，确保检查与获取状态操作的原子性，防止因并发操作导致的 folio 状态不一致，从而避免获取到 NULL 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/886d763bff86f51aaf6bd2a5f9d9bb691e9198d0

@@ -1,0 +1,25 @@
+#标题
+bpftool 反汇编显示错误的 callq 调用地址
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 bpftool 对 JIT 编译后的 BPF 程序进行反汇编时，显示的 `callq` 指令地址不正确。具体表现为：反汇编输出中的函数调用地址计算错误，无法对应到内核中的实际符号地址，导致调试和分析困难。
+
+#主要错误日志
+未知
+
+#问题根因
+在进行反汇编时，传递给反汇编引擎（LLVM 或 libbfd）的程序计数器（PC）值不正确。
+1. 对于 LLVM 后端：`LLVMDisasmInstruction` 函数的 PC 参数应当是内核中的实际地址，用于计算正确的相对调用地址，但原代码仅传递了偏移量。
+2. 对于 libbfd 后端：相对地址需要加上函数在内核中的符号起始地址（`func_ksym`）才能得到正确的绝对地址，但原代码未进行此调整。
+
+#解决方案
+修改 `jit_disasm.c` 文件，调整 PC 和地址打印逻辑：
+1. 修改 `init_context` 和 `disassemble_insn` 函数接口，增加 `func_ksym` 参数传递。
+2. 针对 LLVM 后端：在调用 `LLVMDisasmInstruction` 时，将 PC 参数修改为 `func_ksym + pc`，确保传入的是内核实际地址。
+3. 针对 libbfd 后端：新增 `disasm_info` 结构体保存 `func_ksym`，并实现自定义的 `disasm_print_addr` 回调函数，在打印地址时自动加上 `func_ksym` 偏移量，从而修正显示的调用地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a8b0d7ce22bc6a2d471e74c7dc80ac85283e6882

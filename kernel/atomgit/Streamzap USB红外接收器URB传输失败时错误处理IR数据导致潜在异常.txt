@@ -1,0 +1,23 @@
+#标题
+Streamzap USB红外接收器URB传输失败时错误处理IR数据导致潜在异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 streamzap_callback() 接收到带有非致命错误状态（如非 -ECONNRESET、-ENOENT 或 -ESHUTDOWN 的错误码）的 URB 时，驱动程序忽略了传输失败的可能性，错误地尝试继续处理红外（IR）数据。这可能导致驱动程序处理无效或损坏的数据，进而引发不可预期的功能异常。
+
+#主要错误日志
+urb terminated, status: %d
+
+#问题根因
+`streamzap_callback` 函数在处理 URB 完成回调时逻辑存在缺陷。原代码逻辑仅在状态码为 -ECONNRESET、-ENOENT 或 -ESHUTDOWN 时才直接返回并打印错误日志，对于其他非零错误状态（default case），代码会直接跳出 switch 语句并继续执行后续的 IR 数据处理流程。这导致在 URB 传输实际失败（status 非 0）的情况下，驱动仍然尝试解析 `urb->actual_length` 和缓冲区数据，违反了数据有效性前提。
+
+#解决方案
+修改 `streamzap_callback` 函数的 URB 状态判断逻辑，严格限制仅在 `urb->status` 为 0（传输成功）时才执行 IR 数据处理。具体变更包括：
+1. 将原有的 IR 数据处理逻辑提取到独立的 `sz_process_ir_data` 函数中，以提高代码可读性。
+2. 调整 switch-case 结构：将原本的 `default: break` 移除，新增 `case 0` 分支，明确只有传输成功时才调用 `sz_process_ir_data`。
+3. 对于非致命错误（default case），现在直接跳出 switch 结构，不再处理数据，从而避免处理失败的 URB 数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9774382ecd1a9cc81656eed1b537338b047e9a68

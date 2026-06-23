@@ -1,0 +1,22 @@
+#标题
+ACPI processor_core: x2apic 模式下 map_x2apic_id 逻辑错误导致 amd-pstate 初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ASUS X470-i、Pro WS X570 Ace 等 AMD AM4 平台主板上，当 BIOS 开启 x2apic 选项时，amd-pstate 驱动无法正常初始化，导致 CPU 无法使用 AMD P-State 性能调节功能。
+
+#主要错误日志
+[    0.315438] acpi LNXCPU:00: Failed to get CPU physical ID.
+[    0.354756] ACPI CPPC: No CPC descriptor for CPU:0
+[    0.714951] amd_pstate: the _CPC object is not present in SBIOS or ACPI disabled
+
+#问题根因
+BIOS 使用了 ACPI 6.0 已废弃的 Processor 语句（而非 Processor Device Objects）来声明 CPU。内核函数 `map_x2apic_id()` 在处理逻辑中强制要求 `device_declaration` 为真才进行 ID 映射，而在这种旧式声明下 `device_declaration` 为假，导致无法获取 CPU 物理 ID，进而引发后续 amd-pstate 初始化失败。
+
+#解决方案
+修改 `map_x2apic_id()` 函数的逻辑判断条件。将原有的 `device_declaration && (apic->uid == acpi_id)` 修改为 `apic->uid == acpi_id && (device_declaration || acpi_id < 255)`。允许在 ID 小于 255 的情况下兼容旧式 Processor 语句声明，从而正确映射 CPU 物理 ID。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5aa56f101746bd652d7d5805ca07e5715b94d190

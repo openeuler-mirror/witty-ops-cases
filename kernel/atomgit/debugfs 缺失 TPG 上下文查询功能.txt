@@ -1,0 +1,25 @@
+#标题
+debugfs 缺失 TPG 上下文查询功能
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统调试工具 debugfs 中缺少对 TPG（Traffic Process Group）上下文信息的查询接口，导致开发人员无法查看 TPG 编号、偏移及有效 TPG 数量等关键信息，阻碍了系统的调试与性能优化工作。该缺陷是由提交 f817c5c6db98 引入的功能缺失。
+
+#主要错误日志
+未知
+
+#问题根因
+在添加 aeq/ceq/tp/tpg 上下文查询功能的补丁（f817c5c6db98）中，遗漏了 TPG 上下文的 debugfs 实现部分。虽然框架定义了上下文查询类型，但未实现对应的 `ubase_dump_tpg_ctx` 回调函数，也未将其注册到 debugfs 文件系统中，导致无法通过 debugfs 获取 TPG 上下文状态。
+
+#解决方案
+在 `ubase_ctx_debugfs.c` 中实现 TPG 上下文打印逻辑：
+1. 新增 `ubase_tpg_ctx_titles_print` 函数打印表头（包含 CHANNEL_ID, TPGN, TP_SHIFT 等字段）。
+2. 新增 `ubase_dump_tpg_ctx` 函数，从 `ubase_dev` 结构体中读取 TPG 配置并格式化输出。
+3. 扩展 `ubase_dbg_ctx_type` 枚举添加 `UBASE_DBG_TPG_CTX`，并在 `ubase_get_ctx_num` 和 `dbg_ctx` 数组中补充 TPG 的处理分支。
+4. 新增 `ubase_dbg_dump_tpg_ctx` 接口函数，增加状态检查（`UBASE_STATE_INITED_B`）、锁保护（`tpg_lock`）及空指针检查，最后调用 `ubase_dbg_dump_context` 完成数据输出。
+5. 在 `ubase_debugfs.c` 中注册名为 "tpg_context" 的 debugfs 节点，关联上述读取函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6f8c9ef43a6caf8bd44e9a419b4bef8d5405974b

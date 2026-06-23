@@ -1,0 +1,23 @@
+#标题
+GFS2 文件系统卸载后 DLM 指针访问引发的 Use-After-Free 风险修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+GFS2 文件系统在执行卸载操作期间或之后，若仍有进程尝试进行文件锁操作（如 fcntl 锁请求、解锁或查询），内核可能访问已被释放的 DLM（Distributed Lock Manager）锁空间指针，导致内核崩溃或发生不可预测的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+GFS2 在卸载过程中会调用 `gdlm_unmount` 释放 DLM 锁空间并将 `ls->ls_dlm` 指针置为 NULL，但此时并未与其他并发的锁操作路径（如 `gfs2_lock`、`gdlm_lock`、`gdlm_put_lock` 等）进行严格的同步保护。这导致并发路径可能读取到非 NULL 的旧指针，进而对已释放的内存进行操作，引发 Use-After-Free 安全漏洞。
+
+#解决方案
+在 `lm_lockstruct` 结构体中引入读写信号量 `ls_sem`，用于保护 DLM 锁空间的访问与释放同步：
+1. 在 `gdlm_mount` 初始化时初始化 `ls_sem`，并将 `ls_dlm` 初始化为 NULL。
+2. 在所有 DLM 操作入口（如 `gfs2_lock`、`gdlm_lock`、`gdlm_put_lock`、`sync_lock` 等）添加 `down_read(&ls->ls_sem)` 保护，并在调用 DLM 函数前检查 `ls->ls_dlm` 是否为 NULL，若为 NULL 则直接返回 `-ENODEV`。
+3. 在 `gdlm_unmount` 释放锁空间时持有写锁 `down_write(&ls->ls_sem)`，确保释放期间无其他读操作进行，实现安全卸载。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cc669ac95200306f07ab9e871479b7cda3c6f34c

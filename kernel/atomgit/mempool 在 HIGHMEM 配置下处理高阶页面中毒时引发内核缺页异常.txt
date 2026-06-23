@@ -1,0 +1,34 @@
+#标题
+mempool 在 HIGHMEM 配置下处理高阶页面中毒时引发内核缺页异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动过程中，在初始化 bio integrity 模块时触发内核缺页异常，导致系统崩溃。具体表现为在 `mempool_init_node` 流程中对内存池元素进行中毒操作时，内核无法处理虚拟地址 `fffba000` 的写操作，触发 Oops。
+
+#主要错误日志
+BUG: unable to handle page fault for address: fffba000
+#PF: supervisor write access in kernel mode
+#PF: error_code(0x0002) - not-present page
+*pde = 03171067 *pte = 00000000
+Oops: Oops: 0002 [#1]
+EIP: memset (arch/x86/include/asm/string_32.h:168 arch/x86/lib/memcpy_32.c:17)
+Call Trace:
+poison_element (mm/mempool.c:83 mm/mempool.c:102)
+mempool_init_node (mm/mempool.c:142 mm/mempool.c:226)
+mempool_init_noprof (mm/mempool.c:250 (discriminator 1))
+bio_integrity_initfn (block/bio-integrity.c:483 (discriminator 8))
+
+#问题根因
+在开启 `CONFIG_HIGHMEM` 的系统中，内存池的 `poison_element` 和 `check_element` 函数处理由页分配器支持的高阶内存时存在逻辑缺陷。
+原代码仅使用 `kmap_local_page` 映射了第一个页，随后却尝试对整个 `1 << order` 大小的内存区域进行访问（memset 或 check）。由于高地址内存页在没有显式映射的情况下无法直接访问，导致访问后续页面时触发缺页异常。
+
+#解决方案
+修改 `mm/mempool.c` 中的 `poison_element` 和 `check_element` 函数，针对 `CONFIG_HIGHMEM` 配置进行修复：
+1. 当配置了 `CONFIG_HIGHMEM` 时，使用循环遍历高阶内存包含的所有物理页。
+2. 对每个页面单独调用 `kmap_local_page` 进行映射，执行中毒或检查操作后立即 `kunmap_local` 解除映射。
+3. 当未配置 `CONFIG_HIGHMEM` 时，仍保持原有逻辑，直接通过 `page_address` 获取线性地址并一次性处理整个区域，以避免不必要的性能开销。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f85f25885c7e180b05917d8d50243edbc0aa3c09

@@ -1,0 +1,20 @@
+#标题
+perf python 接口内存泄漏导致对象引用计数未释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Python 绑定接口 `pyrf_evlist__read_on_cpu` 处理 perf 事件时，若遇到 `evlist__event2evsel` 查找失败或 `sample` 解析出错（`can't parse sample`）的异常路径，会导致刚创建的 `pyevent` 对象引用计数未减少，造成内存泄漏（Memory Leak）。
+
+#主要错误日志
+"perf: can't parse sample, err=%d"
+
+#问题根因
+在 `pyrf_evlist__read_on_cpu` 函数中，代码首先创建了 `pyevent` 对象，但在后续的错误处理分支（`!evsel` 或 `err` 不为0）中，直接返回了 `Py_None` 或调用 `PyErr_Format` 返回错误，未先对 `pyevent` 对象调用 `Py_DECREF` 减少引用计数，导致该对象无法被 Python 垃圾回收机制回收，引发内存泄漏。
+
+#解决方案
+在函数 `pyrf_evlist__read_on_cpu` 的两个错误返回路径中，补充调用 `Py_DECREF(pyevent)`，确保在函数返回前释放对 `pyevent` 对象的引用，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d140589b1274d8d419e39907140949d6252459c

@@ -1,0 +1,20 @@
+#标题
+watchdog: aspeed: 32位架构下除法运算导致内核构建失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 32 位架构上编译内核时，链接阶段发生失败，无法生成最终的内核镜像。
+
+#主要错误日志
+ld.lld-21: error: undefined symbol: __aeabi_uldivmod
+
+#问题根因
+在 `aspeed_wdt_update_bootstatus` 函数中，计算 `idx` 时进行了除法操作。原代码逻辑中，被除数 `(intptr_t)wdt->base & 0x00000fff` 被隐式提升为 64 位进行除法运算，或者 `resource_size(res)` 返回类型导致除法需要 64 位除法指令支持。在 32 位架构（如 ARM）上，64 位除法需要调用 `__aeabi_uldivmod` 库函数，而内核环境不支持该库函数调用，从而导致链接器报错找不到该符号。
+
+#解决方案
+修改 `drivers/watchdog/aspeed_wdt.c` 文件中的除法操作，将除数 `resource_size(res)` 强制转换为 `uintptr_t` 类型。由于两个操作数的实际值均不会超过寄存器宽度（32位），此操作消除了 64 位除法的需求，使其在 32 位架构上能够正常编译链接。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ff249bf53c9c1a540be072872e40eb1cd110476c

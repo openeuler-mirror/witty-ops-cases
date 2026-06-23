@@ -1,0 +1,21 @@
+#标题
+spi: aspeed: 修复读写函数错误处理路径缺失停止用户模式调用的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Aspeed SMC SPI 驱动的 `aspeed_spi_read_user` 和 `aspeed_spi_write_user` 函数中，当 `aspeed_spi_send_cmd_addr` 执行失败时，函数直接返回错误码，未调用 `aspeed_spi_stop_user` 退出用户模式。这导致 SPI 控制器的状态机或硬件状态未被正确恢复，可能引发后续 SPI 通信异常或控制器挂死。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit Message 与代码差异分析：
+在 `aspeed_spi_read_user` 和 `aspeed_spi_write_user` 函数中，代码逻辑原已在函数末尾调用 `aspeed_spi_stop_user(chip)` 来平衡开头的 `aspeed_spi_start_user(chip)`。然而，在中间的错误处理路径（即 `aspeed_spi_send_cmd_addr` 返回值小于 0 时），代码直接执行了 `return ret`，跳过了末尾的停止操作。这破坏了 `start` 与 `stop` 的配对调用原则，导致硬件状态未被正确清理。
+
+#解决方案
+修改错误处理路径，将直接返回改为跳转（`goto stop_user`）至函数末尾的清理代码段。确保无论 `aspeed_spi_send_cmd_addr` 成功与否，都会执行 `aspeed_spi_stop_user(chip)`，保证硬件状态的正确恢复，并返回相应的错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/106c9eead39b97b242451b2768cef8586cddcca9

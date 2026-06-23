@@ -1,0 +1,23 @@
+#标题
+[paravirt] 修复 TDX halt/safe-halt 功能导致的 KABI 变更问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能 TDX 相关功能涉及 `halt` 与 `safe_halt` 调用时，由于 struct `pv_irq_ops` 和 `struct paravirt_patch_template` 结构体布局发生变化，破坏了内核应用二进制接口（KABI）稳定性，可能导致内核模块兼容性问题或运行时异常。
+
+#主要错误日志
+未知
+
+#问题根因
+此前提交 "x86/paravirt: Move halt paravirt calls under CONFIG_PARAVIRT" 引入了变更：由于 openEuler 默认配置未开启 `CONFIG_PARAVIRT_XXL`，导致 `struct pv_irq_ops` 变为空结构体。当后续开启该结构体内的 `halt` 和 `safe_halt` 字段时，会改变 `struct paravirt_patch_template` 中现有字段的偏移量，从而破坏 KABI 兼容性。
+
+#解决方案
+利用 `pv_irq_ops` 在默认配置下为空结构体的特性，通过 KABI 宏进行调整：
+1. 在 `struct pv_irq_ops` 中使用 `KABI_EXTEND` 宏定义 `safe_halt` 和 `halt` 字段，将其标记为扩展字段。
+2. 在 `struct paravirt_patch_template` 中，使用 `KABI_BROKEN_REMOVE` 临时移除原有的 `irq` 字段占位，并将其移动到结构体末尾使用 `KABI_EXTEND` 重新添加。
+此举确保了结构体中原有字段的偏移量不变，将变更限制在结构体末尾，从而保证了 KABI 的安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5efb8cffbf264bdc1a6d29694550c70fabdc8a4d

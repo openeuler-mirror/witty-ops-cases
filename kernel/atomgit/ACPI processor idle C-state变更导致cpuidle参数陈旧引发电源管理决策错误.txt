@@ -1,0 +1,25 @@
+#标题
+ACPI processor idle C-state变更导致cpuidle参数陈旧引发电源管理决策错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统发生电源通知事件（power notification event）导致ACPI空闲状态发生变化时，现有的处理逻辑仅进行部分更新。这导致cpuidle关键参数（如 target_residency_ns 和 exit_latency_ns）保持陈旧值。同时，每个CPU的 cpuidle_device 数据（包括 last_residency_ns、states_usage 和 disable 标志）未能正确同步。系统使用这些陈旧数据进行电源管理决策，导致功耗管理行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在处理电源状态变更通知时，现有代码逻辑未对 cpuidle 框架进行完全重置。具体表现为：
+1. 仅更新了部分 C-state 信息，未重新评估全局状态参数，导致 target_residency_ns 和 exit_latency_ns 等关键参数过时。
+2. 未正确重置 per-CPU 的 cpuidle_device 数据结构，导致 last_residency_ns、states_usage 和 disable 标志与实际硬件状态不同步。
+
+#解决方案
+修改通知处理逻辑，在 C-state 列表变更时执行完整的 cpuidle 重置流程：
+1. 注销所有 cpuidle_device 实例，清理旧的设备数据。
+2. 注销并重新注册 ACPI idle 驱动，强制框架重新评估全局状态参数，确保驱动状态匹配新的硬件电源配置。
+3. 重新初始化所有 CPU 的电源信息，并重新注册 cpuidle_device，恢复正常的空闲管理功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0d58b424b074b1b96690a19ca8ad133b5fd720e3

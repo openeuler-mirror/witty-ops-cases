@@ -1,0 +1,25 @@
+#标题
+rcu-tasks: do_exit() 与 RCU tasks 之间存在死锁风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在运行过程中发生死锁，具体表现为在 `do_exit()` 执行过程中持有互斥锁，同时该互斥锁在 `synchronize_rcu_tasks()` 流程中被尝试获取，导致任务永久阻塞。此类死锁难以通过 lockdep 检测，且复现难度较大。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `do_exit()` 函数中，`exit_tasks_rcu_start()` 与 `exit_tasks_rcu_stop()` 之间的代码段若持有某个互斥锁，而此时 `synchronize_rcu_tasks()` 恰好也在等待该锁，就会触发死锁。
+造成此问题的根本机制是：处于 `do_exit()` 流程中段的任务已从系统任务列表中移除，导致 RCU Tasks 机制难以追踪到这些任务并等待其完成，旧的实现通过 SRCU 机制进行等待，从而引发了上述锁的依赖冲突。
+
+#解决方案
+通过重构 RCU Tasks 的等待机制来消除死锁。具体措施为：
+1. 移除原有的基于 SRCU 的等待机制（移除 `tasks_rcu_exit_srcu`）。
+2. 引入 per-CPU 列表（`rtp_exit_list`）来记录当前正在退出（`do_exit`）的任务。
+3. 修改 `exit_tasks_rcu_start()` 和 `exit_tasks_rcu_finish()` 的逻辑，分别将任务加入和移除该 per-CPU 列表。
+4. 在 RCU Tasks 宽限期内的 `rcu_tasks_postscan()` 阶段，直接扫描这些 per-CPU 列表以找到那些已从全局任务列表移除但仍需等待的任务，将其加入 holdout 列表进行等待，从而避免了死锁路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/289da4af41db46fba5a82206effc7d6a7dbb97a0

@@ -1,0 +1,23 @@
+#标题
+cgroup/cpuset-v1: 挂载 cpuset 文件系统时参数 cpuset_v2_mode 无法识别
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `-t cpuset` 类型挂载 cgroup v1 控制器并指定 `-o cpuset_v2_mode` 参数时，系统返回错误信息 "cgroup: Unknown parameter 'cpuset_v2_mode'"，导致挂载失败或参数未生效。该问题导致依赖该参数实现 v2 行为（如 CPU 热插拔时 cpuset/cpus 文件行为）的场景（如 Android 系统）无法按预期工作。
+
+#主要错误日志
+cgroup: Unknown parameter 'cpuset_v2_mode'
+
+#问题根因
+内核 commit e1cba4b85daa 在实现 "cpuset_v2_mode" 挂载选项时，仅更新了 "cgroup" 文件系统类型的参数解析逻辑，遗漏了对特殊用例 "cpuset" 文件系统类型的支持。由于 Android 等场景习惯使用 `mount -t cpuset` 进行挂载，而 `cpuset_fs_type` 定义中未关联 `cpuset_fs_parameters` 参数表，且对应的 `cpuset_fs_context_ops` 缺少 `parse_param` 回调函数，导致内核无法识别该挂载参数。
+
+#解决方案
+补丁通过修改 `kernel/cgroup/cgroup.c` 文件，为 cpuset 文件系统类型补充了参数解析支持：
+1. 新增 `cpuset_param` 枚举与 `cpuset_fs_parameters` 参数规格表，定义 "cpuset_v2_mode" 选项。
+2. 新增 `cpuset_parse_param` 解析函数，用于识别该选项并设置 `CGRP_ROOT_CPUSET_V2_MODE` 标志位。
+3. 将 `cpuset_parse_param` 绑定到 `cpuset_fs_context_ops` 操作集，并将 `cpuset_fs_parameters` 注册到 `cpuset_fs_type` 文件系统类型中。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7b404449eae3296a2b8985e3afcf92ee62be9153

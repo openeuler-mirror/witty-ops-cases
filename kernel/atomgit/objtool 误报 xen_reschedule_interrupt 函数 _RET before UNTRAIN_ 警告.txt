@@ -1,0 +1,21 @@
+#标题
+objtool 误报 xen_reschedule_interrupt 函数 "RET before UNTRAIN" 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译内核时，objtool 校验阶段报出警告信息，提示 `xen_reschedule_interrupt` 函数存在 RET 指令位于 UNTRAIN 之前的问题，但该问题是由于 objtool 解析逻辑不完整导致的误报。
+
+#主要错误日志
+vmlinux.o: warning: objtool: xen_reschedule_interrupt+0x2a: RET before UNTRAIN
+
+#问题根因
+在 `!CONFIG_IA32_EMULATION` 配置下，`xen_entry_SYSCALL_compat()` 函数以 SYSCALL 指令结尾，该指令被 objtool 分类为 `INSN_CONTEXT_SWITCH`。
+`validate_unret()` 函数在处理 `INSN_CONTEXT_SWITCH` 时，逻辑与 `validate_branch()` 不一致。它没有将非函数（non-function）上下文中的 `INSN_CONTEXT_SWITCH` 视为代码流的“死路”，而是继续向后解析，导致错误地越过了 `xen_entry_SYSCALL_compat()` 的边界，进而触发了 "RET before UNTRAIN" 的误报警告。
+
+#解决方案
+在 `tools/objtool/check.c` 的 `validate_unret()` 函数中增加对 `INSN_CONTEXT_SWITCH` 的处理逻辑。检查若当前指令不属于函数内部（`!insn_func(insn)`），则直接返回 0 停止验证，使其行为与 `validate_branch()` 保持一致，从而修复误报问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8fc7ce7538b461660dbedf70f1f84971941f16c1

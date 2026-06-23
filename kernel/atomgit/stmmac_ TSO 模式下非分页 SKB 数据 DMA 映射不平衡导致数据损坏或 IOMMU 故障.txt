@@ -1,0 +1,28 @@
+#标题
+stmmac: TSO 模式下非分页 SKB 数据 DMA 映射不平衡导致数据损坏或 IOMMU 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 TSO（TCP Segmentation Offload）功能的场景下，当 SKB 的非分页数据（non-paged data）需要被拆分为多个 DMA 描述符进行传输时（例如 DMA AXI 地址宽度配置为 40-bit/48-bit，或数据大小超过 TSO_MAX_BUFF_SIZE），可能会触发严重故障。
+具体表现为：
+1. 发送的数据出现损坏。
+2. 触发 IOMMU 故障。
+3. 系统可能伴随内存污染或不可预见的内核行为。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `stmmac_tso_xmit` 函数中处理非分页 SKB 数据的 DMA 映射时，逻辑存在错误。
+如果非分页数据需要多个 DMA 描述符（例如 N, N+1, N+2），当前代码错误地将 DMA 缓冲区地址记录在了第一个描述符对应的 `tx_q->tx_skbuff_dma[N].buf` 中。
+这导致 `stmmac_tx_clean` 在处理完第一个描述符时，就检测到有效的 DMA 缓冲区地址并提前执行了 `dma_unmap_single` 操作。此时，DMA 引擎可能尚未处理完后续描述符（N+1, N+2），仍在访问该 DMA 内存区域。
+结果就是 DMA 引擎访问了已经取消映射或释放的内存，导致数据损坏或 IOMMU 报错。
+
+#解决方案
+修正 DMA 缓冲区地址的存储位置。对于需要多个描述符的非分页数据，将 DMA 缓冲区地址保存到**最后一个**描述符对应的 `tx_q->tx_skbuff_dma[entry].buf` 中（代码中使用 `tx_q->cur_tx` 指向当前/最后的描述符），并将前面的描述符对应的 `buf` 字段留空（NULL）。
+这确保了 `stmmac_tx_clean` 只有在 DMA 引擎处理完所有相关描述符（即最后一个描述符完成）后，才会执行 DMA 取消映射操作，从而避免内存访问冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/af8401bc24b54d9558baab59ac745ce0c62d858f

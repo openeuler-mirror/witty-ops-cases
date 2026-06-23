@@ -1,0 +1,20 @@
+#标题
+sw64架构KVM透明大页检查逻辑错误导致映射调整异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构下，KVM 在填充二级 MMU 页表时，对透明大页（THP）的检查判断逻辑存在缺陷。错误的检查条件可能导致非透明大页被误判为 THP 进行处理，或者真正的 THP 页面未能被正确识别和处理，进而引发 KVM 虚拟机的内存映射错误或稳定性问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `transparent_hugepage_adjust` 函数中，原代码使用 `!PageHuge(page) && PageTransCompoundMap(page)` 的组合逻辑来判断透明大页。这种方式不够准确且显式，无法像 `kvm_is_transparent_hugepage()` 那样精确地检查一个复合页是否为透明大页，导致在 KVM 填充二级 MMU 时可能出现误判。
+
+#解决方案
+修改 `arch/sw_64/kvm/mmu.c` 文件中的判断逻辑，移除原有的 `!PageHuge(page) && PageTransCompoundMap(page)` 判断，替换为直接调用 `kvm_is_transparent_hugepage(pfn)` 函数。该函数能够显式且准确地检查给定的 PFN 是否对应一个透明大页，从而确保只有在确认是 THP 的情况下才进行后续的调整操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/90e18be4bcbc349733f9101471838d20c215e2a3

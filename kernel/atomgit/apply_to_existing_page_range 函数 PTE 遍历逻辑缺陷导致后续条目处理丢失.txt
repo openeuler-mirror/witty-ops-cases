@@ -1,0 +1,22 @@
+#标题
+apply_to_existing_page_range 函数 PTE 遍历逻辑缺陷导致后续条目处理丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+调用 `apply_to_existing_page_range()` 函数时，若 PTE 页表中存在 `pte_none()` 条目，循环遍历将错误地停止向前推进。导致该条目之后的所有 PTE 表项（无论是否为空）都被跳过，用户定义的回调函数 `fn` 不会被调用，导致相关内存操作未执行，产生非预期的功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `apply_to_pte_range()` 中，当 `create` 参数为 false（即 `apply_to_existing_page_range` 调用场景）时，循环逻辑存在严重缺陷：
+原代码逻辑中，PTE 指针的递增（`pte++`）被错误地放置在 `fn` 调用内部，且仅在 `create` 为真或当前条目非空时执行。
+这意味着一旦遇到 `pte_none()` 条目，`pte++` 不会被执行，导致指针永远停留在该空条目处，无法遍历后续的页表项。
+
+#解决方案
+修改 `apply_to_pte_range()` 函数中的循环控制逻辑，将 PTE 指针递增操作（`pte++`）移至 `do...while` 循环的条件更新部分，确保无论当前条目是否为空，循环每次迭代都能正确移动到下一个 PTE 条目，从而保证遍历覆盖整个指定地址范围。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/383f188038c3f7c0fc50f607e7849515c426edd7

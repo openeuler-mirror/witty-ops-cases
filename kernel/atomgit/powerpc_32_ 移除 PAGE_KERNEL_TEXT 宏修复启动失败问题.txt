@@ -1,0 +1,20 @@
+#标题
+powerpc/32: 移除 PAGE_KERNEL_TEXT 宏修复启动失败问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+PowerPC 32 位系统在特定的内核配置组合下启动失败。由于旧的 `PAGE_KERNEL_TEXT` 宏定义无法准确适应 jump_labels、static links 等功能对内核文本段读写权限的需求，导致内核在启动过程中出现功能异常或无法正常启动。
+
+#主要错误日志
+未知
+
+#问题根因
+旧的 `PAGE_KERNEL_TEXT` 宏根据编译时的配置（如 CONFIG_KGDB、CONFIG_XMON、CONFIG_KPROBES 等）静态决定内核文本段是只读执行（ROX）还是读写执行（X）。然而，现代内核特性（如 jump_labels 等）普遍需要在运行时修改内核文本，导致某些配置组合下权限设置不准确，进而引发启动失败。相比之下，`CONFIG_STRICT_KERNEL_RWX` 提供了更精确的内核修改访问控制机制。
+
+#解决方案
+彻底移除 `PAGE_KERNEL_TEXT` 宏定义。在内核启动映射阶段（`__mapin_ram_chunk` 函数），将内核文本段的映射权限由 `PAGE_KERNEL_TEXT` 改为 `PAGE_KERNEL_X`（读写执行），确保启动阶段具有写入权限。同时，将 `mmu_mark_initmem_nx` 函数中的 `setibat` 调用也替换为 `PAGE_KERNEL_X`，并依赖 `CONFIG_STRICT_KERNEL_RWX` 机制在后续流程中提供正确的内存保护，从而避免因权限静态配置错误导致的启动失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/64322bc34a264ff225d56c9fd59a72bfd18720b3

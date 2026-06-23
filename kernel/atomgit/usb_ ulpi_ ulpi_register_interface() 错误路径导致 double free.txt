@@ -1,0 +1,20 @@
+#标题
+usb: ulpi: ulpi_register_interface() 错误路径导致 double free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `ulpi_register_interface()` 函数内部的 `device_register()` 或 `ulpi_register()` 执行失败时，触发内核内存管理的 "double free" 错误，可能导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+当 `device_register()` 失败时，`ulpi_register()` 内部会调用 `put_device()` 处理 `ulpi->dev`。该操作会触发设备释放回调函数 `ulpi_dev_release()`，该回调函数已经释放了 `ulpi` 结构体指针。然而，`ulpi_register_interface()` 的错误处理路径在收到错误返回值后，又显式调用了 `kfree(ulpi)`，导致同一块内存被释放两次。
+
+#解决方案
+移除 `ulpi_register_interface()` 函数错误处理路径中的 `kfree(ulpi)` 调用，完全交由 `put_device()` 触发的 `ulpi_dev_release()` 回调来处理资源清理，从而避免重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/71bb22756578083256fec4a35624780a318d43d5

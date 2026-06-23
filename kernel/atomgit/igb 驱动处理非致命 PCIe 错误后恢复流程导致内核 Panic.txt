@@ -1,0 +1,30 @@
+#标题
+igb 驱动处理非致命 PCIe 错误后恢复流程导致内核 Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 igb 网卡设备遇到瞬时非致命 PCIe 错误时，系统在处理错误恢复流程中触发内核 Panic。具体表现为 AER 广播恢复消息后，在 `napi_enable` 函数中触发 `kernel BUG`，导致系统崩溃。
+
+#主要错误日志
+[  T292] pcieport 0000:00:1c.5: AER: Uncorrected (Non-Fatal) error received: 0000:09:00.0
+[  T292] igb 0000:09:00.0: PCIe Bus Error: severity=Uncorrected (Non-Fatal), type=Transaction Layer, (Requester ID)
+[  T292] pcieport 0000:00:1c.5: AER: broadcast resume message
+[  T292] ------------[ cut here ]------------
+[  T292] kernel BUG at net/core/dev.c:6539!
+[  T292] invalid opcode: 0000 [#1] PREEMPT SMP
+[  T292] RIP: 0010:napi_enable+0x37/0x40
+[  T292] Call Trace:
+[  T292]  igb_up+0x41/0x150
+[  T292]  igb_io_resume+0x25/0x70
+
+#问题根因
+前次提交 004d25060c78 ("igb: Fix igb_down hung on surprise removal") 修改了 `igb_io_error_detected()`，使其忽略非致命 PCIe 错误以避免重复调用 `igb_down()` 导致 hung task。
+这导致了新问题：当非致命错误发生时，`igb_io_error_detected()` 未将设备下线，但随后的 `igb_io_resume()` 假定设备已被下线并尝试调用 `igb_up()` 重新启动设备。此时 NAPI 实例实际上仍处于启用状态，`igb_up()` 再次调用 `napi_enable()` 时触发 `BUG()`，因为 NAPI 状态检查失败。
+
+#解决方案
+在 `igb_io_resume()` 函数中增加对设备状态的检查。如果接口正在运行（`netif_running` 为真），但设备状态标志位 `__IGB_DOWN` 未置位，说明 `igb_io_error_detected()` 并未将设备下线（即处于非致命错误恢复路径），此时无需也不应执行 `igb_up()` 操作，直接返回即可。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d0e9b70c58e0de6d78253f4e544367b0859b6dc0

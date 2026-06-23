@@ -1,0 +1,23 @@
+#标题
+ti-sci pmdomain: 缺少 of_node_put 导致引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 TI SCI 电源域驱动时，内核设备树节点引用计数发生泄漏。若节点引用计数持续累积且未被释放，将导致对应的 device node 无法被正常释放或移除，可能引发内存泄漏问题，影响系统长期运行的稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ti_sci_pm_domain_probe` 中，代码通过 `of_parse_phandle_with_args()` 解析设备树节点，该函数会自动增加 `args.np` 的引用计数。然而，在循环处理过程中，无论是匹配到特定节点（`args.np == dev->of_node`）还是处理失败的情况，代码均未调用 `of_node_put()` 来减少引用计数，导致节点引用计数无法正确释放，造成引用计数泄漏。
+
+#解决方案
+在补丁中补充了缺失的 `of_node_put()` 调用：
+1. 在 `args.np == dev->of_node` 的条件分支内，添加 `of_node_put(args.np)` 以平衡引用计数。
+2. 在处理异常或未匹配情况的 `else` 分支内，添加 `of_node_put(args.np)` 以确保资源释放。
+通过这两处修改，确保在循环的各种退出路径中都能正确释放设备树节点的引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a2c027aa48df42728720c995bb1b3ccee86af495

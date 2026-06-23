@@ -1,0 +1,26 @@
+#标题
+f2fs压缩模块释放Use-After-Free导致内核崩溃或系统挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在f2fs文件系统启用压缩功能的情况下，当读取文件后立即删除该文件，若系统负载较高导致处理post_read_wq的kworker延后执行，可能触发UAF（Use-After-Free）。此时内核可能在访问已释放的inode内存时发生崩溃（panic/oops），或者引发系统挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+decompress_io_ctx（dic）结构体在I/O完成后可能被异步释放。若在读取操作后立即执行文件删除操作，且处理post_read_wq工作队列的kworker因高负载尚未执行，此时inode（f2fs_inode_info）可能已被驱逐并释放。
+具体竞态条件如下：
+1. 线程A调用f2fs_decompress_end_io将free_dic工作加入队列。
+2. 线程B执行unlink和iput，触发evict并通过call_rcu释放inode。
+3. RU回调执行kmem_cache_free，inode内存被释放。
+4. kworker最终执行f2fs_late_free_dic时，通过dic->inode访问已释放的内存（如读取i_compress_algorithm），导致UAF。
+此外，之前的修复方案可能导致系统挂起问题。
+
+#解决方案
+在decompress_io_ctx结构体中新增sbi和compress_algorithm字段，在分配dic时预先存储这两个关键数据。在后续的解压和释放流程（如f2fs_free_dic、f2fs_release_decomp_mem等）中，直接使用dic->sbi和dic->compress_algorithm，而不再通过dic->inode指针进行访问，从而避免因inode提前释放引发的UAF风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1d5913aac6409f70eafdf6ec0a3010f6f83760a4

@@ -1,0 +1,24 @@
+#标题
+urma: ubcore设备引用计数泄漏导致对象未释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ubcore_get_device_by_eid` 获取设备对象后，部分错误处理分支或退出路径未成对调用 put 操作。这将导致设备对象的引用计数无法归零，设备对象无法被释放，造成内存泄漏（memory leak）。若涉及设备热插拔或模块卸载场景，可能导致设备无法正常移除或资源残留。
+
+#主要错误日志
+未知
+
+#问题根因
+代码逻辑中存在遗漏 `ubagg_put_ubcore_device` 调用的路径：
+1. 在 `ubagg_ioctl.c` 的 `get_physical_device` 函数中，遍历匹配设备时，若匹配成功或遍历结束，直接返回，未释放 `ubcore_get_device_by_eid` 获取的设备对象引用。
+2. 在 `ubagg_netlink.c` 的 `ubagg_nl_handle_user_msg` 函数中，函数返回前未调用 `ubagg_put_ubcore_device(dev)` 释放引用。
+
+#解决方案
+1. 在 `get_physical_device` 函数的循环流程中补充调用 `ubagg_put_ubcore_device(dev)`，确保每次获取的设备引用在循环迭代的合适位置被释放。
+2. 在 `ubagg_nl_handle_user_msg` 函数返回前补充调用 `ubagg_put_ubcore_device(dev)`。
+3. 将 `ubagg_put_ubcore_device` 函数声明从 `static` 修改为全局可见，并在头文件中声明，以便跨文件调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/57cb973a9396ac307bec63adc960867041a4172b

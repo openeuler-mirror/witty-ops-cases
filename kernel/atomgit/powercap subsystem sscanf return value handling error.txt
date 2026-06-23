@@ -1,0 +1,20 @@
+#标题
+powercap subsystem sscanf return value handling error
+
+#内核版本
+OLK-6.6
+
+#问题现象
+powercap 子系统在处理约束属性时，由于对 sscanf 返回值的判断逻辑错误，导致在解析成功时错误地返回 -EINVAL，使得相关的属性读取或写入操作非预期地失败。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中使用 `if (!sscanf(...))` 进行返回值检查存在逻辑错误。sscanf 返回成功匹配的项目数，成功时返回 1，失败时返回 0 或 EOF。由于逻辑取反操作 `!` 的存在，当 sscanf 成功解析返回 1 时，`!1` 结果为 0（假），导致条件判断进入错误处理分支返回 -EINVAL；而当 sscanf 失败返回 0 时，`!0` 结果为 1（真），反而可能绕过错误检查。这种隐式布尔转换导致了与预期相反的错误处理行为。
+
+#解决方案
+修正 sscanf 返回值的检查逻辑，将隐式布尔转换检查改为显式返回值比较。将所有 `if (!sscanf(...))` 修改为 `if (sscanf(...) != 1)`，确保仅在 sscanf 成功解析预期数量的项目（返回值为 1）时继续执行，而在解析失败（返回 0 或 EOF）时正确返回 -EINVAL。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/03d3add1b9ab5d11eb8a5060051b6736a136b8e6

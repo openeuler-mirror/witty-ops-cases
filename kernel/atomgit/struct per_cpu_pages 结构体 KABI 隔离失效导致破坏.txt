@@ -1,0 +1,23 @@
+#标题
+struct per_cpu_pages 结构体 KABI 隔离失效导致破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_TRANSPARENT_HUGEPAGE 的情况下，由于 NR_PCP_LISTS 宏定义增加了 1，导致 `struct per_cpu_pages` 结构体的大小发生变化。该变更破坏了内核应用程序二进制接口（KABI）的稳定性，可能导致依赖旧结构体布局的内核模块（如驱动程序）加载失败、运行时数据错乱或内核崩溃，影响系统的兼容性与升级平滑性。
+
+#主要错误日志
+未知
+
+#问题根因
+自提交 bf14ed81f571 ("mm/page_alloc: Separate THP PCP into movable and non-movable categories") 引入变更后，当启用 CONFIG_TRANSPARENT_HUGEPAGE 时，NR_PCP_LISTS 的值增加了 1。这直接导致 `struct per_cpu_pages` 结构体中的 `lists` 数组长度扩展，进而改变了结构体的整体大小，违反了 KABI 不变原则。
+
+#解决方案
+利用 `struct per_cpu_pages` 结构体末端原本存在的填充空洞（hole），在不改变结构体对外暴露大小的情况下扩展数组。
+1. 重新定义宏逻辑，将新增的 list 计数独立为 NR_PCP_THP_UNMOVABLE。
+2. 引入 NR_PCP_OLD_LISTS 代表原始数组大小，NR_PCP_LISTS 代表实际使用的数组大小。
+3. 使用 `#ifndef __GENKSYMS__` 条件编译指令：在生成符号表时使用 NR_PCP_OLD_LISTS 保持对用户态工具的兼容，在内核实际编译运行时使用 NR_PCP_LISTS 利用预留空洞存放新增成员，从而修复 KABI breakage 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2f312afa50d69c82911e0042bb2ffa12f95e51bd

@@ -1,0 +1,23 @@
+#标题
+hisi_sec2: AEAD认证标签长度过短触发硬件RAS错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 HMAC-SHAx 等算法时，若 authsize（认证标签长度）小于 4 字节，SEC2 硬件会判定为 BD（Buffer Descriptor）配置错误并上报 RAS 错误，导致相关加解密操作无法正常完成。
+
+#主要错误日志
+[推断] 硬件上报 RAS 错误日志（具体格式取决于硬件寄存器与 RAS 子系统）
+
+#问题根因
+硬件不支持处理 authsize 小于 4 字节的情况。此时 BD 中的 mac_len 字段被设置为 0，硬件将其识别为非法配置并触发 RAS 错误。驱动层此前未对此场景进行有效拦截并切换至软件处理，导致错误发生。
+
+#解决方案
+1. 在驱动初始化阶段为 AEAD 算法分配软件 fallback 句柄，确保存在软件计算路径。
+2. 在 `sec_aead_spec_check` 中增加判断，若 authsize 小于 4 字节（MIN_MAC_LEN），将请求标记为 fallback 模式并返回 EINVAL，由上层逻辑将其转交软件实现处理。
+3. 将 `fallback` 标记位从结构体 `sec_auth_ctx` 移至 `sec_aead_req` 中，实现请求级别的 fallback 控制，避免并发问题。
+4. 移除冗余的检查逻辑，统一 fallback 处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/35ffad3ee733f557b1994d34751dc01044b703dd

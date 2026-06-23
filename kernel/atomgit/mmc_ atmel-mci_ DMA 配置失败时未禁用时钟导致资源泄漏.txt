@@ -1,0 +1,20 @@
+#标题
+mmc: atmel-mci: DMA 配置失败时未禁用时钟导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 atmci 驱动初始化过程中，若 `atmci_configure_dma()` 返回 `-EPROBE_DEFER`（例如 DMA 控制器尚未就绪），驱动会推迟探测。但在退出探测函数的错误路径中，未调用 `clk_disable_unprepare()` 禁用先前已使能的时钟 `host->mck`，导致时钟资源泄漏或引用计数异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `atmci_probe` 函数中，此前已经调用了 `clk_prepare_enable(host->mck)` 使能了时钟。当后续调用 `atmci_configure_dma(host)` 失败并返回 `-EPROBE_DEFER` 时，代码直接跳转至 `err_dma_probe_defer` 标签退出，遗漏了与 `clk_prepare_enable()` 配对的 `clk_disable_unprepare()` 调用，导致时钟未被正确禁用。
+
+#解决方案
+在 `atmci_configure_dma` 返回 `-EPROBE_DEFER` 的错误处理分支中，增加调用 `clk_disable_unprepare(host->mck)`，确保在退出前释放时钟资源，保持资源使能与释放的对称性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5cfd67c0ad17a6236193b4c1cbdb7b41178ea44d

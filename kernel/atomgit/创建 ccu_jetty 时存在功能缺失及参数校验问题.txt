@@ -1,0 +1,40 @@
+#标题
+创建 ccu_jetty 时存在功能缺失及参数校验问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 创建 ccu_jetty 相关功能缺失，无法支持 WQE lock buffer jetty 类型及 CCU JFC 属性，导致相关业务场景无法正常创建资源。
+2. 在创建 lock buffer jetty 时，若传入参数不合法（如 buffer index 超出范围、硬件不支持、传输模式错误等），内核未进行有效校验，可能导致后续流程异常或内存分配失败。
+3. 在非 4KB 页大小的系统上，创建指定 jetty id 时存在错误的页大小校验逻辑，可能导致合法操作失败。
+
+#主要错误日志
+- "no support create lock buffer jetty.\n"
+- "JFR is not exist.\n"
+- "invalid parameter, jetty transport mode = %u.\n"
+- "invalid parameter, depth= %u, seg= %u, max_depth= %u, max_jfs_seg= %u.\n"
+- "invalid parameter, inline data:%u, max_inline_len:%u.\n"
+- "invalid parameter, RSGE:%u, max_rsge:%u.\n"
+- "user mode jetty priority is out of range, priority is %u.\n"
+- "buffer index is out of range.\n"
+- "lock buffer bit block shift is out of range.\n"
+- "failed to alloc work request id for JFS id = %u when entry count = %u.\n"
+- "alloc WQE lock buffer jetty id failed, ret = %d.\n"
+- "failed to get SQ buffer in WQE lock buffer jetty process, ret=%d.\n"
+- "invalid JFC no support CCU JFC.\n"
+
+#问题根因
+1. 驱动代码中缺少对 `UDMA_LOCK_BUFFER_JETTY_TYPE` 和 `UDMA_LOCK_CCU_JFC_TYPE` 类型的完整支持逻辑，导致无法创建相应的 lock buffer jetty 和 JFC 资源。
+2. 内核结构体定义中缺少 `lock_buf_bb_shift`、`ccu_jfc_property_en` 等硬件能力位域，导致驱动无法正确识别硬件特性并进行相应初始化。
+3. 参数校验函数 `udma_verify_lock_buffer_jetty_param` 等缺失或未被正确调用，导致非法参数未在入口处拦截。
+
+#解决方案
+1. 新增 `UDMA_LOCK_BUFFER_JETTY_TYPE` 和 `UDMA_LOCK_CCU_JFC_TYPE` 枚举类型，并在 `udma_jetty.c` 和 `udma_jfc.c` 中增加相应的创建、销毁及配置逻辑。
+2. 在 `udma_cmd.h` 和 `udma_def.h` 中扩展结构体字段，增加 `lock_buf_bb_shift`、`lock_buffer_en` 和 `ccu_jfc_property_en` 等成员，以支持从硬件查询并存储相关能力。
+3. 实现 `udma_verify_lock_buffer_jetty_param` 函数，对 jetty 深度、SGE 数量、inline data 大小、传输模式及 buffer index 等参数进行严格校验。
+4. 新增 `udma_create_jetty_lock_buffer` 和 `udma_delete_jetty_lock_buffer` 接口，并在用户控制操作表中注册。
+5. 移除 `well_known_jetty_pgsz_check` 相关的冗余校验代码，解决非 4KB 页系统上的兼容性问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d19cf14e9de01b6e80b8b3e4541d399cfac8d01a

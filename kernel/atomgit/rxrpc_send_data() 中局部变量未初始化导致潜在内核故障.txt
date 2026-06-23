@@ -1,0 +1,20 @@
+#标题
+rxrpc_send_data() 中局部变量未初始化导致潜在内核故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 AF_RXRPC 协议进行数据发送时，由于 `txb` 变量未初始化，可能导致内核访问非法内存或数据结构异常，进而引发 kernel panic 或 Oops（具体表现取决于栈上残留数据）。该缺陷由静态分析工具或代码审查发现。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `rxrpc_send_data()` 中，变量 `txb` 的初始化代码（从 `call->tx_pending` 赋值）位于跳转标签 `reload` 之后的代码路径中。如果程序执行过程中跳转到 `maybe_error` 标签（例如在检查 `sk->sk_shutdown` 时），此时 `txb` 尚未经过初始化赋值，导致后续逻辑使用未初始化的变量，引发不可预期的行为。
+
+#解决方案
+将 `txb` 变量的加载与初始化代码块移至 `reload` 标签之后、所有可能的跳转语句（如跳转到 `maybe_error`）之前。这确保了无论执行路径如何，`txb` 都能正确初始化，从而修复了变量未初始化的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac89efe5aae2303a1cbbc3eb628251c4ce7bcdd3

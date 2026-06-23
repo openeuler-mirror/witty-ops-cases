@@ -1,0 +1,47 @@
+#标题
+IB/mlx5: MR注销流程中因锁顺序错误导致的潜在死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载内核模块或注销内存区域（MR）时，系统可能发生死锁，导致相关进程（如 python3、modprobe 等）处于不可中断睡眠状态（D状态），或触发内核锁依赖检查工具（Lockdep）报告可能的死锁风险。
+
+#主要错误日志
+```
+python3/20557 is trying to acquire lock:
+ ffff888387542128 (&umem_odp->umem_mutex){+.+.}-{4:4}, at:
+ mlx5_ib_invalidate_range+0x5b/0x550 [mlx5_ib]
+
+ but task is already holding lock:
+ ffffffff82f6b840 (mmu_notifier_invalidate_range_start){+.+.}-{0:0}, at:
+ unmap_vmas+0x7b/0x1a0
+
+ which lock already depends on the new lock.
+
+ Chain exists of:
+ &dev->cache.rb_lock --> mmu_notifier_invalidate_range_start -->
+ &umem_odp->umem_mutex
+
+ Possible unsafe locking scenario:
+
+       CPU0                        CPU1
+       ----                        ----
+   lock(&umem_odp->umem_mutex);
+                                lock(mmu_notifier_invalidate_range_start);
+                                lock(&umem_odp->umem_mutex);
+   lock(&dev->cache.rb_lock);
+
+ *** DEADLOCK ***
+```
+
+#问题根因
+在 `mlx5_ib_dereg_mr` MR注销流程中，代码在持有 `umem_mutex` 锁的情况下调用了 `kzalloc()` 或相关函数（如 `cache_ent_find_and_store` 内部获取 `rb_lock`）。
+由于 `kzalloc()` 可能触发内存回收（fs_reclaim），进而调用 `mmu_notifier_invalidate_range_start`，该函数最终会尝试再次获取 `umem_mutex`，从而导致 `umem_mutex` 的递归锁定死锁。此外，`rb_lock` 与 `umem_mutex` 之间的获取顺序在不同执行路径中也不一致，进一步加剧了死锁风险。
+
+#解决方案
+重构 `mlx5_revoke_mr` 函数逻辑，将操作拆分为 `mlx5_umr_revoke_mr_with_lock` 和 `mlx5r_handle_mkey_cleanup`。
+在 ODP（On-Demand Paging）场景下，确保在调用可能涉及内存分配或获取 `rb_lock` 的 `cache_ent_find_and_store` 函数之前，先释放 `umem_mutex` 锁。通过调整锁的持有范围，避免在持有 `umem_mutex` 时进入内存回收路径或请求其他可能引发死锁的锁，从而打破死锁循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7123c1a0d81f1ac8338b4bcaab8d71bee2b0e77b

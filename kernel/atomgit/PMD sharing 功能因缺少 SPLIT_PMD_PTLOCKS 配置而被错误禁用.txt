@@ -1,0 +1,25 @@
+#标题
+PMD sharing 功能因缺少 SPLIT_PMD_PTLOCKS 配置而被错误禁用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持并开启 PMD sharing 功能的架构上，由于内核配置选项判断逻辑错误，导致 PMD sharing 功能实际被禁用，可能影响大页内存管理的性能与稳定性。同时，在 PowerPC 8xx 架构下，若配置了 incompatible 的 split page table locks，编译时会触发预处理错误。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中使用了宏 `USE_SPLIT_PMD_PTLOCKS` 和 `USE_SPLIT_PTE_PTLOCKS` 来判断是否启用分割页表锁功能。这些宏被定义为：
+`#define USE_SPLIT_PTE_PTLOCKS (NR_CPUS >= CONFIG_SPLIT_PTLOCK_CPUS)`
+这种定义方式在某些内核配置下无法正确反映实际的编译配置状态，导致条件判断失效。例如，`SPLIT_PMD_PTLOCKS` 的启用本应依赖于 `ARCH_ENABLE_SPLIT_PMD_PTLOCK`，但原有逻辑掩盖了这一依赖关系，导致 PMD sharing 相关逻辑判断错误。
+
+#解决方案
+将宏定义机制修改为 Kconfig 配置选项机制：
+1. 在 `mm/Kconfig` 中新增 `CONFIG_SPLIT_PTE_PTLOCKS` 和 `CONFIG_SPLIT_PMD_PTLOCKS` 配置项，明确其依赖关系（如 SMP、NR_CPUS 数量及特定架构限制）。
+2. 删除 `include/linux/mm_types_task.h` 中原有的 `USE_SPLIT_PTE_PTLOCKS` 和 `USE_SPLIT_PMD_PTLOCKS` 宏定义。
+3. 将代码中所有使用 `#if USE_SPLIT_...` 的条件编译逻辑修改为 `#if defined(CONFIG_SPLIT_...)`，确保编译时决策与 Kconfig 配置一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/92376bb5690a9eee7d3ce626819313af43af7d2f

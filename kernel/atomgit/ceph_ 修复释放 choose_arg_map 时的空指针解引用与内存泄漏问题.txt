@@ -1,0 +1,24 @@
+#标题
+ceph: 修复释放 choose_arg_map 时的空指针解引用与内存泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在释放 `crush_choose_arg_map` 结构时，若 `arg_map->args` 指针为空（NULL），内核将发生空指针解引用错误导致 crash；同时，原有的内存释放逻辑结构混乱，存在潜在的内存泄漏风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `free_choose_arg_map` 函数中，代码逻辑在检查 `arg_map` 是否为空之前就进入了循环释放流程，且未对 `arg_map->args` 指针进行有效性检查。当 `arg_map->args` 为 NULL 时，访问 `arg_map->args[i]` 会触发空指针解引用。此外，原代码在释放内部结构时跳出循环或逻辑中断可能导致 `arg_map` 本身未被释放。
+
+#解决方案
+重构 `free_choose_arg_map` 函数的内存释放逻辑：
+1. 调整 `arg_map` 的非空检查顺序，将其置前。
+2. 增加对 `arg_map->args` 指针的非空判断，仅在指针有效时遍历并释放其内部成员。
+3. 增加对 `arg->weight_set` 指针的非空判断，防止释放空指针。
+4. 确保 `kfree(arg_map)` 在函数末尾执行，避免内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/10b65f4e8f0f16db60959cd966ea63645634e15c

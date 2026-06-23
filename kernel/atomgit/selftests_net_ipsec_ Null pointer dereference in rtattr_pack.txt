@@ -1,0 +1,28 @@
+#标题
+selftests/net/ipsec: Null pointer dereference in rtattr_pack
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 selftests/net/ipsec 测试用例时，触发空指针解引用。静态分析工具 cppcheck 报警指出 `rtattr_pack` 函数中存在对 `payload` 指针的解引用风险，当传入参数 `payload` 为 NULL 且 `size` 为 0 时，调用 `memcpy` 可能导致未定义行为。
+
+#主要错误日志
+tools/testing/selftests/net/ipsec.c:230:25: warning: Possible null pointer dereference: payload [nullPointer]
+    memcpy(RTA_DATA(attr), payload, size);
+                           ^
+tools/testing/selftests/net/ipsec.c:1618:54: note: Calling function 'rtattr_pack', 4th argument 'NULL' value is 0
+    if (rtattr_pack(&req.nh, sizeof(req), XFRMA_IF_ID, NULL, 0)) {
+                                                       ^
+tools/testing/selftests/net/ipsec.c:230:25: note: Null pointer dereference
+    memcpy(RTA_DATA(attr), payload, size);
+                           ^
+
+#问题根因
+函数 `rtattr_pack` 在处理空载荷（payload 为 NULL，size 为 0）的场景时，未对 `payload` 指针进行非空检查，直接执行了 `memcpy(RTA_DATA(attr), payload, size)` 操作。虽然在 size 为 0 的情况下通常不会发生实际内存拷贝，但传入 NULL 指针给 memcpy 属于未定义行为，且触发了静态分析工具的空指针解引用告警。
+
+#解决方案
+在 `rtattr_pack` 函数中增加对 `payload` 指针的非空判断。仅当 `payload` 不为空时才执行 `memcpy` 操作，从而修复空指针解引用风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/92d17c1bc3a5587622f048cfe23769aff24892aa

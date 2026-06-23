@@ -1,0 +1,28 @@
+#标题
+cifs: fix memory leak in smb3_fs_context_parse_param error path
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 CIFS/SMB3 文件系统的 `Opt_source` 挂载选项时，若在 `ctx->source` 和 `fc->source` 成功分配内存后、函数执行完成前发生错误（如后续参数解析失败），会导致内存泄漏。该问题由 syzbot 检测到，表现为内核内存对象未能正确释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb3_fs_context_parse_param` 函数的错误处理路径 `cifs_parse_mount_err` 标签处，代码仅释放了 `password` 相关的内存，遗漏了对 `ctx->source` 和 `fc->source` 的释放。
+具体的泄漏流程如下：
+1. `ctx->source = smb3_fs_context_fullpath(ctx, '/')` 分配了内存。
+2. `fc->source = kstrdup(ctx->source, GFP_KERNEL)` 再次分配内存。
+3. 随后发生错误，跳转至 `cifs_parse_mount_err` 标签。
+4. 旧错误处理代码未清理 source 字符串，导致内存泄漏。
+
+#解决方案
+在 `smb3_fs_context_parse_param` 函数的错误处理路径（`cifs_parse_mount_err` 标签）中增加对 `ctx->source` 和 `fc->source` 的清理逻辑。具体修改为：
+1. 调用 `kfree(ctx->source)` 并将其置为 NULL。
+2. 调用 `kfree(fc->source)` 并将其置为 NULL。
+此举确保了在错误退出时释放已分配的资源，并防止潜在的 double-free 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4de38119ce8076cbe4b394847983e968843b67f4

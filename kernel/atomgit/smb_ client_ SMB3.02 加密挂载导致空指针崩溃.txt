@@ -1,0 +1,42 @@
+#标题
+smb: client: SMB3.02 加密挂载导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 mount.cifs 挂载 SMB3.02 (vers=3.02) 并启用加密 (seal) 时，内核发生空指针引用崩溃。触发场景为 SMB3.02 协议协商过程中，客户端未正确设置加密算法类型，导致后续加密操作访问了未初始化的指针。
+
+#主要错误日志
+BUG: KASAN: null-ptr-deref in crypto_aead_setkey+0x2c/0x130
+Read of size 8 at addr 0000000000000020 by task mount.cifs/1095
+CPU: 1 UID: 0 PID: 1095 Comm: mount.cifs Not tainted 6.12.0 #1
+Call Trace:
+ dump_stack_lvl+0x5d/0x80
+ kasan_report+0xda/0x110
+ crypto_aead_setkey+0x2c/0x130
+ crypt_message+0x258/0xec0 [cifs]
+ smb3_init_transform_rq+0x352/0x3f0 [cifs]
+ smb_send_rqst+0x144/0x230 [cifs]
+ compound_send_recv+0x59b/0x1140 [cifs]
+ SMB2_tcon+0x3ec/0xb30 [cifs]
+ cifs_get_smb_ses+0xcdd/0x10a0 [cifs]
+ cifs_mount_get_session+0x8a/0x210 [cifs]
+ dfs_mount_share+0x1b0/0x11d0 [cifs]
+ cifs_mount+0xb3/0x3d0 [cifs]
+ cifs_smb3_do_mount+0x1e2/0xc80 [cifs]
+ smb3_get_tree+0x1bf/0x330 [cifs]
+ vfs_get_tree+0x4a/0x160
+ path_mount+0x3c1/0xfb0
+ __x64_sys_mount+0x1a6/0x1e0
+ do_syscall_64+0xbb/0x1d0
+ entry_SYSCALL_64_after_hwframe+0x77/0x7f
+
+#问题根因
+SMB3.0 和 SMB3.02 协议不支持加密协商上下文，当协商响应中设置 SMB2_GLOBAL_CAP_ENCRYPTION 标志时，客户端应使用 AES-128-CCM 作为默认密码。现有代码逻辑错误地仅对 SMB3.0 (SMB30_PROT_ID) 设置了 server->cipher_type，而遗漏了 SMB3.02 (SMB302_PROT_ID)。这导致在 SMB3.02 连接中 server->cipher_type 未初始化（为 0 或 NULL），后续调用链 smb3_crypto_aead_allocate -> crypto_aead_setkey 时触发了空指针引用。
+
+#解决方案
+在 fs/smb/client/smb2pdu.c 的 SMB2_negotiate 函数中，扩展设置默认加密算法的条件判断。将原先仅针对 SMB30_PROT_ID 的判断修改为同时包含 SMB30_PROT_ID 和 SMB302_PROT_ID，确保 SMB3.02 协议在协商阶段也能正确将 cipher_type 设置为 SMB2_ENCRYPTION_AES128_CCM。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/85f4678d388efb390e615dadb3845563345d8db9

@@ -1,0 +1,24 @@
+#标题
+drm/bridge: cdns-dsi: Fix incorrect REG_WAKEUP_TIME calculation causing display instability
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 Cadence DSI 桥接驱动的设备在启用显示时，由于 `REG_WAKEUP_TIME` 寄存器值计算错误，导致显示功能异常。原计算结果通常超出寄存器字段大小，造成实际写入值随机化，可能引发视频模式显示不正常或不稳定的问题。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序中 `REG_WAKEUP_TIME` 的计算逻辑存在缺陷：
+1. **计算公式错误**：原有的计算方式 `(phy_cfg->hs_prepare + phy_cfg->hs_zero) / tx_byte_period` 本身不正确。
+2. **寄存器溢出**：计算出的结果几乎总是大于寄存器字段的大小，导致实际写入硬件的值是随机截断后的结果。
+3. **文档缺失**：根据文档说明，该值通常需要硬件特性分析来确定，无法通过通用算法精确计算。
+
+#解决方案
+修改 `drivers/gpu/drm/bridge/cadence/cdns-dsi-core.c` 中的计算逻辑。由于缺乏精确的硬件特性计算方法，采用基于测试验证的经验值算法：
+将 `reg_wakeup` 设置为行总时钟数的十分之一（`dsi_cfg.htotal / nlanes / 10`）。测试表明该值小于行时间且适用于所有测试过的 HDMI 显示模式，能够修正原有的随机值问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/05bf83b681fad4d62bd6d690526a44401d2bf152

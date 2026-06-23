@@ -1,0 +1,20 @@
+#标题
+ath12k: RX peer frag setup 失败时存在越界访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `ath12k_dp_rx_peer_frag_setup` 函数执行失败的错误处理路径中，由于 TID（Traffic Identifier）变量未正确递减，导致后续进行 peer 清理时访问 `peer->rx_tid[]` 数组发生越界访问。该问题通过代码审查发现，可能引发内核内存非法访问或崩溃。
+
+#主要错误日志
+ath12k: failed to setup rx defrag context
+
+#问题根因
+在 `ath12k_dp_peer_setup` 函数中，当 `ath12k_dp_rx_frag_setup` 调用失败进入错误处理流程时，TID 变量已经在之前的循环中递增。代码直接跳转到 `peer_clean` 标签进行清理，但清理逻辑依赖于正确的 TID 值来回收资源。由于 TID 未在跳转前递减回退，导致清理过程中索引 `peer->rx_tid[]` 数组时超出边界。
+
+#解决方案
+在 `ath12k_dp_peer_frag_setup` 失败的处理分支中，于跳转至 `peer_clean` 标签之前，增加 `tid--` 操作。确保 TID 值回退到正确的索引位置，从而保证后续清理逻辑能正确访问 `peer->rx_tid[]` 数组，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/86a2935ce6c7dc5c3405d43028b07b390926e535

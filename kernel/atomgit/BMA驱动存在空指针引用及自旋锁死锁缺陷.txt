@@ -1,0 +1,25 @@
+#标题
+BMA驱动存在空指针引用及自旋锁死锁缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中可能触发内核 Oops（空指针引用）或出现 spinlock 死锁现象，导致内核线程阻塞或系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **空指针引用**：在 `bma_intf_is_link_ok` 函数中，代码直接访问全局变量 `g_bma_dev` 的成员而未检查 `g_bma_dev` 是否为空。若该变量未初始化或已被置空，将导致 Oops。
+2. **并发竞态与死锁**：在 `edma_host_recv_msg` 及相关调用链中，对私有数据结构 `priv->recv_msgs` 链表的访问缺乏正确的锁保护。原实现错误地使用了 `bma_dev->priv_list_lock`，且锁的获取与释放逻辑未覆盖所有访问路径，导致潜在的竞态条件；同时，错误地在持有锁的情况下调用可能导致睡眠或重入的函数，引发死锁风险。
+
+#解决方案
+1. **修复空指针引用**：在 `bma_intf_is_link_ok` 函数中增加对 `g_bma_dev` 指针的有效性判断，确保在访问其成员前指针非空。
+2. **修复锁机制**：
+   - 移除 `edma_host_recv_msg` 函数中对 `bma_dev->priv_list_lock` 的错误加锁操作。
+   - 改为在调用者层面（如 `bma_priv_clean_up` 和 `bma_cdev_recv_msg` 函数）使用 `spin_lock_irqsave` 和 `spin_unlock_irqrestore` 对 `priv->recv_msg_lock` 进行加锁，确保对 `priv->recv_msgs` 链表访问的互斥性与正确性。
+3. **版本升级**：将驱动版本号从 0.3.8 升级至 0.3.10 以标识此次修复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6b6d5871437c4adda78a8fb495b923380a7f9d2e

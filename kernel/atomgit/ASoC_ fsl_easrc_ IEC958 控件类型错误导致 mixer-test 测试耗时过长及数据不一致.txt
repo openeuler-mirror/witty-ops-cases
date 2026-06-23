@@ -1,0 +1,22 @@
+#标题
+ASoC: fsl_easrc: IEC958 控件类型错误导致 mixer-test 测试耗时过长及数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 ALSA mixer-test 测试时，由于 IEC958 channel status controls 使用了错误的控件类型，导致测试程序尝试遍历所有 32bit 数值，造成测试过程消耗大量时间，严重影响测试效率。同时，在写入寄存器更新控件值时，若未使能 runtime PM，可能导致 regmap 缓存数据与硬件实际值不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 控件类型定义错误：驱动代码中 IEC958 通道状态控件使用了整型类型，而非专用的 SNDRV_CTL_ELEM_TYPE_IEC958 类型。这导致用户层工具（如 mixer-test）将其视为普通数值控件并进行全范围值遍历，引发性能问题。
+2. 电源管理缺失：在 `fsl_easrc_set_reg` 函数中更新寄存器前未调用 `pm_runtime_resume_and_get`，若此时设备处于挂起状态，直接操作 regmap 可能导致缓存与硬件不同步。
+
+#解决方案
+1. 修改控件定义：新增 `fsl_easrc_iec958_info` 回调函数，将 IEC958 相关控件的类型设置为 `SNDRV_CTL_ELEM_TYPE_IEC958`，并调整 `get/put` 接口以适配该类型的数据结构（使用 `ucontrol->value.iec958.status`），同时合并原有的 CS0-CS5 多个独立控件为单一控件，减少控件数量。
+2. 增加电源管理保护：在 `fsl_easrc_set_reg` 函数中更新寄存器前增加 `pm_runtime_resume_and_get` 调用，操作完成后调用 `pm_runtime_put_autosuspend`，确保操作期间设备处于正常工作状态，保证 regmap 缓存与硬件数据的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58ea85cc8d8637c20c888bd8fb012f2c360b841e

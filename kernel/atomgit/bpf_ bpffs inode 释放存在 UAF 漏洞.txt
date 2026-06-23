@@ -1,0 +1,23 @@
+#标题
+bpf: bpffs inode 释放存在 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BPF 文件系统中使用符号链接或进行 RCU pathwalk 时，可能会触发内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+bpffs 的 `bpf_destroy_inode` 函数在处理 inode 销毁时，未遵循 RCU 宽限期规则，直接或在错误的时机释放了 `inode->i_link` 内存。这导致在 RCU 路径查找期间，其他线程可能仍在访问该内存区域，从而引发 Use-After-Free（UAF）问题。
+
+#解决方案
+恢复 bpffs inode 的 RCU 延迟释放机制。具体修改如下：
+1. 将 `kfree(inode->i_link)` 和 `free_inode_nonrcu(inode)` 的释放逻辑从 `bpf_destroy_inode` 中移除，迁移至新增的 `bpf_free_inode` 函数中。
+2. `bpf_free_inode` 函数会在 RCU 宽限期结束后被调用，确保此时没有任何 RCU 读侧临界区正在访问该 inode 或 i_link，从而安全释放内存。
+3. 在 `bpf_super_ops` 结构体中注册 `.free_inode` 回调为 `bpf_free_inode`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3e04bdae0118de363a7c1e2c1a10a661c0230464

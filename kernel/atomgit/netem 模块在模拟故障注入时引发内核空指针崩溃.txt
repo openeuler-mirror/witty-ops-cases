@@ -1,0 +1,20 @@
+#标题
+netem 模块在模拟故障注入时引发内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当配置 netem qdisc 进行网络故障模拟（开启 corrupt 选项）且处理的数据包线性数据区长度（skb_headlen）为 0 时，内核会访问非法内存地址，导致系统崩溃或触发 kernel oops。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `net/sched/sch_netem.c` 的 `netem_enqueue` 函数中，执行数据包损坏模拟逻辑时，代码直接使用 `get_random_u32_below(skb_headlen(skb))` 计算偏移量来修改 `skb->data`。如果传入的 `skb` 线性数据区长度为 0（例如所有数据均存储在分页碎片中），`get_random_u32_below(0)` 会触发异常行为（如除零错误或返回越界值），进而导致非法内存访问或内核崩溃。
+
+#解决方案
+在执行数据位翻转操作前，增加对 `skb_headlen(skb)` 是否非 0 的判断检查。若线性数据区长度为 0，则跳过注入损坏操作，从而避免对空长度进行随机数生成及非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4edf2ea0e1addd1de3fa5a49816992aa2288a3dd

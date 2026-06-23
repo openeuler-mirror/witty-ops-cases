@@ -1,0 +1,25 @@
+#标题
+pinctrl: Toshiba Visconti DTS "groups" 属性校验警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 Toshiba Visconti TMPV7700 SoC 相关设备树文件（如 `toshiba/tmpv7708-rm-mbrc.dts`）进行 `dtbs_check` 校验时，出现属性长度过长的警告。具体表现为当 `groups` 属性包含多个引脚组条目（如同时配置多个 PWM 引脚组）时，校验工具报错提示列表长度超限。
+
+#主要错误日志
+toshiba/tmpv7708-rm-mbrc.dtb: pinctrl@24190000 (toshiba,tmpv7708-pinctrl): pwm-pins:groups: ['pwm0_gpio16_grp', 'pwm1_gpio17_grp', 'pwm2_gpio18_grp', 'pwm3_gpio19_grp'] is too long
+
+#问题根因
+设备树绑定文档 `toshiba,visconti-pinctrl.yaml` 中的定义存在缺陷：
+1. `groups` 属性被错误地定义为单一字符串类型（`$ref: .../definitions/string`），而实际上该属性在 `pinmux-node.yaml` 模式中应定义为字符串数组。
+2. 由于类型定义限制，导致 schema 校验时无法接受包含多个条目的数组，从而引发 "is too long" 的校验失败警告。
+
+#解决方案
+修改设备树绑定文档 `Documentation/devicetree/bindings/pinctrl/toshiba,visconti-pinctrl.yaml`：
+1. 移除 `groups` 属性下错误的 `$ref` 单字符串类型定义。
+2. 将原有的枚举限制包裹在 `items` 关键字下，以正确表示数组元素。
+3. 新增 `minItems: 1` 和 `maxItems: 8` 约束，明确允许 `groups` 属性包含 1 到 8 个条目，从而修复校验警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f5c41ca2ee3e0121d872cac586baaed2f58f84f7

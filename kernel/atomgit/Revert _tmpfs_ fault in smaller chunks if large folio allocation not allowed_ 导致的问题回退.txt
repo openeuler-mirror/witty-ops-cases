@@ -1,0 +1,23 @@
+#标题
+Revert "tmpfs: fault in smaller chunks if large folio allocation not allowed" 导致的问题回退
+
+#内核版本
+OLK-6.6
+
+#问题现象
+该 Commit 为撤销补丁，原补丁引入了 `IOCB_NO_LARGE_CHUNK` 标志位以优化 tmpfs 在不支持大页分配时的写入行为。撤销该补丁意味着恢复了之前的默认行为，即无论是否允许大页分配，写入路径均尝试使用 `mapping_max_folio_size` 作为 chunk 大小，可能导致在特定场景下内存分配压力增大或性能回退。
+
+#主要错误日志
+未知
+
+#问题根因
+根据关联的 Issue 与 PR 信息，该补丁被撤销是因为原修复方案存在问题（Issue ID: IC5K6D）。原补丁通过引入 `IOCB_NO_LARGE_CHUNK` 强制将写入切片限制为 PAGE_SIZE，虽然意在解决大页分配失败的问题，但该实现被证实有缺陷或不再需要，因此需要回退该逻辑以恢复标准的 chunk 分配策略。
+
+#解决方案
+删除 `IOCB_NO_LARGE_CHUNK` 相关的逻辑代码。具体包括：
+1. 移除 `include/linux/fs.h` 中 `IOCB_NO_LARGE_CHUNK` 宏定义。
+2. 恢复 `mm/filemap.c` 中 `generic_perform_write` 函数的逻辑，不再根据 `IOCB_NO_LARGE_CHUNK` 标志调整 chunk 大小，直接使用 `mapping_max_folio_size(mapping)`。
+3. 移除 `mm/shmem.c` 中 `shmem_file_write_iter` 函数里设置 `IOCB_NO_LARGE_CHUNK` 标志的判断逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3d258cb3d5f8d68f99233b1788975d8563607b82

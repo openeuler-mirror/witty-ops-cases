@@ -1,0 +1,25 @@
+#标题
+drm/rockchip: vop2: 窗口在不同层级切换时导致 Alpha 混合错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RK3588 平台上，当 DRM 驱动中的 VOP2（Video Output Processor 2）窗口在不同层级（layer）之间切换时，会出现 alpha blending 错误。具体表现为显示异常，这是由于未使用的图层被错误地配置为保留值 0x5，而在 RK3588 上该值会选中 Cluster3，导致硬件图层配置冲突。
+
+#主要错误日志
+未知
+
+#问题根因
+VOP2 的每个图层都必须绑定一个窗口，且该窗口不能被其他图层使用。
+旧代码在处理未使用的图层时，将其统一配置为 0x5（reserved value）。虽然 0x5 在 RK3568 上是保留值，但在 RK3588 上它会选中 Cluster3。
+当进行窗口切换（从 layerM 切换到 layerN）时，如果仅将新窗口绑定到 layerN，而没有处理 layerN 原先绑定的旧窗口，会导致同一个窗口被两个图层同时选中；同时，将未使用图层配置为 0x5 的操作在 RK3588 上引发了错误的硬件选中，从而导致 alpha blending 计算错误。
+
+#解决方案
+修改 `vop2_setup_layer_mixer` 函数中的图层分配逻辑：
+1. 不再将未使用的图层统一配置为 0x5，而是通过交换机制处理窗口与图层的绑定关系。
+2. 当需要将一个窗口从 layerM 移动到 layerN 时，查找原先绑定在 layerN 上的窗口，并将其移动到 layerM。
+3. 通过这种交换逻辑，确保每个图层绑定的窗口唯一，避免因配置保留值 0x5 而在 RK3588 上引发硬件选中冲突，从而修复 alpha blending 错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3f3ff2cb275d2063dd3de3eac821980dd63f2260

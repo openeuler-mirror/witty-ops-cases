@@ -1,0 +1,24 @@
+#标题
+wifi: at76c50x: 释放后访问导致USB设备引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 at76c50x USB WiFi 设备（执行 disconnect 操作）时，内核发生 Use-After-Free 访问错误。由于在对象内存释放后仍尝试访问其成员，可能导致内核崩溃或内存数据损坏，并造成 USB 设备对象的引用计数泄漏（memory leak of the usb device）。
+
+#主要错误日志
+```
+wiphy_info(priv->hw->wiphy, "disconnecting\n");
+dev_info(&interface->dev, "disconnected\n");
+```
+（注：日志原文提取自代码上下文，故障本身由 UAF 引发，可能伴随 slab 报错或 oops，但 commit 未提供具体 panic 日志）
+
+#问题根因
+在 `at76_disconnect` 函数中，调用 `at76_delete_device(priv)` 时，内部通过 `ieee80211_free_hw` 释放了 `priv` 指向的内存。函数返回后，代码继续使用 `priv->udev` 作为参数调用 `usb_put_dev`，此时 `priv` 已指向被释放的内存（Use-After-Free），导致访问非法内存且未能正确释放 USB 设备引用。
+
+#解决方案
+修改 `at76_disconnect` 函数，在调用 `at76_delete_device` 释放 `priv` 对象之前，或者不依赖已释放的 `priv` 对象，而是直接通过 `interface_to_usbdev(interface)` 获取 USB 设备指针。将 `usb_put_dev(priv->udev)` 修改为 `usb_put_dev(interface_to_usbdev(interface))`，确保在释放私有数据后不再访问它，并正确处理 USB 设备的引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f7fdb444ec790733b7acac4eba9cb05d226cbd79

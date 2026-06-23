@@ -1,0 +1,23 @@
+#标题
+urma: 导入 jfr 时 PSN 交换异常修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UBCORE_TP_RM 传输模式且 tp_type 为 UBCORE_RTP 的场景下，当配置了共享 TP (share_tp=1) 导入 jfr 时，PSN (Packet Sequence Number) 交换过程出现异常。这是由于 PSN 初始化逻辑处理不当导致的数据不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ubcore_import_jfr_compat` 函数中，`active_tp_cfg.tp_attr.tx_psn` 的初始化逻辑存在缺陷。原代码逻辑在 `trans_mode == UBCORE_TP_RM` 且共享 TP 分支下，未正确设置 `tx_psn`，而是将其留空或延迟到后续逻辑处理。实际上，对于共享 TP 场景，应使用配置中的指定值 `cfg->stp_cfg.tx_psn`，而对于非共享 TP 场景，应使用随机值。原代码将随机值生成放置在条件判断之后，且未在共享 TP 分支内覆盖，导致 PSN 交换行为不符合预期。
+
+#解决方案
+调整 `active_tp_cfg.tp_attr.tx_psn` 的赋值逻辑：
+1. 将随机值初始化 `get_random_u32()` 提前至条件判断之前，作为默认值。
+2. 在条件分支中，若为共享 TP 场景 (`cfg->flag.bs.share_tp == 1`)，则将 `tx_psn` 覆盖赋值为配置值 `cfg->stp_cfg.tx_psn`。
+此举确保了不同分支下 PSN 值均被正确初始化，修复了 PSN 交换异常的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e517016cf72d6d7139c99f2a64492c4c76f3892d

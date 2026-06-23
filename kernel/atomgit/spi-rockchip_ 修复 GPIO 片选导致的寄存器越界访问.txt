@@ -1,0 +1,20 @@
+#标题
+spi-rockchip: 修复 GPIO 片选导致的寄存器越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SPI 控制器使用 GPIO 作为片选（Chip Select）且 SPI 模式配置为 SPI_CS_HIGH 时，内核会对寄存器进行越界写操作。这是因为 GPIO 编号通常远大于原生片选编号，将其作为位索引写入寄存器会导致越界访问，可能引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `rockchip_spi_config` 函数中，代码处理 `SPI_CS_HIGH` 模式时，未区分原生片选和 GPIO 片选。对于 GPIO 片选，代码错误地使用 GPIO 编号（`spi_get_chipselect` 返回值）作为位偏移量写入 `CR0_SOI_OFFSET` 寄存器。由于 GPIO 编号可能远超寄存器位宽范围（原生 CS 通常较小），导致寄存器越界访问（out of bounds access）。
+
+#解决方案
+在设置 `CR0_SOI_OFFSET` 位之前，增加对片选类型的判断。仅当使用原生片选（非 GPIO 片选，即 `!spi_get_csgpiod(spi, 0)`）时，才执行寄存器写入操作；若为 GPIO 片选则跳过此步骤，从而避免越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/32ef213f016f4ec0e0576cb0d19d5e2a45cbcd22

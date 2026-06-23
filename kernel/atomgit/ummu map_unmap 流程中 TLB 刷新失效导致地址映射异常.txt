@@ -1,0 +1,23 @@
+#标题
+ummu map/unmap 流程中 TLB 刷新失效导致地址映射异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Hisilicon UMMU（User Mode Memory Management Unit）驱动的场景下，进行内存 map/unmap 操作时，由于 TLB 刷新流程处理不当，可能导致非代理（non-agent）设备的 TLB 未正确失效，进而引发内存访问错误、数据不一致或 DMA 操作异常。
+
+#主要错误日志
+未知
+
+#问题根因
+原有代码中，`ummu_tlbi_walk` 调用了 `ummu_tlbi_range` 进行 TLB 刷新，且在 unmap 流程中通过 `non_agent_ummu_flush_tlb` 手动处理非代理设备的 TLB 刷新逻辑，这种方式未能正确同步 IOMMU 框架层的 `iommu_domain` 信息，且与核心层期望的刷新流程不一致，导致部分 TLB 项未被正确清除。
+
+#解决方案
+1. 重构 TLB 刷新接口，新增 `tlb_inv_walk` 回调及 `ummu_core_tlb_inv_walk` 接口，用于同步刷新指定地址范围的中间 TLB 状态（walk cache）。
+2. 修改 `ummu_tlbi_walk` 实现，调用新的 `ummu_core_tlb_inv_walk` 接口，确保刷新操作正确传递 `iommu_domain` 参数。
+3. 在 `logic_ummu_unmap_pages` 中移除原有的 `non_agent_ummu_flush_tlb` 手动刷新逻辑，改为依赖 IOMMU 框架标准的 unmap 返回后由上层调用 `tlb_inv_walk` 进行刷新。
+4. 新增 `ummu_sync_iommu_domain` 函数及 `probe_finalize` 钩子，在设备 probe 阶段将 `iommu_domain` 同步保存到 `ummu_domain` 结构中，确保后续刷新操作能获取到正确的 domain 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0bb934f3d40e7a18240922cf85a7d7f1e66dbe34

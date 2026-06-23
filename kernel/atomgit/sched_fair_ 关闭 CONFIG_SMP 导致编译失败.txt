@@ -1,0 +1,24 @@
+#标题
+sched/fair: 关闭 CONFIG_SMP 导致编译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在禁用 CONFIG_SMP 选项（UP 配置）编译内核时，调度器模块构建失败。编译器报错提示 `steal_fail_ni_enabled` 函数未定义，以及 `smt_qos_update_qos_level` 函数引用未声明，导致 fair.c 编译中断。
+
+#主要错误日志
+未知（编译错误通常输出在构建日志中，Commit 未提供具体编译报错文本）
+
+#问题根因
+在引入 SMT QoS 调度核心代码的提交中，仅为 SMP 配置实现了相关辅助函数，遗漏了 UP（单处理器）配置下的兼容性处理：
+1. `steal_fail_ni_enabled()` 函数在 `!CONFIG_SMP` 配置下缺少对应的存根定义。
+2. `smt_qos_update_qos_level()` 函数调用未用 `CONFIG_SMP` 宏包裹，导致在 UP 配置下尝试调用 SMP 专用接口。
+
+#解决方案
+补充 `!CONFIG_SMP` 配置下的代码存根与宏保护：
+1. 在 `#else /* CONFIG_SMP */` 分支中添加 `steal_fail_ni_enabled()` 的静态内联存根函数，直接返回 false。
+2. 在 `pick_next_task_fair` 和 `__set_next_task_fair` 函数中调用 `smt_qos_update_qos_level()` 的代码段外层添加 `#ifdef CONFIG_SMP` 条件编译，确保该部分代码仅在 SMP 配置下编译。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/083f18c88b586e2f2c24a2b69c27119db609cf94

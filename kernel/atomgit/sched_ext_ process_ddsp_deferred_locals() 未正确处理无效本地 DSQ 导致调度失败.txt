@@ -1,0 +1,20 @@
+#标题
+sched_ext: process_ddsp_deferred_locals() 未正确处理无效本地 DSQ 导致调度失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `dispatch_to_local_dsq()` 返回 `DTL_INVALID`（即目标 DSQ 无效）时，调用者 `process_ddsp_deferred_locals()` 未执行任何操作，导致任务无法被正确调度。与之相对，另一个调用者 `finish_dispatch()` 在相同情况下会回退到全局 DSQ。这种处理逻辑的不一致导致在特定调度路径下，任务丢失或未能得到执行。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `dispatch_to_local_dsq()` 使用枚举返回值 `DTL_INVALID` 来表示无效的本地 DSQ 场景。然而，调用者之一 `process_ddsp_deferred_locals()` 忽略了该返回值，未做任何处理；而另一个调用者 `finish_dispatch()` 则实现了回退到全局 DSQ 的逻辑。这种不一致的处理方式导致 `process_ddsp_deferred_locals()` 路径在遇到无效 DSQ 时缺乏容错机制，引发调度失效。
+
+#解决方案
+移除了 `dispatch_to_local_dsq()` 的枚举返回值，将其改为 `void` 类型。将处理 `DTL_INVALID` 情况的逻辑（回退到全局 DSQ）直接下沉到 `dispatch_to_local_dsq()` 函数内部，确保无论是 `process_ddsp_deferred_locals()` 还是 `finish_dispatch()` 调用，在遇到无效本地 DSQ 时都能统一执行回退到全局 DSQ 的操作，从而修复调度逻辑漏洞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cc34f5eddb96379d9eebfe6aad1e83dfc95cad46

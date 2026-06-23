@@ -1,0 +1,23 @@
+#标题
+net_sched: qfq 控制组中嵌套 netem 导致链表双重添加故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 QFQ (Quick Fair Queueing) qdisc 时，若配置了 class 并以 netem 作为子 qdisc，在执行数据包入队操作时可能触发内核链表双重添加错误。该故障可能导致内核内存损坏、系统崩溃或网络流量控制行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `qfq_enqueue` 函数中，代码使用变量 `first`（定义为 `!cl->qdisc->q.qlen`）来判断队列是否为空，进而决定是否将 class 添加到 active 链表中。
+当 QFQ class 配合 netem 作为子 qdisc 使用时，netem 可能会在内部重循环数据包，导致子 qdisc 的队列长度（`cl->qdisc->q.qlen`）在入队前已经不为 0。此时 `first` 变量为 false，代码逻辑错误地认为该 class 已经在 active 链表中，跳过了链表添加操作，但实际上该 class 可能尚未被激活。或者相反，导致该 class 被重复添加到链表中。
+根本原因在于通过子 qdisc 的队列长度来判断 QFQ class 的激活状态是不可靠的，无法正确处理 netem 等内部会持有数据包的 qdisc 场景。
+
+#解决方案
+修改 `qfq_enqueue` 函数中判断 class 是否激活的逻辑。
+不再依赖子 qdisc 的队列长度（`!cl->qdisc->q.qlen`），而是新增 `cl_is_active` 函数，直接检查 class 自身的 active 链表节点（`cl->alist`）是否为空（`list_empty(&cl->alist)`）。该方式能准确反映 class 当前的激活状态，避免了因 netem 导致的误判和链表双重添加问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/57b964423ccd53c23a3e19f78fe91ccb764c1c4c

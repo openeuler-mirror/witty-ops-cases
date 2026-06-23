@@ -1,0 +1,22 @@
+#标题
+spi-nor: 解析 SMPT 时因 dummy cycles 配置错误导致闪存无法正确读取扇区配置
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用支持 SFDP（Serial Flash Discoverable Parameters）的 SPI NOR 闪存（特别是 Infineon S25FS-S 系列）时，驱动解析 SMPT（Sector Map and Parameter Table）失败或读取到错误的扇区配置信息。由于读取寄存器操作使用的 dummy cycles（空周期）数量不正确，导致主机无法正确识别闪存的扇区布局，进而引发闪存读写功能异常或设备初始化失败。
+
+#主要错误日志
+未知
+
+#问题根因
+SMPT 表中包含配置检测信息，描述了读取扇区配置所需的操作码、地址和 dummy cycles。当 dummy cycles 字段被标记为 `SMPT_CMD_READ_DUMMY_IS_VARIABLE` 时，驱动默认使用 `nor->read_dummy` 的值（通常初始化为 0）。
+对于 Infineon S25FS-S 系列闪存，其 Read Any Register 命令定义了 8 个 dummy cycles，但驱动默认值 0 与此硬件实际要求不符。原有的代码逻辑缺乏修正机制，导致在解析 SMPT 时使用了错误的 dummy cycles 值，从而导致读取数据错误。
+
+#解决方案
+在 `struct spi_nor_fixups` 中新增 `smpt_read_dummy` 钩子函数，并在 SMPT 解析流程 `spi_nor_smpt_read_dummy()` 中调用该钩子。
+当检测到 dummy cycles 为变量时，先使用默认值，随后调用 `smpt_read_dummy` 钩子对其进行修正，允许厂商或设备特定的驱动代码将 dummy cycles 值更新为硬件实际使用的数值（如 S25FS-S 的 8 个周期），从而确保正确读取配置寄存器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/00b71692e10a1a67e6eb01dcbc317cfbab2ece53

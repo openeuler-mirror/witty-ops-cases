@@ -1,0 +1,25 @@
+#标题
+NFSv4/flexfiles 未正确处理数据服务器返回的 NFS 级别权限错误导致 I/O 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 NFS 客户端通过低于 1024 的端口号连接到 flexfiles 数据服务器时，服务器返回 NFSERR_PERM 错误。由于客户端错误处理逻辑未能正确识别并处理该 NFS 级别错误（错误地将其视为 RPC 级别错误或处理不当），导致 I/O 操作无法恢复。具体表现为读取操作失败未重试其他数据服务器，或写入操作在重连前未能正确重试。
+
+#主要错误日志
+未知
+
+#问题根因
+flexfiles 驱动程序中的 `ff_layout_async_handle_error_v4` 和 `ff_layout_async_handle_error_v3` 函数在处理错误时，原先仅依赖 `task->tk_status`（RPC 层错误码）进行判断，未传入并检查 `op_status`（NFS 协议操作状态码）。这导致客户端无法区分 NFS 层错误（如 NFSERR_PERM）和 RPC 层错误。对于 NFSERR_PERM 这类需要断开连接并重试的错误，原逻辑未能执行 `xprt_force_disconnect` 及重试逻辑，导致 I/O 路径处理异常。
+
+#解决方案
+修改 flexfiles 的错误处理函数，增加对 NFS 操作状态码 `op_status` 的解析：
+1. 在 `ff_layout_async_handle_error` 及其 v3/v4 子函数中新增 `u32 op_status` 参数。
+2. 新增针对 `op_status` 的 switch 分支处理逻辑，区分 RPC 错误与 NFS 错误。
+3. 针对 `NFSERR_PERM` 错误，增加显式处理逻辑：调用 `xprt_force_disconnect` 强制断开连接，并返回 `-EAGAIN` 触发重试。
+4. 调整其他 NFS 错误码（如 `NFS4ERR_DELAY`, `NFS4ERR_GRACE` 等）的处理路径，确保正确的重试或恢复行为。
+5. 更新 `ff_layout_read_done_cb`、`ff_layout_write_done_cb` 和 `ff_layout_commit_done_cb` 调用点，传入 `hdr->res.op_status`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/63a3f5d07cc22bc514c3ac101abda9c2e4491ec0

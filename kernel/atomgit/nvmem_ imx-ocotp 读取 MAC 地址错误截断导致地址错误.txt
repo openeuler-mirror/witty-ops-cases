@@ -1,0 +1,20 @@
+#标题
+nvmem: imx-ocotp 读取 MAC 地址错误截断导致地址错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i.MX 平台上读取 nvmem 中的 MAC 地址时，上层获取到的 MAC 地址错误。原本正确的 MAC 地址（例如 70:B3:D5:14:E9:0E）被错误截断，变成了 00:00:70:B3:D5:14。
+
+#主要错误日志
+未知
+
+#问题根因
+由于引入了提交 "13bcd440f2ff nvmem: core: verify cell's raw_len"，受 word_size 为 4 字节的影响，"mac-address" 单元的读取缓冲区长度从 6 字节扩展到了 8 字节。驱动中的后处理函数在进行字节交换（swap）操作时，使用了扩展后的缓冲区长度（8 字节）进行全缓冲区交换，导致 MAC 地址在数据交换过程中被错误截断。
+
+#解决方案
+在驱动对 "mac-address" 进行后处理字节交换操作时，限制处理的字节长度为 ETH_ALEN（6 字节）。通过 `bytes = min(bytes, ETH_ALEN)` 确保仅对有效的 MAC 地址字节进行交换，忽略因对齐产生的额外填充字节，从而向上层传递正确的 MAC 地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5788c01aff7d4c0efdc50e24afb0d4b16d733de0

@@ -1,0 +1,27 @@
+#标题
+serial: uartlite: 修复 probe 过程中 PM runtime 引用计数下溢问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动探测（probe）阶段，对于非控制台端口的串口设备，PM runtime 引用计数发生下溢，导致内核发出警告信息。
+
+#主要错误日志
+Runtime PM usage count underflow!
+
+#问题根因
+在 `ulite_probe()` 函数末尾调用 `pm_runtime_put_autosuspend()` 释放引用时，对于非控制台端口，并未持有对应的 PM runtime 引用。
+具体流程如下：
+1. 对于非控制台端口，UART 核心在 `ulite_assign()` 流程中通过 `uart_change_pm()` 执行了一次平衡的 get/put 循环：
+   `uart_change_pm(ON)` -> 调用 `pm_runtime_get_sync()` (+1)
+   `uart_change_pm(OFF)` -> 调用 `pm_runtime_put_autosuspend()` (-1)
+2. 此时引用计数已平衡归零。
+3. 随后 `ulite_probe()` 末尾再次调用 `pm_runtime_put_autosuspend()` 尝试减 1，导致计数下溢。
+4. 对于控制台端口，由于 UART 核心跳过了 `uart_change_pm(OFF)` 步骤，掩盖了此问题。
+
+#解决方案
+在 `ulite_probe()` 函数中，于 `pm_runtime_enable()` 之前增加调用 `pm_runtime_get_noresume()`。这获取了一个显式的、归属于 probe 流程的引用，用于配对函数末尾的 `pm_runtime_put_autosuspend()` 调用，从而确保无论是控制台端口还是非控制台端口，引用计数均维持正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/add886b7aaa30f54065cc3926fda009166260f97

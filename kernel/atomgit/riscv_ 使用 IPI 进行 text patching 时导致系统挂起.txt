@@ -1,0 +1,23 @@
+#标题
+riscv: 使用 IPI 进行 text patching 时导致系统挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V 架构下，当使用 IPI（处理器间中断）进行远程 icache 刷新时，执行内核代码段修补（text patching，如 ftrace 激活）会导致系统挂起，系统无法继续响应。
+
+#主要错误日志
+未知
+
+#问题根因
+当前内核使用 `stop_machine()` 机制来修补内核代码段。在修补过程中，`patch_text_nosync()` 函数会发射 IPI 用于远程 icache 刷新。这导致了死锁或竞争条件：`stop_machine()` 本身需要协调所有 CPU 停止当前任务，而此时的 IPI 中断处理机制与 `stop_machine()` 的状态冲突，从而导致系统挂起。
+
+#解决方案
+修改代码修补逻辑，确保每个 CPU 都在 `stop_machine()` 的上下文中执行代码修补函数，并在该上下文中显式调用本地 icache 刷新（`local_flush_icache_all()`），从而避免在修补过程中触发可能导致挂起的 IPI。具体改动包括：
+1. 将 `patch_insn_write` 函数接口公开，允许直接写入指令而不立即同步。
+2. 修改 `ftrace` 相关代码，使用 `stop_machine` 机制包装代码修改操作，确保所有 CPU 同步执行刷新操作，而不是依赖 IPI。
+3. 在 `patch_text_cb` 回调函数中移除对 `patch_text_nosync` 的调用，改为调用 `patch_insn_write` 并显式执行 `local_flush_icache_all()`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/339d88b5f1de117c5806d9e5c4310717dae1058b

@@ -1,0 +1,20 @@
+#标题
+Bluetooth: hci_conn: fix potential UAF in set_cig_params_sync
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `set_cig_params_sync` 函数处理 Bluetooth ISO CIG (Connected Isochronous Group) 参数时，由于未持有 `hci_dev` 锁即访问连接哈希表，可能导致 Use-After-Free (UAF) 问题。该问题可能引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `set_cig_params_sync` 在查找 CIG 连接 (`hci_conn_hash_lookup_cig`) 时未持有 `hci_dev` 的锁 (`hci_dev_lock`)。在并发场景下，查找到的 `conn` 指针可能在后续使用过程中被其他路径释放，从而导致 Use-After-Free。
+
+#解决方案
+在访问连接哈希表前加锁。具体修改为：在 `set_cig_params_sync` 函数入口处调用 `hci_dev_lock(hdev)` 获取锁，在查找失败返回或函数结束前调用 `hci_dev_unlock(hdev)` 释放锁，确保查找和使用连接对象过程中数据结构的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a72a102dba122d3c67015bc1995924e491cf5bb4

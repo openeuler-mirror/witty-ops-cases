@@ -1,0 +1,20 @@
+#标题
+perf sched timehist 命令致 evsel->priv 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `perf sched timehist` 命令后，工具进程退出时未释放 `evsel->priv` 指向的内存。该问题属于资源泄漏，在长时间运行或特定场景下可能导致内存占用持续升高，通常通过 Valgrind 等内存检测工具或观察进程内存退出状态可见。
+
+#主要错误日志
+未知
+
+#问题根因
+`perf sched timehist` 命令使用 `evsel->priv` 保存每 CPU 的计时信息（`struct evsel_runtime`），但在 `evsel` 结构体释放时，未注册或调用相应的析构函数来释放该私有指针及其内部动态分配的内存（如 `last_time` 数组），导致内存泄漏。
+
+#解决方案
+在 `perf sched timehist` 初始化流程中调用 `evsel__set_priv_destructor` 注册自定义析构函数 `timehist__evsel_priv_destructor`。该析构函数负责释放 `struct evsel_runtime` 结构体及其内部的 `last_time` 成员，确保在 `evsel__exit` 销毁 evsel 实例时自动回收内存资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce4078c731ca9932a57f6aad3226dd3be235abdb

@@ -1,0 +1,21 @@
+#标题
+cifs: 挂载参数 closetimeo 处理过程中存在整型溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载 CIFS/SMB3 文件系统时，若用户指定的 `closetimeo` 参数值较大（但符合 u32 范围），内核在处理该参数时触发整型溢出。这导致原本应生效的上限检查失效，系统可能接受了错误的超时配置，进而影响 deferred close（延迟关闭）的行为逻辑。
+
+#主要错误日志
+cifs_errorf(fc, "closetimeo too large\n");
+
+#问题根因
+用户提供的挂载参数 `closetimeo`（类型为 u32）在转换为 jiffies 单位时发生了整型溢出。代码原先的逻辑是先执行乘法运算 `ctx->closetimeo = HZ * result.uint_32`，然后再进行上限校验。当用户输入较大的秒数时，`HZ * result.uint_32` 的结果超出了变量类型的表示范围导致溢出，使得校验逻辑判断错误，无法正确拦截过大的参数值。
+
+#解决方案
+调整校验逻辑的顺序与方式，在进行乘法转换之前先对原始输入值（秒数）进行校验。
+修改后的逻辑为：先判断 `result.uint_32` 是否大于 `SMB3_MAX_DCLOSETIMEO / HZ`，如果超出范围则报错 `cifs_parse_mount_err`；只有在校验通过后，才执行赋值操作 `ctx->closetimeo = HZ * result.uint_32`。此举有效避免了乘法运算导致的整型溢出问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d2bd2c412e1d9e0888cb86219ed287a1a0c7b24e

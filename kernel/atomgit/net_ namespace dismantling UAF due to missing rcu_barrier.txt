@@ -1,0 +1,23 @@
+#标题
+net: namespace dismantling UAF due to missing rcu_barrier
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在销毁网络命名空间时，内核可能发生 Use-After-Free (UAF) 导致的 panic 或数据损坏。该问题与 CVE-2024-56658 相关。
+
+#主要错误日志
+未知
+
+#问题根因
+在移除网络命名空间设备时，许多网络设备通知处理程序使用 call_rcu() 来释放资源。然而，在 `cleanup_net()` 工作队列中释放 `struct net` 结构体本身之前，没有等待这些 RCU 回调完成。这导致在 `struct net` 被释放后，可能仍有 RCU 回调尝试访问该结构体，从而引发 Use-After-Free。
+
+#解决方案
+修复方案是推迟 `struct net` 结构体最终释放的时机：
+1. 在 `struct net` 中新增 `defer_free_list` 成员（使用 KABI_FILL_HOLE 填充以保持内核 ABI 兼容性）。
+2. 在 `net_free()` 函数中，不再直接调用 `kmem_cache_free()` 释放内存，而是将 `struct net` 添加到一个全局的 `defer_free_list` 链表中。
+3. 在 `cleanup_net()` 中已有的 `rcu_barrier()` 之后，调用新增的 `net_complete_free()` 函数。该函数负责释放上一轮 `rcu_barrier()` 之前积累的所有 `struct net` 结构体。这确保了在释放命名空间结构体之前，所有挂起的 RCU 回调都已完成。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9012a3c1394784259a2b7fe73ae0bbdd3e1c71d

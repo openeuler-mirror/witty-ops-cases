@@ -1,0 +1,29 @@
+#标题
+dm-cache 直通模式下并发写导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 dm-cache 处于 passthrough（直通）模式时，若对同一缓存块进行并发写入，触发缓存条目失效流程，由于 bio prison cell 锁定失败，导致在错误处理路径中解引用空指针，引发内核崩溃。通过 fio 工具进行并发随机写测试可稳定复现该问题。
+
+#主要错误日志
+KASAN: null-ptr-deref in range [0x0000000000000000-0x0000000000000007]
+CPU: 0 UID: 0 PID: 134 Comm: fio Not tainted 6.19.0-rc7 #3 PREEMPT
+RIP: 0010:dm_cell_unlock_v2+0x3f/0x210
+Call Trace:
+ invalidate_complete+0xef/0x430
+ map_bio+0x130f/0x1a10
+ cache_map+0x320/0x6b0
+ __map_bio+0x458/0x510
+ dm_submit_bio+0x40e/0x16d0
+ __submit_bio+0x419/0x870
+
+#问题根因
+在 passthrough 模式下，当 dm-cache 开始使缓存条目失效时，若由于对同一缓存块的并发写入导致 bio prison cell 锁定失败，此时 `mg->cell` 保持为 NULL。然而，`invalidate_complete()` 函数的错误处理路径在尝试解锁和释放 cell 时，未检查 `mg->cell` 是否为有效指针，直接对其进行了解引用操作，从而触发了空指针引用错误。
+
+#解决方案
+在 `invalidate_complete()` 函数中执行解锁操作前，增加对 `mg->cell` 指针有效性的检查。仅当 `mg->cell` 非空时，才调用 `dm_cell_unlock_v2` 和 `free_prison_cell` 函数，避免对空指针进行解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6a2c83cfa8d766aea83472054ffed34e34e6353c

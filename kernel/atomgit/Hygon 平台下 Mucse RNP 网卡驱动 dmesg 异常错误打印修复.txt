@@ -1,0 +1,29 @@
+#标题
+Hygon 平台下 Mucse RNP 网卡驱动 dmesg 异常错误打印修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hygon 平台上使用 Mucse RNP 系列网卡驱动时，系统启动或运行过程中 dmesg 日志显示异常错误信息。此外，当网卡设备处于拔出或 PCI 通道离线状态时，驱动程序在移除或关闭过程中尝试访问硬件寄存器可能导致系统不稳定或产生额外的内核报错；sysfs 接口在设备 Down 状态下访问可能异常。
+
+#主要错误日志
+未知
+（注：Commit 信息中仅提及 "Fix rnp errors dmesg show"，未提供具体的 dmesg 报错文本片段，代码变更中新增的日志为修复逻辑中的信息打印，而非故障本身的特征日志。）
+
+#问题根因
+驱动程序在多处关键流程中缺乏对 PCI 设备在线状态的检查：
+1. 当 PCI 设备处于离线或被拔出状态时，驱动仍尝试执行邮箱通信、硬件寄存器读写等操作，导致错误日志打印或系统异常。
+2. 驱动内部邮箱通信机制使用动态内存分配，可能存在内存管理问题。
+3. sysfs 调试接口未检查设备运行状态，在设备 Down 时访问可能导致异常。
+4. 统计信息缺失 Pause 帧计数，且部分硬件特性（如 TP 类型设备 ID）未支持。
+
+#解决方案
+1. 增加 PCI 设备状态检查：在 `rnp_down`、`rnp_remove`、`rnp_mbx_configure_pf`、`rnp_write_posted_mbx`、`rnp_set_mac_rx_hw_ops_n10`、`rnp_rpu_mpe_stop` 等关键函数入口处增加 `pci_channel_offline()` 判断。若设备已离线，直接返回或跳过硬件操作，避免无效访问导致的错误打印。
+2. 优化邮箱 Cookie 内存管理：将邮箱请求的 Cookie 分配机制从动态 `kzalloc` 改为静态数组池管理（`mbx_req_cookie_pool`），并增加超时自动回收机制，防止内存泄漏或分配失败。
+3. 增加 sysfs 访问保护：在 `rx_desc_info_show`、`tx_ring_info_show` 等 sysfs 接口函数中增加 `__RNP_DOWN` 状态检查，防止在设备关闭状态下访问硬件资源。
+4. 完善硬件支持与统计：增加对 PCI_DEVICE_ID_N10_TP 设备 ID 的支持；在统计信息中补充 `mac_rx_pause_count` 和 `mac_tx_pause_count` 的统计读取。
+5. 版本更新：驱动版本号更新至 0.3.8。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/39ed30395946b5df8940f9f9d22f206ae2272c46

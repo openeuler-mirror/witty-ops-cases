@@ -1,0 +1,23 @@
+#标题
+eventpoll 修复 struct eventpoll / struct file UAF 漏洞的重构补丁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 eventpoll 文件移除与 epoll 项移除的逻辑时，存在 Use-After-Free (UAF) 安全漏洞。该漏洞被追踪为 CVE-2026-46242，可能导致内核内存被非法访问或修改，进而引发系统崩溃或权限提升。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 信息中的 "Stable-dep-of" 标记，该补丁是为修复后续提交 "eventpoll: fix ep_remove struct eventpoll / struct file UAF" 所做的准备工作。根本原因在于 `__ep_remove` 函数内部混合处理了 `struct file` 的移除操作和 `struct epitem` 的移除操作，逻辑界限不清晰，导致了潜在的 UAF 风险。
+
+#解决方案
+重构 `__ep_remove` 函数，将其拆分为两个独立的辅助函数：`__ep_remove_file` 和 `__ep_remove_epi`。
+1. `__ep_remove_file`：专门负责处理 `struct file` 相关的移除逻辑，包括从文件结构的链表中删除 epoll 项。
+2. `__ep_remove_epi`：专门负责处理 `struct epitem` 相关的移除逻辑，包括从 epoll 红黑树中删除节点。
+通过明确划分文件移除与 epoll 项移除的边界，为修复 UAF 漏洞提供了正确的代码结构基础。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0401ef167239a2df577adaa2e71f8f48f77a8d44

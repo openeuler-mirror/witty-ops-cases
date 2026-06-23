@@ -1,0 +1,31 @@
+#标题
+KSM madvise 误清除高 32 位标志导致 userfaultfd release 触发 kernel BUG
+
+#内核版本
+OLK-6.6
+
+#问题现象
+syzkaller 发现内核崩溃。当对已注册 userfaultfd (MINOR mode) 的 VMA 执行 `madvise(MADV_UNMERGEABLE)` 后关闭 userfaultfd 时，触发 `kernel BUG at mm/userfaultfd.c:2067`（或在新版本内核中触发 WARNING）。这是由于 VMA 状态不一致导致：`vma->vm_userfaultfd_ctx` 指针有效，但 `vma->vm_flags` 中的 UFFD 标志位被意外清空。
+
+#主要错误日志
+[   44.607039] ------------[ cut here ]------------
+[   44.607422] kernel BUG at mm/userfaultfd.c:2067!
+[   44.608148] Oops: invalid opcode: 0000 [#1] SMP DEBUG_PAGEALLOC KASAN NOPTI
+[   44.608814] CPU: 1 UID: 0 PID: 2475 Comm: reproducer Not tainted 6.16.0-rc6 #1 PREEMPT(none)
+[   44.617726] Call Trace:
+[   44.617926]  <TASK>
+[   44.619284]  userfaultfd_release+0xef/0x1b0
+
+#问题根因
+在 x86_64 架构下，`VM_MERGEABLE` 宏定义为 `0x80000000`，C 语言标准将其视为 `unsigned int` 类型。在 `ksm_madvise` 函数执行 `vm_flags &= ~VM_MERGEABLE` 操作时：
+1. `~VM_MERGEABLE` 运算结果为 `0x7fffffff`（unsigned int 类型）。
+2. 该结果在与 `unsigned long` 类型的 `vm_flags` 进行按位与运算前，被零扩展为 64 位：`0x000000007fffffff`。
+3. 原本期望的掩码是保留高位，即 `0xffffffff7fffffff`。
+实际运算导致 `vm_flags` 的高 32 位（可能包含 userfaultfd 相关标志）被意外清零，破坏了 VMA 的标志位状态。
+
+#解决方案
+将 `VM_MERGEABLE` 的宏定义修改为 `BIT(31)`。
+此举强制将该常量定义为 `unsigned long` 类型（在 64 位系统上），使得 `~VM_MERGEABLE` 运算结果的高 32 位填充为 1（即变为 `0xffffffff7fffffff`），从而确保在清除 `VM_MERGEABLE` 标志位时，不会误清除 `vm_flags` 的高 32 位内容。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b3fa0b96caefd052f4b91af20fc57485893570c1

@@ -1,0 +1,26 @@
+#标题
+USB serial belkin_sa: TIOCMBIS/TIOCMBIC ioctl 操作导致调制解调器控制线状态错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 TIOCMBIS 或 TIOCMBIC ioctl 命令单独设置或清除调制解调器控制线（如 RTS 或 DTR）时，内核会错误地去断言未在掩码中指定的控制线。这表现为串口通信控制逻辑异常，例如仅尝试设置 RTS 时，DTR 信号被意外拉低或清除，导致依赖该控制信号的设备通信失败。
+
+#主要错误日志
+- Set RTS error %d
+- Set DTR error %d
+（注：日志原文由 Commit diff 中的 dev_err 调用提取，仅在有错误返回时打印）
+
+#问题根因
+该问题是一个自 2003 年引入 `tiocmset()` 回调函数以来的长期回归缺陷。根因在于 `belkin_sa_tiocmset` 函数中处理 `clear` 标志（对应 TIOCMBIC 操作）的逻辑错误：
+原代码在处理 `clear & TIOCM_RTS` 或 `clear & TIOCM_DTR` 时，将 `rts` 或 `dtr` 变量设置为 0，并在后续无条件执行 USB 命令（`BSA_USB_CMD`）发送。这导致即使调用者只想修改其中一个信号（例如仅清除 RTS），驱动也会将另一个信号（如 DTR）对应的变量置为 0 并发送给硬件，从而错误地去断言了本不应改变的控制线。
+
+#解决方案
+修改 `drivers/usb/serial/belkin_sa.c` 中的 `belkin_sa_tiocmset` 函数：
+1. 修正变量语义与逻辑，当检测到 `clear` 标志包含 `TIOCM_RTS` 或 `TIOCM_DTR` 时，将对应的操作标志 `rts` 或 `dtr` 置为 1，表示需要执行设置操作。
+2. 改为有条件地发送 USB 控制命令，仅在 `rts` 或 `dtr` 标志为 1 时才调用 `BSA_USB_CMD` 发送设置请求。
+3. 发送命令时，参数使用 `control_state` 中的当前实际状态值（`!!(control_state & TIOCM_RTS)`），确保只更新目标信号而不影响其他信号状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c97f1654694f37e2912e90537e613badab4987c8

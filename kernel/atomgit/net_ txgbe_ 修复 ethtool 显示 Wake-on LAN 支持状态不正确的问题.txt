@@ -1,0 +1,20 @@
+#标题
+net: txgbe: 修复 ethtool 显示 Wake-on LAN 支持状态不正确的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ethtool 查询网卡 Wake-on LAN (WoL) 功能时，无论硬件实际是否支持，均错误地显示网卡支持单播、多播、广播和魔术包等多种唤醒模式。这导致用户在硬件不支持 WoL 的设备上尝试配置唤醒功能时产生误判，且配置行为与实际硬件能力不符。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `txgbe_get_wol` 函数中，未正确根据硬件子系统设备 ID 判断 WoL 支持能力，直接硬编码声明了 `WAKE_UCAST | WAKE_MCAST | WAKE_BCAST | WAKE_MAGIC` 全部支持。同时，在 `txgbe_set_wol` 函数中，允许用户设置硬件并不支持的 UCAST、MCAST、BCAST 唤醒模式，而实际上硬件仅支持 `WAKE_MAGIC`。
+
+#解决方案
+修改 `txgbe_get_wol` 逻辑，将 `wol->supported` 初始化为 0，优先检查 `(hw->subsystem_device_id & TXGBE_WOL_MASK) != TXGBE_WOL_SUP`，若硬件不支持则直接返回；若支持，则仅设置 `wol->supported = WAKE_MAGIC`。同时，在 `txgbe_set_wol` 中移除对 `WAKE_UCAST`、`WAKE_MCAST`、`WAKE_BCAST` 的设置处理，确保驱动上报和配置的 WoL 功能与硬件实际能力（仅支持魔术包唤醒）一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ed4c5468b9279d989760da1baac97877f479e8d

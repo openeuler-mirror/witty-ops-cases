@@ -1,0 +1,28 @@
+#标题
+KMSAN 访问影子内存越界导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 KMSAN（KernelMemorySanitizer）的内核上运行 `sha224_kunit` 测试时触发崩溃。具体表现为调用 `kmsan_internal_set_shadow_origin()` 函数时发生缺页错误，导致内核 Oops。
+
+#主要错误日志
+BUG: unable to handle page fault for address: ffffbc3840291000
+#PF: supervisor read access in kernel mode
+#PF: error_code(0x0000) - not-present page
+Oops: 0000 [#1] SMP NOPTI
+RIP: 0010:kmsan_internal_set_shadow_origin+0x91/0x100
+Call Trace:
+ <TASK>
+ __msan_memset+0xee/0x1a0
+ sha224_final+0x9e/0x350
+
+#问题根因
+当 `memset()` 操作的缓冲区地址未 4 字节对齐且延伸至保护页边缘时，`kmsan_internal_set_shadow_origin()` 函数末尾的循环在访问影子内存字节时逻辑错误。该函数对地址和大小进行了向下取整以处理 origin，但在检查对应的影子字节时，错误地使用了原始未对齐的影子地址，导致访问超出缓冲区影子内存的范围，进而访问到未映射的内存区域引发崩溃。
+
+#解决方案
+修改 `mm/kmsan/core.c` 中的 `kmsan_internal_set_shadow_origin` 函数。引入 `aligned_shadow` 变量，在地址未对齐的情况下，正确计算并使用对齐后的影子地址来访问影子字节，确保不会越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/27b8e79c9a60f2cc2e9fdc526d3d09aa23fa2189

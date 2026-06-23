@@ -1,0 +1,20 @@
+#标题
+bonding: enslave失败后因slave数组更新导致的use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在bonding驱动进行slave设备添加操作时，如果在更新slave数组之后、slave完全初始化完成之前发生错误（如XDP程序设置失败）导致enslave流程回滚失败，内核后续访问该slave数据结构时发生Use-After-Free，可能导致内核崩溃或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在`bond_enslave`函数中，代码过早调用了`bond_update_slave_arr`来更新slave数组。如果在此之后、slave完全加入之前发生错误（例如检查slave设备的XDP支持情况失败），错误处理路径会释放该slave结构，但该slave指针已经被添加到了活跃的slave数组中。这导致后续数据包发送流程遍历slave数组时，访问到了已被释放的内存地址。
+
+#解决方案
+将`bond_update_slave_arr(bond, NULL)`的调用位置从XDP功能检查之前移动到XDP相关设置完成之后。确保只有当slave设备完全通过了所有检查并成功加入后，才更新slave数组，从而避免在错误回滚时出现数组引用悬空指针的情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3cc8abee7d7f0cdc2e57dbfe91bddd42650f6bbe

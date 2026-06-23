@@ -1,0 +1,20 @@
+#标题
+spi: mpc52xx: 驱动卸载时因竞争条件导致释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 mpc52xx_spi 驱动模块（执行 unbind 操作）时，可能触发内核崩溃或内存非法访问。这是由于在中断处理程序仍在调度工作队列的同时，驱动已释放了相关资源，导致释放后使用。
+
+#主要错误日志
+未知
+
+#问题根因
+在驱动的移除函数 `mpc52xx_spi_remove` 中，`cancel_work_sync(&ms->work)` 被放置在 `free_irq` 之前。由于中断处理程序会调度该 work，如果在取消工作队列之前先释放了中断，中断处理程序可能仍在运行并尝试调度已被取消或正在清理的 work，从而导致竞争条件，引发 use-after-free（释放后使用）。
+
+#解决方案
+调整 `mpc52xx_spi_remove` 函数中的代码执行顺序。先调用 `free_irq` 禁用并释放中断，随后再调用 `cancel_work_sync` 取消工作队列。这确保了在清理工作队列时，不再有新的中断来调度该 work，从而避免了竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/be3f79c6d6dc6ed90d7057f9163725f1b05554ed

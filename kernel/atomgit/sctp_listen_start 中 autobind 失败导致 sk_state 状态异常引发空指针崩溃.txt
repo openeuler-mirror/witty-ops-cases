@@ -1,0 +1,26 @@
+#标题
+sctp_listen_start 中 autobind 失败导致 sk_state 状态异常引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `sctp_autobind()` 在 `sctp_listen_start()` 函数中执行失败时，socket 状态未正确恢复为 CLOSED。导致后续再次调用 `sctp_inet_listen()` 时，如果设置了 `SCTP_REUSE_PORT`，内核会访问空指针 `bind_hash` 从而引发崩溃。
+
+#主要错误日志
+KASAN: null-ptr-deref in range [0x0000000000000000-0x0000000000000007]
+RIP: 0010:sctp_inet_listen+0x7f0/0xa20 net/sctp/socket.c:8617
+Call Trace:
+ <TASK>
+ __sys_listen_socket net/socket.c:1883 [inline]
+ __sys_listen+0x1b7/0x230 net/socket.c:1894
+ __do_sys_listen net/socket.c:1902 [inline]
+
+#问题根因
+在 `sctp_listen_start()` 被 `sctp_inet_listen()` 调用时，代码先将 `sk_state` 设置为了 `LISTENING`。如果随后的 `sctp_autobind()` 因某种原因失败，函数直接返回错误，但未将 `sk_state` 重置回 `CLOSED`。这导致下一次调用 `sctp_inet_listen()` 时，内核误认为 socket 已处于监听状态，进而解引用了为空的 `bind_hash` 指针。
+
+#解决方案
+在 `sctp_listen_start()` 函数中，当 `sctp_autobind(sk)` 执行失败时，在返回 `-EAGAIN` 错误码之前，调用 `inet_sk_set_state(sk, SCTP_SS_CLOSED)` 将 socket 状态重置为 CLOSED。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/024efad37ebe861ea06e4f8c7458510bc0df33a8

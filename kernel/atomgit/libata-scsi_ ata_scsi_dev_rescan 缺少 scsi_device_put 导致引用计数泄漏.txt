@@ -1,0 +1,20 @@
+#标题
+libata-scsi: ata_scsi_dev_rescan 缺少 scsi_device_put 导致引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 ATA 设备重新扫描（rescan）过程中，若 `scsi_resume_device` 返回 `-EWOULDBLOCK`，函数直接跳转退出，未释放之前获取的 `scsi_device` 引用，导致引用计数泄漏。这可能导致设备状态异常，进而影响后续的设备操作或系统电源管理行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ata_scsi_dev_rescan` 函数中，当 `scsi_resume_device(sdev)` 返回 `-EWOULDBLOCK` 时，代码逻辑直接通过 `goto unlock_scan` 跳出。由于在函数入口处通过 `scsi_device_get(sdev)` 获取了设备引用，但在该错误处理分支中遗漏了调用 `scsi_device_put(sdev)` 来释放引用，从而导致 `sdev` 的引用计数无法正确归零。
+
+#解决方案
+在 `drivers/ata/libata-scsi.c` 文件的 `ata_scsi_dev_rescan` 函数中，针对 `scsi_resume_device` 返回 `-EWOULDBLOCK` 的分支，在执行 `goto unlock_scan` 跳转之前，增加调用 `scsi_device_put(sdev)` 以确保引用计数被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5ad226b26a8169a455fab28ce5ca5f96c1e9df3c

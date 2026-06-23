@@ -1,0 +1,26 @@
+#标题
+unic 驱动 JFC 上下文域字段初始化错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在部分硬件版本（非 A.0 或 K.0）上，JFC（Job Finish Context）上下文初始化时使用了错误的固定值，导致域段信息（domain segment information）不正确。这会导致初始化 JFC 上下文时的验证流程失败，可能引发功能异常或初始化错误。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码在初始化 JFC 上下文时，未根据硬件版本区分处理 `ceqn` 字段的位宽差异：
+1. 旧代码统一使用了 8 位的 `ceqn` 结构，且 `queue_token_id` 直接使用了传入的参数，未正确根据硬件能力选择初始化值。
+2. 在支持 9 位 `ceqn` 的新硬件版本上，错误的位域定义和初始化值导致上下文校验失败。
+3. 此外，代码中 `cq_cnt_mode` 等字段的赋值逻辑也被固化，未遵循正确的初始化规范。
+
+#解决方案
+1. 在 `unic_jfc_ctx` 结构体定义中引入联合体，分别支持 8 位 (`dw2_ceqn8`) 和 9 位 (`dw2_ceqn9`) 的 `ceqn` 位域定义，以适配不同硬件版本。
+2. 新增辅助函数 `unic_jfc_support_ceqn9`，通过判断硬件版本 (`hw_ver`) 决定是否支持 9 位 `ceqn`。
+3. 修改 `unic_init_jfc_ctx` 初始化逻辑，根据硬件版本选择正确的联合体成员进行赋值，确保 `queue_token_id`、`cq_cnt_mode` 和 `ceqn` 等字段初始化正确。
+4. 同步更新 debugfs 输出接口 `unic_dump_jfc_ctx_info_sw`，根据硬件版本打印正确的 `ceqn` 字段值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7bf32a49ffdb2880a61c242aae58480974eb98f6

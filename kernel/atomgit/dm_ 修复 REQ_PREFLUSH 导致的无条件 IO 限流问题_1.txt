@@ -1,0 +1,20 @@
+#标题
+dm: 修复 REQ_PREFLUSH 导致的无条件 IO 限流问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Device Mapper (dm) 的场景下（如 XFS 文件系统），当提交带有 REQ_PREFLUSH 标志的 bio 时，dm 层生成的 flush_bio 会无条件地被 wbt（Writeback Throttling）机制限流。这导致本不应被限流的元数据写入操作（如 XFS 的 iclog 写入）在 `wbt_wait()` 处陷入长时间等待，引发 IO 性能严重下降或卡顿。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__send_empty_flush()` 函数中，dm 层构造 flush_bio 时硬编码设置了 `REQ_OP_WRITE | REQ_PREFLUSH | REQ_SYNC` 标志，未保留原始 bio 中的 `REQ_IDLE` 标志。这导致 `wbt_should_throttle()` 判断逻辑认为该 bio 需要被限流，从而触发 `wbt_wait()`。尽管 XFS 等文件系统层已经通过相关补丁（如 commit 2def2845cc33）试图避免元数据 IO 被限流，但 dm 层在处理 flush 时丢弃了 `REQ_IDLE` 标志，导致限流仍然发生。
+
+#解决方案
+修改 `drivers/md/dm.c` 中的 `__send_empty_flush()` 函数。在构造 flush_bio 的标志位时，检查原始 bio (`ci->io->orig_bio`) 是否同时包含 `REQ_IDLE` 和 `REQ_SYNC` 标志。如果是，则在 flush_bio 中也添加 `REQ_IDLE` 标志。这使得 `wbt_should_throttle()` 返回 false，从而避免进入 `wbt_wait()`，解决了非预期的 IO 限流问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7c476cdbac02c4e46a6cf43384f6bfefbba773f4

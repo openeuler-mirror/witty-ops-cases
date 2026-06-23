@@ -1,0 +1,27 @@
+#标题
+[arm64 编译头文件依赖缺失导致构建失败]
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 arm64 架构下编译包含 `<linux/mem_encrypt.h>` 的代码时，由于头文件隐式依赖缺失，导致编译过程中出现多个错误和警告，编译无法通过。
+
+#主要错误日志
+- `error: call to undeclared library function 'memcpy' with type 'void *(void *, const void *, unsigned long)'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]`
+- `warning: declaration of 'struct device' will not be visible outside of this function [-Wvisibility]`
+- `error: call to undeclared function 'virt_to_phys'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]`
+
+#问题根因
+arm64 架构下的头文件 `asm/mem_encrypt.h` 和 `asm/rsi_cmds.h` 缺少必要的显式包含声明。具体为：
+1. `asm/mem_encrypt.h` 中使用了 `struct device` 但未前置声明该结构体。
+2. `asm/rsi_cmds.h` 中使用了 `memcpy` 和 `virt_to_phys` 函数，但未包含对应的 `<linux/string.h>` 和 `<asm/memory.h>` 头文件。
+这些依赖在 x86 架构下可能由其他头文件间接包含，但在 arm64 下未被覆盖，导致编译器无法识别相关函数和结构体。
+
+#解决方案
+通过补充缺失的头文件包含与前置声明修复编译错误：
+1. 在 `arch/arm64/include/asm/mem_encrypt.h` 中添加 `struct device;` 的前置声明。
+2. 在 `arch/arm64/include/asm/rsi_cmds.h` 中添加 `#include <linux/string.h>` 和 `#include <asm/memory.h>`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/20362b95ff48ccdc52585077cde67ffbd6a7c35a

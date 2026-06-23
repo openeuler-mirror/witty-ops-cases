@@ -1,0 +1,27 @@
+#标题
+EDAC/ie31200: 初始化函数错误路径处理顺序错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ie31200_edac 模块初始化过程中，若 pci_register_driver 注册失败或后续 pci_get_device 获取设备失败，模块退出时的错误处理路径（error path）执行顺序不正确。这会导致资源释放顺序混乱，可能引发资源泄露或内核状态不一致，进而影响系统后续对相关 PCI 设备的操作。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 ie31200_init() 的错误处理标签 fail0 和 fail1 的跳转逻辑与资源清理代码的排列顺序不匹配。
+原有的错误处理逻辑中，fail1 标签用于注销 pci_driver，fail0 标签用于释放 pci_dev 结构。然而，在 pci_register_driver 注册成功后，若后续初始化步骤失败（如 pci_get_device 失败），代码错误地跳转到了 fail1（仅注销驱动），遗漏了释放 mci_pdev 的步骤；或者在某些路径下，执行的清理操作与资源的申请顺序相反，未遵循“后申请的资源先释放”的原则。
+
+#解决方案
+修正 ie31200_init() 函数的错误处理顺序，确保资源释放逻辑严格遵循“后申请先释放”的原则：
+1. 当 pci_register_driver 失败时，直接返回错误码，无需执行其他清理。
+2. 当后续 pci_get_device 失败时，跳转至 fail0 标签。
+3. 调整 fail0 和 fail1 标签对应的代码块顺序：
+   - fail1：负责释放 pci_dev 结构（调用 pci_dev_put）。
+   - fail0：负责注销 pci_driver（调用 pci_unregister_driver）。
+   此调整保证了在初始化失败时，先释放后续申请的 mci_pdev，再注销之前注册成功的驱动，避免资源泄露。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d91ac7e55c3efe6bcab6b2c5158c5f8c5c8cfa72

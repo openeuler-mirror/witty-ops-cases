@@ -1,0 +1,24 @@
+#标题
+ipv6：高并发下一跳路由变更导致 fib6_select_path 软死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IPv6 路由表频繁刷新（高频率添加/删除下一跳）且同时存在大量 IPv6 出流量（如 iperf3 压测）的场景下，内核触发软死锁。具体表现为内核响应停滞，并在一段时间后触发 kernel panic（若配置了 softlockup_panic），导致系统不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在处理 IPv6 多路径路由选择时，`fib6_select_path` 函数遍历 `fib6_siblings` 链表使用的是非 RCU 保护的读操作（如 `list_for_each_entry_safe`），而在路由添加或删除路径中（如 `fib6_add_rt2node`、`fib6_del_route`）对同一链表的修改操作也未使用 RCU 机制（如使用 `list_del_init`）。
+这导致读侧在遍历链表时，写侧可能正在并发修改链表节点，引发竞争条件。读侧因链表结构损坏或指针异常陷入无限循环，从而导致 CPU 长时间处于中断或软中断上下文无法退出，触发 soft lockup。
+
+#解决方案
+将相关链表操作转换为 RCU 保护模式，以实现读写无锁并发：
+1. **读侧遍历保护**：将 `fib6_select_path`、`rt6_fill_node`、`rt6_nlmsg_size` 等函数中的链表遍历操作从 `list_for_each_entry_safe` 替换为 `list_for_each_entry_rcu`，并添加 `rcu_read_lock()` 和 `rcu_read_unlock()` 保护区间。
+2. **写侧修改保护**：将 `fib6_add_rt2node` 和 `fib6_del_route` 中的链表添加与删除操作替换为 RCU 版本，如将 `list_add_tail` 替换为 `list_add_tail_rcu`，将 `list_del_init` 替换为 `list_del_rcu`。
+3. **内存分配调整**：将 `inet6_rt_notify` 中的内存分配标志从 `gfp_any()` 改为 `GFP_ATOMIC`，以适应 RCU 读侧加锁上下文的要求，防止睡眠。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3e0125e653b7cab737919e85503a68ca69aa8c0f

@@ -1,0 +1,23 @@
+#标题
+kmemleak对象释放接口使用错误导致内存处理不当
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在kmemleak初始化或运行过程中，当尝试插入的内存对象地址已存在于红黑树中（发生冲突）时，系统调用错误的接口（`kmem_cache_free`）释放该对象。由于该对象可能源自内存池而非Slab分配器，错误的释放接口会导致内存管理状态不一致，可能引发内存泄露或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+kmemleak对象是通过`mem_pool_alloc()`分配的，该函数可能从Slab分配器返回内存，也可能从内部静态内存池`mem_pool[]`返回内存。在代码逻辑中，当`__link_object`检测到对象地址冲突时，原代码直接调用`kmem_cache_free(object_cache, object)`来释放刚分配的对象。如果该对象恰好来自静态内存池`mem_pool[]`，使用Slab释放接口是不合法的，因为其底层存储机制不匹配。
+
+#解决方案
+修改对象释放逻辑，将冲突场景下的释放接口由`kmem_cache_free()`替换为`mem_pool_free()`。
+具体变更：
+1. 修改`__link_object`函数返回值为`int`类型，在检测到对象冲突时返回`-EEXIST`，正常插入时返回`0`。
+2. 在调用者`__create_object`中检查`__link_object`的返回值，如果返回非零值（发生冲突），则调用`mem_pool_free(object)`来正确释放对象，确保释放接口与分配接口`mem_pool_alloc()`相匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c73813d6931b4f697331ba144adb8c827a0e40ef

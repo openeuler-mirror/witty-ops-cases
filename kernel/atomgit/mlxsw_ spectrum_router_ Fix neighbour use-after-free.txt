@@ -1,0 +1,27 @@
+#标题
+mlxsw: spectrum_router: Fix neighbour use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Mellanox mlxsw 驱动进行路由邻居表项（neighbour entry）操作时，可能触发内核内存滥用，导致系统崩溃或不可预测的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在邻居表项的分配与销毁流程中，引用计数管理不一致。具体表现为：
+1. `mlxsw_sp_neigh_entry_alloc` 函数中未持有 `neighbour` 结构体的引用计数，但在释放函数 `mlxsw_sp_neigh_entry_free` 中进行了释放操作。
+2. `mlxsw_sp_nexthop_neigh_init` 调用 `neigh_lookup` 或 `neigh_create` 获取了引用，但未在适当时机释放该临时引用，导致引用计数泄漏或逻辑混乱。
+3. `mlxsw_sp_nexthop_dead_neigh_replace` 中引用计数的获取与释放逻辑混乱，容易导致 use-after-free。
+
+#解决方案
+调整 `neighbour` 结构体的引用计数管理逻辑，确保生命周期正确：
+1. 在 `mlxsw_sp_neigh_entry_alloc` 中增加 `neigh_hold(n)` 调用，确保邻居对象在表项存活期间不被释放。
+2. 在 `mlxsw_sp_neigh_entry_free` 中对应的增加 `neigh_release(neigh_entry->key.n)` 调用，平衡引用计数。
+3. 在 `mlxsw_sp_nexthop_neigh_init` 末尾增加 `neigh_release(n)`，释放初始化时获取的临时引用（因 `neigh_entry` 已持有引用）。
+4. 在 `mlxsw_sp_nexthop_dead_neigh_replace` 中，将 `neigh_release(old_n)` 移至新表项插入成功后立即执行，移除循环中冗余的 `neigh_release`、`neigh_clone` 以及末尾多余的 `neigh_release` 调用，修正引用计数增减逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cd0b0a63f44f1cd822c63ecffe8a7e615938c98d

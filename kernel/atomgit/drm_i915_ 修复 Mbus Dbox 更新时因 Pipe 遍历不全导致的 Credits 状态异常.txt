@@ -1,0 +1,20 @@
+#标题
+drm/i915: 修复 Mbus Dbox 更新时因 Pipe 遍历不全导致的 Credits 状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel 显示驱动中，当对特定 Pipe 进行禁用或启用操作时，会导致其他 Pipe 的 Credits 状态受到影响。若在 `intel_mbus_dbox_update` 过程中仅遍历当前状态中的 Pipe，而非所有处于 Active 状态的 Pipe，将导致硬件状态配置不一致，可能引发显示功能异常或不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `intel_mbus_dbox_update` 函数使用了 `for_each_new_intel_crtc_in_state` 宏进行遍历，该宏仅遍历当前状态涉及的 Crtc，且代码中存在 `if (!new_crtc_state->hw.active)` 的检查，导致逻辑仅处理了当前状态下的 Pipe。实际上，禁用或启用某一个 Pipe 会影响其他 Pipe 的 Credits，因此必须遍历所有 Active 的 Pipe 来更新配置，而非仅限于当前状态变更涉及的 Pipe。
+
+#解决方案
+修改遍历逻辑，将 `for_each_new_intel_crtc_in_state` 替换为 `for_each_intel_crtc_in_pipe_mask`，并直接使用 `new_dbuf_state->active_pipes` 作为掩码进行遍历。此举确保了函数能遍历到所有处于 Active 状态的 Pipe，从而正确处理所有相关 Pipe 的 Credits 更新，修复了遍历范围缺失的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e547e7ec3e712b87c5b9ce800d6d906f00bc03f0

@@ -1,0 +1,23 @@
+#标题
+net: sched: ets qdisc OOB 越界索引导致本地提权风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户向 ETS qdisc 传递 clid（class ID）为 0 时，`ets_class_from_arg()` 函数触发数组越界访问（Out-Of-Bounds）。内核日志记录 UBSAN 异常，指示索引值溢出（如 18446744073709551615）。该越界漏洞可能被利用导致本地特权升级。
+
+#主要错误日志
+[   18.853271] UBSAN: array-index-out-of-bounds in net/sched/sch_ets.c:93:20
+[   18.853743] index 18446744073709551615 is out of range for type 'ets_class [16]'
+[   18.864022]  ets_class_change+0x3d6/0x3f0
+[   18.864322]  tc_ctl_tclass+0x251/0x910
+
+#问题根因
+`ets_class_from_arg()` 函数在处理传入的 `arg` 参数时缺乏边界检查。当传入的 `arg` 为 0 时，代码执行 `&q->classes[arg - 1]` 运算，导致索引计算为 -1，在无符号整数运算下转化为一个巨大的数值（如 18446744073709551615），从而引发越界访问。
+
+#解决方案
+在 `ets_class_from_arg()` 函数中增加参数校验逻辑，判断 `arg` 是否为 0 或大于 `q->nbands`。如果条件成立，直接返回 NULL，阻止非法索引计算。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4c81fd0d7cf6448d1de834745d9756a831ace29c

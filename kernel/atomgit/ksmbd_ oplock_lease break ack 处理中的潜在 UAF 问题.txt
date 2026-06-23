@@ -1,0 +1,20 @@
+#标题
+ksmbd: oplock/lease break ack 处理中的潜在 UAF 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SMB2 oplock 或 lease break 应答时，若 `ksmbd_iov_pin_rsp` 函数返回错误，内核可能发生 Use-After-Free（UAF）。此时 `opinfo->state` 可能已被访问，且 `opinfo_put` 和 `ksmbd_fd_put` 可能被调用两次，导致内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb20_oplock_break_ack` 和 `smb21_lease_break_ack` 函数的原有逻辑中，释放资源（如 `opinfo_put`、`ksmbd_fd_put`）的操作被放置在 `ksmbd_iov_pin_rsp` 调用之前。当 `ksmbd_iov_pin_rsp` 返回错误时，代码跳转到错误处理标签 `err_out`，导致释放资源的代码被重复执行；同时也可能访问到已释放的 `opinfo` 结构体，从而引发 Use-After-Free。
+
+#解决方案
+调整代码执行顺序，将资源释放操作（设置 `opinfo->op_state`、唤醒队列、引用计数释放等）移至 `ksmbd_iov_pin_rsp` 调用之后。修改后的逻辑确保无论 `ksmbd_iov_pin_rsp` 成功与否，资源释放操作仅执行一次，且在确认响应数据正确处理后再进行清理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f81dc92623bb162d3990bb45270643c85f2af40

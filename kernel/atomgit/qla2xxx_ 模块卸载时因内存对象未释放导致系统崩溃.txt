@@ -1,0 +1,22 @@
+#标题
+qla2xxx: 模块卸载时因内存对象未释放导致系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行驱动模块的加载/卸载循环测试时，系统发生崩溃。具体表现为执行 `rmmod` 卸载模块过程中，内核检测到 SLAB 缓存 `qla2xxx_srbs` 中仍有对象未被释放，从而触发 BUG 并打印调用栈，导致模块无法正常卸载。
+
+#主要错误日志
+[61110.467498] BUG qla2xxx_srbs (Tainted: G           OE    --------  --- ): Objects remaining in qla2xxx_srbs on __kmem_cache_shutdown()
+[61110.467639] kmem_cache_destroy qla2xxx_srbs: Slab cache still has objects when called from qla2x00_module_exit+0x93/0x99 [qla2xxx]
+[61110.467659] WARNING: CPU: 53 PID: 455206 at mm/slab_common.c:520 kmem_cache_destroy+0x14d/0x160
+
+#问题根因
+在函数 `qla_fab_async_scan` 中，如果检测到 `SF_SCANNING` 标志位已置位（表示扫描处于活动状态），函数会直接返回。此时，传入的 `sp` 指针（SRB 结构体）未被执行释放操作。这导致对应的内存对象遗留在 `qla2xxx_srbs` 缓存中，当模块卸载销毁缓存时，内核发现仍有对象存在，从而触发 BUG 导致系统崩溃。
+
+#解决方案
+修改 `qla_fab_async_scan` 函数的错误处理路径。当检测到扫描活动正在进行时，不再直接返回，而是跳转到 `done_free_sp` 标签处执行内存释放逻辑，确保 `sp` 结构体被正确释放，避免内存泄漏和后续的系统崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0fee58a3a2822b1bbc4282ea6c7ab3622f027617

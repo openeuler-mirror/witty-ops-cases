@@ -1,0 +1,39 @@
+#标题
+内存离线迁移毒化页时内核触发 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行内存热拔除（Memory Hotplug）或离线操作时，如果涉及迁移包含硬件错误的中毒页，内核会触发 WARNING 并打印调用栈。触发条件通常为对已存在硬件错误的内存进行离线操作。
+
+#主要错误日志
+```
+------------[ cut here ]------------
+WARNING: CPU: 1 PID: 365 at mm/rmap.c:1847 try_to_unmap_one+0x8fc/0xd3c
+Modules linked in:
+CPU: 1 UID: 0 PID: 365 Comm: bash Tainted: G        W          6.13.0-rc1-00018-gacdb4bbda7ab #42
+...
+Call trace:
+ try_to_unmap_one+0x8fc/0xd3c (P)
+ try_to_unmap_one+0x3dc/0xd3c (L)
+ rmap_walk_anon+0xdc/0x1f8
+ rmap_walk+0x3c/0x58
+ try_to_unmap+0x88/0x90
+ unmap_poisoned_folio+0x30/0xa8
+ do_migrate_range+0x4a0/0x568
+ offline_pages+0x5a4/0x670
+ ...
+---[ end trace 0000000000000000 ]---
+```
+
+#问题根因
+在进行内存离线迁移时，函数 `do_migrate_range` 会调用 `try_to_unmap` 解除毒化页的映射。原代码在调用 `try_to_unmap` 时仅传递了 `TTU_IGNORE_MLOCK` 标志，未传递 `TTU_HWPOISON` 标志。
+根据之前的提交 `6da6b1d4a7df` ("mm/hwpoison: convert TTU_IGNORE_HWPOISON to TTU_HWPOISON")，逻辑要求在解除毒化页映射时必须显式设置 `TTU_HWPOISON` 标志，否则 `try_to_unmap_one` 在处理该类页面时因标志位缺失触发内部校验警告。
+
+#解决方案
+在 `do_migrate_range` 函数中处理已映射毒化页的分支里，修改 `try_to_unmap` 的调用参数，添加 `TTU_HWPOISON` 标志。
+具体变更：将 `try_to_unmap(folio, TTU_IGNORE_MLOCK)` 修改为 `try_to_unmap(folio, TTU_IGNORE_MLOCK | TTU_HWPOISON)`，确保迁移流程正确处理中毒页的解除映射逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/24dfcc694f65d8beab419b564b428ea6485fbdde

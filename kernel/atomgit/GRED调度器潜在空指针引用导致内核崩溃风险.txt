@@ -1,0 +1,20 @@
+#标题
+GRED调度器潜在空指针引用导致内核崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 GRED 调度器初始化过程中，如果内存分配失败（kzalloc 返回 NULL），代码进入错误处理路径并调用 gred_destroy。在 gred_destroy 中进一步调用 gred_offload 时，memset 可能接收到 NULL 指针作为输入，从而导致潜在的内核 crash。
+
+#主要错误日志
+未知
+
+#问题根因
+在 gred_init 函数中，如果 kzalloc 返回 NULL 指针，代码会执行错误处理路径并调用 gred_destroy。gred_destroy 无条件调用 gred_offload，而在该场景下 table->opt 为 NULL，导致 gred_offload 内部的 memset 操作引发空指针引用。此时 gred_change_table_def() 尚未被调用，因此没有必要调用 ->ndo_setup_tc()。
+
+#解决方案
+在 gred_destroy 函数中调用 gred_offload 之前，增加对 table->opt 指针的非空检查。仅当 table->opt 不为 NULL 时，才执行 gred_offload(sch, TC_GRED_DESTROY) 操作，从而避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc22e6810156370d216ee31b6518179d5202128c

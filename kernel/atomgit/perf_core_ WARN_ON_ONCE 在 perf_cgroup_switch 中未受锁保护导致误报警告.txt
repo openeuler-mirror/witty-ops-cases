@@ -1,0 +1,20 @@
+#标题
+perf/core: WARN_ON_ONCE 在 perf_cgroup_switch 中未受锁保护导致误报警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 perf cgroup 事件时，系统触发内核警告 WARN_ON_ONCE，导致 dmesg 中出现警告栈信息。该警告是由于并发访问导致的误报，即在锁保护区域外检查 `nr_cgroups` 状态，从而在并发场景下（如 `perf_cgroup_event_disable` 同时运行）触发了本不应触发的警告。
+
+#主要错误日志
+WARNING: CPU: ... PID: ... at kernel/events/core.c:... perf_cgroup_switch+0x.../0x...
+
+#问题根因
+前一个修复提交 3172fb986666 ("perf/core: Fix WARN in perf_cgroup_switch()") 试图修复 `perf_cgroup_switch` 和 `perf_cgroup_event_disable` 之间的并发问题，但未将 `WARN_ON_ONCE(cpuctx->ctx.nr_cgroups == 0)` 移入锁保护区域内。这导致该检查语句在未持有锁的情况下执行，无法保证数据一致性，在并发场景下 `nr_cgroups` 可能暂时为 0，从而错误地触发了警告。
+
+#解决方案
+将 `WARN_ON_ONCE(cpuctx->ctx.nr_cgroups == 0)` 语句从原位置移动至获取锁之后的临界区内（即 `perf_ctx_disable` 调用之前），确保在检查 `nr_cgroups` 时数据受锁保护，避免因并发修改导致的误报警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8ebc410997d01db9f0572235802a70a724b7387f

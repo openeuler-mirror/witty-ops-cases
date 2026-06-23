@@ -1,0 +1,20 @@
+#标题
+RDMA/mlx5: MPV设备vport回环配置被意外覆盖导致功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多端口虚拟化（MPV）设备场景下，vport的回环功能本应永久启用，但在驱动运行过程中，该配置被其他驱动流程覆盖或禁用，导致回环功能失效，影响MPV设备的正常通信或数据传输路径。
+
+#主要错误日志
+未知
+
+#问题根因
+先前代码虽然设定了MPV设备的回环为启用状态，但缺少一种“强制启用”的状态标记机制。这导致当驱动中的其他流程（如TD或QP相关的逻辑）运行时，能够无视MPV的回环需求，错误地修改配置状态并禁用回环，从而覆盖了MPV所需的默认配置。
+
+#解决方案
+在 `mlx5_ib_lb_state` 结构体中新增 `force_enable` 布尔字段。修改 `mlx5_ib_enable_lb_mp` 函数，在启用MPV回环后将该字段置为 true；修改 `mlx5_ib_disable_lb_mp` 函数，在禁用时将其置为 false。同时在 `mlx5_ib_enable_lb` 和 `mlx5_ib_disable_lb` 入口处增加判断逻辑：若 `force_enable` 为 true，则直接返回，阻止其他流程修改回环状态，从而确保MPV设备的回环配置不被覆盖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c0d1814b446091f82943ac65be697a746266a95a

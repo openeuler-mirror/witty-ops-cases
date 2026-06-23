@@ -1,0 +1,20 @@
+#标题
+PCI/AER: 请求重置恢复阶段 uevent 事件缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PCIe 高级错误报告（AER）恢复流程中，当驱动程序的 `error_detected()` 回调函数请求重置（返回 `PCI_ERS_RESULT_NEED_RESET`）时，系统未能向用户空间发送 `BEGIN_RECOVERY` 相关的 uevent 事件，导致用户空间守护进程（如 udev 规则）无法感知恢复流程的开始，进而导致恢复流程异常或设备状态未正确同步。
+
+#主要错误日志
+未知
+
+#问题根因
+自提交 `7b42d97e99d3` ("PCI/ERR: Always report current recovery status for udev") 起，AER 恢复机制开始使用 `error_detected()` 的返回值作为参数调用 `pci_uevent_ers()`。然而，`pci_uevent_ers()` 函数内部的 switch 处理逻辑遗漏了对 `PCI_ERS_RESULT_NEED_RESET` 返回值的处理分支。该返回值未映射到任何 uevent 动作，导致驱动请求重置时，`BEGIN_RECOVERY` 事件未能被触发发送。
+
+#解决方案
+修改 `drivers/pci/pci-driver.c` 文件中的 `pci_uevent_ers()` 函数，在 switch 语句中增加对 `PCI_ERS_RESULT_NEED_RESET` 的处理分支，将其与 `PCI_ERS_RESULT_NONE` 及 `PCI_ERS_RESULT_CAN_RECOVER` 归为一类，统一触发 `ERROR_EVENT=BEGIN_RECOVERY` 事件，确保恢复流程开始时能正确通知用户空间。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3791ee0afba8556a0b1a0a5fc8682e67564695db

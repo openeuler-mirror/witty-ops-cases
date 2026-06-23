@@ -1,0 +1,33 @@
+#标题
+文件系统冻结与解冻期间磁盘离线触发死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 xfstests generic/390 测试用例并同时进行磁盘下线/上线操作时，系统发生死锁。进程进入不可中断睡眠状态，具体表现为 `do_renameat2` 等系统调用调用链长期阻塞，无法完成文件操作。
+
+#主要错误日志
+fsstress        D    0 11672  11625 0x00000080
+Call Trace:
+ ? __schedule+0x2fc/0x930
+ ? filename_parentat+0x10b/0x1a0
+ schedule+0x28/0x70
+ rwsem_down_read_failed+0x102/0x1c0
+ ? __percpu_down_read+0x93/0xb0
+ __percpu_down_read+0x93/0xb0
+ __sb_start_write+0x5f/0x70
+ mnt_want_write+0x20/0x50
+ do_renameat2+0x1f3/0x550
+ __x64_sys_rename+0x1c/0x20
+ do_syscall_64+0x5b/0x1b0
+ entry_SYSCALL_64_after_hwframe+0x65/0xca
+
+#问题根因
+当文件系统（如 ext4）正在进行冻结操作时，若因磁盘离线导致 I/O 错误，文件系统会切换为只读模式。随后的 thaw_super() 解冻操作在检查到文件系统只读时，会直接跳过解锁 percpu 冻结信号量的步骤，导致信号量被永久持有，其他请求该信号量的进程（如 rename 操作）陷入死锁等待。
+
+#解决方案
+在 `sb_writers` 结构体中新增 `frozen_ro` 字段，用于记录文件系统在冻结时刻是否处于只读状态。在 `freeze_super` 函数中根据当前状态设置该标志位，在 `thaw_super_locked` 函数中依据该标志位判断是否需要释放冻结持有者及更新状态，从而确保解冻流程正确释放锁资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2a794f7e21b1ea58904da3fb79a3fa3781db4555

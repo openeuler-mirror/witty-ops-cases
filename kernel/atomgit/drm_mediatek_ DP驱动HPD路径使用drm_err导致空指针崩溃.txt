@@ -1,0 +1,22 @@
+#标题
+drm/mediatek: DP驱动HPD路径使用drm_err导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统启动或面板探测阶段，若 DisplayPort 辅助总线（AUX bus）进行 probe 操作时触发 HPD（Hot-Plug Detect）检测，且此时 `drm_dev` 尚未完成初始化绑定，内核将发生空指针解引用，导致系统崩溃或相关模块加载失败。
+
+#主要错误日志
+Read mstm cap failed: %zd
+Read irq vector failed: %zd
+Can't parse capabilities: %d
+
+#问题根因
+函数 `mtk_dp_wait_hpd_asserted()` 可能通过 `dp_aux_ep_probe` -> `[panel probe]` -> `mtk_edp_wait_hpd_asserted` 调用链被调用，该调用时机早于 `mtk_dp_bridge_attach()` 中 `mtk_dp->drm_dev` 指针的赋值。原代码在 `mtk_dp_wait_hpd_asserted()` 及其调用的 `mtk_dp_parse_capabilities()` 函数中使用了 `drm_err()` 打印日志，该函数内部会引用 `mtk_dp->drm_dev`，从而引发空指针解引用。
+
+#解决方案
+将 `mtk_dp_wait_hpd_asserted()` 和 `mtk_dp_parse_capabilities()` 函数中的 `drm_err()` 调用替换为 `dev_err()`。`dev_err()` 仅依赖设备结构体 `mtk_dp->dev`，避免了对未初始化的 `drm_dev` 指针的访问。同时，在修改后的日志打印中增加了错误码参数，以便于后续调试定位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/28413aca44ab0847b84f549ba83e79fad282cd85

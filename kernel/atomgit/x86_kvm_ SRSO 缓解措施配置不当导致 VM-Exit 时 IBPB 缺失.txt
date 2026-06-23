@@ -1,0 +1,30 @@
+#标题
+x86/kvm: SRSO 缓解措施配置不当导致 VM-Exit 时 IBPB 缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定的 SRSO（Speculative Return Stack Overflow）缓解配置下，系统未能按预期在 VM-Exit 时触发 IBPB（Indirect Branch Prediction Barrier）指令。
+具体表现如下：
+1. 当启动参数为 `spec_rstack_overflow=ibpb` 时，仅触发了 Entry 时的 IBPB，缺失了预期的 VM-Exit 时的 IBPB。
+2. 当启动参数为 `spec_rstack_overflow=ibpb-vmexit` 且系统已设置 `X86_FEATURE_ENTRY_IBPB` 时，`X86_FEATURE_IBPB_ON_VMEXIT` 未被正确设置，导致缓解措施失效。
+3. 部分配置下，尽管系统实际进行了缓解，但仍错误报告系统受 SRSO 漏洞影响。
+
+#主要错误日志
+- 推断：`WARNING: kernel not compiled with CPU_SRSO.`
+- 推断：`WARNING: kernel not compiled with CPU_IBPB_ENTRY.`
+
+#问题根因
+由于 Commit [1]（重新定义了 IBPB 标志位语义）与 Commit [2]（添加 SRSO IBPB 支持）合并时交互处理不当，导致逻辑冲突：
+1. `X86_FEATURE_IBPB_ON_VMEXIT` 标志位的设置条件过于严格或不完整。对于 `spec_rstack_overflow=ibpb` 配置，旧逻辑认为 `X86_FEATURE_ENTRY_IBPB` 足够，未设置 `X86_FEATURE_IBPB_ON_VMEXIT`，导致 VM-Exit 路径跳过 IBPB。
+2. 对于 `spec_rstack_overflow=ibpb-vmexit`，代码被 `CONFIG_CPU_SRSO` 宏错误包裹，且检查逻辑依赖 `!boot_cpu_has(X86_FEATURE_ENTRY_IBPB)`，导致在已开启 Entry IBPB 的系统中无法生效。
+3. 代码依赖配置错误，`UNTRAIN_RET_VM` 实际依赖 `CONFIG_MITIGATION_IBPB_ENTRY` 才能被正确编译进去，但原代码未正确处理此依赖关系。
+
+#解决方案
+1. 对于 `spec_rstack_overflow=ibpb` 配置：强制同时设置 `X86_FEATURE_ENTRY_IBPB` 和 `X86_FEATURE_IBPB_ON_VMEXIT`，并清除冗余的 `X86_FEATURE_RSB_VMEXIT`。
+2. 对于 `spec_rstack_overflow=ibpb-vmexit` 配置：将依赖的编译宏从 `CONFIG_CPU_SRSO` 修正为 `CONFIG_CPU_IBPB_ENTRY`，并移除对 `X86_FEATURE_ENTRY_IBPB` 的反向依赖检查，确保只要微码支持即可开启该缓解措施。
+3. 更新 Kconfig 说明，明确 `CONFIG_MITIGATION_IBPB_ENTRY` 同时支持 `retbleed=ibpb` 和 `spec_rstack_overflow={ibpb,ibpb-vmexit}` 配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/41af3be719bd7e03f87faefb84318528df2a1126

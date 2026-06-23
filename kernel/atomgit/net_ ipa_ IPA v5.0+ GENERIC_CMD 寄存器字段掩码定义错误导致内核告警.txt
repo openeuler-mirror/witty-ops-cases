@@ -1,0 +1,28 @@
+#标题
+net: ipa: IPA v5.0+ GENERIC_CMD 寄存器字段掩码定义错误导致内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IPA 功能启用的情况下，尝试向 MPSS remoteproc 发送 "stop" 命令时，系统触发内核告警（WARN）。此现象是由于寄存器字段定义与硬件实际布局不匹配导致。
+
+#主要错误日志
+内核 WARN 日志（具体调用栈未提供，触发场景为发送 "stop" 到 MPSS remoteproc）。
+
+#问题根因
+IPA v5.0 的 GSI 寄存器定义文件中，`GENERIC_CMD` 寄存器的字段掩码（field masks）定义错误，不符合硬件文档 (GSI_V3_0_EE_n_GSI_EE_GENERIC_CMD_*) 中描述的硬件布局。
+具体错误如下：
+1. `GENERIC_CHID` 字段掩码原定义为 `GENMASK(9, 5)`，实际应为 `GENMASK(12, 5)`；
+2. `GENERIC_EE` 字段掩码原定义为 `GENMASK(13, 10)`，实际应为 `GENMASK(16, 13)`；
+3. 缺少 `GENERIC_PARAMS` 字段定义（应为 `GENMASK(31, 24)`）。
+错误的位掩码导致写入寄存器的值不正确，进而触发了内核 WARN。
+
+#解决方案
+修正 `drivers/net/ipa/reg/gsi_reg-v5.0.c` 中 `reg_generic_cmd_fmask` 数组的定义，使其与硬件文档一致：
+1. 将 `GENERIC_CHID` 的掩码修正为 `GENMASK(12, 5)`；
+2. 将 `GENERIC_EE` 的掩码修正为 `GENMASK(16, 13)`；
+3. 新增 `GENERIC_PARAMS` 字段定义为 `GENMASK(31, 24)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c5ebea67dffad8da402dce652eeabef3dbf3e4bf

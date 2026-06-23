@@ -1,0 +1,28 @@
+#标题
+pinctrl: qcom: sm8350-lpass-lpi I2S2 与 SWR TX 引脚配置错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm SM8350 平台上，LPASS LPI (Low Power Audio SubSystem Low Power Island) 引脚控制器驱动存在配置错误：
+1. I2S2 功能异常：`i2s2_data_groups` 错误地将 GPIO12 列出了两次，导致缺少对 GPIO13 的支持，I2S2 数据引脚无法正常工作。
+2. SWR TX 功能异常：`swr_tx_data_groups` 在 GPIO5 上配置了 `swr_tx_data2` 功能，但 GPIO5 同时也支持 `swr_rx_data1`。由于错误地将 TX 功能配置在 GPIO5，可能影响 SWR RX 功能的正常选择与复用。
+
+#主要错误日志
+未知
+
+#问题根因
+SM8350 与 SC7280 SoC 的 LPASS LPI 引脚控制器硬件设计完全一致，但原 SM8350 驱动代码中定义的引脚组数据存在笔误：
+1. `i2s2_data_groups` 数组定义为 `{ "gpio12", "gpio12" }`，遗漏了 GPIO13。
+2. `swr_tx_data_groups` 包含 GPIO5，但这造成了功能定义的冗余且掩盖了 GPIO5 同时支持 RX 功能的事实。
+
+#解决方案
+删除独立的 `pinctrl-sm8350-lpass-lpi` 驱动文件，将其合并至 `pinctrl-sc7280-lpass-lpi` 驱动中。
+具体修改包括：
+1. 在 `pinctrl-sc7280-lpass-lpi.c` 中增加 `qcom,sm8350-lpass-lpi-pinctrl` 的设备兼容性匹配，直接复用 SC7280 的正确引脚配置数据。
+2. 移除 `PINCTRL_SM8350_LPASS_LPI` Kconfig 配置选项及对应的编译对象。
+此举通过复用已验证正确的 SC7280 驱动数据，一次性修复了上述引脚定义错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/250a6af88cb68cc9fb1c5418996abcf4e87132d6

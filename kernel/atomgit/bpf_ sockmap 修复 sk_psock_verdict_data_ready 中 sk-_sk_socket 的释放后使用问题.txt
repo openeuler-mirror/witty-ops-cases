@@ -1,0 +1,24 @@
+#标题
+bpf: sockmap 修复 sk_psock_verdict_data_ready 中 sk->sk_socket 的释放后使用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 AF_UNIX socket 发送消息时，触发 KASAN 检测到的 slab-use-after-free 错误。具体表现为在 `sk_psock_verdict_data_ready` 函数中访问已释放的 `sk->sk_socket` 成员，导致内核崩溃或内存破坏。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in sk_psock_verdict_data_ready+0xec/0x590 net/core/skmsg.c:1278
+Read of size 8 at addr ffff8880594da860 by task syz.4.1842/11013
+Call Trace:
+ sk_psock_verdict_data_ready+0xec/0x590 net/core/skmsg.c:1278
+ unix_stream_sendmsg+0x8a3/0xe80 net/unix/af_unix.c:2482
+
+#问题根因
+在 `unix_stream_sendmsg()` 流程中，发送端调用对端 socket 的 `sk->sk_data_ready()` 是在释放 `unix_state_lock()` 之后进行的。尽管发送端持有对端的引用计数，但这无法阻止对端执行 `sock_orphan()` 操作。对端的 `sk_socket` 可能在 RCU 宽限期后被释放，而 `sk_psock_verdict_data_ready()` 在读取 `sk->sk_socket` 及其 `ops` 时未加锁保护，导致访问到已被释放的内存。
+
+#解决方案
+在 `sk_psock_verdict_data_ready()` 函数中引入 RCU 保护机制。使用 `rcu_read_lock()` 和 `rcu_read_unlock()` 包裹对 `sk->sk_socket` 的读取操作，并使用 `READ_ONCE` 确保读取操作的原子性，防止在读取过程中指针被并发释放，从而避免释放后使用问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/083aa3c90dbda902aa36f994755d9f6fcfc1bc22

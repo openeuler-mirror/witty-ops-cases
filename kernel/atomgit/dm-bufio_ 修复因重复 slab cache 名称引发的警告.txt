@@ -1,0 +1,21 @@
+#标题
+dm-bufio: 修复因重复 slab cache 名称引发的警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 CONFIG_DEBUG_VM 配置项的内核中，dm-bufio 模块在创建多个 client 时触发内核警告。系统日志中出现关于重复 slab cache 名称的警告信息，这是由于 dm-bufio 为每个 client 分配 slab cache 时使用了静态命名规则，导致不同 client 创建了同名的 cache。
+
+#主要错误日志
+未知
+（注：Commit 信息仅提及“warnings about duplicate slab caches”及“Warn on duplicate cache names”，未提供具体的内核日志输出原文。）
+
+#问题根因
+内核提交 4c39529663b9 ("slab: Warn on duplicate cache names when DEBUG_VM=y") 增加了对重复 cache 名称的检测警告。dm-bufio 代码在为每个 client 分配 slab cache 时，因为无法在模块初始化阶段预知辅助数据的大小，采用了动态创建的方式，但命名规则仅基于尺寸（如 "dm_bufio_cache-%u"），导致创建多个 client 时出现重名，从而触发了 DEBUG_VM 的警告机制。
+
+#解决方案
+修改 dm-bufio 的 slab cache 命名逻辑，引入一个静态原子变量 `seqno` 作为全局序列号。在创建 slab cache 时，将此序列号追加到 cache 名称末尾（例如 "dm_bufio_cache-%u-%u"），确保每个 client 分配的 cache 名称全局唯一，从而消除重复名称警告。同时扩大了 `slab_name` 数组的容量以容纳更长的名称。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ffa3116b27119f91916ec0cb8a49b9cc5418c4cf

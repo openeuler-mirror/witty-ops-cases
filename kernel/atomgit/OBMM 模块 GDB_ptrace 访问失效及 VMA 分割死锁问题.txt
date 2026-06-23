@@ -1,0 +1,32 @@
+#标题
+OBMM 模块 GDB/ptrace 访问失效及 VMA 分割死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **GDB/ptrace 访问失败**：对 OBMM 设备内存映射区（PFNMAP VMA）进行 GDB 调试或 ptrace 读写出错，无法正常访问内存数据，返回 `-EOPNOTSUPP`。
+2. **VMA 分割死锁**：在进行进程调试或内存操作触发 VMA 分割（split_vma）时，系统可能发生死锁，导致进程挂起或调度异常。
+3. **Cache 操作无效**：在某些路径下传入无效的 cache_ops 参数，导致函数返回 `-EINVAL` 且未留下错误日志。
+
+#主要错误日志
+- `pr_warn("Unexpected fault\n");`
+- `pr_err("vma close: cache flush failed: %d\n", ret);`
+- `pr_err("mmap split must be aligned: addr=%#lx\n", addr);`
+- `pr_err("ownership update must be aligned: pid=%d start=%#llx end=%#llx\n", current->pid, update_info->start, update_info->end);`
+- `pr_err("Invalid cache operations: %#lx\n", cache_ops);`
+
+#问题根因
+1. **访问接口缺失**：OBMM 模块使用 `VM_IO | VM_PFNMAP` 标志映射设备内存，导致标准内核访问接口无法处理 ptrace 请求；原 `obmm_vma_access` 直接返回 `-EOPNOTSUPP`，未实现针对 PFNMAP 的内存读写逻辑。
+2. **死锁隐患**：`obmm_region` 结构体中的 `mmap_count` 为普通 `unsigned long` 类型，在 `obmm_vma_open` 中非原子递增。当 `update_range` 流程持有 `state_mutex` 锁并调用 `split_vma` 时，`split_vma` 会再次调用 `obmm_vma_open`，若该函数试图获取同一锁或因计数器同步问题阻塞，将导致死锁或状态不一致。
+3. **参数校验日志缺失**：`flush_cache_by_pa` 和 `obmm_region_flush_range` 函数在校验 `cache_ops` 失败时，原实现仅在部分路径打印日志，或在打印日志后未返回错误码，导致问题难以定位。
+
+#解决方案
+1. **实现自定义 ptrace 访问接口**：重写 `obmm_vma_access` 函数，通过 `follow_pte` 获取物理页表项（PTE），使用 `ioremap_prot` 建立临时内核映射，并利用 `copy_mc_to_kernel` 实现安全的内核态内存读写，支持 GDB/ptrace 对设备内存的访问。
+2. **消除死锁风险**：将 `obmm_region->mmap_count` 的类型从 `unsigned long` 改为 `atomic_t`，使用原子操作 `atomic_inc` 和 `atomic_dec_and_test` 进行计数，避免在 VMA 操作回调中引入锁竞争，解决 `split_vma` 场景下的死锁问题。
+3. **完善 Cache 操作校验与日志**：新增并统一使用 `obmm_is_valid_cache_ops` 内联函数校验 cache 操作参数，校验失败时统一打印 `pr_err` 日志并返回 `-EINVAL`。
+4. **重构所有权追踪机制**：优化 `obmm_ownership_info` 结构体及相关计数逻辑，简化权限状态管理，增强代码可维护性。
+5. **导出内核符号**：导出 `split_vma` 符号（`EXPORT_SYMBOL(split_vma)`），支持模块化调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/64b39aa84a986d324fe3801ea7ce76234365cfd6

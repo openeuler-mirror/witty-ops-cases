@@ -1,0 +1,20 @@
+#标题
+smb: client: smb2_open_file() 函数存在 UAF 与双重释放风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB 客户端打开文件过程中，若因权限问题（-EACCES）触发重试逻辑，可能导致内核发生 Use-After-Free（UAF）或 Double Free 错误，造成系统崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb2_open_file()` 函数中，当首次调用 `SMB2_open()` 返回 -EACCES 错误时，代码会释放 `err_iov` 指向的内存并尝试重试。但在重试前，未将指针变量 `err_iov` 和 `err_buftype` 清零或重置。这导致若重试也失败且 `@data != NULL` 时，函数后续的清理逻辑会再次尝试释放同一块内存（Double Free）；或者在特定上下文中访问已被释放的内存区域（UAF）。
+
+#解决方案
+在释放 `err_iov` 对应的缓冲区后、重试 `SMB2_open()` 之前，显式将 `err_iov` 结构体通过 `memset` 清零，并将 `err_buftype` 重置为 `CIFS_NO_BUFFER`，防止后续错误处理路径对同一内存进行重复释放或非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/94ce9f18aa9536d7749f59bf8e76eb2bfa8c19f6

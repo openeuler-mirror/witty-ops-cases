@@ -1,0 +1,23 @@
+#标题
+SMB1 协议下 MF 符号链接查询与创建失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在连接 Windows 98 等 old SMB1 服务器时，由于服务器不支持 CAP_NT_SMBS 功能，导致 MF (Minshall+French) 符号链接相关操作异常：
+1. 查询 MF 符号链接时无法正确识别，导致无法检测到符号链接。
+2. 创建 MF 符号链接时操作失败，用户态进程收到 EIO (Input/output error) 错误返回。
+
+#主要错误日志
+未知
+
+#问题根因
+旧版 SMB1 服务器（如 Windows 98）不支持 `CAP_NT_SMBS` 功能，因此不支持 `CIFS_open()` 函数调用。内核代码在 `cifs_query_mf_symlink()` 和 `cifs_create_mf_symlink()` 函数中直接调用了 `CIFS_open()`，而没有使用已经兼容处理了 `CAP_NT_SMBS` 逻辑的 `server->ops->open` 回调函数（该回调会根据服务器能力选择 `SMBLegacyOpen()`）。这导致对不支持 NT SMBs 的服务器发起错误请求，进而引发功能失败。
+
+#解决方案
+修改 `fs/smb/client/link.c` 文件中的 `cifs_query_mf_symlink()` 和 `cifs_create_mf_symlink()` 函数，将直接调用 `CIFS_open()` 的代码改为调用 `tcon->ses->server->ops->open` 回调函数。
+同时，由于 `open` 回调函数使用的数据结构不同，将 `cifs_query_mf_symlink()` 中的局部变量 `FILE_ALL_INFO file_info` 替换为 `struct cifs_open_info_data query_data`，并相应调整后续对文件大小 (`EndOfFile`) 的访问路径，确保兼容性与逻辑正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d08346e8693325c608dda23ed59b9b5b4a5880bf

@@ -1,0 +1,25 @@
+#标题
+Bluetooth: btusb: 伪造 CSR 蓝牙控制器(0a12:0001)命令超时问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用伪造的 CSR 蓝牙控制器（USB ID: 0a12:0001）时，蓝牙命令发送失败并出现超时错误。具体表现为设备连接后，执行 HCI 命令（如 Opcode 0x1004）时无法正常完成，导致控制器初始化或功能异常。
+
+#主要错误日志
+kernel: usb 1-1: new full-speed USB device number 19 using xhci_hcd
+kernel: usb 1-1: New USB device found, idVendor=0a12, idProduct=0001, bcdDevice=88.91
+kernel: usb 1-1: New USB device strings: Mfr=0, Product=2, SerialNumber=0
+kernel: usb 1-1: Product: BT DONGLE10
+Bluetooth: hci1: Opcode 0x1004 failed: -110
+kernel: Bluetooth: hci1: command 0x1004 tx timeout
+
+#问题根因
+伪造的 CSR 控制器无法正确处理短传输。根据 USB 2.0 规范，中断传输在数据包大小为 0（ZPL）或小于 wMaxPacketSize 时被视为完成。此前代码使用 `HCI_MAX_EVENT_SIZE` 作为缓冲区大小，意图让 USB 协议栈自动处理 ZPL/short-transfer，但伪造的 CSR 设备不支持这种处理方式，导致命令传输失败并触发超时。
+
+#解决方案
+在 `btusb_submit_intr_urb` 函数中针对特定设备添加差异化处理。如果检测到设备 Vendor ID 为 0x0a12 且 Product ID 为 0x0001（伪造 CSR 设备），则直接使用端点的 `wMaxPacketSize` 作为缓冲区大小，而不是使用 `HCI_MAX_EVENT_SIZE`，从而规避该类设备对短传输处理不兼容的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0836afa3cd4b5f80a5603a1262f1a897e82ce3d8

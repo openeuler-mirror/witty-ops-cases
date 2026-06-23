@@ -1,0 +1,25 @@
+#标题
+cachefiles: ondemand 模式下对象文件指针引用计数导致的空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 cachefiles 的 ondemand 模式下，当用户态进程对 anon_fd 执行 write（写入）或 llseek（寻址）操作时，若同时发生 umount 或 cookie 撤回操作，会导致内核发生 NULL Pointer Dereference（空指针解引用）从而引发崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+object->file 指针的生命周期与分配的 fd 不一致。具体并发场景如下：
+1. **写操作路径**：`cachefiles_ondemand_fd_write_iter` 检查 `object->file` 非空后准备进行写入。
+2. **销毁路径**：`cachefiles_withdraw_cookie` -> `cachefiles_clean_up_object` 调用 `fput(object->file)` 并将 `object->file` 置为 NULL。
+3. **崩溃点**：写操作路径继续使用已置空的 `file` 指针调用 `__cachefiles_write`，导致解引用空指针崩溃。
+
+#解决方案
+通过引入引用计数机制及锁保护来同步对象生命周期：
+1. 在 `cachefiles_ondemand_fd_write_iter` 和 `cachefiles_ondemand_fd_llseek` 函数中，使用 `spin_lock` 保护读取 `object->file` 的过程，在判断指针非空后立即调用 `get_file()` 增加引用计数，解锁后再执行具体操作，操作结束后调用 `fput()` 释放引用。
+2. 在 `cachefiles_clean_up_object` 函数中，使用 `spin_lock` 保护 `object->file` 的清空操作，确保指针读取与置空的原子性，防止竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c31894c71fa3df6aea0a55d92180df427c9512b4

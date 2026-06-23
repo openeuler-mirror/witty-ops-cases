@@ -1,0 +1,28 @@
+#标题
+bpf: 释放后访问导致 __bpf_prog_offload_destroy 页故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 BPF JIT 常量盲化（bpf_jit_harden >= 2）且加载设备绑定 XDP 程序的场景下，当销毁网络命名空间时，内核发生页故障崩溃。具体表现为运行 xdp_metadata 自测试后清理网络命名空间时触发 unable to handle page fault。
+
+#主要错误日志
+BUG: unable to handle page fault for address: ffffc900085f1038
+Workqueue: netns cleanup_net
+RIP: 0010:__bpf_prog_offload_destroy+0xc/0x80
+Call Trace:
+__bpf_offload_dev_netdev_unregister+0x257/0x350
+bpf_dev_bound_netdev_unregister+0x4a/0x90
+unregister_netdevice_many_notify+0x2a2/0x660
+...
+cleanup_net+0x21a/0x320
+
+#问题根因
+当设备绑定 XDP 程序（BPF_F_XDP_DEV_BOUND_ONLY）进行 JIT 编译时，若启用了常量盲化，bpf_jit_blind_constants() 会克隆生成新程序，并释放原程序。在释放过程中，bpf_jit_prog_release_other() 更新了 aux->prog 指向存活的新程序，但未更新 offload->prog 指针。这导致 offload->prog 依然指向已被释放的旧程序内存。后续销毁网络命名空间时，__bpf_prog_offload_destroy 访问了该悬空指针，引发页故障。
+
+#解决方案
+在 bpf_jit_prog_release_other() 函数中，更新 aux->prog 的同时，增加对 fp->aux->offload 的判断，如果存在则同步更新 offload->prog 指针，确保其始终指向有效的程序内存，避免释放后访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/490061e0c266b42fbc079622c575f66c98f20f79

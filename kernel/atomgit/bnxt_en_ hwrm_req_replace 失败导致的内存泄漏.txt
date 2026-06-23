@@ -1,0 +1,20 @@
+#标题
+bnxt_en: hwrm_req_replace 失败导致的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 bnxt_en 驱动执行固件消息发送流程时，若 `hwrm_req_replace` 函数调用失败，驱动将直接返回错误码而未释放先前分配的请求资源，导致内核内存泄漏。该问题属于代码逻辑缺陷引发的资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `bnxt_send_msg` 中，当 `hwrm_req_replace(bp, req, fw_msg->msg, fw_msg->msg_len)` 执行失败时，代码逻辑直接 `return rc` 返回，跳过了后续 `hwrm_req_drop(bp, req)` 的调用。这导致之前通过 `hwrm_req` 机制分配的请求内存无法被释放，从而引发内存泄漏。该缺陷自提交 bbf33d1d9805 引入新 API 后便存在。
+
+#解决方案
+修改 `bnxt_send_msg` 函数的错误处理路径，当 `hwrm_req_replace` 失败时，不再直接返回，而是跳转（goto）到统一的清理标签 `drop_req`。在 `drop_req` 标签处调用 `hwrm_req_drop(bp, req)` 确保请求资源被正确释放，然后再返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2fe47634732277818b3dcd1001ba9c3bfe19a9a7

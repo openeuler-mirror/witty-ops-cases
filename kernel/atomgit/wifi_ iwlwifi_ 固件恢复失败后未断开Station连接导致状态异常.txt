@@ -1,0 +1,20 @@
+#标题
+wifi: iwlwifi: 固件恢复失败后未断开Station连接导致状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 iwlwifi 驱动执行固件错误恢复操作失败时（例如恢复命令返回错误），Station 接口的连接状态未被正确清理，导致连接处于“limbo（悬空/无效）”状态，用户无法立即重新连接，需依赖其他机制触发断开。
+
+#主要错误日志
+Failed to send recovery cmd blob was invalid %d
+
+#问题根因
+在 `iwl_mvm_send_recovery_cmd` 函数中，当发送恢复命令后固件返回错误（`resp` 非零）时，驱动虽然打印了错误日志，但未主动断开现有的 Station 接口连接。这导致网络接口状态与底层固件实际状态不一致，连接卡在无效状态。
+
+#解决方案
+在恢复命令失败的错误处理路径中，增加对 Station 接口的断开处理。具体修改为：当检测到恢复命令返回失败（`resp` 为真）时，调用 `ieee80211_iterate_interfaces` 遍历所有网络接口，对类型为 `NL80211_IFTYPE_STATION` 的接口执行 `ieee80211_hw_restart_disconnect`，主动断开连接以清除异常状态，允许用户立即重新连接。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6a9b5c9c0a2fa155b03505a5fa6bb74c1f759e5e

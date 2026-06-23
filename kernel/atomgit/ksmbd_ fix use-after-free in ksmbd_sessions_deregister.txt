@@ -1,0 +1,22 @@
+#标题
+ksmbd: fix use-after-free in ksmbd_sessions_deregister
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 服务处理连接断开或会话注销时，内核可能发生 Use-After-Free（UAF）故障。具体表现为在调用 `ksmbd_sessions_deregister` 函数销毁会话后，相关内存结构仍被引用，可能导致内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ksmbd_sessions_deregister` 函数中，当条件满足执行 `hash_del(&sess->hlist)` 删除哈希表条目后，直接调用了 `ksmbd_session_destroy(sess)` 销毁会话。然而，此时 `conn->sessions` 这个 xarray 中仍保留着指向该会话（sess）的引用（即 sess->id 对应的条目未被清除）。
+这导致后续代码路径或其他线程在遍历 `conn->sessions` 时，能够获取到一个已经被销毁（内存已释放）的会话指针，从而引发 Use-After-Free。
+
+#解决方案
+在删除哈希表条目 `hash_del` 之后、销毁会话 `ksmbd_session_destroy` 之前，增加对 `conn->sessions` xarray 的清理操作。
+具体修改为：持有 `conn->session_lock` 写锁，调用 `xa_erase(&conn->sessions, sess->id)` 清除 xarray 中的引用，释放锁后再进行会话销毁。这确保了在销毁会话对象前，所有指向它的引用都被移除，避免了 UAF 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9511576e4e3a48ff9287754abf1ee249e34554dc

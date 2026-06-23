@@ -1,0 +1,20 @@
+#标题
+NFC LLCP socket 状态为 CLOSED 时缺失 return 导致的 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFC LLCP 协议处理中，当 socket 状态为 LLCP_CLOSED 时，函数 `nfc_llcp_recv_hdlc()` 和 `nfc_llcp_recv_disc()` 在执行完资源释放后未返回，而是继续执行后续代码。这导致 `release_sock()` 被重复调用，且 `nfc_llcp_sock_put()` 被调用两次，引发 refcount 下溢，最终导致 use-after-free。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nfc_llcp_recv_hdlc()` 和 `nfc_llcp_recv_disc()` 函数中，处理 socket 状态为 `LLCP_CLOSED` 的分支逻辑存在缺陷。代码正确调用了 `release_sock(sk)` 和 `nfc_llcp_sock_put(llcp_sock)`，但缺少 `return` 语句。导致程序执行流穿透到函数剩余部分，再次调用释放函数，引发双重释放和引用计数下溢。
+
+#解决方案
+在 `nfc_llcp_recv_hdlc()` 和 `nfc_llcp_recv_disc()` 函数的 `LLCP_CLOSED` 处理分支末尾，添加缺失的 `return` 语句，防止代码执行流穿透，避免双重释放和 refcount 下溢。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/16bcef866285cbae2fd46ac45d7b0092069bc520

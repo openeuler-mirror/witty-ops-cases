@@ -1,0 +1,24 @@
+#标题
+md: action_store() 在 sync_thread 未注册时错误返回 EBUSY 导致 mdadm 测试失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 mdadm 测试用例（如 07reshape5intr）时，向阵列添加新磁盘后立即启动 reshape 操作失败。具体表现为 `mdadm --grow` 命令执行失败，用户空间程序接收到 -EBUSY 错误返回。
+
+#主要错误日志
+未知
+
+#问题根因
+在尝试注册新的 sync_thread 时，MD_RECOVERY_RUNNING 标志位会被设置。如果此时 `md_start_sync()` 实际上未执行任何操作（do nothing），该标志位随后会被清除。在这个时间窗口内，若 `action_store()` 被调用，它会检测到 MD_RECOVERY_RUNNING 仍处于置位状态（实际上 sync_thread 尚未注册），从而错误地返回 -EBUSY。
+例如在测试场景中：
+1. `mdadm /dev/md0 --add /dev/xxx` 通过 `add_bound_rdev()` 设置 MD_RECOVERY_NEEDED。
+2. 紧接着执行 `mdadm --grow /dev/md0 -n 3`。
+3. `--grow` 触发 `action_store()`，恰好在上述 race window 中检测到 MD_RECOVERY_RUNNING，导致操作失败。
+
+#解决方案
+修改 `action_store()` 的逻辑，不再仅依据 MD_RECOVERY_RUNNING 标志位判断是否忙，而是通过 `flush_work(&mddev->sync_work)` 等待潜在的 sync 工作完成。如果 sync_thread 最终并未注册，操作应当继续执行而不是失败；只有当 sync_thread 确实已注册时，相关操作才返回 -EBUSY。同时移除了不再需要的 `sync_mutex` 锁，改用更细粒度的锁同步机制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3b99c89919b9d2c7561e2db4ef9c75bf51d911e2

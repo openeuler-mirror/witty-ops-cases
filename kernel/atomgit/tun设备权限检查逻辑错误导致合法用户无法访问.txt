@@ -1,0 +1,20 @@
+#标题
+tun设备权限检查逻辑错误导致合法用户无法访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了 TUN 设备 owner（所有者）的情况下，如果该 owner 的补充组（supplementary groups）中不包含 TUN 设备配置的 group（组），则即使用户 ID 与 owner 完全匹配，也无法访问 TUN 设备。这导致设置了归属权的 TUN 设备反而无法被指定用户使用，除非用户具备 CAP_SYS_ADMIN 权限（此时等同于未设置归属权）。
+
+#主要错误日志
+未知
+
+#问题根因
+TUN 设备的权限检查函数 `tun_not_capable` 实现逻辑错误。原逻辑要求用户必须**同时**满足 UID 匹配 owner 和 GID 匹配 group 两个条件（在非 CAP_NET_ADMIN 情况下），这违背了通常的“用户或组匹配即可”的权限语义。因此，当合法的 owner 用户不属于指定的 group 时，权限检查会错误地返回无权限，导致访问被拒绝。
+
+#解决方案
+修改 `tun_not_capable` 函数为 `tun_capable`，调整权限判断逻辑：只要满足 CAP_NET_ADMIN 权限、UID 匹配 owner 或 GID 匹配 group 中的**任意一个**条件，即视为有权限访问。这修正了之前的逻辑错误，确保只要用户 ID 匹配或组 ID 匹配就能正常访问设备。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9da581a462e3e5e938df4e240d918b06d80def4

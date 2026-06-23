@@ -1,0 +1,37 @@
+#标题
+net: dsa: 修复非 DSA 网络设备事件中 netdev_priv() 提前解引用导致的内存越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统中创建 dummy 接口并添加 VLAN 上层接口时，触发 KASAN 检测到的 slab 越界访问错误，导致内核打印 BUG 信息并打印调用堆栈。具体复现步骤如下：
+1. 执行 `ip link add dummy1 type dummy` 创建 dummy 接口。
+2. 执行 `ip link add link dummy1 name dummy1.100 type vlan id 100` 添加 VLAN 接口。
+
+#主要错误日志
+[   43.309174] ==================================================================
+[   43.316456] BUG: KASAN: slab-out-of-bounds in dsa_user_prechangeupper+0x30/0xe8
+[   43.323835] Read of size 8 at addr ffff3f86481d2990 by task ip/374
+[   43.330058]
+[   43.342436] Call trace:
+[   43.366542]  dsa_user_prechangeupper+0x30/0xe8
+[   43.371024]  dsa_user_netdevice_event+0xb38/0xee8
+[   43.375768]  notifier_call_chain+0xa4/0x210
+[   43.379985]  raw_notifier_call_chain+0x24/0x38
+[   43.384464]  __netdev_upper_dev_link+0x3ec/0x5d8
+[   43.389120]  netdev_upper_dev_link+0x70/0xa8
+[   43.393424]  register_vlan_dev+0x1bc/0x310
+[   43.397554]  vlan_newlink+0x210/0x248
+[   43.401247]  rtnl_newlink+0x9fc/0xe30
+[   43.404942]  rtnetlink_rcv_msg+0x378/0x580
+
+#问题根因
+在处理 NETDEV_CHANGEUPPER 和 NETDEV_PRECHANGEUPPER 事件时，代码逻辑存在缺陷。在通过 `dsa_slave_dev_check()` 检查设备类型之前，代码就提前调用了 `dsa_slave_to_port(dev)`（内含 `netdev_priv()` 解引用）。
+由于并非所有 net_device 的私有数据区都是 `struct dsa_user_priv` 类型（例如 dummy 接口私有数据大小为 0），导致对非 DSA 设备进行了非法内存访问。虽然大多数驱动分配的私有内存足够大掩盖了此问题，但对于 priv 尺寸为 0 的设备（如 dummy 接口），该访问会被 KASAN 捕获为越界读取。
+
+#解决方案
+调整代码执行顺序，确保在解引用 `netdev_priv()` 获取 `dsa_port` 结构体指针之前，先调用 `dsa_slave_dev_check(dev)` 完成设备类型校验。只有当校验通过确认是 DSA slave 设备时，才执行后续的解引用操作，从而避免对非 DSA 设备的非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3946c79b22ed70e169f2e16726cbf87368c10eaa

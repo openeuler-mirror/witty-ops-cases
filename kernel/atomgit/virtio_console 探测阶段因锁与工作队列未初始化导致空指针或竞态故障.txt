@@ -1,0 +1,21 @@
+#标题
+virtio_console 探测阶段因锁与工作队列未初始化导致空指针或竞态故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 virtio_console 设备驱动探测阶段，若设备存在缺陷或行为异常，在 vqs 创建后立即发送中断。此时由于必要的锁（ports_lock）和工作队列（control_work、config_work）尚未初始化，中断处理程序回调时会触发内核崩溃或空指针访问。
+
+#主要错误日志
+[推断] Unable to handle kernel NULL pointer dereference
+[推断] BUG: spinlock bad magic (对应 spin_lock_init 未执行)
+
+#问题根因
+代码初始化顺序错误。原代码在初始化 spin_lock（ports_lock）和 INIT_WORK（control_work、config_work）之前就调用了 init_vqs 创建并启用虚拟队列。此时设备已准备就绪，若立即触发中断，中断回调函数（如 control vq callback 或 config interrupt）会尝试操作未初始化的锁或工作队列，导致系统崩溃。
+
+#解决方案
+调整初始化顺序，确保所有必要的锁和工作队列在创建虚拟队列之前完成初始化。具体修改为：将 spin_lock_init、INIT_LIST_HEAD、INIT_WORK 等初始化操作移至 init_vqs 调用之前执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e84c1ebe4cc30fb5ac0b444da69a918d32ee996

@@ -1,0 +1,29 @@
+#标题
+mailbox: bcm2835 设备挂起过程中固件属性请求超时
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统进入 noirq 挂起阶段时，Raspberry Pi 电源驱动发起的固件属性请求总是超时，导致系统无法正常挂起。具体表现为内核抛出警告堆栈，打印 "Firmware transaction 0x00028001 timeout" 错误信息，且挂起流程耗时异常增加（从正常的约 1.7ms 延长至约 3095ms）。
+
+#主要错误日志
+```
+PM: late suspend of devices complete after 1.754 msecs
+WARNING: CPU: 0 PID: 438 at drivers/firmware/raspberrypi.c:128 rpi_firmware_property_list+0x204/0x22c
+Firmware transaction 0x00028001 timeout
+Modules linked in:
+CPU: 0 PID: 438 Comm: bash Tainted: G         C         6.9.3-dirty #17
+Hardware name: BCM2835
+...
+PM: noirq suspend of devices complete after 3095.584 msecs
+```
+
+#问题根因
+在 noirq 挂起阶段，底层 BCM2835 mailbox 的中断（IRQ）被内核禁用。此时 rpi_firmware_property_list() 函数发起的固件通信请求无法收到中断响应，导致一直等待直到超时。由于 VideoCore 端不被视为唤醒源，该中断在挂起-恢复周期期间本应保持启用状态。
+
+#解决方案
+在 BCM2835 mailbox 驱动注册中断处理程序时，添加 `IRQF_NO_SUSPEND` 标志。这确保了该中断在系统挂起和恢复周期中保持启用状态，从而避免固件通信超时。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ec4fb84c9540a9ded8baf3a446cbd9228cea10a5

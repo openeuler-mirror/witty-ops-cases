@@ -1,0 +1,22 @@
+#标题
+wifi: mac80211: 连接过程中修改MAC地址导致状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 WiFi 连接过程中（正在认证或关联阶段），系统允许修改接口的 MAC 地址。这会导致连接过程使用旧的 MAC 地址进行交互，而接口实际 MAC 地址已变更为新值，从而引发连接失败或后续通信状态异常。此外，在已存在对端站点信息的情况下修改 MAC 地址也会破坏已知的对端状态。
+
+#主要错误日志
+未知
+
+#问题根因
+在实现 `POWERED_ADDR_CHANGE` 特性时，检查逻辑不完善。原代码仅通过 `netif_carrier_ok()` 判断链路状态来拒绝修改，但在正在连接（auth_data 或 assoc_data 非空）时，carrier 尚未置位，导致检查被绕过。同时，原代码未检查是否已存在对端站点信息，若对端站点已添加并记录了当前接口地址，此时修改地址将导致地址不一致。
+
+#解决方案
+在 `ieee80211_can_powered_addr_change` 函数中增加两项检查：
+1. 在函数入口处检查是否存在对端站点（`sta_info_get_by_idx`），若存在则直接返回 `-EBUSY` 拒绝修改。
+2. 针对 Station 和 P2P Client 类型接口，增加对连接状态的检查，若 `sdata->u.mgd.auth_data` 或 `sdata->u.mgd.assoc_data` 存在（表示正在认证或关联），则返回 `-EBUSY` 拒绝修改。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0c961c8774cdf47b34a6b15adcb647b55d3ee15c

@@ -1,0 +1,20 @@
+#标题
+ice驱动tc flower过滤器设置LAN_EN标志导致PF误收数据包
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了两个特定tc flower过滤器的情况下（第一个将广播流量重定向到PF，第二个对特定源MAC地址的广播流量进行镜像到VF1），预期行为是仅当源MAC匹配时，数据包会被发送到LAN和VF1。但实际现象是，即使源MAC不匹配，PF接口也能收到广播数据包，导致PF上出现了非预期的流量接收。
+
+#主要错误日志
+未知
+
+#问题根因
+在处理带有LAN_ENABLE动作的过滤器时，驱动程序未正确设置目的VSI（Destination VSI）。硬件交换逻辑在多个过滤器匹配时会执行“LAN_EN标志位与运算（AND）”和“LB_EN标志位或运算（OR）”。由于LAN_EN过滤器中目的VSI被设置为PF VSI，导致数据包被错误的转发到PF接口上。
+
+#解决方案
+修改代码逻辑，在设置ICE_SINGLE_ACT_LAN_ENABLE动作标志时，将rule_info.sw_act.vsi_handle（目的VSI句柄）强制覆盖为源VSI索引。这样确保了过滤器仅设置LAN_EN位，而不会因为目的VSI指向PF导致数据包被PF接收；同时由于VF在正常操作中关闭了本地回环，即使硬件交换逻辑产生了LB_EN标志，数据包也不会出现在该VSI上。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9656476afe8e593da1da75d9c2cf8c35e5d07e1

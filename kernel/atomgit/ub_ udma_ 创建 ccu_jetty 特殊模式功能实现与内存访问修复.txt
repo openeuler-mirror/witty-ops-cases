@@ -1,0 +1,37 @@
+#标题
+ub: udma: 创建 ccu_jetty 特殊模式功能实现与内存访问修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建 ccu_jetty 的特殊模式（Lock Buffer Jetty）时存在功能缺陷。该模式下 SQ 队列的处理逻辑不符合预期：UDMA 不应主动请求 SQ 队列，而应使用用户传递的索引通过基址偏移获取值。同时，该模式下 depth 和 sqe_bb_cnt 应为固定值且不可由用户配置，此前未做限制导致参数配置异常。此外，在非标准页大小系统上创建指定 jetty id 时会触发错误检查导致创建失败。
+
+#主要错误日志
+- "Does not support specifying jetty id on non-4KB page systems.\n"
+- "no support create lock buffer jetty.\n"
+- "JFR is not exist.\n"
+- "invalid parameter, jetty transport mode = %u.\n"
+- "invalid parameter, depth= %u, seg= %u, max_depth= %u, max_jfs_seg= %u.\n"
+- "invalid parameter, inline data:%u, max_inline_len:%u.\n"
+- "invalid parameter, RSGE:%u, max_rsge:%u.\n"
+- "user mode jetty priority is out of range, priority is %u.\n"
+- "buffer index is out of range.\n"
+- "lock buffer bit block shift is out of range.\n"
+- "udma alloc WQE lock buffer jetty id buf failed, ret = %d.\n"
+- "failed to get SQ buffer in WQE lock buffer jetty process, ret=%d.\n"
+- "failed to alloc work request id for JFS id = %u when entry count = %u.\n"
+
+#问题根因
+1. 驱动未正确区分处理 ccu_jetty 的特殊模式，导致 SQ 队列的内存分配和索引处理逻辑错误。
+2. 缺少对 Lock Buffer Jetty 模式的参数校验，允许用户配置本应固定的 depth 和 sqe_bb_cnt 参数。
+3. 受 `well_known_jetty_pgsz_check` 变量控制，在非 4KB 页大小系统上错误地阻止了指定 jetty id 的创建。
+
+#解决方案
+1. 新增 `UDMA_LOCK_BUFFER_JETTY_TYPE` 类型及对应的创建、删除和校验接口，实现独立的参数校验与内存管理逻辑。
+2. 针对 Lock Buffer Jetty 模式，将 `sqe_bb_cnt` 强制固定为 2，`depth` 根据 `lock_buf_bb_shift` 计算固定值，并使用用户传入的 `buf_idx` 进行基址偏移计算，而非动态申请内存。
+3. 移除 `well_known_jetty_pgsz_check` 模块参数及相关校验逻辑，解决非 4KB 页大小系统的兼容性问题。
+4. 扩展 capability 字段支持 `lock_buffer_en` 与 `ccu_jfc_property_en` 特性，并在 JFC 上下文中增加 `ccu_en` 等相关字段以支持该模式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a451c41a2cda9305d053ca01fa80754f87d2d9c1

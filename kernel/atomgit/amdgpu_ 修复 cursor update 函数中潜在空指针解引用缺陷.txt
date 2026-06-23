@@ -1,0 +1,20 @@
+#标题
+amdgpu: 修复 cursor update 函数中潜在空指针解引用缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `amdgpu_dm_plane_handle_cursor_update` 函数执行过程中，若 `afb` 指针实际为空，代码逻辑仍尝试访问其成员变量，可能导致内核发生空指针解引用，进而引发内核崩溃或显示相关功能异常。
+
+#主要错误日志
+drivers/gpu/drm/amd/amdgpu/../display/amdgpu_dm/amdgpu_dm_plane.c:1298 amdgpu_dm_plane_handle_cursor_update() error: we previously assumed 'afb' could be null (see line 1252)
+
+#问题根因
+在函数 `amdgpu_dm_plane_handle_cursor_update` 中，代码此前已经假定 `afb` 变量可能为空（即进行了防御性判断或在逻辑上允许其为空），但在后续代码行（原第 1298 行）计算 `attributes.pitch` 时，未再次检查 `afb` 是否为空就直接访问了 `afb->base.pitches[0]`，从而引入了空指针解引用的风险。
+
+#解决方案
+在访问 `afb` 成员进行 pitch 计算之前，增加 `if (afb)` 的非空检查，确保仅在 `afb` 指针有效时才进行赋值操作，从而避免空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aba90d2aa67439744e49ac2373f011e56e6d4743

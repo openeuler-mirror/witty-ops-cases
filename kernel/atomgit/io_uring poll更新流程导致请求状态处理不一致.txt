@@ -1,0 +1,23 @@
+#标题
+io_uring poll更新流程导致请求状态处理不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 io_uring poll remove 操作并尝试更新请求时，若底层 `io_poll_add` 返回 `IOU_OK`（表示请求已完成），系统未正确进入完成处理路径。这导致请求可能被错误地标记为失败（`req_set_fail`），或者返回码被不正确地设置为 `-ECANCELED`，引发用户态请求处理逻辑异常或结果不符预期。
+
+#主要错误日志
+未知
+
+#问题根因
+在处理 poll 请求更新时，代码逻辑未正确区分 `io_poll_add` 的返回值含义。原代码仅检查返回值是否为 0 或 `-EIOCBQUEUED`，遗漏了返回值为 `IOU_OK`（操作成功且请求已完成）的情况。当 `io_poll_add` 返回 `IOU_OK` 时，请求实际上已经完成，不应被标记为取消（`-ECANCELED`），而应直接进入完成流程。
+
+#解决方案
+修改 `io_poll_remove` 函数中的返回值判断逻辑：
+1. 将判断条件改为明确匹配 `IOU_ISSUE_SKIP_COMPLETE`，仅在无需完成时跳过。
+2. 新增对 `IOU_OK` 返回值的处理分支，跳转至 `complete` 标签执行完成逻辑。
+3. 调整失败标记逻辑，在 `complete` 标签处根据 `cqe.res` 是否小于 0 来决定是否调用 `req_set_fail`，确保请求状态与实际结果一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8c78ab71d76ef893cb5432cf468b65f8a629cb7b

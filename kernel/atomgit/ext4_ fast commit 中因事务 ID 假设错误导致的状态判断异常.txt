@@ -1,0 +1,20 @@
+#标题
+ext4: fast commit 中因事务 ID 假设错误导致的状态判断异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ext4 文件系统开启 fast commit 功能时，由于代码逻辑错误地假设事务 ID（tid）'0' 是无效值，导致 `s_fc_ineligible_tid` 的判断逻辑失效。这可能导致 fast commit 机制对事务 ineligible 状态的判断不准确，进而可能引发文件系统一致性相关的潜在风险。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `jbd2_journal_shrink_checkpoint_list()` 和 `ext4_fc_mark_ineligible()` 中的逻辑错误地假设 '0' 不是有效的事务 ID。实际上 tid '0' 是合法的，且 `sbi->s_fc_ineligible_tid` 初始化为 '0'，这导致在比较 tid 时逻辑出错，无法正确判断当前事务是否已被标记为 ineligible。
+
+#解决方案
+修改 `ext4_fc_mark_ineligible()` 函数，不再依赖 tid 与 '0' 的比较来判断事务有效性。引入 `has_transaction` 布尔变量明确标记是否存在运行中的事务，并利用 ext4 的挂载标志 `EXT4_MF_FC_INELIGIBLE` 来判断 `sbi->s_fc_ineligible_tid` 是否已被设置，从而修正事务 ID 的更新逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a3784f63a1e3217a4a511de9ae7aa8d7632942c2

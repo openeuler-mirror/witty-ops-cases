@@ -1,0 +1,20 @@
+#标题
+regmap 初始化失败导致 regmap_bus 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用 `__regmap_init()` 初始化失败时，若此前通过 `regmap_get_i2c_bus()` 或 `regmap_get_spi_bus()` 分配了 `regmap_bus` 结构体（用于支持 quirks），该内存块未被释放，导致内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__regmap_init()` 函数中，当函数内部发生错误并跳转至 `err` 标签退出时，未检查 `bus->free_on_exit` 标志位。对于 I2C 和 SPI 总线，如果 `regmap_bus` 是通过 `kmemdup()` 动态分配的，其 `free_on_exit` 字段被置为 true，但错误路径中缺少对应的 `kfree(bus)` 操作，导致内存泄漏。
+
+#解决方案
+在 `__regmap_init()` 函数的错误处理路径（`err` 标签处）增加判断逻辑：如果 `bus` 指针有效且 `bus->free_on_exit` 为真，则调用 `kfree(bus)` 释放内存，修复潜在的内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/665db777666920ee4d64a5f418df49ef96400a37

@@ -1,0 +1,21 @@
+#标题
+mlx5e SHAMPO 在 64K 页面大小下 skb 空间检查错误导致 GRO 会话提前终止
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置为 64K 页面大小的系统上使用 Mellanox 网卡进行 HW GRO 处理时，内核对 skb 剩余空间的计算发生错误。这导致 GRO 会话被意外提前终止，无法正常进行数据包聚合，进而影响网络吞吐量与性能。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `mlx5e_hw_gro_skb_has_enough_space()` 在计算 skb frags 是否有足够空间存储更多数据时，使用了公式 `PAGE_SIZE * nr_frags + data_bcnt <= GRO_LEGACY_MAX_SIZE`。该公式在 64K 页面大小下不正确，会导致判断逻辑认为第一个 fragment 大小超出 `GRO_LEGACY_MAX_SIZE`，从而触发 GRO 会话的提前终止。实际上，硬件会将数据连续填充至 64K 预留大小，驱动会将同一页面的数据合并至同一个 fragment，因此数据在 64K 页面下实际只会跨越一个或最多两个 fragment，不会发生溢出。
+
+#解决方案
+修改 `mlx5e_hw_gro_skb_has_enough_space()` 函数的逻辑，增加针对大页面的特殊处理：
+当 `PAGE_SIZE >= GRO_LEGACY_MAX_SIZE`（64K）时，直接使用 `skb->len + data_bcnt <= GRO_LEGACY_MAX_SIZE` 进行检查；对于其他页面大小，保留原有的检查逻辑。该修复避免了因错误的数学计算导致的 GRO 提前中断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a93648150c990857370ea7081d980e5827100c45

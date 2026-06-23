@@ -1,0 +1,21 @@
+#标题
+iommu/ummu-core: VMA split 场景下 kref 不平衡导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 VMA 进行 split 操作时发生 kref 泄漏，进而导致 `mmap_info` 结构体内存泄漏。具体表现为：当发生部分 unmap（`page_cnt > 0`）时，引用计数未正确减少，相关内存资源无法释放。
+
+#主要错误日志
+未知
+
+#问题根因
+VMA split 操作会调用 `vm_ops->open` 从而通过 `kref_get` 增加引用计数。然而在 `tid_munmap` 路径中，`kref_put` 仅在 `page_cnt <= 0` 的释放路径中被调用。当发生部分 unmap（`page_cnt > 0`）时，缺少对应的 `kref_put` 操作，导致 kref 计数不平衡，最终引发内存泄漏。
+
+#解决方案
+1. 在 `tid_munmap` 函数末尾无条件调用 `kref_put`，确保每次 VMA close 操作都有对应的 kref 释放，维持引用计数平衡。
+2. 在 `tid_munmap` 函数入口处增加对 `map_info` 的 NULL 检查，以优雅处理边界情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c9d4d65fe047ad565e5e699f9bd8a6d1a0231958

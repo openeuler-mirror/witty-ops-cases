@@ -1,0 +1,24 @@
+#标题
+perf/x86/intel/uncore: 修复 Die ID 初始化与查找错误导致 PMON 单元丢失或内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在多节点（nr_node_ids > 8）系统中，当与 UBOX 设备关联的 CPU 均处于离线状态时，内核触发 `WARN_ON_ONCE` 告警，并错误地终止扫描流程，导致部分 UBOX 设备被跳过，引发 Uncore PMU 初始化失败或不完整。
+2. 在支持 NUMA 的平台上若禁用了 NUMA 功能，`pcibus_to_node()` 返回 NUMA_NO_NODE，导致 `uncore_device_to_die()` 返回 -1。在 Intel SPR 和 EMR 平台上，这会导致 `spr_update_device_location()` 忽略对应的 PMON 单元，致使其无法添加到 RB 树中，造成性能监控设备丢失。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **逻辑缺陷**：`snbep_pci2phy_map_init()` 函数在 `die_id` 为 -1 时触发了不必要的 `WARN_ON_ONCE` 并返回 `-EINVAL`。实际上，`die_id == -1` 用于标记离线总线是预期行为，不应视为错误；同时 `pci_get_device()` 并不保证按顺序迭代，直接 `break` 会导致后续 UBOX 设备被跳过。
+2. **拓扑获取失效**：`uncore_device_to_die()` 依赖 `pcibus_to_node()` 获取拓扑信息，当 Linux 中禁用 NUMA 时该函数失效。而正确的 Die ID 应通过 UBOX GIDNIDMAP 寄存器获取，不依赖于 NUMA 是否开启。
+
+#解决方案
+1. 移除 `snbep_pci2phy_map_init()` 中对 `WARN_ON_ONCE(die_id == -1)` 的检查及其后的 `break` 语句，避免错误告警和跳过后续设备扫描。
+2. 在 `spr_update_device_location()` 中，将 `uncore_device_to_die()` 替换为 `uncore_pcibus_to_dieid()`。新函数直接从 UBOX GIDNIDMAP 寄存器读取拓扑信息，解决了 NUMA 禁用场景下的问题。
+3. 在 `spr_uncore_pci_init()` 中显式调用 `snbep_pci2phy_map_init()` 以确保映射表初始化，并保留 `uncore_device_to_die()` 仅用于必须依赖 NUMA 信息的多节点（> 8）场景。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cc023510898fc3e960ae9569630b0ae7d9a73a62

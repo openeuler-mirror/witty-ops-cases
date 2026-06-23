@@ -1,0 +1,27 @@
+#标题
+urma在RM共享TP模式下 deactivate TP 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RM（Reliable Migration）共享 TP（Transport Path）模式下，当尝试销毁一个由内核线程创建的 TP 时，如果调用者是一个用户态线程，会导致销毁操作失败。
+
+#主要错误日志
+- Failed to deactivate tp
+- Failed to queue deactivate tp
+
+#问题根因
+在去激活 TP 时，底层机制会检查当前进程 PID 是否为内核线程。如果是用户态线程，TP 将不会被销毁。
+对于非共享 TP，由 Jetty 导入创建的 TP 在取消导入时销毁（用户态到内核态转换），由 `handle_create_req()` 创建的 TP 由 `handle_destroy_req()` 销毁（内核线程）。
+当开启共享 TP 后，上述两种情况共享同一个 TP。这会导致用户态线程尝试销毁一个由内核线程分配的 TP，因权限或上下文检查不通过而导致失败。
+
+#解决方案
+引入工作队列机制，将 TP 销毁操作移至内核线程中执行，从而绕过“用户态线程无法销毁内核线程创建的 TP”的限制。
+具体修改包括：
+1. 新增 `ubcore_deactive_stp_work` 结构体和 `ubcore_deactive_stp` 处理函数，封装 TP 销毁的上下文及执行逻辑。
+2. 在 `ubcore_adapter_layer_rm_stp_disconnect` 函数中，不再直接调用 `ubcore_deactive_tp`，而是初始化一个 work 并将其放入新增的 `UBCORE_DEACTIVE_SHARE_TP_WQ` 工作队列中。
+3. 修正了 `ubcore_active_tp` 调用后的状态设置逻辑，仅在激活成功时设置为 `RM_STP_ACTIVE`，否则设置为 `RM_STP_ERROR`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4327eb23f0021966af4a7becc7b21f1ccd123b7a

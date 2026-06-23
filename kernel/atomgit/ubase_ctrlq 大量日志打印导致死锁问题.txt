@@ -1,0 +1,24 @@
+#标题
+ubase_ctrlq 大量日志打印导致死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ubase 模块处理 ctrlq crq 队列任务时，若频繁遇到无效序列号的情况，会触发大量日志打印。这会导致系统发生死锁，进而引发 crash（panic）。
+
+#主要错误日志
+- "seq is invalid, opcode = 0x%x, service_type = 0x%x, seq = %u.\n"
+- "invalid seq = %u, opcode = 0x%x, service_type = 0x%x.\n"
+- "ubase log rate is limited, ctrlq_self_seq_invalid_log_cnt = %u, ctrlq_other_seq_invalid_log_cnt = %u.\n"
+
+#问题根因
+在 `ubase_ctrlq_handle_crq_msg` 和 `ubase_ctrlq_handle_other_msg` 函数中，当检测到无效序列号时，代码在持有自旋锁（`spin_lock_bh`）的情况下调用 `ubase_warn` 进行日志打印。如果错误频繁发生，控制台输出或日志系统的开销会导致 CPU 长时间持有锁，从而引发死锁。此外，`ubase_ctrlq_crq_handler` 中的处理循环没有限制处理数量（budget），可能导致无限循环处理加重系统负载。
+
+#解决方案
+1. **修复锁与日志顺序**：将日志打印操作移到自旋锁释放之后执行，避免在持锁期间进行耗时的 I/O 操作。
+2. **引入速率限制**：新增 `ubase_log_rs` 结构体和相关限速逻辑，使用 `ubase_warn_rl` 替代 `ubase_warn`，限制无效序列号日志的打印频率，防止日志洪泛。
+3. **限制处理配额**：在 `ubase_ctrlq_crq_handler` 中引入 `UBASE_CTRLQ_CRQ_POLLING_BUDGET`（256），限制单次循环处理的请求数量，防止无限循环占用 CPU。若处理达到上限且队列非空，则重新调度任务继续处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e911001387ed828279af9d3d962c9389c93ecbfc

@@ -1,0 +1,20 @@
+#标题
+iommu/amd: 非vCPU IRTE设置vCPU亲和性返回值错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在AMD IOMMU驱动中，当针对非vCPU的中断重映射表项（IRTE）调用 `amd_ir_set_vcpu_affinity()` 设置vCPU亲和性时，函数错误地返回了成功（0）。由于调用者KVM被误导认为IRTE已成功配置为发布中断模式，这可能导致中断路由配置错误，进而引发虚拟机中断处理异常或不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `amd_ir_set_vcpu_affinity()` 在检查发现设备未启用 `use_vapic`（即非vCPU IRTE场景）时，直接返回了0（成功）。这种处理方式向KVM隐瞒了IRTE并未实际配置的事实，属于逻辑错误。正确的逻辑应当是如果没有配置vAPIC，则无法设置vCPU亲和性，应返回错误码。
+
+#解决方案
+修改 `drivers/iommu/amd/iommu.c` 中的 `amd_ir_set_vcpu_affinity` 函数逻辑：当检测到 `!dev_data || !dev_data->use_vapic` 条件成立时，将返回值从 `0` 修改为 `-EINVAL`，显式告知调用方参数无效或操作不被允许。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f05c57c092e42120e6a729e3c53c2396d7c927f

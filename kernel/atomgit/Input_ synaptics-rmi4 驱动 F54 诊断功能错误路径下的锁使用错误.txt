@@ -1,0 +1,20 @@
+#标题
+Input: synaptics-rmi4 驱动 F54 诊断功能错误路径下的锁使用错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 synaptics-rmi4 触摸屏驱动的 F54 诊断功能处理逻辑中，当获取报告大小（report_size）为 0 时，代码进入错误处理路径。由于加锁位置不当，导致在未持有互斥锁 `data_mutex` 的情况下尝试解锁，引发内核锁机制异常或潜在的内核崩溃/死锁问题。此问题由 Clang 线程安全检查器检测发现。
+
+#主要错误日志
+Bad report size, report type=%d
+
+#问题根因
+在 `rmi_f54_work` 函数中，`mutex_lock(&f54->data_mutex)` 的调用位置在检查 `report_size` 之后。当 `report_size` 为 0 时，代码直接跳转到 `error` 标签执行释放锁的操作，但此时锁尚未被获取，从而导致对未持有锁的 mutex 进行解锁操作，违反了锁的使用规范。
+
+#解决方案
+将 `mutex_lock(&f54->data_mutex)` 的调用从检查 `report_size` 之后移动到函数入口处（检查 `report_size` 之前），确保在进入可能的错误处理路径（跳转到 `error` 标签）之前，锁已经被正确持有，从而保证错误路径中解锁操作的合法性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a211744ca839163c0ad4fe17781a85c063a7b260

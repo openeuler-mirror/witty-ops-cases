@@ -1,0 +1,45 @@
+#标题
+f2fs: prepare_compress_overwrite潜在死循环导致内核挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 xfstests generic/475 测试用例时，当向 dm 设备加载错误表（error table）触发 IO 错误后，内核线程 kworker/u8:0 进入不可中断睡眠状态（D state）超过 122 秒，导致测试挂起。具体表现为 `__f2fs_write_data_pages()` 函数被阻塞，持有锁后无法释放，进而阻塞所有其他回写任务。
+
+#主要错误日志
+INFO: task kworker/u8:0:11 blocked for more than 122 seconds.
+      Not tainted 6.14.0-rc3-xfstests-lockdep #1
+"echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+task:kworker/u8:0    state:D stack:0     pid:11    tgid:11    ppid:2      task_flags:0x4208160 flags:0x00004000
+Workqueue: writeback wb_workfn (flush-253:0)
+Call Trace:
+ <TASK>
+ __schedule+0x309/0x8e0
+ schedule+0x3a/0x100
+ schedule_preempt_disabled+0x15/0x30
+ __mutex_lock+0x59a/0xdb0
+ __f2fs_write_data_pages+0x3ac/0x400
+ do_writepages+0xe8/0x290
+ __writeback_single_inode+0x5c/0x360
+ writeback_sb_inodes+0x22f/0x570
+ wb_writeback+0xb0/0x410
+ wb_do_writeback+0x47/0x2f0
+ wb_workfn+0x5a/0x1c0
+ process_one_work+0x223/0x5b0
+ worker_thread+0x1d5/0x3c0
+ kthread+0xfd/0x230
+ ret_from_fork+0x31/0x50
+ ret_from_fork_asm+0x1a/0x30
+ </TASK>
+
+#问题根因
+当 dm 设备注入 IO 错误后，`f2fs_prepare_compress_overwrite()` 函数在读取压缩簇页面时遇到 IO 错误，导致页面无法更新。由于代码未正确处理该 IO 错误，函数陷入死循环不断重试读取。此时该函数已持有 `.writepages` 锁，死循环导致锁一直无法释放，从而阻塞了所有其他的回写任务，引发内核挂起。
+
+#解决方案
+通过以下修改修复死循环问题：
+1. 在 `prepare_compress_overwrite()` 函数中增加 `f2fs_handle_page_eio()` 调用，用于检测并处理页面的 IO 错误，打破重试循环。
+2. 将 `f2fs_read_multi_pages()` 函数中对 `f2fs_cp_error()` 的检测逻辑提前，以便在早期阶段发现检查点错误并及时返回 `-EIO`，避免后续无意义的处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f6e078d8c0145801e21e56bd59b0660a56e9b49

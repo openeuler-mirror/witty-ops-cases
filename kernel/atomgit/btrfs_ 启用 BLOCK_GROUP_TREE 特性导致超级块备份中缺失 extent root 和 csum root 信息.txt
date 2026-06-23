@@ -1,0 +1,20 @@
+#标题
+btrfs: 启用 BLOCK_GROUP_TREE 特性导致超级块备份中缺失 extent root 和 csum root 信息
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当文件系统设置了 `BLOCK_GROUP_TREE` compat_ro 标志位时，超级块备份中错误地遗漏了 extent root 和 csum root 字段的记录。这会导致文件系统在回滚或检查上次提交的相关根节点信息时数据不完整，可能引发文件系统一致性校验问题或恢复异常。
+
+#主要错误日志
+未知
+
+#问题根因
+代码逻辑错误继承了 `EXTENT_TREE_V2` 的特殊处理方式。在 `backup_super_roots()` 函数中，原代码使用 `btrfs_fs_compat_ro(info, BLOCK_GROUP_TREE)` 作为条件判断来跳过 extent root 和 csum root 的备份。这是因为在 `EXTENT_TREE_V2` 特性中这部分处理逻辑不同，但在该特性拆分后，此特殊判断条件被错误地关联到了 `BLOCK_GROUP_TREE` 特性上。实际上，`BLOCK_GROUP_TREE` 的存在不应导致这两个字段不被记录。
+
+#解决方案
+修改 `fs/btrfs/disk-io.c` 文件中 `backup_super_roots()` 函数的条件判断逻辑。将判断条件从 `!btrfs_fs_compat_ro(info, BLOCK_GROUP_TREE)` 修正为 `!btrfs_fs_incompat(info, EXTENT_TREE_V2)`，确保仅当存在 `EXTENT_TREE_V2` 不兼容特性时才跳过相关字段的记录，从而修正 `BLOCK_GROUP_TREE` 场景下的备份缺失问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/04467c66e09640d02b1683774d8805fc0aa6d902

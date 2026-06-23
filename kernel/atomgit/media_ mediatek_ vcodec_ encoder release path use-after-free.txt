@@ -1,0 +1,34 @@
+#标题
+media: mediatek: vcodec: encoder release path use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MediaTek 视频编码器驱动中，当应用程序关闭编码设备文件时，若存在正在运行的编码任务，内核可能发生 Use-After-Free 故障。该问题由竞态条件引起：释放路径在释放上下文内存前未等待工作队列完全停止，导致工作队列处理函数在内存释放后继续访问已释放的上下文结构。
+经 KASAN 检测确认，可观测到以下现象：
+1. 内核报告 "BUG: KASAN: slab-use-after-free"。
+2. 进程 mtk_venc_worker 发生非法内存读取。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in mtk_venc_worker+0x159/0x180
+Read of size 4 at addr ffff88800326e000 by task kworker/u8:0/12
+Workqueue: mtk_vcodec_enc_wq mtk_venc_worker
+Allocated by task 47:
+  __kasan_kmalloc+0x7f/0x90
+  fops_vcodec_open+0x85/0x1a0
+Freed by task 47:
+  __kasan_slab_free+0x43/0x70
+  kfree+0xee/0x3a0
+  fops_vcodec_release+0xb7/0x190
+
+#问题根因
+`fops_vcodec_release()` 函数在释放上下文结构 `ctx` 之前，未取消或等待 `ctx->encode_work` 中正在运行或待处理的工作。
+根本原因在于 `v4l2_m2m_ctx_release()` 仅等待 m2m 作业的生命周期结束（通过 TRANS_RUNNING 标志），而不等待工作队列的生命周期结束。当 `v4l2_m2m_job_finish()` 被调用后，m2m 框架认为作业已完成并让释放函数返回，但工作队列处理函数 `mtk_venc_worker` 可能仍在运行并尝试访问 `ctx` 结构体，此时 `ctx` 已被 `kfree` 释放，从而触发 Use-After-Free。
+
+#解决方案
+在 `fops_vcodec_release()` 函数中，于 `v4l2_ctrl_handler_free()` 调用之后、删除链表节点之前，增加调用 `cancel_work_sync(&ctx->encode_work)`。
+该函数确保工作队列处理程序在上下文被释放前被取消（如果处于待处理状态）或已完成同步（如果正在运行），从而避免工作队列在内存释放后继续访问上下文结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/742805c7d91ec6f1b0cb2de0730b3360d8b3a46f

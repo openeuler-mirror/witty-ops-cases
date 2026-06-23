@@ -1,0 +1,20 @@
+#标题
+videobuf2: 分配失败路径下的设备引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 videobuf2-dma-contig 模块进行内存分配时，若 DMA 分配（`vb2_dc_alloc_coherent` 或 `vb2_dc_alloc_non_coherent`）失败，系统不会正确释放之前获取的设备引用计数。这会导致设备引用计数泄漏，可能引发设备无法正常释放或卸载的问题。
+
+#主要错误日志
+dma alloc of size %lu failed\n
+
+#问题根因
+在函数 `vb2_dc_alloc()` 中，代码开头调用了 `get_device()` 以增加设备引用计数。然而，在后续的 DMA 分配流程中，如果分配失败（返回错误），函数直接执行 `kfree(buf)` 并返回错误指针，遗漏了调用 `put_device()` 来释放先前获取的设备引用。这导致了引用计数的泄漏。
+
+#解决方案
+在 DMA 分配失败的错误处理路径中，在调用 `kfree(buf)` 之前，增加 `put_device(buf->dev)` 调用，确保正确释放设备引用计数，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb4ad770b5edbb0643891074caf0e0652d48c1ae

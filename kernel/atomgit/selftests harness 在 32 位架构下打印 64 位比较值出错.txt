@@ -1,0 +1,21 @@
+#标题
+selftests harness 在 32 位架构下打印 64 位比较值出错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 32 位架构上运行 selftests 测试（如 get_syscall_info）时，当测试断言（__EXPECT）失败需要打印 64 位变量值进行诊断，输出的日志信息出现错误。
+具体表现为：期望值与实际值本应不同，但打印显示的数值却完全相同，导致诊断信息混淆，无法定位真实的测试失败原因。
+
+#主要错误日志
+# get_syscall_info.c:209:get_syscall_info:Expected exp_args[2] (3134324433) == info.entry.args[1] (3134324433)
+
+#问题根因
+在 `tools/testing/selftests/kselftest_harness.h` 的 `__EXPECT()` 宏实现中，打印 64 位数值时错误地使用了 `intptr_t` 和 `uintptr_t` 类型进行转换。在 32 位架构上，这两种类型不足以容纳 64 位数值，导致数据截断或符号扩展错误，进而产生错误的诊断输出。
+
+#解决方案
+修改 `__EXPECT()` 宏中的类型定义，将 `intptr_t` 替换为 `intmax_t`，将 `uintptr_t` 替换为 `uintmax_t`，同时更新 `__TH_LOG` 中的 printf 格式说明符以匹配新类型（例如使用 `%ju` 和 `%jd`），确保在 32 位架构上也能正确打印完整的 64 位数值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/971c6b023d1b3a4f82d0c6c553fe5ebd9c58a315

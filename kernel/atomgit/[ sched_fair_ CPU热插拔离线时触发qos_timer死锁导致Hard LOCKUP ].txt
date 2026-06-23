@@ -1,0 +1,41 @@
+#标题
+[ sched/fair: CPU热插拔离线时触发qos_timer死锁导致Hard LOCKUP ]
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行CPU热插拔离线操作时，若此时`qos_overload_timer_handler()`正在并发执行，会触发ABBA死锁，进而导致内核发生Hard LOCKUP并引发Kernel Panic。
+
+#主要错误日志
+[359230.788754] Call trace:
+[359230.788755] hrtimer_active+0x7c/0xec
+[359230.788757] hrtimer_cancel+0x3c/0x60
+[359230.788758] unthrottle_qos_cfs_rqs+0xbc/0x110
+[359230.788760] unthrottle_offline_cfs_rqs+0x40/0x150
+[359230.788762] rq_offline_fair+0x60/0x70
+[359230.788764] set_rq_offline.part.0+0x54/0xf4
+[359230.788765] set_rq_offline+0x34/0x44
+[359230.788767] rq_attach_root+0x1e8/0x260
+[359230.788768] cpu_attach_domain+0x244/0x430
+[359230.788770] detach_destroy_domains+0xbc/0x140
+[359230.788772] partition_sched_domains_locked+0x23c/0x314
+[359230.788774] rebuild_sched_domains_locked+0x1f0/0x270
+[359230.788776] cpuset_hotplug_workfn+0x514/0x74c
+[359230.788777] process_one_work+0x34c/0x800
+[359230.788779] worker_thread+0xa8/0x500
+[359230.788780] kthread+0x1e0/0x220
+[359230.788782] ret_from_fork+0x10/0x18
+[359230.788783] Kernel panic - not syncing: Hard LOCKUP
+
+#问题根因
+CPU热插拔离线流程与QOS定时器处理函数`qos_overload_timer_handler()`存在锁竞争，导致了ABBA死锁：
+1. `qos_overload_timer_handler()`执行时需要获取rq锁；
+2. CPU离线流程在`unthrottle_offline_cfs_rqs`中调用`unthrottle_qos_cfs_rqs()`，该函数内部会调用`cancel_qos_timer()`等待定时器处理结束；
+3. 此时CPU离线流程已持有某些锁（如_rq_offline相关锁），而定时器处理函数在等待rq锁，形成了ABBA死锁，最终触发Hard LOCKUP。
+
+#解决方案
+修改`unthrottle_offline_cfs_rqs()`函数，将内部的`unthrottle_qos_cfs_rqs()`调用替换为`__unthrottle_qos_cfs_rqs()`。`__unthrottle_qos_cfs_rqs()`函数仅执行解限流操作，不包含`cancel_qos_timer()`逻辑，从而避免了在CPU离线过程中因等待定时器结束而引发的死锁风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/04da62af4bfef38a6171236476672ad82d332631

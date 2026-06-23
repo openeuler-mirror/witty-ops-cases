@@ -1,0 +1,24 @@
+#标题
+RISC-V: KVM: SBI SFENCE 调用中 size 参数检查不符合规范
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V KVM 虚拟化场景下，当 Guest 发起 SBI 远程 TLB 刷新（SFENCE）操作时，若请求刷新整个地址空间且参数 `size` 设置为 `-1`（即 $2^{XLEN}-1$），Host 内核未能正确识别该意图，导致未能执行全地址空间的刷新操作，可能引发 Guest 虚拟机的内存一致性异常或内存访问错误。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 SBI（Supervisor Binary Interface）规范，SBI 远程 fence 操作仅在以下两种情况下适用于整个地址空间：
+1. `start_addr` 和 `size` 均为 0；
+2. `size` 等于 $2^{XLEN}-1$（即 -1）。
+
+内核代码在处理 `SBI_EXT_RFENCE_REMOTE_SFENCE_VMA` 和 `SBI_EXT_RFENCE_REMOTE_SFENCE_VMA_ASID` 调用时，仅检查了条件 1（`cp->a2 == 0 && cp->a3 == 0`），遗漏了条件 2 的检查，导致规范实现不完整。
+
+#解决方案
+修改 `arch/riscv/kvm/vcpu_sbi_replace.c` 中的条件判断逻辑，在原有的“起始地址和大小均为 0”判断基础上，增加“size 等于 -1（`cp->a3 == -1UL`）”的判断条件。只要满足其中一个条件，即触发全地址空间的 TLB 刷新操作，从而符合 SBI 规范要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cc91b3837dcb8a5620ed9a200f6741f6ced89c5a

@@ -1,0 +1,31 @@
+#标题
+md/raid5: 移除残留 RCU 保护导致的 sparse 静态检查报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 sparse 工具对内核代码进行静态检查时，`drivers/md/raid5.c` 文件中出现多处“incompatible types in comparison expression (different address spaces)”错误。具体表现为在比较表达式中，`__rcu` 地址空间指针与普通指针类型不兼容。
+
+#主要错误日志
+drivers/md/raid5.c:8071:24: error: incompatible types in comparison expression (different address spaces):
+drivers/md/raid5.c:8071:24:    struct md_rdev [noderef] __rcu *
+drivers/md/raid5.c:8071:24:    struct md_rdev *
+drivers/md/raid5.c:7569:25: error: incompatible types in comparison expression (different address spaces):
+drivers/md/raid5.c:7569:25:    struct md_rdev [noderef] __rcu *
+drivers/md/raid5.c:7569:25:    struct md_rdev *
+drivers/md/raid5.c:7573:25: error: incompatible types in comparison expression (different address spaces):
+drivers/md/raid5.c:7573:25:    struct md_rdev [noderef] __rcu *
+drivers/md/raid5.c:7573:25:    struct md_rdev *
+
+#问题根因
+在提交 ad8606702f26 ("md/raid5: remove rcu protection to access rdev from conf") 中，移除了访问 conf 中 rdev 的 RCU 保护机制，但代码中残留了三处未同步更新的 RCU 相关用法（涉及 `RCU_INIT_POINTER` 赋值和 `rcu_dereference` 取值），导致指针地址空间属性不一致，引发 sparse 静态检查报错。实际上不会引发运行时功能问题，属于代码一致性问题。
+
+#解决方案
+移除残留的 RCU 保护代码，将其改为直接赋值和直接引用，以匹配之前的重构改动：
+1. 在 `setup_conf` 函数中，将 `RCU_INIT_POINTER(disk->replacement, rdev)` 改为直接赋值 `disk->replacement = rdev`。
+2. 在 `setup_conf` 函数中，将 `RCU_INIT_POINTER(disk->rdev, rdev)` 改为直接赋值 `disk->rdev = rdev`。
+3. 在 `print_raid5_conf` 函数中，移除 `rcu_read_lock()` 和 `rcu_read_unlock()` 调用，并将 `rcu_dereference(conf->disks[i].rdev)` 改为直接引用 `conf->disks[i].rdev`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/316a0f9c3156b9d9006562a1da6d4586203f5a06

@@ -1,0 +1,26 @@
+#标题
+pm80xx驱动在rmmod时触发数组越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统连接了Expander（扩展器）设备时，在执行 `rmmod` 移除 pm80xx 驱动模块过程中触发 UBSAN（未定义行为检测器）告警。系统打印数组索引越界信息，指出索引值超出了 `pm8001_phy` 数组的定义范围。此问题发生在设备移除通知的处理流程中。
+
+#主要错误日志
+UBSAN: array-index-out-of-bounds in drivers/scsi/pm8001/pm8001_sas.c:786:17
+index 28 is out of range for type 'pm8001_phy [16]'
+
+#问题根因
+在提交 f7b705c238d1 中引入的代码逻辑错误。在 `pm8001_dev_gone_notify` 函数中，代码无条件地使用 `attached_phy` 作为索引来访问 `pm8001_ha->phy` 数组。
+根因分析如下：
+1. `pm8001_ha->phy` 数组仅包含 HBA（主机总线适配器）的本地物理端口（phys），其大小由 `pm8001_ha->chip->n_phy` 决定（例如 8 或 16）。
+2. 对于直连设备，`attached_phy` 存储的是本地 PHY ID，访问数组安全。
+3. 但对于连接在 Expander 后面的设备，`attached_phy` 存储的是远端 Expander 的 PHY ID（可能很大，例如 28 或 30），而不是本地 PHY ID。
+4. 当移除连接了 Expander 的驱动时，驱动错误地使用 Expander 的 PHY ID 去索引本地的 `phy` 数组，导致数组越界访问。
+
+#解决方案
+在访问 `pm8001_ha->phy` 数组前增加设备类型判断。只有当设备不是通过 Expander 连接时，才执行清除 `phy_attached` 标志的操作。修改代码逻辑：通过检查 `dev->parent` 是否存在且是否为 Expander 类型，来区分直接连接设备和扩展连接设备，从而避免对本地 PHY 数组的越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/291982cae2055cb12c808c2b0e0cacc5f1b1d68a

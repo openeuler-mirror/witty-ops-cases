@@ -1,0 +1,20 @@
+#标题
+PCI: Fix NVMe link speed downgrade to 2.5GT/s during hotplug
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NVMe 设备热拔插过程中，PCIe 链路速度异常降级至 2.5GT/s，导致设备无法以预期的更高速度运行，影响系统性能。
+
+#主要错误日志
+pci_info(dev, "removing 2.5GT/s downstream link speed restriction\n")
+
+#问题根因
+在 `pcie_failed_link_retrain` 函数中，代码逻辑在检查链路状态（DLLLA）和链路速度控制（TLS）是否为 2.5GT/s 时，错误地附加了 `pci_match_id(ids, dev)` 作为判断条件。这导致对于某些特定设备，虽然检测到了 2.5GT/s 的限制，但因为 ID 匹配条件限制未能进入解除限制的处理流程，或者是匹配逻辑放置位置不当导致处理异常，从而引起链路速度降级问题。
+
+#解决方案
+调整 `pci_match_id(ids, dev)` 的判断位置，将其移至函数入口的过滤条件中，确保只有匹配的设备才执行后续的链路重训练逻辑，同时移除了解除速度限制分支中多余的 ID 匹配检查，确保所有符合条件且处于 2.5GT/s 限制状态的设备都能正确解除限制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/60f723bd608bc930b919a5fcb328ecf700e454df

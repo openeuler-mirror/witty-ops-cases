@@ -1,0 +1,26 @@
+#标题
+acpi: nfit: 修复 acpi_nfit_ctl 中整型缩窄转换导致的校验绕过问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Syzkaller 报告了一个内核警告，在 `to_nfit_bus_uuid()` 函数中触发："only secondary bus families can be translated"。
+该警告表明有非法参数传入函数，若用户提供的 `call_pkg->nd_family` 值非零但其低 32 位为零，可绕过原有的非零检查并导致未定义行为。
+
+#主要错误日志
+"only secondary bus families can be translated"
+
+#问题根因
+在 `acpi_nfit_ctl()` 函数中，校验逻辑存在整型缩窄转换缺陷：
+1. 代码首先校验 `call_pkg->nd_family`（u64 类型）不为 0。
+2. 随后该值被隐式转换为 int 类型赋给变量 `family`。
+3. 接着代码校验 `family` 是否大于 `NVDIMM_BUS_FAMILY_MAX`。
+如果用户输入的 `call_pkg->nd_family` 是一个非零值（满足第一次校验），但其低 32 位为 0（导致转换为 int 后变为 0），则该值能够绕过后续的大小校验，最终将无效参数传递给底层函数。
+
+#解决方案
+修改校验逻辑，直接对原始变量 `call_pkg->nd_family`（u64 类型）进行范围检查，而不是对转换后的 int 类型变量 `family` 进行检查。
+将 `if (family > NVDIMM_BUS_FAMILY_MAX ...` 修改为 `if (call_pkg->nd_family > NVDIMM_BUS_FAMILY_MAX ...`，确保在类型转换发生前正确拦截非法输入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b4ecf14812907eb50059a0f16c41383391e871db

@@ -1,0 +1,22 @@
+#标题
+fbdev: valkyriefb: Fix reference count leak in valkyriefb_init
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在加载 valkyriefb 驱动模块时，若设备树中存在 valkyrie 节点，会导致设备节点（device_node）的引用计数发生泄漏。若 `of_address_to_resource` 函数调用失败，驱动初始化直接返回，但未释放已获取的节点引用；在正常流程退出循环后，同样未释放节点引用。长期或反复操作可能导致内核内存资源耗尽。
+
+#主要错误日志
+- `printk(KERN_ERR "can't find address for valkyrie\n")`
+
+#问题根因
+函数 `of_find_node_by_name()` 返回设备树节点时会增加该节点的引用计数，调用者需要在不需要时调用 `of_node_put()` 来释放引用。原代码在 `valkyriefb_init` 函数中获取了节点 `dp`，但在处理 `of_address_to_resource` 失败的分支以及正常处理流程结束后，均未调用 `of_node_put(dp)` 释放引用，导致引用计数泄漏。
+
+#解决方案
+在 `valkyriefb_init` 函数中补充 `of_node_put(dp)` 调用：
+1. 在 `of_address_to_resource` 失败的错误处理分支中，在返回前增加 `of_node_put(dp)`。
+2. 在循环末尾或正常流程结束处增加 `of_node_put(dp)`，确保节点引用被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6704166c35614294efb59f2640fb7378daf1b4f9

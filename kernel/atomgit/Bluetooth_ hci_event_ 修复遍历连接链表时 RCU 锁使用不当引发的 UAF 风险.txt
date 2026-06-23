@@ -1,0 +1,21 @@
+#标题
+Bluetooth: hci_event: 修复遍历连接链表时 RCU 锁使用不当引发的 UAF 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 HCI_LE_Create_BIG_Complete 事件时，内核遍历设备连接链表过程中不当使用 `rcu_read_unlock()`。这导致 RCU 临界区提前结束，使得后续代码在 RCU 读锁释放后继续访问连接对象（如 `conn->state`, `conn->flags` 等）。此行为违反了 RCU 指针访问规则，可能导致 Use-After-Free（释放后使用）或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hci_le_create_big_complete_evt` 函数中，代码在 `list_for_each_entry_rcu` 循环内部调用了 `rcu_read_unlock()`。
+根据 RCU 机制，通过 `rcu_dereference`（或 `list_for_each_entry_rcu`）获取的指针仅在 RCU 读临界区内有效。原代码在循环体中间断地调用 `rcu_read_unlock()` 和 `rcu_read_lock()`，导致在临界区外访问了 `conn` 对象成员（如 `hci_debugfs_create_conn`、`hci_conn_add_sysfs` 等调用时），这破坏了 RCU 保护机制，存在指针被并发释放后访问的风险。
+
+#解决方案
+移除循环内部的 `rcu_read_lock()` 和 `rcu_read_unlock()` 调用，改为使用专门的查找函数 `hci_conn_hash_lookup_big_state` 来定位处于 `BT_BOUND` 状态的连接。修复补丁删除了不安全的 RCU 遍历逻辑，确保在对连接对象进行状态更新、调试文件系统创建和 sysfs 添加操作时，对象生命周期安全受控（依赖于 `hci_dev_lock` 或引用计数）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9d1d6db4fd63ce87e45068e21f526f3c587b8915

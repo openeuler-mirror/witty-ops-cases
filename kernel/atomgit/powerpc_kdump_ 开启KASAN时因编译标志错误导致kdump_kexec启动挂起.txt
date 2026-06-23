@@ -1,0 +1,20 @@
+#标题
+powerpc/kdump: 开启KASAN时因编译标志错误导致kdump/kexec启动挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 KASAN 功能的情况下，执行 kdump 或 kexec 操作时系统挂起，导致 kdump 内核无法正常启动。
+
+#主要错误日志
+bad_page_fault
+
+#问题根因
+Makefile 中禁用 KASAN 插件的配置项书写错误，缺少了目标文件后缀 ".o"（原为 `KASAN_SANITIZE_core_$(BITS) := n`）。这导致编译器未能正确对该目标文件禁用 KASAN 插件，使得 `kexec_copy_flush` 和 `copy_segments` 函数被插桩。这些函数在 MMU 禁用的状态下运行，插桩后的代码会通过常规地址转换路径访问影子内存，从而触发无法处理的页错误，最终导致系统挂起。
+
+#解决方案
+修正 arch/powerpc/kexec/Makefile 中的 KASAN_SANITIZE 变量赋值，补全 ".o" 后缀，确保 KASAN_SANITIZE_core_$(BITS).o 的 KASAN 插件被正确禁用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b3fb90c83080a9a0736fabefd43de4339ea57b54

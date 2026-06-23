@@ -1,0 +1,22 @@
+#标题
+nfs/enfs: 释放 view_table 时的内存泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在释放 ENFS（Elastic NFS）视图表（view_table）时，部分链表成员未被执行清理操作，导致关联的 `lif_info` 和 `ls_info` 结构体内存未被释放，发生内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `enfs_free_view_table` 在释放 `view_table` 结构体时逻辑不完整。虽然调用宏定义的清理函数清除了 `fs_info` 和 `shard_view` 的链表，但遗漏了对 `lif_info`（链表头 `lif_head`）和 `ls_info`（链表头 `ls_head`）链表的清理操作，导致这些链表上挂载的内存对象在 `view_table` 释放时无法被正确回收。
+
+#解决方案
+在 `enfs_free_view_table` 函数中补充缺失的清理调用。具体修改包括：
+1. 利用现有的 `DEFINE_CLEAR_LIST_FUNC` 宏分别定义 `lif_info` 和 `ls_info` 的清理函数。
+2. 在 `enfs_free_view_table` 中依次调用 `enfs_clear_lif_info(table)` 和 `enfs_clear_ls_info(table)`，确保所有链表成员在释放表结构前被正确清空。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca593c48d1e16a8143aa02ec6f8234d1a05af45e

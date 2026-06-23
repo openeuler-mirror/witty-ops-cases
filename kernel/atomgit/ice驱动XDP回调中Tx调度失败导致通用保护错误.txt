@@ -1,0 +1,32 @@
+#标题
+ice驱动XDP回调中Tx调度失败导致通用保护错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+加载XDP程序时，若Tx调度器更新失败，内核将触发通用保护错误，导致系统崩溃。崩溃发生在中断上下文的处理过程中，具体表现为Oops错误，并伴随“Failed VSI LAN queue config for XDP”的错误提示。
+
+#主要错误日志
+[  +9.549584] ice 0000:ca:00.0: Failed VSI LAN queue config for XDP, error: -5
+[  +0.382335] Oops: general protection fault, probably for non-canonical address 0x50a2250a90495525: 0000 [#1] SMP NOPTI
+[  +0.010710] CPU: 103 UID: 0 PID: 0 Comm: swapper/103 Not tainted 6.14.0-net-next-mar-31+ #14 PREEMPT(voluntary)
+[  +0.010946] RIP: 0010:__ice_update_sample+0x39/0xe0 [ice]
+[  +0.002715] Call Trace:
+[  +0.002452]  <IRQ>
+[  +0.004835]  ice_napi_poll+0x665/0x680 [ice]
+[  +0.003500]  __napi_poll+0x28/0x190
+[  +0.003752]  net_rx_action+0x198/0x360
+
+#问题根因
+在XDP回调函数中，当添加新的Tx队列后需要更新Tx调度器。如果Tx调度器更新失败，回调函数应回滚所有之前的更改。
+旧代码在处理该失败路径时存在缺陷：未将XDP队列从q_vectors（中断向量）中解除映射，且未将XDP rings指针置为NULL。这导致系统继续引用已释放或无效的资源，从而触发通用保护错误崩溃。
+
+#解决方案
+1. 新增 `ice_unmap_xdp_rings` 函数，专门用于处理XDP环与中断向量的解映射操作。
+2. 在Tx调度器配置失败的错误处理路径中，调用 `ice_unmap_xdp_rings` 执行遗漏的解映射操作。
+3. 在释放xdp_rings内存后，显式将 `vsi->xdp_rings` 指针置为 NULL，防止悬空指针引用。
+4. 在XDP回调处理中，若资源准备或ring创建失败，立即跳转到恢复流程（resume_if），确保错误处理路径完整。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/02722d8ff8ade6097c5eae44b5e55447e57d9c86

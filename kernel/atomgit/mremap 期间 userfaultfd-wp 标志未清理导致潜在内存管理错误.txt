@@ -1,0 +1,23 @@
+#标题
+mremap 期间 userfaultfd-wp 标志未清理导致潜在内存管理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 userfaultfd 写保护功能的 VMA 进行 mremap 操作时，若未启用 UFFD_FEATURE_EVENT_REMAP 特性，页表中残留的 uffd-wp 标志未被正确清理。这会导致在移动后的新 VMA 中，由于新 VMA 未注册 userfaultfd，这些残留的写保护标志引发后续内存访问异常或内核内存管理逻辑错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在进行 mremap 系统调用移动页表项时，内核未检查 userfaultfd 的 UFFD_FEATURE_EVENT_REMAP 特性是否启用。如果该特性未启用，mremap 后新 VMA 将失去 userfaultfd 上下文，但页表项（PTE/PMD）中的 uffd-wp 标志仍然保留。内核代码在移动页表时未能针对这种情况清理写保护位，导致新 VMA 中存在悬空的 uffd-wp 状态。
+
+#解决方案
+该补丁通过以下方式修复此问题：
+1. 新增辅助函数 `vma_has_uffd_without_event_remap`，用于检查 VMA 是否注册了 userfaultfd 且未启用 UFFD_FEATURE_EVENT_REMAP 特性。
+2. 在 `move_ptes`、`move_huge_pmd` 和 `move_huge_pte` 等页表移动核心函数中，增加逻辑判断：如果存在上述情况，显式调用 `pte_clear_uffd_wp` 或 `pmd_clear_uffd_wp` 清理页表项中的写保护标志。
+3. 在 `move_normal_pmd` 和 `move_normal_pud` 优化路径中增加检查 `uffd_supports_page_table_move`，若不支持则回退到逐页移动模式，以确保所有层级的页表都能正确处理 uffd-wp 标志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/709e694429aedef30c2ca8f61141ec83bb088c15

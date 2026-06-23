@@ -1,0 +1,28 @@
+#标题
+USB Type-C anx7411 驱动 fwnode_handle 引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ANX7411 Type-C 驱动初始化过程中，若 `anx7411_typec_port_probe` 函数因配置缺失或校验失败（如 power-role/data-role 未找到、PDO 校验失败等）而返回错误，或驱动模块被卸载（`.remove`）时，此前获取的 `fwnode_handle` 和 `usb_role_switch` 对象的引用计数未被正确递减。这会导致内核对象的引用计数泄漏，可能造成内存泄漏或相关资源无法正常释放的问题。
+
+#主要错误日志
+- power-role not found: %d
+- data-role not found: %d
+- try-power-role not found: %d
+- source cap validate failed: %d
+- sink cap validate failed: %d
+- Failed to register type c port %d
+
+#问题根因
+在 `anx7411_typec_port_probe` 函数中，代码通过 `fwnode_handle_get` 等操作获取了 `fwnode_handle` 和 `usb_role_switch` 的引用（增加了引用计数）。然而，当函数在后续步骤中出错跳转到错误处理路径时，代码直接返回而未调用 `fwnode_handle_put` 或 `usb_role_switch_put` 来减少引用计数。此外，在驱动的 `.remove` 函数中，也遗漏了对 `fwnode_handle` 的 put 操作。
+
+#解决方案
+修复引用计数泄漏问题，具体措施如下：
+1. 新增 `anx7411_port_unregister` 辅助函数，封装对 `fwnode_handle_put`、`anx7411_port_unregister_altmodes`、`typec_unregister_port` 以及 `usb_role_switch_put` 的调用，确保资源按序释放。
+2. 在 `anx7411_typec_port_probe` 函数的各个错误分支中，将直接 `return` 修改为 `goto` 跳转到新增的 `put_usb_role_switch` 或 `put_fwnode` 标签处执行清理逻辑。
+3. 在 `anx7411_i2c_remove` 函数及 `i2c_probe` 失败路径中，调用 `anx7411_port_unregister` 替代原有的分散清理代码，确保在驱动卸载或初始化失败时正确释放所有引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6442c70424daec4d36ffb116da83fec3237ce06b

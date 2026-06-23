@@ -1,0 +1,26 @@
+#标题
+calipso 处理 SYN Cookie 时访问空指针导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 SYN Cookie 的 IPv6 环境下使用 CALIPSO 协议时，内核发生通用保护错误，导致主机崩溃。具体表现为 TCP 连接处理过程中触发 Oops，KASAN 报告空指针解引用。
+
+#主要错误日志
+TCP: request_sock_TCPv6: Possible SYN flooding on port [::]:20002. Sending cookies.
+Oops: general protection fault, probably for non-canonical address 0xdffffc0000000006: 0000 [#1] PREEMPT SMP KASAN NOPTI
+KASAN: null-ptr-deref in range [0x0000000000000030-0x0000000000000037]
+RIP: 0010:sock_kmalloc+0x35/0x170 net/core/sock.c:2806
+Call Trace:
+ ipv6_renew_options
+ calipso_req_setattr+0x181/0x340 net/ipv6/calipso.c:1204
+
+#问题根因
+在 TCP SYN Cookie 机制被触发时，`reqsk->rsk_listener` 可能为 NULL。`calipso_req_setattr()` 和 `calipso_req_delattr()` 函数通过 `sk_to_full_sk(req_to_sk(req))` 获取 `struct sock` 指针，但在 SYN Cookie 场景下该指针为 NULL。后续代码直接对该指针进行解引用操作（如调用 `sock_kmalloc`），导致发生空指针解引用错误。
+
+#解决方案
+在 `calipso_req_setattr()` 和 `calipso_req_delattr()` 函数中增加对 `sk` 指针的判断。如果 `sk` 为 NULL（即处于 SYN Cookie 场景），`calipso_req_setattr()` 直接返回 `-ENOMEM` 错误，`calipso_req_delattr()` 直接返回，从而避免空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3824c677440bed0a6be65099d63524243c923926

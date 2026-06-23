@@ -1,0 +1,26 @@
+#标题
+PowerNV PCI热插拔驱动中断处理机制缺陷导致潜在系统崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PowerNV 平台进行 PCI 设备热插拔操作时，若涉及子设备或下游端口，系统可能因中断处理不当而触发 panic 或出现不可预测的行为。具体表现为在移除（disable）操作期间，下游插槽的中断未被正确清理，可能导致中断风暴或访问已释放资源；同时在重新使能插槽时，意外禁用了 MSI/MSI-X 中断，导致热插拔事件无法正常响应。
+
+#主要错误日志
+SLOT_WARN(php_slot, "Cannot alloc workqueue\n");
+SLOT_WARN(php_slot, "Error %d enabling IRQ %d\n", ret, irq);
+
+#问题根因
+驱动程序在中断资源管理上存在逻辑缺陷：
+1. 在禁用插槽时，未递归禁用下游所有子插槽的中断，导致移除设备后遗留活跃的中断句柄，可能引发系统崩溃。
+2. `pnv_php_disable_irq` 函数逻辑有误，在非预期场景下（如热插拔中断重置过程）错误地禁用了 MSI/MSI-X，切断了热插拔事件的通知通道。
+3. 工作队列的释放与中断禁用顺序不协调，可能导致中断处理程序访问已释放的工作队列。
+
+#解决方案
+1. 引入 `pnv_php_disable_all_irqs` 和 `pnv_php_disable_all_downstream_irqs` 函数，在禁用插槽时递归清理所有下游插槽的中断资源，确保资源释放完整。
+2. 重构 `pnv_php_disable_irq` 函数，增加 `disable_msi` 参数，将 MSI/MSI-X 的禁用逻辑与 PCI 设备禁用逻辑解耦，避免在错误场景下误关闭中断。
+3. 将工作队列的创建提前至插槽分配阶段，并将销毁逻辑移至 `pnv_php_free_slot`，确保生命周期管理正确，避免竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/30607aef774624b9e0d910882cf39a6528c288d7

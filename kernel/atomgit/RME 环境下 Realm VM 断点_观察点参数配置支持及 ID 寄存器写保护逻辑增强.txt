@@ -1,0 +1,27 @@
+#标题
+RME 环境下 Realm VM 断点/观察点参数配置支持及 ID 寄存器写保护逻辑增强
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 用户态无法通过 `KVM_SET_ONE_REG` 接口配置 Realm VM 的断点数和观察点数。
+2. 在 Realm 描述符创建后，尝试修改 ID 寄存器返回错误码不一致或未按预期拦截（原逻辑仅检查 `kvm_vm_has_ran_once`，未覆盖 Realm 创建阶段）。
+3. 若输入非法的调试版本或断点参数，内核未进行有效性校验可能导致后续异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 功能缺失：`validate_realm_set_reg` 校验函数未放行 `KVM_REG_ARM_ID_AA64DFR0_EL1` 寄存器，且 `realm_create_rd` 创建 Realm 描述符时未从该寄存器提取 `BRPs` 和 `WRPs` 参数传递给 RMM。
+2. 逻辑漏洞：`set_id_reg` 函数中对 ID 寄存器不可变性的检查仅依赖 `kvm_vm_has_ran_once`，未包含 `kvm_realm_is_created` 状态，导致 Realm 创建后仍可能被错误修改。
+3. 校验缺失：`set_id_aa64dfr0_el1` 函数未对 `DebugVer`、`BRPs`、`WRPs` 等字段进行合法性边界检查（如数值需大于 0，CTX_CMPs 不得大于 BRPs）。
+
+#解决方案
+1. 在 `validate_realm_set_reg` 中增加对 `KVM_REG_ARM_ID_AA64DFR0_EL1` 的 case 分支，允许用户态配置该寄存器。
+2. 在 `realm_create_rd` 中解析 `ID_AA64DFR0_EL1` 寄存器值，提取 `BRPs` 和 `WRPs` 字段并赋值给 `params` 结构体，传递给 RMM。
+3. 在 `set_id_aa64dfr0_el1` 中增加参数合法性校验逻辑，拒绝 `DebugVer` 小于实现版本、`bps/wps` 为 0 或 `ctx_cmps > bps` 等非法配置，返回 `-EINVAL`。
+4. 修改 `set_id_reg` 的不可变检查条件，在 `kvm_vm_has_ran_once` 基础上增加 `|| kvm_realm_is_created(vcpu->kvm)` 判断，确保 Realm 创建后 ID 寄存器不被修改。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7774c8164828a32bbafc297633a193ff12f6d40f

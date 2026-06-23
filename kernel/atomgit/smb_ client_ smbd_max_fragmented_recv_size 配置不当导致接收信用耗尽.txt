@@ -1,0 +1,20 @@
+#标题
+smb: client: smbd_max_fragmented_recv_size 配置不当导致接收信用耗尽
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 SMB Direct (RDMA) 功能下载文件（未使用 rdma offload）或从服务器获取大量目录枚举数据时，若服务器发送的数据接近或达到 `smd_max_fragmented_recv_size` 阈值，客户端可能无法授予接收信用。此时所有接收缓冲区可能已被移动至 recv_io.reassembly.list，导致连接挂起或数据传输中断。
+
+#主要错误日志
+未知
+
+#问题根因
+内核参数 `smbd_max_fragmented_recv_size` 原设置为 1024 * 1024 (1MB)，该值严重超过了系统实际能支持的接收能力。根据 SMB Direct 协议规范及代码逻辑，接收能力受限于接收信用最大值与每个信用对应的最大负载乘积（smbd_receive_credit_max * max_payload_per_credit），即 1340 * 255 = 341700 字节。设置过大的 `smbd_max_fragmented_recv_size` 会导致在接收大量数据时耗尽接收缓冲区，从而无法向服务器授予新的接收信用，造成通信阻塞。
+
+#解决方案
+将 `smbd_max_fragmented_recv_size` 的值从 1MB (1024 * 1024) 修正为 173910。该值基于每个信用的最大负载与最大信用数的计算并取半，即 `(1364 * 255) / 2`。该数值既满足协议规范要求的最小值 131072，又保证不超过最大理论接收上限 341700，从而避免接收信用耗尽的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2fd18f66843e62f6616726d8a2227355a2ecfb35

@@ -1,0 +1,26 @@
+#标题
+drm/hisilicon/hibmc: HPD中断触发错误行为导致热拔插识别异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当DisplayPort接口发生热拔插（HPD out）时，由于信号变化极快，驱动在 `detect_ctx()` 中通过 aux channel 检测时可能仍认为设备处于连接状态。这导致驱动忽略了 HPD out 信号，造成系统无法正确识别显示器已断开连接，热拔插功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+HPD out 信号持续时间极短，导致在 DP 的 `detect_ctx()` 函数中通过 aux channel 检测时，结果仍显示为连接状态。原逻辑直接依赖该检测结果或中断状态判断，未维护一个独立的连接状态标志，导致驱动错误地忽略了短暂的 HPD out 信号，无法正确响应断开事件。
+
+#解决方案
+在 `hibmc_dp` 结构体中新增 `hpd_status` 标志位用于维护连接状态。
+1. 修改 `hibmc_dp_detect()` 函数，不再依赖 aux channel 检测，而是直接读取 `hpd_status` 标志返回连接状态。
+2. 重构中断处理函数 `hibmc_dp_hpd_isr()`：
+   - 根据 `hpd_status` 当前值判断是处理“拔出”还是“插入”中断。
+   - 若当前为连接状态且收到拔出中断，则执行链路重置、更新 `hpd_status` 为 0 并触发连接器热插拔事件。
+   - 若当前为断开状态且收到插入中断，则执行配置、更新 `hpd_status` 为 1 并触发事件。
+   此修复通过软件状态位规避了硬件信号过快导致的检测误判问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca17e53be0f7411a3eda07dcc3bb075b042b2934

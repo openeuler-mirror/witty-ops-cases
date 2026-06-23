@@ -1,0 +1,23 @@
+#标题
+UB驱动并发加载卸载导致Memory RAS处理空指针及日志优化
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动并发加载和卸载的场景下，UB Memory RAS handler 可能会变成空指针，导致驱动运行异常。此外，Memory RAS 中断处理程序（ISR）中的错误日志信息不够清晰，难以定位问题。
+
+#主要错误日志
+- UB memory ras event: type=%u
+- UB memory ras handler failed, ret=%d
+
+#问题根因
+在驱动并发加载和卸载的场景下，`ub_mem_ras_handler_register` 与 `ub_mem_ras_handler_unregister` 函数对全局 `handler` 指针的修改缺乏互斥保护，导致在中断处理程序 `hi_mem_ras_isr` 中获取到的 `handler` 可能为 NULL，引发并发竞态问题。
+
+#解决方案
+1. 引入 `mem_ras_mutex` 互斥锁，在 `ub_mem_ras_handler_register`、`ub_mem_ras_handler_unregister` 以及中断处理函数 `hi_mem_ras_isr` 中加锁，确保 handler 指针在并发场景下的安全性。
+2. 优化错误日志打印，将原先的 `WARN_ON(ret)` 替换为具体的 `pr_err` 错误日志，明确记录 RAS handler 调用失败的返回值；同时优化 RAS 事件类型的日志前缀，使其更具辨识度。
+3. 修正 `UB_MEM_VERSION_2` 版本下内存解码器基地址的映射偏移量计算逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0cefbdbd67ec81b05e3ef4314c829c44bf8c3107

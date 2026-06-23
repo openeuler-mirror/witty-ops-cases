@@ -1,0 +1,35 @@
+#标题
+RDMA/hns: DWQE路径下QP状态错误导致缺失Flush CQE引发NFS挂死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 NFS over RDMA 场景下，当 QP（Queue Pair）状态进入错误模式（errored mode）时，系统出现 hung task timeout 现象，导致任务长时间阻塞无法完成。具体表现为 `ib_drain_sq` 函数执行超时。
+
+#主要错误日志
+ hung task timeout 相关调用栈：
+    __switch_to+0x7c/0xd0
+    __schedule+0x350/0x750
+    schedule+0x50/0xf0
+    schedule_timeout+0x2c8/0x340
+    wait_for_common+0xf4/0x2b0
+    wait_for_completion+0x20/0x40
+    __ib_drain_sq+0x140/0x1d0 [ib_core]
+    ib_drain_sq+0x98/0xb0 [ib_core]
+    rpcrdma_xprt_disconnect+0x68/0x270 [rpcrdma]
+    xprt_rdma_close+0x20/0x60 [rpcrdma]
+    xprt_autoclose+0x64/0x1cc [sunrpc]
+    process_one_work+0x1d8/0x4e0
+    worker_thread+0x154/0x420
+    kthread+0x108/0x150
+    ret_from_fork+0x10/0x18
+
+#问题根因
+在 DWQE（Direct WQE）路径中，当 QP 状态变为 IB_QPS_ERR 时，缺少对 Flush CQE 处理函数的调用。这导致新添加的未完成 WQEs（Work Queue Entries）无法被 flush，进而导致后续流程中 `ib_drain_sq` 一直等待无法完成，最终触发 hung task timeout。
+
+#解决方案
+在 `write_dwqe` 函数中增加 QP 状态检查逻辑。如果检测到 QP 状态为 `IB_QPS_ERR`，立即调用 `flush_cqe` 函数处理 CQE，并直接返回，不再下发 DWQE，从而确保错误状态下的 WQE 能被正确 flush。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a35a3c16eafeea908fc679e25d7385c4c657a971

@@ -1,0 +1,26 @@
+#标题
+xhci: TD失效处理在Set TR Dequeue挂起期间导致逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在USB XHCI驱动处理流端点或停止端点的并发操作时，若硬件正在执行Set TR Dequeue命令，此时调用 `xhci_invalidate_cancelled_tds()` 可能导致：
+1. 函数读取到不一致的端点或流上下文状态，导致TD（Transfer Descriptor）失效处理逻辑错误。
+2. 无法为下一个流正确下发Set TR Dequeue命令，导致xHC缓存无法清理。
+3. 若端点停止（halt）触发的Reset Endpoint与Set TR Dequeue并发执行，可能导致TD被清理后未及时返还给上层驱动，造成URB处理延迟或资源泄漏。
+
+#主要错误日志
+未知
+（注：补丁中仅包含 `xhci_dbg` 调试日志，非错误级别日志，如 "Giveback cancelled URB %p TD\n" 等，无明显错误打印。）
+
+#问题根因
+`xhci_invalidate_cancelled_tds()` 函数缺乏对 `SET_DEQ_PENDING` 状态的检查。
+当硬件正在执行 Set TR Dequeue 命令修改端点或流上下文的出队指针时，该函数被 Stop Endpoint 或 Reset Endpoint 的完成处理程序并发调用。此时读取的指针状态可能处于变化之中，导致逻辑判断错误。同时，这掩盖了原本需要处理的 TD 清理任务，导致后续的 Set TR Dequeue 命令无法正确下发，且被清理的 TD 无法及时回传。
+
+#解决方案
+1. 在 `xhci_invalidate_cancelled_tds()` 函数入口处增加检查：若检测到 `ep->ep_state` 设置了 `SET_DEQ_PENDING` 标志，直接返回 0，避免在硬件修改指针期间进行操作。
+2. 修改 `xhci_handle_cmd_set_deq()` 完成处理程序：不再依赖局部变量 `deferred` 判断，改为直接检查 `cancelled_td_list` 是否为空。如果不为空，重新调用 `xhci_invalidate_cancelled_tds()` 继续处理，并随后调用 `xhci_giveback_invalidated_tds()` 确保被清理的 TD 及时返还。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c529675961c94dbd258d8d5603161a4985007154

@@ -1,0 +1,23 @@
+#标题
+brcmfmac USB驱动下载流程因未检查返回值导致使用未初始化变量
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Broadcom FMAC USB 无线网卡驱动固件下载过程中，若底层通信函数 `brcmf_usb_dl_cmd` 执行失败，驱动程序未能感知错误并继续向下执行。此时，用于存储状态信息的结构体变量 `state` 未被正确赋值（处于未初始化状态），程序后续直接读取该变量的 `state` 和 `bytes` 字段进行逻辑判断。这可能导致驱动程序基于随机栈数据做出错误的流程决策，引发不可预期的行为或逻辑错误。
+
+#主要错误日志
+brcmf_err("Invalid DL state: %u\n", rdlstate);
+（注：此为补丁改进后的日志。故障发生时，若 `brcmf_usb_dl_cmd` 失败且未修复，可能无明确错误日志，或打印出因未初始化导致的随机状态值。）
+
+#问题根因
+函数 `brcmf_usb_dl_writeimage()` 调用 `brcmf_usb_dl_cmd()` 时未检查其返回值。当 `brcmf_usb_dl_cmd()` 执行失败时，参数 `state` 中的 `state.state` 和 `state.bytes` 字段未被初始化。代码随后直接使用这些未初始化的变量进行条件判断，导致逻辑风险。
+
+#解决方案
+1. 增加 `brcmf_usb_dl_cmd()` 函数返回值的检查机制。
+2. 若调用失败，立即跳转至错误处理流程（`goto fail`），避免后续使用未初始化的变量。
+3. 优化错误日志输出，将原本模糊的 "Failed to DL_START" 改为更详细的 "Invalid DL state: %u"，以便于问题定位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/06479ff6f7c2b6a58e7cc26bd7bab2d7a2b9bc3a

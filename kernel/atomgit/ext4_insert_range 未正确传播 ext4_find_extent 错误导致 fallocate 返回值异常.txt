@@ -1,0 +1,20 @@
+#标题
+ext4_insert_range 未正确传播 ext4_find_extent 错误导致 fallocate 返回值异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 fallocate 操作（INSERT_RANGE）时，若底层 `ext4_find_extent` 发生错误，系统调用却错误地返回成功（0）。这导致用户误以为操作成功，但实际文件内容未按预期更新，造成文件数据状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ext4_insert_range` 中，调用 `ext4_find_extent` 失败时（返回 PTR_ERR），代码仅释放了信号量并跳转至 `out_stop` 标签，但未将 `path` 的错误码赋值给返回值变量 `ret`。这导致函数最终返回 0，掩盖了实际发生的错误。
+
+#解决方案
+在 `ext4_find_extent` 返回错误指针（IS_ERR(path)）的分支中，增加 `ret = PTR_ERR(path);` 语句，确保错误码能够正确向上传播，使系统调用返回正确的错误值而非 0。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1344a0f01c73e1cbbe1423673cd41d92ce6d9c5b

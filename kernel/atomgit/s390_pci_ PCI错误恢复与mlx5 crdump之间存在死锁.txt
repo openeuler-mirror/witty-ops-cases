@@ -1,0 +1,56 @@
+#标题
+s390/pci: PCI错误恢复与mlx5 crdump之间存在死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 s390 架构上进行 mlx5 设备的 PCI 错误恢复测试时，系统出现任务挂起，触发了 hung_task 检测机制。具体表现为两个进程互相阻塞：
+1. `kmcheck` 进程在执行 PCI 错误恢复流程时阻塞，处于 D 状态超过 122 秒。
+2. `kworker` 进程在执行 `mlx5_fw_fatal_reporter_err_work` 进行 crdump 收集时阻塞，处于 D 状态超过 122 秒。
+此外，手动执行 `devlink health dump show` 命令触发 crdump 的同时进行 PCI 错误恢复也能复现该死锁。
+
+#主要错误日志
+mlx5_core 0000:00:00.1: mlx5_health_try_recover:338:(pid 5553): health recovery flow aborted, PCI reads still not working
+INFO: task kmcheck:72 blocked for more than 122 seconds.
+      Not tainted 5.14.0-570.12.1.bringup7.el9.s390x #1
+"echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+task:kmcheck         state:D stack:0     pid:72    tgid:72    ppid:2      flags:0x00000000
+Call Trace:
+ [<000000065256f030>] __schedule+0x2a0/0x590
+ [<000000065256f356>] schedule+0x36/0xe0
+ [<000000065256f572>] schedule_preempt_disabled+0x22/0x30
+ [<0000000652570a94>] __mutex_lock.constprop.0+0x484/0x8a8
+ [<000003ff800673a4>] mlx5_unload_one+0x34/0x58 [mlx5_core]
+ [<000003ff8006745c>] mlx5_pci_err_detected+0x94/0x140 [mlx5_core]
+ [<0000000652556c5a>] zpci_event_attempt_error_recovery+0xf2/0x398
+ [<0000000651b9184a>] __zpci_event_error+0x23a/0x2c0
+INFO: task kworker/u1664:6:1514 blocked for more than 122 seconds.
+      Not tainted 5.14.0-570.12.1.bringup7.el9.s390x #1
+task:kworker/u1664:6 state:D stack:0     pid:1514  tgid:1514  ppid:2      flags:0x00000000
+Workqueue: mlx5_health0000:00:00.0 mlx5_fw_fatal_reporter_err_work [mlx5_core]
+Call Trace:
+ [<000000065256f030>] __schedule+0x2a0/0x590
+ [<000000065256f356>] schedule+0x36/0xe0
+ [<0000000652172e28>] pci_wait_cfg+0x80/0xe8
+ [<0000000652172f94>] pci_cfg_access_lock+0x74/0x88
+ [<000003ff800916b6>] mlx5_vsc_gw_lock+0x36/0x178 [mlx5_core]
+ [<000003ff80098824>] mlx5_crdump_collect+0x34/0x1c8 [mlx5_core]
+ [<000003ff80074b62>] mlx5_fw_fatal_reporter_dump+0x6a/0xe8 [mlx5_core]
+ [<0000000652512242>] devlink_health_do_dump.part.0+0x82/0x168
+ [<0000000652513212>] devlink_health_report+0x19a/0x230
+ [<000003ff80075a12>] mlx5_fw_fatal_reporter_err_work+0xba/0x1b0 [mlx5_core]
+
+#问题根因
+s390 平台的 PCI 错误恢复处理函数 `zpci_event_attempt_error_recovery` 调用了 `pci_dev_lock(pdev)`，该函数会同时持有 `device_lock` 和 `pci_cfg_access_lock`，这与 powerpc 的 EEH 和通用的 PCI AER 处理逻辑不一致。
+由此引发了典型的 ABBA 死锁：
+1. **任务 1 (kmcheck)**：在错误恢复流程中持有 `pci_cfg_access_lock` (因调用了 `pci_dev_lock`)，随后尝试获取 devlink 锁。
+2. **任务 2 (kworker)**：在执行 crdump 时持有 devlink 锁，随后调用 `mlx5_vsc_gw_lock` -> `pci_cfg_access_lock` 尝试获取 `pci_cfg_access_lock`。
+双方互相持有对方需要的锁，导致死锁。
+
+#解决方案
+修改 s390 平台的 PCI 错误恢复代码，将 `pci_dev_lock(pdev)` 替换为 `device_lock(&pdev->dev)`，将对应的解锁函数替换为 `device_unlock(&pdev->dev)`。
+该修改移除了对 `pci_cfg_access_lock` 的依赖，仅保留 `device_lock`，从而消除了与 mlx5 驱动 crdump 流程之间的锁竞争，且测试表明 s390 的 PCI 错误恢复无需阻塞配置空间访问即可正常运行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/161c8b0190a6d3d06686c451e58174fce609e276

@@ -1,0 +1,20 @@
+#标题
+sock_recv_errqueue 在 CONFIG_HARDENED_USERCOPY 下触发内核 panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核配置开启 CONFIG_HARDENED_USERCOPY 时，调用 `sock_recv_errqueue` 接收错误队列消息会触发内核 panic，导致系统崩溃或调用进程异常终止。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `sock_recv_errqueue` 函数中，代码直接将 `SKB_EXT_ERR(skb)` 指向的内核数据结构地址 `&serr->ee` 作为参数传递给 `put_cmsg`。在开启了 `CONFIG_HARDENED_USERCOPY` 的内核中，由于该地址位于内核堆的特殊区域（如 slab cache object 以外或越界访问），触发了 hardened usercopy 的安全检查机制，导致 kernel panic。
+
+#解决方案
+引入一个栈上的局部变量 `struct sock_extended_err ee` 作为“跳板缓冲区”。先将 skb 中的数据拷贝到这个栈变量中，然后再将该栈变量的地址传递给 `put_cmsg`。此举确保了拷贝操作针对的是合法的栈内存区域，从而绕过 hardened usercopy 的限制，修复了 panic 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2bdbbb3f6a3b3290ab88edd2f320d5cb26bffbd7

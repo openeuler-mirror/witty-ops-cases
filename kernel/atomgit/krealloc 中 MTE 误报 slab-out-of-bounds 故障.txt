@@ -1,0 +1,42 @@
+#标题
+krealloc 中 MTE 误报 slab-out-of-bounds 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动或运行过程中，当调用 `krealloc` 并涉及 spare memory 初始化（如 `nf_nat_init` 初始化阶段）时，触发 KASAN 报告 "slab-out-of-bounds" 错误，导致内核执行路径异常。错误信息显示指针标签与内存标签不匹配，属于内存标签扩展（MTE）的误报。
+
+#主要错误日志
+==================================================================
+swapper/0: BUG: KASAN: slab-out-of-bounds in __memset+0x84/0x188
+swapper/0: Write at addr f4ffff8005f0fdf0 by task swapper/0/1
+swapper/0: Pointer tag: [f4], memory tag: [fe]
+swapper/0:
+swapper/0: CPU: 4 UID: 0 PID: 1 Comm: swapper/0 Not tainted 6.12.
+swapper/0: Hardware name: MT6991(ENG) (DT)
+swapper/0: Call trace:
+swapper/0:  dump_backtrace+0xfc/0x17c
+swapper/0:  show_stack+0x18/0x28
+swapper/0:  dump_stack_lvl+0x40/0xa0
+swapper/0:  print_report+0x1b8/0x71c
+swapper/0:  kasan_report+0xec/0x14c
+swapper/0:  __do_kernel_fault+0x60/0x29c
+swapper/0:  do_bad_area+0x30/0xdc
+swapper/0:  do_tag_check_fault+0x20/0x34
+swapper/0:  do_mem_abort+0x58/0x104
+swapper/0:  el1_abort+0x3c/0x5c
+swapper/0:  el1h_64_sync_handler+0x80/0xcc
+swapper/0:  el1h_64_sync+0x68/0x6c
+swapper/0:  __memset+0x84/0x188
+swapper/0:  btf_populate_kfunc_set+0x280/0x3d8
+...
+
+#问题根因
+该问题由 commit 1a83a716ec233 引入。在 `__do_krealloc` 函数中零填充 spare memory 时，代码仅考虑了软件 KASAN 而未考虑 MTE（Memory Tagging Extension）。在调用 `memset` 前没有重置 KASAN 标签，导致指针标签与内存标签不匹配，从而触发 MTE 误报 slab-out-of-bounds 错误。
+
+#解决方案
+修改 `mm/slab_common.c` 文件中的 `__do_krealloc` 函数。在执行 `memset` 清零 spare memory 操作时，将指针 `p` 替换为 `kasan_reset_tag(p)` 的返回值。这确保了在 MTE 场景下进行内存操作前，指针标签被正确重置，消除了标签不匹配导致的误报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c193c0f25008c4c9dd97935ddce825f23f52ffab

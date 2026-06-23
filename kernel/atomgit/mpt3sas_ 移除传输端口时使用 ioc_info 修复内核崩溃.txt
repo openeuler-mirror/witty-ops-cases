@@ -1,0 +1,22 @@
+#标题
+mpt3sas: 移除传输端口时使用 ioc_info 修复内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `rmmod` 移除 mpt3sas 驱动模块的过程中，触发内核 Oops（general protection fault），导致系统崩溃。崩溃发生在 `mpt3sas_transport_port_remove` 函数执行路径中，具体表现为访问非法内存地址。
+
+#主要错误日志
+[83428.295776] Oops: general protection fault, probably for non-canonical address 0x6f702f323a33312d: 0000 [#1] SMP NOPTI
+[83428.295799] RIP: 0010:__dev_printk+0x1f/0x70
+[83428.295863]  mpt3sas_transport_port_remove+0x1c7/0x420 [mpt3sas]
+
+#问题根因
+在 `mpt3sas_transport_port_remove()` 函数中，代码使用 `dev_printk()` 打印日志，其传入的设备结构体参数为 `&mpt3sas_port->port->dev`。此时，SAS transport 层的设备可能已经处于部分注销或释放状态，导致访问该 `struct device` 时触发生命周期违规，引发内核崩溃。
+
+#解决方案
+将 `mpt3sas_transport_port_remove()` 函数中的日志打印接口由 `dev_printk()` 替换为 `ioc_info()`。`ioc_info()` 是基于 PCI 设备（`ioc->pdev->dev`）进行日志输出的，该 PCI 设备在驱动移除前一直保持有效，从而避免了访问已释放或无效设备结构体导致的崩溃风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/be83dbb07765cf5bb018708af44f8fe3804da367

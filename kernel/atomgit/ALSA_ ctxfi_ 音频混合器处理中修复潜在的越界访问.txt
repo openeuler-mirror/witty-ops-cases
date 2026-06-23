@@ -1,0 +1,21 @@
+#标题
+ALSA: ctxfi: 音频混合器处理中修复潜在的越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ctxfi 声卡驱动在处理音频混合器（audio mixer）时，触发 UBSAN 检测到的数组越界访问错误。具体表现为内核日志中出现 "UBSAN: array-index-out-of-bounds" 报警，索引值超出数组定义范围。
+
+#主要错误日志
+UBSAN: array-index-out-of-bounds in /build/reproducible-path/linux-6.17.8/sound/pci/ctxfi/ctamixer.c:347:48
+index 8 is out of range for type 'unsigned char [8]'
+
+#问题根因
+在音频混合器处理代码中，`conf` 字段被用作循环索引，并在 `amixer_index()` 和 `sum_index()` 等索引回调函数中被引用。由于代码中缺少对 `conj` 字段的正确（重新）初始化，导致循环索引值异常，进而引发了越界访问。
+
+#解决方案
+在 `ctamixer.c` 文件中的 `amixer_rsc_init` 和 `sum_rsc_init` 函数里，显式添加 `amixer->rsc.conj = 0;` 和 `sum->rsc.conj = 0;` 的初始化操作，确保循环索引在使用前被正确初始化为 0，从而避免越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce3518f17ae0dee6d4861054e31237466b0546c9

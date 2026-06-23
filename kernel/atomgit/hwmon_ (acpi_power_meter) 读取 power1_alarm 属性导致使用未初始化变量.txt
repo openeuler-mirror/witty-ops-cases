@@ -1,0 +1,23 @@
+#标题
+hwmon: (acpi_power_meter) 读取 power1_alarm 属性导致使用未初始化变量
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户在没有预先查询 'power' 和 'cap' 属性的情况下，直接读取 'power1_alarm' 属性时，驱动程序会使用未初始化的变量进行判断，导致返回错误的告警状态或不可预期的行为。
+
+#主要错误日志
+- 推断：`dev_err_once(&device->dev, "update cap failed when capping value is changed.\n");`
+- `dev_info(&device->dev, "Capping in progress.\n");`
+
+#问题根因
+'power1_alarm' 属性依赖于 acpi_power_meter_resource 结构体中的 'power' 和 'cap' 字段。目前这两个字段仅在用户查询 'power' 和 'cap' 属性时才会更新。如果用户直接查询 'power1_alarm' 属性，驱动将使用未初始化的变量进行逻辑判断。
+
+#解决方案
+1. 在结构体中新增 `bool power_alarm` 字段用于维护告警状态。
+2. 在 `show_val` 函数处理 `power1_alarm` 时，先调用 `update_meter` 更新功率值；若硬件不支持通知功能，还需调用 `update_cap` 更新上限值。
+3. 在通知回调函数 `acpi_power_meter_notify` 中，针对 `METER_NOTIFY_CAP` 事件更新 `cap` 值，针对 `METER_NOTIFY_CAPPING` 事件设置 `power_alarm` 状态，确保能正确反映实时告警状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/67891a7f4a8ac8d2f051a342bef18d7da3733666

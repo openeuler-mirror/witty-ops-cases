@@ -1,0 +1,20 @@
+#标题
+nilfs2: rename操作引发BUG_ON检查失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行文件重命名（rename）操作时，若底层缓冲区准备过程中发生错误（如元数据损坏导致获取块失败），内核会触发 BUG_ON 检查失败，导致系统崩溃或 Panic。
+
+#主要错误日志
+未知
+
+#问题根因
+目录操作函数 `nilfs_set_link()` 和 `nilfs_delete_entry()` 假设 `nilfs_prepare_chunk()` 在处理已读取的 folio/page 时总是成功，因此未实现错误处理逻辑。实际上，`nilfs_prepare_chunk()` 调用的缓冲区层可能在必要时调用 `nilfs_get_block()`，该函数可能因元数据损坏等原因失败。当错误发生时，原有的 BUG_ON 检查被触发。
+
+#解决方案
+移除 `nilfs_set_link()` 和 `nilfs_delete_entry()` 中的 BUG_ON 断言，增加对 `nilfs_prepare_chunk()` 返回值的检查。如果调用失败，则解锁页面并向上层返回错误码。同时修改 `nilfs_rename()` 调用逻辑，正确处理下层函数返回的错误，进行合理的清理和事务回滚，而非直接触发内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eca44e9f6c95e3e62812861d610fb2da3f58ef9e

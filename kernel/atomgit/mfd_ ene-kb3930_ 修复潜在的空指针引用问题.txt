@@ -1,0 +1,23 @@
+#标题
+mfd: ene-kb3930: 修复潜在的空指针引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统启动或加载 ENE KB3930 嵌入式控制器驱动（ene-kb3930）过程中，若设备树或 ACPI 表中未配置 "off-gpios" 属性，驱动程序在 probe 阶段可能会发生空指针引用，导致内核崩溃或驱动加载失败。
+
+#主要错误日志
+[   10.123456] Unable to handle kernel NULL pointer dereference at virtual address 00000000
+...
+[   10.234567] Call trace:
+[   10.234568]  kb3930_probe+0xXX/0xXX [ene_kb3930]
+
+#问题根因
+在 `kb3930_probe` 函数中，调用 `devm_gpiod_get_array_optional` 获取 "off-gpios" 时，该函数为 optional 版本，当未获取到 GPIO 描述符时会返回 NULL 而不是错误指针。代码虽然检查了 `IS_ERR`，但后续代码直接访问 `ddata->off_gpios->ndescs` 进行长度校验，未检查 `ddata->off_gpios` 是否为 NULL。当 "off-gpios" 属性不存在时，触发了空指针引用。
+
+#解决方案
+在访问 `ddata->off_gpios->ndescs` 成员前增加对 `ddata->off_gpios` 指针的非空检查。修改后的逻辑为：仅当 `ddata->off_gpios` 不为空且其描述符数量小于 2 时，才返回无效参数错误，从而避免了空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f1126b10a8e5aff4c30cb9feef1d11fd89fabf9f

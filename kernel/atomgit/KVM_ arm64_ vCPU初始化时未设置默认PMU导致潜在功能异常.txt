@@ -1,0 +1,23 @@
+#标题
+KVM: arm64: vCPU初始化时未设置默认PMU导致潜在功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在KVM ARM64虚拟化场景下，若vCPU拥有PMU特性但用户态未显式指定PMU类型，系统在处理`KVM_ARM_VCPU_INIT`时未设置默认PMU。这可能导致后续vCPU运行时PMU功能不可用，或者在非同构CPU架构（如big.LITTLE）上因PMU亲和性问题导致Guest计数器工作异常。该问题关联issue: https://gitee.com/openeuler/kernel/issues/ICWPIF
+
+#主要错误日志
+未知
+
+#问题根因
+原先的逻辑中，默认PMU的选择是在`kvm_arm_pmu_v3_set_attr`接口中进行的，这导致在vCPU初始化阶段，如果vCPU带有PMU特性但Guest尚未设置PMU，系统没有及时设置默认的PMU实例。根据代码注释更新，正确的逻辑应当是在vCPU初始化时，针对当前核心探测并设置默认PMU，以确保PMU实例与vCPU初始化上下文匹配。
+
+#解决方案
+将默认PMU的设置逻辑从`kvm_arm_pmu_v3_set_attr`函数移至`kvm_vcpu_init`处理流程中。具体修改如下：
+1. 新增`kvm_setup_vcpu`函数，在vCPU初始化时检查：若vCPU拥有PMU且Guest尚未设置PMU，则调用`kvm_arm_set_default_pmu`设置默认PMU。
+2. 将`kvm_arm_set_default_pmu`函数的可见性改为全局（non-static），并在头文件中声明，以便在初始化流程中调用。
+3. 移除`kvm_arm_pmu_v3_set_attr`中原有的默认PMU设置代码，确保PMU初始化时机的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9370d40193b09af6d75bca91621a6949e85a6ebc

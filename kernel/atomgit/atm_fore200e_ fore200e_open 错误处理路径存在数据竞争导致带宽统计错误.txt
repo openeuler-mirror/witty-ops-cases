@@ -1,0 +1,22 @@
+#标题
+atm/fore200e: fore200e_open 错误处理路径存在数据竞争导致带宽统计错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ATM fore200e 设备驱动的高并发场景下，当 `fore200e_open` 函数执行失败进入错误处理路径时，若同时有其他 CPU 正在执行 `fore200e_close` 或 `fore200e_change_qos` 操作，会发生数据竞争。此竞争导致 `available_cell_rate`（可用信元速率/带宽）统计值被错误覆盖，造成带宽资源统计不准确（如统计值与实际占用不符）。
+
+#主要错误日志
+未知
+
+#问题根因
+字段 `fore200e->available_cell_rate` 是一个用于跟踪可用带宽的共享资源，被 `fore200e_open`、`fore200e_close` 和 `fore200e_change_qos` 并发访问。
+在 `fore200e_open` 函数中，正常流程里减去带宽操作正确持有 `rate_mtx` 锁，但在 `fore200e_activate_vcin` 调用失败后的错误处理路径中，恢复带宽的操作（加回 `vcc->qos.txtp.max_pcr`）未持有锁。
+具体原因为：错误处理路径在未加锁的情况下读取并修改 `available_cell_rate`。若此时其他 CPU 获取锁并修改了该值（例如 `fore200e_close` 中释放带宽），错误路径会将基于旧值计算的结果写回，从而覆盖了并发的更新，导致带宽统计出现不一致。
+
+#解决方案
+在 `fore200e_open` 函数的错误处理路径中，对 `fore200e->available_cell_rate` 的加法操作前后增加 `mutex_lock` 和 `mutex_unlock` 保护，确保对该共享资源的访问处于 `rate_mtx` 互斥锁的保护之下，防止读-改-写竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/07b4727ce46be9e4b26ee458171654e5e63d982a

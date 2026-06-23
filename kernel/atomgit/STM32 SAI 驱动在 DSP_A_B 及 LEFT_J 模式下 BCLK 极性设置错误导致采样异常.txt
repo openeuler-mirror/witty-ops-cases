@@ -1,0 +1,21 @@
+#标题
+STM32 SAI 驱动在 DSP_A/B 及 LEFT_J 模式下 BCLK 极性设置错误导致采样异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 STM32 SAI 驱动配合 DSP_A、DSP_B 或 LEFT_J 音频格式，且配置为 SND_SOC_DAIFMT_NB_NF（Normal Bit Clock, Negative Frame Sync）时，数据会在错误的 BCLK 边沿被采样。这违反了 ALSA 规范中 NB_NF 应在上升沿采样的约定，导致音频数据接收异常或播放失真。该问题已在 cs47l35 codec 上通过实测验证。
+
+#主要错误日志
+未知
+
+#问题根因
+STM32 SAI 驱动在处理 DSP_A、DSP_B 和 LEFT_J 格式时，未设置时钟选通位（CKSTR）。
+根据 STM32MP25 SAI 参考手册，若要在 SCK 上升沿对接收信号进行采样，必须设置 CKSTR=1。由于驱动遗漏了该设置，SAI 默认在下降沿进行采样，这与 SND_SOC_DAIFMT_NB_NF 要求的上升沿采样逻辑相悖，从而导致采样时机错误。
+
+#解决方案
+在 `stm32_sai_set_dai_fmt` 函数中，针对 `SND_SOC_DAIFMT_MSB`（LEFT_J）、`SND_SOC_DAIFMT_DSP_A` 和 `SND_SOC_DAIFMT_DSP_B` 这三种格式，通过设置 `cr1 |= SAI_XCR1_CKSTR` 来显式启用时钟选通位，确保 BCLK 极性符合 ALSA 规范要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/938b7232866abb54ab2c36d34d11ad2723c73175

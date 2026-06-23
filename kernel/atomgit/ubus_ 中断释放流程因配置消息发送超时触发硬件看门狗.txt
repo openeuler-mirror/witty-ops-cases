@@ -1,0 +1,24 @@
+#标题
+ubus: 中断释放流程因配置消息发送超时触发硬件看门狗
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行中断释放操作时，如果配置消息发送超时，会导致系统触发硬件看门狗复位。
+
+#主要错误日志
+- `ub int type1 clear UB_INT_TYPE1_ENABLE failed`
+- `ub int type1 clear UB_INT_TYPE1_EN_INT_NUM failed`
+- `ub int type1 clear UB_INT_TYPE1_INT_DATA failed`
+- `ub int type1 clear UB_INT_TYPE1_INT_ADDR_L failed`
+- `ub int type1 clear UB_INT_TYPE1_INT_ADDR_H failed`
+
+#问题根因
+在中断释放流程中，内核持有 spin_lock_irqsave 锁。原代码在发送配置消息（如清除 ENABLE、EN_INT_NUM 等寄存器）时未处理返回值，若消息发送超时（ETIMEDOUT），代码将一直等待或处于非预期状态。由于此时锁未被释放，长时间阻塞最终导致硬件看门狗被触发。
+
+#解决方案
+在 `ub_int_type1_clear_msg` 函数中增加对 `ub_cfg_write_byte` 和 `ub_cfg_write_dword` 返回值的检查。一旦检测到返回值为 `-ETIMEDOUT`，立即打印错误日志并退出函数，避免在持有锁的情况下无限期阻塞，从而防止触发硬件看门狗。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa1dd1465a9797aed741f0517f5676a7b623f35c

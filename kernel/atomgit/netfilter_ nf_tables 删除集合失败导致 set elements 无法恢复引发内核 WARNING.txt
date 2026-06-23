@@ -1,0 +1,29 @@
+#标题
+netfilter: nf_tables 删除集合失败导致 set elements 无法恢复引发内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行删除 netfilter set 的操作失败并进入 abort 路径时，系统触发内核 WARNING，导致对象内存泄漏（memleak）。具体表现为在 `nft_setelem_data_deactivate` 函数中触发引用计数相关的警告信息，系统调用栈显示为 `nft_delset` -> `nft_map_deactivate` -> `nft_rhash_walk` 路径。
+
+#主要错误日志
+[43929.457523] ------------[ cut here ]------------
+[43929.457532] WARNING: CPU: 0 PID: 1139 at include/net/netfilter/nf_tables.h:1237 nft_setelem_data_deactivate+0xe4/0xf0 [nf_tables]
+[43929.458014] RIP: 0010:nft_setelem_data_deactivate+0xe4/0xf0 [nf_tables]
+[43929.458332]  nft_mapelem_deactivate+0x24/0x30 [nf_tables]
+[43929.458453]  nft_rhash_walk+0xdd/0x180 [nf_tables]
+[43929.458769]  nf_tables_deltable+0x501/0x580 [nf_tables]
+
+#问题根因
+在 abort 路径中，`nft_mapelem_activate()` 需要将引用计数恢复到原始状态。当前代码使用 `set->ops->walk()` 迭代集合元素，但现有的集合迭代器会跳过下一代处于 inactive 状态的元素。这在 abort 路径中是不正确的，因为此时需要跳过 active 元素（而不是 inactive 元素）来恢复原始状态。逻辑错误导致无法正确恢复元素状态，进而引发 WARNING 和内存泄漏。
+
+#解决方案
+将 inactive 元素的检查逻辑移动到集合迭代器回调函数中，并反转 `.activate` 场景的逻辑（即跳过 active 元素）。
+1. 在调用 delete set 命令时，切换元素的下一代 generation bit。
+2. 在 `.activate` (abort) 路径中调用 `nft_clear()` 来恢复下一代 generation bit。
+3. 修改 `nft_bitmap_activate`、`nft_rhash_activate`、`nft_hash_activate`、`nft_pipapo_activate`、`nft_rbtree_activate` 等函数，使用 `nft_clear` 替换 `nft_set_elem_change_active`。
+4. 移除各 set 类型（bitmap, hash, pipapo, rbtree）的 walk 函数中对 inactive 元素的过滤检查，将检查逻辑下沉到回调函数中处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e27dfe61093fd02f7eb284b8088a258f54f89137

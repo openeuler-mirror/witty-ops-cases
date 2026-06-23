@@ -1,0 +1,22 @@
+#标题
+drm/i915/gvt: 修复 opregion 签名未终止字符串初始化警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核编译阶段，编译器针对 `drivers/gpu/drm/i915/gvt/opregion.c` 文件中的代码逻辑报出“unterminated-string-initialization”（未终止字符串初始化）警告。虽然代码逻辑是有意为之（不包含 NUL 终止符），但编译器无法识别该意图，误判为潜在的安全隐患。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `intel_vgpu_init_opregion` 函数中，代码使用 `const char opregion_signature[16] = OPREGION_SIGNATURE`（即 "IntelGraphicsMem"）进行初始化。由于源字符串长度为 16 字节且目标数组大小也为 16 字节，初始化时会丢弃末尾的 NUL 终止符。编译器检测到此行为并发出警告，因为这在常规 C 字符串操作中通常被视为错误。
+
+#解决方案
+移除了局部变量 `opregion_signature` 的定义，改为直接使用字符串字面量 `OPREGION_SIGNATURE` 初始化 `header->signature`。关键修改点如下：
+1. 使用 `memcpy(header->signature, OPREGION_SIGNATURE, sizeof(header->signature))` 替代原有的拷贝方式，明确表明是按固定大小的二进制数据块进行拷贝，而非字符串操作。
+2. 增加了 `static_assert(sizeof(header->signature) == sizeof(OPREGION_SIGNATURE) - 1)` 静态断言，确保目标空间大小与源字符串长度（不含 NUL）匹配，保证代码逻辑的正确性与清晰度。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e04a780e33bbdcbb61e5cb137b0a93c27b301d73

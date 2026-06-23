@@ -1,0 +1,23 @@
+#标题
+内核编译失败：CONFIG_UB_UMS未配置时访问结构体成员ums_ok报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 openEuler 内核代码编译时，若未开启 CONFIG_UB_UMS 配置项，编译过程在 net/ipv4/tcp_input.c 文件处中断，提示结构体成员未定义错误。该问题由合并提交 "net: Add a new protocol family AF_UB" 引入，导致特定配置下内核无法构建成功。
+
+#主要错误日志
+>> net/ipv4/tcp_input.c:7198:25: error: 'struct tcp_options_received' has no member named 'ums_ok'; did you mean 'smc_ok'?
+    7198 |                 tmp_opt.ums_ok = 0;
+         |                         ^~~~~~
+         |                         smc_ok
+
+#问题根因
+先前提交在引用 `ums_ok` 成员时，错误地使用了 `if (IS_ENABLED(CONFIG_UB_UMS))` 进行运行时检查。在 C 语言中，`IS_ENABLED` 仅在编译时评估为真或假，但代码体内对 `ums_ok` 成员的访问在所有配置下都会进行语法检查。当 `CONFIG_UB_UMS` 未配置时，相关结构体（如 `struct tcp_options_received` 和 `struct inet_request_sock`）中不存在 `ums_ok` 成员，导致编译器报错找不到成员。
+
+#解决方案
+将 `IS_ENABLED(CONFIG_UB_UMS)` 条件判断修改为预处理器宏条件 `#if IS_ENABLED(CONFIG_UB_UMS)`。通过预处理指令，在 `CONFIG_UB_UMS` 未配置时完全屏蔽对 `ums_ok` 成员的访问代码，从而避免编译错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/da0fca701aad15332f66dc43bd59f8c1d221f66e

@@ -1,0 +1,22 @@
+#标题
+ sched: 修复 struct sched_entity 结构体中的 KABI 破坏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在引入 EEVDF 调度器相关补丁（如设置 sched_runtime 建议值及传播 min_slice）时，直接在 `struct sched_entity` 结构体中新增了 `min_slice` 和 `custom_slice` 字段，导致内核 ABI（KABI）一致性被破坏。这会导致依赖该结构体布局的二进制驱动或模块无法正常加载或运行，可能引发内核崩溃或模块兼容性错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在提交 `a01260d66615` 和 `e9054f60ffb0` 中，为了支持 EEVDF 特性，直接在 `struct sched_entity` 中新增了 `u64 min_slice` 和 `unsigned char custom_slice` 成员变量。这种直接修改核心结构体成员的方式改变了结构体的大小和布局，破坏了内核的 ABI 稳定性保证。
+
+#解决方案
+利用内核提供的 KABI 保留机制，将新增成员重新安置或标记，以维持结构体大小和布局的兼容性：
+1. 删除直接新增的 `u64 min_slice` 成员，改为使用结构体中原有的 `KABI_RESERVE(1)` 空间来存储该变量（通过 `KABI_USE(1, u64 min_slice)` 实现）。
+2. 删除直接新增的 `unsigned char custom_slice` 成员，改为使用 `KABI_FILL_HOLE` 宏填充到结构体原有的空洞中，避免改变成员偏移。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22a7dabac4f42f4d7a96461f4379468cb826e4a3

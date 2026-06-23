@@ -1,0 +1,25 @@
+#标题
+kmemleak 对 memmap 进行双重扫描导致不必要的性能开销
+
+#内核版本
+OLK-6.6
+
+#问题现象
+kmemleak 在扫描内存时，对 mem_map（struct page 内存映射区）进行了重复扫描。kmemleak 会显式遍历所有有效的 struct page 对象进行扫描，但 memmap_alloc() 分配的内存块也被添加到了 kmemleak 的灰对象列表中，导致同一块内存被扫描两次，增加了系统启动或内存初始化阶段的耗时。
+
+#主要错误日志
+未知
+
+#问题根因
+kmemleak 机制对内存泄漏的检测存在逻辑冗余：
+1. kmemleak 已经实现了针对所有有效 struct page 对象的显式扫描逻辑。
+2. 与此同时，memmap_alloc() 函数在通过 memblock 分配内存时，默认将分配的内存区域添加到了 kmemleak 的扫描列表中。
+3. 这导致 mem_map 区域既被作为特定对象扫描，又被作为普通内存块扫描，造成了双重扫描。
+
+#解决方案
+在 memmap_alloc() 函数中调用 memblock 分配接口时，传入 `MEMBLOCK_ALLOC_NOLEAKTRACE` 标志位。
+该标志位能够阻止 memblock 将分配的内存添加到 kmemleak 的跟踪扫描列表中，从而消除重复扫描。
+同时，代码注释中明确说明了 kmemleak 会通过遍历 struct page 显式扫描 mem_map，因此无需 memblock 额外添加跟踪。此修改也修复了 `__earlyonly_bootmem_alloc` 函数，使其统一调用 memmap_alloc 以应用该逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f0cd808707a389da2d6f8629f498946e6c567d8d

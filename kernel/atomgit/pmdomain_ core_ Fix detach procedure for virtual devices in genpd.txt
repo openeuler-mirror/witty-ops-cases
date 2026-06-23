@@ -1,0 +1,20 @@
+#标题
+pmdomain: core: Fix detach procedure for virtual devices in genpd
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当设备通过 `genpd_dev_pm_attach_by_id()` 接口挂载到 PM domain 时，对应的虚拟设备在分离过程中未正确禁用 Runtime PM。这会导致设备从 genpd 分离后 Runtime PM 仍处于使能状态，与设计预期不符。在最坏的情况下，该问题会导致 `genpd_runtime_suspend()` 中发生 NULL pointer dereference（空指针引用）崩溃；在其他情况下，可能导致设备维持不必要的性能状态投票。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `genpd_dev_pm_detach()` 函数中，针对通过 `genpd_dev_pm_attach_by_id()` 创建的虚拟设备，缺少与挂载时 `pm_runtime_enable()` 相对应的 `pm_runtime_disable()` 调用。这导致虚拟设备在注销前 Runtime PM 依然处于开启状态，引发后续的状态不一致和崩溃问题。
+
+#解决方案
+在 `genpd_dev_pm_detach()` 函数中增加逻辑判断，检查设备是否为 genpd 创建的虚拟设备（通过 `dev->bus == &genpd_bus_type` 判断）。如果是虚拟设备，则在分离流程中、注销设备前调用 `pm_runtime_disable()`，确保 Runtime PM 状态正确恢复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0a44d6076b2e08397e4c2a6439f1f25b285619b6

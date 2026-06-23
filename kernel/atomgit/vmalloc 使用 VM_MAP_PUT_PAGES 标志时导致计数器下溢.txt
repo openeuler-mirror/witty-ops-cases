@@ -1,0 +1,21 @@
+#标题
+vmalloc 使用 VM_MAP_PUT_PAGES 标志时导致计数器下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 i915 驱动（目前唯一调用者）并触发 vmap 相关路径时，内核内存统计计数器发生下溢。具体表现为 `nr_vmalloc_pages` 和 MEMCG_VMALLOC 计数出现异常负值，可能导致内存控制组（memory cgroup）统计信息错误或潜在的内核状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `vfree()` 函数中，当调用者（如 i915 驱动）通过 `vmap()` 指定 `VM_MAP_PUT_PAGES` 标志时，`vfree()` 会错误地减少 `nr_vmalloc_pages` 和 `MEMCG_VMALLOC` 计数器。
+根本原因在于：这两个计数器是在 `vmalloc()` 函数中增加的，但在 `vmap()` 函数中并未增加。当使用了 `VM_MAP_PUT_PAGES` 标志的内存区域被释放时，代码逻辑未检查该标志就直接执行了递减操作，从而导致计数器下溢。
+
+#解决方案
+在 `mm/vmalloc.c` 的 `vfree()` 实现中，对 `nr_vmalloc_pages` 和 `MEMCG_VMALLOC` 计数器的递减操作增加条件判断。只有当 `vm->flags` 未设置 `VM_MAP_PUT_PAGES` 标志时，才执行相应的计数器递减操作，以此修正统计逻辑，避免下溢。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4b2a382952a1fb6bc98be250ab043aa33861b5b2

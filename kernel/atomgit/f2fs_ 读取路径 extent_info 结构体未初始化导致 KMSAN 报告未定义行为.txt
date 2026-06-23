@@ -1,0 +1,21 @@
+#标题
+f2fs: 读取路径 extent_info 结构体未初始化导致 KMSAN 报告未定义行为
+
+#内核版本
+OLK-6.6
+
+#问题现象
+KMSAN（KernelMemorySanitizer）检测到在 F2FS 文件系统读取 extent tree 路径中使用了未初始化的值。具体表现为 `__is_extent_mergeable()` 和 `__is_back_mergeable()` 函数在访问 `extent_info` 结构体成员时触发了 uninit-value 错误，可能导致后续的 extent 合并逻辑出现未定义行为或内核状态异常。
+
+#主要错误日志
+KMSAN: uninit-value in __is_extent_mergeable
+KMSAN: uninit-value in __is_back_mergeable
+
+#问题根因
+在函数 `f2fs_init_read_extent_tree` 中，局部变量 `struct extent_info ei` 未被初始化。随后调用 `get_read_extent_info()` 时，该函数仅初始化了结构体中的 `fofs`、`blk`、`len` 三个字段，导致结构体中剩余的字段保持未初始化状态。当这些未初始化的字段后续在 `__is_extent_mergeable()` 或 `__is_back_mergeable()` 函数中被访问以判断是否可合并时，触发了未定义行为。
+
+#解决方案
+修改 `fs/f2fs/extent_cache.c` 文件，将 `struct extent_info ei` 的声明方式从 `struct extent_info ei;` 修改为 `struct extent_info ei = {0};`，即在分配时进行零初始化。这确保了结构体中所有成员在使用前都具有确定的初始值（0），防止访问未初始化内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1464ce01f730283e048dc05f9180e4e780db4a8a

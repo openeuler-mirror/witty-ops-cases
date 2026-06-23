@@ -1,0 +1,20 @@
+#标题
+crypto: starfive 未正确处理 sg_nents_for_len 返回值导致错误掩盖
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `sg_nents_for_len` 函数时，若该函数返回负数错误码（如参数无效等情况），由于接收变量被定义为无符号类型，导致错误码被转换为极大的正整数。这可能绕过后续的错误检查逻辑，进而引发潜在的缓冲区溢出问题或不可预期的驱动行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `starfive_hash_digest` 函数中，`sg_nents_for_len` 的返回值被直接赋值给了 `unsigned long` 类型的变量 `rctx->in_sg_len`。当 `sg_nents_for_len` 执行失败返回负数错误码时，由于类型转换机制，负数被错误的解释为一个大正整数，导致错误状态被掩盖且未能及时返回处理。
+
+#解决方案
+引入 `int` 类型变量 `sg_len` 来接收 `sg_nents_for_len` 的返回值；增加对该返回值的判断逻辑，若返回值小于 0 则立即向上返回错误；仅在检查通过后，将其赋值给 `rctx->in_sg_len`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bdffaa7dc62406d3e34e3ef22c316f79c15a1519

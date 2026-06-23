@@ -1,0 +1,20 @@
+#标题
+x86/umip: 错误解码 0F 01 指令导致非 UMIP 指令被错误模拟
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 UMIP（User-Mode Instruction Prevention）功能的 x86 架构系统中，当 CPU 执行基于寄存器操作数的 0F 01 指令变体（如 VMX 的 VMLAUNCH 指令）时，若触发 #GP 异常（例如由于 CPL 特权级违规），内核会错误地将其识别为 SGDT 或 SIDT 等 UMIP 指令并尝试进行模拟。这导致内核对非 UMIP 指令进行了错误的模拟处理，可能导致系统行为异常或功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+SGDT 和 SIDT 指令仅接受内存操作数，不接受寄存器操作数。而在 x86 指令集中，操作码 0F 01 的寄存器形式用于编码 VMX（如 VMLAUNCH）、SGX（ENCLS）及其他系统指令。内核在 `identify_insn` 函数中处理 UMIP 违例导致的 #GP 异常时，未检查 ModRM 字节中的 Mod 字段（即未判断操作数是内存还是寄存器）。这导致内核错误地将 0F 01 的寄存器形式归类为 SGDT/SIDT 指令，进而触发了错误的指令模拟逻辑。
+
+#解决方案
+在 `arch/x86/kernel/umip.c` 的 `identify_insn` 函数中增加对 ModRM 字节 Mod 字段的检查。对于操作码 0F 01 后 ModRM 为 /0 (SGDT) 和 /1 (SIDT) 的情况，显式判断 `X86_MODRM_MOD` 是否为 3（寄存器寻址模式）。如果是寄存器寻址，则直接返回 `-EINVAL` 以跳过 UMIP 模拟，从而避免将 VMX、SGX 等指令误判为 UMIP 指令。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b706235a8796ee8cab6532821a5f68d1ba93d785

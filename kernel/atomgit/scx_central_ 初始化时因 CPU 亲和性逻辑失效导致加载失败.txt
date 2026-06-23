@@ -1,0 +1,31 @@
+#标题
+scx_central: 初始化时因 CPU 亲和性逻辑失效导致加载失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+加载 scx_central 调度器时失败，内核报告初始化错误，提示 init 函数运行在非中央 CPU 上。由于 ops.init() 实际由 scx_enable_helper 线程调用且可运行在任意 CPU，导致原有的用户态 sched_setaffinity() 亲和性设置机制失效。
+
+#主要错误日志
+[ 1985.319942] sched_ext: central: scx_central.bpf.c:314: init from non-central CPU
+[ 1985.320317]    scx_exit+0xa3/0xd0
+[ 1985.320535]    scx_bpf_error_bstr+0xbd/0x220
+[ 1985.320840]    bpf_prog_3a445a8163fa8149_central_init+0x103/0x1ba
+[ 1985.321073]    bpf__sched_ext_ops_init+0x40/0xa8
+[ 1985.321286]    scx_root_enable_workfn+0x507/0x1650
+[ 1985.321461]    kthread_worker_fn+0x260/0x940
+[ 1985.321745]    kthread+0x303/0x3e0
+[ 1985.321901]    ret_from_fork+0x589/0x7d0
+[ 1985.322065]    ret_from_fork_asm+0x1a/0x30
+
+#问题根因
+scx_central 模块原先假定 ops.init() 会运行在选定的中央 CPU 上，并在代码中强制检查当前 CPU ID。然而，ops.init() 实际上是由 scx_enable_helper 内核线程调用的，该线程可能运行在任意 CPU 上，导致检查条件 `bpf_get_smp_processor_id() != central_cpu` 成立并触发错误，进而导致加载失败。
+
+#解决方案
+1. 将 BPF 定时器的启动逻辑（bpf_timer_start）从 central_init() 延迟到 central_dispatch() 的首次调度时执行，确保定时器在中央 CPU 上启动。
+2. 在 central_init() 中初始化定时器后，立即调用 scx_bpf_kick_cpu() 唤醒中央 CPU，强制其立即进入调度路径以触发定时器启动。
+3. 移除用户态工具 scx_central.c 中不再有效的 sched_setaffinity() 相关代码逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/59547ead7dbb56f7884dcf601877d0b279b437f5

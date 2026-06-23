@@ -1,0 +1,25 @@
+#标题
+swiotlb_bounce() 函数部分同步逻辑错误导致校验失败或误报警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用支持 DMA min_align_mask 的存储设备进行写入后读出校验测试时（配合 swiotlb=force 内核启动参数），数据校验失败。
+同时，内核日志中可能出现错误的 WARN_ON 警告信息，提示 "Access before mapping start detected" 或 "Buffer overflow detected"，导致内核误判为非法访问或缓冲区溢出。
+
+#主要错误日志
+- dev_WARN_ONCE(dev, 1, "Access before mapping start detected. orig offset %u, requested offset %u.\n", orig_addr_offset, tlb_offset);
+- dev_WARN_ONCE(dev, 1, "Buffer overflow detected. Allocation size: %zu. Mapping size: %zu+%u.\n", alloc_size, size, tlb_offset);
+
+#问题根因
+当 `swiotlb_align_offset()` 返回非零值，且 `tlb_addr` 指向分配的第二个或后续 swiotlb slot 的前几个字节时，`swiotlb_bounce()` 计算出的偏移量调整值 `tlb_offset` 应为负数。
+然而原代码中 `tlb_offset` 被定义为 `unsigned int`（无符号整型），导致负数调整值被误判为大正数，进而引发以下两个问题：
+1. 错误的算术运算导致 `orig_addr` 计算错误，进而导致数据同步（DMA 传输）错误。
+2. 原代码中对 `tlb_offset` 的边界检查逻辑无法区分“首个 slot 的非法越界”与“后续 slot 的合法负偏移”，导致误触发 WARN 警告。
+
+#解决方案
+将变量 `tlb_offset` 的类型从 `unsigned int` 修改为 `int`（有符号整型），以正确处理负偏移情况；同时移除了之前为了检测错误而加入的、但在特定合法场景下会误报的过严边界检查代码，从而修正了部分同步（partial sync）的计算逻辑与校验行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58069ea20154c3aedfc3807c099042ab3ea907d0

@@ -1,0 +1,22 @@
+#标题
+f2fs: 修复 __insert_extent_tree 中的无限循环问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 F2FS 文件系统获取到错误的 extent info 数据时，在红黑树中查找 extent_node 节点会引发无限循环（在 CONFIG_F2FS_CHECK_FS=n 配置下），导致内核在该函数处卡死，无法继续执行。
+
+#主要错误日志
+```
+f2fs_err_ratelimited: corrupted extent, type: %d, extent node in rb tree [%u, %u, %u], age [%llu, %u], extent node to insert [%u, %u, %u], age [%llu, %u]
+```
+
+#问题根因
+在 `__insert_extent_tree` 函数插入 extent 节点到红黑树的过程中，如果遇到错误的 extent 信息（corrupted extent info），代码逻辑会进入异常分支。在未开启 CONFIG_F2FS_CHECK_FS 的情况下，`f2fs_bug_on` 不会触发 panic 或中断流程，导致程序流无法跳出循环，从而形成无限循环。
+
+#解决方案
+在红黑树插入逻辑的异常分支中（else 分支），增加错误日志打印以记录损坏的 extent 信息详情，并显式返回 NULL 指针，从而避免死循环并允许上层调用者处理该错误情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d394bf7869381ff96d89746563ef794908b0f023

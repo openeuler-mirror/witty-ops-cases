@@ -1,0 +1,20 @@
+#标题
+xfrm: RCU use-after-free in policy netns exit
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在网络命名空间退出时，触发 RCU use-after-free 故障。具体表现为内核在清理 xfrm 策略时，由于 work 处理与命名空间销毁流程存在竞争或时序问题，导致访问了已被释放的内存。
+
+#主要错误日志
+未知
+
+#问题根因
+在网络命名空间退出流程中，原有的 `xfrm_policy_fini` 函数未在 RCU 读锁临界区或正确的上下文中同步处理 work（`policy_hthresh.work` 和 `policy_hash_work`），导致在命名空间资源释放后，work 可能仍在运行或访问已释放的 net 结构，引发 RCU use-after-free。该问题被收录为 CVE-2026-43091。
+
+#解决方案
+将原本在 `xfrm_policy_fini` 中执行的 work 同步刷新操作（`disable_work_sync` 和 `flush_work`）移动到新增的 `xfrm_net_pre_exit` 函数中。通过注册 `pernet_operations` 的 `.pre_exit` 接口，确保这些 work 在命名空间完全销毁前被正确同步和清理，从而避免 UAF。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/af903092eae62ff1752c966216bb86fdf97f735d

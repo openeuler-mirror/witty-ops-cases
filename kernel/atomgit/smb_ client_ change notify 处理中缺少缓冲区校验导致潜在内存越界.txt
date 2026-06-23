@@ -1,0 +1,20 @@
+#标题
+smb: client: change notify 处理中缺少缓冲区校验导致潜在内存越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SMB3 变更通知响应时，内核未对服务器返回的 Output Buffer 进行有效性校验即进行内存拷贝操作。当服务器返回畸形或恶意的响应数据（如 Offset 或 Length 非法）时，可能导致内核内存越界读取或内存污染。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `SMB2_change_notify` 函数中，调用 `smb2_validate_iov` 校验响应缓冲区时，代码逻辑遗漏了对返回值 `rc` 的检查。这导致即便校验函数发现缓冲区偏移或长度异常，代码仍继续执行 `kmemdup` 进行内存拷贝，从而绕过了安全检查机制。该问题引入于提交 e3e9463414f61 ("smb3: improve SMB3 change notification support")。
+
+#解决方案
+在 `fs/smb/client/smb2pdu.c` 中修改 `SMB2_change_notify` 函数逻辑：捕获 `smb2_validate_iov` 的返回值并赋给 `rc`，紧接着添加判断逻辑，若 `rc` 非零则直接跳转至 `cnotify_exit` 错误处理出口，终止后续的内存拷贝操作，从而避免处理无效缓冲区。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/48a96bbd606632ce6a7f634ba693454f8d6e8297

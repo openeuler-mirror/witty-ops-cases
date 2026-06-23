@@ -1,0 +1,34 @@
+#标题
+LoongArch架构多模块缺陷修复（缓存信息、RTC中断、缓存刷新策略等）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **缓存信息错误**：LoongArch 平台 CPU 缓存共享信息显示不正确，SMT 线程间的缓存共享关系未被正确识别。
+2. **RTC 中断风暴**：Loongson RTC 设备触发中断后无法清除中断状态，导致中断持续触发或系统挂起。
+3. **网卡 LAG 配置异常**：Intel ice 网卡驱动在创建 LAG recipe 时，在特定架构下可能出现非对齐访问错误。
+4. **蓝牙挂起失败**：LoongArch 平台蓝牙设备在系统挂起过程中可能出现异常。
+5. **HDA 设备异常**：Loongson HDA/HDMI 设备可能因 TCSEL 配置导致音频功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **缓存信息**：`cache_cpumap_setup` 函数未处理 SMT 核心共享所有缓存的情况，仅依据 `cache_leaves_are_shared` 判断，导致 SMT 线程间共享映射缺失。
+2. **RTC 中断**：中断服务程序 `loongson_rtc_isr` 未在处理结束时清除 `TOY_MATCH0_REG` 寄存器，导致中断无法被清除。
+3. **网卡 LAG**：代码使用 `bitmap_zero` 和 `set_bit` 组合操作 `u64` 类型的位图，这在某些架构下可能引发非对齐内存访问问题。
+4. **缓存刷新**：原有 `flush_cache_all` 在缓存包含特性生效时调用的刷新逻辑不适用于末级缓存，需改为专门针对末级缓存的刷新逻辑。
+5. **HDA 设备**：Loongson HDA 控制器需要 `AZX_DCAPS_NO_TCSEL` 标志以避免错误的 TCSEL 寄存器配置。
+
+#解决方案
+1. **修复缓存共享信息**：在 `cache_cpumap_setup` 中增加对 SMT 核心的判断逻辑，若为 SMT 线程则直接设置共享 CPU 掩码。
+2. **修复 RTC 中断**：在 `loongson_rtc_isr` 中添加 `regmap_write(priv->regmap, TOY_MATCH0_REG, 0)` 操作以清除中断标志。
+3. **修复非对齐访问**：在 ice 驱动中将 `bitmap_zero/set_bit` 操作替换为 `put_unaligned_le64`，确保数据写入的对齐安全性。
+4. **优化缓存刷新**：引入 `flush_cache_last_level` 函数，并在缓存包含特性生效时调用该函数替代原有的 `flush_cache_leaf`。
+5. **蓝牙挂起适配**：在 `btusb_suspend` 中针对 LoongArch 架构增加 1ms 延时以确保硬件状态稳定。
+6. **修复 HDA 配置**：为 Loongson HDA 和 HDMI 设备添加 `AZX_DCAPS_NO_TCSEL` 标志。
+7. **配置调整**：将 LoongArch defconfig 中的 `CONFIG_CMA_SIZE_MBYTES` 设置为 0。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/de1a4d9334a066358a69aaa6dfc94a78bcebb2e2

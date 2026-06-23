@@ -1,0 +1,22 @@
+#标题
+sw64架构guest内存与CPU热插拔功能失效问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构环境下，进行 Guest 虚拟机内存热拔出操作时，因内核接口参数不匹配导致调用失败，内存无法正常移除；同时在进行 CPU 热插拔操作时，因缺少必要的函数声明，可能导致编译警告或运行时调用异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **内存热拔出接口不匹配**：内核社区提交 e1c158e49566 移除了 `remove_memory()` 函数的 `nid`（节点 ID）参数，但 sw64 架构下的 `sunway_memory_device_remove` 函数仍尝试传递已废弃的 `node` 参数，导致接口调用不兼容。
+2. **CPU热插拔缺少头文件依赖**：`drivers/misc/sunway-ged.c` 在进行 CPU 热插拔时使用了 `get_cpu_device()` 函数，但未包含声明该函数的 `<linux/cpu.h>` 头文件。
+
+#解决方案
+1. 移除内存热拔出流程中的 `node` 变量读取与传参逻辑，将 `remove_memory(node, start_addr, length)` 修改为 `remove_memory(start_addr, length)`，以适配最新的内核接口定义。
+2. 在 `sunway-ged.c` 文件头部添加 `#include <linux/cpu.h>`，确保 CPU 热插拔相关函数 `get_cpu_device()` 能正确找到定义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/88d6f93472c0dc8b2c54926de795ed344e94df4d

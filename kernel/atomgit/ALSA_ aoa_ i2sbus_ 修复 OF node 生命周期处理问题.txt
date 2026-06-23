@@ -1,0 +1,25 @@
+#标题
+ALSA: aoa: i2sbus: 修复 OF node 生命周期处理问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Apple Onboard Audio (AOA) i2sbus 驱动时，由于设备树节点（OF node）引用计数管理不当，可能导致内核内存管理子系统出现异常，例如访问已释放内存或释放时引用计数不平衡。
+
+#主要错误日志
+未知
+
+#问题根因
+`i2sbus_add_dev()` 函数在处理设备树节点引用计数时存在两个缺陷：
+1. 在 `for_each_child_of_node()` 循环中，迭代器会自动释放子节点的引用，但代码直接将匹配的 "sound" 子节点指针保存到 `sound` 变量中，未增加引用计数，导致该节点可能被提前释放。
+2. 函数将 `np` 节点赋值给 `dev->sound.ofdev.dev.of_node` 时，未增加引用计数，但 i2sbus 重写了设备释放回调，导致后续释放设备时引用计数不平衡，引发内存管理错误。
+
+#解决方案
+1. 在 `i2sbus_add_dev()` 中，当找到匹配的 "sound" 子节点时，先释放之前保存的节点（如有），然后使用 `of_node_get()` 增加新匹配节点的引用计数后再保存。
+2. 在使用完 `sound` 节点进行 layout-id/device-id 查找后，显式调用 `of_node_put()` 释放引用。
+3. 在 `i2sbus_add_dev()` 赋值 `dev->sound.ofdev.dev.of_node` 时，使用 `of_node_get(np)` 增加引用计数。
+4. 在错误处理路径和 `i2sbus_release_dev()` 释放回调函数中，显式调用 `of_node_put(i2sdev->sound.ofdev.dev.of_node)` 以平衡引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/05e85c6059d2728a5b47a85923b5cbb721e1955f

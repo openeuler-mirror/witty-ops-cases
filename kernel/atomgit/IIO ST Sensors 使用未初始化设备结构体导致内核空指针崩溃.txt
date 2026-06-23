@@ -1,0 +1,28 @@
+#标题
+IIO ST Sensors 使用未初始化设备结构体导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IIO 子系统的 ST Sensors 驱动加载过程中，若 `st_sensors_power_enable()` 函数调用 `devm_regulator_bulk_get_enable()` 失败并尝试打印错误日志，内核会发生 panic（空指针解引用）。此外，该问题也潜在影响其他错误处理路径下的 `dev_err`、`dev_warn` 和 `dev_info` 打印功能。
+
+#主要错误日志
+- Unable to handle kernel NULL pointer dereference（推断，由 panic 现象得出）
+- "unable to enable supplies\n"（触发 panic 的打印调用）
+- "failed to set new fullscale.\n"
+- "DRDY on INT1 not available.\n"
+- "DRDY on INT2 not available.\n"
+- "DRDY on pdata not valid.\n"
+- "failed to read Who-Am-I register.\n"
+- "failed to allocate iio trigger.\n"
+- "failed to request trigger IRQ.\n"
+
+#问题根因
+在驱动的各 probe 函数中，`indio_dev` 结构体内部的 `dev` 成员（`&indio_dev->dev`）在被传递给 `dev_err_probe`、`dev_err` 等函数进行日志打印时，尚未完成初始化。此时该结构体内部指针为空，导致内核在尝试访问未初始化的设备结构体进行日志输出时触发空指针崩溃。
+
+#解决方案
+修改所有相关的日志打印调用，将传入的设备指针参数从 `&indio_dev->dev`（未初始化）修改为 `indio_dev->dev.parent`（父设备指针，已初始化）。确保在 `indio_dev->dev` 初始化完成之前，所有设备日志输出都基于已存在的父设备进行操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/812ed59840159141878b862aae77688f74ed49ea

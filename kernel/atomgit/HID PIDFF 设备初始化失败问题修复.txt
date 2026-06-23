@@ -1,0 +1,23 @@
+#标题
+HID PIDFF 设备初始化失败问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+部分 PID 力反馈（Force Feedback）设备（如 Cammus、VRS、FFBeast 等品牌的方向盘）在连接系统时初始化失败，导致设备无法正常使用力反馈功能。
+
+#主要错误日志
+- （推断）hid_err: "unknown set_effect report layout\n"
+
+#问题根因
+部分非完全符合 PID 标准的力反馈设备在 HID 描述符中缺少 PID_START_DELAY 字段。内核原有的 PIDFF 驱动在查找字段时采用严格校验模式，当找不到该字段时直接判定设置报表布局错误，导致驱动初始化失败并返回 -ENODEV。实际上该延迟字段在绝大多数应用中并未使用，属于可选项。
+
+#解决方案
+1. 在 HID 驱动头文件中定义 `HID_PIDFF_QUIRK_MISSING_DELAY` 宏，用于标识缺少延迟字段的设备特性。
+2. 在 `pidff_device` 结构体中增加 `quirks` 成员用于存储设备特性标志。
+3. 修改字段查找逻辑 `pidff_find_fields`，当发现缺少 `PID_START_DELAY` 字段时不再返回错误，而是返回 `HID_PIDFF_QUIRK_MISSING_DELAY` 标志。
+4. 在 `pidff_set_effect_report` 和 `pidff_autocenter` 函数中增加判断，若设备标记了 `MISSING_DELAY` 特性，则跳过对 `PID_START_DELAY` 字段的设置操作，避免向设备发送无效数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14b46ec1c0cc4b84c23a92ed5e9b608521f7fea0

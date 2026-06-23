@@ -1,0 +1,31 @@
+#标题
+drm/dp_mst: MST侧带消息体长度校验缺陷导致内存越界与UBSAN报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当MST分支设备返回的消息头中body length（msg_len）错误地设置为0时，内核未正确校验该长度，导致后续处理中发生内存越界写入。系统日志中出现UBSAN（Undefined Behavior Sanitizer）数组越界告警以及memcpy检测到的字段跨越写入错误，可能引发内核内存污染。
+
+#主要错误日志
+- UBSAN: array-index-out-of-bounds in drivers/gpu/drm/display/drm_dp_mst_topology.c:786:25
+  index -1 is out of range for type 'u8 [48]'
+  Call Trace:
+   drm_dp_sideband_append_payload+0x33d/0x350 [drm_display_helper]
+   drm_dp_get_one_sb_msg+0x3ce/0x5f0 [drm_display_helper]
+   drm_dp_mst_hpd_irq_handle_event+0xc8/0x1580 [drm_display_helper]
+
+- memcpy: detected field-spanning write (size 18446744073709551615) of single field "&msg->msg[msg->curlen]" at drivers/gpu/drm/display/drm_dp_mst_topology.c:791 (size 256)
+  Call Trace:
+   drm_dp_sideband_append_payload+0x324/0x350 [drm_display_helper]
+   drm_dp_get_one_sb_msg+0x3ce/0x5f0 [drm_display_helper]
+   drm_dp_mst_hpd_irq_handle_event+0xc8/0x1580 [drm_display_helper]
+
+#问题根因
+内核在解码MST侧带消息头时，未对消息体长度（msg_len）进行最小值校验。根据协议，消息体长度至少应为1字节以容纳消息体的CRC（校验码）。如果MST分支设备错误地返回长度为0的消息头（且头部CRC校验通过），代码继续执行会导致在处理负数或零长度缓冲区时触发内存越界访问。
+
+#解决方案
+在函数 `drm_dp_decode_sideband_msg_hdr` 中增加对 `hdr->msg_len` 的校验：如果长度小于1（不满足存放body CRC的最小空间），则直接返回 false，丢弃该非法消息头，防止后续处理流程中出现内存越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8f34708d894435a03b134a22fbcabd1a11a9084a

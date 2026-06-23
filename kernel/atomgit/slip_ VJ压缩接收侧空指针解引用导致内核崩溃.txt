@@ -1,0 +1,32 @@
+#标题
+slip: VJ压缩接收侧空指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理特定配置下的入站 VJ 压缩（Van Jacobson）或未压缩帧时触发空指针解引用，导致在 softirq 上下文中发生 Oops（一般保护故障），进而引发内核崩溃。该问题可由非特权用户通过用户命名空间触发。
+
+#主要错误日志
+Oops: general protection fault, probably for non-canonical
+      address 0xdffffc0000000000: 0000 [#1] SMP KASAN NOPTI
+KASAN: null-ptr-deref in range [0x0000000000000000-0x0000000000000007]
+RIP: 0010:slhc_uncompress (drivers/net/slip/slhc.c:519)
+Call Trace:
+ <TASK>
+ ppp_receive_nonmp_frame (drivers/net/ppp/ppp_generic.c:2466)
+ ppp_input (drivers/net/ppp/ppp_generic.c:2359)
+ ppp_async_process (drivers/net/ppp/ppp_async.c:492)
+ tasklet_action_common (kernel/softirq.c:926)
+
+#问题根因
+slhc_init() 接受 rslots == 0 作为有效配置，表示“无接收压缩”。此时 comp->rstate 保持为 NULL，comp->rslot_limit 为 0。
+PPP 模块（PPPIOCSMAXCID）在处理特定的用户输入（如 0xffff0000）时，由于符号扩展问题导致 val2 + 1 结果为 0，从而调用 slhc_init(0, 1) 初始化了一个 rstate 为空的实例。
+接收侧的辅助函数 slhc_uncompress() 和 slhc_remember() 未对此配置进行防御。当收到 VJ 头部携带显式连接 ID（如 slot 0）的报文时，slot 编号通过了 rslot_limit 的边界检查（因为 limit 为 0，而比较逻辑允许了 slot 0），进而尝试解引用 comp->rstate[x]，导致访问 NULL 指针。
+
+#解决方案
+在 slhc_uncompress() 和 slhc_remember() 函数入口处增加对 comp->rstate 的非空检查。
+若 rstate 为 NULL，slhc_uncompress() 将跳转至现有的 'bad' 标签处理，slhc_remember() 则显式增加 sls_i_error 计数并调用 slhc_toss() 丢弃报文。此修复拒绝在无接收压缩状态下处理接收到的 VJ 报文，防止空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f48f08fc1dcedb3d9dc1c5c8902f804136ad3604

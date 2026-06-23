@@ -1,0 +1,23 @@
+#标题
+driver core: uevent_show() 与驱动解绑竞争条件导致 UAF 或数据读取异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读取设备 `uevent` 属性（`uevent_show`）时，若并发执行驱动解绑操作，可能触发内核崩溃或读取到无效的驱动名称数据。
+
+#主要错误日志
+未知
+
+#问题根因
+`uevent_show()` 函数与驱动解绑流程存在竞争条件。原代码中，`uevent_show()` 调用 `kset->uevent_ops->uevent()`（最终调用 `dev_uevent()`）读取 `dev->driver` 时，虽然可能持有 `device_lock`，但在 `module_remove_driver()` 清理驱动信息时未进行相应的同步，导致读取到已被释放的 `device_driver` 结构体指针，引发 Use-After-Free 或内存访问越界。
+
+#解决方案
+采用 RCU（Read-Copy-Update）机制替代锁进行保护：
+1. 在 `dev_uevent()` 中使用 `rcu_read_lock()` 和 `rcu_read_unlock()` 包裹临界区，并使用 `READ_ONCE(dev->driver)` 安全读取驱动指针。
+2. 在 `module_remove_driver()` 移除驱动前调用 `synchronize_rcu()`，确保所有读取路径完成后再进行清理。
+3. 移除 `uevent_show()` 中冗余的 `device_lock` 调用，优化并发性能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/de7233ed2c8d1b60baacc511624c794569bdd26c

@@ -1,0 +1,23 @@
+#标题
+arm-smmu-v3: 修复页表预取导致的额外 ATC TLB 刷新问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 CONFIG_HISILICON_ERRATUM_162100602 配置项且使能了 SMMU 同步批处理优化选项（ARM_SMMU_OPT_SYNC_BATCH）的场景下，进行 SMMU 页表映射操作时，系统会执行多余的 ATC TLB 无效化操作，导致不必要的性能开销。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的修复提交（14554f1c8b05）中，为了解决同步性能问题引入了批处理逻辑，但该逻辑在 `arm_smmu_tlb_inv_walk` 函数中的判断条件不严谨。当 `size` 为 0 时，只要检测到 `ARM_SMMU_OPT_SYNC_BATCH` 选项就会触发额外的 TLB 刷新。实际上，该处理路径原本是为了应对页表预取问题，而页表预取触发 TLB 刷新的逻辑应该仅针对受影响的特定硬件 Errata 场景，而不应普遍作用于开启了批处理优化选项的所有场景。这导致了非预期的额外 ATC TLB 刷新。
+
+#解决方案
+1. 新增 `IO_PGTABLE_QUIRK_HISI_ERRATA` 标志位，用于精确标识受影响的硬件 Errata 场景。
+2. 在 `arm_smmu_domain_finalise` 函数中，仅当 SMMU 选项包含 `ARM_SMMU_OPT_SYNC_BATCH` 时，才将 `IO_PGTABLE_QUIRK_HISI_ERRATA` 标志传递给页表配置。
+3. 修改 `arm_smmu_tlb_inv_walk` 中的逻辑，移除对 `ARM_SMMU_OPT_SYNC_BATCH` 的直接判断，改为仅依赖 `size` 参数（由底层页表逻辑在符合 Errata 条件时传入 0）来决定是否执行刷新。
+4. 修改 `io-pgtable-arm.c` 中的映射逻辑，确保只有同时满足 `lvl <= 2` 且设置了 `IO_PGTABLE_QUIRK_HISI_ERRATA` 标志时，才执行 TLB 刷新，从而避免了额外的无效化操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5063408e4b3cf75dcbedd7d90abbfcf191f6ba7f

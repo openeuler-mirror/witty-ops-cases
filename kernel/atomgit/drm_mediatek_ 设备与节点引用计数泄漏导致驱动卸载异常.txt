@@ -1,0 +1,28 @@
+#标题
+drm/mediatek: 设备与节点引用计数泄漏导致驱动卸载异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mtk_drm_get_all_drm_priv 函数执行过程中，由于未正确释放设备引用计数，导致设备节点引用计数泄漏。该泄漏会阻碍驱动卸载（unbind）操作时设备或节点资源的正常释放，可能导致驱动无法正常卸载或资源无法回收。
+
+#主要错误日志
+未知
+
+#问题根因
+在 mtk_drm_get_all_drm_priv 函数中，调用 device_find_child() 和 of_find_device_by_node() 获取设备和节点指针时，这两个函数都会增加找到对象的引用计数。然而，代码在后续处理路径中（如异常分支或循环提前结束时）未调用 put_device() 和 of_node_put() 来释放这些引用。具体表现为：
+1. device_find_child() 返回前调用了 get_device() 增加了引用计数，但使用后未配对调用 put_device()。
+2. of_find_device_by_node() 同样增加了引用计数，但未进行释放。
+3. for_each_child_of_node() 迭代器在循环未达到 MAX_CRTC 提前结束时，未释放节点引用。
+
+#解决方案
+修改 mtk_drm_drv.c 文件中的逻辑，确保在所有代码路径下都正确释放引用。
+1. 在 `if (!of_id)` 和 `if (!pdev)` 判断分支跳转前增加 `of_node_put(node)` 操作。
+2. 在 `if (!drm_dev)` 判断分支跳转前增加 `put_device(&pdev->dev)` 和 `of_node_put(node)` 操作。
+3. 在 `if (!temp_drm_priv)` 判断分支跳转前增加 `put_device(drm_dev)`、`put_device(&pdev->dev)` 和 `of_node_put(node)` 操作。
+4. 在正常处理流程结束后，显式调用 `put_device(drm_dev)` 和 `put_device(&pdev->dev)` 释放引用，并保留 `of_node_put(node)`。
+5. 调整循环跳出逻辑，移除原先在 `if (cnt == MAX_CRTC)` 内部的 `of_node_put(node)`，统一通过标签和循环结束处理来确保资源释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e083deb61658921f9c72e94e88604acf9b96091a

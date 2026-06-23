@@ -1,0 +1,22 @@
+#标题
+vmxnet3 网卡 XDP 流量发送队列竞争条件导致数据损坏或崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 XDP 流量运行在 CPU 编号大于或等于网卡 Tx 队列数量的 CPU 上时，vmxnet3_xdp_get_tq() 总是选择 queue 0 进行发送。此时，若多个不同 CPU 上的 XDP 发送操作并行运行，将因缺乏锁保护引发竞争条件，可能导致内核崩溃（panic）、数据损坏或发送队列管理混乱。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 队列选择逻辑缺陷：在 CPU 编号大于等于 Tx 队列数量时，原代码使用 `reciprocal_scale` 函数而非简单的取模运算，导致不同 CPU 错误地映射到同一个发送队列（queue 0）。
+2. 并发保护缺失：`vmxnet3_xdp_xmit()` 和 `vmxnet3_xdp_xmit_frame()` 函数在使用返回的队列进行发送时未持有任何锁，导致多个 CPU 并发操作同一队列时产生竞争条件。
+
+#解决方案
+1. 修正队列选择算法：将 `reciprocal_scale(cpu, tq_number)` 修改为简单的取模运算 `cpu % tq_number`，确保 CPU 在超出队列范围时能正确分布到不同队列。
+2. 增加并发锁保护：在 `vmxnet3_xdp_xmit()` 中引入 `__netif_tx_lock`/`__netif_tx_unlock` 保护整个发送循环；在 `vmxnet3_xdp_xmit_frame()` 中引入 `spin_lock_irq`/`spin_unlock_irq` 保护描述符操作、DMA 映射及错误处理路径，防止并发访问导致的数据竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/28b86fe42e787328c20545f1c11fc40bd3fef9a8

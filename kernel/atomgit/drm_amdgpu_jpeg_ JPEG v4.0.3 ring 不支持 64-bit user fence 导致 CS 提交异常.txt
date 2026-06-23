@@ -1,0 +1,20 @@
+#标题
+drm/amdgpu/jpeg: JPEG v4.0.3 ring 不支持 64-bit user fence 导致 CS 提交异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 VCN4.0.3 硬件平台上使用 JPEG ring 进行计算时，由于硬件不支持 64 位的 user fence 写入，若用户态提交包含 user fence 的 CS（Command Submission）请求，会导致内核未拒绝此类不支持的请求，进而可能引发硬件故障、系统崩溃或未定义的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+JPEG rings 硬件设计上不支持 64 位的 user fence 写入操作，但驱动程序在初始化 `jpeg_v4_0_3_dec_ring_vm_funcs` 结构体时，未设置 `no_user_fence` 标志位。这导致内核驱动层未能正确识别并拒绝包含 user fence 的 CS 提交，尝试执行硬件不支持的指令流。
+
+#解决方案
+在 JPEG v4.0.3 的 ring 函数结构体 `jpeg_v4_0_3_dec_ring_vm_funcs` 中添加 `.no_user_fence = true` 属性。该设置告知 AMDGPU 驱动核心层该 ring 不支持 user fence，从而在 CS 提交阶段直接拒绝包含 user fence 的请求，避免后续硬件异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8c699553f067da5d8d2ab2919fd5a558c8285902

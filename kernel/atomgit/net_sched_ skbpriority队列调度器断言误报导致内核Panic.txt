@@ -1,0 +1,25 @@
+#标题
+net_sched: skbpriority队列调度器断言误报导致内核Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 skbprio (skb priority queue) qdisc 进行网络流量控制时，内核触发 BUG_ON 断言失败，导致系统崩溃或内核 panic。
+
+#主要错误日志
+内核 panic 信息包含：
+`BUG_ON(sch->q.qlen != 1);`
+或
+`BUG_ON(sch->q.qlen);`
+
+#问题根因
+skbprio 调度器代码中存在过于严格的队列断言检查。
+1. 在 `skbprio_enqueue` 函数中，当最低优先级队列变空且与最高优先级相同（即队列刚清空）时，代码断言 `sch->q.qlen` 必须为 1。但实际上此时队列长度可能为 0（例如数据包刚被出队），导致断言条件不成立。
+2. 在 `skbprio_dequeue` 函数中，逻辑判断 `lowest_prio == highest_prio` 时，直接断言 `sch->q.qlen` 为假（0）。然而，该条件并不严格代表队列为空，可能存在其他数据包，从而导致断言失败误报。
+
+#解决方案
+移除 `net/sched/sch_skbprio.c` 中 `skbprio_enqueue` 和 `skbprio_dequeue` 函数内不合逻辑的 `BUG_ON` 断言语句，防止在正常的队列状态转换过程中触发内核 panic。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6b459d643ea5b0b026195e800293d35a6352f8ad

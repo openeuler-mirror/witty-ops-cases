@@ -1,0 +1,24 @@
+#标题
+mmc: sdhci: 修改时钟参数前未关闭 SD 卡时钟导致电压切换失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Baytrail 和 Apollo Lake SD 控制器上使用特定的 Swissbit SD 卡进行电压切换操作时，因产生虚假时钟脉冲导致电压切换失败，进而影响设备的正常识别与通信。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 SD Host Controller Simplified Specification v4.20 §3.2.3 规范，在更改 SD 卡时钟参数前必须先禁用外部卡时钟。原代码逻辑在 `sdhci_set_clock` 函数中，当需要设置新时钟频率时，直接向 `SDHCI_CLOCK_CONTROL` 寄存器写入 0 进行全局清零，而非先单独关闭 SD 卡时钟使能位（`SDHCI_CLOCK_CARD_EN`）。这种非标准操作序列在特定硬件（如 Baytrail 和 Apollo Lake 控制器）上引发了虚假时钟脉冲，破坏了电压切换流程。
+
+#解决方案
+修改 `drivers/mmc/host/sdhci.c` 中的 `sdhci_set_clock` 函数逻辑：
+1. 在更改时钟参数前，先读取当前 `SDHCI_CLOCK_CONTROL` 寄存器值。
+2. 判断如果 `SDHCI_CLOCK_CARD_EN` 位已置位，则先将其清零以显式关闭卡时钟，保持其他配置不变。
+3. 若目标时钟为 0，则在关闭卡时钟后，再将整个寄存器清零并返回。
+此修复确保了在调整时钟参数前，卡时钟处于禁用状态，符合硬件规范要求，消除了虚假脉冲。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8c901da4afd9b1a62e347594e053250ae16179fc

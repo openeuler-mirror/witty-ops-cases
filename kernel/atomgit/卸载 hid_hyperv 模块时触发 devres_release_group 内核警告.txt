@@ -1,0 +1,35 @@
+#标题
+卸载 hid_hyperv 模块时触发 devres_release_group 内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 'hid_hyperv' 模块时，内核触发 WARNING 并打印调用栈。该问题源于驱动探针阶段对 devres 机制的处理不当，导致模块卸载时 devres 组状态异常。
+
+#主要错误日志
+```
+hv_vmbus: unregistering driver hid_hyperv
+------------[ cut here ]------------
+WARNING: CPU: 2 PID: 3983 at drivers/base/devres.c:691 devres_release_group+0x1f2/0x2c0
+...
+Call Trace:
+ <TASK>
+ ? devres_release_group+0x1f2/0x2c0
+ hid_device_remove+0xf5/0x220
+ device_release_driver_internal+0x371/0x540
+ bus_remove_device+0x1f1/0x3f0
+ device_del+0x33f/0x8c0
+ hid_destroy_device+0xc8/0x130
+ mousevsc_remove+0xd2/0x1d0 [hid_hyperv]
+ ...
+```
+
+#问题根因
+Hyper-V HID 驱动在探针过程中手动覆盖了 `hid_dev->driver` 指针，并自行调用 `hid_parse()` 和 `hid_hw_start()` 模拟探针流程，但未调用 `devres_open_group()` 来分配对应的设备资源组。而在驱动移除时，`hid_device_remove()` 会默认调用 `devres_release_group()`，尝试释放一个从未分配的资源组，从而触发 devres 机制的警告。
+
+#解决方案
+重构驱动探针流程，移除对 `hid_dev->driver` 的非法覆盖。改为定义标准的 `hid_driver` 结构体（`mousevsc_hid_driver`），实现合法的 `.probe` 回调（`mousevsc_hid_probe`），并在模块初始化 (`mousevsc_init`) 时通过 `hid_register_driver()` 注册该驱动。这样利用 HID 核心层的标准流程来管理 devres 资源组，避免了手动操作导致的资源管理不一致问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fe7aff458942e0ed2510c7eae3412bdee35cabf0

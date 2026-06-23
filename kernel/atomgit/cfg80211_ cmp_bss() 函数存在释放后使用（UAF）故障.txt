@@ -1,0 +1,20 @@
+#标题
+cfg80211: cmp_bss() 函数存在释放后使用（UAF）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在调用 `cmp_bss()` 函数时触发内核崩溃或内存错误，表现为释放后使用。该问题由 syzbot 自动化测试发现，通常发生在 WiFi 扫描更新已知 BSS 信息的场景下。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cfg80211_update_known_bss()` 函数中，代码直接释放了 `beacon_ies` 指针指向的内存，但未检查该指针是否正通过 `hidden_beacon_bss` 指针被其他 BSS 对象共享。当网络存在隐藏 SSID 且 `beacon_ies` 被共享时，直接释放会导致其他引用该数据的 BSS 对象产生悬空指针，进而在后续访问（如 `cmp_bss()` 中）触发释放后使用错误。根因在于 Commit 776b3580178f 引入的 `bss_free()` 处理逻辑未在此处同步更新。
+
+#解决方案
+在 `cfg80211_update_known_bss()` 函数中释放旧的 `beacon_ies` 前，增加对 `new->pub.hidden_beacon_bss` 的判断。仅当 `hidden_beacon_bss` 为空（即 beacon_ies 未被共享）时，才执行 `kfree_rcu` 释放操作，从而避免对共享数据的误释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/81bc7e0fb1e0834a382a996935c8482f280b806a

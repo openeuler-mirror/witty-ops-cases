@@ -1,0 +1,23 @@
+#标题
+ub: udma: rx close 流程中的锁竞争与移除处理修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 rx close 相关处理流程中（如 `udma_clean_jfc`），若在非 lock_free 模式下操作，可能因锁竞争导致内核异常或死锁。
+2. 在设备移除（`udma_remove`）过程中，若 `udma_close_ue_rx` 失败，驱动会陷入无限循环重试并打印错误日志，导致设备无法正常卸载或移除流程卡死。
+
+#主要错误日志
+dev_err(&adev->dev, "udma close ue rx failed in remove process.\n");
+
+#问题根因
+1. **锁使用不当**：在 `udma_clean_jfc` 函数中，非 lock_free 模式下使用了普通的 `spin_lock`，未关闭中断，可能在某些上下文中引起死锁或竞争问题。
+2. **移除逻辑死循环**：`udma_remove` 函数中包含一段 while(true) 循环逻辑，当 `udma_close_ue_rx` 返回非 0（失败）时，该循环会持续休眠重试并打印错误，导致移除流程无法继续向下执行，形成卡死。
+
+#解决方案
+1. **修复锁竞争**：将 `udma_clean_jfc` 中的 `spin_lock` 和 `spin_unlock` 替换为 `spin_lock_irqsave` 和 `spin_unlock_irqrestore`，确保在持有锁期间关闭中断，避免死锁。
+2. **修正移除逻辑**：删除 `udma_remove` 中的无限重试循环逻辑（包括相关的 msleep 和退避时间变量），改为单次调用 `udma_close_ue_rx`，若失败则直接打印错误日志并继续执行后续卸载流程，确保设备能正常移除。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4e578b3d5f1d86505d1350fa2a23334ac9b0b793

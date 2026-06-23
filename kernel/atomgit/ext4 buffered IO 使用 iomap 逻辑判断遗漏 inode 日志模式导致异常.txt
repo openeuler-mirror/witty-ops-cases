@@ -1,0 +1,20 @@
+#标题
+ext4 buffered IO 使用 iomap 逻辑判断遗漏 inode 日志模式导致异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ext4 文件系统中，当 inode 被单独设置了 `EXT4_INODE_JOURNAL_DATA` 标志（即文件级日志数据模式），但文件系统挂载选项并非 `data=journal` 时，内核缓冲 IO（buffered IO）错误地使用了 iomap 路径。这违反了 ext4 对日志数据模式处理的内部假设，可能导致数据一致性风险或内核异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ext4_should_use_buffered_iomap` 在判断是否使用 iomap 路径时，仅检查了文件系统的挂载选项 `DATA_FLAGS` 是否为 `EXT4_MOUNT_JOURNAL_DATA`，遗漏了对单个 inode 标志 `EXT4_INODE_JOURNAL_DATA` 的检查。当挂载选项非日志模式但特定 inode 被设置了日志模式时，逻辑判断错误地返回真值，导致缓冲 IO 走了不支持的 iomap 路径。
+
+#解决方案
+在 `ext4_should_use_buffered_iomap` 函数中增加判断条件，通过 `ext4_test_inode_flag` 检查 inode 是否设置了 `EXT4_INODE_JOURNAL_DATA` 标志。如果该标志存在，函数应返回 `false`，确保此类 inode 使用传统的日志处理路径而非 iomap。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/09c4f9cd2261af7da3b4b58466c5672169751c28

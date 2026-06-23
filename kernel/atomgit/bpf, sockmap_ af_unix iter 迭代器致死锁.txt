@@ -1,0 +1,43 @@
+#标题
+bpf, sockmap: af_unix iter 迭代器致死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 BPF iterator 进行 UNIX 域 socket 遍历时，若 BPF 程序尝试更新 sockmap，系统会检测到递归锁定并触发死锁警告。具体场景为 `bpf_iter_unix_seq_show()` 获取锁后，BPF 程序调用 `sock_map_update_elem()` 再次尝试获取同一锁，导致内核报告 "possible recursive locking detected" 并指出 "DEADLOCK" 风险。
+
+#主要错误日志
+WARNING: possible recursive locking detected
+test_progs/1393 is trying to acquire lock:
+ffff88811ec25f58 (slock-AF_UNIX){+...}-{3:3}, at: sock_map_update_elem+0xdb/0x1f0
+
+but task is already holding lock:
+ffff88811ec25f58 (slock-AF_UNIX){+...}-{3:3}, at: __lock_sock_fast+0x37/0xe0
+
+other info that might help us debug this:
+ Possible unsafe locking scenario:
+
+       CPU0
+       ----
+  lock(slock-AF_UNIX);
+  lock(slock-AF_UNIX);
+
+ *** DEADLOCK ***
+
+ May be due to missing lock nesting notation
+
+4 locks held by test_progs/1393:
+ #0: ffff88814b59c790 (&p->lock){+.+.}-{4:4}, at: bpf_seq_read+0x59/0x10d0
+ #1: ffff88811ec25fd8 (sk_lock-AF_UNIX){+.+.}-{0:0}, at: bpf_seq_read+0x42c/0x10d0
+ #2: ffff88811ec25f58 (slock-AF_UNIX){+...}-{3:3}, at: __lock_sock_fast+0x37/0xe0
+ #3: ffffffff85a6a7c0 (rcu_read_lock){....}-{1:3}, at: bpf_iter_run_prog+0x51d/0xb00
+
+#问题根因
+`bpf_iter_unix_seq_show()` 函数使用了 `lock_sock_fast()` 来锁定 socket。当该函数走快速路径（fast path）时，它会持有 `slock-AF_UNIX` 锁。此时，如果正在运行的 BPF iterator 程序尝试调用 `sock_map_update_elem()` 更新 sockmap，该函数内部会调用 `bh_lock_sock()`，这会尝试再次获取同一个 `slock-AF_UNIX` 锁，从而引发递归锁定（recursive locking）导致死锁。
+
+#解决方案
+将 `bpf_iter_unix_seq_show()` 函数中的锁获取方式从 `lock_sock_fast()` 修改为标准的 `lock_sock()`。此举避免了因 `lock_sock_fast()` 快速路径持有自旋锁而导致的递归锁定问题。同时，将 socket 状态检查条件从 `sk_unhashed(sk)` 修改为 `sock_flag(sk, SOCK_DEAD)` 以适配锁机制的变更。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/680a9303b7d446f5e8dba44b6cec26c785a2a8a8

@@ -1,0 +1,21 @@
+#标题
+btrfs: 日志重放时忽略当前 inode 缺失导致逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BTRFS 文件系统进行日志重放过程中，若当前 inode 在子卷树中缺失，内核错误地忽略了该错误情况，导致日志重放逻辑未正确处理关键缺失对象，可能导致文件系统状态不一致或数据完整性问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `add_inode_ref()` 中，当通过 `btrfs_iget_logging()` 查找 inode 失败时返回了 `-ENOENT`。其调用者 `replay_one_buffer()` 仅依据返回值为 `-ENOENT` 就忽略了错误，误认为这只是“父目录未找到”的正常情况。然而，实际上“当前 inode 未找到”也是返回 `-ENOENT`，这是一个致命错误，不应被忽略。该问题是在引入提交 5f61b961599a ("btrfs: fix inode lookup error handling during log replay") 后，错误处理逻辑变更导致的回归问题：之前的逻辑会将“当前 inode 未找到”转换为 `-EIO` 从而中止重放，修改后改为返回 `-ENOENT` 导致被调用者忽略。
+
+#解决方案
+1. 在 `add_inode_ref()` 函数内部区分错误场景：如果缺失的是父目录，将 `-ENOENT` 转换为 `0`（表示可接受的跳过）；如果缺失的是当前 inode，则保留 `-ENOENT` 错误码返回。
+2. 修改调用者 `replay_one_buffer()`，移除对 `-ENOENT` 的特殊忽略逻辑，使其对任何非零返回值都进行处理（中止重放），从而确保当前 inode 缺失时能正确报错。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/97ff53b111690b3729b54b0794f7a2525082dc6d

@@ -1,0 +1,22 @@
+#标题
+Plantronics 耳机音频控制名称不规范导致音量调节与静音功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Poly/Plantronics 部分系列的耳机在连接系统后，由于内核生成的混音器控制名称不符合 ALSA 标准命名规范，导致用户空间程序无法识别相应的音频控制元素。具体表现为：耳机的音量调节和静音事件无法正确路由到耳机的音频控制逻辑，用户无法通过标准界面控制耳机的播放音量或麦克风静音状态。例如，麦克风静音控制被错误命名为 "Headset Microphone Capture Switch"，耳机音量控制被错误命名为 "Headset Earphone Playback Volume"。
+
+#主要错误日志
+- `usb_audio_dbg(chip, "no change in %s\n", id->name);` （推断：未匹配到触发词时的调试日志）
+- `usb_audio_dbg(chip, "fixing kctl name %s\n", id->name);` （推断：修复控制名称时的调试日志）
+- `usb_audio_dbg(chip, "something wrong in kctl name %s\n", id->name);` （推断：名称格式异常时的调试日志）
+
+#问题根因
+该系列 Plantronics 耳机在 USB 音频描述符中定义的 Feature Unit、Input Unit 或 Output Unit 名称包含了非标准的额外词汇（如 "Microphone"、"Earphone" 等），导致内核生成的 ALSA 控制名称变为 "Headset Microphone Capture Switch" 或 "Headset Earphone Playback Volume" 等。用户空间音频服务通常期望标准的 "Headset Capture Switch" 或 "Headset Playback Volume" 格式，因名称不匹配导致控制失效。
+
+#解决方案
+在 `sound/usb/mixer_quirks.c` 中新增 `snd_fix_plt_name` 函数，针对 Vendor ID 为 0x047f (Plantronics) 的设备，在创建音量（UAC_FU_VOLUME）或静音（UAC_FU_MUTE）控制时，检查控制名称是否包含 "Earphone"、"Microphone"、"Receive"、"Transmit" 等非标准触发词。如果包含，则将控制名称强制重命名为标准的 "Headset [Playback|Capture] [Volume|Switch]" 格式，确保用户空间程序能正确识别并处理这些控制元素。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/37004d0ed6595ad38a94acfbf8f6d42893a84c9f

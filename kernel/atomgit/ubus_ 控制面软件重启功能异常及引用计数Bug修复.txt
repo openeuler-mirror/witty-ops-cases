@@ -1,0 +1,40 @@
+#标题
+ubus: 控制面软件重启功能异常及引用计数Bug修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在ubus子系统中触发控制软件重启功能时，可能因状态机管理不当导致功能异常。
+2. 系统日志中出现 "active add start task failed" 等错误提示。
+3. 内部管理状态维护异常，retry（重试）机制存在逻辑缺陷，可能导致任务重试失败或状态不一致。
+4. device attach 或 reinit 操作失败时，状态未正确恢复或处理。
+
+#主要错误日志
+- `ub_err(uent, "active add start task failed\n");`
+- `ub_warn(uent, "device attach failed, ret=%d\n", ret);`
+- `ub_err(uent, "reinit ret[%d]\n", ret);`
+- `ub_warn(uent, "disable ue, get mue lock busy\n");` (推断：对应代码逻辑 `if (!lock)` 分支)
+- `ub_warn(uent, "retry[%d] add delay work failed\n", task_type);`
+- `ub_err(uent, "alloc retry[%d] task failed\n", task_type);`
+
+#问题根因
+1. **状态维护缺失**：在 `ub_enum_entities_active` 等函数中，添加任务失败时未将 `ent_mgmt_state` 恢复为 `MGMT_STATE_IDLE`，导致状态异常。
+2. **引用计数处理不当**：在 `ub_pool_attach` 函数中，错误地直接返回了局部变量 `ret` 而非预期的状态码，且未正确处理 `ubc` 的引用计数（缺少 `ub_ubc_get`），可能导致引用计数泄漏或访问错误。
+3. **Retry机制缺陷**：重试逻辑未区分 Attach 和 Reinit 类型，导致重试任务类型混淆；同时在 retry 任务添加失败时未清理 `task_src` 标志位，影响后续重试。
+4. **并发与锁问题**：在 `ub_delay_task_disable` 流程中，获取锁失败时状态机处理不完整。
+
+#解决方案
+1. **修复状态机流转**：在 `ub_enum_entities_active` 中添加任务失败的回退逻辑，将状态重置为 `MGMT_STATE_IDLE`；在各关键路径（如 `ub_delay_task_work` 的 `TASK_TYPE_START` 分支）补充状态设置。
+2. **修正返回值与引用计数**：`ub_pool_attach` 函数修改为正确返回 0，并调用 `ub_ubc_get(ubc)` 增加引用计数。
+3. **重构 Retry 机制**：
+   - 新增 `TASK_TYPE_ATTACH_RETRY` 和 `TASK_TYPE_REINIT_RETRY` 类型，细化重试场景。
+   - 修改 `ub_add_retry_task` 接口，传入 `task_type` 参数。
+   - 在 retry 任务结构体中增加 `task_type` 字段，确保重试逻辑正确分发。
+   - 增加 retry 任务存在性检查，防止重复添加。
+4. **增加调试与状态可见性**：
+   - 在 sysfs 中新增 `mgmt_state` 和 `task_src` 属性文件，便于用户态监控内部状态。
+   - 在 vendor 驱动中增加详细的注册、注销日志打印，辅助定位问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cde60695611dd9fa3c039b608912708d02c5f46f

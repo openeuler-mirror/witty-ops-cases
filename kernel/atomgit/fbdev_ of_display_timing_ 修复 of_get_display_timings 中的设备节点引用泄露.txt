@@ -1,0 +1,20 @@
+#标题
+fbdev: of_display_timing: 修复 of_get_display_timings 中的设备节点引用泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `of_get_display_timings` 函数解析显示时序时，如果遇到错误路径提前退出（如 `of_parse_display_timing` 解析失败或内存分配失败），会导致设备节点（device node）的引用计数未被正确释放，从而造成内核对象引用泄露。长期运行可能导致内存泄露或设备树节点无法正确释放。
+
+#主要错误日志
+未知
+
+#问题根因
+代码使用了 `for_each_child_of_node` 宏进行循环遍历，该宏需要调用者手动管理节点引用计数。当循环内部发生错误（如解析失败）执行 `goto timingfail` 提前退出时，当前遍历的子节点引用计数未被释放，导致引用泄露。
+
+#解决方案
+将循环遍历宏从 `for_each_child_of_node` 替换为 `for_each_child_of_node_scoped`。后者利用自动变量清理机制（automatic cleanup），确保在循环因任何原因（包括提前退出）结束时，自动调用 `of_node_put` 释放节点引用，从而避免泄露。同时将循环变量名从 `entry` 调整为 `child` 以适配宏定义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6611cd76a78f96be4ca872e550acbffafd7f915c

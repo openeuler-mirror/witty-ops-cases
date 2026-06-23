@@ -1,0 +1,22 @@
+#标题
+qlcnic: SRIOV 模式下存在内存泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 qlcnic 网卡驱动启用 SRIOV 功能的过程中，若内存分配失败（如 `sriov->allowed_vlans` 或 `vf->sriov_vlans` 分配失败），此前已成功分配的内存资源未被释放，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `qlcnic_sriov_set_guest_vlan_mode` 和 `qlcnic_sriov_alloc_vlans` 函数中，当某次内存分配（如 `kcalloc`）失败并返回 `-ENOMEM` 时，缺少对之前步骤中已分配内存的清理逻辑（即未调用 `qlcnic_sriov_free_vlans`），导致内存泄漏。
+
+#解决方案
+在内存分配失败的错误处理路径中增加 `qlcnic_sriov_free_vlans(adapter)` 调用：
+1. 在 `qlcnic_sriov_set_guest_vlan_mode` 中，若 `sriov->allowed_vlans` 分配失败，调用该函数释放内存。
+2. 在 `qlcnic_sriov_alloc_vlans` 中，若某个 VF 的 `sriov_vlans` 分配失败，调用该函数释放已分配的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/da5097d68cb97456282594ad1889c70bf180d3ef

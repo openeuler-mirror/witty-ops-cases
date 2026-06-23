@@ -1,0 +1,25 @@
+#标题
+urma: ubagg获取物理设备信息接口存在错误处理缺失与数据结构不匹配
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ubagg_user_ctl()` 处理 `GET_SLAVE_DEVICE` 操作时，若设备不存在，函数可能静默失败并导致后续错误处理不当。更严重的是，由于校验逻辑使用的结构体大小（`struct ubagg_slave_device`）与实际拷贝给用户态的数据不匹配，导致内核缓冲区过度读取、内存信息泄漏或用户态数据损坏。
+
+#主要错误日志
+- ubagg_log_err("aggregation device not exist.");
+- ubagg_log_err("ubagg dev not exist:%s", dev->dev_name);
+- ubagg_log_err("ubagg user ctl has no enough space, buffer size:%u, needed size:%lu", ...)
+
+#问题根因
+1. **设备查找逻辑缺陷**：原实现中 `get_slave_dev()` 函数在查找设备失败时返回 false，但调用处缺乏对设备有效性的严格校验，可能导致在设备不存在时继续执行后续逻辑。
+2. **结构体校验与拷贝不一致**：代码在进行用户态缓冲区大小校验时使用的是 `sizeof(struct ubagg_slave_device)`，但在执行 `copy_to_user()` 时拷贝的却是结构体内部成员或过时的数据结构，导致校验的大小与实际拷贝的大小不一致。这种不匹配会导致内核读取超出预期范围的内存（Over-read）并拷贝给用户态，引发信息泄漏或数据损坏。
+
+#解决方案
+1. **替换设备查找逻辑**：移除存在缺陷的 `get_slave_dev()` 函数，改为直接调用 `ubagg_find_dev_by_name()` 来验证 bonding 设备是否存在，确保设备不存在时正确返回 `-ENXIO`。
+2. **重构数据结构与接口**：将操作码从 `GET_SLAVE_DEVICE` 更新为 `GET_PHYSICAL_DEVICE`，定义新的输出结构体 `struct ubagg_physical_device_out`。
+3. **修正校验与拷贝逻辑**：修改用户态缓冲区校验条件，使用正确的新结构体大小 `sizeof(struct ubagg_physical_device_out)` 进行校验；同时更新 `copy_to_user()` 的源数据指针，确保拷贝的数据内容与长度校验严格一致，修复内存过度读取问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eefe127d5f5dd39d5a4a17a1ee54fb2ee4b11721

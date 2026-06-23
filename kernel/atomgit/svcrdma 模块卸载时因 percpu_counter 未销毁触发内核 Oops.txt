@@ -1,0 +1,42 @@
+#标题
+svcrdma 模块卸载时因 percpu_counter 未销毁触发内核 Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 svcrdma 模块初始化过程中，若 `register_sysctl()` 返回 NULL（注册失败），模块初始化函数返回错误但未销毁已初始化的 percpu 计数器。随后在移除模块（rmmod）时，由于残留节点存在于 `percpu_counters` 链表中，触发内核页故障导致 Oops。若未开启 `CONFIG_HOTPLUG_CPU` 配置，则表现为内存泄漏。
+
+#主要错误日志
+RPC: Registered rdma transport module.
+RPC: Registered rdma backchannel transport module.
+RPC: Unregistered rdma transport module.
+RPC: Unregistered rdma backchannel transport module.
+BUG: unable to handle page fault for address: fffffbfff80c609a
+PGD 123fee067 P4D 123fee067 PUD 123fea067 PMD 10c624067 PTE 0
+Oops: Oops: 0000 [#1] PREEMPT SMP KASAN NOPTI
+RIP: 0010:percpu_counter_destroy_many+0xf7/0x2a0
+Call Trace:
+ <TASK>
+ __die+0x1f/0x70
+ page_fault_oops+0x2cd/0x860
+ spurious_kernel_fault+0x36/0x450
+ do_kern_addr_fault+0xca/0x100
+ exc_page_fault+0x128/0x150
+ asm_exc_page_fault+0x26/0x30
+ percpu_counter_destroy_many+0xf7/0x2a0
+ mmdrop+0x209/0x350
+ finish_task_switch.isra.0+0x481/0x840
+ schedule_tail+0xe/0xd0
+ ret_from_fork+0x23/0x80
+ ret_from_fork_asm+0x1a/0x30
+ </TASK>
+
+#问题根因
+在 `svc_rdma_proc_init()` 函数中，当 `register_sysctl()` 返回 NULL 时，代码直接返回错误，但未调用 `percpu_counter_destroy()` 销毁之前已成功初始化的计数器（如 `svcrdma_stat_read`、`svcrdma_stat_recv` 等）。如果开启了 `CONFIG_HOTPLUG_CPU`，这些残留节点会留在 `percpu_counters` 链表中，导致后续模块卸载或其他操作遍历该链表时触发页故障；若未开启该配置，则导致内存泄漏。
+
+#解决方案
+修改 `svc_rdma_proc_init()` 函数的错误处理路径，增加对 `register_sysctl()` 返回 NULL 的判断。若返回 NULL，则按初始化的逆序依次销毁已初始化的 percpu 计数器（`svcrdma_stat_write`、`svcrdma_stat_sq_starve`、`svcrdma_stat_recv`、`svcrdma_stat_read`），并返回 `-ENOMEM` 错误码，防止资源泄漏及后续 Oops。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/193ceac9e23e59a0c03ee9f6121dd334cf83971b

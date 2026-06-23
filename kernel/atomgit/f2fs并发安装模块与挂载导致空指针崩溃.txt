@@ -1,0 +1,30 @@
+#标题
+f2fs并发安装模块与挂载导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发安装 f2fs.ko 模块和挂载 f2fs 文件系统时，触发内核空指针引用，导致系统崩溃或模块加载失败。
+
+#主要错误日志
+KASAN: null-ptr-deref in range [0x0000000000000020-0x0000000000000027]
+RIP: 0010:__bio_alloc+0x2fb/0x6c0 [f2fs]
+Call Trace:
+ <TASK>
+ f2fs_submit_page_bio+0x126/0x8b0 [f2fs]
+ __get_meta_page+0x1d4/0x920 [f2fs]
+ get_checkpoint_version.constprop.0+0x2b/0x3c0 [f2fs]
+ validate_checkpoint+0xac/0x290 [f2fs]
+ f2fs_get_valid_checkpoint+0x207/0x950 [f2fs]
+ f2fs_fill_super+0x1007/0x39b0 [f2fs]
+ mount_bdev+0x183/0x250
+
+#问题根因
+在 `init_f2fs_fs()` 初始化流程中，`register_filesystem(&f2fs_fs_type)` 被过早调用。此时 f2fs 文件系统所需的私有 bioset 尚未初始化完成。若此时有并发进程尝试挂载 f2fs 文件系统，会进入挂载流程并调用 `f2fs_submit_page_bio`，进而访问未初始化的 bioset 指针，导致空指针引用。
+
+#解决方案
+调整 `init_f2fs_fs()` 函数中的初始化顺序，将 `register_filesystem(&f2fs_fs_type)` 注册操作移至函数末尾，确保在文件系统注册前，所有依赖资源（如 bioset、shrinker、cache 等）均已初始化完毕，从而避免并发挂载时访问未初始化资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/43b05af5de097cfe1564502a18fa67550a9b7ffe

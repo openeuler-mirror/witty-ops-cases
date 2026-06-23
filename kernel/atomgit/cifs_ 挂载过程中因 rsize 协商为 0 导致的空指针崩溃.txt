@@ -1,0 +1,23 @@
+#标题
+cifs: 挂载过程中因 rsize 协商为 0 导致的空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CIFS 挂载过程中，若服务端协商返回的 `MaxReadSize` 为 0 或重连过程中 `server->max_read` 被置 0，会导致 `cifs_sb->rsize` 计算结果为 0。该值为 0 时，`cifs_send_async_read()` 调用 `iov_iter_get_pages_alloc()` 分配页面数组失败，导致 `data->pages` 为 NULL，进而在回调函数 `uncached_fill_pages()` 中触发空指针解引用，造成内核崩溃。
+
+#主要错误日志
+[  365.523456] CIFS VFS: Negotiated rsize is 0, get connect failed
+
+#问题根因
+`cifs_sb->rsize` 的值被设定为 `SMB3_DEFAULT_IOSIZE` 与 `server->max_read` 两者中的较小值。导致 `cifs_sb->rsize` 为 0 的原因有两个：
+1. 协商过程中，服务端返回的 `rsp->MaxReadSize` 为 0，导致 `server->max_read` 被赋值为 0。
+2. 在 `cifsd` 线程中调用 `cifs_reconnect()` 时，`server->max_read` 被重置为 0，在重连完成前计算出的 `cifs_sb->rsize` 变为 0。
+当 `rsize` 为 0 时，内核无法正确分配内存页，最终触发了空指针崩溃。
+
+#解决方案
+在挂载阶段（`cifs_mount_get_tcon` 函数中）增加对 `cifs_sb->ctx->rsize` 的检查。如果协商后的 `rsize` 值为 0，则打印错误日志并以 `-EINVAL` 错误码退出挂载流程，提前阻断后续可能发生的空指针解引用风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3319eda60a52c7975f57bc080d7e75e71e8f2f0b

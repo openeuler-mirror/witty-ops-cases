@@ -1,0 +1,20 @@
+#标题
+PCI: brcmstb: regulator_bulk_get 错误处理缺陷导致内核 panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `regulator_bulk_get()` 调用失败且未创建任何 regulators 时，如果后续 PCIe 链路建立失败，系统在调用 `regulator_bulk_free()` 时会触发内核 panic。
+
+#主要错误日志
+[    ] Did not get regulators, err=%d
+
+#问题根因
+在 `brcm_pcie_add_bus` 函数中，调用 `regulator_bulk_get()` 失败后，代码未将 `pcie->sr` 设置为 NULL。这导致后续错误处理路径中，`regulator_bulk_free()` 错误地尝试释放无效的 regulator 资源，从而引发空指针解引用或无效内存访问导致 panic。
+
+#解决方案
+在 `regulator_bulk_get()` 失败的错误处理分支中，增加 `pcie->sr = NULL;` 赋值操作，确保后续清理代码不会尝试释放未成功分配的资源。同时优化了日志打印，增加了错误码输出以便于调试。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5cea5f63c2cce9fa14618c053208122b62990c51

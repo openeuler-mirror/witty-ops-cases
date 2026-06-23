@@ -1,0 +1,21 @@
+#标题
+arm64/mpam: L2 monitor 在 CDP 模式下读取异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CDP（Code and Data Prioritization）模式时，L2 缓存监控功能工作异常。由于监测通道（monitor）索引计算逻辑错误，导致在 CDP 模式下无法正确读取 L2 监控数据，可能导致监控数值错误或读取失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 CDP 模式下，`resctrl_arch_rmid_read` 函数中的 `cfg.mon` 索引计算逻辑缺失。原代码逻辑未针对 CDP 模式下的不同 partid（CDP_DATA 和 CDP_CODE）分别计算 monitor 索引，导致使用了错误的 monitor 索引进行读取。同时，原代码中存在冗余的 switch-case 判断限制了支持的监控事件类型，进一步影响了处理流程。
+
+#解决方案
+1. 移除 `resctrl_arch_mon_ctx_alloc_no_wait` 中对特定事件 ID（如 L3/L2 occupancy/mbm）的过滤判断，统一返回 `__mon_is_rmid_idx` 标识，简化分配逻辑。
+2. 在 `resctrl_arch_rmid_read` 中修正 `cfg.mon` 的计算方式，确保在非 CDP 模式和 CDP 模式（包括 DATA 和 CODE 两个 partid 分支）下，均根据当前的 `partid` 对 `num_mon` 取模来计算正确的 `cfg.mon` 索引，保证读取正确的硬件监控寄存器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/83b79525e1b864357a25073f671a320c4be5a5b5

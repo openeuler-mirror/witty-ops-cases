@@ -1,0 +1,24 @@
+#标题
+serial: fsl_lpuart: 配置RS485寄存器时因未禁用发送器导致硬件配置失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LPUART 32位串口驱动中，当用户通过应用层接口（如 TIOCGRS485/TIOCSRS485）修改 RS485 配置时，若发送器处于使能状态，MODIR 寄存器中的 TXRTSE 和 TXRTSPOL 位变更可能无法生效，导致 RS485 模式（如 RTS 引脚极性或发送使能逻辑）配置异常，进而引发通信失败。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 LPUART 参考手册规定，MODIR 寄存器中的 TXRTSE 和 TXRTSPOL 位只能在发送器禁用时进行修改。原代码在 `lpuart32_config_rs485` 函数中直接修改这些寄存器位，未检查并禁用发送器（Transmitter），违反了硬件操作时序要求。
+
+#解决方案
+在修改 RS485 相关寄存器（UARTMODIR）前，增加发送器状态检查与控制逻辑：
+1. 读取 UARTCTRL 寄存器，判断发送使能位（TE）是否置位。
+2. 若 TE 已使能，先调用 `lpuart32_wait_bit_set` 等待发送状态完成（TC 位置位），然后写 UARTCTRL 禁用 TE，并通过循环等待硬件确认 TE 位已被清零。
+3. 执行原有的 RS485 寄存器配置操作。
+4. 配置完成后，若之前禁用了发送器，重新恢复 UARTCTRL 中的 TE 位，使能发送器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3e689157b36665889cdb96196e946a948ae5594e

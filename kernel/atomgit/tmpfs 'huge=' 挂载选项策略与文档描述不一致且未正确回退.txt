@@ -1,0 +1,21 @@
+#标题
+tmpfs 'huge=' 挂载选项策略与文档描述不一致且未正确回退
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 tmpfs 挂载时使用 `huge=always` 或 `huge=within_size` 选项，当 PMD 尺寸的大页分配失败时，系统未能回退尝试较小尺寸的大页，导致大页分配成功率低于预期。同时，文档中关于 "never" 设置的描述不够准确，未说明 `MADV_COLLAPSE` 可以无视该设置强制合并大页，可能导致用户对系统行为产生误解。
+
+#主要错误日志
+未知
+
+#问题根因
+代码逻辑中，`shmem_huge_global_enabled` 函数在处理 `SHMEM_HUGE_ALWAYS` 和 `SHMEM_HUGE_WITHIN_SIZE` 场景时，错误地调用了 `shmem_mapping_size_orders`。该函数基于写入大小计算大页阶数，但在 PMD 分配失败时未能提供回退到较小大页尺寸的机制，导致分配策略不正确。此外，配套文档未更新关于 `MADV_COLLAPSE` 行为的说明，导致文档与实际代码逻辑不符。
+
+#解决方案
+1. **代码修复**：移除 `shmem_mapping_size_orders` 函数，修改 `shmem_huge_global_enabled` 逻辑。对于 `huge=always` 和 `huge=within_size` 选项，改为返回 `THP_ORDERS_ALL_FILE_DEFAULT`，确保在 PMD 大页分配失败时能够正确回退尝试较小的子大页尺寸。
+2. **文档更新**：更新 `Documentation/admin-guide/mm/transhuge.rst`，明确说明设置 "never" 并不会全局禁用透明大页，因为 `madvise(..., MADV_COLLAPSE)` 可以无条件忽略该设置并强制合并；同时更新了 `always` 和 `within_size` 选项的说明，指明其优先尝试 PMD 大页并在失败后回退的行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5eb2e030c0e9dcbd54aac7aea8a1a806ac347251

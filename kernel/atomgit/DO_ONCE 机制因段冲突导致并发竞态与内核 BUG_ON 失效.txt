@@ -1,0 +1,27 @@
+#标题
+DO_ONCE 机制因段冲突导致并发竞态与内核 BUG_ON 失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `clear_warn_once` 操作时，由于 `DO_ONCE` 与 `DO_ONCE_LITE` 共享同一个内存段，导致内核产生竞态条件。该竞态可能引发 `static_key` 状态不一致，最终导致内核触发 `BUG_ON(!static_key_enabled)` 检查失败。具体表现为系统运行过程中出现内核 panic 或 Oops，错误提示为 `BUG_ON` 失效。
+
+#主要错误日志
+BUG_ON(!static_key_enabled)
+
+#问题根因
+提交 c2c60ea37e5b ("once: use __section(".data.once")") 将 `DO_ONCE` 的 `___done` 变量移动到了 `.data.once` 段，这与同样使用该段的 `DO_ONCE_LITE()` 发生冲突。当使用 `clear_warn_once` 重置警告状态时，它会遍历并重置 `.data.once` 段中的变量。
+这导致了以下竞态问题：
+1. `DO_ONCE` 本应用于内部同步（如 `get_random_once`），不应被 `clear_warn_once` 重置。
+2. 当 `clear_warn_once` 错误地重置了 `DO_ONCE` 的 `___done` 标志位时，破坏了 `DO_ONCE` 内部的同步逻辑，导致 `static_key` 被错误地多次 disable 或 enable，进而触发 `once_deferred` 中的 `BUG_ON` 检查失败。
+
+#解决方案
+通过将 `DO_ONCE` 的 `___done` 标志位隔离到独立的 `.data..do_once` 段中，使其免受 `clear_warn_once` 的影响。
+具体修改包括：
+1. 修改 `include/linux/once.h`，将 `DO_ONCE` 和 `DO_ONCE_SLEEPABLE` 宏中的 `___done` 变量 section 属性从 `.data..once` 修改为 `.data..do_once`。
+2. 修改 `include/asm-generic/vmlinux.lds.h`，在链接脚本中新增 `*(.data..do_once)` 的段定义，确保新段被正确链接。
+此修复确保 `clear_warn_once` 仅重置 `WARN_ON_ONCE` 等宏使用的 `.data..once` 段数据，而不会干扰 `DO_ONCE` 的同步状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75f862862b71b29f0c3e02757402b607d59bf3bc

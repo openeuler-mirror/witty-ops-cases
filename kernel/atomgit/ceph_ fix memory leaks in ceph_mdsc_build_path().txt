@@ -1,0 +1,23 @@
+#标题
+ceph: fix memory leaks in ceph_mdsc_build_path()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Ceph 文件系统中，当 `ceph_mdsc_build_path()` 函数在处理特定错误路径（如加密名称构造失败或路径长度超过 PATH_MAX）时，未能释放先前通过 `__getname()` 申请的内存，导致内核内存泄漏。该问题关联 CVE-2026-43419。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ceph_mdsc_build_path()` 函数中，通过 `__getname()` 获取的 "path" 指针需要在函数退出前被释放。若该指针的所有权未通过 `path_info.path` 传递给调用者，函数必须自行释放。此前的代码在 `fscrypt_fname_encrypt_buffer_inplace()` 返回错误、`fscrypt_fname_disk_name_usr()` 返回错误以及路径过长（`-ENAMETOOLONG`）这几个错误返回路径中，遗漏了 `__putname(path)` 调用，导致内存泄漏。
+
+#解决方案
+在 `fs/ceph/mds_client.c` 文件的 `ceph_mdsc_build_path()` 函数中，针对三个不同的错误返回路径补充 `__putname(path)` 调用：
+1. 在 `fscrypt_fname_encrypt_buffer_inplace()` 失败后、返回 `ERR_PTR(ret)` 前，增加 `__putname(path)`。
+2. 在 `fscrypt_fname_disk_name_usr()` 失败后、返回 `ERR_PTR(len)` 前，增加 `__putname(path)`。
+3. 在处理 `ENAMETOOLONG` 错误、返回 `ERR_PTR(-ENAMETOOLONG)` 前，增加 `__putname(path)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/90a0c2927c4b5261172dd937d384c7549fc7e71d

@@ -1,0 +1,20 @@
+#标题
+omap3isp: DMA scatterlist 同步操作参数错误导致内存不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+OMAP3 ISP 驱动在进行 DMA 缓冲区同步时，使用了错误的 scatterlist 条目数量（`sg_table.nents`），这违反了 DMA API 的使用约定。该错误可能导致 DMA 缓冲区的缓存一致性维护失败，进而引发数据损坏、设备功能异常或内核内存状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序错误地使用了 `dma_sync_sg_for_*()` 系列接口。根据 DMA API 规范，调用 `dma_sync_sg_for_*()` 时传入的条目数（nents）必须是之前调用 `dma_map_sg_*()` 时返回的映射条目数，而不是 `sg_table` 结构中存储的原始条目数（`sg_table.nents`）。代码中直接使用了 `req->table.sgt.nents` 和 `buf->sgt.nents`，忽略了 `dma_map_sg` 可能合并条目的情况，导致同步操作范围不正确。
+
+#解决方案
+使用内核提供的基于 `sg_table` 的封装函数进行修复。将 `dma_sync_sg_for_cpu` 替换为 `dma_sync_sgtable_for_cpu`，将 `dma_sync_sg_for_device` 替换为 `dma_sync_sgtable_for_device`。这些封装函数内部会自动处理 `sg_table` 的正确参数，确保传入底层同步接口的是映射时的有效条目数，从而保证缓存一致性的正确维护。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bee4a0daba7087a4d748d3497d910375af895e28

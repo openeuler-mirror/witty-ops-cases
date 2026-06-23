@@ -1,0 +1,21 @@
+#标题
+ummu-core 在进程退出期间触发 UAF 导致地址访问失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在用户态 udma 模块中，进程退出销毁 so（共享对象）期间，若线程调用 urma_unregister_seg 触发 udma 失效流程，内核访问 `base_domain` 成员时遇到地址访问失败。
+
+#主要错误日志
+地址访问失败: 0xdeacfffffffffff8
+
+#问题根因
+在进程退出销毁 so 时，会删除所有的 tid 和 domain 资源。此时若有线程调用 urma_unregister_seg 触发 udma 失效流程，会尝试访问已被释放的内存。
+根本原因在于 `proc_info_xa` 进程索引的 key 原本由 `tgid` 和 `start_time` 组成，导致在失效流程中无法获取进程锁，从而无法与 tid 的删除操作进行互斥，导致了 Use-After-Free 问题。
+
+#解决方案
+修改 `proc_info_xa` 进程索引的 key 为进程的 `mm_struct` 指针。这使得在失效流程（`ummu_core_invalidate_cfg`）中可以通过 `mm` 找到对应的 `proc_manager` 并获取进程锁（`proc_mtx`），从而确保与 tid 删除操作的互斥性，避免并发访问已释放内存。同时优化了 `ummu_core_invalidate_cfg` 的调用逻辑，直接调用 `ummu_core_invalidate_tid` 并传入 `mm` 参数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/53658de93113f36a2729ca9f0c3a64639e37d100

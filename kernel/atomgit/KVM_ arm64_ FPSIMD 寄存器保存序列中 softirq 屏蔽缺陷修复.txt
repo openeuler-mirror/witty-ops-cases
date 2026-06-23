@@ -1,0 +1,20 @@
+#标题
+KVM: arm64: FPSIMD 寄存器保存序列中 softirq 屏蔽缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 arm64 架构下进行 FPSIMD 寄存器状态保存与刷新的过程中，由于未正确屏蔽中断（softirq），可能导致该临界区被软中断打断。若在软中断处理程序中触发了 FPSIMD 上下文切换，将破坏当前进程的 FPSIMD 寄存器状态一致性，进而导致用户态应用程序出现数据损坏、计算结果错误或未定义行为。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `fpsimd_save_and_flush_cpu_state` 原实现仅通过 `get_cpu_fpsimd_context` 获取上下文，该函数内部使用 `preempt_disable` 禁用抢占，但并未禁用中断。这导致在保存 FPSIMD 状态的临界区内，CPU 仍可响应并处理软中断。若此时发生上下文切换，将破坏 FPSIMD 保存逻辑的完整性。
+
+#解决方案
+修改 `fpsimd_save_and_flush_cpu_state` 函数，将原有的 `get_cpu_fpsimd_context` 调用替换为 `local_irq_save(flags)` 结合 `__get_cpu_fpsimd_context` 的方式。该修改确保在保存和刷新 CPU 状态期间禁用本地中断，从而防止 softirq 打断临界区。操作完成后通过 `__put_cpu_fpsimd_context` 释放上下文并调用 `local_irq_restore(flags)` 恢复中断状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a0274731ee882b413f8e119f108f91d72c608fde

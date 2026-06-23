@@ -1,0 +1,31 @@
+#标题
+virtio_net: IFF_XMIT_DST_RELEASE清零且napi_tx为假时触发dst_ops UAF崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 virtio_net 驱动配置为 `napi_tx=N` 且设备的 `IFF_XMIT_DST_RELEASE` 标志被清除（例如配置 tc route filter 规则）时，若在网络命名空间销毁期间仍有 skb 停留在发送队列中，内核会发生 UAF（Use-After-Free）错误，导致无法处理内核页面请求，引发内核崩溃。
+
+#主要错误日志
+Unable to handle kernel paging request at virtual address ffff80007e150000
+CPU: 2 UID: 0 PID: 6236 Comm: ping Kdump: loaded Not tainted 7.0.0-rc1+ #6 PREEMPT
+...
+percpu_counter_add_batch+0x3c/0x158 lib/percpu_counter.c:98 (P)
+dst_release+0xe0/0x110  net/core/dst.c:177
+skb_release_head_state+0xe8/0x108 net/core/skbuff.c:1177
+sk_skb_reason_drop+0x54/0x2d8 net/core/skbuff.c:1255
+dev_kfree_skb_any_reason+0x64/0x78 net/core/dev.c:3469
+napi_consume_skb+0x1c4/0x3a0 net/core/skbuff.c:1527
+__free_old_xmit+0x164/0x230  drivers/net/virtio_net.c:611 [virtio_net]
+free_old_xmit drivers/net/virtio_net.c:1081 [virtio_net]
+start_xmit+0x7c/0x530 drivers/net/virtio_net.c:3329 [virtio_net]
+
+#问题根因
+当 `IFF_XMIT_DST_RELEASE` 被移除时，网络协议栈期望驱动持有 `skb->dst` 的引用直到数据包完全发送完毕。但在 virtio_net 驱动配置 `napi_tx=N` 的情况下，skb 可能会在 virtio 发送环中停留较长时间。如果此时网络命名空间被销毁，相关的 `dst_ops` 结构体可能已被释放。当后续有数据包发送触发 `free_old_xmit()` 清理旧 skb 并调用 `dst_release()` 时，由于 `dst_entry` 引用的 `dst_ops` 已被释放，从而导致 UAF 问题。
+
+#解决方案
+在 `start_xmit` 函数中，当不使用 napi (`!use_napi`) 时，在调用 `skb_orphan` 之后显式调用 `skb_dst_drop(skb)` 释放 dst 引用。这确保了在 skb 进入 virtio 队列之前，dst 引用已被正确处理，避免在网络命名空间销毁后出现悬空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bca07dd0c447f9fb05fd6ce8b12097d32d8061db

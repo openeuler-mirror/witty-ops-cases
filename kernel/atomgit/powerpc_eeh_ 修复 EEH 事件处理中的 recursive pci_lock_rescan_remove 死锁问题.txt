@@ -1,0 +1,38 @@
+#标题
+powerpc/eeh: 修复 EEH 事件处理中的 recursive pci_lock_rescan_remove 死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 EEH（Enhanced Error Handling）事件处理流程中，系统检测到潜在的递归锁定风险并触发 lockdep 警告。具体表现为 `eehd` 进程在尝试获取 `pci_rescan_remove_lock` 锁时，发现该锁已被当前任务持有，导致 WARNING: possible recursive locking detected，进而破坏 PCI 错误报告功能及正常的 EEH 事件触发流程。
+
+#主要错误日志
+```
+[   84.964298] [    T928] ============================================
+[   84.964304] [    T928] WARNING: possible recursive locking detected
+[   84.964311] [    T928] 6.18.0-rc3 #51 Not tainted
+[   84.964315] [    T928] --------------------------------------------
+[   84.964320] [    T928] eehd/928 is trying to acquire lock:
+[   84.964324] [    T928] c000000003b29d58 (pci_rescan_remove_lock){+.+.}-{3:3}, at: pci_lock_rescan_remove+0x28/0x40
+[   84.964342] [    T928]
+                       but task is already holding lock:
+[   84.964347] [    T928] c000000003b29d58 (pci_rescan_remove_lock){+.+.}-{3:3}, at: pci_lock_rescan_remove+0x28/0x40
+[   84.964383] [    T928]
+                       *** DEADLOCK ***
+```
+
+#问题根因
+在之前的提交 1010b4c012b0 ("powerpc/eeh: Make EEH driver device hotplug safe") 中，为了改进与 PCI 热插拔层的同步，重构了 EEH 驱动。该补丁错误地将 `pci_lock_rescan_remove()` 的调用移到了 `eeh_handle_normal_event()` 中更外层的位置。
+具体来说，`eeh_handle_normal_event()` 在调用 `eeh_pe_bus_get()` 之前就获取了 `pci_lock_rescan_remove_lock`，而 `eeh_pe_bus_get()` 函数内部也会尝试获取同一把锁。这导致了嵌套锁定，触发了死锁检测警告并阻断了正常的 EEH 事件处理路径。
+
+#解决方案
+1. **重构锁机制**：将 `eeh_pe_bus_get()` 拆分为内部实现函数 `_eeh_pe_bus_get(struct eeh_pe *pe, bool do_lock)`，增加布尔参数 `do_lock` 控制是否加锁。
+2. **新增接口封装**：
+   - `eeh_pe_bus_get()`：调用内部函数并启用加锁（`do_lock=true`），供未持有锁的调用者使用。
+   - `eeh_pe_bus_get_nolock()`：调用内部函数并跳过加锁（`do_lock=false`），供已持有 `pci_lock_rescan_remove_lock` 的调用者使用。
+3. **修正调用点**：在 `eeh_handle_normal_event()` 和 `eeh_handle_special_event()` 等已持有锁的上下文中，将原有的 `eeh_pe_bus_get()` 调用替换为 `eeh_pe_bus_get_nolock()`，避免递归锁获取。
+4. **代码整理**：将 `eeh_pe_loc_get()` 拆分为 `eeh_pe_loc_get()` 和 `eeh_pe_loc_get_bus()` 以适配上述变更。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ef455a356bbf75c0f9ef8b66286202251609daf4

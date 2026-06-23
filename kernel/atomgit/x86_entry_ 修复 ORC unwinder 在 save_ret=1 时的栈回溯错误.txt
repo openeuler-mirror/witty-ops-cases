@@ -1,0 +1,21 @@
+#标题
+x86/entry: 修复 ORC unwinder 在 save_ret=1 时的栈回溯错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ORC (ORC unwinder) 进行栈回溯时，若遇到使用了 `save_ret=1` 参数的中断入口辅助函数（如 `INTERRUPT` 宏生成的入口代码），回溯器可能无法正确解析栈帧，导致栈回溯结果不准确或断裂。具体表现为在调用栈追踪（如 `dump_stack`、panic 回溯或 kprobe 触发点）中，本应连贯的内核栈信息在入口代码处被截断或误判，无法正确追溯到中断发生时的上下文。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `PUSH_REGS` 宏中，当 `save_ret=1` 时，代码逻辑会将原本存放在栈顶的辅助函数返回地址取出暂存到 `%rsi` 寄存器，随后用 `pt_regs->di` 的数据覆盖栈顶原返回地址位置。
+此操作破坏了栈上原本的返回地址结构，而此时尚未建立完整的 `pt_regs` 栈帧。原有的 ORC 提示信息（UNWIND_HINT）未及时更新，导致 ORC unwinder 依据错误的栈布局信息进行解析，无法正确跨越该区域进行回溯。
+
+#解决方案
+在 `arch/x86/entry/calling.h` 的 `PUSH_REGS` 宏代码段中，当 `save_ret=1` 且覆盖了原返回地址后，立即添加 `UNWIND_HINT_IRET_REGS offset=3*8` 指令。该指令明确告知 unwinder 此时的栈基址应基于 IRET 帧进行解析，从而修正了覆盖返回地址后的栈回溯信息，确保后续栈回溯的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3400ccd554804e735f270bf5597ca6b6751337af

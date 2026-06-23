@@ -1,0 +1,23 @@
+#标题
+BPF JIT调用在FineIBT模式下触发#CP异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用FineIBT（基于IBT）的硬件环境下，当BPF程序调用常规C函数（非JIT函数）时，由于调用约定不兼容，会触发控制流保护异常（#CP），导致内核崩溃或调用失败。该问题仅在支持IBT的硬件上且开启FineIBT特性时触发。
+
+#主要错误日志
+未知
+
+#问题根因
+当前BPF调用约定标记为 `__nocfi`，但在调用非JIT的常规C函数时，两者调用约定不兼容。`__nocfi` 直接调用函数入口点（func+0），而 FineIBT 模式下会在该位置放置 `endbr-poison`，这并不是有效的间接调用目标，从而触发 #CP 异常。
+
+#解决方案
+为BPF JIT代码生成实现正确的CFI（控制流完整性）序言（prologues），并在x86架构下移除BPF相关函数的 `__nocfi` 标记。具体包括：
+1. 在BPF JIT编译过程中增加 `emit_cfi` 逻辑，根据当前CFI模式（FineIBT或kCFI）生成对应的哈希检查指令序言。
+2. 调整 `bpf_func` 指针偏移量（`cfi_get_offset`），确保指向正确的函数入口。
+3. 为FineIBT模式注册额外的符号信息，辅助堆栈回溯。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9c163ff4834e2b9a3e002d5561786efa301c6fe1

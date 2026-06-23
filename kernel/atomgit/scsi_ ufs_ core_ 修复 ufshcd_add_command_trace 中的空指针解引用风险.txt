@@ -1,0 +1,27 @@
+#标题
+scsi: ufs: core: 修复 ufshcd_add_command_trace 中的空指针解引用风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 UFS（通用闪存存储）中断流程时发生崩溃。具体表现为在 `ufshcd_add_command_trace` 函数中访问 `hwq->id` 时触发空指针解引用，导致内核 panic 或 oops。该问题通常在 MCQ（Multi-Circular Queue）模式启用且 `ufshcd_mcq_req_to_hwq()` 返回 NULL 时触发。
+
+#主要错误日志
+```
+[<ffffffd5d255c1dc>] ufshcd_add_command_trace+0x23c/0x320
+[<ffffffd5d255bad8>] ufshcd_compl_one_cqe+0xa4/0x404
+[<ffffffd5d2572968>] ufshcd_mcq_poll_cqe_lock+0xac/0x104
+[<ffffffd5d11c7460>] ufs_mtk_mcq_intr+0x54/0x74 [ufs_mediatek_mod]
+...
+Kernel log indicates a crash in ufshcd_add_command_trace, due to a NULL pointer dereference when accessing hwq->id.
+```
+
+#问题根因
+在 `ufshcd_add_command_trace` 函数中，当 MCQ 功能启用时，代码直接调用 `ufshcd_mcq_req_to_hwq(hba, rq)` 获取硬件队列指针 `hwq`，并立即解引用 `hwq->id`。由于 `ufshcd_mcq_req_to_hwq()` 在某些情况下可能返回 NULL，代码未对其进行有效性检查即直接访问成员变量，导致了空指针解引用错误。
+
+#解决方案
+在访问 `hwq->id` 之前增加对 `hwq` 指针的 NULL 检查。只有当 `hwq` 不为空时，才获取其 id 值，从而防止内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/013fcd690bc05d0ef168733212603625437982d5

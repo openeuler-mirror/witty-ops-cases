@@ -1,0 +1,20 @@
+#标题
+Atmel ECC 驱动初始化失败导致 I2C 客户端引用计数不同步
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 atmel-ecc 驱动初始化过程中，如果 crypto_alloc_kpp() 分配转换失败，驱动不会正确释放先前已分配的 I2C client。这会导致 `->tfm_count` 计数器失去同步，造成资源泄漏，后续可能影响设备的正常打开与关闭逻辑。
+
+#主要错误日志
+[   ] Failed to allocate transformation for '%s': %ld
+
+#问题根因
+在函数 `atmel_ecdh_init_tfm` 中，当 `crypto_alloc_kpp()` 调用失败时，函数直接返回错误码，但遗漏了调用 `atmel_ecc_i2c_client_free()` 来释放之前通过 `atmel_ecc_i2c_client_alloc()` 获取的 I2C client 资源。这导致了 `->tfm_count` 计数与实际状态不符。
+
+#解决方案
+在 `crypto_alloc_kpp()` 失败的错误处理路径中，增加调用 `atmel_ecc_i2c_client_free(ctx->client)`，确保在分配转换失败时正确释放已预留的 I2C client，维持 `->tfm_count` 计数的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01cbaeaf99d1ef9e4319310ae092584f9f9c3127

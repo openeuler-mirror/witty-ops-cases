@@ -1,0 +1,27 @@
+#标题
+sch_pie: 遗漏的数据竞争标注导致潜在读取不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 KCSAN (Kernel Concurrency Sanitizer) 进行数据竞争检测时，内核日志报告 sch_pie 模块中存在多处数据竞争。具体表现为 `pie_dump_stats` 函数读取 `vars->prob`、`params->dq_rate_estimator` 以及 `pie_process_dequeue`、`pie_calculate_probability` 函数写入相关变量时未使用 READ_ONCE 或 WRITE_ONCE 宏，导致并发访问时可能出现内存不一致现象。
+
+#主要错误日志
+未知
+
+#问题根因
+这是先前修复补丁（"net/sched: sch_pie: annotate data-races in pie_dump_stats()"）的遗漏问题。代码中仍有部分共享变量在读写时缺少必要的标记：
+1. `pie_process_dequeue` 函数中，`vars->qdelay` 的赋值操作未使用 WRITE_ONCE 保护，且逻辑分散在多行导致判断与写入之间存在窗口。
+2. `pie_calculate_probability` 函数中，`vars->prob` 的增加与减少操作直接赋值，未使用 WRITE_ONCE。
+3. `pie_dump_stats` 函数中，读取 `q->vars.prob` 和 `q->params.dq_rate_estimator` 时未使用 READ_ONCE。
+这些变量在定时器上下文或数据包处理路径中被修改，同时在控制路径（通过 netlink dump）中被读取，缺乏适当的并发访问保护会导致 KCSAN 报警或潜在的读取撕裂。
+
+#解决方案
+补丁通过引入 WRITE_ONCE 和 READ_ONCE 宏来标注所有遗漏的数据竞争点：
+1. 重构 `pie_process_dequeue` 中的赋值逻辑，将条件判断内置，使用 `WRITE_ONCE(vars->qdelay, backlog ? now - pie_get_enqueue_time(skb) : 0)` 替代原有分离的读写操作。
+2. 在 `pie_calculate_probability` 中，将 `vars->prob` 的增减操作修改为 `WRITE_ONCE(vars->prob, ...)` 形式，确保原子性写入标记。
+3. 在 `pie_dump_stats` 中，对 `q->vars.prob` 和 `q->params.dq_rate_estimator` 的读取添加 READ_ONCE 宏，确保读取侧的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bbbdb09d0ceebb30863a09dc87f67081394b2c91

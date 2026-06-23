@@ -1,0 +1,23 @@
+#标题
+mt7996驱动HE PHY能力属性配置错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+MediaTek Wi-Fi 7 (mt7996) 设备的 HE (High Efficiency) PHY Capabilities 元素中，"HE SU PPDU And HE MU PPDU With 4x HE-LTF And 0.8 us GI" 能力位未正确置位。这导致设备无法向系统声明其对特定 HE-LTF 和 GI 组合的硬件支持能力，可能影响 Wi-Fi 连接性能或导致关联过程中的协商异常。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在初始化 HE PHY 能力时逻辑有误。在代码路径中，`IEEE80211_HE_PHY_CAP7_HE_SU_MU_PPDU_4XLTF_AND_08_US_GI` 属性仅在特定条件分支（iftype 判断后）中被设置，且使用了 `|=` 运算符。这导致该能力位并未在所有必要的场景下被正确设置（或者说原本的位置导致其依赖于特定条件）。实际上，硬件是支持该能力的，因此该能力位应当作为基础能力在早期阶段无条件设置。
+
+#解决方案
+修改 `mt7996_init_he_caps` 函数中的代码逻辑：
+1. 将 `IEEE80211_HE_PHY_CAP7_HE_SU_MU_PPDU_4XLTF_AND_08_US_GI` 的设置从原本的条件代码块中移出。
+2. 在 `phy_cap_info[2]` 设置之后，直接对 `phy_cap_info[7]` 赋值为该宏，确保该能力位在所有情况下都被正确置 1。
+3. 移除原代码块中冗余的 `|= IEEE80211_HE_PHY_CAP7_HE_SU_MU_PPDU_4XLTF_AND_08_US_GI` 操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/294a4358e3b7d3f7183b0593e9a1f34b29d7c5cc

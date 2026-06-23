@@ -1,0 +1,20 @@
+#标题
+ARM64 TLB 刷新导致 MMU notifiers 地址范围参数错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行基于范围的 TLB 无效化操作时，MMU notifier 回调函数接收到错误的地址范围参数，具体表现为 start 和 end 地址相等（空范围）。虽然这不会导致功能性正确性问题（因为空范围会幸运地触发“刷新全部”路径），但会导致系统性能下降。
+
+#主要错误日志
+未知
+
+#问题根因
+宏 `__flush_tlb_range_op` 在实现中直接修改了输入参数（start 和 pages），这属于非预期的语义错误。当该宏执行完毕后，调用者 `__flush_tlb_range_nosync()` 传递给 `mmu_notifier_arch_invalidate_secondary_tlbs()` 的地址范围参数已经被修改为无效值（start=end），导致二级 TLB 无效化通知未能传递正确的地址范围。该缺陷自引入 mmu_notifiers 调用时便已存在，后因重构引入 `__flush_tlb_range_op` 宏而变得难以发现。
+
+#解决方案
+修改 `__flush_tlb_range_op` 宏，在宏内部创建局部变量 `__flush_start` 和 `__flush_pages` 来保存输入参数 `start` 和 `pages` 的副本，后续的循环与计算操作均基于局部变量进行，从而避免直接修改输入参数，确保调用者在宏执行后仍能获取到正确的原始地址范围。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cb229d60aac38fabab1ae46bbdc74c251d4829e3

@@ -1,0 +1,24 @@
+#标题
+nfs: fix rpc_task use-after-free when open and close different files concurrently
+
+#内核版本
+OLK-6.6
+
+#问题现象
+并发执行打开和关闭不同文件的操作时，发生 rpc_task 结构体释放后使用，导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+并发打开和关闭不同文件时，存在竞争条件。当 `nfs4_close_done` 执行时，如果相关的 open 请求已经失败但尚未完成清理，close 操作可能会错误地释放 seqid 资源，导致正在等待的或后续的 rpc_task 访问了已释放的内存（UAF）。
+
+#解决方案
+新增 `nfs_release_seqid_inorder` 函数，在释放 seqid 时增加对链表位置的判断逻辑，确保释放操作的顺序正确性。
+具体修改：
+1. 在 `nfs4state.c` 中新增 `nfs_release_seqid_inorder` 函数，该函数在持有锁的情况下检查当前 seqid 是否为链表中最后一个，如果不是则唤醒下一个任务，然后从链表中删除该 seqid，从而防止竞争条件下的 UAF 问题。
+2. 修改 `nfs4proc.c` 中的 `nfs4_close_done` 函数，将 `nfs_release_seqid` 调用替换为 `nfs_release_seqid_inorder`。
+3. 修改 `nfs4_open_release` 函数，在 RPC 状态非正常或未完成时，调用 `nfs_release_seqid_inorder` 进行清理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b8723410e273baf83580c7e67c64c5fc9a2151ca

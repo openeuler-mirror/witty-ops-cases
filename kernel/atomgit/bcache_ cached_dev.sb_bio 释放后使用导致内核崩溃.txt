@@ -1,0 +1,33 @@
+#标题
+bcache: cached_dev.sb_bio 释放后使用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在生产环境中收到多起内核崩溃报告。具体表现为在停止 bcache 设备的同时若正在写入超级块，会导致内核访问已释放的内存地址，从而触发 Call Trace 并崩溃。
+
+#主要错误日志
+```
+[6888366.280350] Call Trace:
+[6888366.280452]  blk_update_request+0x14e/0x370
+[6888366.280561]  blk_mq_end_request+0x1a/0x130
+[6888366.280671]  rbd_img_handle_request+0x1a0/0x1b0 [rbd]
+[6888366.280792]  rbd_obj_handle_request+0x32/0x40 [rbd]
+[6888366.280903]  __complete_request+0x22/0x70 [libceph]
+[6888366.281032]  osd_dispatch+0x15e/0xb40 [libceph]
+[6888366.281164]  ? inet_recvmsg+0x5b/0xd0
+[6888366.281272]  ? ceph_tcp_recvmsg+0x6f/0xa0 [libceph]
+[6888366.281405]  ceph_con_process_message+0x79/0x140 [libceph]
+[6888366.281534]  ceph_con_v1_try_read+0x5d7/0xf30 [libceph]
+[6888366.281661]  ceph_con_workfn+0x329/0x680 [libceph]
+```
+
+#问题根因
+`sb_bio` 是嵌入在 `struct cached_dev` 结构体中的成员，而非每次单独分配的内存。当设备停止运行时，`cached_dev` 会被释放。如果设备在停止过程中恰逢正在向超级块写入数据，`cached_dev` 结构体会先被释放，但 I/O 操作可能尚未完成。当 I/O 结束回调执行时，会访问已经释放的 `sb_bio` 地址，导致释放后使用崩溃。
+
+#解决方案
+在 `cached_dev_free` 函数中释放 `cached_dev` 结构体之前，增加 `closure_sync(&dc->sb_write)` 调用。该操作会等待所有挂起的超级块写入操作完成，确保没有正在进行的 I/O 操作访问 `sb_bio`，从而避免释放后使用的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/707a952d396df13fd418af3e66c1d05cb2b47d7c

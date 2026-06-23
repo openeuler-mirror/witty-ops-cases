@@ -1,0 +1,20 @@
+#标题
+ACPI: processor: idle: 注册 cpuidle 设备失败导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `acpi_processor_power_init` 初始化 ACPI 处理器电源状态时，若 `cpuidle_register_device` 注册失败，会导致 `cpuidle_device` 结构体内存泄漏，造成内核内存资源的持续占用与浪费。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `acpi_processor_power_init` 函数中，当 `cpuidle_register_device` 注册失败时，错误处理分支仅注销了驱动（`cpuidle_unregister_driver`），但未释放先前分配的 `cpuidle_device` 内存（`dev`），且未将对应的 per-CPU 指针置空，从而导致内存泄漏。
+
+#解决方案
+在 `cpuidle_register_device` 失败的错误处理路径中，增加内存释放逻辑：将 `per_cpu(acpi_cpuidle_device, pr->id)` 置为 NULL，并调用 `kfree(dev)` 释放已分配的内存，防止资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0ff03ef80cf7d85640b90566896c4597e06c8992

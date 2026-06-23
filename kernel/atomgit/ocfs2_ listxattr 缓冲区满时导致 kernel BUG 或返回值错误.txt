@@ -1,0 +1,37 @@
+#标题
+ocfs2: listxattr 缓冲区满时导致 kernel BUG 或返回值错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 OCFS2 inode 同时拥有 inline 和 block-based xattrs，且 inline xattr 名称恰好填满用户提供的缓冲区时，调用 `listxattr()` 会触发 kernel BUG，或返回一个大于缓冲区大小的尺寸值。
+具体表现为：
+1. 内核触发 invalid opcode (kernel BUG)，导致进程崩溃。
+2. 调用栈显示崩溃发生在 `usercopy_abort`，经由 `__check_heap_object` 和 `copy_to_user` 调用链。
+
+#主要错误日志
+kernel BUG at mm/usercopy.c:102!
+Oops: invalid opcode: 0000 [#1] SMP KASAN NOPTI
+RIP: 0010:usercopy_abort+0xb7/0xd0 mm/usercopy.c:102
+Call Trace:
+ __check_heap_object+0xe3/0x120 mm/slub.c:8243
+ check_heap_object mm/usercopy.c:196 [inline]
+ __check_object_size mm/usercopy.c:250 [inline]
+ __check_object_size+0x5c5/0x780 mm/usercopy.c:215
+ check_object_size include/linux/ucopysize.h:22 [inline]
+ check_copy_size include/linux/ucopysize.h:59 [inline]
+ copy_to_user include/linux/uaccess.h:219 [inline]
+ listxattr+0xb0/0x170 fs/xattr.c:926
+ ...
+
+#问题根因
+在 Commit 936b8834366e ("ocfs2: Refactor xattr list and remove ocfs2_xattr_handler().") 重构后，`ocfs2_xattr_list_entry()` 函数错误地使用 `size == 0` 来判断是否处于“探测模式”，而不是检查缓冲区指针是否为 NULL。
+当 inline xattr 名称恰好填满缓冲区时，`ocfs2_listxattr()` 完成 inline-xattr 遍历后进入 block-xattr 遍历，此时剩余空间 size 为 0，但缓冲区指针非 NULL。函数误判此时不需要边界检查，继续统计 block xattr 长度，导致最终返回的结果长度大于实际提供的缓冲区大小，进而引发后续的内存拷贝越界检查失败。
+
+#解决方案
+修改 `fs/ocfs2/xattr.c` 中的 `ocfs2_xattr_list_entry` 函数，将探测模式的判断条件从 `if (!size)` 修改为 `if (!buffer)`。
+通过检查缓冲区指针是否为 NULL 来判断是否仅需计算大小，恢复重构前的行为逻辑。当缓冲区剩余空间为 0 但仍有待处理 xattr 时，正确返回 `-ERANGE`，而不是返回一个大于缓冲区大小的值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7121d3efd0cd62330e1567be517958f41f6eb48d

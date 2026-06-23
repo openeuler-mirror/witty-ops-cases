@@ -1,0 +1,30 @@
+#标题
+sched_numa_find_nth_cpu() 在 CPU 离线场景下导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 架构设备（如 rk3399 RockPro64）启动过程中，若通过内核参数（如 maxcpus=4）导致部分 CPU 核心处于离线状态（例如 big.LITTLE 架构中所有 big 核心离线），系统初始化 PMU 驱动时会触发内核缺页异常，导致内核 Panic 并尝试杀死 init 进程。
+
+#主要错误日志
+[    1.422922] Unable to handle kernel paging request at virtual address ffffff8000000000
+[    1.423635] Mem abort info:
+[    1.423889]   ESR = 0x0000000096000006
+[    1.424227]   EC = 0x25: DABT (current EL), IL = 32 bits
+[    1.425735] Data abort info:
+[    1.425998]   ISV = 0, ISS = 0x00000006, ISS2 = 0x00000000
+[    1.429014] Internal error: Oops: 0000000096000006 [#1]  SMP
+[    1.432094] lr : sched_numa_find_nth_cpu+0x284/0x488
+[    1.439559]  sched_numa_find_nth_cpu+0x2a0/0x488 (P)
+[    1.440016]  smp_call_function_any+0xc8/0xd0
+[    1.449047] Kernel panic - not syncing: Attempted to kill init! exitcode=0x0000000b
+
+#问题根因
+函数 `sched_numa_find_nth_cpu()` 使用二分查找（bsearch）在 `sched_domains_numa_masks` 中寻找与给定 cpumask 相交的“最近”CPU。当传入的 cpumask 中所有 CPU 均处于 offline 状态时，masks 与 cpus 没有交集，bsearch 将返回 NULL。原代码未对 bsearch 的返回值进行空指针检查，直接对 NULL 指针进行了解引用操作，从而触发了内核崩溃。
+
+#解决方案
+在 `kernel/sched/topology.c` 的 `sched_numa_find_nth_cpu` 函数中，增加对 `bsearch` 返回值 `hop_masks` 的非空校验。如果 `hop_masks` 为 NULL，则直接跳转到 unlock 处返回，避免解引用空指针。修复后，函数将返回 `nr_cpu_ids`，上层调用逻辑（如 `smp_call_function_any`）会正确处理该返回值并返回 `-ENXIO`，从而避免崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/43545318052f4c06f6e109fe302042a9d0f18dcd

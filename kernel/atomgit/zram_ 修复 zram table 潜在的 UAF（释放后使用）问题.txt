@@ -1,0 +1,20 @@
+#标题
+zram: 修复 zram table 潜在的 UAF（释放后使用）问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 zram 设备初始化过程中 zram_meta_alloc 分配内存失败（例如在 zs_create_pool 阶段失败）时，设备处于未初始化的失败状态。若用户随后尝试重置（reset）该失败的设备，将触发 UAF（Use-After-Free）漏洞，导致内核崩溃或内存被非法读写。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 zram_meta_alloc 中，如果 zs_create_pool 创建失败，代码路径会调用 vfree(zram->table) 释放已分配的表内存，但未将 zram->table 指针置为 NULL。导致后续用户重置该未初始化设备时，zram_meta_free 函数再次尝试访问并释放该指针，引发 UAF。
+
+#解决方案
+在 zram_meta_alloc 函数的错误处理路径中，vfree(zram->table) 之后立即将 zram->table 设置为 NULL，防止后续误用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bd96116aa9a827486d1b0e82b209ca71fc60f47b

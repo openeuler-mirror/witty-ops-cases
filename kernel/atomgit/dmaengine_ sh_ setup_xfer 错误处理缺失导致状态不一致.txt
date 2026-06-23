@@ -1,0 +1,28 @@
+#标题
+dmaengine: sh: setup_xfer 错误处理缺失导致状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 SuperH DMA 引擎驱动时，若 `setup_xfer` 操作（配置 DMA 请求/通道寄存器）失败，系统无法感知该错误，导致驱动程序错误地认为通道配置成功并继续执行后续传输流程。这会导致 DMA 传输状态不一致，可能引发通道挂起、资源泄漏或后续不可预知的 DMA 传输故障。
+
+#主要错误日志
+- "setup_xfer failed: %d\n" (推断：当补丁应用后，此处将打印具体的错误码)
+
+#问题根因
+根本原因是 `sh_dmae_setup_xfer` 函数及其在 `shdma_ops` 中的回调函数 `setup_xfer` 被定义为 `void` 类型，即不返回错误码。
+尽管底层的硬件配置函数 `dmae_set_dmars` 和 `dmae_set_chcr` 可能会执行失败，但由于 `setup_xfer` 忽略了这些返回值并向上层报告“成功”，导致上层调用者 `shdma_tx_submit` 在配置失败的情况下仍然将数据块加入队列并尝试启动传输，未能执行必要的回滚操作（如清理队列、恢复 PM 状态）。
+
+#解决方案
+1. 修改 `sh_dmae_setup_xfer` 函数的返回类型从 `void` 改为 `int`，使其能够向上传递底层硬件配置的错误。
+2. 在函数内部捕获 `dmae_set_dmars` 和 `dmae_set_chcr` 的返回值，若失败则直接返回错误码。
+3. 同步修改 `shdma_ops` 结构体中 `setup_xfer` 函数指针的定义。
+4. 在调用点 `shdma_tx_submit` 中增加对 `setup_xfer` 返回值的检查：
+   - 若返回错误，打印错误日志。
+   - 将已加入队列的 chunks 移回空闲队列并标记为 IDLE。
+   - 恢复电源管理状态为 `SHDMA_PM_ESTABLISHED`。
+   - 释放运行时 PM 引用并返回错误，阻止后续无效操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9de095c51a3b4d5e439cde73f037d06404f80b45

@@ -1,0 +1,20 @@
+#标题
+amdgpu: psp_sw_fini 函数释放缓冲区后未重置指针导致潜在 UAF 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 驱动卸载或设备反初始化过程中，`psp_sw_fini` 函数释放了 `psp->cmd` 指向的内存缓冲区，但未将 `psp->cmd` 指针本身置为 NULL。这导致该指针成为悬空指针，若后续代码路径错误地引用该指针，将引发 Use-After-Free 导致的内核崩溃或不可预测行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `psp_sw_fini` 中，原代码逻辑将 `psp->cmd` 赋值给局部变量 `cmd`，随后释放了局部变量 `cmd` 指向的内存并将局部变量置 NULL。然而，原始的结构体成员 `psp->cmd` 并未被重置，仍然指向已被释放的内存地址，留下了悬空指针引用的安全隐患。
+
+#解决方案
+修改 `psp_sw_fini` 函数实现，直接对 `psp->cmd` 执行 `kfree` 释放操作，并在释放后立即将 `psp->cmd` 设置为 NULL，确保结构体成员状态正确，消除悬空指针风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a5fe6a21adcee30c72bb2a6c6f51a932f49df0d6

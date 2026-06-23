@@ -1,0 +1,20 @@
+#标题
+carl9170固件加载失败后触发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 carl9170 无线设备固件加载失败时，驱动程序仍尝试 ping 该设备。由于此时设备未通过 `ieee80211_register_hw()` 注册，内部工作队列尚未创建，导致在调用 `ieee80211_queue_work()` 时引发空指针引用，进而造成系统崩溃。
+
+#主要错误日志
+- 推断日志：`device %s is not registered`（修复补丁中新增的告警输出）
+
+#问题根因
+在固件加载失败的场景下，设备未完成注册（未调用 `ieee80211_register_hw()`），因此内部工作队列不存在。代码在 `carl9170_usb_rx_complete` 中未检查设备注册状态，直接调用 `ieee80211_queue_work(ar->hw, &ar->ping_work)`，试图向一个未初始化的队列添加工作，从而触发空指针引用。
+
+#解决方案
+在调用 `ieee80211_queue_work` 前增加 `ar->registered` 状态检查：若设备已注册，则正常执行 ping 操作；若设备未注册，则跳过操作并打印 `pr_warn_once` 告警日志，避免访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7b33be5d5ff08e00aa42256da2a209f4ba77d8c2

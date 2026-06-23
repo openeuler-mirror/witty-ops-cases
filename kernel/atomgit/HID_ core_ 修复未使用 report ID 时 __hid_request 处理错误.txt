@@ -1,0 +1,22 @@
+#标题
+HID: core: 修复未使用 report ID 时 __hid_request 处理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 HID 设备的 report descriptor 中存在 feature report 大小为 0 或 report ID 未被使用（report ID 为 0）的情况时，内核在处理 __hid_request 时会发生错误。这可能导致内存访问越界或数据传输错误，从而引发内核 panic 或设备功能异常。
+
+#主要错误日志
+dbg_hid("unable to complete request: %d\n", ret);
+
+#问题根因
+在 HID 子系统中，当 report ID 为 0（未使用）时，`hid_alloc_report_buf` 分配的缓冲区空间不足以容纳需要预留的报告 ID 字节。同时，`__hid_request` 函数在处理此类报告时，未正确地将第一个字节预留为 report ID，直接将数据写入缓冲区起始位置，导致传递给底层驱动的数据格式与协议不符，引发处理错误。
+
+#解决方案
+1. 修改 `hid_alloc_report_buf` 函数，在计算分配长度时，若 report->id 为 0，额外增加 1 个字节用于预留 report ID。
+2. 修改 `__hid_request` 函数逻辑，当 report->id 为 0 时，将数据缓冲区指针向后偏移一位，以预留第一个字节给 report ID，并相应增加传输长度。
+3. 将直接调用 `hid->ll_driver->raw_request` 改为调用 `hid_hw_raw_request` 以确保流程的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9fcee560353e07f9d9dcea8b25144b5480e28470

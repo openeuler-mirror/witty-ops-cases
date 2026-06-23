@@ -1,0 +1,20 @@
+#标题
+hv_set_ifconfig 脚本因权限设置时序问题导致 NetworkManager 配置文件存在短暂全局可读风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Hyper-V 守护进程工具 hv_set_ifconfig 在配置网络接口时，生成的 NetworkManager 配置文件（.nmconnection 文件）在创建过程中存在一个短暂的时间窗口，期间文件权限为全局可读。这可能导致敏感配置信息（如 WiFi 密码）被系统上的其他非特权用户读取，造成信息泄露风险。
+
+#主要错误日志
+未知
+
+#问题根因
+脚本 `hv_set_ifconfig.sh` 在处理配置文件时，先使用 `cp` 命令创建了文件，随后调用 `chmod 600` 修改权限。由于创建与修改权限之间存在时间差，导致文件在极短时间内处于默认 umask 权限（通常包含其他用户可读权限），引发潜在的安全隐患。
+
+#解决方案
+修改 `tools/hv/hv_set_ifconfig.sh` 脚本，移除 `chmod 600` 命令，改为在文件创建前调用 `umask 0177`。通过预先设置 umask，确保后续创建的文件仅对所有者可读写，从源头避免权限滞后的时间窗口问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f270f0ad8981cc1ccfa595cee5f947581ee19e55

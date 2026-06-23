@@ -1,0 +1,22 @@
+#标题
+xhci: Fix invalid pointer dereference in Etron workaround
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在操作 Etron xHCI 主机控制器时发生崩溃。在进行控制传输压力测试时，由于指针访问越界，导致内核立即崩溃或读取垃圾数据，进而可能引发链路 TRB 被错误替换为 NOOP，造成传输异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `xhci_queue_ctrl_tx` 函数中，Etron 特定的变通方案代码在调用 `prepare_transfer()` 和 `prepare_ring()` 之前执行检查。此时 `enqueue` 指针可能已指向段的最后一个链路 TRB（Link TRB）。
+原代码使用 `trb_is_link(ep_ring->enqueue + 1)` 进行判断，当 `enqueue` 位于段末尾时，`enqueue + 1` 指向了一个无效的内存地址，导致无效指针解引用。这不仅会导致内核崩溃，还可能因读取垃圾数据误判为链路 TRB，破坏数据结构。
+
+#解决方案
+修改 `drivers/usb/host/xhci-ring.c` 中的判断逻辑，将 `trb_is_link(ep_ring->enqueue + 1)` 替换为 `last_trb_on_seg(ep_ring->enq_seg, ep_ring->enqueue + 1)`。
+此方法避免了直接解引用 `enqueue + 1` 指针，通过检查段结构和指针位置来判断下一个位置是否为段末尾（即链路 TRB），从而在不访问无效内存的情况下得出正确结果。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a6aab5f8c2b58cc4f47a0f6d44796315da039639

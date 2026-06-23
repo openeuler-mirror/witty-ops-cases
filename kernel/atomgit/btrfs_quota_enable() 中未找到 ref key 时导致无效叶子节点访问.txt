@@ -1,0 +1,20 @@
+#标题
+btrfs_quota_enable() 中未找到 ref key 时导致无效叶子节点访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 Btrfs 配额（btrfs_quota_enable）的过程中，若搜索特定 key 时未找到（btrfs_search_slot_for_read 返回 1），代码逻辑错误地继续循环。此时路径已无效，导致内核访问无效的叶子节点，可能引发内存访问错误或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 btrfs_quota_enable() 中，当 btrfs_search_slot_for_read() 返回 1 时，表示未找到大于或等于目标 key 的项，意味着已到达树的末尾，此时路径已无效。原代码逻辑在 `ret > 0` 的情况下仅执行 `continue`，并未跳出循环，导致后续继续使用无效的 path 进行访问。
+
+#解决方案
+修改 fs/btrfs/qgroup.c 中的逻辑，当 btrfs_search_slot_for_read() 返回值大于 0 时，将 `continue` 改为 `break`，立即终止搜索循环，避免访问无效路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/126e285eb56629c6e1f96947a298ac8252ea1ab6

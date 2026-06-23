@@ -1,0 +1,21 @@
+#标题
+vDSO自测工具在s390x架构下解析哈希表异常导致浮点异常崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 s390x 架构下运行 vDSO self tests（如 `vdso_test_gettimeofday`）时，程序立即崩溃并退出，终端显示 "Floating point exception (core dumped)"。
+
+#主要错误日志
+# ./vdso_test_gettimeofday
+Floating point exception (core dumped)
+
+#问题根因
+vDSO 自测代码中的 `parse_vdso.c` 文件硬编码了 ELF 哈希表项（entry）的大小为 32 位（`ELF(Word)`）。然而，在 s390x 架构上，ELF 哈希表项实际上是 64 位大小。代码在解析哈希表时使用了错误的数据宽度读取数据，导致内存访问错位或读取到错误的数值，进而在后续处理中触发非法计算，引发浮点异常。
+
+#解决方案
+修改 `tools/testing/selftests/vDSO/parse_vdso.c` 文件，引入条件编译宏 `ELF_HASH_ENTRY`。针对 s390x 架构将其定义为 64 位类型（`ELF(Xword)`），其他架构保持为 32 位类型（`ELF(Word)`），并将代码中涉及的哈希表相关变量（如 `bucket`, `chain`, `nbucket`, `nchain` 及 `hash` 指针）的类型修改为 `ELF_HASH_ENTRY`，以确保数据结构解析正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae70372ecbd0ffd6d7b81fe675e8a68e5096ab6e

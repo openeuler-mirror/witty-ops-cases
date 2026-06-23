@@ -1,0 +1,20 @@
+#标题
+RDMA/bnxt_re驱动dma_free_coherent指针参数错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载或重置 bnxt_re RDMA 设备过程中，释放 PBL（Physical Buffer List）内存时，由于传入 `dma_free_coherent` 的虚拟地址指针参数计算错误（被强制对齐到页边界），导致内核无法正确追踪或释放 DMA 内存，可能引发内存泄漏、内核警告或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在调用 `dma_alloc_coherent()` 分配内存时，返回的指针 `pbl->pg_arr[i]` 已经是 DMA 映射后的有效缓冲区地址。但在释放时，代码错误地对该指针执行了页对齐掩码操作 `(void *)((unsigned long)pbl->pg_arr[i] & PAGE_MASK)`。这导致传给 `dma_free_coherent()` 的指针可能指向缓冲区所在页的起始地址而非分配时的原地址，破坏了 DMA API 的配对使用规则。
+
+#解决方案
+移除错误的页对齐掩码计算逻辑，直接将 `dma_alloc_coherent()` 返回的原指针 `pbl->pg_arr[i]` 传递给 `dma_free_coherent()`，确保分配与释放时传入的虚拟地址指针完全一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f642b1f7dccde954dbdd871b540c2516da904909

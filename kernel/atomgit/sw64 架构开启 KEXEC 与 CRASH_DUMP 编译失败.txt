@@ -1,0 +1,22 @@
+#标题
+sw64 架构开启 KEXEC 与 CRASH_DUMP 编译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构下配置并编译内核时，若同时选中 KEXEC 和 CRASH_DUMP 选项，会导致编译过程报错失败，无法生成内核镜像。
+
+#主要错误日志
+未知
+
+#问题根因
+`ELF_NGREG` 宏定义被硬编码为 33，与 `struct user_pt_regs` 的实际大小不匹配。此外，`sw64_elf_core_copy_regs` 函数声明与定义在特定编译配置下缺失或不一致，导致编译器无法正确处理寄存器上下文的拷贝逻辑。
+
+#解决方案
+1. 修改 `arch/sw_64/include/asm/elf.h`，引入 `#include <asm/ptrace.h>` 头文件以获取必要的结构体定义。
+2. 将 `ELF_NGREG` 的定义从硬编码数值 33 修改为动态计算值 `sizeof(struct user_pt_regs) / sizeof(elf_greg_t)`，确保大小一致。
+3. 删除 `sw64_elf_core_copy_regs` 的外部函数声明，改为直接定义 `ELF_CORE_COPY_REGS` 宏，在宏内部通过指针运算获取 `thread_info` 并直接赋值寄存器状态，从而解决编译依赖问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bccdc82e8b9eba785f06292bb19467f75ea18fa1

@@ -1,0 +1,20 @@
+#标题
+bpf: 修复 rcu_tasks_trace 与 event_mutex 之间的死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在调用 BPF trace printk 相关功能时，可能触发死锁，导致相关进程或系统状态处于不可中断的等待状态（D状态），系统无法正常继续执行 BPF 追踪操作。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bpf_get_trace_printk_proto` 和 `bpf_get_trace_vprintk_proto` 函数中，直接调用 `__set_printk_clr_event` 尝试启用 `bpf_trace_printk` 事件。该执行路径持有 `rcu_tasks_trace` 锁，而 `trace_set_clr_event` 函数内部需要获取 `event_mutex` 锁。在内核的其他执行路径中，存在先持有 `event_mutex` 再等待 `rcu_tasks_trace` 锁的情况，这违反了锁的获取顺序，从而导致死锁。
+
+#解决方案
+将 `trace_set_clr_event` 的调用移至工作队列中异步执行。具体修改为：将 `__set_printk_clr_event` 函数改造为工作队列的处理函数，并通过 `DECLARE_WORK` 定义工作项。在 `bpf_get_trace_printk_proto` 和 `bpf_get_trace_vprintk_proto` 中，不再直接调用 `__set_printk_clr_event`，而是通过 `schedule_work` 调度该工作项执行。此举避免了在 `rcu_tasks_trace` 上下文中直接竞争 `event_mutex`，从而修复了死锁问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/112e9a3d72c56c6c19e78b0b5056bc707f405836

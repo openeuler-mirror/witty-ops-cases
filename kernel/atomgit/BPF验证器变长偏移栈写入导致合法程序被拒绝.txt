@@ -1,0 +1,20 @@
+#标题
+BPF验证器变长偏移栈写入导致合法程序被拒绝
+
+#内核版本
+OLK-6.6
+
+#问题现象
+合法的BPF程序在加载验证阶段被内核拒绝，导致程序无法正常运行。
+
+#主要错误日志
+"invalid size of register fill"
+
+#问题根因
+在BPF验证器处理变长偏移栈写入时，如果写入覆盖了之前溢出的指针，代码仅将 `spilled_ptr.type` 设置为 `NOT_INIT`，但未调用 `scrub_spilled_slot` 清理 `slot_type`。这导致验证器内部状态不一致：`is_spilled_reg()` 判断为真（因为 slot 类型未清理）但 `spilled_ptr.type` 却是 `NOT_INIT`，进而导致 `check_stack_read_fixed_off()` 函数误判，抛出错误并拒绝合法程序。
+
+#解决方案
+在 `check_stack_write_var_off` 函数中引入并调用 `scrub_special_slot` 辅助函数。该函数在将 `spilled_ptr.type` 设为 `NOT_INIT` 的同时，会检查并清理 `slot_type` 数组，确保栈槽状态的一致性，从而避免验证器对合法程序的误拦截。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/189a44b06fe3808085c2004b71aee649814e2f61

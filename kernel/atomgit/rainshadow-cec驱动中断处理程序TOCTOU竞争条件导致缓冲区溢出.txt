@@ -1,0 +1,20 @@
+#标题
+rainshadow-cec驱动中断处理程序TOCTOU竞争条件导致缓冲区溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在rainshadow-cec驱动中，由于中断处理程序存在TOCTOU（Time-of-Check to Time-of-Use）竞争条件，在高并发中断场景下，多个中断实例可能同时读取到非满的缓冲区状态并执行写入操作。这会导致缓冲区长度（buf_len）超出其容量（DATA_SIZE），引发缓冲区溢出，内核日志中可能出现缓冲区溢出的警告信息。
+
+#主要错误日志
+buffer overflow
+
+#问题根因
+在中断处理函数 `rain_interrupt()` 中，对 `rain->buf_len` 的缓冲区满检查是在获取 `rain->buf_lock` 自旋锁之前进行的。与此同时，工作处理函数 `rain_irq_work_handler()` 在持有同一把锁的情况下也会修改 `rain->buf_len`。这构成了一个TOCTOU竞争条件：多个中断调用可能在获取锁之前都读取到 `buf_len` 未满的状态，随后依次获取锁并写入数据，导致 `buf_len` 被多次递增从而超出容量限制，造成缓冲区溢出。
+
+#解决方案
+将 `spin_lock()` 的调用移动到缓冲区满检查（`if (rain->buf_len == DATA_SIZE)`）之前，确保缓冲区状态的检查与后续修改操作在原子上下文中执行，从而消除竞争条件。同时，在缓冲区已满的溢出路径中增加对应的 `spin_unlock()` 调用，确保锁被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/68cbf69bddd89e05a99ce332557c5548a075a8c3

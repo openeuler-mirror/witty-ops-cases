@@ -1,0 +1,27 @@
+#标题
+spi: at91-usart: 驱动卸载时未注销控制器导致资源释放顺序错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 at91-usart SPI 驱动（执行 driver unbind 或模块移除）时，内核可能发生崩溃或出现 Use-After-Free 现象。这是因为在注销 SPI 控制器之前，底层的时钟和 DMA 资源已被释放并可能被其他模块复用，此时 SPI 控制器仍处于注册状态，可能继续接收或处理请求，导致访问已释放的资源而引发异常。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于驱动探测时使用了 devm_spi_register_controller() 进行自动资源管理，而在驱动移除函数 at91_usart_spi_remove() 中，代码逻辑先调用了 at91_usart_spi_release_dma() 和 clk_disable_unprepare() 释放了底层 DMA 和时钟资源，之后才（隐式地）进行控制器的注销。
+由于 devm 回调的执行顺序通常在驱动移除函数执行完之后，这导致控制器在底层硬件资源释放后仍然处于注册状态一段时间，引发了资源访问冲突。根本原因是控制器注销与资源释放的顺序颠倒。
+
+#解决方案
+1. 将驱动探测阶段的 devm_spi_register_controller() 替换为 spi_register_controller()，取消自动注销管理，以便在移除函数中显式控制注销时机。
+2. 在移除函数 at91_usart_spi_remove() 中调整执行顺序：
+   - 先调用 spi_controller_get() 增加引用计数。
+   - 显式调用 spi_unregister_controller() 注销控制器。
+   - 随后再执行 at91_usart_spi_release_dma() 和 clk_disable_unprepare() 释放底层 DMA 和时钟资源。
+   - 最后调用 spi_controller_put() 减少引用计数。
+此举确保了控制器先从内核子系统中注销，再释放其依赖的底层硬件资源，避免了 Use-After-Free 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dd8f6639d3edd1566f31e492e2d3a0a482c68088

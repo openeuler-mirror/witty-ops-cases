@@ -1,0 +1,20 @@
+#标题
+scsi: mpt3sas: Fix a fw_event memory leak
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 NVMe PCIe 拓扑变更事件（`MPI2_EVENT_PCIE_TOPOLOGY_CHANGE_LIST`）时，内核存在内存泄漏缺陷。由于对应的事件处理分支直接返回，未能释放 `fw_event` 结构体所占用的内存资源，随着此类事件的发生，系统内存会逐渐减少。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `_mpt3sas_fw_work()` 中，处理 `MPI2_EVENT_PCIE_TOPOLOGY_CHANGE_LIST` 事件的代码分支在执行完 `_scsih_pcie_topology_change_event` 后，直接将 `ioc->current_event` 置空并 `return` 返回。这导致函数末尾的 `fw_event_work_put(fw_event)` 引用计数减少与释放逻辑被跳过，从而导致 `fw_event` 对象的内存泄漏。
+
+#解决方案
+移除 `MPI2_EVENT_PCIE_TOPOLOGY_CHANGE_LIST` case 分支中的 `return` 语句，改为使用 `break` 跳出 switch 语句。这使得代码流程能够正常继续执行至函数末尾的 `out` 标签处，确保调用 `fw_event_work_put(fw_event)` 正确释放内存资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/74a0081760ebaa880edc60681a5a77fe617f0360

@@ -1,0 +1,25 @@
+#标题
+tsnep: 使用 DSA 堆叠驱动时时间戳功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用堆叠 DSA（Distributed Switch Architecture）驱动的场景下，tsnep 网卡驱动的时间戳功能工作异常。驱动会错误地对 SKBTX_HW_TSTAMP 标志置位但未实际启用硬件时间戳的 SKB 进行时间戳处理，或者在 DSA 驱动设置 SKBTX_IN_PROGRESS 标志时产生不期望的时间戳，导致时间戳逻辑混乱，违反了时间戳接口的预期行为。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在发送路径中仅检查 `SKBTX_IN_PROGRESS` 标志来决定是否进行时间戳处理，而没有检查适配器配置 `adapter->hwtstamp_config.tx_type` 是否已启用 `HWTSTAMP_TX_ON`。
+根据文档 `Documentation/networking/timestamping.rst` 中的 "Other caveats for MAC drivers" 说明，驱动不应检查 `SKBTX_IN_PROGRESS` 标志，因为该标志可能由堆叠的 DSA 驱动设置。正确的做法是检查 `SKBTX_HW_TSTAMP` 标志并结合 `hwtstamp_config.tx_type` 配置，仅在两者同时满足条件时才启用硬件时间戳。原实现未做此区分，导致在 DSA 场景下产生不必要的时间戳或逻辑错误。
+
+#解决方案
+修改驱动的时间戳判定逻辑，将时间戳条件的评估移至发送路径的早期（`tsnep_xmit_frame_ring` 函数中），并存储结果到新增的 TX entry 标志 `TSNEP_TX_TYPE_TSTAMP` 中。
+1. 新增定义 `TSNEP_TX_TYPE_TSTAMP` 标志位。
+2. 在 `tsnep_xmit_frame_ring` 函数中，仅当 `skb_shinfo(skb)->tx_flags` 包含 `SKBTX_HW_TSTAMP` 且 `adapter->hwtstamp_config.tx_type` 为 `HWTSTAMP_TX_ON` 时，才设置 `SKBTX_IN_PROGRESS` 并将 `do_tstamp` 标记为真。
+3. 将 `do_tstamp` 状态通过 `tsnep_tx_map` 传递并记录在 TX 描述符的 type 字段中。
+4. 在发送确认路径（`tsnep_tx_poll`）和激活路径（`tsnep_tx_activate`）中，改为检查新的 `TSNEP_TX_TYPE_SKB_TSTAMP` 标志，而非直接检查 `SKBTX_IN_PROGRESS`，从而避免受 DSA 驱动干扰。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4b5f42253a56dda41ccfea3f80d81cfaa03bf3ac

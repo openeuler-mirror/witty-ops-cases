@@ -1,0 +1,20 @@
+#标题
+bnxt 驱动清除 XDP 后未重计算 features 导致空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 bnxt 网卡驱动上清除 XDP 程序后，触发内核空指针引用，导致系统崩溃或网络功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在清除 XDP（调用 `bnxt_xdp_set` 且 prog 为空）时，代码路径 `bnxt_set_rx_skb_mode(bp, false)` 没有重新计算并更新网络设备的 features（如 LRO）。原来的逻辑在 XDP 关闭分支中直接返回，遗漏了 `netdev_update_features` 的调用。而在设备初始化阶段（`bnxt_init_one`），`netdev_update_features` 会依赖这些 features 标志位进行检查，标志位状态不一致导致后续逻辑中引发空指针引用。
+
+#解决方案
+重构 `bnxt_set_rx_skb_mode` 函数逻辑，将其拆分为内部实现函数 `__bnxt_set_rx_skb_mode` 和外壳封装函数。确保在关闭 XDP 模式（`page_mode` 为 false）时，正确处理 LRO 相关标志位，并强制调用 `netdev_update_features(bp->dev)` 更新硬件特性，从而保证设备状态一致性，避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6f9e5e2b42f8ed9353dce4590e97fab94bbf33d1

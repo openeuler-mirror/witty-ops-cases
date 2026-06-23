@@ -1,0 +1,20 @@
+#标题
+most: usb: 修复探测晚期失败导致的双重释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MOST 子系统的 USB 驱动进行设备探测（probe）时，若在 `most_register_interface` 注册之后的初始化步骤（如 DCI 设备分配或注册）失败，系统将触发双重释放，可能导致内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+MOST 子系统的 `most_register_interface` 接口设计非标准，它在注册失败和注销时均会释放接口结构体。最近的代码修改使得 USB 驱动在探测晚期失败（注册成功后的后续初始化失败）时，错误地跳转至 `err_free_busy_urbs` 标签执行清理流程。这导致 `mdev` 结构体首先在 `most_deregister_interface` 调用链中被释放，随后又因后续的清理代码（如 `kfree(mdev->busy_urbs)`）访问已释放内存或再次触发释放逻辑，从而引发双重释放和释放后使用问题。
+
+#解决方案
+修改 `hdm_probe` 函数的错误处理路径。在 `most_register_interface` 注册成功后的失败分支中，不再跳转至末尾的 `err_free_busy_urbs` 标签，而是在调用完 `most_deregister_interface` 后直接返回错误码，避免重复释放和已释放内存的访问。同时修正了 DCI 设备注册失败时 `put_device` 的调用位置以确保资源正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/28d8909ee681baf8f6c5e71192e66c88cf023045

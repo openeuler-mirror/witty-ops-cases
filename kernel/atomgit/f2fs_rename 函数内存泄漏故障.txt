@@ -1,0 +1,33 @@
+#标题
+f2fs_rename 函数内存泄漏故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中检测到内存泄漏问题。syzbot 测试工具在执行 rename 系统调用相关测试时，触发 Kmemleak 检测报告，显示存在未释放的内核对象（size 16），导致内存资源持续占用无法回收。
+
+#主要错误日志
+BUG: memory leak
+unreferenced object 0xffff888127f70830 (size 16):
+  comm "syz.0.23", pid 6144, jiffies 4294943712
+  backtrace (crc 925f8a80):
+    kmemleak_alloc_recursive include/linux/kmemleak.h:44 [inline]
+    slab_post_alloc_hook mm/slub.c:4520 [inline]
+    slab_alloc_node mm/slub.c:4844 [inline]
+    __do_kmalloc_node mm/slub.c:5237 [inline]
+    __kmalloc_noprof+0x3bd/0x560 mm/slub.c:5250
+    kmalloc_noprof include/linux/slab.h:954 [inline]
+    fscrypt_setup_filename+0x15e/0x3b0 fs/crypto/fname.c:364
+    f2fs_setup_filename+0x52/0xb0 fs/f2fs/dir.c:143
+    f2fs_rename+0x159/0xca0 fs/f2fs/namei.c:961
+    ...
+
+#问题根因
+在 commit 40b2d55e0452 ("f2fs: fix to create selinux label during whiteout initialization") 的修改中，于 `f2fs_rename` 函数内调用 `f2fs_setup_filename()` 初始化 whiteout 文件名时，遗漏了与之匹配的 `f2fs_free_filename()` 调用来释放相关内存，导致在 rename 操作流程中发生内存泄漏。
+
+#解决方案
+在 `f2fs_rename` 函数中，于 `f2fs_create_whiteout` 调用之后添加 `f2fs_free_filename(&fname)` 语句，确保 `fname` 结构体分配的内存资源被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d4045a9bbff7db3afe93fb1ce71d732e65a7f0b6

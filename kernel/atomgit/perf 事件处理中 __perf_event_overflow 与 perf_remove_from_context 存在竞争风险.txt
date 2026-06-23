@@ -1,0 +1,24 @@
+#标题
+perf 事件处理中 __perf_event_overflow 与 perf_remove_from_context 存在竞争风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 perf 性能监测事件处理过程中，当发生硬件性能监控中断（PMI）或软件事件溢出时，如果并发执行 `perf_event_release_kernel()` 移除事件操作，可能触发内核竞争条件。该竞争可能导致访问已释放的 `perf_event` 结构体，进而引发内核 Panic 或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`perf_event_overflow()` 和 `perf_swevent_event()` 等事件处理入口函数在进入 `__perf_event_overflow()` 核心逻辑前，未显式禁止中断或抢占，无法有效序列化（serialize）对 perf 上下文和 event 对象的访问。这导致这些入口函数与 `perf_event_release_kernel()` -> `perf_remove_from_context()` 这类可能释放 event 的执行路径之间存在竞争窗口，后者可能在此窗口期间将 event 从上下文中移除并释放，导致前者访问悬空指针。
+
+#解决方案
+在相关事件处理入口处增加同步保护与断言检查：
+1. 在 `perf_event_overflow()` 中添加 `lockdep_assert_irqs_disabled()`，确认硬件 PMI 入口中断已禁用，防止与 `perf_remove_from_context()` 竞争。
+2. 在 `perf_tp_event()` 和 `perf_swevent_event()` 中添加 `lockdep_assert_preemption_disabled()`，确保在处理 tracepoint 和软件事件时抢占已禁用，保证 event 对象生命周期安全。
+3. 在 `perf_swevent_event()` 的采样路径中增加 `guard(irqsave)()` 保护并检查 `event->state`，显式禁用中断以序列化与 `event_function_call()` IPIs 的交互，防止并发移除操作。
+4. 修正 `perf_swevent_hrtimer()` 的调用路径，改为调用带有锁断言的 `perf_event_overflow()` 以统一入口保护。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae0304cd14ca3be39ebab6ce633814c12689967c

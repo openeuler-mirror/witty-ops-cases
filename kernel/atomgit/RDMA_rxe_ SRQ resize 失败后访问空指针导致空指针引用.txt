@@ -1,0 +1,20 @@
+#标题
+RDMA/rxe: SRQ resize 失败后访问空指针导致空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA RXE 驱动中，当修改共享接收队列（SRQ）属性触发 resize 操作时，若 `rxe_queue_resize` 函数执行失败，后续代码路径仍会尝试访问 `srq->rq.queue`，导致内核发生空指针引用。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `rxe_srq_from_attr` 中，当执行 `rxe_queue_resize` 失败时，原代码逻辑跳转到 `err_free` 标签执行清理操作。该清理操作将 `srq->rq.queue` 置为 NULL，随后函数返回错误码。然而，在 resize 失败的场景下，`srq->rq.queue` 原本指向有效的队列，不应被释放或置空。错误的清理逻辑导致有效的队列指针丢失（被置为 NULL），引发后续的空指针引用。
+
+#解决方案
+修改 `rxe_srq_from_attr` 函数的错误处理路径。当 `rxe_queue_resize` 失败时，直接返回错误码 `err`，不再执行多余的队列清理和指针置空操作（移除 `err_free` 标签及其后的 `rxe_queue_cleanup` 和 `srq->rq.queue = NULL` 代码），从而保留原有的有效队列指针，避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6f68c7c273458fd7930a5f4d28387e20f174a836

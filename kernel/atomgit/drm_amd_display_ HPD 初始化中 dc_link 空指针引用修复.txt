@@ -1,0 +1,21 @@
+#标题
+drm/amd/display: HPD 初始化中 dc_link 空指针引用修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `amdgpu_dm_hpd_init` 函数执行过程中，当遇到没有有效 `dc_link` 的连接器时，代码在先前检查中假设 `dc_link` 可能为 NULL，但后续代码无条件对其进行解引用，导致潜在的空指针解引用错误，可能引发内核 panic 或 Oops。
+
+#主要错误日志
+drivers/gpu/drm/amd/amdgpu/../display/amdgpu_dm/amdgpu_dm_irq.c:940 amdgpu_dm_hpd_init()
+error: we previously assumed 'dc_link' could be null (see line 931)
+
+#问题根因
+在 `amdgpu_dm_hpd_init` 函数中，代码逻辑用于处理热插拔检测（HPD）初始化。部分连接器可能没有有效的 `dc_link`（即为 NULL）。代码在判断是否使用轮询时正确检查了 `dc_link` 是否为空，但在后续设置 HPD 中断时，直接解引用了 `dc_link` 指针（访问 `dc_link->irq_source_hpd`），未进行空指针检查，导致空指针解引用风险。
+
+#解决方案
+在循环遍历连接器时，提前获取 `dc_link` 指针，并立即判断其是否为 NULL。如果 `dc_link` 为 NULL，则跳过当前连接器的后续处理，从而避免空指针解引用。具体代码变更为：在获取 `dc_link` 后添加 `if (!dc_link) continue;` 判断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d84ddd7dada75e717bd24aea7e3ae5006adede53

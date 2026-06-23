@@ -1,0 +1,23 @@
+#标题
+i.MX6QDL PCIe 挂起/恢复功能失效导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+i.MX6QDL 平台在连接 PCIe 设备（如 ath10k 或 iwlwifi 无线网卡）的情况下，执行系统挂起和恢复操作失败。恢复时内核挂起并报错，导致系统不可用。具体表现为 PCIe 设备无法从 D3hot 状态切换回 D0 状态，随即触发内核异常错误。
+
+#主要错误日志
+ath10k_pci 0000:01:00.0: Unable to change power state from D3hot to D0, device inaccessible
+Unhandled fault: imprecise external abort (0x1406) at 0x0106f944
+
+#问题根因
+根据 NXP 勘误文档 ERR005723，i.MX6QDL 处理器的 PCIe 控制器不支持 L2 电源下拉功能。原有的挂起/恢复代码逻辑未针对此硬件缺陷进行处理，错误地触发了不支持的电源状态转换，破坏了 PCIe 功能，导致恢复失败和驱动崩溃。
+
+#解决方案
+针对 i.MX6QDL 受 ERR005723 影响的特性，引入 `IMX6_PCIE_FLAG_BROKEN_SUSPEND` 标志位并调整挂起/恢复流程：
+1. **挂起阶段**：跳过常规的 L2 电源关闭流程，改为断言核心复位并禁用时钟以节省功耗，避免触发硬件错误。
+2. **恢复阶段**：重新使能参考时钟、解除断言核心复位，并重置连接的 PCIe 设备（这是关键，可避免 ath10k 等驱动崩溃），随后重新初始化 Root Complex 并恢复 MSI 寄存器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8f6c0e0a2c3f2a602668afb2ee958291cb6a7a22

@@ -1,0 +1,22 @@
+#标题
+OF 平台 PCI 设备 ACS 未生效故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在采用设备树（OF）平台的系统中，首个枚举的 PCI 设备（通常是 Root Port）未正确启用 ACS（Access Control Services）功能。这导致该设备无法进行 ACS 验证，影响了 PCI 设备的隔离特性，可能导致 DMA 重映射或 P2P 通信安全策略失效。
+
+#主要错误日志
+未知
+
+#问题根因
+PCI 子系统中 ACS 的启用依赖 `pci_request_acs()` 设置 `pci_acs_enable` 标志。在 OF 平台上，`pci_request_acs()` 是在 `of_iommu_configure()` 调用链中被触发的，该调用链发生在设备添加（`device_add`）阶段。
+然而，原有的 `pci_enable_acs()` 函数是在 `pci_device_add` -> `pci_init_capabilities` -> `pci_acs_init` 中调用的。这个调用时机早于 `device_add` 阶段，即早于 `pci_request_acs()` 的设置时机。
+因此，在 `pci_enable_acs()` 执行时，`pci_acs_enable` 标志尚未被置位，导致 ACS 启用检查失败，首个设备的 ACS 功能未被开启。
+
+#解决方案
+调整 `pci_enable_acs()` 的调用时机，将其从 `pci_acs_init()` 移至 `pci_dma_configure()` 函数中。确保 `pci_enable_acs()` 在 `of_dma_configure()` -> `of_iommu_configure()` -> `pci_request_acs()` 执行完毕之后调用，从而保证 `pci_acs_enable` 标志已正确设置，进而正确启用 ACS 功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d57dfffb41b6705726f0d46fc73e4650a2eab386

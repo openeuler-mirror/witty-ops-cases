@@ -1,0 +1,20 @@
+#标题
+netfilter: nf_set_pipapo_avx2 初始 map 填充未清零导致潜在匹配错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 AVX2 优化的 nftables pipapo 集合进行查找时，由于初始 result map 的剩余比特位未被正确清零，可能导致匹配结果异常，进而引发规则匹配错误或非预期的网络行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nft_pipapo_avx2_lookup` 函数中，初始化 `res` 指向的 map 时，注释声称“Starting map doesn't need to be set for this implementation”（此实现不需要设置起始 map），因此直接跳过了初始化步骤。然而，实际上虽然不需要将起始位全置为 1，但必须将 `f->bsize` 到 `m->bsize_max` 之间的剩余比特位清零。缺少这一步清零操作导致残留数据干扰了后续的匹配逻辑。
+
+#解决方案
+新增 `pipapo_resmap_init_avx2` 函数用于初始化 result map。该函数不同于通用实现，它不再设置起始 map 的比特位，但会显式地将 `f->bsize` 至 `m->bsize_max` 范围内的剩余比特位清零。在 `nft_pipapo_avx2_lookup` 中调用该函数替代原有的空操作，确保 map 初始状态正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6b7e21339fe1d46d17edbda7c9e4fb289553b654

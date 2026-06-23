@@ -1,0 +1,24 @@
+#标题
+sched_ext: Print sched_ext info when dumping stack
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统发生内核崩溃或调用堆栈转储（如触发 NULL 指针解引用、执行 `dump_stack()`）时，内核日志中缺少 `sched_ext` 调度器的状态信息（如调度器名称、启用状态、任务运行队列时间等），导致在 `sched_ext` 环境下难以快速判断故障发生时的调度器上下文。
+
+#主要错误日志
+未知
+（注：Commit 提供的日志样例为演示输出，展示了补丁引入后的效果，而非故障本身的报错。演示日志如下：
+`Sched_ext: qmap (enabled+all), task: runnable_at=-17ms`）
+
+#问题根因
+原有内核代码在 `sched_show_task` 和 `dump_stack_print_info` 流程中，仅调用了 `print_worker_info` 和 `print_stop_info`，未实现对 `sched_ext` 调度器状态的打印功能。这导致在使用 `sched_ext` 调度类时，堆栈转储信息缺失关键调试上下文。
+
+#解决方案
+1. 在 `kernel/sched/ext.c` 中新增 `print_scx_info()` 函数，用于获取并打印当前 `sched_ext` 调度器的名称、启用状态以及任务的 `runnable_at` 时间。
+2. 在 `kernel/sched/core.c` 的 `sched_show_task()` 函数以及 `lib/dump_stack.c` 的 `dump_stack_print_info()` 函数中，新增对 `print_scx_info()` 的调用，使其在堆栈转储时自动输出调度器信息。
+3. 通过 `copy_from_kernel_nofault` 安全地读取任务状态，确保在异常上下文中打印信息的安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0318a848cc36bcf04bba26229b6c4b1e9843b001

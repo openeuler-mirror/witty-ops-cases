@@ -1,0 +1,25 @@
+#标题
+urma bonding导入交换连接使用了错误的UE索引
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在jetty、JFR和segment的内核侧bonding资源导入交换过程中，系统未使用用户空间指定的UE（User Engine）索引，而是错误地在内部跨die重试连接数据交换。这导致bonding导入交换选择了错误的本地物理设备和对端主EID，造成连接建立失败或功能异常。
+
+#主要错误日志
+- ubcore_log_err("udata or udrv_data is null.\n");
+- ubcore_log_err("invalid udata in_addr or in_len:%u.\n", udata->udrv_data->in_len);
+- ubcore_log_err("failed to copy ue_idx from user, byte:%lu.\n", byte);
+- ubcore_log_err("invalid ue_idx:%u.\n", *ue_idx);
+- ubcore_log_err("Invalid ue_id: %u.\n", ue_id);
+- ubcore_log_err("Failed find physical device");
+
+#问题根因
+在进行bonding资源导入交换时，代码逻辑硬编码或默认使用了索引0（如`ues[0]`），而没有从用户传入的udata中提取并校验用户指定的`ue_idx`。这导致在查找物理设备和获取对端主EID时，忽略了用户空间的意图，使用了错误的UE配置进行连接。
+
+#解决方案
+修改bonding导入交换逻辑，从用户空间数据（udata->in）中复制并校验`ue_idx`。确保在调用`ubcore_find_physical_device`和`ubcore_get_primary_eid_by_agg_eid`等关键函数时，传递并使用该用户指定的索引，从而正确选择本地物理设备和对端主EID。同时增加了对`ue_idx`范围的有效性检查（需小于`IODIE_NUM`）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d0de8a81cf4e6ecc106a9a914999b8947e2e75a1

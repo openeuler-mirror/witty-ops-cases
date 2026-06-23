@@ -1,0 +1,20 @@
+#标题
+tipc: fix memory leak in tipc_link_xmit
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 TIPC 链路发生拥塞且消息优先级为系统重要性（TIPC_SYSTEM_IMPORTANCE）时，`tipc_link_xmit` 函数直接返回 `-ENOBUFS` 错误码，但未释放传入的 socket 缓冲区队列（`list`），导致内存泄漏。
+
+#主要错误日志
+[   ] tipc: link overflow<link_name>
+
+#问题根因
+在 `tipc_link_xmit` 函数中，处理链路拥塞异常分支时，如果消息优先级为 `TIPC_SYSTEM_IMPORTANCE`，代码打印告警日志后直接返回 `-ENOBUFS`，遗漏了对传入的 sk_buff 队列 `list` 的释放操作，导致内存泄漏。
+
+#解决方案
+在 `tipc_link_xmit` 函数中，当系统重要性消息导致链路溢出并返回 `-ENOBUFS` 前，增加调用 `__skb_queue_purge(list)` 来清空并释放队列中的所有 skb，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6a66ab3a84c9b17b8cf9e59fe98e40ca0327f51a

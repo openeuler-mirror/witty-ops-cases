@@ -1,0 +1,23 @@
+#标题
+tracing 机制在打印含 %s 指针的事件时可能导致内核崩溃或内存访问错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读取 trace 数据时，如果 trace event 包含指向内核动态分配内存或非事件数据区域的 "%s" 格式字符串指针，可能会在内存被释放后访问到无效地址，导致内核崩溃或访问非法内存。此外，原有的 KABI 机制因结构体字段变更而被破坏。
+
+#主要错误日志
+- `WARN_ONCE(!good, "event '%s' has unsafe pointer field '%s'", ...)` （推断）
+- `trace_seq_printf(seq, "EVENT %s: HAS UNSAFE POINTER FIELD '%s'\n", ...)` （推断）
+
+#问题根因
+原有的 `trace_check_vprintf` 检查逻辑在处理 TP_printk 格式中的 "%s" 时，仅通过格式字符串进行校验，没有在字段层面标记哪些指针需要运行时检查。如果字符串指针指向了 ring buffer 之外且非静态的内存区域，该内存可能在读取 trace 前已被释放，从而引发 UAF（Use After Free）或访问非法内存。同时，该补丁修复了 `trace_event_fields` 结构体变更导致的 KABI 破坏问题。
+
+#解决方案
+1. **字段标记机制**：在 `ftrace_event_field` 结构体中新增 `needs_test` 标志位，在事件初始化时遍历字段，将需要进行安全检查的字符串字段打上标记，并在 `trace_event_call` 中设置 `TRACE_EVENT_FL_TEST_STR` 标志。
+2. **运行时检查优化**：废弃原有的 `trace_check_vprintf` 复杂校验逻辑，改为在打印事件前调用 `ignore_event` 函数。该函数仅针对标记了 `needs_test` 的字段检查其指针是否指向有效的 ring buffer 区域或静态数据区，若不安全则打印警告并忽略该事件。
+3. **KABI 修复**：利用 `KABI_FILL_HOLE` 在联合体中填充新增的 `needs_test` 位域，避免改变结构体大小破坏 KABI 兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/74286da1995dd8a99c67a9fb3cf658d2557f143d

@@ -1,0 +1,29 @@
+#标题
+wifi: ath12k 硬件分组环境下重启触发 MHI 状态设置失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用硬件分组的情况下执行系统重启时，dmesg 日志中大量打印 "failed to set mhi state" 错误信息。这是由于同组内的设备在被移除时都会尝试下电，导致对已下电的设备重复执行电源关闭操作。
+
+#主要错误日志
+ath12k_pci 0002:01:00.0: failed to set mhi state POWER_OFF(3) in current mhi state (0x0)
+ath12k_pci 0002:01:00.0: failed to set mhi state: POWER_OFF(3)
+ath12k_pci 0002:01:00.0: failed to set mhi state DEINIT(1) in current mhi state (0x0)
+ath12k_pci 0002:01:00.0: failed to set mhi state: DEINIT(1)
+ath12k_pci 0003:01:00.0: failed to set mhi state POWER_OFF(3) in current mhi state (0x0)
+ath12k_pci 0003:01:00.0: failed to set mhi state: POWER_OFF(3)
+ath12k_pci 0003:01:00.0: failed to set mhi state DEINIT(1) in current mhi state (0x0)
+ath12k_pci 0003:01:00.0: failed to set mhi state: DEINIT(1)
+ath12k_pci 0004:01:00.0: failed to set mhi state POWER_OFF(3) in current mhi state (0x0)
+ath12k_pci 0004:01:00.0: failed to set mhi state: POWER_OFF(3)
+
+#问题根因
+在硬件分组环境下，当设备被移除时，它会对自己以及同组内的所有伙伴设备执行下电操作。由于同组内的每个设备都会执行此流程，导致每个设备被多个伙伴设备重复下电。当设备已经处于下电状态（MHI state 0x0）时，再次尝试设置 POWER_OFF 或 DEINIT 状态就会失败并报错。
+
+#解决方案
+在 `ath12k_pci_power_down` 函数中增加状态检查逻辑。在下电前检查 `ATH12K_PCI_FLAG_INIT_DONE` 标志位是否已设置；如果该标志位未设置，说明同组内的其他伙伴设备已经执行过下电操作，当前设备应跳过后续下电步骤直接返回，从而避免重复下电导致的错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6b32096dea3336144fa4d88531d4e5d053299ccb

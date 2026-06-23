@@ -1,0 +1,20 @@
+#标题
+iommu/arm-smmu-v3: domain_alloc_user 函数错误指针检查修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 arm_smmu_domain_alloc_user 函数分配域时，如果底层 arm_smmu_domain_alloc 函数返回了错误指针（ERR_PTR），上层代码错误地将其判断为 NULL，导致返回错误的错误码（-ENOMEM），掩盖了真实的错误原因，可能导致后续初始化流程异常或内存分配失败定位不准确。
+
+#主要错误日志
+未知
+
+#问题根因
+arm_smmu_domain_alloc() 函数在失败时返回的是错误指针，而不是 NULL。但在 arm_smmu_domain_alloc_user 函数中，代码使用 `if (!smmu_domain)` 进行检查，这导致当返回错误指针时判断条件为假，接着函数返回了 ERR_PTR(-ENOMEM)，既丢失了真实的错误信息也返回了不符合预期的错误码。
+
+#解决方案
+修改 arm_smmu_domain_alloc_user 函数中的错误检查逻辑，将 `if (!smmu_domain)` 修改为 `if (IS_ERR(smmu_domain))`，并在返回时使用 `return ERR_CAST(smmu_domain)` 直接传递底层的错误指针，确保错误码正确向上传递。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c48607a9f84f1c4bb8f4b3e738efa984f82a77ef

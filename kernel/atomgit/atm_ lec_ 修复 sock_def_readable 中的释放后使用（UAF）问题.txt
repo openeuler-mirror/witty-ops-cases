@@ -1,0 +1,31 @@
+#标题
+atm: lec: 修复 sock_def_readable 中的释放后使用（UAF）问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ATM LANE（LAN Emulation）模块中，当关闭 lec ATM socket 时，存在并发竞态条件，导致内核发生释放后使用。具体表现为在 `sock_def_readable` 函数中访问已释放 socket 的等待队列时触发 panic 或内核崩溃。该漏洞被 Syzbot 发现并记录为 CVE-2026-43050。
+
+#主要错误日志
+未知
+
+#问题根因
+故障的根本原因是 `lec_atm_close()` 将 `priv->lecd` 设置为 NULL 时缺乏同步机制，与此同时，`send_to_lecd()`、`lec_handle_bridge()` 和 `lec_atm_send()` 等调用者在取消引用 `priv->lecd` 时也没有针对并发拆卸的保护措施。
+具体流程如下：
+1. `lec_atm_close()` 清空 `priv->lecd` 指针。
+2. 另一个线程仍在使用该指针指向的 socket 结构。
+3. Socket 通过 RCU 被释放。
+4. 当访问 socket 的等待队列时，`sock_def_readable()` 触发 use-after-free。
+
+#解决方案
+通过将 `priv->lecd` 转换为受 RCU 保护的指针来修复此竞态问题，具体修改如下：
+1. 在 `lec.h` 中将 `priv->lecd` 标记为 `__rcu` 指针。
+2. 在 `lec_atm_close()` 和 `lecd_attach()` 中使用 `rcu_assign_pointer()` 进行安全的指针赋值。
+3. 在 `lec_start_xmit()`、`lec_push()`、`send_to_lecd()` 和 `lecd_attach()` 中，对于仅做非空检查而不解引用的场景，使用 `rcu_access_pointer()`。
+4. 在 `send_to_lecd()`、`lec_handle_bridge()` 和 `lec_atm_send()` 中，使用 `rcu_read_lock`/`rcu_dereference`/`rcu_read_unlock` 原语安全地访问 `lecd`。
+5. 在 `lec_atm_close()` 中，使用 `rcu_assign_pointer()` 后调用 `synchronize_rcu()`，确保所有读取者在继续执行前已完成操作（由于 `lec_atm_close()` 从持有睡眠锁 `lock_sock()` 的 `vcc_release()` 调用，因此同步是安全的）。
+6. 移除 `lec_atm_close()` 中手动排空 `sk_receive_queue` 的代码，因为 `vcc_destroy_socket()` 在 `lec_atm_close()` 返回后会自动处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c69ede402a4d10d5b61fb0f96f8efd9094329459

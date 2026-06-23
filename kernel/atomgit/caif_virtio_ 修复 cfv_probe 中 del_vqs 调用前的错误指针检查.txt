@@ -1,0 +1,22 @@
+#标题
+caif_virtio: 修复 cfv_probe 中 del_vqs 调用前的错误指针检查
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 caif_virtio 设备探测（probe）过程中，若出现错误进入清理路径，内核可能因错误的指针检查逻辑引发空指针访问或导致未定义行为。具体表现为在 `cfv->vdev` 非 NULL 但 `cfv->vq_tx` 为 NULL 的情况下，错误的判断逻辑掩盖了实际问题，或者相反，在 `cfv->vdev` 已经被解引用后再检查其是否为 NULL 属于冗余逻辑。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cfv_probe` 函数的错误处理路径中，代码检查 `cfv->vdev` 是否为 NULL 来决定是否调用 `del_vqs()`。这存在两个问题：
+1. **检查对象错误**：`del_vqs()` 操作涉及释放 virtqueues，逻辑上应当检查 `cfv->vq_tx` 指针是否为 NULL，而不是 `cfv->vdev`。
+2. **逻辑冗余与隐患**：在执行该检查之前，代码已经对 `cfv->vdev` 进行了解引用，此时再检查 `cfv->vdev` 是否为 NULL 不仅冗余，且无法正确处理 `vq_tx` 未初始化的场景。
+
+#解决方案
+修改 `drivers/net/caif/caif_virtio.c` 文件中 `cfv_probe` 函数的错误处理逻辑，将调用 `del_vqs()` 前的判断条件由 `if (cfv->vdev)` 修改为 `if (cfv->vq_tx)`，确保仅在发送队列有效时才执行删除操作，修正了错误的指针检查逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ec19e00fd21afecb96e4dae5261e1e1db6df3a2

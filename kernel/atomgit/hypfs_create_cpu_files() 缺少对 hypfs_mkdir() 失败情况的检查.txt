@@ -1,0 +1,20 @@
+#标题
+hypfs_create_cpu_files() 缺少对 hypfs_mkdir() 失败情况的检查
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 s390 架构的 hypfs 文件系统中，当 `hypfs_mkdir()` 创建 CPU 目录失败时，函数未及时返回错误码，而是继续执行后续的 `hypfs_create_u64()` 操作。这可能导致内核访问无效的 dentry 指针，引发内核 panic 或 Oops，或者在用户态访问 hypfs 时触发 slab-out-of-bounds 等异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `hypfs_create_cpu_files()` 调用 `hypfs_mkdir()` 创建目录后，原代码未检查返回值 `cpu_dir` 是否有效（是否为 ERR_PTR）。如果目录创建失败，代码继续使用该无效指针调用 `hypfs_create_u64()`，导致系统崩溃或内存破坏。
+
+#解决方案
+在 `hypfs_mkdir()` 调用之后立即添加返回值检查，使用 `IS_ERR()` 宏判断 `cpu_dir` 是否为错误指针。若是错误指针，则通过 `PTR_ERR()` 获取错误码并直接返回，阻止后续代码访问无效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2fb26398903a14eec410ba9cfbb54c9f339570bd

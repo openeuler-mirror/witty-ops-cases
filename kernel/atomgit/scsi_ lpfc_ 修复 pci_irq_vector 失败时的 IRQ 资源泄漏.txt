@@ -1,0 +1,22 @@
+#标题
+scsi: lpfc: 修复 pci_irq_vector 失败时的 IRQ 资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 lpfc 驱动初始化过程中，若 `pci_irq_vector()` 调用失败，驱动未能释放之前已申请的中断资源，导致 IRQ 泄漏。静态代码分析工具 smatch 会报告如下警告：
+lpfc_init.c: lpfc_sli4_enable_msi() warn: 'phba->pcidev->irq' from request_irq() not released.
+
+#主要错误日志
+- 0496 MSI pci_irq_vec failed (%d)
+- 0502 INTR pci_irq_vec failed (%d)
+
+#问题根因
+在函数 `lpfc_sli4_enable_msi()` 和 `lpfc_sli4_enable_intr()` 的错误处理路径中，当 `pci_irq_vector()` 获取中断向量失败时，代码直接返回或释放了 PCI IRQ vectors，但遗漏了调用 `free_irq()` 来释放此前通过 `request_irq()` 已申请的 `phba->pcidev->irq` 资源，从而导致中断资源泄漏。
+
+#解决方案
+在 `lpfc_sli4_enable_msi()` 和 `lpfc_sli4_enable_intr()` 函数中 `pci_irq_vector()` 调用失败的错误处理分支里，增加 `free_irq(phba->pcidev->irq, phba);` 调用，确保在中断向量获取失败时正确释放已申请的中断资源，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1c5a36fa7ae5fb3a82b4f60bf62bca3a282f3b6b

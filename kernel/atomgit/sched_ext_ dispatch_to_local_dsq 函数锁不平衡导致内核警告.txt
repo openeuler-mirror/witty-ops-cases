@@ -1,0 +1,34 @@
+#标题
+sched_ext: dispatch_to_local_dsq 函数锁不平衡导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 `stress-ng --race-sched 0` 测试，即多个任务快速更改 CPU 亲和性时，内核检测到锁不平衡错误并打印 WARNING 日志。系统调用栈显示 `dispatch_to_local_dsq` 函数试图释放一个未被当前上下文持有的运行队列锁（`&rq->__lock`）。
+
+#主要错误日志
+[   13.413579] =====================================
+[   13.413660] WARNING: bad unlock balance detected!
+[   13.413729] 6.13.0-virtme #15 Not tainted
+[   13.413792] -------------------------------------
+[   13.413859] kworker/1:1/80 is trying to release lock (&rq->__lock) at:
+[   13.413954] [<ffffffff873c6c48>] dispatch_to_local_dsq+0x108/0x1a0
+[   13.414111] but there are no more locks to release!
+[   13.414176]
+[   13.414176] other info that might help us debug this:
+[   13.414258] 1 lock held by kworker/1:1/80:
+[   13.414318]  #0: ffff8b66feb41698 (&rq->__lock){-.-.}-{2:2}, at: raw_spin_rq_lock_nested+0x20/0x90
+
+#问题根因
+在 `dispatch_to_local_dsq()` 函数中，当与 `dispatch_dequeue()` 发生竞争时，代码逻辑错误地假设任务已经被移动到了目标运行队列（`dst_rq`）。实际上，在通过 `move_remote_task_to_local_dsq` 移动任务后，当前持有的锁可能已经变更为 `dst_rq`，但代码未正确跟踪当前锁定的 `rq`，导致后续试图解锁错误的 `rq` 或重复解锁，从而触发锁不平衡警告。
+
+#解决方案
+修复方案是在 SMP 配置下引入一个局部变量 `locked_rq` 用于准确跟踪当前持有的运行队列锁。具体修改包括：
+1. 初始化 `locked_rq` 为传入的 `rq`。
+2. 在切换到 `src_rq` 锁时，更新 `locked_rq` 为 `src_rq`。
+3. 在调用 `move_remote_task_to_local_dsq` 后（此时锁已切换到 `dst_rq`），更新 `locked_rq` 为 `dst_rq`。
+4. 在函数末尾恢复锁状态时，使用 `locked_rq` 进行判断和解锁操作，确保释放的是当前实际持有的锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f9c2cf43b28d65b3a85ca6af4eb074224afad97

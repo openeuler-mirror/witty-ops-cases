@@ -1,0 +1,20 @@
+#标题
+libbpf: 复用 DEVMAP 失败问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 eBPF 应用程序中尝试复用（reuse）已被 pinned 的 DEVMAP 或 DEVMAP_HASH 类型地图时，操作始终失败，导致地图加载或映射复用流程无法正常完成。
+
+#主要错误日志
+未知
+
+#问题根因
+内核中 `bpf_get_map_info_by_fd()` 接口在处理 DEVMAP 时，返回的标志位中总是包含 `BPF_F_RDONLY_PROG`，但该标志位在地图创建时通常是未设置的（invalid）。libbpf 在检查地图兼容性（`map_is_reuse_compat`）时，直接对比了 `map_flags`，导致现有地图的标志位与创建参数不一致，从而判定为不兼容。
+
+#解决方案
+在 libbpf 的地图兼容性检查逻辑中增加特殊处理：若检测到地图类型为 `BPF_MAP_TYPE_DEVMAP` 或 `BPF_MAP_TYPE_DEVMAP_HASH`，则在比较前将获取到的 `map_info.map_flags` 中的 `BPF_F_RDONLY_PROG` 标志位清除，忽略该标志位带来的差异，从而允许正常复用 DEVMAP。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/af4fe6766fd66a0afaabe9ddba109f9ec44dbcc9

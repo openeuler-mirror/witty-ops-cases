@@ -1,0 +1,23 @@
+#标题
+xfs_prepare_shift() 在 RT 设备上因范围计算错误导致文件系统损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 XFS 实时（RT）设备上执行文件移位操作时，因 xfs_prepare_shift() 函数未使用正确的 RT extent 范围进行边界对齐和稳定化处理，可能导致 COW 写回完成与插入操作发生竞争，进而引发文件数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 xfs_prepare_shift() 函数中，计算需要刷新和取消映射的范围时，原本的代码硬编码使用了常规的块大小作为对齐和偏移单位。对于 RT 设备，其分配单元与常规块大小不同。必须考虑 RT extent 范围来稳定边界，否则在移位操作期间，COW 写回完成可能与 extent 插入发生竞争并导致文件损坏。
+
+#解决方案
+修改 xfs_prepare_shift() 函数中的范围计算逻辑，将原来硬编码的块大小替换为通过 xfs_inode_alloc_unitsize() 获取的实际分配单元大小。具体包括：
+1. 使用 xfs_inode_alloc_unitsize(ip) 替代 mp->m_sb.sb_blocksize 来确定对齐粒度。
+2. 使用 rounddown_64(offset, rounding) 进行向下对齐。
+3. 在计算起始偏移量时，减去相应的分配单元大小而非固定的块大小，从而确保在 RT 设备上也能正确稳定边界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01f5631eeca71d4ee0ad8bc8fe5bccd341659154

@@ -1,0 +1,20 @@
+#标题
+soc: qcom: ocmem: 修复设备引用计数泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm OCMEM 驱动中，当通过 `of_get_ocmem` 接口成功查找并获取 OCMEM 设备的驱动数据时，之前获取的 `struct device` 引用计数未被释放。这是一个内核资源泄漏问题，会导致该设备的引用计数永久增加，可能阻止设备被正确移除或释放，最终可能影响系统资源可用性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `of_get_ocmem` 函数中，代码通过 `of_find_device_by_node` 获取了 OCMEM 平台设备的引用（增加了引用计数），但在成功获取到驱动数据 `platform_get_drvdata(pdev)` 后，并未调用 `put_device` 释放该引用。之前的修复补丁仅处理了查找失败的错误路径，遗漏了成功返回路径上的引用释放。由于持有设备引用并不能防止其驱动数据失效，因此保留该引用无实际意义，导致了引用计数泄漏。
+
+#解决方案
+在 `of_get_ocmem` 函数中，将 `put_device(&pdev->dev)` 调用移至获取驱动数据之后、判断数据有效性之前。这确保了无论是成功返回还是因驱动数据无效而退出，设备引用计数都能被正确释放。具体改动为删除 `if (!ocmem)` 判断块内的 `put_device` 调用，并在获取 `ocmem` 变量后立即无条件执行 `put_device`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31c465ddef5eb96bd95afa3040e78e4f1449f869

@@ -1,0 +1,25 @@
+#标题
+NFS/ENFS 修复 exten_call.c 中的内存泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFS 的 ENFS 模块中，当执行 `dorado_query_fs_shard`、`dorado_query_lsId` 或 `dorado_query_dns` 等函数时，若系统内存紧张导致 `kmalloc` 分配失败，函数会返回错误码但未释放之前已分配的内存。这会导致内核内存泄漏，随着时间推移可能耗尽系统内存，影响系统稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+代码逻辑存在缺陷，在错误处理路径中遗漏了内存释放操作。具体包括：
+1. 在 `dorado_query_fs_shard` 函数中，当 `buf` 分配失败时，直接返回 `-ENOMEM`，未释放之前已分配的 `args` 结构体。
+2. 在 `dorado_query_lsId` 函数中，存在同样的逻辑错误，`buf` 分配失败时未释放 `args` 结构体。
+3. 在 `dorado_query_dns` 函数中，当 `resData` 分配失败时，仅释放了 `extend3Res`，但未通过 `goto out` 跳转到统一的清理流程，导致其他资源未被正确释放。
+
+#解决方案
+补充错误处理路径中缺失的内存释放操作：
+1. 在 `dorado_query_fs_shard` 和 `dorado_query_lsId` 函数中，当 `buf` 分配失败（`!buf`）时，增加 `kfree(args)` 调用以释放之前分配的内存。
+2. 在 `dorado_query_dns` 函数中，当 `resData` 分配失败时，将直接返回修改为设置错误码 `ret = -ENOMEM` 并通过 `goto out` 跳转到函数末尾的清理逻辑，确保所有分配的资源被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b31506834cd780cb0574b0d48c85cffabf73e6ca

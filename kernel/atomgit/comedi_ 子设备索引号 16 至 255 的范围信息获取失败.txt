@@ -1,0 +1,26 @@
+#标题
+comedi: 子设备索引号 16 至 255 的范围信息获取失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 COMEDI 子设备索引号大于 15（即 16 到 255）时，调用 `COMEDI_RANGEINFO` ioctl 无法正确获取子设备的范围信息。系统可能返回错误的范围表（对应子设备索引对 16 取模后的结果），或者直接返回 `-EINVAL` 错误导致 ioctl 调用失败。该问题主要影响支持超过 16 个子设备的驱动，如 "8255" 驱动和 "comedi_bond" 驱动。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在处理 `COMEDI_CHANINFO` 和 `COMEDI_RANGEINFO` ioctl 时，对 `range_type` 字段中子设备索引位的编码定义不一致：
+1. `COMEDI_CHANINFO` ioctl 生成的 `range_type` 中，子设备索引仅占用 bits 27:24（掩码 0xf），仅能表示 0-15 的索引，且 bits 31:28 被错误地填入了设备次设备号。
+2. `COMEDI_SUBDINFO` ioctl 则使用 bits 31:24 存储子设备索引。
+3. `COMEDI_RANGEINFO` ioctl 解码时，从 bits 27:24 提取子设备索引（掩码 0xf），导致索引大于 15 时数据截断或解析错误，从而引发功能异常。
+
+#解决方案
+修改 `COMEDI_CHANINFO` 和 `COMEDI_RANGEINFO` 的处理逻辑，统一使用 `range_type` 的 bits 31:24 来存储和解析子设备索引（支持范围 0-255）：
+1. 在 `do_chaninfo_ioctl` 函数中，移除生成 `range_type` 时对 `dev->minor` 的左移填充操作，确保 bits 31:24 完整用于存储子设备索引。
+2. 在 `do_rangeinfo_ioctl` 函数中，将提取子设备索引的掩码从 `0xf` 修改为 `0xff`，以正确解析 8 位的子设备索引。
+3. 更新 `comedi.h` 头文件文档，将子设备索引的位域说明从 bits 27:24 更正为 bits 31:24。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f4608a28d1322bdfabc73723129ba7fa5537f30c

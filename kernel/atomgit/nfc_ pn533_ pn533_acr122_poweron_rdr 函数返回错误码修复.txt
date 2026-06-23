@@ -1,0 +1,20 @@
+#标题
+nfc: pn533: pn533_acr122_poweron_rdr 函数返回错误码修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFC pn533 设备驱动加载或电源开启过程中，若 USB 数据传输实际发送长度（transferred）不等于命令预期长度，驱动虽然打印了错误日志，但函数却错误地返回了成功（0），导致上层调用者误认为电源开启操作成功，可能引发后续设备状态不一致或未定义行为。
+
+#主要错误日志
+nfc_err(&phy->udev->dev, "Reader power on cmd error %d\n", rc);
+
+#问题根因
+在 `pn533_acr122_poweron_rdr` 函数中，当 USB 传输失败（`rc` 非零）或传输字节数不匹配（`transferred != sizeof(cmd)`）时，代码执行流进入错误处理分支。原代码逻辑 `return rc;` 存在漏洞：如果变量 `rc` 为 0（即 USB 核心层未返回错误码），但传输字节数不匹配，该函数会直接返回 `rc` 的值（即 0）。这掩盖了“传输字节数不匹配”这一错误事实，导致本应失败的函数调用返回了成功状态。
+
+#解决方案
+修改 `drivers/nfc/pn533/usb.c` 文件中 `pn533_acr122_poweron_rdr` 函数的错误返回逻辑。将 `return rc;` 修改为 `return rc ?: -EINVAL;`。此修改利用 C 语言的条件运算符特性，确保在 `rc` 为 0 但传输字节数不匹配的情况下，函数正确返回 `-EINVAL`（无效参数错误码），从而如实向上层报告故障。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d72b12bc5918905eef70fa251f054b16482c1521

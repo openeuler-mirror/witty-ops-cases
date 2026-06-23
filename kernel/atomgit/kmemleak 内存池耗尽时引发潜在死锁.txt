@@ -1,0 +1,20 @@
+#标题
+kmemleak 内存池耗尽时引发潜在死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核内存泄漏检测器（kmemleak）的内存池耗尽时，系统可能触发死锁，导致相关进程或线程挂起，无法继续执行。
+
+#主要错误日志
+"Memory pool empty, consider increasing CONFIG_DEBUG_KMEMLEAK_MEM_POOL_SIZE\n"
+
+#问题根因
+在 `mem_pool_alloc` 函数中，当内存池为空时，代码在持有 `kmemleak_lock` 自旋锁且关闭本地中断的情况下调用了 `pr_warn_once()`。控制台打印函数可能涉及调度器或获取其他锁，因此在自旋锁临界区内进行打印可能导致死锁。
+
+#解决方案
+将 `pr_warn_once()` 调用移动到 `kmemleak_lock` 锁释放之后执行。通过引入一个布尔标志位 `warn`，在锁临界区内仅记录状态，在释放锁后再进行日志打印，从而避免了在持锁期间进行可能引起睡眠或递归锁的操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fce63d719640b702f3efb936a23caef1b501ca82

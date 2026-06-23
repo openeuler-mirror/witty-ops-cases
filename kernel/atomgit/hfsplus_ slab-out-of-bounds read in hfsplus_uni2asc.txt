@@ -1,0 +1,32 @@
+#标题
+hfsplus: slab-out-of-bounds read in hfsplus_uni2asc
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `listxattr` 系统调用处理 HFS+ 文件系统扩展属性时，触发 KASAN 检测到的 slab-out-of-bounds 越界读取错误。读取操作发生在 `hfsplus_uni2asc` 函数中，导致内核打印 BUG 信息并打印调用栈。该问题是由于之前的修复补丁 (94458781aee6) 不完整导致的。
+
+#主要错误日志
+```
+BUG: KASAN: slab-out-of-bounds in hfsplus_uni2asc+0xa71/0xb90 fs/hfsplus/unicode.c:186
+Read of size 2 at addr ffff8880289ef218 by task syz.6.248/14290
+```
+推断日志（基于代码逻辑）：
+```
+pr_err("invalid length %u has been corrected to %d\n", be16_to_cpu(ustr->length), ustrlen);
+```
+
+#问题根因
+在 `hfsplus_listxattr` 函数调用 `hfsplus_uni2asc` 时，传入的参数是 `struct hfsplus_attr_unistr*` 类型的指针，但函数设计预期处理的是 `struct hfsplus_unistr*` 类型。
+这两个结构体的大小不同，导致 `hfsplus_uni2asc` 内部进行边界检查时使用了错误的长度限制（`HFSPLUS_MAX_STRLEN`）。当 `ustrlen` 值大于实际分配的内存大小时，指针在 unicode 缓冲区访问时越界，导致越界读取。
+
+#解决方案
+重构 `hfsplus_uni2asc` 函数接口，将原有的边界检查逻辑参数化：
+1. 将原 `hfsplus_uni2asc` 函数修改为静态内部函数，增加 `max_len` 参数用于指定最大长度限制。
+2. 新增封装函数 `hfsplus_uni2asc_str`，传入 `HFSPLUS_MAX_STRLEN` 作为最大长度，用于处理标准的 `struct hfsplus_unistr` 结构。
+3. 新增封装函数 `hfsplus_uni2asc_xattr_str`，传入 `HFSPLUS_ATTR_MAX_STRLEN` 作为最大长度，用于处理扩展属性相关的 `struct hfsplus_attr_unistr` 结构。
+4. 修改 `hfsplus_readdir` 和 `hfsplus_listxattr` 调用处，分别使用上述对应的新封装函数，确保边界检查使用正确的内存限制值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4d94951dd305d7c095f657ae824b0a439bde8851

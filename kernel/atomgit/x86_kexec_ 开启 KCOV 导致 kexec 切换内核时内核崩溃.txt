@@ -1,0 +1,25 @@
+#标题
+x86/kexec: 开启 KCOV 导致 kexec 切换内核时内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 CONFIG_KCOV 的内核上执行 kexec 切换到新内核时，系统陷入无尽的崩溃循环，导致 kexec 无法正常执行。复现方法如下：
+1. 使用 KCOV 插桩编译的内核启动。
+2. 执行命令加载新内核：`kexec -l /boot/otherKernel`
+3. 执行切换：`kexec -e`
+此时内核开始崩溃并在循环中重启。
+
+#主要错误日志
+未知
+
+#问题根因
+`load_segments()` 函数会更改段寄存器，这会使 GS base 失效，而 KCOV 依赖 GS base 来获取 per-cpu 数据。当 CONFIG_KCOV 被启用时，`load_segments()` 之后调用的任何插桩 C 代码（例如 `native_gdt_invalidate()`）会触发 KCOV 机制，由于 GS base 已失效，导致内核访问错误内存地址并崩溃，且该崩溃会不断循环。
+
+#解决方案
+通过修改 Makefile，禁用 `machine_kexec_64.c` 和 `physaddr.c` 两个源文件的 KCOV 插桩选项（`KCOV_INSTRUMENT_*.o := n`）。
+这样可以在保留 KCOV 与 KEXEC 兼容性（如 syzkaller 收集崩溃转储场景）的同时，避免对 KCOV 快速路径增加额外性能开销或对单个函数进行脆弱的插桩禁用，从而防止崩溃发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/24b62934b00dca4eb4475051a4992da25faa5028

@@ -1,0 +1,20 @@
+#标题
+resctrl: 修复开启 mbm_event 时 mkdir 计数器自动分配逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 mbm_event 的情况下，通过 mkdir 创建监控组时，无论 `mbm_assign_on_mkdir` 标志位是否设置，计数器都会被自动分配给新的 RMID 和 MBM 事件对。这导致计数器自动分配的策略控制失效，预期行为应为：仅当 `mbm_assign_on_mkdir` 设置时才自动分配，否则不应自动分配。
+
+#主要错误日志
+未知
+
+#问题根因
+内核对 `mbm_assign_on_mkdir` 标志位的检查位置错误。该检查本应在 `rdtgroup_assign_cntrs()` 函数中（用于控制创建监控组时是否自动分配计数器），但错误地放置在了 `rdtgroup_unassign_cntrs()` 函数中（用于监控组删除时的计数器取消分配）。由于删除监控组时应始终取消分配计数器，不应受 `mbm_assign_on_mkdir` 控制，这导致自动分配逻辑失去了开关控制。
+
+#解决方案
+将 `mbm_assign_on_mkdir` 的条件检查从 `rdtgroup_unassign_cntrs()` 函数移至 `rdtgroup_assign_cntrs()` 函数中。这确保了只有在系统支持监控、MBM 计数器分配功能已启用且 `mbm_assign_on_mkdir` 标志为真时，才会在创建目录时自动分配计数器；同时在删除目录时正常执行取消分配操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f21198ef166de5e5469473605fefc3ca6e11f77f

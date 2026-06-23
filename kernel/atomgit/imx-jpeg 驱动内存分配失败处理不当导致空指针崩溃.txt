@@ -1,0 +1,20 @@
+#标题
+imx-jpeg 驱动内存分配失败处理不当导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当驱动内存分配失败时，由于未执行清理操作，后续的分配错误检测会产生误报，导致缓冲区处于未初始化状态，进而引发 NULL 指针引用。
+
+#主要错误日志
+dev_err(jpeg->dev, "Could not allocate descriptors for slot %d", jpeg->slot_data.slot);
+
+#问题根因
+在 `mxc_jpeg_alloc_slot_data` 函数中，当内存分配失败进入 `err` 标签处理时，驱动没有清理已分配的资源（即未调用 `mxc_jpeg_free_slot_data`）。这导致内部状态残留，使得后续对分配失败的判断变为假阳性，系统试图使用未初始化的缓冲区从而触发空指针崩溃。
+
+#解决方案
+在错误处理路径 `err` 标签处增加调用 `mxc_jpeg_free_slot_data(jpeg)` 函数，确保在分配失败时正确释放资源并清理状态，防止后续操作访问未初始化的缓冲区。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/689dc2428b8dc8348da6a1b025450adde718a53d

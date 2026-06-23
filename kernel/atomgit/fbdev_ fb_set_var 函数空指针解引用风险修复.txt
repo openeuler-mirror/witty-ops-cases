@@ -1,0 +1,20 @@
+#标题
+fbdev: fb_set_var 函数空指针解引用风险修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 fb_set_var 设置可变屏幕参数过程中，如果 `fb_add_videomode` 执行失败，函数直接返回错误码，但未恢复 `info->var` 结构体。这导致 `info->var` 处于不一致的中间状态，后续代码（如 `fb_videomode_to_var`）在引用该结构体成员时可能引发空指针解引用，造成内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `fb_set_var` 在尝试添加视频模式失败（`ret` 为非 0 值）时，直接返回了错误码，遗漏了将 `info->var` 恢复为修改前保存的 `old_var` 的步骤。这导致 `info->var` 保留了无效或部分修改的状态，进而引发后续引用时的空指针解引用问题。
+
+#解决方案
+在 `fb_set_var` 函数中，当检测到 `fb_add_videomode` 返回错误时，在返回前增加 `info->var = old_var;` 操作，确保将显示参数回滚到修改前的状态，从而避免状态不一致引发的空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce905c6d783b31a3576a1069f9a68784733f5017

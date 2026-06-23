@@ -1,0 +1,25 @@
+#标题
+perf/x86/intel/uncore: SPR 服务器 IIO 自由运行计数器带宽统计刻度错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Sapphire Rapids (SPR) 服务器平台上使用 perf 工具监测 IIO（I/O）带宽时，`bw_in_port*`（输入带宽）和 `bw_out_port*`（输出带宽）事件的统计结果不准确。具体表现为计算出的带宽数值与实际业务流量不符，存在显著偏差。
+
+#主要错误日志
+未知
+
+#问题根因
+SPR 平台的 IIO 带宽自由运行计数器的配置直接沿用了 ICX（Ice Lake）平台的刻度，但这对于 SPR 是错误的：
+1. **输入带宽刻度错误**：SPR 的计数器每 32 字节增加一次，而不是 ICX 平台的 4 字节，导致沿用旧刻度（`3.814697266e-6`）计算出的带宽值严重偏低。
+2. **输出带宽无法固定刻度**：SPR 的 IIO 带宽输出计数器的增加量不固定，取决于请求的大小，因此无法找到一个固定的乘数来进行换算，导致无法通过简单的刻度转换得到正确的带宽数值。
+
+#解决方案
+修改内核代码 `arch/x86/events/intel/uncore_snbep.c`，重新调整 SPR 的 IIO 自由运行事件描述配置：
+1. 删除针对 SPR 特定的、包含错误刻度信息的 `spr_uncore_iio_freerunning_events` 数组定义。
+2. 将 `spr_uncore_iio_free_running` 结构体中的 `event_descs` 字段指向通用的 `snr_uncore_iio_freerunning_events`。
+此举移除了错误的带宽刻度配置，避免 perf 工具使用错误的换算公式，确保计数器数值按原始行为处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/950465cb69f0f67fac295af5ad125af1ea8f65c3

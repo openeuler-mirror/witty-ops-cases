@@ -1,0 +1,20 @@
+#标题
+cdx: driver_override_show 存在 UAF 与内核地址泄露风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发访问 sysfs 接口时，`driver_override_show()` 函数可能触发 Use-After-Free (UAF) 错误。由于该接口对所有用户可读，在特定竞态条件下，可能导致向用户空间泄露内核地址，带来安全隐患。
+
+#主要错误日志
+未知
+
+#问题根因
+`driver_override_show()` 与 `driver_override_store()` 同属于 `DEVICE_ATTR_RW`，可并发执行。`driver_override_store()` 调用 `driver_set_override()` 时持有设备锁 (`device_lock`) 更新并可能释放 `driver_override` 指针，而 `driver_override_show()` 在读取该指针时未加锁保护。若此时指针被并发释放，读取操作将访问已释放内存（UAF），进而可能打印出内核地址。
+
+#解决方案
+在 `driver_override_show()` 函数中增加锁保护。在读取 `cdx_dev->driver_override` 前后分别调用 `device_lock(dev)` 和 `device_unlock(dev)`，确保读取操作与写入操作的原子性，防止访问已释放指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/727663a7bf456efc967d922dc657181bc0f60aef

@@ -1,0 +1,26 @@
+#标题
+hwmon: (pmbus/q54sj108a2) fix stack overflow in debugfs read
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在访问 Q54SJ108A2 电源驱动 debugfs 接口读取数据时触发内核栈溢出。具体表现为：
+1. 栈内存破坏，可能导致内核 panic 或 oops。
+2. debugfs 读取到的数据内容全为零（因为错误地读取了零初始化的缓冲区），无法获取真实的 I2C 设备数据。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动函数 `q54sj108a2_debugfs_read` 在调用 `bin2hex()` 时存在两个严重错误：
+1. **参数传递错误**：源地址和目的地址传反了。代码将 `data`（I2C 读取的数据）作为目的地址，将 `data_char`（零初始化的缓冲区）作为源地址，导致输出全零。
+2. **缓冲区溢出**：`bin2hex()` 每个字节转换为两个十六进制字符，读取 32 字节会产生 64 字节输出。但目标缓冲区 `data` 仅为 34 字节，导致写入越界，覆盖了栈上其他数据。
+
+#解决方案
+1. **扩展缓冲区大小**：将用于存储十六进制输出的缓冲区 `data_char` 扩展至 66 字节（`I2C_SMBUS_BLOCK_MAX * 2 + 2`），防止溢出。
+2. **修正参数顺序**：调用 `bin2hex()` 时，正确传入源地址 `data` 和目的地址 `data_char`，确保数据转换正确。
+3. **修正输出指针**：引入指针变量 `out`，根据数据处理路径正确指向包含有效数据的缓冲区（`data` 或 `data_char`），并传递给 `simple_read_from_buffer`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f1c36aa32173ce094aa1c69a73bba7c03e63ab91

@@ -1,0 +1,24 @@
+#标题
+riscv: 修复异常处理路径下的栈回溯中断问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V 架构下，当进程发生异常或系统调用时，内核栈回溯功能失效。具体表现为调用栈追踪在 `handle_exception()` 处停止，无法继续打印异常发生前的用户空间或内核态调用栈信息，导致调试时丢失关键的上下文回溯数据。该问题是在引入优化异常处理延迟的改动后出现的。
+
+#主要错误日志
+未知
+
+#问题根因
+在引入 commit 5d5fc33ce58e ("riscv: Improve exception and system call latency") 之前，`ra` 寄存器会被填充为 `ret_from_exception` 的符号地址，栈回溯代码通过检查 `pc` 是否等于该符号地址来识别异常边界。
+优化后，`handle_exception` 改用常规的 `call` 指令调用 C 代码，导致返回地址不再固定为单一的 `ret_from_exception` 符号。原有的相等性检查逻辑失效，栈回溯代码无法正确识别异常处理区域的边界，导致遍历提前终止或出错。
+
+#解决方案
+修改栈回溯逻辑，将原来基于单一地址的相等性检查改为基于地址范围的检查：
+1. 在汇编文件 `arch/riscv/kernel/entry.S` 中，于 `ret_from_exception` 函数末尾添加一个全局符号 `ret_from_exception_end` 作为异常处理代码段的结束边界标记。
+2. 在 `arch/riscv/kernel/stacktrace.c` 中，声明外部符号 `ret_from_exception_end`，并将判断条件从 `pc == (unsigned long)handle_exception` 修改为 `pc >= (unsigned long)handle_exception && pc < (unsigned long)&ret_from_exception_end`。
+通过判断 PC 指针是否落在 `handle_exception` 到 `ret_from_exception_end` 之间的区间内，准确识别异常处理路径，恢复正确的栈回溯能力。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/49d26285f0b315a416759753e49bdee4af835d4b

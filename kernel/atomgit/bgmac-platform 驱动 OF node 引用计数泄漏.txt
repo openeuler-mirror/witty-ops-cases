@@ -1,0 +1,20 @@
+#标题
+bgmac-platform 驱动 OF node 引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核设备树（OF）节点引用计数发生泄漏。该问题由静态分析工具发现，在 `bgmac_probe` 函数执行过程中，通过 `of_parse_phandle` 获取的设备树节点在使用后未释放，导致该节点的引用计数无法平衡，长期累积可能导致内存泄漏或设备树节点资源无法正常释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bgmac_probe` 函数中，代码调用 `of_parse_phandle(np, "phy-handle", 0)` 获取设备树节点指针，用于判断连接方式。但在检查完节点是否存在后，代码直接丢弃了该指针，未调用 `of_node_put()` 来减少引用计数。这违反了设备树节点引用计数的使用规范，导致节点引用计数泄漏。
+
+#解决方案
+修改 `bgmac_probe` 函数逻辑，引入局部变量 `phy_node` 存储 `of_parse_phandle` 的返回值。在确认节点存在后，立即调用 `of_node_put(phy_node)` 释放对该节点的引用，从而平衡引用计数，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/50d2a532c4368f3a1a4f928d8924b3b3d5b294be

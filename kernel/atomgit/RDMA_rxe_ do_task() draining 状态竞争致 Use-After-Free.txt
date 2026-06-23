@@ -1,0 +1,23 @@
+#标题
+RDMA/rxe: do_task() draining 状态竞争致 Use-After-Free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA/rxe 模块中，当 `do_task()` 函数耗尽迭代预算准备重新调度时，若此时并发执行 `rxe_cleanup_task()` 或 `rxe_disable_task()`，可能发生状态竞争。该竞争会导致任务在应处于 DRAINING（排空）状态时错误地重置为 IDLE 并重新调度，进而引发 Use-After-Free（释放后使用）漏洞。
+
+#主要错误日志
+未知
+
+#问题根因
+该问题是在内核从 tasklets 迁移到 workqueues 的过程中引入的（Commit 9b4b7c1f9f54）。根本原因在于 `do_task()` 在迭代次数用尽时（`!ret`），直接将任务状态设置为 `TASK_STATE_IDLE` 以便重调度，而未二次检查当前状态。
+与此同时，`rxe_cleanup_task()` 和 `rxe_disable_task()` 在等待任务排空时会释放自旋锁。如果 `do_task()` 恰好在此窗口期获取锁并覆盖了 `TASK_STATE_DRAINING` 状态，清理逻辑将错误地继续执行，导致任务在资源释放后仍被调度运行，造成 Use-After-Free。
+
+#解决方案
+修复补丁恢复了迁移前的处理逻辑。在 `do_task()` 中，当迭代预算耗尽时，增加对 `TASK_STATE_DRAINING` 状态的判断：
+1. 如果状态不是 `TASK_STATE_DRAINING`，则保持原逻辑，设置状态为 `TASK_STATE_IDLE` 并标记重调度。
+2. 如果状态已经是 `TASK_STATE_DRAINING`，则设置 `cont = 1` 强制进行新一轮循环。这使得任务能够继续执行直到进入 switch 语句并正确转换为 `TASK_STATE_DRAINED` 状态，从而按预期停止任务，避免竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/971e910c862555e72fa493e82b767966108e57e8

@@ -1,0 +1,26 @@
+#标题
+sw64: 虚拟化场景下 PINTC 中断控制器工作异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构虚拟化环境中，虚拟 PINTC（Virtual PINTC）无法正常工作。由于驱动代码未区分物理机和虚拟机场景，错误地尝试映射物理 PINTC 专属的寄存器地址，导致中断控制器初始化失败，进而影响虚拟机中断处理功能。
+
+#主要错误日志
+PINTC: failed to map pintc base address
+PINTC: failed to map mcu base address
+（注：当虚拟化场景下无法映射寄存器时触发）
+
+#问题根因
+虚拟 PINTC 与物理 PINTC 存在本质差异：
+1. 虚拟 PINTC 不具备物理 PINTC 的硬件寄存器，驱动在初始化时强制尝试 ioremap 这些不存在的寄存器地址导致失败。
+2. 包含虚拟 PINTC 的中断控制器拓扑结构为扁平结构，与物理 PINTC 的层级结构不同，原代码未针对虚拟化场景适配正确的 irq_chip 操作结构体。
+
+#解决方案
+1. 修复初始化逻辑：在 `pintc_of_init_common` 函数中增加虚拟化环境判断（`vt` 标志），如果是虚拟环境，跳过 `pintc_base` 和 `mcu_base` 的 ioremap 操作，避免因映射失败导致驱动加载失败。
+2. 抽象 irq_chip 操作：新增 `mcu_chip` 指针成员，针对虚拟环境引入精简版的 `pintc_mcu_vt_chip` 结构体，仅包含基本名称，不包含硬件寄存器操作；物理环境则继续使用完整的 `pintc_mcu_chip`。
+3. 适配中断映射：新增 `pintc_mcu_map_irq` 函数并注册到 `irq_domain_ops` 的 `.map` 接口，确保在 Legacy 模式下也能正确设置中断处理函数和标志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e20bb849c2044010743b41937a63d8baf33d2d54

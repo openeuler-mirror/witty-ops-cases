@@ -1,0 +1,25 @@
+#标题
+amd-xgbe: RX checksum offload 关闭后因依赖特性未同步导致行为异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在禁用网卡 RX checksum offload（接收校验和卸载）功能时，系统未同步关闭 Split Header（拆包头）、VXLAN 等依赖特性。根据 XGMAC 规范，这些特性开启时会自动选择 IPC Full Checksum Offload Engine。当 RX checksum offload 被关闭而这些依赖特性仍处于开启状态时，会引发特性依赖不匹配，导致网络设备行为异常、功能不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 XGMAC 规范，启用 Layer 3/Layer 4 Packet Filtering、Split Header 和 Virtualized Network support 等特性会自动在接收端选择 IPC Full Checksum Offload Engine。问题根因在于驱动程序在处理 `xgbe_set_features` 时，仅对 RX checksum offload 进行了开启或关闭操作，未同步处理其依赖的特性。当 RX checksum offload 被禁用时，Split Header 和 VXLAN 功能未被相应禁用，这种特性依赖的不匹配导致了异常行为。
+
+#解决方案
+修改驱动程序逻辑，确保在切换 RX checksum offload 状态时，同步切换其依赖的特性：
+1. 在禁用 RX checksum offload 时，同步调用 `disable_sph` 和 `disable_vxlan` 接口关闭拆包头和 VXLAN 功能，并调度重启工作队列。
+2. 在启用 RX checksum offload 时，同步调用 `enable_sph` 和 `enable_vxlan` 接口开启相应功能，并调度重启工作队列。
+3. 新增 `xgbe_disable_sph_mode` 函数实现拆包头模式的关闭逻辑。
+4. 在设备初始化阶段 (`xgbe_init`)，根据当前 `NETIF_F_RXCSUM` 特性状态决定是否初始化 RSS 和 SPH 模式，保证初始状态一致。
+5. 调整接收缓冲区映射逻辑 (`xgbe_map_rx_buffer`)，根据 RX checksum offload 是否启用来设置正确的 header buffer 大小。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c152c6812faa00111365ad389c0510e80f08cdcb

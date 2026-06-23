@@ -1,0 +1,20 @@
+#标题
+ext4 mb_check_buddy 中因预分配块耗尽导致组号断言失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当开启 MB_CHECK_ASSERT 宏进行调试时，若块组末尾的预分配空间被耗尽，在 `__mb_check_buddy` 检查时会触发断言失败。系统报错："Assertion failure in mb_free_blocks() : "groupnr == e4b->bd_group""。这实际上是一个误报，会导致系统在特定的预分配耗尽场景下异常中断或打印错误堆栈。
+
+#主要错误日志
+Assertion failure in mb_free_blocks() : "groupnr == e4b->bd_group"
+
+#问题根因
+当位于块组末尾的预分配空间耗尽时（例如在 32768 块的组中 pa_pstart 推进到 32768），其起始地址已指向下一个块组。如果该耗尽的 pa（pa_len == 0）仍暂时停留在 bb_prealloc_list 链表中，检查逻辑调用 `ext4_get_group_no_and_offset` 获取组号时会得到下一个块组的编号，导致其与当前块组编号比较时触发断言失败。这是对处于过渡状态（即将被移除）的空预分配结构的错误检查。
+
+#解决方案
+在 `__mb_check_buddy` 遍历预分配链表时，增加对 `pa->pa_len` 的判断。如果 `pa->pa_len` 为 0，则跳过后续的组号验证检查，因为这类条目处于耗尽的过渡状态，即将从链表中移除，不应触发断言。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c7b687dca21e66eabc9fd4bd9ccc13bb5107eb9

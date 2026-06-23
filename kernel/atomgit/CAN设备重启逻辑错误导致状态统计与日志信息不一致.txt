@@ -1,0 +1,25 @@
+#标题
+CAN设备重启逻辑错误导致状态统计与日志信息不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 CAN 设备执行重启操作时，如果底层 `do_set_mode` 调用失败，系统仍会错误地增加重启统计计数器（`restarts`）并打印 "restarted" 调试日志，导致用户看到的统计信息与日志信息显示重启成功，但实际上设备并未成功重启且处于停止状态。
+
+#主要错误日志
+- 调试日志（修复前位置）：`restarted`
+- 错误日志（修复前格式）：`Error %d during restart`
+- 错误日志（修复后格式）：`Restart failed, error %pe`
+
+#问题根因
+在 CAN 设备重启函数 `can_restart` 中，重启统计计数的增加和调试日志的打印被放置在调用 `do_set_mode` 执行实际重启操作之前。这意味着无论后续重启操作是否成功，内核都会记录重启成功。当 `do_set_mode` 返回错误时，设备并未真正重启，但统计数据和日志已错误地表明重启完成，导致内核状态与硬件实际状态不一致。
+
+#解决方案
+调整代码执行顺序，将调试日志打印和 `can_stats.restarts` 统计增加的操作移动到 `do_set_mode` 调用成功之后。
+具体修改如下：
+1. 将 `netdev_dbg(dev, "restarted\n")` 和 `priv->can_stats.restarts++` 移至 `if (err)` 判断的 `else` 分支中，确保仅在重启成功时执行。
+2. 优化错误日志打印格式，使用 `%pe` 打印错误指针符号名而非数字错误码，提升可读性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6e82415eb7ea81e9695580f1afa19459eb265455

@@ -1,0 +1,24 @@
+#标题
+sw64: pci: numa_off模式下无法获取Node ID导致PCIe控制器初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核启动参数设置 `numa_off` 时，PCIe 控制器初始化失败。原因是此时无法正确获取 Node ID，导致 PCIe 控制器无法标记为 "link up" 状态，进而影响后续配置读写操作及控制器初始化流程。
+
+#主要错误日志
+- dev_err(&adev->dev, "unable to get node ID\n");
+- pr_info("RC link down\n");
+- （推断）初始化失败时可能伴随返回 -EINVAL 错误。
+
+#问题根因
+在 `pci-sunway.c` 的 `sw64_pci_ecam_init` 函数中，代码无条件调用 `acpi_get_node()` 获取 Node ID，并在返回 `NUMA_NO_NODE` 时直接报错退出。当设置 `numa_off` 时，ACPI NUMA 功能被禁用，`acpi_get_node()` 无法返回正确的 Node ID，导致 PCIe 控制器初始化逻辑误判失败。
+此外，原有代码使用全局位图 `rc_linkup` 并依赖 `(node, index)` 来标记链路状态，这也使得 Node ID 成为关键依赖项。
+
+#解决方案
+1. 修改 `sw64_pci_ecam_init` 函数逻辑，增加 `#ifdef CONFIG_ACPI_NUMA` 宏保护，并在调用 `acpi_get_node()` 前检查 `numa_off` 变量。当 `numa_off` 为真时，跳过 ACPI Node ID 获取步骤，避免返回无效值导致的初始化失败。
+2. 将 PCIe 链路状态标记方式从“依赖 Node ID 的全局位图”改为“依赖 `struct pci_controller` 结构体内的 `linkup` 字段”。在 `pci_controller` 结构体中新增 `bool linkup` 成员，修改 `pci_mark_rc_linkup`、`pci_clear_rc_linkup` 和 `pci_get_rc_linkup` 等接口，直接操作 `hose->linkup`，从而解除了链路状态检查对 Node ID 的强依赖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eaf6947d8c29a4828cdda2364af22ca4caaec467

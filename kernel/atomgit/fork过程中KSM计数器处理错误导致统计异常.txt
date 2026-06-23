@@ -1,0 +1,23 @@
+#标题
+fork过程中KSM计数器处理错误导致统计异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用KSM（Kernel Samepage Merging）功能的场景下，进程调用fork创建子进程时，子进程的`mm_struct`中的KSM相关计数器（如`ksm_merging_pages`、`ksm_rmap_items`）未正确初始化，继承了父进程的数值，导致KSM的零页统计计数器`ksm_zero_pages`计算错误或出现统计泄漏，影响系统内存管理的准确性。
+
+#主要错误日志
+未知
+
+#问题根因
+在`ksm_fork`函数中，当父进程设置了`MMF_VM_MERGEABLE`标志位时，代码直接调用`__ksm_enter(mm)`将子进程加入KSM管理，但未对子进程`mm_struct`中的`ksm_merging_pages`和`ksm_rmap_items`字段进行清零初始化。这导致子进程继承了父进程的统计值，同时`ksm_zero_pages`的全局计数也未正确累加子进程应有的初始值，从而引发计数错误。
+
+#解决方案
+在`ksm_fork`函数内部、调用`__ksm_enter(mm)`之前，对子进程的`mm_struct`相关字段进行显式初始化：
+1. 将子进程的`mm->ksm_merging_pages`设置为0。
+2. 将子进程的`mm->ksm_rmap_items`设置为0。
+3. 读取子进程当前的`ksm_zero_pages`值，并将其累加到全局变量`ksm_zero_pages`中，确保零页统计的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1576db76f9943a5a3572957d7d30109343c48f70

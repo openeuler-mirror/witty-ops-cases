@@ -1,0 +1,23 @@
+#标题
+ALSA: usb-audio: UAC3 流解析时 PD 对象内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在解析 UAC3 流时，如果 audioformat 与其他流共享同一 endpoint，该 audioformat 会被添加到链表中，但此时新分配的 PD（Power Domain）对象未被正确赋值给流也未释放，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__snd_usb_parse_audio_interface()` 循环处理中，每次迭代都会分配一个 PD 对象。当 audioformat 与其他流共享同一 endpoint 时，`snd_usb_add_audio_stream()` 会将其加入链表并返回，但此时 PD 对象的所有权管理混乱：既未成功赋值给子流（`subs->str_pd`），也未在后续路径中被释放。代码中对 PD 对象的所有权处理不够严谨，导致特定路径下对象遗漏。
+
+#解决方案
+重构 PD 对象的生命周期管理：
+1. 将 PD 指针的传递方式改为二级指针（`struct snd_usb_power_domain **pdptr`），并在函数 `snd_usb_add_audio_stream` 和 `snd_usb_init_substream` 中传递该二级指针。
+2. 在 `snd_usb_init_substream` 中，若 PD 成功赋值给子流，则将调用者持有的指针置为 NULL（`*pdptr = NULL`），明确所有权转移。
+3. 在 `__snd_usb_parse_audio_interface()` 循环中使用 `__free(kfree)` 自动清理属性定义 PD 指针。若 PD 对象被成功赋予流，指针被置空，自动清理不生效；若未成功赋值（如循环结束或错误路径），自动清理机制将释放剩余对象，从而杜绝泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/83edd54bdd1b723e4de6ff276a14bc533c66205f

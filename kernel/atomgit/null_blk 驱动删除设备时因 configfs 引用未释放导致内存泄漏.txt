@@ -1,0 +1,33 @@
+#标题
+null_blk 驱动删除设备时因 configfs 引用未释放导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核配置启用 `CONFIG_BLK_DEV_NULL_BLK_FAULT_INJECTION` 的情况下，当移除 null_blk 设备（nullbX）时，内核内存分配器（kmemleak）报告存在内存泄漏。泄漏的对象为与故障注入相关的 configfs 配置项。
+
+#主要错误日志
+```
+unreferenced object 0xc00000021ff25c40 (size 32):
+  comm "mkdir", pid 10665, jiffies 4322121578
+  hex dump (first 32 bytes):
+    69 6e 69 74 5f 68 63 74 78 5f 66 61 75 6c 74 5f  init_hctx_fault_
+    69 6e 6a 65 63 74 00 88 00 00 00 00 00 00 00 00  inject..........
+  backtrace (crc 1a018c86):
+    __kmalloc_node_track_caller_noprof+0x494/0xbd8
+    kvasprintf+0x74/0xf4
+    config_item_set_name+0xf0/0x104
+    config_group_init_type_name+0x48/0xfc
+    fault_config_init+0x48/0xf0
+    ...
+```
+
+#问题根因
+null_blk 驱动在初始化故障注入支持时，会创建 `timeout_inject`、`requeue_inject` 和 `init_hctx_fault_inject` 三个 configfs items 作为顶层 nullbX configfs group 的子项，并持有它们的引用。然而，在移除 nullbX 设备时，驱动仅释放了顶层 configfs group 的引用，未显式释放对这些子 configfs items 的引用，导致这些对象无法被回收从而引起内存泄漏。
+
+#解决方案
+在删除 nullb 设备的流程中（`nullb_group_drop_item` 函数），显式调用 `config_item_put` 释放对 `timeout_inject`、`requeue_inject` 和 `init_hctx_fault_inject` 三个 configfs items 的引用。补丁通过新增 `nullb_del_fault_config` 函数实现该释放逻辑，确保设备移除时相关资源被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dd5cd1f4bf39b3c44cf154e6e3a3a75e82cb393e

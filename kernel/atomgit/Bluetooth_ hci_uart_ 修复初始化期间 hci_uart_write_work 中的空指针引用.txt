@@ -1,0 +1,20 @@
+#标题
+Bluetooth: hci_uart: 修复初始化期间 hci_uart_write_work 中的空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hci_uart 设备初始化过程中，若 TTY 发生写唤醒（write wakeup）事件，内核可能因竞态条件触发空指针引用，导致内核崩溃或调用栈异常。
+
+#主要错误日志
+未知
+
+#问题根因
+hci_uart_set_proto() 在调用 hci_uart_register_dev() 之前就设置了 HCI_UART_PROTO_INIT 标志位。随后 hci_uart_register_dev() 调用 proto->open() 初始化 hu->priv。在此期间，若 TTY 发生写唤醒，hci_uart_tx_wakeup() 检测到 HCI_UART_PROTO_INIT 标志已设置，便会调度 write_work 执行 hci_uart_write_work()。此时 hu->priv 尚未初始化完成（为 NULL），导致 proto->dequeue() 访问 hu->priv 时发生 NULL pointer dereference。
+
+#解决方案
+将 set_bit(HCI_UART_PROTO_INIT, &hu->flags) 的调用位置从 hci_uart_set_proto() 函数移至 hci_uart_register_dev() 函数内部，且置于 proto->open() 成功执行之后。这确保了 hu->priv 必须在初始化完成后，才允许调度 write_work，从而避免了竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab425e50806adac276892f799cde053f692dd10d

@@ -1,0 +1,22 @@
+#标题
+LoongArch架构cacheinfo共享信息显示错误导致L1/L2实例数统计异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在Loongson-3A6000处理器（4核8线程）上，通过 `lscpu` 命令查询缓存信息时，L1d、L1i 和 L2 缓存的实例数量显示错误。
+修复前显示为 8 个实例（L1d: 512 KiB x 8, L1i: 512 KiB x 8, L2: 2 MiB x 8），未能正确反映 SMT 核心共享私有缓存的拓扑关系。
+修复后正确显示为 4 个实例（L1d: 256 KiB x 4, L1i: 256 KiB x 4, L2: 1 MiB x 4）。
+
+#主要错误日志
+未知
+
+#问题根因
+SMT 核心及其兄弟核心共享相同的 L1 和 L2 私有缓存，但内核在初始化 cacheinfo 时，`cache_cpumap_setup` 函数未正确处理 SMT 线程间的缓存共享关系。导致 `shared_cpu_map` 未包含 SMT 兄弟线程，进而导致系统误判每个线程拥有独立的 L1/L2 缓存实例。
+
+#解决方案
+修改 `arch/loongarch/kernel/cacheinfo.c` 中的 `cache_cpumap_setup` 函数。在判断缓存块是否共享之前，增加对 SMT 兄弟线程的检测逻辑：如果两个 CPU 是 SMT 兄弟关系（通过 `cpus_are_siblings` 判断），则直接互相设置 `shared_cpu_map`，从而正确反映 SMT 核心共享 L1/L2 缓存的事实。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cf5e7fb0aab363c11cab76784c5be7694fd88637

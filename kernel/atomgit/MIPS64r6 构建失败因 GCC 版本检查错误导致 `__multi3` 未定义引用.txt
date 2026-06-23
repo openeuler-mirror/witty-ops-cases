@@ -1,0 +1,22 @@
+#标题
+MIPS64r6 构建失败因 GCC 版本检查错误导致 `__multi3` 未定义引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用受影响的 GCC 版本编译 MIPS64r6 内核时，构建过程中断，链接器报告未定义引用错误。
+
+#主要错误日志
+mips64-linux-ld: lib/math/div64.o: in function `mul_u64_add_u64_div_u64':
+div64.c:(.text+0x84): undefined reference to `__multi3'
+
+#问题根因
+GCC 10 之前的版本（特别是 GCC 7-9）在 MIPS64r6 架构下进行 64 位 widening multiplication 时，会低效地生成 `__multi3` 库调用，而该操作本应由合适的机器指令完成。
+内核代码中的条件编译判断 `__GNUC__ < 8` 不准确，导致在 GCC 8 和 GCC 9 编译环境下未使能 `__multi3` 的内核实现代码，从而引发链接阶段的符号缺失错误。
+
+#解决方案
+修正 `arch/mips/lib/multi3.c` 中的 GCC 版本检查宏条件。将判断条件从 `(__GNUC__ < 8)` 修改为 `(__GNUC__ < 10)`，确保在 GCC 10 修复该问题之前，内核均提供 `__multi3` 的实现以解决链接失败问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/901c174f97791beaf8759b134f1dcd3d258a5e4f

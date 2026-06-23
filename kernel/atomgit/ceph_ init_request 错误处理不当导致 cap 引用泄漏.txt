@@ -1,0 +1,26 @@
+#标题
+ceph: init_request 错误处理不当导致 cap 引用泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Ceph 客户端在处理预读操作时发生 cap 引用计数泄漏。观测到内核日志中反复出现 "revocation" 和 "get_cap_refs" 相关记录，且 MDS（元数据服务器）随后报告内核客户端释放 cap 超时。
+
+#主要错误日志
+<7>[ 5413.970692] ceph:  get_cap_refs 00000000958c114b ret 1 got Fr
+<7>[ 5413.970695] ceph:  start_read 00000000958c114b, no cache cap
+...
+<7>[ 5473.934609] ceph:   my wanted = Fr, used = Fr, dirty -
+<7>[ 5473.934616] ceph:  revocation: pAsLsXsFr -> pAsLsXs (revoking Fr)
+<7>[ 5473.934632] ceph:  __ceph_caps_issued 00000000958c114b cap 00000000f7784259 issued pAsLsXs
+<7>[ 5473.934638] ceph:  check_caps 10000000e68.fffffffffffffffe file_want - used Fr dirty - flushing - issued pAsLsXs revoking Fr retain pAsLsXsFsr  AUTHONLY NOINVAL FLUSH_FORCE
+
+#问题根因
+一系列代码变更（特别是 commit 2de160417315）修改了 `init_request()` 的错误处理逻辑，导致当该函数返回错误时，不再调用清理函数。具体在 `ceph_init_request` 函数中，如果获取了 cap 引用但后续初始化流程失败，错误处理分支缺少 `ceph_put_cap_refs()` 调用，导致 cap 引用无法释放，从而引起泄漏。
+
+#解决方案
+在 `ceph_init_request` 函数的错误返回路径中补充资源清理逻辑。当函数返回值 `ret < 0` 时，检查是否已获取 cap 引用（`got` 变量非 0），若已获取则调用 `ceph_put_cap_refs` 释放引用，随后释放 `priv` 内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9432f26cdfa17778225ddce658e87148c5d8415c

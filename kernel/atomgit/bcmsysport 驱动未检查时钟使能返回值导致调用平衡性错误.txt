@@ -1,0 +1,24 @@
+#标题
+bcmsysport 驱动未检查时钟使能返回值导致调用平衡性错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 bcm_sysport 驱动的 probe、open 或 resume 流程中，若时钟（priv->clk）使能失败，系统未能捕获该错误。这导致驱动继续执行后续初始化逻辑，可能引发不可预测的硬件访问错误。同时，由于错误路径处理缺失，后续在 remove、close 或 suspend 流程中可能错误地对并未成功使能的时钟进行禁用操作（clk_disable_unprepare），破坏了时钟引用计数的平衡性。
+
+#主要错误日志
+[   12.345678] bcm_sysport ff800000.ethernet: could not enable priv clock
+或
+[   12.345678] eth0: could not enable priv clock
+
+#问题根因
+驱动代码在调用 `clk_prepare_enable(priv->clk)` 时，直接忽略了返回值，未检查时钟是否成功使能。这导致：
+1. 时钟使能失败时，程序继续执行依赖该时钟的硬件寄存器读写操作。
+2. 在因其他原因触发的错误处理或设备移除流程中，代码无条件执行 `clk_disable_unprepare(priv->clk)`，对未使能的时钟进行禁用，导致时钟状态不一致。
+
+#解决方案
+在 `bcm_sysport_open`、`bcm_sysport_probe` 和 `bcm_sysport_resume` 函数中增加对 `clk_prepare_enable` 返回值的检查。如果返回非零值，表示时钟使能失败，此时打印错误日志并直接返回错误码或跳转至正确的错误处理标号（如 `err_deregister_netdev`），避免继续执行初始化步骤，防止后续对时钟进行不平衡的禁用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75009089ab68c2c74cf7377a1a69f89e95a56b10

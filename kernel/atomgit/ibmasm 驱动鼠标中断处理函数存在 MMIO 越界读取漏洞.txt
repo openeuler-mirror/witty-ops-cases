@@ -1,0 +1,20 @@
+#标题
+ibmasm 驱动鼠标中断处理函数存在 MMIO 越界读取漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当服务处理器被攻破或出现异常硬件状态时，向读写索引 MMIO 寄存器写入超出 `REMOTE_QUEUE_SIZE` (60) 范围的值并触发中断，导致内核进行越界 MMIO 读取。若数值过大导致地址超出 PCI BAR 映射范围，将触发机器检查异常；否则会读取到非预期的设备寄存器数据。
+
+#主要错误日志
+未知
+
+#问题根因
+`ibmasm_handle_mouse_interrupt()` 函数在处理鼠标中断时，直接将从硬件读取的 `reader` 和 `writer` 索引值传入 `get_queue_entry()` 函数进行指针计算（`queue_begin + reader * sizeof(struct remote_input)`），未进行边界检查。恶意的服务处理器可以写入越界值，导致 `memcpy_fromio()` 从错误的 MMIO 地址读取数据，引发内存访问违规或机器检查异常。
+
+#解决方案
+在 `ibmasm_handle_mouse_interrupt()` 函数的主循环开始处，增加对 `reader` 和 `writer` 索引值的边界检查。判断它们是否大于等于 `REMOTE_QUEUE_SIZE`，如果越界则调用 `set_queue_reader(sp, 0)` 重置读索引并跳出循环，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/196bf3d2314e3be59d20c5d582cb65d3ac6f9f75

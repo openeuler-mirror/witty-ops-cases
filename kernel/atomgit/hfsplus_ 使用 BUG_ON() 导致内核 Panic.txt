@@ -1,0 +1,21 @@
+#标题
+hfsplus: 使用 BUG_ON() 导致内核 Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载或操作 HFS+ 文件系统过程中，若属性文件状态不一致，内核直接触发 BUG_ON() 导致系统 Panic/Oops，系统崩溃不可用。
+
+#主要错误日志
+[内核日志] Kernel panic - not syncing: kernel BUG at fs/hfsplus/xattr.c:xxx
+(注：原代码为 BUG_ON() 宏触发，典型日志如上)
+
+#问题根因
+在 `hfsplus_create_attributes_file` 函数中，代码使用 `BUG_ON(i_size_read(attr_file) != 0)` 检查属性文件大小。当文件系统元数据不一致（如 attribute file 大小非 0）时，内核直接调用 BUG() 终止系统，而非进行错误处理。对于文件系统损坏这类非致命错误，不应导致内核崩溃。
+
+#解决方案
+移除 `BUG_ON()` 宏，改为使用条件判断处理错误。当检测到属性文件大小不为 0 时，设置错误码 -EIO，打印错误日志提示运行 fsck.hfsplus 修复，并跳转至错误处理流程（`goto end_attr_file_creation`）以正常返回错误，避免系统崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/edbaa06833dbe9e5d8e65524d2ef7fd63f861c0c

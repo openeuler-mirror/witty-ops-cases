@@ -1,0 +1,22 @@
+#标题
+dvb-core: DVR设备重打开时环形缓冲区错误重初始化导致waitqueue孤立
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当多个读者打开同一个DVR设备时，如果发生重打开操作，会导致内核崩溃或内存破坏。具体表现为：
+1. 已通过io_uring或epoll注册的等待队列条目被孤立，持有过期的prev/next指针。
+2. 后续对等待队列的操作可能触发内核恐慌或链表遍历错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dvb_dvr_open()` 函数中，每次打开设备时错误地调用了 `dvb_ringbuffer_init()`。该函数内部会调用 `init_waitqueue_head()`，将共享的等待队列头 `dmxdev->dvr_buffer.queue` 重新初始化为空。由于该等待队列是共享资源（同一DVR设备的所有打开操作共享），此操作切断了现有的等待队列链表，导致已有的等待项（来自io_uring poll或epoll）被从链表中移除且指针失效。
+
+#解决方案
+在 `dvb_dvr_open()` 路径中移除 `dvb_ringbuffer_init()` 调用，改为直接赋值 `data` 和 `size` 成员，并调用 `dvb_ringbuffer_reset()` 函数。这样仅重置缓冲区的读写位置和错误状态，避免触碰已初始化的等待队列和自旋锁，从而防止孤立现有等待队列条目。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/49492d38cafbd0929dfbee013a19622bd60a5275

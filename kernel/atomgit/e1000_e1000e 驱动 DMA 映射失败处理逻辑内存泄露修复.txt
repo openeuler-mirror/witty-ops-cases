@@ -1,0 +1,21 @@
+#标题
+e1000/e1000e 驱动 DMA 映射失败处理逻辑内存泄露修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 e1000 或 e1000e 网卡驱动进行发送（TX）数据包处理时，若遇到 DMA 映射失败（DMA map failed），驱动程序在执行错误清理流程时会导致内存泄露。系统日志中会出现 DMA 映射失败的报错信息，且伴随内存资源未能正确释放。
+
+#主要错误日志
+- e1000: "TX DMA map failed\n"
+- e1000e: "Tx DMA map failed\n"
+
+#问题根因
+在 `e1000_tx_map` 和 `e1000e_tx_map` 函数的 `dma_error` 错误处理标签处，代码逻辑存在缺陷。原代码在清理已映射的 buffer 之前执行了 `if (count) count--;` 操作。这导致在 `while (count--)` 循环清理先前映射的 DMA 缓冲区时，计数值 `count` 被非预期地减少了一次。结果是最先成功映射的那个 buffer（即当前发生错误的前一个 buffer）没有被纳入清理范围，从而导致该 buffer 对应的 DMA 映射未能被取消，造成内存泄露。
+
+#解决方案
+删除 `dma_error` 错误处理代码块中的 `if (count) count--;` 判断语句。修改后，当 DMA 映射失败时，`count` 变量能正确反映已成功映射需清理的 buffer 数量，随后的 `while (count--)` 循环能正确遍历并清理所有已分配的资源，防止内存泄露。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ea4288abdd49fbb567acff03e44b1c87f309d18a

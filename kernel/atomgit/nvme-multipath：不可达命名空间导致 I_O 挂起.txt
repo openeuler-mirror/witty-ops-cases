@@ -1,0 +1,38 @@
+#标题
+nvme-multipath：不可达命名空间导致 I/O 挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在目标端执行重复的命名空间重映射操作期间，若部分路径不可达且活跃路径被优先移除，系统会出现扫描进程卡死（D 状态）的现象，导致进程无法继续执行。
+
+#主要错误日志
+[<0>] folio_wait_bit_common+0x12a/0x310
+[<0>] filemap_read_folio+0x97/0xd0
+[<0>] do_read_cache_folio+0x108/0x390
+[<0>] read_part_sector+0x31/0xa0
+[<0>] read_lba+0xc5/0x160
+[<0>] efi_partition+0xd9/0x8f0
+[<0>] bdev_disk_changed+0x23d/0x6d0
+[<0>] blkdev_get_whole+0x78/0xc0
+[<0>] bdev_open+0x2c6/0x3b0
+[<0>] bdev_file_open_by_dev+0xcb/0x120
+[<0>] disk_scan_partitions+0x5d/0x100
+[<0>] device_add_disk+0x402/0x420
+[<0>] nvme_mpath_set_live+0x4f/0x1f0 [nvme_core]
+[<0>] nvme_mpath_add_disk+0x107/0x120 [nvme_core]
+[<0>] nvme_alloc_ns+0xac6/0xe60 [nvme_core]
+[<0>] nvme_scan_ns+0x2dd/0x3e0 [nvme_core]
+[<0>] nvme_scan_work+0x1a3/0x490 [nvme_core]
+
+#问题根因
+当存在多个路径且部分路径不可达时，如果活跃路径被优先移除，`nvme_find_path()` 会在 `ns_head` 中重新排队 I/O（因为路径列表中仍存在路径）。然而，由于剩余路径均处于非活跃状态，重排队列表永远不会被触发执行，导致 I/O 无法处理进而引发挂起。此外，在 `nvme_mpath_shutdown_disk` 中，未正确检查 `NVME_NSHEAD_DISK_LIVE` 标志位状态即进行操作，导致时序错误。
+
+#解决方案
+1. 在 `nvme_available_path()` 函数中增加对 `NVME_NSHEAD_DISK_LIVE` 标志位的检查，若该位未置位则直接返回 NULL，避免在磁盘非活跃时尝试查找路径。
+2. 修改 `nvme_mpath_shutdown_disk()` 函数逻辑，使用 `test_and_clear_bit` 原子操作清除 `NVME_NSHEAD_DISK_LIVE` 标志位，确保在清除该标志位后才执行 `del_gendisk` 和重排队工作。
+3. 增加同步 RCU (`synchronize_srcu`) 操作并调度 `requeue_work`，确保在所有路径移除后，I/O 能被正确重新排队并以失败终止，从而解除挂起状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a7613702280992263b9956989377d6f51e723b4e

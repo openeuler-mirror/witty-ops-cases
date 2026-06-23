@@ -1,0 +1,21 @@
+#标题
+perf probe 探测 C++ 重载函数时地址定位错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `perf probe` 对 C++ 程序中的重载函数（如 `print_data(int)`）进行探测时，工具查找到的符号地址是正确的，但在实际写入 uprobe_events 时使用了错误的偏移地址，导致探测点被错误地定位到另一个重载函数（如 `print_data(Point&)`）上，造成探测失效或探测到错误的代码位置。
+
+#主要错误日志
+Symbol print_data(int) address found : afc
+Writing event: p:probe_test_cpp_mangle/test /home/niayan01/test_cpp_mangle:0xb38
+
+#问题根因
+在 `debuginfo__find_probe_point` 函数中，查找探测点时调用了 `dwarf_diename()` 获取函数名。对于 C++ 重载函数，该函数返回的是去除了参数信息的通用函数名（如 "print_data"），而非唯一的链接名（Mangled Name，如 "_Z10print_datai"）。由于多个重载函数共用同一个通用名，导致工具在计算偏移量时匹配到了错误的函数基址，从而生成了错误的探测地址。
+
+#解决方案
+修改 `tools/perf/util/probe-finder.c` 中的逻辑，优先调用 `die_get_linkage_name()` 获取唯一的链接名；若 DIE 中不存在链接名，再回退使用 `dwarf_diename()` 获取通用名。以此确保在处理 C++ 重载函数时能根据唯一的符号名计算正确的偏移地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c955acca1fb317a10c59dda80327fd78574ca99a

@@ -1,0 +1,24 @@
+#标题
+genksyms 解析重复符号时引发内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 genksyms 工具处理内核符号时，若 *.symref 文件中包含重复定义的符号，工具内部会发生内存泄漏。虽然该问题主要影响构建宿主机的内存资源，属于构建时缺陷，但在大规模编译或持续集成场景下可能导致内存占用异常升高。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__add_symbol()` 函数中，当读取到的符号已在哈希表中存在时，代码逻辑会将旧符号从哈希表中移除（unhash），但并未释放该符号结构体及其 `name` 和 `defn` 成员所占用的内存，从而导致内存泄漏。
+此外，修复前 `sym->name` 可能与 `node->string` 共享内存，直接释放极易引发 double-free 错误，这使得原先的内存管理逻辑存在缺陷。
+
+#解决方案
+1. 在 `__add_symbol()` 中移除旧符号节点时，显式调用 `free_list` 和 `free` 释放 `sym->defn`、`sym->name` 和 `sym` 结构体自身，防止内存泄漏。
+2. 修改 `symbol` 结构体定义，将 `name` 字段类型从 `const char *` 改为 `char *`。
+3. 在创建新符号时，使用 `xstrdup` 复制名称字符串赋值给 `sym->name`，确保符号名称拥有独立的内存所有权，避免与 `node->string` 共享内存导致的潜在 double-free 风险。
+4. 同步调整 `parse.y` 和 `read_reference` 相关调用处，移除冗余的 `strdup` 调用以配合上述改动。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/42cb86532cbf61af7fe8e8b713d2a861ad7d80a2

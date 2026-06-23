@@ -1,0 +1,28 @@
+#标题
+ub/udma: 修复 RCU 保护的内存释放错误及版本校验缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 udma 模块处理 ctrlq 相关功能（如 eid update、tp active 检查、mue eid guid 通知）时，若遇到内存分配失败或处理流程结束，可能触发内核内存释放错误（如 slab corruption 或 kernel BUG），存在 UAF（Use-After-Free）风险；同时，对非支持的 service_version 缺少校验可能导致未定义行为。
+
+#主要错误日志
+- dev_err(udma_dev->dev, "unsupported service version (%u).\n", service_ver);
+- dev_err(udev->dev, "msg param num(%u) is invalid.\n", tp_num);
+- dev_err(udev->dev, "check tp status failed, ret(%d).\n", ret);
+- dev_err(udev->dev, "send check tp active ctrlq msg failed, ret(%d).\n", ret);
+
+#问题根因
+1. **内存释放错误**：在 `udma_ctrlq_check_tp_status` 和 `udma_ctrlq_check_tp_active` 函数中，代码逻辑在 RCU 读临界区（`rcu_read_lock` 与 `rcu_read_unlock` 之间）结束后，或在分配失败路径中，直接使用了 `kfree` 释放内存。由于相关数据结构可能在 RCU 机制下被引用，直接释放会导致 Use-After-Free 或内存污染。
+2. **版本校验缺失**：`udma_ctrlq_eid_update`、`udma_ctrlq_check_tp_active` 和 `udma_ctrlq_notify_mue_eid_guid` 函数未对传入的 `service_ver` 参数进行有效性检查，可能导致使用了不支持的协议版本。
+
+#解决方案
+1. **修复内存释放机制**：
+   - 定义包含 `rcu_head` 成员的新结构体（`udma_tp_active_req_info` 和 `udma_tp_active_rsq_info`）来封装原有的请求和响应信息。
+   - 将所有的 `kfree(req_info/rsp_info)` 调用替换为 `kfree_rcu(&tp_active_req/rcu)`，确保内存宽限期结束后才释放，符合 RCU 安全释放规则。
+2. **增加版本校验**：
+   - 在 `udma_ctrlq_eid_update`、`udma_ctrlq_check_tp_active` 和 `udma_ctrlq_notify_mue_eid_guid` 入口处增加 `if (service_ver != UBASE_CTRLQ_SER_VER_01)` 判断，对不支持的版本返回 `-EOPNOTSUPP` 并打印错误日志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ec9ceb02e5dd2a4061b828a15b3c12e4402e8493

@@ -1,0 +1,20 @@
+#标题
+Bluetooth: ISO 接收路径 ISO_CONT 分组时导致 skb 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理蓝牙 ISO（Isochronous）类型连接的接收数据时，若接收到 ISO_CONT 类型的分片数据包，内核会将该数据包的数据拷贝至连接缓冲区 `conn->rx_skb` 中，但未能释放原始的 `skb` 数据包。这导致内核内存泄漏，随着分片数据包的不断接收，系统可用内存逐渐减少。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `net/bluetooth/iso.c` 的 `iso_recv` 函数中，处理 `ISO_CONT` 分支时，代码逻辑在将数据拷贝到 `conn->rx_skb` 后直接执行了 `return` 返回。这导致函数提前退出，跳过了函数末尾通用的 `kfree_skb(skb)` 处理流程，导致该 `skb` 内存块无法被释放。
+
+#解决方案
+修改 `net/bluetooth/iso.c` 文件，将 `ISO_CONT` 处理分支末尾的 `return` 语句修改为 `break`。这样在完成数据拷贝后，代码能继续向下执行，进入函数末尾统一的 `skb` 释放逻辑，从而修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/57dfd2775d14bff8fdd2bc42853d26ccff19ea4c

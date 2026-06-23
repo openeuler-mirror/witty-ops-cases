@@ -1,0 +1,22 @@
+#标题
+usb: gadget: udc: fix use-after-free in usb_gadget_state_work
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB Gadget 设备卸载过程中，由于并发竞争，`usb_gadget_state_work` 可能在设备结构体被释放后仍然执行，导致 Use-After-Free（释放后使用）问题。具体表现为内核崩溃或内存非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `usb_del_gadget` 删除设备流程中，`flush_work` 旨在等待已调度的工作执行完毕，但在 `flush_work` 执行前或期间，若 `usb_gadget_set_state` 被外部调用，它会无检查地再次调度 `gadget->work`。这导致在设备清理完成后仍有新的工作项被调度执行，访问了已经释放的 `gadget` 结构体内存。
+
+#解决方案
+在 `struct usb_gadget` 中新增 `state_lock` 自旋锁和 `teardown` 标志位，对状态设置和工作调度进行并发控制：
+1. 在 `usb_gadget_set_state` 函数中加入锁保护，并在调度工作前检查 `teardown` 标志，若设备正在销毁则不再调度新工作。
+2. 在 `usb_del_gadget` 函数中，在执行 `flush_work` 之前，持有锁将 `teardown` 标志置为 `true`，阻止后续 `schedule_work` 调用，确保清理过程的安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d3b5df9eef707c643920fa071149564de8456b6f

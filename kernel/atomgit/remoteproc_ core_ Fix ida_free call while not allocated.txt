@@ -1,0 +1,25 @@
+#标题
+remoteproc: core: Fix ida_free call while not allocated
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 rproc_alloc() 函数中，若在调用 ida_alloc 之前发生错误（如 kstrdup_const 或 rproc_alloc_ops 失败），代码会调用 put_device 触发 rproc_type_release。由于 rproc->index 被初始化为 0，导致条件 (rproc->index >= 0) 成立，进而调用 ida_free 释放一个从未分配的 ID，引发内核 WARNING 并打印错误日志 "ida_free called for id=0 which is not allocated"。
+
+#主要错误日志
+[    4.181906] WARNING: CPU: 1 PID: 24 at lib/idr.c:525 ida_free+0x100/0x164
+[    4.188854] ida_free called for id=0 which is not allocated.
+[    4.270565]  ida_free from rproc_type_release+0x38/0x60
+[    4.275832]  rproc_type_release from device_release+0x30/0xa0
+[    4.281601]  device_release from kobject_put+0xc4/0x294
+[    4.286762]  kobject_put from rproc_alloc.part.0+0x208/0x28c
+
+#问题根因
+rproc->index 默认初始化为 0，而 ida_alloc 的调用位置在 rproc_alloc() 函数中靠后。如果在 ida_alloc 调用之前发生错误并进入错误处理流程（put_device -> rproc_type_release），rproc->index 仍为 0。此时 rproc_type_release 中的检查条件 (rproc->index >= 0) 误判为真，导致错误地调用 ida_free 去释放 ID 0。
+
+#解决方案
+将 ida_alloc 调用逻辑移至 rproc_alloc() 函数的更早位置（在设备私有数据设置之后、其他可能失败的内存分配之前），确保只要设备结构体分配成功，index 就已正确分配，从而避免在错误回滚路径上操作未分配的 ID。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a8ea870d4237ac18f44522fe33510512f179a652

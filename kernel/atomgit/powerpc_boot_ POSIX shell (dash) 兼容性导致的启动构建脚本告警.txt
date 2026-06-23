@@ -1,0 +1,37 @@
+#标题
+powerpc/boot: POSIX shell (dash) 兼容性导致的启动构建脚本告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PowerPC 架构下编译内核启动镜像时，如果系统使用 dash（POSIX shell）而非 bash，`arch/powerpc/boot/wrapper` 脚本在第 237 行执行判断逻辑时会报错。
+具体表现为：
+1. 终端打印 shell 语法错误：`arch/powerpc/boot/wrapper: 237: [: 0: unexpected operator`。
+2. 由于判断逻辑失败，未能正确抑制链接器警告，导致构建日志中出现非预期的 `ld` 警告信息：`ld: warning: arch/powerpc/boot/zImage.epapr has a LOAD segment with RWX permissions`。
+
+#主要错误日志
+arch/powerpc/boot/wrapper: 237: [: 0: unexpected operator
+ld: warning: arch/powerpc/boot/zImage.epapr has a LOAD segment with RWX permissions
+
+#问题根因
+脚本 `arch/powerpc/boot/wrapper` 中的条件判断语句使用了非 POSIX 标准的语法，导致与 dash shell 不兼容。
+具体代码问题点：
+1. `&>/dev/null` 语法：在 POSIX sh 标准中未定义，dash 不支持该重定向写法（应使用 `>/dev/null 2>&1`）。
+2. 变量引用未加引号：`${CROSS}ld` 未使用双引号包裹，存在单词分割风险。
+3. 判断逻辑冗余：原代码使用 `[ ... -eq 0 ]` 比较 `echo $?` 的输出，这种写法在 dash 下对命令替换的处理方式存在兼容性问题，直接导致报错 "unexpected operator"。
+
+#解决方案
+修改 `arch/powerpc/boot/wrapper` 脚本第 237 行，将判断逻辑改为符合 POSIX 标准的写法：
+1. 移除 `[ ... -eq 0 ]` 的比较结构，直接利用命令的返回值作为 `if` 的判断条件。
+2. 将重定向语法从 `&>/dev/null` 修改为标准的 `>/dev/null 2>&1`。
+3. 对变量 `"${CROSS}ld"` 加上双引号以防止分词。
+
+修复前代码：
+`if [ $(${CROSS}ld -v --no-warn-rwx-segments &>/dev/null; echo $?) -eq 0 ]; then`
+
+修复后代码：
+`if "${CROSS}ld" -v --no-warn-rwx-segments >/dev/null 2>&1; then`
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b32a38651d4193d30c00862feea87382dffd67ea

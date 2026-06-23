@@ -1,0 +1,22 @@
+#标题
+wifi: ath11k: 修复停止 AMPDU 会话时因传递错误 TID 值导致的吞吐量下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ongoing traffic（持续流量传输）场景下，当请求停止某一个 TID（Traffic Identifier）的 AMPDU 会话时，会错误地影响其他正在活跃的会话。受影响的会话会被错误地停止，导致其 BA（Block Ack）窗口大小降级为最小值，进而导致明显的网络吞吐量下降。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ath11k_dp_rx_ampdu_stop()` 中调用 `ath11k_peer_rx_tid_reo_update()` 更新 BA 会话状态时，传入的参数错误。
+代码原本直接传递了 `peer->rx_tid`，这实际上是 `rx_tid` 数组的基地址（对应 TID 0），而不是当前请求停止的特定 TID。这导致内核更新了错误的 TID 会话状态（总是影响 TID 0），而不是请求停止的那个 TID 会话。
+
+#解决方案
+修改 `ath11k_dp_rx_ampdu_stop()` 函数逻辑，在调用 `ath11k_peer_rx_tid_reo_update()` 前，正确定位目标 TID 结构体指针。
+具体变更：将参数 `peer->rx_tid` 修改为 `rx_tid`（即 `&peer->rx_tid[params->tid]`），确保传递给更新函数的是对应具体 TID 的正确指针，从而仅停止请求的特定 AMPDU 会话。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5006e62ca769e48069b4c7120867c8cc7499031a

@@ -1,0 +1,22 @@
+#标题
+x86/resctrl: 开启 SNC 时 arch_mbm_* 数组越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 Sub-NUMA Clustering (SNC) 的系统上使用 resctrl 功能时，监控组（monitoring groups）可能会被分配到超出 `arch_mbm_local` 和 `arch_mbm_total` 数组容量的 RMID 值，导致内核发生数组越界访问。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于在获取 RMID 数量时，使用的数据来源不一致：
+`resctrl_arch_system_num_rmid_idx()` 函数原本直接返回硬件支持的 RMID 总数（未调整的原始值），而在 SNC 模式下，L3 资源的 `num_rmid` 是经过 SNC 节点数调整后的值（即 `原始值 / snc_nodes_per_l3_cache`）。
+代码中混用了这两个值，导致分配的 RMID 索引可能大于调整后的数组长度，从而引发越界。
+
+#解决方案
+修改 `resctrl_arch_system_num_rmid_idx()` 函数的实现，使其不再返回硬件原始的 `x86_cache_max_rmid + 1`，而是直接返回 L3 资源结构体中已经过 SNC 调整的 `num_rmid` 值，确保 RMID 索引计算的一致性，防止数组越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b11fbd1013fa96f0c951ce46e640950517a6b895

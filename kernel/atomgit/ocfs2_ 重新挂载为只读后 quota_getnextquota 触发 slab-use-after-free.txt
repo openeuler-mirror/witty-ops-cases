@@ -1,0 +1,21 @@
+#标题
+ocfs2: 重新挂载为只读后 quota_getnextquota 触发 slab-use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 ocfs2 文件系统挂载后，若执行重新挂载（remount）为只读模式，随后用户调用 `quota_getnextquota` 系统调用时，会发生 slab-use-after-free 故障。具体表现为访问了悬空指针 `sb_dqinfo(sb, type)->dqi_priv`。
+
+#主要错误日志
+slab-use-after-free
+
+#问题根因
+在重新挂载为只读的过程中，指针 `dqi_priv` 被释放但未置为 NULL，导致其成为悬空指针。同时，只读重挂载设置了 `DQUOT_SUSPENDED` 标志而非 `DQUOT_USAGE_ENABLED` 标志。后续在获取下一个 quota 信息时，函数 `ocfs2_get_next_id` 仅检查了 quota usage flags（如 `sb_has_quota_loaded`），未检查 quota suspended flags，导致错误地进入了使用了悬空指针 `dqi_priv` 的代码路径。
+
+#解决方案
+1. 在 `ocfs2_local_free_info` 函数中，释放 `oinfo` 内存后，将 `info->dqi_priv` 显式设置为 NULL，避免产生悬空指针。
+2. 在 `ocfs2_get_next_id` 函数中，将检查条件从 `sb_has_quota_loaded` 修改为 `sb_has_quota_active`，以正确处理 `DQUOT_SUSPENDED` 状态，防止在 quota 挂起时进行非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8f903618b0c0261ff354674e40d009566b8bf9ff

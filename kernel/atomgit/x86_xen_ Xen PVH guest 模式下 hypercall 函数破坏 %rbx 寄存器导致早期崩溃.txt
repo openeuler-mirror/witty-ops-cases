@@ -1,0 +1,20 @@
+#标题
+x86/xen: Xen PVH guest 模式下 hypercall 函数破坏 %rbx 寄存器导致早期崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在作为 Xen PVH guest 运行时，内核在早期启动阶段发生崩溃。原因是 `xen_hypercall_hvm()` 函数在执行过程中破坏了 `%rbx` 寄存器的值，若调用者依赖 `%rbx` 在函数调用期间保持不变，将导致系统早期崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+`xen_hypercall_hvm()` 函数在 64 位模式下的代码路径中，使用了 `%rbx` 寄存器来加载 `xen_hypercall_amd` 的地址并进行比较。由于 `%rbx` 是 callee-saved 寄存器（被调用者保存寄存器），函数理应保证其在返回后值不变。该函数错误地覆盖了 `%rbx` 的值且未恢复，导致调用者上下文受损，进而引发系统早期崩溃。
+
+#解决方案
+修改 `arch/x86/xen/xen-head.S` 中的 `xen_hypercall_hvm` 函数，将原本使用 `%rbx` 寄存器的操作改为使用 `%rcx` 寄存器。具体变更包括将 `lea xen_hypercall_amd(%rip), %rbx` 改为 `lea xen_hypercall_amd(%rip), %rcx`，以及将后续的比较指令 `cmp %rax, %rbx` 改为 `cmp %rax, %rcx`，从而避免破坏 `%rbx` 寄存器的内容。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fbaf5f8964d4907faf28dc0368df9bf03f470ef2

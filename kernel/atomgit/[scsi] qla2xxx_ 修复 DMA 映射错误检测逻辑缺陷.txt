@@ -1,0 +1,21 @@
+#标题
+[scsi] qla2xxx: 修复 DMA 映射错误检测逻辑缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 qla24xx_get_port_database 函数执行过程中，当 DMA 映射失败时，驱动程序可能无法正确检测到该错误。由于错误的条件判断逻辑，系统可能误判映射状态为成功，导致后续 DMA 操作使用无效的地址，从而引发内存访问异常、数据损坏或 SCSI 设备通信故障。
+
+#主要错误日志
+ql_log(ql_log_warn, vha, 0x1116, "Failed to map dma buffer.\n");
+（注：此日志在修复前因判断条件错误可能无法按预期触发）
+
+#问题根因
+代码中对 `dma_map_single()` 返回值的判断使用了 `if (!pdb_dma)`，这是不正确的。`dma_map_XXX()` 函数在映射失败时返回 `DMA_MAPPING_ERROR`（通常定义为 `~0`），而非 `NULL`（0）。因此，`!pdb_dma` 无法匹配 `~0` 这种失败情况，导致程序跳过错误处理逻辑，继续使用无效的 DMA 地址进行操作。
+
+#解决方案
+修改 `qla24xx_get_port_database` 函数中的 DMA 映射结果判断逻辑，将 `if (!pdb_dma)` 替换为标准的 `if (dma_mapping_error(&vha->hw->pdev->dev, pdb_dma))`。这确保了无论底层架构如何定义错误码，都能准确检测 DMA 映射失败的情况，并正确执行错误处理路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cf150d6493bcb27ba4178b1b23c263699fdce873

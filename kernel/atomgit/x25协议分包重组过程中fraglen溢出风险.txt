@@ -1,0 +1,22 @@
+#标题
+x25协议分包重组过程中fraglen溢出风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 X.25 协议数据包重组时，若接收大量数据分片，`x25_sock.fraglen` 累加过程中可能发生整型溢出，导致协议栈内部状态异常。此外，在清除套接字队列时，`fraglen` 计数器未被正确重置，可能导致后续数据处理逻辑错误。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **缺少溢出检查**：在 `x25_queue_rx_frame` 函数中，直接执行 `x25->fraglen += skb->len` 累加操作，未对累加后的结果进行上限检查。由于 `fraglen` 为 `unsigned short` 类型，当累加值超过 `USHRT_MAX` (65535) 时会发生溢出。
+2. **状态重置遗漏**：在 `x25_clear_queues` 函数中，虽然调用了 `skb_queue_purge` 清空了 `fragment_queue` 队列，但未将统计变量 `x25->fraglen` 重置为 0，导致残留的计数值影响后续处理。
+
+#解决方案
+1. 在 `net/x25/x25_in.c` 的 `x25_queue_rx_frame` 函数中增加保护性检查，若 `x25->fraglen + skb->len` 大于 `USHRT_MAX`，直接返回错误（return 1），防止溢出。
+2. 在 `net/x25/x25_subr.c` 的 `x25_clear_queues` 函数中，在清空 `fragment_queue` 队列的同时，显式将 `x25->fraglen` 重置为 0，确保状态一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ca84160119a196c8e4a6d3dc6fcc362277c750d

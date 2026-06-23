@@ -1,0 +1,20 @@
+#标题
+cgroup/cpuset: 隔离 CPU 泄露至调度域导致隔离失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统启动时存在隔离 CPU（isolated CPUs）的场景下，这些隔离 CPU 错误地泄露到了调度域（sched domain）中，导致本应被隔离的 CPU 仍然参与调度，破坏了 CPU 隔离的功能预期。
+
+#主要错误日志
+未知
+
+#问题根因
+提交 ccac8e8de99c ("cgroup/cpuset: Fix remote root partition creation problem") 引入了一种简化的调度域生成方案，仅包含分区根（partition roots）。然而，该方案未正确处理“top cpuset 允许包含启动时隔离 CPU”这一例外情况。代码直接将 top cpuset 的 `effective_cpus` 拷贝到调度域中，未将隔离 CPU 从中剔除，从而导致隔离 CPU 泄露到调度域。
+
+#解决方案
+在生成调度域时增加判断逻辑：如果当前处理的是 top cpuset，则使用 `cpumask_and` 函数将其 `effective_cpus` 与 `housekeeping_cpumask(HK_TYPE_DOMAIN)` 进行与运算，显式排除掉启动时的隔离 CPU，确保它们不会进入调度域。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e26aaac514e29316d7d3be81c959b8a22c982d83

@@ -1,0 +1,21 @@
+#标题
+smb: client: parse_dfs_referrals 返回值处理不符合 MS-DFSC 规范
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SMB 客户端向服务器请求 DFS referral 且服务器返回成功的响应，但响应中 NumberOfReferrals 字段为 0 时，客户端未按协议要求处理，而是错误地返回了 -EINVAL，导致 I/O 操作未能正确以 STATUS_OBJECT_PATH_NOT_FOUND 失败，影响 DFS 路径解析逻辑。
+
+#主要错误日志
+- `cifs_dbg(VFS, "num_referrals: must be at least > 0, but we get num_referrals = %d\n", *num_of_nodes);`
+- `cifs_tcon_dbg(VFS, "parse error in %s rc=%d\n", __func__, rc);`
+
+#问题根因
+根据 MS-DFSC 协议规范（3.1.5.4.3 节），如果 referral 请求成功但 NumberOfReferrals 为 0，意味着 DFS 服务器无法找到合适的目标，客户端必须将原始 I/O 操作失败处理为 STATUS_OBJECT_PATH_NOT_FOUND。内核原实现中，对此场景返回了 -EINVAL，且 parse_dfs_referrals 的调用者会将此错误码视为解析错误并直接退出，未正确区分“无目标”与“解析格式错误”的情况。
+
+#解决方案
+修改 `parse_dfs_referrals()` 函数，当检测到 `NumberOfReferrals` 小于 1 时，将返回值从 `-EINVAL` 修改为 `-ENOENT`，以匹配协议规范中“找不到路径”的语义。同时，修改调用者 `smb2_get_dfs_refer()` 的错误处理逻辑，忽略 `-ENOENT` 返回值，允许上层调用者正确处理“无目标”的情况，而不是将其视为解析错误终止流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c4358551b19c7f2dc95d4c27f118bd119f63be4c

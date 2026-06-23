@@ -1,0 +1,20 @@
+#标题
+md: 阻止在 FROZEN/IDLE 状态下错误更新 resync/recovery 偏移量
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 MD 阵列处于 FROZEN 或 IDLE 状态时，同步恢复进程（md_do_sync）未正确退出，导致 `curr_resync` 及后续的 `recovery_offset` 被错误地设置为 MaxSector。这向系统错误地信号指示恢复/同步已完成，但实际上磁盘数据并未真正更新，导致数据不一致风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `md_do_sync()` 函数中，当 `md_sync_action` 返回 `ACTION_FROZEN` 时，后续调用的 `md_sync_position()` 会返回 MaxSector。代码逻辑未针对 FROZEN 或 IDLE 状态进行拦截处理，导致 `curr_resync`（以及随后的 `recovery_offset`）被赋值为 MaxSector，从而错误地标记同步完成。
+
+#解决方案
+在 `md_do_sync()` 函数中增加状态检查逻辑。当检测到当前同步动作为 `ACTION_FROZEN` 或 `ACTION_IDLE` 时，设置 `MD_RECOVERY_INTR` 标志位并跳过后续的偏移量更新流程，防止错误的完成信号产生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cfcd0df4e9ab3574cc7736b51cf2092861a3b04f

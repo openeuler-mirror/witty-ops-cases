@@ -1,0 +1,26 @@
+#标题
+can: isotp: sendmsg 发送路径存在 tx.buf 释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CAN ISO-TP 协议通信场景下，当调用 `close()` 关闭 socket 时，若因信号中断导致等待队列提前退出，此时若发送操作 `isotp_sendmsg()` 仍在进行中，会发生 `tx.buf` 的释放后使用。该故障可能导致内核内存损坏、系统崩溃或不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+`isotp_sendmsg()` 仅通过 `cmpxchg()` 对 `so->tx.state` 进行串行化访问。`isotp_release()` 通过 `wait_event_interruptible()` 等待 `ISOTP_IDLE` 状态后释放 `so->tx.buf`。
+根因在于：当 `close()` 流程中的 `wait_event_interruptible()` 被信号中断时，如果此时 `tx.state` 处于 `ISOTP_SENDING` 状态，等待循环会提前退出。随后 release 流程强制设置 `ISOTP_SHUTDOWN` 并继续执行 `kfree(so->tx.buf)`。与此同时，`sendmsg` 流程可能仍在 `isotp_fill_dataframe()` 中读取 `so->tx.buf` 以处理最后的 CAN 帧，从而引发释放后使用。
+
+#解决方案
+将 `so->tx.buf`（以及 `so->rx.buf`）的内存释放操作从 `isotp_release()` 函数移动到 socket 析构函数（`sk_destruct`）中执行。
+具体修改为：
+1. 新增 `isotp_sock_destruct()` 函数，在其中执行 `kfree(so->rx.buf)` 和 `kfree(so->tx.buf)`。
+2. 在 `isotp_init()` 中将 socket 的析构函数指针 `sk->sk_destruct` 赋值为 `isotp_sock_destruct`。
+3. 移除原 `isotp_release()` 中直接释放 buffer 的代码。
+此举确保只有当 `isotp_sendmsg()` 和 `isotp_release()` 都执行完毕，socket 引用计数归零后，才会真正释放缓冲区内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cdda7b7fe77e2945c99aa3873e5f3be82670a71d

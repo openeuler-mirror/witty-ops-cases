@@ -1,0 +1,23 @@
+#标题
+x86/sgx: sgx_encl_create 函数中存在大小计算溢出风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建 SGX Enclave 时，若传入的 `secs->size` 参数不是 2 的幂次方，会导致内核在计算 EPC（Enclave Page Cache）总大小或 shmem 总大小时发生 u64 整数溢出。溢出发生后，可能导致内存分配异常或后续 ECREATE 指令执行失败，影响 SGX Enclave 的正常创建功能。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `sgx_encl_create` 函数中，计算 EPC 总大小和 shmem 总大小的逻辑存在整数溢出漏洞：
+1. EPC 大小计算：由于需要额外添加 SECS 页面，累加后的总大小可能溢出 u64 类型。
+2. Shmem 大小计算：即使 EPC 大小未溢出，由于需要为每个页面添加 128 字节的 PCMD 结构体空间，累加后的总大小仍可能溢出 u64。
+根本原因在于输入参数 `secs->size` 未经过充分校验，导致后续基于该值的算术运算越界。
+
+#解决方案
+在执行大小计算之前，增加对 `secs->size` 的前置校验。根据 SGX 微架构要求，Enclave 的地址空间大小必须是 2 的幂次方。补丁在 `sgx_encl_create` 函数开头增加了 `is_power_of_2(secs->size)` 检查，如果校验失败则直接返回 `-EINVAL`。这不仅符合硬件 ECREATE 指令的要求，也确保了后续的 `encl_size` 计算不会发生溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/07cb0003b3b14b3b61cda18f3233f5a8cf64acb4

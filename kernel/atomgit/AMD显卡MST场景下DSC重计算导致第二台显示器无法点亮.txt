@@ -1,0 +1,23 @@
+#标题
+AMD显卡MST场景下DSC重计算导致第二台显示器无法点亮
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在部分支持DSC（Display Stream Compression）功能的MST（Multi-Stream Transport）扩展坞上，连接第二台显示器时出现无法点亮的问题，显示器无法正常显示图像。
+
+#主要错误日志
+未知
+
+#问题根因
+前序提交 c53655545141 ("drm/amd/display: dsc mst re-compute pbn for changes on hub") 引入了缺陷。该补丁在判断是否需要重新计算DSC时，错误地检查了链路层的DPCD DSC基本能力，导致在某些MST拓扑下提前返回false，跳过了必要的DSC重计算流程。对于符合规范的新型MST DSC设备，其DSC能力是通过Virtual DPCD（虚拟DPCD）寄存器上报的，而非链路层的物理DPCD，因此原逻辑无法正确识别这些设备的DSC支持能力，导致显示点亮失败。
+
+#解决方案
+修改 `is_dsc_need_re_compute` 函数中的DSC能力检测逻辑：
+1. 移除函数开头对 `dc_link->dpcd_caps.dsc_basic_caps` 的过早检查，避免错误跳过后续流程。
+2. 在遍历流（stream）时，增加对 `aconnector->dsc_aux` 的有效性检查。
+3. 改用 `aconnector->dc_sink->dsc_caps.dsc_dec_caps.is_dsc_supported` 检查缓存的虚拟MST DSC能力，或检查链路层的DSC透传支持，从而正确识别符合规范的MST DSC设备并触发重计算。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6e8de0fa11c8965055cbf45db348bbdb788d7ef1

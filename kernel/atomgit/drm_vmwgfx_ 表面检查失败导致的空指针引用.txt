@@ -1,0 +1,20 @@
+#标题
+drm/vmwgfx: 表面检查失败导致的空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当满足条件 `!bo` 且 `!vmw_kms_srf_ok()` 时（即表面尺寸超过纹理限制），内核在 `vmw_kms_fb_create` 函数中跳转至 `err_out` 标签进行处理。由于此时返回值 `ret` 为 0，`err_out` 处的代码逻辑会尝试解引用尚未初始化的 `vfb` 指针（当前为 NULL），从而导致空指针解引用错误。
+
+#主要错误日志
+DRM_ERROR("Surface size cannot exceed %dx%d\n", dev_priv->texture_max_width, dev_priv->texture_max_height);
+
+#问题根因
+在处理表面检查失败（Surface check failure）的异常分支中，代码跳转到 `err_out` 前未正确设置错误返回值 `ret`。这导致 `err_out` 处的代码错误地认为操作成功（ret == 0），进而对空指针 `vfb` 进行了解引用操作。
+
+#解决方案
+在表面尺寸检查失败的分支中，跳转到 `err_out` 之前，显式将 `ret` 设置为 `-EINVAL`（无效参数），确保错误能被正确传递和处理，避免进入解引用逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f4e233c7152982cddfc6e15da69f830e9eda56de

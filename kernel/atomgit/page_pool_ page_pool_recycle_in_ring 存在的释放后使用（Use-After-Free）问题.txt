@@ -1,0 +1,20 @@
+#标题
+page_pool: page_pool_recycle_in_ring 存在的释放后使用（Use-After-Free）问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 page_pool 进行页面回收时，`page_pool_recycle_in_ring` 函数可能发生竞争条件，导致释放后使用，具体表现为内核崩溃或数据结构被破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+原有的 `page_pool_recycle_in_ring` 实现中，直接调用 `ptr_ring_produce` 或 `ptr_ring_produce_bh` 时缺乏必要的锁保护机制。这导致在生产者将页面放入环形缓冲区的过程中，该页面可能被其他路径并发释放或回收，从而引发 Use-After-Free 风险。
+
+#解决方案
+修改 `page_pool_recycle_in_ring` 函数，在操作环形缓冲区前显式获取生产者锁（`page_pool_producer_lock`），并使用 `__ptr_ring_produce` 进行无锁内部插入操作，完成后释放锁。同时，在 `page_pool_release` 函数中也增加了获取生产者锁的步骤，以确保所有生产者操作已完成，防止资源释放过程中的竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2fe7c867a885250769cc4cb01f8b1fa0f1fcbd5c

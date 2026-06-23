@@ -1,0 +1,20 @@
+#标题
+hibmcge 驱动 debugfs 接口触发除零错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当网卡端口处于 down 状态时，队列被释放，此时若通过 debugfs 接口查询队列使用情况，内核会触发除零错误。
+
+#主要错误日志
+未知
+
+#问题根因
+当网络端口 down 时，驱动释放了队列资源，导致 `ring->len` 变为 0。此时若调用 `hbg_get_queue_used_num()` 函数计算队列已使用数量，代码直接执行取模运算 `(ring->ntu + ring->len - ring->ntc) % ring->len`，由于除数 `ring->len` 为 0，导致除零错误。
+
+#解决方案
+在 `hbg_get_queue_used_num()` 函数中增加对 `ring->len` 的有效性检查。如果 `ring->len` 为 0，函数直接返回 0，避免进行除法运算；同时使用 `READ_ONCE` 确保读取过程的原于性，防止并发访问导致的数据不一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/49a2936d38ead93715715530683059365612afcb

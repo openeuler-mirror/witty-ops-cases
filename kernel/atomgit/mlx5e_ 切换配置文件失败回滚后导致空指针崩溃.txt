@@ -1,0 +1,38 @@
+#标题
+mlx5e: 切换配置文件失败回滚后导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mlx5e 驱动执行 profile 切换（如通过 devlink 切换 switchdev 模式）时，若第一步失败且回滚到原 profile 也失败，会导致 netdev_priv 处于完全重置的悬空状态。此时再次尝试切换模式（如第二次开启 switchdev），内核在尝试访问已置空的 priv->mdev 时触发 NULL 指针引用，导致 Oops 并伴随系统崩溃。
+
+#主要错误日志
+- 第一次开启 switchdev 失败且回滚失败：
+```
+mlx5_core 0012:03:00.1: mlx5e_netdev_init_profile:6214:(pid 37199): mlx5e_priv_init failed, err=-12
+mlx5_core 0012:03:00.1 gpu3rdma1: mlx5e_netdev_change_profile: new profile init failed, -12
+workqueue: Failed to create a rescuer kthread for wq "mlx5e": -EINTR
+mlx5_core 0012:03:00.1: mlx5e_netdev_init_profile:6214:(pid 37199): mlx5e_priv_init failed, err=-12
+mlx5_core 0012:03:00.1 gpu3rdma1: mlx5e_netdev_change_profile: failed to rollback to orig profile, -12
+```
+- 第二次尝试开启 switchdev 触发崩溃：
+```
+BUG: kernel NULL pointer dereference, address: 0000000000000038
+Oops: Oops: 0000 [#1] SMP NOPTI
+RIP: 0010:mlx5e_detach_netdev+0x3c/0x90
+Call Trace:
+ mlx5e_netdev_change_profile+0x45/0xb0
+ mlx5e_vport_rep_load+0x27b/0x2d0
+ ...
+ devlink_nl_eswitch_set_doit+0x6f/0xf0
+```
+
+#问题根因
+函数 `mlx5e_netdev_change_profile` 在尝试切换到新 profile 失败后，尝试回滚到旧的 profile。如果回滚操作也失败，代码未正确处理 `priv` 结构体的状态，导致 `priv` 被完全清理重置（如 `priv->mdev` 变为 NULL）。此时 netdev 仍然存在，但关联的私有数据已损坏。当用户再次调用该函数（例如第二次切换模式）时，代码直接使用传入的 `priv` 指针并访问 `priv->mdev`，未检查其有效性，从而引发空指针崩溃。
+
+#解决方案
+修改 `mlx5e_netdev_change_profile` 及其调用链，不再传入 `priv` 指针，改为传入 `netdev` 和 `mdev`。在函数内部通过 `netdev_priv` 获取 `priv` 后，增加对 `priv->profile` 有效性的检查。如果检测到 `priv` 无效（即上一次切换失败且未恢复），则跳过旧 profile 的清理流程，直接尝试附加新的 profile，从而避免访问空指针并允许系统从错误状态中恢复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/74cec33ab04e6032928fd6d06a438e04f0d11921

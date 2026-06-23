@@ -1,0 +1,20 @@
+#标题
+NFS flexfilelayout 设备节点分配内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFS pNFS Flex File Layout 功能场景下，当 `nfs4_ff_alloc_deviceid_node` 函数分配 `ds_versions` 内存失败时，系统未能正确释放此前已经分配并添加到链表中的 `dsaddrs` 结构体，导致内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `nfs4_ff_alloc_deviceid_node` 在处理错误退出路径时存在逻辑缺陷。在调用 `kmalloc` 分配 `ds_versions` 失败时，代码直接跳转至 `out_scratch` 标签。此时，之前已经成功分配并链接到链表中的 `dsaddrs` 内存资源未被释放，也没有进行相应的清理操作，从而导致内存泄漏。
+
+#解决方案
+修正错误处理跳转逻辑。将 `ds_versions` 分配失败后的 `goto` 目标从 `out_scratch` 修改为 `out_err_drain_dsaddrs`，确保在内存分配失败时，能够跳转到正确的清理流程，释放已分配的 `dsaddrs` 资源，避免内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fdfcebea554e2e295382486265fa9ef633e88ac8

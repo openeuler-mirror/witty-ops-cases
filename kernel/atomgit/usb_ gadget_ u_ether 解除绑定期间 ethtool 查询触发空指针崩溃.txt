@@ -1,0 +1,26 @@
+#标题
+usb: gadget: u_ether 解除绑定期间 ethtool 查询触发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB Gadget 设备执行解除绑定操作期间，若用户空间工具（如 ethtool）查询存活的网络接口，内核将发生空指针引用崩溃，导致系统不可用。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference
+Call trace:
+ eth_get_drvinfo+0x50/0x90
+ ethtool_get_drvinfo+0x5c/0x1f0
+ __dev_ethtool+0xaec/0x1fe0
+ dev_ethtool+0x134/0x2e0
+ dev_ioctl+0x338/0x560
+
+#问题根因
+修复提交 ec35c1969650 ("usb: gadget: f_ncm: Fix net_device lifecycle with device_move") 在 unbind 过程中将 gadget 设备重新挂载到 /sys/devices/virtual，这会清除 gadget 指针。如果用户空间工具在此脱离窗口期查询该接口，`eth_get_drvinfo` 函数会尝试访问已置空的 `dev->gadget` 指针，从而导致 NULL 指针引用。
+
+#解决方案
+在 `eth_get_drvinfo` 函数中增加对 `dev->gadget` 指针的非空检查。当检测到 gadget 已脱离时，跳过 `fw_version` 和 `bus_info` 字符串的拷贝操作，ethtool 核心层会自动处理空字符串情况，从而避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/079e2d6ebffe3527f27ad897bbf7c8161d2c06f4

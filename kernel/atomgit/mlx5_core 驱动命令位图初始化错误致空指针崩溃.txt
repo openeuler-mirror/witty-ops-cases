@@ -1,0 +1,34 @@
+#标题
+mlx5_core 驱动命令位图初始化错误致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mlx5 驱动加载过程中（例如执行 `mlx5_enable_hca()` 阶段），若在首次调用 MANAGE_PAGES 命令前发生健康错误，系统会触发空指针解引用，导致内核崩溃。
+
+#主要错误日志
+BUG: KASAN: null-ptr-deref in mlx5_cmd_trigger_completions+0x1db/0x600 [mlx5_core]
+Write of size 4 at addr 0000000000000214 by task kworker/u96:2/12078
+CPU: 10 PID: 12078 Comm: kworker/u96:2 Not tainted 6.9.0-rc2_for_upstream_debug_2024_04_07_19_01 #1
+Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS rel-1.13.0-0-gf21b5a4aeb02-prebuilt.qemu.org 04/01/2014
+Workqueue: mlx5_health0000:08:00.0 mlx5_fw_fatal_reporter_err_work [mlx5_core]
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x7e/0xc0
+ kasan_report+0xb9/0xf0
+ kasan_check_range+0xec/0x190
+ mlx5_cmd_trigger_completions+0x1db/0x600 [mlx5_core]
+ mlx5_cmd_flush+0x94/0x240 [mlx5_core]
+ enter_error_state+0x6c/0xd0 [mlx5_core]
+ mlx5_fw_fatal_reporter_err_work+0xf3/0x480 [mlx5_core]
+
+#问题根因
+命令位图在初始化时未包含 MANAGE_PAGES 命令的专用位，该位原本仅在执行 MANAGE_PAGES 命令时才被初始化。
+当健康错误在首次 MANAGE_PAGES 命令调用前发生（例如驱动加载早期的 `mlx5_enable_hca()` 阶段），`mlx5_cmd_trigger_completions()` 函数会尝试触发 MANAGE_PAGES 命令的完成回调。由于此时对应位未初始化且状态异常，导致访问了无效地址，引发空指针解引用错误。
+
+#解决方案
+修正命令位图的初始化逻辑，在 `mlx5_cmd_enable` 阶段即正确初始化包含 MANAGE_PAGES 位的命令掩码，确保位图范围覆盖所有可能的命令条目，避免后续触发完成时访问越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7a46ee717d4c2c4c4f10c218cc1735e292a5efb8

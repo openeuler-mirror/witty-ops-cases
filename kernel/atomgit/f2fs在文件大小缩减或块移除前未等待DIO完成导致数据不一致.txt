@@ -1,0 +1,22 @@
+#标题
+f2fs在文件大小缩减或块移除前未等待DIO完成导致数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对文件执行 truncate 操作（减小文件大小）或 fallocate 打洞操作时，如果存在正在进行的 Direct I/O (DIO) 写请求，由于未等待 DIO 写完成就直接移除或释放了相应的磁盘块，可能导致先前的直接写 IO 覆盖已被其他 inode 重用的磁盘块上的数据，从而引发数据损坏或数据不一致问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在进行文件大小缩减（setattr）或块移除（fallocate）操作时，内核未等待正在进行的 Direct I/O 写入完成。这导致旧的写 IO 在块被释放并可能重新分配给其他文件后仍然继续执行，从而可能覆盖其他文件的新数据。根据 Commit 描述："It should wait all existing dio write IOs before block removal, otherwise, previous direct write IO may overwrite data in the block which may be reused by other inode."
+
+#解决方案
+在移除磁盘块之前增加等待机制，确保所有正在进行的 Direct I/O 写入完成。具体修改如下：
+1. 在 `f2fs_setattr` 函数中，当设置的新文件大小小于原大小时，在执行后续操作前调用 `inode_dio_wait(inode)` 等待 DIO 完成。
+2. 在 `f2fs_fallocate` 函数中，在进行块移除或打洞操作前，调用 `inode_dio_wait(inode)` 等待 DIO 完成。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac72dfd33d2cd01276facca265e18d07e1ca22a0

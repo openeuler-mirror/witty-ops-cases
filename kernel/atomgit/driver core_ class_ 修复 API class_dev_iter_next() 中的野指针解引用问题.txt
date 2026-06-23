@@ -1,0 +1,23 @@
+#标题
+driver core: class: 修复 API class_dev_iter_next() 中的野指针解引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用 `class_dev_iter_init()` 时传入的 `class` 参数对应的结构体尚未注册（或无效），`class_to_subsys()` 会返回错误，但由于原函数返回值为 void 且未对输出参数 `iter` 进行初始化，调用者无法感知错误并继续调用 `class_dev_iter_next()` 或 `class_dev_iter_exit()`。此时 `iter` 结构体中的成员为野指针，后续对这些野指针的解引用操作将导致内核崩溃或不可预知的异常行为。
+
+#主要错误日志
+推断日志：
+`class_dev_iter_init: class <address> was not registered yet`
+
+#问题根因
+在 API `class_dev_iter_init()` 中，当参数 `class` 无效（`class_to_subsys()` 返回 NULL）时，函数直接返回但未对输出参数 `iter` 进行初始化（memset）。由于函数返回类型为 void，调用者无法检测到初始化失败，继续使用包含野指针的 `iter` 结构体调用 `class_dev_iter_next()`，导致发生野指针解引用。
+
+#解决方案
+1. 在 `class_dev_iter_init()` 函数入口处增加 `memset(iter, 0, sizeof(*iter))`，确保输出参数被清零初始化。
+2. 在 `class_dev_iter_init()` 检测到 `class` 无效时，增加 `pr_crit` 日志打印以提示错误，并直接返回。
+3. 在 `class_dev_iter_next()` 函数入口增加判断，若 `iter->sp` 为 NULL（即上一步初始化失败的情况），则直接返回 NULL，防止野指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/850e19e357c0a9e26387dc0f6a7d9ae4ac0ae919

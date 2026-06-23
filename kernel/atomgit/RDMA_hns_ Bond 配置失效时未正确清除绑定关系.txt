@@ -1,0 +1,20 @@
+#标题
+RDMA/hns: Bond 配置失效时未正确清除绑定关系
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA hns 驱动中，当 Bond 配置变为无效（invalid）时，系统未能正确清除 bond 关系。这会导致驱动内部维护的 bond 状态与实际配置不一致，可能引发后续 Bond 配置更新失败或资源泄漏等异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `upper_event_filter` 中，过滤逻辑存在缺陷。原代码仅在 `bond_state` 不为 `HNS_ROCE_BOND_NOT_ATTACHED` 且 `upper_dev` 不匹配时返回 false，但该逻辑位置不当。当配置失效触发解绑流程（`info->linking` 为假）时，如果 `bond_state` 已经不是 `NOT_ATTACHED` 状态，函数错误地继续执行后续判断，未能正确识别出这是一个需要处理的旧配置清除事件，导致 bond 关系未被清除。
+
+#解决方案
+修改 `upper_event_filter` 函数的逻辑判断顺序。在函数入口处增加对 `bond_state` 的检查：若 `bond_state` 不等于 `HNS_ROCE_BOND_NOT_ATTACHED`，则直接返回比较 `upper_dev` 的结果。同时删除原有位置错误的重复判断逻辑，确保在配置失效或状态异常时能正确触发清除流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/da7b90e3d5072015e6389609d23cf32cf851762d

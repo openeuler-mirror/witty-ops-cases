@@ -1,0 +1,23 @@
+#标题
+selftests/rseq: 修复无 rseq 支持的 glibc 环境下的处理逻辑缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 glibc 版本低于 2.35（即不支持 rseq）的环境中运行内核 selftests/rseq 测试时，由于初始化逻辑遗漏，`rseq_size` 变量始终保持为初始值 `-1U`（无效值），导致测试无法正确判断 rseq 注册状态和可用特性，进而引发测试失败或异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在将 librseq 的提交 c7b45750fa85 移植到内核 selftests 时，遗漏了 `rseq_init()` 函数末尾的关键代码行 `rseq_size = get_rseq_kernel_feature_size();`。这导致当 glibc 不支持 rseq 时，`rseq_size` 未被正确设置，保留了初始化时的 `-1U` 值，破坏了后续的逻辑判断。
+
+#解决方案
+修改 `rseq_init()` 和 `rseq_register_current_thread()` 的逻辑，模仿 libc 的行为模式：
+1. 在 `rseq_init()` 中移除对 `rseq_size` 的直接设置（此前根据 `rseq_available` 设置为 0），统一将其初始化为 0。
+2. 将 `rseq_size` 的设置推迟到首个线程成功注册 rseq 时进行，即在 `rseq_register_current_thread()` 成功执行 `sys_rseq` 系统调用后，再调用 `get_rseq_kernel_feature_size()` 设置 `rseq_size`。
+3. 移除 `rseq_reg_success` 静态变量，直接通过判断 `rseq_size` 是否大于 0 来确定是否已有线程成功注册。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3f41ad3619e5f8a5a14b2665e91f9ce7873a5c65

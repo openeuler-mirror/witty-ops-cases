@@ -1,0 +1,28 @@
+#标题
+soc cache: ioctl 错误路径处理及参数校验修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 用户态程序调用 ioctl 时，若传入 `HISI_CACHE_MAINT_MAKEINVALID` 类型的缓存维护操作，内核未进行拦截，可能导致非预期的内核行为或安全风险。
+2. 用户态传入的地址和大小参数存在整数溢出或未对齐时，内核校验逻辑存在缺陷，可能导致内存访问越界或校验失效。
+3. ioctl 接口在参数分配失败时的错误处理路径不正确，可能导致锁资源泄漏或空指针引用。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **权限控制缺失**：内核代码未对用户态请求进行严格限制，允许用户态发起仅限内核内部使用的 `HISI_CACHE_MAINT_MAKEINVALID` 操作。
+2. **校验逻辑漏洞**：地址校验未考虑 `vaddr + size` 的整数溢出场景，且在 `hisi_hha_cache_do_maintain` 中未对地址进行对齐处理即进行操作，同时 `mnt_type` 缺少上界检查。
+3. **错误路径缺陷**：`hisi_soc_cache_mgmt_ioctl` 函数在内存分配失败时，错误地跳转至 `out` 标签，而该标签位置不合理，可能导致后续逻辑异常。
+
+#解决方案
+1. **限制用户态操作**：在 `__hisi_soc_cache_maintain` 函数入口处增加判断，若 `mnt_type >= HISI_CACHE_MAINT_MAKEINVALID` 则直接返回 `-EINVAL`，阻止用户态执行该操作；同时在 UAPI 头文件中将 `HISI_CACHE_MAINT_MAKEINVALID` 宏定义包裹在 `#ifdef __KERNEL__` 中，对用户态不可见。
+2. **完善参数校验**：
+   - 在 `__hisi_soc_cache_maintain` 中增加校验：`!size || vaddr + size < vaddr`，防止整数溢出；使用 `range_in_vma` 替换原有检查以确保地址范围完全在 VMA 内。
+   - 在 `hisi_hha_cache_do_maintain` 中增加 `mnt_type` 上界检查（`>= HISI_CACHE_MAINT_MAX`），并对地址进行向下对齐、大小进行向上对齐处理。
+3. **修正错误处理**：在 `hisi_soc_cache_mgmt_ioctl` 中，内存分配失败时直接 `return -ENOMEM`，移除错误的 `goto out` 跳转。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/efd9f2ac5415d5ff477f01ccc2e428f69a764862

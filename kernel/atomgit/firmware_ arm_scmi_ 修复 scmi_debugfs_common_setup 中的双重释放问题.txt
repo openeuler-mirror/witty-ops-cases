@@ -1,0 +1,21 @@
+#标题
+firmware: arm_scmi: 修复 scmi_debugfs_common_setup 中的双重释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 Clang 静态代码扫描工具（scan-build）检查代码时，报告存在“Attempt to free released memory”警告，指出在 `scmi_debugfs_common_setup` 函数中存在对已释放内存再次释放（double free）的风险。在 `devm_add_action_or_reset` 执行失败的低概率路径下，可能导致内核内存管理机制异常。
+
+#主要错误日志
+| drivers/firmware/arm_scmi/driver.c:line 2915, column 2
+|       Attempt to free released memory.
+
+#问题根因
+当 `devm_add_action_or_reset()` 函数调用失败时，代码逻辑错误地显式调用了 `scmi_debugfs_common_cleanup(dbg)`。同时，根据 `devm_add_action_or_reset` 的内部逻辑，如果注册失败，它会自动调用传入的清理回调函数（即 `scmi_debugfs_common_cleanup`）。这导致 `scmi_debugfs_common_cleanup` 被执行了两次，进而导致 `dbg->name` 发生双重释放。
+
+#解决方案
+删除 `devm_add_action_or_reset()` 失败分支中多余的 `scmi_debugfs_common_cleanup(dbg)` 显式调用。因为 `devm_add_action_or_reset` 在失败时会自动执行清理回调，无需人工再次调用，由此避免了双重释放的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d15171315a6d2af906dfd0e1600ed4360b470e3b

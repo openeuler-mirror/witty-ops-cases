@@ -1,0 +1,20 @@
+#标题
+ipvs: 小内存系统上 clamp() 参数顺序错误导致编译时断言失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译 IPVS 模块时，如果系统配置为小内存环境（内存小于 512MB），内核编译过程中会触发 `clamp()` 函数内的编译时断言（compile-time assert），导致编译失败或报错。
+
+#主要错误日志
+minmax.h: use BUILD_BUG_ON_MSG() for the lo < hi test in clamp()
+
+#问题根因
+`max_avail` 的值是通过 `order_base_2()` 根据系统内存大小计算得出的，`order_base_2(x)` 定义为 `(x) ? fn(x) : 0`。编译器会为后续代码生成两份副本（一份针对 x=0 的情况）。当内存极小时，计算出的 `max_avail` 可能很小，导致 `clamp(max, min, max_avail)` 中的参数范围出现 `min > max_avail` 的情况，从而触发了 `clamp()` 宏内部新增的 `BUILD_BUG_ON_MSG` 编译时检查（要求 lo < hi）。
+
+#解决方案
+修正 `clamp()` 函数的参数顺序，将 `max` 改为 `max_avail` 作为第一个参数，确保遵循 `(val, lo, hi)` 的标准定义，避免编译器静态检查时误报；同时将 `clamp_val()` 替换为 `clamp()` 以提高代码健壮性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4b86fae36977e19545c342d4c75efbe3cdc4abfa

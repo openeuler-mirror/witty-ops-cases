@@ -1,0 +1,21 @@
+#标题
+dmaengine: mv_xor 修复 DMA map 失败后缺失检查与 unmap 的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+mv_xor 驱动在初始化通道过程中，若底层 DMA 映射（dma_map_single）失败，驱动未检测到错误并继续使用无效的 DMA 地址，可能导致后续 DMA 操作访问非法内存，引发内核崩溃或数据损坏。同时，在内存分配失败的错误处理路径中，之前已映射的 DMA 区域未被正确释放，导致内存泄漏或资源残留。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码在调用 `dma_map_single` 对 `dummy_src` 和 `dummy_dst` 进行映射后，未调用 `dma_mapping_error` 检查映射是否成功，直接使用了可能无效的 DMA 地址。此外，错误处理路径中缺少对已成功映射区域的 `dma_unmap_single` 调用，导致资源未释放。
+
+#解决方案
+1. 在 `dma_map_single` 调用后立即增加 `dma_mapping_error` 检查，若映射失败则返回 `-ENOMEM` 错误。
+2. 引入 `err_unmap_src` 和 `err_unmap_dst` 标签，在后续内存分配失败或初始化出错时，通过 goto 跳转执行反向操作，确保已映射的 DMA 区域被正确 unmap，实现资源的安全释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3b4bc29d6245d2ba583ad5acdcd3463d98f5c882

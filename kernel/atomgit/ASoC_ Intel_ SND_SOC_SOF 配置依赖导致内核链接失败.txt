@@ -1,0 +1,38 @@
+#标题
+ASoC: Intel: SND_SOC_SOF 配置依赖导致内核链接失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置内核时，如果将 Intel SoC 相关配置（SND_SOC_SOF）编译为可加载模块，但将板级配置编译为内建，会导致编译阶段出现链接失败。
+
+#主要错误日志
+x86_64-linux-ld: sound/soc/intel/boards/sof_rt5682.o: in function `sof_rt5682_hw_params':
+sof_rt5682.c:(.text+0x1f9): undefined reference to `sof_dai_get_mclk'
+x86_64-linux-ld: sof_rt5682.c:(.text+0x234): undefined reference to `sof_dai_get_bclk'
+x86_64-linux-ld: sound/soc/intel/boards/sof_rt5682.o: in function `sof_rt5682_codec_init':
+sof_rt5682.c:(.text+0x3e0): undefined reference to `sof_dai_get_mclk'
+x86_64-linux-ld: sound/soc/intel/boards/sof_cs42l42.o: in function `sof_cs42l42_hw_params':
+sof_cs42l42.c:(.text+0x2a): undefined reference to `sof_dai_get_bclk'
+x86_64-linux-ld: sound/soc/intel/boards/sof_nau8825.o: in function `sof_nau8825_hw_params':
+sof_nau8825.c:(.text+0x7f): undefined reference to `sof_dai_get_bclk'
+x86_64-linux-ld: sound/soc/intel/boards/sof_da7219.o: in function `da7219_codec_init':
+sof_da7219.c:(.text+0xbf): undefined reference to `sof_dai_get_mclk'
+x86_64-linux-ld: sound/soc/intel/boards/sof_maxim_common.o: in function `max_98373_hw_params':
+sof_maxim_common.c:(.text+0x6f9): undefined reference to `sof_dai_get_tdm_slots'
+x86_64-linux-ld: sound/soc/intel/boards/sof_realtek_common.o: in function `rt1015_hw_params':
+sof_realtek_common.c:(.text+0x54c): undefined reference to `sof_dai_get_bclk'
+x86_64-linux-ld: sound/soc/intel/boards/sof_realtek_common.o: in function `rt1308_hw_params':
+sof_realtek_common.c:(.text+0x702): undefined reference to `sof_dai_get_mclk'
+x86_64-linux-ld: sound/soc/intel/boards/sof_cirrus_common.o: in function `cs35l41_hw_params':
+sof_cirrus_common.c:(.text+0x2f): undefined reference to `sof_dai_get_bclk'
+
+#问题根因
+内核配置允许将 Intel SoC 配置（SND_SOC_SOF）设为可加载模块的同时，将板级驱动代码设为内建。这导致板级驱动在链接阶段找不到 `sof_dai_get_mclk`、`sof_dai_get_bclk` 等定义在 `snd_soc_sof.ko` 模块中的符号，从而引发 "undefined reference" 错误。
+
+#解决方案
+修改 `sound/soc/intel/boards/Kconfig` 文件，调整配置依赖关系。在 `SND_SOC_INTEL_MACH` 的条件判断中增加对 `SND_SOC_SOF_INTEL_COMMON` 的依赖检查，确保当 SOF 支持被编译为模块时，板级驱动代码不能被强制内建，从而避免链接时的符号未定义错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fdc85ab137a04896f80eac3384f4f09c8e40aae6

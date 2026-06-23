@@ -1,0 +1,20 @@
+#标题
+net: mvpp2: cls: 规则插入函数 mvpp2_ethtool_cls_rule_ins 中的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mvpp2_ethtool_cls_rule_ins 函数中，当 ethtool 规则的 flow_type 转换失败时，函数直接退出，导致此前通过 ethtool_rx_flow_rule_create() 分配的 ethtool_rule 内存结构体未被释放，造成内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 mvpp2_ethtool_cls_rule_ins() 函数中，ethtool_rule 由 ethtool_rx_flow_rule_create() 分配。如果后续的 flow type 转换失败（即 mvpp2_cls_ethtool_flow_to_type 返回值小于 0），函数跳转到 clean_rule 标签。然而，clean_rule 标签仅释放了 efs 结构体，遗漏了对 ethtool_rule 的清理操作，从而导致了内存泄漏。
+
+#解决方案
+修改错误处理路径，将 flow_type 转换失败后的跳转目标从 clean_rule 修改为 clean_eth_rule。clean_eth_rule 标签会正确调用 ethtool_rx_flow_rule_destroy() 来销毁 ethtool_rule，随后再释放 efs，从而修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1d82819742c07039e288fe4570fe2b0d4a417d8d

@@ -1,0 +1,24 @@
+#标题
+RDMA/hns: 修复 RoCE Bonding 中的 RCU 指针解引用违规问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核编译时触发 Sparse 静态分析工具的警告信息，提示存在对 noderef 表达式的非法解引用。该问题主要影响开启了静态分析检查的构建流程，虽然可能在运行时引发不可预期的行为，但主要表现为代码合规性告警。
+
+#主要错误日志
+warning: dereference of noderef expression
+
+#问题根因
+在 `is_active_slave` 函数中，代码直接通过 `bond_grp->bond->curr_active_slave->dev` 访问 `curr_active_slave` 成员。在 Linux 内核定义中，`curr_active_slave` 被声明为 `struct slave __rcu *` 类型，其中 `__rcu` 宏包含 `__attribute__((noderef))` 属性。该属性禁止调用者直接对指针进行解引用操作，必须使用专门的 RCU 保护接口进行访问。直接解引用违反了 RCU（Read-Copy-Update）同步机制的访问规则。
+
+#解决方案
+修改 `drivers/infiniband/hw/hns/hns_roce_bond.c` 文件中的 `is_active_slave` 函数，移除直接的指针解引用操作。
+具体修复措施：
+1. 不再直接访问 `curr_active_slave->dev`。
+2. 引入 `rcu_read_lock` 和 `rcu_read_unlock` 保护临界区。
+3. 调用标准的 RCU 辅助函数 `bond_option_active_slave_get_rcu(bond_grp->bond)` 来安全获取当前活跃的 slave 设备指针，从而消除 Sparse 警告并符合内核编码规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c6d6af3dcca36bb55f12800d0837686207e7fc8f

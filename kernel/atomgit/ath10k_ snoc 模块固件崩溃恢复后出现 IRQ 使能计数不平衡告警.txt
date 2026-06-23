@@ -1,0 +1,21 @@
+#标题
+ath10k: snoc 模块固件崩溃恢复后出现 IRQ 使能计数不平衡告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 WCN3990 固件发生崩溃并进行恢复（recovery）流程后，系统产生 IRQ enable 不平衡的内核告警。具体表现为固件崩溃恢复完成后，内核检测到中断使能计数与去使能计数不匹配，触发相关的 splat 错误信息。
+
+#主要错误日志
+未知
+
+#问题根因
+在固件崩溃恢复流程中，`ath10k_snoc_hif_stop()` 函数跳过了中断（IRQ）的禁用操作，但在后续的 `ath10k_snoc_hif_start()` 函数中，代码无条件地调用了 `ath10k_snoc_irq_enable(ar)` 来启用中断。
+由于之前并未执行对应的禁用操作，此处的启用操作导致了 IRQ 计数不平衡。同时，代码无法通过 `ATH10K_FLAG_CRASH_FLUSH` 标志位来判断当前是否处于恢复流程，因为该标志位在 `hif_start()` 调用前已被清除，导致逻辑判断失效。
+
+#解决方案
+在 `ath10k_snoc_hif_start()` 函数中增加对 `ATH10K_SNOC_FLAG_RECOVERY` 标志位的判断。如果该标志位被置位，说明当前处于固件崩溃恢复流程且中断一直处于启用状态，此时跳过 `ath10k_snoc_irq_enable(ar)` 的调用，从而避免重复启用中断导致计数不平衡。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/41103fdf8af4431e3b93d21a5616d46fe40d8412

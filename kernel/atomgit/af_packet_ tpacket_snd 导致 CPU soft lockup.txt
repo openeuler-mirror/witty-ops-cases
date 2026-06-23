@@ -1,0 +1,27 @@
+#标题
+af_packet: tpacket_snd 导致 CPU soft lockup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `tpacket_snd` 操作发送数据包时，若进程上下文与 ksoftirqd 线程运行在同一个 CPU 上，且满足特定时序条件（前一次发送出错后立即进行下一次发送，且 tx_ring 无可用帧），会导致进程陷入内核态死循环而不释放 CPU。这会阻止 ksoftirqd 线程被调度运行，进而导致 `pending_refcnt` 无法减少，死循环无法退出，最终触发 CPU soft lockup（软死锁）。
+
+#主要错误日志
+未知
+
+#问题根因
+当 `MSG_DONTWAIT` 标志未设置时，`tpacket_snd` 函数会等待 `pending_refcnt` 减至零。
+1. 如果前一次发送过程中发生错误，函数退出时 `pending_refcnt` 可能尚未归零。
+2. 假设紧接着执行下一次发送操作，但 `tx_ring` 中没有可用帧（即 `packet_current_frame` 返回 NULL），此时 `skb` 为 NULL。
+3. 原代码逻辑中，进入等待（`wait_for_completion_interruptible_timeout`）的条件是 `if (need_wait && skb)`。由于此时 `skb` 为 NULL，函数不会执行等待操作让出 CPU，而是进入一个 `do-while` 循环轮询等待 `pending_refcnt` 归零。
+4. `pending_refcnt` 的减少依赖于 `skb->destructor` 的调用，这通常发生在 ksoftirqd 线程的软中断上下文中。
+5. 当 ksoftirqd 线程与当前陷入死循环的进程绑定在同一个 CPU 时，由于进程不让出 CPU，ksoftirqd 无法被调度，导致 `pending_refcnt` 永远无法减少，从而形成死锁。
+
+#解决方案
+修改 `tpacket_snd` 函数中的等待与循环逻辑：
+1. 将判断是否执行等待的条件从检查 `skb` 指针改为检查 `pending_refcnt` 是否不为零（`packet_read_pending(&po->tx_ring)`）。只要还有未完成的发送请求且需要等待，就应该调用 `wait_for_completion_interruptible_timeout` 让出 CPU，允许 ksoftirqd 执行。
+2. 简化循环逻辑，将 `do-while` 循环条件改为 `while (1)`。在 `packet_current_frame` 返回 NULL 的分支中，如果不需要等待或等待超时，则直接 `break` 退出循环。这样既修复了死锁问题，也避免了在循环条件中重复调用耗时的 `packet_read_pending` 函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f6d33afdabebef0ba979dbc0b9d7103656816ea

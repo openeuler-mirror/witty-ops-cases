@@ -1,0 +1,22 @@
+#标题
+ksmbd: 客户端错误回收已过期的持久打开句柄导致潜在状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ksmbd 在处理 SMB 协议的持久打开时，未正确校验句柄是否已过期。这导致客户端能够成功回收本应已失效的 durable opens 句柄，破坏了文件句柄的生命周期管理，可能导致文件访问冲突或状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ksmbd_lookup_durable_fd` 函数中，原有的逻辑仅检查 `fp->conn` 是否存在来判断句柄有效性，未对 `durable_scavenger_timeout` 进行校验。这导致即使持久打开句柄已经超过了设定的超时时间（即已过期），客户端仍然可以找回并使用该句柄，而没有被正确清理或拒绝。
+
+#解决方案
+在 `struct ksmbd_file` 结构体中新增 `durable_scavenger_timeout` 字段用于记录过期时间戳。
+1. 在 `session_fd_check` 函数中，当检测到设置了 `durable_timeout` 时，计算当前的 jiffies 加上超时时间赋值给 `durable_scavenger_timeout`。
+2. 在 `ksmbd_lookup_durable_fd` 查找句柄时，增加对 `durable_scavenger_timeout` 的判断：如果当前时间已超过设定的过期时间，则判定查找失败，释放句柄引用并返回 NULL，从而阻止客户端回收已过期的句柄。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7e3cb857c825f4e7f59cf816dacaa7877850cda9

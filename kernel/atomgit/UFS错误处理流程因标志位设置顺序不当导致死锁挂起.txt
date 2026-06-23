@@ -1,0 +1,41 @@
+#标题
+UFS错误处理流程因标志位设置顺序不当导致死锁挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在UFS（通用闪存存储）设备进行错误处理时发生挂起（Hang），具体表现为错误处理线程陷入无限等待状态。通过堆栈回溯可见，`ufshcd_err_handler` 线程在调用 `ufshcd_rpm_get_sync` 进行运行时恢复时，一直等待 `START_STOP` 命令完成而无法返回，导致错误处理流程无法继续执行。
+
+#主要错误日志
+Backtrace:
+__switch_to+0x174/0x338
+__schedule+0x600/0x9e4
+schedule+0x7c/0xe8
+schedule_timeout+0xa4/0x1c8
+io_schedule_timeout+0x48/0x70
+wait_for_common_io+0xa8/0x160 //waiting on START_STOP
+wait_for_completion_io_timeout+0x10/0x20
+blk_execute_rq+0xe4/0x1e4
+scsi_execute_cmd+0x108/0x244
+ufshcd_set_dev_pwr_mode+0xe8/0x250
+__ufshcd_wl_resume+0x94/0x354
+ufshcd_wl_runtime_resume+0x3c/0x174
+scsi_runtime_resume+0x64/0xa4
+rpm_resume+0x15c/0xa1c
+__pm_runtime_resume+0x4c/0x90 // Runtime resume ongoing
+ufshcd_err_handler+0x1a0/0xd08
+process_one_work+0x174/0x808
+worker_thread+0x15c/0x490
+kthread+0xf4/0x1ec
+ret_from_fork+0x10/0x20
+
+#问题根因
+`ufshcd_err_handling_prepare()` 内部会调用 `ufshcd_rpm_get_sync()` 尝试恢复设备电源状态。该恢复操作需要提交 SCSI 命令，而在 `ufshcd_queuecommand()` 函数中，如果检测到 `UFSHCD_EH_IN_PROGRESS` 标志位已设置，将直接返回 `SCSI_MLQUEUE_HOST_BUSY`。
+原代码逻辑在调用 `ufshcd_err_handling_prepare()` 之前就设置了 `UFSHCD_EH_IN_PROGRESS` 标志，导致 `ufshcd_rpm_get_sync()` 试图提交 SCSI 命令时被自身阻塞，从而形成死锁挂起。
+
+#解决方案
+调整 `UFSHCD_EH_IN_PROGRESS` 标志位的设置时机。将 `ufshcd_set_eh_in_progress(hba)` 的调用位置移动到 `ufshcd_err_handling_prepare(hba)` 之后。确保在进行错误处理准备（包括运行时恢复）时，该标志位尚未设置，从而允许 SCSI 命令正常下发，避免死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/070e3d4db822bd6863702c9a03813af1c839fa12

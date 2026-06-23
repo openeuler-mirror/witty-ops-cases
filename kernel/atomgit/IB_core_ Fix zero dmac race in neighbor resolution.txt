@@ -1,0 +1,22 @@
+#标题
+IB/core: Fix zero dmac race in neighbor resolution
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在大规模 RDMA 业务场景下（N 个节点并发解析 ARP），RDMA 连接出现静默丢包，最终报错 RETRY_EXC_ERR。
+
+#主要错误日志
+RETRY_EXC_ERR
+
+#问题根因
+dst_fetch_ha() 在读取邻居表项（neighbor）时未持有锁，与 __neigh_update() 更新邻居表项存在竞争条件（Race Condition）。
+具体流程为：__neigh_update() 先将 nud_state 设置为 NUD_REACHABLE，此时硬件地址（ha）仍为 0；dst_fetch_ha() 此时检查 nud_state 状态有效，随即读取 ha，获取到了错误的零值 MAC 地址。尽管使用了 seqlock，但在读取期间 seqlock 未检测到并发写操作。
+此外，netevent_callback 会在任意邻居变为 NUD_VALID 时唤醒所有待处理的 addr_req 工作线程，在大规模并发下极大地增加了竞争触发的概率。错误的零 MAC 地址被写入设备 QP 导致通信失败。
+
+#解决方案
+在 dst_fetch_ha() 函数中，增加对邻居表项读锁（read_lock_bh）的持有。确保在检查 nud_state 状态和拷贝硬件地址（ha）期间，与 __neigh_update() 的写操作保持同步，防止读取到中间状态的零值 MAC 地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58a4b1d2e0d071c7ca7cc6720f1f849ac7919cfd

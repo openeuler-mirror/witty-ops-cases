@@ -1,0 +1,27 @@
+#标题
+ubdevshm 边界检查与引用计数管理缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 `ubdevshm` 模块进行共享内存区域重叠检查时，因边界计算错误导致连续地址区域的判断逻辑异常，可能导致合法地址被误判为重叠或非法。
+2. 在进程查找相关接口中，存在 `task_struct` 引用计数管理错误，可能导致内核对象引用计数泄漏或释放后使用，引发内核稳定性风险。
+3. 调用 `ubdevshm_register_segment` 注册大小时，若传入 `size` 为 0，未能正确拦截无效参数。
+
+#主要错误日志
+- `pr_err("invalid param\n");`
+- `pr_err("tgid[%d] is same with peer task\n", tgid);`
+
+#问题根因
+1. **边界检查计算错误**：函数 `shm_area_find_overlap` 在计算区域结束地址 `end_area` 时，未对地址区间进行减 1 处理（`min(a->va + a->size, b->va + b->size)`），导致包含了不属于自己的最后一个字节地址，使得连续地址的判断条件出错。
+2. **引用计数冗余增加**：函数 `get_task_by_tgid` 在已经通过 `get_pid_task` 获取任务结构体引用的情况下，再次调用 `get_task_struct`，导致引用计数多算一次；同理 `get_task_by_peer_tgid` 中也存在类似逻辑，导致引用计数管理混乱。
+3. **参数校验缺失**：`ubdevshm_register_segment` 入口处未对 `va->size` 进行非 0 校验。
+
+#解决方案
+1. **修正边界计算**：将 `end_area` 的计算逻辑修正为 `min(a->va + a->size - 1, b->va + b->size - 1)`，确保地址区间比较的正确性。
+2. **移除冗余引用计数操作**：删除 `get_task_by_tgid` 中多余的 `get_task_struct` 调用；修正 `get_task_by_peer_tgid` 的引用计数逻辑，确保在错误分支中正确释放引用（调用 `put_task_struct`），正常分支依赖 `get_pid_task` 返回的引用。
+3. **完善参数校验**：在 `ubdevshm_register_segment` 中增加 `!va->size` 的判断条件，拦截无效参数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0d80333d8a55204ab722c03276dccdfec050c197

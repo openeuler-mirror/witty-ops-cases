@@ -1,0 +1,20 @@
+#标题
+rtl8187驱动接收回调函数存在潜在缓冲区下溢风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Realtek rtl8187 无线网卡驱动时，若接收到的数据包长度小于预期的 struct rtl8187_rx_hdr 或 struct rtl8187b_rx_hdr 结构体大小，内核在处理接收回调函数 rtl8187_rx_cb 时，会从 skb 尾部读取数据并强制转换为对应的结构体指针。由于缺乏长度校验，直接访问该指针成员可能导致内核内存越界读取（缓冲区下溢），进而引发内核 Panic 或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 rtl8187_rx_cb 中，代码通过 skb_tail_pointer(skb) - sizeof(*hdr) 计算 header 指针位置，随后直接访问 hdr->flags、hdr->signal 等成员。在此之前，代码未校验 skb->len 是否足以容纳对应的 rx_hdr 结构体。当 USB 接收到的数据包过小（如损坏的数据包或特定的攻击包），指针计算将指向无效内存区域，导致缓冲区下溢漏洞。
+
+#解决方案
+在访问接收头部数据前增加长度检查。若 skb->len 小于结构体 sizeof(struct rtl8187_rx_hdr) 或 sizeof(struct rtl8187b_rx_hdr)，则直接跳转到 free_skb 标签释放 socket buffer 并返回，从而避免越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8a42f4fcc19f12a5dafbb8d055562c1bcd3ed71b

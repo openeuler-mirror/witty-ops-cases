@@ -1,0 +1,27 @@
+#标题
+urma内核态wk_jetty重传机制可靠性及资源释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核态wk_jetty重传机制存在可靠性隐患及安全问题。在特定场景下（如创建rtbuffer失败或处理连接响应时），重传相关的资源（如rt_work、rtbuffer）未得到正确清理，可能导致内存泄漏或资源泄漏；此外，发送端维护了无用的lru_node逻辑，可能导致潜在的逻辑异常。
+
+#主要错误日志
+- ubcore_log_err("create msn_node failed. msn %llu eid " EID_FMT "\n", msn, EID_ARGS(*dst_eid));
+- ubcore_log_err("Failed to create the first rt_work. msn %llu.\n", msn);
+- ubcore_log_err("Failed to create rtbuffer.\n");
+- ubcore_log_err("Failed to create rtbuffer, packet size too large.\n");
+
+#问题根因
+1. 资源管理缺陷：在发送路径中，如果创建了rt_work但后续创建rtbuffer失败（如内存不足或包过大），代码未正确释放已分配的rt_work，导致资源泄漏。
+2. 释放路径不完整：在连接响应处理路径中，只释放了msn_node，未检查并取消正在运行的rt_work并释放相关资源，导致资源未彻底清理。
+3. 冗余逻辑：发送端逻辑中包含lru_node的处理，但该逻辑实际上并未使用，属于无用代码。
+
+#解决方案
+1. 移除发送端的lru_node逻辑：修改ubmad_create_msn_node函数，增加use_lru参数，在发送端调用时传入false，不再将节点加入lru链表。
+2. 完善错误处理流程：在发送路径中，若创建rtbuffer失败，增加对rt_work的清理逻辑，调用cancel_delayed_work_sync取消延迟工作并释放内存。
+3. 补充释放路径逻辑：在处理连接响应时，在释放msn_node前，显式获取并清理其关联的rt_work及rtbuffer资源，确保资源彻底释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a2f21d30273cdd27dd53c02b7faadfbc8ceaef57

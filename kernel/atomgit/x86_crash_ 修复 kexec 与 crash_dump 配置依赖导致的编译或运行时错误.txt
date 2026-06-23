@@ -1,0 +1,23 @@
+#标题
+x86/crash: 修复 kexec 与 crash_dump 配置依赖导致的编译或运行时错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在禁用 CONFIG_CRASH_DUMP 但启用 CONFIG_KEXEC_CORE 的内核配置场景下，编译过程中出现与 crash 相关的函数（如 `crash_setup_memmap_entries`、`crash_load_segments`）未定义引用错误；或者生成的内核镜像中包含不必要的 crash dumping 代码，导致内核逻辑混淆或 kexec 重启路径异常。
+
+#主要错误日志
+未知
+
+#问题根因
+内核源码中错误地将 crash dumping（kdump）相关的代码逻辑耦合在 `CONFIG_KEXEC_CORE` 编译选项下。实际上，kexec 快速重启功能与 crash dumping 功能应通过 `CONFIG_KEXEC_CORE` 和 `CONFIG_CRASH_DUMP` 两个独立的配置项进行区分。由于宏定义 `#ifdef CONFIG_KEXEC_CORE` 覆盖了本应属于 `CONFIG_CRASH_DUMP` 的代码块，导致在特定配置组合下，部分必要代码未被编译或非必要代码被错误包含。
+
+#解决方案
+重构 x86 架构下的内核代码，将 crash dumping 相关的逻辑从 `CONFIG_KEXEC_CORE` 中剥离，并封装在 `CONFIG_CRASH_DUMP` 或 `CONFIG_CRASH_RESERVE` 宏定义中：
+1. 调整 Makefile，将 `crash.o` 的编译依赖从 `CONFIG_KEXEC_CORE` 修改为 `CONFIG_CRASH_DUMP`。
+2. 修正 `arch/x86/kernel/` 下多个文件（如 kexec-bzimage64.c, machine_kexec_64.c, reboot.c, smp.c 等）及虚拟化相关文件（mshyperv.c, kvm.c, xen-enlighten.hvm.c）中的条件编译宏，将 `crash_shutdown`、`crash_load_segments` 等函数的可见性控制从 `CONFIG_KEXEC_CORE` 改为 `CONFIG_CRASH_DUMP`。
+3. 修正 `setup.c` 中 `reserve_crashkernel` 的依赖检查，改为 `CONFIG_CRASH_RESERVE`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/47ff774cbb440dfc3cf5d5bc7cf82b41d4d99966

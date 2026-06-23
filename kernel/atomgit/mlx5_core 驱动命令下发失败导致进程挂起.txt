@@ -1,0 +1,41 @@
+#标题
+mlx5_core 驱动命令下发失败导致进程挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `cmd_alloc_index()` 分配失败时，`cmd_work_handler()` 函数直接返回，未能完成 `ent->slotted` 的完成量。这导致发起该命令的任务一直在等待完成量，进而出现进程阻塞超过 120 秒的现象，触发 hung_task 检测告警。受影响的进程通常涉及网卡队列工作队列（如 `kworker`），导致相关网卡功能（如 CQ 调整）无响应。
+
+#主要错误日志
+mlx5_core 0000:01:00.0: cmd_work_handler:877:(pid 3880418): failed to allocate command entry
+INFO: task kworker/13:2:4055883 blocked for more than 120 seconds.
+      Not tainted 4.19.90-25.44.v2101.ky10.aarch64 #1
+      "echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+kworker/13:2    D    0 4055883      2 0x00000228
+Workqueue: events mlx5e_tx_dim_work [mlx5_core]
+Call trace:
+     __switch_to+0xe8/0x150
+     __schedule+0x2a8/0x9b8
+     schedule+0x2c/0x88
+     schedule_timeout+0x204/0x478
+     wait_for_common+0x154/0x250
+     wait_for_completion+0x28/0x38
+     cmd_exec+0x7a0/0xa00 [mlx5_core]
+     mlx5_cmd_exec+0x54/0x80 [mlx5_core]
+     mlx5_core_modify_cq+0x6c/0x80 [mlx5_core]
+     mlx5_core_modify_cq_moderation+0xa0/0xb8 [mlx5_core]
+     mlx5e_tx_dim_work+0x54/0x68 [mlx5_core]
+     process_one_work+0x1b0/0x448
+     worker_thread+0x54/0x468
+     kthread+0x134/0x138
+     ret_from_fork+0x10/0x18
+
+#问题根因
+在 `cmd_work_handler()` 处理过程中，如果 `cmd_alloc_index()` 失败，代码逻辑进入了错误处理分支。虽然在该分支中调用了 `complete(&ent->done)` 来唤醒等待 `done` 的任务，并释放了信号量 `up(&cmd->vars.sem)`，但遗漏了对 `ent->slotted` 完成量的处理。调用链上游的 `cmd_exec()` 函数在等待 `ent->slotted` 完成量时，因该完成量从未被置位，导致任务一直处于阻塞状态无法返回，从而引发进程挂起。
+
+#解决方案
+在 `cmd_work_handler()` 函数中，当 `cmd_alloc_index()` 失败并进入早期返回路径时，在释放信号量后、return 之前，增加调用 `complete(&ent->slotted)`，确保等待该完成量的任务能够被正确唤醒并处理错误情况，避免无限期阻塞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6b777e767412851a2f2d429a9b55a3e96612c8b2

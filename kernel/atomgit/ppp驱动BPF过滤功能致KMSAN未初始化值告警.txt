@@ -1,0 +1,25 @@
+#标题
+ppp驱动BPF过滤功能致KMSAN未初始化值告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核内存检测工具（KMSAN）捕获到“uninit-value”告警。该问题出现在PPP驱动配合BPF过滤程序使用时，特定构造的BPF程序（如syzkaller生成的测试用例或部分libpcap生成的规则）会读取PPP数据包头部未初始化的字节，导致内核检测到使用未初始化内存的风险。
+
+#主要错误日志
+KMSAN: uninit-value warning
+
+#问题根因
+PPP驱动在处理数据包过滤时，为了适配BPF程序假设的4字节PPP头部，会通过`skb_push`在数据包头部压入2字节。
+原代码仅初始化了这2字节中的第一个字节（用于标识数据包方向 inbound/outbound），而第二个字节未被初始化。正常情况下libpcap生成的BPF程序会跳过这2字节，但若BPF程序从偏移量0开始读取，会读取到第二个字节中的未初始化数据，从而触发KMSAN告警。
+
+#解决方案
+修改PPP驱动代码，将原本仅初始化1字节的操作改为初始化2字节。
+具体变更如下：
+1. 定义宏 `PPP_FILTER_OUTBOUND_TAG` (0x0100) 和 `PPP_FILTER_INBOUND_TAG` (0x0000)。
+2. 在 `ppp_send_frame` 和 `ppp_receive_nonmp_frame` 函数中，使用 `*(__be16 *)skb_push(skb, 2) = htons(PPP_FILTER_..._TAG);` 替代原有的单字节赋值。
+此举确保了BPF过滤头部的两个字节均被显式初始化，消除了读取未初始化内存的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a8694d53f1264e05e2b53e5e5274c699631dbdb1

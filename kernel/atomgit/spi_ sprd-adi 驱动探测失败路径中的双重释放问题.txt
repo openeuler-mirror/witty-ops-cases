@@ -1,0 +1,20 @@
+#标题
+spi: sprd-adi 驱动探测失败路径中的双重释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sprd-adi 驱动加载过程中，若 `devm_register_restart_handler` 注册失败，内核会发生双重释放错误，可能导致内存损坏或系统崩溃。
+
+#主要错误日志
+[推断] 内核日志可能包含：can not register restart handler
+
+#问题根因
+驱动使用 `spi_alloc_host()` 分配控制器，但使用 `devm_spi_register_controller()` 进行注册。当 `devm_register_restart_handler` 失败时，代码跳转到 `put_ctlr` 标签手动调用 `spi_controller_put()` 释放资源。由于设备使用了 devm 机制，probe 失败时设备核心层会自动再次调用 `spi_controller_put()`，导致 `spi_controller` 结构体被双重释放。
+
+#解决方案
+将 `spi_alloc_host()` 替换为 `devm_spi_alloc_host()`，利用托管资源管理机制自动处理释放逻辑，并移除错误处理路径中手动调用的 `spi_controller_put()` 代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cac0ebd9fb1907100adf7d71f58809cb2c87e4a2

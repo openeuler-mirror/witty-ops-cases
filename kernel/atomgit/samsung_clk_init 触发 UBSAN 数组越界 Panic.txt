@@ -1,0 +1,25 @@
+#标题
+samsung_clk_init 触发 UBSAN 数组越界 Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使能 UBSAN_ARRAY_BOUNDS 配置后，系统在初始化 Samsung 时钟驱动（如 exynos/arm64 平台）时触发内核恐慌。调用链显示崩溃发生在 `samsung_clk_init` 函数中，导致系统无法正常启动。
+
+#主要错误日志
+UBSAN: array index out of bounds: 00000000f2005512 [#1] PREEMPT SMP
+Call trace:
+ samsung_clk_init+0x110/0x124 (P)
+ samsung_clk_init+0x48/0x124 (L)
+ samsung_cmu_register_one+0x3c/0xa0
+ exynos_arm64_register_cmu+0x54/0x64
+
+#问题根因
+在 `samsung_clk_init` 函数中，代码逻辑在设置 `ctx->clk_data.num = nr_clks` 之前就尝试解引用 `ctx->clk_data.hws` 数组进行赋值操作（`ctx->clk_data.hws[i] = ERR_PTR(-ENOENT)`）。由于 `clk_data.num` 此时值为 0，UBSAN 机制检测到数组索引越界，从而触发 Panic。
+
+#解决方案
+调整代码执行顺序，将 `ctx->clk_data.num = nr_clks` 的赋值操作移动至 for 循环（遍历 hws 数组）之前。这确保了在访问数组元素前，数组大小已被正确初始化，从而修复了 UBSAN 数组越界问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/32ff18eb69d1923b811003ed66e27032a3419582

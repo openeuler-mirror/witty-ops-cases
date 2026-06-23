@@ -1,0 +1,21 @@
+#标题
+RDMA/siw: 头部处理过程中潜在的空指针引用修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 RDMA (siw) 接收数据时，若 `siw_get_hdr()` 函数在调用 `set_rx_fpdu_context()` 之前返回 `-EINVAL` 错误，此时 `qp->rx_fpdu` 指针尚未初始化（为 NULL）。后续错误处理路径在判断 `qp->rx_fpdu->more_ddp_segs` 时未进行空指针检查，直接导致内核发生空指针引用，触发 KASAN 报错或内核 panic。
+
+#主要错误日志
+[  101.384271] KASAN: null-ptr-deref in range [0x00000000000000c0-0x00000000000000c7]
+[  101.385869] RIP: 0010:siw_tcp_rx_data+0x13ad/0x1e50
+
+#问题根因
+在 `siw_tcp_rx_data` 函数的错误处理路径中，代码尝试访问 `qp->rx_fpdu->more_ddp_segs` 成员。然而，当 `siw_get_hdr()` 提前返回 `-EINVAL` 时，`set_rx_fpdu_context()` 尚未被调用，导致 `qp->rx_fpdu` 指针为 NULL。代码逻辑未检查该指针是否为空就直接进行解引用，从而引发空指针引用错误。
+
+#解决方案
+在访问 `qp->rx_fpdu->more_ddp_segs` 之前增加对 `qp->rx_fpdu` 指针的有效性检查。修改条件判断逻辑，仅当 `qp->rx_fpdu` 非空时才访问其成员变量，防止空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac2ec94d9ef3ea06ff16ef18390433bd52b06c08

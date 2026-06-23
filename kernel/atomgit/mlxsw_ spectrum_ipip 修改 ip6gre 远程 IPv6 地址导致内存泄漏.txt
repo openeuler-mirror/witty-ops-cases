@@ -1,0 +1,36 @@
+#标题
+mlxsw: spectrum_ipip 修改 ip6gre 远程 IPv6 地址导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+修改 ip6gre 设备的远程 IPv6 地址后，驱动未正确处理地址映射关系，导致内核产生 WARNING 并引发内存泄漏。在执行 `devlink dev reload` 或设备删除流程时，可观测到内核警告与未释放的内核对象。
+
+#主要错误日志
+1. 内核 WARNING 信息：
+```
+WARNING: CPU: 0 PID: 1682 at drivers/net/ethernet/mellanox/mlxsw/spectrum.c:3002 mlxsw_sp_ipv6_addr_put+0x140/0x1d0
+```
+
+2. 内存泄漏报告：
+```
+unreferenced object 0xffff898081f597a0 (size 32):
+  comm "ip", pid 1626, jiffies 4294719324
+  backtrace:
+    [<00000000ff2a1ddb>] mlxsw_sp_ipv6_addr_kvdl_index_get+0x281/0x340
+    [<000000009ddd445d>] mlxsw_sp_router_netdevice_event+0x47b/0x1240
+```
+
+#问题根因
+设备将用于封装的 IPv6 地址存储在由驱动管理的线性内存中。在更改 ip6gre netdevice 的远程地址时，驱动程序逻辑存在缺陷：新的远程地址从未被添加到驱动的哈希表（及设备硬件）中，而旧的地址也从未从哈希表中移除。这导致了旧地址占用的内存无法释放，进而引发内存泄漏和相关警告。
+
+#解决方案
+在 `mlxsw_sp_ipip_ol_netdev_change_gre6` 函数中增加对 IPv6 地址变更的处理逻辑：
+1. 在配置变更前，先获取新地址的 KVDL 索引并将其更新到 ipip_entry 中。
+2. 调用 `mlxsw_sp_ipip_ol_netdev_change_gre` 进行配置更新。
+3. 更新成功后，释放旧地址的引用 (`mlxsw_sp_ipv6_addr_put`)。
+4. 若更新失败，回滚 KVDL 索引并释放新地址的引用，确保资源正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5a0059c7a9dde076e86ef5caa957f77680c90bc7

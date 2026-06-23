@@ -1,0 +1,21 @@
+#标题
+hwmon: (ibmpex) 修复 high/low store 函数中的释放后使用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 ibmpex 驱动过程中，如果同时通过 sysfs 接口触发 `high/low store` 操作，会触发竞态条件，导致访问已释放的内存区域，引发内核崩溃或系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+`ibmpex_high_low_store()` 函数通过 `dev_get_drvdata()` 获取驱动数据后直接使用，未进行有效性校验。在驱动卸载路径中，`dev_set_drvdata(..., NULL)` 和 `hwmon_device_unregister()` 的调用顺序不当，导致 sysfs 回调函数可能在数据结构被释放后、但 sysfs 接口未完全注销前被调用，从而引发 use-after-free 漏洞。
+
+#解决方案
+1. 在 `ibmpex_high_low_store()` 函数中增加对 `dev_get_drvdata()` 返回值的 NULL 检查，若数据无效则直接返回 `-ENODEV`。
+2. 调整 `ibmpex_bmc_delete()` 函数中的资源释放顺序：先调用 `hwmon_device_unregister()` 注销 hwmon 设备，随即调用 `dev_set_drvdata(data->bmc_device, NULL)` 将驱动数据置空，最后再移除设备文件和释放内存。这防止了 TOCTOU 问题，确保回调执行时数据有效或已不再可访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/71058d6a44de92ba21b2dc173c1d0f11f8d2bd73

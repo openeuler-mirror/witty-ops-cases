@@ -1,0 +1,20 @@
+#标题
+wifi: rtw89: firmware download error code propagation failure
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 rtw89 无线网卡驱动下载固件头部和主体的过程中，若 `rtw89_h2c_tx` 函数执行失败，调用者无法获取到真实的错误码。虽然内核日志会打印发送失败的提示，但上层函数接收到的是被硬编码覆盖的 `-1` 错误码，而非 `rtw89_h2c_tx` 返回的具体错误原因，导致故障排查困难或错误处理逻辑异常。
+
+#主要错误日志
+rtw89_err(rtwdev, "failed to send h2c\n");
+
+#问题根因
+在 `__rtw89_fw_download_hdr` 和 `__rtw89_fw_download_main` 函数中，当 `rtw89_h2c_tx` 返回非零错误码时，代码逻辑错误地将该返回值覆盖为硬编码的 `-1`（`ret = -1;`），导致原始的具体错误码丢失，未能正确传递给上层调用者。
+
+#解决方案
+删除 `__rtw89_fw_download_hdr` 和 `__rtw89_fw_download_main` 函数中处理 `rtw89_h2c_tx` 返回值时的 `ret = -1;` 赋值语句，确保直接保留并向上层传递 `rtw89_h2c_tx` 的原始错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f814664d13b1b83270cc7eac863a7fec770b4d98

@@ -1,0 +1,23 @@
+#标题
+driver/core: 修复 platform_device/bus_type/device 结构体 KABI 破损问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核关键数据结构 `struct device`、`struct bus_type` 及 `struct platform_device` 的成员布局发生变化，导致内核模块接口（KABI）不一致。这会引发驱动程序加载失败、内核 panic 或在使用旧版驱动模块时出现不可预知的异常行为，严重影响系统的兼容性与稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+在合入上游提交 639757536abe ("driver core: generalize driver_override in struct device") 和 e5181adaa2f2 ("driver core: platform: use generic driver_override infrastructure") 时，直接修改了 `struct device` 中 `driver_override` 成员的位置、`struct bus_type` 中 `driver_override` 的类型定义以及 `struct platform_device` 的成员布局，未遵循 openEuler 内核的 KABI 兼容性规范，导致结构体尺寸与成员偏移量改变，破坏了二进制兼容性。
+
+#解决方案
+利用 KABI 宏对相关结构体进行调整以修复兼容性：
+1. 在 `struct device` 中，将 `driver_override` 结构体移动到 `KABI_RESERVE(5)` 和 `KABI_RESERVE(6)` 的位置进行占位，并使用 `#ifndef __GENKSYMS__` 条件编译确保在生成符号表时保持兼容。
+2. 在 `struct bus_type` 中，使用 `KABI_USE(1, bool driver_override)` 宏替换原有的 `bool driver_override` 定义，复用预留空间。
+3. 在 `struct platform_device` 中，使用 `KABI_DEPRECATE` 宏保留 `driver_override` 字段以维持结构体大小不变。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dbe6b07c9f9807233f50a87367c7005bae0ebd31

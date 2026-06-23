@@ -1,0 +1,20 @@
+#标题
+md raid_disks_store 接口存在并发竞态条件导致潜在系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 sysfs 接口动态修改 MD 设备的 raid_disks 参数时，由于缺乏必要的并发保护，可能触发内核竞态条件。这可能导致内核崩溃、数据不一致或 MD 阵列状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `raid_disks_store` 函数中，原代码仅使用 `mddev_lock` 获取锁，未调用 `mddev_suspend` 挂起阵列。在进行磁盘数量调整的关键路径上，如果不同时暂停阵列的 I/O 活动，可能导致该操作与其他 I/O 处理路径发生并发冲突，从而引发系统不稳定或崩溃。该缺陷被收录为 CVE-2025-71225。
+
+#解决方案
+将 `raid_disks_store` 函数中的锁操作由 `mddev_lock` 替换为 `mddev_suspend_and_lock`，并在解锁路径将 `mddev_unlock` 替换为 `mddev_unlock_and_resume`。这确保了在修改阵列磁盘数量时，设备处于挂起状态，避免了并发操作带来的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b98a816286b8048a7f16415e7d508ca96d0c2f41

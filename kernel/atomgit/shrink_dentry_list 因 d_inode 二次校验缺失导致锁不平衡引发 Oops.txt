@@ -1,0 +1,36 @@
+#标题
+shrink_dentry_list 因 d_inode 二次校验缺失导致锁不平衡引发 Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下执行 dentry 缩减操作（如内存回收或文件系统扫描）时，内核检测到 PV qspinlock 值损坏，触发 WARNING 并打印调用栈，导致系统异常。
+
+#主要错误日志
+```
+------------[ cut here ]------------
+pvqspinlock: lock 0xff438c8e84836be0 has corrupted value 0x0!
+WARNING: CPU: 1 PID: 370 at kernel/locking/qspinlock_paravirt.h:498
+CPU: 1 PID: 370 Comm: bash Not tainted 5.10.0 #2008
+RIP: 0010:__pv_queued_spin_unlock_slowpath+0xbf/0xd0
+Call Trace:
+ __raw_callee_save___pv_queued_spin_unlock_slowpath+0x11/0x24
+ .slowpath+0x9/0x16
+ dentry_unlink_inode+0x91/0x120
+ __dentry_kill+0xf3/0x1c0
+ shrink_dentry_list+0x4b/0xe0
+ prune_dcache_sb+0x52/0x80
+ super_cache_scan+0x133/0x1f0
+ do_shrink_slab+0x14a/0x2f0
+```
+
+#问题根因
+在 `shrink_lock_dentry()` 函数中，当尝试锁定父目录失败时，会临时释放并重新获取 dentry 锁。在重新获取 dentry 锁后，代码仅检查了 `d_lockref.count` 是否为 0，未再次校验 `d_inode` 是否发生变化。
+若在此锁释放间隙，其他线程（如 `lookup_open`）修改了该 dentry 的 inode（从负向 dentry 变为正向 dentry），当前线程会持有未锁定的 inode 指针继续执行。随后在 `dentry_unlink_inode()` 中尝试解锁该 inode 时，因该 inode 实际未被锁定，导致 "bad unlock balance" 错误，触发 spinlock 校验失败。
+
+#解决方案
+在 `shrink_lock_dentry()` 重新获取 dentry 锁后，增加对 `d_inode` 的校验。修改判断条件，确保 `dentry->d_inode` 与初次锁定时记录的 `inode` 一致，若不一致则放弃锁定，避免对未锁定的 inode 进行操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3d0b6504921ea88ac8efa41980a2497342fd5c53

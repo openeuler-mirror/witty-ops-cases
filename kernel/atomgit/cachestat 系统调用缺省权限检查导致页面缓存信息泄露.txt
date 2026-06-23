@@ -1,0 +1,24 @@
+#标题
+cachestat 系统调用缺省权限检查导致页面缓存信息泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+cachestat 系统调用在实现时遗漏了对调用进程写权限或文件所有权的校验。这导致无权写入特定文件的普通用户可以通过该系统调用查询该文件的页面缓存统计信息，造成信息泄露风险，违背了系统安全策略。
+
+#主要错误日志
+未知
+
+#问题根因
+cachestat 系统调用在最初实现时（commit cf264e1329fb），未引入类似 mincore() 系统调用中的权限保护逻辑（commit 134fca9063ad）。内核仅检查了文件描述符的有效性，未验证调用进程是否具备对该文件的写权限（FMODE_WRITE）、是否为文件所有者（inode_owner_or_capable）或是否具备写访问权限（MAY_WRITE），从而导致非授权用户可获取页面缓存状态。
+
+#解决方案
+在 cachestat 系统调用处理流程中增加权限检查函数 `can_do_cachestat`。在进行统计计算前，校验当前进程是否满足以下任一条件：
+1. 文件是以写模式打开的（f_mode & FMODE_WRITE）；
+2. 当前进程是文件的所有者或具有相应的 capability（inode_owner_or_capable）；
+3. 当前进程对文件具有写权限（file_permission 返回 0）。
+若上述条件均不满足，系统调用将直接返回 `-EPERM` 错误，拒绝访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2465b3982648cf1134f8364f0888254eef14e271

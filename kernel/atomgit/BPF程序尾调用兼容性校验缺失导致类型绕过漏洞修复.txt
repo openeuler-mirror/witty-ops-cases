@@ -1,0 +1,22 @@
+#标题
+BPF程序尾调用兼容性校验缺失导致类型绕过漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `BPF_MAP_TYPE_PROG_ARRAY` 进行尾调用时，内核未校验主程序与被调用程序的 `expected_attach_type` 是否一致。这可能导致拥有不同 `expected_attach_type` 的程序通过尾调用链接在一起，例如将未设置 attach type 的 XDP 程序尾调用至 BPF_XDP_DEVMAP 类型的程序，从而绕过内核原本的权限与类型隔离检查，引发非预期行为。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在 `bpf_prog_map_compatible` 函数中校验 BPF 程序与 Map 的兼容性时，遗漏了对 `expected_attach_type` 字段的检查。当 Map 类型为 `BPF_MAP_TYPE_PROG_ARRAY` 时，若主程序的 `expected_attach_type` 与 Map 中已记录的程序类型不一致，内核错误地返回了兼容，导致类型校验失效。
+
+#解决方案
+在 `include/linux/bpf.h` 中的 `bpf_map_owner` 结构体新增 `expected_attach_type` 成员变量。修改 `kernel/bpf/core.c` 中的逻辑：
+1. 在设置 map owner 信息时，同步记录程序的 `expected_attach_type`。
+2. 在兼容性检查逻辑中，针对 `BPF_MAP_TYPE_PROG_ARRAY` 类型的 Map，增加对 `expected_attach_type` 的严格比较，若不一致则判定为不兼容。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f50a28e7b7fcd68e7dd70d300e4b7fe83c59fa15

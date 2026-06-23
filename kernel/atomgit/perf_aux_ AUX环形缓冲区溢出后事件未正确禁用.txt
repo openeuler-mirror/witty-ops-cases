@@ -1,0 +1,20 @@
+#标题
+perf/aux: AUX环形缓冲区溢出后事件未正确禁用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当AUX事件发生环形缓冲区溢出时，内核意图通过设置 `pending_disable` 标志来禁用该事件，但由于标志位处理逻辑错误，该事件实际上并未被禁用，导致后续的IRQ工作队列无法触发，事件禁用流程失效。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的提交 ca6c21327c6a ("perf: Fix missing SIGTRAPs") 中，`pending_disable` 标志被修改为布尔类型，但 AUX 事件相关代码未同步更新。代码错误地将当前 CPU 号（`smp_processor_id()`）赋值给 `pending_disable`。当 CPU 号为 0 时，该标志被误判为 false，导致 IRQ 工作队列无法被触发。此外，后续提交 2b84def990d3 引入了新的 IRQ work `pending_disable_irq` 处理禁用流程，AUX 事件路径也未更新以适配该机制。
+
+#解决方案
+在检测到 AUX 环形缓冲区溢出时，不再直接赋值 `pending_disable` 标志，而是改为调用 `perf_event_disable_inatomic()` 函数来正确启动禁用流程。同时更新了相关注释以反映 `pending_disable` 现为布尔值（0 或 1）的变化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/232153094288afb03edddca5f0f7169c32110853

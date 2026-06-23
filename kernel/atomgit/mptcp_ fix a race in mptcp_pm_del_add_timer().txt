@@ -1,0 +1,29 @@
+#标题
+mptcp: fix a race in mptcp_pm_del_add_timer()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 MPTCP (Multipath TCP) 连接时，由于并发竞争条件，触发 KASAN (Kernel Address Sanitizer) 检测到的 "slab-use-after-free" 错误。具体表现为在 `mptcp_pm_del_add_timer` 函数中访问定时器时，对应的内存对象已被另一进程释放，导致内核崩溃或内存损坏。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in __timer_delete_sync+0x372/0x3f0 kernel/time/timer.c:1616
+Read of size 4 at addr ffff8880311e4150 by task kworker/1:1/44
+Call Trace:
+  sk_stop_timer_sync+0x1b/0x90 net/core/sock.c:3631
+  mptcp_pm_del_add_timer+0x283/0x310 net/mptcp/pm.c:362
+  ...
+
+#问题根因
+`mptcp_pm_del_add_timer()` 函数在调用 `sk_stop_timer_sync(sk, &entry->add_timer)` 时存在竞争条件。该函数查找到 `entry` 后释放了锁，另一进程（如执行 `mptcp_pm_flush_addrs_and_subflows` 的任务）可能在此时获取锁并释放了该 `entry` 结构体。由于缺乏 RCU (Read-Copy-Update) 保护机制，当前线程在调用停止定时器接口时访问了已被释放的内存。
+
+#解决方案
+引入 RCU 保护机制防止 Use-After-Free 问题：
+1. 在结构体 `mptcp_pm_add_entry` 中增加 `struct rcu_head rcu` 成员。
+2. 在 `mptcp_pm_del_add_timer()` 函数中增加 `rcu_read_lock()` 和 `rcu_read_unlock()` 保护临界区，确保在查找和操作 `entry` 期间内存不会被释放。
+3. 将 `entry` 的释放方式由 `kfree(entry)` 修改为 `kfree_rcu(entry, rcu)`，确保在所有 RCU 读侧临界区退出前内存保持有效。
+4. 优化代码逻辑，将变量 `add_timer` 替换为布尔值 `stop_timer` 以提升代码可读性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7505002c6e58a20fa67a481f338ade455d4b41df

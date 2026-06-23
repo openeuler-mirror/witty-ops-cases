@@ -1,0 +1,22 @@
+#标题
+openat2 使用 RESOLVE_NO_XDEV 时意外触发 automount 导致非预期行为
+
+#内核版本
+OLK-6.6
+
+#问题现象
+调用 openat2 系统调用时，即使设置了 RESOLVE_NO_XDEV 标志位，内核仍会触发 automount（自动挂载）。这违反了 RESOLVE_NO_XDEV 禁止跨越文件系统挂载点的语义定义，可能导致非预期的挂载行为或程序运行结果与预期不符。
+
+#主要错误日志
+未知
+
+#问题根因
+openat2 处理逻辑存在缺陷：当传入 RESOLVE_NO_XDEV 标志时，openat2 本应禁止穿越挂载点，但实际上并未阻止 automount 的触发逻辑。代码路径在 `follow_automount` 和 `__traverse_mounts` 函数中，未正确检查 `LOOKUP_NO_XDEV` 标志位，导致即便设置了禁止跨设备标志，依然执行了自动挂载动作。
+
+#解决方案
+在文件系统路径查找的关键路径中增加对 `LOOKUP_NO_XDEV` 标志的检查：
+1. 在 `follow_automount` 函数中，检测到 `LOOKUP_NO_XDEV` 标志时，直接返回 `-EXDEV` 错误，阻止触发 automount。
+2. 在 `__traverse_mounts` 函数处理 DCACHE_MANAGE_TRANSIT 时，同样检查 `LOOKUP_NO_XDEV` 标志，若存在则返回 `-EXDEV`，确保文件系统管理的转移动作也被阻止。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9955e2dc6def6de583e078a4aab9091f37c6fd8b

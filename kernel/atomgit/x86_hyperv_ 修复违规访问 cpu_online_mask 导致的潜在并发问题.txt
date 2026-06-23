@@ -1,0 +1,20 @@
+#标题
+x86/hyperv: 修复违规访问 cpu_online_mask 导致的潜在并发问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hyper-V root partition 环境下，MSI 中断消息组合过程中，代码在未持有 CPU 读锁的情况下访问了 `cpu_online_mask`。这违反了 RCU 或 CPU hotplug 的锁保护规则，可能导致读取到不一致的 CPU 位图信息，进而引发内核警告或不可预期的中断路由行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hv_irq_compose_msi_msg` 函数中，原代码调用 `cpumask_first_and(affinity, cpu_online_mask)` 来获取 CPU。由于当前上下文未持有 `cpus_read_lock`，直接访问 `cpu_online_mask` 是不安全的。实际上此处不需要与 `cpu_online_mask` 做交集运算，因为 `irq_data_get_effective_affinity_mask` 返回的有效亲和性掩码在此回调中已保证有效。
+
+#解决方案
+移除对 `cpu_online_mask` 的不安全访问，直接使用 `cpumask_first()` 函数从 `irq_data_get_effective_affinity_mask(data)` 返回的掩码中获取第一个 CPU。这既修复了锁规则违反的问题，也简化了逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/48c782b6f970d95c2d697fee6f319b0a3a5966dd

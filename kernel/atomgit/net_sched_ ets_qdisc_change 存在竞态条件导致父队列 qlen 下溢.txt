@@ -1,0 +1,26 @@
+#标题
+net_sched: ets_qdisc_change 存在竞态条件导致父队列 qlen 下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ETS（Enhanced Transmission Selection）队列规则变更期间，若 SFQ（Stochastic Fairness Queueing）的 perturb timer 恰好在特定时间点触发，将触发竞态条件。该竞态可被滥用导致父队列的 qlen（队列长度）计数发生下溢。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ets_qdisc_change` 函数中，处理旧波段释放时的逻辑存在并发缺陷。原代码在持有锁的情况下调用 `qdisc_tree_flush_backlog()`，随后释放锁，最后调用 `qdisc_put()`。这与其他 CPU 上运行的 rehash 操作（涉及 `qdisc_tree_reduce_backlog()`）存在时序窗口，导致竞态发生，进而使得父队列的 qlen 计数错误减少，产生下溢。具体竞态过程如下：
+1. CPU 0 锁定 root。
+2. CPU 0 调用 `qdisc_tree_flush_backlog()`。
+3. CPU 0 解锁 root。
+4. 此时 CPU 1 锁定 root，执行 rehash，调用 `qdisc_tree_reduce_backlog()`。
+5. CPU 0 随后执行 `qdisc_put()`。
+该流程导致 backlog 计数操作不同步。
+
+#解决方案
+将 `ets_qdisc_change` 函数中释放旧波段队列时的调用接口从 `qdisc_tree_flush_backlog()` 替换为 `qdisc_purge_queue()`。修改后，在释放锁之前，队列中的所有数据包会被直接清除，从而避免了与其他 CPU 上的 rehash 操作产生竞态条件，防止 qlen 下溢。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6e865acd93331ff37edaed91aebc44c2a9d3de83

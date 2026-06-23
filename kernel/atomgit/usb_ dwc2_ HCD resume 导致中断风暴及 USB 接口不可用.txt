@@ -1,0 +1,27 @@
+#标题
+usb: dwc2: HCD resume 导致中断风暴及 USB 接口不可用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Raspberry Pi 等设备上，当 HCD（主机控制器驱动）执行 resume（恢复）操作时，系统遭遇中断风暴。由于驱动未能正确设置硬件访问标志位，导致端口中断被忽略，进而迫使上层禁用 dwc2 中断线，最终导致 USB 接口处于不可用状态。
+
+#主要错误日志
+irq 66: nobody cared (try booting with the "irqpoll" option)
+CPU: 0 PID: 0 Comm: swapper/0 Tainted: G W          6.10.0-rc3
+Hardware name: BCM2835
+...
+handlers:
+[<f539e0f4>] dwc2_handle_common_intr
+[<75cd278b>] usb_hcd_irq
+Disabling IRQ #66
+
+#问题根因
+在 `_dwc2_hcd_resume` 函数中，当检测到端口连接状态（HPRT0_CONNSTS）时，驱动程序遗漏了设置 `HCD_FLAG_HW_ACCESSIBLE` 标志位。这导致在重新使能中断后，处理程序认为硬件不可访问而忽略了进入的端口中断，触发了内核的中断风暴检测机制，强制禁用了该中断线。
+
+#解决方案
+在 `drivers/usb/dwc2/hcd.c` 文件的 `_dwc2_hcd_resume` 函数中，针对端口连接存在的分支路径，补充设置 `HCD_FLAG_HW_ACCESSIBLE` 标志位，确保中断处理程序能正确响应硬件中断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f30f9a854d3afeb81429333c9cbbb14afb90adfe

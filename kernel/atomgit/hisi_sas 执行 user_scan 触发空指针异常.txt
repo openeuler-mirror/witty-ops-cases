@@ -1,0 +1,29 @@
+#标题
+hisi_sas 执行 user_scan 触发空指针异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hisi_sas 驱动下执行 user_scan 操作时，由于代码逻辑尝试扫描不存在的通道 1，导致触发内核空指针解引用，系统发生 Oops 并打印调用栈。
+
+#主要错误日志
+[  441.554662] Unable to handle kernel NULL pointer dereference at virtual address 00000000000008b0
+[  441.554769] Internal error: Oops: 0000000096000004 [#1]  SMP
+[  441.698277] pc : sas_find_dev_by_rphy+0x44/0x118
+[  441.782053] Call trace:
+[  441.784488]  sas_find_dev_by_rphy+0x44/0x118 (P)
+[  441.789095]  sas_target_alloc+0x24/0xb0
+[  441.801096]  scsi_scan_channel+0x74/0xb8
+[  441.805008]  scsi_scan_host_selected+0x170/0x188
+[  441.809615]  sas_user_scan+0xfc/0x148
+[  441.813267]  store_scan+0x10c/0x180
+
+#问题根因
+hisi_sas 控制器仅支持单通道（channel 0），但驱动初始化时将 `shost->max_channel` 错误地设置为 1。在提交 37c4e72b0651 引入的扫描逻辑变更后，`user_scan()` 会遍历从 0 到 `max_channel` 的所有通道。当尝试扫描 channel 1 时，因该通道不存在且相关数据结构未初始化，导致 `sas_find_dev_by_rphy` 函数访问空指针。
+
+#解决方案
+将 hisi_sas 驱动中 `shost->max_channel` 的值从 1 修正为 0，确保扫描逻辑仅处理存在的 channel 0，避免访问无效通道导致的空指针异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4efda03b8756ff8ba1d91eb89158225cdb39eafa

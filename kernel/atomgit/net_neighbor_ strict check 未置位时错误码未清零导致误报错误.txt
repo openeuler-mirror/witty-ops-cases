@@ -1,0 +1,20 @@
+#标题
+net/neighbor: strict check 未置位时错误码未清零导致误报错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在用户态程序发送存在缺陷的请求（如请求一个不存在的邻居表）且未设置 strict_check 标志时，内核错误地返回了验证错误码，而不是预期的正常处理结果（如无数据返回）。这可能导致用户态程序收到非预期的错误反馈，干扰其他故障的触发或复现流程。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `neigh_dump_info` 函数中，调用 `neigh_valid_dump_req` 进行请求验证后，若返回错误（err < 0）但因 `cb->strict_check` 未设置而跳过立即返回，`err` 变量保留了之前的错误值且未被清零。导致后续代码路径中，如果没有找到可 dump 的表，函数最终返回该残留的错误码，而不是 0。
+
+#解决方案
+在 `neigh_dump_info` 函数中，当 strict check 检查通过或被忽略后（即 `if (err < 0 && cb->strict_check)` 判断之后），显式将 `err` 变量重置为 0，确保后续逻辑不受验证错误码残留值的影响。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8ab43f4e59a4818e988e61038fdc063899fe6bbf

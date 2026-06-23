@@ -1,0 +1,21 @@
+#标题
+urma: 修复 ubcore 连接错误及冗余逻辑清理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ubcore 模块在建立连接（包括 RM 和 RC 模式）过程中可能出现连接错误。代码层面存在未使用的 TPID 上下文查找逻辑、无效的条件复用判断以及多余的 vtpn 字段赋值操作，这些冗余逻辑可能干扰正常的连接建立流程或导致状态不一致。
+
+#主要错误日志
+ubcore_log_err("Failed to send destroy req message");
+ubcore_log_info("connect vtpn:%u, trans_mode:%u, tp_handle: %llu.\n", ...);
+
+#问题根因
+在 `ubcore_vtpn_get` 函数中，存在未使用的 TPID context 查找逻辑（`ubcore_fget_tpid_ctx`）及相关的状态检查和自旋锁操作。代码尝试通过 `ctx` 进行条件复用和字段赋值，但这些逻辑不仅未被有效利用（属于冗余代码），且在后续流程中引入了不必要的复杂性，导致连接行为异常。
+
+#解决方案
+移除 `ubcore_vtpn_get` 函数中未使用的 TPID context 查找、条件复用判断以及冗余的 vtpn 字段赋值代码。具体包括删除 `ubcore_tpid_key` 的构造、`ubcore_fget_tpid_ctx` 的调用、基于 `ctx` 状态的分支判断以及 `spin_lock` 相关操作，同时清理了多余的空行，确保 vtpn 创建流程仅执行必要的激活逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c4abffdd8af1aa022180b3511cb4f1a94cf18f58

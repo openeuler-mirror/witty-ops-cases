@@ -1,0 +1,20 @@
+#标题
+hfsplus: 并发场景下引用计数管理缺失导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `sync()` 与 `link()` 并发执行时，HFS+ 文件系统内核模块触发引用计数校验失败，导致内核 panic。具体表现为在 `hfs_bnode_put` 流程中触发 `BUG_ON(!atomic_read(&node->refcnt))`，系统崩溃。
+
+#主要错误日志
+BUG_ON(!atomic_read(&node->refcnt))
+
+#问题根因
+在 `__hfs_bnode_create` 函数中，当线程 A 创建 bnode 并插入哈希表后，并发线程 B 在哈希表中发现了该节点。根据 `hfs_bnode_find` 的调用约定，每次调用都应持有引用。然而，线程 B 在复用已插入的节点时，未调用 `hfs_bnode_get()` 增加引用计数（refcnt 仍为 1），导致后续两个线程在释放节点时引发引用计数下溢，从而触发 BUG_ON 崩溃。
+
+#解决方案
+在 `__hfs_bnode_create` 函数中，当发现节点已被其他线程插入哈希表（else 分支）时，在返回该节点前显式调用 `hfs_bnode_get(node2)` 以增加引用计数，确保并发场景下引用计数的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0e5cc7f04b04206641eb7cf7f47276b891ec33dd

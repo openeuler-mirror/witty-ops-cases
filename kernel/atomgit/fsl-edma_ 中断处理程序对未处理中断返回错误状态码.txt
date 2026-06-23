@@ -1,0 +1,20 @@
+#标题
+fsl-edma: 中断处理程序对未处理中断返回错误状态码
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 fsl,imx93-edma4 硬件平台上，两个 DMA 通道共享同一个中断。当 `fsl_edma3_tx_handler` 被调用但该通道并未产生中断（即“错误”的通道触发了处理程序）时，驱动程序错误地返回了 `IRQ_HANDLED`。这导致中断子系统误认为中断已被正确处理，可能导致中断线被错误地禁用或影响共享中断线上其他设备的中断处理逻辑。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fsl_edma3_tx_handler` 函数中，读取通道中断状态寄存器 `ch_int` 后，如果值为 0（表示该通道无中断挂起），代码原逻辑直接返回 `IRQ_HANDLED`。对于共享中断场景，这违背了中断处理程序的返回语义，即未处理中断应返回 `IRQ_NONE`。
+
+#解决方案
+修改 `drivers/dma/fsl-edma-main.c` 文件中的 `fsl_edma3_tx_handler` 函数。当 `ch_int` 寄存器值为 0 时，将返回值从 `IRQ_HANDLED` 修改为 `IRQ_NONE`，以正确告知中断核心层该中断未被此设备处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fafabed45c9745c26ca2e9e45400a0795fb140f5

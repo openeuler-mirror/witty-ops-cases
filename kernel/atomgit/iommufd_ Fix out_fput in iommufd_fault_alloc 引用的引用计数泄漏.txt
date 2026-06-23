@@ -1,0 +1,28 @@
+#标题
+iommufd: Fix out_fput in iommufd_fault_alloc 引用的引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 iommufd_fault_alloc 接口时，触发内核警告并打印引用计数相关的错误信息。具体表现为：
+1. refcount_t 在减操作时命中 0，提示内存泄漏。
+2. VFS 层关闭文件时发现文件计数为 0。
+3. 文件引用计数不平衡。
+
+#主要错误日志
+- refcount_t: decrement hit 0; leaking memory.
+- WARNING: CPU: 48 PID: 2369 at lib/refcount.c:31 refcount_warn_saturate+0x60/0x230
+- VFS: Close: file count is 0 (f_op=iommufd_fops [iommufd])
+- WARNING: CPU: 48 PID: 2369 at fs/open.c:1507 filp_flush+0x3c/0xf0
+- imbalanced put on file reference count
+- WARNING: CPU: 48 PID: 2369 at fs/file.c:74 __file_ref_put+0x100/0x138
+
+#问题根因
+在 iommufd_fault_alloc 函数的错误处理路径 `out_fput` 中，代码逻辑存在冗余释放。`fput()` 调用会触发 `file->f_op->release` 操作，该操作内部已经释放了 fault 对象和 ictx 上下文。然而，原代码在 `fput()` 之后又显式调用了 `refcount_dec(&fault->obj.users)` 和 `iommufd_ctx_put(fault->ictx)`，导致对同一资源进行了重复释放，从而引发引用计数不平衡及内存泄漏警告。
+
+#解决方案
+删除 `out_fput` 标签处 `fput(filep)` 之后的两行冗余代码（即 `refcount_dec(&fault->obj.users)` 和 `iommufd_ctx_put(fault->ictx)`），避免在 `fput` 触发的 release 操作之后再次释放资源，从而修复引用计数警告问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/30a09dcaeabedd7dc46440f816f795ae25ee720d

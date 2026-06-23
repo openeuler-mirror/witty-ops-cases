@@ -1,0 +1,24 @@
+#标题
+userfaultfd 操作因全局 mmap_lock 锁竞争导致性能下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 userfaultfd 相关操作（如 mfill_atomic）时，系统并发性能下降。由于原有逻辑强制在 mmap_lock 临界区内执行操作，在高并发场景下，多个线程竞争同一进程的 mmap_lock 读锁，导致严重的锁等待和性能瓶颈。对于非写保护类型的 userfaultfd 操作，这种现象尤为明显，尽管操作仅涉及单个 VMA，但仍需持有全局锁。
+
+#主要错误日志
+未知
+
+#问题根因
+问题的根本原因在于 userfaultfd 的操作（除写保护外）原本总是获取并持有进程级别的 mmap_lock（读锁），即使操作仅涉及单个 VMA。这种粗粒度的锁策略在多线程并发环境下导致了不必要的锁竞争和阻塞。此外，原有逻辑在处理 HugeTLB 页面时，需要在中途释放 mmap_lock 从用户空间拷贝数据，导致重试逻辑复杂且状态管理困难。
+
+#解决方案
+引入并使用细粒度的 per-VMA 锁机制替代全局 mmap_lock。具体修改如下：
+1. 新增 `lock_vma` 和 `uffd_mfill_lock` 函数，优先尝试在 RCU 保护下获取 per-VMA 锁（`lock_vma_under_rcu`），若获取失败或无法分配 anon_vma，则回退到传统的 mmap_lock 方式。
+2. 修改 `mfill_atomic` 和 `mfill_atomic_hugetlb` 等核心函数，使用新的锁定接口。在持有 per-VMA 锁的情况下，允许在退出临界区时释放锁，而不必像 mmap_lock 那样在函数返回前一直持有，从而减少了锁的持有时间。
+3. 重构了 VMA 查找逻辑，将 `find_dst_vma` 替换为 `validate_dst_vma` 和 `find_vma_and_prepare_anon` 的组合，以适配新的锁机制并确保私有映射的 anon_vma 准备就绪。
+4. 此补丁优化了除写保护（write-protect，需遍历多个 VMA，仍需 mmap_lock）外的 userfaultfd 操作的并发性能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7726ebd3879c8d3152349c1ca087ade47fec2f68

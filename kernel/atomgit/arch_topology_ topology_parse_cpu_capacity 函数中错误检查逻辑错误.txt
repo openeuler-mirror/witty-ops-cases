@@ -1,0 +1,25 @@
+#标题
+arch_topology: topology_parse_cpu_capacity 函数中错误检查逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统初始化阶段解析 CPU capacity 时，代码对 `of_clk_get` 返回值的检查逻辑存在错误。原代码使用 `!PTR_ERR_OR_ZERO` 进行判断，这导致当 `of_clk_get` 正常返回一个有效的时钟指针（非错误指针）时，条件判断结果为假，跳过了 CPU capacity_freq_ref 的初始化逻辑；而当返回错误指针时，反而可能错误地进入处理流程。这直接导致 CPU 的 capacity_freq_ref 未能正确设置，影响 CPU 拓扑与调度域的初始化。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `topology_parse_cpu_capacity` 函数中对 `of_clk_get` 返回值的校验宏使用不当。原代码使用 `!PTR_ERR_OR_ZERO(cpu_clk)` 进行判断：
+1. 当 `cpu_clk` 为有效指针（非 NULL，非 ERR_PTR）时，`PTR_ERR_OR_ZERO` 返回 0，取非后为真，逻辑理应通过，但原代码意图是排除错误，写法易混淆且在特定判断逻辑下可能反转。
+2. 更关键的是，`of_clk_get` 可能返回 NULL 或错误码。`PTR_ERR_OR_ZERO` 仅在输入为错误指针时返回错误码，对于 NULL 或有效指针均返回 0。
+3. 原判断逻辑实际上将“有效指针”和“NULL/错误”的情况搞反了（或逻辑互补错误），导致有效时钟对象被忽略。
+
+正确的逻辑应当是检查指针是否有效（非 NULL 且非错误指针），即 `!IS_ERR_OR_NULL(cpu_clk)`。
+
+#解决方案
+修改 `drivers/base/arch_topology.c` 文件中 `topology_parse_cpu_capacity` 函数的错误检查逻辑。将 `if (!PTR_ERR_OR_ZERO(cpu_clk))` 修改为 `if (!IS_ERR_OR_NULL(cpu_clk))`，确保只有在获取到有效时钟指针时才执行 `capacity_freq_ref` 的赋值操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1afba07140d149180803e3b0f957883b720216cd

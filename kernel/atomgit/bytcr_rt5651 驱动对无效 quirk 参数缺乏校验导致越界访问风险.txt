@@ -1,0 +1,23 @@
+#标题
+bytcr_rt5651 驱动对无效 quirk 参数缺乏校验导致越界访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户通过模块参数传入无效的 quirk 值时，驱动未进行有效性检查，直接使用该值进行位操作映射。这会导致内部逻辑判断错误，并可能引发越界访问，造成系统异常或崩溃。
+
+#主要错误日志
+quirk sets invalid input map: 0x%x, default to DMIC_MAP
+
+#问题根因
+驱动代码中 `BYT_RT5651_MAP` 宏仅对传入的 quirk 参数进行位掩码提取，未校验提取出的值是否为合法的枚举类型（如 BYT_RT5651_DMIC_MAP 等）。当传入非法值时，代码直接放行，导致后续处理流程中出现不可预期的行为，如数组越界访问（OOB access）。
+
+#解决方案
+在 `log_quirks` 函数中增加输入映射值的合法性校验逻辑：
+1. 将原本分散的 `if` 判断改为 `switch-case` 结构。
+2. 在 `default` 分支中，通过 `dev_warn_once` 打印警告日志指出无效值。
+3. 主动修正无效的 quirk 位段：清除原有的 map 位，强制设置为默认的 `BYT_RT5651_DMIC_MAP`，确保后续流程安全。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0c6550f747a751aa2a000def0273945132b6a797

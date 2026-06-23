@@ -1,0 +1,26 @@
+#标题
+lpfc 驱动延迟接收路径缓冲区释放顺序导致潜在并发访问故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 lpfc NVMe Target 驱动的延迟接收路径处理中，存在并发风险。当 `lpfc_nvmet_defer_rcv` 函数执行时，`ctxp->rqb_buffer` 可能被其他线程或中断处理程序并发访问或修改。若缓冲区释放顺序不当，可能导致指针被错误引用，进而引发内存 corruption 或内核崩溃；同时可能出现日志打印 "6425 Defer rcv: no buffer" 但实际上逻辑判断存在竞态窗口的情况。
+
+#主要错误日志
+lpfc_printf_log(phba, KERN_INFO, LOG_NVME_IOERR,
+		"6425 Defer rcv: no buffer oxid x%x: "
+		"flg %x ste %x\n",
+		ctxp->oxid, ctxp->flag, ctxp->state);
+
+#问题根因
+在 `lpfc_nvmet_defer_rcv` 函数中，获取 `ctxp->rqb_buffer` 指针与将其置空的操作未在同一个临界区内完成，且顺序颠倒。原有代码在未持有锁的情况下读取 buffer 指针，并在释放缓冲区后才加锁将 `ctxp->rqb_buffer` 置为 NULL。这导致在读取缓冲区指针到加锁置空之间存在竞态窗口，其他上下文可能在此期间修改该指针，导致逻辑错误或使用了已释放的缓冲区指针。
+
+#解决方案
+修改 `lpfc_nvmet_defer_rcv` 函数中的加锁与操作顺序：
+1. 将 `ctxp->rqb_buffer` 的读取操作移到 `ctxp->ctxlock` 自旋锁保护的临界区内。
+2. 在临界区内，读取缓冲区指针后立即将 `ctxp->rqb_buffer` 置为 NULL，确保取值与置空操作的原子性。
+3. 随后再释放锁，并在锁外执行缓冲区的释放操作。此修复遵循了正确的“先取出、后置空、再释放”的并发处理逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b2b8512ca97108929f3aca5405875d91577b8c80

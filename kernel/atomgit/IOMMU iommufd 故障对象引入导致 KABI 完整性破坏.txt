@@ -1,0 +1,23 @@
+#标题
+IOMMU iommufd 故障对象引入导致 KABI 完整性破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 iommufd fault 对象功能的内核版本中，由于核心数据结构 `struct iopf_group` 发生了非兼容性变更（字段顺序调整、新增字段），破坏了内核 ABI（KABI）的稳定性。这会导致依赖旧结构体布局的内核模块或驱动在加载或运行时发生不一致行为，可能引发内核崩溃（panic）、内存损坏或驱动功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在合入 "iommufd: Add iommufd fault object" 功能补丁时，直接修改了 `struct iopf_group` 结构体定义：将 `fault_count` 字段位置移动，并新增了 `node` 和 `cookie` 字段。这些改动改变了结构体的内存布局和大小，直接破坏了 KABI 兼容性承诺，导致存量或二进制兼容模块无法正确解析该结构体。
+
+#解决方案
+采用 KABI 补救机制对数据结构进行重构，保持核心结构体布局不变：
+1. 恢复 `struct iopf_group` 的原始字段顺序，将新增字段 `fault_count` 和 `cookie` 移入 `KABI_USE` 占位符字段中，确保核心结构体大小和偏移不变。
+2. 新定义扩展结构体 `struct iopf_group_extend`，将 `struct iopf_group` 作为其第一个成员，并将原本破坏 KABI 的 `node` 字段（链表节点）放置在扩展结构体中。
+3. 修改内存分配逻辑，将原本直接分配 `iopf_group` 的代码改为分配 `iopf_group_extend`，通过 `container_of` 机制在两个结构体间进行转换，从而在保持 KABI 兼容的前提下支持新功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6b74104e5aa19a548b997fc70ee595bdca5c608f

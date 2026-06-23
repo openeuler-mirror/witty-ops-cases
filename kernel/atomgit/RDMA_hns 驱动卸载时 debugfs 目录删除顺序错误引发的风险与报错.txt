@@ -1,0 +1,25 @@
+#标题
+RDMA/hns 驱动卸载时 debugfs 目录删除顺序错误引发的风险与报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动卸载过程中存在资源访问风险与错误：
+1. 若先调用 `hns_roce_unregister_device` 释放 ib_device，随后 debugfs 使用该设备指针存在 Use-After-Free 风险。
+2. 若先调用 `hns_roce_unregister_debugfs` 删除根目录，随后在 `hns_roce_unregister_device` 流程中清理 uctx 的 debugfs 子目录时，因父目录已不存在而报错。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动退出流程（`hns_roce_exit`）中函数调用顺序不当：
+`hns_roce_unregister_device()` 与 `hns_roce_unregister_debugfs()` 的调用顺序存在逻辑冲突。若先注销设备，ib_device 被释放，后续 debugfs 操作存在风险；若先注销 debugfs，会整体删除目录，导致后续注销设备流程中尝试移除已不存在的 uctx debugfs 子目录时出错。
+
+#解决方案
+1. 调整 `hns_roce_exit` 函数中的调用顺序，将 `hns_roce_unregister_debugfs()` 移至 `hns_roce_unregister_device()` 之前执行。
+2. 在 `hns_roce_unregister_debugfs()` 中移除 debugfs 目录后，通过 `memset` 将 `hr_dev->dbgfs` 清零。
+3. 修改 `hns_roce_unregister_uctx_debugfs()` 实现，增加 `hr_dev` 参数，改为通过 `debugfs_lookup_and_remove` 精确删除指定名称的子目录。结合清零操作，当 debugfs 根目录已不存在（指针为 NULL）时，该逻辑可直接返回，避免因目录不存在而抛出错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9a8ae9304c78d27bcce0f32e2eb8ad3599ed6a31

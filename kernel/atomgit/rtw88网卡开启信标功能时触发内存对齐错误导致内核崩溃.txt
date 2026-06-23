@@ -1,0 +1,32 @@
+#标题
+rtw88网卡开启信标功能时触发内存对齐错误导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在执行 Wi-Fi 扫描等操作时，调用 `rtw_core_enable_beacon` 函数读写寄存器时触发内存对齐故障，导致内核 Oops 并崩溃，受影响的系统出现死机或重启。
+
+#主要错误日志
+Unable to handle kernel paging request at virtual address ffff8000827e0522
+Mem abort info:
+  ESR = 0x0000000096000021
+  EC = 0x25: DABT (current EL), IL = 32 bits
+  SET = 0, FnV = 0
+  EA = 0, S1PTW = 0
+  FSC = 0x21: alignment fault
+Internal error: Oops: 0000000096000021 [#1]  SMP
+Call trace:
+ rtw_pci_read32+0x18/0x40 [rtw88_pci]
+ rtw_hw_scan_chan_switch+0x124/0x1a8 [rtw88_core]
+ rtw_fw_c2h_cmd_handle+0x254/0x290 [rtw88_core]
+ rtw_c2h_work+0x50/0x98 [rtw88_core]
+
+#问题根因
+`rtw_core_enable_beacon()` 函数在操作 `REG_TXPAUSE` 寄存器时，错误地使用了 4 字节读写函数（`rtw_write32_set`/`rtw_write32_clr`）。由于目标地址不是 4 的倍数（非 4 字节对齐），导致在部分系统（如 ARM64 架构）上触发 "alignment fault" 异常，进而引发内核崩溃。
+
+#解决方案
+将 `rtw_core_enable_beacon()` 函数中对 `REG_TXPAUSE` 寄存器的操作从 32 位（4字节）读写修改为 8 位（1字节）读写，即把 `rtw_write32_set` 替换为 `rtw_write8_set`，把 `rtw_write32_clr` 替换为 `rtw_write8_clr`，从而避免内存对齐错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e58c721d06e2866c9e7aa101a8284c347bca87c1

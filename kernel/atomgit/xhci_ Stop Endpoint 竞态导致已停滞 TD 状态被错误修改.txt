@@ -1,0 +1,20 @@
+#标题
+xhci: Stop Endpoint 竞态导致已停滞 TD 状态被错误修改
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 USB 设备端点发生停滞时，如果此时恰好有一个 Stop Endpoint 命令正在等待处理，Stop Endpoint 命令执行失败。其处理程序会错误地修改当前停滞传输描述符（TD）的状态码为 -EPROTO，覆盖了原本应分配的 -EPIPE 状态，导致上层应用或驱动收到错误的传输状态反馈。
+
+#主要错误日志
+xhci_dbg(xhci, "Stop ep completion raced with stall\n");
+
+#问题根因
+这是一个竞态条件问题。当设备停滞端点时，当前 TD 被分配 -EPIPE 状态并排队 Reset Endpoint。如果此时 Stop Endpoint 正在等待，它会先于 Reset Endpoint 运行并因端点已停滞而失败。Stop Endpoint 的处理程序未能正确判断停滞是否已被处理，错误地将 TD 状态修改为 -EPROTO，导致在 Reset Endpoint 处理程序运行并启动回调之前，TD 的状态被覆盖。
+
+#解决方案
+在 Stop Endpoint 处理程序中增加检查逻辑：判断端点状态标志位 `EP_HALTED` 是否已被设置。如果该标志位已设置，说明停滞事件已经被处理且 Reset Endpoint 正在等待，此时应跳过对 TD 状态的修改操作，直接清除 `EP_STOP_CMD_PENDING` 标志并返回，保持 TD 原有的 -EPIPE 状态不变。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/53cef018470a769921d1cf18729e0fc64f9cc229

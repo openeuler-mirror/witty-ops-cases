@@ -1,0 +1,20 @@
+#标题
+TCP/DCCP IPv6 监听套接字处理路径存在 skb 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 IPv6 TCP 或 DCCP 套接字处于 LISTEN 状态时，在接收处理数据包过程中，若存在接收选项（`rxopt.all`），内核会克隆并分配一个 skb 结构。由于代码逻辑遗漏，该克隆的 skb 在处理路径中未被释放，导致内核内存泄漏。长期运行可能导致系统内存耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tcp_v6_do_rcv` 和 `dccp_v6_do_rcv` 函数中，代码在处理监听套接字接收包时，无条件地根据 `np->rxopt.all` 判断是否克隆 skb 到 `opt_skb` 变量。然而，当套接字状态为 LISTEN 时，后续处理逻辑并未使用或释放该 `opt_skb`，导致内存泄漏。实际上，LISTEN 状态的套接字不需要处理这些选项数据。
+
+#解决方案
+在克隆 skb 前增加套接字状态判断，若套接字处于 LISTEN 状态（`TCP_LISTEN` 或 `DCCP_LISTEN`），则跳过克隆操作，从而避免不必要的内存分配和后续的泄漏。同时移除了子套接字处理路径中多余的 `__kfree_skb(opt_skb)` 调用，使逻辑更加清晰。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db8975dade15e009c37543458cf919c70e063fc3

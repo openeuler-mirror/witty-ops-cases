@@ -1,0 +1,26 @@
+#标题
+sched_ext: 加载阶段错误信息上报不完整
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 BPF 调度器（sched_ext）在加载过程中的 `ops.init()`、`ops.cgroup_init()` 或 `ops.init_task()` 阶段失败时，系统无法通过 `scx_exit_info` 结构体完整记录并向用户态上报详细的错误信息。特别是在 `ops.init_task()` 失败时，原有的错误处理逻辑会导致错误详情丢失，用户无法通过 `ops.exit()` 回调获取具体的失败原因（如失败的进程名、PID 及错误码），从而难以进行故障定位。
+
+#主要错误日志
+- 推断：`sched_ext: ops.cgroup_init() failed (%d)`
+- 推断：`sched_ext: ops.init() failed (%d)`
+- 原有日志：`sched_ext: ops.init_task() failed (%d) for %s[%d] while loading`（修复前通过 pr_err 打印，修复后通过 scx_ops_error 记录）
+- 推断：`sched_ext: scx_ops_enable() failed (%d)`
+
+#问题根因
+在 BPF 调度器加载使能流程中，针对 `ops.init()`、`ops.cgroup_init()` 以及 `ops.init_task()` 的失败路径，内核未统一调用 `scx_ops_error()` 函数来记录错误详情。这导致 `scx_exit_info` 中缺失关键的错误上下文信息。此外，部分错误路径直接返回错误码而非触发 `ops.exit()` 流程，进一步导致用户态无法接收到完整的错误报告。
+
+#解决方案
+统一所有可能由 BPF 调度器引发的失败路径的处理逻辑，确保均通过 `scx_ops_error()` 记录详细的错误信息，并由 `ops.exit()` 进行上报。具体修改如下：
+1. 在 `ops.init()` 和 `ops.cgroup_init()` 失败时，增加 `scx_ops_error()` 调用以记录错误码。
+2. 将 `ops.init_task()` 失败时的 `pr_err()` 调用替换为 `scx_ops_error()`，以保留进程上下文信息。
+3. 调整 `scx_ops_enable()` 函数的返回逻辑，在 `err_disable` 标签处统一调用 `scx_ops_error()` 并返回 0（表示初始化动作完成但状态为 disable），确保错误信息能够通过 `ops.exit()` 完整传递给用户态，同时刷新工作队列确保错误及时上报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58e153fccb25d4d070cc1b09f30fdc849c9eecae

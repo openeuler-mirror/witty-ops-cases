@@ -1,0 +1,20 @@
+#标题
+rtc: pcf2127: PCF2131 SPI 通信配置错误导致寄存器访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 PCF2131 RTC 芯片且通过 SPI 接口连接的系统上，驱动加载或运行时可能出现寄存器读写失败，导致 RTC 功能无法正常使用。该问题是由于内核版本回溯（backport）过程中的代码位置错误，将 SPI 接口的配置补丁错误地应用到了 I2C 接口的配置代码中，致使 SPI 接口下的 PCF2131 设备配置未得到正确修复。
+
+#主要错误日志
+未知
+
+#问题根因
+在将上游 Commit (fa78e9b606a472495ef5b6b3d8b45c37f7727f9d) 回溯到 LTS 分支（linux-6.12.y 和 linux-6.6.y）时，开发人员错误地将针对 SPI regmap 的配置修复（设置 read_flag_mask 和 write_flag_mask 为 0x0）应用到了 I2C regmap 的配置代码段中。这很可能是由于内核 6.14 版本引入的新功能导致驱动文件中 regmap 配置代码块位置移动，从而在人工或自动回溯时产生了混淆。最终结果是在 SPI 模式下，PCF2131 的特定配置代码缺失，导致 SPI 通信参数不正确。
+
+#解决方案
+删除错误放置在 `pcf2127_i2c_probe` 函数中的 PCF2131 配置代码块，将其正确移动到 `pcf2127_spi_probe` 函数中。具体修改为：在 SPI 探测函数中，当检测到设备类型为 PCF2131 时，设置 `config.read_flag_mask = 0x0` 和 `config.write_flag_mask = 0x0`，以确保 SPI 总线下的寄存器读写标志位正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/131b930babe34cd4510a67165b849ff82d477452

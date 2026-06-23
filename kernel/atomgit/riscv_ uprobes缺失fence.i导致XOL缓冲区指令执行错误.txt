@@ -1,0 +1,20 @@
+#标题
+riscv: uprobes缺失fence.i导致XOL缓冲区指令执行错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V 架构（如 Spacemit K1/X60 处理器）上运行 BPF 自测试 "test_progs: uprobe_autoattach, attach_probe" 时，uprobes 测试随机出现崩溃或异常（randomly blew up）。这是由于 CPU 执行了陈旧或错误的指令，导致单步执行（XOL）逻辑失败。
+
+#主要错误日志
+未知
+
+#问题根因
+RISC-V 的 uprobes 实现在构建 XOL（execute out-of-line）缓冲区后，缺少必要的 `fence.i` 指令（即指令缓存刷新）。在向内存写入替换指令后，若不刷新指令缓存，CPU 可能会执行缓存中残留的陈旧或错误指令，从而导致程序行为异常或崩溃。
+
+#解决方案
+在 `arch_uprobe_copy_ixol` 函数中，向 XOL 缓冲区复制完指令后，增加调用 `flush_icache_range(start, start + len)` 来刷新指令缓存，确保 CPU 能取到正确的指令，同时移除了原先无效的 `flush_dcache_page` 调用及相关注释。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/44f9aa476c59431770c7361e6d6b566f34eecf6b

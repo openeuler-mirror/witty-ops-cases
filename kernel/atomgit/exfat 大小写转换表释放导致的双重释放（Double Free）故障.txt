@@ -1,0 +1,23 @@
+#标题
+exfat 大小写转换表释放导致的双重释放（Double Free）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 exfat 文件系统挂载过程中，若大小写转换表初始化失败，内核在清理资源时触发双重释放，可能导致系统崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `exfat_create_upcase_table()` 执行失败的处理路径中：
+1. 首先调用 `exfat_free_upcase_table()` 释放了 `->vol_utbl` 指向的内存。
+2. 随后在 `exfat_kill_sb()` -> `delayed_free()` 的流程中，再次调用 `exfat_free_upcase_table()`。
+3. 由于 `exfat_free_upcase_table()` 函数内释放内存后未将 `sbi->vol_utbl` 指针置空，导致该指针成为悬空指针，从而在第二次调用时引发双重释放。
+
+#解决方案
+在 `exfat_free_upcase_table()` 函数中，执行 `kvfree(sbi->vol_utbl)` 释放内存后，立即将 `sbi->vol_utbl` 指针设置为 `NULL`，防止悬空指针被再次释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/33ce3a2f807c2fd02bb8b3c333985479d213d2fe

@@ -1,0 +1,20 @@
+#标题
+LeapIOraid 驱动 strscpy 调用存在内存越界风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动在处理 SCSI 主机查询（Inquiry）VPD SN 信息时，若分配了较小的内存空间存放序列号，由于拷贝长度参数错误使用指针大小而非实际分配长度，可能导致内存越界写入，进而引发内核 Crash 或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `leapioraid_scsihost_inquiry_vpd_sn` 函数中，代码使用 `kmalloc(len, GFP_KERNEL)` 分配了长度为 `len` 的内存，但在随后的 `strscpy` 调用中，第三个参数错误地使用了 `sizeof(*serial_number)`。由于 `serial_number` 是一个指针，`sizeof(*serial_number)` 计算的是指针指向字符的大小（通常为 1 字节），而非实际分配的缓冲区大小 `len`，导致 `strscpy` 无法正确执行边界检查，引发越界写入。
+
+#解决方案
+修正 `strscpy` 函数的第三个参数，将其从 `sizeof(*serial_number)` 修改为实际分配的缓冲区长度 `len`，确保字符串拷贝严格限制在已分配的内存范围内。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/34aca7dce8183a6832361f564e5d70abce03e657

@@ -1,0 +1,20 @@
+#标题
+sched/fair: 修复 child_cfs_rq_on_list 中潜在的内存损坏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核调度器在处理 CFS（Completely Fair Scheduler）运行队列（cfs_rq）链表时，可能触发潜在的内存损坏。根据数据结构的内存布局情况，该故障可能表现为内存访问错误或系统崩溃，也可能表现为无明确崩溃但产生不可预测的行为。当结构体布局发生变化时，可能会诱发内存故障或访问垃圾数据。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `child_cfs_rq_on_list` 函数中，代码尝试将 `prev` 指针通过 `container_of` 转换为 `cfs_rq` 结构体。然而，`prev` 指针可能来源于 `struct rq` 的 `leaf_cfs_rq_list`，而非链表中的某个具体的 `cfs_rq` 节点。这种转换是无效的，会导致访问非法内存地址。问题源头在于 `list_add_leaf_cfs_rq` 函数中，`rq->leaf_cfs_rq_list` 链表头被错误地加入到了叶子链表中，或者 `rq->tmp_alone_branch` 指向了 `rq->leaf_cfs_rq_list`，导致后续遍历时误将链表头当作节点数据处理。
+
+#解决方案
+在 `child_cfs_rq_on_list` 函数中增加边界检查。在进行 `container_of` 转换之前，判断 `prev` 指针是否等于当前运行队列的链表头 `&rq->leaf_cfs_rq_list`。如果相等，说明当前节点已经是链表头部或无法获取有效的父节点，函数直接返回 `false`，从而避免对无效指针进行转换，防止内存损坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/45a77f21bec66a48c2de3a8d2ee723982b5a8c22

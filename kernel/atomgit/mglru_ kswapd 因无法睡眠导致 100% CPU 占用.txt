@@ -1,0 +1,20 @@
+#标题
+mglru: kswapd 因无法睡眠导致 100% CPU 占用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定内存压力场景下（如关闭 Swap 且清理完 Page Cache），kswapd 内核线程长时间无法进入睡眠状态，持续占用 100% CPU 资源。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `lru_gen_shrink_node()` 函数中，代码无条件地将 `pgdat->kswapd_failures` 清零。这导致即使 kswapd 在内存回收过程中反复失败（未取得进展），系统仍误认为其状态正常，从而阻止 kswapd 进入睡眠，引发 CPU 100% 占用。
+
+#解决方案
+修改 `mm/vmscan.c` 中的逻辑，仅在内存回收取得实际进展（`sc->nr_reclaimed > reclaimed`）时才清除 `kswapd_failures` 计数器。此举确保了当 kswapd 无法回收内存时，能够正确记录失败次数并最终进入睡眠状态，避免死循环占用 CPU。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f4cd2e127e1302d12cba9c4f65d60ca4c0120572

@@ -1,0 +1,20 @@
+#标题
+PCI portdrv: remove 回调路径潜在资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+PCIe 端口服务驱动在卸载时，若驱动未实现 remove 回调函数，会导致设备引用计数无法释放，造成资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `pcie_port_probe_service()` 函数中无条件调用了 `get_device()` 增加了设备引用计数。但在 `pcie_port_remove_service()` 函数中，原有的 `put_device()` 调用被包含在 `if (driver && driver->remove)` 判断条件内。如果 PCIe 驱动没有提供 remove 回调，`put_device()` 将不会被执行，导致设备引用计数无法平衡，从而引发资源泄漏。
+
+#解决方案
+将 `put_device(dev)` 调用移出 `if (driver && driver->remove)` 判断块，确保无论驱动是否实现 remove 回调，在移除服务时都能无条件释放设备引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db5a49778a591878fe9a9ab3c6c7edf06e058e8e

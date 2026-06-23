@@ -1,0 +1,24 @@
+#标题
+pwm: tiehrpwm 时钟分频计算边界条件导致配置失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 PWM 时，当 `period_cycles` 恰好为 `PERIOD_MAX`（0x10000）的整数倍时，驱动程序无法找到有效的时钟分频值，导致 PWM 配置失败，用户可能会遇到 PWM 功能无法正常使用的情况。
+
+#主要错误日志
+- 推断：`dev_err(chip->dev, "Unsupported values\n");`
+
+#问题根因
+`set_prescale_div()` 函数负责计算时钟分频设置，目的是将输入时钟频率分频，使得所需的周期长度最多为 0x10000 个时钟周期。
+根因在于计算逻辑存在两个边界条件错误：
+1. 计算分频请求值时使用了整除 `period_cycles/PERIOD_MAX`，当 `period_cycles` 确好是 `PERIOD_MAX` 的整数倍时，计算出的分频值刚好满足需求，但后续比较逻辑使用了 `>`（大于）判断，导致相等的有效分频值被跳过。
+2. 比较逻辑 `if (*prescale_div > rqst_prescaler)` 应为 `>=`。当计算出的分频值等于请求值时，理论上是合法且满足需求的，但原代码跳过了这种情况，导致搜索不到有效分频配置。
+
+#解决方案
+1. 修改 `set_prescale_div` 函数中的比较逻辑，将 `if (*prescale_div > rqst_prescaler)` 修改为 `if (*prescale_div >= rqst_prescaler)`，允许分频值等于请求值的情况。
+2. 修改调用处 `ehrpwm_pwm_config` 中的分频计算，使用 `DIV_ROUND_UP(period_cycles, PERIOD_MAX)` 替代直接的整除运算，确保分频计算的向上取整逻辑正确，配合修改后的比较条件正确处理边界情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a7f2f238ff74491c98dd782d715153c17c9bbd58

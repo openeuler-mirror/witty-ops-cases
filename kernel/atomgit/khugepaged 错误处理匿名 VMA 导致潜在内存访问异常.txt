@@ -1,0 +1,20 @@
+#标题
+khugepaged 错误处理匿名 VMA 导致潜在内存访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_SHMEM 配置的情况下，khugepaged 线程或 madvise_collapse 系统调用在处理匿名 VMA（Anonymous VMA）时，代码逻辑错误地进入了针对文件映射的 `hpage_collapse_scan_file()` 处理分支。这可能导致内核内存管理行为异常，引发不可预期的错误或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中的判断条件 `if (IS_ENABLED(CONFIG_SHMEM) && vma->vm_file)` 存在逻辑缺陷。虽然匿名 VMA 通常 `vm_file` 为 NULL，但在某些特殊场景（如外部文件映射被取消映射或特殊栈/堆处理）下，该判断条件可能为真，从而错误地将匿名 VMA 当作文件映射 VMA 处理，进而调用了不应适用的 `hpage_collapse_scan_file()` 函数。
+
+#解决方案
+修改 `mm/khugepaged.c` 中的判断逻辑，将 `vma->vm_file` 替换为显式的 VMA 类型检查函数 `!vma_is_anonymous(vma)`。该修正确保了只有非匿名的 VMA（即真正的文件映射）才会进入文件扫描处理流程，避免了匿名 VMA 被错误处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c15f5cb6579ba6d62e96b35463e921379b7e9844

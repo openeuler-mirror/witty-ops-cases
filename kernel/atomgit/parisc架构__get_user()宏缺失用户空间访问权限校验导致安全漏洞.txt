@@ -1,0 +1,23 @@
+#标题
+parisc架构__get_user()宏缺失用户空间访问权限校验导致安全漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PA-RISC 架构上，`__get_user()` 函数在处理用户空间指针时存在缺陷，未能正确校验指针的读取访问权限。这可能导致内核在未授权的情况下读取用户空间内存，违背了安全访问控制原则。该缺陷被收录为 CVE-2025-39716，关联 issue 为 ICWO1O。
+
+#主要错误日志
+未知
+
+#问题根因
+原有代码中 `__get_user()` 宏直接调用 `__get_user_internal()` 获取用户数据，但缺少对传入指针进行显式的用户空间读取访问权限探测。在 PA-RISC 架构下，如果不主动通过指令探测权限，可能会绕过必要的安全检查，导致权限校验缺失，从而引发安全漏洞。
+
+#解决方案
+修改 `arch/parisc/include/asm/uaccess.h` 文件，在 `__get_user()` 宏的实现逻辑中增加权限探测步骤：
+1. 新增 `__probe_user_internal()` 宏，使用汇编指令 `proberi` 对指定空间寄存器（SR_USER）下的指针进行权限探测，检查是否具有 `PRIV_USER` 权限，若探测失败则返回 `-EFAULT`。
+2. 修改 `__get_user()` 宏，使其先调用 `__get_user_internal()` 进行数据读取。
+3. 在读取成功的情况下（`likely(!__gu_err)`），进一步调用 `__probe_user_internal()` 对指针进行权限合法性校验，确保访问操作符合用户空间安全规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3729d3e6dea60145c9c14b43c0909c8d1eac7fb2

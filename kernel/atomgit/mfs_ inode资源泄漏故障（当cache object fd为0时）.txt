@@ -1,0 +1,20 @@
+#标题
+mfs: inode资源泄漏故障（当cache object fd为0时）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 mfs cache object 的文件描述符（fd）值为 0 时，系统无法正确处理该对象的释放逻辑。具体表现为：在执行 fd_release 操作时，若 fd 为 0，代码逻辑会错误地跳过资源清理步骤，导致该 object 关联的 inode 无法被正确释放（iput 未被调用），从而造成 inode 资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中对 `object->fd` 的有效性判断逻辑存在错误。原代码使用 `if (object->fd > 0)` 来判断 fd 是否有效，但在 Linux 系统中，文件描述符 0（stdin）是合法的有效值。因此，当 fd 值为 0 时，该条件判断为假，导致代码未执行释放逻辑，进而引发 inode 资源泄漏。
+
+#解决方案
+修正文件描述符的有效性判断条件，将 `object->fd > 0` 修改为 `object->fd >= 0`。该修复应用于 `fs/mfs/cache.c` 中的 `fd_release` 函数和 `try_hook_fd` 函数，确保当 fd 值为 0 时，也能被识别为有效描述符并进行相应的资源释放或获取操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/87b169ff3a9ea18e03ac141fdbe72d47cf998e4b

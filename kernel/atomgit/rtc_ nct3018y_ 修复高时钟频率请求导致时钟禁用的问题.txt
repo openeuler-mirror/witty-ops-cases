@@ -1,0 +1,20 @@
+#标题
+rtc: nct3018y: 修复高时钟频率请求导致时钟禁用的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用 `nct3018y_clkout_round_rate` 函数请求的时钟频率高于设备支持的最高频率时，函数错误地返回 0，导致时钟被禁用，而非使用支持的最高频率。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nct3018y_clkout_round_rate` 函数逻辑中，当请求频率 `rate` 高于数组 `clkout_rates` 中的所有支持频率时，循环结束返回了 `0`。根据 Common Clock Framework (CCF) API 规范，`round_rate` 钩子函数在此场景下应返回硬件支持的最大频率（即最接近且小于等于请求值的频率，若无小于等于的值则应返回支持的最大值，此处修正为返回支持的最大频率），返回 0 会导致时钟框架误认为该时钟应被禁用。
+
+#解决方案
+修改 `drivers/rtc/rtc-nct3018y.c` 文件中的 `nct3018y_clkout_round_rate` 函数。当请求频率超出支持范围时，将返回值从 `0` 修改为 `clkout_rates[0]`（即设备支持的最高频率），以符合 clk API 规范并保持时钟处于工作状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/05c671ab0877aeab7490d38cdb267795868957de

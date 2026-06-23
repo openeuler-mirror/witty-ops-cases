@@ -1,0 +1,26 @@
+#标题
+调度器 soft quota 机制导致空指针崩溃及 EEVDF 计数下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 soft quota 特性的场景下，调度器在选择任务时可能触发如下故障：
+1. 内核发生空指针解引用，导致系统崩溃或重启。
+2. 若空指针解引用被规避，则触发 EEVDF 调度器的算数下溢，导致调度记账数据损坏，引发系统运行异常。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference
+
+#问题根因
+在 `pick_next_task()` 逻辑重构后，`pick_task()` 仅负责选择任务，而 `pick_next_task()` 还负责完成 put-prev 和 set-next 序列。
+`pick_task_idle()` 函数中的 soft quota 路径错误地调用了 `pick_next_task_fair(rq, NULL, NULL)`，传入的 `prev` 参数为 NULL。这导致 `pick_next_task_fair()` 内部尝试解引用 `prev->sched_class` 时触发空指针崩溃。
+此外，即使避免了空指针解引用，EEVDF 逻辑可能会重新选中 `cfs_rq->curr`，但该实体已经出队且未计入 `cfs_rq->sum_weight`，导致第二次出队操作引发 `sum_weight` 下溢。
+
+#解决方案
+1. 修正 `pick_task_idle()` 中的调用参数，将 `pick_next_task_fair()` 的第二个参数由 `NULL` 改为 `rq->curr`，传入当前任务作为 `prev`，避免空指针解引用。
+2. 新增 `soft_quota_pick_next_done()` 辅助函数，用于检测 soft quota 路径是否已经完成了 fair 任务的 pick-next 序列。
+3. 在核心调度器路径中增加判断：如果 soft quota 路径已完成选核与设置，则跳过后续的 `put_prev_set_next_task()` 调用，防止对同一个 fair 实体重复执行 put/set 操作，避免 EEVDF 计数下溢。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad0da792854f1de4de99b0ef713725bfd811e0c4

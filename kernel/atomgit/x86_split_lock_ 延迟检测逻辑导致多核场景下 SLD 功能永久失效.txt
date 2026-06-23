@@ -1,0 +1,20 @@
+#标题
+x86/split_lock: 延迟检测逻辑导致多核场景下 SLD 功能永久失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多核系统上，若配置了 `split_lock_mitigate=0`（警告模式且关闭缓解模式），当多线程应用在多个 CPU 上同时触发 Split Lock 时，只有一个 CPU 能成功调度延迟工作队列。其余 CPU 上的 Split Lock 检测（SLD）功能会被关闭且无法再次被重新启用。随着时间推移，系统中绝大多数核心的 SLD 功能将永久失效，导致无法再检测到 Split Lock 行为。
+
+#主要错误日志
+未知
+
+#问题根因
+所有 CPU 共用了一个全局的 `delayed_work` 结构体（`sl_reenable`）。在 `split_lock_warn()` 函数中，当多个 CPU 同时触发 Split Lock 并调用 `schedule_delayed_work_on()` 时，由于该工作结构体已被标记为 `WORK_STRUCT_PENDING_BIT` 状态，后续 CPU 的调度请求会失败且返回值未被检查。这导致这些 CPU 虽然禁用了 SLD 功能，但未能成功将重新启用 SLD 的工作项放入队列，最终导致 SLD 功能在这些核心上永久关闭。
+
+#解决方案
+将全局共享的 `sl_reenable` 延迟工作结构体修改为 per-CPU 变量（`DEFINE_PER_CPU(struct delayed_work, sl_reenable)`），确保每个 CPU 拥有独立的工作队列结构。同时，在 `split_lock_warn()` 函数中增加了对该 per-CPU 结构体的延迟初始化逻辑，从而保证每个 CPU 都能独立、可靠地调度延迟工作以重新启用 SLD 功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/57c9d04781441e3d5b2c6527e20e811a0162826e

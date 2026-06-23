@@ -1,0 +1,25 @@
+#标题
+Bluetooth: SCO 连接释放时存在 UAF（Use-After-Free）漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 SCO（Synchronous Connection-Oriented）蓝牙连接断开时，触发 KASAN 检测到的 slab-use-after-free 错误。具体表现为在执行 `sco_conn_free` 流程中，对已释放的内存地址进行了写操作。故障通常发生在 `hci_cmd_sync_work` 工作队列处理连接中止或删除的过程中。
+
+#主要错误日志
+```
+BUG: KASAN: slab-use-after-free in sco_conn_free net/bluetooth/sco.c:87 [inline]
+BUG: KASAN: slab-use-after-free in kref_put include/linux/kref.h:65 [inline]
+BUG: KASAN: slab-use-after-free in sco_conn_put+0xdd/0x410 net/bluetooth/sco.c:107
+Write of size 8 at addr ffff88811cb96b50 by task kworker/u17:4/352
+```
+
+#问题根因
+当 SCO socket 被释放（`sk_destruct`）时，其关联的连接对象 `sco_pi(sk)->conn` 仍然持有指向该 socket 的指针（`conn->sk`）。若此时连接对象尚未完全销毁，后续在连接清理路径（如 `sco_conn_free` -> `kref_put`）中，代码可能会尝试访问或操作 `conn->sk`，导致访问已释放的 socket 内存（UAF）。根本原因在于 socket 销毁时未将其从关联的连接对象中解绑，导致留下了悬空指针。
+
+#解决方案
+在 socket 销毁函数 `sco_sock_kill` 中增加防护逻辑。在标记 socket 为死亡（SOCK_DEAD）并解除链接之前，显式地将连接对象中的 socket 指针置空（`conn->sk = NULL`）。此举确保了后续连接对象在清理过程中不会访问到已释放的 socket 内存，从而避免 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/578a027324368e9d2fa0d446da017d3ccfd8e13c

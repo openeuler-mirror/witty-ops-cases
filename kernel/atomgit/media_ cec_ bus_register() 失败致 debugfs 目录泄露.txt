@@ -1,0 +1,20 @@
+#标题
+media: cec: bus_register() 失败致 debugfs 目录泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CEC 子系统初始化过程中，若 `bus_register()` 注册失败，`debugfs_create_dir()` 创建的 "cec" 目录未被清理。这导致 debugfs 中残留陈旧条目，并阻止模块进行正常的重载操作。
+
+#主要错误日志
+cec: bus_register failed
+
+#问题根因
+在函数 `cec_devnode_init()` 中，代码先调用 `debugfs_create_dir()` 创建了目录，随后调用 `bus_register()`。当 `bus_register()` 执行失败进入错误处理路径时，代码仅注销了字符设备区域（`unregister_chrdev_region`），却遗漏了删除已创建的 debugfs 目录，从而导致资源泄露。
+
+#解决方案
+在 `bus_register()` 失败的错误处理分支中，增加调用 `debugfs_remove_recursive(top_cec_dir)`，确保在初始化失败时清理已创建的 debugfs 目录，修复资源泄露问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7c5b4c651f86cf268ec0e136d2a25e3af1fb879d

@@ -1,0 +1,30 @@
+#标题
+arm64: RME: 修复 RIPAS 变更处理逻辑导致 RTT 状态错误及资源泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Realm 虚拟机（RME）场景下，处理 RIPAS（Realm IPA State）变更时可能出现以下异常：
+1. 在释放块映射时，因 RTT 表基地址对齐错误导致 `rmi_rtt_fold` 调用失败，进而引发内存资源泄漏。
+2. 在创建 RTT（Realm Translation Table）层级时，已分配但在错误处理路径中未正确释放的 granule 页面发生泄漏。
+3. 在 `kvm_complete_ripas_change` 处理循环中，因循环条件及返回值设置错误，导致 RIPAS 变更完成逻辑异常，可能引发后续 `kvm_rec_enter` 进入失败或状态不一致。
+
+#主要错误日志
+- 推断：`Unexpected error in realm_set_ipa_state: %#x`（来自代码上下文 `WARN(1, "Unexpected error in %s: %#x\n", __func__, ret)`）
+- 推断：`WARN_ON(1)` 触发的内核警告栈（在 `realm_fold_rtt_level` 默认分支）
+
+#问题根因
+1. **地址对齐错误**：在 `realm_rtt_fold` 函数中，传入 `rmi_rtt_fold` 的地址未按照上一级 RTT 的映射大小进行向下对齐（`ALIGN_DOWN`），导致 RMI 调用不符合硬件规范要求。
+2. **内存泄漏**：在 `realm_create_rtt_levels` 函数中，当检测到 RTT 已存在（`RMI_ERROR_RTT`）时，此前刚刚分配并委托的 granule 页面未被释放直接退出循环，导致内存泄露。
+3. **逻辑缺陷**：`kvm_complete_ripas_change` 函数中的循环结束条件 `top_ipa < top` 错误，且未正确更新 `rec->run->exit.ripas_base` 值，导致无法正确向 VMM 报告处理进度或状态。
+4. **流程缺失**：`realm_unmap_shared_range` 中缺少对 `realm_fold_rtt_level` 的调用，导致解映射后未能及时折叠并释放 RTT 资源。
+
+#解决方案
+1. 在 `realm_rtt_fold` 中调用 `rmi_rtt_fold` 前，增加 `addr = ALIGN_DOWN(addr, rme_rtt_level_mapsize(level - 1))` 修正地址对齐。
+2. 在 `realm_create_rtt_levels` 的错误处理路径中，当 RTT 已存在时增加 `free_delegated_granule(rtt)` 调用以释放多余内存。
+3. 将 `kvm_complete_ripas_change` 中的循环条件修正为 `base < top`，并增加 `rec->run->exit.ripas_base = base` 赋值以确保状态正确返回。
+4. 将 `realm_fold_rtt_level` 函数定义前移，并在 `realm_unmap_shared_range` 末尾调用该函数，确保解映射后正确折叠 RTT 表并回收资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6d843720999deba794135a07d761280dc7632bf6

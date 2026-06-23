@@ -1,0 +1,26 @@
+#标题
+soc: qcom: pdr: 修复潜在死锁导致服务发现超时问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多进程并发场景下，当进程A调用 pdr_add_lookup() 发起服务查找，同时进程B收到 locator 服务上线通知时，系统触发死锁。导致进程A在 pdr_locate_service() 中等待 QMI 响应超时，最终打印超时错误日志，且因使用有序工作队列，进程B无法完成新服务请求工作，相关音频功能可能出现回归或异常。
+
+#主要错误日志
+PDR: tms/servreg get domain list txn wait failed: -110
+PDR: service lookup for msm/adsp/sensor_pd:tms/servreg failed: -110
+
+#问题根因
+死锁发生于进程A与进程B对 `pdr->list_lock` 锁的竞争与有序工作队列的阻塞机制：
+1. 进程A执行 `pdr_locator_work()` 时持有 `list_lock` 互斥锁，随后调用 `pdr_get_domain_list()` 发送请求并在同一有序工作队列中等待响应。
+2. 进程B执行 `pdr_locator_new_server()` 试图获取 `list_lock` 互斥锁，但被进程A阻塞。
+3. 由于工作队列是有序的，进程B的工作项无法完成，导致队列阻塞，进程A等待的响应报文（由队列处理）无法被处理，从而形成死锁循环。
+代码层面，`pdr_locator_new_server()` 在持有 `list_lock` 的情况下遍历列表并调度工作，这是导致死锁的直接诱因，而实际上列表遍历操作已在 `locator_work` 内部实现，此处属于冗余且危险的加锁操作。
+
+#解决方案
+移除 `pdr_locator_new_server()` 函数中不必要的列表遍历与加锁逻辑。
+由于 `pdr_locator_work()` 内部已经会对 `pdr->lookups` 列表进行完整的遍历与检查，因此在 `pdr_locator_new_server()` 中无需再次持有 `list_lock` 遍历列表。修复方案直接调用 `schedule_work(&pdr->locator_work)` 即可，避免了在 QMI 回调路径中持有锁，从而打破死锁链条。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fbd32b0bed35acae50983f7112273414a49373ee

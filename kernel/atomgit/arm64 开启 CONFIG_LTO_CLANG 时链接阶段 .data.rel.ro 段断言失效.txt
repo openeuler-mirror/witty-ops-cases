@@ -1,0 +1,20 @@
+#标题
+arm64 开启 CONFIG_LTO_CLANG 时链接阶段 .data.rel.ro 段断言失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 架构下启用 CONFIG_LTO_CLANG 进行内核编译链接时，链接器脚本中对 `.data.rel.ro` 段大小的断言检查失效。该断言本应用于检测并禁止 `.data.rel.ro` 段的存在，但由于逻辑位置错误，导致即使内核镜像中实际包含了不该出现的 `.data.rel.ro` 段，构建过程也不会报错，可能引入潜在的运行时风险或破坏内核设计的内存布局属性。
+
+#主要错误日志
+ASSERT(SIZEOF(.data.rel.ro) == 0, "Unexpected RELRO detected!")
+
+#问题根因
+链接脚本中的 `ASSERT(SIZEOF(.data.rel.ro) == 0, "Unexpected RELRO detected!")` 检查逻辑被放置在 `RW_DATA()` 宏定义之后。当启用 CONFIG_LTO_CLANG 时，`.data.rel.ro` 段会匹配 `RW_DATA()` 宏中定义的 `.data.[0-9a-zA-Z_]*` 模式，导致该段内容被提前归入 `DATA_MAIN` 区域。此时断言执行时 `.data.rel.ro` 段已被清空，导致断言检查通过，无法检测出“Unexpected RELRO”的异常情况。
+
+#解决方案
+将 `.data.rel.ro` 的段定义及对应的 `ASSERT` 断言逻辑从 `RW_DATA()` 宏调用之后移动到 `RW_DATA()` 宏调用之前。这确保了断言在 `RW_DATA()` 宏处理并吸收相关段之前执行，从而能够正确检测到 `.data.rel.ro` 段的存在并在大小非 0 时报错。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b2cdee131200f457de9ee76fee9db111cc556db1

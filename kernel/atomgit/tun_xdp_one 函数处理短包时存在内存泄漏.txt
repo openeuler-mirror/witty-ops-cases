@@ -1,0 +1,20 @@
+#标题
+tun_xdp_one 函数处理短包时存在内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 TUN 设备的 XDP（eXpress Data Path）功能处理网络包时，如果接收到的数据包长度小于以太网头部长度（ETH_HLEN），内核在丢弃该数据包时未正确释放对应的内存页。这会导致系统内存泄漏，在遭受恶意短包攻击或网络异常时可能耗尽系统内存。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `drivers/net/tun.c` 的 `tun_xdp_one` 函数中，当检测到数据大小（datasize）小于 ETH_HLEN 时，代码直接返回 `-EINVAL` 错误，但遗漏了释放之前已经分配或引用的数据页（`virt_to_head_page(xdp->data)`），导致该内存页无法被回收，从而引起内存泄漏。
+
+#解决方案
+在 `tun_xdp_one` 函数中，于返回 `-EINVAL` 错误之前，显式调用 `put_page(virt_to_head_page(xdp->data))` 释放数据页引用，确保内存资源被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/00adba78c0014bbd6e0c52680a9cbc626f799bb4

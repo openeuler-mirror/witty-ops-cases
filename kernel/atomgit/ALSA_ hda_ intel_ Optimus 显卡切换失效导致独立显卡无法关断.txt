@@ -1,0 +1,23 @@
+#标题
+ALSA: hda: intel: Optimus 显卡切换失效导致独立显卡无法关断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在部分双 GPU 笔记本电脑上，独立显卡（DGPU）不包含功能正常的 HDA 控制器。由于 `quirk_nvidia_hda()` 强制启用了该控制器，导致驱动加载尝试探测失败（发生在 `azx_first_init` 阶段）。尽管驱动初始化失败并停止了芯片，但设备仍处于“已探测”状态，PCI 子系统将其标记为活跃。这导致 `vga_switcheroo` 无法关闭独立显卡，造成 Optimus 显卡切换功能失效，独立显卡无法进入休眠状态，可能引发额外的功耗问题。
+
+#主要错误日志
+- `GPU sound probed, but not operational: please add a quirk to driver_denylist`
+
+#问题根因
+`quirk_nvidia_hda()` 为了修复某些 BIOS 的 Bug，会强制启用所有 NVIDIA GPU 上的 HDA 控制器。然而，部分双 GPU 笔记本的独立显卡实际上没有功能完备的 HDA 控制器（BIOS 本意是禁用它）。当驱动尝试探测这个“虚假”的 HDA 控制器时，会在 `azx_first_init()` 中失败。问题在于，此时设备已经被 PCI 子系统标记为“已探测”和“活跃”状态，且 `azx_free()` 只是停止了芯片并未修正电源管理状态。由于 PCI 层建立的音视频设备电源管理同步链接（`pci_create_device_link`），HDA 设备保持活跃会阻止 `vga_switcheroo` 将独立显卡断电。
+
+#解决方案
+在 `azx_free()` 函数中，针对已注册 `vga_switcheroo` 的设备增加异常处理逻辑：
+1. 检测到设备虽已探测但功能异常时，打印警告日志提示用户将该设备加入 `driver_denylist` 黑名单。
+2. 显式调用 `pm_runtime_disable`、`pm_runtime_set_suspended` 和 `pm_runtime_enable`，强制将设备运行时电源状态设置为挂起。
+此修复确保了即使驱动探测失败，HDA 设备也能进入正确的电源状态，从而解除对 `vga_switcheroo` 关闭独立显卡的阻塞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/77cecf742748160498a7e886b61f4531108e1b90

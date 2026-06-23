@@ -1,0 +1,21 @@
+#标题
+spi: rockchip: 中断处理误判导致 SPI 传输异常中止
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ROCKCHIP_SPI_VER2_TYPE2 类型的控制器 Target 模式下，当进行短数据传输（数据量小于 fifo_len 触发 PIO 模式）时，正常的 SPI 传输会被错误地中止。具体表现为：每次 PIO 中断（包括正常的接收缓冲区满 INT_RF_FULL 中断）都会触发 `ctlr->target_abort()`，导致数据传输失败或无法完成。
+
+#主要错误日志
+未知
+
+#问题根因
+在中断服务程序 `rockchip_spi_isr()` 中，判断是否发生 CS inactive 事件时，错误地读取了中断屏蔽寄存器（IMR）而非中断状态寄存器（ISR）。
+由于在 PIO 模式下准备中断时（`rockchip_spi_prepare_irq`），如果启用了 `cs_inactive`，IMR 中会同时置位 `INT_RF_FULL` 和 `INT_CS_INACTIVE`。代码逻辑 `readl_relaxed(rs->regs + ROCKCHIP_SPI_IMR) & INT_CS_INACTIVE` 仅检查该中断是否被使能，而非是否真实发生。因此，只要 `cs_inactive` 被启用，该判断条件恒为真，导致任何 PIO 中断都会触发传输中止逻辑。
+
+#解决方案
+修改 `rockchip_spi_isr()` 函数中的判断逻辑，将读取 `ROCKCHIP_SPI_IMR` 改为读取 `ROCKCHIP_SPI_ISR`（即 RISR，由 IMR 屏蔽后的中断状态），以准确反映当前中断源是否为 `INT_CS_INACTIVE`，从而避免误中止正常的数据传输。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b9635d8f76c4d8e37da55517ccb285c98c2bd1aa

@@ -1,0 +1,20 @@
+#标题
+enetc驱动在Big Endian系统下读取64位寄存器存在字节序处理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在Big Endian架构的系统上，若使用基于 `ioread32` 组合实现的 `_enetc_rd_reg64` 函数读取64位寄存器，会获取到错误的数值。该问题会导致驱动行为异常，虽然当前所有使用该驱动的In-tree用户均为Little Endian系统且未受影响，但在受影响的配置下会引发功能故障。
+
+#主要错误日志
+未知
+
+#问题根因
+`enetc_hw.h` 中的 `_enetc_rd_reg64` 函数在通过两次 `ioread32` 调用拼接64位返回值时，错误地假设 `ioread32` 返回的是小端序（little-endian）值，并使用 `le64_to_cpu` 进行了转换。然而，`ioread32` 的返回值实际上是主机字节序。这导致在Big Endian系统上，移位和或运算拼接出的结果不正确，与直接使用 `ioread64` 的实现逻辑不一致。
+
+#解决方案
+修改 `_enetc_rd_reg64` 函数，移除错误的 `le64_to_cpu` 转换逻辑。将代码从 `return le64_to_cpu((__le64)high << 32 | low);` 修改为 `return (u64)high << 32 | low;`，确保将 `ioread*` 函数的返回值正确作为主机字节序处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c685ccd4b648d57b441360fec7e4beb3cf9f88a9

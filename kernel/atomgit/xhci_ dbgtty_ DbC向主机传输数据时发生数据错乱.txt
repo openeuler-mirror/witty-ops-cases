@@ -1,0 +1,23 @@
+#标题
+xhci: dbgtty: DbC向主机传输数据时发生数据错乱
+
+#内核版本
+OLK-6.6
+
+#问题现象
+通过 xHCI DbC（Debug Capability）接口向主机传输数据时，数据内容发生错乱（corruption）。具体表现为：如果 kfifo 中存在剩余数据，由于正在进行的写操作与写请求完成处理程序之间存在竞争条件，导致发送的数据块顺序与原始数据顺序不一致。例如，原始数据为 "12345678"，主机接收到的数据可能错乱为 "56781234"。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在从 kfifo 读取数据到 dbc 请求缓冲区以及将请求排队到传输环（transfer ring）这两个操作之间未能保持锁保护，导致了竞争条件。
+具体流程为：cpu0 上的 `dbc_start_tx()` 在从 kfifo 读取数据到 req1 缓冲区后释放了锁，此时 cpu1 上的写完成处理程序获得锁，将完成的 req2 重新排队。这导致 req2 提前被插入到传输环中，使得请求的 TRB 顺序（req2 在 req1 前）与 kfifo 中的数据顺序（req1 数据在前，req2 数据在后）不匹配，从而导致发送的数据顺序颠倒。
+
+#解决方案
+在 `dbc_port` 结构体中新增 `tx_running` 标志位。
+1. 重构原 `dbc_start_tx()` 为 `dbc_do_start_tx()`，在函数开始处将 `tx_running` 置为 true，结束处置为 false。
+2. 新增包装函数 `dbc_start_tx()`，在调用实际传输逻辑前检查 `tx_running` 标志。如果当前正处于传输过程中（`tx_running` 为 true），则直接返回 `-EBUSY`，防止在非锁定区域重入传输逻辑，确保请求按正确顺序排队。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/889764fe9f54adc35a4ebf9a79bda551807e974e

@@ -1,0 +1,20 @@
+#标题
+sw64: bpf: fix BPF_CALL JIT for multi-function programs
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 BPF 尾调用或多函数程序的 JIT 编译过程中，由于动态分配的函数起始地址在所有函数 JIT 完成前未知，导致在最终 pass 之前获取到的 BPF_CALL 目标地址为 0。这会导致最终镜像中的 ctx->epilogue_offset 和 BPF_EXIT 跳转偏移量计算错误，引发 BPF 程序执行逻辑异常或崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+对于包含 bpf-to-bpf 调用的程序，动态分配的函数起始地址直到程序的所有函数都完成 JIT 编译后才能确定。在此之前的编译轮次中，BPF_CALL 的目标地址获取为 0。由于之前的实现中指令数量不固定，不同 JIT pass 之间 ctx->idx 发生变化，导致 ctx->epilogue_offset 和 BPF_EXIT 跳转偏移量在最终镜像中计算错误。
+
+#解决方案
+新增函数 emit_sw64_load_call_addr() 用于发射 BPF_CALL 目标地址。该函数与 emit_sw64_ldu64 类似，但区别在于它总是固定发射 12 条指令。通过保证指令数量恒定，确保在多次 JIT pass 中 ctx->idx 保持不变，从而修正偏移量计算错误的问题。将 build_insn 中的 emit_sw64_ldu64 调用替换为该新函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/28a37d510778776a4636bddf12af53c458fb8bda

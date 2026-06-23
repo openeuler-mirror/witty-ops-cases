@@ -1,0 +1,21 @@
+#标题
+SPI 设备初始化 setup 失败导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SPI 设备注册过程中，若 `spi_setup()` 函数执行失败（例如在设置 CS 时序或电源管理自动化失败时），此前已由控制器 `setup()` 回调分配的资源（如内存、IO 映射等）未被释放，导致内核资源泄漏。该问题可能随着设备反复注册/注销尝试最终导致系统内存耗尽或不稳定。
+
+#主要错误日志
+- `dev_err(dev, "can't setup %s, status %d\n", dev_name(&spi->dev), status);`
+- `dev_err(&spi->controller->dev, "Failed to power device: %d\n", status);`
+
+#问题根因
+根据提交信息 "spi: fix resource leaks on device setup failure"，根因在于 `spi_setup()` 函数在设备初始注册阶段失败时，未调用控制器的 `cleanup()` 回调。具体流程为：`__spi_add_device` 调用 `spi_setup` 时，控制器驱动可能已通过 `setup()` 钩子分配了资源，但随后的错误处理路径（如 `spi_set_cs_timing` 失败或 `auto_runtime_pm` 失败）直接返回了错误码，跳过了资源清理步骤。
+
+#解决方案
+重构 `spi_setup` 实现逻辑，引入内部函数 `__spi_setup`，增加 `initial_setup` 布尔参数用于区分是初始注册还是后续重新配置。在初始注册阶段（`initial_setup` 为 true），若 setup 过程中发生错误，代码将跳转至 `err_cleanup` 标签，显式调用 `spi_cleanup(spi)` 释放资源，从而修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b06b40da0466f45c6f2649caabec97753fa4e458

@@ -1,0 +1,31 @@
+#标题
+memory tiers: default_dram_perf_ref_source 变量未使用导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动过程中，kmemleak 检测到内存泄漏报告。泄漏的源地址空间为 ACPI HMAT 相关数据，且报告中提示变量 `default_dram_perf_ref_source` 已初始化但从未被使用。
+
+#主要错误日志
+```
+unreferenced object 0xff11000225a47b60 (size 16):
+  comm "swapper/0", pid 1, jiffies 4294761654
+  hex dump (first 16 bytes):
+    41 43 50 49 20 48 4d 41 54 00 c1 4b 7d b7 75 7c  ACPI HMAT..K}.u|
+  backtrace (crc e6d0e7b2):
+    [<ffffffff95d5afdb>] __kmalloc_node_track_caller_noprof+0x36b/0x440
+    [<ffffffff95c276d6>] kstrdup+0x36/0x60
+    [<ffffffff95dfabfa>] mt_set_default_dram_perf+0x23a/0x2c0
+    [<ffffffff9ad64733>] hmat_init+0x2b3/0x660
+    ...
+```
+
+#问题根因
+在 Commit 3718c02dbd4c 中添加了变量 `default_dram_perf_ref_source` 用于保存性能数据来源信息，该变量进行了内存分配和初始化，但在后续代码逻辑中从未被引用。这不仅导致了 kmemleak 报告内存泄漏，也使得内核日志中缺少性能数据来源信息，不利于排查性能数值不一致的根本原因。
+
+#解决方案
+修改 `mm/memory-tiers.c` 文件，在打印 DRAM 节点性能信息的日志中增加对 `default_dram_perf_ref_source` 和 `source` 变量的输出。该修复既消除了内存泄漏（通过使用已分配的变量），又在日志中提供了性能数据的来源（如 ACPI HMAT），帮助定位性能不一致问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/78024576801a5e8d5e7e694137d75735ad2423ca

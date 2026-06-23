@@ -1,0 +1,24 @@
+#标题
+sun8i-ce-cipher 错误处理路径中的 DMA 映射释放缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Allwinner sun8i-ce 加密引擎驱动进行加密操作时，若数据处理过程中发生错误并进入异常清理流程，内核可能会尝试释放一个无效或未成功映射的 DMA 地址。此行为可能导致内核崩溃、Oops 或内存数据损坏，尤其是在解密操作特定场景下触发了错误的 DMA 反向映射逻辑。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `sun8i_ce_cipher_prepare` 函数的错误处理代码路径中存在逻辑缺陷：
+1. **目标缓冲区解映射缺陷**：在异常处理分支中，代码无条件地调用 `dma_unmap_sg` 对目标缓冲区进行解映射，未检查 `nr_sgd` 是否大于 0。如果目标缓冲区实际上并未映射成功（即 DMA 映射数量为 0），错误的解映射操作将引发问题。
+2. **IV 缓冲区解映射缺陷**：在处理初始向量（IV）的清理时，代码直接检查 `rctx->addr_iv` 指针值是否非空，而非使用 `dma_mapping_error` 校验映射是否成功。如果 `addr_iv` 被赋予了一个无效的错误码（如 0 或错误地址指针），错误校验将通过，导致随后对无效地址执行 `dma_unmap_single` 操作。
+
+#解决方案
+修改 `drivers/crypto/allwinner/sun8i-ce/sun8i-ce-cipher.c` 文件，修正错误处理路径中的资源释放逻辑：
+1. **增加映射存在性检查**：在调用 `dma_unmap_sg(ce->dev, areq->dst, ...)` 之前，增加 `if (nr_sgd > 0)` 判断，确保仅当目标 DMA 缓冲区实际存在并成功映射时才执行解映射操作。
+2. **修正映射错误校验**：将 IV 地址的校验从 `if (rctx->addr_iv)` 修改为 `if (!dma_mapping_error(ce->dev, rctx->addr_iv))`，严格校验 DMA 映射是否有效，防止对无效或错误的映射地址进行解映射操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5fd07e83200ea10a0c3aa123036ef096c92685d4

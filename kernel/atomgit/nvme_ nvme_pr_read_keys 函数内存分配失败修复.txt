@@ -1,0 +1,20 @@
+#标题
+nvme: nvme_pr_read_keys 函数内存分配失败修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `nvme_pr_read_keys` 读取 NVMe 预留键值时，若需要读取的键值数量较多，导致分配的内存 `rse_len` 较大，可能因内存碎片化严重或超过 `kmalloc` 的分配限制而导致内存分配失败，进而导致接口返回 `-ENOMEM`，功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+代码原使用 `kzalloc` 进行内存分配，该函数基于 slab 分配器，对于大块内存或在高内存碎片化场景下容易分配失败。而后续代码逻辑中可能存在因分配失败导致的内存泄漏风险（根据 patch 上下文推断），或单纯因无法获取大块连续物理内存导致功能不可用。根本原因在于使用了不适合大块内存分配的 `kzalloc` 接口。
+
+#解决方案
+将 `drivers/nvme/host/pr.c` 中 `nvme_pr_read_keys` 函数内的内存分配方式从 `kzalloc` 修改为 `kvzalloc`，对应的释放函数从 `kfree` 修改为 `kvfree`。`kvzalloc` 在大块内存分配时会自动回退到 `vmalloc`，以虚拟连续内存替代物理连续内存，从而提高分配成功率，修复潜在的内存分配失败问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c691c44ae59595cc179c5f023007517fec7a9d02

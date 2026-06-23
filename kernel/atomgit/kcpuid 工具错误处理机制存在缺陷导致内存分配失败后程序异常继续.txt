@@ -1,0 +1,28 @@
+#标题
+kcpuid 工具错误处理机制存在缺陷导致内存分配失败后程序异常继续
+
+#内核版本
+OLK-6.6
+
+#问题现象
+kcpuid 工具在运行过程中，若遇到内存分配失败或文件打开失败等情况，程序仅打印错误信息但不会退出，导致后续流程在无效内存指针上操作，可能引发段错误或程序行为异常。此外，错误信息与警告信息被错误地输出到了标准输出而非标准错误。
+
+#主要错误日志
+推断日志：
+- "malloc func leaf: Cannot allocate memory" (原 perror 输出)
+- "realloc f->leafs: Cannot allocate memory" (原 perror 输出)
+- "Fail to open 'cpuid.csv'" (原 printf 输出)
+- "Warning: wrong line format:" (原 printf 输出)
+- "ERR: invalid input index (0x%x)" (原 printf 输出)
+
+#问题根因
+kcpuid 工具的代码逻辑在处理 malloc、realloc 以及 fopen 等系统调用失败时存在缺陷。代码中使用了 perror 或 printf 打印错误信息，但在打印后未执行 exit 退出逻辑，而是继续执行后续代码，导致空指针解引用风险。同时，错误信息输出到了标准输出，不符合标准的错误处理规范。
+
+#解决方案
+引入 `<err.h>` 标准库函数重构错误处理逻辑：
+1. 将所有内存分配失败（malloc/realloc）和文件打开失败的处理逻辑替换为 `err(EXIT_FAILURE, ...)`，该函数会自动将错误信息输出到标准错误并终止程序。
+2. 将格式错误和参数错误的警告信息替换为 `warnx(...)`，确保信息输出到标准错误。
+3. 修复 usage 帮助信息的输出方式，使用 `warnx` 替代 `printf`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c5599f003b20e33e312b7b2cfe42193da35954c8

@@ -1,0 +1,20 @@
+#标题
+futex: requeue-PI机制存在Use-After-Free导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 futex_wait_requeue_pi() 与 futex_requeue() 并发执行的场景下，由于竞争条件，等待线程 T1 可能在未正确同步的情况下提前退出并清理栈上的 futex_q 结构。此时，重排队线程 T2 在抢占恢复后继续执行 wake_up_state()，访问了已被释放或无效的 futex_q 结构（特别是 q->task 指针），从而触发 Use-After-Free，可能导致内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 requeue_pi_wake_futex() 函数中，更新 futex_q::requeue_state 的操作（通过 futex_requeue_pi_complete()）与读取 futex_q::task 的操作之间存在竞争窗口。在上述特定竞速场景中，T1 线程因为超时或信号唤醒，在 futex_requeue_pi_wakeup_sync() 中看到 Q_REQUEUE_PI_LOCKED 状态后直接退出，导致栈上的 futex_q 结构变为无效垃圾数据。与此同时，T2 线程在更新 requeue_state 后才去读取 q->task，此时读取到的已是无效指针，导致 wake_up_state() 访问已释放内存。
+
+#解决方案
+在 requeue_pi_wake_futex() 函数中，调整读取顺序，使用 READ_ONCE() 在更新 requeue_state 之前读取 futex_q::task 指针并保存到局部变量中。这确保了在标记重排队状态改变（即向等待者发送信号）之前，task 指针已经被安全获取。由于 RCU 保护机制，即使 T1 线程退出，task_struct 在 wake_up_state() 执行期间依然有效，从而避免了 Use-After-Free。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fbd3b444bef30aa2cc6f7d13a57cd296afd06ea5

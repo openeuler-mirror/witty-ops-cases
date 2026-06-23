@@ -1,0 +1,22 @@
+#标题
+HID pidff 设备因缺失 PARAMETER_BLOCK_OFFSET 字段导致初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+部分 HID 力反馈设备（如 VRS DirectForce PRO）在初始化 Conditional Effects（条件效果）时失败，导致设备无法正常使用力反馈功能。
+
+#主要错误日志
+hid_warn(pidff->hid, "unknown condition effect layout\n");
+
+#问题根因
+部分单轴 HID 力反馈设备的 Conditional Effects 报告描述符中缺失 PARAMETER_BLOCK_OFFSET 字段。内核驱动在 `pidff_set_condition_report` 函数中未处理该字段缺失的情况，依然尝试写入该字段，导致设备初始化流程报错。
+
+#解决方案
+1. 新增 `HID_PIDFF_QUIRK_MISSING_PBO` quirk 标志位，用于标识缺失 PARAMETER_BLOCK_OFFSET 字段的设备。
+2. 在 `pidff_find_fields` 中增加自动检测逻辑，若发现 `set_condition` 表中缺失 `PID_PARAM_BLOCK_OFFSET` 字段，则自动设置该 quirk 标志。
+3. 修改 `pidff_set_condition_report` 函数逻辑，若检测到 `MISSING_PBO` quirk，则跳过对 `PID_PARAM_BLOCK_OFFSET` 字段的设置，并将循环次数（max_axis）限制为 1，从而兼容此类设备。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6d7be9e854a3f0ff3e2a6197cde228b3eb7c7cca

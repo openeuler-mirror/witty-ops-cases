@@ -1,0 +1,26 @@
+#标题
+RDMA/hns 命令接口失败导致日志风暴甚至系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 HNS RoCE 硬件处于异常状态时，驱动程序在命令接口（cmd_mbox）调用失败后的错误处理路径中，会无限制地打印错误日志。这种高频的日志打印会导致系统出现日志洪水，严重时甚至引发系统崩溃。
+
+#主要错误日志
+- "failed to send create cmd for CQ(0x%lx), ret = %d.\n"
+- "failed to handle cmd of modifying SRQ, ret = %d.\n"
+- "failed to process cmd of querying SRQ, ret = %d.\n"
+- "failed to process cmd when querying MPT, ret = %d.\n"
+- "failed to destroy MPT, ret = %d.\n"
+- "failed to create MPT, ret = %d.\n"
+- "failed to config SRQC, ret = %d.\n"
+
+#问题根因
+`hns_roce_cmd_mbox()` 是驱动与硬件交互的命令接口。在硬件异常导致该函数调用失败时，驱动在后续的错误处理路径中使用了普通的 `ibdev_err()` 和 `ibdev_warn()` 接口打印日志。由于缺少速率限制机制，在硬件持续异常的情况下，这些 unlimited（无限制）的错误打印会引发日志风暴，消耗系统资源甚至导致系统崩溃。
+
+#解决方案
+将 `hns_roce_cmd_mbox()` 及其封装函数（`hns_roce_create_hw_ctx`/`hns_roce_destroy_hw_ctx`）失败后的错误处理路径中的 `ibdev_err()` 替换为 `ibdev_err_ratelimited()`，将 `ibdev_warn()` 替换为 `ibdev_warn_ratelimited()`，通过引入速率限制机制防止日志风暴。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/02477845b0a8e0e230ccc72d353ed6eb487e5605

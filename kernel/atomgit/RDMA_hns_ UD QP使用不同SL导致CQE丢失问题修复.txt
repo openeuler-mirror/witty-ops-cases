@@ -1,0 +1,24 @@
+#标题
+RDMA/hns: UD QP使用不同SL导致CQE丢失问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当UD（Unreliable Datagram）类型的QP（Queue Pair）使用多个不同的SL（Service Level）发送数据时，受硬件限制，可能导致CQE（Completion Queue Entry）丢失，进而引发上层应用无法正确获取完成通知或IO挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+由于硬件（HW）问题，如果同一个UD QP在发送过程中使用了多种不同的SL（Service Level），硬件可能会丢弃部分CQE。原代码逻辑在每次发送时直接从地址句柄（AH）获取SL并写入WQE，且更新QP结构体中的SL字段，这导致同一个QP在不同时刻可能配置不同的SL值，从而触发该硬件缺陷。
+
+#解决方案
+修改驱动程序逻辑，对UD QP的SL配置进行约束：
+1. 在QP结构体中新增 `ud_sl_set` 标志位。
+2. 在发送路径（`fill_ud_av`）中，仅当 `ud_sl_set` 为假时，将AH中的SL值记录到QP结构体中并设置 `ud_sl_set` 为真；后续发送统一使用QP结构体中缓存的SL值。
+3. 通过这种方式强制同一个UD QP在生命周期内仅使用首次发送时的SL，避免SL变更触发硬件缺陷。
+4. 在QP状态变更为错误（IB_QPS_ERR）时，重置 `ud_sl_set` 标志位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5ee9ff3ba9957cfd525109c9995a354f2aa8b668

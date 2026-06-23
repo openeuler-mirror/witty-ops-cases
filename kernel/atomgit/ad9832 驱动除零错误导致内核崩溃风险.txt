@@ -1,0 +1,20 @@
+#标题
+ad9832 驱动除零错误导致内核崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ad9832 驱动执行频率写入操作时，若系统时钟 `mclk` 频率为 0，将触发除零错误（division by zero）。该错误发生在 `ad9832_calc_freqreg` 函数计算频率寄存器值的过程中，可能导致内核 panic 或 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ad9832_write_frequency` 函数中，调用 `clk_get_rate(st->mclk)` 获取时钟频率可能返回 0。后续代码在 `ad9832_calc_freqreg` 函数中进行除法运算时未对时钟频率进行零值检查，从而导致除零错误。原有的边界检查 `if (fout > (clk_get_rate(st->mclk) / 2))` 无法防御 `mclk` 为 0 的情况，且当 `fout` 为 0 时也未能有效拦截。
+
+#解决方案
+在 `ad9832_write_frequency` 函数中增加对时钟频率返回值的零值检查。将 `clk_get_rate(st->mclk)` 的返回值存入临时变量 `clk_freq`，在原有的边界检查条件中增加 `!clk_freq` 判断：`if (!clk_freq || fout > (clk_freq / 2))`。若时钟频率为 0，直接返回 `-EINVAL`，避免向下传递引发除零错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7cf71887f5299bc5f7e623fb45688ab36ca1343a

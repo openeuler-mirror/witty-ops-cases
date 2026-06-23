@@ -1,0 +1,39 @@
+#标题
+MPTCP 回退过程中重注入导致的死锁故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MPTCP 协议栈处理 MP_FAIL 包后、发送 infinite map 之前的临界区间，若数据包调度器尝试进行重注入操作，内核会检测到递归锁风险并触发死锁告警，导致系统打印 WARNING 信息并报告 DEADLOCK。
+
+#主要错误日志
+WARNING: possible recursive locking detected
+6.18.0-rc7-virtme #1 Not tainted
+--------------------------------------------
+mptcp_connect/20858 is trying to acquire lock:
+ff1100001da18b60 (&msk->fallback_lock){+.-.}-{3:3}, at: __mptcp_try_fallback+0xd8/0x280
+
+but task is already holding lock:
+ff1100001da18b60 (&msk->fallback_lock){+.-.}-{3:3}, at: __mptcp_retrans+0x352/0xaa0
+
+other info that might help us debug this:
+ Possible unsafe locking scenario:
+
+       CPU0
+       ----
+  lock(&msk->fallback_lock);
+  lock(&msk->fallback_lock);
+
+ *** DEADLOCK ***
+
+ May be due to missing lock nesting notation
+
+#问题根因
+数据包调度器在收到 MP_FAIL 后、infinite map 发送前尝试进行重注入。此时 MPTCP 需要以原子方式相对于 WRT fallback 执行重注入，导致在已经持有 `msk->fallback_lock` 的情况下再次尝试获取该锁，从而引发递归锁定死锁。
+
+#解决方案
+在 `__mptcp_retrans` 函数中增加对临界场景的判断，明确禁止在回退（fallback）处理正在进行（即 `!msk->allow_subflows`）时执行重注入操作，从而避免在持有 `fallback_lock` 时再次尝试获取锁，修复了该死锁问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ad5144b03119118e476b2ff0007d7638824c81a

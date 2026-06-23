@@ -1,0 +1,29 @@
+#标题
+hrtimers: CPU热插拔过程中状态处理错误导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在CPU执行热插拔操作（从CPUHP_ONLINE过渡到CPUHP_HRTIMERS_PREPARE状态之前）并随即回滚至CPUHP_ONLINE时，出现以下异常：
+1. 内核日志中出现 `WARN_ON_ONCE` 警告，位于 `enqueue_hrtimer()` 函数中。
+2. CFS调度器错误地认为 hrtick 已激活，导致定时功能异常。
+3. 该CPU的时钟事件设备永久失去切换到 oneshot 模式的机会。
+4. 存在悬空指针，可能导致系统崩溃或不可预测的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+当CPU进行热插拔操作并在中途回滚时（例如在未达到 `CPUHP_HRTIMERS_PREPARE` 状态前返回在线状态），`hrtimers_prepare_cpu()` 不会被执行。这导致 `cpu_base.hres_active` 保持为 1，且 `cpu_base.online` 未被正确设置为 1。
+同时，由于在 `CPUHP_AP_TICK_DYING` 阶段 tick 和 clockevents 已经被关闭，回滚时缺少相应的启动回调来重置这些状态。这导致 per-CPU 状态（如 `active_bases`、`hres_active` 等）未能重置，残留了陈旧的状态和悬空指针，破坏了 hrtimer 的一致性。
+
+#解决方案
+新增 `hrtimers_cpu_starting()` 回调函数，并将其绑定到 `CPUHP_AP_HRTIMERS_DYING` 阶段的 `startup.single` 钩子上。
+该修复措施在 CPU 启动（或回滚）时重置陈旧的 per-CPU 状态，具体包括：
+1. 将 `active_bases`、`hres_active`、`hang_detected` 等关键参数重置为初始值。
+2. 设置 `cpu_base->online` 为 1。
+3. 确保 `hrtimers_init()` 初始化流程也调用该函数以保证一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8f46cfbf6cf1e33a2a413a5b1a0923ce2d5c77b6

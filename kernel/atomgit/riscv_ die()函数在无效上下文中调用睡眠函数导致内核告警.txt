@@ -1,0 +1,36 @@
+#标题
+riscv: die()函数在无效上下文中调用睡眠函数导致内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启了 PREEMPT_RT 的 RISC-V 架构内核中，当触发异常处理流程调用 die() 函数时，系统打印 "BUG: sleeping function called from invalid context" 警告信息，提示在原子上下文中调用了可能导致睡眠的函数，随后系统可能触发 Oops 或异常行为。
+
+#主要错误日志
+BUG: sleeping function called from invalid context at kernel/locking/spinlock_rt.c:48
+in_atomic(): 1, irqs_disabled(): 1, non_block: 0, pid: 285, name: mutex
+preempt_count: 110001, expected: 0
+RCU nest depth: 0, expected: 0
+CPU: 0 UID: 0 PID: 285 Comm: mutex Not tainted 6.12.0-rc7-00022-ge19049cf7d56-dirty #234
+Hardware name: riscv-virtio,qemu (DT)
+Call Trace:
+dump_backtrace+0x1c/0x24
+show_stack+0x2c/0x38
+dump_stack_lvl+0x5a/0x72
+dump_stack+0x14/0x1c
+__might_resched+0x130/0x13a
+rt_spin_lock+0x2a/0x5c
+die+0x24/0x112
+do_trap_insn_illegal+0xa0/0xea
+_new_vmalloc_restore_context_a0+0xcc/0xd8
+Oops - illegal instruction [#1]
+
+#问题根因
+die() 函数通常在异常处理程序中被调用，此时处于无效上下文，不允许睡眠。然而，该函数内部使用了普通的 spinlock_t 锁。在开启了 PREEMPT_RT 的内核中，spinlock_t 会被转换为可睡眠的 rt_spin_lock，导致 die() 在持有锁时可能发生睡眠，从而触发 "sleeping function called from invalid context" 的内核告警。
+
+#解决方案
+将 die() 函数中使用的锁类型从 spinlock_t 修改为 raw_spinlock_t。raw_spinlock_t 在 PREEMPT_RT 内核中仍然保持非睡眠特性，从而确保在异常处理等原子上下文中调用的安全性。具体代码修改为使用 DEFINE_RAW_SPINLOCK 定义锁，并使用 raw_spin_lock_irqsave 及 raw_spin_unlock_irqrestore 进行加锁解锁操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fbd7561740768e002c5791e6be4f120890906569

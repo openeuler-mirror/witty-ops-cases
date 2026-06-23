@@ -1,0 +1,20 @@
+#标题
+smb: client: fix crypto buffers in non-linear memory
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SMB3 客户端在进行加密通信时，内核可能发生内存破坏或访问无效内存，导致系统崩溃或数据损坏。该问题发生在处理非线性内存中的加密缓冲区时，涉及 `kvzalloc` 与 `kzalloc` 在内存分配与释放方式上的不匹配。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb2_aead_req_alloc` 函数中，代码使用 `kvzalloc` 分配内存，但在 `crypt_message` 函数中却使用 `kfree_sensitive` 进行释放。`kvzalloc` 在物理内存连续性不足时会分配非线性内存，而 `kfree_sensitive` 仅适用于通过 `kmalloc` 或 `kzalloc` 分配的线性内存。这种分配与释放函数的不匹配导致内存管理错误。
+
+#解决方案
+将 `smb2_aead_req_alloc` 函数中的内存分配函数从 `kvzalloc(len, GFP_NOFS)` 修改为 `kzalloc(len, GFP_NOFS)`，确保分配的内存始终是线性的；同时移除不再需要的 `sensitive_size` 参数传递，并在释放时直接调用 `kfree_sensitive`，从而保证内存分配与释放接口的正确匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/475ad739de0d59c667bb9fa8ab728d1d146c8e28

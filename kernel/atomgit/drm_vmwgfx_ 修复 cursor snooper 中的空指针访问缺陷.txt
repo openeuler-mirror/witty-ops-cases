@@ -1,0 +1,21 @@
+#标题
+drm/vmwgfx: 修复 cursor snooper 中的空指针访问缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 DMA 操作相关的指令流程时，如果 `vmw_cmd_res_check` 检查通过但未成功将资源放入 `res_cache`（例如特定边界条件），后续代码在未做判空处理的情况下直接访问 `sw_context->res_cache[vmw_res_surface].res` 并将其转换为 `srf`，导致内核发生空指针访问。
+
+#主要错误日志
+VMW_DEBUG_USER("could not find surface for DMA.\n");
+VMW_DEBUG_USER("Invalid DMA surface.\n");
+
+#问题根因
+函数 `vmw_cmd_dma` 调用 `vmw_cmd_res_check` 后，直接从 `sw_context->res_cache` 获取资源指针并强制转换为 `vmw_surface` 类型。虽然 `vmw_cmd_res_check` 返回 0 通常意味着成功，但在某些异常路径或特定情况下，缓存中的 `res` 指针可能为 NULL。代码缺乏对该指针有效性的检查，直接传递给 `vmw_res_to_srf` 宏及后续函数使用，从而引发空指针解引用。
+
+#解决方案
+在获取 `sw_context->res_cache[vmw_res_surface].res` 后增加显式的空指针检查逻辑。如果指针为空，打印调试信息 "Invalid DMA surface." 并返回 `-EINVAL`，阻止后续 `vmw_kms_cursor_snoop` 函数对该空指针的访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/daf0920601b21418596c47935f2ed50ffe95d248

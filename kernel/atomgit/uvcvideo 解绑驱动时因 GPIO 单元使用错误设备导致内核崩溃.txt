@@ -1,0 +1,23 @@
+#标题
+uvcvideo 解绑驱动时因 GPIO 单元使用错误设备导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 USB 摄像头设备包含 GPIO 单元时，若用户通过解绑操作将驱动与 USB 接口分离，系统将触发 OOPS/崩溃。具体的复现路径为：设备在位且 GPIO 中断已启用的情况下执行驱动解绑操作，随后若有中断触发，将访问已释放的内存区域导致崩溃。普通的设备断开连接不会触发此故障。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在管理 GPIO 资源时使用了错误的设备结构体。代码中错误地使用了 USB 设备（`dev->udev->dev`）作为托管资源管理的父设备，而正确应该是 USB 接口设备（`dev->intf->dev`）。
+当执行驱动解绑操作时，因为父设备（USB 设备）未被移除，托管清理函数不会被调用，导致 GPIO 中断未被正确禁用。此时如果中断被触发，中断处理函数将尝试访问已经被 `uvc_delete` 释放的内存区域，从而引发内核 OOPS。
+
+#解决方案
+1. **修正设备结构体引用**：将 `devm_gpiod_get_optional` 和 `dev_err_probe` 函数调用中的设备参数从 `&dev->udev->dev`（USB 设备）修改为 `&dev->intf->dev`（接口设备）。
+2. **移除中断托管依赖**：放弃使用 `devm_request_threaded_irq`，改为手动调用 `request_threaded_irq` 申请中断，并在数据结构中增加 `initialized` 标记位以记录初始化状态。
+3. **增加显式反初始化逻辑**：新增 `uvc_gpio_deinit` 函数，在其中显式调用 `free_irq` 释放中断，并在 `uvc_unregister_video` 流程中调用该清理函数，确保在资源释放前中断已被正确注销。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/304692dab34c73d026cbcccbf187b7b24ea2476b

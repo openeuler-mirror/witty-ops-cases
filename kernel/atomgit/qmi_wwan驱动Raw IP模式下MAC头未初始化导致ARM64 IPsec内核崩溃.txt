@@ -1,0 +1,39 @@
+#标题
+qmi_wwan驱动Raw IP模式下MAC头未初始化导致ARM64 IPsec内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ARM64架构下，使用QMI mux接口（qmimux0）运行IPsec流量时，触发内核恐慌导致系统崩溃。具体表现为在处理Raw IP数据包时，由于MAC header offset未初始化，xfrm或其它子系统在访问该偏移量时触发严格对齐检查失败，从而引发Oops。
+
+#主要错误日志
+Internal error: Oops: 000000009600004f [#1] SMP
+CPU: 0 UID: 0 PID: 0 Comm: swapper/0 Not tainted 6.12.34-gbe78e49cb433 #1
+Hardware name: LS1028A RDB Board (DT)
+pstate: 60000005 (nZCv daif -PAN -UAO -TCO -DIT -SSBS BTYPE=--)
+pc : xfrm_input+0xde8/0x1318
+lr : xfrm_input+0x61c/0x1318
+sp : ffff800080003b20
+Call trace:
+ xfrm_input+0xde8/0x1318
+ xfrm6_rcv+0x38/0x44
+ xfrm6_esp_rcv+0x48/0xa8
+ ip6_protocol_deliver_rcu+0x94/0x4b0
+ ip6_input_finish+0x44/0x70
+ ip6_input+0x44/0xc0
+ ipv6_rcv+0x6c/0x114
+ __netif_receive_skb_one_core+0x5c/0x8c
+ __netif_receive_skb+0x18/0x60
+ process_backlog+0x78/0x17c
+ __napi_poll+0x38/0x180
+ net_rx_action+0x168/0x2f0
+
+#问题根因
+Raw IP数据包没有MAC头，导致 `skb->mac_header` 处于未初始化状态。当xfrm等子系统尝试访问该MAC头偏移量时，由于ARM64架构的严格对齐检查要求，引发了内核崩溃。
+
+#解决方案
+在 `qmimux_rx_fixup` 函数处理新建的 `skbn` 结构时，显式调用 `skb_reset_mac_header(skbn)` 来初始化MAC头偏移量，防止后续子系统访问无效偏移地址导致崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/95522508839fdcd8bbe62e50d2e97765e96ef249

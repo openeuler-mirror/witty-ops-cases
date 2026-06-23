@@ -1,0 +1,20 @@
+#标题
+RDMA/mlx5：非 representor 设备硬件计数器查询数据未更新
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 switchdev 模式下，非 representor 设备（non-representor devices）查询硬件计数器时，PPCNT 计数器和拥塞控制计数器的数据未被更新，导致用户获取到的计数器数值为旧值或零，无法反映真实的硬件统计状态。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `do_get_hw_stats` 函数中，判断是否跳过设备计数器查询的逻辑存在错误。原代码仅判断 `is_mdev_switchdev_mode` 且 `port_num != 0`，导致所有 switchdev 模式下的设备（包括非 representor 设备）都错误地跳过了 PPCNT 计数器和拥塞控制计数器的查询流程。实际上，非 representor 设备应该调用 `mlx5_ib_query_q_counters()` 查询所有可用计数器，只有 representor 设备才应跳过这部分查询。
+
+#解决方案
+修改 `drivers/infiniband/hw/mlx5/counters.c` 文件中的判断条件，在原有判断逻辑中增加 `dev->is_rep` 检查。修改后的逻辑确保只有当设备处于 switchdev 模式、且是 representor 设备、且端口不为 0 时才跳过设备计数器查询，从而允许非 representor 设备正常查询并更新 PPCNT 和拥塞控制计数器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce1a5c4758479cd5b67e19fdbb274d8675eb5d5e

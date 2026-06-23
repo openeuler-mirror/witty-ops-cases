@@ -1,0 +1,20 @@
+#标题
+perf: 多 CPU PG 场景下 lastup 替代策略导致 CPU 选择异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多 CPU PG（Processor Group）场景下，当用于替代的 CPU 缺席时，系统的 `lastup` 替代策略未能正确跳过该缺席 CPU 并寻找下一个有效 CPU，导致替代逻辑异常，影响了 `hisi_uncore_l3c_pmu` 驱动对 CPU 资源的正确配置与管理。
+
+#主要错误日志
+未知
+
+#问题根因
+在多 CPU PG 场景下，`hisi_l3c_do_last_up` 函数在执行 CPU 替代逻辑时，没有检查目标替代 CPU（`cpu_num - sub`）是否在 `cpu_mask` 中存在（即是否 online/present）。若目标 CPU 缺席，代码仍尝试将其分配给 `core_config`，导致配置错误。
+
+#解决方案
+修改 `hisi_l3c_do_last_up` 函数逻辑，在分配替代 CPU 前，通过 while 循环检查目标 CPU 是否在 `cpu_mask` 中置位。若目标 CPU 缺席，则递减 `sub` 变量以跳过该 CPU，寻找下一个有效的替代 CPU，确保仅选择在位的 CPU 进行替代。同时，代码引入了 `ROLL_OVER` 策略支持，并修正了 SMT 与 PORT 的计算宏定义以适配单线程核心场景。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0ceb48e4cea5cbf53f548125ed3286605101055a

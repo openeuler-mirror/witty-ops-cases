@@ -1,0 +1,30 @@
+#标题
+amdgpu: KFD动态分区切换期间因锁与进程检查机制缺陷导致潜在并发冲突
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 KFD（Kernel Fusion Driver）设备的动态分区切换时，系统可能出现检查与锁定不一致的情况。具体表现为：在执行设备模式切换前，尽管旧进程正处于销毁流程中（process_wq_release 未完成），锁定检查未能有效拦截，可能导致模式切换在进程资源未完全清理时进行，引发潜在的并发访问冲突或状态异常。此外，原有逻辑无法区分特定设备锁定与全局锁定，影响多设备场景下的独立性。
+
+#主要错误日志
+- pr_debug("process_wq_release not finished\n");
+
+#问题根因
+1. **锁定粒度不足**：原有的 `kfd_locked` 变量为全局计数，无法针对特定的 `kfd_dev` 设备进行独立锁定，导致在多设备或分区切换场景下锁状态管理混乱。
+2. **进程退出竞态**：在进行锁定检查时，仅检查了全局进程哈希表 `kfd_processes_table`，未针对特定设备的进程引用计数 `kfd_processes_count` 进行原子检查。这导致在进程销毁的异步阶段（release work 尚未执行完毕），系统误判为无进程占用，从而错误地获取锁并进入分区切换。
+3. **Cgroup权限与设备关联缺失**：旧逻辑未校验进程是否关联到目标设备或是否具备 Cgroup 访问权限，导致检查逻辑不严谨。
+
+#解决方案
+1. **引入设备级锁与计数**：在 `kfd_dev` 结构体中新增 `kfd_dev_lock` 用于设备级锁定，新增 `kfd_processes_count` 原子变量用于跟踪特定设备上的进程数量。
+2. **优化锁定检查逻辑**：
+   - 修改 `kgd2kfd_check_and_lock_kfd` 接口，传入具体的 `kfd_dev` 参数。
+   - 优先检查 `kfd_processes_count`，若计数不为 0（表示有进程待销毁），直接返回 `-EBUSY` 并打印调试日志。
+   - 更新 `kfd_is_locked` 逻辑，支持针对特定 `kfd_dev` 的锁定状态检查。
+3. **完善进程生命周期管理**：
+   - 在创建进程设备数据（`kfd_create_process_device_data`）时，增加 `kfd_processes_count` 计数。
+   - 在销毁进程设备数据（`kfd_process_destroy_pdds`）时，减少 `kfd_processes_count` 计数。
+   - 确保分区切换前检查所有运行中进程是否已从目标设备移除（通过遍历 pdds 检查）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0f0e225983a72ce9d23f8b52e40a58122f130384

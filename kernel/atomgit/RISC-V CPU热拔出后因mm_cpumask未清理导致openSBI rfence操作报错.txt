@@ -1,0 +1,20 @@
+#标题
+RISC-V CPU热拔出后因mm_cpumask未清理导致openSBI rfence操作报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在RISC-V架构下进行CPU热拔出操作后，如果系统调用openSBI的RFENCE扩展功能（如通过IPI向其他hart发送指令），会导致openSBI内部校验失败并产生错误。
+
+#主要错误日志
+未知
+
+#问题根因
+openSBI v1.7版本增加了对IPI操作的hart检查机制，它会比较Linux内核传递过来的hmask参数与openSBI侧维护的在线hart掩码。在CPU离线过程中，`cpu_online_mask`在`__cpu_disable`函数中被显式清除，但进程的`mm_cpumask`未被同步清理。由于`mm_cpumask`被用于构建rfence操作的参数，当其包含了已离线的hart ID时，会导致传递给openSBI的掩码与openSBI侧的在线hart掩码不一致，从而触发错误。
+
+#解决方案
+在CPU热拔出的清理流程函数`arch_cpuhp_cleanup_dead_cpu`中，显式调用`clear_tasks_mm_cpumask(cpu)`，将离线CPU从所有任务的`mm_cpumask`中移除，确保后续rfence操作生成的掩码不包含已离线的hart，从而与openSBI的状态保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6c7e45a40c14e744ab3e9679abee607fb1e727ef

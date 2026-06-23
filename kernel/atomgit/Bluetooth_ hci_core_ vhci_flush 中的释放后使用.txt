@@ -1,0 +1,30 @@
+#标题
+Bluetooth: hci_core: vhci_flush 中的释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多线程并发访问 VHCI 设备时，若一个线程调用 close() 释放设备，同时另一个线程正在执行 ioctl() 进行设备重置操作，内核会触发 KASAN 检测到的 slab-use-after-free 错误，导致内核崩溃。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in skb_queue_empty_lockless include/linux/skbuff.h:1891 [inline]
+BUG: KASAN: slab-use-after-free in skb_queue_purge_reason+0x99/0x360 net/core/skbuff.c:3937
+Read of size 8 at addr ffff88807cb8d858 by task syz.1.219/6718
+Call Trace:
+ skb_queue_purge_reason+0x99/0x360 net/core/skbuff.c:3937
+ vhci_flush+0x44/0x50 drivers/bluetooth/hci_vhci.c:69
+ hci_dev_do_reset net/bluetooth/hci_core.c:552 [inline]
+ hci_dev_reset+0x420/0x5c0 net/bluetooth/hci_core.c:592
+
+#问题根因
+问题源于 hci_unregister_dev() 将 hdev 从 hci_dev_list 移除后缺乏同步机制。当一个线程通过 close() 调用 vhci_release() 释放 hdev 结构体时，另一个线程可能正在进行 ioctl() 调用，且已经在 hci_dev_list 遍历中获取了该 hdev 指针（尚未执行 unlink 操作），导致该线程在后续操作（如 hci_dev_reset）中访问已被释放的内存。
+
+#解决方案
+在 hci_dev 结构体中引入 SRCU（Sleepable Read-Copy Update）机制：
+1. 在 hci_dev 结构体定义中添加 struct srcu_struct srcu 成员。
+2. 在 hci_alloc_dev_priv() 中初始化 SRCU 结构，在 hci_unregister_dev() 中执行 synchronize_srcu() 等待所有读侧临界区结束，并清理 SRCU 结构。
+3. 新增 hci_dev_get_srcu() 和 hci_dev_put_srcu() 接口，将 hci_dev_reset() 等可能存在并发风险的接口改为在 SRCU 读侧临界区内执行，确保在设备注销期间不会发生释放后使用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/027adc92d2ed27eaa57ecc1295c93b446f512127

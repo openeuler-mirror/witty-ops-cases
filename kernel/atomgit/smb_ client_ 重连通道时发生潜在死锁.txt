@@ -1,0 +1,43 @@
+#标题
+smb: client: 重连通道时发生潜在死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核检测到可能的循环锁定依赖，触发 `possible circular locking dependency detected` 警告。在 SMB 客户端尝试重新连接通道时，`cifsd` 线程试图获取锁顺序错误的锁，导致系统可能进入死锁状态。具体表现为 `cifs_signal_cifsd_for_reconnect` 函数在持有 `chan_lock` 的情况下试图获取 `srv_lock`，而这与系统中已有的锁依赖链冲突。
+
+#主要错误日志
+```text
+======================================================
+WARNING: possible circular locking dependency detected
+6.16.0-rc3-build2+ #1301 Tainted: G S      W
+------------------------------------------------------
+cifsd/6055 is trying to acquire lock:
+ffff88810ad56038 (&tcp_ses->srv_lock){+.+.}-{3:3}, at: cifs_signal_cifsd_for_reconnect+0x134/0x200
+
+but task is already holding lock:
+ffff888119c64330 (&ret_buf->chan_lock){+.+.}-{3:3}, at: cifs_signal_cifsd_for_reconnect+0xcf/0x200
+
+which lock already depends on the new lock.
+
+Chain exists of:
+  &tcp_ses->srv_lock --> &ret_buf->ses_lock --> &ret_buf->chan_lock
+
+ *** DEADLOCK ***
+```
+
+#问题根因
+`cifs_signal_cifsd_for_reconnect()` 函数在处理重连时，持有 `cifs_tcp_ses_lock`、`ses_lock` 和 `chan_lock` 的情况下，又去获取 `srv_lock`。
+这导致了锁依赖链形成闭环：`srv_lock` -> `ses_lock` -> `chan_lock` -> `srv_lock`。系统中其他路径（如 `cifs_setup_session` 和 `cifs_match_super`）的锁获取顺序与此路径相反，从而引发了潜在的死锁风险。
+
+#解决方案
+重构 `cifs_signal_cifsd_for_reconnect()` 函数的锁处理逻辑，避免嵌套持有导致死锁的锁：
+1. 新增 `set_need_reco(server)` 宏，用于单独获取 `srv_lock` 并设置重连状态，随后立即释放锁。
+2. 引入一个局部的重连列表 `reco`（使用 `LIST_HEAD(reco)`）以及服务器结构体中的 `rlist` 字段。
+3. 在遍历会话和通道时，仅持有 `cifs_tcp_ses_lock`、`ses_lock` 和 `chan_lock`，将需要重连的服务器实例添加到 `reco` 列表中并增加引用计数，但**不**在此处获取 `srv_lock`。
+4. 退出锁保护区域后，遍历 `reco` 列表，对每个服务器实例调用 `set_need_reco()` 设置重连状态，最后减少引用计数。
+此修改确保了 `srv_lock` 不再与其他高优先级锁嵌套持有，从而打破了循环依赖链。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/66f471486e31effa8ce5dda2f915e531e7a9d106

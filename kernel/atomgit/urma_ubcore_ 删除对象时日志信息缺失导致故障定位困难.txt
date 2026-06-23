@@ -1,0 +1,28 @@
+#标题
+urma/ubcore: 删除对象时日志信息缺失导致故障定位困难
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除 urma/ubcore 子系统中的 jfs、jfr、jetty、jfc 等对象时，若操作失败或对象未正确释放，内核日志中缺少对象类型（type）、对象 ID（id）以及错误码等关键信息。这导致在出现资源释放失败或对象泄漏时，无法快速定位是哪种类型的对象、哪个具体实例出现了问题，增加了故障排查的难度。
+
+#主要错误日志
+- "Failed to delete jetty, id: %u, ret: %d.\n"
+- "Failed to delete jfr, id: %u, ret: %d.\n"
+- "Failed to delete jfc, id: %u, ret: %d.\n"
+- "Failed to delete jfs, id: %u, ret: %d, why: %d.\n"
+- "Failed to delete jfc, id: %u, ret: %d, why: %d"
+- "obj was not free correctly, type: %d."
+
+#问题根因
+内核代码在执行 ubcore_delete_jfs/jfr/jetty/jfc 等删除操作失败时，没有打印任何错误日志或打印的信息过于简单（缺少 id 和 ret）；在 ubcore_free_driver_obj 回调中，仅打印了 "obj was not free correctly"，未指明具体的对象类型。日志信息维度不足，缺乏上下文信息，导致故障发生时无法进行有效的日志检索和定界。
+
+#解决方案
+1. 在 `ub_mad.c` 中新增封装函数 `ubmad_delete_jetty/jfr/jfc`，在调用删除函数失败时打印对象 ID 和返回值。
+2. 在 `uburma_uobj.c` 中的对象释放函数（如 `uburma_free_jfs`、`uburma_free_jfr` 等）中，增加删除失败时的错误日志，记录对象 ID、返回值 `ret` 及原因 `why`。
+3. 在 `ubcore_device.c` 中重构 `ubcore_free_driver_obj`，增加 `type` 参数，并为此函数封装了 `ubcore_free_jfs_obj`、`ubcore_free_jetty_obj` 等一系列特定类型的释放函数，确保在对象未正确释放时能打印出具体的对象类型（type）。
+4. 将部分 `ubcore_log_warn` 调整为 `ubcore_log_info` 或优化日志内容，提升日志的可读性和信息量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bd2362418904821bed5cd36d3066269550289c23

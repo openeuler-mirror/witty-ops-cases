@@ -1,0 +1,20 @@
+#标题
+io_uring kbuf 回收时未校验 buffer list 状态导致 UAF 或内存破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当请求在 io-wq 中执行期间，若其关联的 buffer list 被移除或升级为 ring-based 类型，请求完成后尝试回收缓冲区时，可能会访问已释放的内存或向非法内存区域写入数据，导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `io_kbuf_recycle_legacy` 函数中，代码直接将请求的 buffer 添加回 buffer list（`list_add(&buf->list, &bl->buf_list)`），但未检查 buffer list 是否仍然存在（`bl` 是否为 NULL）以及是否仍为传统的链表模式（`bl->is_mapped` 状态）。若请求在 io-wq 中处于 in-flight 状态时，用户空间已通过其他操作将该 buffer list 删除或升级为 ring-based 类型，回收逻辑就会操作无效或错误类型的指针，引发故障。
+
+#解决方案
+在将 buffer 添加回链表之前增加校验逻辑：检查 `bl` 指针是否非空且 `bl->is_mapped` 标记是否为假（即非 ring-based）。如果校验失败（列表已升级或被移除），则跳过 `list_add` 操作，直接丢弃该 buffer。同时，清空请求的 `kbuf` 指针以避免后续错误引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7e2d22ed6e42332d7dfabf54b3eb267693b19856

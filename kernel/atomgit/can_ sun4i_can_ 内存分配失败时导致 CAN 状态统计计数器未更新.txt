@@ -1,0 +1,22 @@
+#标题
+can: sun4i_can: 内存分配失败时导致 CAN 状态统计计数器未更新
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Allwinner A10/A20 CAN 控制器驱动处理错误中断时，若 `skb`（socket buffer）内存分配失败，系统将无法正确更新 CAN 总线状态相关的错误统计计数器（如 warning、passive、bus-off 状态计数）。这导致用户无法通过标准接口获取准确的控制器状态变化记录，影响故障诊断与监控。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `sun4i_can_err()` 中，原代码逻辑使用 `likely(skb)` 判断，仅当 `skb` 分配成功时才调用 `can_change_state()` 函数。若内存分配失败（`skb` 为 NULL），代码仅简单设置 `priv->can.state = state`，跳过了 `can_change_state()` 调用。
+实际上，`can_change_state()` 函数内部具备处理 `cf` 参数为 NULL 的能力，原本的设计错误地假定该函数必须依赖有效的 `cf` 指针，导致在内存紧张场景下丢失了状态统计信息的更新。
+
+#解决方案
+移除 `sun4i_can_err()` 函数中对 `skb` 指针的非空检查，无论内存分配是否成功，均调用 `can_change_state()` 函数。
+修改后，利用 `can_change_state()` 对 NULL 指针的处理能力，确保即使在 `skb` 分配失败的情况下，也能正确更新 warning、passive 和 bus-off 等状态错误计数器的统计信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d8da980eaa7024919c8fd0293307d706945be6f0

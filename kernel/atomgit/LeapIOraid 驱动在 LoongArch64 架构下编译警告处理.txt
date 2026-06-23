@@ -1,0 +1,28 @@
+#标题
+LeapIOraid 驱动在 LoongArch64 架构下编译警告处理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch64 架构下编译 LeapIOraid 驱动时出现多处编译警告，具体包括：
+1. 函数缺少原型警告：`warning: no previous prototype for 'XXX' [-Wmissing-prototypes]`
+2. 变量定义但未使用警告：`warning: variable 'XXX' set but not used [-Wunused-but-set-variable]`
+3. 格式化输出截断警告：`warning: '%d' directive output may be truncated writing between 1 and 3 bytes into a region of size between 1 and 26 [-Wformat-truncation=]`
+
+#主要错误日志
+未知
+
+#问题根因
+1. **代码作用域与可见性问题**：部分内部函数（如 `leapioraid_base_stop_smart_polling`、`leapioraid_base_process_reply_queue` 等）未声明为 `static`，导致编译器报警缺少原型。
+2. **冗余代码问题**：代码中存在定义了但未使用的变量（如 `sgl_zero_addr`、`timeleft`、`revision` 等），以及函数调用返回值未被使用的情况（如 `leapioraid_base_get_iocstate`），触发未使用变量警告。
+3. **缓冲区溢出风险与格式不匹配**：结构体中用于存储工作队列名称的缓冲区长度（20字节）不足，且 `snprintf` 使用 `%d` 格式化 `ioc->id`（实际为无符号数），导致编译器检测到潜在的截断风险。
+
+#解决方案
+1. **修复函数作用域**：将仅在文件内部使用的函数添加 `static` 关键字声明，修复缺失原型警告。
+2. **清理冗余代码**：删除未使用的局部变量定义，移除无副作用且返回值未被使用的函数调用。
+3. **修复格式化字符串**：将 `snprintf` 中的 `%d` 修改为 `%u` 以匹配 `ioc->id` 的无符号类型，并修正 `leapioraid_udp_init` 函数的返回值逻辑。
+4. **扩展缓冲区长度**：将结构体中工作队列名称数组的长度从 20 字节扩展到 48 字节，防止字符串截断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/15ac0de239497e0a3497a106b9c0cc8795f0144a

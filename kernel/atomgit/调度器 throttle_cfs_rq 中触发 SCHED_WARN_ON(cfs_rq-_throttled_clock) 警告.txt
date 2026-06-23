@@ -1,0 +1,20 @@
+#标题
+调度器 throttle_cfs_rq 中触发 SCHED_WARN_ON(cfs_rq->throttled_clock) 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_QOS_SCHED 配置的情况下，内核运行过程中触发调度器警告 SCHED_WARN_ON(cfs_rq->throttled_clock)，表明 CFS 带宽控制的 throttled_clock 时间记录逻辑出现了不一致。
+
+#主要错误日志
+SCHED_WARN_ON(cfs_rq->throttled_clock)
+
+#问题根因
+在 enqueue_entity 函数中，当 CFS 运行队列（cfs_rq）处于 throttled 状态（throttled_hierarchy 为真）时，代码会更新 throttled_clock。然而，在开启 CONFIG_QOS_SCHED 功能时，存在一种特殊场景：cfs_rq->throttled 状态被标记为 QOS_THROTTLED，此时内核逻辑不应进行标准的 CFS 带宽控制时钟更新。由于缺少对 QOS_THROTTLED 状态的判断过滤，导致代码错误地更新了 throttled_clock，进而触发 SCHED_WARN_ON(cfs_rq->throttled_clock) 的警告。
+
+#解决方案
+在 kernel/sched/fair.c 的 enqueue_entity 函数中，针对 CONFIG_QOS_SCHED 配置增加判断条件。当检测到 cfs_rq->throttled 不等于 QOS_THROTTLED 时，才执行后续的 throttled_clock 和 throttled_clock_self 更新操作，从而避免在 QOS 节流场景下错误修改时钟变量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75f570271f5fbcf9c1a9989105b07679cd75331d

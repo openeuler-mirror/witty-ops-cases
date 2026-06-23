@@ -1,0 +1,20 @@
+#标题
+irqchip/gic-v3: 系统休眠退出失败导致中断控制器未正确重新初始化
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统执行 CPU 级电源管理操作（如休眠或深度睡眠）时，若 CPU_PM_ENTER 阶段失败并触发 CPU_PM_ENTER_FAILED 回调，GIC-v3 中断控制器未能重新使能 Redistributor 并执行 CPU 系统寄存器初始化。这导致系统在电源管理失败后的恢复路径中，中断控制器处于未初始化或禁用状态，进而引发系统无法响应中断、挂起或后续异常重启。
+
+#主要错误日志
+未知
+
+#问题根因
+GIC-v3 驱动的 `gic_cpu_pm_notifier` 回调函数逻辑存在缺陷。原代码仅在 `cmd == CPU_PM_EXIT`（即成功退出低功耗模式）时执行重新初始化操作，而未覆盖 `CPU_PM_ENTER_FAILED`（进入低功耗模式失败）的场景。当电源管理进入流程失败时，硬件状态可能已被破坏或改变，但驱动未能捕获该失败事件进行状态恢复，导致中断控制器功能失效。
+
+#解决方案
+修改 `drivers/irqchip/irq-gic-v3.c` 中的 `gic_cpu_pm_notifier` 函数，扩展条件判断逻辑。将原有的仅处理 `CPU_PM_EXIT` 修改为同时处理 `CPU_PM_EXIT` 和 `CPU_PM_ENTER_FAILED`，确保在电源管理流程失败退出时，也能正确执行 `gic_enable_redist(true)` 和 `gic_cpu_sys_reg_init()`，恢复中断控制器的正常工作状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9917cb05e407330fbfbf11fc4d5fc04f83044fa9

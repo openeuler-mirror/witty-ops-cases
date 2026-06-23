@@ -1,0 +1,27 @@
+#标题
+mptcp: set_flags 接口缺少错误提示信息导致用户态诊断困难
+
+#内核版本
+OLK-6.6
+
+#问题现象
+用户态程序调用 MPTCP 的 set_flags 相关接口（如 mptcp_pm_nl_set_flags 或 mptcp_userspace_pm_set_flags）处理失败时，仅能捕获到错误码（如 -EOPNOTSUPP, -EINVAL），无法获取具体的错误原因描述。这导致用户难以区分是由于参数缺失、地址未找到、token 无效还是 flags 冲突等原因导致的失败，增加了故障排查的难度。
+
+#主要错误日志
+未知
+
+#问题根因
+内核 MPTCP 子系统在 set_flags 处理流程中，多个异常分支（如查找地址失败、参数校验失败、token 无效等）虽然返回了错误码，但未调用 GENL_SET_ERR_MSG 或 NL_SET_ERR_MSG_ATTR 接口设置详细的错误信息，导致用户态无法通过 netlink 机制获取具体的报错提示。
+
+#解决方案
+在 pm_netlink.c 和 pm_userspace.c 的 set_flags 相关函数的错误处理路径中，针对不同的错误场景补充调用 GENL_SET_ERR_MSG 或 NL_SET_ERR_MSG_ATTR 设置具体的错误提示信息。
+具体修复点包括：
+1. 当地址 ID 缺失时，提示 "missing required inputs"。
+2. 当地址查找失败时，提示 "address not found"。
+3. 当 flags 配置冲突时，提示 "invalid addr flags"。
+4. 当 token 无效时，提示 "invalid token"。
+5. 当 PM 模式不匹配时，提示 "userspace PM not selected"。
+6. 当地址族无效时，提示 "invalid address families"。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/29ed76fdb5219157db19cdb269676845dd85506e

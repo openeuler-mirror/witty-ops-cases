@@ -1,0 +1,27 @@
+#标题
+lpc18xx-dmamux 路由分配时存在设备引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 lpc18xx dmamux 驱动执行 DMA 路由分配过程中，若因参数校验失败（如参数个数错误、mux 编号无效、值超范围）或资源繁忙导致分配流程提前退出，系统未正确释放此前查找 DMA mux 平台设备时获取的设备引用计数。这会导致内核设备对象引用计数泄漏，长期运行可能引发内存泄漏或设备无法正常释放等问题。
+
+#主要错误日志
+- "invalid number of dma mux args\n"
+- "invalid mux number: %d\n"
+- "invalid dma mux value: %d\n"
+- "can't get dma master\n"
+- "dma request %u busy with %u.%u\n"
+
+#问题根因
+在 `lpc18xx_dmamux_reserve` 函数中，代码开头通过查找 DMA mux 平台设备获取了该设备的引用（reference），但在后续的错误处理分支（如参数校验失败、资源繁忙等）中，直接返回了错误指针 `ERR_PTR`，遗漏了调用 `put_device` 来释放设备引用。此外，正常流程返回时也未释放该引用。这导致了设备引用计数的泄漏。
+
+#解决方案
+修改 `lpc18xx_dmamux_reserve` 函数的错误处理路径与正常返回路径：
+1. 将各错误分支原有的直接 `return ERR_PTR(...)` 修改为跳转到统一的错误处理标签 `err_put_pdev`。
+2. 在 `err_put_pdev` 标签处调用 `put_device(&pdev->dev)` 释放设备引用，然后返回错误码。
+3. 在函数正常返回前（成功分配路由后），同样调用 `put_device(&pdev->dev)` 释放引用，确保引用计数平衡。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ed88a668bec3507c94303eb638efcd54356715ae

@@ -1,0 +1,20 @@
+#标题
+net_sched: hfsc 修复 netem 子类导致的 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 HFSC 类的子 qdisc 为 netem 时，存在 UAF（Use-After-Free）漏洞。由于 netem 的重入（reentrant）特性（如数据包重Duplicate），在 `hfsc_enqueue` 过程中会错误地认为队列非空，导致同一个 class 被重复插入到 vttree 或 eltree 中，进而引发内存管理错误或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+HFSC 调度器错误地假设 `cl->qdisc->q.qlen == 0` 能够保证该类未被插入 vttree 或 eltree。在 netem 作为子 qdisc 的场景下，由于存在数据包重放，这一假设不成立，导致代码在类已被激活（已插入树）的情况下再次尝试插入，从而引发 UAF。
+
+#解决方案
+在 `hfsc_enqueue` 函数中增加对 `cl->cl_nactive` 变量的检查。仅当 `first` 为真且 `cl->cl_nactive` 为假（即类当前未被激活）时，才执行初始化并插入 vttree 或 eltree 的操作，以此规避重入场景下的重复插入问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4d7b5ae2e60e030262f6672962578d40a4a8280c

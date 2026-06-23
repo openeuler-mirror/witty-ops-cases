@@ -1,0 +1,20 @@
+#标题
+media: cxd2841er: fix 64-bit division on gcc-9
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 gcc-9 编译内核模块 `cxd2841er.ko` 时，编译过程报错并终止，提示未定义的符号引用，导致模块构建失败。
+
+#主要错误日志
+ERROR: modpost: "__aeabi_uldivmod" [drivers/media/dvb-frontends/cxd2841er.ko] undefined!
+
+#问题根因
+代码中的 `do_div()` 宏在处理复杂的除法表达式时，虽然 `__builtin_constant_p()` 判定其为常量，但实际上编译器未能正确识别，导致生成了 64 位除法指令调用（`__aeabi_uldivmod`）。在 32 位架构或特定编译器版本（如 gcc-9）下，该调用缺乏对应的库支持从而引发链接错误。
+
+#解决方案
+将 `cxd2841er_calc_iffreq_xtal` 函数中的 `do_div()` 调用替换为 `div_u64()`。此改动强制先对除法表达式进行求值，避免了编译器对复杂表达式的错误优化，同时也提高了代码可读性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b4c02f6c60ae5749cb0d0628dce724cfc8d69e55

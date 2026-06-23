@@ -1,0 +1,32 @@
+#标题
+libceph: ceph_handle_auth_reply 越界访问导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核处理 CEPH_MSG_AUTH_REPLY 类型的消息时，若消息中的 payload_len 字段值大于 INT_MAX，会触发整型溢出并导致越界内存访问。该故障可被 KASAN 机制检测到，触发 "slab-out-of-bounds" 错误并打印调用栈，导致内核崩溃或异常行为。
+
+#主要错误日志
+BUG: KASAN: slab-out-of-bounds in ceph_handle_auth_reply+0x642/0x7a0 [libceph]
+Read of size 4 at addr ffff88811404df14 by task kworker/20:1/262
+CPU: 20 UID: 0 PID: 262 Comm: kworker/20:1 Not tainted 6.19.2 #5 PREEMPT(voluntary)
+Call Trace:
+ dump_stack_lvl+0x76/0xa0
+ print_report+0xd1/0x620
+ kasan_report+0xe7/0x130
+ ceph_handle_auth_reply+0x642/0x7a0 [libceph]
+ mon_dispatch+0x973/0x23d0 [libceph]
+ ceph_con_process_message+0x1f1/0x650 [libceph]
+ ...
+
+#问题根因
+在 ceph_handle_auth_reply() 函数中，变量 payload_len 定义为 int 类型。当从消息中解码出的 payload_len 值大于 INT_MAX 时，发生整型溢出，该值被解释为负数。
+由于 ceph_decode_need() 函数仅检查内存访问是否超出缓冲区末尾地址，负的 payload_len 导致指针算术运算发生错误（指针地址减去该负值，实际向后移动），从而绕过边界检查引发越界访问。
+
+#解决方案
+1. 将 payload_len 和 result_msg_len 变量的数据类型从 int 修改为 u32，防止因数值过大导致的整型溢出。
+2. 在解码 payload_len 和 result_msg_len 后，立即使用 ceph_decode_need() 函数增加额外的健全性检查，确保这两个长度值不大于消息段的总体长度，从而防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eccdd3442b64467bd745c0c6cc6101a8ecc66ee9

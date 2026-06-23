@@ -1,0 +1,27 @@
+#标题
+hwmon: (gsc-hwmon) 风扇 PWM 自动调节点显示值计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+读取 gsc-hwmon 设备的 sysfs 接口时，风扇 PWM 自动调节点的数值显示错误：
+1. `pwmX_auto_pointY_pwm` 显示值错误放大了 100 倍（例如显示为 25500，期望值为 255）；
+2. `pwmX_auto_pointY_temp` 显示值错误缩小了 10 倍（例如显示为 4500，期望值为 45000）。
+这导致用户无法通过 sysfs 获取正确的风扇控制参数，影响风扇控制策略的配置与监控。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的修复提交（a6d80df47ee2）中，代码逻辑修正出现错误：
+1. 在 `pwm_auto_point_temp_show` 函数中，原代码将温度值乘以 10，但根据 hwmon API 要求（单位为毫摄氏度），应乘以 100 才能正确显示。
+2. 在 `pwm_auto_point_pwm_show` 函数中，原代码计算公式缺少除以 100 的操作，导致返回的 PWM 值（0-255 范围）被错误放大。
+
+#解决方案
+修正 `drivers/hwmon/gsc-hwmon.c` 中的数值计算逻辑：
+1. 将 `pwm_auto_point_temp_show` 中的计算从 `ret * 10` 修改为 `ret * 100`，确保温度单位符合毫摄氏度标准。
+2. 将 `pwm_auto_point_pwm_show` 中的计算从 `255 * (50 + (attr->index * 10))` 修改为 `255 * (50 + (attr->index * 10)) / 100`，确保 PWM 值在 0-255 的标准范围内。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/92fc81fbf51fb609ce03e974e6d5331243aa6ff5

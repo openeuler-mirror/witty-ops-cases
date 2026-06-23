@@ -1,0 +1,20 @@
+#标题
+usb: gadget: u_serial: TTY wakeup 导致的空指针引用（NPE）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB Gadget u_serial 驱动使用过程中，当 gserial_connect 与 gs_close 并发执行时，触发内核空指针引用，导致内核崩溃。
+
+#主要错误日志
+NPE (Null Pointer Exception)
+
+#问题根因
+gs_start_io() 调用 gs_start_rx() 或 gs_start_tx() 时，这些函数会短暂释放 port_lock 以执行 usb_ep_queue()。此时间窗口允许 gs_close() 和 gserial_disconnect() 分别清除 port.tty 和 port_usb。原代码在调用 tty_wakeup() 前仅检查 port->port.tty 指针，但在并发场景下，该检查通过后指针可能被清空，从而导致对 NULL 指针进行解引用操作。
+
+#解决方案
+移除直接检查 port->port.tty 指针并调用 tty_wakeup() 的方式，改用 null-safe 的 TTY Port 辅助函数 tty_port_tty_wakeup(&port->port)。该函数内部实现了必要的锁保护与空指针检查，能够安全地处理 TTY 端口状态变化，避免竞态条件引发的 NPE。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5c66249f48ab2a000790717698e5e7c95e804f0b

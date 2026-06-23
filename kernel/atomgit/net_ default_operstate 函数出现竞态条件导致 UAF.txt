@@ -1,0 +1,29 @@
+#标题
+net: default_operstate 函数出现竞态条件导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设备与网络命名空间卸载期间，若发生竞态条件，内核会触发 KASAN 检测到的 slab-use-after-free 错误。该问题由 syzbot 发现，导致内核崩溃或内存破坏。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in __dev_get_by_index+0x5d/0x110 net/core/dev.c:852
+Read of size 8 at addr ffff888043eba1b0 by task syz.0.0/5339
+Call Trace:
+ __dev_get_by_index+0x5d/0x110 net/core/dev.c:852
+ default_operstate net/core/link_watch.c:51 [inline]
+ rfc2863_policy+0x224/0x300 net/core/link_watch.c:67
+ linkwatch_do_dev+0x3e/0x170 net/core/link_watch.c:170
+ netdev_run_todo+0x461/0x1000 net/core/dev.c:10894
+
+#问题根因
+问题根因是设备卸载与网络命名空间销毁之间存在竞态条件。在 `netdev_run_todo()` 调用 `__rtnl_unlock()` 之后，无法保证每个设备的 `netns` 仍然存活。如果此时 `default_operstate()` 调用 `__dev_get_by_index(dev_net(dev), iflink)`，可能会访问已经被释放的 `netns` 内存，从而触发 UAF。
+
+#解决方案
+在 `default_operstate()` 函数中增加防御性检查：
+1. 在调用 `__dev_get_by_index()` 之前，检查设备的 `reg_state` 是否为 `NETREG_UNREGISTERED`。如果是，则直接返回 `IF_OPER_DOWN`，避免后续访问可能已释放的 `netns`。
+2. 添加 `ASSERT_RTNL()` 断言，确保在调用 `__dev_get_by_index()` 时持有 RTNL 锁，防止在非预期上下文中调用导致竞态问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/372a6a577174d31be4b1a2196922d77c7061f017

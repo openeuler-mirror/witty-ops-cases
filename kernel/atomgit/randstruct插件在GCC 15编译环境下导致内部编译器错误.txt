@@ -1,0 +1,28 @@
+#标题
+randstruct插件在GCC 15编译环境下导致内部编译器错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用配置了 "--enable-checking=misc" 选项的 GCC 15 编译器编译内核时，触发内部编译器错误，编译过程中断。具体触发的位置为 `arch/arm64/kernel/kexec_image.c` 文件第 132 行声明 `kexec_image_ops` 结构体变量时。
+
+#主要错误日志
+arch/arm64/kernel/kexec_image.c:132:14: internal compiler error: in comptypes_check_enum_int, at c/c-typeck.cc:1519
+  132 | const struct kexec_file_ops kexec_image_ops = {
+      |              ^~~~~~~~~~~~~~
+ internal_error(char const*, ...), at gcc/gcc/diagnostic-global-context.cc:517
+ fancy_abort(char const*, int, char const*), at gcc/gcc/diagnostic.cc:1803
+ comptypes_check_enum_int(tree_node*, tree_node*, bool*), at gcc/gcc/c/c-typeck.cc:1519
+
+#问题根因
+randstruct GCC 插件在处理类型属性时逻辑不够严谨。旧代码在向结构体类型变体添加属性（如 `randomize_performed`、`designated_init` 等）时，直接操作并复制了 `TYPE_ATTRIBUTES` 链表，这导致类型系统的一致性检查在 GCC 15 中失效。GCC 15 在 `comptypes_check_enum_int` 函数中增加了更严格的类型检查，当检测到类型属性处理不一致时触发了内部错误。
+
+#解决方案
+参考 2021 年公开版本的 randstruct 插件实现，重构属性添加逻辑：
+1.  在 `gcc-common.h` 中新增辅助函数 `add_type_attr`，该函数能够更加谨慎地将属性添加到类型的所有相关变体（main variant、canonical type 等）中，确保类型属性在整个类型系统中保持一致性。
+2.  在 `randomize_layout_plugin.c` 中，移除原有的手动链表操作代码，统一调用新的 `add_type_attr` 函数来添加 `randomize_performed`、`designated_init`、`has_flexarray` 和 `randomize_considered` 等属性。
+3.  修正 `handle_randomize_layout_attr` 函数中对 `FIELD_DECL` 类型的处理逻辑，确保属性正确关联。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0b9370ffbbcb45d2e495a209fdf9ba3f4424ab9c

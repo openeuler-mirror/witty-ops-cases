@@ -1,0 +1,22 @@
+#标题
+LeapIOraid 驱动错误掩盖正常磁盘问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LeapIOraid 驱动处理配置页无效（CONFIG_INVALID_PAGE）的场景下，本应正常识别的“ugood”（未配置的良好）磁盘被错误地隐藏，导致系统中无法看到本该存在的物理磁盘设备。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `leapioraid_config_get_volume_handle` 中，代码逻辑对 IOC 状态码的处理存在缺陷。当固件返回 `LEAPIORAID_IOCSTATUS_CONFIG_INVALID_PAGE` 状态时，该状态本应被视为正常情况（例如表示遍历结束或无更多配置），但驱动代码将其视为错误并直接跳转到 `out` 处理，且保留了错误的返回值 `r = -1`，导致上层逻辑误判并隐藏了磁盘。此外，`LEAPIORAID_NAME_LENGTH` 定义长度不足（32字节），在特定场景下导致缓冲区空间不足。
+
+#解决方案
+1. 修正 `leapioraid_config_get_volume_handle` 函数的状态处理逻辑：当 `ioc_status` 为 `LEAPIORAID_IOCSTATUS_CONFIG_INVALID_PAGE` 时，将 `volume_handle` 置 0 并返回成功状态（`r = 0`），确保正常磁盘不被错误过滤。
+2. 扩展 `LEAPIORAID_NAME_LENGTH` 宏定义长度，从 32 字节修改为 48 字节，以防止缓冲区溢出或截断。
+3. 优化调试信息打印逻辑，使用封装函数 `leapioraid_debug_dump_mf` 替代原有的循环打印代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/39c80985e5c3e243984a0affb3e31b6e52e30577

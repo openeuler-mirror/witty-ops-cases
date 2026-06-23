@@ -1,0 +1,26 @@
+#标题
+interference: 修复 sched_task_is_throttled 的编译警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定内核配置下（CONFIG_CGROUP_SCHED=n，但启用了 CONFIG_SCHED_CORE 或 CONFIG_CGROUP_IFS），内核编译过程中出现 "no previous prototype for function" 警告，提示函数 `sched_task_is_throttled` 缺少函数原型声明。
+
+#主要错误日志
+kernel/sched/core.c:158:5: warning: no previous prototype for function 'sched_task_is_throttled' [-Wmissing-prototypes]
+  158 | int sched_task_is_throttled(struct task_struct *p, int cpu)
+      |     ^
+kernel/sched/core.c:158:1: note: declare 'static' if the function is not intended to be used outside of this translation unit
+  158 | int sched_task_is_throttled(struct task_struct *p, int cpu)
+      | ^
+      | static
+
+#问题根因
+函数 `sched_task_is_throttled` 的声明被错误地放置在 `#ifdef CONFIG_CGROUP_SCHED` 宏条件块内部。当内核配置关闭 `CONFIG_CGROUP_SCHED` 时，无论是否启用 `CONFIG_SCHED_CORE` 或 `CONFIG_CGROUP_IFS`，该函数的声明都会被预处理器忽略，导致编译器无法找到函数原型从而触发警告。
+
+#解决方案
+将 `sched_task_is_throttled` 的函数声明代码块从 `CONFIG_CGROUP_SCHED` 条件编译块中移出，确保在 `CONFIG_CGROUP_SCHED=n` 但 `CONFIG_SCHED_CORE` 或 `CONFIG_CGROUP_IFS` 开启的情况下，该函数声明依然可见。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1161d3542f40a8f0850c39d012b230ec4b16029a

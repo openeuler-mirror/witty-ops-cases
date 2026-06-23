@@ -1,0 +1,20 @@
+#标题
+scsi: lpfc: 清理 lpfc_vport 结构时未检查 hdwq 空指针导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 lpfc_sli4_hba_setup() 初始化过程中，若 lpfc_sli4_read_rev() 调用失败并触发清理流程，系统可能在 sli4_hba.hdwqs 分配前调用 lpfc_sli4_vport_delete_fcp_xri_aborted() 函数。此时访问未分配的硬件队列将引发空指针解引用，导致内核 panic 或 oops。
+
+#主要错误日志
+未知
+
+#问题根因
+当 lpfc_sli4_read_rev() 调用失败时，驱动会执行清理例程 lpfc_sli4_vport_delete_fcp_xri_aborted()。该清理例程可能在 sli4_hba.hdwqs 内存分配之前被调用。代码在尝试获取第一个硬件队列的 abts_io_buf_list_lock 锁时，未对 phba->sli4_hba.hdwq 指针进行有效性检查，直接访问了空指针。
+
+#解决方案
+在 lpfc_sli4_vport_delete_fcp_xri_aborted() 函数中增加对 phba->sli4_hba.hdwq 的空指针检查。如果指针为空，意味着端口初始化阶段已发生错误且队列尚未建立，函数应直接返回，避免后续对空指针的解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22c98d58db49056d2baac599374a182af0a94ae7

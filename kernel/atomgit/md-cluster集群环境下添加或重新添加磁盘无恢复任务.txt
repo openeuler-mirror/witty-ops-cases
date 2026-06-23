@@ -1,0 +1,28 @@
+#标题
+md-cluster集群环境下添加或重新添加磁盘无恢复任务
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 md-cluster（集群 MD）环境中，当向 RAID1 阵列添加或重新添加磁盘时，集群节点间状态同步出现竞争，导致所有节点均未执行 recovery（恢复）同步任务。
+通过 `cat /proc/mdstat` 查看状态，显示没有恢复动作正在进行，数据未能同步到新加磁盘。
+
+#主要错误日志
+未知
+
+#问题根因
+内核提交 db5e653d7c9f ("md: delay choosing sync action to md_start_sync") 延迟了同步动作的开始时机。在集群环境下，这引发了节点间的竞态条件：
+1. Node1 在处理磁盘添加时，发送 METADATA_UPDATED 消息，但尚未调用 md_do_sync。
+2. Node2 收到消息后处理 metadata 更新，误以为 Node1 尚未开始同步，于是提前激活了备用盘并跳过了恢复步骤。
+3. 最终结果是 Node1 尚未持有锁开始同步，Node2 已经激活磁盘并跳过了同步，导致集群中无节点执行恢复任务。
+
+#解决方案
+在集群通信层增加同步开始的通知机制，确保节点间对同步状态的感知一致：
+1. 新增消息类型 `RESYNCING_START` 和状态标志位 `MD_CLUSTER_WAITING_FOR_SYNC`。
+2. 在 `md_do_sync` 函数开始执行同步循环前，调用 `resync_start_notify` 发送 RESYNCING_START 消息，通知其他节点同步即将开始。
+3. 在其他节点收到 RESYNCING_START 消息后，清除 `MD_CLUSTER_WAITING_FOR_SYNC` 标志。
+4. 在 `check_sb_changes` 处理远端磁盘激活逻辑时，通过 `resync_status_get` 检查该标志。如果标志位存在，说明对端节点正在进行同步，此时通过将 `saved_raid_disk` 设置为 -1 强制进行全量同步（fullsync），避免因错误判断 recovery_offset 而跳过同步。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/599fc33c362310092d4e7a3f011df6c7935a28ef

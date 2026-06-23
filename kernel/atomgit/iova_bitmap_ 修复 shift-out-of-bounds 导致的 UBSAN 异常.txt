@@ -1,0 +1,20 @@
+#标题
+iova_bitmap: 修复 shift-out-of-bounds 导致的 UBSAN 异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核开启 UBSAN 检查时，在调用 `iova_bitmap_offset_to_index()` 函数过程中，如果 `bitmap->mapped.pgshift` 的值超过 31（例如 63），会触发 UBSAN 移位越界。这可能导致内核未定义行为，进而引发内核 panic 或异常终止当前进程。
+
+#主要错误日志
+UBSAN: shift-out-of-bounds in drivers/iommu/iommufd/iova_bitmap.c
+
+#问题根因
+在 `iova_bitmap_offset_to_index` 函数中，代码 `1 << bitmap->mapped.pgshift` 使用的常量 "1" 默认为 32 位的 `int` 类型。当 `pgshift`（`unsigned long` 类型）的数值大于 31 时，左移操作会导致 32 位整型溢出，无法表示结果，从而触发 UBSAN 移位越界未定义行为。
+
+#解决方案
+将移位操作中的常量 "1" 修改为 "1UL"，将其类型提升为 `unsigned long`，以匹配操作数的类型并防止移位溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ed85baabfe5a708c96cae88d78e791bcbebd4141

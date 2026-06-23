@@ -1,0 +1,20 @@
+#标题
+net: stmmac: 修复访问已释放的 IRQ affinity_hint 导致的 UAF 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 stmmac 驱动使用多 MSI 向量时，如果通过 procfs 读取 IRQ 相关信息（如查看中断亲和性），可能会触发内核崩溃或访问非法内存。这是由于驱动将指向栈内存的指针注册给了内核 IRQ 子系统，该栈内存释放后仍被引用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `stmmac_request_irq_multi_msi` 函数中，代码定义了一个局部的 `cpumask_t cpu_mask` 变量，并通过 `irq_set_affinity_hint` 函数将其指针保存到了 `irq_desc` 结构中。由于 `cpu_mask` 是局部变量，当函数返回后该栈内存即被释放，导致 `irq_desc` 中保存的 affinity hint 指针指向了无效的内存区域，从而引发 Use-After-Free 问题。
+
+#解决方案
+将局部变量 `cpumask_t cpu_mask` 替换为持久存在的 CPU 掩码。修改代码直接调用 `cpumask_of(cpu_number)` 函数来获取特定 CPU 的持久化掩码指针，避免使用临时的栈变量，确保 IRQ 子系统后续通过 procfs 访问该指针时内存依然有效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/df234d0ef945da831db9d2e7b00d5132c00d3e6c

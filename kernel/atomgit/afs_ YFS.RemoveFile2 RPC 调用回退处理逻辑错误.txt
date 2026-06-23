@@ -1,0 +1,26 @@
+#标题
+afs: YFS.RemoveFile2 RPC 调用回退处理逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 YFS.RemoveFile2 RPC 调用删除文件时，若服务器不支持该操作返回特定的错误码，客户端回退处理逻辑失效。具体表现为：
+1. 当服务器返回 RXGEN_OPCODE 错误码时，客户端未能识别该情况，导致未能正确回退到旧的删除文件接口。
+2. 尝试设置服务器标志时访问了无效的内存地址（call->server），可能导致内核空指针崩溃或内存访问错误，进而引发内核 Oops 或服务不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+该故障由两个逻辑错误共同导致：
+1. **错误码检查不全**：在 `yfs_done_fs_remove_file2` 函数中，仅检查了 `RX_INVALID_OPERATION`，遗漏了 `RXGEN_OPCODE` 错误码，导致无法正确触发回退逻辑。
+2. **指针引用错误**：代码中错误地使用了 `call->server` 来设置服务器标志。对于拥有操作描述符的普通文件系统 RPC 调用，`call->server` 已不再有效使用，正确的访问路径应为 `call->op->server`。
+
+#解决方案
+修改 `fs/afs/yfsclient.c` 文件中的 `yfs_done_fs_remove_file2` 函数：
+1. 扩展错误码检查范围，增加对 `RXGEN_OPCODE` 的判断（`call->abort_code == RXGEN_OPCODE`）。
+2. 修正服务器指针引用方式，将 `call->server->flags` 修改为 `call->op->server->flags`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d1b1bb281cbb50d6d1511e1030c632cbda4fe490

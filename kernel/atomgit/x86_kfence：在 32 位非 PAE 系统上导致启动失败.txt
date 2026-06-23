@@ -1,0 +1,23 @@
+#标题
+x86/kfence：在 32 位非 PAE 系统上导致启动失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 32 位非 PAE（Non-PAE）系统上启动内核时，因 kfence 模块对 PTE（页表项）处理逻辑不当导致系统无法正常启动。
+
+#主要错误日志
+未知
+
+#问题根因
+先前的修复补丁（"x86/kfence: avoid writing L1TF-vulnerable PTEs"）为了防范 L1TF 漏洞，在 kfence 保护页面时无条件地反转了整个 PTE 值。然而，Linux 内核在 2-level paging（二级分页，即非 PAE 模式）下并不支持这种调整方式。这导致在 32 位非 PAE 系统上生成了错误的 PTE，进而引发启动失败。
+
+#解决方案
+修改 `arch/x86/include/asm/kfence.h` 中的 `kfence_protect_page` 函数逻辑：
+1. 不再无条件反转整个 PTE。
+2. 改为翻转 `_PAGE_PRESENT` 位来标记页面不存在。
+3. 使用 `flip_protnone_guard()` 辅助函数处理地址位反转。该函数在二级分页模式下是空操作，在其他分页模式下才执行地址位反转以避免 L1TF 漏洞。此举同时兼容了 32 位非 PAE 系统与 PAE/64 位系统的安全性需求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4e59fa843b10fd44a7d80d7c5232ca5996ab30aa

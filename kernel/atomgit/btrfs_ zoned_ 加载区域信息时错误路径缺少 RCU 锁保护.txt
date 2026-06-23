@@ -1,0 +1,20 @@
+#标题
+btrfs: zoned: 加载区域信息时错误路径缺少 RCU 锁保护
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BTRFS 启用 Zoned 模式的情况下，当加载区域信息遇到区域处于离线或只读状态时，内核在打印错误日志过程中访问 RCU 保护的字符串变量时未持有 RCU 读锁。这违反了 RCU 的访问规则，可能导致内核发出 RCU 相关的警告或引发潜在的内存访问不安全问题。
+
+#主要错误日志
+"zoned: offline/readonly zone %llu on device %s (devid %llu)"
+
+#问题根因
+函数 `btrfs_load_zone_info()` 在处理区域离线或只读的错误路径时，使用了 `btrfs_err()` 打印日志，并访问了受 RCU 保护的设备名称 `device->name`。由于 `btrfs_err()` 内部不会自动持有 RCU 读锁，而 `rcu_str_deref()` 要求在 RCU 读临界区内访问，导致出现了无 RCU 锁保护的指针解引用。该缺陷自引入 Zone 加载逻辑时就已存在。
+
+#解决方案
+将错误打印接口从 `btrfs_err()` 修改为 `btrfs_err_in_rcu()`。该接口会在打印前自动获取 RCU 读锁，确保对 RCU 保护变量 `device->name` 的访问符合内核同步规范，从而修复该并发安全问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0e801dba737f65bbbd6bc876a3c4371cdfd305f2

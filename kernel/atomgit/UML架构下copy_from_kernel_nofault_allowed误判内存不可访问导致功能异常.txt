@@ -1,0 +1,20 @@
+#标题
+UML架构下copy_from_kernel_nofault_allowed误判内存不可访问导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在User-Mode Linux (UML)架构下，当内核尝试通过 `copy_from_kernel_nofault` 等接口安全访问内存时，访问可能会被错误地拒绝。具体表现为：如果目标内存页被宿主机交换出，内核会误认为该内存不可访问，导致依赖该机制的内核功能（如kprobe、bpf等需要安全读取内核内存的场景）执行失败或行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+UML架构自定义了 `copy_from_kernel_nofault_allowed` 函数，该实现内部调用 `mincore()` 系统调用来检测内存页的驻留情况。其逻辑缺陷在于：`mincore()` 仅反映页面是否驻留在物理内存中，若页面被宿主机换出，`mincore()` 会返回非驻留状态。基于此实现的 `copy_from_kernel_nofault_allowed` 会错误地将“已换出但有效”的内存页判定为不可访问，从而阻止了合法的安全内存访问。
+
+#解决方案
+移除 UML 架构下自定义的 `copy_from_kernel_nofault_allowed` 函数实现及其依赖的 `os_mincore` 调用，直接回退使用内核默认的实现。原因在于 UML 现已支持正确的 `_nofault` 内存访问函数，不再需要通过 `mincore` 进行这种不准确的预检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c78fb03621624e06dbc74b0fe68d219419e0eaab

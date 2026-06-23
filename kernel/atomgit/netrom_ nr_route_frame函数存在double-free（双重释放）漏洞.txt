@@ -1,0 +1,23 @@
+#标题
+netrom: nr_route_frame函数存在double-free（双重释放）漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `nr_route_frame` 函数时，若 `nr_neigh->ax25` 指针为 NULL，会导致 `old_skb` 被错误地释放两次，引发内核 double-free 漏洞，可能造成内核内存破坏或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nr_route_frame` 函数中，代码逻辑原本在 `skb_copy_expand` 成功后立即执行了 `kfree_skb(skb)` 释放原始 skb。然而，后续代码路径中，如果 `nr_neigh->ax25` 为 NULL，函数返回前（或调用者）会再次尝试释放该 skb 资源。这导致同一块内存被释放两次（double-free）。
+
+#解决方案
+修改 `nr_route_frame` 函数中的资源释放逻辑，延迟原始 skb 的释放时机。
+1. 引入新的指针变量 `oskb` 保存原始 skb 的引用，使用 `nskb` 指向新拷贝的 skb。
+2. 移除在 `skb_copy_expand` 后立即释放原 skb 的代码。
+3. 在函数返回前检查返回值 `ret`，如果处理失败（`ret` 为真），再调用 `kfree_skb(oskb)` 释放原始 skb，从而避免在错误路径下的重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7df6de0501a05383506877ee7756dff82a66d0e5

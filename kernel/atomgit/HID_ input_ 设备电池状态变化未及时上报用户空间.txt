@@ -1,0 +1,32 @@
+#标题
+HID: input: 设备电池状态变化未及时上报用户空间
+
+#内核版本
+OLK-6.6
+
+#问题现象
+HID 输入设备的电池状态（充电/放电）发生变化时，内核未立即将状态变更事件上报给用户空间。
+对于大多数通过切换总线（如从蓝牙切换到 USB）来改变充电状态的设备，此问题不明显；但对于那些在不连接/断开连接的情况下电池状态发生变化的设备（例如通过无线连接的手机，其电池状态改变时并未重新插拔），用户空间无法及时获取到最新的电池状态信息，导致显示或逻辑滞后。
+
+#主要错误日志
+未知
+
+#问题根因
+在处理 HID 电源事件（`EV_PWR`）时，内核逻辑存在缺陷。原代码逻辑如下：
+1. 调用 `hidinput_update_battery_charge_status` 尝试更新充电状态。
+2. 如果该函数返回 `true`（表示已处理），则直接返回，**跳过**了后续的电池电量更新与上报逻辑。
+3. 如果返回 `false`，才调用 `hidinput_update_battery`。
+
+然而，`hidinput_update_battery_charge_status` 函数在成功更新内部充电状态属性后，并没有触发 `power_supply_changed` 事件来通知用户空间。这导致单纯的充电状态变化（如从放电变为充电）被内核内部处理完毕后，用户空间未收到任何通知。
+
+#解决方案
+修改 `hidinput_update_battery` 函数逻辑，使其接收 `usage` 参数并内部调用 `hidinput_update_battery_charge_status`。
+在 `hidinput_update_battery` 中：
+1. 优先调用 `hidinput_update_battery_charge_status` 检查并更新充电状态。
+2. 如果充电状态有更新（返回 `true`），立即调用 `power_supply_changed(dev->battery)` 将状态变化通知用户空间，并结束流程。
+3. 如果非充电状态变化，继续执行原有的电池电量更新逻辑。
+
+通过此修改，确保无论是充电状态变化还是电量变化，都能立即通过 `power_supply_changed` 上报给用户空间。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/843826b2e4a53f740dd779a7d28ff171198974de

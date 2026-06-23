@@ -1,0 +1,41 @@
+#标题
+USB gadget dummy-hcd 在 RT 内核中的锁与中断管理缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 RT（Real-Time）特性的内核中，USB dummy-hcd 驱动模块在执行 dequeue 操作时，因违反 RT 内核的睡眠规则导致内核异常。具体表现为在禁用本地中断的情况下调用可能睡眠的 `spin_lock` 函数，可能引发内核警告或调度错误。
+
+#主要错误日志
+未知
+
+#问题根因
+该问题源于 `dummy_hcd` 驱动中中断管理与自旋锁混合使用的方式不当。
+原有代码逻辑为：
+```
+local_irq_save(flags);
+spin_lock(&dum->lock);
+...
+spin_unlock(&dum->lock);
+... // 调用 usb_gadget_giveback_request()
+local_irq_restore(flags);
+```
+在非 RT 内核中，该模式可以正常工作。但在 RT 内核中，自旋锁被处理为类似于互斥锁的机制，`spin_lock()` 可能会睡眠。内核规定在禁用本地中断期间不允许发生睡眠操作，因此该代码模式在 RT 内核中触发缺陷。
+
+#解决方案
+修改锁与中断的处理逻辑，使其符合 RT 内核要求。将 `local_irq_save` 替换为 `spin_lock_irqsave`，并调整临界区范围。
+修复后的逻辑为：
+```
+spin_lock_irqsave(&dum->lock, flags);
+...
+spin_unlock(&dum->lock);
+usb_gadget_giveback_request(...);
+spin_lock(&dum->lock);
+...
+spin_unlock_irqrestore(&dum->lock, flags);
+```
+通过在持有锁期间释放锁来调用回调函数，并使用 `spin_lock_irqsave`/`spin_unlock_irqrestore` 统一管理锁与中断状态，避免了在中断禁用期间调用可能睡眠的锁函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/06c1e5a9b480d6512d9609bcbc96006a86c44987

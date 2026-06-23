@@ -1,0 +1,21 @@
+#标题
+can: usb: f81604: 修复 URB 提交未锚定导致的资源泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Fintek F81604 USB CAN 设备驱动运行过程中，若系统调用 `usb_kill_anchored_urbs()` 尝试停止 URB（USB Request Block）传输（例如在驱动卸载或设备断开场景下），由于读批量回调（read bulk callback）中 URB 未被正确锚定，导致该 URB 无法被正确终止和回收，从而造成 URB 资源泄露。
+
+#主要错误日志
+推断日志（基于代码逻辑）：
+"%s: failed to resubmit read bulk urb: %pe" 或 "%s: failed to resubmit int urb: %pe"
+
+#问题根因
+在驱动的 `f81604_read_bulk_callback` 函数中，重新提交 URB（`usb_submit_urb`）之前缺少调用 `usb_anchor_urb` 将其挂载到锚点。根据内核 URB 处理逻辑，URB 必须在提交前进行锚定，否则后续调用 `usb_kill_anchored_urbs()` 时无法找到并终止该 URB，进而导致资源泄露。该逻辑在驱动其他位置处理正确，但在读批量回调和中断回调中遗漏。
+
+#解决方案
+在重新提交 URB 之前增加 `usb_anchor_urb` 调用，将 URB 锚定到 `priv->urbs_anchor`；同时增加错误处理逻辑，若 `usb_submit_urb` 提交失败，立即调用 `usb_unanchor_urb` 解除锚定以释放资源。此修复确保了 URB 生命周期管理的正确性，防止资源泄露。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cceabe9a7613aa70708b68ea007c3abfcbb769e0

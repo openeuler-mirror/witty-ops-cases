@@ -1,0 +1,24 @@
+#标题
+static_call 模块初始化失败处理不当导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当加载内核模块过程中发生内存分配失败，且该模块使用了静态调用（static call）机制时，在模块初始化失败后的清理路径中，会触发通用保护异常（#GP），导致内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在模块插入过程中，`static_call_add_module()` 调用 `__static_call_init()` 进行初始化。若初始化过程中内存分配失败，函数返回错误码，模块核心随后调用 `static_call_del_module()` 进行清理。
+问题的根本原因在于 `static_call_del_module()` 盲目假设 `key::mods` 指针指向有效的 `struct static_call_mod` 结构体。实际上，`key::mods` 是一个联合体（union）的一部分，用于节省空间：
+- 如果 bit 0 为 1，它是指向内置调用站点列表的指针（`sites`）。
+- 如果 bit 0 为 0，它是指向模块链的指针（`mods`）。
+当 `__static_call_init()` 因内存分配失败而退出时，部分 key 可能尚未从 `sites` 转换为 `mods`。此时 `static_call_del_module()` 错误地将 `sites` 指针当作 `mods` 指针进行解引用，访问了无效的内存地址，从而引发 #GP。
+
+#解决方案
+在 `static_call_del_module()` 遍历静态调用站点时，增加对 key 类型的检查。通过引入 `static_call_key_has_mods(key)` 检查，判断 key 当前是否持有有效的 `mods` 指针。如果 key 仍然是 `sites` 指针（即未因分配失败而被更新），则立即终止遍历，因为后续的站点也未被初始化代码触及。此修复避免了将 `sites` 指针误认为 `mods` 指针而导致的非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9dfe299a5122bebe91edcc1373dc06b0dfb83fc

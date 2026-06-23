@@ -1,0 +1,20 @@
+#标题
+mptcp: 修复设置时间戳套接字选项时因原子上下文休眠导致的调度崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MPTCP 子流上设置 `SO_TIMESTAMP`、`SO_TIMESTAMPNS` 或 `SO_TIMESTAMPING` 等时间戳相关套接字选项时，触发内核 panic。错误提示为 "scheduling while atomic"（在原子上下文中进行调度），导致系统崩溃或不可用。
+
+#主要错误日志
+scheduling while atomic
+
+#问题根因
+在 `mptcp_setsockopt_sol_socket_tstamp` 和 `mptcp_setsockopt_sol_socket_timestamping` 函数中，代码错误地使用了 `lock_sock_fast()` 来锁定子流套接字。`lock_sock_fast()` 会使代码处于原子上下文，但随后调用的 `sock_set_timestamp()` 和 `sock_set_timestamping()` 辅助函数内部可能会睡眠，导致在原子上下文中执行休眠操作，从而引发内核 panic。
+
+#解决方案
+将子流套接字锁定方式从原子上下文的 `lock_sock_fast()` / `unlock_sock_fast()` 替换为可休眠的 `lock_sock()` / `release_sock()`，确保在调用可能睡眠的时间戳设置函数前处于进程上下文，避免调度错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b84eb07e7f4133a506e377bdb2dc05e18f736da7

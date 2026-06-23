@@ -1,0 +1,20 @@
+#标题
+uvcvideo: 修复延迟探测错误导致内置摄像头被忽略
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动或摄像头驱动加载过程中，部分依赖 GPIO 的内置摄像头无法被识别或初始化。驱动程序未能正确处理 GPIO 尚未就绪的情况，导致设备探测直接失败而非延迟等待，内置摄像头在系统中不可见。
+
+#主要错误日志
+uvc: Unable to parse UVC GPIOs
+
+#问题根因
+在 `uvc_probe` 流程中，`uvc_gpio_parse()` 函数在依赖的 GPIO 尚未探测就绪时会返回 `-EPROBE_DEFER`。原代码逻辑错误地将所有小于 0 的返回值统一转换为 `-ENODEV`，导致 `-EPROBE_DEFER` 错误码丢失。这使得内核认为设备不存在而不是稍后重试探测，从而导致内置摄像头被错误地忽略。
+
+#解决方案
+修改 `uvc_probe` 函数中的错误处理逻辑，保留底层函数（如 `uvc_gpio_parse`）返回的具体错误码，特别是 `-EPROBE_DEFER`。确保在 GPIO 未就绪时，驱动能向总线层正确传递延迟探测请求，以便在 GPIO 可用后自动重新探测设备。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ff51a89fccccf5892b6c6b2c0ab592f048fa3b1f

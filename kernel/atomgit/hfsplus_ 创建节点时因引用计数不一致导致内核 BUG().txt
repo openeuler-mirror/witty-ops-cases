@@ -1,0 +1,22 @@
+#标题
+hfsplus: 创建节点时因引用计数不一致导致内核 BUG()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 hfs_bnode_create() 函数发现节点已存在时，未增加引用计数即返回该节点，导致后续在 hfs_bnode_put() 释放节点时触发引用计数不一致，引发内核 BUG() 并崩溃。
+
+#主要错误日志
+- `kernel BUG at fs/hfsplus/bnode.c:676!`
+- `BUG_ON(!atomic_read(&node->refcnt))`
+- `pr_crit("new node %u already hashed?\n", num);`
+
+#问题根因
+在 hfs_bnode_create() 函数中，当发现节点已被哈希（正常操作下不应发生，可能由位图错误或文件系统损坏引起）时，代码直接返回了现有节点指针，但未增加其引用计数。这导致后续释放节点时引用计数逻辑错误，触发 BUG_ON 检查失败。
+
+#解决方案
+修改 hfs_bnode_create() 函数逻辑，当检测到节点已存在时，不再返回节点指针，而是返回 ERR_PTR(-EEXIST) 以正确向调用者传递错误信号，调用者已具备 IS_ERR() 检查机制处理此类错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/826e4c682410cb02b9d1a309b272b076bcc472d8

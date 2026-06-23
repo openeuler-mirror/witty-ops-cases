@@ -1,0 +1,21 @@
+#标题
+MediaTek UART APDMA 高于 4G 地址寻址功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 33 位 DMA 地址寻址（高于 4G 内存）的 MediaTek SoC 平台上，使用 UART APDMA 进行数据收发时功能异常。当 DMA 缓冲区地址位于 4G 以上空间时，硬件无法正确访问内存，导致数据传输错误或失败。
+
+#主要错误日志
+未知
+
+#问题根因
+寄存器命名误解导致编程逻辑错误。寄存器偏移量 0x54 的正确名称应为 `VFF_ADDR2`，用于存放 DMA 地址的高 32 位以支持 4G 以上寻址。原代码错误地将其理解为使能位寄存器 `VFF_4G_SUPPORT`，并在该寄存器中写入了使能标志 `VFF_4G_EN_B`，而非 DMA 地址的高 32 位数据，导致硬件无法获取完整的高位地址信息。
+
+#解决方案
+1. 修正寄存器宏定义，将 `VFF_4G_SUPPORT` 重命名为 `VFF_ADDR2`，将 `VFF_4G_SUPPORT_CLR_B` 重命名为 `VFF_ADDR2_CLR_B`，以准确反映其硬件功能。
+2. 修正 TX/RX 传输逻辑，在初始化及传输过程中，当支持 33 位寻址时，向 `VFF_ADDR2` 寄存器写入 DMA 地址的高 32 位（`upper_32_bits(d->addr)`），而非原有的使能标志位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ed8b587ab851e2c2c364fce2268acf7da39bbdb

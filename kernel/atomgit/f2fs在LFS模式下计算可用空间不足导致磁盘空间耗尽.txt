@@ -1,0 +1,20 @@
+#标题
+f2fs在LFS模式下计算可用空间不足导致磁盘空间耗尽
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 f2fs 文件系统开启 lfs（Log-structured File System）模式时，`has_not_enough_free_secs()` 函数未能正确计算脏数据量。这导致系统在进行空间判断时出现偏差，无法通过前台 GC（Foreground Garbage Collection）回收足够的空闲 section，最终引发磁盘空间耗尽的问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 lfs 模式下，脏数据需要执行 OPU（Out-Of-Place Update，异地更新）操作，因此必须将其纳入空间需求计算中。原代码在 `__get_secs_required` 函数中，仅当 `SBI_CP_DISABLED` 标志位被设置时才计算脏数据（`F2FS_DIRTY_DATA`）。这导致在普通 lfs 模式下，`has_not_enough_free_secs()` 漏算了脏数据占用的空间，低估了实际所需的空间需求。
+
+#解决方案
+修改 `fs/f2fs/segment.h` 中的 `__get_secs_required` 函数，移除判断条件中对 `SBI_CP_DISABLED` 标志位的依赖。只要开启了 f2fs lfs 模式，就必须将脏数据页（`F2FS_DIRTY_DATA`）计入总数据块和数据段的计算中，从而确保空间评估准确，触发正确的 GC 回收机制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d17f24614cbaea11f9884eddeb7b475a44e74cf4

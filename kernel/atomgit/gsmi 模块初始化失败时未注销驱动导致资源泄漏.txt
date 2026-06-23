@@ -1,0 +1,21 @@
+#标题
+gsmi 模块初始化失败时未注销驱动导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 gsmi 模块初始化过程中，若 `platform_device_register_full()` 注册失败，驱动未正确执行退出清理流程，导致已注册的 platform_driver 无法注销，造成资源泄漏。
+
+#主要错误日志
+gsmi: unable to register platform device
+gsmi: failed to load: %d
+
+#问题根因
+在 `gsmi_init()` 函数中，当 `platform_device_register_full()` 返回错误时，代码直接 return 了错误码，跳过了后续的清理逻辑。由于此前已成功注册了 `gsmi_driver_info`（通过 `platform_driver_register`），直接返回导致该 driver 未被注销，从而引发资源泄漏。这是因为在错误处理路径上缺失了 `platform_driver_unregister()` 调用。
+
+#解决方案
+修改 `gsmi_init()` 中的错误处理逻辑。当 `platform_device_register_full()` 失败时，不再直接返回，而是将错误码保存到 ret 变量，并通过 `goto out_unregister` 跳转至统一的清理出口。在 `out_unregister` 标签处，确保执行 `platform_driver_unregister(&gsmi_driver_info)` 以释放已注册的驱动资源，最后再返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b7a8c00a4ac56ec7eec4bd268948b716d63a826d

@@ -1,0 +1,20 @@
+#标题
+leds-qcom-lpg: Hi-Res PWM 模式下分辨率最大值设置错误导致 PWM 值溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用高分辨率 PWM（Hi-Res PWM）时，如果 PWM 消费者请求的周期与硬件实际支持的最佳周期不匹配（例如请求 5ms 但硬件只能做到 4.26ms），消费者请求的占空比可能超出当前所选分辨率的范围。由于代码错误地将 PWM 值上限固定为 15 位分辨率的最大值，而实际上可能选择了较低的分辨率（如 8 位），导致计算出的 PWM 值超出分辨率允许的范围，硬件内部逻辑会将该值回绕，最终导致 LED 亮度控制异常或闪烁行为不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `lpg_calc_duty` 函数中，针对 Hi-Res PWM 类型的通道，代码原本直接将 PWM 值上限 `max` 硬编码为 `LPG_RESOLUTION_15BIT - 1`。然而，Hi-Res PWM 支持多种分辨率选择，当用户选择了低于 15 位的分辨率（例如 8 位）时，仍然使用 15 位的上限进行计算会导致 PWM 值溢出。正确的做法是 `max` 值应当根据当前选定的分辨率动态计算。
+
+#解决方案
+修改 `drivers/leds/rgb/leds-qcom-lpg.c` 文件中的 `lpg_calc_duty` 函数。将 Hi-Res PWM 分支下的 `max` 计算逻辑从固定的 `LPG_RESOLUTION_15BIT - 1` 修改为 `BIT(lpg_pwm_resolution_hi_res[chan->pwm_resolution_sel]) - 1`，确保 PWM 值的上限严格限制在当前选定分辨率所允许的最大范围内。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3528174dcb8464ca58a89ac83740bc8fcd2400a6

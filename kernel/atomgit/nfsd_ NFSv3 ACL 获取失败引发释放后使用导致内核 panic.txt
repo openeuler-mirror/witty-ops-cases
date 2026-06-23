@@ -1,0 +1,29 @@
+#标题
+nfsd: NFSv3 ACL 获取失败引发释放后使用导致内核 panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFS 服务端处理 NFSv3 ACL 请求时，若获取 acl_default 失败，代码逻辑会同时释放 acl_access 和 acl_default。然而，resp 结构体中的指针未被清零，仍指向已释放的内存。后续在 `nfs3svc_release_getacl` 函数中再次引用这些指针时，触发 refcount 计数下溢，引发内核 WARNING 并导致 panic。
+
+#主要错误日志
+------------[ cut here ]------------
+refcount_t: underflow; use-after-free.
+WARNING: CPU: 26 PID: 3199 at lib/refcount.c:28
+refcount_warn_saturate+0xb5/0x170
+...
+Call Trace:
+ nfs3svc_release_getacl+0xc9/0xe0
+ svc_process_common+0x5db/0xb60
+ ...
+Kernel panic - not syncing: kernel: panic_on_warn set ...
+
+#问题根因
+在 `nfsacld_proc_getacl` 和 `nfsd3_proc_getacl` 函数的失败处理路径中，代码调用了 `posix_acl_release` 释放 `resp->acl_access` 和 `resp->acl_default`，但释放后未将对应指针置为 NULL。这导致后续资源释放流程（如 `nfs3svc_release_getacl`）误以为指针有效并尝试再次释放或访问，从而引发 UAF（释放后使用）及 refcount 下溢。
+
+#解决方案
+在 `fs/nfsd/nfs2acl.c` 和 `fs/nfsd/nfs3acl.c` 的失败处理标签（fail）中，于 `posix_acl_release` 调用之后，显式将 `resp->acl_access` 和 `resp->acl_default` 指针置为 NULL，防止产生悬垂指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5d6d00ab349b0e2d6038345b3e1b9aee0c88a262

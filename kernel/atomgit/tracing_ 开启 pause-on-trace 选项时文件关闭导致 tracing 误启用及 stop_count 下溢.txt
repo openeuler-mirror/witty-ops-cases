@@ -1,0 +1,20 @@
+#标题
+tracing: 开启 pause-on-trace 选项时文件关闭导致 tracing 误启用及 stop_count 下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 tracing 实例配置了 "pause-on-trace" 选项时，打开 trace 文件会暂停追踪，关闭文件时应恢复追踪。但在当前实现下，如果有其他组件（如其他 tracer）已经暂停了追踪，此时关闭 trace 文件会错误地尝试恢复追踪，导致内部计数 `stop_count` 错误减少。当真正的暂停者试图恢复追踪时，`stop_count` 会低于零，从而触发内核警告。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `tracing_release` 函数判断是否需要恢复追踪的逻辑有误。原有逻辑仅检查 `tr->stop_count` 是否非零来决定是否恢复追踪。由于现在存在多种场景会增加 `stop_count`，如果 trace 文件打开时未增加计数（因非 pause-on-trace 场景），但关闭时发现 `stop_count` 不为零（由其他暂停者增加），就会错误地执行恢复操作，导致 `stop_count` 下溢。
+
+#解决方案
+在 trace iterator 结构中新增 `TRACE_FILE_PAUSE` 标志位。在打开文件（`__tracing_open`）时，若确实因 "pause-on-trace" 选项暂停了追踪，则设置该标志位。在关闭文件（`tracing_release`）时，不再依赖全局的 `stop_count` 判断，而是检查当前 iterator 的 `TRACE_FILE_PAUSE` 标志位。只有该标志位被设置时，才执行恢复追踪操作，确保只恢复由本次文件操作引发的暂停。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9faf545c82fbd7d7b6f32c3990b828274dd381ce

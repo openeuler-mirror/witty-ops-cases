@@ -1,0 +1,20 @@
+#标题
+ocfs2: handle a symlink read error correctly
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读取 OCFS2 快速符号链接时，若读取 inode 元数据（bh）失败，内核未正确处理错误流程。这可能导致页面未被正确解锁，进而引发潜在的死锁问题或内存泄漏，表现为进程在访问符号链接时处于不可中断睡眠状态（D状态）。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ocfs2_fast_symlink_read_folio` 中，当读取缓冲区头失败（status < 0）时，代码直接返回了错误码，跳过了后续的 `unlock_page(page)` 和 `brelse(bh)` 清理操作。这导致页面锁未被释放且缓冲区头引用计数未减少，造成资源泄漏和锁冲突。
+
+#解决方案
+修改错误处理路径，将直接 `return status` 改为 `goto out`，确保在发生错误时也能执行统一的清理流程：调用 `unlock_page(page)` 解锁页面并调用 `brelse(bh)` 释放缓冲区头，最后再返回错误状态码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0e68a81f057c59d0fcad228cd490c7e283657828

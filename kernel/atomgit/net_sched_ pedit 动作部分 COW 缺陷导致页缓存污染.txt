@@ -1,0 +1,23 @@
+#标题
+net/sched: pedit 动作部分 COW 缺陷导致页缓存污染
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 tc pedit 动作修改报文内容时，若配置了 typed keys 且涉及运行时头部偏移计算，可能导致写操作区域未完全执行 COW（Copy-On-Write）。该缺陷会引发页缓存污染，破坏非预期的内存页面，进而造成系统数据损坏或内核行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tcf_pedit_act()` 函数中，代码在进入 key 循环前仅依据 `tcfp_off_max_hint` 计算了一次 COW 范围，但该 hint 未将 typed keys 运行时添加的头部偏移量计算在内。这导致部分写入区域未被 COW 覆盖，直接修改了只读页缓存。此外，对于负偏移（如 ingress 时的以太网头修改）场景，原有的 offset 校验逻辑也存在缺陷，未正确处理 COW headroom 的需求。
+
+#解决方案
+1. 将 `skb_ensure_writable()` 调用从循环外移至循环内，在计算出实际写入偏移量后再执行 COW 操作。
+2. 增加 `check_add_overflow()` 校验以防止偏移量算术运算溢出，并修复 `offset_valid()` 函数对负偏移的校验逻辑。
+3. 对于负偏移场景，显式调用 `skb_cow()` 处理 headroom 区域的 COW；对于正偏移场景，确保写入范围完全处于可写区域。
+4. 移除不再准确的 `tcfp_off_max_hint` 字段及其相关计算逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9b9cb642bbe69eae178dc3309c526ef252f91962

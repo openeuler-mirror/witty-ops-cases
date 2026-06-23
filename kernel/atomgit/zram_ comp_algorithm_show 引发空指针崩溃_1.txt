@@ -1,0 +1,29 @@
+#标题
+zram: comp_algorithm_show 引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+LTP 测试触发内核空指针引用，导致内核崩溃。在 zram 设备初始化过程中，若用户通过 sysfs 接口访问设备（如执行 cat 操作），会触发 NULL pointer dereference，系统打印 Oops 调用栈并终止当前进程。
+
+#主要错误日志
+```
+Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
+...
+Call trace:
+ __pi_strcmp+0x24/0x140
+ comp_algorithm_show+0x40/0x70 [zram]
+ dev_attr_show+0x28/0x80
+ sysfs_kf_seq_show+0x90/0x140
+ ...
+```
+
+#问题根因
+在 `zram_add()` 函数中，`zram->comp_algs[ZRAM_PRIMARY_COMP]` 的初始化通过 `comp_algorithm_set()` 完成，原逻辑该操作位于 `device_add_disk()` 之后。这导致在设备注册到系统后、但压缩算法尚未设置前，存在一个时间窗口。用户空间在此窗口期内访问 sysfs 接口（如读取 `comp_algorithm` 属性）会触发 `comp_algorithm_show()`，进而尝试对未初始化的 NULL 指针执行字符串比较操作，引发崩溃。
+
+#解决方案
+将 `comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor)` 的调用位置从 `device_add_disk()` 之后移动到之前。这确保了在用户空间可以通过 sysfs 访问 zram 设备之前，压缩算法相关的字段已经正确初始化，从而消除了竞态条件导致的空指针风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad4dd6e8942dfd648298b267799be6ac82622f2a

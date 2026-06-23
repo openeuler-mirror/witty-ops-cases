@@ -1,0 +1,20 @@
+#标题
+drm/msm/adreno: 初始化期间空指针访问导致潜在崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Adreno GPU 初始化过程中，若 `msm_gpu_init` 函数内部逻辑在 `gpu->pdev` 赋值前触发了对 `gpu->pdev` 的访问（例如通过 `dev_to_gpu` 相关流程），将引发空指针解引用错误，导致内核 panic 或 GPU 初始化失败。
+
+#主要错误日志
+未知
+
+#问题根因
+指针 `gpu->pdev` 的赋值操作被放置在 `msm_gpu_init` 函数内部执行，但在该函数内部调用 `platform_set_drvdata` 之前或期间的部分逻辑可能依赖 `gpu->pdev` 指向有效的 `pdev` 结构体。由于赋值滞后，此时 `gpu->pdev` 仍为 NULL，导致空指针访问。
+
+#解决方案
+将 `gpu->pdev = pdev;` 的赋值操作从 `msm_gpu_init` 函数内部移至调用者 `adreno_gpu_init` 函数中，并在调用 `msm_gpu_init` 之前完成赋值。这确保了在执行后续初始化流程时，`gpu->pdev` 已经指向有效地址，从而避免空指针异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3d987923cecc33d76ef9453bf58612455a066137

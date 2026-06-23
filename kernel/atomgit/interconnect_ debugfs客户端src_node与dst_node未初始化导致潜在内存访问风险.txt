@@ -1,0 +1,20 @@
+#标题
+interconnect: debugfs客户端src_node与dst_node未初始化导致潜在内存访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 interconnect debugfs 测试客户端功能时，若 `src_node` 和 `dst_node` 指针未初始化，读取或写入相应的 debugfs 文件节点可能触发内核异常。由于 `debugfs_create_str()` API 假定传入的字符串指针要么为 NULL，要么指向有效的内存地址，未初始化的指针（野指针）可能导致内核访问非法内存。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `icc_debugfs_client_init` 函数中，全局指针变量 `src_node` 和 `dst_node` 在传递给 `debugfs_create_str()` 函数前未被初始化。`debugfs_create_str()` 的实现要求传入的字符串指针必须是 NULL 或者指向有效的 kmalloc 分配的内存，未初始化的指针导致该 API 对野指针进行操作，引发内存访问安全问题。
+
+#解决方案
+在调用 `debugfs_create_str()` 创建 debugfs 条目之前，使用 `devm_kstrdup` 将 `src_node` 和 `dst_node` 初始化为空字符串（""）。这确保了指针始终指向有效的内存对象，保障了后续通过 debugfs 接口进行读写操作的安全性。若内存分配失败，函数返回 -ENOMEM。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c52d38d38578287ae655f113da36ab3bea71ea8b

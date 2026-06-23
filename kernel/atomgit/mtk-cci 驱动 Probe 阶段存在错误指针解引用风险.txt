@@ -1,0 +1,20 @@
+#标题
+mtk-cci 驱动 Probe 阶段存在错误指针解引用风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MediaTek CCI devfreq 驱动加载（probe）过程中，若 `sram_reg` 获取失败并返回 `-EPROBE_DEFER` 错误指针，驱动在错误处理路径中清理资源时，会尝试对该错误指针进行解引用操作（调用 `regulator_is_enabled`），可能导致内核崩溃或异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `mtk_ccifreq_probe` 函数的错误处理流程中，对 `drv->sram_reg` 指针仅进行了 `NULL` 检查（`if (drv->sram_reg ...)`），未考虑到该指针可能指向 `ERR_PTR(-EPROBE_DEFER)` 的情况。当指针为错误类型时，直接将其作为有效指针传递给 `regulator_is_enabled` 函数引发了错误指针解引用问题。
+
+#解决方案
+修改错误处理逻辑中的指针有效性检查条件，将原本的 `drv->sram_reg` 判断修改为 `!IS_ERR_OR_NULL(drv->sram_reg)`，确保在指针为 `NULL` 或错误指针（ERR_PTR）时均跳过操作，从而避免解引用错误指针导致的故障。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a4141921d47de271674fcad2d7405348b8ae0d2f

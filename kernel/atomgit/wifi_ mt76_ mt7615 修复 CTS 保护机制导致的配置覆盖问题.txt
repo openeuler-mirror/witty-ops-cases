@@ -1,0 +1,21 @@
+#标题
+wifi: mt76: mt7615 修复 CTS 保护机制导致的配置覆盖问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mt7615 驱动中，当启用或调整 `use_cts_prot` 支持（CTS 保护机制）以兼容老旧 11g/n 设备、处理隐藏 SSID 或管理传统客户端时，驱动程序直接写入了 Wireless Table (WTBL) 硬件寄存器。这种直接操作会导致 WTBL 条目中的其他关键配置被意外覆盖，破坏了无线站点的配置完整性，进而影响无线连接的稳定性与兼容性。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于驱动程序直接操作了硬件 WTBL（Wireless Table）寄存器来设置 RTS/CTS 位（`MT_WTBL_W3_RTS`）。驱动不应直接写入 WTBL，因为这会引发“overwritten issues”（配置覆盖问题），导致原有配置丢失。正确的做法应是通过 MCU 命令来协同固件处理保护机制的设置。
+
+#解决方案
+移除了直接操作 WTBL 寄存器的 `mt7615_mac_enable_rtscts` 函数及其相关调用。
+新增 `mt7615_mcu_set_protection` 函数，通过 MCU 命令（`MCU_EXT_CMD(PROTECT_CTRL)`）向固件发送保护控制请求。该函数整合了 HT 操作模式和 CTS 保护设置，避免了直接写寄存器带来的覆盖风险，正确实现了对 CTS 保护帧及兼容性模式的支持。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b9576cb9ed174e6c7c57d8b7e3b08f71a3f3a4e6

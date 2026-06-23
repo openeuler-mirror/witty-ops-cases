@@ -1,0 +1,23 @@
+#标题
+slimbus: core: fix runtime PM imbalance on report present
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 Slimbus 设备或地址分配在 report present 流程中失败时，控制器的运行时电源管理（Runtime PM）引用计数未正确减少，导致控制器无法进入挂起状态。
+
+#主要错误日志
+"slim ctrl not active,state:%d, ret:%d\n"
+
+#问题根因
+在 `slim_device_report_present` 函数中，当控制器状态不为 `SLIM_CLK_ACTIVE` 或者 `slim_get_device` 获取设备失败（返回 `IS_ERR`）时，代码直接返回错误或跳转到了未执行 `pm_runtime_put_autosuspend` 的标签处。这导致先前已增加的 Runtime PM usage count 没有被平衡减少，造成引用计数泄漏。
+
+#解决方案
+修改错误处理路径的跳转逻辑：
+1. 当控制器状态不为 `SLIM_CLK_ACTIVE` 时，跳转到 `out_put_rpm` 标签（原为 `slimbus_not_active`）以执行 PM 引用计数释放。
+2. 当 `slim_get_device` 失败时，不再直接 `return -ENODEV`，而是赋值 `ret` 后同样跳转到 `out_put_rpm` 标签。
+3. 统一在 `out_put_rpm` 标签处调用 `pm_runtime_mark_last_busy` 和 `pm_runtime_put_autosuspend`，确保在所有错误退出路径上都能正确释放 Runtime PM 引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a2c6f674e1e3679a8ea6e1e3c481204d65c9cc13

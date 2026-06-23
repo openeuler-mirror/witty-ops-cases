@@ -1,0 +1,24 @@
+#标题
+f2fs: 修复 umount 过程中 f2fs_write_end_io 发生的 UAF（Use-After-Free）问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发执行 loop 设备 IO 处理与 umount 操作时，触发内核 Use-After-Free 故障。
+syzbot 报告在 f2fs_write_end_io() 函数中访问已释放的 sbi 内存。具体表现为：umount 流程在 kill_f2fs_super 中释放 sbi 内存后，IO 完成回调 f2fs_write_end_io 仍试图访问 sbi 统计信息，导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+这是一个竞态条件引发的 UAF 问题。根因在于 `f2fs_write_end_io()` 中的唤醒逻辑位置不当。
+在 umount 流程（`kill_f2fs_super` -> `kill_block_super` -> `f2fs_put_super`）中，代码会先释放 sbi 内存，此时 loop 设备的 IO 回调路径（`f2fs_write_end_io`）可能尚未完全结束。
+原代码在 `end_page_writeback()` 之后调用 `get_pages(sbi, ...)`，而 `end_page_writeback()` 可能导致 umount 流程中的 inode 写回等待完成并继续执行 `free(sbi)`。因此，当 IO 回调路径随后执行 `get_pages` 访问 sbi 时，sbi 已被释放，从而导致 UAF。
+
+#解决方案
+将检查并唤醒 checkpoint 等待队列的逻辑（`wake_up(&sbi->cp_wait)`）移动到 `end_page_writeback()` 调用之前。
+这样确保了对 sbi 的访问发生在页面写回状态结束之前，而在 `kill_f2fs_super` 中释放 sbi 前会驱逐所有页缓存，保证了所有 folios 的写回状态已结束，从而避免了在访问 sbi 时其已被释放的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a1b4e28af53521813ab44c571ccf1df87526a0e0

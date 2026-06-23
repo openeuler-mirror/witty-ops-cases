@@ -1,0 +1,22 @@
+#标题
+PCI: pci_slot_unlock 存在锁对称性缺陷导致双重解锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PCI 子系统进行热插拔或相关状态操作时，触发锁逻辑错误。由于 `pci_slot_unlock` 与 `pci_slot_lock` 逻辑不对称，导致同一个桥设备（bridge device）被解锁两次。这可能引发内核临界区保护失效，进而导致系统崩溃、死锁或数据结构损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+修复补丁 `a4e772898f8b ("PCI: Add missing bridge lock to pci_bus_lock()")` 调整了 `pci_slot_lock` 的逻辑，使其根据 `dev->subordinate` 是否存在来决定锁的获取方式。然而，对应的 `pci_slot_unlock` 函数未做同步修改，导致锁操作不对称。
+在原代码逻辑中，若设备存在 `subordinate`（即其为桥设备），代码先调用 `pci_bus_unlock`（该函数内部会解锁 `bus->self`，即该桥设备本身），随后又无条件调用 `pci_dev_unlock(dev)`。这导致同一个桥设备被连续解锁两次，引发重复解锁错误。
+
+#解决方案
+修改 `drivers/pci/pci.c` 文件中的 `pci_slot_unlock` 函数，将 `pci_dev_unlock(dev)` 调用移入 `else` 分支中。
+修改后的逻辑确保：如果设备是桥设备（`dev->subordinate` 存在），则仅通过 `pci_bus_unlock` 路径处理解锁；如果设备不是桥设备，则通过 `pci_dev_unlock` 路径处理解锁。这恢复了对称性，避免了双重解锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8ad62cba606d691e7613f1ec4b27fc347faf20dd

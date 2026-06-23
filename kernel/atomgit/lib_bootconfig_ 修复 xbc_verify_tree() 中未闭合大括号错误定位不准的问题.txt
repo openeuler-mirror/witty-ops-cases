@@ -1,0 +1,20 @@
+#标题
+lib/bootconfig: 修复 xbc_verify_tree() 中未闭合大括号错误定位不准的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用引导配置时，若存在大括号未闭合的错误，内核在验证配置树时报错信息指向了错误的位置。虽然系统能检测到“Brace is not closed”错误，但错误日志中引用的节点并非实际未闭合的那个大括号，导致用户无法根据报错信息定位到配置文件中真正的语法错误位置。
+
+#主要错误日志
+Brace is not closed
+
+#问题根因
+在 `__xbc_open_brace()` 函数中，压栈操作使用后置自增（`open_brace[brace_index++]`），这意味着 `brace_index` 变量在操作后总是指向最后一个有效条目的下一个位置。而在 `xbc_verify_tree()` 函数中检测到未闭合大括号时，代码直接使用 `open_brace[brace_index]` 来获取节点索引。由于索引多 1，这导致访问了刚压入条目之后的位置，该位置包含过时或零数据，从而使得报错引用了错误的节点。
+
+#解决方案
+修改 `lib/bootconfig.c` 文件中的 `xbc_verify_tree()` 函数，将获取未闭合大括号节点的索引逻辑从 `open_brace[brace_index]` 修正为 `open_brace[brace_index - 1]`。因为此处代码处于 `if (brace_index)` 保护中，`brace_index` 必定大于 0，该修改能正确获取到最后一个被压入且未闭合的大括号节点。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7e9a572397e6b30ee2515aa0a2d06d9ede1fb235

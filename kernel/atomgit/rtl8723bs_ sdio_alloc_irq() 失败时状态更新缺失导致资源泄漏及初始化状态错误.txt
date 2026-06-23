@@ -1,0 +1,21 @@
+#标题
+rtl8723bs: sdio_alloc_irq() 失败时状态更新缺失导致资源泄漏及初始化状态错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RTL8723BS SDIO 适配器驱动初始化过程中，若 `sdio_alloc_irq()` 分配中断失败，驱动不会执行必要的资源清理流程（跳过了 `goto free_if1`），导致内存等资源泄漏。同时，`rtw_drv_init()` 函数错误地返回成功（0），导致上层调用者误认为设备初始化完成，设备处于不可用的半初始化状态。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `rtw_drv_init` 中，调用 `sdio_alloc_irq(dvobj)` 时未将其返回值赋给 `status` 变量。代码逻辑直接判断 `sdio_alloc_irq(...) != _SUCCESS`，即使该函数调用失败，`status` 变量仍保持前一步操作成功的值（`_SUCCESS`）。
+这导致随后的 `if (status != _SUCCESS)` 检查失败，程序未跳转至错误处理标签 `free_if1`，而是继续执行并返回成功。因此，错误处理路径被跳过，资源未释放，且返回了错误的初始化状态。
+
+#解决方案
+修改 `drivers/staging/rtl8723bs/os_dep/sdio_intf.c` 文件，将 `sdio_alloc_irq(dvobj)` 的返回值正确存储到 `status` 变量中。这使得后续的条件判断能正确识别失败状态，并复用现有的错误处理流程跳转至 `free_if1` 进行资源清理，同时确保函数返回错误码而非成功。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/46ef222ca785099c38d2a3c9a637be611e9ef44c

@@ -1,0 +1,22 @@
+#标题
+urma: 共享TP模式下并发创建Jetty导致PSN交换异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在共享TP（Shared TP）模式下，当本地和远端同时创建Jetty时，会导致两端各生成两个或以上的tx_psn值，而实际仅存在一个活跃的TP。在并发条件下，哪个tx_psn值被实际使用变得不确定，导致PSN交换过程出现数据异常，可能引发后续通信连接或数据传输错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在共享TP模式并发创建Jetty的场景下，`ubcore_import_jfr_compat` 函数中 `active_tp_cfg.tp_attr.tx_psn` 的赋值逻辑存在缺陷。原有的随机值生成（`get_random_u32`）位置不当，导致在获取TP列表（`ubcore_get_rm_stp_list`）前后可能产生不一致的tx_psn，或者未能正确使用配置中的tx_psn，从而导致在交换PSN值时出现混乱。
+
+#解决方案
+调整tx_psn的赋值时机与逻辑：
+1. 在函数逻辑开始处，统一先为 `active_tp_cfg.tp_attr.tx_psn` 赋予随机值（`get_random_u32`）。
+2. 在进入共享TP处理分支（`ubcore_get_rm_stp_list`）时，显式将该值更新为配置中指定的 `cfg->stp_cfg.tx_psn`，确保在创建 `rm_tp_info` 时获取并存储了确定的tx_psn值，从而保证在交换PSN时的唯一性与正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c4a38efb285ca8cb35657fb27ec6ce4c5b7dea02

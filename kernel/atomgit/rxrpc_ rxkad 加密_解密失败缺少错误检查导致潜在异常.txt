@@ -1,0 +1,27 @@
+#标题
+rxrpc: rxkad 加密/解密失败缺少错误检查导致潜在异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 rxkad 安全协议进行 RxRPC 通信时，若内核加密 API（crypto API）执行加密或解密操作失败（例如返回 -ENOMEM），系统未能捕获该错误。这可能导致：
+1. 内核继续处理未经正确加密或解密的数据，导致数据损坏或校验失败。
+2. 连接建立过程中使用了无效的响应数据，可能导致连接异常或状态不一致。
+3. 在 `rxkad_verify_packet_2` 场景下，解密失败可能触发警告信息。
+
+#主要错误日志
+[   23.456789] WARNING: CPU: 1 PID: 123 at net/rxrpc/rxkad.c:526 rxkad_verify_packet_2+0x123/0x456
+
+#问题根因
+rxkad 模块在调用 `crypto_skcipher_encrypt()` 和 `crypto_skcipher_decrypt()` 进行数据包加解密时，未检查返回值。虽然这些加密函数在正常情况下通常返回 0，但在内存不足等异常情况下会返回错误码（如 -ENOMEM）。原代码直接忽略了这些可能的错误返回，导致程序继续执行后续逻辑，引入了潜在的安全隐患或逻辑错误。此外，`rxkad_decrypt_response` 函数原本无返回值，无法向上层传递错误。
+
+#解决方案
+1. 为 `crypto_skcipher_encrypt()` 和 `crypto_skcipher_decrypt()` 的调用添加返回值检查。
+2. 在错误发生时，立即终止当前操作并向上层返回错误码。
+3. 将 `rxkad_decrypt_response` 函数的返回类型从 `void` 修改为 `int`，以便传递解密操作的结果。
+4. 修复 `crypto_sync_skcipher_setkey` 的错误处理，移除 `BUG()` 调用，改为正常错误返回。
+5. 针对 `rxkad_verify_packet_2` 中的解密失败，添加 `WARN_ON_ONCE(ret != -ENOMEM)` 以便调试，并正确释放资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0221d94269e2d13ed9357a1e40829cb8bae509ed

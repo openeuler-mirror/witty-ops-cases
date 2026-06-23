@@ -1,0 +1,22 @@
+#标题
+tcp: plb_rehash 变量读写竞争触发 KCSAN 数据竞争告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行 KCSAN (Kernel Concurrency Sanitizer) 检测时，报告 `tp->plb_rehash` 变量存在数据竞争。该问题发生在 `tcp_get_timestamping_opt_stats()` 函数无锁读取 `plb_rehash` 与 `tcp_plb_check_rehash()` 函数写入该变量之间，尽管是无锁设计，但缺乏相应的标注导致内核sanitizer工具报警。
+
+#主要错误日志
+未知
+
+#问题根因
+`tcp_get_timestamping_opt_stats()` 函数被设计为有意在无锁状态下运行，但在访问 `tp->plb_rehash` 和 `tp->timeout_rehash` 时未使用 `READ_ONCE()` 标注；同时，`tcp_plb_check_rehash()` 函数中对 `tp->plb_rehash` 的递增操作也未使用 `WRITE_ONCE()` 标注。这种常规的内存访问方式在并发环境下触发了 KCSAN 的数据竞争检测机制。
+
+#解决方案
+遵循无锁编程规范，对并发访问的变量添加读写标注修复：
+1. 在 `net/ipv4/tcp.c` 的 `tcp_get_timestamping_opt_stats()` 函数中，使用 `READ_ONCE()` 读取 `tp->plb_rehash` 和 `tp->timeout_rehash`。
+2. 在 `net/ipv4/tcp_plb.c` 的 `tcp_plb_check_rehash()` 函数中，使用 `WRITE_ONCE()` 对 `tp->plb_rehash` 进行递增写入操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1aa525363f7b1aeb8b8e71ebc7803fbf4e6af8f5

@@ -1,0 +1,23 @@
+#标题
+arm64: dts: rockchip: Set correct pinctrl for I2S1 8ch TX on odroid-m1
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Odroid-M1 设备上进行音频播放时，由于 I2S1 接口的引脚复用配置缺失，导致驱动加载时发生 pinmux 冲突。系统日志显示 pinctrl 申请引脚失败，最终 I2S 设备无法正常工作，音频播放功能异常。
+
+#主要错误日志
+[  116.856643] [    T782] rockchip-pinctrl pinctrl: pin gpio1-10 already requested by affinity_hint; cannot claim for fe410000.i2s
+[  116.857567] [    T782] rockchip-pinctrl pinctrl: error -EINVAL: pin-42 (fe410000.i2s)
+[  116.857618] [    T782] rockchip-pinctrl pinctrl: error -EINVAL: could not request pin 42 (gpio1-10) from group i2s1m0-sdi1 on device rockchip-pinctrl
+[  116.857659] [    T782] rockchip-i2s-tdm fe410000.i2s: Error applying setting, reverse things back
+
+#问题根因
+设备树中 `i2s1_8ch` 节点未配置 `pinctrl` 属性，导致内核无法正确申请和管理 I2S1 所需的 GPIO 引脚。具体表现为尝试申请 `gpio1-10` 时发现已被占用，引发 `pinmux conflicts`。实际上 I2S1 连接到 RK809 codec 仅使用 SCLK, LRCK, SDI0 和 SDO0 信号，不应引起广泛的引脚冲突。
+
+#解决方案
+修改设备树文件 `rk3568-odroid-m1.dts`，在 `&i2s1_8ch` 节点中增加 `pinctrl-names` 和 `pinctrl-0` 属性。明确指定默认使用的引脚组为 `i2s1m0_sclktx`、`i2s1m0_lrcktx`、`i2s1m0_sdi0` 和 `i2s1m0_sdo0`，确保只声明实际需要的引脚，避免无效引脚申请导致的冲突，从而正确建立音频信号路由。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3b4ab0da2b891c23ab879833d299d87b8cd5bc0

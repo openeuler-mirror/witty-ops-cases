@@ -1,0 +1,20 @@
+#标题
+ext4 文件系统挂载失败时定时器释放顺序不当引发 Use-After-Free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ext4 文件系统挂载失败的过程中，存在 timer use-after-free 风险。具体表现为挂载流程进入错误处理路径时，定时器资源的销毁顺序错误，可能导致内核访问已释放的数据结构。
+
+#主要错误日志
+未知
+
+#问题根因
+在 ext4 挂载失败的清理函数 `failed_mount3` 标签处，原有的代码逻辑先调用 `del_timer_sync(&sbi->s_err_report)` 删除定时器，随后调用 `ext4_stop_mmpd(sbi)`。由于 `ext4_stop_mmpd` 可能会等待某个工作队列或任务完成，而在该过程中可能涉及对 `sbi` 结构体中相关成员（如 `s_err_report`）的访问或回调。顺序颠倒导致定时器被提前删除，而后续的清理步骤可能再次触发该定时器或访问相关数据，从而引发 use-after-free 问题。
+
+#解决方案
+调整错误处理路径中资源释放的顺序。将 `del_timer_sync(&sbi->s_err_report)` 的调用位置移动到 `ext4_stop_mmpd(sbi)` 之后。确保先停止依赖该定时器的任务（mmpd），再删除定时器，从而避免在 `ext4_stop_mmpd` 执行期间发生定时器回调或访问冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/125777fe78a1ad8805e8ac4457ceaaf6f1fc0c84

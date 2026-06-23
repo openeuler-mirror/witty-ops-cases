@@ -1,0 +1,24 @@
+#标题
+as102_usb_probe 注册后错误路径致 UAF 与 Double-Free 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 as102_usb 驱动加载过程中，若 `as102_usb_probe` 初始化流程在注册 USB 字符设备后触发错误路径，会导致内核发生 Use-After-Free (UAF) 和 Double-Free (DFB) 漏洞。攻击者或本地用户可通过在设备注册后、注销前的极短时间窗口内打开设备节点进行竞态攻击，最终导致内核崩溃或权限提升。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `as102_usb_probe` 函数中，驱动调用 `usb_register_dev()` 注册字符设备后，若后续初始化步骤失败进入错误处理分支，代码会立即调用 `usb_deregister_dev()` 并直接 `kfree(as102_dev_t)`。
+根据 USB 子系统机制，`usb_deregister_dev()` 虽然阻止了新的 `open()` 调用，但无法立即移除已打开的文件描述符。若用户态进程在设备注销前成功打开了设备，该文件描述符将保持有效直到调用 `.release()`。
+此时驱动已在 probe 的错误路径中释放了 `as102_dev_t` 内存。当用户态随后关闭文件描述符时，`as102_release()` -> `as102_usb_release()` 将再次访问或释放该内存，触发 UAF 和 Double-Free。
+
+#解决方案
+修改 `as102_usb_probe` 的错误处理逻辑：在注册设备成功后的错误路径中，不再直接释放内存。具体修改为：
+1. 在调用 `usb_deregister_dev()` 之前先将接口驱动数据设置为 NULL（`usb_set_intfdata(intf, NULL)`），防止 disconnect 与 release 并发访问。
+2. 移除错误路径中对 `as102_dev_t` 的直接 `kfree` 操作，将内存释放权移交给 `.release()` 回调函数，确保只有当所有打开的文件描述符关闭后才释放内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bcf6bbdfdbf7f004af66fc29f0dd36d99d038b4b

@@ -1,0 +1,25 @@
+#标题
+qman_destroy_fq 函数在动态 FQID 场景下存在竞态条件导致 WARN_ON 触发
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当开启 QMAN_FQ_FLAG_DYNAMIC_FQID 标志时，在多线程并发执行 qman_destroy_fq 与 qman_create_fq 的过程中，存在竞态条件。该竞态导致 qman_create_fQ() 中触发了 WARN_ON(fq_table[fq->idx]) 告警，表明新分配的 FQID 在表中检测到非空指针，破坏了 FQ 表的一致性。
+
+#主要错误日志
+- 推断日志：`WARNING: CPU: X PID: Y at drivers/soc/fsl/qbman/qman.c:qman_create_fq+0xZZ/0xNN`
+- diff 中新增调试日志：`pr_debug("FQID %d leaked\n", fq->fqid);`
+
+#问题根因
+问题源于 `qman_destroy_fq` 函数中释放资源与清理状态的时序错误。原逻辑中，先调用 `qman_release_fqid`（内含 `gen_pool_free` 操作）将 fqid 放回内存池，随后才将 `fq_table[fq->idx]` 设为 NULL。
+在此期间，若另一线程并发调用 `qman_create_fq`，可能从内存池中分配到刚被释放的 fqid，并检查 `fq_table[fq->idx]`。此时由于原线程尚未执行 `fq_table[fq->idx] = NULL`，新线程观测到该槽位非空，从而触发 WARN_ON。
+
+#解决方案
+调整 `qman_destroy_fq` 函数中的资源释放顺序，确保状态清理先于资源回收。
+1. 将原 `qman_release_fqid` 调用拆解，先显式调用 `qman_shutdown_fq` 并检查是否发生泄漏。
+2. 无论是否涉及动态 FQID，均确保先执行 `fq_table[fq->idx] = NULL`，将槽位清空。
+3. 仅在确认无泄漏（`!leaked`）且为动态 FQID 的情况下，加入写内存屏障 `smp_wmb()`，确保上述 NULL 设置对其他 CPU 可见，最后才调用 `gen_pool_free` 将 fqid 放回内存池。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9d735bd5bdba89df5cc4db3331fd5fd53d508342

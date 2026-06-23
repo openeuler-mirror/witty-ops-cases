@@ -1,0 +1,22 @@
+#标题
+drivers/ub/sentry: 修复 match_dev_by_local_eid 函数中的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `match_dev_by_local_eid` 函数进行设备匹配时，若成功匹配到设备或遍历完设备的 EID 列表后未释放先前申请的内存，会导致内核内存泄漏。随着调用次数增加，系统可用内存逐渐减少。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `match_dev_by_local_eid` 在处理过程中通过 `ubcore_get_eid_list` 获取了 EID 信息结构的内存指针。原代码逻辑中，在成功匹配到设备直接返回时，以及在循环遍历完当前设备的所有 EID 后继续检查下一个设备时，均未调用 `ubcore_free_eid_list` 释放已获取的内存资源，导致内存泄漏。
+
+#解决方案
+在函数中引入局部指针变量 `eid_list` 用于保存 `ubcore_get_eid_list` 返回的首地址。
+1. 在成功匹配设备的分支返回前，增加调用 `ubcore_free_eid_list(eid_list)` 释放内存。
+2. 在遍历完当前设备 EID 列表的循环结束后，增加调用 `ubcore_free_eid_list(eid_list)` 释放内存，确保下一次循环或函数退出前资源被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d5aa56430e15f86bf487608eaad0ad1a150cb705

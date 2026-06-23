@@ -1,0 +1,20 @@
+#标题
+dmaengine: ti: k3-udma: UDMA 设备查找时存在引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在查找 UDMA platform device 时，内核未正确释放设备引用计数。这会导致设备对象引用计数泄漏，潜在影响设备的正常释放与卸载流程，造成内存资源无法回收。
+
+#主要错误日志
+UDMA has not been probed
+
+#问题根因
+在 `of_xudma_dev_get` 函数中，通过 `of_find_device_by_node` 查找到 UDMA 设备后获取了设备引用。但在函数返回前（无论是错误处理路径还是正常路径），代码逻辑未正确执行 `put_device` 操作来平衡引用计数。此外，持有 platform device 的引用并不能阻止其 driver data 被释放，因此该引用在查找完成后无保留意义，导致了泄漏。
+
+#解决方案
+在 `of_xudma_dev_get` 函数中，无论后续 `platform_get_drvdata` 是否成功获取数据，都必须立即释放之前查找设备时获取的引用。修复补丁将 `put_device(&pdev->dev)` 调用移至获取 `drvdata` 之后、判断其有效性之前，确保引用计数被及时释放，修复了内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4e5e806ee40dbdbb876886f2af1cca580a9c2eb5

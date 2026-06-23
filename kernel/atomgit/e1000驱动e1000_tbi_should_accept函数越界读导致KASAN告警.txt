@@ -1,0 +1,42 @@
+#标题
+e1000驱动e1000_tbi_should_accept函数越界读导致KASAN告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理网络接收包时触发KASAN（Kernel Address Sanitizer）slab-out-of-bounds错误。具体表现为在NAPI接收路径调用 `e1000_clean_rx_irq` 处理数据包时，调用 `e1000_tbi_should_accept` 读取数据帧的最后一个字节时发生内存越界访问。此时可能导致内核崩溃或非法访问其他slab对象，影响系统稳定性。
+
+#主要错误日志
+```
+==================================================================
+BUG: KASAN: slab-out-of-bounds in e1000_tbi_should_accept+0x610/0x790
+Read of size 1 at addr ffff888014114e54 by task sshd/363
+
+CPU: 0 PID: 363 Comm: sshd Not tainted 5.18.0-rc1 #1
+...
+Call Trace:
+ <IRQ>
+ ...
+ e1000_tbi_should_accept+0x610/0x790
+ e1000_clean_rx_irq+0xa8c/0x1110
+ e1000_clean+0xde2/0x3c10
+ __napi_poll+0x98/0x380
+ net_rx_action+0x491/0xa20
+ ...
+The buggy address is located 1620 bytes to the right of
+ 2048-byte region [ffff888014114000, ffff888014114800]
+==================================================================
+```
+
+#问题根因
+在函数 `e1000_tbi_should_accept` 中，代码在未校验数据帧长度 `length` 有效性的情况下，直接通过 `u8 last_byte = *(data + length - 1)` 读取帧数据的最后一个字节。当描述符报告的 `length` 为 0 或者 `length` 大于实际的 RX 缓冲区大小时，该指针计算将导致越界读取，访问到不相关的 slab 内存对象。
+
+#解决方案
+在读取 `data[length - 1]` 前增加边界检查：
+1. 检查 `length` 是否为 0，若为 0 则直接返回 false 拒绝该帧。
+2. 检查 `length` 是否超过 `adapter->rx_buffer_len`，若超过则返回 false。
+通过这两项检查，确保只有在长度合法的情况下才访问数据缓冲区，从而防止越界读。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae8e9d7d74ebc24417a03c57a7a1a5dd6f6d03d3

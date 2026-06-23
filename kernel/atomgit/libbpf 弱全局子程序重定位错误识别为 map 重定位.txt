@@ -1,0 +1,21 @@
+#标题
+libbpf 弱全局子程序重定位错误识别为 map 重定位
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 libbpf 进行 BPF 程序加载或静态链接时，若涉及 weak（弱）全局子程序的重定位，libbpf 会错误地拒绝该重定位操作。用户在 BPF skeleton 生成或静态链接阶段会收到令人困惑的错误提示，提示这是一个针对 map 的错误重定位，而实际上这是函数子程序重定位。
+
+#主要错误日志
+libbpf: prog 'handle_tp': bad map relo against 'foo' in section '.text'
+Error: failed to open BPF object file: Relocation failed
+
+#问题根因
+sym_is_subprog() 函数在判断符号是否为子程序时，逻辑不完整。代码仅检查了绑定属性为 STB_GLOBAL 的全局函数，忽略了绑定属性为 STB_WEAK 的全局函数。这导致 weak 全局子程序未被识别为有效的子程序，进而被错误地识别为 map 重定位进行处理，导致重定位失败。
+
+#解决方案
+修改 `tools/lib/bpf/libbpf.c` 中的 `sym_is_subprog` 函数逻辑，在判断全局函数时，增加对 STB_WEAK 绑定类型的支持。将判断条件从 `bind == STB_GLOBAL` 修改为 `(bind == STB_GLOBAL || bind == STB_WEAK)`，从而正确识别 weak 全局子程序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a1a5a00d470f5b72476ba083b2d3b1627d1e85ef

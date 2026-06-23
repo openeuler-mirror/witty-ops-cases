@@ -1,0 +1,23 @@
+#标题
+wifi: rtl8xxxu: 固件下载偶发失败导致设备探测失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Realtek WiFi 设备（如 RTL8188EU）在探测阶段偶发失败，导致设备无法正常工作。该问题多发生于设备位于 USB 集线器后的场景。
+
+#主要错误日志
+[推断] dmesg 或 /var/log/messages 中可能出现：
+rtl8xxxu: Failed to write block at addr: [addr] size: [size]
+[推断] 固件加载相关的错误返回值打印：
+rtl8xxxu: download_firmware -11
+
+#问题根因
+固件下载过程中偶尔会出现 EPROTO 错误。该错误在底层写入函数 `rtl8xxxu_writeN` 中被转换为 EAGAIN 返回给上层调用者，但设备探测逻辑中没有任何重试机制，导致固件下载失败直接引发设备探测失败。
+
+#解决方案
+在 `rtl8xxxu_init_device` 函数中增加固件下载的重试机制。具体修改为将原本单次的 `rtl8xxxu_download_firmware` 调用改为循环调用，当返回值为 -EAGAIN 时进行重试（最多重试 5 次），以确保在偶发通信错误下仍能成功加载固件。同时，将底层写入失败时的日志打印级别调整为调试模式（`RTL8XXXU_DEBUG_REG_WRITE`），避免重试期间刷屏过多日志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/de50632e7739d6cb7835c653461ad724c778dfb4

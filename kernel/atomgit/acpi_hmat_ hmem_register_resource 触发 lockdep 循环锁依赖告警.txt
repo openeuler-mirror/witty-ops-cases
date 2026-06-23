@@ -1,0 +1,48 @@
+#标题
+acpi/hmat: hmem_register_resource 触发 lockdep 循环锁依赖告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在自动上线（auto-online）CXL 内存区域时，触发 lockdep 检测到可能的循环锁定依赖，产生 WARNING 告警。系统日志中出现关于 `hmem_resource_lock` 与 `(node_chain).rwsem` 之间锁顺序冲突的详细堆栈信息，提示存在潜在死锁风险。
+
+#主要错误日志
+```text
+======================================================
+WARNING: possible circular locking dependency detected
+6.17.0djtest+ #53 Tainted: G        W
+------------------------------------------------------
+systemd-udevd/3334 is trying to acquire lock:
+ffffffff90346188 (hmem_resource_lock){+.+.}-{4:4}, at: hmem_register_resource+0x31/0x50
+
+but task is already holding lock:
+ffffffff90338890 ((node_chain).rwsem){++++}-{4:4}, at: blocking_notifier_call_chain+0x2e/0x70
+
+which lock already depends on the new lock.
+[..]
+Chain exists of:
+  hmem_resource_lock --> mem_hotplug_lock --> (node_chain).rwsem
+
+ Possible unsafe locking scenario:
+
+       CPU0                    CPU1
+       ----                    ----
+  rlock((node_chain).rwsem);
+                               lock(mem_hotplug_lock);
+                               lock((node_chain).rwsem);
+  lock(hmem_resource_lock);
+```
+
+#问题根因
+锁依赖链分析显示存在冲突：`hmem_resource_lock` -> `mem_hotplug_lock` -> `(node_chain).rwsem`。
+在代码路径中，存在先持有 `(node_chain).rwsem` 再请求 `hmem_resource_lock` 的情形（例如通过 `blocking_notifier_call_chain` 调用链触发）；而在其他路径中，锁的获取顺序相反。这种不一致的锁获取顺序导致 lockdep 判定为可能的循环依赖。
+
+#解决方案
+重构 `hmat_register_target` 函数逻辑，将其拆分为初始化部分和热插拔更新部分。
+1. 新增 `hmat_hotplug_target` 函数，专门处理热插拔场景下的目标更新。
+2. 将原本混合在 `hmat_register_target` 中的目标属性注册逻辑（如 `hmat_register_target_initiators` 等）移至新函数中，避免在 `hmat_callback` 调用链中触发可能导致死锁的设备注册流程。
+3. `hmat_callback` 回调函数改为仅调用 `hmat_hotplug_target`，从而规避了在持有 `node_chain.rwsem` 时去获取 `hmem_resource_lock` 的危险锁序，打破了循环依赖链。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/de03acfa5731af980b681e0370157d014ba077d3

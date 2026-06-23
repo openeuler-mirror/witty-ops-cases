@@ -1,0 +1,24 @@
+#标题
+sch_cake: cake_drop导致qlen统计错误引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当父级 Qdisc 为 qfq_qdisc 时，触发空指针解引用，导致内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 cake_drop() 函数中调用 qdisc_tree_reduce_backlog() 更新了 Qdisc 层级的 qlen 和 backlog。其调用者 cake_enqueue() 假设父级 Qdisc 会入队当前数据包，但当 cake_enqueue() 返回 NET_XMIT_CN 时，父级 Qdisc 实际上停止了入队操作。这导致 Qdisc 树的 qlen/backlog 统计不一致，进而引发 NULL 指针解引用。
+
+#解决方案
+修改 cake_enqueue() 逻辑，通过观察 cake_drop() 调用序列前后的差异来计算 qlen/backlog 的变化量。
+1. 移除 cake_drop() 内部的 qdisc_tree_reduce_backlog() 调用。
+2. 在 cake_enqueue() 中记录 drop 操作前后的 sch->q.qlen 和 sch->qstats.backlog。
+3. 计算 delta 后，统一调用 qdisc_tree_reduce_backlog() 进行补偿。
+4. 如果 cake_enqueue() 返回 NET_XMIT_CN（表示当前包被标记为拥塞但未真正由父类入队），需额外对 qlen 和 backlog 进行减 1 和减 len 的修正，以确保统计准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d92cd27614347fa35c51a197a60f97818d4bd0ac

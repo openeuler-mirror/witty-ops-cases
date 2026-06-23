@@ -1,0 +1,38 @@
+#标题
+LoongArch KVM 在 PREEMPT_RT 内核下触发 scheduling while atomic 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 PREEMPT_RT 的内核上运行 LoongArch KVM 虚拟机时，系统触发 "scheduling while atomic" 错误，导致内核调用栈转储。该问题发生在 VCPU 状态切换过程中，具体表现为 QEMU 进程在非预期的上下文中进行了调度操作。
+
+#主要错误日志
+BUG: scheduling while atomic: qemu-system-loo/1011/0x00000002
+Modules linked in: amdgpu rfkill nft_fib_inet nft_fib_ipv4 nft_fib_ipv6 nft_fib nft_reject_inet nf_reject_ipv4 nf_reject_ipv6 nft_reject nft_ct nft_chain_nat ns
+CPU: 1 UID: 0 PID: 1011 Comm: qemu-system-loo Tainted: G        W          6.12.0-rc2+ #1774
+Tainted: [W]=WARN
+Call Trace:
+[<9000000003a13998>] show_stack+0x38/0x180
+[<9000000004e3ea34>] dump_stack_lvl+0x84/0xc0
+[<9000000003a71708>] __schedule_bug+0x48/0x60
+[<9000000004e45734>] __schedule+0x1114/0x1660
+[<9000000004e46040>] schedule_rtlock+0x20/0x60
+[<9000000004e4e330>] rtlock_slowlock_locked+0x3f0/0x10a0
+[<9000000004e4f038>] rt_spin_lock+0x58/0x80
+[<9000000003b02d68>] hrtimer_cancel_wait_running+0x68/0xc0
+[<9000000003b02e30>] hrtimer_cancel+0x70/0x80
+[<ffff80000235eb70>] kvm_restore_timer+0x50/0x1a0 [kvm]
+[<ffff8000023616c8>] kvm_arch_vcpu_load+0x68/0x2a0 [kvm]
+[<ffff80000234c2d4>] kvm_sched_in+0x34/0x60 [kvm]
+
+#问题根因
+在 PREEMPT_RT 内核中，未标记为硬中断模式的 hrtimer 默认会在软中断上下文中过期。当 KVM 模块的 `kvm_restore_timer` 函数尝试取消定时器时，会通过 `hrtimer_cancel` 等待正在运行的定时器回调完成。
+如果定时器运行在软中断上下文，`hrtimer_cancel_wait_running` 会尝试获取自旋锁并可能调用 `schedule_rtlock` 进行调度。然而，`kvm_restore_timer` 是在抢占通知器中被调用的，此时抢占已被禁用。在抢占禁用的上下文中调用调度函数违反了 PREEMPT_RT 的规则，从而触发了 "scheduling while atomic" 错误。
+
+#解决方案
+将 LoongArch KVM 定时器的初始化与启动模式从 `HRTIMER_MODE_ABS_PINNED` 修改为 `HRTIMER_MODE_ABS_PINNED_HARD`。
+此修改强制定时器回调在硬中断上下文中执行，而不是软中断上下文。由于定时器回调函数执行时间很短，适合在硬中断中运行，这样可以避免在 `hrtimer_cancel` 过程中因等待软中断回调而引发的调度冲突，从而修复了 PREEMPT_RT 内核下的原子调度错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ffc0064364fbeec15d94af6da592635e32a6e8b

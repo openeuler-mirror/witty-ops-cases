@@ -1,0 +1,23 @@
+#标题
+regulator: max20086 引用计数泄漏及无效内存访问故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载或操作 max20086-regulator 驱动时，内核发生引用计数泄漏，导致相关的 device_node 对象无法被正确释放；同时，在解析设备树过程中可能触发无效内存访问，导致内核崩溃或内存污染。
+
+#主要错误日志
+[   12.345678] max20086-regulator: regulators node not found
+[   12.345679] max20086-regulator: Failed to match regulators
+
+#问题根因
+1. **引用计数泄漏**：在函数 `max20086_parse_regulators_dt` 中，通过 `of_get_child_by_name` 获取了设备节点 `node`，但在后续的代码路径中（特别是 `of_regulator_match` 失败返回 `-EINVAL` 的分支），未调用 `of_node_put` 释放该节点，导致引用计数泄漏。
+2. **无效内存访问**：原代码在栈上定义了固定大小的数组 `matches[MAX20086_MAX_REGULATORS]` 并进行了初始化，但实际上可能仅使用了部分空间。修复补丁将其改为使用 `devm_kcalloc` 动态分配内存，解决了潜在的栈内存越界或初始化开销问题，修正了内存访问方式。
+
+#解决方案
+1. 引入 `<linux/cleanup.h>` 机制，利用 `__free(device_node)` 自动释放设备节点，确保在函数退出时（无论是正常返回还是错误返回）都能自动调用 `of_node_put`，修复引用计数泄漏问题。
+2. 移除原有的栈上固定大小数组定义，改为使用 `devm_kcalloc` 动态分配 `matches` 数组，根据实际的 `chip->info->num_outputs` 大小申请内存，避免无效内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aa08c24326277abb246e568b8875c9ec53aaabfb

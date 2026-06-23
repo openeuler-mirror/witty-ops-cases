@@ -1,0 +1,29 @@
+#标题
+ixgbevf驱动在Hyper-V虚拟机中触发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在Hyper-V虚拟机环境中加载 ixgbevf 驱动进行探测（probe）时，内核发生空指针解引用，导致系统崩溃。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000000
+Hardware name: Microsoft Corporation Virtual Machine/Virtual Machine
+Workqueue: events work_for_cpu_fn
+RIP: 0010:0x0
+Call Trace:
+ ixgbevf_negotiate_api+0x66/0x160 [ixgbevf]
+ ixgbevf_sw_init+0xe4/0x1f0 [ixgbevf]
+ ixgbevf_probe+0x20f/0x4a0 [ixgbevf]
+ local_pci_probe+0x50/0xa0
+ work_for_cpu_fn+0x1a/0x30
+
+#问题根因
+先前提交 a7075f501bd3 为 ixgbevf_mac_ops 结构体添加了 .negotiate_features 回调函数以修复邮箱API兼容性问题，但遗漏了针对 Hyper-V 环境的 ixgbevf_hv_mac_ops 结构体。导致在 Hyper-V 虚拟机中，hw->mac.ops.negotiate_features 指针为 NULL。驱动在初始化过程中调用 ixgbevf_negotiate_api() -> ixgbevf_set_features() 时，无条件解引用该空指针引发崩溃。
+
+#解决方案
+在 ixgbevf_hv_mac_ops 操作表中补全缺失的 negotiate_features 接口。新增 ixgbevf_hv_negotiate_features_vf 函数，该函数针对 Hyper-V 场景直接返回 -EOPNOTSUPP（上层调用逻辑已对该错误码进行容错处理），并将其赋值给 ixgbevf_hv_mac_ops.negotiate_features 成员，从而避免空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cbeb952535c367758f11b97b7328499b5dab69bf

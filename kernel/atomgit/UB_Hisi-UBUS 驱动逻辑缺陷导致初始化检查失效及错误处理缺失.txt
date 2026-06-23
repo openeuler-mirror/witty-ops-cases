@@ -1,0 +1,36 @@
+#标题
+UB/Hisi-UBUS 驱动逻辑缺陷导致初始化检查失效及错误处理缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 UBUS decoder 初始化过程中，即使 `decoder_unmap` 接口缺失，系统仍会错误地跳过检查继续执行，可能导致后续解映射操作时发生空指针崩溃或未定义行为。
+2. UBUS 枚举过程中，若 TLV 信息校验失败或实体类型无效，函数虽然打印了错误日志，但错误码未正确向上传递，导致上层调用者误认为操作成功，引发状态不一致。
+3. 注入路由错误（RAS）场景下，错误处理逻辑覆盖不完整，且部分错误日志级别设置不当。
+
+#主要错误日志
+- `pr_err("decoder_map or decoder_unmap ops not exist\n")`
+- `dev_err(dev, "tlv si/pi/pn/ci NULL\n")`
+- `ub_err(uent, "alloc dev uent_num failed, ret=%d\n", uent_num);`
+- `pr_err("vdm_pld is null\n")`
+- `pr_err("ctl_no %u not found in ubc_list\n", ctl_no)`
+- `pr_err("ub_vdm_message execute error, ret=%d\n", ret)`
+- `dev_warn(&ubc->dev, "event_cnt [%u] is invalid\n", event_cnt);` （原为 dev_err）
+
+#问题根因
+1. **逻辑运算符误用**：`ub_decoder_map` 函数中检查接口是否存在时，使用了 `!ops->decoder_map && !ops->decoder_unmap`（逻辑与），正确逻辑应为“或”（`||`），导致只要存在其中一个接口，检查就被绕过。
+2. **返回值未设置**：`ub_enum_ent` 和 `ub_host_probe` 等函数在处理错误分支时，仅执行了 `goto err` 跳转，未将 `ret` 变量设置为负值错误码（如 `-EFAULT`、`-EINVAL`），导致函数返回 0（成功），掩盖了失败事实。
+3. **参数校验与解析错误**：`hi_eu_table_info_write` 中误用了未初始化的变量 `fields` 进行校验，且对 `kstrtoint` 的返回值检查不当。
+
+#解决方案
+1. **修正条件判断逻辑**：将 `ub_decoder_map` 中的条件判断修正为 `!ubc->ops->decoder_map || !ubc->ops->decoder_unmap`，确保任一接口缺失均报错退出。
+2. **补全错误码返回**：在 `ub_enum_ent`、`ub_host_probe` 等函数的错误处理分支中，显式设置 `ret = -EFAULT` 或 `ret = -EINVAL`，确保错误能正确向上传递。
+3. **修正变量使用与校验**：删除无效的 `fields` 变量判断，改为正确检查 `kstrtoint` 的返回值 `ret`。
+4. **功能增强与重构**：
+   - 新增 `ub_black_box` 模块用于故障记录支持。
+   - 扩展 `ub_mem_ras_err_info` 结构体字段以适配新的 RAS 场景。
+   - 调整日志级别，将无效 event_cnt 的打印从 `dev_err` 降级为 `dev_warn`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8eb52b366b82f99fa601019eee9f8ab005785f8c

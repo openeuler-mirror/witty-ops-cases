@@ -1,0 +1,29 @@
+#标题
+LoongArch 架构 GPIO/DWMAC/PWM 驱动功能异常与配置错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. LoongArch 64位 GPIO 控制器在 `BIT_CTRL_MODE` 下配置引脚方向、电平或读取状态时，可能出现配置失效、读写错误或操作非目标引脚的现象。
+2. LoongArch DWMAC 网卡驱动可能因时钟配置不匹配导致 MDC 信号异常，进而引起 MDIO 通信失败或网卡无法正常工作。
+3. LoongArch PWM 驱动在 ACPI 模式下因默认频率数值设置错误（单位换算错误），导致 PWM 输出频率严重偏离预期，设备功能异常。
+4. 内核模块依赖 `pwm_add_table` 接口无法正常导出符号，导致相关模块加载失败。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **GPIO 驱动**：代码在 `BIT_CTRL_MODE` 模式下错误地使用了 64 位 (`readq`/`writeq`) 或 32 位寄存器访问函数来操作实际上按 8 位 (`u8`) 组织的寄存器空间，且位操作未正确处理寄存器偏移和掩码（应使用 `pin / 8` 计算偏移，`pin % 8` 计算位掩码，并使用 `readb`/`writeb`）。
+2. **DWMAC 驱动**：`clk_csr` 被错误配置为 2（对应 20-35MHz 输入时钟），而硬件实际输入时钟频率应为 100-150MHz，需要将 `clk_csr` 设置为 1。
+3. **PWM 驱动**：宏定义 `LOONGSON_PWM_FREQ_DEFAULT` 错误地定义为 50000，实际应为 50000000（50MHz），导致频率计算错误。
+4. **PWM 核心**：函数 `pwm_add_table` 缺少 `EXPORT_SYMBOL_GPL` 导出符号声明，导致外部模块无法引用。
+
+#解决方案
+1. **GPIO 驱动修复**：将 `loongson_commit_direction_bit`、`loongson_commit_level_bit`、`loongson_gpio_get`、`loongson_gpio_get_direction` 及 `loongson_gpio_to_irq` 函数中的寄存器访问方式从 64 位/32 位读写修正为 8 位读写（`readb`/`writeb`），并修正寄存器偏移计算逻辑为 `offset + (pin / 8)`，位操作修正为 `1 << (pin % 8)`。
+2. **DWMAC 驱动修复**：将 `plat->clk_csr` 的值从 2 修改为 1，以匹配 100-150MHz 的输入时钟频率。
+3. **PWM 驱动修复**：修正 `LOONGSON_PWM_FREQ_DEFAULT` 宏定义值为 50000000；同时修正 `pwm_loongson_config` 函数中 `duty` 和 `period` 变量类型为 `u64` 以防止计算溢出。
+4. **PWM 核心修复**：为 `pwm_add_table` 函数添加 `EXPORT_SYMBOL_GPL` 导出声明。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b0b9195f11b88eaa4456e99d3e6b7a56ed1907e7

@@ -1,0 +1,28 @@
+#标题
+Zhaoxin KX40000 DMA 补丁编译警告及符号依赖修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定配置（如 intel-lkp 测试环境）下编译内核时，`zhaoxin_kh40000.c` 及相关调用处出现编译警告或错误：
+1. 位运算逻辑警告；
+2. 全局变量与函数符号未定义的链接错误；
+3. 模块依赖 `CONFIG_PCI` 导致在无 PCI 支持配置下构建失败。
+
+#主要错误日志
+- 推断日志：编译阶段 Warning 或 Error，涉及 `zhaoxin_patch_code` 位运算、`is_zhaoxin_kh40000` 未定义、`kh40000_dma_direct_ops` 未定义等。
+
+#问题根因
+1. `zhaoxin_patch_code_setup` 函数中判断条件写错，使用了位或操作符（`|`）而非位与操作符（`&`），导致逻辑恒真并产生编译警告；
+2. 关键变量（如 `is_zhaoxin_kh40000`、`kh40000_dma_direct_ops`）定义为全局可见符号，但在头文件中通过 `extern` 声明且依赖 `CONFIG_PCI` 宏保护，导致在配置不满足或符号封装不当的情况下出现未定义引用；
+3. `zhaoxin_kh40000.c` 的编译依赖配置项为 `CONFIG_PCI`，实际应依赖 `CONFIG_INTEL_IOMMU`，导致配置不匹配时的构建问题。
+
+#解决方案
+1. 修正位运算逻辑，将 `if (ZHAOXIN_P2CW_NODE_CHECK | zhaoxin_patch_code)` 修改为 `if (ZHAOXIN_P2CW_NODE_CHECK & zhaoxin_patch_code)`；
+2. 封装全局变量访问，将直接访问全局变量改为调用函数接口（如 `is_zhaoxin_kh40000()`、`kh40000_get_direct_dma_ops()`），并使用 `__weak` 属性提供默认实现，降低模块间耦合与编译依赖；
+3. 修正 Makefile 中的编译条件，将 `obj-$(CONFIG_PCI)` 修改为 `obj-$(CONFIG_INTEL_IOMMU)`，确保仅在必要时编译该模块；
+4. 对内部使用的全局变量和结构体添加 `static` 修饰符，限制作用域，避免符号冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd9739f11c0faa63d9a79ac0fb1dadb17b70136e

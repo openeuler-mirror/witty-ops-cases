@@ -1,0 +1,20 @@
+#标题
+cpcap-charger: Fix null pointer dereference in cpcap_usb_detect
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 cpcap_usb_detect() 函数执行过程中，调用 power_supply_get_by_name("battery") 获取电池电源供应对象时，该函数可能返回 NULL。原代码使用 IS_ERR_OR_NULL 宏进行判断，但随后在错误处理路径中直接对返回值调用 PTR_ERR(battery)，若返回值为 NULL，将导致对 NULL 指针进行解引用操作，进而引发内核空指针崩溃或不可预知的错误行为。
+
+#主要错误日志
+- 原日志打印（存在潜在崩溃风险）："battery power_supply not available %li\n"
+
+#问题根因
+power_supply_get_by_name() 函数在查找失败时返回 NULL，而不是错误指针（error pointer）。原代码使用 IS_ERR_OR_NULL 检查返回值，当返回值为 NULL 时，宏 IS_ERR_OR_NULL 为真，代码进入错误处理分支并调用 PTR_ERR(battery)。由于 PTR_ERR 宏内部会对入参进行解引用操作（通常定义为 `(long) PTR_ERR(ptr)`），当传入 NULL 时，导致对 NULL 指针的非法解引用。
+
+#解决方案
+修改 cpcap_usb_detect() 函数中对 battery 返回值的判断逻辑，将 `if (IS_ERR_OR_NULL(battery))` 修改为 `if (!battery)`，直接检查空指针。同时移除错误处理分支中对 PTR_ERR 的调用，避免对 NULL 指针进行解引用，仅输出 "battery power_supply not available" 提示信息并返回。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/45ab6ae654cd62e9d2950ab5c2b7ab7bad7ba081

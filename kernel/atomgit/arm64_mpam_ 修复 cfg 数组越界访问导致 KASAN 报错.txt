@@ -1,0 +1,24 @@
+#标题
+arm64/mpam: 修复 cfg 数组越界访问导致 KASAN 报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 resctrl_arch_get_config() 访问 per msc 组件的 cfg 数组时，触发了 KASAN slab-out-of-bounds 故障，具体表现为内核读写越界，通常发生在 mkdir 任务执行过程中。
+
+#主要错误日志
+BUG: KASAN: slab-out-of-bounds in resctrl_arch_get_config+0x404/0x7c8
+Read of size 4 at addr ffff08280da29b64 by task mkdir/4156
+
+#问题根因
+cfg 数组的内存分配大小与实际访问的索引范围不匹配。数组分配时使用了 mpam_partid_max 作为长度，但在实际使用中，有效的 partid 范围包含 0 到 mpam_partid_max，即数组长度应为 mpam_partid_max + 1。这导致当访问索引为 mpam_partid_max 的元素时，发生了越界访问。
+
+#解决方案
+修正 cfg 数组的分配大小与遍历逻辑，统一使用 resctrl_arch_get_num_closid(NULL) 接口获取正确的 partid 数量（该接口返回值已包含最大值修正），替换原有的 mpam_partid_max 变量。涉及修改点包括：
+1. __allocate_component_cfg 函数中 kcalloc 的参数。
+2. mpam_reprogram_ris 和 mpam_reprogram_msc 函数中的循环边界条件。
+3. mpam_reset_class 函数中 memset 的大小参数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dbb480977ec1f4088f83298fcac7b3623a796b39

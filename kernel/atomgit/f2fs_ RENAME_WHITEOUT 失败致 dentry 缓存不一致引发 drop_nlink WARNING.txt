@@ -1,0 +1,25 @@
+#标题
+f2fs: RENAME_WHITEOUT 失败致 dentry 缓存不一致引发 drop_nlink WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载了具有损坏目录深度值的 F2FS 文件系统上执行 RENAME_WHITEOUT 操作时，若 whiteout 创建失败，会导致 VFS 层 dentry 缓存与磁盘状态不一致。后续针对同一目录项执行重命名操作时，系统会尝试对一个 i_nlink 已经为 0 的 inode 执行 drop_nlink 操作，从而触发内核 WARNING。具体复现路径为：
+1. 挂载带有损坏 i_current_depth 的 F2FS 镜像。
+2. 执行 `renameat2(file2, file1, RENAME_WHITEOUT)`，该操作失败但部分元数据已修改。
+3. 执行 `renameat2(file3, file1, 0)`。
+4. 系统触发 WARNING。
+
+#主要错误日志
+WARNING in drop_nlink()
+
+#问题根因
+F2FS 在处理 RENAME_WHITEOUT 时，先执行了目录修改（更新目标入口、删除源入口），随后尝试通过 `f2fs_add_link` 添加 whiteout 入口。若因目录结构损坏导致 `f2fs_add_link` 失败，虽然函数向 VFS 返回了错误，但之前的目录修改已落盘。
+VFS 层在收到错误返回后，不会调用 `d_move()` 更新 dentry 缓存。这导致 `new_dentry` 仍指向旧的 inode（`new_inode`），而该 inode 的 `i_nlink` 已被减少至 0。后续操作使用该过时的缓存时，尝试再次减少链接计数（drop_nlink），在 i_nlink 已经为 0 的情况下触发 WARNING。
+
+#解决方案
+在 `f2fs_rename` 函数中，当 `f2fs_add_link` 创建 whiteout 失败时，显式调用 `d_invalidate` 对 `old_dentry` 和 `new_dentry` 进行无效化处理。此举强制 VFS 在后续操作中重新从磁盘读取状态，确保缓存一致性，避免引用已释放或状态异常的 inode。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a5d5dfdc03fcff59a546c4ef919509416214f52d

@@ -1,0 +1,20 @@
+#标题
+kbuild: userprogs: 使用 clang 链接时未正确调用 lld 导致交叉编译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `LLVM=1` 进行内核编译时，userprogs 基础设施（用于构建用户空间程序）链接失败。虽然文档说明应使用 `ld.lld` 进行链接，但 clang 实际上调用了系统中全局安装的交叉链接器（如 `${target}-ld`）或回退到系统默认链接器，导致链接器不匹配或交叉编译失败。
+
+#主要错误日志
+未知
+
+#问题根因
+userprogs 基础设施通过 `$(CC)` 链接目标文件（显式调用或隐式直接编译为可执行文件）。当指定 `LLVM=1` 时，kbuild 文档指示应使用 `ld.lld`，但 clang 默认不会自动使用 `$(LD)` 变量指定的链接器，而是根据 `$PATH` 查找 `${target}-ld` 或回退到系统链接器。正常的内核构建不受影响，因为其链接器是直接调用的，不经过编译器。
+
+#解决方案
+在 Makefile 中增加配置，当检测到编译器为 clang 且链接器为 lld 时（`CONFIG_CC_IS_CLANG` 和 `CONFIG_LD_IS_LLD` 均为 y），向 `KBUILD_USERLDFLAGS` 追加 `--ld-path=$(LD)` 选项。通过显式传递该参数给 clang，强制其使用 kbuild 指定的链接器，从而修复链接器选择错误的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b57ce6a856da46f0ea1bef42eb1272c8c0c21081

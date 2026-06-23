@@ -1,0 +1,25 @@
+#标题
+btrfs: 修复 btrfs_validate_super 中超级块偏移量错误信息打印不准确的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 BTRFS 文件系统校验超级块发现偏移量不匹配时，内核日志打印的错误信息不准确。
+具体表现为：在校验非第一份超级块（如镜像块）时，错误日志中用于比对的目标偏移量始终显示为第一个超级块的固定偏移量（`BTRFS_SUPER_INFO_OFFSET`），而非当前正在校验的实际超级块偏移量，导致日志信息误导调试人员。
+
+#主要错误日志
+- 修复前日志格式（存在缺陷）：
+  `super offset mismatch %llu != %u`
+
+#问题根因
+在 commit 069ec957c35e ("btrfs: Refactor btrfs_check_super_valid") 重构后，`btrfs_validate_super` 函数已支持校验所有超级块镜像，但错误打印代码未同步更新。
+代码中硬编码使用了 `BTRFS_SUPER_INFO_OFFSET` 常量（仅代表第一个超级块的偏移）和 `%u` 格式，而未使用动态计算当前镜像偏移的 `btrfs_sb_offset(mirror_num)` 变量，导致无论校验哪个镜像，日志都错误地显示与第一个超级块偏移进行比对。
+
+#解决方案
+修正 `btrfs_validate_super` 函数中的错误日志打印逻辑：
+1. 将比对的目标值从常量 `BTRFS_SUPER_INFO_OFFSET` 修改为函数调用 `btrfs_sb_offset(mirror_num)`，以正确反映当前校验超级块的实际偏移量。
+2. 将格式化字符串中的 `%u` 修改为 `%llu`，以适配 `u64` 类型的返回值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/72077859baebe1d2ccf336bae40ef9ed7a3e56e4

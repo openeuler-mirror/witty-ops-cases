@@ -1,0 +1,24 @@
+#标题
+xfs: xfs_bmap_add_extent_delay_real 在部分转换时触发断言失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 XFS 文件系统中进行延迟分配-extent 的部分转换操作时（即只转换延迟分配 extent 中的一小部分而非全部），内核触发 ASSERT 断言失败。此外，在某些情况下，可能因保留块不足导致文件系统错误地触发 ENOSPC（无空间）并引发文件系统关闭。
+
+#主要错误日志
+未知
+（注：Commit 信息中仅提及 "trigger the assert" 和 "trigger a fs shutdown due to ENOSPC"，未提供具体的 Panic 或错误日志字符串。）
+
+#问题根因
+函数 `xfs_bmap_add_extent_delay_real` 负责将延迟分配 extent 转换为实际 extent。虽然代码设计上旨在处理各种重叠情况，但实际上仅演练了“转换整个 extent”或“从起始位置部分转换”的场景。
+当仅转换延迟分配 extent 的极小部分时，新计算出的间接块数（`da_new`）可能与原有间接块数（`da_old`）相等。若此时转换操作需要分配新的间接块，`da_new` 会因此增加，导致 `da_new > da_old`。
+原代码中的断言 `ASSERT(state == 0 || da_new < da_old)` 假定 `da_new` 必须小于 `da_old`（除非 state 为 0），这在上述部分转换场景下无法满足，从而导致断言失败。同时，原代码在调整磁盘块计数时未允许使用保留块池，增加了触发 ENOSPC 错误的风险。
+
+#解决方案
+1. 修改断言逻辑，移除 `da_new < da_old` 的强制要求，改为 `ASSERT(da_new <= da_old)`，以适应部分转换场景下 `da_new` 可能等于或略大于 `da_old` 的情况。
+2. 在调整空闲块计数（`xfs_mod_fdblocks`）时，将参数从 `false` 修改为 `true`，允许分配器在需要时使用保留块池，防止因间接块分配导致的意外 ENOSPC 和文件系统关闭。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/441413f51d9fc7f4fd10517ad0b64135bd9c41d3

@@ -1,0 +1,27 @@
+#标题
+iavf: VLAN过滤器的删除路径与添加路径不对称导致驱动与硬件状态不同步
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除 VLAN 过滤器时，驱动程序立即释放了跟踪结构，但未等待物理功能（PF）的确认。这导致以下现象：
+1. 若 PF 拒绝了删除请求，过滤器仍保留在硬件中，但驱动程序已丢失跟踪结构，导致驱动与硬件状态不同步。
+2. 在删除挂起期间，若发生其他操作（如添加、重置），由于跟踪结构已不存在，无法正确处理竞态条件。
+3. 在删除挂起状态下重复删除操作，可能导致 PF 返回错误，进而导致完成处理程序错误地将已删除的过滤器恢复为 ACTIVE 状态。
+
+#主要错误日志
+未知
+
+#问题根因
+VLAN 过滤器的 DELETE 路径与 ADD 路径不对称。ADD 路径会等待 PF 确认（ADD -> ADDING -> ACTIVE），但 DELETE 路径在发送 DEL 消息后立即释放了过滤器结构体，未等待 PF 响应。这导致驱动无法处理 PF 拒绝删除的情况，也无法处理涉及正在删除的过滤器的竞态条件。
+
+#解决方案
+引入 IAVF_VLAN_REMOVING 状态，使 DELETE 路径与 ADD 路径对称：
+1. 在 `iavf_del_vlans()` 中，将过滤器状态从 REMOVE 转换为 REMOVING，而不是立即释放内存。
+2. 在 `iavf_virtchnl_completion()` 中新增处理逻辑：若 PF 确认删除成功则释放过滤器；若 PF 拒绝则将状态恢复为 ACTIVE。
+3. 更新 `iavf_add_vlan()` 逻辑以处理 REMOVING 状态：若正在删除过程中用户重新添加相同的 VLAN，则将其排队等待 ADD，以便在 PF 处理完 DEL 后重新编程。
+4. 更新 `iavf_del_vlan()` 以跳过已处于 REMOVING 状态的过滤器，防止重复发送 DEL 请求导致状态管理混乱。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/04f2ea2664b8e55e8bc781c99bcbb8a5e91ec03c

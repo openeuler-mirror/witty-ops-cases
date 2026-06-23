@@ -1,0 +1,20 @@
+#标题
+RDMA/hns 内存释放接口不匹配导致潜在资源泄露风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hns_roce 驱动分配 HEM（Hop Table Entry Management）内存失败时的异常回滚路径中，使用了通用的 `kfree` 接口释放内存。这导致 HEM 结构体中关联的 DMA 缓冲区资源未被正确释放，造成内存资源泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `hns_roce_alloc_hem` 的错误处理标签 `fail` 下，代码直接调用了 `kfree(hem)`。由于 HEM 结构体的分配是通过 `hns_roce_alloc_hem` 进行的，该结构体内部可能包含了需要特殊处理的资源（如 DMA 映射内存）。释放时应使用对应的 `hns_roce_free_hem` 接口以确保所有关联资源被正确清理，直接使用 `kfree` 导致了接口使用不匹配。
+
+#解决方案
+修正异常退出路径中的内存释放接口调用，将 `kfree(hem)` 修改为 `hns_roce_free_hem(hr_dev, hem)`，确保 HEM 结构体及其关联资源被完整释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d7d7f131569485a9b6737b85cd8144196135b1a1

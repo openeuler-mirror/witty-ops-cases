@@ -1,0 +1,24 @@
+#标题
+fec: PTP周期输出sysfs接口通道配置失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在FEC（Fast Ethernet Controller）驱动中配置PTP PPS（Pulse Per Second）周期输出功能时，通过sysfs接口配置通道1、2或3（逻辑索引）时失败。由于驱动内部存在错误的索引校验逻辑，导致除默认通道外的其他通道无法正常使用，相关配置操作被拒绝。
+
+#主要错误日志
+未知
+
+#问题根因
+在实现PPS通道配置功能时，驱动代码逻辑存在冲突：
+1. sysfs接口使用逻辑通道索引，并限制索引值小于`n_per_out`（该值被设置为1）。
+2. 驱动内部将周期输出的通道索引配置为硬件通道号。
+3. `fec_ptp_enable()`函数中包含一个冗余校验，它会检查请求的通道索引（`rq->perout.index`）是否与驱动内部的硬件通道号（`fep->pps_channel`）一致。
+4. 当用户通过sysfs尝试使用非默认通道时，逻辑索引与硬件通道号不一致，触发`-EOPNOTSUPP`错误返回，导致通道1..3实际上无法从sysfs使用。
+
+#解决方案
+移除`fec_ptp_enable()`函数中对`rq->perout.index != fep->pps_channel`的冗余检查，从而允许sysfs接口正常配置和使用PTP周期输出通道。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/510757fcd9ad2c326a16c4e41907e26099b112cd

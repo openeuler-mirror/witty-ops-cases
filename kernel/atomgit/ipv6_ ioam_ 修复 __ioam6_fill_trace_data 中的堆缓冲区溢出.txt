@@ -1,0 +1,23 @@
+#标题
+ipv6: ioam: 修复 __ioam6_fill_trace_data 中的堆缓冲区溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统处理特制的 IPv6 IOAM（In-situ Operations, Administration, and Maintenance）数据包时，在接收路径上触发内核恐慌。攻击者可通过构造恶意数据包，导致内核堆内存（skb_shared_info）被写入约 100 字节的越界数据，造成内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__ioam6_fill_trace_data()` 函数中，内核直接信任并使用数据包头部中的 `trace->nodelen` 字段来决定写入数据的长度，而没有检查该字段与 `trace->type` 字段（指示存在哪些数据项）的一致性。
+攻击者可构造恶意数据包，将 `nodelen` 设为 0，同时设置 `type` 的位 0-21。这导致函数在分配的区域之外（约 100 字节）写入数据，覆盖了相邻的堆内存（如 `skb_shared_info`），从而引发内核崩溃。
+
+#解决方案
+1. 新增辅助函数 `ioam6_trace_compute_nodelen()`，根据 `trace->type` 字段计算出期望的 `nodelen` 值。同时修正了掩码定义 `IOAM6_MASK_SHORT_FIELDS` 以符合 RFC 9197 标准。
+2. 在发送路径（`ioam6_iptunnel.c`）中，使用该辅助函数替换原有的计算逻辑。
+3. 在接收路径（`exthdrs.c` 的 `ipv6_hop_ioam` 函数）中增加校验：如果数据包中的 `trace->nodelen` 与根据 `type` 计算出的期望值不一致，则直接丢弃数据包，防止越界写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/802137d93dd75cda59621189a036da32e2a202c5

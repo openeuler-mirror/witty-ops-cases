@@ -1,0 +1,21 @@
+#标题
+PCI: pci_alloc_child_bus 函数因 device_register 失败导致的引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PCI 子系统分配子总线（child bus）的过程中，若 `device_register` 注册失败，系统会触发 WARN_ON 警告，但随后未正确释放已初始化的设备结构体（`child->dev`），导致引用计数泄漏（reference leak）和潜在的内存泄漏。该问题通过代码审查发现。
+
+#主要错误日志
+WARNING: CPU: ... PID: ... at drivers/pci/probe.c:... pci_alloc_child_bus+0x.../0x...
+（推断：触发 `WARN_ON(ret < 0)` 警告信息）
+
+#问题根因
+在 `pci_alloc_child_bus` 函数中，调用 `device_register(&child->dev)` 失败时（返回值 ret < 0），原有代码仅调用了 `WARN_ON` 进行告警，但未调用 `put_device` 来释放设备对象。根据 `device_register` 的内核 API 规范，当注册失败时，调用者必须显式调用 `put_device` 以释放设备引用，否则会导致资源泄漏。
+
+#解决方案
+修改 `drivers/pci/probe.c` 文件中的 `pci_alloc_child_bus` 函数。在 `device_register` 调用失败时，增加 `put_device(&child->dev)` 调用以正确释放引用，并返回 NULL 指针以防止后续代码使用无效指针。具体修改为将原有的 `WARN_ON(ret < 0)` 改为条件判断 `if (WARN_ON(ret < 0))`，在条件成立时执行清理操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ee422d270b4e1f50489dccdf08badca823ab602

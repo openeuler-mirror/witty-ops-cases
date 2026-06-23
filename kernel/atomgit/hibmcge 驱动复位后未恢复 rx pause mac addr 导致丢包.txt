@@ -1,0 +1,20 @@
+#标题
+hibmcge 驱动复位后未恢复 rx pause mac addr 导致丢包
+
+#内核版本
+OLK-6.6
+
+#问题现象
+hibmcge 网卡设备发生复位后，驱动未能恢复接收暂停帧的 MAC 地址配置。导致网卡无法正确接收目的地址为驱动自身 MAC 地址的暂停帧，仅能接收目的地址为 01:80:C2:00:00:01 的暂停帧，造成流控功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+MAC 硬件默认仅支持接收目的地址为 01:80:C2:00:00:01 的暂停帧。驱动在 `.ndo_set_mac_address()` 流程中会调用 `hbg_hw_set_rx_pause_mac_addr()` 将驱动 MAC 地址设置为暂停帧目的地址，从而支持两种类型的暂停帧接收。但在设备复位流程中，代码遗漏了重新调用 `hbg_hw_set_rx_pause_mac_addr()` 恢复该配置，导致复位后该配置丢失。
+
+#解决方案
+在复位后的恢复流程函数 `hbg_restore_user_def_settings()` 中，补充调用 `hbg_hw_set_rx_pause_mac_addr()`。从 MAC 表中索引 0 处获取主机 MAC 地址，并将其重新写入硬件寄存器，确保复位后能正确接收目的地址为自身 MAC 的暂停帧。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c48dc38e81de3a5b32c2f37e3493d626e036abb0

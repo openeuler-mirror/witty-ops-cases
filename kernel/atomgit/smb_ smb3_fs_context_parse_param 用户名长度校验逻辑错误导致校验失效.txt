@@ -1,0 +1,20 @@
+#标题
+smb: smb3_fs_context_parse_param 用户名长度校验逻辑错误导致校验失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载 SMB 文件系统并传入超长用户名时，内核未按预期拦截并报错，导致无效的用户名参数可能被错误接受，可能引发后续处理逻辑的异常或内存越界风险。
+
+#主要错误日志
+- pr_warn("username too long\n"); （注：原逻辑因判断条件错误无法触发此日志）
+
+#问题根因
+在函数 `smb3_fs_context_parse_param` 中，用户名长度校验的条件判断逻辑错误。`strnlen(..., CIFS_MAX_USERNAME_LEN)` 的最大返回值为 `CIFS_MAX_USERNAME_LEN`。代码原使用 `>` 进行比较，导致该条件表达式永远为假（FALSE），使得长度校验代码块变为死代码，无法对超长用户名进行有效拦截。
+
+#解决方案
+修正 `fs/smb/client/fs_context.c` 文件中的比较运算符，将判断条件从 `strnlen(...) > CIFS_MAX_USERNAME_LEN` 修改为 `strnlen(...) == CIFS_MAX_USERNAME_LEN`，确保当用户名长度达到或超过限制时能正确触发错误处理逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a786b7b74923d75062147a6fb1b945304813068c

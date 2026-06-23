@@ -1,0 +1,20 @@
+#标题
+smb/server: smb2_open 函数中 ksmbd_file 引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 smb2_open 函数处理流程中，当调用 ksmbd_vfs_getattr() 失败时，未释放持久文件句柄的引用计数，导致 ksmbd_file 对象发生内存泄漏。随着时间推移，可能耗尽系统内存资源。
+
+#主要错误日志
+未知
+
+#问题根因
+在 smb2_open 函数的错误处理路径中，代码逻辑顺序有误。原代码在调用 ksmbd_vfs_getattr() 并判断其失败跳转到 err_out2 之前，未调用 ksmbd_put_durable_fd(fp) 释放引用计数。这意味着当 ksmbd_vfs_getattr() 返回错误时，程序直接跳转至错误处理流程，遗漏了减少引用计数的步骤，从而造成引用计数泄漏。
+
+#解决方案
+调整 ksmbd_put_durable_fd(fp) 的调用位置，将其移至 ksmbd_vfs_getattr() 调用之后、错误判断（if (rc) goto err_out2）之前。这确保了无论 ksmbd_vfs_getattr() 是否成功，之前获取的引用计数都能被正确释放，修复了内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bdfcdda46d9048a392f552e6945dcb5d6f977fc4

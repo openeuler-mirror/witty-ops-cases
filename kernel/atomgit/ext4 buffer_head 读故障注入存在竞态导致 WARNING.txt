@@ -1,0 +1,30 @@
+#标题
+ext4 buffer_head 读故障注入存在竞态导致 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 ext4 debug 进行故障注入测试时，触发内核警告。系统打印 EXT4-fs 错误信息，报告无法读取 inode bitmap，随后在 `mark_buffer_dirty` 函数中触发 `WARN_ON_ONCE`，导致内核栈追踪信息打印。
+
+#主要错误日志
+EXT4-fs error (device sda): ext4_read_inode_bitmap:201: comm fsstress: Cannot read inode bitmap - block_group = 8, inode_bitmap = 1051
+WARNING: CPU: 0 PID: 511 at fs/buffer.c:1181 mark_buffer_dirty+0x1b3/0x1d0
+
+#问题根因
+ext4 的 buffer_head 读故障注入实现存在竞态条件。buffer_head 读取完成与故障注入操作（清除 uptodate 标志）不是原子操作，导致在竞态条件下，正常使用的 buffer_head 的 uptodate 标志被错误清除。
+具体流程如下：
+1. CPU0 执行 `ext4_read_inode_bitmap` 调用 `ext4_read_bh` 读取完成。
+2. CPU1 在判断 `buffer_uptodate` 为真后返回该 buffer。
+3. CPU2 此时正在进行日志提交事务 (`jbd2_journal_commit_transaction`)，最终调用 `mark_buffer_dirty`。
+4. 此时 CPU0 执行 `ext4_simulate_fail_bh` 清除了 uptodate 标志。
+5. CPU2 在 `mark_buffer_dirty` 中检测到 `!buffer_uptodate(bh)`，触发 WARNING。
+
+#解决方案
+修改故障注入的实现方式，将故障注入逻辑提前到 buffer_head 读函数内部执行，而不是在 IO 完成后执行。具体措施如下：
+1. 为 `ext4_read_bh` 和 `ext4_read_bh_nowait` 函数增加 `simu_fail` 布尔类型参数。
+2. 在 `__ext4_read_bh` 函数内部，如果检测到需要模拟故障 (`simu_fail` 为真)，直接清除 uptodate 标志并解锁 buffer，从而避免了 IO 完成后与故障注入之间的竞态窗口。
+3. 移除原 `ext4_simulate_fail_bh` 接口及其在调用处的代码，改为在调用读函数时直接传入故障注入判断结果（如 `ext4_simulate_fail(sb, EXT4_SIM_IBITMAP_EIO)`）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd839db3f599c8ba012689674e24a22888cb337c

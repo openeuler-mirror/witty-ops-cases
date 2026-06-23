@@ -1,0 +1,26 @@
+#标题
+rnpgbe驱动在网卡Down状态下访问sysfs接口导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当网卡处于 Down 状态时，如果通过 `cat` 命令读取某些 sysfs 接口（如 `rx_ring_info`），操作系统会发生崩溃。具体表现为内核空指针解引用，触发 Oops，导致系统不可用。
+
+#主要错误日志
+[1912.135606] BUG:kernel Null pointer dereference, address: 0000000000000000
+[1912.136346] #PE :supervisor read access in kernel mode
+[1912.136886] #PE:error code(0x0000)- not-present page
+[1912.137395] PGD c08563f067 P4D c08563f067 PUD c08eee2067 PMD 0
+[1912.137907] Oops: 0000 [#1] SMP NOPTI
+[1912.138401] CPU: 19 PID: 119500 Comm: uwsqi Kdump: loaded Tainted: G
+[1912.139444] RIP: 0010:rx_ring_info_show+0xc2/0x110 [rnpgbe]
+
+#问题根因
+在网卡处于 Down 状态时，驱动程序未对 Ring Buffer 资源的有效性进行检查。此时 Ring Buffer 可能尚未分配或已被释放，相关指针为空。当用户通过 sysfs 接口（如 `rx_ring_info_show`, `tx_ring_info_show` 等）读取信息时，代码直接尝试访问这些空指针，导致内核发生空指针解引用崩溃。
+
+#解决方案
+在 sysfs 接口的 `show` 和 `store` 回调函数中增加网卡状态检查。在访问 Ring Buffer 资源前，通过 `test_bit(__RNP_DOWN, &adapter->state)` 判断网卡是否处于 Down 状态，若处于 Down 状态则直接返回，避免访问无效指针。受影响的接口包括 `rx_ring_info`, `tx_ring_info`, `rx_desc_info`, `tx_desc_info` 等。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/05c2ef31f61fac655815d2a45c1eb23ba1b90230

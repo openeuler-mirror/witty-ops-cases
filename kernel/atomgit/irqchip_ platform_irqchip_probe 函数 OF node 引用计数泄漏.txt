@@ -1,0 +1,20 @@
+#标题
+irqchip: platform_irqchip_probe 函数 OF node 引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `platform_irqchip_probe` 函数执行过程中，若 `irq_init_cb` 回调函数查找失败（返回 NULL）或父中断控制器尚未就绪（返回 `-EPROBE_DEFER`），函数会提前返回错误码。此时，先前通过 `of_irq_find_parent` 获取的设备树节点 `par_np` 的引用计数未被正确释放，导致该 OF node 引用计数泄漏。长期累积可能导致系统内存资源耗尽或设备树节点无法正常释放。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `platform_irqchip_probe` 在通过 `of_irq_find_parent()` 获取父节点 `par_np` 后，在两个错误处理分支（`irq_init_cb` 为空和父控制器未找到匹配主机）中直接返回了错误码，遗漏了对 `par_np` 执行 `of_node_put()` 操作，从而引起了引用计数泄漏。
+
+#解决方案
+使用 `__free(device_node)` 自动清理构造声明变量 `par_np`。这样当变量超出作用域（即函数返回）时，编译器会自动插入释放引用的代码，从而确保在所有返回路径（包括错误处理路径）上都能正确释放 OF node 引用，修复了手动管理遗漏的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8cbb64ef4d42845651f8e62edfa494e1dd007744

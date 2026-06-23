@@ -1,0 +1,20 @@
+#标题
+crypto: inside-secure 驱动 safexcel_xcbcmac_cra_init 内存分配失败时返回值错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核启用 `inside-secure` 加密驱动且内存紧张的场景下，`safexcel_xcbcmac_cra_init` 函数中的 `kmalloc` 分配内存失败。由于函数错误地返回了 0（成功），调用者误认为初始化成功，导致后续访问空指针引发内核 panic 或 Oops，或导致相关的加密算法注册与使用出现异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit 320406cb60b6 ("crypto: inside-secure - Replace generic aes with libaes") 将 `crypto_alloc_cipher()` 替换为 `kmalloc()`，但未正确修改返回值处理逻辑。当 `kmalloc()` 返回 NULL 时，代码使用 `PTR_ERR_OR_ZERO(NULL)` 进行判断，该宏会返回 0。但实际上内存分配已失败，此处理应返回 `-ENOMEM` 错误码。返回值错误掩盖了分配失败的事实。
+
+#解决方案
+修改 `drivers/crypto/inside-secure/safexcel_hash.c` 中 `safexcel_xcbcmac_cra_init` 函数的返回值处理逻辑。将 `return PTR_ERR_OR_ZERO(ctx->aes);` 修改为 `return ctx->aes == NULL ? -ENOMEM : 0;`，确保在 `kmalloc` 分配失败时正确返回 `-ENOMEM`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a90dbf993f5d8c62c2a66af1aa2898a0d2a527e1

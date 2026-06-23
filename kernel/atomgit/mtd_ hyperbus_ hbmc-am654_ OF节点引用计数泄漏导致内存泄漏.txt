@@ -1,0 +1,22 @@
+#标题
+mtd: hyperbus: hbmc-am654: OF节点引用计数泄漏导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 am654_hbmc_platform_driver 驱动使用过程中，若 .probe() 探测过程发生错误中途返回，或者执行 .remove() 移除设备驱动时，设备树（OF）节点的引用计数未正确递减。该故障会导致内核内存泄漏，随着设备反复绑定与解绑或探测失败重试，系统内存资源逐渐耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+在驱动代码中，`am654_hbmc_probe()` 函数通过 `of_get_next_child()` 获取了 OF 节点指针，该函数会增加节点的引用计数。然而，在 .probe() 的多个错误处理分支以及 .remove() 函数中，代码直接返回或退出，未调用 `of_node_put()` 来配对减少引用计数，导致节点引用计数泄漏。
+
+#解决方案
+修复补丁通过增加 `of_node_put()` 调用来平衡引用计数：
+1. 在 `am654_hbmc_probe()` 函数中引入 `put_node` 标签，在错误处理路径（如 `of_address_to_resource` 失败、`devm_mux_control_get` 失败、`mux_control_select` 失败以及 `devm_ioremap_resource` 失败时）跳转至该标签执行 `of_node_put(priv->hbdev.np)`。
+2. 在 `am654_hbmc_remove()` 函数末尾增加 `of_node_put(priv->hbdev.np)` 调用，确保设备移除时释放节点引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/833daeaa53aaf42fe4673fe60bc50fb46a47ba47

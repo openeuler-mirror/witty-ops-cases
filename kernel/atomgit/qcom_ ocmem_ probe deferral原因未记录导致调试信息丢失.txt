@@ -1,0 +1,20 @@
+#标题
+qcom: ocmem: probe deferral原因未记录导致调试信息丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在OCMEM驱动加载过程中，若依赖的父设备节点尚未就绪，驱动虽然能正确返回 `-EPROBE_DEFER` 进行探测延迟，但在内核日志中缺乏明确的错误记录或延迟原因说明。这导致在系统启动或驱动加载阶段，无法通过 `dmesg` 观测到具体的延迟原因，增加了系统可靠性分析与启动流程调试的难度。
+
+#主要错误日志
+- 原始日志（修复前）：`Cannot find device node %s`
+
+#问题根因
+在 `of_get_ocmem` 函数中，当 `of_find_device_by_node` 找不到对应的平台设备时，代码逻辑直接调用了 `dev_err` 打印错误信息并返回 `ERR_PTR(-EPROBE_DEFER)`。这种处理方式仅仅在当前时刻打印了日志，但没有将错误原因与 `EPROBE_DEFER` 状态进行绑定记录。根据内核驱动模型最佳实践，应当使用 `dev_err_ptr_probe` 等机制将延迟原因注册到设备系统中，以便在后续排查 `probe` 失败原因时能够追溯到具体信息，而不是单纯丢弃或仅在日志流中留下一过性记录。
+
+#解决方案
+修改 `drivers/soc/qcom/ocmem.c` 文件中的 `of_get_ocmem` 函数。将原有的 `dev_err` 与 `ERR_PTR(-EPROBE_DEFER)` 组合调用替换为 `dev_err_ptr_probe` 宏。该宏在返回延迟错误指针的同时，会自动处理错误日志的记录与延迟原因的注册，确保驱动探测延迟的原因能被内核设备核心层正确追踪与展示。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d902772fa2386fb184878731e1e46be47b78c890

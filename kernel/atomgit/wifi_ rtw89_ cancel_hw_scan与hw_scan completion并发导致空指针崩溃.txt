@@ -1,0 +1,26 @@
+#标题
+wifi: rtw89: cancel_hw_scan与hw_scan completion并发导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 WiFi 驱动 rtw89 执行硬件扫描（hw_scan）过程中，若触发取消扫描操作（cancel_hw_scan），存在并发竞争风险。当 `cancel_hw_scan` 检查通过但尚未完成处理时，`hw_scan` 完成流程并发执行，释放了扫描资源，导致 `cancel_hw_scan` 后续操作引发空指针解引用及 Use-After-Free，系统触发 Kernel Panic。
+
+#主要错误日志
+KASAN: null-ptr-deref in range [0x0000000000000088-0x000000000000008f]
+RIP: 0010:rtw89_fw_h2c_scan_offload_be+0xc33/0x13c3 [rtw89_core]
+Call Trace:
+ rtw89_hw_scan_offload+0xb5e/0xbf7 [rtw89_core]
+ rtw89_hw_scan_abort+0x58/0xb7 [rtw89_core]
+ rtw89_ops_cancel_hw_scan+0x120/0x13b [rtw89_core]
+ ieee80211_scan_cancel+0x468/0x4d0 [mac80211]
+
+#问题根因
+驱动中的 `rtwdev->scanning` 标志位原本未受互斥锁保护。`cancel_hw_scan` 函数在临界区外检查该标志位，此时若硬件扫描完成流程并发执行，清除了该标志位并调用 `ieee80211_scan_completed()` 释放了 `local->hw_scan_req`。随后 `cancel_hw_scan` 继续执行扫描终止逻辑时，访问已释放的资源，导致空指针解引用和 Use-After-Free。
+
+#解决方案
+将 `rtwdev->scanning` 标志位的检查逻辑移动到互斥锁保护的临界区内。确保在检查扫描状态和执行终止操作期间，资源不会被并发流程释放，从而消除竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7723622c7ff6add1c43601b9132d31fda3dc35a0

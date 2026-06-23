@@ -1,0 +1,20 @@
+#标题
+usb: chipidea: udc: 传输错误发生时因 IOC 未设置导致中断处理缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 USB 事务完成导致错误状态时，如果传输描述符（TD）未设置中断完成位，控制器仅设置 USBSTS 寄存器中的 UEI（USB Error Interrupt）位，而不设置 UI（USB Interrupt）位。由于驱动程序原逻辑仅检查 UI 位，导致在这种特定错误场景下未调用 `isr_tr_complete_handler()` 进行处理，进而导致传输错误无法被及时清理或上报，可能引发 USB 设备通信阻塞或状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 USBSTS 寄存器描述，UEI（USB Error Interrupt）在 USB 事务完成并产生错误时被置位。如果发生错误的 TD 设置了 IOC，则 UI 位也会被置位；但如果 IOC 未设置，则仅 UEI 被置位。驱动程序原有的中断处理逻辑仅通过 `USBi_UI & intr` 来判断是否调用 `isr_tr_complete_handler()`，遗漏了 IOC 未设置但发生传输错误（UEI 置位）的情况，导致错误处理流程未被触发。
+
+#解决方案
+修改 `drivers/usb/chipidea/udc.c` 中的中断判断逻辑，将中断状态检查条件从仅检查 `USBi_UI` 修改为检查 `USBi_UI | USBi_UEI`。即当发生传输错误中断（UEI）时，即便未设置 IOC 且 UI 未置位，也能正确触发 `isr_tr_complete_handler()` 执行后续处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e10ff8d648c8a4ce0e1f4fdb3d0713324a9d9b4

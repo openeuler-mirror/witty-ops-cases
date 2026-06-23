@@ -1,0 +1,20 @@
+#标题
+atomisp: 3A统计内存分配失败导致断言触发或内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel IPU v2 驱动中，当系统内存不足导致 `rgby_data` 内存分配失败时，驱动未进行错误检查便继续执行。该缺陷会触发 `ia_css_s3a_hmem_decode()` 函数中的 `assert(host_stats->rgby_data)` 断言失败，可能导致内核 Panic 或驱动运行异常。
+
+#主要错误日志
+assert(host_stats->rgby_data)
+
+#问题根因
+函数 `ia_css_3a_statistics_allocate()` 在使用 `kvmalloc` 分配 `rgby_data` 内存后，未检查返回值是否为空（NULL）。若分配失败，后续代码会使用空指针，从而在 `ia_css_s3a_hmem_decode()` 中触发断言或引发空指针引用。
+
+#解决方案
+在 `drivers/staging/media/atomisp/pci/sh_css_params.c` 文件的 `ia_css_3a_statistics_allocate()` 函数中，于 `kvmalloc` 调用之后增加了对 `me->rgby_data` 的非空检查。如果分配失败，直接跳转至 `err` 标签进行错误处理和资源释放，避免后续使用空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6d519c6a69864b3b040e19d1a3845715ca17d4b8

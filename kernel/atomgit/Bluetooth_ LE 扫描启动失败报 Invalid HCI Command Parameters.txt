@@ -1,0 +1,24 @@
+#标题
+Bluetooth: LE 扫描启动失败报 Invalid HCI Command Parameters
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当蓝牙控制器处于正在广播或正在发起 LE 连接的状态时，若尝试启动扩展扫描（Set Extended Scan）并配置自身地址类型为随机地址，控制器返回“Invalid HCI Command Parameters (0x12)”错误，导致扫描无法正常启动。
+
+#主要错误日志
+> HCI Event: Command Complete (0x0e) plen 4
+      LE Set Extended Scan Enable (0x08|0x0042) ncmd 1
+        Status: Invalid HCI Command Parameters (0x12)
+
+#问题根因
+在 `hci_set_random_addr_sync` 函数中，判断是否跳过更新随机地址的逻辑存在缺陷。原代码仅检查当前是否处于广播（HCI_LE_ADV）或连接状态即跳过地址设置，忽略了此时随机地址可能尚未被编程的情况。
+这导致在需要使用随机地址的场景下，地址未成功下发至控制器，但上层协议栈认为已设置，最终控制器因缺少有效的随机地址而拒绝后续的扫描启动命令。
+
+#解决方案
+修改 `net/bluetooth/hci_sync.c` 中的 `hci_set_random_addr_sync` 函数逻辑，在判断是否跳过地址更新时，增加对 `hdev->random_addr` 是否已设置的检查（即 `bacmp(&hdev->random_addr, BDADDR_ANY)`）。
+仅当随机地址已存在且控制器正忙于广播或连接时才跳过更新；若随机地址尚未设置，则强制执行地址设置操作，确保控制器拥有有效的随机地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f098d0ef0f59f280c8273b0de775833205d2624

@@ -1,0 +1,22 @@
+#标题
+rpmsg: core: fix race in driver_override_show() and use core helper
+
+#内核版本
+OLK-6.6
+
+#问题现象
+rpmsg 子系统中读取 `driver_override` sysfs 属性时，存在与写入操作的竞态条件，可能导致 Use-After-Free（释放后使用）故障。具体表现为：当 `driver_override_show` 函数正在读取字符串时，并发的 `driver_override_store` 操作可能释放该字符串内存，导致读取端访问已释放的内存地址，引发内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`driver_override_show` 函数在没有持有 `device_lock` 的情况下读取 `driver_override` 字符串，而 `driver_override_store` 函数在持有 `device_lock` 时会修改并释放该字符串。这种不同步的锁机制导致了竞态条件，使得字符串在被读取时可能已被释放，从而引发 Use-After-Free。
+
+#解决方案
+1. 移除不再适用的 `rpmsg_string_attr` 宏定义。
+2. 新增显式的 `driver_override_store` 函数，使用内核标准辅助函数 `driver_set_override` 来设置或清除 `driver_override`，该函数内部正确处理了锁和内存管理。
+3. 新增显式的 `driver_override_show` 函数，在读取操作期间加锁（`device_lock`），防止并发修改，并使用 `sysfs_emit` 安全输出数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/41bacb3fbdd69f24a6d3857c4be22287f5354dc2

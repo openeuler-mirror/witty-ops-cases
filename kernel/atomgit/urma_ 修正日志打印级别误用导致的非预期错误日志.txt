@@ -1,0 +1,24 @@
+#标题
+urma: 修正日志打印级别误用导致的非预期错误日志
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中，在 `ubcore` 模块执行正常的业务逻辑处理（如 tpid_reuse 为 false 时的导入操作、tpid_list 引用计数释放）时，内核日志中持续打印 `err` 级别的错误信息。这误导用户或运维工具认为内核发生了功能性故障或异常，实际上这是预期的代码分支逻辑或正常的引用计数处理流程。
+
+#主要错误日志
+- `active_tp_cfg tpid_reuse is false, do import_jfr_ex_old.`
+- `active_tp_cfg tpid_reuse is false, do import_jetty_ex_old.`
+- `kref_put: ref_cnt is %u`
+
+#问题根因
+开发人员在代码实现中错误地将正常的业务提示信息定义为 `ubcore_log_err` 级别。具体表现为：
+1. 在 `ubcore_import_jfr_ex` 和 `ubcore_import_jetty_ex` 函数中，当 `tpid_reuse` 为 false 时走旧逻辑路径是正常流程，不应打印错误日志。
+2. 在 `ubcore_tpid_list_kref_put` 函数中，打印引用计数值用于调试观察，并非错误异常，不应使用错误级别。
+
+#解决方案
+将相关日志打印接口从 `ubcore_log_err` 修改为 `ubcore_log_info_rl`（带速率限制的信息级别日志），以匹配其实际的业务语义，消除对监控系统的误导。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c43c84d74d3fba931d541a00384f0e109edb07fc

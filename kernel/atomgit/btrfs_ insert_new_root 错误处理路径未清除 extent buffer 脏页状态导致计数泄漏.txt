@@ -1,0 +1,20 @@
+#标题
+btrfs: insert_new_root 错误处理路径未清除 extent buffer 脏页状态导致计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Btrfs 文件系统执行插入新根节点（insert_new_root）操作时，若树修改日志（tree mod log）记录失败，内核在错误处理路径中未能正确清除已分配 extent buffer 的脏状态。此缺陷会导致 `dirty_metadata_bytes` 计数器无法正确回退调整，且相关 folios 的脏标记未移除，进而可能导致内存泄漏、文件系统状态不一致或后续事务处理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，问题根因在于 `insert_new_root()` 函数的错误处理分支中，当树修改日志操作失败（`ret < 0`）时，代码直接调用了 `btrfs_free_tree_block` 释放 extent buffer，但遗漏了调用 `btrfs_clear_buffer_dirty()` 来清除脏状态。清除脏状态是必要的步骤，用于修正 `fs_info->dirty_metadata_bytes` 计数器并移除相关 folios 的脏标记。该缺陷是在移除 `BUG_ON()` 调用（Commit f61aa7ba08ab）引入错误处理逻辑时产生的。
+
+#解决方案
+在 `insert_new_root()` 函数的错误处理路径中，即在调用 `btrfs_free_tree_block` 释放 extent buffer 之前，增加调用 `btrfs_clear_buffer_dirty(trans, c)`。此举确保在释放内存前正确清理脏页状态，修正脏元数据字节计数，避免资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1e44fef649dfc22cdf1c5abf2e298a1b7ab8e7d9

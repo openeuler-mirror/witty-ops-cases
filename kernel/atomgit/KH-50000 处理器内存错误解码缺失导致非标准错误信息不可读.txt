@@ -1,0 +1,23 @@
+#标题
+KH-50000 处理器内存错误解码缺失导致非标准错误信息不可读
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Zhaoxin KH-50000 处理器平台上，发生特定类型的内存错误时，内核日志无法输出人类可读的详细错误类型描述。部分非标准定义的内存错误（如 CRC 错误、单设备错误等）虽然被硬件上报，但缺乏相应的解码逻辑，导致运维人员无法直观判断具体的硬件故障原因。
+
+#主要错误日志
+未知
+（注：修复补丁新增了日志输出格式，推断修复后内核将打印如下日志：）
+`[推断] %s Specific error type: %d, %s\n`
+（其中包含具体的错误类型字符串，如 "correctable write CRC error" 等）
+
+#问题根因
+Zhaoxin KH-50000 处理器的部分内存错误类型不符合 UEFI 标准的内存错误分类规范。硬件通过复用 Requestor ID 字段来上报这些非标准错误，而原有内核代码中缺乏对该非标准用法的解析逻辑，导致这些特定的内存错误无法被正确解码和展示。
+
+#解决方案
+在 `drivers/firmware/efi/cper.c` 中新增针对 Zhaoxin 平台的非标准内存错误解码函数 `cper_print_mem_zx`。该函数检测 CPU 型号为 KH-50000 (x86=0x7, model=0x7b) 后，解析 `cper_sec_mem_err` 结构中的 `requestor_id` 字段，将其映射为预定义的错误类型字符串数组 `zx_mem_err_type_strs`，并通过 `pr_info` 输出详细的错误描述信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0d428cf11cc3cc90a83535a0777bec0e330e0430

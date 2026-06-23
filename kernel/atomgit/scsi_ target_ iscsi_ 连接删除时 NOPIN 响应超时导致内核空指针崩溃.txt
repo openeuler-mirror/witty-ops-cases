@@ -1,0 +1,30 @@
+#标题
+scsi: target: iscsi: 连接删除时 NOPIN 响应超时导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除 iSCSI 连接的过程中，NOPIN 响应定时器可能到期，导致内核崩溃。具体表现为：系统打印 NOPIN 响应超时日志后，触发“Kernel NULL pointer dereference”错误，调用栈显示在 `iscsit_fill_cxn_timeout_err_stats` 函数中调用 `strlcpy` 时发生崩溃。
+
+#主要错误日志
+- Did not receive response to NOPIN on CID: 0, failing connection for I_T Nexus (null),i,0x00023d000125,iqn.2017-01.com.iscsi.target,t,0x3d
+- BUG: Kernel NULL pointer dereference on read at 0x00000000
+- NIP  strlcpy+0x8/0xb0
+- LR iscsit_fill_cxn_timeout_err_stats+0x5c/0xc0 [iscsi_target_mod]
+- Call Trace:
+  - iscsit_handle_nopin_response_timeout+0xfc/0x120 [iscsi_target_mod]
+  - call_timer_fn+0x58/0x1f0
+  - run_timer_softirq+0x740/0x860
+  - __do_softirq+0x16c/0x420
+  - irq_exit+0x188/0x1c0
+  - timer_interrupt+0x184/0x410
+
+#问题根因
+在关闭连接（`iscsit_close_connection`）时，代码先停止了 nopin 响应定时器（`iscsit_stop_nopin_response_timer`），后停止 nopin 定时器（`iscsit_stop_nopin_timer`）。然而，nopin 定时器的到期处理逻辑可能会重新启动 nopin 响应定时器。因此，如果在停止 nopin 响应定时器之后、停止 nopin 定时器之前，nopin 定时器触发并重启了 nopin 响应定时器，该响应定时器就会在连接已被删除或处于不一致状态时到期，进而访问空指针导致崩溃。
+
+#解决方案
+调整 `iscsit_close_connection` 函数中两个定时器的停止顺序：先停止 nopin 定时器（`iscsit_stop_nopin_timer`），再停止 nopin 响应定时器（`iscsit_stop_nopin_response_timer`）。这样可以确保在停止响应定时器之前，nopin 定时器不会再有机会重新启动它，从而避免潜在的竞态条件和随后的内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9de091938272df4c3e3824bb2a79fee6944d81ba

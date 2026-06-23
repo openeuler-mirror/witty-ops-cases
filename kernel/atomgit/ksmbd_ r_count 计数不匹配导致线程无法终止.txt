@@ -1,0 +1,20 @@
+#标题
+ksmbd: r_count 计数不匹配导致线程无法终止
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ksmbd 内核模块中的引用计数 `r_count` 出现负值，导致 ksmbd 线程无法正常终止，可能引发连接释放流程阻塞或服务停止失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb2_oplock_break_noti` 和 `smb2_lease_break_noti` 函数中，`r_count` 引用计数仅在 `op_state` 状态为 `OPLOCK_ACK_WAIT`（存在 oplock break 等待）时才进行增加，但在后续流程中会无条件执行减少操作。这导致 `r_count` 的增加与减少操作不配对，使得计数值变为负数，进而阻塞线程终止逻辑。
+
+#解决方案
+将 `ksmbd_conn_r_count_inc(conn)` 函数调用从 `if (opinfo->op_state == OPLOCK_ACK_WAIT)` 条件判断内部移至外部，确保在进行后续操作前无条件增加引用计数，从而保证引用计数的增加与减少严格配对。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6fbacb406cfa2bd9f5740c5bf6d367574a6f8e1d

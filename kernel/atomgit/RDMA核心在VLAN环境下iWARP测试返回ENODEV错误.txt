@@ -1,0 +1,20 @@
+#标题
+RDMA核心在VLAN环境下iWARP测试返回ENODEV错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在iWARP设备上进行VLAN流量测试时，`cma_validate_port()` 函数校验失败，导致连接建立过程中返回 `-ENODEV` 错误，测试无法正常进行。
+
+#主要错误日志
+未知
+
+#问题根因
+在VLAN流量场景下，`rdma_copy_src_l2_addr()` 函数总是将 `bound_if_index` 设置为真实网络设备的索引，而不是VLAN网络设备的索引。这导致后续在 `cma_validate_port()` 中进行校验时，VLAN网络设备的 `ifindex` 无法与 `bound_if_index` 匹配，从而引发 `ENODEV` 错误。底层查找函数 `rdma_find_ndev_for_src_ip_rcu` 返回了VLAN设备，而上层逻辑期望匹配的是真实设备索引。
+
+#解决方案
+在 `drivers/infiniband/core/addr.c` 的 `rdma_find_ndev_for_src_ip_rcu` 函数中增加判断逻辑：如果找到的设备是VLAN设备（`is_vlan_dev(dev)`），则通过 `vlan_dev_real_dev(dev)` 获取其对应的真实网络设备并返回，确保索引匹配的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e3e1190468792c2297a4003f0f7a97c4394286c5

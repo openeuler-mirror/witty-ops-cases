@@ -1,0 +1,21 @@
+#标题
+ip6erspan_changelink 使用错误 netns 导致 slab-use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 IFLA_NET_NS_FD 迁移（将设备移动到新的 network namespace）后，修改 ip6erspan 设备配置会触发内核崩溃。具体表现为 KASAN 报告 slab-use-after-free 错误，随后在 `unregister_netdevice_many_notify()` 函数中触发 kernel BUG（引用 LIST_POISON1）。该问题可由非特权用户通过 `unshare --user --map-root-user --net` 命令复现。
+
+#主要错误日志
+- KASAN: slab-use-after-free
+- kernel BUG at net/core/dev.c (LIST_POISON1)
+
+#问题根因
+在提交 `5e72ce3e3980` 之后，`ip6erspan_newlink()` 正确使用了 `link_net` 来解析每命名空间的 ip6gre 哈希表。然而，`ip6erspan_changelink()` 未同步修改，仍然使用 `dev_net(dev)` 获取网络命名空间。当设备通过 `IFLA_NET_NS_FD` 迁移到新的命名空间后，`dev_net(dev)` 返回的是新命名空间，而设备创建时的哈希表位于原命名空间。这导致隧道被错误地插入到新命名空间的哈希表中，原命名空间保留了一个过时的条目。当原命名空间被销毁时，内核遍历到该过时条目引发释放后使用错误。
+
+#解决方案
+修改 `ip6erspan_changelink()` 函数，使用缓存的结构体成员 `t->net` 来获取网络命名空间，而非调用 `dev_net(dev)`。这确保了在设备迁移后，仍能正确引用原始创建时的网络命名空间哈希表，修复了哈希表管理不一致的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/334bd0e8dffbe4dda2a7968182a93f10dcc925f8

@@ -1,0 +1,20 @@
+#标题
+INFTL_findwriteunit函数缺少inftl_read_oob返回值检查导致潜在逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 INFTL_findwriteunit() 函数执行过程中，当 inftl_read_oob() 调用失败时，代码未检查返回值，直接使用了未初始化或无效的 bci 数据结构中的 Status 字段。这可能导致函数进入错误的处理逻辑，无法像 INFTL_deleteblock() 那样正确跳出循环或处理错误状态，进而引发 MTD 子系统的数据一致性问题或异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 INFTL_findwriteunit() 在调用 inftl_read_oob() 读取 OOB（Out-of-Band）数据时，忽略了该函数的返回值。若读取失败，后续代码仍会错误地访问 bci 结构体中的 Status 和 Status1 字段，导致状态判断错误。对比 INFTL_deleteblock() 的实现，正确的做法应是在读取失败时进行错误处理。
+
+#解决方案
+修改 drivers/mtd/inftlcore.c 文件中的 INFTL_findwriteunit() 函数，增加对 inftl_read_oob() 返回值的检查。如果函数返回值小于 0（表示读取失败），则将 status 变量设置为 SECTOR_IGNORE，使其能正确跳出 while 循环；只有当读取成功时，才从 bci 结构中获取 status 值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/751d3e700ff540eab5a96a749844b74db7a80059

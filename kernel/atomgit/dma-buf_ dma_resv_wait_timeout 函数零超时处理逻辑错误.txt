@@ -1,0 +1,22 @@
+#标题
+dma-buf: dma_resv_wait_timeout 函数零超时处理逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用 `dma_resv_wait_timeout` 函数并将超时参数（timeout）设置为 0 时，根据文档说明，函数不应等待任何操作，若 fence 已发出信号则应直接返回 1。但实际实现中，函数会错误地等待至少一个 jiffies 的时间，导致行为与文档定义不一致，可能引起不必要的延迟。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `dma_resv_wait_timeout` 的代码实现存在逻辑缺陷。在遍历 fence 列表时，代码错误地将上一次迭代的返回值（`ret`）作为下一次迭代的超时参数传入 `dma_fence_wait_timeout`，而不是使用原始的 `timeout` 变量。这导致当 `timeout` 初始为 0 时，第一次迭代后 `ret` 变为 1，随后的迭代错误地使用了 1 作为超时值，从而引发了非预期的等待。
+
+#解决方案
+修正 `dma_resv_wait_timeout` 函数的超时处理逻辑：
+1. 在调用 `dma_fence_wait_timeout` 时，始终传入原始的 `timeout` 变量，而非上一次迭代的返回值 `ret`。
+2. 在循环中正确更新 `timeout` 变量，仅在 `timeout` 不为 0 时将其更新为剩余时间（`ret`），确保零超时情况下的返回值符合文档定义（返回 1 表示信号已发出），避免不必要的等待。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a373375600b0629e05206680bac1bff46496a927

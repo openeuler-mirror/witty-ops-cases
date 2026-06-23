@@ -1,0 +1,23 @@
+#标题
+bpf: Convert bpf_selem_unlink_map to failable
+
+#内核版本
+OLK-6.6
+
+#问题现象
+BPF 本地存储机制在并发更新或分配过程中，由于锁保护范围不足，可能导致临界区操作在执行中途失败（例如 cmpxchg 失败），从而引发状态不一致。具体表现为 `bpf_local_storage_update` 和 `bpf_local_storage_alloc` 流程中，元素链接与解链接操作未能作为原子事务执行，存在中间状态可见的风险。
+
+#主要错误日志
+未知
+
+#问题根因
+根本原因在于 `bpf_local_storage_update()` 和 `bpf_local_storage_alloc()` 中的更新操作步骤（link_map、link_storage、unlink_map）未能在持有同一个锁（`b->lock`）的情况下原子完成。部分操作（如 unlink_map）在释放锁之后进行，导致操作可能“在中间失败”，破坏了状态的完整性。此外，原有的 `bpf_selem_unlink_map` 实现不支持失败处理，无法适应后续引入 `rqspinlock` 可能导致的锁获取失败场景。
+
+#解决方案
+1. 将 `bpf_selem_unlink_map()` 函数修改为支持返回错误码的形式（failable），使其能够向上传递失败信息。
+2. 引入 `_nolock` 后缀的内部辅助函数（如 `bpf_selem_link_map_nolock` 和 `bpf_selem_unlink_map_nolock`），允许在已持有锁的上下文中直接操作。
+3. 修改 `bpf_local_storage_update()` 和 `bpf_local_storage_alloc()` 的逻辑，扩大 `b->lock` 的锁保护范围，确保元素链接与解链接的“三步更新过程”在锁内原子执行，防止操作中途失败导致的不一致。
+4. 移除不再需要的 `selem_linked_to_map_lockless()` 检查，因为在常见路径下操作均在锁保护下进行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/499c90ae60d8b0f16426c74babc8756cca9152db

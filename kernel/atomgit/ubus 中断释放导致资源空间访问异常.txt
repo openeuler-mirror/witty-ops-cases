@@ -1,0 +1,25 @@
+#标题
+ubus 中断释放导致资源空间访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在释放 ubus 中断时，若资源空间不可访问，会导致系统异常。具体表现为中断释放流程中访问无效地址或触发 WARNING。
+
+#主要错误日志
+[推断] 内核日志中可能出现如下调用栈或警告：
+WARNING: CPU: ... PID: ... at drivers/ub/ubus/msi/msi.c:... ub_int_type2_clear_msg
+
+#问题根因
+在中断释放（clear_msg）和禁用流程中，代码逻辑存在缺陷：
+1. `ub_int_type2_clear_msg` 函数中存在对已释放或不可访问地址空间的访问操作，且原有清除逻辑未正确处理中断索引与掩码位的保留。
+2. `ub_disable_intr` 函数缺少对地址描述表的清理逻辑，导致资源残留或访问异常。
+
+#解决方案
+1. 修改 `ub_int_type2_clear_msg` 函数，移除对不可访问地址空间的操作，并在清理中断索引时保留掩码位，避免错误访问。
+2. 修改 `ub_int_type2_mask` 和 `ub_int_type2_unmask_irq` 函数，调整寄存器读写逻辑，直接设置或写入地址索引值，不再依赖读取-修改-写入（RMW）模式。
+3. 在 `ub_disable_intr` 函数中增加遍历清理所有地址描述表项的逻辑，确保资源彻底释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6fb61e4fb48c42edc56605d6e186e28e67628502

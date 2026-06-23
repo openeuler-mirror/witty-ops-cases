@@ -1,0 +1,25 @@
+#标题
+rbd: device_add_disk() 失败导致释放流程错误引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在映射 RBD 镜像时，若 `device_add_disk()` 步骤失败（例如通过故障注入模拟），内核会触发通用保护错误或空指针解引用，导致主机崩溃。
+
+#主要错误日志
+Oops: general protection fault, probably for non-canonical address 0xdffffc0000000000: 0000 [#1] SMP KASAN NOPTI
+KASAN: null-ptr-deref in range [0x0000000000000000-0x0000000000000007]
+RIP: 0010:__blk_mq_free_map_and_rqs+0x8c/0x240
+Call Trace:
+ blk_mq_free_tag_set+0x77/0x460
+ do_rbd_add+0x1446/0x2b80
+
+#问题根因
+在 `do_rbd_add()` 函数中，设备通过 `device_add()` 发布后，若后续的 `device_add_disk()` 调用失败，错误处理路径直接调用 `rbd_free_disk()` 进行清理，随后又跳转执行 `rbd_dev_device_release()`。这导致 `rbd_free_disk()` 被重复调用，破坏了 blk-mq 的清理流程，在 `__blk_mq_free_map_and_rqs()` 中触发了空指针解引用。
+
+#解决方案
+修改错误处理路径，当 `device_add_disk()` 在 `device_add()` 成功后失败时，先调用 `device_del()` 从设备层级中移除设备，确保拆除顺序与正常移除流程一致，避免通过错误的路径重复进入磁盘清理逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ed660964edd283a0dc43e673e7bcee799615bfe

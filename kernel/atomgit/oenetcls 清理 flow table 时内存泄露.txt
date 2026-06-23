@@ -1,0 +1,21 @@
+#标题
+oenetcls 清理 flow table 时内存泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 flow table 清理操作（如删除设备或队列）时，发生内存泄露。由于代码逻辑错误，导致仅有最后一个遍历到的 flow table 对象被释放，其余对象的内存未被正确回收。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `oecls_dev_flow_table_cleanup` 函数中，锁的保护范围过大，且 `call_rcu` 调用位于循环外部。
+原代码逻辑在持有自旋锁的情况下遍历所有队列，但在循环结束后才执行 `call_rcu`。这导致 `dtb` 指针在每次循环中被覆盖，最终只有最后一个被遍历到的 `dtb` 对象被释放，之前遍历过的对象指针丢失，造成内存泄露。
+
+#解决方案
+缩小自旋锁 `oecls_dev_flow_lock` 的保护范围，将锁的获取和释放操作移入循环内部。在循环内部，每次获取到 `dtb` 指针后立即判断并调用 `call_rcu` 进行释放，确保每个非空的 flow table 对象都能被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d42aa266a7802ce02afb3166982b41b23e0de6d5

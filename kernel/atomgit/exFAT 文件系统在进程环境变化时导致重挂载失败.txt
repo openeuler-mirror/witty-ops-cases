@@ -1,0 +1,20 @@
+#标题
+exFAT 文件系统在进程环境变化时导致重挂载失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+exFAT 文件系统执行 remount（重新挂载）操作时报错失败。当执行 mount 和 remount 操作的进程 umask 值不同时，触发了该故障，导致无法完成重挂载请求。同时，进程的 uid 和 gid 在不同环境下也可能发生类似变化，导致挂载选项被意外修改。
+
+#主要错误日志
+未知
+
+#问题根因
+在初始化文件系统上下文（`exfat_init_fs_context`）时，代码无差别地使用了当前进程的 `current_uid()`、`current_gid()` 以及 `current->fs->umask` 来设置文件系统的 `fs_uid`、`fs_gid`、`fs_fmask` 和 `fs_dmask`。对于 remount 操作（`FS_CONTEXT_FOR_RECONFIGURE`），这会导致选项被重置为当前调用进程的环境参数，而非保留初始挂载时的参数。当调用 remount 的进程环境（如 umask）与初始挂载进程不一致时，导致挂载选项检测失败或配置错误，从而引发 remount 失败。
+
+#解决方案
+在 `exfat_init_fs_context` 函数中增加对重挂载场景的判断。如果检测到 `fc->purpose` 为 `FS_CONTEXT_FOR_RECONFIGURE`，则从现有的超级块（`super_block`）中继承原有的挂载选项（`fs_uid`、`fs_gid`、`fs_fmask`、`fs_dmask`），而不是从当前进程中重新获取，确保 remount 操作保留原有的权限与属性配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9b881bf6ed4a51611f9c2e788b68184d1e4c58c8

@@ -1,0 +1,20 @@
+#标题
+md: 修复 is_mddev_idle 中不必要的溢出处理改动导致的回归
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中触发 UBSAN（Undefined Behavior Sanitizer）警告，提示在 `is_mddev_idle` 函数计算 `curr_events` 时发生溢出。除此之外，该溢出不会引起任何功能性异常或系统崩溃，系统运行状态正常。
+
+#主要错误日志
+UBSAN: overflow in is_mddev_idle（推断：基于 Commit 中提到的 "except for a UBSAN warning"）
+
+#问题根因
+此前为了修复 `is_mddev_idle` 中的溢出问题，将相关变量类型从 `int` 和 `atomic_t` 扩展为 `long long` 和 `atomic64_t`。然而，从 gendisk 层面看，使用 64 位来记录 `sync_io` 是不必要的。虽然原代码存在溢出风险，但该溢出不会造成功能性影响，仅触发 UBSAN 警告。修复溢出引入了额外的计算和检查开销，属于过度修复。
+
+#解决方案
+回退提交 3f9f231236ce7e48780d8a4f1f8cb9fae2df1e4e，恢复使用 32 位整型（`int` 和 `atomic_t`）处理 `sync_io` 和 `curr_events`。接受理论上存在的溢出行为，以避免引入不必要的计算开销。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b3a8a697ad407ccc8eb53153a3cafb191e7a0fea

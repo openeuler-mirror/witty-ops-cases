@@ -1,0 +1,20 @@
+#标题
+selftests/seccomp: arm64兼容模式下syscall_restart测试用例失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 设备运行 32 位兼容模式（arm compat）进行内核自测试时，`selftests/seccomp` 中的 `syscall_restart` 测试用例执行失败。测试程序尝试区分原生 ARM 模式与 ARM64 兼容模式以处理 ABI 差异时，错误地将 ARM64 兼容模式识别为原生 ARM 模式，导致断言失败。
+
+#主要错误日志
+未知
+
+#问题根因
+ARM 与 ARM64 兼容模式之间的系统调用 ABI 存在不一致性，导致 `syscall_restart` 测试需要针对不同模式进行逻辑适配。原有的适配逻辑仅通过检查 `utsbuf.machine` 字段的前三个字符是否为 "arm" 来判断是否为原生 ARM 模式。然而，ARM64 设备在兼容模式下运行时，`machine` 字段可能报告为 "armv8l" 或 "armv8b"，其前三个字符也是 "arm"。这导致逻辑误判，错误地对 ARM64 兼容模式应用了原生 ARM 的处理路径，从而引发测试失败。
+
+#解决方案
+修改 `tools/testing/selftests/seccomp/seccomp_bpf.c` 中的判断逻辑，在检查 `machine` 字段前缀为 "arm" 的基础上，增加额外的排除条件：确保 `machine` 字段不等于 "armv8l" 且不等于 "armv8b"。通过增加对 "armv8l" 和 "armv8b" 的校验，确保该分支逻辑仅在原生 ARM 模式下生效，而在 ARM64 兼容模式下跳过，从而正确处理不同架构下的 ABI 差异。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f306c3c3eff6af690b7869a9fc8704d7f25ea82b

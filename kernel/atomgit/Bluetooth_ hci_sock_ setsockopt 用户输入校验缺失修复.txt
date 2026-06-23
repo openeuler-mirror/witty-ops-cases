@@ -1,0 +1,20 @@
+#标题
+Bluetooth: hci_sock: setsockopt 用户输入校验缺失修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用蓝牙套接字的 setsockopt 系统调用时（如设置 HCI_DATA_DIR、HCI_TIME_STAMP、HCI_FILTER 或 BT_SND/RCVBUF 等选项），若用户传入的数据长度小于内核预期的结构体大小，内核未对用户输入长度进行有效性校验直接进行内存拷贝，可能导致内核读取到未初始化的栈内存或访问非法内存，进而引发信息泄露或内核异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hci_sock_setsockopt_old` 和 `hci_sock_setsockopt` 函数中，处理多个 socket 选项时，代码直接使用 `copy_from_sockptr` 拷贝用户数据，却未使用传入的 `len` 参数校验用户提供的缓冲区长度是否足够。这使得内核可能读取超出用户实际提供数据范围的内存。
+
+#解决方案
+使用封装好的 `bt_copy_from_sockptr` 函数替换原有的 `copy_from_sockptr` 调用。该函数内部会先检查用户传入的 `len` 是否小于目标结构体的大小，如果小于则返回 `-EINVAL`，从而确保在拷贝前校验用户输入长度的合法性，防止越界读取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d65774293a93e5771e19f282e5568b8a52f56e35

@@ -1,0 +1,35 @@
+#标题
+urma: 修复 JFC/JFS/JFR 对象生命周期与哈希表管理顺序错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 URMA（User Space Remote Memory Access）模块中，JFC（Jetty File Context）、JFS（Jetty File Sender）、JFR（Jetty File Receiver）对象在创建（alloc）阶段即加入哈希表，但在激活前若被删除或配置检查未通过，会导致对象状态管理混乱。具体表现为：
+1. 在 `ubcore_set_jfr_opt` 函数中使用了错误的枚举值 `UBCORE_JFS_BIND_JFC` 来处理 JFR 的绑定操作，导致逻辑错误。
+2. 对象在未激活状态下仍存在于全局哈希表中，可能在查找时被错误引用。
+3. 激活 JFS/JFR 时未检查其依赖的 JFC 是否已激活，可能导致底层驱动状态不一致。
+
+#主要错误日志
+- `ubcore_log_err("Failed to add jfc to hash_table,ret is %d.\n", free_ret);`
+- `ubcore_log_err("failed to free jfc, ret: %d, jfc_id:%u.\n", ...)`
+- `ubcore_log_err("Failed to add jfs.\n");`
+- `ubcore_log_err("jfs cfg is not supported.\n");`
+- `ubcore_log_err("jfc in jfs has not activated.\n");`
+- `ubcore_log_err("jfc in jfr has not activated.\n");`
+- `ubcore_log_err("Failed to add jfs, ret: %d.\n", ret);`
+- `ubcore_log_err("Failed to add jfr.\n");`
+
+#问题根因
+1. **生命周期管理错误**：原代码在 `alloc` 阶段将对象加入哈希表，在 `free` 阶段移除。这不符合对象“分配-激活-去激活-释放”的语义，导致未激活对象暴露在全局查找中。
+2. **参数校验缺失**：在 `active_jfs` 和 `active_jfr` 流程中，缺少对其依赖的 `jfc` 对象是否已激活的检查，违反了依赖约束。
+3. **逻辑判断 typo**：在 `ubcore_set_jfr_opt` 函数中，错误地使用了 `UBCORE_JFS_BIND_JFC` 宏来处理 JFR 的 JFC 绑定逻辑，应使用 `UBCORE_JFR_BIND_JFC`。
+
+#解决方案
+1. **调整哈希表管理时机**：将 JFC、JFS、JFR 对象加入哈希表的操作从 `alloc` 阶段移动到 `active` 阶段，将移除操作从 `free` 阶段移动到 `deactive` 阶段。确保只有激活的对象才能被查找到。
+2. **增加依赖状态检查**：在 `ubcore_active_jfs` 和 `ubcore_active_jfr` 中增加检查，确保关联的 JFC 已处于激活状态（`is_actived == true`）。
+3. **修正枚举值引用**：将 `ubcore_set_jfr_opt` 中的 `UBCORE_JFS_BIND_JFC` 替换为 `UBCORE_JFR_BIND_JFC`。
+4. **移动配置检查**：将部分配置有效性检查（如 trans_mode、jfs_cfg）移至 `active` 阶段进行，确保在激活前完成所有校验。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b24258977971010dce4d5773fb80eb6e8355cba7

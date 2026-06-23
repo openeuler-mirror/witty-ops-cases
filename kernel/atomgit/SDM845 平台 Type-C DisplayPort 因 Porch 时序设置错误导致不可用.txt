@@ -1,0 +1,22 @@
+#标题
+SDM845 平台 Type-C DisplayPort 因 Porch 时序设置错误导致不可用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SDM845 平台的 Type-C DisplayPort 功能不可用，显示异常。
+
+#主要错误日志
+未知
+
+#问题根因
+代码逻辑中对 DP/EDP 的 Porch 时序调整（h_front_porch/v_front_porch 清零并累加到 back_porch）本意是为了对齐右下角，但该逻辑被错误地应用到了所有 DP 接口。
+对于 SDM845 硬件，此 Porch 变更会导致 DisplayPort 功能失效（同时也会引起 HDMI 撕裂问题）。根本原因是逻辑判断条件不完整，未排除 SDM845 这类不支持该时序调整的特殊情况。
+
+#解决方案
+修改 `dpu_encoder_phys_vid.c` 中的逻辑，引入 `wide_bus_en` 标志位作为判断条件。
+原逻辑仅判断接口类型为 `INTF_DP` 即执行时序偏移；修复后，只有当接口类型为 `INTF_DP` 且 `wide_bus_en` 使能时才执行 Porch 时序偏移操作。这确保了 SDM845 等不涉及 widebus 配置的场景不会触发错误的时序计算，从而修复 DisplayPort 不可用的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/024d490d59ce9b57a0152eabf9db15aade27eff7

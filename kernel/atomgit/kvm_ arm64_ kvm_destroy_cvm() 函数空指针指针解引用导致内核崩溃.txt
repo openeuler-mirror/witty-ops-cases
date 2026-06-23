@@ -1,0 +1,20 @@
+#标题
+kvm: arm64: kvm_destroy_cvm() 函数空指针指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 KVM 环境下，当触发 CVM（Confidential Virtual Machine）销毁流程时，若存在 timer early inject 场景，内核可能发生 NULL 指针解引用，导致宿主机内核崩溃或不可预见的异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `kvm_destroy_cvm()` 函数入口处，原有代码仅检查了 `cvm` 指针是否为空，但未检查当前虚拟机是否为 Realm 类型。在某些特定场景下（如 timer early inject），非 Realm 实例调用该函数时，逻辑判断不完整导致后续代码路径访问了无效的 `cvm` 指针，从而触发空指针解引用。
+
+#解决方案
+在 `arch/arm64/kvm/virtcca_cvm.c` 文件的 `kvm_destroy_cvm()` 函数中，增加对 `kvm_is_realm(kvm)` 的判断。修改后的逻辑在函数入口处同时检查 `!kvm_is_realm(kvm)` 和 `!cvm`，若任一条件满足则直接返回，避免对非 Realm 实例或空指针进行后续处理，从而修复空指针解引用问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/521fd085be9d75c5b984b3bbbbb999b289c6594a

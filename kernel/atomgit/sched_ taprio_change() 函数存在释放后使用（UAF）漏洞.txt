@@ -1,0 +1,20 @@
+#标题
+sched: taprio_change() 函数存在释放后使用（UAF）漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `taprio_change()` 函数时，由于调度切换或移除操作，`admin` 指针可能变为悬空指针，导致释放后使用。该问题可被 KASAN（Kernel Address Sanitizer）检测到，可能引发内核崩溃或内存损坏。
+
+#主要错误日志
+KASAN: use-after-free detected
+
+#问题根因
+在 `taprio_change()` 函数中，`admin` 指针可能因为 `advance_sched()` 导致的调度切换或移除而变为悬空指针。现有代码中由 `q->current_entry_lock` 保护的关键区域太小，无法防止此类场景发生，从而导致 UAF 问题。
+
+#解决方案
+修改 `net/sched/sch_taprio.c` 文件中的 `taprio_change()` 函数。将原本的 `rcu_assign_pointer()` 替换为 `rcu_replace_pointer()`。此举可以在尝试安排释放内存之前立即更新 `admin` 指针，从而正确处理旧指针的引用计数与生命周期，避免释放后使用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9ec2f82236c203a6bcccbf8f298a59d069bad229

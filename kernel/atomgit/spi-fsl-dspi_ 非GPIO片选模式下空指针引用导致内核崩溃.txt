@@ -1,0 +1,23 @@
+#标题
+spi-fsl-dspi: 非GPIO片选模式下空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LS1046A 等硬件平台上，当 SPI 设备未配置 GPIO 作为片选时，加载或使用 spi-fsl-dspi 驱动过程中触发内核空指针引用，导致系统崩溃。
+
+#主要错误日志
+[    4.251960] Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
+[    4.308805] Internal error: Oops: 0000000096000004 [#1] PREEMPT SMP
+[    4.339794] pc : gpiod_direction_output+0x34/0x5c
+[    4.435771]  dspi_setup+0x220/0x334
+
+#问题根因
+在 `dspi_setup` 函数中，代码直接调用 `spi_get_csgpiod(spi, 0)` 获取 GPIO 描述符，并在未检查返回值是否为 NULL 的情况下将其传递给 `gpiod_direction_output` 函数。当 SPI 设备未使用 GPIO 片选时，`spi_get_csgpiod` 返回 NULL，导致传入空指针引发崩溃。
+
+#解决方案
+在调用 `gpiod_direction_output` 前增加对 `spi_get_csgpiod` 返回值的校验。定义中间变量 `gpio_cs` 接收返回值，只有当 `gpio_cs` 非 NULL 时才执行 GPIO 方向设置操作，从而避免空指针传递。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/10077d49b163c21bb395145d1e86cd11097cabe9

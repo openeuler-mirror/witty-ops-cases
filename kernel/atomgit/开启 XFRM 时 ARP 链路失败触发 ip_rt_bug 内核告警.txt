@@ -1,0 +1,29 @@
+#标题
+开启 XFRM 时 ARP 链路失败触发 ip_rt_bug 内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 XFRM（IPsec）策略的环境中，当发生 ARP 链路失败（arp link failure）时，内核会触发 `ip_rt_bug`。具体表现为执行特定脚本添加 XFRM 策略并进行网络连通性测试（如 ping 一个不可达 IP）时，系统触发 WARNING，导致内核栈回溯。
+
+#主要错误日志
+WARNING: CPU: 0 PID: 0 at net/ipv4/route.c:1241 ip_rt_bug+0x14/0x20
+RIP: 0010:ip_rt_bug+0x14/0x20
+Call Trace:
+ <IRQ>
+ ip_send_skb+0x14/0x40
+ __icmp_send+0x42d/0x6a0
+ ipv4_link_failure+0xe2/0x1d0
+ arp_error_report+0x3c/0x50
+ neigh_invalidate+0x8d/0x100
+ neigh_timer_handler+0x2e1/0x330
+
+#问题根因
+`icmp_route_lookup()` 函数在处理本地生成数据包触发的 ICMP 错误消息时，逻辑存在缺陷。当启用 XFRM 对 ICMP 流量进行重查找（relookup）时，如果重查找后的路由对象（dst）的输出接口被错误地设置为 `ip_rt_bug`（原本应为有效的输出路由），会导致后续发送 ICMP 目的不可达消息时触发 BUG。根本原因是对于本地生成的数据包，其路由出口设备通常是 loopback（回环接口），在 XFRM 重查找校验时处理不当，错误地将 input 路由设置给了 skb。
+
+#解决方案
+在 `icmp_route_lookup()` 函数中增加判断逻辑：在进行 ICMP 重查找后，检查目的地址是否为本地地址（RTN_LOCAL）。如果是本地生成的数据包（目的地址为本地），则跳过后续可能导致错误路由设置的重查找校验流程，直接返回有效的路由，从而避免触发 `ip_rt_bug`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a25607371d028a9741507893ced90baf506baec6

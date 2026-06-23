@@ -1,0 +1,20 @@
+#标题
+bpf, ktls: 使用 bpf_msg_pop_data() 导致数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ktls 发送数据时，若通过 socket 策略调用了 `bpf_msg_pop_data()` 减少了明文数据长度，会导致发送端传输包含未初始化数据的缓冲区。接收端在解析 TLS Record 时会因此报错，因为未初始化的字节被追加到了完整的 "Application Data" 数据包之后。
+
+#主要错误日志
+未知
+
+#问题根因
+发送明文数据时，系统最初计算了对应的密文长度。然而，当后续通过 socket 策略减少了明文数据长度时（例如执行 `bpf_msg_pop_data()`），未重新计算对应的密文长度。这导致密文传输阶段发送了多余的、未初始化的数据。
+
+#解决方案
+在 `bpf_exec_tx_verdict` 函数中增加判断逻辑，若检测到 `delta` 值大于 0（表明执行了 `bpf_msg_pop_data()` 导致明文数据大小减少），则调用 `sk_msg_trim()` 函数相应地缩减密文数据的长度，确保密文长度与明文缩减后的长度保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58c1d8ca0a0cc50896a34b93d9196a6bab8aeeeb

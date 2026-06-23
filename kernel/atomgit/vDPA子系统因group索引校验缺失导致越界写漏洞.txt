@@ -1,0 +1,23 @@
+#标题
+vDPA子系统因group索引校验缺失导致越界写漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在vDPA（virtio data path acceleration）子系统处理`VHOST_VDPA_SET_GROUP_ASID` ioctl命令时，若用户空间传入的group索引值等于设备支持的group数量（`ngroups`），将导致内核发生越界写。该漏洞可能触发内核崩溃、内存破坏或权限提升。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于驱动层的边界检查不一致与缺失：
+1. 原代码将group边界检查分散在各底层驱动（如 `mlx5_vdpa`、`vdpa_sim`）中，且 `vdpa_sim` 驱动存在判断逻辑错误，使用了 `>` 而非 `>=`，导致当 `group == ngroups` 时未拦截非法输入。
+2. 该合法的 `group` 值后续被用于数组索引操作（如 `mvdev->group2asid[group]` 或 `vdpasim->iommu[asid]` 相关逻辑），造成越界写。
+
+#解决方案
+将边界检查逻辑从底层驱动（`mlx5_vdpa`, `vdpa_sim`）上移至通用 vDPA 层（`vhost_vdpa.c`）。
+在 `vhost_vdpa_vring_ioctl` 函数处理 `VHOST_VDPA_SET_GROUP_ASID` 分支时，增加对 group 索引（`idx`）的判断：若 `idx >= vdpa->ngroups` 则直接返回 `-EINVAL`。此修改消除了驱动层重复检查的遗漏风险，统一了安全策略。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a1d5ba76c9d1041fcfe7cce36e57b30e6fe3babe

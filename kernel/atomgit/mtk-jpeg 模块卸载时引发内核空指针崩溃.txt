@@ -1,0 +1,34 @@
+#标题
+mtk-jpeg 模块卸载时引发内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 mtk-jpeg 模块时，内核触发空指针解引用，导致调用栈回溯并引发内核 panic。具体表现为 modprobe 进程在执行 `destroy_workqueue` 时无法处理内核分页请求。
+
+#主要错误日志
+[  677.862514] Unable to handle kernel paging request at virtual address dfff800000000023
+[  677.863633] KASAN: null-ptr-deref in range [0x0000000000000118-0x000000000000011f]
+[  677.882838] pc : destroy_workqueue+0x3c/0x770
+[  677.883413] lr : mtk_jpegdec_destroy_workqueue+0x70/0x88 [mtk_jpeg_dec_hw]
+[  677.895677]  devm_action_release+0x50/0x90
+[  677.896211]  release_nodes+0xe8/0x170
+[  677.896688]  devres_release_all+0xf8/0x178
+[  677.897219]  device_unbind_cleanup+0x24/0x170
+
+#问题根因
+根据 Commit 描述，该问题引入于 commit 09aea13ecf6f ("media: mtk-jpeg: refactor some variables")。
+根本原因在于 workqueue 的生命周期管理位置错误：
+1. 在问题代码中，`devm_add_action_or_reset` 被错误地放置在 `mtk_jpeg_dec_hw.c` 的子设备探测流程中，绑定的是子设备的 `pdev->dev`。
+2. 当模块卸载或设备解绑时，子设备先于主设备被移除，触发 `devres_release_all` 释放资源。
+3. 此时主设备指针 `master_dev->workqueue` 仍被持有，但 workqueue 资源已被提前释放或相关上下文已不可用，导致后续主设备尝试销毁 workqueue 时访问了无效地址，触发 KASAN 报告的 null-ptr-deref。
+
+#解决方案
+将 workqueue 的销毁逻辑从子设备驱动 (`mtk_jpeg_dec_hw.c`) 移动到核心驱动 (`mtk_jpeg_core.c`) 中。
+1. 在 `mtk_jpeg_core.c` 中新增 `mtk_jpeg_destroy_workqueue` 辅助函数。
+2. 在主设备的 probe 流程中，成功创建 workqueue 后，立即调用 `devm_add_action_or_reset` 将该 workqueue 的销毁动作注册到主设备的资源管理中。
+3. 删除 `mtk_jpeg_dec_hw.c` 中原有的 workqueue 资源注册代码，确保 workqueue 的生命周期与主设备保持一致，避免提前释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c1f4f23463fec4ab1cb4af5fe1bdb9b2b11296e

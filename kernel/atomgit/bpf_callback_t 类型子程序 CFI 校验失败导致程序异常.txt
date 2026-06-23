@@ -1,0 +1,24 @@
+#标题
+bpf_callback_t 类型子程序 CFI 校验失败导致程序异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CFI（控制流完整性）保护的 x86 架构下，BPF 程序中调用特定子程序时触发 CFI 校验失败。具体表现为运行包含 `bpf_for_each_map_elem` 等回调机制的 BPF 程序（如 `bloom_filter_bench.c`）时，系统检测到控制流完整性错误，可能导致内核 panic 或程序异常终止。
+
+#主要错误日志
+推断：内核日志中出现 CFI failure 相关的打印（通常包含指令指针地址和预期的 hash 值），例如：
+`Kernel panic - not syncing: CFI failure`
+
+#问题根因
+BPF 子程序预期的函数签名类型为 `bpf_callback_t`，但在 JIT 编译生成代码时，错误地使用了主 BPF 程序对应的 `bpf_func_t` 类型的 CFI Hash 值进行校验。由于类型签名不匹配，导致生成的 CFI Hash 不一致，进而引发 CFI 机制误报。
+
+#解决方案
+引入专门的 `cfi_bpf_subprog_hash` 变量用于存储 `bpf_callback_t` 类型的 CFI Hash。修改 BPF JIT 编译逻辑，根据当前是否为子程序使用对应的 Hash 值：
+1. 在汇编代码中新增 `cfi_bpf_subprog_hash` 定义，基于 `__bpf_callback_fn` 生成类型 ID。
+2. 修改 `emit_cfi`、`emit_fineibt` 和 `emit_kcfi` 函数，增加 `is_subprog` 参数判断。
+3. 对于子程序，使用 `cfi_bpf_subprog_hash` 进行 CFI 校验指令的生成，确保类型匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1099d6c05985a1bd0c8b2eae01484b82e44a61dd

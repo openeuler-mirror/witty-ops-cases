@@ -1,0 +1,20 @@
+#标题
+KVM SVM CSV3 虚拟机启动失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统配置大量 CMA 内存（例如占系统内存 50%）且通过设备直通方式启动虚拟机时，由于并发长期锁页（longterm pin）导致页面引用计数异常，最终导致虚拟机启动失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 CSV3 虚拟机启动过程中，`pin_user_pages_remote()` 和 `pin_user_pages_fast()` 可能并发锁定同一个页面。`pin_user_pages_remote()` 会因 `FOLL_LONGTERM` 标志尝试将页面从 CMA 区域迁移到非 CMA 区域，但并发执行导致页面引用计数不符合预期，致使迁移失败，进而导致虚拟机启动失败。
+
+#解决方案
+在 `csv3_pin_shared_memory` 函数中，使用 `mmap_write_lock/unlock()` 对页表操作进行加锁，序列化 `pin_user_pages_remote()` 和 `pin_user_pages_fast()` 的执行过程。同时将 `pin_user_pages_fast()` 替换为 `pin_user_pages()` 以配合写锁机制，解决并发导致的页面引用计数异常问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c8811e997588d2532155467eedf1b5b277413c49

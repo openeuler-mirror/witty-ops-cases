@@ -1,0 +1,20 @@
+#标题
+netconsole: 空字符串处理不当导致 trim_newline 发生越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户空间向 netconsole 的 configfs 接口（如 `dev_name_store` 或 `userdatum_value_store`）写入空字符串（例如 `write(fd, "\0", 1)`）时，内核在 `trim_newline` 函数中触发越界访问。该访问属于未定义行为，具体表现为读取（并可能在特定条件下写入）缓冲区前一个字节的位置。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `trim_newline()` 在计算字符串长度 `len = strnlen(s, maxlen)` 后，未检查 `len` 是否为 0 便直接访问 `s[len - 1]`。当传入字符串为空（`len` 为 0）时，`len - 1` 发生下溢（变为 `size_t` 最大值），导致访问缓冲区之外的内存地址。
+
+#解决方案
+在 `trim_newline` 函数中计算长度后，增加对 `len` 的非零判断。若长度为 0 则直接返回，避免后续的越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c0ca7aaa3a802e1d9505cd12ee0cf069f84b9dfc

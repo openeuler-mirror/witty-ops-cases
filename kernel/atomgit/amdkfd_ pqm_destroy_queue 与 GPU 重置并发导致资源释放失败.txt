@@ -1,0 +1,21 @@
+#标题
+amdkfd: pqm_destroy_queue 与 GPU 重置并发导致资源释放失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 GPU 执行重置操作期间，若用户进程调用 `pqm_destroy_queue` 销毁队列，销毁操作会失败。此时内核未正确清理队列资源，导致该队列残留于 `process_queue_list` 链表中且相关内存未释放，可能引发内存泄漏或后续队列管理异常。
+
+#主要错误日志
+[推断] 根据代码逻辑，故障发生时会打印如下错误日志：
+Pasid 0x%x destroy queue %d failed, ret -5
+
+#问题根因
+当 GPU 处于重置状态时，底层 `destroy_queue` 操作会返回 `-EIO` 错误码。`pqm_destroy_queue` 函数原有的错误处理逻辑仅允许 `-ETIME` 错误码跳过资源清理步骤，而将 `-EIO` 视为其他严重错误直接跳转至 `err_destroy_queue` 标签处理。这导致在 GPU 重置场景下，函数过早退出，未能执行将队列从 `process_queue_list` 移除以及释放相关资源的操作。
+
+#解决方案
+修改 `drivers/gpu/drm/amd/amdkfd/kfd_process_queue_manager.c` 文件中的错误判断逻辑：在 `destroy_queue` 返回失败时，将 `-EIO`（即 GPU 重置状态码）与 `-ETIME` 同等对待。允许代码继续向下执行，完成队列节点从链表的删除及资源释放工作，确保在 GPU 重置并发场景下资源能被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e22c89830edc295285d7e92d0c66967ea0924650

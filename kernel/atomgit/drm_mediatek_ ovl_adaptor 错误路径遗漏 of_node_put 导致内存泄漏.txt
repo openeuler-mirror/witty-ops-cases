@@ -1,0 +1,20 @@
+#标题
+drm/mediatek: ovl_adaptor 错误路径遗漏 of_node_put 导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MT8195 ovl_adaptor 组件初始化过程中，若 `of_find_device_by_node(node)` 查找设备失败，函数直接返回 `-EPROBE_DEFER`，但未释放已获取的 device node 引用。这会导致内核内存泄漏，随着错误路径的重复触发，系统可用内存逐渐减少。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ovl_adaptor_comp_init` 函数中，使用 `for_each_child_of_node()` 遍历子节点时，若遇到错误路径（如 `of_find_device_by_node` 返回 NULL）直接退出循环，遗漏了 `of_node_put()` 调用。根据内核文档要求，退出该循环时需要减少子节点的引用计数（refcount），否则会导致引用计数泄露，从而引发内存泄漏。
+
+#解决方案
+在 `of_find_device_by_node(node)` 判断为空的错误处理分支中，增加 `of_node_put(node)` 调用，确保在返回 `-EPROBE_DEFER` 前正确释放 device node 的引用计数，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1032ae67b7b9e4379963539a56306d5c2cc3ab18

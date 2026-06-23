@@ -1,0 +1,24 @@
+#标题
+drm/v3d: MMU flush操作顺序错误导致多进程渲染竞态条件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行多个渲染进程时，由于MMU cache与TLB刷新顺序不当，触发竞态条件，导致内核IRQ触发MMU错误。
+
+#主要错误日志
+- dev_err(v3d->drm.dev, "MMUC flush wait idle failed\n");
+- dev_err(v3d->drm.dev, "MMU TLB clear wait idle failed\n");
+
+#问题根因
+MMU刷新顺序错误，原代码先执行TLB清除再刷新MMU cache。正确逻辑应先刷新MMU cache，再刷新TLB。此外，原代码未等待MMU cache刷新完成即开始TLB刷新，导致在多进程并发渲染场景下，MMU cache与TLB之间出现竞态条件。
+
+#解决方案
+调整 `v3d_mmu_flush_all` 函数中的刷新顺序与同步逻辑：
+1. 先执行MMU cache刷新（写入 `V3D_MMUC_CONTROL`），并调用 `wait_for` 等待其完成。
+2. 确认MMU cache刷新完成后，再执行TLB清除（写入 `V3D_MMU_CTL`）并等待其完成。
+此举消除了两者之间的竞态窗口，确保操作顺序符合硬件要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/301edebf90ce3bcd561d74cb72380f887cb28ef0

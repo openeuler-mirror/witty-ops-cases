@@ -1,0 +1,21 @@
+#标题
+ext4 fsmap 查询元数据映射范围判断错误导致结果异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `fsmap` (通过 `xfs_io -c fsmap` 等接口) 查询特定范围的文件系统元数据映射时，如果查询的起始范围位于某个元数据 extent 的中间（即该 extent 起始位置早于查询起始位置，但覆盖了查询范围），内核会错误地跳过该 extent 或将其标记为 "unknown"，而不是返回该 extent 的完整或部分信息。
+例如，存在一个元数据 extent [16..5127]，当执行范围查询 `fsmap -d 24 33` 时，预期应返回该 extent 的相关信息，但实际输出显示为 `unknown`，且范围显示为 `[24..39]`，导致报告不完整。修复后，查询能正确返回覆盖该范围的完整 extent 信息 `[16..5127]`。
+
+#主要错误日志
+未知
+
+#问题根因
+`ext4_getfsmap_rec_before_low_key` 函数中的比较逻辑存在缺陷。原代码使用 `rec->fmr_physical < info->gfi_low.fmr_physical` 来判断一个记录是否在查询范围之前。这导致那些起始物理块号小于查询起点、但长度延伸至查询范围内的 extent 被误判为“在查询范围之前”而被过滤掉。此外，`ext4_getfsmap_meta_helper` 中的重叠判断逻辑也存在偏差，未能正确包含部分重叠的 extent。
+
+#解决方案
+修改比较逻辑，将判断条件从“记录起始物理块号小于查询起点”修正为“记录结束物理块号小于等于查询起点”（`rec->fmr_physical + rec->fmr_length <= info->gfi_low.fmr_physical`）。同时，调整 `ext4_getfsmap_meta_helper` 中遍历元数据列表的重叠判断条件，确保凡是与查询范围 `[fs_start, fs_end]` 有交集（部分或完全重叠）的 extent 都能被正确报告，从而与 XFS 的行为保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ec936111e5abeea603bccd269647bc2d42e417e9

@@ -1,0 +1,20 @@
+#标题
+arm64: SError与SEA中断触发panic未标记硬件污染
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当ARM64系统触发同步外部中止或系统错误中断并导致panic时，内核状态未被正确标记。这导致在大规模部署环境中，难以通过内核污染标志位快速识别并关联由硬件故障导致的系统崩溃，影响故障定界与调试效率。
+
+#主要错误日志
+- SError Interrupt on CPU%d, code 0x%016lx -- %s
+
+#问题根因
+内核在处理ARM64架构的SError中断和SEA（Synchronous External Abort）异常时，缺乏对内核状态进行标记的逻辑。这两种异常通常指示潜在的硬件故障，但在触发panic前未调用add_taint函数设置TAINT_MACHINE_CHECK标志，导致无法像x86架构的机器检查异常（MCE）那样标记硬件错误状态。
+
+#解决方案
+分别在arm64_serror_panic函数和do_sea函数的执行路径中添加add_taint(TAINT_MACHINE_CHECK, LOCKDEP_STILL_OK)调用。该修改确保在系统因SError或SEA异常崩溃时，内核会被标记为“机器检查”污染状态，从而辅助运维人员识别硬件相关的崩溃原因。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f292692d2f557d6caba42644e8f9e96e6066b578

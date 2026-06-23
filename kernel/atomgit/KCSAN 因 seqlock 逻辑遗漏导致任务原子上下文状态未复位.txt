@@ -1,0 +1,25 @@
+#标题
+KCSAN 因 seqlock 逻辑遗漏导致任务原子上下文状态未复位
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核测试中发现，部分任务的 `current->kcsan_ctx.in_flat_atomic` 字段在操作后一直保持为 true 状态，直到任务退出才结束。这导致 KCSAN（内核并发卫生检查器）将该任务后续的所有内存访问都误判为原子操作，从而产生假阴性，即未能检测到实际存在的数据竞争。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fs/dcache.c` 的 `d_lookup` 函数中，使用了 seqlock 的 `read_seqbegin` 和 `read_seqretry` 机制。代码逻辑中，如果在 `read_seqbegin` 后通过 `__d_lookup` 找到了目标 dentry，则会直接 `break` 跳出循环，导致 `read_seqretry` 未被调用。
+在修复前的代码中，`read_seqbegin` 会调用 `kcsan_flat_atomic_begin()` 开启原子上下文，并假设后续一定会调用 `read_seqretry` 来执行 `kcsan_flat_atomic_end()` 结束原子上下文。然而，上述 dentry 命中提前退出的场景打破了这个假设，导致对应的 KCSAN 状态无法复位，残留的原子标记影响了后续的竞争检测逻辑。
+
+#解决方案
+移除 `read_seqbegin` 和 `read_seqretry` 中关于 KCSAN 原子上下文的错误假设与显式注解。
+具体修改为：
+1. 删除 `read_seqbegin` 中的 `kcsan_atomic_next(0)` 和 `kcsan_flat_atomic_begin()` 调用，使其直接返回 `read_seqcount_begin` 的结果。
+2. 删除 `read_seqretry` 中的 `kcsan_flat_atomic_end()` 调用，使其直接返回 `read_seqcount_retry` 的结果。
+修复后，KCSAN 将依赖于 `read_seqcount_begin/retry` 层级已有的正确注解，避免了因跳过 retry 步骤导致的状态残留问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8c62eecafc6043031bc9e1e4ed222ee7606fe39d

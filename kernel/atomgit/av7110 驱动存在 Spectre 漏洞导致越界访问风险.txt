@@ -1,0 +1,23 @@
+#标题
+av7110 驱动存在 Spectre 漏洞导致越界访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+av7110 驱动在处理 CI 消息和 ioctl 调用时，未对用于数组索引的用户可控值进行 Spectre 漏洞防护。在推测执行环境下，攻击者可以通过构造特定的参数（如 `data[2]` 或 `info->num`）诱发 CPU 推测执行越界访问 `ci_slot` 数组，导致内核内存信息泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在访问 `av7110->ci_slot` 数组时，虽然存在部分边界检查（如 `data[2] != 1 && data[2] != 2` 或 `info->num < 0 || info->num > 1`），但这些检查对于 Spectre 变种攻击（推测执行绕过）无效。CPU 的推测执行可能会忽略这些检查分支，直接使用外部可控的索引值访问数组，导致越界读取。
+
+#解决方案
+1. 引入 `<linux/nospec.h>` 头文件。
+2. 定义宏 `MAX_CI_SLOTS` 为 2，明确数组边界。
+3. 使用 `array_index_nospec()` 宏对数组索引进行加固处理。该宏会在推测执行路径上限制索引值不超过数组最大下标，从而阻止 Spectre 攻击利用推测执行读取越界内存。
+4. 将 `CI_handle` 函数和 `dvb_ca_ioctl` 函数中直接使用 `data[2] - 1` 和 `info->num` 作为下标的地方，替换为经过 `array_index_nospec()` 处理后的安全索引值 `slot_num`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b91870b13a743a0feb09a62853e70388487a86e1

@@ -1,0 +1,24 @@
+#标题
+cifs: SMB客户端 tlink 对象引用计数泄漏导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 SMB/CIFS 客户端进行文件重命名或设置/获取 ACL 操作时，若遇到特定错误路径（如内核不支持 rename 操作、路径转换分配内存失败），内核无法正确释放 `tlink` 对象的引用计数。这会导致引用计数泄漏，进而造成内存泄漏。严重时可能导致系统内存资源耗尽或相关 SMB 资源无法释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cifs_do_rename` 函数中，如果 `server->ops->rename` 为空，代码直接返回 `-ENOSYS`，未执行 `cifs_put_tlink(tlink)` 释放 tlink 引用；
+在 `get_smb2_acl_by_path` 和 `set_smb2_acl` 函数中，如果 `cifs_convert_path_to_utf16` 转换失败（返回 NULL），代码直接释放 xid 并返回错误码，同样跳过了 `cifs_put_tlink(tlink)` 的调用。
+以上三处错误处理路径均遗漏了对 tlink 引用计数的释放操作，导致引用计数泄漏。
+
+#解决方案
+修复上述三个函数的错误处理路径：
+1. 在 `cifs_do_rename` 中，将 `server->ops->rename` 为空时的直接返回改为跳转到 `do_rename_exit` 标签（该标签包含释放 tlink 的逻辑）。
+2. 在 `get_smb2_acl_by_path` 和 `set_smb2_acl` 中，添加 `put_tlink` 标签，在路径转换失败或内存分配失败时，通过 `goto put_tlink` 跳转执行 `cifs_put_tlink(tlink)`，确保 tlink 引用计数被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/87097e7e48bf4c92859c0d477a0634c831df8562

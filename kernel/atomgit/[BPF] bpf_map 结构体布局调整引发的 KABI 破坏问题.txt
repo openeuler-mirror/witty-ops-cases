@@ -1,0 +1,25 @@
+#标题
+[BPF] bpf_map 结构体布局调整引发的 KABI 破坏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核编译阶段触发 KABI（内核应用程序二进制接口）一致性检查失败，导致编译报错或警告。该问题是由于在合入上游补丁（移动 bpf map owner 及增加 cookie 对象）时，修改了 `struct bpf_map` 的成员布局，破坏了内核定义的数据结构稳定性，影响内核模块的兼容性。
+
+#主要错误日志
+未知
+
+#问题根因
+上游提交 fd1c98f0ef5c ("bpf: Move bpf map owner out of common struct") 和 12df58ad2942 ("bpf: Add cookie object to bpf maps") 对 `struct bpf_map` 结构体进行了修改：
+1. 新增了 `u64 cookie` 成员。
+2. 新增了 `spinlock_t owner_lock` 成员并重排了结构体布局。
+这些修改改变了 `struct bpf_map` 的大小和成员偏移量，直接破坏了 openEuler 内核要求的 KABI 稳定性承诺。
+
+#解决方案
+利用 openEuler 内核提供的 KABI 容错机制修复结构体布局：
+1. 使用 `KABI_FILL_HOLE` 宏将 `u64 cookie` 成员填充到结构体的空洞位置，避免破坏后续成员偏移。
+2. 使用 `KABI_BROKEN_REPLACE` 宏对 `owner` 相关的改动进行封装，在保留新功能结构体定义（包含 lock、type、jited 等成员）的同时，维持 KABI 检查工具对原结构体布局的识别，从而解决 KABI breakage 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d393973c92284b5c3355162271a7cb3bf790336f

@@ -1,0 +1,21 @@
+#标题
+drivers/base/node: register_one_node 函数存在双重释放风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在节点注册过程中，若 `device_register()` 注册失败，内核会发生双重释放。该问题可能导致系统内存管理状态异常，引发内核崩溃或不可预测的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `register_node()` 函数内部，当 `device_register()` 失败时，代码逻辑会调用 `put_device(&node->dev)`。该操作触发了 `node_device_release()` 回调，后者执行了 `kfree(to_node(dev))`，即已经释放了 node 结构体内存。
+然而，调用者 `register_one_node()` 在捕获到 `register_node()` 返回的错误后，又错误地执行了一次 `kfree(node)`。由于此时 node 指针指向的内存已被释放，导致了双重释放。
+
+#解决方案
+删除 `register_one_node()` 函数中处理 `register_node()` 错误分支时的冗余 `kfree(node)` 代码，防止对已释放的内存进行二次释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7866bbff662c7b6d59d0a5883da4c1aeeefbcd2f

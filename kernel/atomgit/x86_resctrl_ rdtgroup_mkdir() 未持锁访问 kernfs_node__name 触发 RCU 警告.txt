@@ -1,0 +1,36 @@
+#标题
+x86/resctrl: rdtgroup_mkdir() 未持锁访问 kernfs_node::name 触发 RCU 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 RDT (Resource Director Technology) 的 x86 系统上，当用户尝试创建 resctrl 控制组或监控组时，内核触发 `suspicious RCU usage` 警告。系统标记为 Tainted，调用栈显示警告源自 `rdtgroup_mkdir` 函数对 `kernfs_node::name` 的访问。
+
+#主要错误日志
+| WARNING: suspicious RCU usage
+| 6.15.0-rc1 #4465 Tainted: G            E
+| -----------------------------
+| arch/x86/kernel/cpu/resctrl/internal.h:408 suspicious rcu_dereference_check() usage!
+| [...]
+| Call Trace:
+|  <TASK>
+|  dump_stack_lvl
+|  lockdep_rcu_suspicious.cold
+|  is_mon_groups
+|  rdtgroup_mkdir
+|  kernfs_iop_mkdir
+|  vfs_mkdir
+|  do_mkdirat
+|  __x64_sys_mkdir
+|  do_syscall_64
+|  entry_SYSCALL_64_after_hwframe
+
+#问题根因
+自内核提交 `741c10b096bc` ("kernfs: Use RCU to access kernfs_node::name.") 起，访问 kernfs node name 需要通过 RCU 保护或持有相关锁。`rdtgroup_mkdir()` 函数在检查父目录是否为 "mon_groups" 时调用了 `is_mon_groups()`，该操作访问 `kernfs_node::name`，但此时 `rdtgroup_mkdir()` 尚未持有 `rdtgroup_mutex` 锁，从而触发了 RCU 使用不当的警告。
+
+#解决方案
+将 `is_mon_groups()` 的检查逻辑从 `rdtgroup_mkdir()` 函数移动到 `mkdir_rdt_prepare()` 函数内部执行。因为 `mkdir_rdt_prepare()` 会通过 `rdtgroup_kn_lock_live()` 获取 `rdtgroup_mutex` 锁，这样可以确保在访问 `kernfs_node::name` 时持有正确的锁，避免 RCU 警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0248a294bd72ef4edf5662529566969b51fd1157

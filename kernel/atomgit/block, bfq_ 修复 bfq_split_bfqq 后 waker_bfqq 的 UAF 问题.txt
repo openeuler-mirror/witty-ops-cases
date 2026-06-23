@@ -1,0 +1,31 @@
+#标题
+block, bfq: 修复 bfq_split_bfqq 后 waker_bfqq 的 UAF 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在运行 fsstress 等负载触发 bfq 调度器逻辑时，发生 KASAN 检测到的 Slab Use-After-Free (UAF) 错误。具体表现为在 `bfq_init_rq` 函数中访问 `waker_bfqq` 时，该指针指向的内存已被释放，导致内核崩溃或内存污染。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in bfq_init_rq+0x175d/0x17a0 block/bfq-iosched.c:6958
+Read of size 8 at addr ffff8881b57147d8 by task fsstress/232726
+Call Trace:
+ hlist_add_head include/linux/list.h:1023 [inline]
+ bfq_init_rq+0x175d/0x17a0 block/bfq-iosched.c:6958
+ ...
+Freed by task 232726:
+ kmem_cache_free+0x110/0x760 mm/slub.c:3842
+ bfq_put_queue+0x6a7/0xfb0 block/bfq-iosched.c:5428
+ bfq_split_bfqq+0x481/0xdf0 block/bfq-iosched.c:6754
+
+#问题根因
+在 `bfq_split_bfqq` 函数执行过程中，如果 `waker_bfqq` 不在当前进程的合并链（merge chain）中，且其进程引用计数（process reference）为 0，该 `waker_bfqq` 会被释放。然而，之前的修复补丁仅处理了 `waker_bfqq` 在合并链中的情况，遗漏了不在合并链中但引用计数为 0 的场景。这导致后续代码仍在访问已释放的 `waker_bfqq` 指针，从而触发 UAF。
+
+#解决方案
+在 `bfq_waker_bfqq` 函数中增加对 `waker_bfqq` 不在合并链情况的检查。如果 `waker_bfqq` 不在合并链中，且其进程引用计数为 0，则返回 NULL，防止返回已被释放或即将被释放的指针。代码修改逻辑如下：
+1. 遍历合并链时，若发现 `waker_bfqq` 在链中，检查引用计数，若为 1 则返回 NULL，否则返回 `waker_bfqq`。
+2. 若遍历结束未在链中发现 `waker_bfqq`，则额外检查其引用计数，若为 0 则返回 NULL，避免 UAF。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56f22e44b95691f33a14440d003f5c47aad4ce84

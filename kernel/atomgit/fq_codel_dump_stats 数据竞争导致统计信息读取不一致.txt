@@ -1,0 +1,20 @@
+#标题
+fq_codel_dump_stats 数据竞争导致统计信息读取不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `fq_codel_dump_stats()` 获取 Qdisc 统计信息时，由于锁获取时机过晚，导致在填充 `st.qdisc_stats` 结构体数据的过程中，相关数据字段（如 `maxpacket`、`drop_overlimit` 等）可能因并发操作而发生数据竞争，读取到的统计数据可能不一致或异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`fq_codel_dump_stats()` 函数在填充 `st.qdisc_stats` 中的关键数据字段（如 `maxpacket`、`drop_overlimit`、`ecn_mark`、`memory_usage` 等）之后才调用 `sch_tree_lock(sch)` 获取锁。这导致在读取并填充这些数据时存在无锁保护的窗口期，引发了数据竞争。
+
+#解决方案
+将 `sch_tree_lock(sch)` 的调用位置前移，确保在访问并填充 `st.qdisc_stats` 的 live 数据之前已经持有锁，从而避免并发访问导致的数据竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0f14c41447883d54dd9e122981e0278537f07382

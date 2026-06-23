@@ -1,0 +1,20 @@
+#标题
+ipv4: ip_tunnel: Fix suspicious RCU usage warning in ip_tunnel_find
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 ip_tunnel_find 函数遍历哈希表时，内核触发 suspicious RCU usage 警告，提示 RCU 回调使用方式可能不正确。
+
+#主要错误日志
+WARNING: suspicious RCU usage
+
+#问题根因
+在 ip_tunnel_find 函数中，遍历哈希表使用的是 hlist_for_each_entry_rcu，但未向其传递 RCU 锁定条件参数。此时若调用者未持有 RCU 读锁（rcu_read_lock），而仅持有 RTNL 锁，RCU 检查机制无法感知该保护状态，从而误报 suspicious RCU usage 警告。
+
+#解决方案
+在 hlist_for_each_entry_rcu 遍历宏中增加条件参数 lockdep_rtnl_is_held()。该参数告知 RCU 检查机制当前可能持有 RTNL 锁，从而消除误报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/20410b7ec06ec29b693484fa5fd97a046c4b8d04

@@ -1,0 +1,30 @@
+#标题
+SoundWire: 系统挂起期间链路断开后处理从设备告警导致寄存器访问失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统级挂起回调执行期间，链路断开后，处理挂起的从设备状态工作队列会导致 MIPI 寄存器访问失败，出现命令响应超时和数据传输失败。
+
+#主要错误日志
+soundwire sdw-master-0-0: trf on Slave 1 failed:-110 read addr 0 count 1
+rt722-sdca sdw:0:0:025d:0722:01: SDW_DP0_INT recheck read failed:-110
+rt722-sdca sdw:0:0:025d:0722:01: Slave 1 alert handling failed: -110
+amd_sdw_manager amd_sdw_manager.0: SDW0 cmd response timeout occurred
+amd_sdw_manager amd_sdw_manager.0: command timeout for Slave 1
+soundwire sdw-master-0-0: trf on Slave 1 failed:-110 write addr 5c count 1
+amd_sdw_manager amd_sdw_manager.0: SDW0 previous cmd status clear failed
+amd_sdw_manager amd_sdw_manager.0: command timeout for Slave 1
+soundwire sdw-master-0-0: trf on Slave 1 failed:-110 write addr 5d count 1
+amd_sdw_manager amd_sdw_manager.0: SDW0 previous cmd status clear failed
+amd_sdw_manager amd_sdw_manager.0: command timeout for Slave 1
+
+#问题根因
+在系统挂起回调执行期间，SoundWire 链路断开后，仍有挂起的从设备状态工作队列在运行，此时尝试访问 MIPI 寄存器导致失败。
+
+#解决方案
+在挂起回调执行时钟停止序列之前，针对两种电源模式（CLK_STOP_MODE 和 POWER_OFF_MODE），均调用 cancel_work_sync() 取消挂起的从设备状态工作队列，避免在链路断开后进行非法寄存器访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f80d8e73ff605f98ee0ba1b64f99597bfa7e4bda

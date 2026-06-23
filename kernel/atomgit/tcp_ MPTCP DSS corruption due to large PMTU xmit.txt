@@ -1,0 +1,21 @@
+#标题
+tcp: MPTCP DSS corruption due to large PMTU xmit
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当在回环设备（loopback）上启用 PMTU（Path MTU Discovery）时，`tcp_mtu_probe()` 会生成非常大的探测包。此时 `tcp_can_coalesce_send_queue_head()` 函数未能正确检查 MPTCP 相关的约束条件，允许创建了跨 DSS（Data Sequence Signal）的探测包，导致 MPTCP DSS 数据损坏。系统触发 WARNING 并打印调用栈，严重时可导致内核恐慌。
+
+#主要错误日志
+WARNING: CPU: 0 PID: 5227 at net/mptcp/protocol.c:695 __mptcp_move_skbs_from_subflow+0x20a9/0x21f0 net/mptcp/protocol.c:695
+TCP: request_sock_subflow_v4: Possible SYN flooding on port [::]:20002. Sending cookies.
+
+#问题根因
+`tcp_can_coalesce_send_queue_head()` 函数在检查 SKB 是否可以合并时，没有像其他合并路径一样检查 MPTCP 层面的限制条件（DSS 扩展信息）。这导致在 PMTU 探测过程中，包含了不同 MPTCP DSS 信息的 SKB 被错误地合并到同一个探测包中，破坏了 MPTCP 的数据完整性。
+
+#解决方案
+修改 `tcp_output.c` 中的 `tcp_can_coalesce_send_queue_head()` 函数，使用 `tcp_skb_can_collapse()` 替换原有的零散检查条件。`tcp_skb_can_collapse()` 内部已经封装了对 MPTCP 扩展信息的校验逻辑，确保在合并 SKB 时遵守 MPTCP 的协议约束，从而避免 DSS 损坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d0c742c4fe1f921c1e652de3d55fa84ead67be9b

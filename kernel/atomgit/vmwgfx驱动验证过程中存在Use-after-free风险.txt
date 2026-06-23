@@ -1,0 +1,20 @@
+#标题
+vmwgfx驱动验证过程中存在Use-after-free风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在vmwgfx显卡驱动进行资源验证的过程中，当尝试获取资源引用失败时（例如资源已被标记为doomed），函数直接返回错误码，但未清理先前已插入哈希表的节点。这导致后续代码可能访问该哈希节点，进而引发Use-after-free（释放后使用）故障或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `vmw_validation_add_resource` 中，代码逻辑先将 `node` 插入到哈希表 `res_ht` 中，随后尝试通过 `vmw_resource_reference_unless_doomed` 获取资源引用。当获取引用失败（返回NULL）时，原代码直接返回 `-ESRCH`，遗漏了从哈希表中删除该 `node` 的操作。由于 `node` 内存可能随后被释放或重用，残留的哈希表入口导致悬空指针，造成Use-after-free。
+
+#解决方案
+在获取资源引用失败的分支中，增加 `hash_del_rcu(&node->hash.head)` 操作，确保在返回错误前将节点从哈希表中移除，防止后续通过哈希表访问到无效节点。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f86b3750f822939d45302695b1e22f02286650b2

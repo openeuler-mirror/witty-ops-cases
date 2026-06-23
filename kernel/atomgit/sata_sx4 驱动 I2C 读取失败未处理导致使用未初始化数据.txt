@@ -1,0 +1,20 @@
+#标题
+sata_sx4 驱动 I2C 读取失败未处理导致使用未初始化数据
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sata_sx4 驱动初始化 DIMM 过程中，若 I2C 读取操作（pdc20621_i2c_read）失败，驱动未进行错误处理，导致程序继续使用未初始化的 `spd0` 数据进行计算和配置，可能引发硬件初始化异常或不可预知的驱动行为。
+
+#主要错误日志
+Failed in i2c read at index %d: device=%#x, reg=%#x
+
+#问题根因
+函数 `pdc20621_prog_dimm0()` 调用 `pdc20621_i2c_read()` 时未检查返回值。当 I2C 读取失败时，存放读取结果的变量 `spd0` 处于未初始化状态，后续代码直接使用了该无效数据。
+
+#解决方案
+在 `pdc20621_prog_dimm0()` 函数中增加对 `pdc20621_i2c_read()` 返回值的检查。若读取失败，通过 `dev_err()` 打印错误日志并返回 `-EIO` 错误码；同时在调用链上层 `pdc20621_dimm_init()` 中增加对 `pdc20621_prog_dimm0()` 返回值的错误检查与处理，阻断错误扩散。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/710b510d5f8f1ccd4b20ea9009e2254cabf7d85c

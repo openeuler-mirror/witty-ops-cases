@@ -1,0 +1,22 @@
+#标题
+dmaengine: dw: dmamux: 修复设备引用计数泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RZN1 DMA 路由分配过程中，若因参数个数错误（`args_count` 不匹配）或内存分配失败导致函数提前退出，或函数在正常流程结束后，均未释放通过 `of_find_device_by_node()` 获取的设备引用计数，导致设备对象引用计数发生泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `rzn1_dmamux_route_allocate` 函数中，代码通过 `of_find_device_by_node()` 获取了设备结构体引用，但在函数的几个退出路径（包括参数校验失败、内存分配失败以及正常执行完毕）中，均缺少对应的 `put_device()` 调用来释放引用，从而导致设备引用泄漏。
+
+#解决方案
+在函数的所有退出路径中增加 `put_device()` 调用：
+1. 在参数校验失败和内存分配失败的错误处理分支中，利用 `goto` 语句跳转至新增的 `put_device` 标签处执行释放操作。
+2. 在函数正常返回前，显式调用 `put_device(&pdev->dev)` 释放引用，确保资源正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e9eb0d6dce6c6163040b1fc095ef7df4250446c5

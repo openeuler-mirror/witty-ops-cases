@@ -1,0 +1,26 @@
+#标题
+nvme-pci: 并发 DPC 与热插拔事件导致重置死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PCIe DPC（Downstream Port Containment）事件与热插拔（HP）并发发生的场景下，NVMe 驱动程序发生死锁。具体表现为：
+1. NVMe 设备重置操作卡住（stuck reset），无法继续执行。
+2. 由于设备重置无法完成，导致 IO 请求超时（默认可能长达一分钟）。
+3. 系统无法正常移除或恢复该 NVMe 设备。
+
+#主要错误日志
+未知
+
+#问题根因
+当 PCIe DPC 事件触发时，链路会被 toggle（开关切换）。如果插槽不支持带外存在检测，这将触发 pciehp 重新枚举。
+此时，NVMe 错误处理流程（error handling）持有设备锁并尝试重启设备。同时，pciehp 请求断开驱动程序连接，但被正在等待错误处理完成的设备锁阻塞。
+另一方面，NVMe 的重置流程因设备已不存在且存在未完成的 IO 而无法推进；超时处理程序检测到设备正在进行错误处理，因此未采取任何行动。最终导致死锁。
+
+#解决方案
+在 NVMe 超时处理程序（`nvme_timeout`）中增加对设备连接状态的检测。如果发现 PCI 设备已断开连接（`pci_dev_is_disconnected`），立即将控制器状态切换为 `NVME_CTRL_DELETING`。
+此举旨在绕过常规的错误恢复等待流程，强制执行禁用/删除路径，从而打破因设备已移除但错误处理流程仍在等待而造成的死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c6eba264a4fb1e0d9b60a3fe41ca38a105d99724

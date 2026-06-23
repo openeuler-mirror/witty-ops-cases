@@ -1,0 +1,22 @@
+#标题
+x86/bugs: IBPB 未正确清除 RSB（返回栈缓冲区）预测
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了 `X86_BUG_IBPB_NO_RET` 标志的处理器上，调用 `indirect_branch_prediction_barrier()` 进行间接分支预测屏障（IBPB）操作时，未能按预期清除返回栈缓冲区（RSB）的预测条目。这导致 CPU 仍可能利用残留的 RSB 预测执行恶意代码路径，破坏了 IBPB 作为安全屏障的完整性，可能引发 Spectre BHB 类型的侧信道攻击风险。
+
+#主要错误日志
+未知
+
+#问题根因
+根据硬件行为，IBPB 操作预期应清除 RSB。然而，当处理器存在 `X86_BUG_IBPB_NO_RET` 硬件缺陷时，仅执行标准的 IBPB 指令（写入 MSR_IA32_PRED_CMD）无法自动清除 RSB。
+原实现中，`indirect_branch_prediction_barrier()` 函数仅调用 `alternative_msr_write()` 写入预测命令寄存器，未针对 `X86_BUG_IBPB_NO_RET` 情况进行额外的 RSB 清填处理，导致在受影响硬件上 RSB 预测残留。
+
+#解决方案
+修改 `indirect_branch_prediction_barrier()` 函数的实现逻辑，不再直接调用 `alternative_msr_write()`，而是通过内联汇编调用 `write_ibpb()` 函数。
+`write_ibpb()` 内部集成了 `FILL_RETURN_BUFFER` 宏，该宏会在检测到 `X86_BUG_IBPB_NO_RET` 标志时主动执行 RSB 清填操作，从而确保在所有硬件平台上 IBPB 操作都能正确清除 RSB 预测。同时，该修复保留了使用 `x86_pred_cmd` 变量（支持 SBPB）的现有逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eb3fac933bf71080722a2455bf9cc8acea33a204

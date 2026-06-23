@@ -1,0 +1,22 @@
+#标题
+usb: hub: 修复运行时电源管理调节延迟工作的刷新与调度时序问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 QC SC8280XP CRD 板卡上进行系统挂起/恢复测试时，由于未正确刷新延迟工作队列，触发了系统挂起/恢复流程中的异常问题。同时存在运行时电源管理（runtime pm）引用计数顺序错乱的风险，可能导致 autopm put 在 get 之前被调用。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **延迟工作未刷新**：在提交 8f5b7e2bec1c 中添加了延迟工作项以防止 USB3 hub 在恢复后立即挂起，但在系统挂起或 hub 需要静默时，`hub_quiesce()` 未刷新该延迟工作，导致在特定硬件平台（如 QC SC8280XP）上引发问题。
+2. **调度时序错误**：延迟工作项的调度是在调用 `usb_autopm_get_interface_no_resume` 之前进行的。存在工作项在 autopm get 执行前就已运行的风险，这将导致 autopm put 在 get 之前被调用，破坏了运行时电源管理的使用计数顺序。
+
+#解决方案
+1. 在 `hub_quiesce()` 函数中增加 `flush_delayed_work(&hub->init_work)` 调用，确保在 hub 静默时刷新该延迟工作项。
+2. 调整 `hub_activate()` 函数中的执行顺序，将 `usb_autopm_get_interface_no_resume` 调用移至 `INIT_DELAYED_WORK` 和 `queue_delayed_work` 之前，确保先获取引用再调度工作，避免时序竞态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/38fcb66e8bedda085016429efa9d3983b96d6c0c

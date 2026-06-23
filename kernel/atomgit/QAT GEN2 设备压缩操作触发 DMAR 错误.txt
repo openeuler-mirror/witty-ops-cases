@@ -1,0 +1,21 @@
+#标题
+QAT GEN2 设备压缩操作触发 DMAR 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 VT-d（IOMMU）的系统环境中，使用 QAT GEN2 设备执行压缩操作时，触发 DMAR 错误，导致设备功能异常或系统稳定性受影响。
+
+#主要错误日志
+DMAR errors
+
+#问题根因
+QAT GEN2 设备在执行压缩操作时，为了进行完整性校验，硬件会从目的缓冲区回读已压缩的输出数据并进行解压验证。然而，当前驱动程序错误地将目的缓冲区标记为 DMA_FROM_DEVICE（仅写），这不符合 GEN2 硬件同时读写该缓冲区的需求。
+自内核 v6.16-rc1 起，提交 6f5dc7658094 ("iommu/vt-d: Restore WO permissions on second-level paging entries") 开始在二级页表项中严格强制执行只写权限。这导致当 QAT GEN2 硬件尝试回读目的缓冲区进行校验时，因缺乏读权限而触发 DMAR 错误。
+
+#解决方案
+修改 QAT 驱动中目的缓冲区的 DMA 映射方向，将其从 DMA_FROM_DEVICE 修改为 DMA_BIDIRECTIONAL，以确保硬件在 GEN2 设备校验阶段拥有读取权限。主要涉及文件 `drivers/crypto/intel/qat/qat_common/qat_bl.c` 和 `qat_compression.c` 中的 `dma_map_single` 与 `dma_unmap_single` 调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b31f663a1c16751ed0feb42df14732f0cab4aa61

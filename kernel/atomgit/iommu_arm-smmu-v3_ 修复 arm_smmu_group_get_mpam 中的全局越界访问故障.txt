@@ -1,0 +1,35 @@
+#标题
+iommu/arm-smmu-v3: 修复 arm_smmu_group_get_mpam 中的全局越界访问故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对与 MPAM 相关的 SMMU 功能进行测试时，触发 KASAN 全局越界访问错误。具体场景为某些设备（如 HISI PTT trace）的 DMA 只能工作在直通模式，当执行 rmdir 操作触发相关 iommu_group 查询流程时，系统检测到非法内存读取。
+
+#主要错误日志
+BUG: KASAN: global-out-of-bounds in arm_smmu_group_get_mpam
+Read of size 4 at addr ffffd8dbdf3bf0d8 by task rmdir/9954
+Call trace:
+ arm_smmu_group_get_mpam+0x4c/0x150
+ iommu_group_get_qos_params+0xa8/0xe8
+ resctrl_arch_match_iommu_closid+0x80/0x118
+ rdt_move_group_iommus.isra.0+0x198/0x1c0
+ rdtgroup_rmdir_ctrl+0x58/0x1e8
+ rdtgroup_rmdir+0x198/0x290
+ kernfs_iop_rmdir+0xa0/0xe8
+ vfs_rmdir.part.0+0xd8/0x290
+ do_rmdir+0x288/0x2e0
+
+#问题根因
+部分设备（如 Hisi PTT trace）的 DMA 仅支持直通模式。在 `__iommu_domain_alloc()` 中，SMMU 针对此类设备并未分配 `smmu_domain` 结构体，这些设备天然不支持 MPAM 特性。
+然而，`arm_smmu_group_get_mpam()` 和 `arm_smmu_group_set_mpam()` 函数未对 `IOMMU_DOMAIN_IDENTITY` 和 `IOMMU_DOMAIN_BLOCKED` 类型的 domain 进行有效性检查，直接调用 `to_smmu_domain(domain)` 转换并访问其成员，导致访问了无效内存地址，引发全局越界访问。
+
+#解决方案
+在 `arm_smmu_group_get_mpam()` 和 `arm_smmu_group_set_mpam()` 函数中增加对 domain 类型的判断逻辑。
+通过 `domain->type & IOMMU_DOMAIN_ALLOC_FLAGS` 获取分配类型，若类型为 `IOMMU_DOMAIN_IDENTITY` 或 `IOMMU_DOMAIN_BLOCKED`，则跳过后续 `smmu_domain` 相关处理：
+- 在 `arm_smmu_group_set_mpam()` 中直接返回 `-EINVAL`。
+- 在 `arm_smmu_group_get_mpam()` 中直接返回 `0`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a738bf79a0d7f27ae30447e044b10af03bcc7ca5

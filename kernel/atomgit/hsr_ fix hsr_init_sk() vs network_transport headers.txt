@@ -1,0 +1,21 @@
+#标题
+hsr: fix hsr_init_sk() vs network/transport headers
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HSR（高可用无缝冗余）模块初始化 skb 时，由于网络头和传输头重置顺序不当，导致 `skb->mac_len` 被错误地设置为一个接近 65535 的无效值，可能导致后续网络协议栈处理异常或数据包损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hsr_init_sk()` 函数中，调用顺序存在逻辑错误：先调用了 `skb_reset_mac_header()` 和 `skb_reset_mac_len()`，随后才调用 `skb_reset_network_header()`。
+由于 `skb_reset_mac_len()` 需要依据正确的网络头指针（应位于 MAC 头之后）来计算 MAC 长度，但此时网络头尚未正确设置（仍在原位置），导致计算出的 `mac_len` 接近 65535。
+
+#解决方案
+调整代码执行顺序，将 `skb_reset_network_header()` 和 `skb_reset_transport_header()` 的调用移至 `dev_hard_header()` 之前。这确保了在调用 `skb_reset_mac_len()` 计算MAC长度时，网络头指针已经处于正确的位置，从而避免了 `mac_len` 的错误赋值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0f580a5a3787624d69d3ae2b609f2476cf752563

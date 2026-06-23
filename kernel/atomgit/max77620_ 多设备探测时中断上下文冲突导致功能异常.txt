@@ -1,0 +1,20 @@
+#标题
+max77620: 多设备探测时中断上下文冲突导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在同一系统中探测两个 max77620 设备（或手动触发第二次探测）时，驱动程序会发生 IRQ chip 冲突。第二次探测会覆盖第一次探测设备的中断驱动数据（irq_drv_data），导致第一个设备的中断处理函数在错误的上下文中执行，进而引发中断处理逻辑错误或不可预知的系统行为。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序定义了静态全局变量 `max77620_top_irq_chip` 用于存储 IRQ chip 信息，该结构体并非 const 类型。在 probe 过程中，代码直接修改了该全局结构体的 `irq_drv_data` 成员以指向当前探测的设备私有数据结构 `max77620_chip`。由于 `devm_regmap_add_irq_chip()` 仅存储该结构体的指针而不进行拷贝，当系统探测第二个同类设备时，第二次 probe 会覆盖全局变量中的 `irq_drv_data`，导致第一个设备中断触发时使用了错误的上下文指针。
+
+#解决方案
+将静态全局变量 `max77620_top_irq_chip` 修改为 `const` 类型，防止直接修改。在 probe 函数中，使用 `devm_kmemdup()` 动态复制该结构体，并在复制的副本中设置 `irq_drv_data`，最后将副本指针传递给 `devm_regmap_add_irq_chip()`。这确保了每个设备实例拥有独立的 IRQ chip 配置，互不干扰。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/03bf86311f82fb86a54f763c1ad174f1ab820029

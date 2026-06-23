@@ -1,0 +1,20 @@
+#标题
+PCI/ASPM: switch upstream function 移除时链路状态释放导致异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当移除 PCIe Switch 的上游端口（upstream port）功能 0 时，内核在 `pcie_aspm_exit_link_state` 函数中过早释放了链路状态（link state）。该链路状态实际上是所有下游（subordinate）链路的父链路（parent_link），过早释放会导致后续访问相关链路状态时出现 Use-After-Free 或数据结构损坏，可能引发内核崩溃或 PCIe 子系统行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `pcie_aspm_exit_link_state` 函数中，原逻辑在移除功能 0 时直接释放链路状态。若功能 0 是一个 Switch upstream port，该链路状态是所有下游链路的父链路（parent_link）。如果过早释放此状态，会导致下游链路引用的 `parent_link` 指针变为无效，引发后续操作异常。修复前的注释未考虑到 Switch upstream port 的层级关系，错误地建议在移除功能 0 时直接释放链接状态。
+
+#解决方案
+修改 `pcie_aspm_exit_link_state` 逻辑，增加判断：若当前移除的设备 `pdev` 不是 `link->downstream`（即不是功能 0），则直接跳过释放逻辑（跳转至 `out` 标签）。确保只有在功能 0 被移除时才执行链路状态释放，且保证释放时机不会早于下游链路对其的使用，从而避免 Switch upstream port 场景下的父链路过早释放问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd778013397409e6094b56d953351edd42000801

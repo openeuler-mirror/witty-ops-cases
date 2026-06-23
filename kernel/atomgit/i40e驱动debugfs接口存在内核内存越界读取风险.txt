@@ -1,0 +1,22 @@
+#标题
+i40e驱动debugfs接口存在内核内存越界读取风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+i40e网卡的debugfs接口文件（'command' 和 'netdev_ops'）在执行读取操作时存在安全隐患。攻击者可以通过向 'netdev_ops' 文件写入特定构造的数据，触发 `snprintf` 截断，进而导致 `copy_to_user` 读取超出分配缓冲区的范围，造成任意内核内存泄露。此外，这些文件使用静态全局缓冲区，在多设备并发写入时会产生数据竞争与垃圾数据。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **内存越界读取风险**：`i40e_dbg_netdev_ops_read` 函数使用 `snprintf` 计算长度并将数据拷贝至用户空间。如果用户写入的数据足够大导致 `snprintf` 返回值（预期写入长度）超过缓冲区大小，`copy_to_user` 可能会读取缓冲区之外的内存区域。
+2. **静态缓冲区设计缺陷**：驱动使用静态全局变量 `i40e_dbg_command_buf` 和 `i40e_dbg_netdev_ops_buf` 存储数据，缺乏锁保护。这导致多设备并发操作时数据混乱，且 `command` 文件的读缓冲区从未被写入过数据，完全无效。
+
+#解决方案
+1. **移除读取接口**：直接移除 `i40e_dbg_command_read` 和 `i40e_dbg_netdev_ops_read` 函数及其在 `file_operations` 中的注册，禁止对这些 debugfs 文件的读取操作。这消除了内存泄露风险并节省了 512 字节的静态内存。
+2. **重构写入逻辑**：将 `netdev_ops` 的写入处理逻辑重构为使用动态分配的内存（`kzalloc`），替代原有的静态全局缓冲区，避免多设备并发写入时的数据竞争问题，并在操作结束后释放内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f7190c9a42018decc14f0ab46b5c8174355dea8d

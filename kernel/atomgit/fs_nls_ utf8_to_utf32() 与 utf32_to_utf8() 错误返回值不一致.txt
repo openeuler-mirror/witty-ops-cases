@@ -1,0 +1,23 @@
+#标题
+fs/nls: utf8_to_utf32() 与 utf32_to_utf8() 错误返回值不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核函数 `utf8_to_utf32()` 与 `utf32_to_utf8()` 在遇到错误时返回值不一致。在修复前的代码中，`utf8_to_utf32()` 在出错时返回 -1，而 `utf32_to_utf8()` 返回标准的 errno 错误码。这种 API 行为的不一致可能导致调用者错误处理失败或逻辑异常，特别是在统一处理 NLS（Native Language Support）转换错误的场景下。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，问题根因是 commit 25524b619029 ("fs/nls: Fix utf16 to utf8 conversion") 引入的不一致性。该提交修改了 `utf32_to_utf8()` 使其返回 errno 代码，但未同步修改 `utf8_to_utf32()`，导致后者仍保留返回 -1 的旧逻辑，破坏了两个接口错误处理行为的统一性。
+
+#解决方案
+修改 `fs/nls/nls_base.c` 中的 `utf8_to_utf32()` 函数，将其错误返回值从 -1 调整为标准的 errno 代码。具体变更如下：
+1. 当遇到非法字节序列（如字符超出范围、代理对错误、字节格式错误）时，返回 `-EILSEQ`。
+2. 当输入长度不足时，返回 `-EOVERFLOW`。
+以此确保该函数与 `utf32_to_utf8()` 的错误返回风格保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/59e4d0f3f75fd4591c4bacb28f77dc5845eb4579

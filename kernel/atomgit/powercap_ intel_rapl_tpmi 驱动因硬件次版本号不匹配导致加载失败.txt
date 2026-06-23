@@ -1,0 +1,28 @@
+#标题
+powercap: intel_rapl_tpmi 驱动因硬件次版本号不匹配导致加载失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 TPMI（Topology Aware Register and PM Capsule Interface）功能的 Intel 硬件平台上，当硬件次版本号发生变化（如固件升级增加了新字段但未修改现有 MMIO 偏移量）时，`intel_rapl_tpmi` 驱动程序拒绝加载并退出。这导致系统无法通过 RAPL 接口监控或控制功耗，相关的 powercap 接口无法提供给用户层使用。
+
+#主要错误日志
+- `pr_warn(FW_BUG "Unsupported version:%d\n", tpmi_domain_version);` [原有逻辑，导致误报错]
+- `pr_warn(FW_BUG "Unsupported major version:%ld\n", TPMI_MAJOR_VERSION(tpmi_domain_version));` [修复后，仅针对主版本]
+- `pr_info("Ignore: Unsupported minor version:%ld\n", TPMI_MINOR_VERSION(tpmi_domain_version));` [修复后，针对次版本]
+
+#问题根因
+驱动程序原有的版本检查逻辑过于严格，未区分硬件的主版本号和次版本号。根据硬件定义规范：
+1. 主版本号变化代表 MMIO 偏移或字段定义发生了破坏性修改，驱动确实需要更新才能兼容。
+2. 次版本号变化仅代表新增了字段，不影响现有的 MMIO 偏移和字段定义，驱动程序实际上可以向后兼容继续工作。
+原有代码在检测到任何版本不一致时均直接返回 `-ENODEV`，导致在硬件仅升级次版本号（属于兼容范围内的变更）时，驱动错误地认为版本不支持而退出。
+
+#解决方案
+修改版本校验逻辑，区分主、次版本号的处理方式：
+1. 将原本单一的版本宏 `TPMI_RAPL_VERSION` 拆分为 `TPMI_RAPL_MAJOR_VERSION` 和 `TPMI_RAPL_MINOR_VERSION`。
+2. 若检测到主版本号不匹配，保持原有逻辑：打印警告日志并返回错误 `-ENODEV`，拒绝加载。
+3. 若检测到次版本号不一致（硬件版本高于驱动版本），调整处理策略：仅打印信息级别日志并忽略差异，继续执行后续初始化流程，确保驱动正常工作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6fee701e651e17b2f4c4accced2c16e84b341c75

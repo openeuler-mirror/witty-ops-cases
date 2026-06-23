@@ -1,0 +1,26 @@
+#标题
+urma/ubcore: 私有协议通信消息版本及载荷校验缺失导致兼容性与访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 ubcore 私有协议路径接收到的消息格式在后续版本中扩展时，旧内核未校验消息版本，会继续解析不支持的报文，导致兼容性问题（如解析错误或状态异常）。此外，若接收到的载荷长度不符合预期，可能导致对截断载荷的非法访问。
+
+#主要错误日志
+- "Unsupported msg version %u, expected %u"
+- "Unsupported msg version %u, expected %u, " MSG_FMT
+- "Unsupported msg version, recv request version %u, current version %u.\n"
+- "Invalid tx msg: data is null, " MSG_FMT
+
+#问题根因
+ubcore 私有协议路径在接收报文时缺少对消息版本号的校验。如果未来消息格式扩展且版本号变更，旧内核无法识别不兼容的报文，仍尝试解析从而导致错误。同时，发送路径未校验 `msg->data` 是否为空，存在潜在的空指针访问风险。
+
+#解决方案
+1. 在 `ubcore_net_handle_msg` 及 `ubmad_process_msg` 等接收处理函数中增加版本号校验，若接收到的消息版本与当前内核支持的版本不一致，则拒绝处理并打印错误日志。
+2. 在 `ubagg_connect_bonding.c` 的消息处理流程中同样增加版本号校验。
+3. 在 `ubcore_send_comm_msg` 和 `ubcore_send_comm_msg_to` 发送函数中增加防御性校验，确保当 `msg->len` 大于 0 时 `msg->data` 不为空，避免非法内存访问。
+4. 统一宏定义，使用 `UBMAD_MSG_CUR_VERSION` 等宏替代硬编码版本号。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dfc72fb7ad943ba5aed74e8ed60a76a89030ddac

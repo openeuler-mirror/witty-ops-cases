@@ -1,0 +1,21 @@
+#标题
+AES S-box 缺失 MMU 写保护导致安全属性不合规
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核中 AES 算法的 S-box 查找表数据本应处于只读内存区域受到 MMU 保护，但实际被错误地放置在了可写的 ".data..cacheline_aligned" section 中。这导致关键加密常量数据缺乏硬件级别的写保护机制，存在被意外或恶意修改的风险，不符合安全编码规范。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中使用了 `__cacheline_aligned` 属性来定义 `aes_sbox` 和 `aes_inv_sbox` 数组。该属性会将数据放入 ".data..cacheline_aligned" section，而该 section 没有被标记为只读（read-only），因此无法获得 MMU 的写保护。作为本应只读的加密敏感数据，不应使用此属性。
+
+#解决方案
+将 `aes_sbox` 和 `aes_inv_sbox` 数组的属性定义从 `__cacheline_aligned` 修改为 `____cacheline_aligned`。
+修改后的属性仅对数据进行内存对齐处理，而不会改变其所在的 section，使得数据能够保留在 ".rodata" 只读段中，从而正确获得 MMU 的写保护。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/27beccd274b16ac9736f0b186537b1b91af5b1f5

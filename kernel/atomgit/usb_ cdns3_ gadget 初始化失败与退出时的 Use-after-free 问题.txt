@@ -1,0 +1,24 @@
+#标题
+usb: cdns3: gadget 初始化失败与退出时的 Use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 cdnsp gadget 设备初始化失败或模块退出过程中，内核发生 Use-after-free 错误。具体表现为释放 gadget 结构体后，与其关联的 endpoints 仍持有该结构体的悬空指针，后续操作引发内存非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__cdnsp_gadget_init()` 和 `cdnsp_gadget_exit()` 函数中，通过 `usb_del_gadget_udc()` 释放 gadget 结构体（`pdev->gadget`）的时机早于 endpoints 的释放。由于 endpoints 通过 `ep_list` 链接在 gadget 结构体中，先释放 gadget 结构体导致 endpoints 链表中存在悬空指针，后续释放 endpoints 时触发 use-after-free。
+
+#解决方案
+将 `usb_del_gadget_udc()` 操作拆分为独立的 "del" 和 "put" 步骤：
+1. 调用 `usb_del_gadget()` 删除 gadget。
+2. 调用 `cdnsp_gadget_free_endpoints()` 释放 endpoints。
+3. 调用 `usb_put_gadget()` 最终释放 gadget 结构体。
+确保 endpoints 在 gadget 结构体释放前被正确清理，修复悬空指针问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/da7e68db6111a08d8ef0a9949b6765a4e1afe5fb

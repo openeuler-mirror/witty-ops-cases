@@ -1,0 +1,39 @@
+#标题
+smb: client: re-negotiation阶段首个命令失败返回EHOSTDOWN
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在CIFS/SMB客户端进行重协商（re-negotiation）过程中，如果客户端与服务器的连接曾中断并恢复，客户端执行命令（如 `ls`）会直接失败并返回 `EHOSTDOWN` 错误，而不是等待重协商完成。该问题发生在服务器侧因异常重启（sysrq-trigger）导致连接中断，随后恢复且客户端尝试重新协商的特定时序下。
+
+#主要错误日志
+ls thread
+----------------
+  smb2_negotiate
+    server->tcpStatus = CifsInNegotiate
+    compound_send_recv
+      wait_for_compound_request
+
+cifsd thread
+----------------
+  cifs_readv_from_socket
+    server_unresponsive
+      server->tcpStatus == CifsInNegotiate && jiffies > server->lstrp + 20s
+        cifs_reconnect
+          cifs_abort_connection: mid_state = MID_RETRY_NEEDED
+
+ls thread
+----------------
+      cifs_sync_mid_result return EAGAIN
+  smb2_negotiate return EHOSTDOWN
+
+#问题根因
+在内核引入 commit fabc4ed200f9 后，`server_unresponsive` 函数增加了一个条件，依据 `server->lstrp`（最后一次服务器响应时间）来判断客户端是否需要重连。
+当客户端之前连接失败并中止连接时，`server->lstrp` 记录的是最后一次更新的时间。在后续进行重协商时，如果 `server->lstrp` 时间过于陈旧，且代码在进入 `CifsInNegotiate` 状态前未更新该时间戳，`server_unresponsive` 函数会误判服务器无响应并触发 `cifs_reconnect`。这导致正在进行的首个协商命令失败（mid_state 被置为 MID_RETRY_NEEDED，最终返回 EHOSTDOWN），而不是等待协商完成。
+
+#解决方案
+在 `cifs_negotiate_protocol` 函数中，在将服务器状态切换为 `CifsInNegotiate` 之前，更新 `server->lstrp` 为当前时间（`jiffies`）。此举确保了在协商过程中，时间戳检查不会因为之前的陈旧时间而误触发重连逻辑，从而允许协商过程正常完成。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/52f8c993bf603347638e03250335d6cf7e33c23f

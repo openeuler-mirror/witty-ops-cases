@@ -1,0 +1,20 @@
+#标题
+iomap读写范围调整逻辑导致数据读取错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在文件系统执行缓冲读取操作时，iomap_adjust_read_range 函数在处理已更新块的跳跃逻辑时存在计算错误，导致读取范围指针未正确对齐。这可能引发数据读取内容错误或文件系统不一致，具体表现为读取到的数据与预期不符或部分数据丢失。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `iomap_adjust_read_range` 函数中，当跳过文件开头的已更新块时，原代码逻辑直接按 `block_size` 增加偏移量，未正确处理块内偏移量。由于文件起始位置可能并非块大小对齐，直接按块大小增加会导致计算出的 `bytes_skipped` 比实际应跳过的字节数多出一个 `block_offset`，从而造成读取范围指针计算错误，读取了错误的数据范围。
+
+#解决方案
+修复 `iomap_adjust_read_range` 函数中的偏移量计算逻辑。在计算跳过的字节数时，引入 `block_offset`（`*pos & (block_size - 1)`）进行修正。计算公式调整为 `bytes_skipped = (blocks_skipped << block_bits) - block_offset`，确保跳过的字节数准确扣除块内偏移量，从而正确更新 `pos`、`poff` 和 `plen` 变量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2ea1bf8d88234b9660033ef4223cd01700e02c49

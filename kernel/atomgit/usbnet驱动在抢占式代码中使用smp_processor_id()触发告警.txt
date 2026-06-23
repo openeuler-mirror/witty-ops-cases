@@ -1,0 +1,20 @@
+#标题
+usbnet驱动在抢占式代码中使用smp_processor_id()触发告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 usbnet_resume_rx 函数时，内核触发 "using smp_processor_id() in preemptible code" 告警。该警告表明内核在进程可被抢占的上下文中调用了 smp_processor_id()，这可能导致获取的处理器 ID 不一致或非预期，影响内核代码正确性。
+
+#主要错误日志
+BUG: using smp_processor_id() in preemptible code
+
+#问题根因
+usbnet_resume_rx 函数内部调用了 clear_bit 和 tasklet_schedule 等函数。在这些函数的调用路径中（可能涉及底半部处理逻辑），代码依赖当前的 CPU ID，但调用 usbnet_resume_rx 时 CPU 处于可抢占状态。未关闭抢占或底半部的情况下调用相关依赖处理器 ID 的逻辑，导致了抢占上下文违规的警告。
+
+#解决方案
+在 usbnet_resume_rx 函数中，对关键操作区间增加底半部同步保护。具体修改是在调用 clear_bit(EVENT_RX_PAUSED, &dev->flags) 之前调用 local_bh_disable() 关闭底半部抢占，在 tasklet_schedule(&dev->bh) 执行完毕后调用 local_bh_enable() 重新开启底半部。此举确保了在获取 CPU ID 或操作 per-cpu 变量期间，进程不会被迁移到其他 CPU，从而消除告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e00e84493578550d44a697fd3e79ff049b6bf808

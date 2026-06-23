@@ -1,0 +1,20 @@
+#标题
+perf/x86/intel: Fix NULL event dereference crash in handle_pmi_common()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理性能监控中断（PMI）时，内核发生空指针解引用，导致系统崩溃。该问题发生在中断节流停止事件组的过程中，具体表现为 `handle_pmi_common()` 函数检测到 `active_mask` 位已设置，但对应的 `cpuc->events[]` 条目已被清空，从而触发崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+当 PEBS（Precise Event-Based Sampling）处理仍在进行时，`perf_event_overflow()` 触发了 `perf_event_throttle_group()`，该函数停止了事件组并清除了 `cpuc->events[]` 条目。然而，`handle_pmi_common()` 在遍历事件时，`cpuc->active_mask` 中的激活位可能仍然处于设置状态，导致代码尝试访问已经被置为 NULL 的 `cpuc->events[]` 条目，进而引发空指针解引用。尽管之前的修复提交 7e772a93eb61 将 `cpuc->events[]` 的清理操作从 `x86_pmu_stop()` 移至 `x86_pmu_del()`，但在该场景下仍会出现 active 位置位而 event 指针为 NULL 的情况。
+
+#解决方案
+在 `handle_pmi_common()` 函数中遍历事件时，增加对 event 指针的显式 NULL 检查。如果 event 指针为 NULL，则跳过后续处理，从而避免空指针解引用崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb5f3c29728536118da0ead3c3f7f6520c518117

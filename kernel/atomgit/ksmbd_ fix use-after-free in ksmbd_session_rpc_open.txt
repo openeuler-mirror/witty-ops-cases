@@ -1,0 +1,25 @@
+#标题
+ksmbd: fix use-after-free in ksmbd_session_rpc_open
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 内核服务器模块处理会话 RPC 操作时，若并发执行 `ksmbd_session_rpc_open` 与 `ksmbd_session_rpc_clear_list`（或 `ksmbd_session_rpc_close`），存在竞争条件导致 Use-After-Free（释放后使用）漏洞。具体表现为内核内存被非法访问或修改，可能触发内核崩溃或系统异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`ksmbd_session_rpc_open` 函数与会话销毁/关闭相关函数（如 `ksmbd_session_rpc_clear_list`、`ksmbd_session_rpc_close`）在操作 `sess->rpc_handle_list` 这一 xarray 数据结构时缺乏必要的锁保护。
+具体而言，`ksmbd_session_rpc_open` 向列表中插入条目，而其他函数负责擦除和释放条目，由于未使用读写信号量进行同步，导致并发操作时出现竞争条件，进而引发 Use-After-Free。
+
+#解决方案
+在 `ksmbd_session` 结构体中新增 `struct rw_semaphore rpc_lock` 成员，并在相关操作路径中添加读写信号量保护：
+1. 在 `__session_create` 中初始化 `rpc_lock`。
+2. 在 `ksmbd_session_rpc_open` 中使用 `down_read` 和 `up_read` 保护插入与打开操作。
+3. 在 `ksmbd_session_rpc_close` 和 `ksmbd_session_rpc_clear_list` 中使用 `down_write` 和 `up_write` 保护擦除与释放操作。
+通过读写锁机制确保对 RPC 句柄列表的并发访问安全，消除竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/43dee42da251fff623cebd8cf1e4cdf3d1cf6f55

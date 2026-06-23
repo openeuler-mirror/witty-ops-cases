@@ -1,0 +1,22 @@
+#标题
+[urma: 修复 ubagg 驱动引用计数处理错误]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[内核模块引用计数管理异常。在驱动注销（rmmod）或设备卸载过程中，可能导致内核模块引用计数泄露（无法正常释放模块）或访问已释放的模块地址，引发 kernel oops 或设备状态异常。]
+
+#主要错误日志
+[未知]
+
+#问题根因
+[代码逻辑中对 `ubc_dev->ops->owner` 指针的判断条件写反了。
+1. 在 `uburma_release_file` 函数中，条件 `ubc_dev->ops->owner != NULL` 应简化为标准的指针真值判断，此处逻辑虽未直接导致错误，但写法不规范；
+2. 根本错误在于 `uburma_open` 函数中，判断条件误写为 `!ubc_dev->ops->owner`（即“owner 为空”），这导致当 owner 指针有效时，代码逻辑反而跳过了 `try_module_get` 的执行；或者尝试对无效指针进行操作。这导致模块引用计数获取与释放逻辑不匹配。]
+
+#解决方案
+[修正 `uburma_open` 函数中的条件判断逻辑，将 `!ubc_dev->ops->owner` 修改为 `ubc_dev->ops->owner`，确保仅在 owner 指针有效时才执行 `try_module_get` 操作；同时规范化 `uburma_release_file` 中的指针判断写法，修复引用计数处理错误。]
+
+#来源
+[https://atomgit.com/openeuler/kernel/commit/1121c5557ede2747d2d2afc41d1141f25a5dcd0a]

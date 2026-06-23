@@ -1,0 +1,22 @@
+#标题
+x86 32位模式下 get_user 8字节读取失败未清零高32位寄存器
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 32 位 x86 架构下，当调用 get_user 进行 8 字节数据读取时，如果地址范围检查失败，返回值的高 32 位未被正确清零，导致用户空间可能读取到内核栈上的脏数据。
+运行 KUnit 测试可复现该问题：
+./tools/testing/kunit/kunit.py run --arch i386 usercopy
+
+#主要错误日志
+未知
+
+#问题根因
+在 32 位 x86 架构的 __get_user_8 汇编实现中，用于存放 8 字节数据高 32 位的寄存器 %ecx 的清零操作被置于 check_range 检查之后。当 check_range 检查失败并跳转退出时，位于其后的 xor %ecx,%ecx 指令不会被执行，导致 %ecx 寄存器保留了旧值（脏数据），未能按预期将返回值的高 32 位清零。该问题由 commit 8a2462df1547 引入。
+
+#解决方案
+将 32 位模式下的 %ecx 寄存器清零指令（xor %ecx,%ecx）移动到 check_range 调用之前执行。这样可以确保无论 check_range 检查成功还是失败，目标寄存器的高 32 位均已被预先清零，从而保证错误路径下返回数据的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1565d5f1c546de4671ae1d79156436b9bf246248

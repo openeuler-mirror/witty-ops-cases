@@ -1,0 +1,24 @@
+#标题
+perf/x86/intel: Fixed Counter MSR索引计算错误导致ACR配置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置固定计数器（Fixed Counter）的自动计数器重载（ACR）功能时，ACR掩码值被错误地保存到了通用计数器（GP Counter）在 `acr_cfg_b[]` 数组中的位置，而非预期的固定计数器位置。例如，Fixed Counter 0 的 ACR 掩码值本应保存至 `acr_cfg_b[32]`，实际却被错误地保存到了 `acr_cfg_b[0]`。这会导致 ACR 功能配置错乱，影响性能监控数据的准确性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `intel_pmu_config_acr()` 函数中，计算固定计数器的 MSR 地址偏移量时存在逻辑错误。原代码在处理固定计数器时，直接修改了硬件索引 `idx`（执行 `idx -= INTEL_PMC_IDX_FIXED`），随后将该减法结果作为索引传递给 `wrmsrl` 进行写入。
+然而，`x86_pmu.addr_offset` 函数的内部实现已经包含了对 `idx` 参数的处理逻辑。原代码先对 `idx` 进行了减法操作，再传入 `addr_offset`，导致双重偏移计算，从而得出了错误的 MSR 索引地址，将固定计数器的配置写到了错误的位置。
+
+#解决方案
+修复 `intel_pmu_config_acr()` 函数中的索引计算逻辑：
+1. 引入一个新的局部变量 `msr_offset` 用于存储计算后的偏移量。
+2. 对于通用计数器，直接调用 `x86_pmu.addr_offset(idx, false)` 获取偏移。
+3. 对于固定计数器，在调用 `x86_pmu.addr_offset` 时，传入 `idx - INTEL_PMC_IDX_FIXED` 作为参数，而不是先修改 `idx` 本身。这确保了传递给数组索引 `acr_cfg_b[idx]` 的 `idx` 保持正确的硬件索引值，同时 MSR 写入地址使用了正确的偏移计算逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bc2d96f5fc9d2ec7aa383821fac32d789b5c2f8d

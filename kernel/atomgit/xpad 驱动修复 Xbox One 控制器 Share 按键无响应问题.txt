@@ -1,0 +1,22 @@
+#标题
+xpad 驱动修复 Xbox One 控制器 Share 按键无响应问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Xbox One 及 Xbox Series S|X 部分型号控制器（如 Microsoft Xbox Series S|X Controller、HyperX Clutch Gladiate v2、ASUS ROG RAIKIRI、SCUF Gaming Controller）连接系统后，按下 Share 按键无反应，无法触发预期的按键事件，导致功能不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+控制器数据包中 Share 按键的状态偏移量并非固定值，而是取决于特定接口的存在与否，位于数据包末尾的两个不同位置之一。由于驱动程序缺乏对标识数据包的解析能力，无法自动判断接口是否存在，导致原代码使用了硬编码的固定偏移量 `data[22]` 来读取按键状态，该位置对部分控制器无效，从而导致按键功能失效。
+
+#解决方案
+1. 新增 `MAP_SHARE_BUTTON` 和 `MAP_SHARE_OFFSET` 宏定义，用于标记设备是否支持 Share 按键以及确定其在数据包中的正确偏移位置。
+2. 修改 `xpadone_process_packet` 函数接口，增加数据包长度参数 `len`，通过计算 `data[len - 26]` 或 `data[len - 18]` 动态定位按键偏移量。
+3. 在设备列表 `xpad_device` 中，针对已知存在问题的特定控制器型号（如 0x045e:0x0b12、0x03f0:0x08B6 等）添加相应的映射标志位，修正按键读取逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f854f00f3723f1012d8757c9d94e648355480407

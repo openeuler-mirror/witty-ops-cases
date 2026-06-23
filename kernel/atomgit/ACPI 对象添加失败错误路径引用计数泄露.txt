@@ -1,0 +1,20 @@
+#标题
+ACPI 对象添加失败错误路径引用计数泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ACPI 设备对象添加流程中（如 `acpi_add_power_resource` 或 `acpi_add_single_object` 函数），若 `acpi_device_add()` 执行失败，系统不会产生显式的崩溃或错误日志，但会导致内核对象引用计数泄露（refcount leak），可能引发内存泄露或设备资源无法正常释放的问题。
+
+#主要错误日志
+未知
+
+#问题根因
+`acpi_init_device_object()` 初始化后，`struct acpi_device` 的生命周期应由驱动核心通过引用计数管理。但在 `acpi_add_power_resource()` 和 `acpi_add_single_object()` 的错误处理路径中，代码直接调用了 release 回调函数（如 `acpi_release_power_resource` 或 `acpi_device_release`）来释放对象。这绕过了正常的设备生命周期规则，导致在未释放 `device_initialize()` 获取的引用的情况下直接释放了对象，从而引发引用计数泄露。
+
+#解决方案
+修改 `acpi_add_power_resource()` 和 `acpi_add_single_object()` 函数的错误处理路径，将直接调用 release 回调函数改为调用 `acpi_dev_put()`。此举确保正确减少引用计数，并由 release 回调函数在引用计数归零时执行最终的清理工作，从而遵循正常的设备生命周期管理规则。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7fe607c4e1a067e427f4a6c4abcf743d555c3e53

@@ -1,0 +1,20 @@
+#标题
+gpio: bcm-kona: GPIO锁控功能在非0号Bank失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Broadcom Kona GPIO控制器在操作GPIO编号大于32（即非0号Bank）的引脚时，锁定（lock）与解锁（unlock）功能失效。具体表现为无法正确对高编号GPIO进行硬件锁定状态设置或清除，可能导致GPIO权限控制异常或相关功能模块工作不正常。
+
+#主要错误日志
+未知
+
+#问题根因
+在GPIO锁定和解锁函数中，写入寄存器的位掩码计算错误。代码直接使用了全局GPIO编号作为位索引（`BIT(gpio)`），而该寄存器是按Bank划分的，应该使用GPIO在当前Bank内的偏移索引（`GPIO_BIT(gpio)`）。这导致对于编号超过32的GPIO（即Bank 1及以上的Bank），计算出的位掩码超出了当前Bank寄存器的有效位范围，从而无法正确操作对应的锁定位。
+
+#解决方案
+修正 `bcm_kona_gpio_lock_gpio` 和 `bcm_kona_gpio_unlock_gpio` 函数中的位掩码计算逻辑。引入 `int bit = GPIO_BIT(gpio)` 变量获取GPIO在当前Bank内的索引，并将寄存器操作中的 `BIT(gpio)` 替换为 `BIT(bit)`，确保写入的是对应Bank内的正确位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4217b6e5ab73a621f66009448e4a51c331f0a2e7

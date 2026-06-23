@@ -1,0 +1,26 @@
+#标题
+usb: renesas-xhci: External ROM访问超时导致SPI EEPROM编程失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在针对 uPD720201 控制器编程 External SPI EEPROM 芯片时，操作可能失败。具体表现为芯片擦除或扇区擦除操作无法在预期时间内完成，导致固件下载或 ROM 写入流程异常。使用 Macronix MX25L5121E 或 MX25V5126F 等 SPI EEPROM 时更容易复现此问题。
+
+#主要错误日志
+未知
+
+#问题根因
+当前代码中定义的 External ROM 访问超时时间过短。具体而言：
+1. `renesas_rom_erase()` 函数中的 Chip Erase 超时时间设为 100ms。
+2. `renesas_fw_download_image()` 函数中控制器发出的 Sector Erase 超时时间设为 100ms。
+根据芯片手册，Macronix MX25L5121E 的 Chip Erase 最大耗时需 2 秒，Sector Erase 需 300ms；MX25V5126F 的 Chip Erase 最大耗时需 3.2 秒，Sector Erase 需 400ms。驱动设定的 100ms 超时远低于这些芯片的实际性能指标，导致操作尚未完成即触发超时失败。
+
+#解决方案
+调整 ROM 访问的超时重试次数，延长等待时间以适配主流 SPI EEPROM 芯片：
+1. 将 Sector Erase 的重试次数调整为 50000 次（约 500ms）。
+2. 新增 Chip Erase 专用的重试次数 500000 次（约 5秒）。
+此调整确保超时时间覆盖手册规定的最大擦除时间，解决编程失败问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4bd2cb959c753c3efe506fd40bedb050b40d0a34

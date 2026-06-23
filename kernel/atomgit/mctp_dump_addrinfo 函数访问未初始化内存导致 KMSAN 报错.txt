@@ -1,0 +1,25 @@
+#标题
+mctp_dump_addrinfo 函数访问未初始化内存导致 KMSAN 报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户空间程序（如 dhcpd 或 busybox "ip addr show"）发起 MCTP 地址信息转储请求且未提供完整的 ifaddrmsg 结构体时，内核会访问未初始化的内存。这会触发 KMSAN（Kernel Memory Sanitizer）检测到未初始化值的使用，导致内核报错并打印调用栈。
+
+#主要错误日志
+BUG: KMSAN: uninit-value in mctp_dump_addrinfo+0x208/0xac0 net/mctp/device.c:128
+ mctp_dump_addrinfo+0x208/0xac0 net/mctp/device.c:128
+ rtnl_dump_all+0x3ec/0x5b0 net/core/rtnetlink.c:4380
+ rtnl_dumpit+0xd5/0x2f0 net/core/rtnetlink.c:6824
+ netlink_dump+0x97b/0x1690 net/netlink/af_netlink.c:2309
+（推断）mctp: Invalid header for addr dump request
+
+#问题根因
+在 `mctp_dump_addrinfo` 函数中，代码直接从 `nlmsg_data(cb->nlh)` 获取 `ifaddrmsg` 结构体指针，并读取其中的 `ifa_index` 字段用于接口过滤。然而，在某些调用场景下（如 syzkaller 触发的 dhcpd 或 busybox ip 命令），传入的 netlink 消息长度可能不足以包含完整的 `ifaddrmsg` 结构体。此时，直接读取 `hdr->ifa_index` 实际上是在访问未初始化的内存区域，从而触发 KMSAN 报错。
+
+#解决方案
+在读取 `ifa_index` 前增加对 netlink 消息长度的校验。如果 `cb->nlh->nlmsg_len` 大于等于 `ifaddrmsg` 结构体的大小，则正常解析 `ifa_index`；否则，判断是否开启了严格检查模式（`strict_check`）。若开启了严格检查，则设置错误提示信息并返回 `-EINVAL`；若未开启，则跳过接口过滤（将 `ifindex` 默认初始化为 0），避免访问未初始化内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c0f559315b720b7f38d7e0027363c2ed2a712cac

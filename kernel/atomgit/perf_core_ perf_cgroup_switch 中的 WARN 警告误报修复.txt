@@ -1,0 +1,23 @@
+#标题
+perf/core: perf_cgroup_switch 中的 WARN 警告误报修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行过程中，内核日志中触发 `WARN_ON_ONCE(cpuctx->ctx.nr_cgroups == 0)` 警告。该警告出现在 `perf_cgroup_switch` 函数中，实际上是一个误报（false positive），且伴随着潜在的竞争条件风险。
+
+#主要错误日志
+Call trace 或日志中包含：
+`WARN_ON_ONCE(cpuctx->ctx.nr_cgroups == 0);`
+
+#问题根因
+`WARN_ON_ONCE` 检查语句位于锁保护区域之外。当发生 `perf_remove_from_context()` 与 `perf_cgroup_switch()` 的竞争时，可能在锁外读取到不一致的状态，导致条件判断触发警告，而实际上这是一个正常的竞争场景，不应该报警。
+
+#解决方案
+1. 将 `WARN_ON_ONCE(cpuctx->ctx.nr_cgroups == 0)` 判定语句移至 `perf_ctx_lock` 临界区内部。
+2. 引入 `guard(perf_ctx_lock)` 机制自动管理锁的生命周期。
+3. 在获取锁后增加对 `cpuctx->cgrp` 的二次检查（Re-check），以正确处理与 `perf_remove_from_context()` 的竞争，避免在 cgroup 已被移除的情况下继续执行后续逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f36b06323c07e5f1fa253f4181850d274496b895

@@ -1,0 +1,21 @@
+#标题
+RDMA/hns: sysfs 中 u32 与 __le32 类型混用导致的数据处理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hns_roce 驱动中，拥塞控制算法参数配置结构体 `hns_roce_scc_param` 的 `lifespan` 字段存在类型不一致问题。该字段定义为 `u32`，但在部分操作中被当作 `__le32` 处理（如 memcpy 操作），且在计算 jiffies 时未进行字节序转换，可能导致该字段值解析错误，进而影响拥塞控制参数的生命周期判断逻辑。
+
+#主要错误日志
+未知
+
+#问题根因
+结构体 `hns_roce_scc_param` 中的 `lifespan` 字段定义为 `u32` 类型，但代码逻辑中将其作为 `__le32` 进行操作（如 memcpy），且在使用 `msecs_to_jiffies` 进行转换时，直接使用了 `scc_param->lifespan` 而未进行 `le32_to_cpu` 转换。这种类型混用和缺失字节序转换导致了数据处理错误。
+
+#解决方案
+1. 将 `hns_roce_scc_param` 结构体中的 `lifespan` 字段类型从 `u32` 修改为 `__le32`，以匹配其实际在内存中的存储格式。
+2. 在调用 `msecs_to_jiffies` 时，对 `scc_param->lifespan` 添加 `le32_to_cpu()` 转换，确保在计算时间前将其转换为主机字节序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c78aee253fff8279cf1930b1a90dc3ae5afcdf94

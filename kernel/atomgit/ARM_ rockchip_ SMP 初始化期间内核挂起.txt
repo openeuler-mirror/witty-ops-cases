@@ -1,0 +1,21 @@
+#标题
+ARM: rockchip: SMP 初始化期间内核挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RK3188 平台进行 SMP（多核）初始化时，主 CPU 向 SRAM 写入 trampoline 代码以启动从 CPU。由于写入 SRAM 时从 CPU 处于上电状态，可能导致从 CPU 在内核非预期的情况下执行 trampoline 代码，从而引发内核挂起。该故障表现为偶现的启动卡死。
+
+#主要错误日志
+[    0.091568] CPU0: thread -1, cpu 0, socket 0, mpidr 80000000
+[    0.091996] rockchip_smp_prepare_cpus: ncores 4
+
+#问题根因
+在 `rockchip_smp_prepare_cpus` 函数中，SRAM 初始化操作（写入 trampoline 代码）发生时，从 CPU 尚未被显式下电。对于 RK3188（Cortex-A9 架构），如果在从 CPU 上电状态下写入 SRAM，可能会导致从 CPU 立即执行代码，进而引发竞争条件或内核挂起。
+
+#解决方案
+调整代码执行顺序，将 `rockchip_smp_prepare_sram`（SRAM 初始化）操作移动到所有从 CPU 被显式下电之后执行。确保在写入 trampoline 代码时，所有非主 CPU 均处于下电状态，从而避免竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db96ebbb2ded79cd6a36f603e585b377bac6ecc1

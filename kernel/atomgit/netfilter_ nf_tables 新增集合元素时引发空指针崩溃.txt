@@ -1,0 +1,40 @@
+#标题
+netfilter: nf_tables 新增集合元素时引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `nft_add_set_elem()` 添加集合元素的过程中，由于 elem 结构体未正确初始化，导致后续事务处理流程中触发内核空指针解引用，系统崩溃并打印调用栈。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address 0000000000000014
+Call trace:
+ nft_setelem_remove+0x28/0xe0 [nf_tables]
+ __nf_tables_abort+0x5f8/0xbe8 [nf_tables]
+ nf_tables_abort+0x64/0x1c8 [nf_tables]
+ nfnetlink_rcv_batch+0x2d8/0x850 [nfnetlink]
+ nfnetlink_rcv+0x168/0x1a8 [nfnetlink]
+ netlink_unicast_kernel+0x7c/0x160
+ netlink_unicast+0x1ac/0x250
+ netlink_sendmsg+0x21c/0x458
+ __sock_sendmsg+0x4c/0xa8
+ ____sys_sendmsg+0x280/0x300
+ ___sys_sendmsg+0x8c/0xf8
+ __sys_sendmsg+0x74/0xe0
+ __arm64_sys_sendmsg+0x2c/0x40
+ invoke_syscall+0x50/0x128
+ el0_svc_common.constprop.0+0xc8/0xf0
+ do_el0_svc+0x48/0x78
+ el0_slow_syscall+0x44/0x1b8
+ el0t_64_sync_handler+0x100/0x130
+ el0t_64_sync+0x188/0x190
+
+#问题根因
+在 `nft_add_set_elem()` 函数中，elem 结构体的初始化过程缺失。当事务被中止（abort）时，`nft_setelem_remove` 函数尝试访问该未初始化的 elem 结构体成员，导致 NULL 指针解引用错误。
+
+#解决方案
+在 `nft_add_set_elem()` 函数中添加 `nft_trans_elem(trans) = elem;` 语句，确保在将事务添加到提交列表之前，正确初始化并绑定 elem 数据，从而防止后续处理流程中访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce07ff4681bc4d83315681ae78e0b7ef1a5bd315

@@ -1,0 +1,20 @@
+#标题
+spi: wpcm-fiu: 修复 wpcm_fiu_probe 中潜在的空指针解引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 wpcm-fiu 驱动探测过程中，如果 `platform_get_resource_byname` 无法找到指定的内存资源，将返回 NULL 指针。驱动代码在未进行空指针检查的情况下，直接将该资源指针传递给 `resource_size()` 函数，导致内核发生空指针解引用并触发 panic 或 oops，系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `wpcm_fiu_probe()` 调用 `platform_get_resource_byname()` 获取名为 "memory" 的资源，该函数可能返回 NULL。代码原本在验证 `devm_ioremap_resource` 返回值之前就调用了 `resource_size(res)`，当 `res` 为 NULL 时，解引用操作导致内核崩溃。
+
+#解决方案
+将 `fiu->memory_size` 的赋值操作（包含 `resource_size(res)` 调用）移动到 `devm_ioremap_resource()` 的错误检查代码之后。这确保了只有在资源获取及映射初步有效的情况下才进行 size 计算，避免了潜在的空指针解引用风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ccdb7b3179902436f1b1dc156eeed8b095717c6

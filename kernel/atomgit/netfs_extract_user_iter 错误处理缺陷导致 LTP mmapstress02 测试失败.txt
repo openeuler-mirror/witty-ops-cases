@@ -1,0 +1,26 @@
+#标题
+netfs_extract_user_iter 错误处理缺陷导致 LTP mmapstress02 测试失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CIFS 文件系统上运行 LTP 测试用例 mmapstress02 时测试失败。该问题源于 `netfs_extract_user_iter` 函数在处理用户页面提取时，未能正确处理 `iov_iter_extract_pages` 返回 0 或负数的错误情况，导致直接 IO（DIO）的读写行为异常。
+
+#主要错误日志
+Couldn't get user pages (rc=%zd)
+（注：该日志原文在修复补丁中被移除，替换为更严谨的错误处理逻辑，推断为故障发生时可能触发的打印）
+
+#问题根因
+函数 `netfs_extract_user_iter` 在调用 `iov_iter_extract_pages` 失败时的处理逻辑存在缺陷：
+1. 仅检查了返回值 `ret < 0` 的情况，未处理返回值为 0 的边界情况。
+2. 当提取页面失败（如返回 -ENOMEM）或返回 0 时，代码直接中断循环，但没有正确区分是否应该允许“短 IO”操作。
+3. 如果在已提取部分页面（`npages > 0`）的情况下发生错误，原有逻辑未允许下发已提取部分的 IO 请求，而是错误地返回了失败，导致针对 CIFS 的直接 IO 读写在特定压力测试下失败。
+
+#解决方案
+修改 `fs/netfs/iterator.c` 中的错误处理逻辑：
+1. 将循环内的判断条件从 `if (ret < 0)` 修改为 `if (unlikely(ret <= 0))`，并在返回值为 0 时转换为 `-EIO` 后跳出循环。
+2. 在循环结束后增加精细化错误处理：仅当返回错误为 `-ENOMEM` 或者完全没有提取到页面（`npages == 0`）时，才释放已分配的资源并返回错误码；否则允许利用已成功提取的页面继续进行后续的短 IO 操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/40bcacd5f7f6c813e29deaefdf718ea88abe3afb

@@ -1,0 +1,25 @@
+#标题
+netfilter: nf_reject回环报文处理导致dst引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理回环接口的报文并触发NF_REJECT功能（如发送ICMP不可达或RST重置报文）时，内核触发WARN_ON告警，提示试图替换一个非空的skb dst entry，导致dst引用计数泄漏。
+
+#主要错误日志
+WARNING: include/linux/skbuff.h:1165 skb_dst_check_unset include/linux/skbuff.h:1164 [inline]
+WARNING: include/linux/skbuff.h:1165 skb_dst_set include/linux/skbuff.h:1210 [inline]
+WARNING: include/linux/skbuff.h:1165 nf_reject_fill_skb_dst+0x2a4/0x330 net/ipv4/netfilter/nf_reject_ipv4.c:234
+Call Trace:
+ nf_send_unreach+0x17b/0x6e0 net/ipv4/netfilter/nf_reject_ipv4.c:325
+ nft_reject_inet_eval+0x4bc/0x690 net/netfilter/nft_reject_inet.c:27
+
+#问题根因
+早期提交（f53b9b0bdc59）引入了在PREROUTING阶段进行reject的支持，但忽略了回环报文的特性。回环报文在PRE_ROUTING阶段就已经携带了dst_entry（路由信息）。代码原先仅通过Hook点类型（如NF_INET_PRE_ROUTING）来判断是否需要填充dst，导致对已有dst的回环报文错误地执行了填充操作，进而覆盖了原有的dst entry，造成引用计数泄漏并触发警告。
+
+#解决方案
+修改nf_send_reset、nf_send_unreach及其IPv6对应函数的逻辑，不再仅依据Hook点类型判断，而是直接检查skb是否已经attached了dst entry。如果skb已经包含路由信息（即`skb_dst(oldskb)`非空），则跳过dst填充函数（如nf_reject_fill_skb_dst），避免覆盖现有路由导致泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4752b115998d7ea928883ac9320b05bbdbb09ed9

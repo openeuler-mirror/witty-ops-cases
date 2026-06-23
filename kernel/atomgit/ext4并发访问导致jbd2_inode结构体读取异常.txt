@@ -1,0 +1,22 @@
+#标题
+ext4并发访问导致jbd2_inode结构体读取异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启ext4 fast commit功能的高并发场景下，读取或截断文件时，内核可能读取到未完全初始化的`jbd2_inode`结构体指针。这可能导致内核访问无效内存区域，引发系统崩溃、Oops或文件系统数据不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在`ext4_inode_attach_jinode`函数中，代码在初始化`jbd2_inode`结构体之前就将其指针赋值给了`ei->jinode`。由于缺乏必要的内存屏障，其他并发执行的线程（如执行fast commit提交、等待或截断操作的线程）可能通过`READ_ONCE`或直接读取观察到该指针，并尝试访问尚未完成初始化的结构体成员（如`jinode->i_vfs_inode`），从而导致Use-After-Free或访问未初始化内存的严重错误。
+
+#解决方案
+1. 调整初始化顺序：确保先调用`jbd2_journal_init_jbd_inode`完成`jbd2_inode`结构体的完整初始化，再将其赋值给`ei->jinode`。
+2. 引入内存屏障与原子写：在初始化完成与指针赋值之间添加`smp_wmb()`写屏障，并使用`WRITE_ONCE`宏进行指针赋值，确保其他线程观察到指针非空时，其指向的内容已完全初始化。
+3. 统一读取方式：在`ext4_fc_submit_inode_data_all`、`ext4_fc_wait_inode_data_all`和`ext4_begin_ordered_truncate`等读取路径中，使用`READ_ONCE`宏安全地读取`jinode`指针，防止编译器优化导致的读取不一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dcec2e4b453a56dacb1b50507d869e42cff308f9

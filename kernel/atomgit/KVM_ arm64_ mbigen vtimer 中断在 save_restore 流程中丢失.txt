@@ -1,0 +1,26 @@
+#标题
+KVM: arm64: mbigen vtimer 中断在 save/restore 流程中丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 KVM 场景下进行 vcpu put/load（如虚拟机迁移或休眠唤醒）的 save/restore 流程中，虚拟定时器（vtimer）中断发生丢失。具体表现为：如果 vtimer 已过期且 mbigen 处于 active 状态，但中断消息尚未发送给 ITS，此时软件侧保存的状态显示 active=1，但实际硬件的中断请求已被错误清除。这导致 mbigen active 状态无法被正确恢复并永久清除，进而阻塞后续所有的 vtimer 中断注入。
+
+#主要错误日志
+未知
+
+#问题根因
+软件假设当 mbigen active 被置为 1 时，mbigen 已经向 ITS 发送了写请求中断。然而，硬件实际行为分为两个阶段：
+1. 第一阶段：MBIX 输出置 1，表示有待发送的写请求，此时 mbigen active 被置为 1。
+2. 第二阶段：mbigen_wr 信号实际发送写请求。
+问题发生在软件在第一阶段和第二阶段之间执行了 save 操作：软件读取并保存了 active=1 的状态，随后通过写 MBIX_INT_CLR 寄存器清除 active 位。由于此时硬件还未来得及发送写请求（第二阶段），该清除操作导致本应发送的中断请求也被一并清除。但软件侧已保存了 active=1 的错误状态，导致后续 restore 流程逻辑异常，造成中断丢失或阻塞。
+
+#解决方案
+修改 mbigen 的 save/restore 逻辑：
+1. 在 `kvm_vtimer_mbigen_save_stat` 函数中，移除主动清除 mbigen active 状态的代码逻辑，避免在硬件发送中断请求前错误清除中断。
+2. 在 `kvm_vtimer_mbigen_restore_stat` 函数中，移除恢复 mbigen active 状态的代码，避免恢复错误的 active 状态导致后续中断被阻塞。
+3. 配合 `kvm_vtimer_mbigen_auto_clr_set` 功能，在 vcpu put 流程中由硬件确保 active 状态自动清除。该方案虽然可能引入极少量的额外中断，但可被 Guest OS（如 Linux）正常处理，从而解决了中断丢失和阻塞问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/379e25fca89e09af322e6eee912bc8a67c55a783

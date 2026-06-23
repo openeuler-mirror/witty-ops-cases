@@ -1,0 +1,20 @@
+#标题
+thunderbolt: nhi_wake_supported 因属性读取逻辑错误导致错误返回唤醒支持状态
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Thunderbolt 控制器驱动中，`nhi_wake_supported()` 函数逻辑异常。当设备固件中不存在 "WAKE_SUPPORTED" 属性时，该函数本应返回默认值，但实际上会因为使用了未初始化的变量 `val` 而大概率返回 `true`。这会导致系统错误地认为设备支持唤醒功能，可能在电源管理（特别是 S4 状态唤醒）过程中引发不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+`device_property_read_u8()` 函数在成功读取属性时返回 0，失败时返回非 0 值。原代码逻辑为 `if (device_property_read_u8(...))`，即当读取失败（属性不存在）时进入判断分支。此时变量 `val` 未被赋值（未初始化），导致 `return !!val` 语句使用了随机垃圾值，使得函数在属性不存在时错误地返回 `true`。
+
+#解决方案
+修改 `drivers/thunderbolt/nhi.c` 中的条件判断逻辑，将 `if (device_property_read_u8(...))` 更改为 `if (!device_property_read_u8(...))`。这确保了只有在属性读取成功时才使用 `val` 的值进行判断，若读取失败则直接返回默认值 `true`，从而避免了使用未初始化变量的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d972362a7d6ab3401eeedf67fa41504629d5a9a6

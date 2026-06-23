@@ -1,0 +1,22 @@
+#标题
+urma 模块处理请求时引用计数泄漏导致设备对象未释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 urma_admin 聚合删除 eid 操作或处理 seg/jetty 信息请求过程中，若 `ubcore_user_control` 或发送响应函数执行失败，内核未正确释放设备的引用计数，导致设备对象引用计数泄漏，无法正常卸载或释放设备资源。
+
+#主要错误日志
+- ubcore_log_err("Failed to get seg info by user ctl");
+- ubcore_log_err("Failed to send create resp message.\n");
+- ubcore_log_err("Failed to get jetty info by user ctl");
+
+#问题根因
+在 `handle_seg_info_req` 和 `handle_jetty_info_req` 函数中，代码逻辑在获取 `bonding_dev` 设备对象后，若后续操作（如 `ubcore_user_control` 或 `send_xxx_resp`）失败，直接返回或仅打印错误日志，遗漏了调用 `ubcore_put_device(bonding_dev)` 进行引用计数释放的步骤，导致设备引用计数泄漏。
+
+#解决方案
+在 `handle_seg_info_req` 和 `handle_jetty_info_req` 函数的错误处理路径中增加 `goto put_device` 跳转，确保在函数退出前无论成功或失败均调用 `ubcore_put_device(bonding_dev)` 释放设备引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/92c700c4c276585ba1b6ba777842d0638affb0f1

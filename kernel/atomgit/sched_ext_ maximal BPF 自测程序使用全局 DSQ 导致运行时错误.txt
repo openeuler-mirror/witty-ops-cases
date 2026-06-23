@@ -1,0 +1,24 @@
+#标题
+sched_ext: maximal BPF 自测程序使用全局 DSQ 导致运行时错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 sched_ext 的 maximal.bpf.c 自测程序时，由于调度器直接分发和消费全局调度队列（SCX_DSQ_GLOBAL），导致触发运行时错误，影响自测程序的正常执行与验证。
+
+#主要错误日志
+未知
+
+#问题根因
+maximal.bpf.c 测试程序旨在验证尽可能多的 ops 回调功能，但其在实现中错误地使用了 SCX_DSQ_GLOBAL 进行任务的分发与消费。根据 sched_ext 的设计约束，调度器应创建并使用自己的 DSQ，而非直接操作全局 DSQ，从而导致了运行时错误。
+
+#解决方案
+修改 maximal.bpf.c 文件，将调度队列的操作从全局 DSQ 切换为自定义 DSQ：
+1. 定义宏 DSQ_ID 为 0。
+2. 在 `maximal_enqueue` 函数中，将 `scx_bpf_dsq_insert` 的目标队列参数从 `SCX_DSQ_GLOBAL` 修改为 `DSQ_ID`。
+3. 在 `maximal_dispatch` 函数中，将 `scx_bpf_dsq_move_to_local` 的源队列参数从 `SCX_DSQ_GLOBAL` 修改为 `DSQ_ID`。
+4. 在 `maximal_init` 初始化函数中，添加 `scx_bpf_create_dsq(DSQ_ID, -1)` 调用以创建自定义 DSQ。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/764465b4009e867ad07885ac6dd01e0febe9c8f8

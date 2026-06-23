@@ -1,0 +1,23 @@
+#标题
+qrtr_ns 模块驱动卸载时的 use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 qrtr_ns 驱动（执行 remove 操作）过程中，若在销毁工作队列（destroy_workqueue）之后、释放套接字（sock_release）之前有数据包到达，会触发 use-after-free 问题，可能导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在驱动的 remove 回调函数中，销毁工作队列（destroy_workqueue()）与释放套接字（sock_release()）之间存在时间窗口。如果在此期间有数据包到达，`qrtr_ns_data_ready()` 回调函数会尝试将工作项加入队列，此时访问已经被销毁的工作队列结构体导致了 use-after-free。
+
+#解决方案
+1. 在 `qrtr_ns_init()` 初始化阶段保存原始的 `sk_data_ready` 回调函数指针。
+2. 在 `qrtr_ns_remove()` 卸载阶段开始时，立即将套接字的 `sk_data_ready` 回调恢复为原始保存的回调函数。
+3. 在恢复回调前，使用 `write_lock_bh` 保护回调指针的修改，确保并发安全。
+4. 在销毁工作队列前增加 `synchronize_net()` 调用，确保 RX 线程处理完成，避免竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/637287daf6a2dc61695814fb81c202d5f8b18de6

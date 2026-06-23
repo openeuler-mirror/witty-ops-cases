@@ -1,0 +1,28 @@
+#标题
+resctrl 挂载选项在挂载列表中显示错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+挂载 resctrl 文件系统后，通过查看挂载列表发现挂载选项显示异常：
+1. 使用 `-o l2` 选项挂载时，挂载列表中不显示 `l2` 选项。
+2. 使用 `-o cdp` 选项挂载时，挂载列表中错误地额外显示了 `cdpl2` 信息。
+修复后，挂载列表将显示实际有效的挂载参数，例如：`-o cdpl2` 仅显示 `cdp`，`-o l2,cdpl2` 显示 `l2,cdpl2`。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `rdtgroup_show_options` 在显示挂载选项时逻辑存在缺陷：
+1. 缺少对 `l2` 选项的显示逻辑判断，导致在 ARM64 MPAM 配置下 L2 资源不可见时无法正确显示该选项。
+2. 显示 `cdpl2` 选项时未检查 L2 资源是否可见（`invisible` 属性），导致在 L2 资源不可见的情况下错误地输出了 `cdpl2` 信息。
+
+#解决方案
+修改 `fs/resctrl/rdtgroup.c` 中的 `rdtgroup_show_options` 函数：
+1. 新增变量 `l2_visible` 用于判断 L2 资源是否可见。
+2. 在输出 `cdpl2` 选项前增加 `l2_visible` 的判断条件，防止不可见资源对应的选项被错误显示。
+3. 补充在 `CONFIG_ARM64_MPAM` 配置且 L2 资源可见时显示 `l2` 选项的逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/11f9972b32685731940ea13000e9743d7faeecd9

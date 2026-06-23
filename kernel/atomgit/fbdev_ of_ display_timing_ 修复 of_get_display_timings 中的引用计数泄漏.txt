@@ -1,0 +1,21 @@
+#标题
+fbdev: of: display_timing: 修复 of_get_display_timings 中的引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设备树解析显示时序过程中，若遇到特定错误路径（如无时序指定或内存分配失败），内核无法正确释放 `native_mode` 节点的引用计数，导致该 device_node 的引用计数泄漏（refcount leak）。长期累积可能导致内存资源耗尽或设备卸载异常。
+
+#主要错误日志
+- `%pOF: no timings specified\n`
+- `%pOF: could not allocate timings array\n`
+
+#问题根因
+函数 `of_parse_phandle()` 返回一个引用计数已增加的 device_node 并存储在 `entry` 变量中，随后该指针被复制到 `native_mode` 变量。当代码在第 184 行或第 192 行的错误处理路径跳转到 `entryfail` 标签时，没有调用 `of_node_put(native_mode)` 来递减引用计数，从而导致引用计数泄漏。
+
+#解决方案
+修改错误处理路径的跳转目标，将第 184 行和第 192 行的 `goto entryfail` 改为 `goto timingfail`。`timingfail` 标签对应的代码块包含 `of_node_put(native_mode)` 操作，确保在清理过程中正确释放引用计数，修复内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2274f04b194c2895a1252c694bd078435c73ecda

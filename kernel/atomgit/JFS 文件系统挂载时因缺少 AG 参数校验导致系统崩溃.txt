@@ -1,0 +1,24 @@
+#标题
+JFS 文件系统挂载时因缺少 AG 参数校验导致系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+挂载一个包含损坏或恶意构造位图数据的 JFS 文件系统镜像时，内核在 `dbMount` 函数中因读取到非法的 AG（Allocation Group）参数，导致内核崩溃或系统异常。
+
+#主要错误日志
+未知
+
+#问题根因
+JFS 文件系统在挂载阶段加载磁盘位图信息时，`dbMount` 函数未对从磁盘读取的 `db_agheight`、`db_agwidth`、`db_agstart` 等 AG（Allocation Group）参数进行充分的有效性校验。如果磁盘数据被篡改或损坏，这些非法参数会导致后续内核计算或内存访问越界，进而引发 panic。
+
+#解决方案
+在 `fs/jfs/jfs_dmap.c` 的 `dbMount` 函数中，增加对 AG 相关参数的完整性校验。具体修复措施包括：
+1. 新增对 `db_agheight` 的范围检查，防止其超过 `L2LPERCTL >> 1`。
+2. 新增对 `db_agwidth` 的范围与逻辑检查，确保其值在 1 到 `LPERCTL / MAXAG` 之间，且符合树结构计算逻辑。
+3. 新增对 `db_agstart` 的边界检查，防止其越界访问 CTL 树结构。
+4. 将原本分散的多个条件判断合并为一个统一的校验块，若任一参数校验失败，则直接返回 `-EINVAL` 错误，阻止文件系统挂载。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e85d00ca34d1e6757be9b0f553fd8ee122a22ab4

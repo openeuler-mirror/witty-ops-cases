@@ -1,0 +1,20 @@
+#标题
+bcmgenet: 修复 bcmgenet_put_txcb 函数中的差一错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 bcmgenet 网卡驱动发送数据时，若触发了发送描述符指针的回绕，`bcmgenet_put_txcb` 函数会返回错误的 tx_cb 指针。这导致驱动对错误的发送控制块进行清理或解除映射，进而引发内存管理错误、数据损坏或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+`bcmgenet_put_txcb` 函数中存在差一错误。`write_ptr` 指向下一个可用的 tx_cb，在需要回退以获取当前正在处理的 tx_cb 时，代码逻辑错误地先获取了 tx_cb 指针，随后才对 `write_ptr` 进行回退。这导致返回的 tx_cb 实际上是下一个将要使用的（错误的）控制块，而非当前需要清理的控制块，从而导致资源清理逻辑处理了错误的对象。
+
+#解决方案
+调整 `bcmgenet_put_txcb` 函数中的代码执行顺序，先执行 `write_ptr` 指针的回退操作，然后再根据回退后的 `write_ptr` 计算 tx_cb 指针并返回。这确保了返回的是正确被回绕清理的 tx_cb，以便对其进行正确的清理操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab77ca3aee1b94f78ba259ee2dea532052756a39

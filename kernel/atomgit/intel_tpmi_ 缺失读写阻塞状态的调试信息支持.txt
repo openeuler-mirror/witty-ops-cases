@@ -1,0 +1,22 @@
+#标题
+intel/tpmi: 缺失读写阻塞状态的调试信息支持
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 debugfs 查看 TPMI（Topology Aware Register and PM Campus Interface）功能状态时，用户只能看到 `locked`（锁定）和 `disabled`（禁用）状态，无法获取硬件层面的 `read_blocked`（读阻塞）和 `write_blocked`（写阻塞）状态。这导致当 TPMI 功能因硬件读写阻塞配置导致操作失败（如写入被忽略或读取全 0xFF）时，缺乏关键的调试信息来定位问题根源。
+
+#主要错误日志
+未知
+
+#问题根因
+TPMI 规范定义了完整的功能状态寄存器，包含 enabled、write_blocked、read_blocked、locked 等字段。当前代码中 `tpmi_read_feature_status()` 函数仅解析了 `disabled` 和 `locked` 状态位，未读取并解析 `write_blocked` 和 `read_blocked` 相关的硬件状态位。这导致 debugfs 接口无法向用户展示完整的硬件阻塞状态。
+
+#解决方案
+1. 新增 `struct tpmi_feature_state` 结构体，完整定义 TPMI 功能状态寄存器位域，包含 enabled、write_blocked、read_blocked、locked 等字段。
+2. 重构 `tpmi_read_feature_status()` 函数，将原来仅提取部分状态的逻辑改为使用 `memcpy_fromio` 读取完整的硬件状态到新结构体中。
+3. 更新 debugfs 的 `tpmi_pfs_dbg_show` 接口，增加 `read_blocked` 和 `write_blocked` 列的显示，以便用户能查看到完整的硬件阻塞状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d41771b29f76a6c0a06c1cfb61ab0fed7ca87acf

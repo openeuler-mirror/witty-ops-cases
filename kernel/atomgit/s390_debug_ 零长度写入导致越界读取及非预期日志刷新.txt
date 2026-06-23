@@ -1,0 +1,22 @@
+#标题
+s390/debug: 零长度写入导致越界读取及非预期日志刷新
+
+#内核版本
+OLK-6.6
+
+#问题现象
+对 s390 debug 文件系统进行写入操作时，若写入长度为 0，会触发内核越界读取。具体表现为：
+1. 若用户态缓冲区后的残余字节为 '-' 或数字字符，debug 日志会被非预期地静默清空。
+2. 若用户态传入的缓冲区未映射（unmapped），写入系统调用返回 -EFAULT 错误，而非预期的 -EINVAL。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `debug_input_flush_fn()` 在处理写入请求时，未对写入长度 `user_len` 进行校验，直接调用 `copy_from_user()` 从用户态拷贝 1 个字节。当写入长度为 0 时，该操作读取了用户态缓冲区范围之外的 1 个字节，导致越界读取。
+
+#解决方案
+在 `debug_input_flush_fn()` 函数中增加对 `user_len` 的判断，若长度为 0，直接返回 `-EINVAL` 错误码，避免执行后续的 `copy_from_user()` 操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9a3499a3beeae020b9f4e558c32b7e80b880cbc8

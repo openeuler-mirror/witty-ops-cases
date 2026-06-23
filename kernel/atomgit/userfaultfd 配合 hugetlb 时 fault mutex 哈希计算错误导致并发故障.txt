@@ -1,0 +1,20 @@
+#标题
+userfaultfd 配合 hugetlb 时 fault mutex 哈希计算错误导致并发故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 userfaultfd 机制配合 HugeTLB 页面进行操作时，由于故障互斥锁的哈希索引计算不准确，可能导致本应串行化的页面故障处理流程出现竞争条件。这会破坏 `hugetlb_fault_mutex` 的保护机制，可能引发数据不一致、页面映射错误或内核内存管理子系统的不稳定行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mfill_atomic_hugetlb` 函数中，计算 `hugetlb_fault_mutex` 哈希索引时调用了 `linear_page_index` 函数。该函数以系统页粒度计算偏移量，而 HugeTLB 处理逻辑应当以大页粒度进行计算。这种粒度不匹配导致计算出的哈希索引不正确，无法正确对齐和隔离不同大页区域的故障处理，从而失去了互斥锁应有的保护作用。
+
+#解决方案
+新增并使用专门的辅助函数 `hugetlb_linear_page_index`，该函数根据 VMA 对应的大页状态计算以大页为粒度的偏移量。在 `mfill_atomic_hugetlb` 中替换原有的 `linear_page_index` 调用，确保 `hugetlb_fault_mutex_hash` 接收到正确的索引值，从而修复哈希计算错误，恢复故障互斥锁的正确保护机制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6c9f23a22409e7d397a461e89e4b6eba2a1be55b

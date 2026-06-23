@@ -1,0 +1,20 @@
+#标题
+sw64架构kprobe on ftrace在软中断上下文中恢复寄存器错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在sw64架构下使用kprobe on ftrace功能时，若触发环境处于软中断（soft interrupt）上下文中，内核在尝试恢复寄存器（regs）时会触发异常或错误。原因是代码错误地判断了上下文环境，导致调用`get_irq_regs()`返回了空指针（0），随后对空指针进行解引用操作。
+
+#主要错误日志
+未知
+
+#问题根因
+在`kprobe_ftrace_handler`函数中，代码原使用`in_interrupt()`来判断当前是否处于硬中断上下文，以决定是否通过`get_irq_regs()`保存`orig_r0`、`orig_r19`和`cause`寄存器。然而，`in_interrupt()`在软中断上下文中也会返回真值，但在软中断上下文中`get_irq_regs()`会返回0（NULL）。这导致在软中断场景下错误地进入了寄存器恢复分支，进而引发了空指针解引用问题。
+
+#解决方案
+将判断条件从`in_interrupt()`修改为`in_irq()`。`in_irq()`仅会在硬中断（Hardware IRQ）上下文中返回真值，从而排除了软中断的情况，确保只有在`get_irq_regs()`有效时才执行寄存器恢复操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5f05d03e00af57c6dea3660fbb19887a8eeb5711

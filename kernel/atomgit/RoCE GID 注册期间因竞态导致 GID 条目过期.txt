@@ -1,0 +1,24 @@
+#标题
+RoCE GID 注册期间因竞态导致 GID 条目过期
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IB 设备注册窗口期间，若网卡属性发生变化（例如通过 udev 规则设置 VF 的 MAC 地址），RoCE GID 条目将变为过期状态。具体表现为：VF 创建后，通过 `show_gids` 显示的 GID 仍源自旧的随机 MAC 地址，而非新配置的 MAC 地址。
+
+#主要错误日志
+未知
+
+#问题根因
+这是设备注册与 netdev 事件处理之间的竞态问题：
+1. `ib_register_device()` 调用链中，GID 表先被分配并填充旧 MAC 地址。
+2. 此时 CPU 1 触发 `NETDEV_CHANGEADDR` 事件，调用 `ib_enum_all_roce_netdevs()`。
+3. 该函数仅遍历标记为 `DEVICE_REGISTERED` 的设备，但该标记在注册过程最后才设置，导致事件被静默丢弃。
+4. 最终设备标记设置过晚，错过了 netdev 属性变更事件，导致 GID 表中保留旧值。
+
+#解决方案
+引入一个新的 xarray 标记 `DEVICE_GID_UPDATES`，在 GID 表分配和初始化后立即设置该标记。修改 `ib_enum_all_roce_netdevs()` 函数使用此新标记来遍历设备，而不是等待 `DEVICE_REGISTERED` 标记。这确保了在设备注册期间到达的 netdev 事件（包括 MAC 地址变更和 IP 地址变更）能被正确处理，从而修复 GID 条目过期的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22572f8bc489b79cd3d6db5a17fbdbe0cdc7d728

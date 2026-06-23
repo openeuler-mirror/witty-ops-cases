@@ -1,0 +1,29 @@
+#标题
+sched_ext: 加载 eBPF 调度器时错误修改 per-cpu migration 任务调度类
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 eBPF 调度器（如 scx_rustland）时，系统会遍历 scx_tasks 列表并设置调度类。此过程中，per-cpu migration 任务的 `sched_class` 被错误地设置为 `rt_sched_class`。即使卸载 BPF 调度器后，该问题依然存在，migration 任务的调度类未能恢复，可能导致系统调度行为异常。
+
+#主要错误日志
+[  199.245639][  T630] sched_ext: "rustland" does not implement cgroup cpu.weight
+[  199.269213][  T630] sched_ext: BPF scheduler "rustland" enabled
+migration/0:24->rt_sched_class+0x0/0xe0
+migration/1:27->rt_sched_class+0x0/0xe0
+migration/2:33->rt_sched_class+0x0/0xe0
+migration/3:39->rt_sched_class+0x0/0xe0
+migration/4:45->rt_sched_class+0x0/0xe0
+migration/5:52->rt_sched_class+0x0/0xe0
+migration/6:58->rt_sched_class+0x0/0xe0
+migration/7:64->rt_sched_class+0x0/0xe0
+
+#问题根因
+在加载 eBPF 调度器时，代码遍历 scx_tasks 列表并调用 `__setscheduler_class()` 来获取新的 `sched_class`。然而，`__setscheduler_class()` 函数没有对 `stop_sched_class` 进行特殊处理，导致原本属于 `stop_sched_class` 的 per-cpu migration 任务被错误地设置为 `rt_sched_class`。卸载调度器后，该错误状态依然保留。
+
+#解决方案
+新建 `scx_setscheduler_class()` 函数，在调用 `__setscheduler_class()` 前增加对 `stop_sched_class` 的判断检查：如果任务的调度类已经是 `stop_sched_class`，则直接保持该调度类不变，否则才调用 `__setscheduler_class()` 进行设置。以此防止 per-cpu migration 任务的调度类被错误修改。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5235dae02796eb8a90580efdea6911917a511886

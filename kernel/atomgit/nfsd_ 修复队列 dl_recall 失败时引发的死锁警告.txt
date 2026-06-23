@@ -1,0 +1,30 @@
+#标题
+nfsd: 修复队列 dl_recall 失败时引发的死锁警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核出现死锁警告（deadlock warning）。该问题发生在调用 `nfs4_put_stid` 时，此前 `dl_recall` 队列操作失败。
+具体死锁链条如下：
+- T1 线程持有 `ctx->flc_lock`，尝试获取 `clp->cl_lock`。
+- T2 线程持有 `clp->cl_lock`，尝试获取 `flctx->flc_lock`。
+- 两者形成 AB-BA 死锁锁关系。
+
+#主要错误日志
+未知
+
+#问题根因
+当文件打开时，`nfs4_delegation` 被分配且 `sc_count` 初始化为 1。`file_lease` 持有该委托的引用。
+在 `nfsd_break_one_deleg` 函数中，当前代码持有 `flc_lock` 锁。如果 `dl_recall` 队列操作失败，代码调用 `nfs4_put_stid` 尝试释放引用。`nfs4_put_stid` 内部会尝试获取 `clp->cl_lock`。
+与此同时，解关联过程需要在 `generic_delete_lease` 中获取 `flc_lock`。
+虽然分析指出由于 `sc_count` 此时不会减为 0，实际死锁可能不会发生，但代码路径触发了死锁检查警告。
+根本原因是在持有 `flc_lock` 的情况下调用了可能尝试获取其他锁（`cl_lock`）的函数 `nfs4_put_stid`，从而触发了锁依赖验证系统的报警。
+
+#解决方案
+修改 `fs/nfsd/nfs4state.c` 中的 `nfsd_break_one_deleg` 函数。
+当 `nfsd4_run_cb(&dp->dl_recall)` 队列操作失败时，不再调用 `nfs4_put_stid(&dp->dl_stid)`，而是直接调用 `refcount_dec(&dp->dl_stid.sc_count)` 减少引用计数。
+由于在 `nfsd_break_one_deleg` 执行期间持有 `flc_lock`，解关联过程被阻塞，导致 `sc_count` 此时不会减为 0，因此直接使用 `refcount_dec` 是安全的，且避免了尝试获取 `cl_lock`，从而消除了死锁警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/550f4c06fa639eba73a77223e173252be6b10814

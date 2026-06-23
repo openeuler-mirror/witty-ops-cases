@@ -1,0 +1,23 @@
+#标题
+octeon_ep驱动Rx路径未处理SKB分配失败导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内存紧张导致SKB分配失败时，驱动程序在处理接收队列过程中触发空指针解引用，导致内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `__octep_oq_process_rx()` 调用 `build_skb()` 分配 SKB 内存，但该函数在内存不足时会返回 NULL，驱动未对返回值进行校验直接使用，从而引发 NULL pointer dereference。
+
+#解决方案
+在 `__octep_oq_process_rx()` 中增加对 `build_skb()` 返回值的判断。若返回 NULL，执行以下处理逻辑：
+1. 调用新增的辅助函数 `octep_oq_drop_rx()`，unmmap/flush 当前报文使用的所有 fragment buffers，确保资源正确释放且不破坏 DMA 队列状态。
+2. 递增驱动统计计数器 `alloc_failures`。
+3. 使用 `continue` 跳过当前报文处理，继续轮询队列中的其他报文，避免因立即中断轮询而错误地向 NAPI 机制传递 Rx 压力下降的信号。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f7adb40e6b01cbb60119a20de5b295bb83850d2e

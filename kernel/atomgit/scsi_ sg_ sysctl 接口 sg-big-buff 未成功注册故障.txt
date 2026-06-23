@@ -1,0 +1,20 @@
+#标题
+scsi: sg: sysctl 接口 sg-big-buff 未成功注册故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核启动或 SG 模块加载过程中，sysctl 接口 `sg-big-buff` 未被创建。用户无法通过 `/proc/sys` 或 `sysctl` 命令查看或修改 `sg-big-buff` 参数值，导致依赖于该参数进行缓冲区大小配置的功能失效或无法调优。
+
+#主要错误日志
+未知
+
+#问题根因
+由 Commit 26d1c80fd61e ("scsi/sg: move sg-big-buff sysctl to scsi/sg.c") 引入。在该提交中，`register_sg_sysctls()` 函数被错误地放置在了 `init_sg()` 函数的错误处理路径中（即 `scsi_register_interface` 调用成功后的回退分支）。由于 `scsi_register_interface` 正常情况下返回 0，导致 `register_sg_sysctls()` 永远不会被执行，从而使得 sysctl 参数 `sg-big-buff` 未被注册。
+
+#解决方案
+将 `register_sg_sysctls()` 调用移动至 `init_sg()` 函数的正常初始化路径中。具体修改为：在 `scsi_register_interface(&sg_interface)` 成功返回后（`if (0 == rc)` 分支内），立即调用 `register_sg_sysctls()`，确保在模块初始化成功时正确注册 sysctl 接口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d86ce051264fe5ee2931ea062e9ed7ec1e08451f

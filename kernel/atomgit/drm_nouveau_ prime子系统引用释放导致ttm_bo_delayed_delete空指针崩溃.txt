@@ -1,0 +1,43 @@
+#标题
+drm/nouveau: prime子系统引用释放导致ttm_bo_delayed_delete空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在使用nouveau驱动处理PRIME buffer共享时，触发内核Oops（general protection fault）。具体表现为在工作队列处理`ttm_bo_delayed_delete`任务时，访问了非法内存地址（0x6b6b6b6b6b6b6b7b），导致内核崩溃。
+
+#主要错误日志
+```text
+Oops: general protection fault, probably for non-canonical address 0x6b6b6b6b6b6b6b7b: 0000 [#1] PREEMPT SMP
+CPU: 4 UID: 0 PID: 1082 Comm: kworker/u65:2 Not tainted 6.14.0-rc4-00267-g505460b44513-dirty #216
+Workqueue: ttm ttm_bo_delayed_delete [ttm]
+RIP: 0010:dma_resv_iter_first_unlocked+0x55/0x290
+Call Trace:
+ <TASK>
+ ? __die_body.cold+0x19/0x26
+ ? die_addr+0x3d/0x70
+ ? exc_general_protection+0x159/0x460
+ ? asm_exc_general_protection+0x27/0x30
+ ? dma_resv_iter_first_unlocked+0x55/0x290
+ dma_resv_wait_timeout+0x56/0x100
+ ttm_bo_delayed_delete+0x69/0xb0 [ttm]
+ process_one_work+0x217/0x5c0
+ worker_thread+0x1c8/0x3d0
+ kthread+0x10b/0x240
+ ret_from_fork+0x40/0x70
+ </TASK>
+```
+
+#问题根因
+该故障是由于nouveau驱动在处理PRIME导入的GEM对象释放时，函数调用顺序不当导致的生命周期问题：
+1. `nouveau_gem_object_del`调用`drm_prime_gem_destroy(dma_buf)`释放了共享dma_buf的引用，导致引用计数归零。
+2. 随之触发级联释放：dma_buf销毁 -> amdgpu_bo引用计数归零 -> amdgpu_bo销毁 -> `dma_resv_fini`销毁reservation对象。
+3. 此时`nouveau_bo`结构体中的`obj->bo.base.resv`指针变为悬垂指针，指向已被释放的内存。
+4. 后续`ttm_bo_put`调度执行`ttm_bo_delayed_delete`时，代码试图解引用上述悬垂指针，触发通用保护错误。
+
+#解决方案
+将`drm_prime_gem_destroy`的调用位置从`nouveau_gem_object_del`移动到`nouveau_bo_del_ttm`。这确保了该函数在`ttm_bo_delayed_delete`流程执行完毕后才进行清理，保证了在TTM释放流程期间，关联的reservation对象仍然有效，避免了悬垂指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d32c678c51bbdee89192cadc7450288ec7c5b1a2

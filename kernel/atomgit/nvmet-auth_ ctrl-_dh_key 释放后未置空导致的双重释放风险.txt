@@ -1,0 +1,20 @@
+#标题
+nvmet-auth: ctrl->dh_key 释放后未置空导致的双重释放风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NVMe target 控制器的认证流程中，当 `nvmet_setup_dhgroup()` 函数执行出错时，后续在销毁控制器（调用 `nvmet_destroy_auth()`）过程中可能触发内核双重释放，导致内核内存管理崩溃或不可预测的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+`ctrl->dh_key` 可能在同一个控制器的多次 `nvmet_setup_dhgroup()` 调用中被使用。在错误处理路径中，代码执行了 `kfree_sensitive(ctrl->dh_key)` 释放内存，但未将 `ctrl->dh_key` 指针置为 NULL。这导致后续在 `nvmet_destroy_auth()` 函数中再次尝试释放该指针时引发双重释放问题。
+
+#解决方案
+在 `drivers/nvme/target/auth.c` 文件中，`nvmet_setup_dhgroup()` 函数的错误处理路径内，在调用 `kfree_sensitive(ctrl->dh_key)` 释放内存后，立即将 `ctrl->dh_key` 赋值为 NULL，从而防止悬垂指针导致的重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a40237766e26ab7df76eb4c4e190e9098dee1297

@@ -1,0 +1,20 @@
+#标题
+smb: client: cfids_invalidation_worker 存在不完整移植导致 UAF 隐患
+
+#内核版本
+OLK-6.6
+
+#问题现象
+由于补丁移植不完整，在 SMB 客户端执行缓存目录失效操作（invalidate_all_cached_dirs）时，cfids_invalidation_worker 函数未正确调用 close_cached_dir 函数，而是直接调用了 kref_put。这导致原补丁（bdb596ceb4b7）试图修复的“smb2_close_cached_fid 潜在 UAF（Use-After-Free）”问题仍然存在，可能引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+之前的修复提交 bdb596ceb4b7 ("smb: client: fix potential UAF in smb2_close_cached_fid()") 在合入时存在不完整。该补丁应该将所有相关的 kref_put 调用转换为 close_cached_dir 调用，但在 cfids_invalidation_worker 函数中遗漏了一处转换，导致该路径下的 UAF 风险未被消除。
+
+#解决方案
+修改 fs/smb/client/cached_dir.c 文件中 cfids_invalidation_worker 函数，将循环内的 kref_put(&cfid->refcount, smb2_close_cached_fid) 替换为 close_cached_dir(cfid)，确保与上游修复逻辑一致，正确处理引用计数释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3b1ef36c87ae3b1fb411210a58ed09b5ae97fe59

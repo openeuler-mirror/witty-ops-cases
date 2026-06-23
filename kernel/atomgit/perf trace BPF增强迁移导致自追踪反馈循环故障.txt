@@ -1,0 +1,21 @@
+#标题
+perf trace BPF增强迁移导致自追踪反馈循环故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `perf trace` 工具追踪特定系统调用（如 `write` 或 `newfstatat`）时，工具自身产生的输出调用也会被追踪，导致输出结果中包含 `perf` 进程自身的系统调用事件，形成无限反馈循环。例如，执行 `perf trace -e write` 时，终端持续打印 perf 进程对 stderr (fd: 2) 的写入操作，导致输出刷屏，无法正常过滤掉 perf 自身的 PID。
+
+#主要错误日志
+未知
+
+#问题根因
+在 Linux 6.6 内核版本进行 BPF skeleton 迁移（Commit 5e6da6be3082f）后，代码逻辑遗漏了将 BPF skeleton 中的 `pids_filtered` map 赋值给 `trace->filter_pids.map` 的步骤。
+这导致 `trace__set_filter_pids` 函数虽然试图过滤 perf 自身的 PID，但由于 map 指针为空，过滤规则未能写入 BPF map。结果导致 BPF 程序无法获取需要过滤的 PID 列表，所有被追踪的系统调用（包括 perf 工具自身产生的调用）都被输出，从而产生了反馈循环。
+
+#解决方案
+在 `tools/perf/builtin-trace.c` 的 `trace__run` 函数中增加检查与赋值逻辑。如果 `trace->skel` 已初始化，显式将 `trace->skel->maps.pids_filtered` 赋值给 `trace->filter_pids.map`。这确保了后续调用 `trace__set_filter_pids` 时能正确更新 BPF map，从而恢复 perf 自身 PID 的过滤功能，消除反馈循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0ee10968296452b924d67ef902c8302b505181dc

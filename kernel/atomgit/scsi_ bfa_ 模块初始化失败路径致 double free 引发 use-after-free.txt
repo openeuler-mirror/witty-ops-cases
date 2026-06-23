@@ -1,0 +1,34 @@
+#标题
+scsi: bfa: 模块初始化失败路径致 double free 引发 use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 bfa 驱动模块时，若 `bfad_im_module_init` 初始化失败，后续错误处理流程触发 `use-after-free`，导致内核崩溃（KASAN 报警）。
+
+#主要错误日志
+```
+BUG: KASAN: slab-use-after-free in __lock_acquire+0x2aca/0x3a20
+Read of size 8 at addr ffff8881082d80c8 by task modprobe/25303
+...
+Call Trace:
+ attribute_container_unregister+0x30/0x160
+ fc_release_transport+0x19/0x90 [scsi_transport_fc]
+ bfad_im_module_exit+0x23/0x60 [bfa]
+ bfad_init+0xdb/0xff0 [bfa]
+ ...
+Freed by task 25303:
+ kfree+0x212/0x480
+ bfad_im_module_init+0x7e/0x80 [bfa]
+ ...
+```
+
+#问题根因
+驱动初始化函数 `bfad_init` 调用 `bfad_im_module_init` 失败时，内部已经执行了 `fc_release_transport` 释放传输模板资源。但 `bfad_init` 随后跳转到 `ext` 标签继续执行 `bfad_im_module_exit`，该函数再次对同一资源执行 `fc_release_transport`，导致 double free（双重释放），进而引发 use-after-free 问题。
+
+#解决方案
+修改 `bfad_init` 函数的错误处理逻辑：当 `bfad_im_module_init` 返回错误时，直接返回错误码 `-ENOMEM`，不再跳转执行 `bfad_im_module_exit`，避免对已释放的资源进行重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e7f17fae0c013c25c555db1ba8ad6d312afae106

@@ -1,0 +1,23 @@
+#标题
+nilfs2: truncate_inode_pages 调用导致的 buffer_head 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 nilfs2 文件系统垃圾回收（GC）操作时，系统内存发生泄漏。具体表现为内核缓冲头（buffer_head）对象数量持续增加，且无法被正常释放。该问题主要影响 nilfs2 的 gc inode 缓存、DAT 影子 inode 以及 b-tree 节点缓存。虽然在常规操作下 b-tree 节点缓存的显式清理掩盖了泄漏现象，但在 GC 执行期间泄漏问题会加剧。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在将 `block_invalidatepage` 转换为 `block_invalidate_folio` 时，移除了 `folio_invalidate()` 中对旧版 `invalidatepage` 方法的兼容回退逻辑。nilfs2 中的部分伪 inode（如 gc inode 和 DAT shadow inode）原本使用空的 `address_space_operations`（empty_aops），该结构体未实现 `invalidate_folio` 方法。因此，在调用 `truncate_inode_pages()` 清理页缓存时，`block_invalidate_folio` 未被调用，导致附加在这些页面上的 `buffer_head` 结构体未能通过 `try_to_free_buffers()` 释放，从而引发内存泄漏。
+
+#解决方案
+修改 nilfs2 的地址空间操作结构体定义与赋值逻辑：
+1. 新增 `nilfs_buffer_cache_aops` 结构体，将 `invalidate_folio` 回调指针设置为 `block_invalidate_folio`。
+2. 将受影响的 nilfs2 伪 inode（包括 b-tree 节点缓存 inode、gc inode 以及 DAT shadow inode）的 `i_mapping->a_ops` 从 `empty_aops` 替换为新定义的 `nilfs_buffer_cache_aops`。
+此修复确保了在页面失效时能正确调用缓冲区释放逻辑，恢复与旧版内核一致的行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/42e0064aa702bd5d3d6e46710daa79807c855bf4

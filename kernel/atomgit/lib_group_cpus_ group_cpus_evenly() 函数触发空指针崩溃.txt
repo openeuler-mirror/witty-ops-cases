@@ -1,0 +1,27 @@
+#标题
+lib/group_cpus: group_cpus_evenly() 函数触发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在测试 null_blk 模块时，通过 configfs 将 poll_queues 设置为 0（执行 `echo 0 > poll_queues`），触发内核 NULL 指针引用，导致系统 panic。调用栈显示崩溃发生在 `__bitmap_or` 函数中，由 `__group_cpus_evenly` 调用链引发。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000010
+Oops: Oops: 0000 [#1] SMP NOPTI
+RIP: 0010:__bitmap_or+0x48/0x70
+Call Trace:
+ __group_cpus_evenly+0x822/0x8c0
+ group_cpus_evenly+0x2d9/0x490
+ blk_mq_map_queues+0x1e/0x110
+ null_map_queues+0xc9/0x170 [null_blk]
+
+#问题根因
+调用 `group_cpus_evenly()` 时传入参数 `numgrps` 为 0，导致 `kcalloc()` 返回 `ZERO_SIZE_PTR`（值为 0x10）。后续代码未对返回值进行有效性检查直接进行指针解引用操作，触发了空指针崩溃。
+
+#解决方案
+在 `group_cpus_evenly()` 函数入口处增加判断，若参数 `numgrps` 为 0，直接返回 NULL，避免后续分配与解引用错误。该修复同时覆盖了 SMP 与非 SMP 版本的代码路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/91ab80683568cf9ca82177b4d067522c9f093de1

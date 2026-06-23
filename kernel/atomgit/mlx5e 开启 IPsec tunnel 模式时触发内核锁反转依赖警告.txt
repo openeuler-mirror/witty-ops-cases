@@ -1,0 +1,47 @@
+#标题
+mlx5e 开启 IPsec tunnel 模式时触发内核锁反转依赖警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调试版内核中开启 IPsec packet offload 的 tunnel 模式时，系统检测到锁依赖反转，触发 `SOFTIRQ-safe -> SOFTIRQ-unsafe lock order detected` 警告，并在内核日志中打印 `*** DEADLOCK ***` 提示。该问题可能导致潜在死锁风险。
+
+#主要错误日志
+```text
+WARNING: SOFTIRQ-safe -> SOFTIRQ-unsafe lock order detected
+6.12.0+ #4 Not tainted
+-----------------------------------------------------
+charon/1337 [HC0[0]:SC0[4]:HE1:SE0] is trying to acquire:
+ffff88810f365020 (&xa->xa_lock#24){+.+.}-{3:3}, at: mlx5e_xfrm_del_state+0xca/0x1e0 [mlx5_core]
+
+and this task is already holding:
+ffff88813e0f0d48 (&x->lock){+.-.}-{3:3}, at: xfrm_state_delete+0x16/0x30
+which would create a new lock dependency:
+ (&x->lock){+.-.}-{3:3} -> (&xa->xa_lock#24){+.+.}-{3:3}
+
+Possible interrupt unsafe locking scenario:
+
+       CPU0                    CPU1
+       ----                    ----
+  lock(&xa->xa_lock#24);
+                               local_irq_disable();
+                               lock(&x->lock);
+                               lock(&xa->xa_lock#24);
+  <Interrupt>
+    lock(&x->lock);
+
+ *** DEADLOCK ***
+```
+
+#问题根因
+该故障由两处代码逻辑缺陷引起：
+1. **锁上下文不一致**：在 SA（Security Association）添加流程（`mlx5e_xfrm_add_state`）中，调用 `xa_set_mark` 设置标记时未使用 `_bh()` 后缀的锁保护变体。而在删除流程中使用了 `xa_erase_bh`，这导致在中断上下文（如 `xfrm_timer_handler`）持有 `&x->lock`（SOFTIRQ-safe）时，试图获取 `&xa->xa_lock`（SOFTIRQ-unsafe），违反了锁依赖规则，触发了死锁检测警告。
+2. **冗余同步操作**：在 SA 删除例程（`mlx5e_xfrm_del_state`）中调用了不必要的 `flush_workqueue`。由于此时 SA 已从 SADB（Security Association Database）中移除，且后续在 `mlx5e_xfrm_free_state` 中会取消相关工作，该操作属于多余且可能加剧锁竞争。
+
+#解决方案
+1. **修正锁保护方式**：在 `mlx5e_xfrm_add_state` 函数中，将 `xa_set_mark` 调用修改为显式使用 `xa_lock_bh` 和 `xa_unlock_bh` 包裹 `__xa_set_mark`，确保在正确上下文中持有锁，消除锁依赖反转风险。
+2. **移除冗余代码**：从 `mlx5e_xfrm_del_state` 函数中删除多余的 `flush_workqueue` 调用及相关变量，优化代码逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f27f0aa1df948c3aca92e3bbf6136d9b3f073ed8

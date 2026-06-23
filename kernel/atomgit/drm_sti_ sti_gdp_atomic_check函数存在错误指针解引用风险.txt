@@ -1,0 +1,20 @@
+#标题
+drm/sti: sti_gdp_atomic_check函数存在错误指针解引用风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sti_gdp_atomic_check 函数执行过程中，如果 `drm_atomic_get_crtc_state` 调用失败，函数未检测返回的错误指针（error pointer）便直接进行解引用操作（访问 `crtc_state->mode`），导致内核发生 panic 或 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `sti_gdp_atomic_check` 调用 `drm_atomic_get_crtc_state` 获取 crtc 状态后，缺少对返回值 `crtc_state` 的有效性检查（是否为 IS_ERR）。如果该函数返回错误指针，代码后续直接解引用 `crtc_state->mode` 成员，触发了无效内存访问。
+
+#解决方案
+在 `drivers/gpu/drm/sti/sti_gdp.c` 文件的 `sti_gdp_atomic_check` 函数中，调用 `drm_atomic_get_crtc_state` 后立即增加判断逻辑：若 `IS_ERR(crtc_state)` 为真，则直接返回 `PTR_ERR(crtc_state)` 错误码，避免后续对错误指针的解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d8b474e6a1e1cc099e0afd7fa4153391c24d473d

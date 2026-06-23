@@ -1,0 +1,23 @@
+#标题
+cifs: SMB1 Kerberos 认证非 UNICODE 模式下请求编码错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 SMB1 协议进行 Kerberos 认证且处于非 UNICODE 模式时，Session Setup 请求的编码不正确。与 UNICODE 模式不同，非 UNICODE 模式下的请求缺少必须的 OSLM（OS/Language Manager）字符串和 Domain 字符串，且用于判断 UNICODE 模式的标志位检查逻辑错误（基于服务器 capabilities 而非 Flags2），导致协议实现不符合标准，影响认证过程的兼容性与正确性。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **字符串编码缺失**：在 `sess_auth_kerberos` 函数的非 UNICODE 分支中，原代码调用的 `ascii_ssetup_strings` 函数虽然包含 Domain 和 OSLM 字符串处理，但在 Kerberos 认证的具体流程中，未能正确像 UNICODE 模式那样独立填充这些字符串，导致请求包中缺失关键信息。
+2. **判断逻辑错误**：代码错误地使用 `ses->capabilities & CAP_UNICODE` 来判断是否使用 UNICODE 模式。根据 SMB 协议标准，该判断应基于 SMB 报头中的 `pSMB->req.hdr.Flags2 & SMBFLG2_UNICODE` 标志位。
+
+#解决方案
+1. **重构字符串处理函数**：提取公共逻辑，新增 `ascii_oslm_strings` 和 `ascii_domain_string` 函数，分别用于处理 ASCII 模式下的 OSLM 字符串和 Domain 字符串。
+2. **修正 Kerberos 认证流程**：在 `sess_auth_kerberos` 函数的非 UNICODE 分支中，调用新增的 `ascii_oslm_strings` 和 `ascii_domain_string` 函数，确保请求包含正确的字符串信息。
+3. **修正标志位判断**：将 UNICODE 模式的判断条件从 `ses->capabilities & CAP_UNICODE` 修改为 `pSMB->req.hdr.Flags2 & SMBFLG2_UNICODE`，确保遵循协议规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/41c0d3836b3d12a7756d5f2933a818c218edad0d

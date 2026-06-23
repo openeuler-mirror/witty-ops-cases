@@ -1,0 +1,28 @@
+#标题
+sched_ext: scx_ops_bypass 中错误的 irq restore 导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能 sched_ext 调度器（如加载 BPF sched_ext 程序）时，触发内核 WARNING，提示 `raw_local_irq_restore() called with IRQs enabled`。系统检测到在 IRQs 已使能的状态下错误地调用了 IRQ 恢复函数，导致调用栈回溯。
+
+#主要错误日志
+raw_local_irq_restore() called with IRQs enabled
+WARNING: CPU: 1 PID: 96 at kernel/locking/irqflag-debug.c:10 warn_bogus_irq_restore+0x30/0x40
+...
+Call trace:
+ warn_bogus_irq_restore+0x30/0x40 (P)
+ warn_bogus_irq_restore+0x30/0x40 (L)
+ scx_ops_bypass+0x224/0x3b8
+ scx_ops_enable.isra.0+0x2c8/0xaa8
+ bpf_scx_reg+0x18/0x30
+
+#问题根因
+在 `scx_ops_bypass()` 函数中，之前的修复补丁为了解决竞争问题添加了外层的 irqsave/restore 锁保护，但遗漏了将内层的 `rq_unlock_irqrestore()` 转换为 `rq_unlock()`。这导致在代码路径中提前恢复了 IRQ（re-enable IRQ prematurely），随后外层锁再次尝试恢复 IRQ 状态时引发不一致，从而触发警告。
+
+#解决方案
+将 `scx_ops_bypass()` 函数中 `!scx_enabled()` 分支下的 `rq_unlock_irqrestore(rq, &rf)` 修改为 `rq_unlock(rq, &rf)`，移除多余的 irqrestore 操作，确保 IRQ 状态由外层锁统一管理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b2c90061f98e380e28d23d04aca99a6812f56107

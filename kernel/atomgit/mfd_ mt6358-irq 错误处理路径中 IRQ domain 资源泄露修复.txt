@@ -1,0 +1,20 @@
+#标题
+mfd: mt6358-irq 错误处理路径中 IRQ domain 资源泄露修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mt6358_irq_init() 初始化过程中，若 irq_domain_add_linear() 执行成功，但后续的 devm_request_threaded_irq() 注册中断失败，函数直接返回错误码，导致已创建的 IRQ domain 未被释放，造成资源泄露。
+
+#主要错误日志
+[    ]dev_err(chip->dev, "Failed to register IRQ=%d, ret=%d\n", chip->irq, ret);
+
+#问题根因
+mt6358_irq_init() 函数在错误处理路径中存在逻辑缺陷：当 devm_request_threaded_irq() 失败时，代码直接返回，遗漏了调用 irq_domain_remove() 来清理之前通过 irq_domain_add_linear() 成功创建的 IRQ domain。
+
+#解决方案
+在 devm_request_threaded_irq() 失败的错误处理分支中，增加调用 irq_domain_remove(chip->irq_domain) 以确保正确释放已分配的 IRQ domain 资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6beab9d9aef8b12a80b5f07aa9398141abf52a42

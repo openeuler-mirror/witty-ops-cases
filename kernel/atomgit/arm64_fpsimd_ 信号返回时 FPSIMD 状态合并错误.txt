@@ -1,0 +1,24 @@
+#标题
+arm64/fpsimd: 信号返回时 FPSIMD 状态合并错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 SME (Scalable Matrix Extension) 的 ARM64 系统上执行信号返回操作时，若恢复流式 SVE (Streaming SVE) 状态，FPSIMD 信号帧中的低 128 位数据未能正确合并到 SVE 寄存器状态中。这导致应用程序在信号处理返回后，向量寄存器的值不符合预期，可能导致计算结果错误或程序行为异常。该问题受系统调用等行为影响，表现出非确定性的特征。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `fpsimd_update_current_state()` 在判断是否需要将 FPSIMD 状态合并到 SVE 状态时，错误地依赖了 `TIF_SVE` 标志位，而不是保存的 `fp_type` 状态类型。
+具体表现为：
+1. 在仅有 SME 而没有 SVE 的系统上，`TIF_SVE` 无法被设置，导致合并逻辑永远不会执行。
+2. 在同时拥有 SVE 和 SME 的系统上，`TIF_SVE` 可以独立于 `PSTATE.SM` 被清除（例如在 `sigreturn` 开始时的系统调用路径中），导致合并逻辑可能执行也可能不执行，表现出非确定性错误。
+该逻辑错误导致信号返回时无法正确遵循向后兼容性原则，即未能用 FPSIMD 信号帧中的值覆盖 SVE 信号帧中的对应低位值。
+
+#解决方案
+修改 `fpsimd_update_current_state()` 函数中的判断逻辑，将条件从检查 `TIF_SVE` 标志位改为检查 `current->thread.fp_type == FP_STATE_SVE`。这确保了合并操作依赖于实际保存的 FPSIMD 状态类型，从而正确处理流式 SVE 寄存器状态的恢复，与信号发送时的行为保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc14e80107c017755239991f7aa5dd3c268a9b2a

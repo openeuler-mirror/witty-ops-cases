@@ -1,0 +1,20 @@
+#标题
+iwlegacy: il3945_store_measurement 缺少互斥锁保护导致潜在并发问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `il3945_store_measurement` 函数触发测量操作时，由于未持有 `il->mutex` 互斥锁，若开启内核锁调试功能（如 LOCKDEP），会触发锁断言失败，可能导致内核警告或潜在的并发竞态风险。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `il3945_store_measurement()` 调用了 `il3945_get_measurement()`，后者内部调用了 `il_send_cmd_sync()`。函数 `il_send_cmd_sync()` 内部包含 `lockdep_assert_held(&il->mutex)` 断言，要求调用者必须持有 `il->mutex` 锁。但 `il3945_store_measurement()` 在调用链路中未获取该锁，违反了锁的使用约定。同文件中的其他 sysfs store 函数（如 `il3945_store_flags`）均正确获取了该锁。
+
+#解决方案
+在 `il3945_store_measurement()` 函数中调用 `il3945_get_measurement()` 前后，分别添加 `mutex_lock(&il->mutex)` 和 `mutex_unlock(&il->mutex)` 操作，确保符合底层函数的锁要求，修复缺失的互斥锁保护。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8bd4730d36caa715c3e4de39452150656d1fc273

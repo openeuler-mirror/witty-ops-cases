@@ -1,0 +1,20 @@
+#标题
+can: j1939: 注销期间会话激活竞态导致设备引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在卸载或注销 CAN 设备（如 vcan0）时卡死，持续打印告警信息，显示设备无法释放，引用计数不为 0。具体表现为 `unregister_netdevice` 等待超时，Usage count 持续为 2，导致设备注销流程无法完成。
+
+#主要错误日志
+unregister_netdevice: waiting for vcan0 to become free. Usage count = 2
+
+#问题根因
+这是一个竞态条件问题。在设备注销过程中，`j1939_cancel_active_session()` 在 `NETDEV_UNREGISTER` 通知回调中被调用以清理会话。然而，此时 `j1939_session_activate()` 仍可能成功激活新会话并增加设备引用计数。由于 `j1939_cancel_active_session()` 已经执行完毕，这部分在竞态窗口中新激活的会话没有被正确清理，导致设备引用计数无法归零，设备无法注销。
+
+#解决方案
+在 `j1939_session_activate()` 函数中增加对设备注册状态的检查。在持有会话列表锁（session list lock）的情况下，检查 `priv->ndev->reg_state` 是否为 `NETREG_REGISTERED`。若设备已不在注册状态，则直接返回 `-ENODEV` 拒绝激活会话，从而关闭竞态窗口，防止在设备注销后新建会话导致引用计数泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5765755e385013eff007fa0fb7da434eec7f4b6b

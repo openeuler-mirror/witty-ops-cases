@@ -1,0 +1,20 @@
+#标题
+sched/debug: avg_vruntime() 无锁调用导致数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+运行 stress-ng-yield 测试时，机器运行异常。该问题由特定提交引入，导致 sched/debug 模块在无锁保护的情况下调用 avg_vruntime() 函数，该函数从纯读取操作变为更新变量操作，从而破坏了数据一致性。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复前的代码中，`avg_vruntime()` 函数的性质发生了变化（由提交 b3d99f43c72b 引入）：它从一个纯粹的读取函数变成了一个会更新变量的函数。然而，`kernel/sched/debug.c` 文件中的 `print_cfs_rq()` 函数依然在释放锁（`raw_spin_rq_unlock_irqrestore`）之后调用 `avg_vruntime()`。这导致该函数在无锁状态下执行写操作，将一个原本无害的 debug 代码路径错误地变成了数据破坏者。
+
+#解决方案
+调整 `print_cfs_rq()` 函数中 `avg_vruntime()` 的调用时机。在持有锁的情况下先调用 `avg_vruntime()` 并将结果存储在临时变量 `avruntime` 中，随后再释放锁。这样可以确保对调度器运行队列的访问和修改都在锁的保护范围内，避免数据竞争和损坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9e6db597a93352676474b295c035c3ce384b6ac

@@ -1,0 +1,23 @@
+#标题
+drm/mediatek: dp: HPD通路中使用drm_err引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MediaTek DP 驱动的 HPD（Hot Plug Detect）处理流程中，当解析设备能力失败或读取 DPCD 寄存器错误时，内核尝试调用 `drm_err` 打印日志。由于此时 `mtk_dp->drm_dev` 指针可能尚未初始化或为 NULL，导致系统发生 NULL pointer dereference（空指针引用）崩溃。
+
+#主要错误日志
+- 推断日志：Read mstm cap failed: -%d
+- 推断日志：Read irq vector failed: -%d
+- 推断日志：Can't parse capabilities: -%d
+
+#问题根因
+在 `mtk_dp_wait_hpd_asserted` 函数及其调用的 `mtk_dp_parse_capabilities` 函数中，错误处理路径使用了 `drm_err(mtk_dp->drm_dev, ...)` 进行日志打印。
+根本原因在于：HPD 通路可能在 `drm_dev` 设备结构体初始化之前被触发，此时 `mtk_dp->drm_dev` 指针为空，直接使用该指针作为参数调用 `drm_err` 会触发空指针解引用错误。
+
+#解决方案
+将 HPD 通路中的 `drm_err` 调用替换为 `dev_err`，使用底层的 `mtk_dp->dev` 设备指针作为参数。`dev_err` 不依赖 DRM 设备结构体，避免了因 `drm_dev` 未初始化导致的空指针崩溃风险，同时修正了日志打印格式以包含错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/29e145f6d270c9152a6c2cce51299811de4bdad9

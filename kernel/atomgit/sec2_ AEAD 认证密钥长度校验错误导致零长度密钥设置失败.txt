@@ -1,0 +1,21 @@
+#标题
+sec2: AEAD 认证密钥长度校验错误导致零长度密钥设置失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HMAC 认证密钥长度为 0 字节的场景下（符合 RFC 标准），SEC2 驱动错误地拒绝设置密钥，导致相关加密算法配置失败，返回 -EINVAL 错误码。
+
+#主要错误日志
+hisi_sec2: aead auth key error!
+
+#问题根因
+驱动代码在 `sec_aead_auth_set_key` 函数中包含一段错误的校验逻辑，强制要求 `authkeylen` 必须大于 0。根据 HMAC RFC 标准，认证密钥的长度可以为 0 字节，硬件也支持处理该场景，因此该校验是多余且错误的。
+
+#解决方案
+1. 删除对 `authkeylen` 为 0 时的错误校验分支（原代码直接返回 -EINVAL）。
+2. 在后续的内存拷贝逻辑中增加判断，仅当 `authkeylen` 大于 0 时执行 `memcpy` 操作，避免潜在的非法内存访问，同时允许 `ctx->a_key_len` 被设置为 0 以支持标准用法。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9d4a7a259a742408f300b388f2acd53e29c9c70e

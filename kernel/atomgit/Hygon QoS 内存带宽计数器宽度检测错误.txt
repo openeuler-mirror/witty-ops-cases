@@ -1,0 +1,26 @@
+#标题
+Hygon QoS 内存带宽计数器宽度检测错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hygon 平台上使用 resctrl 子系统进行 QoS（服务质量）资源监控时，内存带宽计数器宽度解析错误。系统未能正确识别 Hygon 处理器特有的 MBM（Memory Bandwidth Monitoring）计数器宽度偏移量，导致内存带宽监控数据统计不准确，影响资源调配与性能分析。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在检测 CPU 特性时，将 Hygon 处理器与 AMD 处理器同等处理，统一使用了 AMD 定义的计数器宽度偏移量 `MBM_CNTR_WIDTH_OFFSET_AMD`（值为 20）。然而，Hygon 处理器的硬件设计不同，其 MBM 计数器宽度偏移量应为 8。代码逻辑中缺乏对 `X86_VENDOR_HYGON` 的独立判断分支，导致赋值错误。
+
+#解决方案
+修改 `arch/x86/kernel/cpu/resctrl/core.c` 中的 `resctrl_cpu_detect` 函数逻辑：
+1. 新增 Hygon 专用的宏定义 `MBM_CNTR_WIDTH_OFFSET_HYGON`，值为 8。
+2. 将原有的单一判断逻辑重构为 `switch-case` 结构，根据 `x86_vendor` 类型分别处理：
+   - 若为 `X86_VENDOR_AMD`，偏移量设为 20。
+   - 若为 `X86_VENDOR_HYGON`，偏移量设为 8。
+   - 其他厂商保持默认值 0。
+以此确保 Hygon 平台能获取正确的计数器宽度参数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/565acf6ebc9aa29e3d9fb84b6dae819e2eea6dc7

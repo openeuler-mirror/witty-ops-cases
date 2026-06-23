@@ -1,0 +1,23 @@
+#标题
+spi: dln2: 修复控制器注销顺序错误导致设备驱动无法正常通信的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 DLN-2 USB-SPI 适配器驱动模块（执行 remove 操作）时，SPI 设备驱动在进行注销过程中无法正常执行 I/O 操作。由于控制器被过早禁用，可能导致 SPI 设备驱动在注销回调中尝试访问硬件时失败，进而引发潜在的系统状态不一致或设备卸载异常。
+
+#主要错误日志
+Failed to disable SPI module
+Failed to register host
+
+#问题根因
+问题源于 `dln2_spi_remove` 函数中注销顺序的错误处理。原代码在注销 SPI 控制器之前先禁用了 SPI 模块。这导致 SPI 设备驱动的注销流程在需要访问硬件进行 I/O 操作时，底层控制器已被禁用，从而无法完成正常的清理工作。此外，原代码使用了 `devm_spi_register_controller`，该托管函数在 remove 函数返回后才执行注销，这进一步扩大了控制器处于无效状态的时间窗口。
+
+#解决方案
+1. **调整注销顺序**：在 `dln2_spi_remove` 函数中，确保先调用 `spi_unregister_controller` 注销控制器，然后再调用 `dln2_spi_enable(dln2, false)` 禁用 SPI 模块。
+2. **放弃托管注册**：将 probe 阶段的 `devm_spi_register_controller` 替换为 `spi_register_controller`，以便在 remove 阶段能够显式控制控制器的注销时机，确保其在模块禁用前完成。
+3. **增加引用计数保护**：在注销过程中显式调用 `spi_controller_get` 和 `spi_controller_put`，防止在注销流程执行期间控制器结构体被提前释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4347e8e17e5d6482c915b0fa55af5772cf088d23

@@ -1,0 +1,28 @@
+#标题
+sh: cpuinfo: CONFIG_CPUMASK_OFFSTACK 配置下读取 /proc/cpuinfo 触发内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核开启 CONFIG_CPUMASK_OFFSTACK 和 CONFIG_DEBUG_PER_CPU_MAPS 编译选项时，系统启动或用户读取 /proc/cpuinfo 文件时，内核会触发运行时警告（WARNING），导致 dmesg 中出现堆栈调用记录，影响系统日志洁净度。
+
+#主要错误日志
+[    3.052463] ------------[ cut here ]------------
+[    3.059679] WARNING: CPU: 3 PID: 1 at include/linux/cpumask.h:108 show_cpuinfo+0x5e8/0x5f0
+[    3.070072] Modules linked in: efivarfs autofs4
+[    3.076257] CPU: 0 PID: 1 Comm: systemd Not tainted 5.19-rc5+ #1052
+...
+[    3.231150] [<9000000000210220>] show_cpuinfo+0x5e8/0x5f0
+[    3.238080] [<90000000004f578c>] seq_read_iter+0x354/0x4b4
+...
+[    3.281824] ---[ end trace 8b484262b4b8c24c ]---
+
+#问题根因
+在 `arch/sh/kernel/cpu/proc.c` 文件的 `c_start` 函数中，遍历 CPU 使用了编译时的静态宏 `NR_CPUS` 作为上限判断条件。当开启 CONFIG_CPUMASK_OFFSTACK 配置时，系统支持的实际 CPU 数量可能小于 `NR_CPUS`，直接使用 `NR_CPUS` 访问超出运行时实际 CPU 数量（`nr_cpu_ids`）的位图会触发 `cpu_max_bits_warn()` 产生警告。
+
+#解决方案
+将 `c_start` 函数中的 CPU 遍历上限从编译时的宏定义 `NR_CPUS` 修改为运行时的变量 `nr_cpu_ids`，确保遍历范围限制在系统实际可用的 CPU 数量之内，从而避免越界访问触发警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f3f69dcff0f7ed582e086a3b91ce8b256958e7f

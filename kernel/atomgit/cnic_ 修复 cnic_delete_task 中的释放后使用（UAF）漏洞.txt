@@ -1,0 +1,21 @@
+#标题
+cnic: 修复 cnic_delete_task 中的释放后使用（UAF）漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在清理 cnic 设备过程中，若延迟工作队列 `delete_task` 正在执行且循环重新入队，可能导致 `cnic_dev` 被释放后，`cnic_delete_task()` 仍然试图对其进行解引用，从而引发内核崩溃或内存损坏。该问题通过静态分析发现，可表现为内核 panic 或 UAF 异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `cnic_cm_stop_bnx2x_hw()` 中，原代码使用 `cancel_delayed_work()` 来取消延迟工作项 `delete_task`，该函数不能保证工作项如果正在执行会完全结束。此外，`delete_task` 是循环性的工作项，`flush_workqueue()` 仅等待调用前已入队的工作项，无法覆盖在 `flush_workqueue()` 调用后重新提交的工作项。
+这导致了竞争条件：当 CPU 0 执行清理流程调用 `cnic_free_dev(dev)` 释放内存后，CPU 1 上的 `cnic_delete_task()` 新实例可能仍在运行或刚被重新入队执行，尝试访问已释放的 `cnic_dev` 结构体，造成释放后使用。
+
+#解决方案
+将 `cnic_cm_stop_bnx2x_hw()` 中的 `cancel_delayed_work()` 替换为 `cancel_delayed_work_sync()`。该函数能确保当前正在执行的工作项完成后再返回，从而避免 UAF。同时，由于 `cancel_delayed_work_sync()` 内部已包含同步等待逻辑，原有的 `flush_workqueue()` 调用变得冗余，因此将其移除。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/769df72d4242f25ff69bbf471c2f24d6b3cd5d90

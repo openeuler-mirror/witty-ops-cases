@@ -1,0 +1,25 @@
+#标题
+uacce: NUMA 距离计算缺陷及互斥锁重复加锁修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 当设备 NUMA 节点无效（如为 NUMA_NO_NODE）时，`numa_distance_show` 接口可能计算出错误的 NUMA 距离值，导致用户态获取的距离信息不正确。
+2. 在 `uacce_vma_close` 函数处理流程中，若 `qfr` 为空，代码逻辑错误地执行了重复锁定互斥锁（`mutex_lock`），这将导致线程死锁或内核挂起，进而引发进程无法退出或相关资源无法释放。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **互斥锁逻辑错误**：在 `uacce_vma_close` 函数中，当判断 `qfr` 为空时，原代码误写为 `mutex_lock(&q->mutex)`，而此时该锁已被持有，导致重复加锁。
+2. **NUMA 距离计算缺陷**：在 `numa_distance_show` 函数中，未检查 `uacce->parent->numa_node` 是否为有效值（`NUMA_NO_NODE`），直接将其传入 `node_distance` 进行计算，导致计算结果不正确；且默认初始化值为 0 而非标准的 `LOCAL_DISTANCE`。
+
+#解决方案
+1. **修复死锁问题**：将 `uacce_vma_close` 中的 `mutex_lock(&q->mutex)` 修改为 `mutex_unlock(&q->mutex)`，确保在异常退出路径正确释放锁。
+2. **修复 NUMA 距离计算**：
+   - 增加 `uacce->parent->numa_node != NUMA_NO_NODE` 的有效性检查。
+   - 将 `distance` 变量的默认初始值从 0 修改为 `LOCAL_DISTANCE`，确保在非 NUMA 配置或节点无效时返回合理的默认值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8f2b0ee61919102731b00d46e288ea0663667350

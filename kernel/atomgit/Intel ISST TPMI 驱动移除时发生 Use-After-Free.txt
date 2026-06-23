@@ -1,0 +1,20 @@
+#标题
+Intel ISST TPMI 驱动移除时发生 Use-After-Free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 Intel Speed Select Technology (ISST) TPMI 设备（触发 `tpmi_sst_dev_remove` 函数）时，内核会发生 Use-After-Free 错误。具体表现为在释放内存后继续访问该内存区域的指针，可能导致内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tpmi_sst_dev_remove` 函数中，代码逻辑错误导致释放顺序颠倒。具体原因为：在 `if (!tpmi_sst->partition_mask_current)` 条件成立时，代码先调用了 `kfree(tpmi_sst)` 释放内存，随后又访问了 `tpmi_sst->package_id` 以执行 `isst_common.sst_inst[tpmi_sst->package_id] = NULL` 操作。此时 `tpmi_sst` 指针指向的内存已被释放，构成了 Use-After-Free。
+
+#解决方案
+调整代码执行顺序，确保在释放内存前完成指针成员的访问。将 `isst_common.sst_inst[tpmi_sst->package_id] = NULL;` 移至 `kfree(tpmi_sst);` 之前执行，避免访问已释放的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e7147608ea9b08eb657e0e80d3e72b9d876effee

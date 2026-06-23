@@ -1,0 +1,20 @@
+#标题
+resctrl: 缺失 rdt_last_cmd_clear() 导致 last_cmd_status 接口残留陈旧日志
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 resctrl 子系统操作过程中，`last_cmd_status` 接口显示非当前操作的陈旧日志信息，导致用户无法获取正确的命令执行状态。此前为了修复 lockdep 警告而移除了 `rdt_last_cmd_clear()` 调用，但引入了状态显示不准确的功能性缺陷。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复 "Fix potential lockdep warning" 的补丁中，直接移除了 `rdt_last_cmd_clear()` 调用。然而，这导致在成功获取 `rdtgroup_mutex` 锁之后、进行具体业务逻辑处理之前，未能清理上一次操作的命令状态，使得 `last_cmd_status` 接口保留了陈旧的日志内容，不符合该接口原本的功能定义。
+
+#解决方案
+在 `rdtgroup_cpus_write` 和 `mkdir_rdt_prepare` 函数中，于成功获取 `rdtgroup_mutex` 锁之后、进入具体业务逻辑判断之前，恢复并添加 `rdt_last_cmd_clear()` 调用，确保每次操作开始时清空上一次的命令状态，从而正确显示当前操作的执行结果。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8c44479505cc747ac19d838734983ea3f7412897

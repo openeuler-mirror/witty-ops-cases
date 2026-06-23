@@ -1,0 +1,20 @@
+#标题
+BPF 辅助函数在错误返回路径下未初始化输出指针导致信息泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 BPF 辅助函数（如 `bpf_strtol`、`bpf_strtoul`、`bpf_kallsyms_lookup_name`、`bpf_skb_check_mtu`、`bpf_xdp_check_mtu`）执行失败并返回错误码时，其指针类型的输出参数（如 `res`、`mtu_len`）未被赋值。这导致 BPF 程序读取到未初始化的内核栈数据，造成内核内存信息泄露给用户空间。
+
+#主要错误日志
+未知
+
+#问题根因
+相关 BPF 辅助函数的实现中，在处理错误返回路径（如 `return -EINVAL` 或 `return -ENODEV`）时，没有将传入的输出指针参数置零或赋予安全值。虽然 BPF verifier 保证了指针本身的有效性，但并未保证在错误分支下指针指向的内存已被正确初始化，导致原有栈数据残留。
+
+#解决方案
+在函数入口处或错误处理路径中，显式地将输出参数指针指向的内存初始化为 0。例如，在 `bpf_strtol` 中增加 `*res = 0`，在 `bpf_skb_check_mtu` 中将 `mtu` 初始化为 0 并在返回前统一赋值给 `*mtu_len`，确保无论函数执行成功还是失败，输出参数都处于确定状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7a7909bb7f9d734df91e2da34eaf59fffeaab5c3

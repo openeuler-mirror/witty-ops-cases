@@ -1,0 +1,20 @@
+#标题
+x86/dumpstack: 异常栈回溯不准确导致栈追踪丢失首帧
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在异常栈上进行栈回溯时，调用栈追踪结果不准确。具体表现为：栈追踪输出中缺失了本应被访问的第一帧信息，导致调用栈仅包含猜测行，而非正确的函数调用序列。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit 2e4be0d011f2 ("x86/show_trace_log_lvl: Ensure stack pointer is aligned, again") 在代码清理过程中，错误地将 `stack` 变量的赋值初始化移动到了循环头部。这导致 `get_stack_pointer()` 函数使用了错误的 `regs` 指针（使用了栈帧顶部的 regs 而非调用者提供的 regs）。当该 regs 为 NULL 时，函数错误地回退到当前任务的栈指针；当 regs 指向另一个 regs 帧时，导致线性猜测展开逻辑从栈的过高位置开始，跳过了正确的第一帧。
+
+#解决方案
+将 `stack = stack ?: get_stack_pointer(task, regs);` 赋值语句从 `for` 循环头部移回循环开始之前的位置，确保使用调用者提供的 `regs` 进行栈指针初始化，从而保证栈回溯起点的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e9d26ca9eb2d604fad4c7275a81428107286f928

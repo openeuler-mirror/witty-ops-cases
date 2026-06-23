@@ -1,0 +1,29 @@
+#标题
+vhost/scsi: 处理 SCSI AN 请求触发空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 Guest 发送 SCSI AN（Asynchronous Notification）请求时，宿主机内核触发空指针引用（null-ptr-dereference），导致 vhost_worker 进程被杀死。由于进程在崩溃时持有 `vq->mutex` 锁，导致对应的 tpg（Target Portal Group）资源无限期被占用，后续相关操作可能卡死。
+
+#主要错误日志
+```
+Oops: general protection fault, probably for non-canonical address 0xdffffc0000000000: 0000 [#1] PREEMPT SMP KASAN NOPTI
+KASAN: null-ptr-deref in range [0x0000000000000000-0x0000000000000007]
+RIP: 0010:vhost_scsi_get_req+0x165/0x3a0
+Call Trace:
+ vhost_scsi_ctl_handle_vq+0x2a4/0xca0
+ vhost_scsi_ctl_handle_kick+0x52/0x90
+ vhost_run_work_list+0x134/0x1b0
+ vhost_task_fn+0x121/0x350
+```
+
+#问题根因
+在 `vhost_scsi_ctl_handle_vq()` 函数中，处理 `VIRTIO_SCSI_T_AN_*` 类型的请求时，`vc.target` 被设置为 NULL（因为此类请求不需要 tpg）。该指针随后被传递给 `vhost_scsi_get_req()` 函数。在 `vhost_scsi_get_req()` 中，代码直接对 `vc->target` 进行了解引用操作（作为数组索引访问 `vs_tpg[*vc->target]`），且在此之前未检查 `vc->target` 是否为空，从而触发了空指针引用漏洞。
+
+#解决方案
+在 `vhost_scsi_get_req()` 函数中增加对 `vc->target` 的非空检查。只有当 `vc->target` 不为 NULL 时，才执行获取 `vs_tpg` 和 `tpg` 的逻辑；否则跳过该逻辑直接返回，避免了空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6e286ee63e138f3e08f5721abbf82376f1dc2d91

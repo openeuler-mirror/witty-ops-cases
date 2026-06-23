@@ -1,0 +1,20 @@
+#标题
+i40e网卡VF统计信息中tx_dropped计数未正确更新
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在Intel X710系列网卡驱动（i40e）中，创建VF（Virtual Function）后，通过VF发送异常报文（如无效VLAN标签或TTL=0的报文），查看VF统计信息时发现`tx_dropped`计数始终为0，未能正确反映发送过程中被丢弃的报文数量。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在获取VF统计信息时，错误地从`i40e_eth_stats.tx_discards`字段读取数据来更新`tx_dropped`。根据硬件规格，对应的寄存器GLV_TDPC并未实现，且`i40e_update_eth_stats()`函数也不会更新`tx_discards`字段，导致该值一直为0。
+
+#解决方案
+修改`drivers/net/ethernet/intel/i40e/i40e_virtchnl_pf.c`中的`i40e_get_vf_stats`函数，将`vf_stats->tx_dropped`的数据来源从无效的`stats->tx_discards`改为有效的`stats->tx_errors`。`tx_errors`字段由`i40e_update_eth_stats()`通过读取GLV_TEPC寄存器正确更新，能够真实反映发送丢弃的报文统计。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf9b5b13c199330545c99136348b534a9cd90aed

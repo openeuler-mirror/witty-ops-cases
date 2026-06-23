@@ -1,0 +1,29 @@
+#标题
+Bluetooth: MGMT 修复 set_powered_sync 中的 slab-use-after-free 读漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理蓝牙 MGMT 设置电源状态时，触发 KASAN 检测到的 slab-use-after-free 错误，导致内核崩溃。具体表现为在工作队列 `hci_cmd_sync_work` 执行 `set_powered_sync` 函数时，访问了已被释放的内存地址。此问题可能发生在设备关闭过程中或并发操作时。
+
+#主要错误日志
+```text
+BUG: KASAN: slab-use-after-free in set_powered_sync+0x3a/0xc0 net/bluetooth/mgmt.c:1353
+Read of size 8 at addr ffff888029b4dd18 by task kworker/u9:0/54
+Workqueue: hci0 hci_cmd_sync_work
+Call Trace:
+ set_powered_sync+0x3a/0xc0 net/bluetooth/mgmt.c:1353
+ hci_cmd_sync_work+0x22b/0x400 net/bluetooth/hci_sync.c:328
+ ...
+```
+
+#问题根因
+当 HCI 设备关闭时（如调用 `hci_dev_close_sync`），`__mgmt_power_off` 函数会遍历并清理 MGMT pending 队列，释放了 `MGMT_OP_SET_POWERED` 相关的 `cmd` 数据结构。然而，与此同时或之后，`set_powered_sync` 同步回调函数可能被调度执行。由于之前的逻辑未在 `set_powered_sync` 中检查 `cmd` 是否仍在 pending 队列中（即未检查是否已被释放或取消），直接访问了 `cmd->param`，导致访问已释放内存。此外，`mgmt_set_powered_complete` 仅检查了句柄匹配，未处理 `-ECANCELED` 的情况，也未能有效阻止 UAF 的发生。
+
+#解决方案
+1. 在 `set_powered_sync` 函数中增加防御性检查，在访问 `cmd->param` 之前，通过 `pending_find` 验证 `cmd` 是否仍位于 pending 队列中。如果找不到（已被清理），则直接返回 `-ECANCELED`，避免访问无效指针。
+2. 在 `mgmt_set_powered_complete` 函数中增加对 `err == -ECANCELED` 的判断。如果操作已被取消，直接返回，不再尝试查找 pending 命令或进行后续处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/73aa9203756731a6dbabe7c7ea0cb3996e17bb72

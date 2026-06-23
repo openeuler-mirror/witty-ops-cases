@@ -1,0 +1,24 @@
+#标题
+RDMA/hns: 多 Bank 使用 EXT_SGE 导致 RoCEE 挂死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用多个 QP（Queue Pair）bank 且这些 QP 均使用 EXT_SGE（扩展 SGE）功能时，RoCEE（RDMA over Converged Ethernet Engine）硬件可能会发生挂起，导致设备无响应或 IO 通信中断。
+
+#主要错误日志
+未知
+
+#问题根因
+当多个 Bank 的 QP 同时使用 EXT_SGE 时，不同 Bank 的 QP 在处理扩展 SGE 时可能会相互干扰，从而触发硬件故障导致 RoCEE 挂死。
+
+#解决方案
+引入 QP-bank-limit 机制：
+1. 新增 `HNS_ROCE_CAP_FLAG_LIMIT_BANK` 特性标志位。
+2. 在分配 QP 和 CQ 时，根据该标志位限制有效的 Bank 掩码（`valid_cq_bank_mask` 和 `valid_qp_bank_mask`），将使用 EXT_SGE 的 QP 限制在特定的 Bank 内（如 Bank 0 和 Bank 6），避免不同 Bank 间的干扰。
+3. 若不启用该限制机制，固件将限制最大 SGE 数量并禁用扩展 SGE 功能，以防止硬件挂起。
+4. 启用限制机制时，向用户态报告的 `max_cq` 和 `max_qp` 数量减半，以适应 Bank 限制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/209f40403456bf445343fa00b481cbbb012117ea

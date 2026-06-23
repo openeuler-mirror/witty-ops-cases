@@ -1,0 +1,20 @@
+#标题
+jbd2: 事务ID比较未处理回绕导致fc_begin_commit逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 JBD2 文件系统进行 fast commit 操作时，当事务 ID（tid）发生回绕时，`jbd2_fc_begin_commit` 函数对事务 ID 的比较逻辑会出现错误判断。这会导致该函数错误地返回 `-EALREADY`，阻止了本应进行的 fast commit 流程，可能导致文件系统同步功能异常或事务无法正确提交。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `jbd2_fc_begin_commit` 函数中，原代码使用简单的逻辑运算符 `<=` 来比较当前事务 ID（`tid`）与日志的提交序列号（`j_commit_sequence`）。由于事务 ID 是循环使用的无符号整数，当数值达到上限发生回绕时，直接的数值比较无法正确反映事务的新旧顺序，导致比较结果与预期不符。
+
+#解决方案
+修正事务 ID 的比较方式，将原本的 `tid <= journal->j_commit_sequence` 修改为使用专用的 `tid_geq` 函数进行比较（即 `tid_geq(journal->j_commit_sequence, tid)`）。`tid_geq` 函数专门设计用于处理 32 位事务 ID 的回绕问题，能够正确判断事务序列的新旧关系，从而确保在 ID 回绕场景下逻辑依然正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e55a8dd4571538f635dadac6b05bc08f1c5d4765

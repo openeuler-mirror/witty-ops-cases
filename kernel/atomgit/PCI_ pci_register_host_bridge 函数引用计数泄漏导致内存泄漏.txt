@@ -1,0 +1,23 @@
+#标题
+PCI: pci_register_host_bridge 函数引用计数泄漏导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `pci_register_host_bridge` 函数注册 PCI 主桥时，若 `device_register(&bus->dev)` 执行成功但后续步骤（如 `device_add_groups` 或资源分配）失败导致函数跳转到 `unregister` 或 `free` 标签处退出，`bus` 对象的引用计数未被正确释放，导致内存泄漏（memory leak）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `pci_register_host_bridge` 函数中，当 `device_register(&bus->dev)` 成功执行后，内核已接管了 `bus` 对象的生命周期。然而，在错误处理路径的 `free` 标签下，代码直接调用 `kfree(bus)` 释放内存，未调用 `put_device(&bus->dev)` 来丢弃该设备的引用。这导致已注册设备的引用计数泄漏，内存无法被正确回收。
+
+#解决方案
+修改错误处理逻辑，引入 `bus_registered` 布尔变量标记 `bus->dev` 是否已注册。
+在函数退出前的清理逻辑中：
+1. 若 `bus_registered` 为真，调用 `put_device(&bus->dev)` 正确释放引用计数，由设备核心层在引用计数归零时释放内存。
+2. 若 `bus_registered` 为假，表示设备尚未注册，直接调用 `kfree(bus)` 释放内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/00a5fd640e825f76e4ea645b7c28206cd66c142e

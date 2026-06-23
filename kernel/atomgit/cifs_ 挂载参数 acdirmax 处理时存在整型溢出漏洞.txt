@@ -1,0 +1,20 @@
+#标题
+cifs: 挂载参数 acdirmax 处理时存在整型溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载 CIFS 文件系统时，若用户指定的 `acdirmax` 参数值过大（但在秒级别逻辑上看似合法），在内核将其转换为 jiffies 的过程中会触发整型溢出。这可能导致绕过原本设计的上限校验，从而设置错误的目录元数据缓存超时时间，影响系统稳定性或导致非预期行为。
+
+#主要错误日志
+cifs_errorf(fc, "acdirmax too large\n");
+
+#问题根因
+在处理 `acdirmax` 挂载参数时，代码逻辑顺序错误：先执行 `ctx->acdirmax = HZ * result.uint_32` 进行乘法运算，然后再进行上限校验。由于 `result.uint_32` 是用户可控的 u32 类型变量，乘以 HZ 后可能超出 32 位整数的表示范围发生溢出，导致随后的校验 `ctx->acdirmax > CIFS_MAX_ACTIMEO` 判断失效。
+
+#解决方案
+调整校验逻辑的顺序，在执行乘法转换之前，直接对用户输入的原始值（秒）进行校验。修改后的逻辑判断 `result.uint_32 > CIFS_MAX_ACTIMEO / HZ`，若校验通过再进行赋值操作，从而避免了中间过程的整型溢出风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba271ca448e9b5eb4d0dd589bb44c1205ee91e5c

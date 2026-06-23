@@ -1,0 +1,20 @@
+#标题
+brcmfmac: 停止 watchdog 任务时潜在 use-after-free 问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在停止 brcmfmac 驱动的 watchdog 任务时，若 watchdog 任务恰好在发送信号（send_sig）和停止内核线程（kthread_stop）调用之间结束，将触发 use-after-free 问题，可能导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在调用 send_sig() 向 watchdog 线程发送信号后、调用 kthread_stop() 停止线程前，watchdog 任务可能已经自行退出。当任务退出时，其 task_struct 可能被释放，导致后续的 kthread_stop() 访问已释放的内存，引发 use-after-free。
+
+#解决方案
+在操作 watchdog 任务指针前，通过调用 get_task_struct() 增加该任务的引用计数，确保任务结构在操作期间不会被释放；随后将 kthread_stop() 替换为 kthread_stop_put()，在停止任务后相应地减少引用计数，从而避免竞态条件引发的内存访问错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8c773eae47f3a367f61061951ea01480d458d962

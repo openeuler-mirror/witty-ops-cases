@@ -1,0 +1,20 @@
+#标题
+ALSA: PCM 默认 mmap fault 处理函数缺省 NULL 检查导致潜在崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ALSA PCM 子系统处理 mmap 数据缺页中断时，若驱动未提供 `page` 回调且未分配 DMA 缓冲区（`runtime->dma_area` 为 NULL），内核将直接对该 NULL 指针进行 `virt_to_page` 地址转换，导致内核崩溃或不可预测的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `snd_pcm_mmap_data_fault` 在处理缺页中断时，针对默认处理路径（即 `substream->ops->page` 为空且无 DMA 缓冲区的情况），直接使用了 `runtime->dma_area` 进行地址计算，未对该指针进行非空校验。若 `runtime->dma_area` 为 NULL，将引发非法指针访问。
+
+#解决方案
+在默认 mmap fault 处理分支中增加对 `runtime->dma_area` 的非空检查。如果检测到该指针为 NULL，通过 `WARN_ON_ONCE` 记录警告信息并直接返回 `VM_FAULT_SIGBUS` 信号，阻止后续的非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/243c0c153790684d9d040654dd901694fb81e556

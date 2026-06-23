@@ -1,0 +1,27 @@
+#标题
+mremap 触发 userfaultd 相关内核 WARN 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在向一个跨度至少为一个 PMD 的 VMA 注册 userfaultd（且禁用了 remap 事件）后，调用 mremap() 对该 VMA 进行重映射。当因页表分配错误导致页表移动失败并进行恢复时，内核会触发 WARN_ON_ONCE 警告。虽然内核逻辑最终能正确处理（通过递归避免移动实际页表），但触发该警告会产生令人不悦的调用栈信息。
+
+#主要错误日志
+WARNING: CPU: 2 PID: 6133 at mm/mremap.c:357 move_normal_pmd mm/mremap.c:357 [inline]
+WARNING: CPU: 2 PID: 6133 at mm/mremap.c:357 move_pgt_entry mm/mremap.c:595 [inline]
+WARNING: CPU: 2 PID: 6133 at mm/mremap.c:357 move_page_tables+0x3832/0x44a0 mm/mremap.c:852
+RIP: 0010:move_normal_pmd mm/mremap.c:357 [inline]
+RIP: 0010:move_pgt_entry mm/mremap.c:595 [inline]
+RIP: 0010:move_page_tables+0x3832/0x44a0 mm/mremap.c:852
+
+#问题根因
+根本原因在于页表移动过程中的检查逻辑不完整：
+在正常的页表移动过程中，如果检测到 uffd 禁用了 remap 事件，代码会返回 false 并递归进入下层页表处理。然而，当页表移动因分配错误失败并尝试恢复时，VMA 的角色发生了互换（原本的“新 VMA”变成了恢复操作的“旧 VMA”），此时恢复路径下的 VMA 没有 uffd 上下文。
+原来的代码仅检查了当前的 VMA，未检查“新 VMA”。这导致在恢复移动期间，代码没有像原始移动那样递归处理，而是尝试直接移动页表，结果遇到了已存在的页表项，从而触发了 `pmd_none` 或 `pud_none` 的 WARN 检查。
+
+#解决方案
+新增辅助函数 `uffd_supports_page_table_move`，用于同时检查源 VMA 和目标 VMA 是否支持页表移动。在 PMD 和 PUD 级别的移动操作（`move_normal_pmd` 和 `move_normal_pud`）开始前调用该函数，并调整检查顺序，使其在 `pmd_none()` / `pud_none()` 合理性检查之前执行。这样可以确保在原始移动和恢复移动两种场景下，如果任一 VMA 不支持页表移动（即需要清理 uffd-wp 状态），均会正确返回 false 并走递归路径，从而避免触发 WARN。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/46661f9d51fa073e35120c07de11ecceea0dee5e

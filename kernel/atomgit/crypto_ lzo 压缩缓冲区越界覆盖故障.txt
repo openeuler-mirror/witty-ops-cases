@@ -1,0 +1,23 @@
+#标题
+crypto: lzo 压缩缓冲区越界覆盖故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用内核 LZO 压缩算法（如 zram 场景）时，如果压缩后的数据大小超过了预设的输出缓冲区长度，压缩函数不会停止写入而是继续执行，导致缓冲区越界覆盖。这会破坏相邻内存数据，引发内核 Panic 或不可预测的系统异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+`lzo1x_1_compress` 和 `lzorle1x_1_compress` 函数内部实现缺乏对输出缓冲区边界的检查。在压缩过程中，写入操作未判断目标地址是否超出 `dst_len` 范围，当输出缓冲区不足时，程序继续向后写入数据，导致内存越界。
+
+#解决方案
+将 LZO 压缩实现从“非安全”版本替换为“安全”版本：
+1. 新增 `lzo1x_compress_safe.c` 文件，通过宏定义开启边界检查逻辑。
+2. 修改 `lzo1x_1_do_compress` 函数，增加 `op_end` 指针参数和 `NEED_OP(x)` 宏检查，在每次写入数据前判断剩余空间是否足够。若空间不足，立即终止压缩并返回 `LZO_E_OUTPUT_OVERRUN` 错误码。
+3. 在 `crypto/lzo.c` 和 `crypto/lzo-rle.c` 中，将调用接口从 `lzo1x_1_compress`（及 rle 版本）替换为对应的 `_safe` 版本，防止缓冲区越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1523befcf189eb0da442eb8a0d778b1a5f3f6b04

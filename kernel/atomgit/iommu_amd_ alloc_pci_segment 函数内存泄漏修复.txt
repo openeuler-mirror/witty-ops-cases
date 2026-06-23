@@ -1,0 +1,20 @@
+#标题
+iommu/amd: alloc_pci_segment 函数内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD IOMMU 初始化过程中，若系统内存不足（或连续内存不足），`alloc_pci_segment` 函数分配设备表、别名表或反向查找表失败时，此前已分配的 `amd_iommu_pci_segment` 结构体内存未能释放，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `alloc_pci_segment` 在分配内存过程中，若后续的 `alloc_dev_table`、`alloc_alias_table` 或 `alloc_rlookup_table` 调用失败，函数直接返回 `NULL`，但未对已分配的 `pci_seg` 结构体以及已成功分配的资源进行回滚释放。
+
+#解决方案
+在 `alloc_pci_segment` 函数中引入错误处理标签（`err_free_alias_table`、`err_free_dev_table`、`err_free_pci_seg`），当后续分配步骤失败时，跳转至相应的错误处理流程，依次释放已分配的别名表、设备表，并将 `pci_seg` 从链表中删除后释放内存，确保资源正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8ced07402569a5cefa38bf50169e13984038b0a1

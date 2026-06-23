@@ -1,0 +1,33 @@
+#标题
+NFS nfs_release_folio() 在 kcompactd 回写时导致死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在运行 NFS loopback 挂载（NFS 客户端挂载本机 NFSD 导出的 XFS 文件系统）并进行内存整理时，kcompactd 内核线程进入不可中断睡眠状态，长时间阻塞，触发 hung task 检测告警。
+
+#主要错误日志
+INFO: task kcompactd0:58 blocked for more than 4435 seconds.
+[<0>] folio_wait_bit+0xe8/0x200
+[<0>] folio_wait_writeback+0x2b/0x80
+[<0>] nfs_wb_folio+0x80/0x1b0 [nfs]
+[<0>] nfs_release_folio+0x68/0x130 [nfs]
+[<0>] split_huge_page_to_list_to_order+0x362/0x840
+[<0>] migrate_pages_batch+0x43d/0xb90
+[<0>] migrate_pages_sync+0x9a/0x240
+[<0>] migrate_pages+0x93c/0x9f0
+[<0>] compact_zone+0x8e2/0x1030
+[<0>] compact_node+0xdb/0x120
+[<0>] kcompactd+0x121/0x2e0
+
+#问题根因
+在 NFS loopback 挂载场景下，kcompactd 线程在进行内存迁移和分裂大页时调用 nfs_release_folio()。该函数尝试调用 nfs_wb_folio() 回写脏页，这会触发对 NFSD（基于 XFS）的写回请求。而 NFSD 可能正在等待 XFS 的 __filemap_get_folio()，导致依赖循环：kcompactd 等待写回完成，而写回流程被 kcompactd 正在占用或需要的资源阻塞，从而形成死锁。原有的代码逻辑仅检查并跳过了 kswapd 进程，未处理 kcompactd 进程。
+
+#解决方案
+1. 在进程标志位中新增 PF_KCOMPACTD 标志，并在 mm/compaction.c 中设置 kcompactd 线程启动时置上该标志，退出时清除。
+2. 在 include/linux/compaction.h 中新增辅助函数 current_is_kcompactd() 用于判断当前进程是否为 kcompactd。
+3. 修改 fs/nfs/file.c 中的 nfs_release_folio() 函数，在判断是否跳过回写逻辑时，增加对 current_is_kcompactd() 的检查，使其像 kswapd 一样直接返回 false 跳过回写，从而避免死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d89f0e9cfb9ac692c4197a90a1511cd35ec3971a

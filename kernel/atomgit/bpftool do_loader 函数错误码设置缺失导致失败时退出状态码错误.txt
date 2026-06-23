@@ -1,0 +1,20 @@
+#标题
+bpftool do_loader 函数错误码设置缺失导致失败时退出状态码错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 bpftool 的 loader 功能加载 eBPF 对象文件，且 `bpf_object__open_file` 调用失败（例如文件不存在或格式错误）时，尽管工具输出了错误信息，但其命令行的退出状态码（exit status code）却返回为成功（0）。这导致脚本或自动化工具无法通过判断返回值来感知加载操作失败，影响自动化流程的可靠性。
+
+#主要错误日志
+p_err("failed to open object file");
+
+#问题根因
+在 `do_loader()` 函数中，当 `bpf_object__open_file()` 执行失败时，代码跳转至错误处理标签 `err_close_obj`，但在此过程中未将变量 `err` 设置为错误值（如 -1）。由于函数局部变量 `err` 默认初始化为 0，导致函数最终返回 0，即表示操作成功，掩盖了实际发生的错误。
+
+#解决方案
+在 `tools/bpf/bpftool/prog.c` 文件的 `do_loader` 函数中，针对 `bpf_object__open_file()` 失败的分支，显式设置错误码 `err = -1;`，以确保函数返回正确的错误状态，与其他调用 `bpf_object__open_file` 的位置保持一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/225d40a1bd53cb81fe05b056326a5ded2b929beb

@@ -1,0 +1,26 @@
+#标题
+ACPICA 解析器缓存内存泄漏导致 kmem_cache_destroy 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动过程中，若 ACPI 解释器因无效 ACPI 信息提前终止（early abort），内核调用 `kmem_cache_destroy` 销毁缓存时失败。系统日志显示 "Slab cache still has objects"，具体涉及 `Acpi-Parse` 和 `Acpi-parse_ext` 缓存。该泄漏在旧版本内核（<= 4.9）中可能泄露内核函数地址，破坏 KASLR 安全机制。
+
+#主要错误日志
+[    0.364016] ACPI: Unable to start the ACPI Interpreter
+[    0.365061] ACPI Error: Could not remove SCI handler (20170303/evmisc-281)
+[    0.368174] kmem_cache_destroy Acpi-Parse: Slab cache still has objects
+[    0.388039] kmem_cache_destroy Acpi-parse_ext: Slab cache still has objects
+
+#问题根因
+当 AML 解析发生错误导致 ACPI 提前终止时，`acpi_ps_complete_final_op()` 函数的实现存在缺陷。该函数在遇到错误（如 `AE_CTRL_TERMINATE` 或其他失败状态）时，会立即返回，未继续执行剩余操作对象（ops）的清理工作。这导致 `Acpi-Parse` 和 `Acpi-ParseExt` 缓存中的对象未被释放，从而在后续调用 `acpi_ut_delete_caches()` 销毁缓存时引发内存泄漏。
+
+#解决方案
+修改 `acpi_ps_complete_final_op()` 函数的逻辑，确保在发生错误时不再直接返回，而是继续遍历并完成所有剩余的操作对象。具体修改包括：
+1. 引入 `return_status` 变量保存最终返回状态，以及 `ascending` 布尔变量控制回调逻辑。
+2. 当遇到 `AE_CTRL_TERMINATE` 或其他错误状态时，将 `ascending` 设为 `FALSE` 并记录错误状态，但循环继续执行以处理后续 ops。
+3. 确保所有操作对象都通过 `acpi_ps_complete_this_op()` 完成清理，从而彻底释放缓存对象，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fcb07815a89be59e08add7d09d4951ccc0a6533d

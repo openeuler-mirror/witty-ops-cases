@@ -1,0 +1,24 @@
+#标题
+xfs: 磁盘介质故障导致的 ENODATA 错误码被误传给 xattr 代码
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当磁盘发生介质故障时，XFS 文件系统在读取扩展属性或目录项过程中可能错误地返回 `-ENODATA`。这会导致上层应用或调用者误以为属性不存在，从而产生逻辑判断错误，掩盖了真实的底层 I/O 错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 XFS 代码路径中，`ENODATA` 存在二义性：对于磁盘层（disk I/O），它暗示发生了磁盘介质故障；但对于 xattr（扩展属性）层，它表示“属性未找到”。
+在发生磁盘读取错误时，底层代码直接将 `-ENODATA` 向上传递，未进行转换。这导致 xattr 代码将其误解为正常的“属性不存在”情况，而非严重的 I/O 错误，从而导致错误处理逻辑异常。
+
+#解决方案
+在关键读取路径 `xfs_attr_rmtval_get` 和 `xfs_da_read_buf` 中增加错误码转换逻辑：
+1. 在 `xfs_attr_rmtval_get` 函数中，若 `xfs_buf_read` 返回 `-ENODATA`，将其转换为 `-EIO`。
+2. 在 `xfs_da_read_buf` 函数中，若读取返回 `-ENODATA` 且当前处理的是属性 Fork（`whichfork == XFS_ATTR_FORK`），将其转换为 `-EIO`。
+通过这种方式，消除了 `ENODATA` 的二义性，确保上层代码能够正确识别并处理底层磁盘故障。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5a69179e86bbcd53691a6ce35cc688061e090619

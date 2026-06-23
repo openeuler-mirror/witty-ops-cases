@@ -1,0 +1,23 @@
+#标题
+dvbdev: DVB_DYNAMIC_MINORS未配置时设备注册逻辑错误导致潜在的内存泄漏与状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核配置项 `DVB_DYNAMIC_MINORS` 未开启的情况下，调用 `dvb_register_device` 注册 DVB 设备时，若计算的 minor 号超过 `MAX_DVB_MINORS`，函数逻辑处理不当。虽然返回了错误码 `-EINVAL`，但未能正确执行资源清理与释放，可能导致内核对象泄漏、锁未释放或设备状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+当 `DVB_DYNAMIC_MINORS` 宏未定义时，代码中原有的 `#else` 分支逻辑存在严重缺陷：
+1. 在检测到 `minor >= MAX_DVB_MINORS` 时，代码跳转到了错误处理逻辑，但使用了未初始化或错误赋值的变量 `ret` 作为返回值。
+2. 错误处理分支仅执行了部分资源释放（如 `dvb_media_device_free`、`list_del`、`kfree`），但遗漏了关键的互斥锁释放操作 `mutex_unlock(&dvbdev_register_lock)`。
+相比之下，动态分配分支（`DVB_DYNAMIC_MINORS` 定义时）在此类错误下仅调用 `goto` 跳转至统一的清理逻辑，流程更为严谨。
+
+#解决方案
+重构 `dvb_register_device` 函数中非动态 minor 分配路径的错误处理逻辑。将 minor 号越界检查移出独立的 `#else` 块，统一使用公共的越界检查代码段。当 minor 越界时，直接跳转到已有的公共错误处理标签（由 diff 上下文推断为 `goto` 逻辑）或复用公共的清理代码路径，确保在出错时能正确释放锁资源并返回正确的错误码 `-EINVAL`，从而修复内存泄漏和锁未释放的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/70125123232f0fef6f3ba4126aa3c8d783a4abeb

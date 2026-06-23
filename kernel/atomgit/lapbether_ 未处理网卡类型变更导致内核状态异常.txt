@@ -1,0 +1,20 @@
+#标题
+lapbether: 未处理网卡类型变更导致内核状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 lapbether 设备的下层网卡类型发生变化时（例如通过 bonding 驱动将非 ARPHRD_ETHER 类型设备作为从设备），内核未阻止该操作。这违反了 `lapbeth_data_transmit()` 函数要求下层设备类型必须为 ARPHRD_ETHER 的预设条件，可能导致内核状态不一致或后续数据传输异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`lapbeth_device_event()` 函数缺少对 `NETDEV_PRE_TYPE_CHANGE` 事件的处理逻辑。`lapbeth_data_transmit()` 依赖下层设备类型为 ARPHRD_ETHER，但系统允许在 lapbether 设备运行期间改变下层网卡类型，破坏了这一预设条件。特别是在 bonding 驱动启用非 ARPHRD_ETHER 设备作为从设备时，会触发此问题。
+
+#解决方案
+在 `lapbeth_device_event()` 函数的 switch 语句中增加 `NETDEV_PRE_TYPE_CHANGE` 事件处理分支。如果检测到当前设备关联了 lapbeth 设备，则返回 `NOTIFY_BAD`，明确拒绝下层设备类型的变更请求，从而保证 lapbether 设备始终基于正确的以太网设备类型运行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c6a81b3b3df6ce187b2999488041af4a514a2b66

@@ -1,0 +1,22 @@
+#标题
+nfsd: laundromat_work 执行时因 nfsd_ssc 未初始化导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFS 服务启动过程中，如果内核等待用户空间响应时间过长（例如在 `nfs4_state_start_net` 调用链中调用 `cld_pipe_upcall` 等待完成时），`laundromat_work` 延迟工作队列可能在 `nfsd_ssc` 初始化完成之前开始执行。此时 `laundromat_work` 访问未初始化的 `nfsd_ssc` 导致发生空指针解引用，引发内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `nfs4_state_start_net()` 中，`laundromat_work` 会通过调用链 `nfs4_laundromat` -> `nfsd4_ssc_expire_umount` 访问 `nfsd_ssc`。
+根本原因是代码初始化顺序错误：`nfsd_ssc` 的初始化代码位于 `nfs4_state_start_net()` 调用之后，而 `nfs4_state_start_net()` 内部会启动 `laundromat_work`。
+通常情况下，`laundromat_work` 的延迟启动时间足够 `nfsd_ssc` 完成初始化。但在特定场景下（如内核长时间等待用户空间响应），延迟工作队列可能提前运行，从而访问到尚未初始化的 `nfsd_ssc`，导致 NULL 指针解引用。
+
+#解决方案
+调整初始化顺序，将 `nfsd_ssc` 的初始化工作（`nfsd4_ssc_init_umount_work`）移动到 `nfs4_state_start_net()` 调用之前执行，确保在 `laundromat_work` 可能启动前，`nfsd_ssc` 已经完成初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/605ad98c50c877c48e575f3b64375a4d3d791ce2

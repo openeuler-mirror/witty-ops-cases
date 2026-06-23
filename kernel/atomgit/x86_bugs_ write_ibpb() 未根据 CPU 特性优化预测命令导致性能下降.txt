@@ -1,0 +1,20 @@
+#标题
+x86/bugs: write_ibpb() 未根据 CPU 特性优化预测命令导致性能下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 SBPB（Selective Branch Prediction Barrier）的 AMD CPU 上，若系统判定不需要刷新分支类型预测（例如 CPU 具有 SRSO_NO 特性或 SRSO 缓解措施被禁用），内核在执行 `write_ibpb()` 时仍然强制使用开销较大的 IBPB（Indirect Branch Prediction Barrier）指令，而不是更轻量级的 SBPB 指令。这会导致上下文切换等场景下的 CPU 开销增加，造成不必要的性能损失。
+
+#主要错误日志
+未知
+
+#问题根因
+`write_ibpb()` 函数在汇编层硬编码使用了 `PRED_CMD_IBPB` 指令来刷新预测器。然而，对于分支类型预测不需要被刷新的场景（如 CPU 支持 SRSO_NO 或 SRSO 缓解被禁用时），使用全功能的 IBPB 是多余的。内核中已有变量 `x86_pred_cmd` 维护了当前应当使用的最佳预测命令（IBPB 或 SBPB），但 `entry_ibpb` 汇编代码未读取该变量，导致无法根据实际需求切换到轻量级的 SBPB。
+
+#解决方案
+修改汇编代码 `entry_ibpb`，将原本硬编码的 `PRED_CMD_IBPB` 替换为对全局变量 `x86_pred_cmd` 的动态读取（`_ASM_RIP(x86_pred_cmd)`）。这使得内核能够根据 CPU 特性和缓解策略配置，自动选择使用 IBPB 或更轻量级的 SBPB 指令，从而在保证安全性的前提下优化性能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/913a9ccfc2f6dbd972fa329e59fbb4b22a64b175

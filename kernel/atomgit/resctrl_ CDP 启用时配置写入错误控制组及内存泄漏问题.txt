@@ -1,0 +1,34 @@
+#标题
+resctrl: CDP 启用时配置写入错误控制组及内存泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在启用 CDP（Code and Data Prioritization）功能但硬件资源不支持该特性时，resctrl 子系统将配置写入错误的控制组，导致资源分配策略失效。
+2. 内核存在内存泄漏，具体由 `closid_init()` 分配的位图未在退出路径释放引起。
+3. MPAM 驱动中存在内存泄漏，`resctrl_arch_mon_ctx_alloc_no_wait()` 分配的内存对象未正确释放。
+4. MBM（Memory Bandwidth Monitoring）溢出检查逻辑在特定硬件（如 mbwu_flowrate_list 中列出的型号）上不必要地执行，可能引发性能开销或潜在异常。
+5. MPAM 驱动中 `get_cpumask_from_cache_id` 存在逻辑判断错误，导致跳过有效的缓存 ID 处理。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **配置写入错误**：在 `resctrl_arch_update_one` 和 `resctrl_arch_get_config` 中，代码逻辑未正确处理“CDP 已启用但资源不支持 CDP”的情况，导致 `partid` 计算错误，将配置应用到了错误的控制组。
+2. **内存泄漏（closid）**：`rdt_get_tree` 函数在初始化失败或 `rdt_kill_sb` 在卸载时，未调用 `closid_exit()` 释放 `closid_free_map` 位图。
+3. **内存泄漏（mpam）**：`resctrl_arch_mon_ctx_free` 原实现中直接 `kfree` 了栈上的指针变量地址（`arch_mon_ctx`），导致动态分配的 `u32` 对象（`ret`）未被释放；同时对于 L3 占用事件，未释放通过 `mpam_alloc_csu_mon` 分配的监视器资源。
+4. **逻辑判断错误**：`get_cpumask_from_cache_id` 中判断条件误写为 `if (cache_id == ~0UL)`，实际应为 `if (iter_cache_id == ~0)`，导致逻辑失效。
+5. **MBM 溢出检测误判**：`mbwu_flowrate_list` 中列出的硬件不需要 MBM 溢出检查，但原代码未判断硬件特性，一律启动溢出处理程序。
+
+#解决方案
+1. **修复 CDP 配置逻辑**：修改 `parse_bw`、`resctrl_arch_update_one` 和 `resctrl_arch_get_config` 函数。当 CDP 启用但资源不支持时（`resctrl_arch_hide_cdp` 返回 true），强制将配置同时应用到 `CDP_CODE` 和 `CDP_DATA` 类型，并确保读取时使用正确的索引。
+2. **修复内存泄漏**：
+   - 新增 `closid_exit` 函数用于释放 `closid_free_map`。
+   - 在 `rdt_get_tree` 的错误处理路径和 `rdt_kill_sb` 中调用 `closid_exit`。
+   - 重构 `resctrl_arch_mon_ctx_free`，直接释放传入的 `arch_mon_ctx` 指针，并移除无效的资源释放逻辑。
+3. **修复逻辑判断**：修正 `get_cpumask_from_cache_id` 中的变量比较逻辑，使用 `iter_cache_id` 进行判断。
+4. **优化 MBM 溢出检测**：引入 `resctrl_arch_would_mbm_overflow` 接口，针对特定硬件返回 `false`，避免不必要的溢出处理线程启动。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/43f34487defb05a765ab54fb14605c60fc9282b8

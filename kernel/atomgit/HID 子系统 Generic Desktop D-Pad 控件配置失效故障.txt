@@ -1,0 +1,23 @@
+#标题
+HID 子系统 Generic Desktop D-Pad 控件配置失效故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在引入 "System Do Not Disturb"（免打扰）事件代码支持后，Generic Desktop D-Pad（方向键）控件的配置流程被错误跳过，导致设备上的 D-Pad 功能无法正常使用或映射，而 "Do Not Disturb" 功能可能受影响。
+
+#主要错误日志
+未知
+
+#问题根因
+之前的补丁在添加 "System Do Not Disturb" 功能时，使用了掩码判断 `if ((usage->hid & 0xf0) == 0x90)` 来处理 SystemControl。然而，Generic Desktop D-Pad 的 usage HID 值（如 HID_GD_UP 为 0x00010090 等）也落在此掩码范围内。代码逻辑先匹配到了该条件，但在处理 switch 分支时仅处理了 0xb（对应 Do Not Disturb），其余情况直接 `goto ignore`，导致后续原本用于处理 D-Pad 的代码块无法被执行，从而冲突并跳过了 D-Pad 的配置。
+
+#解决方案
+修改 `hid-input.c` 中的逻辑，将 D-Pad 处理逻辑与 "System Do Not Disturb" 的处理逻辑合并到同一个 `switch` 语句中。具体措施包括：
+1. 重新定义 `HID_GD_DO_NOT_DISTURB` 宏以明确匹配特定值。
+2. 在同一个 switch case 分支中分别处理 `HID_GD_UP`、`HID_GD_DOWN`、`HID_GD_RIGHT`、`HID_GD_LEFT` 以及 `HID_GD_DO_NOT_DISTURB`。
+3. 确保 D-Pad 相关的 `hat_dir` 设置和映射逻辑（`map_abs`）能够正确执行，不再被 ignore，从而解决两者冲突的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/160697da01aa2aba48d28fe9effe671fee119268

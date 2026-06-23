@@ -1,0 +1,24 @@
+#标题
+f2fs零范围操作触发kernel BUG导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 f2fs 文件系统的 fallocate 相关操作（如 f2fs_zero_range）时，若触发特定错误路径，内核会检测到 extent 长度为零的异常状态，随即触发 `kernel BUG` 导致系统崩溃（Oops），并在日志中打印 invalid opcode 错误。
+
+#主要错误日志
+F2FS-fs (loop0): __update_extent_tree_range: extent len is zero, type: 0, extent [0, 0, 0], age [0, 0]
+------------[ cut here ]------------
+kernel BUG at fs/f2fs/extent_cache.c:678!
+Oops: invalid opcode: 0000 [#1] SMP KASAN NOPTI
+RIP: 0010:__update_extent_tree_range+0x13bc/0x1500 fs/f2fs/extent_cache.c:678
+
+#问题根因
+在 `f2fs_do_zero_range` 函数的错误处理路径中，代码未检查计算后的 extent 长度是否为 0，直接调用了 `f2fs_update_read_extent_cache_range` 更新 extent cache。这导致向 extent cache 中添加了一个长度为 0 的无效 extent，触发了内核在 `__update_extent_tree_range` 中的 BUG 检查机制。
+
+#解决方案
+在 `fs/f2fs/file.c` 的 `f2fs_do_zero_range` 函数中，在更新 extent cache 前增加判断条件 `if (index > start)`。仅当 extent 长度（`index - start`）大于 0 时才执行更新操作，从而避免向 extent cache 中写入零长度的 extent。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/79bc0356a340af72f7b7118e7418c8239c67a1fd

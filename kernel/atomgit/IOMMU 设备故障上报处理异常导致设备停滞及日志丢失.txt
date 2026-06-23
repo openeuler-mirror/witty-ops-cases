@@ -1,0 +1,29 @@
+#标题
+IOMMU 设备故障上报处理异常导致设备停滞及日志丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 当设备接收到 IOMMU 页面请求（PAGE_REQ）故障时，如果未附加支持故障处理的 domain 或 iopf_param 为 NULL，驱动程序的 `ops->page_response` 回调未被调用，导致设备陷入停滞状态。
+2. `arm_smmu_v3` 驱动依赖 `iommu_report_device_fault` 的返回值来记录错误日志，由于该函数返回值变为 void，导致这些错误事件在日志中被遗漏，无法观测。
+
+#主要错误日志
+dev_warn_ratelimited(dev, "iopf with pasid %d aborted\n",
+		     fault->prm.pasid);
+
+#问题根因
+在之前的代码修改中，`iommu_report_device_fault` 函数被修改为返回 void，且假设驱动仅需调用该函数上报 iopf。
+这导致了两个问题：
+1. 核心代码在处理故障时，如果没有找到有效的 fault capable domain 或 iopf_param，直接返回，并未调用驱动的 `page_response` 回调来响应设备，导致设备（特别是等待 PAGE_REQ 响应的设备）挂起。
+2. 驱动层（如 arm_smmu_v3）无法通过返回值判断上报是否成功，从而丢失了错误记录的机会。
+
+#解决方案
+修改 `iommu_report_device_fault` 函数逻辑以正确处理错误的 iopf 设置：
+1. 将函数返回值类型从 void 改回 int。
+2. 新增 `find_fault_handler` 函数，在处理故障前先检查是否存在有效的 attach handle 和 iopf handler。如果检查失败，跳转到 `err_bad_iopf` 处理流程。
+3. 在 `err_bad_iopf` 标签处，如果故障类型为 `IOMMU_FAULT_PAGE_REQ`，调用新增的 `iopf_error_response` 函数发送无效响应（`IOMMU_PAGE_RESP_INVALID`）以解除设备停滞。
+4. 对于错误的 iopf 设置场景，返回 `-EINVAL`，允许驱动层根据返回值记录错误日志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5baa6545978eee8e7bbceec2892902e0073ad305

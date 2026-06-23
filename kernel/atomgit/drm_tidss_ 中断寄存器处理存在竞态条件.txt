@@ -1,0 +1,22 @@
+#标题
+drm/tidss: 中断寄存器处理存在竞态条件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+TI Keystone 平台 Display SubSystem (tidss) 驱动在处理中断寄存器时存在竞态条件。由于对 irq status 寄存器的访问缺乏锁保护，在并发场景下（如中断处理程序与复位操作并发执行），可能导致中断状态读取混乱或寄存器操作冲突，进而引发显示子系统行为异常或不可预测的错误。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序使用自旋锁（spinlock）保护了 `irq_masks` 字段和 irq enable 寄存器，但在访问 irq status 寄存器（ irqstatus ）时未持有该锁。这导致中断状态寄存器的读取与清除操作未受保护，从而引入了竞态条件风险。
+
+#解决方案
+在访问 irq status 寄存器时获取自旋锁，确保对中断寄存器操作的原子性：
+1. 在 `dispc_softreset_k2g` 函数中，对 `dispc_set_irqenable` 和 `dispc_read_and_clear_irqstatus` 的调用前后添加 `spin_lock_irqsave` 和 `spin_unlock_irqrestore` 保护。
+2. 在 `tidss_irq_handler` 中断处理函数中，对 `dispc_read_and_clear_irqstatus` 的调用前后添加 `spin_lock` 和 `spin_unlock` 保护。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1bd8bc3f8cd03b34f35fd87c2afc7e24ec62eaae

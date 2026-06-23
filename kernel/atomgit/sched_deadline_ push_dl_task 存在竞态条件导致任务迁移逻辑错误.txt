@@ -1,0 +1,25 @@
+#标题
+sched/deadline: push_dl_task 存在竞态条件导致任务迁移逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Deadline 调度类中进行任务推送时，若发生锁竞争导致 `double_lock_balance` 释放并重获锁，在此窗口期内任务可能已被迁移并在其他 CPU 上运行，随后又被唤醒重新入队。此时，原有的检查逻辑可能误判通过，导致对已迁移且不再位于 pushable 链表中的任务进行错误的推送操作。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `find_lock_later_rq` 函数中，当获取双锁过程中释放了当前运行队列锁时，存在一个时间窗口。在此期间，任务可能被迁移到其他 CPU 执行并重新入队。原有的检查逻辑未能有效覆盖“任务已迁移且重新入队”的场景，导致针对 `push_dl_task` 调用路径的校验不足，未能发现任务已不再是 pushable 链表的头部节点。
+
+#解决方案
+在 `find_lock_later_rq` 获取锁后增加更严格的校验逻辑：
+1. 将函数 `pick_next_pushable_dl_task` 移至调用位置之前以便引用。
+2. 区分调用场景进行校验：
+   - 对于被限流的任务（`dl_throttled`，对应 `dl_task_offline_migration` 路径），保留原有检查逻辑（检查任务状态、CPU 归属等）。
+   - 对于未被限流的任务（对应 `push_dl_task` 路径），新增检查确保任务仍然位于 pushable 任务链表的头部（`task == pick_next_pushable_dl_task(rq)`）。
+3. 移除了部分在新增校验下已不再必要的冗余检查，确保任务迁移决策的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/24ef4bba4bdaf8774381ab9095806d94c69ce139

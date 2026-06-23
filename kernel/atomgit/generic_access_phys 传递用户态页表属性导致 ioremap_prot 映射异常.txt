@@ -1,0 +1,21 @@
+#标题
+generic_access_phys 传递用户态页表属性导致 ioremap_prot 映射异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 架构下，`generic_access_phys` 函数通过 `ioremap_prot` 映射物理内存时，直接将用户态页表属性作为参数传递。这导致建立内核映射时使用了错误的内存属性，可能引发内核访问该段内存时出现非对齐访问、数据损坏或不可预知的系统异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`generic_access_phys` 函数原本直接获取用户态 PTE 中的页表属性，并将其原封不动地传递给 `ioremap_prot`。然而，用户态页表属性与内核态页表属性在定义上存在差异，直接混用会导致映射的内存属性不正确。
+
+#解决方案
+1. 在 ARM64 架构下新增 `arch_mk_kernel_prot` 函数，该函数通过保留内核页表基础属性（`_PAGE_KERNEL`）并仅从用户态属性中提取 PTE_ATTRINDX_MASK（内存类型索引），构造合法的内核态页表属性。
+2. 在 `mm/memory.c` 中引入 `arch_mk_kernel_prot` 逻辑，在调用 `ioremap_prot` 前使用该函数对用户态属性进行转换，确保传递给 `ioremap_prot` 的是正确的内核属性值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca4b8ad8af0ebfaecdfa4d3acdde08384bdae8ba

@@ -1,0 +1,24 @@
+#标题
+cpcap-battery 驱动中的释放后使用（Use-After-Free）问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设备移除（removal）过程中，系统发生崩溃或内存被静默破坏。这是由于中断处理程序在 `power_supply` 句柄已被释放但中断处理程序尚未注销的时间窗口内被调用，导致 `power_supply_changed()` 函数访问了已释放的内存。
+
+此外，在设备探测（probe）阶段也存在竞态风险，中断可能在 `power_supply` 句柄注册完成之前触发，导致 `power_supply_changed()` 使用未初始化的句柄。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在初始化过程中，使用 `devm_` 托管函数申请中断（IRQ）的时机早于注册 `power_supply` 句柄的时机。由于 `devm_` 机制按照申请的逆序释放资源，这导致在移除设备时，`power_supply` 句柄先被释放注销，而中断处理程序后被注销。
+
+这就造成了一个竞态条件：在 `power_supply` 句柄释放后、中断注销前，如果中断触发，中断处理程序将调用 `power_supply_changed()` 并传入已释放的句柄指针，从而引发释放后使用。
+
+#解决方案
+调整 `cpcap_battery_probe` 函数中的初始化顺序，将中断申请操作（`cpcap_battery_init_interrupts`）移动到 `power_supply` 句柄注册之后执行。这确保了资源释放时的正确顺序：中断先注销，`power_supply` 句柄后释放，从而消除了竞态窗口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/08231dc45a8148e9ad0b12b77dc2ae83bb762e35

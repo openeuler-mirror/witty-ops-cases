@@ -1,0 +1,34 @@
+#标题
+f2fs: 修复 dnode page 越界访问导致的内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载损坏的 f2fs 镜像时，进行写入操作会触发 KASAN 检测到的 slab out-of-bounds 访问错误，导致内核 panic 或 dump_stack。具体表现为在 `f2fs_get_dnode_of_data` 函数处理过程中访问了非法内存地址。
+
+#主要错误日志
+```
+BUG: KASAN: slab-out-of-bounds in data_blkaddr fs/f2fs/f2fs.h:3053 [inline]
+BUG: KASAN: slab-out-of-bounds in f2fs_data_blkaddr fs/f2fs/f2fs.h:3058 [inline]
+BUG: KASAN: slab-out-of-bounds in f2fs_get_dnode_of_data+0x1a09/0x1c40 fs/f2fs/node.c:855
+Read of size 4 at addr ffff88807c433000 by task syz-executor.0/1234
+
+Call Trace:
+ ...
+ f2fs_reserve_block+0x53/0x310 fs/f2fs/data.c:1195
+ prepare_write_begin fs/f2fs/data.c:3395 [inline]
+ f2fs_write_begin+0xf39/0x2190 fs/f2fs/data.c:3594
+ ...
+```
+修复补丁新增的错误日志（推断触发时输出）：
+`f2fs: inode mapping table is corrupted, run fsck to fix it, ino:%lu, nid:%u, level:%d, offset:%d`
+
+#问题根因
+在损坏的 f2fs 镜像中，存在一个 direct node 的 node id 与其所属的 inode id 相同。在 `f2fs_get_dnode_of_data()` 函数处理过程中，内核将该 dnode 错误地解析为 inode node 结构。由于 inode 与 dnode 结构大小和布局不同，计算块地址时导致数组越界访问（例如访问了 page 边界外的地址 4096），从而触发 KASAN 报错或内存崩溃。
+
+#解决方案
+在 `f2fs_get_dnode_of_data()` 函数的循环中增加健全性检查：判断当前访问的 direct node id (`nids[i]`) 是否等于 inode id (`dn->inode->i_ino`)。如果相等，说明元数据已损坏，立即返回 `-EFSCORRUPTED` 错误，打印错误日志提示运行 fsck，并设置 `SBI_NEED_FSCK` 标志，从而避免后续的越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1f6c331befe6b138abde2ccf953443e4aace5ff8

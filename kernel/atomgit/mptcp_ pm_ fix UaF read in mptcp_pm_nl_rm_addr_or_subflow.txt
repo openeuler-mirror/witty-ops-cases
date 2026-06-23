@@ -1,0 +1,26 @@
+#标题
+mptcp: pm: fix UaF read in mptcp_pm_nl_rm_addr_or_subflow
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行 MPTCP 路径管理操作删除子流时触发 KASAN 检测到的 Use-After-Free 错误，导致内核崩溃并打印 splat 信息。该故障可通过 Syzkaller 复现，具体表现为在 `mptcp_pm_nl_rm_addr_or_subflow` 函数中对已释放的内存进行读取访问。
+
+#主要错误日志
+```
+BUG: KASAN: slab-use-after-free in mptcp_pm_nl_rm_addr_or_subflow+0xb44/0xcc0 net/mptcp/pm_netlink.c:881
+Read of size 4 at addr ffff8880569ac858 by task syz.1.2799/14662
+...
+The buggy address is located 88 bytes inside of freed 512-byte region [ffff8880569ac800, ffff8880569aca00)
+```
+
+#问题根因
+在 `mptcp_pm_nl_rm_addr_or_subflow` 函数中，代码在调用 `mptcp_close_ssk` 关闭子流之后，依然尝试读取 `subflow` 结构体中的 `request_join` 字段。
+`mptcp_close_ssk` 会触发子流的释放流程，导致 `subflow` 指向的内存被释放。随后对该内存区域的访问触发了 Use-After-Free 错误。
+
+#解决方案
+调整代码执行顺序，将 `subflow->request_join` 的读取操作移至 `mptcp_close_ssk` 调用之前。这样可以确保在访问 `subflow` 结构体成员时，该结构体尚未被释放，从而避免 Use-After-Free 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/12a2f6037f5edec54ebdd4ba7cd42369d8809463

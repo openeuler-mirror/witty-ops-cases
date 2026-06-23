@@ -1,0 +1,33 @@
+#标题
+Cadence D-PHY 初始化序列错误导致 PLL 锁定与 O_CMN_READY 状态轮询失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Cadence D-PHY 驱动（如 J721E 平台）时，由于驱动在状态机使能前错误地轮询 PLL lock 和 O_CMN_READY 状态，导致初始化流程异常。具体表现为：
+1. D-PHY 电源开启（power_on）流程可能因轮询超时而失败。
+2. 后续依赖 D-PHY 初始化完成的 MIPI 接口（如 DSI/CSI）无法正常工作，导致设备无法正常通信或枚举失败。
+
+#主要错误日志
+- 推断：dmesg 中可能出现以下错误打印（基于补丁新增的 dev_err 调用）：
+  `Failed to setup PSM with error %d`
+  `Failed to get band control value with error %d`
+  `Failed to lock PLL with error %d`
+  `O_CMN_READY signal failed to assert with error %d`
+
+#问题根因
+根据 J721E TRM 文档 "12.7.2.4.1.2.1 Start-up Sequence Timing Diagram" 描述，PLL lock 和 O_CMN_READY 的断言仅能在公共状态机通过编程 DPHY_CMN_SSM 寄存器使能之后发生。
+旧版本驱动逻辑存在错误：它在 `cdns_dphy_j721e_set_pll_cfg` 函数中（即状态机使能之前）就尝试轮询 PLL lock 和 O_CMN_READY 状态。这违反了硬件初始化序列要求，导致轮询条件永远无法满足或时序错误，从而引发初始化失败。
+
+#解决方案
+修改 D-PHY 驱动的初始化逻辑，严格遵循硬件手册规定的启动序列：
+1. **调整调用顺序**：将时钟相关编程和 PLL 配置从 `configure` 回调函数移动到 `power_on` 回调函数中执行。
+2. **修正轮询时机**：在 `power_on` 流程中，先写入 `DPHY_CMN_SSM` 寄存器使能状态机，然后再调用新增的 `wait_for_pll_lock` 和 `wait_for_cmn_ready` 接口进行状态轮询。
+3. **状态管理增强**：
+   - 增加 `is_configured` 和 `is_powered` 状态标志，确保 `configure` 在 `power_on` 之前调用，且防止重复上电。
+   - 在 `power_off` 回调中明确禁用状态机（清除 `DPHY_CMN_SSM_EN` 位），以便客户端驱动可以通过 "power_off -> configure -> power_on" 序列重新配置 PLL。
+4. **错误处理完善**：在 `power_on` 流程中增加了对 PSM 设置、PLL 锁定和 O_CMN_READY 状态检查的错误处理路径，失败时自动关闭已开启的时钟。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a133dd973c4a9296cd8486d54dee51809b5cb7b2

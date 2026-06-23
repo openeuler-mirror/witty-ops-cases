@@ -1,0 +1,20 @@
+#标题
+i2c: tegra: ACPI 模式下复位控制错误处理修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在部分使用 ACPI 的平台上，Tegra I2C 控制器驱动初始化过程中，复位控制逻辑可能对错误码进行错误判断。由于 `acpi_evaluate_object()` 返回的是 ACPI 错误码（在某些错误场景下可能为正值），而非标准的 Linux 负错误码，导致驱动层的错误检查逻辑失效或产生误判，进而可能引发 I2C 设备功能异常。同时，代码中存在 `WARN_ON_ONCE(err)` 警告，可能在系统日志中留下堆栈跟踪记录。
+
+#主要错误日志
+未知
+
+#问题根因
+根本原因在于 `tegra_i2c_init()` 函数中直接调用 `acpi_evaluate_object()` 进行复位操作。该函数返回的是 ACPI 定义的错误码（整数），而 Linux 内核通常使用负整数表示错误。在某些平台上，ACPI 返回的错误码为正值，这导致将其作为 Linux 错误码处理时逻辑不一致或不正确。此外，原有的逻辑分别处理 ACPI 和 Device Tree 两种复位方式，增加了维护复杂性与出错概率。
+
+#解决方案
+移除手动调用 `acpi_evaluate_object()` 执行复位的代码逻辑，改用内核提供的标准接口 `device_reset(i2c_dev->dev)`。该接口内部已正确封装了对 ACPI 和 Device Tree 模式下复位操作的差异化处理，能够统一并正确处理错误码返回值，从而修复了 ACPI 错误码语义不一致的问题。同时删除了冗余的 `tegra_i2c_init_reset()` 函数，简化了代码路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/835ca3a29d9b2acc84b7f147816be5ce4450243e

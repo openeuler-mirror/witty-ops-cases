@@ -1,0 +1,22 @@
+#标题
+tracing: probes: trace_probe_log APIs 存在竞态条件导致数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下，通过 kprobe_events 或 uprobe_events 接口创建探测事件时，由于共享变量 `trace_probe_log` 未受锁保护，可能发生竞态条件。这会导致日志信息被覆盖或混乱，进而引发内核警告或配置错误。
+
+#主要错误日志
+未知
+
+#问题根因
+共享变量 `trace_probe_log` 可以通过 kprobe_events、uprobe_events 和 dynamic_events 的探测事件创建操作进行访问和修改。虽然 dynamic_events 的操作通过 `dyn_event_ops_mutex` 进行了串行化保护，但 kprobe_events 和 uprobe_events 接口的操作并未持有该互斥锁，导致并发访问时发生竞态。
+
+#解决方案
+1. 新增 `dyn_event_create()` 函数，在该函数内部持有 `dyn_event_ops_mutex` 互斥锁后调用具体的 create 操作，确保事件创建过程受锁保护。
+2. 将 kprobe 和 uprobe 的创建流程修改为调用 `dyn_event_create()`，从而统一使用互斥锁保护。
+3. 在 `trace_probe_log_init()`、`trace_probe_log_clear()` 等相关 API 中增加 `lockdep_assert_held(&dyn_event_ops_mutex)` 检查，利用 lockdep 机制确保调用时锁已被持有。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a8f2babf2ce07d8d4ea52923ce9c7e1b15cfadb3

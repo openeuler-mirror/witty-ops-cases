@@ -1,0 +1,23 @@
+#标题
+urma: 修复发送状态检查日志级别及ACK超时状态处理不当
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 URMA 相关数据发送操作时，如果底层返回状态为 `UBCORE_CR_ACK_TIMEOUT_ERR`（Status 9），内核日志中会错误地打印大量 "Tx status error" 错误信息。对于预期的 ACK 超时场景，此日志打印过于频繁且级别过高，造成日志噪音，干扰正常的故障排查。
+
+#主要错误日志
+Tx status error. cr_cnt %d, status %d, comp_len %u, user_ctx: 0x%llx.
+
+#问题根因
+在 `ubmad_send_work_handler` 函数中，对完成状态（completion status）的判断逻辑存在缺陷：
+1. 仅判断了 `cr.status != UBCORE_CR_SUCCESS`，未排除预期的 `UBCORE_CR_ACK_TIMEOUT_ERR` 状态，导致 ACK 超时也被视为异常错误。
+2. 对于高频率可能出现的非致命场景使用了 `ubcm_log_err` 打印，未使用限流日志接口，可能导致日志刷屏。
+
+#解决方案
+1. 增加状态判断条件，当状态为 `UBCORE_CR_ACK_TIMEOUT_ERR` 时不打印错误日志，即将判断条件修改为 `cr.status != UBCORE_CR_SUCCESS && cr.status != UBCORE_CR_ACK_TIMEOUT_ERR`。
+2. 将日志打印接口从 `ubcm_log_err` 修改为 `ubcm_log_err_rl`（Rate Limited），对错误日志进行限流处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/28e8caace482140a0144fba6c0e36706fdc5a134

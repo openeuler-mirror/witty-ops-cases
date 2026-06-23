@@ -1,0 +1,20 @@
+#标题
+ring-buffer: bytes_dropped 与 bytes_dropped_nested 计算逻辑颠倒
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ring buffer 启动自检测试中，统计丢弃字节时，`bytes_dropped` 与 `bytes_dropped_nested` 两个字段的赋值逻辑发生颠倒。虽然该错误不会影响最终 `total_dropped` 的统计结果，但会导致分类统计信息不准确，无法正确区分嵌套上下文与非嵌套上下文中的丢字节数量。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `rb_write_something` 函数中，当事件丢弃发生时，代码对 `bytes_dropped` 和 `bytes_dropped_nested` 的赋值逻辑与 `nested` 布尔标志位的判断条件相反：在 `nested` 为真时错误地增加了 `bytes_dropped`，而在非嵌套情况下错误地增加了 `bytes_dropped_nested`。
+
+#解决方案
+修正 `kernel/trace/ring_buffer.c` 中的逻辑判断：当 `nested` 为真时，将丢弃长度累加到 `data->bytes_dropped_nested`；当 `nested` 为假时，将丢弃长度累加到 `data->bytes_dropped`，确保统计变量与上下文类型匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/458ddccf53a7c5c96cfc6077ab672f18e66be2d8

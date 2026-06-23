@@ -1,0 +1,34 @@
+#标题
+tee: tee_shm_put 函数空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统执行关机或休眠流程时，触发内核空指针引用，导致内核 panic。从调用栈看，问题发生在 `systemd-sleep` 进程执行过程中，通过 `optee_shutdown` -> `__optee_disable_shm_cache` -> `tee_shm_free` -> `tee_shm_put` 路径触发崩溃。
+
+#主要错误日志
+Unable to handle kernel paging request at virtual address 0000000000100cca
+Mem abort info:
+ESR = 0x0000000096000004
+EC = 0x25: DABT (current EL), IL = 32 bits
+SET = 0, FnV = 0
+EA = 0, S1PTW = 0
+FSC = 0x04: level 0 translation fault
+Internal error: Oops: 0000000096000004 [#1] SMP
+pc : tee_shm_put+0x24/0x188
+lr : tee_shm_free+0x14/0x28
+Call trace:
+ tee_shm_put+0x24/0x188
+ tee_shm_free+0x14/0x28
+ __optee_disable_shm_cache+0xa8/0x108
+ optee_shutdown+0x28/0x38
+
+#问题根因
+在 `__optee_disable_shm_cache` 函数中，`reg_pair_to_ptr` 返回的 `shm` 指针可能为 NULL。后续调用链 `tee_shm_free(shm)` -> `tee_shm_put(shm)` 中，`tee_shm_put` 函数未对传入的 `shm` 指针及其内部成员（`ctx`、`teedev`）进行有效性检查，直接访问了 `shm->ctx->teedev`，导致解引用空指针引发内核崩溃。
+
+#解决方案
+在 `tee_shm_put` 函数开头增加防御性检查，若传入的 `shm` 指针为 NULL，或其成员 `shm->ctx`、`shm->ctx->teedev` 为 NULL，则直接返回，避免空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3ce9607d2fef8874f7e6288e79f4501e492835e0

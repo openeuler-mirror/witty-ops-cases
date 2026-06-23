@@ -1,0 +1,22 @@
+#标题
+BPF验证器结构体KABI一致性破坏导致兼容性问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核BPF子系统中 `struct bpf_verifier_state` 和 `struct bpf_verifier_env` 的结构体定义发生了变化，破坏了内核应用程序二进制接口（KABI）的一致性。该问题由提交 f6c4972ba798 引入，具体表现为内核结构体成员变动可能导致依赖旧接口的模块或用户态工具出现兼容性故障。
+
+#主要错误日志
+未知
+
+#问题根因
+在提交 f6c4972ba798 ("bpf: support non-r10 register spill/fill to/from stack in precision tracking") 中，为了支持非r10寄存器的栈溢出/填充精度跟踪功能，修改了 `struct bpf_verifier_state` 中的 `jmp_history` 字段类型（从 `struct bpf_idx_pair` 变更为 `struct bpf_jmp_history_entry`），并在 `struct bpf_verifier_env` 中新增了 `cur_hist_ent` 字段。这些结构体布局的直接变更破坏了内核的KABI兼容性。
+
+#解决方案
+利用内核提供的 KABI 宏机制对结构体进行修复，在不改变原有二进制布局的前提下完成功能扩展：
+1. 在 `struct bpf_verifier_state` 中，使用 `KABI_BROKEN_REMOVE` 宏移除旧的 `struct bpf_idx_pair` 定义，并使用 `KABI_REPLACE` 宏将原有的 `jmp_history` 字段类型从 `struct bpf_idx_pair` 替换为 `struct bpf_jmp_history_entry`。
+2. 在 `struct bpf_verifier_env` 中，不直接新增字段，而是利用已有的 `KABI_RESERVE(1)` 填充位，通过 `KABI_USE(1, ...)` 宏将新增的 `cur_hist_ent` 字段填充到预留空间中，从而保持结构体总大小和既有成员偏移不变。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4d1c47364ce3565adacb7ed32da6e1ea37bb4c79

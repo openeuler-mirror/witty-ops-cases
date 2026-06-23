@@ -1,0 +1,20 @@
+#标题
+scsi: qla4xxx: 修复潜在的错误指针解引用导致 Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 qla4xxx 驱动执行 iSCSI 连接相关流程时，若 `qla4xxx_ep_connect` 函数执行失败并返回错误指针（error pointer），`qla4xxx_get_ep_fwdb` 函数会将该错误指针传递给调用者。调用者在后续操作中对该返回值进行解引用时，将触发内核 Oops（如空指针类错误或非法地址访问），导致系统崩溃或相关 SCSI 功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `qla4xxx_get_ep_fwdb` 的设计意图是在错误时返回 NULL，但其调用的 `qla4xxx_ep_connect` 函数在失败时返回的是错误指针（error pointer）。`qla4xxx_get_ep_fwdb` 未对返回值进行校验，直接将错误指针作为返回值传递给上层调用者，导致上层调用者在解引用时触发 Oops。
+
+#解决方案
+在 `qla4xxx_get_ep_fwdb` 函数中增加对 `qla4xxx_ep_connect` 返回值的检查。通过 `IS_ERR(ep)` 判断返回值是否为错误指针，若是则直接返回 NULL，避免错误指针向上层传播。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/73b0de8d928a738e5dbc174bfd1b15b7e499b58b

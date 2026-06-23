@@ -1,0 +1,20 @@
+#标题
+brcmnand_waitfunc 错误返回值被误当作 NAND 状态导致状态读取错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Broadcom NAND 控制器驱动执行写操作（如 `brcmnand_write`）过程中，若底层等待函数 `brcmnand_waitfunc` 返回错误码（负值），该错误码会被错误地当作 NAND 状态字节进行处理。这可能导致驱动误判 NAND 状态，进而引发后续操作异常或掩盖真实的硬件故障。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `brcmnand_write` 中，调用 `brcmnand_waitfunc` 获取状态后，代码未检查返回值是否为负数（错误码）。由于缺少对 `status < 0` 的判断，错误返回值被直接当作 NAND 状态进行逻辑判断（如 `status & NAND_STATUS_FAIL`），导致错误值被误用为 NAND 状态。该问题是在引入提交 f504551b7f15 ("mtd: rawnand: Propagate error and simplify ternary operators for brcmstb_nand_wait_for_completion()") 后产生的回归问题。
+
+#解决方案
+在 `brcmnand_write` 函数中，获取 `brcmnand_waitfunc` 返回值后，立即增加返回值检查逻辑。若 `status` 小于 0，则将其作为错误返回值（`ret = status`）并直接跳转至 `out` 标签处退出函数，避免将错误码误当作 NAND 状态处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/36df9fc4db8c22a4fabc4700ad087d69a7d98822

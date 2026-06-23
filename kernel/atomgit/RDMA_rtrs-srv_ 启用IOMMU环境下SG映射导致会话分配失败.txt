@@ -1,0 +1,21 @@
+#标题
+RDMA/rtrs-srv: 启用IOMMU环境下SG映射导致会话分配失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 IOMMU 的机器上，RTRS 服务端会话分配失败，导致服务无法正常建立连接。
+
+#主要错误日志
+RTRS server session allocation failed: -EINVAL
+
+#问题根因
+`ib_dma_map_sg()` 的调用方错误地预期映射后的条目数（nr）必须等于请求的条目数（nr_sgt）。但在 IOMMU 使能的情况下，DMA 映射过程中可能会合并散列表项，导致实际映射的条目数小于请求的条目数。原代码将这种情况误判为错误，返回 -EINVAL，且后续缓存 DMA 地址的逻辑未考虑 SG 表项合并的情况，直接遍历原长度的 sgt 导致地址缓存错误。
+
+#解决方案
+1. 修改判断逻辑：将映射成功的条件从 `nr != nr_sgt` 改为 `nr < nr_sgt`，即只要返回的正值（实际映射条目数）小于等于请求条目数均视为合法，只有返回负值或映射条目数超过请求才报错。
+2. 修正 DMA 地址缓存逻辑：不再简单地按原请求条目数遍历，而是遍历映射后的 SG 表项。针对每个返回的 sg entry，根据其 DMA 长度和最大块大小（max_chunk_size）进行内部循环拆解，正确填充 `srv_path->dma_addr` 数组，处理因 IOMMU 合并 SG 区域带来的差异。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3d3e5d1bc6761793389353d2f3125c2b6540166e

@@ -1,0 +1,20 @@
+#标题
+smb: client: smb2_set_path_attr 函数引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB 客户端进行文件路径属性设置（如重命名）操作时，若路径转换函数 `cifs_convert_path_to_utf16` 执行失败，会导致内核对象 `cfile` 的引用计数（refcount）发生泄漏。随着操作频次增加，泄漏的引用计数会累积，可能导致相关内核资源无法正常释放。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `cifs_get_writable_path` 在成功获取 `cfile` 时会将其引用计数 `cfile->count` 加一。按照设计，函数 `smb2_compound_op` 负责减少该引用计数。然而，在 `smb2_set_path_attr` 函数中，如果 `cifs_convert_path_to_utf16` 转换失败，代码直接跳转至 `smb2_rename_path` 标签并返回，此错误处理路径遗漏了对 `cfile` 引用计数的释放操作（未调用 `cifsFileInfo_put`），从而导致引用计数泄漏。
+
+#解决方案
+在 `smb2_set_path_attr` 函数中，当 `cifs_convert_path_to_utf16` 转换失败且 `cfile` 指针非空时，增加对 `cifsFileInfo_put(cfile)` 的调用，以确保在错误返回前正确释放引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/689558df0cd2a18021c90ba85127edbd3c496d1c

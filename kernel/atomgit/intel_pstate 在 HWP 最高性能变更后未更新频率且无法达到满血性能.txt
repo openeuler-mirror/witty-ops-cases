@@ -1,0 +1,30 @@
+#标题
+intel_pstate 在 HWP 最高性能变更后未更新频率且无法达到满血性能
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 HWP（Hardware P-states）的系统中，若硬件在启动后变更了 CPU 的最高性能等级，会出现以下现象：
+1. sysfs 接口 `cpuinfo_max_freq` 未更新，无法反映 CPU 当前真实的最高性能值。
+2. 即使 CPU 硬件能力提升，CPU 也无法达到预期的最高性能水平。
+
+示例现象：
+故障前：
+scaling_max_freq 和 cpuinfo_max_freq 均为 3700000。
+变更后（预期应更新）：
+cpuinfo_max_freq 应更新为 3900000，scaling_max_freq 也应相应调整，但旧内核未生效。
+
+#主要错误日志
+未知
+
+#问题根因
+在某些系统上，HWP 的最高性能等级会在启动后发生变化。旧版本的驱动代码在处理 HWP 中断时，仅检查并处理了保证性能变更的状态位（MSR_HWP_STATUS 的 bit 0），忽略了对最高性能变更状态位（MSR_HWP_STATUS 的 bit 3）的处理。同时，在使能 HWP 中断时，也遗漏了对 MSR_HWP_INTERRUPT 寄存器 bit 2（最高性能变更中断使能位）的设置。这导致驱动无法感知最高性能等级的变化，进而无法通知 cpufreq 核心层更新频率限制。
+
+#解决方案
+1. 扩展 HWP 中断处理逻辑，增加对 `HWP_HIGHEST_PERF_CHANGE_STATUS`（bit 3）的检测。
+2. 在使能 HWP 中断时，若 CPU 支持 `X86_FEATURE_HWP_HIGHEST_PERF_CHANGE` 特性，将 `MSR_HWP_INTERRUPT` 的 bit 2 置位，以允许接收最高性能变更通知。
+3. 当收到最高性能变更中断后，沿用已有的保证性能变更处理流程，通知 cpufreq 核心层并更新 `MSR_HWP_REQUEST` 寄存器，确保频率信息与硬件状态同步。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/07ccb32af1aaedf50301441e400cefba0f11d97f

@@ -1,0 +1,26 @@
+#标题
+net/oenetcls: 移除模块时访问已释放代码导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `rmmod` 移除 oenetcls 内核模块时，系统发生崩溃。这是因为在模块移除过程中，工作队列尚未销毁且其中的工作任务可能仍在执行，导致任务尝试访问已经失效的模块代码段或数据结构，从而触发 panic 或 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+模块移除流程存在并发与资源释放顺序问题：
+1. 在 `oecls_ntuple_res_clean()` 中，并未销毁工作队列 `do_cfg_workqueue`，导致工作队列残留。
+2. 缺少同步机制确保已提交的工作任务执行完毕或停止。在模块代码移除后，残留的工作任务调用 `cfg_work` 等模块内函数时，导致访问非法内存地址引发崩溃。
+3. RCU 保护机制不足，未等待 RCU 宽限期结束即继续执行清理操作，可能导致 RCU 数据一致性被破坏。
+
+#解决方案
+1. 在 `oecls_ntuple_res_clean()` 函数末尾调用 `destroy_workqueue(do_cfg_workqueue)` 显式销毁工作队列。
+2. 引入原子变量 `oecls_worker_count` 统计正在执行的工作任务数量。在任务开始时原子计数加一，任务结束时减一。
+3. 在销毁工作队列前，使用 `while` 循环轮询等待 `oecls_worker_count` 归零，确保所有工作任务均已执行完毕，避免访问已释放的模块内存。
+4. 使用 `rcu_assign_pointer` 替换 `RCU_INIT_POINTER` 设置 RCU 指针，并调用 `synchronize_rcu()` 等待 RCU 宽限期结束，确保 RCU 数据一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d10ae31e539a86a4f2bd2f0a18d732714464584d

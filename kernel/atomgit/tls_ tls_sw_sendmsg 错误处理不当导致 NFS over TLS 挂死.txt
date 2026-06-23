@@ -1,0 +1,21 @@
+#标题
+tls: tls_sw_sendmsg 错误处理不当导致 NFS over TLS 挂死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 TLS 封装的 RPC（如 NFS over TLS）场景下，若网络连接不稳定，NFS 客户端会发生挂起。系统陷入死循环：RPC 层持续尝试发送数据，但始终收到底层网络返回的 -EBADMSG 错误，导致无法正常重连或恢复，表现为发送进程卡死（D 状态）或无限循环重试。
+
+#主要错误日志
+未知
+
+#问题根因
+在 TLS 发送记录函数 `tls_tx_records()` 中，当 `tcp_sendmsg_locked()` 返回错误码（如 -EPIPE）时，代码逻辑错误地将其统一转换为 -EBADMSG 并传递给 socket 错误报告处理函数 `tls_err_abort()`。
+这导致上层 RPC 层接收到的是 -EBADMSG 而非原始的 -EPIPE。RPC 层对 -EPIPE 的处理策略是重连传输层，但对 -EBADMSG 无此逻辑，从而导致 RPC 层在已断开的连接上无限重试发送，形成死循环。
+
+#解决方案
+修改 `net/tls/tls_sw.c` 文件中 `tls_tx_records()` 函数的错误处理逻辑。在 `tx_err` 标签处，不再将错误码强制转换为 -EBADMSG，而是直接传递原始错误码 `rc` 给 `tls_err_abort()`。这使得上层协议（如 RPC）能够正确识别底层链路错误（如 -EPIPE）并触发重连机制，避免挂死。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c98ed48921230b7706338d96483357906ca8e3f3

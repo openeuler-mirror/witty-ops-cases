@@ -1,0 +1,20 @@
+#标题
+wifi: wlcore: 修复 resume 路径中的互斥锁缺省锁定故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 wlcore 驱动的 resume 流程中，代码逻辑尝试解锁一个未被锁定的互斥锁（wl->mutex）。该问题由 Clang 线程安全分析器检测发现，可能导致内核锁定机制混乱或潜在的竞争条件。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `wl1271_op_resume` 函数中，代码原逻辑是在执行 `pm_runtime_force_resume` 和相关 spinlock 操作后才去获取 `wl->mutex` 锁。然而，后续代码流程或逻辑依赖要求必须先持有该锁才能进行解锁操作。由于获取锁的操作被放置在错误的位置（靠后），导致在需要解锁时锁尚未被获取，从而触发锁定 Bug。根本原因是 commit 45aa7f071b06 引入的代码变更导致锁的获取时机滞后。
+
+#解决方案
+将 `mutex_lock(&wl->mutex)` 调用移动到 `pm_runtime_force_resume` 调用之前，确保在进入后续可能涉及解锁的逻辑前，互斥锁已经被正确锁定。这修复了锁定顺序错误，保证了锁的正确获取与释放配对。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a073985eb2925dd1acd857b32d94ae57fd8aa49b

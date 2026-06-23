@@ -1,0 +1,22 @@
+#标题
+mm: shmem: 修复 within_size 策略下索引对齐错误导致的大页分配问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 shmem 的 per-size within_size 策略时，由于索引（index）对齐计算错误，导致对文件 i_size 的检查不准确。这会导致系统返回不合适的大页阶数，可能引发内存分配行为异常或资源浪费。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `shmem_allowable_huge_orders` 函数中，使用 `round_up(index + 1, order)` 对索引进行对齐计算时，`round_up` 的第二个参数应传入字节数或页面数的倍数值（即 `1 << order`），但代码错误地直接传入了 `order`（阶数数值）。这导致 `round_up` 的计算逻辑错误，进而导致 `i_size` 检查条件 `i_size >> PAGE_SHIFT >= index` 判断失误，最终返回了不正确的大页阶数。
+
+#解决方案
+修改 `mm/shmem.c` 中的对齐计算逻辑：
+1. 将 `round_up(index + 1, order)` 修改为 `round_up(index + 1, 1 << order)`，确保按页面数倍数进行正确的向上取整。
+2. 引入新变量 `aligned_index` 接收对齐后的值，在后续的 i_size 边界检查中使用 `aligned_index`，避免直接修改 `index` 变量影响其他逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c01cfed1544b76d0c70f102a713a5145ee1cd861

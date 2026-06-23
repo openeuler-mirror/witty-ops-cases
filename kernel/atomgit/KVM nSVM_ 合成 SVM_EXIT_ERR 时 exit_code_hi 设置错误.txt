@@ -1,0 +1,21 @@
+#标题
+KVM nSVM: 合成 SVM_EXIT_ERR 时 exit_code_hi 设置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 KVM 嵌套虚拟化场景下，当 VMRUN 操作失败并需要合成 `SVM_EXIT_ERR` 退出事件时，KVM 错误地将 64 位退出码的高 32 位（exit_code_hi）设置为 0，而不是 -1。这导致虚拟机状态异常，无法正确反映硬件定义的无效退出状态（VMEXIT_INVALID），可能导致后续处理逻辑错误或与硬件行为不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 AMD APM 文档，VMCB 中的退出码（EXITCODE）在偏移量 0x70 处定义为一个 64 位的值。文档中定义的错误退出码（如 -1 表示 VMEXIT_INVALID）实际上是负值，这暗示并经过硬件实测验证（在 Milan 和 Turin 平台上），错误退出码需要使用完整的 64 位来表示。
+KVM 自诞生以来一直存在一个长期 Bug，将退出码视为 32 位值处理。在合成 `SVM_EXIT_ERR` 时，代码将 `exit_code_hi`（高 32 位）设置为 0，而根据规范和硬件行为，该值应为 -1（即 0xFFFFFFFF），以正确表示 64 位的负值退出码。
+
+#解决方案
+修改 `arch/x86/kvm/svm/nested.c` 文件，在 `nested_svm_vmrun` 函数中，当合成 `SVM_EXIT_ERR` 时，将 `exit_code_hi` 字段从 0 修改为 `-1u`，确保 64 位退出码被正确设置为 -1，从而修复与硬件规范不一致的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/13f8f0e19ce9c85d90620115d89440dac5678a92

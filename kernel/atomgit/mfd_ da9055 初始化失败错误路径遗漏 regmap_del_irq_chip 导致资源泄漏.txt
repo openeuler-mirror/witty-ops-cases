@@ -1,0 +1,20 @@
+#标题
+mfd: da9055 初始化失败错误路径遗漏 regmap_del_irq_chip 导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 da9055_device_init() 初始化 DA9055 设备时，若 regmap_add_irq_chip() 成功但后续 mfd_add_devices() 失败，内核将跳转到错误处理分支。此时仅执行了 mfd_remove_devices()，导致之前注册的 irq_chip 资源未被释放，造成内存资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+错误处理路径逻辑不完整。当 da9055_device_init() 函数执行失败进入 err 标签处理时，代码只调用了 mfd_remove_devices(da9055->dev) 移除 MFD 设备，却遗漏了调用 regmap_del_irq_chip() 来清理已通过 regmap_add_irq_chip() 成功注册的中断芯片资源，从而导致资源泄漏。
+
+#解决方案
+在 drivers/mfd/da9055-core.c 文件的错误处理路径（err 标签处）中，在 mfd_remove_devices() 调用之后、return ret 之前，增加调用 regmap_del_irq_chip(da9055->chip_irq, da9055->irq_data)，确保在初始化失败时正确释放已注册的 IRQ 资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/09c8fd1fc96359efdf5b7043a1684adf25441690

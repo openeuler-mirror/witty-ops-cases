@@ -1,0 +1,24 @@
+#标题
+RDMA/mlx4: 修复访问未初始化 gids 数组的误报错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Smatch 等静态代码分析工具扫描内核代码时，工具报告了虚假的错误提示，指出函数 `mlx4_ib_del_gid()` 中存在访问未初始化符号 'gids' 的风险。此问题虽不直接导致运行时故障，但会造成代码质量误报，干扰静态分析检查。
+
+#主要错误日志
+drivers/infiniband/hw/mlx4/main.c:393 mlx4_ib_del_gid() error: uninitialized symbol 'gids'.
+
+#问题根因
+局部变量 `gids` 在声明时未进行初始化（未赋值为 NULL）。在后续的代码逻辑中，`gids` 仅在特定条件分支（`!ret && hw_update`）下被赋值，而在 `ret` 非零的情况下 `gids` 处于未初始化状态。虽然逻辑上保证了 `ret` 非零时会提前返回，不会真正使用未初始化的值，但代码结构不够清晰，导致静态分析工具无法正确追踪变量状态，从而触发了误报。
+
+#解决方案
+对代码逻辑进行重构以消除歧义：
+1. 在声明变量 `gids` 时直接初始化为 `NULL`。
+2. 将原本嵌套在 `if (!ret && hw_update)` 条件块中的 `mlx4_ib_update_gids()` 调用移出，改为直接检查 `if (gids)`。
+3. 将 `kfree(gids)` 移出条件块，确保无论何种路径都能执行释放操作（kfree 对 NULL 指针是安全的）。
+此举使得代码逻辑更加清晰，静态分析工具能够正确识别变量状态，从而消除了误报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/20acfb223defb7023e3d4f7ec65b935e55577c75

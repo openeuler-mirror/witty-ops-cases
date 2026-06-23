@@ -1,0 +1,20 @@
+#标题
+ti: icss-iep 驱动禁用 perout 信号时引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 icss_iep_exit() 清理资源时，如果尝试禁用 PPS 或 perout（周期性输出）信号，内核会发生 NULL pointer dereference（空指针解引用）导致崩溃。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference
+
+#问题根因
+ICSS IEP 驱动使用标志位追踪 perout 和 pps 的启用状态。在禁用信号时，icss_iep_perout_enable_hw 函数原本的逻辑仍会尝试访问传入的 ptp_perout_request 结构体指针（例如访问 req->flags 或 req->period）。然而，在驱动退出或禁用流程中，该结构体指针无效或未正确传递，导致对空指针的解引用。实际上，禁用操作并不需要请求结构体中的具体参数。
+
+#解决方案
+修改 icss_iep_perout_enable_hw 函数逻辑，在检测到 on 参数为 false（即禁用操作）时，提前返回并直接执行硬件寄存器清除操作（如清除 IEP_CMP_CFG_REG、IEP_CMP1_REG 等），避免访问请求结构体。同时调整 icss_iep_perout_enable 函数中对请求参数校验的顺序，确保在禁用模式下跳过不必要的标志位检查，防止解引用空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cb95c2d1aaed149bd860f43de36ba151cbe37078

@@ -1,0 +1,23 @@
+#标题
+ipmi:ssif: 线程创建失败时清理代码误判 NULL 导致潜在风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SSIF (System Management Interface) 驱动加载过程中，若内核线程创建失败（例如由于内存不足或资源限制），驱动程序的错误处理路径会尝试清理该线程资源。由于错误处理代码仅检查指针是否为 NULL，而线程创建失败时返回的是 PTR_ERR() 类型的错误指针（非 NULL），导致清理逻辑误判，可能引发后续的空指针访问或资源释放错误。该问题通过静态分析工具发现。
+
+#主要错误日志
+dev_notice(&ssif_info->client->dev, "Could not start kernel thread: error %d\n", rv);
+
+#问题根因
+在 `ssif_probe` 函数中，调用 kthread_create 创建线程失败时，返回值是 PTR_ERR() 形式的错误指针（例如 -ENOMEM 对应的指针值），而非 NULL。
+清理代码逻辑在设计上期望线程指针要么是有效的，要么是 NULL。
+然而，当线程创建失败进入错误处理分支时，代码虽然获取了错误码 `rv`，但 `ssif_info->thread` 仍保留了无效的错误指针值（非 NULL）。这导致后续的清理代码无法正确识别“线程未创建成功”这一状态，进而引发错误的清理操作。
+
+#解决方案
+在检测到线程创建失败（`IS_ERR(ssif_info->thread)` 为真）的分支中，获取错误码之后，显式将 `ssif_info->thread` 置为 NULL。
+这样将错误指针转换为清理代码期望的 NULL 值，确保后续清理逻辑能正确判断线程未有效创建的状态，避免错误的资源操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f8187a123c18b15e60ffc3a082e958c499b17974

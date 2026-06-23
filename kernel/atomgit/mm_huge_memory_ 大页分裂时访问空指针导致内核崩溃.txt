@@ -1,0 +1,20 @@
+#标题
+mm/huge_memory: 大页分裂时访问空指针导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `split_huge_page_to_list_to_order` 函数对大页进行分裂时，如果目标 folio 是位于交换缓存中的 shmem folio 或者已被截断的 folio，内核会发生 NULL pointer dereference（空指针解引用），导致系统崩溃或内核线程异常退出。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference
+
+#问题根因
+Commit c010d47f107f 引入了对 `mapping->flags` 的早期检查逻辑。对于处于交换缓存中的 shmem folio 或已被截断的 folio，其 `folio->mapping` 指针可能为 NULL。代码在访问 `mapping->flags` 之前未对 `mapping` 指针进行非空判断，直接访问空指针导致了内核崩溃。
+
+#解决方案
+在访问 `mapping->flags` 之前，增加对 `folio->mapping` 是否为空的检查。如果 `mapping` 为 NULL，函数直接返回 `-EBUSY` 以指示存在竞争条件，从而避免空指针解引用。补丁通过将非匿名 folio 的 mapping 检查逻辑前置来修复此问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e229bfa1121815a1d230859be94426341fbebf9e

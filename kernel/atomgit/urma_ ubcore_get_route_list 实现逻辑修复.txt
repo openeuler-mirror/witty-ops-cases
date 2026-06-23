@@ -1,0 +1,28 @@
+#标题
+urma: ubcore_get_route_list 实现逻辑修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ubcore_get_route_list` 获取路由列表时，内核可能发生内存越界访问，导致系统崩溃或数据损坏；同时存在路由信息获取逻辑错误，导致在某些传输场景下无法正确获取端口 EID 信息，函数返回失败。
+
+#主要错误日志
+- `ubcore_log_warn("Invalid route num.\n");`（推断：路由数量超出限制时打印）
+- `ubcore_log_err("Failed to get topo port eid, route_num: %u.\n", num);`
+- `ubcore_log_err("Failed to get primary eid, ret: %d.\n", ret);`
+- `ubcore_log_err("Failed to get port eid, ret: %d.\n", ret);`
+
+#问题根因
+1. **数组越界风险**：函数内部使用指针直接修改 `route_list->route_num` 作为循环索引，且未对索引上限进行检查。当路由数量超过缓冲区大小时，会导致写入越界（缓冲区溢出）。
+2. **赋值逻辑错误**：原代码中 `(void) *len++;` 的写法实际上是对指针指向的值进行自增后未使用，并未正确更新索引指针，导致数据写入位置错误或覆盖。
+3. **逻辑分支缺失**：原实现根据 `tp_type` 进行 switch 分支处理，仅处理单一类型，无法满足实际需要同时获取 primary eid 和 port eid 的需求。
+
+#解决方案
+1. **增加边界检查**：定义宏 `UBCORE_MAX_ROUTE_NUM` 限制最大路由数，在循环写入 `route_list->buf` 前检查索引是否越界，若越界则打印警告并返回错误。
+2. **修正索引管理**：移除直接操作指针的写法，改用局部变量 `num` 计算索引，并在函数末尾将最终数值赋给 `route_list->route_num`，确保逻辑清晰且安全。
+3. **重构获取流程**：移除 switch 分支判断，改为依次调用 `ubcore_get_route_primary_eid` 和 `ubcore_get_route_port_eid`，确保获取完整的路由信息。
+4. **代码规范化**：使用 `memcpy` 替代直接赋值进行结构体拷贝，修复潜在的编译警告或对齐问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fda46c98eae5049ce9a9d19c6087ee04dadb1383

@@ -1,0 +1,20 @@
+#标题
+adp5589-keys 驱动 probe 阶段 NULL 指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 adp5589-keys 键盘驱动过程中，如果设备探测失败或路径中触发错误处理流程，内核发生 NULL pointer dereference（空指针引用）导致 Oops 或 Panic。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference
+
+#问题根因
+在驱动探测函数 `adp5589_probe` 中，`devm_add_action_or_reset` 注册了清理回调函数 `adp5589_clear_config`，传入的参数为 `client`。当驱动探测失败或设备移除时，回调函数试图通过 `i2c_get_clientdata(client)` 获取 `kpad` 结构体指针。然而，`i2c_set_clientdata(client, kpad)` 的调用位于探测函数的末尾，若探测在到达该行之前失败，`client->dev.driver_data` 将为 NULL。因此，回调函数中获取到的 `kpad` 指针为 NULL，随后对该指针成员（如 `kpad->var`）的访问引发了空指针引用错误。
+
+#解决方案
+修改 `adp5589_clear_config` 函数的传参逻辑，直接将 `kpad` 结构体指针作为参数传递给 `devm_add_action_or_reset`，而非传递 `client` 指针再去间接获取。同时删除了冗余的 `i2c_set_clientdata` 调用。这样确保了在清理回调执行时，能够直接使用有效的 `kpad` 指针进行寄存器清理操作，避免了依赖未初始化的 clientdata 的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01613b888d087df4feb34828510831b665b8b27b

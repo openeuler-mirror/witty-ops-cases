@@ -1,0 +1,25 @@
+#标题
+arm64: mm: HVO: split vmemmap pmd 导致的 ABBA 死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 HVO（HugeTLB Vmemmap Optimization）特性的 arm64 系统中，当进行大页内存释放操作时，若同时触发针对正在执行 break-before-make (BBM) 流程的页面的访问，系统可能发生 ABBA 死锁，导致相关进程或 CPU 无法继续执行。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `split_vmemmap_huge_pmd` 函数中，`pte_free_kernel()` 函数在持有 `init_mm.page_table_lock` 自旋锁的情况下被调用，而 `pte_free_kernel()` 内部会尝试获取 `zone->lock`。
+与此同时，另一个进程（CPU0）在执行 `free_pages()` 时已经持有 `zone->lock`，随后触发了针对正在进行 BBM 操作的 struct page 的缺页异常（page fault）。在缺页异常处理路径 `__do_kernel_fault()` -> `vmemmap_handle_page_fault()` 中，进程尝试获取 `init_mm.page_table_lock`。
+这导致了两个 CPU 之间形成锁的循环依赖：
+CPU0 持有 zone->lock，等待 init_mm.page_table_lock；
+CPU1 持有 init_mm.page_table_lock，等待 zone->lock。
+从而引发 ABBA 死锁。
+
+#解决方案
+将 `pte_free_kernel()` 调用移出 `init_mm.page_table_lock` 自旋锁的保护范围。在释放锁之后再进行页表页的释放操作，从而避免在持有 `init_mm.page_table_lock` 期间再去竞争 `zone->lock`，打破死锁链条。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/031ec3f60db858c4e13a90cf298e5df5022f3787

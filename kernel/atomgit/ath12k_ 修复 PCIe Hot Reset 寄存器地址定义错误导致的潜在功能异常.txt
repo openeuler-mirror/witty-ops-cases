@@ -1,0 +1,23 @@
+#标题
+ath12k: 修复 PCIe Hot Reset 寄存器地址定义错误导致的潜在功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ath12k 驱动的特定硬件平台（如 WCN7850）上，驱动加载或复位流程中可能因访问错误的 PCIe Hot Reset 寄存器地址导致功能异常或硬件状态初始化失败。该缺陷涉及安全漏洞 CVE-2025-38414。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码中原先使用硬编码宏定义 `GCC_GCC_PCIE_HOT_RST` (0x1e38338) 作为 PCIe Hot Reset 寄存器地址。然而，不同芯片版本（如 qcn9274 v1/v2 与 wcn7850）的该寄存器物理地址并不相同（wcn7850 应为 0x1e40304）。硬编码导致在非 qcn9274 硬件上操作了错误的寄存器地址。
+
+#解决方案
+1. 移除 `GCC_GCC_PCIE_HOT_RST` 的硬编码宏定义，改为通过硬件参数抽象 `hw_params->regs` 动态获取寄存器地址。
+2. 在 `ath12k_hw_regs` 结构体中新增 `gcc_gcc_pcie_hot_rst` 成员。
+3. 分别为 qcn9274_v1、qcn9274_v2 和 wcn7850 的寄存器配置表赋值正确的复位寄存器地址（0x1e38338 和 0x1e40304）。
+4. 修改 `ath12k_pci_enable_ltssm` 函数中的寄存器读写接口，使用新的宏 `GCC_GCC_PCIE_HOT_RST(ab)` 替代原有的硬编码宏，以确保访问正确的硬件地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e0ea2bc1877297aa3c6cea6b19227357243be367

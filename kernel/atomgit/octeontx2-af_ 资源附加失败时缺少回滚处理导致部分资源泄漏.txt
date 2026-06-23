@@ -1,0 +1,22 @@
+#标题
+octeontx2-af: 资源附加失败时缺少回滚处理导致部分资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `rvu_mbox_handler_attach_resources` 进行 RVU 块资源分配时，若中途 `rvu_attach_block` 失败（如分配 NPA 成功但后续分配 NIX 失败），系统未能清理已成功附加的资源。这导致资源处于部分附加的中间状态，引发资源泄漏，后续操作可能因资源未释放或状态不一致而失败。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `rvu_attach_block` 原本返回类型为 `void`，且内部在遇到错误（如 `rvu_alloc_rsrc` 失败或查找块地址失败）时直接 `return`，未返回错误码。调用方 `rvu_mbox_handler_attach_resources` 无法感知资源附加失败，导致在后续步骤失败时，前面步骤已分配的资源无法被回滚清理。
+
+#解决方案
+1. 修改 `rvu_attach_block` 函数返回类型为 `int`，在错误分支返回具体的错误码（如 `-EINVAL`、`-EFAULT`、`-ESRCH`）。
+2. 在 `rvu_mbox_handler_attach_resources` 中检查 `rvu_attach_block` 的返回值。
+3. 引入 `fail1` 到 `fail6` 的标签实现回滚逻辑：一旦后续资源附加失败，立即跳转到对应的 fail 标签，逆序释放之前已成功附加的所有资源（如 CPT 失败则回滚 TIM、SSOW、SSO、NIX、NPA 等），确保资源状态的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c511836491800001d75bfa05486e20c2ddbf1dfa

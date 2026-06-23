@@ -1,0 +1,20 @@
+#标题
+cx25821 ALSA 驱动 hw_params 接口错误路径内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 cx25821 显卡进行音频捕获时，若 `snd_cx25821_hw_params` 函数内部的 `cx25821_risc_databuffer_audio` 调用失败，驱动未释放先前由 `cx25821_alsa_dma_map` 申请的 DMA 映射资源，导致内核内存泄漏。
+
+#主要错误日志
+pr_info("DEBUG: ERROR after cx25821_risc_databuffer_audio()\n");
+
+#问题根因
+函数 `snd_cx25821_hw_params` 的错误处理路径逻辑不完整。当函数调用 `cx25821_risc_databuffer_audio` 失败并跳转到 error 标签时，未调用 `cx25821_alsa_dma_unmap` 来释放此前已成功映射的 DMA 资源，导致资源泄漏。
+
+#解决方案
+在 `cx25821_risc_databuffer_audio` 调用失败的错误处理分支中，增加对 `cx25821_alsa_dma_unmap(chip)` 的调用，确保在异常退出前释放已申请的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a11e789c3c77a26dd876894d0e0ca680c1a44fab

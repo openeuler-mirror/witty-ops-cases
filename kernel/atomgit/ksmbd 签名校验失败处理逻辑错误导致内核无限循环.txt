@@ -1,0 +1,21 @@
+#标题
+ksmbd 签名校验失败处理逻辑错误导致内核无限循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SMB2 请求签名校验失败（或其他参数错误场景）时，内核陷入无限循环。系统表现为 CPU 使用率飙升，且内核日志被大量 "bad smb2 signature" 报错信息刷屏。
+
+#主要错误日志
+"bad smb2 signature"
+
+#问题根因
+在 `__process_request()` 函数中，当签名校验失败（`check_sign_req` 返回错误）或命令无效时，代码调用 `set_smb2_rsp_status(work, STATUS_ACCESS_DENIED)` 设置状态。该函数会将 `work->next_smb2_rcv_hdr_off` 重置为 0，导致指向链中下一个命令的指针丢失。
+后果是 `is_chained_smb2_message()` 函数无法正确偏移，持续指向同一个请求头。如果该请求头的 `NextCommand` 字段非零，函数会一直返回 true，导致 `__handle_ksmbd_work()` 反复处理同一个失败的请求，形成无限循环。
+
+#解决方案
+修改 `fs/smb/server/server.c` 中的 `__process_request()` 函数，在命令无效（`STATUS_INVALID_PARAMETER`）、命令未实现（`STATUS_NOT_IMPLEMENTED`）以及签名校验失败（`STATUS_ACCESS_DENIED`）的错误路径下，将返回值从 `SERVER_HANDLER_CONTINUE` 修改为 `SERVER_HANDLER_ABORT`。这确保了处理循环在遇到上述错误时立即终止，而不是尝试继续处理无效的偏移量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3f7188e0ad042b31fbb805b9421e3fb6edae3c32

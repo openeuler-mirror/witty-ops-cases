@@ -1,0 +1,21 @@
+#标题
+ipv6: rpl lwt输入路径下的dst引用循环导致释放失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在IPv6 RPL（Routing Protocol for Low-Power and Lossy Networks）轻量级隧道（lwt）的输入处理路径中，发生目的入口（dst）引用计数循环。该缺陷会导致内核无法正确释放路由缓存对象，进而引发内存泄漏或相关的内核资源管理故障。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `rpl_input` 中，代码在调用 `ip6_route_input(skb)` 后试图缓存新的路由条目。由于 `ip6_route_input` 调用后，原始的 `orig_dst` 可能已不可用或被替换，导致后续缓存逻辑无法正确比对 `lwtstate`。
+当新查找到的路由目的入口（`dst`）的 `lwtstate` 与原始的 `lwtstate` 实际上是同一个对象时，代码仍然对其进行缓存操作。这导致该路由对象内部形成了一个自我引用的循环，使得引用计数无法归零，对象无法被释放。
+
+#解决方案
+在 `rpl_input` 函数中提前保存原始目的入口的 `lwtstate` 指针地址，避免在 `ip6_route_input` 调用后访问无效的 `orig_dst`。在进行路由缓存设置前，增加判断逻辑：比较新路由的 `lwtstate` 与保存的原始 `lwtstate` 地址是否相同。如果相同，说明会产生引用循环，此时跳过缓存操作，从而避免引用计数死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/975e89d2768968680624b175f17e2202e03f322f

@@ -1,0 +1,25 @@
+#标题
+mtk-cqdma: mtk_cqdma_tx_status 函数中 flags 变量重复使用导致锁破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 mtk_cqdma_tx_status 函数时，由于局部变量 `flags` 被重复用于不同的自旋锁操作，导致内部锁状态被破坏，可能引发系统死锁、内核崩溃或数据竞争异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mtk_cqdma_tx_status` 函数中，代码连续获取两个不同的自旋锁（`cvc->pc->lock` 和 `cvc->vc.lock`）时，错误地复用了同一个 `flags` 变量来保存中断状态。具体原因为：
+1. 外层锁 `spin_lock_irqsave(&cvc->pc->lock, flags)` 执行后，`flags` 保存了当前的中断状态。
+2. 内层锁 `spin_lock_irqsave(&cvc->vc.lock, flags)` 执行时，覆盖了 `flags` 中保存的外层锁的状态。
+3. 当内层锁释放 `spin_unlock_irqrestore(&cvc->vc.lock, flags)` 时，恢复的是内层锁保存的中断状态，而非外层锁进入时的原始状态。
+这导致外层锁在释放前，中断状态已被错误修改，从而破坏了锁的正确性。
+
+#解决方案
+修改代码逻辑，针对内层锁 `cvc->vc.lock` 不再使用 `_irqsave` 变体，而是直接使用 `spin_lock` 和 `spin_unlock`。
+原因在于外层锁 `cvc->pc->lock` 已经通过 `spin_lock_irqsave` 禁用了本地中断，因此在持有外层锁期间，内层锁操作无需再次保存和恢复中断标志。通过移除内层锁对 `flags` 变量的操作，避免了变量复用导致的锁状态破坏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0bf25d29ae13a6e8fcffa9bfe0eafdd5692b8428

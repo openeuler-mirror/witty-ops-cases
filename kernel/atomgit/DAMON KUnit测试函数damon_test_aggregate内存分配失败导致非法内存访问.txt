@@ -1,0 +1,22 @@
+#标题
+DAMON KUnit测试函数damon_test_aggregate内存分配失败导致非法内存访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 DAMON 内核单元测试（KUnit）时，若 `damon_test_aggregate` 函数内部的动态内存分配（如 `ctx`、`target` 或 `region` 结构体分配）失败，代码未做防护继续执行后续逻辑，导致 inappropriate memory access（不恰当的内存访问），可能引发内核 Oops 或 Panic。
+
+#主要错误日志
+- "ctx alloc fail"
+- "target alloc fail"
+- "region alloc fail"
+
+#问题根因
+`damon_test_aggregate()` 函数假设其内部所有的动态内存分配操作都会成功。虽然在真实场景中这些小额分配极大概率会成功，但在理论上的内存不足情况下，分配可能失败。原代码缺少对 `damon_new_target()` 和 `damon_new_region()` 返回值的 NULL 指针检查，若分配失败，后续代码将直接访问 NULL 指针或非法地址。
+
+#解决方案
+在 `damon_test_aggregate()` 函数中增加对内存分配结果的检查。对于 `ctx` 分配失败，直接跳过测试；对于 `target` 或 `region` 分配失败，先调用 `damon_destroy_ctx()` 清理之前已分配的上下文资源，然后调用 `kunit_skip()` 跳过当前测试用例的剩余执行，防止非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6dbeeda71d6e386e8597df7733e94133e963b0c3

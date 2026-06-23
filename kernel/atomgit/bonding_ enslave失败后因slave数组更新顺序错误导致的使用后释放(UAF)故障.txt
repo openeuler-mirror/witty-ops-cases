@@ -1,0 +1,32 @@
+#标题
+bonding: enslave失败后因slave数组更新顺序错误导致的使用后释放(UAF)故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在Bonding接口配置了XDP程序且模式为balance-xor时，执行高并发的网卡enslave操作并发送流量，内核立即发生崩溃。
+具体表现为：
+1. 触发 Oops: general protection fault（通用保护错误）。
+2. KASAN 报告可能发生了野内存访问。
+3. 系统标记为 Tainted (BAD_PAGE)。
+4. 进程上下文（如 mausezahn 发包进程）在调用 `bond_start_xmit` 时触发崩溃。
+
+#主要错误日志
+[  605.602850] Oops: general protection fault, probably for non-canonical address 0xe0e6fc2460000137: 0000 [#1] SMP KASAN NOPTI
+[  605.602916] KASAN: maybe wild-memory-access in range [0x07380123000009b8-0x07380123000009bf]
+[  605.603032] RIP: 0010:netdev_core_pick_tx+0xcd/0x210
+[  605.603507]  ? bond_start_xmit+0xbfb/0xc20 [bonding]
+[  605.603731]  bond_start_xmit+0x623/0xc20 [bonding]
+
+#问题根因
+在 `bond_enslave` 流程中，`bond_update_slave_arr` 被调用以更新 slave 数组，此时新的 slave 已被加入数组，可立即用于 Tx 发送。然而，后续的 XDP 设置步骤（`xdp_prog` 相关检查与设置）可能会失败并触发错误处理路径，导致新分配的 slave 内存被释放。
+由于 slave 已被加入数组但内存被释放，此时进行发包操作会访问已释放的内存，导致 Use-After-Free 和内核崩溃。
+根本原因是 `bond_update_slave_arr` 调用时机过早，未遵循“在确保后续步骤不再可能失败时才更新数组”的原则。
+
+#解决方案
+调整 `bond_update_slave_arr` 的调用位置，将其从 XDP 设置检查之前移动到 XDP 设置成功之后。
+修改逻辑：确保在 XDP 相关设置（`bond->xdp_prog` 处理）完成且不再有可能发生失败导致回滚之前，不更新 slave 数组，从而避免在 enslave 失败清理期间数组中包含已释放的 slave 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/04b5d92dda6560e79590b8abc8bf6aebdf729629

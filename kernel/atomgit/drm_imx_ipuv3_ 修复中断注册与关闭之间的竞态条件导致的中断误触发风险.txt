@@ -1,0 +1,20 @@
+#标题
+drm/imx/ipuv3: 修复中断注册与关闭之间的竞态条件导致的中断误触发风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 imx-drm 驱动加载过程中，中断注册（request_irq）与随后的中断关闭（disable_irq）之间存在时间窗口。在此窗口期内，中断可能未被正确屏蔽就已经触发，导致在驱动初始化未完成时处理中断，可能引发功能异常或内核状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `ipu_drm_bind` 函数中，先调用了 `request_irq()` 注册中断，随后才调用 `disable_irq()` 尝试屏蔽中断。这两步操作非原子性，导致存在一个时间间隙，在此期间中断处于使能状态，从而可能意外触发。
+
+#解决方案
+修改 `drivers/gpu/drm/imx/ipuv3/ipuv3-crtc.c` 文件，在调用 `devm_request_irq()` 时直接传入 `IRQF_NO_AUTOEN` 标志。该标志确保在请求中断时自动保持禁用状态，从而消除了注册后到手动关闭之间的时间窗口。同时删除了原本冗余的 `disable_irq()` 调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/294a4e98c2297dc84334f0073d8bd247abde853c

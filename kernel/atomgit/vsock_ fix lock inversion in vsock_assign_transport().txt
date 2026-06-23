@@ -1,0 +1,22 @@
+#标题
+vsock: fix lock inversion in vsock_assign_transport()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统触发潜在的锁反转死锁，涉及 vsock_register_mutex 和 sk_lock-AF_VSOCK。Syzbot 报告该问题在调用 vsock_linger() 时可能出现，导致线程阻塞或系统挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+该问题由 commit 687aa0c5581b ("vsock: Fix transport_* TOCTOU") 引入。该补丁在 vsock_assign_transport() 中围绕 transport->release() 调用添加了 vsock_register_mutex 锁定，而 transport->release() 可能调用 vsock_linger()。
+vsock_assign_transport() 可能在持有 sk_lock 的情况下被调用。vsock_linger() 内部调用 sk_wait_event() 会临时释放并重新获取 sk_lock。在此窗口期内，如果另一个线程持有 vsock_register_mutex 并尝试获取 sk_lock，就会形成循环依赖，从而导致死锁。
+
+#解决方案
+在调用 transport->release() 和 vsock_deassign_transport() 之前释放 vsock_register_mutex。
+修复逻辑调整了代码顺序：先通过 try_module_get() 获取新传输层的模块引用，确保新传输层不会消失，随即释放 vsock_register_mutex，然后再执行旧传输层的释放操作。这样做是安全的，因为释放旧传输层不需要持有 vsock_register_mutex。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7ec51acc451db014bc7d2e81a70bfc8ff56ee228

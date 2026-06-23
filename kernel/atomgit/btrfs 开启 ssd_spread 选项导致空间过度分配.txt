@@ -1,0 +1,29 @@
+#标题
+btrfs 开启 ssd_spread 选项导致空间过度分配
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当挂载 btrfs 文件系统使用 `-o ssd_spread` 选项时，执行不同大小的文件写入操作会导致严重的空间过度分配。
+复现步骤如下：
+1. 挂载：`mount -o ssd_spread $dev $mnt`
+2. 写入大文件：`dd if=/dev/zero of=$mnt/big bs=16M count=1`
+3. 写入中等文件：`dd if=/dev/zero of=$mnt/med bs=4M count=1`
+4. 执行 `sync`
+若将上述写入与同步过程循环执行，每次迭代会分配约 2GB 空间，而实际数据写入量仅约 20MB。
+
+#主要错误日志
+未知
+
+#问题根因
+自内核 6.1 引入 allocation size classes 特性后，该特性与 `ssd_spread` 选项的聚类分配器存在交互缺陷。
+`find_free_extent()` 函数包含多层嵌套循环，size class 特性依赖其中的 block_group 循环来检查合适的 size class。然而，聚类分配器会缓存一个 block_group 并直接从中借用空闲区间进行分配，从而跳过了该循环检查。
+在正常情况下，这种跳过是允许的，但在引入 size class 后，分配可能在 `do_allocation()` 成功返回后，因 size class 不匹配而在外部失败。由于多层循环逻辑极其复杂，该失败未被正确处理，导致分配器在同一种 block_group 中陷入死循环般的反复分配，直到分配失败才释放 cluster。这导致分配器跳过了大量可用的 block_group，只能通过强制分配新的 chunk 来满足请求，最终导致严重的空间浪费。
+
+#解决方案
+修改聚类分配器逻辑，使其感知 size class。
+具体做法是在 `find_free_extent_clustered()` 函数中增加 size class 检查：在尝试从缓存的 cluster block_group 分配之前，调用 `find_free_extent_check_size_class()` 验证 size class 是否匹配。如果不匹配，则跳过该 cluster。虽然这可能会轻微影响聚类分配器的性能，但能彻底解决过度分配的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab7530ddb757ecb1c74e67d795138988d8453b3d

@@ -1,0 +1,20 @@
+#标题
+spi: bcmbca-hsspi 驱动解绑时资源释放顺序错误导致 I/O 异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行驱动解绑（driver unbind）操作时，由于控制器注销与资源释放顺序错误，导致 SPI 设备驱动在注销过程中无法正常进行 I/O 操作，可能引发不可预见的通信故障或内核异常。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `remove` 流程中使用了托管接口 `devm_spi_register_controller`，导致内核在驱动解绑时，先执行了底层资源的禁用（如中断屏蔽、时钟关闭），之后才注销 SPI 控制器。这违背了正确的资源释放顺序，使得 SPI 驱动在控制器的注销回调中试图进行 I/O 操作时，底层硬件资源已不可用。
+
+#解决方案
+将 SPI 控制器的注册方式从托管模式 `devm_spi_register_controller` 改为手动注册模式 `spi_register_controller`；并在 `bcmbca_hsspi_remove` 函数中，显式添加 `spi_unregister_controller` 调用，并确保其位于禁用中断、时钟等底层资源操作之前，以保证控制器注销期间硬件资源仍然可用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/058bf83eacffa5e973e4b05504f41d16d398c7b4

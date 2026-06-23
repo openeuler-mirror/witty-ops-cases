@@ -1,0 +1,20 @@
+#标题
+mtd: spi-nor: debugfs 中 spi_nor_params_show 函数越界读取修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 64 位系统上访问 debugfs 中的 spi-nor 参数信息时，`spi_nor_params_show` 函数可能触发越界读取。当 `nor->flags` 中设置了超出 `snor_f_names` 数组实际元素范围的标志位时，由于传入的数组长度参数错误放大，导致在 `spi_nor_print_flags` 函数中访问非法内存区域。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `spi_nor_params_show()` 函数中调用 `spi_nor_print_flags()` 时，使用 `sizeof(snor_f_names)` 传递数组长度。由于 `snor_f_names` 是一个指针数组，`sizeof()` 运算符返回的是该数组占用的总字节数（元素数量 * 8 字节），而不是数组的元素个数。在 64 位系统上，这使得传入的长度参数比预期大 8 倍。在 `spi_nor_print_flags()` 内部进行边界检查时，错误的长度允许循环访问超出数组实际范围的内存，从而引发越界读取。
+
+#解决方案
+修改 `drivers/mtd/spi-nor/debugfs.c` 文件，引入 `<linux/array_size.h>` 头文件，并将调用 `spi_nor_print_flags()` 时的长度参数从 `sizeof(snor_f_names)` 修改为 `ARRAY_SIZE(snor_f_names)`，确保传递的是数组的实际元素个数而非字节数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/044dc375f9ca9d8eee57d2d2842ae5f8fde914a1

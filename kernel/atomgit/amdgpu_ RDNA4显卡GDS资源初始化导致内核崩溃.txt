@@ -1,0 +1,20 @@
+#标题
+amdgpu: RDNA4显卡GDS资源初始化导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RX 9070 XT (RDNA4/GFX 12) 显卡上加载 amdgpu 驱动模块（modprobe）时，内核发生崩溃。该问题仅在内核配置开启 CONFIG_DRM_DEBUG_MM 时必然触发，若未开启该配置则此隐患可能未暴露。
+
+#主要错误日志
+DRM_MM_BUG_ON(start + size <= start)
+
+#问题根因
+RDNA4 硬件移除了 GDS、GWS 和 OA 片上内存资源，初始化代码正确地将对应的大小设置为 0。然而，`amdgpu_ttm_init()` 函数无条件地对这些资源调用 `amdgpu_ttm_init_on_chip()`。当 size 为 0 时，该调用链传递给 `drm_mm_init(mm, 0, 0)`，触发断言检查 `DRM_MM_BUG_ON(start + size <= start)` 判定为真（因 size 为 0），导致内核崩溃。
+
+#解决方案
+在 `amdgpu_ttm_init_on_chip()` 函数中增加判断，当输入参数 `size_in_page` 为 0 时直接返回 0，跳过 TTM 资源管理器的注册，从而避免对不存在的硬件资源进行无效初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/11d5fa1a85997b35d7511a99015ad8810e04d2ac

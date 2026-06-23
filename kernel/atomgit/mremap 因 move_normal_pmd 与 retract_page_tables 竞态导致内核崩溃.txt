@@ -1,0 +1,20 @@
+#标题
+mremap 因 move_normal_pmd 与 retract_page_tables 竞态导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行内存 mremap（移动）操作时，若同时与 THP（透明大页）的 collapse（折叠）操作发生竞态，内核会读取到无效的 PMD 条目。这会导致后续操作处理不当，进而引发 kernel panic 或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `move_normal_pmd` 函数执行过程中，获取了 PMD 锁，但在读取 `old_pmd` 并准备清除前，可能发生调度或竞态。此时，`retract_page_tables` 可能已将该 PMD 修改为叶子节点或清除。如果 `move_normal_pmd` 未检查 PMD 的当前状态直接使用过时的 PMD 值，就会导致严重的内存一致性问题。
+
+#解决方案
+在 `move_normal_pmd` 函数中，读取 PMD 值后立即增加状态检查。如果发现 PMD 不存在（`!pmd_present`）或已变成叶子页表项（`pmd_leaf`），则判定为发生竞态，直接跳过后续的清除和移动操作，返回失败，从而避免处理无效的 PMD 条目。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/041ba6283517d987d0e60854e0cdf00da3614831

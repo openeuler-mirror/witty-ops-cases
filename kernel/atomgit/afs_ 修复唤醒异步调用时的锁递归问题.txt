@@ -1,0 +1,20 @@
+#标题
+afs: 修复唤醒异步调用时的锁递归问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AFS 文件系统处理异步调用唤醒时，系统可能发生死锁或内核锁递归错误，导致调用流程阻塞或内核线程无法继续执行。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `afs_wake_up_async_call` 函数中，调用者持有 call notify spinlock（自旋锁）。此时如果直接调用 `afs_put_call` 减少引用计数，当引用计数降为 0 时，会立即触发 `afs_free_call` 进行释放操作。该释放流程中包含 `rxrpc_kernel_shutdown_call` 等可能休眠或获取其他锁的操作，从而在持有自旋锁的上下文中违反了锁的获取顺序或导致了锁递归。
+
+#解决方案
+引入延迟释放机制。在 `afs_call` 结构体中新增 `free_work` 工作队列项，并新增 `afs_deferred_put_call` 接口。将原本 `afs_wake_up_async_call` 中直接调用的 `afs_put_call` 替换为 `afs_deferred_put_call`。当引用计数降为 0 时，不再直接释放资源，而是通过 `schedule_work` 将释放任务提交到工作队列中异步执行，从而避免在持有自旋锁的上下文中进行可能引发锁递归或阻塞的操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf99c65158daa4de84bb793933fbf49ff4ade13a

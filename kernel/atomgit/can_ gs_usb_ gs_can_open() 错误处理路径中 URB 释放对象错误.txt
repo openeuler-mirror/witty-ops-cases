@@ -1,0 +1,20 @@
+#标题
+can: gs_usb: gs_can_open() 错误处理路径中 URB 释放对象错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 gs_usb 设备打开过程中，若分配 RX URB 失败进入错误处理路径，驱动会错误地终止尚未使用的 TX URBs，而忽略了已分配的 RX URBs。这会导致已分配的 RX URBs 泄漏，且由于相关资源未正确释放，可能导致设备状态异常或后续重新打开失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 commit 2603be9e8167 添加错误处理逻辑时存在失误。`gs_can_open()` 函数分配了 RX URBs 并将其锚定在 `parent->rx_submitted`，但在失败清理代码段 `out_usb_kill_anchored_urbs` 中，错误地调用了 `usb_kill_anchored_urbs(&dev->tx_submitted)` 来终止 TX URBs。此时网络设备尚未注册，TX URBs 尚未分配，因此该操作无效，而真正需要清理的 `parent->rx_submitted` 中的 RX URBs 却未被处理，导致资源泄漏。
+
+#解决方案
+修改 `gs_can_open()` 函数中的错误处理代码，将 `usb_kill_anchored_urbs(&dev->tx_submitted)` 更正为 `usb_kill_anchored_urbs(&parent->rx_submitted)`，以确保在打开失败时正确释放已分配的 RX URBs。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ed3c842d84b1fd526e777e57c560aae1895ec095

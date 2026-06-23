@@ -1,0 +1,20 @@
+#标题
+mmc: renesas_sdhi: 探测函数错误处理路径缺陷导致潜在崩溃或资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `renesas_sdhi_probe` 流程中，若 IRQ 注册阶段（`platform_irq_count` 或 `devm_request_irq`）发生错误，系统错误地跳转至 `eirq` 标签并调用 `tmio_mmc_host_remove`。由于此时 `tmio_mmc_host_probe` 尚未执行成功，`host` 结构体中的相关资源可能未初始化，导致 `tmio_mmc_host_remove` 访问无效内存引发内核崩溃；或因跳过了正确的资源释放步骤（如关闭时钟）而导致资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 Commit 74f45de394d9 ("mmc: renesas_sdhi: register irqs before registering controller") 调整代码流程将 `tmio_mmc_host_probe` 移至 IRQ 注册之后，相应的错误处理逻辑未同步更新。错误处理跳转标签的指向关系未修正，导致在 `tmio_mmc_host_probe` 执行前就尝试移除 host，且遗漏了对已使能时钟的关闭操作。
+
+#解决方案
+修改 `renesas_sdhi_probe` 函数中的错误处理跳转逻辑：将 IRQ 注册阶段的错误处理跳转目标从 `eirq` 修改为 `edisclk`。同时，删除多余的 `eirq` 标签及其下的 `tmio_mmc_host_remove(host)` 调用，确保错误发生时直接执行关闭时钟（`renesas_sdhi_clk_disable`）和释放资源的操作，避免非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8af3bf61b503512d8bb29c152a41b00b7ca40cba

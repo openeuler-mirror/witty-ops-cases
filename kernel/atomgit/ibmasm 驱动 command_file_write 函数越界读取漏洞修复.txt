@@ -1,0 +1,25 @@
+#标题
+ibmasm 驱动 command_file_write 函数越界读取漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `ibmasm` 模块中，用户空间向 `command_file_write` 接口写入特定数据时，若数据长度小于 `struct dot_command_header` 大小，或者数据头部声明的命令大小超过实际分配的缓冲区大小，会导致越界读取（OOB reads）。具体表现为：
+1. 内核堆内存数据泄露给服务处理器。
+2. 可能触发内核崩溃或未定义行为。
+
+#主要错误日志
+未知
+
+#问题根因
+`command_file_write()` 函数在处理用户输入时，分配了 `count` 字节的内核缓冲区并拷贝用户数据，但在将其传递给 `get_dot_command_size()` 和 `get_dot_command_timeout()` 之前，未校验缓冲区大小是否符合 dot command 协议要求。
+由于分配大小（`count`）和头部字段（`command_size`、`data_size`）均可由用户独立控制，攻击者可以构造恶意数据，使 `get_dot_command_size()` 返回值超过分配大小，从而在 `get_dot_command_timeout()` 和 `memcpy_toio()` 中触发越界读取，导致内核堆内存泄露。
+
+#解决方案
+在 `command_file_write()` 函数中增加两处防护校验：
+1. 在分配缓冲区前，检查写入大小 `count` 是否小于 `struct dot_command_header` 的大小，若小于则直接返回 `-EINVAL`。
+2. 在拷贝用户数据后，检查 `count` 是否小于数据头部声明的总大小（即 `get_dot_command_size()` 返回值），若缓冲区不足以容纳头部声明的命令，则释放缓冲区并返回 `-EINVAL`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e5533351a99fc06281cfd022b27d42bdcb4f1239

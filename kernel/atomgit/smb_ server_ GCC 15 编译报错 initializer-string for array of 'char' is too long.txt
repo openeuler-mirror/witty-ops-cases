@@ -1,0 +1,23 @@
+#标题
+smb: server: GCC 15 编译报错 initializer-string for array of 'char' is too long
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 GCC 15 编译内核时，编译过程因触发了 `-Werror=unterminated-string-initialization` 警告而中止，导致构建失败。
+
+#主要错误日志
+fs/smb/server/smb_common.c:21:35: error: initializer-string for array of 'char' is too long [-Werror=unterminated-string-initialization]
+   21 | static const char basechars[43] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_-!@#$%";
+      |                                   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+cc1: all warnings being treated as errors
+
+#问题根因
+GCC 15 默认引入了 `-Werror=unterminated-string-initialization` 检查。代码中 `basechars` 数组定义为 `char basechars[43]`，但其初始化字符串显式指定了 43 个字符，未包含字符串终止符 `\0`。严格的长度定义导致编译器认为初始化字符串对于数组而言过长且未终止，从而触发构建错误。
+
+#解决方案
+将 `basechars` 的定义方式从定长字符数组修改为字符指针（`static const char *basechars`），并调整计算其长度的宏定义 `MANGLE_BASE`，由原先的 `sizeof` 运算改为 `strlen(basechars)` 函数调用，以兼容 GCC 15 的新警告策略。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8e59808966b5088f19bad8b23aa60c84dec5290e

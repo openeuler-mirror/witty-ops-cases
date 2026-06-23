@@ -1,0 +1,24 @@
+#标题
+perf comm: comm_str__put() 引用计数检查逻辑缺陷导致潜在内存管理问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启引用计数检查的情况下，`comm_str__put()` 函数在处理数组中条目的移除逻辑时存在缺陷。具体表现为：
+1. 在数组中搜索条目时使用了中间指针，这可能干扰引用计数检查机制。
+2. 当引用计数减至 0 时尝试释放内存，但未正确处理数组中仍持有该条目引用的情况，可能导致内存被错误释放或引发引用计数检查相关的异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `comm_str__put()` 的原有实现中，当引用计数减至 0 时直接调用 `RC_CHK_FREE` 释放内存，但未正确处理该条目仍存在于 `comm_strs` 数组中的情况。同时，原有的线性搜索移除逻辑在处理引用计数检查时存在不一致性。根据 Commit 描述，问题核心在于 "Searching for the entry in the array needs to avoid the intermediate pointer with reference count checking"（在数组中搜索条目时需要避免带有引用计数检查的中间指针）。
+
+#解决方案
+1. **重构移除逻辑**：新增 `comm_strs__remove_if_last()` 函数，使用二分查找定位数组中的条目，替代原有的线性搜索。
+2. **修正引用计数处理流程**：修改 `comm_str__put()` 逻辑，当引用计数减至 0 时释放内存；若引用计数降至 1（意味着仅数组持有引用），则调用 `comm_strs__remove_if_last()` 将其从数组中移除并释放。
+3. **修正查找函数**：调整 `comm_strs__findnew()` 返回值，确保返回前增加引用计数 (`comm_str__get(result)`)，保证引用计数的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/87a9440c861d647c58d66c893cc8e0e0f3971daf

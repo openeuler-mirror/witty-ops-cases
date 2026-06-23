@@ -1,0 +1,67 @@
+#标题
+RDMA/hns: 修复大量内核打印导致的 Hard LOCKUP Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 rpcrdma 功能时，内核持续产生大量打印消息，最终导致内核 Panic。具体表现为系统触发 Hard LOCKUP，CPU 无法响应，系统崩溃不可用。
+
+#主要错误日志
+Kernel panic - not syncing: Hard LOCKUP
+Call trace:
+ dump_backtrace+0x0/0x214
+ show_stack+0x20/0x2c
+ dump_stack+0xf0/0x138
+ panic+0x194/0x3b8
+ nmi_panic+0xb8/0xd0
+ watchdog_hardlockup_check+0x100/0x180
+ sdei_watchdog_callback+0x68/0xa4
+ sdei_event_handler+0x28/0xa4
+ _sdei_handler+0x88/0x160
+ __sdei_handler+0x30/0x60
+ __sdei_asm_handler+0xe8/0x19c
+ pl011_console_write+0xcc/0x280
+ call_console_drivers.constprop.0+0x110/0x210
+ console_unlock+0x1c4/0x4c0
+ vprintk_emit+0x1b8/0x254
+ vprintk_default+0x40/0x60
+ vprintk_func+0x110/0x270
+ printk+0x68/0xa8
+ print_modules+0x88/0x108
+ __warn+0x94/0x1c0
+ report_bug+0xb4/0x130
+ bug_handler+0x2c/0x90
+ call_break_hook+0x70/0x9c
+ brk_handler+0x24/0x80
+ do_debug_exception+0x94/0x12c
+ el1_dbg+0x34/0x50
+ el1_sync_handler+0xc8/0xe4
+ el1_sync+0x74/0x100
+ check_flush_dependency+0xe8/0x150
+ start_flush_work.constprop.0+0x1dc/0x300
+ __flush_work.isra.0+0x48/0xc0
+ __cancel_work_timer+0x154/0x1e0
+ cancel_delayed_work_sync+0x1c/0x40
+ rdma_addr_cancel+0x164/0x1ac [ib_core]
+ cma_cancel_operation+0x74/0xa4 [rdma_cm]
+ _destroy_id+0x24/0x294 [rdma_cm]
+ destroy_id_handler_unlock+0xa0/0x16c [rdma_cm]
+ rdma_destroy_id+0x2c/0x50 [rdma_cm]
+ rpcrdma_reply_handler+0x7bc/0x1390 [rpcrdma]
+ rpcrdma_get_device_name_and_vector+0x2d0/0x610 [rpcrdma]
+ rpcrdma_xprt_connect+0x34/0x224 [rpcrdma]
+ xprt_rdma_print_stats+0x194/0xaa0 [rpcrdma]
+ process_one_work+0x1d8/0x4e0
+ worker_thread+0x154/0x420
+ kthread+0x108/0x150
+ ret_from_fork+0x10/0x18
+
+#问题根因
+在 hns_roce_mr_enable 函数中，当创建 MPT（Memory Protection Table）失败时，驱动使用 `dev_err` 进行错误打印。在使用 rpcrdma 场景下，如果持续触发该错误，会导致产生大量内核打印。控制台驱动（如 pl011_console_write）在处理大量输出时会长时间占用 CPU 并持有锁，导致看门狗（Watchdog）检测到 CPU 长时间未响应，从而触发 Hard LOCKUP 导致系统 Panic。
+
+#解决方案
+将 `hns_roce_mr_enable` 函数中的 `dev_err` 调用修改为 `dev_err_ratelimited`。通过限速机制，防止在短时间内产生过量内核日志，从而避免因控制台输出过载导致的系统死锁和 Panic。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/47ff48ec5214574c51770d76f2d7452d6fc5429b

@@ -1,0 +1,20 @@
+#标题
+HID: core: 修复 Resolution Multiplier 必须位于 Logical Collection 中的错误假设
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核 HID 核心子系统在处理 Resolution Multiplier（分辨率倍增器）控件时，若该控件未包含在任何 Logical Collection 中，代码逻辑会错误地继续使用非 Logical Collection 的集合指针。这可能导致内核访问无效数据或逻辑错误，该问题最早由 syzbot fuzzer 在 2019 年报告。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `hid_apply_multiplier()` 错误地假设所有 Resolution Multiplier 控件都一定包含在 Logical Collection 中。尽管函数注释引用了 HID 规范说明“如果未定义 Logical Collection，则 Resolution Multiplier 与报告中的所有控件相关联”，但代码实现中存在遗漏：向上遍历集合父节点时，并未处理最终未找到 Logical Collection 的情况。这导致当设备确实没有定义 Logical Collection 时，代码逻辑未按预期处理（未将 `multiplier_collection` 置为 NULL），从而引发错误。
+
+#解决方案
+在 `hid_apply_multiplier` 函数中，当向上遍历查找 Logical Collection 结束后，增加判断逻辑：检查最终找到的集合类型是否为 `HID_COLLECTION_LOGICAL`，若不是，则将 `multiplier_collection` 指针显式设置为 NULL，以符合 HID 规范中关于未定义 Logical Collection 时的处理要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2f17b4cd746729ad9c7c0af6479761bacac0fe2a

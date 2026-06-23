@@ -1,0 +1,21 @@
+#标题
+Bluetooth: SMP 配对过程中收到未允许命令导致会话卡死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在蓝牙 SMP（Security Manager Protocol）配对绑定过程中，若收到未允许的命令（如顺序错误的 Identity Information、Signing Information 等），内核仅打印告警日志并丢弃报文，未中断配对流程。这导致配对会话无法正常完成，一直处于挂起（stuck）状态，设备无法正常断开连接或完成绑定。
+
+#主要错误日志
+- Bluetooth: hci0: unexpected SMP command 0x0a from XX:XX:XX:XX:XX:XX
+- （推断）Bluetooth: hci0: SMP key rejected
+
+#问题根因
+根据 Core Spec 6.1 规范，密钥分发有严格的顺序要求（例如 IRK -> BD_ADDR -> CSRK）。当对端设备未遵循该顺序发送命令时，内核现有逻辑仅检测到命令未被允许（unexpected SMP command），但未将其视为配对失败进行处理。这导致 SMP 状态机未能正确清理会话资源并断开连接，致使会话卡死。
+
+#解决方案
+在 `net/bluetooth/smp.c` 的 `smp_sig_channel` 函数中，增加对未允许命令的处理逻辑。当检测到特定密钥分发命令（`SMP_CMD_IDENT_INFO`, `SMP_CMD_IDENT_ADDR_INFO`, `SMP_CMD_SIGN_INFO`）未被允许时，主动调用 `smp_failure(conn, SMP_KEY_REJECTED)` 发送配对失败命令并终止会话，确保会话资源被正确清理且设备立即断开连接。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6fdc2defdef82b421e2be97edafef4310e6084ea

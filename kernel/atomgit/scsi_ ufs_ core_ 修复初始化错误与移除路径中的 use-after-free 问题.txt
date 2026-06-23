@@ -1,0 +1,26 @@
+#标题
+scsi: ufs: core: 修复初始化错误与移除路径中的 use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UFS 驱动初始化失败或设备移除路径中，存在 Host Bus Adapter (HBA) 内存结构被释放后继续访问的风险（Use-After-Free）。具体表现为初始化流程出错时的清理路径，或设备热插拔/驱动卸载时的资源释放路径中，可能触发内核崩溃或内存非法访问。
+
+#主要错误日志
+- "Initialization failed\n"（驱动初始化失败时的打印）
+- "Allocation failed\n"（内存分配失败时的打印）
+- "failed to add ufshcd dealloc action\n"（推断：devm_add_action_or_reset 失败时由 dev_err_probe 打印）
+
+#问题根因
+原有的资源管理机制中，`ufshcd_alloc_host` 分配的 SCSI host 结构通过 `ufshcd_dealloc_host` 中的 `scsi_host_put` 进行释放，而该释放动作并未纳入 devres（托管资源）框架。在驱动初始化中间步骤失败或设备移除时，调用者需显式调用 `ufshcd_dealloc_host`，若资源释放顺序管理不当或错误路径遗漏释放，会导致对已释放内存的引用，从而引发 Use-After-Free。
+
+#解决方案
+将 SCSI host 的生命周期管理由手动引用计数迁移至设备托管资源框架：
+1. 移除显式释放函数 `ufshcd_dealloc_host`。
+2. 新增 `ufshcd_devres_release` 回调函数，内部调用 `scsi_host_put`。
+3. 在 `ufshcd_alloc_host` 中调用 `devm_add_action_or_reset` 注册该释放回调。
+4. 修改 `ufshcd-pci.c` 和 `ufshcd-pltfrm.c`，删除所有错误路径和移除路径中对 `ufshcd_dealloc_host` 的显式调用，确保资源随设备注销自动释放，消除 UAF 隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/70d4c93a620562f2f8f8897d9f0ec61267655350

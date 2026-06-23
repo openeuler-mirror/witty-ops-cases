@@ -1,0 +1,26 @@
+#标题
+e1000e: MTP及后续平台因K1配置错误导致MDI报错及潜在丢包
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Meteor Lake (MTP) 及后续平台上使用 e1000e 网卡驱动时，集成 MAC 与 I219 PHY 之间的 Kumeran 接口频率发生变化，导致访问 PHY 时出现偶发的 MDI 错误；在极少数情况下，可能导致数据包损坏。
+
+#主要错误日志
+e_err("Failed to reconfigure K1 exit timeout\n");
+e_dbg("Failed to reconfigure K1 exit timeout\n");
+e_dbg("Error failed to reconfigure K1 exit timeout\n");
+e_err("ME blocked access to PHY after reset\n");
+
+#问题根因
+从 Meteor Lake 平台开始，集成 MAC 与 I219 PHY 之间的 Kumeran 接口工作频率发生了改变。原有的 Kumeran 空闲状态（K1）参数配置与新平台不匹配，导致了 MDI 访问错误和潜在的丢包风险。此外，硬件重置会还原此配置，需要在多个初始化节点重新应用。
+
+#解决方案
+修改驱动初始化逻辑，针对 MTP 及后续平台（e1000_pch_mtp, e1000_pch_lnp, e1000_pch_ptp, e1000_pch_nvp）调整 Kumeran K1 退出超时参数：
+1. 将 Kumeran K1 掉电状态从 P0s 修改为 P1。
+2. 重新配置 K1 退出超时时间（设置 I217_PHY_TIMEOUTS_REG 寄存器相应位为 0xF00）。
+3. 在 `e1000_init_phy_workarounds_pchlan` 和 `e1000_init_hw_ich8lan` 等关键路径中增加该配置逻辑，确保在硬件重置后能够重新应用正确的参数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd9392f71c047dbc17db194fc48dac310c6e2d21

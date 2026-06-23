@@ -1,0 +1,23 @@
+#标题
+fjes 驱动硬件初始化错误路径缺少 iounmap 导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+fjes 驱动在硬件初始化过程中，若 `fjes_hw_reset` 失败或检测到无效的 `epid` 参数（如 `max_epid` 为 0 或 `my_epid` 大于等于 `max_epid`），函数将直接返回错误码。此时，先前通过 `fjes_hw_iomap` 映射的内存资源未被释放，导致内存资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fjes_hw_init` 函数中，代码原逻辑在处理 `fjes_hw_reset` 失败和 `epid` 合法性检查失败这两个错误分支时，直接返回了错误值，遗漏了调用 `fjes_hw_iounmap` 来释放之前已映射的 I/O 内存资源。
+
+#解决方案
+在 `fjes_hw_init` 函数中添加 `err_iounmap` 标签，并修改错误处理路径：
+1. 当 `fjes_hw_reset` 失败时，跳转至 `err_iounmap` 标签执行清理。
+2. 当 `epid` 合法性检查失败时，设置返回值为 `-ENXIO` 并跳转至 `err_iounmap` 标签执行清理。
+3. 在 `err_iounmap` 标签处调用 `fjes_hw_iounmap(hw)` 释放映射资源，确保资源正确释放后再返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b128ea3dae713eea5971671fe2dd144af2bcda7b

@@ -1,0 +1,23 @@
+#标题
+Bluetooth: L2CAP: 修复 l2cap_unregister_user 中的 UAF 与列表损坏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+由于并发访问导致的风险，系统在运行蓝牙 L2CAP 相关操作时可能触发内核崩溃或数据结构损坏。具体表现为：
+1. **Use-After-Free（UAF）**：访问已释放的内存。
+2. **List Corruption（列表损坏）**：内核链表结构被破坏。
+3. 该问题由 syzbot 自动化测试工具发现并报告。
+
+#主要错误日志
+未知
+
+#问题根因
+在提交 `ab4eedb790ca` 之后，函数 `l2cap_conn_del()` 使用 `conn->lock` 来保护 `conn->users` 的访问。然而，`l2cap_register_user()` 和 `l2cap_unregister_user()` 函数并未使用 `conn->lock`，而是继续使用 `hci_dev_lock()`。这导致了锁的不一致，使得这两个函数可以与 `l2cap_conn_del()` 并发地访问 `conn->users` 和 `conn->hchan`，从而引发竞态条件，最终导致 use-after-free 和列表损坏错误。
+
+#解决方案
+修改 `l2cap_register_user()` 和 `l2cap_unregister_user()` 函数，将原本使用的 `hci_dev_lock(hdev)` 替换为 `mutex_lock(&conn->lock)`，确保对 `l2cap_conn` 结构体中 `conn->users` 和 `conn->hchan` 成员的访问保护机制与 `l2cap_conn_del()` 保持一致，从而消除竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6f0dd762efd1fc8dfd4d47e9a130552d0fc40c02

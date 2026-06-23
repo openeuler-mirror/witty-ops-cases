@@ -1,0 +1,22 @@
+#标题
+PCI: pci_slot_trylock() 错误处理中的锁释放缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PCI 子系统处理 pci_slot_trylock() 失败路径时，系统可能出现以下异常现象：
+1. 产生警告信息，提示试图释放一个未被当前上下文持有的锁。
+2. 错误地释放了属于其他线程的锁，可能导致后续的内核崩溃或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit a4e772898f8b ("PCI: Add missing bridge lock to pci_bus_lock()") 对代码进行了重构，将 bridge device 的 `pci_dev_trylock()` 操作委托给了 `pci_bus_trylock()`。然而，在修改后的失败处理路径中，遗漏了对原有 `pci_dev_unlock(dev)` 的删除。这导致当 `pci_bus_trylock()` 获取锁失败时，代码错误地执行了一次多余的 `pci_dev_unlock(dev)`，即对一个实际上并未被当前流程锁定的设备进行解锁操作。
+
+#解决方案
+删除 `pci_slot_trylock()` 函数中 `pci_bus_trylock()` 失败分支内冗余的 `pci_dev_unlock(dev)` 调用，确保失败路径下的锁操作正确配对。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7718e376c34edbe3a816195c964a25ae648ad7cd

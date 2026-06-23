@@ -1,0 +1,22 @@
+#标题
+liquidio: octeon_init_instr_queue 中的整型溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 Cavium Liquidio 网卡驱动并初始化指令队列时，若队列编号 `iq_no` 较大（最高可达 64），表达式计算过程中可能发生整型溢出。这可能导致 `io_qmask.iq64B` 掩码值设置错误，进而导致设备配置异常或驱动初始化逻辑错误；在极端情况下可能引发内核内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `octeon_init_instr_queue` 中，表达式 `((conf->instr_type == 64) << iq_no)` 存在溢出风险。
+`conf->instr_type == 64` 的结果为整型，当 `iq_no` 达到 64（即 `CN23XX_MAX_RINGS_PER_PF` 的最大值）时，左移操作超出了 32 位整型的表示范围，导致计算结果溢出且不正确。
+
+#解决方案
+将表达式 `(conf->instr_type == 64)` 强制转换为 `u64` 类型。
+修改后的代码为 `oct->io_qmask.iq64B |= ((u64)(conf->instr_type == 64) << iq_no);`，确保整个移位运算在 64 位空间内进行，避免溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/626a69b24409edcf8df4d32f9d0380d8555d45ce

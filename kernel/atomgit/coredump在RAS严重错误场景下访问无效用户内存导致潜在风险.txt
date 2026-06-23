@@ -1,0 +1,22 @@
+#标题
+coredump在RAS严重错误场景下访问无效用户内存导致潜在风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在触发严重RAS（可靠性、可用性、可服务性）错误后，进程的用户数据变得不可访问。此时若系统尝试进行 coredump 操作，可能会因为访问无效的用户内存区域（特别是 `dump_vma_snapshot` 阶段循环读取用户内存以判断 ELF 头时）而导致异常或不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在发生严重 RAS 事件的场景下，用户内存已整体不可访问。原代码逻辑未对这种情况进行检查，导致 `do_coredump` 入口处以及 `dump_vma_snapshot` 遍历 VMA 并尝试拷贝数据（检查 ELF 头）时，会强行访问已不可用的用户内存区域。
+
+#解决方案
+在 coredump 流程中增加对 `mm_is_critical_error(mm)` 的检查点：
+1. 在 `do_coredump` 函数入口处增加检查，若当前进程标记为严重错误状态，直接跳转至 fail 退出流程，跳过 coredump。
+2. 在 `dump_vma_snapshot` 函数内部循环处理 ELF 头占位符时增加检查，若发现严重错误标记，立即释放快照资源并返回失败，避免后续 `copy_from_user` 操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/604577fcb5776767ed5eaaef05e35afb838149d5

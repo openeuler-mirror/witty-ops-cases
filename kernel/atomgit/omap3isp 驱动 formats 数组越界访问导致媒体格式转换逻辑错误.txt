@@ -1,0 +1,26 @@
+#标题
+omap3isp 驱动 formats 数组越界访问导致媒体格式转换逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 OMAP3 ISP（Image Signal Processor）驱动处理媒体格式转换时，由于未正确排除 `formats` 数组的末尾空项，导致以下异常：
+1. `isp_video_mbus_to_pix` 函数错误地接受了 code 值为 0 的无效格式，本应在查找失败时触发警告并返回，但实际上可能未报错或导致后续逻辑异常。
+2. `isp_video_pix_to_mbus` 函数在未找到匹配项时，错误地选择了 code 值为 0 的格式，而不是预期的数组末尾空项（用于标记“无匹配”），导致配置了无效的媒体总线格式。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动中定义的 `formats` 数组末尾包含一个空的条目 `{ 0, }` 用作哨兵或默认值。
+1. 在 `isp_video_mbus_to_pix` 函数中，循环遍历范围包括了该空条目（`i < ARRAY_SIZE(formats)`），导致 code 为 0 的情况被错误地匹配为有效格式；同时判定“未找到匹配”的边界条件判断错误，导致无法正确拦截无效输入。
+2. 在 `isp_video_pix_to_mbus` 函数中，循环条件原本意图排除最后一项，但计算错误（使用了 `ARRAY_SIZE(formats) - 1`），导致实际遍历范围包含了末尾空项的前一项，使得查找失败时无法正确选中作为默认值的空项。
+
+#解决方案
+修正 `isp_video.c` 中相关函数的循环边界条件：
+1. 在 `isp_video_mbus_to_pix` 函数中，将循环条件修改为 `i < ARRAY_SIZE(formats) - 1`，并修正 `WARN_ON` 判断条件，确保跳过数组末尾的空条目，避免匹配 code 0。
+2. 在 `isp_video_pix_to_mbus` 函数中，将循环条件修改为 `i < ARRAY_SIZE(formats) - 2`，确保遍历排除掉最后两个条目（实际是确保只遍历有效格式，保留最后一项作为查找失败时的默认选中项），从而正确处理无匹配的情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3593e5912275a71645e5f7f2f7b2cffb631d4801

@@ -1,0 +1,27 @@
+#标题
+LoongArch内核loongson_gpu_fixup_dma_hang函数导致内核ADE访问Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在LoongArch平台插入独立GPU（如LG100 GPU）时，系统启动过程中触发内核地址错误异常，导致Panic。调用栈显示异常发生在`loongson_gpu_fixup_dma_hang`函数中，该函数在PCI设备扫描与初始化阶段被调用。
+
+#主要错误日志
+Kernel ade access[#1]:
+CPU: 0 PID: 1 Comm: swapper/0 Not tainted 6.6.136-loong64-desktop-hwe+ #4
+ESTAT: 00480000 [ADEM] (IS= ECode=8 EsubCode=1)
+BADV: 7fffffffffffff00
+Call Trace:
+[<90000000017e5534>] loongson_gpu_fixup_dma_hang+0xb4/0x210
+[<9000000000eebc08>] pci_fixup_device+0x108/0x280
+[<9000000000ebb70c>] pci_setup_device+0x24c/0x690
+
+#问题根因
+函数`loongson_gpu_fixup_dma_hang`中的switch-case语句仅处理了DC2和DC3两种情况。当平台插入未覆盖到的独立GPU设备时，switch语句未命中，变量`crtc_reg`未被正确初始化（或保持了随机值），导致后续`readl(crtc_reg)`操作访问了非法地址，从而触发ADE异常。
+
+#解决方案
+在`loongson_gpu_fixup_dma_hang`函数的switch语句中增加`default`分支。当设备ID不匹配已知类型时，先调用`iounmap(regbase)`释放已映射的IO内存资源，然后直接返回，避免执行后续非法的寄存器访问操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/28c465fd9a4cd5f8cc1bc93c0ed99db9fc9ecd16

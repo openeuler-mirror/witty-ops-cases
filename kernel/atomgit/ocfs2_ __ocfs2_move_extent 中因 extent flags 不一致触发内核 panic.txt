@@ -1,0 +1,20 @@
+#标题
+ocfs2: __ocfs2_move_extent 中因 extent flags 不一致触发内核 panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 OCFS2 文件系统执行 move extents 操作时，若 extent flags 与预期不一致，内核会直接触发 `BUG()` 导致系统崩溃。该问题通常由文件系统损坏或 syzbot 等模糊测试工具触发，导致内核不可用。
+
+#主要错误日志
+Inode %llu has corrupted extent %d with flags 0x%x at cpos %u\n
+
+#问题根因
+在函数 `__ocfs2_move_extent()` 中，代码使用 `BUG_ON(ext_flags != rec->e_flags)` 来校验 extent 标志位。当文件系统出现损坏导致标志位不匹配时，内核直接调用 `BUG()` 引发 panic，这种做法过于激进，导致整个系统崩溃而非仅报错。
+
+#解决方案
+将 `BUG_ON()` 宏替换为 `ocfs2_error()` 错误处理函数。当检测到 extent flags 不一致时，打印详细的错误信息（包括 Inode 编号、extent 索引、flags 值和 cpos），并返回错误码跳转至 `out` 标签退出，从而避免内核崩溃，提高系统可靠性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/286bd164832b64450cdc7a7236180a6dcd37cc3f

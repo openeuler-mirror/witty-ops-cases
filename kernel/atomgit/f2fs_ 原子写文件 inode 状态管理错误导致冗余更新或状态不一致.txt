@@ -1,0 +1,27 @@
+#标题
+f2fs: 原子写文件 inode 状态管理错误导致冗余更新或状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行数据库文件的原子写操作过程中，inode 的状态管理存在逻辑缺陷：
+1. 在原子写提交数据前，错误地设置了 VFS dirty 状态，导致不必要的 inode 冗余更新。
+2. 在数据提交后、元数据提交前，未能正确切换状态（未清除原子 dirty 状态并设置 VFS dirty 状态），可能导致 VFS 无法正确刷新 dirty inode。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `f2fs_mark_inode_dirty_sync` 和 `f2fs_inode_dirtied` 函数中，对原子写文件状态的判断条件不完整：
+1. 未检查 `FI_ATOMIC_COMMITTED` 标志位，导致在原子写事务未提交时，可能错误地触发了 VFS 层面的 dirty 标记设置，违反了“原子写提交前应避免 VFS dirty 状态”的设计原则。
+2. 在 `__f2fs_commit_atomic_write` 中，清除 `FI_ATOMIC_DIRTIED` 并设置 VFS dirty 状态的操作仅针对已设置 `FI_ATOMIC_DIRTIED` 的情况，但对于未设置该标志（例如写入前就提交）的情况处理不够清晰，导致状态流转不明确。
+
+#解决方案
+修改内核代码逻辑，严格区分原子写事务提交前后的 inode 状态：
+1. 在 `f2fs_mark_inode_dirty_sync` 中增加检查：仅当文件是原子文件且已设置 `FI_ATOMIC_COMMITTED` 标志时，才允许设置 VFS dirty 状态；否则直接返回，避免冗余更新。
+2. 在 `f2fs_inode_dirtied` 中增加检查：仅当原子写未提交（未设置 `FI_ATOMIC_COMMITTED`）时，才设置 `FI_ATOMIC_DIRTIED` 标志。
+3. 在 `__f2fs_commit_atomic_write` 中，在设置 `FI_ATOMIC_COMMITTED` 后，显式清除 `FI_ATOMIC_DIRTIED` 标志并调用 `f2fs_mark_inode_dirty_sync` 设置 VFS dirty 状态，确保在元数据提交前 VFS 能感知到 inode 变更。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/027327a531b61d0414763cfeb6f50e79fd86df3e

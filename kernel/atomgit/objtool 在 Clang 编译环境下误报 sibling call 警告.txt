@@ -1,0 +1,20 @@
+#标题
+objtool 在 Clang 编译环境下误报 sibling call 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Clang 编译内核时，objtool 校验工具会错误地识别跳转表逻辑，导致构建过程中产生警告信息。该警告指出在栈帧被修改的情况下从可调用指令进行了 sibling call（同级调用），但这实际上是误报，代码逻辑本身是正确的。
+
+#主要错误日志
+vmlinux.o: warning: objtool: ___bpf_prog_run+0x1c5: sibling call from callable instruction with modified stack frame
+
+#问题根因
+在 Clang 编译生成的代码中，加载跳转表地址与间接跳转之间可能存在一个条件前向跳转。原有的 objtool 代码仅将“无条件前向跳转”的指令存储回溯指针，导致 objtool 在回溯查找跳转表时遗漏了 Clang 特有的这种条件跳转情况，从而无法正确识别跳转表结构，触发了错误的栈帧检查警告。
+
+#解决方案
+修改 tools/objtool/check.c 中的 mark_func_jump_tables 函数，放宽存储回溯指针的条件。去除对指令类型必须为“无条件跳转”的检查，只要该指令有跳转目标且属于前向跳转，就存储其回溯指针，从而允许 objtool 正确追踪 Clang 生成的条件前向跳转并正确识别跳转表。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/60438ceb2fe066854f1e97f4747da96b4a295051

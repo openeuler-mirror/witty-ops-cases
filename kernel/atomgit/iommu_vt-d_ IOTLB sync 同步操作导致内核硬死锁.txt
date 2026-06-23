@@ -1,0 +1,20 @@
+#标题
+iommu/vt-d: IOTLB sync 同步操作导致内核硬死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IOMMU 发生 ITE（Invalidation Timeout Error）事件后，进行错误处理流程时触发内核硬死锁。表现为系统在 IOMMU 相关操作（如设备透传、DMA 映射解除等场景）中卡死无响应，CPU 处于无限轮询等待状态。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `qi_check_fault` 处理 IOMMU ITE 事件时，代码逻辑假定请求队列中的请求位于奇数位置，并将这些位置的状态设置为 QI_ABORT，这仅能满足单一请求提交的场景。然而，`qi_submit_sync` 现已支持同时提交多个请求，无法保证 `wait_desc`（等待描述符）一定处于奇数位置。因此，当某个请求超时时，IOMMU 无法重新发起请求，导致代码陷入无限轮询等待，从而引发硬死锁。
+
+#解决方案
+修改 `qi_check_fault` 中的错误处理逻辑，移除仅针对奇数位置处理的限制（`head |= 1`）。将所有已被 IOMMU 获取且状态记录为 QI_IN_USE 的请求（包括 wait_desc 请求）状态均设置为 QI_ABORT，从而支持多个请求的重新提交，打破死锁循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/708d5425992b4bc8b34ec4d0997c37e73fc5b9d0

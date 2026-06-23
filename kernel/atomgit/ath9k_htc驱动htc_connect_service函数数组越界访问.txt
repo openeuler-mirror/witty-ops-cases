@@ -1,0 +1,30 @@
+#标题
+ath9k_htc驱动htc_connect_service函数数组越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用模糊测试（fuzzer）测试 ath9k 驱动时，触发内核 UBSAN（Undefined Behavior Sanitizer）告警，检测到数组索引越界。系统打印“array-index-out-of-bounds”错误信息及调用栈。触发场景通常涉及固件加载流程（kworker/request_firmware_work_func）。
+
+#主要错误日志
+UBSAN: array-index-out-of-bounds in drivers/net/wireless/ath/ath9k/htc_hst.c:26:51
+index 255 is out of range for type 'htc_endpoint [22]'
+CPU: 0 UID: 0 PID: 8 Comm: kworker/0:0 Not tainted 6.11.0-rc6-dirty #14
+Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+Workqueue: events request_firmware_work_func
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x180/0x1b0
+ __ubsan_handle_out_of_bounds+0xd4/0x130
+ htc_issue_send.constprop.0+0x20c/0x230
+ ...
+
+#问题根因
+在 `htc_connect_service()` 函数中，变量 `target->conn_rsp_epid` 在赋值给 `*conn_rsp_epid` 并被后续代码使用前，未进行有效的范围检查。当该值异常（如变为 255）时，由于定义的 `htc_endpoint` 数组长度仅为 22，导致后续使用该索引访问数组时发生越界。
+
+#解决方案
+在 `htc_connect_service()` 函数中，获取到 `target->conn_rsp_epid` 后，增加范围检查逻辑。判断该值是否小于 0 或大于等于 `ENDPOINT_MAX`；若超出有效范围，则直接返回 `-EINVAL` 错误，防止越界索引被传递和使用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/13d13a6ef00f80e847236daf56c3b6b6173c4002

@@ -1,0 +1,20 @@
+#标题
+media: b2c2: flexcop_pci_remove 中断检查工作队列致释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 flexcop PCI 设备驱动模块或移除设备时，内核发生释放后使用，可能导致内核崩溃、Oops 或内存数据损坏。该问题发生在 `flexcop_pci_remove` 函数执行过程中，此时中断检查工作队列可能与设备移除流程并发执行。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `flexcop_pci_remove` 函数中，调用 `cancel_delayed_work` 来取消 `irq_check_work`。该函数是异步非阻塞的，仅尝试取消延迟工作，不会等待该工作项正在执行的处理程序完成。如果工作队列的处理程序正在运行，它可能在设备资源被释放后继续访问 `fc_pci` 结构体，从而触发释放后使用。
+
+#解决方案
+将 `flexcop_pci_remove` 函数中的 `cancel_delayed_work` 替换为 `cancel_delayed_work_sync`。后者会等待正在运行的工作队列处理程序执行完毕，确保在释放设备资源前工作队列已完全停止，从而避免并发访问导致的释放后使用问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c7bddec3c1aa3024e1cf336b53803342a86d102f

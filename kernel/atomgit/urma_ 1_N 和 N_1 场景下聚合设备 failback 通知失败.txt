@@ -1,0 +1,23 @@
+#标题
+urma: 1:N 和 N:1 场景下聚合设备 failback 通知失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 1:N（一对多）和 N:1（多对一）部署场景下，聚合设备（ubagg）进行 failback（故障回切）时，内核侧无法支持 failback 通知流程。导致用户空间无法收到正确的 failback 结果反馈，聚合设备无法完成正常的故障回切操作。
+
+#主要错误日志
+未知
+
+#问题根因
+现有的内核侧 failback 通知路径代码逻辑缺失，未针对 1:N 和 N:1 场景实现专门的聚合设备 failback 处理流程。缺少连接 bonding 侧 failback 请求/响应与用户空间 netlink 通知之间的桥接机制，导致无法正确处理该场景下的回切请求与结果上报。
+
+#解决方案
+1. 新增 `ubagg_failback.c` 模块，实现专用的 ubagg failback 流程，包括 failback 消息处理函数、会话跟踪机制及结果收集逻辑。
+2. 扩展 ubagg generic-netlink 家族，新增 `UBAGG_NL_CMD_FAILBACK_START`、`UBAGG_NL_CMD_FAILBACK_NOTIFY`、`UBAGG_NL_CMD_FAILBACK_RESULT`、`UBAGG_NL_CMD_FAILBACK_DONE` 命令，支持 failback 处理的全流程交互。
+3. 重构代码，将 `find_bonding_dev` 函数移至新增的 `ubagg_device.c` 文件中并重命名为 `ubagg_find_bonding_device`，以便在 failback 流程中复用。
+4. 在 `ubcore_cm.c` 中增加对新定义的 `UBAGG_COMM_MSG_FAILBACK_REQ` 和 `UBAGG_COMM_MSG_FAILBACK_RESP` 消息类型的支持。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1a84f02f7c1a0161b44401217e208d3749e95883

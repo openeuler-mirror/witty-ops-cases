@@ -1,0 +1,24 @@
+#标题
+scs: 修复 scs_check_usage 中因参数错误导致的内存扫描范围错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_DEBUG_STACK_USAGE 配置进行内核调试时，影子调用栈使用量检查函数 `scs_check_usage` 工作异常。具体表现为：
+1. 影子调用栈使用统计报告不准确，内核日志中显示错误的栈使用数值。
+2. 极端情况下可能导致内核崩溃，例如当传入错误参数计算的地址范围涉及未映射内存时，触发 kernel panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `scs_check_usage` 的循环条件中，调用 `__scs_magic()` 函数时传入了错误的参数。
+`__scs_magic()` 需要一个 `void *` 类型的变量（即影子调用栈的起始地址），但代码中错误地传入了 `struct task_struct *` 类型的 `tsk`。
+这导致循环扫描的结束地址计算错误，原本应扫描 `__scs_magic(task_scs(tsk))`（影子调用栈的结束地址），实际却扫描了 `__scs_magic(tsk)`，从而引发内存范围校验错误。
+
+#解决方案
+修正 `scs_check_usage` 函数中 for 循环的边界判断条件，将 `__scs_magic(tsk)` 修改为 `__scs_magic(task_scs(tsk))`，确保传入参数为影子调用栈的起始地址，从而正确计算栈的结束地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dd70332ce6ed2e0dbdbdc34af2c307d730c3c2ec

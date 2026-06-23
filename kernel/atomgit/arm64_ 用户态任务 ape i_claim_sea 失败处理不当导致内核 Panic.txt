@@ -1,0 +1,21 @@
+#标题
+arm64: 用户态任务 ape i_claim_sea 失败处理不当导致内核 Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当发生同步外部中止（SEA）时，若 `apei_claim_sea` 调用失败且处理该异常的上下文为用户态任务，内核未向用户进程发送信号而是直接触发 panic，导致系统不可用。
+
+#主要错误日志
+- pr_emerg("comm: %s pid: %d apei claim sea failed. addr: %#lx, esr: %#lx\n", ...)
+- arm64_force_sig_fault 打印信息："Uncorrected memory error on access to user memory\n"
+
+#问题根因
+在 `do_sea` 流程中，如果 `apei_claim_sea` 失败，内核无法获取有效的错误信息进行上报。原逻辑在此情况下会直接调用 `arm64_notify_die`，进而导致内核 Panic。然而，当异常发生在用户态任务上下文时，本可以通过向该任务发送故障信号来终止进程，从而避免整个系统崩溃。
+
+#解决方案
+修改 `do_apei_claim_sea` 函数逻辑：在 `apei_claim_sea` 调用失败但当前上下文为用户态任务（`current->mm` 存在）时，打印紧急日志记录错误信息，并通过 `arm64_force_sig_fault` 向当前任务发送信号（sig 和 code 由上层传入），最后返回 true 以避免流程继续走到 `arm64_notify_die` 触发内核 Panic。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d0e0832f2cf87f3f962af2a87ff35ac22f3773c5

@@ -1,0 +1,44 @@
+#标题
+UFS 内核 RTC 更新时导致系统死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在运行过程中触发 UFS 设备运行时挂起时发生死锁，导致相关内核线程（如 kworker）处于不可中断的睡眠状态。
+
+#主要错误日志
+死锁调用栈：
+kworker/0:1     D 4892.876354 10 10971 4859 0x4208060 0x8 10 0 120 670730152367
+<ffffffee5e71ddb0> __switch_to+0x1a8/0x2d4
+<ffffffee5e71e604> __schedule+0x684/0xa98
+<ffffffee5e71ea60> schedule+0x48/0xc8
+<ffffffee5e725f78> schedule_timeout+0x48/0x170
+<ffffffee5e71fb74> do_wait_for_common+0x108/0x1b0
+<ffffffee5e71efe0> wait_for_completion+0x44/0x60
+<ffffffee5d6de968> __flush_work+0x39c/0x424
+<ffffffee5d6decc0> __cancel_work_sync+0xd8/0x208
+<ffffffee5d6dee2c> cancel_delayed_work_sync+0x14/0x28
+<ffffffee5e2551b8> __ufshcd_wl_suspend+0x19c/0x480
+<ffffffee5e255fb8> ufshcd_wl_runtime_suspend+0x3c/0x1d4
+<ffffffee5dffd80c> scsi_runtime_suspend+0x78/0xc8
+<ffffffee5df93580> __rpm_callback+0x94/0x3e0
+<ffffffee5df90b0c> rpm_suspend+0x2d4/0x65c
+<ffffffee5df91448> __pm_runtime_suspend+0x80/0x114
+<ffffffee5dffd95c> scsi_runtime_idle+0x38/0x6c
+<ffffffee5df912f4> rpm_idle+0x264/0x338
+<ffffffee5df90f14> __pm_runtime_idle+0x80/0x110
+<ffffffee5e24ce44> ufshcd_rtc_work+0x128/0x1e4
+<ffffffee5d6e3a40> process_one_work+0x26c/0x650
+
+#问题根因
+存在一个典型的 ABBA 死锁场景：
+1. `kworker` 线程执行 `ufshcd_rtc_work`，调用 `ufshcd_rpm_get_sync()` 等待运行时恢复。
+2. 同时，运行时挂起流程正在执行 `__ufshcd_wl_suspend`，调用 `cancel_delayed_work_sync()` 等待 RTC work 刷新结束。
+结果导致 RTC work 等待 Resume，而 Suspend 又在等待 RTC work 结束，双方互相等待形成死锁。
+
+#解决方案
+修改 RTC 更新逻辑，不再强制使用 `ufshcd_rpm_get_sync` 等待唤醒。改为使用 `ufshcd_rpm_get_if_active` 检查当前 RPM 状态，如果状态不是 `RPM_ACTIVE`（即返回值小于等于 0），则直接跳过 RTC 更新操作，从而打破死锁链条。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14cd6da5234f858bb2e60766421eb63ca68ec2cc

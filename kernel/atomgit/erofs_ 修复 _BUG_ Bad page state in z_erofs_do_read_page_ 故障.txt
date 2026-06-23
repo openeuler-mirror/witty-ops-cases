@@ -1,0 +1,20 @@
+#标题
+erofs: 修复 "BUG: Bad page state in z_erofs_do_read_page" 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理特定构造的 erofs 镜像文件时，内核触发 "BUG: Bad page state in z_erofs_do_read_page" 错误。该问题仅影响特定的构造镜像，正常文件系统不受影响。
+
+#主要错误日志
+BUG: Bad page state in z_erofs_do_read_page
+
+#问题根因
+这是一个由稳定版内核回移植补丁引入的问题（stable-only issue）。在回移植提交 9e2f9d34dd12 ("erofs: handle overlapped pclusters out of crafted images properly") 时，代码逻辑存在缺陷：当更新了 `pcl->compressed_bvecs[nr].page` 后，遗漏了对 `oldpage` 变量的更新。这导致后续的 `cmpxchg()` 操作失败，从而触发了 BUG。该问题仅存在于 6.6.y 等稳定版分支，上游内核因重构和新特性原因不存在此问题。
+
+#解决方案
+在 `fs/erofs/zdata.c` 文件的 `pickup_page_for_submission` 函数中，当更新 `pcl->compressed_bvecs[nr].page` 指向 `page` 后，立即同步更新 `oldpage` 变量的值为 `page`，以确保后续 `cmpxchg()` 逻辑正确执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/562f7c36cfeb19f0f2356bfd925af620f11c1e08

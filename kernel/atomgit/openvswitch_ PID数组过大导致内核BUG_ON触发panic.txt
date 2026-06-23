@@ -1,0 +1,38 @@
+#标题
+openvswitch: PID数组过大导致内核BUG_ON触发panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+拥有 CAP_NET_ADMIN 权限的用户（在启用了非特权用户命名空间的系统中，如 Ubuntu 默认配置，普通用户可通过 `unshare -Urn` 获取该权限）可以配置一个超大的 upcall PID 数组。当执行 vport 变更操作（如 `ovs_vport_cmd_set`）时，内核在分配固定大小的 reply buffer 后尝试序列化该 PID 数组，导致缓冲区溢出，触发 `nla_put()` 失败，进而触发 `BUG_ON(err < 0)`，引发内核 panic（invalid opcode），系统崩溃不可用。
+
+#主要错误日志
+kernel BUG at net/openvswitch/datapath.c:2414!
+Oops: invalid opcode: 0000 [#1] SMP KASAN NOPTI
+CPU: 1 UID: 0 PID: 65 Comm: poc Not tainted 7.0.0-rc7-00195-geb216e422044 #1
+RIP: 0010:ovs_vport_cmd_set+0x34c/0x400
+Call Trace:
+ <TASK>
+ genl_family_rcv_msg_doit (net/netlink/genetlink.c:1116)
+ genl_rcv_msg (net/netlink/genetlink.c:1194)
+ netlink_rcv_skb (net/netlink/af_netlink.c:2550)
+ genl_rcv (net/netlink/genetlink.c:1219)
+ netlink_unicast (net/netlink/af_netlink.c:1344)
+ netlink_sendmsg (net/netlink/af_netlink.c:1894)
+ __sys_sendto (net/socket.c:2206)
+ __x64_sys_sendto (net/socket.c:2209)
+ do_syscall_64 (arch/x86/entry/syscall_64.c:63)
+ entry_SYSCALL_64_after_hwframe (arch/x64/entry/entry_64.S:130)
+ </TASK>
+Kernel panic - not syncing: Fatal exception
+
+#问题根因
+vport netlink reply 辅助函数使用 `nlmsg_new(NLMSG_DEFAULT_SIZE, ...)` 分配固定大小的 skb，但通过 `ovs_vport_get_upcall_portids()` 序列化完整的 upcall PID 数组时，`ovs_vport_set_upcall_portids()` 函数接受的数组大小仅限制为 sizeof(u32) 的非零倍数，没有设置上限。攻击者可以安装一个足够大的 PID 数组，导致回复缓冲区溢出，`nla_put()` 失败返回 -EMSGSIZE，从而触发 `BUG_ON(err < 0)` 导致内核崩溃。
+
+#解决方案
+1. 在 `ovs_vport_set_upcall_portids()` 函数中增加校验，拒绝设置数量超过 `nr_cpu_ids` 的 PID，将 PID 数组大小限制在与 datapath 侧一致的上限。
+2. 新增 `ovs_vport_cmd_msg_size()` 函数，基于 `nr_cpu_ids` 限制预先计算最坏情况下的回复大小，替换原有的 `NLMSG_DEFAULT_SIZE` 固定分配策略，确保 skb 缓冲区空间充足。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b041646514e4eab949e26be68fac6ccac68bb3b0

@@ -1,0 +1,36 @@
+#标题
+openvswitch: MPLS报文解析死循环导致软死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统接收到异常的 MPLS 报文（未以 Bottom Label Stack 结尾）时，内核在解析 MPLS 标签过程中会陷入死循环。这会导致 CPU 卡死并触发 soft lockup，系统响应中断但无法调度，造成该 CPU 核心无响应。同时可能触发 UBSAN（Undefined Behavior Sanitizer）报警，提示数组索引越界（index -1 is out of range）。
+
+#主要错误日志
+UBSAN: array-index-out-of-bounds in /build/linux-0Pa0xK/linux-5.15.0/net/openvswitch/flow.c:662:26
+index -1 is out of range for type '__be32 [3]'
+CPU: 34 PID: 0 Comm: swapper/34 Kdump: loaded Tainted: G           OE   5.15.0-121-generic #131-Ubuntu
+Call Trace:
+ <IRQ>
+ ubsan_epilogue+0x9/0x36
+ __ubsan_handle_out_of_bounds.cold+0x44/0x49
+ key_extract_l3l4+0x82a/0x840 [openvswitch]
+ key_extract+0x9c/0x2b0 [openvswitch]
+ ovs_flow_key_extract+0x124/0x350 [openvswitch]
+ ovs_vport_receive+0x61/0xd0 [openvswitch]
+ netdev_port_receive+0xc4/0x180 [openvswitch]
+ netdev_frame_hook+0x1f/0x40 [openvswitch]
+ __netif_receive_skb_core.constprop.0+0x23a/0xf00
+ net_rx_action+0x126/0x280
+ handle_softirqs+0xda/0x2d0
+ irq_exit_rcu+0x96/0xc0
+
+#问题根因
+在解析 MPLS 报文时，用于记录标签数量的变量 `label_count` 被定义为 `u8` 类型。当遇到构造特殊的 MPLS 报文（如未包含 Bottom Label Stack 标记）时，循环解析逻辑会使 `label_count` 持续递增。由于 `u8` 类型最大值为 255，当计数超过 255 时发生溢出并回绕至 0，导致循环判断条件失效，进而引发内核陷入死循环。
+
+#解决方案
+将 `net/openvswitch/flow.c` 文件中 `key_extract_l3l4` 函数内的 `label_count` 变量类型从 `u8` 修改为 `size_t`。修改后的类型具有足够大的数值范围，防止在处理大量标签时发生整型溢出，从而避免死循环的发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f69ac63d11f1e9c999f601395c32a1b768995e1

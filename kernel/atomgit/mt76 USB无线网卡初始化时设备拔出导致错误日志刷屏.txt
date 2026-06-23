@@ -1,0 +1,22 @@
+#标题
+mt76 USB无线网卡初始化时设备拔出导致错误日志刷屏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在初始化 mt76 系列 USB 无线网卡的过程中，如果拔出设备，会触发 -EPROTO 错误。该错误处理逻辑不当，导致内核疯狂打印错误日志（超过 2000 次，持续约 5 分钟）。日志刷屏期间，USB 设备无法正常断开连接，且 USB 端口无法识别新插入的设备。
+
+#主要错误日志
+mt76x2u 2-2.4:1.0: vendor request req:47 off:9018 failed:-71
+mt76x2u 2-2.4:1.0: vendor request req:47 off:9018 failed:-71
+...
+
+#问题根因
+当 USB 设备通信出现 -EPROTO 错误（通常由底层硬件错误或设备拔出引起）时，驱动程序的 `mt76u_vendor_request` 函数未像处理 -ENODEV 那样停止重试或标记设备移除。由于 -EPROTO 是底层硬件错误，此时重复进行 vendor request 期望读取正确数据是不明智的，这导致了无休止的重试和错误日志打印。
+
+#解决方案
+修改 `drivers/net/wireless/mediatek/mt76/usb.c` 中的 `__mt76u_vendor_request` 函数。在错误处理逻辑中，将 -EPROTO 与 -ENODEV 同等对待：当返回值为 -EPROTO 时，立即设置 `MT76_REMOVED` 状态标志位并直接返回，不再进行重试和错误打印，从而避免日志风暴并允许 USB 子系统正常处理设备断开。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f0d13ecf516baf6152870b36bbc7378e627c0436

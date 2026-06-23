@@ -1,0 +1,21 @@
+#标题
+LoongArch KVM 在 MMU 映射变更时未正确清除 LLBCTL 寄存器导致 LL/SC 原子语义失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构下的 KVM 虚拟化环境中，当发生 secondary MMU 映射变更（如 gpa 到 hpa 的映射改变）时，如果 Guest OS 正在执行 LL/SC（Load Linked/Store Conditional）原子指令对，会导致原子操作语义失效。具体表现为：LL 指令加载了旧地址并设置了 LLBCTL 标志，而在映射变更后，SC 指令仍能成功向新地址写入数据，导致数据不一致或逻辑错误，破坏了多线程环境下的同步机制。
+
+#主要错误日志
+未知
+
+#问题根因
+LLBCTL 寄存器是独立于 Host 的 Guest CSR 寄存器。原代码在 MMU 映射变更时调用 `set_gcsr_llbctl(LOONGARCH_CSR_LLBCTL)`，传入的参数值不正确（可能未包含正确的 WCLLB 位定义或写入值错误），未能有效清除 Guest 的 LLBCTL 寄存器中的 WCLLB 标志。
+这导致在 MMU 映射发生变更后，Guest 中之前的 LL 指令留下的 LLBCTL 状态仍然有效。当 Guest 执行 SC 指令时，硬件检查到 LLBCTL 标志为 on，便允许写入新的地址，从而违反了 LL/SC 必须针对同一地址且中间未被干扰的原子语义。
+
+#解决方案
+修正 `kvm_check_vpid` 函数中清除 LLBCTL 寄存器的逻辑。在检测到 MMU 映射变更时，将 `set_gcsr_llbctl` 的参数从 `LOONGARCH_CSR_LLBCTL` 修改为 `CSR_LLBCTL_WCLLB`，确保正确写入 WCLLB 位以清除 Guest 的 LLBCTL 寄存器状态。这强制 SC 指令在映射变更后失败，从而维护 LL/SC 指令对的正确原子性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/003c12fd845b06cfc7ebef34668d059dc4c26c1c

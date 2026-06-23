@@ -1,0 +1,20 @@
+#标题
+ACPI: video: Fix use-after-free in acpi_video_switch_brightness
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 ACPI 视频总线设备通知处理程序（`acpi_video_bus_remove_notify_handler`）时，若 `acpi_video_switch_brightness` 延迟工作队列（`switch_brightness_work`）正在运行或已调度，可能导致内核发生 Use-After-Free 错误。这是因为在销毁设备对象前未取消该工作队列，工作队列回调函数可能访问已被释放的内存。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `acpi_video_bus_remove_notify_handler` 函数中，遍历视频设备列表时仅移除了通知处理程序，但未调用 `cancel_delayed_work_sync` 取消设备的 `switch_brightness_work` 延迟工作队列。当设备对象后续被释放后，该工作队列如果被执行，将访问已经释放的设备对象内存，引发 Use-After-Free。
+
+#解决方案
+在 `acpi_video_bus_remove_notify_handler` 函数的 `list_for_each_entry` 循环中，针对每个视频设备，在移除通知处理程序之后、释放设备对象之前，增加调用 `cancel_delayed_work_sync(&dev->switch_brightness_work)`，确保在清理资源前同步取消未完成的亮度切换工作队列，防止访问已释放内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f63f1c2252f7f846bc559b060dea97849308b9be

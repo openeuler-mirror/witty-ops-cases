@@ -1,0 +1,32 @@
+#标题
+sched: yield_to与try_to_wake_up之间存在竞争导致警告或潜在内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中触发 SCHED_WARN 警告，调用链显示为 `__warn_printk -> set_next_buddy -> yield_to_task_fair -> yield_to -> kvm_vcpu_yield_to`。这是由于 `yield_to()` 在操作目标任务时未持有正确的运行队列锁，导致内核调度器检测到不一致状态并打印警告信息。
+
+#主要错误日志
+```
+__warn_printk
+set_next_buddy
+yield_to_task_fair
+yield_to
+kvm_vcpu_yield_to [kvm]
+...
+```
+
+#问题根因
+`yield_to()` 函数与 `try_to_wake_up()` 函数之间存在竞争条件。
+具体流程如下：
+1. CPU0 上的 `yield_to()` 获取了 rq0 和 rq1 的锁，并检查确认目标任务在 rq1 上。
+2. 在 `yield_to()` 进行二次检查后但尚未操作任务前，目标任务被唤醒并迁移到 CPU2（锁定了 task_pi 和 rq2），导致 `task_rq` 变更为 rq2。
+3. `yield_to()` 随后在未持有 rq2 锁的情况下调用了 `yield_to_task_fair`。
+根本原因在于 `yield_to()` 仅使用 `local_irq_save` 禁用本地中断，未先获取目标任务的 `pi_lock`，无法阻止任务在此期间被迁移到其他运行队列，导致后续操作违反了锁保护规则。
+
+#解决方案
+修改 `yield_to()` 函数的锁获取逻辑。将原有的 `local_irq_save` 替换为 `raw_spin_lock_irqsave(&p->pi_lock, flags)`，在操作开始前先获取目标任务的 `pi_lock`。这确保了在操作目标任务期间，任务无法被 `try_to_wake_up()` 等路径迁移到其他运行队列，从而避免了竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/002c90dd0cec965e33071ec3db1496fd984ba65b

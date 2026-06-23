@@ -1,0 +1,20 @@
+#标题
+netfilter: nf_conntrack_h323 组件 decode_int 函数越界读漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统处理精心构造的畸形 H.323/RAS 数据包时，内核 NF conntrack H.323 模块的 `decode_int` 函数会发生 1-4 字节的越界读取。该漏洞可导致内核地址信息泄露，严重情况下可能引发内核崩溃或影响系统稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `decode_int()` 函数的 CONS 分支处理逻辑中，代码首先调用 `get_bits(bs, 2)` 读取长度值，随后直接调用 `get_uint(bs, len)` 读取数据。现有的边界检查（`nf_h323_error_boundary(bs, 0, 2)`）仅验证了 `get_bits` 读取的 2 个比特是否在缓冲区范围内，并未验证后续 `get_uint` 需要读取的 `len` 字节（长度范围为 1-4 字节）是否仍在缓冲区内。因此，恶意构造的数据包可触发 1-4 字节的 slab 越界读。
+
+#解决方案
+在调用 `get_uint(bs, len)` 之前，增加对 `len` 字节长度的边界检查。具体修改为：在 `get_bits(bs, 2) + 1` 计算出 `len` 后，立即调用 `nf_h323_error_boundary(bs, len, 0)` 进行校验；若校验失败则直接返回 `H323_ERROR_BOUND` 错误，防止越界读取发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/49ff8bfc948d912d5789233ae918738c7cd41a61

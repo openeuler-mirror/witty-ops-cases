@@ -1,0 +1,20 @@
+#标题
+xhci_disable_slot 函数内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 xhci_disable_slot() 函数的错误处理路径中，当 USB 控制器处于停止或濒死状态，或者下发禁用槽位命令失败时，发生内核内存泄漏。由于需要特定的硬件状态或异常条件才能触发该错误路径，常规运行下不易复现。
+
+#主要错误日志
+未知
+
+#问题根因
+在 xhci_disable_slot() 函数中，通过 xhci_alloc_command() 分配命令结构体时，会同时分配一个完成结构体。然而，在错误处理路径中，代码仅使用了 kfree(command) 来释放命令结构体本身，导致与之关联的完成结构体未被释放，从而造成内存泄漏。
+
+#解决方案
+将错误处理路径中的 kfree(command) 替换为 xhci_free_command(xhci, command)。xhci_free_command() 函数会正确地释放命令结构体及其关联的完成结构体。由于命令结构体在分配时进行了零初始化，command->in_ctx 为 NULL，因此使用 xhci_free_command() 不会引起误释放问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/29a9c01863fd9cdcc9dc56a9e18cf9a56baf2905

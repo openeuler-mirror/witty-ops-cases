@@ -1,0 +1,21 @@
+#标题
+io_uring multishot 模式下缓冲区状态未刷新导致数据异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 io_uring 的 multishot 模式配合 selected buffers（选择缓冲区）功能时，由于内核在轮询事件处理路径中未正确回收缓冲区（kbuf），导致缓冲区环形队列状态未刷新。这会导致缓冲区资源管理混乱，可能引发数据损坏、缓冲区泄漏或后续请求处理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 io_poll_task_func 处理逻辑中，当 io_poll_check_events 返回 IOU_POLL_NO_ACTION 或 IOU_POLL_REQUEUE 时，代码直接返回或重队列，缺少对 io_kbuf_recycle 的调用。
+根本原因在于：multishot 的每次迭代都可能获取新的缓冲区，在重新进入等待前必须刷新 kbuf ring 状态。原代码逻辑遗漏了这一步骤，导致缓冲区状态未能正确恢复或更新。
+
+#解决方案
+在 io_uring/poll.c 的 io_poll_task_func 函数中，针对 ret == IOU_POLL_NO_ACTION 和 ret == IOU_POLL_REQUEUE 两个分支，在返回或重队列前显式调用 io_kbuf_recycle(req, 0)，确保缓冲区状态被正确刷新和回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f62553bd1ee88375cd2cb87635f42b02601edb9

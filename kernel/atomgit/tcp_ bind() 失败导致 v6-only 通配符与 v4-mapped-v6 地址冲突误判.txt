@@ -1,0 +1,24 @@
+#标题
+tcp: bind() 失败导致 v6-only 通配符与 v4-mapped-v6 地址冲突误判
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在同一个端口上先后绑定（bind）以下两个地址时，原本应该成功的第二个绑定操作失败：
+1. 绑定 `[::]` 地址并设置 IPV6_V6ONLY 选项；
+2. 绑定 `::ffff:127.0.0.1`（v4-mapped-v6）地址。
+表现为内核错误地判断地址冲突，导致 bind 系统调用返回失败。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit 5e07e672412b 引入的变更让 v4-mapped-v6 地址使用 bhash2 来更快检测冲突，但遗漏了必要的逻辑判断。在 `__inet_bhash2_conflict()` 函数中，代码仅针对 `AF_INET` 类型的套接字检查了 `IPV6_V6ONLY` 属性以避免误报冲突，却未对 v4-mapped-v6 地址进行同样的检查。
+当进行第二个 bind 操作时，`inet_bind2_bucket_match_addr_any()` 返回了第一个套接字（[::]）的桶信息，随后 `inet_bind_conflict()` 未检查具体地址便直接返回冲突，导致 v4-mapped-v6 地址错误地与设置了 IPV6_V6ONLY 的 v6 通配地址发生冲突判定。
+
+#解决方案
+修改 `net/ipv4/inet_connection_sock.c` 中的 `__inet_bhash2_conflict()` 函数。在检测到对端套接字设置了 `IPV6_V6ONLY` 时，除了原本对 `AF_INET` 套接字放行的逻辑外，增加对 v4-mapped-v6 地址的判断：如果当前套接字是 v4-mapped-v6 地址，则不应视为冲突，直接返回 false，从而修复 bind 行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c8581e07554a88cbd6507328c79ecd624e582045

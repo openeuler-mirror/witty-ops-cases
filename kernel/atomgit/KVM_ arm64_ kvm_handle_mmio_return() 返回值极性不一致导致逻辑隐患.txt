@@ -1,0 +1,22 @@
+#标题
+KVM: arm64: kvm_handle_mmio_return() 返回值极性不一致导致逻辑隐患
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 arm64 KVM 虚拟化场景下处理 MMIO 返回时，`kvm_handle_mmio_return()` 函数的返回值语义与 `handle_exit()` 中其他退出处理函数不一致。虽然此问题本身描述为无功能性改变，但这种不一致性会增加代码维护难度，容易在后续添加处理逻辑或合并补丁时引发错误判断，导致对 MMIO 退出处理流程的控制逻辑出现偏差。
+
+#主要错误日志
+未知
+
+#问题根因
+`kvm_handle_mmio_return()` 函数返回 0 表示成功/继续运行，而其他大多数退出处理函数返回 <= 0 表示主机需要处理该退出。这种返回值极性（polarity）的不一致使得代码逻辑难以推演，且不利于未来扩展其他处理程序。
+
+#解决方案
+修改 `kvm_handle_mmio_return()` 的返回值极性以统一代码风格：
+1. 将 `kvm_handle_mmio_return()` 内部的成功返回值从 0 改为 1。
+2. 修改调用处 `kvm_arch_vcpu_ioctl_run()` 中的判断逻辑，将 `if (ret)` 改为 `if (ret <= 0)`，确保当返回值小于等于 0 时才返回给调用者处理，否则继续运行虚拟机。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/07519775d794e5d612cf7fb04dc0adde12c25d0a

@@ -1,0 +1,28 @@
+#标题
+nvme-tcp: nvme_tcp_poll 竞态条件导致 UAF 引发的内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在运行 NVMe over TCP 时，`nvme_tcp_poll` 函数与发送路径的错误处理程序发生竞态条件。当 socket 读取过程中遇到错误时，如果未能及时停止轮询循环，可能导致请求在被轮询的同时被错误处理程序完成并释放，从而引发 UAF（Use-After-Free）。最终表现为内核空指针解引用（NULL pointer dereference），触发 Oops 并打印相关调用栈。
+
+#主要错误日志
+[35665.692310] nvme nvme2: failed to send request -13
+[35665.702265] nvme nvme2: unsupported pdu type (3)
+[35665.702272] BUG: kernel NULL pointer dereference, address: 0000000000000000
+[35665.702542] nvme nvme2: queue 1 receive failed:  -22
+[35665.703209] #PF: supervisor write access in kernel mode
+[35665.703213] #PF: error_code(0x0002) - not-present page
+[35665.703220] Oops: 0002 [#1] SMP PTI
+[35665.703658] nvme nvme2: starting error recovery
+[35665.709172] RIP: 0010:_raw_spin_lock+0xc/0x30
+
+#问题根因
+`nvme_tcp_poll()` 可能与发送路径的错误处理程序发生竞态。当尝试从 socket 读取数据发生错误时，原代码未将错误状态向上传递，导致块层无法及时中断轮询循环。这使得请求在正在被轮询检查完成状态时，被错误处理路径提前完成并释放，进而导致 UAF panic。
+
+#解决方案
+修改 `nvme_tcp_poll` 函数，捕获 `nvme_tcp_try_recv` 的返回值。如果该调用返回错误，则将该错误码直接返回给调用者，确保块层能够感知错误并立即中断轮询循环，避免对已释放的资源进行访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa52b4af0dd7ac0e691a478508b4bdf03a8e71f3

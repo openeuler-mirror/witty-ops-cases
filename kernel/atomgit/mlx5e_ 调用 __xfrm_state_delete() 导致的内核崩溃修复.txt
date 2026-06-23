@@ -1,0 +1,33 @@
+#标题
+mlx5e: 调用 __xfrm_state_delete() 导致的内核崩溃修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动延迟工作任务处理 IPsec TX 限制时，内核发生通用保护错误，导致系统崩溃。具体表现为在 `mlx5e_ipsec_handle_sw_limits` 处理流程中触发 `Oops: general protection fault`，地址通常指向非规范地址 `0xdead000000000108` 附近。
+
+#主要错误日志
+Oops: general protection fault, probably for non-canonical address 0xdead000000000108: 0000 [#1] SMP
+CPU: 5 UID: 0 PID: 7448 Comm: kworker/u102:2 Not tainted 6.11.0-rc2+ #1
+Workqueue: mlx5e_ipsec: eth%d mlx5e_ipsec_handle_sw_limits [mlx5_core]
+RIP: 0010:__xfrm_state_delete+0x3d/0x1b0
+Call Trace:
+ <IRQ>
+ ? __xfrm_state_delete+0x3d/0x1b0
+ ? __xfrm_state_delete+0x2f/0x1b0
+ xfrm_timer_handler+0x174/0x350
+ __hrtimer_run_queues+0x121/0x270
+ ...
+ mlx5e_ipsec_handle_sw_limits+0x7d/0x90 [mlx5_core]
+ process_one_work+0x137/0x2d0
+ ...
+
+#问题根因
+驱动的延迟工作任务在调用 `xfrm_state_check_expire()` 之前未检查 `km.state` 的状态。当 xfrm state 已被删除但尚未释放时，其状态可能已被置为 `XFRM_STATE_DEAD`。此时若调用 `xfrm_state_check_expire()`，会将状态重置为 `XFRM_STATE_EXPIRED`，导致随后在 xfrm timer 中再次调用 `__xfrm_state_delete()`，从而引发双重删除导致的内核崩溃。
+
+#解决方案
+在驱动延迟工作任务中增加状态检查逻辑：在调用 `xfrm_state_check_expire()` 前，先判断 `x->km.state` 是否为 `XFRM_STATE_VALID`。若状态无效（非 `XFRM_STATE_VALID`），则直接跳过过期检查并退出，避免对已处于删除流程的状态进行非法操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31b0740e29b068f3ccf19275b78b6cf1db6070fa

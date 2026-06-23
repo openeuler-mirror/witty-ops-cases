@@ -1,0 +1,36 @@
+#标题
+scsi: mpi3mr: bsg初始化失败导致卸载时内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mpi3mr 驱动初始化过程中，若 `bsg_setup_queue()` 函数执行失败，驱动会继续加载。当后续进行驱动卸载（unbind）操作时，内核触发 NULL pointer dereference（空指针引用）崩溃，导致系统不可用。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 000000000000041c
+Call Trace:
+  <TASK>
+  mpi3mr_bsg_exit+0x1f/0x50 [mpi3mr]
+  mpi3mr_remove+0x6f/0x340 [mpi3mr]
+  pci_device_remove+0x3f/0xb0
+  device_release_driver_internal+0x19d/0x220
+  unbind_store+0xa4/0xb0
+  kernfs_fop_write_iter+0x11f/0x200
+  vfs_write+0x1fc/0x3e0
+  ksys_write+0x67/0xe0
+  do_syscall_64+0x38/0x80
+  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+
+#问题根因
+在 `mpi3mr_bsg_init()` 函数中，`bsg_setup_queue()` 的返回值被直接赋值给 `mrioc->bsg_queue`。当 `bsg_setup_queue()` 失败时，它返回的是一个错误指针（error pointer，通过 `IS_ERR()` 判断），而不是 NULL。
+由于错误指针不是 NULL，导致在 `mpi3mr_bsg_exit()` 函数中，条件判断 `if(!mrioc->bsg_queue)` 为假，跳过了 `bsg_remove_queue()` 的调用。后续代码直接解引用 `mrioc->bsg_queue`（此时指向无效地址）引发空指针崩溃。
+
+#解决方案
+修改 `mpi3mr_bsg_init()` 中的赋值逻辑：
+1. 引入局部变量 `q` 接收 `bsg_setup_queue()` 的返回值。
+2. 在检查 `IS_ERR(q)` 判断失败逻辑结束后，再将 `q` 赋值给 `mrioc->bsg_queue`。
+此举确保了当 `bsg_setup_queue()` 失败时，`mrioc->bsg_queue` 保持为 NULL（默认值），从而允许 `mpi3mr_bsg_exit()` 中的 NULL 检查生效，避免访问无效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/28ac5c53a4b338667b809d8b9f6e6dd04186a4d0

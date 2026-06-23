@@ -1,0 +1,24 @@
+#标题
+KVM arm64 vgic-v3 修复 Hip10 erratum 162200806 规避代码无效问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HiSilicon Hip10 芯片平台上运行 KVM 虚拟机时，涉及 GICv3 SGI（软件中断）Pending 状态读取的逻辑失效。由于之前的代码逻辑错误，变量 `is_pending` 被赋值后未使用，导致该 Erratum 的规避代码实际上未生效，可能导致中断状态判断错误，进而影响虚拟机中断处理的正确性。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因有两点：
+1. 逻辑缺陷：在 `__read_pending` 函数中，针对 Hip09/Hip10 erratum 162200806 的处理分支里，计算出的 `is_pending` 变量值未被使用，反而错误地进入了后续的 `val = false` 并调用 `irq_get_irqchip_state`，导致规避逻辑失效。
+2. 硬件适配错误：该 Erratum 实际上适用于 Hip10 芯片，但旧代码将其命名为 `HIP09_ERRATUM_162200806`，导致芯片类型识别与规避措施不匹配。
+
+#解决方案
+1. 修复变量作用域与赋值：删除无效的局部变量 `is_pending`，将计算结果直接赋值给 `val`，并调整 `else` 分支逻辑，确保仅在非该 Erratum 场景下才执行 `irq_get_irqchip_state`。
+2. 更正芯片标识：将相关宏定义、文档及代码中的芯片类型从 Hip09 修正为 Hip10，确保针对 Hip10 的 Erratum 规避代码正确生效。
+3. 完善 KVM info 初始化：在 `gic_of_setup_kvm_info` 和 `gic_acpi_setup_kvm_info` 中补充了对 `FLAGS_WORKAROUND_HIP10_ERRATUM_162200806` 标志的传递逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0c4f928ec9174805616631ebf19b03447faede61

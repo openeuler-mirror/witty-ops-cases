@@ -1,0 +1,26 @@
+#标题
+PowerPC EEH错误处理流程存在竞态条件导致潜在内存访问错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在PowerPC架构下进行EEH（Enhanced Error Handling）错误恢复时，由于`pci_lock_rescan_remove`锁的保护范围不当，存在竞态条件。若设备在检查后被移除，可能导致内核访问已释放的内存（Use-After-Free）或空指针引用，进而引发内核崩溃或数据损坏。具体表现为EEH恢复流程不稳定，或在设备热插拔与错误恢复并发时出现异常。
+
+#主要错误日志
+- eeh_edev_info(edev, "no device")
+- pr_err("%s: Cannot find PCI bus for PHB#%x-PE#%x\n", __func__, pe->phb->global_number, pe->addr)
+- pr_err("%s: PCI bus for PHB#%x-PE#%x disappeared\n", __func__, pe->phb->global_number, pe->addr)
+- pr_warn("%s: Invalid value %d from next_error()\n", __func__, rc)
+
+#问题根因
+原代码中`pci_lock_rescan_remove()`锁的加锁范围过小或位置不正确。例如在`eeh_pe_report_edev`函数中，获取设备引用(`get_device`)前未持有锁，导致设备指针检查与使用之间存在竞态窗口。另外，`eeh_reset_device`等函数中锁的持有与释放逻辑分散，未对整个恢复流程进行有效保护，导致在并发场景下设备可能被意外移除。同时，`eeh_bridge_check_link`中未检查`pdev`是否为空即访问其成员，存在空指针解引用风险。
+
+#解决方案
+1. 扩大锁的保护范围：将`pci_lock_rescan_remove()`的调用上移至函数入口（如`eeh_handle_normal_event`和`eeh_handle_special_event`开头），确保整个错误处理流程在锁的保护下进行，防止设备在处理过程中被移除。
+2. 修复空指针访问：在`eeh_bridge_check_link`中增加对`edev->pdev`是否为空的判断，避免空指针解引用。
+3. 完善错误处理路径：在`eeh_pe_report_edev`中，当设备不存在时设置`result`为`PCI_ERS_RESULT_DISCONNECT`；在移除设备前重新检查`bus`是否存在，避免操作已消失的总线。
+4. 调整锁的粒度：移除分散在子函数内部的加解锁操作，统一在高层处理函数中进行保护，消除死锁隐患并简化逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6709bc5e15b9653af44cbb5d65e38ec4eb1f8b07

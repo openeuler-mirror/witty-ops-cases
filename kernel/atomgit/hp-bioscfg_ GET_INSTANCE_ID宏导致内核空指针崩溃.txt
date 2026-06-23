@@ -1,0 +1,26 @@
+#标题
+hp-bioscfg: GET_INSTANCE_ID宏导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户态工具（如 fwupd）尝试通过 sysfs 读取 BIOS 配置属性时触发内核崩溃。系统日志显示通用保护错误，具体表现为在 `min_length_show` 等属性显示函数中发生空指针解引用。
+
+#主要错误日志
+Oops: general protection fault [#1] SMP KASAN NOPTI
+KASAN: null-ptr-deref in range [0x0000000000000000-0x0000000000000007]
+RIP: 0010:min_length_show+0xcf/0x1d0 [hp_bioscfg]
+
+#问题根因
+`GET_INSTANCE_ID` 宏存在两个严重缺陷：
+1. **越界访问**：循环条件使用了 `<=` 而非 `<`，导致循环变量超出数组实际索引范围（0 到 instances_count-1），从而访问了无效的数组边界。
+2. **空指针解引用**：代码在访问 `attr_name_kobj->name` 之前未检查 `attr_name_kobj` 是否为 NULL，当数组元素中的该指针为空时直接引发崩溃。
+
+#解决方案
+修改 `drivers/platform/x86/hp/hp-bioscfg/bioscfg.h` 中的 `GET_INSTANCE_ID` 宏定义：
+1. 将循环边界条件从 `i <= bioscfg_drv.type##_instances_count` 修正为 `i < bioscfg_drv.type##_instances_count`，防止数组越界。
+2. 在调用 `strcmp` 访问 `name` 成员前，增加对 `bioscfg_drv.type##_data[i].attr_name_kobj` 的非空检查，避免空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7bb74f66cae3ad108d795650c1eb9bdf7e9598cd

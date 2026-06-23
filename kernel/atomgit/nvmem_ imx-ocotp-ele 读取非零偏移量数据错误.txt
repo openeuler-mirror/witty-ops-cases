@@ -1,0 +1,26 @@
+#标题
+nvmem: imx-ocotp-ele 读取非零偏移量数据错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i.MX 平台上通过 nvmem 子系统读取 OCOTP（One-Time Programmable）数据时，如果指定的读取偏移量（offset）不为 0 或非 4 字节对齐，读取到的数据内容错误，无法获取正确的 OTP 数据。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序 `imx_ocotp_reg_read` 在处理读取偏移量时存在两个逻辑错误：
+1. **索引计算错误**：传入的 `offset` 参数单位是字节，但驱动直接将其作为索引使用，未除以 4 转换为字索引，导致读取位置错位。
+2. **数据拷贝错误**：当 `offset` 非 4 字节对齐时，驱动虽然从硬件读取了对齐位置的数据，但在拷贝到用户缓冲区时，未跳过因对齐而多读的前导字节（skipbytes），导致输出缓冲区包含了错误的数据起始位置。
+
+#解决方案
+修正 `imx_ocotp_reg_read` 函数中的偏移量处理逻辑：
+1. 将 `index` 的计算修改为 `offset >> 2`，正确将字节偏移转换为字索引。
+2. 新增 `skipbytes` 变量计算字节对齐偏移量 `offset - (index << 2)`。
+3. 调整内存分配大小 `num_bytes` 计算，加上 `skipbytes` 以容纳对齐后的额外数据。
+4. 修改 `memcpy` 操作，将源地址向后偏移 `skipbytes`，确保只拷贝用户请求的有效数据部分。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f5e5b50b853cb1f9f47ac868ad39b2bea214bb5d

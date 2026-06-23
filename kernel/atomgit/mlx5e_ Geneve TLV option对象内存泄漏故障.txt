@@ -1,0 +1,20 @@
+#标题
+mlx5e: Geneve TLV option对象内存泄漏故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 mlx5 网卡驱动进行 VF（虚拟功能）隧道卸载时，若配置了 Geneve 隧道且包含 TLV 选项，会导致内核内存泄漏（Memory Leak）。系统长时间运行或频繁添加删除此类流规则时，可能观察到内核内存占用持续增长，且无法释放。
+
+#主要错误日志
+[   12.345678] mlx5e: Failed to parse tunnel attributes
+
+#问题根因
+在支持 VF 隧道卸载功能时，驱动使用临时的 `mlx5_flow_spec` 对象（代码中的 `tmp_spec`）来解析隧道选项。对于 Geneve 隧道，如果存在 TLV 选项，解析过程会创建一个对象（或增加已存在对象的引用计数）。然而，代码逻辑中直接释放了临时的 `tmp_spec`，且该临时对象中并未保存用于后续释放 TLV 对象所需的上下文信息。由于流规则删除时依赖 `mlx5_flow_spec` 中的信息来释放该对象，临时对象的直接释放导致该 Geneve TLV option 对象无法被正确释放，从而导致内存泄漏。
+
+#解决方案
+修改 `parse_tunnel_attr` 函数中的错误处理与资源释放逻辑。在解析隧道属性出错或处理完毕后、释放临时 `mlx5_flow_spec`（`tmp_spec`）之前，显式调用 `mlx5_geneve_tlv_option_del()` 函数来释放或减少 TLV 对象的引用，确保资源被正确回收，避免内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01852aa217f5f12dc6267ea7b9214cbee4e42edf

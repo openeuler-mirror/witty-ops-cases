@@ -1,0 +1,30 @@
+#标题
+bnxt_en: 老旧设备固件接口更新导致驱动 Probe 失败及请求过大错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Stratus (BCM957452) 设备上使用固件版本 FW 20.8.3.11 时，驱动加载失败。
+具体表现为：
+1. 初始化过程中报错 "Unable to reserve tx rings"、"2nd rings reservation failed." 以及 "Not enough rings available."。
+2. 即使解决了探测问题，后续还会出现 "Failed to set async event completion ring." 错误。
+
+#主要错误日志
+bnxt_en ...: Unable to reserve tx rings
+bnxt_en ...: 2nd rings reservation failed.
+bnxt_en ...: Not enough rings available.
+bnxt_en ...: Failed to set async event completion ring.
+[推断] bnxt_en ...: oversized hwrm request, req_type 0x%x
+
+#问题根因
+近期固件接口更新将 `struct hwrm_func_cfg_input` 结构体的大小增加到了 128 字节以上。然而，部分老旧设备（如 BCM957452）最大仅支持 128 字节的请求长度。
+驱动在发送 `HWRM_FUNC_CFG` 命令时，`__hwrm_send()` 函数检测到请求长度超过了设备支持的 `bp->hwrm_max_ext_req_len`（即 128 字节），直接返回 `-E2BIG` 错误，导致命令执行失败，进而引发驱动探测和配置流程失败。实际上驱动代码尚未访问新增的字段，不需要发送超长的数据。
+
+#解决方案
+1. 新增辅助函数 `bnxt_hwrm_func_cfg_short_req_init`，在初始化 `HWRM_FUNC_CFG` 请求时，将请求长度限制为结构体大小与设备支持的最大长度（`bp->hwrm_max_ext_req_len`）之间的最小值，确保请求长度不超过 128 字节，从而兼容老旧设备。
+2. 将所有调用 `hwrm_req_init(bp, req, HWRM_FUNC_CFG)` 的地方替换为新的 `bnxt_hwrm_func_cfg_short_req_init` 函数。
+3. 在 `__hwrm_send()` 中增加警告打印，当请求过大时输出 "oversized hwrm request" 提示，便于后续调试。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/845a0ad3973daa5b21e27e7997511851f8fc0cfd

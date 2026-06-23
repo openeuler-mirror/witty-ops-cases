@@ -1,0 +1,23 @@
+#标题
+af_unix: 修复 embryo socket 导致的循环引用垃圾回收失败问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 AF_UNIX 套接字的文件描述符被传递给 embryo socket（尚未被 accept 的监听套接字）时，内核无法正确识别由监听套接字（A 和 B）构成的循环引用。这导致垃圾回收（GC）机制失效，相关套接字的引用计数无法归零。在用户态调用 close() 后，底层的 unix_release() 不会被触发，导致套接字对象无法释放，造成内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 AF_UNIX 套接字的垃圾回收机制中，如果循环引用涉及 embryo socket，现有逻辑未能正确构建引用图。例如，若 socket A 的 fd 传给了 D（A 的 embryo），B 的 fd 传给了 C（B 的 embryo），此时 D 持有 A 的引用，C 持有 B 的引用。由于 C/D 位于 A/B 的接收队列中，只有 A/B 释放后 C/D 才能被清理，但 A/B 的释放又依赖于 C/D 的关闭，形成死锁。
+根本原因在于，当 fd 传递给 embryo socket 时，引用实际上是由其父监听套接字间接持有的，但在构建 GC 图时，代码直接使用了 `edge->successor->vertex`，未判断 successor 是否为 embryo socket（即 `listener` 成员是否非空），导致未能将图正确表示为 A <-> B 的循环依赖关系，从而遗漏了该循环引用的检测。
+
+#解决方案
+1. 在 `net/unix/garbage.c` 中新增辅助函数 `unix_edge_successor()`。该函数在遍历引用边时检查目标套接字是否为 embryo socket（判断 `listener` 指针是否有效），若是，则将父监听套接字的 vertex 作为后续节点返回，从而正确还原间接持有的引用关系。
+2. 在 `net/unix/garbage.c` 的 `__unix_walk_scc()` 函数中，将直接访问 `edge->successor->vertex` 的逻辑替换为调用 `unix_edge_successor(edge)`，确保 GC 能够识别包含 embryo socket 的循环引用。
+3. 新增 `unix_update_edges()` 函数，并在 `net/unix/af_unix.c` 的 `unix_accept()` 流程中调用。该函数在获取新连接（embryo socket 变为已连接套接字）时，持有 `unix_gc_lock` 锁将 `listener` 指针置空，避免在 GC 运行过程中因状态变化导致竞争或误判。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/53065cc7a0c3484518bee0c4100c7dfbb2f61c2f

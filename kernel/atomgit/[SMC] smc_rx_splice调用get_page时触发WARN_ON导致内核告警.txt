@@ -1,0 +1,36 @@
+#标题
+[SMC] smc_rx_splice调用get_page时触发WARN_ON导致内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMC（Shared Memory Communications）协议处理循环回环设备（loopback-ism）的 DMB（Data Memory Buffer）时，调用 `splice` 系统调用会触发内核 `WARN_ON_ONCE()` 告警。该问题发生于 `get_page()` 函数中，原因是传递给该函数的内存页面并非合法的页支持内存。若内存释放早于 `splice_to_pipe()` 完成，此缺陷可能进一步导致 Use-After-Free 风险。
+
+#主要错误日志
+```
+WARNING: CPU: 18 PID: 12152 at ./include/linux/mm.h:1330 smc_rx_splice+0xaf8/0xe20 [smc]
+CPU: 18 UID: 0 PID: 12152 Comm: smcapp Kdump: loaded Not tainted 6.17.0-rc3-11705-g9cf4672ecfee #10 NONE
+Hardware name: IBM 3931 A01 704 (z/VM 7.4.0)
+...
+Call Trace:
+ smc_rx_splice+0xafc/0xe20 [smc]
+ smc_rx_recvmsg+0xa74/0xe00 [smc]
+ smc_splice_read+0x1ce/0x3b0 [smc]
+ sock_splice_read+0xa2/0xf0
+ do_splice_read+0x198/0x240
+ splice_file_to_pipe+0x7e/0x110
+ do_splice+0x59e/0xde0
+```
+
+#问题根因
+`smc_lo_register_dmb()` 函数通过 `kzalloc()` 分配 DMB 缓冲区，该内存来自 kmalloc 内存池，不具备页结构支持。后续在 `smc_rx_splice()` 流程中，代码尝试对该内存地址调用 `get_page()` 以增加引用计数。由于 kmalloc 分配的内存不是页支持的，`get_page()` 内部的 `WARN_ON_ONCE()` 检查失败并触发告警，同时导致无法正确持有缓冲区的引用计数。
+
+#解决方案
+将 DMB 缓冲区的内存分配方式从 `kzalloc()` 替换为 `folio_alloc()`。
+1. 使用 `folio_alloc(GFP_KERNEL | __GFP_NOWARN | __GFP_NOMEMALLOC | __GFP_NORETRY | __GFP_ZERO, ...)` 分配内存，确保获取的内存是页支持的。
+2. 通过 `folio_address()` 获取内存地址赋值给 `cpu_addr`。
+3. 相应地，在释放内存时，将 `kvfree()` 替换为 `folio_put(virt_to_folio(...))`，以正确释放 folio 页面。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/91a0e5b0d17a4ec33727504df7cef44ae5a75b1c

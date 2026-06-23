@@ -1,0 +1,31 @@
+#标题
+NFS 读取路径中因双重解锁导致的死锁或内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当文件被读取的同时被另一个 NFS 客户端截断时，内核可能发生死锁，导致进程在 `folio_wait_bit_common()` 中永久等待；或者在特定时序下触发内核警告 "folio is not locked"。大部分情况下表现为进程挂起（D 状态），少数情况下触发 `netfs_read_collection` 中的 WARNING。
+
+#主要错误日志
+------------[ cut here ]------------
+R=0000031c: folio 10 is not locked
+WARNING: CPU: 0 PID: 29 at fs/netfs/read_collect.c:133 netfs_read_collection+0x7c0/0xf00
+[...]
+Workqueue: events_unbound netfs_read_collection_worker
+RIP: 0010:netfs_read_collection+0x7c0/0xf00
+[...]
+Call Trace:
+ <TASK>
+ netfs_read_collection_worker+0x67/0x80
+ process_one_work+0x12e/0x2c0
+ worker_thread+0x295/0x3a0
+
+#问题根因
+在函数 `nfs_return_empty_folio()` 中无条件调用了 `folio_unlock()`，但在 fscache 启用时，该函数不应直接解锁 folio。这导致 `folio_unlock()` 被错误地调用了两次，第二次调用通过异或操作（XOR）将 `PG_locked` 标志位翻转回去，导致 folio 看起来仍处于锁定状态，进而导致其他等待该锁的进程死锁；或者在后续流程中因状态不一致触发警告。
+
+#解决方案
+在 `nfs_return_empty_folio()` 函数中调用 `folio_unlock()` 前，增加 `nfs_netfs_folio_unlock()` 条件检查。仅当该检查返回 true 时才执行解锁操作，确保在 fscache 启用场景下不会发生双重解锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dbba5afb42832dba7e6fb354ddc99b3d6eb5285a

@@ -1,0 +1,20 @@
+#标题
+btrfs: open_ctree() 失败时缺少错误原因输出导致排查困难
+
+#内核版本
+OLK-6.6
+
+#问题现象
+挂载大型 BTRFS 文件系统（例如底层由硬件 RAID56 控制器支持且缺失一个设备的场景）时，挂载过程耗时过长，随后被 systemd 终止。此时内核日志仅输出 "open_ctree failed"，不包含任何错误码或具体原因，导致无法定位挂载失败的真实原因（如信号中断等）。
+
+#主要错误日志
+BTRFS error (device sdj): open_ctree failed
+
+#问题根因
+在 `btrfs_fill_super()` 函数中，当 `open_ctree()` 返回错误时，内核仅打印了硬编码的字符串 "open_ctree failed"，未将具体的错误返回值（error number）输出到日志中。这导致在复杂故障场景下（如被信号中断导致的 -EINTR），管理员无法从日志中获取有效线索。
+
+#解决方案
+修改 `fs/btrfs/super.c` 中的错误处理逻辑，在 `btrfs_err` 打印中增加错误码参数。将原本的 `btrfs_err(fs_info, "open_ctree failed")` 修改为 `btrfs_err(fs_info, "open_ctree failed: %d", err)`，从而在日志中明确显示失败的错误号。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eca1e8a62d50f76cad08536849f9573dcb62a831

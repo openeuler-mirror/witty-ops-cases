@@ -1,0 +1,25 @@
+#标题
+x86 FPU 状态在原子与非原子上下文切换间损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核 FPU 状态数据出现不一致。当系统中同时存在原子上下文（如 `kernel_fpu_begin`）和非原子上下文（如 `kernel_fpu_begin_nonatomic`，用于 NT copy）的 FPU 操作时，由于竞态条件，可能导致 FPU 状态在抢占或上下文切换过程中被破坏。此外，若调用时序不当（如在 `kernel_fpu_begin_nonatomic` 流程中间调用了 `kernel_fpu_end`），可能触发内核警告栈调用 `WARN_ON_ONCE`。
+
+#主要错误日志
+- `WARN_ON_ONCE(test_thread_flag(TIF_USING_FPU_NONATOMIC));`（见于修改前的代码逻辑）
+- `WARN_ON_FPU(this_cpu_read(in_kernel_fpu));`（见于修改前的 `kernel_fpu_end_nonatomic` 函数）
+- `WARN_ON_FPU(!test_thread_flag(TIF_USING_FPU_NONATOMIC));`（见于 `kernel_fpu_end_nonatomic` 函数）
+
+#问题根因
+`kernel_fpu_begin_nonatomic`（用于非原子上下文）与 `kernel_fpu_begin`（用于原子上下文）之间存在竞态条件。
+原实现在处理这两种 FPU 使用路径时，缺乏有效的隔离机制。特别是在 `kernel_fpu_begin_nonatomic` 执行过程中，如果发生抢占或与其他 FPU 操作交叉执行，会导致 FPU 状态保存与恢复混乱，破坏状态完整性。
+
+#解决方案
+1. 引入独立的 FPU 上下文标志处理逻辑 `check_using_kernel_fpu`，通过参数区分原子和非原子路径，确保状态隔离。
+2. 在 `kernel_fpu_begin_nonatomic_mask` 中增加 `local_irq_save` 和 `local_irq_restore` 保护，防止在保存 FPU 状态过程中被中断打断，确保操作原子性。
+3. 优化检查逻辑：将 `check_using_kernel_fpu` 的检查点前移，并在发现 `TIF_USING_FPU_NONATOMIC` 标志时，根据上下文（atomic/non-atomic）主动执行 `save_fpregs_to_fpkernelstate` 或 `fpregs_restore_kernelregs`，从而正确维护 FPU 状态的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/32afeccc02179d5153c4493c736ccd1a8ba9e0b4

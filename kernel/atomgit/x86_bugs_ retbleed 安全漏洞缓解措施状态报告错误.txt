@@ -1,0 +1,20 @@
+#标题
+x86/bugs: retbleed 安全漏洞缓解措施状态报告错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel CPU 上，当用户指定了非默认的 spectre_v2 缓解措施（如 spectre_v2=retpoline）时，内核虽然打印了警告信息，但在 sysfs 接口中仍错误地报告 retbleed 的状态为 "Mitigation: IBRS" 或 "Mitigation: Enhanced IBRS"。实际上此时 IBRS 并未设置，系统仍易受 retbleed 攻击，导致用户误判系统安全状态。
+
+#主要错误日志
+RETBLEED_INTEL_MSG（推断原文为："WARNING: Kernel is vulnerable to RETBleed" 或类似提示，具体由宏定义）
+
+#问题根因
+在 Intel CPU 上，默认的 retbleed 缓解措施依赖 IBRS/eIBRS，这要求 spectre_v2 必须应用类似的缓解措施。代码逻辑中，当检测到 spectre_v2 选择了不兼容的缓解方案（如 retpoline）时进入 default 分支，虽然打印了错误日志，但未更新 `retbleed_mitigation` 变量的值。导致后续系统状态上报时，依然沿用之前判定的 IBRS 状态，而非实际的“无缓解”状态。
+
+#解决方案
+修改 `arch/x86/kernel/cpu/bugs.c` 中的 `retbleed_select_mitigation` 函数。在不兼容的 spectre_v2 配置分支（default 分支）中，打印错误日志后，增加设置 `retbleed_mitigation = RETBLEED_MITIGATION_NONE` 的逻辑。这确保了内核正确识别并报告系统当前处于易受攻击状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5f9474075c8ff53ec3dd40f4896fe75213efb8c1

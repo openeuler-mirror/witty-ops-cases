@@ -1,0 +1,20 @@
+#标题
+RDMA/hns: 修复 alloc_user_qp_db 错误处理路径中解映射条件不匹配问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA HNS 驱动中，当创建 XRC TGT 类型的 QP 时，若 `alloc_user_qp_db` 函数执行失败进入错误处理路径，会触发对未映射的 doorbell（sdb）进行解映射操作，导致内核状态不一致或潜在的内存访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `alloc_user_qp_db` 函数中，正常流程映射 sdb 的条件是 `user_qp_has_sdb()` 返回真，但在错误处理路径（`err_sdb` 标签处）判断是否需要解映射 sdb 的条件却是 `hr_qp->en_flags & HNS_ROCE_QP_CAP_SQ_RECORD_DB`。这两个条件并不完全等价，导致在某些特定场景（如 QP 类型为 XRC TGT）下，错误路径误判为已映射从而执行了错误的解映射操作。
+
+#解决方案
+在函数入口处预先计算并存储 `has_sdb` 和 `has_rdb` 两个布尔变量，将正常映射流程的判断逻辑修改为使用这两个变量。同时，将错误处理路径中的解映射判断条件修改为直接使用 `has_sdb` 变量，确保错误处理路径的解映射条件与正常映射路径的条件严格一致，避免对未映射的资源执行解映射操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7ca6a3a75fdbd636e21443a3d4d16597ba624af6

@@ -1,0 +1,20 @@
+#标题
+sched_ext: move_local_task_to_local_dsq 缺失后入队处理导致抢占失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 sched_ext 调度器类时，当通过 `scx_bpf_dsq_move()` 将任务从非本地 DSQ 迁移到同一 CPU 的本地 DSQ 时，系统未能正确执行后入队处理流程。这导致在设置了 `SCX_ENQ_PREEMPT` 标志或当前正在运行 idle 任务时，系统无法按预期触发抢占，任务无法及时获得 CPU 运行权。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `move_local_task_to_local_dsq()` 用于将任务从非本地 DSQ 移动到本地 DSQ，它直接操作本地 DSQ 而未经过标准的 `dispatch_enqueue()` 路径。由于该函数缺失了后入队处理逻辑，导致在 `SCX_ENQ_PREEMPT` 设置或运行 idle 任务时，无法触发必要的抢占操作。
+
+#解决方案
+在 `move_local_task_to_local_dsq()` 函数中添加调用 `local_dsq_post_enq()` 以执行后入队处理，从而恢复抢占功能。同时，为避免在调度路径（dispatch path）中触发不必要的重新调度，在 `local_dsq_post_enq()` 中增加了对 `SCX_RQ_IN_BALANCE` 标志的检查：若 RQ 处于 balance 状态（表示 CPU 已处于寻找下一任务的状态），则直接返回，不再触发抢占或 resched。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f602ea1eccd4503eff1a9a398c6bb37656f74182

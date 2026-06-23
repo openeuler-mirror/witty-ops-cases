@@ -1,0 +1,20 @@
+#标题
+net: dsa: probe failure leads to routing table memory leak
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DSA（Distributed Switch Architecture）子系统初始化过程中，若 `dsa_tree_setup_cpu_ports` 函数执行失败（即 probe failure），此前已分配的路由表（routing table）内存未被释放，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `dsa_tree_setup` 中，当 `dsa_tree_setup_cpu_ports` 调用失败时，代码直接返回错误码（`return err;`），跳过了后续的清理逻辑。这导致在初始化早期分配并挂载在 `dst->rtable` 链表上的 `dsa_link` 结构体未被释放，从而造成内存泄漏。
+
+#解决方案
+在 `dsa_tree_setup` 函数中增加错误处理跳转逻辑。当 `dsa_tree_setup_cpu_ports` 失败时，不再直接返回，而是跳转至新增的 `teardown_rtable` 标签处执行清理。同时，将路由表销毁逻辑封装为独立函数 `dsa_tree_teardown_routing_table`，并在错误处理路径和正常的 `dsa_tree_teardown` 流程中复用该函数，确保内存正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f8821f3dcd9df4fdd0234b38fed450727f217f5b

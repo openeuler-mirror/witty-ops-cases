@@ -1,0 +1,22 @@
+#标题
+KVM x86 MMIO 写操作修复导致 KABI CRC 校验失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对内核进行 KABI CRC 校验时（通常发生在模块加载或内核升级场景），校验失败。这是由于修复 CVE-2026-31588 的补丁修改了 `struct kvm_mmio_fragment` 结构体，导致内核 ABI 校验值发生变化，影响了内核的向后兼容性与稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+修复 CVE-2026-31588 的补丁在 `struct kvm_mmio_fragment` 结构体中移除了 `val` 成员并修改了 `len` 成员的类型，这种结构体布局的变更触发了内核 KABI CRC 校验机制，导致 CRC 值不匹配。
+
+#解决方案
+1. 利用 `kvm_run.s` 结构体中预留的 2048 字节空间，在 `struct kvm_sync_regs` 尾部新增 `__u64 mmio_scratch[2]` 数组成员。
+2. 通过 `#ifndef __GENKSYMS__` 宏包裹新增成员，使其在生成内核符号 CRC 时不被计算，从而保持 KABI 兼容性。
+3. 修改 MMIO 读写逻辑，将原先指向内部临时变量 `frag->val` 的指针改为指向新增的 `vcpu->run->s.regs.mmio_scratch` 数组，既解决了 CVE 问题又规避了 KABI 变更问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6bfb296a95696ab9b0afc8c6b554ad5cb78fee0e

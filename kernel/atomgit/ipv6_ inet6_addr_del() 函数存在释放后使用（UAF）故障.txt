@@ -1,0 +1,20 @@
+#标题
+ipv6: inet6_addr_del() 函数存在释放后使用（UAF）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除 IPv6 地址时，若该地址配置了临时地址管理标志（IFA_F_MANAGETEMPADDR），内核在调用 `inet6_addr_del()` 过程中会触发释放后使用，可能导致内核 Panic 或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `inet6_addr_del()` 函数中，代码逻辑顺序错误。`ipv6_del_addr(ifp)` 被过早调用，导致 `ifp` 指针被释放。随后代码继续检查 `ifp->flags` 并尝试调用 `delete_tempaddrs(idev, ifp)`，此时访问的是已被释放的内存地址，从而触发 UAF 故障。
+
+#解决方案
+调整代码执行顺序，将 `ipv6_del_addr(ifp)` 的调用移至 `delete_tempaddrs(idev, ifp)` 及相关标志位检查逻辑之后。确保在使用 `ifp` 指针完成所有必要的检查和清理操作后，再执行内存释放动作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9baf929fdff3f40e050e3baa6e96fa48ae7346bd

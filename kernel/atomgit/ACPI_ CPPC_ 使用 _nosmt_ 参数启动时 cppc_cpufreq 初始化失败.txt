@@ -1,0 +1,20 @@
+#标题
+ACPI: CPPC: 使用 "nosmt" 参数启动时 cppc_cpufreq 初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了超线程（SMT）的系统上，使用 "nosmt" 或 "nosmt=force" 内核启动参数启动时，cppc_cpufreq 驱动初始化失败。这导致系统无法正常加载 CPU 频率驱动，可能影响性能调节功能。
+
+#主要错误日志
+未知
+
+#问题根因
+`per_cpu(cpc_desc_ptr, cpu)` 对象仅针对在线（online）CPU 进行初始化（路径为 `acpi_soft_cpu_online` -> `__acpi_processor_start` -> `acpi_cppc_processor_probe`）。然而，`send_pcc_cmd()` 和 `acpi_get_psd_map()` 函数仍在遍历所有“可能”（possible）的 CPU。当 `acpi_get_psd_map()` 遇到离线 CPU 时，会返回 `-EFAULT` 错误码，从而导致初始化流程中断。
+
+#解决方案
+将 `send_pcc_cmd()` 和 `acpi_get_psd_map()` 函数中的循环遍历宏从 `for_each_possible_cpu()` 修改为 `for_each_online_cpu()`，确保只处理已初始化的在线 CPU，避免访问离线 CPU 导致的错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/879910065c0e3ab0fc4555337de22c7a9986172b

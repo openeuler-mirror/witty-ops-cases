@@ -1,0 +1,20 @@
+#标题
+amdgpu: VMID 预留错误未正确转发导致 SPM 使用时 GPU 挂死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 SPM（Stream Performance Monitor）功能时，如果 VMID 预留操作实际失败，用户空间会被错误地告知预留成功，导致后续操作使用无效的 VMID，最终引发 GPU 挂死。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `amdgpu_vm_ioctl` 函数处理 `AMDGPU_VM_OP_RESERVE_VMID` 操作时，代码直接调用了 `amdgpu_vmid_alloc_reserved` 函数但忽略了其返回值。这导致即使底层 VMID 分配失败，内核仍会将 `reserved_vmid` 标志位设置为 `true`，从而掩盖了错误状态，使用户空间误以为已成功预留 VMID。
+
+#解决方案
+修改 `amdgpu_vm_ioctl` 函数逻辑，增加对 `amdgpu_vmid_alloc_reserved` 函数返回值的检查。如果分配函数返回错误码，则直接向上层返回该错误，阻止将 `reserved_vmid` 标志位错误地置位，从而确保用户空间能正确感知 VMID 预留失败的状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f49271a13f38e65e6560829cf530faac9e6bdd77

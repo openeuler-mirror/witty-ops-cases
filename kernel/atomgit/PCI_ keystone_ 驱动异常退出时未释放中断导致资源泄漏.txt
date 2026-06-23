@@ -1,0 +1,20 @@
+#标题
+PCI: keystone: 驱动异常退出时未释放中断导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 Keystone PCI 驱动在申请 "ks-pcie-error-irq" 中断后，若因后续步骤出错导致驱动初始化失败并退出时，此前申请的中断未被释放，导致中断资源泄漏。
+
+#主要错误日志
+dev_err(dev, "failed to request error IRQ %d\n", irq);
+
+#问题根因
+驱动在 probe 阶段使用 `request_irq()` 申请了中断，但在驱动因错误退出时，没有对应的 `free_irq()` 调用来释放该中断。虽然调用 `request_irq()` 的代码位置随时间有所变动，但该资源泄漏问题一直未被修复。
+
+#解决方案
+将 `request_irq()` 替换为 `devm_request_irq()`。利用设备托管机制，在驱动退出或剥离时自动释放中断资源，从而避免资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eb76b8cf321c9e21dbd5a58eb275a927e4d74f4d

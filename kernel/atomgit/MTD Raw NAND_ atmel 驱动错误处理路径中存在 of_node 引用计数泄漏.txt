@@ -1,0 +1,20 @@
+#标题
+MTD Raw NAND: atmel 驱动错误处理路径中存在 of_node 引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 atmel NAND 控制器驱动初始化过程中，若 `atmel_nand_create()` 或 `atmel_nand_controller_add_nand()` 执行失败，驱动程序跳转到错误处理标签退出，但未释放已获取的设备节点 `nand_np` 的引用计数。这会导致内核对象引用计数泄漏，可能造成内存泄漏或设备树节点无法正常释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `atmel_nand_controller_add_nands` 中，代码使用 `for_each_child_of_node` 宏遍历设备树子节点。当循环体内调用 `atmel_nand_create` 或 `atmel_nand_controller_add_nand` 失败时，代码直接跳转到错误处理标签返回。由于 `for_each_child_of_node` 在每次循环开始时会增加子节点的引用计数，而在正常退出循环时才会释放，如果在循环中途因错误跳出，当前遍历的子节点 `nand_np` 的引用计数不会被释放，从而导致节点引用计数泄漏。
+
+#解决方案
+将宏 `for_each_child_of_node` 替换为 `for_each_child_of_node_scoped`。`for_each_child_of_node_scoped` 是一个自动作用域管理的变体，它利用编译器的自动清理机制，确保在循环变量离开作用域时（无论是正常结束还是因错误跳出）自动释放节点引用计数，从而修复了错误处理路径中的资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0d806cc95581c161e97823e976587084f291cb58

@@ -1,0 +1,20 @@
+#标题
+pinctrl: renesas: rzv2m: 修复缺失的 of_node_put() 调用导致引用计数泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在调用 `of_parse_phandle_with_fixed_args()` 解析设备树节点后，未释放设备节点的引用计数，导致该节点的引用计数持续保持为正值。这可能引发内存泄露（memory leak），在特定场景下阻碍相关设备节点内存的正常回收，影响系统长期运行的稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `drivers/pinctrl/renesas/pinctrl-rzv2m.c` 文件的 `rzv2m_gpio_register` 函数中，代码调用了 `of_parse_phandle_with_fixed_args()` 函数。根据内核 API 规范，该函数要求调用者在处理完成后必须调用 `of_node_put()` 来释放输出结构体中的节点指针（node pointer），但原代码逻辑中遗漏了这一步骤，导致设备节点的引用计数未能正确减少。
+
+#解决方案
+在 `rzv2m_gpio_register` 函数中，于获取 `of_args` 数据之后且在使用其参数进行校验之前，显式调用 `of_node_put(of_args.np)` 以正确释放设备节点的引用计数，修复内存泄露问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab9fbdb3cfe3fdf95e9212921ac4ea8de31e52af

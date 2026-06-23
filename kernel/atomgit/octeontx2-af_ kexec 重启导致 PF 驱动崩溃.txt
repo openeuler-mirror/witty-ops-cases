@@ -1,0 +1,20 @@
+#标题
+octeontx2-af: kexec 重启导致 PF 驱动崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 kexec 重启时，由于硬件未完全掉电，旧内核的 AF（Admin Function）状态残留到新内核。若 AF 和 PF 驱动均以模块形式编译，PF 驱动可能在 AF 驱动重新初始化硬件之前开始探测。PF 驱动误判 AF 已就绪并访问过时的硬件状态，从而导致系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+kexec 重启过程中硬件未掉电，导致旧内核的 AF 状态残留。具体原因为 RVUM block revision（被 PF 驱动用作判断 AF 初始化完成的标志）在关闭时未被清除。在新内核启动阶段，PF 驱动读取到该残留的 revision 值，错误地认为 AF 已经准备就绪，进而访问无效的硬件状态引发崩溃。
+
+#解决方案
+在 AF 驱动的关闭流程中增加 `rvu_shutdown` 回调函数，并在该函数中调用 `rvu_clear_rvum_blk_revid` 清除 RVUM 块的 revision 号。这确保了在 kexec 重启场景下，PF 驱动不会因检测到残留的 revision 值而误判 AF 状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/280cdb98e6244b5576bcbf0b324581841f606a21

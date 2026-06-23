@@ -1,0 +1,40 @@
+#标题
+PCI: AER: do_recovery 死锁导致系统任务阻塞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在处理 PCIe AER（高级错误报告）恢复流程时触发死锁，导致相关进程（如 kworker、systemd-udevd）处于不可中断睡眠状态（D状态）超过 30 秒，系统出现卡顿或无响应。具体场景通常发生在驱动探测过程中启用 SR-IOV 时恰好遇到 AER 错误。
+
+#主要错误日志
+[   70.984091] pcieport 0000:00:02.0: AER: Uncorrected (Non-Fatal) error received: id=0010
+[   70.984112] pcieport 0000:00:02.0: PCIe Bus Error: severity=Uncorrected (Non-Fatal), type=Transaction Layer, id=0010(Requester ID)
+...
+[  107.484190] INFO: task kworker/0:1:76 blocked for more than 30 seconds.
+[  107.705368] kworker/0:1     D    0    76      2 0x80000000
+[  107.771050] Workqueue: events aer_isr
+[  108.022594]  ? report_error_detected+0xa6/0x210
+[  108.320904]  pci_walk_bus+0x46/0x90
+[  108.411658]  broadcast_error_message+0xc3/0xf0
+[  108.464835]  do_recovery+0x34/0x220
+[  108.506569]  ? get_device_error_info+0x92/0x130
+[  108.560785]  aer_isr+0x28f/0x3b0
+...
+[  108.957129] INFO: task kworker/0:2:205 blocked for more than 30 seconds.
+[  109.645410]  pci_device_add+0x158/0x240
+[  109.691313]  pci_iov_add_virtfn+0x24f/0x340
+[  109.741375]  pci_enable_sriov+0x32b/0x420
+
+#问题根因
+死锁由锁的获取顺序不一致引起。
+CPU0 在驱动附加流程中：先持有设备互斥锁，后在 SR-IOV 初始化中尝试获取写信号量。
+CPU1 在 AER 中断处理流程中：先持有读信号量，后在错误恢复回调中尝试获取设备互斥锁。
+两个 CPU 互持半个锁资源并等待对方释放，形成典型的 ABBA 死锁。
+
+#解决方案
+修改 AER 恢复流程中的处理逻辑，解耦 `pci_bus_sem` 信号量与设备互斥锁的持有关系。
+具体方案：在遍历 PCI 总线执行错误恢复回调前，先通过 `pci_walk_bus` 收集所有相关设备指针到一个临时列表，并增加引用计数；随后释放 `pci_bus_sem` 信号量；最后遍历该临时列表，在持有设备锁的情况下安全地调用错误处理回调函数。此举避免了在遍历总线时同时持有两个锁，从而消除了死锁隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4833391f5a1ef97e47a3c1f883584e1ac6b4b054

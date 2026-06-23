@@ -1,0 +1,20 @@
+#标题
+I2C pnx 驱动等待函数超时时间单位错误导致超时异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+I2C pnx 驱动在执行传输操作时，`wait_timeout` 和 `wait_reset` 等待函数提前超时返回，导致 I2C 通信失败或设备功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+自提交 f63b94be6942 ("i2c: pnx: Fix potential deadlock warning from del_timer_sync() call in isr") 起，`i2c_pnx_algo_data.timeout` 成员变量的存储单位被修改为了 jiffies。然而，`wait_timeout` 和 `wait_reset` 函数在进行轮询等待时，未进行单位转换，仍直接将 jiffies 值当作毫秒进行计算和延时。这导致实际等待时间远小于预期（例如原本应等待 100ms，实际可能只等待了几个毫秒），从而导致等待逻辑提前超时。
+
+#解决方案
+在 `wait_timeout` 和 `wait_reset` 函数中，使用 `jiffies_to_msecs()` 接口将 `data->timeout` 的值从 jiffies 单位转换为毫秒单位，确保等待时长符合预期设计。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0f2543e31cc454e6b2408113965203ab2ed753f7

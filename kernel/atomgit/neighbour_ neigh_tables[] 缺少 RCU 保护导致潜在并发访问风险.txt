@@ -1,0 +1,23 @@
+#标题
+neighbour: neigh_tables[] 缺少 RCU 保护导致潜在并发访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发环境下访问邻居表（neighbour tables）时，系统可能因缺少适当的锁保护机制（如 RTNL 或 RCU）而导致数据竞争，进而引发内核崩溃或数据不一致问题。该问题主要影响 `neigh_xmit`、`neightbl_dump_info` 等函数对 `neigh_tables[]` 数组的访问安全性。
+
+#主要错误日志
+未知
+
+#问题根因
+全局数组 `neigh_tables[]` 在代码路径 `neigh_xmit()` 中仅使用了 `rcu_read_lock()` 进行保护，但数组本身的更新操作（如 `neigh_table_init` 和 `neigh_table_clear`）并未使用 RCU 机制进行同步，且数组声明缺少 `__rcu` 标记。这导致读取端在 RCU 读侧临界区内访问该数组时，无法保证其正在访问的指针处于稳定状态，存在并发访问风险。
+
+#解决方案
+为 `neigh_tables[]` 数组添加 RCU 保护机制：
+1. 将 `neigh_tables[]` 的声明修改为 `struct neigh_table __rcu *neigh_tables[]`，使用 `__rcu` 注解标记。
+2. 在写入端，使用 `rcu_assign_pointer()` 进行指针赋值（如 `neigh_table_init`），并在清除操作（`neigh_table_clear`）中调用 `synchronize_rcu()` 确保宽限期结束后才释放资源。
+3. 在读取端，统一使用 `rcu_dereference_rtnl()` 或 `rcu_dereference()` 来获取指针，确保内存屏障和访问安全。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5cc4757622e37d1ff95e95b0da774620719cdeb2

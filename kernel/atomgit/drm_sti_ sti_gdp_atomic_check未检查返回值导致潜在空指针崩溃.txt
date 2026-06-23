@@ -1,0 +1,20 @@
+#标题
+drm/sti: sti_gdp_atomic_check未检查返回值导致潜在空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `sti_gdp_atomic_check` 函数时，若 `drm_atomic_get_crtc_state` 获取状态失败，函数并未返回错误码而是继续执行。此时后续代码直接解引用了无效的指针 `crtc_state`（如访问其成员 `mode`），导致内核发生 Oops 或 Panic，进而引发系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `sti_gdp_atomic_check` 函数中，调用 `drm_atomic_get_crtc_state(state, crtc)` 获取 CRTC 状态后，未对该返回值进行有效性检查（即未检查 `IS_ERR(crtc_state)`）。当该函数因某种内部错误返回错误指针时，代码继续向下执行并解引用了该错误指针，从而导致内核崩溃。
+
+#解决方案
+在 `drivers/gpu/drm/sti/sti_gdp.c` 文件的 `sti_gdp_atomic_check` 函数中，增加对 `drm_atomic_get_crtc_state` 返回值的检查逻辑：使用 `IS_ERR(crtc_state)` 判断是否出错，若出错则使用 `PTR_ERR(crtc_state)` 返回具体的错误码，阻断后续对无效指针的访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1160aa7a72d8b4c182a84b8eb4d2dc95dfc76521

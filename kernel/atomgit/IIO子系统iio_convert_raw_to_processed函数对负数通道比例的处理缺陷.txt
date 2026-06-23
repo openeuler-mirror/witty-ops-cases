@@ -1,0 +1,30 @@
+#标题
+IIO子系统iio_convert_raw_to_processed函数对负数通道比例的处理缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 IIO 子系统的 `iio_convert_raw_to_processed` 接口处理负数通道比例时，计算结果错误。
+具体表现为：当通道比例值小于 -1.0（例如 -1.5）时，函数返回的处理值不正确。
+例如：当 raw=2，scale=10，channel-scale=-1.5 时，预期结果应为 -30，但实际计算结果为 -10。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `iio_convert_raw_to_processed_unlocked` 函数中，对 `IIO_VAL_INT_PLUS_MICRO` 和 `IIO_VAL_INT_PLUS_NANO` 类型比例值的处理逻辑存在缺陷。
+原代码逻辑分别计算整数部分和小数部分再累加：
+1. `*processed = raw64 * scale_val * scale;`
+2. `*processed += div_s64(raw64 * (s64)scale_val2 * scale, 1000000LL);`
+当比例小于 -1.0 时（如 -1.5，存储为 val=-1, val2=500000），第一步计算 `2 * -1 * 10 = -20`，第二步计算 `2 * 500000 * 10 / 1000000 = 10`，最终结果为 `-20 + 10 = -10`。
+其根本原因在于直接使用带符号的 `scale_val` 进行计算，而 `scale_val2` 通常存储为绝对值，导致两部分数值的符号处理不一致，破坏了负数的正确累加逻辑。
+
+#解决方案
+修改 `drivers/iio/inkern.c` 中的计算逻辑，统一处理负数情况：
+1. 引入 `abs()` 函数处理，强制使用 `scale_val` 和 `scale_val2` 的绝对值进行整数部分与小数部分的计算，确保两部分数值同号累加。
+2. 在计算完成后，检查原始的 `scale_val` 或 `scale_val2` 是否为负数，如果是，则将最终结果乘以 -1。
+此修复同时兼容了 `IIO_VAL_INT_PLUS_[MICRO|NANO]` 类型负数比例的三种可能存储格式（包括 val=-xxx, val2=-xxx 的情况）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c2b25e26d83b00140d814b8118813e6c10ba0b6c

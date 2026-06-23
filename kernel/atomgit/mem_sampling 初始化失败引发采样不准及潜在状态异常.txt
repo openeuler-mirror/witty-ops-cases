@@ -1,0 +1,27 @@
+#标题
+mem_sampling 初始化失败引发采样不准及潜在状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 当 ARM SPE（Statistical Profiling Extensions）硬件初始化失败时，mem_sampling 机制未能正确阻止自身启用，导致后续功能在不可用的硬件基础上运行。
+2. 在开启 NUMA Balancing 或 DAMON 功能时，内存采样数据不准确，无法正确反映内存访问情况，影响系统内存调优策略。
+3. `mm_spe_getbuf_addr` 接口返回的数据结构指针与调用者预期的地址数据不符，导致数据读取错误。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **状态检查顺序错误**：在 `set_mem_sampling_state` 函数中，检查 `mm_spe_enabled()` 状态的代码位于设置 saved_state 逻辑之后。当 SPE 初始化失败时，错误的执行流程导致状态机异常，未能有效阻断采样功能的开启。
+2. **缓冲区接口定义不一致**：`mm_spe_getbuf_addr` 函数返回的是结构体指针 `struct mm_spe_buf *`，但调用者实际需要的是存储数据的基地址。这导致 NUMA Balancing 和 DAMON 在获取采样缓冲区地址时获取了错误的指针值，从而导致采样数据不准确。
+3. **结构体定义缺失**：结构体 `mem_sampling_record` 缺少 `boost_spe_idx` 成员，导致相关索引操作无法正确进行。
+
+#解决方案
+1. **调整检查逻辑顺序**：将 `mm_spe_enabled()` 和 `mem_sampling_ops.sampling_start` 的有效性检查移动到 `set_mem_sampling_state`、`set_numabalancing_mem_sampling_state` 和 `set_damon_mem_sampling_state` 函数的最前面，确保在 SPE 未成功初始化时直接返回，阻止功能启用。
+2. **修正函数返回值类型与实现**：修改 `mm_spe_getbuf_addr` 函数的返回类型为 `void *`，并直接返回 `spe_buf->record_base`（缓冲区基地址），确保调用者获取到正确的数据地址。
+3. **补充结构体成员**：在 `struct mem_sampling_record` 中添加 `u16 boost_spe_idx` 成员以支持索引操作。
+4. **修复资源释放顺序**：在 `mm_spe_buffer_free` 中，先调用 `set_mem_sampling_state(false)` 关闭功能，再减少 `spe_probe_status` 计数，避免状态竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2db5cb91e7fc6622ffacee9ac7da382928acd0b1

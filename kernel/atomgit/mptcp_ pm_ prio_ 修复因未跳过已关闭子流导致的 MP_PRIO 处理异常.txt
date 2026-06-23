@@ -1,0 +1,20 @@
+#标题
+mptcp: pm: prio: 修复因未跳过已关闭子流导致的 MP_PRIO 处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当初始 MPTCP 子流被关闭并重新打开后，再次尝试为相同的本地地址发送 MP_PRIO 选项时，内核未能正确跳过已关闭的子流。这会导致协议处理逻辑异常，可能引发 MP_PRIO 发送错误或状态不一致，影响 MPTCP 连接的路径管理功能。
+
+#主要错误日志
+未知
+
+#问题根因
+在发送 MP_PRIO 选项时，代码遍历子流列表但未检查子流的活跃状态。根因在于 `mptcp_pm_nl_mp_prio_send_ack` 函数缺少对已关闭子流的过滤逻辑，导致在处理关闭后又重新打开的子流场景时，错误地尝试在非活跃（已关闭）的子流上执行操作。
+
+#解决方案
+在 `net/mptcp/pm_netlink.c` 文件的 `mptcp_pm_nl_mp_prio_send_ack` 函数中，遍历子流列表时增加对 `__mptcp_subflow_active(subflow)` 的判断。如果子流不活跃，则直接跳过后续处理，从而确保 MP_PRIO 仅在活跃的子流上发送。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dad1f37e67777059cc5637d3b4b32f3c16640720

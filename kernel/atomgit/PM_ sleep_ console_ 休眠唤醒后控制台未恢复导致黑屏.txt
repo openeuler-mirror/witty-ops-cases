@@ -1,0 +1,20 @@
+#标题
+PM: sleep: console: 休眠唤醒后控制台未恢复导致黑屏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+计算机在未连接显示器的情况下进入休眠状态，系统将控制台切换至虚拟终端 tty63 (SUSPEND_CONSOLE)。如果在唤醒前连接了显示器，系统唤醒时会跳过必要的虚拟终端恢复过程，导致控制台停留在 tty63 而未切回 tty1，最终表现为系统唤醒后黑屏。
+
+#主要错误日志
+未知
+
+#问题根因
+在休眠流程中，系统通过 `vt_move_to_console()` 将前台控制台切换到了 SUSPEND_CONSOLE。但在恢复流程中，`pm_restore_console()` 函数依据 `pm_vt_switch()` 的返回值来判断是否需要恢复控制台。如果在休眠期间重新连接了显示器，`pm_vt_switch()` 可能返回 false，导致系统误判认为不需要切换控制台，从而跳过了恢复原控制台（如 tty1）的操作，导致黑屏。
+
+#解决方案
+引入一个全局标志变量 `vt_switch_done` 来记录休眠期间是否成功执行了控制台切换操作。在 `pm_prepare_console()` 成功切换到休眠控制台后，将该标志置为 true；在 `pm_restore_console()` 恢复过程中，除了检查 `pm_vt_switch()` 外，额外检查 `vt_switch_done` 标志。只要之前成功切换过控制台，就强制执行恢复操作，确保控制台切回原终端，从而修复因显示器重新连接导致的黑屏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/314e8fc735ce721c7ebc62a02fda69a042e4ddb5

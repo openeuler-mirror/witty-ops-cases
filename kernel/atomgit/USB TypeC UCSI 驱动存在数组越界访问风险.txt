@@ -1,0 +1,20 @@
+#标题
+USB TypeC UCSI 驱动存在数组越界访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+通过 debugfs 接口写入特定数据时，可触发内核数组越界访问。由于 `new_cam` 变量受用户控制且最大可达 255，而 `uc->updated` 数组大小仅为 30，当输入值超过数组界限时，将导致非法内存访问，可能引发内核崩溃（Oops/Panic）或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ucsi_ccg_update_set_new_cam_cmd()` 在处理 `*cmd` 变量时，未对通过 debugfs 传入的参数进行有效性校验。`new_cam` 变量源自 `*cmd`，用户可将其设置为最大 255 的值，但该值被直接用作 `uc->updated` 数组的索引，而该数组大小仅为 UCSI_MAX_ALTMODES (30)，从而导致越界访问。
+
+#解决方案
+在函数 `ucsi_ccg_update_set_new_cam_cmd()` 中添加边界检查。在计算 `new_port` 指针前，判断 `new_cam` 是否大于等于 `uc->updated` 数组的大小（ARRAY_SIZE），若越界则直接返回，避免非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/974ad8e27c63e6b9da7430c7541f9452618d7fbb

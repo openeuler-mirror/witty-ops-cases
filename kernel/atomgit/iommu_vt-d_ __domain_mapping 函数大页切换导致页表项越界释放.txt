@@ -1,0 +1,27 @@
+#标题
+iommu/vt-d: __domain_mapping 函数大页切换导致页表项越界释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 DMA 映射时，如果 iov_pfn 范围未对齐到目标大页层级（例如 1GiB），`__domain_mapping()` 会向 `switch_to_super_page()` 传递未对齐的地址范围。这导致函数释放了超出预期的页表项（PTE）范围，造成内存破坏或内核数据结构损坏。在修复补丁中增加了对齐检查，若触发该错误条件将打印警告日志。
+
+#主要错误日志
+- 推断：`WARNING: CPU: X PID: Y at drivers/iommu/intel/iommu.c:2034 switch_to_super_page+0x.../0x...`
+- 原文片段（来自补丁添加的 WARN_ON）：
+  ```
+  if (WARN_ON(!IS_ALIGNED(start_pfn, lvl_pages) ||
+  	    !IS_ALIGNED(end_pfn + 1, lvl_pages)))
+  	return;
+  ```
+
+#问题根因
+`switch_to_super_page()` 函数假设其操作的内存范围是对齐到目标大页层级的，但 `__domain_mapping()` 在调用该函数时未对此进行校验。当遇到未对齐的映射请求时（例如 iov_pfn 范围 `[0x400000, 0x4c05ff]`），`__domain_mapping()` 直接将其传递给 `switch_to_super_page()`，导致该函数释放了比预期更多的页表项（例如一直释放到 `0x4fffff`），从而导致页表项越界释放。
+
+#解决方案
+1. 在 `__domain_mapping()` 中，调用 `switch_to_super_page()` 前，使用 `round_down` 对需要移除的页数 `nr_pages` 进行向下取整对齐，确保传递的范围在目标大页边界内。
+2. 在 `switch_to_super_page()` 入口处增加 `WARN_ON` 对齐检查，若输入参数 `start_pfn` 或 `end_pfn` 未按 `lvl_pages` 对齐，则直接返回并打印警告，防止越界操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/622ac2f4544f16856618e1c8e9f26db3a977238f

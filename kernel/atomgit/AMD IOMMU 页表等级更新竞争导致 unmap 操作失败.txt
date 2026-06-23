@@ -1,0 +1,26 @@
+#标题
+AMD IOMMU 页表等级更新竞争导致 unmap 操作失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD IOMMU 驱动处理 DMA unmap 操作时，如果此时另一个 CPU 核心正在进行页表等级扩容，可能导致 `fetch_pte` 读取到不一致的页表根指针和等级值，进而导致 `iommu_unmap` 操作失败。上层调用者可能因此触发警告或进行重试。
+
+#主要错误日志
+未知
+
+#问题根因
+AMD IOMMU 页表支持动态等级调整，在地址空间扩容时会同时更新 `pgtable->root` 和 `pgtable->mode`。
+在并发场景下：
+1. CPU 0 执行 map 操作调用 `increase_address_space()`，先更新了 `pgtable->root`（新值）。
+2. CPU 1 执行 unmap 操作调用 `fetch_pte()`，此时读取到新的 `root`，但尚未更新 `mode`（旧值）。
+3. 这种读取到“新 root + 旧 mode”的不一致状态，导致页表遍历逻辑错误，函数返回 NULL，最终引发 unmap 失败。
+
+#解决方案
+在 `amd_io_pgtable` 结构体中引入 `seqcount` 序列锁机制。
+- 在写侧（`increase_address_space` 函数中）：使用 `write_seqcount_begin` 和 `write_seqcount_end` 包裹对 `root` 和 `mode` 的更新，确保更新操作的原子性可见。
+- 在读侧（`alloc_pte` 和 `fetch_pte` 函数中）：使用 `read_seqcount_begin` 和 `read_seqcount_retry` 循环读取 `root` 和 `mode`，确保读取过程中没有发生并发更新，若发生则重试读取。从而避免读取到不一致的中间状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f14beac6aeffefd5192f11d6710dba814bf87992

@@ -1,0 +1,29 @@
+#标题
+of: of_find_node_opts_by_path() 解析 alias+path+options 模式路径失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+调用 OF 接口 `of_find_node_opts_by_path()` 查找设备节点时，如果传入的路径参数符合 `"alias-name/node-name-1/.../node-name-N:options"` 这种“别名+路径+选项”的组合模式，函数无法找到对应的设备节点。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `of_find_node_opts_by_path()` 在计算别名长度时逻辑错误。当路径中同时包含分隔符 `/` 和选项分隔符 `:` 时，代码未能正确截取别名部分。
+以路径 `"testcase-alias/phandle-tests/consumer-a:testaliasoption"` 为例：
+- 正确的别名长度应为 14（对应 "testcase-alias"）。
+- 实际计算出的长度为 39（错误地计算到了选项分隔符 `:` 的位置）。
+导致解析出的别名字符串错误，进而导致节点查找失败。
+
+#解决方案
+修改别名长度的计算逻辑：优先查找路径中 `/` 和 `:` 两个分隔符位置，取两者中先出现的位置作为别名的结束位置。
+具体代码修改：
+1. 使用 `strchrnul(path, '/')` 查找路径分隔符。
+2. 判断选项分隔符 `separator` 是否存在且位置在 `/` 之前。
+3. 若是，则将别名结束位置更新为 `separator` 的位置。
+以此确保在包含选项的情况下，能正确截取别名长度。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c5b3a141c0caa700fbf8f213befe2f8aaf5f6856

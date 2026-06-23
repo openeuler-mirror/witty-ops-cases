@@ -1,0 +1,26 @@
+#标题
+ubcore路由查询在容器环回场景下返回错误码导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在容器 loopback 环回场景下进行路由查询时，当路由数量达到上限或不存在直连物理链路时，相关接口返回 `-EINVAL` 错误码，导致上层业务无法获取正确的路由信息，路由查询功能失效。
+
+#主要错误日志
+- `ubcore_log_warn("Invalid route num.\n");`
+- `ubcore_log_err("No links to dst eid.\n");`
+- （推断）`ubcore_log_err("get topo port eid, route_num: %u.\n", num);`
+
+#问题根因
+代码逻辑判定过于严格，不适用于容器环回场景：
+1. 当遍历到的路由数量 `num` 达到 `UBCORE_MAX_ROUTE_NUM` 时，代码直接返回 `-EINVAL` 错误，实际上此时应停止遍历并返回已收集的有效路由数据。
+2. 在 `ubcore_get_route_primary_eid` 函数中，代码强制检查源节点与目的节点之间是否存在物理链路（`has_link`），若无物理链路直接返回 `-EINVAL`。但在容器环回场景下，不需要依赖物理链路即可完成路由查询，该检查导致查询失败。
+
+#解决方案
+修改路由查询逻辑以适配容器环回场景：
+1. 在 `ubcore_get_route_port_eid` 函数中，当路由数量达到上限时，修正 `route_num` 为最大值并返回成功（0），而不是返回错误码。
+2. 删除 `ubcore_get_route_primary_eid` 函数中关于物理链路存在性（`has_link`）的检查逻辑，移除相关变量与循环判定，使得在无物理链路时也能正常返回路由结果。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/80e78a4adcc463d2e091c4e8e88dc21c6b9d98e9

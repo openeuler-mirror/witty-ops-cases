@@ -1,0 +1,24 @@
+#标题
+iscsi: Fix incorrect error path labels for flashnode operations
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 iSCSI flashnode 相关操作（新建、删除、登录、登出等）时，若因指定的 host_no 找不到对应的 SCSI host 导致查找失败，内核会执行错误的错误处理流程。这表现为在 `shost` 指针为 NULL 的情况下仍尝试执行 `scsi_host_put(shost)` 操作，可能导致引用计数错误或内核崩溃。
+
+#主要错误日志
+- `iscsi_new_flashnode could not find host no %u`
+- `iscsi_del_flashnode could not find host no %u`
+- `iscsi_login_flashnode could not find host no %u`
+- `iscsi_logout_flashnode could not find host no %u`
+- `iscsi_logout_flashnode_sid could not find host no %u`
+
+#问题根因
+在 `iscsi_new_flashnode`、`iscsi_del_flashnode`、`iscsi_login_flashnode`、`iscsi_logout_flashnode` 和 `iscsi_logout_flashnode_sid` 这几个函数中，当 `scsi_host_lookup` 调用失败（返回 NULL）时，代码错误地跳转到了 `put_host` 标签。由于此时 `shost` 为 NULL，不需要执行 `scsi_host_put()` 操作，错误的跳转导致了无效的指针操作。
+
+#解决方案
+修正各函数中 host 查找失败时的跳转标签，使其跳转到对应的退出标签（如 `exit_new_fnode`、`exit_del_fnode` 等），而不是 `put_host`。同时移除了 `iscsi_new_flashnode` 函数中不再使用的 `put_host` 标签，确保错误处理路径的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/be224f0c39a54bc2a863d59d793d15bbf645c047

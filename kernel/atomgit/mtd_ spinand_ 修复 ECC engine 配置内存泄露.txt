@@ -1,0 +1,40 @@
+#标题
+mtd: spinand: 修复 ECC engine 配置内存泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统启动或 SPI NAND 设备探测过程中，kmemleak 检测到内存泄露。具体表现为 `spinand_probe` 流程中为 ECC engine 配置分配的内存对象在设备清理时未被释放。
+
+#主要错误日志
+unreferenced object 0xffffff80064f00e0 (size 8):
+  comm "swapper/0", pid 1, jiffies 4294937458
+  hex dump (first 8 bytes):
+    00 00 00 00 00 00 00 00                          ........
+  backtrace (crc 0):
+    kmemleak_alloc+0x30/0x40
+    __kmalloc_cache_noprof+0x208/0x3c0
+    spinand_ondie_ecc_init_ctx+0x114/0x200
+    nand_ecc_init_ctx+0x70/0xa8
+    nanddev_ecc_engine_init+0xec/0x27c
+    spinand_probe+0xa2c/0x1620
+    spi_mem_probe+0x130/0x21c
+    spi_probe+0xf0/0x170
+    really_probe+0x17c/0x6e8
+    __driver_probe_device+0x17c/0x21c
+    driver_probe_device+0x58/0x180
+    __device_attach_driver+0x15c/0x1f8
+    bus_for_each_drv+0xec/0x150
+    __device_attach+0x188/0x24c
+    device_initial_probe+0x10/0x20
+    bus_probe_device+0x11c/0x160
+
+#问题根因
+在 `spinand_cleanup()` 函数中，未调用 `nanddev_ecc_engine_cleanup()` 来释放 ECC engine 初始化时分配的配置内存（ECC engine conf），导致内存泄露。
+
+#解决方案
+在 `spinand_cleanup()` 函数中添加对 `nanddev_ecc_engine_cleanup(nand)` 的调用，确保在清理 NAND 设备时正确释放 ECC engine 的配置内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0d8347af90fefa674f7ad0ce02e1c8986f664f1a

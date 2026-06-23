@@ -1,0 +1,23 @@
+#标题
+ALSA USB Audio: Extigy 和 Mbox 设备潜在越界访问漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当接入恶意构造的 USB Audio 设备（如 Extigy 或 Mbox）时，设备提供的 `bNumConfigurations` 值可能超过内核预期。该值如果超过 `dev->config` 数组分配时依据的初始值，会导致内核后续在 `usb_destroy_configuration` 等函数中进行内存访问时发生越界，可能引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `snd_usb_extigy_boot_quirk`、`snd_usb_mbox2_boot_quirk` 和 `snd_usb_mbox3_boot_quirk` 函数中，代码直接调用 `usb_get_descriptor` 并将获取到的设备描述符覆盖写入 `dev->descriptor`。
+恶意设备可以提供一个比初始值更大的 `bNumConfigurations` 值。由于 `dev->config` 数组的大小是在设备枚举初期根据当时的描述符信息分配的，如果新的 `bNumConfigurations` 超过了这个已分配的大小，后续遍历或销毁配置（如 `usb_destroy_configuration`）时就会发生数组越界访问。
+
+#解决方案
+在上述三个 quirk 函数中引入中间变量 `new_device_descriptor` 来接收新获取的设备描述符。在更新内核持有的 `dev->descriptor` 之前，增加校验逻辑：检查新描述符中的 `bNumConfigurations` 是否大于原描述符中的值。
+- 如果新值过大，打印调试日志 "error too large bNumConfigurations" 并拒绝更新描述符，防止越界。
+- 如果新值合法，则通过 `memcpy` 将新描述符安全地拷贝到 `dev->descriptor` 中。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bd07596478e61e34e2d32b25807634ef9fc8d90e

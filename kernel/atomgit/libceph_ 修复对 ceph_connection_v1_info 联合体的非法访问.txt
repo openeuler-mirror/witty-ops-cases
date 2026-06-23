@@ -1,0 +1,28 @@
+#标题
+libceph: 修复对 ceph_connection_v1_info 联合体的非法访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 msgr2 协议时，内核代码非法访问了 `con->v1` 联合体成员。这导致以下现象：
+1. 在 64 位系统上，读取 `con->v1.auth_retry` 会返回 bogus（虚假/错误）值而非 0，导致错误的授权无效化并频繁获取新票据。
+2. 非法写入 `con->v1.connect_seq` 可能导致更严重的后果（如内存数据损坏），尽管发生频率较低。
+
+#主要错误日志
+未知
+
+#问题根因
+在引入 msgr2.1 协议（commit cd1a677cad99）后，`ceph_connection` 结构体中的 `v1` 和 `v2` 联合体成员共享内存空间。
+1. `con->v1.auth_retry` 与 `con->v2.out_iter` 在 64 位系统上内存重叠。
+2. `con->v1.connect_seq` 与 `con->v2.conn_bufs` 内存重叠。
+通用代码在 `con_fault_finish` 和 `clear_standby` 函数中直接读写 `con->v1` 成员，未检查当前连接是否实际使用 msgr1 协议。当 msgr2 在用时，这些访问实际上读写的是 `v2` 成员的内存位置，导致数据错误或非预期行为。
+
+#解决方案
+在访问 `con->v1` 联合体成员前，增加协议版本判断：
+1. 在 `con_fault_finish` 函数中，读取 `con->v1.auth_retry` 前检查 `!ceph_msgr2(from_msgr(con->msgr))`。
+2. 在 `clear_standby` 函数中，递增 `con->v1.connect_seq` 前检查 `!ceph_msgr2(from_msgr(con->msgr))`。
+确保仅当连接使用 msgr1 协议时才操作 v1 相关字段，避免对 v2 内存区域的非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2fc7ebf27f12c3a0c1f6a6870b51ed96f438119a

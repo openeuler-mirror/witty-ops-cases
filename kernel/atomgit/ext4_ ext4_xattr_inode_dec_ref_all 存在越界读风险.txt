@@ -1,0 +1,28 @@
+#标题
+ext4: ext4_xattr_inode_dec_ref_all 存在越界读风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统挂载包含损坏扩展属性（xattr）的 ext4 文件系统镜像时，在清理孤立 inode 的过程中，内核 KASAN 检测机制报告“use-after-free”或“越界读”错误，导致内核崩溃或产生 Call Trace 日志。具体触发路径为 `ext4_orphan_cleanup` -> `iput` -> `ext4_evict_inode` -> `ext4_xattr_delete_inode` -> `ext4_xattr_inode_dec_ref_all`。
+
+#主要错误日志
+BUG: KASAN: use-after-free in ext4_xattr_inode_dec_ref_all+0x6ff/0x790
+Read of size 4 at addr ffff88807b003000 by task syz-executor.0/15172
+CPU: 3 PID: 15172 Comm: syz-executor.0
+Call Trace:
+ ext4_xattr_inode_dec_ref_all+0x6ff/0x790 fs/ext4/xattr.c:1137
+ ext4_xattr_delete_inode+0x4c7/0xda0 fs/ext4/xattr.c:2896
+ ext4_evict_inode+0xb3b/0x1670 fs/ext4/inode.c:323
+ ext4_orphan_cleanup fs/ext4/super.c:3298 [inline]
+ ext4_fill_super+0x8c57/0xba40 fs/ext4/super.c:5300
+
+#问题根因
+问题根因是 `ext4_xattr_delete_inode()` 函数在处理 inode 内部的扩展属性时，未校验 xattr 数据的合法性。当磁盘上的 inode 扩展属性区域已损坏（如越界），代码直接访问了无效的内存地址，导致越界读取。
+
+#解决方案
+将 xattr 合法性校验逻辑提前至 inode 读取阶段。在 `ext4_iget_extra_inode()` 函数中增加 `xattr_check_inode()` 调用，确保在读取 inode 时就检测 xattr 是否有效，防止后续操作访问损坏的数据结构。同时移除 `ext4_xattr_ibody_get`、`ext4_xattr_ibody_list`、`ext4_get_inode_usage` 等其他路径中的冗余校验代码，统一验证入口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/35778dd47bce15169c8506066edfc5dc0ba7385a

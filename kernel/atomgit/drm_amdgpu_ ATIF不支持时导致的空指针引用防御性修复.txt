@@ -1,0 +1,20 @@
+#标题
+drm/amdgpu: ATIF不支持时导致的空指针引用防御性修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统运行过程中，若内核调用 `amdgpu_atif_call` 函数评估 ATIF ACPI 方法时返回 `AE_NOT_FOUND`（即 ATIF 不支持），代码逻辑未将其视为失败情况继续执行。此时 `buffer.pointer`（即 `obj`）为 NULL，后续代码直接引用该指针会导致空指针解引用，进而引发内核 panic 或 Oops。
+
+#主要错误日志
+DRM_DEBUG_DRIVER("failed to evaluate ATIF got %s\n", acpi_format_exception(status));
+
+#问题根因
+函数 `acpi_evaluate_object()` 调用失败时可能返回 `AE_NOT_FOUND`。在原有代码逻辑中，`AE_NOT_FOUND` 被特殊处理，不进入错误处理分支。这导致当 `status` 为 `AE_NOT_FOUND` 时，代码继续向下执行，但此时 `buffer.pointer`（obj）并未被赋值（保持为 NULL），后续对其访问引发了空指针解引用。静态分析工具 Coverity 检测出该问题（CID 1600951: FORWARD_NULL）。
+
+#解决方案
+修改 `drivers/gpu/drm/amd/amdgpu/amdgpu_acpi.c` 文件中的错误判断逻辑。移除对 `status != AE_NOT_FOUND` 的特殊判断，将所有 `ACPI_FAILURE(status)` 的情况统一视为失败，直接跳转到错误处理分支释放资源并退出，从而避免对 NULL 指针的解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/756c797d7200dbe8d90c253b2d280c1eebb778f3

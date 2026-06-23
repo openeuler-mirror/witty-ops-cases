@@ -1,0 +1,25 @@
+#标题
+ubase 模块内存分配 API 不适配导致内存管理功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ubase 模块在调用内存分配接口时，因使用旧版 API `ummu_fill_pages` 无法正确传递 GFP 参数，可能导致内存分配行为不符合预期（如缺乏清零操作）；同时内存释放接口 `ummu_drain_pages` 未适配对应的 `ummu_core_drain_pages` API，引发接口调用不匹配，严重时可导致驱动初始化失败或内存管理错误。
+
+#主要错误日志
+- `ubase_err(udev, "failed to fill pages in ummu, ret = %d\n", ret);`
+- `ubase_err(udev, "failed to drain pages in ummu, npage = %u, ret = %d.\n", ...)`
+
+#问题根因
+内核内存管理子系统（ummu）的 API 发生了变更：
+1. 内存分配接口由 `ummu_fill_pages` 替换为 `ummu_core_fill_pages`，新接口要求显式指定 gfp 分配参数，而旧代码未适配此改动，缺失了必要的 GFP 标志（如 `__GFP_ZERO`）。
+2. 内存释放接口由 `ummu_drain_pages` 替换为 `ummu_core_drain_pages`，旧代码仍调用已废弃或不匹配的旧接口，导致 API 调用不一致。
+
+#解决方案
+修改 `drivers/ub/ubase/ubase_mailbox.c` 文件，适配 ummu 最新的内存管理 API：
+1. 在 `ubase_create_ctx_page` 函数中，将 `ummu_fill_pages` 替换为 `ummu_core_fill_pages`，并增加 gfp 参数 `(udev->gfp | __GFP_ZERO)` 以确保内存分配正确且清零。
+2. 在 `ubase_destroy_ctx_page` 函数中，将 `ummu_drain_pages` 替换为 `ummu_core_drain_pages` 以匹配分配接口的变更。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d1cfd57813b63036e9cde834735d6c06eb3afbcf

@@ -1,0 +1,25 @@
+#标题
+rcu_read_unlock() 在 irq_exit() 中触发死循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `irq_exit()` 过程中，若 BPF 程序挂载在 `trace_tick_stop` tracepoint 上并触发 `rcu_read_unlock_special()`，系统会触发 IPI 中断导致递归调用 `irq_exit()`，进而引发死锁或系统挂起。通过在 `tick_irq_exit()` 中添加简单的 RCU 锁测试代码也可复现启动挂起现象。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `rcu_read_unlock_special()` 执行期间，如果正处于 `irq_exit()` 流程中（此时 `in_hardirq()` 返回 false），代码尝试通过 `irq_work_queue_on` 发送 IPI 给本 CPU 以请求调度器关注。
+由于 IPI 中断处理本身也会进入 `irq_exit()` 路径，导致递归调用，从而引发死循环。
+此外，`defer_qs_iw_pending` 状态管理不当：如果 IRQ work 处理程序在 RCU 读取侧临界区中间运行，可能导致状态停留在 PENDING 而无法重新排队，阻碍了延迟 QS 的上报。
+
+#解决方案
+重构 RCU 的 IRQ work 状态管理机制，将 `defer_qs_iw_pending` 从布尔类型改为整型状态标志（DEFER_QS_IDLE 和 DEFER_QS_PENDING）。
+1. 在 `rcu_preempt_deferred_qs_irqrestore()` 函数开头，如果检测到状态为 PENDING，立即将其重置为 IDLE，确保后续可以重新排队。
+2. 在 `rcu_preempt_deferred_qs_handler()` 处理程序中，若检测到当前仍处于 RCU 读取侧临界区（`rcu_preempt_depth() > 0`），将状态重置为 IDLE 以便重新触发 IRQ work。
+3. 在 `rcu_read_unlock_special()` 中，仅在状态不为 PENDING 时才进行 IRQ work 初始化和排队，避免重复或错误的 IPI 触发。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/410fe06564b2a6efa333c69d58052f96d1e242e1

@@ -1,0 +1,25 @@
+#标题
+GIC-v4 修复 VPE 竞争条件导致的功能异常问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 GIC-v4 中断控制器处理过程中，当 VPE（Virtual Processing Element）正在被销毁时，若并发执行 `set_affinity` 操作或 VMOVP 命令，可能导致内核陷入竞争条件。该问题关联 CVE-2024-50192，具体表现为在 VPE 销毁路径上错误地处理了映射计数与亲和性变更请求。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 GIC-v4 驱动对 `vmapp_count` 的初始化与检查逻辑不当：
+1. **初始化遗漏**：原代码仅在 `gic_rdists->has_rvpeid` 为真时初始化 `vmapp_count`，导致非 GICv4.1 场景下计数器未被初始化。
+2. **竞争条件**：`its_vpe_set_affinity` 函数未检查 VPE 是否正处于销毁状态（`vmapp_count` 为 0），导致在 VPE 即将消亡时仍尝试发起 VMOVP 操作，引发异常。
+3. **计数逻辑位置错误**：在 `its_build_vmapp_cmd` 中，原子计数操作的位置未覆盖非 GICv4.1 的分支，导致映射计数管理混乱。
+
+#解决方案
+1. **修正初始化逻辑**：将 `vmapp_count` 的初始化移至条件判断之外，并调整结构体定义位置，确保所有场景下该原子变量均被正确初始化为 0。
+2. **增加销毁状态检查**：在 `its_vpe_set_affinity` 入口处增加对 `vmapp_count` 的检查。若计数为 0，表明 VPE 正在销毁，此时若为 Eager Mapping 模式则返回 `-EINVAL`，若为 Lazy Mapping 模式则直接更新有效亲和性并返回，避免发起无效的 VMOVP 命令。
+3. **调整计数原子操作位置**：将 `vmapp_count` 的增减操作调整至函数 `its_build_vmapp_cmd` 的更外层或正确分支中，确保映射计数的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f622579deab158e7d361eb841bfd1758fd883f5e

@@ -1,0 +1,20 @@
+#标题
+KVM: arm64: IPIV特性迁移后导致宿主机持续打印vSGI陷阱错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在IPIV（Virtual SGI with IPIV）特性的跨平台迁移场景下，若源宿主机环境支持并开启了IPIV，且虚拟机也启用了该特性，当该虚拟机迁移至不支持IPIV的目标宿主机时，目标宿主机会持续打印报错信息 "vSGI trap! IPIV disabled!"，导致系统日志被刷屏或影响业务正常运行。
+
+#主要错误日志
+vSGI trap! IPIV disabled!
+
+#问题根因
+目标宿主机在处理虚拟机迁移（uaccess write）时，未检查当前宿主机环境是否实际支持IPIV特性，仅依据迁移传入的配置信息直接启用了虚拟机的IPIV功能。这导致在不支持IPIV的宿主机上强制开启了该特性，触发vSGI陷阱异常，从而持续打印错误日志。
+
+#解决方案
+在迁移恢复写入IPIV配置（`vgic_mmio_uaccess_write_its_iidr`）时，增加对宿主机IPIV支持能力的检查。调用 `hisi_ipiv_supported_per_vm(kvm)` 函数判断当前环境是否支持，仅当宿主机支持且迁移配置要求开启时，才将 `enable_ipiv_from_guest` 标志置为 true，防止在不支持的环境下错误开启该特性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22f1e3b38ca09cbc655a606e6404b996710841a1

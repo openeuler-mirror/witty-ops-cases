@@ -1,0 +1,20 @@
+#标题
+AF_KEY 协议 migrate 消息处理中的参数校验缺失导致内核崩溃或内存越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 PFKEY 接口发送 migrate 消息触发 IPsec 迁移时，若用户空间传入非法的地址族（family）参数（如伪造或畸形的 old_family/new_family），内核将依据该非法参数计算 sockaddr 大小。由于缺少对计算结果的有效性校验，可能导致内存分配大小异常，进而引发内核崩溃或内存越界访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `net/key/af_key.c` 的 `pfkey_send_migrate` 函数中，直接使用用户传入的 `old_family` 和 `new_family` 调用 `pfkey_sockaddr_pair_size` 计算所需内存大小，但未校验该函数返回值是否为 0（0 通常代表传入的 family 参数非法）。这导致后续根据非法大小进行内存操作，引发系统不稳定。
+
+#解决方案
+在 `pfkey_send_migrate` 函数计算内存大小的循环中，增加对 `pfkey_sockaddr_pair_size` 返回值的校验。如果返回值为 0，立即终止处理并返回 `-EINVAL` 错误，防止使用非法参数继续执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5e46bb3017f0875f2bece3f0cdea1ad3bbeeb44b

@@ -1,0 +1,23 @@
+#标题
+cpufreq: governor 初始化错误路径双重释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `cpufreq_dbs_governor_init()` 函数的初始化过程中，如果遇到错误（如 dbs_data kobject 初始化错误），内核在处理错误回滚路径时会发生双重释放，可能导致内核崩溃或内存损坏。
+
+#主要错误日志
+initialization failed (dbs_data kobject init error %d)
+
+#问题根因
+在 `cpufreq_dbs_governor_init` 的错误处理路径中，代码逻辑存在顺序错误：
+1. 先调用了 `kobject_put(&dbs_data->attr_set.kobj)`，该函数调用会触发 release 回调从而释放 `dbs_data` 结构体。
+2. 随后代码又继续调用 `gov->exit(dbs_data)`。
+这导致已经释放的 `dbs_data` 指针被再次访问并尝试进行清理操作，引发了双重释放。
+
+#解决方案
+调整错误处理路径中的函数调用顺序。将 `kobject_put()` 调用移动到 `gov->exit()` 之后，并直接跳转至 `free_policy_dbs_info` 标签处执行后续清理，避免在 `gov->exit()` 执行前释放 `dbs_data` 结构体，从而消除双重释放隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/42c753eff174fc15c0e6e336e1de20f8e5d79371

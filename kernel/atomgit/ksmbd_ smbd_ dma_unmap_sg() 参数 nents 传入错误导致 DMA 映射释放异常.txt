@@ -1,0 +1,23 @@
+#标题
+ksmbd: smbd: dma_unmap_sg() 参数 nents 传入错误导致 DMA 映射释放异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 的 RDMA 传输功能中，当发送数据缓冲区处理失败或发送完成后进行资源清理时，`dma_unmap_sg()` 函数被传入了错误的参数（使用了 `dma_map_sg()` 的返回值而非原始的 nents）。这违反了 DMA API 的使用规范，可能导致内核 DMA 映射表不一致、内存泄漏或潜在的内核崩溃。
+
+#主要错误日志
+failed to map buffer
+buffer not fitted into sges
+
+#问题根因
+根据 Linux DMA API 规范，`dma_unmap_sg()` 函数的 `nents` 参数必须与传递给 `dma_map_sg()` 函数的 `nents` 参数值相同，而不是 `dma_map_sg()` 的返回值。
+在原代码逻辑中，`get_mapped_sg_list()` 内部调用 `ib_dma_map_sg()` 时传入的 nents 是 `get_sg_list()` 返回的 `npages`，但该 `npages` 值未传出给调用者。后续调用 `ib_dma_unmap_sg()` 时，错误地使用了 `ib_dma_map_sg()` 的返回值 `sg_cnt`，导致传入的 nents 不一致。
+
+#解决方案
+修改 `get_mapped_sg_list()` 函数，增加一个输出参数 `npages`，将 `get_sg_list()` 获取到的页数（即调用 `ib_dma_map_sg()` 时使用的 nents）传出。
+在调用者 `smb_direct_post_send_data()` 中，接收该 `npages` 值，并在需要调用 `ib_dma_unmap_sg()` 时，将正确的 `npages` 传入，而非使用映射后的返回值 `sg_cnt`，从而修复 DMA 映射与解映射参数不一致的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/270a614463e1bb6246978aa90597385fa81fcb32

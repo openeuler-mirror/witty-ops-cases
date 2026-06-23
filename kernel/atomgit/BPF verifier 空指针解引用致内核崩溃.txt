@@ -1,0 +1,22 @@
+#标题
+BPF verifier 空指针解引用致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载特定 BPF 程序（freplace 类型）替换目标程序时，若目标程序不包含子程序，内核在 BPF 校验器处理 `changes_pkt_data` 属性检查时触发空指针解引用，导致系统崩溃或异常。
+
+#主要错误日志
+Extension program changes packet data, while original does not
+
+#问题根因
+在 `bpf_check_attach_target` 函数中，代码无条件访问 `aux->func[subprog]` 来检查 `changes_pkt_data` 属性。然而，对于没有子程序的主程序，`bpf_prog_aux->func` 指针为 NULL。此时直接访问会导致空指针解引用。
+
+#解决方案
+修改 `kernel/bpf/verifier.c` 中的逻辑，增加对 `aux->func` 指针的非空判断：
+- 若 `aux->func` 存在，则访问 `aux->func[subprog]->aux->changes_pkt_data`。
+- 若 `aux->func` 为 NULL，则直接访问 `aux->changes_pkt_data`（因为 `aux` 实例本身即代表主子程序）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/57a97402a5249b92d6b555f530b9b42f207ce24f

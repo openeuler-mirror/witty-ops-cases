@@ -1,0 +1,20 @@
+#标题
+sw64 ioremap 中 pci_remap_cfgspace 整数溢出故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SW64 架构下，由于定义的 `bsz` 大小为 `1<<24`，当 `bus_range` 较大时，计算 `bus_range * bsz` 的结果超出了 32 位整数的表示范围，导致发生无符号整数溢出。该溢出使得 `pci_remap_cfgspace()` 函数接收到错误的 size 参数，进而导致 PCI 配置空间映射异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `pci_ecam_create()` 函数中，变量 `bus_range` 和 `bsz` 原本被定义为 `unsigned int` 类型。SW64 架构下的 `bsz` 值为 `1<<24`，明显大于其他架构。在进行乘法运算 `bus_range * bsz` 时，结果超出了 32 位无符号整数（unsigned int）的最大值，发生了整数溢出，导致传递给 `pci_remap_cfgspace()` 的尺寸参数错误。
+
+#解决方案
+针对 SW64 架构，在调用 `pci_remap_cfgspace()` 时，显式将 `bus_range` 和 `bsz` 转换为 `unsigned long` 类型进行计算。通过类型提升，确保乘法运算在 64 位空间进行，从而避免 32 位整数溢出，保证传递正确的映射尺寸。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/26b6aa6cfb0d8575a0a911cdf8cf43ecd22a708f

@@ -1,0 +1,24 @@
+#标题
+[arm64/entry.S: 修复 Clang 集成汇编器的条件判断语法错误]
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Clang 编译 arm64 内核（特别是启用 CONFIG_ARM64_SYNC_SEI 或 CONFIG_FAST_SYSCALL 配置项）时，编译过程失败。编译器在处理 `arch/arm64/kernel/entry.S` 汇编文件时报错，无法正确解析宏中的条件判断逻辑，导致内核无法构建。
+
+#主要错误日志
+未知（Commit 信息中未提供具体的编译错误日志原文，推测为 Assembler messages: Error: junk at end of line 或 non-constant expressions in .if directive 等语法错误）。
+
+#问题根因
+汇编代码中使用了 GNU Assembler (GAS) 特有的 C 风格条件判断语法（如 `.if \label == xcall` 或 `.if \label != xcall`）。
+Clang 的集成汇编器对 `.if` 指令的处理比 GAS 严格，不支持在汇编预处理条件中直接对宏参数进行此类字符串比较或逻辑判断操作。这种语法差异导致 Clang 在编译时无法解析这些条件块，从而引发编译错误。
+
+#解决方案
+将汇编宏中的 C 风格条件判断指令替换为标准的汇编条件指令：
+1. 将 `.if \label != xcall` 修改为 `.ifnc \label, xcall`（使用 `.ifnc` 进行字符串不相等比较）。
+2. 将 `.if \label == xcall` 修改为 `.ifc \label, xcall`（使用 `.ifc` 进行字符串相等比较）。
+3. 对于复合条件 `.if \el == 1 && \ht == h && \label == error`，拆分为嵌套的标准汇编条件块：先使用 `.if \el == 1`，再嵌套 `.ifc \ht, h` 和 `.ifc \label, error`，并相应增加 `.endif` 以闭合代码块。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/886604102713a528aa4216e35910040981c26cb7

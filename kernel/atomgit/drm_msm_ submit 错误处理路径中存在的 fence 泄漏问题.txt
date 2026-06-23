@@ -1,0 +1,20 @@
+#标题
+drm/msm: submit 错误处理路径中存在的 fence 泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 drm/msm 驱动的 submit 错误处理路径中，由于未正确清理调度实体相关资源，导致 fence 对象发生内存泄漏。该问题关联安全漏洞 CVE-2025-38410。
+
+#主要错误日志
+未知
+
+#问题根因
+在提交（submit）失败的错误路径中，代码可能直接调用 unref 销毁 submit 对象，而没有调用 `drm_sched_entity_push_job()`。这导致 `msm_job_free()` 回调函数永远不会被执行。由于 `drm_sched_job_cleanup()` 负责释放调度相关的 fence 资源，且会将 `s_fence` 置为 NULL，如果缺少该步骤，会导致相关 fence 无法释放，从而引发内存泄漏。
+
+#解决方案
+在 `__msm_gem_submit_destroy` 函数中增加对 `submit->base.s_fence` 的检查。如果该指针不为空，说明 `drm_sched_job_cleanup()` 尚未被调用（即处于未执行 push_job 的错误路径），此时显式调用 `drm_sched_job_cleanup(&submit->base)` 来清理调度任务资源并释放 fence，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/46b4eb23b323e86b3f9f2b9e40e271a38bcb0195

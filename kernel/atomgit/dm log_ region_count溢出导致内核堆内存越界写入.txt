@@ -1,0 +1,32 @@
+#标题
+dm log: region_count溢出导致内核堆内存越界写入
+
+#内核版本
+OLK-6.6
+
+#问题现象
+创建具有极大长度（large ti->len）和较小region_size的mirror目标时，因region_count计算溢出，导致内核堆内存越界写入。
+具体表现为：
+1. 创建特定大容量mirror设备时触发内核崩溃。
+2. 系统日志显示 "BUG: scheduling while atomic" 以及 "Fixing recursive fault but reboot is needed!"。
+3. dmsetup status 显示同步计数异常，如 sync_count 显示为 1 而非预期的 4294967297（发生截断）。
+4. 复现命令示例：
+   dmsetup create bigzero --table '0 8589934594 zero'
+   dmsetup create mymirror --table '0 8589934594 mirror core 2 2 nosync 2 /dev/mapper/bigzero 0 /dev/mapper/bigzero 0'
+
+#主要错误日志
+BUG: scheduling while atomic: (udev-worker)/9150/0x00000000
+RIP: 0010:core_in_sync+0x14/0x30 [dm_log]
+CR2: 0000000000000008
+Fixing recursive fault but reboot is needed!
+DMWARN("region count exceeds limit of %u", UINT_MAX); // 修复补丁新增的错误日志
+
+#问题根因
+局部变量 region_count 被声明为 unsigned int（32位），但计算其值的 dm_sector_div_up() 函数返回 sector_t（64位）。当设备镜像目标的 ti->len 足够大且 region_size 较小时，计算结果超过 UINT_MAX，发生整型溢出截断。截断后的较小值被用于计算 bitset_size，导致 clean_bits、sync_bits 和 recovering_bits 内存分配过小。后续使用未截断的真实 region 索引进行位操作时，引发堆内存越界写入。
+
+#解决方案
+1. 将局部变量 region_count 的类型从 unsigned int 修改为 sector_t（64位），防止赋值时发生截断。
+2. 在计算出 region_count 后增加显式溢出检查，若其值超过 UINT_MAX（lc->region_count 的存储上限），则输出警告日志并返回 -EINVAL 错误，拒绝创建设备。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2dda73b37de3545021e00ae4fe64a938e775e78e

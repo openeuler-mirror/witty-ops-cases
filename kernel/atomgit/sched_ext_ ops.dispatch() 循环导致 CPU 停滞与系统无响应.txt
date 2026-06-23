@@ -1,0 +1,20 @@
+#标题
+sched_ext: ops.dispatch() 循环导致 CPU 停滞与系统无响应
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 BPF 调度器程序中的 `ops.dispatch()` 反复分发不符合条件的任务（ineligible tasks）时，会导致调度器的 dispatch 路径陷入死循环。这种循环会停滞 CPU，如果所有 CPU 都陷入此种状态，系统的看门狗（watchdog）或 sysrq 处理程序将无法运行，导致系统完全无响应且无法恢复。
+
+#主要错误日志
+未知
+
+#问题根因
+调度器的 dispatch 路径在 `ops.dispatch()` 分发或消费任务后，如果本地 DSQ（Dispatch Queue）仍为空，会自动重试。这种重试机制虽然是必要的（用于处理跨 CPU 迁移时丢失任务的情况）且方便了 `ops.dispatch()` 的实现，但缺乏循环次数限制。这使得 `ops.dispatch()` 有可能通过反复分发不符合条件的任务将 CPU 困在调度循环中，导致其他关键内核线程（如 watchdog）无法获得 CPU 资源。
+
+#解决方案
+在 `kernel/sched/ext.c` 的 `balance_scx()` 函数中引入循环计数器限制（最大 32 次迭代 `SCX_DSP_MAX_LOOPS`）。当循环达到最大迭代次数时，强制跳出循环并调用 `scx_bpf_kick_cpu()` 触发重新调度，从而允许调度器切换到下一个任务（通常是 idle 任务），打破停滞状态，让 watchdog 或其他系统服务有机会运行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5c49f8602c40306d0aa3a3254d91397d0dc7d5f6

@@ -1,0 +1,28 @@
+#标题
+mm/damon/sysfs: state_show 存在 Use-After-Free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DAMON sysfs 接口中，当读取 kdamond 的 state 文件时，若并发执行 `damon_sysfs_turn_damon_on`、`damon_sysfs_kdamonds_rm_dirs` 或 `damon_sysfs_kdamond_release` 操作，可能触发内核 Use-After-Free（UAF）漏洞。具体表现为访问已释放的 `damon_ctx` 结构体，可能导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`state_show()` 函数在没有持有 `damon_sysfs_lock` 锁的情况下直接读取并解引用 `kdamond->damon_ctx`。这导致了与其他持有该锁并释放或修改 context 的函数（如 `damon_sysfs_turn_damon_on`、`damon_sysfs_kdamonds_rm_dirs` 和 `damon_sysfs_kdamond_release`）之间存在竞态条件（Race Condition）。
+具体的竞态场景如下：
+CPU 0 (state_show)                     CPU 1 (damon_sysfs_turn_damon_on)
+ctx = kdamond->damon_ctx;              mutex_lock(&damon_sysfs_lock);
+                                        damon_destroy_ctx(kdamond->damon_ctx);
+                                        kdamond->damon_ctx = NULL;
+                                        mutex_unlock(&damon_sysfs_lock);
+damon_is_running(ctx); /* ctx 已被释放 */
+mutex_lock(&ctx->kdamond_lock); /* 触发 UAF */
+
+#解决方案
+在 `state_show()` 函数中访问 `kdamond->damon_ctx` 之前，引入 `damon_sysfs_lock` 互斥锁保护。修改逻辑为：先尝试获取锁，获取成功后再读取 context 指针并进行状态判断，最后释放锁。此举参照了同文件中 `pid_show()` 的锁定方式，确保在读取 context 期间不会被并发释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ea00344782f39af8781dc1627aba1e27e84f9a73

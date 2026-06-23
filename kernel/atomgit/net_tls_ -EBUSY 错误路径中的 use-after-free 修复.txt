@@ -1,0 +1,25 @@
+#标题
+net/tls: -EBUSY 错误路径中的 use-after-free 修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TLS 加密过程中，当加密请求返回 -EBUSY 并进行异步处理时，若异步等待返回错误，会导致 use-after-free 漏洞。具体表现为内核数据结构 `encrypt_pending` 计数被破坏（double-decrement），导致后续的 `tls_encrypt_async_wait()` 错误地跳过等待逻辑。此时若随后调用 `sendmsg`，可能在 `cryptd` 回调仍在挂起状态时通过 `bpf_exec_tx_verdict()` 释放 `tls_rec` 记录，从而在回调触发时访问已释放内存引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tls_do_encryption()` 函数中，对 `crypto_aead_encrypt()` 返回 `-EBUSY` 的处理存在逻辑缺陷。
+1. 当返回 `-EBUSY` 时，请求被加入 cryptd backlog，完成后会调用回调函数 `tls_encrypt_done()`。
+2. 回调函数 `tls_encrypt_done()` 无条件地恢复 scatterlist 条目并递减 `ctx->encrypt_pending`。
+3. 如果 `tls_encrypt_async_wait()` 返回错误，原有的同步错误处理路径会再次执行清理操作，导致 `encrypt_pending` 被二次递减，scatterlist 条目被二次恢复。
+这种双重清理破坏了 `encrypt_pending` 的哨兵值（初始化为 1），致使后续逻辑无法正确等待异步回调完成，进而引发 use-after-free。
+
+#解决方案
+在 `-EBUSY` 处理路径中，当 `tls_encrypt_async_wait()` 返回错误时，跳过同步清理代码。因为异步回调 `tls_encrypt_done()` 已经处理了 `encrypt_pending` 的递减和 sge 的恢复。
+具体代码修改为：在 `rc = tls_encrypt_async_wait(ctx)` 后，判断返回值是否不为 `-EINPROGRESS`（即发生了错误），若是，则直接将记录从链表中删除并返回错误，不再执行后续的同步清理逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/221c2464c4468651a2dcf330d4e5051d6466806e

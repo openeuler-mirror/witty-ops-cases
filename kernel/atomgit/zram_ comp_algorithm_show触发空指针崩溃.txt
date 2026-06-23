@@ -1,0 +1,20 @@
+#标题
+zram: comp_algorithm_show触发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在注册 zram 设备后、磁盘初始化完成前，如果立即查询该设备的压缩算法信息（如读取 `/sys/block/zram<id>/comp_algorithm`），将引发空指针解引用导致内核崩溃（panic/oops）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `zram_add` 函数中，`comp_algorithm_set` 的调用位置过于靠后。代码原先将设置压缩算法的操作置于 `device_add_disk` 之后，但此时设备已经暴露给用户空间。若在 `comp_algorithm_set` 执行前，用户空间并发访问 `comp_algorithm_show` 接口，会导致该接口访问未初始化的压缩算法指针，从而引发空指针解引用。
+
+#解决方案
+将 `comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor)` 函数调用上移至 `device_add_disk` 之前执行。确保在设备注册并对用户空间可见之前，压缩算法相关的字段已正确初始化，从而避免并发访问引发的空指针问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e53a23ef21aa9859c864e7c4bb6ecde5269f54b6

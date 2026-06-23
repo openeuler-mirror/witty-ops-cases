@@ -1,0 +1,29 @@
+#标题
+ksmbd: compound request 中 share_conf 的 UAF（Use-After-Free）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SMB 复合请求时，若首个命令为 `SMB2_TREE_DISCONNECT`，后续命令（如 `SMB2_WRITE`）在复用 `work->tcon` 时未校验连接状态，导致访问已被释放的 `share_conf` 内存，触发 KASAN 检测到的 slab-use-after-free 错误，可能导致内核崩溃或内存破坏。
+
+#主要错误日志
+```
+[    4.145059] BUG: KASAN: slab-use-after-free in smb2_write+0xc74/0xe70
+[    4.145415] Read of size 4 at addr ffff88810430c194 by task kworker/1:1/44
+...
+[    4.152088]  __ksmbd_tree_conn_disconnect+0xc8/0x190
+[    4.152211]  handle_ksmbd_work+0x40f/0x1080
+...
+[    4.153226] The buggy address is located 20 bytes inside of
+[    4.153226]  freed 96-byte region [ffff88810430c180, ffff88810430c1e0)
+```
+
+#问题根因
+在 `smb2_get_ksmbd_tcon()` 函数中处理复合请求时，代码直接复用 `work->tcon` 而没有校验 `tcon->t_state` 状态。初始的查找路径通过 `ksmbd_tree_conn_lookup()` 检查了 `t_state == TREE_CONNECTED`，但复合请求的复用路径绕过了此检查。如果复合请求中前一命令（如 `SMB2_TREE_DISCONNECT`）已将 `t_state` 设为 `TREE_DISCONNECTED` 并通过 `ksmbd_share_config_put()` 释放了 `share_conf`，后续命令再通过 `work->tcon->share_conf` 访问该内存时即发生 UAF。
+
+#解决方案
+在 `smb2_get_ksmbd_tcon()` 函数的复合请求处理路径中增加 `t_state` 状态校验。在复用 `work->tcon` 前，判断 `work->tcon->t_state` 是否等于 `TREE_CONNECTED`，若状态不对则直接返回 `-ENOENT`，从而避免访问已断开连接并释放的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c1cac1db78e6d10a6d872eef86f35571065070a

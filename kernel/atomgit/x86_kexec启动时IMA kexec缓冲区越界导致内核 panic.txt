@@ -1,0 +1,22 @@
+#标题
+x86/kexec启动时IMA kexec缓冲区越界导致内核 panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 kexec 启动第二阶段内核时，若命令行参数限制了内存大小（如使用 "mem=<size>"），且上一阶段内核传递的 IMA measurement list 所在的物理地址范围超出了当前内核可用的 RAM 边界，则会触发内核 panic。此时 IMA 远程证明（attestation）也会因测量列表丢失而失败。
+
+#主要错误日志
+BUG: unable to handle page fault for address: ffff97793ff47000
+RIP: ima_restore_measurement_list+0xdc/0x45a
+#PF: error_code(0x0000) – not-present page
+
+#问题根因
+当第二阶段内核通过 kexec 引导且使用了限制内存的命令行参数（如 mem=<size>）时，上一阶段内核遗留的 IMA 测量列表缓冲区可能位于被截断的物理内存区域之外。代码在获取该缓冲区时未进行物理内存边界有效性校验，直接对非法物理地址进行映射访问，导致缺页错误。
+
+#解决方案
+在 `ima_get_kexec_buffer` 函数中增加对 IMA 缓冲区物理地址范围的健全性检查。调用 `ima_validate_range` 接口（利用 `page_is_ram` 校验）确保缓冲区完全位于当前内核可用的物理内存范围内，若校验失败则返回错误，避免访问非法内存地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fe9d804b67331ff9549a1cd56959c3632cfd329b

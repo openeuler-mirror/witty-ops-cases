@@ -1,0 +1,26 @@
+#标题
+TCP极端内存压力场景下导致连接死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 iperf3 配合 "pasta" 协议拼接器进行测试时，当系统处于极端内存压力下，TCP 连接发生死锁。
+服务端因内存不足丢弃接收到的数据包并发送零窗口通告，但在内存恢复后，服务端未能再次通告非零窗口。对端认为接收窗口仍为零，停止发送数据，导致连接挂起，数据传输中断。
+
+#主要错误日志
+[5201<->39222]: DROPPING skb [265600160..265665640], reason: SKB_DROP_REASON_PROTO_MEM
+[5201<->39222]: ADVERTISING WIN 0, ACK_SEQ: 265600160
+[5201<->39222]: NOT calling tcp_send_ack()
+[5201<->39222]: tcp_select_window(->)
+[5201<->39222]: (inet_csk(sk)->icsk_ack.pending & ICSK_ACK_NOMEM) ? --> TRUE
+[5201<->39222]: returning 0
+
+#问题根因
+在内存压力极端的情况下，TCP 套接字虽然会临时通告零窗口，但未将该状态（`tp->rcv_wnd = 0`）正确存储到套接字数据结构中。这导致在 `__tcp_cleanup_rbuf()` 函数计算新窗口时，因当前窗口值（`win_now`）与新窗口值（`new_win`）差异过小，无法触发窗口更新或 ACK 发送。由于对端仍认为窗口大小为零，不再发送数据，从而导致双方陷入死锁状态。
+
+#解决方案
+修改 `tcp_select_window` 函数，在因内存不足（`ICSK_ACK_NOMEM`）返回零窗口时，同步更新套接字状态：设置 `tp->rcv_wnd = 0`，将 `tp->rcv_wup` 更新为 `tp->rcv_nxt`，并重置 `tp->pred_flags` 为 0。这确保了零窗口状态被正确记录，使得后续内存恢复后能正确计算并通告新的窗口大小，打破死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4e0e1449405105aabde14f12c3e811c83b5fed55

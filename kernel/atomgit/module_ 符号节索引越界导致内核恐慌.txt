@@ -1,0 +1,20 @@
+#标题
+module: 符号节索引越界导致内核恐慌
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载内核模块时，若模块中某个符号的 `st_shndx`（节索引）值超出模块节头表的有效范围，内核在处理符号简化（simplify_symbols）阶段会访问无效内存地址，从而触发内核恐慌。
+
+#主要错误日志
+[推断] module_name: Symbol symbol_name has an invalid section index xxx (max yyy)
+
+#问题根因
+内核模块加载器在 `simplify_symbols` 函数处理默认类型符号时，未对 `sym[i].st_shndx` 进行越界检查。当该索引值大于或等于节头数量（`info->hdr->e_shnum`）时，后续代码依据该索引访问相关数据结构会导致越界访问，进而引发内核恐慌。
+
+#解决方案
+在 `kernel/module/main.c` 的 `simplify_symbols` 函数 `default` 分支开头增加边界检查逻辑。若检测到 `sym[i].st_shndx >= info->hdr->e_shnum`，则打印错误日志并返回 `-ENOEXEC` 错误码，终止模块加载流程以防止系统崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5321e69666f7f8320c52d1d510c17688d5eed105

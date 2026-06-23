@@ -1,0 +1,20 @@
+#标题
+of: address: 资源地址边界溢出导致设备树资源解析错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 32 位非 PAE（Physical Address Extension）内核上运行为 PAE 内核生成的设备树（DT）时，内核在解析设备树地址资源时发生静默截断。具体表现为 `struct resource` 中的 `start` 和 `end` 成员数值错误，可能导致设备地址映射错误或功能异常。该问题常见于使用 arm defconfig 配置并在 `qemu-system-arm -M virt` 环境下运行的场景。
+
+#主要错误日志
+未知
+
+#问题根因
+结构体 `resource` 的成员 `start` 和 `end` 类型为 `resource_size_t`，在 32 位非 PAE 内核中宽度为 32 位。然而，从设备树（OF）读取的地址值始终为 64 位宽。当设备树中定义的物理地址超出 32 位范围（例如 DT 创建于 PAE 使能环境，而当前运行内核为非 PAE）时，直接赋值会导致数据溢出截断，原有的代码逻辑未对这种溢出情况进行检测和报错。
+
+#解决方案
+在 `drivers/of/address.c` 的 `__of_address_to_resource` 函数中引入 `linux/overflow.h` 接口。在将 64 位地址 `taddr` 赋值给 `r->start` 以及计算 `r->end` 之前，使用 `overflows_type()` 宏进行检测。如果检测到数值超出目标类型的表示范围，函数直接返回 `-EOVERFLOW` 错误码，从而避免静默截断，明确报告资源边界溢出错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/24c755ffa065e609a758f5a40aa964f8178934b8

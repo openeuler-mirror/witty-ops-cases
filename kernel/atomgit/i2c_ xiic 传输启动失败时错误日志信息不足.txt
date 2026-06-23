@@ -1,0 +1,23 @@
+#标题
+i2c: xiic 传输启动失败时错误日志信息不足
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 I2C 控制器处于忙碌状态（EBUSY）导致 `xiic_start_xfer` 函数启动传输失败时，内核日志仅打印一条含义模糊的通用错误信息 "Error xiic_start_xfer"，无法有效区分是总线忙、FIFO 清空超时还是时钟设置错误导致的失败，增加了故障定位难度。
+
+#主要错误日志
+- "Error xiic_start_xfer"（修复前模糊日志）
+- "cannot start a transfer while busy"（修复后新增日志）
+- "Failed to clear rx fifo"（关联的其他错误场景日志）
+
+#问题根因
+`xiic_start_xfer` 函数在处理不同的错误返回值（EBUSY、ETIMEDOUT、EINVAL）时，日志打印策略不一致。EBUSY 场景（总线忙或仍有消息在处理）发生时未打印具体的错误原因，直接跳转至退出流程，随后仅由上层调用者打印了一条通用的 "Error xiic_start_xfer"，导致关键错误信息丢失。
+
+#解决方案
+1. 在 `xiic_start_xfer` 函数中检测到 busy 状态时，新增 `dev_err` 打印明确的错误信息 "cannot start a transfer while busy"。
+2. 移除上层 `xiic_xfer` 函数中对 `xiic_start_xfer` 返回值的通用错误打印，避免打印无实质意义的日志，让错误信息在具体失败点更具针对性地输出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0db20382dd459661f0decc3b28eab8b6234fcd63

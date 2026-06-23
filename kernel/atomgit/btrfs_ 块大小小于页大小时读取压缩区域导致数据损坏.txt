@@ -1,0 +1,23 @@
+#标题
+btrfs: 块大小小于页大小时读取压缩区域导致数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 64K 页大小（如 aarch64 配置 64K 页大小）且 btrfs 块大小为 4K 的环境下，执行压缩写、reflink（ reflink 源与目标范围有重叠）后再写 入 的操作，读取 文件时会出现数据损坏。
+具体表现为 文件 中预期应充满 `0xff` 的区域出现了错误的 `0x00` 数据块。例如在测试用例中，`od` 命令显示 [32K, 60K) 范围内的数据错误地显示为全零。
+
+#主要错误日志
+未知
+
+#问题根因
+在 v5.15 内核引入 bs < ps（块大小小于页大小）支持后，`btrfs_read_folio()` 开始能够一次性读取多个块，但其调用 `btrfs_do_readpage()` 时未传递 `prev_em_start` 指针（传值为 NULL）。
+原有的压缩读合并检查逻辑依赖 `prev_em_start` 指针来判断是否需要强制提交 bio，防止不合逻辑的合并。由于该指针缺失，当同一个 folio 内包含指向同一压缩数据但偏移量不同的 extent map 时，检查逻辑失效，导致错误的 bio 合并。最终解压缩程序只填充了部分数据（如前 32K），剩余部分未被填充（保持为零），导致数据损坏。
+
+#解决方案
+修改 `btrfs_do_readpage()` 函数，不再依赖传入的 `prev_em_start` 指针参数进行判断。在 `btrfs_bio_ctrl` 结构体中新增成员 `last_em_start`，用于记录上一次读操作使用的 extent map 起始偏移量。
+将压缩 extent 的强制 bio 提交检查逻辑修改为检查 `bio_ctrl->last_em_start`，确保只有属于同一个 extent map 的读请求才会被合并，从而修复了在 bs < ps 场景下的数据损坏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f1f76a4373f43025b2629aadba96e4fef28161ca

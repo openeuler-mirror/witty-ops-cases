@@ -1,0 +1,31 @@
+#标题
+riscv: kgdb 调试寄存器赋值错误导致调试数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 KGDB 对 RISC-V 架构内核进行调试时，调试器读取的寄存器值与实际硬件寄存器值不一致。具体表现为：
+1. 查看 S1 寄存器时，实际显示的是 A1 寄存器的值。
+2. 查看 S9 寄存器时，实际显示的是 S10 寄存器的值。
+3. 查看 S10 寄存器时，实际显示的是 S11 寄存器的值。
+4. S11 寄存器的值无法被正确读取。
+
+#主要错误日志
+未知
+
+#问题根因
+RISC-V KGDB 实现代码中存在多处赋值错误：
+1. `dbg_reg_def[]` 数组中，S1 寄存器的定义错误地使用了 A1 寄存器在 `struct pt_regs` 中的偏移量，导致读取位置错误。
+2. `sleeping_thread_to_gdb_regs()` 函数中，在将进程上下文中的 S 系列寄存器复制到 GDB 寄存器数组时，数组下标与数据源映射错误：
+   - `gdb_regs[DBG_REG_S9_OFF]` 错误地赋值为 `task->thread.s[10]`（应为 `s[9]`）；
+   - `gdb_regs[DBG_REG_S10_OFF]` 错误地赋值为 `task->thread.s[11]`（应为 `s[10]`）；
+   - 缺少对 `gdb_regs[DBG_REG_S11_OFF]` 的赋值（应赋值为 `task->thread.s[11]`）。
+
+#解决方案
+修改 `arch/riscv/kernel/kgdb.c` 文件，修正寄存器偏移量定义与赋值逻辑：
+1. 将 `dbg_reg_def[]` 数组中 S1 寄存器的偏移量修正为 `offsetof(struct pt_regs, s1)`。
+2. 在 `sleeping_thread_to_gdb_regs()` 函数中，按正确的顺序和索引进行赋值：S9 对应 `task->thread.s[9]`，S10 对应 `task->thread.s[10]`，并新增 S11 对应 `task->thread.s[11]` 的赋值操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/73c8b38cd9bd86aa6994447a95f35b2c897262cc

@@ -1,0 +1,33 @@
+#标题
+bnxt 驱动卸载 XDP 后未更新 features 导致 NULL pointer dereference
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 功能异常：加载 XDP 程序后再卸载（`xdp off`），HW-GRO 功能未能自动恢复，显示状态为 `off [requested on]`。
+2. 内核崩溃：在卸载 XDP 后调整网卡队列数（如 `ethtool -L`）时触发内核空指针崩溃。
+3. 崩溃调用栈：
+   ```
+   BUG: kernel NULL pointer dereference, address: 0000000000000168
+   RIP: 0010:__bnxt_hwrm_vnic_set_rss+0x13a/0x1a0
+    bnxt_hwrm_vnic_rss_cfg_p5+0x47/0x180
+    __bnxt_setup_vnic_p5+0x58/0x110
+    bnxt_init_nic+0xb72/0xf50
+    __bnxt_open_nic+0x40d/0xab0
+    bnxt_open_nic+0x2b/0x60
+    ethtool_set_channels+0x18c/0x1d0
+   ```
+
+#主要错误日志
+- `BUG: kernel NULL pointer dereference, address: 0000000000000168`
+
+#问题根因
+驱动在清除 XDP（`bnxt_set_rx_skb_mode(bp, false)`）时，未同步调用 `netdev_update_features()` 来更新硬件特性（如 HW-GRO）。这导致 GRO 的重新启用处于“挂起”状态，内部资源未实际分配。
+随后在执行其他重配置操作（如修改通道数 `ethtool -L`）时，因有效 ring 数量计算差异（HW-GRO 使 ring 数量翻倍，与设置值抵消），导致驱动跳过了 RSS 映射表的更新。此时驱动尝试访问已被释放或未分配的 ring 资源，引发空指针引用崩溃。
+
+#解决方案
+修改 `bnxt_set_rx_skb_mode` 函数逻辑，将 `netdev_update_features()` 调用移至该函数内部统一处理。确保在 XDP 关闭（`page_mode` 为 false）时，驱动能正确更新 features 并处理 LRO/GRO 相关的标志位恢复，避免设备状态不一致导致的崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/214db665886174e1908f5f99ce30fec7b3c93696

@@ -1,0 +1,20 @@
+#标题
+cpufreq：切换调速器失败回滚时未正确退出旧调速器
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 cpufreq_set_policy() 流程中，若新调速器启动失败且回滚到旧调速器（old_gov）时，如果旧调速器的启动（cpufreq_start_governor）也失败，系统未正确清理该调速器状态。此时旧调速器已被初始化但未启动成功，却未被 exit，且 policy->governor 指针可能指向异常状态，导致 cpufreq 子系统状态不一致，可能引发后续操作异常或资源泄漏。
+
+#主要错误日志
+pr_debug("starting governor %s failed\n", policy->governor->name);
+
+#问题根因
+在新调速器启动失败后的回滚路径中，代码尝试重新启动旧调速器。原逻辑仅处理了 `cpufreq_init_governor` 失败的情况，遗漏了对 `cpufreq_start_governor` 失败的处理。当旧调速器初始化成功但启动失败时，代码直接返回，未调用 `cpufreq_exit_governor` 进行清理，也未将 `policy->governor` 置空，导致资源未释放且策略状态错误。
+
+#解决方案
+在回滚启动旧调速器的逻辑中，增加对 `cpufreq_start_governor` 返回值的判断。若启动失败，立即调用 `cpufreq_exit_governor` 退出该调速器，并将 `policy->governor` 设置为 NULL，确保状态正确清理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0233cbaed3a2dcc458bb46b5bc499b1906bf31e9

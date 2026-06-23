@@ -1,0 +1,33 @@
+#标题
+unic驱动修改已配置MAC地址时is_pfc标志位失效及UMV表溢出问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在修改已配置的单播MAC地址时，is_pfc优先级标志位无法生效，导致PFC（基于优先级的流量控制）功能针对该MAC地址行为异常。
+2. 在MAC地址列表满的情况下，新修改的MAC地址条目无法同步到硬件UMV表，导致MAC地址配置失败或丢包。
+3. 日志中 `__ubase_event_register` 与 `__ubase_event_unregister` 接口的错误打印信息过于相似，难以区分是注册还是注销操作出错，增加了故障定位难度。
+
+#主要错误日志
+- register unsupported drv_type(%u).
+- register unsupported event type(%u).
+- unregister unsupported drv_type(%u).
+- unregister unsupported event type(%u).
+- event type wrong, event_type = %u.
+- rate limited log: aeq_event_type_exceed_max_cnt = %llu.
+- using random MAC address %s.
+
+#问题根因
+1. **is_pfc标志失效**：在 `unic_cfg_mac_address` 接口中，当修改一个已存在的MAC地址时，虽然代码更新了节点的 `is_pfc` 标志，但由于该节点状态可能非 `TO_ADD`，导致该标志无法通过周期性任务的命令队列下发给硬件，从而未生效。
+2. **UMV表同步失败**：原代码使用 `list_add_tail` 将MAC条目加入链表尾部，当链表满时，新修改的条目在遍历同步时可能因溢出而被忽略，无法写入硬件UMV表。
+3. **日志辨识度低**：`__ubase_event_register` 和 `__ubase_event_unregister` 函数中的错误日志打印格式完全一致（均打印 "unsupported drv_type" 或 "unsupported event type"），缺少 "register" 或 "unregister" 关键字区分。
+
+#解决方案
+1. **修复is_pfc同步**：在修改已配置MAC地址的场景下（节点已存在且状态非 `TO_ADD`），主动调用 `unic_del_mac_addr_common` 下发删除命令，随后将节点状态重置为 `TO_ADD`，确保后续流程能将带有正确 `is_pfc` 标志的配置同步给硬件。
+2. **优化链表操作**：将 `list_add_tail` 修改为 `list_add`（头插法），确保每次修改或新增的MAC条目都位于链表头部，在硬件UMV表空间受限时优先同步，防止溢出导致的同步失败。
+3. **区分日志打印**：修改 `__ubase_event_register` 和 `__ubase_event_unregister` 中的错误日志，分别增加 "register" 和 "unregister" 前缀，明确操作上下文。
+4. **日志与调试优化**：移除冗余的调试日志，增加 trace 点记录 misc event cause，并对异常事件类型打印进行限流处理，避免日志刷屏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7d4cc817f0d13ee593139161484742153daf302d

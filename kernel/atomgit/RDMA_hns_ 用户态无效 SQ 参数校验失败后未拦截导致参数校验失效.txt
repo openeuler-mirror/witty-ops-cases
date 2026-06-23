@@ -1,0 +1,20 @@
+#标题
+RDMA/hns: 用户态无效 SQ 参数校验失败后未拦截导致参数校验失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户态传递无效的 SQ（Send Queue）参数时，内核虽然在校验函数中检测到了错误，但未能正确拦截该错误请求。这导致校验失败的无效参数实际上被内核接受并继续执行后续流程，可能导致 RDMA QP（Queue Pair）创建或配置异常。
+
+#主要错误日志
+failed to set user SQ size, ret = %d.
+
+#问题根因
+在 `set_qp_param` 函数中调用 `set_user_sq_size()` 对用户态 SQ 参数进行校验时，如果校验失败（返回非零值），代码仅打印了错误日志 `ibdev_err`，但未紧接着执行 `return` 操作。程序继续向下运行导致 `ret` 变量被后续代码覆写，从而丢失了错误状态码，使得无效参数未被拦截。
+
+#解决方案
+在 `set_user_sq_size()` 校验失败的分支中，打印错误日志后立即添加 `return ret` 语句，确保检测到无效参数时函数立即退出并向上层返回错误码。同时，调整 `default_congest_type()` 的调用位置以保持代码风格统一。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/403f2fb17868c06d688baffeaea2f9d4eeebf281

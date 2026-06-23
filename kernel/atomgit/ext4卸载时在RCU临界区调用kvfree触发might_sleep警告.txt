@@ -1,0 +1,38 @@
+#标题
+ext4卸载时在RCU临界区调用kvfree触发might_sleep警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载ext4文件系统或初始化失败时，内核触发同步RCU用法警告（suspicious RCU usage）并在无效上下文中调用睡眠函数，导致调用栈打印WARNING信息。具体场景发生在文件系统初始化失败路径或卸载路径中。
+
+#主要错误日志
+```
+EXT4-fs (vdb): unmounting filesystem cd983e5b-3c83-4f5a-a136-17b00eb9d018.
+
+WARNING: suspicious RCU usage
+./include/linux/rcupdate.h:409 Illegal context switch in RCU read-side critical section!
+other info that might help us debug this:
+rcu_scheduler_active = 2, debug_locks = 1
+Call Trace:
+...
+__might_sleep+0x108/0x160
+vfree+0x58/0x910
+kvfree+0x23/0x40
+ext4_group_desc_free+0x111/0x270
+...
+
+BUG: sleeping function called from invalid context at mm/vmalloc.c:3441
+in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 556, name: umount
+preempt_count: 1, expected: 0
+```
+
+#问题根因
+在ext4_group_desc_free、ext4_flex_groups_free以及ext4_mb_release等释放资源的函数中，代码使用了rcu_read_lock/unlock()进入RCU读临界区，并在临界区内调用了kvfree()。由于kvfree()可能调用vfree()，而vfree()内部包含might_sleep()检查，这在RCU读临界区是非法的，因此触发了“Illegal context switch in RCU read-side critical section”和“sleeping function called from invalid context”的警告。
+
+#解决方案
+移除相关释放函数（ext4_group_desc_free、ext4_flex_groups_free、ext4_mb_release、ext4_mb_init_backend）中包裹kvfree调用的rcu_read_lock/unlock()代码，并将rcu_dereference()替换为rcu_access_pointer()。这种修改是安全的，因为这些场景主要出现在初始化失败或卸载路径中，此时不存在并行的资源访问竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9bed5dbc1540b6e476c1ae9ed83dd990fd9fa618

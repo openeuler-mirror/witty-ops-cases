@@ -1,0 +1,20 @@
+#标题
+fgraph: 多次注册失败时的错误处理逻辑缺陷导致 PM notifier 意外注销
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ftrace graph 已成功注册的情况下，再次调用 register_ftrace_graph() 进行注册时若发生失败，错误处理逻辑会错误地注销 PM notifier。由于此时仍有前序的 ftrace graph 处于活跃状态，PM notifier 的意外注销会导致内核状态不一致，可能引发后续电源管理相关功能异常或内核警告。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的修复补丁中，为了处理 register_ftrace_graph() 失败的场景，代码添加了 unregister_pm_notifier() 调用。但是该调用是无条件执行的。由于 PM notifier 仅在首次成功注册 ftrace graph 时被注册，如果首次注册成功，后续的注册失败时，代码仍会注销 PM notifier，此时系统中仍有活跃的 fgraph 注册，导致了 notifier 的生命周期管理错误。
+
+#解决方案
+修改 register_ftrace_graph() 的错误处理逻辑，在注销 PM notifier 前增加判断条件。仅当 ftrace_graph_active 计数器减为 0（即没有任何活跃的 fgraph 注册）时，才执行 unregister_pm_notifier() 操作。通过统一使用 goto 语句跳转到统一的错误处理出口（out_err），确保在 ret 不为 0 时正确处理计数和 notifier 的注销。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dfa6f4d244d30c1bcfe44c109f523e8dc303ef73

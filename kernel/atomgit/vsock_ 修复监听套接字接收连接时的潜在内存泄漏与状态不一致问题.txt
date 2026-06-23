@@ -1,0 +1,20 @@
+#标题
+vsock: 修复监听套接字接收连接时的潜在内存泄漏与状态不一致问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 vsock 监听套接字接收新连接过程中，如果 `virtio_transport_recv_listen` 函数在调用 `sk_acceptq_added(sk)` 之后、连接完全建立之前遇到错误（如 `virtio_transport_space_update` 失败或后续逻辑出错），会导致连接请求被丢弃或清理流程执行，但监听套接字的接受队列计数已被增加。这导致队列计数与实际排队连接数不一致，可能引发内存泄漏（child sock 未被正确计数释放）或监听服务异常（队列长度限制计算错误）。
+
+#主要错误日志
+未知
+
+#问题根因
+`sk_acceptq_added(sk)` 函数调用位置过早。原代码在获取子套接字后立即增加监听套接字的接受队列计数，但此时连接尚未完全建立。若后续步骤（如 `lock_sock` 或 `virtio_transport_space_update` 等）失败并返回错误，函数退出时没有对应的 `sk_acceptq_removed` 操作来抵消之前的计数增加，从而导致接受队列计数溢出/不准确。
+
+#解决方案
+将 `sk_acceptq_added(sk)` 的调用移至连接处理流程的关键错误检查点之后、确保连接即将成功建立之前。确保只有当连接确认无误即将放入接受队列时，才增加队列计数，从而避免因中途出错导致的计数不一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e8465f0a458dcbdf40f485e45802f76c4a6b6a9e

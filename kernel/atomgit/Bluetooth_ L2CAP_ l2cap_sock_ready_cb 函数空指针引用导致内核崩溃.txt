@@ -1,0 +1,28 @@
+#标题
+Bluetooth: L2CAP: l2cap_sock_ready_cb 函数空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在蓝牙 L2CAP 连接处理过程中，触发 `l2cap_info_timeout` 工作队列时，内核发生空指针引用。KASAN 检测到无效内存访问，导致内核恐慌，系统崩溃。
+
+#主要错误日志
+KASAN: null-ptr-deref in range [0x0000000000000260-0x0000000000000267]
+RIP: 0010:kasan_byte_accessible+0x12/0x30
+Call Trace:
+ l2cap_sock_ready_cb+0x46/0x160
+ l2cap_conn_start+0x779/0xff0
+ l2cap_info_timeout+0x68/0xa0
+ process_scheduled_works+0xb6e/0x18c0
+ worker_thread+0xa53/0xfc0
+Kernel panic - not syncing: Fatal exception
+
+#问题根因
+在函数 `l2cap_sock_ready_cb` 中，变量 `sk` 直接从 `chan->data` 赋值而来，但在使用 `sk` 指针（调用 `lock_sock(sk)`）之前，代码未检查该指针是否为空。如果 `chan->data` 为 NULL，后续对其成员的访问将触发空指针引用导致内核崩溃。
+
+#解决方案
+在 `l2cap_sock_ready_cb` 函数中，使用 `sk` 指针前增加 `if (!sk) return;` 判断。如果指针为空则直接返回，避免对空指针进行解引用操作，从而防止内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/83a803a26fda6933f812ec8eae9f28e14424191f

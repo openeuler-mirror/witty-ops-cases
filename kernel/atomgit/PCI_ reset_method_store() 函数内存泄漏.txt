@@ -1,0 +1,20 @@
+#标题
+PCI: reset_method_store() 函数内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在向 PCI 设备的 `reset_method` sysfs 节点写入数据时，内核发生内存泄漏。若通过工具（如 kmemleak）检测，可观测到通过 `kstrndup()` 分配的内存块在操作结束后未被释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `reset_method_store()` 函数中，使用 `kstrndup()` 分配内存并赋值给局部指针变量 `options`。随后代码使用 `strsep(&options, " ")` 循环解析字符串，由于 `strsep()` 会修改传入的第一个参数指针，当字符串中没有剩余空格或解析完毕时，`options` 指针会被置为 NULL。这导致原本指向 `kstrndup()` 分配内存的指针丢失，后续的 `kfree(options)` 释放操作无效，从而造成内存泄漏。
+
+#解决方案
+引入一个新的临时指针变量 `tmp_options` 用于 `strsep()` 的迭代解析，保留原始指针变量 `options` 不变。修改后，`strsep()` 操作修改的是 `tmp_options`，而 `options` 始终指向 `kstrndup()` 分配的内存起始地址，确保后续 `kfree(options)` 能正确释放内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/27d6627fbe034abbceab89cc253ded3e303a2ee7

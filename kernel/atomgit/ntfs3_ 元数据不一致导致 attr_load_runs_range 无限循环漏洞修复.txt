@@ -1,0 +1,20 @@
+#标题
+ntfs3: 元数据不一致导致 attr_load_runs_range 无限循环漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当挂载一个构造了异常元数据的畸形 NTFS 镜像文件时，内核在处理属性数据加载时陷入无限循环，导致 CPU 占用率飙高甚至系统挂起，造成拒绝服务。具体触发场景为：属性头标记为空 run list（evcn=-1, svcn=0），但目录项引用它时认为包含实际数据。
+
+#主要错误日志
+未知
+
+#问题根因
+在 NTFS 文件系统实现中，当属性头声明为空（evcn=-1 且 svcn=0）但调用者期望读取实际数据时，`run_unpack()` 会正确识别并提前返回成功，导致 `runs_tree` 未初始化（`run->runs` 为 NULL）。上层函数 `attr_load_runs_range()` 错误地假设返回成功意味着 runs 已加载，将 `clen` 设为 0。随后的 `run_lookup_entry()` 因为 runs_tree 未初始化而持续查找失败，导致循环变量 `vcn` 累加 0（`vcn += 0`），从而触发无限循环。
+
+#解决方案
+在 `attr_load_runs_range` 函数中引入重试计数器 `retry`。检测 `run_lookup_entry()` 是否在 `attr_load_runs_vcn()` 调用后连续失败：如果第一次加载后查找仍然失败，判定为元数据损坏，直接返回 `-EINVAL` 错误码从而跳出循环，避免 DoS 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d4863fee5b6d5a9842bdbd989c087592b55a1e62

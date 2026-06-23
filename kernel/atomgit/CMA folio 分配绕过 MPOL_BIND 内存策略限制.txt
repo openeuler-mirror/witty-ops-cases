@@ -1,0 +1,22 @@
+#标题
+CMA folio 分配绕过 MPOL_BIND 内存策略限制
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了 MPOL_BIND 内存策略的场景下，进程进行 CMA folio 内存分配时，系统未遵循预设的 nodemask 限制，错误地优先尝试从本地节点（preferred_nid/local node）进行分配。当本地节点不在策略允许的 nodemask 范围内时，本应失败的分配请求却成功执行，导致内存分配绕了 MPOL_BIND 的访问控制约束，破坏了 NUMA 内存策略的隔离性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `folio_alloc_cma()` 函数的实现中，无条件地优先尝试从传入的 `nid`（本地节点）对应的 CMA 区域进行分配，代码逻辑为 `if (folio_cma_area[nid])` 直接尝试分配。该逻辑未在分配前检查 `nodemask` 是否包含该 `nid`。因此，当本地节点不在 `MPOL_BIND` 策略允许的节点掩码中时，分配依然成功，从而绕过了内存策略的检查机制。
+
+#解决方案
+1. **修复策略绕过问题**：修改 `folio_alloc_cma()` 函数逻辑，在尝试从指定 nid 分配前增加检查：`if (!nodemask || node_isset(nid, *nodemask))`，确保仅当节点在策略允许范围内或无策略限制时才进行分配。
+2. **重构分配流程**：重写 `folio_alloc_cma_mpol()` 函数，使其逻辑与 `__alloc_pages_mpol()` 对齐，完整支持 `MPOL_PREFERRED_MANY`、`MPOL_INTERLEAVE` 等多种内存策略模式，而非简单转发请求。
+3. **提取公共逻辑**：将 `smart_grid` 的处理逻辑提取为独立的辅助函数 `mpol_apply_smart_grid()`，消除 `__alloc_pages_mpol()` 与 `folio_alloc_cma_mpol()` 之间的代码重复，并确保 CMA 分配路径也能正确应用 smart_grid 策略。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f64696d8613d002b88f31cdb27aabc6a40ac2f8a

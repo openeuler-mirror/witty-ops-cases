@@ -1,0 +1,30 @@
+#标题
+CD-ROM设备未正确设置只读状态导致BLKROGET返回值错误及I/O失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+CD-ROM设备注册时，内核未调用 set_disk_ro() 设置只读状态，导致 BLKROGET ioctrl 始终返回 0（可写），即使光驱不具备写入能力。
+这导致依赖 BLKROGET 判断设备状态的用户态程序出现异常行为：
+1. systemd 在设置 loop 设备时，因误判设备可写而未设置 LO_FLAGS_READ_ONLY 标志，导致通过 loop 设备向 CD-ROM 写入数据时产生 I/O 错误。
+2. systemd-fsck 因误判设备可写，未使用 no-repair 模式（-n 参数）运行。
+此外，sr 驱动内部原本用于拦截写操作的 cd->writeable 判断逻辑失效，无法有效阻止内核内部的 bio 写入请求。
+
+#主要错误日志
+未知
+
+#问题根因
+问题的根本原因在于 cdrom 核心层与 sr 驱动对设备写入能力的探测时机和状态同步存在缺陷：
+1. register_cdrom() 未同步只读状态：cdrom 核心层在注册设备时从未调用 set_disk_ro()，导致块层无法感知设备的只读属性。
+2. 写入能力探测时机错误：cdi->mask 中的写入能力位（CDC_DVD_RAM、CDC_CD_RW 等）来源不同。部分来自 MODE SENSE，而 CDC_MRW_W 和 CDC_RAM 需要通过 MMC GET CONFIGURATION 命令探测。原逻辑中，GET CONFIGURATION 探测仅在 cdrom_open_write() 中执行（即设备打开时），导致设备探测（probe）阶段 cdi->mask 不完整，默认值掩盖了真实能力。
+3. sr 驱动的 writeable 标志位无效：sr 驱动中的 cd->writeable 标志位原本依赖 cdi->mask 判断，但由于探测阶段 mask 位未更新，导致该标志位被错误地置为 1。在 sr_init_command() 中对该标志位的检查形同虚设，无法拦截写命令。
+
+#解决方案
+1. 新增探测接口：将 cdrom_open_write() 中的 GET CONFIGURATION 探测逻辑剥离为独立的导出函数 cdrom_probe_write_features()。
+2. 提前探测时机：在 sr 驱动的 sr_probe() 函数中，于 get_capabilities() 之后、register_cdrom() 之前调用 cdrom_probe_write_features()，确保在设备注册前 cdi->mask 已包含准确的写入能力信息。
+3. 同步块层状态：在 register_cdrom() 中根据完整的写入能力掩码（CDC_DVD_RAM | CDC_MRW_W | CDC_RAM | CDC_CD_RW）调用 set_disk_ro()，将设备的只读状态正确传递给块层。
+4. 移除冗余标志：删除 sr 驱动中无效的 cd->writeable 成员变量，并在 sr_init_command() 中直接使用 get_disk_ro(cd->disk) 来判断是否允许写操作，从而利用修复后的块层状态拦截所有写请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5d9eab2f5c18481d435ade0e8a8224ffdbfdaf56

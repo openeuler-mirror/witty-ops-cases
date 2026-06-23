@@ -1,0 +1,20 @@
+#标题
+自动清理机制释放错误指针导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 `__free(kfree)` 或类似的自动清理机制管理内存时，如果指针被设置为错误指针（error pointer，例如 `ERR_PTR(-ENOMEM)`），在作用域结束自动执行清理函数时会引发内核崩溃（crash）。
+
+#主要错误日志
+未知
+
+#问题根因
+自动清理函数 `DEFINE_FREE(kvfree)` 的实现仅检查了指针是否为 `NULL`（`if (_T)`），未检查指针是否为错误指针（`IS_ERR`）。当自动释放的分配结果是一个错误指针时（例如 `gpiochip_dup_line_label` 返回失败），清理逻辑尝试释放无效的错误地址，导致内核崩溃。此前补丁集成不完整，仅包含了 kfree 相关检测，遗漏了 kvfree 的错误指针检测。
+
+#解决方案
+修改 `include/linux/slab.h` 中的 `DEFINE_FREE(kvfree, ...)` 定义，将释放条件从 `if (_T)` 修改为 `if (!IS_ERR_OR_NULL(_T))`，确保在指针为 NULL 或错误指针时跳过释放操作，从而避免非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f425548707d663fa8bd0d5020275e7db701cfed7

@@ -1,0 +1,23 @@
+#标题
+tcp_bpf: psock->cork分配失败导致内存泄漏与内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 sk_msg 程序并配置 cork 字节后，若发送数据量小于 cork 字节数且触发内存分配故障注入（fault injection），系统会触发内核警告（WARNING）。该警告发生在套接字销毁阶段（inet_sock_destruct），表明存在内存管理错误（如 sk_forward_alloc 计数不平衡）。
+
+#主要错误日志
+WARNING: net/ipv4/af_inet.c:156 at inet_sock_destruct+0x623/0x730 net/ipv4/af_inet.c:156
+RIP: 0010:inet_sock_destruct+0x623/0x730 net/ipv4/af_inet.c:156
+Call Trace:
+ __sk_destruct+0x86/0x660 net/core/sock.c:2339
+
+#问题根因
+在 tcp_bpf_send_verdict() 函数处理 cork 逻辑时，如果 psock->cork 的内存分配失败（例如在故障注入场景下），代码直接返回 -ENOMEM，但未调用 sk_msg_free() 来释放 sk_msg_alloc() 已经分配的资源。这导致 sk->sk_forward_alloc 的变更未被正确回滚，造成内存泄漏，最终在套接字销毁时触发内核警告。
+
+#解决方案
+在 psock->cork 分配失败的错误处理分支中增加 sk_msg_free(sk, msg) 调用，以释放已分配的资源并恢复 sk->sk_forward_alloc 状态；同时将 *copied 设置为 0，确保向调用者返回正确的错误状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/89489b49043cde93b8a23ddfa2b0a37689ed3713

@@ -1,0 +1,27 @@
+#标题
+urma流创建失败及潜在内核崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用urma功能时，流创建失败。同时，在聚合设备查询段信息时存在并发访问风险，可能导致内核崩溃或数据读取错误。
+
+#主要错误日志
+- `ubagg_log_err("Failed to find seg.\n")`
+- `ubcore_log_err("invalid param")`
+- `ubcore_log_err("length of ioctl input parameter is out of range.\n")`
+- `ubcore_log_err("hdr args len and args addr can't be 0.\n")`
+
+#问题根因
+1. **并发访问缺陷**：在 `ubagg_get_seg_info` 函数中，代码在持有自旋锁的情况下将数据拷贝到用户空间（`memcpy((void *)user_ctl->out.addr...)`），这违反了自旋锁不能睡眠的原则；而补丁前的代码在 `memcpy` 前过早释放了锁，导致并发访问风险，可能读取到不一致的数据或引发指针访问错误，进而导致流创建失败。
+2. **命名空间处理缺失**：内核类 `g_ubcore_class` 未正确设置 `namespace` 回调函数，导致在非初始命名空间下设备创建和处理异常。
+3. **全局文件句柄管理缺陷**：全局设备的 `ioctl` 接口未实现具体的命令处理逻辑，且未正确管理文件的私有数据引用计数。
+
+#解决方案
+1. **修复锁机制**：调整 `ubagg_get_seg_info` 中的锁释放位置，确保在 `memcpy` 操作期间持有自旋锁，完成拷贝后再释放，以防止并发冲突。
+2. **完善命名空间支持**：新增 `ubcore_net_namespace` 函数并赋值给 `g_ubcore_class.namespace`，确保设备类能正确处理网络命名空间。
+3. **增强IO控制实现**：重构 `ubcore_global_ioctl` 和文件操作接口，增加了对 `UBCORE_UVS_CMD` 命令的解析处理，并引入 `kref` 引用计数机制管理全局文件句柄的生命周期。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac036c0fb0535deae383d1b84937515496e9591c

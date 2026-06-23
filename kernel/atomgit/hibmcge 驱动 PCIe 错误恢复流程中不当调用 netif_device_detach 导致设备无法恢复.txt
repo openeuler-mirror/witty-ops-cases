@@ -1,0 +1,20 @@
+#标题
+hibmcge 驱动 PCIe 错误恢复流程中不当调用 netif_device_detach 导致设备无法恢复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 hibmcge 设备与不支持 `error_detected` 回调的设备处于同一 PCI 子树下时，若发生非致命 PCI 错误，系统阻止后续错误回调的执行，导致 `slot_reset` 未被调用。此时驱动已在 `error_detected` 阶段将设备Detach，但无法执行恢复复位操作，最终导致设备处于断开状态且无法恢复。
+
+#主要错误日志
+failed to re-enable PCI device after reset
+
+#问题根因
+驱动在 `pci_error_handlers.error_detected()` 回调中过早调用了 `netif_device_detach()`。根据 PCI 错误恢复机制（`drivers/pci/pcie/err.c`），如果子树中有设备不支持 `error_detected` 回调，将返回 `PCI_ERS_RESULT_NO_AER_DRIVER`，阻止子树中所有设备的后续错误回调。这导致 `slot_reset` 未执行，设备保持 Detach 状态无法恢复。实际上 Detach 操作应与 Reset 操作绑定执行。
+
+#解决方案
+将 `netif_device_detach()` 和 `pci_disable_device()` 调用从 `error_detected()` 回调函数移动到 `slot_reset()` 回调函数中。这确保了只有在真正执行复位流程时才进行设备分离和禁用，避免了因流程中断导致的设备不可恢复问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6f33ceedd4e7d90f1d64ff20913624b32708cfcc

@@ -1,0 +1,24 @@
+#标题
+RDMA/hns: DCA内存地址信息泄露修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在HNS RDMA驱动中，DCA（Dynamic Connection Attachment）内存的地址信息被暴露给用户模式。用户态程序可以获取到内核态DCA内存的真实地址，导致内核地址空间信息泄露，可能被攻击者利用进行内核攻击或绕过KASLR等安全机制。
+
+#主要错误日志
+未知
+
+#问题根因
+在`add_dca_mem`函数中，分配的DCA内存结构体指针`mem`被直接赋值给`attr.key`（`attr.key = (u64)mem;`），随后该key会传递至用户空间。由于内核指针直接作为key暴露，导致内核内存地址信息泄露。
+
+#解决方案
+使用SipHash算法对内存地址进行加密处理，隐藏真实的内核地址。
+1. 在`hns_roce_dev`结构体中新增`siphash_key_t dca_safe_hash_key`成员用于存储哈希密钥。
+2. 在DCA安全页初始化函数`alloc_dca_safe_page`中，通过`get_random_bytes`随机生成哈希密钥。
+3. 在`add_dca_mem`函数中，将原来直接赋值的逻辑修改为使用`siphash_1u64`对内存地址进行哈希加密，将加密后的值作为key。
+4. 在驱动释放函数`hns_roce_free_dca_safe_buf`中，调用`memzero_explicit`清零哈希密钥，防止密钥残留。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a0f3509fdfdb5813c57a5eac965174f439377615

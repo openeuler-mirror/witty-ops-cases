@@ -1,0 +1,20 @@
+#标题
+fs/ntfs3: 检测到属性枚举错误时未及时标记 inode 为坏块导致后续异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NTFS3 文件系统操作中，当 MFT 记录损坏或属性结构不一致时，内核未立即将对应的 inode 标记为坏块。这导致后续操作继续访问该无效数据，可能引发内核崩溃或进一步的数据损坏。该问题由 syzbot 发现并报告。
+
+#主要错误日志
+未知
+
+#问题根因
+`mi_enum_attr()` 函数在执行属性枚举时，若检测到属性头大小、数据偏移、VCN 范围或磁盘分配大小等关键元数据存在不一致（例如 `used > total`、`off + asize > used` 或 `alloc_size > volume.size`），仅返回 NULL 并未标记 inode 状态。这种处理方式遗漏了错误状态的传递，导致上层调用者无法识别 inode 已失效，从而继续尝试访问无效内存或提交错误的元数据修改。
+
+#解决方案
+扩展 `mi_enum_attr()`、`mi_find_attr()` 和 `mi_insert_attr()` 等关键函数的接口，增加 `struct ntfs_inode *ni` 参数。在 `mi_enum_attr()` 内部，一旦检测到属性结构异常（即原先返回 NULL 的错误分支），立即调用 `_ntfs_bad_inode(&ni->vfs_inode)` 将该 inode 标记为坏块，防止后续操作继续使用该无效 inode。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f4c99067de3696ccf77a20a2c1e215d7b89da9e

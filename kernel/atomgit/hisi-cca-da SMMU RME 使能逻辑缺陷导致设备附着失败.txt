@@ -1,0 +1,22 @@
+#标题
+hisi-cca-da SMMU RME 使能逻辑缺陷导致设备附着失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能 VFIO IOMMU Type1 的 Realm 场景下，当 SMMU 的 Realm 功能（RME）未正确初始化或使能时，设备绑定过程中 `arm_smmu_attach_dev` 函数会错误地继续执行后续流程而非报错退出，可能导致内核逻辑异常或设备功能不可用。
+
+#主要错误日志
+pr_err("realm smmu has not enabled.\n")
+
+#问题根因
+1. **设备附着流程缺陷**：在 `arm_smmu_attach_dev` 中，当 `smmu_domain->smmu` 为空时，代码无条件调用 `arm_smmu_domain_finalise`，未检查底层 SMMU 硬件是否已使能 Realm 能力（`smmu->realm.enabled`），导致在不支持的硬件上错误继续执行。
+2. **RME 使能函数空指针风险**：在 `arm_smmu_enable_rme` 函数中，直接调用 `arm_smmu_support_rme(smmu)` 时未对 `smmu` 指针进行有效性检查，若 `smmu` 为 NULL 会触发空指针解引用错误。
+
+#解决方案
+1. **增加 Realm 使能状态检查**：在 `arm_smmu_attach_dev` 中调用 `arm_smmu_domain_finalise` 前，增加对 `smmu->realm.enabled` 的判断。若未使能，则打印错误日志 "realm smmu has not enabled." 并返回 `-EOPNOTSUPP` 错误码，阻止后续流程。
+2. **增加指针有效性保护**：在 `arm_smmu_enable_rme` 函数的条件判断中增加 `smmu` 指针的非空检查（`!smmu`），防止在 SMMU 设备未就绪时触发空指针崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9c2b20f961e2dc67a9efb73060215d73cebe0ffc

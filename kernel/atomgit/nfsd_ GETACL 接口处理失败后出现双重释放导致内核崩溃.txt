@@ -1,0 +1,20 @@
+#标题
+nfsd: GETACL 接口处理失败后出现双重释放导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 nfsd 的 GETACL 接口时，若处理过程进入失败分支（fail label），后续请求处理过程中可能触发 kernel Oops 或内存相关的崩溃（如 slab poison 检测失败）。该问题由指针悬挂引发，可能导致系统服务异常或重启。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nfsacld_proc_getacl` 和 `nfsd3_proc_getacl` 函数的失败处理路径中，代码调用了 `posix_acl_release` 释放了 `resp->acl_access` 和 `resp->acl_default` 指针，但未将这两个指针置为 NULL。由于该路径最后执行 `goto out` 跳转，若后续逻辑再次访问或释放这些指针（例如在最终响应清理阶段），将导致对同一块内存的重复释放，即 "double free" 问题。
+
+#解决方案
+在 `fs/nfsd/nfs2acl.c` 和 `fs/nfsd/nfs3acl.c` 文件的失败处理路径中，于 `posix_acl_release` 调用之后，显式将 `resp->acl_access` 和 `resp->acl_default` 指针置为 NULL，以此防止悬挂指针引发的后续内存访问错误或重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/300626c26e54e4aba255f9833e65d47e801ca576

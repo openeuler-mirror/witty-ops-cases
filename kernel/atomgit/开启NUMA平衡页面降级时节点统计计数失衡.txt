@@ -1,0 +1,21 @@
+#标题
+开启NUMA平衡页面降级时节点统计计数失衡
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当开启NUMA平衡并启用页面降级功能时，vmscan在收缩LRU过程中调用migrate_pages会导致节点统计信息出现负值计数。通过读取 `/proc/sys/vm/stat_refresh` 会触发内核告警，显示 `nr_isolated_anon` 和 `nr_isolated_file` 出现异常的负数值。这种统计失衡可能会影响内存碎片整理和内存回收的 throttle（节流）行为。
+
+#主要错误日志
+[77383.088417] vmstat_refresh: nr_isolated_anon -103212
+[77383.088417] vmstat_refresh: nr_isolated_file -899642
+
+#问题根因
+在 `shrink_folio_list` -> `demote_folio_list` -> `migrate_pages` 的调用路径中，对于成功迁移的页面，`migrate_folio_done` 函数无条件执行了 `mod_node_page_state` 操作，递减了节点的隔离页面计数。然而，对于 MR_DEMOTION 场景，页面在降级迁移前并未被计入 NR_ISOLATED_* 统计中，导致迁移成功后多执行了一次递减操作，造成节点统计计数出现负值失衡。
+
+#解决方案
+修改 `mm/migrate.c` 文件中的 `migrate_folio_done` 函数逻辑。在执行隔离页面计数递减操作前，增加对迁移原因 `reason` 的判断。仅当页面非 movable 且迁移原因不为 `MR_DEMOTION` 时，才执行计数递减，从而修正统计失衡问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e0ef8036d7a244df29411ec7d8a1fd9fd2428c97

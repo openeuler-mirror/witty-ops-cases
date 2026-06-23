@@ -1,0 +1,24 @@
+#标题
+RDMA/hns: sysfs store 与固件配置 SCC 参数并发冲突导致数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HNS RoCE 驱动中，当用户通过 sysfs 接口修改 SCC（拥塞控制）参数时，若恰好与延迟工作队列中的固件配置操作并发，会导致 SCC 参数在内存与固件中的状态不一致，可能引发参数配置错误或固件配置失败。
+
+#主要错误日志
+failed to configure scc param, opcode: 0x%x, ret = %d.
+
+#问题根因
+驱动使用 delayed_work 延迟将 SCC 参数配置到固件，但没有对内存中的参数数据进行并发保护。当 sysfs 的 store 回调函数修改内存中的 SCC 参数时，工作队列线程可能正在读取该参数并将其下发到固件，导致发送给固件的参数与内存中保存的“最新参数”不一致。
+
+#解决方案
+在 `hns_roce_scc_param` 结构体中引入互斥锁 `scc_mutex`，并在以下关键路径加锁保护：
+1. 在 `hns_roce_v2_config_scc_param`（下发固件配置）过程中持锁，保护参数下发及 `latest_param` 更新。
+2. 在 `hns_roce_v2_query_scc_param`（查询固件参数）过程中持锁，保护参数回写。
+3. 在 `scc_attr_show`（sysfs 读）和 `scc_attr_store`（sysfs 写）过程中持锁，保护参数的读写操作。
+从而确保内存参数与固件配置操作的原子性与一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3d57d0f4604a4d94d452c0fc39ef4bbdfdc326fb

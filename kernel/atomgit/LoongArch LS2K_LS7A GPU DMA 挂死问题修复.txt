@@ -1,0 +1,28 @@
+#标题
+LoongArch LS2K/LS7A GPU DMA 挂死问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LS2K/LS7A 硬件平台上，系统重启或从 S3/S4 状态恢复时，GPU DMA 发生挂起，导致图形子系统无法正常工作。
+
+#主要错误日志
+- `pci_err(pdev, "Failed to ioremap()\n");`
+- `pci_info(pdev, "DMA hang fixup at reg[0x%lx]: 0x%x\n", (unsigned long)crtc_reg & 0xffff, readl(crtc_reg));`
+
+#问题根因
+硬件设计与资源共享限制导致：
+1. GPU、DC（显示控制器）和 VPU 通常为 PCI 设备 06.0、06.1 和 06.2，它们共享部分硬件资源。
+2. 当配置 PCI 06.0 设备（GPU）的 BAR1 时，DMA 内存访问无法通过该 BAR 进行，否则会导致硬件异常。
+3. 在重启或 S3/S4 唤醒等典型场景下，DC 仍然通过 BAR 访问内存，未禁止该行为导致 GPU DMA 发生挂死。
+
+#解决方案
+实现软件规避策略，在配置 GPU 设备 BAR1 时暂时关闭 DC、GPU 和 VPU 的内存访问权限：
+1. 新增 `loongson_gpu_fixup_dma_hang` 函数，通过操作 DC 的 CRTC 寄存器来控制内存访问开关。
+2. 注册 `DECLARE_PCI_FIXUP_EARLY` 钩子，在 PCI 初始化早期阶段关闭 CRTC 输出使能（`CRTC_OUTPUT_ENABLE`），阻止 DC 访问内存。
+3. 注册 `DECLARE_PCI_FIXUP_FINAL` 钩子，在 PCI 初始化完成阶段恢复 CRTC 输出使能状态。
+4. 针对 LS2K/LS7A 对应的 GPU 设备 ID（0x7a25, 0x7a35）应用此修复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c4fb594ec3c07772964179891e8b29bbb318a3ca

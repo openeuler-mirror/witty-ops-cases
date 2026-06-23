@@ -1,0 +1,20 @@
+#标题
+ipmi_msghandler 在 BMC 升级期间产生过量告警导致系统日志刷屏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对运行中的系统进行 BMC 固件升级时，由于 BMC 暂时离线，IPMI 消息处理模块（ipmi_msghandler）会生成大量 "BMC returned incorrect response" 警告信息。在大型部署环境中，这种情况会导致系统日志被刷屏，造成磁盘空间浪费或掩盖其他关键日志信息。
+
+#主要错误日志
+"BMC returned incorrect response, expected netfn %x cmd %x, got netfn %x cmd %x\n"
+
+#问题根因
+在 BMC 固件升级过程中，BMC 会暂时处于离线状态，导致返回不正确的响应。内核驱动 ipmi_msghandler 在处理此类响应时使用了 dev_warn() 函数，该函数不具备速率限制功能，因此在 BMC 维护期间产生了无节制的日志打印，进而引发日志洪泛。
+
+#解决方案
+将 drivers/char/ipmi/ipmi_msghandler.c 文件中 handle_one_recv_msg 函数内的 dev_warn() 调用替换为 dev_warn_ratelimited()。该修复通过引入速率限制机制，有效抑制了 BMC 维护期间的重复告警，防止系统日志被刷屏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3eb11a29591187c4211cb6793548b6e472e9e14

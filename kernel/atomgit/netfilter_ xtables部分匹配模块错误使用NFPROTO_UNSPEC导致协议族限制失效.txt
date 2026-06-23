@@ -1,0 +1,24 @@
+#标题
+netfilter: xtables部分匹配模块错误使用NFPROTO_UNSPEC导致协议族限制失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核网络子系统中的 xt_mac、xt_owner、xt_physdev 以及 xt_realm 模块在之前的更新中被错误地设置为 NFPROTO_UNSPEC 协议族，导致其注册范围超过了预期的协议类型。特别是 xt_realm 模块，由于其内部依赖 IPv4 特有的 `dst->tclassid` 字段，错误地注册到 NFPROTO_UNSPEC 可能导致在非 IPv4 场景下触发异常行为。同时，xt_mac、xt_owner 和 xt_physdev 也不应被 ebtables 用户空间程序使用，但错误的协议族设置破坏了这一限制。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit ab4f21e6fb1c ("netfilter: xtables: use NFPROTO_UNSPEC in more extensions") 过度扩展了 NFPROTO_UNSPEC 的使用范围。根因在于：
+1. xt_realm 模块依赖 IPv4 特有的字段 `dst->tclassid`，不应设置为 NFPROTO_UNSPEC，必须限制为 NFPROTO_IPV4。
+2. xt_mac、xt_owner、xt_physdev 这三个扩展模块不应被 ebtables 使用，设置为 NFPROTO_UNSPEC 会违背用户空间工具的限制规则。
+
+#解决方案
+部分还原 commit ab4f21e6fb1c 的修改，将受影响的匹配模块重新限制为 inet family（IPv4 和/或 IPv6）：
+1. 对于 xt_mac、xt_owner、xt_physdev：将 `.family` 从 `NFPROTO_UNSPEC` 修改为分别注册 `NFPROTO_IPV4` 和 `NFPROTO_IPV6` 两个实例，将注册接口从 `xt_register_match` 改为 `xt_register_matches` 以支持数组注册。
+2. 对于 xt_realm：将 `.family` 从 `NFPROTO_UNSPEC` 显式修改回 `NFPROTO_IPV4`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9f7044a7bb97c3e1b62d2b76b384a633b6eea0c

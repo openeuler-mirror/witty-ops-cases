@@ -1,0 +1,23 @@
+#标题
+spi: ACPI 模式下 SPI 设备中断探测未处理延迟探测导致驱动加载失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Dell XP 9340 等笔记本电脑上，vsc-tp 驱动程序探测 SPI 设备时失败，导致设备无法正常工作。该问题发生在系统引导或驱动加载阶段。
+
+#主要错误日志
+vsc-tp spi-INTC10D0:00: probe with driver vsc-tp failed with error -22
+
+#问题根因
+在 SPI 设备探测流程 `spi_probe` 中，针对 ACPI 伴随设备的处理逻辑存在缺陷。当 GPIO 中断资源尚不可用导致 `acpi_dev_gpio_irq_get` 返回 `-EPROBE_DEFER` 时，现有代码未正确处理该返回值并将其传递给驱动程序。驱动的 `probe` 函数接收到无效的 IRQ 编号（负值），进而调用 `request_irq` 失败返回 `-EINVAL`（错误码 -22），最终导致驱动探测失败，而不是像设备树（OF/DT）模式那样进行延迟探测重试。
+
+#解决方案
+修改 `drivers/spi/spi.c` 中的 `spi_probe` 函数，增加对 ACPI 设备 IRQ 延迟探测的处理逻辑。具体变更包括：
+1. 在 `spi_probe` 函数中新增检查：如果设备有 ACPI 伴随且 `spi->irq` 小于 0，调用 `acpi_dev_gpio_irq_get` 获取 IRQ。
+2. 若获取 IRQ 返回 `-EPROBE_DEFER`，则 `spi_probe` 直接返回 `-EPROBE_DEFER`，触发内核核心层的延迟探测机制。
+3. 将原本在 `acpi_register_spi_device` 中执行的 IRQ 获取逻辑移除，统一在 `spi_probe` 阶段处理，确保探测流程的一致性与正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ff82e998d5841278c8a8da33013fa6ecec78d179

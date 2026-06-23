@@ -1,0 +1,29 @@
+#标题
+scsi: ufs: core: 修复最后一条命令完成后时钟异常升频问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UFS 设备时钟伸缩挂起流程与新的命令下发流程并发执行时，由于锁竞争导致 `clk_scaling.window_start_t` 被错误地置为 0，进而导致下一次 `polling_ms` 定时器触发时系统异常地进行时钟升频。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `ufshcd_clk_scaling_suspend_work`（线程 A）与 `ufshcd_send_command`（线程 B）之间的竞争条件。
+具体竞争步骤如下：
+1. 线程 A 在 `ufshcd_clk_scaling_suspend_work` 中第一次获取 `host_lock`，设置 `is_suspended` 为 true 后释放锁。
+2. 此时线程 B 在 `ufshcd_clk_scaling_start_busy` 中获取 `host_lock`（发生竞争）。
+3. 线程 A 随后调用 `__ufshcd_suspend_clkscaling`，第二次获取 `host_lock`，强制将 `clk_scaling.window_start_t` 设置为 0。
+这打破了时钟伸缩统计的正常逻辑，导致随后的时钟频率计算异常，触发错误的升频操作。此外，代码中存在不必要的 `__ufshcd_suspend_clkscaling` 函数封装，增加了锁操作的复杂性和风险。
+
+#解决方案
+重构时钟伸缩挂起逻辑，将 `window_start_t` 的清零操作移至持有 `host_lock` 的临界区内执行，消除了二次加锁带来的竞争窗口。
+具体修改包括：
+1. 在 `ufshcd_clk_scaling_suspend_work` 函数中，将 `hba->clk_scaling.window_start_t = 0` 的赋值操作移至 `spin_unlock_irqrestore` 之前执行。
+2. 删除冗余的 `__ufshcd_suspend_clkscaling` 函数，直接在锁保护后的安全上下文中调用 `devfreq_suspend_device`。
+3. 同步修正 `ufshcd_suspend_clkscaling` 函数中的类似逻辑，确保 `window_start_t` 清零同样位于锁临界区内。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/33d5fac5d45cf291369de714776be58a4fc297a2

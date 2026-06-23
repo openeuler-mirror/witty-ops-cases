@@ -1,0 +1,29 @@
+#标题
+oenetcls 模块 SMP 与上下文安全问题及初始化失败资源泄露修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 内核在开启 PREEMPT_RT 或调试选项时，触发 "BUG: using smp_processor_id() in preemptible"  的 SMP 检查警告或 Panic。
+2. 在 socket 操作路径中，ntuple 规则配置逻辑持有自旋锁睡眠，导致内核调用栈打印调度错误或死锁。
+3. oenetcls 模块初始化失败时未清理已分配资源，导致后续卸载模块或重复初始化时出现内存泄露或异常行为。
+
+#主要错误日志
+BUG: using smp_processor_id() in preemptible
+oecls_debug: alloc_ordered_workqueue fails
+
+#问题根因
+1. **smp_processor_id() 误用**：代码在可抢占上下文中直接调用 `smp_processor_id()`，而该函数要求调用上下文不能被抢占。应使用 `raw_smp_processor_id()` 获取原始 CPU ID。
+2. **原子上下文睡眠**：ntuple 规则配置流程（如 `add_ntuple_rule`）在持有 mutex 锁的情况下调用可能睡眠的函数（如 `cfg_ethtool_rule` 内部的内存分配或 ioctl 操作），违反了原子上下文约束。
+3. **初始化错误处理缺失**：`oecls_init` 及相关子模块初始化函数（如 `oecls_ntuple_res_init`）在内部分配资源失败时，未正确回滚已分配的内存或工作队列，导致资源泄露。
+4. **Hook 机制不当**：原实现使用 tracepoint hook 机制，在高速数据路径（如 `netif_receive_skb`）中引入了不必要的开销和复杂性。
+
+#解决方案
+1. **修复 SMP 调用**：将 `smp_processor_id()` 替换为 `raw_smp_processor_id()`，确保在可抢占上下文中安全获取 CPU 信息。
+2. **重构执行上下文**：移除 tracepoint hook 机制，改用 RCU 保护的函数指针结构体 `oecls_hook_ops` 进行直接调用。引入 workqueue 机制，将 ntuple 规则配置任务（`cfg_work`）下发给内核线程执行，避免在 socket 系统调用路径中阻塞或违规持有锁。
+3. **完善错误处理**：修改 `oecls_ntuple_res_init` 和 `oecls_flow_res_init` 增加返回值检查，在 `oecls_init` 中增加对初始化函数返回值的判断，失败时跳转到 `clean_rxq` 标签执行资源清理。
+4. **优化 Hook 架构**：删除 `CONFIG_OENETCLS_HOOKS` 配置选项及相关 tracepoint 代码，简化模块依赖和调用路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f5c3ef8592e93defd1776bf98321957b43330e73

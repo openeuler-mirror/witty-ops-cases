@@ -1,0 +1,21 @@
+#标题
+move_mount(2) 中 MOVE_MOUNT_SET_GROUP 标志破坏传播图导致断言失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 `move_mount(2)` 系统调用且带有 `MOVE_MOUNT_SET_GROUP` 标志时，若源挂载点被标记为 shared（即非纯事件接收端），会导致内核传播图内部结构断裂。这破坏了 `->mnt_share` 和 `->mnt_slave` 链表的断言假设，可能导致内核迭代器行为异常或触发断言检查失败。
+
+#主要错误日志
+未知
+
+#问题根因
+提交 9ffb14ef61ba ("move_mount: allow to add a mount into an existing group") 引入了该缺陷。在 `do_set_group()` 函数中，当源挂载点（from）是 slave（`IS_MNT_SLAVE(from)`）且被标记为 shared 时，代码通过 `list_add(&to->mnt_slave, &m->mnt_slave_list)` 将新挂载点添加到了 slave 列表的头部。
+根据 `Documentation/filesystem/sharedsubtree.rst` 文档定义，同一 peer group 中的所有 vfsmount 必须拥有相同的 `->mnt_master`，且若非 NULL，它们应构成 slave 列表中的一个连续有序段。原有代码将新挂载点插入列表开头，导致其未紧跟在源挂载点之后，从而破坏了传播图迭代器关于链表连续性的假设。
+
+#解决方案
+修改 `fs/namespace.c` 中 `do_set_group()` 函数的列表插入逻辑。将 `list_add(&to->mnt_slave, &m->mnt_slave_list)` 修改为 `list_add(&to->mnt_slave, &from->mnt_slave)`。这确保新挂载点被插入到源挂载点的紧后位置，而非列表头部，从而在源挂载点为 shared 的情况下维护了传播图的正确结构；对于源挂载点未标记 shared 的情况，该行为同样正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c27c189d20cfed0fe7c6e64df2b0315d8a2985cd

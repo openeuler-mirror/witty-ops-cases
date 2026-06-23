@@ -1,0 +1,20 @@
+#标题
+f2fs: 截断压缩簇时左移操作导致整数溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 F2FS 文件系统上对压缩 inode 执行部分截断操作时，由于页索引在左移过程中发生整数溢出，导致计算出的文件偏移量错误。这可能造成截断位置判断失误，进而导致数据损坏或文件系统状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `f2fs_truncate_partial_cluster` 函数中，计算偏移量 `start` 时，直接对 `rpages[i]->index`（类型为 `pgoff_t`，通常为 unsigned long）执行左移操作 `<< PAGE_SHIFT`。由于 `PAGE_SHIFT` 值较大，左移后的结果可能超出 `unsigned long` 的表示范围，导致溢出，然后才赋值给 `loff_t` 类型的变量 `start`。
+
+#解决方案
+在执行左移操作前，显式将 `rpages[i]->index` 强制转换为 `loff_t` 类型（64位有符号整数），确保移位操作在 64 位空间中进行，从而避免溢出。代码修改为：`loff_t start = (loff_t)rpages[i]->index << PAGE_SHIFT;`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6f321a73282e8ff5f6d315822498275892e554a3

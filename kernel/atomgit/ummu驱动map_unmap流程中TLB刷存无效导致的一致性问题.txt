@@ -1,0 +1,23 @@
+#标题
+ummu驱动map/unmap流程中TLB刷存无效导致的一致性问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在UMMU（Userspace Memory Management Unit）驱动场景下，执行内存映射或解除映射操作时，因TLB无效化流程存在缺陷，可能导致IOMMU硬件页表（WALK CACHE）未正确刷新。这会引起内存一致性错误，表现为设备DMA读写到错误的内存地址、数据损坏或系统异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在UMMU驱动的map/unmap流程中，`struct ummu_domain` 缺少指向IOMMU框架层 `iommu_domain` 的指针字段。导致在进行TLB无效化操作（如 `iommu_iotlb_gather_add_page`）时，操作对象不正确，无法正确关联到IOMMU框架的domain结构，进而导致硬件TLB（尤其是WALK CACHE）未被有效刷新。
+
+#解决方案
+1. 在 `struct ummu_domain` 结构体中新增 `domain` 字段，用于存储IOMMU框架的 `iommu_domain` 指针。
+2. 新增 `sync_iommu_domain` 回调函数，在 `logic_ummu_probe_finalize` 阶段将IOMMU框架的domain指针同步填充到每个 `ummu_domain` 中。
+3. 修正 `ummu_tlbi_page()` 函数，使其使用新增的 `domain` 字段进行操作，确保 `iommu_iotlb_gather_add_page` 在正确的domain上下文中执行。
+4. 重构 `ummu_tlbi_walk()` 逻辑，使其调用新增的 `ummu_core_tlb_inv_walk()` -> `logic_ummu_tlb_inv_walk()`，确保能遍历并正确刷新所有相关硬件实例的WALK CACHE。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f2e9dddcd089857b771fdc77f6f416e14b1d287e

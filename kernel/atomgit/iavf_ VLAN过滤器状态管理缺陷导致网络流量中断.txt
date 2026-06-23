@@ -1,0 +1,24 @@
+#标题
+iavf: VLAN过滤器状态管理缺陷导致网络流量中断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 iavf 驱动管理的虚拟功能（VF）上，快速执行 VLAN 接口的创建、删除与再次创建操作，或者在 VF 复位期间进行 VLAN 删除与添加操作时，VLAN 过滤器未能正确下发到硬件。导致该 VLANID 的网络流量无法正常通信，且该问题发生在内核内部状态机处理过程中，无明显的内核崩溃或报错打印。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序中 VLAN 过滤器的状态机逻辑存在缺陷，导致在并发或特定时序操作下状态转换错误：
+1. **VLAN 丢失问题**：在 `iavf_del_vlan` 将状态置为 `IAVF_VLAN_REMOVE` 后，紧接着调用 `iavf_add_vlan` 添加同一个 VLAN。由于代码逻辑未处理 `IAVF_VLAN_REMOVE` 状态下的重新添加，导致状态未转换回 `IAVF_VLAN_ACTIVE`，最终该 VLAN 在工作队列执行时被删除而非添加。
+2. **VLAN 误删问题**：在 VF 复位期间，驱动会将所有 VLAN 状态重置为 `IAVF_VLAN_ADD`。若此时内核线程调用 `iavf_del_vlan`，旧代码仅将状态置为 `IAVF_VLAN_REMOVE`，未检查其当前是否处于 `IAVF_VLAN_ADD`（即尚未下发硬件）。这导致工作队列后续发送了错误的删除指令，将本应取消添加的 VLAN 过滤器从硬件中移除。
+
+#解决方案
+修改 `iavf_add_vlan` 和 `iavf_del_vlan` 函数的状态处理逻辑：
+1. 在 `iavf_add_vlan` 中增加判断：若 VLAN 过滤器当前状态为 `IAVF_VLAN_REMOVE`（表示删除请求尚未发送给 PF），直接将其状态改回 `IAVF_VLAN_ACTIVE`，避免不必要的 PF 交互并防止 VLAN 丢失。
+2. 在 `iavf_del_vlan` 中增加判断：若 VLAN 过滤器当前状态为 `IAVF_VLAN_ADD`（表示添加请求尚未发送给 PF），直接从列表中移除该过滤器并释放内存，无需向 PF 发送删除请求，防止状态机错乱。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3cabd0708c7652840dbff6a5b2854fb8476b3b71

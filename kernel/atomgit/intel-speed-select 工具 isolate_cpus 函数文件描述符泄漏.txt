@@ -1,0 +1,20 @@
+#标题
+intel-speed-select 工具 isolate_cpus 函数文件描述符泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+intel-speed-select 工具在执行 CPU 隔离操作时，当 `(!level)` 条件为真时，无论是在 write 写入失败的错误路径还是执行成功的正常路径，函数直接返回而未关闭先前打开的文件描述符，导致文件描述符泄漏。长期运行或反复调用可能导致进程文件句柄耗尽。
+
+#主要错误日志
+Can't update to member
+
+#问题根因
+在 `isolate_cpus()` 函数中，当处理 `(!level)` 分支逻辑时，代码打开文件描述符后，在后续的 `write()` 失败返回点（原代码第 953 行）以及成功执行后的返回点（原代码第 956 行），均遗漏了 `close(fd)` 操作，导致文件描述符未被释放。
+
+#解决方案
+在 `isolate_cpus()` 函数的 `(!level)` 分支中，于两个 `return` 语句前分别添加 `close(fd)` 调用，确保文件描述符在函数返回前被正确关闭，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/48f93cb3df0ecaf69d40e4383dc71f9363b25bc8

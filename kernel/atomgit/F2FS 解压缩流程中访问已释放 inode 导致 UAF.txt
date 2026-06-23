@@ -1,0 +1,26 @@
+#标题
+F2FS 解压缩流程中访问已释放 inode 导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 F2FS 文件系统使用压缩功能时，若在解压缩 IO 过程中发生错误或延迟，可能导致内核崩溃或内存非法访问。
+
+#主要错误日志
+- lzo decompress failed, ret:%d
+- lzo invalid rlen:%zu, expected:%lu
+- lz4 decompress failed, ret:%d
+- lz4 invalid ret:%d, expected:%lu
+- zstd_init_dstream failed
+- zstd_decompress_stream failed, ret: %d
+- ZSTD invalid rlen:%zu, expected:%lu
+
+#问题根因
+`decompress_io_ctx` 结构体中的 `inode` 指针在某些异步或错误处理路径下可能已经被释放，但解压缩相关的错误处理函数（如 `f2fs_err_ratelimited`）和内存分配函数仍通过 `F2FS_I_SB(dic->inode)` 尝试获取 `f2fs_sb_info` 指针。此时访问已释放的 `inode` 会触发 Use-After-Free 漏洞（CVE-2025-38627），导致系统崩溃或安全问题。
+
+#解决方案
+在 `decompress_io_ctx` 结构体中新增 `sbi` 指针成员和 `compress_algorithm` 成员。在创建解压缩上下文时直接缓存 `sbi` 指针和压缩算法类型，后续所有解压缩路径中的函数调用（如 `page_array_alloc`、`f2fs_err_ratelimited` 等）均改为直接使用缓存的 `dic->sbi`，避免通过 `dic->inode` 进行间接访问，从而规避 UAF 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3a69e08ab8e08cda9fc4713bafb36a1adec31c4

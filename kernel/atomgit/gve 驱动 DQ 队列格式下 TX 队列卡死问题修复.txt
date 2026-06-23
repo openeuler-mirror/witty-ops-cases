@@ -1,0 +1,26 @@
+#标题
+gve 驱动 DQ 队列格式下 TX 队列卡死问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 DQ（Descriptor Queue）队列格式时，如果发生 TX 超时，网络发送队列（TX queue）会陷入卡死状态。系统可能过早触发设备复位，且不会尝试“踢”队列来恢复传输，导致网络吞吐受影响或连接中断。
+
+#主要错误日志
+- "Timeout on tx queue, %d"
+- "Kicking queue %d"
+
+#问题根因
+`gve_tx_timeout` 函数中计算 missed completions（遗漏完成事件）的逻辑仅适用于 GQ 队列格式，不适用于 DQ 队列格式。此外，原逻辑在尝试恢复队列时错误地屏蔽了设备中断，这在 GQ 或 DQ 格式下均不需要。
+这导致 DQ 格式下发生 TX 超时时，驱动会跳过队列恢复步骤，直接触发设备复位，从而导致 TX 队列卡死无法恢复。
+
+#解决方案
+修改 `gve_tx_timeout` 处理逻辑：
+1. 移除针对 pending work 的检查逻辑，该逻辑仅对 GQ 格式有效。
+2. 移除不必要的中断屏蔽操作。
+3. 在验证队列未频繁超时（距离上次 kick 时间间隔大于 `MIN_TX_TIMEOUT_GAP`）后，直接通过调用 `napi_schedule` 来“踢”队列尝试恢复传输。
+4. 只有在无法成功踢队列时才触发设备复位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/938cc17ad230bed11e7d6678777f7c48052f9c83

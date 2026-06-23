@@ -1,0 +1,20 @@
+#标题
+sched_ext: scx_enable() 在 fair 类高负载下饥饿导致系统挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `scx_enable()` 操作时，如果系统中存在大量 fair 调度类任务导致负载饱和，系统会发生挂起。具体表现为在 `scx_enable()` 的 READY -> ENABLED 任务切换循环过程中，调用线程被无限期饥饿，无法完成调度类切换，导致系统无响应。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `scx_enable()` 过程中，调用线程的调度类会从 fair（公平调度）切换到 ext（扩展调度）。由于 fair 调度类的优先级高于 ext，当系统被 fair 类任务饱和时，调用线程在切换循环中会被 fair 类任务无限期抢占（饥饿），导致使能流程无法完成，进而导致系统挂起。该问题是在引入 `scx_bypass()` 替代 `preempt_disable()` 时引入的，原有的 `preempt_disable()` 保护在该场景下也不完整。
+
+#解决方案
+将 `scx_enable()` 的执行体下放到一个专用的系统级实时（RT, SCHED_FIFO）内核线程中执行。实时内核线程不会被 fair 或 ext 类任务抢占，从而避免了饥饿问题。实现上，`scx_enable()` 函数懒加载创建该 RT 内核线程，通过 `scx_ops_enable_cmd` 结构体传递参数，并同步等待执行完成。同时修正了 `scx_create_rt_helper` 函数中对返回值的错误检查逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5d127bb8dd96fb179e34b256ee9b88de099bf739

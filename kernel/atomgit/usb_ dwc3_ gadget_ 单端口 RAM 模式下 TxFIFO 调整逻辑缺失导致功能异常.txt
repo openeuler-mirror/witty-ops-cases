@@ -1,0 +1,26 @@
+#标题
+usb: dwc3: gadget: 单端口 RAM 模式下 TxFIFO 调整逻辑缺失导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在仅使用单端口 RAM（Single Port RAM）的平台配置（如 USB2.0-only 模式）下，DWC3 控制器的 TxFIFO 调整逻辑无法正常工作。由于代码未正确识别并处理单端口 RAM 场景，导致 FIFO 容量计算错误，可能引发 FIFO 分配越界或内存分配失败，最终导致 USB 功能异常。
+
+#主要错误日志
+[   XX.XX] dwc3 dwc3.0.auto: Fifosize(XX) > RAM size(XX) epXX depth:XX
+
+#问题根因
+原有的 TxFIFO 调整逻辑仅支持多端口 RAM 场景，硬编码从 RAM1 读取深度（`DWC3_RAM1_DEPTH`），忽略了单端口 RAM 场景：
+1. 未通过 `HWPARAMS1` 寄存器的 `DWC3_SPRAM_TYPE` 位检查 RAM 类型。
+2. 单端口 RAM 模式下，RX 和 TX FIFO 共享 RAM0 空间，TxFIFO 起始地址可能非零，原有逻辑未减去起始地址偏移量，也未从 RAM0 读取深度，导致计算的可用 RAM 大小错误。
+
+#解决方案
+修改 `drivers/usb/dwc3/gadget.c` 中的 FIFO 调整逻辑：
+1. 新增函数 `dwc3_gadget_calc_ram_depth`，通过读取 `HWPARAMS1` 判断 RAM 类型。
+2. 若为单端口 RAM，从 `HWPARAMS6` 获取 RAM0 深度，并减去 `GTXFIFOSIZ(0)` 中记录的 TxFIFO 起始地址偏移，以获得准确的可用 RAM 深度。
+3. 若为非单端口 RAM，保持原逻辑从 `HWPARAMS7` 获取 RAM1 深度。
+4. 将 `dwc3_gadget_resize_tx_fifos` 和 `dwc3_gadget_check_config` 中硬编码的 `ram1_depth` 替换为调用新函数计算的 `ram_depth`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fdc2af3db544569d59b856eae31de9f32157945b

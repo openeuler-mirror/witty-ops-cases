@@ -1,0 +1,21 @@
+#标题
+scsi: hisi_sas: 控制器挂起状态下执行 FLR 导致 SATA 设备丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当控制器和磁盘处于挂起状态时执行 PCIe FLR（Function Level Reset），会导致 SATA 设备丢失。
+
+#主要错误日志
+- 推断：内核日志中可能出现 libata 层报告的 IDENTIFY command failed（识别命令失败）。
+- 推断：内核日志中可能出现 revalidate fails（重新验证失败），随后 SATA 设备被禁用。
+
+#问题根因
+在控制器恢复期间，libata 层会被调用以初始化 SATA 设备。若此时执行 FLR，会导致 IDENTIFY 命令失败，进而导致重新验证失败，最终 libata 层禁用该 SATA 设备。根本原因是执行 FLR 时未等待错误处理完成。
+
+#解决方案
+在 FLR 准备阶段增加等待逻辑，使用 `wait_event` 等待 `scsi_host_in_recovery(shost)` 状态结束，确保在执行 FLR 前错误处理已完成，从而避免冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5c7d9d52dc06aaf6284924fd246e7de5c508f1ee

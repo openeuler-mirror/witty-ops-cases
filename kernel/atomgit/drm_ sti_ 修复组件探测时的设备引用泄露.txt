@@ -1,0 +1,21 @@
+#标题
+drm: sti: 修复组件探测时的设备引用泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核执行 DRM sti 驱动的组件探测（component probe）过程中，对 VTG（Video Timing Generator）设备节点进行查找时，通过 `of_find_device_by_node()` 获取的设备引用未被释放，导致设备对象引用计数泄露，相关设备结构体无法被正常回收。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `of_vtg_find()` 中，调用 `of_find_device_by_node()` 获取平台设备对象时，内核会增加该设备的引用计数。函数在通过 `platform_get_drvdata()` 获取驱动数据后，直接返回了指针，但未调用 `put_device()` 减少引用计数。
+虽然持有平台设备的引用并不能阻止其驱动数据（driver data）被释放，但在查找完成后继续持有该引用无实际意义，且导致了引用计数泄露。
+
+#解决方案
+在 `of_vtg_find()` 函数中，获取到设备驱动数据后，立即调用 `put_device(&pdev->dev)` 释放之前获取的设备引用，确保设备对象的引用计数正确平衡，从而修复内存泄露问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/669c931f3f6a1c7d1826b1623f93b17b211237e7

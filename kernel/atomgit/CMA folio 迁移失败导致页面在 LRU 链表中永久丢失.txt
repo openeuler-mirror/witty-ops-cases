@@ -1,0 +1,23 @@
+#标题
+CMA folio 迁移失败导致页面在 LRU 链表中永久丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在调用 `move_pages`、`mbind`、`memory-failure`、`DAMON` 或 `cpuset` 等接口尝试迁移 CMA（连续内存分配器）folios 时，迁移操作异常。
+2. 被跳过迁移的 CMA folios 未能正确回归 LRU 链表，导致这些页面在系统中永久“搁浅”，造成内存管理混乱或潜在的资源泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **一般迁移入口缺乏校验**：虽然 NUMA balancing 路径已经阻断了 CMA folios 的迁移，但通用入口函数 `__add_folio_for_migration()` 缺少对 CMA folios 的检查，导致其他调用者（如 move_pages 等）仍尝试迁移这类不应迁移的页面。
+2. **页面回收逻辑错误**：在 `migrate_pages()` 函数中，对于无法迁移的 `skip_folios`，原代码使用 `list_splice()` 将其重新拼接回源链表，但这并未将页面放回 LRU 链表，导致页面脱离内存管理（stranded）。
+
+#解决方案
+1. **增加 CMA 属性检查**：在 `__add_folio_for_migration()` 函数中增加 `folio_test_fcma()` 判断，若为 CMA folio 则直接返回 `-EBUSY`，从入口处拒绝迁移操作。
+2. **修正页面回收方式**：在 `migrate_pages()` 函数中，将处理 `skip_folios` 的 `list_splice(&skip_folios, from)` 替换为 `putback_movable_pages(&skip_folios)`，确保被跳过的页面能正确回归 LRU 链表。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/460878f85e6d0e93da8ef3fb29a8725d6ea475e6

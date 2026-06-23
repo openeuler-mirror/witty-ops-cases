@@ -1,0 +1,20 @@
+#标题
+nvme-pci: 管理 MQ 操作缺失 commit_rqs 回调导致门铃写丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 io_uring_cmd passthrough 批量提交 NVMe 管理命令时，若 `bd->last` 为 false（表示尝试聚合命令），且后续命令因故无法分发，会导致管理队列的门铃寄存器更新被跳过。这会导致硬件无法及时感知有新命令提交，进而引发命令提交挂起、I/O 超时或控制器响应异常。
+
+#主要错误日志
+未知
+
+#问题根因
+内核启用了 NVMe 管理命令的 io_uring passthrough 功能（引入于 commit 58e5bdeb9c2b）。在此机制下，管理命令可能被批量提交，此时 `bd->last` 可能为 false，意图聚合多个命令后一次性写门铃。然而，`nvme_mq_admin_ops` 结构体中缺失了 `commit_rqs` 回调函数的实现。当命令聚合过程中后续命令无法分发时，内核缺乏机制来强制刷新已提交命令的门铃，导致管理队列的 SQ（Submission Queue）门铃写操作丢失。
+
+#解决方案
+在 `drivers/nvme/host/pci.c` 文件中的 `nvme_mq_admin_ops` 结构体定义里，添加 `.commit_rqs = nvme_commit_rqs` 回调。这确保了在批量提交管理命令且发生中断或无法继续聚合时，能够正确触发门铃写操作，及时通知硬件处理请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5742658205eeaa927389188da5617e9eafa67437

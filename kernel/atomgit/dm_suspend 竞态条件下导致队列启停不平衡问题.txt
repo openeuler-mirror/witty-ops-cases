@@ -1,0 +1,23 @@
+#标题
+dm_suspend 竞态条件下导致队列启停不平衡问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 device mapper 挂起和恢复过程中，若发生竞态条件，可能导致队列启停状态不平衡。具体表现为：在 __dm_suspend 失败或 dm_resume 执行时，队列可能被错误地多次启动，或者未能正确恢复，进而引发 I/O 请求处理异常或系统状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在原有的实现中，`dm_start_queue` 和 `dm_stop_queue` 的调用仅依赖于 `dm_request_based(md)` 判断，未记录队列已被停止的实际状态。当 __dm_suspend 过程中出现竞态或错误回滚时，代码路径无法准确判断队列是否已被停止过，导致在恢复路径中可能对未停止的队列执行 `dm_start_queue` 操作，或者在队列已停止的情况下未正确恢复，造成队列启停计数或状态失衡。
+
+#解决方案
+1. 在 `dm-core.h` 中新增 `DMF_QUEUE_STOPPED` 标志位，用于记录队列的停止状态。
+2. 在 `__dm_suspend` 函数中停止队列后，立即设置 `DMF_QUEUE_STOPPED` 标志位。
+3. 在 `__dm_suspend` 失败回滚路径和 `__dm_resume` 恢复路径中，使用 `test_and_clear_bit(DMF_QUEUE_STOPPED, ...)` 替代原有的 `dm_request_based(md)` 判断。这确保只有在队列确实被停止过（标志位已设置）的情况下才执行 `dm_start_queue`，从而避免队列启停不平衡。
+4. 在 `dm_resume` 入口处增加对 `DMF_FREEING` 标志位的检查，防止对正在销毁的设备执行恢复操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5cee2a75cafc654d4e5c6064860deadb5d5e5f95

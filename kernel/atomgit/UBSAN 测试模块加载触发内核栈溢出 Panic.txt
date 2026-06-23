@@ -1,0 +1,36 @@
+#标题
+UBSAN 测试模块加载触发内核栈溢出 Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 架构下（未开启 CONFIG_UBSAN_TRAP），加载 `lib_ubsan.ko` 测试模块时触发 Kernel Panic。系统报错 "stack-protector: Kernel stack is corrupted"，导致 insmod 进程无法完成模块初始化。
+
+#主要错误日志
+[   31.616546] Kernel panic - not syncing: stack-protector: Kernel stack is corrupted in: test_ubsan_out_of_bounds+0x158/0x158 [test_ubsan]
+[   31.646817] CPU: 3 UID: 0 PID: 179 Comm: insmod Not tainted 6.15.0-rc2 #1 PREEMPT
+[   31.648153] Hardware name: linux,dummy-virt (DT)
+[   31.648970] Call trace:
+[   31.649345]  show_stack+0x18/0x24 (C)
+[   31.650960]  dump_stack_lvl+0x40/0x84
+[   31.651559]  dump_stack+0x18/0x24
+[   31.652264]  panic+0x138/0x3b4
+[   31.652812]  __ktime_get_real_seconds+0x0/0x10
+[   31.653540]  test_ubsan_load_invalid_value+0x0/0xa8 [test_ubsan]
+[   31.654388]  init_module+0x24/0xff4 [test_ubsan]
+[   31.655077]  do_one_initcall+0xd4/0x280
+[   31.655680]  do_init_module+0x58/0x2b4
+
+#问题根因
+`test_ubsan_out_of_bounds` 函数在测试越界访问时存在两个问题导致内核栈被破坏：
+1. **变量布局不可控**：原代码中分别定义的局部变量（`above`、`arr`、`below`）在栈上的布局顺序不由开发者控制，编译器可能打乱其顺序，导致原本用于保护周围内存的缓冲区失效，测试时的越界写入破坏了栈上的关键数据（如栈保护金丝雀 Canary）。
+2. **越界索引过大**：测试使用的越界索引值为 5，超过了保护内存的大小（`above[4]` 和 `below[4]` 均为 4 字节），直接越过了保护区域写入了其他栈数据。
+
+#解决方案
+1. **强制内存布局**：将测试数据封装到一个结构体中，利用结构体成员在内存中连续排列的特性，强制保证 `above`、`arr`、`below` 的相对顺序，确保保护缓冲区有效。
+2. **修正越界索引**：将越界索引 `j` 从 5 修改为 4，确保越界访问落在保护缓冲区 `above` 或 `below` 内，而不是破坏其他栈变量。
+3. **优化变量属性**：移除部分不必要的 `volatile` 关键字，改用 `OPTIMIZER_HIDE_VAR()` 宏来防止编译器过度优化，既保证了测试的有效性，又避免了 `volatile` 带来的副作用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/292f129315e197fe05647b4b2c58f66cb39afd7b

@@ -1,0 +1,20 @@
+#标题
+MPTCP 端点移除时因计数错误导致潜在故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 MPTCP 端点配置同时具有 signal 和 subflow 标志，但在特定条件下无法创建子流（例如 `while` 循环未执行）时，系统未正确更新 `local_addr_used` 计数器。后续在移除该端点并调用 `__mark_subflow_endp_available()` 函数时，因预期计数器已被增加而实际未增加，导致状态不一致，可能引发内存越界、UAF 或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `mptcp_pm_create_subflow_or_signal_addr` 中，当端点同时设置了 `signal` 和 `subflow` 标志时，代码逻辑依赖 `while` 循环来增加 `msk->pm.local_addr_used` 计数。如果循环体未执行（即未能创建子流），该计数器未被增加。然而，后续移除端点的逻辑（`__mark_subflow_endp_available`）默认假设该计数器已被正确递增，这种不匹配导致了后续处理时的异常。
+
+#解决方案
+在 `mptcp_pm_create_subflow_or_signal_addr` 函数中增加修正逻辑：如果检测到端点同时具有 `signal` 和 `subflow` 标志，且未通过 `while` 循环创建子流（即循环未执行），则必须显式增加 `msk->pm.local_addr_used` 计数器，以确保端点使用状态的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e03b34a78c8735facf771797b181d5d9aa7174e3

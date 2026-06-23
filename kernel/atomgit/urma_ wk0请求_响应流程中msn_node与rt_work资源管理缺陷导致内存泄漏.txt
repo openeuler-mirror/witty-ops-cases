@@ -1,0 +1,32 @@
+#标题
+urma: wk0请求/响应流程中msn_node与rt_work资源管理缺陷导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 wk0 连接请求和响应过程中，存在多处资源管理缺陷：
+1. 内存泄漏：`msn_node` 结构体中的 `lru_node` 成员在 wk0 请求路径下被错误地加入 LRU 链表，但在连接响应处理流程中仅将其从哈希表删除，未从 LRU 链表中移除，导致链表节点悬空或泄漏。
+2. 内存泄漏：`msn_node` 结构体中的 `rt_work` 指针未正确初始化为 NULL，且在连接响应处理完毕后未释放关联的 `rt_work` 及其关联的 `rtbuffer` 资源。
+3. 异常处理不完整：在创建 `rtbuffer` 失败或报文长度过大时，已分配的 `rt_work` 未被释放，导致内存泄漏。
+
+#主要错误日志
+- "create msn_node failed. msn %llu eid " EID_FMT "\n"
+- "Failed to create the first rt_work. msn %llu.\n"
+- "Failed to create rtbuffer.\n"
+- "Failed to create rtbuffer, packet size too large.\n"
+
+#问题根因
+1. `ubmad_create_msn_node` 函数设计存在缺陷，所有创建的 `msn_node` 都无条件添加到 LRU 链表中。然而 wk0 请求/响应流程中的 `msn_node` 有独立的生命周期管理，不应受 LRU 机制管理，导致 `lru_node` 字段被错误挂载且未被清理。
+2. `msn_node` 结构体分配后，`rt_work` 成员未显式初始化为 NULL，导致后续判断逻辑可能出错。
+3. `ubmad_process_conn_resp` 函数中，在查找到匹配的 `msn_node` 并释放后，未检查并释放其持有的 `rt_work` 指针，直接导致重传工作项和缓冲区内存泄漏。
+4. `ubmad_do_post_send_wk0_conn_data` 函数在 `rtbuffer` 创建失败的异常分支中，未取消并释放已分配的 `rt_work`。
+
+#解决方案
+1. 修改 `ubmad_create_msn_node` 函数签名，增加 `use_lru` 布尔参数。在 wk0 请求与响应相关的调用路径中传入 `false`，禁止将此类 `msn_node` 加入 LRU 链表，从根源解决 LRU 链表管理混乱问题。
+2. 在 `ubmad_create_msn_node` 中显式初始化 `msn_node->rt_work = NULL`，确保指针状态干净。
+3. 在 `ubmad_process_conn_resp` 处理逻辑中，移除 `msn_node` 前先保存 `rt_work` 指针，移除节点后检查并调用 `cancel_delayed_work_sync` 取消定时工作，随后释放内存及相关 `rtbuffer`。
+4. 在 `ubmad_do_post_send_wk0_conn_data` 的错误处理路径中，增加对 `rt_work` 的取消与释放逻辑，确保资源回收完整。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/23d0c5b424f3413d5f43cdad12ad0bdbe09bffc1

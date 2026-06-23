@@ -1,0 +1,25 @@
+#标题
+cls_fw 分类器在共享块上触发空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 cls_fw 过滤器以“旧方法”（未指定 TCA_OPTIONS）挂载到共享块（shared block）上时，若有携带非零 major skb mark 的数据包进行分类，内核会发生空指针引用（NULL pointer dereference），导致 KASAN 报错或内核 panic。
+
+#主要错误日志
+KASAN: null-ptr-deref in range [0x0000000000000038-0x000000000000003f]
+RIP: 0010:fw_classify (net/sched/cls_fw.c:81)
+Call Trace:
+ tcf_classify (./include/net/tc_wrapper.h:197 net/sched/cls_api.c:1764 net/sched/cls_api.c:1860)
+ tc_run (net/core/dev.c:4401)
+ __dev_queue_xmit (net/core/dev.c:4535 net/core/dev.c:4790)
+
+#问题根因
+在 `fw_classify()` 函数中，“旧方法”路径调用 `tcf_block_q()` 并解引用 `q->handle`。共享块的 `block->q` 指针为 NULL，导致解引用时发生空指针引用。
+
+#解决方案
+在 `fw_change()` 函数中增加校验逻辑，禁止在共享块上使用“旧方法”配置（即必须指定 mark/TCA_OPTIONS），因为 `fw_classify()` 的旧方法路径依赖 `block->q`，而该值在共享块场景下为 NULL。修复代码在检测到共享块且未指定选项时返回 `-EINVAL` 并通过 `NL_SET_ERR_MSG` 提示错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/55058566213b411fab520c58ef23d64246b6a08b

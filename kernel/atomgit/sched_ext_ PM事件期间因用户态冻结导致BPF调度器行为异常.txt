@@ -1,0 +1,20 @@
+#标题
+sched_ext: PM事件期间因用户态冻结导致BPF调度器行为异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统进行电源管理（PM）操作（如休眠、挂起、恢复）期间，使用了带有活跃用户态组件的 BPF 调度器时，系统可能出现调度异常行为，包括任务停滞或调度器功能失效。这是由于 PM 操作会冻结用户态进程，导致 BPF 调度器的用户态部分无法响应内核调度请求。
+
+#主要错误日志
+sched_ext: Failed to register PM notifier (%d)
+
+#问题根因
+PM 操作会冻结用户态，而部分 BPF 调度器包含活跃的用户态组件并参与关键的调度路径。当用户态被冻结时，这些调度器无法正常工作，从而导致调度行为异常或停滞。此外，在系统冻结期间，调度活动较少，使用简单的 FIFO 回退行为通常足够，复杂的 BPF 调度逻辑并非必需。
+
+#解决方案
+在内核中引入 PM 事件通知器机制。当系统进入 PM 事件（如 PM_HIBERNATION_PREPARE、PM_SUSPEND_PREPARE 等）时，调用 `scx_ops_bypass(true)` 绕过 BPF 调度器，回退到默认的 FIFO 调度行为；当 PM 事件结束（如 PM_POST_HIBERNATION、PM_POST_SUSPEND 等）时，调用 `scx_ops_bypass(false)` 恢复 BPF 调度器的正常运行。同时增加了 PM 通知器的注册逻辑，若注册失败则打印错误日志并返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f4d35be72878db6476e4d1e23dbcd8e8643e07d

@@ -1,0 +1,40 @@
+#标题
+RDMA/rxe: ibv_query_device 测试因 sys_image_guid 为 0 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 rdma-core 测试套件中执行 `ibv_query_device()` 和 `ibv_query_device_ex()` 相关测试用例时失败。测试断言检查设备属性 `attr.sys_image_guid` 不为 0，但实际运行时该值为 0，导致 Assertion 错误。
+
+#主要错误日志
+```
+FAIL: test_query_device (tests.test_device.DeviceTest.test_query_device)
+Test ibv_query_device()
+----------------------------------------------------------------------
+Traceback (most recent call last):
+   File "/home/ubuntu/rdma-core/tests/test_device.py", line 63, in test_query_device
+     self.verify_device_attr(attr, dev)
+   File "/home/ubuntu/rdma-core/tests/test_device.py", line 200, in verify_device_attr
+     assert attr.sys_image_guid != 0
+AssertionError
+
+FAIL: test_query_device_ex (tests.test_device.DeviceTest.test_query_device_ex)
+Test ibv_query_device_ex()
+----------------------------------------------------------------------
+Traceback (most recent call last):
+   File "/home/ubuntu/rdma-core/tests/test_device.py", line 222, in test_query_device_ex
+     self.verify_device_attr(attr_ex.orig_attr, dev)
+   File "/home/ubuntu/rdma-core/tests/test_device.py", line 200, in verify_device_attr
+     assert attr.sys_image_guid != 0
+AssertionError
+```
+
+#问题根因
+在网络设备绑定到 rxe 之前，代码尝试获取网络设备指针来生成 `sys_image_guid`。由于此时网络设备尚未就绪或无法获取，导致生成逻辑错误，使得 `sys_image_guid` 被赋值为 0。
+
+#解决方案
+修改 `rxe_init_device_param` 和 `rxe_init_ports` 函数接口，直接使用 `rxe_add` 传入的有效 `net_device` 指针，而不是通过 `rxe_ib_device_get_netdev` 尝试获取。这确保了在初始化设备参数和端口信息时，使用正确的网络设备地址来生成 GUID，移除了不必要的获取和释放网络设备引用的操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dd32f9ea7a808e89a3557f56617a295064d3dadd

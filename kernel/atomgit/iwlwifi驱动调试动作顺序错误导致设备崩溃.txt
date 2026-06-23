@@ -1,0 +1,20 @@
+#标题
+iwlwifi驱动调试动作顺序错误导致设备崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了调试转储分割（dump split）功能并实施中间固件重置的机制后，驱动程序在应用调试配置（apply config）时会触发设备崩溃，导致无线网卡功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序中调试动作的执行顺序实现错误。在引入转储分割和中间固件重置机制后，固件在错误发生时不再自行终止，而是由驱动在转储过程中进行重置。原有的代码逻辑在某些时间点先执行 `iwl_dbg_tlv_apply_config` 再执行 `iwl_dbg_tlv_tp_trigger`，这导致在错误的时机应用配置，进而引发设备崩溃。正确的逻辑应当是先触发时间点处理，再应用配置。
+
+#解决方案
+调整 `iwl_dbg_tlv_time_point` 函数中多个 case 分支的代码执行顺序。将 `iwl_dbg_tlv_apply_config(fwrt, conf_list)` 的调用移至 `iwl_dbg_tlv_tp_trigger` 调用之后，确保在应用配置之前先完成触发器处理和相关固件交互，从而避免设备崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fc9a3145274d4733c1f28daeacf6599d6850648b

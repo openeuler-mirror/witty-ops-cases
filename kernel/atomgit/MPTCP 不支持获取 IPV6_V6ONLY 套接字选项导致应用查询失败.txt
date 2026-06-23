@@ -1,0 +1,20 @@
+#标题
+MPTCP 不支持获取 IPV6_V6ONLY 套接字选项导致应用查询失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+MPTCP 套接字不支持 `getsockopt(IPV6_V6ONLY)` 操作，导致应用程序无法通过该接口读取 IPV6_V6ONLY 的设置值。这会阻塞那些需要在执行后续操作前检查该选项默认值（通常 Linux 默认为 0）的应用程序，表现为获取选项调用失败或行为与标准 TCP 套接字不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+此前在 MPTCP 中添加 IPV6_V6ONLY 支持时，仅实现了 `setsockopt` 部分，遗漏了 `getsockopt` 部分的实现。导致底层代码已具备相关字段（`sk->sk_ipv6only`），但未向上层暴露查询接口，使得 MPTCP 套接字行为不符合标准的套接字 API 规范。
+
+#解决方案
+在 `net/mptcp/sockopt.c` 中新增 `mptcp_getsockopt_v6` 函数。该函数处理 SOL_IPV6 级别的选项获取，针对 `IPV6_V6ONLY` 选项，通过调用 `mptcp_put_int_option` 返回套接字中 `sk_ipv6only` 字段的值；同时在 `mptcp_getsockopt` 主入口中增加对 SOL_IPV6 级别的分发调用，从而完整支持该选项的查询功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac8267efaf50f232048f1e3d712d879797d635d2

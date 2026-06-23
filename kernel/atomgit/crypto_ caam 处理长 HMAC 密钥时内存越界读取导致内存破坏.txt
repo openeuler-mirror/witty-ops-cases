@@ -1,0 +1,21 @@
+#标题
+crypto: caam 处理长 HMAC 密钥时内存越界读取导致内存破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当向 CAAM 加密驱动提供长度大于块大小的 HMAC 密钥时，驱动程序在复制密钥过程中发生内存越界读取。这可能导致相邻内存区域的数据被破坏或泄露，进而引发系统不稳定、数据损坏或其他不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+当密钥长度超过块大小时，驱动会分配内存并对其进行哈希处理。为了满足 DMA 缓存对齐要求，分配的内存长度（aligned_len）可能大于原始密钥长度。
+原代码使用 `kmemdup(key, aligned_len, GFP_KERNEL)` 进行内存分配和复制，该函数尝试从源缓冲区复制 `aligned_len` 个字节，而源缓冲区实际只有 `keylen` 个字节。这导致读取了多余的 `aligned_len - keylen` 个字节，造成越界读取并可能破坏邻近内存。
+
+#解决方案
+将 `kmemdup` 调用替换为 `kmalloc` 加 `memcpy` 的组合。先使用 `kmalloc` 分配对齐后的内存空间，再使用 `memcpy` 仅复制原始密钥长度（`keylen`）的数据，确保不会读取源缓冲区之外的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/97565e1e91a05ed0b630b7f869af8c3a5910fec2

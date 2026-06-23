@@ -1,0 +1,20 @@
+#标题
+AppArmor 策略解包内存分配失败时返回错误码不正确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 AppArmor 策略过程中，若系统内存不足导致 `unpack_perms_table` 函数中的 `kcalloc` 分配失败，内核错误地返回 `-EPROTO`（协议错误）状态码，而非预期的 `-ENOMEM`（内存不足）状态码。这可能导致上层调用者或用户空间工具无法准确识别故障是由内存资源短缺引起的，从而影响故障诊断与处理逻辑。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `security/apparmor/policy_unpack.c` 的 `unpack_perms_table` 函数中，通过 `kcalloc` 分配 `perms` 结构体内存时，若分配失败（返回 NULL），代码逻辑跳转至 `fail_reset` 标签。该错误处理路径将指针位置重置后，统一返回了 `-EPROTO` 错误码，未针对内存分配失败这一特定情况返回正确的 `-ENOMEM` 错误码。
+
+#解决方案
+修改 `unpack_perms_table` 函数中的内存分配失败处理逻辑。在 `kcalloc` 分配失败时，直接重置解包位置指针 `e->pos` 并立即返回 `-ENOMEM`，从而修正错误码传递，确保返回值真实反映故障原因。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a265ed49461ab51728cd2899f9136bbd25340e69

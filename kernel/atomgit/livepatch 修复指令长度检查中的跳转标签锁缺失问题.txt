@@ -1,0 +1,24 @@
+#标题
+livepatch 修复指令长度检查中的跳转标签锁缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行内核热补丁（livepatch）加载时，如果补丁函数涉及 jump label 或 static call 检查，系统可能因并发操作导致内存访问异常或检查结果不一致，从而引发内核宕机或崩溃；或因未持有必要的锁而触发内核锁校验机制（如 lockdep）的告警。
+
+#主要错误日志
+- `pr_err("'%s' has static key in first %zu bytes, ret=%d\n", func->old_name, KLP_MAX_REPLACE_SIZE, ret);`
+- `pr_err("'%s' has static call in first %zu bytes, ret=%d\n", func->old_name, KLP_MAX_REPLACE_SIZE, ret);`
+
+#问题根因
+在 `check_address_conflict` 函数中调用 `jump_label_text_reserved()` 和 `static_call_text_reserved()` 检查指令长度冲突时，未持有 `jump_label_mutex` 锁。虽然代码注释曾认为不需要锁，但 `jump_label_text_reserved()` 的实现及其注释明确要求调用者必须持有 `jump_label_mutex`，否则在检查过程中若 jump label 或 static call 的调用点发生变化（如并发模块加载或状态更新），将导致竞争条件。
+
+#解决方案
+在 `check_address_conflict` 函数中添加 `jump_label_lock()` 和 `jump_label_unlock()` 保护。具体修改包括：
+1. 引入 `<linux/jump_label.h>` 头文件。
+2. 在检查循环开始前调用 `jump_label_lock()` 获取锁。
+3. 检查结束后（包括错误跳出路径 `goto out`）调用 `jump_label_unlock()` 释放锁，确保对 jump label 和 static call 文本区域的检查在锁保护下进行，消除并发风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/592badb8b1e9b4053b26525d5ddc6389b9902684

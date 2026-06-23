@@ -1,0 +1,37 @@
+#标题
+sched: Soft domain 功能改进及内存泄漏与原子上下文睡眠故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **内存泄漏**：在销毁任务组（task_group）时，未正确释放 soft domain 相关的内存资源（`sf_ctx`），导致内存泄漏。
+2. **原子上下文睡眠**：在 `wake_soft_domain` 函数调用路径中，由于在 `rcu_read_lock` 临界区内执行了可能睡眠的操作，导致内核报告 "might sleep in atomic section" 或类似的调度警告/宕机。
+3. **空指针引用**：在读取 cgroup 接口（如 `cpu.soft_domain_nr_cpu`）时，若任务组未初始化 soft domain 上下文，会导致内核空指针引用异常。
+
+#主要错误日志
+- 推断日志（原子上下文睡眠）：BUG: scheduling while atomic / might sleep in atomic section
+- 推断日志（空指针引用）：BUG: kernel NULL pointer dereference
+
+#问题根因
+1. **内存泄漏根因**：`soft_domain_ctx` 结构体在 `alloc_fair_sched_group` 中分配，但在相应的销毁路径（如 `alloc_fair_sched_group` 失败处理或 `unregister_fair_sched_group`）中缺少对应的 `destroy_soft_domain` 调用；且缺少 `css_offline` 回调来清理用户设置的软域配置。
+2. **原子上下文睡眠根因**：`wake_soft_domain` 函数被错误地放置在 `select_task_rq_fair` 的 `rcu_read_lock` 临界区之前或内部，且其内部逻辑（如内存分配或锁获取）可能引起睡眠。
+3. **空指针引用根因**：cgroup 接口读取函数（如 `cpu_soft_domain_read_s64`）直接访问 `tg->sf_ctx` 成员而未检查指针是否为空，当 soft domain 功能未启用或初始化失败时触发空指针访问。
+4. **其他逻辑缺陷**：`wake_soft_domain` 未正确处理任务的 CPU 亲和性，可能导致选核违反调度约束。
+
+#解决方案
+1. **修复内存泄漏**：
+   - 增加 `destroy_soft_domain` 函数用于释放 `sf_ctx`。
+   - 在 `alloc_fair_sched_group` 的错误处理路径和 `unregister_fair_sched_group` 中调用 `destroy_soft_domain`。
+   - 注册 `cpu_cgroup_css_offline` 回调，在 cgroup 下线时调用 `offline_soft_domain` 清理配置。
+2. **修复原子上下文睡眠**：
+   - 将 `wake_soft_domain` 调用移至 `select_task_rq_fair` 中 `rcu_read_lock` 获取之前执行，避免在 RCU 临界区内核抢占关闭的情况下调用可能睡眠的函数。
+3. **修复空指针引用**：
+   - 在 `cpu_soft_domain_read_s64`、`cpu_soft_domain_quota_read_u64` 及 `soft_domain_cpu_list_seq_show` 等接口函数中增加 `if (!tg->sf_ctx)` 判断，若未初始化则直接返回 0。
+4. **功能完善与修复**：
+   - 在 `wake_soft_domain` 中增加对 `p->cpus_ptr` 或 `p->select_cpus` 的交集检查，确保选核符合任务亲和性。
+   - 增加内核启动参数 `sched_soft_domain` 开关，控制该特性的启用状态。
+   - 修正 `init_soft_domain` 函数签名，增加 `parent` 参数以正确继承父组的 soft domain 配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/83e8bdb64d91699ff98c044bb1be13e54568853a

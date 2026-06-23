@@ -1,0 +1,23 @@
+#标题
+TCP 数据竞争导致 KCSAN 工具报告访问冲突
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 KCSAN (Kernel Concurrency Sanitizer) 进行数据竞争检测时，内核报告 `tp->data_segs_out` 和 `tp->total_retrans` 变量存在数据竞争。这是因为 `tcp_get_timestamping_opt_stats()` 函数设计为无锁运行，其对相关变量的读取与 `tcp_output.c` 中的写入操作未进行并发保护，触发了 KCSAN 的警告。
+
+#主要错误日志
+未知
+
+#问题根因
+`tcp_get_timestamping_opt_stats()` 函数故意在无锁状态下执行，以便快速获取统计信息。然而，代码中直接对 `tp->data_segs_out` 和 `tp->total_retrans` 进行了普通读取，而发送路径（如 `__tcp_transmit_skb`、`__tcp_retransmit_skb`）中同时对这两个变量进行了普通写入。这种并发的不加锁访问导致 KCSAN 检测到并报告了数据竞争问题。
+
+#解决方案
+为消除 KCSAN 报告的数据竞争警告，对相关变量的访问添加了数据竞争注解：
+1. 在读取侧（`tcp_get_timestamping_opt_stats`）：将直接访问修改为使用 `READ_ONCE()` 宏读取 `tp->data_segs_out` 和 `tp->total_retrans`。
+2. 在写入侧（`__tcp_transmit_skb`、`__tcp_retransmit_skb`、`tcp_rtx_synack`）：将直接赋值修改为使用 `WRITE_ONCE()` 宏写入 `tp->data_segs_out` 和 `tp->total_retrans`。
+此举明确告知编译器和分析工具该处存在并发访问意图，从而消除了伪阳性警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e190691bdeeb91d00ce30afb8e3cd5478af2d038

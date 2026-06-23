@@ -1,0 +1,27 @@
+#标题
+ppp: ppp_fill_forward_path 存在竞态条件导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PPP 接口转发路径处理过程中，由于并发操作导致内核崩溃：
+1. 当 PPP 通道正在断开连接时，若此时触发 `ppp_fill_forward_path`，可能因访问已释放的通道结构体或空指针导致 Kernel Panic。
+2. 具体表现为在 `ppp_fill_forward_path` 函数中访问无效内存地址或解引用 NULL 指针。
+
+#主要错误日志
+未知
+
+#问题根因
+`ppp_fill_forward_path()` 函数存在两个竞态条件：
+1. **链表访问竞态**：`ppp->channels` 链表在 `list_empty()` 检查与 `list_first_entry()` 获取首元素之间可能发生变化。由于未持有 `ppp_lock()`，若唯一的通道在 `ppp_disconnect_channel()` 中被删除，`list_first_entry()` 可能访问到一个空链表头或已释放的条目，从而触发 panic。
+2. **空指针解引用**：当调用 `ppp_unregister_channel()` 时，`pch->chan` 被设置为 NULL，随后才将 `pch` 从 `ppp->channels` 链表中移除。这导致遍历链表时可能获取到一个 `pch->chan` 为 NULL 的条目，直接解引用引发崩溃。
+
+#解决方案
+采用无锁 RCU（Read-Copy-Update）方法修复竞态问题：
+1. 使用 `list_first_or_null_rcu()` 替代原有的 `list_empty()` 和 `list_first_entry()` 组合，安全地测试并访问链表首元素。
+2. 将 `ppp->channels` 链表的修改操作（如 `list_add_tail`、`list_del`）转换为对应的 RCU 变体（`list_add_tail_rcu`、`list_del_rcu`），并在移除通道后调用 `synchronize_net()` 确保读取侧完成。
+3. 在解引用 `pch->chan` 前使用 `READ_ONCE()` 进行读取，并增加 NULL 检查逻辑，防止访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/053536466f2e455181cb8e20fb449fbaaa5f3a23

@@ -1,0 +1,32 @@
+#标题
+drm/sched: 修复 drm_sched_entity_kill_jobs_cb 中的死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在运行 GPU 负载时可能触发内核死锁，导致相关进程挂起（D状态）或系统无响应。内核日志中会打印典型的死锁检测警告，指出 CPU0 和 CPU1 之间存在锁的逆向依赖，并标记为 `*** DEADLOCK ***`。
+
+#主要错误日志
+[ 1231.611031]  Possible interrupt unsafe locking scenario:
+[ 1231.611033]        CPU0                    CPU1
+[ 1231.611034]        ----                    ----
+[ 1231.611035]   lock(&xa->xa_lock#17);
+[ 1231.611038]                                local_irq_disable();
+[ 1231.611039]                                lock(&fence->lock);
+[ 1231.611041]                                lock(&xa->xa_lock#17);
+[ 1231.611044]   <Interrupt>
+[ 1231.611045]     lock(&fence->lock);
+[ 1231.611047]
+                *** DEADLOCK ***
+
+#问题根因
+问题源于 `drm_sched_entity_kill_jobs_cb()` 函数在中断上下文中执行时的锁竞争：
+1. `drm_sched_entity_kill_jobs_cb` 作为 fence signaling 回调在中断上下文中运行，尝试获取 `xa_lock`，而该锁可能已被其他 CPU 上的进程上下文（如 `drm_sched_job_add_dependency`）持有，导致死锁。
+2. `dma_fence_signal` 获取 `fence.lock` 后调用回调，回调内若调用 `dma_fence_add_callback` 尝试获取另一个 fence 的锁，若两个 fence 共享同一个 spinlock 也会导致死锁。
+
+#解决方案
+将依赖项的迭代与重新提交逻辑从 `drm_sched_entity_kill_jobs_cb` 移至 `drm_sched_entity_kill_jobs_work` 中执行。通过将复杂的锁操作和依赖处理移至工作队列（workqueue）的进程上下文中，避免了在中断上下文中持有锁引发的死锁风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fc38a412e2524e77215164fc423a1d959bfb64b5

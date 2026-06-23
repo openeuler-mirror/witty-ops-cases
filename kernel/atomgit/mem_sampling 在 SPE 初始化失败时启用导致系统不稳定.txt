@@ -1,0 +1,22 @@
+#标题
+mem_sampling 在 SPE 初始化失败时启用导致系统不稳定
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 ARM Statistical Profiling Extension (SPE) PMU 驱动未正确初始化或已卸载时，若尝试启用 `mem_sampling` 功能，可能导致未定义行为或系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+在代码逻辑中，`mm_spe_buffer_free` 函数先执行 `spe_probe_status -= 1` 后才调用 `set_mem_sampling_state(false)`，而在 `set_mem_sampling_state` 及相关状态设置函数中，检查 SPE 是否就绪的逻辑（`mm_spe_enabled`）依赖于 `spe_probe_status` 的值。
+这导致了竞争窗口或状态不一致：在 SPE 状态被标记为未初始化（probe_status 减小）后、内存采样被显式关闭前，系统可能尝试启用内存采样功能。此时 SPE 实际上不可用，但代码未能有效拦截启用请求，从而引发问题。
+
+#解决方案
+1. 调整 `mm_spe_buffer_free` 中的执行顺序，确保先调用 `set_mem_sampling_state(false)` 关闭内存采样功能，然后再修改 `spe_probe_status` 状态值，避免状态检查出现窗口期。
+2. 在 `set_numabalancing_mem_sampling_state`、`set_damon_mem_sampling_state` 和 `set_mem_sampling_state` 等状态设置函数的入口处提前增加检查：若 `mem_sampling_ops.sampling_start` 未初始化或 `mm_spe_enabled()` 返回假，则直接返回，阻止在 SPE 不可用状态下启用内存采样。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f597613cc308cc3f9dfb61fb5a8dfc018a7d1640

@@ -1,0 +1,20 @@
+#标题
+PM / devfreq: hisi: 修复 OPP 处理中的潜在 UAF 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hisi_uncore_freq 驱动执行频率调整时，存在潜在的使用后释放风险。如果在调用 `dev_pm_opp_put(opp)` 释放 OPP 节点后、发送频率命令前发生竞争或后续操作，可能导致内核访问已释放的内存区域，引发内核崩溃或不可预知的异常行为。
+
+#主要错误日志
+dev_err(dev, "Failed to get opp for freq %lu hz\n", *freq);
+
+#问题根因
+在函数 `hisi_uncore_target` 中，代码逻辑顺序错误。在通过 `dev_pm_opp_get_freq(opp)` 获取频率数据之前，就过早调用了 `dev_pm_opp_put(opp)` 释放了 OPP 指针。这导致后续代码（`hisi_uncore_cmd_send` 前的操作）可能基于已释放的 OPP 指针进行操作，从而引发 UAF。
+
+#解决方案
+调整代码执行顺序，将 `dev_pm_opp_put(opp)` 调用移动到获取频率数据操作之后、发送命令之前，确保 OPP 指针在使用期间保持有效，修复了 UAF 隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e29e2d34aae82e026de7ef2f1d29ef4014d7dd47

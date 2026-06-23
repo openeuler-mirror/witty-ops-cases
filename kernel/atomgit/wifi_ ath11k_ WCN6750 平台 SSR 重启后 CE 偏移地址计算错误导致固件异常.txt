@@ -1,0 +1,21 @@
+#标题
+wifi: ath11k: WCN6750 平台 SSR 重启后 CE 偏移地址计算错误导致固件异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 WCN6750 等不支持 CE 地址空间重映射的平台上，当触发 Subsystem Restart (SSR) 时，系统访问了无效的 CE 寄存器地址，导致固件在 SSR 触发后出现异常行为，无法正常恢复运行。
+
+#主要错误日志
+未知
+
+#问题根因
+在初始 SRNG 设置阶段，`mem_ce` 和 `mem` 被初始化为相同的 iomem 地址，CE 偏移地址计算正确。但在固件下载后，`mem` 地址被 QMI 消息中的 BAR 地址更新，而 `mem_ce` 地址未同步更新。
+对于 WCN6750（`ce_remap` 为 false），其 CE 地址空间与 WCSS 地址空间相同。当 SSR 发生并调用 `ath11k_hal_srng_init()` 进行重新初始化时，由于 `mem_ce` 仍为旧地址，导致 CE 偏移地址计算错误，进而使得 CPU 访问了无效的 CE 寄存器地址。
+
+#解决方案
+在 `ath11k_qmi_request_device_info()` 函数中，当获取到新的 BAR 地址并更新 `ab->mem` 时，增加判断逻辑：如果当前硬件平台不支持 CE 重映射（即 `ab->hw_params.ce_remap` 为 false），则将 `ab->mem_ce` 同步更新为 `ab->mem`，确保 CE 偏移地址计算基准正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b017442f121f176f9f8180fab73dbf6f0d3559b5

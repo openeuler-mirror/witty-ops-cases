@@ -1,0 +1,29 @@
+#标题
+af_packet 在 MSG_PEEK 场景下触发 vlan_get_tci 内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 MSG_PEEK 标志调用 recvmsg 系统调用接收数据包时，内核在处理 VLAN 标签获取逻辑（vlan_get_tci）时触发 skb_under_panic，导致系统崩溃或 Oops。该问题由 syzbot 发现，属于对 skb 不安全操作引发的内存越界或状态不一致。
+
+#主要错误日志
+skbuff: skb_under_panic: text:ffffffff8a8da482 len:32 put:14 head:ffff88807a1d5800 data:ffff88807a1d5810 tail:0x14 end:0x140 dev:<NULL>
+------------[ cut here ]------------
+kernel BUG at net/core/skbuff.c:206 !
+Oops: invalid opcode: 0000 [#1] PREEMPT SMP KASAN PTI
+RIP: 0010:skb_panic net/core/skbuff.c:206 [inline]
+RIP: 0010:skb_under_panic+0x14b/0x150 net/core/skbuff.c:216
+Call Trace:
+ skb_push+0xe5/0x100 net/core/skbuff.c:2636
+ vlan_get_tci+0x272/0x550 net/packet/af_packet.c:565
+ packet_recvmsg+0x13c9/0x1ef0 net/packet/af_packet.c:3616
+
+#问题根因
+在上游提交 79eecf631c14 ("af_packet: Handle outgoing VLAN packets without hardware offloading") 中引入的 `vlan_get_tci()` 函数存在缺陷。该函数为了获取 VLAN TCI，通过 `skb_push` 修改了 skb 的 data 指针。然而，该实现忽略了 `MSG_PEEK` 场景（只查看数据但不从队列移除）。在 MSG_PEEK 模式下，skb 可能被多个 CPU 并发读取，修改 skb 数据指针会导致竞态条件或破坏 skb 状态，从而触发 skb_under_panic 崩溃。
+
+#解决方案
+重写 `vlan_get_tci()` 函数，移除对 `skb_push` 的调用以及相关的 skb 指针回滚操作。改为使用只读方式计算偏移量（`skb_mac_offset(skb) + header_len`）并配合 `skb_header_pointer` 获取 VLAN 头信息。同时为 skb 参数添加 `const` 限定符，确保函数不会修改 skb 结构，从而兼容 MSG_PEEK 场景及多 CPU 并发读取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9da5277a71e3e62640eb4f6d9d1d957d0094ec9

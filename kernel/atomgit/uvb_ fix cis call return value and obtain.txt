@@ -1,0 +1,24 @@
+#标题
+uvb: fix cis call return value and obtain
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在调用 `cis_call_uvb` 或 `cis_call_uvb_sync` 函数时，若遇到 `uvb_window` 无可用 buffer 的情况，函数返回值错误，未正确返回错误码，导致调用者无法感知底层功能不支持的状态。
+2. 在 `uvb_occupy_window` 函数中，指针赋值逻辑错误，原代码将二级指针变量本身置 NULL 而非解引用后的指针内容，可能导致后续逻辑异常或内存管理混乱。
+
+#主要错误日志
+- "no window buffer to save data\n"
+- "sync call no window buffer to save data\n"
+
+#问题根因
+1. **返回值未初始化与赋值缺失**：`cis_call_uvb` 和 `cis_call_uvb_sync` 函数中，局部变量 `err` 未初始化为 0；且在 `wd->buffer` 为空的错误分支中，仅打印了错误日志但未将 `err` 赋值为 `-EOPNOTSUPP`，导致函数直接跳转至返回语句时返回了错误的值（未定义或 0），掩盖了错误状态。
+2. **指针赋值错误**：`uvb_occupy_window` 函数中，`memunmap(*wd_obtain)` 后应当将指针内容置空（`*wd_obtain = NULL`），但原代码误写为 `wd_obtain = NULL`，这试图修改指针变量本身的地址值，而非其指向的内容，属于明显的指针操作错误。
+
+#解决方案
+1. **修复返回值逻辑**：在 `cis_call_uvb` 和 `cis_call_uvb_sync` 函数定义时，将 `err` 初始化为 0；在判断 `!wd->buffer` 的错误处理分支中，增加 `err = -EOPNOTSUPP;` 赋值语句，确保函数能正确返回错误码。
+2. **修复指针赋值**：将 `uvb_occupy_window` 函数中的 `wd_obtain = NULL` 修正为 `*wd_obtain = NULL`，确保正确地将指针解引用后置空。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f837e62106b79d9356040628db3ecabafeb5d97e

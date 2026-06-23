@@ -1,0 +1,21 @@
+#标题
+drm/amdkfd: MES模式下访问debugfs hang_hws接口导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持MES（Microcode Execute Scheduler）的GPU设备上，通过debugfs接口触发`hang_hws`操作（通常用于GPU复位测试）时，触发内核空指针访问错误，导致内核崩溃。
+
+#主要错误日志
+- 触发故障时的内核日志（推断）：
+  `Inducing MES hang is not supported`
+
+#问题根因
+`debugfs hang_hws`接口原本设计用于HWS（Hardware Schduler）场景下的GPU复位测试。在MES路径下，`dqm->packet_mgr`结构体未被初始化配置。若在MES模式下调用该接口，代码继续执行并尝试访问未初始化的`dqm->packet_mgr`，从而引发空指针访问导致内核崩溃。
+
+#解决方案
+在`kfd_debugfs_hang_hws`函数入口处增加对MES模式的检查判断。如果检测到设备启用了MES（`dev->kfd->shared_resources.enable_mes`为真），则打印错误日志并直接返回`-EINVAL`，阻止后续流程执行，从而规避空指针访问风险。MES模式下的`hang_hws`支持计划后续版本实现。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fe53dfa0c2c8ea06e5de23c7db940cb9ce7c3304

@@ -1,0 +1,24 @@
+#标题
+br_netfilter发送VxLAN未标记流量导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 br_netfilter 模块且开启 bridge-nf-call-iptables 的环境下，网桥端口为 VxLAN 设备时，转发/泛洪大于 VxLAN MTU 的未标记流量会导致内核 Panic。具体表现为内核无法处理 NULL 指针解引用，触发 Oops 并导致系统崩溃。
+
+#主要错误日志
+[  176.291791] Unable to handle kernel NULL pointer dereference at virtual address 0000000000000110
+[  176.293013] Data abort info:
+[  176.294827] Internal error: Oops: 0000000096000004 [#1] PREEMPT SMP
+[  176.296808] pc : br_nf_dev_queue_xmit+0x390/0x4ec [br_netfilter]
+[  176.316060] Kernel panic - not syncing: Oops: Fatal exception in interrupt
+
+#问题根因
+在转发大于 MTU 的未标记数据包至 VxLAN 网桥端口时，`br_handle_egress_vlan_tunnel` 将 `skb_dst` 设置为隧道 dst（metadata 类型），此时 `skb_valid_dst(skb)` 返回 false 且 `metadata->dst.dev` 为 NULL。随后在 `br_nf_dev_queue_xmit` 中进行分片检查时，代码调用 `br_nf_ip_fragment` -> `ip_skb_dst_mtu`，该函数误将此 metadata dst 当作有效的 dst 使用并尝试访问 `dst->dev`，从而触发空指针崩溃。
+
+#解决方案
+在 `br_netfilter_hooks.c` 的 `br_nf_dev_queue_xmit` 函数中增加有效性检查。在进行分片处理前，调用 `skb_valid_dst(skb)` 判断目标地址是否有效，若无效（即 metadata dst 情况），直接跳转到 drop 流程丢弃数据包，避免后续访问空指针导致的崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae6a8066b99888c30e76a9a850abcf619bcb9fdc

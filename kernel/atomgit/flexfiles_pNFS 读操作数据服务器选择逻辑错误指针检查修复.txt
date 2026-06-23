@@ -1,0 +1,20 @@
+#标题
+flexfiles/pNFS 读操作数据服务器选择逻辑错误指针检查修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 pNFS flexfiles 布局进行读操作时，由于代码未正确处理 `ff_layout_choose_ds_for_read` 函数返回的错误指针（error pointer），导致逻辑判断错误。系统可能将错误指针误判为有效的数据服务器（DS）指针并尝试使用，或者未能正确触发回退到 MDS（元数据服务器）的流程，进而导致后续的内核空指针崩溃或 I/O 处理流程异常。
+
+#主要错误日志
+未知
+
+#问题根因
+近期提交 f06bedfa62d5 ("pNFS/flexfiles: don't attempt pnfs on fatal DS errors") 将 `ff_layout_choose_ds_for_read()` 的错误返回类型从返回 `NULL` 改为了返回错误指针（ERR_PTR）。然而，部分调用该函数的代码路径（如 `ff_layout_choose_best_ds_for_read`、`ff_layout_get_ds_for_read`、`ff_layout_pg_init_read` 等）未同步更新，仍然使用简单的非 NULL 检查（`if (ds)` 或 `if (!ds)`）。这导致错误指针被视为有效的返回值，从而绕过了错误处理逻辑。
+
+#解决方案
+修改所有调用 `ff_layout_choose_ds_for_read` 及其相关封装函数的代码路径，将原本的 NULL 指针检查替换为 `IS_ERR()` 检查，以正确识别错误指针并进入相应的错误处理分支。同时，在遍历检查设备可用性的循环中，确保在最后一次迭代时正确初始化错误状态 `ds = ERR_PTR(-EINVAL)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/05f609b975da71110a734c9d30ca2fd7e9c280eb

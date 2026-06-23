@@ -1,0 +1,20 @@
+#标题
+NFS 客户端回写过程中内存分配失败导致回环设备文件系统错误或损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当回环设备在工作队列上下文中向 NFS 文件上的文件进行回写操作时，内存分配失败概率显著增加。此故障会导致回环设备文件系统内部出现错误或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 NFS 客户端从工作队列上下文进行回写时，如果当前任务设置了 PF_MEMALLOC_NOIO 或 PF_MEMALLOC_NOFS 标志，代码仍强制使用 __GFP_NORETRY 标志进行内存分配。这两者的组合极大地增加了内存分配失败的可能性。
+
+#解决方案
+修改 `nfs_io_gfp_mask` 函数中的内存分配标志逻辑。对于工作队列线程，仅当 `current_gfp_context` 返回完整的 `GFP_KERNEL`（即未受限）时，才添加 `__GFP_NORETRY` 和 `__GFP_NOWARN` 标志；如果上下文已设置限制（如 NOIO 或 NOFS），则使用 `current_gfp_context` 返回的受限掩码，避免使用 __GFP_NORETRY，从而降低分配失败的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/de11c6c0153d63d3f80996a56a6d80cf855f1ddc

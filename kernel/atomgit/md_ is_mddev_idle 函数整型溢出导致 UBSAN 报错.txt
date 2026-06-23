@@ -1,0 +1,37 @@
+#标题
+md: is_mddev_idle 函数整型溢出导致 UBSAN 报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中 UBSAN（Undefined Behavior Sanitizer）捕获到未定义行为并打印告警堆栈，指出 `is_mddev_idle` 函数中发生了符号整型溢出。具体表现为内核日志中出现 "UBSAN: Undefined behaviour" 相关记录，涉及 MD 驱动同步线程。
+
+#主要错误日志
+UBSAN: Undefined behaviour in drivers/md/md.c:8175:15
+signed integer overflow:
+-2147483291 - 2072033152 cannot be represented in type 'int'
+Call trace:
+ dump_backtrace+0x0/0x310
+ show_stack+0x28/0x38
+ dump_stack+0xec/0x15c
+ ubsan_epilogue+0x18/0x84
+ handle_overflow+0x14c/0x19c
+ __ubsan_handle_sub_overflow+0x34/0x44
+ is_mddev_idle+0x338/0x3d8
+ md_do_sync+0x1bb8/0x1cf8
+ md_thread+0x220/0x288
+ kthread+0x1d8/0x1e0
+ ret_from_fork+0x10/0x18
+
+#问题根因
+在 `is_mddev_idle` 函数计算 `curr_events` 时，使用 `int` 类型变量存储 `part_stat_read_accum`（扇区统计累加值）与 `sync_io`（同步IO计数值）的差值。当 stat 累加值或 `sync_io` 大于 `INT_MAX`（2147483647）时，减法运算结果超出 `int` 类型能表示的范围，导致有符号整数溢出。
+
+#解决方案
+将相关变量及计数器类型从 32 位整型升级为 64 位整型以容纳更大的数值：
+1. 将 `struct gendisk` 中的 `sync_io` 成员类型从 `atomic_t` 修改为 `atomic64_t`。
+2. 将 `struct md_rdev` 中的 `last_events` 成员类型从 `int` 修改为 `long long`。
+3. 在 `is_mddev_idle` 函数中，将局部变量 `curr_events` 类型从 `int` 修改为 `long long`，并相应调整读取 `sync_io` 的接口为 `atomic64_read`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/69396d26a018c3f455481bafa0c42e1b90c13a22

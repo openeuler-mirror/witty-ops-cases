@@ -1,0 +1,20 @@
+#标题
+usb: renesas_usbhs: 驱动连续 unbind/bind 操作致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Renesas RZ/G2L SoC 平台上对 USB 驱动执行连续的 unbind/bind 操作时，触发内核崩溃。系统报出 "Unable to handle kernel NULL pointer dereference at virtual address" 错误信息，故障调用栈指向 `usbhsc_notify_hotplug()` 函数。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address
+
+#问题根因
+在驱动解绑（unbind）过程中，`usbhs_remove()` 函数未对挂起的 `notify_hotplug_work` 延迟工作进行刷新（flush）。当驱动资源被释放后，该延迟工作队列仍被执行，导致 `usbhsc_notify_hotplug()` 函数访问了无效的驱动资源，从而引发空指针引用崩溃。
+
+#解决方案
+在 `usbhs_remove()` 函数中添加 `flush_delayed_work(&priv->notify_hotplug_work)` 调用，确保在释放驱动资源前，所有待处理的 notify_hotplug 延迟任务均已执行完毕或被取消，避免访问已释放资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56626e0f367ba1c29b0830dba93bc8dc5705c756

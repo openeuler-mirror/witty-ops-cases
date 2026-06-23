@@ -1,0 +1,20 @@
+#标题
+[dmaengine: mediatek: mtk_cqdma_tx_status 存在潜在死锁风险]
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核存在潜在死锁风险。在 `mtk_cqdma_tx_status()` 函数执行过程中，若与其他处理 pc 和 vc 字段的函数（如 `mtk_cqdma_issue_pending()` 或 `mtk_cqdma_free_active_desc()`）并发执行，可能因锁获取顺序不一致导致死锁，进而引发系统挂起或相关 DMA 操作阻塞。
+
+#主要错误日志
+未知
+
+#问题根因
+死锁源于锁获取顺序违反。在 `mtk-cqdma.c` 文件中，其他函数（如 `mtk_cqdma_issue_pending`）遵循先获取 `pc` 锁再获取 `vc` 锁的顺序。然而，`mtk_cqdma_tx_status()` 函数先获取了 `vc` 锁，随后调用 `mtk_cqdma_find_active_desc()` 时又获取了 `pc` 锁。这种 `vc -> pc` 的反向加锁顺序与既定的 `pc -> vc` 顺序冲突，从而产生了死锁隐患。
+
+#解决方案
+调整 `mtk_cqdma_tx_status()` 中的加锁顺序以符合正确的锁层级。具体修改为：将 `mtk_cqdma_find_active_desc()` 内部的 `pc` 锁操作移除，改为在调用者 `mtk_cqdma_tx_status()` 中先获取 `pc` 锁，再获取 `vc` 锁。这确保了加锁顺序始终为 `pc -> vc`，从而消除了死锁风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab42787b8eb5466a8145630864e3a0db49d54790

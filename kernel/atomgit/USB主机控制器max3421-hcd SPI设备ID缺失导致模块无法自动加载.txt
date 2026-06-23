@@ -1,0 +1,23 @@
+#标题
+USB主机控制器max3421-hcd SPI设备ID缺失导致模块无法自动加载
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动或加载 max3421-hcd 驱动模块时，内核日志出现警告信息，提示 SPI 驱动缺少 spi_device_id。由于缺少对应的 SPI 设备 ID 表，导致驱动模块无法基于设备树兼容性字符串自动加载，设备无法正常工作。
+
+#主要错误日志
+SPI driver max3421-hcd has no spi_device_id for maxim,max3421
+
+#问题根因
+驱动代码中定义了 of_device_id 匹配表用于设备树匹配，但缺少对应的 spi_device_id 表。在 Linux 内核 SPI 子系统中，如果驱动支持设备树匹配但没有提供 spi_device_id，模块自动加载机制会失效，导致驱动无法正确绑定到设备。
+
+#解决方案
+在驱动源文件 `drivers/usb/host/max3421-hcd.c` 中添加 `spi_device_id` 表，并将其注册到模块设备表（MODULE_DEVICE_TABLE），同时在 spi_driver 结构体中设置 id_table 指针。具体修改如下：
+1. 新增 `max3421_spi_ids` 数组，包含 "max3421" 设备名。
+2. 使用 `MODULE_DEVICE_TABLE(spi, max3421_spi_ids)` 导出该表以支持模块自动加载。
+3. 在 `max3421_driver` 结构体中添加 `.id_table = max3421_spi_ids` 字段。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/53731638fa8e4ed54555f82d258594aef8267129

@@ -1,0 +1,26 @@
+#标题
+scsi: ufs: mediatek: Auto-Hibern8 定时器配置未适配不同厂商器件导致配置不合理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+MediaTek UFS 主机控制器的 Auto-Hibern8 定时器（AHIT）配置未根据闪存器件厂商的差异进行区分，导致在某些厂商（如 Samsung、Micron）的器件上使用了不匹配的休眠定时值。同时，时钟门控的延迟时间未根据 AHIT 进行正确的比例换算，可能导致时钟门控配置不符合预期，影响电源管理效率或设备稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+原有代码在 `ufs_mtk_post_link` 阶段统一将 AHIT 设置为固定值（scale=3, timer=10），未根据 UFS 器件厂商 ID（wmanufacturerid）配置特定的休眠时间。此外，时钟门控延迟的计算逻辑未正确解析 AHIT 的 scale 和 timer 字段，仅提取了 timer 部分进行计算，导致延迟时间换算错误。
+
+#解决方案
+1. 将 AHIT 配置逻辑从 `post_link` 阶段移动到 `ufs_mtk_fixup_dev_quirks` 函数中，以便在识别到器件厂商后进行针对性配置。
+2. 新增 `ufs_mtk_fix_ahit` 函数，根据器件厂商 ID 设定不同的 AHIT 值：
+   - Samsung 器件配置为 3.5 ms。
+   - Micron 器件配置为 2 ms。
+   - 其他厂商器件配置为 1 ms。
+3. 新增 `ufs_mtk_us_to_ahit` 辅助函数，将微秒单位的定时值转换为 AHIT 寄存器格式。
+4. 重构 `ufs_mtk_setup_clk_gating` 函数，正确解析 AHIT 寄存器中的 scale 和 timer 字段，将时钟门控延迟设置为 AHIT 对应的毫秒数，并强制最小值为 10 ms，确保时钟门控延迟与自动休眠时间匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5b8b550977298ae8a80e6a96f2c0553d275a84be

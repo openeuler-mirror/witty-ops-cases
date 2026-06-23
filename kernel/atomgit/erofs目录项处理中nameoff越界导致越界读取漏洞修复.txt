@@ -1,0 +1,23 @@
+#标题
+erofs目录项处理中nameoff越界导致越界读取漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载并读取精心构造的恶意EROFS文件系统镜像时，若目录块中存在尾随dirent且其nameoff值大于等于maxsize，内核会发生越界读取。此外，若nameoff0不是`sizeof(struct erofs_dirent)`的整数倍，也可能触发未定义行为。
+
+#主要错误日志
+erofs: bogus dirent @ nid %llu
+erofs: invalid de[0].nameoff %u @ nid %llu
+
+#问题根因
+EROFS文件系统驱动在处理目录项时，虽然对普通dirent进行了边界检查，但对尾随dirent的处理存在缺陷。在计算尾随dirent的名称长度时，使用了`strnlen()`配合`maxsize - nameoff`。如果构造的EROFS镜像中尾随dirent的`nameoff >= maxsize`，`maxsize - nameoff`会发生下溢，导致`strnlen()`读取超出目录块范围的内存。同时，代码未校验`nameoff0`是否为`sizeof(struct erofs_dirent)`的整数倍。
+
+#解决方案
+1. 在计算尾随dirent名称长度前，增加边界检查：若`maxsize <= nameoff`，直接判定为无效条目，跳转到错误处理流程，避免减法下溢。
+2. 在`erofs_readdir`中增加校验，确保`nameoff`必须大于0且为`sizeof(struct erofs_dirent)`的整数倍。
+3. 优化校验逻辑，使用`in_range32`检查名称长度是否在合法范围内，若发现越界或非法值则返回`-EFSCORRUPTED`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/888fd93a70383f0a3489b5ea1be588c3b3f24fef

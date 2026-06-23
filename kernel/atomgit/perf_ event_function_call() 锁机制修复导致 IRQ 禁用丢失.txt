@@ -1,0 +1,23 @@
+#标题
+perf: event_function_call() 锁机制修复导致 IRQ 禁用丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+由于在修复 `event_function_call()` 锁机制的过程中错误地移除了中断禁用（IRQ disabling）逻辑，导致内核在执行该代码路径时可能出现竞态条件，引发内核崩溃或数据不一致等不可预期的系统故障。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit 558abc7e3f89 ("perf: Fix event_function_call() locking") 在修复锁相关问题时，错误地移除了中断禁用（IRQ disabling）操作，导致 `event_function_call` 函数在获取 `perf_ctx_lock` 前未能正确关闭本地中断，破坏了原有的并发保护机制。
+
+#解决方案
+恢复 `event_function_call()` 函数中的中断禁用逻辑。具体修改包括：
+1. 在调用 `task_function_call` 失败后的路径中，先调用 `local_irq_disable()` 禁用本地中断。
+2. 随后获取 `cpuctx` 指针并持有 `perf_ctx_lock`。
+3. 在函数退出或跳转路径（如 `goto unlock` 或 `goto again`）中，确保在释放锁后调用 `local_irq_enable()` 恢复中断，保证锁与中断状态的配对维护。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d3ce3af02f110f66bfeb3d881dbbcc08c7619285

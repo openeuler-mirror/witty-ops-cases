@@ -1,0 +1,23 @@
+#标题
+gfs2：rename与exchange操作因缺少重试机制导致返回ESTALE错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+GFS2文件系统在执行 rename 或 exchange 操作时，若遇到异步 glock 处理超时，操作会直接失败并返回 `-ESTALE` 错误，而不是按预期进行重试。这导致在超时场景下（尽管是罕见但预期会发生的情况），文件操作非正常中断。
+
+#主要错误日志
+未知
+
+#问题根因
+在实现 GFS2 异步 glock 处理的提交（ad26967b9afa）中，原本设计需要为 rename 和 exchange 操作增加重试逻辑，但该部分代码从未被实现。此外，原有代码使用的超时时间设置得过高，不适合超时为罕见但预期场景的情况。当发生超时时，系统直接返回 `-ESTALE` 而未进行重试，同时也未处理信号中断情况。
+
+#解决方案
+1. 在 `gfs2_rename` 和 `gfs2_exchange` 函数中增加重试循环（`again` 标签），当 `gfs2_glock_async_wait` 返回 `-ESTALE` 时，增加重试计数并跳转重试。
+2. 修改 `gfs2_glock_async_wait` 函数，支持传入重试次数参数。
+3. 调整超时策略：缩短超时时间，并在重试过程中引入随机延迟（random delay）和指数退避机制，以优化高负载下的表现。
+4. 将等待逻辑改为可中断（interruptible），正确处理信号中断情况，返回 `-EINTR`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/55d46d177e0e1f2e6575e081d0e4130f1bfc318c

@@ -1,0 +1,30 @@
+#标题
+shmem 支持 mTHP swapin 时因 swapcache 冲突导致 softlockup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 64kB 大页（mTHP）且使用 zram 作为 swap 设备的场景下，执行内存压力测试（频繁写入文件并读取）时，系统容易触发 softlockup。具体表现为 CPU#0 被卡死超过 700 秒，调用栈显示进程处于 `shmem_swapin_folio` -> `shmem_alloc_folio` -> `mpol_shared_policy_lookup` 循环中。
+
+#主要错误日志
+watchdog: BUG: soft lockup - CPU#0 stuck for 763s! [cat:5787]
+RIP: 0010:mpol_shared_policy_lookup+0xd/0x70
+Call Trace:
+ <TASK>
+ shmem_alloc_folio+0x31/0xc0
+ shmem_swapin_folio+0x309/0xcf0
+ shmem_get_folio_gfp+0x2ed/0x5b0
+ shmem_file_read_iter+0x7f/0x2e0
+ vfs_read+0x252/0x330
+ ksys_read+0x68/0xf0
+ </TASK>
+
+#问题根因
+当进行 mTHP（多尺寸透明大页）swapin 时，预读（readahead）机制可能已经将部分 order 0 的 folio 加载到了 swap cache 中。此时，shmem 尝试分配一个新的 mTHP folio 进行 swapin，由于新分配的 mTHP folio 与 swap cache 中已存在的 order 0 folio 存在冲突，导致 `swapcache_prepare` 失败并返回 `-EEXIST`。shmem 错误处理逻辑未正确处理此情况，导致不断重试分配，从而陷入死循环引发 softlockup。
+
+#解决方案
+在 `shmem_swapin_folio` 函数中增加检查逻辑，在分配 mTHP folio 之前，先通过 `non_swapcache_batch` 函数检查目标范围内的所有 swap entry 是否均未缓存。如果检测到部分 entry 已存在于 swap cache 中（即 `non_swapcache_batch` 返回值不等于 `nr_pages`），则放弃分配 mTHP，回退（fallback）到 order 0 的 folio 进行 swapin，避免因 cache 冲突导致的死循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5a72d2e54e8ff7c7f9510de875cf201ad18f36c4

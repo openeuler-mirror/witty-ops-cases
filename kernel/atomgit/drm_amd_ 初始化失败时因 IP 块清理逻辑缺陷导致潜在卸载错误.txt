@@ -1,0 +1,21 @@
+#标题
+drm/amd: 初始化失败时因 IP 块清理逻辑缺陷导致潜在卸载错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+AMD GPU 驱动在初始化阶段若发现（discovery）失败（例如硬件不支持某 IP 块），驱动加载会失败。在后续的错误处理回滚或卸载路径中，由于 `num_ip_blocks` 未清零，代码会尝试遍历并清理未成功初始化的 IP 块，导致清理过程出现错误或异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `amdgpu_device_ip_early_init` 函数中，当 `amdgpu_discovery_set_ip_blocks` 执行失败时，代码直接返回了错误码，但未将 `adev->num_ip_blocks` 重置为 0。这导致在驱动卸载函数 `amdgpu_driver_unload_kms` 中，检查条件误认为 IP 块已初始化，从而进入了不必要的清理流程，进而引发清理失败。
+
+#解决方案
+1. 在 `amdgpu_device_ip_early_init` 的错误处理路径中，当 `amdgpu_discovery_set_ip_blocks` 失败返回时，显式将 `adev->num_ip_blocks` 设置为 0，跳过后续不必要的 IP 块解初始化（fini）流程。
+2. 同时在 `amdgpu_driver_unload_kms` 中增加对 `!adev->num_ip_blocks` 的判断，若计数为 0 则直接返回，避免执行无效的卸载操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/63642f0022192cd434f96207780e1ac73aae0d84

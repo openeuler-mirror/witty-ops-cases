@@ -1,0 +1,23 @@
+#标题
+mlx5 IRQ分配失败引发全局rmap误释放导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统同时开启fwctl和rds配置，且IRQ向量耗尽时，`mlx5_irq_alloc` 函数中的 `request_irq()` 调用失败。在错误处理路径中，驱动错误地释放了整个 `rmap` 结构，导致其他线程访问该结构时触发 General Protection Fault，进而引发内核恐慌。
+
+#主要错误日志
+mlx5_core 0000:05:00.0: mlx5_irq_alloc:293:(pid 66740): Failed to request irq. err = -28
+general protection fault, probably for non-canonical address 0xe277a58fde16f291: 0000 [#1] SMP NOPTI
+RIP: 0010:free_irq_cpu_rmap+0x23/0x7d
+Kernel panic - not syncing: Fatal exception
+
+#问题根因
+在 `mlx5_irq_alloc` 函数中，当 `request_irq()` 因IRQ向量耗尽而失败时，错误处理代码错误地调用了 `free_irq_cpu_rmap(*rmap)` 来释放整个 rmap 结构。这导致该结构中其他仍在使用的有效映射被移除，当其他线程尝试访问已释放的 rmap 时，触发了 General Protection Fault 崩溃。
+
+#解决方案
+修改 `pci_irq.c` 中的错误处理逻辑，在 `request_irq()` 失败的清理路径中，将 `free_irq_cpu_rmap(*rmap)` 替换为 `irq_cpu_rmap_remove(*rmap, irq->map.virq)`。此修改确保仅移除刚刚添加的那个特定 IRQ 映射，而不是释放整个 rmap 结构，从而保留了其他有效的映射并避免了崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/52e1c377e6562742c3056837b9a4c85b79de0906

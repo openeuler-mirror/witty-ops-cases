@@ -1,0 +1,21 @@
+#标题
+RDMA/rtrs: max_pages_per_mr 计算错误导致内存区域分配失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 RDMA 设备的 `max_mr_size` 在 `[mr_page_shift+31:mr_page_shift]` 位范围内的值为零时，客户端路径的 `max_pages_per_mr` 计算结果会被错误地设置为 0。这将导致后续在 `alloc_path_reqs` 函数中将无效的参数 0 传递给 `ib_alloc_mr`，引发内存区域（MR）分配失败，进而导致 RTRS 连接或 IO 请求无法正常建立。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `query_fast_reg_mode` 函数中计算 `max_pages_per_mr` 时，代码执行 `do_div(max_pages_per_mr, (1ull << mr_page_shift))` 后，如果设备 `max_mr_size` 属性在特定比特位范围为零，除法结果可能为 0。随后的 `min3` 函数会将 `clt_path->max_pages_per_mr` 错误地设置为 0。
+
+#解决方案
+在 `drivers/infiniband/ulp/rtrs/rtrs-clt.c` 文件中，于 `do_div` 计算之后、`min3` 比较之前，增加一行代码：`max_pages_per_mr = min_not_zero((u32)max_pages_per_mr, U32_MAX);`。
+该修复通过 `min_not_zero` 确保了即使计算出的 `max_pages_per_mr` 为 0，也会被 U32_MAX 替代（实际受限于 `min3` 中的其他参数），从而避免将 0 作为最终值传递给底层函数，保证了参数的有效性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6c0e1940f83dd3f75b20ac413525014e7c1cd912

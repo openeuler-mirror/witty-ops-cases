@@ -1,0 +1,20 @@
+#标题
+pci_endpoint_test: request_irq 错误日志显示错误的 IRQ 类型
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `pcitest -i 2` 设置 IRQ 类型后，若后续 `request_irq` 请求中断失败，内核日志（dmesg）中显示的 IRQ 类型名称与当前实际设置的类型不一致。例如，当前 IRQ 类型已设置为 MSI-X，但错误日志中却显示 "MSI 3"，导致排障信息混淆。
+
+#主要错误日志
+- `pci-endpoint-test 0000:01:00.0: Failed to request IRQ 30 for MSI 3`
+
+#问题根因
+驱动代码中存在两个表示中断类型的变量：全局变量 `irq_type` 和设备实例变量 `test->irq_type`。在 `pci_endpoint_test_request_irq` 函数的错误处理流程中，错误信息的打印逻辑错误地引用了全局变量 `irq_type`，而该变量可能未能及时更新或反映当前测试实例的中断类型，导致日志打印出错误的 IRQ 类型名称。
+
+#解决方案
+修改 `drivers/misc/pci_endpoint_test.c` 文件中 `pci_endpoint_test_request_irq` 函数的错误处理分支，将 `switch (irq_type)` 修改为 `switch (test->irq_type)`，确保错误日志打印时读取的是当前测试实例正确的 `irq_type` 值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/044e4a7e5ed568343e57ccbe7fe1e5070da25803

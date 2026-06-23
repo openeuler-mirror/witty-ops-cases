@@ -1,0 +1,20 @@
+#标题
+sysctl: proc_do_large_bitmap 未初始化变量导致合法输入返回 EINVAL
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 large bitmap 类型的 sysctl 参数进行写入操作时，如果输入缓冲区合法但未包含特定尾随字符，内核函数意外返回 `-EINVAL` 错误码，导致用户态设置 sysctl 参数失败。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `proc_do_large_bitmap()` 定义了局部变量 `c` 但未进行初始化。后续逻辑调用 `proc_get_long()` 解析输入，该函数仅在输入缓冲区包含尾随字符时才设置变量 `c` 的值。如果输入解析后无尾随字符，变量 `c` 保持未初始化状态（随机值）。若 `c` 随机值恰好为 `-`，代码逻辑会误判为需要解析输入的第二部分（如范围处理），在没有后续数据的情况下错误返回 `-EINVAL`。
+
+#解决方案
+在 `kernel/sysctl.c` 的 `proc_do_large_bitmap` 函数中，将字符变量 `c` 的定义修改为初始化为 0（`c = 0`），确保在输入缓冲区无尾随字符时，变量处于确定状态，避免误判。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d5d54092b65ef4986f39d11d2e8f804e7af77bfc

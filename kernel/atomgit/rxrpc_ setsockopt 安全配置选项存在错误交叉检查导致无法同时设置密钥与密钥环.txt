@@ -1,0 +1,23 @@
+#标题
+rxrpc: setsockopt 安全配置选项存在错误交叉检查导致无法同时设置密钥与密钥环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 AF_RXRPC socket 时，若先调用了 `setsockopt(RXRPC_SECURITY_KEYRING)` 设置了密钥环，随后再调用 `setsockopt(RXRPC_SECURITY_KEY)` 设置密钥时，内核错误地返回 EINVAL，导致无法在同一个 socket 上同时配置客户端安全密钥和服务端安全密钥环，影响了 AF_RXRPC socket 同时作为客户端和服务端使用的功能。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `rxrpc_setsockopt` 函数处理 `RXRPC_SECURITY_KEYRING` 选项的代码路径中，存在一段错误的逻辑检查：如果 `rx->key` 指针已被设置，则直接返回 EINVAL 错误。这是一个不合理的交叉检查，因为 AF_RXRPC socket 设计上允许同时持有 `rx->key`（用于客户端发送呼叫）和 `rx->securities`（用于服务端接受呼叫）。该检查阻止了用户在设置密钥环后再设置密钥的操作。此外，`RXRPC_SECURITY_KEY` 的前置检查逻辑也存在位置不当的问题。
+
+#解决方案
+移除 `rxrpc_setsockopt` 中针对 `RXRPC_SECURITY_KEYRING` 和 `RXRPC_SECURITY_KEY` 的不正确交叉检查代码。具体修改包括：
+1. 删除 `RXRPC_SECURITY_KEYRING` 分支中对 `rx->key` 的非空检查。
+2. 删除 `RXRPC_SECURITY_KEY` 分支中原有的对 `rx->key` 的检查，并将其下移至 `rxrpc_request_key` 函数内部进行统一处理。
+3. 修正 `rxrpc_request_key` 函数中的校验逻辑，将其原来对 `rx->securities` 的检查改为对 `rx->key` 的检查，确保逻辑正确且不阻碍正常功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9ffe171057f092aaa11982a0717d650a8d594b9

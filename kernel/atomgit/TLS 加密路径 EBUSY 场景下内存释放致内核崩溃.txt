@@ -1,0 +1,20 @@
+#标题
+TLS 加密路径 EBUSY 场景下内存释放致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统进行 TLS 软件加密传输时，如果加密引擎处于忙碌状态返回 EBUSY，在异步回调完成后，系统可能会遭遇 kernel panic 或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tls_do_encryption` 函数中，当收到 `-EBUSY` 返回码时，会调用 `tls_encrypt_async_wait` 等待异步加密完成。如果该等待最终返回错误（非 `-EINPROGRESS`），原有的代码逻辑会继续执行后续的同步清理流程，再次尝试递减 `encrypt_pending` 计数并恢复 SGE（Scatter/Gather Entries）。然而，异步回调函数 `tls_encrypt_done()` 无论成功与否都已经被执行，其中已经完成了 `encrypt_pending` 的递减和 SGE 的恢复操作。这导致了双重释放和状态不一致，进而引发内核崩溃。
+
+#解决方案
+在 `tls_do_encryption` 函数中，当处理 `-EBUSY` 且等待结束后，增加判断逻辑：如果返回值不是 `-EINPROGRESS`（即代表异步操作已完成且失败或成功），直接将记录从列表中删除并返回，跳过后续的同步清理代码，避免重复清理导致的崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c7e77e155c8c657c6f0fb178f97261bf9aba1cb3

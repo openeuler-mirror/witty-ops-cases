@@ -1,0 +1,20 @@
+#标题
+net: dsa: b53: 修改 PVID 时错误刷新 VLAN 导致旧 PVID 流量中断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Broadcom B53 交换机驱动中，当更改端口的默认 VLAN ID（PVID）时，系统会错误地刷新新添加的 VLAN 条目，而不是旧的 PVID。这导致旧的 PVID 对应的 VLAN 条目未被正确清理（或被错误地再次刷新），可能导致交换机转发行为异常，旧 PVID 相关的流量无法正确老化或处理。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `b53_vlan_add` 中，当端口 PVID 发生变更时，代码逻辑本意是刷新旧的 PVID 对应的 VLAN 条目。但由于代码编写错误，调用 `b53_fast_age_vlan` 时传入的参数是当前正在操作的 `vlan->vid`（即新 PVID 或当前添加的 VLAN），而非 `old_pvid`。这导致旧的 PVID 未被刷新，且新加入的 VLAN 可能被非预期地再次刷新。
+
+#解决方案
+修改 `drivers/net/dsa/b53/b53_common.c` 文件中的 `b53_vlan_add` 函数，将 `b53_fast_age_vlan` 的调用参数从 `vlan->vid` 修正为 `old_pvid`，确保在 PVID 变更时正确刷新旧 PVID 的 VLAN 条目。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f01eaa7b0f4b8f26d763999a6bc442472d1e5869

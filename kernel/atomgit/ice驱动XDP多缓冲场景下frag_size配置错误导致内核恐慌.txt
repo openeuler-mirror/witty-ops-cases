@@ -1,0 +1,25 @@
+#标题
+ice驱动XDP多缓冲场景下frag_size配置错误导致内核恐慌
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ice网卡驱动上使用XDP多缓冲（XDP multi-buffer）功能时，若调用 `bpf_xdp_frags_increase_tail()` 调整数据包尾部空间，会导致内核恐慌。
+具体复现条件为运行 `XDP_ADJUST_TAIL_GROW_MULTI_BUFF` xskxceiver 测试，将数据包大小修改为 6912 字节，并将请求偏移量设置为巨大值（如 `XSK_UMEM__MAX_FRAME_SIZE * 100`）。
+在零拷贝（ZC）模式下虽不会触发恐慌，但会出现本应成功的尾部增长操作失败的现象。
+
+#主要错误日志
+未知
+
+#问题根因
+ice驱动在配置XDP RxQ信息时，错误地将 `frag_size` 字段设置为 DMA 写入长度，而 `bpf_xdp_frags_increase_tail()` 函数期望该字段代表完整的缓冲区大小。这种假设不一致导致计算出的尾部空间变为负值，进而引发内核恐慌。
+
+#解决方案
+修改 `ice_vsi_cfg_rxq` 函数中的 `__xdp_rxq_info_reg` 调用参数：
+1. 在非ZC模式下，使用 `ice_get_frame_sz(ring)` 获取帧大小替代原有的 `ring->rx_buf_len`。
+2. 在ZC模式下，使用新获取的 `frag_size`（通过 `xsk_pool_get_rx_frag_step` 计算得出）替代原有的 `ring->rx_buf_len`。
+此举确保 `frag_size` 反映真实的缓冲区大小，修复了因数值计算错误导致的崩溃与功能异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d71ee4a3279e5a21e8b096a08fbb1cc41ad20497

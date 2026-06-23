@@ -1,0 +1,20 @@
+#标题
+cgroup/rdma: rdmacg_try_charge 函数整型溢出导致资源计量错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA 资源使用量达到 INT_MAX（默认最大值）时，再次尝试申请资源（charge）本应被拒绝，但实际上申请成功，导致资源使用量被错误地更新为负数，破坏了 cgroup 的资源计量统计。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `rdmacg_try_charge` 函数中，表达式 `rpool->resources[index].usage + 1` 在赋值给 s64 变量 `new` 之前，是作为 int 类型进行运算的。当 `usage` 等于 `INT_MAX` 时，加法运算发生整型溢出变成 `INT_MIN`。该负值随后绕过了 `new > max` 的检查逻辑，导致错误的资源分配。
+
+#解决方案
+修复方法是在进行加法运算前，将 `usage` 强制转换为 s64 类型，确保运算在 64 位环境下进行，从而避免整型溢出。代码变更为：`new = (s64)rpool->resources[index].usage + 1;`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/041bd933a13c6fa22a078474cff3d14e1661299d

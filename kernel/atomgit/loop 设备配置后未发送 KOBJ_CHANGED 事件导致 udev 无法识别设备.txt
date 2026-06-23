@@ -1,0 +1,20 @@
+#标题
+loop 设备配置后未发送 KOBJ_CHANGED 事件导致 udev 无法识别设备
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 loop 设备（如通过 losetup 设置）时，若无分区存在，内核不会发送 "changed" uevent，导致 udev 无法感知设备创建或变更，进而导致用户态工具（如 losetup）无法正确识别或处理设备。
+
+#主要错误日志
+未知
+
+#问题根因
+内核代码中对 `dev_set_uevent_suppress` 的使用存在误解。根据提交信息，代码注释中的 "uncork"（拔塞）一词暗示预期被抑制的事件会在取消抑制后自动发送，但实际上被抑制的事件是被丢弃的。这导致在默认情况下，loop 设备自身不会发出 "changed" 事件。虽然每个发现的分区会触发设备上的 changed 事件，但对于没有分区的设备，不会发出任何事件。
+
+#解决方案
+在 `loop_change_fd` 和 `loop_configure` 函数中，于调用 `dev_set_uevent_suppress(..., 0)` 取消抑制之后，显式调用 `kobject_uevent(..., KOBJ_CHANGE)` 发送变更事件，同时删除了引起误导的代码注释。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bc296dc195569a7e1feb5bf056125c30b4936d07

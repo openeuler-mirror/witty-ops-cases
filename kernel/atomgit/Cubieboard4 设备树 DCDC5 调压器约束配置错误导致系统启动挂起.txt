@@ -1,0 +1,27 @@
+#标题
+Cubieboard4 设备树 DCDC5 调压器约束配置错误导致系统启动挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在启动过程中挂起，具体表现为 PMIC（电源管理芯片）驱动探测失败。当 U-Boot 错误地将 DCDC5 电压设置为 1.75V 时，内核尝试将其调整为设备树中定义的范围（1.475V-1.525V），但由于该范围无法被硬件编程设定，导致调压器驱动注册失败，进而导致依赖该 PMIC 的关键设备无法工作，系统挂起。
+
+#主要错误日志
+[    4.447653] axp20x-rsb sunxi-rsb-3a3: AXP20X driver loaded
+[    4.450066] vcc-dram: Bringing 1750000uV into 1575000-1575000uV
+[    4.460272] vcc-dram: failed to apply 1575000-1575000uV constraint: -EINVAL
+[    4.474788] axp20x-regulator axp20x-regulator.0: Failed to register dcdc5
+[    4.482276] axp20x-regulator axp20x-regulator.0: probe with driver axp20x-regulator failed with error -22
+
+#问题根因
+X-Powers AXP809 PMIC 的 DCDC5 电压轨分辨率为 50mV。设备树中配置的 `regulator-min-microvolt`（1425000uV）和 `regulator-max-microvolt`（1575000uV）约束不符合硬件步进要求（例如 1.475V 和 1.525V 无法精确设定）。当驱动尝试将当前异常电压值约束到不支持的范围时返回 -EINVAL，导致整个调压器驱动探测失败。
+
+#解决方案
+修正设备树 `sun9i-a80-cubieboard4.dts` 中 DCDC5 调压器的电压约束范围，将其设置为硬件支持的可编程值：
+- 将 `regulator-min-microvolt` 从 `<1425000>` 修改为 `<1450000>`；
+- 将 `regulator-max-microvolt` 从 `<1575000>` 修改为 `<1550000>`。
+以此确保驱动在尝试修正电压时能成功应用约束。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fc967240c1c39cb473eca12de7ebbe83ea66cca8

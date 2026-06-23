@@ -1,0 +1,20 @@
+#标题
+RDMA/hns: free_buffer_pages_proc函数循环遍历逻辑错误导致状态检查失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在RDMA hns驱动DCA（Dynamic Connection Attachment）特性中，`free_buffer_pages_proc`函数遍历内存页状态时，由于循环变量`i`对应的成员状态未正确获取，导致循环实际上只检查了同一个固定的页面状态，而非遍历检查所有页面。这使得内存页释放逻辑判断失效，无法准确统计空闲页面数量，可能导致内存资源泄漏或回收异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在`free_buffer_pages_proc`函数的for循环中，调用`dca_page_is_free`时传入的参数是`state`（局部变量或固定地址），而非随循环变量`i`变化的`&mem->states[i]`。由于迭代的元素在循环过程中没有改变，导致该循环变成了无意义的操作，无法正确遍历检查`mem->states`数组中的页面状态。
+
+#解决方案
+修改`drivers/infiniband/hw/hns/hns_roce_dca.c`文件中`free_buffer_pages_proc`函数的循环逻辑，将`dca_page_is_free(state)`修改为`dca_page_is_free(&mem->states[i])`，确保每次循环迭代都能正确获取并检查对应的内存页状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/159da2001818f2fd19b91f6fad59451e58a95c9b

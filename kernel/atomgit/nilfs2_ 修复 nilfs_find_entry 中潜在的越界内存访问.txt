@@ -1,0 +1,22 @@
+#标题
+nilfs2: 修复 nilfs_find_entry 中潜在的越界内存访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 inode 的 i_size 被篡改为一个超大值时，在目录中搜索记录会触发内存访问越界。具体表现为：
+1. 内存访问超出了 folio/page 的范围。
+2. 如果开启了 KASAN，会检测到 use-after-free 错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nilfs_last_byte()` 函数中，用于接收 inode->i_size 的局部变量 `last_byte` 被错误地定义为 `unsigned int` 类型（32位）。由于 i_size 是 64 位值，赋值时发生了高位截断（bit loss）。这导致后续在 `nilfs_find_entry()` 中计算结束地址时发生下溢，产生一个巨大的字节偏移值，进而引发越界内存访问。
+
+#解决方案
+将 `nilfs_last_byte()` 函数中的局部变量 `last_byte` 的类型从 `unsigned int` 修改为 `u64`，以防止 i_size 数值截断，确保地址计算的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8035eb3b7e9c7813004163b73886b5ee0277cb72

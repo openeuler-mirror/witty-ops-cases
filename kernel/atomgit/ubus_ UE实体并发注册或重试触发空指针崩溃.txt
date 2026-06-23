@@ -1,0 +1,20 @@
+#标题
+ubus: UE实体并发注册或重试触发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 VDM 代码逻辑中，UE（USB Entity）实体的 START 和 ATTACH 功能未持有 MUE 设备锁。当用户并发加载 ubase 驱动并注册 UE，或者 UE 重试 ATTACH 任务时，系统发生 panic。
+
+#主要错误日志
+ub_warn(uent, "device attach failed, ret=%d\n", ret);
+
+#问题根因
+在 UE 实体的 START 和 ATTACH 处理流程中（`ub_delay_task_device_attach` 和 `ub_delay_task_work` 函数），操作 UE 实体设备时未持有对应的 MUE 设备锁（`device_lock`）。这导致在并发加载驱动或任务重试的场景下，因竞态条件引发内核 panic。
+
+#解决方案
+在 `ub_delay_task_device_attach` 和 `ub_delay_task_work` 函数中，针对非 MUE 实体（`!uent->is_mue`）的操作，在调用 `device_attach` 和 `ub_start_ent` 前后分别增加 `device_lock` 和 `device_unlock` 操作，确保设备操作过程中的并发安全。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3a006a725c3e9418ee5201283413a5837bb4a1bd

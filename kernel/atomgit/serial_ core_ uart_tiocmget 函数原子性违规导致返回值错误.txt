@@ -1,0 +1,20 @@
+#标题
+serial: core: uart_tiocmget 函数原子性违规导致返回值错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下，`uart_tiocmget()` 函数可能返回错误的 Modem 控制状态值。具体表现为：当 `uart_tiocmget()` 与 `uart_update_mctrl()` 并发执行时，最终返回给用户态的结果可能由旧的 `mctrl` 值与新的硬件状态值组合而成，导致状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `uart_tiocmget()` 函数中，读取 `uport->mctrl` 的操作位于锁保护之外（`spin_lock_irq` 之前）。这导致了原子性违规：代码首先读取 `mctrl` 赋值给 `result`，随后加锁读取硬件状态。在此期间，若 `uart_update_mctrl()` 并发执行并持锁修改了 `mctrl`，`uart_tiocmget()` 将使用旧的 `mctrl` 值与新的硬件状态值进行或运算，最终导致返回值逻辑错误。
+
+#解决方案
+将 `result = uport->mctrl;` 语句移动到 `spin_lock_irq(&uport->lock);` 之后执行。确保读取 `mctrl` 和读取硬件状态这两个操作都在锁的保护下进行，从而保证两者的原子性与一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6953d14b060bc68be5207a4e03a8de597d2b5b01

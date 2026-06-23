@@ -1,0 +1,20 @@
+#标题
+RDMA/hns: 延迟销毁数据库机制失效问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA 驱动中，数据库以页为单位进行分配和释放，一个 db 页会被多个 db 共享。当多个 db 共享同一页时，如果最后一个释放的 db 未设置延迟销毁标志，即使该页中其他先前释放的 db 设置了该标志，驱动仍会直接释放该页。这导致延迟销毁机制失效，可能引发资源释放时序错误，进而导致重置与资源注销并发场景下的故障。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动对 db 页的延迟销毁判断逻辑存在缺陷。原逻辑仅根据当前正在释放的 db 结构体自身的 `delayed_unmap_flag` 来决定是否对共享页执行延迟销毁。由于 db 页是共享资源，如果设置了延迟销毁标志的 db 先释放，而最后一个释放的 db 未设置该标志，共享页会被错误地立即释放，导致延迟销毁机制失效。
+
+#解决方案
+在 `hns_roce_umem_node` 结构体中新增 `delayed_unmap_flag` 标志位，用于表征该 db 页（umem_node）是否需要延迟销毁。在 `hns_roce_db_unmap_user` 函数中，将传入的 `delayed_unmap_flag` 参数通过位或操作（|=）记录到 `umem_node->delayed_unmap_flag` 中。当 db 页引用计数归零触发释放逻辑时，改为检查 `umem_node->delayed_unmap_flag` 而非入参标志，确保只要页面上曾有 db 请求延迟销毁，该页面就会执行延迟销毁流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c132cb0babaec730f13b096cb6f5bd9a06b265f6

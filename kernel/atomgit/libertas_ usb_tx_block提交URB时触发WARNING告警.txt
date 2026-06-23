@@ -1,0 +1,20 @@
+#标题
+libertas: usb_tx_block提交URB时触发WARNING告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在快速加载固件等场景下，`usb_tx_block` 函数在上一次传输尚未完成时被再次调用。此时向 USB 核心提交仍处于活动状态的 URB（USB Request Block），导致 `usb_submit_urb` 检测到状态异常并触发内核 WARNING，日志提示 "URB submitted while active"。
+
+#主要错误日志
+URB submitted while active
+
+#问题根因
+`usb_tx_block()` 函数在提交 `cardp->tx_urb` 之前，未确保该 URB 上一次传输已经完成。如果 URB 仍处于活动状态时（例如在快速固件加载期间），函数再次尝试提交该 URB，USB 核心会检测到 URB 正在被使用，从而触发 WARNING 告警。
+
+#解决方案
+在提交新的 URB 请求前，强制调用 `usb_kill_urb(cardp->tx_urb)` 杀死可能正在活动的 URB。这确保了 URB 处于空闲状态，可以安全地重新利用和提交，从而避免重复提交活动 URB 导致的告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dbba3d68ab873c4dfd1be123d7768cb24d3d4b4c

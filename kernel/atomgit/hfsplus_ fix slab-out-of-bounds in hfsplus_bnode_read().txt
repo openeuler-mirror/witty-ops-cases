@@ -1,0 +1,25 @@
+#标题
+hfsplus: fix slab-out-of-bounds in hfsplus_bnode_read()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+HFS+ 文件系统在处理 bnode 数据时，若传入的偏移量超出节点大小范围，会触发 slab-out-of-bounds 越界访问漏洞，可能导致内核崩溃或内存破坏。
+
+#主要错误日志
+- pr_err("requested invalid offset: " "NODE: id %u, type %#x, height %u, " "node_size %u, offset %d\n", ...)
+- pr_err("requested length has been corrected: " "NODE: id %u, type %#x, height %u, " "node_size %u, offset %d, " "requested_len %d, corrected_len %d\n", ...)
+- pr_err("requested zero length: " "NODE: id %u, type %#x, height %u, " "node_size %u, offset %d, len %d\n", ...)
+
+#问题根因
+hfsplus 模块在执行 hfs_bnode_read、hfs_bnode_write、hfs_bnode_clear、hfs_bnode_copy 及 hfs_bnode_move 等函数时，未对传入的偏移量和读写长度进行边界检查。当请求的读取范围超出 bnode 实际分配的内存边界时，引发 slab-out-of-bounds 越界访问。
+
+#解决方案
+在涉及 bnode 数据操作的函数（read/write/clear/copy/move）入口处增加统一的边界校验逻辑：
+1. 新增 `is_bnode_offset_valid` 函数检查偏移量是否小于节点大小，若无效则打印错误日志并拒绝访问。
+2. 新增 `check_and_correct_requested_length` 函数，检查偏移量加长度是否超出节点大小，若越界则自动修正长度为剩余可用空间并打印警告日志。
+3. 增加对请求长度为 0 的异常情况检查，防止无效操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2dd1fc895955cf43940f36f9f928998614466d3b

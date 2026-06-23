@@ -1,0 +1,30 @@
+#标题
+ice驱动在100GB/s链路下PTP时间同步偏差过大
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 E823 设备上使用 100GB/s 链路运行 ptp4l 应用程序（作为 Time Receiver）时，报告的主时钟偏移量过高，无法收敛到正常范围（如 100ns 以内），通常维持在数千纳秒级别，导致 PTP 时间同步功能异常。
+
+#主要错误日志
+ptp4l[5278.775]: master offset      12470 s2 freq  +41288 path delay -3002
+ptp4l[5278.837]: master offset      10525 s2 freq  +39202 path delay -3002
+ptp4l[5278.900]: master offset     -24840 s2 freq  -20130 path delay -3002
+ptp4l[5278.963]: master offset      10597 s2 freq  +37908 path delay -3002
+ptp4l[5279.025]: master offset       8883 s2 freq  +36031 path delay -3002
+ptp4l[5279.088]: master offset       7267 s2 freq  +34151 path delay -3002
+ptp4l[5279.150]: master offset       5771 s2 freq  +32316 path delay -3002
+ptp4l[5279.213]: master offset       4388 s2 freq  +30526 path delay -3002
+ptp4l[5279.275]: master offset     -30434 s2 freq  -28485 path delay -3002
+ptp4l[5279.338]: master offset     -28041 s2 freq  -27412 path delay -3002
+ptp4l[5279.400]: master offset       7870 s2 freq  +31118 path delay -3002
+
+#问题根因
+驱动代码中针对 100GB/s 速率的 PHY 时钟频率设置不正确。具体为 `tx_desk_rsgb_pcs` 和 `rx_desk_rsgb_pcs` 两个字段被错误地初始化为 644.53125 MHz，这与硬件规格文档不符，导致 PHY 时钟初始化频率值错误，进而引发 PTP 偏移计算异常。
+
+#解决方案
+修正 `ice_ptp_consts.h` 中 E822 vernier 信息常量表里 100GB/s 速率对应的参数配置。将 `tx_desk_rsgb_pcs` 和 `rx_desk_rsgb_pcs` 的频率值从 644531250 (644.53125 MHz) 修改为 390625000 (390.625 MHz)，以符合内部硬件文档规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/786fa1ff6c65f08ab6161227f8c44c833afe5d45

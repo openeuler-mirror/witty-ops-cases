@@ -1,0 +1,20 @@
+#标题
+HID: wacom: kobject 创建失败导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Wacom 设备驱动初始化过程中（`wacom_initialize_remotes` 函数），若 `kobject_create_and_add` 创建并注册 kobject 失败（例如由于内存不足返回 NULL），此前已通过 `kfifo_alloc` 分配的 FIFO 缓冲区未被释放，导致内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `wacom_initialize_remotes()` 函数中，代码先调用 `kfifo_alloc()` 分配了 FIFO 缓冲区。随后虽然设计了通过 `devm_add_action_or_reset()` 注册清理动作的机制，但在该清理动作注册之前，代码尝试调用 `kobject_create_and_add()`。如果此 kobject 创建失败，函数直接返回 `-ENOMEM`，此时清理动作尚未注册，导致此前分配的 FIFO 缓冲区无法被释放，从而引发内存泄漏。
+
+#解决方案
+在 kobject 创建失败的错误处理分支中，显式调用 `kfifo_free(&remote->remote_fifo)` 释放此前分配的 FIFO 缓冲区，确保资源被正确回收后再返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/40fc2d6f363459d69aaa3fe0c68f6df6ef4b35d7

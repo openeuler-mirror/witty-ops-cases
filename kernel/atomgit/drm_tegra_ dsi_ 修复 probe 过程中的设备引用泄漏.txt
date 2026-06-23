@@ -1,0 +1,20 @@
+#标题
+drm/tegra: dsi: 修复 probe 过程中的设备引用泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Tegra DSI 驱动加载（probe）过程中，当设备配置为 ganged（并行/组合）模式时，如果伴随设备（companion device）查找到但其驱动数据（driver data）尚未初始化（即 `dsi->slave` 为 NULL），驱动会返回 `-EPROBE_DEFER`，但未能正确释放先前通过查找设备操作获取的 `struct device` 引用。这会导致内核对象引用计数泄漏，阻碍对应设备对象的正常释放与回收。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tegra_dsi_ganged_probe` 函数中，查找伴随设备时调用了获取设备引用的接口。原代码逻辑中，仅在 `dsi->slave` 存在时才调用 `put_device` 释放引用，而当 `dsi->slave` 为 NULL（伴随设备尚未 probe 完成）时，代码直接返回 `-EPROBE_DEFER`，跳过了 `put_device` 调用，导致设备引用计数泄漏。实际上，持有设备引用并不能防止其驱动数据消失，因此应立即释放该引用。
+
+#解决方案
+调整 `put_device` 的调用位置，确保无论伴随设备的驱动数据是否已就绪，在获取完 `platform_get_drvdata` 后都立即调用 `put_device` 释放设备引用，修正后的逻辑保证了引用计数的平衡。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a7cd2369ea85937a7079ba982a6ee3f728cc20ad

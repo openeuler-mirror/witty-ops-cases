@@ -1,0 +1,23 @@
+#标题
+txgbe: VF组播地址删除操作未生效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+虚拟机（VF）在删除组播地址后，仍然持续接收到该地址的组播流量。该问题无论 VF 绑定到 DPDK 驱动还是 Linux 内核驱动均存在。
+
+#主要错误日志
+未知
+
+#问题根因
+PF 驱动在处理 VF 的 update-multicast 邮箱命令时，逻辑存在缺陷。原处理流程仅将消息缓冲区中的地址添加到硬件表中，未能清除旧的表项。与 PF 自身更新组播表（会执行 flush/reload 全表操作）不同，VF 的命令处理保留了旧地址，导致删除操作无效。
+
+#解决方案
+修改 PF 的组播更新流程。在处理 VF 组播邮箱命令时，先清空整个多播表（MTA），然后通过遍历所有 VF 的组播地址重新填充表项。具体代码变更包括：
+1. 在 `txgbe_set_vf_multicasts` 函数中，移除旧的直接寄存器设置逻辑，改为调用 `txgbe_write_mc_addr_list` 同步更新 PF 和 VF 的 MTA 表。
+2. 在 `txgbe_restore_vf_multicasts` 函数开头增加 `memset` 操作清空 `mta_shadow`。
+3. 调整 `txgbe_write_mc_addr_list` 函数逻辑，根据是否启用 SR-IOV 决定是否在更新地址列表前清空硬件表项，确保删除动作生效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/16a83c8aec65f269b1d9f9d1ba2da1ecb464a5ca

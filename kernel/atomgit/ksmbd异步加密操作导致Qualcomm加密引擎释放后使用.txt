@@ -1,0 +1,25 @@
+#标题
+ksmbd异步加密操作导致Qualcomm加密引擎释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在采用高通（Qualcomm）Crypto Engine（QCE）等异步硬件加密引擎的场景下，ksmbd模块进行SMB3加密或解密操作时触发内核崩溃。具体表现为DMA传输完成回调函数访问了已被释放的内存，导致NULL指针崩溃或内存破坏。
+
+#主要错误日志
+pc : qce_skcipher_done+0x24/0x174
+lr : vchan_complete+0x230/0x27c
+...
+el1h_64_irq+0x68/0x6c
+ksmbd_free_work_struct+0x20/0x118 [ksmbd]
+ksmbd_exit_file_cache+0x694/0xa4c [ksmbd]
+
+#问题根因
+`ksmbd_crypt_message()` 函数为AEAD请求设置了NULL的完成回调函数，且未正确处理异步加密引擎返回的 `-EINPROGRESS` 状态码。当高通Crypto Engine等异步硬件返回 `-EINPROGRESS` 时，ksmbd将其误判为错误并立即释放了请求内存，但此时硬件DMA操作仍在进行中。随后DMA传输完成触发的回调函数试图访问已释放的内存，导致Use-After-Free和空指针崩溃。
+
+#解决方案
+采用标准的 `crypto_wait_req()` 等待模式修复该问题。将AEAD请求的回调函数设置为 `crypto_req_done`，并引入 `DECLARE_CRYPTO_WAIT` 初始化等待队列。使用 `crypto_wait_req()` 包装加密/解密操作，确保在异步引擎返回 `-EINPROGRESS` 时，当前进程会等待硬件操作完成后再继续执行，从而避免过早释放内存资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/955a505e89fa9fbd036271ae7c66448f69252745

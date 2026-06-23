@@ -1,0 +1,21 @@
+#标题
+shmem 构建失败（CONFIG_SWAP 未启用）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在禁用 CONFIG_SWAP 配置项进行内核编译时，构建过程报错中断，具体表现为 `include/linux/migrate.h` 出现语法错误，以及 `mm/shmem.c` 中调用 `swap_cluster_readahead()` 时因函数签名不匹配导致编译失败。
+
+#主要错误日志
+未知
+
+#问题根因
+此前提交 ed205f43c85f 将 `swap_cluster_readahead` 函数的返回值类型转换为 folio 并调整了参数列表，但修改时遗漏了 `mm/swap.h` 中对应的桩函数实现。
+当 CONFIG_SWAP 未启用时，编译器使用的是旧版的桩函数定义（参数列表为 `swp_entry_t entry, gfp_t gfp_mask, struct vm_fault *vmf`），这与实际调用点期望的新签名（4个参数）不一致，从而导致编译错误。
+
+#解决方案
+修改 `mm/swap.h` 文件中的 `swap_cluster_readahead` 桩函数定义，将其参数列表更新为与实际函数原型一致的 4 个参数（`swp_entry_t entry, gfp_t flag, struct mempolicy *mpol, pgoff_t ilx`），确保禁用 CONFIG_SWAP 时函数原型匹配，修复构建错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2935e7fbf2dfaba387254fce5d1c2ef84c4a3ff1

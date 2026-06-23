@@ -1,0 +1,20 @@
+#标题
+net/mana: client oob 写入时错误触发内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 MANA 网卡驱动进行数据发送时，若 OOB（Out-Of-Band）数据位于 SGL（Scatter-Gather List）中，内核会触发 WARN_ON_ONCE 警告。这会导致内核日志中出现调用栈回溯，影响系统稳定性并造成不必要的日志噪音。
+
+#主要错误日志
+内核日志中会出现 WARNING 相关的调用栈信息（由 WARN_ON_ONCE 触发）。
+
+#问题根因
+在 `mana_gd_write_client_oob` 函数中，代码逻辑检查 OOB 是否在 SGL 中（`oob_in_sgl` 为真）。此时原代码强制校验 `pad_data` 指针不能为空（`!pad_data`）且 SGE 数量必须大于等于 2。实际上，当 OOB 已经在 SGL 中时，`pad_data` 并不是必须的，原有的校验条件过于严格，导致在正常业务场景下错误地触发了警告。
+
+#解决方案
+移除 `mana_gd_write_client_oob` 函数中对 `pad_data` 的非空检查。修改后的逻辑仅校验 `wqe_req->num_sge < 2`，不再对 `pad_data` 进行限制，从而修复了误报的警告问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/969ea9f2d3c31b418a0141ca3ed7b8ad2d58b8c4

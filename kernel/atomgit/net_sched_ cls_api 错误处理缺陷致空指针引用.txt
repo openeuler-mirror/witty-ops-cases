@@ -1,0 +1,26 @@
+#标题
+net/sched: cls_api 错误处理缺陷致空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置流量控制（tc）规则时，若内核分配 ID 发生回绕，内核将触发 NULL 指针引用错误，导致系统崩溃或相关进程异常终止。具体表现为执行 tc 相关操作时触发内核 Oops。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000000
+CPU: 114 PID: 16151 Comm: handler114 Kdump: loaded Not tainted 5.14.0-503.16.1.el9_5.x86_64 #1
+RIP: 0010:tcf_action_init+0x1f8/0x2c0
+Call Trace:
+ tcf_action_init+0x1f8/0x2c0
+ tcf_exts_validate_ex+0x175/0x190
+ fl_change+0x537/0x1120 [cls_flower]
+
+#问题根因
+函数 `tcf_exts_miss_cookie_base_alloc()` 调用 `xa_alloc_cyclic()` 进行内存分配，该函数在分配成功且发生回绕时返回值为 1。原代码逻辑仅判断 `if (err)`，将返回值 1 误判为错误并向上层返回。上层函数 `fl_change()` 将返回值 1 视为成功，随即调用 `tcf_exts_validate_ex()` 和 `tcf_action_init()`，此时 `exts->actions` 已被错误地置为 NULL，导致在 `tcf_action_init()` 中发生空指针引用。
+
+#解决方案
+修正 `tcf_exts_miss_cookie_base_alloc()` 中的错误判断逻辑，将 `if (err)` 修改为 `if (err < 0)`。根据 `xa_alloc_cyclic` 的 API 规范，返回负值表示错误，返回 0 或正值（表示分配的索引）表示成功。此修改确保仅在真正发生错误时才进入异常处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2317a1c1b382656625a991cbd3bf80058e20fc26

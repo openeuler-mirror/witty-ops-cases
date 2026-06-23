@@ -1,0 +1,20 @@
+#标题
+f2fs在LFS模式下f2fs_map_blocks()未触发前台GC导致潜在问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在LFS（Log-structured File System）模式下，当调用f2fs_map_blocks()进行数据块映射且涉及块创建（m_may_create为真）时，系统未能及时触发前台垃圾回收。这可能导致空间分配不足或触发CVE-2025-38626相关的异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数f2fs_map_blocks()中，当map->m_may_create为真时，代码直接获取锁（f2fs_map_lock），但在LFS模式下缺失了前台GC（Garbage Collection）的触发逻辑。由于LFS模式依赖GC来回收空闲块，未在锁操作前调用f2fs_balance_fs(sbi, true)进行空间平衡与回收，导致后续操作可能面临无可用空间或其他一致性故障。
+
+#解决方案
+在fs/f2fs/data.c的f2fs_map_blocks()函数中，于f2fs_map_lock()调用之前，增加对LFS模式的判断。若当前处于LFS模式（f2fs_lfs_mode(sbi)为真），则显式调用f2fs_balance_fs(sbi, true)触发前台GC，确保在进行块分配前有足够的空闲空间，从而修复该缺陷。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8be0cbe5b5a4ccb908d3d67958173f7579cfd5ef

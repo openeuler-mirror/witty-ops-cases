@@ -1,0 +1,21 @@
+#标题
+hwlat tracer 假共享导致误报硬件延迟事件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多核系统（如双路服务器，每 NUMA 节点 32 CPU）上运行 hwlat tracer，当设置较低阈值（如 1us）和特定窗口参数时，会观测到大量的“虚假”硬件延迟事件（例如每秒 500 次），而实际上并未发生真实的硬件延迟。此外，hwlat_data.count 的计数可能出现重复或遗漏值的现象。
+
+#主要错误日志
+未知
+
+#问题根因
+get_sample() 函数在访问 hwlat_data 时未持有必要的锁（hwlat_data.lock），导致数据访问未受保护。在 per-cpu 模式下，hwlat_data.sample_width 与 hwlat_data.count 在内存中仅相隔 8 字节，极有可能位于同一缓存行。当某线程修改 count 时，缓存行处于修改状态，其他线程在检测循环中读取 sample_width 时需要重新获取该缓存行，此获取过程在部分系统上耗时足够长以至于被误判为延迟事件。这形成了自我强化的循环：延迟事件增加 count -> 引发缓存行失效 -> 读取 sample_width 变慢 -> 产生更多延迟事件。同时，未保护的 count 自增操作也导致了计数不准确。
+
+#解决方案
+1. 将 hwlat_data.count 的类型由 u64 修改为 atomic64_t，使用 atomic64_inc_return 进行原子操作自增，确保计数的准确性且无需加锁。
+2. 在 get_sample() 函数入口处，通过 READ_ONCE 将 hwlat_data.sample_width 读取到局部变量 sample_width 中，并在后续循环判断中使用该局部变量。此举避免了在紧密循环中反复读取全局变量，消除了因 count 修改导致的缓存行假共享问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2dac93bc0dd27215aa1b31da75a802fa5b400b4e

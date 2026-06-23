@@ -1,0 +1,22 @@
+#标题
+urma_admin agg del eid failed 导致 bonding 设备删除卡死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 urma_admin 聚合删除 eid（agg del eid）操作时失败，导致 bonding 设备在删除过程中卡住，无法正常完成删除流程。
+
+#主要错误日志
+- ubcore_log_err("Failed to get seg info by user ctl");
+- ubcore_log_err("Failed to send create resp message.\n");
+- ubcore_log_err("Failed to get jetty info by user ctl");
+
+#问题根因
+在 `handle_seg_info_req` 和 `handle_jetty_info_req` 函数中，当 `ubcore_user_control` 或发送响应（`send_seg_info_resp`/`send_jetty_info_resp`）失败时，代码直接返回，遗漏了调用 `ubcore_put_device(bonding_dev)` 来释放设备引用计数。这导致设备引用计数泄漏，进而引发 bonding 设备删除时无法释放资源而卡死的问题。
+
+#解决方案
+在错误处理路径中增加 `goto put_device` 跳转，确保在 `ubcore_user_control` 调用失败或发送响应失败时，能够跳转到函数末尾执行 `ubcore_put_device(bonding_dev)` 操作，正确释放设备引用计数，避免资源泄漏和删除卡死。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b934f1c63022388a5da6bfad5ad3426bfa018ff3

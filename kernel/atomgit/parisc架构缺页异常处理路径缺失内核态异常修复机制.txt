@@ -1,0 +1,20 @@
+#标题
+parisc架构缺页异常处理路径缺失内核态异常修复机制
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 parisc 架构下，当内核态代码访问无效地址触发 do_page_fault 时，如果代码路径进入 bad_area_nosemaphore 分支，系统未能正确执行异常修复（fixup），导致内核无法从预期的异常处理中恢复，进而引发内核崩溃或异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+do_page_fault 函数在 bad_area_nosemaphore 标签处的处理逻辑缺失了对内核态异常的检查与修复步骤。当发生缺页异常时，如果处于内核模式且该异常可以被修复（例如通过 exception table 查找修复地址），代码应直接返回并跳转到修复地址，但原有逻辑未包含此判断，导致后续错误处理流程不符合预期。
+
+#解决方案
+在 bad_area_nosemaphore 标签处增加对异常上下文的判断逻辑：使用 user_mode(regs) 检查是否为用户态，若为内核态则调用 fixup_exception(regs) 尝试修复。如果修复成功，函数直接返回，避免触发后续不必要的错误处理流程（如向当前进程发送信号），从而正确恢复内核执行流。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/46a2854f7ac2dd39675133a0be4165f4041f2e67

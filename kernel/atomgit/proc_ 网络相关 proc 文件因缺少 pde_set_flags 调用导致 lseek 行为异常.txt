@@ -1,0 +1,21 @@
+#标题
+proc: 网络相关 proc 文件因缺少 pde_set_flags 调用导致 lseek 行为异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建网络相关的 proc 文件时，由于未调用 `pde_set_flags()`，导致 `proc_reg_open()` 中错误地清除了 `FMODE_LSEEK` 标志。这导致相关 proc 文件的 lseek 功能行为异常（表现为不支持 lseek 或 lseek 逻辑错误），影响了用户空间程序对这类 proc 文件的正常寻址操作。
+
+#主要错误日志
+未知
+
+#问题根因
+为了防止模块卸载竞争导致的 UAF（释放后使用）问题，内核引入了 `pde_set_flags()` 机制，在 `proc_register()` 之前将 `proc_ops` 中的标志位保存到 PDE（proc_dir_entry）自身，以便后续通过 `pde_has_proc_*()` 辅助函数安全检查，避免直接解引用 `pde->proc_ops`。
+然而，对于网络相关的 proc 文件创建路径，遗漏了对 `pde_set_flags()` 的调用。这导致 PDE 中的标志位未正确初始化（例如 `PROC_ENTRY_proc_lseek`），进而导致 `proc_reg_open()` 在检查是否支持 lseek 时判断错误，不当清除了文件模式的 `FMODE_LSEEK`。
+
+#解决方案
+将 `pde_set_flags()` 的调用逻辑统一移至 `proc_register()` 函数内部，确保所有通过 `proc_register()` 注册的 proc 条目（包括网络相关文件）都会正确设置标志位。同时在 `pde_set_flags()` 函数中增加了对 `proc_ops` 的 NULL 检查，防止空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/39c41eccafdf5f175fcaca1192e355293decf9cc

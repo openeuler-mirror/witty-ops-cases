@@ -1,0 +1,20 @@
+#标题
+ext4: 修复扩展属性内存分配导致的死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ext4 文件系统操作过程中，若触发扩展属性相关逻辑，系统可能发生死锁，导致相关进程处于不可中断睡眠状态（D状态），无法继续执行。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ext4_xattr_inode_cache_find` 在进行内存分配时使用了 `GFP_KERNEL` 标志。由于该函数是被 `ext4_xattr_inode_lookup_create` 调用的，而父函数已经持有文件系统锁并使用了 `GFP_NOFS` 标志以避免递归锁定，子函数使用 `GFP_KERNEL` 可能触发直接的内存回收动作，进而尝试重新获取文件系统锁，从而引发死锁。
+
+#解决方案
+将 `fs/ext4/xattr.c` 文件中 `ext4_xattr_inode_cache_find` 函数内的 `kvmalloc` 分配标志由 `GFP_KERNEL` 修改为 `GFP_NOFS`，使其与父函数的内存分配上下文保持一致，避免在持有锁的情况下进行可能引起死锁的内存回收操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3b1420c0bbac6c66c5cefc08c45309dc337a9ca6

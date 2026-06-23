@@ -1,0 +1,20 @@
+#标题
+vga_arb_write并发场景下引用计数竞争致下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下调用 `vga_arb_write` 时，`uc->io_cnt` 计数器发生竞争条件。当初始值为 1 时，并发操作导致计数器下溢，变为 4294967295（即 -1 的无符号整型表示），引发 VGA 设备资源计数逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `vga_arb_write` 函数中，`vga_put(pdev, io_state)` 调用与 `uc->io_cnt--` 减一操作存在时序竞争。代码先调用 `vga_put` 释放资源，随后再修改用户上下文计数 `uc->io_cnt`。在并发条件下，这种顺序导致 `uc->io_cnt` 在并发修改中出现不一致（如从 1 变为 4294967295），造成引用计数下溢。
+
+#解决方案
+调整代码执行顺序，将 `vga_put(pdev, io_state)` 的调用移动到修改 `uc->io_cnt` 和 `uc->mem_cnt` 代码之后。确保先更新用户上下文计数，再释放 VGA 资源，从而消除竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7d4f489bd5cfdd069a9c892694fcba11f067ffc6

@@ -1,0 +1,38 @@
+#标题
+usb: gadget: u_serial: 解绑操作导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 USB Gadget unbinding（解绑）操作时，如果触发了 gadget 重配置（reconfiguration），可能会引发内核崩溃。具体表现为调用链中出现空指针访问，导致 `gs_read_complete` 函数异常，系统可能发生 panic 或 Oops。
+
+#主要错误日志
+Call trace:
+ gs_read_complete+0x58/0x240
+ usb_gadget_giveback_request+0x40/0x160
+ dwc3_remove_requests+0x170/0x484
+ dwc3_ep0_out_start+0xb0/0x1d4
+ __dwc3_gadget_start+0x25c/0x720
+ kretprobe_trampoline.cfi_jt+0x0/0x8
+ kretprobe_trampoline.cfi_jt+0x0/0x8
+ udc_bind_to_driver+0x1d8/0x300
+ usb_gadget_probe_driver+0xa8/0x1dc
+ gadget_dev_desc_UDC_store+0x13c/0x188
+ configfs_write_iter+0x160/0x1f4
+ vfs_write+0x2d0/0x40c
+ ksys_write+0x7c/0xf0
+ __arm64_sys_write+0x20/0x30
+ invoke_syscall+0x60/0x150
+ el0_svc_common+0x8c/0xf8
+ do_el0_svc+0x28/0xa0
+ el0_svc+0x24/0x84
+
+#问题根因
+在 `gserial_disconnect` 函数中，执行解绑操作时，先将 `gser->ioport`（即 port）清空（置为 NULL），随后才禁用 endpoints。在极端情况下，`gser->ioport` 被清空后，若立即触发 gadget 重配置，会导致 `gs_read_complete` 回调函数被调用。此时由于 port 指针已被清空，代码尝试访问空指针从而引发崩溃。
+
+#解决方案
+调整 `gserial_disconnect` 函数中的操作顺序，将 `usb_ep_disable`（禁用端点）操作移至 `port->port_usb = NULL` 和 `gser->ioport = NULL` 之前执行。此举确保在端口指针清空之前，已禁用端点并中止所有活跃的 I/O 操作，防止后续回调函数访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f33eee1e1930904cff8be3c5713eb14dbdf6dfa7

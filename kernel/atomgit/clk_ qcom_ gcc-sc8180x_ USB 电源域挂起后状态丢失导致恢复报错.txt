@@ -1,0 +1,21 @@
+#标题
+clk: qcom: gcc-sc8180x: USB 电源域挂起后状态丢失导致恢复报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统挂起后在恢复过程中，USB 子系统报告状态丢失错误。具体表现为 xHCI 控制器在恢复时检测到错误状态，导致根集线器被重置。虽然重新初始化通常能成功，但这会导致恢复过程变慢。
+
+#主要错误日志
+- xhci-hcd xhci-hcd.0.auto: xHC error in resume, USBSTS 0x401, Reinit
+- usb usb1: root hub lost power or was reset
+
+#问题根因
+SC8180x 平台的 GCC 驱动中，USB 相关的 GDSC（全局分布式开关控制器）电源域配置的电源状态为 `PWRSTS_OFF_ON`。这导致在系统挂起时电源域被完全关闭，USB 控制器丢失了寄存器状态。而 USB 子系统并不期望在挂起恢复过程中丢失状态，从而引发了 xHC 恢复错误和重新初始化。
+
+#解决方案
+修改 `drivers/clk/qcom/gcc-sc8180x.c` 中 `usb30_sec_gdsc`、`usb30_prim_gdsc` 和 `usb30_mp_gdsc` 三个结构体的配置，将 `pwrsts` 字段从 `PWRSTS_OFF_ON` 修改为 `PWRSTS_RET_ON`。这使得电源域在挂起期间保持 retention（保持）模式，维持硬件状态不丢失，从而避免恢复时的错误和重置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/120c292da3ea95f275df5a6b2b9bbf62f96fa20e

@@ -1,0 +1,20 @@
+#标题
+octeon_ep驱动未初始化控制 mbox 任务导致固件信息获取失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 octeon_ep 驱动过程中，调用 `octep_ctrl_net_get_info` 获取固件信息时无法返回从 Octeon 设备查询到的真实固件信息，导致驱动初始化流程中获取到的固件信息不正确或无效。
+
+#主要错误日志
+[推断] drivers/net/ethernet/marvell/octeon_ep/octep_main.c: Failed to get firmware info
+
+#问题根因
+由于控制网络接收工作任务（`ctrl_mbox_task`）和中断轮询任务（`intr_poll_task`）的初始化动作被放在了 `octep_ctrl_net_get_info` 调用之后，导致该函数在第一次被调用时，相关的工作队列和任务尚未初始化或排队，因此无法正常处理来自固件的响应，无法获取实际的固件信息。
+
+#解决方案
+调整初始化顺序，将工作队列任务的初始化（`INIT_WORK`、`INIT_DELAYED_WORK`）以及中断轮询任务的排队（`queue_delayed_work`）移动到 `octep_ctrl_net_get_info` 调用之前执行。同时增加对 `octep_ctrl_net_get_info` 返回值的错误检查，若获取失败则打印错误日志并跳转到错误处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d5b231d10636d5dd8ad34a8ad66591f685c03661

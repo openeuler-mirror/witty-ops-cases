@@ -1,0 +1,48 @@
+#标题
+ub/unic: 重置流程、DFX能力及Bond/QoS功能的多个缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **重置与初始化异常**：驱动初始化或重置过程中，混杂模式配置可能未正确同步，导致状态不一致；QoS初始化失败时处理不当，可能引发后续功能异常。
+2. **Bond 从设备状态不同步**：网卡加入或退出 Bond 时，驱动未及时感知并通知固件，导致 Bond 状态管理异常。
+3. **自检测试执行异常**：设备处于初始化或重置状态时执行自检测试，触发空指针访问或状态判断错误；Loopback 测试报文构造有误导致测试失败。
+4. **资源泄漏与误删**：IP 地址管理流程中，特定并发场景下存在内存泄漏；MAC 地址设置流程异常。
+5. **日志与调试信息缺失**：部分错误场景仅打印 Warning，关键调试信息（如 SQ/RQ/CQ 队列信息）无法获取，影响故障定位。
+
+#主要错误日志
+- `failed to notify bond status change, port id = %u, bonding_cmd = %s, ret = %d.`
+- `failed to disable pause, ret = %d.`
+- `failed to set pfc tx rx enable or priority, ret = %d.`
+- `failed to self test, due to dev initing or resetting.`
+- `eth packet content error, i = %u.`
+- `failed to verify ip info size, len = %u.`
+
+#问题根因
+1. **代码逻辑缺陷**：
+   - Bond 状态变更未注册 netdevice 事件通知，导致无法捕获 `NETDEV_CHANGEUPPER` 事件。
+   - QoS 初始化函数返回值判断逻辑错误，未正确处理 `-EPERM` 以外的错误。
+   - IP 地址同步逻辑未考虑并发查询期间的状态转换，导致节点被误删或泄漏。
+   - Loopback 测试中报文数据填充使用了 `i & 0xff` 导致数据模式错误，且测试报文头构造使用了错误的 MAC 拷贝接口。
+2. **状态检查不足**：
+   - 自检测试入口仅检查了 `resetting` 状态，未检查 `initing` 状态及指针有效性。
+   - 混杂模式激活/去激活流程中，错误处理逻辑导致状态位未被正确设置或清除。
+
+#解决方案
+1. **修复 Bond 状态同步**：新增 `NETDEV_CHANGEUPPER` 事件监听，在网卡上下级关系变更时触发 Bond 状态同步流程。
+2. **完善重置与初始化流程**：
+   - 修正 QoS 初始化流程，函数改为 void 类型并在内部处理配置，避免上层错误处理遗漏。
+   - 优化混杂模式设置逻辑，确保状态正确更新。
+   - 增加 `unic_is_initing_or_resetting` 检查及指针有效性校验，防止空指针崩溃。
+3. **修复资源管理问题**：
+   - 重构 IP 地址同步函数 `unic_update_ip_list`，正确处理并发查询期间的节点状态，防止内存泄漏。
+   - 修正 MAC 地址设置逻辑，确保正确处理已存在地址的状态。
+4. **修复自检与调试功能**：
+   - 修正 Loopback 报文构造，使用正确的数据填充模式及 `ether_addr_copy` 接口。
+   - 新增 `sq_rq_cq_info` debugfs 节点，输出关键队列上下文信息。
+   - 将关键配置失败的日志级别从 `unic_info`/`unic_warn` 提升为 `unic_err`。
+5. **代码清理与重构**：移除冗余的 Loopback 标志位定义，统一使用能力检查函数；修正 headers 头文件包含顺序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fe5ffbaf0a109e269d6e98676aa8a2251d7293a7

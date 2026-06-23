@@ -1,0 +1,20 @@
+#标题
+videobuf2-dma-sg 错误使用 scatterlist 同步接口导致内存一致性问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 videobuf2 的 dma-sg 内存管理功能时，CPU 访问 DMA 缓冲区可能出现数据不一致现象。由于 DMA 缓冲区同步接口参数传递错误，系统可能未能正确刷新 CPU 缓存或无效化缓冲区，导致数据损坏或 I/O 操作异常。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序错误使用了 `dma_sync_sg_for_*()` 接口。代码中传入的是 `sgt->nents`（映射后的条目数），而该接口要求传入的参数必须是最初传递给 `dma_map_sg_*()` 函数的原始条目数（即 `nents`，而非 `sgt->nents`）。这种参数不匹配导致底层 Cache 维护操作范围不正确，破坏了 DMA 缓冲区的数据一致性。
+
+#解决方案
+将 `dma_sync_sg_for_cpu()` 和 `dma_sync_sg_for_device()` 替换为封装好的 `dma_sync_sgtable_for_cpu()` 和 `dma_sync_sgtable_for_device()` 包装器函数。这些包装器函数内部会自动处理 `sg_table` 结构，确保传入正确的参数进行缓存同步操作，从而修复内存一致性问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/19f18c6f3cdf132e52724f51341fe6776b7ef3b8

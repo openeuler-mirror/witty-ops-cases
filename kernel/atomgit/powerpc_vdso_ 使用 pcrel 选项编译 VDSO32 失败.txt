@@ -1,0 +1,32 @@
+#标题
+powerpc/vdso: 使用 pcrel 选项编译 VDSO32 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 power10 平台上开启 pcrel 选项编译 VDSO32 时构建失败。首先在汇编阶段报出语法错误；修正汇编问题后，在编译阶段报出编译器选项冲突错误，导致内核无法完成编译。
+
+#主要错误日志
+- 汇编阶段错误：
+```
+arch/powerpc/kernel/vdso/gettimeofday.S:40: Error: syntax error; found `@', expected `,'
+arch/powerpc/kernel/vdso/gettimeofday.S:40: Error: junk at end of line: `@notoc'
+make[2]: *** [arch/powerpc/kernel/vdso/Makefile:85: arch/powerpc/kernel/vdso/gettimeofday-32.o] Error 1
+```
+- 编译阶段错误：
+```
+cc1: error: '-mpcrel' requires '-mcmodel=medium'
+make[2]: *** [arch/powerpc/kernel/vdso/Makefile:89: arch/powerpc/kernel/vdso/vgettimeofday-32.o] Error 1
+```
+
+#问题根因
+1. 宏定义缺陷：`CFUNC()` 宏在 `CONFIG_PPC_KERNEL_PCREL` 配置开启时，无条件地添加 `@notoc` 后缀。但在 32 位编译环境下，汇编器不支持此语法，导致 "syntax error" 和 "junk at end of line" 错误。
+2. 编译选项泄露：构建系统未能从 32 位编译选项中移除 `-mpcrel` 标志，而 `-mpcrel` 选项在当前上下文中依赖 `-mcmodel=medium`（通常用于 64 位），导致选项不兼容的编译错误。
+
+#解决方案
+1. 修改 `arch/powerpc/include/asm/ppc_asm.h`，将 `CFUNC()` 宏的定义条件限制为仅在 `__powerpc64__` 且定义了 `CONFIG_PPC_KERNEL_PCREL` 时才使用 `@notoc` 后缀，确保 32 位构建使用标准符号名。
+2. 修改 `arch/powerpc/kernel/vdso/Makefile`，在 `CC32FLAGSREMOVE` 变量中增加 `-mpcrel` 选项，确保编译 32 位 VDSO 代码时过滤掉该不兼容的编译标志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6842a3c36d6f18ac9eacd2337247cc548467c42f

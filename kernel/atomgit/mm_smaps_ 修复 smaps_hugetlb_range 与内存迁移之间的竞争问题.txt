@@ -1,0 +1,20 @@
+#标题
+mm/smaps: 修复 smaps_hugetlb_range 与内存迁移之间的竞争问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读取 /proc/<pid>/smaps 文件时，若对应的进程正在使用大页（HugeTLB）且发生内存迁移，内核可能会因为读取到不一致的页表项状态而引发数据竞争，可能导致统计数据不准确或触发内核警告。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smaps_hugetlb_range` 函数中，访问和解析大页页表项时未持有大页锁。这导致在读取 PTE（页表项）或 Swap 条目并将其转换为 folio 的过程中，该页表项可能正被内存迁移逻辑并发修改。这种缺乏锁保护的并发访问导致了竞争条件，进而引发潜在的状态不一致问题。
+
+#解决方案
+在 `smaps_hugetlb_range` 函数中增加大页锁保护。在读取和处理页表项之前，调用 `huge_pte_lock` 获取锁，并在处理完成后调用 `spin_unlock` 释放锁。同时，将代码逻辑从操作 `struct page` 更新为操作 `struct folio`，以适配新的内核内存模型，并利用 `folio_likely_mapped_shared` 等接口确保判断的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e2898b670e6ce4dd8b1d669cc22c00b6c58fed61

@@ -1,0 +1,22 @@
+#标题
+UBIFS: 清空 slab 缓存后 dump TNC 树导致空指针访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UBIFS 文件系统运行过程中，如果执行了清空 slab 缓存的操作（例如通过特定调试接口或内存回收路径），此时内存中的 TNC（Tnc Node Cache）树节点被释放，根节点 `c->zroot.znode` 变为 NULL。若此时触发 `ubifs_dump_tnc` 函数来转储 TNC 树信息，内核将访问已置空的 `c->zroot.znode` 指针，导致发生空指针解引用，进而引发内核崩溃或 Oops 异常。
+
+#主要错误日志
+(pr_err"\n");
+(pr_err"(pid %d) start dumping TNC tree\n", current->pid);
+(pr_err"empty TNC tree in memory\n");
+
+#问题根因
+清空 slab 缓存的操作会释放内存中所有的 znode 并将 `c->zroot.znode` 置为 NULL。而 `ubifs_dump_tnc` 函数在遍历转储 TNC 树时，未对 `c->zroot.znode` 进行非空检查，直接将其作为参数传递给 `ubifs_tnc_levelorder_next` 函数进行访问，从而触发了空指针解引用错误。
+
+#解决方案
+在 `ubifs_dump_tnc` 函数中增加对 `c->zroot.znode` 的非空判断。如果根节点指针不为空，则继续执行原有的遍历转储逻辑；如果根节点指针为空，则打印 "empty TNC tree in memory" 提示信息并跳过遍历，从而避免空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7959e212b025f1f35b25d3329c2fe1218a3193d9

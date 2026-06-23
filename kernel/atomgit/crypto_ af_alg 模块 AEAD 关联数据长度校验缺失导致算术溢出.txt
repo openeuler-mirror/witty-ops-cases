@@ -1,0 +1,20 @@
+#标题
+crypto: af_alg 模块 AEAD 关联数据长度校验缺失导致算术溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 AEAD（Authenticated Encryption with Associated Data）加密请求时，若用户空间传入的关联数据长度超过或等于 0x80000000，内核在后续处理 TX buffer 大小校验时会发生算术溢出，可能导致校验失效或内存越界访问，系统返回 -EINVAL 错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `af_alg_cmsg_send` 函数处理 `ALG_SET_AEAD_ASSOCLEN` 控制消息时，未对用户传入的 `aead_assoclen`（关联数据长度）进行范围检查。由于该值在后续 TX buffer 大小校验逻辑中参与算术运算，当值过大（如 >= 0x80000000）时会导致算术溢出，从而绕过安全检查。
+
+#解决方案
+在 `crypto/af_alg.c` 的 `af_alg_cmsg_send` 函数中增加边界检查，当 `aead_assoclen` 大于等于 0x80000000 时，直接返回 -EINVAL，防止后续运算溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5213768324c8c530390cb77dba409e704e2e1bec

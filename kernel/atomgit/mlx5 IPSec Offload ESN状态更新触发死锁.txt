@@ -1,0 +1,22 @@
+#标题
+mlx5 IPSec Offload ESN状态更新触发死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了 IPSec Offload 且启用了 ESN（Extended Sequence Number）功能的场景下，当内核处理 IPSec 异步事件（如 ESN 状态更新）时，系统发生死锁，导致该 CPU 核hang住，相关网络流量中断。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `mlx5e_ipsec_update_esn_state` 中，代码逻辑在持有自旋锁 `sa_entry->x->lock` 的情况下，调用了 `mlx5_accel_esp_modify_xfrm` 函数。该函数内部可能会睡眠或进行耗时操作，违反了自旋锁的使用原则。此外，这种在锁内调用 `modify_xfrm` 的方式破坏了原有的并发保护假设，导致在事件处理流程中出现死锁。
+
+#解决方案
+将 `mlx5_accel_esp_modify_xfrm` 函数的调用移到自旋锁临界区之外执行。具体修改为：
+1. 在 `mlx5e_ipsec_update_esn_state` 函数中移除对 `mlx5_accel_esp_modify_xfrm` 的直接调用，改为由上层调用者处理。
+2. 在 `mlx5e_ipsec_handle_event` 中引入临时变量 `tmp` 和标志位 `need_modify`，先在锁内完成属性构建和状态判断，然后在释放锁 `spin_unlock_bh` 之后，根据标志位安全地调用 `mlx5_accel_esp_modify_xfrm` 进行硬件修改，从而避免死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1d8b3a2b3d4715fcb512c6aa00f5aacdcb09cce5

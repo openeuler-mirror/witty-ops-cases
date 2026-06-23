@@ -1,0 +1,25 @@
+#标题
+wilc1000 WiFi驱动WID字符串配置处理缓冲区溢出漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Microchip wilc1000 WiFi驱动在处理WID（Wireless Information Element）字符串配置时存在安全漏洞。当驱动解析响应帧中的字符串类型数据（如固件版本、MAC地址、关联响应信息）时，若接收到的数据长度超过本地缓冲区大小，会触发缓冲区溢出，可能导致内核内存损坏或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在`wilc_wlan_parse_response_frame`函数处理`WID_STR`类型数据时，代码直接使用`memcpy`将从响应帧中解析出的数据拷贝到目标缓冲区，未校验数据长度`len`是否超过目标缓冲区`cfg->s[i].str`的容量。同时，代码结构上先进行数据处理后才更新长度变量`len`并进行大小校验，导致边界检查失效，从而引发缓冲区溢出。此外，`g_cfg_str`数组定义中缺少记录缓冲区长度的字段，导致运行时无法获知缓冲区边界。
+
+#解决方案
+1. **扩展数据结构**：在`struct wilc_cfg_str`结构体中新增`u16 len`字段，用于存储缓冲区最大容量；同时相应调整`struct wilc_cfg_str_vals`中`mac_address`和`firmware_version`数组的大小定义以适应对齐。
+2. **初始化缓冲区长度**：在`wilc_wlan_cfg_init`函数中，为各个字符串配置项（固件版本、MAC地址、关联响应）显式初始化新增的`len`字段。
+3. **修复校验逻辑**：在`wilc_wlan_parse_response_frame`函数中：
+   - 调整代码执行顺序，先计算预期数据长度`len`，再执行边界检查，最后进行数据拷贝。
+   - 增加`WID_STR`处理分支的边界检查：校验数据长度`len`是否超过缓冲区容量`cfg->s[i].len`，以及是否超过接收帧总长度`size`。如果检查失败则直接返回，避免溢出。
+   - 同时修复`WID_CHAR`、`WID_SHORT`、`WID_INT`类型的处理逻辑，将长度计算和帧大小校验移至数据处理之前，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/09444e87eb2682275b51110fa013188f0ca91dc7

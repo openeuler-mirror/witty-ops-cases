@@ -1,0 +1,31 @@
+#标题
+perf inject 在处理 leader sampling 时错误插入额外样本导致数据膨胀
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `perf record` 进行 leader sampling（例如 `-e "{instructions,cycles}:S"`）并经由 `perf inject` 处理后，输出的 perf.data 文件体积异常增大。对比原始数据与 inject 后的数据发现，inject 工具错误地将单个包含一组读取值的样本拆分成了多个样本，导致输出文件中多出了本不存在的 `PERF_RECORD_SAMPLE` 事件，破坏了数据的正确性。
+
+#主要错误日志
+未知
+（注：此问题表现为数据输出差异，Commit 信息中未包含具体的内核报错日志，而是提供了数据对比差异，以下摘取关键差异片段供参考）
+```diff
+-0xc550@perf.data [0x30]: event: 3
++0xc550@perf.data [0xd0]: event: 9
+...
++1642373909693435 0xc550 [0xd0]: PERF_RECORD_SAMPLE(IP, 0x1): 2915700/2915700: 0xffffffff860172fc period: 1 addr: 0
++... sample_read:
++.... group nr 2
++..... id 00000000001acbe6, value 0000000000000176, lost 0
++..... id 00000000001acbf6, value 0000000000001862, lost 0
+```
+
+#问题根因
+在处理 leader samples 时，代码逻辑会将一个包含一组读取值的独立样本错误地拆分为多个样本进行处理。`perf inject` 工具默认沿用了通用的样本处理逻辑，没有阻止这种拆分行为，导致样本被重复处理并插入到输出流中，从而产生了额外的、不正确的样本数据。此问题由 commit e4caec0d1af3d608 引入。
+
+#解决方案
+在 `perf inject` 工具的初始化配置中，设置 `dont_split_sample_group` 标志位为 `true`。同时在 `deliver_sample_group` 函数逻辑中增加判断：当该标志位被设置时，直接调用 `deliver_sample_value` 处理整个样本组，而不再执行拆分样本的操作。此修改仅针对 `perf inject` 工具，不影响其他 perf 工具的现有行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6bcc19ceec971e11ad8efef51ee1d42924cf2c98

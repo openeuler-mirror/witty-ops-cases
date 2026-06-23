@@ -1,0 +1,21 @@
+#标题
+ucounts: inc_rlimit_get_ucounts 函数计数器泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当进程的用户命名空间层级中某个层级的 ucount 计数器增加后超过限制（rlimit）或变为负值时，inc_rlimit_get_ucounts 函数返回错误但未正确回滚已增加的计数器。这导致该 rlimit 计数器发生永久性泄漏，后续相关资源申请可能因计数器值持续过大而频繁失败，影响系统功能正常使用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 inc_rlimit_get_ucounts 函数中，代码逻辑遍历命名空间层级增加计数器。如果在中间某层级的计数器增加后发现其值超过限制（new > max）或溢出（new < 0），函数会跳转到 unwind 标签处进行错误处理。
+然而，原代码中 unwind 标签直接调用了 do_dec_rlimit_put_ucounts 进行资源释放，却跳过了对当前层级（iter）已增加的计数器进行减法回滚的操作（即跳过了 dec_unwind 标签前的 atomic_long_sub_return 操作）。这意味着当前层级增加的计数没有被正确回滚，导致计数器值比实际引用多 1，从而引发计数器泄漏。
+
+#解决方案
+修改 kernel/ucount.c 中的错误处理跳转逻辑。当检测到计数器值无效（new < 0 或 new > max）时，将跳转目标从 unwind 改为 dec_unwind。这确保了在释放 ucounts 资源前，先执行 atomic_long_sub_return 操作将当前层级的计数器减一，从而正确恢复计数器状态，避免泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7e82851b478bb30085a0fabecf7cdb5afaca1bcf

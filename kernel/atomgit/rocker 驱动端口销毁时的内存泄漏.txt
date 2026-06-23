@@ -1,0 +1,20 @@
+#标题
+rocker 驱动端口销毁时的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 rocker 设备时，发生内核内存泄漏。每个端口泄漏 sizeof(struct ofdpa_port) 字节的内存，随着端口数量的增加，内存泄漏量累积。
+
+#主要错误日志
+未知
+
+#问题根因
+在 rocker_world_port_pre_init() 中通过 kzalloc 为 rocker_port->wpriv 分配了内存，但在 rocker_world_port_post_fini() 中，仅当 wops->port_post_fini 回调函数存在时才释放该内存。由于 rocker_ofdpa_ops 未实现 port_post_fini 回调（为 NULL），导致函数直接返回，kfree 未被执行，从而造成内存泄漏。
+
+#解决方案
+修改 rocker_world_port_post_fini() 函数逻辑，无论 wops->port_post_fini 回调是否存在，都执行 kfree(rocker_port->wpriv) 操作，确保内存被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eb230b2a14693d7a0d22bcbfc533df0679798ad3

@@ -1,0 +1,24 @@
+#标题
+powerpc64/bpf: 尾调用失败时错误递增尾调用计数器
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 powerpc64 架构下运行 BPF 程序时，如果发起 tail call（尾调用），但目标 BPF 程序不存在（指针为 NULL），尾调用计数器（tail_call_cnt）仍会被错误地递增。这会导致 tail call 的实际调用次数未达到最大限制（通常为 33 次）时，程序就因为计数器溢出而提前终止，导致 BPF 程序逻辑执行异常，部分尾调用功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+在 powerpc64 的 BPF JIT 编译实现中，`bpf_jit_emit_tail_call` 函数生成的汇编代码逻辑顺序有误。原代码在检查目标程序指针 `prog` 是否为 NULL 之前，就已经执行了 `tail_call_cnt++` 并写回栈。这导致即使尾调用因为找不到目标程序而未实际执行（直接跳转到 out 退出），计数器仍然增加了 1。根据 Commit 描述：“Do not increment tailcall count, if tailcall did not succeed due to missing BPF program.”
+
+#解决方案
+调整 JIT 生成指令的顺序，将尾调用计数器的写回操作（`PPC_RAW_STD`）移动到确认目标程序存在（`prog != NULL`）的检查之后。具体修改为：
+1.  先在寄存器中递增计数器（`PPC_RAW_ADDI`），但暂不写回内存。
+2.  接着计算并加载目标程序指针，判断其是否为 NULL。
+3.  如果指针为 NULL，直接跳转退出，此时计数器未写回，保持原值。
+4.  如果指针非 NULL（尾调用可行），再执行计数器值写回栈的操作，随后跳转执行目标程序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01e5c442367bc1513cbd5336515151692a5bb0b8

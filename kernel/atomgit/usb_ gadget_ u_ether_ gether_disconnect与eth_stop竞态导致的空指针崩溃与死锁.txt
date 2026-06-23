@@ -1,0 +1,42 @@
+#标题
+usb: gadget: u_ether: gether_disconnect与eth_stop竞态导致的空指针崩溃与死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB gadget 以太网功能关闭过程中，若 `gether_disconnect()` 与 `eth_stop()` 并发执行，会引发内核空指针崩溃，并进一步导致系统硬锁。
+
+具体表现为：
+1. 系统触发 NULL 指针引用崩溃，调用链显示在 `eth_stop` 过程中尝试启用端点时访问了空指针。
+2. 因 `eth_stop()` 崩溃时持有自旋锁，导致另一执行线程 `gether_disconnect()` 无法获取同一锁而永久自旋，触发 hardlockup 检测告警。
+
+#主要错误日志
+日志原文：
+```
+Unable to handle kernel NULL pointer dereference
+Call trace:
+ __dwc3_gadget_ep_enable+0x60/0x788
+ dwc3_gadget_ep_enable+0x70/0xe4
+ usb_ep_enable+0x60/0x15c
+ eth_stop+0xb8/0x108
+```
+```
+Core - Debugging Information for Hardlockup core(7)
+Call trace:
+ queued_spin_lock_slowpath+0x94/0x488
+ _raw_spin_lock+0x64/0x6c
+ gether_disconnect+0x19c/0x1e8
+ ncm_set_alt+0x68/0x1a0
+ composite_setup+0x6a0/0xc50
+```
+
+#问题根因
+根本原因是 `dev->port_usb` 的清理时机滞后。
+在 `gether_disconnect()` 函数中，将 `dev->port_usb` 置空的操作位于函数末尾。若此时并发执行 `eth_stop()`，它会读取到非空的 `dev->port_usb`，进而尝试访问已被 `gether_disconnect()` 拆除的端点描述符，引发空指针崩溃。同时，崩溃发生在 `eth_stop()` 持有 `dev->lock` 期间，导致 `gether_disconnect()` 无法获取锁而陷入死锁。
+
+#解决方案
+将 `dev->port_usb` 的置空操作移至 `gether_disconnect()` 函数的开头，并在持有 `dev->lock` 自旋锁的保护下进行。这样可以立即切断链接，确保后续并发的 `eth_stop()` 能看到 `dev->port_usb` 为 NULL，从而安全退出，避免访问无效端点或死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a1fc552d27664c9b523cec4c665240703cc389cf

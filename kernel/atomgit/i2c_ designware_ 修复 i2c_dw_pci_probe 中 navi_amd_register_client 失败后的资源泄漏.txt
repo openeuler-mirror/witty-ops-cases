@@ -1,0 +1,20 @@
+#标题
+i2c: designware: 修复 i2c_dw_pci_probe 中 navi_amd_register_client 失败后的资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD NAVI GPU 模型下，若 `i2c_dw_pci_probe` 函数调用 `i2c_new_ccgx_ucsi`（即 `navi_amd_register_client` 逻辑）失败，驱动probe流程未正确释放此前已注册的 i2c adapter，导致内核资源泄漏。
+
+#主要错误日志
+register UCSI failed
+
+#问题根因
+在 `i2c_dw_pci_probe` 的错误处理路径中，当 `i2c_new_ccgx_ucsi` 执行失败（返回 IS_ERR）时，代码直接返回错误值，遗漏了调用 `i2c_del_adapter` 来撤销此前 `i2c_dw_probe` 中注册的 adapter。这与驱动 remove 函数中的清理逻辑不一致，导致了资源未释放。
+
+#解决方案
+在错误处理分支中增加 `i2c_del_adapter(&dev->adapter)` 调用，确保在 UCSI 注册失败时，已分配的 i2c adapter 资源被正确注销和释放，避免资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b155c6fc2cacfe050b74117b0c24e806e10a552e

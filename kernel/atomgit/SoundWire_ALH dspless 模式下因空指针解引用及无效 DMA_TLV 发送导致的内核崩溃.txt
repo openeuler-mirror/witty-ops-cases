@@ -1,0 +1,22 @@
+#标题
+SoundWire/ALH dspless 模式下因空指针解引用及无效 DMA_TLV 发送导致的内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SoundWire/ALH 协议使用 dspless 模式时，内核可能出现空指针解引用导致崩溃（panic）；或者在 hw_params 配置阶段，因向固件发送了不必要的 DMA_TLV 配置导致功能异常或固件处理错误。
+
+#主要错误日志
+dev_err(sdev->dev, "%s: swidget is NULL\n", __func__);
+
+#问题根因
+1. 代码逻辑中未对 `swidget` 指针进行有效性检查，在特定路径下该指针为 NULL 时直接使用导致空指针解引用。
+2. 在 dspless 模式下，对于 SoundWire/ALH DAI，代码流程错误地继续执行了 HDAudio 相关的 DMA_TLV 配置发送逻辑，而 dspless 模式不应向固件发送这些配置。
+
+#解决方案
+1. 在 `hda_dai_get_ops` 函数中增加 `swidget` 的非空校验，若为 NULL 则打印错误日志并返回，防止空指针访问。
+2. 在 `non_hda_dai_hw_params` 函数中增加对 `sdev->dspless_mode_selected` 的判断，若处于 dspless 模式则跳过获取 stream_id 及发送 DMA_TLV 的流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/922693957218686de02a2790502497625ece0d5d

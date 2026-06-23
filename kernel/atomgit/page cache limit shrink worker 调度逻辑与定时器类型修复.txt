@@ -1,0 +1,24 @@
+#标题
+page cache limit shrink worker 调度逻辑与定时器类型修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统配置了 page cache limit 功能时，即使 cache 未超限，shrink worker 仍会被周期性唤醒并调度执行，造成不必要的 CPU 开销和调度抖动。此外，deferrable timer 的使用可能导致回收工作延迟过长，无法及时响应 cache 限制要求。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **调度逻辑缺失**：`shrink_shepherd` 函数仅检查了 `should_periodical_reclaim()`，未在调度工作队列前检查当前 page cache 是否真正超限（`page_cache_over_limit()`），导致在 cache 未超限时也会触发节点回收任务。
+2. **检查位置不当**：`vm_cache_limit_mbytes` 的非零检查原本位于 `should_reclaim_page_cache` 函数中，该函数在 `cache_limit_mbytes_sysctl_handler` 的循环调用中被误用，且该检查应属于“是否超限”的判断逻辑，位置不合理。
+3. **定时器类型不当**：原实现使用了 `DEFERRABLE_WORK`（可延迟定时器），在系统空闲时可能导致回收 worker 延迟执行，不利于及时控制 page cache。
+
+#解决方案
+1. **优化调度逻辑**：在 `shrink_shepherd` 中添加 `if (page_cache_over_limit())` 判断，确保仅在 page cache 超限时才向各节点队列发送回收任务。
+2. **重构判断函数**：移除冗余的 `should_reclaim_page_cache` 函数，将 `vm_cache_limit_mbytes` 的非零检查移入 `page_cache_over_limit` 函数开头，使逻辑更内聚；同时在 `cache_limit_mbytes_sysctl_handler` 中直接使用 `should_periodical_reclaim` 配合 `page_cache_over_limit` 进行判断。
+3. **替换定时器类型**：将 `DECLARE_DEFERRABLE_WORK` 替换为 `DECLARE_DELAYED_WORK`，确保 shrink worker 按预期延迟时间调度，避免系统休眠导致的调度延迟。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3fd9936a893c7e8e5ce9da304be0a351ce73b8a0

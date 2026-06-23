@@ -1,0 +1,20 @@
+#标题
+PCI/MSI: MSI-X 初始化失败时未释放映射内存导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 MSI-X 中断的过程中，若 `msix_setup_interrupts()` 函数执行失败（例如内存分配失败或中断配置错误），驱动程序初始化失败并返回错误码，但导致内核地址空间内存资源泄漏。长期或频繁触发该错误路径可能导致系统可用虚拟地址空间耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `msix_capability_init()` 在执行流程中，会先调用 `ioremap` 映射 MSI-X 区域并存入 `dev->msix_base`。随后调用 `msix_setup_interrupts()` 进行中断设置。当 `msix_setup_interrupts()` 返回失败时，原代码逻辑直接跳转至 `out_disable` 标签进行清理，遗漏了调用 `iounmap(dev->msix_base)` 来解除映射，导致映射的内存区域未被释放。
+
+#解决方案
+修改 `msix_capability_init()` 函数的错误处理路径。当 `msix_setup_interrupts()` 失败时，将跳转目标从 `out_disable` 修改为新增的 `out_unmap` 标签。在 `out_unmap` 处增加 `iounmap(dev->msix_base)` 调用，确保在错误返回前正确解除 MSI-X 区域的内存映射，修复内存资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0c6b50143cdc55a79012dacc3ad89fac30e7757c

@@ -1,0 +1,31 @@
+#标题
+dwc3 gadget: 中断处理重执行导致中断风暴
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定场景下（如中断上半部被多次调用），DWC3 控制器驱动产生中断风暴，导致 CPU 被特定中断处理程序（irq/dwc3）长时间占用，系统响应变慢。通过 ftrace 观测可见高频的 `irq_handler_entry` 和 `irq_handler_exit` 事件，且返回值均为 `handled`。
+
+#主要错误日志
+ftrace event stub during dwc3 irq storm:
+    irq/504_dwc3-1111  ( 1111) [000] .... 70.000866: irq_handler_exit: irq=14 ret=handled
+    irq/504_dwc3-1111  ( 1111) [000] .... 70.000872: irq_handler_entry: irq=504 name=dwc3
+    irq/504_dwc3-1111  ( 1111) [000] .... 70.000874: irq_handler_exit: irq=504 ret=handled
+    irq/504_dwc3-1111  ( 1111) [000] .... 70.000881: irq_handler_entry: irq=504 name=dwc3
+    irq/504_dwc3-1111  ( 1111) [000] .... 70.000883: irq_handler_exit: irq=504 ret=handled
+    irq/504_dwc3-1111  ( 1111) [000] .... 70.000889: irq_handler_entry: irq=504 name=dwc3
+    irq/504_dwc3-1111  ( 1111) [000] .... 70.000892: irq_handler_exit: irq=504 ret=handled
+    irq/504_dwc3-1111  ( 1111) [000] .... 70.000898: irq_handler_entry: irq=504 name=dwc3
+    irq/504_dwc3-1111  ( 1111) [000] .... 70.000901: irq_handler_exit: irq=504 ret=handled
+    ...
+
+#问题根因
+在修复提交 d325a1de49d6 ("usb: dwc3: gadget: Prevent losing events in event cache") 之后，当中断上半部（TH）被多次调用时，虽然保护了缓存事件不被覆盖，但 `dwc3_process_event_buf` 函数返回 `IRQ_HANDLED` 导致系统误认为中断已处理完毕。然而，如果此时硬件中断线仍处于活跃状态，会导致中断控制器重新分发中断，进而引发中断风暴（irq storm），导致中断处理程序持续占用 CPU。
+
+#解决方案
+1. 调整 `DWC3_EVENT_PENDING` 标志位的清除顺序及内存屏障：在 `dwc3_process_event_buf` 中，先将 `DWC3_EVENT_PENDING` 标志位清除，并添加写内存屏障确保该操作对 `dwc3_check_event_buf` 可见，随后再处理中断 moderation 相关寄存器。
+2. 默认启用中断 moderation（IMOD）：修改 `dwc3_check_params`，对所有支持 IMOD 功能的 DWC3 控制器默认设置 `imod_interval = 1`，而不是仅针对特定版本或当其值为 0 时才设置。这能有效缓解中断风暴问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/88ca6556e06a37616d1b49b2268b63f4d5e9fbf2

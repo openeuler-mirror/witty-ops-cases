@@ -1,0 +1,21 @@
+#标题
+static_call: 模块加载时内存分配失败引发无意义的 WARN_ON 告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在加载模块（MODULE_STATE_COMING）过程中，若 static call 内存分配失败，系统会触发 WARN_ON 告警栈信息。由于内存分配失败已有相应的错误处理逻辑，该 WARN_ON 属于多余告警，会增加内核日志噪音。
+
+#主要错误日志
+- 原日志（修复前）：`Failed to allocate memory for static calls`（伴随 WARN_ON 栈回溯打印）
+- 修复后日志：`Failed to allocate memory for static calls`
+
+#问题根因
+在 `static_call_module_notify` 函数中，当 `static_call_add_module` 返回错误（如内存分配失败）时，代码使用 `WARN(1, ...)` 进行告警。该告警本身无实质意义，因为后续的错误处理流程（`static_call_del_module`）已经接管了该失败情况，不需要因此触发内核告警栈打印。
+
+#解决方案
+将 `WARN(1, "Failed to allocate memory for static calls")` 替换为 `pr_warn("Failed to allocate memory for static calls\n")`。移除不必要的 WARN_ON 调用，仅保留警告级别的日志打印，避免不必要的内核栈信息输出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b324fa0a7770e145efc01b2926a7374e864127c8

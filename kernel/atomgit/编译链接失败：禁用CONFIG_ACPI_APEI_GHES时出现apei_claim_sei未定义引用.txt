@@ -1,0 +1,22 @@
+#标题
+编译链接失败：禁用CONFIG_ACPI_APEI_GHES时出现apei_claim_sei未定义引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译 arm64 内核时，若配置选项 `CONFIG_ACPI_APEI_GHES` 未开启（设为 n），构建过程中会出现链接失败错误，导致内核无法生成最终镜像。
+
+#主要错误日志
+aarch64-linux-gnu-ld: arch/arm64/kernel/traps.o: in function `arm64_is_fatal_ras_serror':
+traps.c:(.text+0x1490): undefined reference to `apei_claim_sei'
+
+#问题根因
+函数 `apei_claim_sei()` 的声明与 inline stub 宏定义被错误地放置在 `CONFIG_ACPI` 宏控制块内（位于 `arch/arm64/include/asm/acpi.h`），但该函数的实际实现位于 `ghes.c` 文件中，该文件的编译依赖于 `CONFIG_ACPI_APEI_GHES` 配置。
+当 `CONFIG_ACPI=y` 但 `CONFIG_ACPI_APEI_GHES=n` 时，头文件中声明了该函数（或暴露了接口），导致 `traps.c` 调用该函数，但因 `ghes.c` 未被编译链接，导致链接器找不到函数定义，从而引发“undefined reference”错误。
+
+#解决方案
+将 `apei_claim_sei()` 的函数声明及静态 inline stub 定义从 `arch/arm64/include/asm/acpi.h` 移至 `include/acpi/ghes.h` 文件中，使其正确受 `CONFIG_ACPI_APEI_GHES` 宏保护。同时，在 `arch/arm64/kernel/traps.c` 中包含 `acpi/ghes.h` 头文件，确保编译与链接依赖的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/404b36567babb8d8c1dffdcf845dd4e8c937c4ae

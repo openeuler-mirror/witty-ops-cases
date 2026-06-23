@@ -1,0 +1,20 @@
+#标题
+ARM: at91: pm: 备份模式下 ZQ 校验错误导致阻抗值不匹配
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SAMA7G5 和 SAMA7D65 芯片的备份模式（backup mode）下，系统唤醒过程中进行阻抗重新校验时遇到 "ZQ calibrate error"。在 DDR 进入自刷新模式前保存的阻抗值与电阻值不匹配。
+
+#主要错误日志
+ZQ calibrate error
+
+#问题根因
+DDR3PHY_ZQ0CR0 寄存器中的 ZDATA 字段使用修正格雷码来选择不同的阻抗设置，但原有的 `modified_gray_code` 算法不正确。该算法将 ZDATA 包含的四个独立阻抗元素（pull-down, pull-up, pull-down on-die termination, pull-up on-die termination）合并处理，且没有使用正确的移位偏移量。设计团队确认这是校验逻辑中的 Bug，导致保存的阻抗配置值错误，无法通过 Bootstrap 阶段的校验。
+
+#解决方案
+应用设计团队提供的修正方案，将原来的 `modified_gray_code` 数组替换为修正后的 `modified_fix_code` 数组，并在赋值时为每个独立的阻抗元素应用正确的移位偏移量（`<< DDR3PHY_ZQ0SR0_PDO_OFF` 等），确保四个阻抗元素被独立且正确地设置，从而修复校验逻辑错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b0b58df644b2a3b43fce11ab71a6d0f59a1b4a71

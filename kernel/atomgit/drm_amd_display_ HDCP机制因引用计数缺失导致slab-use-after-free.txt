@@ -1,0 +1,30 @@
+#标题
+drm/amd/display: HDCP机制因引用计数缺失导致slab-use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 USB-C 扩展坞连接显示器并支持 HDCP 的场景下，当拔出扩展坞后再重新插入时，内核触发 KASAN 检测到的 slab-use-after-free 错误。系统日志显示在 `event_property_validate` 函数中访问了已释放的内存地址，导致内核工作队列崩溃或相关功能异常。
+
+#主要错误日志
+[   66.775837] BUG: KASAN: slab-use-after-free in event_property_validate+0x42f/0x6c0 [amdgpu]
+[   66.776171] Read of size 4 at addr ffff888127804120 by task kworker/0:1/10
+[   66.776186] Workqueue: events event_property_validate [amdgpu]
+[   66.777643] Allocated by task 10:
+[   66.777661]  dm_dp_add_mst_connector+0xdd/0x5c0 [amdgpu]
+[   66.777932] Freed by task 1713:
+[   66.777949]  kfree+0x13f/0x4b0
+[   66.777949]  dm_dp_mst_connector_destroy+0xfa/0x150 [amdgpu]
+
+#问题根因
+AMD GPU 显示驱动的 HDCP 代码在 `amdgpu_dm_hdcp.c` 中拷贝 `amdgpu_dm_connector` 对象指针时，未增加对应的 kref 引用计数。当 USB-C 扩展坞被拔出时，对应的 `amdgpu_dm_connector` 对象被释放，但 HDCP 代码中仍保留着指向该内存的悬空指针。当扩展坞重新插入时，HDCP 代码尝试解引用这些悬空指针，从而触发 slab-use-after-free 错误。
+
+#解决方案
+修复 HDCP 工作队列处理逻辑，正确管理 `amdgpu_dm_connector` 指针的生命周期：
+1. 在 `hdcp_update_display` 和 `update_config` 函数中，存储新的 connector 指针前，调用 `drm_connector_get` 增加引用计数，并检查释放旧的指针引用。
+2. 在 `hdcp_remove_display` 和 `hdcp_reset_display` 函数中，清除指针前调用 `drm_connector_put` 减少引用计数，并将指针置为 NULL。
+这确保了 connector 对象在使用期间不会被提前释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/15ac7fcb25c49f9f3a0e6c1c1e9c96a5cbf500c9

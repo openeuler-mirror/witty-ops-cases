@@ -1,0 +1,25 @@
+#标题
+btrfs: 配额禁用与重扫描ioctl并发导致qgroup记录UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当执行配额禁用操作与配额重扫描ioctl并发执行时，触发内核Use-After-Free（UAF）故障。具体表现为内核访问已释放的内存地址，可能导致内核崩溃或系统异常。
+
+#主要错误日志
+未知
+
+#问题根因
+存在一个竞态条件：
+1. 任务A进入btrfs_ioctl_quota_rescan() -> btrfs_qgroup_rescan()。
+2. 任务B进入btrfs_quota_disable()并调用btrfs_qgroup_wait_for_completion()，此时因fs_info->qgroup_rescan_running为false（任务A尚未设置），该函数直接返回未做等待。
+3. 任务B调用btrfs_free_qgroup_config()，在未持有fs_info->qgroup_lock锁的情况下开始释放fs_info->qgroup_tree中的qgroup记录。
+4. 任务A进入qgroup_rescan_zero_tracking()，持有fs_info->qgroup_lock锁遍历fs_info->qgroup_tree，但此时任务B正在无锁释放该树中的节点，导致任务A访问了已被释放的内存（use-after-free）。
+
+#解决方案
+1. 在btrfs_free_qgroup_config()函数中，遍历并释放qgroup_tree前获取fs_info->qgroup_lock自旋锁，并在循环处理节点时正确释放与重新获取锁，以防止并发修改。
+2. 在btrfs_qgroup_rescan()函数中，在启动rescan worker之前检查BTRFS_FS_QUOTA_ENABLED标志位，如果配额已被禁用则不启动worker并返回错误，避免无意义的重扫描。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d49a9db37121391ebeb0f75be11ae92eb8c42102

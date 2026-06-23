@@ -1,0 +1,20 @@
+#标题
+PCI P2PDMA mmap 失败导致设备移除时系统挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 sysfs 接口对 PCI P2PDMA 设备进行 mmap 操作时，若内核函数 `vm_insert_page()` 执行失败（例如由于内存不足或 VMA 插入限制），应用程序会收到 mmap 调用失败的返回值。然而，在此之后尝试移除该 PCI 设备（如执行设备热拔插或驱动卸载）时，内核线程 `memunmap_pages()` 会永久阻塞（hang），导致设备无法正常移除，相关进程处于不可中断睡眠状态。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `p2pmem_alloc_mmap()` 中，当 `vm_insert_page()` 失败时，代码逻辑虽然通过 `gen_pool_free()` 释放了分配的内存池空间，但遗漏了执行 `percpu_ref_put()` 操作来释放之前在 `gen_pool_alloc_owner()` 成功后获取的 `pgmap` 的 per-CPU 引用计数。由于引用计数未被正确释放，后续在移除 PCI 设备调用 `memunmap_pages()` 等待引用计数归零时，会因为计数未归零而永远阻塞。
+
+#解决方案
+在 `vm_insert_page()` 失败的错误处理路径中，增加对 `percpu_ref_put(ref)` 的调用，确保在回滚内存分配操作的同时，正确释放 per-CPU 引用计数，避免引用计数泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ceb417b67961120b2efbd1df192971bdb4ea8289

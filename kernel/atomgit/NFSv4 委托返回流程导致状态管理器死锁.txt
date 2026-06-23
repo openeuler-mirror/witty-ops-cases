@@ -1,0 +1,20 @@
+#标题
+NFSv4 委托返回流程导致状态管理器死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 NFSv4 状态管理器时系统发生死锁，导致状态管理流程无法正常推进，相关委托返回操作被挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `_nfs4_proc_delegreturn` 函数中，当处理委托返回时，逻辑判断不完整。原代码仅在 `!data->inode` 条件下初始化序列，但在状态管理器运行期间（`NFS4CLNT_RECLAIM_REBOOT` 状态位被设置时），若缺少对该状态的判断，会导致错误的序列处理流程，进而引发死锁。
+
+#解决方案
+在 `fs/nfs/nfs4proc.c` 文件的 `_nfs4_proc_delegreturn` 函数中修改条件判断逻辑，增加对 `NFS4CLNT_RECLAIM_REBOOT` 状态位的检测。当 `data->inode` 不存在或者 `NFS4CLNT_RECLAIM_REBOOT` 标志位被设置时，强制调用 `nfs4_init_sequence` 进行序列初始化，从而避免死锁发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4e94e27f65a5ac044145cb83557c2e21a17ae860

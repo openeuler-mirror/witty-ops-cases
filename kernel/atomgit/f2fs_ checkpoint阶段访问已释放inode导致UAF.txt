@@ -1,0 +1,47 @@
+#标题
+f2fs: checkpoint阶段访问已释放inode导致UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在f2fs文件系统中，当使用fuzzed镜像触发特定路径时，内核在执行checkpoint过程中访问已释放的inode内存，触发KASAN检测到的use-after-free错误。具体表现为：
+1. 进程在执行writeback回写（wb_workfn）时，于 `__list_del_entry_valid` 函数处触发UAF读取。
+2. 故障调用链显示：`f2fs_sync_inode_meta` -> `f2fs_inode_synced` -> `list_del_init`，尝试操作的地址属于已释放的 `f2fs_inode_cache` 对象。
+3. 另外在某些上下文中（如syzbot日志所示），`f2fs_evict_inode` 可能触发 `f2fs_bug_on` 警告或内核恐慌。
+
+#主要错误日志
+```
+BUG: KASAN: use-after-free in __list_del_entry_valid+0xa6/0x130 lib/list_debug.c:62
+Read of size 8 at addr ffff888100567dc8 by task kworker/u4:0/8
+...
+Call Trace:
+ ...
+ list_del_init include/linux/list.h:206 [inline]
+ f2fs_inode_synced+0x100/0x2e0 fs/f2fs/super.c:1553
+ f2fs_update_inode+0x72/0x1c40 fs/f2fs/inode.c:588
+ f2fs_update_inode_page+0x135/0x170 fs/f2fs/inode.c:706
+ f2fs_write_inode+0x416/0x790 fs/f2fs/inode.c:734
+ ...
+ wb_workfn+0xbba/0x1030 fs/fs-writeback.c:2266
+ ...
+
+Allocated by task 298:
+ ...
+ f2fs_alloc_inode+0x2d/0x350 fs/f2fs/super.c:1437
+ ...
+
+Freed by task 0:
+ ...
+ f2fs_free_inode+0x24/0x30 fs/f2fs/super.c:1584
+ ...
+```
+
+#问题根因
+在处理fuzzed镜像时，f2fs可能未正确清除目标inode的 `FI_DIRTY_INODE` 标志。当 `f2fs_evict_inode()` 执行完毕后，该inode被释放，但其仍挂载在 `sbi->inode_list[DIRTY_META]` 全局链表中。随后系统触发checkpoint时，`f2fs_sync_inode_meta()` 遍历该链表并试图访问已释放的inode，导致use-after-free。
+
+#解决方案
+在 `f2fs_evict_inode()` 函数中，无论之前的错误检查条件如何，均强制调用 `f2fs_inode_synced()`。此举确保清除 `FI_DIRTY_INODE` 标志，并将inode从全局脏链表 `sbi->inode_list[DIRTY_META]` 中移除，防止后续checkpoint阶段访问已释放的inode内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/50a03d3a562159f03f8d536bd1a5cc77a15a6792

@@ -1,0 +1,33 @@
+#标题
+iommu/ummu: 修复2P虚拟化错误及ubmem unmap返回值异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在2P（双路）虚拟化场景下，内核在操作 nested domain 时出现空指针引用导致系统崩溃或异常。
+2. ubmem-mmu 驱动在执行 unmap 操作时返回了错误的内存长度数值，可能导致上层调用逻辑异常。
+3. 在特定 Kconfig 配置下编译内核失败，或编译过程中出现未定义符号引用错误。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **2P虚拟化空指针问题**：在函数 `logic_ummu_viommu_alloc_domain_nested` 中，`nested_base_domain->core_dev` 成员未初始化赋值，导致后续 `ummu_viommu_cache_invalidate_user` 函数通过 `nested_domain->base_domain.core_dev` 获取设备指针时访问了空指针。
+2. **unmap返回值错误**：函数 `ubmem_mmu_unmap_pages` 在清理 `mdom` 结构体前，返回了即将被清零的 `mdom->iova_len` 字段，而非实际取消映射的大小，导致返回值错误。
+3. **编译依赖与隔离问题**：
+   - Kconfig 中错误地选择了 `UMMU_CORE` 导致依赖关系不正确。
+   - `ummu_def_domain_type` 函数在 `CONFIG_UB_UMMU_BYPASSDEV` 未配置时调用了未包含的函数接口。
+   - 头文件中 `ummu_core_tid_ops` 定义和 `logic_ummu_remove_dev_pasid` 函数缺少对应的 CONFIG 宏保护，导致在特定配置下出现编译错误或链接错误（缺少定义）。
+
+#解决方案
+1. **修复空指针引用**：在 `logic_ummu_viommu_alloc_domain_nested` 函数中增加对 `nested_base_domain->core_dev` 的赋值，将其指向 `&ummu->core_dev`，确保后续调用能正确获取设备句柄。
+2. **修复返回值逻辑**：在 `ubmem_mmu_unmap_pages` 中引入局部变量 `unmapped`，在清理 `mdom` 结构体前保存 `mdom->iova_len` 的值，并返回该局部变量。
+3. **修复编译配置**：
+   - 修正 Kconfig，将 `select UMMU_CORE` 改为 `select UB_UMMU_CORE` 和 `UB_UMMU_CORE_DRIVER`。
+   - 在 `ummu_def_domain_type` 函数中增加 `#ifdef CONFIG_UB_UMMU_BYPASSDEV` 条件编译，移除对 `MMU_NOTIFIER` 的多余依赖。
+   - 在 `logic_ummu_remove_dev_pasid` 函数定义及 `sva.h` 头文件中的相关接口增加 `#ifdef CONFIG_UB_UMMU_SVA` 保护。
+   - 移除 `include/linux/ummu_core.h` 中多余的 `ummu_core_tid_ops` 静态定义，避免定义冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dfb9bd9242c2350c127d51a126976ed386e9cc48

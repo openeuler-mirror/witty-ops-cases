@@ -1,0 +1,33 @@
+#标题
+obmm: mmap 回滚失效、并发释放竞态及 export_user 标志位校验缺失修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **标志位校验缺失**：在调用 `export_user_addr` 接口时，系统未拦截带有 `OBMM_EXPORT_FLAG_FAST` 标志的非法请求，导致非预期的导出行为。
+2. **状态回滚错误**：在 `obmm_shm_fops_mmap` 执行失败并退出时，`mmap_granu` 字段被错误地重置为 `OBMM_MMAP_GRANU_NONE`，破坏了内存区域的粒度状态一致性，可能导致后续 mmap 调用判断错误。
+3. **并发释放竞态**：在进行 region 释放与 device 释放的过程中存在竞态条件，若 region 的内存释放先于 device 释放完成，可能引发 Use-After-Free 或内核崩溃。
+
+#主要错误日志
+- `pr_err("FAST flag is not allowed in export_user_addr.\n");`
+- `pr_err("error running huge mmap for not pmd-aligned vma: %#lx-%#lx\n", vma->vm_start, vma->vm_end);`
+- `pr_err("map with PAGE_SIZE and PMD_SIZE granu should not be mixed on the same region\n");`
+- `pr_err("mmap region %d: offset:%#lx, size:%#lx over region size: %#llx", reg->regionid, offset, size, reg->mem_size);`
+
+#问题根因
+1. **标志位遗漏**：`obmm_export_from_user.c` 中的校验逻辑未包含对 `OBMM_EXPORT_FLAG_FAST` 标志的检查。
+2. **回滚逻辑缺陷**：`obmm_shm_fops_mmap` 函数在处理大页或普通页 mmap 时，未保存初始的 `mmap_granu` 状态；当流程中间步骤（如权限检查、所有权初始化）失败时，错误地将 `mmap_granu` 重置为初始态 `NONE`，而非恢复为修改前的值。
+3. **生命周期管理竞态**：`obmm_region` 结构体缺少同步机制来确保 `device` 对象的 `release` 回调执行完毕后再释放 `region` 内存。在 `obmm_import` 失败路径或 `obmm_unimport` 流程中，直接 `kfree` 释放结构体，可能与设备模型的异步释放产生竞态。
+
+#解决方案
+1. **增加标志位校验**：在 `obmm_cmd_export_pid_allowed` 函数中增加对 `OBMM_EXPORT_FLAG_FAST` 标志的检查，若存在则返回 `-EINVAL`。
+2. **修正 mmap 状态回滚**：在 `obmm_shm_fops_mmap` 入口处保存 `init_mmap_granu`，并在所有权初始化成功后更新该保存值，确保在 `err_reset_mmap_granu` 分支能正确恢复到有效的历史状态，而非盲目重置为 `NONE`。
+3. **引入同步机制**：
+   - 在 `obmm_region` 结构体中新增 `atomic_t device_released` 成员。
+   - 在设备添加时将其初始化为 0，在 `obmm_shm_dev_release` 回调中将其置为 1。
+   - 新增 `wait_until_dev_released` 函数，通过自旋等待确保设备释放完成。
+   - 在 `free_export_region`、`obmm_import` 失败路径及 `obmm_unimport` 释放路径中调用该等待函数，防止 Use-After-Free。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6c8b8eed96ce22afed9db30528159d894b595e2b

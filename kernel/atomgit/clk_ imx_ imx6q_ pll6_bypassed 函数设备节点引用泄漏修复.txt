@@ -1,0 +1,23 @@
+#标题
+clk: imx: imx6q: pll6_bypassed 函数设备节点引用泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 imx6q 的 pll6_bypassed() 函数时，内核存在内存泄漏现象。由于函数内部调用 of_parse_phandle_with_args() 获取设备节点引用后，未在所有退出路径上调用 of_node_put() 释放引用，导致设备节点引用计数无法归零，相关内核对象无法正常释放。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 pll6_bypassed() 调用 of_parse_phandle_with_args() 解析设备树节点，该函数会增加设备节点的引用计数。然而，原代码逻辑中，无论是在循环匹配成功跳出时，还是在后续的解析处理中，都遗漏了调用 of_node_put() 来释放引用，从而导致设备节点引用计数泄漏（reference leak）。
+
+#解决方案
+在函数的所有退出路径上补充 of_node_put() 调用：
+1. 在循环内部，当匹配条件满足（clkspec.args[0] == IMX6QDL_PLL6_BYPASS）并执行 break 跳出前，增加 of_node_put(clkspec.np)。
+2. 在循环内部，当匹配不成功进行下一轮迭代前，增加 of_node_put(clkspec.np)。
+3. 在函数末尾，对再次调用 of_parse_phandle_with_args() 获取的 clkspec.np，在判断条件前增加 of_node_put(clkspec.np) 释放引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9c310bda0121f7f2287b6e69c6464573ddf52929

@@ -1,0 +1,28 @@
+#标题
+media: vidtv: fix nfeeds state corruption on start_streaming failure
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 vidtv 驱动调用 `vidtv_start_feed` 时，若内部 `vidtv_start_streaming` 执行失败，会导致驱动状态损坏（nfeeds 计数器异常递增）。表现为后续的 start_feed 调用误判已有多个 feed 运行从而跳过复用器启动，stop_feed 调用尝试停止不存在的流。此外，该状态损坏还会导致内存泄漏，因为复用器和通道资源在启动失败时可能已部分分配但未被清理。
+
+#主要错误日志
+BUG: memory leak
+unreferenced object 0xffff888145b50820 (size 32):
+backtrace (crc 90a0c7d4):
+ vidtv_psi_service_desc_init+0x74/0x1b0 drivers/media/test-drivers/vidtv/vidtv_psi.c:288
+ vidtv_channel_s302m_init+0xb1/0x2a0 drivers/media/test-drivers/vidtv/vidtv_channel.c:83
+ vidtv_channels_init+0x1b/0x40 drivers/media/test-drivers/vidtv/vidtv_channel.c:524
+ vidtv_mux_init+0x516/0xbe0 drivers/media/test-drivers/vidtv/vidtv_mux.c:518
+ vidtv_start_streaming drivers/media/test-drivers/vidtv/vidtv_bridge.c:194 [inline]
+ vidtv_start_feed+0x33e/0x4d0 drivers/media/test-drivers/vidtv/vidtv_bridge.c:239
+
+#问题根因
+当 `vidtv_start_streaming()` 在 `vidtv_start_feed()` 函数内部执行失败时，`nfeeds` 计数器已经被预先递增，但并未因失败而回滚。这导致计数器值与实际活跃的 feed 数量不一致。由于状态损坏，停止流逻辑因判断 `dvb->streaming == false` 而提前返回，导致复用器和通道相关的内存资源未被释放。
+
+#解决方案
+在 `vidtv_start_feed` 函数中，检测到 `vidtv_start_streaming(dvb)` 返回错误（ret < 0）时，立即执行 `dvb->nfeeds--` 操作。确保在启动流失败时将计数器回退，保持其与实际活跃 feed 数量同步，从而避免状态损坏及随后的内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58283475b273d961783424a191faa37e371448a7

@@ -1,0 +1,26 @@
+#标题
+mac80211: CMAC加密函数未处理哈希错误导致管理帧处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在WiFi mac80211子系统处理管理帧加密与解密时，若底层AES-CMAC哈希计算函数（如`crypto_shash_init`、`crypto_shash_update`等）执行失败，系统未能捕获该错误状态。这可能导致内核继续使用无效或未初始化的MIC（消息完整性码）进行数据处理，造成管理帧加密发送异常或接收端解密验证逻辑混乱，潜在引发内存安全问题或通信连接不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+根据Commit描述，问题根因为：
+"The called hash functions could fail thus we should check return values."
+即被调用的哈希函数可能执行失败，但原代码逻辑中未对其返回值进行检查和处理。函数`ieee80211_aes_cmac`和`ieee80211_aes_cmac_256`原先返回类型为`void`，在调用`crypto_shash_init`、`crypto_shash_update`及`crypto_shash_finup`等底层加密接口时，忽略了这些接口可能返回的错误码，导致错误在调用链中被掩盖。
+
+#解决方案
+1. 修改`ieee80211_aes_cmac`和`ieee80211_aes_cmac_256`函数的返回值类型，由`void`改为`int`，使其能够向上层传递错误状态。
+2. 在上述两个函数内部，对`crypto_shash_init`、`crypto_shash_update`和`crypto_shash_finup`的每一次调用都增加返回值检查；若调用失败，立即终止计算并向上返回错误码。
+3. 调整调用方逻辑：
+   - 在发送路径（`ieee80211_crypto_aes_cmac_encrypt`、`ieee80211_crypto_aes_cmac_256_encrypt`）中，检查CMAC函数返回值，若失败则丢弃数据包（返回`TX_DROP`）。
+   - 在接收路径（`ieee80211_crypto_aes_cmac_decrypt`、`ieee80211_crypto_aes_cmac_256_decrypt`）中，检查CMAC函数返回值，若失败则丢弃数据包（返回`RX_DROP_U_DECRYPT_FAIL`）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9aa793830f439144806b2d5a12e0b9858e783b42

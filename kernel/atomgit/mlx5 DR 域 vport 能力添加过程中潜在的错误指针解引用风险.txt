@@ -1,0 +1,20 @@
+#标题
+mlx5 DR 域 vport 能力添加过程中潜在的错误指针解引用风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mlx5 驱动的 DR（Direct Rules）域添加 vport capability 时，若 `xa_insert` 函数返回非 `-EBUSY` 的错误码（如 `-ENOMEM`），`dr_domain_add_vport_cap` 函数将错误地返回 `ERR_PTR(ret)`。由于上层调用逻辑可能未对返回值进行 `IS_ERR` 检查，直接使用返回指针，导致系统解引用了无效的错误指针，引发 kernel panic 或 Oops。
+
+#主要错误日志
+mlx5dr_dbg(dmn, "Couldn't insert new vport into xarray (%d)\n", ret);
+
+#问题根因
+函数 `dr_domain_add_vport_cap` 在处理 `xa_insert` 失败时逻辑不当。对于大多数错误码，函数返回了 `ERR_PTR(ret)`，而调用者期望该函数在失败时返回 `NULL`（`ERR_PTR(-EBUSY)` 除外，该情况被视为一种特殊的存在状态）。返回非 `NULL` 的错误指针导致调用者误以为获取了有效对象并尝试访问，从而触发空指针或错误指针解引用。
+
+#解决方案
+修改 `dr_domain_add_vport_cap` 函数的错误处理路径。仅在 `xa_insert` 返回 `-EBUSY` 时返回 `ERR_PTR(-EBUSY)`；对于其他错误情况，正确返回 `NULL`，以匹配调用者的预期行为并防止指针解引用错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d753f33ae67f552f17161a7e34a8d4bb7d6972c9

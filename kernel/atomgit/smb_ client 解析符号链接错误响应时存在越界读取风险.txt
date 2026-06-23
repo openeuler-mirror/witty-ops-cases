@@ -1,0 +1,25 @@
+#标题
+smb: client 解析符号链接错误响应时存在越界读取风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SMB 服务器对 CREATE 请求返回 STATUS_STOPPED_ON_SYMLINK 错误响应时，内核客户端在解析该响应数据时可能发生越界读取（OOB read）。
+具体表现为：越界读取的堆内存字节被错误地 UTF-16 解码为符号链接目标名称，并通过 readlink(2) 系统调用返回给用户空间，导致用户读取到脏数据或敏感信息，存在信息泄露风险。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **循环边界检查缺失**：在 `symlink_data()` 函数中，遍历 SMB 3.1.1 错误上下文的循环条件 `p < end` 仅检查了指针是否越界，但未保证完整的上下文头部结构在边界内。当服务器控制的 `ErrorDataLength` 将指针 `p` 推进到距离 `end` 1-7 字节范围内时，下一次循环迭代读取 `p->ErrorId`（偏移量 4）或 `p->ErrorDataLength`（偏移量 0）时会发生越界读取。
+2. **头部校验不足**：找到匹配上下文后，代码未检查符号链接头部结构本身是否完全位于有效内存范围内。
+3. **偏移量计算错误**：`smb2_parse_symlink_response()` 使用固定宏 `SMB2_SYMLINK_STRUCT_SIZE` 计算缓冲区边界，该计算仅在 `ErrorContextCount == 0` 时正确。当存在错误上下文时，符号链接数据位置更深，导致边界检查范围小于实际数据范围，允许读取越界。
+
+#解决方案
+1. **加强循环边界校验**：将 `symlink_data()` 中的循环条件从 `p < end` 修改为 `(u8 *)p + sizeof(*p) <= end`，确保每次迭代读取前，完整的错误上下文头部结构都位于有效内存范围内。
+2. **增加结构体边界检查**：在返回符号链接数据指针前，增加校验 `(u8 *)sym + sizeof(*sym) > end`，确保符号链接响应头部完整且未越界。
+3. **修正数据边界计算**：在 `smb2_parse_symlink_response()` 中，移除基于固定宏 `SMB2_SYMLINK_STRUCT_SIZE` 的检查，改为基于实际 `sym->PathBuffer` 指针位置与 `iov_len` 进行动态边界校验，确保 SubstituteName 和 PrintName 的读取不会超出 iov 缓冲区范围。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6caf8cc2277cedc8480ff8cb8c94e0d74168dd99

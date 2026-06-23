@@ -1,0 +1,20 @@
+#标题
+perf/core: Fix WARN in perf_sigtrap()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核运行过程中触发 `perf_sigtrap()` 内的 `WARN_ON_ONCE` 警告。该问题通常在进程退出阶段，由 `perf_pending_task()` 与 `perf_event_exit_task_context()` 并发执行时触发，导致内核日志中出现警告堆栈信息。
+
+#主要错误日志
+`WARN_ON_ONCE(event->ctx->task != current)`
+
+#问题根因
+`exit_task_work()` 在 `perf_event_exit_task_context()` 将 `ctx->task` 更新为 `TASK_TOMBSTONE` 之后运行。这导致 `perf_pending_task()` 调用的 `perf_sigtrap()` 可能观察到 `event->ctx->task == TASK_TOMBSTONE`。由于 `perf_sigtrap()` 内部先执行了 `WARN_ON_ONCE(event->ctx->task != current)` 检查，后执行 `PF_EXITING` 检查，导致在进程退出竞争条件下错误地触发了警告。
+
+#解决方案
+交换 `perf_sigtrap()` 函数中早期退出检查的顺序。将 `current->flags & PF_EXITING` 检查移至 `WARN_ON_ONCE(event->ctx->task != current)` 检查之前，确保在检查上下文一致性之前优先判断进程是否正在退出，从而避免在竞争场景下触发不必要的警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/49aebffe5ab6b645ff62f6b0b33909351723839d

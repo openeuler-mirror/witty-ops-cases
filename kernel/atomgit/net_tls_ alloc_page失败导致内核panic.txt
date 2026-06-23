@@ -1,0 +1,20 @@
+#标题
+net/tls: alloc_page失败导致内核panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在TLS（Kernel TLS）数据处理流程中，当系统内存不足导致`alloc_page`分配失败时，内核触发panic。该问题发生在`tls_strp_read_copy`函数处理socket数据的路径上。
+
+#主要错误日志
+未知
+
+#问题根因
+在`tls_strp_read_copy`函数中，`shinfo->frag_list`被过早地置为NULL。当后续的内存分配循环（涉及`alloc_page`）失败时，函数会提前返回错误码。由于`shinfo->frag_list`已被清空，调用者或后续的清理逻辑在尝试处理或释放该`anchor` skb时，访问了无效的指针或状态，从而导致内核panic。
+
+#解决方案
+将`shinfo->frag_list = NULL;`语句的位置调整。原代码在内存分配循环之前将其置空，修复后将其移动到内存分配成功循环结束之后。这样确保了如果在内存分配过程中失败退出，`frag_list`的状态保持不变或未被错误地修改，从而避免了因内存分配失败引发的指针访问异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/de77e9c80efaf3890697ce25530864472e02bff3

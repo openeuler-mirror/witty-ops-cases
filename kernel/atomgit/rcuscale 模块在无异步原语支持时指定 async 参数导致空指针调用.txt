@@ -1,0 +1,22 @@
+#标题
+rcuscale 模块在无异步原语支持时指定 async 参数导致空指针调用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当对不支持异步原语（如 RCU Tasks Rude，其缺少 call_rcu_tasks_rude() 函数）的 RCU 实现指定 rcuscale 模块的 async 参数时，内核会发生一系列空指针解引用错误。故障具体表现为内核日志中出现 splat 报错信息，系统可能触发 panic 或产生调用栈回溯。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference
+
+#问题根因
+当 rcuscale 模块的 async 模块参数被指定时，代码逻辑未检查当前 RCU 实现是否真正提供了异步原语接口。对于像 RCU Tasks Rude 这样没有实现 call_rcu_tasks_rude() 函数（即 cur_ops->async 为 NULL）的场景，代码仍然尝试调用该函数指针，导致调用 NULL 指针引发故障。
+
+#解决方案
+在调用异步接口前增加有效性检查：
+1. 在异步调用路径添加 `!WARN_ON_ONCE(!cur_ops->async)` 条件判断，若检测到当前实现不支持异步原语，则打印警告信息并自动回退到非异步测试模式，避免调用空指针。
+2. 在 gp_barrier 调用处添加 `cur_ops->async` 的判断条件，防止在未初始化的情况下调用屏障函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dfec8a26273d1f67136d4f6e9740f1364fe28520

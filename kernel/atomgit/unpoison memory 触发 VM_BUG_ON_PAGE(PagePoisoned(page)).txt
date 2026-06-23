@@ -1,0 +1,20 @@
+#标题
+unpoison memory 触发 VM_BUG_ON_PAGE(PagePoisoned(page))
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对离线（offline）或无效的内存页执行 unpoison 操作时，内核触发 VM_BUG_ON_PAGE(PagePoisoned(page)) 告警或检查失败。该问题源于代码对无效 pfn 的处理逻辑不当，导致获取了错误的 page 指针进而访问到被毒化的页面结构。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__unpoison_memory` 函数中，原代码使用 `pfn_valid(pfn)` 检查 pfn 有效性，随后通过 `pfn_to_page(pfn)` 获取页面。对于处于离线状态或不存在 struct page 的内存区域，`pfn_valid` 可能返回 true，但对应的 struct page 可能处于无效或被毒化状态，此时直接访问会导致 `VM_BUG_ON_PAGE(PagePoisoned(page))` 触发。
+
+#解决方案
+将 `pfn_to_page(pfn)` 替换为 `pfn_to_online_page(pfn)`。`pfn_to_online_page` 会严格检查 pfn 对应的页面是否在线且有效，如果页面离线或无效则返回 NULL。同时在返回值处理上，将原来的 `-ENXIO` 修改为 `-EIO`，以正确处理无效 pfn 输入的情况，避免访问无效页面结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ecaa5727e1ebbfa738f7ee09218c84cb5ba2b5de

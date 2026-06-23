@@ -1,0 +1,20 @@
+#标题
+wifi: mac80211: mesh转发路径下TID丢失导致数据传输阻塞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Mesh 网络环境中，当发生路由路径变更导致流量从快速转发路径切换到慢速转发路径时，非零 TID（Traffic Identifier）的数据包在转发过程中其 QoS 控制头部的 TID 字段被错误地清除为 0。这导致接收端在 QoS 控制头中看到 TID 0，但在序列号控制字段中看到的序列号却对应于原始的正确 TID。这种不一致导致接收端丢弃 TID 0 的数据包或处理异常，进而引发 TID 0 数据流停滞，表现为 Mesh 链路中间节点发生路由变更后出现网络卡顿或连接中断。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，该问题根因是内核提交 986e43b19ae9 ("wifi: mac80211: fix receiving A-MSDU frames on mesh interfaces") 引入的回归缺陷。在 `ieee80211_rx_h_mesh_fwding()` 处理慢速转发路径时，未调用 `ieee80211_set_qos_hdr` 函数来正确设置转发报文的 QoS 头部。这导致转发出去的 skb 缓冲区中，QoS 控制头内的 TID 值丢失（变为 0），而 `skb->priority` 仍保留着正确的入口 TID 值。驱动层（如 mt7915）依据 `skb->priority` 设置硬件序列号，导致发出的报文头部 TID 信息与序列号所属 TID 不匹配。
+
+#解决方案
+在 `net/mac80211/rx.c` 文件的 `ieee80211_rx_mesh_data` 函数中，于将转发报文加入发送队列（`ieee80211_add_pending_skb`）之前，增加调用 `ieee80211_set_qos_hdr(sdata, fwd_skb)`。此举确保了在慢速转发路径下，转发的数据包 QoS 头部能够根据 `skb->priority` 被正确重写，从而修复 TID 字段丢失的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dcc194306a787c1b0f370d924f783904d8aad3dd

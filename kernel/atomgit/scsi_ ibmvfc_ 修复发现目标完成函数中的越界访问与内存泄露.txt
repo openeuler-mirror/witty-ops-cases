@@ -1,0 +1,20 @@
+#标题
+scsi: ibmvfc: 修复发现目标完成函数中的越界访问与内存泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 VIO 服务器恶意或受损时，会在发现目标 MAD 响应中返回一个超出 max_targets 限制的 num_written 值。该值未经校验被存储并用作循环边界，导致在 ibmvfc_alloc_targets() 中访问 disc_buf[] 数组时发生越界读写。越界读取的内核内存数据随后被封装在 Implicit Logout 和 PLOGI MAD 中发送回 VIO 服务器，造成内核内存信息泄露。
+
+#主要错误日志
+ibmvfc_dbg(vhost, "Discover Targets succeeded\n");
+
+#问题根因
+在 ibmvfc_discover_targets_done() 函数中，处理 IBMVFC_MAD_SUCCESS 分支时，直接将响应中的 rsp->num_written 赋值给 vhost->num_targets，未校验其是否超过 disc_buf[] 数组分配的大小 max_targets。恶意 VIO 服务器提供的 num_written 值过大，导致后续循环索引越界，访问了 DMA 一致性分配区域之外的内核内存。
+
+#解决方案
+在存储 vhost->num_targets 之前，使用 min_t(u32, be32_to_cpu(rsp->num_written), max_targets) 对其进行赋值，将 num_written 的值限制在 max_targets 范围内，防止数组越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac87c0f89877e5994850ad3493656f67a49c7181

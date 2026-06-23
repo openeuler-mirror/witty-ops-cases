@@ -1,0 +1,20 @@
+#标题
+wifi: libertas: 在中断上下文中调用 usb_kill_urb 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 libertas USB 无线网卡驱动发送数据路径上，当 `usb_tx_block` 函数被中断上下文（如 HCD giveback 路径）调用时，触发了内核崩溃或异常行为。这是因为代码在中断上下文中调用了可能引起睡眠的 `usb_kill_anchored_urbs()` 函数，导致内核调度错误（syzbot 报告）。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `usb_tx_block` 函数中使用 `usb_kill_anchored_urbs()` 来强制终止未完成的 URB 以实现发送路径的串行化。然而，`usb_kill_anchored_urbs()` 函数内部包含睡眠操作，不能在中断上下文中使用。当 `usb_tx_block` 在中断上下文（例如 USB 主机控制器驱动的 giveback 路径）中被调用时，系统会因为在中断上下文中睡眠而触发崩溃或 BUG。
+
+#解决方案
+修改 `usb_tx_block` 函数，移除会阻塞的 `usb_kill_anchored_urbs()` 调用。改为检查 `tx_submitted` 锚点是否为空（即检查是否有正在传输的 URB）。如果存在正在传输的 URB，直接返回 `-EBUSY` 错误码，避免在中断上下文中进行睡眠操作，从而修复该问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c53c293da09c05b29fe14f8d1c9c3b50cc8d8c32

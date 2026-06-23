@@ -1,0 +1,21 @@
+#标题
+cpufreq: conservative 调度器在 NOHZ 关闭且高负载下无法升频
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在关闭 NOHZ 功能且使用 conservative 调频策略的情况下，当 CPU 处于 100% 满负载时，CPU 频率无法提升，甚至可能降至最低频率。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dbs_update()` 函数中，当 NOHZ 关闭时，`get_cpu_idle_time_jiffy()` 获取的 `idle_time` 理论上可能为负数（例如在 100% 忙时，统计误差可能导致计算出的 idle 时间小于上一次采样）。
+之前的代码在检测长空闲区间时，将 `idle_time` 强转为 `int` 类型与无符号的 `sampling_rate` 比较。根据 C 语言提升规则，负数在比较时会被提升为巨大的无符号数。这导致系统误判发生了“长空闲区间”，从而设置了极大的 `idle_periods` 值，使得 conservative 调度器误认为 CPU 长期空闲而将频率降至最低。
+
+#解决方案
+在 `dbs_update()` 中使用 `idle_time` 之前，先判断 `cur_idle_time` 与 `j_cdbs->prev_cpu_idle` 的大小关系。若当前 idle 时间小于上一次记录，直接将 `idle_time` 修正为 0，确保后续逻辑正确处理 100% 负载的情况，避免错误的类型转换导致逻辑异常。同时简化了后续 load 计算的逻辑分支。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fe98901764894f4bd9d41fd2852aa2c04dcf5fd3

@@ -1,0 +1,20 @@
+#标题
+XFS 分配 buftarg 失败时存在 DAX 设备引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 XFS 文件系统初始化分配 buftarg 的过程中，若 `xfs_alloc_buftarg` 函数内部初始化步骤（如 LRU 初始化）失败，会导致内存泄漏。具体表现为内核资源未正确释放，可能导致后续对同一 DAX 设备的操作出现引用计数不平衡或设备无法正常释放的问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `xfs_alloc_buftarg` 函数的错误处理路径中，代码直接跳转到 `error_free` 标签释放内存并返回 NULL，但遗漏了调用 `fs_put_dax()` 来释放 `btp->bt_daxdev` 的引用计数。根据 Commit 描述，该问题是在实现 XFS 的 `->notify_failure()` 功能时引入的，导致错误路径下 DAX 设备引用发生泄漏。
+
+#解决方案
+在 `xfs_alloc_buftarg` 函数的 `error_free` 标签处，即在释放 `btp` 内存之前，增加调用 `fs_put_dax(btp->bt_daxdev, mp)`，确保在初始化失败时正确释放 DAX 设备的引用计数，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/565e7126d6ad80fca06a778c37be8b0dfb664eed

@@ -1,0 +1,42 @@
+#标题
+rtlwifi: USB设备efuse读取失败导致系统挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过Syzkaller模拟Realtek USB WiFi适配器（使用raw-gadget和dummy_hcd）触发驱动探测（probe）时，系统出现任务挂起（hung task）。具体表现为 `kworker/0:3` 进程处于 `D` 状态（不可中断睡眠），导致系统无法正常重启或响应。调用栈显示阻塞发生在 `hub_event` 工作队列中的 `read_efuse_byte` 函数执行期间。
+
+#主要错误日志
+task:kworker/0:3 state:D stack:0 pid:662 tgid:662 ppid:2 flags:0x00004000
+Workqueue: usb_hub_wq hub_event
+Call Trace:
+ __schedule+0xe22/0xeb6
+ schedule_timeout+0xe7/0x132
+ __wait_for_common+0xb5/0x12e
+ usb_start_wait_urb+0xc5/0x1ef
+ ? usb_alloc_urb+0x95/0xa4
+ usb_control_msg+0xff/0x184
+ _usbctrl_vendorreq_sync+0xa0/0x161
+ _usb_read_sync+0xb3/0xc5
+ read_efuse_byte+0x13c/0x146
+ read_efuse+0x351/0x5f0
+ efuse_read_all_map+0x42/0x52
+ rtl_efuse_shadow_map_update+0x60/0xef
+ rtl_get_hwinfo+0x5d/0x1c2
+ rtl92cu_read_eeprom_info+0x10a/0x8d5
+ ? rtl92c_read_chip_version+0x14f/0x17e
+ rtl_usb_probe+0x323/0x851
+ usb_probe_interface+0x278/0x34b
+ really_probe+0x202/0x4a4
+ __driver_probe_device+0x166/0x1b2
+ driver_probe_device+0x2f/0xd8
+
+#问题根因
+`read_efuse_byte()` 函数在读取失败时的重试循环最大次数被硬编码为 10000 次。在 USB 设备场景下，I/O 传输速度受限于 USB 协议及模拟环境（如 dummy_hcd），单次循环耗时可能长达 15 秒。当读取 efuse（如 512 字节）时，如果持续失败并触发大量重试，会导致总耗时极长（理论可达数小时），从而长时间占用驱动探测流程，引发系统挂起。
+
+#解决方案
+针对 USB 接口类型的设备，将 `read_efuse_byte()` 函数中的最大重试次数从 10000 次大幅降低至 10 次。代码逻辑新增了对 `rtlpriv->rtlhal.interface` 的判断，若为 `INTF_USB` 则使用较小的重试上限，避免在 I/O 缓慢或失败时长时间阻塞内核线程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ea42050a5c420e369250f0d36dc838095617df6

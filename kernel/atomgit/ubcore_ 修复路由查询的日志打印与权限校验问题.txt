@@ -1,0 +1,27 @@
+#标题
+ubcore: 修复路由查询的日志打印与权限校验问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 系统日志中出现大量非预期的错误级别日志打印 "get topo port eid, route_num" 和 "get topo primary eid, route_num"，干扰日志查看。
+2. 路由查询逻辑存在缺陷，在特定场景下未能正确校验对端节点 ID（peer_node），导致查询到的路由信息可能包含非目标节点的无效路径。
+
+#主要错误日志
+ubcore_log_err("get topo port eid, route_num: %u.\n", num);
+ubcore_log_err("get topo primary eid, route_num: %u.\n", num);
+（注：上述日志在补丁中被删除，原因为不应使用错误级别打印常规流程日志）
+
+#问题根因
+1. **日志级别误用**：在 `ubcore_get_route_port_eid` 和 `ubcore_get_route_primary_eid` 函数的正常执行流程中，错误地使用了 `ubcore_log_err` 打印路由数量信息，导致日志污染。
+2. **校验逻辑缺失**：在 `ubcore_get_route_port_eid` 函数中，遍历查找路由时仅检查了 `peer_port` 是否有效，遗漏了对 `peer_node`（对端节点 ID）的校验。这导致代码可能将链路连接到其他非目标节点的端口误认为是有效路由。
+3. **权限配置错误**：`UBCORE_CMD_GET_ROUTE_LIST` 命令在全局命令函数表中被错误地标记为需要权限校验（true），这与该查询接口的设计意图不符。
+
+#解决方案
+1. **清理无效日志**：移除 `ubcore_get_route_port_eid` 与 `ubcore_get_route_primary_eid` 函数中的 `ubcore_log_err` 打印代码。
+2. **完善校验条件**：在 `ubcore_get_route_port_eid` 的循环判断条件中增加 `src_topo_info->links[iodie_id][port_id].peer_node != dst_topo_info->id` 校验，确保仅当链路的对端节点与目标节点一致时才视为有效路径。
+3. **修正命令权限**：将 `g_ubcore_uvs_global_cmd_funcs` 表中 `UBCORE_CMD_GET_ROUTE_LIST` 的权限标记从 `true` 修改为 `false`，取消不必要的权限限制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f0dbd3a648f5092e2c85e5c7a342ae936d54e6ca

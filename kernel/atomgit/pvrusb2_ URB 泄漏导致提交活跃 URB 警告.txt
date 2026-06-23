@@ -1,0 +1,20 @@
+#标题
+pvrusb2: URB 泄漏导致提交活跃 URB 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `pvr2_send_request_ex()` 成功提交写 URB 但随后提交读 URB 失败（如返回 -ENOMEM）时，函数立即返回而未等待写 URB 完成。由于驱动复用同一个 URB 结构体，后续调用 `pvr2_send_request_ex()` 时会尝试提交仍然处于活跃状态的写 URB，从而触发 `usb_submit_urb()` 中的 "URB submitted while active" 警告。
+
+#主要错误日志
+URB submitted while active
+
+#问题根因
+在 `pvr2_send_request_ex()` 函数中，若写 URB 提交成功但读 URB 提交失败，代码逻辑直接跳转到 `done` 标签返回，未对已提交的写 URB 进行取消（unlink）和等待完成操作。这导致该 URB 仍处于挂起状态（active），当该 URB 结构体被再次用于下一次提交时，内核检测到 URB 仍处于活跃状态从而报错。
+
+#解决方案
+在读 URB 提交失败的错误处理路径中，增加对写 URB 挂起状态的检查。如果写 URB 仍在挂起中（`hdw->ctl_write_pend_flag` 为真），则调用 `usb_unlink_urb()` 取消该 URB，并通过循环等待 `hdw->ctl_done` 完成量确保写 URB 彻底结束，防止 URB 泄漏和重复提交活跃 URB 的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/12a78f1b7883a23a079ec1a47176f3aea2a6008e

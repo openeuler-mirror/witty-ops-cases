@@ -1,0 +1,20 @@
+#标题
+tcp: 被动 TFO socket 返回无效 NAPI ID 导致零拷贝接收异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+被动 TFO（TCP Fast Open）socket 通过 SO_INCOMING_NAPI_ID 获取到的 NAPI ID 为无效值 0。该问题导致依赖正确 NAPI ID 进行队列处理的零拷贝接收（zero copy receive）功能无法正常工作。
+
+#主要错误日志
+未知
+
+#问题根因
+在被动 TFO socket 的创建流程中，未正确设置 NAPI ID。具体原因为 `tcp_fastopen_create_child` 函数中缺少对 `sk_mark_napi_id_set` 的调用，导致 socket 的 NAPI ID 保持为初始值 0，无法关联到正确的接收队列。该缺陷自引入 commit e5907459ce7e ("tcp: Record Rx hash and NAPI ID in tcp_child_process") 后产生。
+
+#解决方案
+在 `net/ipv4/tcp_fastopen.c` 文件的 `tcp_fastopen_create_child` 函数中，增加对 `sk_mark_napi_id_set(child, skb)` 的调用。该修复确保了在被动 TFO socket 创建过程中，能够从 skb 中正确解析并设置 NAPI ID，从而修复零拷贝接收依赖的队列映射问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/65643205be315c2784b43cdb6b0cd451fc92a488

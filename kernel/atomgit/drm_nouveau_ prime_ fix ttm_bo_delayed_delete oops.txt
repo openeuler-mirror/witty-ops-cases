@@ -1,0 +1,20 @@
+#标题
+drm/nouveau: prime: fix ttm_bo_delayed_delete oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 nouveau 显卡驱动处理 DMA-BUF PRIME 导入的 buffer 对象时，触发 `ttm_bo_delayed_delete` 流程导致内核 Oops（空指针引用或释放后使用），造成系统崩溃或不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nouveau_gem_object_del` 函数中，对于导入的 GEM 对象，代码逻辑先调用 `drm_prime_gem_destroy` 销毁了 PRIME 资源（如 sg 和 attach），随后调用 `ttm_bo_put` 将 buffer 对象加入 TTM 延迟删除队列。当后续 TTM 执行 `nouveau_bo_del_ttm` 回调时，该 buffer 对象关联的 `import_attach` 指针未被清空且指向的内存已被释放，导致访问了已销毁的资源，引发 Oops。
+
+#解决方案
+将 `drm_prime_gem_destroy` 的调用点从 `nouveau_gem_object_del` 移至 `nouveau_bo_del_ttm` 中。确保在 TTM buffer 对象生命周期的最后阶段（即 `nouveau_bo_del_ttm` 执行时）再销毁 PRIME 资源，避免了资源提前释放导致的 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/571552c7fb136e86f4279b2e96292270085255e5

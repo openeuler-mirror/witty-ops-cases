@@ -1,0 +1,20 @@
+#标题
+ccs_probe 资源释放顺序错误导致潜在内存泄漏或 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `ccs_probe` 函数的错误处理路径中，资源释放顺序与分配顺序不一致。若驱动探测失败并进入错误清理流程，可能导致内存管理状态混乱，具体表现为潜在的内存泄漏（Memory Leak）或释放后使用（Use-After-Free）风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ccs_probe` 函数中，`ccs_limits` 是在 `mdata.backing` 分配之后，由 `ccs_read_all_limits()` 分配的。根据资源管理最佳实践，资源释放应遵循“后进先出”（LIFO）原则。原代码在错误处理标号中，先释放了 `mdata.backing`，后释放 `ccs_limits`，颠倒了分配顺序，导致资源清理顺序错误。
+
+#解决方案
+调整 `ccs_probe` 函数错误处理标号的顺序，将 `out_free_ccs_limits` 标号移至 `out_release_mdata` 之前。确保 `ccs_limits` 先于 `mdata.backing` 被释放，从而保证资源释放顺序与分配顺序严格相反。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6f8d14da43921c24b1c05146b6536a866d7e9cf9

@@ -1,0 +1,20 @@
+#标题
+streamzap 驱动 probe 阶段 URB 提交失败未处理导致设备不可用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Streamzap 遥控接收器驱动在初始化（probe）过程中，若 usb_submit_urb 提交失败，驱动未检测错误也未终止探针流程，导致设备处于不可用的半初始化状态。
+
+#主要错误日志
+dev_err(sz->dev, "urb submit failed\n");
+
+#问题根因
+在 streamzap_probe 函数中，调用 usb_submit_urb 提交 URB 时，代码未正确处理返回值。如果提交失败（返回值小于 0），代码仅打印错误日志但继续执行并返回 0（成功），导致驱动认为设备初始化成功，实际上设备无法正常工作。
+
+#解决方案
+修改 streamzap_probe 函数，检查 usb_submit_urb 的返回值。若返回值小于 0（提交失败），打印错误日志后跳转至错误处理流程，释放已分配的 RC 设备资源，清除接口私有数据，并向上层返回错误码，从而确保探针失败，避免产生不可用的设备实例。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22374d628f7b8f58e49ba4c26b4cbdd20cfdd4af

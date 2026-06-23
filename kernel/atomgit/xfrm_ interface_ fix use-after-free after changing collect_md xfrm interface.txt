@@ -1,0 +1,20 @@
+#标题
+xfrm: interface: fix use-after-free after changing collect_md xfrm interface
+
+#内核版本
+OLK-6.6
+
+#问题现象
+修改 xfrm interface 的 collect_md 属性时触发 Use-After-Free 故障。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `xfrmi_changelink` 函数中，原代码未充分拦截 `collect_md` 属性的变更请求。当从用户空间发起变更请求将接口改为 `collect_md` 模式（或反向修改）时，代码逻辑未在修改前有效地拒绝该操作，导致接口属性被不当修改，进而引发 Use-After-Free 内存错误。
+
+#解决方案
+修改 `xfrmi_changelink` 函数的校验逻辑，在函数入口处增加对 `collect_md` 属性的严格检查。如果请求参数 `p.collect_md` 或现有接口参数 `xi->p.collect_md` 处于生效状态，直接返回 `-EINVAL` 并设置错误消息 "collect_md can't be changed"，从而禁止对该属性的动态修改，防止内存非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab3877c0bd3428de0230aa709f75f726954540c5

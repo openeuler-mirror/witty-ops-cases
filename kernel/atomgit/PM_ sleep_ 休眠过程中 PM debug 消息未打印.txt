@@ -1,0 +1,22 @@
+#标题
+PM: sleep: 休眠过程中 PM debug 消息未打印
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统进行 hibernation（休眠到磁盘）操作时，开启了 PM debug 开关（`pm_debug_messages_on`），但内核日志中未显示预期的电源管理调试信息，导致无法通过日志排查休眠流程问题。
+
+#主要错误日志
+未知
+
+#问题根因
+此前提交 cdb8c100d8a4 ("include/linux/suspend.h: Only show pm_pr_dbg messages at suspend/resume") 修改了 `pm_debug_messages_should_print()` 函数，限制 PM debug 消息仅在系统级 suspend/resume 过程中打印，但遗漏了 hibernation 场景。该函数缺少对 hibernation 状态的检查，导致休眠过程中调试消息被错误地抑制。
+
+#解决方案
+在 `kernel/power/main.c` 的 `pm_debug_messages_should_print()` 函数中增加对 hibernation 状态的判断。具体修改逻辑如下：
+1. 新增 `hibernation_in_progress()` 函数接口，用于判断当前是否处于 hibernation 流程中。
+2. 修改 `pm_debug_messages_should_print()` 返回条件为：`pm_debug_messages_on && (hibernation_in_progress() || pm_suspend_target_state != PM_SUSPEND_ON)`，从而支持在 hibernation 过程中正常打印调试信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a0d5b85247d5b08613b6caefe6b9933254d116c7

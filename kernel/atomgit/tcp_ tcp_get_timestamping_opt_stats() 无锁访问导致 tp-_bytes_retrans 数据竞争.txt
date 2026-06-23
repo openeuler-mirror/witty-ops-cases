@@ -1,0 +1,23 @@
+#标题
+tcp: tcp_get_timestamping_opt_stats() 无锁访问导致 tp->bytes_retrans 数据竞争
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 KCSAN（Kernel Concurrency Sanitizer）数据竞争检测工具的场景下，内核报告 `tp->bytes_retrans` 变量发生数据竞争。该竞争发生在 TCP 重传路径（写操作）与 TCP 时间戳统计选项获取路径（读操作）之间，可能导致 KCSAN 报警或潜在的统计数据读取不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `tcp_get_timestamping_opt_stats()` 被设计为无锁运行以提升性能，但其在读取 `tp->bytes_retrans` 字段时未使用 `READ_ONCE()` 注解。与此同时，`__tcp_retransmit_skb()` 函数在更新该字段时也未使用 `WRITE_ONCE()` 注解。这种无保护的并发读写访问触发了 KCSAN 的数据竞争检测机制。
+
+#解决方案
+遵循无锁编程规范，为并发访问的变量添加访问注解：
+1. 在 `tcp_get_timestamping_opt_stats()` 中读取 `tp->bytes_retrans` 时，添加 `READ_ONCE()` 封装。
+2. 在 `__tcp_retransmit_skb()` 中更新 `tp->bytes_retrans` 时，添加 `WRITE_ONCE()` 封装。
+此举既保留了无锁设计的性能优势，又消除了 KCSAN 报告的数据竞争告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b8e355a3404071156a96eb518accb1b5402f1f38

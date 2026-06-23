@@ -1,0 +1,41 @@
+#标题
+ACPI: CPPC: CPU hotplug 导致 related_cpus 不一致引发警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 SMT 且使用 ACPI CPPC cpufreq 驱动的 ARM64 机器上，并发地对同一物理核的两个 SMT 线程进行上线和下线操作时，内核产生大量警告调用栈。具体表现为：
+1. 在 CPU 上线过程中触发 `cpufreq_online` 相关的警告调用栈。
+2. `policy->related_cpus` 显示不一致，例如在特定步骤下仅包含 CPU 220，而缺失了本应同属一个频率域的 CPU 221。
+
+#主要错误日志
+```
+CPU: 221 PID: 1119 Comm: cpuhp/221 Kdump: loaded Not tainted 6.6.0debug+ #5
+Hardware name: To be filled by O.E.M. S920X20/BC83AMDA01-7270Z, BIOS 20.39 09/04/2024
+pstate: a1400009 (NzCv daif +PAN -UAO -TCO +DIT -SSBS BTYPE=--)
+pc : cpufreq_online+0x8ac/0xa90
+lr : cpuhp_cpufreq_online+0x18/0x30
+...
+Call trace:
+ cpufreq_online+0x8ac/0xa90
+ cpuhp_cpufreq_online+0x18/0x30
+ cpuhp_invoke_callback+0x128/0x580
+ cpuhp_thread_fun+0x110/0x1b0
+ smpboot_thread_fn+0x140/0x190
+ kthread+0xec/0x100
+ ret_from_fork+0x10/0x20
+---[ end trace 0000000000000000 ]---
+```
+
+#问题根因
+问题根因在于 `acpi_get_psd_map()` 函数中错误地使用了 `for_each_online_cpu()` 进行遍历。
+_PSD（P-State Dependency）定义了跨 CPU 核心频率控制的硬件依赖关系，这是一种硬件拓扑的物理属性，不应随 CPU 的上线/下线状态而改变。
+使用 `for_each_online_cpu()` 导致离线 CPU 被排除在 `shared_cpu_map` 之外。当该 CPU 后续上线时，内核无法识别其属于共享频率域，导致 `policy->related_cpus` 数据不一致，从而触发警告。
+
+#解决方案
+1. 将 `acpi_get_psd_map()` 和 `send_pcc_cmd()` 中的 `for_each_online_cpu()` 回退为 `for_each_possible_cpu()`。这确保 ACPI 表中定义的所有核心从一开始就被正确映射到相应的性能域，与 `policy->related_cpus` 的逻辑保持一致。
+2. 针对 `acpi_get_psd_map()` 中 `match_cpc_ptr` 为 NULL 的情况，将处理逻辑从跳转至错误处理（`goto err_fault`）修改为直接跳过本次循环（`continue`），以适应可能的 CPU 状态变化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7d3919740410c7eb7c4b3fb3c2df327d258cbf6f

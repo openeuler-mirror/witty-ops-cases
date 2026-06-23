@@ -1,0 +1,26 @@
+#标题
+ALSA: hda/cirrus: 修正全比例音量设置逻辑导致耳机输出静音问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定硬件平台上，由于全比例音量设置逻辑错误，错误地设置了相关位并清除了保留位，导致耳机输出被静音，用户无法听到声音。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `cs42l42_resume` 函数中处理全比例音量时的逻辑存在缺陷：
+1. 逻辑判断错误：原代码根据 `full_scale_vol` 标志位清除或保留 `CS42L42_FULL_SCALE_VOL_MASK` 位，逻辑与预期相反。实际上当 `full_scale_vol` 标志置位时应设置该位。
+2. 寄存器操作错误：原代码错误地修改了保留位（Bit 0），导致耳机输出静音。
+3. 初始化参数错误：在初始化表 `cs42l42_init_reg_seq`、`dolphin_c0_init_reg_seq` 和 `dolphin_c1_init_reg_seq` 中，`CS42L42_HP_CTL` 寄存器的初始值设置不正确，同样触发了上述静音问题。
+
+#解决方案
+1. 修正逻辑判断：修改 `cs42l42_resume` 函数，当 `full_scale_vol` 标志有效时，使用“或”运算正确设置全比例音量位，确保保留位不被错误清除。
+2. 统一静音控制：显式清除 `CS42L42_ANA_MUTE_AB` 掩码位以取消模拟通道 A/B 的静音状态。
+3. 更新寄存器定义：修正宏定义 `CS42L42_FULL_SCALE_VOL_0DB` 与 `CS42L42_FULL_SCALE_VOL_MINUS6DB` 的值，使其与逻辑匹配。
+4. 修正初始值：将相关初始化表中的 `CS42L42_HP_CTL` 寄存器默认值修正为 `0x0D`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b5bba4b7fa0a8a0571b4561705789db0d02babc3

@@ -1,0 +1,20 @@
+#标题
+tcp_abort() 函数存在竞态条件导致 tcp_poll() 结果不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 tcp_abort() 销毁 TCP 套接字时，由于内部处理顺序问题，导致 tcp_poll() 可能获取到不一致的状态结果，影响用户态程序对套接字状态的正确感知。
+
+#主要错误日志
+未知
+
+#问题根因
+tcp_abort() 函数中，原先的逻辑是先调用 sk_error_report() 再调用 tcp_done()。这导致在 tcp_done() 执行前，tcp_poll() 可能已经读取到了旧的状态信息，从而引发竞态条件。这与之前修复的 tcp_write_err() 问题类似，需要确保在设置错误并完成套接字状态变更后，再通知上层应用，以保证 tcp_poll() 结果的一致性。
+
+#解决方案
+使用 tcp_done_with_error() 函数替换原有的手动设置 sk_err、内存屏障、sk_error_report() 以及 tcp_done() 的序列。tcp_done_with_error() 内部封装了正确的顺序逻辑，确保先完成状态变更，再进行错误上报，从而消除竞态风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/08cfce8bc39813dfc3e539ce5ae869906a4c245c

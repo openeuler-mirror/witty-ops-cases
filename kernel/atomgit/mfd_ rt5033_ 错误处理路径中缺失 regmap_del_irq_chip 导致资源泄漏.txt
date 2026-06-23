@@ -1,0 +1,20 @@
+#标题
+mfd: rt5033: 错误处理路径中缺失 regmap_del_irq_chip 导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+RT5033 驱动在初始化过程中，若 `regmap_add_irq_chip` 之后的步骤发生错误，驱动将移除设备或退出探测函数，但由于未调用 `regmap_del_irq_chip`，导致此前注册的中断芯片资源未被释放，造成内存泄漏或中断资源泄漏。
+
+#主要错误日志
+dev_err(&i2c->dev, "Failed to request IRQ %d: %d\n", ...)
+
+#问题根因
+驱动在 `rt5033_i2c_probe` 函数中使用 `regmap_add_irq_chip` 注册了中断芯片，但在后续的错误处理路径中缺失了对应的 `regmap_del_irq_chip` 调用。当探测失败时，无法自动释放已申请的中断资源。
+
+#解决方案
+将 `regmap_add_irq_chip` 替换为托管版本 `devm_regmap_add_irq_chip`。该函数利用设备资源管理机制，在驱动卸载或探测失败时自动释放中断芯片资源，从而修复了资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8c5e93da44f0cc23b9d2556df085341fc90375b3

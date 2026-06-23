@@ -1,0 +1,24 @@
+#标题
+ES8328/ES8388 音频编解码器 DAC 直通输出路由失效导致无声
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ES8328 或 ES8388 音频编解码器时，尽管 DAPM 路由声称支持 DAC 直接输出到 Output（绕过 Mixer），但在实际使用中，如果不设置 Mixer 的特定控制位（DACCONTROL17 bit 7 和 DACCONTROL20 bit 7），Left Out 1/2 和 Right Out 1/2 均无法输出模拟音频信号。用户可能发现在 alsamixer 中取消 Mixer 的静音后音频才能正常工作，这与驱动定义的“直通”路由逻辑不符。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序错误地定义了音频路由，声称 DAC 可以直接连接到 Output 而无需经过 Mixer。然而，根据硬件实际行为，DAC 输出必须经过 Mixer 才能到达 Output 引脚。DACCONTROL17 和 DACCONTROL20 的 bit 7 实际上控制着 DAC 信号是否输入到 Mixer 中，如果缺失该配置，DAC 信号无法进入 Mixer，导致输出无声。驱动代码中存在无效的 DAC->Output 直通路由定义，且 Mixer 的供电状态未与这些关键控制位绑定，导致路由逻辑与硬件寄存器行为脱节。
+
+#解决方案
+修改驱动代码，移除错误的 DAC 到 Output 的直接路由，强制 DAC 信号经过 Mixer。
+具体修改包括：
+1. 删除错误的 DAPM 路由表项（如 "Left Out 1", NULL, "Left DAC" 等），改为建立 DAC 到 Mixer 的连接（"Left Mixer", NULL, "Left DAC"）。
+2. 将 Mixer 控件（SND_SOC_DAPM_MIXER）的寄存器参数从无状态（SND_SOC_NOPM）修改为对应的控制寄存器（ES8328_DACCONTROL17 bit 7 和 ES8328_DACCONTROL20 bit 7），使 Mixer 的电源管理状态与 DAC 输入使能状态正确关联。
+3. 移除 Mixer controls 中多余的 "Playback Switch" 定义，因为该功能已由 Mixer widget 本身的寄存器配置接管。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/32a1459c026b7f66181e2032927a3f8b3e8f172f

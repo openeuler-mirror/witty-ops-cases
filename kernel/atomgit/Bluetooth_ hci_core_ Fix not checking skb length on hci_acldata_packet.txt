@@ -1,0 +1,20 @@
+#标题
+Bluetooth: hci_core: Fix not checking skb length on hci_acldata_packet
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理蓝牙 ACL 数据包时，若接收到的 skb（socket buffer）长度过小（小于 `hci_acl_hdr` 结构体大小），内核未进行长度校验直接读取数据，可能导致越界访问或内存污染，进而引发内核 Panic 或不可预期的行为。
+
+#主要错误日志
+bt_dev_err(hdev, "ACL packet too small");
+
+#问题根因
+函数 `hci_acldata_packet` 在解析 ACL 数据包头时，原代码直接将 `skb->data` 强转为 `hci_acl_hdr` 指针并调用 `skb_pull`，未检查 skb 是否有足够的数据长度来存放头部信息。当 skb 长度不足时，会发生越界读取。
+
+#解决方案
+使用 `skb_pull_data` 函数替代原有的 `skb_pull` 操作。`skb_pull_data` 会在拉取数据前自动检查 skb 长度是否满足请求的大小（`sizeof(*hdr)`）。若长度不足，该函数返回 NULL，此时代码新增判断逻辑，打印错误日志 "ACL packet too small" 并跳转至 `drop` 标签丢弃该异常数据包，从而避免越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5036b0d0ae4c7eff54d20e45f34dfcb0ce121dff

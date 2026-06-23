@@ -1,0 +1,20 @@
+#标题
+hns3驱动并行卸载时触发内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户并行卸载 hclge 驱动和 hns3 驱动时，系统触发 Oops（内核崩溃）。具体表现为在卸载过程中，hclge 层尝试对 `hnae3_ae_dev_list` 中的节点禁用 SRIOV，而此时 hns3 驱动可能正在移除这些节点，导致访问已释放内存或空指针引用。
+
+#主要错误日志
+未知
+
+#问题根因
+hclge 驱动卸载时会遍历 `hnae3_ae_dev_list` 并尝试禁用 SRIOV。若此时用户卸载 hns3 驱动，hns3 会移除 `hnae3_ae_dev_list` 中的所有节点。由于缺乏对并行卸载流程的有效保护（无法简单使用 `hnae3_common_lock`，因为 `pci_disable_sriov()` 内部触发的 VF 移除流程也会尝试获取该锁，导致死锁风险），导致并发访问冲突引发 Oops。
+
+#解决方案
+引入一个新的互斥锁 `hnae3_unload_lock` 用于保护驱动卸载流程。在 hns3、hclge 及 hclgevf 的退出函数中，通过调用 `hnae3_acquire_unload_lock()` 和 `hnae3_release_unload_lock()` 确保驱动卸载过程串行化，从而避免并发卸载导致的竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31e1d3af8f5aeb0183d33737dbc90ec48c6774a0

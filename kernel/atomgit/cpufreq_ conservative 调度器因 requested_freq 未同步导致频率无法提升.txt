@@ -1,0 +1,20 @@
+#标题
+cpufreq: conservative 调度器因 requested_freq 未同步导致频率无法提升
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 conservative 调度器时，若平台在调度器设置频率后修改了实际 CPU 频率（例如因平台特定的频率调整），导致 policy->cur 与缓存的 requested_freq 不再同步。此时调度器可能错误地认为 CPU 已运行在最高频率，从而跳过后续的频率提升操作，即使 CPU 实际上仍有提升空间，导致 CPU 频率被限制在较低水平无法升高。
+
+#主要错误日志
+未知
+
+#问题根因
+缓存的 requested_freq 变量未能保证与 policy->cur 保持同步。当平台限制了频率策略时，policy->cur 会发生变化，但 conservative 调度器内部缓存的 requested_freq 未随之更新。这种不匹配导致调度器误判当前频率状态，认为已达到最高频率而停止升频。
+
+#解决方案
+在 conservative 调度器中新增 `.limits` 回调函数 `cs_limits`。当检测到 policy limits 发生变化时，将 dbs_info->requested_freq 重置为当前的 policy->cur，以消除缓存与实际状态的不一致，确保后续频率调整逻辑正确执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e7b02240fce2623357e9e7265f3e9afbd012707d

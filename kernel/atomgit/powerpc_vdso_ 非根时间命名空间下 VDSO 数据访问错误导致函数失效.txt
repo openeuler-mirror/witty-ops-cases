@@ -1,0 +1,20 @@
+#标题
+powerpc/vdso: 非根时间命名空间下 VDSO 数据访问错误导致函数失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非根时间命名空间中运行时，VDSO 中的 `__kernel_get_syscall_map`、`__kernel_get_tbfreq` 和 `__kernel_sync_dicache` 函数无法正常工作，读取到的数据为 0，导致依赖于这些系统调用映射或时间基准频率的功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在非根时间命名空间中，全局 VDSO 数据页被替换为专用的命名空间数据页，而全局数据页被映射在其下一页。相关函数仍直接使用 `get_datapage` 宏获取数据指针，未判断 `clock_mode` 是否为 `VDSO_CLOCKMODE_TIMENS`，导致读取到错误的内存位置（读取到的值为 0），无法获取正确的系统调用映射或时间基准频率数据。
+
+#解决方案
+引入一个新的汇编宏 `get_realdatapage`，该宏在获取数据页指针后会检查 `clock_mode` 字段。如果检测到 `clock_mode` 等于 `VDSO_CLOCKMODE_TIMENS`，则将指针偏移一个 `PAGE_SIZE` 以访问真实的全局数据页。修复补丁将 `__kernel_get_syscall_map`、`__kernel_get_tbfreq` 和 `__kernel_sync_dicache` 函数中对 `get_datapage` 的调用替换为 `get_realdatapage`，从而确保在时间命名空间场景下能正确读取数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e0faf2fb9df8240135cbe85a4378b258cfd6e169

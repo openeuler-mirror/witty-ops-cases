@@ -1,0 +1,20 @@
+#标题
+KVM_GET_REG_LIST 在 RME REC 未_finalize时错误返回 EPERM
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 RME（Realm Management Extension）场景下，主机调用 `KVM_GET_REG_LIST` ioctl 获取寄存器列表时，若 REC（Realm Execution Context）尚未完成 finalize 操作，ioctl 会错误地返回 `-EPERM` 错误。由于 REC 的 finalize 必须在 Realm 描述符创建之后才能进行，这导致用户态无法在合适的时机正常调用 `KVM_GET_REG_LIST` 来查询寄存器列表。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `kvm_arch_vcpu_ioctl()` 处理 `KVM_GET_REG_LIST` 请求时，代码使用 `kvm_arm_vcpu_is_finalized()` 进行了过早的检查。该检查不仅拦截了未 finalize 的 SVE 状态，也意外拦截了未 finalize 的 REC 状态。然而，RME REC 的 finalize 时机较晚（需在 Realm 描述符创建之后），导致原本合法的寄存器列表查询请求被错误拒绝。
+
+#解决方案
+将 finalize 的检查逻辑从 `kvm_arch_vcpu_ioctl()` 的通用路径移动到 `copy_sve_reg_indices()` 函数内部。修改后，只有当实际拷贝 SVE 寄存器索引时才会检查 SVE 是否已 finalize，从而允许 RME REC 在未 finalize 时正常通过 `KVM_GET_REG_LIST` 获取寄存器列表。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8fe0448808f90bf8b14b3427ccf1e9111bacf6b3

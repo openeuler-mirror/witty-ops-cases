@@ -1,0 +1,22 @@
+#标题
+memcg: 修复 OOM 流程中的 soft lockup 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内存控制组（memcg）触发 OOM（Out of Memory）流程时，系统可能检测到 soft lockup 并打印警告信息。该问题发生在内核遍历进程列表进行任务扫描或任务转储（dump_tasks）时，由于进程数量过多且循环中未主动让出 CPU，导致长时间占用 CPU 不释放，触发 soft lockup 看门狗机制。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mem_cgroup_scan_tasks` 函数和 `dump_tasks` 函数中，代码通过循环遍历所有进程（或 cgroup 中的任务）以执行回调或转储操作。当系统中进程数量非常多时，该循环执行时间过长，且循环体内未包含调度点或喂狗操作，导致当前 CPU 长时间处于忙碌状态无法调度其他任务，也无法响应 soft lockup 看门狗的检测，从而触发 soft lockup 警告。
+
+#解决方案
+在相关的长循环中引入 CPU 让步机制，防止长时间占用 CPU：
+1. 在 `mem_cgroup_scan_tasks` 函数的循环中，每遍历 1024 个任务插入一次 `cond_resched()` 调用，主动尝试调度，允许其他任务运行。
+2. 在 `dump_tasks` 函数的 `for_each_process` 循环中，每遍历 1024 个进程调用一次 `touch_softlockup_watchdog()`，重置 soft lockup 计时器，防止误报 soft lockup 警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0094f7d8ccefd0e88c812660e78646cebef28f15

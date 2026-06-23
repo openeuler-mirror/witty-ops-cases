@@ -1,0 +1,20 @@
+#标题
+dmaengine: xilinx_dma 残余量计算因高位比特干扰导致结果错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Xilinx DMA 驱动在获取传输事务的残余量时计算结果错误。由于 `control` 和 `status` 寄存器字段的高位比特（非缓冲区大小部分）参与了减法运算，可能导致残余量数值计算异常，进而影响上层应用对 DMA 传输状态的判断（如传输进度显示不正确或同步机制失效）。
+
+#主要错误日志
+未知
+
+#问题根因
+segment 的 `.control` 和 `.status` 字段中包含高位比特，这些高位并不属于缓冲区大小的一部分，有效的缓冲区大小仅位于低 `max_buffer_len` 比特中。原有代码逻辑是先执行减法运算 `(control - status)`，然后再进行掩码操作 `& max_buffer_len`。这种顺序导致高位比特的差值干扰了最终结果，导致残余量计算错误。
+
+#解决方案
+修改残余量计算逻辑，先使用 `max_buffer_len` 对 `control` 和 `status` 分别进行掩码操作，滤除高位干扰比特，然后再执行减法运算。即将 `(control - status) & mask` 修改为 `(control & mask) - (status & mask)`，确保只有有效的缓冲区长度比特参与运算。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58c5916af150dcb3682df307908db87265dc2f28

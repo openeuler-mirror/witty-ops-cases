@@ -1,0 +1,22 @@
+#标题
+block: fix uaf for flush rq while iterating tags
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在迭代遍历标签时，对 flush request 发生 Use-After-Free (UAF)。该故障可能导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 信息，该问题关联 Issue IBEAF4。根本原因在于 `blk_register_queue` 和 `del_gendisk` 中对 `QUEUE_FLAG_INIT_DONE` 标志位的设置与清除逻辑处理不当，导致在遍历 tags 过程中 request 对象的生命周期管理出现混乱，从而引发 UAF。
+
+#解决方案
+修改了 `blk_register_queue` 和 `del_gendisk` 的代码逻辑：
+1. 在 `blk_register_queue` 中，移除了 `blk_queue_init_done(q)` 的判断检查，强制设置 `QUEUE_FLAG_INIT_DONE` 标志位并切换 `q_usage_counter` 到 percpu 模式，确保队列初始化状态正确。
+2. 在 `del_gendisk` 中，移除了清除 `QUEUE_FLAG_INIT_DONE` 标志位的操作，调整了队列解冻与退出逻辑的代码路径，保证了队列销毁流程的正确性，从而避免了 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/87e637b2cc45c4837577ed5a231740913885f65f

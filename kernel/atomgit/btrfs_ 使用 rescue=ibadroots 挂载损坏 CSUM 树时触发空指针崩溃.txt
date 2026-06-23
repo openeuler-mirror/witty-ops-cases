@@ -1,0 +1,28 @@
+#标题
+btrfs: 使用 rescue=ibadroots 挂载损坏 CSUM 树时触发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 BTRFS 文件系统的 CSUM tree root 损坏时，使用 `rescue=ibadroots` 选项进行挂载。挂载过程虽然成功解析了参数，但在后续进行数据读取（如执行文件操作）时，内核触发 General Protection Fault（通用保护错误）或空指针解引用，导致内核 Oops。
+
+#主要错误日志
+- BTRFS warning (device loop0): checksum verify failed on logical 5312512 mirror 1 wanted 0xb043382657aede36608fd3386d6b001692ff406164733d94e2d9a180412c6003 found 0x810ceb2bacb7f0f9eb2bf3b2b15c02af867cb35ad450898169f3b1f0bd818651 level 0
+- DEBUG: read tree root path failed for tree csum, ret=-5
+- Oops: general protection fault, probably for non-canonical address 0xdffffc0000000041: 0000 [#1] SMP KASAN NOPTI
+- KASAN: null-ptr-deref in range [0x0000000000000208-0x000000000000020f]
+- RIP: 0010:btrfs_lookup_csum+0x93/0x3d0 [btrfs]
+
+#问题根因
+在 `load_global_roots_objectid` 函数中，当 CSUM tree root 读取失败（`read_tree_root_path` 返回错误指针）且设置了 `rescue=ibadroots` 选项时：
+1. 代码逻辑错误地判断：因为设置了 `IGNOREBADROOTS` 选项，所以不将 `ret` 赋值为 `PTR_ERR(root)`，而是保持了之前的 `ret=0`。
+2. 函数结尾的错误处理逻辑依赖 `ret` 是否非零来决定是否设置 `BTRFS_FS_STATE_NO_DATA_CSUMS` 标志位。
+3. 由于 `ret` 仍为 0，该标志位未被设置，导致后续 I/O 路径误以为 CSUM 树可用并尝试访问 CSUM root 进行校验和查找。
+4. 实际上 CSUM root 指针为空或无效，导致访问非法地址引发 Oops。
+
+#解决方案
+修改 `fs/btrfs/disk-io.c` 中的 `load_global_roots_objectid` 函数。当 `read_tree_root_path()` 失败（返回 `IS_ERR(root)`）时，无论是否设置了 `IGNOREBADROOTS` 选项，都必须将错误码传递给 `ret` 变量（即 `ret = PTR_ERR(root)`）。这确保了后续的错误处理流程能正确识别 CSUM 树加载失败，并设置相应的安全标志位，防止后续非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b23f229688cedc6fa641820cbda410c7035cc4fd

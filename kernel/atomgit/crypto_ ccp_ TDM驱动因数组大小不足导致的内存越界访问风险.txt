@@ -1,0 +1,20 @@
+#标题
+crypto: ccp: TDM驱动因数组大小不足导致的内存越界访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `tdm_get_cmd_context_hash` 函数时，内核可能发生内存越界写操作。由于传递给 `sprint_symbol` 的缓冲区 `symbol_buf` 大小小于 `KSYM_NAME_LEN`，在后续的内核符号查找调用链中，会对超出数组边界的内存地址执行写零操作（`namebuf[KSYM_NAME_LEN - 1] = 0`），导致内核内存破坏，可能引发内核崩溃或不可预知的异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tdm_get_cmd_context_hash` 函数中，定义的缓冲区 `symbol_buf` 大小被硬编码为 128 字节。该缓冲区随后被传递给 `sprint_symbol` 函数，经过调用链 `sprint_symbol -> __sprint_symbol -> kallsyms_lookup_buildid`，底层函数会强制向缓冲区偏移量为 `KSYM_NAME_LEN - 1` 的位置写入结束符 `\0`。由于 `KSYM_NAME_LEN` 通常大于 128 字节，该写操作越过了 `symbol_buf` 的实际分配边界，导致内存越界访问。
+
+#解决方案
+将 `drivers/crypto/ccp/hygon/tdm-dev.c` 文件中 `symbol_buf` 数组的大小定义从硬编码的 `128` 修改为内核宏定义 `KSYM_NAME_LEN`，以确保缓冲区大小符合内核符号处理函数的最小要求，防止越界写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7ab4b6f0cf77a5a287e38cb8eee988954db419f4

@@ -1,0 +1,20 @@
+#标题
+RSI911x WiFi 驱动因未设置 vif 数据大小导致内存越界写入引发内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动后，在执行 WiFi 接口启动与关闭操作（`ip link set wlan0 up` 后紧接着 `ip link set wlan0 down`）时触发内核崩溃。具体表现为内存数据被破坏，导致在网络流量控制逻辑中访问到非法地址。
+
+#主要错误日志
+未知
+
+#问题根因
+RSI911x 驱动未设置 `vif_data_size`，导致 `ieee80211_vif` 结构体分配时未预留驱动私有数据空间。然而驱动仍通过 `vif->drv_priv` 访问并写入 `struct vif_priv` 数据，导致越界写入，破坏了临近内存结构体（如 `fq_tin` 的成员），进而引发后续的内存访问崩溃。
+
+#解决方案
+在驱动初始化函数 `rsi_mac80211_attach` 中，设置 `hw->vif_data_size = sizeof(struct vif_priv)`，确保内核为 vif 驱动私有数据分配足够的内存空间，避免越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/69d8b356766ad92920486fe69e3bb1851410606c

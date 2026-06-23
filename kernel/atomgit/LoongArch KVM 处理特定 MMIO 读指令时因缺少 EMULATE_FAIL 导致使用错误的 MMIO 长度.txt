@@ -1,0 +1,20 @@
+#标题
+LoongArch KVM 处理特定 MMIO 读指令时因缺少 EMULATE_FAIL 导致使用错误的 MMIO 长度
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch KVM 虚拟化场景下，当 Guest 执行 ldptr（opcode 0x24...0x27）指令触发 MMIO 读操作且解码路径走到 default 分支时，系统未能正确标记模拟失败。此时内核使用了错误的 MMIO 长度（为前一次 MMIO 操作遗留的陈旧值），导致 MMIO 操作行为异常，可能引发 Guest 状态错误或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `kvm_emu_mmio_read` 函数的 ldptr（opcode 0x24...0x27）指令解码路径中，default 分支仅执行了 break 操作，未将 `ret` 变量设置为 `EMULATE_FAIL`。这导致 `ret` 保持为 `EMULATE_DO_MMIO` 的状态，同时 `run->mmio.len` 未被初始化（保留了前一次操作的陈旧值），代码因此以错误的长度继续执行 MMIO 流程。
+
+#解决方案
+在 `arch/loongarch/kvm/exit.c` 文件的 `kvm_emu_mmio_read` 函数中，针对 ldptr 指令解码的 default 分支添加 `ret = EMULATE_FAIL` 赋值语句，使其与其他 default 分支（如 0x28...0x2e 和 0x38 的情况）处理逻辑保持一致，确保异常路径能正确返回失败状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/af9c2090636168952bce5c3dfe254720e517593c

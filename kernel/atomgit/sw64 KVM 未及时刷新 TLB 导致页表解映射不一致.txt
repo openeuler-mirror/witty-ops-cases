@@ -1,0 +1,20 @@
+#标题
+sw64 KVM 未及时刷新 TLB 导致页表解映射不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构的 KVM 虚拟化环境中，当执行页表解映射操作（unmap_apt_ptes/unmap_apt_pmds）时，由于未在清除页表项（PTE/PMD/PUD）后立即刷新远程 TLB，可能导致 Guest 或 Host 侧访问到过期的地址翻译缓存，进而引发内存访问错误、数据不一致或系统异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `unmap_apt_ptes` 和 `unmap_apt_pmds` 函数中，清除页表项（set_pte/pmd_clear/pud_clear）后，缺少调用 `kvm_flush_remote_tlbs(kvm)` 来同步刷新其他 CPU 上的 TLB 缓存。根据 Commit 描述，必须在 APT pte/pmd/pud 被设置或清除后刷新远程 TLB，以维护页表一致性。
+
+#解决方案
+在 `arch/sw_64/kvm/mmu.c` 文件中，针对 `unmap_apt_ptes` 和 `unmap_apt_pmds` 函数，在清除页表项（set_pte、pmd_clear、pud_clear）之后，立即插入 `kvm_flush_remote_tlbs(kvm)` 函数调用，确保页表变更即时对所有 CPU 可见。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d63fbf87bf4bdaa5700a4007c9adb704564e5865

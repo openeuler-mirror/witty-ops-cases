@@ -1,0 +1,20 @@
+#标题
+mailbox控制器注册因缺少通道数组校验导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `mbox_controller_register` 注册 mailbox 控制器时，若驱动程序未正确初始化 `chans` 数组指针（即为 NULL），内核将发生空指针解引用（OOPS）。由于 mailbox 控制器可能在系统启动非常早期的阶段初始化，该 OOPS 可能导致系统在启动早期卡死或崩溃且无法观察到错误信息。
+
+#主要错误日志
+未知
+
+#问题根因
+`mbox_controller_register` 函数在入口检查中遗漏了对 `mbox->chans` 指针的有效性校验。当驱动传入的 `mbox_controller` 结构体中 `chans` 成员为 NULL 时，代码继续执行并在后续访问通道数组时触发空指针解引用。原代码仅检查了 `mbox`、`mbox->dev`、`mbox->ops` 和 `mbox->num_chans`，未包含 `mbox->chans`。
+
+#解决方案
+在 `mbox_controller_register` 函数的 sanity check（健全性检查）中增加对 `mbox->chans` 的判断。若 `mbox->chans` 为空，函数直接返回 `-EINVAL`，从而避免后续的空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/89fd897b09696694dcdf6e231b8f37d9c244af43

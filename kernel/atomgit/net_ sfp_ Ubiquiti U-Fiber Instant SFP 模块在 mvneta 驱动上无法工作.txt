@@ -1,0 +1,20 @@
+#标题
+net: sfp: Ubiquiti U-Fiber Instant SFP 模块在 mvneta 驱动上无法工作
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 Ubiquiti U-Fiber Instant SFP 模块时，网络接口无法正常建立连接。该故障特定于 mvneta 网络驱动，因为 mvneta 驱动强制要求 1000baseX 模式必须开启自动协商，而该 SFP 模块的 Quirk 处理逻辑错误地移除了自动协商支持位，导致驱动拒绝配置链路。
+
+#主要错误日志
+未知
+
+#问题根因
+在引入 commit 8110633db49d7de2 后，SFP 总线层调整了自动协商和流控位的设置顺序，改为在调用 SFP quirks 之前设置。Ubiquiti U-Fiber Instant SFP 模块的 quirk 函数 `sfp_quirk_ubnt_uf_instant` 为了修正模块 EEPROM 中错误的传输模式声明，先清零了所有支持模式，再单独设置 `1000baseX_Full`。这导致之前预设的 `Autoneg`、`Pause` 和 `Asym_Pause` 位被意外清除。mvneta 驱动自 commit c762b7fac1b249a9 起禁止在 802.3z 模式下禁用自动协商，因此最终因缺少 `Autoneg` 位而导致链路配置失败。
+
+#解决方案
+修改 `sfp_quirk_ubnt_uf_instant` 函数，在清零并设置 `1000baseX_Full` 模式后，显式重新设置 `Autoneg`、`Pause` 和 `Asym_Pause` 位，确保该模块在 mvneta 等强制要求自动协商的驱动上能正常工作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/95e34abbd44226b6f0cdd8252558f378e223d2a0

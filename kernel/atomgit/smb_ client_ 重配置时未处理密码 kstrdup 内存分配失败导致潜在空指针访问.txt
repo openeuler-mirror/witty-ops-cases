@@ -1,0 +1,22 @@
+#标题
+smb: client: 重配置时未处理密码 kstrdup 内存分配失败导致潜在空指针访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB 客户端执行重新配置操作时，若系统内存不足，内核内存分配函数 kstrdup 失败。由于代码未检查返回值，session 结构体中的密码指针将为 NULL，后续代码若直接引用该指针将引发空指针解引用异常，可能导致内核 panic 或不可预知的执行流错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb3_reconfigure()` 函数中，调用 `kstrdup()` 复制 `ctx->password` 和 `ctx->password2` 到 `ses->password` 和 `ses->password2` 时，未对返回值进行检查。当内存分配失败时，kstrdup 返回 NULL，导致后续使用该密码指针时存在安全隐患。
+
+#解决方案
+在 `smb3_reconfigure()` 函数中增加对 `kstrdup` 返回值的校验：
+1. 若 `ses->password` 分配失败，直接返回 -ENOMEM。
+2. 若 `ses->password2` 分配失败，释放已分配的 `ses->password` 并置 NULL，随后返回 -ENOMEM。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58673ac6e08a341dfc3a075d6582a1dc21d49102

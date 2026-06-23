@@ -1,0 +1,25 @@
+#标题
+ipv6: ioam: 修复 __ioam6_fill_trace_data 中的空指针解引用风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 IPv6 IOAM (In-situ Operations, Administration, and Maintenance) 跟踪数据时，内核可能发生空指针解引用导致 panic 或 Oops。该问题可能发生在设备注销或特定网络路径处理过程中，当相关网络设备结构体不可用时触发。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `__ioam6_fill_trace_data` 在处理 IOAM 跟踪数据时存在多处安全隐患：
+1. 直接调用 `__in6_dev_get()` 获取设备接口信息后未检查返回值是否为 NULL，就直接访问其成员（如 `cnf.ioam6_id`），导致潜在的空指针解引用。
+2. 使用 `skb_dst(skb)->dev` 获取设备指针不够安全，未采用适当的 RCU 保护机制。
+3. 访问可能被并发修改的配置变量（如 `ioam6_id`）时缺少 `READ_ONCE()` 保护，可能导致读取不一致。
+
+#解决方案
+1. **增加空指针检查**：在调用 `__in6_dev_get(skb->dev)` 和 `__in6_dev_get(dev)` 后增加判断逻辑。如果获取的 `inet6_dev` 指针为 NULL，则将相应的 IOAM 数据字段填充为 `IOAM6_U16_UNAVAILABLE` 或 `IOAM6_U32_UNAVAILABLE`，避免解引用空指针。
+2. **使用安全的设备获取接口**：将代码中的 `skb_dst(skb)->dev` 替换为 `skb_dst_dev_rcu(skb)`，以确保在 RCU 读临界区内安全获取目的设备指针。
+3. **增加并发读取保护**：在读取 `ioam6_id`、`ioam6_id_wide` 等配置项时添加 `READ_ONCE()` 宏，防止编译器优化导致的读取不一致问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/98be119d1bcf7af14692ac7eaa022ae5997a9dd0

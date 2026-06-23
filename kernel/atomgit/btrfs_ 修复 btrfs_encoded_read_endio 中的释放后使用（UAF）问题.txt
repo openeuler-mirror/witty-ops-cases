@@ -1,0 +1,20 @@
+#标题
+btrfs: 修复 btrfs_encoded_read_endio 中的释放后使用（UAF）问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Btrfs 文件系统执行编码读操作时，内核可能发生 Use-After-Free（释放后使用）故障，导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `btrfs_encoded_read_endio` 函数中，原有的代码使用 `atomic_dec_return(&priv->pending)` 来减少 pending 计数并判断是否唤醒等待队列。这引入了竞争窗口：当 pending 计数减至 0 时唤醒等待线程，该线程可能立即退出并释放 `priv` 结构体。然而，当前 endio 函数在唤醒操作后继续执行 `bio_put(&bbio->bio)`，此时 `priv` 可能已被释放，导致对 `priv` 的访问变成释放后使用。
+
+#解决方案
+将 `atomic_dec_return` 替换为 `atomic_dec_and_test`。该修改确保只有当 pending 计数减至 0 时才执行唤醒操作，且逻辑上保证了在计数归零（意味着所有 IO 完成）的上下文中处理唤醒流程，修复了对 `priv` 结构体的非法访问问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc900cdaf1b88d3ca87222919e798067b102e30c

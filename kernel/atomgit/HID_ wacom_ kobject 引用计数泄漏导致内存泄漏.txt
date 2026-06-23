@@ -1,0 +1,20 @@
+#标题
+HID: wacom: kobject 引用计数泄漏导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Wacom 驱动初始化远程设备过程中，若 `sysfs_create_files()` 创建失败，会导致 kobject 引用计数泄漏。该故障表现为内核对象无法被释放，造成内存泄漏，且相关 kobject 目录残留。
+
+#主要错误日志
+`hid_err(wacom->hdev, "cannot create sysfs group err: %d\n", error);`
+
+#问题根因
+在函数 `wacom_initialize_remotes()` 中，当 `sysfs_create_files()` 执行失败时，代码直接返回错误码。由于此时清理动作尚未注册，导致之前获取的 kobject 引用计数未被执行 `kobject_put()` 释放。引用计数归零失败使得 kobject 永远无法被释放，从而引发引用计数泄漏。
+
+#解决方案
+在 `sysfs_create_files()` 失败的出错处理路径中，增加调用 `kobject_put(remote->remote_dir)`，确保在返回错误前释放 kobject 的引用计数，从而修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0171f617406c33366dc18ca77557d60a359494a2

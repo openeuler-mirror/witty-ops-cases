@@ -1,0 +1,20 @@
+#标题
+posix-cpu-timers: 修复 handle_posix_cpu_timers 与 posix_cpu_timer_del 的竞态条件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进程退出阶段，若非自动回收（non-autoreaping）任务已通过 `exit_notify()`，此时从 IRQ 上下文调用 `handle_posix_cpu_timers()`，该任务可能立即被其父进程或调试器回收（reap）。若此时并发执行 `posix_cpu_timer_del()`，将无法检测到 `timer->it.cpu.firing != 0`，导致定时器删除逻辑出现竞态问题，可能导致内核状态不一致或定时器处理错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `run_posix_cpu_timers()` 中缺少对 `tsk->exit_state` 的检查。如果一个正在退出的任务已经通过了 `exit_notify()`，此时任务可能被并发回收。随之发生的 `handle_posix_cpu_timers()` 执行期间，并发的 `posix_cpu_timer_del()` 会因为 `cpu_timer_task_rcu()` 或 `lock_task_sighand()` 失败而无法正确获取锁，从而错过了对 `timer->it.cpu.firing` 状态的检测。
+
+#解决方案
+在 `run_posix_cpu_timers()` 函数入口处增加对 `tsk->exit_state` 的检查。如果任务处于退出状态，则直接返回，防止在任务被回收期间运行定时器处理逻辑，从而避免与 `posix_cpu_timer_del()` 发生竞态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d1e5de38c9e078a787f4731c1afd592d1e7db26f

@@ -1,0 +1,23 @@
+#标题
+MHI主机控制器处理传输事件时未校验TRE一致性导致潜在内存越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在MHI（Mobile High-Definition Interface）主机控制器处理数据传输事件时，若Event元素指向了非预期的TRE（Transfer Ring Element），且该TRE未设置CHAIN（链式）标志，内核可能继续处理错误的环形缓冲区指针。这会导致内核读写非法内存区域，可能引发系统崩溃、内存数据损坏或不可预知的异常行为。
+
+#主要错误日志
+dev_err(&mhi_cntrl->mhi_dev->dev, "Event element points to an unexpected TRE\n");
+
+#问题根因
+在 `parse_xfer_event` 函数中，代码直接根据事件指针计算出的 `dev_rp` 进行处理，未校验其与当前环形缓冲区读指针 `local_rp` 的逻辑关系。根据CVE-2025-39790关联的分析，如果硬件或固件行为异常，事件指针可能指向意外的TRE。原代码缺少对 `dev_rp` 是否等于 `next_rp`（下一个预期的TRE）的判断，同时也未检查非链式TRE的特殊情况，导致在指针不匹配时仍继续执行遍历逻辑，引发内存访问越界。
+
+#解决方案
+在 `drivers/bus/mhi/host/main.c` 的 `parse_xfer_event` 函数中增加防御性检查逻辑：
+1. 计算预期的下一个TRE指针 `next_rp`，并处理环形缓冲区的回绕情况。
+2. 在处理环形缓冲区循环前，校验 `dev_rp` 是否等于 `next_rp`，或者当前TRE是否设置了 `CHAIN` 位。
+3. 如果校验失败（即事件元素指向非预期的TRE且非链式），则打印错误日志 "Event element points to an unexpected TRE" 并跳出循环，拒绝处理该错误事件，从而避免内存越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9678bcbec5d975d88b58d67707b262445de8b689

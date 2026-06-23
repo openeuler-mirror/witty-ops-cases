@@ -1,0 +1,23 @@
+#标题
+perf test 'import perf' in python 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SW64 架构下执行 perf 测试中的 Python 扩展测试（'import perf'）时失败，加载生成的 python.so 共享库时系统报告未定义符号错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在提交 523c2489c851 ("perf jitdump: Add SW64 support") 添加 jitdump 支持时，遗漏了将 `perf_regs_sw64.c` 文件添加到 `python-ext-sources` 列表中。此外，代码中存在命名不一致的问题：构建系统目标名为 `perf_regs_sw_64.o`，而源文件中的符号定义（如 `__perf_reg_name_sw64`）与 `perf_regs.c` 中的调用以及 `python-ext-sources` 的期望名称不匹配。这导致生成的 python.so 缺少必要的符号定义，从而引发 undefined symbol 错误。
+
+#解决方案
+统一 SW64 架构下的寄存器处理函数命名规范并补全构建依赖。具体修改如下：
+1. 将构建目标文件名和源文件列表中的名称统一为 `perf_regs_sw64`（去除多余的下划线）。
+2. 将源代码中的符号名称 `__perf_reg_name_sw_64`、`__perf_reg_ip_sw_64`、`__perf_reg_sp_sw_64` 分别重命名为 `__perf_reg_name_sw64`、`__perf_reg_ip_sw64`、`__perf_reg_sp_sw64`。
+3. 在 `tools/perf/util/python-ext-sources` 文件中添加 `util/perf-regs-arch/perf_regs_sw64.c`，确保 Python 扩展构建时包含该源文件，从而导出正确的符号。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/24e56826772ac6d630194c51fc220306670e7629

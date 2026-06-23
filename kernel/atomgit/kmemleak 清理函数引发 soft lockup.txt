@@ -1,0 +1,20 @@
+#标题
+kmemleak 清理函数引发 soft lockup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `__kmemleak_do_cleanup()` 函数进行内存清理时，若 `object_list` 链表过长，内核会长时间占用 CPU 不释放，导致触发 soft lockup（软锁死），系统响应受阻。
+
+#主要错误日志
+未知
+
+#问题根因
+`__kmemleak_do_cleanup()` 函数在遍历并删除 `object_list` 链表中的对象时，执行流程是一个紧凑的循环，中间没有调用调度函数。当系统中存在大量待清理的 kmemleak 对象时，该循环会长时间占用 CPU，导致内核无法响应调度请求，从而触发 soft lockup 机制报警。
+
+#解决方案
+在 `__kmemleak_do_cleanup()` 的对象遍历循环中引入计数器，每处理 64 个对象（`!(++cnt & 0x3f)`）调用一次 `cond_resched()`，主动让出 CPU 使用权，允许调度器切换进程，从而避免长时间占用 CPU 导致的 soft lockup 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/711408f4205052ea351349284eaf4ae68a995bbe

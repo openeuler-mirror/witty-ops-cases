@@ -1,0 +1,25 @@
+#标题
+sched/numa: task_numa_work空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 stress-ng-vm-segv 测试用例进行压力测试时，内核发生空指针引用错误，导致系统崩溃并触发 crashdump。具体表现为内核无法处理虚拟地址 0000000000000020 的缺页异常，调用栈显示由 `task_numa_work` 函数触发的 `vma_migratable` 调用中出现空指针解引用。
+
+#主要错误日志
+[323676.066985] Unable to handle kernel NULL pointer dereference at virtual address 0000000000000020
+[323676.067115] pc : vma_migratable+0x1c/0xd0
+[323676.067122] lr : task_numa_work+0x1ec/0x4e0
+[323676.067153]  vma_migratable+0x1c/0xd0
+[323676.067155]  task_numa_work+0x1ec/0x4e0
+[323676.070184] Starting crashdump kernel...
+
+#问题根因
+stress-ng-vm-segv 测试会取消映射子进程的整个地址空间，导致子进程没有 VMA。在 munmap 系统调用返回用户态之前，可能会添加并执行 `task_numa_work()` 进行 NUMA 平衡。在此场景下，由于子进程在 munmap 后没有 vma，`task_numa_work()` 中的 `vma_next()` 即使从 0 重新开始迭代也会返回空指针。代码在 `do...while` 循环中对 vma 指针进行了解引用操作，但未在操作前检查 vma 指针是否为空，从而触发了空指针引用错误。
+
+#解决方案
+修改 `kernel/sched/fair.c` 中的 `task_numa_work` 函数，将原有的 `do...while` 循环结构改为 `for` 循环结构，并在循环条件中显式检查 vma 指针是否非空（`for (; vma; vma = vma_next(&vmi))`），确保在解引用 vma 之前进行有效性验证，从而避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fc46500c054a160790e25e88d691d6b0b1beba1d

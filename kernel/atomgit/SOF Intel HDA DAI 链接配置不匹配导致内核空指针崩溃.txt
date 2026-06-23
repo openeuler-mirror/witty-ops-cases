@@ -1,0 +1,21 @@
+#标题
+SOF Intel HDA DAI 链接配置不匹配导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当音频拓扑文件与机器驱动中的 DAI 链接配置不匹配时（特别是在使用 dummy DAI link 进行回环捕获回声参考的场景下），触发内核 NULL pointer dereference，导致系统崩溃。
+
+#主要错误日志
+RIP: 0010:hda_dai_get_ops.isra.0+0x14/0xa0 [snd_sof_intel_hda_common]
+（注：修复后新增日志）dev_err: "%s: widget is NULL\n"
+
+#问题根因
+机器驱动中的 DAI links 与拓扑配置存在不匹配。在特定场景（如回环捕获）下，DAI 对应的 playback/capture widget 未被设置（为 NULL），代码在未做判空保护的情况下直接访问 `w->dobj.private`，导致空指针解引用。
+
+#解决方案
+在 `sound/soc/sof/intel/hda-dai.c` 的 `hda_dai_get_ops` 函数中增加对 `widget` 指针的判断。如果 `widget` 为空，打印错误日志并直接返回 NULL，避免后续代码访问空指针导致崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb3aa5ac3952a0ec0d7df532e5a66953c1c8bdac

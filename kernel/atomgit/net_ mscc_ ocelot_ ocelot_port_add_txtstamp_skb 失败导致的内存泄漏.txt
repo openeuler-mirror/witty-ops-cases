@@ -1,0 +1,20 @@
+#标题
+net: mscc: ocelot: ocelot_port_add_txtstamp_skb 失败导致的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 PTP 时间戳 FIFO 满时，`ocelot_port_add_txtstamp_skb` 函数执行失败。由于失败路径未释放 skb 克隆，导致内存泄漏。随着时间推移，系统可能出现内存资源耗尽的情况。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ocelot_port_txtstamp_request` 函数中，调用 `ocelot_port_add_txtstamp_skb()` 之前先调用了 `skb_clone_sk()` 创建了 skb 的克隆。当 `ocelot_port_add_txtstamp_skb()` 失败（例如由于 PTP 时间戳 FIFO 满）时，代码直接返回错误，未调用 `kfree_skb()` 释放先前创建的 skb 克隆，导致该内存块的引用丢失，从而发生内存泄漏。
+
+#解决方案
+在 `ocelot_port_add_txtstamp_skb()` 调用失败的错误处理分支中，增加 `kfree_skb(*clone)` 调用，确保在返回错误前释放已分配的 skb 克隆，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/287117d884577e420871acfaa357c7cb91719489

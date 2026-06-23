@@ -1,0 +1,21 @@
+#标题
+ASoC: davinci-evm: 修复 davinci_evm_probe 中的引用计数泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 davinci-evm 声卡驱动probe过程中，若发生错误（如解析 phandle 失败、注册声卡失败等），函数直接返回，导致此前通过 `of_parse_phandle` 获取的 device node 引用计数未被释放，造成内核对象引用计数泄漏。长期运行或重复触发可能导致内存泄漏。
+
+#主要错误日志
+No clock or clock rate defined.
+snd_soc_register_card failed (%d)
+
+#问题根因
+`davinci_evm_probe` 函数调用 `of_parse_phandle()` 获取 "ti,audio-codec" 和 "ti,mcasp-controller" 对应的设备节点，该函数会增加节点的引用计数。但在多个错误处理分支中（如第二次 `of_parse_phandle` 失败、`snd_soc_of_parse_card_name` 失败、`devm_snd_soc_register_card` 失败等），函数直接返回错误码，未调用 `of_node_put()` 释放已获取的节点引用，从而导致引用计数泄漏。
+
+#解决方案
+修改 `davinci_evm_probe` 函数的错误处理路径，引入统一的 `err_put` 标签。在各个错误分支中，不再直接返回，而是跳转至 `err_put` 处执行清理工作。在 `err_put` 处，检查并调用 `of_node_put()` 释放 `dai->cpus->of_node` 和 `dai->codecs->of_node`，并将指针置空，确保资源正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9f5e4e57b80413f4f5ab222f385cb32ffa7ae8bc

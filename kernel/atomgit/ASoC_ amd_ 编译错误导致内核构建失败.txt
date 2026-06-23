@@ -1,0 +1,25 @@
+#标题
+ASoC: amd: 编译错误导致内核构建失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译 AMD YC 音频机器驱动时，编译过程因隐式函数声明错误而中止，导致内核构建失败。具体表现为在 `acp6x_probe` 函数中调用 `acpi_evaluate_integer` 时找不到函数定义。
+
+#主要错误日志
+sound/soc/amd/yc/acp6x-mach.c: In function 'acp6x_probe':
+>> sound/soc/amd/yc/acp6x-mach.c:573:15: error: implicit declaration of function 'acpi_evaluate_integer'; did you mean 'acpi_evaluate_object'? [-Werror=implicit-function-declaration]
+     573 |         ret = acpi_evaluate_integer(handle, "_WOV", NULL, &dmic_status);
+         |               ^~~~~~~~~~~~~~~~~~~~~
+         |               acpi_evaluate_object
+   cc1: some warnings being treated as errors
+
+#问题根因
+函数 `acpi_evaluate_integer` 及其在 `acpi_bus.h` 中的原型定义仅在 `CONFIG_ACPI` 配置项启用时可用。`SND_SOC_AMD_YC_MACH` 配置项的代码逻辑中使用了该 ACPI 函数，但其 Kconfig 定义中缺少对 `ACPI` 的依赖声明，导致在未启用 ACPI 的编译环境中，编译器无法找到函数原型从而报错。
+
+#解决方案
+修改 `sound/soc/amd/Kconfig` 文件，在 `SND_SOC_AMD_YC_MACH` 配置项中增加对 `ACPI` 的依赖。将配置行从 `depends on SND_SOC_AMD_ACP6x` 修改为 `depends on SND_SOC_AMD_ACP6x && ACPI`，确保只有在 ACPI 支持启用时才编译该模块，从而避免因缺少头文件定义导致的编译错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dcb0ee2cc5becff473695513c686ec9d3eef9a4f

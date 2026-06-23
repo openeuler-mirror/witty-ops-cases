@@ -1,0 +1,32 @@
+#标题
+ksmbd: durable v2 replay 导致活跃文件句柄释放后使用(UAF)
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理带 SMB2_FLAGS_REPLAY_OPERATION 标志的 DURABLE_REQ_V2 上下文时，若对已处于活跃连接状态的文件句柄进行 durable v2 replay，内核会发生 slab-use-after-free。故障触发时 KASAN 报告在 `__ksmbd_close_fd` 函数中对已释放的 `fp->conn` 指针进行解引用（`spin_lock` 操作），导致内核崩溃或内存破坏。该问题可通过构造特定的 SMB2 请求复现。
+
+#主要错误日志
+```
+[    7.349607] BUG: KASAN: slab-use-after-free in _raw_spin_lock+0x75/0xe0
+[    7.349811] Write of size 4 at addr ffff8881056ac18c by task kworker/1:2/108
+...
+[    7.350128]  __ksmbd_close_fd+0x27f/0xaf0
+[    7.350131]  ksmbd_close_fd+0x135/0x1b0
+[    7.350133]  smb2_close+0xb19/0x15b0
+...
+[    7.350197] The buggy address belongs to the object at ffff8881056ac000
+[    7.350197]  which belongs to the cache kmalloc-1k of size 1024
+[    7.357857] The buggy address is located 396 bytes inside of
+[    7.357857]  freed 1024-byte region [ffff8881056ac000, ffff8881056ac400)
+```
+
+#问题根因
+`parse_durable_handle_context()` 函数在处理 DURABLE_REQ_V2 上下文且带有 SMB2_FLAGS_REPLAY_OPERATION 标志时，无条件地将 `dh_info->fp->conn` 赋值为当前连接。由于 `ksmbd_lookup_fd_cguid()` 未根据连接过滤文件句柄，可能返回已处于活跃连接状态的句柄。该无条件赋值操作覆盖了原有的 `fp->conn` 指针，导致原连接被释放后，`fp->conn` 指向了已释放的内存（悬空指针）。后续在 `__ksmbd_close_fd()` 中通过 `spin_lock(&fp->conn->llist_lock)` 访问该指针时触发 use-after-free。
+
+#解决方案
+移除对 `fp->conn` 的无条件赋值逻辑，增加判断：若 `dh_info->fp->conn` 不为 NULL（即句柄已处于活跃状态），则拒绝该 replay 操作并返回 `-EBADF` 错误。这确保了只有断开连接的句柄（`fp->conn == NULL`）才能进行重连操作，该逻辑与 `ksmbd_lookup_durable_fd()` 的行为保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56e99114209c5cc2c130eabc7c24dd6c824614d4

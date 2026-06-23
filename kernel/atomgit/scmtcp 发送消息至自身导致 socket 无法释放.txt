@@ -1,0 +1,20 @@
+#标题
+scmtcp 发送消息至自身导致 socket 无法释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 scmtcp 文件描述符通过 sendmsg 向自身发送消息且未进行 recvmsg 操作时，scmtcp 文件在哈希表中持有一个额外的引用计数。在关闭 scmtcp 文件描述符时，仅会执行一次 fput() 减引用操作，导致引用计数无法归零，socket 无法被真正释放，从而发生资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+scmtcp 协议在处理 sendmsg 时，如果允许将文件描述符发送给自身，会将该文件引用计入哈希表。这导致该文件描述符额外增加了一次引用计数。后续在关闭该文件描述符时，close 操作仅触发一次引用计数减少，无法抵消 sendmsg 时增加的引用，导致 socket 引用计数永不为零，无法释放。
+
+#解决方案
+在 scmtcp_sk_sendmsg 函数中增加检查逻辑，通过新增的 file_list_has_self 函数判断待发送的文件列表中是否包含当前 socket 自身。如果检测到发送目标是自身，则直接返回 -EINVAL 错误，拒绝该操作，从而防止引用计数泄漏。同时，将 flist_seq 字段修改为原子变量以支持并发安全。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1808313ed5d885b9f7a5bdb8a547f34819d420a

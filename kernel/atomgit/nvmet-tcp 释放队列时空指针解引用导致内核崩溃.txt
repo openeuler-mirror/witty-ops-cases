@@ -1,0 +1,36 @@
+#标题
+nvmet-tcp 释放队列时空指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NVMe over TCP target 配置过程中，如果 TCP 连接未能成功建立（例如连接处于非 ESTABLISHED 状态），随后在释放队列资源时，内核会触发 NULL 指针解引用，导致系统崩溃并打印 Oops 信息。崩溃通常发生在 `tcp_fin` 处理流程中，RIP 寄存器指向地址 0x0。
+
+#主要错误日志
+```
+[  286.462026][    C0] BUG: kernel NULL pointer dereference, address: 0000000000000000
+[  286.462814][    C0] #PF: supervisor instruction fetch in kernel mode
+[  286.463796][    C0] #PF: error_code(0x0010) - not-present page
+[  286.465086][    C0] Oops: Oops: 0010 [#1] SMP KASAN PTI
+[  286.466393][    C0] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.16.3-3.fc41 04/01/2014
+[  286.467147][    C0] RIP: 0010:0x0
+[  286.467420][    C0] Code: Unable to access opcode bytes at 0xffffffffffffffd6.
+...
+[  286.476719][    C0]  <IRQ>
+[  286.477429][    C0]  tcp_fin+0x2bb/0x440
+...
+[  286.513548][    C0]  </IRQ>
+...
+[  286.535077][    C0]  nvme_tcp_alloc_queue+0xb3b/0x2590 [nvme_tcp]
+```
+
+#问题根因
+在 `nvmet_tcp_set_queue_sock` 函数中，如果 TCP 连接尚未建立，`queue->state_change` 指针不会被设置（保持为 NULL），`sock->sk->sk_state_change` 回调也不会被替换。
+当后续清理或释放队列调用 `nvmet_tcp_restore_socket_callbacks` 时，代码未检查 `queue->state_change` 是否为空，直接将其赋值给 `sock->sk->sk_state_change`。这导致 socket 状态变化时（如收到 FIN 包）尝试执行空指针函数，从而触发 NULL 指针解引用。
+
+#解决方案
+在 `nvmet_tcp_restore_socket_callbacks` 函数中增加判断：如果 `queue->state_change` 为 NULL，则直接返回，不执行 socket 回调函数的恢复操作。这避免了将 NULL 指针设置为 socket 的状态变化回调函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/586771fa432d8d18804789f5ca91f9046667d98d

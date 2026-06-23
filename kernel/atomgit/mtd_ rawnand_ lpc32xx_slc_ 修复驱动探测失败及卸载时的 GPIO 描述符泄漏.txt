@@ -1,0 +1,20 @@
+#标题
+mtd: rawnand: lpc32xx_slc: 修复驱动探测失败及卸载时的 GPIO 描述符泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `lpc32xx_slc` NAND 驱动加载过程中，若探测阶段发生错误导致初始化失败，或者在驱动卸载时，会发生 GPIO 描述符资源泄漏。该问题导致系统无法正确回收已分配的 GPIO 资源，长期运行或反复加载卸载驱动可能造成资源耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `probe` 函数中通过 `gpiod_get_optional()` 获取了 GPIO 描述符，但在 `probe` 失败的错误处理路径和 `remove` 卸载路径中，均未调用 `gpiod_put()` 来释放该描述符。这直接导致了 GPIO 资源的泄漏。
+
+#解决方案
+在 `lpc32xx_nand_probe` 函数的错误处理路径中增加 `gpiod_put(host->wp_gpio)` 调用，确保探测失败时释放资源；同时在 `lpc32xx_nand_remove` 函数中增加 `gpiod_put(host->wp_gpio)` 调用，确保驱动卸载时正确释放 GPIO 描述符。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7b1aff0db6408e7fefe6b1e16ac1de6bde14eea4

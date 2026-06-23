@@ -1,0 +1,24 @@
+#标题
+alloc_contig_range 在 __GFP_COMP 且 order < MAX_ORDER 场景下触发内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `alloc_contig_range()` 函数时，若传入 `__GFP_COMP` 标志且请求的 PFN 范围阶数（order）为 `pageblock_order`（小于 `MAX_ORDER`），会触发内核 WARNING 并导致分配失败。具体表现为 CPU 触发警告堆栈，日志显示请求的 PFN 范围与实际分配的范围不一致（实际分配范围更大）。
+
+#主要错误日志
+- `WARNING: CPU: 3 PID: 580 at mm/page_alloc.c:6877 alloc_contig_range+0x280/0x340`
+- `PFN range: requested [2150105088, 2150105600), allocated [2150105088, 2150106112)`
+- （新增校验日志）`WARN_ONCE true, "PFN range: requested [%lu, %lu) is not suitable for __GFP_COMP\n"`
+
+#问题根因
+当请求的 PFN 范围阶数小于 `MAX_ORDER` 时，并发调用 `alloc_contig_range()` 可能导致内存合并。具体过程为：两个相邻的 `alloc_contig_range()` 调用分别隔离并迁移页面，释放到 `MIGRATE_ISOLATED` 链表中。`__free_one_page()` 函数会将这些迁移隔离的伙伴页面合并为一个更大的 `MAX_ORDER` 阶伙伴块。随后 `find_large_buddy()` 返回这个 `MAX_ORDER` 阶的伙伴块，导致返回的分配范围大于请求的范围，从而触发 `start != outer_start` 或 `end != outer_end` 的校验失败并报 WARNING。
+
+#解决方案
+修改 `alloc_contig_range()` 函数逻辑：
+1. 在函数入口处增加校验，若设置了 `__GFP_COMP`，检查请求的 PFN 范围是否对齐且大小为 2 的幂，否则直接返回 `-EINVAL` 并打印告警。
+2. 在处理 `__GFP_COMP` 分支时，移除原有的直接报错逻辑。如果检测到分配范围与请求范围不一致（即 `outer_start` 小于 `start` 或 `outer_end` 大于 `end`），调用新增的 `split_pages_to_order0()` 将高阶页面拆分为单页，并调用 `free_pfn_range()` 将超出请求范围的页面释放回系统，确保最终仅保留请求的 PFN 范围。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6fed6af16b739efe39686eb04704cbc09cfb73be

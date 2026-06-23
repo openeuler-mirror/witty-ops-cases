@@ -1,0 +1,25 @@
+#标题
+ksmbd: 会话注销与建立并发导致的 UAF 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 服务处理并发请求时，若 SMB2 会话注销与 SMB2 会话建立同时发生，将触发竞争条件，导致对已释放的 session 结构体进行访问，引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+smb2 session log off 与 smb2 session setup 之间存在竞争问题。
+1. 在会话注销过程中，`sess->state` 被设置为 `SMB2_SESSION_EXPIRED` 但未持有 `session_lock` 锁，导致状态变更与会话查找逻辑存在竞争窗口。
+2. session 结构体缺乏引用计数机制，导致在一个线程正在使用 session 时，另一个线程可能将其释放，从而触发 user-after-free。
+
+#解决方案
+1. 增加引用计数：在 `ksmbd_session` 结构体中新增 `atomic_t refcnt` 字段，并实现 `ksmbd_user_session_get` 和 `ksmbd_user_session_put` 接口。
+2. 保护关键路径：在 `smb2_check_user_session` 和 `smb2_sess_setup` 中查找成功后增加引用计数；在请求处理结束（`__handle_ksmbd_work`）时减少引用计数。
+3. 加锁保护状态变更：在 `smb2_session_logoff` 中设置 `SMB2_SESSION_EXPIRED` 状态时，获取 `conn->session_lock` 写锁，防止并发竞争。
+4. 优化销毁逻辑：在 `ksmbd_expire_session` 中检查引用计数，仅当 `refcnt` 为 0 时才允许销毁会话，确保 session 在使用期间不会被释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8bcb559d927de364b65992ae55886f73de399c33

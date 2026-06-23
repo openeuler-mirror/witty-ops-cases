@@ -1,0 +1,27 @@
+#标题
+workqueue: UBSAN 报告 shift_and_mask 函数整数减法溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Android 虚拟机启动过程中，内核触发 UBSAN（Undefined Behavior Sanitizer）错误，报告整数减法溢出。该错误发生在 `cancel_delayed_work` 函数调用路径中，最终导致内核恐慌并停止同步。
+
+#主要错误日志
+Internal error: UBSAN: integer subtraction overflow: 00000000f2005515 [#1] PREEMPT SMP
+Kernel panic - not syncing: UBSAN: integer subtraction overflow: Fatal exception
+Call trace:
+ cancel_delayed_work+0x34/0x44
+ deferred_probe_extend_timeout+0x20/0x70
+ driver_register+0xa8/0x110
+ __platform_driver_register+0x28/0x3c
+ syscon_init+0x24/0x38
+
+#问题根因
+`shift_and_mask()` 函数在构造掩码时使用了有符号立即数 `1` 进行移位操作。当该函数被调用且移位参数 `shift` 为 31（即 `WORK_OFFQ_POOL_SHIFT`）时，表达式 `(1 << bits)` 的结果被视为有符号整数，导致后续的减法操作变为从 `INT_MIN` 进行递减，从而触发 UBSAN 的整数减法溢出错误。
+
+#解决方案
+将 `shift_and_mask()` 函数中构造掩码的立即数修改为无符号常量 `1U`。修改后的表达式为 `(1U << bits) - 1`，确保移位和减法运算在无符号整数域中进行，从而避免溢出问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8cc0573aca431d8bb008c3adf60913d2025c2896

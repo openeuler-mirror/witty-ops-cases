@@ -1,0 +1,20 @@
+#标题
+ext4查找入口项未正确处理inline entry错误返回导致潜在风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ext4 文件系统进行目录项查找时，若 `ext4_find_inline_entry` 函数返回错误（如内存分配失败或其他异常），`__ext4_find_entry` 函数未能正确识别并退出错误处理流程，而是继续执行后续代码逻辑。这可能导致内核在持有错误状态的情况下继续运行，引发不可预期的行为或潜在的内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__ext4_find_entry` 函数中，调用 `ext4_find_inline_entry` 后，代码仅根据 `has_inline_data` 变量来判断是否退出循环（`goto cleanup_and_exit`）。虽然 `ext4_find_inline_entry` 可能返回一个编码后的错误指针（ERR_PTR），但原有代码逻辑未使用 `IS_ERR` 宏对此返回值进行检查，导致错误返回值被忽略，未能及时跳转到清理退出路径。
+
+#解决方案
+修改 `fs/ext4/namei.c` 文件中的 `__ext4_find_entry` 函数，在调用 `ext4_find_inline_entry` 后，增加对返回值 `ret` 的错误检查判断。将原有的判断条件 `if (has_inline_data)` 修改为 `if (has_inline_data || IS_ERR(ret))`，确保当函数返回错误指针时，能够显式地跳转到 `cleanup_and_exit` 进行错误处理，从而避免潜在风险并提高代码可读性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c5e1af0f3ec61675c041e331bd08d6b00dc198ee

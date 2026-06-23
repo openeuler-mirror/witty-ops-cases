@@ -1,0 +1,21 @@
+#标题
+GCC 编译下 Software Tag-Based KASAN 机制失效导致内存检查异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 GCC 编译内核并启用 Software Tag-Based KASAN（基于硬件地址标签）时，内核代码中标记为 `__no_sanitize_address` 的函数未能正确关闭 KASAN 插桩检测。这导致本应豁免 KASAN 检查的关键代码路径（如某些底层原子操作或特定上下文）仍然被插桩，可能引发错误的内存错误报告、非预期的内核崩溃或 KASAN 相关的功能性故障。
+
+#主要错误日志
+未知
+
+#问题根因
+GCC 编译器在处理 `-fsanitize=kernel-hwaddress` 选项时存在已知 Bug（GCC Bugzilla ID: 117196）。该 Bug 导致 `__attribute__((no_sanitize_address))` 属性无法正确禁用硬件地址消毒插桩。因此，原有的宏定义 `__no_sanitize_address` 在 GCC 环境下失效，内核无法在指定函数中屏蔽 KASAN 检测。
+
+#解决方案
+修改 `include/linux/compiler-gcc.h` 文件，针对 GCC 编译器增加条件编译逻辑：
+当检测到定义了 `__SANITIZE_HWADDRESS__` 宏时，将 `__no_sanitize_address` 的定义从 `__attribute__((__no_sanitize_address__))` 替换为 GCC 支持的 `__attribute__((__no_sanitize__("hwaddress")))`，从而确保在 GCC 编译环境下能正确屏蔽对特定函数的 KASAN 插桩。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad68c4385af1344cd654a771a5e3dc5c1afbd5fc

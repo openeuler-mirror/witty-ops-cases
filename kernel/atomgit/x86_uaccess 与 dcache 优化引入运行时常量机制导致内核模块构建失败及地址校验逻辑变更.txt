@@ -1,0 +1,27 @@
+#标题
+x86/uaccess 与 dcache 优化引入运行时常量机制导致内核模块构建失败及地址校验逻辑变更
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在启用 `runtime-const` 基础设施的内核版本中，若内核模块（LKM）尝试使用 `runtime_const_ptr` 相关接口，编译阶段将直接报错终止，错误信息提示无法在模块中使用该基础设施。
+2. 内核地址校验逻辑变更：原有的 `valid_user_address` 实现从简单的符号位判断改为基于 `USER_PTR_MAX` 的运行时常量比较，引入了对 LAM（Linear Address Masking）特性的潜在支持逻辑，改变了用户空间地址边界的行为。
+
+#主要错误日志
+推断（基于代码变更）：
+`#error "Cannot use runtime-const infrastructure from modules"`
+
+#问题根因
+该补丁为了修复 CVE-2024-50102 并优化内核性能，引入了 `runtime-const` 机制。该机制允许内核在启动时动态修补代码段中的常量值（如 `USER_PTR_MAX`），以替代编译时的固定常量，从而提升运行时性能（特别是在 `get_user` 路径和 dcache 哈希计算中）。
+由于该机制涉及修改内核核心代码段（text section）且依赖启动时的初始化过程，其设计不支持在动态加载的内核模块中使用，因此在头文件中针对 `MODULE` 宏定义了编译错误检查。
+
+#解决方案
+1. 引入 `arch/x86/include/asm/runtime-const.h` 头文件，实现运行时常量修补基础设施，包括指针加载与移位操作的宏定义及初始化函数。
+2. 在 `arch/x86/include/asm/uaccess_64.h` 中重构 `valid_user_address` 与 `mask_user_address`，使用 `runtime_const_ptr(USER_PTR_MAX)` 替代原有的硬编码地址边界检查。
+3. 在 `arch/x86/lib/getuser.S` 汇编代码中调整 `check_range` 宏，植入占位符常量 `0x0123456789abcdef` 并配合 `runtime_ptr_USER_PTR_MAX` 段，以便在启动时由内核修补为真实的用户空间最大地址。
+4. 在内核启动流程 `arch_cpu_finalize_init` 中调用 `runtime_const_init` 初始化相关常量。
+5. 在 `arch/x86/include/asm/runtime-const.h` 中增加 `#ifdef MODULE` 保护，若在模块编译上下文中使用该功能，则触发 `#error` 编译错误，防止不支持的用法；同时在 `uaccess_64.h` 中为模块场景提供回退定义 `#define runtime_const_ptr(sym) (sym)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f76a3f634d62b1d7b2c4b4818f9604e5f7cba154

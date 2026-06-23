@@ -1,0 +1,23 @@
+#标题
+fec网卡链路状态变更导致PPS功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当FEC网卡发生链路状态改变（Link state change）时，控制器会执行复位操作。该复位过程会导致之前已启用的PPS（Pulse Per Second）信号意外停止输出，导致依赖PPS的精密时间同步功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+在链路状态变化时，FEC控制器驱动会调用 `fec_restart` 进行复位。复位操作会重置硬件寄存器，导致PPS功能被关闭。驱动程序在复位前未保存PPS的启用状态，复位后也未恢复PPS配置，从而导致PPS功能丢失。
+
+#解决方案
+在驱动中增加PTP状态保存与恢复机制：
+1. 在 `fec_enet_private` 结构体中新增 `ptp_saved_state` 成员用于保存PPS启用状态。
+2. 在控制器复位/停止流程（`fec_restart`、`fec_stop`）前，调用 `fec_ptp_save_state` 保存当前的 `pps_enable` 状态。
+3. 在控制器复位完成后的初始化流程中，调用 `fec_ptp_restore_state`。如果之前保存的状态显示PPS已启用，则重新调用 `fec_ptp_enable_pps` 恢复PPS信号输出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/acfde3b9c05d84c6957837098adb7df3ed3d3fb8

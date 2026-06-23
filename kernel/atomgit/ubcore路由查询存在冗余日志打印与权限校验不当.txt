@@ -1,0 +1,25 @@
+#标题
+ubcore路由查询存在冗余日志打印与权限校验不当
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在执行路由查询（获取拓扑端口eid或primary eid）时，系统日志中会持续打印包含 `route_num` 的错误级别日志，造成日志冗余。
+2. 路由查询接口 `UBCORE_CMD_GET_ROUTE_LIST` 配置了不必要的权限验证标记（true），导致非预期权限要求，影响正常查询流程。
+
+#主要错误日志
+- `ubcore_log_err("get topo port eid, route_num: %u.\n", num);`
+- `ubcore_log_err("get topo primary eid, route_num: %u.\n", num);`
+
+#问题根因
+1. 代码中误用了 `ubcore_log_err` 接口打印常规的路由查询结果信息，且在查询结束时无条件打印，导致日志刷屏。
+2. 命令处理函数表 `g_ubcore_uvs_global_cmd_funcs` 中，`UBCORE_CMD_GET_ROUTE_LIST` 命令的权限验证字段被错误地初始化为 `true`，导致对路由查询操作进行了多余的权限校验。
+
+#解决方案
+1. 移除 `ubcore_get_route_port_eid` 和 `ubcore_get_route_primary_eid` 函数中的 `ubcore_log_err` 调用，消除冗余日志打印。
+2. 将 `UBCORE_CMD_GET_ROUTE_LIST` 在全局命令函数表中的权限验证字段从 `true` 修改为 `false`，移除不必要的权限限制。
+3. 修正代码中一处判断逻辑，在 `ubcore_get_route_port_eid` 中增加对 `peer_node` 的校验，确保仅在目的节点匹配时才进行后续处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cc416924fe72427c43c5d540473681faa6e88699

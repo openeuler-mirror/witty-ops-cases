@@ -1,0 +1,24 @@
+#标题
+drm/mediatek: 绑定失败导致关机路径发生KASAN use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mtk_drm_bind 函数执行失败（如 mtk_drm_kms_init 返回失败）的情况下，系统关机或重启时触发 KASAN "use-after-free" 报告。内核检测到释放后的内存被访问，导致无法处理内核分页请求，可能引发系统不稳定或崩溃。
+
+#主要错误日志
+[   86.513162] BUG: KASAN: use-after-free in drm_atomic_helper_shutdown+0x33c/0x378
+[   86.514258] Read of size 8 at addr ffff0000d46fc068 by task shutdown/1
+[   86.577642] Unable to handle kernel paging request at virtual address e0e9c0920000000b
+
+#问题根因
+在 mtk_drm_bind 函数中，当 mtk_drm_kms_init 初始化失败时，代码流程会执行错误处理：通过 drm_dev_put 释放了 drm 设备内存。
+然而，错误处理逻辑不完整，仅将主 private->drm 指针置为 NULL，未将 private->all_drm_private[i]->drm 指针置为 NULL。这些指针仍指向已被释放的内存地址。
+随后在系统关机流程中，mtk_drm_shutdown -> drm_atomic_helper_shutdown 路径遍历 all_drm_private 并访问其 drm 指针，导致访问已释放内存，触发 use-after-free 错误。
+
+#解决方案
+在 mtk_drm_bind 函数的错误处理路径中，在调用 drm_dev_put 释放资源后，增加循环遍历 private->all_drm_private 数组，将其中所有 drm 指针显式置为 NULL，防止后续关机流程访问悬空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f56f6b768a43efa3ea5571a5ead35fe4477af50b

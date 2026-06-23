@@ -1,0 +1,22 @@
+#标题
+PM: sleep: 挂起失败引发恢复阶段运行时PM状态异常告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在执行挂起操作过程中，若 `dpm_suspend()` 阶段发生失败，随后的恢复流程中，部分标记为 `direct_complete` 的设备会触发无效的运行时 PM（Runtime PM）使能操作。尽管该问题实际危害较低（因为 `pm_runtime_enable()` 会阻止 "disable depth" 计数器下溢），但会导致内核打印警告信息，造成日志污染。
+
+#主要错误日志
+- inferred: `pm_runtime_enable()` 调用引发的 underflow 警告（由 Commit 描述中 "it causes a warning message to be printed for each affected device" 推断）。
+
+#问题根因
+当 `dpm_suspend()` 失败时，部分 `power.direct_complete` 已设置的设备可能尚未被 `device_suspend()` 处理。这意味着这些设备的运行时 PM 尚未被禁用。然而，`device_resume()` 函数假定所有 `power.direct_complete` 设备的运行时 PM 都已被禁用，因此会尝试重新启用它们，这导致了逻辑错误和警告打印。根本原因在于恢复逻辑无法区分“已处理过的 direct complete 设备”和“因挂起失败未处理过的 direct complete 设备”。
+
+#解决方案
+1. 在 `device_suspend()` 中，对于标记为 `direct_complete` 且成功跳过挂起流程的设备，显式设置 `dev->power.is_suspended` 标志为 true。
+2. 修改 `device_resume()` 逻辑，将 `dev->power.is_suspended` 的检查移至 `dev->power.direct_complete` 检查之前。
+3. 若 `is_suspended` 为 false，则直接跳过该设备的恢复流程（goto Complete），从而避免对未处理的 direct complete 设备错误地调用 `pm_runtime_enable()`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8ff8d37cf689060c48aae644f692d623139d128c

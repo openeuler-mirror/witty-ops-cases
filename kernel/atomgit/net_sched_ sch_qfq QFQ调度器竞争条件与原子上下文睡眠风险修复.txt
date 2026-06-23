@@ -1,0 +1,23 @@
+#标题
+net/sched: sch_qfq QFQ调度器竞争条件与原子上下文睡眠风险修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在多线程并发修改QFQ调度器类别参数时，可能触发内核竞态条件，导致数据不一致或内核崩溃。
+2. 在删除QFQ类别或销毁Qdisc时，可能因在持有锁的情况下调用可能睡眠的函数而触发内核警告。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **竞态条件**：在 `qfq_change_class`、`qfq_dump_class` 和 `qfq_dump_class_stats` 函数中，读取 `qfq_aggregate` 结构体成员（如 `class_weight` 和 `lmax`）时未持有 `sch_tree_lock` 锁，导致读写并发场景下出现竞态条件。
+2. **原子上下文睡眠风险**：原代码在 `qfq_destroy_class` 中直接调用 `qfq_rm_from_agg`，而 `qfq_destroy_class` 可能被 `qfq_delete_class` 在持有 `sch_tree_lock` 锁的原子上下文中调用，若 `qfq_rm_from_agg` 内部操作可能睡眠，则违反了原子上下文约束。
+
+#解决方案
+1. **加锁保护**：在 `qfq_change_class`、`qfq_dump_class` 和 `qfq_dump_class_stats` 函数中，访问聚合结构成员前增加 `sch_tree_lock(sch)` 加锁，访问结束后立即调用 `sch_tree_unlock(sch)` 解锁，确保数据读取的一致性。
+2. **调整函数调用位置**：将 `qfq_rm_from_agg(q, cl)` 的调用从 `qfq_destroy_class` 函数中移除，分别添加到 `qfq_delete_class`（在锁保护区域外或适当时机）和 `qfq_destroy_qdisc` 的循环中。这样确保在删除类别时，该操作在非持锁上下文或正确的流程中执行，避免在原子上下文中触发睡眠问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/508a0a52e499411342959099238b52c359519f6d

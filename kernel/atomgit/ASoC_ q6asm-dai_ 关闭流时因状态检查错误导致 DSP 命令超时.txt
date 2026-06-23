@@ -1,0 +1,20 @@
+#标题
+ASoC: q6asm-dai: 关闭流时因状态检查错误导致 DSP 命令超时
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 q6asm 流未启动（非 RUNNING 状态）的情况下执行关闭操作时，系统会发送不必要的 DSP 命令。该命令无法被 DSP 处理，最终导致命令超时，影响音频功能正常关闭流程。
+
+#主要错误日志
+q6asm-dai ab00000.remoteproc:glink-edge:apr:service@7:dais: CMD 10bcd timeout
+
+#问题根因
+在 `q6asm_dai_prepare` 函数中，代码使用 `if (prtd->state)` 来判断是否需要关闭现有的流设置。该判断条件过于宽泛，导致在流未处于 RUNNING 状态时也会尝试发送 `CMD_CLOSE` 命令给 DSP。由于流实际上并未运行，DSP 无法处理该命令，从而导致命令超时。
+
+#解决方案
+修改状态检查逻辑，将 `if (prtd->state)` 修正为精确匹配 `if (prtd->state == Q6ASM_STREAM_RUNNING)`。只有当流处于运行状态时，才执行关闭命令和相关内存解绑操作，并在操作后将状态更新为 `Q6ASM_STREAM_STOPPED`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/336b5896259c6c13a4dd6dc0f85293b9e70126d7

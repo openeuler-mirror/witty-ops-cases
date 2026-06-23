@@ -1,0 +1,23 @@
+#标题
+调度子系统 task_group 结构体因成员变量移动破坏 KABI 兼容性
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核编译或运行时出现 KABI（内核应用程序二进制接口）一致性检查失败或警告。具体表现为 `struct task_group` 结构体布局发生变化，导致依赖该结构体偏移量的内核模块或现有二进制无法正常工作，可能引发内核崩溃或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的提交 `7c08225d72da` 中，`struct task_group` 结构体内的成员变量 `int idle` 从 `#ifdef CONFIG_FAIR_GROUP_SCHED` 宏保护区域移动到了 `#ifdef CONFIG_GROUP_SCHED_WEIGHT` 宏保护区域。这一变动改变了结构体的内存布局，导致结构体大小或成员偏移量发生变化，直接破坏了内核 KABI 的稳定性。
+
+#解决方案
+利用内核 KABI 补丁机制对结构体布局进行修复。具体措施如下：
+1. 在原位置（`CONFIG_FAIR_GROUP_SCHED` 区域）使用 `KABI_BROKEN_REMOVE(int idle)` 占位，标记该成员已移除但保留空间。
+2. 在 `KABI_RESERVE(4)` 位置使用 `KABI_USE(4, int idle)` 重新定义 `idle` 成员，将其放置在预留的扩展空间中。
+3. 调整宏逻辑，确保 `CONFIG_GROUP_SCHED_WEIGHT` 配置下 `idle` 成员位于固定的 KABI 预留位置，而在未配置时保持为 `KABI_RESERVE(4)`，从而保证结构体整体布局与 KABI 兼容。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2a556466e18341e3c15b5b89b399daa09f33c2c9

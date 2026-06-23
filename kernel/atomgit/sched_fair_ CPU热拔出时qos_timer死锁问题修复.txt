@@ -1,0 +1,23 @@
+#标题
+sched/fair: CPU热拔出时qos_timer死锁问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行CPU热拔出（cpuhp offline）操作时，系统触发死锁，导致CPU无法正常下线，相关进程可能处于D状态（不可中断睡眠）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `unthrottle_offline_cfs_rqs` 函数中，QOS调度相关的解流控操作被调用两次：
+1. 在 `rq_clock_start_loop_update(rq)` 之后调用了一次 `unthrottle_qos_cfs_rqs`。
+2. 在 `rq_clock_stop_loop_update(rq)` 之前又调用了一次 `unthrottle_qos_cfs_rqs`。
+这种重复调用在CPU offline流程中诱发了 `qos_timer` 的死锁。
+
+#解决方案
+删除 `unthrottle_offline_cfs_rqs` 函数末尾冗余的 `unthrottle_qos_cfs_rqs` 调用，仅保留循环更新开始部分的解流控操作，并改用内部函数 `__unthrottle_qos_cfs_rqs` 确保逻辑正确，从而避免死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b044b94df37ed14f06515caf1f20acd4274c0380

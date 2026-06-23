@@ -1,0 +1,24 @@
+#标题
+RDMA/mlx5: 用户 Mkey 注销流程中使用 umem 判断导致潜在内存泄漏或对象泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA mlx5 驱动中，某些特定场景下（如特定用户应用 Mkey）umem 指针可能为 NULL。驱动在注销 MR（dereg_mr）流程中错误地使用 `mr->umem` 指针作为判断 Mkey 是否可缓存的条件，导致对这些 Mkey 的缓存判断逻辑失效。这可能导致本应被销毁或回收的 Mkey 未被正确处理，进而造成内存泄漏或内核对象泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 `mlx5_ib_dereg_mr` 函数中判断 Mkey 是否可缓存的逻辑有误。代码原先使用 `if (mr->umem && ...)` 进行检查，但在某些情况下用户应用 Mkey 的 `umem` 可能为 NULL。此时，即使 Mkey 本身是可缓存的，该判断条件也会失败，导致代码跳过将 Mkey 放入缓存的逻辑，且后续可能未正确执行销毁操作，从而引发资源泄露。
+
+#解决方案
+1. 在 `struct mlx5_ib_mkey` 结构体中新增 `cacheable` 位域字段，用于明确标记 Mkey 是否可缓存。
+2. 在创建 MR 时（`alloc_cacheable_mr`），根据逻辑设置 `cacheable` 标志为 true。
+3. 重构注销逻辑，引入 `mlx5_revoke_mr` 函数。
+4. 将缓存判断条件从检查 `mr->umem` 改为检查 `mr->mmkey.cacheable` 标志位，确保即使 umem 为 NULL 也能正确识别可缓存 Mkey。
+5. 确保所有未被放回缓存的 Mkey 都会被显式销毁，修复了原先逻辑中可能存在的未销毁漏洞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8a60ed359cc0256611086bae8ed78af11eb9f6c7

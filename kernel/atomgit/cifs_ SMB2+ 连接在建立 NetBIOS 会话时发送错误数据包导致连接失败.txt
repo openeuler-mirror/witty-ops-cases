@@ -1,0 +1,20 @@
+#标题
+cifs: SMB2+ 连接在建立 NetBIOS 会话时发送错误数据包导致连接失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 TCP 端口 139（NetBIOS over TCP）建立 SMB2 或 SMB3 连接时，连接建立失败。服务器无法解析客户端发送的 NetBIOS 会话请求包。此问题不影响 SMB1 连接，仅影响 SMB2 及以上版本的协议连接。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ip_rfc1001_connect()` 在发送 NetBIOS Session Request 数据包时使用了 `smb_send()` 函数。`smb_send()` 函数设计上期望传入的是 SMB 数据包，对于 SMB2+ 连接，它会修改数据包头（mangles packet header）。由于 NetBIOS Session Request 数据包并非标准 SMB 数据包，导致发送的数据包被破坏，变成了服务器无法解析的错误数据。
+
+#解决方案
+修改 `ip_rfc1001_connect()` 函数，移除 `smb_send()` 调用，改为使用 `smb_send_kvec()` 函数。`smb_send_kvec()` 会原样发送数据而不进行 SMB 协议相关的头部修改，从而确保 NetBIOS 会话请求包的完整性。同时调整了相关代码以适配 `smb_send_kvec()` 的 API 接口（使用 `struct msghdr` 和 `struct kvec`）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/91309ea9f4a57865857e98ac36341706cdf583fd

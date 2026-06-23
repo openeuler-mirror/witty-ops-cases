@@ -1,0 +1,20 @@
+#标题
+netem: slot 延迟计算溢出导致 slot pacing 失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 netem 进行广域网仿真且配置的 slot 延迟范围较大（例如 min_delay 为 1s，max_delay 为 5s）时，延迟差值超过约 2.1 秒（2^31 纳秒）。此时延迟计算发生溢出，导致产生负的延迟结果，进而导致基于 slot 的流量整形（pacing）功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `get_slot_next()` 函数中，计算 min_delay 和 max_delay 之间的随机延迟时使用了公式 `get_random_u32() * (max_delay - min_delay) >> 32`。由于 `get_random_u32()` 返回无符号 32 位整数，而 `max_delay` 与 `min_delay` 的差值以纳秒为单位，当该差值超过约 2.1 秒（即大于 2^31 纳秒）时，乘法运算会导致有符号 64 位算术溢出，产生负值结果。
+
+#解决方案
+使用 `mul_u64_u32_shr()` 函数替换原有的乘法与移位操作。该函数专门用于处理 64 位与 32 位数的宽化乘法，能够正确处理大数值运算而不会发生溢出，从而修正了延迟计算逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6bd5d204e9d9121ddcf99e08e4ca56837e8d6f99

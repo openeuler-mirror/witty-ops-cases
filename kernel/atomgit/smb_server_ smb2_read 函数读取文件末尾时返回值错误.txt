@@ -1,0 +1,20 @@
+#标题
+smb/server: smb2_read 函数读取文件末尾时返回值错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 smb2_read 函数读取文件时，若读取位置处于文件末尾（Offset 超过文件大小），虽然服务器正确响应了 STATUS_END_OF_FILE 状态，但函数返回值为 0，这可能导致调用者无法正确识别读取操作已到达文件末尾的错误情况，影响上层业务逻辑对文件读取状态的判断。
+
+#主要错误日志
+未知
+
+#问题根因
+在 smb2_read 函数处理文件末尾读取的分支中，代码设置了响应状态 `rsp->hdr.Status = STATUS_END_OF_FILE`，但函数返回值错误地写为 `return 0`。根据 Linux 内核错误码定义，STATUS_END_OF_FILE 对应的错误码应为 -ENODATA，原代码返回 0 导致错误状态未能正确向上传递。
+
+#解决方案
+修改 `fs/smb/server/smb2pdu.c` 文件中 smb2_read 函数的返回值逻辑。在处理 STATUS_END_OF_FILE 的分支中，将返回值从 `return 0` 修正为 `return -ENODATA`，以确保内核错误码与 SMB 状态码正确映射。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/52e5c0ac8c8a7c27a702340c56ec984bca04b36d

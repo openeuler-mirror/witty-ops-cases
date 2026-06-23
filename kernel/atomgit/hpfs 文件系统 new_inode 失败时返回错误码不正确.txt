@@ -1,0 +1,20 @@
+#标题
+hpfs 文件系统 new_inode 失败时返回错误码不正确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HPFS 文件系统中执行 mkdir、create、mknod 或 symlink 操作时，若系统内存紧张导致 inode 内存分配失败，用户错误地接收到 "No space left on device" (ENOSPC) 错误，而非预期的 "Out of memory" (ENOMEM) 错误，误导故障排查方向。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 new_inode() 用于在内存中分配 inode 结构体（通过 kmem_cache_alloc_lru 等内存分配接口），其失败表明系统存在内存压力。然而，hpfs_mkdir、hpfs_create、hpfs_mknod 和 hpfs_symlink 这四个函数在 new_inode() 返回 NULL 时，未将错误码设置为 -ENOMEM，而是沿用了之前的 -ENOSPC 错误码，导致返回了错误的磁盘空间不足信号。
+
+#解决方案
+修改 fs/hpfs/namei.c 文件中的 hpfs_mkdir、hpfs_create、hpfs_mknod 和 hpfs_symlink 函数，在检测到 new_inode() 返回 NULL（分配失败）时，显式将错误变量 err 设置为 -ENOMEM，确保向用户空间返回正确的内存不足错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fc848c95b6aba70c7744dc2c219a85286fed0a04

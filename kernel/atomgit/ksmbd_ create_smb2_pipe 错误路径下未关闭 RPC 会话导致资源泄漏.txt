@@ -1,0 +1,22 @@
+#标题
+ksmbd: create_smb2_pipe 错误路径下未关闭 RPC 会话导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 内核服务器处理 SMB2 管道创建请求时，若 `ksmbd_iov_pin_rsp()` 函数调用失败，系统未能正确清理已分配的 RPC 会话句柄。这会导致内核内存泄漏或 RPC 连接句柄资源泄漏，随着错误累积可能耗尽系统资源。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `create_smb2_pipe` 函数中，当调用 `ksmbd_iov_pin_rsp()` 失败时，代码直接跳转到错误处理出口，但遗漏了调用 `ksmbd_session_rpc_close()` 来释放之前已成功分配的 RPC 会话 ID。变量 `id` 在定义时未初始化，且在错误路径下保留了有效的会话 ID 值，导致清理逻辑未被触发（或无法判断是否需要清理），从而造成资源泄漏。
+
+#解决方案
+在 `create_smb2_pipe` 函数中：
+1. 将变量 `id` 初始化为 -1，确保在未成功分配时为无效值。
+2. 在错误处理出口处增加判断逻辑：若 `id >= 0`（即已分配有效会话），则调用 `ksmbd_session_rpc_close(work->sess, id)` 释放资源，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/197062d3abedf2c2f8e9a1f7cef1cecb7da268c2

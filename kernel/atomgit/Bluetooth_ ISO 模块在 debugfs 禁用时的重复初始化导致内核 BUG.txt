@@ -1,0 +1,31 @@
+#标题
+Bluetooth: ISO 模块在 debugfs 禁用时的重复初始化导致内核 BUG
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核配置禁用了 debugfs（如 `CONFIG_DEBUG_FS` 或 `CONFIG_DEBUG_FS_ALLOW_ALL` 未设置）时，`iso_init()` 函数提前返回且未标记初始化完成。这导致后续再次调用 `iso_init()` 时触发重复初始化，执行重复的 `proto_register()` 等操作。在开启 `CONFIG_LIST_HARDENED` 和 `CONFIG_BUG_ON_DATA_CORRUPTION` 的情况下，会触发内核 BUG 并导致系统崩溃（Oops）。
+
+#主要错误日志
+list_add double add: new=ffffffffc0b280d0, prev=ffffffffbab56250,
+  next=ffffffffc0b280d0.
+------------[ cut here ]------------
+kernel BUG at lib/list_debug.c:35!
+Oops: invalid opcode: 0000 [#1] PREEMPT SMP PTI
+CPU: 2 PID: 887 Comm: bluetoothd Not tainted 6.10.11-1-ao-desktop #1
+RIP: 0010:__list_add_valid_or_report+0x9a/0xa0
+...
+  __list_add_valid_or_report+0x9a/0xa0
+  proto_register+0x2b5/0x340
+  iso_init+0x23/0x150 [bluetooth]
+...
+
+#问题根因
+在 `iso_init()` 函数中，如果 `bt_debugfs` 创建失败或不存在（对应 debugfs 被禁用的情况），代码逻辑会直接 `return 0` 提前退出。此时 `iso_inited` 变量未被设置为 true，导致内核认为 ISO 模块未初始化。当后续流程再次调用 `iso_init()` 时，会重复执行 `proto_register()` 等注册函数，引发链表双重添加错误。
+
+#解决方案
+移除 `iso_init()` 函数中对 `bt_debugfs` 错误状态的提前返回逻辑。确保无论 debugfs 是否可用，初始化流程都能完整执行并将 `iso_inited` 标记为 true，从而防止重复初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/766201ba68e32cabe49fb41907b0515a194b1a72

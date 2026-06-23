@@ -1,0 +1,20 @@
+#标题
+net: dsa: tag_brcm: legacy标签解析pskb_may_pull长度校验错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Broadcom BCM63xx 等支持 legacy tag 的 DSA 交换机架构中，当接收到的数据包头部空间不足时，驱动程序在进行数据包处理时可能触发内核崩溃或数据访问越界；或者因头部检查长度错误导致合法的数据包被错误丢弃，造成网络通信异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `brcm_leg_tag_rcv` 函数中，调用 `pskb_may_pull` 检查数据包是否有足够的头部空间时，错误地使用了 `BRCM_LEG_PORT_ID`（仅 1 字节）作为长度参数。正确的检查长度应为 `BRCM_LEG_TAG_LEN + VLAN_HLEN`（即 10 字节），因为实际处理逻辑需要访问完整的 legacy tag 和可能的 VLAN 头部。错误的参数导致头部检查不充分，可能引发后续内存访问问题或数据包处理失败。
+
+#解决方案
+修改 `net/dsa/tag_brcm.c` 文件中 `brcm_leg_tag_rcv` 函数的 `pskb_may_pull` 调用参数，将错误的 `BRCM_LEG_PORT_ID` 替换为正确的 `BRCM_LEG_TAG_LEN + VLAN_HLEN`，确保在处理数据包前线性化并校验足够的头部空间（10 字节）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/60f17e29ae0b521b140c2ff392e15d345c3a287b

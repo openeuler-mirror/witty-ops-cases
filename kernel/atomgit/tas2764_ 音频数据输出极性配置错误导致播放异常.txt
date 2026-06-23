@@ -1,0 +1,24 @@
+#标题
+tas2764: 音频数据输出极性配置错误导致播放异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 tas2764 编解码芯片的系统在进行音频播放时，由于 TX（发送）与 RX（接收）的极性配置不匹配，导致音频数据位对齐错误，表现为播放无声、噪声或音频内容异常。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `tas2764_set_fmt` 函数中配置音频格式时，仅设置了 RX（接收）阶段的边沿极性（`asi_cfg_1`），但遗漏了对 TX（发送）阶段极性（`asi_cfg_4`）的配置。根据硬件时序要求，TX launch polarity 需要与 RX capture polarity 相反才能产生正确的位槽对齐，原代码未设置 TX 极性导致数据传输时序错误。
+
+#解决方案
+修改 `sound/soc/codecs/tas2764.c`，在设置 RX 极性的同时，根据反向原则配置 TX 极性：
+1. 新增变量 `asi_cfg_4` 用于配置 TX 极性。
+2. 当 RX 配置为上升沿采样（Rising）时，TX 配置为下降沿输出（Falling）。
+3. 当 RX 配置为下降沿采样（Falling）时，TX 配置为上升沿输出（Rising）。
+4. 将配置写入 `TAS2764_TDM_CFG4` 寄存器以修正时序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f09c9dd01907fc9a1ba874163c0dde3646023828

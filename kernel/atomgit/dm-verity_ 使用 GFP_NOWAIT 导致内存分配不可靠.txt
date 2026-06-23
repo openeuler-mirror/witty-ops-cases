@@ -1,0 +1,23 @@
+#标题
+dm-verity: 使用 GFP_NOWAIT 导致内存分配不可靠
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 dm-verity 功能时，前向纠错（FEC）缓冲区的内存分配可能随机失败。由于分配失败，相关 I/O 操作将被中止，可能导致数据校验失败或设备映射器（device-mapper）返回 I/O 错误。
+
+#主要错误日志
+DMERR("failed to allocate FEC buffer");
+
+#问题根因
+代码在 `fec_alloc_bufs` 函数中使用 `GFP_NOWAIT` 标志从内存池分配内存。`GFP_NOWAIT` 分配方式本身不具备等待内存可用的能力，在内存紧张或碎片化严重时极易分配失败，导致系统行为不可靠。
+
+#解决方案
+将内存分配标志从 `GFP_NOWAIT` 修改为 `GFP_NOIO`。
+修改点位于 `drivers/md/dm-verity-fec.c` 文件中：
+1. 将 `mempool_alloc` 的分配参数由 `GFP_NOWAIT` 改为 `GFP_NOIO`。
+2. 移除了原本针对分配失败的处理逻辑（错误日志打印及返回 `-ENOMEM`），因为 `mempool_alloc` 在使用 `GFP_NOIO` 标志时，如果内存不足会等待内存释放，保证分配不会失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aac6dbff3c61a2d55898a63103084ecf5958e638

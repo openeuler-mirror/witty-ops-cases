@@ -1,0 +1,22 @@
+#标题
+scsi: myrs: dma_alloc_coherent() 错误检查缺陷导致设备初始化异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Mylex RAID 控制器（myrs 驱动）在初始化过程中，若 DMA 内存分配失败，驱动可能未能正确检测到分配错误，导致访问非法指针引发内核崩溃或设备初始化失败。
+
+#主要错误日志
+- [推断] Failed to map command mailbox
+- [推断] Failed to map status mailbox
+- [推断] Failed to map firmware health buffer
+
+#问题根因
+驱动程序中使用 `dma_mapping_error()` 来检查 `dma_alloc_coherent()` 的返回值。根据内核 API 规范，`dma_alloc_coherent()` 在分配失败时并不总是设置 DMA 地址，因此不应使用 `dma_mapping_error()` 进行检查。正确的做法是直接检查 `dma_alloc_coherent()` 返回的 CPU 虚拟地址指针是否为 NULL。错误的检查方式导致分配失败时程序继续执行，进而引发后续异常。
+
+#解决方案
+修改 `drivers/scsi/myrs.c` 中的内存分配检查逻辑，将 `dma_mapping_error()` 替换为直接检查指针是否为 NULL（如 `if (!mbox)`）。这确保了在 DMA 内存分配失败时，驱动能够立即感知并正确处理错误，避免访问非法内存地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba136bf7c1b77e5e054a21dfb4ca901302c09219

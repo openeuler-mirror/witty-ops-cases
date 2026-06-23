@@ -1,0 +1,22 @@
+#标题
+RDMA/hns: 修复 CQ 异步事件处理中的 UAF 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HNS RoCE 驱动中，当 CQ（完成队列）异步事件处理与 CQ 销毁操作并发执行时，可能触发 Use-After-Free（UAF）故障，导致内核崩溃或内存非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+CQ 的引用计数（refcount）未受锁保护。在 CQ 异步事件处理流程中，并发操作可能导致 CQ 已被释放，此时若继续访问该 CQ 将触发 UAF。
+
+#解决方案
+使用 xa_lock() 保护 CQ 引用计数的增加操作。具体修改包括：
+1. 在查找 CQ 并增加引用计数时，加锁确保原子性，防止并发销毁导致 UAF。
+2. 将相关的 xarray 操作函数替换为中断安全版本（如 `xa_store_irq`、`xa_erase_irq`），确保在异步中断上下文中的锁安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6fb7ba54b2d93d51230b2a915c531a586374f990

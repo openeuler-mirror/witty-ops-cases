@@ -1,0 +1,38 @@
+#标题
+obmm: 日志格式缺失换行符及代码冗余问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+OBMM（OpenEuler Buffer Management Module）子系统在运行过程中，内核日志（dmesg）输出格式不规范。部分错误和调试信息在打印时缺少行尾换行符 `\n`，导致后续日志内容紧接在同一行输出，严重影响日志的可读性与自动化解析工具的解析效果。此外，代码中存在未使用的冗余变量定义。
+
+#主要错误日志
+- `pr_err("%s:fast alloc failed. nid: %d, request: 0x%lx, available: 0x%lx", ...)` （推断：日志行尾缺失换行）
+- `pr_err("%s: null pointer.", ...)`
+- `pr_err("%#x is not a known scna, lookup ret=%pe", ...)`
+- `pr_err("failed to load export argument")`
+- `pr_err("failed to write export result")`
+- `pr_err("failed to load import argument")`
+- `pr_err("failed to write import result")`
+- `pr_err("failed to load unexport argument")`
+- `pr_err("failed to load unimport argument")`
+- `pr_err("failed to load addr_query argument")`
+- `pr_err("failed to write obmm_query result")`
+- `pr_err("failed to load preimport argument")`
+- `pr_err("failed to write preimport result")`
+- `pr_err("invalid vendor_len = 0x%x, should less than 0x%x", ...)`
+- `pr_err("Cannot use memory from multiple sockets.\n")` （注：补丁扩充了该日志描述）
+- `pr_err("mmap region %d: not allow to be mmaped", ...)`
+- `pr_err("mmap region %d: invalid vma permission", ...)`
+
+#问题根因
+开发人员在编写 pr_err、pr_info、pr_debug 等日志打印函数调用时，遗漏了字符串末尾的换行符 `\n`。在 Linux 内核日志系统中，若打印字符串不以换行符结尾，日志缓冲区不会自动换行，导致该条日志与下一条日志连在一起。同时，`obmm_shm_dev_release` 函数中定义了未被使用的局部变量 `reg`，属于冗余代码。
+
+#解决方案
+1. 修复日志换行问题：遍历 drivers/ub/obmm/ 目录下的相关源文件，为所有缺失换行符的 pr_err、pr_info、pr_debug 日志字符串末尾补充 `\n`。
+2. 优化日志描述：修正 `obmm_export_from_pool.c` 中关于多插槽内存使用的错误提示信息，使其描述更准确。
+3. 清理冗余代码：移除 `obmm_shm_dev.c` 中 `obmm_shm_dev_release` 函数内未使用的变量声明及其 container_of 初始化代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/39b9cc8398639540e2c5dba6e62d808695de6d91

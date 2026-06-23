@@ -1,0 +1,24 @@
+#标题
+pstore/ram: persistent_ram_save_old 函数堆缓冲区溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定场景下（开启 pstore 更新定时器且发生非致命 oops），系统触发 KASAN 检测到的 slab 越界读写错误。具体表现为：
+1. 发生堆缓冲区溢出，导致内存被非法覆写。
+2. 后续读取 pstore 记录时发生越界读取。
+3. 极难复现，依赖特定的启动时序和缓冲区大小变化。
+
+#主要错误日志
+BUG: KASAN: slab-out-of-bounds in ramoops_pstore_read+0x...
+Read of size N at addr ... by task ...
+
+#问题根因
+函数 `persistent_ram_save_old()` 可能对同一个 `persistent_ram_zone` 被多次调用。当首次调用时，函数分配了大小为 X 的缓冲区 `prz->old_log`。若后续调用时缓冲区大小 Y 发生变化（Y > X），代码仅检查指针是否为空，未检查大小是否匹配，便直接更新 `prz->old_log_size` 为 Y 并执行 `memcpy_fromio()`。这导致向仅分配了 X 大小的堆内存中写入了 Y 字节数据，引发堆溢出。
+
+#解决方案
+在 `persistent_ram_save_old()` 函数中增加缓冲区大小校验逻辑。在分配新缓冲区前，检查 `prz->old_log` 是否存在且其大小 `prz->old_log_size` 是否与当前需要保存的大小 `size` 一致。若不一致，先调用 `persistent_ram_free_old(prz)` 释放旧缓冲区，随后重新分配匹配新大小的缓冲区，确保内存空间充足。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3f4e10f2f599c2b3be5643f479e4836613424b63

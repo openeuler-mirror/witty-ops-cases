@@ -1,0 +1,23 @@
+#标题
+drm_dp_cec: CEC适配器属性检查错误导致HPDtoggle时设备反复注销注册
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当显示设备发生热插拔（HPD）信号短暂变低（少于1秒）时，CEC适配器属性检查逻辑错误地判定属性已变更，导致CEC设备被反复注销并重新注册。
+若内核开启了 CONFIG_MEDIA_CEC_RC 配置项，伴随CEC设备的重新注册，其关联的 input 设备也会被反复注销与注册。这导致 /sys 目录下对应的 input 设备编号持续递增（例如从 input20 增长到 input21 等），随着时间推移该编号可能达到数千。虽然未导致系统崩溃，但这属于非预期行为，可能造成设备管理混乱。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `drm_dp_cec.c` 中，检查 CEC 适配器属性是否变更的代码实现存在缺陷。原代码使用等号（`==`）直接比较 `aux->cec.adap->capabilities` 与 `cec_caps` 的全部位。
+当 CEC 核心代码新增功能特性（如 `CEC_CAP_RC`）后，核心层可能会自动修改 capabilities 位掩码。这导致在 HPD 短暂 toggle 场景下，比较结果总是不相等（即判定为属性已变更）。从而触发代码逻辑错误地执行注销旧设备、注册新设备的流程，而不是保留现有设备。
+
+#解决方案
+修改属性变更检查逻辑，不再比较完整的 capabilities 位图，而是仅检查实际上可能发生变化的特定位（`CEC_CAP_MONITOR_ALL`）。
+具体修改为：将 `aux->cec.adap->capabilities == cec_caps` 修改为 `(aux->cec.adap->capabilities & CEC_CAP_MONITOR_ALL) == (cec_caps & CEC_CAP_MONITOR_ALL)`。这样避免了因其他无关 capability 位的差异而触发设备重新注册。同时，移除了之前为了规避此问题而添加的 `#ifndef CONFIG_MEDIA_CEC_RC` 相关的临时处理代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/92c48aa4c502be9243ed7b6dda20a84f84b56ba4

@@ -1,0 +1,35 @@
+#标题
+Bluetooth: ISO 链路断开时错误触发被动扫描
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 ISO（Isochronous）链路断开时，系统错误地触发了蓝牙被动扫描。这导致在非 LE 链路断开的场景下，扫描被意外开启。
+
+#主要错误日志
+```
+> HCI Event: LE Meta Event (0x3e) plen 29
+      LE Connected Isochronous Stream Established (0x19)
+        Status: Success (0x00)
+        Connection Handle: 257
+        ...
+> HCI Event: Disconnect Complete (0x05) plen 4
+        Status: Success (0x00)
+        Handle: 257
+        Reason: Remote User Terminated Connection (0x13)
+< HCI Command: LE Set Extended Scan Enable (0x08|0x0042) plen 6
+        Extended scan: Enabled (0x01)
+        Filter duplicates: Enabled (0x01)
+        Duration: 0 msec (0x0000)
+        Period: 0.00 sec (0x0000)
+```
+
+#问题根因
+在 `hci_disconn_complete_evt` 函数中，处理断开连接事件时，代码未对连接类型进行判断。原有的逻辑在查找连接参数并决定是否重新启用被动扫描时，没有限制仅针对 LE 链路（`LE_LINK`）。因此，当 ISO 链路断开时，代码错误地进入了处理 LE 自动连接的逻辑，从而触发了不应执行的被动扫描更新流程。
+
+#解决方案
+在处理断开连接事件时，增加对连接类型 `conn->type` 的判断条件。仅当断开的连接类型为 `LE_LINK` 时，才执行连接参数查找及后续的被动扫描重置操作。通过添加 `if (conn->type == LE_LINK)` 判断，确保 ISO 链路或其他非 LE 链路的断开不会误触发被动扫描。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/19fcb96885f1ee82358ec82ab9cb764db5da0cbd

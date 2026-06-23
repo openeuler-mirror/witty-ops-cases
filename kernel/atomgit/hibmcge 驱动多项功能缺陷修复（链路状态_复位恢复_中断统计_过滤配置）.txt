@@ -1,0 +1,31 @@
+#标题
+hibmcge 驱动多项功能缺陷修复（链路状态/复位恢复/中断统计/过滤配置）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **中断统计异常**：多个网络设备共享同一份中断统计数据，导致统计信息互相覆盖或混淆，无法准确反映单个设备的实际中断情况。
+2. **复位后功能失效**：网卡复位后，接收暂停帧的 MAC 地址未恢复，导致流控功能异常；同时 MTU 变更时打印日志显示的数值不正确。
+3. **链路修复逻辑错误**：在 MAC 与 PHY 链路连接失败时的修复流程中，存在重复调用 `phy_stop()` 的风险；且在 PHY 链路已断开的情况下仍尝试执行修复操作，可能导致内核空指针崩溃或不稳定；相关 debugfs 接口读取的 `np_link fail state` 状态不准确。
+4. **过滤与流控行为不正确**：组播地址过滤配置错误，导致组播流量处理异常；暂停帧（Pause Frame）统计计数错误。
+
+#主要错误日志
+- "failed to fix the MAC link status"
+- "failed to link between MAC and PHY, try to fix..."
+- "change mtu from %u to %u\n" (日志中打印的旧 MTU 值可能错误)
+
+#问题根因
+1. **中断统计**：`hbg_vector` 结构体中的统计计数成员设计不当，导致不同设备实例共享了同一份统计内存。
+2. **复位恢复**：`hbg_restore_user_def_settings` 函数遗漏了对 `rx_pause_mac_addr` 的恢复操作；MTU 变更日志打印顺序在变量更新前执行。
+3. **链路修复**：`hbg_fix_np_link_fail` 函数逻辑缺陷，未检查 PHY 链路状态即执行 `phy_stop/start`，且未持有 RTNL 锁，导致重复停止 PHY 或在无效状态下操作。
+4. **硬件配置**：组播过滤掩码寄存器未正确初始化；暂停帧通过控制位未根据流控使能状态正确配置。
+
+#解决方案
+1. **修复中断统计共享**：将统计计数从 `hbg_irq_info` 结构体中移除，改为在 `hbg_vector` 中动态分配独立的 `stats_array` 数组，确保每个设备实例拥有独立的统计内存。
+2. **完善复位恢复流程**：在 `hbg_restore_user_def_settings` 中增加调用 `hbg_hw_set_rx_pause_mac_addr` 恢复接收暂停 MAC 地址；调整 `hbg_net_change_mtu` 中日志打印与变量更新的顺序。
+3. **修正链路修复逻辑**：在 `hbg_fix_np_link_fail` 中增加 RTNL 锁保护，增加对 `phydev->link` 状态的检查，若 PHY 链路已断开则直接退出，避免无效操作。
+4. **修正过滤与流控配置**：在 `hbg_hw_set_mac_filter_enable` 中设置组播掩码寄存器为全 1；在 `hbg_hw_set_pause_enable` 中根据流控使能状态正确配置 `PAUSE_FRM_PASS_B` 寄存器位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1bd343c5ec16d8828dd554fc5729323b67b6a39

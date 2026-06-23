@@ -1,0 +1,23 @@
+#标题
+btrfs: 插入inline extent失败路径下的qgroup空间预留泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在Btrfs文件系统中执行涉及inline extent插入的操作（如写入压缩数据或小文件）时，如果系统在分配path结构体或加入事务处理阶段发生错误（如内存不足），函数`__cow_file_range_inline`会直接返回错误码。此时，此前已经预留的qgroup数据空间未能被正确释放，导致空间预留泄漏。该问题可能导致后续操作因可用空间不足而失败，影响系统稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数`cow_file_range_inline`中，当遇到`btrfs_alloc_path()`分配失败或`btrfs_join_transaction()`执行失败时，代码逻辑直接返回了错误码（-ENOMEM或PTR_ERR），但跳过了调用`btrfs_qgroup_free_data()`释放已预留空间的步骤。代码路径设计缺陷导致错误处理分支未清理资源。
+
+#解决方案
+修改`fs/btrfs/inode.c`中的错误处理逻辑：
+1. 将局部变量`trans`初始化为`NULL`。
+2. 当`btrfs_alloc_path()`失败或`btrfs_join_transaction()`失败时，不再直接`return`，而是将错误码赋值给`ret`变量，并跳转至`out`标签。
+3. 在`out`标签处，确保调用`btrfs_qgroup_free_data()`来释放预留的qgroup空间，并检查`trans`指针非空后再结束事务，从而修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/349280859240c6acdedaaf6795caf3d03298075e

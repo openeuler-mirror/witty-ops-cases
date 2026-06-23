@@ -1,0 +1,25 @@
+#标题
+xcall2.0 空指针访问引发 Panic 及系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在设备树（DT）测试场景下，执行 xcall 分离操作时触发内核 panic。
+2. 在 `__do_sys_epoll_pwait` 系统调用处理流程中，访问 `get_pfi` 返回的 NULL 指针导致内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **Panic 根因**：在 `xcall_detach` 函数中，`put_xcall()` 被错误地在自旋锁上下文中调用，且调用时序不当，导致在释放资源过程中引发 panic。
+2. **NULL 指针根因**：在 `get_pfi` 函数中，`current_prefetch_mm_data()` 的返回值未在调用 `put_xcall` 或后续使用前进行有效性检查，导致 `__do_sys_epoll_pwait` 中直接使用了 NULL 指针。
+
+#解决方案
+1. **修复 Panic**：调整 `xcall_detach` 中的锁处理逻辑，将所有 `put_xcall()` 操作移至自旋锁上下文之外执行，避免在锁内释放资源。
+2. **修复空指针**：
+   - 在 `get_pfi` 函数中提前获取 `current_prefetch_mm_data()` 并赋值给指针变量，确保后续的判空逻辑能够覆盖到该指针。
+   - 在 `__do_sys_epoll_pwait` 调用处增加对 `get_pfi` 返回值的 NULL 检查，防止解引用空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/17e5b5e8e10a443e48d0adc27820c9fb68a2d138

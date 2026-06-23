@@ -1,0 +1,44 @@
+#标题
+devcoredump: 修复 devcd->mutex 导致的循环锁定依赖死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核 lockdep 检测到可能的循环锁定依赖，导致系统报告 "possible circular locking dependency detected" 警告。具体场景为在执行设备驱动的 unbind 操作（如 `xe_fault_inject` 进程写入 unbind 接口）时，触发 `dev_coredump_put` 流程，进而尝试获取 `devcd->mutex` 和 `del_wk` 的工作完成锁，从而触发了潜在的死锁路径。
+
+#主要错误日志
+```
+======================================================
+WARNING: possible circular locking dependency detected
+6.16.0-rc6-lgci-xe-xe-pw-151626v3+ #1 Tainted: G S   U
+------------------------------------------------------
+xe_fault_inject/5091 is trying to acquire lock:
+ffff888156815688 ((work_completion)(&(&devcd->del_wk)->work)){+.+.}-{0:0}, at: __flush_work+0x25d/0x660
+
+but task is already holding lock:
+ffff888156815620 (&devcd->mutex){+.+.}-{3:3}, at: dev_coredump_put+0x3f/0xa0
+which lock already depends on the new lock.
+
+Chain exists of: (work_completion)(&(&devcd->del_wk)->work) --> kn->active#236 --> &devcd->mutex
+ Possible unsafe locking scenario:
+       CPU0                    CPU1
+       ----                    ----
+  lock(&devcd->mutex);
+                               lock(kn->active#236);
+                               lock(&devcd->mutex);
+  lock((work_completion)(&(&devcd->del_wk)->work)));
+ *** DEADLOCK ***
+```
+
+#问题根因
+原有代码中的 `devcd_free` 函数在持有 `devcd->mutex` 的情况下调用 `flush_delayed_work`，而工作队列回调函数 `devcd_del` 内部会调用 `device_del`，`device_del` 会获取 kernfs 的 `kn->active` 锁。同时，用户态写入操作（如 `devcd_data_write`）会先获取 `kn->active` 锁，再尝试获取 `devcd->mutex`。这就形成了 `devcd->mutex` -> `work_completion` -> `kn->active` -> `devcd->mutex` 的循环依赖，导致死锁风险。
+
+#解决方案
+修复方案重构了 `devcoredump` 的并发控制逻辑：
+1. 移除可能导致死锁的 `flush_delayed_work` 调用，改为在 `devcd_free` 中使用 `cancel_delayed_work_sync`，并在互斥锁保护下手动执行删除逻辑 `__devcd_del`。
+2. 引入 `init_completed` 和 `deleted` 状态标志位，替代原有的 `delete_work` 标志，以更精确地控制生命周期。
+3. 调整初始化流程，在 `device_add` 之前就初始化并调度 `del_wk`，并通过 `init_completed` 标志确保只有在初始化成功后才执行删除操作，避免了锁的嵌套持有和跨上下文的冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2eace68d147ddd297ca339fb01459e4da4e06920

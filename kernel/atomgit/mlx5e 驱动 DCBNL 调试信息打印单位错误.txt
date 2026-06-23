@@ -1,0 +1,21 @@
+#标题
+mlx5e 驱动 DCBNL 调试信息打印单位错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 Mellanox 网卡 DCB（数据中心桥接）最大速率限制时，内核调试日志输出的带宽单位始终显示为 "Gbps"，而实际配置的数值可能以 100 Mbps 为单位。这导致调试信息中显示的带宽值与实际配置意图严重不符（例如将 100 Mbps 误显示为 100 Gbps），对运维排查和故障定位造成误导。
+
+#主要错误日志
+推断日志格式如下（修复前）：
+`mlx5e: mlx5e_dcbnl_ieee_setmaxrate: tc_%d <=> max_bw %d Gbps`
+
+#问题根因
+在 `mlx5e_dcbnl_ieee_setmaxrate` 函数中，打印调试信息时硬编码了 "Gbps" 单位，未根据硬件返回的实际单位（`max_bw_unit`）进行区分。硬件支持两种速率单位（100 Mbps 和 1 Gbps），代码逻辑未将 `max_bw_value` 与对应的 `max_bw_unit` 结合计算和显示，导致单位显示错误。
+
+#解决方案
+修改调试信息打印逻辑，引入单位映射表，根据 `max_bw_unit` 的值动态选择正确的单位字符串（"Mbps" 或 "Gbps"），并据此对 `max_bw_value` 进行数值换算。将硬编码的 "%d Gbps" 修改为 "%u %s"，确保输出的速率数值与单位一致，消除误导性信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/714e1a4bf29e7712567aa8aed3a3f41f60847a57

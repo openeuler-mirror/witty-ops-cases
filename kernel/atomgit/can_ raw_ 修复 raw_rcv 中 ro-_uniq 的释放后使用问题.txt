@@ -1,0 +1,20 @@
+#标题
+can: raw: 修复 raw_rcv 中 ro->uniq 的释放后使用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在释放 raw CAN socket 时，由于接收器删除是延后执行的（通过 call_rcu()），raw_rcv() 可能仍在 RCU 读侧临界区中运行。此时 raw_release() 已经释放了 ro->uniq，导致 raw_rcv() 访问该内存区域时发生释放后使用，可能引发内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+raw_release() 通过 can_rx_unregister() 注销 raw CAN 接收过滤器，但接收器的删除是通过 call_rcu() 延迟执行的。这留下了一个时间窗口：raw_release() 释放了 ro->uniq 之后，raw_rcv() 可能仍在 RCU 读侧临界区中运行并试图访问 ro->uniq，从而导致释放后使用。
+
+#解决方案
+将 free_percpu(ro->uniq) 的调用从 raw_release() 移动到一个 raw 特定的 socket 析构函数（raw_sock_destruct）中。can_rx_unregister() 会持有 socket 的额外引用计数，并且只有在 RCU 回调中才会释放该引用。因此，在 sk_destruct 中释放 uniq 可以确保在所有相关回调执行完毕并释放引用之前，percpu 区域不会被释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e9111c087f33e55094f625bb3ca935201aeaad28

@@ -1,0 +1,20 @@
+#标题
+drm/v3d: GPU超时重置后任务无限重复执行导致反复复位
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 V3D GPU 发生超时故障时，驱动程序尝试重置并重新提交作业。由于缺乏对错误状态的检查，已经被标记为“guilty”（有错）的作业会被反复重新提交执行。这导致同一个有问题的作业无限循环运行，进而引发重复的 GPU 复位操作，系统陷入 GPU 重置死循环。
+
+#主要错误日志
+未知
+
+#问题根因
+V3D 驱动依赖 `drm_sched_increase_karma()` 和 `drm_sched_resubmit_jobs()` 函数来处理超时后的重试逻辑。当超时发生时，`drm_sched_increase_karma()` 将作业标记为有错，而 `drm_sched_resubmit_jobs()` 会在该有错作业的 DMA fence 上设置错误状态。然而，TFU 和 CSD 相关的作业执行函数（`v3d_tfu_job_run` 和 `v3d_csd_job_run`）在执行前未检查作业 fence 是否已标记错误，导致已经被标记错误的有错作业被再次运行，引发无限循环的 GPU 重置。
+
+#解决方案
+在 `v3d_tfu_job_run` 和 `v3d_csd_job_run` 函数中增加对作业 DMA fence 错误状态的检查。如果检测到 `job->base.base.s_fence->finished.error` 不为 0，则直接返回 NULL，阻止有错作业的执行，从而避免重复的 GPU 复位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cf83b0f19266bdf9eba7332df2a22084d2f3349c

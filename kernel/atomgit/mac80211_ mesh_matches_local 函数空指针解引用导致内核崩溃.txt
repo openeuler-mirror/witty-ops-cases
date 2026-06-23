@@ -1,0 +1,33 @@
+#标题
+mac80211: mesh_matches_local 函数空指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统处理无线 Mesh 网络帧时，若接收到构造特殊的 CSA（Channel Switch Announcement）action 帧（包含有效的 Mesh ID IE 但缺失 Mesh Configuration IE），内核会发生空指针解引用，导致 Oops（general protection fault）甚至系统崩溃。攻击者可利用此漏洞造成拒绝服务。
+
+#主要错误日志
+Oops: general protection fault, probably for non-canonical address ...
+KASAN: null-ptr-deref in range [0x0000000000000000-0x0000000000000007]
+Workqueue: events_unbound cfg80211_wiphy_work
+Call Trace:
+ <TASK>
+ ? __pfx_mesh_matches_local (net/mac80211/mesh.c:65)
+ ieee80211_mesh_rx_queued_mgmt (net/mac80211/mesh.c:1686)
+ ieee80211_iface_work (net/mac80211/iface.c:1754 net/mac80211/iface.c:1802)
+ cfg80211_wiphy_work (net/wireless/core.c:426)
+ process_one_work (net/kernel/workqueue.c:3280)
+ worker_thread (net/kernel/workqueue.c:3352)
+ kthread (net/kernel/kthread.c:436)
+ ret_from_fork_asm (net/arch/x86/entry/entry_64.S:255)
+ </TASK>
+
+#问题根因
+函数 `mesh_matches_local()` 在处理 mesh 配置参数时，无条件解引用 `ie->mesh_config` 指针。当该函数被 `mesh_rx_csa_frame()` 调用时，传入的解析后 action-frame 元素可能不包含 Mesh Configuration IE，导致 `ie->mesh_config` 为 NULL，从而触发空指针解引用。其他调用路径已有防护检查，唯有 `mesh_rx_csa_frame()` 路径缺失该检查。
+
+#解决方案
+在 `net/mac80211/mesh.c` 文件的 `mesh_matches_local()` 函数入口处增加对 `ie->mesh_config` 的非空检查。如果指针为 NULL，函数直接返回 false，避免后续代码解引用空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c918657191334d93b4e16903852808644baa6857

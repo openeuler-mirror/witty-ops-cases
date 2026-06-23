@@ -1,0 +1,20 @@
+#标题
+RDMA/iwpm: Netlink 属性策略未强制校验 NUL 终止符潜在内存越界风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA iWARP Port Mapper (iwpm) 模块处理用户空间发来的 Netlink 响应消息时，若用户空间传递的 `IWPM_NLA_RREG_IBDEV_NAME`、`IWPM_NLA_RREG_ULIB_NAME` 或 `IWPM_NLA_MAPINFO_ULIB_NAME` 属性数据未包含字符串终止符 `\0`，内核在使用 `strcmp` 等函数处理这些属性时可能发生内存越界读取，导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+iwpm 模块的 Netlink 属性策略表（`resp_reg_policy` 和 `resp_mapinfo_policy`）将相关字符串属性定义为 `NLA_STRING` 类型。`NLA_STRING` 类型在解析时并不强制校验数据 payload 中是否包含 NUL 终止符。然而，后续代码逻辑直接将这些属性作为标准 C 字符串（传递给 `strcmp` 等函数）处理。如果用户空间发送的数据缺少终止符，将导致字符串处理函数读取超出 payload 边界的内存。
+
+#解决方案
+将相关 Netlink 属性策略的类型从 `NLA_STRING` 修改为 `NLA_NUL_STRING`。`NLA_NUL_STRING` 类型会在解析阶段强制校证 payload 数据是否以 NUL 字符结尾，从而确保后续作为 C 字符串处理时的内存安全。此次修复涉及 `IWPM_NLA_RREG_IBDEV_NAME`、`IWPM_NLA_RREG_ULIB_NAME` 和 `IWPM_NLA_MAPINFO_ULIB_NAME` 三个属性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/62efe3080a4268d438522b475302bb20222cd658

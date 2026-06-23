@@ -1,0 +1,22 @@
+#标题
+xsched: CFS shares 权重计算因 u64 溢出导致除零错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户为 CFS 组配置非常大的 shares 值（位于 u64 范围）时，内核在进行权重计算时发生 u64 整数溢出。溢出导致计算的子权重值变为 0，进而导致全局权重最大公约数（w_gcd）保持为 0，最终在执行权重归一化步骤（`weight = weight / w_gcd`）时触发致命的除零错误（divide-by-zero），造成内核崩溃或异常。
+
+#主要错误日志
+未知
+
+#问题根因
+之前的 CFS 组权重计算采用“乘积 / share”方案进行归一化。当用户配置极大的 shares 值时，中间乘积变量 `sh_prod_red` 发生 u64 溢出并回绕为一个较小的数值，导致计算出的 `children->weight` 为 0。由于所有权重变为 0，权重最大公约数 `w_gcd` 也为 0，最终触发了 `weight / w_gcd` 处的除零崩溃。
+
+#解决方案
+1. 将 `shares_cfg` 的数据类型从 u64 限制为 u32，从源头防止算术溢出。
+2. 移除不稳定的基于乘积的归一化算法，直接使用 `shares_cfg` 作为调度权重。
+3. 引入 `xs_calc_delta_fair()` 辅助函数，使用 `mul_u64_u32_div()` 安全地缩放 vruntime，避免直接除法操作，并内置了对零权重的防御性处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/936e094f8b185dfbe44eea73beb923c93458e960

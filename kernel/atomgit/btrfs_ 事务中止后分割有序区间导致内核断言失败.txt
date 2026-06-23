@@ -1,0 +1,30 @@
+#标题
+btrfs: 事务中止后分割有序区间导致内核断言失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 Direct IO 写入过程中，如果发生事务中止，内核会触发断言失败并导致 Oops。具体表现为：
+1. 内核日志打印 "assertion failed: !(flags & ~BTRFS_ORDERED_TYPE_FLAGS)"。
+2. 触发 "kernel BUG at fs/btrfs/ordered-data.c:1234!" 导致内核崩溃。
+3. 系统可能进入只读模式，进程被挂起或终止。
+
+#主要错误日志
+```
+BTRFS error (device loop0 state A): Transaction aborted (error -12)
+assertion failed: !(flags & ~BTRFS_ORDERED_TYPE_FLAGS), in fs/btrfs/ordered-data.c:1234
+------------[ cut here ]------------
+kernel BUG at fs/btrfs/ordered-data.c:1234!
+Oops: invalid opcode: 0000 [#1] PREEMPT SMP KASAN NOPTI
+RIP: 0010:btrfs_split_ordered_extent+0xd8d/0xe20 fs/btrfs/ordered-data.c:1234
+```
+
+#问题根因
+当 Direct IO 写入过程中发生事务中止时，`btrfs_destroy_ordered_extents()` 函数会将所有现有的有序区间标记为 `BTRFS_ORDERED_IOERR` 标志。随后，如果代码流程进入 `btrfs_split_ordered_extent()`，且该有序区间仍有剩余字节未处理，代码会执行断言检查 `ASSERT(!(flags & ~BTRFS_ORDERED_TYPE_FLAGS))`。由于此时 `BTRFS_ORDERED_IOERR` 标志已被设置，而该标志不属于 `BTRFS_ORDERED_TYPE_FLAGS`（仅包含常规、nocow、预分配、压缩、直接IO等类型标志），导致断言失败，引发内核 BUG。
+
+#解决方案
+在 `btrfs_split_ordered_extent()` 函数中增加对 `BTRFS_ORDERED_IOERR` 标志的检查。如果检测到该标志，直接返回错误指针，不再继续执行分割操作。返回的错误码优先使用导致事务中止的文件系统错误码，若无则返回 -EIO。此举避免了在已出错的有序区间上执行无效的分割操作，从而绕过断言检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0619e7a514619eed8f537658cd0efe83322acbf0

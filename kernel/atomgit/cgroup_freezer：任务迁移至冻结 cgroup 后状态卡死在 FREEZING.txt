@@ -1,0 +1,27 @@
+#标题
+cgroup/freezer：任务迁移至冻结 cgroup 后状态卡死在 FREEZING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+将进程迁移至已处于 FROZEN 状态的 cgroup 后，该 cgroup 的状态变为 FREEZING 并一直保持，无法恢复为 FROZEN，导致进程未被正确冻结。复现步骤如下：
+1. 创建 freezer cgroup：`mkdir /sys/fs/cgroup/freezer/test`
+2. 冻结 cgroup：`echo FROZEN > test/freezer.state`
+3. 确认状态为 FROZEN：`cat test/freezer.state` 显示 `FROZEN`
+4. 后台启动进程：`sleep 1000 &`
+5. 将进程迁入 cgroup：`echo <pid> > test/cgroup.procs`
+6. 检查状态：`cat test/freezer.state` 显示 `FREEZING`（预期应保持 FROZEN 或完成冻结）
+
+#主要错误日志
+未知
+
+#问题根因
+在 `freezer_attach` 函数处理任务迁移到已冻结 cgroup 的逻辑中，调用 `freeze_task(task)` 的时机错误。
+原代码在 `freeze_task(task)` 执行后，才去清除父级链中的 `CGROUP_FROZEN` 标志位。由于 `freeze_task()` 内部会检查 `freezing()` 条件，而此时 `CGROUP_FROZEN` 标志位尚未清除，导致 `freezing()` 检查错误地返回 false，使得 `__freeze_task()` 未被调用，任务实际上并未进入冻结流程，cgroup 状态因此卡死在 FREEZING。
+
+#解决方案
+调整代码执行顺序，先清除 `CGROUP_FROZEN` 标志位，再调用 `freeze_task(task)`。具体修改为：在 `freezer_attach` 函数中，将 `freeze_task(task)` 调用移至清除 `CGROUP_FROZEN` 状态的 while 循环之后，确保状态标志位正确更新后再触发任务冻结。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9e6a218889efd22b2ecc57b5f1541fbbef37ff1b

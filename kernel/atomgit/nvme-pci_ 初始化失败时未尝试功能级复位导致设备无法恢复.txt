@@ -1,0 +1,21 @@
+#标题
+nvme-pci: 初始化失败时未尝试功能级复位导致设备无法恢复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+NVMe 设备在初始化过程中陷入复位状态无法退出，内核报告设备未就绪并中止复位。此时设备无法正常使用，通常需要完全断电重启才能恢复。
+
+#主要错误日志
+Device not ready; aborting reset, CSTS=0x1
+controller reset completed after pcie flr (推断：修复后成功恢复的提示日志)
+
+#问题根因
+多厂商的 NVMe 设备可能会卡在某种复位状态下，通过标准的 NVMe 级控制器复位无法使其退出该状态。内核驱动在初始化失败时缺乏更底层的恢复手段，导致设备长期处于不可用状态。
+
+#解决方案
+在 `nvme_pci_configure_admin_queue` 函数中，当 NVMe 控制器复位失败时，增加 PCIe 功能级复位（FLR）的尝试逻辑。若 FLR 成功，则恢复 PCI 状态并重新尝试禁用控制器，从而在不重启系统的情况下恢复设备功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/35a46768b96469cb8ebeb33222f18fe9af21cc00

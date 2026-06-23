@@ -1,0 +1,25 @@
+#标题
+iov_iter在开启KMAP_LOCAL_FORCE_MAP调试选项下触发kunmap警告并挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 x86_32 架构、开启 CONFIG_DEBUG_KMAP_LOCAL_FORCE_MAP=y 配置且带有 highmem 的环境中，对 huge=always 的 tmpfs 执行 generic/077 测试（或执行写入操作）时，内核触发 WARNING 并随后挂起（进程处于可中断状态）。
+
+#主要错误日志
+WARNING: CPU: 5 PID: 3517 at mm/highmem.c:622 kunmap_local_indexed+0x62/0xc9
+CPU: 5 UID: 0 PID: 3517 Comm: cp Not tainted 6.12.0-rc4 #2
+...
+copy_page_from_iter_atomic+0xa6/0x5ec
+generic_perform_write+0xf6/0x1b4
+shmem_file_write_iter+0x54/0x67
+
+#问题根因
+`copy_page_from_iter_atomic()` 函数在处理内存映射时，逻辑判断仅依赖于 `PageHighMem(page)`。当开启 `CONFIG_DEBUG_KMAP_LOCAL_FORCE_MAP` 调试选项时，即使是低端内存（lowmem）也需要强制通过 kmap 机制进行映射访问。原代码未覆盖此调试场景，导致对非高端内存页面直接访问后错误地调用了解映射函数，或者映射索引不匹配，从而触发 `kunmap_local_indexed` 的警告并导致系统挂起。
+
+#解决方案
+修改 `lib/iov_iter.c` 中的 `copy_page_from_iter_atomic()` 函数。引入一个布尔变量 `uses_kmap`，其值为 `IS_ENABLED(CONFIG_DEBUG_KMAP_LOCAL_FORCE_MAP) || PageHighMem(page)`。将原有代码中判断 `PageHighMem(page)` 的条件统一替换为 `uses_kmap`，确保在开启强制映射调试选项时，内存页面能够被正确地映射、循环处理和解映射。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb4037b123e5f3e0fbfb9cb767875a51685e194c

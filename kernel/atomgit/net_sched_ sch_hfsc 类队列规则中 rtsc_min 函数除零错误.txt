@@ -1,0 +1,24 @@
+#标题
+net/sched: sch_hfsc 类队列规则中 rtsc_min 函数除零错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 HFSC（Hierarchical Fair Service Curve）排队规则时，若输入较大的斜率参数（例如 m1=4000000000），内核在处理 concave-curve intersection（凹曲线相交）路径时会触发除零错误，导致内核崩溃，寄存器显示除法错误。
+
+#主要错误日志
+Oops: divide error: 0000
+RIP: 0010:rtsc_min (net/sched/sch_hfsc.c:601)
+Call Trace:
+ init_ed (net/sched/sch_hfsc.c:629)
+ hfsc_enqueue (net/sched/sch_hfsc.c:1569)
+
+#问题根因
+函数 `m2sm()` 将 u32 类型的斜率转换为 u64 类型的缩放值，对于大输入值，结果可以达到 2^32 量级。函数 `rtsc_min()` 计算两个此类 u64 值的差值并将其存储在 u32 变量 `dsm` 中作为除数。当差值恰好等于 2^32 时，将其截断存入 u32 变量会导致数值变为 0，从而在执行除法运算时引发除零错误。
+
+#解决方案
+将变量 `dsm` 的数据类型从 u32 扩展为 u64，以保留完整的差值；同时将除法操作从 `do_div()` 替换为支持 64 位除数的 `div64_u64()`，从而避免因截断导致的除零崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1258690443df2e31b822888ebd23e635b3563e67

@@ -1,0 +1,20 @@
+#标题
+resctrl: max_threshold_occupancy 写操作返回值错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 L2_MON 但不支持 limbo 机制的系统上，对 `max_threshold_occupancy` 接口文件进行写操作时，虽然内核跳过了更新处理，但错误地返回了 0 字节写入，导致用户态写入操作返回异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 信息，前序修复补丁引入了 L2_MON 不支持 limbo 机制的判断逻辑。当检测到缓存层级不为 3（`r->cache_level != 3`）时，代码直接 `return 0`。这导致在跳过写操作处理时，未能返回实际写入的字节数（`nbytes`），破坏了文件写操作的返回语义。
+
+#解决方案
+修改 `max_threshold_occ_write` 函数的错误处理路径。当检测到缓存层级不支持时，不再直接返回 0，而是跳转（`goto out`）至函数末尾的统一返回点，正确返回用户请求写入的字节数 `nbytes`，确保写操作系统调用返回值正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/854b802bf3e636c0f7012c835d5e12b3325173f7

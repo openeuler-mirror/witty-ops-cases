@@ -1,0 +1,23 @@
+#标题
+PCI: rockchip-ep: Fix address translation unit programming
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Rockchip PCIe Endpoint 控制器在进行地址映射时，地址转换单元配置错误。在映射一段大小为 `<size>` 字节、起始地址为 `<pci_addr>` 的 PCI 地址空间时，驱动程序仅根据映射大小计算掩码位数，导致计算出的掩码位数不正确。这会导致 PCIe 出站地址转换失败，造成数据传输路径错误或设备无法正常通信。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `rockchip_pcie_prog_ep_ob_atu()` 在计算地址转换所需的掩码位数 `num_pass_bits` 时，仅使用了映射大小 `size` 进行计算（`fls64(size - 1)`），而忽略了 PCI 起始地址 `pci_addr` 的影响。
+正确的计算逻辑应基于地址范围 `[pci_addr..pci_addr + size - 1]` 中变化的地址位数来确定掩码位数。此外，根据 RK3399 TRM 规范，掩码位数必须限制在 8 到 20 之间（对应 256 字节对齐和 1MB 窗口大小限制），原代码缺乏对上限 20 位的正确约束。
+
+#解决方案
+引入辅助函数 `rockchip_pcie_ep_ob_atu_num_bits()` 来修正掩码位数的计算逻辑：
+1.  使用 `fls64(pci_addr ^ (pci_addr + size - 1))` 计算地址范围变化位数，同时考虑了 PCI 地址和映射大小。
+2.  使用 `clamp` 函数将计算结果限制在 `ROCKCHIP_PCIE_AT_MIN_NUM_BITS` (8) 和 `ROCKCHIP_PCIE_AT_MAX_NUM_BITS` (20) 之间，确保符合硬件规范要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c942046fdf2691d0a42aaa968c6e610f7d7d3862

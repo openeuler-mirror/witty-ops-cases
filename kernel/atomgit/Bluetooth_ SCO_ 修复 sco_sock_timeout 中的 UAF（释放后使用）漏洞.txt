@@ -1,0 +1,23 @@
+#标题
+Bluetooth: SCO: 修复 sco_sock_timeout 中的 UAF（释放后使用）漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在蓝牙 SCO（Synchronous Connection-Oriented）连接处理超时或断开连接的过程中，若并发竞争导致 `sco_sock_timeout` 或 `sco_conn_del` 访问 `conn->sk` 时，该 socket 已被其他路径释放，将触发 UAF（Use-After-Free）漏洞，可能导致内核崩溃或内存被篡改。该问题由 syzbot 发现并报告。
+
+#主要错误日志
+未知
+
+#问题根因
+根本原因在于 `sco_conn_lock` 等待期间存在竞态窗口。
+在 `sco_sock_timeout` 函数中，等待获取 `sco_conn_lock` 锁的过程中，`conn->sk` 指向的 socket 可能已经被 unlink（解除链接）并释放。原代码在获取锁后仅判断 `conn->sk` 指针是否为空，但没有检查该 socket 是否仍然属于当前管理列表（`sco_sk_list`），如果指针指向的内存已释放或被重用，直接对其执行 `sock_hold` 等操作将导致 UAF。
+
+#解决方案
+1. 新增辅助函数 `bt_sock_linked`，用于检查指定的 socket 是否仍链接在蓝牙 socket 列表中。
+2. 在 SCO 模块中新增封装函数 `sco_sock_hold`，该函数在获取 socket 引用前，先调用 `bt_sock_linked` 检查 `conn->sk` 是否有效。
+3. 修改 `sco_sock_timeout` 和 `sco_conn_del` 函数，将原有的直接指针判断逻辑替换为调用 `sco_sock_hold`。只有当确认 socket 仍在列表中（即有效）时，才增加引用计数并返回指针，否则返回 NULL，从而防止对已释放内存的访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5b2a60360270d49723d88421256d2bb5a1d1d38b

@@ -1,0 +1,27 @@
+#标题
+hfsplus: 挂载损坏文件系统导致读取未初始化内存
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载构造的损坏 HFS+ 文件系统时，内核读取了未初始化的内存数据。当 `hfsplus_strcasecmp()` 使用这些未初始化数据作为数组索引时，触发 KMSAN（Kernel Memory Sanitizer）报警。
+
+#主要错误日志
+- KMSAN 报警日志（推断）：`KMSAN: uninit-value in hfsplus_strcasecmp`
+- 调试输出显示读取长度异常：`HFSPLUS_BREC_READ: rec_len=520, fd->entrylength=26`
+- 调试输出警告：`HFSPLUS_BREC_READ: WARNING - entrylength (26) < rec_len (520) - PARTIAL READ!`
+
+#问题根因
+根本原因在于 `hfs_brec_read()` 函数仅验证读取长度不超过缓冲区大小，但未校验读取的数据长度是否符合特定记录类型的预期大小。
+当挂载损坏的文件系统时，`hfs_brec_read()` 读取的数据量（如 26 字节）小于目标结构体的大小（如 520 字节），导致结构体中剩余字节处于未初始化状态。这些未初始化数据（如 `tmp.thread.nodeName`）随后被拷贝并在字符串比较函数中被使用，触发了内存安全警告。
+
+#解决方案
+引入新的封装函数 `hfsplus_brec_read_cat()` 来读取并验证目录记录大小，具体措施如下：
+1. 新增 `hfsplus_brec_read_cat()` 函数，在读取数据后根据记录类型（文件夹、文件、线程）校验数据长度的合法性。
+2. 对于线程记录，先检查长度是否满足最小要求 `HFSPLUS_MIN_THREAD_SZ`，防止读取越界，再根据名称长度计算预期大小进行比对。
+3. 若读取长度与预期不符，返回 `-EIO` 错误。
+4. 在 `hfsplus_find_cat()` 中对临时变量进行零初始化，作为防御性编程措施。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0eaae0ac1714fe34f0e05970a30c7b636b509f5f

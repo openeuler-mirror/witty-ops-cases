@@ -1,0 +1,29 @@
+#标题
+khugepaged 匿名 VMA 误判导致内核 BUG_ON 触发崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 madvise(MADV_COLLAPSE) 系统调用时，若 VMA 映射至 /dev/zero（具有 vm_file 但被标记为匿名 VMA），内核触发 BUG_ON 并导致 Oops 崩溃。具体表现为内核日志打印 "kernel BUG at mm/khugepaged.c:1835!"，随后系统调用栈追踪指向 collapse_file 与 hpage_collapse_scan_file 函数。
+
+#主要错误日志
+------------[ cut here ]------------
+kernel BUG at mm/khugepaged.c:1835!
+Internal error: Oops - BUG: 00000000f2000800 [#1] SMP
+...
+Call trace:
+ collapse_file+0xa44/0x1400 (P)
+ hpage_collapse_scan_file+0x278/0x400
+ madvise_collapse+0x1bc/0x678
+
+#问题根因
+映射到 /dev/zero 的 VMA 虽然拥有 vm_file 结构，但实际上通过 mmap_zero() 被设置为匿名 VMA（anonymous VMA）。
+原有代码逻辑仅检查 `vma->vm_file` 是否存在来判断是否进行文件页折叠扫描（hpage_collapse_scan_file）。对于这类特殊的匿名 VMA，代码错误地进入了文件页处理路径。由于该类 VMA 可能未进行 2MB 对齐，导致在 collapse_file 中触发 pgoff 未对齐的 BUG_ON。
+此前该问题未暴露是因为 `khugepaged_max_ptes_none` 检查会提前跳过折叠，但 Commit d8ea7cc8547c 限制了该检查仅对 khugepaged 生效，使得 madvise_collapse 路径触发了此潜在缺陷。
+
+#解决方案
+在 `khugepaged_scan_mm_slot` 和 `madvise_collapse` 函数中，修改进入文件页折叠扫描的判断条件。将原有的 `vma->vm_file` 检查修正为 `!vma_is_anonymous(vma)`，确保只有真正的非匿名 VMA 才会调用 `hpage_collapse_scan_file()`，从而避免对 /dev/zero 等伪文件映射的匿名 VMA 进行错误的文件折叠处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5b03897933dcc584fa4fc212b6ff3a3049de5984

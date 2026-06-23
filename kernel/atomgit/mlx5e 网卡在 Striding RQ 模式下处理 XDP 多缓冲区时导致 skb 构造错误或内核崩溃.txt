@@ -1,0 +1,27 @@
+#标题
+mlx5e 网卡在 Striding RQ 模式下处理 XDP 多缓冲区时导致 skb 构造错误或内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 mlx5 驱动的 Striding RQ（Multi-Packet WQE）模式下，当 XDP 程序通过 `bpf_xdp_adjust_head()` 或 `bpf_xdp_adjust_tail()` 修改了数据包布局（如增加线性数据区或收缩非线性数据区）后，驱动程序未正确处理布局变化，导致以下现象：
+1. 若 XDP 程序增加了线性数据，驱动构造 skb 时会忽略这部分数据，导致数据丢失或错乱。
+2. 若 XDP 程序收缩了非线性数据，驱动在调用 `__pskb_pull_tail()` 时可能传入错误的长度参数，触发内核 BUG_ON 导致系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在处理 multi-buf XDP 时，错误地假设 XDP 程序运行后 `xdp_buff` 的布局保持不变，即假设线性数据区依然为空且碎片（fragments）数量未改变。
+1. 当线性数据区发生变化时，`mlx5e_build_linear_skb()` 仍按旧的布局（线性数据长度为 0）构建 skb，导致新增的线性数据被忽略。
+2. 当碎片大小发生变化时，传递给 `__pskb_pull_tail()` 的 delta 值可能超过实际的非线性数据大小，触发该函数内部的 `BUG_ON` 检查失败。
+
+#解决方案
+修改 `mlx5e_skb_from_cqe_mpwrq_nonlinear` 函数，在 XDP 程序运行后根据 `xdp_buff` 的实际状态重新计算并构建 skb：
+1. 记录运行 XDP 前的碎片数量，运行后对比数量变化，若有差异则回退碎片指针并重新计算 truesize。
+2. 调用 `mlx5e_build_linear_skb()` 时，使用 `xdp_buff` 中实际的线性数据长度，而非固定的 0。
+3. 仅当存在非线性数据时才调用 `__pskb_pull_tail()`，并确保拉取长度不超过实际数据长度，修正 headlen 的计算逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1f4a508960fc461e88153b408aab12e21f21f886

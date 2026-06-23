@@ -1,0 +1,32 @@
+#标题
+powerpc/memtrace与蓝牙驱动等多项CVE修复及缺陷补丁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **memtrace**: 在PowerPC平台上操作memtrace设备时，若用户态发起的mmap请求映射范围越界（如offset超出对象大小或映射长度过大），内核可能未正确校验导致越界访问。
+2. **btnxpuart**: 蓝牙驱动在固件下载流程异常或超时情况下，可能对空指针或未初始化的fw_name执行释放操作，引发内核崩溃。
+3. **thunderbolt**: 在Thunderbolt驱动处理配置请求时，可能发生重复出队操作，导致内核崩溃或数据结构损坏。
+4. **xhci**: USB XHCI驱动在处理特定Etron硬件 workaround 时，可能触发无效指针解引用。
+5. **memory-failure**: 内存热拔出或错误处理流程中， poisoned folio 的 unmap 操作可能处理不当。
+
+#主要错误日志
+- **btnxpuart**: bt_dev_err(hdev, "FW Download Timeout. offset: %d", ...); (推断：超时后触发空指针释放路径)
+
+#问题根因
+1. **memtrace**: `memtrace_mmap` 函数原有的边界校验逻辑不严谨，无法正确处理 `vm_pgoff` 超出范围或 `vma` 映射长度超过剩余页面的情况。
+2. **btnxpuart**: 固件下载失败或超时后，代码未检查 `nxpdev->fw` 指针是否有效及 `fw_name` 是否为空，直接执行 `release_firmware` 和 `memset`。
+3. **thunderbolt**: `tb_cfg_request_dequeue` 函数未检查请求是否处于 `TB_CFG_REQUEST_ACTIVE` 状态即执行 `list_del`，导致请求可能被重复移除。
+4. **xhci**: `xhci_queue_ctrl_tx` 中判断 Link TRB 的逻辑使用了 `trb_is_link`，未考虑到 Ring 边界情况，导致在 Segment 末尾访问无效指针。
+5. **memory-failure**: 在 `do_migrate_range` 中处理已映射的 folio 时，`try_to_unmap` 未携带 `TTU_HWPOISON` 标志。
+
+#解决方案
+1. **memtrace**: 重构 `memtrace_mmap` 边界检查，增加对 `vm_pgoff` 和 `vma_nrpages` 的严格范围校验，确保映射请求在 `ent->size` 范围内。
+2. **btnxpuart**: 在释放固件资源前增加判断条件 `if (nxpdev->fw && strlen(nxpdev->fw_name))`，确保指针非空且名称有效后再执行释放和清零操作。
+3. **thunderbolt**: 在 `tb_cfg_request_dequeue` 函数开头增加 `TB_CFG_REQUEST_ACTIVE` 标志位检查，若未激活则直接解锁返回，防止重复 dequeue。
+4. **xhci**: 将 `xhci_queue_ctrl_tx` 中的 `trb_is_link(ep_ring->enqueue + 1)` 判断修改为 `last_trb_on_seg(ep_ring->enq_seg, ep_ring->enqueue + 1)`，正确处理 Segment 边界。
+5. **memory-failure**: 在 `do_migrate_range` 循环中调用 `try_to_unmap` 时，增加 `TTU_HWPOISON` 标志位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/725b08f1f4ec6222daf26947dab419023ec7bed0

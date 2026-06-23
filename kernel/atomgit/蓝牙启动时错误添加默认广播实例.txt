@@ -1,0 +1,36 @@
+#标题
+蓝牙启动时错误添加默认广播实例
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动过程中，蓝牙子系统在不需要的情况下错误地添加了一个默认广播实例。该行为触发了内核调用栈打印，干扰正常启动流程。
+
+#主要错误日志
+Call trace:
+  dump_backtrace+0x94/0xec
+  show_stack+0x18/0x24
+  dump_stack_lvl+0x48/0x60
+  dump_stack+0x18/0x24
+  hci_setup_ext_adv_instance_sync+0x17c/0x328
+  hci_powered_update_adv_sync+0xb4/0x12c
+  hci_powered_update_sync+0x54/0x70
+  hci_power_on_sync+0xe4/0x278
+  hci_set_powered_sync+0x28/0x34
+  set_powered_sync+0x40/0x58
+  hci_cmd_sync_work+0x94/0x100
+  process_one_work+0x168/0x444
+  worker_thread+0x378/0x3f4
+  kthread+0x108/0x10c
+  ret_from_fork+0x10/0x20
+
+#问题根因
+在 `hci_powered_update_adv_sync` 函数中，条件判断逻辑使用了逻辑或（`||`）操作符：`if (hci_dev_test_flag(hdev, HCI_ADVERTISING) || list_empty(&hdev->adv_instances))`。
+由于启动阶段 `adv_instances` 列表通常为空（`list_empty` 为真），导致即使 `HCI_ADVERTISING` 标志未置位，条件依然成立，从而错误地执行了添加默认广播实例的流程。
+
+#解决方案
+修改 `net/bluetooth/hci_sync.c` 文件中的条件判断逻辑，将逻辑或（`||`）操作符修改为逻辑与（`&&`）。这确保了只有在 `HCI_ADVERTISING` 标志置位且广播实例列表为空时，才会添加默认广播实例，避免了启动时的错误行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d49259060dc1ffef2c3ce67e91e497262c368e1b

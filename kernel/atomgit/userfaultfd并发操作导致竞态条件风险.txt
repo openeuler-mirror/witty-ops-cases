@@ -1,0 +1,23 @@
+#标题
+userfaultfd并发操作导致竞态条件风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在userfaultfd启用非协作操作事件通知（如UFFD_FEATURE_EVENT_REMAP）时，若用户态进程发起mremap、mmap等操作的同时执行userfaultfd ioctl（如UFFDIO_COPY、UFFDIO_ZEROPAGE等），可能导致userfaultfd操作与内存布局变更并发执行。由于原实现中`mmap_changing`计数器的增加与检查未在统一锁机制下进行，存在竞态窗口，可能导致userfaultfd操作处理异常，或内存管理状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复前，`mmap_changing`原子变量的增加操作（发生在mremap、unmap等路径）与读取检查操作（发生在userfaultfd copy/zeropage/wp等ioctl路径）虽然各自在`mmap_lock`临界区内，但两者之间缺乏直接的同步机制。这导致userfaultfd操作无法可靠地阻止在非协作事件正在发生时进行，从而无法严格保证“若用户态请求非协作操作通知，则userfaultfd操作不并发发生”的设计约束。
+
+#解决方案
+在`userfaultfd_ctx`结构体中引入一个新的读写信号量`map_changing_lock`。
+1. 在进行非协作操作（如dup、mremap、remove、unmap）时，在增加`mmap_changing`计数器前后分别获取和释放`map_changing_lock`的写锁（`down_write`/`up_write`）。
+2. 在执行userfaultfd操作（如copy、zeropage、writeprotect、continue、poison）时，在读取`mmap_changing`计数器前后分别获取和释放`map_changing_lock`的读锁（`down_read`/`up_read`）。
+通过读写信号量机制，确保在非协作事件修改内存布局期间，userfaultfd操作会被阻塞，从而消除了竞态条件，也为后续将fill/move ioctls中的`mmap_lock`替换为per-vma锁做准备。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/06266e814867f734effdfbf4f92094a0a72f3c63

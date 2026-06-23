@@ -1,0 +1,20 @@
+#标题
+iommu/vt-d: debugfs 修复 legacy 模式页表转储逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 debugfs 对 IOMMU 进行页表转储（dump）时，若设备处于 legacy 模式且 Translation Type (TT) 不支持多级页表转换，内核代码未对 TT 类型进行有效判断，仍尝试计算并解析页表指针（pgd）。这可能导致读取到无效的内存地址，引发内核崩溃或转储输出错误的地址转换信息。
+
+#主要错误日志
+未知
+
+#问题根因
+在 legacy 模式下，原代码直接从上下文条目的低位中提取页表指针，未根据 Intel VT-d 规范检查 Translation Type (TT) 字段。实际上，仅当 TT 类型为 CONTEXT_TT_MULTI_LEVEL 或 CONTEXT_TT_DEV_IOTLB 时，页表指针才有效；对于其他 TT 类型，不应进行后续的页表遍历操作。
+
+#解决方案
+修改 `drivers/iommu/intel/debugfs.c` 中的 `domain_translation_struct_show` 函数。在 legacy 模式分支中增加对 Translation Type (TT) 字段的提取与判断逻辑。仅当 TT 为 CONTEXT_TT_MULTI_LEVEL 或 CONTEXT_TT_DEV_IOTLB 时执行页表解析，对于其他 TT 类型直接跳转至解锁流程，避免处理无效地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e955a4bb6b17ab0d6730cd96f1b7627c02747f7a

@@ -1,0 +1,24 @@
+#标题
+afs: 服务器列表构建时引用计数处理不当导致内存释放延迟与链表破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在分配和构建 afs_server_list 结构对象时，若服务器在 VLDB 记录中存在多个条目（重复指针），丢弃重复指针时未正确减少活跃用户计数。这会导致服务器记录无法被正确清理，可能引发以下现象：
+1. 在 `/proc/net/afs/servers` 中偶尔观察到已死亡（dead）的服务器记录。
+2. 内核检测到链表破坏，触发 list_del 相关的错误报告。
+
+#主要错误日志
+list_del corruption. prev->next should be ffff888102423e40, but was 0000000000000000. (prev=ffff88810140cd38)
+
+#问题根因
+在构建 afs_server_list 时，代码会查找每个服务器地址以获取服务器记录。当某个服务器在记录中有多个条目时，代码会丢弃重复的指针。
+问题在于：丢弃重复指针时，代码仅调用了 `afs_put_server`（仅减少引用计数 refcount，用于保持内存存在），而未调用 `afs_unuse_server`（减少活跃用户计数 active-user count，决定对象生命周期）。
+由于查找操作获取了活跃用户计数，未能减少该计数会导致服务器记录无法被清理，进而可能导致看到已删除的 afs_cell 对象或引发链表破坏。
+
+#解决方案
+修改 `fs/afs/server_list.c` 文件中的逻辑，在处理重复服务器指针时，将错误的 `afs_put_server` 调用替换为 `afs_unuse_server`，以确保正确减少活跃用户计数，允许资源被正常释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e4f0ec19eef731dd084159fed45ad9eadcd866cf

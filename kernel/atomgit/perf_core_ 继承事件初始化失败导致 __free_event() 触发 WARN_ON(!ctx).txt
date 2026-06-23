@@ -1,0 +1,20 @@
+#标题
+perf/core: 继承事件初始化失败导致 __free_event() 触发 WARN_ON(!ctx)
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 perf 事件继承过程中，若 `find_get_pmu_context` 初始化失败并调用 `free_event` 释放子事件时，由于此时 `child_event->ctx` 尚未赋值（为 NULL），会触发 `__free_event()` 中的 `WARN_ON(!ctx)` 告警。
+
+#主要错误日志
+WARN_ON(!ctx)
+
+#问题根因
+在 `inherit_event` 函数中，`child_event->ctx` 的赋值操作被置于 `find_get_pmu_context` 调用之后。当 `find_get_pmu_context` 失败并返回错误指针时，代码路径跳转至 `free_event`，此时 `child_event->ctx` 仍为空指针，导致后续释放流程中触发上下文为空的告警。即子事件的 ctx 成员在错误处理路径中被访问时未被正确初始化。
+
+#解决方案
+将 `get_ctx(child_ctx)` 和 `child_event->ctx = child_ctx` 的赋值操作提前至 `find_get_pmu_context` 调用之前。这确保了在进入可能失败的 PMU 上下文初始化流程前，子事件已经持有了有效的上下文引用，从而避免了错误处理路径中的空指针告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e69c6375f883badcc9ec4c9e9ed85660ac3fb1bf

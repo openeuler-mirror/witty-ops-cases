@@ -1,0 +1,20 @@
+#标题
+tracing: 事件名称长度校验未考虑字符串终止符导致潜在越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置内核跟踪事件时，若输入的事件名称长度恰好等于 MAX_EVENT_NAME_LEN（例如 64 个字符），校验逻辑未能正确识别出长度溢出，可能导致内核在拷贝或处理该字符串时发生越界访问，破坏内核内存数据或引发不可预知的异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `traceprobe_parse_event_name` 函数中，校验事件名称长度的判断条件为 `len > MAX_EVENT_NAME_LEN`。该逻辑忽略了字符串末尾的 NULL 终止符（'\0'）也需要占用一个字节的空间。当输入长度等于 MAX_EVENT_NAME_LEN 时，加上终止符后的总长度将超出预定义的数组或缓冲区边界，但原代码会错误地判定为合法，从而遗漏了对该类边界情况的拦截。
+
+#解决方案
+修改 `kernel/trace/trace_probe.c` 文件中的长度校验条件，将 `len > MAX_EVENT_NAME_LEN` 修正为 `len >= MAX_EVENT_NAME_LEN`。此举确保了当事件名称长度达到上限时，判定为过长并返回错误，从而预留出足够的空间存储 NULL 终止符，防止缓冲区越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3adce5ad864bdd8a4d48dae9e0f199f1406033da

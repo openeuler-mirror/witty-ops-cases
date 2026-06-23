@@ -1,0 +1,20 @@
+#标题
+LoongArch内核kexec重启时objtool警告函数穿越问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在LoongArch架构上编译内核时，objtool校验工具报错，提示 `machine_kexec.o` 中的 `kexec_reboot()` 函数代码流发生异常跳转，直接穿透（falls through）到了下一个函数 `crash_shutdown_secondary()`。这可能导致编译警告或在特定条件下产生非预期的代码执行行为。
+
+#主要错误日志
+kexec_reboot() falls through to next function crash_shutdown_secondary()
+
+#问题根因
+在 `kexec_reboot()` 函数中使用了 `unreachable()` 编译器内建函数。在没有启用UBSAN（未定义行为检测）的情况下，编译器可能会生成穿透到下一个函数的代码，而不是真正的停止或陷阱，导致函数逻辑流异常穿透。
+
+#解决方案
+将 `kexec_reboot()` 函数中的 `unreachable()` 调用替换为 `BUG()` 宏。这样可以在该位置生成一个确定的 "break BRK_BUG" 陷阱指令，并保留 unreachable 注解提示编译器优化，从而防止代码流穿透到后续函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cbc7833d438a5b6e5e5d61b7250c6c402f0aeb9a

@@ -1,0 +1,21 @@
+#标题
+inv_icm42600 温度传感器计算值错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+IIO子系统 inv_icm42600 IMU 传感器的温度读数计算不准确。根据 IIO 文档规范，offset 应在 scale 缩放之前应用到 raw 值，但当前驱动在计算温度时，未将 offset 除以 scale 进行预修正，导致最终换算出的温度值（Tm°C）偏离实际物理值。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动的温度计算公式实现不符合 IIO 核心定义。根据文档 "offset to be added to <type>[Y]_raw prior to scaling by <type>[Y]_scale"，计算顺序应为 `(raw + offset) * scale`。
+原代码直接使用物理公式的 offset 值 25000，但内核 IIO 核心处理流程是先加 offset 再乘 scale。正确的 offset 应为 `25000 / 7.548309 ≈ 3312`。由于未将 offset 值除以 scale 进行归一化处理，导致应用层读取的温度数据计算错误。
+
+#解决方案
+修改 `inv_icm42600_temp_read_raw` 函数中 `IIO_CHAN_INFO_OFFSET` 的返回值。将 offset 从 25000 修正为 3312，以确保在 IIO 核心计算流程 `(raw + offset) * scale` 中能得到正确的温度结果。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fab299e86653434bbc0f83e6fd729220cc3ef8f6

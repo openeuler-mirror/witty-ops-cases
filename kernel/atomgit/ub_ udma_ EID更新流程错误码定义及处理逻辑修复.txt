@@ -1,0 +1,25 @@
+#标题
+ub: udma: EID更新流程错误码定义及处理逻辑修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UDMA 设备状态非正常（非 UDMA_NORMAL）的情况下，驱动在处理 EID 更新请求时使用了未定义或错误的错误码，且错误日志信息描述不准确。这可能导致上层应用或调用方无法正确识别设备不存在或未就绪的具体原因，进而引发后续处理流程异常。
+
+#主要错误日志
+- dev_err(udma_dev->dev, "udma dev does not exist!\n");
+
+#问题根因
+1. 错误码定义位置不当：宏 `EDRVNOEXIST` 原定义在函数 `udma_ctrlq_eid_update` 内部，导致其作用域受限，无法被其他相关流程（如 `udma_ctrlq_notify_mue_eid_guid`）复用，且属于非标准定义方式。
+2. 错误码值错误：在 `udma_ctrlq_notify_mue_eid_guid` 函数中，当设备状态异常时，错误地返回了 `0`（成功），掩盖了实际错误。
+3. 日志描述不准确：原日志 "udma dev is not ready!" 无法准确反映设备不存在或驱动未就绪的状态。
+
+#解决方案
+1. 将错误码宏定义移至头文件 `udma_eq.h` 中，重命名为 `EDRVNO` 并赋值为 255，扩大其作用域以便全局使用。
+2. 修正 `udma_ctrlq_eid_update` 函数中的错误返回值，使用标准化的 `EDRVNO` 替代原有的局部宏。
+3. 修正 `udma_ctrlq_notify_mue_eid_guid` 函数中的返回逻辑，当设备状态异常时返回 `-EDRVNO` 而非 `0`，确保错误正确上报。
+4. 更新错误日志信息为 "udma dev does not exist!"，使其更准确地描述当前状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d32c96906d05fdaa03e88724d892b71b2d2c7daf

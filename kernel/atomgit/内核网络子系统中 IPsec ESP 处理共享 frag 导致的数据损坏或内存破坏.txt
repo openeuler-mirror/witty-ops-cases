@@ -1,0 +1,21 @@
+#标题
+内核网络子系统中 IPsec ESP 处理共享 frag 导致的数据损坏或内存破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 IPsec ESP（Encapsulating Security Payload）报文时，若 skb（socket buffer）包含共享片段，内核可能错误地处理数据，导致数据损坏、内存破坏或系统异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在网络发送路径（`__ip_append_data` / `__ip6_append_data`）中，当分配新的 skb 片段时，若未设置 `MSG_NO_SHARED_FRAGS` 标志，内核会标记该片段为共享。然而，在 ESP 输入处理路径（`esp_input` / `esp6_input`）中，代码仅检查了 `skb_has_frag_list`，未检查 `skb_has_shared_frag`。这导致内核对含有共享片段的 skb 进行了不当处理，破坏了内存管理假设。
+
+#解决方案
+1. 在 `net/ipv4/ip_output.c` 和 `net/ipv6/ip6_output.c` 的 `__ip_append_data` 和 `__ip6_append_data` 函数中，当拷贝数据并分配新片段时，若未设置 `MSG_NO_SHARED_FRAGS` 标志，则设置 `SKBFL_SHARED_FRAG` 标志以正确标记共享属性。
+2. 在 `net/ipv4/esp4.c` 和 `net/ipv6/esp6.c` 的 `esp_input` 和 `esp6_input` 函数中，增加对 `skb_has_shared_frag` 的检查，避免对含有共享片段的 skb 进行错误处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/34728ebdc9b1f6202ff9a500d8c905374579794a

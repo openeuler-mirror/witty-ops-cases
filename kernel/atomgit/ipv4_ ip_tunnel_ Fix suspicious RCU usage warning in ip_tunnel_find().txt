@@ -1,0 +1,51 @@
+#标题
+ipv4: ip_tunnel: Fix suspicious RCU usage warning in ip_tunnel_find()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 ip tunnel 新建链路（ip tunnel newlink）等控制路径操作时，内核触发 `suspicious RCU usage` 警告并打印调用栈。系统提示 `RCU-list traversed in non-reader section`，尽管此时 `rtnl_mutex` 锁已被持有，但 RCU 遍历接口未感知到锁的保护，导致锁检查工具（Lockdep）误报。
+
+#主要错误日志
+WARNING: suspicious RCU usage
+6.12.0-rc3-custom-gd95d9a31aceb #139 Not tainted
+-----------------------------
+net/ipv4/ip_tunnel.c:221 RCU-list traversed in non-reader section!!
+
+other info that might help us debug this:
+
+rcu_scheduler_active = 2, debug_locks = 1
+1 lock held by ip/362:
+ #0: ffffffff86fc7cb0 (rtnl_mutex){+.+.}-{3:3}, at: rtnetlink_rcv_msg+0x377/0xf60
+
+stack backtrace:
+CPU: 12 UID: 0 PID: 362 Comm: ip Not tainted 6.12.0-rc3-custom-gd95d9a31aceb #139
+Hardware name: Bochs Bochs, BIOS Bochs 01/01/2011
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0xba/0x110
+ lockdep_rcu_suspicious.cold+0x4f/0xd6
+ ip_tunnel_find+0x435/0x4d0
+ ip_tunnel_newlink+0x517/0x7a0
+ ipgre_newlink+0x14c/0x170
+ __rtnl_newlink+0x1173/0x19c0
+ rtnl_newlink+0x6c/0xa0
+ rtnetlink_rcv_msg+0x3cc/0xf60
+ netlink_rcv_skb+0x171/0x450
+ netlink_unicast+0x539/0x7f0
+ netlink_sendmsg+0x8c1/0xd80
+ ____sys_sendmsg+0x8f9/0xc20
+ ___sys_sendmsg+0x197/0x1e0
+ __sys_sendmsg+0x122/0x1f0
+ do_syscall_64+0xbb/0x1d0
+ entry_SYSCALL_64_after_hwframe+0x77/0x7f
+
+#问题根因
+`ip_tunnel_find()` 函数使用 `hlist_for_each_entry_rcu()` 遍历 per-netns 的 IP tunnel 哈希表。该哈希表实际上受 RTNL mutex 保护，且该函数仅在控制路径中被调用（此时 RTNL mutex 已被持有）。然而，代码在调用 RCU 遍历宏时未传递锁的持有状态检查条件（lockdep expression），导致 RCU 锁调试机制误认为在非 Reader section（非 RCU 读侧临界区）进行了 RCU 列表遍历，从而触发警告。
+
+#解决方案
+在 `ip_tunnel_find()` 函数的 `hlist_for_each_entry_rcu()` 宏调用中增加 `lockdep_rtnl_is_held()` 参数。该参数告知 RCU 子系统和 Lockdep：当前遍历受 RTNL mutex 保护，且锁已被持有。修改后既验证了锁的持有状态，又消除了误报的警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1dd32348dd785fdca37a76834197c40e56f93787

@@ -1,0 +1,20 @@
+#标题
+tg3 驱动查询速度/双工模式时存在竞态条件导致状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当驱动通过 netif_carrier_on() 信号通知链路启动时，由于内部 link_up 状态未立即更新，导致用户查询到的链路状态不一致。具体表现为：查看 /proc/net/bonding/bondX 文件时，速度和双工模式显示为 unknown（未知），而此时使用 ethtool 工具查询却能显示正确的数值。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在调用 netif_carrier_on() 标记载波启动时，其内部的 `tp->link_up` 状态变量并非原子性地立即更新，这导致在 `tg3_get_link_ksettings` 函数中检查 `tp->link_up` 时存在竞态窗口。在该窗口期内，链路实际上已通，但驱动内部状态判定仍为未通，从而返回了错误的速度和双工配置。
+
+#解决方案
+修改 `tg3_get_link_ksettings` 函数中的链路状态判断逻辑，将直接检查驱动内部状态变量 `tp->link_up` 改为检查网络设备载波状态接口 `netif_carrier_ok(dev)`。该接口能准确反映当前的链路载波状态，避免了驱动内部状态更新延迟导致的不一致问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9aa62967adffb0392fdd346bcb9ffb8b1e95324d

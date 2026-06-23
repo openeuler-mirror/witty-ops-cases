@@ -1,0 +1,49 @@
+#标题
+SMC 连接 LGR/link 引用计数 UAF 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核运行过程中触发引用计数错误警告，报错信息显示 "addition on 0; use-after-free" 或 "underflow; use-after-free"。故障现场通常位于 `smc_lgr_terminate_work` 或 `smc_listen_work` 工作队列处理流程中，表明 SMC（Shared Memory Communications）的 LGR（Link Group）或 link 资源被提前释放或重复释放。
+
+#主要错误日志
+错误场景 1：
+```
+refcount_t: addition on 0; use-after-free.
+WARNING: CPU: 14 PID: 107447 at lib/refcount.c:25 refcount_warn_saturate+0x9c/0x140
+Workqueue: events smc_lgr_terminate_work [smc]
+Call trace:
+ refcount_warn_saturate+0x9c/0x140
+ __smc_lgr_terminate.part.45+0x2a8/0x370 [smc]
+ smc_lgr_terminate_work+0x28/0x30 [smc]
+ process_one_work+0x1b8/0x420
+ worker_thread+0x158/0x510
+ kthread+0x114/0x118
+```
+
+错误场景 2：
+```
+refcount_t: underflow; use-after-free.
+WARNING: CPU: 6 PID: 93140 at lib/refcount.c:28 refcount_warn_saturate+0xf0/0x140
+Workqueue: smc_hs_wq smc_listen_work [smc]
+Call trace:
+ refcount_warn_saturate+0xf0/0x140
+ smcr_link_put+0x1cc/0x1d8 [smc]
+ smc_conn_free+0x110/0x1b0 [smc]
+ smc_conn_abort+0x50/0x60 [smc]
+ smc_listen_find_device+0x75c/0x790 [smc]
+ smc_listen_work+0x368/0x8a0 [smc]
+ process_one_work+0x1b8/0x420
+ worker_thread+0x158/0x510
+ kthread+0x114/0x118
+```
+
+#问题根因
+由于 `smc_conn_free()` 被重复调用，导致 LGR/link 的引用计数（refcnt）被重复释放。具体原因为服务端监听路径（`smc_listen_work`）中的部分操作（如 `smc_conn_abort` -> `smc_conn_free`）未持有 sock lock 锁保护，导致其与其它已受 sock lock 保护的连接操作并发执行，引发了竞态条件，最终导致引用计数错误。
+
+#解决方案
+在 `smc_listen_work()` 处理流程开始处增加 `lock_sock()` 锁保护，并在后续处理函数 `smc_listen_out()` 中对应释放锁。这确保了监听处理路径与其他连接操作之间的互斥性，避免了 `smc_conn_free()` 的重复调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/08db73fbc65352531f8924ee4df827e731d7bd84

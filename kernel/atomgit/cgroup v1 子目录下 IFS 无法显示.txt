@@ -1,0 +1,20 @@
+#标题
+cgroup v1 子目录下 IFS 无法显示
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 cgroup v1 的环境中，IFS（Interference）功能无法在子目录（sub-cgroup）下正常显示，导致用户无法在 cgroup v1 层级结构中查看或使用相关功能。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `task_ifs` 函数中，获取任务所属 cgroup 的 IFS 指针逻辑有误。原代码逻辑直接调用了 `task_dfl_cgroup(task)` 获取默认 cgroup，而在 cgroup v1 环境下，任务的默认 cgroup 可能与其所属的 cpuacct 子系统 cgroup 不一致。由于 IFS 功能依赖于 cpuacct 子系统（CONFIG_CGROUP_CPUACCT），若不针对 cgroup v1 特殊处理去获取 cpuacct 子系统的 cgroup，会导致无法正确找到并返回 IFS 对象，从而表现为 IFS 无法显示。
+
+#解决方案
+修改 `task_ifs` 函数，增加对 cgroup v1 的判断逻辑。如果检测到系统运行在 cgroup v1 模式（通过 `!cgroup_subsys_on_dfl(cpuacct_cgrp_subsys)` 判断），则通过 `task_cgroup(task, cpuacct_cgrp_id)` 获取正确的 cpuacct 子系统 cgroup，并据此返回 IFS 指针；否则维持原有逻辑，返回默认 cgroup 的 IFS 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd27647cf6d981b2aaeb90ee202a3ca6ef98e48e

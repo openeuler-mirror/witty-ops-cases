@@ -1,0 +1,25 @@
+#标题
+urma: 首次建立连接时 tjetty 创建异常导致通信失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在首次创建连接的过程中，目标端 tjetty 资源获取失败，导致连接建立流程中断，返回 repost response 失败错误。具体表现为：在连接请求处理阶段，系统尝试获取或创建目标 hash node 失败，连接无法正常建立。
+
+#主要错误日志
+- "try to repost response failed, msn = %llu, seid..."
+- "Invalid eid ..." (ubcore_log_err_rl)
+- "cast eid to ubcm failed." (ubcore_log_err_rl)
+- "Failed to get primary eid array, ret: %d." (ubcore_log_err_rl)
+
+#问题根因
+在 `ubmad_try_repost_all_response` 函数中，当首次建立连接时，`ubmad_get_tjetty` 获取 tjetty 失败（返回 NULL 或错误指针）。原代码逻辑未处理此异常情况，直接返回 -1 导致流程终止，未能像修复后的代码那样尝试调用 `ubmad_import_jetty` 导入 jetty 资源。此外，原逻辑中 `ubmad_get_tgt_hash_node` 与 `ubmad_create_tgt_hash_node` 分离，在并发或首次创建场景下存在竞态或逻辑漏洞，导致 hash node 创建或查找异常。
+
+#解决方案
+1. 修改 `ubmad_try_repost_all_response` 函数逻辑，当 `ubmad_get_tjetty` 获取失败时，增加调用 `ubmad_import_jetty` 尝试导入 jetty 资源的处理逻辑。
+2. 重构目标 hash node 的管理机制，将原有的 `ubmad_create_tgt_hash_node` 删除，新增 `ubmad_find_and_create_tgt_hash_node` 函数。该函数在持有锁的情况下，先查找是否存在对应的 hash node，若不存在则创建，保证了查找与创建的原子性，修复了首次连接创建时的异常问题。
+3. 将部分高频调用的 `ubcore_log_err`/`ubcore_log_info` 替换为 `_rl` 后缀的限速日志接口（如 `ubcore_log_err_rl`），防止在高并发异常场景下日志打印过于频繁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/16fa5655315e0e03792b9ef490ac2af4c4b784a5

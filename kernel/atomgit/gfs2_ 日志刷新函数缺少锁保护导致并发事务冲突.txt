@@ -1,0 +1,23 @@
+#标题
+gfs2: 日志刷新函数缺少锁保护导致并发事务冲突
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 GFS2 文件系统中，内核线程 `gfs2_logd` 在调用日志刷新函数（`gfs2_ail1_start`, `gfs2_ail1_wait`, `gfs2_ail1_empty`）时未持有 `sd_log_flush_lock` 锁。这导致这些函数在执行过程中缺乏与并发事务的互斥保护，可能引发内核 panic、数据损坏或文件系统不一致等严重故障。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `gfs2_logd()` 直接调用了 `gfs2_ail1_start()`、`gfs2_ail1_wait()` 和 `gfs2_ail1_empty()` 等日志刷新函数，但未获取 `sdp->sd_log_flush_lock` 锁。根据代码逻辑，这些函数需要排斥并发事务，缺少锁保护会导致并发访问冲突。
+
+#解决方案
+重构锁机制以修复并发问题：
+1. 将原有的 `gfs2_log_flush` 函数重构为非锁定版本 `__gfs2_log_flush`（移除内部的 `down_write` 和 `up_write` 操作）。
+2. 新建封装函数 `gfs2_log_flush`，在其中获取 `sd_log_flush_lock` 锁后调用 `__gfs2_log_flush`，保持原有外部接口行为不变。
+3. 在 `gfs2_logd` 线程中，在调用 `gfs2_ail1_*` 系列函数和 `__gfs2_log_flush` 之前显式获取 `sd_log_flush_lock` 锁，确保整个日志刷新过程在锁的保护下进行，防止并发事务干扰。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/175b8241bcac8a14efe8f86b4a28d66dc5bc0adc

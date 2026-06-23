@@ -1,0 +1,20 @@
+#标题
+cgroup: 任务迁移与迭代竞态导致迭代跳过任务
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发进行任务迁移和 cgroup 任务迭代（如读取 `cgroup.procs`）时，迭代操作可能跳过部分任务，导致读取结果不完整。例如，cgroup 中存在 PID 101、102、103 三个任务，若在读期间迁移 PID 102，读取结果可能仅显示 PID 101 而跳过 PID 103。该问题复现概率较低，但在人为注入延迟放大竞态窗口后可稳定复现。
+
+#主要错误日志
+未知
+
+#问题根因
+当任务从 `css_set` 迁移出时，`cgroup_migrate_add_task()` 会先调用 `list_move_tail` 将任务从 `cset->tasks` 移至 `cset->mg_tasks`。若此时 `css_task_iter` 正好指向该任务，虽然会调用 `css_task_iter_skip()` 来保持迭代器有效，但由于任务已被移至 `mg_tasks` 链表，迭代器实际上是在 `mg_tasks` 链表上前进，而非原本的 `tasks` 链表。这导致原 `cset->tasks` 链表中剩余的任务以及 `mg_tasks` 中的任务被错误跳过。
+
+#解决方案
+在 `cgroup_migrate_add_task()` 函数中，于将任务从 `cset->tasks` 链表移除（unlink）之前，先调用 `css_set_skip_task_iters()`。这使得所有活跃的迭代器提前前进到 `cset->tasks` 链表的下一个任务，确保即使任务正被并发迁移，迭代仍能正确继续，从而修复竞态问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/25773dfe18476f0f2bf5bc76477b769560caddaa

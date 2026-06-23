@@ -1,0 +1,21 @@
+#标题
+rxrpc: recvmsg() 无条件重排队列导致 UAF 或引用计数下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用 `rxrpc_recvmsg()` 时，若指定了 `MSG_DONTWAIT` 且接收队列头部的 call 对象互斥锁已被锁定，函数会失败并尝试重新排队该 call。若此时同时指定了 `MSG_PEEK` 或 I/O 线程已将其重新排队， unconditional requeue（无条件重入队）操作将导致 recvmsg 队列损坏。此损坏可进一步引发 Use-After-Free (UAF) 或引用计数下溢。
+
+#主要错误日志
+未知
+
+#问题根因
+`rxrpc_recvmsg()` 在因锁竞争失败需要重新排队 call 对象时，未检查该 call 是否已经处于 recvmsg 队列中，直接执行了 `list_add` 操作。如果 call 已经在队列中（例如因为 `MSG_PEEK` 标志未将其移除，或 I/O 线程已重新排队），这种无条件重入队会破坏链表结构，导致严重的内存管理错误。此外，`MSG_PEEK` 模式下不应触发 `rxrpc_notify_socket()` 的逻辑也存在缺陷。
+
+#解决方案
+1. 在重新排队逻辑中增加队列状态检查：如果 call 尚未在队列中，则将其添加；如果已在队列头部，则直接释放引用；如果已在队列中但非头部，则将其移动到队列头部。
+2. 修复 `MSG_PEEK` 标志处理逻辑，避免在未消耗完数据的情况下错误调用 `rxrpc_notify_socket(call)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/59fd4395926c4839d46ce3fac1d1ee859ece09b7

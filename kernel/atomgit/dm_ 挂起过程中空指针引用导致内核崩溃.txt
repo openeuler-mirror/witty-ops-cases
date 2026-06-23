@@ -1,0 +1,22 @@
+#标题
+dm: 挂起过程中空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行设备映射器的挂起操作时，如果 `dm_suspend` 流程在特定条件下（如 `map` 为 NULL）继续执行，会触发 NULL 指针引用错误，导致内核 panic 或 oops。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference
+
+#问题根因
+在 `__dm_suspend` 函数中，代码逻辑未对 `map` 指针进行有效性检查。当 `map` 为 NULL 时，代码依然尝试调用 `dm_request_based(map)` 宏（该宏会访问 `map` 的成员）以及 `dm_wait_for_completion` 函数，从而导致空指针解引用。此外，变量 `r` 在未初始化的情况下可能被使用，增加了不可预期行为的风险。
+
+#解决方案
+1. 在调用 `dm_request_based` 前增加 `map` 指针的非空检查。
+2. 在调用 `dm_wait_for_completion` 前增加 `map` 指针的非空检查。
+3. 初始化局部变量 `r` 为 0，防止在特定跳转路径下使用未初始化的值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7c88d562698a40eccc8bd4769ee85c3902a73435

@@ -1,0 +1,20 @@
+#标题
+hwmon: (tmp513) Fix Current Register value interpretation
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动读取并处理 Current Register（电流寄存器）的值后，返回的结果不符合 TMP512/TMP513 规范。具体表现为：寄存器值的符号位索引计算存在差一错误，导致结果不正确；对于负值，由于缺少正确的符号扩展，会被错误地报告为较大的正值。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 TMP512/TMP513 数据手册，Current Register (07h) 是一个 16 位二进制补码整数值。驱动程序在将原始寄存器值转换为有符号整数值时，调用 `sign_extend32` 函数指定的符号位索引为 16，而实际上应为 15（即 off-by-one 错误）。此外，由于 `data->curr_lsb_ua` 是 `u32` 类型，转换后的有符号值与其相乘时，若原值为负，会因为类型提升问题导致计算结果错误（被误报为大的正值）。
+
+#解决方案
+修正 `sign_extend32` 函数调用中的符号位索引参数，从 16 改为 15，以修正 off-by-one 错误；同时将 `data->curr_lsb_ua` 强制转换为 `long` 类型，确保负值运算时的正确符号扩展。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/842db312502e8dedbbcaa21746f048a565021276

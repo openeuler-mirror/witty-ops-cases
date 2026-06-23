@@ -1,0 +1,24 @@
+#标题
+mmc: sdhci-msm 未能正确设置 regulator 负载导致 eMMC/SD 初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm 平台上，如果 regulator 处于 LPM（Low Power Mode）状态，且 sdhci-msm 驱动未设置正确的负载电流，会导致 eMMC 和 SD 设备无法正常初始化。
+
+#主要错误日志
+未知
+
+#问题根因
+Qualcomm regulator 支持两种供电模式：HPM 和 LPM。当前 sdhci-msm.c 驱动没有设置负载来调整 eMMC 和 SD 的电流。如果 regulator 在 LPM 状态下没有设置正确的负载，将导致无法提供足够的电流，从而导致设备初始化失败。
+
+#解决方案
+在驱动中分别为 eMMC 和 SD 的 Vdd 以及 Vdd-io 供电设置正确的电流负载值。
+具体修改如下：
+1. 定义 eMMC 和 SD 的最大负载电流宏（MMC_VMMC_MAX_LOAD_UA、SD_VMMC_MAX_LOAD_UA、SD_VQMMC_MAX_LOAD_UA）。
+2. 新增 `msm_config_vmmc_regulator` 和 `msm_config_vqmmc_regulator` 函数，根据设备类型（eMMC 或 SD）和电源模式（HPM 或 LPM）计算并设置对应的负载电流。
+3. 在 `sdhci_msm_set_vmmc` 和 `msm_toggle_vqmmc` 函数中调用新增的配置函数，确保在电源状态切换时 regulator 处于正确的负载配置，保证设备在 LPM 状态下也能正常工作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b410208af810a789eccf7f2d5bb83ec2c0c9eb00

@@ -1,0 +1,22 @@
+#标题
+scmtcp: 修复 sendmsg 发送自身 socket 导致无法释放的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 scmtcp 协议的 socket 通过 `sendmsg` 系统调用发送文件描述符时，如果发送的目标文件描述符恰好是该 socket 自身，会导致该 socket 的引用计数无法正确释放，从而引发 socket 对象泄露，进程无法正常关闭连接，相关内核资源无法回收。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **并发安全问题**：原代码中 `scmtcp_sock` 结构体内的 `flist_seq` 成员类型为 `u32`，在多核并发环境下，对其执行 `++` 自增操作不是原子的，可能导致序列号分配冲突。
+2. **逻辑缺陷**：在 `scmtcp_sk_sendmsg` 处理流程中，缺少对发送文件列表中是否包含自身 socket 的检查。当用户态传入自身 socket 的文件描述符进行发送时，内核代码路径未进行拦截，直接增加了自身 socket 的引用计数，导致后续释放逻辑无法匹配，造成引用计数泄漏。
+
+#解决方案
+1. **数据类型原子化**：将 `struct scmtcp_sock` 中的 `flist_seq` 类型由 `u32` 修改为 `atomic_t`，并将相关的自增与初始化操作分别改为 `atomic_fetch_inc` 和 `atomic_set`，消除并发安全隐患。
+2. **增加自引用检查**：新增 `file_list_has_self` 函数，用于遍历检查待发送的文件列表中是否包含当前 socket。在 `scmtcp_sk_sendmsg` 函数中增加判断逻辑，如果检测到发送列表中包含自身 socket，则直接释放文件列表并返回 `-EINVAL`，阻止非法操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5207118f547948200fe033dbbcf96bc8f1eafec8

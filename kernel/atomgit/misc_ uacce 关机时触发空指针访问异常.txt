@@ -1,0 +1,24 @@
+#标题
+misc: uacce 关机时触发空指针访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统关机（poweroff）过程中，内核发生空指针访问异常。该问题发生在 uacce 设备驱动模块处理队列停止与释放逻辑时，由于队列状态判断逻辑缺失，导致在无效状态下错误调用底层驱动回调函数。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `uacce_stop_queue` 函数中，原逻辑仅检查了 `uacce->ops->stop_queue` 是否存在，但未对队列状态进行严格校验。当队列状态不为 `UACCE_Q_STARTED` 时，代码仍可能继续执行后续流程。
+此外，状态流转设计存在缺陷，`uacce_stop_queue` 直接将状态置为 `UACCE_Q_ZOMBIE`，而在 `uacce_put_queue` 中未检查状态即调用 `put_queue` 回调。这导致在关机流程中，当队列处于非预期状态（如已停止或未启动）时，错误的函数调用路径引发了空指针访问。
+
+#解决方案
+1. 在 `uacce_stop_queue` 函数入口处增加状态判断，若队列状态不为 `UACCE_Q_STARTED` 则直接返回，避免无效操作。
+2. 调整队列状态机流转逻辑：`uacce_stop_queue` 将状态从 `UACCE_Q_STARTED` 修改为 `UACCE_Q_INIT`，而不是直接置为 `UACCE_Q_ZOMBIE`。
+3. 在 `uacce_put_queue` 函数中增加状态判断，仅当队列状态为 `UACCE_Q_INIT` 时才调用 `put_queue` 回调并进行资源释放，最终再将状态置为 `UACCE_Q_ZOMBIE`。
+通过上述修复，确保了队列操作的严格顺序性，防止在非法状态下调用驱动回调函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c318a78da81b16bbacfcc5fd51e5cdb99c12a5d2

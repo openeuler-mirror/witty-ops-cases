@@ -1,0 +1,27 @@
+#标题
+bpf,perf: Fix invalid prog_array access in perf_event_detach_bpf_prog
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定 BPF 与 Perf 事件关联的场景下，当进程及其子进程退出释放资源时，内核发生崩溃。
+具体的复现场景如下：
+1. 创建一个 tracepoint perf event，设置 attr.inherit=1，将其附加到进程并绑定 BPF 程序。
+2. 附加的进程执行 fork 操作，子进程创建继承的事件，该子事件共享父事件的 BPF 程序及全局 tp_event（以及 prog_array）。
+3. 进程与子进程同时退出，释放两个事件。
+4. 第一次 perf_event_detach_bpf_prog 调用释放了 tp_event->prog_array。
+5. 第二次 perf_event_detach_bpf_prog 调用时，因 tp_event->prog_array 为 NULL 而触发崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 perf_event_detach_bpf_prog 函数中，当处理继承的 perf 事件分离时，prog_array 是在 tracepoint（tp_event）级别共享的。
+当父进程和子进程的事件先后释放时，第一次释放调用会释放 tp_event->prog_array。第二次释放调用进入同一函数时，未检查 prog_array 指针是否为空就直接尝试访问（如调用 bpf_prog_array_copy），导致访问空指针引发内核崩溃。
+
+#解决方案
+在 perf_event_detach_bpf_prog 函数中增加对 prog_array 指针的有效性检查。如果 bpf_event_rcu_dereference 获取到的 old_array 为空，则直接跳转到 put 标签处进行后续处理，避免对空指针进行解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/45d08c1dabcae862ec1278c78d8aed70e882fb91

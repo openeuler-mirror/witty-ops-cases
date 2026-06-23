@@ -1,0 +1,20 @@
+#标题
+cpufreq: intel_pstate 对象生命周期管理错误导致潜在崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在虚拟化环境中进行 CPU 设备热拔出操作时，理论上可能触发内核崩溃。该问题源于 `update_qos_request()` 函数中过早释放了 `policy` 对象的引用，随后代码又试图通过 QoS 请求对象间接访问该 `policy` 对象，导致访问已释放内存的风险。
+
+#主要错误日志
+pr_warn("Failed to update freq constraint: CPU%d\n", i);
+
+#问题根因
+在 `update_qos_request()` 函数中，调用 `cpufreq_cpu_put(policy)` 的时机过早。该函数在释放 `policy` 对象引用后，紧接着调用 `freq_qos_update_request()`，而后者会通过传入的 QoS 请求对象间接访问刚刚释放的 `policy` 对象。这种对象生命周期管理错误导致了 Use-After-Free 风险。
+
+#解决方案
+调整 `cpufreq_cpu_put(policy)` 的调用位置，将其移至 `freq_qos_update_request()` 调用之后，确保在不再需要访问 `policy` 对象时再释放引用。同时增加了对 `req` 为空情况的判断，若为空则立即释放引用并跳过后续操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4d6be99c4de16dbd9ccdb744c78210624d870d55

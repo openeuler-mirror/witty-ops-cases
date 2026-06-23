@@ -1,0 +1,20 @@
+#标题
+usb: gadget: f_subset: 修复 geth_free 中引用计数不平衡导致无法重配置属性的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB gadget 子系统中，使用 configfs 配置 f_subset 功能后，如果进行 unlink 操作再尝试重新配置属性，配置操作无法成功执行。系统未能正确清理资源，导致该功能实例无法被再次正常使用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `geth_alloc()` 函数中增加了引用计数（refcnt），但在对应的 `geth_free()` 函数中未能相应地减少引用计数。这种引用计数的不平衡导致资源未能正确释放，进而阻止了后续通过 configfs 对该功能属性的重新配置。
+
+#解决方案
+在 `geth_free()` 函数中添加引用计数减一的操作。具体修改为：通过 `container_of` 获取 `f_gether_opts` 结构体指针，并使用 `scoped_guard(mutex, &opts->lock)` 保护临界区，在其中执行 `opts->refcnt--`，以确保引用计数正确递减，实现资源的合理清理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/446a472287c491924526a5dce59dfa9d6ec04707

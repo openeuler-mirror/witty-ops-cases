@@ -1,0 +1,20 @@
+#标题
+mtd: rawnand: cadence: DMA unmap 使用了错误的设备句柄
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Cadence NAND 控制器驱动在进行 DMA 传输时，`dma_unmap_single` 函数错误地使用了 NAND 控制器设备（framework device）作为参数，而非物理/总线设备（DMA device）。这种设备句柄的不匹配会导致 DMA 映射管理错误，可能引发内核内存损坏、DMA 地址泄漏或数据传输异常。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码逻辑错误。`dma_map_single` 函数正确地使用了物理/总线设备（`dma_dev`）进行映射，但在后续的 `dma_unmap_single` 解除映射操作中，错误地使用了 NAND 控制器设备（`cdns_ctrl->dev`）。这违反了 DMA 映射 API 必须使用同一设备句柄进行 map/unmap 操作的原则。
+
+#解决方案
+修正 `cadence_nand_slave_dma_transfer` 函数中的 `dma_unmap_single` 调用参数。将原本错误的 `cdns_ctrl->dev` 替换为正确的 `dma_dev->dev`，确保 DMA 映射与解除映射使用相同的物理/总线设备句柄。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5ca8de781f75c28f60466ed1fca22e7a5b7acadc

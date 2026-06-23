@@ -1,0 +1,24 @@
+#标题
+drm/bridge: it6505: fix HDCP Bstatus check
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 HDCP（高带宽数字内容保护）功能激活时，DisplayPort 源端在接收到接收端发送的 CP_IRQ（内容保护中断请求）后，未能正确检查和处理 DPCD 中的 Bstatus 值。这导致在认证过程中或认证完成后，面对 R0_PRIME_READY、REAUTH_REQ 或 LINK_FAILURE 等状态位时，系统无法做出正确的响应（如触发 CPIRQ 或重新启动 HDCP 认证），可能导致 HDCP 握手失败、认证流程卡死或受保护内容无法正常显示。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `it6505_process_hpd_irq` 函数中，处理 DP_CP_IRQ 中断的逻辑存在缺陷：
+1. 原代码在读取 Bstatus 之前就盲目触发了 `HDCP_TRIGGER_CPIRQ`，未根据 Bstatus 的实际内容进行条件判断。
+2. 缺少对关键 Bstatus 位（如 `DP_BSTATUS_R0_PRIME_READY`、`DP_BSTATUS_REAUTH_REQ`、`DP_BSTATUS_LINK_FAILURE`）的检查逻辑，导致无法根据接收端的状态正确执行认证流程，例如在认证进行中（HDCP_AUTH_GOING）收到 R0 就绪信号时未触发相应操作，或在认证完成（HDCP_AUTH_DONE）后收到重认证或链路失败请求时未重启 HDCP。
+
+#解决方案
+修改 `it6505_process_hpd_irq` 函数，移除原有的无条件触发 CPIRQ 的代码，增加对 Bstatus 寄存器值的判断逻辑：
+1. 当 Bstatus 指示 R0_PRIME_READY 且当前处于认证进行中（HDCP_AUTH_GOING）时，才触发 HDCP_TRIGGER_CPIRQ。
+2. 当 Bstatus 指示需要重新认证（REAUTH_REQ）或链路失败（LINK_FAILURE）且当前处于认证完成（HDCP_AUTH_DONE）状态时，调用 `it6505_start_hdcp` 重新启动 HDCP 认证流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab675f96584089f29b09bf1e108a038e32f92108

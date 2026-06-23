@@ -1,0 +1,24 @@
+#标题
+ext4 umount 竞态导致 update_super_work 发生 use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 ext4 文件系统时，若与 `update_super_work` 工作队列发生竞态，内核会发生 Use-After-Free（UAF）故障。具体表现为在 umount 过程中，工作队列访问了已被释放的 `kernfs_node` 对象，可能导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+该问题由 Commit b98535d09179 引入。为了修复 `start_this_handle` 中的 bug_on 问题，该提交将 `ext4_unregister_sysfs()` 移到了刷新 `s_sb_upd_work` 之前。这导致了以下竞态条件：
+1. `ext4_put_super` 调用 `ext4_unregister_sysfs`，通过 `kobject_del` 释放了 sysfs 目录。
+2. 此时 `update_super_work` 正在运行，它调用 `ext4_notify_error_sysfs` -> `sysfs_notify`。
+3. `sysfs_notify` 尝试访问 `kobj->sd`（即 `kernfs_node`），但该指针已在步骤 1 中被置空或对应的内存已通过 RCU 释放。
+4. 导致 `kernfs_get(kn)` 访问了悬空指针，触发 Use-After-Free。
+
+#解决方案
+在 `ext4_sb_info` 结构体中新增互斥锁 `s_error_notify_mutex`，用于同步 `sysfs_notify` 与 `kobject_del` 的操作。在 `ext4_notify_error_sysfs` 函数中，持锁检查 `s_kobj.state_in_sysfs` 状态位：如果为真则调用 `sysfs_notify`，否则跳过调用。同时在 `ext4_register_sysfs` 和 `ext4_unregister_sysfs` 中对 kobject 的操作也加入该锁保护，防止 TOCTOU 竞态，确保在检查状态到实际使用 kobject 期间，该对象不会被并发删除。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/580e22b8d0af3d14a2bc982fb1fb50934e78fb0f

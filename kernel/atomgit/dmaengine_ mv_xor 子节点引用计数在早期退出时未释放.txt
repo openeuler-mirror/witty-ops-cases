@@ -1,0 +1,20 @@
+#标题
+dmaengine: mv_xor 子节点引用计数在早期退出时未释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mv_xor 驱动加载过程中，若设备树子节点解析中断号失败或通道添加返回错误，驱动程序直接跳转至错误处理流程，导致子节点 `of_node` 的引用计数泄漏，造成内核对象引用计数管理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动使用 `for_each_child_of_node()` 循环遍历设备树子节点，该宏会自动增加子节点的引用计数。代码中存在两个早期退出点（`goto err_channel_add`），在跳转出循环前未调用 `of_node_put()` 减少引用计数，导致引用计数泄漏。此问题自引入 Device Tree 绑定支持以来一直存在。
+
+#解决方案
+在 `mv_xor_probe` 函数的两个错误处理分支中，即在执行 `goto err_channel_add` 跳转之前，显式调用 `of_node_put(np)` 释放子节点引用，确保引用计数平衡。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b11a039258e0c5f1370e36172c0c5f32d16561a

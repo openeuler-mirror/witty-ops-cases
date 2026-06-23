@@ -1,0 +1,22 @@
+#标题
+dmaengine: idxd: 硬件不支持事件日志时触发 FLR 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当硬件不支持向事件日志报告错误时，若接收到引发功能级重置（FLR）的错误，驱动程序在恢复过程中会尝试访问未分配的事件日志结构体，导致系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+硬件不支持事件日志时，驱动程序不会分配 `idxd->evl` 结构体。但在执行 FLR 恢复流程调用 `idxd_device_config_restore()` 时，代码未检查 `idxd->evl` 是否为空，直接对其成员 `size` 进行赋值；同时 `idxd_device_evl_free()` 在释放时也未检查指针有效性，导致了空指针解引用引发的崩溃。
+
+#解决方案
+在访问或释放事件日志相关资源前增加指针有效性检查：
+1. 在 `idxd_device_config_restore()` 函数中，对 `idxd->evl` 进行非空判断，仅当其存在时才恢复 `evl->size`。
+2. 在 `idxd_device_evl_free()` 函数中，增加对 `evl` 指针的非空判断，若未分配则直接返回。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/19287c50d652a9d83cbfbb044f431f6810d45d47

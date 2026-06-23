@@ -1,0 +1,21 @@
+#标题
+sun3_82586驱动发送报文时存在内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当通过 sun3_82586 网络驱动发送数据包时，如果数据包长度超过驱动限制（XMIT_BUFF_SIZE），驱动程序会直接返回 NETDEV_TX_OK，但未释放对应的 skb（socket buffer）结构。这将导致内核内存泄漏，随着此类异常发送请求的累积，系统可用内存逐渐减少，极端情况下可能影响系统稳定性。
+
+#主要错误日志
+[驱动打印的告警日志，表明触发了该缺陷路径]
+%s: Sorry, max. framelength is %d bytes. The length of your frame is %d bytes.
+
+#问题根因
+在函数 `sun3_82586_send_packet()` 中，校验逻辑发现 `skb->len` 大于 `XMIT_BUFF_SIZE` 时，仅打印了错误信息并返回 `NETDEV_TX_OK`，遗漏了调用 `dev_kfree_skb(skb)` 释放内存，导致该 skb 无法被回收。
+
+#解决方案
+在报文长度校验失败的错误处理分支中，补充调用 `dev_kfree_skb(skb)` 函数，确保在丢弃超长报文的同时释放其占用的内存资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b217c8c9572375df16ae9ffb0193cc83f63db769

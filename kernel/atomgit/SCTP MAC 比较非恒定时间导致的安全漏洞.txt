@@ -1,0 +1,20 @@
+#标题
+SCTP MAC 比较非恒定时间导致的安全漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SCTP 协议栈在进行 Cookie 签名校验和认证数据校验时，使用了非恒定时间的比较函数。攻击者可利用此缺陷通过侧信道攻击（timing attack）逐字节推导出正确的 MAC 值，进而伪造 SCTP Cookie 或数据包绕过认证，造成未授权访问或连接劫持。
+
+#主要错误日志
+未知
+
+#问题根因
+内核代码在 `sctp_unpack_cookie` 和 `sctp_sf_authenticate` 函数中直接调用了 `memcmp` 进行摘要或签名比较。`memcmp` 函数在发现字节不一致时会立即返回，其执行时间依赖于不匹配字节的位置，这种非恒定时间的行为引入了时间侧信道风险，允许攻击者通过响应时间差异推断正确的 MAC 内容。
+
+#解决方案
+将 `memcmp` 替换为 `crypto_memneq` 进行比较。`crypto_memneq` 是专门用于密码学场景的比较函数，无论比较的内容是否匹配，其执行时间都是恒定的，从而消除了时间侧信道攻击的风险。具体修改涉及 `net/sctp/sm_make_chunk.c` 和 `net/sctp/sm_statefuns.c` 两处代码逻辑，并增加了对 `<crypto/utils.h>` 头文件的引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7ffd0584d69a4cd972d4bd2ff973d15f4507aea1

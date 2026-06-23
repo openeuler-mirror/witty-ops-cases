@@ -1,0 +1,20 @@
+#标题
+act_csum 处理 VLAN 报文时引发内核空指针崩溃或内存越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 VLAN 封装报文时，若报文数据不完整（恶意构造或损坏的报文），在 `tcf_csum_act` 函数中直接访问 `skb->data` 指向的内存地址，导致内核崩溃或内存越界访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `net/sched/act_csum.c` 的 `tcf_csum_act` 函数中，处理 VLAN 报文分支时，代码直接将 `skb->data` 强制转换为 `struct vlan_hdr` 指针并访问其成员，未通过 `pskb_may_pull` 检查数据包是否有足够的空间容纳 VLAN 头部（VLAN_HLEN）。当报文长度不足以包含 VLAN 头部时，会导致非法内存访问。
+
+#解决方案
+在访问 VLAN 头部数据前，增加 `pskb_may_pull(skb, VLAN_HLEN)` 检查。若检查失败（即报文长度不足），则跳转到 `drop` 标签直接丢弃报文，避免非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cdab0180df58292a828c9b682fdf7a6bba2e6e92

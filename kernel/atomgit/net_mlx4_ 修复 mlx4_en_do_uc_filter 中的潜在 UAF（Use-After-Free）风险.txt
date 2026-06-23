@@ -1,0 +1,20 @@
+#标题
+net/mlx4: 修复 mlx4_en_do_uc_filter 中的潜在 UAF（Use-After-Free）风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核调试开启的情况下，当网卡驱动 mlx4_en_do_uc_filter 函数执行 MAC 地址过滤并移除条目时，存在潜在的 Use-After-Free 风险。即在释放 `entry` 内存结构后，代码仍试图读取 `entry->mac` 成员以打印调试日志。虽然实际触发概率较低（因为使用了 kfree_rcu），但在代码逻辑上构成了安全隐患。
+
+#主要错误日志
+未知（此问题为代码静态逻辑缺陷，Commit 中未包含触发时的具体报错日志。涉及的关键调试打印原文为："Removed MAC %pM on port:%d\n"）
+
+#问题根因
+在函数 `mlx4_en_do_uc_filter` 中，代码先调用 `kfree_rcu(entry, rcu)` 释放了 `entry` 指针指向的内存，随后又通过 `entry->mac` 访问该内存区域以打印调试信息。这是典型的释放后使用（UAF）错误，顺序颠倒导致了逻辑上的内存访问违规。
+
+#解决方案
+调整代码执行顺序，将访问 `entry->mac` 的调试打印语句移至 `kfree_rcu(entry, rcu)` 释放操作之前。确保在释放内存前完成所有必要的读取操作，从而消除潜在的 UAF 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3475bc9495fcf0a6da81a2ff743cfc023cbd7dd7

@@ -1,0 +1,24 @@
+#标题
+RDMA/irdma：rdma_connect 因无效 ARP 索引失败时错误返回 ENOMEM
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户态调用 rdma_connect() 建立连接时，若因无效 ARP 索引导致连接失败，用户态 RDMA 核心库收到的是 ENOMEM（内存不足）错误码。该错误码具有误导性，掩盖了真实的配置或索引错误原因，导致用户无法正确排查故障。
+
+#主要错误日志
+- 推断：CM: allocate node failed ret=-22（或对应 EINVAL 的负值错误码）
+- 原有日志（修复前）：CM: allocate node failed
+
+#问题根因
+在函数 irdma_make_cm_node() 中，当检测到 arpindex 小于 0（即无效 ARP 索引）时，代码直接跳转到 err 标签进行处理。err 标签处的逻辑统一返回 NULL，导致上层调用者 irdma_create_cm_node() 将其误判为内存分配失败，并向上返回 -ENOMEM 错误码，而非正确的 -EINVAL 错误码。
+
+#解决方案
+修改 irdma_make_cm_node() 函数的错误处理逻辑：
+1. 在检测到 arpindex < 0 时，将局部变量 ret 设置为 -EINVAL。
+2. 将函数返回值类型逻辑改为返回 ERR_PTR(ret)，而非返回 NULL。
+3. 同步更新上层调用者（如 irdma_create_cm_node() 和 irdma_receive_ilq()），使用 IS_ERR() 替代判空检查，并通过 PTR_ERR() 获取并传递正确的错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f80d02c8281f4073a06176fab060bce5de86f014

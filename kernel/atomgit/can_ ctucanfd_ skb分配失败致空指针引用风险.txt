@@ -1,0 +1,20 @@
+#标题
+can: ctucanfd: skb分配失败致空指针引用风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CTU CAN FD 驱动处理错误中断过程中，当系统内存紧张导致 skb 分配失败时，驱动程序未在 `CAN_STATE_ERROR_ACTIVE` 分支中对 `skb` 指针进行非空检查。若此时直接访问 `cf` 指针（指向 `skb` 缓冲区数据），将导致内核空指针解引用，进而引发内核崩溃或异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ctucan_err_interrupt` 在处理 `CAN_STATE_ERROR_ACTIVE` 状态时，代码逻辑遗漏了对 `skb` 分配是否成功的判断。当 `alloc_can_err_skb` 返回 NULL（即 `skb` 为 NULL）时，`cf` 指针亦为 NULL，代码直接对 `cf->can_id` 和 `cf->data` 进行赋值操作，导致空指针访问。
+
+#解决方案
+在 `ctucan_err_interrupt` 函数的 `CAN_STATE_ERROR_ACTIVE` case 分支中，增加对 `skb` 指针的非空检查（`if (skb)`）。仅当 `skb` 分配成功时才执行对 `cf` 结构体成员的赋值操作，避免空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8856efa152073dfb9c406b4fefa935faedca3d0a

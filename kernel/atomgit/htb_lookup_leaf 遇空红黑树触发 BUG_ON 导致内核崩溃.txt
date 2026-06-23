@@ -1,0 +1,29 @@
+#标题
+htb_lookup_leaf 遇空红黑树触发 BUG_ON 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 tc 配置 HTB、netem 和 blackhole 组合的 Qdisc 规则后，执行 ping 测试触发内核 BUG_ON，导致系统崩溃或调用栈异常打印。
+
+#主要错误日志
+推断：
+内核日志中包含调用栈信息：
+BUG_ON();
+htb_lookup_leaf();
+
+#问题根因
+在复杂的 Qdisc 级联场景下（HTB -> netem -> blackhole），数据处理流程触发了罕见的竞态条件：
+1. htb_dequeue 调用 htb_dequeue_tree，进而调用 netem_dequeue。
+2. netem_dequeue 调用 blackhole_enqueue，该函数丢弃数据包并返回非 NET_XMIT_SUCCESS 值。
+3. 这导致 netem_dequeue 调用 qdisc_tree_reduce_backlog，因为 qlen 变为 0，它调用链 htb_qlen_notify -> htb_deactivate -> htb_safe_rb_erase 将该 class 从 hprio rbtree 中移除。
+4. 由于这是 rbtree 中唯一的节点，__rb_change_child 将 rb_root 指针置为 NULL。
+5. 随后 blackhole_dequeue 返回 NULL，netem_dequeue 返回 NULL，htb_dequeue_tree 再次调用 htb_lookup_leaf 查找同一个已经被置空的 hprio rbtree。
+6. 此时 htb_lookup_leaf 中的 BUG_ON(!hprio->row.rb_node) 条件成立，触发内核崩溃。
+
+#解决方案
+修改 `htb_lookup_leaf` 函数，将直接触发崩溃的 `BUG_ON(!hprio->row.rb_node)` 替换为防御性判断。当检测到红黑树节点为空时，直接返回 NULL，而不是触发 BUG_ON。此举允许上层调用者 `htb_dequeue_tree` 正确处理空树的情况，避免系统崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f77daa044b4937e3240c968c8d0452bd51e50f04

@@ -1,0 +1,49 @@
+#标题
+Hisilicon SEC/HPRE/ZIP/QM 驱动多重故障修复（PF2VF超时、FLR误报错、Backlog死锁等）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1.  **全局复位时 PF2VF 通信超时**：在设备执行全局复位期间，PF（Physical Function）向 VF（Virtual Function）发送消息可能失败，导致复位流程异常或超时。
+2.  **FLR 流程中误报 AXI 错误**：在进行 FLR（Function Level Reset）操作前，未正确屏蔽硬件错误报告，导致复位过程中触发不必要的 AXI 总线错误打印或中断。
+3.  **SEC 模块 Backlog 请求死锁**：SEC 模块在处理加密请求时，存在 backlog 请求处理逻辑缺陷，导致特定高负载场景下出现死锁，业务卡死无法继续。
+4.  **HPRE 模块数据访问异常**：在 ECC（椭圆曲线加密）和 Curve25519 算法回调处理中，存在数据未取消映射即进行内存操作的情况，可能导致数据不一致或内存访问错误。
+5.  **AEAD GCM 模式参数校验缺失**：GCM 模式下对认证标签长度校验缺失，可能接受不合规的请求参数。
+
+#主要错误日志
+- "QM mailbox is busy to start!"
+- "QM mailbox operation timeout!"
+- "QM mailbox operation failed!"
+- "QM mailbox operation failed since qm is stop!"
+- "set sqc failed"
+- "set cqc failed"
+- "failed to read SQC addr!"
+- "failed to read CQC addr!"
+
+#问题根因
+1.  **PF2VF 超时**：PF2VF 通信机制依赖硬件 Mailbox 状态，但在全局复位等异常状态下，硬件无法及时响应，导致软件长时间等待或超时；同时复位流程中未对 Master OOO（Out-of-Order）行为进行适当控制。
+2.  **FLR 误报错**：原有代码在执行 FLR 前未调用 `disable_axi_error` 接口屏蔽 AXI 相关错误，导致 FLR 过程中硬件状态变迁触发了虚假的 AXI 错误中断。
+3.  **Backlog 死锁**：SEC 驱动中 backlog 队列的处理逻辑存在并发问题，`list_add_tail` 与后续的 `spin_unlock` 操作时序不当，且 `fake_busy` 标记位处理逻辑不完善，导致请求无法正确下发或唤醒。
+4.  **HPRE 数据异常**：`hpre_ecdh_cb` 和 `hpre_curve25519_cb` 回调函数中，数据清理函数 `hw_data_clr_all` 被错误地放置在内存操作 `memmove` 之后，违反了 DMA 数据流的正确顺序（应先 unmap 后访问）。
+5.  **Mailbox 获取效率低与接口缺陷**：驱动分别多次调用接口获取 SQC 和 CQC 信息，且读取接口设计不够健壮，未充分考虑硬件忙碌状态的重试机制。
+
+#解决方案
+1.  **优化 PF2VF 通信与复位逻辑**：
+    - 增加 `QM_DEVICE_DOWN` 状态标志，在设备停止或复位时直接拦截并返回错误，避免无效等待。
+    - 引入 `disable_axi_error` 和 `enable_axi_error` 回调，在 FLR 前屏蔽 AXI 错误，FLR 后恢复。
+    - 增加全局复位时的等待重试次数与超时阈值（`QM_WAIT_DST_ACK`, `QM_MAX_PF_WAIT_COUNT`），提高容错性。
+2.  **修复 Backlog 死锁与并发问题**：
+    - 移除 SEC 驱动中复杂的 backlog 链表管理逻辑，改为直接通过 `fake_busy` 标记位管理请求状态。
+    - 修正请求处理时序，确保在持有锁时正确设置 `fake_busy`，避免并发竞争导致的死锁。
+3.  **修正 HPRE 数据处理顺序**：
+    - 将 `hpre_ecdh_hw_data_clr_all` 和 `hpre_curve25519_hw_data_clr_all` 函数调用移动至 `memmove` 操作之前，确保先取消 DMA 映射再进行内存数据搬移。
+4.  **重构 Mailbox 接口与交互流程**：
+    - 将原 `hisi_qm_mb` 接口拆分为 `hisi_qm_mb_write` 和 `hisi_qm_mb_read`，明确读写语义。
+    - 实现一次性获取 Mailbox 配置的功能，避免多次交互。
+    - 优化 Mailbox 忙等待逻辑，使用轮询替代简单的 `readl_relaxed_poll_timeout`，增加针对不同命令（如 STOP_QP）的定制化等待周期。
+5.  **完善参数校验**：
+    - 在 SEC AEAD 模块中增加 GCM 模式下认证标签大小的校验（`SEC_GCM_MIN_AUTH_SZ`），拒绝非法参数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bc1f23afbfcaf160b63074d1b6ae47ca7fc61916

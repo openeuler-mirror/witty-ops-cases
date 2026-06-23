@@ -1,0 +1,29 @@
+#标题
+tracing: arm32架构下编译类型比较警告修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 arm32 架构上编译内核时，`kernel/trace/trace.c` 文件的 `tracing_splice_read_pipe` 函数触发编译警告，提示在进行指针类型比较时缺少类型转换。
+
+#主要错误日志
+kernel/trace/trace.c: In function 'tracing_splice_read_pipe':
+./include/linux/minmax.h:20:28: warning: comparison of distinct pointer types lacks a cast
+  (!!(sizeof((typeof(x) *)1 == (typeof(y) *)1)))
+            ^
+./include/linux/minmax.h:26:4: note: in expansion of macro '__typecheck'
+   (__typecheck(x, y) && __no_side_effects(x, y))
+    ^~~~~~~~~~~
+kernel/trace/trace.c:6771:8: note: in expansion of macro 'min'
+        min((size_t)trace_seq_used(&iter->seq),
+        ^~~
+
+#问题根因
+在 arm32 架构上，`size_t` 被定义为 `unsigned int`，而 `PAGE_SIZE` 被定义为 `unsigned long`。在调用 `min()` 宏时，由于两个操作数的类型不一致，且 `min()` 宏内部通过 `__typecheck` 断言两个参数的类型必须相等，导致了“comparison of distinct pointer types”（比较不同指针类型）的编译警告。
+
+#解决方案
+将 `min()` 宏调用中的 `PAGE_SIZE` 参数强制转换为 `size_t` 类型。这样可以保证两个操作数的类型一致，从而消除编译警告，同时该修改也兼容其他架构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5a8a33dcb21ba81313c5f79047c781fef0d8989d

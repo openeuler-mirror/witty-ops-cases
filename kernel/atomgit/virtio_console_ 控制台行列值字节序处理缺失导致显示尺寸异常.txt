@@ -1,0 +1,22 @@
+#标题
+virtio_console: 控制台行列值字节序处理缺失导致显示尺寸异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非小端字节序架构（如 big endian 架构）上使用 virtio console 设备时，若宿主机发送了控制台 resize 消息，guest 内核接收到的控制台行与列数值可能出现错误。这会导致 guest 内部设置的终端窗口大小与宿主机实际指定的尺寸不一致，进而可能引起终端显示排版混乱或光标定位异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 virtio 规范，virtio console resize 消息中的 `cols` 和 `rows` 字段被定义为 little endian。原代码在处理这些字段时，直接使用了 `__u16` 类型进行接收，未进行字节序转换（如 `virtio16_to_cpu()`）。这导致在大端字节序系统上，内核直接将小端字节序的数据当作本地字节序处理，从而解析出错误的行列数值。
+
+#解决方案
+修改 `drivers/char/virtio_console.c` 中的 `handle_control_message` 函数：
+1. 将用于存储行列数的临时结构体成员变量类型从 `__u16` 修改为 `__virtio16`。
+2. 在调用 `set_console_size` 前，使用 `virtio16_to_cpu()` 宏对 `rows` 和 `cols` 进行正确的字节序转换，确保数据符合 virtio 规范定义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f3cbba1f00aa3906918f81dcd039403e1aac19b

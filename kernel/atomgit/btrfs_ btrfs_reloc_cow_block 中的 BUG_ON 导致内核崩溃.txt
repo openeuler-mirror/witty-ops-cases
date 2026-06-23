@@ -1,0 +1,20 @@
+#标题
+btrfs: btrfs_reloc_cow_block 中的 BUG_ON 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BTRFS 文件系统进行数据重定位操作时，若反向引用缓存出现不一致，内核会触发 BUG_ON 导致系统崩溃。该问题可能由反向引用缓存的内部 Bug 或 extent tree 的数据损坏引发。
+
+#主要错误日志
+btrfs: bytenr %llu was found but our backref cache was expecting %llu or %llu
+
+#问题根因
+函数 `btrfs_reloc_cow_block()` 中存在一个 `BUG_ON` 检查，当 `node->bytenr` 和 `node->new_bytenr` 均不等于 `buf->start` 时触发。这种情况通常意味着反向引用缓存中存在错误节点，缓存数据与实际不匹配。原代码直接触发 panic（BUG_ON），导致系统不可用。
+
+#解决方案
+将 `BUG_ON` 替换为标准的错误处理逻辑。通过 `btrfs_err` 输出详细的调试信息（包括实际的 bytenr 和期望的 bytenr 值），并返回 `-EUCLEAN` 错误码，从而避免内核崩溃，允许上层调用者处理文件系统损坏错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4934dcc45ae1a4f89f80008cbf805801fdbbcce4

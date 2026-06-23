@@ -1,0 +1,19 @@
+#标题
+NFSD: filecache 初始化失败后状态标志未清除导致潜在清理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 NFSD filecache 初始化函数 `nfsd_file_cache_init()` 执行失败时，全局状态标志 `NFSD_FILE_CACHE_UP` 未被正确清除。这导致系统错误地认为 filecache 处于“up”状态，若后续调用 `nfsd_file_cache_shutdown()`，可能会在资源未正确分配的情况下尝试执行清理操作，引发不可预期的异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `nfsd_file_cache_init()` 中，代码逻辑存在缺陷：虽然在成功路径上设置了 `NFSD_FILE_CACHE_UP` 标志位，但在初始化过程中若发生错误（如 `rhltable_init` 或后续内存分配失败），函数直接返回错误码，未清除该标志位。由于 `nfsd_file_cache_init()` 可能在内部已经设置了该标志，失败路径遗漏清除操作导致状态不一致。
+
+#解决方案
+修改 `fs/nfsd/filecache.c` 文件中的错误处理路径：
+1. 将中间步骤 `rhltable_init` 失败后的返回语句修改为跳转至统一的 `out` 标签。
+2. 在 `out` 标签处增加判断逻辑，若返回值 `ret` 表示错误（非0），则调用 `clear_bit(NFSD_FILE_CACHE_UP, &nfsd_file_flags)` 清除状态标志，确保初始化失败时 filecache 状态被正确标记为“down”。

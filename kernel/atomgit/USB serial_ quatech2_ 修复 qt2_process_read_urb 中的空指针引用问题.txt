@@ -1,0 +1,20 @@
+#标题
+USB serial: quatech2: 修复 qt2_process_read_urb 中的空指针引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 USB 串口数据读取（URB）时，若接收到特定的数据包导致端口号变更，且变更后的端口号恰好等于当前串口设备支持的最大端口数（`serial->num_ports`），内核将发生空指针引用，进而可能导致 Oops 或内核崩溃。
+
+#主要错误日志
+`%s - port change to invalid port: %i\n`
+
+#问题根因
+在 `qt2_process_read_urb` 函数中，校验新端口号有效性的逻辑存在边界判断错误。原代码使用 `if (newport > serial->num_ports)` 进行检查，忽略了 `newport` 等于 `serial->num_ports` 的情况。由于端口号索引从 0 开始，等于 `num_ports` 的索引已越界，后续代码直接使用该越界索引访问端口对象数组导致了空指针引用。
+
+#解决方案
+修改 `drivers/usb/serial/quatech2.c` 文件中的边界检查条件，将 `if (newport > serial->num_ports)` 修正为 `if (newport >= serial->num_ports)`，正确拦截越界的端口号，防止访问无效内存地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5e283eba5a6806e34dbf800b0001e96301de8b13

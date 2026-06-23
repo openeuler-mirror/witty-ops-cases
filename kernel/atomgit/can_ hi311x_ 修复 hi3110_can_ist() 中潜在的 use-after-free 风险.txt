@@ -1,0 +1,22 @@
+#标题
+can: hi311x: 修复 hi3110_can_ist() 中潜在的 use-after-free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hi311x CAN 控制器驱动处理错误状态过程中，当需要报告 rxerr 和 txerr 计数时，存在潜在的 use-after-free 风险。由于在 `netif_rx(skb)` 调用后仍然尝试访问并修改 `cf->data[6]` 和 `cf->data[7]` 以填充错误计数，此时 skb 可能已被释放或重用，导致内核内存破坏或不可预知的崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+由 Commit a22bd630cfff 引入的缺陷。在 `hi3110_can_ist()` 函数中，代码先调用了 `netif_rx(skb)` 将 skb 发送到网络协议栈，随后在非 bus-off 的分支中又尝试向该 skb 的数据区写入 `txerr` 和 `rxerr` 信息。`netif_rx()` 调用后，skb 的所有权已转移，其内存可能已被释放或用于其他目的，此时再对其进行写入操作构成了典型的 use-after-free 错误。
+
+#解决方案
+调整 `netif_rx(skb)` 的调用位置。将 `netif_rx()` 的调用从错误状态报告之前移至之后，确保在发送 skb 之前已完成所有必要的数据填充（包括错误计数信息）。具体变更如下：
+1. 在处理 `CAN_STATE_BUS_OFF` 状态时，保留 `netif_rx(skb)` 调用。
+2. 在非 bus-off 状态（正常操作或错误激活状态）需要报告 rxerr/txerr 时，先进行数据填充，最后再调用 `netif_rx(skb)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce6f1ab98c68566df40df5630bf80eac2ff6edbe

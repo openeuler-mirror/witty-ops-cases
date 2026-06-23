@@ -1,0 +1,20 @@
+#标题
+livepatch 在 ftrace 修改指令时读取到错误的指令长度
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 livepatch 补丁操作时，若 ftrace 正在修改指令，livepatch 进行指令长度检查可能读取到错误的长度，导致检查逻辑异常或潜在的冲突漏检。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `check_address_conflict` 函数中，调用 `jump_label_text_reserved()` 检查指令长度时未持有 `jump_label_lock`。根据 `jump_label_text_reserved()` 的注释要求，调用者必须持有 `jump_label_mutex`（对应 `jump_label_lock()`）。此前代码认为调用点在模块插入后不会改变而省略了锁，但在 ftrace 修改指令的并发场景下，会导致读取到的指令长度不正确。
+
+#解决方案
+在 `check_address_conflict` 函数中增加 `jump_label_lock()` 锁的获取与释放。在进入检查循环前获取锁，在函数返回前（包括正常退出和错误退出路径）释放锁，确保指令长度检查过程的并发安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad9d6110c1eda3b9e15c961aba15c4fb2597ef6d

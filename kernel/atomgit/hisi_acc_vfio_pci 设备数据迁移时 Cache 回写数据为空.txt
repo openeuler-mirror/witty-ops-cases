@@ -1,0 +1,21 @@
+#标题
+hisi_acc_vfio_pci 设备数据迁移时 Cache 回写数据为空
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 hisi_acc_vfio_pci 驱动进行 VFIO 直通设备实时迁移过程中，由于缓存回写时机错误，导致源设备上的缓存数据未能成功写入内存，迁移后目的端设备读取到的数据为空，造成设备状态数据丢失或不一致。
+
+#主要错误日志
+- `dev_err(dev, "failed to writeback QM Cache!\n")`（代码变更中涉及的错误打印）
+- `dev_err(dev, "failed to writeback QM cache!\n")`（代码变更中涉及的错误打印）
+
+#问题根因
+缓存回写操作被错误地放置在停止设备操作之后的数据拷贝阶段。在此时序下，设备操作已停止，导致缓存回写获取到的数据为空，无法成功将数据写入。
+
+#解决方案
+将缓存回写操作从数据拷贝阶段移动至停止设备阶段进行。具体修改为：在 `hisi_acc_vf_stop_device` 函数中增加 `vf_qm_cache_wb` 调用，并从 `vf_qm_state_save` 函数中移除该调用，从而确保在设备停止过程中完成缓存数据的回写，保证数据完整性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b953d4187fcf527637e049beed9346bc83943a73

@@ -1,0 +1,20 @@
+#标题
+LoongArch KVM kvm_device 结构体内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构 KVM 虚拟化场景下，销毁 PCH PIC 设备时存在内存泄漏。具体表现为 `kvm_ioctl_create_device()` 函数中分配的 `kvm_device` 结构体内存未被释放，随着设备创建与销毁操作的反复进行，系统内存会持续减少。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `kvm_ioctl_create_device()` 函数中为 `kvm_device` 结构体分配了内存，该结构体的 `destroy()` 方法（即 `kvm_pch_pic_destroy()`）本应负责释放该内存。然而，`kvm_pch_pic_destroy()` 函数仅释放了设备私有数据 `s`，遗漏了对 `dev`（即 `kvm_device` 结构体本身）的释放操作，导致了内存泄漏。
+
+#解决方案
+在 `arch/loongarch/kvm/intc/pch_pic.c` 文件的 `kvm_pch_pic_destroy()` 函数中，在释放私有数据 `s` 之后，增加调用 `kfree(dev)`，以确保 `kvm_device` 结构体被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aea45f34efee75d4276a12894f0ad14e20492334

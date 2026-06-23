@@ -1,0 +1,35 @@
+#标题
+ksmbd: 处理错误路径时遗漏释放锁导致死锁或原子上下文泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 创建链接（smb2_create_link）的过程中，如果遇到目标已存在或删除失败等错误场景，内核工作队列线程会泄露持有的锁或原子上下文，导致潜在死锁。系统检测到工作队列锁泄露并触发警告，随后可能导致服务无响应。
+
+#主要错误日志
+BUG: workqueue leaked lock or atomic: kworker/5:21/0x00000000/7596
+     last function: handle_ksmbd_work
+2 locks held by kworker/5:21/7596:
+ #0: ffff8881051ae448 (sb_writers#3){.+.+}-{0:0}, at: ksmbd_vfs_kern_path_locked+0x142/0x660
+ #1: ffff888130e966c0 (&type->i_mutex_dir_key#3/1){+.+.}-{4:4}, at: ksmbd_vfs_kern_path_locked+0x17d/0x660
+CPU: 5 PID: 7596 Comm: kworker/5:21 Not tainted 6.1.162-00456-gc29b353f383b #138
+Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.17.0-debian-1.17.0-1 04/01/2014
+Workqueue: ksmbd-io handle_ksmbd_work
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x44/0x5b
+ process_one_work.cold+0x57/0x5c
+ worker_thread+0x82/0x600
+ kthread+0x153/0x190
+ ret_from_fork+0x22/0x30
+ </TASK>
+
+#问题根因
+在 `smb2_create_link` 函数中，当调用 `ksmbd_vfs_kern_path_start_removing()` 成功获取锁和引用后，若后续处理遇到错误（如 `-EINVAL` 或 `-EEXIST`），代码逻辑直接跳转至 `out` 标签退出，未调用 `ksmbd_vfs_kern_path_end_removing()`（或 `ksmbd_vfs_kern_path_unlock()`）来释放 `inode` 锁和放置引用。这导致了锁泄露和原子上下文泄露。
+
+#解决方案
+修改 `fs/smb/server/smb2pdu.c` 中的错误处理路径：在错误分支（目标删除失败或链接已存在）中，不再直接跳转退出，而是确保先调用 `ksmbd_vfs_kern_path_unlock()` 释放路径锁，然后再根据错误码跳转至 `out` 标签。这样保证了锁的获取与释放操作成对出现，修复了资源泄露问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fbfd475863efac108f965d4aac2d57db0fbb70d2

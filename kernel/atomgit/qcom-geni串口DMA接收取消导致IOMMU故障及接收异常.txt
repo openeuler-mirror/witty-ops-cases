@@ -1,0 +1,26 @@
+#标题
+qcom-geni串口DMA接收取消导致IOMMU故障及接收异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在停止串口接收（stop_rx）时，若未等待DMA传输完成直接取消命令，可能导致DMA完成中断在接收重启后触发。此异常行为会引发IOMMU页错误，导致串口接收功能彻底失效。具体表现为串口引擎报告接收字节数为0，蓝牙设备（如hci0）因无法读取版本信息出现超时。
+
+#主要错误日志
+- qcom_geni_serial 988000.serial: serial engine reports 0 RX bytes in!
+- arm-smmu 15000000.iommu: FSR    = 00000402 [Format=2 TF], SID=0x563
+- arm-smmu 15000000.iommu: FSYNR0 = 00210013 [S1CBNDX=33 WNR PLVL=3]
+- Bluetooth: hci0: command 0xfc00 tx timeout
+- Bluetooth: hci0: Reading QCA version information failed (-110)
+
+#问题根因
+驱动在调用 `stop_rx()` 取消接收命令时，未能等待DMA传输完成。这导致DMA完成中断在rx重启后才触发，此时的中断处理程序错误地解除了新命令的DMA缓冲区映射，从而触发了IOMMU故障并导致接收功能损坏。此外，原代码在取消操作失败时缺少必要的状态机重置步骤。
+
+#解决方案
+修改 `qcom_geni_serial_stop_dma` 函数，在取消命令后增加对 `RX_EOT` 状态的轮询等待。
+1. 若DMA传输正常完成（`RX_EOT` 置位），清除相关中断标志位（`RX_EOT | RX_DMA_DONE`）。
+2. 若DMA传输未能完成（取消失败），则执行abort操作，并增加状态机重置逻辑：写入 `SE_DMA_RX_FSM_RST` 寄存器并等待 `RX_RESET_DONE`，随后清除中断标志，确保状态机恢复正常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/48ab5810d4d796c7ea110ede584dffc9ffe9edf5

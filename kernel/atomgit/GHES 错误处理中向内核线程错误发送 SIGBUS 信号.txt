@@ -1,0 +1,20 @@
+#标题
+GHES 错误处理中向内核线程错误发送 SIGBUS 信号
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 平台上，当内核线程（如 kcompactd）执行过程中发生同步外部中止且硬件错误无法恢复时，内核尝试向该内核线程发送 SIGBUS 信号。由于内核线程没有用户空间内存映射，发送信号不仅无意义，还可能导致不可预期的行为。
+
+#主要错误日志
+pr_err("Sending SIGBUS to current task due to memory error not recovered");
+
+#问题根因
+在 `ghes_do_proc` 函数中，当处理同步硬件错误且错误无法恢复时，代码逻辑未区分当前执行流是用户进程还是内核线程。直接调用 `force_sig(SIGBUS)` 向当前任务发送信号。对于 `current->mm == NULL` 的内核线程，接收 SIGBUS 信号是无效的，会导致内核行为异常。
+
+#解决方案
+在发送 SIGBUS 信号前增加对 `current->mm` 的检查。修改条件判断为 `if (sync && !queued && current->mm)`，确保仅当当前任务包含有效的用户空间内存映射（即为用户进程）时，才发送 SIGBUS 信号，从而避免向内核线程发送无用信号。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/afaf740d8b1d39947f725fd4000e8864aa45a90b

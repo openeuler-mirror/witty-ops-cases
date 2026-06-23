@@ -1,0 +1,40 @@
+#标题
+[scsi] sg模块参数def_reserved_size非法值导致soft lockup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户通过sysfs接口将sg模块参数`def_reserved_size`设置为负数（如-1）后，执行打开`/dev/sgX`设备的操作（如`exec 4<> /dev/sg0`），将触发内核soft lockup。具体表现为CPU长时间卡死，看门狗检测到CPU停滞并打印警告信息，进程无法继续执行。
+
+#主要错误日志
+watchdog: BUG: soft lockup - CPU#5 stuck for 26 seconds! [bash:537]
+Modules loaded:
+CPU: 5 UID: 0 PID: 537 Command: bash, kernel version 6.19.0-rc3+ #134,
+PREEMPT disabled
+Hardware: QEMU Standard PC (i440FX + PIIX, 1996), BIOS version
+1.16.1-2.fc37 dated 04/01/2014
+...
+Call Trace:
+  sg_build_reserve+0x5c/0xa0
+  sg_add_sfp+0x168/0x270
+  sg_open+0x16e/0x340
+  chrdev_open+0xbe/0x230
+  do_dentry_open+0x175/0x480
+  vfs_open+0x34/0xf0
+  do_open+0x265/0x3d0
+  path_openat+0x110/0x290
+  do_filp_open+0xc3/0x170
+  do_sys_openat2+0x71/0xe0
+  __x64_sys_openat+0x6d/0xa0
+  do_syscall_64+0x62/0x310
+  entry_SYSCALL_64_after_hwframe+0x76/0x7e
+
+#问题根因
+内核参数`def_reserved_size`定义了每个SG文件描述符保留的默认缓冲区大小，规范要求其范围应在0到1,048,576（1MB）之间。虽然`sg_proc_write_dressz`接口强制执行了该限制，但直接通过sysfs（`/sys/module/sg/parameters/def_reserved_size`）修改模块参数时，原有的`module_param_named`定义未对输入值进行校验。当写入非法值（如-1）时，内核在后续打开sg设备调用`sg_build_reserve`分配缓冲区时，因传入的size参数异常导致陷入死循环，从而引发soft lockup。
+
+#解决方案
+将`def_reserved_size`的模块参数定义从普通的`module_param_named`改为带有回调校验功能的`module_param_cb`。新增`def_reserved_size_set`回调函数，在设置参数值时通过`kstrtoint`转换并强制校验数值范围：若小于0或大于1048576，则直接返回`-ERANGE`拒绝修改，从而防止非法值导致内核锁死。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1698b6790aa48e3938573c97242e57ec2a699d8

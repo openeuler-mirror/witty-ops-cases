@@ -1,0 +1,20 @@
+#标题
+net/mdiobus: C45 读写接口越界访问漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 mdio-tools 等工具通过网络接口的 ioctl 对 PHY 设备进行 Clause 45 (C45) 模式的读写操作时，可以传入超过内核支持范围（PHY_MAX_ADDR，通常为 32）的 MDIO 地址值。该非法地址未被过滤，导致内核进行越界访问。虽然读写操作本身可能失败，但会错误地访问并修改 mdiobus 统计信息数组之外的内存，构成潜在的安全隐患。
+
+#主要错误日志
+未知
+
+#问题根因
+在进行 C45 模式的 mdiobus 读写操作时，`__mdiobus_c45_read` 和 `__mdiobus_c45_write` 函数未对传入的 `addr` 参数进行有效性校验。内核通过 `PHY_MAX_ADDR` 定义了支持的地址数量（32个），但 ioctl 接口允许用户传入大于该限制的地址值。由于代码逻辑中存在对 `bus->stats` 数组的访问，传入过大的地址索引将导致数组越界读写。
+
+#解决方案
+在 `__mdiobus_c45_read` 和 `__mdiobus_c45_write` 函数入口处增加地址边界检查。如果传入的 `addr` 参数大于或等于 `PHY_MAX_ADDR`，函数直接返回 `-ENXIO` 错误，从而阻止后续的越界操作，增强系统的安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/409c770a432578d6586fb6813c554f48f96b2529

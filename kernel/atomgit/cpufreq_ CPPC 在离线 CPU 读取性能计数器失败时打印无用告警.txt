@@ -1,0 +1,20 @@
+#标题
+cpufreq: CPPC 在离线 CPU 读取性能计数器失败时打印无用告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统日志中出现大量无意义的告警信息，提示读取特定 CPU 的性能计数器失败。该现象主要发生在 CPU 处于离线状态时，此时读取计数器返回错误（如 -EFAULT）属于预期行为，但内核仍会打印警告日志，干扰运维排查。
+
+#主要错误日志
+cppc_cpufreq_cpu_fie_init: failed to read perf counters for cpu:%d: %d
+
+#问题根因
+在 `cppc_cpufreq_cpu_fie_init` 函数中，调用 `cppc_get_perf_ctrs` 读取性能计数器失败时，代码逻辑未先充分判断 CPU 状态。当 CPU 处于 offline 状态时，读取操作返回错误码（如 -EFAULT）且计数器值为 0 是预期行为，但原代码仍直接调用 `pr_warn` 打印警告日志，导致对预期内的失败情况产生了误报。
+
+#解决方案
+修改 `drivers/cpufreq/cppc_cpufreq.c` 中的错误处理逻辑：在读取性能计数器失败时，增加 `cpu_online(cpu)` 判断。仅当 CPU 处于在线状态且读取失败时，才保留告警打印（原代码逻辑）；若 CPU 已离线，则将日志级别从 `pr_warn` 降级为 `pr_debug`，避免刷屏干扰。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d08e86c77069fbbdd7fdbdaa408c198223bc0900

@@ -1,0 +1,22 @@
+#标题
+x86/resctrl: Hygon CPU 缺失 resctrl 初始化导致 Platform QoS 功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Hygon CPU 在支持 Platform QoS 特性时，由于部分关键数据结构未初始化，导致 resctrl 子系统功能异常。具体表现为 `rdt_resource` 和 `hw_res` 结构体中的关键成员（如 `membw`、`alloc_capable`、`num_closid`、`cache`、`msr_base` 等）处于未初始化状态，影响资源分配与监控功能的正常使用。
+
+#主要错误日志
+未知
+
+#问题根因
+Hygon CPU 的 BSP 初始化助手函数中仅调用了 `resctrl_cpu_detect()` 进行了部分初始化，但在后续关键路径中遗漏了对 Hygon 厂商的处理：
+1. `get_mem_config()` 函数中仅判断了 `X86_VENDOR_AMD`，未包含 `X86_VENDOR_HYGON`，导致 `__rdt_get_mem_config_amd()` 未被执行，`rdt_resource::membw`、`alloc_capable` 以及 `hw_res::num_closid` 未初始化。
+2. `rdt_init_res_defs()` 函数中同样仅判断了 `X86_VENDOR_AMD`，未包含 `X86_VENDOR_HYGON`，导致 `rdt_init_res_defs_amd()` 未被执行，`rdt_resource::cache` 以及 `hw_res::msr_base`、`msr_update` 未初始化。
+
+#解决方案
+在 `get_mem_config()` 和 `rdt_init_res_defs()` 函数的厂商判断逻辑中，增加对 `X86_VENDOR_HYGON` 的支持，使其与 AMD 使用相同的初始化路径（`__rdt_get_mem_config_amd` 和 `rdt_init_res_defs_amd`），确保 Hygon CPU 能正确完成 resctrl 相关数据结构的初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db724012d89f286a19dd8d31058dca7114270a3f

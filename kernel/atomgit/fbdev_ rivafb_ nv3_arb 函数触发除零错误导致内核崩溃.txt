@@ -1,0 +1,25 @@
+#标题
+fbdev: rivafb: nv3_arb 函数触发除零错误导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+用户态程序通过 FBIOPUT_VSCREENINFO ioctl 调用 /dev/fb* 时，若底层硬件（如恶意构造或模拟的 PCI 设备）提供异常的 PLL 配置导致 mclk_khz 为 0，内核在计算 FIFO 仲裁参数时触发除零错误（divide error），导致内核崩溃。
+
+#主要错误日志
+rivafb: setting virtual Y resolution to 2184
+divide error: 0000 [#1] PREEMPT SMP KASAN PTI
+CPU: 0 PID: 2187 Comm: syz-executor.0 Not tainted 5.18.0-rc1+ #1
+Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS rel-1.12.0-59-gc9ba5276e321-prebuilt.qemu.org 04/01/2014
+RIP: 0010:nv3_arb drivers/video/fbdev/riva/riva_hw.c:439 [inline]
+RIP: 0010:nv3_get_param+0x3ab/0x13b0 drivers/video/fbdev/riva/riva_hw.c:546
+
+#问题根因
+驱动在 nv3_arb() 函数中重新计算 FIFO 仲裁参数时，直接使用 state->mclk_khz 作为除数进行运算。正常硬件环境下该值非零，但在恶意构造或配置错误的设备中，该值可能为零，且代码未对其进行有效性校验，从而在计算 gns 变量时触发除零错误。
+
+#解决方案
+在 drivers/video/fbdev/riva/riva_hw.c 的 nv3_arb() 函数中，在进行除法运算前增加对 state->mclk_khz 的判断，若该值为 0 则直接返回，避免除零错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6bb82dd874bd9c7b2eaf252b17f59fc796e5fe74

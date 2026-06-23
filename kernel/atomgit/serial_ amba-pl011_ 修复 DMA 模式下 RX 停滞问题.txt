@@ -1,0 +1,20 @@
+#标题
+serial: amba-pl011: 修复 DMA 模式下 RX 停滞问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 DMA 进行串口接收（RX）的场景下，当调用串口的 throttle API（如触发硬件流控）后，再调用 unthrottle API 恢复接收，串口接收逻辑发生永久性停滞，无法继续接收数据。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `pl011_throttle_rx()` 调用 `pl011_stop_rx()` 禁用接收时，会通过清除 DMACR 寄存器的 RXDMAE bit 来禁用 RX DMA。然而，对应的 `pl011_unthrottle_rx()` 函数在恢复接收时，未检测并重新设置 RXDMAE bit。这导致在使用 DMA 的情况下，throttle 后 DMA 接收功能未恢复，从而导致 RX 停滞。
+
+#解决方案
+在 `pl011_unthrottle_rx()` 函数中增加判断逻辑：如果当前使用的是 RX DMA 模式（`uap->using_rx_dma` 为真），则需重新设置 DMACR 寄存器的 RXDMAE bit，确保 DMA 接收功能被正确重新使能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5f4e17771c6d8224b0afab59bd2d5b4d6ab95c5e

@@ -1,0 +1,21 @@
+#标题
+pinctrl: mcp23s08: 修复因 regmap 锁导致的原子上下文睡眠问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mcp23s08 pinctrl 驱动中，执行引脚配置读取（如 `mcp_pinconf_get`）或设置（如 `mcp_pinconf_set`）操作时，内核检测到在原子上下文中睡眠，可能导致内核调用栈打印或系统异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动的 `regmap_config` 配置未禁用内部锁（`disable_locking` 未设置为 true），导致 `regmap` 内部使用 mutex 进行保护。然而，部分 `mcp` 操作函数（如 `mcp_set_bit`、`mcp_read`）可能会在持有自旋锁（`mcp->lock`）的原子上下文中被调用。当 regmap 内部试图获取 mutex 锁时，就会在原子上下文中睡眠，引发故障。
+
+#解决方案
+1. 在 `mcp23x08_regmap` 和 `mcp23x17_regmap` 配置中添加 `disable_locking = true`，禁用 regmap 内部的锁机制，因为驱动自身已使用 `mcp->lock` 进行保护。
+2. 在 `mcp_pinconf_get` 和 `mcp_pinconf_set` 函数调用 `mcp_read` 和 `mcp_set_bit` 前后，显式添加 `mutex_lock(&mcp->lock)` 和 `mutex_unlock(&mcp->lock)`，确保对 regmap 访问的线程安全与锁保护一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/05c54501e798ddf47d1dd8e789dc8b46a4f13da7

@@ -1,0 +1,23 @@
+#标题
+NFS挂载处理标志位异常导致SB_RDONLY状态丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在NFS挂载过程中，当涉及第二个超级块时，挂载标志位处理异常。具体表现为：若挂载命令带有只读（ro）参数，内核在处理第二个超级块实例时未正确传递`SB_RDONLY`标志，导致文件系统状态与用户预期不符；同时，`NFS_SB_MASK`的定义使得只读标志在内部逻辑中被屏蔽，可能导致挂载后的文件系统属性错误。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因主要有两点：
+1. `fs/nfs/internal.h` 中的 `NFS_SB_MASK` 宏定义包含了 `SB_RDONLY`，导致NFS在设置超级块标志时错误地屏蔽了只读标志。
+2. `fs/nfs/nfs4super.c` 的 `do_nfs4_mount` 函数中，在获取第二个超级块的 dentry 后，未将文件系统配置上下文中的标志位同步赋值给超级块的 `s_flags`，导致挂载标志丢失。
+
+#解决方案
+1. 修改 `fs/nfs/internal.h`，将 `SB_RDONLY` 从 `NFS_SB_MASK` 宏定义中移除，确保只读标志不被内部逻辑过滤。
+2. 在 `fs/nfs/nfs4super.c` 的 `do_nfs4_mount` 函数中，增加 `dentry->d_sb->s_flags = fc->sb_flags;` 代码，确保挂载标志正确传递给新创建的超级块。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3f69c178075fd0ca2fe20a82e768d5cb30ed1c9d

@@ -1,0 +1,24 @@
+#标题
+Hygon 内核非原子 NT 拷贝路径中 FPU 状态检查与内存屏障缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hygon 平台下，当进程执行非原子（non-atomic）的非临时（NT）用户态数据拷贝操作时，内核可能发生 FPU 状态管理错误，具体表现为：
+1. 内核线程或用户进程在切换时错误地尝试保存/恢复 FPU 状态，可能导致 FPU 寄存器污染或状态损坏。
+2. 在执行 AVX2 优化的大块内存非对齐拷贝后，由于缺乏内存屏障，可能导致数据写入顺序不受控，引发数据一致性问题或可见性异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **FPU 标志位检查对象错误**：在 `switch_kernel_fpu_prepare` 函数中，原代码使用 `test_thread_flag(TIF_USING_FPU_NONATOMIC)` 检查当前进程的标志位。但在上下文切换逻辑中，应当检查的是即将被换出的进程（`prev`）的标志位，即应当使用 `test_ti_thread_flag(task_thread_info(prev), TIF_USING_FPU_NONATOMIC)`。原实现导致对前一个进程的 FPU 状态判断失效。
+2. **非临时拷贝缺乏内存屏障**：在 `copy_user_avx2.S` 中的 `large_block_nt_unaligned_cpy` 路径下，使用了非临时存储指令进行优化拷贝。原代码在处理尾部数据（`Lavx2_copy_user_handle_tail`）前仅执行了 `vzeroupper`，未添加 `sfence` 指令。非临时存储是弱序的，缺少 `sfence` 可能导致后续指令在数据完全写出前执行，引发数据一致性问题。
+
+#解决方案
+1. 修正 FPU 状态检查逻辑，将 `test_thread_flag` 替换为 `test_ti_thread_flag(task_thread_info(prev), ...)`，确保正确检查前一个任务（`prev`）的线程标志位。
+2. 在汇编文件 `arch/x86/lib/copy_user_avx2.S` 的跳转标签 `88` 处、`vzeroupper` 指令前添加 `sfence` 指令，确保非临时存储操作在处理尾部或结束前已完成写缓冲，保证数据一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/68a1335e333258105128c5e4c3a47760a2e28a10

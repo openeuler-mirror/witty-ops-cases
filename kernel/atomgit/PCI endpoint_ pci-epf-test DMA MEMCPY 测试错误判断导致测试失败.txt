@@ -1,0 +1,21 @@
+#标题
+PCI endpoint: pci-epf-test DMA MEMCPY 测试错误判断导致测试失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当主机端请求进行 DMA MEMCPY 测试时，如果端点设备的 DMA 控制器支持 DMA_PRIVATE，测试会错误地失败，即使该 DMA 控制器实际上同时支持 DMA_MEMCPY 能力。
+
+#主要错误日志
+- 修改前报错日志："Cannot transfer data using DMA\n"
+- 修改后报错日志（当控制器确实不支持时）："DMA controller doesn't support MEMCPY\n"
+
+#问题根因
+代码逻辑中对 DMA 能力的判断有误。原代码仅检查 `epf_test->dma_private` 标志位，如果该标志为真则直接拒绝测试。然而，DMA 控制器可以同时支持 DMA_PRIVATE 和 DMA_MEMCPY，原逻辑未针对 DMA_MEMCPY 能力进行校验，导致误判。
+
+#解决方案
+修改判断逻辑，不再单纯依赖 `dma_private` 标志位，而是直接调用 `dma_has_cap(DMA_MEMCPY, ...)` 函数来检测 DMA 控制器是否具备 DMA_MEMCPY 能力。若不具备该能力，则返回错误并打印更准确的错误信息 "DMA controller doesn't support MEMCPY"。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/121dd2a1c813b924f9782ca793b634b48f56fa51

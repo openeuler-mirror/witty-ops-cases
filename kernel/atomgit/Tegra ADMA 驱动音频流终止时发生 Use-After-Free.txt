@@ -1,0 +1,31 @@
+#标题
+Tegra ADMA 驱动音频流终止时发生 Use-After-Free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Tegra ADMA 驱动中，当音频流终止（特别是发生 XRUN 状况）时，内核触发 Use-After-Free 错误。具体表现为 DMA 缓冲区在 `tegra_adma_terminate_all()` 中被释放，但尚未执行的 vchan 完成任务let随后访问了该已释放的内存，导致系统崩溃或内存污染。
+
+#主要错误日志
+```
+[  337.427523] BUG: KASAN: use-after-free in vchan_complete+0x124/0x3b0
+[  337.427544] Read of size 8 at addr ffff000132055428 by task swapper/0/0
+[  337.427603]  vchan_complete+0x124/0x3b0
+```
+
+#问题根因
+这是一个典型的竞态条件问题，根本原因是对虚拟通道完成任务let缺乏同步机制。故障流程如下：
+1. DMA 传输完成，中断调度了完成 tasklet，但 tasklet 尚未执行。
+2. 音频播放停止，调用 `tegra_adma_terminate_all()`，该函数调用 `tegra_adma_stop()` 并通过 `kfree()` 释放了 DMA 缓冲区内存。
+3. 步骤 1 中调度的 tasklet 最终执行，调用 `vchan_complete()` 尝试访问已被释放的内存。
+由于 tasklet 可能在被调度后的任何时间执行，原代码无法保证 `vchan_complete()` 运行时缓冲区仍然有效。
+
+#解决方案
+修复方案通过引入标准的 DMA 引擎同步机制来解决竞态问题：
+1. 修改 `tegra_adma_stop()` 函数：不再直接调用 `kfree(tdc->desc)` 释放描述符，而是调用 `vchan_terminate_vdesc(&tdc->desc->vd)` 将描述符标记为终止状态，防止其被立即释放。
+2. 新增 `tegra_adma_synchronize()` 回调函数：内部调用 `vchan_synchronize(&tdc->vc)`，该函数会杀掉所有待处理的 tasklet 并释放所有已标记为终止的描述符，从而确保资源释放的安全性。
+3. 将 `tegra_adma_synchronize` 注册到 DMA 设备操作的 `device_synchronize` 接口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d990dc7cf497dc9df09071dc432907f4575d14ff

@@ -1,0 +1,20 @@
+#标题
+IIO ADC驱动 ad_sigma_delta 缓冲区回调函数非对称调用导致状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ADI Sigma Delta ADC 设备时，若 `update_scan_mode` 回调函数执行失败，驱动程序会错误地调用 `postdisable` 函数。由于此前并未成功调用对应的 `postenable` 函数，导致驱动内部状态不一致，设备处于非预期的异常状态。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序将缓冲区禁用回调定义为 `postdisable`，这与已存在的 `postenable` 回调不对称。在 IIO 子系统中，如果 `update_scan_mode` 在启用流程中失败，框架仍会调用 `postdisable` 回调进行清理。由于 `postenable` 未曾执行或未成功执行，此时调用 `postdisable` 违反了驱动的状态机逻辑，导致驱动状态混乱。
+
+#解决方案
+将 `ad_sd_buffer_setup_ops` 结构体中的缓冲区禁用回调函数指针从 `postdisable` 修改为 `predisable`。通过将禁用回调改为 `predisable`，使其与 `postenable` 形成正确的配对关系，确保在 `update_scan_mode` 失败等异常路径下，驱动程序的状态转换逻辑正确，避免状态不一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22d14f885d61053f7beb1a14c9a271fe9888a098

@@ -1,0 +1,32 @@
+#标题
+nfs: decode_getfattr_attrs 触发 KMSAN 未初始化值告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFS 文件系统操作（如执行 cp 命令或触发 inode 重新验证）时，内核触发 KMSAN（KernelMemorySanitizer）告警，报告在 `decode_getfattr_attrs` 函数中检测到未初始化值的使用。
+
+#主要错误日志
+BUG: KMSAN: uninit-value in decode_getfattr_attrs+0x2d6d/0x2f90
+CPU: 1 UID: 0 PID: 7651 Comm: cp Tainted: G    B
+Tainted: [B]=BAD_PAGE
+Hardware name: QEMU Standard PC (Q35 + ICH9, 2009)
+Call Trace:
+ decode_getfattr_attrs+0x2d6d/0x2f90
+ decode_getfattr_generic+0x806/0xb00
+ nfs4_xdr_dec_getattr+0x1de/0x240
+ rpcauth_unwrap_resp_decode+0xab/0x100
+ rpcauth_unwrap_resp+0x95/0xc0
+ call_decode+0x4ff/0xb50
+ __rpc_execute+0x57b/0x19d0
+ ...
+
+#问题根因
+`nfs_fattr_init()` 函数在初始化 `nfs_fattr` 结构体时，遗漏了对 `fattr->mdsthreshold` 成员的初始化。这导致后续在 `decode_getfattr_attrs()` 函数中调用 `decode_attr_mdsthreshold()` 时，访问了未初始化的指针值，从而触发 KMSAN 告警。
+
+#解决方案
+在 `fs/nfs/inode.c` 文件的 `nfs_fattr_init()` 函数中，显式将 `fattr->mdsthreshold` 初始化为 NULL，确保结构体成员在使用前处于确定状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b2d0f105f8cca3b25d9bca0f3af3729ac220d11a

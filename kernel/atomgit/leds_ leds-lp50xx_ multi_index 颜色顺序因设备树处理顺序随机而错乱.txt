@@ -1,0 +1,24 @@
+#标题
+leds: leds-lp50xx: multi_index 颜色顺序因设备树处理顺序随机而错乱
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 LED 设备树子节点时，若节点处理顺序随机或倒序，会导致 `multi_index` 属性显示为 "blue green red" 而非预期的 "red green blue"。依赖 `multi_index` 来控制 LED 的用户态应用程序将因此功能异常。此外，若设备树节点未设置 `reg` 属性或 `reg` 值超出范围，驱动将无法正确加载并报错。
+
+#主要错误日志
+- `dev_err(priv->dev, "reg must be set\n");`
+- `dev_err(priv->dev, "reg %i out of range\n", multi_index);`
+
+#问题根因
+驱动程序在解析设备树子节点时，直接使用循环变量 `num_colors` 作为数组索引填充 `mc_led_info`，未依据设备树节点的 `reg` 属性确定位置。这导致 `mc_subled` 的数组索引取决于设备树节点的处理顺序（可能随机或倒序），无法保证 `multi_index` 的正确映射。
+
+#解决方案
+修改 `lp50xx_probe_dt` 函数，在遍历子节点时增加对 `reg` 属性的读取与校验：
+1. 强制读取 `reg` 属性值作为 `multi_index` 索引，若缺失则返回 `-EINVAL` 并打印错误日志 "reg must be set"。
+2. 校验 `reg` 值是否超出 `LP50XX_LEDS_PER_MODULE` 范围，若越界则返回 `-EINVAL` 并打印错误日志。
+3. 使用校验后的 `reg` 值（即 `multi_index`）替代原有的循环计数器 `num_colors` 作为 `mc_led_info` 的数组索引，确保颜色顺序与硬件定义一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dcc2ff5e7c7dd00d70e7f6863ab533e60bbed35d

@@ -1,0 +1,32 @@
+#标题
+ceph: 修复并发操作导致 r_parent 过期引发的引用计数泄漏与 UAF 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CephFS 客户端进行并发操作（如 rename）时，由于 `req->r_parent` 指针在请求发起与处理期间可能变得陈旧，导致状态更新应用到错误的目录 inode 上。这可能引发以下现象：
+1. 内核引用计数泄漏，导致旧父目录 inode 无法释放。
+2. 新父目录 inode 引用计数下溢，触发内核警告或导致 Use-After-Free 风险。
+3. MDS 收到错误的父目录引用信息。
+
+#主要错误日志
+- 推断：内核日志中出现如下警告信息：
+  `ceph: r_parent mismatch (had %llx wanted %llx) - updating`
+
+#问题根因
+当未持有父目录锁（`!parent_locked`）时，`req->r_parent` 指针可能在请求发起后因并发重命名操作而过期。
+1. **状态应用错误**：代码未验证缓存的 `r_parent` 是否与 MDS 回复中实际的目录信息匹配，导致状态更新应用到错误的 inode。
+2. **引用计数失衡**：当 `r_parent` 被更新指向正确的 inode 时，未同步迁移 `CEPH_CAP_PIN` 引用。旧父目录持有的 PIN 引用未释放（导致泄漏），新父目录未获取 PIN 引用（导致后续 `ceph_mdsc_release_request` 释放时引用计数下溢）。
+
+#解决方案
+1. **增加校验逻辑**：在构建请求消息时，检查 `r_parent` 的 inode 号是否与路径编码得到的 `vino.ino` 一致。若不一致，说明 `r_parent` 已过期。
+2. **修正引用计数**：当检测到 `r_parent` 不匹配时，执行修正逻辑：
+   - 调用 `ceph_put_cap_refs` 释放旧父目录的 `CEPH_CAP_PIN` 引用。
+   - 调用 `iput` 释放旧父目录的 inode 引用。
+   - 更新 `req->r_parent` 指向正确的新父目录 inode。
+   - 调用 `ceph_get_cap_refs` 获取新父目录的 `CEPH_CAP_PIN` 引用。
+3. **重构路径处理接口**：引入 `struct ceph_path_info` 结构体统一封装路径信息，辅助传递和验证 inode 号（vino），以便进行上述校验。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/18d767a2c31068e7e7ccb6d68c187bb8c6840589

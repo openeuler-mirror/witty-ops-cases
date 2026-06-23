@@ -1,0 +1,28 @@
+#标题
+espintpc 保存 encap socket 导致命名空间引用泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除 network namespace（netns）时发生引用泄漏，导致 netns 无法被正确释放和删除。
+该问题发生在使用 espintcp 功能且存在 encap socket 缓存的场景下。如果 espintcp 状态在删除 netns 之前未被正确删除（例如通过 flush 或单个删除操作），或者 netns 内的进程已终止导致无法触达 xfrm state 进行删除时，会发生此泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+当前的 encap socket 缓存机制导致了引用计数泄漏。引用链为：xfrm_state -> encap_sk -> netns。
+由于 encap socket 是一个用户态 socket，它持有对 netns 的引用。如果 espintcp 状态（xfrm_state）持有 encap_sk 的引用，且在删除 netns 之前未显式删除该 state，则 xfrm_state 会继续持有 socket 引用，进而持有 netns 引用。当 netns 变得不可达（如内部进程已终止）时，无法删除 xfrm state 来释放其对 socket 的引用，从而导致 netns 无法被删除。
+
+#解决方案
+移除 encap socket 的缓存机制。修改代码不再在 `xfrm_state` 中缓存 `encap_sk` 指针，而是每次需要时通过查找获取 socket，并在使用完毕后立即释放引用（`sock_put`）。
+具体变更包括：
+1. 删除 `struct xfrm_state` 结构体中的 `encap_sk` 字段。
+2. 删除 `esp_tcp_sk` 结构体及其相关的 RCU 回收函数。
+3. 修改 `esp_find_tcp_sk` 和 `esp6_find_tcp_sk` 函数，移除缓存读取和更新逻辑，改为直接查找 socket。
+4. 在 `esp_output_tcp_finish` 和 `esp_output_tcp_encap` 相关调用路径中，增加 `sock_put` 调用以平衡查找时获取的引用。
+5. 移除 `xfrm_state.c` 中 `__xfrm_state_delete` 里释放 `encap_sk` 引用的代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cf2f51bdc875144de9af47a82d0eb3367e4c179a

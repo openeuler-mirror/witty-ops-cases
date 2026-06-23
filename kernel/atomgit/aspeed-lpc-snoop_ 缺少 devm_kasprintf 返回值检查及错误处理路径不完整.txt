@@ -1,0 +1,24 @@
+#标题
+aspeed-lpc-snoop: 缺少 devm_kasprintf 返回值检查及错误处理路径不完整
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 aspeed_lpc_enable_snoop 函数中，如果 devm_kasprintf 分配内存失败（返回 NULL），内核将继续执行并访问 NULL 指针，导致空指针引用异常。此外，若 misc_register 注册失败或遇到无效通道参数，函数将直接返回错误码，未能释放先前分配的 kfifo 资源或注销已注册的 misc 设备，导致资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 调用 devm_kasprintf 申请内存后未检查返回值是否为 NULL，存在空指针解引用风险。
+2. 错误处理路径不完整：misc_register 失败时未跳转至资源释放逻辑；default 分支处理无效通道时未注销已注册的 misc 设备也未释放 kfifo。
+
+#解决方案
+1. 增加 devm_kasprintf 返回值的 NULL 检查，若失败则跳转至 err_free_fifo 标签进行清理。
+2. 修改 misc_register 的错误处理，将直接返回改为跳转至 err_free_fifo 标签以释放 kfifo。
+3. 修正 switch 语句 default 分支的错误处理，跳转至 err_misc_deregister 标签，依次执行 misc_deregister 和 kfifo_free，确保资源正确释放。
+4. 调整函数正常返回逻辑，确保在成功路径返回 0。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/857f3b8a822e0931896e69f3531ec80eb90814f1

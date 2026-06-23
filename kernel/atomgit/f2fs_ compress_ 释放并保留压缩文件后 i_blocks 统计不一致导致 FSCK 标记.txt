@@ -1,0 +1,20 @@
+#标题
+f2fs: compress: 释放并保留压缩文件后 i_blocks 统计不一致导致 FSCK 标记
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对压缩文件执行释放操作后紧接着执行保留操作，随后删除该文件时，文件系统一致性检查（FSCK）标记被置位，系统报告 i_blocks 统计不一致。
+
+#主要错误日志
+F2FS-fs (dm-48): Inconsistent i_blocks, ino:401231, iblocks:1448, sectors:1472
+
+#问题根因
+在 `release_compress_blocks` 流程中，针对特定类型的压缩集群（如 `C D D D D D D D`），代码会执行 `i_blocks` 减 1 和 `i_compr_blocks` 加 7 的操作。但在后续的 `reserve_compress_blocks` 流程中，原代码仅通过判断 `to_reserved == 1` 来跳过更新。这导致在 `reserved` 为 0 的场景下，错误地跳过了 `i_blocks` 和 `i_compr_blocks` 的反向更新操作，从而导致 `i_blocks` 统计值与实际扇区数不一致。
+
+#解决方案
+修改 `reserve_compress_blocks` 函数中的判断逻辑，在原有条件 `to_reserved == 1` 的基础上增加 `reserved` 非零的检查。仅当 `reserved` 存在且 `to_reserved == 1` 时才跳过更新，确保在 `reserved` 为 0 时能正确更新 `i_blocks` 和 `i_compr_blocks`，修复统计不一致的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/35ee16fd164fdff585037e014226ea1bc55ae8d6

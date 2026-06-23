@@ -1,0 +1,20 @@
+#标题
+net/packet: packet_set_ring() 与 packet_notifier() 并发竞争缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `packet_set_ring()` 函数执行期间释放锁时，存在竞争窗口，导致另一个线程可以运行 `packet_notifier()` 并处理 `NETDEV_UP` 事件。这打破了预期的临界区保护逻辑，可能导致 socket 状态不一致或协议钩子注册/注销行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `packet_set_ring()` 函数中，代码在持有 `po->bind_lock` 临界区时，先判断 `was_running` 状态，然后有条件地设置 `po->num` 为 0 并释放锁。这导致在锁释放期间，`po->num` 可能仍保持非零值。此时，若另一个线程执行 `packet_notifier()` 处理 `NETDEV_UP` 事件，会因为看到非零的 `po->num` 而错误地认为 socket 处于挂钩状态，从而触发竞争。该问题与历史提交 15fe076edea7 ("net/packet: fix a race in packet_bind() and packet_notifier()") 中的场景类似。
+
+#解决方案
+修改 `packet_set_ring()` 中的锁处理逻辑，将 `WRITE_ONCE(po->num, 0)` 操作从条件判断中移出，强制在释放 `po->bind_lock` 之前无条件执行。这确保了在锁释放的窗口期内，socket 始终处于“未挂钩”状态（num 为 0），防止 `packet_notifier()` 误判并处理事件，从而消除竞争风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4022d4c5f4ec48cc0312acea5fb57d2cdab0b506

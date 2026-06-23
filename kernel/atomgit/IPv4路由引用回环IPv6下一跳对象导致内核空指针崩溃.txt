@@ -1,0 +1,21 @@
+#标题
+IPv4路由引用回环IPv6下一跳对象导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当创建一个独立的IPv6下一跳对象并将其绑定到回环设备（例如执行 `ip -6 nexthop add id 100 dev lo`），随后配置IPv4路由引用该下一跳对象时，内核会发生空指针解引用并触发 Panic。该故障由 syzbot 发现。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fib6_nh_init()` 函数中，判断路由是否为拒绝路由的逻辑存在误判。原代码使用 `fib6_is_reject()` 进行判断，由于下一跳对象没有目的地址前缀（fc_dst=::），导致 `fib6_is_reject()` 错误地将所有绑定到回环设备的下一跳对象都识别为拒绝路由。
+误判导致代码错误地进入了拒绝路由处理路径，该路径跳过了 `fib_nh_common_init()` 的调用，使得 `nhc_pcpu_rth_output` 指针未被分配内存。当后续 IPv4 路由引用此下一跳对象时，`__mkroute_output()` 函数尝试访问该空指针引发崩溃。
+
+#解决方案
+修改 `fib6_nh_init()` 中的判断逻辑，仅通过检查 `RTF_REJECT` 标志位来识别显式拒绝路由，不再使用 `fib6_is_reject()` 函数进行判断。这使得绑定到回环设备的独立 IPv6 下一跳对象能正确走常规初始化路径，调用 `fib_nh_common_init()` 分配必要的内存资源，从而避免空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e144decbcf6930a4a59288cc71ee51d59972d02e

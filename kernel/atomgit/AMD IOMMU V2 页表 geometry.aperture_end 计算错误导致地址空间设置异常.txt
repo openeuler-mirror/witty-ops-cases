@@ -1,0 +1,25 @@
+#标题
+AMD IOMMU V2 页表 geometry.aperture_end 计算错误导致地址空间设置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD IOMMU V2 页表模式下，`dma_max_address()` 返回的地址空间上限未考虑符号扩展特性，导致 `iommu_domain` 的 `geometry.aperture_end` 值错误。这会引起 IOMMU 地址空间配置不一致，特别是在 PASID 0 与 非 0 PASID 绑定同一个 domain 时表现不一致，可能导致 DMA 映射地址越界或设备访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+AMD IOMMU 文档明确指出 V2 页表遵循 x86 CPU 的符号扩展规则（Sign Extension），即地址空间的最高位用于符号扩展，中间存在非规范地址区域。然而原代码在计算 V2 页表的最大地址时，直接使用了全 1 掩码（如 5 级页表返回 `0x1ffffffffffffff`），未剥离最高有效位。
+此外，硬件存在文档未记录的行为：当 V2 页表绑定到 PASID 0 时不进行符号扩展检查，但绑定到其他 PASID 时会进行检查。由于 IOMMU 核心代码不支持带符号扩展的地址空间几何描述，导致驱动上报的地址范围包含了实际上不可用的“上半部”空间，引发功能异常。
+
+#解决方案
+修改 `drivers/iommu/amd/iommu.c` 中的 `dma_max_address()` 函数，在计算 V2 页表最大地址时，将页表级别对应的位移减 1，从而去除最高有效位，仅使用“下半部”地址空间。
+修改后的返回值示例：
+- 5 级页表：由 `0x1ffffffffffffff` 修正为 `0x0ffffffffffffff`。
+- 4 级页表：由 `0xffffffffffff` 修正为 `0x7fffffffffff`。
+此举确保 IOMMU domain 几何属性在所有 PASID 场景下行为一致且正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4d45d145d186274f85e5a45ad97464e5bd741187

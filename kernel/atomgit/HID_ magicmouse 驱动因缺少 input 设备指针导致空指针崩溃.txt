@@ -1,0 +1,20 @@
+#标题
+HID: magicmouse 驱动因缺少 input 设备指针导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当伪造的 USB 设备伪装为 Magic Mouse 设备并发送自定义的报告描述符时，由于 `input_mapping` 钩子函数未被调用，导致 `msc->input` 指针保持为 NULL。随后在 `magicmouse_input_configured` 函数中调用 `magicmouse_setup_input` 时引发内核崩溃。
+
+#主要错误日志
+hid_err(hdev, "magicmouse setup input failed (no input)");
+
+#问题根因
+伪造的 USB 设备可以发送自定义的报告描述符，导致 `input_mapping()` 钩子函数未被调用，从而使得 `msc->input` 未被初始化（保持为 NULL）。驱动程序在后续的 `input_configured()` 钩子中未检查该指针有效性就直接使用，导致了空指针引用崩溃。
+
+#解决方案
+在 `magicmouse_input_configured` 函数开头增加对 `msc->input` 指针的检查。如果该指针为 NULL，则打印错误日志并返回 `-EINVAL`，以此拒绝该设备的初始化，避免后续的空指针崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9b49f482350925fbcca08e0f17fcc0ffc4926d3

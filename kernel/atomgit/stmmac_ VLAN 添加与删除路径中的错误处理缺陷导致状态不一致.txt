@@ -1,0 +1,26 @@
+#标题
+stmmac: VLAN 添加与删除路径中的错误处理缺陷导致状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 stmmac 驱动中操作 VLAN 时，若硬件过滤器写入或删除失败，会导致驱动内部状态与硬件实际状态不一致：
+1. 添加 VLAN 时，若硬件过滤器写入失败，驱动仍保留该 VID 在 active_vlans 位图和哈希寄存器中，导致存在“僵尸”VLAN 配置。
+2. 删除 VLAN 时，若硬件过滤器删除失败，驱动已从 active_vlans 位图中清除该 VID，但硬件表中仍存在该 VLAN 过滤规则，导致资源泄漏或后续配置冲突。
+
+#主要错误日志
+未知
+
+#问题根因
+stmmac_vlan_rx_add_vid() 和 stmmac_vlan_rx_kill_vid() 函数中的操作顺序不当，缺乏必要的回滚机制：
+1. stmmac_vlan_rx_add_vid() 在写入硬件过滤器之前就更新了 active_vlans 和 VLAN 哈希寄存器，当后续硬件写入失败时，未对已更新的软件状态进行回滚。
+2. stmmac_vlan_rx_kill_vid() 在移除硬件过滤器之前就清除了 active_vlans，当后续硬件删除失败时，软件状态已丢失，无法恢复一致性。
+
+#解决方案
+调整代码执行顺序并增加回滚逻辑，确保状态一致性：
+1. 对于 VLAN 添加操作：若硬件过滤器写入失败，回滚 active_vlans 位图和哈希表状态（调用 clear_bit 和 stmmac_vlan_update）。
+2. 对于 VLAN 删除操作：先更新哈希表，再尝试操作硬件过滤器。若硬件操作失败，通过重新设置 active_vlans 位图并调用 stmmac_vlan_update 来恢复原有状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf37c5ea815bb30a5850814a7cc13a14e1c84a51

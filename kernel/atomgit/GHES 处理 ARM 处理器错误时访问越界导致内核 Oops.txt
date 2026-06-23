@@ -1,0 +1,30 @@
+#标题
+GHES 处理 ARM 处理器错误时访问越界导致内核 Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 BIOS 生成非常小或不完整的 ARM Processor Error 记录时，内核在处理 GHESv2 记录过程中会访问非法内存地址，导致内核 Oops（空指针解引用或越界访问）。具体表现为系统启动或运行过程中触发 Internal error，进程（如 kworker）崩溃，严重时导致系统宕机。
+
+#主要错误日志
+[    1.492129] Internal error: Oops: 0000000096000005 [#1]  SMP
+[    1.495820] CPU: 0 UID: 0 PID: 9 Comm: kworker/0:0 Not tainted 6.18.0-rc1-00017-gabadcc3553dd-dirty #18 PREEMPT
+[    1.496433] Workqueue: kacpi_notify acpi_os_execute_deferred
+[    1.497199] pc : log_arm_hw_error+0x5c/0x200
+[    1.497380] lr : ghes_handle_arm_hw_error+0x94/0x220
+[推断] FW_BUG "arm error length: %d\n"
+[推断] FW_BUG "length is too small\n"
+[推断] FW_BUG "firmware-generated error record is incorrect\n"
+
+#问题根因
+BIOS 生成的 ARM Processor Error 记录（GHESv2 records）存在数据长度过小或不完整的情况。内核代码在 `ghes_handle_arm_hw_error` 和 `log_arm_hw_error` 函数中，未对 `err->section_length` 和 `ctx_info->size` 等关键字段进行有效性校验，直接进行内存访问计算（如 `err_info + err->err_info_num`），导致访问越界，引发 Oops。
+
+#解决方案
+在内核解析 GHES ARM 错误记录的路径上增加边界检查逻辑：
+1. 在 `ghes_handle_arm_hw_error` 中校验 `gdata->error_data_length` 是否至少包含 `struct cper_sec_proc_arm` 的大小，若长度不足则打印警告并返回，避免处理非法数据。
+2. 在遍历错误信息数组时，增加对剩余长度 `length` 的检查，确保在读取 `struct cper_arm_err_info` 之前有足够的数据空间。
+3. 在 `log_arm_hw_error` 中，校验上下文信息访问是否超出 `err->section_length` 范围，防止越界读取 `ctx_info->size`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/354122fd6c9191074a08b2e880cf0cbe9276f3c6

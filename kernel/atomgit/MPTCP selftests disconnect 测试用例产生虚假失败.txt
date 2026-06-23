@@ -1,0 +1,35 @@
+#标题
+MPTCP selftests disconnect 测试用例产生虚假失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 MPTCP selftests 的 disconnect 测试用例时，测试脚本报告虚假错误，导致测试失败。具体表现为：
+- 测试输出显示 `[FAIL]`，提示 "file received by server does not match"。
+- 日志中出现 "Unexpected revents: POLLERR/POLLNVAL(19)"。
+- 接收到的文件末尾包含多余的损坏字节。
+- 最终报告 "Tests of the full disconnection have failed"。
+
+#主要错误日志
+INFO: disconnect
+INFO: extra options: -I 3 -i /tmp/tmp.r43niviyoI
+01 ns1 MPTCP -> ns1 (10.0.1.1:10000      ) MPTCP (duration 140ms) [FAIL]
+file received by server does not match (in, out):
+Unexpected revents: POLLERR/POLLNVAL(19)
+-rw-r--r-- 1 root root 10028676 Jan 10 10:47 /tmp/tmp.r43niviyoI.disconnect
+Trailing bytes are:
+\R!8u25N%
+-rw------- 1 root root 9992290 Jan 10 10:47 /tmp/tmp.Os4UbnWbI1
+Trailing bytes are:
+\R!8u25N%
+[FAIL] Tests of the full disconnection have failed
+
+#问题根因
+根因在于测试程序的用户态逻辑。测试程序在所有待处理数据发送完毕后立即执行断开连接操作，这会生成一个 FASTCLOSE 包。如果该 FASTCLOSE 包在对端 socket 尚未进入 closed 状态之前到达，根据协议规范，msk socket 会向用户空间报告错误，导致测试用例判定为失败。
+
+#解决方案
+修改测试程序 `xdisconnect` 函数，将原先仅检查发送队列是否清空的逻辑，改为等待所有相关的 MPTCP socket 完全进入 closed 状态后再执行断开连接操作。具体实现为：在调用 shutdown 后，通过 `getsockname` 获取本地地址并构造 `ss -M | grep` 命令循环检查 socket 是否已从系统列表中消失（即已关闭），从而确保断开连接时对端已处于 closed 状态，避免虚假错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/02473456c3abd02831b5c05c0ba236904917959c

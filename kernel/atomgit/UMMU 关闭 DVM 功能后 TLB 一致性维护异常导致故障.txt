@@ -1,0 +1,32 @@
+#标题
+UMMU 关闭 DVM 功能后 TLB 一致性维护异常导致故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 UMMU 硬件关闭 DVM (Distributed Virtual Memory) 特性时，TLB 一致性无法正确通过软件维护，导致 SVA/KSVA 场景下出现内存访问异常或数据不一致问题。具体表现为：
+1. 在 SVA 场景下进行 DMA 操作时，由于 TLB 刷新策略错误（误用 DMA 场景策略），导致 TLB 未及时刷新。
+2. TLBI 指令的 scale 参数超出硬件限制，导致刷新命令执行异常。
+3. 进程退出或 PASID 移除时，因锁获取方式不当（trylock 失败直接返回）导致 TLB 未刷新。
+4. domain 释放时，对 SVA domain 错误地执行了清空配置操作。
+
+#主要错误日志
+未知
+
+#问题根因
+UMMU 硬件关闭 DVM 功能后，需要软件维护 TLB 一致性。原有代码存在多处缺陷：
+1. `ummu_tlbi_range` 和 `ummu_tlbi_context` 函数在处理 SVA 类型的 domain 时，错误地使用了 DMA 场景的 TLB 刷新命令（`UMMU_TLBI_SCENE_DMA`），而非 SVA 专用命令。
+2. `__ummu_tlbi_range` 中计算 TLB 刷新范围参数 `scale` 时，未考虑硬件限制（`UMMU_OPT_TLBI_LIMIT_SCALE`），可能超过硬件支持的最大值。
+3. `logic_ummu_mm_arch_invalidate_secondary_tlbs` 中使用 `down_read_trylock`，若锁竞争失败则直接返回，导致 TLB 刷新流程被跳过。
+4. `logic_domain_free` 中未区分 SVA domain，错误地调用了 `flush_iotlb_all` 和 `sync_dom_cfg` 清理函数。
+
+#解决方案
+1. **修正 TLB 刷新策略**：在 `ummu_tlbi_range` 和 `ummu_tlbi_context` 中增加对 `IOMMU_DOMAIN_SVA` 类型的判断，SVA 场景使用 `UMMU_TLBI_SCENE_SVA`，DMA 场景使用 `UMMU_TLBI_SCENE_DMA`。
+2. **限制 scale 参数范围**：在 `__ummu_tlbi_range` 中引入 `max_scale` 变量，根据硬件特性（`UMMU_OPT_TLBI_LIMIT_SCALE`）将 scale 参数限制在硬件允许范围内（最大 31 或限制为 15）。
+3. **修复锁获取逻辑**：将 `logic_ummu_mm_arch_invalidate_secondary_tlbs` 中的 `down_read_trylock` 改为 `down_read`，确保 TLB 刷新操作必须执行。
+4. **优化 domain 释放流程**：在 `logic_domain_free` 中增加判断，跳过 SVA domain 的 `flush_iotlb_all` 和配置清理流程。
+5. **禁用 DVM 默认功能**：在硬件探测中默认关闭 DVM 特性（`UMMU_FEAT_BTM`），并设置相应的硬件限制选项。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0092a24b697108b5e976c4da0aae2d923122f1cd

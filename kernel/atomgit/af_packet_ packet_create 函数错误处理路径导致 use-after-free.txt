@@ -1,0 +1,20 @@
+#标题
+af_packet: packet_create 函数错误处理路径导致 use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建 AF_PACKET 类型的 socket 时，若 `packet_alloc_pending()` 分配失败，函数 `packet_create()` 会释放 `sk` 对象但随即返回错误。由于此时 `sock_init_data()` 已执行完毕，被释放的 `sk` 对象仍关联在 `sock` 对象中，导致残留悬空指针。后续代码若访问该 socket，将触发 use-after-free（释放后使用）漏洞。
+
+#主要错误日志
+未知
+
+#问题根因
+在原代码逻辑中，`sock_init_data(sock, sk)` 先于 `packet_alloc_pending(po)` 执行。当 `packet_alloc_pending()` 失败时，错误处理分支直接调用 `sk_free(sk)` 释放内存，但未清理 `sock` 结构体中指向 `sk` 的指针。这导致 `sock` 结构体持有已释放内存的悬空指针，造成 use-after-free 隐患。
+
+#解决方案
+调整 `packet_create()` 函数中的初始化顺序，将 `packet_alloc_pending()` 的调用提前至 `sock_init_data()` 之前。若 `packet_alloc_pending()` 失败，则直接跳转至 `out_sk_free` 标签释放 `sk` 并返回错误，此时 `sock` 与 `sk` 尚未关联，从而避免了悬空指针的产生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e2aa347e1f9e3990f16b91e7edca2d7648777f43

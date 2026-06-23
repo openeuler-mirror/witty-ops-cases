@@ -1,0 +1,20 @@
+#标题
+rtc: at91sam9: 探测失败路径下的 OF node 引用泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 at91sam9 RTC 驱动时，若在 `probe` 阶段获取 GPBR regmap 失败（例如 `syscon_node_to_regmap` 返回错误），驱动将终止初始化流程。此过程中，由于未正确释放设备树节点（OF node）的引用计数，导致内核对象资源泄露。长期运行或反复执行设备绑定/解绑操作可能耗尽系统资源。
+
+#主要错误日志
+failed to retrieve gpbr regmap, aborting.
+
+#问题根因
+驱动在 `at91_rtc_probe` 函数中调用 `of_parse_phandle_with_fixed_args()` 获取设备树节点引用后，未在后续的错误处理路径中调用 `of_node_put()` 释放该引用。具体来说，当 `syscon_node_to_regmap(args.np)` 执行失败或后续检查出错时，代码直接返回，遗漏了对 `args.np` 的释放操作。
+
+#解决方案
+在 `syscon_node_to_regmap()` 调用之后，添加 `of_node_put(args.np)` 调用，确保无论后续探测是否成功，设备树节点的引用计数都能被正确释放，从而修复资源泄露问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ccb54e4976eab0119b398d7f34786cf2c46ee2ab

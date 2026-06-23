@@ -1,0 +1,24 @@
+#标题
+LoongArch IOMMU 模块初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+LoongArch 架构下 IOMMU 模块初始化过程中发生失败，导致 IOMMU 功能无法正常使用。具体表现为驱动加载或设备绑定时无法正确分配默认域类型，可能伴随内核返回错误码或设备探测失败。
+
+#主要错误日志
+未知
+
+#问题根因
+LoongArch IOMMU 驱动程序未实现 `def_domain_type` 回调函数，且 `la_iommu_domain_alloc` 函数缺乏对 `IOMMU_DOMAIN_IDENTITY` 类型域的处理逻辑。当 IOMMU 子系统尝试为设备分配默认域（通常为 IDENTITY 类型）时，驱动无法正确响应，导致初始化流程异常终止。此外，`loongarch_iommu_disable` 变量初始值设置不当也可能影响初始化状态。
+
+#解决方案
+1. 新增 `la_iommu_def_domain_type` 回调函数，指定默认域类型为 `IOMMU_DOMAIN_IDENTITY`，并将其注册到 `la_iommu_ops` 操作集中。
+2. 在 `la_iommu_domain_alloc` 函数的 switch 分支中增加对 `IOMMU_DOMAIN_IDENTITY` 类型的支持，使其与 `IOMMU_DOMAIN_UNMANAGED` 等类型共享分配逻辑。
+3. 修正 `la_iommu_domain_alloc` 的错误返回值，将 `NULL` 改为 `ERR_PTR(-ENOMEM)` 和 `ERR_PTR(-EINVAL)`，以符合内核标准错误处理规范。
+4. 在 `la_iommu_attach_dev` 流程中增加对 `IOMMU_DOMAIN_IDENTITY` 类型域的判断，允许其直接通过。
+5. 将全局变量 `loongarch_iommu_disable` 的初始化值从 1 修改为默认的 0（隐式初始化）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7e640142ed329d136ee5d8aad89fe14226330abb

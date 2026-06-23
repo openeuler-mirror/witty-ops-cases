@@ -1,0 +1,25 @@
+#标题
+CIFS/SMB3 tcon 引用计数并发更新导致的数据竞争与潜在内存释放风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CIFS/SMB3 挂载环境下，并发操作（如取消关闭请求、DFS 引用查询、服务器重连或缓存目录清理）可能导致 `tcon` 结构体的引用计数 `tc_count` 更新出现竞争。由于错误的锁使用，可能导致引用计数管理混乱，进而引发内核警告 "tcon refcount is negative"，或导致 Use-After-Free 及内核崩溃。
+
+#主要错误日志
+WARN_ONCE(tcon->tc_count < 0, "tcon refcount is negative");
+
+#问题根因
+内核社区之前引入了细粒度锁（`srv_lock`, `ses_lock`, `tc_lock`）以替代全局锁 `cifs_tcp_ses_lock` 来保护结构体字段。但在部分代码路径中，开发者仍错误地使用全局锁 `cifs_tcp_ses_lock` 来保护 `tcon` 结构体内的 `tc_count` 字段。这种不一致的加锁方式导致在并发场景下，对 `tc_count` 的修改操作未受正确锁保护，引发了数据竞争。
+
+#解决方案
+将所有涉及修改 `tcon->tc_count` 字段的代码路径中的锁操作，从全局锁 `cifs_tcp_ses_lock` 替换为 `tcon` 结构体内部的细粒度锁 `tc_lock`。
+具体修改文件及位置：
+1. `fs/smb/client/cached_dir.c`：在 `cfids_laundromat_worker` 中修改 `tc_count` 前后使用 `tc_lock`。
+2. `fs/smb/client/smb2misc.c`：在 `smb2_handle_cancelled_close` 中使用 `tc_lock` 保护 `tc_count` 的读取、检查与更新。
+3. `fs/smb/client/smb2ops.c`：在 `smb2_get_dfs_refer` 中对 `tc_count` 的自增操作加锁，对自减操作调用 `cifs_put_tcon`（内部已包含正确的锁处理）。
+4. `fs/smb/client/smb2pdu.c`：在 `smb2_reconnect_server` 中对 `tc_count` 的自增操作加锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/44af0238792c09dfc5cd54cc120bc12851b8dee6

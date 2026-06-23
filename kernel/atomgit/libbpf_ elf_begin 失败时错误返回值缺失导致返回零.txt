@@ -1,0 +1,20 @@
+#标题
+libbpf: elf_begin 失败时错误返回值缺失导致返回零
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `btf_parse_elf` 函数处理 ELF 文件失败（`elf_begin` 返回 NULL）时，函数错误地返回了 0（即成功状态码），而不是返回错误码。这会导致调用者误认为 BTF（BPF Type Format）解析成功，但实际上并未正确处理 ELF 文件，可能导致后续 BPF 程序加载或类型分析环节出现未定义行为或难以调试的逻辑错误。
+
+#主要错误日志
+failed to open %s as ELF file
+
+#问题根因
+在封装 `btf_find_elf_sections` 函数的过程中，遗漏了 `elf_begin` 失败时的错误码设置。代码在 `elf_begin` 失败分支仅打印了警告日志并跳转到 `done` 清理流程，但未将局部变量 `err` 设置为负值错误码（如 `-LIBBPF_ERRNO__FORMAT`），导致函数最终返回了 `err` 的初始化值（通常为 0）。
+
+#解决方案
+在 `tools/lib/bpf/btf.c` 的 `btf_parse_elf` 函数中，针对 `elf_begin` 失败的分支（`if (!elf)`），显式添加错误码赋值语句 `err = -LIBBPF_ERRNO__FORMAT;`，确保在 ELF 文件打开失败时返回正确的错误状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/061e9efd7d1bb2c4f199d879b0f69a578006e1bc

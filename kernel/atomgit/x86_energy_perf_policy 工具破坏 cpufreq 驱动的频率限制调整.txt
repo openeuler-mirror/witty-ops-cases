@@ -1,0 +1,21 @@
+#标题
+x86_energy_perf_policy 工具破坏 cpufreq 驱动的频率限制调整
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `x86_energy_perf_policy` 工具设置硬件性能状态（HWP）限制时，若系统同时启用了 intel_pstate 驱动，工具对 MSR（Model Specific Register）的直接写入操作会覆盖驱动通过 sysfs 接口调整后的值。这导致驱动对频率范围的裁剪（clipping）逻辑失效，使得最终的硬件限制超出平台允许的范围（PLATFORM_INFO），造成性能状态设置不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+`x86_energy_perf_policy` 工具在通过 cpufreq sysfs 接口设置频率限制后，仍然继续尝试直接写入 MSR 寄存器来设置 raw HWP limits。
+intel_pstate 驱动程序会将用户的 sysfs 请求根据 `PLATFORM_INFO` 限制进行裁剪，例如当 HWP.CAP.MIN/MAX 超出平台支持范围时，驱动会修正这些值。然而，工具后续对 MSR 的直接写入操作绕过了驱动的修正逻辑，直接修改了硬件寄存器，从而“撤销”了驱动所做的合规性调整。
+
+#解决方案
+在代码逻辑中增加标志变量 `hwp_limits_done_via_sysfs`。当工具成功通过 sysfs 接口更新 cpufreq scaling 频率时，将该标志置为 1。随后在 `update_hwp_request` 函数中，增加对 `hwp_limits_done_via_sysfs` 标志的检查，若已通过 sysfs 完成设置，则跳过对 `hwp_min` 和 `hwp_max` MSR 寄存器的直接写入操作，确保驱动修正后的配置不被覆盖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/429d5bd96f793510521730b6cde9ae41146807d9

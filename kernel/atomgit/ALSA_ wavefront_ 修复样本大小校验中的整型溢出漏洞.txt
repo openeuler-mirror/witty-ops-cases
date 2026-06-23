@@ -1,0 +1,23 @@
+#标题
+ALSA: wavefront: 修复样本大小校验中的整型溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ALSA wavefront 驱动加载样本时，若 `header->size` 变量值过大（超过有符号 int 的最大值），会导致 `wavefront_send_sample()` 函数在校验样本大小时发生整型溢出。该溢出会绕过内存充足性检查，导致驱动误判内存不足或引发后续内存分配与访问异常。
+
+#主要错误日志
+- "insufficient memory to load %u byte sample.\n"（修复后的日志格式）
+
+#问题根因
+`wavefront_send_sample()` 函数在校验样本大小时存在逻辑缺陷。`header->size` 字段为 `u32` 类型，但原代码将其强制转换为 `int` 类型与 `dev->freemem` 进行比较。当 `header->size` 的值大于 `INT_MAX`（例如最高位为 1）时，转换后的结果变为负数，导致比较逻辑错误（整型溢出），从而绕过了内存容量的安全检查。
+
+#解决方案
+修改 `sound/isa/wavefront/wavefront_synth.c` 中的比较逻辑：
+1. 移除对 `header->size` 的强制 `int` 类型转换，直接使用无符号数进行比较，避免整型溢出。
+2. 增加对 `dev->freemem` 是否小于 0 的前置检查，确保错误状态被正确捕获。
+3. 将错误日志中的格式说明符由 `%d` 修改为 `%u`，以正确显示无符号整型数值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f310e32eb8c03a81cf4358aa0fbbd3064b3f0274

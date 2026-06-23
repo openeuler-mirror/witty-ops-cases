@@ -1,0 +1,22 @@
+#标题
+wifi: mwifiex: 申请中断与关闭中断间存在竞态条件导致异常中断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mwifiex 驱动加载过程中，调用 request_irq() 申请中断后至调用 disable_irq() 禁用中断前的时间窗口内，可能收到意外的中断请求。该竞态条件可能导致系统在未准备好处理中断的情况下触发中断处理流程，引发功能异常或稳定性问题。
+
+#主要错误日志
+推断：
+"Failed to request irq_wakeup %d (%d)\n"
+"fail to init wakeup for mwifiex\n"
+
+#问题根因
+根因在于代码逻辑中 `request_irq()` 与 `disable_irq()` 调用之间存在时间间隙。在此间隙内，中断线处于已启用状态，导致中断可能在预期禁用前触发，存在竞态风险。
+
+#解决方案
+修改中断申请逻辑，在 `request_irq()` 函数调用时传入 `IRQF_NO_AUTOEN` 标志。该标志可禁止中断在申请时自动使能，从而消除了单独调用 `disable_irq()` 的必要及其带来的竞态窗口，确保中断在显式使能前一直处于禁用状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/96cbcc2ef50cd32ceaa8bda433c9bbc14faf64de

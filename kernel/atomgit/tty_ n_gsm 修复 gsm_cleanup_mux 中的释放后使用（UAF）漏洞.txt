@@ -1,0 +1,30 @@
+#标题
+tty: n_gsm 修复 gsm_cleanup_mux 中的释放后使用（UAF）漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多线程并发通过 ioctl 调用清理 GSM 多路复用器时，触发 KASAN 检测到的 slab-use-after-free 错误。系统调用链显示在 `gsm_cleanup_mux` 函数中发生了非法内存读取，导致内核崩溃或内存损坏。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in gsm_cleanup_mux+0x77b/0x7b0
+Read of size 8 at addr ffff88815fe99c00 by task poc/3379
+Call Trace:
+ <TASK>
+ gsm_cleanup_mux+0x77b/0x7b0 drivers/tty/n_gsm.c:3160 [n_gsm]
+ gsmld_ioctl+0x395/0x1450 drivers/tty/n_gsm.c:3408 [n_gsm]
+ tty_ioctl+0x643/0x1100 drivers/tty/tty_io.c:2818
+
+Freed by task 3367:
+ kfree+0x126/0x420 mm/slub.c:4580
+ gsm_cleanup_mux+0x36c/0x7b0 drivers/tty/n_gsm.c:3160 [n_gsm]
+
+#问题根因
+`gsm_msg` 结构体存在于 `gsm_mux` 的 `tx_ctrl_list` 或 `tx_data_list` 链表中。由于缺乏锁保护，多个线程可以通过 ioctl 并发进入 `gsm_cleanup_mux` 函数，导致链表中的消息对象被重复释放（double free）或在遍历时访问已释放的内存，从而引发释放后使用（UAF）问题。
+
+#解决方案
+在 `gsm_cleanup_mux` 函数中遍历并释放 `tx_ctrl_list` 等链表之前，引入 `gsm->tx_lock` 自旋锁保护（使用 `guard(spinlock_irqsave)`），确保在清理队列和释放内存时的并发安全，防止多线程竞争导致的 UAF。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c160ea05806d6ef331c5b566137ce582c821bdcc

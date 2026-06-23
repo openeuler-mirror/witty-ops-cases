@@ -1,0 +1,27 @@
+#标题
+nexthop组内成员FDB状态变更导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 nexthop 组中包含成员 nexthop 时，若通过 `ip nexthop replace` 命令修改成员 nexthop 的 FDB 状态（从 FDB 改为非 FDB 或反之），随后添加路由并通过该 nexthop 组进行流量转发（如执行 ping 操作），将触发内核 NULL 指针解引用（NPD），导致主机崩溃或 Oops 异常。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 00000000000003c0
+Oops: Oops: 0000 [#1] SMP
+RIP: 0010:fib_lookup_good_nhc+0x1e/0x80
+Call Trace:
+ <TASK>
+ fib_table_lookup+0x541/0x650
+ ip_route_output_key_hash_rcu+0x2ea/0x970
+ ...
+
+#问题根因
+内核逻辑在创建 nexthop 组时正确校验了 FDB 与非 FDB 类型成员的互斥性，禁止了非 FDB 组包含 FDB 成员或 FDB 组包含非 FDB 成员的创建操作。但在修改（replace）单个 nexthop 属性时，未对 FDB 状态变更做限制。如果该 nexthop 已被加入某个组，修改其 FDB 状态会导致组内成员类型不一致。由于 FDB nexthop 未关联 nexthop 设备（nh_dev），路由查找路径在处理该非法配置时访问了空指针导致崩溃。
+
+#解决方案
+在 `replace_nexthop_single` 函数中增加校验逻辑：检查目标 nexthop 是否处于任何 nexthop 组中（通过 `grp_list` 判断），如果是，则禁止修改其 FDB 状态（比较 new 和 old 的 `fdb_nh` 标志位）。若检测到此类非法变更操作，内核拒绝执行并返回错误信息 "Cannot change nexthop FDB status while in a group"。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/679f6b8a2a1a7febe13f0095da23001a3440403f

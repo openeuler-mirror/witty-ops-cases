@@ -1,0 +1,38 @@
+#标题
+Bluetooth: L2CAP 对 L2CAP_ECRED_RECONF_REQ 请求响应错误结果码
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 L2CAP/ECFC 相关测试用例（如 BI-03-C, BI-04-C, BI-05-C, BI-06-C, BI-07-C）时，内核对 L2CAP Enhanced Credit Reconfigure Request 的响应不正确。具体表现为：
+1. 对请求的数据包长度校验逻辑错误，导致返回无效/保留的结果码（Result: Reserved 0x000c），而非预期的无效 CID 错误。
+2. 当 MPS 减小涉及多个信道时，错误返回重配置成功（0x0000），未按协议返回 L2CAP_RECONF_INVALID_MPS (0x0002)。
+3. 当 SCID 无效（未连接）时，错误返回重配置成功（0x0000），未返回无效 CID 错误（0x0003）。
+4. 当 MPS 值小于最小值（64）时，返回的结果码不符合预期参数错误（0x0004）。
+
+#主要错误日志
+> ACL Data RX: Handle 64 flags 0x02 dlen 14
+      LE L2CAP: Enhanced Credit Reconfigure Request (0x19) ident 2 len 6
+        MTU: 64
+        MPS: 64
+        Source CID: 64
+< ACL Data TX: Handle 64 flags 0x00 dlen 10
+      LE L2CAP: Enhanced Credit Reconfigure Respond (0x1a) ident 2 len 2
+!        Result: Reserved (0x000c)
+         Result: Reconfiguration failed - one or more Destination CIDs invalid (0x0003)
+
+#问题根因
+内核在处理 L2CAP_ECRED_RECONF_REQ 请求时存在多处逻辑缺陷：
+1. 数据长度校验错误：检查 CID 大小的逻辑 `(cmd_len - sizeof(*req) % sizeof(u16))` 运算符优先级错误，应为 `(cmd_len - sizeof(*req)) % sizeof(u16)`，导致校验失效并使用错误的结果码 `L2CAP_CR_LE_INVALID_PARAMS`（该值在重配置场景下为保留值）。
+2. 遍历处理逻辑不完整：原代码在遍历多个 SCID 时，遇到无效 CID 仅是 continue 跳过，未终止处理并返回错误；且 MPS 减小的检查逻辑未区分单信道与多信道场景，导致违反协议规范（多信道时不允许减小 MPS）。
+3. 提交修改前未进行参数原子性检查，先修改了信道参数再判断有效性，导致即使后续判定失败，信道状态已被破坏。
+
+#解决方案
+1. 修正校验逻辑：修正 CID 大小检查的运算符优先级，并在长度校验失败时返回正确的结果码 `L2CAP_RECONF_INVALID_CID`。
+2. 新增宏定义：添加 `L2CAP_RECONF_INVALID_CID` 和 `L2CAP_RECONF_INVALID_PARAMS` 宏以支持正确的错误码返回。
+3. 引入临时数组存储：使用指针数组 `chan[L2CAP_ECRED_MAX_CID]` 暂存查找到的信道结构体，先完成所有参数和状态的有效性检查（如 CID 有效性、MTU/MPS 是否允许减小），确认无误后再统一提交修改。若检查过程中发现任何错误（如无效 CID、MTU 减小、多信道 MPS 减小等），立即跳转至响应流程返回对应错误码。
+4. 完善边界检查：增加对 `num_scid` 是否超过 `L2CAP_ECRED_MAX_CID` 的检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/047545da43479f6407e7d7cf2caaa116f5d78d1d

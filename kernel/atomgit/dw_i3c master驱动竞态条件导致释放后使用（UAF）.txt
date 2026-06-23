@@ -1,0 +1,30 @@
+#标题
+dw_i3c master驱动竞态条件导致释放后使用（UAF）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 dw_i3c master 模块时，若此时中断处理程序正在调度 hot-join 工作，可能会导致内核发生释放后使用，进而引发内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dw_i3c_common_probe` 中，`&master->hj_work` 绑定了 `dw_i3c_hj_work` 函数。中断处理函数 `dw_i3c_master_irq_handler` 可能调用 `dw_i3c_master_irq_handle_ibis` 来调度该工作队列。
+在模块移除过程中调用 `dw_i3c_common_remove` 进行清理时，代码直接调用 `i3c_master_unregister` 释放了 `master->base`，但此时此前调度的 `hj_work` 可能尚未执行完毕或正在执行。这导致工作队列执行时访问了已经被释放的内存，触发 UAF。
+竞态序列如下：
+CPU0 (移除模块)                          CPU1 (工作队列)
+dw_i3c_common_remove                     |
+i3c_master_unregister(&master->base)     |
+device_release                           |
+// 释放 master->base                     |
+                                         | dw_i3c_hj_work
+                                         | i3c_master_do_daa(&master->base)
+                                         | // 使用已释放的 master->base
+
+#解决方案
+在 `dw_i3c_common_remove` 函数中，于调用 `i3c_master_unregister` 释放资源之前，先调用 `cancel_work_sync(&master->hj_work)` 取消并等待正在进行的 hj_work 工作队列完成，确保在清理资源前没有遗留的并发任务在运行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7d5b9cd6ef2724e5aa5892815da2dbcec1d0c020

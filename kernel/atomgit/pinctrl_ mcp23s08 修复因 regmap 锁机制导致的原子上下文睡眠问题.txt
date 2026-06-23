@@ -1,0 +1,34 @@
+#标题
+pinctrl: mcp23s08 修复因 regmap 锁机制导致的原子上下文睡眠问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当设备使用 MCP23xxx IO 扩展器接收中断时，系统触发 BUG，提示在无效上下文中调用了睡眠函数。具体表现为在加载使用 MCP23017 IO 扩展器（I2C）的触摸屏驱动实验过程中，内核报错并打印调用栈。
+
+#主要错误日志
+BUG: sleeping function called from invalid context at kernel/locking/mutex.c:283
+in_atomic(): 1, irqs_disabled(): 1, non_block: 0, ...
+preempt_count: 1, expected: 0
+...
+Call Trace:
+...
+__might_resched+0x104/0x10e
+__might_sleep+0x3e/0x62
+mutex_lock+0x20/0x4c
+regmap_lock_mutex+0x10/0x18
+regmap_update_bits_base+0x2c/0x66
+mcp23s08_irq_set_type+0x1ae/0x1d6
+__irq_set_trigger+0x56/0x172
+__setup_irq+0x1e6/0x646
+request_threaded_irq+0xb6/0x160
+
+#问题根因
+pinctrl-mcp23s08 驱动中的 regmap 默认使用互斥锁进行并发访问保护。在 `mcp23s08_irq_set_type()` 函数调用 `regmap_update_bits_base()` 时会尝试获取该互斥锁。然而，调用链上层的 `__setup_irq()` 函数已经持有了自旋锁，导致系统在持有自旋锁的情况下尝试获取互斥锁，从而引发原子上下文睡眠错误。
+
+#解决方案
+在 regmap 配置中设置 `disable_locking = true` 以禁用 regmap 内部锁，因为驱动自身的 `mcp->lock` 互斥锁已足以保护 regmap 免受并发访问影响。同时，在之前未受 `mcp->lock` 保护的 `mcp_pinconf_get()` 和 `mcp_pinconf_set()` 函数中补充了对 `mcp->lock` 的加锁与解锁操作，确保所有 regmap 访问路径的线程安全。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3d59a61fafe76abda83ae6b8a7b6ae7051f93d17

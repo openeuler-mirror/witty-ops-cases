@@ -1,0 +1,27 @@
+#标题
+proc文件系统 readdir 遍历引发 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 stress-ng 进行压测时，并发执行 getdent（遍历目录）和 tun（网络设备）相关测试用例时会触发 Use-After-Free（UAF）问题。具体表现为在遍历 `/proc/pid/net/dev_snmp6/` 目录时，内核访问了已被释放的 proc_dir_entry 结构体，可能导致内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `proc_readdir_de()` 函数执行目录遍历的过程中，存在一个时间窗口。此时另一个 CPU 正在执行 `unregister_netdevice` 和 `remove_proc_subtree`。
+具体过程如下：
+1. CPU 0 正在遍历 `/proc/pid/net/dev_snmp6/` 目录，当前 pde 为 tun3。
+2. CPU 1 注销 netdevice tun3 和 tun2，调用 `rb_erase()` 将它们从红黑树中移除，并将 pde(tun2) 释放回 slab 缓存。
+3. 此时 `rb_erase()` 虽然将节点从树中移除，但没有将节点的 `rb_node` 标记为 EMPTY（空）。
+4. CPU 0 继续执行 `pde_subdir_next()` 查找下一个节点时，由于 tun3 节点未正确标记为空，函数错误地返回了已被释放的 tun2 节点指针。
+5. CPU 0 对该指针进行解引用（`de = next`），触发 UAF 访问。
+
+#解决方案
+在移除 proc 目录项时，调用 `RB_CLEAR_NODE()` 宏显式地将红黑树节点设置为 EMPTY 状态。
+修改了 `fs/proc/generic.c`，新增 `pde_erase()` 辅助函数，封装了 `rb_erase()` 和 `RB_CLEAR_NODE()` 操作。在 `remove_proc_entry` 和 `remove_proc_subtree` 函数中，将原有的 `rb_erase()` 调用替换为 `pde_erase()`，确保节点在从红黑树移除后状态正确，从而使 `pde_subdir_next()` 能正确返回 NULL，避免返回已释放的节点。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9672c84ad3c55012a0ef31d83533ef1fdbcb6646

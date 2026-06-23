@@ -1,0 +1,34 @@
+#标题
+ROH 核心及 HNS3 驱动安全与逻辑缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **内存泄漏与释放后访问风险**：在 `alloc_hsag` 函数分配失败的错误处理路径中，未正确释放已分配的 `roh_hw_stats_attribute` 结构体内存；错误处理结束后指针未置空，存在后续被误用导致 UAF（Use-After-Free）的风险。
+2. **系统通知链异常**：IPv4 事件通知处理函数 `roh_ipv4_event` 在设置 EID 失败时，错误地返回了负值错误码，可能导致通知链处理异常或调用者行为异常。
+3. **函数返回值缺失**：`hns3_roh_reset_notify_init` 函数在重置初始化失败分支中未返回错误值，导致上层调用者误判重置操作成功。
+4. **格式字符串安全警告**：日志打印中使用了不匹配的格式说明符（如 `int` 对应 `unsigned int` 变量），存在潜在的格式字符串安全风险。
+
+#主要错误日志
+1. 推断日志（基于 pr_err 调用）：
+   `failed to set eid by IP, ret = %d`
+2. 推断日志（基于 dev_err 调用）：
+   `just %u intr resources, not enough(min: %d).`
+   `failed to reinit in roh reset process, ret = %d`
+
+#问题根因
+1. **安全缺陷**：`sysfs.c` 中错误处理路径的 `kfree` 操作对象错误，仅释放了属性指针数组项，未释放包含属性的结构体本身；且失败后未将指针置为 NULL。
+2. **逻辑错误**：`roh_ipv4_event` 返回值不符合 notifier 链规范，应返回 `NOTIFY_DONE` 而非负值错误码。
+3. **逻辑遗漏**：`hns3_main.c` 重置通知初始化失败时，执行了清理操作但遗漏 `return ret` 语句，导致函数继续执行并返回 0。
+4. **代码冗余与规范问题**：存在冗余的变量赋值（`active` 字段）、未使用的锁初始化（`crq.lock`）以及不安全的格式字符串使用。
+
+#解决方案
+1. 修正 `alloc_hsag` 错误处理路径，使用 `container_of` 正确获取并释放 `roh_hw_stats_attribute` 结构体内存，并在释放后将指针置 NULL。
+2. 修正 `roh_ipv4_event` 返回值，设置 EID 失败时返回 `NOTIFY_DONE`。
+3. 在 `hns3_roh_reset_notify_init` 失败分支增加 `return ret` 语句，确保错误码正确上报。
+4. 修正 `hns3_roh_get_cfg_from_frame` 中的 printk 格式说明符，将 `%d` 修改为 `%u` 以匹配无符号类型变量。
+5. 移除冗余代码，包括 `active` 字段相关操作、`crq.lock` 初始化及相关锁操作、冗余的调试信息打印。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/778ed997d610bab41beeee319df3bfc161747571

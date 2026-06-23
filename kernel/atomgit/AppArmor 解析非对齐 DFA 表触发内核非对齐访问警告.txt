@@ -1,0 +1,27 @@
+#标题
+AppArmor 解析非对齐 DFA 表触发内核非对齐访问警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在解析 AppArmor DFA（确定性有限自动机）表时，若表数据未按 8 字节对齐，内核会触发非对齐内存访问。系统运行过程中会抛出 WARNING 并打印堆栈跟踪，提示 "dfa blob stream ... not aligned" 及 "Kernel unaligned access"。该问题在某些严格检查对齐访问的架构（如 sparc）上会导致 AppArmor 规则加载失败或系统不稳定。
+
+#主要错误日志
+[   73.901376] WARNING: CPU: 0 PID: 341 at security/apparmor/match.c:316 aa_dfa_unpack+0x6cc/0x720
+[   74.536543] Call Trace:
+[   74.568561] [<0000000000434c24>] dump_stack+0x8/0x18
+[   74.633757] [<0000000000476438>] __warn+0xd8/0x100
+[   74.696664] [<00000000004296d4>] warn_slowpath_fmt+0x34/0x74
+[   74.771006] [<00000000008db28c>] aa_dfa_unpack+0x6cc/0x720
+[   75.609503] dfa blob stream 0xfff0000008926b96 not aligned.
+[   75.682695] Kernel unaligned access at TPC[8db2a8] aa_dfa_unpack+0x6e8/0x720
+
+#问题根因
+DFA 表数据可能源自内核空间或用户空间，其内存地址并不总能保证 8 字节对齐。在 `aa_dfa_unpack` 和 `unpack_table` 函数中，代码直接使用强制类型转换（如 `*(__be16 *) (blob)`）进行内存访问，这种直接解引用操作在某些架构上会触发非对齐访问异常或警告。
+
+#解决方案
+修改 `security/apparmor/match.c` 文件，引入 `<asm/unaligned.h>` 头文件，并将所有直接对 DFA 表数据的强制类型转换读取操作替换为 `get_unaligned_be16`、`get_unaligned_be32` 等安全访问宏函数。这些函数能够正确处理非对齐地址的数据读取，从而避免非对齐访问错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f405401cf458e1259418c71ca4bee2c0766dd8a6

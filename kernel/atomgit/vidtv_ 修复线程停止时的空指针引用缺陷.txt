@@ -1,0 +1,22 @@
+#标题
+vidtv: 修复线程停止时的空指针引用缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 vidtv 驱动启动流的过程中，若 `vidtv_mux_init` 初始化失败，后续流程可能触发空指针引用；此外，停止流接口在非流状态下被调用时，也会因访问空指针导致内核崩溃。
+
+#主要错误日志
+- 推断日志：`dev_warn_ratelimited(dev, "No streaming. Skipping.\n");`
+
+#问题根因
+1. 启动流逻辑中，`dvb->streaming` 标志位被置于 `vidtv_mux_init` 之前。若初始化失败返回 `-ENOMEM`，`dvb->streaming` 已被置为 true，但 `dvb->mux` 为 NULL，导致后续清理或停止逻辑访问空指针。
+2. 停止流逻辑中，未对 `dvb->streaming` 状态进行检查，若在未流状态下调用，可能操作未初始化的 `dvb->mux` 指针。
+
+#解决方案
+1. 将 `dvb->streaming = true` 的赋值操作移动到 `vidtv_mux_init` 成功之后，确保 mux 指针有效才标记流状态为真，避免初始化失败后的不一致状态。
+2. 在 `vidtv_stop_streaming` 函数开头增加状态检查，若 `dvb->streaming` 为 false，直接打印警告日志并返回，避免继续执行后续的停止与销毁逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/15e3c9baf1909563f6ed135d99b97e46a7ce9b65

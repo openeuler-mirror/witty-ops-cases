@@ -1,0 +1,20 @@
+#标题
+ath10k: peer_sta_ps_state_chg 事件处理函数缺少锁保护
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 WMI_PEER_STA_PS_STATE_CHG_EVENT 事件时，函数 `ath10k_wmi_event_peer_sta_ps_state_chg()` 试图断言持有 `ar->data_lock` 锁，但实际调用链中并未获取该锁。这可能导致 lockdep 锁校验警告，且对共享数据 `arsta->peer_ps_state` 的并发访问存在竞态条件风险。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ath10k_wmi_event_peer_sta_ps_state_chg()` 使用 `lockdep_assert_held()` 断言调用者应持有 `ar->data_lock` 锁，但实际上层调用函数 `ath10k_wmi_10_2_op_rx()` 和 `ath10k_wmi_10_4_op_rx()` 在调用该函数前并未获取此锁。同时，字段 `arsta->peer_ps_state` 在 `core.h` 中明确注释由 `ar->data_lock` 保护，缺少锁保护违反了该数据结构的访问规则。
+
+#解决方案
+移除无效的 `lockdep_assert_held()` 断言，并在更新 `arsta->peer_ps_state` 字段的代码段周围显式添加 `spin_lock_bh(&ar->data_lock)` 和 `spin_unlock_bh(&ar->data_lock)`，以确保对共享数据的并发安全访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5fbaf58b78806f1820939031f02c5b65b638fad1

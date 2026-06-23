@@ -1,0 +1,20 @@
+#标题
+dma-fence: fence merge 失败路径下的引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 dma-fence 合并操作过程中，如果分配输出 dma-fence-array 失败，会导致输入的 fence 对象引用计数发生泄漏。随着时间推移，可能导致内存泄漏或相关资源无法正常释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `__dma_fence_unwrap_merge` 中，当分配 `result`（dma-fence-array）失败时，代码直接跳转到 `return_tmp` 标签进行错误处理返回。在此之前，代码已经将输入的 fence 对象存入临时数组 `array` 并增加了引用计数（或持有引用），但在分配失败的错误处理路径中，未遍历 `array` 数组调用 `dma_fence_put` 释放这些引用，从而导致引用计数泄漏。
+
+#解决方案
+在 `result` 分配失败的分支中，增加一个循环遍历 `array` 数组，对每一个已处理的 fence 调用 `dma_fence_put`，以确保在错误返回前正确释放所有持有的引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5f989eb91a852f4daaeca99e8e138d4a310f0b67

@@ -1,0 +1,20 @@
+#标题
+NFSv4/pNFS: 修复 NFS_LAYOUT_DRAIN 唤醒条件的竞态问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 pNFS 布局获取操作并发较高的场景下，当 `NFS_LAYOUT_DRAIN` 标志位被清除并尝试唤醒等待进程时，存在内存屏障缺失导致的竞态风险。这可能导致等待该标志位的进程无法被正确唤醒，进而引发相关 NFS 操作挂起或无响应。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nfs_layoutget_end` 函数中，使用 `atomic_dec_and_test` 原子操作减少引用计数并检查是否为零，随后调用 `test_and_clear_bit` 清除 `NFS_LAYOUT_DRAIN` 标志位并唤醒等待进程。问题在于，`atomic_dec_and_test` 与后续的 `wake_up_bit` 之间存在内存乱序可见性问题。根据修复补丁分析，缺少 `smp_mb__after_atomic()` 内存屏障可能导致唤醒动作在标志位清除操作对其他 CPU 可见之前执行，从而引发竞态，导致唤醒丢失。
+
+#解决方案
+在 `nfs_layoutget_end` 函数中，于 `test_and_clear_bit` 操作成功后、调用 `wake_up_bit` 之前，插入 `smp_mb__after_atomic()` 内存屏障函数。该屏障确保了对 `NFS_LAYOUT_DRAIN` 标志位的清除操作在唤醒动作之前对所有 CPU 可见，从而修复了该竞态问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/63e6e3e6dc02a9ea3dbbc39e1fc3650c8cc0265b

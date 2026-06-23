@@ -1,0 +1,28 @@
+#标题
+ice驱动SR-IOV VF初始化失败路径导致链表损坏引发内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 SR-IOV VFs 时，如果 `ice_ena_vfs()` 在调用 `ice_create_vf_entries()` 之后失败，系统会因链表损坏而触发内核 BUG 或 KASAN 报告。具体复现步骤为设置网卡为 switchdev 模式并开启 promisc 模式后，连续两次写入 `sriov_numvfs` 接口。故障发生时系统崩溃，调用栈指向 `ice_mbx_init_vf_info`。
+
+#主要错误日志
+list_add corruption. next->prev should be prev (ffff8882e241c6f0), but was 0000000000000000. (next=ffff888455da1330).
+kernel BUG at lib/list_debug.c:29!
+RIP: 0010:__list_add_valid_or_report+0xa6/0x100
+ ice_mbx_init_vf_info+0xa7/0x180 [ice]
+ ice_initialize_vf_entry+0x1fa/0x250 [ice]
+ ice_sriov_configure+0x8d7/0x1520 [ice]
+
+（或）
+BUG: KASAN: use-after-free in __list_add_valid_or_report+0xf1/0x100
+
+#问题根因
+VFs 在 `ice_mbx_init_vf_info()` 函数中被添加到 PF-VF mailbox 链表中，但在错误处理路径中，`ice_ena_vfs()` 失败后调用释放逻辑时，仅释放了 VF 内存，未将其从该链表中移除。这导致后续操作尝试向已释放的内存节点添加新条目，引发链表损坏（list_add corruption）或 Use-After-Free 错误。
+
+#解决方案
+将 VF 条目从 PF-VF mailbox 链表中移除的操作（`list_del(&vf->mbx_info.list_entry)`）从 `ice_free_vfs()` 函数移动到 `ice_free_vf_entries()` 函数中。这确保了在任何释放 VF 条目的场景下（包括错误路径），VF 都能正确地从链表中注销，从而避免链表损坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a4388a61d9d466184e2b0d16eea2094c026db50e

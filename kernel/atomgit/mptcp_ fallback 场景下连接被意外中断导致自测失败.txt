@@ -1,0 +1,20 @@
+#标题
+mptcp: fallback 场景下连接被意外中断导致自测失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CONFIG_PREEMPT 内核配置下，当 MPTCP 连接发生 fallback 时，若 TCP 对端在 MPTCP 之前关闭连接，数据传输会被意外中断。这表现为 MPTCP 自测程序在 fallback 场景下频繁失败。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `subflow_sched_work_if_closed()` 在处理 fallback socket 时存在竞态条件。当 TCP 对端关闭连接（半关闭）且无入站数据待处理时，该函数会调度 MPTCP worker 去优雅关闭子流，并尝试注入处理一个假的 DATA_FIN。在 CONFIG_PREEMPT 内核下，MPTCP worker 可能过早执行，在 `subflow_sched_work_if_closed()` 创建 dummy DATA_FIN 之前就关闭了 fallback 子流，从而意外中断了数据传输。问题在于代码逻辑未对 fallback 子流进行特殊处理，而 fallback 子流不需要 MPTCP 层面的双向连接性检查。
+
+#解决方案
+在 `__mptcp_close_subflow()` 函数中增加对 fallback 状态的检查。如果当前处于 fallback 模式（通过 `__mptcp_check_fallback(msk)` 判断），则跳过关闭子流的操作，从而避免在 fallback 半关闭场景下因竞态导致的过早关闭问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9d30164d62f667c8869a29379c4692c882407884

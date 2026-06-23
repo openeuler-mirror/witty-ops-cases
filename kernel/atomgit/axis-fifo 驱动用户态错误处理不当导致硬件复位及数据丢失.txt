@@ -1,0 +1,22 @@
+#标题
+axis-fifo 驱动用户态错误处理不当导致硬件复位及数据丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 axis-fifo 驱动的 read 或 write 操作遇到用户可感知的错误（如读取长度为 0、用户缓冲区过小、数据非字对齐或用户空间内存拷贝失败）时，驱动程序会执行不必要的硬件复位操作。这导致硬件 TX 和 RX FIFO 被清空，AXI-Stream 链路被重置，从而造成其他正常进行中的 FIFO 数据通路发生数据丢失或硬件中断，影响系统稳定性。
+
+#主要错误日志
+- "received a packet of length 0\n"
+- "user read buffer too small (available bytes=%zu user buffer bytes=%zu)\n"
+- "received a packet that isn't word-aligned\n"
+
+#问题根因
+驱动程序在 `axis_fifo_read` 和 `axis_fifo_write` 函数的错误处理路径中，错误地调用了 `reset_ip_core()` 函数。该函数会对硬件 IP 核执行全局复位，清空所有 FIFO 缓冲并重置链路。这些错误场景属于用户态请求错误或软件逻辑异常，本应通过返回错误码（如 -EIO, -EINVAL, -EFAULT）让用户处理，而不应触发影响全局硬件状态的复位操作，导致无关的数据通路受到波及。
+
+#解决方案
+移除 `axis_fifo_read` 和 `axis_fifo_write` 函数中针对用户错误的硬件复位调用（`reset_ip_core`）。修改后的代码仅输出错误日志并向用户空间返回相应的错误码，允许用户自行处理错误，同时保持硬件状态稳定，避免因单个操作的错误而复位整个 IP 核造成其他数据丢失。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/952f7cd12da31225ca0eb95b2dd1d80035d6ee3a

@@ -1,0 +1,24 @@
+#标题
+gpio-fan 驱动缺失互斥锁保护导致竞态风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 gpio-fan 驱动的散热冷却设备接口设置风扇状态（thermal_cooling_device ops）、执行设备停止、挂起或恢复操作时，由于 `set_fan_speed()` 函数调用路径缺少互斥锁保护，可能导致风扇控制逻辑出现并发访问冲突，引发不可预期的风扇转速行为或内核状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+`set_fan_speed()` 函数设计上要求调用者持有 `fan_data->lock` 互斥锁，但在 `gpio_fan_set_cur_state`、`gpio_fan_stop`、`gpio_fan_suspend` 和 `gpio_fan_resume` 这四个函数中直接调用了 `set_fan_speed()`，未进行加锁操作。这违反了该驱动内部的并发同步约定，导致关键数据段存在竞态条件风险。
+
+#解决方案
+在涉及风扇速度设置的关键路径上补充互斥锁保护。具体修改如下：
+1. 在 `gpio_fan_set_cur_state` 函数中，调用 `set_fan_speed()` 前后分别添加 `mutex_lock` 和 `mutex_unlock`。
+2. 在 `gpio_fan_stop` 函数中，调用 `set_fan_speed()` 前后分别添加 `mutex_lock` 和 `mutex_unlock`。
+3. 在 `gpio_fan_suspend` 函数中，调用 `set_fan_speed()` 前后分别添加 `mutex_lock` 和 `mutex_unlock`。
+4. 在 `gpio_fan_resume` 函数中，调用 `set_fan_speed()` 前后分别添加 `mutex_lock` 和 `mutex_unlock`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b4d0aca1fbfb4e96673b2f6e67ca46dcd57b284d

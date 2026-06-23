@@ -1,0 +1,26 @@
+#标题
+net: dsa: microchip: PTP 中断初始化失败导致虚拟 IRQ 泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Microchip KSZ DSA 交换机驱动初始化 PTP（精确时间协议）消息中断时，若 `request_threaded_irq()` 步骤发生错误，驱动进入错误处理路径，导致新创建的虚拟 IRQ（Virtual IRQ）映射未被释放，造成内存资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ksz_ptp_irq_setup()` 中，`irq_create_mapping()` 被调用的时机与 `ptpmsg_irq[n].num` 赋值及错误处理逻辑不对称。具体原因为：
+1. 虚拟 IRQ 映射在 `ksz_ptp_irq_setup()` 函数外部批量创建，但在 `ksz_ptp_msg_irq_setup()` 内部才赋值给 `ptpmsg_irq[n].num`。
+2. 如果在赋值前（例如 `request_threaded_irq()` 阶段）发生错误，代码进入错误处理路径，此时 `ptpmsg_irq[n].num` 尚未持有有效的 IRQ 编号。
+3. 错误处理代码尝试根据 `ptpmsg_irq[n].num` 来释放映射，由于该值为空或无效，导致 `irq_dispose_mapping()` 未被正确执行，从而丢失了该虚拟 IRQ 的映射关系。
+
+#解决方案
+调整 IRQ 映射创建的位置，确保创建与释放的对称性：
+1. 将 `irq_create_mapping()` 的调用从 `ksz_ptp_irq_setup()` 移至 `ksz_ptp_msg_irq_setup()` 函数内部，并立即将返回值赋给 `ptpmsg_irq->num`。
+2. 若 `irq_create_mapping()` 返回失败，直接返回错误，避免后续操作。
+3. 在错误处理路径（`out_ptp_msg` 标签处）添加 `irq_dispose_mapping(port->ptpmsg_irq[irq].num)` 调用，确保在释放中断处理函数后，同步销毁 IRQ 映射，防止资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/177376d5f0c50f4dcf10a485fc2414261776795b

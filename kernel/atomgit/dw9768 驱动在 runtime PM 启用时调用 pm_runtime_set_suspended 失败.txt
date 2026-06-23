@@ -1,0 +1,24 @@
+#标题
+dw9768 驱动在 runtime PM 启用时调用 pm_runtime_set_suspended 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 dw9768 驱动 probe 或 remove 过程中，若运行时电源管理（Runtime PM）已使能，调用 `pm_runtime_set_suspended()` 或 `pm_runtime_set_active()` 会返回 `-EAGAIN` 错误，导致设备状态设置失败，驱动初始化或卸载流程异常。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 probe 流程中先调用了 `pm_runtime_enable(dev)`，随后在条件分支中调用 `pm_runtime_set_active(dev)`；在 remove 流程中也是先调用 `pm_runtime_disable(dev)` 的位置不当（在 diff 修改前，remove 中先调用 `pm_runtime_set_suspended` 再 disable）。
+根据内核 Runtime PM 机制，对于已经通过 `pm_runtime_enable` 使能了运行时电源管理的设备，直接调用 `pm_runtime_set_suspended` 或 `pm_runtime_set_active` 是无效的，函数会返回 `-EAGAIN`，因为此时设备状态由 PM core 自动管理。代码逻辑顺序错误导致在 PM 已使能状态下尝试手动设置状态。
+
+#解决方案
+调整 `pm_runtime_enable` 与状态设置函数的调用顺序：
+1. 在 probe 流程中，先执行 `pm_runtime_set_active(dev)`，然后再调用 `pm_runtime_enable(dev)`，确保在使能 PM 前完成状态预设。
+2. 在 remove 流程中，先调用 `pm_runtime_disable(dev)`，然后再调用 `pm_runtime_set_suspended(dev)`，确保在禁用 PM 后再手动设置状态。
+3. 同时修正了判断条件，使用 `!IS_ENABLED(CONFIG_PM)` 替代 `!pm_runtime_enabled(dev)` 以避免逻辑依赖关系混乱。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/73ee0401670b6baf4f4ab77fe3d68828cdfa7893

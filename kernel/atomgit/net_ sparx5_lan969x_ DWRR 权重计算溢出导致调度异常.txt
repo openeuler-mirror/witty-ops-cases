@@ -1,0 +1,20 @@
+#标题
+net: sparx5/lan969x: DWRR 权重计算溢出导致调度异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 DWRR（Deficit Weighted Round Robin）调度策略时，因硬件开销值计算错误，导致带宽无法按预期在各流量类之间正确分配。由于计算出的 cost 值超出寄存器位宽限制发生溢出，实际写入硬件的权重值与预期不符，导致流量调度行为异常（如某些队列带宽份额不符合配置预期）。
+
+#主要错误日志
+未知
+
+#问题根因
+宏定义 `SPX5_DWRR_COST_MAX` 设置为 63（对应 6 bits），但硬件寄存器字段 `HSCH_DWRR_ENTRY_DWRR_COST` 实际仅为 5 bits 宽（对应掩码 `GENMASK(24, 20)`，最大值应为 31）。该不匹配导致函数 `sparx5_weight_to_hw_cost()` 计算出的 cost 值在通过 `FIELD_PREP` 写入寄存器时发生静默溢出，从而产生错误的调度权重。
+
+#解决方案
+将 `drivers/net/ethernet/microchip/sparx5/sparx5_qos.h` 文件中的宏定义 `SPX5_DWRR_COST_MAX` 的值从 63 修改为 31，使其与硬件寄存器的实际位宽保持一致，防止数值溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0ea32f77a66d74104218cff4a03258959540132a

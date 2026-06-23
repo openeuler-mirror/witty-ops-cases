@@ -1,0 +1,21 @@
+#标题
+libbpf 程序加载回调中 expected_attach_type 设置处理逻辑缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核不支持 `expected_attach_type` 字段的情况下，对于允许的程序类型，重置 `expected_attach_type` 为零的逻辑失效，导致 USDT（User Statically Defined Tracing）程序在使用 uprobe multi link 功能时无法正确设置或保留附加类型，进而导致程序加载或挂载行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根据提交信息，引入缺陷的 Commit 5902da6d8a52 破坏了原有的逻辑：当内核不支持 `expected_attach_type` 字段时，针对允许的程序类型将其重置为零的逻辑失效。同时，对于 multi-uprobe 场景，虽然需要显式覆盖并保留 `expected_attach_type`，但原代码未在 `libbpf_prepare_prog_load` 回调函数中同步更新 `prog->expected_attach_type` 和 `opts->expected_attach_type`，且赋值时机与位置不当，导致了字段设置处理错误。
+
+#解决方案
+1. 在 `libbpf_prepare_prog_load` 函数中，针对 USDT 且内核支持 `FEAT_UPROBE_MULTI_LINK` 的场景，显式同时设置 `prog->expected_attach_type` 和 `opts->expected_attach_type` 为 `BPF_TRACE_UPROBE_MULTI`，确保用户在程序中查询该值时能获取正确结果。
+2. 将 `load_attr.expected_attach_type` 的赋值逻辑移至 `bpf_object_load_prog` 函数中更早的位置（在 `btf_fd` 处理之前），确保在程序加载属性初始化阶段就正确获取并固化 `prog->expected_attach_type` 的值，避免后续流程干扰。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/64d0c18e02381f11fc918acfbe79df814939a551

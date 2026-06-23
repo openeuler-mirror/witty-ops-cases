@@ -1,0 +1,37 @@
+#标题
+urma: ubagg failback 设备查找与释放逻辑缺陷导致潜在内存泄露或空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 UB (Userspace Bus) 聚合的 Failback（故障回切）操作或设备查找时，内核可能遭遇以下异常：
+1.  内核崩溃或空指针解引用，发生在尝试访问已释放或未正确获取的设备对象时。
+2.  内存泄露，表现为 `ubagg_device` 或 `ubcore_device` 对象的引用计数未正确释放，设备无法被正常注销或销毁。
+3.  Failback 请求处理失败，导致高可用连接回切功能异常。
+
+#主要错误日志
+未知
+（注：Commit diff 中仅包含代码逻辑修正，未显式包含 dmesg 日志输出片段。但从修正逻辑推断，可能伴随 "Failed to get bonding device for failback start" 或类似错误打印。）
+
+#问题根因
+该故障由多个相关的引用计数管理与设备查找逻辑缺陷共同导致：
+1.  **设备查找接口设计缺陷**：原先使用 `ubagg_find_bonding_device` 查找设备时，未增加设备对象的引用计数，导致在并发场景下设备可能在被使用过程中被释放，引发 Use-After-Free 或空指针崩溃。
+2.  **设备查找依据错误**：在 Failback 处理流程（如 `fb_handle_start`）中，错误地使用了 `task->new_pjetty_id.eid`（新物理 Jetty ID 的 EID）来查找 Bonding 设备。正确的逻辑应使用 `task->vjetty_id.eid`（虚拟 Jetty ID 的 EID），因为虚拟 EID 才是 Bonding 设备的唯一标识，导致查找失败或查找到错误的设备。
+3.  **引用计数操作不匹配**：
+    - 在 `alloc_xchg_session` 中错误地传入了 `dev` 参数，导致 Session 创建过程引用计数管理混乱。
+    - 在连接交换流程（`ubagg_connect_xchg_seg` 等）中，错误调用 `ubagg_put_ubcore_device` 释放物理设备，而物理设备应通过 `ubcore_put_device` 释放。
+    - Failback 回调函数（`fb_req_complete`、`fb_complete`）中仅释放了设备引用但未处理其他资源，且在错误分支遗漏了引用释放。
+
+#解决方案
+通过重构设备管理接口并修正 Failback 流程的引用计数逻辑来解决：
+1.  **重构设备管理接口**：将 `ubagg_find_bonding_device` 替换为 `ubagg_get_device_by_eid` 等新接口。新接口在查找设备的同时通过 `kref_get` 增加引用计数，确保调用者持有一个有效的引用，调用者使用完毕后需调用 `ubagg_put_device` 释放。
+2.  **修正 Failback 查找逻辑**：在 `fb_handle_start` 中，将设备查找参数从 `task->new_pjetty_id.eid` 修正为 `task->vjetty_id.eid`，确保根据虚拟 EID 正确找到对应的 Bonding 设备。
+3.  **统一引用计数操作**：
+    - 修正 `alloc_xchg_session` 调用，传入 `NULL` 避免不必要的引用获取。
+    - 将物理设备释放接口统一为 `ubcore_put_device`，并导出该符号。
+    - 在 `handle_seg_req`、`handle_jetty_req` 及 Failback 流程中补充遗漏的 `ubagg_put_device` 调用，确保所有错误分支和正常流程均能正确释放设备引用。
+    - 新增 `ubagg_session_flush` 接口以支持设备注销时刷新会话队列。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8e9dbbafb409d55e3348028c2fd6de6b5ee514d1

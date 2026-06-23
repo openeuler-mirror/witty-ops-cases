@@ -1,0 +1,24 @@
+#标题
+net/sched: act_ife 模块释放后使用（UAF）导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核中使用 IFE（Ingress Flow Enforcement）动作模块时，若配置修改触发参数更新，内核可能出现释放后使用，导致系统崩溃、重启或触发内核 Oops。该问题属于安全漏洞 CVE-2026-23378。
+
+#主要错误日志
+Unknown
+
+#问题根因
+在 `act_ife` 模块中，元数据列表 `metalist` 原本存储在 `tcf_ife_info` 结构体中。当用户修改配置触发 `tcf_ife_init` 更新时，旧参数通过 `kfree_rcu` 释放，但此时 `metalist` 链表头随旧参数一同失效。与此同时，数据包处理路径（如 `tcf_ife_decode`）仍在通过 RCU 保护读取该链表头，导致访问已释放内存，引发 UAF 故障。此外，旧代码在清理元数据时直接释放内存，未正确处理元数据操作模块的引用计数。
+
+#解决方案
+将 `metalist` 链表头从 `tcf_ife_info` 结构体移动到 `tcf_ife_params` 结构体中，使元数据列表的生命周期与参数结构体一致，并利用 RCU 机制进行保护。
+1. 修改数据结构定义，将 `metalist` 移至 `tcf_ife_params`。
+2. 更新 `__add_metainfo`、`populate_metalist`、`dump_metalist` 等相关函数接口，传入 `tcf_ife_params` 指针而非 `tcf_ife_info`，确保操作的是当前有效的参数对象。
+3. 在 `tcf_ife_decode` 和 `tcf_ife_encode` 等数据路径函数中，通过 `rcu_dereference_bh` 获取当前参数对象，再遍历其 `metalist`，确保读取安全。
+4. 使用 `call_rcu` 替代 `kfree_rcu` 来延迟释放参数结构体，并在回调函数中正确清理元数据列表及释放模块引用，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ffbc02a662f1c18b1870990b5d01ef20a394ddea

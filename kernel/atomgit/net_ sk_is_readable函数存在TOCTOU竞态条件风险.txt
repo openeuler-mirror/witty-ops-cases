@@ -1,0 +1,20 @@
+#标题
+net: sk_is_readable函数存在TOCTOU竞态条件风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `sk_is_readable` 函数判断套接字可读性时，由于存在 Time-of-Check to Time-of-Use (TOCTOU) 竞态条件，若 `sk->sk_prot` 指针在检查与使用之间被并发修改，可能导致内核读取到错误的函数指针或数据，进而引发内核恐慌或未定义行为。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `sk_is_readable` 在访问 `sk->sk_prot` 成员时存在竞态窗口。原代码逻辑分两次访问 `sk->sk_prot`：第一次是在 `if` 语句中检查 `sk->sk_prot->sock_is_readable` 是否存在，第二次是在返回语句中调用 `sk->sk_prot->sock_is_readable(sk)`。在这两次访问之间，`sk->sk_prot` 指针可能被其他执行流修改，导致检查时使用的协议结构与实际调用时不一致，从而引发 TOCTOU 安全隐患。
+
+#解决方案
+通过引入局部变量并使用 `READ_ONCE` 宏来修复该问题。在函数入口处，使用 `READ_ONCE(sk->sk_prot)` 将套接字协议指针一次性读取到局部变量 `prot` 中，后续的检查和调用均基于该局部变量进行。这确保了检查与使用的是同一个指针值，消除了竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/64277ba39c93e4751e13a16b4ee745c82584c2d1

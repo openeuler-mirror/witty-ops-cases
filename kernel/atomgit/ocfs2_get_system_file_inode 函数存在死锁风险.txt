@@ -1,0 +1,25 @@
+#标题
+ocfs2_get_system_file_inode 函数存在死锁风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在并发执行 ocfs2_mknod 和 ocfs2_fill_super 流程时触发死锁，导致相关进程处于不可中断睡眠状态（D状态），系统负载升高或挂起。Syzkaller 测试报告了此潜在死锁问题。
+
+#主要错误日志
+- 推断日志（基于补丁新增的 mlog 打印）：
+  mlog(ML_ERROR, "Inode #%llu ip_alloc_sem is temporarily unavailable\n", ...);
+
+#问题根因
+内核中存在锁依赖反转导致的死锁（ABBA 死锁）。具体的锁获取顺序冲突如下：
+CPU0 路径：先获取 `ocfs2_file_ip_alloc_sem_key` 锁（在 ocfs2_mknod 中），后尝试获取 `system_file_mutex` 锁（在 ocfs2_get_system_file_inode 中）。
+CPU1 路径：先获取 `system_file_mutex` 锁（在 ocfs2_fill_super 中），后尝试获取 `ocfs2_file_ip_alloc_sem_key` 锁（在 ocfs2_read_virt_blocks 中）。
+两个 CPU 互斥地持有对方需要的锁，形成死锁环路。
+
+#解决方案
+在 `ocfs2_read_virt_blocks` 函数中，将 `ip_alloc_sem` 信号量的获取方式从阻塞式 `down_read` 修改为尝试式 `down_read_trylock`。
+若锁获取失败，函数立即返回 `-EAGAIN` 错误并打印错误日志，避免因等待锁资源而进入死锁等待队列，从而打破死锁环路。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bbe7abe84a560db89d2886cc2aa329e83a7fbb77

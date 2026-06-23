@@ -1,0 +1,22 @@
+#标题
+i40e 网卡 PTP 应用报文接收时间戳丢失故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 PTP 应用（如 ptp4l）且高频率 PTP 报文入站的场景下，应用层收到 SYNC 报文但未携带硬件时间戳，导致 PTP 同步功能异常。
+
+#主要错误日志
+ptp4l[13848.762]: port 1 (ens2f3np3): received SYNC without timestamp
+ptp4l[13848.825]: port 1 (ens2f3np3): received SYNC without timestamp
+ptp4l[13848.887]: port 1 (ens2f3np3): received SYNC without timestamp
+
+#问题根因
+在 `set_rx_mode` 函数中，缺少服务任务调度。当服务任务未在 `set_rx_mode` 之后立即运行时，无法及时检查 PTP RX 报文是否在固件中挂起，也无法正确传播 IEEE 1588 精密时间协议（PTP）所需的多播地址等设置。由于 RX 时间戳功能依赖于这些过滤器的正确设置，若服务任务调度延迟，将导致接收到的 SYNC 报文丢失时间戳。该问题仅在 PTP 报文频率较高时偶现。
+
+#解决方案
+在 `i40e_set_rx_mode` 函数末尾添加 `i40e_service_event_schedule(vsi->back)` 调用，确保在设置接收模式后立即调度服务任务，以及时处理固件中的 PTP 报文并应用正确的过滤器设置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1c9bb3ddb20986fef201bf78c6aefdcabad67cb

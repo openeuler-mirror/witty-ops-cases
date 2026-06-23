@@ -1,0 +1,20 @@
+#标题
+can: gs_usb: gs_usb_receive_bulk_callback 中 usb_submit_urb 失败致 URB 未解锚引发挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 gs_usb 驱动在 `gs_usb_receive_bulk_callback` 函数中重新提交 URB（`usb_submit_urb`）失败时，该 URB 仍然保留在锚点链表中。此时若调用 `gs_can_close` 关闭设备，`usb_kill_anchored_urbs` 会无限循环等待链表变空，导致关闭接口的操作挂起，进程处于不可中断睡眠状态。
+
+#主要错误日志
+- `netdev_info(netdev, "failed to re-submit IN URB: %pe\n", ERR_PTR(urb->status));`（推断：修复补丁新增的日志，用于记录提交失败）
+
+#问题根因
+在之前的修复提交（`7352e1d5932a`）中，为了防止 URB 内存泄漏，在调用 `usb_submit_urb` 之前将 URB 重新锚定到了 `rx_submitted` 链表。但是该逻辑未处理 `usb_submit_urb` 提交失败的情况。一旦提交失败，URB 仍保留在锚点链表中无法被消耗，导致后续 `gs_can_close` 中的 `usb_kill_anchored_urbs` 死循环。
+
+#解决方案
+在 `gs_usb_receive_bulk_callback` 函数中增加对 `usb_submit_urb` 返回值的检查。若提交失败（返回非 0），立即调用 `usb_unanchor_urb` 将 URB 从链表中移除，避免链表泄漏导致的挂起问题。同时，增加日志打印以便于故障定位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/765454b0dbaac7ac0e8ef99f4ce2193bd0a66dce

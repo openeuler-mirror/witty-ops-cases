@@ -1,0 +1,20 @@
+#标题
+usb: hub: 修复挂起恢复后因刷新延迟工作队列导致的异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Raspberry Pi 3B+ 设备上进行挂起恢复测试时触发新问题；同时该补丁修复了此前在 QC SC8280XP CRD 板上因未刷新延迟工作队列导致的 USB3 Hub runtime-suspend 过早问题。
+
+#主要错误日志
+未知
+
+#问题根因
+此前代码复用 `hub->init_work` 用于 post resume 目的，并在 `hub_quiesce()` 中对其进行刷新。然而 `init_work` 原本初始化为 NULL 工作函数，且运行中动态更改工作函数，这导致在不支持 USB3 的设备（如 Raspberry Pi 3B+，不队列 post resume 工作）上刷新该工作项时触发了非预期的新问题。
+
+#解决方案
+不再复用 `hub->init_work`，而是创建专用的延迟工作项 `hub->post_resume_work` 用于 post resume 处理。在 `hub_quiesce()` 中仅刷新该专用的 `post_resume_work`，从而解耦不同功能的工作队列，避免对未执行 post resume 逻辑的设备造成干扰。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cf0e642526bf1139826dd3fa409b138439454ef6

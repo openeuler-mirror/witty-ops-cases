@@ -1,0 +1,26 @@
+#标题
+bpf: 修复 coerce_reg_to_size_sx 中的符号扩展截断故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+BPF 验证器在处理符号扩展操作（sign-extension）更新寄存器状态时，因赋值顺序错误导致 64 位值向 32 位无符号值（u32_min/u32_max）转换时发生非预期的截断。这导致寄存器范围跟踪信息不正确，例如将本应为 0xfffffffe 的无符号最小值错误地计算为 0xfffffffe 的低 32 位值。该缺陷会导致 BPF 程序验证过程中的状态推断错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `coerce_reg_to_size_sx()` 函数中，链式赋值的执行顺序存在逻辑错误。
+原代码写法为 `reg->umin_value = reg->u32_min_value = s64_min;`，C 语言的赋值结合性是从右向左，这导致先将 `s64_min` 赋值给 `u32_min_value`（此时发生隐式截断），然后再将截断后的 `u32_min_value` 赋值给 64 位的 `umin_value`。
+结果导致 64 位的无符号 min/max 值被错误地截断为 32 位的值，破坏了寄存器状态的正确性。
+
+#解决方案
+修改赋值顺序，确保先将 64 位的源值（`s64_min`/`s64_max`）赋值给 64 位的目标变量（`smin_value`/`umin_value` 等），然后再赋值给 32 位的目标变量。
+修正后的代码为：
+`reg->u32_min_value = reg->umin_value = s64_min;`
+`reg->u32_max_value = reg->umax_value = s64_max;`
+（以及对应的 signed 分支），从而避免先写入 32 位变量导致的截断问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3f496e4a73bcbf7b994db0012ed5f56ad19a5bdc

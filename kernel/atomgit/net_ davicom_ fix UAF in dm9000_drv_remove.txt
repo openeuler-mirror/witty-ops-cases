@@ -1,0 +1,20 @@
+#标题
+net: davicom: fix UAF in dm9000_drv_remove
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 dm9000 网卡驱动（执行 rmmod 或驱动移除操作）时，触发释放后使用（UAF）漏洞，可能导致内核崩溃或内存数据被非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dm9000_drv_remove` 函数中，`dm` 指针作为网络设备的私有数据，在调用 `free_netdev(ndev)` 后已被释放。但代码逻辑中，`free_netdev(ndev)` 被错误地放置在检查并关闭电源调节器 `if (dm->power_supply)` 之前，导致在 `free_netdev` 执行后依然访问了已释放的 `dm` 指针来获取 `power_supply` 成员。
+
+#解决方案
+调整 `free_netdev(ndev)` 的调用位置，将其移至函数末尾。确保在释放网络设备结构体之前，先完成对私有数据 `dm` 中 `power_supply` 成员的访问和 `regulator_disable` 操作，从而避免 UAF 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5de6ee7d991e0411ca3aea2f6186be65d3a65ccd

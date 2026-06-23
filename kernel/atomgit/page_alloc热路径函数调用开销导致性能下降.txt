@@ -1,0 +1,20 @@
+#标题
+page_alloc热路径函数调用开销导致性能下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了错误注入功能相关配置但未开启 CONFIG_FAIL_PAGE_ALLOC 的场景下，页面分配的热路径存在不必要的函数调用开销。由于 `should_fail_alloc_page` 函数被实现为 `noinline` 且总是被调用，即使其内部逻辑为空，也会导致内存分配性能下降。
+
+#主要错误日志
+未知
+
+#问题根因
+commit af3b854492f3 将 `should_fail_alloc_page()` 修改为一个 `noinline` 函数并总是从页面分配热路径中调用。当 CONFIG_FAIL_PAGE_ALLOC 配置项未启用时，该函数体虽为空，但函数调用本身仍然存在，引入了不必要的 CPU 开销，影响了页面分配的性能。
+
+#解决方案
+将 `should_fail_alloc_page()` 函数重新移回 CONFIG_FAIL_PAGE_ALLOC 配置选项控制之下。当 CONFIG_FAIL_PAGE_ALLOC 未启用时，将其定义为 `static inline` 空函数，从而完全消除热路径中的函数调用开销；当启用时，保留 ALLOW_ERROR_INJECTION 和 BTF_ID 记录以支持错误注入功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4b0e0ccd5df2294b1c871416ed04d211da2b4a77

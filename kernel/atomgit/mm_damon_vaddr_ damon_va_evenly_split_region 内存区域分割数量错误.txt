@@ -1,0 +1,20 @@
+#标题
+mm/damon/vaddr: damon_va_evenly_split_region 内存区域分割数量错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DAMON_MIN_REGION 为 0x1000 的情况下，调用 `damon_va_evenly_split_region()` 将 [0x0, 0x3000) 区域分割为 2 片时，实际结果错误地分割成了 3 个区域：[0x0, 0x1000), [0x1000, 0x2000), [0x2000, 0x3000)，而不是预期的 2 个区域。这导致 DAMON 虚拟地址空间监控的区域划分逻辑不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `damon_va_evenly_split_region()` 函数中，计算每个分割片段大小的逻辑为 `sz_piece = ALIGN_DOWN(sz_orig / nr_pieces, DAMON_MIN_REGION)`。该计算过程中的除法和 ALIGN_DOWN 向下对齐操作会导致精度丢失，使得计算出的 `sz_piece` 小于理想值。随后的循环逻辑 `for (start = r->ar.end; start + sz_piece <= orig_end; ...)` 仅依赖剩余大小判断是否继续分割，未限制实际分割次数，导致最终分割出的区域数量超过了指定的 `nr_pieces`。
+
+#解决方案
+修改 `damon_va_evenly_split_region()` 函数中的循环逻辑，引入计数器 `i` 来记录已分割的片段数量，强制限制循环次数不超过 `nr_pieces`，确保分割出的区域数量与请求一致。同时在 KUnit 测试 `damon_test_split_evenly` 中新增了覆盖此场景的测试用例。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7eb5b86b94d843cddbaa80b9f584cad7e4d62ef2

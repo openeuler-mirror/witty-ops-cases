@@ -1,0 +1,20 @@
+#标题
+qcom_scm: 修复 qcom_scm_is_available 中缺失的读屏障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMP（多核）环境下，调用 `qcom_scm_is_available()` 函数检查 SCM 设备可用性时，可能由于内存屏障缺失导致读取到过时的全局变量 `__scm` 值（如 NULL）。虽然当前驱动设计下（不支持解绑、probe 失败处理有限）可能不会导致致命问题，但存在代码正确性隐患，可能导致对设备可用状态的误判。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的提交 2e4955167ec5 中，为了修复初始化问题，在 probe 函数中使用 `smp_store_release()` 写入全局变量 `__scm`。根据内存屏障语义，写屏障通常需要与读屏障或地址依赖屏障配对使用。然而，该提交在 `qcom_scm_is_available()` 中仅使用了 `READ_ONCE()`，这不是一个完整的读屏障。这导致在弱内存模型下，其他 CPU 核心可能无法立即观察到 probe 函数中对 `__scm` 的存储操作，从而读取到旧值。
+
+#解决方案
+在 `qcom_scm_is_available()` 函数中，将 `READ_ONCE(__scm)` 替换为 `smp_load_acquire(&__scm)`。这与 `qcom_scm_probe()` 函数中的 `smp_store_release()` 形成配对，确保在读取 `__scm` 指针时，所有在 probe 阶段之前的存储操作对该读取者可见，从而保证了 SMP 环境下的代码正确性。同时更新了注释，明确指出了配对的屏障位置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/26b3e84594fd2fdd472b260e981c3c3a3d3e5dde

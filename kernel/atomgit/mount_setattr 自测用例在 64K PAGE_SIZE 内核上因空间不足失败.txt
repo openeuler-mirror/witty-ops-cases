@@ -1,0 +1,24 @@
+#标题
+mount_setattr 自测用例在 64K PAGE_SIZE 内核上因空间不足失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PAGE_SIZE 为 64K 的内核环境中运行 mount_setattr_test 自测用例时，测试无法通过。具体表现为在创建 ext4 镜像文件系统时报错 "No space left on device"，导致测试用例异常终止，例如 `mount_setattr_idmapped.invalid_fd_negative` 用例失败。
+
+#主要错误日志
+mkfs.ext4: No space left on device while writing out and closing file system
+# mount_setattr_test.c:1055:invalid_fd_negative:Expected system("mkfs.ext4 -q /mnt/C/ext4.img") (256) == 0 (0)
+# invalid_fd_negative: Test terminated by assertion
+#          FAIL  mount_setattr_idmapped.invalid_fd_negative
+not ok 12 mount_setattr_idmapped.invalid_fd_negative
+
+#问题根因
+测试代码创建了一个大小限制为 100,000 字节的 tmpfs 挂载点，随后在该 tmpfs 上创建一个 2MB 的 ext4 镜像文件。在 4K PAGE_SIZE 的内核上，ext4 镜像文件实际占用的磁盘空间约 84KB，可以放入 100,000 字节的 tmpfs 中。但在 64K PAGE_SIZE 的内核上，由于内存页大小增加，ext4 镜像文件至少占用 256KB 空间，超过了 tmpfs 设定的 100,000 字节限制，从而导致 "No space left on device" 错误。
+
+#解决方案
+修改测试代码 `tools/testing/selftests/mount_setattr/mount_setattr_test.c`，将 tmpfs 的挂载大小参数从 `size=100000` 调整为 `size=2m`，确保 tmpfs 有足够的空间容纳 ext4 镜像文件，从而修复在 64K PAGE_SIZE 内核上的失败问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8769e429d89692f3cfdca0ef02fe7dab1f6c26bf

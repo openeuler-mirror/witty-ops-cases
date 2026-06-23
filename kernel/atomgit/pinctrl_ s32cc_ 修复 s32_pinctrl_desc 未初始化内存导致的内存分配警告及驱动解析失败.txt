@@ -1,0 +1,33 @@
+#标题
+pinctrl: s32cc: 修复 s32_pinctrl_desc 未初始化内存导致的内存分配警告及驱动解析失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NXP S32G3 平台上探测 i2c-imx 驱动时，触发内核 WARNING 导致间歇性分配错误，随后出现 pinctrl 解析节点属性失败，最终导致依赖的 I2C 设备（如 pca953x）写入寄存器失败（返回错误码 -6）。
+
+#主要错误日志
+WARNING: CPU: 0 PID: 176 at mm/page_alloc.c:4795 __alloc_pages_noprof+0x290/0x300
+...
+Call trace:
+ __alloc_pages_noprof+0x290/0x300 (P)
+ ___kmalloc_large_node+0x84/0x168
+ __kmalloc_large_node_noprof+0x34/0x120
+ __kmalloc_noprof+0x2ac/0x378
+ pinconf_generic_parse_dt_config+0x68/0x1a0
+ s32_dt_node_to_map+0x104/0x248
+...
+ i2c_adap_imx_init+0x28/0xff8 [i2c_imx]
+
+s32g-siul2-pinctrl 4009c240.pinctrl: /soc@0/pinctrl@4009c240/i2c0-pins/i2c0-grp0: could not parse node property
+pca953x 0-0022: failed writing register: -6
+
+#问题根因
+s32_pinctrl_desc 结构体内存是通过 devm_kmalloc() 分配的，但该函数不会将内存区域初始化为零。导致结构体中的部分字段（特别是 num_custom_params）处于未初始化状态（包含随机垃圾值）。后续在 pinconf_generic_parse_dt_config() 函数中使用该字段时，引发了错误的内存分配行为及解析失败。
+
+#解决方案
+将 drivers/pinctrl/nxp/pinctrl-s32cc.c 文件中 s32_pinctrl_probe 函数内的内存分配函数由 devm_kmalloc() 替换为 devm_kzalloc()，确保分配的内存结构体被初始化为零，从而避免字段未初始化导致的随机值问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9a86b591742ea6f9c944669a8dfbe9e57c5c2332

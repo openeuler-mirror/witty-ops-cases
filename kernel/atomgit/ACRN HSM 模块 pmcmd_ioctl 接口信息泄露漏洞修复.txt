@@ -1,0 +1,20 @@
+#标题
+ACRN HSM 模块 pmcmd_ioctl 接口信息泄露漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ACRN 虚拟化环境中，通过 `pmcmd_ioctl` 接口查询 CPU 的 C-states 或 P-states 信息时，内核可能将未初始化的内存字节拷贝至用户空间，导致内核内存信息泄露（CVE-2025-21950）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `pmcmd_ioctl` 函数中，使用 `kmalloc` 分配内存对象（`pm_info`、`px_data`、`cx_data`）。这些对象随后由 `hcall_get_cpu_state` 进行初始化，但该初始化过程（通过 `acrn_hypercall2` 实现）可能未完全覆盖分配的所有字节。由于内存分配时未清零，残留的未初始化字节随数据被拷贝到用户空间，造成信息泄露风险。
+
+#解决方案
+将 `pmcmd_ioctl` 函数中涉及的三个内存分配调用从 `kmalloc` 修改为 `kzalloc`。通过 `kzalloc` 分配内存时会自动将内存清零，确保即使 hypercall 未完全写入数据，拷贝到用户空间的内存也不会包含内核敏感信息，从而消除信息泄露隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f167d6a8b0f5b67841992b15fdcf016552da62f

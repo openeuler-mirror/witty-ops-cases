@@ -1,0 +1,34 @@
+#标题
+iomap_folio_mkwrite_iter 中脏页范围跟踪错误导致 XFS 断言失败及数据丢失风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 fsstress 压力测试 XFS 文件系统时，触发内核断言失败，导致内核崩溃。具体表现为 XFS 发现 inode 数据分叉存在意外的 delalloc 区块，随后触发 assfail 导致 kernel BUG，系统进入无效操作码错误状态。
+
+#主要错误日志
+XFS (sda): ino 1a0b0a data fork has delalloc extent at [0x186:0x1]
+XFS: Assertion failed: 0, file: fs/xfs/xfs_icache.c, line: 1819
+------------[ cut here ]------------
+kernel BUG at fs/xfs/xfs_message.c:102!
+invalid opcode: 0000 [#1] PREEMPT SMP
+RIP: 0010:assfail+0x54/0x60
+Call Trace:
+ <TASK>
+ xfs_inodegc_set_reclaimable+0x1f1/0x220
+ xfs_inodegc_worker+0x10b/0x2e0
+ process_scheduled_works+0x1a5/0x5e0
+ worker_thread+0x1d1/0x4f0
+ kthread+0x149/0x1c0
+ ret_from_fork+0x52/0x70
+ </TASK>
+
+#问题根因
+在函数 `iomap_folio_mkwrite_iter` 中，调用 `iomap_set_range_dirty()` 时传入了错误的偏移量参数 `0`，而未正确计算 folio 内的实际偏移量。这导致修改过的区块未被正确标记为脏，进而导致回写时跳过这些区块，最终引发 XFS 文件系统内部状态不一致，触发断言失败。
+
+#解决方案
+修正 `iomap_folio_mkwrite_iter` 函数中脏页范围跟踪的逻辑。在调用 `iomap_set_range_dirty()` 之前，使用 `offset_in_folio(folio, iter->pos)` 计算正确的 folio 内偏移量，替换原先硬编码的 `0`，确保所有修改过的区块都能被正确标记为脏并执行回写操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cfdba6557d47bff9d273cde0cd5d79878660c5c7

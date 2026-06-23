@@ -1,0 +1,24 @@
+#标题
+dmaengine: idxd: fix device leaks on compat bind and unbind
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Intel IAA/DSA 加速器设备的 compatible 模式下的 bind 和 unbind sysfs 接口时，内核会发生引用计数泄漏。具体表现为：执行设备绑定或解绑操作后，内核对象引用计数未正确减少，可能导致设备无法被正常释放或移除，长期运行可能引发内存泄漏或设备状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `drivers/dma/idxd/compat.c` 的 `bind_store` 和 `unbind_store` 函数中，通过 `bus_find_device_by_name()` 查找设备时会增加设备的引用计数（kref），但在后续的错误处理路径或正常返回路径中，代码遗漏了调用 `put_device()` 来释放该引用。具体包括：
+1. `unbind_store` 函数中，无论是否成功解绑，查找后均未释放设备引用。
+2. `bind_store` 函数中，在查找设备后，若判断设备已绑定驱动或驱动不匹配、查找替代驱动失败、以及附加驱动失败等多种错误退出场景下，均未释放设备引用。
+
+#解决方案
+修复代码逻辑，确保在所有退出路径（包括正常路径和错误处理路径）中都调用 `put_device()` 释放设备引用。
+1. 在 `unbind_store` 中，将设备查找与解绑逻辑分离，并在函数返回前统一调用 `put_device(dev)`。
+2. 在 `bind_store` 中，增加 `err_put_dev` 标签，将所有错误处理跳转至该标签执行 `put_device(dev)` 操作，并在成功路径末尾显式调用 `put_device(dev)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a6e117cfda20ff5361145387c5b66fc037822254

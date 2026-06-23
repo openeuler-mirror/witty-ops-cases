@@ -1,0 +1,25 @@
+#标题
+LoongArch架构下AMD显卡(rx550/gfx6/gfx7/gfx8) PCIe乱序导致显示异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构平台上使用 AMD 显卡（包括 RX550 及 GFX6/7/8 架构 GPU）时，由于 PCIe 读写顺序问题，导致中断处理（IH ring）和命令流提交出现数据一致性问题。这可能导致图形显示异常、GPU 任务卡死、画面撕裂或系统无法正确响应 GPU 中断。
+
+#主要错误日志
+未知
+
+#问题根因
+LoongArch 架构下 PCIe 总线存在读写顺序错乱问题，导致 GPU 无法按预期顺序获取内存中的数据：
+1. 在中断处理（IH ring）过程中，CPU 写入的数据可能未按顺序到达 GPU，导致 GPU 读取到错误的环形缓冲区内容。
+2. 在 GFX6/7/8 及 CIK 等架构中，EOP（End of Pipeline）包发送顺序或内容受影响，导致流水线同步异常。
+
+#解决方案
+针对 LoongArch 架构特性，在 AMD GPU 驱动中增加读写顺序修复补丁：
+1. **中断处理修复**：在 IH ring 初始化时写入特定标记（`0xDEADBEFF`），并在中断处理前后增加内存屏障（`mb()`）及检查逻辑，确保数据可见性；若检测到顺序错乱，则推迟处理或重新调度。
+2. **命令流修复**：在 `amdgpu_cs_submit` 中增加等待逻辑，确保在 IH 修复工作繁忙时阻塞提交，避免并发冲突。
+3. **EOP 包修复**：针对 GFX6/7/8 及 CIK（radeon）架构，修改 `EVENT_WRITE_EOP` 包的发送逻辑，重复发送 EOP 包或修正其携带的数据内容，以规避硬件层面的顺序问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d68ce957b19efcce686f5df3fdc3729a02ab05ec

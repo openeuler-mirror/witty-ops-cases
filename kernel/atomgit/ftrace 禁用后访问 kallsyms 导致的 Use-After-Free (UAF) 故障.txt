@@ -1,0 +1,31 @@
+#标题
+ftrace 禁用后访问 kallsyms 导致的 Use-After-Free (UAF) 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统加载了存在问题的内核模块并触发 ftrace 禁用后，若执行 `cat /proc/kallsyms` 操作，内核将触发 UAF（Use-After-Free）导致 Oops 甚至崩溃。典型复现路径如下：
+1. 添加 kprobe 跟踪点。
+2. 加载测试模块。
+3. 模块内部触发异常导致 ftrace 被禁用。
+4. 卸载模块。
+5. 读取 `/proc/kallsyms`，此时内核访问已释放的模块内存，触发故障。
+
+#主要错误日志
+BUG: unable to handle page fault for address: ffffffffc05d0218
+Oops: Oops: 0000 [#1] SMP KASAN PTI
+RIP: 0010:sized_strscpy+0x81/0x2f0
+Call Trace:
+ <TASK>
+ ftrace_mod_get_kallsym+0x1ac/0x590
+ update_iter_mod+0x239/0x5b0
+
+#问题根因
+当模块触发异常导致 `ftrace_disabled` 被设置时，`ftrace_release_mod()` 函数会直接返回，跳过了 `mod_map` 的清理工作。这导致 `ftrace_mod_maps` 链表中保留了指向已卸载模块的指针。后续在读取 `/proc/kallsyms` 时，`ftrace_mod_get_kallsym()` 会遍历该链表并尝试访问 `mod_map->mod->name`，此时模块内存已被释放，从而引发 UAF。
+
+#解决方案
+修改 `ftrace_release_mod()` 函数逻辑，无条件地遍历并移除与当前模块关联的 `mod_map` 结构，确保模块卸载时相关资源被正确释放；将 `ftrace_disabled` 的检查逻辑移至资源清理之后，避免在禁用状态下遗留悬空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58699aba0467a810f636f48aed971211a5e65030

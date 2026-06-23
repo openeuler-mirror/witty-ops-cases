@@ -1,0 +1,20 @@
+#标题
+dmaengine: at_hdmac: 修复 of_dma_xlate 中的设备引用泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 at_hdmac 驱动进行 DMA 通道分配并随后释放资源时，存在内核对象引用计数泄漏。具体表现为 DMA 平台设备的引用计数在通道资源释放后未归零，导致设备对象无法被正常释放，可能引发内存泄漏或设备无法正常移除/关闭的问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `at_dma_xlate()` 函数中，查找 DMA 平台设备时会调用 `of_dma_find_device()` 获取设备引用。虽然之前的补丁修复了错误路径下的引用泄漏，但在成功分配通道资源的正常路径下，`atc_free_chan_resources()` 函数仅释放了 `atslave` 结构体的内存，却遗漏了调用 `put_device()` 来释放持有的 `dma_dev` 设备引用。
+
+#解决方案
+在 `atc_free_chan_resources()` 函数中增加释放设备引用的逻辑。在释放 `chan->private`（即 `atslave`）内存前，先判断其是否存在，若存在则调用 `put_device(atslave->dma_dev)` 释放设备引用，随后再 `kfree` 释放内存并将指针置空。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/42a072361049ac64ece72a8ab0bc53116baa222e

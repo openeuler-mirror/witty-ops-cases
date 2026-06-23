@@ -1,0 +1,22 @@
+#标题
+KVM: arm64: IPIv特性在虚拟机热迁移后状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在KVM虚拟化场景下，开启了IPIv（Inter-Processor Interrupt virtualization）特性的虚拟机在进行热迁移（Live Migration）后，Guest OS内部检测到的IPIv使能状态与迁移前不一致，导致依赖该特性的功能异常或配置丢失。
+
+#主要错误日志
+未知
+
+#问题根因
+GITS_IIDR寄存器的bit7位未用于存储IPIv的使能状态。在热迁移过程中，源宿主机和目的宿主机之间缺乏关于Guest OS是否启用IPIv（enable_ipiv_from_guest）的状态传递机制，导致迁移后Guest OS读取的IPIv状态未能正确恢复。
+
+#解决方案
+利用GITS_IIDR寄存器中未使用的bit7位作为标志位，用于存储和传递IPIv的使能状态。
+1. 在读取GITS_IIDR寄存器时（vgic_its_attr_regs_access），如果检测到`enable_ipiv_from_guest`为真，则将bit7位置1，以便Guest OS读取。
+2. 在用户空间写入GITS_IIDR寄存器时（vgic_mmio_uaccess_write_its_iidr），检查bit7位，如果为1则将`enable_ipiv_from_guest`设置为true，从而确保热迁移前后IPIv的状态一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b599aaac9ec7d76f36d7cb5d3e6e3e6d6c325f51

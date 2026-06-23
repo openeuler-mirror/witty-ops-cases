@@ -1,0 +1,26 @@
+#标题
+urma: 修复 uburma ioctl 连接相关的错误处理缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 urma 连接相关的 ioctl 操作（如 import jfr、import jfr_ex、import jetty、import jetty_ex）时，若底层 `ubcore_import_*` 函数返回 NULL（表示失败但未通过 PTR_ERR 传递错误码），用户态程序将接收到错误的返回值（通常为 0），导致无法正确感知操作失败，可能引发后续业务流程异常或不可预知的行为。
+
+#主要错误日志
+- `uburma_log_err("Failed to import jfr.\n");`
+- `uburma_log_err("Failed to import jfr in ex.\n");`
+- `uburma_log_err("Failed to import jetty.\n");`
+- `uburma_log_err("ubcore_import_jetty failed.\n");`
+
+#问题根因
+内核函数 `ubcore_import_jfr` 和 `ubcore_import_jetty` 及其扩展版本在实现上支持返回 NULL（代表失败）与 ERR_PTR（代表具体错误）两种错误形式。然而，`uburma_cmd_import_*` 系列函数在处理返回值时，错误地使用了 `PTR_ERR(tjfr)`。
+当底层函数返回 NULL 时，`IS_ERR_OR_NULL` 判断为真，但 `PTR_ERR(NULL)` 的结果为 0。这导致 ioctl 向用户态返回 0（即成功），掩盖了实际的失败情况。
+
+#解决方案
+修改 `uburma_cmd_import_jfr`、`uburma_cmd_import_jfr_ex`、`uburma_cmd_import_jetty` 以及 `uburma_cmd_import_jetty_ex` 函数中的错误处理逻辑：
+1. 在 `IS_ERR_OR_NULL` 判断分支内增加日志打印，明确记录失败信息。
+2. 修正返回值逻辑：`return IS_ERR(tjfr) ? PTR_ERR(tjfr) : -1;`。即如果返回值是 ERR_PTR 则返回其具体错误码，如果是 NULL 则返回 -1（通用错误码），确保错误状态正确传递给用户态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/803ddc81b7cbe6df91eeaa78def09789f4127fd3

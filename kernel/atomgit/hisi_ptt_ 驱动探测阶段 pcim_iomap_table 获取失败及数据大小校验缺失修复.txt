@@ -1,0 +1,25 @@
+#标题
+hisi_ptt: 驱动探测阶段 pcim_iomap_table 获取失败及数据大小校验缺失修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 HiSilicon PTT (PCIe Trace Tuner) 驱动加载探测过程中，若 `pcim_iomap_table` 获取失败，内核访问非法指针导致 Oops 或崩溃。
+2. 在 PTT 追踪数据更新过程中，若硬件返回的数据大小超过缓冲区大小，可能导致内存越界访问或数据损坏。
+
+#主要错误日志
+- `pci_err(pdev, "failed to get iomap table\n");`
+- `pci_err(hisi_ptt->pdev, "Failed to get the size of traced data from the device\n");`
+
+#问题根因
+1. **空指针解引用风险**：在 `hisi_ptt_probe` 函数中，代码直接调用 `pcim_iomap_table(pdev)[2]` 获取 IO 基地址，未检查 `pcim_iomap_table` 返回值是否为 NULL。如果该函数返回 NULL（例如内存分配失败），将触发空指针解引用导致内核崩溃。
+2. **硬件状态值校验缺失**：在 `hisi_ptt_update_aux` 函数中，读取硬件寄存器获取的追踪数据大小 `size` 未进行有效性校验。如果硬件状态异常返回值大于 `HISI_PTT_TRACE_BUF_SIZE`，后续操作可能导致缓冲区越界。
+
+#解决方案
+1. **增加空指针检查**：在 `hisi_ptt_probe` 中引入中间变量 `iomap_table` 存储 `pcim_iomap_table(pdev)` 的返回值，增加 `if (!iomap_table)` 判断。若获取失败则打印错误日志 "failed to get iomap table" 并返回 `-EFAULT`，避免空指针解引用。
+2. **增加数据大小校验**：在 `hisi_ptt_update_aux` 中读取 `size` 后，增加判断 `if (unlikely(size > HISI_PTT_TRACE_BUF_SIZE))`。若大小非法，打印错误日志 "Failed to get the size of traced data from the device" 并返回 `-EFAULT`，防止越界访问。
+3. **修正拼写错误**：顺便修正了 `hisi_ptt_trace_valid_format` 函数中局部数组名的拼写错误（`availble` -> `available`）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/979f774377458e431eb64cc65832850f02b0545c

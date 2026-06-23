@@ -1,0 +1,25 @@
+#标题
+urma: 关键函数执行时间无法统计影响性能分析与故障定位
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 URMA 链路断开过程中，由于不支持打点计时功能，导致 `uburma_cmd_unimport_seg`、`unimport_jetty`、`unimport_jfr` 等关键函数无法测量运行时间。这使得无法获取函数执行耗时的统计数据，影响了对系统性能的准确分析以及故障定位的效率。
+
+#主要错误日志
+未知
+
+#问题根因
+URMA 模块在链路断开等流程中缺少嵌套的打点计时逻辑。原有代码未在 `uburma_cmd` 层及驱动 OPS 调用层记录时间戳，导致无法统计关键函数的整体运行时间及驱动调用的具体耗时。
+
+#解决方案
+在内核中引入性能统计机制，具体修改如下：
+1. 新增 `ubcore_perf` 模块，实现全局延迟追踪器，支持高精度纳秒级直方图统计。
+2. 定义 `UBCORE_PERF_TRACE_BEGIN` 和 `UBCORE_PERF_TRACE_END` 宏，利用 `ktime_get_mono_fast_ns` 获取时间戳并记录延迟。
+3. 在 `uburma_cmd.c`、`ubcore_jetty.c`、`ubcore_segment.c`、`ubcore_device.c` 等文件的关键函数入口及出口处插入打点宏。
+4. 采用嵌套打点逻辑：外层记录函数整体运行时间，内层记录调用驱动 OPS 的时间。
+5. 新增三个 netlink 命令 `UBCORE_CMD_PERF_START`、`UBCORE_CMD_PERF_STOP`、`UBCORE_CMD_PERF_SHOW`，用于控制统计开关及获取统计结果（包括平均值、P90/P99/P9999 延迟等）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4b58c0f9bcb0b511b0a7acd78a37cbcd7641450e

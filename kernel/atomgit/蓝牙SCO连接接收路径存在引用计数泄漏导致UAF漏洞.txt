@@ -1,0 +1,20 @@
+#标题
+蓝牙SCO连接接收路径存在引用计数泄漏导致UAF漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理蓝牙SCO连接的数据接收时，若连接已断开或socket状态异常，内核可能访问已释放的socket对象，导致内核崩溃或系统不稳定。该问题对应安全漏洞 CVE-2026-31408。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `sco_recv_frame` 函数中，代码直接访问 `conn->sk` 获取 socket 指针，但未增加该 socket 的引用计数（未持有对象）。与此同时，其他路径（如关闭连接）可能释放该 socket。当 `sco_recv_frame` 继续访问该 socket 指针时，引发了 Use-After-Free（UAF）漏洞，存在安全隐患。
+
+#解决方案
+修改 `sco_recv_frame` 函数，将直接读取 `conn->sk` 的操作改为调用 `sco_sock_hold(conn)`。该函数在获取 socket 指针的同时会增加引用计数，防止其在使用过程中被释放。同时，在函数的正常返回路径和错误处理路径中，均相应增加了 `sock_put(sk)` 调用以正确释放引用计数，确保资源管理平衡。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3b8827cc50dba86bbcebf0076538a2952af01d6d

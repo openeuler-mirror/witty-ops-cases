@@ -1,0 +1,20 @@
+#标题
+tcan4x5x: 修复电源调节器获取逻辑导致状态指针被错误置空
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 tcan4x5x CAN 控制器驱动探测过程中，当电源调节器（vsup）存在且 `devm_regulator_get_optional` 成功获取时，驱动逻辑错误地将调节器指针置为 NULL。这导致驱动无法正常启用电源，可能引发设备初始化失败或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tcan4x5x_can_probe` 函数中，处理 `devm_regulator_get_optional` 返回值的逻辑有误。原代码仅检查了返回值是否为 `-EPROBE_DEFER`，对于其他情况（包括成功获取调节器对象的情况），均进入 `else` 分支将 `priv->power` 强制置为 `NULL`。正确的逻辑应当是：只有当返回值确实是错误指针（IS_ERR）且非 `-EPROBE_DEFER` 时，才将其置为 NULL；若成功获取，应保留有效的指针地址。
+
+#解决方案
+修改 `drivers/net/can/m_can/tcan4x5x-core.c` 中的调节器获取逻辑。增加 `IS_ERR(priv->power)` 判断，确保仅在 regulator 获取失败（返回错误指针）时才将 `priv->power` 置为 NULL，从而保留成功获取时的有效指针，保证后续电源操作正常执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6910c70a594a477d16dcc4e7f7fcc1eca74d69df

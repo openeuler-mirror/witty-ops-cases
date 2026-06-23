@@ -1,0 +1,20 @@
+#标题
+mptcp: SynAck HMAC校验失败时使用了错误的MIB计数器
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在MPTCP连接建立过程中，当客户端收到服务器端的SYN/ACK报文并对其中的HMAC校验失败时，内核统计信息记录了错误的计数器类型。具体表现为：系统增加了 `MPTCP_MIB_JOINACKMAC`（用于统计ACK HMAC失败）计数，而非正确的 `MPTCP_MIB_JOINSYNACKMAC`（用于统计SYN/ACK HMAC失败）。这导致网络统计数据无法准确反映是SYN/ACK阶段的HMAC错误还是ACK阶段的HMAC错误，影响故障定位的准确性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `subflow_finish_connect()` 函数中处理接收到的 SYN/ACK 报文时，代码逻辑对服务器端 HMAC 进行校验。如果校验失败（`subflow_thmac_valid` 返回 false），代码错误地增加了 `MPTCP_MIB_JOINACKMAC` 计数器。该计数器本应用于记录 ACK 报文中的 HMAC 错误，而此处实际处理的是 SYN/ACK 报文。虽然内核树中存在与之匹配的 `MPTCP_MIB_JOINSYNACKMAC` 计数器，但此前并未被使用。
+
+#解决方案
+修改 `net/mptcp/subflow.c` 文件中 `subflow_finish_connect` 函数的统计逻辑。将 HMAC 校验失败时的计数器从 `MPTCP_MIB_JOINACKMAC` 修改为 `MPTCP_MIB_JOINSYNACKMAC`。此修改确保了每个计数器准确反映实际发生 HMAC 校验失败的报文类型（SYN/ACK 或 ACK），与服务器端 `subflow_syn_recv_sock()` 函数中的处理逻辑保持对称和一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ef6ed98c66181aa0ce91b8308660086f13d1ed3

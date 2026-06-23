@@ -1,0 +1,20 @@
+#标题
+sw64 架构下 VFIO 模块因 PTE 写入权限检查错误导致 EFAULT
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构下使用 VFIO 功能时，由于内核版本升级引入了新的 PTE 页表标志位检查逻辑，导致在处理共享可写页面时返回 EFAULT 错误，进而导致相关功能（如设备透传）无法正常使用或初始化失败。
+
+#主要错误日志
+未知
+
+#问题根因
+内核版本升级在 `follow_fault_pfn()` 和 `hva_to_pfn_remapped()` 函数中增加了对 PTE 写入权限（`pte_write`）的检查。在 sw64 架构的实现中，共享可写页面设置了 FOW（Fetch and Open Write）位，导致 `pte_write()` 检查返回 false。原有的通用检查逻辑未能兼容 sw64 架构的特殊实现，错误地判定页面不可写，从而返回 EFAULT 或 RO_FAULT 错误。
+
+#解决方案
+针对 sw64 架构进行适配修复，通过增加 `#ifdef CONFIG_SW64` 条件编译宏，在 `follow_fault_pfn()` 和 `hva_to_pfn_remapped()` 函数中跳过不适用于该架构的 `pte_write` 检查逻辑，直接获取 PFN 或将 writable 标志置为 true。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b3cca87280785afa8ad31dc5a7277e7f863c5fd

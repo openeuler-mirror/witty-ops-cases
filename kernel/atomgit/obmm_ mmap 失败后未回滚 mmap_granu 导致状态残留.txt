@@ -1,0 +1,22 @@
+#标题
+obmm: mmap 失败后未回滚 mmap_granu 导致状态残留
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 mmap 映射共享内存区域失败时，区域结构体中的 mmap_granu 字段未被正确还原。这导致即使映射操作失败，区域仍被错误标记为使用特定粒度（PAGE 或 PMD），使得用户无法使用不同的映射参数重试，破坏了映射失败后应能重新映射的预期行为。
+
+#主要错误日志
+- "error running huge mmap for not pmd-aligned vma: %#lx-%#lx\n"
+- "map with PAGE_SIZE and PMD_SIZE granu should not be mixed on the same region\n"
+- "mmap region %d: offset:%#lx, size:%#lx over region size: %#llx"
+
+#问题根因
+在 mmap 处理流程中，代码在初始化内存区域时提前将 `reg->mmap_granu` 设置为请求的粒度，但在后续的错误处理路径中遗漏了对该字段的回滚操作。当映射遇到错误退出时，`mmap_granu` 保留了错误的设置值，导致区域状态不一致。
+
+#解决方案
+在函数入口处保存 `mmap_granu` 的初始值，并在错误处理路径中增加回滚逻辑，将 `reg->mmap_granu` 恢复为初始值。同时修正了混合粒度映射检查的错误码与跳转逻辑，确保在权限检查失败时也能正确回滚状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/43087a8da5cc9401bc461906e47e3e28aeb312a8

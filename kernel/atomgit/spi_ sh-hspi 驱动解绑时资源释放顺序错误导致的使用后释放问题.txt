@@ -1,0 +1,21 @@
+#标题
+spi: sh-hspi 驱动解绑时资源释放顺序错误导致的使用后释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动解绑（driver unbind）操作过程中，SPI 控制器在底层资源（如时钟）被释放后仍被访问。这可能导致内核崩溃或内存访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在移除（hspi_remove）时，未先注销 SPI 控制器就直接释放了底层资源（如通过 clk_put 释放时钟）。此外，probe 阶段使用了 devm_spi_register_controller，该函数在资源管理上无法保证注销顺序先于设备托管资源的释放，导致在驱动解绑时出现资源释放顺序颠倒，引发了 use-after-free 风险。
+
+#解决方案
+1. 将 probe 阶段的 `devm_spi_register_controller` 替换为 `spi_register_controller`，以避免设备托管机制带来的注销顺序问题。
+2. 在 remove 阶段增加显式的注销流程：先调用 `spi_controller_get` 增加引用计数，接着调用 `spi_unregister_controller` 注销控制器，最后才调用 `clk_put` 释放时钟资源并调用 `spi_controller_put` 减少引用计数。这确保了控制器在底层硬件资源释放前已正确注销。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a74821ec0388d0830d3132c051b55ace80812915

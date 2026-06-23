@@ -1,0 +1,24 @@
+#标题
+Phytium DRM 驱动编译失败导致内核模块构建报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译 Phytium DRM 驱动时，内核构建过程在 modpost 阶段失败，无法生成最终的内核模块或镜像，导致构建流程中断。
+
+#主要错误日志
+ERROR: modpost: "__sanitizer_cov_trace_cmpf" [drivers/gpu/drm/phytium/phytium_display.ko] undefined!
+
+#问题根因
+该故障由两个层面的原因共同导致：
+1. **代码冗余引用**：Phytium 显示驱动代码（`phytium_crtc.c`）中包含大量未使用的缩放计算相关静态函数（如 `dc_sinc_filter`、`dc_calculate_sync_table` 等）。这些函数虽然未被调用，但在编译过程中被某些编译器插桩工具（如 KCOV/GCOV）识别并插入了覆盖率跟踪调用（`__sanitizer_cov_trace_cmpf`）。在特定的内核配置或架构环境下，如果缺少对应的 sanitizer 实现或链接配置，就会导致“undefined symbol”错误。
+2. **Kconfig 依赖配置不当**：驱动配置 `DRM_PHYTIUM` 原本仅依赖于 `ARCH_PHYTIUM`，限制了其在 X86 架构下的编译测试与构建，且未覆盖到该驱动实际支持的架构范围。
+
+#解决方案
+1. **移除冗余代码**：删除 `drivers/gpu/drm/phytium/phytium_crtc.c` 中未使用的静态函数代码块，从根本上消除了引发链接错误的符号引用，修复了编译失败问题。
+2. **修正架构依赖**：修改 `drivers/gpu/drm/phytium/Kconfig`，将依赖条件从 `depends on DRM && ARCH_PHYTIUM` 更改为 `depends on DRM && (ARM64 || X86)`，正确声明了驱动支持的架构范围。
+3. **更新默认配置**：在 `arch/x86/configs/openeuler_defconfig` 中显式启用 `CONFIG_DRM_PHYTIUM=y`，确保在 X86 平台配置中包含该驱动。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3b4a5906fa714bdc9a15fc04374942888737eb4c

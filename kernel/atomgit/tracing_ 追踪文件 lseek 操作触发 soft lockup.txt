@@ -1,0 +1,33 @@
+#标题
+tracing: 追踪文件 lseek 操作触发 soft lockup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在追踪处于活动状态时，若对 trace 文件执行 lseek 操作且传入较大的偏移量，系统会触发 soft lockup，导致 CPU 长时间卡死。
+
+#主要错误日志
+watchdog: BUG: soft lockup - CPU#3 stuck for 26s! [poc:141]
+CPU: 3 UID: 0 PID: 141 Comm: poc Not tainted 6.19.0 #1 PREEMPT(none)
+Call Trace:
+  ring_buffer_iter_peek
+  peek_next_entry
+  __find_next_entry
+  trace_find_next_entry_inc
+  s_next
+  traverse.part.0
+  seq_lseek
+  tracing_lseek
+  __x64_sys_lseek
+  do_syscall_64
+  entry_SYSCALL_64_after_hwframe
+
+#问题根因
+trace 文件的 lseek 实现基于 seq_lseek，该函数内部包含一个循环，会反复调用 show() 和 next() 函数直到位置达到目标偏移量。由于该循环内未设置调度点，当提供的偏移量非常大时，CPU 会长时间陷在循环中无法调度，从而触发 soft lockup 检测机制。
+
+#解决方案
+在 s_next() 函数中添加 cond_resched() 调用，使得在大偏移量遍历过程中 CPU 可以主动让出执行权，避免长时间占用 CPU 导致 soft lockup。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad83e90584844f87f3a1b78b60ea5c23ac13fe6d

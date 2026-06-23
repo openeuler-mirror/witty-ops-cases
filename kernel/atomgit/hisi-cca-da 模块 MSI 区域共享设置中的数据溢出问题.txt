@@ -1,0 +1,25 @@
+#标题
+hisi-cca-da 模块 MSI 区域共享设置中的数据溢出问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 PCI 设备 MSI-X 区域共享设置时，由于变量类型定义不当导致数据溢出，进而引发内存区域计算错误。具体表现为：
+1. 在调用 `rsi_set_memory_range_shared` 时可能传入错误的内存地址范围。
+2. 当发生溢出时，内核打印溢出错误日志并返回失败。
+
+#主要错误日志
+[   27.123456] pci dev msi start overflow.
+[   27.123456] pci dev msi end overflow.
+（注：原文代码中为 `pci_err(pdev, "pci dev msi start overflow.\n");` 与 `pci_err(pdev, "pci dev msi end overflow.\n");`）
+
+#问题根因
+在 `set_msix_region_shared` 函数中，变量 `tsize` 被定义为 `u8` 类型。当 MSI-X 表大小（由 `msix_table_size` 返回）超过 `u8` 的最大值（255）时，发生数据溢出，导致后续计算的 MSI 区域结束地址 `end` 不正确。
+
+#解决方案
+1. 将变量 `tsize` 的类型从 `u8` 修改为 `size_t`，以容纳更大的 MSI-X 表大小，消除数据溢出隐患。
+2. 增加对计算出的起始地址 `start` 和结束地址 `end` 的溢出检查：如果 `start <= table_offset` 或 `end <= start`，则判定为溢出，打印错误日志并返回 `-EINVAL`，防止错误的内存范围被传递给底层函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d1d9e42c0b79695ba0a7b5193672b4ae5de9bf38

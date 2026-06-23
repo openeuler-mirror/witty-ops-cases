@@ -1,0 +1,20 @@
+#标题
+fbdev/deferred-io: Clean up pageref on lastclose
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 fbdev deferred-io 机制中，当 framebuffer 设备文件最后一次关闭（lastclose）时，清理逻辑试图通过 `info->fix.smem_len` 遍历页面并清理 mapping。若驱动程序未正确设置 `smem_len` 字段，可能导致清理过程中访问错误的页面或遗漏清理，进而引发内存状态不一致或潜在的内存访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+原有的 `fb_deferred_io_lastclose` 函数依赖 `info->fix.smem_len` 计算页面数量进行遍历清理，但部分驱动可能未正确设置该字段，导致逻辑不可靠。此外，代码在 lastclose 阶段重新查找 page 进行清理是多余的，因为内存映射相关的 pageref 结构体在打开时已建立并维护。
+
+#解决方案
+重构 `fb_deferred_io_lastclose` 的清理逻辑，不再依赖 `smem_len` 进行页面查找。改为直接遍历设备信息中已存在的 `pagerefs` 数组，并新增 `fb_deferred_io_pageref_clear` 辅助函数，显式清除每个 pageref 对应 page 的 mapping 指针。此方法避免了对 `smem_len` 字段的依赖，确保了清理过程的准确性与安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6159139c02930e4287b8bdca343a3a9c7ee08ef6

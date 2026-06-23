@@ -1,0 +1,23 @@
+#标题
+sched_ext: 针对目标调度的迁移禁用处理错误导致任务被错误转移
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 sched_ext 调度器进行针对性调度时，若任务已经处于目标 CPU 上且禁用了迁移，任务会被错误地判断为无法在目标 CPU 上运行，导致任务被不必要地转移到全局 DSQ（Dispatch Queue），破坏了调度器的预期行为。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `task_can_run_on_remote_rq()` 假设传入的任务当前所在的 CPU 与目标 CPU 不同。然而，其调用者（如 `move_task_between_dsqs()` 和 `dispatch_to_local_dsq()`）并未严格遵守此假设，在任务已位于目标 CPU 时仍调用该函数。
+当任务已处于目标 CPU 且被禁用迁移时，`task_can_run_on_remote_rq()` 错误地返回 `false`，导致逻辑误判任务无法运行，从而触发不必要的任务转移。
+
+#解决方案
+1. 在调用者层面修复：更新 `move_task_between_dsqs()` 和 `dispatch_to_local_dsq()` 的逻辑，仅当源 CPU 与目标 CPU 不同时才调用 `task_can_run_on_remote_rq()`。
+2. 增加防御性检查：在 `task_can_run_on_remote_rq()` 中增加 `SCHED_WARN_ON(task_cpu(p) == cpu)`，明确约束调用条件。
+3. 代码清理：将 `task_can_run_on_remote_rq()` 内部的 `is_migration_disabled()` 检查转换为 `SCHED_WARN_ON`，因为在修复调用逻辑后，如果任务位于不同 CPU，前置的 `task_allowed_on_cpu()` 检查应已失败，若执行到此处理论上不应触发该条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/91e71a393562d674773665ebf99300c832925f37

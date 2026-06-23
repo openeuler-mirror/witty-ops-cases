@@ -1,0 +1,22 @@
+#标题
+storvsc: 无负载 SCSI 命令发送时数据长度未初始化导致潜在数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 StorVSC 驱动处理无数据负载的 SCSI 命令（如错误处理中间层下发的 TEST_UNIT_READY 或 REQUEST_SENSE）时，若复用了先前失败命令的缓冲区，可能导致与主机通信的数据长度错误，引发潜在的数据损坏问题。
+
+#主要错误日志
+未知
+
+#问题根因
+`payload->range.len` 被用于指示 SCSI 命令是否携带负载。该数据结构属于上层分配的私有驱动数据的一部分。
+当 SCSI 错误处理中间层发送无负载命令（如 TEST_UNIT_READY）并复用先前失败命令的缓冲区时，私有数据区域可能残留前一条命令的陈旧数据。
+由于驱动未对无负载情况下的 `payload->range.len` 进行初始化，驱动可能直接使用该残留值与主机通信，导致通信数据长度错误及潜在的数据损坏。
+
+#解决方案
+在 `storvsc_queuecommand` 函数中，在处理 scatter-gather 列表之前，显式将 `payload->range.len` 初始化为 0，确保无负载 SCSI 命令发送时数据长度字段是干净的，避免使用陈旧数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6f6042f3bf35bd36e91db4bcd8554126e4ef723a

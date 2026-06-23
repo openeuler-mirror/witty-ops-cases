@@ -1,0 +1,39 @@
+#标题
+urma: 资源创建失败未回滚及修复模式功能适配问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在创建 jetty 资源失败时，未删除已创建的全局拓扑映射，导致资源泄漏。
+2. 在设备属性查询接口中，若用户传入的 dev_name 长度超过限制或未以字符串终止，可能导致内核读取越界；同时查询函数内存在多次内存分配与拷贝，易引发内存相关问题。
+3. JFC/JFS/JFR/Jetty 等资源在销毁时，未根据资源的激活状态区分处理路径，统一调用 delete 接口可能导致非激活资源销毁失败或处理不当。
+
+#主要错误日志
+- "Failed to create jetty rsrc\n"
+- "Invalid dev_name length.\n"
+- "Invalid parameter with error dev_name.\n"
+- "Failed to append, ret: %d.\n"
+- "Failed to delete jfc, id: %u, ret: %d, why: %d.\n"
+- "Failed to free jfc, id: %u, ret: %d, why: %d.\n"
+- "Failed to delete jfs, id: %u, ret: %d, why: %d.\n"
+- "Failed to free jfs, id: %u, ret: %d, why: %d.\n"
+- "Failed to delete jfr, id: %u, ret: %d, why: %d.\n"
+- "Failed to free jfr, id: %u, ret: %d, why: %d.\n"
+- "Failed to delete jetty, id: %u, ret: %d, why: %d.\n"
+- "Failed to free jetty_id, id: %u, ret: %d, why: %d.\n"
+
+#问题根因
+1. **资源泄漏**：`ubcore_cmd_set_topo` 函数在 `ubcore_create_jetty_rsrc` 失败返回前，缺少对 `ubcore_delete_global_topo_map` 的调用，导致全局拓扑映射资源未被清理。
+2. **输入校验缺失与内存风险**：`uburma_cmd_query_device_attr` 函数直接使用用户空间的 `dev_name` 进行 `strcmp` 比较，未校验字符串长度是否合法（如是否超过 `UBCORE_MAX_DEV_NAME`），存在越界读取风险；同时原代码在栈上分配大结构体并多次拷贝，增加了栈溢出和处理异常的风险。
+3. **销毁逻辑单一**：JFC、JFS、JFR、Jetty 的销毁函数仅实现了 `delete` 操作，未区分资源的 `is_actived` 状态。对于未激活的资源，应调用 `free` 接口而非 `delete` 接口，否则会导致操作失败或状态不一致。
+
+#解决方案
+1. **补充错误回滚**：在 `ubcore_cmd_set_topo` 中，当 `ubcore_create_jetty_rsrc` 失败时，增加调用 `ubcore_delete_global_topo_map()` 进行资源回滚。
+2. **增强校验与重构内存管理**：在 `uburma_cmd_query_device_attr` 中，将大结构体改为堆内存分配（`kzalloc`），增加对 `dev_name` 的长度校验（`strnlen`），防止越界访问；优化属性填充流程，调整字段赋值顺序并增加错误处理跳转（`goto free_arg`）确保内存释放。
+3. **适配修复模式销毁逻辑**：在 `uburma_free_jfc`、`uburma_free_jfs`、`uburma_free_jfr`、`uburma_free_jetty` 等函数中，增加对 `is_actived` 状态的判断：
+   - 若 `is_actived` 为真，调用 `ubcore_delete_*` 系列接口。
+   - 若 `is_actived` 为假，调用 `ubcore_free_*` 系列接口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/15e6d5a517ba44be4f80187d8f62a92cfc332795

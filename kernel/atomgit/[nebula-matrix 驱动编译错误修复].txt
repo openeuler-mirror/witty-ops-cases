@@ -1,0 +1,27 @@
+#标题
+[nebula-matrix 驱动编译错误修复]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+在编译 openEuler 内核的 nebula-matrix 网卡驱动时，编译过程失败。主要由于代码中使用了 `vlan_dev_priv(out_dev)->real_dev` 直接访问结构体私有成员，以及未对可选配置项（如 CONFIG_NET_DEVLINK、CONFIG_DCB）相关的代码块进行有效的条件编译隔离，导致在特定配置下出现语法错误或未定义符号错误。
+
+#主要错误日志
+[推断] 编译错误提示，例如：
+1. error: 'struct vlan_dev_priv' has no member named 'real_dev'（或类似结构体访问权限错误）
+2. error: implicit declaration of function 'xxx'（因缺少 CONFIG_NET_DEVLINK 宏包裹导致的函数调用错误）
+3. error: 'struct nbl_serv_qos_info' has no member named 'app'（因缺少 CONFIG_DCB 宏包裹导致的成员访问错误）
+
+#问题根因
+1. 代码直接访问了 `vlan_dev_priv` 结构体内部的 `real_dev` 成员，这不符合内核驱动开发规范，且该成员可能在某些内核版本中不可见或定义不同，应使用标准的 `vlan_dev_real_dev` 接口。
+2. 功能代码块（如 devlink 和 dcb 相关操作）未使用 `#ifdef CONFIG_NET_DEVLINK` 和 `#ifdef CONFIG_DCB` 进行包裹，导致在未开启这些配置项时，编译器尝试编译相关代码但找不到定义，引发编译失败。
+3. `nbl_dev_setup_ktls_ops` 函数定义中存在拼写错误（`ivoidnt`）及参数列表格式问题，导致语法错误。
+
+#解决方案
+1. 将直接访问 `vlan_dev_priv(out_dev)->real_dev` 的代码修改为调用标准接口 `vlan_dev_real_dev(out_dev)`。
+2. 补充缺失的条件编译宏：对涉及 devlink 和 dcb 功能的函数定义、调用及结构体成员添加 `#ifdef CONFIG_NET_DEVLINK` 和 `#ifdef CONFIG_DCB` 保护，确保在配置未开启时代码被正确忽略。
+3. 修正 `nbl_dev_setup_ktls_ops` 函数的定义语法，将返回类型修正为 `int` 并调整参数列表格式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c83cda743e4b3b6d71e36276bf3dc2b35dc64515

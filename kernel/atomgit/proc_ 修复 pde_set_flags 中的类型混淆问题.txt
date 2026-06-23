@@ -1,0 +1,20 @@
+#标题
+proc: 修复 pde_set_flags 中的类型混淆问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 proc 目录项时，由于 `proc_dir_entry` 结构体中存在联合体，`pde_set_flags` 函数错误地将目录项的 `proc_dir_ops` 当作 `proc_ops` 结构体进行解引用，导致类型混淆。这致使对 `proc_ops` 的 NULL 检查失效，可能引发内核异常行为或崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+`proc_dir_entry` 结构体中定义了一个联合体，包含 `proc_ops`（用于文件）和 `proc_dir_ops`（用于目录）。Commit 2ce3d282bd50 引入的修复遗漏了这一细节，代码在调用 `pde_set_flags()` 前未区分文件与目录，直接解引用 `->proc_ops`。对于目录项，该指针实际指向 `proc_dir_ops`，导致类型混淆，原本针对 `proc_ops` 的 NULL 检查逻辑失效。
+
+#解决方案
+在调用 `pde_set_flags()` 函数前，增加 `!S_ISDIR(dp->mode)` 判断条件。仅当 proc 项不是目录时才执行 `pde_set_flags()`，避免对目录项进行错误的类型解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d990889fa3d4c45bfdb185e0ce168ee6bf61402c

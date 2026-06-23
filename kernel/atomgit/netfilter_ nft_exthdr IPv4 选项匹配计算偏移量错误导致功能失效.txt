@@ -1,0 +1,22 @@
+#标题
+netfilter: nft_exthdr IPv4 选项匹配计算偏移量错误导致功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 nftables 进行 IPv4 选项（如 RR、SSRR、RA）匹配或处理时，由于内核对选项偏移量的计算错误，导致 `nft_skb_copy_to_reg()` 函数总是返回 -EFAULT，造成相关规则无法正常匹配或执行。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ipv4_find_option()` 函数中，计算选项偏移量 `*offset` 时错误地加上了 `start` 变量（即 `sizeof(struct iphdr)`）。
+根据 Commit 描述，`__ip_options_compile()` 函数在解析选项时，`opt->srr`、`opt->rr` 等成员存储的已经是相对于 IP 头部的正确偏移值，不需要再额外加上 IP 头部长度。这个冗余的加法导致最终计算出的偏移量超出实际数据范围，从而触发错误返回。
+
+#解决方案
+删除 `ipv4_find_option()` 函数中的 `start` 变量及其相关逻辑。
+在设置 `*offset` 时，直接使用 `__ip_options_compile()` 解析出的选项偏移值（如 `opt->srr`、`opt->rr`、`opt->router_alert`），不再累加 IP 头部长度 `sizeof(struct iphdr)`，确保传递给 `nft_skb_copy_to_reg()` 的偏移量正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a8bbedd9b61985c15d3f02914da7f1b596a2282f

@@ -1,0 +1,20 @@
+#标题
+spinand: spinand_write_page() 未传递 spinand_wait() 错误码导致写入异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SPI NAND 写入操作过程中，若底层 `spinand_wait()` 函数返回错误，`spinand_write_page()` 函数未能正确捕获并向上层传递该错误，导致上层调用者无法感知写入操作的实际失败，可能导致数据完整性受损或后续依赖写入成功的操作发生不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+自提交 3d1f08b032dc ("mtd: spinand: Use the external ECC engine logic") 起，`spinand_write_page()` 函数的逻辑发生了变更，在调用 `spinand_wait()` 后，仅检查了状态寄存器的 `STATUS_PROG_FAILED` 标志，而忽略了 `spinand_wait()` 返回的错误码（变量 `ret`）。这导致底层驱动返回的 I/O 错误或等待超时错误被丢弃，未能像之前版本那样正确传递给上层调用栈。
+
+#解决方案
+修改 `drivers/mtd/nand/spi/core.c` 中的 `spinand_write_page()` 函数，在调用 `spinand_wait()` 后立即检查返回值 `ret`。若 `ret` 不为 0，直接返回该错误码；若返回值为 0，再继续检查状态寄存器的编程失败标志。此修复恢复了原有的错误处理逻辑，确保底层错误能正确传播。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/99434515e46539b8a47768ae3d45f204f893e1e1

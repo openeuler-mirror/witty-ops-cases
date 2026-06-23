@@ -1,0 +1,36 @@
+#标题
+vrf: 移除端口时因缺乏 RCU 同步导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当从 VRF 设备移除端口时，若并发 RCU 读者将该端口识别为 VRF 从设备，但此时其主设备已被更换为非 VRF 设备（如网桥），则会导致内核发生空指针崩溃。触发场景通常涉及在移除 VRF 端口操作的同时进行网络命名或绑定操作。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000000
+[...]
+RIP: 0010:l3mdev_fib_table_rcu (net/l3mdev/l3mdev.c:181)
+[...]
+Call Trace:
+<TASK>
+l3mdev_fib_table_by_index (net/l3mdev/l3mdev.c:201 net/l3mdev/l3mdev.c:189)
+__inet_bind (net/ipv4/af_inet.c:499 (discriminator 3))
+inet_bind_sk (net/ipv4/af_inet.c:469)
+__sys_bind (./include/linux/file.h:62 (discriminator 1) ./include/linux/file.h:83 (discriminator 1) net/socket.c:1951 (discriminator 1))
+__x64_sys_bind (net/socket.c:1969 (discriminator 1) net/socket.c:1967 (discriminator 1) net/socket.c:1967 (discriminator 1))
+do_syscall_64 (arch/x86/entry/syscall_64.c:63 (discriminator 1) arch/x86/entry/syscall_64.c:94 (discriminator 1))
+entry_SYSCALL_64_after_hwframe (arch/x86/entry/entry_64.S:130)
+
+#问题根因
+RCU 读者通过 `netif_is_l3_slave()` 判断某网络设备为 VRF 端口后，假定随后调用 `netdev_master_upper_dev_get_rcu()` 获取的主设备一定是 VRF 设备并对其 l3mdev 操作进行解引用。
+然而，从 VRF 移除端口时缺乏 RCU 同步机制。这导致 RCU 读者可能在清除 `IFF_L3MDEV_SLAVE` 标志之前看到新的主设备（例如网桥），而该新主设备并不具备 l3mdev 操作接口，从而导致解引用时发生空指针崩溃。
+
+#解决方案
+在清除 `IFF_L3MDEV_SLAVE` 标志后添加 RCU 同步（`synchronize_net`），确保并发的 RCU 读者要么看到 VRF 主设备，要么看到已清除标志的非 VRF 设备。
+优化处理：
+1. 当网络设备作为端口被删除时（NETDEV_UNREGISTER 事件），跳过同步以避免不必要的等待。
+2. 当 VRF 设备自身被删除时，跳过同步，因为释放 RTNL 锁前会经过一个 RCU 宽限期。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f13b9e743f3dafa0fa46f9b37cdd18f11f2538d

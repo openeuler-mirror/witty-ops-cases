@@ -1,0 +1,20 @@
+#标题
+drm/amdkfd: retry cam启用时错误操作software fault filter导致处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 GPU 硬件的 retry cam 功能被启用时，驱动程序在处理故障移除逻辑时出现异常行为。由于硬件此时不使用 software retry fault filter，驱动若仍尝试从 software filter ring 中移除故障项，会导致逻辑错误或状态不一致，可能影响后续的故障处理流程。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `amdgpu_gmc_filter_faults_remove` 函数的逻辑判断不完整。当 `retry_cam_enabled` 被启用时，固件并不使用 software retry fault filter，也不会将故障添加到 software filter ring 中。然而，原代码逻辑仅根据该标志位切换中断环（IH ring）指针（选择 `ih_soft` 或 `ih1`），却仍然继续执行后续的故障移除操作。这导致驱动尝试从不存在的 software filter 结构中移除故障，违反了逻辑一致性。
+
+#解决方案
+修改 `amdgpu_gmc_filter_faults_remove` 函数，在检测到 `adev->irq.retry_cam_enabled` 为真时直接返回，完全跳过从 software filter ring 中移除故障的逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1795cf08d8a7aa87448e19ae37c2d5506053d6e9

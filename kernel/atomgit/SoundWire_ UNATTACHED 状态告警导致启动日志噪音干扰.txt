@@ -1,0 +1,21 @@
+#标题
+SoundWire: UNATTACHED 状态告警导致启动日志噪音干扰
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动过程中，内核日志（dmesg）输出大量误导性的 `dev_warn` 级别告警信息。该现象在 SoundWire 编解码器驱动于固件下载后触发硬件复位时发生，此时设备会短暂进入 UNATTACHED 状态随后重新挂载。由于该行为属于正常的初始化序列，这些告警构成了无意义的噪音，可能干扰用户或运维人员对系统状态的判断。
+
+#主要错误日志
+[    X.XXXXXX] soundwire slave: Slave %d state check1: UNATTACHED, status was %d
+[    X.XXXXXx] soundwire slave: Slave %d state check2: UNATTACHED, status was %d
+
+#问题根因
+在 `sdw_handle_slave_status()` 函数中，代码针对 UNATTACHED 状态转换添加了 `dev_warn()` 级别的日志打印。原设计意图是通过动态调试来追踪设备挂载失败，但在实际运行中，正常的设备初始化流程（如 codec 驱动在固件下载后执行硬件复位导致设备短暂变为 UNATTACHED 状态）也会触发这些告警，导致在每次启动时产生误导性的内核日志噪音。
+
+#解决方案
+将 `drivers/soundwire/bus.c` 中针对 UNATTACHED 状态转换的日志打印级别从 `dev_warn()` 降级为 `dev_dbg()`。此修改保留了日志的调试能力（可通过动态调试 dynamic debug 开启），避免了在正常初始化序列中向用户展示误导性的告警信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4d6081a7527f791fe794010a84f636c3049c4f3d

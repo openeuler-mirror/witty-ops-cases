@@ -1,0 +1,30 @@
+#标题
+cifs: smb3_fs_context_parse_param 导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+用户程序调用 fsconfig 两次后退出时，发生内核内存泄漏。syzbot 检测到未释放的对象，具体表现为内存分配后无法回收。
+
+#主要错误日志
+BUG: memory leak
+unreferenced object 0xffff888128afa360 (size 96):
+  backtrace (crc 79c9c7ba):
+    kstrdup+0x3c/0x80 mm/util.c:84
+    smb3_fs_context_parse_param+0x229b/0x36c0 fs/smb/client/fs_context.c:1444
+
+BUG: memory leak
+unreferenced object 0xffff888112c7d900 (size 96):
+  backtrace (crc 79c9c7ba):
+    smb3_fs_context_fullpath+0x70/0x1b0 fs/smb/client/fs_context.c:629
+    smb3_fs_context_parse_param+0x2266/0x36c0 fs/smb/client/fs_context.c:1438
+
+#问题根因
+用户调用 fsconfig 两次时，解析函数 smb3_fs_context_parse_param 会重新分配 ctx->source 和 fc->source，但在分配新内存前未释放旧内存。程序退出时仅释放了第二次分配的内存，导致第一次分配的内存未被释放。此外，fs context 相关代码中没有针对 fc->source 的内存回收逻辑。
+
+#解决方案
+在 smb3_fs_context_parse_param 函数中，每次解析并重新分配 source 内存之前，先调用 kfree 释放原有的 ctx->source 和 fc->source，防止重复分配导致的内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/05f677f04abaec94775fee9ac2ca1b02e36012c8

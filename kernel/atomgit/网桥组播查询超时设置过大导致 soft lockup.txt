@@ -1,0 +1,37 @@
+#标题
+网桥组播查询超时设置过大导致 soft lockup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户将网桥设备的 `multicast_query_interval` 设置为极大值（如 0xffffffffffffffff）时，内核中的局部变量 `time` 发生溢出。溢出后的时间值小于当前 `jiffies`，导致定时器立即到期，到期后又再次调用 `mod_timer()`，形成无限循环，最终触发 soft lockup。受影响的进程通常为 `rb_consumer`，CPU 处于中断上下文（IRQ）中无法退出。
+
+#主要错误日志
+watchdog: BUG: soft lockup - CPU#1 stuck for 221s! [rb_consumer:66]
+CPU: 1 UID: 0 PID: 66 Comm: rb_consumer Not tainted 6.16.0+ #259 PREEMPT(none)
+Call Trace:
+ <IRQ>
+ __netdev_alloc_skb+0x2e/0x3a0
+ br_ip6_multicast_alloc_query+0x212/0x1b70
+ __br_multicast_send_query+0x376/0xac0
+ br_multicast_send_query+0x299/0x510
+ br_multicast_query_expired.constprop.0+0x16d/0x1b0
+ call_timer_fn+0x3b/0x2a0
+ __run_timers+0x619/0x950
+ run_timer_softirq+0x11c/0x220
+ handle_softirqs+0x18e/0x560
+ __irq_exit_rcu+0x158/0x1a0
+ sysvec_apic_timer_interrupt+0x76/0x90
+ </IRQ>
+[推断] br_info: trying to set multicast query interval above maximum, setting to %lu (%ums)
+[推断] br_info: trying to set multicast startup query interval above maximum, setting to %lu (%ums)
+
+#问题根因
+当 `multicast_query_interval` 设置为极大值时，`br_multicast_send_query()` 函数中的局部变量 `time` 计算结果发生整数溢出。计算出的时间值变小且小于当前的 `jiffies`，这导致定时器被认为已到期而立即执行回调。回调函数中再次调用 `mod_timer()` 重新注册定时器，由于时间计算错误依旧存在，定时器再次立即到期，从而陷入死循环，导致 CPU soft lockup。`multicast_startup_query_interval` 也存在同样问题。
+
+#解决方案
+在 `br_multicast_set_query_intvl` 和 `br_multicast_set_startup_query_intvl` 函数中增加数值上限检查。如果用户配置的间隔时间超过最大值（定义为 24 小时，即 86400000 毫秒），强制将其限制为最大值，并打印提示信息。这防止了时间计算溢出，切断了定时器立即重发的死循环路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/235ba397008935ff4f159a2e2e735851433ddb8e

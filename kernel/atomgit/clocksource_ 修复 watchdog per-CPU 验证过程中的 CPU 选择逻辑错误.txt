@@ -1,0 +1,20 @@
+#标题
+clocksource: 修复 watchdog per-CPU 验证过程中的 CPU 选择逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 clocksource watchdog 检测到时钟源偏差（如 TSC 不稳定）并触发 per-CPU 验证检查时，如果配置参数 `verify_n_cpus` 的值大于系统在线 CPU 数量，内核会因随机 cpumask 计算逻辑中的重复选取问题，导致部分在线 CPU 被跳过而未被检查，无法确保所有 CPU 之间的时钟源同步性验证覆盖全量 CPU。例如在一台 4 CPU 的笔记本上设置 `verify_n_cpus=8` 时，仍有部分 CPU 未被纳入验证范围。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `clocksource_verify_choose_cpus` 中，当需验证的 CPU 数量 `n`（即 `verify_n_cpus`）大于等于在线 CPU 数量时，代码未能跳过随机选择逻辑，而是继续进行随机 cpumask 计算。由于随机计算过程存在选取重复 CPU 的可能性，导致实际被选中的 CPU 集合可能少于在线 CPU 总数，致使部分 CPU 被遗漏，未能执行全量 CPU 的时钟同步检查。
+
+#解决方案
+修改 `kernel/time/clocksource.c` 中的判断条件，在 `clocksource_verify_choose_cpus` 函数里，将原有的 `if (n < 0)` 判断修改为 `if (n < 0 || n >= num_online_cpus())`。当配置的验证 CPU 数量大于等于在线 CPU 数量时，直接跳过随机计算逻辑，通过 `cpumask_copy` 拷贝所有在线 CPU 掩码，确保对所有在线 CPU（除当前 CPU 外）进行时钟源同步验证，避免因随机计算重复导致部分 CPU 漏检。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9d3373ad0d4169e94e00d45ebef87e2f7170d876

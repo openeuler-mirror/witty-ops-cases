@@ -1,0 +1,32 @@
+#标题
+resctrl文件系统在不支持RDT的平台上挂载导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在平台硬件不支持任何 RDT (Resource Director Technology) 资源的情况下，尝试挂载 resctrl 文件系统时触发内核 WARNING 并导致崩溃。
+
+#主要错误日志
+WARNING: CPU: 0 PID: 13291 at mm/page_alloc.c:4780 __alloc_pages
+Call Trace:
+ __kmalloc_large_node+0x8f/0x190
+ __kmalloc+0xb8/0x120
+ closid_init+0x4a/0x90
+ rdt_get_tree+0x109/0x400
+ vfs_get_tree+0x25/0xe0
+ do_new_mount+0x164/0x1c0
+ __se_sys_mount+0x165/0x1d0
+ do_syscall_64+0x56/0x100
+
+#问题根因
+在挂载 resctrl 文件系统时，`closid_init` 函数会遍历 `resctrl_schema_all` 链表以确定最小的 CLOSID 数量（`rdt_min_closid`）。当平台不支持任何 RDT 资源时，该链表为空，导致 `rdt_min_closid` 保持其初始化值 `~0`（即 `0xffffffff`）。该值随后被传递给 `bitmap_alloc` 进行内存分配，由于请求分配的位图大小过大，触发了 `__alloc_pages` 的 WARNING 并导致崩溃。
+
+#解决方案
+修改 `closid_init` 函数，增加对无 RDT 资源情况的检测与处理：
+1. 在遍历 schema 链表后，检查 `rdt_min_closid` 是否仍为初始值 `~0`。若是，说明无可用 RDT 资源，函数直接返回 `-EOPNOTSUPP` 错误。
+2. 增加 `bitmap_alloc` 的返回值检查，若内存分配失败，返回 `-ENOMEM` 错误。
+3. 修改函数返回类型为 `int`，并在调用点 `rdt_get_tree` 中增加对返回值的错误处理，确保异常情况能正确终止挂载流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bd359a3fe4390bd062e36c271fda4f806f3f2eca

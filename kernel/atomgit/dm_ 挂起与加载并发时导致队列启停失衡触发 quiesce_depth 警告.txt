@@ -1,0 +1,28 @@
+#标题
+dm: 挂起与加载并发时导致队列启停失衡触发 quiesce_depth 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当设备挂起与表加载并发执行时，`__dm_suspend()` 可能跳过 `dm_stop_queue()` 操作，导致队列的静默深度未增加。随后在表加载完成执行 `__dm_resume()` 时，触发 `q->quiesce_depth == 0` 的警告并打印调用栈。
+
+#主要错误日志
+Call Trace:
+ <TASK>
+ dm_start_queue+0x16/0x20 [dm_mod]
+ __dm_resume+0xac/0xb0 [dm_mod]
+ dm_resume+0x12d/0x150 [dm_mod]
+ do_resume+0x2c2/0x420 [dm_mod]
+ dev_suspend+0x30/0x130 [dm_mod]
+ ctl_ioctl+0x402/0x570 [dm_mod]
+ dm_ctl_ioctl+0x23/0x30 [dm_mod]
+
+#问题根因
+当挂起和加载并发运行时，在 `blk_mq_init_allocated_queue()` 中设置 `q->mq_ops` 之前，`__dm_suspend()` 会跳过 `dm_stop_queue()`，导致队列的 `quiesce_depth` 没有增加。而在后续表加载完成 `__dm_resume()` 运行时，无条件调用 `dm_start_queue()` 尝试递减 `quiesce_depth`，导致出现 `quiesce_depth == 0` 的不平衡状态并触发警告。
+
+#解决方案
+通过引入新的 `DMF_QUEUE_STOPPED` 标志位显式跟踪请求队列是否已被停止。在 `__dm_suspend()` 中成功停止队列时设置该标志，在 `__dm_resume()` 或挂起失败回滚时，仅当该标志被置位时才调用 `dm_start_queue()`，确保队列启停操作的配对性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f7cb7cc982c5922a6c449d2aa2b3b6445d927a2f

@@ -1,0 +1,24 @@
+#标题
+ip_tunnel_init_flow 使用错误的 netns 导致路由查找失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了 IP 隧道（如 gretap）的场景下，当隧道设备与底层设备位于不同的网络命名空间时，内核在进行隧道流量路由查找时使用了错误的网络命名空间（overlay netns 而非 underlay netns）。这导致路由查找失败，隧道流量无法正常转发，可能导致网络不可达或丢包。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ip_tunnel_init_flow` 函数调用中，传入的网络命名空间参数为 `dev_net(dev)`，即隧道设备自身的命名空间。然而，根据代码逻辑，`tunnel->parms.link` 所代表的底层设备实际上位于 `tunnel->net` 指向的网络命名空间。这种参数不匹配导致 flow 结构体初始化时使用了错误的 netns 进行路由查找。
+
+#解决方案
+修改 `ip_tunnel_init_flow` 的调用点，将网络命名空间参数从 `dev_net(dev)` 修正为 `tunnel->net`。
+具体涉及以下文件和函数的修改：
+1. `drivers/net/ethernet/mellanox/mlxsw/spectrum_span.c` 中的 `mlxsw_sp_span_gretap4_route` 函数。
+2. `net/ipv4/ip_tunnel.c` 中的 `ip_tunnel_bind_dev`、`ip_md_tunnel_xmit` 以及 `ip_tunnel_xmit` 函数。
+确保使用正确的 underlay netns 进行路由查找。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0bdb3b8aec70dec229979f3b7e71836d4ad1267b

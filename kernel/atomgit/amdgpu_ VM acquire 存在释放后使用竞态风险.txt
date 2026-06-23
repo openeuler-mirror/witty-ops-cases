@@ -1,0 +1,20 @@
+#标题
+amdgpu: VM acquire 存在释放后使用竞态风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当父进程与子进程通过 fork() 共享同一个 drm_file 时，若两者同时尝试获取同一个 VM（Virtual Memory），会触发竞态条件，导致 use-after-free（释放后使用）问题，可能导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `init_kfd_vm` 函数中，原代码对 `vm->process_info` 的赋值操作是非原子的。当父子进程共享 drm_file 并并发执行 VM acquire 操作时，两者可能同时对该变量进行赋值，从而引发竞态条件，导致出现 use-after-free 风险。
+
+#解决方案
+将原本的非原子赋值操作修改为原子比较交换操作 `cmpxchg()`。在赋值前检查 `vm->process_info` 是否为 NULL，如果不为 NULL 说明已被其他进程获取，直接返回 `-EINVAL` 错误码并跳转到 `already_acquired` 标签处进行清理，从而避免竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7428e4b761a13e7fc2a7f2e8e2498e910d3b889d

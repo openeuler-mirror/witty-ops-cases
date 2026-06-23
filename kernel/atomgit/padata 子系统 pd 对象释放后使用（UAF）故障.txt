@@ -1,0 +1,20 @@
+#标题
+padata 子系统 pd 对象释放后使用（UAF）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 padata 并行处理序列化过程中，存在竞争条件。当 `padata_replace` 被调用时，如果 `padata_reorder` 函数正在处理数据，可能导致 `parallel_data` (pd) 对象的引用计数过早释放，进而引发释放后使用，造成内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `padata_reorder` 函数中存在竞争条件/UAF 漏洞。引用计数在 `padata_do_parallel` 开始时获取，并在 `padata_serial_worker` 结束时释放。问题在于，一旦 padata 被添加到 `queue->serial.list` 并释放了相关的自旋锁，该 padata 可能立即被处理，导致 pd 上的引用计数减少。如果在完全处理完毕前 pd 的引用计数降至 0，且此时 `padata_replace` 正在执行，就会导致 pd 对象被释放，而后续代码仍试图访问该对象，触发 UAF。
+
+#解决方案
+重构 `padata_reorder` 函数逻辑，在释放 `squeue->serial.lock` 之前获取下一个 padata 对象，确保处理流程的原子性和安全性。同时，移除了 `pd->lock` 和 `pd->reorder_work` 相关的复杂同步逻辑，改为在下一个 padata 到达时直接调用 `padata_reorder`，从而从根本上消除了竞争窗口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0730d1c4cf418f95b79e247434a28b47d6bf7c95

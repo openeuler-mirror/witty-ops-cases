@@ -1,0 +1,26 @@
+#标题
+cpufreq: CPU热插拔后重新开启boost功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行特定的 CPU 热插拔与频率调整操作序列后，CPU 无法恢复到最高频率（boost 频率），而是停留在基础频率。具体复现步骤如下：
+1. 开启所有 CPU 的 boost 功能：`echo 1 > /sys/devices/system/cpu/cpufreq/boost`
+2. 下线某个 CPU：`echo 0 > /sys/devices/system/cpu/cpuX/online`
+3. 关闭所有 CPU 的 boost 功能：`echo 0 > /sys/devices/system/cpu/cpufreq/boost`
+4. 上线该 CPU：`echo 1 > /sys/devices/system/cpu/cpuX/online`
+5. 再次开启所有 CPU 的 boost 功能：`echo 1 > /sys/devices/system/cpu/cpufreq/boost`
+结果：CPUX 停留在基础频率，未达到预期的 boost 频率。
+
+#主要错误日志
+未知
+
+#问题根因
+在 CPU 上线过程中，cpufreq 策略的 `max_freq_req` 请求未进行更新，保留了该 CPU 下线前的旧值。当再次开启 boost 功能时，`freq_qos_update_request()` 函数检测到新旧值相同，因此未执行实际的频率更新操作，导致 CPU 无法提升至 boost 频率，只能停留在基础频率。
+
+#解决方案
+在 `cpufreq_online()` 函数中，针对 CPU 上线时策略已存在的场景，增加对 `max_freq_req` 的更新逻辑。具体修改为在 `else` 分支中调用 `freq_qos_update_request(policy->max_freq_req, policy->max)`，确保上线时策略的最大频率请求值被正确刷新。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9876fd09c77db231d2646c463fe7987709995675

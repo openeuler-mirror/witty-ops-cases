@@ -1,0 +1,25 @@
+#标题
+ipv6: seg6_iptunnel 存在二次内存重分配性能损耗问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 IPv6 Segment Routing (seg6_iptunnel) 进行数据包封装转发时，存在性能损耗。具体表现为每个数据包在处理路径上触发了两次 `skb` 内存重分配（realloc），导致网络吞吐量下降，性能测试结果不理想。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在处理 seg6 封装时，逻辑上需要两次扩展 skb 的头部空间：第一次是为 SRH 头部扩展 headroom，第二次是为后续的邻居发现和链路层头部预留空间（`LL_RESERVED_SPACE`）。
+在修复前的代码流程中，`seg6_do_srh` 函数首先调用 `skb_cow_head` 进行第一次扩容（仅根据 SRH 大小），随后在 `seg6_input_core` 或 `seg6_output_core` 中再次调用 `skb_cow_head` 进行第二次扩容。由于第一次扩容时未预知后续链路层开销，导致第一次扩容不足，迫使第二次扩容再次触发真实的内存分配与数据拷贝，造成不必要的性能开销。
+
+#解决方案
+调整 `skb_cow_head` 的调用时机与参数计算方式，将两次内存分配请求合并为一次：
+1. 将 `seg6_do_srh` 函数族（包括 `seg6_do_srh_encap`、`seg6_do_srh_encap_red`、`seg6_do_srh_inline`）的调用逻辑修改为接收 `cache_dst` 参数。
+2. 在调用这些封装函数前，先尝试获取缓存的 dst_entry。
+3. 修改封装函数内部的 `skb_cow_head` 调用，在计算所需 headroom 时，利用传入的 `cache_dst` 提前加上链路层开销（`dst_dev_overhead`），确保一次性分配足够的内存空间。
+4. 将原本位于处理流程后段的第二次 `skb_cow_head` 检查移除或调整位置，避免重复分配。这使得除了首次迭代（缓存为空）外，后续数据包仅需触发一次内存重分配，显著提升了转发性能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/79ea8627e4dfa1167f45e640879680d9d7fabf0b

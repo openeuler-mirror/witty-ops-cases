@@ -1,0 +1,21 @@
+#标题
+serial: amba-pl011: 使用 dma_mapping_error() 替代显式地址检查修复 DMA 映射判断问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PL011 串口驱动进行 DMA TX（发送）数据传输时，若 dma_map_single() 映射失败，驱动程序可能无法正确检测到映射错误。这是因为驱动使用了显式的地址比较（`dmatx->dma == DMA_MAPPING_ERROR`）而非推荐的 DMA API 接口进行检查。在某些平台或特定条件下，显式地址检查可能失效，导致驱动误认为 DMA 映射成功，进而引发 DMA 控制器使用无效的 DMA 地址进行传输，可能导致数据传输失败、内存损坏或内核异常。
+
+#主要错误日志
+unable to map TX DMA
+（注：此为代码中映射失败分支打印的调试日志）
+
+#问题根因
+根据 Documentation/core-api/dma-api.rst 文档要求，检查 dma_map_single() 返回的 DMA 地址是否有效，必须使用专用的 `dma_mapping_error()` 辅助函数。原代码直接将返回地址与 `DMA_MAPPING_ERROR` 进行显式比较，这种方式不符合 DMA API 规范，在部分架构实现中无法准确判定映射是否成功。
+
+#解决方案
+修改 `drivers/tty/serial/amba-pl011.c` 文件中 `pl011_dma_tx_refill` 函数的实现，将 DMA 映射结果的判断方式从显式地址比较 `dmatx->dma == DMA_MAPPING_ERROR` 更改为调用标准接口 `dma_mapping_error(dma_dev->dev, dmatx->dma)`，以确保在各种平台上都能正确检测 DMA 映射失败的情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0798c6b8b28f98968486678b77c4a6cbaa1f227c

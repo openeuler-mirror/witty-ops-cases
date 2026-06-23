@@ -1,0 +1,25 @@
+#标题
+Bluetooth: hci_event: 修复扩展广播地址无效导致 MGMT_EV_DEVICE_FOUND 事件发送错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理蓝牙扩展广播（Extended Advertisement）时，内核错误地发送了带有无效地址（00:00:00:00:00:00）的 MGMT_EV_DEVICE_FOUND 事件。这导致用户空间蓝牙协议栈（如 BlueZ）接收到错误的设备发现信息，影响设备扫描功能的正常使用。
+
+#主要错误日志
+未知
+
+#问题根因
+该问题是由于提交 a2ec905d1e16 ("Bluetooth: fix kernel oops in store_pending_adv_report") 引入的逻辑回归错误。
+原代码在 `process_adv_report` 函数中，通过 `if (!ext_adv && !has_pending_adv_report(hdev))` 判断是否进入处理流程。错误补丁试图跳过扩展广播数据的存储，但由于逻辑运算符优先级或位置错误，实际上导致代码跳过了整个发送 MGMT_EV_DEVICE_FOUND 的 if 语句块。
+对于扩展广播，因为从未调用过 `store_pending_adv_report`，`last_addr_adv` 必然是无效的（未初始化或默认值 00:00:00:00:00:00）。当程序错误地继续执行发送逻辑时，便使用了这个无效地址。
+
+#解决方案
+调整 `hci_event.c` 中 `process_adv_report` 函数的判断逻辑：
+1. 将扩展广播检查 `!ext_adv` 从外层 if 条件中移除，修改为 `if (!has_pending_adv_report(hdev))`，允许进入处理流程以发送 MGMT_EV_DEVICE_FOUND 事件。
+2. 将 `!ext_adv` 检查移动到内部嵌套的 if 条件中，与 `type == LE_ADV_IND || type == LE_ADV_SCAN_IND` 结合，仅在非扩展广播且需要存储待处理报告时才调用 `store_pending_adv_report`。
+此举确保了扩展广播能正确发送设备发现事件，同时避免尝试存储扩展广播数据导致的潜在问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c65c6689f8456d60a27f08951eb4fb6b5e00995f

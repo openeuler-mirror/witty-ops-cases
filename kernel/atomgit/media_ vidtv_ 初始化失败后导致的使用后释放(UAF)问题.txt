@@ -1,0 +1,22 @@
+#标题
+media: vidtv: 初始化失败后导致的使用后释放(UAF)问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 vidtv 模块初始化过程中，若 PSI（Program Specific Information）初始化失败，系统未正确终止后续流程，导致访问了已释放的内存对象。KASAN 检测器报告了 "slab-use-after-free" 错误。该问题由 syzbot 发现，涉及内核地址 `ffff88802fa42acc` 的非法读取。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in vidtv_mux_pid_ctx_init drivers/media/test-drivers/vidtv/vidtv_mux.c:78 [inline]
+BUG: KASAN: slab-use-after-free in vidtv_mux_init+0xac2/0xbe0 drivers/media/test-drivers/vidtv/vidtv_mux.c:524
+Read of size 8 at addr ffff88802fa42acc by task syz.2.37/6059
+
+#问题根因
+在 `vidtv_channel_si_init` 函数中，当 SI（Service Information）初始化失败时，代码逻辑执行了资源释放操作（如销毁 PAT 表），但在函数末尾错误地返回了 `0`（成功），而非错误码。这导致调用者 `vidtv_mux_init` 误认为初始化成功并继续执行后续流程（如调用 `vidtv_mux_pid_ctx_init`），进而访问了已被释放的 `si` 成员内存，触发 Use-After-Free 漏洞（CVE-2025-38227）。
+
+#解决方案
+修改 `drivers/media/test-drivers/vidtv/vidtv_channel.c` 文件中的 `vidtv_channel_si_init` 函数。在 PSI 初始化失败的错误处理路径中，将错误的返回值 `return 0;` 修正为 `return -EINVAL;`。这确保了当初始化失败时，错误状态能正确向上传递，调用者能够及时终止后续处理流程，避免访问已释放的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fda13aa8fa0136d1cb1efc9679ed676ee554dc65

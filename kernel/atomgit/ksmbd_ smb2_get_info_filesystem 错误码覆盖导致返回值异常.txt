@@ -1,0 +1,20 @@
+#标题
+ksmbd: smb2_get_info_filesystem 错误码覆盖导致返回值异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SMB 客户端未协商 SMB3.1.1 POSIX 扩展时，ksmbd 在处理 `smb2_get_info_filesystem` 请求过程中，虽然检测到了不支持的情况，但未能正确向客户端返回 `-EOPNOTSUPP` 错误码。由于错误码变量被后续逻辑覆盖，客户端可能收到错误的响应状态，导致协议交互异常或功能回退失败。
+
+#主要错误日志
+pr_err("client doesn't negotiate with SMB3.1.1 POSIX Extensions\n");
+
+#问题根因
+在函数 `smb2_get_info_filesystem` 中，若客户端未协商 SMB3.1.1 POSIX Extensions，代码分支本应返回 `-EOPNOTSUPP`。但原实现仅设置了返回值变量 `rc = -EOPNOTSUPP`，并未立即返回，导致程序继续向下执行，`rc` 变量被后续代码逻辑覆盖，从而丢失了正确的错误状态。
+
+#解决方案
+在检测到客户端未协商 POSIX 扩展的错误分支中，立即释放已获取的路径资源（调用 `path_put(&path)`），并直接 `return -EOPNOTSUPP`，防止错误码被覆盖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3f51323828862830ed5d0ca28b6b196a5c9ce806

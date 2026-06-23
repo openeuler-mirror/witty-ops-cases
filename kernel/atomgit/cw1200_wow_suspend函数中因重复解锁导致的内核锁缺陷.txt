@@ -1,0 +1,20 @@
+#标题
+cw1200_wow_suspend函数中因重复解锁导致的内核锁缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 cw1200 无线网卡驱动执行 WoW（Wake on Wireless）挂起流程时，若出现 PM 请求失败或设备接收事件触发的强制恢复场景，内核会发生锁定机制异常（重复解锁），可能导致系统不稳定或后续锁操作行为异常。
+
+#主要错误日志
+`wiphy_err(priv->hw->wiphy, "PM request failed: %d. WoW is disabled.\n", ret);`
+
+#问题根因
+前次提交 d98c24617a83 ("wifi: cw1200: Fix locking in error paths") 错误地在 `cw1200_wow_suspend` 函数的错误处理路径中添加了 `mutex_unlock(&priv->conf_mutex)`。实际上，被调用的 `cw1200_wow_resume()` 函数内部已经包含了释放 `priv->conf_mutex` 锁的操作。因此，前次补丁导致该互斥锁被连续解锁两次，引入了严重的锁定 Bug。
+
+#解决方案
+回退提交 d98c24617a83，移除 `cw1200_wow_suspend` 函数中紧随 `cw1200_wow_resume(hw)` 之后的冗余 `mutex_unlock(&priv->conf_mutex)` 调用，确保锁资源仅被释放一次。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/79cd1737b699bc957d2a37825e0879b18e853351

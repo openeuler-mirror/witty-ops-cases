@@ -1,0 +1,20 @@
+#标题
+tmpfs 'huge=' 挂载选项策略变更导致用户态回归及大页分配行为异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载 tmpfs 时使用 `huge=always` 或 `huge=within_size` 选项，内核会基于 write() 和 fallocate() 的操作大小尝试分配任意尺寸的大页，而不是优先尝试 PMD 尺寸的大页。这种行为变更导致依赖 PMD 大页特性的用户场景（如未提供写入大小提示的 i915 驱动）出现性能回归或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在引入大页支持的提交 acd7ccb284b8 之后，tmpfs 调整了 `huge=` 选项的策略。当设置 `huge=always` 或 `huge=within_size` 时，系统不再优先尝试分配 PMD 尺寸的大页，而是优先根据写入大小计算并尝试分配最高阶的大页。这种策略变更打破了原有的语义预期，导致需要 PMD 大页的场景无法获得预期的内存分配行为，从而引发用户态回归。
+
+#解决方案
+修改 tmpfs 大页分配策略：对于 `huge=always` 和 `huge=within_size` 挂载选项，恢复优先尝试分配 PMD 尺寸大页的逻辑；如果 PMD 尺寸分配失败，再回退尝试较小尺寸的大页。同时更新了文档 `transhuge.rst` 以明确这一分配策略语义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/15d1b2f12a9ef0d413345a6628dbfd369e441c81

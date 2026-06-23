@@ -1,0 +1,20 @@
+#标题
+s390/bpf: bpf_arch_text_poke() 在 new_addr 为 NULL 时引发内核偶发 Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 s390 架构下，当 BPF 程序（如 perf 的 on_switch() 程序）运行时，调用 `bpf_arch_text_poke()` 并传入 `new_addr == NULL` 参数时，会触发间歇性的内核恐慌。
+
+#主要错误日志
+未知
+
+#问题根因
+之前的提交 7ded842b356d ("s390/bpf: Fix bpf_plt pointer arithmetic") 意外移除了提交 c730fce7c70c 中的关键修复代码。当 `target`（即 `new_addr` 对应的底层实现）为 NULL 时，代码直接将 `plt->target` 赋值为 NULL。这意味着某些 CPU 可能在分支指令被修补为 no-op 之前就已经跳转到了该 PLT（Procedure Linkage Table）条目，并尝试执行 `target` 为 NULL 的代码，从而导致内核 panic。
+
+#解决方案
+恢复之前被移除的修复代码。在 `bpf_jit_plt` 函数中，当 `target` 指针为 NULL 时，将 `plt->target` 指向返回标签 `ret` 而不是 NULL。这使得 PLT 条目在逻辑上等同于 no-op 操作，确保正在执行该 PLT 条目的 CPU 能够正常返回，避免了空指针解引用引发的崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/741911605c24c2da935bc5fc5aad4bfe1fab7131

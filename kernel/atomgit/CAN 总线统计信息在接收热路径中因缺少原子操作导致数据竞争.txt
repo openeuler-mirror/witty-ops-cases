@@ -1,0 +1,23 @@
+#标题
+CAN 总线统计信息在接收热路径中因缺少原子操作导致数据竞争
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CAN 总线接收数据的热路径中，统计接收匹配次数的变量 `matches` 存在数据竞争风险。该问题可被 KCSAN（Kernel Concurrency Sanitizer）检测工具捕获，可能导致统计的匹配次数不准确，或者在并发读写过程中导致内核状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的修复提交 80b5f90158d1 中，仅修复了 `can_receive()` 函数中的 KCSAN 问题，但遗漏了 `can_rcv_filter()` 函数中使用的 `matches` 变量。该变量在 `struct receiver` 结构体中被定义为 `unsigned long` 类型，并在 `deliver()` 函数的接收热路径中执行非原子的自增操作 `rcv->matches++`，同时在 `can_rx_register()` 中进行非原子的初始化，以及在 `proc.c` 中进行非原子的读取。这种非原子操作在多核并发执行时会导致数据竞争。
+
+#解决方案
+将 `struct receiver` 结构体中的 `matches` 变量类型从 `unsigned long` 修改为 `atomic_long_t`，并对所有访问该变量的代码路径进行相应的原子操作改造：
+1. 在 `can_rx_register()` 中初始化时，使用 `atomic_long_set(&rcv->matches, 0)` 替代直接赋值。
+2. 在 `deliver()` 函数中更新统计时，使用 `atomic_long_inc(&rcv->matches)` 替代自增操作。
+3. 在 `can_print_rcvlist()` 读取统计值时，使用 `atomic_long_read(&r->matches)` 替代直接读取，确保读取操作获取到一致的值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/417a6e71a41a5dac33df655840d54ff48a3f43cf

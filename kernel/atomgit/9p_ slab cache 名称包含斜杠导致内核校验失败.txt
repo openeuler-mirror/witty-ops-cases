@@ -1,0 +1,20 @@
+#标题
+9p: slab cache 名称包含斜杠导致内核校验失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 9p 文件系统使用的设备名称（dev_name）包含特殊字符（如斜杠 '/'，例如 "/dev/root"）时，创建 slab cache 的名称也会包含该斜杠。这会导致内核在 `verify_dirent_name()` 校验时失败，引发错误或异常行为，进而导致 9p 客户端创建流程受阻。
+
+#主要错误日志
+未知
+
+#问题根因
+之前的代码尝试使用 `dev_name` 来构建唯一的 slab cache 名称（格式为 "9p-fcall-cache-%s"）。但 `dev_name` 可能是任意字符串（例如 "/dev/root"），当其包含斜杠时，构成的 cache name 会触发文件名校验逻辑（`verify_dirent_name()`）失败，因为文件名中不允许包含斜杠。
+
+#解决方案
+放弃使用不可控的 `dev_name` 作为 slab cache 名称的一部分，改为引入一个静态原子变量 `seqno`。通过 `atomic_inc_return` 获取递增的序列号，将 slab cache 名称格式修改为 "9p-fcall-cache-%u"，确保名称仅包含安全字符且唯一，从而避免校验失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b0cdc1bbc0db0528516012c189f7425603855491

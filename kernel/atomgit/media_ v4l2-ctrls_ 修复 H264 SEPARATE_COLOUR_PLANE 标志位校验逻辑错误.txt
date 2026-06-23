@@ -1,0 +1,20 @@
+#标题
+media: v4l2-ctrls: 修复 H264 SEPARATE_COLOUR_PLANE 标志位校验逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 H.264 无状态控制参数时，内核对 SPS（Sequence Parameter Set）中 `separate_colour_plane_flag` 的校验逻辑存在缺陷。当 `chroma_format_idc` 值小于 3 但不为 0（例如值为 1 或 2）时，原逻辑未能正确屏蔽 `V4L2_H264_SPS_FLAG_SEPARATE_COLOUR_PLANE` 标志位。这可能导致驱动程序接受了非法的标志位组合，进而引发后续解码处理流程中的数据解析错误或状态不一致，影响视频解码功能的正确性。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 H.264 规范，`separate_colour_plane_flag` 元素仅当 `chroma_format_idc == 3` 时才存在于 SPS 中。原代码将该标志位的屏蔽操作放置在一个针对特定 profile 的条件判断块内（通常隐式针对 profile_idc == 44 的情况），导致当 `chroma_format_idc` 为 1 或 2 时，错误的标志位未被清除。根本原因是对规范条件的判断逻辑不完整，屏蔽该标志位的条件应仅基于 `chroma_format_idc` 的值，而不应受限于特定 profile 的判断块。
+
+#解决方案
+修改文件 `drivers/media/v4l2-core/v4l2-ctrls-core.c` 中的 `std_validate_compound` 函数。将检查并屏蔽 `V4L2_H264_SPS_FLAG_SEPARATE_COLOUR_PLANE` 标志位的代码逻辑移出原有的特定 profile 条件判断块，使其在所有情况下均能正确执行。只要 `p_h264_sps->chroma_format_idc < 3`，即强制清除该标志位，确保符合 H.264 规范要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/86f5cdebb1ab1cc470d52be4bbeb4e3330901108

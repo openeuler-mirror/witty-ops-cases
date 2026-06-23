@@ -1,0 +1,23 @@
+#标题
+sched: 修复 struct sched_entity 中 on_rq 与 rel_deadline 成员引发的 KABI 破坏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核结构体 `struct sched_entity` 发生 KABI（内核应用程序二进制接口）破坏，具体表现为成员变量 `on_rq` 类型变更及 `rel_deadline` 位置调整破坏了二进制兼容性。此问题通常在使能 KABI 兼容性检查或进行内核版本升级/模块加载时被检测到，可能导致内核模块加载失败或运行时因结构体布局不一致引发异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在引入提交 `6b54cc2a9635 ("sched/fair: Avoid re-setting virtual deadline on 'migrations'")` 的修复时，将 `struct sched_entity` 结构体中的 `on_rq` 成员变量类型从 `unsigned char` 修改为 `unsigned int`，并新增了 `rel_deadline` 成员。这一变更改变了结构体的内存布局，导致原本预留的填充空间无法满足新类型的需求，从而破坏了内核 KABI 的稳定性。
+
+#解决方案
+通过调整结构体成员定义修复 KABI 破坏：
+1. 将 `on_rq` 成员的类型保持或还原为 `unsigned int` 以满足逻辑需求。
+2. 利用 `KABI_FILL_HOLE` 宏将 `rel_deadline`（`unsigned char` 类型）填充到结构体的空洞中，而不是紧密排列在 `on_rq` 之后。
+此举旨在利用结构体中既有的空洞空间来安置新增或变更的成员，从而在不影响整体结构体尺寸和既有成员偏移量的前提下恢复 KABI 兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/431f4f87111ab96a80f77a04068f9bd0cacec09e

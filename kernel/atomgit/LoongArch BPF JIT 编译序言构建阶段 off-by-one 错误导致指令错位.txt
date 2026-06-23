@@ -1,0 +1,20 @@
+#标题
+LoongArch BPF JIT 编译序言构建阶段 off-by-one 错误导致指令错位
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构下使用 BPF 功能时，当 BPF 程序不包含尾调用或函数调用时，JIT 编译生成的 prologue（序言）代码存在 off-by-one 错误。该错误会导致后续指令地址错位，引发 BPF 程序运行逻辑错误或不可预知的内核行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `build_prologue` 函数中，原有的逻辑仅处理了 `seen_tail_call(ctx) && seen_call(ctx)` 为真的情况，此时会移动寄存器（`move_reg`）。当该条件为假时，代码路径未生成任何指令，导致 JIT 指令缓冲区对应位置留空或跳过，从而造成后续指令的偏移量计算出现偏差，引发 off-by-one 错误。
+
+#解决方案
+在 `build_prologue` 函数的条件判断中增加 `else` 分支，当不需要保存寄存器时，显式调用 `emit_insn(ctx, nop)` 插入一条 NOP 指令。该修复确保了无论何种执行路径，prologue 阶段生成的指令数量保持一致，消除了指令错位问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2f6f8a0f52903845ede4602b637dd1323aef3592

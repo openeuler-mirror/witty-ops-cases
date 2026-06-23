@@ -1,0 +1,20 @@
+#标题
+调度器时间片参数设置不当导致任务运行时间超出预期
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HZ=1000 且 CPU 数量大于等于 8 的系统中，任务的运行时间偶尔会比预期的调度时间片多出约 1ms。这是因为时钟滴答往往比预期来得稍快，导致任务在即将达到截止时间时又经历了一次额外的 tick，只能等待下一个 tick 才会被认为达到了截止时间。
+
+#主要错误日志
+未知
+
+#问题根因
+默认的调度时间片基准值设置为 0.75 ms，结合时钟事件设备的精度问题以及 CONFIG_IRQ_TIME_ACCOUNTING/CONFIG_PARAVIRT_TIME_ACCOUNTING 配置项的影响，实际 tick 间隔往往略小于 1ms。在 HZ=1000 的系统中，当任务运行时间接近截止时间时，由于 tick 提前到达，导致任务多运行了一个 tick 周期（约 1ms），造成调度精度下降。
+
+#解决方案
+将 `sysctl_sched_base_slice` 和 `normalized_sysctl_sched_base_slice` 的默认值从 750000ULL（0.75 ms）修改为 700000ULL（0.70 ms）。此调整将默认时间片缩短至 2.8 ms（针对 8 核及以上系统），避免了因 tick 提前到达而导致任务获得额外运行时间的问题，从而提高了调度精度。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/85e39ddad6bdc21a62666df49bbd9fd7a98cd37c

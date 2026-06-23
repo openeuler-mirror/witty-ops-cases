@@ -1,0 +1,23 @@
+#标题
+bpf: 修复窄标量值覆盖 64 位标量栈槽被错误拒绝的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在禁用 CAP_PERFMON 和 CAP_SYS_ADMIN（allow_ptr_leaks）权限的场景下，BPF 校验器会错误地拒绝合法的 BPF 程序。具体表现为：当程序尝试将一个窄标量值（如 32 位）覆盖写入到一个已包含 spilled 标量寄存器的栈槽时，校验器误报错误并终止加载，导致原本功能正常的程序无法运行。
+
+#主要错误日志
+- 日志原文：
+  attempt to corrupt spilled pointer on stack
+  processed 2 insns (limit 1000000) max_states_per_insn 0 total_states 0 peak_states 0 mark_read 0.
+
+#问题根因
+BPF 校验器在检查栈写入时，旨在防止对包含 spilled 指针的 8 字节栈槽进行部分覆盖写操作。然而，校验逻辑不完整，在 `check_stack_write_fixed_off` 函数中，仅检查了目标栈槽是否为 spilled 寄存器（`is_spilled_reg`）以及写入大小是否非 8 字节，却未进一步区分该寄存器是指针还是标量。
+这导致校验器在 `!env->allow_ptr_leaks` 且写入大小不等于 `BPF_REG_SIZE` 时，只要栈槽中存在 spilled 寄存器就触发拦截，无法识别“标量覆盖标量”其实是一个合法操作，从而导致误报 "attempt to corrupt spilled pointer on stack" 错误。
+
+#解决方案
+在内核文件 `kernel/bpf/verifier.c` 的 `check_stack_write_fixed_off` 函数中增加判断条件。在原有的检查逻辑中新增 `!is_spilled_scalar_reg(&state->stack[spi])` 判断，确保只有当目标栈槽包含的是 spilled 指针（而非标量）时，才执行拒绝部分覆盖写入的操作，从而允许对 spilled 标量栈槽进行窄写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0dd239f96286e00d1aa2d01023e81fd9e2ec2b48

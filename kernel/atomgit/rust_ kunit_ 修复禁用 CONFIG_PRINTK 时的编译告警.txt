@@ -1,0 +1,30 @@
+#标题
+rust: kunit: 修复禁用 CONFIG_PRINTK 时的编译告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核配置禁用 `CONFIG_PRINTK` 选项的情况下进行编译时，Rust 编译器在 `rust/kernel/kunit.rs` 文件中触发 `unused_variables` 告警，导致构建过程出现警告信息。
+
+#主要错误日志
+warning: unused variable: `args`
+  --> ../rust/kernel/kunit.rs:16:12
+  |
+16 | pub fn err(args: fmt::Arguments<'_>) {
+  |            ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+  --> ../rust/kernel/kunit.rs:32:13
+  |
+32 | pub fn info(args: fmt::Arguments<'_>) {
+  |             ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+#问题根因
+在 `err` 和 `info` 函数中，参数 `args` 仅在 `CONFIG_PRINTK` 配置项开启时被使用。当 `CONFIG_PRINTK` 未设置时，函数体内缺乏对 `args` 的引用，导致 Rust 编译器检测到未使用的变量并抛出警告。
+
+#解决方案
+在 `rust/kernel/kunit.rs` 的 `err` 和 `info` 函数中，通过条件编译宏 `#[cfg(not(CONFIG_PRINTK))]` 添加空赋值语句 `let _ = args;`。该操作在未启用 `CONFIG_PRINTK` 时显式消耗掉 `args` 变量，从而消除编译器的未使用变量警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab940199a5e2d8e30f5cf1d7968a8f5a21129640

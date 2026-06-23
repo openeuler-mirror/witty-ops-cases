@@ -1,0 +1,20 @@
+#标题
+hwrng: ks-sa 驱动初始化阶段除零错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ks_sa_rng_init 函数执行过程中，由于时钟指针未初始化即被使用，导致在进行延迟值计算时触发除零错误（division by zero）。这会导致硬件随机数生成器驱动初始化失败，进而可能导致内核 panic 或设备无法正常工作。
+
+#主要错误日志
+推断：内核日志中可能会出现除零异常（divide error）的 Oops 信息，或者驱动初始化失败的相关提示。
+
+#问题根因
+驱动代码逻辑顺序错误，在 `ks_sa_rng_init` 函数中调用 `clk_get_rate()` 之前，未先获取并初始化时钟指针（clk pointer）。代码直接使用了未初始化的时钟指针，导致后续计算延迟值时出现除零错误。
+
+#解决方案
+在驱动探测函数 `ks_sa_rng_probe` 中，调整代码执行顺序，在使用时钟之前先调用 `devm_clk_get_enabled` 获取并使能时钟。如果获取失败，则返回错误并打印 "Failed to get clock" 日志，确保后续 `clk_get_rate()` 调用时指针有效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5b376c1f742f6183131da9ff806a525c0f5cf76b

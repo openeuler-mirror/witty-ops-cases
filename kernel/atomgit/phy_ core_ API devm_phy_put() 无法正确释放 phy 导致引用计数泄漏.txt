@@ -1,0 +1,23 @@
+#标题
+phy: core: API devm_phy_put() 无法正确释放 phy 导致引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+调用 `devm_phy_put()` 时，实际上并未调用 `phy_put()` 来释放 phy 资源，导致以下问题：
+1. phy 资源释放失败。
+2. `devm_phy_put()` 无法完全撤销 `devm_phy_get()` 的操作。
+3. 在典型的错误处理路径中（如 `devm_phy_get()` 后调用 `devm_phy_put()`），会导致模块和设备的引用计数泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `devm_phy_put()` 函数内部，错误地使用了 `devres_destroy()` 而不是 `devres_release()`。`devres_destroy()` 不会调用 `devm_phy_release()` 回调函数，导致 `phy_put()` 未被执行，进而引发资源释放失败和引用计数泄漏。
+
+#解决方案
+将 `drivers/phy/phy-core.c` 中 `devm_phy_put()` 函数内的 `devres_destroy()` 调用替换为 `devres_release()`，确保释放资源时能正确触发释放回调函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/28012f5e6981a067939eb1021da3859c1b6d5b01

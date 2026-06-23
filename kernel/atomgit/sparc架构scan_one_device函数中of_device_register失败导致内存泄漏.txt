@@ -1,0 +1,20 @@
+#标题
+sparc架构scan_one_device函数中of_device_register失败导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在SPARC架构下，当内核初始化过程中扫描设备节点时，若of_device_register()注册失败，会导致内核日志打印注册失败信息，并引发内核内存泄漏（memory leak）。
+
+#主要错误日志
+[   10.000000] %pOF: Could not register of device.
+
+#问题根因
+在scan_one_device()函数中，调用of_device_register()失败后，代码逻辑仅执行了kfree(op)释放platform_device结构体本身的内存，但未调用put_device(&op->dev)来减少struct device的引用计数。根据device_add()的调用约定，若注册未成功，必须使用put_device()来释放引用计数，以便在kobject_cleanup()中正确释放设备名称等资源。缺少该步骤导致device结构体内部关联的内存（如kobject名称）无法释放，从而造成内存泄漏。
+
+#解决方案
+在of_device_register()失败的错误处理分支中，在打印错误日志后、执行kfree(op)之前，增加调用put_device(&op->dev)。此举确保device结构的引用计数正确递减，使得内核能自动清理相关资源，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc50fbe2ae6fa244d9616920c007ae1a490f7a68

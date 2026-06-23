@@ -1,0 +1,55 @@
+#标题
+ipv4: ip_tunnel: Fix suspicious RCU usage warning in ip_tunnel_init_flow()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过用户态工具（如 `ip` 命令）创建 IP 隧道（如 ipgre）设备时，内核触发 `suspicious RCU usage` 警告。系统检测到 RCU 列表在非读取区域（non-reader section）被遍历，堆栈信息显示调用路径经 `rtnetlink_rcv_msg` -> `ip_tunnel_newlink` -> `ip_tunnel_bind_dev` -> `ip_tunnel_init_flow`。
+
+#主要错误日志
+```
+WARNING: suspicious RCU usage
+6.12.0-rc3-custom-gac8f72681cf2 #141 Not tainted
+-----------------------------
+net/core/dev.c:876 RCU-list traversed in non-reader section!!
+
+other info that might help us debug this:
+
+rcu_scheduler_active = 2, debug_locks = 1
+1 lock held by ip/361:
+ #0: ffffffff86fc7cb0 (rtnl_mutex){+.+.}-{3:3}, at: rtnetlink_rcv_msg+0x377/0xf60
+
+stack backtrace:
+CPU: 3 UID: 0 PID: 361 Comm: ip Not tainted 6.12.0-rc3-custom-gac8f72681cf2 #141
+Hardware name: Bochs Bochs, BIOS Bochs 01/01/2011
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0xba/0x110
+ lockdep_rcu_suspicious.cold+0x4f/0xd6
+ dev_get_by_index_rcu+0x1d3/0x210
+ l3mdev_master_upper_ifindex_by_index_rcu+0x2b/0xf0
+ ip_tunnel_bind_dev+0x72f/0xa00
+ ip_tunnel_newlink+0x368/0x7a0
+ ipgre_newlink+0x14c/0x170
+ __rtnl_newlink+0x1173/0x19c0
+ rtnl_newlink+0x6c/0xa0
+ rtnetlink_rcv_msg+0x3cc/0xf60
+ netlink_rcv_skb+0x171/0x450
+ netlink_unicast+0x539/0x7f0
+ netlink_sendmsg+0x8c1/0xd80
+ ____sys_sendmsg+0x8f9/0xc20
+ ___sys_sendmsg+0x197/0x1e0
+ __sys_sendmsg+0x122/0x1f0
+ do_syscall_64+0xbb/0x1d0
+ entry_SYSCALL_64_after_hwframe+0x77/0x7f
+```
+
+#问题根因
+函数 `ip_tunnel_init_flow()` 在某些代码路径下被调用时未持有 RCU 读锁（RCU read lock），但代码内部却调用了 `l3mdev_master_upper_ifindex_by_index_rcu()` 函数，该函数要求调用者必须在 RCU 读侧临界区内执行，从而导致内核检测到非法的 RCU 使用并报错。
+
+#解决方案
+将 `ip_tunnel_init_flow()` 函数中调用的 `l3mdev_master_upper_ifindex_by_index_rcu()` 替换为 `l3mdev_master_upper_ifindex_by_index()`。后者会在内部自动获取 RCU 读锁后再调用前者，从而保证代码在 RCU 保护下安全执行，消除了调用者必须预先持有 RCU 读锁的依赖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/43b5d154781495ce8544f657c633a4d9f1caa2f9

@@ -1,0 +1,21 @@
+#标题
+arm64: 使用 Clang 编译内核时因 HAVE_DYNAMIC_FTRACE_WITH_ARGS 配置错误导致链接失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 架构下使用 Clang 编译内核（CC=clang），且链接器（GNU LD）版本低于 2.36 时，编译过程在链接阶段中止并报错，导致内核构建失败。该问题由 Kconfig 配置项 HAVE_DYNAMIC_FTRACE_WITH_ARGS 的错误选择逻辑引起。
+
+#主要错误日志
+aarch64-linux-gnu-ld: .init.data has both ordered [`__patchable_function_entries' in init/main.o] and unordered [`.meminit.data' in mm/sparse.o] sections
+aarch64-linux-gnu-ld: final link failed: bad value
+
+#问题根因
+Kconfig 中 `HAVE_DYNAMIC_FTRACE_WITH_ARGS` 的选择逻辑存在错误。该选项在选择时未正确判断工具链（Clang 与 GNU LD）的组合支持情况，导致在 GNU LD 版本低于 2.36（不支持特定特性）的环境下仍被错误选中，进而触发了链接器的有序/无序段冲突错误。根本原因是选择逻辑缺失了对 `GCC_SUPPORTS_DYNAMIC_FTRACE_WITH_ARGS` 或 `CLANG_SUPPORTS_DYNAMIC_FTRACE_WITH_ARGS` 的依赖检查。
+
+#解决方案
+修改 `arch/arm64/Kconfig` 文件，调整 `HAVE_DYNAMIC_FTRACE_WITH_ARGS` 的选择条件，使其显式依赖于 `GCC_SUPPORTS_DYNAMIC_FTRACE_WITH_ARGS` 或 `CLANG_SUPPORTS_DYNAMIC_FTRACE_WITH_ARGS`，从而确保只有在工具链支持的情况下才启用该配置项。同时移除了 `GCC_SUPPORTS_DYNAMIC_FTRACE_WITH_ARGS` 和 `CLANG_SUPPORTS_DYNAMIC_FTRACE_WITH_ARGS` 定义中冗余的 `select HAVE_DYNAMIC_FTRACE_WITH_ARGS` 语句，避免了循环及不当选择。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c6ba590d6c8bbab1dda0bacbccd0320f5f20108f

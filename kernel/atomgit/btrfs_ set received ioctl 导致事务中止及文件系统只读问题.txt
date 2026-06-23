@@ -1,0 +1,20 @@
+#标题
+btrfs: set received ioctl 导致事务中止及文件系统只读问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当普通用户（非 CAP_SYS_ADMIN）调用 `BTRFS_IOC_SET_RECEIVED_SUBVOL` ioctl 设置 received UUID 时，若目标 UUID 树项已接近最大尺寸限制，操作失败将导致事务中止，进而将文件系统置为只读（RO）模式。若用户对大量子卷重复设置相同的 received UUID，可触发此问题，恶意用户可利用此缺陷对系统进行拒绝服务攻击。
+
+#主要错误日志
+未知
+
+#问题根因
+在执行 set received ioctl 时，代码逻辑先启动了事务并进行部分元数据更新，随后尝试调用 `btrfs_uuid_tree_add` 添加 `BTRFS_UUID_KEY_RECEIVED_SUBVOL` 项。若此时因项大小溢出导致添加失败，内核必须中止当前事务以确数据一致性，从而导致文件系统变为只读模式。根本原因在于缺少事前的溢出检查机制，使得事务在已知可能失败的情况下仍然启动。
+
+#解决方案
+在启动事务之前，增加对 UUID 树项是否溢出的提前检查。通过调用新增的 `btrfs_uuid_tree_check_overflow` 函数，探测添加新 UUID 是否会导致项大小超过限制。如果检测到溢出风险，直接返回错误并终止 ioctl 操作，从而避免事务中止和文件系统变为只读。由于调用过程持有 `subvol_sem` 信号量，该检查是并发安全的。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cd6811166c2af45d3222ea84d8c5e14ea39e2cfc

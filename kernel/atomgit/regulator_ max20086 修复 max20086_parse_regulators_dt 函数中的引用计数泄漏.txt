@@ -1,0 +1,20 @@
+#标题
+regulator: max20086 修复 max20086_parse_regulators_dt 函数中的引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 max20086 电源调节器驱动解析设备树过程中，若 devm_kcalloc() 分配内存失败，此前通过 of_get_child_by_name() 获取的设备节点 `node` 未被释放，导致内核对象引用计数泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `max20086_parse_regulators_dt` 函数中，代码通过 `of_get_child_by_name` 获取了设备节点 `node`，正常情况下在函数末尾会调用 `of_node_put(node)` 释放引用。但是，如果在获取节点后、释放节点前调用的 `devm_kcalloc()` 失败并直接返回错误码，程序流程跳过了 `of_node_put(node)` 的调用，导致该设备节点的引用计数无法归零，造成内存泄漏。
+
+#解决方案
+引入 Linux 内核的 `cleanup.h` 机制，使用 `__free(device_node)` 自动清理属性声明变量 `node`。这样当变量超出作用域（无论是正常结束还是错误返回）时，编译器会自动插入释放引用计数的代码，从而确保在所有退出路径（包括内存分配失败路径）上都能正确释放节点引用，修复了引用计数泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c89687359d0d04bf7105282c39ed88707678706

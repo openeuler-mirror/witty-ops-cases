@@ -1,0 +1,23 @@
+#标题
+orangefs xattr 缓冲区溢出导致内核 Oops 及内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 `setfattr` 和 `getfattr` 操作文件时触发内核 Oops，用户进程挂起，Orangefs 文件损坏或出现异常。运行 xfstest `generic/069` 测试用例时引发系统内存耗尽（OOM），导致系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+根本原因在于 `xattr_key()` 函数中的循环条件判断错误：
+1. **缓冲区溢出与死循环**：原代码在 `while(key)` 中判断指针 `key` 是否为空，而非解引用判断字符内容 `*key`。由于 `key` 指针在循环中持续自增，只要不越界访问到无效内存区域，指针值永远非空，导致循环无法正常终止，引发内存越界访问、CPU 挂起或内核 Oops。
+2. **Hash 错误与内存泄漏**：修复上述循环问题后，暴露出 Hash 机制使用不当的问题。原代码使用 `hash_add` 宏，该宏内部会再次对 key 进行 hash 计算（调用 `hash_min`/`hash_log`），而 `xattr_key` 已经返回了一个 hash 值。这种重复 hash 导致 xattr 缓存条目被添加到错误的 hash bucket 中。由于 bucket 不匹配，后续的 `getattr` 请求（如查询 `security.capability`）无法命中缓存，导致每次请求都进行 `kmalloc` 分配新内存且从未释放，最终导致 OOM。
+
+#解决方案
+1. 修正 `xattr_key()` 函数逻辑，将循环条件从 `while(key)` 修改为 `while(*key)`，确保遇到字符串结束符 `\0` 时正确终止循环，并在函数入口增加空指针检查。
+2. 替换 Hash 操作接口，将 `hash_add` 替换为 `hlist_add_head`，手动将节点添加到 `xattr_key` 计算出的正确 bucket 中，避免二次 hash 导致缓存查找失效，从而修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd88c93022cca10a0dc76c22fa826f1061c68c3c

@@ -1,0 +1,22 @@
+#标题
+bpf: devmap 中栈越界写入漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统处理具有大量 upper device（上层设备）的网络设备时，在执行 BPF devmap 的多路径重定向操作（`dev_map_enqueue_multi` 或 `dev_map_redirect_multi`）过程中，会触发栈越界写入。这可能导致内核内存损坏，进而引发内核 panic 或系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `get_upper_ifindexes` 在遍历网络设备的 upper device 链表时，未对写入的数组索引进行边界检查。调用方传入的数组 `excluded_devices` 大小固定为 `MAX_NEST_DEV`（根据代码推断），但该函数假设数组足以容纳所有 upper device。当设备的 upper device 数量超过数组容量时，会导致 `indexes` 数组发生栈越界写入。
+
+#解决方案
+1. 修改 `get_upper_ifindexes` 函数接口，增加 `max` 参数以限制最大写入元素数量。
+2. 在遍历 upper device 的循环中增加边界检查，若当前计数 `n` 大于等于 `max`，则立即停止写入并返回 `-EOVERFLOW` 错误码。
+3. 调用处（`dev_map_enqueue_multi` 和 `dev_map_redirect_multi`）传入 `ARRAY_SIZE(excluded_devices) - 1` 作为上限（预留一个位置给 ingress 设备索引），并对返回值进行错误判断，若返回负值则直接终止操作，防止越界写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/43e62773daf6c883b5caa841ef10c6bde988da45

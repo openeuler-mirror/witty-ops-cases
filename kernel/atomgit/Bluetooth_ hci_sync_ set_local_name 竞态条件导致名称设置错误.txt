@@ -1,0 +1,21 @@
+#标题
+Bluetooth: hci_sync: set_local_name 竞态条件导致名称设置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 MGMT_OP_SET_LOCAL_NAME 设置蓝牙设备名称时，存在竞态条件。由于将新名称拷贝到 `hdev->dev_name` 的操作发生在管理命令排队之后，`set_name_sync()` 函数可能读取到旧的名称值，导致最终写入硬件的名称与用户期望设置的名称不一致，出现名称设置失效或错乱的现象。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `set_name_sync()` 使用 `hdev->dev_name` 字段来发送 `HCI_OP_WRITE_LOCAL_NAME` 命令，但从用户数据拷贝新名称到 `hdev->dev_name` 的操作是在管理命令被排队之后才进行的。这种时序上的错位导致了竞态条件，使得 `set_name_sync()` 在执行时可能读取到尚未更新的旧名称值。
+
+#解决方案
+修改 `hci_update_name_sync()` 函数接口，增加 `const u8 *name` 参数，直接将目标名称作为参数传入，而不是从 `hdev->dev_name` 读取。
+在 `set_name_sync()` 调用处，直接从管理命令参数 `cmd->param` 中获取名称并传递给 `hci_update_name_sync()`，确保使用的是用户设置的新名称，从而规避竞态条件；在 `hci_powered_update_sync()` 调用处，则继续传递 `hdev->dev_name`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0df1e89c6c28992238a258891cae9264155a5f57

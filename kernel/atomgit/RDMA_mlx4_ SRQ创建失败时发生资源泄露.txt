@@ -1,0 +1,20 @@
+#标题
+RDMA/mlx4: SRQ创建失败时发生资源泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mlx4 驱动创建共享接收队列（SRQ）的过程中，若通过 `ib_copy_to_udata` 向用户空间拷贝数据失败，内核未能正确释放已分配的 SRQ 资源，导致资源泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `mlx4_ib_create_srq` 中，当 `ib_copy_to_udata` 拷贝失败时，错误处理代码直接跳转至 `err_wrid` 标签，遗漏了对 `mlx4_srq_free` 的调用，导致此前已分配的 SRQ 对象未能被释放。
+
+#解决方案
+在错误处理路径中增加 `err_srq` 标签，并调用 `mlx4_srq_free(dev->dev, &srq->msrq)` 释放 SRQ 资源。修改后，`ib_copy_to_udata` 失败时直接跳转至 `err_srq` 标签执行资源释放，随后再跳转至 `err_wrid` 标签处理其他清理工作，确保资源被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6f20655dca622a1be0158a6e060b91e1616acfd6

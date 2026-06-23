@@ -1,0 +1,27 @@
+#标题
+MNT_TREE_BENEATH 处理函数 do_move_mount 存在竞态条件导致潜在文件系统异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `mount --move` 进行挂载点移动操作（特别是涉及 MNT_TREE_BENEATH 场景）时，若发生竞态条件，可能导致内核崩溃或文件系统异常关闭。具体表现为：
+1. 在 `do_lock_mount` 获取锁的过程中，若挂载点被并发移动或卸载，可能导致进程持有即将被销毁的 dentry 或 mount 对象。
+2. 若引用计数管理不当，可能导致文件系统在进程持有 inode 锁时被强制关闭。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `do_lock_mount` 处理 "beneath" 挂载场景时，存在两个竞态漏洞：
+1. **对象引用计数丢失**：在获取 `namespace_sem` 锁之前，代码仅通过 `dget()` pin 住了 dentry，但没有 pin 住对应的 mount 对象。此时若无任何锁保护，并发操作可能导致该 mount 对象的引用计数降为 0 并被释放。当进程随后进入 `inode_lock()` 时，可能正操作一个已被销毁的文件系统对象，导致严重后果。
+2. **解锁顺序不当**：在 `unlock_mount` 中，`inode_unlock` 操作在 `namespace_unlock` 之后执行。此时 dentry 实际上已不再受 `namespace_sem` 保护（不再被 pin 住），可能导致 use-after-free 或状态不一致。
+
+#解决方案
+通过修改 `fs/namespace.c` 中的锁定与引用计数逻辑修复竞态：
+1. **同时获取 dentry 和 mount 引用**：在 `do_lock_mount` 中，在持有 `mount_lock` 期间，同时调用 `mntget()` 和 `dget()` 获取父挂载点和 dentry 的引用，确保在进入 `inode_lock()` 前两者均处于安全状态。
+2. **增加状态一致性检查**：在获取 `namespace_sem` 后，增加检查逻辑，确认挂载点未被并发移动（检查 `mnt_mountpoint` 和 `mnt_parent` 是否匹配）。
+3. **调整解锁顺序**：在 `unlock_mount` 中，将 `inode_unlock` 移至 `namespace_unlock` 之前执行，确保 dentry 在被 unpin 之前释放 inode 锁，避免竞态风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a07edbcb1fb128be5fa6c3401e38696d8cd996b7

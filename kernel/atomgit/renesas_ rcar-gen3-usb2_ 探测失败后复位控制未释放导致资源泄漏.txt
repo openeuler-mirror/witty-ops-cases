@@ -1,0 +1,20 @@
+#标题
+renesas: rcar-gen3-usb2: 探测失败后复位控制未释放导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 rcar_gen3_phy_usb2_probe() 探测流程中，若在 reset_control_deassert() 成功执行后的后续步骤中发生错误（如 devm_add_action_or_reset 失败等），函数将直接返回错误码退出，但之前已置位的复位控制信号未被重新复位。这导致驱动初始化失败后资源未被正确释放，复位控制器处于非预期状态，可能影响设备重新加载或后续操作。
+
+#主要错误日志
+未知
+
+#问题根因
+在 rcar_gen3_phy_usb2_init_bus() 函数中，代码在调用 reset_control_deassert() 成功后，缺少对应的错误处理回滚机制。当后续的 devm_add_action_or_reset() 或其他操作失败并跳转到 rpm_put 标签退出时，未调用 reset_control_assert() 将复位状态恢复，导致复位控制逻辑缺失。
+
+#解决方案
+使用 devm_add_action_or_reset() 机制管理复位控制的生命周期。在 reset_control_deassert() 成功后，立即通过 devm_add_action_or_reset() 注册一个清理回调函数 rcar_gen3_reset_assert()。该机制确保当探测失败或设备被移除时，自动调用 reset_control_assert() 释放资源。同时，移除了 remove 函数中不再需要的手动 reset_control_assert() 调用及 struct rcar_gen3_chan 结构体中冗余的 rstc 成员。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e7c68add19e71e2ab81fb80fd5435a162e17aeda

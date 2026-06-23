@@ -1,0 +1,20 @@
+#标题
+btrfs: zoned: 释放预留区段时 zone_unusable 统计不一致导致 ENOSPC 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BTRFS 分区模式下，当预留的区段未被实际使用而被释放时（例如因错误提前退出），虽然空间信息中的预留计数被扣减，但未正确更新 `bytes_zone_unusable` 计数。这导致 `space_info` 层面认为该空间仍为“可用”，而块组层面将其标记为“不可用”。这种统计不一致会绕过异步/同步回收流程，最终导致尽管预留操作成功，但在实际分配区段时触发 ENOSPC（No space left on device）错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `btrfs_free_reserved_bytes` 中，当释放预留区段时，代码逻辑仅处理了只读块组的情况（`cache->ro`），将字节数加到 `bytes_readonly`。对于 Zoned 模式的常规块组，缺少对 `space_info->bytes_zone_unusable` 的更新操作。而在 `btrfs_add_free_space()` 流程中，该区域已被计入 `block_group->zone_unusable`。这导致了 `space_info` 与 `block_group` 之间关于不可用空间的统计出现不一致，进而引发错误的 ENOSPC 判断。
+
+#解决方案
+在 `btrfs_free_reserved_bytes` 函数中增加对 Zoned 模式块组的判断分支。当块组不为只读（`!cache->ro`）且文件系统为 Zoned 模式时，将释放的字节数累加到 `space_info->bytes_zone_unusable`，以确保内核统计数据的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d6ae64fa7e61a43c9fbd393172070907e3507eaa

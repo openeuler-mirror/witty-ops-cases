@@ -1,0 +1,30 @@
+#标题
+scsi: ufs: core: 初始化错误与移除路径中的 use-after-free 修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UFS 驱动初始化失败或驱动卸载（remove）过程中，系统触发 use-after-free 导致内核崩溃。具体表现为释放已释放的内存，典型调用栈显示在 `kfree` 过程中发生崩溃。
+
+#主要错误日志
+Call trace:
+ kfree+0x60/0x2d8 (P)
+ kvfree+0x44/0x60
+ blk_crypto_profile_destroy_callback+0x28/0x70
+ devm_action_release+0x1c/0x30
+ release_nodes+0x6c/0x108
+ devres_release_all+0x98/0x100
+ device_unbind_cleanup+0x20/0x70
+ really_probe+0x218/0x2d0
+
+#问题根因
+`devm_blk_crypto_profile_init()` 注册了一个清理回调，该回调绑定在 platform 设备释放时运行。UFS 的加密私有数据存储在 `struct ufs_hba::crypto_profile` 中，该结构体随 SCSI host 分配。
+在驱动移除或初始化错误处理时，代码流程先调用 `ufshcd_dealloc_host()` 释放了 SCSI host（即释放了 `ufs_hba` 结构体），随后才释放 platform 设备。当 platform 设备释放时，此前注册的 crypto 清理回调被执行，试图访问已经释放的 `ufs_hba::crypto_profile`，从而引发 use-after-free。
+
+#解决方案
+修改 `ufshcd_alloc_host()` 函数，利用 devres 机制注册一个自动清理 action（`ufshcd_devres_release`），在 `hba->dev` 销毁时自动调用 `scsi_host_put()` 释放 SCSI host。
+此举消除了对显式调用 `ufshcd_dealloc_host()` 的依赖，确保 `ufs_hba` 及其关联资源（如 crypto profile）在 devres 清理链上先于 platform 设备的清理回调被处理，从而避免了 use-after-free。同时移除了不再需要的 `ufshcd_dealloc_host()` 函数及其导出符号。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/37b7208589180f2b7e2dbfbaae75fd37de71e30d

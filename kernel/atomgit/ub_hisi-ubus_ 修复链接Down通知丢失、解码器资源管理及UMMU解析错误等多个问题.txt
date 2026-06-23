@@ -1,0 +1,34 @@
+#标题
+ub/hisi-ubus: 修复链接Down通知丢失、解码器资源管理及UMMU解析错误等多个问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 集群场景下，Pool设备未注册到解码器页表中，导致设备注册或资源映射异常。
+2. 当 ublc 设备链路断开时，系统未正确通知共享端口，导致链路状态同步失败。
+3. UMMU 绕过模式下的消息解析错误，影响总线实例创建逻辑。
+4. 内存解码器操作函数指针校验时打印错误的警告信息。
+5. 解码器页表资源释放后残留历史数据，可能导致安全验证风险或后续使用时的数据污染。
+
+#主要错误日志
+- `dev_warn(mem_device->dev, "ub memory decoder ops memory_validate_pa is null.\n");` (修正了原日志中错误的函数名打印)
+- `ub_err(ubc->uent, "read ub cfg1 support feature failed, ret=%d\n", ret);` (推断日志，源自 `map_by_ubus` 函数的错误处理分支)
+
+#问题根因
+1. **代码同步缺失**：驱动代码与上游或设计文档不一致，导致部分逻辑缺失。
+2. **逻辑跳转错误**：`ublc_link_down_handle` 函数在设备移除后直接返回，遗漏了跳转到 `link_down_notify` 标签的步骤，导致共享端口未被通知。
+3. **条件判断逻辑反转**：`ub_vdm_create_bi_bypass_ummu` 中对 `type` 的赋值逻辑（BYPASS 与 NONE）写反了。
+4. **资源释放不完整**：解码器页表释放函数（如 `rgtlb_free_page`、`pgtlb_free_page` 等）在释放内存前未清零，导致 Ubus AI 安全审查不通过，且存在数据残留。
+5. **检查条件遗漏**：`ub_entity_decoder_map_mmio` 未检查 `UB_DECODER_JURIS` 特性位，导致在不该映射的场景下错误映射。
+6. **日志信息错误**：`ub_memory_validate_pa` 函数中 `dev_warn` 打印的操作名称有误。
+
+#解决方案
+1. **修复链路通知流程**：在 `ublc_link_down_handle` 中，将设备移除后的 `return` 语句修改为 `goto link_down_notify`，确保链路断开通知送达。
+2. **修正条件赋值逻辑**：在 `ub_vdm_create_bi_bypass_ummu` 中，修正 `type` 的赋值逻辑，确保 `pld->m` 为真时设置为 `EID_BYPASS`，否则为 `EID_NONE`。
+3. **完善资源清理**：在多个解码器页表释放函数（`rgtlb_free_page`, `pgtlb_free_page`, `rgtlb_unmap_to_range`）中，调用 `dmam_free_coherent` 前先调用 `memset` 清零内存区域，并重置相关表项字段（如 `token_value`）。
+4. **增加特性检查**：新增 `map_by_ubus` 函数并在 `ub_entity_decoder_map_mmio` 中调用，检查 `UB_DECODER_JURIS` 特性位，若由 Ubus 管辖则直接返回，不再进行映射。
+5. **修正日志内容**：将 `ub_memory_validate_pa` 中的错误日志字符串修正为 "memory_validate_pa is null"。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9b3f7b878ff5f585449a55761859fb8430c3c545

@@ -1,0 +1,20 @@
+#标题
+dwc3: PCI 设备 DMA 掩码检查错误导致内存分配失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定非 PCI 的 ACPI 设备场景下，或者系统没有 4GB 以下 DRAM 的环境中，DWC3 驱动因为错误的 DMA 掩码检查逻辑，导致 DMA 掩码被错误地默认设置为 32 位，进而导致 DMA 内存分配失败，设备无法正常工作。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动使用 `sysdev_is_parent` 检查来推断 PCI 设备是否已从 PCI 能力中设置了 DMA 掩码。然而，`sysdev_is_parent` 同样适用于非 PCI 的 ACPI 设备，对于这类设备，DMA 掩码应为总线默认值或由 _DMA 方法设定。由于检查逻辑错误，代码误判进入了非 PCI 处理分支，导致 DMA 掩码默认被设置为 32 位。当系统中没有 4GB 以下的 DRAM 时，32 位的 DMA 分配将会失败。
+
+#解决方案
+修改 `drivers/usb/dwc3/core.c` 文件中的条件判断逻辑，将 `!dwc->sysdev_is_parent` 替换为 `!dev_is_pci(dwc->sysdev)`。通过显式检查设备是否为 PCI 设备，确保仅对非 PCI 设备设置 64 位 DMA 掩码，从而修复对 ACPI 设备的误判问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5a7e985a188b63d39e4b30f574b33c56c102aa01

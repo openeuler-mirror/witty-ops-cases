@@ -1,0 +1,22 @@
+#标题
+ima: fix buffer overrun in ima_eventdigest_init_common
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 IMA (Integrity Measurement Architecture) 违规事件记录时，若摘要（digest）为 NULL 且未明确指定哈希算法（传入 `HASH_ALGO__LAST`），内核在调用 `ima_eventdigest_init_common` 函数时会访问 `hash_digest_size` 数组越界，导致内核缓冲区溢出。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ima_eventdigest_init()` 在调用 `ima_eventdigest_init_common()` 时传入了 `HASH_ALGO__LAST` 作为哈希算法索引。在 `ima_eventdigest_init_common()` 中，当摘要为空（处理违规记录）时，代码直接使用该索引访问数组 `hash_digest_size[hash_algo]`。由于 `HASH_ALGO__LAST` 表示哈希算法列表的末尾（即有效算法数量），并非有效索引，导致数组访问越界。
+
+#解决方案
+在访问 `hash_digest_size` 数组前增加条件判断：
+1. 检查 `hash_algo` 是否小于 `HASH_ALGO__LAST`，若是则正常使用对应算法的摘要大小。
+2. 若 `hash_algo` 无效（等于 `HASH_ALGO__LAST`），则使用默认宏 `IMA_DIGEST_SIZE`（容纳 SHA1 或 MD5）作为偏移量，从而避免数组越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d4b387bab2531bbb4c401b477483977bb725da8b

@@ -1,0 +1,20 @@
+#标题
+ocelot: ocelot_port_xmit_inj 缺少锁保护导致潜在并发风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ocelot 网络驱动中，`ocelot_port_xmit_inj()` 函数在调用 `ocelot_can_inject()` 和 `ocelot_port_inject_frame()` 时未持有注入组锁。虽然代码中包含 `lockdep_assert_held()` 检查，但在实际运行中若内核锁调试功能开启，可能会触发锁断言失败警告；同时，缺乏锁保护会导致对注入寄存器的并发访问冲突，可能引发数据发送路径的异常或不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+`ocelot_port_xmit_inj()` 函数在执行注入路径时，未获取注入组锁。相关依赖函数 `ocelot_can_inject()` 和 `ocelot_port_inject_frame()` 内部均包含 `lockdep_assert_held()` 断言要求持有该锁，而该函数缺失了相应的加锁操作，导致锁保护缺失。
+
+#解决方案
+在 `ocelot_port_xmit_inj()` 函数中补充缺失的锁保护机制。具体修改为：在访问注入路径前调用 `ocelot_lock_inj_grp()` 获取锁，在函数返回前的所有退出路径上调用 `ocelot_unlock_inj_grp()` 释放锁，确保寄存器注入操作的原子性与正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/674f73c2437d9ed6031fc2ddc13a5b3c17db1855

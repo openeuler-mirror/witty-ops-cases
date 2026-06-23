@@ -1,0 +1,22 @@
+#标题
+ bonded DSI 模式下 DSC 压缩导致 pclk 速率计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Bonded DSI（双链路 DSI）场景下开启 DSC 压缩功能时，由于 pclk（像素时钟）速率计算错误，可能导致显示模式设置异常，进而引发显示花屏、抖动或模式设置失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在计算 DSC 压缩后的调整 pclk 速率时，对于 Bonded DSI 模式，代码仅对完整的 hdisplay 进行了一次向上取整。
+由于 Bonded DSI 由两个独立链路组成，每个链路实际传输 hdisplay 的一半数据。正确的计算逻辑应当是：先将 hdisplay 除以 2，对每个半链路的数值分别进行向上取整计算，最后再将结果乘以 2。
+原有的算法只进行了一次取整，导致计算出的 new_hdisplay 比实际值小（例如：全屏 1904 时计算出 635，而正确值应为 636），进而导致 pclk 速率计算偏小，与后续 `dsi_timing_setup()` 中编程的时序参数不一致。
+
+#解决方案
+修改 `dsi_adjust_pclk_for_compression` 函数，增加对 Bonded DSI 模式的判断参数。在该模式下，先将 `hdisplay` 除以 2，对分割后的数值进行 DIV_ROUND_UP 取整计算，随后将结果乘以 2 还原为全屏数值，从而确保 pclk 速率计算与硬件实际传输的时序相匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cc3d984763aa11fa7ea8360323f8a852a9d786b6

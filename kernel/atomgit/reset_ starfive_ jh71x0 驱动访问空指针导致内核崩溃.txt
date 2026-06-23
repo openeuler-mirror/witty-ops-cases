@@ -1,0 +1,20 @@
+#标题
+reset: starfive: jh71x0 驱动访问空指针导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 JH7110 SoC 平台上调用 reset controller 的 status 接口查询复位状态时，由于 `data->asserted` 成员为空指针，导致内核访问非法内存地址，引发 oops 或 kernel panic。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address ... (推断)
+
+#问题根因
+`jh71x0_reset_status` 函数在计算复位状态时，直接使用 `data->asserted[offset]` 进行位运算。在 JH7110 SoC 的驱动实现中，`data->asserted` 指针并未初始化（为 NULL），且该 SoC 不需要依赖 `asserted` 数组来存储状态（硬件寄存器直接反映状态）。驱动代码未对 `data->asserted` 进行非空校验，导致对空指针进行解引用操作。
+
+#解决方案
+在 `jh71x0_reset_status` 函数中增加对 `data->asserted` 指针的非空判断。若指针为空，则直接读取硬件寄存器值并返回状态（即 `!(value & mask)`）；若指针非空，则保留原有的比较逻辑。此修复避免了空指针访问，同时兼容了 JH7110 等不使用 `asserted` 数组的 SoC 场景。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/18400fe855a587aa3303b0992b8a3d6210ee47c1

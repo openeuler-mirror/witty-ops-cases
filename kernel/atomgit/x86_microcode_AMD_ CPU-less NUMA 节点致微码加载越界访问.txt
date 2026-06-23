@@ -1,0 +1,37 @@
+#标题
+x86/microcode/AMD: CPU-less NUMA 节点致微码加载越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配备远内存（Far Memory）的 AMD 机器上（存在无 CPU 的 NUMA 节点）刷新微码更新时，若内核开启 CONFIG_UBSAN_BOUNDS=y，会触发 UBSAN 越界检测告警。该问题可能导致内存数据损坏，影响系统可靠性。
+
+#主要错误日志
+UBSAN: array-index-out-of-bounds in arch/x86/kernel/cpu/microcode/amd.c:X:Y
+index 512 is out of range for type 'unsigned long[512]'
+[...]
+Call Trace:
+ dump_stack
+ __ubsan_handle_out_of_bounds
+ load_microcode_amd
+ request_microcode_amd
+ reload_store
+ kernfs_fop_write_iter
+ vfs_write
+ ksys_write
+ do_syscall_64
+ entry_SYSCALL_64_after_hwframe
+
+#问题根因
+load_microcode_amd() 函数遍历所有 NUMA 节点并获取其 CPU 掩码，无条件访问每个掩码中第一个 CPU 的 per-CPU 数据。
+在存在 CPU-less（无 CPU）NUMA 节点的系统中：
+1. 该节点的 cpumask_of_node(nid) 返回 0（空掩码）。
+2. 对空掩码调用 cpumask_first(0) 返回 CONFIG_NR_CPUS（即 512）。
+3. 使用该返回值作为下标访问 cpu_data(CONFIG_NR_CPUS) 时，导致 per-CPU 数组访问越界（索引 512 超出了定义范围）。
+
+#解决方案
+修改 load_microcode_amd() 函数中的循环逻辑，将 for_each_node(nid) 替换为 for_each_node_with_cpus(nid)。确保仅遍历拥有 CPU 的 NUMA 节点，避免对无 CPU 节点进行非法索引访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca5d96ffdaf2ad6e7b7f02414ac7a7b0b777a718

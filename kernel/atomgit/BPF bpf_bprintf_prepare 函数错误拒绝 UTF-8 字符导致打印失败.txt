@@ -1,0 +1,24 @@
+#标题
+BPF bpf_bprintf_prepare 函数错误拒绝 UTF-8 字符导致打印失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 BPF 辅助函数（如 bpf_trace_printk）进行格式化输出时，若格式字符串中包含 UTF-8 编码的非 ASCII 字符（即字节值 >= 0x80），BPF 程序加载或执行相关辅助函数时会失败。系统会对包含合法 UTF-8 字符的格式字符串返回无效参数错误，导致无法正常输出包含非 ASCII 字符的日志或文本信息。
+
+#主要错误日志
+推断：dmesg 或 BPF verifier 日志中可能包含类似以下错误信息：
+bpf_bprintf_prepare returned -EINVAL
+
+#问题根因
+函数 `bpf_bprintf_prepare()` 在解析格式字符串时，原有的校验逻辑错误地限制了整个字符串必须为 ASCII 字符集。代码中检查逻辑 `if ((!isprint(fmt[i]) && !isspace(fmt[i])) || !isascii(fmt[i]))` 会拒绝所有字节值大于 127 的字符。这导致合法的 UTF-8 编码文本（如中文等多字节字符）无法通过校验，从而错误地返回 `-EINVAL`。实际上，格式转换说明符（%开头）需要 ASCII 解析，但普通文本部分应允许承载 UTF-8 字符。
+
+#解决方案
+修改 `kernel/bpf/helpers.c` 中的 `bpf_bprintf_prepare` 函数的字符校验逻辑：
+1. 放宽普通文本字符的校验：允许字节值 >= 0x80 的字符通过，仅拒绝 ASCII 控制字符（不可打印且非空白字符）。
+2. 增强格式说明符的校验：在处理 '%' 后的字符时，强制要求必须为 ASCII 字符，因为格式解析器仅支持 ASCII 转换说明符和修饰符。
+此举在保持格式解析逻辑不变的前提下，允许 UTF-8 字面量文本正常传递。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/156cdc7dc4f201d26ad109bb08f39032d863448c

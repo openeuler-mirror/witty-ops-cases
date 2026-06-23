@@ -1,0 +1,31 @@
+#标题
+perf record 使用 --overwrite 选项时因 evsel 打开失败触发段错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `perf record` 命令并搭配 `--overwrite` 选项时，如果指定的事件打开失败（例如硬件不支持该事件），程序会发生 Segmentation fault（段错误）并崩溃。
+复现命令示例：`perf record -e cycles-ct -F 1000 -a --overwrite`
+
+#主要错误日志
+Error:
+cycles-ct:H: PMU Hardware doesn't support sampling/overflow-interrupts. Try 'perf stat'
+perf: Segmentation fault
+    #0 0x6466b6 in dump_stack debug.c:366
+    #1 0x646729 in sighandler_dump_stack debug.c:378
+    #2 0x453fd1 in sigsegv_handler builtin-record.c:722
+    #3 0x7f8454e65090 in __restore_rt libc-2.32.so[54090]
+    #4 0x6c5671 in __perf_event__synthesize_id_index synthetic-events.c:1862
+    #5 0x6c5ac0 in perf_event__synthesize_id_index synthetic-events.c:1943
+    #6 0x458090 in record__synthesize builtin-record.c:2075
+    #7 0x45a85a in __cmd_record builtin-record.c:2888
+
+#问题根因
+`--overwrite` 选项隐含了 `--tail-synthesize` 逻辑，该逻辑在记录结束时收集非采样事件。当 evsel 打开失败（如不支持的事件 'cycles-ct'）时，`session->evlist` 未被初始化而保持为 NULL。代码在错误路径中无条件调用 `record__synthesize()`，该函数遍历 NULL 的 evlist 指针，从而引发段错误。
+
+#解决方案
+将 `record__synthesize()` 函数调用移入错误检查块内部（`if (!err)`），确保仅在录制过程没有发生错误且 evlist 已正确初始化时才执行 synthesize 操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/835f5cef60f7fe39e1ce03d5a7bc7fc8300dc258

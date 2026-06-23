@@ -1,0 +1,33 @@
+#标题
+PCI/DPC: 热拔插场景下 DPC 误报 Surprise Down 错误导致冗余日志与恢复失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+PCIe 设备进行异步热拔除操作时，系统触发 DPC（Downstream Port Containment）并打印大量 "Surprise Down" 错误日志。虽然设备能被 pciehp 正常移除，但日志显示 "device recovery failed"，且伴随 1 秒的额外延时。这些错误日志和失败状态会误导用户，让人误以为设备发生了严重的硬件故障或恢复流程失败，实际上这只是热拔插操作的预期副作用。
+
+#主要错误日志
+pcieport 0000:00:01.4: DPC: containment event, status:0x1f01 source:0x0000
+pcieport 0000:00:01.4: DPC: unmasked uncorrectable error detected
+pcieport 0000:00:01.4: PCIe Bus Error: severity=Uncorrected (Fatal), type=Transaction Layer, (Receiver ID)
+pcieport 0000:00:01.4:   device [1022:14ab] error status/mask=00000020/04004000
+pcieport 0000:00:01.4:    [ 5] SDES (First)
+nvme nvme2: frozen state error detected, reset controller
+pcieport 0000:00:01.4: DPC: Data Link Layer Link Active not set in 1000 msec
+pcieport 0000:00:01.4: AER: subordinate device reset failed
+pcieport 0000:00:01.4: AER: device recovery failed
+
+#问题根因
+根据 PCIe r6.0 规范 sec 6.7.6，异步拔除操作伴随 DPC 机制时，会产生 Surprise Down 错误。这是热拔除过程中的预期行为，属于正常的副作用。
+旧版内核代码未识别这种特定场景，将其当作普通的致命错误进行处理。这导致系统尝试执行不必要的错误恢复流程，不仅产生了误导性的错误日志，还因为等待链路状态超时（1000ms）导致 DPC 恢复流程报告失败（recovery failed）。
+
+#解决方案
+在 DPC 中断处理流程中增加对“异步热拔除”场景的识别与特殊处理逻辑：
+1. 识别机制：检查设备是否为热插拔桥，并检查 AER Uncorrected Error Status 寄存器中是否存在 Surprise Down Error (PCI_ERR_UNC_SURPDN) 状态位。若同时满足 DPC 触发条件，则判定为异步热拔除。
+2. 特殊处理：一旦识别为异步热拔除，跳过标准的 AER/DPC 错误恢复流程。
+3. 清理状态：直接清除 AER 状态寄存器、设备状态寄存器及 DPC 状态寄存器中的相关错误位，避免遗留陈旧错误干扰后续操作。
+4. 快速返回：直接返回 IRQ_HANDLED，交由 pciehp 处理后续的设备下线流程，从而消除误导性日志和无效的恢复尝试。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c56fd29590528dc05d24b0c1bf7c802fb2e3fc1c

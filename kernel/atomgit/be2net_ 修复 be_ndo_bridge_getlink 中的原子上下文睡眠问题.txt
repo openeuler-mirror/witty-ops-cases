@@ -1,0 +1,23 @@
+#标题
+be2net: 修复 be_ndo_bridge_getlink 中的原子上下文睡眠问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 be2net 驱动的 bridge getlink 回调函数时，内核触发 "sleeping while atomic" 或 "scheduling while atomic" 类错误，可能导致内核恐慌或调用栈打印。问题源于在 RCU 读锁（rcu_read_lock）保护的原子上下文中调用了可能睡眠的函数（mutex_lock 和 usleep_range）。
+
+#主要错误日志
+- "FW not responding"（推断：若超时可能触发此日志）
+- 内核调用栈显示睡眠行为发生在 rcu_read_lock 保护的路径中。
+
+#问题根因
+be2net 驱动的 `be_ndo_bridge_getlink` 回调函数在 RCU 读锁临界区内被调用，此时处于原子上下文。但驱动的内部实现路径 `be_ndo_bridge_getlink -> be_cmd_get_hsw_config -> be_mcc_notify_wait -> be_mcc_wait_compl` 中，使用了 `mutex_lock` 和 `usleep_range` 进行睡眠等待。在原子上下文中进行睡眠操作导致了内核崩溃。
+
+#解决方案
+1. 将 `mcc_lock` 从互斥锁（`struct mutex`）改为自旋锁（`spinlock_t`），并将加锁函数改为 `spin_lock_bh`，解锁函数改为 `spin_unlock_bh`，以适配原子上下文。
+2. 将等待 FW 完成的延时函数从 `usleep_range(500, 1000)` 替换为 `udelay(100)`，避免在自旋锁持有期间或 RCU 临界区内发生睡眠。
+3. 相应调整了超时计数器的上限定义（从 12000 增加到 120000），以匹配延时单位的变化（从 ms 级 sleep 调整为 us 级 delay）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fe78c406df17f0df5f54c23d23ec0015448c9d94

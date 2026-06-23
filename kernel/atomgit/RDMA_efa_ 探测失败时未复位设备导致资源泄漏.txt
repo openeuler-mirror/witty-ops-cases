@@ -1,0 +1,20 @@
+#标题
+RDMA/efa: 探测失败时未复位设备导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+EFA 设备驱动在 probe（探测）阶段失败时，未执行设备复位操作。这导致设备状态不一致，无法正常关闭共享资源（如 admin queue），可能导致后续操作失败或资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `efa_probe` 函数的错误处理路径中，调用 `efa_remove_device` 时未调用 `efa_com_dev_reset` 进行设备复位。而在正常的设备移除流程（`efa_ib_device_remove`）中，复位操作被错误地放置在该函数内部，导致 probe 失败的退出路径遗漏了复位步骤。这使得设备在初始化失败后无法清理 admin queue 等共享资源，违反了驱动初始化与去初始化的对称性原则。
+
+#解决方案
+将设备复位操作（`efa_com_dev_reset`）从 `efa_ib_device_remove` 函数移动到 `efa_remove_device` 函数中，使其成为设备移除的通用步骤。同时，修改 `efa_remove_device` 函数接口，增加 `reset_reason` 参数。在 probe 失败的错误处理路径中，传入 `EFA_REGS_RESET_INIT_ERR` 参数确保设备被复位；在正常移除路径中，传入 `EFA_REGS_RESET_NORMAL` 参数。这确保了无论 probe 是否成功，设备退出时都能正确复位并释放资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1b652c5ffa2b1a179288e6014d4621c336874096

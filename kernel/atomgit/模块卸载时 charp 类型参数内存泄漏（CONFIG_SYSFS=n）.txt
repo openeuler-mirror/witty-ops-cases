@@ -1,0 +1,24 @@
+#标题
+模块卸载时 charp 类型参数内存泄漏（CONFIG_SYSFS=n）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核配置为 CONFIG_MODULES=y 且 CONFIG_SYSFS=n 的场景下，加载并随后卸载具有 charp 类型参数的内核模块时，会导致内存泄漏。具体表现为该模块占用的 charp 参数内存未被正确释放，随着模块加载/卸载次数增加，系统可用内存减少。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `param_set_charp()` 在设置 charp 模块参数时会分配内存以存储输入值的副本。当模块卸载时，本应调用 `destroy_params()` 来释放这些内存。然而，`destroy_params()` 函数的定义被错误地限制在 CONFIG_SYSFS=y 的条件下编译；当 CONFIG_SYSFS=n 时，仅存在一个空的内联函数实现。这导致在 CONFIG_MODULES=y 但 CONFIG_SYSFS=n 的特定配置下，模块卸载流程跳过了内存释放步骤，从而引发内存泄漏。
+
+#解决方案
+修改 `destroy_params()` 函数的编译条件，使其在 CONFIG_MODULES=y 时可用，而非仅在 CONFIG_SYSFS=y 时可用。具体修改包括：
+1. 将函数重命名为 `module_destroy_params()`，明确其由模块加载器使用。
+2. 将该函数的实现从 `kernel/params.c` 中的 `#ifdef CONFIG_SYSFS` 代码块移出，放入新的 `#ifdef CONFIG_MODULES` 代码块中。
+3. 更新头文件 `include/linux/moduleparam.h` 中的函数声明，移除旧的 `#ifdef CONFIG_SYSFS` 判断逻辑，改为在 `#ifdef CONFIG_MODULES` 下导出声明。
+4. 更新 `kernel/module/main.c` 中的调用点，将 `destroy_params()` 替换为 `module_destroy_params()`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2de30b203fcb3e7ee9943a0a85b2221102dd2f01

@@ -1,0 +1,20 @@
+#标题
+intel_idle 驱动在旧款 CPU 深度睡眠状态下导致 TSC 停止引发系统卡顿
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Core2 代及更早的旧款 CPU 上，当 TSC（时间戳计数器）在 C2 或更深的 C-states 状态下停止工作时，系统会出现停滞和启动延迟。该现象通常发生在时钟源看门狗尚未检测到 TSC 不稳定之前，CPU 首次进入深度空闲状态的时刻。
+
+#主要错误日志
+未知
+
+#问题根因
+Intel idle 驱动虽然优先于 ACPI processor idle 驱动使用，但未实现对 Core2 代 CPU 的特殊处理。这些旧款 CPU 在进入 C2 及更深睡眠状态时 TSC 会停止，而 Intel idle 驱动未像 ACPI 驱动那样将 TSC 标记为不稳定，导致时钟源机制异常，进而引发系统停滞和启动延迟。
+
+#解决方案
+在 `intel_idle_init_cstates_acpi` 函数中增加了检测逻辑：如果 CPU 支持 C2 或更深的 C-states 且不具备非停止 TSC 特性（`X86_FEATURE_NONSTOP_TSC`），则调用 `mark_tsc_unstable` 函数将 TSC 标记为不稳定。此举与 ACPI 驱动的规避措施保持一致，修复了由此导致的卡顿和延迟问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d6323049c10cd8b5b5d14d4d5566bb5c99d327a0

@@ -1,0 +1,24 @@
+#标题
+bpf_struct_ops CFI 校验失败导致间接调用异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 BPF struct_ops 机制时，通过 `__arch_prepare_bpf_trampoline` 生成的 Trampoline 代码用于间接函数调用。由于生成的 Trampoline 缺少匹配的 CFI（Control Flow Integrity）哈希，导致开启了 CFI 保护（如 FineIBT 或 KCFI）的系统在执行这些间接调用时触发校验失败，可能会导致非法指令异常（#UD）或控制保护异常（#CP），进而引发内核 panic 或调用路径崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+BPF struct_ops 使用 `__arch_prepare_bpf_trampoline()` 为间接函数调用编写 Trampoline，但这些 Trampoline 必须具有匹配的 CFI 哈希才能通过 CFI 校验。
+根因在于生成 Trampoline 时，未能正确获取并设置各个方法对应的 CFI 哈希值。此前代码中未针对 `bpf_struct_ops` 的间接调用场景提供获取正确 CFI 哈希的机制，导致生成的代码不符合 CFI 规范。
+
+#解决方案
+1. 新增 `cfi_get_func_hash()` 函数，用于根据函数地址动态获取其 CFI 哈希值。
+2. 引入 `BPF_TRAMP_F_INDIRECT` 标志位，用于标识当前 Trampoline 用于间接调用，并指示 JIT 编译器生成相应的 CFI 指令。
+3. 修改 `emit_cfi()` 相关逻辑，使其支持传入指定的哈希值，而非仅使用默认的 BPF 哈希。
+4. 在 `bpf_struct_ops` 结构中新增 `cfi_stubs` 字段，指向包含 Stub 函数的结构体。编译器会为这些 Stub 函数生成正确的 CFI 信息，Trampoline 生成逻辑通过 `cfi_get_func_hash()` 提取这些 Stub 的哈希值并写入 Trampoline，从而确保间接调用时的 CFI 类型匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/40d06b8e348798fd2417dc281a49853aa54b4687

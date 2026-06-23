@@ -1,0 +1,23 @@
+#标题
+drm/amd/display: 空指针解引用风险修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD 显示驱动模块中，`create_validate_stream_for_sink` 和 `amdgpu_dm_atomic_commit_tail` 函数存在空指针解引用风险。由于代码逻辑中对指针进行了前置的空值检查，表明这些指针在运行时可能为空，但后续使用时未再次检查，可能导致内核空指针崩溃或不可预期的行为。该问题由 Coverity 静态分析工具发现，涉及 3 处 FORWARD_NULL 问题。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 在 `create_validate_stream_for_sink` 函数中，`dm_state` 指针在函数内其他路径已被检查，说明其可能为空，但后续直接作为参数传递使用，存在空指针解引用风险。
+2. 在 `amdgpu_dm_atomic_commit_tail` 函数中，`aconnector->dc_link` 可能赋值为 NULL（例如 `link` 创建失败场景），但在调用 `hdcp_update_display` 时未检查其有效性，直接访问了 `link_index` 成员。
+3. 静态分析工具 Coverity 报告了这些 FORWARD_NULL 问题。
+
+#解决方案
+1. 在 `create_validate_stream_for_sink` 函数中添加对 `dm_state` 指针的非空检查，若为空则直接返回 NULL。
+2. 在 `amdgpu_dm_atomic_commit_tail` 函数中调用 `hdcp_update_display` 前，添加 `if (aconnector->dc_link)` 判断，确保指针有效后再进行解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/afd9b9f4c14ae7b67c91eee28a5e09e32b2a7235

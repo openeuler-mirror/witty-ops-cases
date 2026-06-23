@@ -1,0 +1,20 @@
+#标题
+blk-ioinf: 用户态写入超大 inflight 值导致整型溢出引发除零错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户向 `ioinf_qos_write` 接口写入 inflight 参数值为 4294967296（即 4G 或 UINT_MAX + 1）时，内核内部发生 32 位无符号整型溢出，导致变量值变为 0。随后在内核处理过程中触发除零错误，造成内核异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ioinf_qos_write()` 函数中，来自用户空间的输入值使用 `match_u64` 解析并存储在 u64 类型的变量 `v` 中，但结构体成员 `params.inflight` 定义为 u32 类型。代码未对输入值范围进行充分校验，当用户输入 4294967296 时，赋值操作 `params.inflight = v` 导致 u32 溢出为 0，进而导致后续计算逻辑中出现除零错误。
+
+#解决方案
+在解析 inflight 参数时增加边界检查，限制输入值不能超过 UINT_MAX。具体修改为在条件判断中增加 `v > UINT_MAX` 检查项，若超出范围则直接返回无效参数错误（einval），从而防止溢出发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1a220716db2466c3f68098b06d3ded1cdb3dbdaa

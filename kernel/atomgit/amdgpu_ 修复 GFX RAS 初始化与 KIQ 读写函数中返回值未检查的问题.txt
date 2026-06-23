@@ -1,0 +1,27 @@
+#标题
+amdgpu: 修复 GFX RAS 初始化与 KIQ 读写函数中返回值未检查的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 静态代码分析工具（如 Coverity）报告存在未检查的返回值警告。
+2. 在 `amdgpu_gfx_ras_late_init` 过程中，如果 `amdgpu_ras_reset_error_status` 执行失败，系统未能感知并中止后续初始化流程，可能导致状态不一致。
+3. 在高并发场景下，若 KIQ（Kernel Interface Queue）环形缓冲区分配失败，读写寄存器操作可能继续执行导致空指针崩溃或硬件访问异常，且未正确释放锁资源。
+
+#主要错误日志
+- pr_err("critical bug! too many kiq readers\n");
+- dev_err(adev->dev, "failed to write reg:%x\n", reg);
+- dev_err(adev->dev, "failed to read reg:%x\n", reg);
+
+#问题根因
+驱动代码中多处调用 `amdgpu_ras_reset_error_status` 和 `amdgpu_ring_alloc` 函数时，未对其返回值进行检查和错误处理。这导致：
+1. RAS 错误状态重置失败时未及时返回错误，掩盖了潜在故障。
+2. KIQ 环形缓冲区分配失败时，代码未跳转到错误处理分支，导致在资源不足的情况下继续执行后续指令，且遗漏了锁的释放操作。
+
+#解决方案
+1. 在 `amdgpu_gfx_ras_late_init` 函数中，检查 `amdgpu_ras_reset_error_status` 的返回值，若失败则直接返回错误码。
+2. 在 `amdgpu_kiq_rreg` 和 `amdgpu_kiq_wreg` 函数中，检查 `amdgpu_ring_alloc` 的返回值，若分配失败则跳转到 `failed_unlock` 标签处释放自旋锁并打印错误日志，避免继续执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/59c80f5ae0d9d75daf6299542489965f4d6d9aec

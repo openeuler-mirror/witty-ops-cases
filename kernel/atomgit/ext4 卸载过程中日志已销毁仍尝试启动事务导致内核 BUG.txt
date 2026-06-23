@@ -1,0 +1,22 @@
+#标题
+ext4 卸载过程中日志已销毁仍尝试启动事务导致内核 BUG
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 LTP 压力测试或高并发卸载操作时，系统触发 BUG_ON，导致内核崩溃。该问题发生在文件系统卸载路径中，具体表现为在日志被标记为销毁状态后，仍有工作队列尝试启动新的日志事务。
+
+#主要错误日志
+BUG_ON(journal->j_flags & JBD2_UNMOUNT)
+
+#问题根因
+在 umount 过程中，`ext4_put_super` 调用 `jbd2_journal_destroy` 销毁日志，此时日志线程被杀死并设置 `JBD2_UNMOUNT` 标志。然而，在某些错误处理路径（如 `ext4_inode_error` -> `ext4_handle_error`）中，会调度 `update_super_work` 工作队列。该工作队列在日志销毁后开始执行，调用 `jbd2_journal_start` 尝试开启新事务。由于此时日志已带有 `JBD2_UNMOUNT` 标志，`start_this_handle` 函数中触发了 `BUG_ON(journal->j_flags & JBD2_UNMOUNT)` 导致内核崩溃。根本原因是缺少一种机制来阻止在日志销毁过程中调度新的日志事务。
+
+#解决方案
+引入新的挂载标志 `EXT4_MF_JOURNAL_DESTROY` 用于标记日志正在销毁。
+1. 在 `ext4_journal_destroy` 函数中，在真正销毁日志前，先设置 `EXT4_MF_JOURNAL_DESTROY` 标志，接着强制提交事务并刷新 `s_sb_upd_work` 工作队列，确保此时没有任何新的日志事务会被调度。
+2. 在 `ext4_handle_error` 函数中，检查该标志位。如果日志正在销毁（`EXT4_MF_JOURNAL_DESTROY` 已设置），则跳过通过日志更新超级块的工作队列调度，直接调用 `ext4_commit_super` 更新超级块，避免触发 BUG。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/12b7c9025d18b82fc60316c6bbb1ec48cc86cba7

@@ -1,0 +1,23 @@
+#标题
+renesas rswitch 以太网驱动 MPIC 寄存器初始化设置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Renesas R-Car S4 设备上 rswitch 以太网驱动初始化时，MPIC 寄存器的 PIS（PHY Interface Select）字段被错误地硬编码为 GMII 模式，而非根据实际 PHY 接口类型（如 SGMII、USXGMII 等）进行配置。这导致非 GMII 接口的硬件链路配置不符合数据手册规范，可能引发链路无法建立、通信异常或链路速度不匹配等问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `rswitch_rmac_setting` 函数中，代码直接将 MPIC 寄存器的 PIS 字段硬编码为 `MPIC_PIS_GMII`，未根据 `etha->phy_interface` 判断实际的 PHY 接口类型（如 SGMII、USXGMII、5GBASER 等）；同时 LSC（Link Speed Count）字段的设置逻辑未严格遵循数据手册规范，导致寄存器配置值与硬件实际需求不符。
+
+#解决方案
+修改 `rswitch_rmac_setting` 函数逻辑：
+1. 增加 `switch (etha->phy_interface)` 分支，根据 PHY 实际接口类型（SGMII、USXGMII、5GBASER）正确设置 MPIC.PIS 字段值（如 GMII 或 XGMII），对于其他未明确列出的类型则保留寄存器原值。
+2. 完善 MPIC.LSC 字段的设置逻辑，在默认情况下保留寄存器原值而非直接返回。
+3. 使用 `rswitch_modify` 函数配合 `FIELD_PREP` 宏精确更新 MPIC 寄存器的 PIS 和 LSC 字段，确保修改符合硬件数据手册要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bc2eb199e9be59d82dda9903a73ecf6b144f32d1

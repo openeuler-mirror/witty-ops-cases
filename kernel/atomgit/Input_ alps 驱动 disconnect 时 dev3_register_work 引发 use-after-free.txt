@@ -1,0 +1,20 @@
+#标题
+Input: alps 驱动 disconnect 时 dev3_register_work 引发 use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除或断开 ALPS 触摸板设备时，内核发生 Use-After-Free 故障。具体表现为在驱动执行断开连接流程后，此前调度注册的 dev3 设备相关工作队列仍在运行，试图访问已经被释放的私有数据结构，可能导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `alps_disconnect` 函数中，驱动仅关闭了定时器，但在释放资源前未禁止延迟工作队列 `dev3_register_work`。该工作队列可能在驱动断开连接、释放相关内存后继续执行，从而访问已释放的内存，引发 use-after-free 漏洞。
+
+#解决方案
+在 `alps_disconnect` 函数中，于注销设备和释放资源之前，调用 `disable_delayed_work_sync` 函数同步禁止 `dev3_register_work`，确保工作队列在资源释放前停止执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3aa9cdc39b3dc700377bd478bccf5d238c546bca

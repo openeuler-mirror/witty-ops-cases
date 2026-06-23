@@ -1,0 +1,32 @@
+#标题
+smb: client: SMB3 跟踪点参数顺序错误导致 trace-cmd 输出显示错误的会话与 Tcon ID
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `trace-cmd` 等工具跟踪 SMB3 文件系统操作（如删除、重命名、查询信息等）时，跟踪点输出的会话 ID（sid）和树连接 ID（tid）数值显示错误，出现数值互换现象。例如，在删除操作中，`smb3_delete_enter` 和 `smb3_delete_done` 事件显示的 `sid` 和 `tid` 与同一上下文中 `smb3_cmd_*` 事件显示的正确值不一致，导致无法准确关联会话与共享资源，影响故障定位与行为分析。
+
+#主要错误日志
+BEFORE (错误输出示例):
+```
+rm-2211  [001] .....  1839.550888: smb3_delete_enter:    xid=281 sid=0x5 tid=0x3d path=\hello2.txt
+rm-2211  [001] .....  1839.550894: smb3_cmd_enter:        sid=0x1ac000000003d tid=0x5 cmd=5 mid=61
+rm-2211  [001] .....  1839.552103: smb3_delete_done:     xid=281 sid=0x5 tid=0x3d
+```
+
+AFTER (正确输出示例):
+```
+rm-2501  [001] .....  3237.656110: smb3_delete_enter:    xid=88 sid=0x1ac0000000041 tid=0x5 path=\hello2.txt
+rm-2501  [001] .....  3237.656122: smb3_cmd_enter:        sid=0x1ac0000000041 tid=0x5 cmd=5 mid=84
+rm-2501  [001] .....  3237.657922: smb3_delete_done:     xid=88 sid=0x1ac0000000041 tid=0x5
+```
+
+#问题根因
+基于 `smb3_inf_compound_*_class` 的跟踪点在调用时，传入的参数顺序存在错误，将 `tcon->tid`（树连接 ID）和 `tcon->ses->Suid`（会话 ID）的位置进行了互换。这导致跟踪点记录并输出了错误的 ID 映射关系。此外，在 `SMB2_OP_GET_REPARSE` 分支中，原本应调用 `*_set_*` 跟踪点的地方错误地调用了 `*_get_*` 跟踪点。
+
+#解决方案
+修正 SMB3 跟踪点调用参数的传递顺序，确保 `tid` 和 `Suid` 按照正确的定义顺序传入（通常调整为先 tid 后 Suid，或依据 Tracepoint 定义修正）。同时，修复 `SMB2_OP_GET_REPARSE` 处理路径中跟踪点名称错误调用的问题，确保 Tracepoint 输出与实际内核状态一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d07e7a664230a9cb0babc8ae74588c29f1ce21c1

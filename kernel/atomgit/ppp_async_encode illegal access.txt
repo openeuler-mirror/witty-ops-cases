@@ -1,0 +1,22 @@
+#标题
+ppp_async_encode illegal access
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用 pppoe_sendmsg() 发送大小为 0 的数据时，会触发 ppp_async_encode() 对空 skb 进行处理。导致内核访问未初始化的内存值，触发 KMSAN（Kernel Memory Sanitizer）报告的 uninit-value 错误，可能导致内核崩溃或内存数据泄露。
+
+#主要错误日志
+BUG: KMSAN: uninit-value in ppp_async_encode drivers/net/ppp/ppp_async.c:545 [inline]
+BUG: KMSAN: uninit-value in ppp_async_push+0xb4f/0x2660 drivers/net/ppp/ppp_async.c:675
+CPU: 1 UID: 0 PID: 5411 Comm: syz.1.14 Not tainted 6.12.0-rc1-syzkaller-00165-g360c1f1f24c6 #0
+
+#问题根因
+在函数 ppp_async_encode() 中，判断是否为 LCP 协议包的逻辑存在缺陷。原代码直接访问 `data[2]` 而未检查数据长度 `count`。当传入的 skb 长度为 0（即 `count` 为 0）时，访问 `data[2]` 会导致数组越界访问，读取到未初始化的内存内容。
+
+#解决方案
+在访问数据数组前增加长度检查。在判断 `islcp` 的条件中增加 `count >= 3` 的检查，确保数据缓冲区至少有 3 个字节时才访问 `data[2]`，从而避免对空 skb 或过短 skb 的非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8251d9b2bfb03d915ed9a3c568c97a9434e58b93

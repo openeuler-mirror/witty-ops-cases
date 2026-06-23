@@ -1,0 +1,22 @@
+#标题
+ksmbd: smb2_open 导致文件 mtime 和 ctime 显示错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+通过 cifs.ko 客户端挂载 ksmbd 共享后，执行 stat 命令查看文件属性时，发现文件的修改时间和改变时间显示为极其陈旧的错误时间（如 1970-01-01），与实际时间不符。具体表现如下：
+- Modify: 1970-01-01 01:00:00.000000000 +0100
+- Change: 1970-01-01 01:00:00.000000000 +0100
+
+#主要错误日志
+getattr failed, err %d
+
+#问题根因
+在 ksmbd_vfs_getattr 函数中调用 vfs_getattr 时，请求标志位仅设置了 STATX_BTIME，未包含 STATX_BASIC_STATS。这导致 vfs_getattr 在填充 kstat 结构体时未获取 mtime 和 ctime 字段，从而返回了未初始化或默认的陈旧时间数据。
+
+#解决方案
+修改 fs/smb/server/vfs.c 文件中的 ksmbd_vfs_getattr 函数，在调用 vfs_getattr 时，将请求标志位由 STATX_BTIME 修改为 STATX_BASIC_STATS | STATX_BTIME，确保内核获取并填充完整的基本统计信息（包括 mtime 和 ctime）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c562580c889922b47b9d7ee016587b4ca05d0a1

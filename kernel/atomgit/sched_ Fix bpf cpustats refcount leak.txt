@@ -1,0 +1,28 @@
+#标题
+sched: Fix bpf cpustats refcount leak
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 BPF sched 相关功能时，触发 refcount_t 下溢，导致内核打印 WARNING 信息并打印调用栈。具体表现为 refcount_t: underflow; use-after-free。
+
+#主要错误日志
+refcount_t: underflow; use-after-free.
+WARNING: CPU: 31 PID: 9517 at lib/refcount.c:28 refcount_warn_saturate+0xf4/0x148
+Call trace:
+ refcount_warn_saturate+0xf4/0x148
+ bpf_sched_cpustats_release+0xa4/0xc0
+ bpf_prog_62f48e1f0ef32ae3_select_rq+0x360/0x398
+ bpf_trampoline_6442463850+0x8c/0x1000
+ bpf_sched_cfs_select_rq+0x8/0x18
+ select_task_rq_fair+0x250/0x4c8
+
+#问题根因
+在 `bpf_sched_cpu_stats_of` 函数中执行了 `memset(ctx, 0, sizeof(*ctx))` 操作，该操作错误地将 `cpustats->usage` 的引用计数清零。而在 `bpf_sched_cpustats_create` 中已经对 ctx 进行了初始化，后续在 `bpf_sched_cpustats_release` 中释放对象时，因引用计数异常导致下溢警告。
+
+#解决方案
+移除 `bpf_sched_cpu_stats_of` 函数中多余的 `memset` 操作。由于 ctx 在 create 阶段已正确初始化，无需在 of 阶段重复清零，从而避免破坏引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b38865b0103a7a18be2241d44261a6bd51bc0c36

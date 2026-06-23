@@ -1,0 +1,23 @@
+#标题
+smb: client: 执行 rmmod cifs 后引发 TCP 定时器死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行复现场景（运行特定网络命名空间复现程序后执行 `rmmod cifs`）几秒钟后，系统触发 lockdep 警告，随后在 `tcp_write_timer()` 函数中发生死锁，导致内核无法正常释放相关资源或响应。
+
+#主要错误日志
+lockdep warning (推断)
+deadlock in tcp_write_timer() (推断)
+
+#问题根因
+先前提交 ef71313c7fc48 为修复 netns UAF 问题，手动将 `sk->sk_net_refcnt` 设置为 1。该做法不符合内核设计规范，`sk_net_refcnt` 应由内核根据用户态或内核态套接字自动区分设置。
+在内核 TCP 套接字关闭流程 `tcp_close()` 中，代码逻辑依据 `sk->sk_net_refcnt` 判断是否清理定时器：若 `sk->sk_net_refcnt` 为 1（通常表示用户态套接字），则不调用 `inet_csk_clear_xmit_timers_sync(sk)`。由于补丁错误地手动设置了该标志，导致内核套接字关闭时定时器未被清理，进而触发 lockdep 警告并在定时器回调中引发死锁。
+
+#解决方案
+移除手动设置 `sk->sk_net_refcnt` 的代码，改用 `sock_create_kern()` 创建套接字以明确其为内核套接字，让内核自动处理引用计数逻辑。
+同时，采用显式引用计数管理策略：在创建套接字时调用 `get_net()` 增加网络命名空间引用，在套接字释放路径（`clean_demultiplex_info` 及相关错误处理分支）中调用 `put_net()` 释放引用。这确保了网络命名空间在套接字生命周期内的有效性，同时避免了破坏内核套接字的内部状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/26e3c180a2c53a5f65afd43caf75eb8d510db7db

@@ -1,0 +1,31 @@
+#标题
+cros_ec_keyb 驱动在非矩阵模式下处理事件导致非法内存访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当驱动以 `buttons_switches_only` 模式运行时（未初始化矩阵键盘），若收到 `EC_MKBP_EVENT_KEY_MATRIX` 类型事件，内核触发无法处理的内存读取错误，导致崩溃。
+具体表现为 Unable to handle kernel read from unreadable memory，并伴随调用栈回溯，指向 `input_event` 及 `cros_ec_keyb_work` 函数。
+
+#主要错误日志
+Unable to handle kernel read from unreadable memory at virtual address 0000000000000028
+...
+x3 : 0000000000000000 x2 : 0000000000000000
+x1 : 0000000000000000 x0 : 0000000000000000
+Call trace:
+ input_event
+ cros_ec_keyb_work
+ blocking_notifier_call_chain
+ ec_irq_thread
+
+#问题根因
+在 `cros_ec_keyb_probe()` 函数中，如果配置了 `buttons_switches_only`，则不会调用 `cros_ec_keyb_register_matrix()`，导致 `ckdev->idev` 保持为 NULL。
+后续如果有异常的 `EC_MKBP_EVENT_KEY_MATRIX` 事件进入中断处理流程 `cros_ec_keyb_work()`，代码直接尝试访问 `ckdev->idev` 进行处理，从而触发了空指针解引用导致的非法内存访问。
+
+#解决方案
+在 `cros_ec_keyb_work()` 处理 `EC_MKBP_EVENT_KEY_MATRIX` 事件的分支中增加判断：检查 `ckdev->idev` 是否为空。
+若为空，说明驱动未初始化矩阵键盘设备，此时打印警告日志 `Unexpected key matrix event` 并直接返回 `NOTIFY_OK`，避免访问空指针导致的崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f0896eba4dfaa843a881a02384db2700cfc994f5

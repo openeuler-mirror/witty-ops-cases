@@ -1,0 +1,34 @@
+#标题
+Phytium 显示引擎多模块缺陷修复与功能完善
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **显示接口异常**：PE220X 平台在 BMC 模式下，eDP 背光与电源控制失效，屏幕无法正常点亮或关闭；显示模式配置超过 1920x1080 分辨率时可能出现异常。
+2. **显示缩放与光标异常**：系统调用浮点运算进行显示缩放计算时，在 x86 架构下因未初始化 FPU 环境导致内核崩溃或计算错误；光标移出屏幕左侧边界时显示位置错误。
+3. **驱动加载失败**：在设备树（DTS）或 ACPI 配置不全（缺失 PWM 或 GPIO 资源）时，驱动加载时报错并 probe 失败。
+4. **内存与中断问题**：GEM 对象 mmap 流程存在映射失效风险；DP 接口热插拔中断掩码配置不完整，可能导致部分中断事件丢失。
+
+#主要错误日志
+- `DRM_ERROR("%s: set pwm period to 0\n", __func__);`
+- `DRM_ERROR("malloc %ld failed\n", KERNELSTATES);`
+- `dev_err(&pdev->dev, "Failed to request PWM device: %ld\n", PTR_ERR(priv->info.pwm));`
+- `dev_err(&pdev->dev, "Failed to get edp_en gpio\n");`
+- `dev_err(&pdev->dev, "Failed to get edp_pwr_en gpio\n");`
+- `DRM_ERROR("install irq failed\n");`
+
+#问题根因
+1. **背光控制机制错误**：PE220X 早期版本尝试通过寄存器直接控制背光，但实际硬件需通过 PWM 设备和 GPIO（edp_power_en, edp_bl_en）进行控制，驱动未适配此逻辑。
+2. **架构兼容性问题**：显示缩放算法使用了浮点运算，在 ARM64 上使用了 `kernel_neon_begin` 保护，但在 x86 架构下未调用 `kernel_fpu_begin` 保护，导致 FPU 指令触发异常。
+3. **硬件参数限制与边界检查缺失**：PE220X 硬件限制最大分辨率为 1920x1080，驱动误设为 3840x2160；光标坐标变量类型为 `unsigned int`，导致负坐标处理错误。
+4. **依赖资源检查不足**：驱动初始化时未严格检查必需的 PWM 和 GPIO 资源是否存在，直接引用空指针；DP 中断掩码 `HPD_OTHER_MASK` 定义错误，覆盖位宽不足。
+
+#解决方案
+1. **重构背光控制逻辑**：移除旧的寄存器控制方式，引入 Linux PWM 框架和 GPIO 描述符接口，通过 `pwm_apply_might_sleep` 和 `gpiod_set_value` 标准接口控制背光亮度与电源。
+2. **完善架构兼容性**：在 `phytium_crtc.c` 中增加架构判断宏，x86 架构下使用 `kernel_fpu_begin/end` 包裹浮点运算代码，并修改 Makefile 编译选项支持 SSE/SSE2。
+3. **修正硬件参数与类型**：将 PE220X 最大分辨率限制修正为 1920x1080；将光标坐标相关变量类型改为 `int` 型以支持负值；修正 `HPD_OTHER_MASK` 为 `0x7c`。
+4. **增强初始化健壮性**：在驱动 probe 阶段增加对 PWM 和 GPIO 资源的有效性检查，若获取失败则打印错误日志并终止加载；修正 GEM 对象 mmap 回调路径，确保内存映射正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e2cdf30a3e12bb55e76d60e99c0abd7db2917b5c

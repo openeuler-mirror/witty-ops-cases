@@ -1,0 +1,20 @@
+#标题
+x86/fpu: Guest FPU state buffer allocation size mismatch
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 KVM vCPU 状态缓冲区批量预分配优化时发现，`fpu_alloc_guest_fpstate()` 与 `fpstate_realloc()` 使用的分配大小不一致。该问题可能导致分配的内存大小不符合预期，进而引发内存越界或状态损坏。由于 UABI 大小通常大于等于内核大小，或两者恰好对应相同的页数，该问题此前可能未被察觉。
+
+#主要错误日志
+未知
+
+#问题根因
+`fpu_alloc_guest_fpstate()` 函数错误地使用了 `fpu_user_cfg.default_size`（UABI 形式的默认 XSAVE 特性集大小）来计算分配大小，而正确的做法应该像 `fpstate_realloc()` 那样使用 `fpu_kernel_cfg.default_size`（内核内部压缩表示的大小）。这导致了分配大小计算逻辑的不匹配。
+
+#解决方案
+修改 `arch/x86/kernel/fpu/core.c` 中 `fpu_alloc_guest_fpstate()` 函数的大小计算逻辑，将 `fpu_user_cfg.default_size` 替换为 `fpu_kernel_cfg.default_size`，确保分配的大小包含正确的内核表示所需的内存空间。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2ef9f25996d486a2250b8d5cea64e90d9a737bab

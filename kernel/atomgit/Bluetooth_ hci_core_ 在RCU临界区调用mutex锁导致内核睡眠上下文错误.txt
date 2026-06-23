@@ -1,0 +1,40 @@
+#标题
+Bluetooth: hci_core: 在RCU临界区调用mutex锁导致内核睡眠上下文错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理蓝牙 HCI 事件时触发 `BUG: sleeping function called from invalid context` 错误。具体表现为在工作队列处理 `hci_rx_work` 过程中，持有 RCU 读锁（`rcu_read_lock`）的上下文内调用了可能睡眠的 `mutex_lock` 函数，导致内核报警并打印调用栈。此问题通常发生在 `hci_le_create_big_complete_evt` 事件处理流程中。
+
+#主要错误日志
+BUG: sleeping function called from invalid context at kernel/locking/mutex.c:585
+in_atomic(): 0, irqs_disabled(): 0, non_block: 0, pid: 5070, name: kworker/u9:2
+preempt_count: 0, expected: 0
+RCU nest depth: 1, expected: 0
+4 locks held by kworker/u9:2/5070:
+ #0: ffff888015be3948 ((wq_completion)hci0#2){+.+.}-{0:0}
+ #1: ffffc90003b6fd00 ((work_completion)(&hdev->rx_work)){+.+.}-{0:0}
+ #2: ffff8880665d0078 (&hdev->lock){+.+.}-{3:3}
+ #3: ffffffff8e132020 (rcu_read_lock){....}-{1:2}
+CPU: 0 PID: 5070 Comm: kworker/u9:2 Not tainted 6.8.0-syzkaller-08073-g480e035fc4c7 #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 03/27/2024
+Workqueue: hci0 hci_rx_work
+Call Trace:
+ __might_resched+0x5d4/0x780 kernel/sched/core.c:10187
+ __mutex_lock_common kernel/locking/mutex.c:585 [inline]
+ __mutex_lock+0xc1/0xd70 kernel/locking/mutex.c:752
+ hci_connect_cfm include/net/bluetooth/hci_core.h:2004 [inline]
+ hci_le_create_big_complete_evt+0x3d9/0xae0 net/bluetooth/hci_event.c:6939
+
+#问题根因
+在 `hci_connect_cfm` 等蓝牙回调函数中，代码试图获取 `hci_cb_list_lock` 互斥锁。然而，调用这些回调函数的上下文（如 `hci_le_create_big_complete_evt`）已经处于 RCU 读临界区（持有 `rcu_read_lock`）。根据 Linux 内核规则，在 RCU 读临界区内不允许睡眠或调用可能睡眠的函数（如 `mutex_lock`），从而导致 `scheduling while atomic` 类错误。
+
+#解决方案
+重构 `hci_cb_list` 的访问机制，移除 `hci_cb_list_lock` 互斥锁，改用 RCU 机制保护链表遍历：
+1. 移除全局的 `hci_cb_list_lock` 互斥锁定义及相关加锁逻辑。
+2. 修改 `hci_register_cb` 和 `hci_unregister_cb` 函数，使用 `list_add_tail_rcu` 和 `list_del_rcu` 替代原有的链表操作，实现无锁注册与注销。
+3. 新增 `hci_cb_lookup` 辅助函数，在 RCU 读锁保护下遍历 `hci_cb_list`，利用新增的 `match` 回调函数筛选目标连接，并将匹配的回调结构体拷贝至临时链表，随后在临时链表上执行回调函数，确保在 RCU 临界区内不进行阻塞操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7768dfb28c9f1fc62bef3a4683bad22ff7d7405d

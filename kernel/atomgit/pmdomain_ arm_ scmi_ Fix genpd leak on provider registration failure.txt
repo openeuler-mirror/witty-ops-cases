@@ -1,0 +1,20 @@
+#标题
+pmdomain: arm: scmi: Fix genpd leak on provider registration failure
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SCMI 电源域驱动探测过程中，若 `of_genpd_add_provider_onecell` 注册失败，之前分配并初始化的 `generic_pm_domain` 结构体未被释放，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `scmi_pm_domain_probe` 函数中，调用 `of_genpd_add_provider_onecell` 向设备树节点添加 genpd provider 时，代码未检查返回值是否失败。如果注册失败，函数直接返回错误码，但跳过了对已分配的 `domains` 资源的清理步骤（即调用 `pm_genpd_remove`），从而导致内存泄漏。
+
+#解决方案
+修改 `scmi_pm_domain_probe` 函数逻辑，捕获 `of_genpd_add_provider_onecell` 的返回值。若注册失败，跳转至新增的错误处理标签 `err_rm_genpds`，通过反向遍历 domains 数组并调用 `pm_genpd_remove` 来释放已分配的资源，确保资源正确回收后再返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cf1975ad509b1e5d6a6688e85835c92faeefd06e

@@ -1,0 +1,50 @@
+#标题
+x86/resctrl: 域末 CPU 下线时访问未初始化内存导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_NO_HZ_FULL 和 CONFIG_CPUMASK_OFFSTACK 的内核配置下，当 resctrl 控制组所在的域中最后一个 CPU 下线时，内核发生空指针解引用并触发 OOPS，具体表现为：
+1. 系统触发 panic/OOPS，报错 "BUG: kernel NULL pointer dereference"。
+2. 故障发生在 MBM（内存带宽监控）溢出处理程序的设置过程中。
+3. 调用链显示从 `resctrl_offline_cpu` -> `mbm_setup_overflow_handler` -> `cpumask_any_housekeeping` 流程中触发崩溃。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000000
+#PF: supervisor read access in kernel mode
+#PF: error_code(0x0000) - not-present page
+PGD 0
+Oops: 0000 [#1] PREEMPT SMP NOPTI
+...
+RIP: 0010:__find_nth_andnot_bit+0x66/0x110
+...
+Call Trace:
+ <TASK>
+ ? __die()
+ ? page_fault_oops()
+ ? exc_page_fault()
+ ? asm_exc_page_fault()
+ cpumask_any_housekeeping()
+ mbm_setup_overflow_handler()
+ resctrl_offline_cpu()
+ resctrl_arch_offline_cpu()
+ cpuhp_invoke_callback()
+ cpuhp_thread_fun()
+ smpboot_thread_fn()
+ kthread()
+ ret_from_fork()
+ ret_from_fork_asm()
+ </TASK>
+
+#问题根因
+当域中最后一个 CPU 下线时，内核试图在 `cpumask_any_housekeeping()` 函数中寻找另一个在线 CPU 来运行 MBM 溢出处理程序。
+在该函数中，代码使用 `IS_ENABLED(CONFIG_NO_HZ_FULL)` 判断是否需要检查 `tick_nohz_full_mask` 掩码，以避开 nohz_full CPU。
+然而，在配置了 `CONFIG_CPUMASK_OFFSTACK=y` 的情况下，如果内核启动时未传递 "nohz_full=" 参数，`tick_nohz_full_mask` 指针不会被分配初始化（为 NULL）。此时直接访问该指针进行位操作（`__find_nth_andnot_bit`）会导致空指针解引用。原有的编译时宏检查无法防范运行时的指针未初始化问题。
+
+#解决方案
+将 `cpumask_any_housekeeping()` 函数中的编译时检查 `IS_ENABLED(CONFIG_NO_HZ_FULL)` 替换为运行时检查函数 `tick_nohz_full_enabled()`。
+`tick_nohz_full_enabled()` 会在访问 `tick_nohz_full_mask` 前确认其已正确分配和初始化，从而避免空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3bc5f1aec5378299ef48e55810ea09185b66f234

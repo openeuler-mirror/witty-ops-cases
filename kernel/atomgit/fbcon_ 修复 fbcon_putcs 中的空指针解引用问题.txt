@@ -1,0 +1,22 @@
+#标题
+fbcon: 修复 fbcon_putcs 中的空指针解引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行 fbcon 控制台映射切换操作时触发空指针解引用，导致内核恐慌。通过特定程序打开 /dev/fb1 和 /dev/tty1，依次执行 FBIOPUT_CON2FBMAP 和 TIOCLINUX 等 ioctl 操作后，再次执行 FBIOPUT_CON2FBMAP 即可复现该 panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在 set_con2fb_map 函数执行路径中，当进行控制台映射设置时，代码路径如下：
+set_con2fb_map -> con2fb_init_display -> fbcon_set_disp -> redraw_screen -> hide_cursor -> clear_selection -> highlight -> invert_screen -> do_update_region -> fbcon_putcs -> ops->putcs
+由于在非初次映射的逻辑分支中未调用 set_blitting_type() 进行初始化，导致 ops->putcs 函数指针保持为 NULL，后续调用该指针时引发空指针解引用。
+
+#解决方案
+在 drivers/video/fbdev/core/fbcon.c 的 set_con2fb_map 函数中，针对非新创建设备的分支逻辑（else if 分支），补充调用 set_blitting_type(vc, info) 函数，确保 ops->putcs 指针被正确初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba076339f20da6198f8d492c6557663b0b9999db

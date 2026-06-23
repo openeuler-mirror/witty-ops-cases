@@ -1,0 +1,30 @@
+#标题
+fs/ntfs3: 新增子记录时因重复 ino 导致的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NTFS3 文件系统中添加子记录时，若红黑树中已存在相同 ino 的节点，新分配的 mft_inode 结构体未被释放，导致内存泄漏。该问题由 syzbot 发现，表现为系统报告“unreferenced object”内存泄漏。
+
+#主要错误日志
+BUG: memory leak
+unreferenced object 0xffff888110bef280 (size 128):
+  backtrace (crc 126a088f):
+    ni_add_subrecord+0x31/0x180 fs/ntfs3/frecord.c:317
+    ntfs_look_free_mft+0xf0/0x790 fs/ntfs3/fsntfs.c:715
+
+BUG: memory leak
+unreferenced object 0xffff888109093400 (size 1024):
+  backtrace (crc 7197c55e):
+    mi_init+0x2b/0x50 fs/ntfs3/record.c:105
+    mi_format_new+0x40/0x220 fs/ntfs3/record.c:422
+
+#问题根因
+在 `ni_add_subrecord()` 函数中，通过 `ni_ins_mi()` 将新分配的节点插入红黑树时，如果发现树中已存在相同 `ino` 的节点，`ni_ins_mi()` 会返回已存在的节点指针，而不是新分配的节点。原代码未处理这种“插入失败但节点已存在”的情况，直接丢弃了新分配的 `mft_inode` 指针，且未调用释放逻辑，导致内存泄漏。
+
+#解决方案
+修改 `ni_add_subrecord()` 函数逻辑，使用 `ni_ins_mi()` 的返回值赋给 `*mi`。判断返回值是否为新分配的节点 `m`，若不一致（即插入失败且找到了已有节点），则调用 `mi_put(m)` 释放新分配的内存，从而避免内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b4397e9d0a1a95417da8f5568e079c98e7eeb1da

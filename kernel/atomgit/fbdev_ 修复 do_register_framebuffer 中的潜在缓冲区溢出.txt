@@ -1,0 +1,23 @@
+#标题
+fbdev: 修复 do_register_framebuffer 中的潜在缓冲区溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在帧缓冲设备注册过程中，当 `registered_fb[]` 数组因注销操作产生 NULL 空洞，或数组槽位被全部占用时，注册循环可能越界访问 `registered_fb[FB_MAX]`，导致内核缓冲区溢出。
+
+#主要错误日志
+未知
+
+#问题根因
+当前实现在查找空闲槽位时未对数组索引进行边界检查。在以下场景下会导致缓冲区溢出：
+1. 设备注销操作导致 `registered_fb[]` 数组中存在 NULL 间隙。
+2. 尽管计数器 `num_registered_fb < FB_MAX`，但数组所有槽位实际上已被占用。
+3. 注册循环遍历时超出数组界限，非法访问 `registered_fb[FB_MAX]`。
+
+#解决方案
+在 `do_register_framebuffer` 函数中增加边界检查逻辑。在查找空闲槽位的循环结束后，判断索引 `i` 是否大于等于 `FB_MAX`，若越界则直接返回 `-ENXIO`，防止非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a19371d10613b880db134f9d51f6ce59d4d045ec

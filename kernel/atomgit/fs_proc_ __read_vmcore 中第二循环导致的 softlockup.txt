@@ -1,0 +1,20 @@
+#标题
+fs/proc: __read_vmcore 中第二循环导致的 softlockup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 kdump 环境下读取 /proc/vmcore 时，内核报 softlockup 软锁死警告。在内存受限的 kdump 镜像中，该软锁死不仅产生告警信息，还会干扰 RCU 释放内存等流程，导致 crashdump 流程卡住无法继续进行。此前针对第一循环的修复已合入，但第二循环仍偶现此问题。
+
+#主要错误日志
+未知
+
+#问题根因
+`__read_vmcore` 函数中的第二个循环代码路径虽然存在自然的休眠点（如等待数据写入），但在内存受限的 kdump 环境下，这些休眠点不足以让出 CPU 资源，导致特定条件下仍然触发 softlockup。
+
+#解决方案
+在 `__read_vmcore` 函数的第二个循环末尾显式调用 `cond_resched()`，主动触发调度，允许其他任务运行并避免软锁死。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9d6dbc67ee81bbbba82b0ad9ba5b22b26156ca97

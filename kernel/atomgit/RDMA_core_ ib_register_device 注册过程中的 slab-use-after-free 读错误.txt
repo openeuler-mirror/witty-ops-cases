@@ -1,0 +1,20 @@
+#标题
+RDMA/core: ib_register_device 注册过程中的 slab-use-after-free 读错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ib_register_device` 函数注册 RDMA 设备时，内核触发 KASAN 检测错误，报告 "KASAN: slab-use-after-free Read in ib_register_device"，表明发生了释放后使用（UAF）问题。
+
+#主要错误日志
+KASAN: slab-use-after-free Read in ib_register_device
+
+#问题根因
+在 `ib_register_device` 函数中，设备注册完成后调用 `kobject_uevent` 发送 KOBJ_ADD 事件。此时由于缺少 `devices_rwsem` 信号量的保护，并发路径（如 `ib_unregister_device`）可能读取到正在变更或已释放的设备对象，导致发生 slab-use-after-free 读错误。
+
+#解决方案
+在 `ib_register_device` 函数中，调用 `kobject_uevent` 发送 KOBJ_ADD 事件的前后，分别增加 `down_read(&devices_rwsem)` 和 `up_read(&devices_rwsem)` 操作。通过持有读信号量保护设备状态变更与事件通知过程，防止并发卸载操作引发的使用后释放问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7b5a0d36429478980d168d04adc1a9d3546bf60c

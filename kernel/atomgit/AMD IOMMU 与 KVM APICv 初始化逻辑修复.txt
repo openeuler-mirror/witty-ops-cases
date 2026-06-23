@@ -1,0 +1,26 @@
+#标题
+AMD IOMMU 与 KVM APICv 初始化逻辑修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. AMD IOMMU 在更新 IRTE（中断重定向表项）的 `is_run` 和 `destination` 字段时，不必要地触发了 IOMMU 缓存刷新操作，可能导致性能开销。
+2. 在禁用 APICv（enable_apicv=0）的系统启动阶段，内核日志可能出现 `APICV_INHIBIT_REASON_ABSENT` 相关的不合理状态标记。
+3. 代码注释与实际代码逻辑不符，在检查 APICv inhibit 状态时，注释指向 `svm_vcpu_run()`，实际应在 `vcpu_enter_guest()` 中检查。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **IOMMU 部分**：`amd_iommu_update_ga` 函数在仅更新 `is_run` 和 `destination` 字段时调用了 `modify_irte_ga`，该函数强制执行了昂贵的 `iommu_flush_irt_and_complete` 刷新操作。实际上此类更新不需要立即刷新缓存。
+2. **KVM 部分**：`kvm_apicv_init` 初始化逻辑顺序不合理，先设置 `ABSENT` 状态，再根据 `enable_apicv` 检查是否设置 `DISABLE`，导致逻辑冗余且语义不清晰。
+3. **注释错误**：注释中提到的 sanity check WARN 位置过时，误导代码维护。
+
+#解决方案
+1. **IOMMU 优化**：将 `modify_irte_ga` 拆分为 `__modify_irte_ga`（仅修改内存中的 IRTE）和 `modify_irte_ga`（修改并刷新）。在 `amd_iommu_update_ga` 更新 `is_run` 等字段时，改为调用 `__modify_irte_ga`，移除不必要的缓存刷新，提升性能。
+2. **KVM 逻辑修正**：调整 `kvm_apicv_init` 实现，根据 `enable_apicv` 变量直接决定是设置 `ABSENT` 还是 `DISABLE` 状态，使初始化状态机更明确。
+3. **修正注释**：将 `__kvm_set_or_clear_apicv_inhibit` 函数中的注释从 `svm_vcpu_run()` 更新为 `vcpu_enter_guest()`，以匹配实际代码逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9beb7a781b2830ddfe00e6b8b1eee7ea82cb4808

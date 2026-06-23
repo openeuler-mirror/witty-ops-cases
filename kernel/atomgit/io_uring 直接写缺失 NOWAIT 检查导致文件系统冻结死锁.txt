@@ -1,0 +1,48 @@
+#标题
+io_uring 直接写缺失 NOWAIT 检查导致文件系统冻结死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当执行文件系统冻结操作（fsfreeze）时，系统发生死锁。现象表现为：
+1. 文件系统冻结进程（fsfreeze）处于不可中断睡眠状态（D 状态），等待获取超级块的读写信号量（rwsem）。
+2. 正在进行的 io_uring 写操作（如 fio 任务）同样处于 D 状态，等待获取该信号量以开始新的写操作。
+3. 冻结操作无法完成，写操作无法推进，系统相关路径挂起。
+
+#主要错误日志
+INFO: task fsfreeze:7364 blocked for more than 15 seconds.
+      Not tainted 6.12.0-rc5-00063-g76aaf945701c #7963
+task:fio             state:D stack:0     pid:886   tgid:886   ppid:876
+Call trace:
+ __switch_to+0x1d8/0x348
+ __schedule+0x8e8/0x2248
+ schedule+0x110/0x3f0
+ percpu_rwsem_wait+0x1e8/0x3f8
+ __percpu_down_read+0xe8/0x500
+ io_write+0xbb8/0xff8
+ io_issue_sqe+0x10c/0x1020
+ io_submit_sqes+0x614/0x2110
+ ...
+
+task:fsfreeze        state:D stack:0     pid:7364  tgid:7364  ppid:995
+Call trace:
+ __switch_to+0x1d8/0x348
+ __schedule+0x8e8/0x2248
+ schedule+0x110/0x3f0
+ percpu_down_write+0x2b0/0x680
+ freeze_super+0x248/0x8a8
+ ...
+
+#问题根因
+io_uring 在发起写操作时，无条件调用 `kiocb_start_write()` 获取超级块的读写信号量（rwsem）以防止写入冻结。如果此时有进程正在尝试冻结挂载点，该信号量已被冻结进程持有（写入模式），导致 io_uring 写进程阻塞等待。
+死锁链条为：冻结进程等待之前的写入完成，但之前的写入任务被阻塞在尝试开始一个新的写操作上（等待获取 rwsem），导致双方互相等待，系统死锁。根本原因是 io_uring 未能正确处理 `IOCB_NOWAIT` 标志，在不应阻塞的上下文中进行了阻塞式信号量获取。
+
+#解决方案
+修改 `io_write` 函数逻辑，增加对 `IOCB_NOWAIT` 标志的检查：
+1. 新增辅助函数 `io_kiocb_start_write`，判断 `kiocb` 是否设置了 `IOCB_NOWAIT`。
+2. 如果设置了 `IOCB_NOWAIT`，则使用非阻塞方式尝试获取信号量（`sb_start_write_trylock`）。如果获取失败，直接返回 `-EAGAIN`，由 io_uring 核心层处理重试（这会允许已完成的写操作清理运行，推进冻结进程）。
+3. 如果未设置 `IOCB_NOWAIT`，则保持原有逻辑，允许阻塞获取信号量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/304b66d22b6549b8a0e91137684a00f11f43d806

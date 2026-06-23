@@ -1,0 +1,14 @@
+#标题
+ip6mr: fix tables suspicious RCU usage
+#内核版本
+OLK-6.6
+#问题现象
+在 IPv6 组播路由（ip6mr）模块中，多个代码路径在未持有 RCU 读锁或 RTNL 锁的情况下调用了 `ip6mr_get_table` 函数。这导致了内核检测到可疑的 RCU 使用，可能触发内核警告、Oops 或其他不可预测的内核行为。
+#主要错误日志
+未知
+#问题根因
+`ip6mr_get_table` 函数内部使用了 `hlist_for_each_entry_rcu` 等需要 RCU 保护的遍历操作，但部分调用者（如 `ip6mr_rtm_getroute`、`ip6mr_vif_seq_start` 等）在调用该函数时并未处于 RCU 临界区或持有 RTNL 锁，导致 RCU 检查逻辑失败。
+#解决方案
+将原有的 `ip6mr_get_table` 函数重命名为 `__ip6mr_get_table` 作为底层实现。新增 `ip6mr_get_table` 作为加锁封装版本，在其内部显式调用 `rcu_read_lock` 和 `rcu_read_unlock` 以确保访问安全。对于已经持有 RTNL 锁或 RCU 锁的调用点，改为直接调用无锁版本的 `__ip6mr_get_table`，以避免重复加锁。
+#来源
+https://atomgit.com/openeuler/kernel/commit/0df6e56b69458a2efe0a5561d9cad83b7a8efa7f

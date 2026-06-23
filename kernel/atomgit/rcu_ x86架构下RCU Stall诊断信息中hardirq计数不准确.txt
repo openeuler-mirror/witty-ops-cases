@@ -1,0 +1,36 @@
+#标题
+rcu: x86架构下RCU Stall诊断信息中hardirq计数不准确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在x86架构下触发RCU Stall（如CPU在rcu_read_lock函数中死循环）时，内核打印的Stall诊断信息中，hardirqs（硬中断）的计数显示为0，无法反映真实的硬中断处理情况。
+
+#主要错误日志
+- Before fix:
+```
+[   70.910184] rcu: INFO: rcu_preempt self-detected stall on CPU
+[   70.910436] rcu:     3-....: (4999 ticks this GP) idle=***
+[   70.910711] rcu:              hardirqs   softirqs   csw/system
+[   70.910870] rcu:      number:        0        657            0
+```
+- After fix:
+```
+[   68.046132] rcu: INFO: rcu_preempt self-detected stall on CPU
+[   68.046354] rcu:     2-....: (4999 ticks this GP) idle=***
+[   68.046628] rcu:              hardirqs   softirqs   csw/system
+[   68.046793] rcu:      number:     2498        663            0
+```
+
+#问题根因
+在x86架构下统计硬中断数量时，遗漏了对 `arch_irq_stat_cpu` 的调用。RCU Stall诊断机制仅使用了 `kstat_cpu_irqs_sum` 进行统计，未加上特定架构需要统计的 `arch_irq_stat_cpu` 部分，导致最终输出的 hardirq 数量计数不准确（显示为0）。
+
+#解决方案
+1. 在 `kernel/rcu/tree.c` 中添加 `arch_irq_stat_cpu` 的默认宏定义（若架构未定义则默认为0）。
+2. 修改硬中断统计逻辑，在计算 `nr_hardirqs` 时，将 `kstat_cpu_irqs_sum` 与 `arch_irq_stat_cpu` 的结果相加。
+3. 将 `struct rcu_snap_record` 中 `nr_hardirqs` 成员的类型从 `unsigned long` 修改为 `u64`，以适配可能的数值变化。
+4. 同步更新日志打印格式以匹配新的变量类型。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c3ecc4982dd418cc715db21a44c559653857aef9

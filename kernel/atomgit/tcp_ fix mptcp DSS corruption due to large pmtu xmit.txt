@@ -1,0 +1,20 @@
+#标题
+tcp: fix mptcp DSS corruption due to large pmtu xmit
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行大 PMTU（Path MTU）发送时，MPTCP（Multipath TCP）的 DSS（Data SACK Signal）选项数据发生损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `tcp_can_coalesce_send_queue_head` 中，合并发送队列的逻辑存在缺陷。原代码在判断是否可以合并 skb 时，检查条件不够严谨，导致了在大 PMTU 发送场景下 MPTCP DSS 选项被破坏。
+
+#解决方案
+修改 `net/ipv4/tcp_output.c` 文件中 `tcp_can_coalesce_send_queue_head` 函数的判断逻辑。将原有的判断条件 `unlikely(TCP_SKB_CB(skb)->eor) || tcp_has_tx_tstamp(skb) || !skb_pure_zcopy_same(skb, next)` 替换为 `tcp_has_tx_tstamp(skb) || !tcp_skb_can_collapse(skb, next)`。通过使用更通用的 `tcp_skb_can_collapse` 函数来检查 skb 是否可合并，从而避免了 DSS 选项损坏的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ff5f723b4e7bd16322db86b5c49304a4e1accc29

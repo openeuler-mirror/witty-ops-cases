@@ -1,0 +1,21 @@
+#标题
+fbcon: FBIOPUT_CON2FBMAP ioctl 导致 fast_imageblit 越界写
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户态程序调用 FBIOPUT_CON2FBMAP ioctl 将控制台映射到帧缓冲区时，如果控制台重设失败但代码继续执行，会导致内存越界写入。该问题触发于 fast_imageblit 函数中，表现为 vmalloc 越界写，可能引发内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在处理 FBIOPUT_CON2FBMAP ioctl 时，系统尝试根据帧缓冲区信息调整控制台大小。如果 vc_do_resize() 执行失败，函数本应退出，但实际上代码继续执行并完成了控制台与新帧缓冲区的映射，设置了 display vars。此时 vc_data 仍关联旧的帧缓冲区信息，而 display vars 已指向新的帧缓冲区，这种不一致的状态在后续 fbcon_putcs() 调用 fast_imageblit() 更新屏幕时，导致使用了无效的结构体引用，最终引发越界写入。
+
+#解决方案
+1. 在 fbcon_set_disp 函数中，捕获 vc_resize() 的返回值，若重设失败（返回非 0），则不再调用 update_screen() 更新屏幕，避免在状态不一致的情况下进行绘制操作。
+2. 在 con2fb_init_display 函数中增加判断条件，仅当 fg_console 不等于目标单元时才调用 update_screen()，防止在非可见控制台或映射未完成时错误触发屏幕更新。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ebf06560b8c5ea12ac5c74c35ff9bcc8b7815917

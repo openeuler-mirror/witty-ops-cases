@@ -1,0 +1,20 @@
+#标题
+ksmbd: buffer offset校验缺失导致潜在越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 ksmbd 处理 SMB2 请求（如 SMB2_TREE_CONNECT、SMB2_IOCTL 等）时，若请求中的 Buffer Offset 字段被设置为无效值（如小于结构体本身的大小），内核在计算数据区域位置时会发生错误，导致潜在的越界访问或内存破坏。该缺陷可被恶意构造的请求触发。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb2_get_data_area_len` 函数中，未对请求结构体中的 Buffer Offset 字段进行有效性校验。代码直接信任并使用了客户端传入的偏移值，未判断该值是否小于结构体中 Buffer 字段的实际偏移量（`offsetof(struct ..., Buffer)`）。这导致计算出的数据区指针可能指向结构体内部的保留字段，引发越界访问。
+
+#解决方案
+在 `fs/smb/server/smb2misc.c` 的 `smb2_get_data_area_len` 函数中，对涉及 Buffer Offset 的请求类型（包括 SMB2_TREE_CONNECT、SMB2_QUERY_INFO、SMB2_SET_INFO、SMB2_QUERY_DIRECTORY、SMB2_IOCTL 等）增加偏移量校验。使用 `max_t` 宏确保计算出的偏移值不小于结构体中 Buffer 字段的起始位置，从而防止无效偏移导致的越界。同时，在 `fs/smb/server/smb2pdu.c` 中，相关处理函数调整了对 Buffer 指针的获取方式，确保使用经过校验的偏移值来定位数据缓冲区。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/969190c7f97f5fa1f37ef71076f8e0b5c0809853

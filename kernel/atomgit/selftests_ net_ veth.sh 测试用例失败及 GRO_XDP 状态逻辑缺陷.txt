@@ -1,0 +1,27 @@
+#标题
+selftests: net: veth.sh 测试用例失败及 GRO/XDP 状态逻辑缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `veth.sh` 自测脚本时测试失败，具体表现为：
+1. 部分测试用例未正确开启 `generic-receive-offload` (GRO) 导致测试结果不符合预期。
+2. 当 XDP 程序附加到 veth 设备时，GRO 标志位显示状态与预期不符（预期应为 off，实际可能显示为 on），掩盖了内核处理 XDP 与 GRO 互斥逻辑的真实状态。
+3. `udpgro_fwd.sh` 中部分测试场景缺少必要的 GRO 开启步骤，导致聚合功能未生效。
+
+#主要错误日志
+未知
+
+#问题根因
+veth 设备驱动或测试脚本逻辑存在缺陷，未能正确处理 XDP 加载与 GRO 状态的同步关系。具体根因涉及两点：
+1. 当设备处于 down 状态时，GRO 和 XDP 的状态同步处理不正确。
+2. 测试脚本未显式开启 GRO 配置（`generic-receive-offload`），导致在特定测试分支（如 UDP GRO forwarding）中，依赖于 GRO 功能的聚合测试无法正常执行，且 veth 在加载 XDP 后的 GRO 默认行为与测试预期不一致。
+
+#解决方案
+通过 Backport 上游补丁修复测试脚本与内核逻辑：
+1. 在 `udpgro_fwd.sh` 测试流程中，显式增加 `ethtool -K veth$DST generic-receive-offload on` 配置，确保测试环境 GRO 功能开启。
+2. 在 `veth.sh` 中新增测试用例，验证设备处于 down 状态时 GRO 与 XDP 状态的独立操作能力，修正了 XDP 加载后 GRO 标志位的检查逻辑（从 on 修正为 off），并补充了开启 GRO 后的验证步骤。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e81a1b10524cc404827958b71452500b376d4b42

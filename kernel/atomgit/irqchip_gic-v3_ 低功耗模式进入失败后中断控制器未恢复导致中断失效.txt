@@ -1,0 +1,23 @@
+#标题
+irqchip/gic-v3: 低功耗模式进入失败后中断控制器未恢复导致中断失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 CPU 尝试进入低功耗模式失败时，系统调用 PM 通知回调并传入 CPU_PM_ENTER_FAILED 状态。此时 GIC V3 驱动未处理该状态，导致 GIC 仍处于禁用状态（Group 1 中断禁用、Redistributor 禁用），CPU 无法正常接收和处理中断，系统功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+当 CPU 进入低功耗模式时，GIC V3 驱动会禁用 Redistributor 和 Group 1 中断，并在唤醒时通过处理 CPU_PM_EXIT 事件来重新初始化系统寄存器以恢复中断功能。
+然而，驱动代码中的 `gic_cpu_pm_notifier` 函数仅对 `CPU_PM_EXIT` 事件进行了处理，而忽略了 `CPU_PM_ENTER_FAILED` 事件。
+如果低功耗模式进入过程失败，CPU_PM 框架会发送 `CPU_PM_ENTER_FAILED` 通知以允许驱动撤销状态变更。由于驱动未处理该事件，GIC 硬件保持在进入低功耗前设置的“禁用”状态，导致中断控制器无法恢复工作。
+
+#解决方案
+修改 `drivers/irqchip/irq-gic-v3.c` 中的 `gic_cpu_pm_notifier` 函数，将 `CPU_PM_ENTER_FAILED` 事件与 `CPU_PM_EXIT` 事件同等处理。
+具体修改为：在条件判断中增加 `|| cmd == CPU_PM_ENTER_FAILED`，确保在低功耗进入失败时，同样执行 `gic_enable_redist(true)` 和 `gic_cpu_sys_reg_init()`，从而重新启用 Redistributor 并初始化 CPU 系统寄存器，恢复中断控制器的正常操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d4450356e8fa9b17d2b01b2030a2a1dc2fcc65d2

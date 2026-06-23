@@ -1,0 +1,23 @@
+#标题
+vmalloc KASAN 释放流程缺少调度点导致系统响应延迟
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 KASAN（内核地址消毒剂）的内核中，当进行大规模 vmalloc 内存释放操作时，系统可能出现长时间的调度延迟或卡顿。由于 `kasan_release_vmalloc_node` 函数在处理大量 purge 列表时长时间不释放 CPU，可能触发软锁定（soft lockup）检测或导致系统实时响应能力下降。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `kasan_release_vmalloc_node` 函数中，遍历 `vn->purge_list` 链表并对每个 vmap_area 执行 KASAN 释放操作的循环过程是一个长耗时操作。原代码逻辑中未包含显式的调度点（scheduling point），导致在该循环执行期间 CPU 无法被抢占，进而引发调度延迟。
+
+#解决方案
+在 `kasan_release_vmalloc_node` 的循环体中引入批处理机制和显式调度：
+1. 定义宏 `KASAN_RELEASE_BATCH_SIZE` 为 32，作为检查调度的批次阈值。
+2. 新增计数器 `batch_count`，在每次处理完一个 vmap_area 后递增。
+3. 在循环中加入判断逻辑：当 `need_resched()` 为真（内核需要调度）或者处理数量达到批次阈值时，调用 `cond_resched()` 主动让出 CPU，防止长时间占用 CPU 导致系统卡顿。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7c35cf65ba3d5c17884e1ba976852d3cb433d3c7

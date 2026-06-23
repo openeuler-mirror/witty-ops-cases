@@ -1,0 +1,30 @@
+#标题
+btrfs: 修复尝试加入已终止事务时的释放后使用（UAF）问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Btrfs 文件系统尝试加入当前事务时，如果该事务已被终止，内核会发生释放后使用，触发 KASAN 检测报告，导致系统崩溃或内存损坏。该问题由 syzbot 和 Dmitry Vyukov 报告。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in join_transaction+0xd9b/0xda0 fs/btrfs/transaction.c:278
+Read of size 4 at addr ffff888011839024 by task kworker/u4:9/1128
+Call Trace:
+ __dump_stack lib/dump_stack.c:94 [inline]
+ dump_stack_lvl+0x241/0x360 lib/dump_stack.c:120
+ print_address_description mm/kasan/report.c:378 [inline]
+ print_report+0x169/0x550 mm/kasan/report.c:489
+ kasan_report+0x143/0x180 mm/kasan/report.c:602
+ join_transaction+0xd9b/0xda0 fs/btrfs/transaction.c:278
+ start_transaction+0xaf8/0x1670 fs/btrfs/transaction.c:697
+ ...
+
+#问题根因
+当尝试加入当前事务时，如果事务已被终止，代码在读取其 'aborted' 字段之前就解锁了 `fs_info->trans_lock`，且未持有该事务的额外引用计数。这导致并发任务在终止事务时，可能在当前任务读取 'aborted' 字段之前就释放了该事务结构，从而引发释放后使用。
+
+#解决方案
+在持有 `fs_info->trans_lock` 锁的情况下读取事务的 'aborted' 字段，并将其值保存到局部变量中，随后再解锁并返回该局部变量。这确保了在读取字段时事务结构尚未被释放，因为释放事务的任务必须先获取该锁并将 `fs_info->running_transaction` 设置为 NULL。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/91425d526acdd960d83cb9da9c10ceaa6ff35143

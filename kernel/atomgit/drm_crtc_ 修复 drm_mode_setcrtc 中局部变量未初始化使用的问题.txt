@@ -1,0 +1,20 @@
+#标题
+drm/crtc: 修复 drm_mode_setcrtc 中局部变量未初始化使用的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `drm_mode_setcrtc` 接口时，如果 `DRM_MODESET_LOCK_ALL_BEGIN()` 内部的隐藏重试循环（retry loop）被触发，会导致之前初始化的局部变量状态丢失。这可能导致 `num_connectors` 变量在后续代码路径中被读取时值为随机垃圾数据，进而引发内核逻辑错误、内存访问异常或 CRTC 配置失败。
+
+#主要错误日志
+未知
+
+#问题根因
+`DRM_MODESET_LOCK_ALL_BEGIN()` 宏内部包含一个隐藏的重试循环机制。当该宏因为锁竞争等原因重试时，代码流程会跳转回函数开头重新执行，导致原本在定义时或函数开头初始化的局部变量值被覆盖或处于未定义状态。具体而言，`num_connectors` 变量在重试路径下可能未被正确重新初始化，从而导致后续使用未初始化的变量值。
+
+#解决方案
+在 `DRM_MODESET_LOCK_ALL_END` 之前（即锁机制可能引发重试的临界区内），显式地将 `num_connectors` 初始化为 0。这确保了即使在 `DRM_MODESET_LOCK_ALL_BEGIN` 触发重试循环的情况下，该变量也能在每次循环中被正确初始化为初始值，从而消除未初始化变量使用的隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a205d48bf5e7a6ee3960be931f91c3cd13615206

@@ -1,0 +1,22 @@
+#标题
+fuse-over-io-uring 参数拷贝遗漏 copy_finish 导致载荷页引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 fuse-over-io-uring 功能进行参数拷贝时，发生载荷页引用计数泄漏。由于在拷贝操作完成后未调用 `fuse_copy_finish` 清理状态，导致相关页面引用计数无法正确释放，随着时间推移可能造成内存资源耗尽或系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fuse_uring_copy_from_ring` 和 `fuse_uring_args_to_ring` 函数中，执行 `fuse_copy_out_args` 或 `fuse_copy_args` 完成参数拷贝后，遗漏了调用 `fuse_copy_finish` 函数。`fuse_copy_finish` 负责解除对前一个用户空间缓冲区页的映射并释放相关引用，缺失该步骤导致了 payload pages 的引用计数泄漏。
+
+#解决方案
+1. 将 `fuse_copy_finish` 函数的声明从 `fs/fuse/dev.c` 中的 `static` 修改为全局可见，并在 `fs/fuse/fuse_dev_i.h` 头文件中添加该函数的声明。
+2. 在 `fuse_uring_copy_from_ring` 函数返回前，增加对 `fuse_copy_finish(&cs)` 的调用。
+3. 在 `fuse_uring_args_to_ring` 函数完成 `fuse_copy_args` 后，增加对 `fuse_copy_finish(&cs)` 的调用，确保在错误返回或正常流程中都能正确清理拷贝状态并释放资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c51b2314ff28e472d6a28c9b621be120128afdfc

@@ -1,0 +1,26 @@
+#标题
+mm: VMA heap bounds checking 边界判断错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在判断 VMA（虚拟内存区域）是否为初始堆时，边界检查逻辑存在错误。对于堆区域的起始地址或结束地址恰好等于 `start_brk` 或 `brk` 的边界情况，原逻辑会错误地将其识别为堆区域，可能导致内存统计不准确或后续内存处理逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `vma_is_initial_heap` 函数中，判定 VMA 是否属于堆区域的条件使用了非严格的比较运算符。
+原逻辑为：
+`vma->vm_start <= vma->vm_mm->brk && vma->vm_end >= vma->vm_mm->start_brk`
+这导致当 VMA 的边界与堆边界重合时（例如 `vma->vm_start == brk`），函数仍返回 true，不符合堆区域边界的严格定义。
+
+#解决方案
+修正 `include/linux/mm.h` 中 `vma_is_initial_heap` 函数的边界比较运算符：
+1. 将 `vma->vm_start <= vma->vm_mm->brk` 修改为 `vma->vm_start < vma->vm_mm->brk`。
+2. 将 `vma->vm_end >= vma->vm_mm->start_brk` 修改为 `vma->vm_end > vma->vm_mm->start_brk`。
+通过使用严格小于和严格大于，确保只有真正处于堆区间内部的 VMA 才被正确识别。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/77f7c0c85f41ea4a150204f60478bb01da641a4b

@@ -1,0 +1,20 @@
+#标题
+KMSAN 未正确毒化高阶非复合页导致释放后内存检测失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当释放高阶非复合页时，KMSAN 机制未能对除首页之外的尾页进行毒化处理。这会导致在页面处于释放状态期间，如果发生非法内存访问，KMSAN 无法检测到该错误，从而产生漏报。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `kmsan_free_page()` 函数中，原代码使用 `page_size(page)` 来计算需要毒化的内存大小。`page_size()` 函数仅对 0 阶页和复合页有效，对于非复合的高阶页，它会错误地返回 `PAGE_SIZE`。因此，传入 `kmsan_internal_poison_memory()` 的长度仅为一页大小，导致该高阶内存块中的尾页未被毒化。
+
+#解决方案
+修改 `mm/kmsan/shadow.c` 文件中的 `kmsan_free_page()` 函数，将计算毒化内存大小的逻辑从 `page_size(page)` 改为直接使用传入的 `order` 参数计算，即 `PAGE_SIZE << order`。这样可以确保无论是复合页还是非复合页，都能计算出正确的内存大小进行毒化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b117f6fa915f5fcb5d1c4f272c1df0d4e6614f2f

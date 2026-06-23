@@ -1,0 +1,20 @@
+#标题
+ub: ubus 集群模式下端口重置功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在集群模式（cluster mode）下，用户通过 sysfs 接口尝试进行端口重置（port reset）操作时，逻辑处理未对集群模式进行拦截，导致在不支持该操作的场景下错误执行了重置流程，可能引发功能异常或未定义行为。修复后，系统明确拒绝该操作并返回无效错误。
+
+#主要错误日志
+- `Port reset is not supported by sysfs in cluster mode`（由 dev_err/ub_err 打印）
+
+#问题根因
+`port_reset_store` 函数在处理用户写入的端口重置请求时，缺少对当前是否处于集群模式（`port->uent->ubc->cluster`）的判断逻辑，导致在集群模式下误入原本不支持的重置代码路径。
+
+#解决方案
+在 `drivers/ub/ubus/port.c` 文件的 `port_reset_store` 函数中增加判断：如果检测到 `port->uent->ubc->cluster` 为真，则打印错误日志 "Port reset is not supported by sysfs in cluster mode" 并直接返回 `-EINVAL`，从而阻止在集群模式下执行端口重置。同时，移除了 `Documentation/ub/ubus/hisi_ubus.rst` 中与该无效流程相关的 `probe_dev` 和 `remove_dev` 接口文档描述。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/246a059f3238542f9f9ada5fda550e7f8fb4f78a

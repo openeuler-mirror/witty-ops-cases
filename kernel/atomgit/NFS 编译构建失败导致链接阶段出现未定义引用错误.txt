@@ -1,0 +1,31 @@
+#标题
+NFS 编译构建失败导致链接阶段出现未定义引用错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核编译链接阶段，当配置项 CONFIG_ENFS=m 且 CONFIG_NFS_FS=y 时，构建过程终止并报错。链接器无法找到 NFS 子系统调用的 ENFS 相关符号，导致构建失败。
+
+#主要错误日志
+ld: fs/nfs/client.c:244: undefined reference to `nfs_free_multi_path_client'
+ld: fs/nfs/client.c:331: undefined reference to `nfs_multipath_client_match'
+ld: fs/nfs/client.c:666: undefined reference to `nfs_create_multi_path_client'
+ld: fs/nfs/dir.c:1503: undefined reference to `enfs_check_have_lookup_cache_flag'
+ld: fs/nfs/super.c:562: undefined reference to `nfs_multipath_show_client_info'
+ld: fs/nfs/super.c:1045: undefined reference to `nfs_remount_iplist'
+ld: fs/nfs/super.c:1049: undefined reference to `enfs_free_mount_options'
+ld: fs/nfs/super.c:667: undefined reference to `nfs_multipath_show_client_info'
+ld: fs/nfs/super.c:1368: undefined reference to `enfs_trigger_get_server_capability'
+ld: fs/nfs/fs_context.c:1619: undefined reference to `enfs_free_mount_options'
+ld: fs/nfs/fs_context.c:959: undefined reference to `enfs_parse_mount_options'
+ld: fs/nfs/fs_context.c:1513: undefined reference to `nfs_multipath_set_mount_data'
+
+#问题根因
+构建系统配置依赖处理不当。当 CONFIG_ENFS 配置为模块（=m）而 CONFIG_NFS_FS 配置为内建（=y）时，原 Makefile 使用 `nfs-$(CONFIG_ENFS)` 语法导致 enfs_adapter.o 文件被编译为独立的 enfs_adapter.ko 模块，或者未被正确链接进 nfs.ko。由于 nfs.ko（内建）在链接时需要 enfs_adapter.o 中的符号，但这些符号所在的代码未被合并入 nfs.ko 的对象文件中，从而引发“undefined reference”链接错误。
+
+#解决方案
+修改 `fs/nfs/Makefile` 中的构建逻辑，强制将 `enfs_adapter.o` 编译进 NFS 核心模块。具体修改为：判断 CONFIG_ENFS 不为空时，使用 `nfs-y += enfs_adapter.o` 语法，确保无论 CONFIG_ENFS 取值如何，只要启用该功能，`enfs_adapter.o` 都会被包含在 nfs.ko 的目标列表中，从而解决符号缺失的链接问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/53806d18641c15b833cd6f4f7c540c3018099d7f

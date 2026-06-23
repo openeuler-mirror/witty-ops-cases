@@ -1,0 +1,24 @@
+#标题
+GHES 驱动未遵守 panic= 设置导致硬件错误现场丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统发生致命硬件错误时，GHES 驱动会强制将重启超时时间设置为 30 秒，从而覆盖了用户配置的 `panic=` 内核参数。对于难以复现的问题，系统会在 30 秒后自动重启，导致硬件错误发生的上下文现场被破坏，无法进行有效排查。
+
+#主要错误日志
+推断日志：
+`GHES: Fatal hardware error`
+`GHES: Fatal hardware error but panic disabled`（当 panic=0 时）
+
+#问题根因
+GHES 驱动中硬编码了一个默认的 panic 超时变量 `ghes_panic_timeout`（值为 30）。在 `__ghes_panic` 函数处理致命硬件错误时，代码逻辑检测到 `panic_timeout` 为 0（即用户配置了不重启）时，会强制将其赋值为 30，导致系统无视全局 `panic=` 设置，强制在 30 秒后重启。
+
+#解决方案
+删除 GHES 驱动中硬编码的 `ghes_panic_timeout` 变量及相关逻辑，修改 `__ghes_panic` 函数使其直接调用 `panic()` 函数。这样可以让行为与全局 `panic=` 参数保持一致：
+1. 若配置了 `panic=0`，系统将保持挂起状态以便保留现场排查，同时打印 "Fatal hardware error but panic disabled" 提示。
+2. 若需要重启，用户可通过内核命令行参数 `panic=` 或 CONFIG_PANIC_TIMEOUT 配置项进行控制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/142ef5fcb1fba6c353e6f85086178f0733bf4109

@@ -1,0 +1,26 @@
+#标题
+drm/i915/gem: 修复位运算与逻辑运算 AND 操作符混用导致的 RPM 状态管理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 CONFIG_DRM_I915_DEBUG_RUNTIME_PM 配置项的情况下，由于代码误将逻辑与（&&）写成了位与（&），导致 `intel_wakeref_auto()` 函数可能无法被正确调用。这可能引起 i915 显卡驱动的运行时电源管理（Runtime PM）状态异常，影响 userfault 相关的电源引用计数管理。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中原有的条件判断语句 `if (wakeref & CONFIG_DRM_I915_USERFAULT_AUTOSUSPEND)` 错误地使用了位运算 AND（`&`）而非逻辑运算 AND（`&&`）。
+根因分析如下：
+1. `CONFIG_DRM_I915_USERFAULT_AUTOSUSPEND` 是一个整型配置项，默认值为 250。
+2. `wakeref` 变量在非零时，其值根据配置可能是 -1 或动态分配的指针。
+3. 原代码使用位运算，意图判断两个变量是否非零，但在 `CONFIG_DRM_I915_DEBUG_RUNTIME_PM=y` 且 `wakeref` 为特定指针值时，位运算结果可能意外为 0，导致条件判断失败，绕过了必要的 `intel_wakeref_auto()` 调用。
+
+#解决方案
+修改条件判断逻辑，将位运算 AND（`&`）更正为逻辑运算 AND（`&&`）。同时，为避免 clang 编译器产生 `-Wconstant-logical-operand` 警告，将常量判断写法调整为 `CONFIG_DRM_I915_USERFAULT_AUTOSUSPEND != 0`。
+修复后的代码为：
+`if (wakeref && CONFIG_DRM_I915_USERFAULT_AUTOSUSPEND != 0)`
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5f652d4bf2008980f9e7687581c4a1cb23cba69a

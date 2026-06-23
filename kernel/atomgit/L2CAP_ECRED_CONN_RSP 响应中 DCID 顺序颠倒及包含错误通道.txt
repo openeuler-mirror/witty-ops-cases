@@ -1,0 +1,45 @@
+#标题
+L2CAP_ECRED_CONN_RSP 响应中 DCID 顺序颠倒及包含错误通道
+
+#内核版本
+OLK-6.6
+
+#问题现象
+蓝牙 L2CAP 增强信用连接响应（L2CAP_ECRED_CONN_RSP）中的目标 CID（DCID）顺序与请求中的源 CID（SCID）顺序不一致，导致响应数据包中的 DCID 列表以相反的顺序返回。此外，响应中可能错误地包含了非 BT_CONNECT2 状态的通道，导致协议交互异常。
+
+#主要错误日志
+```
+> ACL Data RX: Handle 16 flags 0x02 dlen 26
+      LE L2CAP: Enhanced Credit Connection Request (0x17) ident 2 len 18
+        PSM: 39 (0x0027)
+        MTU: 256
+        MPS: 251
+        Credits: 65535
+        Source CID: 116
+        Source CID: 117
+        Source CID: 118
+        Source CID: 119
+        Source CID: 120
+< ACL Data TX: Handle 16 flags 0x00 dlen 26
+      LE L2CAP: Enhanced Credit Connection Response (0x18) ident 2 len 18
+        MTU: 517
+        MPS: 247
+        Credits: 3
+        Result: Connection successful (0x0000)
+        Destination CID: 68
+        Destination CID: 67
+        Destination CID: 66
+        Destination CID: 65
+        Destination CID: 64
+```
+
+#问题根因
+1. 在 `__l2cap_chan_add` 函数中使用了 `list_add` 将通道添加到连接列表，该操作是在列表头部插入，导致通道列表的顺序与接收到的 SCID 顺序相反，最终导致响应中的 DCID 顺序颠倒。
+2. 在 `l2cap_ecred_rsp_defer` 函数中，未严格检查通道状态，导致响应中可能包含了处于非预期状态（如 outgoing connection 或非 deferred setup）的通道，且 `chan->ident` 可能被复用导致混淆。
+
+#解决方案
+1. 修改 `__l2cap_chan_add` 函数，将 `list_add` 替换为 `list_add_tail`，确保通道按照接收顺序追加到列表尾部，从而保证 ECRED 响应中 DCID 的顺序与请求中 SCID 的顺序一致。
+2. 完善 `l2cap_ecred_rsp_defer` 函数的检查逻辑，在响应构建过程中跳过已发送连接请求（FLAG_ECRED_CONN_REQ_SENT）或未处于 DEFER_SETUP 状态的通道，确保仅响应合法的连接请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1cd664afc9073e9a51323af4edce0c30b87c935b

@@ -1,0 +1,20 @@
+#标题
+selftests/tracing: subsystem event test 偶发误报失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 tracing 子系统事件测试（subsystem-enable.tc）时，测试用例偶发非预期失败。具体表现为：测试程序检查发现的唯一事件数量少于 3 个，从而触发报错退出，报错信息提示应至少记录 fork、exec 和 exit 事件。此问题在慢速机器上更容易复现。
+
+#主要错误日志
+fail "at least fork, exec and exit events should be recorded"
+
+#问题根因
+测试脚本之前使用 `head -n 100` 仅读取 trace 文件的前 100 行来统计唯一事件数量。由于某些高频事件（如调度事件）可能短时间内大量重复触发，导致前 100 行数据可能仅包含同一种事件类型。这种采样方式无法覆盖足够的时间窗口以捕获 3 种不同的事件，从而导致测试误报失败。
+
+#解决方案
+修改测试脚本，移除 `head -n 100` 的限制，改为实现一个 `check_unique` 函数（使用 awk 脚本），该函数会持续读取 trace 文件内容，动态统计已发现的不同事件名称，一旦检测到 3 种不同事件立即退出读取并返回成功。此方法既解决了慢速机器上读取全量 trace 导致运行时间过长的问题，又避免了因采样行数过少导致的误报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/691eb1c9d3255d1df60686b3879da43636196d2e

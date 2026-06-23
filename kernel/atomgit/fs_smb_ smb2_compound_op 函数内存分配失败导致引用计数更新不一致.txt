@@ -1,0 +1,20 @@
+#标题
+fs/smb: smb2_compound_op 函数内存分配失败导致引用计数更新不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB2 复合操作（compound op）过程中，若 `smb2_compound_op` 函数起始处的 `kzalloc` 分配内存失败，函数直接返回 `-ENOMEM` 并退出。此时，函数内部此前获取的资源（如 `cfile` 结构体指针）未被正确释放，导致引用计数（refcnt）更新不一致，引发内存泄漏或后续访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `smb2_compound_op` 在入口处进行内存分配时，如果失败（`vars == NULL`），代码逻辑直接 `return -ENOMEM`。这跳过了函数尾部的清理流程（如 `cifsFileInfo_put(cfile)`），导致已经持有的对象引用计数无法被递减，破坏了引用计数的平衡性。
+
+#解决方案
+修改错误处理路径，将 `smb2_compound_op` 函数中 `kzalloc` 失败后的 `return -ENOMEM` 语句修改为设置返回值 `rc = -ENOMEM` 并通过 `goto out` 跳转至函数末尾的公共清理代码段。这确保了在内存分配失败时，已持有的资源（如 `cfile`）能被正确释放，从而修复引用计数不一致的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d9583ddc35e8b18fa8657197aa6b9405a501db48

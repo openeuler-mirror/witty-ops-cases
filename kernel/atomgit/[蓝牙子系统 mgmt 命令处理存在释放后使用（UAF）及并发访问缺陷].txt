@@ -1,0 +1,27 @@
+#标题
+[蓝牙子系统 mgmt 命令处理存在释放后使用（UAF）及并发访问缺陷]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+在蓝牙 mgmt 命令处理流程中，由于对 pending 命令队列的并发访问保护不足，导致存在竞争条件。具体表现为：
+1. 命令处理同步函数（如 set_powered_sync）访问命令参数时，该命令可能已被其他线程从队列移除或释放，导致内核崩溃或内存访问错误。
+2. 使用 `__counted_by` 注解的结构体在编译时可能触发动态大小检查相关的构建警告或错误（与 CVE-2025-39981 相关）。
+
+#主要错误日志
+[未知]
+
+#问题根因
+1. **释放后使用（UAF）风险**：原有的 `pending_find` 函数仅查找命令对象，并未在持有锁的情况下保障对象生命周期。在同步执行路径（如 `set_powered_sync`）中，代码直接访问 `cmd->param` 指向的内存，但该命令对象可能已由完成回调路径被 `mgmt_pending_remove` 移除并释放，导致访问已释放内存。
+2. **并发访问不一致**：`mgmt_pending_remove` 在移除命令时会加锁，但移除后操作未有效阻止同步路径继续使用该命令数据。修复补丁引入了 `mgmt_pending_valid` 和 `mgmt_pending_listed` 函数，配合互斥锁 `mgmt_pending_lock`，确保在访问命令数据前验证其有效性，并在有效期间拷贝数据到栈上使用，避免依赖可能被释放的指针。
+3. **编译器内建函数支持**：涉及 `__struct_size` 等宏定义的调整，为了适配 gcc < 10 版本对 `__has_builtin` 的支持，正确处理动态对象大小检测。
+
+#解决方案
+1. **引入有效性检查辅助函数**：新增 `mgmt_pending_valid` 和 `mgmt_pending_listed` 函数，用于在持有 `mgmt_pending_lock` 锁的情况下检查命令对象是否仍在 pending 队列中。
+2. **加锁与数据拷贝**：在 `set_powered_sync`、`set_ssp_sync`、`set_mesh_sync` 等同步函数中，在访问命令参数前加锁，检查命令有效性，若无效则返回 `-ECANCELED`；若有效则将参数数据 `memcpy` 到栈上局部变量中，随后立即释放锁。后续操作使用栈上副本，避免 UAF。
+3. **清理函数替换**：将多处 `mgmt_pending_remove` 替换为 `mgmt_pending_free`，并配合 `mgmt_pending_valid` 使用，确保释放前正确从链表移除且不再被引用。
+4. **头文件调整**：将 `__struct_size` 和 `__member_size` 宏定义移至 `compiler_types.h`，并完善 `__has_builtin` 的兼容性定义，确保编译正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2be611d3df91bcb308e5c5a908c22b6bd051316b

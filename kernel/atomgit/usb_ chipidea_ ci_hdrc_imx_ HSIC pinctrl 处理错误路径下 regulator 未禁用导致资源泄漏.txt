@@ -1,0 +1,24 @@
+#标题
+usb: chipidea: ci_hdrc_imx: HSIC pinctrl 处理错误路径下 regulator 未禁用导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 imx chipidea 驱动加载过程中，若 HSIC pinctrl 处理环节遇到错误（如 `imx_get_clks` 或 `imx_prepare_enable_clks` 失败），驱动探测函数会直接返回错误并退出。此时，先前已成功使能的 HSIC pad regulator 未被禁用，导致稳压器资源引用计数不平衡或资源泄漏。此外，在设备移除（remove）流程中，也存在重复禁用 regulator 的风险或逻辑不一致的问题。
+
+#主要错误日志
+Failed to enable HSIC pad regulator
+Failed to add regulator devm action
+
+#问题根因
+在 `ci_hdrc_imx_probe` 函数中，HSIC pad regulator 在成功使能后，后续的错误处理路径（如获取或准备时钟失败时）跳转标签设计不当，未包含禁用 regulator 的步骤（跳过了 `disable_hsic_regulator` 标签），导致在错误退出时 regulator 仍处于使能状态。同时，移除函数中的清理逻辑与探测函数中的错误处理逻辑不一致，且未利用托管资源管理机制，导致资源生命周期管理混乱。
+
+#解决方案
+引入设备资源管理（devres）机制来自动处理 regulator 的禁用。
+1. 新增 `ci_hdrc_imx_disable_regulator` 辅助函数。
+2. 在 regulator 成功使能后，调用 `devm_add_action_or_reset` 注册该辅助函数。若注册失败则跳转至错误处理流程；若注册成功，后续若发生错误或设备移除，内核资源管理栈会自动调用该回调禁用 regulator。
+3. 移除原代码中手动禁用 regulator 的错误处理标签和相关代码，修正跳转逻辑，确保资源释放路径正确且无重复操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d2736ce21ae39e2c8a04899655109140db2bb445

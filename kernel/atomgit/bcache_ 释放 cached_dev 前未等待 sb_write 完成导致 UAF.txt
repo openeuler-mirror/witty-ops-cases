@@ -1,0 +1,20 @@
+#标题
+bcache: 释放 cached_dev 前未等待 sb_write 完成导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除或停止 bcache 设备（cached_dev）过程中，若此时正有 superblock 写入 I/O 请求在进行中，释放 `cached_dev` 结构体可能导致内核崩溃。由于 `sb_bio` 内嵌在 `cached_dev` 结构体中，I/O 完成回调访问已释放内存会触发 Use-After-Free 问题。
+
+#主要错误日志
+未知
+
+#问题根因
+`cached_dev_free` 函数在释放 `cached_dev` 结构体前，未等待可能正在进行的 superblock 写入操作完成。由于 `sb_bio` 嵌入在 `cached_dev` 结构体内部，若释放结构体时 I/O 仍在进行，I/O 完成时将访问已释放的内存，引发 Use-After-Free 缺陷（CVE-2026-31580）。
+
+#解决方案
+在 `cached_dev_free` 函数中，释放结构体资源前增加同步等待逻辑。通过 `down(&dc->sb_write_mutex)` 和 `up(&dc->sb_write_mutex)` 操作，确保任何持有该锁的 `sb_write` 进程（即正在进行的 I/O）已完成，从而保证无 I/O 正在进行时才进行内存释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/617bc384804e3ad34e6e38249b7b3123d9d2e7df

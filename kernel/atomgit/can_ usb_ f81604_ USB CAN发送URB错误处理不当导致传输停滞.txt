@@ -1,0 +1,29 @@
+#标题
+can: usb: f81604: USB CAN发送URB错误处理不当导致传输停滞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 F81604 USB CAN 设备在进行数据发送时，若底层 USB bulk write URB 发生错误，驱动程序仅打印日志而未进行错误计数更新和队列唤醒操作。这会导致发送队列停滞，数据流无法继续传输，表现为 CAN 发送卡死。
+
+#主要错误日志
+[推断] Tx URB error: ... (具体错误码指针值，如 ERR_PTR(-EIO) 等)
+
+#问题根因
+在 `f81604_write_bulk_callback` 函数中，对 URB 错误状态的处理逻辑不完整：
+1. 仅调用 `netdev_info` 打印了错误日志，未处理错误的后续影响。
+2. 未调用 `can_free_echo_skb` 释放已缓存的 skb，导致内存泄漏或资源未释放。
+3. 未增加 `tx_dropped` 和 `tx_errors` 统计计数。
+4. 最关键的是，未调用 `netif_wake_queue` 唤醒发送队列，导致网络子系统认为队列一直处于停止状态，从而阻塞了后续的数据发送。
+
+#解决方案
+修改 `f81604_write_bulk_callback` 函数，完善错误处理流程：
+1. 增加对特定 URB 状态（-ENOENT, -ECONNRESET, -ESHUTDOWN）的判断，这些情况属于正常终止或硬件已关闭，直接返回不视作错误。
+2. 对于其他错误状态，将日志打印级别从 `netdev_info` 提升为 `netdev_err` 并使用 `net_ratelimit` 限制打印频率。
+3. 调用 `can_free_echo_skb` 释放 echo socket buffer。
+4. 更新 `netdev` 的 `tx_dropped` 和 `tx_errors` 统计计数。
+5. 调用 `netif_wake_queue` 重新唤醒网络发送队列，确保数据流能够继续。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/be97659ae71929555ee6691c803fef586a25a0ca

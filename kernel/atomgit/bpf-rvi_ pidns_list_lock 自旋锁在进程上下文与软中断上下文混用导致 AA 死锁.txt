@@ -1,0 +1,46 @@
+#标题
+bpf-rvi: pidns_list_lock 自旋锁在进程上下文与软中断上下文混用导致 AA 死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在调用 `unshare` 系统调用创建新的 PID namespace 时，可能触发内核 AA（Alloc-Arch）死锁，导致进程挂起或系统响应异常。调用栈显示在进程上下文获取锁期间被中断，且在软中断处理流程（RCU callback）中尝试再次获取同一把锁。
+
+#主要错误日志
+Call trace:
+  native_queued_spin_lock_slowpath+0x71/0x428
+  destroy_pid_namespace+0x100/0x110
+  put_pid_ns+0x90/0xc8
+  put_pid+0x8c/0xc8
+  delayed_put_pid+0x1c/0x30
+  rcu_do_batch+0x164/0x580
+  rcu_core+0x130/0x2b8
+  rcu_core_si+0x18/0x30
+  handle_softirqs+0x120/0x328
+  ...
+  create_pid_namespace+0x214/0x3c0
+  copy_pid_ns+0x90/0xf0
+  create_new_namespaces+0xc8/0x368
+  unshare_nsproxy_namespaces+0x6c/0xc0
+  ksys_unshare+0x130/0x418
+  __arm64_sys_unshare+0x1c/0x38
+  ...
+
+#问题根因
+自旋锁 `pidns_list_lock` 在代码中被用于两个不同的上下文：
+1. 进程上下文（如 `create_pid_namespace` 函数）；
+2. 软中断上下文（Bottom Half，如 `destroy_pid_namespace` 被 RU callback 调用时）。
+代码原先在两处均使用 `spin_lock`，在进程上下文持有锁时，若发生中断并进入软中断处理流程，软中断中再次尝试获取同一把锁，将导致自锁，引发 AA 死锁问题。
+
+#解决方案
+将所有涉及 `pidns_list_lock` 的锁定操作从 `spin_lock` / `spin_unlock` 替换为 `spin_lock_bh` / `spin_unlock_bh`。
+修改涉及的函数包括：
+- `create_pid_namespace`
+- `destroy_pid_namespace`
+- `pidns_list_reset`
+- `pidns_calc_avenrun`
+该修改确保在进程上下文获取锁时禁用软中断，从而避免与软中断上下文争抢锁而发生的死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/93acc40e9b4d56454ab1c8771cf7f254b7b967fb

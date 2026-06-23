@@ -1,0 +1,20 @@
+#标题
+KVM: arm64: CCA Guest Panic When DVMBM is Enabled
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使能 TLBI 优化参数 `kvm-arm.dvmbm_enabled=1` 后，CCA 虚拟机在执行 TLB 刷新时读取 `SYS_LSUDVMBM_EL2` 寄存器获得错误的 bitmap，导致虚拟机发生 Panic。此外，当 LPI 使能时，CPU 进入下电模式会导致 dvmbm 控制寄存器被重置为 0，可能引发功能故障。
+
+#主要错误日志
+未知
+
+#问题根因
+启用 `kvm-arm.dvmbm_enabled=1` 会永久设置 `SYS_LSUDVM_CTRL_EL2` 控制位。由于 CCA 尚不支持该特性，CCA VM 在执行 TLB flush 时会读取到错误的 bitmap 导致 Panic。另外，在 LPI 使能场景下，CPU 进入下电模式后寄存器被重置为 0，导致功能异常。
+
+#解决方案
+将 `SYS_LSUDVM_CTRL_EL2` 控制位的设置改为动态操作：在 `vcpu_load` 时设置，在 `vcpu_put` 时清除，将优化范围限制在普通 VM。同时，在 `kvm_arm_init` 中重置寄存器默认值为 0 以确保安全。对于 LPI 场景，利用 vcpu put/load 机制保证 CPU 下电后重新运行 vCPU 时能重写控制寄存器，避免寄存器重置带来的影响。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7c56727fd614fac5a3dceda041e20a73eb1c1d18

@@ -1,0 +1,23 @@
+#标题
+sentry驱动sscanf缓冲区溢出及输入校验缺失修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在向 `proc_client_info_write` 接口写入特定格式数据时，存在内核缓冲区溢出风险，可能导致内核内存破坏或程序崩溃。
+2. 在向 `proc_oom_rate_limit_write` 接口写入超长字符串（大于 `OOM_RATE_LIMIT_RAW_STR_LEN`）或空字符串时，触发非法内存访问或内存分配异常。
+
+#主要错误日志
+- `pr_err("invalid input length for oom_rate_limit, max %d\n", OOM_RATE_LIMIT_RAW_STR_MAX_LEN);`
+
+#问题根因
+1. **缓冲区溢出**：在 `proc_client_info_write` 函数中，`client_jetty_id_part` 缓冲区大小为 `JETTY_ID_MAX_LEN` (6字节)，但 `sscanf` 格式字符串使用了 `%6[^\n]`，该格式最多可读取6个字符并添加1个空终止符，共计7字节，导致写入越界。
+2. **输入长度校验缺失**：在 `proc_oom_rate_limit_write` 函数中，未对用户输入的长度 `cnt` 进行合法性检查。当 `cnt` 为0或超过最大限制时，代码继续执行后续分配和写入逻辑，导致无效操作或潜在的内存安全问题。
+
+#解决方案
+1. 修复 `proc_client_info_write` 中的格式字符串，将 `%6[^\n]` 修改为 `%5[^\n]`，确保读取的最大字符数不超过缓冲区容量（5字符+1终止符=6字节）。
+2. 在 `proc_oom_rate_limit_write` 函数开头增加输入长度校验，若 `cnt` 为0或大于 `OOM_RATE_LIMIT_RAW_STR_MAX_LEN`，则打印错误日志并返回 `-EINVAL`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c7cec974c74ff5f904936557d8b8cf68719941cd

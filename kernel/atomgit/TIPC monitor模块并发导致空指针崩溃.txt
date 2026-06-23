@@ -1,0 +1,38 @@
+#标题
+TIPC monitor模块并发导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在TIPC（Transparent Inter Process Communication）协议栈中，当bearer启用与禁用操作在短时间内并发执行时，内核触发通用保护故障或空指针解引用，导致系统崩溃。具体表现为在执行`tipc_net_finalize_work`工作队列任务时，`tipc_mon_reinit_self`函数访问了已被置空的`mon->self`指针，引发Oops。
+
+#主要错误日志
+```
+tipc: Node number set to 1055423674
+Oops: general protection fault, probably for non-canonical address 0xdffffc0000000000: 0000 [#1] SMP KASAN NOPTI
+KASAN: null-ptr-deref in range [0x0000000000000000-0x0000000000000007]
+CPU: 3 UID: 0 PID: 6017 Comm: kworker/3:5 Not tainted 6.15.0-rc1-syzkaller-00246-g900241a5cc15 #0 PREEMPT(full)
+Workqueue: events tipc_net_finalize_work
+RIP: 0010:tipc_mon_reinit_self+0x11c/0x210 net/tipc/monitor.c:719
+Call Trace:
+ <TASK>
+ tipc_net_finalize+0x10b/0x180 net/tipc/net.c:140
+ process_one_work+0x9cc/0x1b70 kernel/workqueue.c:3238
+ ...
+```
+
+#问题根因
+问题由启用bearer与禁用bearer之间的竞态条件引起。
+在禁用bearer的流程中，`tipc_mon_delete()`函数持有写锁并将`mon->self`置为`NULL`。
+与此同时，启用bearer流程中提交的`tipc_net_finalize_work`工作队列可能正在执行。该工作队列调用`tipc_mon_reinit_self()`，虽然该函数也获取了写锁，但在获取锁后直接访问`mon->self->addr`进行赋值，未检查`mon->self`是否为空。
+时序如下：
+1. disabling_bearer: 持锁，执行 `mon->self = NULL`，释放锁。
+2. enabling_bearer (workqueue): 获取锁，执行 `mon->self->addr = ...`，此时`mon->self`已为`NULL`，导致空指针解引用。
+
+#解决方案
+在`tipc_mon_reinit_self()`函数中，于对`mon->self`成员进行解引用访问前增加非空判断。
+具体修改为：在持有写锁的状态下，判断`if (mon->self)`，仅当指针有效时才执行`mon->self->addr = tipc_own_addr(net)`操作，从而避免访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d75e4eb6f5287c3b9a56a85e478d7ab752cf78ca

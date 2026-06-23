@@ -1,0 +1,29 @@
+#标题
+ub: cdma: jfs call trace bugfix
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CDMA（Compression DMA）驱动进行设备移除或复位流程时，内核触发 call trace（调用栈追踪）。具体表现为在执行 `dma_delete_context`、`dma_free_queue` 或 `dma_unregister_seg` 等内核态销毁接口时，由于并发竞争或状态不一致导致内核崩溃或警告。
+
+#主要错误日志
+- "flush cqe timeout, id = %u. PI = %u, CI = %u, next_send_ssn = %u next_rcv_ssn = %u state = %u.\n"
+- "modify jfs precondition timeout, id = %u. PI = %u, CI = %u, next_send_ssn = %u next_rcv_ssn = %u state = %u.\n"
+- "cmd flush cmdcnt is %d\n"
+- "cmd flush kcmdcnt is %d\n"
+
+#问题根因
+1. **同步机制缺失**：驱动在进行 context、queue、segment 的销毁操作时，缺少内核态命令计数（kcmdcnt）的保护，导致设备移除流程中无法正确等待内核态命令执行完毕，引发竞争条件及 call trace。
+2. **设备移除流程顺序错误**：在 `cdma_remove` 函数中，`cdma_reset_unmap_vma_pages` 被错误地在 `cdma_client_callback` 之后调用，且 `cdma_kcmd_flush` 缺失，导致资源释放顺序混乱。
+3. **枚举值顺序错误**：`cdma_jetty_state` 枚举中 `CDMA_JETTY_SUSPENDED` 与 `CDMA_JETTY_ERROR` 的定义顺序不符合逻辑预期，可能导致状态判断异常。
+4. **日志打印缺陷**：部分超时警告日志信息不够明确（如将 "flush cqe timeout" 误报为 "ta timeout"），且部分日志未关联具体的设备设备信息。
+
+#解决方案
+1. **新增内核态命令计数机制**：在 `cdma_dev` 结构体中新增 `kcmdcnt` 原子变量和 `kcmddone` 完成量，并实现 `cdma_kcmd_inc`、`cdma_kcmd_dec` 和 `cdma_kcmd_flush` 接口，用于保护内核态销毁操作。
+2. **修复销毁接口**：在 `dma_delete_context`、`dma_free_queue` 和 `dma_unregister_seg` 接口中增加 `cdma_kcmd_inc/dec` 调用，确保操作期间引用计数正确。
+3. **修正设备移除流程**：在 `cdma_remove` 和 `cdma_reset_uninit` 流程中正确加入 `cdma_kcmd_flush` 调用，并调整 `cdma_reset_unmap_vma_pages` 的执行顺序至 `cdma_client_callback` 之前，确保资源依序释放。
+4. **修正枚举与日志**：调整 `CDMA_JETTY_SUSPENDED` 和 `CDMA_JETTY_ERROR` 的枚举顺序，优化日志打印内容使其更精确，并将部分 `pr_info` 改为 `dev_info` 以关联设备上下文。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3549dea457150334fe578a1f10fe3bd98303ee35

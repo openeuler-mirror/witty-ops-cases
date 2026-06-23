@@ -1,0 +1,29 @@
+#标题
+perf test 子命令因文件描述符泄漏导致测试失败及异常退出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `perf test -vv 7`（PERF_RECORD_* events & perf_sample fields 测试项）时，若因权限不足（如 perf_event_paranoid 设置）导致 `sys_perf_event_open` 失败，测试无法正常结束。
+具体表现为：
+1. 测试进程检测到文件描述符泄漏，报错 "Leak of file descriptor ... that opened: 'pipe:[...]'"。
+2. 测试进程触发异常信号（unexpected signal (6)），即 SIGABRT，导致测试失败。
+
+#主要错误日志
+```text
+sys_perf_event_open failed, error -13
+perf_evlist__open: Permission denied
+ ---- end(-2) ----
+Leak of file descriptor 6 that opened: 'pipe:[14200347]'
+ ---- unexpected signal (6) ----
+```
+
+#问题根因
+在 `test__PERF_RECORD` 测试函数中，程序先启动了一个 workload 进程，随后尝试打开 perf 事件。当打开事件失败（例如因权限限制返回 error -13）时，代码直接跳转到 `out_delete_evlist` 进行清理并退出。在此错误处理路径中，未调用 `evlist__cancel_workload` 来终止此前启动的 workload 进程及其管道，导致 workload 的 gopipe 文件描述符未被关闭，从而触发文件描述符泄漏检查失败，进而引发程序异常退出。
+
+#解决方案
+在 `tools/perf/tests/perf-record.c` 中，针对所有可能跳转到 `out_delete_evlist` 的错误处理路径，在跳转前增加调用 `evlist__cancel_workload(evlist)`。这确保了在测试因 `sched__get_first_possible_cpu`、`sched_setaffinity`、`perf_evlist__open` 或 `evlist__mmap` 等原因失败退出前，能够正确取消 workload 并释放相关资源，避免文件描述符泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7bfbb16158154612e8a6f5965fcc9743006e2037

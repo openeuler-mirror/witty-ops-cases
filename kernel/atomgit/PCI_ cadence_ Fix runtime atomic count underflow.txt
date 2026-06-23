@@ -1,0 +1,20 @@
+#标题
+PCI: cadence: Fix runtime atomic count underflow
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Cadence PCIe 主机驱动初始化过程中，若 `pci_host_probe()` 调用失败，系统会触发电源管理核心的警告信息，提示运行时 PM 引用计数发生下溢。
+
+#主要错误日志
+"runtime PM usage count underflow!"
+
+#问题根因
+在 `cdns_pcie_host_setup()` 函数中，当 `pci_host_probe()` 执行失败时，代码逻辑错误地调用了 `pm_runtime_put_sync()` 来减少运行时 PM 计数。然而，该函数内部并未增加过运行时 PM 计数，计数是由上层调用者（如 `cdns_plat_pcie_probe` 或 `j721e_pcie_probe`）增加的。上层调用者在捕获到错误后也会执行减少计数的操作，导致计数被多次减少，从而引发引用计数下溢。
+
+#解决方案
+移除 `cdns_pcie_host_setup()` 函数中错误处理路径下的 `pm_runtime_put_sync()` 调用，在 `pci_host_probe()` 失败时直接返回错误码，由上层调用者统一处理运行时 PM 计数的释放，避免重复减操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0681c3d6c37fd01ed83db4b911c9262ec41390bb

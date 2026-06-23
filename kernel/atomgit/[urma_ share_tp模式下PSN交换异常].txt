@@ -1,0 +1,28 @@
+#标题
+[urma: share_tp模式下PSN交换异常]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[在 share_tp 模式下进行 TP（Transport Path）创建与交换时，由于 PSN（Packet Sequence Number）处理逻辑错误，导致通信双方 PSN 不匹配。具体表现为：复用时未同步已有的 tx_psn，新建时未将生成的 tx_psn 回填到配置结构体中，导致底层通信连接建立异常或数据传输乱序。]
+
+#主要错误日志
+[未知]
+
+#问题根因
+[在 share_tp 模式下，内核代码对 tx_psn 的处理存在三处缺陷：
+1. 复用旧 TP 链路时，未将已存储的 tx_psn 赋值给 stp_cfg，导致使用了未初始化或错误的 PSN 值。
+2. 创建新 TP 链路时，虽然生成了随机 tx_psn，但未将其回填给 stp_cfg->tx_psn，导致后续流程无法获取正确的 PSN。
+3. 在 `ubcore_import_jetty_compat` 函数中，未针对 share_tp 模式做区分处理，错误地重新生成了随机 tx_psn，覆盖了前面流程确定的值，破坏了 PSN 的一致性。]
+
+#解决方案
+[修改 `ubcore_get_rm_stp_list` 与 `ubcore_import_jetty_compat` 函数逻辑：
+1. 在 `ubcore_get_rm_stp_list` 中，当查找并复用已有 TP 信息（info_ext）时，增加赋值操作 `stp_cfg->tx_psn = info_ext->tx_psn`。
+2. 在 `ubcore_get_rm_stp_list` 中，当创建新 TP 信息时，将生成的 `tx_psn` 同时存储到 `tp_info->tx_psn` 和 `stp_cfg->tx_psn` 中。
+3. 调整 `handle_create_req` 中 `tx_psn` 的生成与获取顺序，确保在调用 `ubcore_get_rm_stp_list` 后能正确获取到 stp_cfg 中的 tx_psn。
+4. 在 `ubcore_import_jetty_compat` 中增加判断，如果是 share_tp 模式，直接使用 `cfg->stp_cfg.tx_psn`，否则才生成随机 tx_psn。
+5. 在 `ubcore_rm_tp_info` 结构体和 `ubcore_share_tp_cfg` 结构体中新增 `tx_psn` 字段用于传递与存储。]
+
+#来源
+[https://atomgit.com/openeuler/kernel/commit/e68213582b5fb754e62d597fa7254ce2b9b45b56]

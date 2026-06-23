@@ -1,0 +1,24 @@
+#标题
+comedi: dt2815 驱动在无硬件时触发缺页异常崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统不存在实际的 dt2815 硬件设备时，用户通过 COMEDI_DEVCONFIG ioctl 将驱动绑定到任意 I/O 地址会导致内核崩溃。具体表现为触发缺页异常，系统无法处理内核模式下的超级用户写入访问，导致内核 panic 或 oops。
+
+#主要错误日志
+BUG: unable to handle page fault for address: 000000007fffff90
+#PF: supervisor write access in kernel mode
+#PF: error_code(0x0002) - not-present page
+RIP: 0010:dt2815_attach+0x6e0/0x1110
+[推断] No hardware detected at I/O base 0x... (修复后新增的报错日志)
+
+#问题根因
+dt2815 驱动在 attach 过程中缺少硬件检测机制。当用户通过 COMEDI_DEVCONFIG ioctl 指定任意 I/O 地址时，若该地址无实际硬件存在，`inb()` 操作会返回 0xff（浮空总线状态），但后续的 `outb()` 操作在竞态条件下可能访问非法地址，触发未定义行为导致页面错误。
+
+#解决方案
+在驱动 attach 流程中增加硬件存在性检测。在执行任何写入操作前，首先读取状态寄存器（DT2815_STATUS），若读取值为 0xff（表示浮空总线，无硬件），则终止 attach 流程并返回 `-ENODEV`，从而避免对不存在的硬件执行 I/O 写入操作导致崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0bd4891cc53142500b9cd837a4f6c30dbac58547

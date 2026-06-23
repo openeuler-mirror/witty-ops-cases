@@ -1,0 +1,20 @@
+#标题
+iommu/apple-dart: T8110 DART 中断处理未清除流错误指示位导致 IRQ 无法释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Apple T8110 DART（特别是 t602x 变体硬件）上，当发生 IOMMU 错误触发中断后，中断处理程序未能完全清除硬件错误状态。这导致中断无法正确清除（IRQ only clears when these are cleared），可能引发中断风暴、系统响应迟滞或后续中断处理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+T8110 类型的 DART 硬件在发生错误时，除了 `DART_T8110_ERROR` 寄存器外，还会在 `DART_T8110_ERROR_STREAMS` 寄存器中置位流错误指示。现有代码逻辑仅清除了 `DART_T8110_ERROR` 寄存器，遗漏了对 `DART_T8110_ERROR_STREAMS` 相关位的清除。在 t602x 等硬件变体上，若不同时清除这些流错误指示位，硬件 IRQ 将无法恢复 inactive 状态。
+
+#解决方案
+在 `apple_dart_t8110_irq` 中断处理函数中，在清除 `DART_T8110_ERROR` 寄存器后，增加对 `DART_T8110_ERROR_STREAMS` 寄存器的清除操作。具体实现为：遍历所有 stream 占用的 U32 寄存器空间，批量写入 `U32_MAX`（即全 1）以清除所有流错误指示位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3aac1681e3f76a709644d73cf3985e14f04bac62

@@ -1,0 +1,22 @@
+#标题
+net: dsa: microchip: PTP 中断映射检查逻辑错误导致故障检测失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Microchip KSZ 系列交换芯片驱动进行 PTP（精确时间协议）中断初始化时，若无法找到有效的 IRQ 映射（即 `irq_find_mapping` 返回 0），原有代码未能正确进入错误处理流程。这导致驱动在未获得有效 IRQ 号的情况下继续运行，可能导致后续 PTP 时间戳功能异常或中断处理错误。
+
+#主要错误日志
+未知
+
+#问题根因
+内核函数 `irq_find_mapping()` 的返回值定义为：成功时返回正数 IRQ 号，未找到映射时返回 0，该函数从不返回负值。然而驱动代码 `ksz_ptp_irq_setup()` 中错误地使用了 `if (ptpirq->irq_num < 0)` 来判断调用是否失败。由于返回值 0 不满足小于 0 的条件，代码跳过了错误处理逻辑，错误地认为 IRQ 映射成功。
+
+#解决方案
+修改 `drivers/net/dsa/microchip/ksz_ptp.c` 文件中的 `ksz_ptp_irq_setup` 函数：
+1. 将中断号检查条件从 `if (ptpirq->irq_num < 0)` 修改为 `if (!ptpirq->irq_num)`，以正确捕获返回值为 0 的失败情况。
+2. 在判断失败时，将返回值 `ret` 显式设置为 `-EINVAL`（原先错误地赋值为 `ptpirq->irq_num` 即 0），确保向上层传递有效的错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/536201591bb7276488070cf5f6ae30d72181b915

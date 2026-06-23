@@ -1,0 +1,36 @@
+#标题
+BPF协议转换未清空路由导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 BPF 程序进行 NAT46 转换（将 IPv4 流量盲目翻转为 IPv6）并涉及组播环路时，内核发生空指针引用崩溃。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000000
+  ip6_rcv_core (net/ipv6/ip6_input.c:190:20)
+  ipv6_rcv (net/ipv6/ip6_input.c:306:8)
+  process_backlog (net/core/dev.c:6186:4)
+  napi_poll (net/core/dev.c:6906:9)
+  net_rx_action (net/core/dev.c:7028:13)
+  do_softirq (kernel/softirq.c:462:3)
+  netif_rx (net/core/dev.c:5326:3)
+  dev_loopback_xmit (net/core/dev.c:4015:2)
+  ip_mc_finish_output (net/ipv4/ip_output.c:363:8)
+  NF_HOOK (./include/linux/netfilter.h:314:9)
+  ip_mc_output (net/ipv4/ip_output.c:400:5)
+  dst_output (./include/net/dst.h:459:9)
+  ip_local_out (net/ipv4/ip_output.c:130:9)
+  ip_send_skb (net/ipv4/ip_output.c:1496:8)
+  udp_send_skb (net/ipv4/udp.c:1040:8)
+  udp_sendmsg (net/ipv4/udp.c:1328:10)
+
+#问题根因
+BPF 辅助函数在修改 skb->protocol（如从 ETH_P_IP 修改为 ETH_P_IPV6）时，未清除路由缓存（dst entry）。在涉及组播环路发送的场景下，数据包经过 IPv4 组播输出路径后携带了 IPv4 的 dst，随后通过 netif_rx 进入 ingress 流程。此时 BPF 程序将协议修改为 IPv6，导致数据包进入 ip6_rcv_core 函数，该函数尝试使用旧的 IPv4 dst 指针进行处理，从而引发空指针崩溃。
+
+#解决方案
+在所有修改 skb->protocol 的 BPF 辅助函数中增加路由缓存清理逻辑。新增 `bpf_skb_change_protocol` 函数，在设置协议的同时检查并调用 `skb_dst_drop` 清除旧的路由信息，确保协议转换后不会残留旧协议的 dst 引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b0be8c186c26120b40ebca214b90f39ef0068226

@@ -1,0 +1,23 @@
+#标题
+resctrl: 移除监控组时 CPU 默认属性设置存在并发读写风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 resctrl 控制组或监控组的 rmdir 操作时，如果此时正在进行任务调度（`__resctrl_sched_in`），可能会读取到正在被修改的“撕裂”状态的 CLOSID 或 RMID 值。这在 MPAM 等架构下尤为关键，因为其硬件值需要同时写入 CLOSID 和 RMID，若读取到不一致的值会导致硬件配置错误或不可预期的资源控制行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在移除 resctrl 组时，`rdtgroup_rmdir_ctrl()` 和 `rdtgroup_rmdir_mon()` 会直接通过 `per_cpu` 宏修改 CPU 的 `pqr_state` 状态（`default_closid` 和 `default_rmid`），而调度器入口函数 `__resctrl_sched_in()` 也会读取这些值。
+由于修改操作可能由一个 CPU 发起并写入另一个 CPU 的 per-cpu 变量，而目标 CPU 可能正在读取这些值，双方缺乏锁保护或原子操作保护，导致了读写竞争，可能产生中间状态的错误值。
+
+#解决方案
+1. 引入辅助函数 `resctrl_arch_set_cpu_default_closid_rmid()`，用于统一设置 CPU 的默认 CLOSID 和 RMID 值。
+2. 在辅助函数内部及 `__resctrl_sched_in()` 读取路径中使用 `WRITE_ONCE()` 和 `READ_ONCE()` 宏。这确保了在跨 CPU 修改 per-cpu 变量时，读取端不会观测到部分更新的“撕裂”值，保证了数据的一致性。
+3. 将原来分散的直接赋值操作替换为调用该辅助函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d7e4e18bbe685352149841ae4214e55e7d216558

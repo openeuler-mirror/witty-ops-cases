@@ -1,0 +1,20 @@
+#标题
+slimbus: ngd: Fix reference count leak in qcom_slim_ngd_notify_slaves
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Qualcomm SLIMBus NGD 驱动在调用 `qcom_slim_ngd_notify_slaves()` 函数处理从设备通知时，存在内核对象引用计数泄漏。该问题会导致内核资源无法正确释放，随着时间推移可能造成内存泄漏或设备状态异常。
+
+#主要错误日志
+- "Failed to get logical address\n"（当 slim_get_logical_addr 执行失败时触发）
+
+#问题根因
+函数 `qcom_slim_ngd_notify_slaves()` 内部调用了 `of_slim_get_device()`，该函数进一步通过 `device_find_child()` 获取了设备引用。根据内核文档，`device_find_child()` 获取的引用在使用完毕后必须由调用者通过 `put_device()` 释放。原代码在获取引用并使用后，未执行 `put_device()` 操作，导致引用计数泄漏。
+
+#解决方案
+在 `qcom_slim_ngd_notify_slaves()` 函数中，完成对设备的使用（即调用 `slim_get_logical_addr()` 之后）增加 `put_device(&sbdev->dev)` 调用，以确保正确释放设备引用计数，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3ba0a395606bee7bde00145f64fce3ff305fc927

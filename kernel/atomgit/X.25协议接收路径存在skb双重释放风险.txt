@@ -1,0 +1,20 @@
+#标题
+X.25协议接收路径存在skb双重释放风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当X.25协议处理接收到的分片数据时，若内存分配失败，系统可能触发skb双重释放，导致内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `x25_queue_rx_frame` 中，当 `alloc_skb` 分配失败时，原有逻辑调用了 `kfree_skb(skb)` 并返回错误码 1。该错误码逐层返回至 `x25_backlog_rcv` 后，由于返回值指示“未入队”，`x25_backlog_rcv` 再次调用 `kfree_skb(skb)`，导致同一个 skb 被释放两次。
+
+#解决方案
+移除 `x25_queue_rx_frame` 函数中 `alloc_skb` 失败时的 `kfree_skb(skb)` 调用，直接返回错误码 1。skb 的释放权保留给上层调用者 `x25_backlog_rcv` 处理，从而避免重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eb0a95610dd7d5c85a4f5ef999624164e3410fe4

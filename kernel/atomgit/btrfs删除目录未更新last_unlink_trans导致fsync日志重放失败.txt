@@ -1,0 +1,33 @@
+#标题
+btrfs删除目录未更新last_unlink_trans导致fsync日志重放失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在Btrfs文件系统中，当用户对某个目录执行`rmdir`操作后（该目录仍被打开持有文件描述符），紧接着对该文件描述符执行fsync，若发生掉电并重启，文件系统挂载失败。
+具体表现为：
+1. 挂载文件系统时日志重放失败，返回 `-EIO` 错误。
+2. 内核日志报告关键元数据错误：`BTRFS critical ... corrupt leaf ... invalid nlink: has 2 expect no more than 1 for dir`。
+3. 触发内核警告（WARNING），提示树块写入时检测到数据损坏：`WARNING: fs/btrfs/disk-io.c:326 at btree_csum_one_bio`。
+
+#主要错误日志
+- `[445771.626482] BTRFS info (device dm-0): first mount of filesystem ...`
+- `[445771.638088] BTRFS critical (device dm-0): corrupt leaf: root=5 block=30408704 slot=10 ino=258, invalid nlink: has 2 expect no more than 1 for dir`
+- `[445771.660144] BTRFS error (device dm-0): block=30408704 write time tree block corruption detected`
+- `[445771.662358] ------------[ cut here ]------------`
+- `[445771.662358] WARNING: fs/btrfs/disk-io.c:326 at btree_csum_one_bio+0x217/0x230 [btrfs]`
+- `[445771.713382] BTRFS error (device dm-0): error while writing out transaction: -5`
+- `[445771.717936] BTRFS error (device dm-0 state EA): failed to recover log trees with error: -5`
+- `[445771.719681] BTRFS error (device dm-0 state EA): open_ctree failed: -5`
+
+#问题根因
+在执行`rmdir`删除目录时，内核函数`btrfs_rmdir`调用`btrfs_unlink_inode`解除了链接，但未调用`btrfs_record_unlink_dir`来更新目录的`last_unlink_trans`字段。
+根据Btrfs的fsync逻辑，任何移除了链接的inode都必须将`last_unlink_trans`更新为当前事务ID，否则fsync和日志重放逻辑将无法正确处理该事务。由于该字段未更新，fsync未能正确回退到事务提交模式，导致日志重放过程中元数据不一致，触发了"invalid nlink"错误。
+
+#解决方案
+在`btrfs_rmdir`函数中，调用`btrfs_unlink_inode`之前，显式调用`btrfs_record_unlink_dir(trans, dir, inode, false)`来更新目录的`last_unlink_trans`字段。
+此修改将更新`last_unlink_trans`的逻辑统一到`btrfs_unlink_inode`调用流程中（或由调用者显式执行），确保在删除目录时事务ID被正确记录，从而保证fsync在需要时能正确触发事务提交来保证数据一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a03fb9090930e2590f52258064b7d888f40bceb4

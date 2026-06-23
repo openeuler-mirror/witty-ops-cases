@@ -1,0 +1,24 @@
+#标题
+蓝牙 hci_event 中 OOB 越界读取与无限循环故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 `hci_le_create_big_complete_evt` 事件时，若底层上报的事件数据中 `num_bis`（BIS 数量）与实际预期的 BIS 连接数不匹配（例如事件报告的 BIS 数量少于 `bis_handle` 数组需处理的数量），内核将发生 OOB（Out-of-Bounds）越界读取。
+此外，当所有 BIS 连接在 BIG 创建完成前已关闭，或处理过程中出现未预期的错误状态时，可能触发无限循环或导致 BIG（Broadcast Isochronous Group）无法被正确终止，造成资源泄露或内核状态异常。
+
+#主要错误日志
+- "Not enough BIS handles for BIG 0x%2.2x"
+- "Failed to set BIS handle for BIG 0x%2.2x"
+
+#问题根因
+在 `hci_le_create_big_complete_evt` 函数处理 BIG 创建完成事件时，代码逻辑未对数组索引 `i` 与事件报告的 `num_bis` 进行有效边界检查。当事件数据异常时，循环继续执行导致访问 `ev->bis_handle` 数组越界（OOB read）。同时，错误处理路径未覆盖某些异常情况（如 `hci_conn_set_handle` 失败或特定错误状态），导致 BIG 无法正确终止或循环逻辑失控。
+
+#解决方案
+在遍历处理 BIS 连接时增加边界检查：若索引 `i` 超过 `ev->num_bis`，打印错误日志 "Not enough BIS handles"，设置状态为 `HCI_ERROR_UNSPECIFIED`，执行连接确认与删除操作后跳出处理。
+增加 `hci_conn_set_handle` 失败的处理分支：若设置句柄失败，打印错误日志 "Failed to set BIS handle"，强制设置错误状态以确保 BIG 被终止，并清理连接资源。
+优化终止条件判断：在循环结束后，检查是否存在 `HCI_ERROR_UNSPECIFIED` 状态，确保在发生未指定错误或无 BIS 连接时能正确终止 BIG。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/478956c0a6a64e275df8050c10c55e4b602ba936

@@ -1,0 +1,20 @@
+#标题
+kselftest/arm64: syscall-abi 测试触发非法指令异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 平台上运行 kselftest 中的 syscall-abi 测试时，若系统支持 FEAT_SVE 但不支持 FEAT_SME，测试程序会触发非法指令异常。
+
+#主要错误日志
+未知
+
+#问题根因
+汇编代码逻辑错误导致寄存器值使用混乱。在检查 SVCR（Streaming Vector Control Register）状态时，代码使用 `svcr_in` 的值来决定是否启用 ZA（SME 矩阵寄存器），但在跳转标签的处理上存在缺陷。具体而言，代码在后续加载 ZA 寄存器的流程中使用了 x2 寄存器判断 ZA 是否启用，但由于控制流跳转逻辑不当，x2 寄存器中可能并未加载正确的 `svcr_in` 值（特别是在 !FEAT_SME 场景下），导致错误地执行了 SME 相关指令，从而触发非法指令异常。
+
+#解决方案
+修改 `tools/testing/selftests/arm64/abi/syscall-abi-asm.S` 文件中的汇编跳转逻辑，重新调整代码标号位置。确保在进行 SVCR 检测、ZA 寄存器加载/保存以及 ZT0 处理时，x2 寄存器已正确加载 `svcr_in` 的值，或者在不支持 SME 的情况下正确跳过相关指令，避免在 FEAT_SVE && !FEAT_SME 的硬件配置下执行非法指令。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9cad1cba48c16fdb1d7ca85202139dde55451dff

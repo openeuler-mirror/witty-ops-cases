@@ -1,0 +1,26 @@
+#标题
+fuse: 多节点并发 setattr 导致 inode 缓存属性陈旧
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多客户端挂载 FUSE 文件系统的场景下，当不同节点并发执行 `chmod`、`chown` 或 `truncate` 等涉及 `->setattr()` 的操作时，部分节点可能缓存了陈旧的 inode 属性，导致节点间数据视图不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+问题由 `fuse_setattr()` 与 `fuse_reverse_inval_inode()` 之间的竞争条件引起。具体的竞争时序如下：
+1. client-1 发送 setattr (iattr-1) 请求到服务端；
+2. client-1 收到服务端回复；
+3. 在 client-1 通过 `fuse_change_attributes_common()` 更新缓存的 iattr-1 之前，服务端收到了来自 client-2 的另一个 setattr (iattr-2) 请求；
+4. 服务端请求 client-1 更新 inode 的 attr_version 并使缓存失效，此时 iattr-1 变为陈旧数据；
+5. client-2 收到回复并缓存 iattr-2；
+6. 步骤 2 继续，client-1 执行 `fuse_change_attributes_common()`，将陈旧的 iattr-1 更新到缓存中，覆盖了步骤 4 的失效标记。
+
+#解决方案
+在 `fuse_do_setattr()` 函数中引入属性版本检查机制。在发送 setattr 请求前记录当前的 `attr_version`，在收到回复准备更新属性前，比较当前 `fuse_inode` 的 `attr_version` 与记录值。若当前版本号更大（说明在请求期间属性被修改过），则将属性有效期 (`attr_valid`) 设置为 0，强制下次访问时从用户空间重新获取最新属性，从而避免缓存陈旧数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3af1f0858593456aa909744698cf6ad464215d0f

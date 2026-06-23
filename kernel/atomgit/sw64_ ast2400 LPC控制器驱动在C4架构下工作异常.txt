@@ -1,0 +1,23 @@
+#标题
+sw64: ast2400 LPC控制器驱动在C4架构下工作异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构的 C4 子系统上，ast2400 LPC（Low Pin Count）控制器驱动无法正常工作。由于硬件缺陷，驱动对地址长度的处理不当以及资源索引获取错误，导致 Super I/O 设备初始化失败或功能异常，无法正确读写配置寄存器。
+
+#主要错误日志
+未知
+
+#问题根因
+C4 架构的 LPC 控制器存在硬件缺陷，传入的地址长度为 48 位。驱动程序原有代码将地址类型定义为 `unsigned int`（32位），导致地址截断；同时，获取 Super I/O 资源的索引值错误地使用了 1，而有效的资源索引应为 0，导致无法获取正确的 IO 资源。
+
+#解决方案
+1. 将涉及 LPC 地址的相关变量类型（如 `port`、`superio_ast2400_efir`、`superio_ast2400_efdr`）从 `unsigned int` 修改为 `unsigned long`，以适配 48 位地址长度。
+2. 修正 IO 端口偏移计算逻辑，针对 C4 架构引入 `PORT_OFFSET`（值为 12），在读写配置寄存器时通过 `(1 << PORT_OFFSET)` 计算正确的寄存器偏移量。
+3. 将 `platform_get_resource` 函数的资源索引参数从 1 修正为 0，确保正确获取 Super I/O 资源。
+4. 在 C4 架构下，补充定义 `superio_chip3_resources` 资源的 `start` 和 `end` 地址范围。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/368a16efbc463f8f9a98c1ceb6baa7a7f4a45f57

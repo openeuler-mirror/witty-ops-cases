@@ -1,0 +1,25 @@
+#标题
+X.509 证书 Basic Constraints CA 标志解析错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在解析 X.509 证书的 Basic Constraints 扩展时，错误地处理了 CA 标志。解析器将 ASN.1 DER 编码中的长度字段误认为是布尔值，导致无法正确识别证书是否为 CA 证书。这会导致本应是 CA:TRUE 的证书被错误识别，或者因解析逻辑错误导致证书校验失败（返回 -EBADMSG），影响依赖该标志的密钥验证流程。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 RFC 5280 和 ITU-T X.690 规范，ASN.1 DER 编码的 BOOLEAN 结构为：Tag (0x01), Length (0x01), Value (0x00 为 FALSE, 0xFF 为 TRUE)。
+代码中存在两处解析逻辑错误：
+1. **读取索引错误**：代码原本检查 `v[3]` 是否等于 1 来判断 CA 是否为 TRUE。实际上，`v[2]` 是 ASN1_BOOL Tag，`v[3]` 是长度字段（固定为 0x01），`v[4]` 才是实际的布尔值。代码错误地将长度字段 `v[3]` 当作了值来比较。
+2. **未处理空序列**：根据 DER 编码规则（X.690 section 11.5），默认值必须省略。对于 CA:FALSE 的情况，SEQUENCE 为空（30 00），原代码未处理此合法场景。
+
+#解决方案
+修正 x509_cert_parser.c 中的 Basic Constraints 解析逻辑：
+1. **调整索引与判断值**：将判断条件从检查 `v[3] == 1` 修改为检查 `v[4] == 0xFF`，确保读取的是真正的布尔值字段，且符合 DER 对 TRUE 值为 0xFF 的要求。
+2. **增加空序列处理**：在解析开头增加对 `v[1] == 0` 的判断，如果长度为 0 则直接返回，正确处理 CA:FALSE（默认值省略）的情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca47f27a8b3c2eebef556f09af5a788d31e2df22

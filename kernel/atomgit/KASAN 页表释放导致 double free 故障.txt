@@ -1,0 +1,29 @@
+#标题
+KASAN 页表释放导致 double free 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PowerPC 架构使用 64K 页大小的系统中，进行 PMEM 内存移除操作（如 ndctl 卸载设备）时，触发 KASAN 检测到的 double-free（双重释放）错误。内核报告无效的释放操作，并打印详细的内存状态与调用栈，导致设备解绑流程异常。
+
+#主要错误日志
+```
+BUG: KASAN: double-free in kasan_remove_zero_shadow+0x9c4/0xa20
+Free of addr c0000003c38e0000 by task ndctl/2164
+...
+The buggy address belongs to the object at c0000003c38e0000
+ which belongs to the cache pgtable-2^9 of size 4096
+The buggy address is located 0 bytes inside of
+ 4096-byte region [c0000003c38e0000, c0000003c38e1000)
+```
+
+#问题根因
+`kasan_free_pxd()` 系列函数错误地假设页表始终是 `struct page` 对齐的。在某些架构（如 PowerPC 64K 页大小）中，PUD 等页表（大小为 4096 字节）来源于 slab 缓存（如 `pgtable-2^9`），并不符合 `struct page` 的对齐假设。
+代码中使用了 `page_to_virt(pxd_page())` 来获取页表地址，这在非对齐情况下会计算出错误的内存地址，导致释放了错误的指针，进而触发 KASAN 的 double-free 报警。
+
+#解决方案
+修改 `mm/kasan/init.c` 中的 `kasan_free_pte`、`kasan_free_pmd`、`kasan_free_pud` 和 `kasan_free_p4d` 函数。不再使用 `page_to_virt(pxd_page())` 进行地址转换，而是直接使用传入函数的第一参数（即 `pxd_start`）作为释放地址。该参数本身就是页表的起始地址，从而保证了释放指针的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b9e7de840a841c03cd4c8d78409895ff73ff9860

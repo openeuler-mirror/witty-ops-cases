@@ -1,0 +1,23 @@
+#标题
+ds90ub913 驱动 set_fmt 错误修改返回格式编码导致配置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 ds90ub913 驱动的 `.set_fmt()` 接口设置 sink pad 的流格式时，函数返回的格式结构体中的 `code` 字段被错误地修改为了 `outcode`。这导致用户空间或调用者获取到的返回格式与实际设置的格式不一致，造成格式配置混乱或后续视频流处理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ub913_set_fmt` 函数中，代码逻辑错误地在将用户传入的格式 `format->format` 复制给返回结构体 `*fmt` 之前，就强制修改了 `format->format.code` 为 `finfo->outcode`。
+根据代码逻辑，`outcode` 仅应用于传播到 source pad 的流格式，而不应修改 sink pad 返回给调用者的格式。这导致返回的格式编码被错误地覆盖，且引入了非预期的副作用。
+
+#解决方案
+调整 `ub913_set_fmt` 函数中的赋值顺序与对象。
+1. 先将用户请求的格式 `format->format` 原样复制给返回结构体 `*fmt`，保持 sink pad 格式不变。
+2. 随后再将 `fmt->code` 修改为 `finfo->outcode`，以确保仅在返回结构体上应用传播所需的编码，从而修复了返回格式被错误覆盖的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0fa3f00358c50f5dae357feadf36f0946bbd7d70

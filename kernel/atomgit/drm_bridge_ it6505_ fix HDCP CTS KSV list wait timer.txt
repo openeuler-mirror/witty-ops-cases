@@ -1,0 +1,24 @@
+#标题
+drm/bridge: it6505: fix HDCP CTS KSV list wait timer
+
+#内核版本
+OLK-6.6
+
+#问题现象
+HDCP（高带宽数字内容保护）认证过程中，在等待 KSV 列表时，实际的等待时长远超协议规定的 5 秒超时时间，导致 HDCP CTS（Compliance Test Specification）测试失败。系统未能及时在超时后禁用加密并重启认证。
+
+#主要错误日志
+- DRM_DEV_DEBUG_DRIVER(dev, "KSV list wait timeout"); (推断，基于修复后的代码逻辑)
+- DRM_DEV_DEBUG_DRIVER(dev, "timeout and ksv list wait failed"); (修复前代码中的日志)
+
+#问题根因
+原代码使用一个计数器（`timeout`）配合 `msleep(20)` 进行循环等待（`timeout /= 20; while (timeout > 0) ...`），这种简单的计数循环没有考虑到调度延迟或系统负载的影响，导致实际等待时间远长于预期的 5 秒，无法准确满足 HDCP 协议对 KSV 列表等待时长的要求。
+
+#解决方案
+将计数器循环改为使用内核标准的 jiffies 时间戳机制进行超时控制。具体修改为：
+1. 初始化超时时间戳 `timeout = jiffies + msecs_to_jiffies(5000) + 1`。
+2. 在循环中通过 `time_after(jiffies, timeout)` 函数判断是否超时，替代原有的计数器递减逻辑。
+3. 确保在 5 秒超时后能准确触发超时处理流程，禁用加密并重启 HDCP 认证。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/95fcb53b7d15972f1cec686412802d81bf5febf9

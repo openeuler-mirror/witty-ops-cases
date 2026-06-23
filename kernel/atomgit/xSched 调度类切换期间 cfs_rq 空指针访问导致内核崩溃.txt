@@ -1,0 +1,24 @@
+#标题
+xSched 调度类切换期间 cfs_rq 空指针访问导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下，当对 xcu group 进行调度类切换（如执行 `echo cfs > group/xcu.sched_class`）的同时向该 group 添加进程（如执行 `echo pid > group/cgroup.procs`），内核触发 NULL pointer dereference（空指针引用）导致崩溃。
+
+#主要错误日志
+[推断] 内核崩溃日志，指示在 `enqueue_ctx` 函数中发生了空指针引用。
+XSCHED_ERR: "the cfs_rq of this xse [%d] can't be NULL @ %s\n"
+
+#问题根因
+存在并发竞态条件。在 `xcu_cg_set_sched_class` 函数中切换调度类时，会先持有 `xcg_mutex` 并将 `cfs_rq` 置 NULL（在 `xcg_perxcu_cfs_rq_deinit` 中），然后再重新分配。与此同时，另一个线程执行 `vstream_kick` -> `enqueue_ctx`，仅持有 `xcu->xcu_lock`，此时读取到的 `cfs_rq` 为 NULL，导致解引用空指针崩溃。具体的交错执行序列如下：
+1. 线程 A：`xcu_cg_set_sched_class` -> `xcg_perxcu_cfs_rq_deinit`，设置 `cfs_rq = NULL`。
+2. 线程 B：`vstream_kick` -> `enqueue_ctx`，读取 `cfs_rq` 触发 NULL 指针引用。
+3. 线程 A：继续执行 `xcu_cfs_cg_init` 重新分配 `cfs_rq`。
+
+#解决方案
+在 `xse_integrity_check` 函数中增加对 `cfs_rq` 有效性的健全性检查。当调度类为 CFS 时，若检测到 `cfs_rq` 为 NULL，则提前返回 `-EINVAL`，避免后续代码解引用空指针，从而防止内核崩溃。同时，将 `xsched_cfs_rq_of` 从宏定义改为内联函数，增加了对 `xse->parent_grp` 为空情况的判断，增强了代码的健壮性；在 `xsched_group_xse_detach` 中增加了设置 `xse->parent_grp = NULL` 的操作以配合检查逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/51b79bda41c0ddb4880bc2a140de49ab4b484713

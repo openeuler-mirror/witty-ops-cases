@@ -1,0 +1,21 @@
+#标题
+scsi: storvsc: Fix scheduling while atomic on PREEMPT_RT
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 PREEMPT_RT（实时抢占）内核配置的场景下，storvsc 驱动在执行 I/O 路径时触发“scheduling while atomic”错误，导致内核报告调度原子上下文违规警告或调用栈异常，影响存储 I/O 正常处理。
+
+#主要错误日志
+未知
+
+#问题根因
+在非 RT 内核下，`get_cpu()` 会隐式禁用抢占，通常能保证原子上下文安全。但在 PREEMPT_RT 内核中，抢占模型的语义发生变化，使用 `get_cpu()` 未能有效阻止在此上下文中可能发生的调度行为，从而触发了“scheduling while atomic”问题。代码本意是获取当前 CPU ID 并确保执行上下文不迁移，但原实现方式与 RT 内核机制冲突。
+
+#解决方案
+移除 `get_cpu()` 和 `put_cpu()` 调用，改为使用 `migrate_disable()` 和 `migrate_enable()` 包裹 `smp_processor_id()`。
+`migrate_disable()` 确保当前任务不会迁移到其他 CPU，满足驱动获取当前 CPU ID 进行 I/O 操作的需求，同时该机制在 PREEMPT_RT 内核下是安全的，不会触发原子上下文调度错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ea1f7e0d207aded097f44fa892276fda7f1ff8df

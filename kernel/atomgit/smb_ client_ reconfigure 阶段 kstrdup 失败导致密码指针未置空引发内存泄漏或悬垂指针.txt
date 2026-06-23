@@ -1,0 +1,24 @@
+#标题
+smb: client: reconfigure 阶段 kstrdup 失败导致密码指针未置空引发内存泄漏或悬垂指针
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB 客户端执行重新配置操作时，若内核内存不足导致 `kstrdup` 复制密码失败，函数返回错误码但未正确清理已分配的旧密码指针或部分成功分配的新指针，可能造成内存泄漏或访问悬垂指针。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb3_reconfigure` 函数中，调用 `kstrdup` 复制密码时缺乏返回值检查。当 `kstrdup` 因内存不足返回 NULL 时：
+1. 对于 `password` 字段，旧密码已被释放，但若新密码分配失败，指针未被置为 NULL，导致 `ses->password` 成为悬垂指针。
+2. 对于 `password2` 字段，若其分配失败，此前已成功分配的 `password` 内存未被释放，导致内存泄漏。
+
+#解决方案
+在 `fs/smb/client/fs_context.c` 的 `smb3_reconfigure` 函数中增加对 `kstrdup` 返回值的判断：
+1. 在复制 `password` 后，若失败则直接返回 `-ENOMEM`。
+2. 在复制 `password2` 后，若失败则释放已分配的 `password` 内存并将指针置空，随后返回 `-ENOMEM`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9a1ac4dadee861b36b69d9e3fc48aaefaaaee5b

@@ -1,0 +1,24 @@
+#标题
+bpftool 因 readlink 使用不当导致的截断判断错误与缓冲区非空终止漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+bpftool 工具在执行涉及文件描述符类型判断的操作时，可能因路径长度判断逻辑错误导致误报 "path too long" 错误，或因缓冲区未添加空终止符导致字符串处理函数（如 strstr）读取越界，引发程序崩溃或异常行为。该问题由 Coverity 静态分析工具检测发现。
+
+#主要错误日志
+p_err("can't read link type: path too long!");
+
+#问题根因
+代码中调用 `readlink(path, buf, sizeof(buf))` 时存在两个缺陷：
+1. 截断检查使用了 `sizeof(path)`（路径源字符串的大小）而非 `sizeof(buf)`（目标缓冲区的大小），导致缓冲区大小判断错误。
+2. `readlink` 函数不会自动在缓冲区末尾添加空终止符（null-terminator），代码未手动补充 `\0`，导致后续字符串操作可能越界。
+
+#解决方案
+修正 `get_fd_type` 函数中的 `readlink` 调用后处理逻辑：
+1. 将截断判断条件 `n == sizeof(path)` 修改为 `n == sizeof(buf)`，正确检测目标缓冲区是否写满。
+2. 在读取的字节末尾手动添加空终止符 `buf[n] = '\0'`，确保缓冲区内容为合法的 C 字符串。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9dff1250cd2c1da986862e2cf7dc93c53a219a86

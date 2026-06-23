@@ -1,0 +1,20 @@
+#标题
+serial: 8250: 修复运行时 PM 使用计数器下溢问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核串口驱动 8250 在处理控制台移交或端口注册时，由于运行时电源管理（Runtime PM）使用计数器不平衡，导致计数器下溢。这可能导致串口设备电源管理状态异常，影响后续设备操作或引发内核警告。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `univ8250` 设置阶段，由于 `.dev` 尚未设置，未能调用 `pm_runtime_get_sync()` 增加引用计数。但在后续 `serial8250_register_8250_port()` 流程中，尝试添加端口时 `.dev` 已经设置，若此时未进行相应的 `pm_runtime_get_sync()` 调用以平衡引用计数，会导致 `univ8250_console_exit()` 触发时出现运行时 PM 使用计数器下溢。
+
+#解决方案
+在 `serial8250_register_8250_port()` 函数中，尝试添加端口之前，检查该端口是否已注册为控制台。如果是，调用 `pm_runtime_get_sync()` 以平衡 RPM 使用计数器，防止下溢。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cf28f3f437dfa2ffb05893600b946f0bfc9f4ddc

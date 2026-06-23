@@ -1,0 +1,21 @@
+#标题
+ktls/sockmap: 数据发送失败时内存uncharge操作缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 KTLS 与 sockmap 进行数据发送时，若设置了 `apply_bytes` 参数，数据会被分割为多段发送。当首段数据发送失败（例如对端接收缓冲区已满）时，系统在释放消息（msg）时未能正确归还后续数据段占用的内存，导致内存计费泄漏。该问题在引入 `apply_bytes` 相关测试用例后变得易于复现。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bpf_exec_tx_verdict` 函数中，当指定了 `apply_bytes` 时，数据被分割处理。发送过程会对每一段数据调用 `tcp_bpf_sendmsg_redir()`，成功时会通过 `sk_msg_return_zero()` 解除内存计费。
+然而，如果第一段数据发送失败（例如对端缓冲区满），代码逻辑会进入错误处理分支释放整个 msg。此时，后续尚未处理的数据段虽然没有被发送，但其占用的内存也没有被 uncharge（解除计费），导致内存统计信息泄漏。这是一个自功能引入以来就存在的遗留缺陷。
+
+#解决方案
+在 `bpf_exec_tx_verdict` 函数的错误处理路径中，当发送失败时，在释放 msg 资源前，必须显式调用 `sk_mem_uncharge(sk, msg->sg.size)` 来解除剩余未处理数据的内存计费，确保内存统计的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c2f598ea6ed7e65beb9ee6869e5fb359fa438ded

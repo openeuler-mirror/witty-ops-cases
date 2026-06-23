@@ -1,0 +1,20 @@
+#标题
+btrfs：日志回放期间 walk_log_tree() 失败时缺少事务终止处理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Btrfs 文件系统进行日志回放的过程中，如果 `walk_log_tree()` 函数执行失败，系统未能正确终止（abort）当前事务。这导致事务被提交，但此时并未完全重放日志树中的所有变更，使得相应的子卷树处于不一致状态，可能导致文件系统数据损坏或后续异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，问题根因在于 `btrfs_recover_log_trees` 函数中，当 `walk_log_tree()` 返回失败时，缺少了调用 `btrfs_abort_transaction` 终止事务的逻辑。原代码直接返回了错误，未阻止事务提交，从而将不一致的状态写入了磁盘。
+
+#解决方案
+在 `fs/btrfs/tree-log.c` 的 `btrfs_recover_log_trees` 函数中增加对 `walk_log_tree()` 返回值的检查。如果调用失败，立即调用 `btrfs_abort_transaction` 终止事务，防止在不一致状态下提交事务。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a66d443c2b48ad0bfe27dca5a8b89ae74e9f2a77

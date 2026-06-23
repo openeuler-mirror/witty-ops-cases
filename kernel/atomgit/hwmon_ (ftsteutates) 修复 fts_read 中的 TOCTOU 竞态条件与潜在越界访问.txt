@@ -1,0 +1,22 @@
+#标题
+hwmon: (ftsteutates) 修复 fts_read 中的 TOCTOU 竞态条件与潜在越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在访问 `ftsteutates` 硬件监控驱动的 `pwm_auto_channels_temp` 属性时，存在 Time-of-Check to Time-of-Use (TOCTOU) 竞态条件。由于 `data->fan_source[channel]` 的值在读操作期间可能发生改变，可能导致以下问题：
+1. 逻辑判断与实际使用值不一致（竞态）。
+2. 若变化后的值超过 `BITS_PER_LONG`，作为参数传入 `BIT()` 宏时可能导致内核越界访问或未定义行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fts_read` 函数的 `hwmon_pwm_auto_channels_temp` 分支中，代码多次访问 `data->fan_source[channel]` 进行条件判断和值计算。由于缺乏锁保护，该变量可能在检查（`== FTS_FAN_SOURCE_INVALID`）和使用（传入 `BIT()` 宏）之间被并发修改。如果该值从有效值变为一个大于等于 `BITS_PER_LONG` 的值，将引发严重错误。
+
+#解决方案
+引入局部变量 `fan_source` 在临界区起始位置缓存 `data->fan_source[channel]` 的值，后续的判断与计算均使用该局部变量。这消除了 TOCTOU 竞态条件，同时增加了对 `fan_source >= BITS_PER_LONG` 的边界检查，防止 `BIT()` 宏越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eb3b9047d5cb2383bb6ab5d4124214c638b3ee75

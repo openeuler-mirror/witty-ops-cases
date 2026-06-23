@@ -1,0 +1,20 @@
+#标题
+NFSD 异步 COPY 操作错误处理导致计数器双重递减
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 NFSD 处理异步 COPY 操作时，若系统判断当前挂起的异步复制操作数量超过限制（大于线程数），错误处理流程触发引用计数错误。由于错误分支处理不当，导致 `pending_async_copies` 计数器被多次错误递减，可能引发内核计数混乱，进而影响后续异步 COPY 操作的正常调度与资源释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `nfsd4_copy()` 中，当异步 COPY 操作数量超过限制时，代码逻辑跳转到 `out_err` 标签。该标签会调用 `cleanup_async_copy()` 函数，该函数内部已经包含了对 `nn->pending_async_copies` 的递减操作。然而，在跳转到 `out_err` 之前，代码逻辑错误地显式执行了 `atomic_dec(&nn->pending_async_copies)`。这导致同一个操作被递减了两次，造成引用计数下溢。
+
+#解决方案
+移除错误处理分支中的显式 `atomic_dec(&nn->pending_async_copies)` 调用。修改后，当操作数量超过限制时，直接跳转至 `out_err`，由随后的 `cleanup_async_copy()` 统一负责资源的清理与计数的递减，确保计数器仅被递减一次。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2ba3b6a8b12cb950a8dd6edf149e861b885180fd

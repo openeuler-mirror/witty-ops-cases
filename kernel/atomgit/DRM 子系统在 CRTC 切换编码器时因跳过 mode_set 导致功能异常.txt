@@ -1,0 +1,20 @@
+#标题
+DRM 子系统在 CRTC 切换编码器时因跳过 mode_set 导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在某些特定使用场景下，当一个 CRTC 在两个编码器之间切换时，如果此时 CRTC 上正在编程的模式保持不变，内核会错误地跳过编码器的 mode_set 操作。这可能导致显示功能异常，例如在实时编码器与回写编码器之间切换时，编码器未能正确配置。
+
+#主要错误日志
+未知
+
+#问题根因
+内核逻辑仅根据 `new_crtc_state->mode_changed` 判断是否需要执行编码器的 mode_set。当 CRTC 切换编码器但模式未改变时，`mode_changed` 为 false，导致 mode_set 被跳过。然而，即使模式相同，编码器类型的变更（如从实时编码器切换到回写编码器）也需要重新进行配置，之前的逻辑未考虑 `connectors_changed` 的情况。
+
+#解决方案
+修改 `drivers/gpu/drm/drm_atomic_helper.c` 中的判断逻辑，在检查 `mode_changed` 的同时增加对 `connectors_changed` 的检查。仅当模式未改变且连接器也未改变时，才跳过 mode_set，从而确保在连接器变更时强制执行编码器的 mode_set。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf520732ee0af4037525b09392d1f8e3ba4c253f

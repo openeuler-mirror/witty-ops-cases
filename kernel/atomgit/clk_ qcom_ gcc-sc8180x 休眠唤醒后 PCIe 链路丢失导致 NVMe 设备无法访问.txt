@@ -1,0 +1,25 @@
+#标题
+clk: qcom: gcc-sc8180x 休眠唤醒后 PCIe 链路丢失导致 NVMe 设备无法访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在休眠后唤醒时，PCIe 链路无法恢复正常状态，导致 NVMe 控制器复位失败，设备最终被禁用。具体表现为唤醒后无法读写 NVMe 磁盘，系统日志显示设备无法从 D3cold 状态切换回 D0 状态。
+
+#主要错误日志
+```
+nvme 0002:01:00.0: Unable to change power state from D3cold to D0, device inaccessible
+nvme nvme0: controller is down; will reset: CSTS=0xffffffff, PCI_STATUS read failed (134)
+nvme 0002:01:00.0: Unable to change power state from D3cold to D0, device inaccessible
+nvme nvme0: Disabling device after reset failure: -19
+```
+
+#问题根因
+SC8180x 平台的 GCC 驱动中，PCIe 相关的 GDSC（Global Distributed Switch Controller）电源域配置为 `PWRSTS_OFF_ON` 模式。这导致在系统挂起期间，PCIe 电源域被完全关闭。由于当前的 PCIe 主机控制器驱动尚不支持在状态丢失后恢复（处理 suspend 期间的状态丢失），唤醒时设备无法从 D3cold 正确恢复到 D0 状态，导致链路丢失。
+
+#解决方案
+修改 `drivers/clk/qcom/gcc-sc8180x.c` 中 PCIe 电源域（pcie_0_gdsc, pcie_1_gdsc, pcie_2_gdsc, pcie_3_gdsc）的电源状态配置，将 `pwrsts` 属性从 `PWRSTS_OFF_ON` 修改为 `PWRSTS_RET_ON`。此修改使电源域在挂起期间保持保持状态而非完全断电，避免了状态丢失，从而修复了唤醒后的链路失效问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5876524983ee49bf3db2e1471b07a0a255fc0963

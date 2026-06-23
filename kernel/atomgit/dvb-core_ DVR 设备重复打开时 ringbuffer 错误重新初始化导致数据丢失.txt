@@ -1,0 +1,23 @@
+#标题
+dvb-core: DVR 设备重复打开时 ringbuffer 错误重新初始化导致数据丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户空间应用程序多次打开 DVB DVR 设备（如 `/dev/dvb/adapter0/dvr0`）时，由于 ringbuffer 被错误地执行了初始化操作而非重置操作，可能导致先前缓冲区中尚未被读取的数据丢失或状态错乱，影响视频流的连续录制或播放功能。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dvb_dvr_open` 函数中，当 DVR 设备被再次打开（reopen）时，代码调用了 `dvb_ringbuffer_init` 对 ringbuffer 进行初始化。`dvb_ringbuffer_init` 会重新设置 buffer 的 size 和 data 等基础属性，但更重要的是它会将读写指针清零。这导致如果 buffer 中尚有未处理的数据，这些数据会被直接“丢弃”（指针归零，逻辑上视为无数据），引发数据丢失问题。正确的逻辑应当是仅更新 buffer 的内存指针和大小（如果发生了重新分配），而保留或正确重置读写指针，使用 `dvb_ringbuffer_reset` 来维持状态的正确性。
+
+#解决方案
+修改 `dvb_dvr_open` 函数中的 buffer 处理逻辑，将 `dvb_ringbuffer_init` 调用替换为直接赋值与重置操作：
+1. 直接将新分配的内存地址 `mem` 赋值给 `dmxdev->dvr_buffer.data`。
+2. 直接将 buffer 大小 `DVR_BUFFER_SIZE` 赋值给 `dmxdev->dvr_buffer.size`。
+3. 调用 `dvb_ringbuffer_reset` 函数来重置读写指针等状态，而不是调用 `dvb_ringbuffer_init` 进行全量初始化，从而避免了读写指针被错误清零的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/100342e354864450de649b77754881cfda8fbd27

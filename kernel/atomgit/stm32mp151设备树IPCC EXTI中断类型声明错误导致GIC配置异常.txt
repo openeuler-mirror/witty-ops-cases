@@ -1,0 +1,20 @@
+#标题
+stm32mp151设备树IPCC EXTI中断类型声明错误导致GIC配置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+STM32MP151平台上，IPCC（进程间通信控制器）的接收中断配置错误。由于设备树中将EXTI中断的类型错误地指定为数值“1”（对应IRQ_TYPE_EDGE_RISING），而该中断作为直接事件传递给GIC时，错误的类型配置被传递给父控制器GIC，导致GIC中断类型与硬件实际触发电平（应为高电平触发）不匹配，可能导致IPCC接收中断处理异常或丢失。
+
+#主要错误日志
+未知
+
+#问题根因
+设备树节点 `ipcc` 的 `interrupts-extended` 属性中，EXTI事件61的触发类型参数被硬编码为“1”。在Linux内核IRQ类型定义中，“1”代表 `IRQ_TYPE_EDGE_RISING`（上升沿触发）。然而，IPCC RX中断对应的GIC中断类型应为 `IRQ_TYPE_LEVEL_HIGH`（高电平触发）。由于EXTI事件61是直接事件，其IRQ类型未被EXTI控制器消费，而是直接透传给父控制器GIC，导致GIC接收到错误的边沿触发配置，而非正确的电平触发配置。
+
+#解决方案
+修改设备树源文件 `arch/arm/boot/dts/st/stm32mp151.dtsi`，将 IPCC 节点的 interrupts-extended 属性中 EXTI 61 的第二个参数从数值“1”修正为宏定义 `IRQ_TYPE_LEVEL_HIGH`，以确保传递给GIC的中断类型为高电平触发。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4a31762b71d25f320a24c057f801c1629f925282

@@ -1,0 +1,21 @@
+#标题
+can: mcba_usb: URB 内存泄漏导致接收资源无法释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Microchip CAN BUS Analyzer USB 设备进行通信时，内核发生 URB（USB Request Block）内存泄漏。当设备关闭（调用 mcba_usb_close）时，已完成但未重新锚定的 URB 不会被释放，导致内存资源随着通信次数增加而持续消耗，且 CAN 接收功能可能伴随 resubmit 失败的错误信息。
+
+#主要错误日志
+failed resubmitting read bulk urb: %d\n
+
+#问题根因
+在 `mcba_usb_probe()` 初始化时，URB 被分配并添加到 `priv->rx_submitted` 锚点并提交。然而，USB 核心框架在调用完成回调函数 `mcba_usb_read_bulk_callback()` 之前会将 URB 从锚点中移除。
+在回调函数中，如果处理完成后直接重新提交 URB（`usb_submit_urb`），而没有重新将其锚定到 `priv->rx_submitted`，该 URB 就会脱离锚点的管理。当后续调用 `mcba_usb_close()` -> `mcba_urb_unlink()` -> `usb_kill_anchored_urbs()` 试图释放资源时，这些已脱离锚点的 URB 不会被扫描到，从而导致内存泄漏。
+
+#解决方案
+在 `mcba_usb_read_bulk_callback()` 函数中，重新提交 URB 之前调用 `usb_anchor_urb()` 将其重新锚定到 `priv->rx_submitted`。同时，增加对 `usb_submit_urb()` 返回值的检查：若提交成功则直接返回；若提交失败，则调用 `usb_unanchor_urb()` 撤销锚定，确保 URB 能被正确清理，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9f02f402801e2e5171d0eae5a235092e5176d3b4

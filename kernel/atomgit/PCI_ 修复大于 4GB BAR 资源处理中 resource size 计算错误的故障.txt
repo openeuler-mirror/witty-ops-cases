@@ -1,0 +1,21 @@
+#标题
+PCI: 修复大于 4GB BAR 资源处理中 resource size 计算错误的故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统 PCI 总线地址类型（pci_bus_addr_t）或资源大小类型（resource_size_t）不支持 64 位，且遇到大于 4GB 的 BAR 空间时，内核无法正确处理该资源。此时资源被标记了非零的 flags，但其 size 计算结果不为 0（错误地返回为 1），导致后续资源分配或校验逻辑出现异常。
+
+#主要错误日志
+- `pci_err(dev, "%s: can't handle BAR larger than 4GB (size %#010llx)\n", ...)`
+- `pci_info(dev, "%s: can't handle BAR above 4GB (bus address %#010llx)\n", ...)`
+
+#问题根因
+在 `__pci_read_base()` 函数中，当处理大于 4GB 的 BAR 时，如果系统不支持 64 位地址，代码直接将 `res->start` 和 `res->end` 设置为 0。这种简单的赋值方式虽然意图禁用该资源，但未正确处理结构体成员，导致 `resource_size()` 计算该资源大小时返回 1 而非预期的 0，从而产生一个状态不一致的资源结构。
+
+#解决方案
+使用 `resource_set_range()` 辅助函数替代对 `res->start` 和 `res->end` 的直接赋值。该函数能正确地将结束地址设置为 -1（在 size 为 0 的场景下），从而确保 `resource_size()` 正确返回 0，避免产生无效的资源尺寸信息。同时，在另一处基于 size 设置资源的分支中也统一使用该函数以保持代码一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/37f7950f71cc2a6feeab63b6a82ad0cc36a66040

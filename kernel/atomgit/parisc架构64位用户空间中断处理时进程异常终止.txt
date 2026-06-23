@@ -1,0 +1,21 @@
+#标题
+parisc架构64位用户空间中断处理时进程异常终止
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PA-RISC 64位架构运行 64 位用户空间程序（wide mode）时，发生中断（非 itlb miss）后，进程被内核异常终止。
+
+#主要错误日志
+未知
+
+#问题根因
+在 64 位宽模式（wide mode）下，中断发生时 IASQ 寄存器包含 GVA（全局虚拟地址）的高位部分。代码在处理非 itlb miss 中断时，错误地跳过了 IASQ/IAOQ 的 space_adjust（空间调整）步骤。根据 PA-RISC 2.0 架构手册，这些位需要进行反向处理才能得到正确的空间标识。
+由于缺少调整，IASQ 寄存器中遗留了 IAOQ 的部分位，导致 `handle_interruption()` 中的空间有效性检查失败，进而内核错误地终止了当前进程。
+
+#解决方案
+修改 `arch/parisc/kernel/entry.S`，移除导致跳过 space_adjust 逻辑的无条件分支指令，确保在 64 位模式下对所有中断执行 space_adjust 处理。同时补充对 IASQ1 和 IAOQ1 的 space_adjust 操作，确保 pt_regs 结构中保存的上下文值正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/520da947ceb04291b74b91a040babfb81520bcd9

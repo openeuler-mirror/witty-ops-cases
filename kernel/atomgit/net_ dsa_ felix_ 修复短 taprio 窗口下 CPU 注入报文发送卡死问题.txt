@@ -1,0 +1,22 @@
+#标题
+net: dsa: felix: 修复短 taprio 窗口下 CPU 注入报文发送卡死问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了较短 taprio 调度窗口（如 1250 ns）的情况下，从 Linux CPU 注入的报文（如 PTP 的 Pdelay_Resp 报文）无法正常发送，导致报文卡死。用户层应用（如 ptp4l）因此无法获取发送时间戳，导致协议运行失败。
+
+#主要错误日志
+ptp4l[4134.168]: port 2: send peer delay response failed
+increasing tx_timestamp_timeout may correct this issue, but it is likely caused by a driver bug
+mscc_felix 0000:00:00.5: port 0 tc 0 min gate length 1250 ns not enough for max frame size 1526 at 1000 Mbps, dropping frames over 132 octets including FCS
+
+#问题根因
+驱动中定义的静态保护带最小保留时间常量 `VSC9959_TAS_MIN_GATE_LEN_NS` 设置为 33 ns，该值仅能覆盖转发路径报文的发送需求。对于 CPU 注入路径，该时间窗口不足，导致交换机队列系统拒绝调度报文，从而发生卡死。
+
+#解决方案
+将 `VSC9959_TAS_MIN_GATE_LEN_NS` 宏定义的值从 33 ns 调整为 35 ns。增加这 2 ns 的保留时间足以覆盖 CPU 注入路径的发送需求，确保在短时隙 taprio 调度下报文能被正确调度发送，不再卡死。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/033ad5f5ec6e7234929958ce027c607ca71d3648

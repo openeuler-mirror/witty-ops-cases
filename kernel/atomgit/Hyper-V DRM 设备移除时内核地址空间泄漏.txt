@@ -1,0 +1,20 @@
+#标题
+Hyper-V DRM 设备移除时内核地址空间泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 Hyper-V DRM 设备被移除，或在设备探测的错误路径中，已分配并映射的 MMIO 空间被释放，但未执行取消映射操作，导致内核地址空间发生泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在驱动探测时，程序为 VRAM 分配了 MMIO 空间并将其映射为缓存可用的。然而，在设备移除或探测失败的错误处理路径中，代码仅调用了 `vmbus_free_mmio` 释放了 MMIO 空间，却遗漏了对应的 `iounmap` 调用来解除映射，从而导致内核地址空间泄漏。
+
+#解决方案
+在设备移除函数 `hyperv_vmbus_remove` 以及探测失败时的错误处理标签 `err_free_mmio` 处，于释放 MMIO 空间前增加 `iounmap(hv->vram)` 调用，确保先解除虚拟地址映射再释放物理内存资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1412baf849fc1dbc6a4f74aaf526110d117ab6aa

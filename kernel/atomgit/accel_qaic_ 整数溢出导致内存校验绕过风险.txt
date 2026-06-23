@@ -1,0 +1,20 @@
+#标题
+accel/qaic: 整数溢出导致内存校验绕过风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 QAIC 加速器驱动中，用户通过 `qaic_attach_slice_bo_ioctl()` 接口传入特定的 64 位参数时，内核校验逻辑可能因整数溢出而错误地判定参数合法。这可能导致后续内存访问越界或数据损坏，虽然 Commit 未明确提及具体的 panic 信息，但存在潜在的系统不稳定或安全风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `qaic_validate_req()` 函数中，校验逻辑 `slice_ent[i].offset + slice_ent[i].size > total_size` 直接执行了加法运算。由于 `offset` 和 `size` 均为来自用户空间的 u64 类型变量，当二者相加结果超过 64 位无符号整数最大值时会发生回绕，导致计算结果变小，从而绕过越界检查。
+
+#解决方案
+引入 `check_add_overflow()` 函数对加法运算进行安全检查。修改后的代码先检测 `offset` 与 `size` 相加是否会溢出，若溢出或相加结果大于 `total_size`，则直接返回 `-EINVAL` 错误，从而杜绝整数溢出导致的校验失效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7280a401bb1b03a16216a11d6ad32a333aba46e2

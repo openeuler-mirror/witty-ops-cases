@@ -1,0 +1,23 @@
+#标题
+KVM: arm64: 拒绝设置无效的调试架构版本
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 KVM 虚拟化场景下，用户态（Userspace）尝试将 vCPU 的调试架构版本配置为低于 ARMv8 的无效值时，内核未对其进行有效性拦截。根据 Commit 描述，ARMv8 架构强制要求支持调试功能，KVM 不应允许配置低于此版本的调试架构。
+
+#主要错误日志
+未知
+
+#问题根因
+ARMv8 架构强制要求包含调试架构，但 KVM 原有的 ID 寄存器处理逻辑未能优雅地处理调试版本字段（DebugVer）的非零起始值，导致缺少对无效低版本（小于 ARMv8）的显式检查，允许用户态配置无效的调试架构版本。
+
+#解决方案
+在 `sys_regs.c` 中添加显式检查逻辑：
+1. 修改 `read_sanitised_id_aa64dfr0_el1` 函数，利用 `ID_REG_LIMIT_FIELD_ENUM` 宏将 ID_AA64DFR0_EL1 寄存器的 DebugVer 字段限制在 IMP (ARMv8) 及以上。
+2. 修改 `set_id_dfr0_el1` 回调函数，增加对 ID_DFR0_EL1 寄存器中 CopDbg 字段的校验，若值小于 `ID_DFR0_EL1_CopDbg_Armv8`，则直接返回 `-EINVAL` 拒绝该配置。
+3. 调整 `kvm_arm64_ftr_safe_value` 函数，明确将 DebugVer 字段的安全值类型设为 `FTR_LOWER_SAFE`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b55cb896be25cbd036f4a3d01f7d5b2262dad88b

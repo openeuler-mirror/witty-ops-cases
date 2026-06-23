@@ -1,0 +1,29 @@
+#标题
+mm/memory-tier: 抽象距离计算整型溢出导致内存分级策略错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内存分级子系统错误地将慢速内存（如 CXL 设备）识别为比 DRAM 更快。这导致内核执行错误的页面降级策略，将页面从 CXL 节点（慢速内存）错误地降级到 DRAM 节点（快速内存）。
+
+例如在 dmesg 中观察到如下异常的降级链，其中 Node0/1 为 DRAM，Node2/3 为 CXL 节点，Node2/3 本不应有降级目标：
+ Demotion targets for Node 0: null
+ Demotion targets for Node 1: null
+ Demotion targets for Node 2: preferred: 0-1, fallback: 0-1
+ Demotion targets for Node 3: preferred: 0-1, fallback: 0-1
+
+#主要错误日志
+Demotion targets for Node 0: null
+Demotion targets for Node 1: null
+Demotion targets for Node 2: preferred: 0-1, fallback: 0-1
+Demotion targets for Node 3: preferred: 0-1, fallback: 0-1
+
+#问题根因
+在 `mt_perf_to_adistance()` 函数计算抽象距离时，公式涉及多个整型变量的乘法操作。由于参与计算的数值（如 `MEMTIER_ADISTANCE_DRAM`、延迟、带宽等）可能很大，乘法运算结果超出了整型的最大值（INT_MAX），导致整型溢出。溢出后计算得到的 adist 值错误，进而导致内存分级子系统误判 CXL 内存比 DRAM 更快。
+
+#解决方案
+将宏定义 `MEMTIER_ADISTANCE_DRAM` 的常量后缀修改为 `L`（即 `4L`），强制将其类型定义为 `long`。这会使得后续的乘法运算在 `long` 类型空间进行，利用其更大的数值范围防止溢出，从而修复计算错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/19633d3e0ff4a2c8b14ece5fe350264699720bee

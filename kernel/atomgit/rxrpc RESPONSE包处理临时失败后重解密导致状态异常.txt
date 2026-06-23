@@ -1,0 +1,20 @@
+#标题
+rxrpc RESPONSE包处理临时失败后重解密导致状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 rxrpc RESPONSE 数据包时，若处理过程中发生临时性失败（如内存不足 -ENOMEM 或资源暂时不可用 -EAGAIN），数据包会被重新排队等待重试。此时数据包处于部分解密状态，再次处理时会尝试重新解密，导致协议处理异常或数据不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+当 RESPONSE 包处理遇到临时性错误（-ENOMEM 或 -EAGAIN）时，代码逻辑会将其重新放回队列并触发重试。但这忽略了包可能已经处于部分解密状态的事实。当包被再次取出处理时，会基于错误的状态进行重解密，从而引发问题。
+
+#解决方案
+修改 `rxrpc_do_process_connection` 函数，移除对处理临时失败包的重试逻辑。当处理 RESPONSE 包或 CHALLENGE 包发生错误时，直接丢弃该包。根据协议，本端会发送另一个 CHALLENGE 包以触发新的 RESPONSE，或者服务端会重发 CHALLENGE，从而恢复正常流程，避免对处于中间状态的数据包进行错误重处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/478b9a236e8f4c69a9bc6178c86f0f93e5073a7e

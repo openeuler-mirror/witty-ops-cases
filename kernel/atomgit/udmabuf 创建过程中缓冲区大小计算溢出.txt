@@ -1,0 +1,20 @@
+#标题
+udmabuf 创建过程中缓冲区大小计算溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建 udmabuf 时，如果配置的 `size_limit_mb` 值较大（例如超过 4GB 对应的 MB 值），计算 `pglimit` 过程中会发生整型溢出。这导致计算出的页面限制值远小于预期，使得合法的 udmabuf 创建请求因超出错误的限制而失败，影响 udmabuf 设备的正常功能使用。
+
+#主要错误日志
+未知
+
+#问题根因
+在计算 `pglimit` 时，表达式 `size_limit_mb * 1024 * 1024` 涉及的常量均为 `int` 或 `unsigned int` 类型。当 `size_limit_mb` 的值足够大以至于乘积超过 32 位整数的最大值时，会在赋值给 `pglimit` 之前发生整型溢出，导致计算结果错误。
+
+#解决方案
+修改 `drivers/dma-buf/udmabuf.c` 中的计算逻辑，将 `size_limit_mb` 强制转换为 `u64` 类型（即 `((u64)size_limit_mb * 1024 * 1024)`）。这使得后续的乘法运算在 64 位空间中进行，避免了 32 位整型溢出问题，确保在大内存限制场景下计算出正确的页面限制值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a5f628b8135771d93658ffa221268dfce4584ba4

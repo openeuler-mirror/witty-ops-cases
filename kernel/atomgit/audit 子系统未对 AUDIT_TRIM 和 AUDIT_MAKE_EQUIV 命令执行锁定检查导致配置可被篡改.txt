@@ -1,0 +1,20 @@
+#标题
+audit 子系统未对 AUDIT_TRIM 和 AUDIT_MAKE_EQUIV 命令执行锁定检查导致配置可被篡改
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核审计配置已被锁定（AUDIT_LOCKED）的情况下，拥有 CAP_AUDIT_CONTROL 权限的进程仍可通过 AUDIT_TRIM 和 AUDIT_MAKE_EQUIV 命令修改目录树监视和等价映射关系，导致审计锁机制失效，破坏审计配置的完整性。
+
+#主要错误日志
+未知
+
+#问题根因
+`audit_receive_msg` 函数中，`AUDIT_ADD_RULE` 和 `AUDIT_DEL_RULE` 命令正确检查了 `AUDIT_LOCKED` 状态并返回 `-EPERM`，但 `AUDIT_TRIM` 和 `AUDIT_MAKE_EQUIV` 命令缺少相应的检查逻辑。这允许进程在审计配置锁定后仍能修改目录树监视和等价映射，从而破坏了锁定机制的目的。
+
+#解决方案
+在 `kernel/audit.c` 的 `audit_receive_msg` 函数中，针对 `AUDIT_TRIM` 和 `AUDIT_MAKE_EQUIV` 两个 case 分支，分别增加对 `audit_enabled == AUDIT_LOCKED` 的判断。如果审计已锁定，直接返回 `-EPERM`，从而阻止非法修改。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1e31dc679d6d46dddbd05ecbce287aa809a78c4d

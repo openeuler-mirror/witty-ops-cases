@@ -1,0 +1,23 @@
+#标题
+ksmbd: 修复多个由缓冲区偏移量无效引发的越界访问故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **内存越界访问**：在处理 SMB2 协议请求时，若请求头中的 Buffer Offset 字段被设置为无效值（小于标准结构体大小），ksmbd 在解析数据时会访问到结构体头部之前的内存区域，导致 `slab-out-of-bounds` 问题。
+2. **潜在内存破坏**：在 `smb_strndup_from_utf16` 等函数调用中，使用了错误的起始地址读取数据，可能导致内核内存读取越界或数据解析错误。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **偏移量校验缺失**：在 `smb2_get_data_area_len` 函数中，代码直接信任了请求头中（如 `SMB2_TREE_CONNECT`、`SMB2_CREATE`、`SMB2_QUERY_INFO`、`SMB2_IOCTL` 等）的 Offset 字段，未校验该值是否小于结构体中 Buffer 字段的实际偏移位置。
+2. **指针计算错误**：在 `smb2pdu.c` 的多处实现中（如 `smb2_tree_connect`、`smb2_open`、`smb2_ioctl` 等），直接使用 `req->Buffer` 作为数据起始地址，而没有加上协议头中指定的 Offset 偏移量。当 Offset 值非法或与实际数据位置不符时，导致读取错误的内存位置。
+
+#解决方案
+1. **增加偏移量边界检查**：在 `smb2_get_data_area_len` 函数中，使用 `max_t` 宏将请求中指定的 Offset 与结构体自身的 Buffer 偏移量（通过 `offsetof` 获取）进行比较，确保计算出的数据偏移量不小于结构体定义的最小缓冲区位置，防止读取到结构体头部之外的内存。
+2. **修正数据指针计算逻辑**：在处理 SMB2 命令（如 Tree Connect, Create, Query Directory, Set Info, Ioctl 等）时，移除直接引用 `req->Buffer` 的代码，改为使用 `(char *)req + leXX_to_cpu(req->XXXOffset)` 的方式计算数据起始地址，确保严格按照协议指定的偏移量读取数据，避免越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1b973c5f4ead8093d8018eb8c3aad83f34724173

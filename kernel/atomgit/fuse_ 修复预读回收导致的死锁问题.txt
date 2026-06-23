@@ -1,0 +1,22 @@
+#标题
+fuse: 修复预读回收导致的死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 FUSE 文件系统中，当服务器端不支持 `open`（`no_open` 模式）时，若在处理预读请求的过程中，服务端触发了内存回收，且该回收操作试图驱逐正在被预读文件的 inode，系统将发生死锁。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `no_open` 模式下，`fuse_file_open` 函数错误地将 `fuse_file_alloc` 的 `release` 参数设为 false，导致没有为 `ff->args->release_args` 分配内存。根据代码注释，`release_args` 必须分配，以便在文件操作尚在进行时通过 `fuse_prepare_release()` 保持 inode 的引用计数。如果缺少该分配，当预读请求正在服务时，若服务端触发回收并试图驱逐该 inode，就会因缺少引用计数保护而导致死锁。
+
+#解决方案
+1. 修改 `fuse_file_open` 中的逻辑，确保即使服务端不支持 `open`（即 `no_open` 为真），只要不是目录或者需要打开操作，仍需传入 `release=true` 给 `fuse_file_alloc`，以保证 `release_args` 被正确分配，从而在预读期间持有 inode 引用，防止死锁。
+2. 调整错误处理分支，仅在目录打开失败且设置 `no_opendir` 时才释放 `ff->args` 并置空；对于普通文件设置 `no_open` 的情况，不再释放 `ff->args`，确保后续回收流程能正常处理。
+3. 在 `fuse_file_put` 中增加对 `FUSE_RELEASE` 且 `no_open` 情况的处理，直接调用 `fuse_release_end` 完成释放流程，并修正了一处注释错误（将 'open' 改为 'opendir'）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9a3b94b8b9e86ca11c25b60c7249d74744c80fb3

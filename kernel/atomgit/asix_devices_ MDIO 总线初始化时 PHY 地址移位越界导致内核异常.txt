@@ -1,0 +1,20 @@
+#标题
+asix_devices: MDIO 总线初始化时 PHY 地址移位越界导致内核异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在初始化 ASIX USB 网卡驱动的 MDIO 总线时，触发 shift-out-of-bounds（移位越界）异常。该问题由 Syzbot 报告，可能导致 MDIO 总线操作使用无效的 PHY 地址，进而引发驱动初始化失败或内核不稳定。
+
+#主要错误日志
+shift-out-of-bounds exception on MDIO bus initialization
+
+#问题根因
+在设置 MDIO 总线的 `phy_mask` 时，代码直接使用 `priv->phy_addr` 进行位操作（`BIT(priv->phy_addr)`）。如果 `priv->phy_addr` 的值超过 31（即大于等于 32），传给 `BIT()` 宏的参数将超过 `unsigned long` 的位宽，导致移位越界。根本原因在于未对 PHY 地址进行 5 位掩码限制，使用了超出有效范围（0-31）的地址值。
+
+#解决方案
+在计算 `phy_mask` 时，对 `priv->phy_addr` 执行 5 位掩码操作（`& 0x1f`），确保参与移位运算的值始终限制在 0-31 的合法范围内。修改后的代码为：`priv->mdio->phy_mask = ~(BIT(priv->phy_addr & 0x1f) | BIT(AX_EMBD_PHY_ADDR));`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5f16c23cdbf185ad4b20c9aec857026f64c65eeb

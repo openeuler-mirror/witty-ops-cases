@@ -1,0 +1,27 @@
+#标题
+ipmi: hisi_pso 原子上下文睡眠及 Use-After-Free 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动在 notifier 回调函数（原子上下文）中调用了 `wait_for_completion_timeout`，触发内核报错 "sleeping function called from invalid context"。同时，栈上分配的 completion 数据在超时后被释放，而此时 IPMI 响应可能尚未到达，导致访问已释放内存引发 use-after-free 崩溃。
+
+#主要错误日志
+- "sleeping function called from invalid context"（推断上下文报错）
+- pso: BMC command failed, msg_id=%ld, cc=0x%02x
+- pso: ipmi_request_settime failed: %d
+- pso: wait for BMC response timeout
+
+#问题根因
+驱动的 notifier 回调运行在原子上下文中，但代码调用了可能导致睡眠的 `wait_for_completion_timeout` 函数，违反了原子上下文不能睡眠的规则。此外，用于同步等待的 `pso_txn` 结构体分配在栈上，当等待超时返回后该栈内存即失效，但 IPMI 响应回调 `pso_recv` 可能稍后仍被触发并访问该内存区域，导致 Use-After-Free。
+
+#解决方案
+将驱动重构为异步处理模式，利用内核 workqueue 机制规避原子上下文睡眠问题。
+1. 移除原有的同步等待逻辑和栈上 `completion` 结构体。
+2. 引入全局 work_struct 和状态变量，通过 `schedule_work` 将 IPMI 发送任务提交到系统工作队列，在进程上下文中执行。
+3. 对于连续的状态变更请求，利用 `schedule_work` 的合并特性，只发送最新状态的命令，避免重复请求。
+4. 在响应回调 `pso_recv` 中仅记录日志，不再执行唤醒操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31d658c51a45b3f612e065fc15de04a15b9e1e90

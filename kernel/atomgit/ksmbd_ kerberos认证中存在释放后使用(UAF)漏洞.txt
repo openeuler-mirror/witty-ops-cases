@@ -1,0 +1,27 @@
+#标题
+ksmbd: kerberos认证中存在释放后使用(UAF)漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多线程环境下，当会话正处于 SMB2_SESSION_VALID 状态并进行重新认证时，ksmbd_free_user 释放了 sess->user 指针，但在将其设置为 NULL 之前，另一线程可能访问该指针，导致内核发生释放后使用故障。此外，若不同用户尝试复用现有会话，可能导致权限检查绕过或内核状态混乱。
+
+#主要错误日志
+未知
+
+#问题根因
+在 smb2pdu.c 的 krb5_authenticate 函数中，当会话状态为 SMB2_SESSION_VALID 时，代码先调用 ksmbd_free_user(sess->user) 释放内存，随后将 sess->user 设为 NULL。
+根因在于此处存在时间窗口：在释放指针与置空指针之间，若另一线程操作该会话并访问 sess->user，会触发释放后使用。同时，代码逻辑允许在会话已绑定用户的情况下重新赋值，缺乏对用户一致性的检查。
+
+#解决方案
+1. 移除 smb2pdu.c 中 krb5_authenticate 函数内对 sess->user 的直接释放与置空操作，消除竞态条件窗口。
+2. 将会话用户管理与认证逻辑移至 auth.c 的 ksmbd_krb5_authenticate 函数中统一处理：
+   - 若 sess->user 为空，视为首次认证，直接赋值。
+   - 若 sess->user 不为空，调用 ksmbd_compare_user 比较现有用户与新认证用户。
+   - 若用户不一致，打印调试信息并返回 -EPERM 权限错误，释放新分配的用户结构。
+   - 若用户一致，释放新分配的用户结构，保留原有 sess->user。
+此举确保了指针操作的原子性逻辑，并防止了不同用户复用会话的安全风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/72ac9a7d7facdb3a7f3b238eb48d7737495f46a0

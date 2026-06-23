@@ -1,0 +1,24 @@
+#标题
+Bluetooth: hci_event: 修复 hci_le_create_big_complete_evt 中的越界读取与死循环问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当蓝牙控制器发送 LE_Create_BIG_Complete 事件时，若该事件携带的 `bis_handle` 条目数量少于对应 BIG 的 BT_BOUND 状态连接数，或者 `num_bis` 为 0，内核将发生堆内存越界读取。读取到的无效句柄通常因超过 `HCI_CONN_HANDLE_MAX` 而被拒绝设置，导致连接维持在 BT_BOUND 状态，进而被 `hci_conn_hash_lookup_big_state()` 反复查找，最终导致内核陷入持有 `hci_dev_lock` 锁的无限循环。
+
+#主要错误日志
+- "Bluetooth: Not enough BIS handles for BIG 0x%2.2x"
+- "Bluetooth: Failed to set BIS handle for BIG 0x%2.2x"
+
+#问题根因
+函数 `hci_le_create_big_complete_evt()` 在遍历 BIG handle 的 BT_BOUND 连接时，使用 while 循环并通过 `ev->bis_handle[i++]` 访问数组。代码未在访问数组前检查索引 `i` 是否在 `ev->num_bis` 范围内。当控制器发送的事件数据不完整（bis_handle 数量不足或 num_bis 为 0）时，循环读取了 `bis_handle[]` 数组边界之外的堆内存。
+
+#解决方案
+在代码中增加对 `ev->num_bis` 与索引 `i` 的边界检查。
+1. 在访问 `bis_handle` 数组前，判断 `ev->num_bis <= i`，若条件成立则打印错误日志 "Not enough BIS handles"，设置状态为错误，断开连接并跳过后续处理。
+2. 在 `hci_conn_set_handle` 调用失败时，增加错误处理分支，打印错误日志 "Failed to set BIS handle"，强制设置错误状态并删除连接，防止死循环。
+3. 在函数末尾增加对 `HCI_ERROR_UNSPECIFIED` 状态的检查，确保在发生意外错误或未连接任何 BIS 的情况下终止 BIG。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/65310a3fc10d1b7326b8107c24099e16a8a932a3

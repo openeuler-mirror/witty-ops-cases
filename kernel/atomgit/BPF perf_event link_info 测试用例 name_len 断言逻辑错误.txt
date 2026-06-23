@@ -1,0 +1,20 @@
+#标题
+BPF perf_event link_info 测试用例 name_len 断言逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 BPF 自测试（selftests/bpf）中的 `fill_link_info` 测试时，针对 kprobe、uprobe 和 tracepoint 类型的 perf_event link info，测试用例会在校验 `name_len` 字段时发生断言失败（ASSERT_EQ failed）。具体表现为当内核正确返回名称长度（非 0）时，测试代码仍强制校验该值必须为 0，导致测试无法通过。
+
+#主要错误日志
+未知
+
+#问题根因
+测试代码中的断言逻辑编写错误。代码原意在用户空间未提供缓冲区（`func_name`、`tp_name` 或 `file_name` 指针为空）时，期望内核返回 `name_len` 为 0。但实际上，根据内核实现逻辑，无论用户空间是否提供缓冲区，内核都会返回名称的实际长度（`strlen(name) + 1`）。因此，原有的 `ASSERT_EQ(..., 0, "name_len")` 断言条件错误，与内核实际行为不匹配。
+
+#解决方案
+修改 `tools/testing/selftests/bpf/prog_tests/fill_link_info.c` 文件，移除错误的 `name_len` 为 0 的断言检查。在获取名称前，增加对 `name_len` 的正确性校验，断言其值应等于名称字符串长度加 1（例如 `strlen(KPROBE_FUNC) + 1`），从而确保内核返回的长度信息准确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/06819489ee4c181c1dc7817b53e20d9afe146c40

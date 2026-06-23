@@ -1,0 +1,20 @@
+#标题
+fbdev: tcx.c 修复因 mem_map 偏移量错误导致的用户态 mmap 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定 SPARC 架构环境下，用户态程序（如 Xorg）对 TCX 帧缓冲设备进行 mmap 映射操作时完全失败。内核尝试映射了错误偏移量的物理内存地址，导致映射功能不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+先前提交 403ae52ac047 ("sparc: fix drivers/video/tcx.c warning") 在修复警告时错误地修改了 `physbase` 的初始化逻辑。在 `tcx_probe` 函数中，代码将 `par->mmap_map[i].poff` 直接设置为 `op->resource[j].start`，而正确的逻辑应该是相对于 `info->fix.smem_start` 的偏移量。这导致 sbus mmap 辅助函数计算出了错误的物理地址，尝试映射了 vastly offset memory（巨大偏移的内存），从而破坏了用户态的 mmap 功能。
+
+#解决方案
+修正 `drivers/video/tc x.c` 中 `tcx_probe` 函数内的内存映射偏移计算逻辑。将 `par->mmap_map[i].poff` 的赋值从 `op->resource[j].start` 修改为 `op->resource[j].start - info->fix.smem_start`，确保存储的是相对于显存起始地址的正确偏移量，从而修复 sbus mmap 辅助函数的映射行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/496ee7b3027253869301f18fd57fa5d0024bc25c

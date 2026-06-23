@@ -1,0 +1,24 @@
+#标题
+i40e驱动忽略SO_NOFCS套接字选项导致功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+i40e网卡驱动虽然声明支持 IFF_SUPP_NOFCS 特性，允许用户设置 SO_NOFCS 套接字选项以禁用以太网帧校验序列（FCS），但该选项被驱动静默忽略。在发送数据包时，驱动总是启用 FCS 插入，导致用户设置无效。
+
+复现方法如下：
+创建 AF_PACKET 套接字并设置 SO_NOFCS 选项后发送数据，send() 调用成功返回，但实际发出的数据包并未生效 FCS 相关配置。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在初始化时设置了 `IFF_SUPP_NOFCS` 标志位，向内核声明支持用户态控制 FCS 插入功能。然而，驱动代码中并未检查 `skb->no_fcs` 标志位，写数据包时总是强制启用 FCS offload。这种声明与实际实现不一致的行为导致了功能缺陷。
+
+#解决方案
+删除 `drivers/net/ethernet/intel/i40e/i40e_main.c` 中 `i40e_config_netdev` 函数里的 `netdev->priv_flags |= IFF_SUPP_NOFCS;` 代码行。
+修改后，驱动不再声明支持该功能，当用户尝试设置 SO_NOFCS 时，系统将正确返回 `-EPROTONOSUPPORT` 错误，避免了静默忽略带来的不可预期行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e1fff8c28b82d4727acb1bd9cafab4c5ead7ad53

@@ -1,0 +1,20 @@
+#标题
+i40e 驱动云过滤器 TC 编号输入验证逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 i40e 网卡驱动的 SR-IOV 环境下，当 VF（虚拟功能）尝试配置云过滤器并指定最大有效 TC（流量类别）编号时，驱动错误地拒绝该合法配置，导致过滤器设置失败，影响 VF 的流量分类功能正常使用。
+
+#主要错误日志
+- 推断：dmesg 日志显示 `VF [vf_id]: Invalid TC number [tc_number]`（来自代码上下文 `dev_info(&pf->pdev->dev, "VF %d: Invalid TC number %u\n", ...)`）
+
+#问题根因
+在函数 `i40e_validate_cloud_filter` 中，对 `action_meta`（此处代表 TC 编号）的边界检查逻辑存在差一错误。原代码使用 `tc_filter->action_meta > vf->num_tc` 进行判断，忽略了 TC 编号从 0 开始计数的情况。当 VF 请求数值为 `num_tc - 1` 的 TC 时（即最大有效 TC 编号），判定条件不成立；但当请求值等于 `num_tc` 时，实际上是请求一个不存在的 TC，却通过了部分逻辑。反之，若请求最大有效值，可能因逻辑混淆导致误判。核心问题在于合法的 TC 编号范围应为 `0` 到 `num_tc - 1`，而原校验逻辑未正确涵盖此范围边界。
+
+#解决方案
+修改 `drivers/net/ethernet/intel/i40e/i40e_virtchnl_pf.c` 文件中的输入验证逻辑。将判断条件从 `tc_filter->action_meta > vf->num_tc` 修正为 `tc_filter->action_meta >= vf->num_tc`，确保只有小于 `num_tc` 的 TC 编号才被视为有效输入，从而正确允许最大有效 TC 编号的配置请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aa4e26a18e955a76c957172f673ac4e041685a23

@@ -1,0 +1,22 @@
+#标题
+ub/obmm: allow_slow=false 约束失效导致非预期同步清空操作
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用内存分配接口时，若设置参数 `clear=true` 且 `allow_slow=false`，系统仍会从 uncleared 链表分配内存并执行同步清空操作。这违反了 `allow_slow=false` 的约束，导致调用者在预期不应阻塞或延迟的场景下触发了同步清空逻辑，可能引起性能抖动或时延敏感业务的异常。
+
+#主要错误日志
+未知
+
+#问题根因
+代码逻辑存在缺陷，在 `clear=true` 的分支中，未检查 `allow_slow` 参数就直接将 `second` 链表指针指向 `memseg_uncleared`。
+由于 uncleared 链表的内存需执行同步清空，这是一个耗时操作，实际上属于 "slow" 路径。原代码强行分配该链表内存导致 `allow_slow=false` 的约束失效。此外，补丁移除了基于计数器的前置快速校验，因为计数器数值是统计性的，无法精确反映链表实际状态，且该检查属于冗余逻辑。
+
+#解决方案
+修改链表选择逻辑，在 `clear=true` 时，只有当 `allow_slow` 为真时才将 `second` 指向 `memseg_uncleared`，否则置为 NULL。
+同时优化代码结构：将变量声明移至函数开头，移除冗余变量，简化计数器更新逻辑，并移除了不精确的计数器前置检查，确保仅依据链表实际状态进行分配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fe123d18f698302d664856a6791c7ae573c778d0

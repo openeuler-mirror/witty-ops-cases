@@ -1,0 +1,20 @@
+#标题
+LoongArch 架构设置 VM_NONE/VM_SHARED 权限映射引发内核缺页 Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 32位平台上，当进程将 VMA（虚拟内存区域）设置为 VM_NONE 或 VM_SHARED 权限属性时，会导致页面被标记为不存在，进而触发内核缺页异常，造成内核 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+在 LoongArch 32位平台上，`_PAGE_PROTNONE` 宏的值为 0。在初始化 `protection_map[]` 数组时，`VM_NONE` 和 `VM_SHARED` 的映射项错误地使用了 `_PAGE_PROTNONE` 标志位。由于该标志位在 32 位系统下为 0，导致页表项中缺少 `_PAGE_PRESENT`（存在位）属性，使得处理器在访问相应内存页面时认为页面不存在，从而引发内核缺页异常。
+
+#解决方案
+修改 `arch/loongarch/mm/cache.c` 文件中 `protection_map[]` 数组的定义。针对 `VM_NONE` 和 `VM_SHARED` 的映射项，将原本固定的 `_PAGE_PROTNONE` 替换为条件表达式 `(_PAGE_PROTNONE ? : _PAGE_PRESENT)`。该修改确保了当 `_PAGE_PROTNONE` 为 0（即 32 位平台）时，自动回退使用 `_PAGE_PRESENT` 标志位，从而保证页面属性正确，避免触发异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f2ceee1d6bdc4ad2e6c9528fd8983263bcdbbf84

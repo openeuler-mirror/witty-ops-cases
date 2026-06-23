@@ -1,0 +1,38 @@
+#标题
+gue: GUE 隧道内层协议为 0 导致的 skb 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当接收到内层 IP 协议号（proto_ctype）为 0 的 GUE 数据包时，内核发生 skb 内存泄漏。syzbot 报告了“unreferenced object”内存泄漏，泄漏对象大小为 240 字节。
+
+#主要错误日志
+BUG: memory leak
+unreferenced object 0xffff888109695a00 (size 240):
+  comm "syz.0.17", pid 6088, jiffies 4294943096
+  backtrace (crc a84b336f):
+    kmemleak_alloc_recursive include/linux/kmemleak.h:44 [inline]
+    slab_post_alloc_hook mm/slub.c:4958 [inline]
+    slab_alloc_node mm/slub.c:5263 [inline]
+    kmem_cache_alloc_noprof+0x3b4/0x590 mm/slub.c:5270
+    __build_skb+0x23/0x60 net/core/skbuff.c:474
+    build_skb+0x20/0x190 net/core/skbuff.c:490
+    __tun_build_skb drivers/net/tun.c:1541 [inline]
+    tun_build_skb+0x4a1/0xa40 drivers/net/tun.c:1636
+    tun_get_user+0xc12/0x2030 drivers/net/tun.c:1770
+    tun_chr_write_iter+0x71/0x120 drivers/net/tun.c:1999
+
+#问题根因
+在 `gue_udp_recv()` 函数中，当处理 GUE 数据包时，如果内层协议号 `proto_ctype` 为 0，函数会将返回值设为 0 并传递给 `ip_protocol_deliver_rcu()`。在内核协议栈逻辑中，返回 0 通常被解释为“无错误”或“成功”，导致数据包被错误处理且未被释放或未被正确转发，最终导致 skb 内存泄漏。虽然协议号 0 在 IPv6 中是有效的，但在 GUE 封装场景下，使用 0 作为“resubmit”标记与“无错误”产生了冲突。
+
+#解决方案
+在 `gue_udp_recv()` 函数中增加对 `proto_ctype` 为 0 的检查。如果检测到内层协议号为 0，直接跳转到 `drop` 标签丢弃该数据包，防止内存泄漏。代码变更如下：
+```c
+proto_ctype = guehdr->proto_ctype;
+if (unlikely(!proto_ctype))
+    goto drop;
+```
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a5ccf28b2822e31ce6ff3cbe3fa9043062dbdc6b

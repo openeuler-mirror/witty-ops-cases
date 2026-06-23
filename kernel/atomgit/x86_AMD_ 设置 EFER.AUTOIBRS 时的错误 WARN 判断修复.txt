@@ -1,0 +1,21 @@
+#标题
+x86/AMD: 设置 EFER.AUTOIBRS 时的错误 WARN 判断修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 AUTOIBRS 特性的 AMD CPU 上，当内核尝试设置 EFER 寄存器的 AUTOIBRS 位时，如果该位已经被设置（即硬件先前已开启该功能），内核会错误地触发 WARN_ON_ONCE 警告。这导致系统启动或 CPU 初始化过程中出现非预期的内核警告日志，干扰正常的故障排查。
+
+#主要错误日志
+WARNING: CPU: ... PID: ... at arch/x86/kernel/cpu/amd.c:... init_amd+0x.../0x... （推断：典型 WARN_ON_ONCE 触发日志）
+
+#问题根因
+在 `init_amd()` 函数中，代码使用 `msr_set_bit()` 来设置 MSR_EFER 寄存器的 AUTOIBRS 位。`msr_set_bit()` 函数的返回值含义如下：返回负值表示 WRMSR 操作失败，返回 0 表示该位已经设置（无需再次写入），返回 1 表示该位原为清除状态且已成功设置。
+原代码直接使用 `WARN_ON_ONCE(msr_set_bit(...))` 进行判断，由于 C 语言中非零值为真，当该位已经被设置（返回 0）或操作成功（返回 1）时，条件均可能触发警告逻辑（实际上主要是返回 1 时触发，因为 0 为假不触发，但开发者意图是仅在失败时警告）。这导致在“无需设置（已设置）”的正常成功场景下，内核错误地输出了警告信息。
+
+#解决方案
+修改 `arch/x86/kernel/cpu/amd.c` 中的判断逻辑，仅在 WRMSR 操作真正失败时才触发警告。将 `WARN_ON_ONCE(msr_set_bit(MSR_EFER, _EFER_AUTOIBRS))` 修改为 `WARN_ON_ONCE(msr_set_bit(MSR_EFER, _EFER_AUTOIBRS) < 0)`。这样，只有当 `msr_set_bit` 返回负值（表示写 MSR 失败）时才触发 WARN，忽略了返回 0（位已设置）和返回 1（设置成功）的正常情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b24fbf816b079b8d46a02c06bde06a25a19f7b99

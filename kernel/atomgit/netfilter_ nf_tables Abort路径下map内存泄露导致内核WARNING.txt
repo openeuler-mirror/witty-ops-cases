@@ -1,0 +1,25 @@
+#标题
+netfilter: nf_tables Abort路径下map内存泄露导致内核WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行涉及 map 元素的事务操作时，若触发 abort 回滚路径（如删除元素后删除集合），内核会因引用计数被重复恢复而触发 WARNING。具体表现为 `nf_tables_chain_destroy` 函数检测到状态异常，打印警告调用栈，可能导致内存泄露或后续访问异常。
+
+#主要错误日志
+[ 6170.286939] WARNING: CPU: 6 PID: 790302 at net/netfilter/nf_tables_api.c:2086 nf_tables_chain_destroy+0x1f7/0x220 [nf_tables]
+[ 6170.287768] RIP: 0010:nf_tables_chain_destroy+0x1f7/0x220 [nf_tables]
+[ 6170.288483]  nf_tables_trans_destroy_work+0x588/0x590 [nf_tables]
+
+#问题根因
+删除集合（delete set）命令不依赖事务对象来移除元素。因此，在 abort 路径中，"删除元素（delete element）" 和 "删除集合（delete set）" 的组合操作会导致映射的引用计数被恢复两次。具体来说，abort 路径未检查元素是否已在下一代中处于非活跃状态，盲目执行了 activate 操作，导致状态恢复逻辑错误。
+
+#解决方案
+在 abort 路径处理 `NFT_MSG_DESTROYSETELEM` 时，增加对元素下一代活跃状态的检查。
+1. 新增 `nft_setelem_active_next` 函数用于检查元素在下一代是否活跃。
+2. 在恢复元素状态前，调用该检查函数。
+3. 只有当元素在下一代中未被清除时，才执行 `nft_setelem_data_activate` 和 `nft_setelem_activate` 操作，从而避免重复恢复引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c01f2879c59c21898402d0bf7a65bc7612507ad4

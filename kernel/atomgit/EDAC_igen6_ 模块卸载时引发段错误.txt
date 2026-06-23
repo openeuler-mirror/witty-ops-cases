@@ -1,0 +1,26 @@
+#标题
+EDAC/igen6: 模块卸载时引发段错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+卸载 igen6_edac 内核模块（执行 rmmod）时触发段错误。这是由于内存管理错误导致的，具体表现为对同一块内存区域进行了二次释放。
+
+#主要错误日志
+未知
+
+#问题根因
+该故障由 `mci->pvt_info` 指针的双重释放引起：
+1. 在模块加载（modprobe）阶段，`igen6_probe()` 分配了 `igen6_pvt` 内存，且 `mci->pvt_info` 指向了 `igen6_pvt` 内部的成员 `imc[mc]`。
+2. 在模块卸载（rmmod）阶段，EDAC 核心层的 `mci_release()` 函数会自动执行 `kfree(mci->pvt_info)`，导致 `imc[mc]` 所在的内存被释放。
+3. 随后 `igen6_remove()` 继续执行 `kfree(igen6_pvt)`，由于 `igen6_pvt` 包含了刚才已被释放的 `imc[mc]` 区域，触发了双重释放，导致段错误。
+
+#解决方案
+通过将 `mci->pvt_info` 设置为 NULL 来避免双重释放。
+1. 在 `igen6_unregister_mcis()` 函数中，在调用 `edac_mc_free(mci)` 之前，显式将 `mci->pvt_info` 设为 NULL。
+2. 在 `igen6_register_mci()` 的错误处理路径（fail3标签处）中，同样将 `mci->pvt_info` 设为 NULL。
+此举防止了 EDAC 核心代码释放这块属于 `igen6_pvt` 结构体一部分的内存，确保内存生命周期由驱动自身管理，避免了非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ddd3a864e39eadecf312cf335afa804859ef978

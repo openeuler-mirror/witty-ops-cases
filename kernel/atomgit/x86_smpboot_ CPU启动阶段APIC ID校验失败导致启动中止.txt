@@ -1,0 +1,23 @@
+#标题
+x86/smpboot: CPU启动阶段APIC ID校验失败导致启动中止
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在x86架构系统启动CPU（CPU bringup）过程中，如果CPU的APIC ID无效或物理不存在，内核会打印错误信息并中止该CPU的启动流程，返回-EINVAL。
+
+#主要错误日志
+- CPU %u has invalid APIC ID %x. Aborting bringup
+- CPU %u APIC ID %x is not present. Aborting bringup
+
+#问题根因
+原有的错误提示信息 "smpboot: native_kick_ap: bad cpu 33" 过于简略，未区分具体的错误类型（是APIC ID值无效，还是APIC ID在物理CPU位图中不存在），导致在排查CPU启动失败时无法快速定位具体的故障原因。
+
+#解决方案
+修改 `arch/x86/kernel/smpboot.c` 中的 `native_kick_ap` 函数，将原先合并的判断条件拆分为两个独立的检查分支，并分别打印包含具体APIC ID值和CPU编号的详细错误日志：
+1. 检查APIC ID是否为BAD_APICID或无效值，若是则打印 "invalid APIC ID" 错误并返回。
+2. 检查APIC ID是否存在于 `phys_cpu_present_map` 位图中，若不存在则打印 "is not present" 错误并返回。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3573bf3ac64c9516c7a9548cb15f265959bac0c6

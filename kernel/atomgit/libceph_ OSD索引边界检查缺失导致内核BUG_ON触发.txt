@@ -1,0 +1,20 @@
+#标题
+libceph: OSD索引边界检查缺失导致内核BUG_ON触发
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当接收到来自非可信网络源的特定Ceph OSD Map数据包时，如果其中的OSD索引值超过map->max_osd界限，内核会触发BUG_ON导致系统panic或Oops，造成服务不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+OSD索引来源于不可信的网络数据包。在函数`decode_new_primary_affinity`、`decode_new_up_state_weight`以及`ceph_get_primary_affinity`和`set_primary_affinity`的处理逻辑中，代码直接使用网络传入的OSD索引访问数组，且仅依赖`BUG_ON(osd >= map->max_osd)`进行防御。当恶意或异常数据包中的OSD索引越界时，内核直接触发panic而非返回错误码，导致系统崩溃。
+
+#解决方案
+移除相关路径中的`BUG_ON`断言，替换为显式的边界检查逻辑。在解码函数`decode_new_primary_affinity`和`decode_new_up_state_weight`中，增加判断条件`if (osd >= map->max_osd) goto e_inval;`。当检测到OSD索引越界时，跳转至错误处理标签`e_inval`返回无效数据错误，从而优雅地处理异常数据包，避免内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6d72d156c175ccafc72298412c5b538e4517a388

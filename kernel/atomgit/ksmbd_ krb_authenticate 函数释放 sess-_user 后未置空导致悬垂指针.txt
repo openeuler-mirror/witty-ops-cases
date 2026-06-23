@@ -1,0 +1,20 @@
+#标题
+ksmbd: krb_authenticate 函数释放 sess->user 后未置空导致悬垂指针
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 通过 Kerberos 进行用户认证（krb5_authenticate）的过程中，若会话状态为 SMB2_SESSION_VALID，代码会释放 sess->user 指向的内存。随后调用的 ksmbd_krb5_authenticate 函数可能执行失败并返回，未能重新初始化 sess->user。此时 sess->user 仍指向已被释放的内存（悬垂指针）。当上层调用函数 smb2_sess_setup 继续访问 sess->user 时，将发生访问已释放内存（Use-After-Free）的错误，可能导致内核崩溃或内存数据破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `krb5_authenticate` 函数中，当会话状态有效（SMB2_SESSION_VALID）时，代码调用 `ksmbd_free_user(sess->user)` 释放了用户结构体内存，但未将 `sess->user` 指针置为 NULL。后续依赖 `ksmbd_krb5_authenticate` 函数来重新初始化该指针，但该函数存在执行失败且不进行初始化的路径。若该函数失败，`sess->user` 将保持指向已释放内存的悬垂指针状态，导致后续访问触发 Use-After-Free。
+
+#解决方案
+在 `fs/smb/server/smb2pdu.c` 文件的 `krb5_authenticate` 函数中，在调用 `ksmbd_free_user(sess->user)` 释放内存后，立即显式地将 `sess->user` 指针设置为 NULL。这样可以防止在后续认证流程失败时访问到无效的悬垂指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac8d44193ae46ecb815e4090a59517d3e0d84ce9

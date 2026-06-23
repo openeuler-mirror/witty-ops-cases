@@ -1,0 +1,20 @@
+#标题
+sh: intc: 修复 register_intc_controller 中的 use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在注册中断控制器（intc controller）时，若后续初始化步骤（如 `kmalloc` 分配内存或 `ioremap` 映射寄存器）失败，函数会跳转至错误处理分支（如 `err1`、`err2`）并调用 `kfree` 释放已分配的结构体 `d`。由于结构体 `d` 在初始化早期就被加入了全局链表 `intc_list`，此时虽然内存已释放，但该节点仍留在全局链表中，导致内核在后续遍历 `intc_list` 时访问到已释放内存，引发 Use-After-Free 故障，可能导致内核崩溃或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 `list_add_tail(&d->list, &intc_list)` 操作被过早执行。代码逻辑中，该操作位于资源初始化完成之前，当后续资源申请失败（如内存分配失败、IO 映射失败）进入错误处理流程时，代码仅执行了 `kfree(d)` 释放内存，却未将节点从全局链表 `intc_list` 中删除。这导致全局链表中保留了指向已释放内存的指针，造成 Use-After-Free 安全漏洞。
+
+#解决方案
+将 `list_add_tail(&d->list, &intc_list)` 操作从初始化过程的中间位置移动至函数返回前的最后一步（在 `nr_intc_controllers++` 之前）。这确保了只有当所有资源初始化成功后，该结构体才会被加入全局链表；若中间步骤失败，则无需从链表中移除，从而避免了访问已释放内存的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2f4f29dded795b3894c864639e8e042652b704c7

@@ -1,0 +1,31 @@
+#标题
+imx8ulp flexspi 兼容字符串错误导致内核启动 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+NXP i.MX8ULP EVK 开发板在内核启动过程中，FlexSPI 驱动加载时触发 WARNING 并打印调用栈。由于设备树中 flexspi2 节点使用了错误的兼容字符串，导致驱动使用了错误的查找表（LUT）配置引发异常。
+
+#主要错误日志
+[    1.119072] ------------[ cut here ]------------
+[    1.123926] WARNING: CPU: 0 PID: 1 at drivers/spi/spi-nxp-fspi.c:855 nxp_fspi_exec_op+0xb04/0xb64
+...
+[    1.146821] Hardware name: NXP i.MX8ULP EVK (DT)
+...
+[    1.246267] Call trace:
+[    1.248824]  nxp_fspi_exec_op+0xb04/0xb64
+[    1.253031]  spi_mem_exec_op+0x3a0/0x430
+[    1.257139]  spi_nor_read_id+0x80/0xcc
+[    1.261065]  spi_nor_scan+0x1ec/0xf10
+...
+[    1.407908] ------------[ cut here ]------------
+
+#问题根因
+imx8ulp 的 flexspi 控制器仅支持 16 个 LUT（Lookup Table）序列，而 imx8mm 的 flexspi 控制器支持 32 个 LUT。设备树中 `flexspi2` 节点错误地使用了 `nxp,imx8mm-fspi` 作为兼容字符串，导致驱动程序按照 imx8mm 的规格（32 LUTs）进行初始化和配置，从而引发功能异常并触发 WARNING。
+
+#解决方案
+修改设备树文件 `arch/arm64/boot/dts/freescale/imx8ulp.dtsi`，将 `flexspi2` 节点的 `compatible` 属性从 `"nxp,imx8mm-fspi"` 修正为 `"nxp,imx8ulp-fspi"`，确保驱动匹配正确的硬件特性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a33eac51b5540b5dad8d9f4eb79d6beb09a31102

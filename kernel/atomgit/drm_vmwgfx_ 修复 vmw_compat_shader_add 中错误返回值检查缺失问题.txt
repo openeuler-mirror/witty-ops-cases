@@ -1,0 +1,22 @@
+#标题
+drm/vmwgfx: 修复 vmw_compat_shader_add 中错误返回值检查缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 vmw_compat_shader_add 函数中，当 vmw_shader_alloc() 调用失败时，代码原有的检查逻辑未能正确捕获该错误。这导致函数在内存分配失败或_shader 创建异常的情况下，未能正确返回错误码，反而可能继续执行后续逻辑，引发内核空指针访问或状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 vmw_compat_shader_add() 函数中，对 vmw_shader_alloc() 返回值指针 'res' 的检查存在逻辑错误。原代码错误地检查了旧变量 'ret' 而非新赋值的指针 'res'（代码为 `if (unlikely(ret != 0))`），导致无法正确识别 vmw_shader_alloc() 是否返回了错误指针（如 ERR_PTR）。
+
+#解决方案
+修改 drivers/gpu/drm/vmwgfx/vmwgfx_shader.c 文件中的判断逻辑：
+1. 将条件判断从检查 `ret` 变量改为使用 `IS_ERR(res)` 宏来检查返回指针 `res` 的有效性。
+2. 在判定 `res` 为错误指针后，通过 `ret = PTR_ERR(res)` 提取具体的错误码并赋值给 `ret`，确保错误信息能正确向上传递。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/76ddb5b9a1eb6bfc86af4fd11035f5766daa0f61

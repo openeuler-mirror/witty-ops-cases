@@ -1,0 +1,20 @@
+#标题
+ISST 接口驱动 KASAN 报告 slab-out-of-bounds 越界访问故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行 KASAN（Kernel Address Sanitizer）检测时，触发 `slab-out-of-bounds` 错误报告。该故障发生在 Intel Speed Select Technology (ISST) 接口驱动获取 PCI 设备的过程中。
+
+#主要错误日志
+KASAN: slab-out-of-bounds
+
+#问题根因
+在函数 `_isst_if_get_pci_dev` 中，代码使用 `topology_physical_package_id(cpu)` 获取物理包 ID（pkg_id），并将其直接作为数组索引使用。然而，`physical_package_id` 的值可能大于系统实际存在的物理包数量（`topology_max_packages()`），导致在访问相关数据结构时引发数组越界访问（slab-out-of-bounds）。
+
+#解决方案
+将获取包 ID 的接口从 `topology_physical_package_id(cpu)` 修改为 `topology_logical_package_id(cpu)`，以获取有效的逻辑包索引。同时新增边界检查逻辑，若获取到的 `pkg_id` 大于或等于 `topology_max_packages()`，则直接返回 NULL，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75c706488865688441b20af105bab87a587d04b4

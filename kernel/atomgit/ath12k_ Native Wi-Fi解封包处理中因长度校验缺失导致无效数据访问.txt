@@ -1,0 +1,20 @@
+#标题
+ath12k: Native Wi-Fi解封包处理中因长度校验缺失导致无效数据访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定场景下，硬件可能提供长度超过最大 Native Wi-Fi 头部长度的数据包。在处理 `DP_RX_DECAP_TYPE_NATIVE_WIFI` 类型的解封包时，函数 `ath12k_dp_rx_h_undecap_nwifi` 未对头部长度进行校验，直接访问并修改头部字段，导致无效数据访问及内存污染。
+
+#主要错误日志
+WARN_ON_ONCE(1);
+
+#问题根因
+硬件在某些情况下提供的包长度大于最大 Native Wi-Fi 头部长度。驱动在 `ath12k_dp_rx_h_undecap_nwifi` 函数处理 `DP_RX_DECAP_TYPE_NATIVE_WIFI` 解封类型时，缺少对 SKB 头部长度的有效性检查，导致越界访问。
+
+#解决方案
+新增 `ath12k_dp_rx_check_nwifi_hdr_len_valid` 函数，在处理 SKB 前执行健全性检查。若解封类型为 `DP_RX_DECAP_TYPE_NATIVE_WIFI` 且头部长度超过 `DP_MAX_NWIFI_HDR_LEN`，则增加统计计数并返回错误，阻止后续处理。在 `ath12k_dp_rx_process_msdu`、`ath12k_dp_rx_h_verify_tkip_mic`、`ath12k_dp_rx_h_null_q_desc` 及 `ath12k_dp_rx_h_tkip_mic_err` 等关键路径中插入该校验，确保发现异常长度时直接丢弃数据包并返回 `-EINVAL`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae7cdb5b3769da53ac3c77e589bb15f23f85c49e

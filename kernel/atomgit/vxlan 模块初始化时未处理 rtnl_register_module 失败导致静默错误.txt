@@ -1,0 +1,20 @@
+#标题
+vxlan 模块初始化时未处理 rtnl_register_module 失败导致静默错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 vxlan 模块初始化过程中，若 `rtnl_register_module()` 函数调用失败（例如在内存不足 OOM 场景下），模块未捕获错误并进行回滚处理。这导致模块加载状态与实际功能注册状态不一致，且没有报错信息提示。在 syzkaller 测试等易触发 OOM 的场景中，会因此产生虚假的错误报告或测试失败。
+
+#主要错误日志
+未知
+
+#问题根因
+自 vxlan vni filtering 功能引入以来，`vxlan_vnifilter_init()` 函数一直忽略 `rtnl_register_module()` 的返回值。当该函数失败时，错误被静默忽略，无法保证 rtnetlink 功能注册的“全有或全无”特性，导致模块处于部分初始化的异常状态。
+
+#解决方案
+修改 `vxlan_vnifilter_init()` 的返回类型为 int，并使用 `rtnl_register_many()` 接口替代分散的 `rtnl_register_module()` 调用，以便统一处理注册失败的情况。在模块初始化函数 `vxlan_init_module()` 中增加对 `vxlan_vnifilter_init()` 返回值的检查，若失败则跳转到错误处理标签 `out5`，调用 `rtnl_link_unregister` 进行回滚，确保模块初始化的原子性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7677a7229eebb0faff13c981b810a2055b2a3e73

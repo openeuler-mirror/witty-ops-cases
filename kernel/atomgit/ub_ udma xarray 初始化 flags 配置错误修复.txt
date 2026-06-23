@@ -1,0 +1,28 @@
+#标题
+ub: udma xarray 初始化 flags 配置错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在使用 UDMA (Userspace Direct Memory Access) 相关功能时，驱动程序对 xarray 进行初始化时未正确传递锁标志。
+2. 在某些并发场景下，可能导致内核内存管理出现竞态条件，引发内核 panic 或数据结构损坏。
+3. 另外存在内存分配失败路径上的内存泄漏风险，以及调试日志打印可能导致内核日志缓冲区刷屏的问题。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **核心根因**：函数 `udma_init_udma_table` 和 `udma_init_udma_table_mutex` 在初始化 xarray 时，内部统一调用了 `xa_init`，忽略了特定表结构是否需要中断安全锁（`XA_FLAGS_LOCK_IRQ`）的需求。这导致在需要禁用本地中断进行锁保护的场景下，锁行为不正确，可能引发死锁或并发访问异常。
+2. **其他修复**：代码中还存在几处资源释放逻辑缺失（如 `buf->aligned_va` 和 `aux_info_type` 在错误路径未置 NULL 或释放）以及调试日志未使用 ratelimited 机制的问题。
+
+#解决方案
+1. 修改 `udma_init_udma_table` 和 `udma_init_udma_table_mutex` 函数接口，增加 `bool irq_lock` 参数。
+2. 在函数实现中根据 `irq_lock` 参数判断调用 `xa_init_flags(&table->xa, XA_FLAGS_LOCK_IRQ)` 还是默认的 `xa_init`。
+3. 在调用端（如 `udma_main.c` 等）根据表的实际使用场景传入正确的 `true` 或 `false` 标志：
+   - `jfc_table`、`jetty_grp_table`、`npu_nb_table` 和 `tpn_ue_idx_table` 需要中断锁，设置为 `true`。
+   - `jfr_table`、`ksva_table` 等不需要中断锁，设置为 `false`。
+4. 同时修复了内存分配失败时的泄漏问题和日志打印限速问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/430e4e841b46b8d9e07514cdbfe5ee3544e2ac02

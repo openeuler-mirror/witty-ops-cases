@@ -1,0 +1,27 @@
+#标题
+ub: ubase: 修复编译警告导致构建失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核编译构建过程中，drivers/ub/ubase/ 目录下的多个文件触发编译器警告（warnings），具体表现为：发现未使用的结构体定义、结构体定义不兼容以及函数缺少 "static" 修饰符等问题。该问题由 kernel test robot 在编译测试中报告，可能影响内核构建的严格检查流程（如启用 -Werror 时会导致构建失败）。
+
+#主要错误日志
+未知
+（注：Commit message 中引用的 Reported-by 链接包含详细的编译警告日志原文，但 Commit 自身未直接提供具体的警告文本片段，此处依据模板要求填写“未知”）
+
+#问题根因
+代码中存在以下编码缺陷导致编译器报警：
+1. `ubase_ctrlq_crq_handler` 和 `ubase_cmd_ctx_buf_alloc` 函数仅在文件内部使用，但未添加 `static` 修饰符，导致编译器警告缺少可见性声明。
+2. `ubase_pmem_init_map` 数组的定义方式与其元素结构体 `ubase_pmem_init_func` 的定义方式不匹配（原先的结构体定义融合在数组声明中），导致结构体定义不兼容的警告。
+3. `ubase_ubus_pm_ops` 相关的电源管理定义方式不符合 SIMPLE_DEV_PM_OPS 宏的最新使用规范，导致编译警告。
+
+#解决方案
+通过修改代码消除编译警告：
+1. 为 `ubase_ctrlq_crq_handler` 和 `ubase_cmd_ctx_buf_alloc` 函数添加 `static` 修饰符，明确其内部链接属性。
+2. 将 `ubase_pmem_init_func` 结构体的定义从数组声明中独立出来，先定义结构体类型，再定义数组，消除定义不兼容警告。
+3. 更新 `ubase_ubus_pm_ops` 的定义方式，使用 `DEFINE_SIMPLE_DEV_PM_OPS` 宏替代旧有的 `SIMPLE_DEV_PM_OPS` 及相关 driver 结构体定义，符合当前内核编码规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0c32deb41bc70fd6dc27d8421fd163cbd4172d45

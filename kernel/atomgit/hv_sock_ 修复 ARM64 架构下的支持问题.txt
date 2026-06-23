@@ -1,0 +1,20 @@
+#标题
+hv_sock: 修复 ARM64 架构下的支持问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 架构的内核（配置为 64K 页大小）上，Hyper-V Socket (hv_sock) 功能无法正常工作。由于 VMBUS 环形缓冲区（ring buffers）要求必须页对齐，原有的缓冲区大小设置（如 24K）在 64K 页大小的 ARM64 系统上会导致对齐失败，进而引发功能异常或初始化失败。
+
+#主要错误日志
+未知
+
+#问题根因
+VMBUS 环形缓冲区必须页对齐。在 ARM64 内核上（特别是使用 64K 页大小的配置时），代码中直接使用的 24K 缓冲区大小无法满足页对齐要求。原代码仅使用 `ALIGN(..., HV_HYP_PAGE_SIZE)` 进行对齐，不足以处理跨架构页大小差异带来的问题，导致缓冲区大小不合法。
+
+#解决方案
+修改 `net/vmw_vsock/hyperv_transport.c` 中的缓冲区大小计算逻辑，将 `sndbuf` 和 `rcvbuf` 的对齐方式从 `ALIGN(..., HV_HYP_PAGE_SIZE)` 替换为 `VMBUS_RING_SIZE(...)` 宏。该宏能确保环形缓冲区的大小在所有架构上都是页对齐的，并且足以容纳相关数据，从而修复 ARM64 上的支持问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab26156c6f67f9a92ca3ea270a9e92b4b58c7731

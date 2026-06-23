@@ -1,0 +1,20 @@
+#标题
+pinctrl: qcom: msm: 修复 pinmux 配置过程中的死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm 平台上，当一个 GPIO 上触发了唤醒中断（wakeup IRQ），且该中断处理程序尝试重新配置同一个 GPIO 的 pinmux 时，系统会发生死锁，导致相关线程或 CPU 无法继续响应。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `msm_pinmux_set_mux()` 函数中调用了 `disable_irq()` 来禁用中断。`disable_irq()` 是同步函数，会等待当前正在运行的中断处理程序执行完毕。如果此时中断处理程序正在运行且试图获取 pinmux 相关的锁或资源，而 `msm_pinmux_set_mux()` 又持有锁等待中断处理结束，就会形成循环依赖，从而导致死锁。
+
+#解决方案
+将 `msm_pinmux_set_mux()` 函数中的 `disable_irq()` 替换为 `disable_irq_nosync()`。`disable_irq_nosync()` 仅标记禁用中断而不等待中断处理程序完成，从而打破了循环依赖，避免了死锁发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8792d8c210b9e994c8d453a5ca446e89da3e75a3

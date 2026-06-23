@@ -1,0 +1,20 @@
+#标题
+mlx5 SF 添加失败后因错误处理缺失导致驱动卸载时固件报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在添加 SF（Sub-Function）失败的场景下，错误处理流程未将 SF 从软件维护的 SF 表中删除。随后在驱动卸载时，代码尝试再次删除硬件资源，导致固件报告错误综合征。
+
+#主要错误日志
+Firmware will report syndrome 0x68def3 which means "SF is not allocated can not deallocate".
+
+#问题根因
+SF 添加失败时的错误处理逻辑不完整。虽然硬件资源在失败路径中被释放了，但并未将 SF 条目从 SF 表（SF table）中移除。这导致驱动卸载流程中，系统认为 SF 仍然存在并尝试再次释放硬件资源，进而触发固件报错，提示 SF 未分配无法释放。
+
+#解决方案
+在 SF 添加失败的错误处理分支（esw_err 标签处）中，增加调用 `mlx5_sf_function_id_erase` 函数，确保在释放 SF 内存之前，先将该 SF 从 SF 表中删除，保证软件状态与硬件资源状态的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/44d6c6685a6e3dffa4a2cc9c8d0dfbed00c3ba23

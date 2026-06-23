@@ -1,0 +1,21 @@
+#标题
+amdkfd: amdkfd_free_gtt_mem 导致的 Use-After-Free 漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 驱动（amdkfd）中，调用 `amdgpu_amdkfd_free_gtt_mem` 函数释放内存对象后，由于指针未被正确置空（NULL），导致该指针成为悬空指针。后续代码若继续引用该指针，将触发 Use-After-Free 漏洞，可能导致内核崩溃或内存被非法篡改。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `amdgpu_amdkfd_free_gtt_mem` 的参数类型定义为 `void *mem_obj`（值传递），在函数内部将该参数强制转换为局部变量 `struct amdgpu_bo *bo`，并将该局部变量的地址 `&bo` 传递给 `amdgpu_bo_unref`。
+这导致 `amdgpu_bo_unref` 函数仅仅将局部变量 `bo` 置为 NULL，而调用者持有的原始指针并未被清零。原始指针随后指向了已被释放的内存，从而引发 Use-After-Free 风险。
+
+#解决方案
+将 `amdgpu_amdkfd_free_gtt_mem` 函数的参数类型从 `void *mem_obj` 修改为 `void **mem_obj`（指针的地址），并在函数内部通过解引用操作 (`*bo`) 访问对象，确保 `amdgpu_bo_unref` 能够修改调用者持有的原始指针，将其正确置为 NULL。同时，修复了所有调用该函数的站点，传递指针的地址（如 `&kfd->gtt_mem`）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6665e13cff6f8b6428e9cd544e8ff7ffba1766fd

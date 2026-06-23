@@ -1,0 +1,23 @@
+#标题
+LoongArch KVM eiointc 虚拟机迁移场景下内存越界访问问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构下使用 QEMU 进行虚拟机迁移（migration）时，由于内核 KVM 模块中 eiointc 中断控制器的实现与上游 QEMU 存在兼容性问题，会导致内核发生越界内存访问。这可能导致虚拟机迁移失败、宿主机内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+上游 QEMU 的实现与当前内核 KVM eiointc 中断控制器代码在寄存器访问处理逻辑上存在差异。原代码在处理寄存器读写时，针对起始地址和后续地址使用了分离的 case 分支，且对部分寄存器（如 `nodetype`、`enable` 等）设置了固定且可能过大的访问长度（len），导致在虚拟机迁移场景下进行寄存器访问时发生越界内存访问。
+
+#解决方案
+重构 `kvm_eiointc_regs_access` 函数的寄存器访问逻辑：
+1. 合并寄存器地址范围判断，使用连续的 case range 语法（如 `case EIOINTC_NODETYPE_START ... EIOINTC_NODETYPE_END`）替代原先分离的起始地址与后续地址处理，统一计算偏移量。
+2. 统一并限制访问操作的数据长度，将原来的变长访问（部分为结构体全长）统一修改为固定的 4 字节读写，避免越界访问。
+3. 优化数据拷贝流程，将 `copy_from_user`/`copy_to_user` 移至函数调用外层或改用内核内存拷贝方式，确保访问安全。同时修正了 `pch_pic.c` 中的类似问题，将局部缓冲区大小调整为合理范围。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/248a05f8c6f6e091a19f9b5967a941bbe7c3ace4

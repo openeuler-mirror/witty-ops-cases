@@ -1,0 +1,20 @@
+#标题
+sw64 KVM PV steal time 功能 SRCU 锁泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构 KVM 环境下，当触发 PV steal time 记录函数 `kvm_sw64_record_steal_time()` 的特定错误处理路径（如非法地址或用户空间数据访问失败）时，函数提前返回，导致 SRCU 读锁未被释放。这将引发内核资源泄漏，随着时间推移可能耗尽 SRCU 锁资源，进而影响系统稳定性或导致相关功能阻塞。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `kvm_sw64_record_steal_time()` 在执行过程中首先获取了 SRCU 读锁，但在后续的几个错误检查点（`kvm_is_error_hva` 检查失败、`get_user` 或 `put_user` 操作失败）直接调用了 `return` 语句退出函数。这些提前返回路径跳过了函数末尾的 `srcu_read_unlock` 调用，导致持有的 SRCU 锁无法释放，造成锁资源泄漏。
+
+#解决方案
+修改 `kvm_sw64_record_steal_time()` 函数的退出逻辑，将错误处理路径中的直接 `return` 语句替换为 `goto out_unlock` 跳转。在函数末尾统一设置 `out_unlock` 标签，确保无论是正常执行结束还是遇到错误提前退出，最终都会执行 `srcu_read_unlock` 释放锁资源，从而修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b95ec3541d14d27cd320cc3e588726405a4958d9

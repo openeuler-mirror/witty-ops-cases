@@ -1,0 +1,21 @@
+#标题
+stmmac 驱动未校验 PTP 时钟速率导致配置时间戳功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 stmmac 网卡驱动初始化时间戳计数器时，若 PTP 时钟速率（`clk_ptp_rate`）为 0，内核可能发生除零错误，导致系统崩溃或功能异常。
+
+#主要错误日志
+[   xx.xxxxxx] stmmaceth: Invalid PTP clock rate
+
+#问题根因
+驱动在调用 `stmmac_init_tstamp_counter` 初始化时间戳时，以及 `stmmac_ptp_register` 计算 CDC（Clock Domain Crossing）误差调整值时，未对 `priv->plat->clk_ptp_rate` 进行有效性检查。当该值为 0 时，代码逻辑继续执行除法运算（如 `(2 * NSEC_PER_SEC) / priv->plat->clk_ptp_rate`），导致除零错误。
+
+#解决方案
+1. 在 `stmmac_init_tstamp_counter` 函数中增加对 `priv->plat->clk_ptp_rate` 的非零校验，若值为 0 则打印错误日志 "Invalid PTP clock rate" 并返回 `-EINVAL`，阻止后续配置。
+2. 在 `stmmac_ptp_register` 函数中，由于上游调用点已确保 `clk_ptp_rate` 不为 0，移除了 `if` 条件中对 `clk_ptp_rate` 的重复检查，简化逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4235bcef712034457b038e441060da74deb82475

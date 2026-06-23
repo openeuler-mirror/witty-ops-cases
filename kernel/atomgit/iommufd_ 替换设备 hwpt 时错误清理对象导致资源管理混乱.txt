@@ -1,0 +1,20 @@
+#标题
+iommufd: 替换设备 hwpt 时错误清理对象导致资源管理混乱
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `iommufd_device_do_replace` 函数进行设备 hwpt（硬件页表）替换操作时，若流程进入错误处理分支（err_unresv），系统会错误地从旧的 hwpt（old_hwpt）中移除预留的 iovas，而不是从新设置的 hwpt 中移除。这可能导致新的 hwpt 状态异常，残留本应清理的预留 IOVA 资源，或破坏旧的 hwpt 的状态，进而引发后续 IOMMU 操作的不确定性或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `iommufd_device_do_replace` 的错误处理路径 `err_unresv` 中，代码逻辑错误地传递了 `old_hwpt` 给 `iommufd_group_remove_reserved_iova` 函数。根据 Commit 描述，回滚例程应该移除的是刚刚添加到新的 hwpt 中的预留 iovas，代码却错误地操作了旧的 hwpt。
+
+#解决方案
+修正 `iommufd_group_remove_reserved_iova` 的调用参数，将第二个参数从 `to_hwpt_paging(old_hwpt)` 修改为 `to_hwpt_paging(hwpt)`，确保在出错回滚时，正确地从新 hwpt 中移除预留的 iovas。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cf1d5d1931adbbe17ef631572d28b9f67583e94d

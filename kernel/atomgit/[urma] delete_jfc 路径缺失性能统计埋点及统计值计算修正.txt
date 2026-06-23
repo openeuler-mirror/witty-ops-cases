@@ -1,0 +1,31 @@
+#标题
+[urma] delete_jfc 路径缺失性能统计埋点及统计值计算修正
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在调用 `ubcore_delete_jfc` 接口删除 JFC（Jetty Flow Control）时，内核性能统计功能缺失，导致无法准确度量该删除流程的时延与性能开销。
+2. 性能统计模块在计算 P90、P99、P9999 延迟分位值时，计算结果可能超过最大值（max_ns），导致统计数据出现逻辑错误（分位值不应大于样本最大值）。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **性能埋点缺失**：在 `ubcore_delete_jfc` 函数及其调用链路中，未添加 `UBCORE_PERF_TRACE_BEGIN` 和 `UBCORE_PERF_TRACE_END` 宏定义进行埋点，导致该关键路径缺乏性能数据采集；同时部分相关路径（如 `ubcore_import_jfr`、`ubcore_import_jetty`）的性能埋点类型逻辑存在错误或遗漏。
+2. **统计算法缺陷**：`ubcore_compute_stat_for_type` 函数在计算延迟分位值时，直接取排序后的样本值，未校验该值是否大于统计出的 `max_ns`，违反了分位值不超过最大值的统计定义。
+
+#解决方案
+1. **补全性能埋点**：
+   - 在 `ubcore_delete_jfc`、`uburma_cmd_delete_jfc` 及 `ubcore_get_tp_list` 等函数的所有分支路径中，补全 `UBCORE_PERF_TRACE_BEGIN/END` 调用，确保能正确统计函数执行耗时。
+   - 在 `ubcore_delete_jfc` 中根据设备类型（bonding 或普通）动态选择正确的统计类型（`PERF_AGG_DESTROY_JFC` 或 `PERF_UB_DESTROY_JFC`）。
+   - 修正 `ubcore_import_jfr` 和 `ubcore_import_jetty` 中的性能统计类型逻辑，确保在不同模式下使用正确的统计 ID。
+
+2. **修正分位值计算逻辑**：
+   - 修改 `ubcore_compute_stat_for_type` 函数中 `p90_ns`、`p99_ns`、`p9999_ns` 的赋值逻辑，增加三目运算检查，确保计算出的分位值如果大于 `max_ns`，则强制取值为 `max_ns`。
+
+3. **更新枚举定义**：
+   - 在 `ubcore_perf.h` 中新增 `PERF_URMA_CMD_DELETE_JFC`、`PERF_CORE_DELETE_JFC`、`PERF_AGG_DESTROY_JFC`、`PERF_UB_DESTROY_JFC` 等枚举值以支持新增的统计点。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5246f6e6e42ee25a21d5c6e0eca50ed696690732

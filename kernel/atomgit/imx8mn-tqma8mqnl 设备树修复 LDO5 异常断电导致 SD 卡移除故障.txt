@@ -1,0 +1,25 @@
+#标题
+imx8mn-tqma8mqnl 设备树修复 LDO5 异常断电导致 SD 卡移除故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动完成后，SD 卡被系统移除（SD card removal），导致 SD 卡不可用或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+设备树配置缺陷。原配置中未正确实现 USDHC2 的 `vqmmc` 供电逻辑，导致 LDO5 在启动后自动断电。由于 LDO5 为 SD 卡接口供电，其断电直接导致 SD 卡连接中断。此外，引脚配置中错误地将 GPIO1_IO04 配置为 USDHC2_VSELECT 功能，而未作为独立的 GPIO 控制调节器使用。
+
+#解决方案
+修改设备树源码，引入一个由 GPIO 控制的调节器（`regulator-gpio`）来管理 `vqmmc` 供电：
+1. 在 SoM 级设备树（`imx8mn-tqma8mqnl.dtsi`）中新增 `reg_usdhc2_vqmmc` 节点，配置其由 GPIO1_IO04 控制，供电来源设为 LDO5，默认状态设为 `disabled`。
+2. 将 USDHC2 控制器的 `vqmmc-supply` 属性指向新增的调节器节点。
+3. 新增调节器对应的 pinctrl 配置（`pinctrl_reg_usdhc2_vqmmc`），将 GPIO1_IO04 配置为 GPIO 功能而非 VSELECT 功能。
+4. 从 USDHC2 的默认、100MHz、200MHz 引脚配置组中移除 `MX8MN_IOMUXC_GPIO1_IO04_USDHC2_VSELECT` 配置。
+5. 在板级设备树（`imx8mn-tqma8mqnl-mba8mx.dts`）中将 `reg_usdhc2_vqmmc` 状态设置为 `okay` 以启用该功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75b300393af5d8af11268001edba150283d7d211

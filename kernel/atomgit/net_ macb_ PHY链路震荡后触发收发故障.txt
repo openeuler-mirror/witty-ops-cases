@@ -1,0 +1,23 @@
+#标题
+net: macb: PHY链路震荡后触发收发故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PHY 链路发生 down 后再重新 up 的过程中，网卡发生 TX/RX 功能异常（malfunction），导致网络数据包无法正常收发。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的修复提交 99537d5c476c 中，为了解决死锁问题将 `mog_init_rings()` 回调从 `macb_mac_link_up()` 移动到了 `macb_open()`。然而，该改动引入了新问题：
+当链路断开时，硬件会停止 TX/RX。根据 Zynq UltraScale TRM 文档描述，当 TX 被禁用时，硬件内部的发送队列指针会重置为发送队列基地址寄存器的值，而接收队列指针保持不变。
+在链路重新 up 时，软件维护的队列指针（`queue->tx_head`, `queue->tx_tail`, `queue->rx_prepared_head`, `queue->rx_tail`）与硬件内部已经重置或保持的队列指针不匹配，导致收发功能失效。
+
+#解决方案
+将 `macb_init_buffers()` 函数调用从 `macb_mac_link_up()` 移动至 `macb_open()` 中执行，因为无需在 PHY 事件回调中重置 RBQP 和 TBQP 寄存器。
+同时，在 `macb_mac_link_up()` 事件处理中，仅重置 TX 软件队列的头尾指针（`queue->tx_head = 0; queue->tx_tail = 0;`），以匹配硬件重置 TX 队列指针的行为，确保软硬状态一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/943f0e39cf1979f49d6d02146b608a984f0275c3

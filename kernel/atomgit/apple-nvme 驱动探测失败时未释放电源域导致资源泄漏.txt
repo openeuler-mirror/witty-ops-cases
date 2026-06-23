@@ -1,0 +1,22 @@
+#标题
+apple-nvme 驱动探测失败时未释放电源域导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+apple-nvme 驱动在probe过程中若初始化失败（如控制器初始化错误或分配失败），驱动实例会被销毁，但已获取的电源域未被释放。这导致电源域资源泄漏，可能造成设备电源状态异常或后续重新探测时资源冲突。
+
+#主要错误日志
+未知
+
+#问题根因
+在驱动探测失败或分配失败的错误处理路径中，代码直接跳转至 `put_dev` 或执行 `nvme_uninit_ctrl` 后返回，遗漏了对 `apple_nvme_detach_genpd` 函数的调用。该函数负责分离并释放已关联的电源域，缺失该步骤导致无法正确清理电源资源。
+
+#解决方案
+在驱动初始化失败的错误处理分支中增加电源域释放逻辑：
+1. 在 `apple_nvme_alloc` 函数的 `put_dev` 标签处，调用 `put_device` 前增加 `apple_nvme_detach_genpd(anv)` 调用。
+2. 在 `apple_nvme_probe` 函数的 `out_uninit_ctrl` 标签处，调用 `nvme_put_ctrl` 后增加 `apple_nvme_detach_genpd(anv)` 调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/800e0651e8bffedffb203a883836ee2979524450

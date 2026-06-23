@@ -1,0 +1,20 @@
+#标题
+streamzap: 设备断开与 URB 回调间的竞态条件导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 Streamzap 设备被断开连接时，内核可能发生 Use-After-Free（UAF）故障，导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `streamzap_disconnect` 函数中，代码执行顺序不当引入了竞态条件。原代码先调用 `rc_unregister_device` 注销设备，随后才调用 `usb_kill_urb` 终止 URB。这导致在设备注销后、URB 终止前的时间窗口内，若 URB 回调被执行，可能会访问已经被释放或无效的资源，从而触发 Use-After-Free。
+
+#解决方案
+调整 `streamzap_disconnect` 函数中的执行顺序，确保先调用 `usb_kill_urb(sz->urb_in)` 终止并同步 URB 回调，然后再调用 `rc_unregister_device(sz->rdev)` 注销设备。这样可以确保在设备资源释放前，所有正在进行的 URB 回调已完成，消除了竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a8d5efce8cac8164521db0f7a493c505d01532be

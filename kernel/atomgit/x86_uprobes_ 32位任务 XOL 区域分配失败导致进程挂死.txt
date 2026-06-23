@@ -1,0 +1,20 @@
+#标题
+x86/uprobes: 32位任务 XOL 区域分配失败导致进程挂死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在关闭地址空间随机化（randomize_va_space=0）的环境中，对 32 位程序使用 bpftrace 进行 uprobe 探测时，被探测的进程进入死循环，表现为进程挂起无响应。
+
+#主要错误日志
+未知
+
+#问题根因
+内核 `arch_get_unmapped_area_topdown()` 函数在处理 32 位任务的内存映射时，未考虑 `TIF_ADDR32` 标志，且因为此时不在系统调用上下文中导致 `in_32bit_syscall()` 返回 false。这导致 `vm_unmapped_area()` 计算出的 `high_limit` 大于 32 位任务的 `TASK_SIZE`，进而导致 `get_unmapped_area()` 在检查地址范围时返回 -ENOMEM。由于 `handle_swbp()` 未正确处理该分配失败并静默重启了探测指令，导致进程陷入无限循环。
+
+#解决方案
+在 `arch_uprobe_get_xol_area()` 函数中增加针对 32 位任务的处理逻辑：如果检测到 `TIF_ADDR32` 标志，临时设置 `TS_COMPAT` 状态位，使得 `in_ia32_syscall()` 返回 true，从而确保 `get_unmapped_area()` 能够正确识别 32 位任务的地址空间限制，成功分配 XOL（Execute Out of Line）区域。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a3cef77200f333a0e40ba9e3084b235ecf0a0d6e

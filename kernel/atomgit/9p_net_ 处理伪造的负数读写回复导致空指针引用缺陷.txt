@@ -1,0 +1,27 @@
+#标题
+9p/net: 处理伪造的负数读写回复导致空指针引用缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 9p 文件系统服务器错误地返回成功状态但携带负数的 read/write 计数时，内核会发生空指针引用。
+修复后，此类异常回复会触发错误日志并正确失败，而不是导致内核崩溃。
+
+#主要错误日志
+- 修复后预期的错误日志：
+  `9pnet: bogus RWRITE count (4294967295 > 3)`
+- 相关内核日志格式（Diff 中提取）：
+  `pr_err("bogus RREAD count (%u > %u)\n", received, rsize);`
+  `pr_err("bogus RWRITE count (%u > %u)\n", written, rsize);`
+  `pr_err("bogus RREADDIR count (%u > %u)\n", count, rsize);`
+
+#问题根因
+在 `p9_client_write()` 和 `p9_client_read_once()` 函数中，用于存储读写计数的变量（如 `received`、`written`）被定义为有符号整型。当服务器回复一个伪造的负数值（例如 -1）时，由于有符号数比较的规则，该负数会被判定为小于正数 `rsize`（即 `negative <= positive` 为真），从而绕过了原有的有效性检查逻辑，进而引发空指针引用。
+
+#解决方案
+将相关变量（`rsize`、`received`、`written` 等）的数据类型从有符号整型修改为无符号整型（`u32`）。
+通过类型变更，原先的负数回复会被解析为极大的无符号整数，使得 `rsize < received`（或 `rsize < written`）的比较条件成立，从而正确触发 "bogus RWRITE/RREAD count" 的错误检查逻辑，阻止后续非法操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d2112893023b853b7b08786f83f012bae7a2b2ff

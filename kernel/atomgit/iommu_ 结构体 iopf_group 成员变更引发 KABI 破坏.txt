@@ -1,0 +1,22 @@
+#标题
+iommu: 结构体 iopf_group 成员变更引发 KABI 破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在集成新特性 "iommu: Add attach handle to struct iopf_group" 后，由于修改了内核数据结构 `struct iopf_group` 和 `struct iommu_ops` 的成员布局，导致内核 ABI (KABI) 一致性检查失败，可能引发内核模块加载失败或系统运行时不稳定（取决于具体的 KABI 校验机制）。
+
+#主要错误日志
+未知
+
+#问题根因
+在合入 "iommu: Add attach handle to struct iopf_group" 功能补丁时，直接向 `struct iopf_group` 结构体新增了 `attach_handle` 成员，并在 `struct iommu_ops` 中新增了 `user_pasid_table` 成员，改变了结构体的内存布局，破坏了内核 ABI 的兼容性。
+
+#解决方案
+使用内核预留的 KABI 机制修复结构体布局破坏问题：
+1. 在 `struct iopf_group` 中，利用 `KABI_REPLACE` 宏将原有的 `domain` 成员替换为 `attach_handle` 成员，维持结构体大小和偏移不变。
+2. 在 `struct iommu_ops` 中，利用 `KABI_USE(2, ...)` 宏占用预留的 `KABI_RESERVE(2)` 空间来存放新增的 `user_pasid_table` 成员，避免改变结构体大小。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/03e80217829043b2b014e971b94e5fa05336a0d7

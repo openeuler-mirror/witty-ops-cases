@@ -1,0 +1,22 @@
+#标题
+smb: client: 使用 guest 选项挂载 CIFS 共享失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 `guest` 选项挂载 CIFS 共享时，挂载失败。用户空间的 `mount.cifs` 工具在处理 guest 选项时会设置空的 `password=` 和 `password2=` 选项，由于内核未正确处理 `password2=` 的空字符串情况，导致解析报错。
+
+#主要错误日志
+cifs: Bad value for 'password2'
+
+#问题根因
+内核在解析 CIFS 挂载参数时，只对 `user=` 和 `password=` 选项的空字符串进行了处理，遗漏了 `password2=` 选项。当 `mount.cifs` 传递空的 `password2=` 字符串时，内核无法正确识别并跳过解析，导致返回参数值错误的逻辑。
+
+#解决方案
+在文件 `fs/smb/client/fs_context.c` 中增加对 `password2=` 及其别名 `pass2=` 的特殊处理逻辑：
+1. 在参数定义表中添加 `pass2` 参数支持。
+2. 在参数解析函数 `smb3_fs_context_parse_param` 中，判断如果参数键值为 `pass2` 或 `password2`，则跳过常规解析，将其视为有效选项处理，从而修复挂载失败问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75119b46068a2320b4fb149d755dc8854cccfd6e

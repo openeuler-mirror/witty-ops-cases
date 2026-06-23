@@ -1,0 +1,23 @@
+#标题
+mfd: syscon: 修复 device_node_get_regmap() 中的并发竞争问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当多个调用者同时使用同一个设备节点调用 device_node_get_regmap() 时，可能触发竞争条件。在此场景下，多个线程可能同时发现 syscon_list 中没有对应条目，进而并发执行 of_syscon_register()，导致对同一节点重复注册 syscon 设备，引发内存泄漏、设备初始化异常或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在原有的代码逻辑中，device_node_get_regmap() 在遍历 syscon_list 查找节点后立即释放了自旋锁（spin_unlock），然后才调用 of_syscon_register()。这导致在第一个调用者执行 of_syscon_register() 完成并将其加入链表之前的时间窗口内，后续的并发调用者也会发现链表中没有该节点，从而重复调用 of_syscon_register()。此外，原实现使用自旋锁保护，但 of_syscon_register() 内部调用了 kzalloc() 和 of_clk_get() 等可能休眠的函数，在持有自旋锁时调用这些函数是不安全的。
+
+#解决方案
+1. 将保护 syscon_list 的锁从自旋锁（spinlock）改为互斥锁，以适应 of_syscon_register() 中可能休眠的函数调用。
+2. 调整锁的持有范围，在 device_node_get_regmap() 中，保持互斥锁处于锁定状态，直到 of_syscon_register() 执行完成并将节点添加到 syscon_list 后再解锁。这确保了只有一个调用者能成功执行注册流程，消除了竞争窗口。
+3. 在 of_syscon_register() 函数入口处增加 WARN_ON(!mutex_is_locked(&syscon_list_lock)) 检查，确保调用该函数时已持有锁。
+4. 移除 of_syscon_register() 内部对链表添加操作额外的加解锁逻辑，统一由上层调用者管理锁的生命周期。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7786f3b0296ec711b90470c050e36db4cfef4e6b

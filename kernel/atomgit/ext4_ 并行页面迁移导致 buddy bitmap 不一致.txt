@@ -1,0 +1,20 @@
+#标题
+ext4: 并行页面迁移导致 buddy bitmap 不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 EXT4 文件系统操作时，如果此时并发发生页面迁移，内核可能检测到 buddy bitmap 不一致。该问题源于代码在读取 bitmap 页面时未正确处理页面处于锁定状态的情况，导致读取到未完全初始化或正在迁移中的数据。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ext4_mb_load_buddy_gfp` 函数中，获取页面的逻辑仅检查了 `page == NULL` 或 `!PageUptodate(page)`，未检查 `PageLocked(page)`。当页面正在进行迁移时，页面会被锁定。如果代码此时直接使用该页面，会与正在进行的并发迁移操作产生竞争，从而导致 buddy bitmap 数据不一致。
+
+#解决方案
+在 `ext4_mb_load_buddy_gfp` 函数的页面检查逻辑中增加对 `PageLocked(page)` 的判断。如果页面为空、未更新或已锁定，均释放当前页面引用，并调用 `find_or_create_page` 获取页面锁，以此等待页面初始化或迁移完成，从而避免并发访问导致的不一致问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0b034ceefc661fe1bdcb579b1b4c2634735a361d

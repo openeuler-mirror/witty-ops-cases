@@ -1,0 +1,31 @@
+#标题
+intel-uncore-freq: 因次要版本不匹配导致 Uncore 频率控制接口缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当硬件 TPMI（Topology Aware Register Mapping and Programming Interface）功能的次要版本发生变化但主要版本未变时，当前驱动实现会错误地将此判定为版本不匹配，导致驱动跳过添加该资源的 uncore sysfs 条目，用户无法看到或使用该资源的 uncore 频率控制接口。
+
+#主要错误日志
+- 现象相关日志（原实现触发）：
+  `Uncore: Unsupported version:%d`
+- 修复后新增的区分日志：
+  `Uncore: Unsupported major version:%lx`（推断等级：dev_err）
+  `Uncore: Ignore: Unsupported minor version:%lx`（推断等级：dev_info）
+
+#问题根因
+驱动程序原先仅定义了一个单一的版本号 `UNCORE_HEADER_VERSION`（值为 1），并在探测过程中检查硬件版本是否严格等于该值。然而，TPMI 硬件规范定义了主版本号和次版本号：
+- 主版本号变化表示 MMIO 偏移或字段定义发生改变，驱动无法兼容。
+- 次版本号变化仅表示新增了字段，未修改现有偏移或定义，驱动仍可正常工作。
+由于代码未区分主次版本，当硬件仅升级次版本号（新增功能）时，驱动判定版本不匹配并直接跳过了该资源的初始化。
+
+#解决方案
+修改版本检查逻辑，区分主版本号与次版本号：
+1. 将宏定义 `UNCORE_HEADER_VERSION` 拆分为 `UNCORE_MAJOR_VERSION` 和 `UNCORE_MINOR_VERSION`。
+2. 增加对无效版本（0xFF）的检查。
+3. 当主版本号不匹配时，判定为不支持，打印错误日志并返回 `-ENODEV`。
+4. 当次版本号不匹配时，仅打印提示信息，驱动继续执行初始化流程，不再跳过该资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0306ad73f39b32f57751ece805378d5a5b5eefbd

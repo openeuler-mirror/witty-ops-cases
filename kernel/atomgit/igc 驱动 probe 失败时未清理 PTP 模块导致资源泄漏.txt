@@ -1,0 +1,20 @@
+#标题
+igc 驱动 probe 失败时未清理 PTP 模块导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Intel I225/I226 网卡驱动（igc）在加载过程中，若 `igc_probe()` 函数执行失败（例如在注册网络设备阶段出错），驱动程序未正确释放已初始化的 PTP（精确时间协议）模块资源。这会导致内核资源泄漏，可能影响后续 PTP 功能的使用或导致模块卸载时的异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `igc_probe()` 函数的错误处理路径中，缺少对 `igc_ptp_stop()` 的调用。当驱动初始化在 `err_register` 标签处失败时，代码跳转执行错误处理逻辑，但仅释放了硬件控制权（`igc_release_hw_control`），遗漏了此前已初始化的 PTP 模块清理步骤，导致 PTP 相关资源未被释放。
+
+#解决方案
+在 `igc_probe()` 函数的错误处理路径 `err_register` 标签下，添加 `igc_ptp_stop(adapter)` 函数调用。确保在驱动探测失败退出前，正确停止并清理 PTP 模块资源，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/03d436bc8901fa6ae5f6953663b1875f31e3df3b

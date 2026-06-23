@@ -1,0 +1,27 @@
+#标题
+调度器 soft quota 重选失败导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行 soft quota 相关的调度路径时触发崩溃。具体表现为 `soft_quota_pick_next_done` 函数在解引用 `next->sched_class` 时发生空指针解引用（NULL pointer dereference），导致系统 panic 或 Oops。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address...
+...
+Call trace:
+ soft_quota_pick_next_done
+ ...
+
+#问题根因
+在 `pick_task_idle()` 函数的 soft quota 处理路径中，代码认为只要成功解除了 CFS rq 的限制（unthrottle）且 `rq->cfs.nr_running` 不为 0，`pick_next_task_fair()` 就一定能选出一个任务。
+然而，`pick_task_fair()` 在遍历调度层级时会再次检查 CFS 带宽。刚解除限制的 `cfs_rq` 或其祖先节点可能在选定任务前再次被限制，导致 `pick_next_task_fair()` 返回 NULL。
+由于 `pick_task_idle()` 返回了这个 NULL，破坏了 idle 调度类的契约，核心调度器随后将 NULL 作为 `next` 任务传递给 `soft_quota_pick_next_done()`，该函数未做防护直接访问 `next->sched_class`，从而触发空指针崩溃。
+
+#解决方案
+1. 在 `pick_task_idle()` 中增加对 `pick_next_task_fair()` 返回值的检查。如果重选失败（返回 NULL），则回退（fall back）到默认的 `rq->idle` 任务，确保不违反 idle 调度类契约。
+2. 在 `soft_quota_pick_next_done()` 函数入口处增加对 `next` 指针的非空判断（`!next`），使其能够容忍 next 任务为 NULL 的情况，防止崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c916fd2eb7bb87b8f1a35b3244a0d2ff6d4aa3aa

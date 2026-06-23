@@ -1,0 +1,20 @@
+#标题
+pegasus 驱动 update_eth_regs_async 错误处理路径内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Pegasus USB 网卡驱动执行 `update_eth_regs_async` 函数时，若异步控制请求提交失败（返回非 0 错误码），驱动仅打印错误日志并 detach 设备，但未释放已分配的 `async_urb` 和 `req` 内存对象。这会导致内核内存泄漏，且无法被回收。
+
+#主要错误日志
+- `pegasus %s returned %d\n` (由 netif_err 打印，包含函数名与错误码)
+
+#问题根因
+函数 `update_eth_regs_async` 在处理失败分支时逻辑不完整。当 `usb_submit_urb` 或相关操作失败导致 `ret` 非零进入错误处理代码块时，代码执行了 `netif_device_detach` 和错误日志打印，随后直接返回错误码，遗漏了对之前通过 `usb_alloc_urb` 分配的 `async_urb` 和 `kmalloc` 分配的 `req` 内存的释放操作，从而导致内存泄漏。
+
+#解决方案
+在 `update_eth_regs_async` 函数的错误处理分支中，增加对 `async_urb` 和 `req` 的释放调用。具体修改为在打印错误日志后、返回 ret 前，依次调用 `usb_free_urb(async_urb)` 和 `kfree(req)`，确保失败路径下资源被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a7b43f1f66587d8a2c552d75dab156be80aae1a9

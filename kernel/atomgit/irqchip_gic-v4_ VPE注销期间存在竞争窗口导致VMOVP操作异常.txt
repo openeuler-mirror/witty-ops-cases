@@ -1,0 +1,22 @@
+#标题
+irqchip/gic-v4: VPE注销期间存在竞争窗口导致VMOVP操作异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在GICv4系统中，当用户空间尝试改变一个正在被注销的VPE（Virtual Processing Element）的亲和性时，存在一个微小的竞争窗口。此时VPE已经被解除映射，但对应的中断门铃在/proc/irq/中仍然可见，这可能导致系统尝试对一个无效或正在销毁的VPE执行VMOVP命令，进而引发不可预期的内核行为或硬件状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因是VPE销毁流程与中断亲和性变更流程之间存在竞争条件。具体来说，VPE解除映射后，`vmapp_count` 计数已经归零或减少，但中断接口在 `/proc/irq/` 中仍然对用户空间可见且可操作。此时若用户空间发起亲和性变更请求，内核会尝试对该已注销的VPE执行VMOVP操作。此外，`vmapp_count` 变量此前仅在 GICv4.1 实现中有效，GICv4.0 未利用该机制进行状态跟踪，导致无法检测此类竞争。
+
+#解决方案
+1. 将 `vmapp_count` 成员变量移至结构体公共区域，使其在 GICv4.0 和 GICv4.1 中均可用，用于跟踪VPE是否处于已映射状态。
+2. 在 `its_vpe_set_affinity` 函数中加入防御性检查，通过读取 `vmapp_count` 判断VPE是否处于正在注销或已注销状态。如果计数为0，直接返回 `-EINVAL`，拒绝执行VMOVP命令，从而堵住竞争窗口。
+3. 调整 `its_build_vmapp_cmd` 函数中对 `vmapp_count` 的原子操作逻辑，确保其正确性和通用性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aa6b9c9198c4ea514c718951ab92bbc27bf7149e

@@ -1,0 +1,30 @@
+#标题
+netfilter: nfnetlink_cthelper_dump_table 越界读取故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `nfnl_cthelper_dump_table` 进行 netlink dump 操作时，若上一轮 dump 操作保存的 helper 对象在两轮操作之间被删除，会导致循环逻辑错误，进而引发内核越界读取（OOB read）。系统可能会触发 KASAN 检测告警或导致内核崩溃。
+
+#主要错误日志
+BUG: KASAN: slab-out-of-bounds in nfnl_cthelper_dump_table+0x9f/0x1b0
+Read of size 8 at addr ffff888104ca3000 by task poc_cthelper/131
+Call Trace:
+ nfnl_cthelper_dump_table+0x9f/0x1b0
+ netlink_dump+0x333/0x880
+ netlink_recvmsg+0x3e2/0x4b0
+ sock_recvmsg+0xde/0xf0
+ __sys_recvfrom+0x150/0x200
+ __x64_sys_recvfrom+0x76/0x90
+ do_syscall_64+0xc3/0x6e0
+
+#问题根因
+函数 `nfnl_cthelper_dump_table` 中存在一个 `goto restart` 语句，原本意图是在特定条件下重新遍历当前的哈希桶。然而，该跳转逻辑原本位于 `for` 循环体之外。
+当保存的 `last` helper 在两轮 dump 之间被删除时，所有条目都无法通过 `cur != last` 检查，导致 `cb->args[1]` 未被清零。循环正常结束后，`cb->args[0]` 等于 `nf_ct_helper_hsize`，此时执行 `goto restart` 会跳转回循环内部，绕过了循环的边界检查条件，导致访问 `nf_ct_helper_hash[nf_ct_helper_hsize]` 时发生 8 字节的越界读取。
+
+#解决方案
+将 `goto restart` 相关的重启逻辑代码块移动到 `for` 循环内部。这样确保了重启操作仅在 `cb->args[0]` 仍在有效边界范围内时发生，从而避免了数组越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/567342a677cb2c637220bfd5a97590d5e34249d0

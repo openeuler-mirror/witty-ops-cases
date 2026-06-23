@@ -1,0 +1,33 @@
+#标题
+padata模块存在UAF漏洞导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 LTP 测试（pcrypt_aead01）时触发 KASAN 检测到的 slab-use-after-free 错误，导致内核打印 BUG 信息并打印调用栈。具体表现为 `padata_find_next` 函数读取了已被释放的内存地址。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in padata_find_next+0x29/0x1a0
+Read of size 4 at addr ffff88bbfe003524 by task kworker/u113:2/3039206
+CPU: 0 PID: 3039206 Comm: kworker/u113:2 Kdump: loaded Not tainted 6.6.0+
+Workqueue: pdecrypt_parallel padata_parallel_worker
+Call Trace:
+<TASK>
+dump_stack_lvl+0x32/0x50
+print_address_description.constprop.0+0x6b/0x3d0
+print_report+0xdd/0x2c0
+kasan_report+0xa5/0xd0
+padata_find_next+0x29/0x1a0
+padata_reorder+0x131/0x220
+padata_parallel_worker+0x3d/0xc0
+process_one_work+0x2ec/0x5a0
+
+#问题根因
+在 `padata_reorder` 函数的 while 循环执行过程中，如果加密算法被删除（crypto_del_alg），`padata_serial_worker` 会减少引用计数。若引用计数减至 0，`padata_free_shell` 会释放 `pd` 指针。此时 `padata_reorder` 再次循环调用 `padata_find_next` 时，访问的 `pd` 已被释放，从而触发 Use-After-Free（UAF）。问题发生的根源是 `padata_free_shell` 未等待所有可能正在执行的 `padata_do_serial` 调用结束就进行了资源释放。
+
+#解决方案
+在 `padata_free_shell` 函数中添加 `synchronize_rcu()` 调用。利用 RCU 同步机制等待所有正在进行的 `_do_serial` 调用完成，确保在释放 `pd` 和 `ps` 资源前，所有相关的读端临界区已退出，从而避免 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c93ca84b5f98611d7752060793b9dcb19755e3d

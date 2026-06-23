@@ -1,0 +1,23 @@
+#标题
+sdei_watchdog 在低功耗模式下无法通过 proc 接口关闭
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在低功耗场景（LPI mode）下，用户通过 `/proc/sys/kernel/nmi_watchdog` 接口关闭 NMI watchdog 无效。系统进入/退出低功耗状态时，PM 回调会重新启用 watchdog 事件，导致 watchdog 状态与用户配置不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在低功耗场景下，`sdei_watchdog_pm_notifier` 回调函数会在 `CPU_PM_ENTER` 和 `CPU_PM_EXIT` 时无条件地执行 `sdei_api_event_disable` 和 `sdei_api_event_enable` 操作。这导致即使用户通过 `/proc/sys/kernel/nmi_watchdog` 接口关闭了 watchdog，在电源状态切换时 watchdog 仍会被重新启用，覆盖了用户的配置意图。
+
+#解决方案
+引入 per-cpu 变量 `sdei_usr_en` 用于记录用户对 sdei watchdog 的开启意图。
+1. 在 `sdei_watchdog_hardlockup_enable` 中将该标志置为 1。
+2. 在 `sdei_watchdog_hardlockup_disable` 中将该标志置为 0。
+3. 修改 `sdei_watchdog_pm_notifier` 逻辑，在处理 `CPU_PM_ENTER` 和 `CPU_PM_EXIT` 事件时，先检查 `sdei_usr_en` 标志，仅当该标志为真时才执行对应的 enable/disable 操作，从而保证 PM 回调动作与用户配置保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1155a8fb568e11dcfb23fda811127b4baacbae42

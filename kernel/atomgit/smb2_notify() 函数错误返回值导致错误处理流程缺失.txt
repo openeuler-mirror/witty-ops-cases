@@ -1,0 +1,26 @@
+#标题
+smb2_notify() 函数错误返回值导致错误处理流程缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SMB2 CHANGE_NOTIFY 请求处理过程中发生错误时（如遇到 `STATUS_INTERNAL_ERROR` 或 `STATUS_NOT_IMPLEMENTED`），`smb2_notify()` 函数错误地返回了 0（成功），导致上层调用者 `__process_request()` 无法感知错误，进而无法按预期打印错误日志，掩盖了实际发生的故障。
+
+#主要错误日志
+未知
+
+#问题根因
+`smb2_notify()` 函数在处理错误分支时返回值设置错误。具体表现为：
+1. 在处理 `STATUS_INTERNAL_ERROR` 时返回 0 而非 `-EIO`。
+2. 在处理 `STATUS_NOT_IMPLEMENTED` 时返回 0 而非 `-EOPNOTSUPP`。
+根据设计预期，该函数应在出错时返回错误码，以便 `__process_request()` 能够捕获错误并输出日志。
+
+#解决方案
+修正 `smb2_notify()` 函数的返回值逻辑，使其符合内核标准错误处理规范：
+1. 将 `STATUS_INTERNAL_ERROR` 对应的返回值从 0 修改为 `-EIO`。
+2. 将 `STATUS_NOT_IMPLEMENTED` 对应的返回值从 0 修改为 `-EOPNOTSUPP`。
+3. 更新函数注释，明确返回值含义为“成功时返回 0，否则返回错误”。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/20913c0e1ce8b5bc9c3718915f11fe1e2243b5be

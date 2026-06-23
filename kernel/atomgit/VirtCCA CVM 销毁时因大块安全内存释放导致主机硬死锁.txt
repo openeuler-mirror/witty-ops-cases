@@ -1,0 +1,20 @@
+#标题
+VirtCCA CVM 销毁时因大块安全内存释放导致主机硬死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在销毁拥有大块安全内存的 CVM（Confidential Virtual Machine）时，主机发生硬死锁，系统无响应。
+
+#主要错误日志
+- `pr_warn("KVM destroy cVM ttt failed\n");` [推断：若 tmi_ttt_destroy 接口调用失败且非重试场景时打印]
+
+#问题根因
+在 CVM 销毁流程中，释放大块安全内存的操作耗时过长，且该过程中未触发改软狗看门狗，导致内核判定 CPU 未响应而触发硬死锁。
+
+#解决方案
+在 CVM 销毁流程中增加 `tmi_ttt_destroy` 调用以销毁 TTT（Translation Table Tree），并在循环调用过程中插入 `touch_nmi_watchdog()` 函数以周期性重置 NMI 看门狗，防止因长时间内存操作触发看门狗超时。同时，代码逻辑增加了对返回值 `TMI_ERROR_TTT_DESTROY_AGAIN` 的重试处理以及对低版本 TMM 不支持该接口的兼容性处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1195453664f2035417d75826e54fefb6d81a3f6b

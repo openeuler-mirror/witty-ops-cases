@@ -1,0 +1,20 @@
+#标题
+ALSA: firewire-motu: hwdep read 接口存在缓冲区溢出风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MOTU 火线音频设备的 hwdep read 接口处理 DSP 事件时，若用户提供的缓冲区尺寸小于事件头大小（8 bytes），内核会向用户空间写入超出请求数量的字节数，导致用户空间缓冲区溢出。
+
+#主要错误日志
+未知
+
+#问题根因
+hwdep_read() 函数在处理 DSP 事件时，直接使用 `sizeof(event.motu_register_dsp_change)` 作为拷贝长度，未对用户提供的缓冲区大小 `count` 进行校验。当用户缓冲区小于结构体大小时，`copy_to_user` 会写入超过请求长度的数据，引发缓冲区溢出。
+
+#解决方案
+修改 `sound/firewire/motu/motu-hwdep.c` 中的 `hwdep_read` 函数，使用 `min_t(long, count, sizeof(event.motu_register_dsp_change))` 限制拷贝长度，确保拷贝的字节数不超过用户请求的 count 值，同时修正返回值的计算逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c6a70cc480ad40eb4cefc68f7a636552a816adac

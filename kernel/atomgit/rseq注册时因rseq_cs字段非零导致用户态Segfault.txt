@@ -1,0 +1,20 @@
+#标题
+rseq注册时因rseq_cs字段非零导致用户态Segfault
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 rseq 系统调用进行注册时，若 `rseq_cs` 字段非零且指向无效地址，进程返回用户态时触发 Segfault（段错误）。该问题常见于旧版本 glibc 复用之前线程的 rseq 区域且未清零 `rseq_cs` 字段的场景。
+
+#主要错误日志
+未知
+
+#问题根因
+根据文档，用户态应在注册前将 `rseq_cs` 字段置为 0，但内核未强制执行此检查。若注册时 `rseq_cs` 包含非零残留值且不指向有效的 `struct rseq_cs`，内核返回用户态后会尝试访问该非法地址，导致 segfault。考虑到兼容性，旧版 glibc 在复用 rseq 区域时可能未清理该字段，若内核直接拒绝注册会导致进程终止，因此不能简单地在注册时校验失败。
+
+#解决方案
+在 rseq 注册流程（SYSCALL_DEFINE4）中增加检查逻辑：读取用户态传入的 `rseq_cs` 指针值，若该值非零，则主动将其清零（调用 clear_rseq_cs）。此修复既避免了返回用户态后的 segfault，又保持了对旧版 glibc 的兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/89c586c64ba549b6fdc29425e14a01ccb18957ad

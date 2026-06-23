@@ -1,0 +1,20 @@
+#标题
+ceph: 直接IO读取路径标记脏页时错误检查Fw引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 Direct-IO 读取操作时，内核触发 `BUG_ON` 导致系统崩溃（Kernel Panic）。这是因为在读取路径中尝试标记页面为脏页（dirty pages）时，代码错误地检查了 Fw（FILE_WR）引用计数，而读取路径本不应持有该引用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ceph_dirty_folio` 函数中，存在一个断言检查 `BUG_ON(ci->i_wr_ref == 0)`，意在强制要求调用者持有 Fw（File Write）caps 引用。然而，在进行 Direct-IO 读取时，内核也会尝试标记页面为脏页，但读取路径并不会持有 Fw 引用。这导致了 `i_wr_ref` 为 0，触发了错误的 `BUG_ON` 崩溃检查。
+
+#解决方案
+移除 `fs/ceph/addr.c` 中 `ceph_dirty_folio` 函数内不正确的 `BUG_ON(ci->i_wr_ref == 0)` 检查代码，因为读取路径下标记脏页并不需要持有 Fw 引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/44be4a926efc946120a37ee108c743b2d62845ed

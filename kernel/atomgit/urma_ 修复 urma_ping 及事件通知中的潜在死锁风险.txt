@@ -1,0 +1,24 @@
+#标题
+urma: 修复 urma_ping 及事件通知中的潜在死锁风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 urma_ping 相关操作（如释放 ping_tjetty_entry）或处理 ubmgr 事件通知时，系统可能发生死锁，导致对应进程挂起（D状态）或系统响应异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 在 `ping_tjetty_put` 函数中，`kref_put` 触发的释放回调函数 `__ping_tjetty_free_entry` 内部可能会尝试获取同一个锁（`tjetty_lock`），而在持有该锁的情况下调用 `kref_put` 导致了死锁。
+2. 在 `ubmgr_notify_event` 函数中，持有自旋锁 `g_ubmgr_notifier_list` 期间调用了回调函数 `iter->cb`，如果该回调函数内部试图获取同一把锁或进行其他阻塞操作，将引发死锁风险。
+3. 此外，存在内存释放上下文不一致问题，`ping_ctx_uninit_jetty` 中释放 `ctx->buf` 的操作可能与工作队列中的读/写回调存在竞争风险。
+
+#解决方案
+1. 针对 `ping_tjetty_put` 死锁问题：将引用计数释放操作 `kref_put` 移至自旋锁临界区之外执行。在锁内仅进行引用计数判断（`kref_read`）和节点删除，确保释放回调执行时不再持有锁。
+2. 针对 `ubmgr_notify_event` 死锁问题：将回调函数的执行移至自旋锁临界区之外。在锁内仅获取回调函数指针，解锁后再执行回调，避免在锁内调用未知复杂度的回调函数。
+3. 移除 `ping_ctx_uninit_jetty` 中不安全的 `kfree(ctx->buf)` 操作，交由其他流程正确管理内存生命周期。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/af271291866a8f76cd057b2b97c9edc7c7895550

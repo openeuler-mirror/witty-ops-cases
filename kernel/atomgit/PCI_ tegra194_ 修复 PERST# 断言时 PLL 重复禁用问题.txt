@@ -1,0 +1,21 @@
+#标题
+PCI: tegra194: 修复 PERST# 断言时 PLL 重复禁用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Tegra194 PCIe 控制器驱动中，当触发 PERST#（PCIe 复位）断言操作时，函数 `pex_ep_event_pex_rst_assert()` 错误地调用了两次 `tegra_pcie_bpmp_set_pll_state()`，导致 PLL 被重复禁用。该操作应与 `pex_ep_event_pex_rst_deassert()` 行为相反，实际却遗漏了对 `tegra_pcie_bpmp_set_ctrl_state()` 的调用。这导致控制器去初始化流程不完整或状态异常。
+
+#主要错误日志
+- `dev_err(pcie->dev, "Failed to turn off UPHY: %d\n", ret);` (修复前错误日志)
+- `dev_err(pcie->dev, "Failed to disable controller: %d\n", ret);` (修复后预期日志)
+
+#问题根因
+函数 `pex_ep_event_pex_rst_assert()` 中的代码逻辑存在笔误，在进行控制器去初始化时，错误地复制粘贴了 `tegra_pcie_bpmp_set_pll_state()` 调用，导致 PLL 被重复禁用，而控制器状态未被正确设置。
+
+#解决方案
+将 `pex_ep_event_pex_rst_assert()` 函数中重复调用的 `tegra_pcie_bpmp_set_pll_state(pcie, false)` 修改为 `tegra_pcie_bpmp_set_ctrl_state(pcie, false)`。此修改确保了 PERST# 断言时的去初始化序列与初始化序列（PERST# 解除断言）严格对应，同时也与 `tegra_pcie_unconfig_controller()` 的流程保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d073d2f84bf09e38180d55116129f20f452695a1

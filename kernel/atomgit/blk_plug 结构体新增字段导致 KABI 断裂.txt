@@ -1,0 +1,23 @@
+#标题
+blk_plug 结构体新增字段导致 KABI 断裂
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核内部结构体 `struct blk_plug` 新增了 `cur_ktime` 字段，导致结构体布局发生变化，破坏了内核应用程序二进制接口（KABI）的兼容性，可能引发内核模块加载失败或系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+为了缓存命名空间时间（ns time），在 `struct blk_plug` 中直接新增了 `u64 cur_ktime` 字段，同时 `blk-wbt.c` 和 `blk-cgroup.h` 中新增了对 `blk.h` 的包含。这些变更改变了关键结构体的内存布局，违反了 openEuler 内核关于 KABI 兼容性的要求。
+
+#解决方案
+使用 KABI 保留字段来容纳新增成员，而非直接扩展结构体：
+1. 将 `struct blk_plug` 中直接新增的 `u64 cur_ktime` 字段移除。
+2. 使用 `KABI_USE(1, u64 cur_ktime)` 宏，复用结构体中预留的 `KABI_RESERVE(1)` 空间来存储 `cur_ktime`。
+3. 在 `blk-wbt.c` 和 `blk-cgroup.h` 中，使用 `#ifndef __GENKSYMS__` 宏包裹 `#include "blk.h"`，避免头文件依赖变化影响符号表的生成，从而保持 KABI 稳定。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fba980081516733234524351721cb06ba5653fde

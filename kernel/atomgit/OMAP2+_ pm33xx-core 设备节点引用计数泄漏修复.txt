@@ -1,0 +1,28 @@
+#标题
+OMAP2+: pm33xx-core 设备节点引用计数泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 am335x/am437x 平台初始化 cpuidle 状态时，函数 `amx3_idle_init` 中通过 `of_parse_phandle()` 获取的设备节点引用在使用后未正确释放，导致设备节点引用计数泄漏（reference leaks）。长期运行或重复触发相关初始化逻辑可能导致内核内存资源泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `amx3_idle_init` 在处理设备树节点时，通过 `of_parse_phandle()` 获取了 `state_node` 的引用，但在以下三种退出或跳过路径中遗漏了 `of_node_put()` 调用：
+1. 当 `of_device_is_available(state_node)` 判断为假，执行 `continue` 跳过当前节点时；
+2. 当 cpuidle 状态计数 `i` 达到 `CPUIDLE_STATE_MAX` 时，执行 `break` 退出循环时；
+3. 在正常处理完一个节点后，进入下一次循环前。
+
+这导致设备节点的引用计数无法归零，造成内存泄漏。
+
+#解决方案
+在代码 diff 中显示的相应位置补充调用 `of_node_put(state_node)`，确保无论是跳过处理、达到上限退出还是正常处理完毕，都能正确释放设备节点的引用：
+1. 在 `!of_device_is_available(state_node)` 判断分支的 `continue` 前添加 `of_node_put(state_node)`。
+2. 在达到 `CPUIDLE_STATE_MAX` 的 `break` 前添加 `of_node_put(state_node)`。
+3. 在循环末尾、`state_count++` 之前添加 `of_node_put(state_node)` 以释放正常流程中的引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7916179c6e97078175b56f6c60a95f5ac8d6f1ad

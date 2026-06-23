@@ -1,0 +1,31 @@
+#标题
+NUMA remote 模块内存泄漏及状态管理异常修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在使用 NUMA remote 功能时，`struct memory_block` 结构体存在内存泄漏，导致系统内存资源持续占用无法释放。
+2. 在 `preonline` 状态下执行 offline 操作失败时，内存块无法正确恢复到 `preonline` 状态，导致状态机异常。
+3. 在撤销 fake-online 操作时，若内存块处于非 online 状态（如已 offline 或 preonline），系统可能执行错误的恢复逻辑，引发功能异常或计数错误。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **内存泄漏**：在 `check_memory_block_nid`、`check_memory_block_pre_online` 及 `set_memory_block_pre_online` 等函数中，通过 `find_memory_block_by_id` 获取 `memory_block` 设备引用后，未调用 `put_device` 释放引用计数，导致设备对象无法释放。
+2. **循环边界错误**：部分遍历 memory block 的循环使用 `block_id != end_block_id`（左闭右开区间），但 `end_block_id` 的计算方式基于 `start + size`，导致循环实际上少处理了一个内存块，或者在某些边界条件下处理越界。
+3. **状态恢复逻辑缺失**：
+   - 当 memory block 处于 `preonline` 状态却因故障 offline 失败时，系统未通过 notifier 回调处理 `MEM_OFFLINE` 事件，导致 `pre_online_pages` 计数器未减去相应页数，且未正确维护隔离状态。
+   - 在 `numa_remote_undo_fake_online` 流程中，未检查内存块是否确实处于 `MEM_ONLINE` 状态即执行 undo 操作，导致对非 online 内存块进行了错误的统计计数操作。
+
+#解决方案
+1. **修复引用计数泄漏**：重构 `check_memory_block_state`（合并了原有的 check 函数）和 `set_memory_block_pre_online` 函数，在每次通过 `find_memory_block_by_id` 获取 `mem` 对象后，确保在返回或继续循环前调用 `put_device(&mem->dev)` 释放引用。
+2. **修正循环逻辑**：将涉及 memory block 遍历的循环条件统一修改为 `block_id <= end_block_id`，并修正 `end_block_id` 的计算方式为 `PFN_DOWN(start + size - 1)`，确保覆盖所有目标内存块。
+3. **完善状态机与计数管理**：
+   - 在 `numa_remote_memory_notifier_cb` 中增加对 `MEM_OFFLINE` 事件的处理，当内存下线时更新 `pre_online_pages` 计数，确保统计准确。
+   - 在 `numa_remote_undo_fake_online` 入口处增加 `check_memory_block_online` 检查，确保仅对处于 online 状态的内存块执行 undo 操作。
+   - 调整 `numa_remote_online_pages_cb` 回调逻辑，增加 `check_memory_block_pre_online` 检查，仅对 preonline 状态的内存页执行隔离操作，其余走标准 online 流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/562c7275e70750ffabf6b25db94391ae43f01bbe

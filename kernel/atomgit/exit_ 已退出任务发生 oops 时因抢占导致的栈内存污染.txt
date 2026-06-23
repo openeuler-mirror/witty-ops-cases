@@ -1,0 +1,21 @@
+#标题
+exit: 已退出任务发生 oops 时因抢占导致的栈内存污染
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当处于退出过程的任务发生 oops（例如在文件释放回调中触发 oops）时，系统可能发生严重的内存破坏。具体表现为任务栈的 use-after-free 或 double-free，导致两个不同的任务运行在同一个栈上，进而引发各种不可预知的内存污染或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `make_task_dead()` 在处理正在退出的 oops 任务时，调用 `do_task_dead()` 前未禁止抢占。`do_task_dead()` 内部调用 `__schedule()`，而 `__schedule()` 要求调用时必须禁止抢占。
+若在任务状态被设置为 `TASK_DEAD` 之后、进入调度器之前发生抢占（SM_PREEMPT），`finish_task_switch()` 会认为该任务已死且栈不再使用而释放栈内存。然而被抢占的任务稍后会恢复运行，导致其栈内存被错误地释放或重复释放，引发内存破坏。
+
+#解决方案
+在 `make_task_dead()` 函数中调用 `do_task_dead()` 之前，显式调用 `preempt_disable()` 禁止抢占，确保任务在进入调度循环前不会被抢占，从而避免栈内存被错误释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/04b6bbbf1c2f9341960f862ad861ef6e7787379e

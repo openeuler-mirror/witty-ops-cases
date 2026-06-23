@@ -1,0 +1,23 @@
+#标题
+virtio-net: big 模式下 flags 记录错误导致校验状态处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 virtio-net 驱动使用 big 模式接收数据包时，内核错误地从提交的缓冲区页面地址读取数据，而非从实际的 rx 缓冲区读取。这导致 `VIRTIO_NET_HDR_F_DATA_VALID` 等标志位记录错误，进而影响 XDP 处理后的校验和状态判断，可能导致网络数据包处理逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 Commit 703eec1b2422 ("virtio_net: fixing XDP for fully checksummed packets handling") 中，为了防止 XDP 程序覆写标志位，提前保存了 `hdr.flags`。但在 big 模式下，传入 `receive_buf` 函数的 `buf` 指针指向的是 `struct page` 类型，而非直接的数据缓冲区地址。原代码直接将 `buf` 强转为头部结构指针读取 flags，导致读取了错误的内存位置。相比之下，small 模式已在 Commit c11a49d58ad2 中修复了类似的地址不匹配问题。
+
+#解决方案
+修改 `receive_buf` 函数中获取 flags 的逻辑，针对不同的接收模式分别处理：
+1. 对于 mergeable 模式，保持原逻辑，直接从 `buf` 读取。
+2. 对于 big 模式，先通过 `page_address((struct page *)buf)` 将 page 指针转换为内核虚拟地址，再从该地址读取 flags。
+3. 对于 small 模式，直接从 `buf` 读取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/314ac69314cbd0e1a505214a4ffd23e97308d964

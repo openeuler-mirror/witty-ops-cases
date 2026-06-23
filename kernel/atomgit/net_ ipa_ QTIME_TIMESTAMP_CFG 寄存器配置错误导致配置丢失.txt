@@ -1,0 +1,24 @@
+#标题
+net: ipa: QTIME_TIMESTAMP_CFG 寄存器配置错误导致配置丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+IPA（IP Accelerator）驱动在配置 QTIME_TIMESTAMP_CFG 寄存器时，由于变量赋值逻辑错误，导致先前的配置值被覆盖。这会导致 DPL_TIMESTAMP_LSB 和 DPL_TIMESTAMP_SEL 的配置丢失，进而影响 IPA 硬件的时间戳功能，可能引发数据路径上的时间戳处理异常或硬件功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ipa_qtime_config` 中，对变量 `val` 的赋值操作使用了普通赋值运算符（`=`），而不是按位或运算符（`|=`）。
+具体来说，代码在设置了 DPL 相关字段后，紧接着对 TAG 和 NAT 相关字段进行了赋值：
+`val = reg_encode(reg, TAG_TIMESTAMP_LSB, TAG_TIMESTAMP_SHIFT);`
+`val = reg_encode(reg, NAT_TIMESTAMP_LSB, NAT_TIMESTAMP_SHIFT);`
+这导致前两行为 `val` 设置的 DPL 配置被后续操作完全覆盖，最终写入寄存器的值仅保留了 NAT_TIMESTAMP_LSB 的配置，丢失了 DPL 和 TAG 的配置。
+
+#解决方案
+修改 `ipa_qtime_config` 函数中的赋值逻辑，将变量 `val` 的初始化改为 `val = 0`，并将后续对 TAG 和 NAT 字段的赋值操作符从 `=` 修改为 `|=`，以确保所有字段的配置值能够正确合并保留，最终写入寄存器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0788a01e73a0c3c620ef01c1ab8c39dd12a44da4

@@ -1,0 +1,24 @@
+#标题
+ACPI: CPPC: 使用 nosmp 参数启动时导致空指针引用崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核启动命令行中加入 `nosmp` 参数后，系统启动过程中触发空指针引用，导致内核恐慌，系统无法正常启动。
+
+#主要错误日志
+[    0.401123] Unable to handle kernel NULL pointer dereference at virtual address 00000000000000b8
+...
+[    0.403255] [<ffffffff809a5818>] cppc_allow_fast_switch+0x6a/0xd4
+...
+Kernel panic - not syncing: Attempted to kill init!
+
+#问题根因
+使用 `nosmp` 启动参数时，系统仅引导 CPU0，其他 CPU 不会上线，导致这些 CPU 对应的 `cpc_desc_ptr` 保持为 NULL。`cppc_allow_fast_switch` 函数使用 `for_each_possible_cpu` 遍历所有可能的 CPU，当访问未上线 CPU 的 `cpc_desc_ptr` 时触发空指针解引用，进而引发 panic。
+
+#解决方案
+修改 `drivers/acpi/cppc_acpi.c` 文件中的 `cppc_allow_fast_switch` 函数，将遍历宏从 `for_each_possible_cpu` 改为 `for_each_present_cpu`。此修改确保代码仅遍历系统中当前存在的 CPU，避免了访问未初始化的 NULL 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6b8115fca676ed0e8e745d39670360cc75ab5744

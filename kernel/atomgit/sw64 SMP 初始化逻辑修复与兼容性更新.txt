@@ -1,0 +1,28 @@
+#标题
+sw64 SMP 初始化逻辑修复与兼容性更新
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 使用带 "sunway" 厂商前缀设备树的 CPU 节点无法被内核正确识别，导致 SMP 初始化失败或 Core 版本识别错误。
+2. 当 NR_CPUS 配置值小于固件检测到的 CPU 数量时，SMP 初始化函数过早退出，导致后续 CPU 无法正常枚举。
+3. 内核启动日志中出现冗余的 "Core is not available" 提示信息。
+
+#主要错误日志
+- `pr_warn_once("OF: Core [0x%x] exceeds max core num [%u]\n", rcid, nr_cpu_ids);`
+- `pr_err("OF: No boot_flag_address found\n");`
+
+#问题根因
+1. `sw64_of_core_version` 函数仅匹配 "sw64" 前缀的 compatible 字符串，缺少对 "sunway" 前缀的兼容性支持。
+2. `fdt_setup_smp` 函数在读取 `boot_flag_address` 属性时，仅尝试 "sw64,boot_flag_address"，未尝试 "sunway,boot_flag_address"。
+3. 当检测到的 CPU 逻辑 ID 超过 `nr_cpu_ids` 时，代码错误地执行了 `return 0` 直接退出函数，而不是 `break` 跳出循环继续处理其他逻辑，导致函数执行流中断。
+
+#解决方案
+1. 在 `sw64_of_core_version` 函数中增加对 "sunway,xuelang" 和 "sunway,junzhang" 的 compatible 匹配支持。
+2. 在读取 `boot_flag_address` 时，增加回退逻辑，优先读取 "sw64,boot_flag_address"，若失败则尝试读取 "sunway,boot_flag_address"。
+3. 修正 `fdt_setup_smp` 中的控制流逻辑，当 CPU 数量超过限制时，将 `return 0` 修改为 `break`，确保函数能正常处理后续逻辑而非直接返回。
+4. 移除 `fdt_setup_smp` 中不必要的 "Core is not available" 日志打印。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/16bdd184f69cca7c7ee1d2369f722cdbb74c2439

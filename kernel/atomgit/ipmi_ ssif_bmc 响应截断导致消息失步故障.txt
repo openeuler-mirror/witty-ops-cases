@@ -1,0 +1,21 @@
+#标题
+ipmi: ssif_bmc 响应截断导致消息失步故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SSIF BMC 驱动中，当主机发生掉电或其他异常情况导致响应被截断时，BMC 状态机进入 `SSIF_ABORTING` 状态。此时，若主机侧发起新的 Write 请求，BMC 未能正确处理该请求，导致请求被丢弃或引发后续消息通信失步，造成 IPMI 通信异常。
+
+#主要错误日志
+- log: unexpected WR_REQ in RES_SENDING
+- log: unexpected SLAVE STOP in state=SSIF_ABORTING
+
+#问题根因
+当响应因主机掉电等原因被截断时，BMC 状态机进入 `SSIF_ABORTING` 状态。在原逻辑中，`on_write_received_event` 函数未对 `SSIF_ABORTING` 状态下接收到的新命令进行处理。这导致新到达的有效 Write 请求（如 `SSIF_IPMI_SINGLEPART_WRITE` 或 `SSIF_IPMI_MULTIPART_WRITE_START`）被忽略，未能触发状态转移至 `SSIF_SMBUS_CMD`，从而导致请求丢失和后续通信的数据同步错误。
+
+#解决方案
+在 `on_write_received_event` 函数中增加对 `SSIF_ABORTING` 状态的处理逻辑。当处于该状态时，检查接收到的字节是否为有效的写起始命令（`SSIF_IPMI_SINGLEPART_WRITE` 或 `SSIF_IPMI_MULTIPART_WRITE_START`）。如果是，则将状态转移至 `SSIF_SMBUS_CMD` 并重置 `aborting` 标志位，确保新请求能被正常接收和处理，避免消息失步。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b30d81384c8c8a5214eb697968dbbe750c800f4f

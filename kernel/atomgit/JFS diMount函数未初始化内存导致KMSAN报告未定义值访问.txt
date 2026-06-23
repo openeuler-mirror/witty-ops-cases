@@ -1,0 +1,38 @@
+#标题
+JFS diMount函数未初始化内存导致KMSAN报告未定义值访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统加载 JFS 文件系统时，内核内存检测工具（KMSAN）报告访问未初始化内存的错误。具体表现为 `hex_dump_to_buffer` 函数在处理数据时读取了未初始化的值，触发 `BUG: KMSAN: uninit-value`。该问题可能导致内存数据泄露或不可预期的内核行为。
+
+#主要错误日志
+=====================================================
+BUG: KMSAN: uninit-value in hex_dump_to_buffer+0x888/0x1100 lib/hexdump.c:171
+hex_dump_to_buffer+0x888/0x1100 lib/hexdump.c:171
+print_hex_dump+0x13d/0x3e0 lib/hexdump.c:276
+diFree+0x5ba/0x4350 fs/jfs/jfs_imap.c:876
+jfs_evict_inode+0x510/0x550 fs/jfs/inode.c:156
+evict+0x723/0xd10 fs/inode.c:796
+iput_final fs/inode.c:1946 [inline]
+iput+0x97b/0xdb0 fs/inode.c:1972
+txUpdateMap+0xf3e/0x1150 fs/jfs/jfs_txnmgr.c:2367
+txLazyCommit fs/jfs/jfs_txnmgr.c:2664 [inline]
+jfs_lazycommit+0x627/0x11d0 fs/jfs/jfs_txnmgr.c:2733
+...
+Uninit was created at:
+...
+kmalloc_noprof include/linux/slab.h:901 [inline]
+diMount+0x61/0x7f0 fs/jfs/jfs_imap.c:105
+jfs_mount+0xa8e/0x11d0 fs/jfs/jfs_mount.c:176
+=====================================================
+
+#问题根因
+在 `diMount()` 函数中，使用 `kmalloc` 分配 `imap` 结构体内存后，未对其进行初始化操作。这导致后续代码中 `snprintf()` 函数将该结构体中未初始化的数据写入 `linebuf`，进而在 `hex_dump_to_buffer()` 中触发了对未初始化内存的访问。
+
+#解决方案
+将 `diMount()` 函数中的内存分配函数由 `kmalloc` 替换为 `kzalloc`。这确保了分配的 `imap` 结构体内存在使用前被清零，从而避免了未初始化内存访问的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f26193597ff988a71feb7044e3eb5b6514519567

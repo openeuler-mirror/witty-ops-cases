@@ -1,0 +1,21 @@
+#标题
+scsi: target: configfs 写入操作引发递归锁死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 configfs 写入 `dbroot` 配置项时，若用户传入的路径指向当前正在操作的 configfs 文件自身（例如 `/sys/kernel/config/target/dbroot`），内核将尝试递归获取同一个信号量。这会导致进程陷入死锁状态（D 状态），进而可能触发内核的 hung task 检测机制或导致系统无响应。
+
+#主要错误日志
+- db_root: cannot open: /sys/kernel/config/target/dbroot
+- db_root: not a directory: /sys/kernel/config/target/dbroot
+
+#问题根因
+在 `flush_write_buffer` 函数中，内核已获取 `p->frag_sem` 读写信号量，随后调用 `target_core_item_dbroot_store()` 函数。该函数使用 `filp_open()` 来校验用户传入的路径有效性。当传入的路径恰好是当前正在写入的 configfs 文件时，`filp_open()` 会调用文件系统的 open 函数（`__configfs_open_file`），该函数内部再次尝试获取同一个 `frag_sem` 信号量。由于该信号量已被当前进程持有且不支持递归锁定，从而导致死锁。
+
+#解决方案
+修改 `target_core_item_dbroot_store()` 函数，移除 `filp_open()` 调用，改用 `kern_path()` 函数来校验路径有效性。`kern_path()` 仅执行路径查找和解析，不会触发 configfs 的文件打开操作（`__configfs_open_file`），从而避免了递归获取信号量的问题，从根本上消除了死锁隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1276c96a392c8954b35585124c60f88200b0282d

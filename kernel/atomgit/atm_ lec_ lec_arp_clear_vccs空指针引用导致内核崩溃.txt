@@ -1,0 +1,23 @@
+#标题
+atm: lec: lec_arp_clear_vccs空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ATM LAN Emulation模块中，当底层VCC被关闭时，内核在 `lec_arp_clear_vccs` 函数中触发空指针引用，导致内核崩溃。该问题可通过syzkaller复现。
+
+#主要错误日志
+未知
+
+#问题根因
+在ATM LANE模块中，同一个 `atm_vcc` 可以被多个 `lec_arp_table` 条目共享（通过 `entry->vcc` 或 `entry->recv_vcc`）。当底层VCC关闭时，`lec_vcc_close()` 遍历所有ARP条目并对匹配条目调用 `lec_arp_clear_vccs()`。
+问题发生流程如下：
+1. 第一次遍历：对于第一个共享该VCC的ARP条目，`lec_arp_clear_vccs()` 释放了关联的 `vpriv`（即 `vcc->user_back`），并将 `vcc->user_back` 设置为 NULL。
+2. 第二次遍历：对于下一个共享同一VCC的ARP条目，再次调用 `lec_arp_clear_vccs()`。此时通过 `LEC_VCC_PRIV(vcc)` 获取到的 `vpriv` 为 NULL，代码随后尝试通过 `vcc->pop = vpriv->old_pop` 访问 `vpriv` 成员，导致空指针引用崩溃。
+
+#解决方案
+在 `lec_arp_clear_vccs` 函数中，在访问 `vpriv` 成员之前增加空指针检查。如果 `vpriv` 已经是 NULL，说明该 VCC 已在前序迭代中被清理，此时直接跳过清理块，仅清除当前条目的 `vcc`/`recv_vcc` 指针即可。同时，将 `vcc_release_async()` 等释放操作置于 `vpriv` 非空的判断保护内，防止对已关闭的 socket 重复操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6b90d454ee10f212bf6b7d49a1da23182e2ca01c

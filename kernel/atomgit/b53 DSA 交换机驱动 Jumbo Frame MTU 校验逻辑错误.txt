@@ -1,0 +1,20 @@
+#标题
+b53 DSA 交换机驱动 Jumbo Frame MTU 校验逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设置 MTU 大小为 1501 至 1518 字节（特别是 1515~1517 字节范围）时，驱动程序未能正确启用 Jumbo Frame（巨型帧）功能，导致该 MTU 范围内的网络通信可能因交换机芯片帧大小限制而出现异常或丢包。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `b53_change_mtu` 函数中判断是否启用 Jumbo Frame 时，错误地将 `mtu`（数据载荷大小）与 `JMS_MIN_SIZE`（完整以太网帧长度）进行比较。由于 MTU 仅指数据部分，而 `JMS_MIN_SIZE` 包含了帧头和校验和，导致比较基准不一致。这使得 MTU 在 1500 到 1518 之间的值未能触发启用 Jumbo Frame 的逻辑，而实际上此时需要启用该功能以支持超过标准限制的帧。
+
+#解决方案
+修改 `drivers/net/dsa/b53/b53_common.c` 中的判断逻辑，将 MTU 比较对象从 `JMS_MIN_SIZE` 改为 `ETH_DATA_LEN`（标准以太网 MTU 1500 字节）。仅当请求的 MTU 大于 `ETH_DATA_LEN` 时才启用 Jumbo Frame，确保 MTU 超过 1500 字节时交换机能正确处理大帧。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5caf33eac67193ccbfd16b3238c06ec8951e3830

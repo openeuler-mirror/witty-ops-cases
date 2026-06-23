@@ -1,0 +1,21 @@
+#标题
+radeon 驱动初始化时 encoder->possible_clones 校验失败导致告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 radeon 显卡驱动初始化过程中，内核触发 WARNING 并打印 Bogus possible_clones 相关的错误信息。系统日志中出现校验失败的提示，表明编码器的 possible_clones 位掩码配置不符合 DRM 子系统的要求。
+
+#主要错误日志
+[    2.456789] Bogus possible_clones: [ENCODER:46:TV-46] possible_clones=0x4 (full encoder mask=0x7)
+[    2.456790] WARNING: CPU: 0 PID: 170 at drivers/gpu/drm/drm_mode_config.c:615 drm_mode_config_validate+0x113/0x39c
+
+#问题根因
+DRM 框架在 commit 74d2aacbe840 中引入了对 encoder->possible_clones 的合法性校验，要求编码器的 possible_clones 位掩码必须包含其自身。radeon 驱动的 `radeon_encoder_clones` 函数在计算克隆掩码时，错误地将初始值设为 0，导致最终生成的掩码未包含编码器自身，从而未遵循 DRM 核心的规定。
+
+#解决方案
+修改 `drivers/gpu/drm/radeon/radeon_encoders.c` 中的 `radeon_encoder_clones` 函数。将 `index_mask` 的初始值从 0 修改为 `drm_encoder_mask(encoder)`，确保在计算可能的克隆编码器掩码时，首先将编码器自身包含在内，从而满足 DRM 校验逻辑的要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f0dfe8426b5786fef823982d6078591d8388bcd6

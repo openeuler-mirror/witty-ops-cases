@@ -1,0 +1,20 @@
+#标题
+wifi: ath12k: 修复 TID 设置失败时清理逻辑错误导致的潜在崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ath12k_dp_rx_peer_tid_setup() 执行过程中发生错误时，系统可能访问未分配的 TID 内存，导致潜在的系统崩溃或越界访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ath12k_dp_peer_setup` 函数中，当 `ath12k_dp_rx_peer_tid_setup()` 调用失败时，循环变量 `tid` 的值已经在循环条件检查前自增（或指向了下一个未分配的 TID）。原代码直接以当前的 `tid` 值开始清理循环，导致清理函数 `ath12k_dp_rx_peer_tid_delete()` 试图释放一个实际上并未成功分配的 TID，进而引发错误。此外，`ath12k_dp_rx_peer_frag_setup()` 失败分支中的 `tid--` 操作也存在逻辑冗余。
+
+#解决方案
+修改 `ath12k_dp_peer_setup` 中的错误处理清理循环，在进入清理循环前先执行 `tid--`，确保 `tid` 变量回退到最近一个成功分配的 TID 索引，从而只对已成功分配的资源进行清理和释放。同时移除了 `ath12k_dp_rx_peer_frag_setup()` 失败路径中多余的 `tid--` 操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d0f9de607245bfd82586c61ae81e4fe722ed8c3

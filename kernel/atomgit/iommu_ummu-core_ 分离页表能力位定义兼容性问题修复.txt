@@ -1,0 +1,23 @@
+#标题
+iommu/ummu-core: 分离页表能力位定义兼容性问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 SVA（Shared Virtual Address）分离页表功能时，由于能力位定义顺序发生变化，导致 `ummu_get_sva_mode` 和 `ummu_sva_get_features` 接口返回的模式或特性值解析错误。驱动程序可能错误识别 SVA 工作模式（共享模式被误判为独立模式，或反之），或者错误判断设备是否支持 IOPF（I/O Page Fault）能力，进而引发设备初始化流程异常或功能不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的提交（"iommu/ummu: Add the function of creating devices with SVA-separated"）中新增了分离页表特性，但在定义 `HW_CAP_IOPF` 等硬件能力宏时，将其放置在 bit 0 位置。此次修复将 `HW_CAP_IOPF` 能力位移至 bit 3，而将 `HW_CAP_EXPAN`、`HW_CAP_DOUBLE_PLBI`、`HW_CAP_KCMD_PLBI` 依次前移。根因是分离页表相关的新能力位定义位置调整导致了二进制兼容性问题，旧的定义顺序不再适用。
+
+#解决方案
+修改头文件 `include/uapi/linux/ummu_core.h` 中的宏定义，调整能力位的具体位置：
+1. 将 `HW_CAP_IOPF` 从 `bit 0` 移动到 `bit 3`。
+2. 将 `HW_CAP_EXPAN`、`HW_CAP_DOUBLE_PLBI`、`HW_CAP_KCMD_PLBI` 分别调整到 `bit 0`、`bit 1`、`bit 2`。
+同时更新 `include/linux/ummu_core.h` 中的函数注释（`ummu_get_sva_mode` 和 `ummu_sva_get_features`），使其返回值说明与新的能力位定义保持一致，确保软件层面的兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd73c315363f0de24b4e600fe5b713468493748a

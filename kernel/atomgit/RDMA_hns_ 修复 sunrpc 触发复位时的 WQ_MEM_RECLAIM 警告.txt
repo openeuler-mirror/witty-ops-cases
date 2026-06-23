@@ -1,0 +1,32 @@
+#标题
+RDMA/hns: 修复 sunrpc 触发复位时的 WQ_MEM_RECLAIM 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 sunrpc 时，如果触发复位，内核会打印 WQ_MEM_RECLAIM 相关的警告栈信息。该问题发生在 QP 销毁过程中，涉及内存回收上下文的依赖检查失败。
+
+#主要错误日志
+workqueue: WQ_MEM_RECLAIM xprtiod:xprt_rdma_connect_worker [rpcrdma] is flushing !WQ_MEM_RECLAIM hns_roce_irq_workq:flush_work_handle [hns_roce_hw_v2]
+WARNING: CPU: 0 PID: 8250 at kernel/workqueue.c:2644 check_flush_dependency+0xe0/0x144
+Call trace:
+ check_flush_dependency+0xe0/0x144
+ start_flush_work.constprop.0+0x1d0/0x2f0
+ __flush_work.isra.0+0x40/0xb0
+ flush_work+0x14/0x30
+ hns_roce_v2_destroy_qp+0xac/0x1e0 [hns_roce_hw_v2]
+ ib_destroy_qp_user+0x9c/0x2b4
+ rdma_destroy_qp+0x34/0xb0
+ rpcrdma_ep_destroy+0x28/0xcc [rpcrdma]
+ rpcrdma_xprt_disconnect+0x1d8/0x260 [rpcrdma]
+ xprt_rdma_connect_worker+0xc0/0x120 [rpcrdma]
+
+#问题根因
+在 sunrpc 触发复位时，工作队列 `xprtiod`（设置了 WQ_MEM_RECLAIM 标志）正在处理连接工作，期间调用了 `hns_roce_v2_destroy_qp` 进行 QP 销毁。该销毁流程会 flush `hns_roce_irq_workq` 工作队列。由于 `hns_roce_irq_workq` 在创建时未设置 `WQ_MEM_RECLAIM` 标志，导致内核在检查 flush 依赖时报错：一个具有内存回收属性（WQ_MEM_RECLAIM）的工作队列正在 flush 一个不具备该属性的工作队列。因为 QP 销毁过程会释放内存，该工作队列理应具备 `WQ_MEM_RECLAIM` 属性。
+
+#解决方案
+在初始化 `hns_roce_irq_workq` 工作队列时，添加 `WQ_MEM_RECLAIM` 标志，以满足内存回收上下文的依赖要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4a952bd717f330769d838093d5f8cef474fc6321

@@ -1,0 +1,25 @@
+#标题
+sched_ext: 修复 BPF list kfunc API 定义错误导致 BPF 程序加载失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 sched_ext (scx) 调度器示例或程序时，若代码中使用了 `bpf_list` 相关的 kfunc API，BPF 程序加载失败，无法正常运行。用户空间加载器报错提示找不到内核或模块 BTFs 中的符号。
+
+#主要错误日志
+libbpf: extern (func ksym) 'bpf_list_push_back': not found in kernel or module BTFs
+libbpf: failed to load object 'scx_foo'
+libbpf: failed to load BPF skeleton 'scx_foo': -EINVAL
+
+#问题根因
+内核 BPF 子系统当前仅支持 `bpf_list_push_{front,back}_impl` 形式的 kfunc，而不支持 `bpf_list_push_{front,back}`。头文件 `tools/sched_ext/include/scx/common.bpf.h` 中错误地声明了不存在的 `bpf_list_push_front` 和 `bpf_list_push_back` 符号，导致 BPF 验证器在加载时无法匹配到正确的内核函数，从而报错。
+
+#解决方案
+修改 `common.bpf.h` 头文件，将 `bpf_list_push_front` 和 `bpf_list_push_back` 的声明更改为对应的 `_impl` 后缀函数（即 `bpf_list_push_front_impl` 和 `bpf_list_push_back_impl`），并通过宏定义封装对外的 API 接口。具体变更如下：
+1. 移除原有的 `void bpf_list_push_front(...)` 和 `void bpf_list_push_back(...)` 声明。
+2. 新增 `int bpf_list_push_front_impl(...)` 和 `int bpf_list_push_back_impl(...)` 声明。
+3. 定义宏 `bpf_list_push_front(head, node)` 和 `bpf_list_push_back(head, node)`，使其在调用 `_impl` 函数时传入默认参数（meta 为 NULL，off 为 0），以适配现有的内核接口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ffbb76957cab34d78c0012972650aabc73faefca

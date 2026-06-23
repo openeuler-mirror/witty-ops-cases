@@ -1,0 +1,23 @@
+#标题
+net: pktgen: 解析 MPLS 标签列表时数量限制错误导致配置失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 pktgen 通过 `/proc/net/pktgen/` 接口配置 MPLS 标签时，若标签数量达到 `MAX_MPLS_LABELS` 定义的最大值（例如 15 个），系统会错误地返回“Argument list too long”错误，导致配置无法写入成功。例如执行以下命令时会触发该故障：
+`echo "mpls 00000f00,00000f01,...,00000f0f" > /proc/net/pktgen/lo@0`
+命令行返回：
+`-bash: echo: write error: Argument list too long`
+
+#主要错误日志
+-bash: echo: write error: Argument list too long
+
+#问题根因
+内核源码 `net/core/pktgen.c` 中的 `get_labels` 函数在进行 MPLS 标签解析循环时，对标签数量的边界检查逻辑位置不当。原代码在每次循环解析完一个标签并递增计数器 `n` 后，才检查 `n >= MAX_MPLS_LABELS` 并返回 `-E2BIG`。这导致当解析到第 `MAX_MPLS_LABELS` 个标签时，计数器 `n` 已变为 `MAX_MPLS_LABELS`，随即触发错误返回，实际上少处理了一个标签，使得最大允许标签数变成了 `MAX_MPLS_LABELS - 1`。
+
+#解决方案
+将边界检查逻辑 `if (n >= MAX_MPLS_LABELS) return -E2BIG;` 移至循环体内解析标签操作（`hex32_arg`、`pkt_dev->labels[n]` 赋值）以及计数器 `n` 自增之前。这确保了只有当当前已解析数量 `n` 小于最大限制时才继续解析，从而正确支持解析 `MAX_MPLS_LABELS` 个标签。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9b7e6e407b7841b9e8e35291155d92bc5c6bae65

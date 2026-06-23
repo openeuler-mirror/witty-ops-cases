@@ -1,0 +1,20 @@
+#标题
+espintcp 在异步加密模式下因发送队列满导致 skb 泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 espintcp (RFC 8229) 且配置了异步加密算法时，若 TCP 发送队列（TX queue）已满，内核会发生 socket buffer (skb) 泄漏。在同步加密模式下，该问题不会发生，因为通用的 xfrm output 代码路径会负责释放 skb。此问题会导致内存随着加密流量的发送逐渐耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `esp_output_done` 异步加密回调函数中，当调用 `esp_output_tail_tcp` 时，如果 TCP 发送队列已满，该函数会返回错误。原代码逻辑未处理这种情况下的错误返回值，导致 skb 既没有被发送也没有被释放，从而引发内存泄漏。而在同步加密模式下，上层调用者会处理该错误并释放 skb，因此不存在此问题。
+
+#解决方案
+在 `esp4.c` 和 `esp6.c` 的 `esp_output_done` 函数中，捕获 `esp_output_tail_tcp` 的返回值。如果该函数返回错误（即返回值不等于 `-EINPROGRESS`），则显式调用 `kfree_skb(skb)` 释放 socket buffer，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22d3d499b9c5f0ea084288c71ec2630742e94884

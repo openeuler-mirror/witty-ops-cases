@@ -1,0 +1,36 @@
+#标题
+ub/obmm: 内存池统计计数缺失及参数校验不全导致统计偏差与风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 内存池 `obmm` 模块在进行内存扩展、收缩、分配及隔离等操作时，统计数据（如 `ready_mem_size`、`uncleared_mem_size`）未正确更新，导致用户态通过接口查询到的内存池水位信息与实际物理内存状态不一致，产生统计偏差。
+2. 在特定配置下（如 `mem_allocator_granu` 参数非 2 的幂次方），内核模块加载校验不严格，可能导致后续内存分配对齐异常。
+3. 导出内存接口对 `pxm_numa` 参数校验不足，未限制负值输入，可能导致数组越界访问。
+
+#主要错误日志
+- pr_err_ratelimited("size %#zx is zero or not aligned with allocator->granu.\n", size);
+- pr_err("Invalid pxm_numa %d\n", cmd_export->pxm_numa);
+- pr_err("Invalid pxm_numa %d\n", reg->affinity);
+- pr_err("mem_allocator_granu must be power of 2: %s\n", mem_allocator_granu);
+- pr_err("Failed to create mempool sysfs directory\n");
+
+#问题根因
+1. **统计计数遗漏**：在 `conti_mem_allocator` 的各生命周期函数中，内存链表节点在 `memseg_ready`、`memseg_uncleared` 等链表间迁移时，代码逻辑仅更新了 `pooled_mem_size` 或 `used_mem_size`，遗漏了对 `ready_mem_size` 和 `uncleared_mem_size` 的同步增减操作。例如 `expand` 时未增加 `uncleared_mem_size`，`contract` 时未根据来源分别扣减计数。
+2. **参数校验缺失**：`init_mem_allocator_granu` 函数未检查 `mem_allocator_granu` 是否为 2 的幂，违反了内存分配粒度的对齐要求；同时 `obmm_export_from_pool.c` 与 `obmm_export_from_user.c` 中判断 `pxm_numa` 合法性时，仅检查了上界，未检查下界（负值），存在数组越界隐患。
+
+#解决方案
+1. **完善统计计数逻辑**：
+   - 在 `conti_mem_allocator_expand` 中增加 `atomic64_add(expand_size, &allocator->uncleared_mem_size)`。
+   - 在 `conti_mem_allocator_contract` 中根据实际从 `uncleared` 和 `ready` 链表移除的数量，分别扣减对应的统计计数。
+   - 在 `conti_alloc_memory` 中根据分配来源（`first` 或 `second` 链表）正确扣减 `ready_mem_size` 或 `uncleared_mem_size`。
+   - 在 `conti_clear_thread` 中，根据清理成功或失败的状态，正确转移 `uncleared_mem_size` 与 `ready_mem_size` 的计数。
+   - 在 `conti_mem_allocator_isolate_memseg` 中，根据隔离节点的来源链表正确扣减对应计数。
+2. **增加输入参数校验**：
+   - 在 `init_mem_allocator_granu` 中增加 `is_power_of_2` 校验。
+   - 在 `pxm_numa` 相关校验中增加 `cmd_export->pxm_numa < 0` 和 `reg->affinity < 0` 的判断。
+3. **新增 Sysfs 接口**：引入 `kobject` 机制，增加 `ready_mem_size` 与 `uncleared_mem_size` 统计变量的 Sysfs 导出支持，便于监控与问题定位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a966861817f6f4d43b720c958de08623c717c5ec

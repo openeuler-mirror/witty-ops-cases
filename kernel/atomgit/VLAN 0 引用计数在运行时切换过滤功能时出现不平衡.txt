@@ -1,0 +1,22 @@
+#标题
+VLAN 0 引用计数在运行时切换过滤功能时出现不平衡
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持硬件 VLAN 过滤的网卡设备上进行 UP/DOWN 状态切换或运行时修改过滤功能时，VLAN 0 的引用计数管理混乱，导致引用计数泄漏或不平衡，可能引发内核资源泄漏或设备状态异常。
+
+#主要错误日志
+pr_info("adding VLAN 0 to HW filter on device %s\n", dev->name);
+
+#问题根因
+原有代码在处理 `NETDEV_UP` 和 `NETDEV_DOWN` 事件时，仅根据 `dev->features` 中的 `NETIF_F_HW_VLAN_CTAG_FILTER` 标志位机械地增加或删除 VLAN 0。这忽略了运行时通过 `vlan_vid_add/del` 接口显式操作 VLAN 0 的场景。当用户手动添加了 VLAN 0 后，设备 DOWN 事件仍会强制删除 VLAN 0；或者当运行时特性标志位发生变化时，逻辑分支判断不完整，导致 VLAN 0 的添加与删除操作不配对，从而破坏了引用计数的平衡。
+
+#解决方案
+1. 在 `struct vlan_info` 结构体中新增 `auto_vid0` 标志位，用于记录 VLAN 0 是否由内核自动添加。
+2. 封装 `vlan_vid0_add` 和 `vlan_vid0_del` 函数，在自动添加 VLAN 0 时设置 `auto_vid0` 为 true，在删除时检查该标志位。
+3. 修改事件处理逻辑，`NETDEV_DOWN` 时仅当 `auto_vid0` 为真时才执行删除操作，防止删除用户手动添加的 VLAN 0，确保引用计数在运行时各种场景下保持平衡。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9ec68dec09f1cba021d032b323038124356c9f19

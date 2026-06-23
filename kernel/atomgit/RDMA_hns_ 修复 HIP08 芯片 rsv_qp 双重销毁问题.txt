@@ -1,0 +1,24 @@
+#标题
+RDMA/hns: 修复 HIP08 芯片 rsv_qp 双重销毁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HIP08 修订版本的硬件平台上，若 `hns_roce_v2_init` 初始化过程中发生错误（如 `hns_roce_v2_get_reset_page` 失败），驱动程序在清理资源时会触发 `rsv_qp` 的双重销毁。这将导致内核崩溃、内存访问错误或驱动初始化流程异常。
+
+#主要错误日志
+- "reset state init failed, ret = %d.\n"
+- "failed to init free mr!\n"（若此前初始化步骤失败）
+
+#问题根因
+在原有的代码逻辑中，`free_mr_init` 函数（负责创建 `rsv_qp`）是在 `__hns_roce_hw_v2_init_instance` 函数中被调用的。当 `hns_roce_v2_init` 执行失败时，上层逻辑会调用 `hns_roce_exit` 进行资源清理，该清理流程包含了销毁 `rsv_qp` 的操作。
+同时，`hns_roce_v2_init` 自身的错误处理路径（goto 跳转）也会调用 `free_mr_exit` 尝试销毁 `rsv_qp`。
+这就导致了同一个 `rsv_qp` 对象被销毁两次，引发双重释放问题。
+
+#解决方案
+将 `free_mr_init` 的调用位置从外层的 `__hns_roce_hw_v2_init_instance` 函数移动到内部的 `hns_roce_v2_init` 函数中，并确保该调用位于获取 `reset_page` 之前。
+通过调整初始化顺序，当 `reset_page` 获取失败或后续步骤失败时，`free_mr_exit` 能够正确地与已成功的 `free_mr_init` 配对执行清理，避免了与上层 `hns_roce_exit` 清理逻辑的冲突，从而修复了双重销毁的故障。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d3579957da63905946df7e8532b8ef9ad53c5d04

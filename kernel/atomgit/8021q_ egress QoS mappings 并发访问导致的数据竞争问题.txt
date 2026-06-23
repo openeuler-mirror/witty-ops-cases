@@ -1,0 +1,24 @@
+#标题
+8021q: egress QoS mappings 并发访问导致的数据竞争问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 8021q VLAN 设备的 egress QoS 映射时，若并发进行数据包发送（TX fast path）或状态查询（如 ip link show 或读取 /proc 文件），可能导致内核内存不一致或程序异常行为，存在潜在的安全风险。该问题被追踪为 CVE-2026-46153。
+
+#主要错误日志
+未知
+
+#问题根因
+TX 快速路径和报告路径在没有持有 RTNL 锁的情况下遍历 egress QoS 映射表，而修改路径虽然持有锁，但原有的实现仅使用简单的指针操作和 `smp_wmb/rmb` 内存屏障，无法保证在并发修改（如删除或添加映射节点）时读取路径的安全性和一致性，导致了数据竞争。
+
+#解决方案
+将 egress QoS 映射链表转换为 RCU（Read-Copy-Update）保护的指针：
+1. 在结构体 `vlan_priority_tci_mapping` 中添加 `rcu_head` 成员，并将 `next` 指针标记为 `__rcu`。
+2. 在读取路径（`vlan_dev_get_egress_qos_mask`、`vlan_netlink.c` 和 `vlanproc.c` 的遍历逻辑）中使用 `rcu_read_lock/unlock` 及 `rcu_dereference` 原语。
+3. 在修改路径（`vlan_dev_set_egress_priority`）中使用 `rcu_assign_pointer` 更新指针。
+4. 在释放路径（`vlan_dev_free_egress_priority`）中使用 `kfree_rcu` 延迟释放内存，确保正在进行的读取操作完成后才释放节点。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5878cf7e67ef31eb9cff01a05ec65a02ad5ed260

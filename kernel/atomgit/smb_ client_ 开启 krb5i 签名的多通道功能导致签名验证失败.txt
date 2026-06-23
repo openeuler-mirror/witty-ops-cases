@@ -1,0 +1,25 @@
+#标题
+smb: client: 开启 krb5i 签名的多通道功能导致签名验证失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 `multichannel,max_channels=n,sec=krb5i` 选项挂载 SMB 共享时，客户端在建立辅助通道时使用了错误的签名密钥，导致服务器拒绝辅助通道发送的命令。具体表现为命令执行失败，内核日志中出现签名验证错误。复现步骤为挂载共享后等待几秒卸载，查看 dmesg 可见大量签名错误信息。
+
+#主要错误日志
+CIFS: VFS: sign fail cmd 0x5 message id 0x2
+CIFS: VFS: \\srv SMB signature verification returned error = -13
+CIFS: VFS: sign fail cmd 0x5 message id 0x2
+CIFS: VFS: \\srv SMB signature verification returned error = -13
+CIFS: VFS: sign fail cmd 0x4 message id 0x2
+CIFS: VFS: \\srv SMB signature verification returned error = -13
+
+#问题根因
+在通过 Kerberos 认证建立 SMB 会话时，代码逻辑错误地保留了旧的会话密钥用于绑定操作。当启用多通道功能时，辅助通道复用了主通道的签名密钥。由于每个通道应当拥有独立的签名密钥，这种复用导致辅助通道生成的签名不正确，服务器端因此返回签名验证失败错误。
+
+#解决方案
+修改 `SMB2_auth_kerberos` 函数，移除绑定操作中保留旧会话密钥的逻辑。无论是绑定现有会话还是创建新会话，均强制使用新获取的会话密钥来生成通道的签名密钥，确保每个通道的签名密钥独立且正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf24a45e1828f0d756a5a63abb736bd03c191380

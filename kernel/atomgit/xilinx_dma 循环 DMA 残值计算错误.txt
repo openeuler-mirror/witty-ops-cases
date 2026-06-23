@@ -1,0 +1,25 @@
+#标题
+xilinx_dma 循环 DMA 残值计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Xilinx DMA 控制器进行循环传输时，残值计算功能完全失效。系统仅能正确报告第一个描述符段的残值，当第一个描述符处理完成后，后续无法报告有意义的残值信息，导致依赖 DMA 残值状态的应用层或驱动逻辑判断异常。
+
+#主要错误日志
+未知
+
+#问题根因
+问题由两方面原因导致：
+1. 描述符链表管理缺陷：当第一个描述符处理完成后，它被从 active_list 移动到 done_list，但从未被重新放回 active_list。`xilinx_dma_tx_status()` 函数依赖描述符处于 active_list 来报告残值，导致后续残值计算失效。
+2. 描述符状态字段未重置：在循环 DMA 进行下一轮传输重用描述符前，段描述符的 `.status` 字段未被清零。由于上一轮 DMA 传输已向该字段写入了数据，导致 `xilinx_dma_get_residue()` 误判描述符已完成且残值为 0，从而计算出错误的残值结果。
+
+#解决方案
+在 `xilinx_dma_start_transfer()` 函数中针对循环 DMA 模式进行修复：
+1. 当 pending_list 为空且处于 cyclic 模式时，从 done_list 中取出完成的描述符。
+2. 遍历描述符的所有段，将硬件描述符的 `status` 字段重置为 0，确保下一轮传输状态正确。
+3. 使用 `list_splice_tail_init` 将 done_list 中的描述符重新放回 active_list，确保残值计算函数可以正确遍历活跃描述符。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b58e49e2d687765aeeb8985305f10f926d913936

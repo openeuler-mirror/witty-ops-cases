@@ -1,0 +1,20 @@
+#标题
+max3421-hcd 驱动 Probe 阶段清理流程引发空指针或错误指针解引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 max3421-hcd 驱动加载过程中（probe 阶段），若 `kthread_run()` 创建内核线程失败并返回错误指针，驱动在执行错误处理清理代码时，未正确检查指针类型即调用 `kthread_stop()`，导致内核发生指针解引用错误（panic 或 oops）。
+
+#主要错误日志
+未知
+
+#问题根因
+`kthread_run()` 函数在失败时返回错误指针（error pointer），而不仅仅返回 NULL。原代码在 probe 失败的清理路径中，仅判断 `max3421_hcd->spi_thread` 是否为真值，未排除错误指针的情况。这导致当线程创建失败返回错误指针时，条件判断通过，代码尝试对该错误指针执行 `kthread_stop()` 操作，从而触发非法指针解引用。
+
+#解决方案
+修改 `max3421_probe` 函数中的错误处理逻辑，在调用 `kthread_stop()` 前，使用 `IS_ERR_OR_NULL()` 宏来检测 `max3421_hcd->spi_thread` 指针。确保只有当指针既不是 NULL 也不是错误指针时，才执行停止线程的操作，避免对错误指针进行解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0a79b7674b9ab6e424f083589ae91472bd8e2938

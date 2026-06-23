@@ -1,0 +1,22 @@
+#标题
+can: bcm: procfs 访问时因缺少 RCU 保护导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读取 CAN BCM (Broadcast Manager) 的 procfs 接口内容时，如果对应的 bcm_op 正在被删除，可能会导致 Use-After-Free (UAF) 问题，表现为读取到的数据不可靠或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在生成 procfs 内容时，遍历 `rx_ops` 链表的操作缺少 `rcu_read_lock()` 保护。当 `bcm_op` 正在被移除时，由于其内存释放逻辑已经使用了 RCU 机制，但读取路径未进入 RCU 临界区，导致可能访问到已被释放的内存，引发 UAF。
+
+#解决方案
+1. 在 `bcm_proc_show` 函数中增加 `rcu_read_lock()` 和 `rcu_read_unlock()` 调用，确保遍历链表时处于 RCU 读临界区。
+2. 将链表遍历宏从 `list_for_each_entry` 替换为 `list_for_each_entry_rcu` 以符合 RCU 遍历规范。
+3. 在 `bcm_delete_rx_op`、`bcm_delete_tx_op` 以及 `bcm_rx_setup` 的错误处理路径中，将 `list_del` 替换为 `list_del_rcu`，确保链表删除操作在 RCU 保护下进行，从而与读取路径的 RCU 锁保护相配合。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e12dd380b75dbc66a364cb4fc001405b88299bea

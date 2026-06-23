@@ -1,0 +1,22 @@
+#标题
+spi: bcm63xx: 驱动卸载时控制器注销顺序错误导致资源访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载（unbind）BCM63xx SPI 控制器驱动时，由于注销顺序错误，可能在底层时钟等资源被禁用后，控制器仍被内核引用，导致潜在的内核崩溃或异常访问行为。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 remove 流程中使用了托管版本的 `devm_spi_register_controller` 进行注册。这导致在驱动卸载时，控制器的注销动作被推迟到 devres 资源释放阶段执行，该阶段晚于驱动 `remove` 回调中禁用时钟的操作。因此，在时钟禁用后，控制器结构体可能仍被内核其他部分引用，此时访问硬件或相关资源会导致错误。
+
+#解决方案
+1. 将 `probe` 函数中的 `devm_spi_register_controller` 替换为 `spi_register_controller`，移除托管注销机制。
+2. 在 `remove` 函数中显式调用 `spi_unregister_controller` 注销控制器，确保其在禁用时钟之前执行。
+3. 在注销前后增加引用计数操作 `spi_controller_get` 和 `spi_controller_put`，防止在注销过程中对象被提前释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ada4445b3ed93b95140500a40c2ef67fc79dde9f

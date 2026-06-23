@@ -1,0 +1,20 @@
+#标题
+firmware/sysfb: sysfb_init() 函数错误路径误返回成功
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统启动初始化阶段，若 `sysfb_parent_dev()` 函数调用失败（如无法获取父设备），`sysfb_init()` 本应返回错误码以反映初始化失败，但实际上错误码未正确保留，导致函数错误地返回了 0（成功）。这可能导致内核或用户空间误认为 framebuffer 设备初始化成功，而实际上设备并未正确创建，进而引发后续图形显示相关的功能异常或初始化流程不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `sysfb_init()` 函数中，当 `sysfb_parent_dev()` 调用失败并返回无效指针（PTR_ERR）时，代码进入了 `goto unlock_mutex` 的错误处理路径。但在跳转之前，并未将局部变量 `ret` 的值更新为 `PTR_ERR(parent)`。由于 `ret` 变量在函数入口处默认初始化为 0，导致函数最终返回了 0 而非预期的负错误码，即“错误路径意外返回了成功”。
+
+#解决方案
+修改 `drivers/firmware/sysfb.c` 文件中的 `sysfb_init()` 函数。在检测到 `IS_ERR(parent)` 为真的错误处理分支中，显式增加 `ret = PTR_ERR(parent);` 语句，将错误码从指针中提取并赋值给返回值变量，确保在解锁互斥锁并退出函数时返回正确的错误状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d524d9eac9bba015d0e4e002b973934ae577fefa

@@ -1,0 +1,29 @@
+#标题
+urma: 设备切换命名空间引发内核调用栈异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 URMA 设备移除或命名空间切换操作时，内核触发 Call Trace（调用栈回溯）。具体表现为在 `ping_on_remove_device` 流程中，由于并发问题导致空指针访问或无效内存访问，引发内核 Panic 或 Oops。
+
+#主要错误日志
+```
+Send WR flushed or cr user_ctx is NULL.
+```
+（注：推断在触发 Call Trace 时，可能伴随上述日志输出，表明上下文已失效或工作请求被冲刷。）
+
+#问题根因
+问题根因在于 `ping_wq_queue_work` 函数与 `ping_on_remove_device` 函数之间存在并发竞态条件。
+1. 在设备移除过程中，`ping_on_remove_device` 会销毁工作队列（workqueue），但未与正在提交任务的 `ping_wq_queue_work` 进行有效同步。
+2. `ping_wq_queue_work` 在调用 `queue_work` 前未持有锁，导致其可能在 `wq` 被置空或销毁后仍然尝试向其提交工作项。
+3. 这导致在无效的上下文或已销毁的队列上执行操作，从而触发内核 Call Trace。
+
+#解决方案
+1. **引入专用锁保护**：在 `ubmgr_ping_ctx` 结构体中新增 `spinlock_t wq_lock` 自旋锁，专门用于保护 `wq` 指针与 `queue_work` 操作的原子性。
+2. **入队侧同步**：修改 `ping_wq_queue_work` 函数，在检查 `wq` 是否为空及调用 `queue_work` 期间持有 `wq_lock`。如果检测到 `wq` 为空，直接释放内存并返回 `-ESHUTDOWN`，避免向已销毁的队列提交任务。
+3. **移除侧同步**：修改 `ping_on_remove_device` 函数，在清空 `wq` 指针前持有 `wq_lock`。先将 `ctx->wq` 置为 NULL，再释放锁，确保后续新的入队请求能安全失败，最后再执行 `drain_workqueue` 和 `destroy_workqueue`。
+4. **状态检查**：增加对 `cr->status` 和 `cr->user_ctx` 的有效性检查，提前处理错误状态，避免访问无效上下文。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cc5cf4791641be02e3babaffff05010fc9f56cba

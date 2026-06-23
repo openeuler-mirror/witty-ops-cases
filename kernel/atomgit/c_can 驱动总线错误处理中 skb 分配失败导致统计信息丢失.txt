@@ -1,0 +1,24 @@
+#标题
+c_can 驱动总线错误处理中 skb 分配失败导致统计信息丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 CAN 总线发生错误时，如果内核 SKB 缓冲区分配失败（内存不足或内存碎片化严重），驱动程序会直接退出错误处理流程，导致 `rx_errors` 和 `tx_errors` 等网络设备统计计数器未能更新。这表现为在系统内存紧张场景下，用户通过 `ifconfig` 或 `ip -s link` 查看到的错误计数不再增加，无法真实反映链路的错误状况。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `c_can_handle_bus_err` 函数中，代码逻辑原本在 `alloc_can_err_skb` 分配失败时直接返回 0（`return 0;`），这导致后续针对不同错误类型（如 LEC_STUFF_ERROR、LEC_ACK_ERROR 等）的统计计数更新代码（`stats->rx_errors++` 或 `stats->tx_errors++`）被跳过。根据 Commit 描述，这是由于之前的修复引入了此问题，使得错误统计依赖于 SKB 分配的成功与否。
+
+#解决方案
+调整代码执行顺序，将 SKB 分配失败的检查点（`return 0`）移至统计信息更新之后、发送 SKB 之前。具体修改为：
+1. 移除函数开头对 `skb` 分配失败的立即返回逻辑。
+2. 在操作 `cf` 结构体（错误帧数据）前增加 `if (likely(skb))` 判断，防止空指针访问。
+3. 确保统计信息（`stats->rx_errors` 和 `stats->tx_errors`）在 SKB 分配失败的情况下依然能正确累加。
+4. 在统计更新完成后，再检查 `if (unlikely(!skb))` 并返回，避免执行后续的 `netif_receive_skb`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/677644e398aab4d6f4a40053556f14cc35da4049

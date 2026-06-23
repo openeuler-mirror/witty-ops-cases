@@ -1,0 +1,20 @@
+#标题
+SoundWire 总线在添加从设备时因 IRQ 域创建竞争导致潜在功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SoundWire 总线主设备添加过程中，如果在创建 IRQ 域之前就扫描并添加了从设备，可能导致从设备在需要注册或请求 IRQ 时无法获取对应的 IRQ 域，引发驱动初始化失败或中断处理异常。此外，若从设备扫描失败，先前创建的 IRQ 域可能未被正确释放，导致资源泄漏。
+
+#主要错误日志
+dev_err(bus->dev, "Finding slaves failed:%d\n", ret);
+
+#问题根因
+SoundWire IRQ 域的创建时机滞后。原代码在调用 `sdw_acpi_find_slaves()` 和 `sdw_of_find_slaves()` 扫描并添加从设备之后才调用 `sdw_irq_create()` 创建 IRQ 域。这导致存在一个时间窗口：从设备已被添加到总线，但 IRQ 域尚未就绪。如果在此窗口期内从设备需要访问 IRQ 域，将引发竞争条件导致功能故障。
+
+#解决方案
+调整初始化顺序，将 `sdw_irq_create()` 调用移至扫描从设备（`sdw_acpi_find_slaves` 和 `sdw_of_find_slaves`）之前，确保 IRQ 域在从设备加入总线前已经创建完成。同时，在从设备扫描失败的错误处理路径中增加 `sdw_irq_delete(bus)` 调用，防止资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3b193e4cf9e940effef86ed5a981d384d1727e8f

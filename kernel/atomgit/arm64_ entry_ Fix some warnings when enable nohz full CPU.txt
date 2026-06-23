@@ -1,0 +1,24 @@
+#标题
+arm64: entry: Fix some warnings when enable nohz full CPU
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能 nohz full CPU 的场景下，开启 CONFIG_DEBUG_FEATURE_BYPASS 配置项时，内核会产生与 lockdep 和 context tracking 相关的警告信息。这是因为在快速中断处理路径中，错误地跳过了 RCU 相关的钩子调用。
+
+#主要错误日志
+未知
+
+#问题根因
+1. `CONFIG_DEBUG_FEATURE_BYPASS` 宏定义的本意是旁路调试功能以加速系统调用，但其逻辑错误地掩盖了 `lockdep` 依赖项，且在代码逻辑中过度跳过了必要的 RCU 钩子（如 `tick_irq_enter`、`tick_irq_exit` 和 `account_hardirq_enter`）。
+2. `xint_enter_rcu` 和 `__xint_exit_rcu` 函数中，关键的 RCU 处理函数被 `#ifndef CONFIG_DEBUG_FEATURE_BYPASS` 包裹，导致在开启该配置时这些函数未被调用。
+3. `Kconfig` 中 `DEBUG_FEATURE_BYPASS` 依赖关系配置不当，未能正确表达与 `LOCKDEP` 的互斥关系。
+
+#解决方案
+1. 在 `arch/Kconfig` 中增加 `depends on !LOCKDEP`，确保 `DEBUG_FEATURE_BYPASS` 与 `LOCKDEP` 互斥，防止配置冲突。
+2. 修正 `kernel/softirq.c` 中的 `xint_enter_rcu` 和 `xint_exit_rcu` 逻辑，将 `tick_irq_enter`、`account_hardirq_enter` 和 `tick_irq_exit` 等关键 RCU 和时间统计钩子移出 `#ifndef CONFIG_DEBUG_FEATURE_BYPASS` 的条件编译块，确保这些函数在快速中断路径中始终被执行。
+3. 重构 `entry-common.c` 和 `entry.S`，统一快速中断和快速系统调用的入口/出口路径，使用新定义的 `fast_enter_from_user_mode` 和 `fast_exit_to_user_mode` 函数，在保留 `DEBUG_FEATURE_BYPASS` 优化效果的同时确保核心逻辑完整。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4672b15ea0310686f657dc38c95b8c90663590c0

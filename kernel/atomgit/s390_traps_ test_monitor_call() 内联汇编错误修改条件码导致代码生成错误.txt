@@ -1,0 +1,20 @@
+#标题
+s390/traps: test_monitor_call() 内联汇编错误修改条件码导致代码生成错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 s390 架构下，`test_monitor_call()` 函数中的内联汇编使用了 `xgr` 指令来清零寄存器，该指令会修改条件码，但内联汇编的 clobber 列表未声明此修改。这可能导致编译器生成不正确的代码，进而引发内核启动阶段的 `panic("Monitor call doesn't work!\n")`，或者在后续执行中引发不可预期的异常行为。
+
+#主要错误日志
+panic("Monitor call doesn't work!\n");
+
+#问题根因
+`test_monitor_call()` 内联汇编中使用了 `xgr` 指令（异或操作）来清零寄存器，该指令会修改处理器的条件码。然而，内联汇编的 clobber 列表未包含条件码的修改信息，导致编译器在优化时产生错误的代码生成逻辑。
+
+#解决方案
+将内联汇编中的 `xgr` 指令替换为 `lhi`（Load Halfword Immediate）指令。`lhi` 指令在将寄存器清零时不会修改条件码，从而避免了因条件码未声明修改而导致的编译器代码生成错误。同时，该修改也适配了变量 `val` 为 `int` 类型（32位）的特性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9a4ff6d39b872a32f97dfab873a5f07eb06756c0

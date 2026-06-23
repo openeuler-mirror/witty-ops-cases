@@ -1,0 +1,20 @@
+#标题
+crypto: seqiv 修复 AEAD 加密内存释放遗漏缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统处理 AEAD（Authenticated Encryption with Associated Data）加密请求时，若请求的 IV（Initialization Vector）指针地址不符合对齐要求，内核会分配临时缓冲区复制 IV 数据。在此场景下，加密请求完成后，内核未能释放先前分配的临时缓冲区，导致内存泄漏。此问题关联安全漏洞 CVE-2025-71131。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `seqiv_aead_encrypt` 函数中，代码逻辑通过判断 `info != req->iv` 来决定是否需要清理（释放）临时分配的缓冲区。然而，存在一种边界情况：当传入的 `req->iv` 地址本身已对齐（无需分配新缓冲区），但在函数内部 `info` 指针被更新指向了其他位置（如关联数据区域）时，条件 `info != req->iv` 成立，导致错误地执行了清理逻辑；反之，当确实分配了临时缓冲区时，如果 `info` 指针最终碰巧等于 `req->iv`（虽然在此代码路径中较罕见，但逻辑依赖指针值比较而非分配状态），则会导致临时缓冲区未被释放。代码逻辑依赖于指针地址比较来推断分配状态是不可靠的，导致了内存泄漏或潜在的内存管理错误。
+
+#解决方案
+修改 `crypto/seqiv.c` 文件中的 `seqiv_aead_encrypt` 函数。引入一个显式的布尔变量 `unaligned_info` 来记录 IV 是否因对齐问题而进行了内存分配。在函数开始处计算并保存该状态，在函数结束处根据 `unaligned_info` 变量而非指针地址比较结果来决定是否调用 `seqiv_aead_encrypt_complete2` 进行资源释放。这确保了只要分配了内存就一定会被释放，避免了内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9237eb992691acb9b634040fffbe147a5eaf3c5f

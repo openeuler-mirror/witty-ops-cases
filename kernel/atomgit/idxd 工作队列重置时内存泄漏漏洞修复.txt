@@ -1,0 +1,24 @@
+#标题
+idxd 工作队列重置时内存泄漏漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 idxd 驱动的 workqueue (wq) 执行重置操作时，会发生内存泄漏。具体表现为在重置路径下，与 wq 关联的资源（如描述符、完成队列等）未能被正确释放，导致内核内存持续增长且无法回收。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `idxd_wq_disable_cleanup()` 函数（重置路径调用）中，代码过早地将 `wq->type` 设置为 `IDXD_WQT_NONE`。驱动程序的其他部分将 `wq->type == IDXD_WQT_NONE` 视为 wq 为空（即所有资源已释放）的标志。由于类型设置早于实际资源释放操作，导致资源释放逻辑被跳过或误判，从而引发内存泄漏。
+
+#解决方案
+调整 `wq->type` 的设置时机，确保在资源释放后才将其设置为 `IDXD_WQT_NONE`。
+具体修改如下：
+1. 在 `idxd_wq_free_resources()` 函数中增加 `wq->type = IDXD_WQT_NONE;`，确保资源释放函数执行完毕后标记 wq 为空。
+2. 从 `idxd_wq_disable_cleanup()` 函数中移除 `wq->type = IDXD_WQT_NONE;` 的赋值语句。
+3. 从 `idxd_drv_disable_wq()` 函数中移除冗余的 `wq->type = IDXD_WQT_NONE;` 赋值，统一由资源释放函数处理状态变更。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3106c5de8bc5352d65b267056c0e82ff8dc8fdcb

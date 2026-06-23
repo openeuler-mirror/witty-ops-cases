@@ -1,0 +1,20 @@
+#标题
+smb: server: smb2_open 函数存在 use-after-free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB 服务端处理 smb2_open 请求时，存在内核内存use-after-free隐患。若在该时间窗口内发生并发操作，可能导致内核崩溃或内存数据破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb2_open` 函数中，代码通过 `rcu_dereference(fp->f_opinfo)` 获取 opinfo 指针后，随即调用了 `rcu_read_unlock()` 退出了 RCU 临界区。此后代码继续对该 opinfo 指针进行解引用操作（访问 `opinfo->level`），导致指针在 RCU 锁释放后处于未保护状态，从而产生 use-after-free 漏洞窗口。
+
+#解决方案
+修改 `smb2_open` 函数中对 opinfo 的访问方式，移除原有的 `rcu_read_lock/unlock` 调用，改为使用 `opinfo_get(fp)` 获取 opinfo 指针。该函数内部会正确处理引用计数，确保在使用期间对象不会被释放。同时，在使用完 opinfo 后增加 `opinfo_put(opinfo)` 调用以释放引用，从而修复 use-after-free 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9af7ab5e61d1c330d3e0afa332d4c59e4c8b83f5

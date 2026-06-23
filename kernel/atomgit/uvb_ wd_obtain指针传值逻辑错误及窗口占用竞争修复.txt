@@ -1,0 +1,31 @@
+#标题
+uvb: wd_obtain指针传值逻辑错误及窗口占用竞争修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在CIS框架调用UVB（Ubios Virtual Buffer）相关功能时，由于 `wd_obtain` 参数传递使用了值传递而非双指针，导致 `memremap` 映射后的地址未能正确返回给调用者，进而引发内核崩溃或内存访问错误。
+2. 占用窗口逻辑存在竞争缺陷，当获取窗口失败时未释放自旋锁，可能导致后续操作死锁或窗口资源不可用。
+3. 链表节点初始化缺失，可能导致链表操作异常。
+
+#主要错误日志
+- `pr_err("uvb window obtain map failed\n");`
+- `pr_err("obtain window failed\n");`
+- `pr_err("sync call obtain window failed\n");`
+
+#问题根因
+1. **指针传值错误**：函数 `uvb_occupy_window` 接收 `u64 *wd_obtain` 参数，但在内部进行 `memremap` 赋值时直接对 `wd_obtain` 赋值（而非 `*wd_obtain`），导致调用者持有的指针未被更新，仍为 NULL 或无效地址。
+2. **锁释放逻辑缺失**：在旧代码逻辑中，当 `atomic_cmpxchg` 成功获取锁但 `try_obtain_uvb_window` 失败或条件不满足时，没有执行 `atomic_set(lock, 0)` 释放锁的操作，导致锁泄露。
+3. **原子变量初始化不规范**：`lock_node->lock.counter` 直接赋值应改为使用 `atomic_set` 接口以保证原子性语义。
+
+#解决方案
+1. **修正指针传递逻辑**：将 `uvb_occupy_window` 函数的 `wd_obtain` 参数修改为双指针 `u64 **wd_obtain`，并在函数内部通过 `*wd_obtain` 进行 `memremap` 地址赋值，确保映射后的地址能正确回传给调用者。
+2. **优化锁与占用逻辑**：重构 `uvb_occupy_window` 中的窗口占用循环逻辑，确保在获取锁后，无论 `try_obtain_uvb_window` 成功与否，都能在合适的路径释放锁（`atomic_set(lock, 0)`），修正了原先锁未释放的问题。
+3. **修复代码缺陷**：
+   - 使用 `atomic_set` 替换直接赋值来初始化原子锁变量。
+   - 在 `register_local_cis_func` 中增加 `INIT_LIST_HEAD(&p->link)` 初始化链表节点。
+   - 修正 `odf_separate_name` 中的边界检查条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4fabe265a835078167bda0c8d2396762e86a4db2

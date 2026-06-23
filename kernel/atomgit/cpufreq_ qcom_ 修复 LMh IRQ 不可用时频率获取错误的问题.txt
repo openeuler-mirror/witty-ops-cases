@@ -1,0 +1,23 @@
+#标题
+cpufreq: qcom: 修复 LMh IRQ 不可用时频率获取错误的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm 平台上，当 LMh（Limits Management hardware）中断（IRQ）不可用时，`qcom_cpufreq_hw_recalc_rate()` 函数错误地尝试查询并返回 LMh 限制频率。这导致驱动在不支持或未启用 LMh 的硬件环境下获取到错误的 CPU 频率数据，可能导致 cpufreq 策略异常或频率显示不正确。
+
+#主要错误日志
+未知
+
+#问题根因
+`qcom_cpufreq_hw_recalc_rate()` 函数的实现逻辑存在缺陷。无论 LMh IRQ 是否可用，该函数都直接调用 `qcom_lmh_get_throttle_freq(data)` 尝试获取限制频率。
+根据驱动设计，若 LMh IRQ 不可用（`data->throttle_irq < 0`），驱动应查询 LUT（Look Up Table）表项来获取实际的频率值。原代码未做此判断，导致返回了无效或错误的频率值。此外，原代码中 `data->policy` 仅在 LMh 初始化流程中赋值，若 LMh 不可用则 `data->policy` 未初始化，进一步导致无法正确查询 LUT。
+
+#解决方案
+1. 重构 `qcom_cpufreq_hw_get()` 函数逻辑，提取核心功能到 `__qcom_cpufreq_hw_get(struct cpufreq_policy *policy)`，使其能够根据 LMh IRQ 状态正确选择返回“LMh 限制频率”或“LUT 查询频率”。
+2. 修改 `qcom_cpufreq_hw_recalc_rate()` 调用上述重构后的函数，确保在 LMh IRQ 不可用时回退查询 LUT 频率。
+3. 将 `data->policy` 的赋值位置从 `qcom_cpufreq_hw_lmh_init()` 移至 `qcom_cpufreq_hw_cpu_init()`，确保在任何情况下（LMh 不可用时）`data->policy` 均已正确初始化，以便进行后续的频率查询操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ceac2f27f227fea22829692d016e9c48702eb8f6

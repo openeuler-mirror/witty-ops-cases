@@ -1,0 +1,20 @@
+#标题
+fbdev: ssd1307fb: 修复 ssd1307fb_probe 中潜在的内存页面泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 ssd1307fb 驱动模块时，若驱动初始化过程中 `fb_deferred_io` 分配失败或后续步骤出错，会导致之前通过 `__get_free_pages()` 分配的视频内存页面未被释放，造成内核内存泄漏。
+
+#主要错误日志
+dev_err(dev, "Couldn't allocate deferred io.\n");
+
+#问题根因
+在 `ssd1307fb_probe` 函数中，视频内存是通过 `__get_free_pages()` 分配的。当驱动在分配完视频内存后，在后续的初始化步骤（如 `fb_deferred_io` 分配）失败进入错误处理路径时，代码直接跳转至 `fb_alloc_error` 标签释放 framebuffer 结构体，但遗漏了调用 `__free_pages()` 来释放之前分配的视频内存页面，导致内存泄漏。
+
+#解决方案
+修改错误处理跳转逻辑，在 `fb_deferred_io` 分配失败及相关错误路径中，增加跳转至新增的 `fb_defio_error` 标签，在该标签处调用 `__free_pages(vmem, get_order(vmem_size))` 确保视频内存页面被正确释放，然后再跳转至 `fb_alloc_error` 释放其他资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7179e541d7ee49ce24bf73d9daf519b0dea899bf

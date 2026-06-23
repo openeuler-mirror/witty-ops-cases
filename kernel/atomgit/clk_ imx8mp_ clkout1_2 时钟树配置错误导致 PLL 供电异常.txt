@@ -1,0 +1,21 @@
+#标题
+clk: imx8mp: clkout1/2 时钟树配置错误导致 PLL 供电异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 CLKOUT1/CLKOUT2 配置为由 PLL1/PLL2/PLL3 供电时，因时钟父级设置错误，时钟子系统无法正确控制 PLL 的使能位（PLL_CLKE bit 11），导致 CLKOUT 时钟输出功能异常或无法正常工作。
+
+#主要错误日志
+未知
+
+#问题根因
+CLKOUTn 可以由 PLL1/2/3 供电，但前提是必须通过设置 CCM_ANALOG_SYS_PLLn_GEN_CTRL 寄存器中的 PLL_CLKE 位（bit 11）来使能 PLL。该 bit 11 在时钟树中由 `plln_out` 时钟建模。
+代码中 `imx8mp_clkout_sels` 数组原本将 `sys_pll1`、`sys_pll2`、`sys_pll3` 作为父时钟，这些父时钟无法触发对 bit 11 的控制。正确的父时钟应该是 `sys_pll1_out`、`sys_pll2_out`、`sys_pll3_out`（即 `plln_out`），这样时钟子系统才能正确控制 PLL 的使能状态。
+
+#解决方案
+修改 `drivers/clk/imx/clk-imx8mp.c` 中的 `imx8mp_clkout_sels` 数组，将 `sys_pll1`、`sys_pll2`、`sys_pll3` 分别修正为 `sys_pll1_out`、`sys_pll2_out`、`sys_pll3_out`，将 clkout1/2 正确置于 `plln_sel` 之下，从而确保时钟子系统在需要时能正确置位 PLL_CLKE 并使能 PLL。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1129a0e5a82643f302ed0edc43f6bacf5ad520ad

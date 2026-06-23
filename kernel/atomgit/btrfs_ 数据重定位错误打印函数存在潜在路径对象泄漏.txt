@@ -1,0 +1,21 @@
+#标题
+btrfs: 数据重定位错误打印函数存在潜在路径对象泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BTRFS 文件系统进行数据重定位操作失败并触发错误打印流程时，若 `extent_from_logical()` 函数内部查询成功但未找到对应的 backref item，会导致内核内存对象（extent buffer）泄漏。
+
+#主要错误日志
+btrfs_err_rl(fs_info, "failed to lookup extent item for logical %llu: %d", logical, ret);
+
+#问题根因
+在函数 `print_data_reloc_error()` 中，调用 `extent_from_logical()` 失败后直接返回。
+但在某些特定场景下（如 `btrfs_search_slot()` 返回 0 但在 extent tree 中未找到 backref item），`extent_from_logical()` 虽然返回错误码，但其内部持有的 `path` 结构并未被释放。函数直接返回导致该 `path` 及其关联的 extent buffer 无法释放，造成内存泄漏。
+
+#解决方案
+在 `print_data_reloc_error()` 函数中，当 `extent_from_logical()` 返回错误（ret < 0）时，在返回前增加调用 `btrfs_release_path(&path)`，确保路径资源被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8decb63257abfa3081f954eac5f77e38a8bbf4c9

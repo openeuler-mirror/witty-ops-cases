@@ -1,0 +1,24 @@
+#标题
+powerpc/powernv/memtrace: mmap 存在越界访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 memtrace 功能对 trace buffers 进行 mmap 映射时，若用户请求的映射范围超出了实际分配的区域大小，会导致越界访问。此外，当请求的页偏移大于等于对象总页数时，也会触发非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+memtrace_mmap 函数中的边界检查逻辑存在缺陷。原代码在处理映射请求时，未能正确校验映射起始偏移与映射长度的组合关系：
+1. 原有逻辑未正确拦截 `vma->vm_pgoff` 超出 `ent->size` 范围的情况。
+2. 未校验请求映射的页面范围（`vma_nrpages` + `vm_pgoff`）是否超出了实际分配的内存区域大小（`ent_nrpages`），从而允许了越界的 mmap 操作。
+
+#解决方案
+修改 `arch/powerpc/platforms/powernv/memtrace.c` 中的 `memtrace_mmap` 函数，完善边界检查逻辑：
+1. 增加对 `vma->vm_pgoff` 的检查，若请求的页偏移大于等于实际分配的页数（`ent_nrpages`），则直接返回 `-EINVAL`。
+2. 增加对映射范围的检查，确保请求映射的页数（`vma_nrpages`）不超过剩余可用页数（`ent_nrpages - vma->vm_pgoff`），若越界则返回 `-EINVAL`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/849ad8cd6d9b5ad3c00f92c577143ed729e14b8a

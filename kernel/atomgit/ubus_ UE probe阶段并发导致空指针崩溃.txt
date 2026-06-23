@@ -1,0 +1,23 @@
+#标题
+ubus: UE probe阶段并发导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统加载 ubase 模块线程进行 UE 探测时，若此时 VDM 中的重试任务线程正在进行 MUE 探测，两个线程并发执行会导致 ubase 空指针崩溃。
+
+#主要错误日志
+- "virt notify entity_idx %u, drv not ready\n"（推断日志）
+- "drv virt notify %s ue with entity_idx %u failed, ret=%d\n"（推断日志）
+
+#问题根因
+在 UE probe 过程中，`ub_virt_notify` 函数未对 `pue` 驱动指针 `pdrv` 进行有效性检查，也未判断 MUE 驱动是否已准备就绪（`UB_ENTITY_PROBED` 状态）。当 UE probe 与 MUE probe 并发执行时，驱动指针可能为空或状态未就绪，直接调用 `virt_notify` 回调导致空指针解引用。此外，原实现忽略了对通知失败的处理，导致流程在错误状态下继续执行。
+
+#解决方案
+1. 修改 `ub_virt_notify` 函数返回值类型为 `int`，使其能够向上层反馈执行状态。
+2. 在 `ub_virt_notify` 中增加防御性检查：若 `pdrv` 为空或 `UB_ENTITY_PROBED` 标志未置位，直接返回 `-EAGAIN` 并打印警告日志，避免空指针访问。
+3. 在调用者 `ub_entity_probe` 中检查 `ub_virt_notify` 的返回值，若返回非零（表示驱动未就绪或通知失败），则将任务加入重试队列（`ub_add_retry_task`）并返回 `-EAGAIN`，中止当前探测流程，防止错误继续传导。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba062a81d365389e77429f6619bc4313146cca1e

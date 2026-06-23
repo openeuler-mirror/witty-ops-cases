@@ -1,0 +1,20 @@
+#标题
+maxim-thermocouple: DMA 安全缓冲区对齐失效导致潜在内存损坏风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核 IIO 温度驱动 maxim-thermocouple 在进行 SPI 通信时，由于 DMA 缓冲区对齐标记位置不当，导致 `tc_type` 成员变量可能位于 DMA 缓冲区的 DMA 区域内。这可能引发 DMA 数据传输覆盖驱动状态变量 `tc_type`，造成驱动状态异常或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在结构体 `maxim_thermocouple_data` 中，`__aligned(IIO_DMA_MINALIGN)` 标记被放置在 `buffer` 成员之前，旨在确保 DMA 缓冲区的对齐。然而，该标记仅确保其前面的变量不被 DMA 操作覆盖，并不保证位于其对齐标记之后的变量（如原位置靠后的 `tc_type`）不被共享。由于 `tc_type` 定义在 `buffer` 之后，它可能落入 DMA 缓冲区的滥用范围，破坏了 DMA 安全性。
+
+#解决方案
+调整结构体 `maxim_thermocouple_data` 成员定义顺序，将 `tc_type` 成员移至 `buffer` 定义之前。这样可以确保所有非 DMA 的驱动状态变量均位于 DMA 缓冲区对齐标记之前，从而由 `__aligned(IIO_DMA_MINALIGN)` 机制保护其不受 DMA 传输影响。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6c9ee3212a6d41011df4c4d45a4c854e66a6d388

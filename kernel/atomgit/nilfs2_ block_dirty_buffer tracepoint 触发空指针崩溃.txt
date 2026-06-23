@@ -1,0 +1,21 @@
+#标题
+nilfs2: block_dirty_buffer tracepoint 触发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 "block:block_dirty_buffer" tracepoint 功能时，调用 mark_buffer_dirty() 会导致 NULL pointer dereference（空指针解引用）；若开启了 KASAN，则可能触发 general protection fault（一般性保护错误）。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference
+
+#问题根因
+block_dirty_buffer tracepoint 在 mark_buffer_dirty() 中引用了 bh->b_bdev->bd_dev 成员，但未检查 buffer head 是否持有有效的 block_device 指针。
+在 nilfs2 文件系统中，nilfs_grab_buffer() 函数原本并未设置 buffer head 的 b_bdev 成员。当 buffer head 被 try_to_free_buffers() 分离后又被 create_empty_buffers() 重新附加，且此时 buffer 处于 uptodate 状态时，nilfs2 的部分调用路径会跳过设置 b_bdev 的步骤。随后调用 mark_buffer_dirty() 时，因 bh->b_bdev 为 NULL，触发了空指针解引用。
+
+#解决方案
+在 nilfs2 的核心函数 nilfs_grab_buffer() 中强制设置 buffer head 的 b_bdev 成员为 super_block 结构中的 s_bdev，确保无论 buffer 处于何种状态，其 b_bdev 均指向有效的块设备，从而避免后续 mark_buffer_dirty() 调用 tracepoint 时发生空指针访问。同时移除了 btnode.c、gcinode.c、mdt.c 中冗余的 b_bdev 赋值代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9dbe6d71554f48b4660b3be07346c4b9a9eb812b

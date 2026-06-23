@@ -1,0 +1,22 @@
+#标题
+ubus: reset与activate/deactivate并发导致的状态不一致问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ubus 子系统中，当 reset 流程与 activate/deactivate 操作并发执行时，可能触发并发竞态问题，导致设备状态不一致或功能异常。
+
+#主要错误日志
+device is NULL
+
+#问题根因
+reset 流程与 activate/deactivate 流程之间存在并发缺陷。原代码在 reset 期间调用 `ub_entity_enable_return` 时未持有 `active_mutex` 锁，无法保护 `UB_ENTITY_ACTIVE` 标志位的检查与修改，导致并发操作时出现竞态条件。
+
+#解决方案
+1. 引入 `active_mutex` 互斥锁保护 reset 流程中的 ELR（Entity Level Reset）执行过程，防止其与 activate/deactivate 操作并发。
+2. 重构 `ub_entity_enable_return` 函数实现，提取公共逻辑至 `ub_entity_enable_base`，并增加 `force` 参数。
+3. 新增 `ub_entity_enable_force` 函数（`force=true`），在 reset 流程中调用。该函数在调用 `ubc->ops->entity_enable` 前不检查 `UB_ENTITY_ACTIVE` 标志位，且由 reset 流程上层统一管理锁，确保在复位过程中强制执行实体使能/去使能操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/47255d0b17b29d97063f41f908f70943e0498371

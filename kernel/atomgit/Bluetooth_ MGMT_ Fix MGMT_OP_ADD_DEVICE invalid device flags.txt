@@ -1,0 +1,20 @@
+#标题
+Bluetooth: MGMT: Fix MGMT_OP_ADD_DEVICE invalid device flags
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 MGMT_OP_ADD_DEVICE 添加蓝牙设备时，如果此时后台正在执行 hci_update_passive_scan_sync，设备标志可能会在命令挂起期间被并发更新。这导致 add_device_complete 回调函数上报给用户态的设备标志不是最新的值，而是命令发起时的旧值，造成设备状态不一致或配置错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `add_device` 函数处理过程中，代码将 `current_flags` 存储在 `cmd->user_data` 中。由于 `MGMT_OP_ADD_DEVICE` 命令是异步执行的（通过 `hci_cmd_sync_queue` 排队），在此期间设备标志可能因为其他操作（如 `hci_update_passive_scan_sync`）而发生改变。当命令完成回调 `add_device_complete` 执行时，它直接使用了启动时存储在 `cmd->user_data` 中的旧标志值，而不是查找当前最新的标志值，从而导致了数据不一致。
+
+#解决方案
+移除了将 `current_flags` 存储到 `cmd->user_data` 的代码。在 `add_device_complete` 回调函数中，改为调用 `hci_conn_params_lookup` 实时查找设备当前的连接参数，并从中获取最新的 `flags`。如果查找失败（params 为 NULL），则默认使用 0 作为标志值。这确保了返回给用户态的设备标志是命令完成时刻的最新状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/92d072f6c39b8a63a8662895bd3f8141e23693f9

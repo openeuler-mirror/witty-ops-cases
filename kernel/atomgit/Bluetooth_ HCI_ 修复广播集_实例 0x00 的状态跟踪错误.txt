@@ -1,0 +1,20 @@
+#标题
+Bluetooth: HCI: 修复广播集/实例 0x00 的状态跟踪错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+蓝牙 LE 扩展广播实例 0x00（legacy instance）在挂起恢复操作后未能正确重新启用，导致该特定广播实例的状态丢失或无法正常广播。系统未能正确跟踪实例 0x00 的开启/关闭状态，导致广播行为与预期不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+内核之前假设 `hci_dev` 中的 `HCI_LE_ADV` 标志可以用来跟踪实例 0x00 的状态，但 `HCI_LE_ADV` 是一个全局状态标志，并不特定于实例 0x00。实例 0x00 被视为 legacy instance，不被 `adv_instances` 列表单独跟踪。因此，在 `hci_resume_advertising_sync` 等场景下，无法准确判断实例 0x00 是否原先处于启用状态，从而导致状态跟踪失败。
+
+#解决方案
+在 `include/net/bluetooth/hci.h` 中引入新标志位 `HCI_LE_ADV_0` 专门用于跟踪实例 0x00 的状态。修改 `net/bluetooth/hci_event.c` 中的 `hci_cc_le_set_ext_adv_enable` 函数，在启用或禁用广播时，若句柄为 0x00，则相应地设置或清除 `HCI_LE_ADV_0` 标志。修改 `net/bluetooth/hci_sync.c` 中的 `hci_resume_advertising_sync` 函数，通过检测并清除 `HCI_LE_ADV_0` 标志来准确判断是否需要重新启用实例 0x00 的广播。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/77f5f09fd19d5ff5a951378e67c1523ee38df5cb

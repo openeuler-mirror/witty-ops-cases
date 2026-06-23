@@ -1,0 +1,23 @@
+#标题
+urma: urma_ping 函数存在潜在死锁风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 urma_ping 相关操作时，系统可能触发潜在的死锁风险，导致相关进程或内核线程无法继续执行，系统响应异常。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中存在两处死锁隐患：
+1. 在 `ping_tjetty_put` 函数中，`kref_put` 可能调用释放回调函数 `__ping_tjetty_free_entry`，该回调内部可能再次尝试获取同一把锁（`tjetty_lock`），导致自死锁。
+2. 在 `ubmgr_notify_event` 函数中，事件回调函数 `iter->cb` 是在持有自旋锁 `g_ubmgr_notifier_list` 的情况下执行的。如果回调函数内部试图获取同一把锁或进行其他阻塞操作，将导致死锁或内核崩溃。
+
+#解决方案
+1. 针对 `ping_tjetty_put`：调整锁的保护范围，在释放锁之后再调用 `kref_put` 和 `kfree`。具体做法是先在锁内判断引用计数是否为 1（即即将释放），如果是则从哈希表中删除节点并标记 `last` 为 true，随后释放锁，最后在锁外执行 `kref_put` 和条件释放操作，避免在锁内调用可能递归获取锁的释放函数。
+2. 针对 `ubmgr_notify_event`：将回调函数的执行移到临界区之外。在锁内仅将回调函数指针保存到局部变量 `local_cb`，释放锁后再执行 `local_cb`，从而避免在持有锁期间执行未知回调导致死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/630db922792cbf2b00ad9410697d87e7d23c38e3

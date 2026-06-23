@@ -1,0 +1,27 @@
+#标题
+sched/fair: vruntime_eligible 函数 s64 乘法溢出导致调度判断错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定极端场景下（如涉及 cgroups 且权重配置极端不均时），内核调度器中的 `vruntime_eligible` 函数在进行 64 位有符号数（s64）乘法运算时发生溢出。这会导致调度器对进程的虚拟运行时间（vruntime）资格判断逻辑出错，可能导致进程调度行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在构造的最坏情况场景下，计算公式 `avg >= (vruntime - zero_vruntime) * load` 中的乘法部分会发生溢出。
+具体分析如下：
+1. 当使用 cgroups 时，可能出现权重极小的实体（如 weight=2），其 vlag 边界约为 44 位。
+2. 另一极端情况是 load 包含 `100 * NICE_0_LOAD`。
+3. 在 `vruntime_eligible(puny)` 计算中，右侧项 `(slice + TICK_NSEC) * NICE_0_LOAD * NICE_0_LOAD * 100` 的结果会超过 64 位有符号数（s64）的最大表示范围，从而导致整数溢出。
+
+#解决方案
+修改 `vruntime_eligible` 函数中的乘法逻辑以处理溢出：
+1. 对于支持 128 位整数（`CONFIG_ARCH_SUPPORTS_INT128`）的 64 位系统，显式使用 `__int128` 进行乘法运算。这不仅避免了溢出，而且生成的代码效率更高（如 arm64 可利用 `smulh` 指令）。
+2. 对于不支持 128 位整数的 64 位系统，使用 `check_mul_overflow` 进行溢出检测。如果检测到溢出，根据 key 的符号直接返回判定结果（key 为正则无资格，为负则有资格），否则使用计算结果进行比较。
+3. 对于 32 位系统，乘法结果最大仅 44 位，不会溢出 s64，因此保持原有乘法逻辑不变。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/70d047a4d80f727148026a2a8c183cda0b213d9e

@@ -1,0 +1,20 @@
+#标题
+iommu/sun50i: fix device leak on of_xlate()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 of_xlate() 接口查找 IOMMU 平台设备的驱动数据时，内核对该设备引用计数进行了增加操作，但在后续流程中未释放该引用，导致 IOMMU 平台设备对象发生引用计数泄漏（device leak）。该故障通常表现为设备对象无法被正确释放或卸载，长期运行可能引发内存泄漏相关隐患。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `sun50i_iommu_of_xlate` 函数中，代码逻辑通过 `of_find_device_by_node()` 或类似机制获取了 `iommu_pdev` 结构体指针（隐含增加了设备的引用计数），并在设置完私有数据后直接返回，遗漏了调用 `put_device()` 来减少引用计数的步骤，从而导致设备引用计数泄漏。
+
+#解决方案
+在 `sun50i_iommu_of_xlate` 函数中，于设置设备私有数据（`dev_iommu_priv_set`）之后、返回之前，显式调用 `put_device(&iommu_pdev->dev)` 来释放之前获取的设备引用，确保引用计数平衡，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/83f289f30e3289f917280d27b1c351ad9be5f913

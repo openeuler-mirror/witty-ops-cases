@@ -1,0 +1,20 @@
+#标题
+mailbox: 移除 of_parse_phandle_with_args 处不必要的互斥锁保护
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mailbox 子系统中，`of_parse_phandle_with_args` 函数被 `con_mutex` 互斥锁不必要地保护。虽然这未直接导致死锁或崩溃报告，但构成了潜在的并发性能瓶颈与不合理的锁竞争风险，属于代码逻辑缺陷。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mbox_request_channel` 函数中，代码在解析 phandle（`of_parse_phandle_with_args`）之前就持有了 `con_mutex` 锁。实际上多个消费者（consumers）解析 phandle 并不存在并发问题，不需要在解析阶段进行锁保护。该锁本意是用于保护 controllers 列表，但在解析阶段加锁属于过度保护，导致了不必要的锁竞争。
+
+#解决方案
+调整锁的持有范围，将 `mutex_lock(&con_mutex)` 移动到 `of_parse_phandle_with_args` 解析完成之后、遍历 `mbox_cons` 列表之前。确保仅在操作需要保护的控制器列表时持有锁，而在纯解析设备树数据的阶段不持有锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c8fe061a01c20cdeeea2db845ab08fafb12135b

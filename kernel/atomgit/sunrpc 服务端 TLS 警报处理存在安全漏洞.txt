@@ -1,0 +1,23 @@
+#标题
+sunrpc 服务端 TLS 警报处理存在安全漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+NFS over TLS 服务端在处理 TLS 控制消息（如 TLS Alert）时存在安全漏洞。由于代码错误地假设可以从 msg iterator 的 kvec 中直接读取数据，而 kTLS 实现会将 TLS 非数据记录负载拆分到控制消息缓冲区和消息负载缓冲区中，导致 `tls_alert_recv()` 函数读取到的数据不正确，可能引发安全利用或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`tls_alert_recv()` 函数错误地假设可以直接从 msg iterator 的 kvec 中读取数据。实际上，kTLS 实现会将 TLS 非数据记录（non-data record）的负载拆分处理：控制消息缓冲区包含类型（如 TLS Alert），而负载的其余部分（如 Alert 的 level/description）被放入 msg payload buffer。原代码逻辑未正确处理这种拆分机制，导致了数据处理错误和安全漏洞。
+
+#解决方案
+重构控制消息的设置与 `sock_recvmsg()` 的使用方式：
+1. 修改数据处理流程，当没有设置控制消息结构时，kTLS 层读取并处理 TLS 数据记录类型；若遇到 TLS 控制消息则返回错误。
+2. 在检测到控制消息后，NFS 层设置一个 kvec 支持的 msg 缓冲区来读取控制消息（如 TLS Alert）。
+3. 由于 msg iterator 在拷贝过程中会前进，在调用 `tls_alert_recv` 之前需要使用 `iov_iter_revert` 回退迭代器，确保数据读取的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/badef9f3534cb73f3993d379566fe72d2e903773

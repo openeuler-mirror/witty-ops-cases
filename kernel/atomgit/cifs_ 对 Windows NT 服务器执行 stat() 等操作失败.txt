@@ -1,0 +1,21 @@
+#标题
+cifs: 对 Windows NT 服务器执行 stat() 等操作失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Linux 客户端挂载 Windows NT SMB 服务器时，对不存在的路径执行 `stat()` 操作无法正确返回 `-ENOENT`，而是直接失败；这进一步导致依赖 `stat()` 结果的 `creat()`、`mkdir()` 等文件系统操作异常，无法正常创建文件或目录。
+
+#主要错误日志
+cifs: VFS: Server sent request, not response. mid=%u
+（推断：在修复前，由于错误响应未设置 SMBFLG_RESPONSE 标志，内核会误判为“服务端发送了请求而非响应”，从而触发 `check_smb_hdr` 中的上述报错打印）
+
+#问题根因
+Windows NT SMB 服务器在处理 TRANS2 QUERY_PATH_INFO 请求时，若路径不存在（返回 STATUS_OBJECT_NAME_NOT_FOUND 或 ERRDOS/ERRbadfile）或文件正在被删除（返回 STATUS_DELETE_PENDING），其错误响应包中未设置 SMBFLG_RESPONSE 标志。Linux 内核函数 `check_smb_hdr()` 严格检查响应标志，若缺失则视为无效响应，导致无法正常解析错误码，进而影响上层文件系统操作的逻辑判断。
+
+#解决方案
+在 `check_smb_hdr()` 函数中放宽检查条件：当 SMB 命令类型为 `SMB_COM_TRANSACTION2` 且 Status 字段包含错误码时，跳过对 SMBFLG_RESPONSE 标志的强制检查，允许内核正确解析 Windows NT 服务器返回的错误响应包。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/40f5005022e243b9efc184bb89b049d4d82d8699

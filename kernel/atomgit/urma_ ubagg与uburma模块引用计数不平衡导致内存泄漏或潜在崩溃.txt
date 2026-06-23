@@ -1,0 +1,34 @@
+#标题
+urma: ubagg与uburma模块引用计数不平衡导致内存泄漏或潜在崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中，在处理 ubagg 设备查询、物理设备获取以及 uburma 文件关闭等流程时，可能出现内核对象引用计数泄漏。在极端情况下，如 `ubagg_clear_dev_list` 中重复释放引用计数，可能导致对象被提前释放，引发 use-after-free 或内核 panic；在错误处理路径中遗漏释放引用计数则会导致内存泄漏。
+
+#主要错误日志
+- "Failed to get physical device:%s"
+- "ubagg user ctl has no enough space, buffer size:%u, needed size:%lu"
+- "copy to user fail, ret:%d"
+- "Failed to register mad agent.\n"
+- "Invalid udata out len:%u\n"
+- "ubcore device release in another proccess.\n"
+
+#问题根因
+代码逻辑中存在多处引用计数管理错误：
+1. `ubagg_find_dev_by_name` 查找设备时增加了引用计数，但在部分调用者函数（如 `ubagg_get_physical_device`）的错误处理路径中未成对调用 `ubagg_dev_ref_put`，导致引用计数泄漏。
+2. `ubagg_clear_dev_list` 遍历销毁设备时，多调用了一次 `ubagg_dev_ref_put`，导致引用计数错误递减。
+3. `ubcm_add_device` 在 mad agent 注册失败的错误路径下，未释放已获取的设备引用。
+4. `ubcore_connect_exchange_udata_when_import_seg/jetty` 在参数校验失败的返回路径上，遗漏了 `ubcore_put_device` 调用。
+5. `uburma_close` 在设备释放的特殊分支中，遗漏了 `kref_put` 调用，导致文件对象引用计数泄漏。
+
+#解决方案
+1. 在 `ubagg_find_dev_by_name` 函数内部成功查找到设备时增加 `ubagg_dev_ref_get` 调用，确保返回的设备对象引用计数有效，并在调用者函数 `ubagg_get_physical_device` 的所有错误返回分支及正常退出分支补充对应的 `ubagg_dev_ref_put` 释放操作。
+2. 移除 `ubagg_clear_dev_list` 中多余的 `ubagg_dev_ref_put` 调用，修复重复释放问题。
+3. 在 `ubcm_add_device` 的错误处理标签 `put_dev` 前增加 `ubcm_put_ubc_dev(device)` 调用。
+4. 在 `ubcore_connect_exchange_udata_when_import_seg` 和 `ubcore_connect_exchange_udata_when_import_jetty` 的参数校验失败分支增加 `ubcore_put_device(physical_dev)` 调用。
+5. 在 `uburma_close` 的设备释放分支增加 `kref_put(&file->ref, uburma_release_file)` 调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6cf1cf61b43c945adc7c3ca10bfce0d92122b01d

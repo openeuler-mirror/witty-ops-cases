@@ -1,0 +1,22 @@
+#标题
+perf子系统对内核线程判断逻辑不准确导致潜在异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+perf 子系统在处理部分特定内核线程（如 io_uring helper 线程）时，可能因错误地将其识别为用户进程而导致功能异常或数据获取错误。具体表现可能为 perf 采样时对这类线程的错误寄存器处理或地址翻译尝试。
+
+#主要错误日志
+未知
+
+#问题根因
+内核原先通过检查 `current->mm == NULL` 来判断当前任务是否为内核线程。然而，部分内核线程（特别是 io_uring helpers）拥有非空的 `mm` 字段，导致判断逻辑失效。对于这些线程，虽然它们是内核线程，但 `current->mm` 不为空，导致代码路径错误地进入用户态处理逻辑。
+
+#解决方案
+修改判断逻辑，不再依赖 `current->mm` 是否为空，而是改用更可靠的进程标志位组合 `(current->flags & (PF_KTHREAD | PF_USER_WORKER))` 来识别内核线程。
+1. 在 `get_perf_callchain` 函数中，调整判断条件：如果是内核线程或用户工作者线程，直接将 `regs` 置为 NULL，否则获取任务寄存器。
+2. 在 `perf_sample_regs_user` 和 `perf_virt_to_phys` 函数中，将判断条件统一更新为检查 `PF_KTHREAD | PF_USER_WORKER` 标志位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/406b7cbc55c6a21b811fd6e29b1b279dfa1f9a44

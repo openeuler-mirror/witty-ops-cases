@@ -1,0 +1,24 @@
+#标题
+ksmbd 用户补充组权限缺失导致文件操作失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统用户虽然配置了补充组，但在通过 ksmbd 服务尝试创建文件或目录时，收到 NT_STATUS_ACCESS_DENIED 错误，导致操作无法完成。
+
+#主要错误日志
+ksmbd: login failure
+ngroups(%u) from login response exceeds max groups(%d)
+
+#问题根因
+ksmbd 内核模块在处理用户登录和文件系统权限覆盖（override_fsids）时，仅使用了用户的主 GID，未实现从用户空间获取并处理补充组列表的逻辑。这导致内核凭证中缺少补充组信息，文件系统权限检查时因不匹配补充组权限而拒绝访问。
+
+#解决方案
+1. 新增 KSMBD_EVENT_LOGIN_REQUEST_EXT/RESPONSE_EXT netlink 事件及对应数据结构，用于从用户空间守护进程获取用户的补充组列表。
+2. 修改 `ksmbd_alloc_user` 函数逻辑，解析并存储扩展响应中的补充组信息（ngroups 和 sgid）。
+3. 修改 `__ksmbd_override_fsids` 函数，在分配凭证时将用户的补充组 GID 列表填充到内核凭证的 group_info 中，并调用 `groups_sort` 进行排序以确保权限检查正确。
+4. 增加对补充组数量的校验，若超过 NGROUPS_MAX 则报错并阻止登录。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/adaef63ba473853f7fffbf51d2461623aaa3a74f

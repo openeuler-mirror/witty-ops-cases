@@ -1,0 +1,25 @@
+#标题
+ksmbd: 多个 SMB2 命令处理函数返回值错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核 SMB2 服务器在处理多个特定命令失败场景时，函数返回值错误地返回了 0（成功），掩盖了实际的错误状态。这可能导致上层调用者无法正确感知命令执行失败，进而引发后续处理逻辑异常或资源状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+多个 SMB2 命令处理函数（包括 `smb2_query_dir`, `smb2_read`, `smb2_ioctl`, `smb2_oplock_break`, `smb2_notify` 等）在错误处理分支中，虽然设置了响应头（`rsp->hdr.Status`）的错误状态并构造了错误响应，但函数最终直接返回了 0。这导致调用者误认为命令处理成功。
+
+#解决方案
+修正相关函数的错误返回路径，确保在处理失败时返回正确的负错误码（如 `-ENODATA`, `-EOPNOTSUPP`, `-EINVAL`, `-EIO` 等），并更新相关函数的注释以准确描述返回值含义。具体修改包括：
+1. `smb2_query_dir` 在结束处返回 `rc` 而非 `0`。
+2. `smb2_read` 在文件结束（EOF）场景返回 `-ENODATA`。
+3. `smb2_ioctl` 在不支持的操作或参数错误时返回 `-EOPNOTSUPP` 或 `ret` 变量值。
+4. `smb2_oplock_break` 在参数校验失败时返回 `-EINVAL`。
+5. `smb2_notify` 在内部错误或未实现场景返回 `-EIO` 或 `-EOPNOTSUPP`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/daf060354c6980281af55d7c6c293f6823333249

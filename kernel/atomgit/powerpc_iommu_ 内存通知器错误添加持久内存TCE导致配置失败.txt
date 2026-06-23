@@ -1,0 +1,28 @@
+#标题
+powerpc/iommu: 内存通知器错误添加持久内存TCE导致配置失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LPAR 启动后，使用 `daxctl` 命令将持久内存配置为 "System RAM" 时命令执行失败。具体表现为内核在处理动态 DMA 窗口（DDW）时，PHYP HCALL 调用返回 `H_PARAMETER` 错误，导致无法成功将 pmemory 添加为系统 RAM。
+
+#主要错误日志
+未知
+
+#问题根因
+`iommu_mem_notifier()` 函数在 RAM 动态添加/移除时被调用，负责在 DDW 中添加/移除 TCEs。
+根因在于该通知器未区分普通 RAM 和持久内存：
+1. TCEs 本应仅为 RAM 进行预映射，而不应为持久内存进行预映射。
+2. `daxctl` 将 pmemory 作为 "System RAM" 添加时触发了该通知器。
+3. pmemory 的地址范围远超 LPAR 最大 RAM 限制，也超出了设备初始化时创建的 DDW 范围。
+4. 代码尝试为超出 DDW 范围的 pmemory 预映射 TCEs，导致底层 PHYP HCALL 返回 `H_PARAMETER` 参数错误。
+
+#解决方案
+修改内核逻辑，禁止为持久内存预映射 TCEs。具体改动如下：
+1. **新增接口与逻辑判断**：导出 `hot_add_drconf_memory_max()` 函数接口，并在 `ddw_memory_hotplug_max()` 中调用该接口获取正确的内存热插拔最大地址（此前该函数遍历 device-node 可能获取到 pmemory 的地址）。
+2. **边界检查**：在 `iommu_mem_notifier()` 处理 `MEM_GOING_ONLINE` 和 `MEM_OFFLINE` 事件时，增加判断条件：仅当内存页帧地址 `(arg->start_pfn << PAGE_SHIFT)` 小于 `ddw_memory_hotplug_max()` 时才执行 TCEs 的预映射或清除操作。
+3. 此举确保了持久内存（通常位于 `ddw_memory_hotplug_max()` 之上）不会触发 TCEs 预映射流程，从而避免了 HCALL 参数错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/84f2f9548626d6b3eab682329c2b7c0067d5c4d6

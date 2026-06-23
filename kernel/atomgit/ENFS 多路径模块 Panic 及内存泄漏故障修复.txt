@@ -1,0 +1,28 @@
+#标题
+ENFS 多路径模块 Panic 及内存泄漏故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在运行 ENFS（增强型 NFS）多路径功能时，可能出现内核 Panic；同时存在内存泄漏问题，导致系统内存资源耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **内存泄漏**：`nfs_multipath_client_info_init` 函数在初始化失败时的错误处理路径中，未将指针置为 NULL，导致内存泄漏。
+2. **Panic/逻辑错误**：`enfs_find_clnt_root` 和 `enfs_insert_clnt_root` 等函数中，使用 `list_entry_is_head` 宏遍历链表时的判断逻辑存在缺陷。当遍历未找到匹配项时，循环结束后指针指向链表头而非无效节点，导致后续代码错误地操作链表头节点，引发 Panic。
+3. **潜在并发问题**：`enfs_free_client_info` 函数被非静态导出，可能被错误地外部调用，增加了并发风险；同时移除了 `nfs_multipath_client_info_free_work` 延迟释放机制，改为直接释放以规避潜在的竞态条件。
+
+#解决方案
+1. **修复链表遍历逻辑**：重构 `enfs_find_clnt_root`、`enfs_insert_clnt_root`、`get_view_table`、`get_fsinfo` 等函数，在遍历链表时一旦找到目标立即返回，若循环结束仍未找到则返回 NULL 或错误值，避免错误操作链表头节点。
+2. **修复内存泄漏**：在 `nfs_multipath_client_info_init` 的错误处理分支中，释放内存后立即将指针 `*enfs_info` 置为 NULL，防止悬挂指针。
+3. **代码重构与资源清理优化**：
+   - 将 `enfs_free_client_info` 改为 `static` 函数，限制作用域。
+   - 移除 `nfs_multipath_client_info_free_work` 工作队列处理函数，改为在 `nfs_multipath_client_info_free` 中直接调用释放逻辑。
+   - 新增 `enfs_free_view_table` 及相关辅助函数，统一管理 `view_table` 及其子链表的内存释放，确保释放操作的完整性。
+   - 删除 `shard_route.c` 中未使用的 `lif_head` 链表及相关变量，移除 `rpc_task_release_xprt` 等冗余函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8fa27fba5fd9db50ef3d03358c9abd371dcbdd99

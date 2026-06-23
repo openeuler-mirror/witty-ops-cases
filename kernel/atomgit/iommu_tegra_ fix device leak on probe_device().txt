@@ -1,0 +1,20 @@
+#标题
+iommu/tegra: fix device leak on probe_device()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Tegra SMMU 设备探测过程中，对 IOMMU 平台设备查找驱动数据时，成功获取数据后未释放引用计数，导致该平台设备的引用计数泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tegra_smmu_find` 函数中，调用 `platform_device_alloc` 或查找流程获取 `pdev` 后，虽然之前的补丁修复了错误路径下的引用泄漏，但在成功获取 `mc`（Memory Controller 驱动数据）并返回 `mc->smmu` 的成功路径上，仍然缺少 `put_device(&pdev->dev)` 调用，导致设备引用计数未被释放。
+
+#解决方案
+修改 `drivers/iommu/tegra-smmu.c` 中的 `tegra_smmu_find` 函数，将 `put_device(&pdev->dev)` 调用移至判断 `mc` 是否为空之前，确保无论是返回 NULL 的错误路径还是返回 `mc->smmu` 的成功路径，都能正确释放设备引用，修复内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4d68d87f84c5246df346796af7466cf1cbbb1a72

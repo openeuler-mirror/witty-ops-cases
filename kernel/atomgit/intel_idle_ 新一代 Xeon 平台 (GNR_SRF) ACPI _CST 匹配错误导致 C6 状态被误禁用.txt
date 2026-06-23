@@ -1,0 +1,26 @@
+#标题
+intel_idle: 新一代 Xeon 平台 (GNR/SRF) ACPI _CST 匹配错误导致 C6 状态被误禁用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Granite Rapids (GNR) 和 Sierra Forest (SRF) 等 Xeon 平台上，当 BIOS 开启 ACPI C2 状态时，`intel_idle` 驱动未能正确启用所有 C6 变体状态。
+具体表现为：
+1. 若 BIOS 将 ACPI C2 映射到 C6，则操作系统侧 C6 启用，但 C6P 被错误禁用。
+2. 若 BIOS 将 ACPI C2 映射到 C6P，则操作系统侧 C6 被错误禁用，C6P 启用。
+上述行为导致系统无法充分利用处理器的深层睡眠状态进行节能。
+
+#主要错误日志
+未知
+
+#问题根因
+GNR 和 SRF 平台拥有两种 C6 变体（C6/C6P 或 C6S/C6SP），它们共享相同的 mwait hint 主状态值（state 值为 0x20），仅子状态（sub-state）不同。旧的 `intel_idle` 驱动在匹配 ACPI _CST 和驱动内部 C-state 表时，使用完整的 mwait hint（包含主状态和子状态）进行精确匹配。这导致当 BIOS 只将 ACPI C2 映射到某一种 C6 变体时，驱动仅启用该特定变体，而将另一种变体误判为非 BIOS 支持状态并禁用，破坏了“BIOS 开启 C2 即启用所有 C6 变体”的预期行为。
+
+#解决方案
+1. 引入新标志位 `CPUIDLE_FLAG_PARTIAL_HINT_MATCH`。
+2. 在 GNR 和 SRF 平台的 C6 变体状态定义中添加该标志。
+3. 修改 `intel_idle_off_by_default` 匹配逻辑：对于带有 `CPUIDLE_FLAG_PARTIAL_HINT_MATCH` 标志的状态，在匹配 ACPI _CST 时忽略 mwait hint 的子状态部分，仅匹配主状态部分。这确保了只要 BIOS 开启了 ACPI C2（映射到任一 C6 变体），驱动就会启用所有相关的 C6 变体。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31aa15c443732a1f993894925768b9366deeaf8a

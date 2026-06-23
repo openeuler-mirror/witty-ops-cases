@@ -1,0 +1,20 @@
+#标题
+ocfs2: user_cluster_connect函数导致的双重释放（Double Free）漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 OCFS2 文件系统使用用户态集群堆栈时，若 `user_cluster_connect` 函数在获取锁定版本失败后进行错误处理，会触发双重释放漏洞。该漏洞被收录为 CVE-2025-40055。具体表现为内核内存管理子系统检测到非法内存访问或释放，可能导致内核 panic 或内存数据损坏。
+
+#主要错误日志
+ocfs2: Could not determine locking version
+
+#问题根因
+在函数 `user_cluster_connect()` 中，当通过 `user_cluster_disconnect(conn)` 进行错误回滚处理时，虽然内部已经释放了 `lc` 指向的内存，但 `lc` 指针未被置为 NULL。随后代码跳转至 `out` 标签处继续执行清理逻辑时，会再次尝试释放或操作该指针，从而引发双重释放。
+
+#解决方案
+在 `user_cluster_disconnect(conn)` 调用之后、跳转至 `out` 标签之前，将指针 `lc` 显式置为 NULL (`lc = NULL;`)，防止后续代码再次释放同一块内存区域，从而修复双重释放问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/50928a39170e2c9a819cbca819e24c301781185e

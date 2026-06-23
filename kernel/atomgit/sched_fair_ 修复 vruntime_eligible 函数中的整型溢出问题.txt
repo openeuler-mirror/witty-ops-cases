@@ -1,0 +1,28 @@
+#标题
+sched/fair: 修复 vruntime_eligible 函数中的整型溢出问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 64 位系统上，当调度器计算虚拟运行时间资格（vruntime eligibility）时，若 `key`（经过转换的 vruntime 差值）与 `load`（权重负载）的乘积超过 64 位有符号整数（s64）的最大值，会发生乘法溢出。溢出导致比较逻辑错误，进而可能导致调度器做出错误的调度决策，影响系统的调度正确性与公平性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `kernel/sched/fair.c` 的 `vruntime_eligible` 函数中，原有的代码直接计算 `(s64)(vruntime - cfs_rq->zero_vruntime) * load`。
+在 64 位系统上，`key` 包含 `NSEC_TICK * NICE_0_LOAD`（约 24 位 + 20 位），而 `load` 也包含 `NICE_0_LOAD`。两者的乘积可能达到 64 位，导致 `s64` 类型的乘积结果溢出。原有的代码未对此乘法溢出进行检测和处理，导致比较结果翻转，引发逻辑错误。
+相比之下，在 32 位系统上，该乘积最大约为 44 位，不会溢出，因此该问题仅影响 64 位系统。
+
+#解决方案
+针对 64 位系统引入防溢出处理机制，具体措施如下：
+1. 引入 `vruntime_cmp` 和 `vruntime_op` 宏，统一处理 vruntime 相关的减法和比较运算，确保类型转换的正确性。
+2. 在 `vruntime_eligible` 函数中区分架构处理：
+   - **支持 128 位整数的架构（CONFIG_ARCH_SUPPORTS_INT128）**：利用 `__int128` 类型进行乘法运算，避免溢出。
+   - **不支持 128 位整数的 64 位架构**：使用 `check_mul_overflow` 函数检测乘法是否溢出。如果发生溢出，根据 `key` 的符号直接判定结果：若 `key <= 0` 则判定为 eligible，否则为 not eligible；若未溢出，则使用正常乘积进行比较。
+   - **32 位系统**：维持原有乘法逻辑不变，因为不会发生溢出。
+3. 同时修正了注释中的变量名（`v` 改为 `v0`），使逻辑描述更准确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4df27101ac27af50ae3638ffbecb1a826df5af21

@@ -1,0 +1,24 @@
+#标题
+[编译] PowerPC 架构下 ppc_save_regs 构建缺失导致链接失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PowerPC 架构下，当内核配置未启用 XMON、KEXEC_CORE 或 PPC_BOOK3S 选项时（例如仅启用 CONFIG_PPC32 或特定 PPC64 配置），编译构建过程中会出现链接错误，提示 `ppc_save_regs` 符号未定义，导致内核无法成功构建。
+
+#主要错误日志
+未知
+
+#问题根因
+近期的一个补丁为了修复旧提交 `fc2a5a6161a2`，将 `ppc_save_regs.c` 的编译条件限制为仅当 XMON、KEXEC_CORE 和 PPC_BOOK3S 同时启用时才包含在构建中。
+然而，经过对 irq.c 的多次重构，`ppc_save_regs` 函数的调用路径已经扩展：
+1. 在 `irq_64.c` 中，`replay_soft_interrupts` 函数（属于 CONFIG_PPC64 的一部分）会调用 `ppc_save_regs`。
+2. 在 `kexec.h` 中，`crash_setup_regs` 函数（CRASH_DUMP 路径）也会调用 `ppc_save_regs`，这意味着 CONFIG_PPC32 同样需要该符号。
+因此，原有的条件编译限制过于严格，导致在某些合法的配置组合下（缺少上述三个特定选项时），`ppc_save_regs.o` 未被编译，但代码中仍引用该函数，从而引发构建失败。
+
+#解决方案
+修改 `arch/powerpc/kernel/Makefile`，移除对 `ppc_save_regs.o` 的条件编译判断（`ifneq ($(CONFIG_XMON)$(CONFIG_KEXEC_CORE)$(CONFIG_PPC_BOOK3S),)`），使其默认始终参与内核构建，以满足 PPC32 和 PPC64 不同场景下的依赖需求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/add420f5b1e034b5978fd39a8bea59904dfa1128

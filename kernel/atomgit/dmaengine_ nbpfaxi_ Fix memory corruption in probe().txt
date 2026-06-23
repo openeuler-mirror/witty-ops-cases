@@ -1,0 +1,22 @@
+#标题
+dmaengine: nbpfaxi: Fix memory corruption in probe()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 nbpfaxi 驱动加载执行 probe 函数期间，由于循环迭代次数越界，导致内核发生内存越界写入，造成内存破坏。此外，由于相关检查逻辑受越界访问影响，probe 函数可能错误地总是返回 -EINVAL，导致驱动加载失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 nbpf_probe() 函数中，`nbpf->chan[]` 数组被分配了 `num_channels` 个元素，但代码中的三个循环错误地使用了 `i <= num_channels` 作为判断条件。这导致循环多执行了一次，迭代越过了数组末尾，从而引发内存越界写入。
+此外，在处理第二个循环时，代码逻辑试图跳过错误 IRQ（error IRQ），导致迭代器 `i` 与 `chan` 不同步。原代码在循环结束后检查 `chan` 指针位置，但由于循环本身已经越界，该检查总是失败并返回 -EINVAL。
+
+#解决方案
+修正循环边界条件，将 `i <= num_channels` 统一修改为 `i < num_channels`，防止数组越界访问。
+针对第二个循环逻辑，增加了对 `irqbuf` 数组越界的检查（`if (i >= ARRAY_SIZE(irqbuf))`），并删除了循环结束后不再必要的 `chan` 指针位置检查，因为修正后的循环能保证指针位置正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14332540e71cfaa2c36938e9c11094142ed2f689

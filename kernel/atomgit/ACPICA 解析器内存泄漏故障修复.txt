@@ -1,0 +1,20 @@
+#标题
+ACPICA 解析器内存泄漏故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在解析 AML（ACPI Machine Language）代码过程中，若 `acpi_ps_get_next_field()` 函数调用失败，会导致之前已成功创建的 field 列表对象未被释放，从而造成内核内存泄漏。该问题可能在系统处理复杂或异常的 ACPI 表时触发。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `acpi_ps_get_next_arg()` 的处理逻辑中，当循环调用 `acpi_ps_get_next_field()` 创建 field 对象链表时，如果某次调用失败（返回 NULL），代码直接返回了 `AE_NO_MEMORY` 状态码，但未对之前循环中已成功创建并链接到 `arg` 变量的 field 对象进行释放。这导致了已分配的内存对象丢失引用，形成内存泄漏。
+
+#解决方案
+在 `drivers/acpi/acpica/psargs.c` 中新增静态函数 `acpi_ps_free_field_list()`，用于遍历并释放 field 列表中的所有 Op 对象及其参数。在 `acpi_ps_get_next_arg()` 函数中，当检测到 `acpi_ps_get_next_field()` 返回失败（NULL）时，调用 `acpi_ps_free_field_list(arg)` 清理已分配的内存资源，然后再返回错误状态码，从而修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5234557b024cc9efc7ae8de5d3d5c1ccfb3f8827

@@ -1,0 +1,20 @@
+#标题
+unshare 系统调用中 set_cred_ucounts 失败导致 nsproxy 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `unshare` 系统调用时，若 `set_cred_ucounts()` 函数执行失败，会导致内核对象 `nsproxy` 发生内存泄漏。随着失败次数增加，系统内存资源将被逐渐耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ksys_unshare()` 函数中，当 `set_cred_ucounts(new_cred)` 执行失败时，代码逻辑直接跳转至 `bad_unshare_cleanup_cred` 标签进行清理。此时，之前已经分配或获取的 `new_nsproxy` 指针未被释放，也没有置为 NULL，导致该对象引用计数未减少，从而引发内存泄漏。根本原因是错误处理路径中缺少对 `new_nsproxy` 对象的释放逻辑。
+
+#解决方案
+在 `ksys_unshare()` 函数中增加专门的错误处理标签 `bad_unshare_cleanup_nsproxy`。当 `set_cred_ucounts()` 失败时，跳转至该标签，并调用 `put_nsproxy(new_nsproxy)` 释放对象。同时，在正常流程中成功切换命名空间（`switch_task_namespaces`）后，将 `new_nsproxy` 指针置为 NULL，防止后续错误处理路径重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fbacaac5dc0d38967b80610b785fbf430c434ceb

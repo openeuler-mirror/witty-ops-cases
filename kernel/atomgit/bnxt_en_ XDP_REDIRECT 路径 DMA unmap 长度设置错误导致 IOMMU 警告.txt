@@ -1,0 +1,29 @@
+#标题
+bnxt_en: XDP_REDIRECT 路径 DMA unmap 长度设置错误导致 IOMMU 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 IOMMU 的系统中，使用 bnxt_en 网卡驱动进行 XDP_REDIRECT 数据包发送时，内核触发 WARNING 警告，并打印调用栈。系统检测到 DMA unmap 操作异常。
+
+#主要错误日志
+WARNING: CPU: 36 PID: 0 at drivers/iommu/dma-iommu.c:842 __iommu_dma_unmap+0x159/0x170
+RIP: 0010:__iommu_dma_unmap+0x159/0x170
+Call Trace:
+ <IRQ>
+ iommu_dma_unmap_page+0x4f/0x100
+ dma_unmap_page_attrs+0x52/0x220
+ xdp_return_frame+0x2e/0xd0
+ bnxt_tx_int_xdp+0xdf/0x440 [bnxt_en]
+ __bnxt_poll_work_done+0x81/0x1e0 [bnxt_en]
+ bnxt_poll+0xd3/0x1e0 [bnxt_en]
+
+#问题根因
+在驱动函数 `__bnxt_xmit_xdp_redirect` 中，设置 DMA unmap 长度时代码逻辑有误，调用 `dma_unmap_len_set` 时将长度硬编码为 0，而非使用数据包的实际长度 `len`。这导致后续在 `bnxt_tx_int_xdp` 中进行 DMA unmap 时，传入的长度为 0，进而触发了 IOMMU 子系统中的警告检查。
+
+#解决方案
+修改 `drivers/net/ethernet/broadcom/bnxt/bnxt_xdp.c` 文件中的 `__bnxt_xmit_xdp_redirect` 函数，将 `dma_unmap_len_set(tx_buf, len, 0)` 修改为 `dma_unmap_len_set(tx_buf, len, len)`，确保 DMA unmap 操作使用正确的数据包长度。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/170b8b6ace8bb91ae0b75a8a8b41fd1115aef815

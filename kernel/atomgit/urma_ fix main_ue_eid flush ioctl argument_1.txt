@@ -1,0 +1,20 @@
+#标题
+urma: fix main_ue_eid flush ioctl argument
+
+#内核版本
+OLK-6.6
+
+#问题现象
+调用 UVS 的 `UBCORE_CMD_FLUSH_MAIN_UE_EID` flush 命令时，命令执行失败。该故障导致用户态无法成功刷新 main_ue_eid。
+
+#主要错误日志
+- "Invalid flush main ue eid args_len: %u.\n" (推断：当 args_len 为 0 时，若全局入口检查在此日志之前拦截，可能无此日志；但在旧代码逻辑中，若检查 args_len 不为 0 时会打印此错误。根据 Commit 描述，问题在于旧代码期望 args_len 为 0，而全局入口拒绝 args_len 为 0 的请求，导致处理函数未被调用或因参数校验失败而返回错误。)
+
+#问题根因
+全局 ioctl 入口规则强制拒绝参数头长度（args_len）为零的请求。然而，`ubcore_cmd_flush_main_ue_eid` 处理函数此前设计为期望 `args_len` 为 0。这种规则冲突导致 flush 命令在进入处理函数前就被全局入口拦截拒绝，或者因参数长度不符合预期而失败。
+
+#解决方案
+为 `UBCORE_CMD_FLUSH_MAIN_UE_EID` 命令添加一个保留的 TLV（Type-Length-Value）输入字段，并在 flush 处理程序中解析该字段。该字段必须为零。这使得命令负载非空（args_len 不为 0），从而符合全局 ioctl 参数规则，同时不改变公共 flush API 的语义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d8f8510a8f9026fb45bc1867f235a2898fbe7ed9

@@ -1,0 +1,20 @@
+#标题
+net: cadence: macb: 修复 macb_halt_tx 中的中断禁用下死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sama5d4 设备上，系统发生死锁并持续锁定数天。当设置 THALT（发送暂停）位后，如果 TGO（发送进行中）位保持为高电平，系统会陷入死循环无法退出，导致设备假死或无响应。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `macb_halt_tx` 函数中，代码使用 `jiffies` 来判断超时。由于该函数执行的上下文中中断被禁用，`jiffies` 无法更新，导致 `time_before(halt_time, timeout)` 条件永远为真（或超时逻辑失效），循环无法终止，从而引发死锁。
+
+#解决方案
+移除基于 `jiffies` 的超时判断逻辑，改用 `read_poll_timeout_atomic` 宏进行轮询。该宏通过重试次数（retries）机制来控制超时，不依赖中断驱动的 `jiffies` 更新，从而避免了中断禁用环境下的死锁风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cdd4a660b2d082b589da6682a175d56a9f9fe0b7

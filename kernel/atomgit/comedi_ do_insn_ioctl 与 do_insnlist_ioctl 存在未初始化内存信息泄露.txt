@@ -1,0 +1,20 @@
+#标题
+comedi: do_insn_ioctl 与 do_insnlist_ioctl 存在未初始化内存信息泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 comedi 设备的 `do_insn_ioctl()` 和 `do_insnlist_ioctl()` 指令时，由于缓冲区未完全初始化，导致将未初始化的内核堆数据拷贝至用户空间，触发 KMSAN（Kernel Memory Sanitizer）检测到的内核信息泄露。该漏洞被 syzbot 发现并定位。
+
+#主要错误日志
+KMSAN: kernel-infoleak in do_insn_ioctl()
+
+#问题根因
+内核分配了用于存储 `insn->n` 个样本的缓冲区，但部分指令处理函数（如 `insn_rw_emulate_bits` 或 `vm80xx_ai_insn_read`）在处理 `INSN_READ` 等指令时，并未填满整个缓冲区。当 `insn->n` 大于实际写入的样本数时，剩余的缓冲区空间保留了分配时的随机内存数据。随后系统将整个缓冲区拷贝回用户空间，导致了未初始化内存的泄露。
+
+#解决方案
+在 `do_insn_ioctl()` 和 `do_insnlist_ioctl()` 函数中，于调用指令处理函数 `parse_insn()` 之前，显式调用 `memset` 将分配的数据缓冲区清零，确保即使指令处理函数未完全填充缓冲区，拷贝至用户空间的数据也是安全的（零值），从而消除信息泄露风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1b1c01bb44b2812fa6b1f62a24fa0f17042cf516

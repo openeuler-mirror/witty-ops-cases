@@ -1,0 +1,20 @@
+#标题
+vxlan: vxlan_vnifilter_dump 存在未初始化值访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当发送的 Netlink 消息负载长度小于 `sizeof(struct tunnel_msg)` 时，`vxlan_vnifilter_dump()` 函数会访问消息边界之外的内存，导致访问未初始化的值。该问题由 KMSAN 工具检测并报告，可能引发内核内存安全违规。
+
+#主要错误日志
+BUG: KMSAN: uninit-value in vxlan_vnifilter_dump+0x328/0x920 drivers/net/vxlan/vxlan_vnifilter.c:422
+
+#问题根因
+`vxlan_vnifilter_dump()` 函数在处理 Netlink 消息时，未对消息负载长度进行有效性检查。如果消息长度小于 `struct tunnel_msg` 结构体的大小，函数会越界访问，导致读取到未初始化的内存数据。
+
+#解决方案
+在 `vxlan_vnifilter_dump()` 函数入口处增加消息长度校验。通过检查 `nlmsg_len` 是否小于 `nlmsg_msg_size(sizeof(struct tunnel_msg))`，若条件成立则通过 `NL_SET_ERR_MSG` 设置错误信息并返回 `-EINVAL`，从而阻止对无效内存区域的访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e3b7e3bbd6aa0db2620a2ef5e17779c26cc93c3a

@@ -1,0 +1,33 @@
+#标题
+pptp_xmit() 错误处理路径中引发内核缺页异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PPTP 发送流程中，当 `pptp_xmit()` 函数遇到 socket 状态异常（`PPPOX_DEAD`）或路由查找失败（`IS_ERR(rt)`）时，错误地执行了 `ip_rt_put(rt)` 操作。由于此时路由对象 `rt` 尚未分配或初始化（为 NULL 或无效指针），导致引用计数操作时触发内核缺页异常（Oops），系统崩溃。
+
+#主要错误日志
+BUG: unable to handle page fault for address: ffffffffffffffdb
+PGD df3b067 P4D df3b067 PUD df3d067 PMD 0
+Oops: Oops: 0002 [#1] SMP KASAN PTI
+CPU: 1 UID: 0 PID: 6346 Comm: syz.0.336 Not tainted 6.16.0-next-20250804-syzkaller #0 PREEMPT(full)
+RIP: 0010:rcuref_put+0x172/0x210 include/linux/rcuref.h:173
+Call Trace:
+ <TASK>
+ dst_release+0x24/0x1b0 net/core/dst.c:167
+ ip_rt_put include/net/route.h:285 [inline]
+ pptp_xmit+0x14b/0x1a90 drivers/net/ppp/pptp.c:267
+
+#问题根因
+在 commit de9c4861fb42 之前的代码变更中，变量 `rt` 被初始化为 `NULL`。在 `pptp_xmit()` 的错误处理路径中，代码直接跳转到 `tx_error` 标签并无条件调用 `ip_rt_put(rt)`。如果错误发生在路由分配之前（例如 socket 状态为 `PPPOX_DEAD` 或 `pptp_route_output` 返回错误），此时 `rt` 指针无效，对无效指针调用 `ip_rt_put` 进而触发 `dst_release`，导致内核访问非法地址引发 Oops。
+
+#解决方案
+修改 `pptp_xmit()` 函数的错误处理逻辑：
+1. 将局部变量 `struct rtable *rt` 的初始化从 `NULL` 改为不初始化（或确保逻辑上区分已分配和未分配状态）。
+2. 新增 `tx_drop` 标签专门处理不需要释放路由对象的错误路径（如 `PPPOX_DEAD` 和路由查找失败）。
+3. 保留 `tx_error` 标签用于处理路由对象已成功分配后的错误路径，在此路径下才调用 `ip_rt_put(rt)`。
+这确保了 `ip_rt_put()` 仅在路由对象真正存在时被调用，避免了空指针或非法指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9ab18ed3c2fb11956a41ce0b32f4512a3974e71c

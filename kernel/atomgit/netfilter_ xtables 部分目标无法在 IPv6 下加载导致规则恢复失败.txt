@@ -1,0 +1,26 @@
+#标题
+netfilter: xtables 部分目标无法在 IPv6 下加载导致规则恢复失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ip6tables 恢复规则集时，涉及 MARK 和 NFLOG 的规则无法正确加载，导致 ip6tables-restore 执行失败。此外，TRACE 扩展在 IPv6 下缺少模块自动加载功能。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中存在拼写错误：
+1. 在 `xt_mark.c` 和 `xt_NFLOG.c` 中，IPv6 版本的目标定义结构体错误地将 `family` 字段设置为 `NFPROTO_IPV4`，导致没有对应 `NFPROTO_IPV6` 簇的 target 注册。
+2. 在 `xt_TRACE.c` 中，IPv6 相关的结构体缺失了 `.me = THIS_MODULE` 字段，导致模块自动加载机制无法工作。
+这些错误源于提交 0bfcb7b71e73 ("netfilter: xtables: avoid NFPROTO_UNSPEC where needed")。
+
+#解决方案
+修正代码中的定义错误：
+1. 将 `xt_mark.c` 中 MARK target (revision 2) 的 `family` 字段从 `NFPROTO_IPV4` 修正为 `NFPROTO_IPV6`。
+2. 将 `xt_NFLOG.c` 中 NFLOG target (revision 0) 的 `family` 字段从 `NFPROTO_IPV4` 修正为 `NFPROTO_IPV6`。
+3. 在 `xt_TRACE.c` 的 IPv6 target 定义中添加 `.me = THIS_MODULE`，启用模块引用计数及自动加载支持。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c1d13abd8d4e6e3d91a871eabf000b005a5da0bd

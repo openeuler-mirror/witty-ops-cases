@@ -1,0 +1,20 @@
+#标题
+firmware_loader: fw_log_firmware_info 函数存在资源泄漏风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在固件加载过程中，若 `fw_log_firmware_info` 函数内的内存分配（kmalloc）失败，会导致密码学算法实例（alg）未被释放，造成内核资源泄漏。由于该函数主要用于调试日志打印，此泄漏可能长期存在且不易察觉，最终可能耗尽系统相关资源。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fw_log_firmware_info` 函数中，代码先通过 `crypto_alloc_shash` 分配了算法实例 `alg`，后续流程中如果 `kmalloc` 分配内存失败，代码直接返回或跳转，但未执行 `crypto_free_shash(alg)` 操作。即异常处理路径中遗漏了对 `alg` 实例的释放操作。
+
+#解决方案
+重构资源释放逻辑，将 `crypto_free_shash(alg)` 的调用移动至函数统一的退出标签 `out_free` 处。无论正常执行结束还是因内存分配失败进入异常路径，最终都会执行 `out_free` 标签处的代码，确保 `alg` 实例、`shash` 描述符及相关内存缓冲区被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/52ef2face9493c3fe2b99258fc87a60430197f54

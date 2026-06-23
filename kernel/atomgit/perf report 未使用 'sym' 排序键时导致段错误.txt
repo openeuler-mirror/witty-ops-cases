@@ -1,0 +1,23 @@
+#标题
+perf report 未使用 'sym' 排序键时导致段错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `perf record` 记录 cgroup 数据并使用 `perf report -s cgroup` 查看（即未指定 'sym' 或 'dso' 排序键）时，程序发生段错误崩溃。
+
+#主要错误日志
+Program received signal SIGSEGV, Segmentation fault.
+0x00005555557a8d90 in map__dso (map=0x0) at util/map.h:48
+48		return RC_CHK_ACCESS(map)->dso.
+
+#问题根因
+hist_entry 中的字段是按需填充的，只有在使用了相关的排序键时才具有有意义的值。
+在 `hists__findnew_entry` 函数中，代码无条件地检查并访问了 `he->ms.map`。当用户未使用 'dso' 或 'sym' 排序键时，hist entry 中的 map/symbols 可能是无效的垃圾数据（如 NULL）。代码在没有确认排序键是否包含 'sym' 的情况下直接访问 map 指针，导致了空指针解引用引发的段错误。
+
+#解决方案
+在访问 map 指针前增加排序键检查。修改 `tools/perf/util/hist.c` 中的逻辑，增加 `hists__has(hists, sym)` 判断条件，确保只有在使用了 'sym' 排序键时才执行 map 相关的比较与更新操作，避免访问无效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56ad4e939c8c144ac591a55c9c5fc6bf994217ba

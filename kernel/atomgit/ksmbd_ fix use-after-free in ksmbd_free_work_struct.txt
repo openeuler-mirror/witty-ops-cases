@@ -1,0 +1,20 @@
+#标题
+ksmbd: fix use-after-free in ksmbd_free_work_struct
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 ksmbd（内核SMB服务器）工作结构体释放时发生 Use-After-Free 故障。具体表现为在 oplock（机会锁）释放后，ksmbd_work 结构体中的 `interim_entry` 链表节点可能已被删除或处于未定义状态，随后在 `ksmbd_free_work_struct` 函数中再次操作该链表节点时触发内存错误。
+
+#主要错误日志
+未知
+
+#问题根因
+`ksmbd_work` 结构体的 `interim_entry` 成员在 oplock 释放后可能被删除，但相关逻辑仍试图通过链表管理临时的 interim 请求。这种管理方式导致了链表节点生命周期管理的混乱，进而引发 Use-After-Free 问题。根本原因是不需要使用链表来管理 interim 请求，因为每当需要 oplock break 等待时，interim 请求可以被立即发送。
+
+#解决方案
+移除 `ksmbd_work` 和 `oplock_info` 结构体中的 `interim_entry` 和 `interim_list` 链表管理成员。修改 oplock 处理逻辑，在需要 oplock break 等待时，直接调用 `setup_async_work`、`smb2_send_interim_resp` 和 `release_async_work` 立即发送 interim 响应，而不是将其加入链表延迟处理。这避免了在 oplock 释放后对已释放或已删除链表节点的非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad6d8f38bbaaa620b0d64783ed8624aee2d3b6db

@@ -1,0 +1,24 @@
+#标题
+ubus: 修复 64 位平台任务源位操作越界及设备探测并发问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 64 位平台（如严格校验 8 字节地址偏移的 QEMU 环境中），ubus 子系统在处理热插拔事件或任务调度时，可能出现内核崩溃或数据异常；同时，在设备绑定过程中可能因缺乏锁保护引发并发竞争，导致设备探测失败或状态异常。
+
+#主要错误日志
+ub_warn(uent, "device attach failed, ret=%d\n", ret);
+
+#问题根因
+1. **位操作越界**：在 64 位系统上，`ub_entity_assign_task_src` 和 `ub_entity_test_task_src` 函数直接对 `uent->task_src` 进行位操作，但部分平台对 8 字节地址偏移校验严格，导致访问越界或异常。
+2. **并发竞争**：`ub_delay_task_device_attach` 和 `ub_start_ent` 在执行设备绑定或启动时，未持有 `device_lock`，在非 MUE 设备场景下可能导致并发操作冲突。
+3. **逻辑缺陷**：`ubhp_handle_present` 中未检查 `slot->r_uent` 是否存在即调用 `ubhp_handle_link_up`，可能导致空指针或状态不一致。
+
+#解决方案
+1. **修正位操作偏移**：在 64 位环境下，将位操作的目标地址修改为 `uent->reserved1`，并增加 `TASK_SRC_BIT_OFFSET` 偏移量（定义为 32），确保操作落在合法内存区域；32 位环境保持原有逻辑。
+2. **增加锁保护**：在 `ub_delay_task_device_attach` 和 `ub_delay_task_work` 的 `TASK_TYPE_START` 分支中，针对非 MUE 设备（`!uent->is_mue`）增加 `device_lock` 与 `device_unlock` 保护，确保 `device_attach` 和 `ub_start_ent` 执行过程的并发安全。
+3. **增加状态检查**：在 `ubhp_handle_present` 调用 `ubhp_handle_link_up` 前增加 `!slot->r_uent` 判断，确保仅在无对应实体时执行 link up 处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9f7be7b4dffd65d9a4f2a87775a8de5c42d700ba

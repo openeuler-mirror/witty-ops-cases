@@ -1,0 +1,21 @@
+#标题
+hisi_acc_vfio_pci: Fix reference leak in hisi_acc_vfio_debug_init
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hisi_acc_vfio_pci 驱动初始化 debugfs 过程中，若 `kzalloc` 分配内存失败或函数正常返回时，未调用 `dput()` 减少引用计数，导致 `debugfs_lookup()` 返回的 dentry 引用计数泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+`debugfs_lookup()` 函数返回一个增加了引用计数的 dentry 对象，调用者在使用完毕后必须调用 `dput()` 释放该引用。原代码逻辑中，在内存分配失败分支直接返回，以及函数执行完毕退出时，均未调用 `dput(vfio_dev_migration)`，导致引用计数泄漏。
+
+#解决方案
+1. 在 `kzalloc` 失败的错误处理路径中，增加 `dput(vfio_dev_migration)` 调用，确保释放引用。
+2. 在函数末尾，增加 `dput(vfio_dev_migration)` 调用，平衡 `debugfs_lookup()` 获取的引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c4515786f64186d4c9b78741fe252b52cae942af

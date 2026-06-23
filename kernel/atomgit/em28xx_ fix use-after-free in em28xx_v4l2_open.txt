@@ -1,0 +1,22 @@
+#标题
+em28xx: fix use-after-free in em28xx_v4l2_open
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 em28xx 设备驱动中，当并发执行打开操作（`em28xx_v4l2_open`）与设备初始化失败回滚或设备注销（`em28xx_v4l2_init` 的 error path 或 `em28xx_v4l2_fini`）时，存在竞态条件，导致以下两种故障现象之一：
+1. **Use-After-Free（释放后使用）**：在 `v4l2_fh_init` 中访问 `vdev->ctrl_handler` 时发生，因为 `video_device` 结构体嵌套在已被释放的 `em28xx_v4l2` 结构体中。
+2. **NULL Pointer Dereference（空指针解引用）**：在 `em28xx_resolution_set` 中访问 `v4l2->norm` 时发生，因为 `dev->v4l2` 已被置为 NULL。
+
+#主要错误日志
+未知
+
+#问题根因
+`em28xx_v4l2_open()` 函数在没有持有 `dev->lock` 互斥锁的情况下读取了 `dev->v4l2` 指针。与此同时，`em28xx_v4l2_init()` 的错误处理路径和 `em28xx_v4l2_fini()` 会在持有 `dev->lock` 的情况下释放 `em28xx_v4l2` 结构体并将 `dev->v4l2` 设置为 NULL。这种不同步的访问导致了竞态条件，引发了释放后使用或空指针解引用问题。
+
+#解决方案
+将 `mutex_lock_interruptible(&dev->lock)` 的加锁操作提前到读取 `dev->v4l2` 指针之前，并在持有锁的状态下增加对 `dev->v4l2` 是否为 NULL 的检查。如果为 NULL，则解锁并返回 `-ENODEV`，从而避免访问已释放或无效的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eec457877aa4c003514ea03d33da3be5c650b4ee

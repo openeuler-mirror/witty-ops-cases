@@ -1,0 +1,20 @@
+#标题
+serial: 8250_pci: F81504/508/512 芯片 RS485 RTS 控制功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 Fintek F81504/508/512 芯片的串口设备在 RS485 模式下，部分需要 RTS（Request To Send）信号在发送后保持低电平的设备无法正常工作。用户空间无法成功取消 `SER_RS485_RTS_ON_SEND` 标志位，导致需要 RTS 低电平发送的硬件场景通信失败。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序中 `pci_fintek_rs485_supported` 结构体定义的功能标志位不全。代码仅声明了 `SER_RS485_RTS_ON_SEND`，未声明 `SER_RS485_RTS_AFTER_SEND`。根据内核串口核心层的 `uart_sanitize_serial_rs485()` 校验逻辑，如果驱动未声明某项功能，用户空间就无法取消该功能标志。这使得某些需要特定 RTS 极性控制的 RS485 设备无法配置正确的通信参数。
+
+#解决方案
+修改 `drivers/tty/serial/8250/8250_pci.c` 文件中的 `pci_fintek_rs485_supported` 结构体，在 `flags` 字段中增加 `SER_RS485_RTS_AFTER_SEND` 宏定义。此举向串口核心层声明硬件对该模式的支持，允许用户空间正确配置 RTS 在发送后的状态，从而修复 RS485 通信故障。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a643c6146673e76cbc89798401aa7f1abb93400f

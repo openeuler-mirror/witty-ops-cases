@@ -1,0 +1,20 @@
+#标题
+NFSD在courtesy状态下发送回调导致nfsd4_shutdown_callback挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 NFS4 客户端处于 courtesy 状态时，NFSD 尝试发送回调请求会导致 `nfsd4_shutdown_callback` 函数挂起。该挂起状态大约持续 15 分钟，直到 TCP 层通知 NFSD 连接已断开才会恢复。
+
+#主要错误日志
+未知
+
+#问题根因
+当 nfs4_client 处于 courtesy 状态时，系统尝试发送回调（callback）请求是没有意义的。但原代码逻辑未检查该状态，导致继续发起 RPC 调用。这使得 `cl_cb_inflight` 计数器无法归零（保持非 0 值），进而导致 `nfsd4_shutdown_callback` 进入等待状态并挂起，直至 TCP 连接超时断开。
+
+#解决方案
+修改 `nfsd4_run_cb_work` 函数，在发送回调前增加对客户端状态 `cl_state` 的判断。如果 `clnt` 为空或者 `clp->cl_state` 处于 `NFSD4_COURTESY` 状态，则直接调用 `nfsd41_destroy_cb` 销毁回调结构并返回，跳过后续的 RPC 调用过程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba8ca427d3a11c85e67838f2a4877f7c0a8b9c12

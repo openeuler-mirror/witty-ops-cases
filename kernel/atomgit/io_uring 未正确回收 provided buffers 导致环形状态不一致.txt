@@ -1,0 +1,20 @@
+#标题
+io_uring 未正确回收 provided buffers 导致环形状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 io_uring 的 provided buffers 功能时，若通过 `io_req_prep_async` 函数进行异步请求准备，会导致内核 ring 状态提交异常。具体表现为缓冲区资源未正确回收或重置，可能引发后续的数据处理错误或内存管理问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `io_req_prep_async` 中，代码路径会导入 provided buffers，但在返回前未调用 `io_kbuf_recycle` 来提交或回收环形缓冲区状态。这导致在后续需要重新导入缓冲区时，状态不一致，破坏了 provided buffers 的正确处理流程。
+
+#解决方案
+在 `io_uring.c` 的 `io_req_prep_async` 函数中，调用 `cdef->prep_async(req)` 之后、函数返回之前，增加调用 `io_kbuf_recycle(req, 0)`。此举确保在放弃当前缓冲区引用前正确提交 ring 状态，以便后续需要时能正确重新导入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c88054f38e7ce40ae6c9ef6f162515ec4e2ce9de

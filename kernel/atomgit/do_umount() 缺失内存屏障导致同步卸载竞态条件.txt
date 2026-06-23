@@ -1,0 +1,20 @@
+#标题
+do_umount() 缺失内存屏障导致同步卸载竞态条件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定竞态条件下，当 RCU 路径查找刚好命中正在执行同步卸载的挂载点时，同步卸载操作可能表现出类似 `umount -l`（惰性卸载）的行为，而非预期的正常同步卸载行为。此问题触发概率较低，属于并发场景下的隐蔽 Bug。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `do_umount()` 函数中，检查挂载点引用计数的逻辑前缺少必要的内存屏障。这导致了 `__legitimize_mnt()` 与 `do_umount()` 之间存在竞态：如果 `__legitimize_mnt()` 没有观察到 `do_umount()` 持有的 `lock_mount_hash()` 锁，那么 `do_umount()` 必须确保能观察到 `__legitimize_mnt()` 对引用计数的增加。缺少该屏障会导致检查逻辑误判，从而引发错误的卸载行为。
+
+#解决方案
+在 `do_umount()` 函数的相应代码路径中增加 `smp_mb()` 内存屏障，与 `__legitimize_mnt()` 中的屏障配对使用，确保引用计数检查的内存可见性顺序正确，从而修复该竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4947fe94272af6a7bbe23f31f86432fbc40cb5ba

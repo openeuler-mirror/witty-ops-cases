@@ -1,0 +1,23 @@
+#标题
+ub/cdma: 释放上下文时访问已释放内存导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CDMA 模块进行设备移除或上下文删除流程时，若并发进行异步事件处理，内核可能发生 Use-After-Free（UAF）故障。具体表现为内核恐慌或内存非法访问，系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dma_delete_context` 或 `cdma_delete_ucontext` 流程中，释放上下文资源时，未正确处理上下文结构体中 `jfae` 指针与 `jfae->ctx` 指针的解引用关系。
+原代码在 `cdma_delete_ucontext` 中先置空 `jfae->ctx`，随后调用 `cdma_free_context`，但这在并发场景下存在时序窗口，导致异步事件处理路径通过 `ctx->jfae` 访问到已被部分释放或置空的上下文，或者访问到指针关联关系已破坏的对象，从而触发 UAF。
+
+#解决方案
+1. 在 `cdma_free_context` 函数内部增加对 `ctx->jfae` 的检查，并在释放上下文前将 `ctx->jfae->ctx` 置空，确保指针关联关系在释放内存前被正确断开，避免并发路径访问悬空指针。
+2. 引入内核命令计数器 `kcmdcnt` 与完成量 `kcmddone`，在 `dma_delete_context`、`dma_free_queue`、`dma_unregister_seg` 等关键内核路径中增加引用计数增减操作（`cdma_kcmd_inc/dec`）。
+3. 在设备移除流程（`cdma_remove`、`cdma_reset_uninit`）中调用 `cdma_kcmd_flush`，等待所有内核态命令处理完成后再执行资源销毁，确保资源释放的同步性与安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cd6cf02fa534510bf55ffd1da5263e2ff996ea10

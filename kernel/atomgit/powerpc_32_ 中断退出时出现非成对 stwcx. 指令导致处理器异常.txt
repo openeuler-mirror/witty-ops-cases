@@ -1,0 +1,20 @@
+#标题
+powerpc/32: 中断退出时出现非成对 stwcx. 指令导致处理器异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PowerPC 32 位架构上，发生中断退出时，由于 `stwcx.` 指令未配对执行 `lwarx`，可能导致部分处理器出现异常行为或运行不稳定。该问题是由错误的代码逻辑移植引起的，错误地使用了在 PowerPC 32 上恒为 0 的 `CPU_FTR_STCX_CHECKS_ADDRESS` 特性标志，导致原本必需的配对逻辑失效。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit b96bae3ae2cb ("powerpc/32: Replace ASM exception exit by C exception exit from ppc64") 错误地将 PowerPC 64 位的逻辑复制到了 PowerPC 32 位代码中。该逻辑依赖 `CPU_FTR_STCX_CHECKS_ADDRESS` 特性标志，但该标志在 PowerPC 32 上始终为 0。这导致此前由 Commit b64f87c16f3c 实现的、基于 `CPU_FTR_NEED_PAIRED_STWCX` 特性标志的正确逻辑被覆盖，从而破坏了部分处理器上清除保留地址所需的 `lwarx` 与 `stwcx.` 指令配对要求。
+
+#解决方案
+恢复正确的逻辑实现，将中断退出路径中的特性标志检查从 `CPU_FTR_STCX_CHECKS_ADDRESS` 更正为 `CPU_FTR_NEED_PAIRED_STWCX`。具体修改为：在执行 `stwcx.` 清除保留之前，仅在 `CPU_FTR_NEED_PAIRED_STWCX` 标志置位时才执行 `lwarx` 指令，从而确保指令配对符合硬件要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f34e424ec3619a949d3a4b55784465f7a1de641e

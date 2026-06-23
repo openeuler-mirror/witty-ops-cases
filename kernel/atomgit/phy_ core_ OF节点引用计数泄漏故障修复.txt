@@ -1,0 +1,20 @@
+#标题
+phy: core: OF节点引用计数泄漏故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `phy_get()`、`of_phy_get()`、`devm_phy_get()`、`devm_of_phy_get()` 或 `devm_of_phy_get_by_index()` 等 API 时，由于底层函数 `of_phy_provider_lookup()` 存在逻辑缺陷，导致 Device Tree (OF) 节点的引用计数（refcount）发生泄漏。随着设备反复绑定或相关操作重复执行，系统可能因内核资源未释放而出现内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `of_phy_provider_lookup()` 中，使用了宏 `for_each_child_of_node(parent, child)` 遍历节点。该宏在进入循环体前会自动增加子节点 `@child` 的引用计数。当在循环体内找到匹配节点并直接 `return` 返回时，代码未执行 `of_node_put(child)` 操作来平衡引用计数，从而导致 OF 节点引用计数泄漏。
+
+#解决方案
+在 `of_phy_provider_lookup()` 函数的循环体中，当找到匹配的子节点并准备返回 `phy_provider` 之前，显式调用 `of_node_put(child)` 释放引用计数，确保资源正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/608e1f487e2472699e06ebe8c69574868d1648a3

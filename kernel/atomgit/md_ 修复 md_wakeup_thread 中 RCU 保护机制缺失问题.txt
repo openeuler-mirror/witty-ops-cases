@@ -1,0 +1,23 @@
+#标题
+md: 修复 md_wakeup_thread 中 RCU 保护机制缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 MD (Multiple Device) 阵列时，若调用 md_wakeup_thread 相关函数，可能会因为 RCU 保护机制缺失或不正确导致内核崩溃；特别是在 `stop_sync_thread` 流程中，若传递的同步线程指针需要通过 RCU 方式访问，直接传递指针可能导致访问非法内存。
+
+#主要错误日志
+未知
+
+#问题根因
+原有的 `md_wakeup_thread` 函数虽然在代码中调用了 `rcu_read_lock()`，但实际上并未对传入的参数进行有效的 RCU 保护解引用。此外，`md_wakeup_thread_directly` 函数接收的是 `struct md_thread __rcu *thread`，而在调用时直接传递了 `mddev->sync_thread`，这导致 RCU 解引用操作 `rcu_dereference(thread)` 实际上是在解引用指针本身而非指针指向的内容，无法正确发挥 RCU 保护作用，存在潜在的并发访问风险。
+
+#解决方案
+1. 将 `md_wakeup_thread_directly` 的参数类型修改为二级指针 `struct md_thread __rcu **thread`，使其能够正确接收 RCU 保护的指针地址，并在函数内部使用 `rcu_dereference(*thread)` 进行正确的解引用。
+2. 重命名原 `md_wakeup_thread` 函数为 `__md_wakeup_thread`，移除其内部的 RCU 锁调用。
+3. 通过宏定义 `#define md_wakeup_thread(thread)` 重新封装 `__md_wakeup_thread`，在宏内部显式添加 `rcu_read_lock()` 和 `rcu_read_unlock()`，确保调用时 RCU 保护区域的完整性。
+4. 更新调用点 `md_wakeup_thread_directly(mddev->sync_thread)` 为传地址形式 `md_wakeup_thread_directly(&mddev->sync_thread)`，以匹配新的函数签名并确保 RCU 机制正确生效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/93e89facb7e3f6e6fe30ae5251ec0e1bb76d229f

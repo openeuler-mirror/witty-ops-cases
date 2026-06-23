@@ -1,0 +1,24 @@
+#标题
+geneve: geneve_find_dev 发生释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+syzkaller 报告在 `geneve_find_dev()` 函数中发生释放后使用。当通过 IFLA_NET_NS_PID 等参数将 Geneve 设备移动到不同的网络命名空间，并在原命名空间被销毁后，若在新命名空间中创建新的 Geneve 设备，内核会读取已被释放的内存，触发 KASAN 检测错误。
+
+#主要错误日志
+```
+BUG: KASAN: slab-use-after-free in geneve_find_dev drivers/net/geneve.c:1295 [inline]
+BUG: KASAN: slab-use-after-free in geneve_configure+0x234/0x858 drivers/net/geneve.c:1343
+Read of size 2 at addr ffff000054d6ee24 by task syz.1.4029/13441
+```
+
+#问题根因
+`geneve_configure()` 函数将 `struct geneve_dev.next` 链接到了后端 UDP 套接字所在的网络命名空间（`net_generic(net, geneve_net_id)->geneve_list`）。当设备所属的 `dev_net(dev)` 被销毁时，`geneve_exit_batch_rtnl()` 调用 `unregister_netdevice_queue()` 释放了设备内存，但该设备的 `geneve_dev.next` 仍然链接在 UDP 套接字所在的网络命名空间列表中。当在该命名空间创建新的 Geneve 设备并遍历链表时，访问了已被释放的设备结构体，导致 UAF。
+
+#解决方案
+在 `geneve_destroy_tunnels()` 函数中，遍历 `geneve_list` 时，使用 `geneve_dellink()` 替换 `unregister_netdevice_queue()`。`geneve_dellink()` 会正确地将设备从链表中移除，从而避免后续遍历时访问已释放内存的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/54807a52d4429c506150963db13698a696c2d14f

@@ -1,0 +1,20 @@
+#标题
+sw64 架构 recordmcount 工具错误将 ELF_LITERAL_GOT 重定位类型识别为 _mcount
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构下执行 ftrace 相关操作（运行 recordmcount 工具处理内核镜像）时，该工具可能误将 `ELF_LITERAL_GOT` 类型的重定位条目识别为 `_mcount` 调用。这会导致内核中原有的正确指令被错误地替换为 NOP 指令，进而可能导致内核功能异常或行为不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `sw64_is_fake_mcount()` 函数中，缺少对重定位符号索引是否为 0 的判断。当重定位条目的符号索引（`Elf_r_sym(rp)`）为 0 时，对应的是局部符号或无效条目（如 `ELF_LITERAL_GOT`），不应被当作 `_mcount` 处理。由于缺乏该检查，代码错误地进入了后续的偏移量判断逻辑，导致误判。
+
+#解决方案
+在 `scripts/recordmcount.c` 文件的 `sw64_is_fake_mcount()` 函数中增加判断逻辑：如果重定位条目的符号索引 `Elf_r_sym(rp)` 为 0，则直接返回 1，标识该条目为“fake mcount”并跳过处理，从而防止误将非 `_mcount` 指令替换为 NOP。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9d65bcd2614fba1b08baa9837866eb95d6f8298f

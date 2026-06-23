@@ -1,0 +1,23 @@
+#标题
+urma: 使用回环模式时触发财锁导致死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 URMA 回环模式进行通信时，系统发生死锁，导致相关进程无法继续执行，可能表现为进程挂起（D状态）或系统无响应。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ubcore_reuse_tpid` 函数中，代码在持有 `tpid_reuse->lock` 互斥锁的情况下调用 `ubcore_is_loopback` 函数。而 `ubcore_is_loopback` 内部会尝试获取 `dev->eid_table.lock` 自旋锁。
+反之，在执行路径的其他地方（如 `ubcore_exchange_tp_info` 调用链），可能存在先持有 `eid_table.lock` 再尝试获取 `tpid_reuse->lock` 的情形。
+这种不一致的锁获取顺序导致了典型的 AB-BA 死锁。
+
+#解决方案
+调整代码执行逻辑与锁的获取顺序。将 `ubcore_is_loopback` 函数的调用位置移动到获取 `tpid_reuse->lock` 互斥锁之前。
+通过在进入临界区前提前检查是否为回环模式，避免了在持有 `tpid_reuse->lock` 时再去竞争 `eid_table.lock`，从而消除了死锁产生的条件。同时优化了 `ubcore_disconnect_tpid_with_tpid_reuse` 中的逻辑判断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/80cedace131deffb967f78d7607f0da19261535f

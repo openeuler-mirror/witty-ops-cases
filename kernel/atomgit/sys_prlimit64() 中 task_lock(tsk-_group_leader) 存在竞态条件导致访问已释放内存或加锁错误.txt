@@ -1,0 +1,28 @@
+#标题
+sys_prlimit64() 中 task_lock(tsk->group_leader) 存在竞态条件导致访问已释放内存或加锁错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当进程调用 sys_prlimit64() 对非当前线程组且非组长的目标进程进行操作时，可能触发内核竞态问题。具体表现为：
+1. 目标进程在执行过程中退出或执行 exec，导致其 group_leader 指向的 task_struct 被释放，sys_prlimit64() 访问该指针时可能引发 Use-After-Free 或内核崩溃。
+2. 目标进程执行 multi-threaded exec (de_thread) 改变 group_leader，导致 do_prlimit() 获取错误的锁，或者在 task_lock 与 task_unlock 之间 group_leader 发生变更，破坏锁逻辑。
+
+#主要错误日志
+未知
+
+#问题根因
+sys_prlimit64() 路径下对 task_lock(tsk->group_leader) 的使用存在严重竞态缺陷：
+1. 引用计数保护不足：虽然代码调用了 get_task_struct(tsk) 保护了 tsk 本身，但如果 tsk 不是 current 且不是组长，该进程可能退出或执行 exec，导致 tsk->group_leader 指向的 task_struct 被释放，此时对该指针加锁属于访问已释放内存。
+2. 指针变更竞态：sys_prlimit64() 未持有 tasklist_lock，无法阻止 mt-exec 改变 ->group_leader。这导致 do_prlimit() 可能锁住错误的对象，或者在加锁与解锁之间 group_leader 发生变更引发逻辑错误。
+
+#解决方案
+修改 sys_prlimit64() 的加锁逻辑，在必要时获取 tasklist_lock 读锁：
+1. 增加判断逻辑：检查目标进程 tsk 是否与当前进程属于同一线程组（same_thread_group）。
+2. 加锁保护：若不属于同一线程组，则获取 read_lock(&tasklist_lock)。这可以阻止目标进程进行 group exit 或 de_thread() 变更，确保 tsk->group_leader 在操作期间不会被释放或改变。
+3. 存活检查：在持有 tasklist_lock 后，再次检查进程是否存活，若已死亡则返回 -ESRCH 错误。
+4. 执行操作：在锁保护下调用 do_prlimit()，完成后释放 tasklist_lock。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/72af40a2726a8dee4b1a38edad115665a6cc1343

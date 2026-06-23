@@ -1,0 +1,20 @@
+#标题
+ext4 读取加密目录时因访问非法内存导致系统崩溃或数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当读取加密且未开启 casefold（大小写折叠）功能的 ext4 目录时，系统可能会触发 kernel panic（如 Oops）或内存访问越界错误，导致系统不稳定或文件系统操作失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 ext4_readdir 函数中，代码无条件调用 EXT4_DIRENT_HASH 和 EXT4_DIRENT_MINOR_HASH 宏来获取哈希值。这两个宏会访问紧随 ext4_dir_entry 之后的 struct ext4_dir_entry_hash 结构体。然而，当 inode 处于加密状态但未开启 casefold 特性时，磁盘上的目录项并不包含 hash 值字段，此时访问该位置导致越界内存访问。
+
+#解决方案
+修改 fs/ext4/dir.c 中的 ext4_readdir 逻辑，在访问哈希值前增加判断。如果目录开启了 casefold 特性，则正常读取 hash 和 minor_hash；否则（即仅加密未 casefold），将 hash 和 minor_hash 置为 0 传递给 fscrypt_fname_disk_to_usr 函数，从而避免访问不存在的哈希字段。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/262bdde97c148dc8d328a2b53da25b16b8a9959d

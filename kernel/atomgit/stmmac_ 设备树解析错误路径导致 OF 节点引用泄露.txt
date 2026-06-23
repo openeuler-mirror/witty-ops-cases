@@ -1,0 +1,20 @@
+#标题
+stmmac: 设备树解析错误路径导致 OF 节点引用泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动初始化过程中，若 `stmmac_probe_config_dt()` 函数在某些特定分支遇到错误（如内存分配失败或 MTL 设置失败）并退出时，未正确释放此前通过 `of_parse_phandle()` 获取的设备树（OF）节点引用计数。这会导致内核对象引用计数泄露，可能导致相关设备树节点无法被正常释放或卸载，长期运行或重复操作可能引发内存泄漏相关问题。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `stmmac_probe_config_dt()` 的错误处理逻辑不一致。部分错误路径调用了 `stmmac_remove_config_dt()` 进行资源清理，而其他部分使用了直接返回的“梯子”式展开。这两类处理方式未保持同步，导致在某些错误返回路径下，遗漏了 `of_node_put()` 调用，从而丢失了对 `phy_node` 或 `mdio_node` 的引用计数释放。
+
+#解决方案
+重构 `stmmac_probe_config_dt()` 函数的错误处理逻辑，统一采用标准的“unwind ladder”（解构梯子）模式。在函数末尾添加统一的错误跳转标签（如 `error_put_mdio` 和 `error_put_phy`），确保无论从哪个错误分支退出，都能按相反顺序正确执行 `of_node_put(plat->mdio_node)` 和 `of_node_put(plat->phy_node)`，从而修复引用泄露问题。同时移除了不再需要的 `stmmac_remove_config_dt()` 函数调用，并更新了相关的 devres 清理回调函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b494794c845fda45e7962a624a14ff08dfefb16e

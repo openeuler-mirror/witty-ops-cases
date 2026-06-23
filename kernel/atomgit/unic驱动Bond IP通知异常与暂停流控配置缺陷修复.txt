@@ -1,0 +1,33 @@
+#标题
+unic驱动Bond IP通知异常与暂停流控配置缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在Bond IP地址通知管控平台失败的场景下，可能出现内存申请失败，导致IP地址节点丢失。
+2. 在Bond端口获取Slave配置时存在并发访问风险，缺乏锁保护。
+3. 配置暂停功能时，自动协商状态被错误地固定为关闭，不符合芯片实际能力，导致配置失败或状态异常。
+4. 部分错误场景下打印级别过低（使用warn/info而非err），不利于问题定位。
+
+#主要错误日志
+- `failed to disable pause, ret = %d.` (推断：drivers/net/ub/unic/unic_dcbnl.c)
+- `failed to set pfc tx rx enable or priority, ret = %d.` (推断：drivers/net/ub/unic/unic_dcbnl.c)
+- `failed to set pause, autoneg not supported.` (推断：drivers/net/ub/unic/unic_ethtool.c)
+- `to change autoneg, please use: ethtool -s <dev> autoneg <on|off>` (推断：drivers/net/ub/unic/unic_ethtool.c)
+- `failed to set pause, priority flow control enabled.` (推断：drivers/net/ub/unic/unic_ethtool.c)
+
+#问题根因
+1. **内存管理缺陷**：Bond IP通知失败后，处理逻辑尝试创建新节点并添加回链表。若内存不足导致申请失败，会造成节点丢失；修复前未正确重用原有节点。
+2. **并发保护缺失**：函数 `unic_get_bond_slave` 在获取 bond slave 配置时，在 RCU 临界区外访问了 slave 指针，且未持有 RCU 锁即返回私有数据指针，存在潜在的安全隐患。
+3. **流控逻辑错误**：硬件不支持自动协商配置时，代码强制将自动协商状态设为 off；未根据芯片上报的能力正确处理自动协商状态。
+4. **日志规范问题**：部分关键操作失败的日志使用了 `unic_info` 或 `unic_warn`，未使用 `unic_err`，导致错误信息容易被忽略。
+
+#解决方案
+1. **修复内存管理**：移除创建新节点的逻辑，改为通过 `list_move_tail` 将 IP 节点从临时链表移回原链表，避免内存申请失败导致的节点丢失。
+2. **增加锁保护**：在 `unic_get_bond_slave` 函数中添加 `rcu_read_lock`，确保在访问 slave 结构期间指针有效，并在获取 `unic_dev` 指针后再释放锁。
+3. **修正流控配置**：调整暂停配置逻辑，根据芯片报告的能力（`support_autoneg`）来设置和获取自动协商状态，不再强制设为 off。
+4. **修正日志级别**：将流控配置失败等关键错误路径的打印级别从 `unic_info`/`unic_warn` 修正为 `unic_err`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22129f6de99ec4ab995161c81d50b03f882b617f

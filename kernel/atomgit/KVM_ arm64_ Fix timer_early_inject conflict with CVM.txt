@@ -1,0 +1,23 @@
+#标题
+KVM: arm64: Fix timer_early_inject conflict with CVM
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 KVM 环境下，当创建 CVM（Confidential Virtual Machine，机密虚拟机）实例时，由于 `timer_early_inject` 和 `pvtimer_status` 相关初始化逻辑与 CVM 架构存在冲突，可能导致虚拟机初始化失败或运行时出现未定义的行为（如定时器注入异常）。
+
+#主要错误日志
+未知
+
+#问题根因
+CVM（Realm 虚拟机）具有特殊的内存隔离与执行机制，不支持常规虚拟机所使用的 `timer_early_inject`（早期定时器注入）及 `pvtimer_status`（半虚拟化定时器状态）特性。原代码在 `kvm_arch_init_vm` 和 `kvm_arch_vcpu_create` 流程中无条件调用这些初始化函数，未判断当前虚拟机类型是否为 CVM，从而导致特性冲突。
+
+#解决方案
+在 KVM 虚拟机初始化（`kvm_arch_init_vm`）与 vCPU 创建（`kvm_arch_vcpu_create`）流程中增加对 CVM 类型的判断条件。
+具体修改如下：
+1. 在调用 `kvm_arm_timer_early_inject_vm_init` 前，增加 `if (!kvm_is_realm(kvm))` 判断，跳过 CVM 实例的该初始化步骤。
+2. 在 `CONFIG_VIRT_VTIMER_PV_STATUS` 配置下，调用 `kvm_arm_pvtimer_status_vcpu_init` 前，同样增加 `if (!kvm_is_realm(vcpu->kvm))` 判断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/80ae1d4421819a38248451e882a55b41e5bb4fd8

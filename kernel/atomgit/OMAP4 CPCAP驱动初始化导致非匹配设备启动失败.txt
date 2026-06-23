@@ -1,0 +1,22 @@
+#标题
+OMAP4 CPCAP驱动初始化导致非匹配设备启动失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能 CONFIG_MFD_CPCAP 配置项后，启动 Motorola BT200 设备（使用非出厂 X-Loader）时系统无法正常启动。该问题同样可能导致其他非 OMAP4 或无 CPCAP 硬件的设备出现不可预期的异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+`cpcap_late_init()` 函数在执行后期初始化调用时，未对运行环境进行有效性检查。只要内核开启了 CONFIG_MFD_CPCAP 配置，该函数就会直接调用 `omap4_vc_set_pmic_signaling()` 向 OMAP4 寄存器写入数据，而不管系统中是否真实存在 CPCAP 设备以及当前 SoC 是否为 OMAP4 系列。这导致了在非目标硬件上错误的寄存器操作，破坏了系统正常的启动流程。
+
+#解决方案
+在 `cpcap_late_init()` 函数中增加硬件环境检测逻辑：
+1. 调用 `of_find_compatible_node()` 检查设备树中是否存在 "motorola,cpcap" 兼容节点，若不存在则直接返回，不进行后续操作。
+2. 调用 `soc_is_omap443x()` 等函数检查当前 SoC 类型是否为 OMAP4 系列，只有在 SoC 匹配时才执行 `omap4_vc_set_pmic_signaling()` 配置电压控制器信号。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0915a4f1f4d6984ea8907381cca64df55ddefa4d

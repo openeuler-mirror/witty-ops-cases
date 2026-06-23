@@ -1,0 +1,40 @@
+#标题
+zcopy 模块因缺少 pte_unmap 导致 RCU 读侧临界区内发生自愿上下文切换
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核运行过程中触发 WARNING，提示在 RCU 读侧临界区内发生了自愿上下文切换。调用栈显示进程在退出流程（do_exit）清理 9p 文件系统资源（v9fs_dir_release）时触发了该错误。
+
+#主要错误日志
+------------[ cut here ]------------
+Voluntary context switch within RCU read-side critical section!
+WARNING: CPU: 3 PID: 16383 at kernel/rcu/tree_plugin.h:320 rcu_not_context_switch+0x45c/0x500
+Call trace:
+ rcu_note_context_switch+0x45c/0x500
+ __schedule+0xbc/0x898
+ schedule+0x60/0x138
+ p9_client_rpc+0x118/0x430
+ p9_client_clunk+0x48/0xa8
+ v9fs_dir_release+0xf0/0x138
+ __fput+0xbc/0x280
+ ____fput+0x14/0x28
+ task_work_run+0x70/0xd0
+ do_exit+0x31c/0xa48
+ do_group_exit+0x38/0xa0
+ __arm64_sys_exit_group+0x1c/0x28
+ invoke_syscall+0x48/0x110
+ el0_svc_common.constprop.0+0x44/0xe8
+ do_el0_svc+0x84/0xc8
+ el0_slow_syscall+0x3c/0x120
+ .slow_syscall+0x16c/0x170
+
+#问题根因
+在 `attach_pte_range` 函数中，调用 `_pte_offset_map`（通过 `zcopy_pte_offset_map`）进入 RCU 读区，但在函数退出路径中缺少对应的 `pte_unmap` 调用。这导致进程一直未退出 RCU 读侧临界区，随后在调用 `p9_client_rpc` 进行 RPC 通信触发 `schedule` 时，内核检测到在 RCU 临界区内发生了上下文切换，从而报错。
+
+#解决方案
+在 `attach_pte_range` 函数中增加 `orig_src_ptep` 和 `orig_dst_ptep` 变量用于保存初始 PTE 指针，并在函数返回前的 `out` 标签处、释放自旋锁后，显式调用 `pte_unmap` 解除映射并退出 RCU 读区。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a859064dd6de8d911b9b1db4fb1552c20bb917b0

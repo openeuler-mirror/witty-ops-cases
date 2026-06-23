@@ -1,0 +1,31 @@
+#标题
+PCI: pnv_php: Fix surprise plug detection and recovery
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PowerNV 平台上进行 PCI 设备热插拔时，若发生意外拔出事件，热插拔系统会完全失效，后续无法检测到新插入的设备，必须重启系统才能恢复正常的热插拔检测功能。此外，在特定情况下，热插拔操作可能触发内核空指针引用导致 oops。
+
+#主要错误日志
+- "PCI slot activation failed with error code %d, possible frozen PHB"
+- "Attempting complete PHB reset before retrying slot activation"
+- "Try %d..."
+- "Failed to bring slot online, aborting!"
+- "Upstream bridge PE state unknown, hotplug detect may fail"
+- "Upstream bridge PE %02x frozen, thawing..."
+- "Unable to thaw PE %02x, hotplug detect will fail!"
+- "PE %02x thawed successfully"
+
+#问题根因
+该问题由两个根本原因导致：
+1. 当设备被意外拔出时，上游桥端口通常会在 PHB 上引发 PE（Partitionable Endpoint）冻结。如果未清除该冻结状态，桥接器热插拔通知逻辑发出的 MSI 中断将无法被内核接收，导致该 PE 关联的所有插槽上的插拔事件停滞。
+2. 无论意外移除还是编程移除，设备移除后关联的 PHB/PE 会处于冻结状态。如果未通过基础复位清除该冻结，skiboot 无法解冻并重新扫描插槽，导致无法重新检测设备。
+
+#解决方案
+1. 在热插拔事件处理流程中，当设备被移除后，调用新增的 `pnv_php_detect_clear_suprise_removal_freeze` 函数主动检测并解冻上游桥的 PE，确保后续 MSI 中断能正常接收。
+2. 在插槽激活流程中，新增 `pnv_php_activate_slot` 函数处理插槽上电失败的情况。若上电失败（可能由于 PHB 处于冻结状态），尝试执行最多 3 次 PCIe warm reset 以清除 PHB 锁定状态并重试。
+3. 在 `pci_hp_add_devices` 函数中增加对 `pci_bus_to_OF_node()` 返回值的非空检查，防止设备节点不存在时触发 oops。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/27f78e6ec81ad8e6b014c7b25f3722827b113d69

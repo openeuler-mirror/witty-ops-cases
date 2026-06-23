@@ -1,0 +1,23 @@
+#标题
+i2c: sis630: probe函数中i2c_add_adapter失败导致IO内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 sis630 I2C 总线驱动时，若 `i2c_add_adapter()` 注册适配器失败，驱动程序未正确释放此前通过 `request_region()` 申请的 I/O 区域资源，导致该 I/O 端口区域被错误占用（泄露），进而可能影响后续对该资源的分配与使用。
+
+#主要错误日志
+"SIS630 compatible bus not detected, " (此为 probe 初始阶段的错误日志，若 i2c_add_adapter 失败通常无特定打印，仅返回错误码)
+
+#问题根因
+在 `sis630_probe` 函数中，如果 `i2c_add_adapter()` 调用失败，函数直接返回了错误码，但遗漏了调用 `release_region()` 来释放之前在 `sis630_setup()` 函数中成功申请的 I/O 区域资源。根据代码逻辑，`sis630_setup()` 成功执行意味着 `request_region()` 已生效，因此失败路径必须执行对应的释放操作，此处的错误处理路径缺失导致了资源泄漏。
+
+#解决方案
+修改 `sis630_probe` 函数的错误处理逻辑：
+1. 引入 `ret` 变量存储 `i2c_add_adapter()` 的返回值。
+2. 增加 `i2c_add_adapter()` 调用的错误判断，若返回非 0 值，跳转至新增的 `release_region` 标签处。
+3. 在 `release_region` 标签处执行 `release_region(smbus_base + SMB_STS, SIS630_SMB_IOREGION)` 释放资源，并返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/26c7321f4aef4993744853b83e4d1ae089453754

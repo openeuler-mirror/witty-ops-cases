@@ -1,0 +1,21 @@
+#标题
+iommu/mediatek: 探测阶段 mtk_iommu_device_group 函数空指针引用修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MediaTek IOMMU 驱动探测过程中，由于初始化顺序错误，导致 `mtk_iommu_device_group` 函数在访问 `hw_list` 时引发 NULL 指针引用。具体表现为内核发生 panic 或 Oops 异常，该问题在特定的 IOMMU 探测修复补丁引入后变得可复现。
+
+#主要错误日志
+未知
+
+#问题根因
+根本原因是驱动探测函数 `mtk_iommu_probe` 中的调用顺序不当。
+`iommu_device_register` 函数在 `driver data` 中的 `hw_list` 成员初始化之前被调用。`iommu_device_register` 注册后会触发 probe client 设备的动作，进而调用 `mtk_iommu_device_group` 回调。该回调函数使用 `list_first_entry` 访问 `hw_list`，但此时尚未初始化（且 `list_first_entry` 对空列表不具备安全性），从而导致 NULL 指针引用。
+
+#解决方案
+调整 `mtk_iommu_probe` 函数中的初始化顺序，确保 `hw_list` 相关的数据结构初始化完成之后，再调用 `iommu_device_sysfs_add` 和 `iommu_device_register`。同时修正了错误处理路径的跳转标签，以保证在注册失败时能正确回滚链表添加操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aff1d3df4c219f5cda14def1f5d5a1e63f33086e

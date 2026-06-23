@@ -1,0 +1,20 @@
+#标题
+md/raid5: retry_aligned_read 函数重叠条带处理导致软锁卡死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在运行 RAID5 阵列时，若 `retry_aligned_read()` 遇到重叠条带，内核会陷入无限循环，导致 CPU 发生 soft lockup（软锁死），系统响应受阻。
+
+#主要错误日志
+未知
+
+#问题根因
+当 `retry_aligned_read()` 遇到重叠条带时，原逻辑调用 `raid5_release_stripe()` 将条带释放到无锁链表 `released_stripes` 中。在下一个 `raid5d` 循环迭代中，`release_stripe_list()` 将该条带（因设置了 `STRIPE_HANDLE`）转移到 `handle_list`，但 `retry_aligned_read()` 随后通过 `find_get_stripe()` -> `list_del_init()` 将条带从 `handle_list` 中移除。这导致 `handle_stripe()` 无法处理该条带以解决重叠问题，从而引发无限循环和 soft lockup。
+
+#解决方案
+在 `add_stripe_bio` 失败的处理路径中，不再使用 `raid5_release_stripe()`，而是改用 `__release_stripe()` 并直接将条带放入 `temp_inactive_list`。这避免了条带进入 `released_stripes` 链表，允许 `raid5d` 跳出循环，重叠问题将在后续 `handle_stripe()` 处理该条带时得到解决。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eb45ac9d49ba7f8538604e5a3ced1e872f151468

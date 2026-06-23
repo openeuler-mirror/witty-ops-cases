@@ -1,0 +1,23 @@
+#标题
+wifi: mt76: mt7915: 注销流程中因竞态条件导致的 use-after-free 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 mt7915 PCI 设备（如执行驱动卸载或设备拔出）的过程中，若此时系统正在执行 crash dump 工作队列，内核可能发生 Use-After-Free（UAF）故障，导致内核崩溃（panic）或内存数据破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因是 `mt7915_mac_dump_work()` 与设备注销流程之间存在竞态条件。具体过程如下：
+1. CPU 0（移除路径）：调用 `mt7915_pci_remove()` -> `mt7915_unregister_device()` -> `mt7915_coredump_unregister()`，此时 `dev->coredump.crash_data` 被释放（`vfree`）。
+2. CPU 1（工作队列路径）：调用 `mt7915_sys_recovery_set()` -> `mt7915_reset()` -> `queue_work()`。
+3. 此时 `dump_work` 可能仍在运行或待执行，当 `mt7915_mac_dump_work()` 执行时，尝试访问已经被释放的 `crash_data` 指针，触发 UAF 漏洞。
+
+#解决方案
+在 `mt7915_unregister_device()` 函数中，于释放 `crash_data` 之前调用 `cancel_work_sync(&dev->dump_work)`。该操作确保所有待处理或正在执行的 dump 工作项均已完成并被取消，从而同步工作队列与注销流程，防止对已释放内存的访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22849b3f47cbb4dae7f0176d66becee405731504

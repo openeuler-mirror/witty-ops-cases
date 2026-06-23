@@ -1,0 +1,25 @@
+#标题
+XFS 远程属性读取时磁盘错误误用 ENODATA 导致空指针崩溃或错误返回
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当底层磁盘发生介质错误并返回 ENODATA 时，XFS 扩展属性处理逻辑可能出现以下两种故障现象：
+1. 内核空指针引用崩溃：在 `xfs_attr_leaf_get()` 函数中，因错误码被误判为 `-ENOATTR`（即 `-ENODATA`），导致尝试释放空的缓冲区指针，从而触发 NULL pointer dereference。
+2. 用户态误报：磁盘 I/O 错误被错误地传播为“属性未找到”，用户无法感知真实的介质故障。
+
+#主要错误日志
+未知
+
+#问题根因
+XFS 代码中 `ENODATA`（即 `ENOATTR`）具有特定的语义，表示“请求的属性名未找到”。然而，底层磁盘在发生介质错误时也可能返回 `ENODATA`。
+代码逻辑未对这两者进行区分，导致磁盘错误被误认为是“属性不存在”。特别是在 `xfs_attr_leaf_get()` 中，代码逻辑为：
+`if (error == -ENOATTR) { xfs_trans_brelse(args->trans, bp); ... }`
+当磁盘错误返回 `ENODATA` 时，`bp` 指针为空，该逻辑错误地进入分支并执行释放操作，从而导致空指针解引用。
+
+#解决方案
+在 XFS 底层 I/O 读取函数中拦截磁盘返回的 `ENODATA` 错误码，并将其转换为标准的 I/O 错误 `-EIO`，避免其传播至上层 xattr 逻辑引发歧义或崩溃。具体修改位置包括 `xfs_attr_rmtval_get()` 和 `xfs_da_read_buf()`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/82ebfbed675402258555e1dfa59cbdc561c1c188

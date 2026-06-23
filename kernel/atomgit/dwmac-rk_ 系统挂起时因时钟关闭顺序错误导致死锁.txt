@@ -1,0 +1,20 @@
+#标题
+dwmac-rk: 系统挂起时因时钟关闭顺序错误导致死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RK3576 Sige5 平台上，系统挂起过程中出现死机现象。具体表现为：当系统尝试挂起第二个网络接口时，内核发生挂起，导致系统无法正常进入待机状态。注：挂起第一个网络接口通常正常，因为第二个设备会保持 GRF 所需的时钟处于启用状态。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `gmac_clk_enable` 函数的禁用流程中，代码顺序错误。`set_clock_selection()` 函数需要向 GRF（General Register Files）寄存器写入数据，此操作依赖于特定的时钟处于运行状态。原代码先调用了 `clk_bulk_disable_unprepare` 和 `clk_disable_unprepare` 关闭了时钟，随后才调用 `set_clock_selection()`。这导致在时钟已关闭的情况下尝试访问 GRF 寄存器，从而引发系统挂起。
+
+#解决方案
+调整 `gmac_clk_enable` 函数中禁用逻辑的顺序。将 `set_clock_selection()` 的调用移至 `clk_bulk_disable_unprepare` 和 `clk_disable_unprepare` 之前执行，确保在访问 GRF 寄存器时相关的时钟信号仍然有效，待寄存器配置完成后再关闭时钟。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/87d12800fad7bc12c0d263befd09c03af70e649a

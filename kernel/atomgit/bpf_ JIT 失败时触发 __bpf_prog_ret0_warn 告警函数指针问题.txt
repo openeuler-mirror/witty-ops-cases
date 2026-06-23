@@ -1,0 +1,20 @@
+#标题
+bpf: JIT 失败时触发 __bpf_prog_ret0_warn 告警函数指针问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 BPF 程序 JIT 编译失败时，内核错误地使用了 `__bpf_prog_ret0_warn` 函数指针。这可能导致内核逻辑异常或不必要的警告调用，影响 BPF 程序的正常 fallback 逻辑。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bpf_prog_select_runtime` 函数中，局部变量 `jit_needed` 被初始化为 `false`。当 JIT 编译失败时，由于 `jit_needed` 状态不正确，导致内核未能正确处理失败路径，而是进入了使用 `__bpf_prog_ret0_warn` 的逻辑分支。根本原因在于未正确继承 `fp->jit_requested` 的状态，导致 JIT 请求状态丢失。
+
+#解决方案
+将 `bpf_prog_select_runtime` 函数中 `jit_needed` 变量的初始化值从 `false` 修改为 `fp->jit_requested`，确保在后续处理流程中（特别是 JIT 失败时）能够正确识别原始的 JIT 请求状态，从而避免错误的函数指针赋值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ab3971fa156472870bbed0e6638dc2d33c1bf82

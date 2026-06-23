@@ -1,0 +1,21 @@
+#标题
+urma: 发送状态错误处理逻辑优化及日志级别调整
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 URMA 驱动的数据路径发送处理过程中，当出现 `UBCORE_CR_ACK_TIMEOUT_ERR`（ACK 超时错误）时，内核会以错误级别（`ubcm_log_err`）打印日志。由于超时错误在特定场景下属于预期的网络行为，高频打印会导致内核日志缓冲区被刷屏，可能影响系统性能或掩盖其他关键错误信息。
+
+#主要错误日志
+"Tx status error. cr_cnt %d, status %d, comp_len %u, user_ctx: 0x%llx.\n"
+
+#问题根因
+发送完成处理函数 `ubmad_send_work_handler` 对错误状态的判断过于宽泛。原逻辑仅判断 `cr.status != UBCORE_CR_SUCCESS`，将 `UBCORE_CR_ACK_TIMEOUT_ERR` 也归类为严重错误并高频打印。实际上，ACK 超时错误不应触发与严重硬件故障相同级别的错误日志输出。
+
+#解决方案
+1. **调整错误判断逻辑**：在检查 `cr.status` 时，增加对 `UBCORE_CR_ACK_TIMEOUT_ERR` 的排除判断（`cr.status != UBCORE_CR_ACK_TIMEOUT_ERR`），即仅在非成功且非 ACK 超时的情况下才视为严重错误。
+2. **降低日志打印频率**：将日志打印接口从 `ubcm_log_err` 修改为 `ubcm_log_err_rl`（Rate Limited），通过限速机制防止日志风暴。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/06d09b5922f61adc610f0ba9c8c1942c46b4fb21

@@ -1,0 +1,20 @@
+#标题
+fuse: 终止未提交请求导致 io-uring 链表损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 FUSE 的 io-uring 接口时，若请求被终止且尚未提交，会导致内核链表结构损坏，可能引发内核崩溃或内存越界访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fuse_uring_req_end` 函数中处理终止请求时，仅将 `ent->fuse_req` 置空，但未将请求对象 `req` 从其所属的链表中删除。当请求结构体随后被释放或重用时，链表指针仍指向无效内存，导致链表损坏。
+
+#解决方案
+在 `fuse_uring_req_end` 函数中，持有队列锁后将请求从链表中移除。具体修复为在设置 `ent->fuse_req = NULL` 之前，调用 `list_del_init(&req->list)` 初始化请求的链表节点，确保请求从任何所属链表中安全脱链。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f27c5da4453700f9d70b012e0c61242349da62dc

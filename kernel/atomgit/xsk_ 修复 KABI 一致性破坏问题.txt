@@ -1,0 +1,22 @@
+#标题
+xsk: 修复 KABI 一致性破坏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在引入修复 AF_XDP 通用接收路径竞态条件的补丁后，内核数据结构 `xsk_buff_pool` 发生了 KABI（内核应用程序二进制接口）破坏。该问题主要影响内核模块的兼容性检查，可能导致依赖特定结构体布局的内核模块（如驱动程序）加载失败或运行异常，属于内核接口稳定性问题。
+
+#主要错误日志
+未知
+
+#问题根因
+前序提交 a1356ac7749c ("xsk: Fix race condition in AF_XDP generic RX path") 为了修复竞态条件，在 `struct xsk_buff_pool` 结构体中新增了成员变量 `spinlock_t rx_lock`。这一改动改变了结构体的内存布局，导致结构体大小或成员偏移量发生变化，从而破坏了 KABI 的一致性保证。
+
+#解决方案
+通过调整成员变量的位置和定义方式，保持结构体原本的大小和布局：
+1. 将 `spinlock_t rx_lock` 从 `struct xsk_buff_pool` 中移除，改用 `KABI_FILL_HOLE` 宏在结构体空洞处填充该锁，确保不改变结构体原有边界。
+2. 在 `struct xdp_sock` 结构体中新增 `spinlock_t rx_lock` 作为保留字段，以维持整体数据结构的关联性与 KABI 一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01f96f34890061edeb40c9c072b1ee106b61e7de

@@ -1,0 +1,27 @@
+#标题
+drm/amd/display: HDCP功能引发slab-use-after-free故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理AMD显卡HDCP（High-bandwidth Digital Content Protection）相关显示操作时，例如更新显示配置、移除显示设备或重置显示，内核发生 Slab Use-After-Free 错误。该问题可能导致内核崩溃或系统不稳定。
+
+#主要错误日志
+slab-use-after-free in hdcp
+
+#问题根因
+在 `hdcp_update_display`、`hdcp_remove_display`、`hdcp_reset_display` 及 `update_config` 等函数处理 `amdgpu_dm_connector` 指针时，代码逻辑未正确管理对象的引用计数。
+具体表现为：
+1. 在将新的 `aconnector` 指针赋值给 `hdcp_w->aconnector` 数组前，未增加该对象的引用计数。
+2. 在移除或重置显示时，未对旧的 `aconnector` 指针执行 `drm_connector_put` 操作以减少引用计数。
+这导致当对象在其他地方被释放后，HDCP 工作队列中仍持有指向该已释放内存区域的悬垂指针，后续访问该指针时触发 Use-After-Free。
+
+#解决方案
+修复补丁通过引入引用计数机制来解决该问题：
+1. 在 `hdcp_update_display` 和 `update_config` 函数中，当设置 `hdcp_w->aconnector[conn_index]` 指向新的 `aconnector` 前，调用 `drm_connector_get` 增加引用计数；如果该位置原先存有有效指针，先调用 `drm_connector_put` 释放旧引用。
+2. 在 `hdcp_remove_display` 和 `hdcp_reset_display` 函数中，清理 `hdcp_w->aconnector[conn_index]` 指针前，调用 `drm_connector_put` 减少引用计数，并将指针置为 NULL。
+这确保了 connector 对象在不再被 HDCP 工作队列使用前不会被提前释放，防止了 Use-After-Free 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9820ba2d07c985ba094c6ce1ae8fb0a98fa2d22e

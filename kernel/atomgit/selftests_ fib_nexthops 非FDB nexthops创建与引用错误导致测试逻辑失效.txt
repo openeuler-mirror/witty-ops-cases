@@ -1,0 +1,28 @@
+#标题
+selftests: fib_nexthops 非FDB nexthops创建与引用错误导致测试逻辑失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `fib_nexthops.sh` 自测脚本中的 `ipv6_fdb_grp_fcnal` 和 `ipv4_fdb_grp_fcnal` 测试用例时，部分测试项虽然最终结果显示 [ OK ]（通过），但失败的原因与测试预期不符：
+1. 在测试“FDB nexthop group 包含 non-fdb nexthops”场景时，因创建 non-fdb nexthops 缺失设备参数，提前报错导致后续组合失败，而非预期的“组内类型不匹配”错误。
+2. 在测试“Non-Fdb Nexthop group 包含 fdb nexthops”场景时，错误地引用了之前创建失败的 non-fdb nexthops ID，导致测试未能按预期校验 fdb nexthops 的混用情况。
+
+#主要错误日志
+- Error: Device attribute required for non-blackhole and non-fdb nexthops.
+- Error: Invalid nexthop id.
+- Error: Nexthop id does not exist.
+
+#问题根因
+测试脚本 `fib_nexthops.sh` 存在两处逻辑缺陷：
+1. 创建 non-FDB nexthops 时未指定 `dev` 参数，导致命令执行失败，后续无法正确引用该 nexthop 进行组测试。
+2. IPv4 测试用例中，本应引用 FDB nexthops（ID 16/17）进行测试，实际错误引用了 non-FDB nexthops（ID 14/15），导致测试未覆盖真实的业务场景。
+
+#解决方案
+修改测试脚本 `tools/testing/selftests/net/fib_nexthops.sh`：
+1. 在创建 non-FDB nexthops 的命令中补充 `dev veth1` 参数，确保 nexthop 创建成功。
+2. 修正 IPv4 测试用例中的 nexthop ID 引用，将 `group 14/15` 修改为 `group 16/17`，将路由添加命令中的 `nhid 15` 修改为 `nhid 16`，确保测试使用正确类型的 nexthop。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/977b0155df2bcc93d93478482dc94ff3162ba727

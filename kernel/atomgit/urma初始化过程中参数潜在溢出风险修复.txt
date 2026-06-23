@@ -1,0 +1,20 @@
+#标题
+urma初始化过程中参数潜在溢出风险修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理URMA发送或接收完成队列时，若`cr->local_id`（Jetty ID）小于预设的`IPOURMA_WELL_KNOWN_JETTY_ID`，计算`eid_idx`时会发生整型下溢。此情况可能导致内核访问非法内存地址或逻辑判断错误，且错误日志中打印的索引值不准确。
+
+#主要错误日志
+"IPoURMA incorrect WQE jetty id in the completion record"
+
+#问题根因
+在原代码逻辑中，变量`eid_idx`的计算（`eid_idx = cr->local_id - IPOURMA_WELL_KNOWN_JETTY_ID`）被放在了校验`cr->local_id`合法性之前。当`cr->local_id`的值小于`IPOURMA_WELL_KNOWN_JETTY_ID`时，减法运算发生下溢，导致`eid_idx`变量数值异常；同时错误日志打印的是异常的`eid_idx`而非原始的`cr->local_id`，干扰问题定位。
+
+#解决方案
+调整代码执行顺序，将`eid_idx`的初始化计算移动到`cr->local_id`的合法性校验之后，确保只有在ID合法时才进行减法运算，避免了潜在的整型下溢风险。同时，将错误分支中的日志打印参数从`eid_idx`修改为原始的`cr->local_id`，并同步修正了错误描述字符串，确保日志信息准确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a867ae199d61859ecd9bba18ed8e7f828bc9e947

@@ -1,0 +1,30 @@
+#标题
+usb: gadget: composite_dev_cleanup 中的 use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB Gadget 驱动初始化过程中，若内存分配失败，系统触发 KASAN 检测到的 use-after-free 错误。具体表现为内核报告“BUG: KASAN: use-after-free in composite_dev_cleanup”，导致 init 进程崩溃或内核异常。
+
+#主要错误日志
+BUG: KASAN: use-after-free in composite_dev_cleanup+0xf4/0x2c0
+Read of size 8 at addr 0000004827837a00 by task init/1
+CPU: 10 PID: 1 Comm: init Tainted: G           O      5.10.97-oh #1
+Call trace:
+ kasan_report+0x188/0x1cc
+ __asan_load8+0xb4/0xbc
+ composite_dev_cleanup+0xf4/0x2c0
+ configfs_composite_bind+0x210/0x7ac
+ udc_bind_to_driver+0xb4/0x1ec
+ usb_gadget_probe_driver+0xec/0x21c
+ gadget_dev_desc_UDC_store+0x264/0x27c
+
+#问题根因
+在 `configfs_composite_bind` 调用 `composite_os_desc_req_prepare` 函数时，若 `kmalloc` 分配 `cdev->os_desc_req->buf` 失败，代码逻辑会调用 `usb_ep_free_request` 释放 `cdev->os_desc_req` 指向的内存，但未将 `cdev->os_desc_req` 指针置为 NULL。随后在错误处理流程中，`composite_dev_cleanup` 函数检查到 `cdev->os_desc_req` 不为 NULL，试图再次访问并释放该指针，引发 use-after-free 问题。
+
+#解决方案
+在 `composite_os_desc_req_prepare` 函数中，当 `cdev->os_desc_req->buf` 分配失败且已调用 `usb_ep_free_request` 释放请求后，显式将 `cdev->os_desc_req` 指针置为 NULL。此举确保后续 `composite_dev_cleanup` 检查该指针时判定为空，避免重复释放或非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9cb07fd22253a6513041eced2a1c43870280398

@@ -1,0 +1,34 @@
+#标题
+ext4 非 extent inode 空洞长度计算溢出导致内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在块大小大于 4KB 的 ext4 文件系统中，对非 extent inode（即使用间接块映射的 inode）执行 FIEMAP 相关操作（如执行 fsstress 测试）时，触发内核 WARNING 并可能导致无限循环。调用栈显示异常发生在 `iomap_iter_done` 函数中。
+
+#主要错误日志
+```text
+------------[ cut here ]------------
+WARNING: CPU: 3 PID: 434101 at fs/iomap/iter.c:34 iomap_iter_done+0x148/0x190
+CPU: 3 UID: 0 PID: 434101 Comm: fsstress Not tainted 6.16.0-rc7+ #128 PREEMPT(voluntary)
+...
+Call trace:
+ iomap_iter_done+0x148/0x190 (P)
+ iomap_iter+0x174/0x230
+ iomap_fiemap+0x154/0x1d8
+ ext4_fiemap+0x110/0x140 [ext4]
+ do_vfs_ioctl+0x4b8/0xbc0
+ __arm64_sys_ioctl+0x8c/0x120
+...
+---[ end trace 0000000000000000 ]---
+```
+
+#问题根因
+在 `ext4_ind_map_blocks()` 函数中，用于计算空洞长度的变量 `count` 被定义为 `int` 类型。当文件系统块大小大于 4KB 时，计算出的空洞长度极易超过 `INT_MAX`，导致整数溢出。溢出后返回的空洞长度为 0，进而触发 iomap 基础设施中的 WARNING 及死循环。
+
+#解决方案
+将 `fs/ext4/indirect.c` 中 `ext4_ind_map_blocks()` 函数内的 `count` 变量类型从 `int` 修改为 `u64`，并将赋值逻辑中的 `min_t(unsigned int, ...)` 修改为 `umin(...)`，以防止大块大小场景下的整数溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a48b42946059f2b0dd76ca40e4579ee08f85623c

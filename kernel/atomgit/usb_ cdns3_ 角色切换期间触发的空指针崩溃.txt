@@ -1,0 +1,30 @@
+#标题
+usb: cdns3: 角色切换期间触发的空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统挂起期间若发生 USB 角色切换，在恢复流程中会触发内核空指针引用，导致内核 Oops/Panic，具体表现为在 resume 过程中调用 `usb_hcd_is_primary_hcd` 时崩溃。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address 0000000000000208
+Internal error: Oops: 0000000096000004 [#1]  SMP
+pc : usb_hcd_is_primary_hcd+0x0/0x1c
+lr : cdns_host_resume+0x24/0x5c
+Call trace:
+ usb_hcd_is_primary_hcd+0x0/0x1c (P)
+ cdns_resume+0x6c/0xbc
+ cdns3_controller_resume.isra.0+0xe8/0x17c
+ cdns3_plat_resume+0x18/0x24
+ platform_pm_resume+0x2c/0x68
+
+#问题根因
+当系统处于挂起状态时，如果发生了角色变更，cdns3 驱动会在恢复期间切换到新模式。然而，在 resume 上下文中切换到主机模式会导致 NULL 指针解引用。
+具体原因为：主机角色的 start() 操作会注册一个 xhci-hcd 设备，但在 resume 路径中该设备的 probe 会被延迟。此时，主机角色的 resume() 操作错误地假定 xhci-hcd 设备已经完成探测，实际上并未如此，从而引发空指针引用。
+
+#解决方案
+在 `cdns_resume` 函数中增加对 `role_changed` 状态的检查。如果检测到角色已发生切换，则跳过新角色的 resume 操作，避免在 xhci-hcd 设备未完成探测时调用其 resume 回调，从而修复空指针引用问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a599da3042bfdf18815b9992db6d65dcb76fbfeb

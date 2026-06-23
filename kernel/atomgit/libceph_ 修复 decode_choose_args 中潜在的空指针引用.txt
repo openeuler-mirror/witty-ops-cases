@@ -1,0 +1,20 @@
+#标题
+libceph: 修复 decode_choose_args 中潜在的空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 CEPH_MSG_OSD_MAP 消息并解码 CRUSH map 时，若接收到的消息中包含损坏的数据（例如特定的 bucket_index 指向了一个 NULL 桶），内核在后续处理访问该桶时会发生空指针引用，可能导致内核崩溃或异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `decode_choose_args()` 函数中，解码 `crush_choose_arg_map` 时，从消息中读取 `bucket_index`。虽然代码检查了该索引是否超过 `max_buckets`，但未检查该索引位置对应的 `c->buckets[bucket_index]` 是否为空。由于 CRUSH map 中某些索引可能不指向实际桶而被设置为 NULL，若收到损坏的消息包含此类索引，代码将直接访问空指针导致崩溃。
+
+#解决方案
+在 `decode_choose_args()` 函数中扩展对 `bucket_index` 的校验逻辑。在访问 `c->buckets[bucket_index]` 成员之前，先判断该指针是否为 NULL。若指针为 NULL，则跳过访问并判定参数无效，从而避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7807a00ebe3be957b72efbe080283e409dd143e9

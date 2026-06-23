@@ -1,0 +1,20 @@
+#标题
+Conexant声卡驱动未检查jack检测注册返回值导致潜在内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在Conexant声卡驱动（cx8070或SN6140型号）加载过程中，如果jack检测回调注册失败（例如内存分配失败），驱动仍会继续执行probe初始化流程。这会导致后续处理jack事件或访问相关结构体时，因访问未初始化的数据结构而引发内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `cx_probe`（实际对应补丁上下文中的 `patch_conexant_auto`）中，调用 `snd_hda_jack_detect_enable_callback()` 时的返回值被忽略。该函数返回的是一个指针，若注册失败（如内存分配失败）会返回错误指针（error pointer），驱动代码未使用 `IS_ERR()` 进行检查，导致错误状态未被捕获。
+
+#解决方案
+在调用 `snd_hda_jack_detect_enable_callback()` 后增加返回值检查逻辑。使用 `IS_ERR()` 检查返回的指针是否为错误指针，若是错误，则通过 `PTR_ERR()` 获取错误码，并跳转至错误处理流程（`goto error`），从而阻止驱动在注册失败的情况下继续加载。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a58aac2b4adc9ecb47bb445e3041fe4cc413ace3

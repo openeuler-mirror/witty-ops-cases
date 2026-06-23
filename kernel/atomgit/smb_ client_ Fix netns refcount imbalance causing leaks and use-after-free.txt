@@ -1,0 +1,26 @@
+#标题
+smb: client: Fix netns refcount imbalance causing leaks and use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SMB客户端在网络命名空间处理过程中存在引用计数不平衡问题。具体表现为：
+1. 网络命名空间引用计数泄漏。
+2. 在服务器连接中断或重连场景下，引发 Use-After-Free（释放后使用）风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `generic_ip_connect` 函数中，代码获取了 `netns` 的引用（`get_net`），原本设计在错误路径或 `clean_demultiplex_info` 中释放。然而，在 `cifs_abort_connection` 函数中关闭并释放 socket（`sock_release`）时，没有相应地释放该 `netns` 引用。这导致了引用计数的泄漏。此外，这种引用计数的不平衡管理导致了后续潜在的 Use-After-Free 问题。
+
+#解决方案
+1. 在 `cifs_abort_connection` 函数中，当释放 socket（`server->ssocket` 设为 NULL）时，增加调用 `put_net(cifs_net_ns(server))` 以配对释放网络命名空间引用。
+2. 调整 `generic_ip_connect` 函数中的引用释放逻辑：
+   - 移除 `bind_socket` 失败时的 `put_net` 调用，将释放责任转移到 socket 释放点或最终清理函数中。
+   - 移除 `ip_rfc1001_connect` 失败时的 `put_net` 调用。
+   - 更新注释，明确说明 `netns` 引用将在 socket 释放时（设为 NULL 时）、启动线程前的失败路径中以及最终的 `clean_demultiplex_info` 中释放，确保引用计数生命周期管理的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e485a965b040151342042978a1227e808389714

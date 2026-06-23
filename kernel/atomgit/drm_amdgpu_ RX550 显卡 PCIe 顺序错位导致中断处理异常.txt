@@ -1,0 +1,23 @@
+#标题
+drm/amdgpu: RX550 显卡 PCIe 顺序错位导致中断处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构上使用 RX550 显卡时，出现 PCIe 顺序错位问题。该故障导致中断处理逻辑判断错误，可能引发中断处理流程异常或中断丢失，影响显卡正常工作。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `amdgpu_ih_fix_loongarch_pcie_order_start` 函数中，修复 PCIe 顺序错位的逻辑存在缺陷：
+1. 在遍历中断环缓冲区查找标记 `0xDEADBEFF` 时，未对索引进行对齐检查。由于 `0xDEADBEFF` 本应是 4 字节对齐的数据，当单个字节错位时可能误将非对齐位置的数据识别为标记，导致错误的重启检查。
+2. 针对写入指针（wptr）与旧读取指针（old_rptr）的判断条件覆盖不全。原代码仅检查 `old_rptr == ((wptr + 16) & ptr_mask)`，遗漏了 `old_rptr == ((wptr + 32) & ptr_mask)` 的场景，导致在特定偏移量下错误返回 `IRQ_NONE`，中断处理未正确执行。
+
+#解决方案
+1. 增加索引对齐检查：在遍历 ring buffer 检查 `0xDEADBEFF` 标记时，增加条件 `(i % 4) != 3`，确保仅在 4 字节对齐的正确位置进行匹配，防止误判。
+2. 扩展中断返回判断逻辑：在 `amdgpu_ih_process` 函数中，补充对 `old_rptr == ((wptr + 32) & adev->irq.ih.ptr_mask)` 的判断，修正中断处理返回值逻辑，避免错误返回 `IRQ_NONE`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd39904efa03dea6242ec8fc10cda02c51346852

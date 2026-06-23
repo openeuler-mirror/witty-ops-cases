@@ -1,0 +1,26 @@
+#标题
+arm64/mpam: root组缺省配置导致内存带宽限制失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MPAM（Memory System Resource Partitioning and Monitoring）架构下，当 root 组（根控制组）的配置缺失时，系统未能正确应用内存带宽的硬限制和优先级默认值。这导致 root 组被错误地允许使用空闲内存带宽，破坏了资源隔离预期，可能导致关键资源分配失效或系统行为不符合 QoS 策略。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `mpam_reprogram_ris_partid` 中，当处理 root 组配置缺失的情况时，代码逻辑存在缺陷：
+1. 对于 MBW_MAX（最大内存带宽）特性，当配置缺失时，`limit` 变量被错误地初始化为 `false`，导致跳过带宽限制的写入操作。
+2. 对于 intpri（内部优先级）特性，当配置缺失时，代码仅依据 `mpam_feat_intpri_part_0_low` 特性位计算默认值，未能根据资源类型（如 MB、L3、L2）获取正确的架构默认优先级。
+
+这导致在重新编程 RIS partid 时，默认的硬限制和优先级设置未被显式下发。
+
+#解决方案
+修改 `mpam_reprogram_ris_partid` 函数逻辑，强制更新默认值：
+1. 将 MBW_MAX 特性在配置缺失时的 `limit` 默认值由 `false` 修改为 `true`，确保带宽限制寄存器被写入默认值。
+2. 新增辅助函数 `mpam_intpri_default_val`，根据 class 类型（MEMORY/CACHE 及其级别）动态获取正确的优先级默认值；在配置缺失时，使用该函数返回值设置 INTPRI 字段，替代原有的静态计算逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a26ee3d2d87a76c319663c2c3f05f02cbd06738b

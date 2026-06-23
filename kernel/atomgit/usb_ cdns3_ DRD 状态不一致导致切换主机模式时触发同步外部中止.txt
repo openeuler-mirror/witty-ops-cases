@@ -1,0 +1,26 @@
+#标题
+usb: cdns3: DRD 状态不一致导致切换主机模式时触发同步外部中止
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 cdns3_gadget_start() 初始化失败时，DRD 硬件处于 gadget 模式，但软件状态仍为 INACTIVE，导致软硬件状态不一致。在此状态下通过 sysfs 切换到 host 模式时，角色状态未正确设置为 ACTIVE，导致清理流程被跳过，违反 DRD 控制器设计规范。最终在配置主机控制器时触发同步外部中止，系统崩溃。
+
+#主要错误日志
+[  516.440698] configfs-gadget 13180000.usb: failed to start g1: -19
+[  516.442035] cdns-usb3 13180000.usb: Failed to add gadget
+[  516.443278] cdns-usb3 13180000.usb: set role 2 has failed
+...
+[ 1301.375722] xhci-hcd xhci-hcd.1.auto: xHCI Host Controller
+[ 1301.377716] Internal error: synchronous external abort: 96000010 [#1] PREEMPT SMP
+[ 1301.382485] pc : xhci_gen_setup+0xa4/0x408
+
+#问题根因
+当 cdns3_gadget_start() 失败时，错误处理路径未调用 cdns_drd_gadget_off() 将 DRD 硬件状态复位。这导致 DRD 硬件保持在 gadget 模式，而软件状态仍记录为 INACTIVE。随后在切换到 host 模式时，由于状态不一致，cdns_role_stop() 误判状态而跳过清理操作，未按规范返回空闲状态即进行角色切换，导致 xhci_gen_setup() 访问控制器时触发同步外部中止。
+
+#解决方案
+在 __cdns3_gadget_init 函数中，当 cdns3_gadget_start() 调用失败时，在返回前增加调用 cdns_drd_gadget_off(cdns)，以确保正确清理 DRD gadget 状态，使软硬件状态一致，避免后续角色切换时的异常崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ed476b36a72c7049078d03e3257a94dc00b8ce07

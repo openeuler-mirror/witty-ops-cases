@@ -1,0 +1,31 @@
+#标题
+ksmbd: RPC handle list access 递归锁导致连接挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+客户端尝试打开命名管道时连接挂起，系统出现不可中断的睡眠状态。使用 Samba 的 rpcclient 工具执行 srvinfo 命令时进程无响应。
+
+#主要错误日志
+"echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+task:kworker/0:0 state:D stack:0 pid:5021 tgid:5021 ppid:2 flags:0x00200000
+Workqueue: ksmbd-io handle_ksmbd_work
+Call trace:
+__schedule from schedule+0x3c/0x58
+schedule from schedule_preempt_disabled+0xc/0x10
+schedule_preempt_disabled from rwsem_down_read_slowpath+0x1b0/0x1d8
+rwsem_down_read_slowpath from down_read+0x28/0x30
+down_read from ksmbd_session_rpc_method+0x18/0x3c
+ksmbd_session_rpc_method from ksmbd_rpc_open+0x34/0x68
+ksmbd_rpc_open from ksmbd_session_rpc_open+0x194/0x228
+ksmbd_session_rpc_open from create_smb2_pipe+0x8c/0x2c8
+
+#问题根因
+自提交 305853cce3794 修复 RPC handle list 访问的竞态条件以来，`ksmbd_session_rpc_open` 函数在持有写锁 (`down_write(&sess->rpc_lock)`) 的情况下调用了 `ksmbd_rpc_open`，而后者进一步调用 `ksmbd_session_rpc_method`。`ksmbd_session_rpc_method` 内部试图获取同一个锁的读锁 (`down_read(&sess->rpc_lock)`)，导致递归锁定从而引发死锁。
+
+#解决方案
+移除 `ksmbd_session_rpc_method` 内部的加锁操作，改为使用 `lockdep_assert_held` 断言调用者已持有锁。调整所有 `ksmbd_session_rpc_method` 的调用点（如 `smb2_get_info_file_pipe`、`ksmbd_rpc_write`、`ksmbd_rpc_read`、`ksmbd_rpc_ioctl`），在调用前由调用者显式获取读锁 (`down_read`)，调用后释放锁 (`up_read`)，从而避免在已持有写锁时再次尝试获取读锁造成的死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d187fa61e6e614b7f35fafff72264f5096887601

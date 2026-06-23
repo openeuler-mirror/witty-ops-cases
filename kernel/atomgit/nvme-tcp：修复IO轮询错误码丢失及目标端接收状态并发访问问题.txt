@@ -1,0 +1,25 @@
+#标题
+nvme-tcp：修复IO轮询错误码丢失及目标端接收状态并发访问问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 NVMe over TCP 启用轮询（polling）模式下，如果接收数据过程中发生错误，上层调用者无法感知该错误，导致IO处理流程异常。
+2. 在高并发场景下，NVMe TCP 目标端（target）在处理命令响应时，可能读取到不一致的队列命令指针与接收状态，导致逻辑判断错误或潜在的内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **Host端轮询逻辑缺陷**：函数 `nvme_tcp_poll` 忽略了 `nvme_tcp_try_recv` 的返回值，直接返回 `queue->nr_cqe`。当 `nvme_tcp_try_recv` 返回错误码（负值）时，该错误信息被丢弃，导致上层无法正确处理接收失败的情况。
+2. **Target端并发访问缺陷**：存在读写竞态条件。`nvmet_tcp_queue_response` 函数读取 `queue->cmd` 和 `queue->rcv_state` 时未使用适当的内存屏障或同步机制，而 `nvmet_prepare_receive_pdu` 函数在更新这两个字段时也未确保顺序可见性。这导致读取端可能观察到更新了一半的状态（例如 `cmd` 已更新但 `rcv_state` 仍为旧值），从而引发错误判断。
+
+#解决方案
+1. **修复轮询返回值**：修改 `nvme_tcp_poll` 函数，捕获 `nvme_tcp_try_recv` 的返回值。如果返回值为负数（表示错误），则直接返回该错误码，否则返回完成队列条目数。
+2. **修复并发访问**：
+   - 在写入端 `nvmet_prepare_receive_pdu` 中，使用 `WRITE_ONCE` 更新 `queue->cmd`，并使用 `smp_store_release` 更新 `queue->rcv_state`，确保 `cmd` 的更新在 `rcv_state` 更新之前对其他CPU可见。
+   - 在读取端 `nvmet_tcp_queue_response` 中，使用 `smp_load_acquire` 读取 `queue->rcv_state`，并使用 `READ_ONCE` 读取 `queue->cmd`，确保读到正确的状态与指针对应关系。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6c9163ab751c7f43b516254497fc42e8a73a9c1d

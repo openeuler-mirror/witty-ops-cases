@@ -1,0 +1,20 @@
+#标题
+rxrpc 服务预分配调用 ID 冲突引发清理函数断言失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户空间使用 AF_RXRPC 提供服务并尝试预分配一个已被占用的 Call ID 时，内核错误处理路径逻辑不完整。在返回 `-EBADSLT` 错误码前，清理函数 `rxrpc_cleanup_call()` 会触发断言失败，因为对应的调用对象既未被标记为完成，也未被标记为已释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `rxrpc_service_prealloc_one()` 的错误处理路径 `id_in_use` 中，当检测到 Call ID 冲突时，代码直接调用 `rxrpc_cleanup_call(call)` 进行清理。此时该 `call` 对象的状态不正确：它没有被设置为完成状态，也没有被标记为已释放状态。这导致 `rxrpc_cleanup_call()` 内部的断言检查失败。
+
+#解决方案
+在错误处理路径 `id_in_use` 中，于调用 `rxrpc_cleanup_call(call)` 之前，先调用 `rxrpc_prefail_call(call, RXRPC_CALL_LOCAL_ERROR, -EBADSLT)` 设置调用状态。这会将调用标记为失败和释放状态，从而通过后续清理函数的断言检查，修复了状态不一致导致的内核断言失败问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ef8bcf62be50311fef45f981cbdf687f51499964

@@ -1,0 +1,20 @@
+#标题
+classmate-laptop 驱动 sysfs 接口访问导致空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 classmate-laptop 驱动的生命周期内（如设备初始化未完成或正在注销时），若用户空间通过 sysfs 节点访问加速度计的 sensitivity 或 g_select 属性，或打开 input 设备，内核将引发空指针引用（NULL pointer dereference），导致 Oops 或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `cmpc_accel_sensitivity_show_v4`、`cmpc_accel_sensitivity_store_v4`、`cmpc_accel_g_select_show_v4`、`cmpc_accel_g_select_store_v4` 以及 `cmpc_accel_open_v4` 等接口函数中，直接使用 `dev_get_drvdata` 获取 `inputdev` 和 `accel` 指针并进行解引用，未检查指针是否为 NULL。当设备驱动数据未正确初始化或已被清理时，访问这些指针导致内核崩溃。
+
+#解决方案
+在相关 sysfs 回调函数及 `open` 函数中增加防御性编程检查。在调用 `dev_get_drvdata` 获取 `inputdev` 和 `accel` 指针后，立即判断指针是否为 NULL，若为 NULL 则直接返回 `-ENXIO` 错误码，避免对空指针进行解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3ae14198a8941971332346f1a54744bb102cf44d

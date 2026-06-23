@@ -1,0 +1,25 @@
+#标题
+fuse: io-uring请求取消存在竞态条件导致use-after-free风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 FUSE io-uring 的情况下，当应用程序尝试取消一个正在被 fuse-server io-uring 任务处理的请求时，可能发生竞态条件。具体表现为：应用程序移除请求的同时，服务端任务正在获取该请求，导致请求被错误处理或引发内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+task-A（应用程序）在 `request_wait_answer` 中尝试移除设置了 `FR_PENDING` 标志的请求。同时，task-B（fuse-server io-uring 任务）通过 `FUSE_IO_URING_CMD_COMMIT_AND_FETCH` 处理该请求，并在 `fuse_uring_ent_assign_req()` 中从 pending 列表访问该请求。该代码路径此前未受 `fiq->lock` 保护，因此与 task-A 的移除操作存在竞态风险。原有的锁机制保护不完整且影响扩展性。
+
+#解决方案
+引入专门的处理函数来移除已取消的请求，避免在 io-uring 路径中使用 `fiq->lock` 以保证扩展性。
+具体修改如下：
+1. 新增 `fuse_remove_pending_req` 函数，用于安全地从队列中移除 pending 状态的请求。
+2. 在 `request_wait_answer` 中区分处理 io-uring 请求，调用新增的 `fuse_uring_remove_pending_req`（针对 io-uring）或 `fuse_remove_pending_req`（针对普通请求）。
+3. 移除 `fuse_uring_add_req_to_ring_ent` 中不完整的 `fiq->lock` 锁保护。
+4. 新增 `FR_URING` 标志位用于识别 io-uring 请求，并在请求入队时设置该标志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a99f35a82898b2c06db58e8d93679e1d15c2a4de

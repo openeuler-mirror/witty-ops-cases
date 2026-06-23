@@ -1,0 +1,25 @@
+#标题
+FSMC NAND 探测失败导致设备无法识别
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 FSMC NAND 控制器时，若设备树中未明确指定 `buswidth` 属性为 2（16位），驱动程序探测过程会直接失败。系统日志显示 NAND 设备被识别为 8 位总线宽度，随后报错 "No NAND device found"，导致 NAND flash 无法正常工作。
+
+#主要错误日志
+fsmc-nand 10100000.flash: FSMC device partno 090, manufacturer 80, revision 00, config 00
+nand: device found, Manufacturer ID: 0x20, Chip ID: 0xb1
+nand: ST Micro 10100000.flash
+nand: bus width 8 instead of 16 bits
+nand: No NAND device found
+fsmc-nand 10100000.flash: probe with driver fsmc-nand failed with error -22
+
+#问题根因
+驱动程序在解析设备树属性 `bank-width` 时逻辑存在缺陷。当设备树中未配置 `bank-width` 属性时，代码未设置 `NAND_BUSWIDTH_AUTO` 选项，导致驱动未能自动检测总线宽度，进而无法正确匹配设备配置引发探测失败。
+
+#解决方案
+修改 `fsmc_nand_probe_config_dt` 函数逻辑：当设备树中未读取到 `bank-width` 属性，或该属性值为 1 时，显式设置 `NAND_BUSWIDTH_AUTO` 标志位，允许驱动程序自动检测总线宽度，从而修复探测失败的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b7b13ff802f468fd33cc5a1c27b6b7a4d2922d64

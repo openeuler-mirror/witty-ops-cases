@@ -1,0 +1,23 @@
+#标题
+clk: tegra: periph 修复错误处理缺陷及无符号比较警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+编译过程中产生静态分析警告："Unsigned expression compared with zero: rate < 0"。同时，由于变量类型定义错误，可能导致该模块在运行时无法正确处理负的错误返回值，影响时钟频率确定的准确性。
+
+#主要错误日志
+./drivers/clk/tegra/clk-periph.c:59:5-9: WARNING: Unsigned expression compared with zero: rate < 0
+
+#问题根因
+在 `clk_periph_determine_rate` 函数中，变量 `rate` 被定义为 `unsigned long` 类型。
+1. 该变量用于接收 `div_ops->determine_rate` 的返回值，该函数可能返回负的错误码。
+2. 代码随后执行 `if (rate < 0)` 判断，由于 `rate` 是无符号类型，负的错误码会被解析为极大的正整数，导致条件判断逻辑失效，无法正确捕获错误。
+3. 编译器检测到无符号变量与零比较是无意义的操作，因此触发编译警告。
+
+#解决方案
+将变量 `rate` 的类型从 `unsigned long` 修改为 `long`，使其能够正确存储和识别负的错误码。同时，在赋值给 `req->rate`（unsigned long 类型）时，显式添加 `(unsigned long)` 强制类型转换，确保逻辑正确且消除编译警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/86878f905118e27788921be79b34e7d974332825

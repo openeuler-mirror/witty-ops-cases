@@ -1,0 +1,20 @@
+#标题
+btrfs: COW写操作分配ordered extent失败导致qgroup预留内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 BTRFS 文件系统的 COW（写时复制）写操作时，如果内核分配 ordered extent 失败（例如内存不足），会导致 qgroup 的数据预留空间发生泄漏。该故障属于资源泄漏，通常不会立即引发系统崩溃或报错打印，但随着时间推移可能导致预留空间耗尽，进而影响后续相关文件操作的执行。
+
+#主要错误日志
+未知
+
+#问题根因
+在 COW 写操作的路径中，内核在尝试分配 ordered extent 之前已经进行了 qgroup 数据预留。当分配 ordered extent 失败时，代码逻辑直接返回了 -ENOMEM 错误指针，但遗漏了对 qgroup 预留空间的回滚或释放操作。具体而言，之前调用了 `btrfs_qgroup_release_data()`，但在错误处理路径中未调用对应的 `btrfs_qgroup_free_refroot()`，导致这部分预留配额无法被正确归还，从而引发泄漏。
+
+#解决方案
+在 `alloc_ordered_extent` 函数中增加错误处理逻辑。当 `kmem_cache_zalloc` 分配 ordered extent 失败且当前非 NOCOW 模式（即 COW 模式）时，显式调用 `btrfs_qgroup_free_refroot()` 函数释放之前预留的 qgroup 空间，确保资源正确回收，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d3261975565bb601bd27e68ca2790f1d97960b5a

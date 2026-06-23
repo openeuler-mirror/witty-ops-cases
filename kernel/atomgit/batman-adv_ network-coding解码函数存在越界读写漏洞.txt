@@ -1,0 +1,23 @@
+#标题
+batman-adv: network-coding解码函数存在越界读写漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+batman-adv模块的网络编码功能在处理并解码数据包时，对接收到的数据长度校验不严。攻击者可通过发送特制的报文触发校验逻辑漏洞，导致内核发生越界读取和越界写入，可能造成内核崩溃或内存破坏，存在安全风险（CVE-2025-39839）。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `batadv_nc_skb_decode_packet()` 在处理网络编码数据包时，仅校验了 `coded_len` 是否超过目标 skb 的总长度（`skb->len`），但未考虑到 XOR 操作是从 `sizeof(struct batadv_unicast_packet)` 偏移处开始的，这减少了有效载荷的头部空间。同时，代码完全未校验源 skb（`nc_packet->skb`）的长度。这导致攻击者可以构造恶意的 `coded_len`，使得内核在执行 XOR 解码操作时，在源 skb 和目标 skb 中进行越界读取和写入。
+
+#解决方案
+在执行 XOR 操作前，增加对源 skb 和目标 skb 长度的严格校验。具体修改为：
+1. 校验目标 skb：确保 `coding_len` 加上头部大小（`h_size`）不超过目标 skb 的总长度。
+2. 校验源 skb：新增校验逻辑，确保 `coding_len` 加上头部大小不超过源 skb（`nc_packet->skb`）的总长度。
+若校验失败则直接返回 NULL，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fe431589bf325eddb0615731b1f6b7bf54feb899

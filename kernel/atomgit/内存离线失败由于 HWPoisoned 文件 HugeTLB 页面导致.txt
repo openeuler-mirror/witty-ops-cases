@@ -1,0 +1,20 @@
+#标题
+内存离线失败由于 HWPoisoned 文件 HugeTLB 页面导致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统中存在被硬件中毒且无映射的文件类型 HugeTLB 页面时，执行内存离线操作会失败，导致无法成功移除该内存块。
+
+#主要错误日志
+未知
+
+#问题根因
+当 HugeTLB 页面被标记为 HWPoisoned 且为文件类型时，内存失败处理机制会增加该页面的引用计数。然而，`dissolve_free_huge_pages` 函数在处理此类页面时，未处理该引用计数，导致页面溶解失败，进而阻塞内存离线流程。具体条件为：页面被标记为 `hwpoison`、属于 `hugetlb` 类型、`mapping` 字段为空（无映射）且引用计数为 1。
+
+#解决方案
+在 `dissolve_free_huge_pages` 函数中增加判断逻辑：如果检测到页面是 HWPoisoned 的 HugeTLB 页面，且无映射且引用计数为 1，则调用 `folio_put` 释放由内存失败处理机制增加的引用计数，从而允许页面正常溶解，修复内存离线失败的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf99320e6858fac60f2471c994ff4e97ab68449d

@@ -1,0 +1,22 @@
+#标题
+NFSD: filecache 初始化失败未正确标记状态导致潜在风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 NFSD (Network File System Daemon) 的 filecache 初始化过程中途失败时（例如 `rhltable_init` 返回错误），系统未能将 filecache 的状态标记为“down”。这可能导致内核其他部分误判 filecache 处于可用状态，进而引发未定义的行为或后续的内存访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `nfsd_file_cache_init` 中，如果 `rhltable_init` 初始化失败，代码直接返回了错误码，但遗漏了清除 `NFSD_FILE_CACHE_UP` 标志位的操作。由于该标志位可能在初始化前期已被设置，初始化失败后未将其清除，导致 filecache 实际上不可用，但状态标志却显示为“UP”。
+
+#解决方案
+修改 `nfsd_file_cache_init` 函数的错误处理路径：
+1. 将 `rhltable_init` 失败后的 `return ret` 修改为 `goto out`，统一跳转至函数末尾的清理逻辑。
+2. 在 `out` 标签处增加检查逻辑：如果返回值 `ret` 表示错误（非0），则调用 `clear_bit(NFSD_FILE_CACHE_UP, &nfsd_file_flags)` 显式将 filecache 状态标记为不可用，确保状态与实际初始化结果一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/15581b7e12b24b397ec68c682c26a8d367af51a7

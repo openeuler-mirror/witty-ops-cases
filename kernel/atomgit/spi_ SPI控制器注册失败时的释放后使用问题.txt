@@ -1,0 +1,20 @@
+#标题
+spi: SPI控制器注册失败时的释放后使用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在SPI控制器注册过程中，如果队列初始化函数 `spi_controller_initialize_queue` 执行失败，内核在执行错误处理流程时会发生释放后使用故障。具体表现为在清理设备结构体后继续访问相关资源，可能导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `spi_register_controller` 函数中，当 `spi_controller_initialize_queue` 失败时，原代码逻辑立即调用 `device_del(&ctlr->dev)` 删除设备，随后跳转至 `free_bus_id` 标签继续执行。这导致在 `device_del` 之后，代码仍可能通过 `ctlr` 结构体访问相关成员（如互斥锁或链表），从而引发释放后使用问题。
+
+#解决方案
+调整错误处理流程的跳转逻辑。当 `spi_controller_initialize_queue` 失败时，不再直接删除设备并跳转，而是直接跳转至新增的 `del_ctrl` 标签。`del_ctrl` 标签统一封装了 `device_del` 操作，并确保在释放总线ID（`free_bus_id`）之前完成设备删除，保证了资源释放顺序的正确性，避免了结构体被非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0b56534f2f58ee654be9c81c496d5b4032342ac6

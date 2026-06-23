@@ -1,0 +1,20 @@
+#标题
+uvcvideo: 双流并行导致 USB 包丢失及 MJPEG 帧合并故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+特定摄像头（如 Sonix Technology Co. 292A）在同时运行两个并行流（例如一路 H.264 关键帧与一路 MJPEG 流）时，会出现 USB 包丢失现象。具体表现为驱动程序错误地将两个连续的 JPEG 图像作为单个帧输出，导致视频流解析异常或画面错误。
+
+#主要错误日志
+未知
+
+#问题根因
+特定摄像头在双流并行运行场景下存在硬件缺陷，当 H.264 流发布关键帧时，会导致 MJPEG 流的 USB 包中丢失 EOF（End of Frame，帧结束）标记。驱动程序缺少对这种情况的容错处理，无法正确识别帧边界，从而错误地将两帧图像合并为一帧。
+
+#解决方案
+在 `uvc_video_decode_start` 函数中增加对 `UVC_QUIRK_MJPEG_NO_EOF` quirk 标志的检查逻辑。对于受影响的设备，通过检测数据包中的 SOI（Start of Image，图像开始，0xFF 0xD8）标记来判断新帧的开始。如果当前 buffer 已有数据且检测到新的 SOI 标记，则强制将当前 buffer 状态置为 READY 并标记错误，同时翻转 FID（Field ID）以正确处理下一帧数据，从而修正帧边界识别问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/99ca07b73e422721c6384e56beb823fa342b4cc7

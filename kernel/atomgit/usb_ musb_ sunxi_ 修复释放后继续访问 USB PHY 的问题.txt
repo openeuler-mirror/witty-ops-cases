@@ -1,0 +1,25 @@
+#标题
+usb: musb: sunxi: 修复释放后继续访问 USB PHY 的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sunxi musb 驱动使用过程中，若发生子设备驱动的注销与再次注册，会导致内核访问已被释放的 USB PHY 资源。这可能引发内核崩溃或驱动功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+问题的根本原因在于提交 6ed05c68cbca 引入了 `devm_usb_put_phy()` 调用。
+具体流程如下：
+1. 父驱动 `sunxi_musb_driver` 注册时，通过 `devm_usb_get_phy()` 获取并持有 USB PHY。
+2. 子驱动 `musb_driver` 注销时，在 `sunxi_musb_exit()` 中调用 `devm_usb_put_phy()` 提前释放了 PHY 资源。
+3. 当子驱动 `musb_driver` 再次注册并调用 `sunxi_musb_init()` 时，尝试使用该 PHY 指针，但此时 PHY 已被释放，导致访问已释放内存。
+
+#解决方案
+移除 `sunxi_musb_exit()` 函数中的 `devm_usb_put_phy()` 调用。
+由于父驱动使用 `devm_*` 托管机制获取 PHY，PHY 的生命周期应由设备驱动模型自动管理，在父设备卸载时自动释放，无需在子驱动的退出流程中手动释放，从而避免生命周期管理混乱。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5b83eb8ac1ca7ed5f540df5a08195423b4d095a9

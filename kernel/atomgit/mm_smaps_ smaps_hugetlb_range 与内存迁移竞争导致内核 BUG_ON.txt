@@ -1,0 +1,24 @@
+#标题
+mm/smaps: smaps_hugetlb_range 与内存迁移竞争导致内核 BUG_ON
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进程进行内存迁移（migration）的同时读取 /proc/PID/smaps 文件时，内核触发 BUG_ON 导致系统崩溃或异常终止。具体场景为 smaps_hugetlb_range() 函数处理 HugeTLB 页表项时，未持有页表锁（ptl）与并发的 migrate_pages 操作发生竞争，导致在 pfn_swap_entry_to_page() 函数中触发断言失败。
+
+#主要错误日志
+BUG_ON (in pfn_swap_entry_to_page)
+
+#问题根因
+smaps_hugetlb_range() 函数在处理 pte 时未持有页表锁（ptl）。当该函数与内存迁移操作并发执行时，发生如下竞争时序：
+1. smaps_hugetlb_range 调用 huge_ptep_get 获取 pte。
+2. migrate_pages 调用 remove_migration_ptes 清除迁移条目并解锁 folio。
+3. smaps_hugetlb_range 继续调用 pfn_swap_entry_folio，此时由于迁移状态已改变或数据结构不一致，导致后续在 pfn_swap_entry_to_page 中触发 BUG_ON。
+根本原因在于缺少页表锁保护，导致页表项状态在读取过程中被并发修改。
+
+#解决方案
+在 smaps_hugetlb_range() 函数中引入页表锁保护。具体修改为：在读取 pte 之前调用 huge_pte_lock() 获取锁，覆盖整个 pte 处理逻辑，并在处理完成后调用 spin_unlock() 释放锁，从而避免与内存迁移等操作的竞争风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/537b86446b51c40ffe116fa28ad86a0d377f2ddc

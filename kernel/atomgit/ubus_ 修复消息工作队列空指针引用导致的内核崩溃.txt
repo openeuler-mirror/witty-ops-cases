@@ -1,0 +1,20 @@
+#标题
+ubus: 修复消息工作队列空指针引用导致的内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UBUS 驱动接收消息处理流程中，若特定消息类型对应的工作队列未注册（为空），调用 queue_work() 时会引发空指针解引用，导致内核 Panic。
+
+#主要错误日志
+[    ] ubus: no workqueue registered for msg %u\n
+
+#问题根因
+在执行 `queue_work()` 前未检查对应消息类型的工作队列是否存在。若 `rx_msg_wq[msg]` 为空指针，内核对其进行解引用操作时触发 Panic。该问题源自提交 63179ebb7e8e ("ub:ubus: Add UBUS receive message framework")。
+
+#解决方案
+在消息有效性检查函数 `msg_rx_code_valid` 中增加对 `rx_msg_wq[msg]` 的非空校验。如果工作队列未注册，则打印错误日志并返回 false，阻止后续流程访问空指针，从而避免内核崩溃。同时将原有的 `msg` 判断逻辑重构为 `switch-case` 结构以提高代码健壮性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e505a7803615efd56ea9ab14e0afa64686939b8f

@@ -1,0 +1,26 @@
+#标题
+ptp_hisi 驱动并发打印竞态与设备卸载资源残留故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 PTP 设备探测过程中，若并发访问计数器，打印出的 `rx_cnt` 数值可能与实际操作步骤不一致（如已执行自减但打印值未体现），导致日志信息误报。
+2. 在驱动探测失败或设备移除时，内核链表中的设备节点未被正确删除，导致链表残留节点，可能引发内存泄漏或后续对该链表遍历时的异常（如访问已释放内存）。
+
+#主要错误日志
+- 推断：`failed to probe rx device, please check the asl file!`
+- 推断：`rx_total:%u, current rx_total:%u, rx_cnt:%u`
+- 推断：`waiting for devices...rx total:%u, now:%u. tx total:1, now:%u`
+- 推断：`failed to probe, no base rx device, please check the asl file!`
+
+#问题根因
+1. **并发打印竞态问题**：在 `hisi_ptp_get_rx_resource` 函数中，代码先释放了自旋锁 `write_unlock_irqrestore`，随后才调用 `dev_err` 打印 `rx_cnt`。由于锁已释放，其他线程可能并发修改 `rx_cnt`，导致打印出的计数值与预期不符；同时打印语句中使用的 `ptp->rx_cnt` 在打印前已被自减，但日志格式期望打印操作前的计数值。
+2. **链表节点删除缺失**：在 `hisi_ptp_probe` 函数的多个错误处理分支（如 `rx_base` 为空或后续初始化失败）中，直接返回错误码但未调用链表删除操作将当前设备节点从 `ptp_rx_list` 中移除，导致资源残留。
+
+#解决方案
+1. **修复打印竞态**：调整锁的范围，将 `dev_err` 打印操作包含在 `write_lock` 保护范围内，确保打印时数据一致性；同时修正打印逻辑，对已自减的 `rx_cnt` 执行 `+1` 操作以还原打印前的真实计数值。
+2. **修复资源残留**：抽取公共资源移除逻辑到 `hisi_ptp_remove_resource` 函数中，在 `hisi_ptp_probe` 失败分支中增加调用该函数，确保设备探测失败时能正确从链表中删除节点并更新计数，防止资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/93dac68276a26355438abd7e6ffcf83b33cb2df6

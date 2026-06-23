@@ -1,0 +1,20 @@
+#标题
+net: macb: 修复 tx_ptr_lock 锁竞争导致内核崩溃问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统配置了 netpoll 或在 softirq 上下文中处理网络数据包时，内核可能发生死锁或产生调度错误，导致内核崩溃或网络发送路径挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序中的 `macb_start_xmit` 和 `macb_tx_poll` 函数可能在禁用底半部或禁用中断的上下文中被调用。然而，代码中其他获取 `tx_ptr_lock` 锁的函数仅使用了 `spin_lock` 或 `spin_lock_bh`，未能正确保存中断状态。这导致了锁竞争不一致，可能引发死锁或调度异常。
+
+#解决方案
+将所有涉及 `tx_ptr_lock` 的锁操作统一修改为 `spin_lock_irqsave` 和 `spin_unlock_irqrestore`，以确保在无论当前中断状态如何的情况下，都能安全地获取锁。同时，修正了 `macb_tx_restart` 和 `macb_start_xmit` 中对 `bp->lock` 的锁操作，去除了不必要的 `_irq` 后缀，因为此时外层的 `tx_ptr_lock` 已经处理了中断保护。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8c2391f3f04f4e882c3a03b745b9563a162f66c8

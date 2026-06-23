@@ -1,0 +1,30 @@
+#标题
+drm/hisilicon/hibmc: DP 接口在特定场景下无法显示
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在极少数特定场景下，HiSilicon hibmc DRM 驱动的 DP 接口出现无法显示的问题。
+
+#主要错误日志
+- "dp link training clock recovery %u timers failed\n"
+- "Get lane status failed, ret: %d\n"
+- "get lane status failed\n"
+
+#问题根因
+Commit 信息指出该问题是对头文件 `dp_reg.h` 重构后引入的回归问题。从代码变更分析，根本原因涉及 DP 链路训练和初始化流程中的多处缺陷：
+1. **链路训练参数获取缺失**：`hibmc_dp_link_training` 函数中未从 DPCD 读取并更新接收端的能力（如 `rx_dpcd_revision`、`is_tps3`、`is_tps4`），导致训练模式选择错误（例如未正确使用 TPS3/TPS4 训练模式），且最大训练重试次数判断逻辑不正确。
+2. **Serdes 初始化时序错误**：原代码在 `hibmc_dp_hw_init` 阶段调用 `hibmc_dp_serdes_init` 进行初始化，这与链路训练流程的时序要求不符，修复后将其移除，改为在链路训练配置阶段进行 `serdes_rate_switch`。
+3. **复位与配置流程缺陷**：初始化过程中缺少必要的复位操作（`DPTX_RST`）与延时，且 HDCP 配置顺序不正确。
+4. **模式验证与控制逻辑不足**：缺少对显示模式的带宽验证（`hibmc_dp_mode_valid`），且显示使能/禁用时的寄存器位操作使用了错误的掩码或位定义（如 MST 使能、Timing Gen 使能）。
+
+#解决方案
+1. **完善链路训练能力协商**：新增 `hibmc_dp_update_caps` 函数，在链路训练前正确读取并更新 DPCD 版本、支持的训练模式（TPS3/TPS4）及链路能力，修正训练模式选择逻辑。
+2. **修正初始化与复位流程**：在 `hibmc_dp_hw_init` 中增加复位控制逻辑（写 0 后延时再写 1），调整 HDCP 配置顺序，移除不合理的 `hibmc_dp_serdes_init` 调用。
+3. **优化链路训练重试机制**：根据 DPCD 版本动态设置 Clock Recovery 阶段的最大重试次数（DP 1.4 为 10 次，旧版本为 80 次），并修正状态读取失败时的返回值处理。
+4. **新增模式有效性验证**：实现 `hibmc_dp_mode_valid` 回调函数，根据链路带宽计算能力，拒绝超出带宽范围的高分辨率模式。
+5. **修正寄存器操作定义**：修正 `HIBMC_DP_VIDEO_CTRL` 和 `HIBMC_DP_DPTX_GCTL0` 等寄存器的位操作，使用正确的宏定义（如 `HIBMC_DP_CFG_MST_ENABLE`、`HIBMC_DP_CFG_TIMING_GEN_ENABLE`）替代直接的位操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2a581acede344f1a7dc93c0ae6b155678045ec2b

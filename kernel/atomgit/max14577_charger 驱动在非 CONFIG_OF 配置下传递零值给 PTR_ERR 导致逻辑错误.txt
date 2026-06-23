@@ -1,0 +1,20 @@
+#标题
+max14577_charger 驱动在非 CONFIG_OF 配置下传递零值给 PTR_ERR 导致逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核未配置 CONFIG_OF 的情况下，max14577_charger 驱动加载过程中，probe 函数会将 NULL 指针传递给 PTR_ERR 宏，导致无法正确返回错误码（通常返回 0），可能引发后续异常或静态检查工具报错。
+
+#主要错误日志
+max14577_charger_probe() warn: passing zero to 'PTR_ERR'
+
+#问题根因
+当内核未开启 CONFIG_OF 时，max14577_charger_dt_init 函数直接返回 NULL。probe 函数使用 IS_ERR_OR_NULL 检查该返回值时，虽然判断条件成立，但在执行 return PTR_ERR(chg->pdata) 时，PTR_ERR 宏接收到的是 NULL（值为 0），导致返回了无效的错误码 0，而非预期的负错误码。
+
+#解决方案
+修改 max14577_charger_dt_init 函数在非 CONFIG_OF 配置下的返回值，由返回 NULL 改为返回 ERR_PTR(-ENODATA)；同时将 probe 函数中的判断逻辑由 IS_ERR_OR_NULL 改为 IS_ERR，确保驱动正确处理无设备树数据的情况并返回 -ENODATA 错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e403655d3dfcb463ae8b169b33bc02375a81f00

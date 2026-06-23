@@ -1,0 +1,20 @@
+#标题
+hwmon: drivetemp 驱动在 SCSI 错误发生时向用户空间输出垃圾数据
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当磁盘驱动器发生 SCSI 错误（例如磁盘被断开连接）时，drivetemp 驱动程序会向 hwmon 核心层传递错误的返回值。由于 hwmon 核心仅检查负的错误码，导致其误判操作成功，进而将未初始化的数据上报给用户空间，表现为读取到的温度传感器数据为随机值或垃圾数据。
+
+#主要错误日志
+未知
+
+#问题根因
+`scsi_execute_cmd()` 函数可能返回负值（Linux 标准错误码）或正值（SCSI 命令结果字段）。驱动程序原先直接将该返回值传递给 hwmon 核心，但 hwmon 核心只识别负值作为错误标志。当 SCSI 发生错误导致 `scsi_execute_cmd()` 返回正值时，hwmon 核心认为执行成功并读取了数据缓冲区，实际上该缓冲区内容未初始化或无效，导致垃圾数据输出。
+
+#解决方案
+修改 `drivetemp_scsi_command` 函数，捕获 `scsi_execute_cmd()` 的返回值。如果返回值为正数（表示 SCSI 错误），则将其转换为 `-EIO` 返回给 hwmon 核心，确保错误能被正确识别和处理，防止垃圾数据上报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a02b4525eca0cd7c09431cefb4a6bd75d56cecb5

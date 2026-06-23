@@ -1,0 +1,36 @@
+#标题
+bpf: bpf_fd_array_map_clear 函数缺少 cond_resched 导致 RCU stall
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理包含大量条目的 PROG_ARRAY 类型 BPF map 时，系统负载下触发 RCU stall。具体表现为内核检测到 RCU grace period 阻塞，并打印相关堆栈信息，涉及工作队列 `prog_array_map_clear_deferred` 的执行过程。
+
+#主要错误日志
+rcu: Stack dump where RCU GP kthread last ran:
+CPU: 0 UID: 0 PID: 30932 Comm: kworker/0:2 Not tainted 6.14.0-13195-g967e8def1100 #2 PREEMPT(undef)
+Workqueue: events prog_array_map_clear_deferred
+RIP: 0010:write_comp_data+0x38/0x90 kernel/kcov.c:246
+Call Trace:
+ <TASK>
+ prog_array_map_poke_run+0x77/0x380 kernel/bpf/arraymap.c:1096
+ __fd_array_map_delete_elem+0x197/0x310 kernel/bpf/arraymap.c:925
+ bpf_fd_array_map_clear kernel/bpf/arraymap.c:1000 [inline]
+ prog_array_map_clear_deferred+0x119/0x1b0 kernel/bpf/arraymap.c:1141
+ process_one_work+0x898/0x19d0 kernel/workqueue.c:3238
+ process_scheduled_works kernel/workqueue.c:3319 [inline]
+ worker_thread+0x770/0x10b0 kernel/workqueue.c:3400
+ kthread+0x465/0x880 kernel/kthread.c:464
+ ret_from_fork+0x4d/0x80 arch/x86/kernel/process.c:153
+ ret_from_fork_asm+0x19/0x30 arch/x86/entry/entry_64.S:245
+ </TASK>
+
+#问题根因
+在函数 `bpf_fd_array_map_clear()` 中，循环遍历并删除 map 元素时，每次迭代调用的 `prog_array_map_poke_run()` 函数开销较大。由于循环体内缺少 `cond_resched()` 调用，导致在处理拥有大量条目的 PROG_ARRAY map 时，进程长时间占用 CPU 不释放，无法调度其他任务（包括 RCU 回调），从而引发 RCU stall。
+
+#解决方案
+在 `bpf_fd_array_map_clear()` 函数的循环体中添加 `cond_resched()` 调用。在每次处理完一个 map 条目后，主动检查是否需要调度，允许 CPU 让出执行权，从而避免长时间原子执行导致的 RCU stall。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f4b8747d9684eaea60cfc71945a7dd002d74876e

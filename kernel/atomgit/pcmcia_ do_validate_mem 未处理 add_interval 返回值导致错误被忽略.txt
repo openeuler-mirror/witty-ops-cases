@@ -1,0 +1,20 @@
+#标题
+pcmcia: do_validate_mem 未处理 add_interval 返回值导致错误被忽略
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PCMCIA 设备进行内存验证（validate memory）过程中，若 `add_interval` 函数执行失败（例如内存分配失败），`do_validate_mem` 函数未能捕获该错误码并继续执行后续操作。这导致内存验证结果的不一致性（`mem_db_valid` 未成功更新但 `mem_db` 已被修改），可能引发 PCMCIA 设备内存资源管理异常或内核状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `do_validate_mem` 在调用 `add_interval(&s_data->mem_db_valid, base, size)` 时，原本忽略了其返回值，未进行错误处理。当 `add_interval` 内部发生错误（如内存分配失败）时，调用者无法感知，导致程序继续向下执行 `sub_interval` 操作，破坏了数据结构的完整性。
+
+#解决方案
+修改 `drivers/pcmcia/rsrc_nonstatic.c` 文件中的 `do_validate_mem` 函数，将 `add_interval` 的调用改为赋值给 `ret` 变量，并增加判断：若 `ret` 非零则立即返回错误码，防止在失败情况下继续修改内存数据库。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b24220a9351394214baa02379582c9b46af1edd7

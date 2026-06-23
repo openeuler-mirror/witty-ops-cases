@@ -1,0 +1,24 @@
+#标题
+atlantic: ATL2 固件缺失 set_power 接口导致 Wake-on-LAN 功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 Aquantia AQC113(C) 网卡且固件为 ATL2FW 的设备上，Wake-on-LAN (WOL) 功能无法正常工作。具体表现为：系统关机进入 S5 状态后，网卡未正确配置为低功耗待机模式而是直接断电，导致无法通过魔术包唤醒系统。此外，若网卡先前被 Windows 驱动配置为 WOL 使能，加载 atlantic 驱动后会错误地禁用 WOL 功能。
+
+#主要错误日志
+未知
+
+#问题根因
+ATL2FW 固件操作结构体 `aq_fw_ops` 中缺失 `set_power` 函数指针的实现。代码逻辑中 `set_power` 操作仅针对 `hw_atl` 实现，而 `hw_atl2` 对应的 `aq_a2_fw_ops` 结构体中未定义该接口，导致驱动无法在电源状态切换时向 ATL2 固件下发 WOL 配置参数。
+
+#解决方案
+为 ATL2 固件实现 `set_power` 回调函数。具体修改如下：
+1. 新增 `aq_a2_fw_set_wol_params` 函数，用于配置 MAC 地址、魔术包唤醒标志及链路唤醒标志，并设置固件模式为 `AQ_HOST_MODE_SLEEP_PROXY`。
+2. 新增 `aq_a2_fw_set_power` 函数，在 WOL 使能时调用上述参数配置函数。
+3. 将 `aq_a2_fw_set_power` 函数指针注册到 `aq_a2_fw_ops` 结构体中，补全固件操作接口。
+4. 新增宏定义 `AQ_FW_WAKE_ON_LINK_RTPM` 用于支持链路唤醒相关的特性判断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d3ab85e829e8619a2b840397b8b154e33c140bb

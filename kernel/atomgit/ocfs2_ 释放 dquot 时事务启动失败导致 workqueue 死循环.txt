@@ -1,0 +1,25 @@
+#标题
+ocfs2: 释放 dquot 时事务启动失败导致 workqueue 死循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 fstests generic/329 测试用例时，内核工作队列 `quota_release_workfn` 陷入死循环，不断重复调用 `ocfs2_release_dquot()` 函数。此时 OCFS2 文件系统状态已变为只读，导致事务启动持续失败。
+
+#主要错误日志
+[ 2918.123602 ][  T275 ] On-disk corruption discovered. Please run fsck.ocfs2 once the filesystem is unmounted.
+[ 2918.124034 ][  T275 ] (kworker/u135:1,275,11):ocfs2_release_dquot:765 ERROR: status = -30
+[ 2918.124452 ][  T275 ] (kworker/u135:1,275,11):ocfs2_release_dquot:795 ERROR: status = -30
+[ 2918.124883 ][  T275 ] (kworker/u135:1,275,11):ocfs2_start_trans:357 ERROR: status = -30
+[ 2918.125276 ][  T275 ] OCFS2: abort (device dm-0): ocfs2_start_trans: Detected aborted journal
+[ 2918.125710 ][  T275 ] On-disk corruption discovered. Please run fsck.ocfs2 once the filesystem is unmounted.
+
+#问题根因
+当文件系统处于异常状态（如磁盘损坏导致 journal abort）时，`ocfs2_release_dquot()` 尝试启动事务会失败并返回错误（如 -30，即 EROFS）。由于 `ocfs2_release_dquot()` 在事务启动失败时未将 dquot 标记为 inactive，导致 `quota_release_workfn()` 认为该 dquot 仍需处理，从而反复调用 `ocfs2_release_dquot()`，形成死循环。
+
+#解决方案
+参考 ext4 的 `dquot_release()` 实现逻辑，在 `ocfs2_release_dquot()` 中，当 `ocfs2_start_trans()` 启动事务失败（返回 PTR_ERR）时，显式调用 `clear_bit(DQ_ACTIVE_B, &dquot->dq_flags)` 将 dquot 标记为 inactive，从而打破 `quota_release_workfn()` 的重试循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c834e5535c8f76fff0ee9abf51c26fcfaab9a069

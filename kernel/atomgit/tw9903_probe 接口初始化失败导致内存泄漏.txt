@@ -1,0 +1,20 @@
+#标题
+tw9903_probe 接口初始化失败导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 tw9903 视频解码器驱动时，若硬件初始化过程中 `write_regs` 写入寄存器失败，驱动程序会直接返回错误码退出，但未释放此前在 `v4l2_ctrl_handler_init` 和 `v4l2_ctrl_new_std` 中分配的控制处理器内存，导致内核内存泄漏。
+
+#主要错误日志
+v4l2_err(client, "error initializing TW9903\n");
+
+#问题根因
+在 `tw9903_probe` 函数中，当 `write_regs(sd, initial_registers)` 执行失败进入错误处理路径时，代码仅打印错误日志并返回 `-EINVAL`，遗漏了调用 `v4l2_ctrl_handler_free(hdl)` 来释放已分配的内存资源。
+
+#解决方案
+在 `tw9903_probe` 函数的 `write_regs` 失败分支中，增加调用 `v4l2_ctrl_handler_free(hdl)`，确保在返回错误前释放控制处理器占用的内存，修复潜在的内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/733ffa46603f1993117bd16b622c0f536deb004a

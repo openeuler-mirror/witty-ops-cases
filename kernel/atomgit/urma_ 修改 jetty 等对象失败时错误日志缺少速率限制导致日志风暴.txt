@@ -1,0 +1,31 @@
+#标题
+urma: 修改 jetty 等对象失败时错误日志缺少速率限制导致日志风暴
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 URMA（User space Remote Memory Access）子系统运行过程中，若频繁调用 modify 接口（如 modify_jetty, modify_jfc, modify_jfs, modify_jfr）且底层驱动返回失败，内核日志缓冲区会被大量重复的错误信息填满，可能导致系统控制台响应缓慢或重要日志被覆盖丢失。
+
+#主要错误日志
+- [DRV_ERROR]Failed to modify jetty, id:%u, ret: %d.
+- [DRV_ERROR]Failed to modify jfc, jfc_id:%u, ret: %d.
+- [DRV_ERROR]Failed to modify jfs, jfs_id:%u, ret: %d.
+- [DRV_ERROR]Failed to modify jfr, jfr_id:%u.
+- failed to find jetty.
+- modify jetty failed, ret:%d.
+- failed to find jfc.
+- modify jfc failed, ret:%d.
+- failed to find jfs.
+- modify jfs failed, ret:%d.
+- failed to find jfr.
+- modify jfr failed, ret:%d.
+
+#问题根因
+在 `ubcore_jetty.c` 和 `uburma_cmd.c` 文件中，modify 相关的错误处理路径直接调用了 `ubcore_log_err` 或 `uburma_log_err` 函数打印错误日志。这些打印函数未实施速率限制。当业务层高频触发修改操作且硬件或驱动层持续返回错误时，日志打印缺乏保护机制，引发了内核日志风暴。
+
+#解决方案
+将 modify 相关失败路径中的日志打印函数从普通的 `ubcore_log_err` 和 `uburma_log_err` 替换为带速率限制功能的 `ubcore_log_err_rl` 和 `uburma_log_err_rl`。此举确保在错误高频发生时，日志打印频率受控，防止日志泛滥影响系统稳定性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/109585c4b2924b5e69435880632dcb747c1b10e5

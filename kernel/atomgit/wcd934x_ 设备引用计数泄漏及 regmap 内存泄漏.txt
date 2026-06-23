@@ -1,0 +1,25 @@
+#标题
+wcd934x: 设备引用计数泄漏及 regmap 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+wcd934x 音频编解码器驱动在初始化过程中存在资源泄漏问题。具体表现为：
+1. 设备引用计数泄漏：`wcd934x_codec_parse_data()` 函数调用 `of_slim_get_device()` 获取设备时增加了引用计数，但在成功路径下未释放该引用，导致设备对象无法正确释放。
+2. 内存泄漏：`regmap_init_slimbus()` 分配的 regmap 内存未绑定设备资源管理，设备移除时未自动释放，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 引用计数泄漏根因：调用链为 `of_slim_get_device() -> of_find_slim_device() -> device_find_child()`。根据 `device_find_child()` 的注释，其会增加设备的引用计数，使用后必须调用 `put_device()` 释放。原代码在 `wcd934x_codec_parse_data()` 成功路径下遗漏了 `put_device()` 调用。
+2. 内存泄漏根因：使用了 `regmap_init_slimbus()` 而非托管版本的 `devm_regmap_init_slimbus()`，导致设备移除时 regmap 内存未被自动清理。
+
+#解决方案
+1. 修复引用计数泄漏：在 `wcd934x_codec_parse_data()` 函数中增加对 `put_device()` 的调用；同时新增 `wcd934x_put_device_action()` 辅助函数，并在 probe 阶段通过 `devm_add_action_or_reset()` 注册该回调，确保设备引用计数在全生命周期内正确管理。
+2. 修复内存泄漏：将 `regmap_init_slimbus()` 替换为 `devm_regmap_init_slimbus()`，实现 regmap 内存的自动释放。
+3. 异常路径补丁：在 regmap 初始化失败的错误处理分支中，显式调用 `put_device()` 释放引用，避免错误路径下的泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f8f9edf7a6f3ea93065c1c1262de73acbf688d01

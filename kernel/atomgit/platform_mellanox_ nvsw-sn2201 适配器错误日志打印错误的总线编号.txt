@@ -1,0 +1,21 @@
+#标题
+platform/mellanox: nvsw-sn2201 适配器错误日志打印错误的总线编号
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Mellanox SN2201 系统驱动加载或运行过程中，当 `main_mux_devs` 适配器获取失败时，内核日志输出的错误信息中包含了错误的 I2C 总线编号。日志打印的是 `cpld_devs` 的总线编号，而非实际出错的 `main_mux_devs` 的总线编号，导致运维人员或自动化监控工具误判故障位置。
+
+#主要错误日志
+dev_err(nvsw_sn2201->dev, "Failed to get adapter for bus %d\n", ...);
+（注：该日志触发了错误的总线编号打印）
+
+#问题根因
+在 `nvsw_sn2201_i2c_completion_notify` 函数中，错误处理分支判断的是 `main_mux_devs->adapter` 是否为空，但在打印错误日志时，代码错误地引用了 `nvsw_sn2201->cpld_devs->nr` 作为总线编号，而非当前逻辑上下文相关的 `nvsw_sn2201->main_mux_devs->nr`。这是一个典型的复制粘贴错误或变量引用错误。
+
+#解决方案
+修改 `drivers/platform/mellanox/nvsw-sn2201.c` 文件中的日志打印代码，将 `dev_err` 函数中的总线编号参数从 `nvsw_sn2201->cpld_devs->nr` 修正为 `nvsw_sn2201->main_mux_devs->nr`，确保日志信息与实际的故障对象一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/54b99ce1d9998989f51f00d96fd8e39157514ffa

@@ -1,0 +1,20 @@
+#标题
+dmaengine: nbpfaxi DMA映射失败导致系统崩溃或内存损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 NBPF AXI DMA 控制器驱动进行数据传输时，若遇到 DMA 映射资源紧张等情况导致 `dma_map_single` 映射失败，驱动未捕获该错误并继续执行后续操作。这会导致 CPU 访问无效的 DMA 地址，进而引发内核 panic、oops 或不可预测的内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `nbpf_desc_page_alloc` 函数中调用 `dma_map_single` 进行 DMA 地址映射后，未检查返回值是否存在 `dma_mapping_error`。当 DMA 映射失败时，驱动程序未及时终止流程并清理已分配资源，导致后续代码使用了无效的 DMA 地址句柄。
+
+#解决方案
+在 `nbpf_desc_page_alloc` 函数中增加对 `dma_map_single` 返回值的检查。若检测到 `dma_mapping_error`，则跳转至 `unmap_error` 标签，在清理循环中对之前已成功映射的描述符执行 `dma_unmap_single` 操作，释放占用的映射资源，并返回 `-ENOMEM` 错误码，从而避免使用无效地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/621ed7c0eaa0131c2a6d035673a579fb44959671

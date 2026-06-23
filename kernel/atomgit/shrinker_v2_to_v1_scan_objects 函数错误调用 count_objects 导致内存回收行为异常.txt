@@ -1,0 +1,22 @@
+#标题
+shrinker_v2_to_v1_scan_objects 函数错误调用 count_objects 导致内存回收行为异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 v2 版本 shrinker 适配 v1 接口进行内存回收（shrink）操作时，系统调用行为不匹配。由于错误地调用了 `count_objects` 回调函数而非 `scan_objects`，导致内存回收流程无法正确执行扫描和释放操作，可能导致内存无法按预期回收，进而引发内存压力持续存在或相关子系统功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `shrinker_v2_to_v1_scan_objects` 在适配 v1 shrinker 接口时存在逻辑错误：原代码在应当执行扫描对象（scan_objects）的流程中，错误地调用了计数对象（count_objects）的回调指针。这导致了 shrinker 行为不匹配，使得内存回收机制失效。
+
+#解决方案
+修正 `mm/vmscan.c` 中 `shrinker_v2_to_v1_scan_objects` 函数的回调指针调用逻辑：
+1. 将 `shk_v2->v1->count_objects` 修改为 `shk_v2->v1->scan_objects`，确保在 scan 阶段调用正确的扫描回调函数。
+2. 将默认返回值从 `SHRINK_EMPTY` 修改为 `SHRINK_STOP`，以符合 scan_objects 接口的返回值语义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a05d03c310141f4b19051bc6f4785b25becb4c7e

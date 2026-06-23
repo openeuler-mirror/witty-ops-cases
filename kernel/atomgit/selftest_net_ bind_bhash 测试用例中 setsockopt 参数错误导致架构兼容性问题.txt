@@ -1,0 +1,22 @@
+#标题
+selftest/net: bind_bhash 测试用例中 setsockopt 参数错误导致架构兼容性问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Alpha、MIPS、PA-RISC、SPARC 等非 asm-generic 架构上运行 `bind_bhash` 自测试用例时，由于 `setsockopt()` 的参数传递错误，导致无法正确设置 `SO_REUSEADDR` 和 `SO_REUSEPORT` 套接字选项。虽然代码原意是同时设置这两个选项，但在特定架构下错误的参数值导致实际行为与预期不符，影响测试的有效性。
+
+#主要错误日志
+未知
+
+#问题根因
+测试代码 `bind_bhash.c` 错误地将 `SO_REUSEADDR | SO_REUSEPORT` 作为整数参数直接传递给 `setsockopt()`。
+在 asm-generic 定义中，`SO_REUSEADDR` 为 2，`SO_REUSEPORT` 为 15，按位或的结果 `(2 | 15) == 15`，恰好与 `SO_REUSEPORT` 的值相同，掩盖了错误。
+而在 Alpha、MIPS、PARISC、SPARC 等架构中，`SO_REUSEADDR` 为 0x0004，`SO_REUSEPORT` 为 0x0200，按位或的结果 (0x0204) 不等于任何有效的套接字选项名，导致设置失败或行为异常。
+
+#解决方案
+修改 `tools/testing/selftests/net/bind_bhash.c` 源码，将 `setup()` 和 `main()` 函数中调用 `bind_socket()` 时的参数从 `SO_REUSEADDR | SO_REUSEPORT` 修改为 `SO_REUSEPORT`，确保传入正确的套接字选项名称。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9c9a866087fdd261e17b0ed3cbadfbe054f565b4

@@ -1,0 +1,26 @@
+#标题
+netkit 在 L2 模式下无法设置自定义 MAC 地址
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 L2 模式下运行 Cilium 连接性测试套件时，无法为 netkit 设备指定自定义 MAC 地址。具体表现为 cilium-cni 尝试查询端点并设置 Pod 内接口的 MAC 地址时操作失败，netkit 设备不支持该配置功能。
+
+#主要错误日志
+Setting Ethernet address is not supported
+
+#问题根因
+netkit 驱动程序在实现中缺失了对 L2 模式下设置 MAC 地址的支持：
+1. `netkit_validate` 函数此前直接拒绝设置以太网地址，返回 `-EOPNOTSUPP`；
+2. `netkit_netdev_ops` 结构体中未注册 `ndo_set_mac_address` 回调函数，导致无法处理 MAC 地址修改请求。
+
+#解决方案
+修改 netkit 驱动以支持 L2 模式下的 MAC 地址设置：
+1. 新增 `netkit_set_macaddr` 函数，仅在 `NETKIT_L2` 模式下调用 `eth_mac_addr` 设置 MAC 地址，其他模式返回 `-EOPNOTSUPP`；
+2. 将该函数注册到 `net_device_ops` 的 `ndo_set_mac_address` 接口；
+3. 调整 `netkit_validate` 逻辑，移除对设置以太网地址的硬性拒绝，改为校验地址长度与有效性；
+4. 在 `netkit_new_link` 创建设备逻辑中，仅当未提供 `IFLA_ADDRESS` 参数时才生成随机 MAC 地址，允许用户传入的自定义地址生效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7ab0092929ba0d5b3e9183f434e802b29b5a97dc

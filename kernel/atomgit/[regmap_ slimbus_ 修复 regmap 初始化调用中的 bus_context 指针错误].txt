@@ -1,0 +1,30 @@
+#标题
+[regmap: slimbus: 修复 regmap 初始化调用中的 bus_context 指针错误]
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sdm845 Thundercomm Dragonboard 845c 开发板上播放音频时触发内核崩溃，导致无法处理内核分页请求。
+
+#主要错误日志
+```
+Unable to handle kernel paging request at virtual address ffff8000847cbad4
+...
+Call trace:
+ slim_xfer_msg+0x24/0x1ac [slimbus] (P)
+ slim_read+0x48/0x74 [slimbus]
+ regmap_slimbus_read+0x18/0x24 [regmap_slimbus]
+ _regmap_raw_read+0xe8/0x174
+ ...
+ wcd934x_hw_params+0x494/0x8b8 [snd_soc_wcd934x]
+```
+
+#问题根因
+在 `__devm_regmap_init_slimbus()` 和 `__regmap_init_slimbus()` 函数中，调用 `__regmap_init` 系列函数时传入了错误的 `bus_context` 指针参数（第3个参数）。代码错误地传递了 `&slimbus->dev` 或 `&slimbus`（指针的地址），而正确的参数应为 `slimbus`（指针本身，即 `struct slim_device *`）。这导致 regmap 子系统在后续操作中使用了错误的上下文地址，引发内存访问错误。
+
+#解决方案
+修正 `drivers/base/regmap/regmap-slimbus.c` 文件中的参数传递错误。在 `__regmap_init_slimbus` 和 `__devm_regmap_init_slimbus` 函数中，将 `__regmap_init` 和 `__devm_regmap_init` 的第三个参数（bus_context）分别从 `&slimbus->dev` 和 `&slimbus` 修改为正确的 `slimbus` 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9ebcfe0e59b628525db8cb8e7a96bfecc93c3768

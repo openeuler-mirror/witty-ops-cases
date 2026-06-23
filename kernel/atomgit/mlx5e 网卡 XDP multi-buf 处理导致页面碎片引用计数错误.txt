@@ -1,0 +1,34 @@
+#标题
+mlx5e 网卡 XDP multi-buf 处理导致页面碎片引用计数错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mlx5 网卡上使用 XDP multi-buf 程序并调用 bpf_xdp_pull_data() 调整数据包布局时（例如发送无负载报文触发 XDP 程序处理），触发内核 WARNING，提示页面引用计数错误（negative reference counting error）。该问题在执行 `drivers/net/xdp.py` selftest 中的 `test_xdp_native_tx_mb` 测试用例时被发现，同时在修改 MTU 等触发 RQ 释放的操作路径中也会触发。
+
+#主要错误日志
+WARNING: CPU: 0 PID: 188225 at ./include/net/page_pool/helpers.h:297 mlx5e_page_release_fragmented.isra.0+0xbd/0xe0 [mlx5_core]
+Call Trace:
+ <TASK>
+ mlx5e_free_rx_mpwqe+0x20a/0x250 [mlx5_core]
+ mlx5e_dealloc_rx_mpwqe+0x37/0xb0 [mlx5_core]
+ mlx5e_free_rx_descs+0x11a/0x170 [mlx5_core]
+ mlx5e_close_rq+0x78/0xa0 [mlx5_core]
+ ...
+ mlx5e_change_mtu+0x11d/0x490 [mlx5_core]
+ ...
+
+#问题根因
+XDP multi-buf 程序在运行期间可能会修改 XDP buffer 的布局（例如通过 bpf_xdp_pull_data 移动 header 导致 tail fragment 被丢弃）。之前的修复补丁假设 XDP buffer 布局在程序执行期间不会改变，导致驱动在处理 XDP_TX/XDP_REDIRECT/XDP_PASS 等 action 时，跳过了对已被 XDP 程序丢弃的 fragment 的计数。
+具体流程为：
+1. 驱动初始化页面碎片引用计数为 64。
+2. XDP 程序运行后丢弃了尾部 fragment，引用计数减为 63。
+3. 驱动侧未统计该被丢弃的 fragment，内部计数器仍为 0。
+4. 驱动释放页面时释放了 64 个 fragment，导致 pp_ref_count 变为 -1，触发引用计数异常。
+
+#解决方案
+修复补丁调整了 `mlx5e_skb_from_cqe_mpwrq_nonlinear` 函数中的碎片计数逻辑。针对 XDP 程序处理后的情况，恢复了对原始 XDP buffer fragments 的计数统计，确保所有原始碎片（包括被 XDP 程序丢弃的尾部碎片）都被正确计入驱动侧的引用计数管理中，避免因计数不匹配导致的 negative reference counting 错误。同时修正了 `xdp_update_skb_shared_info` 的 `nr_frags` 参数计算方式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5d9ba9918513c9d9ab70329d1b2814862d07635b

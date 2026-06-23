@@ -1,0 +1,29 @@
+#标题
+selftests/bpf: test_sockmap SENDPAGE 测试因数据逻辑错误返回失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 BPF sockmap 的 selftests 测试时，SENDPAGE 相关测试用例（特别是 push/pop 测试及 test_send_large）执行失败并返回错误。
+具体表现为：
+1. 在 push/pop 测试场景下，pop 操作的起始偏移量（txmsg_start_pop）设置为 4096，而测试参数 iov_length 设置为 1024，因偏移量超出数据长度范围导致测试返回错误。
+2. 数据验证逻辑与实际发送的数据模式不匹配，导致校验失败。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 test_sockmap 测试代码中 SENDPAGE 数据逻辑计算错误：
+1. **发送大小计算错误**：在 `msg_loop` 函数中，计算 `total_bytes` 时未区分 SENDPAGE 场景，错误地乘以了 `iov_count`，导致计算的总发送字节数与实际发送不符。实际上 sendfile 发送的总大小应为 `iov_length * cnt`。
+2. **数据填充逻辑错误**：在 `msg_loop_sendpage` 函数中，准备发送数据的循环逻辑有误，导致发送的数据内容与接收端验证逻辑不一致。
+3. **参数设置不合理**：在 `test_send_large` 函数中，`iov_length` 被设置为 1024，但在 pop 测试中偏移量设为 4096，导致 4096 > 1024 的越界错误。
+
+#解决方案
+修改测试代码逻辑以修正数据发送与验证流程：
+1. **修正发送大小计算**：在 `msg_loop` 中，SENDPAGE 场景下计算 `total_bytes` 时去除 `iov_count` 的乘积，仅使用 `iov_length * cnt`。
+2. **修正数据填充逻辑**：调整 `msg_loop_sendpage` 中的数据写入循环，确保每次发送的数据块内容正确生成。
+3. **调整测试参数**：将 `test_send_large` 中的 `iov_length` 从 1024 修改为 8192，确保其大于 pop 测试的偏移量 4096；同时调整 `chunk_sz` 计算逻辑，在 SENDPAGE 场景下使用 `iov_length` 而非 `iov_length * cnt`，以便正确进行数据校验。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c8df5e4d21ed8ad68aebb4c4cb77e730cc38409f

@@ -1,0 +1,20 @@
+#标题
+io_uring 在内存分配失败注入场景下触发 tctx xarray 非空警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用故障注入导致内存分配失败的场景下，io_uring 任务退出时触发内核警告。具体表现为在 `__io_uring_free` 函数中触发 `WARN_ON_ONCE`，提示 xarray 非空，但实际上并没有有效的节点存储其中。
+
+#主要错误日志
+WARNING: CPU: 0 PID: 16 at io_uring/tctx.c:51 __io_uring_free+0xfa/0x140 io_uring/tctx.c:51
+
+#问题根因
+当 `xa_store()` 在执行过程中遭遇内存分配失败（由 syzbot 注入故障模拟）时，可能会导致 xarray 的内部状态不一致。具体表现为 xarray 的 `->head` 指针非 NULL，但实际并未存储任何有效条目。这导致原有的 `xa_empty()` 检查误判 xarray 非空，从而在任务释放时触发警告。
+
+#解决方案
+修改 `__io_uring_free` 函数中的检查逻辑，暂不直接依赖 `xa_empty()` 进行判断。改为通过 `xa_for_each` 尝试遍历 xarray，如果确实能遍历到条目，则触发 `WARN_ON_ONCE(1)` 并退出循环。这是一个临时规避措施，用于解决 `xa_store()` 分配错误导致的 xarray 状态异常问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/017a1b1fbb58d4061ed76d1078976a60f635b4f1

@@ -1,0 +1,25 @@
+#标题
+ntfs3: run_unpack函数整数溢出导致潜在磁盘数据破坏或越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在打开文件并解析其MFT记录中的runlist时，若runlist数据被恶意构造或异常，可能触发整数溢出。此问题可能导致两种严重后果：
+1. 绕过访问权限检查，访问磁盘上的任意数据。
+2. 在RUN_DEALLOCATE场景下，破坏磁盘上的任意数据（误删非目标数据）。
+
+#主要错误日志
+未知
+
+#问题根因
+ntfs3文件系统的 `run_unpack` 函数在解码压缩的runlist数据时，对从MFT属性中提取的值（如 `dlcn`、`len`）缺乏有效性验证。在计算逻辑簇号（LCN）和虚拟簇号（VCN）时，直接执行加法运算（如 `lcn = prev_lcn + dlcn` 和 `next_vcn = vcn64 + len`），未检查是否发生整数溢出。恶意的MFT记录输入可触发此溢出，导致逻辑错误进而引发越界访问或数据破坏。
+
+#解决方案
+在 `run_unpack` 函数中引入整数溢出检查机制。具体修改如下：
+1. 包含 `<linux/overflow.h>` 头文件。
+2. 使用 `check_add_overflow` 函数替换原有的直接加法运算，分别用于 `prev_lcn + dlcn` 和 `vcn64 + len` 的计算。
+3. 若检测到溢出，函数立即返回 `-EINVAL`，阻止后续潜在的破坏性操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cb2012784f36e61594c66e63dd896dba5053ce72

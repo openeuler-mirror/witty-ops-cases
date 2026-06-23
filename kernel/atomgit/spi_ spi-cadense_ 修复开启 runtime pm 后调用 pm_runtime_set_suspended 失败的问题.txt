@@ -1,0 +1,20 @@
+#标题
+spi: spi-cadense: 修复开启 runtime pm 后调用 pm_runtime_set_suspended 失败的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Cadence SPI 驱动加载失败（probe 失败）或驱动卸载（remove）时，若设备已使能 runtime PM，调用 `pm_runtime_set_suspended()` 会返回 -EAGAIN 错误，导致设备挂起状态设置失败，影响驱动异常路径下的资源清理与状态管理。
+
+#主要错误日志
+未知
+
+#问题根因
+根据内核 Runtime PM 机制，若设备的 runtime PM 已处于 enabled 状态，调用 `pm_runtime_set_suspended()` 是无效的，函数会直接返回 -EAGAIN。驱动在 `cdns_spi_probe` 的错误处理路径和 `cdns_spi_remove` 移除路径中，先调用了 `pm_runtime_set_suspended()`，随后才调用 `pm_runtime_disable()`，此时 runtime PM 尚未禁用，导致设置挂起状态的操作失败。
+
+#解决方案
+调整 `pm_runtime_disable()` 与 `pm_runtime_set_suspended()` 的调用顺序。在 probe 失败路径和 remove 路径中，先调用 `pm_runtime_disable()` 禁用 runtime PM，随后再调用 `pm_runtime_set_suspended()` 设置设备状态，确保状态设置操作能够成功执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0a10d4af59cfbaead7f9199a95cec75412171f82

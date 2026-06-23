@@ -1,0 +1,20 @@
+#标题
+mm: shmem: 修复 swapout 时 ShmemHugePages 统计值溢出错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统执行大页（THP）换出操作后，查看 `/proc/meminfo` 发现 `ShmemHugePages` 显示的数值异常偏大，甚至超过了 `Shmem` 的总量，导致内存统计信息失真。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `shmem_delete_from_page_cache` 函数处理 shmem 大页换出的过程中，代码遗漏了对 `NR_SHMEM_THPS` 统计项的更新。当 THP 被换出时，`NR_FILE_PAGES` 和 `NR_SHMEM` 计数被正确减少，但 `NR_SHMEM_THPS` 计数未减少，导致 `/proc/meminfo` 中的 `ShmemHugePages` 累积计数虚高。
+
+#解决方案
+在 `mm/shmem.c` 中新增 `shmem_update_stats()` 封装函数，统一处理 `NR_SHMEM_THPS`、`NR_FILE_PAGES` 和 `NR_SHMEM` 的统计更新逻辑，确保在修改大页统计时同步更新所有相关计数项。修复了 `shmem_delete_from_page_cache` 中缺失的 `NR_SHMEM_THPS` 更新调用，同时优化了 `shmem_add_to_page_cache` 和 `shmem_replace_folio` 中的统计更新代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/89e8f6011260063ed616b17dce2f4317995aea15

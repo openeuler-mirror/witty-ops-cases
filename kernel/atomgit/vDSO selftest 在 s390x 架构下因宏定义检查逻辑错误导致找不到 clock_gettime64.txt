@@ -1,0 +1,25 @@
+#标题
+vDSO selftest 在 s390x 架构下因宏定义检查逻辑错误导致找不到 clock_gettime64
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 s390x (64 位) 架构上运行 vdso_test_correctness 测试程序时，程序输出警告信息 "Warning: failed to find clock_gettime64 in vDSO"，导致测试无法正确检测到时钟函数。
+
+#主要错误日志
+Warning: failed to find clock_gettime64 in vDSO
+
+#问题根因
+tools/testing/selftests/vDSO/vdso_config.h 中的架构判断逻辑存在缺陷：
+1. 条件判断 `#elif defined (__s390__)` 会同时匹配 s390 (32位) 和 s390x (64位) 架构，因为当 `__s390x__` 定义时 `__s390__` 也会被定义。
+2. 这导致 s390x 64位环境被错误地判定为 32 位环境（设置了 VDSO_32BIT 宏），从而引发了后续的查找失败。
+3. 此外，代码中使用了非标准的 `__s390X__` 宏定义进行判断，这也是潜在的错误点。
+
+#解决方案
+修改 tools/testing/selftests/vDSO/vdso_config.h 文件：
+1. 在 s390 32 位的判断条件中增加对 `__s390x__` 的排除，修改为 `#elif defined (__s390__) && !defined(__s390x__)`，确保仅匹配 32 位环境。
+2. 将非标准的 `__s390X__` 修改修正为标准的 `__s390x__`，确保 64 位环境能被正确识别。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75d3ac79d1b077e1a854a4397b4c92432f746695

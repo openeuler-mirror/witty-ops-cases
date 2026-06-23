@@ -1,0 +1,30 @@
+#标题
+crypto: hisilicon - 硬件错误中断注销时误开启未屏蔽中断源
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载或注销 Hisilicon 加密驱动（QM, HPRE, SEC2, ZIP）时，由于错误中断屏蔽寄存器的操作逻辑错误，原本未启用的中断类型被意外开启。这会导致在驱动卸载后，设备仍可能响应硬件错误中断，从而引发中断风暴或系统异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+错误中断寄存器的每一位对应一种错误类型，其中写 0 表示启用中断，写 1 表示禁用中断。
+在修复前的代码中，执行“禁用中断”或“注销”操作时，使用了 `readl` 读取当前寄存器值并通过或运算（`|=`）合成新值的逻辑：
+1. 对于 `uninit` 流程，代码逻辑为 `irq_mask |= readl(...)`。这意味着如果寄存器中原本某些位是 0（即之前已启用中断），读取后再写入 1，这是正确的禁用操作。
+2. 然而，对于 `init` 流程中的错误源清理或特定设备的禁用逻辑，如果仅将 `err_mask`（部分位）写入寄存器，或者通过逻辑运算计算掩码时，未考虑到"写 1 禁用"的语义。
+根据 Commit 描述，问题在于："Currently, when disabling interrupts, it incorrectly enables the interrupt types that were not enabled."（当前禁用中断时，错误地启用了未启用的中断类型）。
+核心原因是在处理中断屏蔽寄存器时，没有遵循"写 1 禁用"的原则直接写入全 1 来屏蔽所有中断，而是使用了变量运算，导致那些本应保持禁用状态（值为 1）的位被错误地清零（启用）。
+
+#解决方案
+修改驱动代码，在需要禁用所有硬件错误中断的场景下，不再通过读取计算的方式生成掩码，而是直接向中断屏蔽寄存器写入全 1（`GENMASK(31, 0)`），并使用全 1 清除所有错误源状态。
+具体修改如下：
+1. 在 QM 模块中，定义 `QM_RAS_MASK_ALL` 和 `QM_RAS_CLEAR_ALL` 为 `GENMASK(31, 0)`，并在 `qm_hw_error_uninit_v2`、`qm_hw_error_uninit_v3` 及 `qm_hw_error_init_v1` 中直接写入该值。
+2. 在 HPRE 模块中，定义 `HPRE_RAS_MASK_ALL` 和 `HPRE_RAS_CLEAR_ALL`，并在 `hpre_hw_error_disable` 中直接写入屏蔽所有中断。
+3. 在 SEC2 模块中，定义 `SEC_RAS_CLEAR_ALL`，并在 `sec_hw_error_enable` 的清除步骤中使用。
+4. 在 ZIP 模块中，修正 `HZIP_CORE_INT_MASK_ALL` 为 `GENMASK(31, 0)`，定义 `HZIP_CORE_RAS_CLEAR_ALL`，并在相应屏蔽和清除操作中使用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e624f742430e908020dd2cfab44caede0c4d9e9f

@@ -1,0 +1,21 @@
+#标题
+userfaultfd 注册低地址内存区域失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 userfaultfd (UFFD) 机制注册内存区域时，如果目标内存区域的起始地址低于 `mmap_min_addr`，注册操作会失败并返回 EINVAL 错误。这导致依赖于低地址内存映射的应用程序（如二进制翻译器 Binary Translator）无法使用 UFFD 进行内存写跟踪，而使用经典的 mprotect 方式则没有此限制。
+
+#主要错误日志
+未知
+
+#问题根因
+`fs/userfaultfd.c` 中的 `validate_range()` 函数对传入的内存范围进行了冗余检查。代码强制要求注册区域的起始地址必须大于等于 `mmap_min_addr`。
+然而，UFFDIO_REGISTER 操作处理的内存范围必须已经由 VMA（虚拟内存区域）支持，即该内存区域已被应用程序合法映射。内核在其他路径上已经对低地址访问进行了安全校验，userfaultfd 层再次强制执行 `mmap_min_addr` 检查是不必要的，且阻止了对合法低地址 VMA 的注册。
+
+#解决方案
+移除 `validate_unaligned_range` 函数中对 `start < mmap_min_addr` 的冗余检查代码，允许注册起始地址低于 `mmap_min_addr` 但已被合法映射的内存区域。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/594221f3e7484cc4882d873be339fc6bf72323c1

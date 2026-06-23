@@ -1,0 +1,26 @@
+#标题
+mtk_eth_soc: XDP setup 失败时 eBPF 程序指针未恢复导致引用计数错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mtk_eth_soc 驱动环境下，当网卡处于运行状态且进行 XDP 程序更新时，若 `mtk_open` 函数执行失败，驱动程序未能正确恢复旧的 eBPF 程序指针。这会导致内核错误地减少了旧 eBPF 程序的引用计数，引发引用计数泄漏，可能导致后续程序卸载异常或内核资源释放错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mtk_xdp_setup` 函数中，代码逻辑处理顺序不当：
+1. 使用 `rcu_replace_pointer` 将旧的 eBPF 程序指针 (`old_prog`) 替换为新程序，并保存旧程序指针。
+2. 随后，无论 `mtk_open` 是否成功，代码都执行了 `bpf_prog_put(old_prog)`，释放了旧程序的引用计数。
+3. 当 `mtk_open` 失败时，原代码直接返回错误，未将 `eth->prog` 指针恢复为 `old_prog`。
+这导致结构体中记录的当前程序指针与实际引用计数状态不一致（实质上是丢失了对旧程序的持有权，但又错误地释放了它），违反了错误路径下的状态回滚原则。
+
+#解决方案
+调整 `mtk_xdp_setup` 中的错误处理逻辑，在调用 `mtk_open` 之前暂不释放旧程序引用：
+1. 推迟 `bpf_prog_put(old_prog)` 的调用时机，确保其在 `mtk_open` 成功执行后再进行。
+2. 增加对 `mtk_open` 返回值的检查。如果 `mtk_open` 失败，使用 `rcu_assign_pointer` 将 `eth->prog` 指针恢复为 `old_prog`，确保程序指针指向有效的旧程序，避免引用计数泄漏，然后再返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a0e61ede1161032e50fd39fcb5ef047e92afb069

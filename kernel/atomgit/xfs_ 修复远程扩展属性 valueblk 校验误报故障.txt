@@ -1,0 +1,20 @@
+#标题
+xfs: 修复远程扩展属性 valueblk 校验误报故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行远程扩展属性设置操作过程中，若系统发生宕机等异常中断，重启后进行属性检查时，文件系统 scrub 校验逻辑可能错误地将有效的属性条目标记为损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在远程扩展属性设置操作过程中系统异常中断，可能导致叶子块条目被标记为 `XFS_ATTR_INCOMPLETE`（不完整），且 `valueblk` 被设置为 0。原代码逻辑在校验远程属性条目时，未区分条目是否处于“不完整”状态，只要检测到 `valueblk == 0` 就直接判定为损坏。实际上，对于已标记为 `XFS_ATTR_INCOMPLETE` 的条目，`valueblk` 为 0 是一种合法的中间状态，不应视为错误。
+
+#解决方案
+修改 `fs/xfs/scrub/attr.c` 中的校验逻辑，在检查 `rentry->valueblk` 是否为 0 时，增加对条目标志位的判断。仅当 `valueblk` 为 0 且条目未被标记为 `XFS_ATTR_INCOMPLETE` 时，才将其判定为损坏并调用 `xchk_da_set_corrupt`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b64b47e51cc38ceeb3d8351e25072741357909c

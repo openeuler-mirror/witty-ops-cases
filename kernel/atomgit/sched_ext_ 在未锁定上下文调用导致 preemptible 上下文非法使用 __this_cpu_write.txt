@@ -1,0 +1,20 @@
+#标题
+sched/ext: 在未锁定上下文调用导致 preemptible 上下文非法使用 __this_cpu_write
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进程调度器扩展（sched_ext）模块中，当从未锁定的上下文调用 SCX_CALL_OP 或 SCX_CALL_OP_RET 宏时，如果 runqueue 指针为 NULL，系统会触发 BUG 警告，提示在抢占上下文中错误使用了 `__this_cpu_write()`。
+
+#主要错误日志
+BUG: using __this_cpu_write() in preemptible [00000000]
+
+#问题根因
+在 SCX_CALL_OP 和 SCX_CALL_OP_RET 宏的实现中，未对 runqueue (rq) 指针进行非空检查就直接调用了 update_locked_rq(rq)。当 ops 从未锁定上下文调用时，rq 指针为 NULL。此时调用 update_locked_rq(NULL) 会进一步执行 `__this_cpu_write()`，而该函数在 preemptible（可抢占）上下文中使用是不安全的，从而触发了内核的 BUG 检查机制。
+
+#解决方案
+在 SCX_CALL_OP 和 SCX_CALL_OP_RET 宏中增加对 rq 指针的非空判断。仅当 rq 非 NULL 时才调用 update_locked_rq() 函数；若 rq 为 NULL（即未锁定上下文），则跳过调用，从而避免在 preemptible 上下文中执行 `__this_cpu_write()`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0ce5b2b9f00686cf56ca4056a869f1d1f27a0e37

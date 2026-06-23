@@ -1,0 +1,29 @@
+#标题
+ub: udma: 安全模式上下文验证及溢出检测逻辑缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在非 ver_0 版本的硬件上，驱动错误地执行了仅适用于 ver_0 版本的 pre-flush 步骤，导致流程异常。
+2. 在 `db_status` 非零的情况下错误地进行溢出校验，导致业务异常报错 "JFS overflow"。
+3. 设备状态异常时，错误码返回不一致，且部分场景下返回值不正确。
+
+#主要错误日志
+- dev_err(udma_dev->dev, "JFS overflow, wqebb_cnt:%u.\n", wqebb_cnt);
+- dev_err(udma_dev->dev, "udma dev is not ready!\n");
+
+#问题根因
+1. **上下文验证逻辑不严谨**：代码在处理安全模式时，未严格区分硬件版本。实际上只有 ver_0 版本（A_0 和 K_0）需要执行 pre-flush 步骤，其他版本执行该步骤会导致问题。
+2. **溢出校验条件缺失**：在 `udma_post_one_wr` 函数中，溢出检测函数 `to_check_sq_overflow` 被无条件调用。根因是溢出校验仅应在 `db_status` 为 0 时进行，否则会误报溢出错误。
+3. **错误码与返回值定义错误**：宏定义 `EDRVNO` 值为 255 不符合预期，应使用 `EDRVNOEXIST` (255)；同时在 GUID 响应处理中，设备非正常状态时错误地返回了 0。
+
+#解决方案
+1. **增加硬件版本判断**：在执行 `udma_modify_jetty_precondition`（pre-flush 操作）前，增加硬件版本判断，仅当 `hw_ver` 为 `UBASE_HW_VER_A_0` 或 `UBASE_HW_VER_K_0` 时执行。
+2. **修正溢出检测条件**：在溢出检测逻辑中增加 `sq->db_status == 0` 的前置判断，确保仅在该条件满足时才进行溢出校验。
+3. **修正错误定义与返回值**：
+   - 将 `EDRVNO` 宏定义修改为 `EDRVNOEXIST`。
+   - 修正 `udma_ctrlq_notify_mue_eid_guid` 函数中设备状态异常时的返回值，由 0 改为正确的错误响应处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9352061da409904d211f55f7dbe4760e14e22e28

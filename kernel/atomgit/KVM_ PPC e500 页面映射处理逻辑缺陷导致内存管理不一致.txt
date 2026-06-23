@@ -1,0 +1,25 @@
+#标题
+KVM: PPC e500 页面映射处理逻辑缺陷导致内存管理不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PowerPC e500 架构的 KVM 虚拟化环境中，处理客户机页面错误时，内存管理逻辑存在不一致性。具体表现为：在 `kvmppc_e500_shadow_map` 函数中，调用 `gfn_to_pfn_memslot` 获取页面时，页面的引用计数处理与后续的释放逻辑不匹配，可能导致页面引用计数错误或内存泄露，影响虚拟机内存热迁移或 MMU Notifier 的正常工作。
+
+#主要错误日志
+`pr_err("%s: real page not found for gfn %lx\n", ...)` （推断：当获取到错误 pfn 时可能触发此日志）
+
+#问题根因
+问题根因在于 `kvmppc_e500_shadow_map` 函数中对于 PFN（Page Frame Number）的处理方式陈旧。
+1. 旧代码使用 `gfn_to_pfn_memslot()` 获取 pfn，并手动调用 `kvm_set_pfn_dirty()` 和 `kvm_release_pfn_clean()` 来管理页面状态和引用计数。
+2. 这种手动管理模式难以正确处理所有边界情况（如页面是否可写、是否需要释放引用），且与当前内核 KVM 子系统标准的 `__kvm_faultin_pfn()` 接口设计不符，导致页面状态管理逻辑分散且容易出错。
+
+#解决方案
+将页面获取与释放逻辑重构为标准的 `__kvm_faultin_pfn()` 和 `kvm_release_faultin_page()` 接口调用。
+1. 引入 `struct page *page` 指针，调用 `__kvm_faultin_pfn()` 替代原有的 `gfn_to_pfn_memslot()`，该函数内部正确处理了 `FOLL_WRITE` 标志和页面获取逻辑。
+2. 移除显式的 `kvm_set_pfn_dirty()` 调用，因为新接口 `kvm_release_faultin_page()` 会根据 `writable` 状态自动处理页面的 dirty 标记。
+3. 使用 `kvm_release_faultin_page()` 替代 `kvm_release_pfn_clean()`，确保在函数退出时（无论成功还是失败）都能正确释放页面引用，修复了引用计数管理问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d42079a620161ec8cec37d758ddfa0df98cd86ee

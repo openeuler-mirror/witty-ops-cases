@@ -1,0 +1,20 @@
+#标题
+PCI endpoint: pci-epf-vntb 初始化 BAR 失败时返回错误码不规范
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在初始化 NTB (Non-Transparent Bridge) endpoint function BAR 时，若无可用 BAR（pci_epc_get_next_free_bar 失败），函数 `epf_ntb_init_epc_bar` 返回值为 -1，这不符合内核标准的错误码返回规范，导致调用者难以准确判断失败原因。
+
+#主要错误日志
+dev_err(dev, "Fail to get NTB function BAR\n");
+
+#问题根因
+函数 `epf_ntb_init_epc_bar` 的文档说明要求出错时应返回错误码。然而，当 `pci_epc_get_next_free_bar()` 失败时（即没有可用的 BAR），代码直接返回了 `barno`（此时为负值，可能仅为 -1），而不是返回一个标准的内核错误码（如 -ENOENT）。这导致函数在无可用 BAR 的情况下返回了非标准的错误值。
+
+#解决方案
+修改 `drivers/pci/endpoint/functions/pci-epf-vntb.c` 文件中的 `epf_ntb_init_epc_bar` 函数。当检测到 `barno < 0` 时，将返回值从 `barno` 修改为标准错误码 `-ENOENT`，以表示所需的资源不存在。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9ea6c57f38c72c0292594b1223924b45e5fb3e11

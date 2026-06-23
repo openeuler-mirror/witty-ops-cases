@@ -1,0 +1,23 @@
+#标题
+bnxt 驱动 TPA 聚合 ID 分配越界导致内存破坏风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Broadcom bnxt 网卡驱动在处理 TPA（TCP Segmentation Offload）数据包时，若硬件提供的 agg_id 冲突，查找空闲位图索引失败时未进行有效性校验，可能导致内核内存越界访问或数据结构破坏，进而引发系统不稳定或网络功能异常。
+
+#主要错误日志
+netdev_warn(bp->dev, "Unable to allocate agg ID for ring %d, agg 0x%x\n", rxr->bnapi->index, TPA_START_AGG_ID_P5(tpa_start));
+
+#问题根因
+1. **位图大小定义错误**：原代码使用 `BNXT_AGG_IDX_BMAP_SIZE`（计算公式为 `MAX_TPA_P5 / BITS_PER_LONG`）作为 `find_first_zero_bit` 的搜索范围，该大小远小于实际位图位数，导致搜索函数可能在错误的内存区域查找，或者忽略了位图末尾的有效位。
+2. **缺乏边界检查**：当 `agg_id` 冲突时，`find_first_zero_bit` 可能返回一个超出 `MAX_TPA_P5` 范围的值（一个很大的无效索引），代码未对该返回值进行校验就直接使用，导致数组越界访问。
+
+#解决方案
+1. **修正位图定义与搜索范围**：移除错误的 `BNXT_AGG_IDX_BMAP_SIZE` 宏定义，改用 `DECLARE_BITMAP` 宏正确声明位图大小，并将 `find_first_zero_bit` 的搜索范围参数修正为 `MAX_TPA_P5`。
+2. **增加分配失败处理**：在 `bnxt_alloc_agg_idx` 函数中增加对 `find_first_zero_bit` 返回值的校验，若索引大于等于 `MAX_TPA_P5` 则返回 `INVALID_HW_RING_ID` 表示分配失败。
+3. **增加调用点错误处理**：在 `bnxt_tpa_start` 函数中检查 `bnxt_alloc_agg_idx` 的返回值，若为 `INVALID_HW_RING_ID`，打印警告日志并调度 RX 复位以恢复网卡状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fc08e31813d64189c789b618be382149c4f75425

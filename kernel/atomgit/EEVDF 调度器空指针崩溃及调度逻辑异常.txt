@@ -1,0 +1,28 @@
+#标题
+EEVDF 调度器空指针崩溃及调度逻辑异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在运行过程中触发空指针解引用（null pointer dereference），导致 panic 或 Oops。该故障与 EEVDF 调度器相关，可能表现为系统卡死、调度状态异常或进程调度行为不符合预期（如 yield 操作无效或 vruntime 计算错误导致调度死循环）。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference
+
+#问题根因
+故障源于 EEVDF 调度器实现中的逻辑缺陷：
+1. **变量语义与计算基准错误**：原有代码使用 `min_vruntime` 作为基准计算 `avg_vruntime` 和 `entity_key`，但 `min_vruntime` 的更新逻辑在某些路径下（如 `update_min_vruntime` 中对 `curr` 和 `se` 的判断处理）可能导致基准值不一致或指针异常，进而引发空指针访问。
+2. **更新时机不当**：`min_vruntime` 的更新分散在 `update_curr`、`dequeue_entity` 等多处，且逻辑复杂，容易在状态不一致时访问无效指针。
+3. **迁移与出队逻辑缺陷**：在任务迁移或出队时，未正确处理相对截止时间，导致调度数据结构损坏。
+
+#解决方案
+1. **引入新基准变量**：将 `cfs_rq->min_vruntime` 替换为 `cfs_rq->zero_vruntime`，作为计算平均虚拟运行时间的稳定基准点（`v0`），避免原有 `min_vruntime` 逻辑的不稳定性。
+2. **重构更新逻辑**：删除原有的 `update_min_vruntime` 函数及其分散的调用点，改为在 `__enqueue_entity` 和 `__dequeue_entity` 中调用新函数 `update_zero_vruntime`，该函数直接基于 `avg_vruntime` 更新基准值，逻辑更简单且安全。
+3. **修正调度实体逻辑**：
+   - 在 `dequeue_entity` 中，增加对 `PLACE_REL_DEADLINE` 特性的检查，保留非睡眠任务的相对截止时间。
+   - 在 `place_entity` 中，恢复被迁移任务的相对截止时间。
+   - 修正 `yield_task_fair` 的逻辑，仅在实体符合运行条件时更新 vruntime 和 deadline，防止调度死循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2abf4ce55808ccb5cde1b4081d680634d830d7d0

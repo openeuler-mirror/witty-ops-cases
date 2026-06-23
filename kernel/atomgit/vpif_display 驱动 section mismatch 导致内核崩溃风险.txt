@@ -1,0 +1,24 @@
+#标题
+vpif_display 驱动 section mismatch 导致内核崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动加载或设备探测时可能触发内核崩溃或内存访问异常。具体表现为：
+1. 在驱动延迟探测或通过 sysfs 手动重新绑定时，内核尝试调用已被释放的 init 内存段中的代码，导致 kernel oops 或 panic。
+2. 编译时 modpost 阶段检测到 "Section mismatch" 警告（该警告此前被错误抑制）。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动的 `vpif_probe` 函数被错误地标记为 `__init`，且 `vpif_driver` 结构体使用了 `__refdata` 修饰。
+Platform 驱动可能在 init 内存段被释放后才进行探测（例如发生探测延迟或手动 rebind），此时若调用标记为 `__init` 的 probe 函数，内核将执行已释放/被覆盖的内存区域，导致严重故障。此前的提交 ffa1b391c61b 仅是错误地抑制了编译器对此类问题的警告，并未修复实质缺陷。
+
+#解决方案
+移除 `vpif_probe` 函数的 `__init` 标记，以及 `vpif_driver` 结构体的 `__refdata` 标记。
+确保 probe 函数在 init 段释放后依然可被安全调用，修复代码段生命周期与实际调用时机不匹配的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/87b714a1c85cbda61ce5f3a04c47fbcb0dc5d204

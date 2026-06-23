@@ -1,0 +1,20 @@
+#标题
+i40e 驱动 NAPI poll 跟踪点导致抢占计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中出现软中断抢占计数不一致的异常告警。具体表现为进入软中断处理时抢占计数与退出时不匹配，导致内核内部状态错误。该问题在开启 i40e 驱动相关的 tracepoint 进行调试或监控时触发。
+
+#主要错误日志
+softirq: huh, entered softirq 3 NET_RX with preempt_count 00000100, exited with 00000101?
+
+#问题根因
+在 i40e 驱动的 `i40e_napi_poll` tracepoint 定义中，使用了 `get_cpu()` 函数来获取当前 CPU ID。`get_cpu()` 会隐式地禁用内核抢占（增加 preempt count），但在代码路径中没有任何地方调用 `put_cpu()` 来恢复抢占计数。这导致每次触发该 tracepoint 时，preempt count 都会泄漏（增加 1），破坏了内核抢占计数的平衡。
+
+#解决方案
+将 tracepoint 中获取当前 CPU 的函数从 `get_cpu()` 替换为 `smp_processor_id()`。`smp_processor_id()` 仅读取当前 CPU ID 而不修改抢占计数，从而避免了计数泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/08aedd54c59cb382ccc017d746acb6a4dd510ed4

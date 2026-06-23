@@ -1,0 +1,24 @@
+#标题
+[scsi: smartpqi: 设备移除后资源访问释放导致的竞争条件修复]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+在移除 SCSI 设备的过程中，如果同时触发了 LUN 重置操作，可能会导致系统访问已释放的内存资源，引发 use-after-free 故障。具体表现为：设备移除后，调度执行的 LUN 重置工作队列试图访问已不存在的设备结构体，可能导致内核崩溃或数据损坏。
+
+#主要错误日志
+- "skipping reset of scsi %d:%d:%d:%u, device has been removed\n"（修复补丁新增的警告日志，用于拦截非法重置请求）
+- "resetting scsi %d:%d:%d:%u SCSI cmd at %p due to cmd opcode 0x%02x\n"（重置流程开始的错误日志）
+
+#问题根因
+该故障是一个典型的竞争条件问题。Abort 处理程序可能调度一个 LUN 重置任务，该任务在设备通过 `sdev_destroy()` 移除之后仍然执行。此时，重置处理程序会尝试访问已经被释放的设备资源，从而导致 use-after-free 错误。根本原因在于设备移除流程与 LUN 重置处理流程之间缺乏足够的同步保护机制。
+
+#解决方案
+通过以下三个层面的修改来消除竞争条件并确保资源安全：
+1. **重置前检查**：在设备重置处理程序 `pqi_device_reset_handler` 中，持有 `scsi_device_list_lock` 锁检查目标设备是否仍存在于控制器的 SCSI 设备列表中。如果设备已被移除，直接跳过重置操作并打印警告日志。
+2. **取消待处理任务**：在销毁设备函数 `pqi_slave_destroy` 中，遍历并调用 `cancel_work_sync` 取消所有尚未执行的 TMF（Task Management Function）工作项，防止设备释放后仍有工作队列执行。
+3. **互斥保护释放**：在 `pqi_slave_destroy` 中，将 `pqi_free_device` 操作置于 `lun_reset_mutex` 互斥锁保护范围内，确保在释放设备内存时，不会有并发的重置操作正在访问该设备结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9c209ded55b4398e7ee77285f3d9282acdfc6631

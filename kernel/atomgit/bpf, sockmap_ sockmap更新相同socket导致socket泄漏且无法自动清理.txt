@@ -1,0 +1,27 @@
+#标题
+bpf, sockmap: sockmap更新相同socket导致socket泄漏且无法自动清理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当向 sockmap 中的特定条目更新同一个 socket 时，会导致该 socket 在 sockmap 中发生泄漏。
+具体表现为：更新操作完成后，sockmap 依然持有该 socket，但丢失了对应的链接关系。这导致当该 socket 被 close 关闭时，sockmap 无法感知并自动移除该 socket，已关闭的 socket 残留在 map 中。
+
+#主要错误日志
+未知
+
+#问题根因
+在 sockmap 更新逻辑中，如果使用相同的 socket 更新特定索引位置，代码流程如下：
+1. 获取旧的 socket (osk)。
+2. 通过 sock_map_add_link 为 socket 添加新的链接关系。
+3. 更新 map 中的 socket 指针。
+4. 对旧 socket (osk) 调用 sock_map_unref 进行释放处理。
+问题在于 sock_map_unref 最终调用 sock_map_del_link 时，它会遍历并删除 psock 所有匹配该 map 位置的链接。由于新添加的链接指向的是同一个 map 位置，它会被错误地识别并删除。这导致 sockmap 虽然持有 socket 引用，但对应的链接已被拆毁。
+
+#解决方案
+在 sock_map_del_link 函数中，当找到并删除匹配的 link 后，立即跳出循环。
+修改逻辑为：一旦检测到 link->link_raw == link_raw 匹配，执行删除操作后添加 break 语句，停止继续遍历和删除其余链接，从而保留新添加的链接关系，防止 socket 泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/abb3bd49199be2ded1c42f18ea46e9fcabc92499

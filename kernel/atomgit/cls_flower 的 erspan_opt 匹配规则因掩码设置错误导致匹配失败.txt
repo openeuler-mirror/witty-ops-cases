@@ -1,0 +1,23 @@
+#标题
+cls_flower 的 erspan_opt 匹配规则因掩码设置错误导致匹配失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 cls_flower 进行流量分类匹配 erspan_opt 选项时，规则意外要求匹配所有字段。这导致仅配置了 (version, dir, hwid) 字段的流规则无法正确匹配预期的 ERSPAN 数据包，造成流量分类功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fl_set_erspan_opt()` 函数中，代码使用 `memset(md, 0xff, sizeof(*md))` 将整个 erspan_metadata 结构体及其掩码全部初始化为 1。由于 cls_flower 在匹配时要求同时匹配掩码标记为 1 的字段，这导致内核错误地要求报文匹配 erspan_opt 的所有位，而不仅仅是用户配置的相关字段 (version, dir, hwid)。
+
+#解决方案
+修改 `fl_set_erspan_opt()` 函数，移除对整个 erspan_metadata 结构体的全 1 初始化操作。改为仅针对需要匹配的具体字段设置掩码：
+1. 删除开头的 `memset(md, 0xff, sizeof(*md))` 调用。
+2. 对于 version 1 版本，仅对 `md->u.index` 字段进行全 1 掩码设置。
+3. 对于 version 2 版本，仅对 `dir` 和 `hwid` 字段设置掩码，确保其他未配置字段掩码保持为 0。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/71116b361824972ccdbe2572d84e2af0c2898f95

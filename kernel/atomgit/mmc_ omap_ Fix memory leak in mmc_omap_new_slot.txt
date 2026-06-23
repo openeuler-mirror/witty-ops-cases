@@ -1,0 +1,22 @@
+#标题
+mmc: omap: Fix memory leak in mmc_omap_new_slot
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MMC OMAP 驱动初始化过程中，若 VSD、VIO 或 cover switch 的 GPIO 查找失败，会导致内核内存泄漏。具体表现为驱动加载失败，但此前通过 mmc_alloc_host() 分配的内存未被释放，造成系统内存资源泄露。
+
+#主要错误日志
+- "error looking up VSD GPIO\n"
+- "error looking up VIO GPIO\n"
+- "error looking up cover switch GPIO\n"
+
+#问题根因
+在函数 `mmc_omap_new_slot()` 中，代码逻辑未正确处理 GPIO 查找失败的错误路径。当 `devm_gpiod_get_index_optional` 调用失败时，函数直接返回错误，却未调用 `mmc_free_host()` 来释放此前已分配的 `mmc_host` 结构体内存，导致内存泄漏。
+
+#解决方案
+在代码中增加 `err_free_host` 标签，并在 GPIO 查找失败的错误处理分支中跳转至该标签。该标签对应执行 `mmc_free_host(mmc)` 操作，确保在 GPIO 获取失败时能正确释放已分配的 host 内存，修复了内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/62723b7fa47f4104a5521ad96fbcff345bc528c1

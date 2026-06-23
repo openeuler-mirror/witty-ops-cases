@@ -1,0 +1,20 @@
+#标题
+sch_netem: 修复全非线性 skb 数据包损坏逻辑中的越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 AF_PACKET TX_RING 发送全非线性数据包经过 IPIP 隧道时，触发 netem 模块的数据包损坏逻辑。由于线性数据区长度为 0，导致随机数生成函数返回无约束值，引发对 skb->data 的越界内存访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `netem_enqueue()` 函数中，数据包损坏逻辑使用 `get_random_u32_below(skb_headlen(skb))` 来选取修改 `skb->data` 的索引。当发送全非线性数据包时，`skb_headlen(skb)` 计算结果为 0。将 0 传递给 `get_random_u32_below()` 会进入慢速路径并返回一个不受约束的 32 位随机整数。将该值作为偏移量访问 `skb->data` 导致越界内存访问。
+
+#解决方案
+在执行数据损坏操作前，增加对 `skb_headlen(skb)` 是否非零的校验。若线性区长度为 0（即全非线性包），则直接跳过损坏逻辑，避免越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/30fb7d1db451b7666aae2a32d637dc41f3370cae

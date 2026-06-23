@@ -1,0 +1,20 @@
+#标题
+ipv6: xfrm6: 路由查找错误处理致 dst entry 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IPv6 ESP UDP 封装场景下，当接收到的 skb 没有 dst 关联且路由查找解析到错误路由时，内核在丢弃报文过程中未能正确释放路由查找返回的 dst 引用。持续触发该路径会导致 dst entry 发生内存泄漏，随着重复报文的处理，系统内存资源逐渐耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 xfrm6_rcv_encap() 在 skb 没有 dst 附加时调用 ip6_route_input_lookup() 进行 IPv6 路由查找。该查找函数即使在解析到错误路由（dst->error 被置位）时，也会返回一个带引用计数的 dst entry。原代码在判断 dst->error 后直接跳转到 drop 标签丢弃报文，既没有将 dst 附加到 skb 上（由 skb 释放逻辑处理），也没有手动释放该引用，导致该 dst entry 引用计数泄漏。
+
+#解决方案
+在 xfrm6_rcv_encap() 函数中，当检测到 dst->error 时，在跳转到 drop 标签之前显式调用 dst_release(dst) 释放路由查找返回的引用，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/412b57986b4faa8e2e7a502a1fae88d01dde866b

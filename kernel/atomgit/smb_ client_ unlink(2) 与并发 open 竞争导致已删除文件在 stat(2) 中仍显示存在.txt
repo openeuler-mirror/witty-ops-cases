@@ -1,0 +1,20 @@
+#标题
+smb: client: unlink(2) 与并发 open 竞争导致已删除文件在 stat(2) 中仍显示存在
+
+#内核版本
+OLK-6.6
+
+#问题现象
+CIFS 客户端在执行文件删除操作时，若存在并发 open 操作，可能导致已删除的文件在 stat(2) 系统调用中仍然显示为存在状态，出现文件状态不一致的现象。
+
+#主要错误日志
+未知
+
+#问题根因
+在 cifs_unlink() 过程中，除了向服务器发送删除请求外，还需要关闭延迟关闭的句柄以及将现有打开的句柄标记为已删除。这个过程增加了竞态窗口，导致并发的 open 操作可能在此期间介入。如果 unlink(2) 尚未完成但文件句柄处理尚未结束，并发 open 可能成功打开本应被删除的文件，从而导致后续 stat(2) 检查时发现文件依然存在。
+
+#解决方案
+在 cifs_unlink() 函数中提前对 dentry 进行 unhash 操作（调用 __d_drop）。这样做可以阻止后续的 open 尝试查找该 dentry。当 unlink 正在进行时，任何尝试 open 的操作将会在父目录的 i_rwsem 信号量上阻塞，从而避免了竞争条件。如果 unlink 最终失败，再将 dentry 重新 hash 回去（d_rehash）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c9278d06a469c378441ea1f147bb804ae6daf02b

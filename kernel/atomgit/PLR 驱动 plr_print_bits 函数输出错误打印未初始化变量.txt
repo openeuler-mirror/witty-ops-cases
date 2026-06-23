@@ -1,0 +1,21 @@
+#标题
+PLR 驱动 plr_print_bits 函数输出错误打印未初始化变量
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在遍历并打印 Power Limit Reasons (PLR) 的比特位信息时，若遇到无效范围的比特位（如 10-31 或 62-63），系统未能正确打印 "UNKNOWN(%d)"，而是错误地重复打印了上一个有效比特位的名称。这是由于静态分析工具 Smatch 检测出的未初始化变量使用问题导致的逻辑错误。
+
+#主要错误日志
+drivers/platform/x86/intel/intel_plr_tpmi.c:178 plr_print_bits()
+error: uninitialized symbol 'str'.
+
+#问题根因
+在 `plr_print_bits` 函数的循环中，变量 `str` 在循环外部定义但未初始化。每次循环迭代开始时，`str` 保留了上一次迭代的值。当遇到无效的比特位范围（即查表失败）时，代码未将 `str` 重置或指向 "UNKNOWN" 字符串，导致使用了上一次迭代中残留的 `str` 指针值进行打印。
+
+#解决方案
+将变量 `str` 的定义移动到 `for_each_set_bit` 循环内部，并在每次迭代开始时显式初始化为 `NULL`。这样可以确保在查表失败（即比特位处于无效范围）时，`str` 为 `NULL` 而不是旧值，从而正确触发 "UNKNOWN(%d)" 的打印逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6c144d110a9df7de2a7b8d0b3c56711d157b485a

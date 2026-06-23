@@ -1,0 +1,22 @@
+#标题
+LoongArch IOMMU 内存初始化阶段调用违规导致内存管理破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动过程中，在 `mem_init()` 执行之后调用 `memblock` 内存预留接口，破坏了内存管理机制，可能导致系统内存管理状态异常或启动失败。
+
+#主要错误日志
+未知
+
+#问题根因
+LoongArch IOMMU 内存初始化函数 `loongarch_iommu_mem_init` 原本通过 `arch_initcall` 调用，该调用时机晚于 `mem_init()`。根据内核设计，`memblock` 内存预留操作不允许在 `mem_init()` 之后执行，这违反了内存管理规则并破坏了系统内存状态。
+
+#解决方案
+1. 移除 `loongarch_iommu_mem_init` 函数的 `arch_initcall` 注册，将其改为普通初始化函数。
+2. 将 `loongarch_iommu_mem_init` 的调用时机提前，直接在 `arch_mem_init()` 阶段执行，确保在内存管理子系统完成初始化之前完成内存预留。
+3. 同时将函数内部使用的 `bitmap_zalloc` 替换为 `memblock_alloc`，以适配早期内存分配上下文。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/92a7cb37dccd1794215a529a9eaa91635d33ac78

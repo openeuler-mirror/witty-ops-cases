@@ -1,0 +1,25 @@
+#标题
+spi: rspi: fix controller deregistration
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动解绑（driver unbind）操作过程中，由于控制器注销顺序错误，可能导致内核访问已释放的资源（如 DMA 资源），进而引发内核崩溃或内存访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在移除（remove）时，先释放了底层资源（如 DMA），之后才注销 SPI 控制器。正确的顺序应当是先注销控制器，再释放其依赖的资源。此外，probe 阶段使用了 devm_spi_register_controller，导致 remove 时资源释放顺序不可控。
+
+#解决方案
+1. 在 `rspi_probe` 函数中，将 `devm_spi_register_controller` 替换为 `spi_register_controller`，以手动管理控制器注册生命周期。
+2. 在 `rspi_remove` 函数中，调整注销顺序：
+   - 先调用 `spi_controller_get` 增加引用计数。
+   - 调用 `spi_unregister_controller` 注销控制器。
+   - 随后调用 `rspi_release_dma` 释放 DMA 资源。
+   - 最后调用 `spi_controller_put` 减少引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6360c34aa8b23a5fb8fcc400a411549c4ba07615

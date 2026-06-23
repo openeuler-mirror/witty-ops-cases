@@ -1,0 +1,20 @@
+#标题
+usb: musb: 首次 Rx 端点请求导致硬件锁死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MUSB（Mentor USB）控制器驱动中，当处理第一个 Rx（接收）端点请求时，硬件发生锁死，导致数据传输无法正常进行，影响 USB 外设的通信功能。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `musb_ep_restart` 中，处理 Rx 请求时直接调用了 `rxstate(musb, req)`，而未在启动请求前清除 FIFO 状态。由于第一次请求时 FIFO 可能处于未定义或非空状态，导致硬件状态机异常，从而引发硬件锁死。
+
+#解决方案
+在 `musb_ep_restart` 函数处理 Rx 请求分支时，增加 FIFO 清空（FLUSHFIFO）操作。具体为：读取当前 RXCSR 寄存器值，设置 `MUSB_RXCSR_FLUSHFIFO` 与 `MUSB_RXCSR_P_WZC_BITS` 标志位，并连续两次写入寄存器以确保 FIFO 被彻底清空，从而避免硬件锁死，替换原有直接调用 `rxstate` 的逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a6dac4ac2df15c2c4a158eaf7cd7ee9f1ca0e9d8

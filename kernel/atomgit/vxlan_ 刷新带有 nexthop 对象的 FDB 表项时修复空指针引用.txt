@@ -1,0 +1,20 @@
+#标题
+vxlan: 刷新带有 nexthop 对象的 FDB 表项时修复空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 VXLAN 设备接收到数据包触发 `vxlan_snoop` 函数学习或更新 FDB 表项时，若该 FDB 表项已关联 nexthop 对象，内核可能发生空指针引用，导致系统崩溃或异常重启。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `vxlan_snoop` 函数中，代码逻辑先通过 `first_remote_rcu(f)` 获取 `rdst` 指针，随后才检查 FDB 表项是否绑定了 nexthop 对象 (`f->nh`)。当 FDB 表项绑定了 nexthop 时，`first_remote_rcu` 函数内部因判断 `fdb->nh` 存在而返回 NULL，导致后续代码直接解引用 `rdst` 指针（如 `rdst->remote_ip`）时触发空指针引用。虽然代码后续有“不覆盖 nexthop FDB”的保护逻辑，但检查顺序靠后，无法阻止之前的解引用行为。
+
+#解决方案
+调整 `vxlan_snoop` 函数中的检查顺序，将 nexthop 对象的判断逻辑（`if (rcu_access_pointer(f->nh))`）移至获取 `rdst` 指针之后、解引用 `rdst` 之前。若发现 FDB 表项绑定了 nexthop，直接返回 true，避免调用 `first_remote_rcu` 获取空指针并进行后续解引用。同时更新 `vxlan_private.h` 中 `first_remote_rcu` 的注释，移除“Guaranteed to be non-NULL”的错误断言。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/842ead8bb68759e001086bd293731fd595ec6413

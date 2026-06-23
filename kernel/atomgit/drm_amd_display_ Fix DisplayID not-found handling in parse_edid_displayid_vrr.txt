@@ -1,0 +1,20 @@
+#标题
+drm/amd/display: Fix DisplayID not-found handling in parse_edid_displayid_vrr
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD 显示驱动模块中，函数 `parse_edid_displayid_vrr()` 在处理 EDID 扩展块时存在逻辑缺陷。当 EDID 中不存在 DisplayID 扩展时，代码未能正确检测到该情况，导致函数继续处理最后一个非 DisplayID 的 EDID 扩展块，引发错误。静态分析工具报出警告：变量 'edid_ext' 在检查前已被解引用。
+
+#主要错误日志
+drivers/gpu/drm/amd/amdgpu/../display/amdgpu_dm/amdgpu_dm.c:13079 parse_edid_displayid_vrr() warn: variable dereferenced before check 'edid_ext' (see line 13075)
+
+#问题根因
+在 `parse_edid_displayid_vrr()` 函数中，代码通过循环遍历 EDID 扩展块查找 DisplayID。原有的 NULL 检查逻辑存在缺陷：变量 `edid_ext` 在循环的每次迭代中都会被赋值，只要循环执行过，`edid_ext` 就不会是 NULL。如果循环结束未找到匹配的 DisplayID 块，`edid_ext` 将指向最后一个扩展块，导致原本用于检测“未找到”的 NULL 检查失效，进而错误地解析了不相关的 EDID 扩展块。
+
+#解决方案
+修改查找结束的判断条件，不再依赖 `edid_ext == NULL` 进行判断，而是检查循环索引 `i == edid->extensions`。这能准确判断循环是否遍历完所有扩展块仍未找到 DisplayID，从而正确退出函数，避免解析错误的扩展块。同时优化了 EDID 有效性检查的代码写法。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a55abd44d4d596dc8122fb2fbfe055db62ff7825

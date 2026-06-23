@@ -1,0 +1,22 @@
+#标题
+resctrl 文件系统卸载时导致 closid_free_map 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当挂载 resctrl 文件系统时，`closid_init()` 函数会分配 `closid_free_map` 内存；但在卸载该文件系统时，该内存未被释放，导致内核内存泄漏（kmemleak）。
+
+#主要错误日志
+未知
+
+#问题根因
+`closid_init()` 在文件系统挂载过程中通过 `bitmap_alloc` 分配了 `closid_free_map` 内存，但在文件系统卸载函数 `rdt_kill_sb()` 的清理流程中，缺失了对 `closid_free_map` 的释放操作，导致内存泄漏。
+
+#解决方案
+1. 新增 `closid_exit()` 函数，内部调用 `bitmap_free(closid_free_map)` 用于专门释放资源。
+2. 在 `rdt_kill_sb()` 函数中调用 `closid_exit()`，确保卸载文件系统时释放内存。
+3. 同步修正 `rdt_get_tree()` 中的错误处理路径（goto 标签跳转逻辑），确保挂载失败时也会正确调用 `closid_exit()` 进行资源清理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c03b6842ebc415c14b00b13b6b1457c5a1ad533c

@@ -1,0 +1,29 @@
+#标题
+caif_serial: ldisc_close与发送路径竞争导致tty结构体UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 caif_serial 通信时，触发 KASAN 检测到的 slab-use-after-free 错误。具体表现为在关闭线路规程的同时进行数据包发送，导致内核崩溃或内存非法访问。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in handle_tx+0x5d1/0x620
+Read of size 1 at addr ffff8881131e1490 by task caif_uaf_trigge/9929
+Call Trace:
+ dump_stack_lvl+0x10e/0x1f0
+ print_report+0xd0/0x630
+ kasan_report+0xe4/0x120
+ handle_tx+0x5d1/0x620
+ dev_hard_start_xmit+0x9d/0x6c0
+ __dev_queue_xmit+0x6e2/0x4410
+
+#问题根因
+问题由并发竞争条件引起，发生在 `ldisc_close()` 与数据包发送路径（`caif_xmit` -> `handle_tx`）之间。
+根本原因是在 `ldisc_close()` 中过早地调用了 `tty_kref_put(ser->tty)` 释放了 tty 引用。当 CPU 0 执行关闭流程释放 tty 后，CPU 1 仍在执行发送流程，通过 `ser->tty` 访问了已被释放的 tty 指针，从而触发 UAF。
+
+#解决方案
+将 `tty_kref_put()` 的调用位置从 `ldisc_close()` 移动到 `ser_release()` 函数中，确保在执行 `unregister_netdevice()` 注销网络设备之后再释放 tty 引用。这保证了在网络设备（及 ser 结构体）完全停止活动前，tty 引用一直有效，从而消除了竞争窗口。同时，为防止注销后 ser 结构体随 netdev 一起释放，在注销前先将 `ser->tty` 指针保存到局部变量中使用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c0b3ced01cfe5f7bc2bd5c639e7aadd8c7eb3fcc

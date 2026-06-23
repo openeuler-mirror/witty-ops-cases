@@ -1,0 +1,20 @@
+#标题
+USB Gadget composite驱动os_desc_req内存分配失败导致的双重释放或空指针访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在USB Gadget驱动 composite_os_desc_req_prepare 函数执行过程中，若 os_desc_req 缓冲区分配失败（内存不足），系统后续在调用 composite_dev_cleanup 进行资源清理时，可能触发双重释放或访问已释放内存，导致内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 composite_os_desc_req_prepare 函数中，当 cdev->os_desc_req->buf 分配失败时，代码逻辑会调用 usb_ep_free_request 释放 cdev->os_desc_req 指向的内存，但未将 cdev->os_desc_req 指针置为 NULL。这导致后续 composite_dev_cleanup 函数检查该指针时认为其有效，再次尝试释放同一块内存，引发双重释放风险。
+
+#解决方案
+在内存分配失败的错误处理路径中，调用 usb_ep_free_request 释放请求后，立即将 cdev->os_desc_req 指针置为 NULL。此举确保 composite_dev_cleanup 函数能正确识别该资源已释放，避免重复释放操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/386984013df08bbedf447dee5b0240444cf1c347

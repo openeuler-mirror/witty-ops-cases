@@ -1,0 +1,29 @@
+#标题
+调度组释放时因 QoS unthrottle 操作触发 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统经过长期稳定性测试后触发内核 UAF（Use-After-Free）问题。调用栈显示问题发生在 `__update_blocked_fair` 函数中，由软中断上下文（`run_rebalance_domains`）触发，最终被 KASAN 机制检测到并打印报告。
+
+#主要错误日志
+[ 9533.667062]  dump_stack_lvl+0x47/0x80
+[ 9533.667158]  print_address_description.constprop.0+0x66/0x300
+[ 9533.667346]  print_report+0x3e/0x70
+[ 9533.667619]  kasan_report+0xb4/0xf0
+[ 9533.667804]  __update_blocked_fair+0x421/0x15c0
+[ 9533.668176]  update_blocked_averages+0x14d/0x360
+[ 9533.668271]  run_rebalance_domains+0x66/0xa0
+[ 9533.668370]  handle_softirqs+0x10e/0x4c0
+[ 9533.668458]  irq_exit_rcu+0xea/0x120
+[ 9533.668546]  sysvec_apic_timer_interrupt+0x72/0x90
+
+#问题根因
+在 `free_fair_sched_group` 函数中调用 `unthrottle_qos_sched_group` 是不安全的。`unthrottle_qos_sched_group` 会将 `leaf_cfs_rq` 重新添加回链表并将 `on_list` 标志置为 1。当该操作发生在 `free_fair_sched_group` 流程中时，节点被重新插入链表后随即被释放（kfree），导致其他处理器或上下文在遍历链表时访问已释放内存，触发 UAF。
+
+#解决方案
+将 `unthrottle_qos_sched_group` 的调用位置从 `free_fair_sched_group` 移至 `unregister_fair_sched_group` 函数中。这样可以确保在销毁调度组之前，先通过 `unregister_fair_sched_group` 正确处理 QoS cfs_rq 的 unthrottle 操作，避免在内存释放后链表中仍存在悬空指针的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4382392c36304d3a7b28dfeccff81d1af0dc5fdb

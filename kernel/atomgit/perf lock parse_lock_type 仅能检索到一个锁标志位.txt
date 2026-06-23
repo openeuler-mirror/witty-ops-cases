@@ -1,0 +1,29 @@
+#标题
+perf lock parse_lock_type 仅能检索到一个锁标志位
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `perf lock` 工具并通过 `-Y` 参数指定锁类型过滤器时，解析逻辑存在缺陷，导致只能添加 `lock_type_table` 中匹配到的第一个锁标志位，后续相关的标志位被忽略。
+例如：
+1. 执行 `-Y rwlock` 时，预期应同时添加 `rwlock:R` 和 `rwlock:W`，但实际仅添加了 `rwlock:R`。
+2. 执行 `-Y mutex` 时，预期添加带有 `LCB_F_SPIN` 标志的 mutex，但实际添加的 mutex 缺少该标志。
+这导致 `perf lock contention` 等工具无法正确统计或过滤指定锁类型的完整数据（如只能看到读锁统计而看不到写锁统计）。
+
+#主要错误日志
+Unknown lock flags name: [推断：当用户输入带冒号的无效标志时可能触发]
+Unknown lock name: [推断：当用户输入无效锁名称时可能触发]
+
+#问题根因
+`parse_lock_type` 函数在遍历 `lock_type_table` 时，调用 `get_type_flag` 仅返回第一个匹配项的标志位，且处理逻辑在找到第一个匹配项后便停止遍历或处理不当，未能处理同一锁名称对应多个不同标志位（如 rwlock 对应读和写）的情况，导致部分锁标志丢失。
+
+#解决方案
+重构 `parse_lock_type` 函数：
+1. 移除旧的 `get_type_flag` 辅助函数，改为在主解析循环中直接遍历 `lock_type_table`。
+2. 区分处理带冒号的特定标志输入（如 `rwlock:R`）与通用锁名称输入（如 `rwlock`）。
+3. 对于通用锁名称，遍历整个表，确保添加该名称对应的所有标志位。
+4. 同时将 `mutex-spin` 的别名调整为 `mutex:spin` 以保持一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/142e20977a86386fc086b8e5c084b86b0c1da629

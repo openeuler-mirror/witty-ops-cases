@@ -1,0 +1,21 @@
+#标题
+wifi: ath12k: TKIP MIC 错误处理路径中 MSDU 长度校验缺失导致内存越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在压力测试场景下，当 ath12k 驱动处理 WBM error ring 中的 TKIP MIC 错误时，若收到无效的描述符，会导致从 hal_rx_desc 获取的 MSDU 长度无效。由于缺乏校验，该无效长度被直接传递给 `skb_put()` 函数，可能导致内存越界访问或内核崩溃。
+
+#主要错误日志
+- 推断日志（基于修复代码中的 ath12k_dbg 调用）：
+  `invalid msdu len in tkip mic err %u`
+
+#问题根因
+在 WBM 错误处理路径中，处理 TKIP MIC 错误时，代码直接从 `hal_rx_desc` 的 `msdu_end` 获取 MSDU 长度并传递给 `skb_put()`，未对该长度值进行合法性校验。在压力测试等场景下，WBM error ring 可能会接收到无效的描述符，导致 MSDU 长度值无效，进而引发内存操作越界。
+
+#解决方案
+在 `ath12k_dp_rx_h_tkip_mic_err` 函数中，在调用 `skb_put()` 之前增加长度校验逻辑。判断 `hal_rx_desc_sz + l3pad_bytes + msdu_len` 的计算结果是否大于 `DP_RX_BUFFER_SIZE`。若超过缓冲区大小，则判定为无效 MSDU 长度，打印调试信息并直接丢弃该 skb（返回 true），从而防止无效内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/688ded3955f4d43aea0ceff665cc43c01d98298d

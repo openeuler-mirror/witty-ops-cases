@@ -1,0 +1,28 @@
+#标题
+efi: sysfb_efi 构建时出现未使用变量警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 W=1 选项进行内核编译且 EFI 配置项（CONFIG_EFI）未开启时，编译过程产生编译警告，提示存在定义但未使用的变量和常量。
+
+#主要错误日志
+drivers/firmware/efi/sysfb_efi.c:345:39: warning: ‘efifb_fwnode_ops’ defined but not used [-Wunused-const-variable=]
+  345 | static const struct fwnode_operations efifb_fwnode_ops = {
+      |                                       ^~~~~~~~~~~~~~~~
+drivers/firmware/efi/sysfb_efi.c:238:35: warning: ‘efifb_dmi_swap_width_height’ defined but not used [-Wunused-const-variable=]
+  238 | static const struct dmi_system_id efifb_dmi_swap_width_height[] __initconst = {
+      |                                   ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+drivers/firmware/efi/sysfb_efi.c:188:35: warning: ‘efifb_dmi_system_table’ defined but not used [-Wunused-const-variable=]
+  188 | static const struct dmi_system_id efifb_dmi_system_table[] __initconst = {
+      |                                   ^~~~~~~~~~~~~~~~~~~~~~
+
+#问题根因
+在 CONFIG_EFI 未配置时，部分依赖 EFI 功能的数据结构（如 `efifb_fwnode_ops`、`efifb_dmi_swap_width_height` 等）和代码逻辑仍然被编译进内核，但由于缺少相关调用路径，导致这些定义变成未使用的“死代码”，从而触发编译器警告。原有的宏定义隔离范围不正确。
+
+#解决方案
+调整 `#ifdef CONFIG_EFI` 预处理指令的位置，将其作用域扩大，覆盖住所有依赖 EFI 配置的数据定义和函数实现，确保在 CONFIG_EFI 未设置时，相关代码和数据完全不被编译。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1dd57d8ae4bb7d434764675938662dbb558f03b1

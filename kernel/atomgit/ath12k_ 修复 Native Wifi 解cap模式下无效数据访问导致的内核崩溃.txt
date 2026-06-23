@@ -1,0 +1,23 @@
+#标题
+ath12k: 修复 Native Wifi 解cap模式下无效数据访问导致的内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 Native Wifi 格式的接收数据包时，若报文头部长度异常（超过 DP_MAX_NWIFI_HDR_LEN），驱动程序未进行有效性校验即进行内存访问。该缺陷会导致内核访问无效内存区域，引发 WARN_ON_ONCE 告警、内核 Oops 或系统崩溃，同时伴随 soc_stats 统计中的 invalid_rbm 计数增加。
+
+#主要错误日志
+[内核日志] WARNING: CPU: ... PID: ... at drivers/net/wireless/ath/ath12k/dp_rx.c:... ath12k_dp_rx_check_nwifi_hdr_len_valid+0x.../0x... [ath12k]
+
+#问题根因
+驱动在处理 Native Wifi decap 类型（DP_RX_DECAP_TYPE_NATIVE_WIFI）的接收报文时，在 `ath12k_dp_rx_h_undecap_nwifi` 相关处理流程中，缺乏对 IEEE 802.11 头部长度的合法性校验。当报文头部长度 `hdr_len` 超过最大限制 `DP_MAX_NWIFI_HDR_LEN` 时，程序继续执行导致越界访问无效数据。
+
+#解决方案
+在多个涉及报文处理的函数路径中增加头部校验逻辑：
+1. 新增校验函数 `ath12k_dp_rx_check_nwifi_hdr_len_valid`，用于检查 decap 类型是否为 Native Wifi，若是则计算头部长度并判断是否超过 `DP_MAX_NWIFI_HDR_LEN`。
+2. 若校验失败，增加 `invalid_rbm` 统计计数并触发 `WARN_ON_ONCE(1)`，函数返回 false 以阻止后续处理。
+3. 在 `ath12k_dp_rx_process_msdu`、`ath12k_dp_rx_h_verify_tkip_mic`、`ath12k_dp_rx_h_null_q_desc` 和 `ath12k_dp_rx_h_tkip_mic_err` 等关键接收处理路径中插入该校验调用。若校验失败，立即终止处理流程并丢弃报文（返回 -EINVAL 或 true），防止无效数据访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ecedb4219f373697a260948e7bfe781c40318682

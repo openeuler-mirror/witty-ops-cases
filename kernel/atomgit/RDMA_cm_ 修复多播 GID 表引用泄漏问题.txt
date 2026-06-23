@@ -1,0 +1,20 @@
+#标题
+RDMA/cm: 修复多播 GID 表引用泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RoCE 设备场景下，销毁多播（Multicast）对象时，若曾发生过 `RDMA_CM_EVENT_MULTICAST_JOIN` 事件，内核未正确销毁关联的 AH（Address Handle）属性结构，导致多播 GID 表的引用计数发生泄漏，造成内核内存资源无法释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `destroy_mc` 函数处理 RoCE 协议路径时，代码调用 `cancel_work_sync` 取消了多播加入的工作队列，但遗漏了对 `iboe_join.event` 中 AH 属性的处理。当 `event->event` 为 `RDMA_CM_EVENT_MULTICAST_JOIN` 时，该事件中保存的 `ah_attr` 需要被显式销毁以释放底层资源。原代码逻辑未检查事件类型并调用销毁接口，导致了引用泄漏。
+
+#解决方案
+在 `destroy_mc` 函数的 RoCE 处理分支中，增加对 `mc->iboe_join.event` 的检查。如果事件类型为 `RDMA_CM_EVENT_MULTICAST_JOIN`，则调用 `rdma_destroy_ah_attr` 函数释放 `event->param.ud.ah_attr`，从而修正引用计数并防止资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/757943325d82a19fee619b22be4640c0da75baf2

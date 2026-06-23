@@ -1,0 +1,39 @@
+#标题
+[ub/udma: 修复锁依赖、权限控制及注销流程等多项故障]
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 系统在运行 UDMA 相关业务时可能出现死锁或响应挂起，原因为 ubase 和 udma 模块间存在锁的循环依赖。
+2. 调用 segment 相关接口时，因权限判断逻辑错误导致功能异常或访问权限配置不符合预期。
+3. 在驱动注销或流销毁过程中，若存在 stream 未注销的情况，可能导致驱动卸载失败或资源泄漏。
+4. 在并发场景下（如 poll jfc），若中断未被正确禁用，可能引发竞态条件导致内核崩溃。
+5. 驱动处理 bogus（伪造/无效）jfcn 完成事件时，打印告警日志后直接返回，导致锁未释放引发后续死锁。
+6. 设备处于非正常状态（如 reset 中）时处理 eid update 请求可能引发异常。
+
+#主要错误日志
+- "Completion event for bogus jfcn %lu.\n"
+- "current mm released.\n"
+- "msg len(%u) is invalid.\n"
+- "check tp status failed, ret(%d).\n"
+- "send check tp active ctrlq msg failed, ret(%d).\n"
+- "ksva grant failed token policy %d, access %d, ret = %d.\n"
+- "udma close ue rx failed in reset process.\n"
+
+#问题根因
+1. **锁机制问题**：`udma_poll_jfc`、`udma_post_jfr_wr`、`udma_post_sq_wr` 等接口在非 lock_free 模式下仅使用 `spin_lock`，未禁用中断，在某些上下文中可能导致死锁或竞态；`udma_jfc_completion` 中在查找失败时直接返回，遗漏了 `xa_unlock` 操作导致锁泄漏。
+2. **权限控制逻辑缺陷**：`udma_u_get_seg_perm` 函数对于内存段访问权限的判断逻辑不完善，未能正确处理 LOCAL_ONLY、ATOMIC、WRITE、READ 等标志位的组合情况。
+3. **注销流程缺陷**：在 `udma_reset_down` 中过早关闭 ue_rx，且 `udma_unregister_event` 调用顺序靠后，导致注销流程中无法正确处理带 stream 的注销场景；`udma_remove` 中 `ubase_reset_unregister` 在锁外调用可能导致时序问题。
+4. **状态检查缺失**：`udma_ctrlq_eid_update` 未检查设备状态，在设备非 `UDMA_NORMAL` 状态下仍尝试处理请求。
+5. **资源管理与参数校验**：`udma_ctrlq_check_tp_status` 响应结构定义与内存分配逻辑与请求数据不一致，存在内存分配失败处理不完整的风险；`udma_alloc_ucontext` 错误路径下 `hugepage_lock` 未销毁。
+
+#解决方案
+1. **修复锁与中断**：将相关路径下的 `spin_lock` 替换为 `spin_lock_irqsave`，确保中断安全；修正 `udma_jfc_completion` 中错误路径的解锁顺序。
+2. **修正权限判断**：重写 `udma_u_get_seg_perm` 逻辑，严格检查 LOCAL_ONLY、ATOMIC、WRITE、READ 的组合有效性，拒绝非法配置。
+3. **优化注销流程**：将 `udma_close_ue_rx` 移至 `udma_reset_uninit` 中调用，调整 `udma_unregister_event` 在 `udma_remove` 和 `udma_reset_uninit` 中的调用顺序至 `udma_unset_ubcore_dev` 之前；在 `udma_remove` 中调整 `ubase_reset_unregister` 与互斥锁的获取顺序。
+4. **增加状态检查**：在 `udma_ctrlq_eid_update` 入口处增加 `udma_dev->status != UDMA_NORMAL` 判断，直接返回响应。
+5. **完善资源管理**：修正 `udma_ctrlq_check_tp_status` 的结构体定义与内存分配逻辑，确保内存正确释放；在 `udma_alloc_ucontext` 的错误处理分支增加 `mutex_destroy(&ctx->hugepage_lock)`；将日志打印改为 `dev_warn_ratelimited` 避免日志风暴。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fffef9c5e15ad3020e97a7a69f0bd56cf2136d68

@@ -1,0 +1,20 @@
+#标题
+x86/mtrr: 挂起时访问不存在的 fixed-range MTRRs 导致 MSR 访问错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统挂起过程中，若平台不支持 fixed-range MTRRs（例如 ACRN hypervisor 移除了该特性的模拟），内核会触发未检查的 MSR 访问错误。
+
+#主要错误日志
+unchecked MSR access error
+
+#问题根因
+在挂起流程中，`save_processor_state()` 调用 `mtrr_save_fixed_ranges()` 试图保存 fixed-range MTRRs。原有代码仅检查了 `X86_FEATURE_MTRR` 标志位，未进一步确认 CPU 是否实际支持或开启了 fixed-range MTRRs。对于 ACRN hypervisor 等不具备 fixed-range MTRR 模拟的平台，直接访问这些 MSR 寄存器会触发非法访问错误。
+
+#解决方案
+修改 `mtrr_save_fixed_ranges()` 函数的判断条件，将 `boot_cpu_has(X86_FEATURE_MTRR)` 替换为检查 `mtrr_state.have_fixed`。该变量仅在 MTRRs 存在且 fixed-range MTRRs 被支持时才被置位，从而确保在访问相关 MSR 前已确认其存在性，防止非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd8534df9d4d073420d310200fa2370b2a1c966a

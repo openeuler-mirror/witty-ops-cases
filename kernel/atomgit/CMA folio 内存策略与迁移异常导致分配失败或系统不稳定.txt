@@ -1,0 +1,30 @@
+#标题
+CMA folio 内存策略与迁移异常导致分配失败或系统不稳定
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 进程绑定特定 NUMA 内存策略（如 MPOL_PREFERRED_MANY 或 INTERLEAVE）时，CMA folio 内存分配可能失败，无法在指定节点上分配内存。
+2. 在进行内存迁移（migrate_pages）时，如果涉及到 CMA folio，可能导致页面处理逻辑异常，引发内存泄漏或列表管理混乱（如 skip_folios 列表未正确放回）。
+3. 尝试对 CMA folio 进行迁移操作时，未立即返回错误，导致不必要的处理流程或潜在状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **内存策略应用缺失**：`folio_alloc_cma_mpol` 函数未正确处理 `MPOL_PREFERRED_MANY` 策略，且在分配路径中遗漏了 `smart_grid` 策略的应用，导致分配行为不符合预期。
+2. **NUMA 节点掩码校验缺陷**：`folio_alloc_cma` 在分配前未校验目标节点是否在 `nodemask` 允许范围内，导致可能在错误的节点上分配内存。
+3. **迁移逻辑处理不当**：
+   - `migrate_pages` 函数对 `skip_folios` 列表使用了 `list_splice`，而该列表中的页面引用计数未正确恢复，应使用 `putback_movable_pages` 进行放回。
+   - `__add_folio_for_migration` 函数未对 CMA folio 进行拦截检查，导致 CMA folio 被错误地加入迁移队列。
+
+#解决方案
+1. **完善内存策略处理**：在 `folio_alloc_cma_mpol` 中增加对 `MPOL_PREFERRED_MANY` 的专项处理逻辑，并在通用分配路径前调用 `mpol_apply_smart_grid` 确保 NUMA 策略生效。
+2. **增加节点掩码校验**：在 `folio_alloc_cma` 调用 `cma_alloc_compound` 前，增加判断条件 `!nodemask || node_isset(nid, *nodemask)`，确保仅在允许的节点上分配。
+3. **修正迁移流程**：
+   - 修改 `migrate_pages`，将 `list_splice(&skip_folios, from)` 替换为 `putback_movable_pages(&skip_folios)`，确保页面正确放回并处理引用计数。
+   - 在 `__add_folio_for_migration` 中增加 `folio_test_fcma(folio)` 检查，若为 CMA folio 直接返回 `-EBUSY`，阻止其参与迁移。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aa1c66db3dfa3c2aa36412556cce9e01da0c23ae

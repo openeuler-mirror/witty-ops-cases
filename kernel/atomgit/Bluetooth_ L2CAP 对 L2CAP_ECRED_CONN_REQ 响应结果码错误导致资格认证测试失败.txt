@@ -1,0 +1,21 @@
+#标题
+Bluetooth: L2CAP 对 L2CAP_ECRED_CONN_REQ 响应结果码错误导致资格认证测试失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行蓝牙资格认证测试用例 L2CAP/ECFC/BV-32-C 时测试失败。当安全级别设置为 BT_SECURITY_MEDIUM（安全模式 2）时，系统对 L2CAP_ECRED_CONN_REQ 请求错误地返回了 L2CAP_CR_LE_AUTHENTICATION 结果码，导致协议行为不符合规范。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `l2cap_ecred_conn_req` 中，处理安全检查逻辑时存在缺陷。当调用 `smp_sufficient_security` 检查失败时，代码未区分安全级别，直接将结果码固定赋值为 `L2CAP_CR_LE_AUTHENTICATION`。
+根据规范，当安全级别为 `BT_SECURITY_MEDIUM`（对应安全模式 2，不需要认证仅需加密）时，应返回 `L2CAP_CR_LE_ENCRYPTION` 而非 `L2CAP_CR_LE_AUTHENTICATION`。此逻辑错误与之前修复的 commit 03dba9cea72f 类似。
+
+#解决方案
+修改 `net/bluetooth/l2cap_core.c` 文件中 `l2cap_ecred_conn_req` 函数的安全检查处理逻辑。在判断安全条件不满足时，增加对 `pchan->sec_level` 的判断：若安全级别为 `BT_SECURITY_MEDIUM`，则返回 `L2CAP_CR_LE_ENCRYPTION`；否则返回 `L2CAP_CR_LE_AUTHENTICATION`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1208ffc292aab16e144f5c5fccd315665584ca17

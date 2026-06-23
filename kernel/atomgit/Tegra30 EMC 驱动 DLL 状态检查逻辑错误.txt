@@ -1,0 +1,20 @@
+#标题
+Tegra30 EMC 驱动 DLL 状态检查逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Tegra30 设备在调整内存频率时，外部内存控制器（EMC）驱动对 DLL（延迟锁定环路）使能状态的判断逻辑反转。这可能导致在内存时序切换过程中，驱动程序错误地配置 DLL 变更序列（该开启时关闭，或反之），进而引发内存时序设置错误，造成系统运行不稳定或内存读写异常，具体表现可能包括系统挂起或不可预测的崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+代码在检查 EMRS 寄存器（通过 `timing->emc_mode_1` 传递）中的 DLL 使能位（Bit A0）时逻辑反转。根据硬件规范，DLL 应在 Bit A0 为低电平时使能，但原代码误将 `!!(timing->emc_mode_1 & 0x1)`（即 Bit A0 为高）判定为 DLL 开启，导致 `dll_change` 状态判断与 `emc->dll_on` 状态更新均出现错误。
+
+#解决方案
+修正 `drivers/memory/tegra/tegra30-emc.c` 中的判断逻辑，将 DLL 使能条件的检查取反。具体修改为将 `timing->emc_mode_1 & 0x1` 的逻辑取反操作由 `!!` 修改为 `!`，确保当 Bit A0 为低时正确识别 DLL 为开启状态，从而正确设置 `dll_change` 变量及 `emc->dll_on` 状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dd25034f029b742bea06d3f0828eb625423fdef2

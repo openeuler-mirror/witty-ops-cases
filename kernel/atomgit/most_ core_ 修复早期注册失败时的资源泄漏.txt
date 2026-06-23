@@ -1,0 +1,20 @@
+#标题
+most: core: 修复早期注册失败时的资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MOST（Media Oriented Systems Transport）核心模块注册接口时，若传入的 `most_interface` 结构体中 `enqueue`、`configure`、`poison_channel` 等函数指针为空，或者 `num_channels` 超过最大值，内核将返回 EINVAL 错误。由于错误处理路径未正确释放已初始化的资源，导致该接口相关的内核资源发生泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `most_register_interface` 函数中，代码首先对 `iface->dev` 执行了 `device_initialize` 初始化操作。随后在检查接口参数有效性（如 `enqueue`、`configure` 等回调函数是否存在）时，如果检查失败直接返回 `-EINVAL`，却遗漏了调用 `put_device(iface->dev)` 来释放此前初始化设备对象时引用的资源，从而导致资源泄漏。
+
+#解决方案
+调整参数检查的逻辑顺序，将接口回调函数和通道数量的检查移至 `device_initialize` 调用之前；或者在参数检查失败的分支中补充 `put_device(iface->dev)` 调用。该补丁采用后者，在参数检查失败的错误路径中显式调用 `put_device(iface->dev)`，确保接口注册失败时能正确释放已初始化的设备资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ed02cd9ef95da232bb8e97a692d5e0e3c91add7

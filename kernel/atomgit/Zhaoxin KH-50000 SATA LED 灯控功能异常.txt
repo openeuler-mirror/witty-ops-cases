@@ -1,0 +1,24 @@
+#标题
+Zhaoxin KH-50000 SATA LED 灯控功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在搭载 Zhaoxin KH-50000 处理器的平台上，SATA 控制器的 Activity LED（活动指示灯）无法正常闪烁或响应磁盘活动，LED 指示灯状态显示异常。
+
+#主要错误日志
+- `ahci: zx led quirk init`
+- `P1 removed, LED mode unavailable`（推断：若 P1 设备移除时触发）
+
+#问题根因
+Zhaoxin KH-50000 平台的 SATA 控制器硬件设计存在特殊性，一个 SATA 控制器实例（P0）需要访问另一个实例（P1）的 MMIO 空间才能正确驱动 LED 指示灯。内核原生驱动未针对此硬件特性进行处理，导致 P0 无法获取 P1 的 MMIO 资源，进而导致 LED 控制失效。
+
+#解决方案
+1. 在 `ahci_host_priv` 结构体中新增 `p1_mmio`、`sx_index`、`px_index` 和 `has_p0_p1` 字段，用于保存 P1 的 MMIO 地址及标识 P0/P1 配对关系。
+2. 新增 `ahci_zx_led_init_quirk` 函数，在设备初始化时通过读取特定 MSR 寄存器获取总线拓扑信息，识别 P0 和 P1 设备，并将 P1 的 MMIO 地址传递给 P0。
+3. 新增 `led_get_mmio_quirk` 辅助函数，修改 `ahci_transmit_led_message` 和 `ahci_store_em_buffer` 接口，使其在发送 LED 消息时，针对 P0 设备强制使用 P1 的 MMIO 地址进行寄存器读写。
+4. 新增 `ahci_zx_led_remove_quirk` 函数处理设备移除时的资源清理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c84263290bfc5a304761f3e4e351b9cc148d2997

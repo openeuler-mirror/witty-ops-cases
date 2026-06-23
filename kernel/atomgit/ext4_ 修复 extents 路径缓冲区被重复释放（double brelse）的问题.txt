@@ -1,0 +1,34 @@
+#标题
+ext4: 修复 extents 路径缓冲区被重复释放（double brelse）的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 ext4 文件系统操作（如写入引起 extents 分裂）时，若内存分配失败导致路径重查找，可能触发内核 WARNING。具体表现为内核检测到试图释放一个已经释放的缓冲区，导致 VFS 报错并打印调用栈。
+
+#主要错误日志
+```
+VFS: brelse: Trying to free free buffer
+WARNING: CPU: 2 PID: 72 at fs/buffer.c:1241 __brelse+0x58/0x90
+CPU: 2 PID: 72 Comm: kworker/u19:1 Not tainted 6.9.0-dirty #716
+RIP: 0010:__brelse+0x58/0x90
+Call Trace:
+ <TASK>
+ __find_get_block+0x6e7/0x810
+ bdev_getblk+0x2b/0x480
+ __ext4_get_inode_loc+0x48a/0x1240
+ ...
+ ext4_ext_insert_extent+0x9c8/0x3230
+ ext4_ext_map_blocks+0xf45/0x2dc0
+```
+
+#问题根因
+在函数 `ext4_ext_try_to_merge_up()` 中，代码执行 `brelse(path[1].p_bh)` 释放了缓冲区，但未将 `path[1].p_bh` 指针置为 NULL。
+在后续的异常处理流程中（例如 `ext4_ext_grow_indepth` 中的 `read_extent_tree_block` 返回错误），路径结构体被重用或重新初始化不完全，导致 `path[1].p_bh` 仍指向已被释放的旧缓冲区。随后在 `ext4_ext_drop_refs` 中再次对该指针调用 `brelse()`，引发了 double free（重复释放）。
+
+#解决方案
+在 `ext4_ext_try_to_merge_up()` 函数中，于 `brelse(path[1].p_bh)` 语句之后，显式将 `path[1].p_bh` 设置为 NULL，防止后续逻辑误判并再次释放同一缓冲区。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/202a2ed308077bc9d85b3346ba995e02861bb278

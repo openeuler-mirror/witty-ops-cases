@@ -1,0 +1,23 @@
+#标题
+调度器原子上下文中调用睡眠函数导致原子睡眠问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行 cgroup 子系统下线操作时，触发了原子上下文睡眠问题。具体表现为在 `destroy_auto_affinity()` 函数调用链中，因调用可能睡眠的函数而引发内核告警或 BUG，影响 cgroup 的正常离线流程。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cpu_cgroup_css_offline` 函数中，内核处于原子上下文，此时调用 `destroy_auto_affinity()` 会进一步调用 `smart_grid_usage_dec()`。由于 `smart_grid_usage_dec()` 函数可能会睡眠，违反了原子上下文不能睡眠的规则，从而导致原子睡眠问题。
+
+#解决方案
+将可能睡眠的操作从原子上下文中剥离。具体修改如下：
+1. 新增 `offline_auto_affinity()` 函数，将原本在 `destroy_auto_affinity()` 中可能引起睡眠的 `smart_grid_usage_dec()` 调用逻辑移至该新函数。
+2. 在 `cpu_cgroup_css_offline()` 中，先调用 `offline_auto_affinity()`，随后再调用 `offline_soft_domain()`，确保睡眠操作不在原子临界区内执行。
+3. 保留 `destroy_auto_affinity()` 用于处理 hrtimer 取消、内存释放等无需睡眠或必须在特定上下文执行的操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e6798742026d44232461208a4f99fc0a2a785d2f

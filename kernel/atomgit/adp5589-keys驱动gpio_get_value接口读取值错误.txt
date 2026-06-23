@@ -1,0 +1,24 @@
+#标题
+adp5589-keys驱动gpio_get_value接口读取值错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 adp5589 芯片的 GPIO 被配置为输出模式时，读取该 GPIO 的状态值返回错误。驱动错误地读取了输入状态寄存器（GPI_STATUS），导致读取到的数值与实际输出的电平不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `adp5589_gpio_get_value` 的实现逻辑有误。当 GPIO 方向被配置为输出时，驱动应当从 `ADP5589_GPO_DATA_OUT_A` 寄存器（即内存中的 `dat_out` 缓存）读取设定的输出值，但原代码逻辑未区分 GPIO 方向，始终从 `ADP5589_GPI_STATUS_A` 寄存器读取输入状态，导致读取结果错误。该行为与同系列设备 adp5588 的问题一致。
+
+#解决方案
+修改 `adp5589_gpio_get_value` 函数逻辑，增加对 GPIO 方向的判断：
+1. 获取互斥锁 `gpio_lock` 保护临界区。
+2. 判断 `kpad->dir` 中对应位的方向。
+3. 若为输出，直接返回缓存 `kpad->dat_out` 中的值。
+4. 若为输入，保持原逻辑读取 `ADP5589_GPI_STATUS_A` 寄存器值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f680a831a8c77af3ae6ebfed8874ac1bb347d557

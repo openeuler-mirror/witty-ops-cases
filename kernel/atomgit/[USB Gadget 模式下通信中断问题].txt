@@ -1,0 +1,22 @@
+#标题
+[USB Gadget 模式下通信中断问题]
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 OTG USB 端口用于为 SoC 供电、配置为外设且在 Gadget 模式下使用时，通信会在 Gadget 配置并枚举后约 6 秒无声地停止。例如，在使用 CDC 串口 Gadget 时，主机和设备上的 /dev/tty* 设备仍然存在，但不再传输任何数据。
+
+#主要错误日志
+未知
+
+#问题根因
+在 PHY 驱动的 `rockchip_chg_detect_work` 函数中，充电检测工作队列启动约 6 秒后，代码流程会将控制器设置为非驱动模式：
+`property_enable(base, &rphy->phy_cfg->chg_det.opmode, false);`
+此操作禁用了维持通信所需的功能，导致通信停止。且后续恢复操作无法修复此状态。问题发生的场景是线缆已连接（VBUS 存在），但代码未检查 VBUS 状态就执行了禁用操作。
+
+#解决方案
+在修改 `chg_det.opmode` 状态前增加对 `vbus_attach` 状态的检查。仅在 VBUS 未连接时才允许修改控制器模式，避免在有线缆连接且正在进行通信时错误地关闭通信功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/412f46f60f3475c11223fa44a08cb333cbbf3581

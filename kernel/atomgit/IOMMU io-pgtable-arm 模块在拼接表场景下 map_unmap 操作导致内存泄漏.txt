@@ -1,0 +1,23 @@
+#标题
+IOMMU io-pgtable-arm 模块在拼接表场景下 map/unmap 操作导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 PGD（页全局目录）拼接（Concatenated Tables）功能的 ARM LPAE io-pgtable 场景下，进行大地址空间的 map 或 unmap 操作时：
+1. map 路径：`__arm_lpae_map` 函数可能返回错误的负数值作为映射结果，导致映射行为异常。
+2. unmap 路径：`__arm_lpae_unmap` 及相关拆分函数计算出的 `max_entries` 上限错误，可能导致子页表未被正确遍历与释放，从而造成内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于代码在计算页表剩余条目数（`max_entries`）时，未考虑 PGD 拼接的影响。
+`ARM_LPAE_LVL_IDX()` 函数返回的索引值包含拼接表的偏移量，可能跨越多个页表页。原代码直接使用公式 `ARM_LPAE_PTES_PER_TABLE(data) - map_idx_start` 计算剩余条目，当输入地址较大导致索引跨越页表页边界时，该计算结果会溢出变成负数，导致后续逻辑判断错误。
+
+#解决方案
+引入一个新的辅助函数 `arm_lpae_max_entries()`，用于正确计算在单个页表页内的剩余可映射条目数。该函数通过对索引值与掩码进行位运算（`i & (ptes_per_table - 1)`），剥离拼接表的偏移量，确保计算结果限制在单个页表页范围内。修复补丁在 `__arm_lpae_map`、`arm_lpae_split_blk_unmap` 和 `__arm_lpae_unmap` 中使用该辅助函数替换原有的计算逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d7f7005e5c62dd87f2a98b132eb98cbb4e99085d

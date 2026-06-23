@@ -1,0 +1,20 @@
+#标题
+PCI endpoint test 驱动 DMA 通道错误处理中指针置空错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PCI endpoint function test 驱动初始化过程中，若 DMA 发送通道（dma_chan_tx）分配失败，错误处理代码逻辑错误地清空了发送通道指针，而未清空接收通道指针（dma_chan_rx）。这导致接收通道指针指向了已释放的内存，后续代码若访问该指针可能引发 Use-After-Free 风险或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `pci_epf_test_init_dma_chan` 在 DMA 通道分配失败的错误处理路径中存在笔误。在 `fail_back_rx` 标签处，代码调用 `dma_release_channel` 释放了接收通道 `dma_chan_rx`，但随后错误地将发送通道指针 `dma_chan_tx` 赋值为 NULL，而本应赋值为 NULL 的接收通道指针 `dma_chan_rx` 仍然指向已释放的内存地址。
+
+#解决方案
+修正错误处理路径中的指针赋值错误，将 `fail_back_rx` 标签下的 `epf_test->dma_chan_tx = NULL` 修改为 `epf_test->dma_chan_rx = NULL`，确保释放接收通道后将其指针置空，避免悬挂指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae48e6c4121b263b8c02a1c5de44e106cf84f66e

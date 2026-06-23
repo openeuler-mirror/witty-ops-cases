@@ -1,0 +1,24 @@
+#标题
+hexagon 架构 cmpxchg 宏引发 Sparse 警告：使用整型作为 NULL 指针
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译过程中使用 Sparse 静态分析工具（`make C=1`）针对 hexagon 架构编译网络模块时，触发静态分析警告。
+具体表现为 `net/ipv4/inet_diag.c` 文件中调用 `cmpxchg` 时，Sparse 工具报告 "Using plain integer as NULL pointer"（使用普通整数作为 NULL 指针）。
+
+#主要错误日志
+net/ipv4/inet_diag.c:1511:17: sparse: sparse: Using plain integer as NULL pointer
+
+#问题根因
+Hexagon 架构的 `cmpxchg` 宏定义中，初始化变量 `__oldval` 时直接使用了整数 `0`（`__typeof__(*(ptr)) __oldval = 0;`）。
+当 `cmpxchg` 被用于指针类型参数（如 `struct inet_diag_handler *`）时，该赋值语句相当于将整数 0 直接赋值给指针变量，未进行类型转换，从而触发了 Sparse 工具关于类型安全的警告。
+
+#解决方案
+修改 `arch/hexagon/include/asm/cmpxchg.h` 文件中的 `cmpxchg` 宏定义。
+将变量初始化语句 `__typeof__(*(ptr)) __oldval = 0;` 修改为 `__typeof__(*(ptr)) __oldval = (__typeof__(*(ptr))) 0;`。
+通过显式类型转换，将 0 转换为指针变量 `__oldval` 对应的类型，消除静态分析工具的类型警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/88a9120009a70013450bdd1a37af0810a22384c2

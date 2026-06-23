@@ -1,0 +1,37 @@
+#标题
+mlx5: 同步复位卸载事件触发 lockdep 断言警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 devlink reload fw_activate 选项发起同步复位流程时，触发 lockdep 断言失败，导致内核打印 WARNING 警告。调用栈显示在处理卸载事件时，由于 PF 已持有 devlink 锁，再次尝试获取该锁导致双重锁定检测失败。
+
+#主要错误日志
+WARNING: CPU: 9 PID: 1578 at devl_assert_locked+0x31/0x40
+[...]
+Call Trace:
+<TASK>
+ mlx5_unload_one_devl_locked+0x2c/0xc0 [mlx5_core]
+ mlx5_sync_reset_unload_event+0xaf/0x2f0 [mlx5_core]
+ process_one_work+0x222/0x640
+ worker_thread+0x199/0x350
+ kthread+0x10b/0x230
+ ? __pfx_worker_thread+0x10/0x10
+ ? __pfx_kthread+0x10/0x10
+ ret_from_fork+0x8e/0x100
+ ? __pfx_kthread+0x10/0x10
+ ret_from_fork_asm+0x1a/0x30
+</TASK>
+
+#问题根因
+同步复位流程使用 devlink reload fw_activate 选项时，PF 驱动在处理卸载事件前已经持有 devlink lock。而在 `mlx5_sync_reset_unload_event` 处理函数中，代码路径直接或间接调用了 `mlx5_unload_one_devl_locked`，该函数内部会断言并尝试获取 devlink 锁，从而引发双重锁定和 lockdep 警告。
+
+#解决方案
+重构同步复位卸载流程的处理逻辑：
+1. 新增 `mlx5_sync_reset_unload_flow` 函数统一处理卸载流程，支持根据调用上下文是否已持有锁来选择正确的卸载接口。
+2. 引入 `MLX5_FW_RESET_FLAGS_UNLOAD_EVENT` 标志位，用于标识当前处于卸载事件流程中。
+3. 修改 `mlx5_sync_reset_unload_event` 和 `mlx5_devlink_reload_fw_activate` 调用逻辑，传入 `locked` 参数（true/false），区分是否已持有锁，从而避免在已持锁情况下再次尝试获取锁，消除 lockdep 警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1375b8eacd827df859750a0bd88ffbedd11075e5

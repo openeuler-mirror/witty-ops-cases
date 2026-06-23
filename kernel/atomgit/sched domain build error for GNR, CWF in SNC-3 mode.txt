@@ -1,0 +1,22 @@
+#标题
+sched domain build error for GNR, CWF in SNC-3 mode
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 GNR (Granite Rapids) 和 CWF (Clearwater Forest) 处理器开启 SNC-3 模式时，内核构建调度域出现错误。由于远程 NUMA 节点距离存在过多层级，导致创建了包含本地节点和部分远程节点的多余 NUMA 域级别，系统可能打印包含 "Expect only up to 2 packages" 的警告信息。
+
+#主要错误日志
+WARN_ONCE(topology_max_packages() > 2, "sched: Expect only up to 2 packages for GNR or CWF, but saw %d packages when building sched domains.", topology_max_packages());
+
+#问题根因
+在 SNC 开启的情况下，远程 NUMA 节点距离存在许多层级，导致在构建 NUMA 调度域级别时，系统创建了包含不同远程 NUMA 节点和本地节点的额外 NUMA 级别。原有的调度域构建逻辑未能针对特定硬件架构（GNR/CWF）对这些远程距离进行简化处理，使得调度域结构过于复杂。
+
+#解决方案
+1. 引入 `arch_sched_node_distance` 钩子函数，允许架构特定代码修改 NUMA 距离。
+2. 在 x86 架构下针对 GNR 和 CWF 型号，当存在 Package 内 NUMA (`x86_has_numa_in_package`) 且多 Package 场景下，将远程 Package 的距离统一设置为平均远程距离。
+3. 这样可以将远程 Package 中的 NUMA 节点归组到同一个调度组，简化 NUMA 域结构，避免产生包含混合节点的额外调度域层级。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab25c2ff7c4156a02e17cb588aeea995caab4c7b

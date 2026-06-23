@@ -1,0 +1,20 @@
+#标题
+ASoC: adau1372: PLL锁定失败导致时钟资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ADAU1372 音频编解码器在 PLL 锁定超时失败时，驱动程序未正确处理错误路径，导致 `mclk` 时钟资源泄漏，且驱动内部状态（`enabled` 标记）与硬件实际状态不一致，可能引发后续音频功能异常。
+
+#主要错误日志
+[   xx.xxxxx] adau1372-i2c x-003c: Failed to lock PLL
+
+#问题根因
+函数 `adau1372_enable_pll()` 原设计为 `void` 类型，虽然在 PLL 锁定超时时打印了错误日志 `dev_err`，但并未向调用者返回错误码。这导致上层调用函数 `adau1372_set_power()` 误认为操作成功，继续将 `adau1372->enabled` 设置为 `true`，且未在错误路径上执行 `clk_disable_unprepare(adau1372->mclk)`，从而导致时钟资源泄漏。
+
+#解决方案
+将 `adau1372_enable_pll()` 函数的返回值类型修改为 `int`，在 PLL 锁定超时时返回 `-ETIMEDOUT`，并直接传递 `regmap` 操作的错误码。同时修改 `adau1372_set_power()` 中的调用逻辑，增加对返回值的检查：若 PLL 使能失败，则按逆序执行回滚操作（将 regcache 恢复为 cache-only 模式、重新拉高 GPIO power-down、禁用 mclk 时钟），最后返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56b271680b396185b4c8f2f61bef14885fab8261

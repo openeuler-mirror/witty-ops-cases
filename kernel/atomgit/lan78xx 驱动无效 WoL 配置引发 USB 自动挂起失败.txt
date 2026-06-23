@@ -1,0 +1,20 @@
+#标题
+lan78xx 驱动无效 WoL 配置引发 USB 自动挂起失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户尝试设置一个无效的 Wake-on-LAN (WoL) 配置选项时，驱动程序在返回错误码 `-EINVAL` 之前，已经通过 `usb_autopm_get_interface` 增加了 USB 接口的引用计数，但并未调用对应的释放操作。这导致 USB 接口的引用计数泄漏，进而阻止适配器正确进入自动挂起状态，造成电源管理功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `lan78xx_set_wol` 中，代码逻辑顺序有误。`usb_autopm_get_interface` 被调用在输入参数校验之前。当输入的 `wol->wolopts` 包含无效位（即 `~WAKE_ALL`）时，函数直接返回 `-EINVAL`，但此时已经获取的电源管理引用计数未被释放（未调用 `usb_autopm_put_interface`），导致 refcount 泄漏和 autosuspend 失效。
+
+#解决方案
+调整代码执行顺序，将 WoL 配置选项的有效性检查（`if (wol->wolopts & ~WAKE_ALL)`）移动到 `usb_autopm_get_interface` 调用之前。这确保了在获取电源管理引用计数之前，输入参数已确认为有效，避免了在参数无效时的引用计数泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8f4c297f66e441e2563761ee3eddb5c421e3e108

@@ -1,0 +1,24 @@
+#标题
+RDMA核心暴露hw_counters至非初始命名空间导致潜在安全风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非初始网络命名空间中，RDMA设备的 `hw_counters` 被错误地暴露给用户空间。这可能导致非特权命名空间能够访问或监控其不应具备权限的硬件统计信息，造成信息泄露或逃逸风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在 RDMA 核心设备初始化函数 `rdma_init_coredev` 中，未对设备所属的网络命名空间进行检查。代码逻辑默认将 `hw_stats` 相关的属性组添加到了所有设备实例中，导致在非初始化命名空间创建的 IB 设备也暴露了 `hw_counters` 接口。这破坏了命名空间之间的隔离性。
+
+#解决方案
+在 `rdma_init_coredev` 函数中增加判断逻辑：
+1. 定义变量 `is_full_dev` 用于判断当前设备是否为完整的根设备（位于初始命名空间）。
+2. 如果当前设备非完整根设备且存在硬件统计属性索引（`hw_stats_attr_index`），则将其对应的设备组指针置为 NULL，从而阻止内核在 sysfs 中创建相应的 hw_counters 条目。
+3. 同时修改 `ib_setup_device_attrs` 函数，在注册属性组时记录索引位置到 `ib_device->hw_stats_attr_index`，以便后续清理使用。
+4. 利用 KABI 机制占位符扩展结构体 `ib_device` 以存储新增的索引字段。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d30976c352ca30ae6050657a24cdbd97cb5b5b6a

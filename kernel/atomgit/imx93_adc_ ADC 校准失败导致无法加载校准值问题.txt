@@ -1,0 +1,22 @@
+#标题
+imx93_adc: ADC 校准失败导致无法加载校准值问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ADC 参考电压存在噪声导致校准失败的场景下，驱动程序直接返回错误，导致 ADC 无法正常工作。修复后，即使校准失败也会加载校准值，保证 ADC 功能可用，但精度可能略有降低。
+
+#主要错误日志
+ADC calibration failed!
+
+#问题根因
+ADC 校准可能因参考电压上的噪声而失败。校准失败的要求条件为：ADC reference voltage Noise >= 1.8V * 1/2^ENOB。原代码在校准失败时直接返回 -EAGAIN 并掉电，导致在噪声较大的环境下 ADC 完全不可用。
+
+#解决方案
+修改 `imx93_adc_calibration` 函数逻辑：
+1. 在校准开始前，配置寄存器 `IMX93_ADC_CALCFG0`，置位 `IMX93_ADC_CALCFG0_LDFAIL_MASK`，以启用“在校准失败条件下加载校准值”的功能。
+2. 当检测到校准失败（`IMX93_ADC_MSR_CALFAIL_MASK` 置位）时，不再返回错误并掉电，而是保留当前状态并打印警告日志，允许 ADC 继续工作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9fb655b4f081b93d17ebfec1db2f30cc29e44342

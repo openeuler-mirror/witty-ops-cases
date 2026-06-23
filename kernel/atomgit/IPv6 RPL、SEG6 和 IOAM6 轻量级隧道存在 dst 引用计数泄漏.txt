@@ -1,0 +1,20 @@
+#标题
+IPv6 RPL、SEG6 和 IOAM6 轻量级隧道存在 dst 引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 ioam6.sh 等网络测试用例时，触发内核内存泄漏。通过 kmemleak 工具可以检测到 per-cpu 内存泄漏，泄漏点与路由目标（dst）对象的引用计数未正确释放有关。
+
+#主要错误日志
+未知
+
+#问题根因
+在 IPv6 的 rpl_iptunnel、seg6_iptunnel 和 ioam6_iptunnel 模块中，当 `rpl_do_srh`、`seg6_do_srh` 等处理函数返回错误时，代码逻辑直接跳转到 `drop` 标签进行丢包处理，但遗漏了调用 `dst_release()` 来释放之前通过 `dst_cache_get()` 或路由查找获取到的 dst 引用，导致 dst 对象的引用计数无法归零，从而引发内存泄漏。
+
+#解决方案
+在 rpl_output、rpl_input、seg6_output_core 和 seg6_input_core 等函数的错误处理路径（`drop` 标签处）增加 `dst_release(dst)` 调用，确保在丢包或出错时正确释放路由缓存对象的引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fcb960ac3cc32bb106eeda3c281e9c5a839bff61

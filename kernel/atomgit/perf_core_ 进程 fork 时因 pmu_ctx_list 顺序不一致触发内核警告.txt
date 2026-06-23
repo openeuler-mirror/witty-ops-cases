@@ -1,0 +1,24 @@
+#标题
+perf/core: 进程 fork 时因 pmu_ctx_list 顺序不一致触发内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行特定 perf 事件采集场景下（先开启 LBR 事件，再开启 tracepoint 和软件事件），对目标进程执行 `fork` 操作时，内核触发 WARNING。具体表现为 Syzkaller 触发了 `perf_event_swap_task_ctx_data()` 中的警告 `prev_epc->pmu != next_epc->pmu`。vmcore 分析显示，父子进程的上下文列表中包含相同的 `perf_event_pmu_context`，但排列顺序不一致。
+
+#主要错误日志
+WARNING: CPU: ... PID: ... at kernel/events/core.c:perf_event_swap_task_ctx_ctx_data
+... prev_epc->pmu != next_epc->pmu
+
+#问题根因
+内核在管理 `pmu_ctx_list` 时，父进程与子进程（child）上下文的列表排序依据不一致。
+1. 父进程的 `pmu_ctx_list` 顺序受事件/PMU 添加的时间先后影响。
+2. 子进程在继承上下文时，其 `pmu_ctx_list` 顺序受 `pinned_groups` 和 `flexible_groups` 中事件排列顺序的影响。
+这导致相同的 `perf_event_pmu_context` 在父进程和子进程列表中的相对位置不同，从而在交换任务上下文数据时触发了顺序检查警告。
+
+#解决方案
+修改 `find_get_pmu_context` 函数，在插入新的 `perf_event_pmu_context` 到 `pmu_ctx_list` 时，不再简单地添加到链表头部或尾部，而是根据 PMU type 进行排序插入。具体逻辑为：遍历链表找到 PMU type 大于当前待插入 PMU type 的位置，将新节点插入到该位置之前，若未找到则插入到链表尾部，从而保证列表始终按 PMU type 有序，解决父子进程上下文列表顺序不一致的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/86788aa20b9f65d266c2db15e461fa51c1c6ea50

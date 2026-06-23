@@ -1,0 +1,22 @@
+#标题
+arm64: 1650 XINT 特性开启导致虚拟机应用段错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 1650 硬件特性（使用 32 位 IRQ 入口）开启且设置了 `disable_sdei_nmi_watchdog` 的情况下，如果运行虚拟机，Guest OS 中的应用程序会发生段错误。
+
+#主要错误日志
+未知
+
+#问题根因
+KPTI 和 spectre_bhb 会更新 `this_cpu_vector` 和 `vbar_el1`，但 1650 特性启用逻辑中未更新 `this_cpu_vector`。
+主机开启 XINT 后，`vbar_el1` 被更新为 XINT 向量 `vectors_xcall_xint`，但 `this_cpu_vector` 仍指向默认向量 `vectors`。
+当主机 watchdog NMI 中断打断 Guest 运行时，中断处理会恢复 `vbar_el1` 为当前 CPU 的 `this_cpu_vector`（即默认向量 `vectors`）。这导致 NMI 被错误地当作 XINT 以 32 位 IRQ 入口方式处理，从而引发 Guest 应用段错误。
+
+#解决方案
+在 XINT 向量启用函数 `enable_xcall_xint_vectors()` 中，增加对 `this_cpu_vector` 的更新操作，将其指向 `vectors_xcall_xint`，确保中断向量基准的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d36f46d6c39fb4cc2e051737b55f7e9a51704fe1

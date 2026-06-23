@@ -1,0 +1,21 @@
+#标题
+bq27xxx电池驱动错误码误用导致无电池设备日志刷屏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 HDQ 但未连接 bq27000 电池的设备（如 Pandaboard）上，当用户空间尝试读取 /sys 下电池的 "status" 属性时，控制台日志被大量错误信息刷屏。
+
+#主要错误日志
+[   34.247833] power_supply bq27000-battery: driver failed to report 'status' property: -1
+
+#问题根因
+自从引入提交 f16d9fb6cf03 ("power: supply: bq27xxx: Retrieve again when busy") 后，驱动逻辑发生了变化。当 HDQ 总线上未检测到 bq27000 电池时，驱动通过读取寄存器返回 0xff 来判定设备不存在，并将 `cache.flags` 设为 `-1`。
+历史提交 3dd843e1c26a 最初设计是将此情况识别为设备缺失，期望返回 `-ENODEV`。但在新逻辑中，`cache.flags` 的值 `-1` 被直接作为错误返回值传递，而内核中 `-1` 对应的错误码是 `-EPERM`（操作不允许），而非预期的 `-ENODEV`（无此设备）。这导致 `power_supply_format_property()` 函数误判错误类型并持续打印错误日志。
+
+#解决方案
+修改驱动代码 `drivers/power/supply/bq27xxx_battery.c`，在检测到寄存器读取值为 0xff（即设备不存在或读取错误）时，将 `cache.flags` 显式赋值为 `-ENODEV` 而不是 `-1`，从而确保上层调用能正确识别出“设备不存在”的状态，避免触发不必要的错误日志打印。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7775e840a52e87e836d39e05767d2d0507c73579

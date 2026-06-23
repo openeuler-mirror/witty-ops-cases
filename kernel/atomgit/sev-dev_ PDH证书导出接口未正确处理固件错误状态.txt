@@ -1,0 +1,20 @@
+#标题
+sev-dev: PDH证书导出接口未正确处理固件错误状态
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 SEV（AMD Secure Encrypted Virtualization）驱动的 `SEV_CMD_PDH_CERT_EXPORT` ioctl 接口导出 PDH 证书时，若固件返回错误或命令执行失败，驱动程序未正确检测并终止流程，导致可能向用户空间返回不一致或错误的数据状态，且触发了内核警告日志。
+
+#主要错误日志
+- WARN_ON_ONCE(argp->error) （推断：内核调用栈警告，通常伴随 "WARNING: CPU: ..." 打印）
+
+#问题根因
+在函数 `sev_ioctl_do_pdh_export` 中，代码逻辑存在缺陷。在执行 `__sev_do_cmd_locked` 后，虽然将固件返回的长度拷贝给了 input 变量，但未对返回值 `ret` 或 `argp->error` 进行检查就直接进入了后续的数据拷贝流程。这导致即便固件层面已经出错，驱动依然尝试继续执行，未能及时处理错误状态。
+
+#解决方案
+在拷贝数据到用户空间之前，增加对命令执行返回值 `ret` 及固件错误码 `argp->error` 的检查。若存在错误，则通过 `WARN_ON_ONCE` 记录异常并跳转至错误处理标签 `e_free_cert` 释放资源并退出，确保错误发生时不继续处理无效数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/62d986749185cba20d18980c5a0e5031731e2ad3

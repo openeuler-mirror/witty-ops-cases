@@ -1,0 +1,27 @@
+#标题
+macvlan_common_newlink 错误处理路径引发 Use-After-Free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建 macvlan 接口时，若指定了 MACVLAN_MODE_SOURCE 模式并添加 MAC 地址参数，同时因链路名称无效等原因导致 register_netdevice() 注册失败，内核将发生 Use-After-Free 漏洞。该漏洞可通过发送匹配源 MAC 地址的数据包触发，导致内核崩溃或潜在的系统提权风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在 macvlan_common_newlink() 函数中，当 register_netdevice() 失败时，错误处理逻辑存在缺陷：
+1. 在注册失败前，macvlan_change_sources() 已将新创建的 vlan 指针添加到了底层设备的 port->vlan_source_hash 哈希表中。
+2. 原有代码逻辑中，destroy_macvlan_port 标签处的清理操作受 `create` 变量控制。当 `create` 为 false（即复用已有 port）时，未调用 macvlan_flush_sources() 清理哈希表中的引用。
+3. 随后 rtnl_newlink_create() 调用 free_netdev() 释放了 net_device 结构体内存。
+4. 此时底层设备的 port 仍持有指向已释放内存的 vlan 指针，形成悬垂指针。
+5. 当数据包经过 macvlan_forward_source() 处理时，访问该悬垂指针触发 Use-After-Free。
+
+#解决方案
+修改 macvlan_common_newlink() 函数的错误处理路径：
+1. 移除 `macvlan_flush_sources()` 调用的 `create` 条件判断限制，确保无论 port 是新建还是复用，都必须先清除源 MAC 地址哈希表中的引用。
+2. 将 `macvlan_port_destroy()` 的调用移至 `macvlan_flush_sources()` 之后，并增加 `create` 判断，确保仅在 port 是本此新建时才销毁 port，复用的 port 仅清除引用而不销毁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8ede9684fe46d607ad457762b2da73af5580bc87

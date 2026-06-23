@@ -1,0 +1,23 @@
+#标题
+调度器 set_next_task() 实现逻辑缺失修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调度器核心逻辑中，`pick_next_task()` 的实现应遵循 `pick_task() + set_next_task(.first = true)` 的规则。但在当前内核版本中，`pick_next_task_fair()` 的部分实现路径遗漏了 `set_next_task()` 中应有的部分操作（如 hrtick 启动、misfit 状态更新、QoS 节流等），导致调度行为不一致，可能引发调度延迟、负载均衡状态异常或 QoS 策略未正确生效等隐性功能缺陷。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，调度器规定 `pick_next_task()` 等价于 `pick_task()` 加上 `set_next_task(.first = true)`。然而，原代码中 `pick_next_task_fair()` 的部分快速路径（如 `goto done` 跳转逻辑）直接返回，跳过了 `set_next_task_fair()` 中必要的初始化或状态更新步骤（如 MRU 列表移动、hrtick 设置、QoS 相关处理），导致 `set_next_task()` 的实现不完整，破坏了调度核心的预设规则。
+
+#解决方案
+重构 `pick_next_task_fair()` 与 `set_next_task_fair()` 的实现：
+1. 将 `pick_next_task_fair()` 末尾原本零散的状态更新代码（hrtick、misfit、QoS 等）下沉并集中到 `__set_next_task_fair()` 函数中执行。
+2. 新增 `__set_next_task_fair()` 函数，专门处理 `first=true` 场景下的特有逻辑（hrtick 启动、misfit 更新、QoS 节流及 SMT expel）。
+3. 修改 `pick_next_task_fair()` 的各个返回路径，确保在返回前调用 `set_next_task_fair()` 或 `__set_next_task_fair()`，从而补齐缺失的逻辑，保证调度行为符合内核调度器的核心规则。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/979b5e2505acccd0938304f29883cf7c2734c7ae

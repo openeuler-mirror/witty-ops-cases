@@ -1,0 +1,20 @@
+#标题
+ksmbd: 引用计数泄漏导致内存资源无法释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 SMB 协议的相关逻辑时，当连接处于释放状态（ksmbd_conn_releasing 返回 true）时，未正确递减 opinfo 对象的引用计数。这导致引用计数泄漏，计数无法归零，进而导致相关内存资源无法被正确释放，造成内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb_send_parent_lease_break_noti`、`smb_lazy_parent_lease_break_close` 和 `smb_break_all_levII_oplock` 函数中，代码路径先通过 `atomic_inc_not_zero` 增加了 `opinfo` 的引用计数。随后的检查逻辑中，如果 `ksmbd_conn_releasing(opinfo->conn)` 条件成立，代码直接 `continue` 跳过了后续处理，但遗漏了调用 `opinfo_put` 来释放刚才增加的引用计数，导致引用计数泄漏。
+
+#解决方案
+在上述三个函数的 `ksmbd_conn_releasing` 判断分支中，增加调用 `opinfo_put`（或 `opinfo_put(brk_op)`）函数，确保在跳过处理流程前正确释放引用计数，保证资源能被正常回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c26e585324febdd21c393548452f142763feb9c

@@ -1,0 +1,17 @@
+#标题
+writeback: __mark_inode_dirty 函数存在 use-after-free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 __mark_inode_dirty 函数标记 inode 为脏时，可能触发内核崩溃或内存使用后释放（use-after-free）问题。该问题源于在持锁期间错误地操作了 inode 指针，可能导致在锁释放后、函数返回前访问了已被其他线程释放的 inode。
+
+#主要错误日志
+未知
+
+#问题根因
+在 __mark_inode_dirty 函数中，代码逻辑存在锁释放顺序不当的问题。原代码在调用 trace_writeback_dirty_inode_enqueue(inode) 之前就已经释放了 wb->list_lock 和 inode->i_lock。这意味着在释放锁后，当前线程可能失去对 inode 的有效控制，若此时触发 tracepoint 跟踪函数访问 inode，可能引发 use-after-free 风险。根本原因是在需要保护的对象仍在使用时过早释放了锁。
+
+#解决方案
+调整锁释放与 tracepoint 调用的顺序。将 spin_unlock(&wb->list_lock) 和 spin_unlock(&inode->i_lock) 以及 trace_writeback_dirty_inode_enqueue(inode) 移动到 wb_wakeup_delayed(wb) 调用之后，确保在对 inode 进行追踪操作时仍持有必要的锁保护，或者确保在所有潜在访问完成前不释放锁，从而避免并发导致的 use-after-free。

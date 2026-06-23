@@ -1,0 +1,22 @@
+#标题
+drm/hisilicon/hibmc: 修复中断请求名称变量作用域错误导致 /proc/interrupts 显示异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动加载并注册中断处理程序后，查看 `/proc/interrupts` 或进行内核日志打印时，IRQ 名称显示为乱码或为空，无法正确标识 "hibmc" 相关的中断源；系统功能上表现为中断请求（IRQ request）虽然返回成功，但中断名称信息的持久性存储失效。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hibmc_msi_init` 函数中，传递给 `devm_request_irq` 和 `devm_request_threaded_irq` 的 IRQ 名称参数使用了局部栈变量 `name`。该变量仅在 `hibmc_msi_init` 函数执行期间有效，函数返回后该栈内存即被释放或重用。虽然中断注册当时返回成功，但内核后续引用该名称字符串时（例如列出 `/proc/interrupts`），指向的是无效的内存地址。
+
+#解决方案
+1. 移除局部变量 `char name[32]` 及其动态拼接逻辑。
+2. 修改全局静态数组 `g_irqs_names_map` 中的名称定义为 "hibmc-vblank" 和 "hibmc-hpd"，使命名更明确。
+3. 在调用 `devm_request_irq` 和 `devm_request_threaded_irq` 时，直接传递全局静态数组 `g_irqs_names_map[i]` 作为名称参数，确保中断名称的生命周期贯穿整个驱动运行期间。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1d8f35456b3a037a5f6452cbd0d723a1ca5aab71

@@ -1,0 +1,29 @@
+#标题
+crypto: testmgr 算法自测试误报 ENOENT 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行内核加密子系统自测试（self-test）时，如果待测试的算法已不存在（被移除或模块卸载），内核日志中会打印与 `-ENOENT` 相关的错误告警信息，产生误导性的噪音日志，影响对真实算法测试失败的判断。
+
+#主要错误日志
+- `alg: hash: failed to allocate transform for %s: -2` (推断)
+- `alg: aead: failed to allocate transform for %s: -2` (推断)
+- `alg: skcipher: failed to allocate transform for %s: -2` (推断)
+- `alg: cipher: Failed to load transform for %s: -2` (推断)
+- `alg: acomp: Failed to load transform for %s: -2` (推断)
+- `alg: comp: Failed to load transform for %s: -2` (推断)
+- `alg: cprng: Failed to load transform for %s: -2` (推断)
+- `alg: drbg: could not allocate DRNG handle for %s` (推断)
+- `alg: kpp: Failed to load tfm for %s: -2` (推断)
+- `alg: akcipher: Failed to load tfm for %s: -2` (推断)
+
+#问题根因
+当算法测试管理器尝试分配算法实例进行测试时，如果算法不存在，`crypto_alloc_*` 系列函数会返回 `-ENOENT` 错误。之前的代码逻辑在捕获到该错误后，直接将 `-ENOENT` 作为测试结果向上返回。这会导致上层测试框架将其视为一次失败的测试并打印警告，而实际上算法已不存在的情况不应触发测试失败告警，从而导致了不必要的错误日志输出。
+
+#解决方案
+修改 `crypto/testmgr.c` 中各算法测试函数（包括 hash、aead、skcipher、cipher、acomp、comp、cprng、drbg、kpp、akcipher 等）的错误处理逻辑。当分配算法实例返回 `-ENOENT` 时，不再向上传递该错误码，而是直接返回 `0`（表示测试通过/正常跳过）。这样做是安全的，因为如果算法已不存在，它自然无法被标记为“已测试”，且不会影响系统正常运行。同时，修正了 `drbg_cavs_test` 中错误处理路径可能存在的内存泄漏风险（调整 `kfree_sensitive` 位置）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cd15ee357875b2139cb56baed28bed92718640df

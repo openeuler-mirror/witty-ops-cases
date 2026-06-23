@@ -1,0 +1,20 @@
+#标题
+drm/i915/wm: 平面 DDB 入口校验对象错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i915 驱动进行水印状态校验（verify）时，内核错误地校验了光标（Cursor）平面的 DDB（显示数据缓冲区）入口，而非当前正在遍历的目标平面。这导致校验逻辑失效，可能掩盖了实际平面 DDB 配置不一致的问题，或者在 DDB 配置正确时错误地触发了校验失败告警。
+
+#主要错误日志
+drm_err(&i915->drm, ...)
+
+#问题根因
+函数 `intel_wm_state_verify` 在遍历所有平面进行 DDB 入口校验时，代码逻辑编写错误。代码中硬编码使用了 `PLANE_CURSOR` 作为索引来获取硬件和软件状态的 DDB 入口（`hw_ddb_entry` 和 `sw_ddb_entry`），导致无论当前遍历的是哪个平面，实际校验的都是光标平面的数据，而非当前迭代中 `plane->id` 对应的平面数据。
+
+#解决方案
+修改 `drivers/gpu/drm/i915/display/skl_watermark.c` 文件中的 `intel_wm_state_verify` 函数。将获取 DDB 入口的索引从固定的 `PLANE_CURSOR` 修改为变量 `plane->id`，确保校验逻辑针对正确的平面进行比对。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/396803da0e2db921c1a942edf3f4c189e9bb4c53

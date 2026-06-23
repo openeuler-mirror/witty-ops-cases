@@ -1,0 +1,27 @@
+#标题
+madera: 修复编译器误报的变量未初始化警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 clang-21 编译内核时，编译过程因 `-Wuninitialized` 警告被当作错误处理而中止，`drivers/mfd/madera-core.c` 文件报错提示变量 `mfd_devs` 在使用时可能未被初始化。
+
+#主要错误日志
+drivers/mfd/madera-core.c:739:10: error: variable 'mfd_devs' is uninitialized when used here [-Werror,-Wuninitialized]
+  739 |                               mfd_devs, n_devs,
+      |                               ^~~~~~~~
+drivers/mfd/madera-core.c:459:33: note: initialize the variable 'mfd_devs' to silence this warning
+  459 |         const struct mfd_cell *mfd_devs;
+      |                                        ^
+      |                                         = NULL
+
+#问题根因
+编译器（clang-21）静态分析无法完全追踪代码逻辑，误认为 `mfd_devs` 变量在未初始化的情况下被使用。实际上代码逻辑保证了 `n_devs` 非零时 `mfd_devs` 必然是有效指针，但编译器无法可靠地推断出这一关联，从而触发了误报。
+
+#解决方案
+1. 显式初始化变量 `mfd_devs` 为 `NULL`，消除编译器关于变量未初始化的警告。
+2. 修改条件判断逻辑，将 `if (!n_devs)` 改为 `if (!n_devs || !mfd_devs)`，增加对指针的显式检查，使代码逻辑对编译器更友好，更清晰地表达在 `n_devs` 为 0 或 `mfd_devs` 为空时的错误处理路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ac7e1a123d9734c0ec8e41749454ef65ad2f88c

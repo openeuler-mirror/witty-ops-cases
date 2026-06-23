@@ -1,0 +1,23 @@
+#标题
+sw64 KVM vCPU 在禁用中断状态下错误唤醒
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构 KVM 虚拟化场景下，当 vCPU 处于禁用中断状态时，vCPU 会被错误地唤醒并进入运行状态，违反了“vCPU 禁用中断时应保持睡眠”的设计预期，除非接收到 NMI 中断。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `kvm_arch_vcpu_runnable` 中，判断 vCPU 是否可运行的逻辑不完整。原代码未检查 vCPU 的中断禁用状态（`vcpu->arch.vcb.vcpu_irq_disabled`）以及重启标志（`vcpu->arch.restart`），导致在中断被禁用且无 NMI 中断的情况下，vCPU 依然被判定为可运行（runnable），从而引发错误唤醒。
+
+#解决方案
+修改 `kvm_arch_vcpu_runnable` 函数的逻辑判断顺序：
+1. 若 vCPU 设置了重启标志（`vcpu->arch.restart`），直接返回 1，允许唤醒以处理 NMI 中断。
+2. 若 vCPU 中断被禁用（`vcpu->arch.vcb.vcpu_irq_disabled`），直接返回 0，禁止唤醒。
+3. 其余情况按原有逻辑判断是否有中断挂起或处于非暂停状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/32c95671993314b584847a6427e8f8fdfcf6a448

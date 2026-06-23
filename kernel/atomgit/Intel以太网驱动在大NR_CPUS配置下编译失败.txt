@@ -1,0 +1,27 @@
+#标题
+Intel以太网驱动在大NR_CPUS配置下编译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核配置项 CONFIG_NR_CPUS 设置为较大数值时，编译三个 Intel 以太网驱动（i40e, fm10k, ixgbe）失败。编译过程中触发 BUILD_BUG_ON 编译时断言检查报错，导致无法生成内核镜像。
+
+#主要错误日志
+In function ‘i40e_free_q_vector’,
+    inlined from ‘i40e_vsi_alloc_q_vectors’ at drivers/net/ethernet/intel/i40e/i40e_main.c:12112:3:
+  571 |         _compiletime_assert(condition, msg, __compiletime_assert_, __COUNTER__)
+include/linux/rcupdate.h:1084:17: note: in expansion of macro ‘BUILD_BUG_ON’
+ 1084 |                 BUILD_BUG_ON(offsetof(typeof(*(ptr)), rhf) >= 4096);    \
+drivers/net/ethernet/intel/i40e/i40e_main.c:5113:9: note: in expansion of macro ‘kfree_rcu’
+ 5113 |         kfree_rcu(q_vector, rcu);
+      |         ^~~~~~~~~
+
+#问题根因
+问题根因在于 `q_vector` 结构体中的 `rcu` 成员距离结构体起始位置的偏移量过大。当 CONFIG_NR_CPUS 配置较大时，结构体中 `cpumask_t affinity_mask` 成员的大小会显著增加。由于 `rcu` 成员定义在 `affinity_mask` 之后，导致 `rcu` 成员的偏移量超过了 `kfree_rcu` 宏中 BUILD_BUG_ON 检查的限制（4096 字节），从而触发编译错误。
+
+#解决方案
+调整 `q_vector` 结构体定义，将 `rcu` 成员移动到 `affinity_mask` 成员之前。这样可以确保无论 CONFIG_NR_CPUS 设置为何值（即无论 CPU 掩码占用多大空间），`rcu` 成员的偏移量始终保持在结构体前部，不会超过编译检查限制，从而修复编译失败问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f559f8b9df83254422b451dac32e80a55a96a300

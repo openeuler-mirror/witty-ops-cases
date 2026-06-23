@@ -1,0 +1,20 @@
+#标题
+fuse: uring接口存在空指针解引用引发的内核崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下，当线程正在创建 fuse uring 实例时，另一线程调用 `fuse_uring_create_queue()` 访问 `fc->lock` 会触发内核崩溃。崩溃原因为试图解引用空指针。
+
+#主要错误日志
+未知
+
+#问题根因
+存在竞态条件：当一个线程在 `fuse_uring_create()` 中创建 uring 并设置了 `fc->ring`，但尚未设置 `ring->fc` 时，另一个线程读取 `fc->ring` 并在 `fuse_uring_create_queue()` 中尝试访问 `ring->fc`（此时为 NULL），导致访问 `fc->lock` 时发生空指针解引用。同时存在另一竞态，即在 `fuse_uring_register()` 中比较 `qid` 时，`ring->nr_queues` 可能仍为 0 而未被设置为新值。
+
+#解决方案
+调整赋值顺序并引入内存屏障。修改为仅在 `ring->fc` 和 `ring->nr_queues` 设置完成后，才通过 `smp_store_release()` 设置 `fc->ring`；在读取侧使用 `smp_load_acquire()` 获取 `fc->ring`。这确保了如果 `ring` 指针非空，则 `ring->fc` 必定是有效指针，且 `ring->nr_queues` 反映正确的队列数量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a34c289a38521b965d63eca991398fa4103cb6f7

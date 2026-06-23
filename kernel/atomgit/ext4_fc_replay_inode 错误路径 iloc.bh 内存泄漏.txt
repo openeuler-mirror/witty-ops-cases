@@ -1,0 +1,27 @@
+#标题
+ext4_fc_replay_inode 错误路径 iloc.bh 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 ext4 fast commit（快速提交）恢复路径的重放操作时，若遇到特定错误（如元数据写回失败、inode 获取失败等），内核未正确释放 `iloc.bh` 缓冲区头，导致内存泄漏。该问题在代码审查中被发现，可能在文件系统恢复异常时引发内存资源持续占用。
+
+#主要错误日志
+ext4_debug("Inode not found.");
+
+#问题根因
+在函数 `ext4_fc_replay_inode()` 中，调用 `ext4_get_fc_inode_loc()` 获取 inode 位置时，会持有 `iloc.bh` 的引用，该引用必须通过 `brelse()` 释放。然而，在以下错误处理路径中，代码直接跳转至 `out` 标签而未调用 `brelse()`：
+1. `ext4_handle_dirty_metadata()` 调用失败。
+2. `sync_dirty_buffer()` 调用失败。
+3. `ext4_mark_inode_used()` 调用失败。
+4. `ext4_iget()` 调用失败。
+这导致 `iloc.bh` 引用计数未减少，从而发生内存泄漏。
+
+#解决方案
+1. 新增 `out_brelse` 标签，位于原有 `out` 标签之前，并在该标签处调用 `brelse(iloc.bh)` 释放缓冲区。
+2. 将上述四个错误处理分支的跳转目标从 `out` 修改为 `out_brelse`，确保在退出前释放资源。
+3. 修正函数返回值逻辑，不再固定返回 0，而是返回具体的错误码（如 `-EFSCORRUPTED`），以便正确传播错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ece50644b5f121695dbfd98ed5321baea2616281

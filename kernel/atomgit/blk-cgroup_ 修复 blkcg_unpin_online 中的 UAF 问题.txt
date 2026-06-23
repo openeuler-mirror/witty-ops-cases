@@ -1,0 +1,21 @@
+#标题
+blk-cgroup: 修复 blkcg_unpin_online 中的 UAF 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在调用 `blkcg_unpin_online` 函数过程中触发 Use-After-Free（UAF）故障，可能导致内核 panic 或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `blkcg_unpin_online` 函数的原有逻辑中，代码执行 `blkcg = blkcg_parent(blkcg)` 获取父节点，随后将原 `blkcg` 指针作为参数传入 `blkcg_destroy_blkgs(blkcg)` 进行销毁处理。
+由于 `blkcg_destroy_blkgs(blkcg)` 可能会释放传入的 `blkcg` 对象，导致后续循环中使用的 `blkcg` 指针指向了已被释放的内存，从而引发 Use-After-Free。
+
+#解决方案
+在调用 `blkcg_destroy_blkgs` 之前，先通过局部变量 `parent` 保存父节点指针 `blkcg_parent(blkcg)`。随后将 `blkcg` 传入 `blkcg_destroy_blkgs` 进行销毁，最后再将局部变量 `parent` 赋值给 `blkcg` 用于下一次循环。此修改确保了在销毁当前 `blkcg` 对象前，已经安全地获取了下一个遍历节点，避免了访问已释放内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4a0348cc14b7fe931e7fafddddd2812858cb7c40

@@ -1,0 +1,20 @@
+#标题
+BPF stackmap 越界写入导致 KASAN 检测报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Syzkaller 触发 KASAN 检测报告 slab-out-of-bounds write。具体表现为在调用 `__bpf_get_stackid()` 复制堆栈跟踪数据时，当 perf trace 包含的堆栈条目数量超过 stack map 桶（bucket）的容量时，导致数据越界写入到桶的数据数组中。
+
+#主要错误日志
+KASAN: slab-out-of-bounds write in __bpf_get_stackid
+
+#问题根因
+`__bpf_get_stackid()` 函数在处理堆栈跟踪数据时，计算需要复制的条目数量（`trace_nr`）逻辑存在缺陷。原代码直接使用 `trace->nr - skip` 作为复制长度，未校验该长度是否超过了 stack map 桶所能容纳的最大深度。当 trace 条目数超过 map bucket 限制时，引发越界写入。此外，相关调用函数中 `trace->nr` 的恢复逻辑位置不当，也可能导致计算错误。
+
+#解决方案
+在 `__bpf_get_stackid()` 中引入 `max_depth` 变量，通过 `stack_map_calculate_max_depth` 计算栈图允许的最大深度，并使用 `min_t` 函数限制 `trace_nr` 不超过最大深度限制，确保复制操作在有效范围内。同时，调整 `bpf_get_stackid_pe` 函数中 `trace->nr` 的保存与恢复逻辑，将其移至函数出口处统一处理，保证逻辑正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/daff67b16229e052d10d9eb066c6aba0fac43512

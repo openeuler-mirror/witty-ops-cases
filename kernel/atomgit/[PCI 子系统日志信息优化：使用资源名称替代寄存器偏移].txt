@@ -1,0 +1,33 @@
+#标题
+[PCI 子系统日志信息优化：使用资源名称替代寄存器偏移]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[PCI 子系统在初始化、资源分配及错误处理流程中打印的日志信息可读性较差。日志中使用 `reg 0x%x` 或 `BAR %d` 等寄存器偏移或索引来标识资源，缺少具体的资源名称（如 "BAR 0", "VF BAR 1" 等），导致开发人员或运维人员在排查固件 Bug、资源冲突或对齐问题时，无法直观地识别出具体是哪个资源出现了问题。]
+
+#主要错误日志
+[主要涉及日志格式的变更，以下列出典型的变更前后对比（推断基于代码 diff）：
+- 资源无效：
+  - 原：`pci_info(dev, FW_BUG "reg 0x%x: invalid BAR (can't size)\n", pos);`
+  - 新：`pci_info(dev, FW_BUG "%s: invalid; can't size\n", res_name);`
+- 资源更新错误：
+  - 原：`pci_err(dev, "BAR %d: error updating (%#010x != %#010x)\n", resno, new, check);`
+  - 新：`pci_err(dev, "%s: error updating (%#010x != %#010x)\n", res_name, new, check);`
+- 资源分配失败：
+  - 原：`pci_info(dev, "BAR %d: can't assign %pR (bogus alignment)\n", resno, res);`
+  - 新：`pci_info(dev, "%s %pR: can't assign; bogus alignment\n", res_name, res);`
+- 资源冲突：
+  - 原：`pci_info(dev, "can't claim BAR %d %pR: address conflict with %s %pR\n", ...);`
+  - 新：`pci_info(dev, "%s %pR: can't claim; address conflict with %s %pR\n", ...);`
+]
+
+#问题根因
+[内核 PCI 子系统在多处打印资源相关的日志时，直接使用了寄存器偏移地址（`pos`）或资源索引号（`resno`/`i`），而未调用 `pci_resource_name()` 函数获取该资源的标准名称。这导致日志输出缺乏人性化，无法直接反映资源的实际类型或名称。]
+
+#解决方案
+[修改 PCI 子系统代码，在 `iov.c`、`pci.c`、`probe.c`、`quirks.c`、`setup-bus.c`、`setup-res.c` 等文件中，引入 `pci_resource_name()` 函数调用获取资源的名称字符串（如 `res_name` 或 `r_name`），并将日志打印格式中的 `reg 0x%x` 或 `BAR %d` 替换为 `%s` 并传入资源名称。此修改使得日志输出包含具体的资源名称（例如 "BAR 0"、"VF BAR 1" 等），提升了日志的可读性与问题定位效率。]
+
+#来源
+[https://atomgit.com/openeuler/kernel/commit/c1889036dde109ed83177c64705282af94f8f52d]

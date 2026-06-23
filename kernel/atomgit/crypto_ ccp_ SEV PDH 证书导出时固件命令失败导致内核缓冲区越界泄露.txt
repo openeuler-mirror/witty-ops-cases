@@ -1,0 +1,26 @@
+#标题
+crypto: ccp: SEV PDH 证书导出时固件命令失败导致内核缓冲区越界泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `SEV_PDH_CERT_EXPORT` ioctl 接口导出 PDH 证书时，若固件命令执行失败（特别是返回无效长度的错误情况），内核会尝试将超出内核缓冲区范围的数据拷贝到用户空间，触发 KASAN 检测到的 "slab-out-of-bounds" 错误。这导致内核内存数据泄露给用户空间，并可能造成内核崩溃或被攻击者利用。
+
+#主要错误日志
+BUG: KASAN: slab-out-of-bounds in instrument_copy_to_user ../include/linux/instrumented.h:129 [inline]
+BUG: KASAN: slab-out-of-bounds in _inline_copy_to_user ../include/linux/uaccess.h:205 [inline]
+BUG: KASAN: slab-out-of-bounds in _copy_to_user+0x66/0xa0 ../lib/usercopy.c:26
+Read of size 2084 at addr ffff8885c4ab8aa0 by task syz.0.186/21033
+Call Trace:
+ sev_ioctl_do_pdh_export+0x3d3/0x7c0 ../drivers/crypto/ccp/sev-dev.c:2347
+ sev_ioctl+0x2a2/0x490 ../drivers/crypto/ccp/sev-dev.c:2568
+
+#问题根因
+在 `sev_ioctl_do_pdh_export` 函数中，处理 `SEV_CMD_PDH_CERT_EXPORT` 命令的逻辑存在缺陷。当固件命令执行失败时（例如用户空间提供的缓冲区长度不足，固件返回所需的最小长度），驱动程序未正确检查返回值 `ret` 就直接进入后续的数据拷贝流程。此时，如果直接使用固件返回的长度（`input.pdh_cert_len` 或 `input.cert_chain_len`）进行 `copy_to_user` 操作，该长度可能大于内核实际分配的缓冲区大小，导致越界读取并泄露内核数据。
+
+#解决方案
+在驱动代码 `drivers/crypto/ccp/sev-dev.c` 中，增加对固件命令执行结果的检查。在执行 `copy_to_user` 之前，必须先判断 `__sev_do_cmd_locked` 的返回值 `ret` 以及错误码 `argp->error`。如果命令失败，直接跳转到清理流程（`e_free_cert`），禁止将无效数据拷贝到用户空间。同时增加 `WARN_ON_ONCE(argp->error)` 以便在驱动状态与固件状态不一致时发出警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/71b7b4e171658ed447861815dde4c45ea81e63fd

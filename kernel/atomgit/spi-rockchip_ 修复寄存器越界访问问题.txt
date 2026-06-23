@@ -1,0 +1,20 @@
+#标题
+spi-rockchip: 修复寄存器越界访问问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SPI 设备配置为高电平片选有效（SPI_CS_HIGH）模式且同时使用 GPIO 作为片选信号时，驱动会错误地尝试操作硬件寄存器中的片选位。由于 GPIO 片选对应的硬件索引可能超出了寄存器位宽的限制，导致发生寄存器越界访问，可能引发内核崩溃或不可预期的硬件行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `rockchip_spi_config` 函数中，代码仅判断了 `SPI_CS_HIGH` 模式标志位，未检查当前是否使用了 GPIO 模拟片选（`spi_get_csgpiod`）。当使用 GPIO 作为片选时，`spi_get_chipselect(spi, 0)` 获取的片选索引值可能大于硬件控制器支持的片选线数量。该值直接用于左移操作 `BIT(spi_get_chipselect(spi, 0))` 并写入 `CR0_SOI_OFFSET` 相关位，导致移位溢出并写入非法的寄存器位，造成越界访问。
+
+#解决方案
+在操作硬件片选寄存器位之前，增加对 GPIO 片选的判断条件。修改条件判断逻辑为：仅当配置了 `SPI_CS_HIGH` 模式**且**当前未使用 GPIO 片选（`!spi_get_csgpiod(spi, 0)`）时，才执行硬件寄存器位的设置操作，从而避免对 GPIO 片选场景下的错误硬件操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/351b79f4049d7870b16149197b98b46f644afbdb

@@ -1,0 +1,20 @@
+#标题
+net: skb_segment_list 处理 GRO 报文时内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `skb_segment_list` 函数对 GRO（Generic Receive Offload）报文进行分段处理时，发生内核内存泄漏（memory leak）。系统运行过程中可观察到与网络负载相关的内存占用持续增长，无法被正常回收。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `skb_segment_list` 函数中，代码逻辑错误地累加了 `delta_truesize` 并从父级 skb 的 `truesize` 中减去了该值。由于 `skb_segment_list` 处理的子 skb 通常源自 `skb_gro_receive_list`，这些 skb 可能关联有 socket（`nskb->sk` 非空），导致在分段过程中 `truesize` 的计算与实际内存归属管理不一致，从而引发内存泄漏。
+
+#解决方案
+移除 `delta_truesize` 变量及其相关的 `skb->truesize` 减法操作，不再在分段循环中调整父级 skb 的 `truesize`。同时增加了 `DEBUG_NET_WARN_ON_ONCE` 断言检查，确保进入该函数的 skb 类型为 `SKB_GSO_FRAGLIST`，且子 skb 不应关联 socket，以防止类似逻辑错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c323aa84cc69994c41bd36d70194ebb7b193da27

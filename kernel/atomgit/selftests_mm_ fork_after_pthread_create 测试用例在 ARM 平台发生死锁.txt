@@ -1,0 +1,25 @@
+#标题
+selftests/mm: fork_after_pthread_create 测试用例在 ARM 平台发生死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM 架构的 Android 环境下运行 selftests/mm 测试集时，执行 `fork` 操作前若刚创建过 `pthread` 线程，程序会陷入死锁状态，导致测试用例无法正常完成或挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+测试代码中存在同步时序问题。在进行 `uffd`（Userfaultfd）相关的 pagemap 测试时，主线程在调用 `fork()` 之前通过 `pthread_create()` 启动了事件消费线程，但主线程未确保子线程已成功启动并运行就立即执行了 `fork()`。在 ARM 平台上，这种时序竞争导致了死锁的发生。
+
+#解决方案
+在测试代码中引入 `pthread_barrier` 机制进行同步控制。具体修改为：
+1. 在创建线程前初始化屏障 `pthread_barrier_init`。
+2. 子线程启动后，在执行具体业务逻辑前先调用 `pthread_barrier_wait` 通知父线程已就绪。
+3. 父线程在 `pthread_create` 后、调用 `fork` 前调用 `pthread_barrier_wait` 等待子线程就绪。
+4. 同步完成后销毁屏障。
+此修复确保了在执行 fork 操作前子线程已完全启动，避免了因时序问题引发的死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d03fadc4a7696033526d2532e6e45a2cbdd3be09

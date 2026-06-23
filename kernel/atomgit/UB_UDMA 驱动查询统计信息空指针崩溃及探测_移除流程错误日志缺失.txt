@@ -1,0 +1,27 @@
+#标题
+UB/UDMA 驱动查询统计信息空指针崩溃及探测/移除流程错误日志缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在不支持 UBL 功能的设备上调用 `udma_query_stats` 查询端口统计信息时，可能导致内核崩溃。
+2. 在设备探测失败时，无相关故障日志记录，导致问题难以定位。
+3. 在设备移除过程中，若关闭 UE RX 操作重试时间过长，缺少关键阶段的故障日志记录。
+
+#主要错误日志
+- `dev_err(udma_dev->dev, "failed to query port stats, ret = %d.\n", ret);`
+- `dev_err_ratelimited(&adev->dev, "enter shutdown process.\n");`
+- `dev_err_ratelimited(&adev->dev, "udma close ue rx failed in remove process.\n");`
+
+#问题根因
+1. **空指针引用风险**：`udma_query_stats` 函数未区分设备是否支持 UBL 特性，直接调用 `ubase_get_ub_port_stats` 并在后续代码中解引用了未初始化或无效的 `dl_stats` 结构体指针，同时在 `get_dev_caps_from_ubase` 中未检查 `ubase_get_dev_caps` 返回值是否存在空指针风险。
+2. **日志覆盖不全**：`udma_probe` 失败分支和 `udma_remove` 的重试等待流程中，缺乏调用 `ubase_adev_fault_log` 记录故障事件的逻辑。
+
+#解决方案
+1. 在 `udma_query_stats` 中增加 `ubase_adev_ubl_supported` 判断，根据设备能力分别调用 UBL 统计接口或 ETH MAC 统计接口（`ubase_get_eth_port_stats`），并正确填充对应的统计数值。
+2. 在 `get_dev_caps_from_ubase` 函数中增加对 `ubase_get_dev_caps` 返回值的非空检查，若为空则直接返回。
+3. 在 `udma_probe` 失败路径和 `udma_remove` 的重试等待流程中，补充调用 `ubase_adev_fault_log` 记录 `UDMA_FAULT_EVENT_ID_PROBE` 和 `UDMA_FAULT_EVENT_ID_REMOVE` 故障事件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3bb967f01d30a4ee0f024234e74d4ac5308ee904

@@ -1,0 +1,20 @@
+#标题
+btrfs: 释放额外设备ID时块设备文件引用释放后使用（use-after-free）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `__btrfs_free_extra_devids` 函数释放额外的设备ID时，触发内核 Use-After-Free 故障。具体表现为内核可能报告 slab 对象非法访问或内存破坏，伴随典型的 panic 或 oops 信息。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `btrfs_close_one_device` 函数中，当关闭设备时，代码将 `device->bdev` 设置为 NULL，但未同步将 `device->bdev_handle` 设置为 NULL。这导致后续清理代码路径（如 `__btrfs_free_extra_devids`）在检查 `device->bdev` 为 NULL 时，误判设备已完全清理，但实际上 `device->bdev_handle` 仍保留着过期的指针引用，从而引发 Use-After-Free 问题。
+
+#解决方案
+在 `btrfs_close_one_device` 函数中，将 `device->bdev` 置 NULL 的同时，同步将 `device->bdev_handle` 设置为 NULL，确保设备句柄与块设备指针状态一致，防止悬垂指针被再次使用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b9369980b29775e74086a1231967ca5dee388d5

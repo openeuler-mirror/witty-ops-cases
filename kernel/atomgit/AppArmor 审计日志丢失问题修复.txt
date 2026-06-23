@@ -1,0 +1,20 @@
+#标题
+AppArmor 审计日志丢失问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AppArmor 模块处理 capabilities 审计时，由于多个配置文件（profiles）错误地共享了同一个 `ent->caps` 变量，导致部分审计日志信息丢失，无法正常记录完整的 capabilities 审计消息。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `audit_caps` 函数处理逻辑中，当更新 `ent->profile` 时，如果新传入的 `profile` 与 `ent` 中存储的旧 `profile` 不同，代码未能清理旧的 `ent->caps` 位图。这导致不同的 profile 错误地共享了同一个 `ent->caps` 变量，进而引发日志消息丢失（"Do simple duplicate message elimination" 机制失效）。
+
+#解决方案
+在 `security/apparmor/capability.c` 的 `audit_caps` 函数中，更新 `ent->profile` 之前，增加对 `profile` 与 `ent->profile` 是否相等的判断。如果不相等，说明 profile 发生了变更，需要先调用 `cap_clear(ent->caps)` 清空旧的 caps 位图，然后再进行后续的赋值和 `cap_raise` 操作，以此确保不同 profile 之间的 caps 数据隔离。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/edf5158949ea7dd54fd023908bb23325dd2ea5a4

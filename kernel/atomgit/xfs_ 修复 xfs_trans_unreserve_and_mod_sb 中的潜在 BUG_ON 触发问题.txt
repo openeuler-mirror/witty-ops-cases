@@ -1,0 +1,20 @@
+#标题
+xfs: 修复 xfs_trans_unreserve_and_mod_sb 中的潜在 BUG_ON 触发问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 XFS 文件系统操作（涉及延迟分配与 extent 处理）时，内核可能触发 BUG_ON，导致系统崩溃或 panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `xfs_bmap_add_extent_delay_real` 中，计算新的延迟分配间接块长度（`da_new`）时，使用了 `XFS_FILBLKS_MIN` 宏对 `xfs_bmap_worst_indlen` 的计算结果进行了上限约束。该约束试图避免保留过多的间接块，但在某些边界条件下，约束后的值小于实际需要的最坏情况大小。这导致后续在 `xfs_trans_unreserve_and_mod_sb` 函数中处理超级块修改时，由于块保留值不一致或计算错误，触发了代码中的 BUG_ON 检查。
+
+#解决方案
+移除 `xfs_bmap_add_extent_delay_real` 函数中四处对 `da_new` 计算的 `XFS_FILBLKS_MIN` 约束逻辑，直接使用 `xfs_bmap_worst_indlen` 计算出的最坏情况值作为新的延迟分配间接块长度。这确保了 `da_new` 足够大以满足最坏情况下的间接块需求，从而避免触发 BUG_ON。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/98126c4f6bcf21f8cf40c47f972850b3bfeb61fd

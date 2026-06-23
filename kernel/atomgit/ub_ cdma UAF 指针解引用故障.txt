@@ -1,0 +1,20 @@
+#标题
+ub: cdma UAF 指针解引用故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载或关闭 CDMA 设备上下文时，若正在处理异步事件，内核可能发生 Use-After-Free (UAF) 导致的崩溃或内存访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cdma_free_context` 函数中释放 context 时，未将其与关联的 `jfae` 结构体中的指针断开联系（置 NULL）。这导致在并发场景下，`cdma_write_async_event` 等函数通过 RCU 机制读取到已被释放的 context 指针，引发 UAF。
+
+#解决方案
+在 `cdma_free_context` 函数中增加判断逻辑，若 context 包含 `jfae` 指针，则将其内部的 `ctx` 指针置为 NULL，防止后续异步事件处理逻辑访问已释放的 context 内存；同时删除 `cdma_delete_ucontext` 中冗余的指针置空操作以避免竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae7797e10b1793dd9b84e48a63913eb6e9eefe53

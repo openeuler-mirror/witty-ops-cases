@@ -1,0 +1,20 @@
+#标题
+rseq 注册时因 rseq_cs 指针非空导致用户态段错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+进程调用 rseq 系统调用进行注册时，若用户态 struct rseq 结构体中的 rseq_cs 字段非零（包含残留指针），注册成功返回用户空间后立即触发 Segmentation Fault (segfault)。该问题容易在线程复用 rseq 内存区域且未清零字段的场景下复现（如旧版本 libcs）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 rseq 注册流程中，内核未检查并清理用户态传入的 rseq 结构体中的 rseq_cs 指针。如果应用程序（如旧版 libcs）复用了未清零的 rseq 内存区域，注册时该字段保留了旧的非零值。当系统调用返回用户空间后，内核处理逻辑可能误判该残留指针有效，进而访问非法内存地址导致段错误。
+
+#解决方案
+在 rseq 注册系统调用路径中增加检查逻辑：通过 rseq_get_rseq_cs_ptr_val 读取用户态 rseq->rseq_cs 字段。如果该字段非空，调用 clear_rseq_cs 将其强制清零。此修复避免了因残留指针导致的非法访问，同时保持了向后兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e0c52c8f3404082d833cae683b12cc53a330026

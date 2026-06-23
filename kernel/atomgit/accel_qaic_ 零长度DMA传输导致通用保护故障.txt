@@ -1,0 +1,20 @@
+#标题
+accel/qaic: 零长度DMA传输导致通用保护故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户空间发送长度字段为0的DMA传输请求，或设备在已完成所有字节传输后仍请求继续传输（QAIC_TRANS_DMA_XFER_CONT）时，驱动程序未正确处理该边界条件。这导致 `encode_addr_size_pairs()` 函数试图访问未分配的 `sgt`（散列表），从而引发通用保护故障，造成内核崩溃或异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `find_and_map_user_pages()` 函数中，当计算剩余传输量 `remaining` 为 0 时，代码原先直接返回 0（成功）。这导致 `dma_xfer` 结构体中的 `sgt` 字段未被分配和初始化即返回上层调用。后续调用链中的 `encode_addr_size_pairs()` 函数未对 `sgt` 进行有效性检查便直接访问，导致空指针或无效指针解引用，触发通用保护故障。
+
+#解决方案
+修改 `drivers/accel/qaic/qaic_control.c` 文件中的 `find_and_map_user_pages()` 函数。当检测到 `remaining == 0` 时，将返回值从 `0` 修改为 `-EINVAL`，明确拒绝处理零长度的传输请求，防止后续代码访问无效的内存结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1f2ff844f7c6b1d51bc0062d75f9399ad965b027

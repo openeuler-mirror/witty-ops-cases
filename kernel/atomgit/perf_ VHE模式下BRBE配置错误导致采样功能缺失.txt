@@ -1,0 +1,20 @@
+#标题
+perf: VHE模式下BRBE配置错误导致采样功能缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在VHE（Virtualization Host Extensions）模式的主机上，使用ARM PMUv3进行分支记录采样（FEAT_BRBE）时，因寄存器配置不当，导致采样过程中丢失关键功能（如FZP功能），分支采样数据不完整或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在移植的v18版本BRBE支持代码中，未正确配置BRBCR_EL1寄存器。在VHE模式下，当MDCR_EL2.HPMN设置为PMCR_EL0.N时，计数器由BRBCR_EL1控制而非BRBCR_EL2。代码仅在SYS_BRBCR_EL1写入配置，未在SYS_BRBCR_EL12写入相应配置，导致Host侧的分支采样功能缺失关键配置项。
+
+#解决方案
+在armv8pmu_branch_enable和armv8pmu_branch_disable函数中增加VHE模式判断。若处于VHE模式（is_kernel_in_hyp_mode()为真），则同步配置SYS_BRBCR_EL12寄存器；在写EL12寄存器时，需屏蔽BRBCR_ELx_ExBRE和BRBCR_ELx_E0BRE位，以确保Guest模式下EL1和EL0的记录功能被禁用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56a824d811e8debed95e497201217984cd51066a

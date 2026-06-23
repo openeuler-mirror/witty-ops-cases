@@ -1,0 +1,24 @@
+#标题
+mm: swapcache_prepare失败导致UI卡顿
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在延迟敏感设备（如Android设备）上，当发生交换分区读入且`swapcache_prepare`失败时，进程会强制休眠一个 tick。该行为导致 UI 出现可见的卡顿，严重影响用户体验。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit 13ddaf26be32 ("mm/swap: fix race when skipping swapcache") 引入的修复逻辑中，当 `swapcache_prepare()` 失败时，代码无条件执行 `schedule_timeout_uninterruptible(1)` 进行一个 tick 的休眠。原本旨在防止快速重复触发缺页中断导致的活锁，但在争用激烈的场景下，这种固定的毫秒级休眠会导致进程长时间处于不可中断睡眠状态，直接导致 UI 流畅度下降。
+
+#解决方案
+引入等待队列机制替代无条件休眠。
+1. 定义并初始化一个全局等待队列 `swapcache_wq`。
+2. 当 `swapcache_prepare()` 失败时，将当前任务加入等待队列，再执行休眠。
+3. 在 `swapcache_clear()` 清除完缓存引用后，检查等待队列是否有活动任务，若有则调用 `wake_up()` 唤醒等待的进程。
+该方案使得任务可以在交换缓存释放后立即被唤醒，避免了固定时长的休眠延迟，从而消除 UI 卡顿。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/30ee4dc6125028e5b9d733a1d17d5e16b19e5dfb

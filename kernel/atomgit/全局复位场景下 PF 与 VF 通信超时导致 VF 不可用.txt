@@ -1,0 +1,28 @@
+#标题
+全局复位场景下 PF 与 VF 通信超时导致 VF 不可用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行全局复位过程中，PF 与 VF 进行 mailbox 通信时可能发生失败。若 VF 未接收到 PF 发送的停止功能消息，会导致 VF 处于不可用状态。同时，PF 等待 VF 响应可能发生超时。
+
+#主要错误日志
+- "failed to send command(0x%x) to all vfs!\n"
+- "failed to send command(0x%x) to PF!\n"
+- "failed to get response from PF, suppos it is soft reset!\n"（推断：复位异常流程中打印）
+- "failed to get command from source!\n"
+
+#问题根因
+在全局复位场景下，PF 与 VF 之间的 mailbox 通信机制存在缺陷：
+1. PF 等待 VF 响应的时间（QM_WAIT_DST_ACK 和 QM_MAX_PF_WAIT_COUNT）设置过短，导致响应超时。
+2. 当 mailbox 操作失败时，PF 直接中止发送，未继续向 VF 发送中断事件通知复位。
+3. VF 在获取 PF 消息失败时，未将其视为全局复位情况进行处理，导致 VF 无法正确停止功能并进入复位流程。
+
+#解决方案
+1. 增加 PF 等待 VF 响应的时间参数，将 `QM_WAIT_DST_ACK` 由 10 改为 1000，`QM_MAX_PF_WAIT_COUNT` 由 10 改为 20。
+2. 优化通信失败处理逻辑：在全局复位准备阶段（QM_PF_FLR_PREPARE 或 QM_PF_SRST_PREPARE），即使 mailbox 发送失败，PF 也不报错并继续发送中断事件给 VF；VF 收到中断但读取消息失败时，默认假设为软复位消息并执行复位流程。
+3. 增加 `QM_DEVICE_DOWN` 状态标记，用于在复位过程中标识设备状态，并在 `qm_check_dev_error` 中优先检查该状态，避免 VF 在设备不可用时误读寄存器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f7ec1bcfc9177e3e3ed85665eb058385878ed3c4

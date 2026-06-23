@@ -1,0 +1,20 @@
+#标题
+f2fs: get_new_segment 未正确处理脏段位图导致系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 F2FS 文件系统运行过程中，当分配新段（get_new_segment）时，若 free_segmap 位图状态异常（本应为空闲的段被标记为脏），会触发 `f2fs_bug_on` 导致内核 panic 或系统重启，无法优雅地处理文件系统元数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `get_new_segment` 中，代码逻辑在 `got_it` 标签后检查目标段是否在 `free_segmap` 中被标记为空闲。原实现使用 `f2fs_bug_on` 进行断言检查，一旦发现该段已被标记为脏（非空闲），直接触发内核 panic。这种处理方式过于激进，未能在文件系统元数据发生不一致时提供恢复或停止服务的容错机制。
+
+#解决方案
+将 `f2fs_bug_on` 断言修改为条件判断处理逻辑。若检测到段位图状态损坏（`test_bit` 返回真），将错误码设置为 `-EFSCORRUPTED`，调用 `f2fs_stop_checkpoint` 停止检查点写入以防止损坏扩散，并跳转至 `out_unlock` 退出函数，从而避免系统崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad47bd747b944c33e67a34735922605eeea30fc1

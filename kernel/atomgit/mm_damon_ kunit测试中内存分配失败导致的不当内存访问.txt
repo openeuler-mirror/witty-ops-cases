@@ -1,0 +1,23 @@
+#标题
+mm/damon: kunit测试中内存分配失败导致的不当内存访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 DAMON 核心功能的 kunit 测试（`damon_test_split_at`）时，如果遇到内存压力较大导致动态内存分配失败的场景，测试代码未正确处理失败路径，继续执行后续代码，导致 inappropriate memory access（不当内存访问），可能引发内核 panic 或 Oops。
+
+#主要错误日志
+推断日志：
+kunit_skip: ctx alloc fail
+kunit_skip: target alloc fail
+kunit_skip: region alloc fail
+
+#问题根因
+`damon_test_split_at()` 函数假定其内部所有的动态内存分配（如 `damon_new_target`、`damon_new_region` 等）都会成功。虽然在实际运行中这些分配因体积较小很少失败，但在理论上的内存不足情况下，分配可能失败。原代码缺少对分配返回值的检查与错误处理，直接使用可能为 NULL 的指针，导致后续发生不当内存访问。
+
+#解决方案
+在 `damon_test_split_at()` 函数中增加对内存分配结果的检查。对于每一个内存分配步骤（context、target、region），若发现分配失败，则立即释放之前已成功分配的资源以避免内存泄漏，并调用 `kunit_skip()` 跳过当前测试用例的剩余执行部分，从而防止不当内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/37d3ad5f0d655b72bc7bc62db8d85b8129e9c50b

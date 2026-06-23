@@ -1,0 +1,20 @@
+#标题
+libsubcmd 中 exclude_cmds 函数因空交集场景处理不当导致断言失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当执行命令排除逻辑时，若 `cmds` 列表与 `excludes` 列表无交集（例如 `cmds` 包含 ["read-vdso32"] 而 `excludes` 包含 ["archive"]），程序异常终止并触发断言失败。
+
+#主要错误日志
+help.c:104: exclude_cmds: Assertion `cmds->names[ci] == NULL' failed.
+
+#问题根因
+当 `cmds` 与 `excludes` 没有交集时，主循环结束时 `ci` 与 `cj` 均为 0。原代码逻辑中，处理剩余元素的循环被 `if (ci != cj)` 条件包裹，导致在 `ci == cj` 的情况下该循环体被跳过。随后的清理循环中，代码错误地断言 `cmds->names[ci] == NULL`，但由于前面的循环被跳过，数组元素未被置空且索引未正确推进，导致断言失败。
+
+#解决方案
+调整循环与条件判断的层级结构。将 `if (ci != cj)` 条件移至 `while (ci < cmds->cnt)` 循环内部。无论 `ci` 是否等于 `cj`，循环都会正常遍历并推进索引；仅在 `ci != cj` 时执行数组元素的左移和置空操作，从而正确处理无交集（`ci == cj`）的场景。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4c5e2b6ba46fc5f5c2cab48e5679c6abbe7ff78c

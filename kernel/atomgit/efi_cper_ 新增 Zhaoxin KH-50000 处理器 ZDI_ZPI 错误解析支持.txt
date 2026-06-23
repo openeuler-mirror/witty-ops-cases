@@ -1,0 +1,27 @@
+#标题
+efi/cper: 新增 Zhaoxin KH-50000 处理器 ZDI/ZPI 错误解析支持
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Zhaoxin KH-50000 处理器平台上发生硬件错误时，内核日志无法正确解析和显示 ZDI（ZHAOXIN Direct Interface）与 ZPI（ZHAOXIN Package Interface）的详细错误信息。由于缺乏针对该新型号处理器的特定解析逻辑，用户无法观测到具体的链路速度不可靠状态、链路宽度不可靠状态等详细错误类型，不利于故障定位。
+
+#主要错误日志
+未知
+（注：该 Commit 为新增解析功能，未在提交信息中提供触发修复前的具体错误日志片段。预计修复后将输出类似以下格式的日志：）
+- "general processor error(zpi port 0x%llx error)"
+- "general processor error(zdi port 0x%x %s error)" （其中 %s 可能是 "ccdzdi" 或 "iodzdi"）
+- "socket id %lld error_type: %s"
+
+#问题根因
+Zhaoxin KH-50000 处理器的 ZDI 和 ZPI 支持报告比旧型号（如 KH-40000）更多的附加错误类型和更详细的分析信息。现有内核代码中 `cper_zdi_zpi_err_type_str` 和 `cper_print_proc_generic_zdi_zpi` 函数仅支持旧型号，缺乏对 KH-50000（Model 0x7b）特有的错误类型定义和解析逻辑，导致无法正确解码硬件上报的错误状态。
+
+#解决方案
+1. 在 `zdi_zpi_err_type_strs` 数组中扩展错误类型字符串，新增支持 "SL_NA_CYCLE Status"、"8.0GT/s...32.0GT/s Link Speed Unreliable Status" 以及 "X2...X32X24 Link Width Unreliable Status" 等错误描述。
+2. 修改 `cper_zdi_zpi_err_type_str` 函数，增加对 CPU Model 0x5b (KH-40000) 和 0x7b (KH-50000) 的模型判断逻辑，针对不同型号返回对应的错误类型字符串或 "unknown error"。
+3. 新增 `cper_print_proc_generic_zdi_zpi_kh50000` 函数，专门用于解析 KH-50000 的 ZDI/ZPI 错误寄存器值，提取 socket id、port 类型（ccdzdi/iodzdi）和错误类型并打印。
+4. 重构 `cper_print_proc_generic_zdi_zpi` 入口函数，通过读取 `boot_cpu_data.x86_model` 分发到对应的解析函数（KH-40000 或 KH-50000）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/71ff8ddc89ef0748d469b61bdb2dc5a9d4457c64

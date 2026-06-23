@@ -1,0 +1,23 @@
+#标题
+iio: adc: at91-sama5d2_adc: 模块卸载时潜在 use-after-free 修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 at91-sama5d2_adc 模块过程中，若此时正处于触摸数据处理流程中，内核可能发生 Use-After-Free (UAF) 故障。具体表现为在模块卸载函数调用 iio_device_unregister 释放 indio_dev 资源后，此前调度的工作队列（workq）仍在执行，并尝试访问已被释放的 indio_dev 指针，导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+故障根因是模块卸载与工作队列执行之间存在竞争条件。
+中断处理函数 `at91_adc_interrupt` 会调用 `at91_adc_touch_data_handler` 通过 `schedule_work(&st->touch_st.workq)` 启动工作队列。
+当执行模块卸载（`at91_adc_remove`）时，代码调用 `iio_device_unregister` 释放 `indio_dev`，但并未等待或取消正在运行或待运行的工作队列。
+此时，工作队列处理函数 `at91_adc_workq_handler` 可能仍在运行，并调用 `iio_push_to_buffers(indio_dev)` 访问已经释放的 `indio_dev`，从而触发 UAF。
+
+#解决方案
+在 `at91_adc_remove` 函数中，于调用 `iio_device_unregister` 之后、禁用 DMA 之前，增加对工作队列的同步取消操作 `cancel_work_sync(&st->touch_st.workq)`。这确保了在清理资源前，所有挂起或正在运行的相关工作队列任务已完成，避免了对已释放内存的访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bacddd0ed2c93ae4f5593d91b7b30e8c573c020c

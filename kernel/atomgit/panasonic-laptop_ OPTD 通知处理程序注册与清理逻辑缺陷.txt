@@ -1,0 +1,22 @@
+#标题
+panasonic-laptop: OPTD 通知处理程序注册与清理逻辑缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 panasonic-laptop 驱动加载过程中，若 `device_create_file()` 调用失败，会导致 ACPI notify handler（通知处理程序）发生泄漏。同时，驱动卸载流程中存在逻辑冗余，在 `pcc->platform` 为空时仍尝试注销通知器，且清理顺序与注册顺序不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `acpi_pcc_hotkey_add()` 函数中，`pcc_register_optd_notifier()` 调用位于 `device_create_file()` 的返回值检查之前。当 `device_create_file()` 失败并跳转到错误处理分支时，此前已注册的 ACPI notify handler 不会被注销，从而导致资源泄漏。此外，`acpi_pcc_hotkey_remove()` 中的清理顺序与注册顺序不匹配，且未严格检查 `pcc->platform` 的状态。
+
+#解决方案
+调整代码执行顺序以修复资源泄漏并优化清理逻辑：
+1. 在 `acpi_pcc_hotkey_add()` 中，将 `pcc_register_optd_notifier()` 移至 `device_create_file()` 返回值检查成功之后，确保只有在文件创建成功时才注册通知器，避免失败时的泄漏。
+2. 在 `acpi_pcc_hotkey_remove()` 中，将 `pcc_unregister_optd_notifier()` 移至 `if (pcc->platform)` 判断块内部，且置于 `device_remove_file()` 之前，确保清理顺序与注册顺序严格相反，并避免空指针情况下的无效调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6d85749ed90a7c80686e7b4573131a89f99c145f

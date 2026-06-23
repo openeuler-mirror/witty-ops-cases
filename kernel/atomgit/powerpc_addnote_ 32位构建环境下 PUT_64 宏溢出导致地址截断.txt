@@ -1,0 +1,20 @@
+#标题
+powerpc/addnote: 32位构建环境下 PUT_64 宏溢出导致地址截断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 32 位编译环境下编译 `arch/powerpc/boot/addnote.c` 时产生大量编译警告；实际运行时导致地址被破坏（clobbered addresses），例如在 P4080 处理器上 36 位物理地址无法正确写入，造成引导或加载异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`PUT_64BE` 和 `PUT_64LE` 宏定义中，在进行右移操作（如 `(v) >> 32L`）之前未将参数 `v` 强制转换为 `unsigned long long` 类型。在 32 位系统上，如果 `v` 是 `unsigned long` 类型，其宽度为 32 位，右移 32 位属于未定义行为（通常被编译器视为移位量为 0 或只取低 5 位），导致高位数据丢失（溢出），从而无法正确写入 64 位数值。相比之下，`GET_64[LB]E()` 宏已经正确进行了类型转换。
+
+#解决方案
+修改 `arch/powerpc/boot/addnote.c` 中的 `PUT_64BE` 和 `PUT_64LE` 宏定义，在进行移位操作前显式将参数 `v` 强制转换为 `unsigned long long` 类型，确保在 32 位构建环境下也能正确处理 64 位数值的写入，避免溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8546f2c58fbc99f9224689ed70d6baaa25297d7b

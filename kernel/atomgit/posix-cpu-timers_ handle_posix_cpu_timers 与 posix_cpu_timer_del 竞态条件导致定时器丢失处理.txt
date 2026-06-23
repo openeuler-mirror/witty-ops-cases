@@ -1,0 +1,20 @@
+#标题
+posix-cpu-timers: handle_posix_cpu_timers 与 posix_cpu_timer_del 竞态条件导致定时器丢失处理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进程退出（release_task）期间，若并发执行 posix_cpu_timer_del()，可能会因为无法获取 sighand 锁而失败，导致该函数遗漏对 `timer->it.cpu.firing` 状态的检查与处理，进而引发定时器状态不一致或资源处理逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`handle_posix_cpu_timers()` 与 `posix_cpu_timer_del()` 之间存在竞态条件。如果 `handle_posix_cpu_timers()` 在进程处于退出状态时继续运行，并发的 `posix_cpu_timer_del()` 可能会因 `lock_task_sighand(tsk)` 失败而直接返回，从而错过检查 `timer->it.cpu.firing != 0` 的情况，导致定时器事件丢失或状态错误。
+
+#解决方案
+在 `run_posix_cpu_timers()` 函数中，`handle_posix_cpu_timers()` 运行前增加对当前任务 `tsk->exit_state` 的检查。如果任务已处于退出状态，直接返回，不再处理 CPU 定时器，从而避免与 `release_task` 和 `posix_cpu_timer_del` 的竞态风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3348862a99109095b9f02501955d72698888a622

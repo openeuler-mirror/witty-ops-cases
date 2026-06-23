@@ -1,0 +1,24 @@
+#标题
+iommu/ummu: 多实例场景下非代理实例 Tect 缓存未同步导致数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在部署多个 UMMU（User Mode Memory Management Unit）实例的场景下，执行 EID（Endpoint ID）添加或删除操作时，非代理实例的 Tect 缓存未进行同步更新。这会导致非代理实例的缓存数据与配置表实际状态不一致，可能引发后续的配置错误或内存访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ummu_add_eid` 和 `ummu_del_eid` 函数的处理流程中，代码逻辑存在缺陷：
+1. 当处理非代理实例（else 分支）时，仅调用了 `ummu_device_create_kvtable` 或 `os_meta_del_eid`，遗漏了调用 `ummu_device_sync_tect` 和 `ummu_device_prefetch_cfg` 接口。
+2. `ummu_device_write_tecte` 函数原本的返回值检查逻辑不合理，导致在特定条件下提前返回，未执行后续的同步操作。
+
+#解决方案
+1. 在 `ummu_add_eid` 函数的 else 分支中，补充调用 `ummu_device_sync_tect` 和 `ummu_device_prefetch_cfg` 以确保非代理实例缓存同步。
+2. 在 `ummu_del_eid` 函数的 else 分支中，同样补充上述两个同步与预取操作。
+3. 修改 `ummu_device_fill_tecte` 函数的返回类型为 void，移除冗余的返回值检查，并调整 `ummu_device_write_tecte` 的调用逻辑，确保同步操作 `ummu_device_sync_tect` 能够被正确执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d8411e75db5981140af90b222eb3df41b3e32ade

@@ -1,0 +1,20 @@
+#标题
+ACPI: processor: idle: flatten_lpi_states 缺少边界检查导致潜在越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 ACPI processor idle 状态扁平化时，若复合 LPI 状态组合过多，`flat_state_cnt` 计数器可能在内部循环中多次递增，导致其超过 `ACPI_PROCESSOR_MAX_POWER` 限制，进而引发数组越界写入，可能导致内核内存损坏或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `flatten_lpi_states()` 函数中，合并复合 LPI 状态的内部循环会多次增加 `flat_state_cnt`。原有的边界检查（检查是否超过 `ACPI_PROCESSOR_MAX_POWER`）仅位于外部循环的顶部。如果 `flat_state_cnt` 在外部循环迭代之间的内部循环中多次递增，它可能会在没有被检查的情况下超过 `ACPI_PROCESSOR_MAX_POWER` 限制，导致越界。
+
+#解决方案
+在内部循环中 `flat_state_cnt` 自增之后，立即添加边界检查。如果 `flat_state_cnt` 达到或超过 `ACPI_PROCESSOR_MAX_POWER`，则立即跳出内部循环，随后的外部循环检查将处理告警，从而防止越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac30b7c0434f98c1559d00c2bec462ce0469c162

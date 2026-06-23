@@ -1,0 +1,27 @@
+#标题
+pinctrl: qcom: 修改IRQ类型时因残留中断状态导致虚假中断上报
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非PDC支持的GPIO（non-wakeup GPIO）上执行TLMM测试时，部分测试用例失败。具体表现为在更改中断触发类型（如从上升沿改为下降沿，或改为电平触发）时，系统错误地报告了不匹配的中断事件。例如，在预期不应有中断发生的场景下，中断计数器 `intr_count` 意外增加，测试断言失败。
+
+#主要错误日志
+tlmm_test_silent_falling: ASSERTION FAILED at drivers/pinctrl/qcom/tlmm-test.c:178
+Expected atomic_read(&priv->intr_count) == 0, but
+    atomic_read(&priv->intr_count) == 1 (0x1)
+not ok 2 tlmm_test_silent_falling
+tlmm_test_silent_low: ASSERTION FAILED at drivers/pinctrl/qcom/tlmm-test.c:178
+Expected atomic_read(&priv->intr_count) == 0, but
+    atomic_read(&priv->intr_count) == 1 (0x1)
+not ok 3 tlmm_test_silent_low
+
+#问题根因
+在切换中断类型或极性时，之前GPIO状态变化产生的锁存中断状态未被清除。驱动程序仅在首次使能中断时清除状态，而在修改中断配置（如将上升沿触发改为下降沿触发）时，保留了旧的不匹配的中断状态，导致配置更新后立即触发了虚假的中断处理。
+
+#解决方案
+修改 `pinctrl-msm` 驱动的 `msm_gpio_irq_set_type` 函数逻辑。当检测到中断配置寄存器值发生任何变化（即 `val != oldval`）时，强制调用 `msm_ack_intr_status` 清除残留的中断状态，而不仅仅是在中断从未使能过的情况下才清除。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7d3a595840d67bc6ccd20782b467d57f1118c2db

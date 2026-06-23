@@ -1,0 +1,20 @@
+#标题
+most: usb: Fix use-after-free in hdm_disconnect
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MOST USB 适配器驱动断开连接时触发 KASAN 检测到的 slab-use-after-free 错误。该问题由 syzbot 发现，具体表现为在执行 `hdm_disconnect` 流程时，设备注销后立即释放资源，随后又尝试访问已释放的内存区域。
+
+#主要错误日志
+KASAN: slab-use-after-free in hdm_disconnect
+
+#问题根因
+在 `hdm_disconnect()` 函数中调用 `most_deregister_interface()` 时，底层会执行 `device_unregister(iface->dev)`。如果该操作释放了设备的最后一个引用，设备核心可能会立即调用 `release_mdev()`，而此时 `hdm_disconnect()` 仍在执行中。旧代码在 `hdm_disconnect()` 中手动释放了 `mdev` 拥有的内存资源（如 `busy_urbs`, `cap` 等），随后又执行了 `put_device()` 调用。这导致了竞态条件：要么 `release_mdev()` 访问到了已被 `hdm_disconnect()` 释放的内存，要么 `hdm_disconnect()` 访问了已注销释放的资源，从而引发 use-after-free 或 double-free。
+
+#解决方案
+将 `mdev` 拥有的内存资源（`busy_urbs`, `cap`, `conf`, `ep_address`）的释放操作从 `hdm_disconnect()` 移动到 `release_mdev()` 回调函数中执行。这确保了这些资源仅在设备真正被释放（引用计数归零）时才被释放，且仅释放一次。同时，移除了 `hdm_disconnect()` 中冗余的 `put_device()` 调用，因为在注销流程中引用计数的处理已由设备核心管理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ffb255fbd20f26d7cc110534ca6ead5b4f0c1fe

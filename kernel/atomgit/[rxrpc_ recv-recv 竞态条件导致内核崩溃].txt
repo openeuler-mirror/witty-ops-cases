@@ -1,0 +1,20 @@
+#标题
+[rxrpc: recv-recv 竞态条件导致内核崩溃]
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 RxRPC 调用接收事件时，调用被放入套接字队列唤醒 recvmsg 线程处理。若存在两个线程同时处理同一调用（一个线程正在处理并导致调用终止释放，另一个线程在等待 user_mutex），第一个线程正常完成后，第二个线程获得锁后发现调用已被释放，触发内核 BUG 导致系统崩溃。
+
+#主要错误日志
+kernel BUG at net/rxrpc/recvmsg.c:474!
+
+#问题根因
+在已完成的 RxRPC 调用上存在 recv-recv 竞态条件。第一个线程处理事件时可能看到调用终止并释放（decoupling the call from the user call ID），此时第二个线程被唤醒持有 user_mutex，检查到调用已被释放，直接调用 BUG() 导致内核崩溃。根本原因是并发接收处理逻辑未正确处理调用已释放的状态。
+
+#解决方案
+移除直接触发 BUG() 的代码逻辑，改为在检测到调用已释放（RXRPC_CALL_RELEASED 标志位置位）时，将调用从队列中出队并忽略，通过 goto try_again 重新尝试接收其他调用。同时增加了 trace point（rxrpc_call_see_already_released 和 rxrpc_call_see_recvmsg）以便追踪调试，避免因用户调用 ID（user call ID）已失效而无法通知用户空间的情况导致系统崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a609ffdf3355fe32053311d627ed0e73589c2e0f

@@ -1,0 +1,26 @@
+#标题
+toshiba_haps 驱动 add/remove 例程内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Toshiba HDD Active Protection Sensor 驱动在加载失败或卸载时存在内存泄漏现象。
+具体表现为：
+1. 在 `toshiba_haps_add` 函数执行过程中，若对象分配成功但后续初始化步骤出错导致函数返回错误码，先前分配的内存对象未被释放。
+2. 在 `toshiba_haps_remove` 函数执行时，未释放 `toshiba_haps` 指针指向的内存对象即清空了该指针，导致该内存块变成不可达的已分配内存。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序使用 `kzalloc` 分配内存，但在错误退出路径和设备移除路径中未正确实施内存回收逻辑。
+1. `toshiba_haps_add()` 中分配内存后，若后续流程返回错误，未执行 `kfree` 操作。
+2. `toshiba_haps_remove()` 中仅清空了指针，未先释放指针指向的内存。
+
+#解决方案
+将内存分配方式由 `kzalloc` 替换为托管版本 `devm_kzalloc`。
+通过使用设备资源管理内存分配，内核将自动在设备卸载或初始化失败时回收内存，从而修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5c9ed55f17c0406fe0fc040c404247e057a8049e

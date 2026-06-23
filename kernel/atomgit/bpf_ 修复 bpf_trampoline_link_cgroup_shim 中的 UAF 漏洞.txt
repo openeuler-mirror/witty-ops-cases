@@ -1,0 +1,20 @@
+#标题
+bpf: 修复 bpf_trampoline_link_cgroup_shim 中的 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行 BPF 相关操作时发生 Use-After-Free (UAF) 导致崩溃。该问题在 `bpf_shim_tramp_link_release` 延迟释放资源的窗口期内极易被触发，复现概率接近 100%。
+
+#主要错误日志
+未知
+
+#问题根因
+该漏洞的根本原因是竞态条件。当 `bpf_link_put` 将 `shim_link->link.link` 的引用计数减至零时，该资源被视为已释放，但实际的清理工作（从 `tr->progs_hlist` 中移除）在 `bpf_shim_tramp_link_release` 中被延迟执行。在此窗口期间，另一个进程通过 `bpf_trampoline_link_cgroup_shim` 调用 `cgroup_shim_find` 仍可在 `tr->progs_hlist` 中找到该 shim_link，并对其执行引用计数增加操作，从而导致 Use-After-Free。
+
+#解决方案
+在 `bpf_trampoline_link_cgroup_shim` 函数中增加原子非零检查。在找到 `shim_link` 后，不再直接调用 `bpf_link_inc`，而是使用 `bpf_link_inc_not_zero` 函数。只有当引用计数不为零时才增加引用，从而避免对即将释放或已释放的资源进行操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e3b123dec3d9726d664b496e4992d825affc71a0

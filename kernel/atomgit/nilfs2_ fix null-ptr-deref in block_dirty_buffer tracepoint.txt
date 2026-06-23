@@ -1,0 +1,20 @@
+#标题
+nilfs2: fix null-ptr-deref in block_dirty_buffer tracepoint
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 nilfs2 文件系统时，触发 `block_dirty_buffer` tracepoint 可能导致内核发生空指针引用，进而引发内核恐慌或崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 nilfs2 的代码路径中，多处位置（如 `nilfs_btnode_create_block`、`nilfs_btnode_submit_block`、`nilfs_gccache_submit_read_data`、`nilfs_mdt_create_block`）错误地延迟或遗漏了对 `buffer_head` 结构体中 `b_bdev` 成员的赋值。当这些 buffer_head 随后被标记为 dirty 并通过 `block_dirty_buffer` tracepoint 进行跟踪时，该 tracepoint 会尝试访问 `b_bdev` 成员，由于该成员未初始化（为 NULL），导致发生空指针引用。
+
+#解决方案
+将 `bh->b_bdev` 的赋值操作统一移动到 buffer_head 分配和初始化的公共入口函数 `nilfs_grab_buffer` 中执行。同时，删除 `fs/nilfs2/btnode.c`、`gcinode.c` 和 `mdt.c` 中对 `bh->b_bdev` 的冗余赋值代码。这确保了在任何 buffer_head 被进一步操作或跟踪之前，其 `b_bdev` 成员均已正确指向超级块中关联的块设备，从而避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31c4fffa86e17e8a946c944e91e7412db7f8427b

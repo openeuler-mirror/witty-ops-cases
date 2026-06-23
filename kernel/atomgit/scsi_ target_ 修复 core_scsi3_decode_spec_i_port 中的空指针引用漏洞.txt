@@ -1,0 +1,26 @@
+#标题
+scsi: target: 修复 core_scsi3_decode_spec_i_port 中的空指针引用漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SPC-3 PR SPEC_I_PT 请求时，若无法定位 dest_tpg，函数 `core_scsi3_decode_spec_i_port` 的错误处理路径中会触发空指针引用，导致内核崩溃。具体表现为 unable to handle kernel paging request，系统崩溃并打印调用栈。
+
+#主要错误日志
+SPC-3 PR SPEC_I_PT: Unable to locate dest_tpg
+Unable to handle kernel paging request at virtual address dfff800000000012
+Call trace:
+  core_scsi3_lunacl_undepend_item+0x2c/0xf0 [target_core_mod] (P)
+  core_scsi3_decode_spec_i_port+0x120c/0x1c30 [target_core_mod]
+  core_scsi3_emulate_pro_register+0x6b8/0xcd8 [target_core_mod]
+  target_scsi3_emulate_pr_out+0x56c/0x840 [target_core_mod]
+
+#问题根因
+函数 `core_scsi3_decode_spec_i_port` 在其错误处理路径中，无条件调用 `core_scsi3_lunacl_undepend_item` 并传入 `dest_se_deve` 指针。该指针可能为 NULL，如果 `dest_se_deve` 保持未设置状态，直接传递给该函数将导致空指针引用。
+
+#解决方案
+在调用 `core_scsi3_lunacl_undepend_item` 前，增加对 `dest_se_deve` 指针的非空检查，仅当指针非空时才执行该函数调用，从而避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac5fa2bee301656ecb13c280ac524a810a7a2fe7

@@ -1,0 +1,21 @@
+#标题
+udp gso fraglist 分段处理空指针崩溃故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 UDP GSO 使用 fraglist 模式传输数据时，如果数据包经过 NAT 或 BPF (如 bpf_skb_pull_data) 等钩子处理，可能会破坏 SKB 的几何结构（将数据拉取到线性区域）。在此异常场景下，内核在处理分段时会在 `__udpv4_gso_segment_list_csum` 函数处触发空指针解引用（NULL pointer dereference），导致内核崩溃或网络发送路径异常。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference at ...(推断)
+RIP: __udpv4_gso_segment_list_csum (推断)
+
+#问题根因
+正常的 SKB_GSO_FRAGLIST 包含两个或多个段，且满足特定的几何结构约束（head_skb 包含协议头和第一个 gso_size，frag_list 中的 skb 包含后续段）。可选的数据路径钩子（如 NAT 和 BPF）可以修改这些 skb，破坏了这些不变量。在极端情况下，它们将所有数据拉取到 skb 线性部分，导致 seg->next 为空。代码在 `__udpv4_gso_segment_list_csum` 中访问 `udp_hdr(seg->next)->dest` 时，因指针为空触发崩溃。
+
+#解决方案
+在 `__udp_gso_segment` 函数中增加对 fraglist skb 几何结构的检测。通过比较 `skb_pagelen(gso_skb) - sizeof(*uh)` 与 `gso_size`，识别出被修改过的异常 skb。对于异常 skb，不再调用 `__udp_gso_segment_list` 处理，而是设置好校验和相关信息（csum_start, csum_offset, ip_summed 及 uh->check），将其回退交给通用的 `skb_segment` 函数处理，从而避免空指针崩溃并正确完成分段。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9d4f8f2ece0f73f01d0f7f650a491a5a337db30b

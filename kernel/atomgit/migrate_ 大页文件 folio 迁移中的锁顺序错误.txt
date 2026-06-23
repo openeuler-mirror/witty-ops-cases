@@ -1,0 +1,20 @@
+#标题
+migrate: 大页文件 folio 迁移中的锁顺序错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 Hugetlb 文件 folio 迁移时，可能出现内核崩溃或死锁，导致系统不稳定或进程在迁移操作中挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `unmap_and_move_huge_page` 函数中，锁的获取与释放顺序不一致。原代码在 `folio_mapped` 检查块内部提前释放了 `i_mmap_lock`，但在后续处理中调用 `remove_migration_ptes` 时可能仍需依赖该锁状态，导致锁序错乱。具体表现为 `TTU_RMAP_LOCKED` 标志处理位置不当，破坏了锁的临界区保护范围。
+
+#解决方案
+将 `i_mmap_unlock_write` 的调用从 `folio_mapped` 条件块内部移至函数更外层，确保在 `remove_migration_ptes` 执行完毕后再释放锁。同时，调整 `remove_migration_ptes` 的调用参数，根据 `ttu` 标志正确传递锁定状态，从而修正锁的释放时机与顺序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/da22d7b25fab0e2cc82084d928599d6a69af88a4

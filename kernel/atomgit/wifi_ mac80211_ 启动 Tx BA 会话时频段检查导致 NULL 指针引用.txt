@@ -1,0 +1,20 @@
+#标题
+wifi: mac80211: 启动 Tx BA 会话时频段检查导致 NULL 指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启动 Tx BA (Block Ack) 会话时，若驱动未正确设置频段信息，内核在检查 `chan->band` 成员时触发 NULL 指针引用，导致内核崩溃或相关功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ieee80211_start_tx_ba_session` 函数中，原代码逻辑仅检查了 `ht_supported` 标志，若 HT 不支持则直接访问 `sta->sdata->vif.bss_conf.chandef.chan->band` 进行频段判断。如果底层驱动未正确初始化或赋值 `chan` 指针（例如在某些特定硬件配置下），该访问行为将引发 NULL 指针解引用（NULL dereference）。
+
+#解决方案
+修改频段检查逻辑，不再依赖可能为空的 `chan->band` 指针访问。改为直接检查工作站支持的能力标志位，若不支持 HT，则依次检查是否支持 VHT、HE 或 EHT。如果这些更高阶的协议能力均不支持，才返回 `-EINVAL`，从而避免了访问空指针的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d3951d172709e6260e25315f2b184c09931dd2e1

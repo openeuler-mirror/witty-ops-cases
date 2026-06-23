@@ -1,0 +1,20 @@
+#标题
+NFSD: nfsd4_shutdown_callback 导致挂起问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFS 服务器端进行回调（callback）处理时，若客户端处于 courtesy 状态，相关的工作队列未能正确退出，导致 nfsd4_shutdown_callback 流程挂起，系统无法正常完成关闭或回收流程。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nfsd4_run_cb_work` 函数中，原有的判断逻辑仅检查 `clp->cl_cb_client` 是否为空。当客户端处于 `NFSD4_COURTESY` 状态时，虽然 `clp->cl_cb_client` 可能不为空，但此时不应继续处理回调，而应销毁回调结构。由于缺少对 `NFSD4_COURTESY` 状态的判断，导致流程未正确终止，进而引发挂起。
+
+#解决方案
+在 `fs/nfsd/nfs4callback.c` 文件的 `nfsd4_run_cb_work` 函数中，增加对客户端状态 `clp->cl_state` 的判断。将原有的 `if (!clnt)` 条件修改为 `if (!clnt || clp->cl_state == NFSD4_COURTESY)`，确保当客户端处于 courtesy 状态时，直接调用 `nfsd41_destroy_cb(cb)` 销毁回调并返回，避免后续处理导致的挂起。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ffd82d7aaf0b47cb1a194df68e08fe34bd162c3a

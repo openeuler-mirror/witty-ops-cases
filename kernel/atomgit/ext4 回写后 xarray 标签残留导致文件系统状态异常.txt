@@ -1,0 +1,20 @@
+#标题
+ext4 回写后 xarray 标签残留导致文件系统状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在文件系统重新挂载为只读或进行冻结前的最终同步后，xarray 中残留过期的 DIRTY 和/或 TOWRITE 标签。这会导致后续对这些文件系统启动回写操作时触发内核断言失败，例如在 `ext4_journal_check_start()` 中报告断言错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ext4_bio_write_page()` 函数处理过程中，存在页面没有缓冲区需要提交的情况（例如文件部分为空洞、从 jbd2 调用时无法分配块、或 data=journal 模式下检查点已提前写入缓冲区）。在此类情况下函数直接返回，若页面不需要重置脏标志，则不会调用 `__folio_start_writeback()`，导致 xarray 中的 DIRTY 和 TOWRITE 标签未被清除。这些残留标签破坏了文件系统的状态一致性，最终触发了相关断言检查。
+
+#解决方案
+修改 `ext4_bio_write_folio` 函数逻辑，当没有缓冲区需要提交（`!nr_to_submit`）时，不再直接返回，而是调用 `__folio_start_writeback` 和 `folio_end_writeback` 让页面完整经过回写状态周期。此举确保了 xarray 中的标签被正确更新和清除，从而修复了状态不一致的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0cd1edd03e1fbd9f8644052074acc0e0d2bd3ee2

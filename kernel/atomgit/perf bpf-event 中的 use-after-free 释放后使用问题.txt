@@ -1,0 +1,21 @@
+#标题
+perf bpf-event 中的 use-after-free 释放后使用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `perf_env__insert_bpf_prog_info` 失败时（例如因为 sideband 线程已提前插入了相同的 `bpf_prog_info`），会触发 `info_linear` 的释放。随后代码继续访问已释放的 `info_linear` 内部的 `bpf_prog_info` 结构体，导致 use-after-free（释放后使用）问题，可能引发程序崩溃或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+调用 `perf_env__insert_bpf_prog_info` 可能因 sideband 线程已插入 `bpf_prog_info` 而失败。此类失败情境下，代码逻辑错误地释放了 `info_linear`，但随后仍尝试访问其内部的 `bpf_prog_info` 结构体。此外，相关函数 `perf_env__add_bpf_info` 缺少正确的错误返回值处理与传递机制，导致错误状态未被上层正确感知。
+
+#解决方案
+修复 `perf_event__synthesize_one_bpf_prog` 中的释放逻辑：当 `perf_env__insert_bpf_prog_info` 插入失败时，仅释放 `info_node` 并直接跳转至 `out` 标签退出，避免继续访问已释放的 `info_linear` 数据。
+修改 `perf_env__add_bpf_info` 函数：增加返回值机制以传递错误状态，正确处理 `bpf_prog_get_fd_by_id` 失败、内存分配失败及重复插入等场景，并在调用者 `bpf_event__sb_cb` 中正确传递返回值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/317ba45919b0a5dacac69a3fd17b1064f37343d8

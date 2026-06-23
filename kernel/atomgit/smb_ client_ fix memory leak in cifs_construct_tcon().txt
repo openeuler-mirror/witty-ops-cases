@@ -1,0 +1,37 @@
+#标题
+smb: client: fix memory leak in cifs_construct_tcon()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了 domain= 参数的 multiuser（多用户）挂载场景下，使用 cifscreds 工具添加凭证并执行文件操作（如 ls）后卸载文件系统，kmemleak 检测到内核存在内存泄漏。泄漏的对象大小为 8 字节，内容为域名（如 "ZELDA"）。
+
+#主要错误日志
+unreferenced object 0xffff8881203c3f08 (size 8):
+  comm "ls", pid 5060, jiffies 4307222943
+  hex dump (first 8 bytes):
+    5a 45 4c 44 41 00 cc cc                          ZELDA...
+  backtrace (crc d109a8cf):
+    __kmalloc_node_track_caller_noprof+0x572/0x710
+    kstrdup+0x3a/0x70
+    cifs_sb_tlink+0x1209/0x1770 [cifs]
+    cifs_get_fattr+0xe1/0xf50 [cifs]
+    cifs_get_inode_info+0xb5/0x240 [cifs]
+    cifs_revalidate_dentry_attr+0x2d1/0x470 [cifs]
+    cifs_getattr+0x28e/0x450 [cifs]
+    vfs_getattr_nosec+0x126/0x180
+    vfs_statx+0xf6/0x220
+    do_statx+0xab/0x110
+    __x64_sys_statx+0xd5/0x130
+    do_syscall_64+0xbb/0x380
+    entry_SYSCALL_64_after_hwframe+0x77/0x7f
+
+#问题根因
+在 cifs_construct_tcon() 函数中，当处理 multiuser 挂载且指定了 domain 参数时，cifs_set_cifscreds() 会设置 ctx->domainname。但在函数退出路径（out 标签处）的清理逻辑中，仅释放了 ctx->username 和 ctx->password，遗漏了对 ctx->domainname 的释放，导致内存泄漏。
+
+#解决方案
+在 cifs_construct_tcon() 函数的错误处理和退出路径中，增加对 ctx->domainname 的释放操作（kfree(ctx->domainname)），确保资源被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6d12f5ae4b8617a7c511e122063e029fa3504cc2

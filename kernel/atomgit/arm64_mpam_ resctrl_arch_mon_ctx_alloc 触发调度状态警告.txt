@@ -1,0 +1,35 @@
+#标题
+arm64/mpam: resctrl_arch_mon_ctx_alloc 触发调度状态警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 resctrl_arch_mon_ctx_alloc() 函数时，若当前任务处于非运行状态（non-running state），调用 kmalloc() 会触发内核调度器的警告信息。具体表现为系统抛出 WARNING，提示在 TASK_RUNNING 状态之外调用了可能阻塞的操作。
+
+#主要错误日志
+do not call blocking ops when !TASK_RUNNING; state=1 set at prepare_to_wait
+WARNING: CPU: 78 PID: 12592 at kernel/sched/core.c:10584 _might_sleep
+
+Call trace:
+ _might_sleep+0x1cc/0xf8
+ _kmalloc_cache_alloc_node+0x3a0/0x4e0
+ kmalloc_trace+0x44/0x120
+ resctrl_arch_mon_ctx_alloc+0xf0/0x178
+ mon_event_read+0xa0/0x308
+ mkdir_mondata_subdir+0x24c/0x330
+ mkdir_mondata_all+0x17c/0x248
+ rdt_get_tree+0x2e8/0x680
+ vfs_get_tree+0x5c/0x190
+ do_new_mount+0x27c/0x408
+ path_mount+0x2ac/0x448
+ arm64_sys_mount+0x1d4/0x228
+
+#问题根因
+在原函数 resctrl_arch_mon_ctx_alloc() 中，代码逻辑通过 prepare_to_wait() 将当前任务状态设置为 TASK_INTERRUPTIBLE（state=1），随后在 do-while 循环中调用了 resctrl_arch_mon_ctx_alloc_no_wait()。虽然该子函数名提示 no_wait，但其内部调用的 kmalloc(..., GFP_KERNEL) 是一个可能阻塞的操作。内核调度器检测到任务在非 TASK_RUNNING 状态下尝试执行可能阻塞的内存分配，从而触发 _might_sleep 警告，导致调度状态破坏。
+
+#解决方案
+移除了包含 prepare_to_wait 和 schedule 逻辑的复杂循环等待实现，删除了 resctrl_arch_mon_ctx_alloc_no_wait 辅助函数。直接在 resctrl_arch_mon_ctx_alloc 函数中进行 kmalloc 分配，确保内存分配操作发生在任务处于 TASK_RUNNING 状态时，从而避免了在非运行状态下调用阻塞操作的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4dd41e259489354d33c3a57a8d24e8a91074d9f2

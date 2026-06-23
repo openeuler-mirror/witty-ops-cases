@@ -1,0 +1,20 @@
+#标题
+sxgbe 驱动 rx 方法空指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Samsung 10Gb 以太网驱动（sxgbe）处理接收数据包流程中，若 `skb` 指针为空，驱动虽打印错误日志但未终止处理流程，导致随后直接对该空指针进行解引用操作（如 `prefetch(skb->data)`），引发内核 Panic 或 Oops。
+
+#主要错误日志
+rx descriptor is not consistent
+
+#问题根因
+驱动程序 `sxgbe_rx()` 函数在检查 `priv->rxq[qnum]->rx_skbuff[entry]` 发现其为 NULL 时，仅调用了 `netdev_err` 打印错误信息，但缺少 `break` 或 `return` 语句退出循环。代码继续向下执行，尝试访问 `skb->data` 成员，从而触发空指针解引用漏洞。该问题由代码审查发现。
+
+#解决方案
+在 `sxgbe_rx()` 函数中，当检测到 `skb` 为 NULL 时，在打印错误日志后立即添加 `break` 语句跳出循环，终止当前处理流程并切换至 `sxgbe_rx_refill()`，避免后续对空指针的非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/87ee13d61b3cfcd181fdb84742fbdbb46e57e24c

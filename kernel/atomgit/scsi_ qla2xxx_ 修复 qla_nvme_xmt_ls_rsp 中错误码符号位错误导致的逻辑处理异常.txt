@@ -1,0 +1,20 @@
+#标题
+scsi: qla2xxx: 修复 qla_nvme_xmt_ls_rsp 中错误码符号位错误导致的逻辑处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NVMe over Fabric 场景下，当 qla_nvme_xmt_ls_rsp() 调用 qla2x00_start_sp() 返回错误码（如 EAGAIN）时，由于错误码符号位处理不当，导致 switch-case 逻辑判断错误，未能进入预期的重试流程，可能导致链路服务（LS）响应发送失败或逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 qla2x00_start_sp() 在失败时返回的是负的错误码（negative error codes），而 qla_nvme_xmt_ls_rsp() 中的 switch 语句使用了正数的 EAGAIN（case EAGAIN:）进行判断。代码变更显示应使用 -EAGAIN，这导致当底层层返回 -EAGAIN 时，switch 语句无法匹配到正确的 case 分支，从而破坏了重试逻辑。
+
+#解决方案
+修改 drivers/scsi/qla2xxx/qla_nvme.c 文件中的 qla_nvme_xmt_ls_rsp 函数，将 switch 语句中的判断条件从 `case EAGAIN:` 修改为 `case -EAGAIN:`，以确保能正确匹配底层返回的负错误码，恢复正常的错误处理和重试逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d9c0152f14f96d0313c581cae671dc09eb7ff38e

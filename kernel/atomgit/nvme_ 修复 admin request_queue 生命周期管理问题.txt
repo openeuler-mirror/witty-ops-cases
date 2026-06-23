@@ -1,0 +1,20 @@
+#标题
+nvme: 修复 admin request_queue 生命周期管理问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 NVMe 控制器（Controller）时，由于 `admin_q` 释放时机不正确，可能导致内核访问已释放的队列数据结构，引发内核崩溃或数据损坏。具体表现为在执行 NVMe 设备热插拔或控制器移除操作时系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nvme_remove_admin_tag_set` 函数中过早调用了 `blk_put_queue(ctrl->admin_q)`。这导致 `admin_q` 的引用计数过早归零并被释放，但随后在 `nvme_free_ctrl` 函数中，代码逻辑仍可能访问该队列（或该队列在控制器销毁流程结束前已被释放），违反了对象生命周期管理规则。
+
+#解决方案
+将 `blk_put_queue(ctrl->admin_q)` 的调用从 `nvme_remove_admin_tag_set` 函数中移除，并将其移动到 `nvme_free_ctrl` 函数中执行。通过在 `nvme_free_ctrl` 中增加 `ctrl->admin_q` 的非空检查后再执行释放操作，确保队列结构在控制器完全销毁前一直有效，修复了生命周期管理缺陷。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d9680f1e28f291d3c1e8892ba2d9c15c68e6ad0c

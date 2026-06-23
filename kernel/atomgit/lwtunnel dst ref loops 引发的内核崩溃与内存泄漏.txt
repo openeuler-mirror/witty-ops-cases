@@ -1,0 +1,31 @@
+#标题
+lwtunnel dst ref loops 引发的内核崩溃与内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IPv6 轻量级隧道（lwtunnel，涉及 ila、ioam6、rpl、seg6）的特定配置下，存在 dst cache 引用循环问题。若未应用相关修复补丁，触发该问题会导致内核崩溃。修复后，该问题表现为内核内存泄漏，需通过 kmemleak 工具检测才能观测到。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在处理 lwtunnel（如 rpl, seg6, ioam6, ila）的 input/output/xmit 路径时，存在 dst entry 引用计数处理不当的问题。具体表现为：
+1. dst 引用泄漏。
+2. dst 引用循环。
+3. lwtunnel 重新进入循环。
+这些问题导致内核无法正确释放路由缓存对象，严重时触发内核崩溃。
+
+#解决方案
+此 Commit 引入了自测脚本 `lwt_dst_cache_ref_loop.sh` 以覆盖受影响的场景，验证了如下上游修复补丁的有效性：
+1. commit c71a192976de ("net: ipv6: fix dst refleaks in rpl, seg6 and ioam6 lwtunnels")
+2. commit 92191dd10730 ("net: ipv6: fix dst ref loops in rpl, seg6 and ioam6 lwtunnels")
+3. commit c64a0727f9b1 ("net: ipv6: fix dst ref loop on input in seg6 lwt")
+4. commit 13e55fbaec17 ("net: ipv6: fix dst ref loop on input in rpl lwt")
+5. commit 0e7633d7b95b ("net: ipv6: fix dst ref loop in ila lwtunnel")
+6. commit 5da15a9c11c1 ("net: ipv6: fix missing dst ref drop in ila lwtunnel")
+通过这些补丁，内核阻止了 lwtunnel_{input|output|xmit}() 的重入循环，并修正了 dst 引用计数的增减逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c85da4788bb4a0875f207c5bc6fb69782fe7ad47

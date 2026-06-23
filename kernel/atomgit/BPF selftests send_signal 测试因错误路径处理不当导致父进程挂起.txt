@@ -1,0 +1,20 @@
+#标题
+BPF selftests send_signal 测试因错误路径处理不当导致父进程挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 BPF selftests 的 send_signal 测试时，若 `test_send_signal_kern__open_and_load()` 加载失败，父进程会关闭管道并阻塞在 `wait(NULL)`，而子进程进入无限循环。这导致父进程永久挂起（死锁），测试用例无法正常结束。该问题在以 -O1 优化等级编译自测代码时被触发。
+
+#主要错误日志
+未知
+
+#问题根因
+测试程序中的错误处理路径逻辑不完善。当 BPF 程序加载失败时，父进程关闭管道导致 `ASSERT_EQ(read(pipe_p2c...))` 失败，但代码未在等待前终止子进程。子进程因此继续运行并陷入无限循环，而父进程一直等待子进程退出，形成死锁。
+
+#解决方案
+在 `skel_open_load_failure` 标签处的错误处理路径中，于调用 `wait(NULL)` 之前增加 `kill(pid, SIGKILL)` 操作。这确保了在发生错误时，子进程能被强制终止，从而避免父进程无限期等待。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6a98bd6bc4d6158e8c38cf127d4249c2a691403d

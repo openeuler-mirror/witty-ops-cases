@@ -1,0 +1,21 @@
+#标题
+sdei_watchdog PM通知器未处理CPU_PM_ENTER_FAILED导致状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ARM64架构下，当系统进行电源管理挂起/恢复操作时，若CPU在进入低功耗状态过程中失败（CPU_PM_ENTER_FAILED），SDEI watchdog事件未能被正确重新使能。这会导致内核看门狗在该CPU上失效，无法正常检测系统锁定，且可能掩盖后续的真实故障，增加了系统可靠性风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在`sdei_watchdog_pm_notifier`函数中，电源管理事件处理逻辑不完整。代码仅处理了`CPU_PM_ENTER`（成功进入低功耗模式）和`CPU_PM_EXIT`（退出低功耗模式）的情况，遗漏了`CPU_PM_ENTER_FAILED`（进入失败）事件。
+根据代码逻辑，`CPU_PM_ENTER`时会禁用SDEI watchdog，期望在`CPU_PM_EXIT`时重新使能。当发生`CPU_PM_ENTER_FAILED`时，系统并未真正进入低功耗模式，而是直接返回运行状态，此时应执行与`CPU_PM_EXIT`相同的恢复操作（重新使能watchdog）。由于缺少对该事件的处理，SDEI watchdog一直处于禁用状态，导致功能丢失。
+
+#解决方案
+在`sdei_watchdog_pm_notifier`的事件处理switch-case结构中，新增对`CPU_PM_ENTER_FAILED`事件的处理分支。将该事件与`CPU_PM_EXIT`事件归为同一处理逻辑：检查per-cpu变量`sdei_usr_en`状态，若之前已使能，则调用`sdei_api_event_enable`重新使能SDEI watchdog事件，确保在进入失败路径下系统状态的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2feb968359530b120391080260413c9980edddbb

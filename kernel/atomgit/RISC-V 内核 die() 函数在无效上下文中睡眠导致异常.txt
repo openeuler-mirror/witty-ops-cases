@@ -1,0 +1,20 @@
+#标题
+RISC-V 内核 die() 函数在无效上下文中睡眠导致异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V 架构下，当内核触发 die()（如发生 oops 或严重的异常陷阱）时，系统可能会检测到睡眠函数在无效上下文中被调用，从而导致内核异常或死锁，影响崩溃现场的打印与后续处理流程。
+
+#主要错误日志
+未知
+
+#问题根因
+`die()` 函数用于处理内核严重错误，其执行路径可能处于中断禁用或其他原子上下文中。原代码使用了普通的 `spin_lock_irqsave`，该锁类型在 Linux 内核中是睡眠安全的，若在持有锁期间发生调度或睡眠，会触发 "sleeping in invalid context" 错误。在 die() 这种可能处于高危上下文的函数中，应使用不可睡眠的自旋锁。
+
+#解决方案
+将 `die_lock` 的定义从 `DEFINE_SPINLOCK` 修改为 `DEFINE_RAW_SPINLOCK`，并将对应的锁操作函数 `spin_lock_irqsave` 和 `spin_unlock_irqrestore` 替换为 `raw_spin_lock_irqsave` 和 `raw_spin_unlock_irqrestore`。`raw_spinlock` 是非睡眠锁，确保在 die() 执行过程中处于原子上下文，避免了在无效上下文中睡眠的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/96ebabc25b2677a2a225de204946e424cf3887c1

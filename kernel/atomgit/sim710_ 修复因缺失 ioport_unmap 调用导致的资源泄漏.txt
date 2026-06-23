@@ -1,0 +1,28 @@
+#标题
+sim710: 修复因缺失 ioport_unmap 调用导致的资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+加载或卸载 sim710 SCSI 驱动模块时，内核发生 I/O 端口资源泄漏。具体表现为：
+1. 在驱动初始化失败（如 request_irq 失败）的错误路径中，已映射的 I/O 端口未被释放。
+2. 在正常的设备移除（驱动卸载）路径中，I/O 端口映射未被解除。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `sim710_probe_common()` 函数中调用 `ioport_map()` 映射了 I/O 端口，但在两个关键路径中遗漏了对应的 `ioport_unmap()` 调用：
+1. 错误处理路径：当 `request_irq()` 失败时，代码跳转至 `out_release` 标签执行清理，但此处未调用 `ioport_unmap()`。
+2. 设备移除路径：在 `sim710_device_remove()` 函数中，驱动执行设备移除和资源释放操作，但未包含 `ioport_unmap()`。
+
+这导致无论初始化成功与否，映射的端口资源均无法正确释放。
+
+#解决方案
+在两个缺失的资源释放点添加 `ioport_unmap(hostdata->base)` 调用：
+1. 在 `sim710_probe_common()` 函数的 `out_release` 标签处添加 `ioport_unmap(hostdata->base)`，确保错误路径下释放端口映射。
+2. 在 `sim710_device_remove()` 函数中，于 `NCR_700_release(host)` 之后、`kfree(hostdata)` 之前添加 `ioport_unmap(hostdata->base)`，确保设备移除时释放端口映射。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cbe79d725e616435950c52b0cb14f55b6d834619

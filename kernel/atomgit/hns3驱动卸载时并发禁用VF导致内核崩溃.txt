@@ -1,0 +1,32 @@
+#标题
+hns3驱动卸载时并发禁用VF导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 hns3 驱动（rmmod）的同时并发禁用 VF，触发内核崩溃。系统打印 "Unable to handle kernel NULL pointer dereference" 错误，并伴随调用栈回溯，导致模块卸载失败或系统异常。
+
+#主要错误日志
+[15277.839633][T50670] Unable to handle kernel NULL pointer dereference at virtual address 0000000000000020
+...
+[15278.131557][T50670] Call trace:
+[15278.134686][T50670]  klist_put+0x28/0x12c
+[15278.138682][T50670]  klist_del+0x14/0x20
+[15278.142592][T50670]  device_del+0xbc/0x3c0
+[15278.146676][T50670]  pci_remove_bus_device+0x84/0x120
+[15278.151714][T50670]  pci_stop_and_remove_bus_device+0x6c/0x80
+[15278.157447][T50670]  pci_iov_remove_virtfn+0xb4/0x12c
+[15278.162485][T50670]  sriov_disable+0x50/0x11c
+[15278.166829][T50670]  pci_disable_sriov+0x24/0x30
+[15278.171433][T50670]  hnae3_unregister_ae_algo_prepare+0x60/0x90 [hnae3]
+[15278.178039][T50670]  hclge_exit+0x28/0xd0 [hclge]
+
+#问题根因
+驱动卸载（rmmod hclge）与用户层禁用 VF（sriov_numvfs_store）并发执行时，两者均调用 pci_disable_sriov()。由于缺乏锁保护，两次调用均判断 num_VFs 不为 0 并尝试释放资源。第一次调用释放资源后将 num_VFs 设为 0，第二次调用在资源已被释放的情况下继续执行释放操作，导致访问空指针引发内核崩溃。
+
+#解决方案
+在驱动卸载流程调用 pci_disable_sriov() 前，增加 device_lock() 锁保护。通过持有设备锁，确保对 num_VFs 的判断与资源释放操作互斥，避免并发多次释放资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/48366bf0f44be823a52911f71a0f93f20d73d3e4

@@ -1,0 +1,23 @@
+#标题
+ub: ubase: 修复自旋锁内打印日志导致系统挂起的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `ubase` 模块处理控制队列发送流程时，若控制队列空间不足，系统可能在持有自旋锁的情况下调用日志打印接口。此行为可能导致操作系统挂起，严重影响系统可靠性和运行稳定性。
+
+#主要错误日志
+"no enough space in ctrlq, ci = %u, num = %u.\n"
+
+#问题根因
+在函数 `ubase_ctrlq_send_msg_to_sq` 中，检测控制队列剩余空间的逻辑（原 `ubase_ctrlq_check_csq_enough` 函数）被包含在 `spin_lock_bh` 与 `spin_unlock_bh` 保护的临界区内。当队列空间不足时，代码路径在持有自旋锁的状态下调用 `ubase_warn_rl` 进行日志打印。在自旋锁内执行耗时的 I/O 操作（如日志打印）是违规行为，容易引发死锁或系统调度异常，从而导致 OS 挂起。
+
+#解决方案
+重构代码逻辑，将日志打印操作移出临界区。具体修改为：
+1. 移除在自旋锁内部调用的 `ubase_ctrlq_check_csq_enough` 函数。
+2. 将获取队列头索引（`csq->ci`）及剩余空间检查的逻辑直接内联在锁内。
+3. 若检测到空间不足，先释放自旋锁（`spin_unlock_bh`），随后再执行日志打印函数 `ubase_warn_rl`，最后返回错误码 `-EBUSY`。此举确保了日志打印不在持有锁的情况下执行，消除了系统挂起的隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/232072ce017061a8e0402e041b7e7ea83cf9f4d3

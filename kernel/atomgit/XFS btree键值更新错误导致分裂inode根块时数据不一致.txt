@@ -1,0 +1,22 @@
+#标题
+XFS btree键值更新错误导致分裂inode根块时数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定场景下（如对 bmbt 根块进行分裂且新记录位于新块的第一个槽位，或在 rtinherit=1 时运行 generic/522 测试），内核 btree 键值未能正确更新。这可能导致重叠 interval btree（如 realtime rmapbt）的高位键值错误，反映出的现象是文件系统状态不一致或相关的 xfs/xfstests 测试用例（如 generic/522）失败。虽然理论上是数据损坏问题，但 Commit 中未提供具体的 Panic 或报错日志。
+
+#主要错误日志
+未知
+
+#问题根因
+在 commit 2c813ad66a72 中，对 `xfs_btree_insrec` 处理分裂逻辑的修复不完整。当目标块是一个已满的 inode-rooted btree 根块时，`_make_block_unfull` 函数会将根块内容移动到新块并更新根块指针指向新块。此时，新块已经被添加到了 btree 中，不会向调用者返回新的块指针（nptr 为空）。
+原代码逻辑仅通过判断 `bp->b_bn != old_bn`（块地址变化）来决定是否更新传递给上层调用者的键值。在上述根块分裂场景中，由于新记录总是落入新块，且块指针已处理完毕，代码错误地进入了更新 `lkey` 的分支，而忽略了需要调用 `xfs_btree_update_keys` 来更新整个树（包括高位键值）的需求。这导致重叠 btree 的高位键值无法正确反映整个树的状态，从而引发数据不一致。
+
+#解决方案
+修改 `fs/xfs/libxfs/xfs_btree.c` 中的 `xfs_btree_insrec` 函数逻辑。在判断是否需要更新传入调用者的键值时，增加对 `nptr` 是否为空的检查。
+修改后的逻辑为：只有当 `nptr` 不为空（意味着有新块需要传递给父层级）且数据块地址发生变化（`bp->b_bn != old_bn`）时，才去获取并更新传递给上层的键值；否则，如果需要键值更新（如根块分裂场景），则回退使用标准的 `xfs_btree_update_keys` 机制来确保正确更新 btree 的键值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1bb0e6e17b32db9eab5fde0ec35783efb97f17d1

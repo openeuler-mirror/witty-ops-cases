@@ -1,0 +1,20 @@
+#标题
+mm/mremap: fix move_normal_pmd/retract_page_tables race
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多进程并发环境下，进程 A 执行 `mremap` 系统调用移动内存区域，同时进程 B 对同一 tmpfs 文件映射执行 `madvise(MADV_COLLAPSE)` 时，内核可能触发竞争条件。该竞争可能导致 `move_normal_pmd()` 函数创建错误的 PMD 表项（例如在 x86 架构上将物理页 0 映射为页表），进而可能被利用实现从用户态到内核态的权限提升（Local Privilege Escalation）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mremap()` 处理过程中，`move_page_tables()` 在持有 mmap_lock 写锁但尚未获取 rmap 锁的情况下读取 PMD 表项并决定移动方式。此时，`madvise(MADV_COLLAPSE)` 路径下的 `retract_page_tables()` 可能并发介入并移除页表。由于 rmap 锁的获取发生在 PMD 表项被读取之后，导致 `move_normal_pmd()` 在移动页表时操作的是已被回收或修改的页表结构，从而产生错误的 PMD 表项。
+
+#解决方案
+在 `move_normal_pmd()` 函数中，获取页表锁（old_ptl 和 new_ptl）后，增加对 PMD 表项状态的合法性检查。如果发现 PMD 表项不存在（`!pmd_present(pmd)`）或已变成大页（`pmd_leaf(pmd)`），则判定发生了竞争，直接跳过后续操作并返回失败，让调用者回退到 PTE 级别的复制路径处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aea07f4e72e97fd644c4bceaa758c9e37d8b3d0b

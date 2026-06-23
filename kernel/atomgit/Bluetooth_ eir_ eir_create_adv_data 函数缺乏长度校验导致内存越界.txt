@@ -1,0 +1,20 @@
+#标题
+Bluetooth: eir: eir_create_adv_data 函数缺乏长度校验导致内存越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在蓝牙设备创建广播数据时，若缓冲区空间不足，`eir_create_adv_data` 函数仍会尝试写入 `EIR_FLAGS` 和 `EIR_TX_POWER` 数据，导致写入超出缓冲区边界，引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`eir_create_adv_data` 函数在尝试添加 `EIR_FLAGS` 和 `EIR_TX_POWER` 字段时，未检查剩余缓冲区空间是否足够容纳这些数据。当传入的缓冲区较小时，写入操作会越界，导致系统崩溃。
+
+#解决方案
+修改 `eir_create_adv_data` 函数原型，增加 `size` 参数以传入缓冲区大小。在写入 `EIR_FLAGS` 和 `EIR_TX_POWER` 前，增加判断逻辑 `ad_len + eir_precalc_len(1) <= size`，确保有足够空间才进行写入，防止缓冲区溢出。同时更新所有调用该函数的位置（如 `hci_set_ext_adv_data_sync` 和 `hci_set_adv_data_sync`），传入正确的缓冲区大小（`HCI_MAX_EXT_AD_LENGTH` 或 `sizeof(cp.data)`）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/99d5fc62524a0a9ea9e5d896d8f2edd57582dadb

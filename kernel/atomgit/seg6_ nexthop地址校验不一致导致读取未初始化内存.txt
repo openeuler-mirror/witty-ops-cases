@@ -1,0 +1,20 @@
+#标题
+seg6: nexthop地址校验不一致导致读取未初始化内存
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 seg6 local 轻量级隧道（lwtunnel）的 nexthop 参数（SEG6_LOCAL_NH4 或 SEG6_LOCAL_NH6）时，若用户空间提供的地址数据长度小于内核预期的结构体长度，内核仅校验数据长度是否超过预期，而未校验是否小于预期。这会导致内核读取到未初始化的内存数据，可能造成信息泄露或不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在 `seg6_local_policy` 中对 `SEG6_LOCAL_NH4` 和 `SEG6_LOCAL_NH6` 属性的校验策略定义为 `NLA_BINARY` 并指定最大长度（`.len`），该校验逻辑仅确保用户提供的地址长度不超过指定值。如果用户空间提供的长度短于预期（例如小于 `sizeof(struct in_addr)`），内核后续处理时会按预期长度读取数据，从而读取到未初始化的内存区域。
+
+#解决方案
+修改 `net/ipv6/seg6_local.c` 中的 `seg6_local_policy` 策略定义，将对 `SEG6_LOCAL_NH4` 和 `SEG6_LOCAL_NH6` 的校验宏从指定最大长度的 `{ .type = NLA_BINARY, .len = ... }` 修改为 `NLA_POLICY_EXACT_LEN(...)`。此修改强制要求用户提供的属性数据长度必须精确匹配预期结构体的大小，从而避免读取未初始化内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b11897d234f6be3db23c113de42bd969053088da

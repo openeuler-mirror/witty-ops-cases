@@ -1,0 +1,22 @@
+#标题
+KVM selftests 因编译器 FORTIFY_SOURCE 机制导致 L1 Guest #PF 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Ubuntu 24.04 等默认开启 `_FORTIFY_SOURCE` 的发行版上编译并运行 KVM selftests（如 `x86/nested_emulation_test`）时，L1 Guest 会遭遇页错误导致测试失败。
+
+#主要错误日志
+未知
+
+#问题根因
+部分发行版（如 Ubuntu）配置 GCC 在 -O1 或更高优化级别自动开启 `_FORTIFY_SOURCE`。这导致标准库函数的强化版本定义被引入。
+链接器解析符号时，这些强化版本覆盖了 KVM selftests 自定义的实现（定义在 `lib/string_override.c`），并引用了 GLIBC 中的 PLT 表项。这对 Host 代码无影响，但对于 Guest 代码是灾难性的，例如 `memset()` 可能引用 `__memset_chk@plt`，从而触发 L1 #PF。
+
+#解决方案
+在 KVM selftests 的 Makefile 编译选项（CFLAGS）中新增 `-U_FORTIFY_SOURCE`。
+此举强制取消 `_FORTIFY_SOURCE` 宏定义，防止编译器引入强化版本的库函数定义，消除了因平台或链接器差异导致的不可预测行为，确保测试程序在 Guest 模式下正常运行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/870b6ea5e843b8eea8c1ebda6302bb0d47a72542

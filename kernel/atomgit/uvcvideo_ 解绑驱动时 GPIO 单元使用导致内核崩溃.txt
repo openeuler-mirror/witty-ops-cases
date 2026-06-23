@@ -1,0 +1,23 @@
+#标题
+uvcvideo: 解绑驱动时 GPIO 单元使用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当设备具有 GPIO 单元时，用户执行驱动解绑操作（unbind，非物理断开连接）会导致内核崩溃。其原因为驱动解绑过程中清理函数未被正确调用，IRQ 未被禁用，此时若触发中断，中断处理程序将尝试访问已被释放的内存区域，从而引发 OOPS。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在申请和管理资源时使用了错误的设备对象。代码使用了 USB 设备（`udev->dev`）而非接口设备（`intf->dev`）作为 `devm_*` 托管函数的参数。
+这导致在从 USB 接口解绑驱动时，托管清理函数不会被调用，IRQ 无法被正确禁用。此外，`devm_request_threaded_irq` 的清理动作可能在 `uvc_delete` 释放主结构体之后才执行，导致潜在的内存访问错误。
+
+#解决方案
+1. 修正设备对象引用：将 `devm_gpiod_get_optional` 和 `dev_err_probe` 中的设备参数从 `&dev->udev->dev` 修改为 `&dev->intf->dev`。
+2. 移除有风险的托管中断请求：将 `devm_request_threaded_irq` 替换为标准的 `request_threaded_irq`，并在结构体中增加 `initialized` 状态标记。
+3. 手动释放中断：新增 `uvc_gpio_deinit` 函数，在其中调用 `free_irq`，并在 `uvc_unregister_video` 中显式调用该清理函数，确保解绑流程中中断被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/426f348ec175a5372ce157ae132e10d16b8e8c18

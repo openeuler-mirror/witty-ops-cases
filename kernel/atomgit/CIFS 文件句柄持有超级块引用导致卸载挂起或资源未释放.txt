@@ -1,0 +1,26 @@
+#标题
+CIFS 文件句柄持有超级块引用导致卸载挂起或资源未释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `umount` 卸载 CIFS 文件系统时，卸载操作可能挂起或无法完成。同时，存在延迟关闭的文件句柄和 oplock（机会锁）中断处理进程在卸载后仍然持有资源，导致内核无法正确清理 SMB 客户端资源，可能引发内存泄漏或相关对象释放延迟。
+
+#主要错误日志
+未知
+
+#问题根因
+在早期的实现中，当处理文件对象（分配新的 cinode 或处理 oplock 中断）时，代码会额外持有超级块的引用。设计的初衷是防止在仍有用户访问 inode/dentry 时进行清理，但这导致了副作用：
+1. `umount` 操作会静默地丢弃超级块的一个引用，而延迟关闭的文件和租约中断仍然持有其他引用。
+2. 这导致超级块对象的引用计数无法归零，资源无法在卸载时被立即释放，必须等待所有相关文件句柄释放，破坏了卸载流程的确定性。
+
+#解决方案
+移除文件打开和 oplock 处理路径中对超级块引用的获取与释放操作，改为仅依赖 dentry（及 inode）的引用计数，并在卸载路径中主动清理残留资源。具体修改包括：
+1. 在 `cifs_new_fileinfo` 和 `cifs_oplock_break` 函数中移除 `cifs_sb_active` 和 `cifs_sb_deactive` 的调用，不再额外持有超级块引用。
+2. 将关闭所有延迟文件句柄的操作从 `cifs_umount_begin` 移动到 `cifs_kill_sb` 中执行，确保在杀死超级块前完成清理。
+3. 新增 `cifs_close_all_deferred_files_sb` 接口，用于遍历并关闭特定超级块关联的所有延迟文件。
+4. 在 `cifs_kill_sb` 中调用 `flush_workqueue(cifsoplockd_wq)`，确保所有正在处理的 oplock 中断任务完成后再进行后续的内存释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b28b211c8d8f1b8bf4591d5f8fbd6a653fe166b7

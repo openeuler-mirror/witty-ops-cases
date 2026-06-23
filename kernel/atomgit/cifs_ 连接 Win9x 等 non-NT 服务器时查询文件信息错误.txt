@@ -1,0 +1,29 @@
+#标题
+cifs: 连接 Win9x 等 non-NT 服务器时查询文件信息错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 CIFS 客户端连接不支持 CAP_NT_SMBS 的服务器（如 Win9x）时，执行文件信息查询操作（如 `fstat`）会返回错误的文件属性信息。具体表现为：
+1. 文件属性字段包含虚假数据，例如大量普通文件被错误标记为重解析点，而 Win9x 并不支持该特性。
+2. 只读文件的只读属性位未被正确标记。
+3. 可能向不支持特定命令的服务器发送 `CIFSSMBQPathInfo` 或 `CIFSSMBQFileInfo` 指令导致操作失败或不被支持。
+
+#主要错误日志
+未知
+
+#问题根因
+`cifs_query_path_info()` 和 `cifs_query_file_info()` 函数在处理请求时，未检查服务器是否协商支持 `CAP_NT_SMBS`。
+对于 Win9x 等 non-NT 服务器，`CIFSSMBQPathInfo()` 不被支持，而 `CIFSSMBQFileInfo()` 返回的 Attributes 字段包含无效或错误的数据（如错误的重新解析点标记）。代码未能针对 non-NT 服务器回退到兼容的查询方式，导致上层获取到错误的文件元数据。
+
+#解决方案
+1. 在 `cifs_query_file_info()` 函数开头增加检查，若服务器不支持 `CAP_NT_SMBS` 则直接返回 `-EOPNOTSUPP`，避免发送会返回错误数据的指令。客户端随后会通过 `cifs_query_path_info()` 重新验证 inode 信息。
+2. 修改 `cifs_query_path_info()` 函数逻辑：
+   - 仅当服务器支持 `CAP_NT_SMBS` 时才发送 `CIFSSMBQPathInfo`。
+   - 若上述调用失败或不支持，则回退使用 `CIFSFindFirst()`（使用 `SMB_FIND_FILE_FULL_DIRECTORY_INFO` 级别），该指令兼容 NT 和 non-NT 服务器。
+   - 若 `CIFSFindFirst()` 依然失败，则最后回退使用 `SMBQueryInformation()` 指令。
+   - 增加对非 UNICODE 模式下通配符路径的处理逻辑，防止回退函数错误展开通配符。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58637d4ac3872662657585a8f4dc58ba71f5a097

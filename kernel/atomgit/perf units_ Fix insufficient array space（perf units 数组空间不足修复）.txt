@@ -1,0 +1,25 @@
+#标题
+perf units: Fix insufficient array space（perf units 数组空间不足修复）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 GCC 15.0.1 版本编译内核 perf 工具时，编译过程失败。编译器报告 `-Werror=unterminated-string-initialization` 错误，指出字符数组初始化字符串过长，因为所有警告被当作错误处理（`-Werror`），导致构建无法通过。
+
+#主要错误日志
+util/units.c: In function 'unit_number__scnprintf':
+util/units.c:67:24: error: initializer-string for array of 'char' is too long [-Werror=unterminated-string-initialization]
+   67 |         char unit[4] = "BKMG";
+      |                        ^~~~~~
+cc1: all warnings being treated as errors
+
+#问题根因
+在 `util/units.c` 文件的 `unit_number__scnprintf` 函数中，定义字符数组时指定的大小为 4（`char unit[4]`），而初始化字符串 "BKMG" 包含 4 个字符加上末尾的空字符（`\0`），实际需要 5 个字节的空间。
+旧版本 GCC 可能未严格检查此情况，但 GCC 15.0.1 增强了相关诊断，检测到数组空间不足以容纳完整的字符串字面量（包含结尾空字符），从而触发编译错误。
+
+#解决方案
+移除字符数组定义时的显式大小指定（将 `char unit[4] = "BKMG";` 修改为 `char unit[] = "BKMG";`），让编译器根据初始化字符串自动计算所需的数组大小，从而确保数组空间足够容纳字符串字面量及其终止符。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aeebcdb30f4a8db9d718f6e64213bfadf20f540c

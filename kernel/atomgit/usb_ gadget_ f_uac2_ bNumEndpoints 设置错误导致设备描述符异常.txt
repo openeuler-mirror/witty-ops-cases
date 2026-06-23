@@ -1,0 +1,21 @@
+#标题
+usb: gadget: f_uac2: bNumEndpoints 设置错误导致设备描述符异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 USB Gadget f_uac2 功能时，若启用了音量控制或静音功能，USB 接口描述符中的 `bNumEndpoints` 字段会被设置为 1。在后续重新绑定操作中，即使未启用控制功能，`bNumEndpoints` 仍会错误地保持为 1，导致 USB 设备描述符配置不正确，可能引起主机端枚举失败或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+全局变量或静态数据结构 `std_ac_if_desc` 中的 `bNumEndpoints` 字段在首次绑定时被修改（设为 1），但在解绑或后续绑定流程中未被重置。
+根据 Commit 描述：`afunc_bind` 在启用控制功能时将 `std_ac_if_desc.bNumEndpoints` 设为 1。在下一次调用 `afunc_bind` 时，该值未被清零，导致即使未启用控制功能，`bNumEndpoints` 仍错误地保持为 1。
+
+#解决方案
+在 `afunc_bind` 函数入口处，显式将 `std_ac_if_desc.bNumEndpoints` 重置为 0，确保每次绑定时的初始状态正确，随后再根据实际配置判断是否需要增加端点数量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6a083d40434b17206c47bd57b3f044d45078873f

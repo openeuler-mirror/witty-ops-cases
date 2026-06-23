@@ -1,0 +1,20 @@
+#标题
+uprobe PTE 在 VMA 扩展合并时被错误覆盖
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进程执行 mremap 操作期间，如果 VMA 发生合并，uprobe 插入的 PTE（页表项）会被覆盖丢失。这会导致 uprobe 探针失效，且在 mremap 移动页表时，新创建的 PTE 会变成孤立的节点，引发内核内存管理问题或探测功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `copy_vma` 流程中调用 `vma_merge` 扩展 VMA 时，底层函数 `vma_complete` 会无条件执行 `uprobe_mmap` 操作。该操作在合并场景下会重新建立 uprobe PTE，而后续 mremap 移动页表的操作会覆盖或孤立该 PTE，导致原有的 uprobe 映射被破坏。
+
+#解决方案
+在 `vma_merge` 函数及 `vma_prepare` 结构体中新增 `skip_vma_uprobe` 布尔参数。在 `copy_vma` 调用 `vma_merge` 时，将该参数置为 true，从而在 VMA 合并过程中跳过 `uprobe_mmap` 的调用，防止 uprobe PTE 被错误地重建或覆盖；其他调用 `vma_merge` 的场景保持该参数为 false。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c9092bbdb49dcef6805e81bc55149942ffc53c18

@@ -1,0 +1,20 @@
+#标题
+netpoll: 引用计数处理错误导致清理逻辑异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `__netpoll_cleanup` 清理 netpoll 结构时，若 `npinfo` 的引用计数未减至 0（即多 netpoll 实例共享该 npinfo），代码错误地执行了 `RCU_INIT_POINTER(np->dev->npinfo, NULL)`。这会导致 netdevice 的 `npinfo` 指针过早被置空，破坏了其他仍持有 `npinfo` 引用的 netpoll 实例与设备之间的关联关系，可能引发后续的空指针访问、use-after-free 或 netpoll 功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`__netpoll_cleanup` 函数中的引用计数处理逻辑存在缺陷。当 `refcount_dec_and_test` 返回 false（表示引用计数未归零，仍有其他使用者）时，原代码错误地在 `else` 分支中强制将 `np->dev->npinfo` 置为 NULL。这违背了引用计数的设计初衷，在仍有用户引用 npinfo 的情况下切断了设备到 npinfo 的 RCU 指针路径。
+
+#解决方案
+移除 `refcount_dec_and_test` 判断的 `else` 分支。修改后，只有当引用计数减至 0（最后一个使用者）时，才会清理并置空 `np->dev->npinfo`；若引用计数大于 0，则保留 `np->dev->npinfo` 指针，确保其他活跃的 netpoll 实例能继续通过 RCU 访问到有效的 npinfo 结构，从而保证清理逻辑的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7574a95fe31f7b38875057e465830811805b247b

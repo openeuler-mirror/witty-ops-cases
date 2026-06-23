@@ -1,0 +1,26 @@
+#标题
+dup_mmap() 失败时 uprobe 注册风险及 OOM 处理不当导致潜在内存破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当进程执行 fork 操作且 `dup_mmap()` 在复制 VMA 过程中失败时，内核可能存在以下隐患：
+1. Uprobe 注册逻辑未检查内存空间的稳定性，可能导致在即将销毁或未完全初始化的 mm_struct 上注册探针，引发不可预期行为。
+2. 内核 OOM Killer 在后续处理中可能遍历已损坏的 Maple tree 数据结构，导致内核崩溃或数据破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **Uprobe 注册缺失检查**：`register_for_each_vma()` 在持有 mmap_write_lock 进行 uprobe 注册时，未检查当前 mm_struct 是否处于稳定状态（如正在退出或 fork 失败），这可能导致在无效的地址空间上操作。
+2. **Fork 失败处理逻辑不严谨**：在 `dup_mmap()` 失败的分支中，当存在失败的 VMA（mpnt）时，修复前未设置 `MMF_OOM_SKIP` 标志，导致 OOM Killer 可能尝试遍历一个因写入 XA_ZERO_ENTRY 而损坏的 Maple tree；同时，无论是否存在 mpnt，都未设置 `MMF_UNSTABLE` 标志来标记该 mm_struct 为不稳定状态，增加了并发操作的风险。
+
+#解决方案
+1. **增加地址空间稳定性检查**：在 `kernel/events/uprobes.c` 的 `register_for_each_vma()` 函数中，获取 mmap_lock 后立即调用 `check_stable_address_space(mm)`，若 mm 不稳定则直接跳过注册。
+2. **完善 dup_mmap 失败处理**：在 `kernel/fork.c` 的 `dup_mmap()` 函数中：
+   - 若因复制 VMA 失败退出（mpnt 非空），在标记 Maple tree 失败点的同时，设置 `MMF_OOM_SKIP` 标志，防止 OOM Killer 访问损坏的树结构。
+   - 在失败路径下统一设置 `MMF_UNSTABLE` 标志，明确标记该 mm_struct 为不稳定状态，防止其他子系统（如 uprobe）误用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/29f7045c18bf68581fd4c4e58991d462cb3986d4

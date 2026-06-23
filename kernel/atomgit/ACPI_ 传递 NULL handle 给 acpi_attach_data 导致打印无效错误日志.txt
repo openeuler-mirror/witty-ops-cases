@@ -1,0 +1,26 @@
+#标题
+ACPI: 传递 NULL handle 给 acpi_attach_data 导致打印无效错误日志
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定场景下，ACPI 数据节点的 handle 可能为 NULL，内核尝试将该 NULL handle 传递给 `acpi_attach_data` 函数进行绑定操作。这会导致内核打印令人困惑且无用的错误日志信息，干扰系统日志分析与故障排查。
+
+#主要错误日志
+- 推断日志（基于代码上下文 `acpi_handle_err`）：
+  `Can't tag data node`
+- 新增诊断日志（补丁新增）：
+  `subnode %s: Unknown scope`
+
+#问题根因
+在处理 ACPI 数据节点时，如果数据节点的描述包嵌入在外部 `_DSD` 等效包中且无法确定其作用域，其 ACPI handle 可能为 NULL。原有代码未对 handle 进行有效性检查，直接将 NULL handle 传递给 `acpi_attach_data`，导致触发不必要的错误处理流程和日志输出。
+
+#解决方案
+在调用 `acpi_attach_data` 及相关解绑操作前，增加对 `dn->handle` 是否为 NULL 的判断：
+1. 在 `acpi_tie_nondev_subnodes` 和 `acpi_untie_nondev_subnodes` 函数中，若检测到 `dn->handle` 为 NULL，则跳过当前节点处理。
+2. 在 `acpi_add_nondev_subnodes` 中增加调试日志，明确指出未知作用域的情况。
+此举避免了向 ACPI 核心传递无效句柄，从而阻止了无意义的错误信息打印。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/910b9cf10de51dfd4217dcf32b9b62d7acceaeea

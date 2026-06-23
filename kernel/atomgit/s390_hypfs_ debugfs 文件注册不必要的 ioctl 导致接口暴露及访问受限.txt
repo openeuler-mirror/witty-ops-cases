@@ -1,0 +1,20 @@
+#标题
+s390/hypfs: debugfs 文件注册不必要的 ioctl 导致接口暴露及访问受限
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用内核锁定（kernel lockdown）机制的场景下，hypfs 的所有 debugfs 文件均注册了 ioctl 回调，导致未实现 ioctl 功能的文件也受到锁定策略的限制，引发不必要的访问受限。同时，这也导致未使用的接口被意外暴露给用户空间。
+
+#主要错误日志
+未知
+
+#问题根因
+当前 hypfs 代码在创建 debugfs 文件时，统一使用了包含 `.unlocked_ioctl` 操作的 `dbfs_ops` 结构体。由于所有文件都被标记为支持 ioctl，当内核处于锁定模式时，debugfs 框架会根据 lockdown 安全策略限制对这些文件的访问。实际上，仅有部分文件需要实现 ioctl 功能，这种一刀切的注册方式导致了接口冗余和意外的访问副作用。
+
+#解决方案
+将 debugfs 文件操作结构体拆分为 `dbfs_ops`（仅含读操作）和 `dbfs_ops_ioctl`（含读和 ioctl 操作）。在 `hypfs_dbfs_create_file` 函数中，根据文件是否定义了 `unlocked_ioctl` 回调来动态选择对应的 `file_operations` 结构体。仅对真正需要 ioctl 功能的文件注册 ioctl 接口，从而避免不必要的接口暴露和访问限制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/857968e7ba920e847223b85f59d02bbcd31708e7

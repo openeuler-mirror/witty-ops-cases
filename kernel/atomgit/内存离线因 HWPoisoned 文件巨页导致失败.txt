@@ -1,0 +1,20 @@
+#标题
+内存离线因 HWPoisoned 文件巨页导致失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当文件巨页触发 UCE（Uncorrectable Error）并被标记为 HWPoison 后，即使删除了对应的 hugetlbfs 文件，该巨页仍因引用计数未释放而滞留。随后在尝试对该内存块执行内存离线操作时，`dissolve_free_hugetlb_folios` 函数检测到该巨页非空闲状态，导致内存离线失败。
+
+#主要错误日志
+未知
+
+#问题根因
+文件巨页触发 UCE 时，`me_huge_page()` 函数会保留该巨页在页缓存中，增加其引用计数并设置 `PG_hwpoison` 标志。删除文件后，该巨页因引用计数仍大于 0 而无法释放。进行内存离线时，`dissolve_free_huge_pages()` 严格要求巨页必须处于空闲状态才能溶解，因此导致离线操作失败。
+
+#解决方案
+在 `dissolve_free_huge_pages` 函数中增加判断逻辑：如果检测到巨页同时满足 `PG_hwpoison`、属于巨页、`mapping` 为空（文件已删除）且引用计数为 1（仅剩内存故障模块持有的引用），则强制调用 `folio_put` 释放引用计数，使其变为空闲状态从而成功溶解。该逻辑参考了 commit b023f46813cd 处理普通页 HWPoison 的方式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9459cd462a588fc2b24cf2b42120af13ed0c6fb5

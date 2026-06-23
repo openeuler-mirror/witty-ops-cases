@@ -1,0 +1,21 @@
+#标题
+btrfs: 修复 btrfs_search_dir_index_item 错误指针传递缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核静态检查工具（smatch）报错，指出在 `btrfs_search_dir_index_item` 函数中存在将 0 值传递给 `ERR_PTR` 的风险。这可能导致调用者 `btrfs_unlink_subvol` 在处理子卷 unlink 操作时，无法正确区分“正常返回”与“未找到项”的情况，进而引发逻辑判断错误或内核状态异常。
+
+#主要错误日志
+fs/btrfs/dir-item.c:353 btrfs_search_dir_index_item() warn: passing zero to 'ERR_PTR'
+
+#问题根因
+在 `btrfs_search_dir_index_item` 函数中，当未找到目标 key 时，局部变量 `ret` 可能被置为 0。函数末尾直接执行 `return ERR_PTR(ret)`，将 0 值传递给了 `ERR_PTR()` 宏。`ERR_PTR(0)` 实际上等同于 `NULL`，这导致调用者难以通过 `IS_ERR` 或 `PTR_ERR` 正确识别“未找到项目”（应当返回 -ENOENT）的错误状态，造成了错误码语义的混淆。
+
+#解决方案
+1. 修改 `fs/btrfs/dir-item.c` 中的逻辑，将条件判断 `if (ret > 0)` 修改为 `if (ret >= 0)`，并在该分支中将 `ret` 显式设置为 `-ENOENT`。这确保了当查找无果时，函数返回一个有效的错误指针 `ERR_PTR(-ENOENT)` 而不是 `NULL`。
+2. 相应调整 `fs/btrfs/inode.c` 中调用者 `btrfs_unlink_subvol` 的处理逻辑，将原有的 `IS_ERR_OR_NULL` 检查简化为 `IS_ERR`，统一通过 `PTR_ERR` 获取返回值，使代码逻辑更加清晰、规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4b0c07aa8d7ddf244cf09a4baee9154424a25031

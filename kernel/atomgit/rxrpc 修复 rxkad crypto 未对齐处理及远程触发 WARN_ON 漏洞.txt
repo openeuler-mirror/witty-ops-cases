@@ -1,0 +1,25 @@
+#标题
+rxrpc 修复 rxkad crypto 未对齐处理及远程触发 WARN_ON 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 RxRPC 数据包时，若数据包的加密长度未对齐，内核可能会触发 WARN_ON_ONCE 警告（可能导致内核 panic 如果配置了 panic_on_warn）。此外，非 ENOMEM 类型的解密错误未得到正确处理，可能导致内核逻辑异常或资源处理不当。该问题可由远程端通过构造特定数据包触发。
+
+#主要错误日志
+推断日志：
+rxrpc_abort_eproto: Aborting connection due to rxkad2-crypto-unaligned
+
+#问题根因
+1. 数据包的加密长度可能未对齐，直接传给加密算法处理会导致问题。
+2. 解密失败时的错误处理逻辑不完善，仅针对 -ENOMEM 进行了检查，其他错误触发了 WARN_ON_ONCE 且未正确中止连接。
+3. WARN_ON_ONCE 的使用使得远程攻击者可以通过发送特定数据包在受害主机上触发内核警告。
+
+#解决方案
+1. 在调用解密函数前，将数据长度向下对齐到 8 字节（`round_down(sp->len, 8)`），防止加密算法处理未对齐长度。
+2. 移除 `WARN_ON_ONCE(ret != -ENOMEM)` 调用，防止被远程触发内核警告。
+3. 对于非 -ENOMEM 的解密错误，调用 `rxrpc_abort_eproto` 中止连接，并新增 `rxkad_abort_2_crypto_unaligned` 跟踪点以记录此类错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1f9718d929d3478787123d7adf97fedc5f62256a

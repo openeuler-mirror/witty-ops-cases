@@ -1,0 +1,20 @@
+#标题
+dm thin: 修复 pool_work_wait 中缺失的 destroy_work_on_stack 调用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 dm-thin（Device Mapper Thin Provisioning）模块时，若启用内核调试配置（如 CONFIG_DEBUG_OBJECTS_WORK），内核会检测到工作队列（workqueue）对象生命周期管理错误。具体表现为内核调试子系统报告 "work not destroyed" 相关的警告或错误信息，提示在栈上初始化的工作队列（`pw->worker`）在使用完毕后未被正确销毁，可能导致对象泄露或内存调试机制报错。
+
+#主要错误日志
+ODEBUG: work not destroyed (推断)
+
+#问题根因
+在函数 `pool_work_wait` 中，`pw->worker` 是通过 `INIT_WORK_ONSTACK` 在栈上初始化的工作队列结构。根据内核 API 规范，栈上初始化的工作队列在使用完毕后必须调用 `destroy_work_on_stack()` 进行清理。由于提交 e7a3e871d895 ("dm thin: cleanup noflush_work to use a proper completion") 引入的变更遗漏了该清理步骤，导致工作队列对象在函数返回、栈内存回收前未正确销毁，违反了内核对象生命周期管理要求。
+
+#解决方案
+在 `drivers/md/dm-thin.c` 文件的 `pool_work_wait` 函数中，于 `wait_for_completion` 等待完成后、函数返回前，补上对 `destroy_work_on_stack(&pw->worker)` 的调用，确保栈上工作队列资源被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2f9947891a1c5052b777dea6d8d0b393d2dd9260

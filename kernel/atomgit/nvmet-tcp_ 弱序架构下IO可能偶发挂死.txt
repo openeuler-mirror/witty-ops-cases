@@ -1,0 +1,20 @@
+#标题
+nvmet-tcp: 弱序架构下IO可能偶发挂死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在弱内存序架构（如 ARM64）下，NVMe TCP target 在处理 IO 时可能出现偶发的响应丢包或 IO 挂死现象。具体表现为 IO 请求无法完成，nvmet_tcp_queue_response() 中的 worker 线程可能未被正确唤醒。
+
+#主要错误日志
+未知
+
+#问题根因
+编译器可能对 `queue->cmd` 和 `queue->rcv_state` 的赋值操作进行指令重排。在 `nvmet_prepare_receive_pdu()` 函数中，如果 `rcv_state` 的更新先于 `cmd` 的更新被其他 CPU 观测到，会导致 `nvmet_tcp_queue_response()` 中的判断逻辑出错，从而错误地跳过唤醒 worker 的流程，导致 IO 挂死。
+
+#解决方案
+在 `nvmet_prepare_receive_pdu()` 函数中，使用 `smp_store_release()` 对 `rcv_state` 进行更新，并使用 `WRITE_ONCE()` 更新 `cmd`，以此强制保证内存写入顺序，确保 `rcv_state` 的修改在 `cmd` 修改之后才对其他 CPU 可见。同时，在 `nvmet_tcp_queue_response()` 中使用 `smp_load_acquire()` 读取 `rcv_state` 以及 `READ_ONCE()` 读取 `cmd`，以配对内存屏障，确保读取顺序正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/96c923f9d326a3d0c5ea51702cae82776dece3c5

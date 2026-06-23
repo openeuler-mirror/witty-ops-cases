@@ -1,0 +1,22 @@
+#标题
+nvdimm/bus: 异步初始化中 device_add 失败引发的使用后释放（UAF）问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 KASAN 的环境下，若 nvdimm 设备异步注册过程中 `device_add()` 因内存分配失败等原因调用失败，内核会检测到“使用后释放”错误。
+
+#主要错误日志
+KASAN 报告 use after free 异常；
+dev_err(dev, "%s: failed\n", __func__);
+
+#问题根因
+在 `nd_async_device_register()` 函数中，当 `device_add(dev)` 失败时，代码会执行 `put_device(dev)`，这可能导致设备对象的引用计数降为 0 并被释放。
+原代码在释放后仍然尝试访问 `dev->parent` 指针来执行 `put_device(dev->parent)` 操作。由于 `dev` 已被释放，此时访问 `dev->parent` 构成了使用后释放漏洞。
+
+#解决方案
+在调用 `device_add()` 之前，先将 `dev->parent` 指针保存到一个局部变量 `parent` 中。这样在 `device_add()` 失败并释放 `dev` 对象后，后续代码通过局部变量 `parent` 安全地访问父设备指针并减少引用计数，避免了访问已释放内存的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/efab071369ee35243d7cc564171a2f656c209f2d

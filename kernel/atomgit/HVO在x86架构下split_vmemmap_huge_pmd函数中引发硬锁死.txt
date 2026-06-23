@@ -1,0 +1,20 @@
+#标题
+HVO在x86架构下split_vmemmap_huge_pmd函数中引发硬锁死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在x86架构下触发HVO（HugeTLB Vmemmap Optimization）功能时，系统发生硬锁死，导致内核无响应。
+
+#主要错误日志
+未知
+
+#问题根因
+commit 9f779dc0a09c ("arm64: mm: HVO: support BBM of vmemmap pgtable safely") 在 `split_vmemmap_huge_pmd` 函数中为了安全地刷新TLB，错误地在x86架构下也使用了 `spin_lock_irq` 禁用中断。在x86架构下，TLB刷新需要发送IPI（处理器间中断）。根据 `smp_call_function_many_cond()` 的注释说明，在禁用中断的情况下调用该函数会导致死锁。
+
+#解决方案
+针对不同架构对锁的处理方式进行区分：在arm64架构下定义 `vmemmap_split_lock` 和 `vmemmap_split_unlock` 为带中断禁用的版本（`spin_lock_irq` / `spin_unlock_irq`）；而在默认实现（如x86）中，这两个宏定义为不带中断禁用的版本（`spin_lock` / `spin_unlock`），从而避免在持有锁和禁用中断时进行IPI操作，修复硬锁死问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e5aaaffa1a01a733a1225c9e4eeda2538130bceb

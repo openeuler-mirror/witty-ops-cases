@@ -1,0 +1,20 @@
+#标题
+blk-cgroup: blkcg_maybe_throttle_current() 函数引用泄露导致磁盘无法释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 blk-cgroup 限流流程中，当 blkcg 查找、blkg 查找或 blkg_tryget() 失败时，系统未能正确释放由 `blkcg_schedule_throttle()` 获取的磁盘引用计数。这导致磁盘设备的引用计数发生泄露，使得该磁盘设备永远无法被释放和注销。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `blkcg_maybe_throttle_current()` 函数中，错误处理路径（out 标签）仅调用了 `rcu_read_unlock()`，遗漏了释放磁盘引用的操作。具体原因为在代码重构过程中（从 request_queue 转换为 gendisk），原本存在的 `blk_put_queue()` 调用被意外移除，且未替换为对应的 `put_disk()`。由于在查找操作前 `current->throttle_disk` 已被置为 NULL，`blkcg_exit()` 也无法补救释放该引用，最终导致引用计数泄露。
+
+#解决方案
+在 `blkcg_maybe_throttle_current()` 函数的 out 错误处理标签中，补充调用 `put_disk(disk)` 以正确释放磁盘引用计数，恢复代码重构前原有的资源释放逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9d1083b6e959bfb868bafe47545e17f48d99034

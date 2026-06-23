@@ -1,0 +1,31 @@
+#标题
+arm64 RME 虚拟机进入 REC 前未处理 RIPAS 变更导致状态不一致及内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 arm64 RME (Realm Management Extension) 场景下，虚拟机在处理 RIPAS (Realm IPA State) 变更后再次进入 Guest 时，可能因状态未正确同步导致功能异常。同时，在创建 RTT (Realm Translation Table) 页表层级时，若遇到页表已存在的情况，存在内存泄漏问题。在处理 RMI_EXIT_REALM 错误时，错误码设置不准确，可能导致用户态对虚拟机退出原因的误判。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **RIPAS 变更处理时机错误**：原代码中 RIPAS 变更相关的清理与同步操作直接在 `kvm_rec_enter` 路径中执行，但该路径不支持内存分配等可能休眠的操作。当需要创建新的 RTT 页表以处理 RIPAS 变更时，无法正确完成，导致 Guest 进入前状态未就绪。
+2. **内存泄漏**：在函数 `realm_create_rtt_levels` 中，当检测到 RTT 页表已存在（`RMI_ERROR_RTT` 且 index 为 `level - 1`）时，直接 `continue` 而未释放已分配的 `rtt` granule，导致内存泄漏。
+3. **错误码与状态处理不当**：
+   - `_handle_rec_exit` 中处理 `RMI_ERROR_REALM` 时，错误地将退出原因设置为 `KVM_EXIT_UNKNOWN`，应设置为 `KVM_EXIT_SHUTDOWN` 以反映实际状态。
+   - 默认情况下 `hpfar_el2` 被赋值为可能无效的值，仅在 `RMI_EXIT_SYNC` 场景下才有效。
+   - `realm_rtt_fold` 中地址对齐计算有误，未针对上一级页表大小进行对齐。
+
+#解决方案
+1. **引入 Pre-enter 钩子**：新增 `kvm_rec_pre_enter` 函数及其在 `cca_operations` 中的调用接口。将 RIPAS 变更处理逻辑从 `kvm_rec_enter` 移至 `kvm_rec_pre_enter`，该函数在 `kvm_arch_vcpu_ioctl_run` 循环中调用，支持内存分配，确保在进入 Guest 前完成所有必要的 RTT 创建与状态同步。
+2. **修复内存泄漏**：在 `realm_create_rtt_levels` 中，当页表已存在时，增加 `free_delegated_granule(rtt)` 调用，释放未使用的内存页。
+3. **完善错误处理与状态流转**：
+   - 修正 `_handle_rec_exit` 中 `RMI_ERROR_REALM` 的退出原因为 `KVM_EXIT_SHUTDOWN`。
+   - 仅在 `RMI_EXIT_SYNC` 场景下读取并设置 `hpfar_el2`，其他情况置 0。
+   - 修正 `realm_rtt_fold` 中的地址对齐逻辑，使用 `ALIGN_DOWN` 并依据 `level - 1` 的页表大小进行对齐。
+   - 优化 `realm_set_ipa_state` 中的错误处理逻辑，使其更加清晰。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/674a4e80244f30739ca68d5d20f26959dd341fc2

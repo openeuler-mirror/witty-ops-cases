@@ -1,0 +1,22 @@
+#标题
+spi: zynq-qspi 驱动卸载时因控制器注销顺序错误导致潜在崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 zynq-qspi 驱动模块（执行 driver unbind 或 rmmod）时，系统可能发生崩溃或出现异常行为。这是因为在控制器仍然处于注册状态时，驱动程序就先禁用了控制器硬件（时钟和寄存器），导致资源释放顺序错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在驱动卸载函数 `zynq_qspi_remove` 中，代码逻辑错误地先禁用了 QSPI 控制器硬件（写入寄存器禁用），然后再注销 SPI 控制器。正确的顺序应该是先注销控制器，再禁用硬件。此外，原代码使用了 `devm_spi_register_controller` 进行注册，这会导致控制器注销在驱动卸载之后才发生，加剧了资源释放顺序混乱的问题。
+
+#解决方案
+1. 将 `zynq_qspi_probe` 中的 `devm_spi_register_controller` 替换为 `spi_register_controller`，以便在移除时能手动控制注销顺序。
+2. 修改 `zynq_qspi_remove` 函数逻辑，先调用 `spi_unregister_controller` 注销控制器，然后再调用 `zynq_qspi_write` 禁用控制器硬件。
+3. 修正 `platform_set_drvdata` 保存的数据，从 `xqspi` 改为 `ctlr`，并在 remove 中通过 `spi_controller_get_devdata` 获取 `xqspi`，配合 `spi_controller_get/put` 防止并发释放问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/44dfeb4b6362f930ad22de29bddd284d41ab5d87

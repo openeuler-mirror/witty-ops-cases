@@ -1,0 +1,27 @@
+#标题
+net: dsa: felix: 修复时钟跳变后 taprio 门控状态损坏导致丢包问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LS1028A-RDB 设备上，当使用 `tc qdisc` 配置 taprio 调度并在 PTP 状态机尝试进行时钟步进后，PTP 同步状态无法恢复，持续报错。具体表现为：
+1. PTP 端口状态在 SLAVE 和 LISTENING 之间异常切换。
+2. 发送 peer delay 请求或响应失败，持续报错 "timed out while polling for tx timestamp"。
+3. 硬件丢弃期望获取时间戳的数据包，`ethtool` 统计显示 `tx_lost` 计数增加。
+
+#主要错误日志
+ptp4l[84.170]: timed out while polling for tx timestamp
+ptp4l[84.171]: increasing tx_timestamp_timeout or increasing kworker priority may correct this issue, but a driver bug likely causes it
+ptp4l[84.172]: port 1 (swp0): send peer delay request failed
+ptp4l[84.173]: port 1 (swp0): clearing fault immediately
+ptp4l[84.269]: port 1 (swp0): SLAVE to LISTENING on INIT_COMPLETE
+
+#问题根因
+在 PTP 时钟步进调用 `vsc9959_tas_clock_adjust()` 时，虽然更新了 TAS 的基准时间并触发了配置变更（`CONFIG_CHANGE`），但未重写门控制列表（GCL）RAM。硬件在 `CONFIG_CHANGE` 触发后会更新 GCL RAM，此时使用了内存中的陈旧数据（在特定场景下全为 0，即所有门关闭），导致时间感知整形器关闭了所有流量门，进而丢弃发往该端口的流量。
+
+#解决方案
+在 `vsc9959_tas_clock_adjust()` 函数中，触发 `CONFIG_CHANGE` 之前，显式调用 `vsc9959_tas_gcl_set()` 重新写入当前配置中的所有 GCL 表项，确保硬件 RAM 中的门控状态与时间间隔数据有效且正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c5f5e307622f8871985bf612ab492cb1a96e8ba4

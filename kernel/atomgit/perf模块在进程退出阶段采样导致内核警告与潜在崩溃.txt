@@ -1,0 +1,25 @@
+#标题
+perf模块在进程退出阶段采样导致内核警告与潜在崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 进程退出（do_exit）期间，若同时触发 perf 采样，内核可能触发 WARN_ON_ONCE 警告，打印调用栈信息。
+2. 在进程 mm 结构被释放后尝试访问用户态栈或调用链，可能导致内核空指针访问或非法内存访问，引发 kernel panic 或数据破坏。
+
+#主要错误日志
+[推断] WARN_ON_ONCE(event->ctx->task != current) 触发警告日志。
+
+#问题根因
+1. **竞态条件**：`perf_pending_task()` 和 `perf_pending_irq()` 可能与任务退出流程（`do_exit`）并发执行。
+2. **释放后访问**：原代码在 `do_exit` 中调用 `exit_mm()` 释放进程的 `mm` 结构之后，才调用 `perf_event_exit_task()`。这导致在此窗口期内的 perf 采样逻辑试图访问已释放的 `mm` 结构（进行用户栈 dump 或调用链获取）。
+3. **逻辑顺序错误**：在 `perf_sigtrap()` 中，针对 `PF_EXITING` 进程的检查位于 `WARN_ON_ONCE` 判断之后，导致检查前已经触发了不必要的警告。
+
+#解决方案
+1. **调整执行顺序**：在 `do_exit` 函数中，将 `perf_event_exit_task()` 调用移至 `exit_mm()` 之前，确保在销毁进程地址空间前停止所有 perf 事件，防止释放后访问。
+2. **增加防御检查**：在 `perf_sample_ustack_size()` 和 `perf_callchain()` 函数中增加 `current->mm` 的非空检查，若当前进程无 mm（如内核线程或正在退出），则跳过用户栈采样。
+3. **修正判断顺序**：在 `perf_sigtrap()` 中，将 `PF_EXITING` 标志位的检查逻辑移至 `WARN_ON_ONCE` 检查之前，避免在进程退出时产生无意义的内核警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/616a06f90448c5cf6cb979fab9bf0eb1121b4d8e

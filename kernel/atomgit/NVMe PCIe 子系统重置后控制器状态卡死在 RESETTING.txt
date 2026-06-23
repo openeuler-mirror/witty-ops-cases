@@ -1,0 +1,20 @@
+#标题
+NVMe PCIe 子系统重置后控制器状态卡死在 RESETTING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PowerPC (PPC) 系统上执行 NVMe PCIe 子系统重置时，控制器无法恢复。控制器状态陷入 RESETTING 状态，导致 EEH（Enhanced Error Handling）恢复流程提前退出，设备无法恢复上线。
+
+#主要错误日志
+未知
+
+#问题根因
+在引入提交 d2fe192348f9 (“nvme: only allow entering LIVE from CONNECTING state”) 后，控制器状态机不再允许直接从 RESETTING 状态转换为 LIVE 状态。而在 PPC 系统上，子系统重置路径依赖于先将状态设置为 LIVE，随后通过 PCIe MMIO 读取触发 EEH 恢复。由于状态转换规则变更，状态转换失败，导致控制器卡死在 RESETTING 状态。
+
+#解决方案
+修改 `nvme_pci_subsystem_reset` 函数中的状态转换逻辑。不再直接将控制器状态从当前状态转换为 LIVE，而是遵循新的状态机规则：先将控制器状态显式转换为 CONNECTING，然后再转换为 LIVE。若任一转换失败，则跳转至 unlock 流程处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fde111a524368506f2246ccf0d2e4c8b07931db3

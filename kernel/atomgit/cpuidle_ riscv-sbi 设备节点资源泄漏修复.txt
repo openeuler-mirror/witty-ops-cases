@@ -1,0 +1,20 @@
+#标题
+cpuidle: riscv-sbi 设备节点资源泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V SBI CPU idle 驱动初始化过程中，若 `for_each_possible_cpu` 循环内发生提前退出（early exit），之前获取的设备节点引用计数未被释放，导致内核资源泄漏（reference leak）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `sbi_cpuidle_probe` 函数中，变量 `np` 通过 `of_cpu_device_node_get()` 初始化，该函数要求在不再需要时显式调用 `of_node_put()` 以释放引用。原代码在循环的所有执行路径中遗漏了 `of_node_put()` 调用，导致资源无法正确释放。
+
+#解决方案
+利用 `__free(device_node)` 自动清理属性定义变量 `np`，当变量超出作用域（即每次循环迭代结束或循环提前退出）时，自动调用 `of_node_put()` 释放资源。同时将 `np` 的作用域缩小至 `for_each_possible_cpu` 循环内部，确保每次迭代结束后自动释放，避免资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1b0b109eb1c3044cfa67ff7fc9cb8e126fb248f9

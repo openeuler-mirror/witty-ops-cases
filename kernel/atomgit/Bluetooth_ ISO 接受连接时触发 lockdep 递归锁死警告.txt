@@ -1,0 +1,42 @@
+#标题
+Bluetooth: ISO 接受连接时触发 lockdep 递归锁死警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 ISO socket 的 accept 操作时，内核检测到可能的递归锁定问题，触发 lockdep 警告并打印 "possible recursive locking detected" 与 "DEADLOCK" 信息。此时系统可能处于死锁风险状态，影响蓝牙 ISO 功能的正常使用。
+
+#主要错误日志
+[   41.585683] ============================================
+[   41.585688] WARNING: possible recursive locking detected
+[   41.585694] 6.12.0-rc6+ #22 Not tainted
+[   41.585701] --------------------------------------------
+[   41.585705] iso-tester/3139 is trying to acquire lock:
+[   41.585711] ffff988b29530a58 (sk_lock-AF_BLUETOOTH)
+               at: bt_accept_dequeue+0xe3/0x280 [bluetooth]
+[   41.585905]
+               but task is already holding lock:
+[   41.585909] ffff988b29533a58 (sk_lock-AF_BLUETOOTH)
+               at: iso_sock_accept+0x61/0x2d0 [bluetooth]
+[   41.586064]
+               other info that might help us debug this:
+[   41.586069]  Possible unsafe locking scenario:
+
+[   41.586072]        CPU0
+[   41.586076]        ----
+[   41.586079]   lock(sk_lock-AF_BLUETOOTH);
+[   41.586086]   lock(sk_lock-AF_BLUETOOTH);
+[   41.586093]
+                *** DEADLOCK ***
+
+[   41.586097]  May be due to missing lock nesting notation
+
+#问题根因
+在 `iso_sock_accept` 函数中，线程首先锁定了父 socket (`parent`)，随后在处理流程中（如调用 `bt_accept_dequeue`）又试图锁定子 socket (`child`)。由于父 socket 和子 socket 使用的是同一把锁类 (`sk_lock-AF_BLUETOOTH`)，且代码未使用嵌套锁注解，导致 lockdep 误报递归锁定警告。
+
+#解决方案
+修改 `iso_sock_accept` 函数，将原本的 `lock_sock(sk)` 调用替换为 `lock_sock_nested(sk, SINGLE_DEPTH_NESTING)`。通过使用嵌套锁定机制，明确告知 lockdep 该锁是在嵌套上下文中获取的，从而消除误报的递归锁定警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/453c5011a7e071dd9a4c0e463bb1fc6f04f402eb

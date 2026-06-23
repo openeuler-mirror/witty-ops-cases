@@ -1,0 +1,22 @@
+#标题
+usb: gadget: uvc: 修复 uvc_v4l2.c 中的 ERR_PTR 解引用漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核代码中存在潜在的安全漏洞，在 USB UVC gadget 驱动的 `find_format_by_pix()`、`uvc_v4l2_try_format()` 和 `uvc_v4l2_enum_format()` 函数中，可能对 `ERR_PTR` 类型的指针进行解引用操作。该问题由静态分析工具 smatch 检出，可能导致内核崩溃或不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `uvc_v4l2.c` 文件中，调用 `to_uvc_format()` 函数返回的指针可能是指示错误的 `ERR_PTR` 指针，但代码在后续操作中直接访问该指针成员（如 `fmtdesc->fcc`），未使用 `IS_ERR()` 进行有效性检查，从而导致潜在的非法解引用。
+
+#解决方案
+在涉及 `to_uvc_format()` 返回值使用的代码路径中增加 `IS_ERR()` 判断：
+1. 在 `find_format_by_pix()` 函数中，若检测到 `fmtdesc` 为 `ERR_PTR`，则跳过当前循环继续查找。
+2. 在 `uvc_v4l2_try_format()` 和 `uvc_v4l2_enum_format()` 函数中，若检测到 `fmtdesc` 为 `ERR_PTR`，则直接返回对应的错误码（通过 `PTR_ERR` 获取），避免后续的解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bab222e2b644520cd96d3611d471c11ce44773ff

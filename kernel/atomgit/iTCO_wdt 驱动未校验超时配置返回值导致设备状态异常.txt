@@ -1,0 +1,20 @@
+#标题
+iTCO_wdt 驱动未校验超时配置返回值导致设备状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动在探测过程中，若 `iTCO_wdt_set_timeout` 设置失败，代码未检查返回值，导致驱动继续以无效的超时值运行。用户执行 `wdctl` 命令查看看门狗状态时，会发现显示的剩余时间大于总超时时间的不合理现象。
+
+#主要错误日志
+- (修复后新增日志) `dev_err(dev, "Failed to set watchdog timeout (%d)\n", WATCHDOG_TIMEOUT);`
+
+#问题根因
+在 `iTCO_wdt_probe` 函数中，当预设的 `heartbeat` 超时值设置失败时，代码尝试回退设置默认的 `WATCHDOG_TIMEOUT`，但未捕获并判断 `iTCO_wdt_set_timeout` 的返回值。这导致即使设置失败，驱动仍继续初始化并注册设备，导致内核态寄存器值与用户态显示不一致。
+
+#解决方案
+在回退设置默认超时值的代码路径中，增加对 `iTCO_wdt_set_timeout` 返回值的检查。如果设置失败，打印错误日志并直接返回错误码，终止 probe 流程，避免驱动在无效配置下继续运行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ad0586edd77e5ad1f0596c686eff5e3e259b03e

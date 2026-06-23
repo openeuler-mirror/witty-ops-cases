@@ -1,0 +1,21 @@
+#标题
+imx8-acm 时钟标志位配置错误导致 fsl-sai 音频驱动设置 sysclk 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+fsl-sai 音频驱动在尝试设置 sysclk 时失败，返回 EINVAL 错误，导致音频功能异常。
+
+#主要错误日志
+fsl-sai 59090000.sai: ASoC: error at snd_soc_dai_set_sysclk on 59090000.sai: -22
+imx-hdmi sound-hdmi: failed to set cpu sysclk: -22
+
+#问题根因
+ACM（Audio Clock Mux）驱动注册时钟时将 flags 参数设置为 0，导致时钟框架尝试重新设置父级以匹配所需速率，但该操作不符合驱动预期。ACM 驱动不支持动态重设父级，应依赖设备树中定义的时钟树配置。
+
+#解决方案
+修改 `drivers/clk/imx/clk-imx8-acm.c` 文件，在注册 mux 时钟时将 flags 参数从 0 修改为 `CLK_SET_RATE_NO_REPARENT`。此举告知时钟框架该驱动不支持重新选择父时钟，从而解决了 fsl-sai 驱动设置 sysclk 失败的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/36203b79d832598f0d97c166ced1c0e6d8e11af1

@@ -1,0 +1,20 @@
+#标题
+SMC PNETID 添加逻辑中因比较对象错误导致的功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `smc_pnet_add_pnetid` 函数向网络命名空间添加 PNETID 时，如果待添加的 PNETID 已存在于列表中，系统无法正确识别其存在。这导致原有 PNETID 的引用计数未能正确增加，且错误地释放了新分配的内存对象，进而引发内存泄漏或潜在的内存访问错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smc_pnet_add_pnetid` 函数的遍历检查逻辑中，代码意图比较用户传入的 `pnetid` 与链表中已存在的节点 ID `pi->pnetid`。但代码实现时错误地比较了 `pnetid` 与新分配但尚未加入链表的临时结构体 `pe->pnetid`（`pe` 是刚通过 kmalloc 分配的内存，其内容此时与链表中的已有条目无关）。错误的比较逻辑（`smc_pnet_match(pnetid, pe->pnetid)`）导致查找失败，引发了后续错误的内存处理流程。
+
+#解决方案
+修正代码逻辑，将比较对象从错误的 `pe->pnetid` 改为正确的链表迭代变量 `pi->pnetid`，确保正确遍历并匹配链表中已知的 PNETID，从而保证重复添加时引用计数正确递增且内存正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e19876e3a3a9aa4c77afa24d9cb892139b9f736e

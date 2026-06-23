@@ -1,0 +1,20 @@
+#标题
+fbdev: sh7760fb: 修复 sh7760fb_alloc_mem 函数中的内存泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SH7760/SH7763 LCDC 帧缓冲驱动初始化过程中，当分配的 DMA 内存地址不满足硬件对齐要求（即地址掩码检查失败）时，导致内存泄漏。此时驱动初始化失败，但先前分配的内存未被正确释放。
+
+#主要错误日志
+dev_err(info->device, "kernel gave me memory at 0x%08lx, which is" "unusable for the LCDC\n", (unsigned long)par->fbdma);
+
+#问题根因
+在 `sh7760fb_alloc_mem` 函数中，当 `dma_alloc_coherent` 分配的内存地址不符合 LCDC 硬件要求（`(par->fbdma & SH7760FB_DMA_MASK) != SH7760FB_DMA_MASK`）时，代码调用了 `sh7760fb_free_mem(info)` 尝试释放内存。然而，此时 `info` 结构体中的关键成员（如 `info->screen_base`）尚未初始化，导致 `sh7760fb_free_mem` 无法正确执行释放逻辑，从而导致内存泄漏。
+
+#解决方案
+在 DMA 地址对齐检查失败的错误处理路径中，直接调用 `dma_free_coherent` 释放刚分配的内存，而不是调用依赖 `info` 结构体状态的 `sh7760fb_free_mem` 函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/349f321a22cc5bf3bfac73e498be6560433c4af7

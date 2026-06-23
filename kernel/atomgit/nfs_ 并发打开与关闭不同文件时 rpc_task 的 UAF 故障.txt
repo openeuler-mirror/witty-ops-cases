@@ -1,0 +1,20 @@
+#标题
+nfs: 并发打开与关闭不同文件时 rpc_task 的 UAF 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFSv4 环境下，当并发执行打开文件 B、关闭文件 A 以及卸载文件系统（umount）操作时，触发内核 UAF（Use-After-Free）。具体流程为：打开文件 B 的任务（T1）完成并释放了 rpc_task，但关闭文件 A 的任务（T2）在唤醒后，通过序列列表访问了已释放的 T1 任务数据，导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 nfs4_close_done 函数处理流程中，虽然 T2 任务位于序列列表末尾，但 nfs_release_seqid 函数的逻辑允许其访问列表中排在其之前插入的任务（如 T1）。此时 T1 对应的 rpc_task 已被释放，但其 seqid 结构体尚未从序列列表中移除，导致 T2 唤醒 T1 时发生 UAF。
+
+#解决方案
+将 nfs4_close_done 函数中的 nfs_release_seqid 调用替换为 nfs_release_seqid_inorder。该修复确保只按顺序释放序列 ID，防止访问列表中已释放的前序任务，从而避免 UAF 发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f97f8597cf1cac4dd2a5834197b9a7b221dcaff

@@ -1,0 +1,27 @@
+#标题
+xfrm: 算法信息转储导致内核信息泄露漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在模糊测试或调用 netlink 接口转储 xfrm 安全关联（SA）算法信息时，触发内核信息泄露警告（KMSAN: kernel-infoleak）。内核将包含未初始化填充字段的内存数据复制到用户空间，可能导致敏感数据泄露。
+
+#主要错误日志
+BUG: KMSAN: kernel-infoleak in _copy_to_iter+0x598/0x2a30
+Uninit was stored to memory at:
+ copy_to_user_state_extra+0xcc1/0x1e00
+ dump_one_state+0x28c/0x5f0
+ ...
+Bytes 328-379 of 732 are uninitialized
+Memory access of size 732 starts at ffff88800e18e000
+Data copied to user address 00007ff30f48aff0
+
+#问题根因
+在 `copy_to_user_auth` 函数中，原代码使用 `memcpy` 将 `xfrm_algo_auth` 结构体整体复制到用户空间。该结构体中包含填充字节，这些字节在 `kmalloc` 分配时未被初始化，直接复制导致未初始化的随机内存数据泄露至用户空间。
+
+#解决方案
+修改 `copy_to_user_auth` 函数，移除不安全的 `memcpy` 操作。改为显式地单独复制结构体中的各个有效成员字段（`alg_name`、`alg_key_len`、`alg_trunc_len`）。其中 `alg_name` 使用 `strscpy_pad` 函数进行复制，该函数不仅安全复制字符串，还会自动将剩余的填充字节清零，从而避免未初始化内存泄露。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c335cfd3169f0b59f91c8ae440bda39cc046ebb2

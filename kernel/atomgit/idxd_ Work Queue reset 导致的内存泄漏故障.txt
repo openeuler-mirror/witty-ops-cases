@@ -1,0 +1,20 @@
+#标题
+idxd: Work Queue reset 导致的内存泄漏故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 idxd 驱动的 Work Queue (wq) 进行复位操作时，由于资源释放逻辑不完整，导致相关内存对象未被正确释放，引发内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在故障代码逻辑中，`wq->type` 字段被错误地在 `idxd_wq_disable_cleanup` 和 `idxd_drv_disable_wq` 函数中清零（设为 `IDXD_WQT_NONE`）。当 wq 发生 reset 操作时，代码流程仅调用 `idxd_wq_disable_cleanup` 而不调用 `idxd_wq_free_resources`。由于 `wq->type` 已被提前清零，导致在后续或关联的资源释放路径中（通常依赖 `wq->type` 判断是否需要释放特定资源）跳过了关键的内存释放步骤，从而导致内存泄漏。简而言之，`wq->type` 的清理时机过早，阻断了资源释放逻辑的执行。
+
+#解决方案
+将 `wq->type = IDXD_WQT_NONE` 的赋值操作从 `idxd_wq_disable_cleanup` 和 `idxd_drv_disable_wq` 函数中移除，并将其统一放置在 `idxd_wq_free_resources` 函数中执行。这确保了只有在真正释放资源时才清理类型字段，从而保证在 wq reset 流程中资源能被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/df16529435e1a868382879beebafdfdab1c5d3b9

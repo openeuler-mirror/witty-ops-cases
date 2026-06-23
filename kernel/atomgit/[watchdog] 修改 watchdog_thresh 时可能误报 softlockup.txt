@@ -1,0 +1,20 @@
+#标题
+[watchdog] 修改 watchdog_thresh 时可能误报 softlockup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在动态修改 `/proc/sys/kernel/watchdog_thresh` 参数时（例如从 60 改为 10），若旧定时器在参数更新与新定时器停止的时间窗口内触发，watchdog 可能会错误地使用旧的时间间隔与新的阈值进行比较，导致内核误报 softlockup。
+
+#主要错误日志
+未知
+
+#问题根因
+在更新 `watchdog_thresh` 时存在竞态条件。写入新值与停止旧 watchdog 定时器之间存在时间窗口，如果旧定时器在此窗口内触发，它会使用旧的时间间隔配合已更新的 `watchdog_thresh` 值进行检测，导致逻辑判断错误从而引发 softlockup 误报。
+
+#解决方案
+引入 `watchdog_thresh_next` 影子变量。在修改阈值时，先更新影子变量，待旧的 softlockup 定时器完全停止后，再将影子变量的值同步到实际的 `watchdog_thresh` 变量中。这样可以确保定时器回调函数不会读取到新旧不一致的参数组合，从而避免误报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/91874e3e3adbb58a8c24e3e0a7f10e1ae269d0ab

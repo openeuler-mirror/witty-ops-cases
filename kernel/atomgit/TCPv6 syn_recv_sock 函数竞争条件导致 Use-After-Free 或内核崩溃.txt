@@ -1,0 +1,25 @@
+#标题
+TCPv6 syn_recv_sock 函数竞争条件导致 Use-After-Free 或内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 IPv6 映射地址（v6 mapped）的 TCP 连接请求时，内核存在潜在的竞争条件。当 `tcp_v6_syn_recv_sock` 调用 `tcp_v4_syn_recv_sock` 创建子套接字后，该子套接字立即对 TCP ehash 表可见，此时其他 CPU 可能已经开始使用该套接字。然而，由于初始化代码执行过晚，`newinet->pinet6` 仍指向监听套接字（listener）的 `ipv6_pinfo`，而非子套接字应有的结构，导致其他 CPU 在使用该套接字时访问到错误或已释放的内存，进而触发 syzbot 发现的异常行为或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tcp_v6_syn_recv_sock()` 函数中，针对 v6 mapped 场景的代码执行顺序存在逻辑错误。子套接字的某些关键初始化步骤（特别是 `newinet->pinet6` 的设置）是在调用 `tcp_v4_syn_recv_sock()` 之后执行的。
+根本原因在于：`tcp_v4_syn_recv_sock()` 返回时，子套接字已经被插入到 ehash 表中并对其他 CPU 可见，但此时 `newinet->pinet6` 仍错误地指向监听套接字的 `ipv6_pinfo`。这导致其他 CPU 在并发访问该子套接字时，可能读取到错误的 IPv6 选项信息或面临 Use-After-Free 风险。
+
+#解决方案
+修复方案是将 IPv6 映射子套接字的特定初始化逻辑前移，确保在套接字插入哈希表并对其他 CPU 可见之前完成初始化。具体措施如下：
+1. 新增辅助函数 `tcp_v6_mapped_child_init()`，封装原先后置执行的 IPv6 相关初始化逻辑。
+2. 修改 `tcp_v4_syn_recv_sock()` 及相关回调接口，增加一个函数指针参数 `opt_child_init`。
+3. 在 `tcp_v4_syn_recv_sock()` 中，于插入 ehash 表之前调用 `opt_child_init` 回调（如果提供）。
+4. 在 `tcp_v6_syn_recv_sock()` 调用 `tcp_v4_syn_recv_sock` 时传入 `tcp_v6_mapped_child_init` 作为回调，从而在正确的时机完成初始化。此举同时移除了原先不必要的一次 `tcp_sync_mss()` 调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bb7fe832a74d41f34a882668ea369619311c5c85

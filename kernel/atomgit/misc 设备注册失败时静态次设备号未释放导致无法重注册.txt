@@ -1,0 +1,20 @@
+#标题
+misc 设备注册失败时静态次设备号未释放导致无法重注册
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 misc 设备注册过程中，若 sysfs 文件创建（`device_create_with_groups`）失败，已分配的静态次设备号不会被释放。这导致该静态次设备号永久泄露，后续再次尝试注册使用相同静态次设备号的设备时会持续失败，无法正常使用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `misc_register` 函数中，当 `device_create_with_groups` 执行失败进入错误处理路径时，原有代码逻辑判断 `if (is_dynamic)` 仅对动态分配的次设备号执行 `misc_minor_free` 释放操作。这导致静态分配的次设备号在出错时未被释放，资源泄露且无法再次注册。
+
+#解决方案
+修改 `misc_register` 中的错误处理路径，将 `misc_minor_free(misc->minor)` 移至 `if (is_dynamic)` 判断之外，确保无论是静态还是动态分配的次设备号，在设备创建失败时都能被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c01d922fd9b71279858583b7d7beb29288354ed

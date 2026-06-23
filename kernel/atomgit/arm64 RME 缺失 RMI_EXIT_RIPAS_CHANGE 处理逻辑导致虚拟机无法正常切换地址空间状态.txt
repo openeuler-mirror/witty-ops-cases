@@ -1,0 +1,24 @@
+#标题
+arm64 RME 缺失 RMI_EXIT_RIPAS_CHANGE 处理逻辑导致虚拟机无法正常切换地址空间状态
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 RME（Realm Management Extension）场景下，Guest 虚拟机通过 RSI_IPA_STATE_SET 调用请求将受保护地址空间区域在 RIPAS_RAM 和 RIPAS_EMPTY 之间切换时，会触发 RMI_EXIT_RIPAS_CHANGE 退出。由于内核此前未对该退出原因进行处理，导致 Guest 发起的地址空间状态变更请求无法完成，相关内存管理功能（如受保护内存与非受保护内存的转换）失效。此外，若处理过程中遇到非预期的 RMM 错误，会触发内核 WARN。
+
+#主要错误日志
+- `WARN(1, "Unexpected error in %s: %#x\n", __func__, ret);`（推断：在 realm_set_ipa_state 函数中遇到非预期的 RMI 错误时打印）
+- `WARN_RATELIMIT(ret && ret != -ENOMEM, "Unable to satisfy RIPAS_CHANGE for %#lx - %#lx, ripas: %#lx\n", base, top, ripas);`（推断：在完成 RIPAS 变更过程中若失败且非内存不足时打印）
+
+#问题根因
+内核缺少对 RMI_EXIT_RIPAS_CHANGE 退出类型的处理逻辑。当 Guest 请求变更 RIPAS（Realm IPA State）时，Host 侧内核需要响应此请求，执行相应的 RMI_RTT_SET_RIPAS 调用来提交状态变更，并处理相关的 RTT（Realm Translation Table）页表层级创建或内存映射更新。原代码中 kvm_rec_enter 函数未包含针对 RMI_EXIT_RIPAS_CHANGE 的 case 分支，导致该事件被忽略或处理不当。
+
+#解决方案
+在 arch/arm64/kvm/rme.c 中新增对 RMI_EXIT_RIPAS_CHANGE 的处理支持：
+1. 新增 realm_set_ipa_state 函数：该函数封装了调用 rmi_rtt_set_ripas 的循环逻辑，用于实际修改 RIPAS 状态。处理过程中若发现 RTT 表缺失（RMI_ERROR_RTT），会自动调用 realm_create_rtt_levels 创建所需页表层级；若设置为 RMI_EMPTY 且地址范围有效，则调用 realm_unmap_private_range 解除映射。
+2. 新增 kvm_complete_ripas_change 函数：作为 RMI_EXIT_RIPAS_CHANGE 的处理入口，解析 VCPU 结构中的退出参数（base, top, ripas），填充内存缓存，并在 mmu_lock 锁保护下调用 realm_set_ipa_state，循环处理直到整个地址范围变更完成。
+3. 修改 kvm_rec_enter 函数：在 switch-case 结构中增加 RMI_EXIT_RIPAS_CHANGE 分支，直接调用 kvm_complete_ripas_change 函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/98fac5bf1582b769b2f060cd849558b4251015ce

@@ -1,0 +1,33 @@
+#标题
+powerpc/pseries/iommu: DDW 机制错误标记 MMIO 范围导致 LPAR 启动崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Power Hypervisor 分配的 MMIO 窗口与超过 32 位寻址的动态 DMA 窗口（DDW）范围存在交集时，LPAR 在启动过程中触发 Kernel Oops，导致系统崩溃。调用栈显示崩溃发生在 `iommu_table_reserve_pages` 函数中，通常是在加载驱动（如 be2net）进行 DMA 设置时触发。
+
+#主要错误日志
+BUG: Unable to handle kernel data access on read at 0xc00800005cd40000
+Faulting instruction address: 0xc00000000005cdac
+Oops: Kernel access of bad area, sig: 11 [#1]
+NIP [c00000000005cdac] iommu_table_reserve_pages+0xac/0x100
+LR [c00000000005e830] iommu_init_table+0x80/0x1e0
+Call Trace:
+iommu_init_table+0x60/0x1e0
+iommu_bypass_supported_pSeriesLP+0x9cc/0xe40
+dma_iommu_dma_supported+0xf0/0x230
+dma_set_mask+0x3c/0x80
+be_probe+0xc4/0xb90 [be2net]
+
+#问题根因
+代码中存在两个缺陷导致 IOMMU 错误地标记了 MMIO 页面范围：
+1. 变量类型不匹配：循环索引变量 `i` 被定义为 `int` 类型，而地址为 `unsigned long` 类型。在处理高位地址时，导致索引值变成负数，进而导致 bitmap 设置错误。
+2. 地址移位缺失：DMA 偏移量已经过页偏移，但传入的 MMIO 范围直接使用了 64 位地址而未进行页偏移处理。MMIO 地址需要同样进行页偏移操作才能正确计算保留范围。
+
+#解决方案
+1. 将 `arch/powerpc/kernel/iommu.c` 中 `iommu_table_reserve_pages` 函数内的循环索引变量 `i` 从 `int` 类型修改为 `unsigned long` 类型，防止高位地址转换时出现负值。
+2. 在 `arch/powerpc/platforms/pseries/iommu.c` 的 `enable_ddw` 函数中，调用 `iommu_init_table` 时，对传入的 MMIO 起始地址 `start` 和结束地址 `end` 执行右移 `page_shift` 位的操作，确保地址计算单位一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db3d5af4b09236df0ceef3ff4e0655f19ad3af88

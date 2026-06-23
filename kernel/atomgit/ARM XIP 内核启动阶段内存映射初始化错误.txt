@@ -1,0 +1,21 @@
+#标题
+ARM XIP 内核启动阶段内存映射初始化错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM 架构下启用了 XIP（eXecute In Place）特性的内核启动过程中，因内存映射初始化顺序错误导致内核无法正常建立正确的内存映射，进而导致内核启动失败或内存访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+引入 `kernel_sec_start/end` 变量用于区分内核与低端内存映射的补丁集破坏了 XIP 内核的内存映射逻辑。在 XIP 内核启动流程中，`kernel_sec_start/end` 变量位于只读（RO）内存区域，且在 MMU（内存管理单元）开启之前处于不可写状态。原代码尝试在 `head.S` 中 MMU 开启之前（Early boot阶段）写入这些变量，导致写入失败或数据错误，从而破坏了后续的内核内存映射建立过程。此外，XIP 内核需要为代码段（起始地址为 CONFIG_XIP_PHYS_ADDR）和数据段（起始地址为 CONFIG_PHYS_OFFSET）分别建立不同的映射，原逻辑未正确处理这一需求。
+
+#解决方案
+1. **延迟变量赋值**：不再在 `head.S` 的早期启动代码中设置 `kernel_sec_start/end` 变量，而是将其移动到 `paging_init` 函数中，确保在 MMU 开启后、内存管理初始化时再进行赋值。此时内存已可写，能够正确保存内核物理段的起始与结束地址。
+2. **调整映射逻辑**：将内核代码段的映射创建逻辑从 `devicemaps_init` 函数移动到 `map_kernel` 函数中，并区分 XIP 内核与非 XIP 内核的处理路径，确保 XIP 内核能正确映射代码段（ROM）与数据段（RAM）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cd91fc2f9f80b9404ffb8ac7d5ed2ca6a64daf8a

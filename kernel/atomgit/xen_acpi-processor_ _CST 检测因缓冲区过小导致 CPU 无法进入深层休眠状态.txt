@@ -1,0 +1,20 @@
+#标题
+xen/acpi-processor: _CST 检测因缓冲区过小导致 CPU 无法进入深层休眠状态
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Xen 环境下，当 dom0 的 vCPU 数量少于物理 CPU 数量时（例如 dom0_max_vcpus=2 而物理 CPU 为 8 个），Phase 2 阶段的物理 CPU（如 PCPUs 2-7）无法获取 C-state 数据，导致这些 CPU 只能停留在 C0/C1 状态，无法进入 C2/C3 等深层休眠状态。该问题会导致系统功耗明显增加（实测观察到增加约 4W）。
+
+#主要错误日志
+未知
+
+#问题根因
+`read_acpi_id()` 函数尝试使用栈上分配的 `union acpi_object` 大小的缓冲区（48 字节）来评估 `_CST` 对象，但 `_CST` 返回的是嵌套的 Package 结构（包含每个 C 状态的寄存器描述符、类型、延迟和功耗等），需要数百字节的空间。这导致 `acpi_evaluate_object()` 调用始终因 `AE_BUFFER_OVERFLOW` 失败。在使用 FFH/MWAIT 入口（pblk 为零）的现代系统上，该失败导致函数提前返回，未设置 `acpi_id_cst_present` 标志位，进而导致 `check_acpi_ids()` 认为 Phase 2 CPU 不支持电源管理，未向 Hypervisor 上传 C-state 数据。
+
+#解决方案
+移除存在缺陷的 `acpi_evaluate_object()` 调用，改用 `acpi_has_method()` 函数来检测 `_CST` 方法是否存在。由于原逻辑仅需要知道 `_CST` 是否存在而并不使用其返回值，`acpi_has_method()` 可以通过 `acpi_get_handle()` 正确检测方法存在性且无需分配缓冲区，从而修复了对 Phase 2 CPU 的 C-state 检测问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b35f5daa8deb3992b92942aa0723c038047e726

@@ -1,0 +1,20 @@
+#标题
+block: 修复 bio_slab 名称缓冲区溢出导致 kmem_cache 创建失败问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 Device Mapper 的 bioset bio_slab 大小超过 1000（例如 bio-108）时，系统启动或模块加载过程中出现内核告警：`kmem_cache of name 'bio-108' already exists`。该告警会导致相应的 kmem_cache 分配失败，可能影响块设备层的正常功能。
+
+#主要错误日志
+kmem_cache of name 'bio-108' already exists
+
+#问题根因
+`struct bio_slab` 结构体中的 `name` 字段仅定义为 8 字节（`char name[8]`）。当 bio_slab 的大小超过 1000 时，格式化后的名称字符串（如 "bio-108"）长度超过了 8 字节的限制，导致字符串截断或内存越界。由于截断后的名称可能与已存在的 slab 名称冲突，从而触发了 kmem_cache 分配时的名称重复告警。
+
+#解决方案
+将 `block/bio.c` 中 `struct bio_slab` 结构体的 `name` 字段长度从 8 字节扩展至 12 字节，确保能容纳较大的 bio_slab 名称（如 "bio-108" 及更大的编号），从而修复名称冲突的告警问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/075a652e7e7e968fc79875977066a312b0ee1d7f

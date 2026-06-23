@@ -1,0 +1,21 @@
+#标题
+ipv6: icmpv6_rcv 中存在潜在 UAF 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 IPv6 ICMP 报文接收时，若 skb 线性化缓冲区发生变化（如 pskb_pull 调整 skb->head），此前缓存的 IPv6 源地址和目的地址指针将指向无效内存区域，导致释放后使用（UAF），可能引发内核崩溃或内存破坏。
+
+#主要错误日志
+ICMPv6 checksum failed [%pI6c > %pI6c]
+icmpv6: msg of unknown type [%pI6c > %pI6c]
+
+#问题根因
+在 `icmpv6_rcv` 函数中，代码在调用 `pskb_pull()` 之前就缓存了 `saddr` 和 `daddr` 指针（指向 `skb->head` 相关位置）。`pskb_pull()` 可能会改变 `skb->head`，导致之前缓存的指针失效。后续在慢速路径中调用 `net_dbg_ratelimited()` 打印日志时，使用了这些已失效的指针，从而触发 UAF。
+
+#解决方案
+移除 `saddr` 和 `daddr` 临时指针变量，在需要打印调试信息时，直接通过 `&ipv6_hdr(skb)->saddr` 和 `&ipv6_hdr(skb)->daddr` 获取地址。这样可以确保在 `pskb_pull()` 调用之后访问的是正确的、更新后的内存地址，避免引用旧指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/59d29dffa21ac3e4ef5ac365011cc892f754ff4c

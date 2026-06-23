@@ -1,0 +1,20 @@
+#标题
+mtk-sd: 修复 prepare_data() 错误路径下悬挂指针引发的潜在内存腐败问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mtk-sd 驱动处理 MMC 请求时，若 `msdc_prepare_data()` 函数执行失败（例如 DMA 映射失败），驱动未能清理 `host->mrq` 指针。这导致该指针成为一个悬挂指针，后续如果主机继续使用该指针进行访问，可能导致内存腐败或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，问题根因是驱动在 `msdc_prepare_data()` 的错误处理路径上，未将 `host->mrq` 指针重置为 NULL，导致主机结构体中保留了一个无效的悬挂指针。
+
+#解决方案
+在 `msdc_ops_request` 函数中，当检测到 `msdc_data_prepared(mrq->data)` 为假（即数据准备失败）时，在返回前显式将 `host->mrq` 设置为 NULL，从而避免后续代码访问到无效的悬挂指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/11f4e5b4dd325624747498a3b46717623d26e829

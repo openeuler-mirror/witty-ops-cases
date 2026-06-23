@@ -1,0 +1,21 @@
+#标题
+LoongArch: KVM 虚拟机 GPA 大小计算错误导致地址访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Loongson-3A5000 处理器上运行的虚拟机（VM）中，物理地址空间（GPA）大小被错误地设置为 47 位，而实际应为 48 位。当虚拟机访问位于第 47 位范围内的物理地址时，可能触发非预期的缺页异常或地址错误，导致虚拟机内存访问功能异常。修复代码中增加了地址越界检查，若访问地址超过最大 GPA 地址，会向 Guest 注入 ADE（Address Error）异常。
+
+#主要错误日志
+未知
+
+#问题根因
+变量 `cpu_vabits` 仅表示用户地址空间位数，内核地址空间不包含在内（用户空间和内核空间各占总空间的一半）。代码中计算虚拟机物理地址空间大小时，错误地使用了 `BIT(cpu_vabits - 1)`，导致计算出的 GPA 大小比实际用户地址空间小了一半。正确的逻辑是虚拟机的物理地址空间大小应与物理机的用户虚拟地址空间大小一致，即应使用 `BIT(cpu_vabits)`。
+
+#解决方案
+1. 修正 `kvm_arch_init_vm` 函数中 `gpa_size` 的计算逻辑，将 `BIT(cpu_vabits - 1)` 修改为 `BIT(cpu_vabits)`。
+2. 在 `kvm_handle_rdwr_fault` 函数中增加严格检查，如果发生缺页的 GPA 地址（badv）大于等于虚拟机的最大 GPA 地址（`vcpu->kvm->arch.gpa_size`），则向虚拟机注入 ADEM 类型的 ADE 异常，防止错误进一步扩散。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ec44708a1e6aa63741ea925cebe187581c8beab1

@@ -1,0 +1,20 @@
+#标题
+clk: imx: clk-scu: 修复时钟状态保存与恢复逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统挂起过程中，时钟状态保存机制可能失效。具体表现为：当设备驱动仅调用了 disable（关闭时钟）而未调用 unprepare（去准备）时钟时，该时钟的状态无法被正确保存，导致系统恢复后时钟状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+SCU 时钟操作集仅实现了 prepare 和 unprepare 回调函数。原代码在挂起过程中通过 `clk_hw_is_enabled()` 检查时钟状态来保存 `is_enabled` 标志位，这存在安全隐患。因为部分设备驱动可能只关闭时钟而不执行 unprepare 操作，导致 `clk_hw_is_enabled()` 返回的状态与实际的 prepare 状态不一致，进而导致状态保持功能对此类时钟失效。
+
+#解决方案
+修改 `imx_clk_scu_suspend` 函数中的状态检查逻辑，将判断时钟状态的 API 从 `clk_hw_is_enabled()` 替换为 `clk_hw_is_prepared()`。该修改确保了时钟状态的保存逻辑与 SCU 时钟操作集的实际实现相匹配，从而保证了在驱动仅 disable 未 unprepare 的场景下，时钟状态依然能被正确保存和恢复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a6564080b0cfe089e593a2dc643478360c80abfa

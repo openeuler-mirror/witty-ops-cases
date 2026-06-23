@@ -1,0 +1,20 @@
+#标题
+nfs/enfs: 修复查找 root uuid 时的匹配错误问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ENFS（Enhanced NFS）功能场景下，不同的 RPC 客户端可能拥有相同的 root uuid。由于查找逻辑仅比较了客户端指针而未校验 uuid，导致在并发或复用场景下查找到错误的 root uuid，进而引发 shard 路由查询与更新逻辑异常，可能导致文件访问行为不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `enfs_find_clnt_root` 中，遍历客户端信息列表时，仅判断了 `info->clnt == clnt` 就认为找到目标并退出，未进一步校验传入的 `root_uuid` 是否与存储的 `info->root_uuid` 一致。不同的 RPC 客户端可能持有相同的 root uuid，该逻辑缺陷导致错误的 uuid 匹配。
+
+#解决方案
+修改 `enfs_find_clnt_root` 函数的匹配条件，在检查 `info->clnt == clnt` 的同时，增加对 `root_uuid` 的内存比较（`memcmp`），确保客户端指针与 uuid 均匹配时才视为查找成功。同时优化 `insert_and_update_shard` 函数，移除冗余的局部变量 `root_uuid`，直接使用传入的 `file_uuid` 参数进行查找。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/96155a2ffed0ef662cfb6f30c9eaf575d19c9cc0

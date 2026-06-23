@@ -1,0 +1,20 @@
+#标题
+[usb: cdns3: Fix deadlock when using NCM gadget]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+在 PREEMPT_RT 内核环境下，通过 NCM（Network Control Model）gadget 进行重负载网络传输时（例如执行 "iperf --bidir" 命令），系统发生死锁，导致网络通信中断或系统无响应。
+
+#主要错误日志
+未知
+
+#问题根因
+该故障源于 cdns3 驱动中的并发锁竞争问题。线程中断处理函数与 softirq（软中断）使用了同一个 spinlock（自旋锁）进行保护。在 PREEMPT_RT 内核下，线程中断处理函数在持有锁时可能被 softirq 抢占，而 softirq 随后尝试获取同一把锁，从而导致死锁。
+
+#解决方案
+在线程中断处理函数 `cdns3_device_thread_irq_handler` 的执行临界区内增加软中断禁用保护。具体修改为：在获取自旋锁前调用 `local_bh_disable()` 禁用软中断，在释放自旋锁后调用 `local_bh_enable()` 重新启用软中断，从而防止在锁持有期间发生软中断抢占导致的死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0006cfab245a2d9888ddc8cc5ae7b45520ed0de4

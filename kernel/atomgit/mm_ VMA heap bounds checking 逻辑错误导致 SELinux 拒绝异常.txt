@@ -1,0 +1,25 @@
+#标题
+mm: VMA heap bounds checking 逻辑错误导致 SELinux 拒绝异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在将 SELinux 转换使用 VMA heap check 辅助函数后，触发 execheap SELinux denial（拒绝访问）告警。该问题导致特定的边界情况被错误判定，影响了堆内存区域的正常权限检查。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `vma_is_initial_heap` 的逻辑检查存在缺陷。原先的实现仅检查 VMA 范围是否在 VMA 堆范围内，而修改后的实现检查两个范围是否有交集，但未正确处理边界情况（corner case）。
+具体代码逻辑错误为：当 `vm_end` 等于 `start_brk` 或 `vm_start` 等于 `brk` 时，实际上 VMA 与堆范围并无实际交集，但原代码使用了 `>=` 和 `<=` 比较符导致判定为交集，从而触发了错误的 SELinux 拒绝逻辑。
+
+#解决方案
+修改 `include/linux/mm.h` 中的 `vma_is_initial_heap` 函数，将边界检查的比较运算符由 `<=` 和 `>=` 修正为 `<` 和 `>`。
+具体变更：
+- 将 `vma->vm_start <= vma->vm_mm->brk` 修改为 `vma->vm_start < vma->vm_mm->brk`
+- 将 `vma->vm_end >= vma->vm_mm->start_brk` 修改为 `vma->vm_end > vma->vm_mm->start_brk`
+此修复确保了仅当 VMA 与堆范围存在真正交集时才返回真，修正了边界条件的判断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c5d5dc04397f7cb54b81b80e23b3e9f9e7c266a9

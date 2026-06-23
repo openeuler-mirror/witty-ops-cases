@@ -1,0 +1,20 @@
+#标题
+drm/amd/pp: atomctrl_initialize_mc_reg_table 空指针解引用风险修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 电源管理电源播放（powerplay）模块中，当驱动尝试初始化 MC 寄存器表时，如果 `smu_atom_get_data_table` 获取 `VRAM_Info` 失败（返回 NULL），代码后续将直接解引用该空指针，导致内核发生 NULL 指针解引用错误（Oops/Panic），进而引发系统崩溃或显卡驱动初始化失败。
+
+#主要错误日志
+Could not retrieve the VramInfo table!
+
+#问题根因
+函数 `atomctrl_initialize_mc_reg_table()` 和 `atomctrl_initialize_mc_reg_table_v2_2()` 调用 `smu_atom_get_data_table()` 获取 vram_info 数据表时，未检查其返回值是否为 NULL。当获取数据表失败时，函数返回 NULL，代码后续直接访问该指针导致空指针解引用。
+
+#解决方案
+在 `atomctrl_initialize_mc_reg_table()` 和 `atomctrl_initialize_mc_reg_table_v2_2()` 函数中调用 `smu_atom_get_data_table()` 后增加判断逻辑：若返回指针为 NULL，则打印错误日志 "Could not retrieve the VramInfo table!" 并返回 `-EINVAL`，避免后续对空指针的解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22fc3ffc9d33a933534067199b37ba9d21e2c6db

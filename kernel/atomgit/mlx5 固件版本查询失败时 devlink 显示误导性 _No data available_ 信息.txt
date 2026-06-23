@@ -1,0 +1,29 @@
+#标题
+mlx5 固件版本查询失败时 devlink 显示误导性 "No data available" 信息
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 `devlink dev info` 命令查询 Mellanox 网卡固件版本时，如果固件处于异常状态（如 FW state errors / flash failures）导致版本查询失败，命令会直接中断并返回 misleading 的错误信息 "kernel answers: No data available"，导致用户无法获取设备的任何信息（包括驱动名称、序列号等），也无法直观判断具体故障原因。
+
+#主要错误日志
+- mlxfw: Firmware flash failed: key not applicable, err (7)
+- mlx5_fw_image_pending: can't read pending fw version while fw state is 1
+- kernel answers: No data available
+- mlx5_core_warn: fw query isn't supported by the FW
+- mlx5_core_warn: fw query failed to find boot img component index, err %d
+- mlx5_core_warn: failed to query running version, err %d
+- mlx5_core_warn: failed to query pending image, err %d
+- mlx5_core_warn: failed to query pending version, err %d
+
+#问题根因
+在 `mlx5_devlink_info_get` 函数中调用 `mlx5_fw_version_query` 时，如果 FW 查询失败（例如组件索引查找失败、寄存器查询超时或固件状态异常），该函数会返回非零错误码。调用者直接将该错误码向上返回，导致 devlink 机制直接中断并报错，而不是尝试显示已获取的其他信息或在版本字段中标记错误状态。
+
+#解决方案
+修改 `mlx5_fw_version_query` 的返回值类型为 void，使其在遇到错误时不再向上抛出错误码中断 devlink 流程。具体改动包括：
+1. 在函数入口及各错误处理分支中，将版本值初始化或设置为特定值（running_ver 为 0，pending_ver 为 0 或 U32_MAX/0xfff..），以此标记查询失败状态。
+2. 移除 `mlx5_devlink_info_get` 中对 `mlx5_fw_version_query` 返回值的检查，确保即使版本查询失败，devlink 仍能继续输出设备基础信息和错误标记的版本号。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a8b161a97320ec3d804af8fa25b239af566dcfc3

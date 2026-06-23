@@ -1,0 +1,23 @@
+#标题
+Input: edt-ft5x06 驱动 probe 失败时的 regmap 内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 edt-ft5x06 触摸屏驱动加载过程中，若 probe（探测）阶段因某种原因失败，会导致此前分配的 I2C regmap 实例未被释放，造成内存泄漏。此外，在驱动卸载（remove）时，regmap 的释放时机过早，早于其他由 devm 管理的资源，可能导致潜在的访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `edt_ft5x06_ts_probe()` 函数开始时通过 `devm_regmap_init_i2c`（或类似非 devm 托管的变体）构建了 regmap 实例，但在 probe 失败的退出路径中没有调用 `regmap_exit` 进行释放。同时，`edt_ft5x06_ts_remove()` 函数中手动调用 `regmap_exit` 的时机不正确，未遵循 devm 资源的逆序释放原则。由于驱动可能在 probe 中途为 M06 设备替换特定的 regmap，无法简单使用 `devm_regmap_init_i2c()` 自动管理，导致资源管理逻辑存在漏洞。
+
+#解决方案
+引入自定义的 devm action 机制来管理 regmap 的生命周期。具体修改如下：
+1. 新增 `edt_ft5x06_exit_regmap` 辅助函数，封装 `regmap_exit` 的调用逻辑。
+2. 在 probe 阶段成功创建 regmap 后，立即通过 `devm_add_action_or_reset` 注册该清理函数。
+3. 删除 `edt_ft5x06_ts_remove()` 函数中过早调用的 `regmap_exit` 代码，由 devm 框架在设备卸载时自动按序释放资源。此举确保了无论是 probe 失败还是正常卸载，regmap 均能被正确且安全地释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75162f134146bc4997fbc0bf5c4168f31276ffcf

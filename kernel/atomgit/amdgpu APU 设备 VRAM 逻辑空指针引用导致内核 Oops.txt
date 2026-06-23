@@ -1,0 +1,24 @@
+#标题
+amdgpu APU 设备 VRAM 逻辑空指针引用导致内核 Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 APU 平台及其他未初始化 VRAM 管理器的场景下，内核在执行 VRAM 相关逻辑时触发空指针引用，导致内核 Oops（Panic）。具体触发场景包括：计算迁移阈值（bandwidth control）、查询 VRAM 使用率（ioctl `AMDGPU_INFO_VRAM_USAGE`）以及虚拟机向宿主机上报显存使用量（vf2pf 通信）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 APU 平台上，由于没有独立显存（discrete VRAM），VRAM 管理器结构体中的 `man->bdev`（backing device pointer）保持未初始化状态（NULL）。
+代码在调用 `ttm_resource_manager_usage()` 时，该函数内部尝试获取 `man->bdev->lru_lock` 锁，从而对 NULL 指针 `man->bdev` 进行了解引用，导致内核崩溃。根本原因不是 `man` 指针本身为空，而是其内部成员 `bdev` 未初始化。
+
+#解决方案
+通过引入 `ttm_resource_manager_used()` 检查，在访问 VRAM 管理器前先判断其是否可用（即 `bdev` 是否已初始化），若不可用则直接返回 0，跳过可能触发空指针引用的逻辑。具体修改如下：
+1. **amdgpu_cs.c**：在 `amdgpu_cs_get_threshold_for_moves()` 函数中增加 `ttm_resource_manager_used()` 判断。若管理器不可用，直接将迁移阈值设为 0 并返回，避免进入后续逻辑。
+2. **amdgpu_kms.c**：在 `AMDGPU_INFO_VRAM_USAGE` ioctl 和内存信息上报路径中，使用三元运算符判断：若管理器可用则返回实际 VRAM 使用量，否则返回 0。
+3. **amdgpu_virt.c**：在虚拟化 vf2pf 数据写入路径中，增加同样判断：若管理器可用则计算并上报 `fb_usage`，否则上报 0。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7249eadf4032ca076768054cf107e2e6de517837

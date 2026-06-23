@@ -1,0 +1,28 @@
+#标题
+intel_pstate: 不支持 HWP 的处理器上未检查 MSR 访问导致内核调用栈报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在不支持 Hardware P-State (HWP) 功能的处理器上，当系统固件通过 ACPI 事件 `ACPI_PROCESSOR_NOTIFY_HIGEST_PERF_CHANGED` 修改最高频率时，内核触发未检查的 MSR 访问错误。系统日志中出现调用栈回溯信息，指向 `intel_pstate_get_hwp_cap` 函数尝试读取不可用的 HWP MSR 寄存器。
+
+#主要错误日志
+Call Trace:
+ <TASK>
+ generic_exec_single+0x58/0x120
+ smp_call_function_single+0xbf/0x110
+ rdmsrl_on_cpu+0x46/0x60
+ intel_pstate_get_hwp_cap+0x1b/0x70
+ intel_pstate_update_limits+0x2a/0x60
+ acpi_processor_notify+0xb7/0x140
+ acpi_ev_notify_dispatch+0x3b/0x60
+
+#问题根因
+HWP MSR 0x771 仅在支持且启用了 HWP 功能的 CPU 上可读。在修复前的代码逻辑中，`__intel_pstate_update_max_freq` 函数在处理 ACPI 频率变更通知时，无条件调用 `intel_pstate_get_hwp_cap`，未检查当前系统是否处于 `hwp_active` 状态。这导致在不支持 HWP 的处理器上错误地发起了对 MSR 0x771 的读操作，引发 MSR 访问错误。
+
+#解决方案
+在调用 `intel_pstate_get_hwp_cap` 读取 HWP 能力前，增加 `hwp_active` 变量的检查。只有当该变量为真时才执行读取操作，从而避免在不支持 HWP 的处理器上访问无效的 MSR 寄存器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cb76812bb59b8569995cf84b25ea1177e8f52242

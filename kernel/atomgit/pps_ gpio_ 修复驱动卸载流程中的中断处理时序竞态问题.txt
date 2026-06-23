@@ -1,0 +1,24 @@
+#标题
+pps: gpio: 修复驱动卸载流程中的中断处理时序竞态问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 PPS GPIO 设备驱动时存在潜在竞态条件，若在 PPS 源注销后但中断处理程序尚未释放期间触发中断，可能导致内核恐慌。
+
+#主要错误日志
+未知
+
+#问题根因
+在驱动初始化流程 `pps_gpio_probe()` 中，使用 `devm_request_irq()` 注册中断。由于 devm 机制的资源释放发生在 remove 函数执行完成之后，导致在 `pps_gpio_remove()` 函数中，`pps_unregister_source()` 先于中断释放执行。
+这创建了一个竞态窗口：PPS 源已被注销，但中断处理程序仍处于活动状态。若此时触发中断，中断处理程序可能会访问已注销的 PPS 设备资源，从而引发内核崩溃。
+
+#解决方案
+放弃使用 devm 机制自动管理中断，改为手动管理中断生命周期。
+1. 在 `pps_gpio_probe()` 中将 `devm_request_irq()` 替换为 `request_irq()`。
+2. 在 `pps_gpio_remove()` 中，显式调用 `free_irq()` 释放中断，且该操作必须在 `pps_unregister_source()` 之前执行。
+此举确保了在注销 PPS 源之前，中断处理程序已被安全移除，消除了竞态风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f4060c770e58d298df0628c08e591ed4a0f5eb49

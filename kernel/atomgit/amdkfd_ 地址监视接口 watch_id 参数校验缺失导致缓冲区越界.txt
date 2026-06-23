@@ -1,0 +1,27 @@
+#标题
+amdkfd: 地址监视接口 watch_id 参数校验缺失导致缓冲区越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户态程序向 amdkfd 驱动的调试接口传入一个极大的 watch_id（大于 INT_MAX 或超出数组范围）时，内核在处理该值时会发生类型转换错误和无效移位，导致 `kfd_dbg_trap_clear_dev_address_watch` 函数中出现缓冲区越界访问（Buffer Overflow），可能引发内核崩溃或内存破坏。
+
+#主要错误日志
+drivers/gpu/drm/amd/amdgpu/../amdkfd/kfd_debug.c:448 kfd_dbg_trap_clear_dev_address_watch() error: buffer overflow 'pdd->watch_points' 4 <= u32max user_rl='0-3,2147483648-u32max' uncapped
+
+#问题根因
+1. **类型转换与符号扩展问题**：`watch_id` 在接口定义中为无符号 32 位整数（u32），但在内部辅助函数 `kfd_dbg_clear_dev_watch_id` 和 `kfd_dbg_owns_dev_watch_id` 中被错误地定义为有符号整数（int）。当用户传入大于 INT_MAX 的值时，该值在内部被视为负数。
+2. **移位操作未定义行为**：原代码使用 `0x1 << watch_id` 进行位检测和清除。当 `watch_id` 被视为负数或过大值时，移位操作属于未定义行为（UB），导致逻辑判断失效。
+3. **边界检查缺失**：函数 `kfd_dbg_owns_dev_watch_id` 原有的检查逻辑 `watch_id < MAX_WATCH_ADDRESSES` 在处理大值（如 u32max）时失效，无法正确拦截非法输入，最终导致对 `pdd->watch_points` 数组的越界访问。
+
+#解决方案
+1. **修正数据类型**：将辅助函数 `kfd_dbg_clear_dev_watch_id` 和 `kfd_dbg_owns_dev_watch_id` 的 `watch_id` 参数类型从 `int` 修改为 `u32`，避免隐式类型转换导致的符号问题。
+2. **使用安全的位操作**：使用内核宏 `BIT(watch_id)` 替代手动移位操作（如 `0x1 << watch_id`），确保移位操作的安全性和可移植性。
+3. **增加显式边界检查**：
+   - 在 `kfd_dbg_trap_clear_dev_address_watch` 函数入口处增加检查：`if (watch_id >= MAX_WATCH_ADDRESSES) return -EINVAL;`。
+   - 在 `kfd_dbg_trap_set_dev_address_watch` 函数获取 watch_id 后增加同样的边界检查，防止非法值进入后续逻辑。
+4. **移除冗余检查**：由于入口处已增加显式边界检查，移除 `kfd_dbg_owns_dev_watch_id` 内部的冗余边界判断，简化逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f62b3b47bf12957e8eae12953e4ca1e6c204051f

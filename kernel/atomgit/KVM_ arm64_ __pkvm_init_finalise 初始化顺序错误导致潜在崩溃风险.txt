@@ -1,0 +1,20 @@
+#标题
+KVM: arm64: __pkvm_init_finalise 初始化顺序错误导致潜在崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 KVM arm64 非易失性 hypervisor (nVHE) 初始化阶段，若 `fix_host_ownership()` 函数被扩展用于操作非空的页表（non-empty page-table），系统将触发崩溃。当前版本因宿主机 stage-2 页表初始为空，该问题表现为潜伏的隐患，暂无明显故障现象，但逻辑上存在内存管理缺陷。
+
+#主要错误日志
+未知
+
+#问题根因
+`fix_host_ownership()` 函数在遍历 hypervisor 的 stage-1 页表以调整宿主机 stage-2 页表时，若需要执行缓存维护操作（CMOs），依赖于 per-CPU 的 hyp fixmap 已经建立。然而，原代码逻辑中 `fix_host_ownership()` 在 `fix_hyp_pgtable_refcnt()` 和 `hyp_create_fixmap()` 之前被调用，导致此时 fixmap 尚不存在，从而引发崩溃风险。
+
+#解决方案
+调整 `__pkvm_init_finalise()` 函数中的调用顺序，确保 `fix_hyp_pgtable_refcnt()` 和 `hyp_create_fixmap()` 先于 `fix_host_ownership()` 执行，从而保证 fixmap 在需要时已经完成初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cf85f385f82adcd451fe57e52c62a6d971095db6

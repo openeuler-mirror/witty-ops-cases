@@ -1,0 +1,27 @@
+#标题
+libbpf链接器因libelf函数未设置errno导致段错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 libbpf 进行 BPF 目标文件链接时，若 ELF 文件解析过程中调用 `elf_begin`、`elf64_getehdr` 等函数失败，程序可能发生段错误崩溃。该问题发生在 `linker_load_obj_file` 和 `bpf_linker__finalize` 等函数的处理流程中。
+
+#主要错误日志
+- libbpf: failed to parse ELF file '%s'
+- libbpf: failed to get ELF header for %s
+- libbpf: failed to get SHSTRTAB section index for %s
+- libbpf: failed to get section #%zu header for %s
+- libbpf: failed to get section #%zu name for %s
+- libbpf: failed to get section #%zu (%s) data from %s
+- libbpf: failed to finalize ELF layout
+- libbpf: failed to write ELF contents
+
+#问题根因
+libelf 库中的部分函数（如 `elf_begin`、`elf64_getehdr` 等）在调用失败时，并不保证会设置 `errno`。原代码逻辑在错误处理分支中直接使用 `err = -errno` 来生成返回错误码，当 `errno` 未被设置或包含陈旧值时，可能导致后续逻辑处理异常甚至引发段错误。
+
+#解决方案
+修改 `tools/lib/bpf/linker.c` 文件，在处理 libelf 相关函数调用失败的分支中，移除对 `errno` 的依赖，统一返回明确的错误码 `-EINVAL`，避免了因 `errno` 不确定性导致的崩溃问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ed8ec0de123ff43a095bcba20ba376053bb693ff

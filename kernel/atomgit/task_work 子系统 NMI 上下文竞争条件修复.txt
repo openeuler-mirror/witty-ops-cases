@@ -1,0 +1,20 @@
+#标题
+task_work 子系统 NMI 上下文竞争条件修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NMI（非屏蔽中断）上下文中调用 `task_work_add` 添加任务回调时，由于 `TWA_NMI_CURRENT` 模式下的标志位设置与 IPI 中断处理函数存在竞争条件，可能导致 `TIF_NOTIFY_RESUME` 标志位设置失败或处理逻辑异常，进而导致注册的 task_work 回调无法被正确调度执行，引发相关功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复前的代码逻辑中，`TWA_NMI_CURRENT` 分支仅调用 `irq_work_queue` 触发 IPI，而 IPI 的中断处理函数 `task_work_set_notify_irq` 试图通过 `test_and_set_tsk_thread_flag` 设置 `TIF_NOTIFY_RESUME` 标志。由于 NMI 可以在任意时刻打断当前线程，若 NMI 处理程序与 IPI 中断处理程序在标志位设置上存在时序竞争，可能导致标志位状态不一致或设置遗漏，无法保证 return-to-user 路径被正确触发。
+
+#解决方案
+修改 `task_work_add` 函数中 `TWA_NMI_CURRENT` 分支的处理逻辑，在排队 IPI 之前显式调用 `set_tsk_thread_flag(current, TIF_NOTIFY_RESUME)` 提前设置标志位。同时，将 IPI 中断处理函数 `task_work_set_notify_irq` 的实现置为空操作（no-op），因为此时标志位已由调用者设置完毕，IPI 仅用于触发 return-to-user 路径的检查，从而消除了竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3dc9e123ab92f52f2c511756fb0783d46d3f20ed

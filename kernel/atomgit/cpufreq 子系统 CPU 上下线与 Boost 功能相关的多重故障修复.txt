@@ -1,0 +1,28 @@
+#标题
+cpufreq 子系统 CPU 上下线与 Boost 功能相关的多重故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. CPU 热插拔后，之前使能的 Boost 状态未能正确保持，导致 Boost 功能状态异常。
+2. CPPC 驱动初始化 policy 时，在 Boost 开启的情况下，`policy->max` 频率被错误地设置为 nominal 频率而非 highest 频率，导致性能受限。
+3. `cpufreq_online()` 代码路径中存在潜在的风险，可能在特定条件下引发空指针解引用。
+
+#主要错误日志
+- `pr_info("%s: CPU%d: Cannot %s BOOST\n", ...)` （源自修复补丁，用于指示 Boost 设置失败的情况）
+
+#问题根因
+1. **Boost 状态同步缺陷**：原有的 `cpufreq_online` 逻辑在初始化阶段对 `policy->boost_enabled` 的设置不够完善，且未在 CPU 上线时根据驱动全局状态正确调用 `set_boost` 回调，导致热插拔后 Boost 标志位与实际硬件状态不一致。
+2. **CPPC 频率初始化逻辑错误**：在 `cppc_cpufreq_cpu_init` 中，计算 `policy->max` 时未考虑 `policy->boost_enabled` 的状态，导致开启 Boost 时最大频率计算错误。
+3. **代码逻辑隐患**：Commit Message 明确指出 "prevent NULL dereference in cpufreq_online()"，暗示原代码路径中存在空指针访问风险。
+4. **冗余初始化**：`acpi-cpufreq` 驱动在 `cpu_init` 中重复设置 Boost，与核心层逻辑冲突。
+
+#解决方案
+1. **重构 Boost 初始化逻辑**：将 `policy->boost_enabled` 的初始化逻辑统一移动到 `cpufreq_online()` 函数的末尾。在此处检查驱动全局 Boost 状态与 Policy 状态的一致性，若不一致则调用 `set_boost` 回调进行同步，并增加返回值检查与错误日志打印。
+2. **修正 CPPC 频率计算**：修改 `cppc_cpufreq.c`，在初始化 `policy->max` 时，根据 `policy->boost_enabled` 判断应使用 `caps->highest_perf` 还是 `caps->nominal_perf` 进行换算，确保开启 Boost 时能正确设置最高频率。
+3. **移除冗余代码**：删除 `acpi-cpufreq.c` 中 `cpu_init` 阶段的 `set_boost` 调用，统一由核心层管理，避免冲突。
+4. **修复空指针风险**：通过调整 `cpufreq_online` 中的逻辑顺序和条件判断，规避了潜在的空指针解引用问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1579902ab708490cfc1f44b609946ad357b91578

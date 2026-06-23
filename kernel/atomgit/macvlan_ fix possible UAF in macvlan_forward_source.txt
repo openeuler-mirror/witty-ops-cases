@@ -1,0 +1,23 @@
+#标题
+macvlan: fix possible UAF in macvlan_forward_source
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 macvlan 设备处理数据包转发过程中，由于 `macvlan_source_entry` 结构体中的 `vlan` 指针未受 RCU 保护，可能出现 Use-After-Free（UAF）现象。当 `entry->vlan` 指向的设备被删除释放后，`macvlan_forward_source` 函数可能仍持有该指针的引用并尝试访问其成员（如 flags），导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`macvlan_source_entry` 结构体中的 `vlan` 指针成员未声明为 `__rcu` 类型，且在代码路径中未使用适当的 RCU 指针操作接口（如 `rcu_dereference`）。这导致在 RCU 读侧临界区（如 `macvlan_forward_source`）读取该指针时，无法保证指针与对象生命周期的同步，若此时 `entry->vlan` 指向的对象在另一个线程中被释放，即触发 UAF。
+
+#解决方案
+将 `macvlan_source_entry` 结构体中的 `vlan` 成员声明修改为 `struct macvlan_dev __rcu *vlan`，并全量替换相关访问方式：
+1. 写入操作（初始化、删除）使用 `RCU_INIT_POINTER` 进行赋值；
+2. 读侧遍历或查找操作（如 `macvlan_fill_info_macaddr`、`macvlan_flush_sources`）使用 `rcu_access_pointer` 进行比较；
+3. 关键的转发路径（`macvlan_forward_source`）中使用 `rcu_dereference` 获取指针，并增加空指针检查，确保引用有效后再进行解引用和转发操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/96a44d40c24df901509b6058b2b92dcd2352b0f2

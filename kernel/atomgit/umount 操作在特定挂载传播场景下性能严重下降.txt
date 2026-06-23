@@ -1,0 +1,22 @@
+#标题
+umount 操作在特定挂载传播场景下性能严重下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `umount` 命令卸载挂载点时，若涉及复杂的挂载传播关系，系统响应极其缓慢，出现明显的性能瓶颈，导致卸载操作长时间无法完成。
+
+#主要错误日志
+未知
+
+#问题根因
+内核函数 `change_mnt_propagation()` 在处理挂载传播属性变更时逻辑存在冗余。无论当前挂载点是否处于 `SHARED` 状态，均会调用 `do_make_slave()`。而在 `do_make_slave()` 函数内部，选择新主挂载点的算法效率低下，需遍历寻找合适的 peer，这在复杂的挂载树结构中导致了不必要的开销。实际上，`do_make_slave()` 仅对 `IS_MNT_SHARED()` 的挂载点才有实际操作意义，对非共享挂载点的无效调用导致了性能下降。
+
+#解决方案
+优化 `change_mnt_propagation()` 和 `do_make_slave()` 的处理逻辑：
+1. 在 `change_mnt_propagation()` 中增加判断，仅当挂载点为 `IS_MNT_SHARED()` 时才调用 `do_make_slave()`，避免不必要的函数调用和状态检查。
+2. 重构 `do_make_slave()`，引入辅助函数 `propagation_source()` 来更高效地选择新的 master，避免低效的遍历查找，并清理了冗余的列表操作代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/18c7e393746533bc67103ffe80d8fdfb52d331d3

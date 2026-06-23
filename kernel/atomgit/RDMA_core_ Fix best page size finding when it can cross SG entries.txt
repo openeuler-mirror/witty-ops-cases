@@ -1,0 +1,25 @@
+#标题
+RDMA/core: Fix best page size finding when it can cross SG entries
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理大块连续内存（如 16GB GPU 内存）的 DMA-BUF 场景下，ib_umem_find_best_pgsz 函数错误地选择了最小的 4KB 页面大小，导致性能严重下降。这是因为在计算最佳页面大小时，函数仅根据 SG 列表的条目边界进行判断，而忽略了这些条目在物理内存上实际上是连续的。例如，一个物理连续的 16GB 内存区被分割成多个 4GB-4KB 大小的 SG 条目，导致系统误判内存不连续，无法使用大页（如 2MB 或 1GB）。
+
+#主要错误日志
+未知
+
+#问题根因
+问题的根本原因在于 `ib_umem_find_best_pgsz` 函数错误地将 SG（Scatter-Gather）条目的边界视为物理内存的不连续点。
+1. SG 条目的长度字段为 32 位，限制了单个条目最大只能表示 4GB - PAGE_SIZE 的大小。因此，即使是物理连续的大块内存（如 16GB），也必须被拆分为多个 SG 条目。
+2. 原有逻辑在遍历 SG 列表时，只要遇到不同的 SG 条目，就将其起始地址视为不连续点，并据此计算页面掩码。这导致算法排除了大页选项，最终选择了最差的 4KB 页面大小。
+3. 实际上，这些 SG 条目的物理地址是首尾相连的（前一个条目的结束地址等于下一个条目的起始地址），物理内存是连续的，应当被视为支持大页映射。
+
+#解决方案
+修改了 `drivers/infiniband/core/umem.c` 中的 `ib_umem_find_best_pgsz` 函数逻辑，以及 `drivers/infiniband/core/verbs.c` 中的块迭代器逻辑：
+1. **优化页面对齐检测逻辑**：不再将 SG 条目边界作为天然的不连续点。在计算 mask 时，先检查当前 SG 条目是否与前一个条目物理连续（通过 `check_add_overflow` 和地址比较）。只有当地址确实不连续时，才更新掩码限制页面大小。
+2. **修正跨 SG 条目处理**：相应地调整了 `__rdma_block_iter_next` 函数，使其能够正确处理跨 SG 条目边界的大页情况，确保迭代器可以跨越物理连续的 SG 条目进行大页映射。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bba15d2396015d583cc408a8b3f968e82de650a9

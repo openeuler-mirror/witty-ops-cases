@@ -1,0 +1,23 @@
+#标题
+xHCI 驱动未正确处理取消的 URB 导致 Set TR Deq 命令失败后引发 Babble 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 xHCI 主控处理取消的 URB 请求时，如果下发 "Set TR Dequeue Pointer" 命令失败，主机控制器（xHC）会错误地继续处理本应被取消的传输描述符（TD），导致设备出现 Babble 错误，引发数据传输异常或设备功能故障。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `xhci_invalidate_cancelled_tds` 函数中，处理取消状态的 TD 时逻辑存在缺陷。当准备下发 "Set TR Deq" 命令清理传输环缓存时，代码未将当前取消的 TD 结构体转换为 no-op TRB（无操作传输请求块）。
+若 "Set TR Deq" 命令执行失败，xHC 硬件缓存中仍保留该 TD 的有效信息，导致主机控制器在端点重启后继续处理已取消的 TD，而不是跳过它，进而引发 Babble 错误等异常行为。
+
+#解决方案
+修改 `drivers/usb/host/xhci-ring.c` 中的 `xhci_invalidate_cancelled_tds` 函数。
+在将 TD 状态标记为 `TD_CLEARING_CACHE` 之前，无条件调用 `td_to_noop()` 函数将该 TD 转换为 no-op TRB。
+此举确保即使 "Set TR Deq" 命令失败，xHC 也只会处理空操作 TRB，避免继续执行已取消的传输任务，从而缓解命令失败带来的副作用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/00ad34cb45dc89643af5f089a6dc66a0a5bdffc0

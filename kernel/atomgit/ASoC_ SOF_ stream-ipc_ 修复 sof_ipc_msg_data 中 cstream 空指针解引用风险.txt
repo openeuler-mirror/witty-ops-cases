@@ -1,0 +1,21 @@
+#标题
+ASoC: SOF: stream-ipc: 修复 sof_ipc_msg_data 中 cstream 空指针解引用风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SOF (Sound Open Firmware) 音频子系统处理流 IPC 消息数据时，若 `sps->stream` 为空，代码会错误地假设 `sps->cstream` 非空并直接访问其成员，导致内核发生 NULL 指针解引用（NULL pointer dereference），可能引发内核崩溃或音频功能异常。
+
+#主要错误日志
+- (新增的错误打印，用于标识此故障场景)
+  %s: No stream opened
+
+#问题根因
+在 `sof_ipc_msg_data` 函数的逻辑中，当 `sps->stream` 为 NULL 时，代码直接进入 else 分支处理压缩流，并在未经检查的情况下访问 `sps->cstream->runtime->private_data`。这种假设 `sps->cstream` 必定非空是不正确的，与 `sof_set_stream_data_offset()` 函数中的安全检查逻辑不一致，从而导致空指针解引用风险。
+
+#解决方案
+在处理 `sps->cstream` 分支前增加空指针检查。具体修改为：将原本的 `else` 分支改为 `else if (sps->cstream)`，只有当 `sps->cstream` 确实存在时才进行后续操作；若两者均为空，则新增一个 `else` 分支，通过 `dev_err` 打印错误日志 "No stream opened" 并返回 `-EINVAL` 错误码，从而防止空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f62e168bb85e6490051d4bcefc0c8f6936ab468d

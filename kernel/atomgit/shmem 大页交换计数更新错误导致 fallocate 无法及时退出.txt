@@ -1,0 +1,20 @@
+#标题
+shmem 大页交换计数更新错误导致 fallocate 无法及时退出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 shmem 大页交换_out_操作时，`shmem_falloc->nr_unswapped` 计数更新不准确。该问题是通过代码审查发现的，可能导致 `fallocate()` 系统调用无法按预期尽快退出，影响系统性能与响应速度。
+
+#主要错误日志
+未知
+
+#问题根因
+在引入 large folio swap out 支持后，`shmem_writepage` 函数中更新 `shmem_falloc->nr_unswapped` 的逻辑仍采用单页累加（`++`），未根据实际写入的大页folio包含的页面数量（nr_pages）进行累加。这导致统计的“拒绝换出的页面数”少于实际值，进而可能导致 `fallocate()` 判断逻辑失效，无法尽早退出。
+
+#解决方案
+修改 `mm/shmem.c` 文件中的 `shmem_writepage` 函数，将 `shmem_falloc->nr_unswapped` 的更新方式从自增操作符 `++` 修改为增加实际页面数 `nr_pages`，确保统计计数准确，从而修复 fallocate 无法及时退出的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5c093a1c3d730668f27ca679009bb9fefdf7aca5

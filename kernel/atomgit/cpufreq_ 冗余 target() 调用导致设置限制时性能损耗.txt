@@ -1,0 +1,22 @@
+#标题
+cpufreq: 冗余 target() 调用导致设置限制时性能损耗
+
+#内核版本
+OLK-6.6
+
+#问题现象
+对于设置了 CPUFREQ_NEED_UPDATE_LIMITS 标志的 cpufreq 驱动，当用户请求的目标频率与当前频率（policy->cur）一致时，即使 policy 的 min/max 限制并未发生实际变化，内核核心层仍会无条件重复调用驱动 target() 回调函数。这导致不必要的函数调用开销和潜在的性能损耗，且驱动内部的策略限制状态被冗余更新。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__cpufreq_driver_target` 函数中，原有逻辑仅判断了目标频率是否等于当前频率以及驱动是否具有 `CPUFREQ_NEED_UPDATE_LIMITS` 标志。如果目标频率未变且驱动具有该标志，内核会跳过频率判断直接调用 target()，初衷是允许驱动更新内部状态。然而，内核未检查 policy->min 和 policy->max 是否真的发生了变化。这导致在 limits 未变的情况下，依然触发了冗余的 target() 调用。
+
+#解决方案
+在 `cpufreq_policy` 结构体中新增 `update_limits` 布尔字段，用于跟踪是否有待处理的策略限制更新。
+1. 在 `cpufreq_set_policy` 中，只有当解析后的 min 或 max 值与当前 policy 中的值不同时，才更新 policy->min/max 并将 `policy->update_limits` 置为 true。
+2. 在 `__cpufreq_driver_target` 中，当目标频率未变时，除了检查 `CPUFREQ_NEED_UPDATE_LIMITS` 标志外，额外检查 `policy->update_limits` 位。仅当 limits 确实发生了变化（update_limits 为 true）时才调用 target()，并在调用后清除该标志。若 limits 未变化，则直接返回，避免冗余调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4dbacdc138da67eb3836b9857d8b662efe80c443

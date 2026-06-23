@@ -1,0 +1,20 @@
+#标题
+xfs: 日志恢复时 ri_total 校验错误导致空值属性挂载失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 XFS 文件系统上设置空值（value_len=0）的用户属性后，卸载并重新挂载文件系统时失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `xlog_recover_attri_commit_pass2` 函数中，对 SET/REPLACE 操作的 `ri_total` 校验逻辑硬编码为 3（期望包含 log item、attr name 和 attr value 三个部分）。然而，`xfs_attri_item_size()` 仅在 `value_len > 0` 时才会发出 value iovec，这意味着当设置空值属性时，实际的 `ri_total` 为 2。由于校验逻辑未覆盖此场景，导致日志恢复时误判为数据损坏。
+
+#解决方案
+修改 `xfs_attri_commit_pass2` 中的校验逻辑，不再硬编码 `ri_total` 为 3，而是根据 `alfi_value_len` 动态计算期望的 iovec 数量。将判断条件修改为 `item->ri_total != 2 + !!attri_formatp->alfi_value_len`，以兼容空值属性的情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4e65e82521bdb08777ee0a8c602b65980a01c2f6

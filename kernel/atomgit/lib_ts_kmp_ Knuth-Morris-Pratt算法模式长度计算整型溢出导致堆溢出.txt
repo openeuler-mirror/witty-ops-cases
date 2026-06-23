@@ -1,0 +1,25 @@
+#标题
+lib/ts_kmp: Knuth-Morris-Pratt算法模式长度计算整型溢出导致堆溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Netfilter 的 xt_string 模块（通过用户空间配置）触发 ts_kmp 文本搜索算法时，若传入特定的模式串长度，内核会发生整型溢出。该溢出导致内存分配尺寸小于预期，后续的模式串拷贝操作会越界写入，引发堆溢出。这是一个可从用户空间触发的安全漏洞。
+
+#主要错误日志
+未知
+
+#问题根因
+ts_kmp 算法在初始化时，将前缀表（prefix_tbl）和模式串存储在单一的内存分配中。计算分配大小的公式为 `sizeof(*kmp) + len + len * sizeof(unsigned int)`。
+1. 当 `len` 数值极大时，`len * sizeof(unsigned int)` 可能发生整型溢出（wrap around），导致计算出的总长度变小。
+2. 随后的内存分配基于这个错误的小尺寸进行，导致分配的内存块过小。
+3. 之后执行模式串拷贝时，写入的数据超过了实际分配的内存边界，造成堆溢出。
+
+#解决方案
+在计算分配大小前增加校验逻辑：
+1. 拒绝零长度的模式串，防止 `kmp_find()` 越界读取。
+2. 使用内核溢出辅助函数（`check_mul_overflow` 和 `check_add_overflow`）来检测乘法和加法运算中的整型溢出。如果检测到溢出或参数非法，直接返回 `-EINVAL` 错误，避免进行不当的内存分配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d682bbf2f53d6e99672fa0ed82eb304ca9e8b87d

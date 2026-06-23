@@ -1,0 +1,26 @@
+#标题
+Bluetooth: hci: 修复 hci_read_supported_codecs 中的空指针引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在初始化蓝牙设备过程中，当调用 `hci_read_supported_codecs` 函数处理 `HCI_OP_READ_LOCAL_CODECS` 操作码时，触发内核空指针引用（null-ptr-deref），导致内核崩溃。该问题发生在 `kworker` 进程执行 `hci_power_on` 工作队列时。
+
+#主要错误日志
+KASAN: null-ptr-deref in range [0x0000000000000070-0x0000000000000077]
+RIP: 0010:hci_read_supported_codecs+0xb9/0x870 net/bluetooth/hci_codec.c:138
+Call Trace:
+ hci_read_local_codecs_sync net/bluetooth/hci_sync.c:4546 [inline]
+ hci_init_stage_sync net/bluetooth/hci_sync.c:3441 [inline]
+ hci_dev_do_open net/bluetooth/hci_core.c:483 [inline]
+ hci_power_on+0x11e/0x560 net/bluetooth/hci_core.c:1015
+
+#问题根因
+函数 `__hci_cmd_sync_sk()` 在处理未知操作码（opcode）时逻辑存在缺陷。对于不在 `hci_cc` 表中的未知操作码，`hci_cmd_complete_evt()` 会假设状态为 `skb->data[0]`，导致 `__hci_cmd_sync_sk()` 返回 NULL。调用者 `hci_read_supported_codecs` 未对 NULL 返回值进行检查，直接尝试读取偏移量为 0x70 的内存（即 `skb->data[0]` 的隐式访问），从而触发了空指针引用。
+
+#解决方案
+在 `__hci_cmd_sync_sk()` 函数中增加对 `skb` 为 NULL 的检查，若为 NULL 则返回 `ERR_PTR(-ENODATA)` 而非 NULL。同时，在 `__hci_cmd_sync_status_sk()` 函数中处理该返回值，当检测到 `skb == ERR_PTR(-ENODATA)` 时直接返回 0，避免后续对空指针的解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1b39e30a56e3accffcd97bcc08fc8dcec2ec06e6

@@ -1,0 +1,21 @@
+#标题
+libbpf 处理非标准 ELF 文件时因错误处理不当导致段错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 bpftool 尝试对非标准 ELF 文件（如源代码文件误当作目标文件）进行链接操作时，程序发生段错误并崩溃。例如执行命令 `bpftool gen object output.o sample_ret0.bpf.c` 时，进程异常终止。
+
+#主要错误日志
+- libbpf: failed to get ELF header for sample_ret0.bpf.c: invalid `Elf' handle
+- zsh: segmentation fault (core dumped)  bpftool gen object output.o sample_ret0.bpf.c
+
+#问题根因
+libelf 库函数在失败时不会设置标准的 `errno`，而是使用内部的 `_elf_errno`。libbpf 代码在 `linker_load_obj_file()` 等函数中错误地使用了 `-errno` 来返回错误码。当 libelf 函数失败时，`errno` 未被设置（可能为 0 或保留旧值），导致函数返回 0（即无错误）。这使得后续的链接流程错误地继续执行，访问无效的 ELF 句柄，最终触发段错误。
+
+#解决方案
+修改 `tools/lib/bpf/linker.c` 中的相关错误处理逻辑，当 libelf 相关函数（如 `elf_begin`、`elf64_getehdr`、`elf_getshdrstrndx`、`elf_getdata`、`elf_update` 等）调用失败时，不再返回 `-errno`，而是统一返回 `-EINVAL`，确保错误状态能被正确传递并终止后续处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e0b0602ab55484de0a93e2c9d6f9407a7e44d96

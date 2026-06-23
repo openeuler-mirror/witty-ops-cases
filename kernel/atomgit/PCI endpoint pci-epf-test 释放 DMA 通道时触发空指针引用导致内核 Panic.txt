@@ -1,0 +1,29 @@
+#标题
+PCI endpoint pci-epf-test 释放 DMA 通道时触发空指针引用导致内核 Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PCI endpoint 功能测试驱动（pci-epf-test）进行去初始化操作时，若 DMA 通道指针为 NULL，释放通道过程中会触发 NULL 指针引用，导致内核 Panic。Call trace 显示崩溃发生在 `dma_release_channel` 调用链路中，具体由 `pci_epf_test_epc_deinit` 触发。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address 0000000000000050
+Call trace:
+ dma_release_channel+0x2c/0x120 (P)
+ pci_epf_test_epc_deinit+0x94/0xc0 [pci_epf_test]
+ pci_epc_deinit_notify+0x74/0xc0
+ tegra_pcie_ep_pex_rst_irq+0x250/0x5d8
+ irq_thread_fn+0x34/0xb8
+ irq_thread+0x18c/0x2e8
+ kthread+0x14c/0x210
+ ret_from_fork+0x10/0x20
+
+#问题根因
+`struct pci_epf_test` 结构体中的 `dma_chan_tx` 和 `dma_chan_rx` 字段在 EPF 初始化之后仍可能为 NULL。在 `pci_epf_test_clean_dma_chan()` 函数中，代码直接调用 `dma_release_channel()` 释放这些通道，未对指针进行非空检查。当指针为 NULL 时，`dma_release_channel` 内部访问成员导致 NULL 指针引用。
+
+#解决方案
+在 `pci_epf_test_clean_dma_chan()` 函数中增加对 `dma_chan_tx` 和 `dma_chan_rx` 指针的非空检查。仅当指针非 NULL 时才调用 `dma_release_channel()` 进行释放，并在释放后将指针置为 NULL，防止重复释放或空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/87830f2fc5b1039c87690d8f79c50b9f0ddaa8ef

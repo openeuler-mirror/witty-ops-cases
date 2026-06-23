@@ -1,0 +1,26 @@
+#标题
+ubus 与 ubfi 子系统符号导出与初始化流程修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 内核编译时出现不必要的编译警告（如缺少函数原型警告、未使用的静态函数警告等）。
+2. 在特定配置或构建环境下，`ub` 目录相关代码可能被错误编译，导致潜在的不稳定性。
+3. `ubc_list` 链表可能存在初始化时序问题，影响 ubus 总线控制器的正常初始化。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **符号作用域错误**：大量本应仅限本文件使用的函数（如 `ub_elr`, `ub_assign_resource` 等）未定义为 `static`，且缺少必要的头文件声明，导致编译器产生警告。
+2. **链表初始化缺陷**：`ubc_list` 定义为全局变量但未使用 `LIST_HEAD` 宏进行初始化，而是在 `handle_ubc_table` 函数中通过 `INIT_LIST_HEAD` 初始化。这种做法不仅多余，而且在某些异常路径下可能导致链表未正确初始化。
+3. **Makefile 逻辑缺陷**：`drivers/Makefile` 中 `obj-y += ub/` 的写法强制编译 ub 目录，未正确依赖 `CONFIG_UB` 配置项。
+
+#解决方案
+1. **修复符号作用域**：将 `reset.c`, `resource.c`, `ras.c`, `ubus_config.c`, `ubus_driver.c`, `ubus_entity.c` 等文件中仅内部使用的函数添加 `static` 关键字；在 `ioctl.c`, `reset.c`, `route.c` 中补充缺失的头文件（如 `ioctl.h`, `reset.h`, `route.h`）以解决隐式声明问题。
+2. **修复链表初始化**：在 `drivers/ub/ubfi/ubc.c` 中，将 `struct list_head ubc_list;` 改为 `LIST_HEAD(ubc_list);`，并移除 `handle_ubc_table` 函数中的 `INIT_LIST_HEAD(&ubc_list);` 调用，确保链表在使用前已正确初始化。
+3. **修复编译依赖**：修改 `drivers/Makefile`，将 `obj-y += ub/` 修改为 `obj-$(CONFIG_UB) += ub/`，确保仅当开启 `CONFIG_UB` 时才编译相关代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/72220f090cf216491c25f4fe87c974ea97eb4e19

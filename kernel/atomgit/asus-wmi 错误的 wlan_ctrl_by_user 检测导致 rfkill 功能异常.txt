@@ -1,0 +1,20 @@
+#标题
+asus-wmi 错误的 wlan_ctrl_by_user 检测导致 rfkill 功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在部分返回 0x0005000? 状态值的华硕笔记本型号上，内核错误地将 `wlan_ctrl_by_user` 标志位置位，导致无线网卡 rfkill 功能出现异常（如无法正确控制 WLAN 开关或状态不同步）。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在检测 `wlan_ctrl_by_user` 标志时逻辑判断错误。根据设计，该标志应仅在 WMI 方法返回 `0x0003000?`（表示无硬件 GPIO，需用户态应用控制）时置位。但原代码使用 `if (result & (ASUS_WMI_DSTS_PRESENCE_BIT | ASUS_WMI_DSTS_USER_BIT))` 进行判断，导致返回 `0x0005000?`（表示有硬件 GPIO）的机型也错误地满足条件并设置了该标志，从而触发了 rfkill 相关问题。
+
+#解决方案
+修改 `drivers/platform/x86/asus-wmi.c` 中的判断条件，将按位与操作的结果与预期的位组合进行精确匹配比较。修改后的逻辑确保只有当结果同时包含 `ASUS_WMI_DSTS_PRESENCE_BIT` 和 `ASUS_WMI_DSTS_USER_BIT`（即返回值为 `0x0003000?`）时，才将 `wlan_ctrl_by_user` 置为 1。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6cdae383f749db8657866b1b3a33ef955ed21e2b

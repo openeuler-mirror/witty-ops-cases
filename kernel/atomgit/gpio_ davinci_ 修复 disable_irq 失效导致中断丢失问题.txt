@@ -1,0 +1,20 @@
+#标题
+gpio: davinci: 修复 disable_irq 失效导致中断丢失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TI AM69 等平台上，调用 disable_irq() 后到 enable_irq() 期间发生的中断无法被正确记录，导致这些中断被丢失（missed）。disable_irq() 功能未按预期工作，无法正确处理此时间窗口内的边沿触发中断。
+
+#主要错误日志
+未知
+
+#问题根因
+GPIO 驱动的 `irq_chip` 结构体错误地实现了 `.irq_enable` 和 `.irq_disable` 回调函数，而未实现 `.irq_mask` 和 `.irq_unmask`。内核中断子系统在处理 `disable_irq()` 时，若只提供 enable/disable 接口，无法支持“惰性禁用（lazy disable）”机制下的中断状态跟踪，导致在中断被禁用期间发生的边沿触发事件丢失。
+
+#解决方案
+将 `gpio_irq_disable` 函数重命名为 `gpio_irq_mask`，将 `gpio_irq_enable` 重命名为 `gpio_irq_unmask`，并将 `irq_chip` 结构体中的成员从 `.irq_enable` 和 `.irq_disable` 更改为对应的 `.irq_unmask` 和 `.irq_mask`。此举确保内核中断核心代码能正确跟踪中断屏蔽状态，解决 disable_irq 期间中断丢失的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22b33635b887e624e01717e21ceda68f09b486a7

@@ -1,0 +1,28 @@
+#标题
+RDMA/hns: Fix hung task when drain qp failed
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 RDMA HNS 驱动的 QP（Queue Pair）销毁或资源释放流程中，如果 drain qp（排空队列对）操作失败，系统会出现 hung task（任务挂起）现象。具体表现为进程在等待 completion 完成时陷入不可中断睡眠，导致进程无法退出或相关资源无法释放。
+
+#主要错误日志
+- "Drain qp timeout!\n"
+- "failed to modify qp during drain rq, ret = %d.\n"
+- "failed to post recv for drain rq, ret = %d.\n"
+- "failed to modify qp during drain sq, ret = %d.\n"
+- "failed to post send for drain sq, ret = %d.\n"
+
+#问题根因
+当设备处于 RST_DOWN 等异常状态时，硬件无法正常处理新的 Work Request (WR)，导致 drain SQ/RQ 的 post send/recv 操作失败。原有的处理逻辑未针对此类硬件异常状态进行特殊处理，导致流程继续等待永远无法完成的 Completion Queue Entry (CQE)，从而引发 hung task。
+
+#解决方案
+1. 新增 `drain_sq` 和 `drain_rq` 回调函数，针对设备异常状态实现特殊的 drain 逻辑。
+2. 当检测到设备处于 `HNS_ROCE_DEVICE_STATE_RST_DOWN` 状态时，不再尝试向硬件 post WR，而是通过 `hns_roce_push_drain_wr` 直接向软件队列中压入一个 drain wr，模拟 post 操作。
+3. 增加 `handle_drain_completion` 函数处理完成等待逻辑，针对 DIRECT、SOFTIRQ、WORKQUEUE 等不同的轮询模式分别处理，并设置 30 秒超时 (`DRAIN_QP_TMO`)，防止无限期等待。
+4. 修改 `hns_roce_v2_req_notify_cq`，在设备复位下状态时，通过 `left_sw_wc` 检查软件队列中是否有残留未处理的 WC，确保正确报告 Missed Events，避免 drain 流程遗漏。
+5. 创建 irq_workqueue 时增加 `WQ_MEM_RECLAIM` 标志，确保在内存回收场景下工作队列能正常执行，避免因内存不足导致 drain 流程卡死。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca4c3682e7411cdd8eec6d8edf5df5bd8dc8b387

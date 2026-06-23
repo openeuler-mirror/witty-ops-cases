@@ -1,0 +1,25 @@
+#标题
+userswap 模块 mremap 非对小长度导致的空指针解引用故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户空间调用 mremap 系统调用并传入较小的、非页对齐的长度参数（len）时，内核在处理 userswap 功能逻辑时触发 NULL pointer dereference（空指针解引用），导致内核 panic 或 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `uswap_mremap` 函数中，代码原逻辑先对 `old_len` 和 `new_len` 进行了 `PAGE_ALIGN` 处理，随后使用处理后的长度进行边界检查，但在后续操作中可能继续使用原始的 `len` 参数或基于对齐后的长度计算导致逻辑错误。具体根因在于：
+1. 当传入的 `len` 较小（如 1 字节）时，`PAGE_ALIGN` 后长度变为页大小（如 4096），原本的长度检查逻辑 `!new_len` 无法捕获这种微小输入的异常。
+2. 代码逻辑中对 `len` 的校验不严谨，导致后续代码路径中访问了非法地址，引发空指针解引用。
+
+#解决方案
+修正 `uswap_mremap` 函数的参数校验逻辑，移除对 `old_len` 和 `new_len` 的提前 `PAGE_ALIGN` 操作，直接对原始参数 `len` 进行严格校验：
+1. 增加 `offset_in_page(new_addr)` 的校验，确保新地址页对齐。
+2. 修改长度校验条件为 `old_len != new_len || !old_len || old_len % PAGE_SIZE`，确保长度不为 0、新旧长度一致且必须页对齐，防止微小非对齐长度进入后续逻辑。
+3. 统一使用原始参数 `len` 替代对齐后的 `old_len`/`new_len` 进行地址边界重叠检查，防止因变量值不一致导致的逻辑漏洞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6420ca3bec08790a743498df5d5bdaa1f7f685a0

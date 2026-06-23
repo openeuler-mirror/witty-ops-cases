@@ -1,0 +1,22 @@
+#标题
+EDAC/x38: 修复 x38_probe1() 中的资源泄露问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 x38 内存控制器驱动初始化过程中，若 `edac_mc_alloc()` 分配内存失败，此前代码直接返回错误码，导致之前通过 `ioremap` 映射的 I/O 内存窗口（window）未被解除映射，造成内存资源泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `x38_probe1` 函数中，错误处理路径不完整。函数开始时调用 `ioremap` 进行了资源映射，但在后续 `edac_mc_alloc()` 失败的分支中，直接返回了 `-ENOMEM`，跳过了 `iounmap(window)` 的清理步骤，导致映射的内存区域未被正确释放。
+
+#解决方案
+修改 `x38_probe1` 函数的错误处理逻辑：
+1. 在 `edac_mc_alloc()` 失败时，不再直接返回，而是跳转至统一的错误处理标签 `unmap`。
+2. 调整错误处理代码块（fail/unmap 标签）的顺序，确保先调用 `edac_mc_free` 释放 mci 结构体（若存在），再执行 `unmap` 标签下的 `iounmap(window)` 解除映射，形成标准的资源释放回退模式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/98578ea72e836129388d684d25d1d8745e0f6ab6

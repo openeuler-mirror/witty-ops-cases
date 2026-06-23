@@ -1,0 +1,45 @@
+#标题
+sun8i-ce-cipher 错误处理路径中 DMA 内存释放逻辑缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sun8i-ce 加密引擎驱动处理请求失败时的错误路径中，触发 DMA-API 校验警告。系统检测到驱动程序尝试释放未分配或无效的 DMA 内存地址，导致内核抛出 WARNING 并打印调用栈跟踪。具体表现为：
+1. 当 `dma_map_sg()` 对 `areq->dst` 映射失败时，驱动错误地尝试取消映射（unmap）并未成功分配的 DMA 缓冲区。
+2. 当 `dma_map_single()` 对 IV（初始化向量）映射失败时，驱动在清理路径中尝试释放一个无效的 DMA 内存地址。
+
+#主要错误日志
+------------[ cut here ]------------
+DMA-API: sun8i-ce 1904000.crypto: device driver tries to free an invalid DMA memory address
+WARNING: CPU: 2 PID: 69 at kernel/dma/debug.c:968 check_unmap+0x123c/0x1b90
+Modules linked in: skcipher_example(O+)
+CPU: 2 UID: 0 PID: 69 Comm: 1904000.crypto- Tainted: G           O        6.15.0-rc3+ #24 PREEMPT
+Tainted: [O]=OOT_MODULE
+Hardware name: OrangePi Zero2 (DT)
+pc : check_unmap+0x123c/0x1b90
+lr : check_unmap+0x123c/0x1b90
+...
+Call trace:
+ check_unmap+0x123c/0x1b90 (P)
+ debug_dma_unmap_page+0xac/0xc0
+ dma_unmap_page_attrs+0x1f4/0x5fc
+ sun8i_ce_cipher_do_one+0x1bd4/0x1f40
+ crypto_pump_work+0x334/0x6e0
+ kthread_worker_fn+0x21c/0x438
+ kthread+0x374/0x664
+ ret_from_fork+0x10/0x20
+---[ end trace 0000000000000000 ]---
+
+#问题根因
+驱动程序 `sun8i-ce-cipher.c` 中的 `sun8i_ce_cipher_prepare` 函数在处理错误退出路径时存在逻辑缺陷：
+1. **SG（散列表）清理缺陷**：在 `theend_sgs` 标签处的错误处理中，代码无条件调用 `dma_unmap_sg` 释放 `areq->dst`，未检查之前的 `dma_map_sg` 映射是否成功。若映射失败，后续的 unmap 操作将针对无效的 DMA 地址。
+2. **IV 清理缺陷**：在 `theend_iv` 标签处，代码仅检查了 `rctx->addr_iv` 是否为真，但映射失败时该值可能不为零（例如返回错误码或特定错误地址）。直接调用 `dma_unmap_single` 会触发 DMA-API 的一致性检查警告，提示尝试释放无效地址。
+
+#解决方案
+修复错误处理路径中的条件判断逻辑，确保仅对成功映射的内存执行取消映射操作：
+1. 对于 `areq->dst` 的处理，在调用 `dma_unmap_sg` 前增加判断，仅当 `nr_sgd > 0`（即映射成功）时才执行 unmap 操作。
+2. 对于 IV 的处理，将 `if (rctx->addr_iv)` 条件修改为 `if (!dma_mapping_error(ce->dev, rctx->addr_iv))`，确保只有在 DMA 映射有效（无映射错误）的情况下才执行 `dma_unmap_single`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/53b4eda5c8ccb7db06b205aba4da5f783f9aed0f

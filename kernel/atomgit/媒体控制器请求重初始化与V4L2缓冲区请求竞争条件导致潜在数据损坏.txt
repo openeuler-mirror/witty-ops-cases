@@ -1,0 +1,21 @@
+#标题
+媒体控制器请求重初始化与V4L2缓冲区请求竞争条件导致潜在数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下，调用 `MEDIA_REQUEST_IOC_REINIT` ioctl 进行请求重初始化，或调用 `VIDIOC_REQBUFS` 时，可能与其他正在进行的流操作或请求排队操作发生竞争。若竞争发生，可能导致内核状态不一致，进而引发不可预见的系统行为或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `media_request_ioctl_reinit` 函数中，执行请求重初始化（清理）操作时未持有 `mdev->req_queue_mutex` 互斥锁。这导致该操作未与 `VIDIOC_STREAMON` 或 `VIDIOC_STREAMOFF` 等流操作进行正确的序列化同步。同时，在 `v4l2-ioctl.c` 中，`VIDIOC_REQBUFS` 命令也会修改队列状态，但未被包含在该互斥锁的保护范围内。这种锁保护的缺失导致了竞争条件。
+
+#解决方案
+1. 在 `drivers/media/mc/mc-request.c` 的 `media_request_ioctl_reinit` 函数入口处添加 `mutex_lock(&mdev->req_queue_mutex)`，并在函数返回前的所有退出路径上添加相应的 `mutex_unlock`，确保重初始化过程与请求队列操作互斥。
+2. 在 `drivers/media/v4l2-core/v4l2-ioctl.c` 的 `__video_do_ioctl` 函数中，将 `VIDIOC_REQBUFS` 命令加入需要持有 `req_queue_mutex` 的条件判断中，确保其与流操作和请求排队操作进行序列化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0cdbfabe6c6b8edf6d2f9260ed9f7fe21588b72c

@@ -1,0 +1,20 @@
+#标题
+md/raid1: reshape 释放后使用栈内存导致 UAF 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 RAID1 reshape 操作时，由于 `conf->r1bio_pool` 结构体指向了栈上的局部变量 `newpool`，函数 `raid1_reshape` 返回后栈内存被释放并回收。后续若有代码路径访问 `conf->r1bio_pool`（如访问其等待队列），将触发“释放后使用”错误，可能导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `raid1_reshape` 函数中，代码逻辑错误地将局部栈变量 `newpool` 赋值给了 `conf->r1bio_pool`（`conf->r1bio_pool = newpool;`）。当函数返回后，该栈内存失效，导致全局配置引用了无效的栈地址，形成栈内存释放后使用的隐患。同时，新赋值的 pool 未正确初始化其等待队列头 `wait`。
+
+#解决方案
+在将 `newpool` 赋值给 `conf->r1bio_pool` 后，立即调用 `init_waitqueue_head(&conf->r1bio_pool.wait)` 初始化等待队列。虽然此补丁主要解决了 wait 队列未初始化的问题，但该修复上下文关联了“Fix stack memory use after return”的主题，确保了 pool 结构的成员正确初始化以避免后续访问异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/072cc25292b758d8caa4f19389ad990960aee375

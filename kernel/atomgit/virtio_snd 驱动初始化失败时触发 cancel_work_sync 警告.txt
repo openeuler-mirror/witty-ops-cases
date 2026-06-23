@@ -1,0 +1,27 @@
+#标题
+virtio_snd 驱动初始化失败时触发 cancel_work_sync 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动或加载 virtio_snd 设备时，若驱动探测过程中遇到错误路径，内核触发 WARNING 并打印调用栈。具体表现为在 `virtsnd_probe` 失败后的清理流程中，调用 `cancel_work_sync` 时检测到 `work_struct` 未初始化。
+
+#主要错误日志
+[    8.709131][  T221] WARNING: CPU: 2 PID: 221 at kernel/workqueue.c:4182
+[    8.713282][  T221] Call trace:
+[    8.713365][  T221]  __flush_work+0x8d0/0x914
+[    8.713468][  T221]  __cancel_work_sync+0xac/0xfc
+[    8.713570][  T221]  cancel_work_sync+0x24/0x34
+[    8.713667][  T221]  virtsnd_remove+0xa8/0xf8 [virtio_snd]
+[    8.713868][  T221]  virtsnd_probe+0x48c/0x664 [virtio_snd]
+
+#问题根因
+在 `virtsnd_probe` 流程中，调用 `virtsnd_pcm_parse_cfg` 分配了 `snd->substreams` 数组，但在后续的 `virtsnd_ctl_query_info` 或 info 分配失败时，代码进入错误处理路径。此时 `snd->substreams` 数组已分配但其中的 `elapsed_period` work_struct 尚未初始化（原逻辑中初始化在分配之后进行）。
+当错误路径回溯触发 `virtsnd_remove` 时，该函数遍历 `substreams` 数组并对未初始化的 `elapsed_period` 调用 `cancel_work_sync`，导致内核检测到工作队列结构体未初始化并打印警告。
+
+#解决方案
+将 `substreams` 结构体中关键字段（包括 `elapsed_period` work_struct、锁、等待队列等）的初始化操作提前至内存分配之后。通过在分配 `snd->substreams` 后立即执行初始化，确保后续任何错误路径在调用清理函数时，结构体已处于有效状态，避免对未初始化数据的非法操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8941e193cb01ee03f5d7d50b2cc40a6b210e9504

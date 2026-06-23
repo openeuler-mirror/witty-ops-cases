@@ -1,0 +1,21 @@
+#标题
+reserved-memory: 使用错误 cells 数解析 alignment 属性导致内存初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在启动阶段解析设备树（Device Tree）中动态保留内存节点时，错误地使用 `#address-cells` 的数量去解析 `alignment` 属性，导致属性长度校验失败。系统打印 "invalid alignment property" 错误日志，相关保留内存区域初始化失败并返回 -EINVAL，可能导致依赖该保留内存的驱动或功能无法正常工作。
+
+#主要错误日志
+[    0.000000] invalid alignment property in 'node_name' node.
+（注：'node_name' 为具体节点名称，视实际设备树配置而定）
+
+#问题根因
+根据设备树规范，属性 `alignment` 的大小应基于父节点的 `#size-cells` 属性来定义。但在函数 `__reserved_mem_alloc_size()` 中，代码错误地使用了变量 `dt_root_addr_cells`（对应 `#address-cells`）来校验属性长度和解析数值，而没有使用正确的 `dt_root_size_cells`（对应 `#size-cells`），导致解析逻辑与规范不符，触发校验错误。
+
+#解决方案
+修改 `drivers/of/of_reserved_mem.c` 文件中的 `__reserved_mem_alloc_size` 函数，将校验 `alignment` 属性长度及读取属性的依据从 `dt_root_addr_cells` 修正为 `dt_root_size_cells`，确保与设备树规范一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5977121d3d1f50b084ccdaad1bb3b7e03d381306

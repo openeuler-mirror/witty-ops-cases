@@ -1,0 +1,20 @@
+#标题
+mlx5网卡bridge link show命令执行失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `bridge link show` 命令查询网桥链路信息时，若系统中存在不具备 `eswitch_manager` 能力的 mlx5 设备，命令会直接报错返回失败，而不是跳过该设备继续显示其他有效设备的信息。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `mlx5_eswitch_get_vepa` 在设备缺乏 `eswitch_manager` 能力时会返回 `-EPERM`。`mlx5e_bridge_getlink` 函数（实现 `ndo_bridge_getlink` 接口）直接将该错误码向上返回，导致用户态 `bridge link show` 命令接收到操作权限不允许的错误而中止，无法正确处理不具备该能力的设备。
+
+#解决方案
+修改 `drivers/net/ethernet/mellanox/mlx5/core/en_main.c` 中的 `mlx5e_bridge_getlink` 函数。当 `mlx5_eswitch_get_vepa` 调用失败时，将返回值由传递原错误码（如 `-EPERM`）修改为返回 `-EOPNOTSUPP`（操作不支持）。这使得 `bridge link show` 命令能够识别该设备不支持此操作，从而跳过该设备继续处理其他设备，避免命令整体失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/de542bbb783d9e0317f399181057206bc240d40a

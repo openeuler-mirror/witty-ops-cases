@@ -1,0 +1,22 @@
+#标题
+cpufreq: governor: 修复 dbs_update 中负数 idle_time 处理逻辑缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在关闭 NOHZ 的情况下，若 CPU 处于 100% 繁忙状态，cpufreq governor 在计算负载时可能出现异常。由于 `idle_time` 计算结果可能为负数，导致后续负载计算逻辑判断错误，影响 CPU 频率调整策略的准确性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dbs_update` 函数中，当 NOHZ 关闭时，`idle_time` 通过 jiffies 时间差减去 CPU 统计中的 "busy time" 计算得出。当 CPU 处于 100% 繁忙状态时，理论上时间差与 busy time 应相等，但实践中可能因不同 CPU 更新 jiffies_64 和 CPU 统计信息而产生微小差异，导致 `cur_idle_time` 小于 `j_cdbs->prev_cpu_idle`，进而使 `idle_time` 变为负数。原代码逻辑未正确处理该负值情况，导致负载计算分支判断失误。
+
+#解决方案
+修改 `drivers/cpufreq/cpufreq_governor.c` 中的 `dbs_update` 函数：
+1.  在计算 `idle_time` 时，增加对 `cur_idle_time` 和 `j_cdbs->prev_cpu_idle` 大小的判断。若 `cur_idle_time` 小于等于前一次记录的值，直接将 `idle_time` 置为 0，避免产生负数。
+2.  移除后续代码中对 `idle_time` 的强制类型转换 `(int)`，简化负载计算逻辑，确保在 `idle_time` 为 0 或正常正值时负载计算正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dabd2f7c9c1d6b9dad214ea61407781e0439d85d

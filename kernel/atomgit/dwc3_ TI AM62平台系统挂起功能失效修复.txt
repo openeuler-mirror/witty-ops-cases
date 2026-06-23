@@ -1,0 +1,33 @@
+#标题
+dwc3: TI AM62平台系统挂起功能失效修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TI AM62 平台上，系统挂起操作无法正常完成。具体表现为：
+1. 在 Device/OTG 模式下，若未加载或启动 gadget 驱动，系统挂起失败。
+2. 在 Host 模式下，首次系统挂起可能成功，但在系统恢复后，再次进行系统挂起时失败。
+该问题由提交 6d735722063a 引入，导致了系统电源管理流程异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根因是提交 6d735722063a ("usb: dwc3: core: Prevent phy suspend during init") 修改了 PHY 挂起位（DWC3_GUSB3PIPECTL_SUSPHY 和 DWC3_GUSB2PHYCFG_SUSPHY）的设置逻辑。
+在 AM62 平台上，这两个 SUSPHY 位必须被设置才能保证系统挂起/恢复流程正确工作。
+该提交导致：
+1. 对于 Device/OTG 模式，如果 gadget 驱动未加载启动，SUSPHY 位未被设置。
+2. 对于 Host 模式，SUSPHY 位在首次挂起前被设置，但在系统恢复的核心重初始化过程中被清除，且后续未重新设置。
+这导致在系统挂起时缺乏必要的 PHY 状态支持，从而引发挂起失败。
+
+#解决方案
+在驱动私有数据结构 `struct dwc3` 中新增 `susphy_state` 成员变量，用于记录挂起前的 SUSPHY 状态。
+修改 `dwc3_suspend_common` 函数：
+1. 在挂起流程开始时，保存当前 SUSPHY 位的状态。
+2. 若为非自动挂起（系统挂起），检查当前 SUSPHY 状态，如果未设置，则强制调用 `dwc3_enable_susphy(dwc, true)` 设置该位，以满足 AM62 平台的硬件依赖。
+修改 `dwc3_resume_common` 函数：
+1. 在恢复流程中，若为非自动恢复（系统恢复），将 SUSPHY 位恢复到挂起前保存的 `susphy_state` 状态，确保状态一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/16544fd07a93945fbbbfeb359cc4e8bfc6793c8c

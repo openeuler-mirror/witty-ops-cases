@@ -1,0 +1,22 @@
+#标题
+atm: /proc/net/atm/lec 接口存在引用计数不平衡导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+读取 /proc/net/atm/lec 文件时，因 dev_put() 被错误调用且无配对的 dev_hold()，导致网络设备引用计数失衡，最终引发 Use-After-Free (UAF) 漏洞或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `lec_itf_walk` 函数中，当 `dev` 存在但 `lec_priv_walk` 返回 NULL 时，代码错误地调用了 `dev_put(dev)`。由于在 `lec_seq_start` 阶段并未调用 `dev_hold()` 增加引用计数，该操作导致引用计数错误减少。此外，对 `dev_lec[]` 数组的并发访问缺乏锁保护，导致在遍历过程中设备状态可能发生改变。
+
+#解决方案
+1. 移除 `lec_itf_walk` 中多余的 `dev_put(dev)` 调用，修复引用计数不平衡问题。
+2. 在 `lec_seq_start` 中获取 `lec_mutex` 互斥锁，并在 `lec_seq_stop` 中释放，以防止 `dev_lec[]` 数组在遍历过程中被并发修改。
+3. 在 `lec_seq_stop` 中将 `state->dev` 置为 NULL，配合锁机制保证状态一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bbbcfb0c0b0e8c39e8da0a31f94cd1c39890d3e2

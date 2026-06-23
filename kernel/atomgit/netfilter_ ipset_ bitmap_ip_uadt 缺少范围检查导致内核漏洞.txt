@@ -1,0 +1,25 @@
+#标题
+netfilter: ipset: bitmap_ip_uadt 缺少范围检查导致内核漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `bitmap_ip` 类型的 ipset 进行添加操作（UAPT）时，若传入 `IPSET_ATTR_CIDR` 参数而未传入 `IPSET_ATTR_IP_TO`，代码逻辑会对 `ip` 和 `ip_to` 进行交换处理。由于原代码在交换路径上提前移除了对 `ip` 的下限检查，且后续统一检查遗漏了 `ip < map->first_ip` 的判断，导致特定的参数组合可以绕过边界检查，进而触发内核漏洞（syzbot 报告）。
+
+#主要错误日志
+未知
+
+#问题根因
+当 `tb[IPSET_ATTR_IP_TO]` 不存在但 `tb[IPSET_ATTR_CIDR]` 存在时，或者当 `ip > ip_to` 发生交换时，原代码逻辑存在缺陷：
+1. 在 `ip > ip_to` 的分支中，交换 `ip` 和 `ip_to` 后，原代码错误地移除了 `if (ip < map->first_ip)` 的检查，导致交换后的 `ip` 可能小于集合定义的起始 IP。
+2. 在后续统一的范围检查中，原代码仅检查 `if (ip_to > map->last_ip)`，遗漏了对 `ip` 是否小于 `map->first_ip` 的检查。
+这使得特定场景下无效的 IP 范围未能被正确拦截，导致漏洞产生。
+
+#解决方案
+修复 `net/netfilter/ipset/ip_set_bitmap_ip.c` 中的 `bitmap_ip_uadt` 函数：
+1. 移除 `ip > ip_to` 分支中多余且位置不当的 `IPSET_ERR_BITMAP_RANGE` 检查，保留 `swap` 操作。
+2. 将函数末尾的单一范围检查修改为合并检查：`if (ip < map->first_ip || ip_to > map->last_ip)`，确保无论之前经过哪个分支，最终 `ip` 和 `ip_to` 都必须完全落在集合定义的 `[first_ip, last_ip]` 范围内，否则返回 `-IPSET_ERR_BITMAP_RANGE` 错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8e27cf7592aff4e3c223f2eeb505756b176d0f05

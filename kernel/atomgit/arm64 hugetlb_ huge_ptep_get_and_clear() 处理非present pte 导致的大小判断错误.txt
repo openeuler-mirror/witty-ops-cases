@@ -1,0 +1,21 @@
+#标题
+arm64 hugetlb: huge_ptep_get_and_clear() 处理非present pte 导致的大小判断错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 arm64 架构下使用 HugeTLB 功能时，若涉及非 present 状态的 pte（如 markers、migration entries），内核在调用 `huge_ptep_get_and_clear()` 时可能错误判断 pte 的覆盖大小。这会导致在处理 contiguous pte 时，可能错误地只清理了连续块中的第一个 entry，或者潜在地清理了错误的邻近 pte，破坏进程的内存映射一致性。该问题由 `move_huge_pte()` 等核心内存管理路径触发。
+
+#主要错误日志
+未知
+
+#问题根因
+arm64 架构支持多种 HugeTLB 大小，部分大小（如 CONT_PTE_SIZE）涉及连续 pte。原实现在 `huge_ptep_get_and_clear()` 中通过解析 pte 中的 `PTE_CONT` 位来判断 pte 数量。
+根本原因在于：`PTE_CONT` 位仅在 pte 为 present（有效）时才有意义。对于非 present 的 pte（如 swap entries、markers），该位的值未定义或为其他用途（例如 swap entry 的 offset 字段重叠使用了该位），导致原逻辑错误计算了 contiguous ptes 的数量，进而引发错误的清空操作。
+
+#解决方案
+修改 `huge_ptep_get_and_clear()` 函数实现，不再依赖解析 pte 内容（特别是 PTE_CONT 位）来判断大小，而是直接使用函数传入的 `sz` 参数来确定 pte 覆盖范围。同时，在 `get_clear_contig()` 辅助函数中增加 `pte_present()` 判断，仅在 pte 为 present 状态时才收集 access 和 dirty 标志位，避免处理非 present pte 时的无效操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c9545e09adb08b43aa6f2a338893980d94f2de3f

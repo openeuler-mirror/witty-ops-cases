@@ -1,0 +1,29 @@
+#标题
+Hygon Family 18h Model 4h EDAC 地址转换逻辑错误导致内存故障定位不准
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hygon Family 18h Model 4h 处理器平台上，当发生内存错误（Memory Error）时，EDAC 子系统无法正确将内存控制器报告的规范化地址转换为系统物理地址。这导致内核日志中记录的故障物理地址与实际故障地址不符，甚至在某些 3 通道交错（3 channels interleaving）或 DDR5 场景下，地址转换计算可能出现异常（如计算出的 cs offset 非法），影响故障诊断与定位的准确性。
+
+#主要错误日志
+- `pr_err("%s: Invalid cs offset: 0x%x cs_fabric_id: 0x%x dst_fabric_id: 0x%x.\n", ...)`
+
+#问题根因
+Hygon Family 18h Model 4h 处理器的内存寻址逻辑与旧型号存在显著差异，但内核驱动未做适配：
+1. **DDR5 支持**：新模型支持 DDR5 且引入了子通道概念，原代码未处理 DDR5 使能情况下的地址计算与子通道位填充。
+2. **交织算法差异**：在 3 通道交织场景下，片选 ID（cs_id）的计算方式发生变化，原通用算法不再适用。
+3. **Channel Hashing**：新模型引入了通道哈希机制，原代码缺失该处理逻辑。
+4. **参数缺失**：地址转换函数 `hygon_umc_normaddr_to_sysaddr` 缺少 `sub_channel` 参数输入，无法正确计算目标地址。
+
+#解决方案
+修改 `drivers/edac/amd64_edac.c` 文件，针对 Hygon Family 18h Model 4h（x86_model == 0x4）进行适配修复：
+1. **扩展接口**：为 `hygon_umc_normaddr_to_sysaddr` 函数新增 `sub_channel` 参数，并在 `decode_umc_error` 中从寄存器 `m->ipid` 提取该值传入。
+2. **修正 DDR5 地址计算**：检测 DDR5 使能时，保留子通道位域，调整高低地址拼接逻辑。
+3. **修正 3 通道交织算法**：在 3 通道交织场景下，基于 `cs_fabric_id` 和 `dst_fabric_id` 计算偏移量，采用乘 3 算法修正 cs_id 计算；若计算出的偏移量非法则报错退出。
+4. **增加 Channel Hashing**：在 DDR5 且通道哈希使能时，根据哈希算法计算哈希位并填充到指定位置；否则直接填充 sub_channel。
+5. **更新 Fabric ID 获取**：适配新模型的 `dst_fabric_id` 获取方式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1921190e67ff00ec90736b1aa9d9e35aae1e9f15

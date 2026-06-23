@@ -1,0 +1,22 @@
+#标题
+arm64 KVM 虚拟机无法设置 ACTLR_EL1 寄存器导致硬件 xcall/xint 功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 KVM 虚拟机中，Guest OS 尝试写入 ACTLR_EL1 寄存器时操作被忽略，导致寄存器值无法修改，进而导致依赖该寄存器配置的硬件 xcall/xint 功能无法生效。
+
+#主要错误日志
+未知
+
+#问题根因
+在 vCPU 初始化时，`vcpu->arch.hcr_el2` 被设置为包含 `HCR_TACR` 标志的 `HCR_GUEST_FLAGS`。这导致 Guest 访问 ACTLR_EL1 时会陷入 EL2（Trap 到 Hypervisor）。然而，KVM 当前的 `access_actlr` 处理函数对 ACTLR_EL1 的写入操作直接执行 `ignore_write` 忽略处理，并未更新虚拟寄存器的状态，导致 Guest 无法设置该寄存器，硬件 xcall/xint 无法生效。此外，vCPU 切换时也缺乏对该寄存器物理状态的保存与恢复逻辑。
+
+#解决方案
+1. 修改 KVM 系统寄存器访问处理逻辑，在 `access_actlr()` 函数中增加对写入操作的处理，将 Guest 写入的 `ACTLR_ELx_XCALL` 和 `ACTLR_ELx_XINT` 位更新到 vCPU 的系统寄存器上下文中，而非忽略。
+2. 在 vCPU 状态保存与恢复函数（`__sysreg_save_common_state` 和 `__sysreg_restore_common_state`）中增加对 ACTLR_EL1 的读写操作，确保 vCPU 切换时能正确加载 Guest 的配置值并在切回 Host 时恢复物理寄存器原始值。
+3. 移除 `cpu_enable_arch_xcall_xint` 中对 `HCR_EL2` 寄存器设置 `HCR_TACR` 位的代码，因为该 Trap 行为由 KVM 虚拟化层统一管理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bd2967e62cdff04cb036b503622eea13c5cfb1be

@@ -1,0 +1,23 @@
+#标题
+cpufreq: 启动旧调优器失败时未正确退出导致的状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在切换 cpufreq governor（调优器）的过程中，如果新调优器启动失败，系统尝试回退并启动旧调优器。若旧调优器的启动过程也失败，内核未执行清理工作，导致调优器状态不一致，可能引发后续 cpufreq 操作异常或内存访问错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cpufreq_set_policy` 函数中，当新调优器启动失败并尝试回退到旧调优器时，逻辑存在缺陷：
+1. 调用 `cpufreq_init_governor` 初始化旧调优器。
+2. 随后调用 `cpufreq_start_governor` 启动旧调优器。
+如果 `cpufreq_start_governor` 返回失败，代码未调用 `cpufreq_exit_governor` 进行清理，直接将 `policy->governor` 设为 NULL。这导致调优器处于“已初始化但未启动且未退出”的中间状态，造成资源泄漏或状态不一致。
+
+#解决方案
+修改 `cpufreq_set_policy` 函数中的错误处理路径。在回退到旧调优器时，如果 `cpufreq_start_governor` 失败，增加调用 `cpufreq_exit_governor(policy)` 以确保正确释放资源并退出调优器，随后将 `policy->governor` 置空。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b774eda8e9ac9626b0958d99a652ac899685f93c

@@ -1,0 +1,23 @@
+#标题
+serial: 8250: Fix fifo underflow on flush
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 DMA 发送数据期间调用串口缓冲区刷新（flush）操作时，内核发生 kfifo 下溢。这会导致驱动程序尝试传输异常巨大的数据量（约 2^32 字节），表现为应用程序（如 amidi）在退出时挂起长达 30 秒，等待 FIFO 清空。
+
+#主要错误日志
+- serial8250_tx_dma: tx_size=3 fifo_len=3
+- uart_flush_buffer: resetting fifo
+- __dma_tx_complete: tx_size=3
+- serial8250_tx_dma: tx_size=4096 fifo_len=4294967293
+
+#问题根因
+当刷新串口缓冲区时，`uart_flush_buffer()` 调用了 `kfifo_reset()`。如果此时存在正在进行的 DMA 传输，DMA 完成回调函数 `__dma_tx_complete()` 会继续通过 `uart_xmit_advance()` 消耗 kfifo 中的数据。由于 kfifo 已被重置，这导致 kfifo 计数下溢（变为 4294967293），驱动程序误认为仍有大量数据待传输，从而触发持续的 DMA 传输循环。
+
+#解决方案
+在 8250 驱动中实现 `flush_buffer` 回调函数接口。在缓冲区刷新时，检查是否有正在运行的 DMA 传输；若有，则通过将 `dma->tx_size` 设置为 0，防止 `__dma_tx_complete()` 向 kfifo 推进无效数据，从而避免 kfifo 下溢。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5ecbd640901e3d3f08eaa8b7c95c2e89ee4f4097

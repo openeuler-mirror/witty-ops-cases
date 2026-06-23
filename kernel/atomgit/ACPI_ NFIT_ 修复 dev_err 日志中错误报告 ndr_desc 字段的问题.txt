@@ -1,0 +1,22 @@
+#标题
+ACPI: NFIT: 修复 dev_err 日志中错误报告 ndr_desc 字段的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFIT (NVDIMM Firmware Interface Table) 区域注册过程中，当目标节点（target_node）为 NUMA_NO_NODE 并触发重新计算与日志打印时，内核日志错误地输出了 `numa_node` 字段的值，而非实际变更后的 `target_node` 字段值，导致日志信息与实际代码逻辑不符，误导运维人员进行错误的故障定位或 NUMA 资源分析。
+
+#主要错误日志
+dev_info(acpi_desc->dev, "changing target node from %d to %d for nfit region [%pa-%pa]",
+	 NUMA_NO_NODE, ndr_desc->numa_node, &res.start, &res.end);
+（注：日志原文显示打印了 numa_node，但根据修复逻辑，此处本应打印 target_node）
+
+#问题根因
+开发人员在编写代码时出现了复制粘贴错误。在 `acpi_nfit_register_region` 函数中，日志打印语句的第二个参数原本应打印更新后的 `ndr_desc->target_node`，但错误地复制使用了 `ndr_desc->numa_node`，导致日志内容与上下文逻辑不一致。
+
+#解决方案
+修改 `drivers/acpi/nfit/core.c` 文件中 `acpi_nfit_register_region` 函数内的 dev_info 日志打印参数，将错误的 `ndr_desc->numa_node` 替换为正确的 `ndr_desc->target_node`，确保日志记录的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce1c4f9f16a15964544b21f6761a5c0cfcb12af9

@@ -1,0 +1,20 @@
+#标题
+sched_ext: enable失败与disable流程间bypass模式管理不当导致系统异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+sched_ext调度器在使能（enable）失败时，系统会短暂退出bypass模式，随后再由disable流程重新进入bypass模式。在此窗口期内，若执行scx_enable()的线程已在失败的调度器上，可能被切换出去，导致线程停滞（stall），直到看门狗（watchdog）介入。表现为系统在调度器加载失败后出现短暂的调度停滞或非预期行为。
+
+#主要错误日志
+未知
+
+#问题根因
+scx_enable() 在使能过程中会开启 bypass 模式。若使能失败，原逻辑会关闭 bypass 模式，随后触发 scx_error()。scx_error() 会触发 scx_disable_workfn()，该函数会再次开启 bypass 模式并卸载失败的调度器。这导致系统在使能错误路径与禁用路径之间退出了 bypass 模式。此过程是不必要的且存在风险：执行 scx_enable() 的线程可能已经在失败的调度器上运行，若此时关闭 bypass 模式，该线程可能在触发 scx_error() 之前被切换出去，从而导致停滞。
+
+#解决方案
+在 scx_ops_enable_workfn() 的错误处理路径中，移除 scx_ops_bypass(false) 的调用，保持 bypass 模式处于开启状态。由于即将进入 disable 路径，无需在中间过程关闭 bypass，从而避免因调度切换导致的线程停滞风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3a5edcb8683f55c31d8b65b4c1355dd039b4cc17

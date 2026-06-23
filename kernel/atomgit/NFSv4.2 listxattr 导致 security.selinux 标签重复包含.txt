@@ -1,0 +1,20 @@
+#标题
+NFSv4.2 listxattr 导致 security.selinux 标签重复包含
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 NFS4.1 安全标签（security labels）的服务器上调用 `listxattr` 时，返回的扩展属性列表中 `security.selinux` 标签被包含了两次，导致属性列表内容重复。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nfs4_listxattr` 函数中，代码逻辑未正确处理服务器能力标志。当服务器支持 `NFS_CAP_SECURITY_LABEL` 时，`generic_listxattr` 函数已经包含了 `security.selinux` 标签，但代码后续无条件地再次调用 `security_inode_listsecurity` 添加该标签，导致同一标签在列表中出现两次。
+
+#解决方案
+修改 `fs/nfs/nfs4proc.c` 中的 `nfs4_listxattr` 函数，增加对服务器能力 `NFS_CAP_SECURITY_LABEL` 的判断。仅当服务器不支持该能力时，才调用 `security_inode_listsecurity` 手动添加 `security.selinux` 标签，从而避免在服务器已支持并返回该标签的情况下重复添加。同时初始化变量 `error4` 为 0 以防逻辑跳过时使用未初始化值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7e4afa7b0f48c983360a5753e5d5e02940855f63

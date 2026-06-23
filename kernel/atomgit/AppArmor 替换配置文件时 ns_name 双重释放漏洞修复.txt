@@ -1,0 +1,20 @@
+#标题
+AppArmor 替换配置文件时 ns_name 双重释放漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `aa_replace_profiles` 函数加载 AppArmor 策略时，若 `aa_unpack` 解析后的 `ns_name` 为 NULL，代码会复用 `ent->ns_name`。由于该指针随后被转移给局部变量 `ns_name` 但未从原结构体中清除，导致在清理流程中 `ent->ns_name` 指向的内存先被释放一次，随后局部变量 `ns_name` 再次被释放，触发双重释放错误。该漏洞被标记为 CVE-2026-23408。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `aa_replace_profiles` 函数中，当 `aa_unpack` 后的 `ns_name` 为 NULL 且 `ent->ns_name` 存在时，代码将 `ent->ns_name` 赋值给 `ns_name`（第 1095 行）。然而，后续的错误处理或清理路径中，`aa_load_ent_free(ent)`（第 1262 行）会释放 `ent` 结构体及其内部的 `ns_name` 指针，紧接着代码又执行 `kfree(ns_name)`（第 1270 行），导致同一块内存被释放两次。
+
+#解决方案
+在将 `ent->ns_name` 赋值给局部变量 `ns_name` 后，立即将 `ent->ns_name` 置为 NULL。这样可以防止 `aa_load_ent_free(ent)` 在清理时再次释放该指针，从而避免双重释放问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/06c853560a7b6bddc2f1273e1159d8f6ef301e45

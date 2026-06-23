@@ -1,0 +1,23 @@
+#标题
+GCC 15 编译内核时报 stddef.h 'false' 语法错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 GCC 15 编译内核时，x86 架构下的 compressed boot 阶段构建失败。编译器在处理 `include/linux/stddef.h` 和 `include/linux/types.h` 时报错，提示在 `false` 之前缺少标识符，以及 `bool` 声明冲突。
+
+#主要错误日志
+./include/linux/stddef.h:11:9: error: expected identifier before ‘false’
+   11 |         false   = 0,
+./include/linux/types.h:35:33: error: two or more data types in declaration specifiers
+   35 | typedef _Bool                   bool;
+
+#问题根因
+GCC 15 将默认的 C 标准版本更改为 C23。在 C23 标准中，`bool`、`true` 和 `false` 是保留关键字。内核的主 Makefile 虽然通过 '-std=gnu11' 指定了标准，但 `arch/x86/boot/compressed/Makefile` 使用了独立的 KBUILD_CFLAGS 设置，未显式指定 C 标准版本，导致使用了 GCC 15 默认的 C23 标准。这导致内核在 `stddef.h` 中对 `false` 的枚举定义以及 `types.h` 中对 `bool` 的 typedef 定义与 C23 关键字冲突，从而引发编译错误。
+
+#解决方案
+在 `arch/x86/boot/compressed/Makefile` 中的 `KBUILD_CFLAGS` 变量里显式添加 `-std=gnu11` 选项。此举强制 x86 boot 阶段使用 gnu11 标准，与内核其他部分保持一致，避免了因 GCC 默认标准升级到 C23 带来的关键字冲突问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9fb578c611e8b88eee67437dea523aafc62c33fe

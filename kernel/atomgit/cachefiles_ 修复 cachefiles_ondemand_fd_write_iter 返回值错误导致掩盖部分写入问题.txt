@@ -1,0 +1,20 @@
+#标题
+cachefiles: 修复 cachefiles_ondemand_fd_write_iter 返回值错误导致掩盖部分写入问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 cachefiles ondemand 写入操作时，若发生部分写入，cachefiles_ondemand_fd_write_iter() 函数错误地返回用户态指定的完整写入长度，而非实际写入的字节数。这导致上层调用者无法感知部分写入的情况，误以为数据已全部写入成功，可能导致数据不一致或逻辑错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `__cachefiles_write()` 中，当写入操作返回值大于 0（表示已写入字节数）时，代码逻辑错误地将其强行置为 0。这导致调用者 `cachefiles_ondemand_fd_write_iter()` 无法区分“部分写入”与“完全成功”的场景，进而无条件地返回用户空间请求的完整长度，掩盖了实际写入字节数不足的事实。
+
+#解决方案
+删除 `__cachefiles_write()` 函数中将正数返回值置 0 的错误逻辑，保留 `ret` 为实际写入的字节数；同时调整 `cachefiles_ondemand_fd_write_iter()` 中的判断逻辑，直接使用 `__cachefiles_write()` 返回的实际写入字节数进行后续处理和返回。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f2009c26f7f73889f52c7fd05bd3cc2b8803ac77

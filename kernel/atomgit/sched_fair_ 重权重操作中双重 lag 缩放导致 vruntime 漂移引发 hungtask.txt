@@ -1,0 +1,32 @@
+#标题
+sched/fair: 重权重操作中双重 lag 缩放导致 vruntime 漂移引发 hungtask
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在频繁进行 cgroup throttle/unthrottle 操作的环境中，系统出现 hungtask 现象。具体表现为进程无法被调度，导致锁无法及时释放，进而引发系统挂起。
+
+通过 crash 工具查看运行队列发现，部分任务（如 stress-ng）的 vlag 值异常巨大（如 8444932411139），导致调度器认为其 vruntime 极小或极大，从而长期占用 CPU 或无法被调度，阻塞了持有 cpus_read_lock 的 kworker 线程，最终触发 hungtask 检测。
+
+#主要错误日志
+TASK 1 (systemd) is waiting for cgroup_mutex.
+TASK 329296 (sh) holds cgroup_mutex and is waiting for cpus_read_lock.
+TASK 50173 (kworker/0:0) holds the cpus_read_lock, but fail to be scheduled.
+test_cg and TASK 97 may have suppressed TASK 50173, causing
+it to not be scheduled for a long time, thus failing to release locks in
+a timely manner and ultimately causing a hungtask issue.
+
+#问题根因
+在 EEVDF 调度器下，`reweight_entity()` 对当前正在运行的实体（`se == cfs_rq->curr`）进行重权重操作时，存在逻辑错误：
+1. 实体仍在运行队列上下文中，未经历完整的出队/入队周期，因此 `avg_vruntime()` 保持不变。
+2. `reweight_entity()` 内部已经根据新旧权重比重新缩放了 `se->vlag`。
+3. 随后调用的 `place_entity(..., 0)` 试图将实体重新入队，再次应用了 vlag 缩放公式 `vlag' = vlag * (W + w_i) / W`。
+
+这导致了“双重缩放”，使得实体的 vlag 被错误放大或抑制，进而导致 vruntime 漂移，破坏了调度公平性，最终导致特定任务无法被调度。
+
+#解决方案
+引入新的标志位 `ENQUEUE_REWEIGHT_CURR`。在 `reweight_entity()` 中调用 `place_entity()` 时，若目标实体为当前正在运行的实体，则传递该标志。`place_entity()` 函数在检测到 `ENQUEUE_REWEIGHT_CURR` 标志时，跳过 vlag 的重新计算逻辑，直接使用已经调整好的 vlag 值，从而避免双重缩放问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ea6a1d789ad6c20a7d203aa4761e10c46f39a6c4

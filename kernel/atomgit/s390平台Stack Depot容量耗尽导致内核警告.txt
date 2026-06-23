@@ -1,0 +1,22 @@
+#标题
+s390平台Stack Depot容量耗尽导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 PREEMPT 和 KASAN 的环境下，内核运行过程中触发 Stack Depot 容量耗尽的警告。由于 s390 架构未正确填充 `.irqentry.text` 区段，导致 Stack Depot 无法过滤中断上下文，栈记录大量重复累积，最终耗尽存储容量。
+
+#主要错误日志
+Stack depot reached limit capacity
+WARNING: CPU: 0 PID: 286113 at lib/stackdepot.c:252 depot_alloc_stack+0x39a/0x3c8
+
+#问题根因
+Stack Depot 依赖 `in_irqentry_text()` 函数识别 `.irqentry.text` 和 `.softirqentry.text` 区段中的函数，以此过滤中断上下文，实现栈记录去重。
+s390 架构当前未将中断处理程序放入 `.irqentry.text` 区段（导致该区段为空），使得 Stack Depot 过滤机制失效。系统保存了大量仅在中断入口点不同、但共享相同 IRQ 上下文代码路径的栈踪迹，最终导致 Stack Depot 容量被耗尽。
+
+#解决方案
+修改 s390 内核汇编入口代码，将 IO 和 EXT 中断处理程序（`io_int_handler`、`ext_int_handler`）从 `.kprobes.text` 区段移动到 `.irqentry.text` 区段；同时更新 kprobes 黑名单逻辑，将 `.irqentry.text` 区段加入黑名单以避免 kprobes 误探测。此修改仅针对异步中断，同步异常（如程序检查）保持原样以保留上下文信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/11a4640aa1b4556dbb30d0d5f73485cb6dee4fbf

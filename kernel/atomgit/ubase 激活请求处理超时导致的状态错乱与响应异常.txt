@@ -1,0 +1,25 @@
+#标题
+ubase 激活请求处理超时导致的状态错乱与响应异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 当 ubase 等待激活响应超时时，由于 `activate_done` 完成量未正确重新初始化，导致后续的激活请求处理逻辑异常。
+2. 存在 UE（用户端）与 MUE（管理端）超时时间冲突的问题：当两者同时超时，MUE 向 UE 返回第一个请求的响应，导致 UE 未等待当前请求完成就触发第三个激活请求，造成状态混乱。
+
+#主要错误日志
+ubase_err(udev, "activate wait for response timeout\n"); // 推断日志，基于代码上下文
+
+#问题根因
+1. **完成量未重置**：在发送下一次激活请求前，未调用 `reinit_completion` 对 `activate_done` 进行重新初始化，导致超时后的状态残留，影响后续请求的同步判断。
+2. **超时机制冲突**：UE 和 MUE 对于激活消息拥有相同的超时周期。当 UE 超时发送第二个激活消息时，若 MUE 也恰好超时并响应第一个消息，会打破预期的等待流程，导致 MUE 不等待超时直接发送第三个消息。
+3. **错误响应传递**：MUE 在超时情况下仍然向 UE 发送响应消息，导致 UE 提前结束等待或处理了过期的响应。
+
+#解决方案
+1. **重置完成量**：在发送激活请求前（记录 MSN 时），调用 `reinit_completion(&info->activate_done)` 确保每次请求的同步状态是干净的。
+2. **屏蔽超时响应**：在 `ubase_handle_activate_req` 中增加判断，若返回值为 `-ETIMEDOUT`，则不调用 `ubase_send_activate_resp` 发送响应，强制 UE 端等待直至自身超时。
+3. **调整超时时间**：新增 `ubase_get_activate_timeout` 函数，根据设备状态差异化设置 UE 端的超时时间（Fast 模式 1000ms，Proxy 模式 3000ms，Normal 模式 3200ms），避免与 MUE 超时时间冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/539783172f3c31174385b2e7c0341f1ebee3e515

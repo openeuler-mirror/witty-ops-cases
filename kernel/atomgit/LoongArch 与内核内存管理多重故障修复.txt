@@ -1,0 +1,26 @@
+#标题
+LoongArch 与内核内存管理多重故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. LoongArch 架构在 FDT 系统中调用 `huge_pte_offset()` 时，因 PMD 为 NULL 引发内核 Panic。
+2. 内存分配路径 `__alloc_pages_slowpath` 中，因 cpuset 或 zonelist 更新竞争导致无限重试，进而引发挂起。
+3. LoongArch IOMMU 在设备移除过程中发生错误时，可能导致任务挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+1. `fdt_smp_setup` 函数中调用 `early_numa_add_cpu` 时传参错误，使用了逻辑 CPU 编号而非硬件 CPU ID，导致后续 `huge_pte_offset` 访问空指针引发 Panic。
+2. `__alloc_pages_slowpath` 函数在重试路径（`retry` 标签处）未检查 cpuset 或 zonelist 是否已更新，导致在发生竞争时陷入无限重试循环。
+3. IOMMU 设备移除逻辑顺序不当，在错误发生时未能正确处理，导致潜在的任务挂起风险。
+
+#解决方案
+1. 修正 `fdt_smp_setup` 中的参数传递，将 `early_numa_add_cpu(cpu, 0)` 改为 `early_numa_add_cpu(cpuid, 0)`，确保传入正确的硬件 CPU ID。
+2. 在 `__alloc_pages_slowpath` 的 `retry` 标签处增加 `check_retry_cpuset` 和 `check_retry_zonelist` 检查，若检测到竞争则跳转至 `restart` 流程，避免无限循环。
+3. 移除 `la_iommu_remove_device` 中位于错误处理路径前的 `iommu_group_remove_device(dev)` 调用，优化设备移除流程以避免错误发生时的任务挂起。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9b28d122e285b68843817839d9c5448a057add5

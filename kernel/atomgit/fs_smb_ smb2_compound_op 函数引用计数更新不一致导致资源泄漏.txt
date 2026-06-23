@@ -1,0 +1,21 @@
+#标题
+fs/smb: smb2_compound_op 函数引用计数更新不一致导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB2 复合操作（`smb2_compound_op`）流程中，若内存分配失败（`kzalloc` 返回 NULL），函数直接返回 `-ENOMEM`，导致传入的 `cfile` 结构体引用计数未被正确释放。此行为违反了函数注释规定的契约（调用者期望引用计数由被调函数处理），造成引用计数泄漏（refcount leak），最终可能导致相关资源无法被释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb2_compound_op` 函数中，当 `vars` 结构体分配失败时，代码直接返回 `-ENOMEM`，跳过了函数末尾针对 `cfile` 的引用计数清理逻辑（`cifsFileInfo_put(cfile)`）。
+根据函数定义与注释，`cfile` 的引用应在函数内部释放。该错误路径打破了这一约定，且现有的调用者不会在收到 `-ENOMEM` 错误码时处理 `cfile` 的引用计数更新，从而导致资源泄漏。
+
+#解决方案
+修改 `smb2_compound_op` 函数中 `vars` 分配失败的错误处理路径。不再直接返回错误码，而是将返回值 `rc` 设置为 `-ENOMEM`，并通过 `goto out` 跳转至函数末尾的清理标签。这确保了在内存分配失败时，依然能执行 `cifsFileInfo_put(cfile)` 操作，从而正确释放引用计数。由于 `-ENOMEM` 属于不可恢复错误，直接跳转至 `out` 标签（跳过中间的重放逻辑）是安全的。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2ac233a3c2e7fb54f357e8319f44c9621d5bde82

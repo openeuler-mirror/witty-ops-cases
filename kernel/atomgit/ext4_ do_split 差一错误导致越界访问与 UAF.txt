@@ -1,0 +1,28 @@
+#标题
+ext4: do_split 差一错误导致越界访问与 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Syzkaller 检测到 ext4_insert_dentry 函数中发生 Use-After-Free 问题。该问题由 do_split 函数中的越界访问引起，通常在创建符号链接（symlink）时触发，导致内核崩溃或 KASAN 报错。
+
+#主要错误日志
+BUG: KASAN: use-after-free in ext4_insert_dentry+0x36a/0x6d0 fs/ext4/namei.c:2109
+Write of size 251 at addr ffff888074572f14 by task syz-executor335/5847
+Call Trace:
+ __asan_memcpy+0x40/0x70 mm/kasan/shadow.c:106
+ ext4_insert_dentry+0x36a/0x6d0 fs/ext4/namei.c:2109
+ add_dirent_to_buf+0x3d9/0x750 fs/ext4/namei.c:2154
+ make_indexed_dir+0xf98/0x1600 fs/ext4/namei.c:2351
+ ext4_add_entry+0x222a/0x25d0 fs/ext4/namei.c:2455
+ ext4_symlink+0x920/0xb50 fs/ext4/namei.c:3431
+
+#问题根因
+在 `do_split` 函数中，计算分割点的循环变量 `i` 可能递减至 `-1`。原代码判断条件 `if (i > 0)` 无法正确处理 `i == -1` 的情况。当单个块中包含大量长文件名目录项，导致活跃目录项总大小未超过块大小一半时，`i` 会变为 `-1`。此时原逻辑错误地进入了按半分割（split = count/2）的分支，而不是使用计算出的 move 值，导致分割点计算错误，引发了越界访问及随后的 Use-After-Free。
+
+#解决方案
+修改 `fs/ext4/namei.c` 中 `do_split` 函数的判断条件，将 `if (i > 0)` 修改为 `if (i >= 0)`，确保当循环正常结束（即 `i` 递减至合法索引边界内）时能正确设置分割点，避免错误的分割策略导致越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a4ff7f47094fdc7207b23b4b5f294c0c4fe1e7cf

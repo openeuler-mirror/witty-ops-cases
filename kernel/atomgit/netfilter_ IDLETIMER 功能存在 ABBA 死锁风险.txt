@@ -1,0 +1,32 @@
+#标题
+netfilter: IDLETIMER 功能存在 ABBA 死锁风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发执行 iptables 规则删除与 sysfs 文件读取操作时，内核检测到可能的循环锁定依赖，触发 WARNING。同时，相关的定时器无法正常销毁。
+
+#主要错误日志
+```
+======================================================
+WARNING: possible circular locking dependency detected
+6.12.0-rc7-01692-g5e9a28f41134-dirty #594 Not tainted
+------------------------------------------------------
+iptables/3303 is trying to acquire lock:
+ffff8881057e04b8 (kn->active#48){++++}-{0:0}, at: __kernfs_remove+0x20
+
+but task is already holding lock:
+ffffffffa0249068 (list_mutex){+.+.}-{3:3}, at: idletimer_tg_destroy_v]
+
+which lock already depends on the new lock.
+```
+
+#问题根因
+在 `idletimer_tg_destroy` 函数中，销毁 idletimer 时持有 `list_mutex` 锁进行引用计数判断、链表删除及后续的 sysfs 文件移除操作。同时，用户态读取 sysfs 文件的操作会持有 kernfs 活跃锁并尝试获取 `list_mutex`。这导致了 `list_mutex` 与 kernfs 锁之间的 ABBA 死锁依赖。
+
+#解决方案
+调整锁的持有范围，在将定时器从链表删除后立即释放 `list_mutex`，随后再进行 sysfs 文件移除及内存释放等无需持有该锁的清理操作，从而打破循环锁定依赖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2f47d959749d8f466bfe743deb6c4e3c12cd309b

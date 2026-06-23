@@ -1,0 +1,20 @@
+#标题
+qcom: ocmem: core clock 获取失败导致驱动 probe 加载异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在更新内核版本后，Qualcomm 平台 OCMEM 驱动在探测阶段加载失败，导致 OCMEM 设备无法正常初始化，进而影响依赖 OCMEM 的子系统或功能使用。
+
+#主要错误日志
+[    ...] ocmem: Unable to get core clock
+
+#问题根因
+OCMEM 的 core clock（即 RPM bus 2 clock）现在由 interconnect 驱动内部管理，已从 SMD RPM 时钟驱动中移除。OCMEM 使用者通过 ocmemnoc interconnect 路径投票来确保 ocmem 开启。然而，驱动代码中仍强制使用 `devm_clk_get` 获取该时钟，导致在新版本设备树或内核配置下无法找到该时钟定义，从而返回错误并终止 probe 流程。
+
+#解决方案
+将 OCMEM 驱动中的 `devm_clk_get` 修改为 `devm_clk_get_optional`，使 core clock 变为可选配置。这样既兼容了旧版设备树（仍提供 core clock），也适配了新版内核逻辑（无需提供 core clock），避免了因缺少时钟资源而导致的驱动加载失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5fb6260d09f5dadea331d51a956a5949833f1a96

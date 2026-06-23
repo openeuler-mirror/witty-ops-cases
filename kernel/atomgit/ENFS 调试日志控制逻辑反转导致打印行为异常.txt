@@ -1,0 +1,21 @@
+#标题
+ENFS 调试日志控制逻辑反转导致打印行为异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ENFS（增强型 NFS）模块中，当启用 ENFS 调试功能时，`enfs_print_uuid` 函数原本应打印 UUID 信息，但实际上直接返回未执行打印；反之，当调试功能关闭时，代码逻辑才允许继续执行打印流程。即调试开关的实际效果与预期完全相反。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `shard_route.c` 文件中，`enfs_print_uuid` 函数使用了错误的条件判断逻辑。原代码直接使用 `ifdebug(ENFS)` 作为条件进行返回判断。
+根据 Kernel 中 `ifdebug` 的定义，当调试开启时 `ifdebug(ENFS)` 为真。原代码逻辑为：“如果调试开启，则直接 return”，这导致了调试模式开启时反而跳过了后续的日志打印逻辑，与预期功能相悖。
+
+#解决方案
+在头文件 `enfs_log.h` 中新增一个内联辅助函数 `is_enfs_debug()`，该函数在调试开启时返回 true，关闭时返回 false。同时修改 `shard_route.c` 中的判断条件，将 `ifdebug(ENFS)` 替换为 `if (!is_enfs_debug())`。修改后的逻辑为：“如果调试未开启，则返回”，从而修正了控制流，确保仅在调试开启时执行打印操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0fbb6e383e6818e7f24f90388d061f020f9640b0

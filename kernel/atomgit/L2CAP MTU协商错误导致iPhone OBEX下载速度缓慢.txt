@@ -1,0 +1,24 @@
+#标题
+L2CAP MTU协商错误导致iPhone OBEX下载速度缓慢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+从 iPhone 进行 OBEX 下载时速度缓慢。抓包分析显示，数据传输使用的包大小仅为 672 字节，而非协商好的 32767 字节。具体表现为：在 L2CAP 配置请求中若未包含 MTU 选项，本地设备在配置响应中错误地将 MTU 设为默认值 672 字节，导致对端使用此较小值进行数据传输，无法利用大包传输提升吞吐量。
+
+#主要错误日志
+未知
+
+#问题根因
+根据蓝牙核心规范（Core specification v5.4, Vol. 3, Part A），如果 L2CAP_CONFIGURATION_REQ 数据包中缺少配置参数，则应假定这些参数具有最近显式或隐式接受的值。
+在代码逻辑中，`l2cap_parse_conf_req` 函数在解析配置请求时，将 MTU 初始值硬编码为 `L2CAP_DEFAULT_MTU`（672字节）。当对端（如 iPhone）发送的配置请求中未包含 MTU 参数时，代码未采用反向（incoming）方向协商好的 MTU 值（即 `chan->imtu`），而是直接使用了默认的 672 字节。这导致响应给对端的 MTU 被错误地重置为 672 字节，对端随之使用该小尺寸进行传输。
+
+#解决方案
+修改 `net/bluetooth/l2cap_core.c` 中的 `l2cap_parse_conf_req` 函数：
+1. 将 MTU 变量的初始值从 `L2CAP_DEFAULT_MTU` 改为 0。
+2. 在后续处理逻辑中增加判断：如果 MTU 值仍为 0（即请求方未提供 MTU），则优先使用本端已协商的输入 MTU（`chan->imtu`）；若 `chan->imtu` 不存在，才回退使用默认值 `L2CAP_DEFAULT_MTU`。
+此修复确保了在配置请求未显式携带 MTU 时，系统能正确沿用已协商的大 MTU 值，从而允许使用分片的大包进行数据传输，解决下载速度慢的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aa5476e12b3cbf6b54383958d85d4cf31a084651

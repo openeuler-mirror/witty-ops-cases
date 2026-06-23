@@ -1,0 +1,20 @@
+#标题
+net_sched: red: 修复 __red_change 函数中的竞态条件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 RED（Random Early Detection）队列调度算法时，若进行规则变更（change 操作），内核可能因并发访问导致崩溃或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `__red_change` 中，替换子队列句柄前调用 `qdisc_tree_flush_backlog` 函数存在竞态风险。该函数会遍历并刷新积压队列，在此过程中如果发生并发调度，可能导致正在被操作的队列对象处于不一致状态，进而引发 UAF（Use-After-Free）或空指针访问。
+
+#解决方案
+将替换子队列前的清理函数调用从 `qdisc_tree_flush_backlog(q->qdisc)` 修改为 `qdisc_purge_queue(q->qdisc)`。`qdisc_purge_queue` 能够更安全地清理指定队列中的数据包，避免了竞态条件的发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4467208a8b5583a77c842c4eb7673166deb5b717

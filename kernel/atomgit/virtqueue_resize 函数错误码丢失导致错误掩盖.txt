@@ -1,0 +1,20 @@
+#标题
+virtqueue_resize 函数错误码丢失导致错误掩盖
+
+#内核版本
+OLK-6.6
+
+#问题现象
+调用 `virtqueue_resize()` 函数调整虚拟队列大小时，即使内部的 resize 操作（如 `virtqueue_resize_packet` 或 `virtqueue_resize_split`）已经失败，该函数仍可能向调用者返回成功（0）。这导致上层调用者误判操作结果，无法感知底层故障。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `virtqueue_resize` 函数中，变量 `err` 用于接收内部 resize 辅助函数的返回值。然而，函数最终直接返回了 `virtqueue_enable_after_reset(_vq)` 的结果。当 resize 操作失败（`err` 为非 0）但 `virtqueue_enable_after_reset` 成功（返回 0）时，原本的错误码被覆盖，导致函数错误地返回成功。原逻辑本应在 `enable_vq_after_reset` 成功后返回 `err`，但修改后的代码逻辑丢失了这一处理。
+
+#解决方案
+修改 `virtqueue_resize` 函数的返回逻辑。引入临时变量 `err_reset` 接收 `virtqueue_enable_after_reset` 的返回值。若 `virtqueue_enable_after_reset` 失败，返回该错误码；若成功，则返回原 resize 操作的错误码 `err`（可能为 0 表示成功，或为负值表示具体错误），从而确保 resize 过程中的错误能正确上报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a8c7e229ca1bf5c38139d00d4e1befbc8bc754d7

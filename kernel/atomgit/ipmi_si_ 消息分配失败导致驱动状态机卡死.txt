@@ -1,0 +1,20 @@
+#标题
+ipmi_si: 消息分配失败导致驱动状态机卡死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IPMI 系统接口驱动处理中断时，若遇到内存分配失败（如 `RECEIVE_MSG_AVAIL` 或 `EVENT_MSG_BUFFER_FULL` 标志位置位的情况），驱动程序未能将内部状态恢复为正常状态（SI_NORMAL）。这会导致状态机卡在当前异常状态，无法继续处理后续的 IPMI 消息或事件，造成 IPMI 接口功能失效或响应中断。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `handle_flags` 函数中，当调用 `alloc_msg_handle_irq` 分配消息内存失败时，代码逻辑直接返回，但未将 `smi_info->si_state` 设置为 `SI_NORMAL`。这导致驱动状态机停留在非正常状态，无法跳出当前处理流程，从而阻塞了后续操作。
+
+#解决方案
+在 `handle_flags` 函数处理 `RECEIVE_MSG_AVAIL` 和 `EVENT_MSG_BUFFER_FULL` 分支时，若 `alloc_msg_handle_irq` 返回 NULL（分配失败），在返回前显式将 `smi_info->si_state` 设置为 `SI_NORMAL`，确保状态机回到空闲状态，避免卡死。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e32a6d332b44e70a8ee8b2c88cd54f02e18ecfc9

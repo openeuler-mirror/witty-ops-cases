@@ -1,0 +1,20 @@
+#标题
+UBIFS 文件系统 statfs 显示已用空间统计错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+用户通过 `df` 命令或 `statfs` 系统调用查看 UBIFS 文件系统空间使用情况时，显示的已用空间（used space，计算公式为 total - available）数值不正确。这是因为在计算总块数（total block count）时未正确扣除所有日志头预留的空间，导致总空间虚高，进而导致已用空间显示比实际偏大。
+
+#主要错误日志
+未知
+
+#问题根因
+自从引入 commit e874dcde1cbf ("ubifs: Reserve one leb for each journal head while doing budget") 后，UBIFS 在计算可用空间时会扣除所有日志头的预留空间。然而，在 `init_constants_master` 函数计算总块数（`c->block_cnt`）时，计算逻辑并未同步更新。原代码仅扣除了 `c->jhead_cnt - 1` 个 LEB（逻辑擦除块），假定只有一个日志头可用；但实际上可用空间计算已改为扣除所有日志头的预留。这种计算口径的不一致导致总块数比实际定义的总空间偏大，从而导致已用空间显示错误。
+
+#解决方案
+修改 `fs/ubifs/super.c` 中的 `init_constants_master` 函数，修正总块数的计算公式。具体做法是删除原公式中的 `+ 1` 操作，即从 `c->main_lebs` 中扣除 `c->jhead_cnt`（所有日志头数量），而不是 `c->jhead_cnt - 1`，从而确保总块数与可用空间的计算逻辑一致，正确扣除所有日志头的预留空间。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b66cce4e1278f32fdeabcc5a46fd91e865f79d28

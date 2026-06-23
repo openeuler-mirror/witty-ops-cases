@@ -1,0 +1,27 @@
+#标题
+cfg80211: cfg80211_check_and_end_cac 缺少 wiphy mutex 锁导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 DFS（动态频率选择）相关的 mesh_peer_connected_dfs 测试时，内核触发 WARNING 并打印调用栈。问题发生在工作队列 `cfg80211_propagate_cac_done_wk` 处理过程中，具体表现为调用 `wdev_chandef` 时违反了锁持有的约定。
+
+#主要错误日志
+WARNING: CPU: 0 PID: 495 at net/wireless/chan.c:1552 wdev_chandef+0x60/0x165
+CPU: 0 UID: 0 PID: 495 Comm: kworker/u4:2 Not tainted 6.14.0-rc5-wt-g03960e6f9d47 #33 13c287eeabfe1efea01c0bcc863723ab082e17cf
+Workqueue: cfg80211 cfg80211_propagate_cac_done_wk
+Call Trace:
+ [<6063717b>] wdev_chandef+0x60/0x165
+ [<605f89b4>] regulatory_propagate_dfs_state+0x247/0x43f
+ [<605e6bfd>] cfg80211_propagate_cac_done_wk+0x3a/0x4a
+ [<6007e460>] process_scheduled_works+0x3bc/0x60e
+
+#问题根因
+函数 `wdev_chandef()` 的调用者必须持有 `wiphy` 互斥锁。然而，工作队列回调函数 `cfg80211_propagate_cac_done_wk()` 在调用链中最终触发了 `cfg80211_check_and_end_cac()`，而该函数在调用 `wdev_chandef()` 相关逻辑（如 `cfg80211_chandef_dfs_usable` 检查）前未获取 `wiphy` 锁，从而触发了锁断言警告。
+
+#解决方案
+在函数 `cfg80211_check_and_end_cac()` 中补充缺失的锁保护。具体修改为：在函数入口处调用 `wiphy_lock(&rdev->wiphy)` 获取锁，在函数退出前调用 `wiphy_unlock(&rdev->wiphy)` 释放锁，确保在此期间对 wdev 和 chandef 的访问受到保护。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b23b7adeb1e137c63acb236662ef4c7a7bea3820

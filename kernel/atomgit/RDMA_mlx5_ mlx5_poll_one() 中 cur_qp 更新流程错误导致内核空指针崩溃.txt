@@ -1,0 +1,39 @@
+#标题
+RDMA/mlx5: mlx5_poll_one() 中 cur_qp 更新流程错误导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 CQE（完成队列条目）时，由于 QP 号匹配逻辑错误，驱动程序使用了错误的 QP 指针。该问题主要在 QP 0 和 QP 1 上观察到，会导致内核发生 NULL 指针解引用，触发 Oops 并打印调用栈信息，系统稳定性受损。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000012
+ #PF: supervisor read access in kernel mode
+ #PF: error_code(0x0000) - not-present page
+ PGD 0 P4D 0
+ Oops: Oops: 0000 [#1] SMP
+ CPU: 0 UID: 0 PID: 7927 Comm: kworker/u62:1 Not tainted 6.14.0-rc3+ #189
+ ...
+ RIP: 0010:mlx5_ib_poll_cq+0x4c7/0xd90 [mlx5_ib]
+ ...
+ Call Trace:
+  <TASK>
+  ? mlx5_ib_poll_cq+0x4c7/0xd90 [mlx5_ib]
+  __ib_process_cq+0x5a/0x150 [ib_core]
+  ib_cq_poll_work+0x31/0x90 [ib_core]
+  process_one_work+0x169/0x320
+  worker_thread+0x288/0x3a0
+  ...
+  </TASK>
+
+#问题根因
+在 `mlx5_poll_one()` 函数中，判断当前 QP 是否需要更新时，代码错误地将 CQE 中的 QP 号（来自固件 FW）与 `mlx5_ib_qp` 结构体中的 `ibqp.qp_num`（IB 层 QP 号）进行比较。
+正确的逻辑应该是将 CQE 中的 QP 号与 `mlx5_core_qp` 中的 QP 号（即固件层面的 QP 号 `trans_qp.base.mqp.qpn`）进行比较。
+由于比较对象不匹配，导致驱动错误地复用了旧的 QP 指针或获取了错误的 QP，进而在处理 CQE 时访问了无效内存地址。这在 QP 0 和 QP 1 等特殊队列上尤为明显，因为它们的 IB 层 QP 号与固件 QP 号不一致。
+
+#解决方案
+修改 `drivers/infiniband/hw/mlx5/cq.c` 文件中 `mlx5_poll_one()` 函数的 QP 号比较逻辑。将判断条件从比较 `ibqp.qp_num` 修改为比较 `trans_qp.base.mqp.qpn`，确保 CQE 中的 QP 号与固件层面的 QP 号进行匹配，从而正确更新 `cur_qp` 指针，避免使用错误的 QP 上下文。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/34fc8d99d38a0041a9ebee3151130ffe046b7bf2

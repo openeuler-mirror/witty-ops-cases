@@ -1,0 +1,20 @@
+#标题
+backlight: pm8941 wled_configure 函数缺乏 NULL 指针检查导致潜在内存分配失败风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核初始化 Qualcomm WLED 背光设备过程中，若设备树中未配置 "label" 属性，驱动程序会调用 `devm_kasprintf` 动态生成设备名称。当系统内存不足导致 `devm_kasprintf` 分配失败返回 NULL 时，后续代码如果直接使用该名称指针，将引发内核空指针解引用（NULL Pointer Dereference），可能导致内核崩溃或设备初始化异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `wled_configure` 在调用 `of_property_read_string` 读取 "label" 失败时，使用 `devm_kasprintf` 生成默认名称。原代码逻辑未对 `devm_kasprintf` 的返回值进行检查，若该函数因内存不足返回 NULL，`wled->name` 将被赋值为 NULL，后续代码使用该指针时存在空指针访问风险。
+
+#解决方案
+在 `wled_configure` 函数中增加对 `devm_kasprintf` 返回值的判断：若返回 NULL，则函数立即返回 `-ENOMEM` 错误码，提前终止配置流程，防止空指针被进一步使用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9fe64cfb917baad607499d7085237de93c36195e

@@ -1,0 +1,20 @@
+#标题
+drm/vmwgfx: Fix invalid kref_put callback in vmw_bo_dirty_release
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 vmwgfx 驱动中调用 `vmw_bo_dirty_release` 释放脏追踪资源时，`kref_put` 使用了不兼容的回调函数 `(void *)kvfree`。这属于未定义行为，虽然在当前内核版本中因内存布局偶然能正常工作，但破坏了类型安全，且在编译器开启严格检查或特定架构下可能导致内核崩溃或不可预期的运行错误。
+
+#主要错误日志
+未知
+
+#问题根因
+`kref_put()` 函数期望的释放回调函数签名为 `void (*release)(struct kref *)`，但代码中直接将 `kvfree`（签名为 `void (*)(const void *)`）强制类型转换后传入。由于函数签名不匹配，通过不兼容的函数指针进行调用属于未定义行为。代码此前能运行仅是因为 `ref_count` 是 `vmw_bo_dirty` 结构体的第一个成员，使得 `kref` 指针与结构体指针在数值上相等，从而“意外”通过测试。
+
+#解决方案
+新增一个符合 `kref_put()` 签名要求的专用释放回调函数 `vmw_bo_dirty_free`。在该函数内部，使用 `container_of()` 宏从传入的 `kref` 指针正确地获取包含它的 `vmw_bo_dirty` 结构体指针，然后再调用 `kvfree()` 进行释放。最后将 `kref_put` 的调用参数从 `(void *)kvfree` 替换为 `vmw_bo_dirty_free`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8e5781c75742f44bd1cf43b29286ea641ea84460

@@ -1,0 +1,20 @@
+#标题
+drm/nouveau: pushbuf reloc 边界检查存在 u32 整数溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 nouveau 显卡驱动的 pushbuf 接口进行缓冲区对象重定位操作时，若传入的 `reloc_bo_offset` 参数值较大（接近 u32 上限），边界检查逻辑可能因整数溢出而失效，导致越界写入。这可能引发内核内存破坏，进而导致系统崩溃或产生其他不可预期的行为。
+
+#主要错误日志
+NV_PRINTK(err, cli, "reloc outside of bo\n");
+
+#问题根因
+在 `nouveau_gem_pushbuf_reloc_apply` 函数中，边界检查语句 `r->reloc_bo_offset + 4` 存在缺陷。变量 `r->reloc_bo_offset` 为 u32 类型，当其值足够大时（例如接近 UINT_MAX），加 4 操作会发生 32 位整型溢出并回绕至一个较小的值。这使得检查条件 `r->reloc_bo_offset + 4 > nvbo->bo.base.size` 错误地判定为假，从而绕过了安全检查，允许非法的偏移量通过验证。
+
+#解决方案
+将边界检查中的计算强制转换为 64 位无符号整数（u64）。修改代码为 `(u64)r->reloc_bo_offset + 4`，确保在加法运算过程中不会发生 32 位溢出，从而正确执行边界校验。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb86032dcc80e694259e44ffea901395398011de

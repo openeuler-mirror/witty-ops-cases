@@ -1,0 +1,20 @@
+#标题
+scsi: mvsas: 控制器卸载时延迟工作队列引发use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载Marvell SAS/SATA控制器驱动过程中，若延迟工作队列项 `mwq->work_q` 正在执行，可能导致内核发生 Use-After-Free（UAF）。具体表现为驱动卸载流程释放了 `mvs_info` 结构体内存，但工作队列回调函数 `mvs_work_queue` 仍在尝试访问该结构体，从而引发内核崩溃或内存数据破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mvs_free` 函数中，代码使用 `cancel_delayed_work()` 来取消延迟工作队列。该函数是非同步的，当工作队列项已经在运行时，它无法阻止其继续执行。这导致了竞争条件：驱动卸载流程（CPU 0）执行 `kfree(mvi)` 释放内存后，工作队列回调（CPU 1）仍在执行并试图访问 `mvi` 指针，从而触发 Use-After-Free。
+
+#解决方案
+将 `mvs_free` 函数中的 `cancel_delayed_work()` 替换为 `cancel_delayed_work_sync()`。后者会等待正在执行的延迟工作项完成后再返回，从而确保在释放 `mvs_info` 内存之前，所有相关的工作队列处理都已结束，避免了 UAF 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2f0b55ac1356fd63dea1f17e85a1ce785d0df98e

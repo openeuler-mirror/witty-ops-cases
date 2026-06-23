@@ -1,0 +1,36 @@
+#标题
+f2fs_evict_inode 中因脏 inode 未清理导致 panic 或 use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 F2FS 文件系统使用损坏的镜像 fuzzing 测试或特殊场景下，当 unlink 文件触发 inode 逐出时，系统会发生 panic 或触发 KASAN use-after-free 报错。
+1. 若开启 CONFIG_F2FS_CHECK_FS，系统触发 `kernel BUG at fs/f2fs/inode.c` 导致 panic。
+2. 若未开启上述配置，可能触发 KASAN 报错：`BUG: KASAN: use-after-free in __list_del_entry_valid`，导致内核崩溃。
+
+#主要错误日志
+```text
+kernel BUG at fs/f2fs/inode.c:857!
+RIP: 0010:f2fs_evict_inode+0x1204/0x1a20
+```
+```text
+BUG: KASAN: use-after-free in __list_del_entry_valid+0xa6/0x130 lib/list_debug.c:62
+Read of size 8 at addr ffff88812d962278 by task syz-executor/564
+Call Trace:
+ list_del_init include/linux/list.h:206 [inline]
+ f2fs_inode_synced+0xf7/0x2e0 fs/f2fs/super.c:1531
+ f2fs_update_inode+0x74/0x1c40 fs/f2fs/inode.c:585
+ ...
+```
+
+#问题根因
+在 fuzzed 损坏的文件系统镜像中，存在孤立 inode（如 inode #8）且对应的 dnode（如 dnode #8）已随其他 inode（如 inode #7）的逐出而被丢弃。
+在执行 unlink 触发 `f2fs_evict_inode()` 时，`f2fs_truncate()` 和 `f2fs_update_inode_page()` 会因无法加载该 node 而失败。由于错误处理路径缺失，导致 `f2fs_inode_synced()` 未被调用，inode 的脏状态（`FI_DIRTY_INODE`）未被清除。
+随后在 `kill_f2fs_super` -> `f2fs_sync_inode_meta` 流程中，系统尝试对该已释放的 inode 调用 `f2fs_inode_synced`，引发 use-after-free；或在后续检查中因 inode 仍为脏状态触发 `f2fs_bug_on` 导致 kernel panic。
+
+#解决方案
+在 `f2fs_evict_inode` 函数中增加容错处理。检查 `f2fs_truncate` 和 `f2fs_update_inode_page` 执行后的 inode 状态，若发现 inode 仍处于脏状态（`FI_DIRTY_INODE`），说明因元数据损坏导致更新失败。此时强制调用 `f2fs_inode_synced()` 清除脏标志以避免系统崩溃，同时打印警告日志并设置 `SBI_NEED_FSCK` 标志提示文件系统需要修复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/90cdbbd13b588390dd571f679cfd2d4eaa9d472f

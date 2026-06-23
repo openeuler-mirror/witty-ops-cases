@@ -1,0 +1,26 @@
+#标题
+net: aquantia: ATL2 硬件停止时因缺少描述符缓存无效化导致 SMMU 翻译故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ATL2 网卡设备执行关机、驱动模块卸载操作时，触发 SMMU 翻译故障，内核日志中出现 arm-smmu-v3 event 0x10 错误，报告 "unpriv data write" 和 "Input address caused fault"。
+
+#主要错误日志
+[   70.355743] arm-smmu-v3 arm-smmu-v3.5.auto: event 0x10 received:
+[   70.361893] arm-smmu-v3 arm-smmu-v3.5.auto:  0x0002060000000010
+[   70.367948] arm-smmu-v3 arm-smmu-v3.5.auto:  0x0000020000000000
+[   70.374002] arm-smmu-v3 arm-smmu-v3.5.auto:  0x00000000ff9bc000
+[   70.380055] arm-smmu-v3 arm-smmu-v3.5.auto:  0x0000000000000000
+[   70.386109] arm-smmu-v3 arm-smmu-v3.5.auto: event: F_TRANSLATION client: 0001:06:00.0 sid: 0x20600 ssid: 0x0 iova: 0xff9bc000 ipa: 0x0
+[   70.398531] arm-smmu-v3 arm-smmu-v3.5.auto: unpriv data write s1 "Input address caused fault" stag: 0x0
+
+#问题根因
+ATL2 硬件在 hw_stop() 函数中缺少描述符缓存无效化操作。之前的修复补丁（Commit 7a1bb49461b1 和 ed4d81c4b3f2）仅针对 ATL B0 版本修复了缓存无效化问题，而 ATL2 版本仅执行了中断禁用。这导致在驱动解除 DMA 内存映射后，硬件仍然向已缓存的描述符写入数据，从而触发 SMMU 翻译故障。
+
+#解决方案
+新增一个共享的辅助函数 `aq_hw_invalidate_descriptor_cache()`，并在 ATL B0 和 ATL2 的 hw_stop() 实现中统一调用该函数。该函数通过调用 `hw_atl_rdm_rx_dma_desc_cache_init_tgl` 并轮询等待完成，确保在停止硬件时正确无效化描述符缓存，防止硬件访问已释放的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fc416773e5f43e5cf6542a4a8d3d85deb0c8d986

@@ -1,0 +1,20 @@
+#标题
+mmc: host: renesas_sdhi: 修复非 1:1 分频时实际时钟频率计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Renesas SDHI 控制器的高速率模式下，当 SD 时钟分频比非 1:1（即 SD_CLK_CTRL 寄存器中 DIV[7:0] 位不全为 0）时，通过 debugfs 接口查询到的 actual clock 频率数值不正确。例如，当时钟配置为 50000000 Hz 时，实际显示的 actual clock 错误地报告为 200000000 Hz，与配置的预期时钟频率不符。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在设置时钟分频时，未根据实际写入硬件的分频系数更新 `host->mmc->actual_clock` 变量。导致在非 1:1 分频场景下（如分频系数不为 0xff 时），软件记录的实际时钟频率未除以相应的分频比，保留了未分频前的输入时钟频率值，从而上报了错误的实际时钟频率。
+
+#解决方案
+在 `renesas_sdhi_set_clock` 函数中，写入硬件寄存器前，检查分频系数是否有效。如果分频系数（clock 变量）不为 0xff，则根据分频系数计算实际的分频比（通过 `ffs(clock) + 1` 计算），并将 `host->mmc->actual_clock` 除以该分频比，从而修正实际时钟频率的记录值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/19a5cab350bb896044364bad27ae1341a72f61d8

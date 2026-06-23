@@ -1,0 +1,24 @@
+#标题
+BPF自测程序arg_parsing因断言检查缺失导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在BPF CI运行过程中，`test_parse_test_list_file()` 测试函数触发崩溃（Crash）。崩溃发生在检查 `set.tests[0].name` 的代码行，表现为程序异常终止而非正常报告测试失败。
+
+#主要错误日志
+未知
+
+#问题根因
+测试代码逻辑存在缺陷，缺乏对断言（Assertion）结果的正确处理：
+1. 当 `parse_test_list_file()` 执行失败时，代码未中止后续执行，导致继续访问可能未正确初始化或无效的 `set` 数据结构。
+2. 当 `set.cnt` 为 0（即测试列表为空）时，代码未提前返回，直接访问 `set.tests[0].name` 触发了空指针解引用或越界访问，从而导致崩溃。
+
+#解决方案
+在 `tools/testing/selftests/bpf/prog_tests/arg_parsing.c` 中增加防御性编程逻辑：
+1. 将 `parse_test_list_file()` 的 `ASSERT_OK` 检查改为条件判断，若失败则立即跳转至清理流程（`goto out_fclose`），避免处理无效数据。
+2. 将 `set.cnt` 的 `ASSERT_EQ` 检查改为条件判断，若计数不符合预期（如为0），则跳转至释放资源流程（`goto out_free_set`），防止后续代码访问空数组导致崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/39d700e06b58455ef9a5cdcd9325d11701b310e3

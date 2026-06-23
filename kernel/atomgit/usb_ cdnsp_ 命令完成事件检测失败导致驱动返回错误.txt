@@ -1,0 +1,20 @@
+#标题
+usb: cdnsp: 命令完成事件检测失败导致驱动返回错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 usbtest 驱动测试（test 9）时，配置包含 ep1in/ep1out bulk 和 ep2in/ep2out isoc 端点的环境下，驱动程序偶发返回错误代码，无法正确检测到命令完成事件。
+
+#主要错误日志
+未知
+
+#问题根因
+控制器在执行完 Command Descriptor 后会立即清除 CMD_RING_BUSY 位，但将命令完成事件写入事件环可能存在延迟。在这段微小的时间间隔内，驱动程序检查事件环时可能发现 TRB 的所属权（owner）尚未轮转，从而错误地判断命令未完成并返回错误代码。根本原因是驱动未等待足够时间以确保控制器将事件写入事件环。
+
+#解决方案
+在 `cdnsp_wait_for_cmd_compl` 函数中，当检查到 TRB_CYCLE 状态不匹配时，不再立即返回 `-EINVAL` 错误。引入重试机制，最多重试 10 次，每次重试前延迟 20 微秒（udelay(20)），给予控制器足够的时间将命令完成事件写入事件环，从而避免因事件写入延迟导致的误判。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b89c46fee402fed25e97a656ad4a02eea67534d5

@@ -1,0 +1,28 @@
+#标题
+BPF selftests strncmp 基准测试编译优化导致结果全为零
+
+#内核版本
+OLK-6.6
+
+#问题现象
+运行 BPF selftests 中的 `strncmp-no-helper` 基准测试时，测试结果异常，hits 计数与总操作数始终显示为 0.000M/s，导致基准测试无法正确反映 `bpf_strncmp` 的性能数据。
+
+#主要错误日志
+```text
+# ./bench strncmp-no-helper
+Setting up benchmark 'strncmp-no-helper'...
+Benchmark 'strncmp-no-helper' started.
+Iter   0 (112.309us): hits    0.000M/s (  0.000M/prod), drops    0.000M/s, total operations    0.000M/s
+Iter   1 (-23.238us): hits    0.000M/s (  0.000M/prod), drops    0.000M/s, total operations    0.000M/s
+...
+Summary: hits    0.000 ± 0.000M/s (  0.000M/prod), drops    0.000 ± 0.000M/s, total operations    0.000 ± 0.000M/s
+```
+
+#问题根因
+在 `strncmp` 基准测试的 `strncmp_no_helper` 函数中，`target` 字符串位于 `.rodata` 段（常量）。在手动编写的字符串比较循环中，Clang 编译器对从 const 字符串读取的操作进行了过度优化，导致读取结果总是返回 0，破坏了基准测试的逻辑。
+
+#解决方案
+在读取 const 字符串指针 `target` 前，引入中间变量并使用 `barrier_var()` 宏来防止编译器优化。具体修改为：将 `target` 指针赋值给局部变量 `target_str`，并在后续比较操作前对该变量使用 `barrier_var(target_str)`，确保读取操作按预期执行，从而修复基准测试结果为零的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3a8183a2a6ca6dc70709b4a07c7e0006a8ed3151

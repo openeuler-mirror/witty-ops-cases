@@ -1,0 +1,22 @@
+#标题
+pwm: imx-tpm: EPWM模式MODULO寄存器值计算错误导致PWM周期异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 i.MX TPM PWM 驱动时，输出的 PWM 波形周期不符合预期。特别是在需要输出高频信号（即配置的 period 周期值较小）的场景下，由于硬件 MODULO 寄存器值设置错误，导致实际的 PWM 周期比配置目标多出一个计数周期。此外，在极小周期配置下可能触发无效参数逻辑错误。
+
+#主要错误日志
+未知
+
+#问题根因
+根据参考手册，EPWM（边缘对齐 PWM）模式的周期由 MOD 寄存器决定，公式为 "The EPWM period is determined by (MOD + 0001h)"。驱动代码原直接将计算出的周期计数 `period_count` 写入 MOD 寄存器，未执行减 1 操作，导致硬件实际产生的周期比预期大 1 个计数单位。这是对硬件规格理解的偏差导致的计算逻辑错误。
+
+#解决方案
+修正 MOD 寄存器值的计算逻辑：
+1. 在写入 MOD 寄存器前，将计算得到的周期计数 `period_count` 减 1（`p->mod = period_count - 1`）。
+2. 增加边界检查，若 `period_count` 计算结果为 0，直接返回 `-EINVAL` 错误，避免无效配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0701cf2217a835fae70f4db2ef35c54bdd3dadb1

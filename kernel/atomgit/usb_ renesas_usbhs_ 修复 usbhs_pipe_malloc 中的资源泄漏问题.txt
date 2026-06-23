@@ -1,0 +1,21 @@
+#标题
+usb: renesas_usbhs: 修复 usbhs_pipe_malloc 中的资源泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Renesas USBHS 驱动的 `usbhs_pipe_malloc` 函数中，当 `usbhsp_pipe_barrier` 或 `usbhsp_setup_pipecfg` 执行失败时，此前已通过 `usbhsp_get_pipe()` 分配的 pipe 资源未正确释放。这会导致 pipe 的标志位保持 `IS_USED` 状态无法清除，随着错误路径的反复触发，最终导致 pipe 资源耗尽，系统无法分配新的 USB pipe。
+
+#主要错误日志
+- pipe setup failed %d
+- can't setup pipe
+
+#问题根因
+函数 `usbhsp_get_pipe()` 会将 pipe 的标志位设置为 `IS_USED`。在错误处理路径中（如 `usbhsp_pipe_barrier` 或 `usbhsp_setup_pipecfg` 失败时），代码直接返回 `NULL`，遗漏了调用 `usbhsp_put_pipe()` 来清除标志位。这导致资源未被正确释放，从而引发资源泄漏。
+
+#解决方案
+在 `usbhs_pipe_malloc` 函数的两个错误返回路径中，在返回 `NULL` 之前增加调用 `usbhsp_put_pipe(pipe)`，确保 pipe 资源被正确释放，防止资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c45e8543257d3cb4c65e0b2fb530101a58941c82

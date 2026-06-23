@@ -1,0 +1,20 @@
+#标题
+greybus: lights: 通道数组内存分配失败导致 NULL 指针解引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 gb_lights_light_config() 函数执行过程中，若通道数组 `light->channels` 的内存分配失败，系统在执行清理流程 `gb_lights_release()` 时会访问该 NULL 指针，导致内核发生 NULL 指针解引用错误，可能引发内核 panic 或 oops。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `gb_lights_light_config()` 在调用 `kcalloc()` 分配通道数组内存之前，就已经将 `light->channels_count` 赋值为 `conf.channel_count`。当 `kcalloc()` 分配失败返回 NULL 时，函数直接返回错误码，但此时 `light->channels_count` 已经是一个非零值。后续的清理函数 `gb_lights_release()` 遍历释放资源时，依据该非零的 `channels_count` 进行循环迭代，并对尚未分配成功的 `light->channels` 指针进行解引用，从而触发 NULL 指针引用错误。
+
+#解决方案
+调整赋值顺序，将 `light->channels_count` 的赋值操作移动到 `kcalloc()` 成功分配内存之后。确保只有在内存分配成功后，`channels_count` 才被设置为非零值，从而防止清理路径遍历 NULL 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/053c10b144770af03135aa60f28734e51df3ca47

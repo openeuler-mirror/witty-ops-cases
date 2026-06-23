@@ -1,0 +1,23 @@
+#标题
+NFS 自动挂载新文件系统时 capabilities 设置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFS 自动挂载过程中，当跨越边界进入一个新的文件系统时，capabilities（能力集）被错误地继承自源文件系统，而不是根据新文件系统的实际情况进行重置和探测。这可能导致新挂载的文件系统使用了不正确的属性或功能标志，进而引发功能异常或行为不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，Capabilities 不能在跨越新文件系统时继承。它们需要重置为最小默认值，然后重新探测。原代码在 `nfs_server_copy_userdata` 和 `nfs_clone_server` 等流程中，错误地复制或继承了 `server->caps`，或者在初始化时未正确重置。具体代码层面上，`nfs4_server_set_init_caps` 函数在设置初始能力时使用了 `|=`（或运算），这会保留原有已设置的位，导致能力集未被彻底重置。
+
+#解决方案
+修改 NFS 服务端能力集的初始化逻辑，确保在自动挂载新文件系统或克隆服务器时，先将 capabilities 重置为默认值，再根据配置进行设置。具体措施包括：
+1. 新增统一的 `nfs_server_set_init_caps` 函数，用于根据 NFS 协议版本（v2, v3, v4）正确初始化 `server->caps`，并强制覆盖旧值（使用赋值操作而非或运算）。
+2. 在 `nfs_init_server` 和 `nfs_clone_server` 流程中调用新的初始化函数，确保能力集被重置后再进行探测。
+3. 移除 `nfs_server_copy_userdata` 函数中直接复制 `target->caps = source->caps` 的逻辑，防止错误的能力集继承。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c5618b29f4ed9441eaf3d3250c155f785347d0db

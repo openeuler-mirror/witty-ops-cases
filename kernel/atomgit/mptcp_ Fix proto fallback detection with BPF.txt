@@ -1,0 +1,30 @@
+#标题
+mptcp: Fix proto fallback detection with BPF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 BPF 程序修改套接字（socket）的协议族时，MPTCP 子系统在进行协议回退检测时出现判断错误，触发内核警告。具体表现为：若 BPF 将 IPv6 套接字修改为 IPv4，内核仍误判为 IPv6 协议族，导致断言失败并打印警告栈。
+
+#主要错误日志
+WARNING: CPU: ... PID: ... at net/mptcp/protocol.c:...
+Call Trace:
+...
+? mptcp_fallback_tcp_ops+0x.../0x...
+...
+(推断：由 WARN_ON_ONCE 触发)
+
+#问题根因
+在函数 `mptcp_fallback_tcp_ops` 中，原代码通过检查 `sk->sk_prot` 指针（判断是 `tcpv6_prot` 还是 `tcp_prot`）来决定协议族类型。然而，BPF 程序可以更改套接字的协议族（family），这导致 `sk->sk_prot` 指针与实际的 `sk_family` 状态不一致。直接通过 `sk->sk_prot` 指针判断协议族无法覆盖 BPF 修改后的场景，导致回退逻辑选择了错误的 protocol ops，进而触发了针对 `tcp_prot` 的错误断言检查（`WARN_ON_ONCE(sk->sk_prot != &tcp_prot)`）。
+
+#解决方案
+修改协议族检测逻辑，不再依赖 `sk->sk_prot` 指针进行判断，而是直接读取套接字成员 `sk->sk_family`（使用 `READ_ONCE` 保证读取安全性）。
+具体变更：
+1. 增加读取 `sk->sk_family` 赋值给局部变量 `family`。
+2. 将 IPV6 判断条件从 `sk->sk_prot == &tcpv6_prot` 修改为 `family == AF_INET6`。
+3. 将断言条件从 `sk->sk_prot != &tcp_prot` 修改为 `family != AF_INET`。
+此修复确保了即使 BPF 修改了套接字协议族，检测逻辑也能正确识别当前的协议族类型。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/46f73f208f13eba37e744841d4a6ad317d732120

@@ -1,0 +1,22 @@
+#标题
+ASoC: ep93xx: Fix unchecked clk_prepare_enable() and add rollback on failure
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ep93xx I2S 音频驱动中，`ep93xx_i2s_enable()` 函数依次对 mclk、sclk、lrclk 三个时钟调用 `clk_prepare_enable()` 但未检查返回值。若中间某个时钟（如 sclk 或 lrclk）使能失败，之前已成功使能的时钟（如 mclk）不会被关闭，导致时钟泄漏。如果音频流因故障未能正常启动，这些泄漏的时钟将一直保持开启状态，可能导致系统资源耗尽或音频子系统状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序 `ep93xx_i2s_enable()` 在执行时钟使能操作时，忽略了 `clk_prepare_enable()` 的返回值，且缺乏对已使能时钟的回滚（rollback）机制。当多个时钟序列中的某一个使能失败时，代码继续执行而非报错退出，且未对前序已打开的时钟进行清理。
+
+#解决方案
+1. 将 `ep93xx_i2s_enable()` 函数返回值类型从 `void` 修改为 `int`，使其能够向上层传递错误状态。
+2. 在 `clk_prepare_enable()` 调用后增加返回值检查，若失败则立即执行回滚操作（调用 `clk_disable_unprepare()` 关闭之前已成功使能的时钟）。
+3. 修改调用链 `ep93xx_i2s_startup()` 和 `ep93xx_i2s_resume()`，使其正确处理并向上传播 `ep93xx_i2s_enable()` 返回的错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b74e2a2ddaed5f0331041af89f579f7ea85b31d0

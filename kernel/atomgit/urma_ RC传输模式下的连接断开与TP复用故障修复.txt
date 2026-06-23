@@ -1,0 +1,40 @@
+#标题
+urma: RC传输模式下的连接断开与TP复用故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RC（Reliable Connection）传输模式下，发生以下异常：
+1. 连接断开时，本端发送销毁请求，但对端因引用计数处理不当无法正确响应，导致连接资源残留或释放流程中断。
+2. 内核模式下 TP（Transport Path）复用逻辑缺失，导致在已建立 TP 的情况下重新进行连接操作时，未能直接复用现有 TP，可能导致状态不一致或资源浪费。
+3. `uburma_cmd_bind_jetty_ex` 函数中存在重复调用 `ubcore_bind_jetty_ex` 的代码逻辑错误。
+
+#主要错误日志
+- `ubcore_log_err("TP reference count has been released completely");`
+- `ubcore_log_err("failed to send_msg");`
+- `ubcore_log_err("Failed to send destroy req message");`
+- `ubcore_log_err("Failed to deactivate tp\n");`
+- `ubcore_log_err("bind jetty failed.\n");`
+
+#问题根因
+1. **RC 模式销毁流程缺陷**：`ubcore_adapter_layer_disconnect` 和 `handle_destroy_req` 函数对 RC 传输模式处理不全，缺少必要的参数传递（如 jetty id、trans_mode），且未正确处理 TP 引用计数（kref），导致在判断是否发送销毁请求或执行清理时逻辑错误。
+2. **状态管理缺失**：`ubcore_tpid_ctx` 结构体缺少 `tp_state` 字段，导致无法追踪 TP 的状态，在复用 TP 时无法判断是否需要重新激活。
+3. **代码逻辑冗余**：`uburma_cmd.c` 中 `ubcore_bind_jetty_ex` 被重复调用，第一次调用的返回值被覆盖，可能引发不可预期的行为。
+
+#解决方案
+1. **扩展销毁请求结构体**：在 `msg_destroy_conn_req` 结构体中增加 `peer_tp_handle`、`local_eid`、`peer_eid`、`src_jetty_id`、`dst_jetty_id` 和 `trans_mode` 字段，确保销毁请求携带完整上下文信息。
+2. **完善 RC 模式断开逻辑**：
+   - 在 `ubcore_adapter_layer_disconnect` 中增加 RC 模式的判断分支，发送包含完整参数的销毁请求。
+   - 在发送销毁请求前，检查 TP 引用计数（`kref_read(&ctx->ref) == 1`），若已完全释放则发送销毁请求并返回。
+   - 在 `handle_destroy_req` 中增加对 RC 模式的处理，根据引用计数决定是否执行去激活操作。
+3. **增加 TP 状态管理**：
+   - 新增 `enum tp_status` 枚举（ENABLE, ACTIVE, DEACTIVE）。
+   - 在 `ubcore_tpid_ctx` 中添加 `tp_state` 成员。
+   - 在 TP 创建、复用和激活流程中正确设置和检查该状态（如 `ubcore_create_vtpn` 中判断状态避免重复激活）。
+4. **修复引用计数与重复调用**：
+   - 在 `ubcore_reuse_target_rtp_tpid` 和 `handle_create_req` 等复用路径中增加 `ubcore_tpid_get` 调用以维护引用计数。
+   - 删除 `uburma_cmd.c` 中重复的 `ubcore_bind_jetty_ex` 调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1d3c6e1eae9bc81d1439e007913cdeaadeb67f54

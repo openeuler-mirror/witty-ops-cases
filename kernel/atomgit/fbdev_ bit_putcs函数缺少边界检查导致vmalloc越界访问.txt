@@ -1,0 +1,24 @@
+#标题
+fbdev: bit_putcs函数缺少边界检查导致vmalloc越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在帧缓冲设备控制台显示字符时，若绘制坐标或图像尺寸超出设备显示分辨率范围，会导致vmalloc区域发生越界访问。
+
+#主要错误日志
+vmalloc-out-of-bounds
+
+#问题根因
+`bit_putcs` 函数在绘制字符前，未对 `image.dy`（Y轴起始坐标）、`image.dx`（X轴起始坐标）以及 `image.width`（绘制宽度）进行边界检查。当传入参数超出 `info->var.yres` 或 `info->var.xres` 定义的有效显示区域时，后续代码计算出的内存访问地址将越出合法范围，触发 vmalloc 越界错误。
+
+#解决方案
+在 `drivers/video/fbdev/core/bitblit.c` 的 `bit_putcs` 函数中增加边界检查逻辑：
+1. 在绘制循环前，检查 `image.dy` 是否超过屏幕高度 `yres`，若超过则直接返回。
+2. 限制 `image.height` 不超过剩余屏幕高度（`yres - image.dy`）。
+3. 在绘制循环中，检查 `image.dx` 是否超过屏幕宽度 `xres`，若超过则跳出循环。
+4. 检查绘制区域右边界是否越界（`dx + width > xres`），若越界则截断 `image.width` 并重新计算字符计数 `cnt`，防止越界写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0439ebfd779c0957c198f52225cc027c930746a0

@@ -1,0 +1,23 @@
+#标题
+[调度器新空闲平衡逻辑缺陷导致负载均衡策略不佳]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[在开启 STEAL 特性时，系统负载均衡策略不符合预期。若直接在新空闲平衡（newidle_balance）流程中优先进行跨调度域的任务窃取（steal），会忽略 LLC（Last Level Cache）域内的局部性优势，导致缓存命中率下降；同时，若任务窃取失败后未正确回退到原生的 newidle_balance 机制，可能加剧系统的负载不均衡问题。]
+
+#主要错误日志
+[未知]
+
+#问题根因
+[原有的调度逻辑在 newidle_balance 路径下，未能妥善处理 steal 任务与原生 newidle_balance 机制的优先级顺序。具体而言，未优先尝试在 LLC 域内进行 steal 操作以利用缓存亲和性；且在 steal 失败时，未正确 fallback 到上层调度域的 newidle_balance 机制，导致负载均衡效率下降。]
+
+#解决方案
+[引入 STEAL_FAIL_NI 调度特性开关，重构 idle balance 路径的逻辑：
+1. 在 idle balance 入口处，若开启了 STEAL_FAIL_NI 特性，优先调用 try_steal 尝试拉取任务；若拉取失败（new_tasks == 0），再调用 newidle_balance 进行常规负载均衡。
+2. 在 newidle_balance 函数内部，若开启了 STEAL_FAIL_NI 特性，跳过 SD_SHARE_PKG_RESOURCES 标志的调度域（通常是 LLC 域），避免重复处理，直接在上层调度域进行均衡。
+此方案优先保证了 LLC 域内的任务窃取以提高缓存命中率，同时在失败时回退到更广泛的调度域进行均衡，解决了负载不均衡问题。]
+
+#来源
+[https://atomgit.com/openeuler/kernel/commit/0140f81b8d4c33131728acbaaddee1bea03395f8]

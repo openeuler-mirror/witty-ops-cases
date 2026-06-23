@@ -1,0 +1,21 @@
+#标题
+btrfs文件系统错误状态下写回脏元数据导致use-after-free崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当btrfs文件系统发生错误后，在卸载文件系统过程中触发use-after-free，导致内核崩溃（crash）。该问题在进行generic/388测试用例且元数据使用RAID5配置时容易被触发。表现为在停止所有内核工作队列后，仍有新的工作项被提交到已释放的工作队列中。
+
+#主要错误日志
+未知
+
+#问题根因
+当btrfs遇到错误时，文件系统被标记为错误状态，不再允许新事务，元数据处于冻结状态。但在此错误发生前，已有部分元数据修改驻留在btree inode页缓存中且仍为脏页。
+由于没有真正的事务提交，这些脏页一直保留在缓存中。在close_ctree()调用invalidate_inode_pages2()时无法失效这些脏页。最终在btrfs_stop_all_workers()之后调用iput()时，触发这些脏元数据的写回。如果文件系统使用RAID56元数据，写回将触发RMW（Read-Modify-Write）并向已停止的rmw_workers队列提交新工作，导致queue_work()发出警告并引发use-after-free。
+
+#解决方案
+在write_one_eb()函数中增加特殊处理逻辑：检查文件系统是否已处于错误状态（BTRFS_FS_ERROR）。如果是，立即将btrfs bio（bbio）标记为失败并结束IO，而不是真正提交写回请求。这使得在close_ctree()阶段，iput()可以直接丢弃脏树块而无需真正写入，从而避免向已停止并释放的工作队列提交新任务。此修复同时也作为一道额外的安全网，防止在文件系统已损坏（如extent/free space tree损坏）的情况下，写入错误的树块导致进一步的文件系统破坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c94fa5e295f9eb91228d9b1eae781ad0c10446f1

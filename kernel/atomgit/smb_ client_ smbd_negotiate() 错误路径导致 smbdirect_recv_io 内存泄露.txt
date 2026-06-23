@@ -1,0 +1,20 @@
+#标题
+smb: client: smbd_negotiate() 错误路径导致 smbdirect_recv_io 内存泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 SMB Direct 连接协商时，若 `smbd_post_recv` 函数调用失败，系统卸载模块或关闭 kmem_cache 时会触发内存泄露错误，导致系统无法正常清理缓存。
+
+#主要错误日志
+Objects remaining on __kmem_cache_shutdown()
+
+#问题根因
+在 `smbd_negotiate()` 函数中，调用 `smbd_post_recv()` 前已经获取了 `response` 接收缓冲区资源。当 `smbd_post_recv()` 执行失败（返回非零 rc）时，代码直接返回错误码，未能释放已获取的 `response` 缓冲区，导致 `smbdirect_recv_io` 对象发生内存泄露。
+
+#解决方案
+在 `smbd_negotiate()` 函数中，当检测到 `smbd_post_recv` 返回错误时，在返回错误码前增加调用 `put_receive_buffer(info, response)`，确保接收缓冲区被正确释放，避免内存泄露。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c555e299d9f2561fa7dc7067c07e65c9dfcebee3

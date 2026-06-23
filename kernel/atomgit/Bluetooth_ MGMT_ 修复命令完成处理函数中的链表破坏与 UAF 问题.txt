@@ -1,0 +1,23 @@
+#标题
+Bluetooth: MGMT: 修复命令完成处理函数中的链表破坏与 UAF 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行蓝牙 MGMT 命令（如 `MGMT_OP_SET_MESH_RECEIVER` 或添加广播模式监控）过程中，触发内核链表破坏或释放后使用，导致内核 panic 或系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit 302a1f674c00 引入的 `mgmt_pending_valid()` 函数在验证挂起命令有效性的同时，会将该命令从挂起链表中移除。后续的命令完成处理函数未正确适配这一语义变化，导致了两个问题：
+1. 在 `mgmt_add_adv_patterns_monitor_complete()` 成功路径中，因 `mgmt_pending_valid()` 已将命令从链表移除，再次调用 `mgmt_pending_remove()` 导致 `double list_del()`，引发链表破坏及内核 panic。
+2. 在 `set_mesh_complete()` 错误路径中，`mgmt_pending_valid()` 已将当前命令移除，若继续使用 `mgmt_pending_foreach()` 遍历处理，会错误地针对其他正在处理的 mesh 命令进行操作，导致并发处理时的释放后使用问题。
+
+#解决方案
+1. 在 `mgmt_add_adv_patterns_monitor_complete()` 函数中，将 `mgmt_pending_remove(cmd)` 替换为 `mgmt_pending_free(cmd)`，避免重复删除链表节点。
+2. 在 `set_mesh_complete()` 函数的错误路径中，移除 `mgmt_pending_foreach()` 调用，并简化 `mgmt_cmd_status()` 直接使用 `cmd->opcode`，防止错误操作其他挂起命令。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a5184011f49d8e21b9d40938e95d8d2d5cd0a2ef

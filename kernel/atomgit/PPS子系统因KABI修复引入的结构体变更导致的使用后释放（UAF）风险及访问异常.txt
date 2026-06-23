@@ -1,0 +1,28 @@
+#标题
+PPS子系统因KABI修复引入的结构体变更导致的使用后释放（UAF）风险及访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在PPS（脉冲每秒）子系统驱动中使用 `pps_register_source` 接口注册设备后，系统可能出现以下现象：
+1. 内核崩溃或内存访问错误，表现为访问已释放内存地址。
+2. 驱动调试日志输出异常或无法正常打印设备信息。
+3. 在尝试获取设备引用计数时发生不可预测的行为。
+
+#主要错误日志
+未知
+（注：Commit信息指出这是一个修复KABI broken的补丁，修复了之前的UAF问题，但未提供具体的崩溃日志或调用栈信息。diff中包含大量日志打印级别的修改，如 `dev_err(dev->pps->dev, "lost the signal\n")`，但这些是正常业务日志，非故障报错。）
+
+#问题根因
+前序提交 `c79a39dc8d06` 为了修复PPS子系统中的一个use-after-free漏洞，将 `struct device dev` 成员直接嵌入到了 `struct pps_device` 结构体中。然而，这种修改破坏了内核ABI（KABI）的稳定性。
+为了保持KABI兼容性，本补丁将 `struct pps_device` 中的 `struct device dev` 改为指针 `struct device *dev`，并新增了 `struct cdev cdev` 成员。这要求相关驱动代码必须同步更新访问方式，否则会导致内核结构体布局不匹配与错误的内存访问。
+
+#解决方案
+1. **修改结构体定义**：在 `include/linux/pps_kernel.h` 中，将 `struct pps_device` 成员从内嵌的 `struct device dev` 修改为指针 `struct device *dev`，并添加 `struct cdev cdev` 以维持结构体大小或功能完整性。
+2. **更新设备注册逻辑**：在 `drivers/pps/pps.c` 的 `pps_register_cdev` 函数中，不再使用 `device_register` 初始化内嵌设备，改为使用 `device_create` 动态创建设备对象并赋值给指针；在 `pps_device_destruct` 中增加对动态分配的 `dev` 指针的 `kfree` 操作。
+3. **修正引用计数操作**：全局替换 `get_device(&pps->dev)` 为 `get_device(pps->dev)`，`put_device(&pps->dev)` 为 `put_device(pps->dev)`，确保操作正确的设备对象。
+4. **适配所有调用点**：修改 `drivers/pps/` 目录下所有客户端及核心代码（如 `pps-gpio.c`, `pps-ktimer.c`, `kapi.c` 等），将所有 `&pps->dev` 或 `&dev->pps->dev` 的调用修改为 `pps->dev` 或 `dev->pps->dev`，以适配新的指针类型成员。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/953e780ceaa410279b70c77492d2daf5991653d1

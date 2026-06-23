@@ -1,0 +1,21 @@
+#标题
+ocfs2: 修复 ocfs2_find_victim_chain 中的 kernel BUG 触发内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行 OCFS2 子分配逻辑时，由于分配链表的 `cl_next_free_rec` 字段为 0 或值大于 `cl_count`，导致在 `ocfs2_find_victim_chain()` 函数中触发 `BUG_ON(!cl->cl_next_free_rec)` 条件，进而引发内核崩溃。该问题由 syzbot 报告。
+
+#主要错误日志
+[触发崩溃前的断言检查] BUG_ON(!cl->cl_next_free_rec)
+[修复后的错误日志] Chain allocator dinode %llu has invalid next free chain record %u, but only %u total
+
+#问题根因
+OCFS2 分配链表中的 `cl_next_free_rec` 字段值异常（为 0 或超过链表总数 `cl_count`），导致内核判定无可用链表。原代码在 `ocfs2_find_victim_chain()` 中直接使用 `BUG_ON` 宏检查该条件，由于条件成立直接引发内核恐慌，而非进行受控的错误处理。
+
+#解决方案
+在 `ocfs2_claim_suballoc_bits()` 函数中调用 `ocfs2_find_victim_chain()` 之前增加前置检查。如果检测到 `cl_next_free_rec` 为 0 或大于 `cl_count`，则调用 `ocfs2_error()` 打印错误信息并返回错误码，避免内核 panic，实现优雅的错误处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3bae441195a77c6ecce45eb0932c7de3d3cb8c91

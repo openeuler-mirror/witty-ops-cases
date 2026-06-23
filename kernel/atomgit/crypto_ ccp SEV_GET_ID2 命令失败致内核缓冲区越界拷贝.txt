@@ -1,0 +1,25 @@
+#标题
+crypto: ccp SEV_GET_ID2 命令失败致内核缓冲区越界拷贝
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 SEV_GET_ID2 ioctl 获取 CPU ID 时，若固件命令执行失败（特别是由于用户空间提供的缓冲区长度不足导致的失败），驱动程序仍错误地尝试将数据拷贝到用户空间。这会导致内核读取越界，触发 KASAN 报告 "slab-out-of-bounds"，并可能导致内核数据泄露到用户空间。
+
+#主要错误日志
+BUG: KASAN: slab-out-of-bounds in instrument_copy_to_user ../include/linux/instrumented.h:129 [inline]
+BUG: KASAN: slab-out-of-bounds in _inline_copy_to_user ../include/linux/uaccess.h:205 [inline]
+BUG: KASAN: slab-out-of-bounds in _copy_to_user+0x66/0xa0 ../lib/usercopy.c:26
+Read of size 64 at addr ffff8881867f5960 by task syz.0.906/24388
+Call Trace:
+ sev_ioctl_do_get_id2+0x361/0x490 ../drivers/crypto/ccp/sev-dev.c:2222
+
+#问题根因
+在 `sev_ioctl_do_get_id2` 函数中，处理 PSP 固件命令失败时的逻辑存在缺陷。如果固件命令失败是由于无效长度（即用户缓冲区太小）引起的，固件会在 `data.len` 中返回所需的大小。此时驱动如果未检查命令返回值就直接执行 `copy_to_user`，会尝试按照固件要求的长度（可能大于内核分配的缓冲区大小）拷贝数据，从而造成内核缓冲区读取越界。
+
+#解决方案
+在 `sev_ioctl_do_get_id2` 函数中，执行拷贝操作前增加对命令执行结果的检查。如果 `sev_do_cmd` 返回错误（ret 非 0），或者固件返回错误状态（argp->error 非 0），则直接跳转到 `e_free` 标签释放资源并退出，不再执行后续的 `copy_to_user` 操作。同时，使用 `WARN_ON_ONCE` 对驱动认为成功但固件报错的异常情况进行告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/97d6dd8275edf471af0ba99132abd8315fd0c64a

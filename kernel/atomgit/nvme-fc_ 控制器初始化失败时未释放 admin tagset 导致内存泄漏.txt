@@ -1,0 +1,20 @@
+#标题
+nvme-fc: 控制器初始化失败时未释放 admin tagset 导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 NVMe/FC 控制器初始化过程中，若初始化流程在中途失败（如改变控制器状态或调度连接工作失败），系统无法正确清理已分配的 admin queue/tag set 资源。运行 blktests nvme/fc 测试用例时，kmemleak 工具检测到明显的内存泄漏现象。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nvme_fc_init_ctrl()` 函数中，代码在 `nvme_add_ctrl()` 成功执行后立即分配了 admin blk-mq 资源。如果后续初始化步骤（如设置控制器状态、调度 connect work 等）失败，代码会跳转到 `fail_ctrl` 标签进行处理。该失败处理路径虽然清理了控制器引用，但遗漏了对已分配的 `admin_tagset` 的释放操作，导致 blk-mq 相关内存结构体发生泄漏。
+
+#解决方案
+在失败处理路径（`fail_ctrl`）中增加判断逻辑，检查 `ctrl->ctrl.admin_tagset` 是否存在。若存在，则调用 `nvme_remove_admin_tag_set()` 函数对其进行释放，确保在控制器设置中止时能正确回收所有 admin queue 分配的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/99795c4ef16c5029edc83b2248557c0e6cc4aedc

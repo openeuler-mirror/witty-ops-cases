@@ -1,0 +1,23 @@
+#标题
+bpf: prog_array 在 __uprobe_perf_func 中存在理论性 UAF 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 uprobe 相关的 BPF 程序时，`__uprobe_perf_func` 函数访问 `call->prog_array` 指针存在 Use-After-Free (UAF) 的理论风险。虽然在实际场景中，由于调用链上游的 `handle_swbp()` 已经持有 RCU 锁，该问题可能未被触发，但代码逻辑上缺乏正确的 RCU 保护 annotation，存在指针在读取后立即变为悬挂指针的可能性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__uprobe_perf_func()` 中，指针 `call->prog_array` 的加载没有 RCU annotation 且没有立即显式的 RCU 保护，看起来该指针加载后可能立即变为悬挂指针。虽然后续调用的 `bpf_prog_run_array_uprobe()` 会启动 RCU-trace 读取侧临界区，但这对于防止指针加载时的 UAF 已经太晚。函数内部使用的 `rcu_dereference_check()` 实际上并没有解引用任何内容，导致保护机制失效。
+
+#解决方案
+调整代码语义以对齐 `bpf_prog_run_array()` 的实现方式：
+1. 在调用者 `__uprobe_perf_func()` 中显式提供 `rcu_read_lock_trace()` 保护。
+2. 在持有 RCU 锁的情况下，使用 `rcu_dereference_check()` 加载 `call->prog_array` 指针。
+3. 修改 `bpf_prog_run_array_uprobe()` 函数接口，不再由其内部进行 RCU 锁的获取与释放以及指针解引用，而是直接接收已加载的 `array` 指针，并增加 `RCU_LOCKDEP_WARN` 检查调用者是否已持有 RCU 锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bda5e08acfa02414f0e7c6c495a7ba6af6565303

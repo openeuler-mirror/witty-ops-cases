@@ -1,0 +1,35 @@
+#标题
+remoteproc: rproc_attach 处理资源失败致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当远程处理器处于 RPROC_DETACHED 状态并通过 rproc_attach() 进行附加时，若 rproc_handle_resources() 执行失败，此前由 imx_rproc_prepare() 分配的资源未被释放，导致内核内存泄漏。
+
+#主要错误日志
+```
+unreferenced object 0xffff0000861c5d00 (size 128):
+comm "kworker/u12:3", pid 59, jiffies 4294893509 (age 149.220s)
+hex dump (first 32 bytes):
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ................
+00 00 02 88 00 00 00 00 00 00 10 00 00 00 00 00 ............
+backtrace:
+ [<00000000f949fe18>] slab_post_alloc_hook+0x98/0x37c
+ [<00000000adbfb3e7>] __kmem_cache_alloc_node+0x138/0x2e0
+ [<00000000521c0345>] kmalloc_trace+0x40/0x158
+ [<000000004e330a49>] rproc_mem_entry_init+0x60/0xf8
+ [<000000002815755e>] imx_rproc_prepare+0xe0/0x180
+...
+```
+推断日志：
+`Failed to process resources: %d\n`
+
+#问题根因
+在 rproc_attach() 函数中，当 rproc_set_rsc_table() 或 rproc_handle_resources() 失败时，代码错误地跳转到了 unprepare_device 标签。这导致跳过了 clean_up_resources 标签处的 rproc_resource_cleanup() 调用，使得 imx_rproc_prepare() 中分配的内存资源无法被释放，从而引发内存泄漏。
+
+#解决方案
+修改 rproc_attach() 中的错误处理跳转逻辑，将 rproc_set_rsc_table() 和 rproc_handle_resources() 失败时的跳转目标从 unprepare_device 修改为 clean_up_resources。同时，调整代码结构，将 rproc_resource_cleanup() 放在 rproc_unprepare_device() 之前执行，并移除冗余的 unprepare_device 标签，确保在出错时能正确清理已分配的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c31193390e2d47a40bd68e0979986daef103d61

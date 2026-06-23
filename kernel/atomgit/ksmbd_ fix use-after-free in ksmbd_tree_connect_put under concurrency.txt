@@ -1,0 +1,24 @@
+#标题
+ksmbd: fix use-after-free in ksmbd_tree_connect_put under concurrency
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下，ksmbd 模块在处理 Tree Connect 相关操作时发生 Use-After-Free 故障。具体表现为在 `ksmbd_tree_connect_put` 函数中访问了已经被释放的 `ksmbd_tree_connect` 结构体，可能导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在并发环境下，`ksmbd_tree_connect_put` 和 `ksmbd_tree_conn_disconnect` 两个函数对引用计数 `refcount` 的处理存在竞争条件。原有的实现中，引用计数的递减、检查与释放逻辑分散在不同路径中，且使用了等待队列 `wait_queue_head_t` 进行同步，导致在特定并发时序下，对象可能被提前释放，而在后续代码路径中（如 `smb2_tree_disconnect`）仍试图访问该已释放对象，从而触发 Use-After-Free。
+
+#解决方案
+移除复杂的等待队列同步机制，采用标准的引用计数处理模式：
+1. 删除 `ksmbd_tree_connect` 结构体中的 `wait_queue_head_t refcount_q` 成员及其初始化代码。
+2. 修改 `ksmbd_tree_connect_put` 函数，直接使用 `atomic_dec_and_test` 判断引用计数是否归零，若归零则立即释放内存（`kfree`），不再通过唤醒队列的方式延迟处理。
+3. 调整 `ksmbd_tree_conn_disconnect` 函数逻辑，移除原有的等待队列等待代码，改为在擦除 XA 标记并处理完 IPC 请求后，同样调用 `atomic_dec_and_test` 检查引用计数并执行释放。
+4. 移除 `smb2_tree_disconnect` 中不必要的 `WARN_ON_ONCE` 检查和 `work->tcon = NULL` 赋值，以简化逻辑并避免对引用计数的错误干扰。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c4d3808e024cb0a99cbf7591733dbee1bc750b35

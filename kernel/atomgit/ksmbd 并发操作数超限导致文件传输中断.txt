@@ -1,0 +1,28 @@
+#标题
+ksmbd 并发操作数超限导致文件传输中断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 服务中设置较小的 max credits（如 128 或更低）传输大文件（如 25GB）时，传输失败。
+smbclient 客户端报错 `NT_STATUS_USER_SESSION_DELETED` 及 `Insufficient credits`；Windows 客户端报错 `0x8007003b`。
+
+#主要错误日志
+smbclient 端报错信息：
+```
+cli_push returned NT_STATUS_USER_SESSION_DELETED
+putting file file.bin as \file.bin smb2cli_req_compound_submit:
+Insufficient credits. 0 available, 1 needed
+NT_STATUS_INTERNAL_ERROR closing remote file \file.bin
+smb2cli_req_compound_submit: Insufficient credits. 0 available, 1 needed
+```
+
+#问题根因
+自提交 `0a77d947f599` 引入并发操作数限制检查后，当连接达到最大同时操作数限制时，ksmbd 直接关闭 socket 连接。这导致客户端无法收到减速信号，从而引发传输失败。
+
+#解决方案
+将原有的“达到限制即关闭连接”逻辑修改为“流量控制”逻辑。通过在读取 socket 数据前检查当前运行请求数（`req_running`），若超过最大并发限制（`max_inflight_req`）则让当前处理流程进入等待状态，直到有空闲资源，从而向客户端施加反压使其减速，保证传输完成。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/668d8c689e6a1e4b1ec11624fdee2a63d65a4259

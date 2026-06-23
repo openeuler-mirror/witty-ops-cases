@@ -1,0 +1,40 @@
+#标题
+net: wwan: t7xx: NAPI rx poll 导致的空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 NAPI rx polling 请求时，若用户平面触发断开连接操作导致 `dellink` 逻辑释放了 netdev，驱动在 polling 处理 skb 过程中仍会使用已失效的 netdev，从而引发内核空指针引用崩溃。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 00000000000000f1
+Oops: 0000 [#1] PREEMPT SMP NOPTI
+RIP: 0010:dev_gro_receive+0x3a/0x620
+Call Trace:
+ <IRQ>
+ ? __die_body+0x68/0xb0
+ ? page_fault_oops+0x379/0x3e0
+ ? exc_page_fault+0x4f/0xa0
+ ? asm_exc_page_fault+0x22/0x30
+ ? __pfx_t7xx_ccmni_recv_skb+0x10/0x10 [mtk_t7xx]
+ ? dev_gro_receive+0x3a/0x620
+ napi_gro_receive+0xad/0x170
+ t7xx_ccmni_recv_skb+0x48/0x70 [mtk_t7xx]
+ t7xx_dpmaif_napi_rx_poll+0x590/0x800 [mtk_t7xx]
+ net_rx_action+0x103/0x470
+ irq_exit_rcu+0x13a/0x310
+ sysvec_apic_timer_interrupt+0x56/0x90
+ </IRQ>
+
+#问题根因
+驱动在处理 NAPI rx polling 请求时，netdev 可能已被 dellink 逻辑释放，但在处理 skb 的逻辑中，访问 `ccmni_inst` 数组获取 netdev 指针时未进行有效的并发保护或 NULL 检查（或检查时序晚于指针失效），导致使用了无效的 netdev 指针引发崩溃。
+
+#解决方案
+通过引入 `WRITE_ONCE` 和 `READ_ONCE` 原子操作来保证对 `ccmni_inst` 数组成员访问的原子性与可见性：
+1. 在 `t7xx_ccmni_wwan_dellink` 函数中，先使用 `WRITE_ONCE` 将对应的 `ccmni_inst` 指针置为 NULL，再注销网络设备，确保释放前指针已失效。
+2. 在 `t7xx_ccmni_wwan_newlink` 中使用 `WRITE_ONCE` 设置指针。
+3. 在所有读取 `ccmni_inst` 指针的地方（如 `t7xx_ccmni_recv_skb`、`t7xx_ccmni_queue_tx_irq_notify` 等）使用 `READ_ONCE` 读取，并在读取后增加 NULL 判断，防止使用已释放的指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7d6dd8e6c5801c5eb97bdaa076bb897320a813a5

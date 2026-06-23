@@ -1,0 +1,20 @@
+#标题
+urma: 引用计数释放双重释放导致 UAF 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ubcore_register_device` 失败时，系统可能出现内核崩溃或内存访问越界，具体表现为释放后使用。这是因为在错误处理路径中，对 `ubagg_dev` 进行了多余的引用计数释放操作。
+
+#主要错误日志
+ubcore register device fail, name:%s
+
+#问题根因
+在 `init_ubagg_ubcore_dev` 函数中，当 `ubcore_register_device` 注册失败时，错误处理流程逻辑错误。代码在调用 `free_ubagg_dev_bitmap` 之后，错误地多调用了一次 `ubagg_dev_ref_put`。由于 `free_ubagg_dev_bitmap` 或上层调用逻辑中已包含对该对象的释放操作，此处多余的 `put` 操作会导致引用计数归零过早，引发 Double Free 或 Use-After-Free 风险。
+
+#解决方案
+移除 `ubcore_register_device` 失败分支中多余的 `ubagg_dev_ref_put` 调用，确保引用计数释放逻辑正确，避免双重释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a836486abadbbcebc967961412854983eb212745

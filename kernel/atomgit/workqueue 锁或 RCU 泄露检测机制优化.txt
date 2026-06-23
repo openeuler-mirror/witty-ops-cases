@@ -1,0 +1,30 @@
+#标题
+workqueue 锁或 RCU 泄露检测机制优化
+
+#内核版本
+OLK-6.6
+
+#问题现象
+workqueue 在执行 work item 时，原有的锁调试代码无法准确检测 RCU 深度变化，且报错信息不够详细，难以定位原子上下文、锁或 RCU 泄露的具体原因。在引入 BH workqueue 功能前，需要对现有的锁调试与验证逻辑进行更新与增强。
+
+#主要错误日志
+- 原日志格式：
+  "BUG: workqueue leaked lock or atomic: %s/0x%08x/%d/%d\n"
+  "     last function: %ps\n"
+- 更新后日志格式：
+  "BUG: workqueue leaked atomic, lock or RCU: %s[%d]\n"
+  "     preempt=0x%08x lock=%d->%d RCU=%d->%d workfn=%ps\n"
+
+#问题根因
+原有的 `process_one_work()` 函数仅检查工作项执行结束时的 `in_atomic`、`lockdep_depth` 和 `rcu_preempt_depth` 是否大于 0，这种检查方式不够精确：
+1. 无法检测到执行过程中 RCU 深度的变化（例如进入时深度为 1，退出时深度仍为 1，但中间可能发生了不匹配的获取与释放）。
+2. 报错信息缺少变化前后的对比值，不便于开发者判断是锁增加了未释放，还是 RCU 读临界区未退出。
+此外，flush 路径中的 lockdep 注解代码分散，不利于后续对 BH workqueue 的支持扩展。
+
+#解决方案
+1. **增强检测逻辑**：在 `process_one_work()` 中增加 `lockdep_start_depth` 和 `rcu_start_depth` 变量，记录工作项执行前的锁深度和 RCU 深度。执行结束后，对比当前深度与起始深度是否一致，从而精确检测锁或 RCU 状态的泄露。
+2. **优化日志输出**：更新 `pr_err` 打印格式，增加锁深度和 RCU 深度的变化显示（如 `lock=%d->%d`），明确泄露类型。
+3. **重构 lockdep 注解**：将 flush 路径中的 `lock_map_acquire/release` 操作重构为 `touch_wq_lockdep_map()` 和 `touch_work_lockdep_map()` 函数，并将 work 的 lockdep map 触摸操作从 `__flush_work()` 移至 `start_flush_work()` 中，以便后续支持 BH workqueue 标志检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab669d00526c932f3213d33b84df2cf8e56e6877

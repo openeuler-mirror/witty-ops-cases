@@ -1,0 +1,31 @@
+#标题
+drop_monitor模块初始化顺序错误导致spinlock未初始化被访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 drop_monitor 作为内核模块加载时，如果在模块初始化完成前用户态发送 NET_DM_CMD_START 命令，内核会检测到 spinlock 使用了错误的魔法数，触发 BUG 并打印调用栈。Syzkaller 利用此竞态条件成功复现了该故障。
+
+#主要错误日志
+```
+BUG: spinlock bad magic on CPU#1, syz-executor.0/7995
+ lock: 0xffff88805303f3e0, .magic: 00000000, .owner: <none>/-1, .owner_cpu: 0
+CPU: 1 PID: 7995 Comm: syz-executor.0 Tainted: G            E     5.10.209+ #1
+...
+Call Trace:
+ ...
+ reset_per_cpu_data+0xe6/0x240 [drop_monitor]
+ net_dm_cmd_trace+0x43d/0x17a0 [drop_monitor]
+ ...
+```
+
+#问题根因
+drop_monitor 模块在初始化函数 `init_net_drop_monitor` 中，调用 `genl_register_family` 注册 generic netlink family 的时机过早，且位于 `net_dm_cpu_data_init`（初始化 per-CPU 数据及自旋锁）之前。
+这导致在模块加载过程中，外部用户空间程序（如 Syzkaller）可以通过 netlink 发送命令触发 `net_dm_monitor_start()` 函数，该函数试图获取一个尚未初始化的自旋锁，从而引发 "spinlock bad magic" 错误。
+
+#解决方案
+调整模块初始化顺序：将 per-CPU 数据初始化（包含 spinlock 初始化）和 netdevice notifier 注册操作移动到 `genl_register_family` 注册之前。确保在对外暴露 netlink 接口（允许用户态发送命令）之前，内核内部依赖的资源（锁、 notifier）已准备就绪。同时修复了对应的退出路径顺序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a2e117809d2b384638587a0cd173fa1381e97b28

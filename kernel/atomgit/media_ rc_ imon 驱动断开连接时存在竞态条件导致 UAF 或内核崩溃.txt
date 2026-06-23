@@ -1,0 +1,25 @@
+#标题
+media: rc: imon 驱动断开连接时存在竞态条件导致 UAF 或内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 iMON 设备断开连接（disconnect）的过程中，若用户空间进程正尝试打开显示设备（display_open）或进行写入操作（vfd_write/lcd_write），可能引发竞态条件。这可能导致内核访问已释放的资源（Use-After-Free），进而引发内核崩溃、Oops 或进程在断开连接后仍成功打开设备但操作失败。
+
+#主要错误日志
+- 推断：`pr_err("display not supported by device\n");`
+- 推断：`pr_err_ratelimited("no iMON device present\n");`
+- 推断：`pr_err_ratelimited("no iMON display present\n");`
+
+#问题根因
+在 `imon_disconnect` 函数中，设置 `ictx->disconnected = true` 的操作未持有互斥锁 `ictx->lock`。与此同时，`display_open`、`vfd_write` 和 `lcd_write` 等文件操作接口虽然持有互斥锁检查 `ictx->disconnected` 标志，但由于 `disconnect` 操作未加锁，导致两者之间存在竞态窗口。这使得断开连接的操作与文件操作可能并发执行，从而绕过了设备存在性检查，导致后续操作访问无效指针。
+
+#解决方案
+1. 在 `imon_disconnect` 函数中，将设置 `ictx->disconnected = true` 的操作置于互斥锁 `ictx->lock` 的保护范围内，确保状态变更的原子性。
+2. 调整 `vfd_write` 和 `lcd_write` 函数中的检查逻辑，先获取互斥锁再检查 `ictx->disconnected` 状态，并在发现设备已断开时正确跳转到退出路径（`goto exit`）释放锁。
+3. 在 `display_open` 中增加对 `ictx->disconnected` 的检查，确保在加锁状态下判断设备是否已断开。
+4. 在 `send_packet` 函数中增加对 `ictx->disconnected` 的判断，防止向已断开的设备发送数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/780e3fb29be8e2d2b59f9b22655d1cf1fbb67002

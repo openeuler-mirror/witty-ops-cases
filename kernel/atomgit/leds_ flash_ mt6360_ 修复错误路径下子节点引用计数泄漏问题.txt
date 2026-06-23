@@ -1,0 +1,20 @@
+#标题
+leds: flash: mt6360: 修复错误路径下子节点引用计数泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mt6360 LED 驱动初始化过程中，若probe函数在处理子节点（child node）时遇到错误并提前退出（跳转至错误处理分支），会导致该子节点的引用计数（refcount）未正确减少，从而造成内存泄漏（memory leak）。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码使用了 `device_for_each_child_node()` 宏来遍历子节点，该宏要求在循环内部发生早期退出（如错误跳转）时，必须显式调用 `fwnode_handle_put()` 来减少子节点的引用计数。当前代码在错误路径下跳转至 `out_flash_release` 进行处理时，遗漏了该释放操作，导致引用计数泄漏。
+
+#解决方案
+将 `device_for_each_child_node()` 替换为其作用域变体 `device_for_each_child_node_scoped()`。该变体利用自动清理机制，在循环变量离开作用域（包括因错误提前退出）时自动处理引用计数的递减，从而彻底修复错误路径下的内存泄漏风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3a5c7e9ce0d3dc26c5e8ad57d0e21dddc061cf70

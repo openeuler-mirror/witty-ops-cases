@@ -1,0 +1,20 @@
+#标题
+crypto: ccree 修复 sg_nents_for_len 返回值处理错误导致的错误传播失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ccree 驱动处理哈希请求更新（hash request update）流程中，当 `sg_nents_for_len` 函数返回负值错误码时，驱动未能正确识别并处理该错误。由于返回值被错误地赋值给 `u32` 类型变量，负值错误码被转换为极大的正数值。该非法数值随后被传递给 `sg_copy_to_buffer` 函数，可能导致内存越界访问、数据损坏或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `cc_map_hash_request_update` 中，调用 `sg_nents_for_len(src, nbytes)` 获取 scatter list 条目数时，直接将其返回值赋给了 `areq_ctx->in_nents`（一个 `u32` 类型成员）。`sg_nents_for_len` 在遇到错误时会返回负值（如 `-EINVAL`），而 C 语言中将有符号负数赋值给无符号 `u32` 变量时会发生隐式类型转换，导致负值变成一个非常大的正整数。代码后续逻辑未检查返回值的有效性，直接使用该值进行操作，导致错误被掩盖并引发后续异常。
+
+#解决方案
+在调用 `sg_nents_for_len` 后增加返回值检查逻辑。引入 `int` 类型局部变量 `sg_nents` 接收返回值，判断其是否小于 0。若小于 0，函数直接向上层返回该错误码，终止当前操作，防止错误值污染后续流程；若大于等于 0，再将其赋值给 `areq_ctx->in_nents`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cad5310625a652fdb7541503428335c4e0fc55a2

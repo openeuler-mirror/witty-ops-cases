@@ -1,0 +1,20 @@
+#标题
+i2c: xiic 修复电源管理卸载路径中 pm_runtime_set_suspended 调用失效问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 I2C xiic 驱动 probe 失败的异常处理路径中，调用 `pm_runtime_set_suspended` 设置设备挂起状态失败。该函数返回 `-EAGAIN` 错误码，导致设备在 probe 失败后的电源状态管理不符合预期，可能导致电源状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在驱动 probe 失败的清理代码中，直接调用 `pm_runtime_set_suspended()` 是无效的。根据 Runtime PM 机制，当设备的 Runtime PM 处于启用状态（enabled）时，该函数会检查状态并返回 `-EAGAIN`，导致设置挂起状态的操作无法生效。根本原因是在调用设置挂起状态的接口前，未先禁用 Runtime PM。
+
+#解决方案
+调整 `xiic_i2c_probe` 函数中错误处理路径 `err_pm_disable` 标签下的代码执行顺序。先调用 `pm_runtime_disable()` 禁用 Runtime PM，随后再调用 `pm_runtime_set_suspended()` 设置设备为挂起状态，从而确保状态设置操作能够成功执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7c4372794a2422bc16f4899d1e2d17980c6b1ef5

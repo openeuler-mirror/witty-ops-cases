@@ -1,0 +1,21 @@
+#标题
+stmmac 驱动 RX 内存耗尽导致空指针解引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统内存不足导致 stmmac 驱动的 RX 补充路径持续分配失败时，接收队列处理函数会将已用过的“脏”描述符误认为有效的“满”描述符进行处理，导致内核发生空指针解引用并触发 panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在 stmmac 驱动中，RX 描述符具有三种状态：empty（OWN=1，缓冲区有效）、full（OWN=0，缓冲区有效）、dirty（OWN=0，缓冲区为 NULL）。`stmmac_rx()` 和 `stmmac_rx_zc()` 函数仅检查 OWN 标志位来判断描述符状态，无法区分 `full` 和 `dirty`。
+当 `stmmac_rx_refill()` 因内存不足分配失败时，描述符会停留在 `dirty` 状态（缓冲区指针为 NULL）。如果接收循环继续运行，`cur_rx` 指针追上 `dirty_rx` 指针时，代码会误将 `dirty` 描述符当作 `full` 描述符处理，尝试访问空的缓冲区指针，从而触发空指针解引用。之前的修复仅限制了循环迭代次数，但未能解决 `cur_rx` 追上 `dirty_rx` 时的根本歧义问题。
+
+#解决方案
+在 `stmmac_rx()` 和 `stmmac_rx_zc()` 的接收循环中，在递增 `cur_rx` 指针之前，显式检查下一个描述符条目是否等于 `dirty_rx`。如果相等，则立即跳出循环，防止处理到未分配缓冲区的脏描述符。同时移除了之前不完善的迭代次数限制代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3cfe5eec23e79b7081aae5c2c846623e61d33e13

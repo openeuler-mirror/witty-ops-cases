@@ -1,0 +1,20 @@
+#标题
+bnxt_en: Fix coredump logic to free allocated buffer
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 bnxt_en 网卡驱动的 `HWRM_DBG_COREDUMP_LIST` 固件命令时，若遇到数据长度超过缓冲区的情况（错误路径），驱动程序未释放已分配的 `info->dest_buf` 缓冲区，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `bnxt_hwrm_dbg_dma_data()` 中，当处理 `HWRM_DBG_COREDUMP_LIST` 命令时，如果固件返回的数据长度 `len` 大于请求的长度，代码会进入错误分支（返回 `-ENOBUFS`）并跳出循环。此时，先前已分配的 `info->dest_buf` 指针未被释放。在正常流程中，该指针会被赋值给 `coredump->data` 并在稍后释放，但在错误路径中直接 `break` 导致指针丢失，造成内存泄漏。
+
+#解决方案
+在 `bnxt_hwrm_dbg_dma_data()` 函数的错误路径中增加内存释放逻辑。具体修改为：当返回 `-ENOBUFS` 错误且请求类型为 `HWRM_DBG_COREDUMP_LIST` 时，立即调用 `kfree(info->dest_buf)` 释放缓冲区，并将指针置为 NULL，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/50fa4df684ff4279cbe2f4fc514ffbe85946e00c

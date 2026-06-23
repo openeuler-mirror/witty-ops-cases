@@ -1,0 +1,20 @@
+#标题
+etmem: scan release process中的mm结构体use-after-free故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载etmem模块（rmmod）或关闭etmem相关功能时，触发内核崩溃；或内核日志报告 "use-after-free" 相关的错误，导致系统不稳定。
+
+#主要错误日志
+BUG: KASAN: use-after-free in mm_idle_release
+
+#问题根因
+在 `mm_idle_release` 函数中，代码执行顺序错误。原逻辑先对 `mm_struct` 执行 `mmdrop(mm)` 释放操作，随后再调用 `proc_page_scan_operations.release` 回调函数。而在该 release 回调函数内部会尝试访问已经释放的 `mm_struct` 指针，从而引发 use-after-free 故障。
+
+#解决方案
+调整 `mm_idle_release` 函数中的代码执行顺序，确保在调用 `proc_page_scan_operations.release` 回调函数之后，再执行 `mmdrop(mm)` 操作，避免访问已释放的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6e98ebf5e14f5af19e6c4e4a89d47fd899e97563

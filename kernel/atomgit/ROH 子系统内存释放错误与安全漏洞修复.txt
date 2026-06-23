@@ -1,0 +1,30 @@
+#标题
+ROH 子系统内存释放错误与安全漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 ROH 设备移除或出错路径中，内核可能发生内存泄漏（kfree 释放指针错误）。
+2. IP 事件通知处理失败时，导致 notifier 链调用异常（返回值错误）。
+3. 驱动初始化中断资源不足时，打印日志格式不匹配。
+4. 驱动重置初始化失败时，未正确返回错误码，可能导致上层逻辑误判。
+
+#主要错误日志
+- pr_err("failed to set eid by IP, ret = %d\n", ret);
+- dev_err(hroh_dev->dev, "just %u intr resources, not enough(min: %d).\n", ...);
+- dev_err(dev, "failed to reinit in roh reset process, ret = %d\n", ret);
+
+#问题根因
+1. **内存管理缺陷**：`sysfs.c` 中 `alloc_hsag` 函数在错误处理路径下，直接对 `hsag->attrs[j]` 调用 `kfree`，但该指针并非直接分配的对象，正确的释放对象应为包含该指针的 `container_of` 结构体，导致内存泄漏。
+2. **返回值语义错误**：`core.c` 中 `roh_ipv4_event` 函数在设置 EID 失败时返回了负值错误码，而 notifier 回调函数应返回 `NOTIFY_DONE` 或 `NOTIFY_OK`，返回负值会中断 notifier 调用链。
+3. **代码冗余与安全风险**：包含未使用的冗余函数（如 `roh_register_client` 等）、冗余变量（如 `active` 标志、`reg_base` 打印）以及初始化流程中遗漏的错误返回值处理。
+
+#解决方案
+1. 修复 `alloc_hsag` 中的内存释放逻辑，使用 `container_of` 获取正确的结构体指针后再进行 `kfree`，并置空指针防止 UAF。
+2. 修正 `roh_ipv4_event` 的返回值，在错误路径下返回 `NOTIFY_DONE` 以保证 notifier 机制正常运转。
+3. 移除所有未使用的冗余函数、变量及无关打印，精简代码逻辑。
+4. 补充遗漏的 `return ret` 语句，确保错误能正确向上传递。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b2689450878c5976a312061dd196817fa21922f5

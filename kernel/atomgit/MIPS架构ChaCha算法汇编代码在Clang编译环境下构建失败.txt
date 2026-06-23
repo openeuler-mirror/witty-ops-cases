@@ -1,0 +1,27 @@
+#标题
+MIPS架构ChaCha算法汇编代码在Clang编译环境下构建失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在MIPS32r2架构下使用 Clang 编译器构建内核时，`lib/crypto` 下的 ChaCha 算法汇编文件编译失败，导致内核无法构建成功。具体表现为编译器报错提示未知指令 `rotl` 以及 `wsbh` 指令操作数不足。
+
+#主要错误日志
+- `error: unknown instruction, did you mean: rol, rotr?`
+- `error: too few operands for instruction`
+
+#问题根因
+MIPS32r2 的 ChaCha 汇编代码使用了 GCC 支持但 Clang 不支持的“伪指令”写法，且部分指令格式不符合标准规范：
+1. 代码使用了 `rotl` 伪指令，Clang 汇编器不支持该指令，仅支持标准的 `rotr` 指令。
+2. `wsbh` 指令在代码中仅显式给出了一个操作数，但 Clang 要求必须显式给出两个操作数（源和目标）。
+此外，代码中还存在不必要的大小端特殊处理逻辑（byteswap），增加了代码复杂度并掩盖了指令使用问题。
+
+#解决方案
+修改 `arch/mips/crypto/chacha-core.S` 汇编代码以兼容 Clang 并简化逻辑：
+1. 将所有的 `rotl` 伪指令替换为标准的 `rotr` 指令（通过 `rotr reg, 32 - n` 实现左旋效果）。
+2. 修正 `wsbh` 指令格式，显式指定两个操作数（如 `wsbh n, n`）。
+3. 移除了针对大端模式（Big Endian）不必要的字节交换（byteswap）和反向迭代处理逻辑，因为尾部处理是按字节进行的，实际上是端序无关的。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ff49ba0e708ca35288791fc9da5ea73b3301223b

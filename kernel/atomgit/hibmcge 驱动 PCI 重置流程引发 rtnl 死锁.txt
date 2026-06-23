@@ -1,0 +1,23 @@
+#标题
+hibmcge 驱动 PCI 重置流程引发 rtnl 死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PCI 框架执行 pci_reset_bus 操作时，若总线上存在两个或以上 hibmcge 驱动管理的设备，系统会发生死锁。具体表现为在依次对总线下的设备调用 `reset_prepare` 时，第二个设备尝试获取 `rtnl_lock` 时被阻塞，导致系统挂起或相关进程无法响应。
+
+#主要错误日志
+- [推断] 内核态进程阻塞，lockdep 可能报告锁依赖问题（Commit 未提供具体日志原文）
+- dev_warn(&priv->pdev->dev, "failed to reset because port is up\n");
+
+#问题根因
+在 PCI 框架的 `pci_reset_bus` 流程中，`pci_slot_save_and_disable_locked` 会遍历当前总线下的所有设备并依次执行 `err_handler->reset_prepare()`。
+原代码逻辑中，`hibmcge` 驱动的 `reset_prepare` 回调函数持有 `rtnl_lock`，并预期在 `reset_done` 中释放。当总线上有两个该驱动管理的设备时，第一个设备获取 `rtnl_lock` 后尚未释放（等待 `reset_done`），第二个设备在 `reset_prepare` 中再次请求 `rtnl_lock`，从而导致死锁。
+
+#解决方案
+移除 PCI 重置流程（`reset_prepare` 和 `reset_done`）中的 `rtnl_lock` 加锁操作。
+由于驱动在重置前已经执行了 `netif_device_detach()`，此时设备已与内核网络栈解绑，不会与其他 netdev API 并发执行，因此不再需要 `rtnl_lock` 保护。同时，调整了 `HBG_NIC_STATE_RESETTING` 标志位的设置位置，提前至 `reset_prepare` 入口处，以确保多次重置不会并发执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab8a797059b0ba9002db77851308e1250c355a1a

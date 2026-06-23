@@ -1,0 +1,21 @@
+#标题
+can: usb_8dev: 修复 URB 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在关闭 USB CAN 设备（调用 usb_8dev_close）时，已提交的接收 URB（USB Request Block）未能正确释放，导致内核内存泄漏。随着设备频繁开启与关闭，系统可用内存会逐渐减少。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `usb_8dev_open()` 中分配并提交的接收 URB 被添加到 `priv->rx_submitted` 锚点。然而，USB 核心框架在调用完成回调函数 `usb_8dev_read_bulk_callback()` 之前会先将 URB 从锚点移除。
+在回调函数中，当 URB 处理完毕并重新提交（resubmit）时，代码未将其重新锚定到 `priv->rx_submitted`。这导致一旦 URB 完成了一次传输，它就不再受锚点管理。随后在 `usb_8dev_close()` 调用 `usb_kill_anchored_urbs()` 时，无法找到并释放这些已去锚定的 URB，从而造成内存泄漏。
+
+#解决方案
+在 `usb_8dev_read_bulk_callback()` 回调函数中，于重新提交 URB 之前，调用 `usb_anchor_urb()` 将其重新锚定到 `priv->rx_submitted` 锚点。同时增加对 `usb_submit_urb()` 返回值的判断，若提交失败则调用 `usb_unanchor_urb()` 取消锚定，确保 URB 生命周期管理正确，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/64d6bcbdfb043c6fc1bc8b8992231dc0432ee2eb

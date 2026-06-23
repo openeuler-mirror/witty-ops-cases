@@ -1,0 +1,31 @@
+#标题
+ub/ubus: 修复 IO decoder 页表创建条件判断错误导致的功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定硬件配置下（UB 控制器配置项 `CFG1_BASIC.Supported Feature.Decoder MATT jurisdiction` 指示由 UBFM 管辖），UB driver 错误地尝试创建 IO decoder 页表并进行 MMIO/MATT 寄存器配置。这可能导致驱动初始化失败、寄存器访问错误或内存资源浪费，引发以下日志报错：
+- "Failed to access decoder MMIO BA"
+- "decoder MMIO address does not match HW reg"
+- "Failed to access decoder MATT BA"
+- "decoder MATT address does not match HW reg"
+
+#主要错误日志
+[推断] ub_err(ent, "Failed to access decoder MMIO BA\n");
+[推断] ub_err(ent, "decoder MMIO address does not match HW reg\n");
+[推断] ub_err(ent, "Failed to access decoder MATT BA\n");
+[推断] ub_err(ent, "decoder MATT address does not match HW reg\n");
+
+#问题根因
+原代码判断 IO decoder 是否创建页表（page table）的条件基于 `ubc->cluster`，但这不符合硬件规范。正确逻辑应依据 UB controller 的配置项 `CFG1_BASIC.Supported Feature.Decoder MATT jurisdiction` 来决定：
+1. 当该配置指示由 UBFM 管辖时，driver 不应创建页表或配置相关寄存器。
+2. 原错误判断导致 driver 在不应介入的场景下强制执行了页表创建与寄存器校验逻辑，引发功能异常。
+
+#解决方案
+1. 新增 `create_matt` 布尔成员变量至 `ub_decoder` 结构体。
+2. 在 `ub_get_decoder_cap` 函数中，通过读取 `UB_CFG1_SUPPORT_FEATURE_L` 寄存器获取 feature 字段，并根据 `UB_DECODER_JURIS` 位来设置 `create_matt` 变量（若硬件已管辖则不创建）。
+3. 修改 `ub_decoder_device_set`、`ub_decoder_create_page_table`、`ub_decoder_free_page_table`、`ub_decoder_map` 及 `ub_decoder_unmap` 等函数，在执行页表相关操作前检查 `decoder->create_matt` 标志，若为 false 则直接跳过相关操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7e13e6c7692c252d95cdd8638d5e1b9ecce93959

@@ -1,0 +1,30 @@
+#标题
+arm64 RME：Granule Protection Faults (GPFs) 缺失处理逻辑导致内核无法正确响应
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当主机尝试访问已委派给 Realm 的颗粒时，触发 Granule Protection Fault (GPF) 异常，内核缺少对应的处理函数导致无法正确响应：
+1. 若故障发生在页表遍历期间，应触发内核 oops 并终止运行。
+2. 若故障非页表遍历引起（如用户空间访问已委派页面），应向相关进程发送 SIGBUS 信号，而非无处理或错误处理。
+
+#主要错误日志
+- "Granule Protection Fault at level -1"
+- "Granule Protection Fault at level 0"
+- "Granule Protection Fault at level 1"
+- "Granule Protection Fault at level 2"
+- "Granule Protection Fault at level 3"
+- "Granule Protection Fault not on table walk"
+
+#问题根因
+内核缺少对 Granule Protection Faults (GPFs) 的专门处理逻辑。在 `fault_info` 数组中，对应的异常向量（索引 35-40）被标记为 `do_bad` 或未知状态，导致主机访问已委派给 Realm 的内存区域时，系统无法根据故障类型（页表遍历故障或非页表遍历故障）执行正确的恢复或报错流程。
+
+#解决方案
+在 `arch/arm64/mm/fault.c` 中新增 GPF 处理逻辑：
+1. 新增 `do_gpf_ptw` 函数：专门处理页表遍历期间的 GPF，调用 `die_kernel_fault` 触发内核 oops，表明内核存在 bug。
+2. 新增 `do_gpf` 函数：处理非页表遍历的 GPF，尝试进行异常修复（`fixup_exception`），若无法修复则调用 `arm64_notify_die` 向用户态进程发送 SIGBUS 信号。
+3. 更新 `fault_info` 数组：将索引 35-39 的处理函数由 `do_bad` 分别修改为 `do_gpf_ptw`（对应 level -1 到 3），将索引 40 修改为 `do_gpf`（对应非表遍历场景），确保故障发生时能匹配到正确的处理函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1e16a6643931a67cd35b8857db46398e26031122

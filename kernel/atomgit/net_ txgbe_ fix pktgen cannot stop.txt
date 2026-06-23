@@ -1,0 +1,22 @@
+#标题
+net: txgbe: fix pktgen cannot stop
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 pktgen 工具发送数据包且指定 count 参数时，pktgen 命令无法正常退出，同时会导致 CPU 利用率飙升至 100%。
+
+#主要错误日志
+未知
+
+#问题根因
+故障由延迟释放 tx skbs/buffers 机制引起。在某些工作场景下，原有的触发中断频率（每 2 秒一次）过低，导致资源释放不及时，进而引发 pktgen 无法停止及 CPU 占用过高的问题。
+
+#解决方案
+1. 新增 `irq_timer` 定时器，将触发中断的频率从每 2 秒提高至每 250ms（HZ/4）。
+2. 在 `txgbe_tx_buffer` 结构体中新增 `done_time` 字段，用于记录发送完成的时间戳。
+3. 在 `txgbe_clean_tx_irq` 函数中增加逻辑：当未映射描述符数量超过预留值，或距离发送完成时间已超过 150ms（且 `done_time` 有效）时，触发清理操作，及时释放资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/20a5c3341dedf6c75d968ca65fd8490b0cf3f9dc

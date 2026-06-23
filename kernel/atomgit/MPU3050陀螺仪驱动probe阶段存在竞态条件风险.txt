@@ -1,0 +1,20 @@
+#标题
+MPU3050陀螺仪驱动probe阶段存在竞态条件风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在MPU3050陀螺仪驱动初始化（probe）过程中，由于设备注册过早，用户空间可能在驱动完成中断请求（IRQ）和运行时电源管理（Runtime PM）配置之前就尝试访问设备，导致由于资源未就绪引发的竞态条件，可能导致设备功能异常或访问失败。
+
+#主要错误日志
+dev_err(dev, "device register failed\n");
+
+#问题根因
+根据Commit描述，`iio_device_register()` 被放置在 probe 函数的中间位置，而非末尾。这违反了驱动初始化的最佳实践，导致设备对用户空间可见时，部分关键资源（如 IRQ、Runtime PM 配置）尚未初始化完成，从而引发竞态条件。
+
+#解决方案
+将 `iio_device_register()` 调用移至 probe 函数的最后执行，确保所有硬件资源（缓冲区、IRQ、电源管理）配置完成后再注册设备；同时调整 remove 函数中的 `iio_device_unregister()` 顺序，确保先注销设备再释放资源，并补充了注册失败时的错误回滚路径（释放 IRQ、禁用 Runtime PM）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b24adae31fd8bcadd318a019c4debf869b9f9319

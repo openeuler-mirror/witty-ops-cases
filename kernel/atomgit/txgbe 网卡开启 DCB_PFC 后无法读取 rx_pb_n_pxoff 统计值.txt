@@ -1,0 +1,24 @@
+#标题
+txgbe 网卡开启 DCB/PFC 后无法读取 rx_pb_n_pxoff 统计值
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 DCB（数据中心桥接）并设置 PFC（基于优先级的流量控制）后，网卡接收到 PFC 数据包时，rx_pb_n_pxoff（n=1~7）统计计数器值始终保持为 0，无法正确反映 PFC 暂停帧的接收情况。
+
+#主要错误日志
+未知
+
+#问题根因
+该问题源于对 AML 系列（txgbe_mac_aml/aml40）网卡硬件寄存器定义的误用。
+1. **寄存器地址错误**：AML 硬件使用特定的寄存器地址段 `0x01FA0+ [0..7 * 0x4]` 和 `0x01FC0+ [0..7 * 0x4]` 分别记录 rx_pb_n_pxoff 和 rx_pb_n_pxon，而驱动代码未针对 AML 类型做区分，错误地使用了通用的 `TXGBE_MAC_PXOFFRXC` 等寄存器地址进行读取。
+2. **控制位掩码错误**：寄存器 `TXGBE_MMC_CONTROL` 的 `UP` 字段掩码定义错误，定义为 `0x700`，导致写入位置偏移，正确的掩码应为 `0x70000`。
+
+#解决方案
+1. **新增 AML 专用寄存器定义**：在头文件中增加 `TXGBE_AML_MAC_PXOFFRXC` 和 `TXGBE_AML_MAC_PXONRXC` 宏定义，指向正确的硬件地址。
+2. **区分芯片类型读取统计**：在 `txgbe_update_xoff_received` 和 `txgbe_update_stats` 函数中增加判断逻辑，若网卡类型为 AML 或 AML40，则使用新增的寄存器地址读取统计值；否则使用原有逻辑。
+3. **修正掩码定义**：将 `TXGBE_MMC_CONTROL_UP` 的宏定义从 `0x700` 修正为 `0x70000`，确保控制位写入正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1f749d2d8cb3a25dd6b36afa83f68f4bbb80c8a4

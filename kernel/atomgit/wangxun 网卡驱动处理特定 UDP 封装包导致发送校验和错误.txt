@@ -1,0 +1,22 @@
+#标题
+wangxun 网卡驱动处理特定 UDP 封装包导致发送校验和错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统使用 wangxun 系列网卡发送某些特殊的 UDP 封装数据包（如 Geneve over IPv6）时，如果遇到驱动不支持的标准 UDP 封装类型（switch case default），驱动程序未能正确处理校验和卸载逻辑。这可能导致发送出的数据包校验和字段无效，进而导致接收端丢包或网络通信异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `wx_tx_csum` 中，处理 L4 协议校验和卸载时，针对 switch 语句的 `default` 分支处理逻辑缺失。原代码在 default 分支仅执行 `break`，导致驱动程序未正确设置硬件校验和卸载字段，同时也未回退到软件计算校验和，使得发出的数据包校验和状态不正确。
+
+#解决方案
+修改 `drivers/net/ethernet/wangxun/libwx/wx_lib.c` 文件中的 `wx_tx_csum` 函数：
+1. 在 switch 的 `default` 分支中，调用 `skb_checksum_help(skb)` 函数，由软件层协助计算并填充校验和。
+2. 通过 `goto csum_failed` 跳转到错误处理标签，确保在无法进行硬件卸载时，正确跳过硬件校验和相关配置并继续发送流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e47797a853f796b131bf5af0f876d628039754a7

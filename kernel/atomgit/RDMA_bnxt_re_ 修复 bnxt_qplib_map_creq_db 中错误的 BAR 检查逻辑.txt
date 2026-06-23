@@ -1,0 +1,20 @@
+#标题
+RDMA/bnxt_re: 修复 bnxt_qplib_map_creq_db 中错误的 BAR 检查逻辑
+
+#内核版本
+OLK-6.6
+
+#问题现象
+由于代码逻辑错误，驱动在初始化过程中无法正确检测到 RCFW 通信 BAR（Base Address Register）未被分配或映射的情况。这导致即便 BAR 基地址为 0（未分配状态），驱动也不会报错，可能引发后续功能异常或访问错误内存地址。
+
+#主要错误日志
+QPLIB: CREQ BAR region %d resc start is 0!
+
+#问题根因
+代码中对 BAR 的有效性检查存在逻辑错误。`RCFW_COMM_CONS_PCI_BAR_REGION` 被定义为 BAR 2（即 `bar_id` 为固定值 2），因此原代码判断 `!creq_db->reg.bar_id`（即 `!2`）永远为假，导致检查无效。正确的逻辑应该是检查 `pci_resource_start()` 返回的 `bar_base` 是否为 0，以判断 BAR 是否已被分配。
+
+#解决方案
+修改 `bnxt_qplib_map_creq_db` 函数中的条件判断语句，将 `if (!creq_db->reg.bar_id)` 更正为 `if (!creq_db->reg.bar_base)`，从而正确识别 BAR 未分配的情况并打印错误日志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ec136ee64b2a3af83423b95c070908380ad95bf7

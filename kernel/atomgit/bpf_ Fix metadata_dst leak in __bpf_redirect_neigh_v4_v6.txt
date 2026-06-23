@@ -1,0 +1,20 @@
+#标题
+bpf: Fix metadata_dst leak in __bpf_redirect_neigh_v4/v6
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BPF 程序调用 `bpf_redirect_neigh` 辅助函数进行邻居重定向时，若 skb 已有关联的 dst 条目，会发生内核内存泄漏。具体表现为内核对象 `metadata_dst` 或相关的路由缓存条目引用计数未正确释放，内存占用持续增长。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `__bpf_redirect_neigh_v6` 和 `__bpf_redirect_neigh_v4` 中，调用 `skb_dst_set(skb, dst)` 设置新的 dst 条目之前，未调用 `skb_dst_drop(skb)` 释放 skb 原有的 dst 条目。这导致原 dst 条目的引用计数无法正确递减，从而引发内存泄漏。
+
+#解决方案
+在 `__bpf_redirect_neigh_v6` 和 `__bpf_redirect_neigh_v4` 函数中，于设置新 dst 条目之前添加 `skb_dst_drop(skb)` 调用，确保先释放可能存在的旧 dst 条目，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c7195d9927e7b434a0a7974ca1a327aca26a6236

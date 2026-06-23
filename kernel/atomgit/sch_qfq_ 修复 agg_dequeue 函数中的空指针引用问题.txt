@@ -1,0 +1,22 @@
+#标题
+sch_qfq: 修复 agg_dequeue 函数中的空指针引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核流量控制（QoS）场景下使用 QFQ（Quick Fair Queueing）调度器时，若底层 qdisc 的 `peek` 操作返回 NULL，内核在 `agg_dequeue` 函数中直接使用该返回值计算长度，导致发生空指针引用，进而引发内核崩溃或 Oops。
+
+#主要错误日志
+qdisc_peek_len: %s qdisc %X: is non-work-conserving?
+（推断：修复补丁引入的日志，用于提示非工作保守型 qdisc 异常，修复前通常表现为 Unable to handle kernel NULL pointer dereference）
+
+#问题根因
+在 `net/sched/sch_qfq.c` 的 `agg_dequeue` 函数中，代码直接调用 `cl->qdisc->ops->peek(cl->qdisc)` 并将返回值传递给 `qdisc_pkt_len`，未检查 `peek` 操作的返回值是否为 NULL。当关联的 qdisc 为非工作保守类型且 peek 失败返回 NULL 时，内核发生空指针引用。
+
+#解决方案
+1. 将 `qdisc_peek_len` 函数从 `sch_hfsc.c` 移至通用头文件 `include/net/pkt_sched.h` 中，该函数内部实现了对 `peek` 返回值的 NULL 检查，若为 NULL 则打印警告并返回 0。
+2. 在 `sch_qfq.c` 中使用封装好的 `qdisc_peek_len(cl->qdisc)` 替换原有的直接调用逻辑，从而避免对 NULL 指针的解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d45e459d47c5d79d0869f1e076d98df40d9fe9ba

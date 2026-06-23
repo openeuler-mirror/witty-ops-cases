@@ -1,0 +1,20 @@
+#标题
+s390/bpf: Fix indirect trampoline generation
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 s390 架构下使用 struct_ops 的间接跳板（indirect trampolines）时，由于 `func_addr` 现在是有效的函数指针，导致跳板代码生成逻辑判断失误，未正确设置跳帧标志，进而导致返回地址处理异常，可能引发函数调用错误或系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+在 s390 的 BPF JIT 实现中，之前的逻辑认为只要 `func_addr` 为 NULL 就不是直接调用，从而跳过栈帧。然而，对于 struct_ops 使用的间接跳板，`func_addr` 现在是一个有效的函数指针，导致原有的判断条件 `!func_addr` 为假，未进入跳帧逻辑。实际上，对于间接跳板场景，无论 `func_addr` 是否为空，都需要正确处理返回地址（Return to %r14），即必须设置 `BPF_TRAMP_F_SKIP_FRAME` 标志。
+
+#解决方案
+修改 `arch/s390/net/bpf_jit_comp.c` 中的 `__arch_prepare_bpf_trampoline` 函数，增加对 `BPF_TRAMP_F_INDIRECT` 标志的检测。当检测到该标志时，强制设置 `BPF_TRAMP_F_SKIP_FRAME`，确保间接跳板能正确跳过栈帧，修复返回地址处理逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e87fd8b8c8ae47dc8684b41651cf6487738bf38b

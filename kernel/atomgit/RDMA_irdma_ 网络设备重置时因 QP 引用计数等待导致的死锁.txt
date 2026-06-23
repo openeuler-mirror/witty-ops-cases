@@ -1,0 +1,20 @@
+#标题
+RDMA/irdma: 网络设备重置时因 QP 引用计数等待导致的死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户在网络设备（netdev）重置期间运行 RDMA 应用程序（例如 rping）时，系统发生死锁。具体表现为 netdev 重置操作无法完成，进程处于无限等待状态，导致相关 RDMA 功能卡死。
+
+#主要错误日志
+未知
+
+#问题根因
+netdev 重置触发 ice 驱动移除 irdma 辅助驱动，进而触发 device_delete 和客户端移除流程。在客户端移除过程中，uverbs_client 等待 QP（队列对）的引用计数归零，而 cma_client 持有最后的引用计数，导致循环依赖。在 iWARP 模式下，`irdma_destroy_qp` 函数调用 `wait_for_completion` 无限期等待 `iwqp->free_qp` 完成，从而引发了死锁。
+
+#解决方案
+在 `irdma_destroy_qp` 函数中增加对设备重置状态的判断。如果设备处于重置状态（`iwdev->rf->reset` 为真），则跳过 QP 引用计数归零的等待步骤（`wait_for_completion`），直接继续执行后续销毁流程，从而打破循环依赖，避免死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/11cc4c0e3170ff430d78f3a04ba242b79be1029a

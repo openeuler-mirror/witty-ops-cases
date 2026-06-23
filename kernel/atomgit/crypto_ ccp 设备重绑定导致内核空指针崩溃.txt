@@ -1,0 +1,28 @@
+#标题
+crypto: ccp 设备重绑定导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能 CONFIG_CRYPTO_DEV_CCP_DEBUGFS 配置项的情况下，对 ccp 设备执行解绑和重新绑定操作时，触发内核 NULL 指针解引用，导致系统崩溃。
+
+#主要错误日志
+[  204.976930] BUG: kernel NULL pointer dereference, address: 0000000000000098
+[  204.978026] #PF: supervisor write access in kernel mode
+[  204.979126] #PF: error_code(0x0002) - not-present page
+[  204.980226] PGD 0 P4D 0
+[  204.981317] Oops: Oops: 0002 [#1] SMP NOPTI
+[  205.000297]  start_creating+0x9f/0x1c0
+[  205.001533]  debugfs_create_dir+0x1f/0x170
+[  205.004000]  ccp5_debugfs_setup+0x87/0x170 [ccp]
+[  205.005241]  ccp5_init+0x8b2/0x960 [ccp]
+
+#问题根因
+在 ccp 设备解绑过程中，`ccp5_debugfs_destroy` 函数调用 `debugfs_remove_recursive` 移除了 debugfs 目录，但未将全局指针 `ccp_debugfs_dir` 置为 NULL。当设备重新绑定时，`ccp5_debugfs_setup` 尝试再次创建 debugfs 目录，由于检测到 `ccp_debugfs_dir` 指针非空（指向已销毁的 dentry），导致在 `debugfs_create_dir` -> `start_creating` 流程中引发空指针崩溃。
+
+#解决方案
+在 `ccp5_debugfs_destroy` 函数中，移除 debugfs 目录后，将全局指针 `ccp_debugfs_dir` 置为 NULL，并增加互斥锁保护该操作，确保设备重绑定时能正确重建目录。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6a2e5ed6b98e785aaf0ab9d1c9db8c8a16e1104f

@@ -1,0 +1,23 @@
+#标题
+IPMI KCS 状态机重置逻辑错误导致错误状态处理失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 IPMI KCS 接口处于 `KCS_HOSED`（混乱/故障）状态时，状态机重置逻辑未正确保持错误恢复状态，而是直接将状态重置为 `KCS_IDLE`。这导致驱动在处理 IPMI 断连或通信故障时，状态机行为与预期不符，可能影响后续命令的重试或错误恢复流程。
+
+#主要错误日志
+- 推断：KCS in invalid state %d
+
+#问题根因
+先前的修复补丁引入了 `init_kcs_data_with_state` 函数，在 `kcs_event` 处理 `KCS_HOSED` 状态时，试图将状态设置为 `KCS_ERROR0` 以进行错误处理。然而，根据补丁回退信息及代码逻辑，该修改被证实是不正确的。正确的逻辑应当是在 `KCS_HOSED` 状态下调用 `init_kcs_data` 将状态重置为 `KCS_IDLE`，同时配合 `start_kcs_transaction` 中允许在 `KCS_HOSED` 状态下启动新事务的检查，来正确处理错误恢复。
+
+#解决方案
+回退了错误的修改：
+1. 删除了 `init_kcs_data_with_state` 函数，恢复原有的 `init_kcs_data` 函数，该函数固定将状态初始化为 `KCS_IDLE`。
+2. 在 `kcs_event` 函数的 `KCS_HOSED` 分支中，恢复调用 `init_kcs_data(kcs, kcs->io)`，确保状态机回归空闲状态。
+3. 在 `start_kcs_transaction` 函数中保留了对 `KCS_HOSED` 状态的放行检查（允许在 `KCS_HOSED` 和 `KCS_IDLE` 状态下启动事务），确保在错误状态下可以接收新的命令请求以尝试恢复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d311c5028cfa3eee30f6f1e0968fa43e40de810b

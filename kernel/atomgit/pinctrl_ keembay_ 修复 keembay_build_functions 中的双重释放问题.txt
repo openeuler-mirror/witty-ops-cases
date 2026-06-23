@@ -1,0 +1,20 @@
+#标题
+pinctrl: keembay: 修复 keembay_build_functions 中的双重释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Keem Bay pinctrl 驱动加载或初始化过程中，若 `devm_krealloc_array` 分配失败，系统可能发生内存双重释放，导致内核内存管理子系统崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在代码重构转换为托管内存分配（devm_）时，遗留了一处非托管的 `kfree(keembay_funcs)` 调用。由于 `devm_krealloc_array` 管理的内存会在驱动卸载或设备销毁时自动释放，若该函数在 `devm_krealloc_array` 失败时手动执行 `kfree`，后续设备 detach 时又会自动触发释放，从而导致双重释放。
+
+#解决方案
+删除 `keembay_build_functions` 函数中 `devm_krealloc_array` 失败分支下的冗余 `kfree(keembay_funcs)` 代码，完全依赖托管内存机制进行资源释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/176f0eba314528c877527cbc6372fc01f8962057

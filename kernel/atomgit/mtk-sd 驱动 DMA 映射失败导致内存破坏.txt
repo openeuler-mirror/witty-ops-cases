@@ -1,0 +1,20 @@
+#标题
+mtk-sd 驱动 DMA 映射失败导致内存破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `msdc_prepare_data()` 函数执行失败（例如 DMA 区域映射失败）时，驱动程序未终止请求处理流程。`msdc_start_data()` 随后使用未正确初始化或过时的设置继续进行 DMA 操作，导致系统发生内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+如果 `msdc_prepare_data()` 无法映射 DMA 区域，请求的数据接收准备工作未完成，但 `msdc_start_data()` 仍会使用先前的设置继续进行 DMA 操作。由于 DMA 操作使用了无效或错误的地址/设置，这将直接导致内存破坏。
+
+#解决方案
+在 `msdc_ops_request()` 函数中增加对数据准备状态的检查。调用 `msdc_prepare_data()` 后，立即检查数据是否准备就绪（通过新增的 `msdc_data_prepared()` 辅助函数判断）。如果准备失败，立即设置请求命令的错误码为 `-ENOSPC`，调用 `mmc_request_done()` 终止并完成该请求，从而阻止后续有问题的 DMA 操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0cfceffa0f8b373bc5dc6b1a0c941311a45f14b8

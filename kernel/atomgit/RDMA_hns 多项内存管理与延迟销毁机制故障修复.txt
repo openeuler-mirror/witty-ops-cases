@@ -1,0 +1,36 @@
+#标题
+RDMA/hns 多项内存管理与延迟销毁机制故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 RDMA hns 驱动中，内存分配接口使用不当可能导致内存破坏。具体表现为 `kzalloc` 分配的内存被 `kvfree` 释放，或者 `kvmalloc` 分配的内存结构体成员使用不当，破坏内存边界。
+2. 延迟销毁机制存在缺陷，对于内核模式的 Doorbell (DB) 未进行处理，且 `uctx` 的释放顺序错误，导致设备注销后访问已释放的内存或 debugfs 节点，引发内核 Panic 或 UAF（Use-After-Free）。
+3. DCA 功能在申请 WQE 缓冲区失败时，错误处理路径未正确清理已分配的资源，导致内存泄漏或状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+该 Commit 修复了 RDMA/hns 驱动中的多个根本问题：
+1. **内存分配不匹配**：`dealloc_die_info` 函数中使用 `kvfree` 释放通过 `kzalloc` 分配的内存，违反了内存管理规则；部分结构体成员改变后，原有分配逻辑未适配。
+2. **延迟销毁逻辑缺失与错误**：`free_cq_db` 和 `free_qp_db` 等函数在处理内核 DB 时未传入 `delayed_destroy_flag`，导致延迟销毁机制失效；`hns_roce_dealloc_ucontext` 中 debugfs 注销和 DCA 资源释放发生在从链表删除之后，可能导致并发访问或 UAF。
+3. **资源管理结构设计缺陷**：原有的 `hns_roce_mtr_node` 和 `hns_roce_umem_node` 设计导致管理结构分散，且在错误路径下容易遗漏释放。MTR 结构体作为成员嵌入其他结构体时，导致生命周期管理困难。
+4. **DCA 错误路径处理不当**：`alloc_wqe_buf` 在 `hns_roce_mtr_create` 失败时，未判断 DCA 是否已使能便尝试执行 `hns_roce_disable_dca`，且 DCA 使能失败后未正确回滚资源。
+5. **循环逻辑错误**：`free_buffer_pages_proc` 中循环条件使用了错误的变量，导致逻辑无法正确执行。
+
+#解决方案
+1. **修正内存释放 API**：将 `dealloc_die_info` 中的 `kvfree` 修改为 `kfree`，确保分配与释放接口匹配。
+2. **重构内存管理结构**：
+   - 移除 `hns_roce_mtr_node` 和 `hns_roce_umem_node` 包装结构。
+   - 将 QP、CQ、MR、SRQ、EQ 结构体中的 `mtr` 成员由嵌入值改为指针，并在 `hns_roce_mtr_create` 内部统一申请内存，简化生命周期管理。
+   - 引入 `hns_roce_db_pg_node` 结构统一管理 DB 页面，支持延迟销毁标志。
+3. **完善延迟销毁机制**：
+   - 在 `free_cq_db`、`free_qp_db`、`free_srq_db` 等函数中传递 `delayed_destroy_flag` 参数。
+   - 修改 `hns_roce_free_db` 接口，增加 `delayed_unmap_flag` 参数，并在释放逻辑中检查该标志以决定是否加入 `db_unfree_list`。
+4. **调整释放顺序**：在 `hns_roce_dealloc_ucontext` 中，将 `hns_roce_unregister_uctx_debugfs` 和 `hns_roce_unregister_udca` 的调用移至从链表删除之前，防止 UAF；修正 debugfs 移除逻辑使用 `debugfs_lookup_and_remove`。
+5. **修复 DCA 错误路径**：调整 `alloc_wqe_buf` 错误处理流程，确保仅在 DCA 使能时才执行关闭操作，并正确处理 `mtr_create` 失败后的返回值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/af5900086b6f0256d261f2c36f7beca966875eb1

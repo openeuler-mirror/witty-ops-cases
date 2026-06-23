@@ -1,0 +1,21 @@
+#标题
+ext4: fsmap 输出长度为 0 的错误条目
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在小容量且未开启 meta_bg 特性的 ext4 文件系统上执行 `fsmap` 操作（如 `xfs_io -c "fsmap -d"`）时，输出结果中包含长度为 0 的错误条目。具体表现为输出列表中出现起始块与结束块相同的条目（例如 `[256..255]`），该条目的长度计算为 0，这是不正确的元数据映射信息。
+
+#主要错误日志
+无内核日志报错。现象体现为用户态命令输出异常：
+  2: 253:48 [256..255]: special 102:2 0     <---- 0 len entry
+
+#问题根因
+对于小型文件系统，如果 resize 操作不需要额外的 GDT 块（能够容纳在当前块中），`mkfs.ext4` 会将 `s_reserved_gdt_blocks` 设置为 0。内核 `ext4_getfsmap_find_sb` 函数在处理保留 GDT 块时，未对 `s_reserved_gdt_blocks` 为 0 的情况进行检查，直接调用 `ext4_getfsmap_fill` 函数，导致输出了一个长度为 0 的 fsmap 条目。
+
+#解决方案
+在 `fs/ext4/fsmap.c` 的 `ext4_getfsmap_find_sb` 函数中增加判断逻辑：在处理保留 GDT 块前，先检查 `s_reserved_gdt_blocks` 是否为 0。如果为 0，则直接返回，跳过后续的填充操作，从而避免输出无效的 0 长度条目。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c1759a55545e720975f81837847fd92917ad77a0

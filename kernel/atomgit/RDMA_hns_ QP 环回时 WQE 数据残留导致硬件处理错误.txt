@@ -1,0 +1,26 @@
+#标题
+RDMA/hns: QP 环回时 WQE 数据残留导致硬件处理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当队列对（QP）发生环回时，由于驱动未清零 WQE（Work Queue Element）内存，导致该位置上一次使用遗留的陈旧数据干扰了当前操作的硬件执行。具体表现为：
+1. ATOMIC WQE 中 MSG_START_SGE_IDX 字段保留陈旧值，导致硬件获取错误的 SGE 索引。
+2. FRMR WQE 中 BLOCK_SIZE 和 ZBVA 字段残留陈旧值，被误下发至硬件。
+3. DirectWQE 在未使用时，其相关字段残留陈旧值。
+
+#主要错误日志
+未知
+
+#问题根因
+QP 环回复用 WQE 内存时，驱动未对整个 WQE 空间进行清零操作。由于不同操作码下 WQE 的字段布局不同，当前操作码未显式赋值的字段位置保留了下一次（逻辑上的上一次）写入的陈旧数据。这些残留字段随合法数据一同下发至硬件，导致硬件解析错误或执行异常。具体受影响字段包括 MSG_START_SGE_IDX（ATOMIC WQE）、BLOCK_SIZE 和 ZBVA（FRMR WQE）以及 DirectWQE 相关字段。
+
+#解决方案
+针对不同场景实施精准字段清理，避免全量清零带来的性能损耗：
+1. 对于 ATOMIC WQE：将 MSG_START_SGE_IDX 字段的赋值逻辑调整至通用路径，确保总是写入最新的 sge 索引值。
+2. 对于 FRMR WQE：显式清除 BLOCK_SIZE 和 ZBVA 字段（使用 hr_reg_clear），防止残留旧值。
+3. 对于 DirectWQE：在填充前显式将 `byte_4` 字段清零，以清除 DirectWQE 相关的残留状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9e9473deb8fdaf9b4a8eea9ce926843527997d94

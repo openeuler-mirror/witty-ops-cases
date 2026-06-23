@@ -1,0 +1,23 @@
+#标题
+RDMA/bnxt_re: 错误恢复阶段命令发送逻辑修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设备处于错误状态（特别是 ERR_DEVICE_DETACHED 状态）时，驱动程序仍尝试向固件发送命令，导致命令最终超时；同时，在设备停止过程中存在冗余且无效的 QP 状态修改操作。
+
+#主要错误日志
+未知
+
+#问题根因
+1. `__send_message_basic_sanity()` 函数在检测到 `ERR_DEVICE_DETACHED` 标志位时，直接调用 `bnxt_qplib_map_rc(opcode)` 返回值，未正确传递 `ENXIO` 错误码，导致上层逻辑未能正确识别设备已断开，仍然尝试向固件发送注定超时的命令。
+2. `bnxt_re_dev_stop()` 函数中调用了 `bnxt_re_modify_qp()`，该调用在当前上下文中属于无效操作（no-op），增加了不必要的处理逻辑。
+
+#解决方案
+1. 修改 `__send_message_basic_sanity()` 函数，当检测到 `ERR_DEVICE_DETACHED` 标志时直接返回 `-ENXIO`，明确指示设备不可用。
+2. 在 `__bnxt_qplib_rcfw_send_message()` 中增加对 `-ENXIO` 返回值的特殊处理，将其转换为 `bnxt_qplib_map_rc(opcode)` 以保持接口兼容性，其他错误码直接返回。
+3. 从 `bnxt_re_dev_stop()` 函数中移除无效的 `bnxt_re_modify_qp()` 调用及相关无用变量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/594bef263e949a8609aad1ae24022ec9d3c1e187

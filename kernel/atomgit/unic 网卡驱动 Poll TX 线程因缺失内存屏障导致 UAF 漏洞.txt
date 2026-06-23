@@ -1,0 +1,22 @@
+#标题
+unic 网卡驱动 Poll TX 线程因缺失内存屏障导致 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UNIC 网卡驱动发送过程中，当硬件完成传输并触发 NAPI 轮询线程进行 skb 回收时，可能因读取到旧的 `sq->pi` 或 `sq->skbs[]` 指针，导致释放后使用（UAF）bug。该问题可能导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+该故障由内存屏障缺失引起。在发送线程中，驱动将 skb 保存至 `sq->skbs[]`，更新 `sq->pi` 并写 Doorbell 寄存器触发硬件发送。硬件传输完成后触发中断并运行 NAPI 轮询线程。由于缺少内存屏障，轮询线程可能读取到旧的 `sq->pi` 值，导致从 `sq->skbs[]` 中获取到错误的或旧的 skb 指针，进而引发 UAF 问题。
+
+#解决方案
+1. **添加内存屏障**：在轮询线程读取 `sq->pi` 和 `sq->skbs[]` 之前插入 `dma_rmb()` 屏障，确保 CPU 能观察到最新的数据状态，匹配 CQE 与正确的 skb。
+2. **修复指针清理逻辑**：在 `napi_consume_skb` 释放 skb 后，立即将 `sq->skbs[index]` 置为 NULL，防止悬垂指针引用。
+3. **增加异常检测与统计**：新增 `unic_check_sq_ci_valid` 校验函数，检查 `sq_pi` 与 `sq_ci` 的有效性；新增 `polled_old_pi`、`polled_skb_null` 和 `pi_ci_over_depth` 统计计数器，用于拦截异常情况并提升问题可定位性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/203343d839832f5d5cfa7d64b16fd85ac8787daa

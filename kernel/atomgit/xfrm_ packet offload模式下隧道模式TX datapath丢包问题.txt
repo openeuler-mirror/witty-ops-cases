@@ -1,0 +1,20 @@
+#标题
+xfrm: packet offload模式下隧道模式TX datapath丢包问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在IPsec packet offload模式下配置隧道模式，当匹配输出xfrm策略的报文被发送时，如果内部头引用的网络未被主机直接可达，会导致邻居解析失败，进而发生丢包，IPsec隧道无法正常通信。
+
+#主要错误日志
+未知
+
+#问题根因
+在IPsec packet offload模式的隧道场景中，硬件（HW）负责构建硬头和外部IP头。此时，如果内部头引用的网络对主机不可直接可达，内核栈仍会尝试进行邻居解析，导致解析失败并丢弃报文。根本原因是数据包发送路径未正确处理offload模式下直接发送到指定网卡的逻辑，仍然走了常规的邻居解析流程。
+
+#解决方案
+新增 `xfrm_dev_direct_output` 函数专门处理隧道模式下的直接发送逻辑。在 `xfrm_output` 函数中增加判断，当模式为 `XFRM_MODE_TUNNEL` 时，不再调用常规的 `xfrm_output_resume`，而是调用新函数。该函数通过绕过常规邻居解析，直接将 skb 的 dev 设置为 xfrm state 中指定的 offload 设备（`x->xso.dev`），并调用 `dev_queue_xmit` 直接发送报文，从而避免因内部网络不可达导致的邻居解析失败问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3a133b89fdfec6e26d754ade8b361fb4f9167684

@@ -1,0 +1,41 @@
+#标题
+uacce 及 hisilicon 加速器驱动多项缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **mremap 系统调用异常**：用户态进程对 uacce 设备的内存映射区域执行 mremap 操作时，本应失败但未返回明确的错误码，导致行为未定义。
+2. **内存释放风险**：在 uacce 驱动释放队列文件区域时，若类型为 UACCE_QFRT_SS 且为全局静态内存，可能错误地调用 kfree 释放静态内存，导致内存破坏或内核崩溃。
+3. **资源释放竞争风险**：ioctl 调用 UACCE_CMD_PUT_Q 时，直接调用 put_queue 可能导致资源未完全停止即被释放，存在潜在风险。
+4. **并发竞争问题**：uacce 驱动中 qfr 地址有效性检查缺乏锁保护，在并发场景下可能导致竞争条件。
+5. **SVA 功能失效**：hisi_qm 模块在 uacce_alloc 分配时若 SVA 功能协商失败，驱动未能正确检测并移除 uacce 设备，导致后续功能异常。
+6. **日志拼写错误**：hisi_zip 驱动打印信息中将 "sgl" 误写为 "slg"。
+7. **迁移 DFX 错误码混淆**：在虚拟机热迁移场景下，若虚拟机内未加载 ACC 驱动，测试邮箱命令返回 -EINVAL，与参数错误场景混淆，导致无法区分具体错误类型。
+
+#主要错误日志
+- `pci_err(pdev, "fail to alloc uacce device\n!");`
+- `pci_err(pdev, "fail to enable sva\n!");`
+- `dev_err(dev, "failed to map the dst buffer to hw sgl (%d)!\n", ret);`
+- `dev_err(dev, "qfr NULL, type %lu!\n", vma->vm_pgoff);` （推断，原代码中有此报错逻辑）
+
+#问题根因
+1. **mremap 缺失处理**：uacce 的 vm_operations_struct 操作集中未实现 mremap 回调函数，导致系统默认行为不符合预期。
+2. **静态内存误释放**：`uacce_vma_close` 函数中，未检查 qfr 是否为全局静态变量 `noiommu_ss_default_qfr` 直接进行释放。
+3. **ioctl 处理逻辑不当**：`UACCE_CMD_PUT_Q` 命令处理中，未先确保队列停止即进行资源释放。
+4. **锁缺失**：qfr 操作相关检查缺少 mutex 保护。
+5. **返回值检查不全**：`qm_alloc_uacce` 仅检查了 uacce_alloc 返回指针是否有效，未检查返回的 uacce 设备标志位是否发生了变化，导致 SVA 协商失败时继续使用无效配置。
+6. **拼写失误**：代码中字符串字面量拼写错误。
+7. **错误码选用不当**：ACC 驱动未加载时的错误场景错误地使用了 -EINVAL，应使用 -EAGAIN 以区分参数错误。
+
+#解决方案
+1. **增加 mremap 拒绝接口**：在 `uacce_vm_ops` 中添加 `.mremap = uacce_vma_mremap`，实现该函数返回 `-EPERM` 以明确拒绝 mremap 操作。
+2. **增加内存类型检查**：在释放 qfr 前增加判断 `if (qfr != &noiommu_ss_default_qfr)`，避免释放静态内存。
+3. **重构 ioctl 处理流程**：将 `UACCE_CMD_PUT_Q` 的处理逻辑修改为调用 `uacce_stop_queue`，确保资源安全停止；调整 `uacce_put_queue` 的实现逻辑。
+4. **增加锁保护**：在 `uacce_vma_close` 和 `uacce_fops_mmap` 中涉及 qfr 检查与操作的临界区增加 `mutex_lock(&q->mutex)` 保护。
+5. **完善标志位检查**：在 `qm_alloc_uacce` 中，保存调用前的 `interface.flags`，调用 `uacce_alloc` 后对比新旧 flags，若不一致则打印错误日志并调用 `uacce_remove` 移除设备，返回 `-EINVAL`。
+6. **修正拼写**：将 "slg" 修改为 "sgl"。
+7. **修正错误码**：将 MB_TEST 命令在驱动未加载场景下的返回值从 `-EINVAL` 修改为 `-EAGAIN`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c0c5f5fdc62998e0c68e6c77d6aae2566185bfd5

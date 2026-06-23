@@ -1,0 +1,35 @@
+#标题
+amdgpu 驱动卸载时因释放顺序错误导致 KASAN slab-use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 IGT pci_unplug 测试（模拟设备热拔出）时，内核触发 KASAN 检测错误，报告 "slab-use-after-free"。系统调用 close 触发驱动释放流程时，在 `drm_sched_entity_flush` 函数中访问了已被释放的内存地址，导致内核崩溃或内存破坏。
+
+#主要错误日志
+[  +0.000021] BUG: KASAN: slab-use-after-free in drm_sched_entity_flush+0x6cb/0x7a0 [gpu_sched]
+[  +0.000027] Read of size 8 at addr ffff8881b8605f88 by task amd_pci_unplug/2147
+[  +0.000016] Call Trace:
+[  +0.000014]  drm_sched_entity_flush+0x6cb/0x7a0 [gpu_sched]
+[  +0.000016]  drm_sched_entity_destroy+0x18/0x30 [gpu_sched]
+[  +0.000020]  amdgpu_vce_sw_fini+0x55/0x170 [amdgpu]
+...
+[  +0.000007] Freed by task 2147 on cpu 6 at 160.507651s:
+[  +0.000007]  kfree+0xfa/0x2f0
+[  +0.000007]  drm_sched_fini+0x19d/0x410 [gpu_sched]
+[  +0.000012]  amdgpu_fence_driver_sw_fini+0xc4/0x2f0 [amdgpu]
+
+#问题根因
+驱动卸载流程中函数调用顺序错误。`drm_sched_fini` 在 `drm_sched_entity_kill`（由 `amdgpu_device_ip_fini` 流程触发）之前被调用。
+1. `amdgpu_fence_driver_sw_fini` 先被调用，其内部调用 `drm_sched_fini` 释放了 `drm_sched_rq` 结构体内存。
+2. 随后 `amdgpu_device_ip_fini` 被调用，其在清理 IP 模块（如 VCE）时调用 `drm_sched_entity_destroy`，该函数尝试刷新（flush）实体并访问已释放的 `drm_sched_rq` 内存，导致 Use-After-Free。
+此外，在 `amdgpu_vce_sw_fini` 中，`vce.vcpu_bo` 缓冲区被过早释放，导致后续清理阶段可能出现非法访问。
+
+#解决方案
+调整驱动卸载时的函数调用顺序：
+1. 在 `amdgpu_device_fini_sw` 函数中，交换 `amdgpu_device_ip_fini` 和 `amdgpu_fence_driver_sw_fini` 的调用顺序。确保先通过 `amdgpu_device_ip_fini` 清理所有 IP 模块及其调度实体，再通过 `amdgpu_fence_driver_sw_fini` 清理调度器本身。
+2. 在 `amdgpu_vce_sw_fini` 函数中，将 `amdgpu_bo_free_kernel`（释放 `vce.vcpu_bo`）移动到 `amdgpu_ring_fini` 之后执行，确保该缓冲区在所有相关 ring 清理完毕后再释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4c3f1a0b466f1c9a2781ca8dfb0bfa53c2704148

@@ -1,0 +1,20 @@
+#标题
+urma: ubagg_get_seg_info 函数中自旋锁未释放导致死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ubagg_get_seg_info` 函数时，若用户传入的参数校验失败（`user_ctl->out.addr != 0` 且 `user_ctl->out.len` 小于预期大小），函数会直接返回错误，但此时持有的自旋锁 `ubagg_seg_ht->lock` 未被释放。这将导致后续试图获取该锁的操作进入死锁状态，进而可能引发进程挂起或内核阻塞。
+
+#主要错误日志
+ubagg_log_err("Invalid user out");
+
+#问题根因
+函数 `ubagg_get_seg_info` 在持有自旋锁 `ubagg_seg_ht->lock` 的情况下进行参数校验，在校验失败并返回错误码 `-1` 的退出路径中，遗漏了释放锁的操作（`spin_unlock`），导致锁被永久持有。
+
+#解决方案
+在参数校验失败的返回路径上增加 `spin_unlock(&ubagg_seg_ht->lock)` 调用，确保在函数退出前正确释放自旋锁，避免死锁发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd2f261ad8a23bf3b0f92b05099ad52a884f8d1b

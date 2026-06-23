@@ -1,0 +1,20 @@
+#标题
+ASoC: sti: 未处理 regmap_field_alloc 失败导致潜在内存访问错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 STI 音频驱动初始化过程中，若 `regmap_field_alloc` 分配失败（例如内存不足返回 -ENOMEM），驱动未能正确捕获该错误并中止初始化。系统后续可能尝试访问无效的指针（错误指针而非有效的结构体指针），导致内核崩溃或内存访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `uni_player_parse_dt_audio_glue` 在调用 `regmap_field_alloc()` 后未检查返回值是否为错误指针（IS_ERR）。当内存分配失败时，该函数返回 `PTR_ERR(-ENOMEM)`，代码将其视为非 NULL 的有效指针进行解引用操作（如 `regmap_field_write`），从而引发非法指针访问。
+
+#解决方案
+在 `uni_player_parse_dt_audio_glue` 函数中，对 `player->clk_sel` 和 `player->valid_sel` 的 `regmap_field_alloc` 调用结果增加 `IS_ERR` 判断。若分配失败，立即返回 `PTR_ERR` 错误码，阻止后续代码使用无效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f8c16ddcd74e079cad4f78621faa4371c2dd0863

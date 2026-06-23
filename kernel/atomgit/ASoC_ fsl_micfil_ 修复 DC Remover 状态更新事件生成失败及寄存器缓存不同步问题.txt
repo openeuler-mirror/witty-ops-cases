@@ -1,0 +1,22 @@
+#标题
+ASoC: fsl_micfil: 修复 DC Remover 状态更新事件生成失败及寄存器缓存不同步问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+修改麦克风接口 DC Remover 控制状态时，ALSA 层未生成相应的变更事件，用户空间无法感知控件值已更新。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **返回值错误**：`micfil_put_dc_remover_state()` 函数在更新控件值后固定返回 0，而 ALSA 框架要求 control put 操作在控件值发生改变时应返回 1，否则 ALSA 核心层不会生成变更事件。
+2. **硬件与缓存不同步**：函数在执行 `snd_soc_component_update_bits()` 更新硬件寄存器前未使能 Runtime PM 电源，导致硬件处于掉电状态，写入操作仅更新了 regmap 缓存而未同步到硬件，造成缓存数据与硬件实际值不一致。
+
+#解决方案
+1. **修正返回值逻辑**：直接返回 `snd_soc_component_update_bits()` 的结果，该函数具备判断值是否变更的能力（返回 1 表示变更，0 表示未变更，负数表示错误）。
+2. **添加电源管理**：在调用 `snd_soc_component_update_bits()` 前调用 `pm_runtime_resume_and_get()` 唤醒设备，操作完成后调用 `pm_runtime_put_autosuspend()` 释放引用，确保硬件上电并完成寄存器同步写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/038c3c4f60c8142b15e226fe743750f7a23342e5

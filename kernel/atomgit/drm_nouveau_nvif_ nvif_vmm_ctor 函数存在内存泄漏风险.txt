@@ -1,0 +1,20 @@
+#标题
+drm/nouveau/nvif: nvif_vmm_ctor 函数存在内存泄漏风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `nvif_vmm_ctor` 函数时，若传入的 `type` 参数为非法值（非预设枚举值），内核会触发 WARN_ON(1) 警告，并在返回错误码 `-EINVAL` 前跳过资源清理流程，导致此前已分配的资源发生内存泄漏。
+
+#主要错误日志
+[WARN_ON(1) 触发的调用栈警告]
+
+#问题根因
+在函数 `nvif_vmm_ctor` 的 switch-default 分支处理中，当 `type` 为非法值时，代码直接执行 `return -EINVAL` 返回。此时并未跳转到函数末尾的 `done` 标签处执行资源释放操作，导致函数入口处或之前分配的内存资源未被释放，形成内存泄漏。
+
+#解决方案
+修改 switch-default 分支的逻辑，将直接的 `return -EINVAL` 替换为 `ret = -EINVAL` 赋值操作，并紧接着通过 `goto done` 跳转至函数统一的错误处理出口，确保在参数非法退出路径上能正确释放已分配的资源，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c23e21450880108a225a2f78bddea5f7219b25a6

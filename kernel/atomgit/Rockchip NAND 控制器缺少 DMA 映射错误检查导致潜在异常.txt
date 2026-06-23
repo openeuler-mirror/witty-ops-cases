@@ -1,0 +1,20 @@
+#标题
+Rockchip NAND 控制器缺少 DMA 映射错误检查导致潜在异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Rockchip NAND 控制器驱动进行读写操作时，若 `dma_map_single` 映射失败，驱动程序未检测到错误并继续执行后续 DMA 传输操作。这可能导致访问无效的 DMA 地址，引发内存数据破坏、控制器响应超时或内核崩溃等不可预测的故障现象。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在调用 `dma_map_single` 函数后，未调用 `dma_mapping_error` 函数检查映射是否成功。DMA 映射函数可能因资源耗尽等原因返回错误，缺少检查导致驱动在映射失败的情况下仍尝试进行数据传输。
+
+#解决方案
+在 `rk_nfc_write_page_hwecc` 和 `rk_nfc_read_page_hwecc` 函数中，补充对 `dma_map_single` 返回值的检查逻辑。若 `dma_mapping_error` 检测到映射失败，立即回滚已执行的操作（如释放已映射的缓冲区），并向调用者返回 `-ENOMEM` 错误码，从而避免使用无效的 DMA 地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e436fa78c88944d77d046a85bcf32f7a62ced473

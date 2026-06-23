@@ -1,0 +1,20 @@
+#标题
+EDAC/mc: edac_mc_alloc 错误路径处理顺序错误导致潜在风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 EDAC 子系统内存控制器分配过程中，若 `mci->pvt_info` 的内存分配失败，错误处理路径 `goto error` 被触发。由于 `device_initialize` 和 `release` 回调设置的位置不当，可能导致错误处理逻辑中的设备释放操作行为异常或引发内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `edac_mc_alloc` 函数中，`mci->dev.release` 的赋值与 `device_initialize(&mci->dev)` 的调用位置在 `mci->pvt_info` 内存分配之后。当 `mci->pvt_info` 分配失败跳转到 `error` 标签时，`mci->dev` 尚未初始化且未设置 release 回调。此时若错误处理代码尝试对设备进行操作（如 put_device），会因为结构体未正确初始化而导致问题。
+
+#解决方案
+调整代码执行顺序，将 `mci->dev.release` 的赋值和 `device_initialize(&mci->dev)` 的调用移动到 `mci->pvt_info` 内存分配之前。这确保了无论后续内存分配是否成功，设备结构体均已正确初始化，从而保证错误处理路径的安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/659f090a3b71bc51d6fa1c8b0d9bedd58dc66b6f

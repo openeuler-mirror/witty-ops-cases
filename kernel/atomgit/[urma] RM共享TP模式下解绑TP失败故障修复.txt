@@ -1,0 +1,25 @@
+#标题
+[urma] RM共享TP模式下解绑TP失败故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RM（Reliable Multipath）共享 TP（Transport Path）模式下，执行断开连接操作时，TP 去激活流程失败。系统日志中可能出现 "Failed to deactivate tp" 的错误打印，导致连接资源无法正常释放或状态异常。
+
+#主要错误日志
+- ubcore_log_err("Failed to deactivate tp\n");
+- ubcore_log_err("Failed to queue deactivate tp\n");
+- ubcore_log_err("failed to active tp, vtpn:%u", vtpn->vtpn);
+
+#问题根因
+1. 在 `ubcore_adapter_layer_rm_stp_disconnect` 函数中，原有逻辑直接在上下文中同步调用 `ubcore_deactive_tp`。由于该流程可能涉及阻塞操作或锁竞争，导致在特定上下文下无法正确执行去激活，从而返回失败。
+2. 状态机管理不严谨：在 `ubcore_vtp.c` 中，无论 `ubcore_active_tp` 是否成功，都将 TP 状态设置为 `RM_STP_ACTIVE`，导致状态与实际不符，后续操作可能基于错误状态执行。
+
+#解决方案
+1. **异步化处理**：引入新的工作队列 `UBCORE_DEACTIVE_SHARE_TP_WQ` 和工作结构体 `ubcore_deactive_stp_work`。将同步的去激活操作 `ubcore_deactive_tp` 放入工作队列中异步执行，避免上下文限制导致的失败。
+2. **修复状态机逻辑**：在 `ubcore_vtp.c` 中修正状态设置逻辑，仅在 `ubcore_active_tp` 返回成功（ret == 0）时将状态置为 `RM_STP_ACTIVE`，失败时置为 `RM_STP_ERROR`。
+3. **错误处理增强**：在入队失败时正确释放已分配的内存，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e2db818511688df7c4e75869bad5695aae17553c

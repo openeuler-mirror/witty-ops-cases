@@ -1,0 +1,20 @@
+#标题
+KVM: arm64: vCPU初始化阶段因缺省PMU导致系统寄存器模拟异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在KVM ARM64虚拟化环境中，当用户空间尚未设置vPMU设备属性时，内核在进行系统寄存器模拟操作时，因无法获取有效的PMU实例（PMCR_EL0.N）导致功能异常。该问题主要影响依赖于PMU计数器信息的模拟逻辑，可能导致vCPU初始化流程无法正确处理与PMU相关的状态。
+
+#主要错误日志
+未知
+
+#问题根因
+KVM的系统寄存器模拟逻辑依赖于有效的PMU实例来确定已实现的计数器数量（PMCR_EL0.N）。在修复前，默认PMU的选择时机较晚（发生在用户空间修改vPMU设备属性时），这导致在KVM_ARM_VCPU_INIT处理阶段，系统寄存器模拟逻辑可能在PMU实例尚未就绪时被调用，从而引发错误。
+
+#解决方案
+将默认PMU的选择逻辑提前至KVM_ARM_VCPU_INIT处理函数中执行。具体修改为：在`__kvm_vcpu_set_target`函数中新增`kvm_setup_vcpu`调用，若vCPU拥有PMU特性且当前Guest未设置PMU，则立即调用`kvm_arm_set_default_pmu`设置默认PMU，确保在进行后续系统寄存器模拟前PMU实例已可用。同时，将`kvm_arm_set_default_pmu`函数从静态函数改为全局可访问函数，并移除`kvm_arm_pmu_v3_set_attr`中原有的延迟设置逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c4397f694137b09d44d86d719171c2200a47dbad

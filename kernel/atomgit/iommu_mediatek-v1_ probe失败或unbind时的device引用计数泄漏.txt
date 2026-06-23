@@ -1,0 +1,22 @@
+#标题
+iommu/mediatek-v1: probe失败或unbind时的device引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MediaTek IOMMU v1 驱动加载过程中，若发生探针失败（如探针延迟）或驱动解绑，已获取的 larb 设备引用计数未被释放，导致设备对象泄漏，可能引发内存泄漏或设备状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mtk_iommu_v1_probe` 函数中，驱动通过 `of_find_device_by_node` 获取 larb 设备并增加其引用计数。当探针过程中发生错误返回（如 `EPROBE_DEFER`、`EINVAL` 等）时，代码直接返回而未调用 `put_device` 释放引用；同时 `mtk_iommu_v1_remove` 函数中也缺少对应的释放逻辑，导致设备引用计数泄漏。
+
+#解决方案
+1. 在 `mtk_iommu_v1_probe` 函数的错误处理路径中，增加 `out_put_larbs` 标签，通过遍历 `larb_imu` 数组对已获取的设备调用 `put_device` 释放引用。
+2. 修改探针过程中的错误返回逻辑，跳转至 `out_put_larbs` 进行统一清理，而非直接 `return`。
+3. 在 `mtk_iommu_v1_remove` 函数中，增加遍历释放 larb 设备引用的代码逻辑，确保驱动卸载时资源正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/87f52ce176f984bf2c85596ad9986ba8d4aa10fb

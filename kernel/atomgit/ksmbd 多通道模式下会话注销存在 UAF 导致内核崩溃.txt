@@ -1,0 +1,21 @@
+#标题
+ksmbd 多通道模式下会话注销存在 UAF 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB 多通道场景下，当第二个通道通过第一个通道的连接建立会话时，若触发会话注销逻辑，内核将发生 Use-After-Free 错误。具体表现为：会话结构体在全局会话表中被释放后，连接的 ->sessions 指针仍指向该已释放内存，导致后续访问非法内存，可能引发内核 Oops、系统崩溃或潜在的安全利用风险（CVE-2025-22041）。
+
+#主要错误日志
+未知
+
+#问题根因
+在多通道模式下，`ksmbd_sessions_deregister` 函数在处理会话注销时逻辑存在缺陷。当通过全局会话表释放会话结构体（`ksmbd_session_destroy`）时，未同步清理连接结构体 `conn` 中的 `sessions` 映射（xarray）。这导致已释放的会话指针仍保留在 `conn->sessions` 中，后续通过该连接访问会话 ID 时触发了 UAF（Use-After-Free）问题。
+
+#解决方案
+在移除全局会话表哈希条目（`hash_del`）之后、销毁会话结构体（`ksmbd_session_destroy`）之前，增加对连接级会话映射的清理操作。
+具体修改为：加写锁保护 `conn->session_lock`，调用 `xa_erase(&conn->sessions, sess->id)` 从连接的会话 xarray 中移除对应条目，确保会话结构体释放前不再被连接引用，从而消除 UAF 隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7014eff6a11adf532a9dd9af078de6d641e7c30e

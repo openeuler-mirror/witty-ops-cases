@@ -1,0 +1,28 @@
+#标题
+[drm/i915/gt: VMA分配失败导致timeline引用泄漏]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+在ring submission平台上，当测试用例（如 `igt@api_intel_allocator@fork-simple-stress-signal` 等）触发信号中断导致VMA分配失败，随后卸载i915驱动时，内核触发WARN_ON警告，并在模块卸载时报出slab缓存对象残留错误。具体表现为驱动解绑时 `drm_WARN_ON(dev_priv->mm.shrink_count)` 触发堆栈警告，随后模块卸载时报告 `i915_vma` 对象在 `__kmem_cache_shutdown` 中仍有残留。
+
+#主要错误日志
+```
+<4> [239.330166] i915 0000:00:02.0: [drm] drm_WARN_ON(dev_priv->mm.shrink_count)
+<4> [239.330196] WARNING: CPU: 1 PID: 18570 at drivers/gpu/drm/i915/i915_gem.c:1309 i915_gem_cleanup_early+0x13e/0x150 [i915]
+...
+<3> [357.788006] BUG i915_vma (Tainted: G     U  W        N ): Objects remaining on __kmem_cache_shutdown()
+<3> [357.788031] -----------------------------------------------------------------------------
+<3> [357.788204] Object 0xffff888109e7f480 @offset=29824
+<3> [357.788670] Allocated in i915_vma_instance+0xee/0xc10 [i915] age=292729 cpu=4 pid=2244
+```
+
+#问题根因
+在 `ring_context_alloc()` 函数中，代码逻辑先获取了 `engine->legacy.timeline` 的引用，随后才进行 VMA 分配。当 VMA 分配（如 `i915_vma_instance` 被信号中断）失败时，函数返回错误码，但此前已获取的 timeline 引用未被释放。这导致在下一次 IOCTL 调用时重复获取引用，最终造成 legacy timeline 及其底层的 engine status page VMA 对象在驱动卸载时无法正确释放。
+
+#解决方案
+调整 `ring_context_alloc()` 中的操作顺序，将获取 timeline 引用的操作（`intel_timeline_get`）移动到 VMA 分配成功之后执行。确保只有在 VMA 分配成功的情况下才持有 timeline 引用，从而避免分配失败时的引用泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba66b78d88d3b5647935d3b65d9befdda73745b3

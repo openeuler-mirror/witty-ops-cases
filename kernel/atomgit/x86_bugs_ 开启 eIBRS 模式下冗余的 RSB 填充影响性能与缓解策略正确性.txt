@@ -1,0 +1,28 @@
+#标题
+x86/bugs: 开启 eIBRS 模式下冗余的 RSB 填充影响性能与缓解策略正确性
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 eIBRS（Enhanced Indirect Branch Restricted Speculation）缓解措施的 x86 架构系统上，内核在进程上下文切换时仍然执行了冗余的 RSB（Return Stack Buffer）填充操作。这导致了不必要的性能开销，且与现有的 Spectre v2 缓解逻辑冲突：在 eIBRS 模式下，User->kernel 攻击已由 eIBRS 防护，而 User->user 攻击应通过 IBPB（Indirect Branch Prediction Barrier）处理，RSB 填充无法替代 IBPB 的作用。
+
+#主要错误日志
+Spectre v2 / SpectreRSB mitigation: Filling RSB on context switch
+（注：此为修复前代码静态打印的日志信息，表明 RSB 上下文切换填充被无条件开启。修复后该日志仅在特定缓解模式下根据逻辑打印。）
+
+#问题根因
+修复前的代码逻辑中，`spectre_v2_select_mitigation` 函数无条件地对所有 Spectre v2 缓解模式强制开启了 `X86_FEATURE_RSB_CTXSW`（上下文切换时的 RSB 填充）。然而，在 eIBRS 模式下：
+1. User->kernel 的 RSB 攻击已经通过 eIBRS 硬件机制得到了缓解。
+2. User->user 的 RSB 攻击需要通过 `cond_mitigation()` 中的 IBPB 来缓解，单纯的 RSB 填充无法阻止用户态间的跨进程攻击。
+因此，在 eIBRS 模式下执行 RSB 填充属于冗余操作，既无法提供额外的安全防护，又浪费了 CPU 周期。
+
+#解决方案
+修改 RSB 缓解策略的选择逻辑，将其从无条件开启改为根据 Spectre v2 的具体缓解模式动态判定：
+1. 将函数 `spectre_v2_determine_rsb_fill_type_at_vmexit` 重构并更名为 `spectre_v2_select_rsb_mitigation`，使其同时负责决定 VMEXIT 和 Context Switch 的 RSB 缓解措施。
+2. 对于 `SPECTRE_V2_EIBRS` 相关模式，移除了 `X86_FEATURE_RSB_CTXSW` 的设置，不再进行上下文切换时的 RSB 填充。
+3. 对于 `SPECTRE_V2_RETPOLINE`、`SPECTRE_V2_LFENCE` 和 `SPECTRE_V2_IBRS` 模式，显式保留并设置 `X86_FEATURE_RSB_CTXSW`，确保在非 eIBRS 模式下 RSB 填充机制正常工作。
+4. 更新了 `cond_mitigation` 处的注释，明确 IBPB 用于防止 user->user 的 BTB/RSB 毒化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/02637d559113979e6fbaf904099c9764c77a0495

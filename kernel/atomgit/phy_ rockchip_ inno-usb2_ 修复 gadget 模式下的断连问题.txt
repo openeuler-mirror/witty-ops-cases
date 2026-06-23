@@ -1,0 +1,24 @@
+#标题
+phy: rockchip: inno-usb2: 修复 gadget 模式下的断连问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 OTG USB 端口用于为 SoC 供电并被配置为外设模式运行 gadget 设备时，在 gadget 配置并枚举完成约 6 秒后发生断开连接。设备会迅速重新连接并重新枚举，但之前建立的连接中断。该问题在 Radxa Rock Pi S 开发板上观察到。
+
+#主要错误日志
+未知
+
+#问题根因
+问题由 PHY 驱动代码流程引起：
+1. UDC 启动时调用 `phy_init`，调度了 6 秒延迟的 `otg_sm_work`。
+2. `otg_sm_work` 运行时，若处于 B_IDLE 状态且检测到 VBUS 存在，会立即调度 `chg_detect_work`。
+3. `rockchip_chg_detect_work` 执行时，在 `chg_state` 为 `UNDEFINED` 的情况下，原逻辑仅检查 `!rport->suspended`（表示 PHY 已上电），若条件满足则调用 `rockchip_usb2phy_power_off()`。
+该操作导致 PHY 意外下电，从而切断了正在运行的 gadget 连接。根本原因是缺少对 VBUS 连接状态的判断，导致在有线缆连接（VBUS 存在）的情况下错误地执行了断电逻辑。
+
+#解决方案
+在 `rockchip_chg_detect_work` 函数的 `USB_CHG_STATE_UNDEFINED` 分支中，增加对 VBUS 状态（`vbus_attach`）的检查。修改条件判断为 `if (!rport->suspended && !vbus_attach)`，确保仅在 PHY 未挂起且 VBUS 未连接时才执行 `rockchip_usb2phy_power_off`，从而避免在有源连接情况下错误关闭 PHY 电源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e3f31fff8021f0ad0b91a7df5527e75a646458e9

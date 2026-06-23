@@ -1,0 +1,24 @@
+#标题
+sw64: JunZhang 平台 Legacy 内存检测逻辑导致 NUMA 初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 JunZhang 平台上，当引导标识（boot magic）为 `0xDEED2024UL` 时，内核绕过了传统的内存检测流程。由于此时 NUMA 初始化逻辑未正确处理这种情况，导致 `manual_numa_init` 函数执行失败，进而引发 NUMA 初始化异常。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit message 指出最新固件已能提供完整的内存信息，内核倾向于从固件获取信息以提升兼容性，因此需要移除旧版内存检测逻辑。
+代码分析显示根因在于：
+1. 旧代码中，当 `sunway_boot_magic` 为 `0xDEED2024UL` 时，`sw64_memblock_init` 会跳过 `setup_socket_info` 和 `mem_detect` 等传统检测步骤。
+2. 但 `manual_numa_init` 函数未针对该跳过情况进行适配，导致在内存信息缺失或检测逻辑未执行的情况下尝试初始化 NUMA，从而引发失败。
+
+#解决方案
+1. 在 `sw64_memblock_init` 函数中调整逻辑：仅当 `sunway_boot_magic` **不等于** `0xDEED2024UL` 时，才执行传统内存检测（`setup_socket_info`、`show_socket_mem_layout`、`mem_detect`），确保使用最新固件提供的信息而不进行冗余检测。
+2. 在 `numa.c` 的 `manual_numa_init` 中增加判断：若检测到 `sunway_boot_magic` 为 `0xDEED2024UL`，直接将 `numa_off` 设置为 1 以禁用 NUMA，避免在无传统内存检测数据支撑时强制进行 NUMA 初始化导致失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a50dc21f950d9dda8c5857da7837a088eb14e14d

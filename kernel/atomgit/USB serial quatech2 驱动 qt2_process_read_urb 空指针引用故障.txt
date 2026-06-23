@@ -1,0 +1,20 @@
+#标题
+USB serial quatech2 驱动 qt2_process_read_urb 空指针引用故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 USB 串口数据读取时，由于边界检查条件设置错误，当 `newport` 值等于 `serial->num_ports` 时，代码逻辑未将其判定为非法值，导致访问越界的 `serial->port` 数组元素，引发空指针解引用，造成内核崩溃。
+
+#主要错误日志
+- `%s - port change to invalid port: %i\n`（推断：故障触发时打印的日志，由 dev_err 输出）
+
+#问题根因
+在 `qt2_process_read_urb` 函数中，边界检查条件 `if (newport > serial->num_ports)` 存在逻辑缺陷。`serial->port` 数组的合法下标范围为 0 到 `serial->num_ports - 1`。当 `newport` 等于 `serial->num_ports` 时，该值已超出数组合法范围，但原判断条件未拦截此情况，导致随后执行 `port = serial->port[serial_priv->current_port]` 时访问了越界的数组项，获取到 NULL 指针并引发后续解引用错误。
+
+#解决方案
+修正边界检查逻辑，将判断条件从 `newport > serial->num_ports` 修改为 `newport >= serial->num_ports`，确保当 `newport` 等于数组长度时被正确识别为无效端口并拦截，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/93a02a6e2ea5b70b72a93129e1aebb69c7bee8e4

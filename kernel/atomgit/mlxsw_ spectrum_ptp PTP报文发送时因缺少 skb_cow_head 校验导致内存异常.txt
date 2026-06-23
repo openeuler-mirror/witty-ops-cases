@@ -1,0 +1,20 @@
+#标题
+mlxsw: spectrum_ptp PTP报文发送时因缺少 skb_cow_head 校验导致内存异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Spectrum-1 和 Spectrum-4 ASIC 上发送 PTP 报文时，由于发送路径缺少 `skb_cow_head` 校验，若 SKB 缓冲区头部空间不足或数据头部被克隆，可能导致内核内存越界写入或数据损坏，进而引发系统崩溃或网络发送异常。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit 24157bc69f45 将 `skb_cow_head()` 的调用从 `mlxsw_sp_port_xmit()` 移动到了处理 Tx header 的函数中。然而，在 `mlxsw_sp_ptp_txhdr_construct()` 函数路径（用于 Spectrum-1 和 Spectrum-4 的 PTP 报文处理）中，遗漏了对 `skb_cow_head()` 的调用。这导致在向 SKB 推送 Tx header 之前，未确保有足够的头部空间且头部未被克隆，从而引发内存操作安全隐患。
+
+#解决方案
+在 `mlxsw_sp_ptp_txhdr_construct()` 函数中补充 `skb_cow_head()` 调用，确保在推送 Tx header 前检查并申请足够的头部空间。若检查失败，则增加 `tx_dropped` 计数并释放 SKB，返回 `-ENOMEM` 错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9e09ddfa064a83cbfda06629809ef981033eedce

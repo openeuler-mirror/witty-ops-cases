@@ -1,0 +1,22 @@
+#标题
+ARM SPE PMU 驱动故障处理缺失导致事件组语义异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 ARM SPE (Statistical Profiling Extension) PMU 驱动在计算地址限制失败时（例如 `arm_spe_pmu_next_off` 返回 0），故障被静默忽略。驱动上层误认为 SPE 事件已成功启动，导致 SPE 事件实际上已停止，而同组的其他事件仍在运行。这破坏了 Perf 事件组的语义一致性，导致性能分析数据不准确或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `arm_spe_perf_aux_output_begin()` 在调用 `arm_spe_pmu_next_off()` 计算地址限制失败时返回 0，虽然 `arm_spe_pmu_next_off()` 使用返回零来表示不应启动追踪，但调用者 `arm_spe_perf_aux_output_begin()` 未正确传播该失败状态，未更新 `hwc->state`。
+这导致 `hwc->state` 在失败后仍保持为 0，使得 `arm_spe_pmu_start()` 错误地继续配置过滤寄存器并向 Perf 核心层报告成功。核心层因此认为 SPE 事件已启用，进而启用同组的其他事件，破坏了事件组的语义。
+
+#解决方案
+修改 `arm_spe_perf_aux_output_begin()` 函数，使其返回整型状态码（成功返回 0，失败返回 -EIO），通过检查 `PMBLIMITR_EL1` 寄存器的使能位（E bit）来判断是否成功。
+在中断处理程序和 `arm_spe_pmu_start()` 函数中增加对返回值的检查：若返回值表示失败，则调用 `arm_spe_pmu_stop()` 函数，正确设置 `hwc->state` 为 `PERF_HES_STOPPED`，从而确保故障被正确传播并停止事件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0555ae1cd0d7fe5e7f10677e16439033fb8853cb

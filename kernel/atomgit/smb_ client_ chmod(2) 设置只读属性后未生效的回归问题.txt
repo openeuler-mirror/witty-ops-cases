@@ -1,0 +1,20 @@
+#标题
+smb: client: chmod(2) 设置只读属性后未生效的回归问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+用户对 SMB 客户端挂载下的文件或目录执行 chmod(2) 操作设置为只读（例如清除 S_IWUGO 权限位）后，ATTR_READONLY 属性未能正确更新到 inode 缓存中。对于持有读租约的文件，该属性状态显示不一致，导致 chmod 操作看起来未生效。
+
+#主要错误日志
+未知
+
+#问题根因
+在提交 a18280e7fdea ("smb: cilent: set reparse mount points as automounts") 中，错误地移除了对 `@data` 参数的 NULL 检查。当调用 `is_inode_cache_good()` 时，如果 `@data` 包含新的元数据（如 chmod 触发的 ATTR_READONLY 更新），内核应使用新数据更新 inode，但由于缺少该检查，代码直接复用了旧的缓存数据，导致新设置的只读属性未被更新。
+
+#解决方案
+在 `cifs_get_inode_info()` 和 `smb311_posix_get_inode_info()` 函数中，恢复对 `@data` 参数的 NULL 检查逻辑。仅当 `@data` 为 NULL 时才跳过重新验证直接使用缓存；若 `@data` 非空，则必须使用其携带的新元数据更新 inode，确保属性变更立即生效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/49e6f6621320d933f3a4744a90d949bac5460d46

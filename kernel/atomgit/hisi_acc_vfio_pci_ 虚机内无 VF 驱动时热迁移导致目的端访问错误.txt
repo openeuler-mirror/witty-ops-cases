@@ -1,0 +1,23 @@
+#标题
+hisi_acc_vfio_pci: 虚机内无 VF 驱动时热迁移导致目的端访问错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Guest OS 内未加载 VF 设备驱动的情况下进行热迁移，目的端在进行设备数据迁移恢复操作时，会访问空的地址值，导致访问错误。
+
+#主要错误日志
+dev_info(dev, "resume dma addr is NULL!\n");
+dev_err(dev, "failed to write QM_VF_STATE\n");
+
+#问题根因
+如果 Guest OS 中未加载 VF 设备驱动，尝试进行设备数据迁移时，迁移数据的地址将为 NULL。目的端进行热迁移恢复操作时会访问该空地址值，从而引发访问错误。
+
+#解决方案
+1. 在数据加载阶段（vf_qm_load_data）增加对迁移数据地址（eqe_dma、aeqe_dma、sqc_dma、cqc_dma）的有效性检查，若地址为空，则不执行设备数据迁移。
+2. 若检测到目的端获取的队列地址数据为空，将设备状态设置为 QM_NOT_READY，不再执行设备队列恢复处理。
+3. 删除原 vf_qm_check_match 中不恰当的状态写入逻辑，并确保设备初始化时将 vf_qm_state 默认设置为 QM_NOT_READY。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e809f36681f69df37a2b69bc80284c609a337bbf

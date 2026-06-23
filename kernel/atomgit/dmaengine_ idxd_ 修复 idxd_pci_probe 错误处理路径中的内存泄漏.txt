@@ -1,0 +1,20 @@
+#标题
+dmaengine: idxd: 修复 idxd_pci_probe 错误处理路径中的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 idxd_pci_probe() 函数执行过程中，若发生错误（如 pci_iounmap 之后或 pci_enable_device 失败），之前为 idxd 设备分配的内存及相关资源未被正确释放，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 idxd_pci_probe 的错误处理路径中，代码仅调用了 put_device(idxd_confdev(idxd))，未释放 idxd 结构体指针本身、opcap_bmap 以及 ida 资源。此前分配内存的释放顺序不正确或不完整，导致在出错退出函数时发生内存泄漏。
+
+#解决方案
+新增 idxd_free() 函数用于统一释放 idxd 设备相关资源，该函数依次释放 confdev、opcap_bmap、ida 资源以及 idxd 结构体内存。将错误处理路径中的 put_device 调用替换为 idxd_free，确保在探测失败时按照分配的逆序正确释放所有已分配的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/674ac591cb6636f8aab28a7c37c0666149442a6e

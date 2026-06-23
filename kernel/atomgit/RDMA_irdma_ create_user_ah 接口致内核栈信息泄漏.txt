@@ -1,0 +1,20 @@
+#标题
+RDMA/irdma: create_user_ah 接口致内核栈信息泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 irdma_create_user_ah() 创建用户地址句柄（AH）时，内核将未初始化的栈内存数据（结构体中的保留字段）拷贝至用户空间，导致内核栈内存信息泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+结构体 `irdma_create_ah_resp` 定义中包含 4 字节的 `rsvd` 保留字段。在函数 `irdma_create_user_ah` 中，局部变量 `uresp` 声明后未进行初始化，代码仅对 `ah_id` 字段进行了赋值，而 `rsvd` 字段保持了栈上的随机值。随后该结构体通过 `ib_respond_udata()` 拷贝给用户空间，导致 4 字节的内核栈数据泄漏。
+
+#解决方案
+将结构体变量 `uresp` 的声明方式修改为初始化声明（即 `struct irdma_create_ah_resp uresp = {};`），确保结构体中所有成员（包括未显式赋值的保留字段）均被初始化为 0，从而避免栈上残留数据泄漏到用户空间。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9e126da4d7ef228c5092e6e82a7b2a6daab2cd2e

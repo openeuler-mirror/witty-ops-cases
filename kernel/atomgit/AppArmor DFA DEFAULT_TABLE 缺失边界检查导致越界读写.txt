@@ -1,0 +1,24 @@
+#标题
+AppArmor DFA DEFAULT_TABLE 缺失边界检查导致越界读写
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载包含格式错误 DFA（确定有限状态自动机）的 AppArmor 配置文件时，内核在 `verify_dfa` 函数中触发 KASAN 检测到的 slab 越界读写错误，导致内核崩溃或内存损坏。
+
+#主要错误日志
+[   57.180549] BUG: KASAN: slab-out-of-bounds in verify_dfa+0x59a/0x660
+[   57.180904] Read of size 4 at addr ffff888100eadec4 by task su/993
+[   57.181623]  verify_dfa+0x59a/0x660
+[   57.181627]  aa_dfa_unpack+0x1610/0x1740
+[   57.181730]  policy_update+0x17a/0x330
+
+#问题根因
+`verify_dfa()` 函数在进行 DEFAULT_TABLE 边界检查时存在逻辑漏洞。原代码仅在状态未使用差分编码（`!MATCH_FLAG_DIFF_ENCODE`）时才检查边界。当验证循环遍历差分编码链时，代码直接读取 `k = DEFAULT_TABLE[j]` 并将其作为数组索引使用而未进行校验。如果传入的畸形 DFA 数据中 `DEFAULT_TABLE[j]` 的值大于等于 `state_count`，将导致越界读取和写入。
+
+#解决方案
+移除 `MATCH_FLAG_DIFF_ENCODE` 条件判断，无条件对 DEFAULT_TABLE 中的所有条目进行边界校验。若发现 `DEFAULT_TABLE(dfa)[i] >= state_count`，则打印错误日志 "AppArmor DFA default state out of bounds" 并拒绝加载，从而防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f27d7df40baceab925a8d3a2e3e2c34e60e199d8

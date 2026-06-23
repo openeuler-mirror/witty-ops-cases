@@ -1,0 +1,26 @@
+#标题
+mmc: mtk-sd: 修复 hs400(es) 模式初始化失败问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 eMMC 切换至 hs400(es) 模式时，如果设备树中仅定义了 `mediatek,hs400-ds-dly3` 而未配置 `hs400-ds-delay`，会导致初始化失败。具体表现为在 `mmc_switch_status()` 中 CMD13 命令报告响应 CRC 错误，进而导致 eMMC 卡初始化中止。
+
+#主要错误日志
+[    1.914038][   T82] mmc0: mmc_select_hs400es failed, error -84
+[    1.914954][   T82] mmc0: error -84 whilst initialising MMC card
+
+#问题根因
+问题根源在于寄存器配置时序与逻辑错误：
+1. PAD_DS_DLY3 字段配置时机不当：原代码将 `hs400_ds_dly3` 的设置放在 tuning 函数中执行，导致在 hs400(es) 模式切换过程（tuning 前）中该字段未被配置，从而引发 CRC 错误。
+2. 寄存器覆盖风险：原代码直接写入 `hs400_ds_delay`，当该属性在设备树中未设置时，会写入 0 并覆盖掉之前设置的 DLY3 字段值。
+3. 寄存器配置残留：hs400(es) 模式仅需调优 PAD_DS_DLY1，但 PAD_DS_DLY2_SEL 位未被清除（bypass），影响了信号质量。
+
+#解决方案
+1. 调整配置时序：将 PAD_DS_DLY3 字段的配置逻辑从 `msdc_execute_hs400_tuning()` 移至 `msdc_prepare_hs400_tuning()` 函数中，确保在模式切换前完成配置。
+2. 增加写入保护：在写入 `hs400_ds_delay` 前增加非零判断，防止因该值未定义（为 0）而错误覆盖已配置的 DLY3 字段。
+3. 清除多余配置：在 tuning 流程中显式清除 PAD_DS_DLY2_SEL 位，确保 DLY2 处于 bypass 状态以符合 hs400(es) 规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/404c69ca36d932cdacf9ddd44169eb8e8bbfda4a

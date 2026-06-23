@@ -1,0 +1,23 @@
+#标题
+[LoongArch] KASAN 初始化阶段内存映射与页表遍历异常修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构上启用 KASAN 功能时，系统在早期初始化阶段可能出现内存映射错误或异常崩溃。具体表现为在 `kasan_init` 过程中，对 `VMALLOC_START` 到 `KFENCE_AREA_END` 区域建立早期影子内存映射时触发异常，或在 `setup_ptwalker` 函数执行期间发生非预期的 KASAN 检测错误，导致内核启动失败或运行不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **初始化顺序与映射逻辑错误**：原代码在 `kasan_init` 中调用了 `kasan_populate_early_shadow` 对 `VMALLOC_START` 到 `KFENCE_AREA_END` 区间进行映射，但在 `kasan_mem_to_shadow` 函数中，`kasan_arch_is_ready()` 的判断逻辑导致早期阶段直接返回 `kasan_early_shadow_page`，使得相关映射操作无效或与后续逻辑冲突。
+2. **页表遍历函数缺少 KASAN 屏蔽**：`setup_ptwalker` 函数负责设置硬件页表遍历器，该过程在 KASAN 初始化完成前或操作自身影子区域时不应被 KASAN 插桩检测。原代码未对该函数添加 `__no_sanitize_address` 属性，可能导致非法内存访问检测误报或死锁。
+
+#解决方案
+1. **移除冗余的早期映射调用**：删除 `kasan_init` 函数中对 `kasan_populate_early_shadow(kasan_mem_to_shadow((void *)VMALLOC_START), kasan_mem_to_shadow((void *)KFENCE_AREA_END))` 的调用，简化初始化流程并消除潜在的映射冲突。
+2. **简化影子地址转换逻辑**：移除 `kasan_mem_to_shadow` 函数中对 `kasan_arch_is_ready()` 的判断分支，直接根据地址范围计算影子地址。对于 `FIXADDR_START` 以上的地址直接返回早期影子页，不再受 `kasan_early_stage` 状态限制，确保逻辑统一。
+3. **关闭特定函数的 KASAN 检测**：为 `setup_ptwalker` 函数添加 `__no_sanitize_address` 编译属性，防止该关键初始化函数被 KASAN 插桩，避免在页表遍历器配置期间引发内存检测异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a6b67cc2f91d30bd021777a9e51eb8cca4650b81

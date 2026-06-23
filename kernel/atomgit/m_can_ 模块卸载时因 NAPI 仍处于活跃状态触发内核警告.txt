@@ -1,0 +1,21 @@
+#标题
+m_can: 模块卸载时因 NAPI 仍处于活跃状态触发内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 m_can 驱动模块被移除（rmmod）且 CAN 接口处于 "up" 状态时，内核发出警告信息。这是因为销毁 NAPI 的函数调用时，NAPI 仍处于活跃状态（enabled），触发了内核对非法状态的检查警告。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `m_can_class_unregister()` 函数中，注销顺序错误。代码先调用了 `can_rx_offload_del()` 来删除 NAPI，然后才调用 `unregister_candev()`。
+然而，`unregister_candev()` 内部会调用 `ndo_stop`，如果接口处于 up 状态，`ndo_stop` 会尝试禁用 NAPI。由于此时 NAPI 已被删除，导致内核检测到 NAPI 在仍处于活跃状态时被删除，从而触发警告。
+
+#解决方案
+调整 `m_can_class_unregister()` 函数中的调用顺序。先调用 `unregister_candev(cdev->net)` 注销网络设备，这会触发 `ndo_stop` 并正确禁用 NAPI；随后再调用 `can_rx_offload_del(&cdev->offload)` 删除 offload 相关资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9d4eb5bb1f9ecb6bae99d1f75fdc0313ae1dacbf

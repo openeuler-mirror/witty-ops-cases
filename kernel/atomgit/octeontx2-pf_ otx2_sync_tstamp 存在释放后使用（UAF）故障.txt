@@ -1,0 +1,40 @@
+#标题
+octeontx2-pf: otx2_sync_tstamp 存在释放后使用（UAF）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 OcteonTX2 PCI 设备驱动（执行 cleanup/remove 流程）时，内核触发 KASAN 检测到的 slab-use-after-free 错误。由于 `otx2_ptp_destroy` 与周期性运行的 `synctstamp_work` 延迟工作队列存在竞态条件，导致 `otx2_ptp` 结构体内存被释放后，工作队列回调函数仍试图访问该内存，进而引发内核崩溃或内存污染。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in __run_timer_base.part.0+0x7d7/0x8c0
+Write of size 8 at addr ffff88800aa09a18 by task bash/136
+...
+Call Trace:
+ <IRQ>
+ dump_stack_lvl+0x55/0x70
+ print_report+0xcf/0x610
+ kasan_report+0xb8/0xf0
+ __run_timer_base.part.0+0x7d7/0x8c0
+ run_timer_softirq+0xd1/0x190
+ handle_softirqs+0x16a/0x550
+ irq_exit_rcu+0xaf/0xe0
+ sysvec_apic_timer_interrupt+0x70/0x80
+ </IRQ>
+...
+Freed by task 136:
+ kfree+0x137/0x370
+ otx2_ptp_destroy+0x38/0x80
+ otx2_remove+0x10d/0x4c0
+
+#问题根因
+原代码在 `otx2_ptp_destroy()` 中使用 `cancel_delayed_work()` 来取消 `synctstamp_work`。该函数仅尝试取消待处理的工作项，但如果工作项已经开始执行（处于 running 状态），它不会等待其执行完成。这导致了一个竞态窗口：
+1. CPU 0 (cleanup 路径) 调用 `otx2_ptp_destroy()`，执行 `cancel_delayed_work()` 后继续执行 `kfree(ptp)` 释放内存。
+2. CPU 1 (工作队列回调) 的 `otx2_sync_tstamp()` 正在运行，在内存被释放后仍试图解引用 `otx2_ptp` 指针，触发 use-after-free。
+
+#解决方案
+将 `otx2_ptp_destroy()` 函数中的 `cancel_delayed_work()` 替换为 `cancel_delayed_work_sync()`。后者是同步版本，会等待当前正在运行的延迟工作项执行完成后再返回，从而确保在调用 `kfree(ptp)` 释放内存前，工作队列已完全停止，消除了竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d8e8cf5407521f714ee69d01d946286b3b6ab829

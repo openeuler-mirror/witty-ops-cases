@@ -1,0 +1,20 @@
+#标题
+irqchip/mchp-eic: 分配函数中缺少错误码返回值修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 mchp_eic_domain_alloc() 进行中断分配时，若 irq_domain_translate_twocell() 解析出的 hwirq 值越界（大于等于 MCHP_EIC_NIRQ），函数虽然检测到了该无效值，但未能正确返回错误码，而是返回了成功（0），导致上层调用者误认为分配成功，进而可能引发内存越界访问。
+
+#主要错误日志
+未知
+
+#问题根因
+代码逻辑中判断条件 `if (ret || hwirq >= MCHP_EIC_NIRQ)` 成立时，直接执行 `return ret;`。当 `irq_domain_translate_twocell` 返回成功（ret 为 0）但 `hwirq` 越界时，该语句错误地返回了 0（成功），未设置对应的 -EINVAL 错误码。
+
+#解决方案
+修改返回逻辑，使用 `return ret ?: -EINVAL;`。该写法确保：如果 `ret` 非 0 则返回 `ret`；如果 `ret` 为 0（翻译成功）但 `hwirq` 越界，则返回 `-EINVAL`，从而正确向调用者传递错误状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7250927c3039f5ffbde326281303eb69deda5670

@@ -1,0 +1,21 @@
+#标题
+asus-laptop: 加速度计读取使用未初始化变量导致潜在内核错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Asus Pegatron Lucid 设备上读取加速度计数据时，若 `acpi_evaluate_integer()` 连续多次（超过 `PEGA_ACC_RETRIES` 次）调用失败，系统可能会使用一个未初始化的局部变量 `val` 参与运算。这可能导致传递给 `clamp_val()` 宏的数据为随机垃圾值，进而导致加速度计数据异常或内核行为不可预测。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `pega_acc_axis` 函数中调用 `acpi_evaluate_integer()` 获取加速度计数据时，未检查该函数的返回值（ACPI 状态）。若该函数调用失败（返回错误状态），代码未做处理仍继续循环。当循环重试耗尽后，如果之前所有尝试均失败，局部变量 `val` 将保持未初始化状态，并被传递给后续的 `clamp_val()` 宏使用。
+
+#解决方案
+1. 初始化变量 `val` 为当前传入的 `curr` 值，作为安全缺省值。
+2. 在循环中增加对 `acpi_evaluate_integer()` 返回状态 `status` 的检查，若调用失败（`ACPI_FAILURE(status)`），则直接 `continue` 进行下一次重试，避免处理无效数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a3538d8dd5d2c128b2d4c5c77256861650e58e2d

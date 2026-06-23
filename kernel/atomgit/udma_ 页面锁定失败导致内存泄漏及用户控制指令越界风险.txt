@@ -1,0 +1,42 @@
+#标题
+udma: 页面锁定失败导致内存泄漏及用户控制指令越界风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 UDMA 驱动进行内存注销或清理流程时，由于未正确处理 `sg_append_table` 结构体，导致内核内存泄漏。
+2. 当用户空间传入非法的用户控制指令码时，驱动未进行有效边界检查，可能导致内核越界访问或空指针引用，引发内核 Panic。
+3. 驱动在某些错误处理路径下存在引用计数泄露或资源未释放问题。
+4. 修改 JFS（Jetty File System）配置参数时，可能会因参数校验逻辑缺陷导致配置异常。
+
+#主要错误日志
+- dev_err(udma_dev->dev, "failed to pin_user_pages_fast, page_count: %llu, pinned: %d.\n", ...);
+- dev_err(udma_dev->dev, "failed to sg alloc append table failed, page_count: %llu.\n", ...);
+- dev_err(udev->dev, "invalid user opcode: 0x%x.\n", in.opcode);
+- dev_err(udev->dev, "invalid opcode: 0x%x.\n", k_user_ctl->in.opcode);
+- dev_err(dev->dev, "Invalid jfr param, depth = %u, max_sge = %u.\n", ...);
+
+#问题根因
+1. **内存管理机制错误**：`udma_umem_release` 函数未适配 `sg_append_table` 结构，仍按旧的 `sg_head` 释放，且 `udma_pin_all_pages` 中 `sg_alloc_append_table_from_pages` 失败后未正确回滚，导致内存泄漏。
+2. **边界检查缺失**：`udma_user_ctl` 和 `udma_user_data` 中对 opcode 的校验逻辑有误，仅检查了指针是否为空，未结合数组大小校验，导致潜在的数组越界访问。
+3. **参数校验逻辑不严谨**：`udma_verify_jfr_param` 在校验 `depth` 和 `max_sge` 时，未对传入值进行 `roundup_pow_of_two` 处理后再比较，可能导致实际分配大小超出硬件限制。
+4. **资源释放不完整**：`udma_get_page_priv` 错误路径下丢失错误码，`udma_free_ucontext` 中存在未销毁的互斥锁，`udma_unpin_sw_db` 调用时缺少 `dirty` 参数处理。
+
+#解决方案
+1. **修复内存泄漏**：
+   - 引入 `udma_unpin_pages_by_sgtable` 和 `udma_k_unpin_by_sgtable` 函数，正确处理 scatterlist 的释放逻辑。
+   - 修改 `udma_umem_release` 接口，增加 `dirty` 参数，并调用新的释放函数处理 `umem->append.sgt`。
+   - 在 `udma_pin_all_pages` 中增加对 `sg_alloc_append_table_from_pages` 失败的错误处理和回滚逻辑。
+
+2. **增强边界检查**：
+   - 在 `udma_user_ctl` 和 `udma_user_data` 中，增加 `opcode >= ARRAY_SIZE(g_udma_user_ctl_u_ops)` 的判断，防止数组越界。
+
+3. **完善参数与资源管理**：
+   - 修正 `udma_verify_jfr_param` 中的参数校验，使用 `roundup_pow_of_two` 对参数进行对齐后再检查。
+   - 修正 `udma_free_ucontext` 中缺失的 `mutex_destroy(&ctx->page_lock)` 调用。
+   - 统一修复所有 `udma_unpin_sw_db` 调用点，显式传递 `dirty` 参数（如 false 或 true）。
+   - 修正 `udma_get_page_priv` 错误路径的返回值，确保错误码正确传递。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/45162b504a04d228f4da6ab0cb28dd69b81953a5

@@ -1,0 +1,20 @@
+#标题
+vsock: vsock_*_has_data/space 系列函数空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 vsock socket 已经与传输层解除绑定但仍然被引用时，调用 vsock_stream_has_data、vsock_connectible_has_data 或 vsock_stream_has_space 函数会触发空指针引用，导致内核 panic 或 Oops。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference
+
+#问题根因
+在某些异常场景下，vsock socket 已经与其传输层解除绑定，即 vsk->transport 指针为 NULL，但代码仍尝试调用 vsock_*_has_data() 或 vsock_stream_has_space() 函数。这些函数内部未对 vsk->transport 进行空指针检查，直接解引用导致了 null-ptr-deref。
+
+#解决方案
+在 vsock_stream_has_data()、vsock_connectible_has_data() 和 vsock_stream_has_space() 函数入口处增加防御性检查。如果检测到 vsk->transport 为 NULL，则通过 WARN_ON 打印警告堆栈信息并返回 0（表示无数据或无空间），避免内核崩溃，同时保留现场以便后续调试。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c00dfc7cb365583b1868fa455a7f4ca6fa2113d9

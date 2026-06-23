@@ -1,0 +1,25 @@
+#标题
+mmap_region() 错误处理路径行为缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `mmap_region()` 执行过程中，如果驱动程序的 `->mmap()` 回调函数内部发生错误，内核可能错误地触发 WARN_ON，或者在后续处理路径中出现不可预期的行为（如对已释放资源的错误操作），导致内存映射功能异常或内核状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+原有代码中 `mmap_region()` 的错误处理路径设计存在缺陷：
+1. `vma_iter_prealloc` 的内存预分配操作被错误地放置在 `call_mmap` 调用之后，且 `mapping_map_writable` 的处理逻辑与错误回滚流程交织混乱，导致在 `call_mmap` 失败时，错误处理流程（如 `close_and_free_vma` 标签处的逻辑）可能访问无效上下文或遗漏清理步骤。
+2. 架构相关的 `arch_validate_flags` 检查位置不当，导致错误处理逻辑复杂化。
+
+#解决方案
+重构 `mmap_region()` 的实现逻辑，将核心映射逻辑与前置检查分离：
+1. 新增 `__mmap_region_ext` 函数，将 `map_deny_write_exec` 检查、`arch_validate_flags` 检查以及 `mapping_map_writable` 写映射获取等前置操作移至该函数中先行执行。
+2. 在核心函数 `__mmap_region` 中，将 `vma_iter_prealloc` 移至 `call_mmap` 调用之前执行，确保在执行可能的失败操作前资源已就绪。
+3. 简化错误处理标签，移除复杂的条件回滚逻辑（如移除 `unmap_writable` 标签），确保错误路径清晰、资源释放正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3800e9b66898827cf24afbf3be7ea4877762c0b3

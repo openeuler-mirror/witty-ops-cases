@@ -1,0 +1,20 @@
+#标题
+memory: samsung: exynos-srom: Fix of_iomap leak in exynos_srom_probe
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 exynos_srom_probe 函数执行过程中，如果后续的 of_platform_populate() 或其他处理步骤失败，之前通过 of_iomap() 映射的 srom->reg_base 内存资源未被释放，导致内存资源泄漏。该问题由 smatch 静态分析工具检测发现。
+
+#主要错误日志
+"iomap of exynos srom controller failed\n"
+
+#问题根因
+驱动使用 of_iomap() 进行资源映射，该函数不具备自动清理特性。当驱动在映射成功后的后续初始化步骤（如 of_platform_populate 失败路径）中出错退出时，缺少显式调用 iounmap() 释放资源的逻辑，导致资源泄漏。
+
+#解决方案
+使用托管函数 devm_platform_ioremap_resource() 替换 of_iomap()。该函数利用设备托管机制（devres），在驱动probe失败或设备移除时自动释放映射的资源，从而避免了手动管理带来的泄漏风险。同时调整了错误处理逻辑，适配新函数的返回值（IS_ERR 检查及 PTR_ERR 返回）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/28e2ae5228cb6107462734325f99b6a472bb00ac

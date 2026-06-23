@@ -1,0 +1,22 @@
+#标题
+ACPI: processor: perflib: 修复 BIOS 设置的初始 _PPC 频率限制未生效问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+如果 BIOS 预先设置了 _PPC（Platform Performance Control）频率限制，该限制在系统启动或 CPU 在线时未能正确生效。导致 CPU 频率未能按照 BIOS 设定的初始约束进行管理，即初始频率上限未被正确应用。
+
+#主要错误日志
+- `Failed to add freq constraint for CPU%d (%d)`（推断，原有日志）
+- `Failed to update freq constraint for CPU%d (%d)`（推断，新增日志）
+
+#问题根因
+由于函数调用顺序问题，导致频率 QoS 请求处于非激活状态时便尝试更新约束。
+具体流程为：`cpufreq_policy_online()` 调用链中，`acpi_processor_get_platform_limit()` 先调用了 `freq_qos_update_request(&perflib_req)`，但此时 QoS 请求尚未通过 `freq_qos_add_request()` 激活。真正的激活发生在随后的 `acpi_processor_ppc_init()` 中。因此，`freq_qos_update_request()` 的调用被忽略，导致 BIOS 设置的初始 _PPC 限制失效。
+
+#解决方案
+在 `acpi_processor_ppc_init()` 函数中，于 `freq_qos_add_request()` 成功激活 QoS 请求之后，显式调用 `acpi_processor_get_platform_limit()` 以确保初始 _PPC 限制被正确应用。同时，增加 `pr->performance` 的非空检查，以处理 cpufreq 驱动未调用 `acpi_processor_register_performance()` 的情况，防止空指针异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/72a9ae03bfc47f9512a2748885f71a1340947aa1

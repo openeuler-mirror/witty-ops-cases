@@ -1,0 +1,22 @@
+#标题
+accel/ivpu: 修复 IPC 通信中的 WARN 并优化 autosuspend 延迟设置
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel VPU 驱动中，当调用 `ivpu_ipc_send_receive_internal()` 函数时触发了 WARN 告警，可能导致内核调用栈打印或功能异常。该问题与 CVE-2024-54193 相关。
+
+#主要错误日志
+未知
+
+#问题根因
+ autosuspend delay（自动挂起延迟）的设置逻辑不够合理，未针对不同硬件平台（silicon、simics、FPGA）进行区分，导致超时配置不匹配，进而引发 IPC 通信流程中的状态异常并触发 WARN。
+
+#解决方案
+1. 将 autosuspend delay 的配置迁移到硬件相关代码中（`ivpu_hw_37xx.c` 和 `ivpu_hw_40xx.c`），根据硬件类型（FPGA/simics/silicon）设置不同的超时阈值。
+2. 修改 `ivpu_pm_init` 逻辑，从设备结构体 `vdev->timeout.autosuspend` 读取延迟值，而非硬编码。
+3. 调整 `pm_runtime_set_active` 的调用位置，确保在 `pm_runtime_use_autosuspend` 和 `pm_runtime_set_autosuspend_delay` 之后、设备启用前设置设备状态为 active，保证电源管理状态机初始化顺序正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/50e6f25418ce142ff403310194c329f5951fb5a6

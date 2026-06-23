@@ -1,0 +1,21 @@
+#标题
+/proc/PID/stat 在 coredump 场景下无法正确读取线程 eip/esp 字段
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进程进行 coredump（核心转储）期间，尝试通过 `/proc/PID/stat` 读取非 coredumping 线程（即进程中除触发 coredump 以外的其他线程）的指令指针和栈指针字段时，读取到的值为 0 或无法获取正确值，导致依赖这些信息的调试或分析工具失效。
+
+#主要错误日志
+未知
+
+#问题根因
+内核提交 92307383082d ("coredump: Don't perform any cleanups before dumping core") 调整了 coredump 的执行时机，使其在设置 `PF_EXITING` 标志之前发生。
+原有代码逻辑使用 `PF_EXITING` 标志来判断进程中属于 coredumping 上下文的其他线程。由于 coredump 提前执行，此时线程尚未设置 `PF_EXITING`，导致判断条件失效，内核认为读取 eip/esp 是不安全的，从而阻止了字段读取。
+
+#解决方案
+在 `fs/proc/array.c` 的 `do_task_stat` 函数中，修改判断线程是否处于 coredumping 上下文的条件。在检查 `PF_EXITING` 和 `PF_DUMPCORE` 标志的基础上，增加对 `PF_POSTCOREDUMP` 标志的检查。这确保了在 coredump 执行时机变更后，仍能正确识别处于 coredump 流程中的线程，从而允许安全地读取其 eip 和 esp 字段。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2ffbf76eb1bdb08ee263e1b9ae3f1492935780d2

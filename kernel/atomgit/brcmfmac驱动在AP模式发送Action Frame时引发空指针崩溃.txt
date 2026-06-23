@@ -1,0 +1,25 @@
+#标题
+brcmfmac驱动在AP模式发送Action Frame时引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在仅由 hostapd 管理 WLAN 接口的独立 AP 模式下，当驱动尝试发送 ANQP 查询响应（ANQP Query RESP）Action 帧时（即使是对未关联的 STA），brcmfmac 驱动会发生崩溃。系统出现 "Unable to handle kernel NULL pointer dereference" 错误，导致内核 Panic。
+
+#主要错误日志
+[ 1417.074538] Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
+ [ 1417.075653] Call trace:
+ [ 1417.075662]  brcmf_p2p_send_action_frame+0x23c/0xc58 [brcmfmac]
+ [ 1417.075738]  brcmf_cfg80211_mgmt_tx+0x304/0x5c0 [brcmfmac]
+
+#问题根因
+驱动在发送 Action 帧时，代码逻辑强制使用 P2P vif 指针来发送 "actframe" IOVAR 到固件。在仅运行 hostapd 的独立 AP 模式下，P2P 接口未被创建或初始化，导致 P2P vif 指针为 NULL。驱动对该未初始化的指针进行解引用操作，从而触发了空指针引用崩溃。
+
+#解决方案
+1. 修改 Action 帧发送逻辑，始终使用用户空间发起传输请求时对应的 wdev（wireless device）的 vif，而不是固定使用 P2P vif。这确保了即使 P2P vif 不可用，也能使用 AP vif 发送 Action 帧。
+2. 将 `init_completion(&p2p->send_af_done)` 的初始化位置从 `brcmf_p2p_create_p2pdev()` 移至 `brcmf_p2p_attach()`。因为在独立 AP 模式下前者不会被执行，若不移动，后续 `reinit_completion` 调用将不安全。
+3. 移除 `brcmf_p2p_tx_action_frame()` 中针对 P2P Presence Response 帧的判断逻辑，因为 wpa_supplicant 已正确处理该帧的发送接口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f5d565fe047a22376cb20c8dc7445b1ab804500

@@ -1,0 +1,20 @@
+#标题
+ub: udma: stars jfc 创建流程错误分配 sw db 资源
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建 stars jfc（Job Flow Context）过程中，udma 驱动错误地调用了数据库分配接口。由于 stars jfc 实际上不需要创建 db，这导致了不必要的内存资源分配，且在后续流程出错时引发资源管理逻辑混乱（如错误处理跳转标签与资源释放不匹配）。
+
+#主要错误日志
+- 推断：在修复前的代码中，若分配失败可能打印：`failed to alloc sw db for jfc(%u).\n`
+
+#问题根因
+在 `udma_get_stars_jfc_buf` 函数中，代码逻辑错误地调用了 `udma_alloc_sw_db` 为 stars jfc 分配软件数据库资源。根据 Commit 描述，stars jfc 类型并不需要创建 db，该分配操作属于冗余且错误的逻辑。此外，错误处理路径的标签（如 `err_get_jfc_buf` 与 `err_alloc_cqc`）跳转关系也不正确。
+
+#解决方案
+移除 `udma_get_stars_jfc_buf` 和 `udma_get_jfc_buf_ex` 函数中针对 stars jfc 的 `udma_alloc_sw_db` 调用及相关错误处理代码。同时修正 `udma_create_jfc_ex` 与 `udma_create_stars_jfc` 中的错误处理跳转标签，确保 `udma_post_create_jfc_mbox` 失败时直接跳转到正确的资源清理流程，不再执行多余的 `udma_free_sw_db` 操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/48118f19c9ca3d1b984fb81d1454a4c3430f9d63

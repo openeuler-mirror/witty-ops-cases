@@ -1,0 +1,20 @@
+#标题
+KVM: nSVM: 嵌套虚拟化退出时恢复 CR3 失败处理不当导致状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 KVM nSVM（嵌套 AMD 虚拟化）场景下，当发生 nested #VMEXIT 时，若恢复宿主态（Host）CR3 寄存器失败，原有代码仅简单返回 1，未明确触发 Triple Fault，可能导致虚拟机状态不一致或后续运行异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `nested_svm_vmexit` 中，调用 `nested_svm_load_cr3` 恢复 CR3 失败时（返回非 0 值），代码逻辑直接返回 1。这导致 KVM 无法正确识别该严重的硬件状态恢复失败，进而未能向 VCPU 发出 KVM_REQ_TRIPLE_FAULT 请求来复位或处理该错误状态。
+
+#解决方案
+修改 `nested_svm_vmexit` 函数的错误处理逻辑：当 `nested_svm_load_cr3` 返回失败（rc 不为 0）时，调用 `kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu)` 显式请求 Triple Fault，确保 VCPU 能正确处理该恢复失败的情况，随后返回 1 退出流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/63d3f89d4cab85931e763c60f12b0a91fcc2da72

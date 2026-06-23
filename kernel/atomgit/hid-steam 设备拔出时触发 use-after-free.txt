@@ -1,0 +1,20 @@
+#标题
+hid-steam 设备拔出时触发 use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 hid-steam 设备被移除（拔出）时，内核发生释放后使用。具体表现为设备移除流程中，清理 client_hdev 导致延迟工作队列被重新调度，进而访问了已被释放的资源，可能引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在设备移除函数 `steam_remove` 中，代码顺序存在逻辑错误：先调用了 `cancel_delayed_work_sync` 取消延迟工作，随后才调用 `hid_destroy_device` 销毁 `client_hdev` 设备。然而，销毁 `client_hdev` 的操作会触发重新调度延迟工作（用于重新挂载输入设备）。由于此时取消动作已完成，新调度的工作将在后续执行时访问已被销毁的 `client_hdev`，从而导致 use-after-free。
+
+#解决方案
+调整 `steam_remove` 函数中的清理顺序，将 `hid_destroy_device(steam->client_hdev)` 移至 `cancel_delayed_work_sync` 和其他 `cancel_work_sync` 调用之前。确保先销毁设备结构，再取消所有可能被重新调度的工作队列，防止在取消后又有新工作被调度执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc3a6472492b0bb3d3ed2595f7db31e42efb8729

@@ -1,0 +1,23 @@
+#标题
+erofs 文件句柄编码导致 64 位 NID 溢出问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 NFS 导出 erofs 文件系统时，如果文件的 inode number (NID) 超过 32 位范围，文件句柄在编码过程中会发生截断溢出。这会导致 NFS 客户端无法正确映射或访问这些文件，特别是在调用 fh_to_dentry 或 fh_to_parent 回溯文件时，因解析出的 inode 号错误而失败。
+
+#主要错误日志
+未知
+
+#问题根因
+erofs 文件系统使用 64 位的 NID（Node ID），但在之前的实现中，文件句柄编码逻辑直接调用了 `generic_fh_to_dentry` 等通用函数，且未实现自定义的 `encode_fh` 操作。通用实现默认将 inode number 视为 32 位处理，导致在编码 64 位 NID 时发生截断；同时，编码类型使用了硬编码的魔数（如 0x81, 0x82），缺乏标准的 64 位句柄类型定义支持，导致句柄类型与实际数据宽度不匹配。
+
+#解决方案
+1. 在 `include/linux/exportfs.h` 中新增标准文件句柄类型定义 `FILEID_INO64_GEN` 和 `FILEID_INO64_GEN_PARENT`，明确支持“64位 inode + 32位 generation”的编码格式。
+2. 为 erofs 实现自定义的 `erofs_encode_fh` 函数，手动将 64 位 NID 拆分为高 32 位和低 32 位存入句柄缓冲区，确保不丢失数据。
+3. 重写 `erofs_fh_to_dentry` 和 `erofs_fh_to_parent` 函数，移除对 `generic_fh_to_dentry` 的依赖，改为直接根据新的 `FILEID_INO64_GEN*` 类型校验句柄长度，并通过位运算重组 64 位 NID 进行正确的 inode 查找。
+4. 同时修正 fuse 模块中的相关编码逻辑，统一使用标准的 `FILEID_INO64_GEN*` 类型替代原有的硬编码魔数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7d084ac8343e850ca2e166c9d06dc0d56f0decc0

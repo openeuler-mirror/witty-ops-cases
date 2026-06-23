@@ -1,0 +1,28 @@
+#标题
+ksmbd 多通道连接失败问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB3 多通道场景下，客户端尝试建立第二个通道时连接失败。具体表现为：当第二个通道尝试绑定到已有会话时，服务端错误地拒绝了该连接请求，导致多通道功能无法正常工作。
+
+#主要错误日志
+未知
+
+#问题根因
+问题引入于提交 b95629435b84 ("ksmbd: fix racy issue from session lookup and expire")。
+根本原因在于 `smb2_sess_setup` 处理多通道绑定逻辑时存在错误：
+1. 代码流程中先对会话对象调用了 `ksmbd_user_session_put` 释放引用，随后又调用 `ksmbd_session_lookup` 尝试在当前连接中查找该会话。
+2. 由于引用计数已释放或查找逻辑变动，导致查找失败返回 NULL。
+3. 原代码逻辑在查找失败（`!sess`）时返回 `-EACCES`，这导致了错误的判断：即当会话确实存在于第一个连接的会话列表中时，多通道连接反而被拒绝。正确的逻辑应当是检查会话是否属于当前连接，若属于则拒绝（因为多通道绑定要求会话不在当前新连接中），但由于之前的查找失败，导致逻辑反转或异常处理不当，最终导致合法的多通道连接建立失败。
+
+#解决方案
+修复补丁通过以下措施解决该问题：
+1. 新增辅助函数 `is_ksmbd_session_in_connection`，用于判断指定会话 ID 是否存在于当前连接的会话列表中，该函数内部通过持有 `session_lock` 锁来安全地检查 `xa_load` 结果。
+2. 移除了错误的 `ksmbd_user_session_put` 与 `ksmbd_session_lookup` 组合检查逻辑。
+3. 在 `smb2_sess_setup` 的绑定会话流程中，直接调用新函数 `is_ksmbd_session_in_connection` 进行检查：如果会话已存在于当前连接中，则返回 `-EACCES` 拒绝连接。
+4. 调整了错误处理路径 `goto out_err` 前的资源释放逻辑，确保在连接需要重连等错误路径下正确释放会话引用并置空 `work->sess`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2872f003d132cd0eb2e75d538c33e2c660ab6f71

@@ -1,0 +1,20 @@
+#标题
+bpf: bpf_xdp_adjust_tail 释放所有分片后未清理 pfmemalloc 标志位
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 bpf_xdp_adjust_tail() 释放 XDP 数据的所有分片时，虽然清除了 XDP_FLAGS_HAS_FRAGS 标志位，但未清除 XDP_FLAGS_FRAGS_PF_MEMALLOC 标志位。当前代码逻辑下，在构建 sk_buff 时读取该标志位会受到保护（仅在存在分片时读取），因此暂未引发实质性的故障现象或错误日志，但导致 xdp_buff->flags 状态定义不严格、不正确。
+
+#主要错误日志
+未知
+
+#问题根因
+在 bpf_xdp_frags_shrink_tail 函数中，当释放分片导致 nr_frags 为 0（即释放了所有分片）时，代码逻辑遗漏了清除 XDP_FLAGS_FRAGS_PF_MEMALLOC 标志位。根因是代码路径处理不完整，导致在无分片的情况下，flags 中仍残留 PF_MEMALLOC 相关状态。
+
+#解决方案
+在 net/core/filter.c 的 bpf_xdp_frags_shrink_tail 函数中，当所有分片被释放（sinfo->nr_frags 为 0）时，增加调用新增的辅助函数 xdp_buff_clear_frag_pfmemalloc(xdp)，显式清除 XDP_FLAGS_FRAGS_PF_MEMALLOC 标志位，确保 flags 状态与实际的分片情况保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/715ac116a25428710a9931551957b956aa3d22d3

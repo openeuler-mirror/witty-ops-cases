@@ -1,0 +1,23 @@
+#标题
+media: av7110 修复 Spectre 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+静态分析工具 smatch 检测到 drivers/staging/media/av7110/av7110_ca.c 中存在潜在的 Spectre 漏洞。该漏洞属于推测执行侧信道攻击风险，可能允许攻击者通过边界检查绕过（speculative bypass）非法读取内核内存数据。涉及的代码位置包括 `dvb_ca_ioctl()` 函数和 `CI_handle()` 函数中对 `av7110->ci_slot` 数组的访问。
+
+#主要错误日志
+drivers/staging/media/av7110/av7110_ca.c:270 dvb_ca_ioctl() warn: potential spectre issue 'av7110->ci_slot' [w] (local cap)
+
+#问题根因
+代码中直接使用用户可控或来自硬件的数据（如 `info->num` 或 `data[2]`）作为数组索引访问 `av7110->ci_slot` 数组，虽然存在边界检查，但在 CPU 推测执行路径中，攻击者可能利用分支预测绕过检查，利用越界索引推测读取数组外的内存内容，从而造成敏感信息泄露。
+
+#解决方案
+引入 `<linux/nospec.h>` 头文件并使用 `array_index_nospec()` 宏对数组索引进行加固处理。具体修改如下：
+1. 定义宏 `MAX_CI_SLOTS` 为 2，替换原有的硬编码数组大小。
+2. 在 `dvb_ca_ioctl()` 的 `CA_GET_SLOT_INFO` 分支中，在边界检查通过后，使用 `array_index_nospec(info->num, MAX_CI_SLOTS)` 将索引值限制在有效范围内，阻止推测执行访问越界内存。
+3. 在 `CI_handle()` 函数中，同样使用 `array_index_nospec(data[2] - 1, MAX_CI_SLOTS)` 处理索引，防止通过硬件数据触发的潜在攻击。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e7a312f76c5e367b71ae68df080cb42e33ea94bb

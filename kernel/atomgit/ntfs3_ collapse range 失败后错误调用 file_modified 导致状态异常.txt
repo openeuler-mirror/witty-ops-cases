@@ -1,0 +1,20 @@
+#标题
+ntfs3: collapse range 失败后错误调用 file_modified 导致状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NTFS3 文件系统上执行 `FALLOC_FL_COLLAPSE_RANGE` 操作时，若 `attr_collapse_range` 函数执行失败（返回错误码），内核未正确退出处理流程，而是继续执行 `file_modified` 函数。这导致文件修改事件被错误地触发，可能引发文件系统状态不一致、错误的ctime/mtime更新或审计日志记录错误。
+
+#主要错误日志
+未知
+
+#问题根因
+`ntfs_fallocate` 函数在处理 `FALLOC_FL_COLLAPSE_RANGE` 分支时，调用 `attr_collapse_range` 后未对返回值 `err` 进行检查。代码逻辑直接流转至后续代码，导致即使区间折叠操作失败，仍会继续调用 `file_modified` 函数更新文件状态。
+
+#解决方案
+在 `attr_collapse_range` 调用后增加错误检查逻辑。如果 `err` 不为 0，则立即跳转至 `out` 标签退出函数，确保在操作失败时不会继续执行 `file_modified`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2278ed3841e316b853e814864971fa3b88a40485

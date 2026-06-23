@@ -1,0 +1,20 @@
+#标题
+urma: 修复 ubcore 连接过程中错误的复用逻辑导致的状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 ubcore 连接操作时，由于错误地尝试复用 TP（Transport Path）上下文，可能导致连接状态不一致或连接建立失败。具体表现为 `ubcore_active_tp` 流程被跳过或变量赋值混乱，影响后续的数据传输逻辑。
+
+#主要错误日志
+ubcore_log_info("connect vtpn:%u, trans_mode:%u, tp_handle: %llu.\n", vtpn->vtpn, vtpn->trans_mode, active_tp_cfg->tp_handle.value);
+
+#问题根因
+在 `ubcore_create_vtpn` 函数中，存在一段错误的代码逻辑尝试根据 `local_eid`、`peer_eid` 等信息查找并复用 `tpid_ctx`。这段逻辑会在 `ctx` 存在且状态为 `UBCORE_TP_ACTIVE` 时直接返回，或者在激活 TP 后强制修改 `ctx` 状态。这导致了连接流程中的状态管理混乱，是不必要的冗余逻辑，破坏了正常的 VTPN（Virtual Transport Provider Node）创建与激活流程。
+
+#解决方案
+移除 `ubcore_create_vtpn` 函数中关于 `ubcore_tpid_key` 查找、`ubcore_tpid_ctx` 获取以及相关的复用判断逻辑代码。删除了对 `ctx` 状态的检查、`vtpn` 成员的错误赋值以及对 `ctx->tp_state` 的直接修改，确保连接过程严格遵循标准的 TP 激活流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3abe05e43433ca546043b4065597d910d1e5a965

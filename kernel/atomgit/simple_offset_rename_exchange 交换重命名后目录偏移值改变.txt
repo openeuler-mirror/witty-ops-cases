@@ -1,0 +1,20 @@
+#标题
+simple_offset_rename_exchange 交换重命名后目录偏移值改变
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `simple_offset_rename_exchange` 接口进行目录项交换重命名操作后，用户空间期望原有目录项保持原有的目录偏移值不变，但实际上系统分配了新的偏移值。这导致依赖目录偏移值稳定性的应用程序或文件系统行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `simple_offset_rename_exchange` 函数的实现中，交换目录项时调用了 `simple_offset_add` 接口。该接口会为目录项分配一个新的、递增的偏移值，而不是保留原有的偏移值。这破坏了 rename 操作应保留原目录项偏移值的语义。
+
+#解决方案
+新增 `simple_offset_replace` 辅助函数，该函数使用 `mtree_store` 将目录项直接存储在指定的偏移值位置，而不是分配新值。修改 `simple_offset_rename_exchange` 逻辑，将原来调用 `simple_offset_add` 的地方替换为调用 `simple_offset_replace`，并传入保存的旧偏移值（`new_index` 和 `old_index`），从而确保交换后的目录项保留其原有的偏移值。同时，错误回滚路径也改用该函数进行修复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1a5ffed8a618614b66f771449b1abb3ab5781c9a

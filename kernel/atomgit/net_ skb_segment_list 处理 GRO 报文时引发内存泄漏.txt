@@ -1,0 +1,29 @@
+#标题
+net: skb_segment_list 处理 GRO 报文时引发内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 GRO (Generic Receive Offload) 聚合报文的转发场景下，调用 skb_segment_list() 进行分段时发生内存泄漏。当销毁网络环境（teardown）时，由于 `sk_wmem_alloc` 计数非零，导致 Socket 对象无法被释放。通过 KMEMLEAK 工具可观测到未释放的 Socket 对象。
+
+#主要错误日志
+unreferenced object 0xffff8881e6eb9100 (size 2048):
+  comm "ping", pid 6720, jiffies 4295492526
+  backtrace:
+    kmem_cache_alloc_noprof+0x5c6/0x800
+    sk_prot_alloc+0x5b/0x220
+    sk_alloc+0x35/0xa00
+    inet6_create.part.0+0x303/0x10d0
+    __sock_create+0x248/0x640
+    __sys_socket+0x11b/0x1d0
+
+#问题根因
+Commit ed4cccef64c1 ("gro: fix ownership transfer") 修改了 GRO 处理逻辑，将 fraglist 中的 skb 显式 orphan（设置 `skb->sk = NULL`），这意味着 socket 内存计费完全保留在父 SKB 上。然而，`skb_segment_list()` 函数未同步更新，仍然无条件地从父 SKB 的 truesize 中减去分段的 truesize。
+这导致父 SKB 被释放时，内存统计出现负偏差（under-count），`sk_wmem_alloc` 无法归零，从而阻止 Socket 销毁，造成持续的内存泄漏。
+
+#解决方案
+移除 `skb_segment_list()` 中对 `delta_truesize` 的计算以及从父 SKB `truesize` 中减去该值的逻辑。因为进入该函数的报文仅由 `skb_gro_receive_list` 生成（属于 `SKB_GSO_FRAGLIST` 类型），其分段不再单独进行 socket 内存计费，不需要调整父 SKB 的 truesize。同时，保留了对 `skb_release_head_state()` 的调用以正确处理 SKB 扩展引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c8368cb09ba430ace0eb39cd721a520e551eb1e0

@@ -1,0 +1,47 @@
+#标题
+drm子系统在设备拔出时触发framebuffer和property blobs的UAF故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行IGT测试工具的 "xe_module_load --r reload" 测试（一种激进的内核模块重载测试）时，若同时运行桌面环境和游戏，当合成器退出后，系统调用 drm_dev_unplug() 时出现多处内核 OOPS 和警告。
+具体表现为：
+1. 内核警告 `WARN_ON(!list_empty(&dev->mode_config.fb_list))` 触发，指出 framebuffer 列表非空。
+2. 内核警告 `drm_WARN_ON(!list_empty(&fb->filp_head))` 触发。
+3. 进程（如 kwin_wayland）在关闭文件描述符时崩溃，触发 "general protection fault" 或 "unable to handle page fault"，RIP 分别指向 `drm_framebuffer_cleanup` 和 `drm_property_destroy_user_blobs`，报错显示访问了无效地址（如 0xdead000000000122 或 000001ffffffffff）。
+
+#主要错误日志
+1. Framebuffer 列表非空警告：
+```
+[  739.713076] ------------[ cut here ]------------
+               WARN_ON(!list_empty(&dev->mode_config.fb_list))
+[  739.713079] WARNING: drivers/gpu/drm/drm_mode_config.c:584 at drm_mode_config_cleanup+0x30b/0x320 [drm]
+```
+2. Framebuffer 文件头非空警告：
+```
+[  739.714459] ------------[ cut here ]------------
+[  739.714461] xe 0000:67:00.0: [drm] drm_WARN_ON(!list_empty(&fb->filp_head))
+[  739.714464] WARNING: drivers/gpu/drm/drm_framebuffer.c:833 at drm_framebuffer_free+0x6c/0x90 [drm]
+```
+3. 进程关闭文件时触发的 Oops（General protection fault）：
+```
+[  743.186530] Oops: general protection fault, probably for non-canonical address 0xdead000000000122: 0000 [#1] SMP
+[  743.186539] RIP: 0010:drm_framebuffer_cleanup+0x55/0xc0 [drm]
+```
+4. 进程关闭文件时触发的 Oops（Page fault）：
+```
+[  371.072940] BUG: unable to handle page fault for address: 000001ffffffffff
+[  371.072957] RIP: 0010:drm_property_destroy_user_blobs+0x3b/0x90 [drm]
+```
+
+#问题根因
+在调用 `drm_dev_unplug()` 设备拔出接口时，内核未正确处理 `drm_file` 结构中持有的 framebuffer 和 property blobs 引用。
+具体原因为在 `drm_file_free()` 中释放 framebuffer 和 property blobs 时，缺少 `drm_dev_enter/exit` 保护机制，导致在设备拔出后依然尝试访问已释放的资源。同时，`drm_mode_config_cleanup()` 在清理时未正确处理 filp_head 链表项，导致链表损坏或访问已释放内存，从而引发 Use-After-Free 和空指针/非法地址访问。
+
+#解决方案
+1. 在 `drm_file_free()` 函数中，对 framebuffer 释放（`drm_fb_release`）和 property blobs 销毁（`drm_property_destroy_user_blobs`）的操作增加 `drm_dev_enter` 和 `drm_dev_exit` 保护，确保只有在设备可用时才进行释放操作。
+2. 在 `drm_mode_config_cleanup()` 函数中，清理 framebuffer 列表时，移除仅针对泄露 fb 的打印限制，并在释放前调用 `list_del_init(&fb->filp_head)` 初始化链表头，防止后续清理流程（如文件关闭）再次遍历到已释放的结构体，从而修复链表遍历导致的 UAF。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f97227d3c000bf7f067c30ae676e9c9a75407f8a

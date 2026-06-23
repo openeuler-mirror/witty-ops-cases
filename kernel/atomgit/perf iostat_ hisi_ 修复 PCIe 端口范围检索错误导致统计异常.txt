@@ -1,0 +1,26 @@
+#标题
+perf iostat: hisi: 修复 PCIe 端口范围检索错误导致统计异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hisilicon 平台上使用 `perf iostat` 工具进行 PCIe 性能统计时，工具无法正确过滤和识别 PCIe Root Port 端口。具体表现为：
+1. 未能纳入符合预期 BDF（Bus, Device, Function）范围的端口，导致统计遗漏。
+2. 错误纳入不在预期范围内的端口，导致统计噪音。
+3. 端口掩码计算错误，导致性能数据映射到错误的端口索引上，统计数据与实际硬件端口不匹配。
+
+#主要错误日志
+未知
+
+#问题根因
+工具在检索 PCIe 端口时缺少对 BDF（Bus, Device, Function）范围的过滤机制：
+1. 代码未从 sysfs 读取 `bdf_min` 和 `bdf_max` 参数，导致无法判断当前扫描到的设备是否属于有效端口范围。
+2. 端口掩码计算逻辑 `rp->mask = BIT(rp->dev << 1)` 仅依据设备号 `dev` 进行移位，未考虑端口的起始基准值，导致掩码位偏移错误，无法正确映射到对应的 PMU 事件。
+
+#解决方案
+1. 增加 BDF 范围过滤逻辑：在端口添加函数 `hisi_pcie_root_ports_add` 中新增 `bdf_min` 和 `bdf_max` 参数，计算当前设备的 BDF 值，若不在 `[bdf_min, bdf_max]` 范围内则直接跳过。
+2. 修复掩码计算：修改 `hisi_pcie_init_root_port_mask` 函数，引入基准设备号 `devbase`（取自 `bdf_min`），将掩码计算公式修正为 `BIT((rp->dev - devbase) << 1)`，确保掩码正确对齐到端口索引。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/317ac940b390181b75cfd77f6ec9668244b90791

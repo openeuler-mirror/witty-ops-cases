@@ -1,0 +1,36 @@
+#标题
+KVM脏页记录环形缓冲区offset边界检查绕过导致越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用KVM脏页环形缓冲区的情况下，恶意用户空间进程（VMM）通过操纵 `/dev/kvm` 文件描述符映射的脏页记录条目，可触发内核越界读取。具体表现为：
+1. 通过精心构造 `entry.offset` 值绕过内核边界检查。
+2. 在使用影子页表的虚拟机中，触发 `gfn_to_rmap()` 函数使用近 `U64_MAX` 的索引访问 `slot->arch.rmap`，导致越界读取 `kvm_rmap_head` 指针。
+3. 可能导致内核内存破坏或宿主机崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `kvm_reset_dirty_gfn()` 函数中，对 `offset` 的边界检查逻辑存在整数溢出漏洞。
+原代码逻辑为：
+```c
+if (!memslot || (offset + __fls(mask)) >= memslot->npages)
+    return;
+```
+由于 `offset` 是 `u64` 类型，且加法运算未进行溢出检查，当恶意VMM构造特定的 `offset`（如 `0xffffffffffffffc1`）和 `mask`（导致 `__fls(mask)` 为 63）时，两者相加发生 `u64` 回绕，结果为 0。这使得边界检查条件 `(offset + __fls(mask)) >= memslot->npages` 被错误判定为假（通过检查），从而导致后续代码使用非法的 `offset` 值进行内存访问。
+
+#解决方案
+在 `virt/kvm/dirty_ring.c` 的 `kvm_reset_dirty_gfn()` 函数中，增加对 `offset` 的独立边界检查，防止加法运算发生回绕。
+修改后的逻辑为：
+```c
+if (!memslot || offset >= memslot->npages ||
+    offset + __fls(mask) >= memslot->npages)
+    return;
+```
+该修复确保在执行加法前先验证 `offset` 是否有效，鉴于 `memslot->npages` 远小于 `U64_MAX`，一旦 `offset < npages` 成立，则 `offset + __fls(mask)` 不会溢出且仍在有效范围内。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/daaf7ac6c0131773b91cdcd595da69fe26019b3d

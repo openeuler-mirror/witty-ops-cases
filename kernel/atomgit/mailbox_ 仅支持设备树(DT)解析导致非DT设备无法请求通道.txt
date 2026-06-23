@@ -1,0 +1,31 @@
+#标题
+mailbox: 仅支持设备树(DT)解析导致非DT设备无法请求通道
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 mailbox 客户端设备未使用设备树（DT）实例化，或者尝试使用非 DT 的固件节点（fwnode）进行匹配时，调用 `mbox_request_channel` 或 `mbox_request_channel_byname` 会失败。
+具体表现为：
+1.  函数检测不到 `of_node`，直接返回 `-ENODEV` 错误。
+2.  或者无法正确解析 mbox 属性，导致无法获取 mailbox 通道，相关驱动无法正常 Probe 或工作。
+
+#主要错误日志
+- "No owner device"
+- "No owner fwnode"
+- "%s: can't parse \"mboxes\" property\n"
+- "%s() currently only supports DT\n" （移除前的日志）
+- "%s() could not locate channel named \"%s\"\n"
+
+#问题根因
+原有代码逻辑强依赖于 Linux 设备树框架，在 `mbox_request_channel` 中直接使用 `of_parse_phandle_with_args` 解析 `mboxes` 属性，并仅通过 `of_node` 进行控制器匹配。
+这导致未绑定 device_node 的设备（如使用 ACPI 或其他固件接口的设备）无法解析 mailbox 描述符，也无法通过 fwnode 机制找到对应的 mailbox 控制器，造成功能缺失或匹配失败。
+
+#解决方案
+1.  **引入 fwnode 支持**：将原来的 `of_xlate` 回调扩展为更通用的 `fw_xlate` 回调，允许控制器驱动通过 `fwnode_reference_args` 提供 mapping 映射。
+2.  **通用化属性解析**：使用 `fwnode_property_get_reference_args` 替代 `of_parse_phandle_with_args`，使其能同时支持 DT 和其他固件接口。
+3.  **匹配逻辑优化**：使用 `device_match_fwnode` 替代直接比较 `of_node` 指针，实现基于 fwnode 的设备匹配。
+4.  **兼容性处理**：保留 `of_xlate` 支持，优先尝试 `fw_xlate`；若控制器未提供特定回调，则默认使用 `fw_mbox_index_xlate`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ee36a82b4cd9efece1c16e93d22c0492d663e2a7

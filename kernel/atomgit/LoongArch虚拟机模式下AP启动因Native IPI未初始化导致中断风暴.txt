@@ -1,0 +1,24 @@
+#标题
+LoongArch虚拟机模式下AP启动因Native IPI未初始化导致中断风暴
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在LoongArch架构虚拟机环境下启用半虚拟化IPI（Paravirt IPI）功能后，启动从核（AP）时发生故障。系统在AP启动阶段触发无尽的中断循环，导致AP无法正常完成启动流程。
+
+#主要错误日志
+未知
+
+#问题根因
+在LoongArch虚拟机模式下，AP启动需要使用Native IPI作为OS与BIOS固件的通信接口。当AP执行空闲指令等待唤醒时，如果在写入硬件邮箱和发送IPI之间被软件事件唤醒，ACTION_BOOT_CPU类型的IPI中断会保持挂起状态。
+由于补丁前的代码在启用半虚拟化IPI时未注册Native IPI中断处理程序，导致挂起的Native IPI无法被清除，从而在AP启动阶段引发无尽的中断循环。
+
+#解决方案
+修改 `paravirt.c` 文件，保留并使用原生SMP操作接口：
+1. 新增 `native_ops` 结构体变量，在初始化时保存原生 `mp_ops`。
+2. 在半虚拟化IPI初始化函数 `pv_init_ipi` 中，显式调用 `native_ops.init_ipi()` 以初始化Native IPI中断，确保其中断处理程序被注册以处理挂起中断。
+3. 在IPI发送接口 `pv_send_ipi_single` 和 `pv_send_ipi_mask` 中增加判断逻辑，如果动作类型为 `ACTION_BOOT_CPU`，则直接调用 `native_ops` 对应的发送函数，确保AP启动使用Native IPI通道。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b6239f748d0d896e39b9d41f108163bdb235b8bd

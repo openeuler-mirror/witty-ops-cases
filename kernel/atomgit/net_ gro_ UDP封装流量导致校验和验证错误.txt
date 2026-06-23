@@ -1,0 +1,20 @@
+#标题
+net: gro: UDP封装流量导致校验和验证错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定场景下（如网卡硬件卸载UDP封装流量的校验和、tun驱动注入带UDP封装的GSO包、或基于veth的特定设置），UDP GRO（Generic Receive Offload）处理过程中出现校验和验证错误，可能导致数据包被错误丢弃或网络传输异常。
+
+#主要错误日志
+未知
+
+#问题根因
+UDP GRO 完成阶段（udp4_gro_complete）错误地假设所有进入 RX 队列的数据包的 `encapsulation` 标志均为 0。然而，部分硬件网卡在卸载 UDP 封装流量校验和时会设置该标志，tun 驱动注入带 UDP 封装的 GSO 包时也会设置该标志。这导致 `udp4_gro_complete()` 使用了错误的网络偏移量（使用了内部 inner offset 而非外部 outer offset）来计算外部 UDP 头的伪校验和，从而导致后续数据包处理中的校验和验证失败。
+
+#解决方案
+在 GRO 完成处理函数 `napi_gro_complete` 中，始终显式清零 `skb->encapsulation` 标志。这样可以确保后续处理逻辑使用正确的网络偏移量，对于封装数据包，该标志会在后续的 `udp_gro_complete()` 中按需重新设置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9f8cbe4490bafa656c8b92b8cd220f65254cd96b

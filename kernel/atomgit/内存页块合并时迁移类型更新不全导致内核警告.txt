@@ -1,0 +1,28 @@
+#标题
+内存页块合并时迁移类型更新不全导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内存页面释放并与伙伴系统合并的过程中，当伙伴页的迁移类型不一致时，系统仅更新了伙伴页的第一个页块迁移类型，而遗漏了其余页块。这导致页块迁移类型与包含该页的空闲链表迁移类型不一致，随后在 `expand` 函数或其他代码路径中触发内核警告（WARNING），表现为 `page type is 0, passed migratetype is 1` 等不一致信息。
+
+#主要错误日志
+```text
+[  308.986589] ------------[ cut here ]------------
+[  308.987227] page type is 0, passed migratetype is 1 (nr=256)
+[  308.987275] WARNING: CPU: 1 PID: 5224 at mm/page_alloc.c:812 expand+0x23c/0x270
+...
+[  308.987936] ------------[ cut here ]------------
+[  308.987940] page type is 0, passed migratetype is 1 (nr=256)
+[  308.987951] WARNING: CPU: 1 PID: 5224 at mm/page_alloc.c:860 __del_page_from_free_list+0x1be/0x1e0
+```
+
+#问题根因
+当页面释放并与高阶伙伴页合并时，如果伙伴页的迁移类型与当前页面不同，代码意图是将其更新为当前页面的迁移类型。然而，原代码仅调用了 `set_pageblock_migratetype(buddy, migratetype)`，仅更新了伙伴页起始地址对应的第一个页块的迁移类型。对于高阶页面，其跨度可能覆盖多个页块，未被更新的页块保留了旧的迁移类型，从而破坏了内存管理子系统的一致性假设，导致后续操作中检测到类型不匹配并触发警告。
+
+#解决方案
+在 `__free_one_page` 函数中，当需要更新合并后伙伴页的迁移类型时，将原有的单次更新调用 `set_pageblock_migratetype` 替换为循环更新函数 `change_pageblock_range`。该函数根据页面的阶数计算出覆盖的页块数量，并循环设置范围内所有页块的迁移类型，确保整个高阶内存区域的迁移类型标记一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1bab3ecab618b19bed610f4bfe983ba32fd4c7f

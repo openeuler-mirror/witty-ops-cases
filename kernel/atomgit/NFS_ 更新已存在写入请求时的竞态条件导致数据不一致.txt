@@ -1,0 +1,23 @@
+#标题
+NFS: 更新已存在写入请求时的竞态条件导致数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFS 写入路径中，当更新一个已存在的写入请求时，存在竞态条件。在 `nfs_lock_and_join_requests()` 检查请求是否仍附加到映射（mapping）之后，但在实际锁定页组之前，`nfs_inode_remove_request()` 可能被其他路径成功调用，导致请求被移除。由于调用 `nfs_inode_remove_request()` 的执行者不一定持有页组头锁，这可能导致内核状态不一致或潜在的数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，根本原因在于：在 `nfs_lock_and_join_requests()` 测试请求是否仍附加到映射之后，直到实际锁定页组之前，没有任何机制阻止 `nfs_inode_remove_request()` 被成功调用。这是因为调用 `nfs_inode_remove_request()` 的进程不一定持有页组头锁，从而引发了竞态条件。
+
+#解决方案
+修复方案通过调整锁的获取顺序和范围来解决竞态问题：
+1. 在 `nfs_lock_and_join_requests()` 中更早地获取页组锁，并确保在检查请求是否仍附加到映射期间持有该锁。
+2. 在 `nfs_inode_remove_request()` 函数内部显式调用 `nfs_page_group_lock` 和 `nfs_page_group_unlock`，确保移除请求的操作在页组锁的保护下进行。
+3. 移除了原有的 `nfs_folio_find_and_lock_request` 辅助函数，并将相关逻辑重构为在持有锁的情况下进行检查，确保移除请求操作的原子性与互斥性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1b216c00a7fee8c49e4e871fb7d402538d12940b

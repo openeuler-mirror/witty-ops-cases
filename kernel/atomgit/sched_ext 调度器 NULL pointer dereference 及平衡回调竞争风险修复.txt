@@ -1,0 +1,30 @@
+#标题
+sched_ext 调度器 NULL pointer dereference 及平衡回调竞争风险修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在启用 sched_ext 调度器时，内核可能发生空指针引用导致 panic或内核警告。
+2. 在进行 CPU 调度平衡时，可能因并发操作导致平衡回调被错误插入或处理，引发内核崩溃或调度状态不一致。
+3. 在调度器 ops 启用失败路径中，bypass 状态可能被错误重置，导致后续状态异常。
+
+#主要错误日志
+未知
+（注：Commit 中使用了 `WARN_ON_ONCE`，但未包含具体的 panic 日志或堆栈信息输出）
+
+#问题根因
+1. **空指针引用**：在 `put_prev_task_scx` 函数中，调用 `sched_class_above` 时未检查 `next` 指针是否为空，当 `next` 为 NULL 时触发崩溃。
+2. **回调竞争**：在 `schedule_deferred` 处理 `SCX_RQ_IN_BALANCE` 状态时，原代码直接调用 `queue_balance_callback` 插入回调。由于此时可能释放锁，导致 pending 的回调对调用 `rq_pin_lock()` 的其他不相关代码路径可见，引发竞争条件。
+3. **状态管理错误**：在 `scx_ops_enable_workfn` 的错误处理路径中，`scx_ops_bypass(false)` 被错误调用，导致 bypass 模式过早关闭，而实际上即将进入 disable 路径，应保持 bypass 开启。
+
+#解决方案
+1. **增加指针有效性检查**：在 `put_prev_task_scx` 中调用 `sched_class_above` 前增加 `next` 指针的非空判断（`if (next && ...）`）。
+2. **重构延迟回调机制**：
+   - 引入新标志位 `SCX_RQ_BAL_CB_PENDING` 用于标记待处理的回调请求。
+   - 在 `schedule_deferred` 中遇到 `SCX_RQ_IN_BALANCE` 时，不再直接插入回调，而是设置 `SCX_RQ_BAL_CB_PENDING` 标志并立即返回。
+   - 新增 `maybe_queue_balance_callback` 函数，在 `balance_scx` 流程的适当时机（`rq_repin_lock` 之后）检查该标志位，安全地插入回调，避免锁竞争。
+3. **修正错误处理路径**：移除 `err_disable_unlock_all` 标签下的 `scx_ops_bypass(false)` 调用，保持 bypass 状态开启直至进入完整的 disable 处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/46d68d0afd68a22675ad1645123fbff89f4fbe27

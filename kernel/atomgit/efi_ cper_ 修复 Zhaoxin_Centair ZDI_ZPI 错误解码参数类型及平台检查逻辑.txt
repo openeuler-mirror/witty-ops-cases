@@ -1,0 +1,31 @@
+#标题
+efi: cper: 修复 Zhaoxin/Centair ZDI/ZPI 错误解码参数类型及平台检查逻辑
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Zhaoxin 或 Centair 处理器平台上发生 ZDI（Die 互联）或 ZPI（Socket 互联）错误触发 SMI 中断并填充 CPER 记录时，内核日志解码异常或无法正确输出错误详情。
+
+#主要错误日志
+推断日志（基于修复后的代码逻辑）：
+```dmesg
+[...] general processor error(zpi error)
+[...] bus number %llx device number %llx function number 0
+[...] apic id %lld error_type: %s
+```
+或：
+```dmesg
+[...] general processor error(zdi error)
+```
+
+#问题根因
+1. 函数 `cper_zdi_zpi_err_type_str` 的参数类型定义错误，原定义为 `unsigned long`，应修正为 `unsigned int`，导致参数传递可能存在潜在问题。
+2. 代码逻辑结构不够严谨，原有实现将平台检查逻辑内嵌于函数内部且混杂预处理宏，重构后将平台检查逻辑移至调用处，仅在 X86 平台且 CPU 厂商为 Zhaoxin 或 Centair 时才执行解码操作。
+
+#解决方案
+1. 修改 `include/linux/cper.h` 和 `drivers/firmware/efi/cper.c` 中 `cper_zdi_zpi_err_type_str` 函数的参数类型，由 `unsigned long` 改为 `unsigned int`。
+2. 重构 `cper_print_proc_generic` 函数调用逻辑，将 `#ifdef CONFIG_X86` 和 CPU 厂商检查（`boot_cpu_data.x86_vendor`）移至调用 `cper_print_proc_generic_zdi_zpi` 之前，确保仅在特定平台执行解码逻辑，优化代码结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ea20cb16d1f751b0c982b9cf92c1f5620f0830c

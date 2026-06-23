@@ -1,0 +1,32 @@
+#标题
+amdgpu/amdkfd: 设备卸载与中断处理竞态导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `amdgpu_amdkfd_device_fini_sw` 设备卸载流程时，若此时发生 KGD 中断，系统会触发内核空指针解引用，导致 Kernel Panic/Oops。具体表现为 CPU 115 触发了空指针访问，RIP 寄存器指向 `_raw_spin_lock_irqsave` 函数，系统崩溃。
+
+#主要错误日志
+```
+BUG: kernel NULL pointer dereference, address: 0000000000000098
+Oops: 0002 [#1] SMP NOPTI
+CPU: 115 PID: 0 Comm: swapper/115 Kdump: loaded Tainted: G S  W  OE  K
+RIP: 0010:_raw_spin_lock_irqsave+0x12/0x40
+Call Trace:
+ <IRQ>
+ kgd2kfd_interrupt+0x6b/0x1f0 [amdgpu]
+ amdgpu_irq_dispatch+0x165/0x210 [amdgpu]
+ amdgpu_ih_process+0x80/0x100 [amdgpu]
+ amdgpu_irq_handler+0x1f/0x60 [amdgpu]
+ </IRQ>
+```
+
+#问题根因
+在 `amdgpu_amdkfd_device_fini_sw` 函数执行过程中，存在一个竞态条件窗口：当该函数运行到 `kfd_cleanup_nodes`（将 `kfd->nodes[i]` 置空）与 `kfree(kfd)` 之间时，如果恰好有一个 KGD 中断产生，中断处理函数 `kgd2kfd_interrupt` 会遍历 `kfd->nodes` 数组。此时由于 `kfd->nodes[i]` 已被清空（NULL），代码尝试访问 `node->interrupt_lock` 成员（偏移量 0x98），从而引发空指针解引用导致内核崩溃。
+
+#解决方案
+在 `kgd2kfd_interrupt` 函数遍历 `kfd->nodes` 数组时，增加对 `kfd->nodes[i]` 的非空检查。如果发现节点指针为 NULL，说明正处于卸载流程中的竞态窗口，此时直接返回，避免对空指针进行解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/04a41d57572e494eef7d8f35e9397c9ff8471ad6

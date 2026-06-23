@@ -1,0 +1,28 @@
+#标题
+md/raid1: read_balance 中选择下一个空闲磁盘的逻辑失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RAID1 阵列进行顺序读操作且 IO 大小超过最优 IO 尺寸时，read_balance 函数本应寻找其他空闲磁盘进行负载均衡，但由于逻辑缺陷，系统无法正确切换到其他空闲磁盘，导致读请求负载均衡策略失效，无法有效利用阵列中其他空闲磁盘的带宽。
+
+#主要错误日志
+未知
+
+#问题根因
+ Commit 2e52d449bcec ("md/raid1: add failfast handling for reads.") 移除了关键的代码片段，导致 `read_balance()` 在遍历磁盘时，缺少了 "if (pending == 0) { best_disk = disk; break; }" 这一判断逻辑。
+ 
+ 这导致了以下问题：
+ 1. 原本用于标记“寻找下一个空闲磁盘”的逻辑（`choose_next_idle`）虽然被设置，但在后续遍历中因为缺少对 `pending == 0` 的处理，无法找到并选中下一个空闲磁盘。
+ 2. 代码流程会因为 `choose_next_idle` 被置位后直接 `continue`，导致原本应被选中的最佳磁盘被跳过，最终“choose next idle”功能完全失效。
+
+#解决方案
+重构 `read_balance` 中的磁盘选择逻辑：
+ 1. 移除 `choose_next_idle` 标志位，新增 `sequential_disk` 局部变量用于记录顺序读所在的磁盘。
+ 2. 当检测到顺序读 IO 超过最优尺寸时，不再直接跳出循环，而是增加 `pending` 计数（避免优先选中当前磁盘），并记录当前磁盘到 `sequential_disk`。
+ 3. 若循环结束后发现没有其他空闲磁盘（`min_pending != 0`），则回退选择之前记录的 `sequential_disk`。
+ 4. 若存在其他空闲磁盘，则正常选择空闲磁盘，实现负载均衡。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aa5356b5335275308c5f6f9ab1284b64d08d59f6

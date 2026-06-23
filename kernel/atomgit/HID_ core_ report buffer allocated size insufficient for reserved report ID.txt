@@ -1,0 +1,20 @@
+#标题
+HID: core: report buffer allocated size insufficient for reserved report ID
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 HID 报告 ID（report ID）未被使用（值为 0）时，底层传输驱动程序期望缓冲区的第一个字节为 0。由于分配的缓冲区未预留该额外字节，导致 `implement()` 函数在处理 8 字节块时，实际可用的有效空间不足（本应保证 8 字节，实际仅 7 字节），可能导致内存越界访问或数据传输功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hid_alloc_report_buf` 函数中，分配缓冲区长度时仅加上了 7 个额外字节以满足 `implement()` 函数处理 8 字节块的需求。但当 `report->id` 为 0（未使用）时，底层驱动需要在缓冲区首位保留一个字节存放 0，而分配逻辑未将此预留字节计入总长度，导致缓冲区实际大小不足。
+
+#解决方案
+修改 `drivers/hid/hid-core.c` 中的 `hid_alloc_report_buf` 函数，在计算分配长度时，增加对 `report->id == 0` 情况的判断。若报告 ID 为 0，则在原有长度基础上额外增加 1 个字节，确保缓冲区能容纳预留的报告 ID 字节。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fe71720c1d6286db6aaf11470dadfed7b72438d3

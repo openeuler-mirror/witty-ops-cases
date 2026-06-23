@@ -1,0 +1,25 @@
+#标题
+sched_ext: 直接分发状态残留导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行任务唤醒操作时，如果上一次直接分发的状态未被正确清理，会导致 `p->scx.ddsp_dsq_id` 保留非 `SCX_DSQ_INVALID` 的值。当后续唤醒流程调用 `ops.select_cpu()` 并执行 `scx_bpf_dsq_insert()` 时，会在 `scx_dsq_insert_commit` 函数中触发内核警告（WARNING），指示直接分发状态存在逻辑错误。
+
+#主要错误日志
+WARNING: kernel/sched/ext.c:1273 at scx_dsq_insert_commit+0xcd/0x140
+
+#问题根因
+直接分发状态（`ddsp_dsq_id`）的清理时机不正确。原代码仅在 `dispatch_enqueue()` 中清理该状态，但并非所有消费或取消直接分发的路径都会执行 `dispatch_enqueue()`。这导致在某些特定路径（如延迟分发消费、入队回退、出队取消、调度器切换等）下，直接分发状态未被清除而残留，从而在后续流程中触发了 `mark_direct_dispatch()` 中的错误检查。
+
+#解决方案
+通过引入并调用 `clear_direct_dispatch()` 函数，在所有涉及直接分发状态消费或失效的关键路径上明确清理状态，确保状态的一致性：
+1. **direct_dispatch()**：在同步路径下，缓存状态后并在 `dispatch_enqueue()` 前清理。
+2. **process_ddsp_deferred_locals()**：在消费延迟分发状态前，先缓存状态并清理，防止任务迁移后状态混乱。
+3. **do_enqueue_task()**：在入队回退（本地/全局/旁路）路径上清理状态，因为这些路径忽略直接分发判定。
+4. **dequeue_task_scx()**：在 `dispatch_dequeue()` 之后清理，处理延迟分发取消及 `holding_cpu` 竞争情况。
+5. **scx_disable_task()**：在任务退出当前调度器时清理状态，防止遗留状态影响后续调度器实例。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/575ee2558a36e2c413a376fb6e26dee45c0afec7

@@ -1,0 +1,23 @@
+#标题
+Bluetooth: MGMT: Fix dangling pointer on mgmt_add_adv_patterns_monitor_complete
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在蓝牙 MGMT 子系统中，当 `mgmt_add_adv_patterns_monitor_complete` 函数处理非 `-ECANCELED` 状态时，错误地跳过了处理流程，导致 `cmd` 结构体在未从链表中摘除的情况下被释放，产生悬空指针。后续遍历链表的操作（如 `__mgmt_power_off` 中的 `mgmt_pending_foreach` 或再次调用 `mgmt_pending_valid`）会访问该已释放内存，触发 Use-After-Free（UAF）或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `mgmt_add_adv_patterns_monitor_complete` 中的条件判断逻辑错误。
+原代码逻辑为 `if (status == -ECANCELED && !mgmt_pending_valid(hdev, cmd))`，该条件仅在状态为 `-ECANCELED` 且 `cmd` 无效时返回。
+当 `status` 不等于 `-ECANCELED` 时，代码继续执行 `mgmt_pending_free(cmd)`，但此时并未调用 `mgmt_pending_valid` 进行检查。如果 `cmd` 仍在链表中，`mgmt_pending_free` 会直接 `kfree(cmd)` 而未先将其从链表中移除，导致链表中残留指向已释放内存的悬空指针。
+
+#解决方案
+修正条件判断逻辑，将逻辑与运算符 `&&` 修改为逻辑或运算符 `||`。
+修改后的条件为 `if (status == -ECANCELED || !mgmt_pending_valid(hdev, cmd))`。这确保了只要状态不是 `-ECANCELED`，就会执行 `mgmt_pending_valid(hdev, cmd)` 检查，从而保证在释放 `cmd` 前正确地将其从链表中移除，避免产生悬空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/90c0b09bfbf985f914b145e9c401a1a5d62c1e61

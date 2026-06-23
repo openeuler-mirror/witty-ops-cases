@@ -1,0 +1,22 @@
+#标题
+libceph: 修复对 ceph_connection_v1_info 的非法访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统配置使用 Ceph Messenger v2 协议（ceph_msgr2）时，内核代码在 `con_fault_finish` 和 `clear_standby` 函数中错误地访问了仅属于 v1 协议的数据结构成员 `con->v1`。这导致了非法内存访问，可能引发内核崩溃或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+内核逻辑未对 Ceph 连接使用的协议版本进行区分。在启用 Messenger v2 的情况下，代码路径仍尝试访问 `con->v1.auth_retry` 和增加 `con->v1.connect_seq`。由于 v2 连接不应操作 v1 特有的状态信息，这种访问是非法的。
+
+#解决方案
+在访问 `con->v1` 相关成员前增加协议版本检查。具体修改如下：
+1. 在 `con_fault_finish` 函数中，检查 `con->v1.auth_retry` 前增加判断条件 `!ceph_msgr2(from_msgr(con->msgr))`，确保仅在 v1 协议下执行重试逻辑。
+2. 在 `clear_standby` 函数中，对 `con->v1.connect_seq` 的自增操作增加同样的版本判断保护，防止在 v2 连接上修改 v1 序列号。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9d3aea73534785622da2d9068b16029e4f6a44fb

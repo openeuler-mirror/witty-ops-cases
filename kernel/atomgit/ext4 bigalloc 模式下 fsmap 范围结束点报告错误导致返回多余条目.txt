@@ -1,0 +1,21 @@
+#标题
+ext4 bigalloc 模式下 fsmap 范围结束点报告错误导致返回多余条目
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 bigalloc 选项的 ext4 文件系统上调用 `FS_IOC_GETFSMAP` 接口查询特定范围的磁盘映射信息时，会返回预期之外的错误条目。
+例如在 5G 64k 块大小的文件系统上执行 `xfs_io -c "fsmap -d 0 3"` 查询命令，预期仅返回 1 条记录，实际却返回了 2 条，其中包含了错误的不存在的空间映射信息。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ext4_getfsmap_datadev` 函数处理 fsmap 请求范围结束点的逻辑中，代码错误地使用了集群单元而不是块单元。当启用 bigalloc 特性时，集群与块的大小存在差异，这导致在计算和处理最后一个分配块的逻辑时，错误地触发了针对元数据列表的处理流程，从而合并并输出了错误的、不在查询范围内的额外映射条目。
+
+#解决方案
+修改 `fs/ext4/fsmap.c` 中的 `ext4_getfsmap_datadev` 函数，移除原先基于集群单元调用的 `ext4_getfsmap_datadev_helper` 函数，改为构造一个临时的 dummy 记录 `irec`。将该记录的物理地址 `fmr_physical` 设置为 `end_fsb + 1`（基于块单元），然后直接调用 `ext4_getfsmap_helper` 函数。通过使用块地址而非集群地址，确保了在处理范围结束点时的逻辑正确性，避免了错误条目的产生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14e17cc4a9969d0067db0bcc98b6a9a18964c43b

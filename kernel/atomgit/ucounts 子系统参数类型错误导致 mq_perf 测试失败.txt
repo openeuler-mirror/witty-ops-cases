@@ -1,0 +1,21 @@
+#标题
+ucounts 子系统参数类型错误导致 mq_perf 测试失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 mq_perf 测试用例时出现错误，测试无法正常通过。该问题与 ucounts 资源限制的计算逻辑有关，可能导致资源计数判断异常。
+
+#主要错误日志
+未知
+
+#问题根因
+ucounts 子系统中的 `inc_rlimit_ucounts_limit` 和 `inc_rlimit_get_ucounts` 函数在处理 limit 参数时存在类型问题。参数 `limit` 被定义为 `long` 类型，但在代码逻辑中使用了 `min(limit, max)` 进行比较。
+当 limit 的值大于 LONG_MAX 时（例如用户空间传入的无符号大值），作为有符号长整型传入函数会导致其变为负数。`min()` 宏在有符号数比较时会判定负数小于正数，导致 max 被错误地设置为该负数，进而导致资源限制逻辑判断失误，引发测试失败。
+
+#解决方案
+将相关函数接口中的 `limit` 参数类型从 `long` 修改为 `unsigned long`，并将内部的局部变量 `in_limit` 也修改为 `unsigned long`。同时，将比较逻辑从 `min(limit, max)` 修改为显式的三目运算比较（`limit < max ? limit : max`），确保比较操作按无符号数进行，避免因类型转换导致的逻辑错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/39af6bcfa8655d01bf50c4bbb8fabb5118ffb163

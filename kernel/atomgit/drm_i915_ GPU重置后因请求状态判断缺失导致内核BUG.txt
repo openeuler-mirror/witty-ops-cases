@@ -1,0 +1,28 @@
+#标题
+drm/i915: GPU重置后因请求状态判断缺失导致内核BUG
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Sandy Bridge (Gen6) 平台上，当心跳机制触发引擎重置时，系统触发 kernel BUG 并崩溃。调用栈显示崩溃发生在 `__i915_request_skip` 函数中，由 `GEM_BUG_ON` 断言失败引起。
+
+#主要错误日志
+```
+kernel BUG at drivers/gpu/drm/i915/i915_request.c:556!
+RIP: __i915_request_skip+0x15e/0x1d0 [i915]
+...
+__i915_request_reset+0x212/0xa70 [i915]
+reset_rewind+0xe4/0x280 [i915]
+intel_gt_reset+0x30d/0x5b0 [i915]
+heartbeat+0x516/0x530 [i915]
+```
+
+#问题根因
+在 GPU 重置过程中，硬件状态指针（HWSP）被清零，导致先前已完成的请求看起来像是未完成状态。如果在 `reset_rewind()` 过程中选中了这些请求并将其标记为 guilty，函数 `i915_request_set_error_once()` 会因为 fence 已经处于 signaled 状态而提前返回，未设置致命错误码。随后的 `__i915_request_skip()` 函数执行时，检测到 `rq->fence.error` 不是致命错误，从而触发 `GEM_BUG_ON(!fatal_error(rq->fence.error))` 断言失败。
+
+#解决方案
+在调用 `__i915_request_skip()` 前增加 `i915_request_signaled()` 判断。如果请求已经被信号标记为完成，说明 ring 内容已经提交，无需再执行跳过操作，从而避免因错误码未设置而触发的 BUG。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d429a075c68d943b54582302907ae78d2ff29457

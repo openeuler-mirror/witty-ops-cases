@@ -1,0 +1,21 @@
+#标题
+arm64: ptrace: 修复 NT_ARM_TAGGED_ADDR_CTRL 的 partial SETREGSET 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ptrace` 的 `SETREGSET` 接口操作 `NT_ARM_TAGGED_ADDR_CTRL` 时，如果内核获取 tagged address control 配置失败（例如相关功能未启用或配置异常），系统可能未能正确处理该错误状态，导致后续处理逻辑异常或返回错误的寄存器值。修复方案中增加了 `WARN_ON_ONCE` 警告，以便在出错时打印警告信息。
+
+#主要错误日志
+未知
+
+#问题根因
+`tagged_addr_ctrl_set` 函数在执行设置操作前，未调用 `get_tagged_addr_ctrl` 检查当前 target 的配置状态是否有效。如果 `get_tagged_addr_ctrl` 返回错误，原有代码未进行错误拦截就直接继续执行 `user_regset_copyin`，可能导致后续逻辑处理异常。同时，`tagged_addr_ctrl_get` 函数中对错误的处理不够显式，缺乏内核日志追踪。
+
+#解决方案
+1. 在 `tagged_addr_ctrl_set` 函数中增加对 `get_tagged_addr_ctrl(target)` 返回值的检查。若返回错误值，通过 `WARN_ON_ONCE` 打印警告并直接返回错误码，避免在错误状态下继续执行设置操作。
+2. 在 `tagged_addr_ctrl_get` 函数中，将原有的 `IS_ERR_VALUE(ctrl)` 判断改为 `WARN_ON_ONCE(IS_ERR_VALUE(ctrl))`，以便在获取配置失败时提供内核警告信息，增强可观测性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c95957fb11156932562fd54d7b3d3950568b5956

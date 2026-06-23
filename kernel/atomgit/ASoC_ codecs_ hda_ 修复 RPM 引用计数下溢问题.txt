@@ -1,0 +1,20 @@
+#标题
+ASoC: codecs: hda: 修复 RPM 引用计数下溢问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HD-Audio 编解码器驱动加载过程中，若 `snd_hda_codec_build_controls` 操作失败（例如无法创建控件），会导致内核运行时电源管理（RPM）引用计数发生下溢。这可能引发电源管理状态不一致，导致设备无法正常挂起或唤醒、后续电源操作异常，严重时可能触发内核警告或恐慌。
+
+#主要错误日志
+- `[   XX.XXXXXX] hdac: unable to create controls -XX` (推断，源自 `dev_err(&hdev->dev, "unable to create controls %d\n", ret);`)
+
+#问题根因
+函数 `hda_codec_probe_complete()` 的错误处理路径中存在冗余的 RPM 操作。当 `snd_hda_codec_build_controls` 失败时，代码原逻辑跳转至 `out` 标签执行 `pm_runtime_put_autosuspend(bus->dev)`。然而，`hda_codec_probe_complete()` 的调用者（`hda_codec_probe` 或 `late_probe`）在探测失败后会执行清理流程，该流程同样会对总线进行 RPM 引用计数的减少操作（`pm_runtime_put`）。这导致失败路径下 RPM 计数被多减一次，从而引发引用计数下溢。
+
+#解决方案
+修改 `sound/soc/codecs/hda.c` 中 `hda_codec_probe_complete()` 函数的错误处理逻辑。在 `snd_hda_codec_build_controls` 失败时，直接返回错误码，移除跳转到 `out` 标签的逻辑。这样可以避免在错误路径下执行多余的 `pm_runtime_put_autosuspend` 操作，将 RPM 引用计数的管理权交还给调用者处理，从而修复下溢问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3a5527f9b4a225aefac6ba828d6f34d65daf6ab7

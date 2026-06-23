@@ -1,0 +1,28 @@
+#标题
+serial: sc16is7xx: 流控级别初始化寄存器访问错误导致配置失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SC16IS7XX 串口驱动在初始化阶段配置硬件流控级别时，因寄存器访问模式错误，导致实际写入目标错误：
+1. 尝试设置 MCR[2] 位时，实际错误地访问了 XON1 寄存器；
+2. 尝试写入 TCR 寄存器配置流控触发水平时，实际错误地写入了 MSR 寄存器。
+这导致流控触发水平配置失效，系统使用 FCR 的默认触发水平（$00）而非预期的 TCR 配置值，可能引发串口数据流控异常。
+
+#主要错误日志
+未知
+
+#问题根因
+TCR/TLR 寄存器的访问依赖于 MCR[2] 位的设置，且 MCR 访问需要 LCR[7] 为 0。
+原代码在配置 MCR[2] 前，将 LCR 设置为 $BF（即 SC16IS7XX_LCR_CONF_MODE_B），这导致 MCR 寄存器的地址空间被映射为 XON1，因此写入操作实际修改了 XON1 而非 MCR。
+由于 MCR[2] 未被成功置位，后续对 TCR 寄存器的写入操作实际上访问了与 MSR 共享地址的寄存器，导致流控配置未生效。同时，原代码中关于 "Enable write access to enhanced features and internal clock div" 的注释是错误的，且 EFR[4] 已在 probe 阶段使能，无需重复配置。
+
+#解决方案
+修复串口启动时的寄存器配置流程：
+1. 删除对 EFR[4] 的重复配置及 LCR 设置为 CONF_MODE_B 的错误代码，确保 LCR 保持为 0，从而允许正常访问 MCR 寄存器。
+2. 删除不必要的 regcache_cache_bypass() 调用，因为 TCR 已被声明为 volatile。
+3. 在完成 TCR 配置后，显式清除 MCR[2] 位以关闭 TCR/TLR 寄存器的访问权限，恢复常态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5be357844980489bfd5f02526df607510b74a41e

@@ -1,0 +1,20 @@
+#标题
+pNFS block/scsi layout 提交阶段未初始化指针解引用风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 pNFS 的 block 或 scsi layout 进行 layoutcommit 操作时，若编码过程中发生重试（例如缓冲区空间不足），内核可能会发生未初始化指针解引用，导致内核崩溃或内存非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ext_tree_prepare_commit` 中，当 `ext_tree_encode_commit` 返回非零值（如空间不足）触发重试逻辑时，代码通过 `ext_tree_free_commitdata` 释放了原有的内存资源。随后代码跳转回 `retry` 标签处重新执行，但此时 `start_p` 指针仍指向已被释放的内存页面（或未重新初始化的地址），导致后续对该指针的解引用访问了无效内存。此外，函数末尾直接返回硬编码的 `0`，掩盖了重试后 `ext_tree_encode_commit` 可能返回的错误码。
+
+#解决方案
+移除 `goto retry` 跳转逻辑，改为在错误处理分支中重新计算缓冲区大小（直接使用 `NFS_SERVER(arg->inode)->wsize`），分配新的内存页面后，显式重新调用 `ext_tree_encode_commit` 进行编码，避免对已释放内存的访问。同时，修正函数返回值，返回变量 `ret` 以正确传递编码函数的执行结果。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3b8649fea2f74bc0d700ee3e826a368395c50071

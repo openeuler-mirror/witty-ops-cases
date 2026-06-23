@@ -1,0 +1,20 @@
+#标题
+nvme-pci: 修复 HMB 描述符表内存释放错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NVMe PCI 驱动使用主机内存缓冲区（HMB）功能时，若驱动分配的 HMB 描述符表数量小于 `max_entries`（例如受 `hmmaxd` 参数限制），在释放内存时 `dma_free_coherent` 传入的 size 参数会大于实际分配的大小，导致内核内存管理子系统检测到大小不匹配，可能引发内核警告、内存泄漏或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__nvme_alloc_host_mem` 函数中，分配 HMB 描述符表时依据 `max_entries` 申请了内存，但实际使用的描述符数量 `nr_host_mem_desces` 可能小于 `max_entries`。而在 `nvme_free_host_mem` 函数中，释放内存时直接使用了 `dev->nr_host_mem_descs * sizeof(*dev->host_mem_descs)` 计算大小，该计算值小于 `dma_alloc_coherent` 实际分配的大小；或者如果在分配路径的错误处理分支 `out_free_descs` 中，使用的也是 `max_entries` 计算，导致释放大小与分配大小不一致。根本原因在于驱动未记录实际分配的内存大小，导致释放时参数错误。
+
+#解决方案
+在 `struct nvme_dev` 结构体中新增 `host_mem_descs_size` 成员变量，用于记录实际分配的 DMA 内存大小。在 `__nvme_alloc_host_mem` 分配路径中保存该大小，并在 `nvme_free_host_mem` 释放路径中直接使用该保存的值进行释放，确保内存释放的大小与分配时完全一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/323fdd0bb1c04cc9d146fbb356de334a6230d4f2

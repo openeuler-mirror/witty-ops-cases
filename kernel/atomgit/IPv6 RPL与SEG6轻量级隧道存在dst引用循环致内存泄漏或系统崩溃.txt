@@ -1,0 +1,28 @@
+#标题
+IPv6 RPL与SEG6轻量级隧道存在dst引用循环致内存泄漏或系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用IPv6 RPL（Routing Protocol for Low-Power and Lossy Networks）或SEG6（Segment Routing）轻量级隧道进行报文转发时，可能出现以下现象：
+1. 内核内存泄漏，随着时间推移系统可用内存持续减少。
+2. 在特定配置下触发 dst 引用计数循环，导致内核陷入无限递归或死锁。
+3. 网络数据包转发异常，相关接口流量中断。
+
+#主要错误日志
+未知
+
+#问题根因
+该问题源于两个核心缺陷：
+1. **dst 引用循环**：在 `rpl_input`、`rpl_output` 以及 `seg6_input_core`、`seg6_output_core` 等处理函数中，代码逻辑会将查找到的目的地缓存到 lwtunnel 的 dst_cache 中。如果路由配置导致 lwtunnel 的目的地址解析回指自身，缓存操作会增加自身 dst_entry 的引用计数，形成循环引用，导致该 dst_entry 永远无法被释放，引起内存泄漏；严重时可能导致内核崩溃。
+2. **skb 缓冲区头部空间预留不足**：在进行 `skb_cow_head` 扩展 skb 头部时，代码原使用 `skb->mac_len` 计算预留空间。对于某些需要额外头部开销的隧道封装场景，该计算方式未包含设备驱动的开销，导致预留空间不足，可能引发内存越界访问。
+
+#解决方案
+1. **阻断引用循环**：在缓存 dst_entry 之前，增加检查逻辑，比较待缓存的 dst 与当前原始 dst 的 lwtstate 指针。如果两者相同，说明发生了回环，此时跳过缓存操作，从而打破引用计数循环。代码中增加了 `lwtst != dst->lwtstate` 的判断条件。
+2. **修复头部空间计算**：将 `skb_cow_head` 调用中的 `skb->mac_len` 替换为 `dst_dev_overhead(cache_dst, skb)`，确保预留的头部空间包含正确的设备开销，防止内存越界。
+3. **修正 dst_cache 并发与生命周期管理**：针对 SEG6 模块，将原本单一的 cache 拆分为 `cache_input` 和 `cache_output` 两个独立的缓存，分别处理输入和输出路径，避免不同路径下的 dst 混用和潜在的状态冲突。
+4. **完善错误处理路径**：调整 `dst_release` 的调用时机，确保在错误处理分支中正确释放已获取的 dst 引用，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4469df17f84132b28ff483837ab421c3b449bfc3

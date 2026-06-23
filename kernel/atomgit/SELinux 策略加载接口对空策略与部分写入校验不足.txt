@@ -1,0 +1,24 @@
+#标题
+SELinux 策略加载接口对空策略与部分写入校验不足
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在向 SELinux 的 load 接口写入数据时，若传入空策略（count 为 0）或进行部分写入，内核未在第一时间进行参数校验，可能导致后续逻辑处理异常或产生非预期的错误返回码。
+
+#主要错误日志
+SELinux: failed to load policy
+SELinux: failed to initialize selinuxfs
+
+#问题根因
+`sel_write_load` 函数原本的输入参数校验逻辑位置靠后，且缺少对 `count` 为 0（空策略）的显式检查。这导致在传入无效参数（如空策略）时，代码未能及时返回 `-EINVAL`，而是继续执行并可能返回其他错误码（如 `-ENOMEM`），增加了调试难度且不符合预期的防御性编程规范。
+
+#解决方案
+将输入参数的合法性检查移至 `sel_write_load` 函数开头：
+1. 检查 `ppos` 是否为 0，确保非部分写入，否则返回 `-EINVAL`。
+2. 新增对 `count` 的检查，确保其非零（不为空策略），否则返回 `-EINVAL`。
+3. 调整局部变量初始化位置，仅在需要使用前进行赋值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5f473e0139cab8da2c0866e45e8170f97683bbb7

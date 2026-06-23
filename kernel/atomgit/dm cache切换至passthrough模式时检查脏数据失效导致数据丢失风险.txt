@@ -1,0 +1,25 @@
+#标题
+dm cache切换至passthrough模式时检查脏数据失效导致数据丢失风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 LVM 预加载表的情况下，dm-cache 切换至 passthrough 模式时，若存在脏数据，系统未能有效拦截并报错，导致脏映射被加载到 passthrough 模式中，进而引发数据丢失。具体复现步骤包括：创建一个带有脏数据的 writeback 缓存，预加载一个 passthrough 模式的表，写入数据产生脏块，然后恢复该表，此时脏块可能被错误地加载。
+
+#主要错误日志
+- 推断日志（基于修复代码中的 DMERR）：
+  `device-mapper: cache: [设备名]: cannot enter passthrough mode unless all blocks are clean`
+
+#问题根因
+dm-cache 原代码假设表重载发生在挂起之后，但 LVM 的表预加载打破了这个假设。原有的脏映射检查是在表创建阶段进行的，当使用预加载方式时，元数据更新仍在进行中，导致检查失效（即检查通过但后续加载了脏数据）。这导致系统错误地允许带有脏映射的缓存进入 passthrough 模式，从而造成数据丢失风险。
+
+#解决方案
+将脏映射检查逻辑从表创建阶段移动到 `preresume` 阶段。具体修改为：
+1. 移除 `cache_create` 函数中针对 passthrough 模式的提前检查代码。
+2. 在 `load_mapping` 回调函数中增加检查：如果发现脏映射且当前处于 passthrough 模式，则打印错误日志并返回 `-EBUSY` 错误，阻止设备恢复。
+3. 更新 `cache_preresume` 中的错误处理逻辑，识别 `-EBUSY` 错误码，避免触发不必要的元数据操作失败处理流程。
+4. 删除不再使用的函数 `dm_cache_metadata_all_clean`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dd0dd431314d3e11b686b67ae32595aae7362c67

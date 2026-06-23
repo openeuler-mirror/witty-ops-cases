@@ -1,0 +1,36 @@
+#标题
+locking/spinlock/debug: Fix data-race in do_raw_write_lock
+
+#内核版本
+OLK-6.6
+
+#问题现象
+KCSAN（Kernel Concurrency Sanitizer）检测到内核存在数据竞争。具体表现为在 `do_raw_write_lock` 函数中，一个任务正在对内存地址进行标记写操作，而另一个任务同时对该地址进行读操作，触发了数据竞争告警。
+
+#主要错误日志
+BUG: KCSAN: data-race in do_raw_write_lock / do_raw_write_lock
+
+write (marked) to 0xffff800009cf504c of 4 bytes by task 1102 on cpu 1:
+ do_raw_write_lock+0x120/0x204
+ _raw_write_lock_irq
+ do_exit
+ call_usermodehelper_exec_async
+ ret_from_fork
+
+read to 0xffff800009cf504c of 4 bytes by task 1103 on cpu 0:
+ do_raw_write_lock+0x88/0x204
+ _raw_write_lock_irq
+ do_exit
+ call_usermodehelper_exec_async
+ ret_from_fork
+
+value changed: 0xffffffff -> 0x00000001
+
+#问题根因
+Commit 1a365e822372 ("locking/spinlock/debug: Fix various data races") 虽然修复了大部分数据竞争问题，但在 `do_raw_write_lock()` 函数中处理不完整。该补丁仅将 `debug_write_lock_after()` 部分转换为了 `WRITE_ONCE()`，而遗漏了 `debug_write_lock_before()` 部分，导致在读取 `lock->owner` 和 `lock->owner_cpu` 时未使用 `READ_ONCE()`，从而触发了 KCSAN 的数据竞争报告。
+
+#解决方案
+在 `debug_write_lock_before()` 函数中，对 `lock->owner` 和 `lock->owner_cpu` 的读取操作使用 `READ_ONCE()` 宏进行封装。这确保了读取操作的原子性与一致性，避免了编译器优化导致的数据竞争，从而修复了 KCSAN 报告的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/327de6558d52fc4e5bd69585e11c357a8d773fcb

@@ -1,0 +1,22 @@
+#标题
+arm64: kaslr: fix nokaslr cmdline parsing
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 架构下，内核启动参数中指定的 `nokaslr` 选项解析失效，导致 KASLR（内核地址空间随机化）未能按预期被禁用。该问题主要表现为命令行参数误匹配，例如当 cmdline 中包含类似 `nokaslr_test` 的字符串时，内核错误地识别为 `nokaslr` 参数，从而错误地禁用了 KASLR 功能。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在解析 cmdline 查找 `nokaslr` 字符串时，检查逻辑不完整。原有代码仅校验了 `nokaslr` 字符串起始位置的有效性（即位于 cmdline 开头或前面是空格），但未校验结束位置的有效性。这导致 `__strstr` 匹配到子串后，未判断紧跟其后的字符是否为分隔符（空格或结束符），从而引发了误匹配（例如将 `nokaslr_test` 误判为 `nokaslr`）。
+
+#解决方案
+在 KASLR 初始化代码中增加对 `nokaslr` 参数结束位置的校验逻辑。
+1. 新增 `nokaslr_valid_ends` 函数，用于检查 `nokaslr` 字符串后的字符是否为空格或 `\0` 结束符。
+2. 修改 `cmdline_contains_nokaslr` 函数，只有当字符串起始位置有效（通过 `nokaslr_valid_starts` 校验）且结束位置有效（通过 `nokaslr_valid_ends` 校验）时，才判定 `nokaslr` 参数生效，避免对类似 `nokaslr_test` 等参数的误识别。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a527309654e889995341431b9794bc898cdbdb6f

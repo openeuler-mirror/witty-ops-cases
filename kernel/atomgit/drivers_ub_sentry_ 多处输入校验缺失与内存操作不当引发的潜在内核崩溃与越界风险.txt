@@ -1,0 +1,47 @@
+#标题
+drivers/ub/sentry: 多处输入校验缺失与内存操作不当引发的潜在内核崩溃与越界风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **内核崩溃或内存破坏**：部分函数（如 `str_to_eid`、`urma_recv`）未对传入参数进行空指针检查或缓冲区大小校验错误，可能导致 NULL 指针解引用或栈溢出。
+2. **数据异常**：多个局部数组变量（如 `send_data`、`eid_str_buf`）未初始化，可能导致后续逻辑处理脏数据，引发不可预期的行为。
+3. **内存泄漏**：模块退出函数 `smh_message_exit` 未正确清理 `msgbuf_send` kfifo 中的残留数据，导致内存泄漏。
+4. **越界访问**：EID 字符串处理逻辑中对长度判断条件错误（`>=` 误写为 `>`）及 `snprintf` 长度参数传递错误，可能导致缓冲区越界访问。
+
+#主要错误日志
+- `pr_err("eid str %s len is invalid, failed to transfer\n", eid_str);`
+- `pr_err("Invalid param, failed to match index\n");`
+- `pr_err("Invalid eid num, failed to create urma resource\n");`
+- `pr_err("Invalid param, failed to process multi eid string\n");`
+- `pr_err("Invalid eid format: str too long: %s\n", eid_part);`
+- `pr_err("%s: Invalid param, failed to send data\n", __func__);`
+- `pr_warn("urma recv: msg size exceeds max len %lu\n", len);`
+- `pr_err("%s: Invalid param, failed to send data\n", __func__);` (uvb_send)
+- `pr_err("%s: kstrdup failed!\n", __func__);`
+- `pr_err("%s: Invalid string, failed to convert it to smh_msg.\n", __func__);`
+- `pr_err("%s: Invalid param, failed to send data\n", __func__);` (smh_message_send)
+- `pr_err("%s: Invalid param, failed to get data\n", __func__);`
+
+#问题根因
+1. **防御性编程缺失**：多处关键函数入口未对指针参数进行 NULL 校验（如 `str_to_eid`、`urma_send`、`uvb_send` 等），直接使用指针存在空指针解引用风险。
+2. **数组未初始化**：栈上分配的局部数组（如 `send_data`、`server_cna_buf` 等）未显式初始化为 0，导致数据段结构体或字符串处理逻辑使用随机脏数据。
+3. **边界条件判断错误**：
+    - `process_multi_eid_string` 中判断字符串过长条件为 `strlen(eid_part) > EID_MAX_LEN`，遗漏了等于的情况，导致刚好长度为 `EID_MAX_LEN` 时可能越界。
+    - `urma_recv` 中 `snprintf` 使用传入的 `len`（用户期望长度）而非 `recv_msg` 数组的实际大小，存在栈溢出风险。
+    - `sentry_create_urma_resource` 未校验 `eid_num` 是否超过 `MAX_DIE_NUM`。
+4. **资源清理不彻底**：`smh_message_exit` 中仅释放了 kfifo 结构，未遍历并释放 kfifo 中未消费的消息节点，造成内存泄漏。
+5. **内存分配失败未处理**：`convert_server_cna_str_to_u32_array` 中 `kstrdup` 失败后未做处理，直接使用空指针。
+
+#解决方案
+1. **增加参数校验**：在所有受影响的函数入口处添加指针非空检查及数值范围检查（如 `eid_num > MAX_DIE_NUM`），若参数非法则返回 `-EINVAL`。
+2. **初始化局部变量**：对所有栈上分配的数组和结构体使用 `= {0}` 进行显式初始化，避免使用脏数据。
+3. **修正边界逻辑**：
+    - 将字符串长度校验条件由 `>` 修正为 `>=`。
+    - 修正 `snprintf` 的 size 参数，使用 `sizeof(recv_msg)` 确保写入不会越界。
+    - 在 `convert_str_to_smh_msg` 中增加字符串长度校验防止读取越界。
+4. **完善内存释放逻辑**：在 `smh_message_exit` 中增加循环逻辑，使用 `kfifo_out_spinlocked` 将 kfifo 中残留的内存块取出并调用 `kfree` 释放，确保无内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a51ba5ba2ab7797dd6e5dd21f7de0029dd4fe9dd

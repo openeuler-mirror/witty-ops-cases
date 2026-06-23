@@ -1,0 +1,25 @@
+#标题
+perf mem报告工具错误显示内存访问层级字符串
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `perf mem report` 命令查看内存访问报告时，特定的内存层级（如 PERF_MEM_LVLNUM_L2_MHB）显示为错误的字符串（例如显示为 "L5 hit"），而非预期的正确描述字符串（如 "L2 MHB hit"）。
+
+#主要错误日志
+- 错误输出示例：
+  `0.02%	1	3644	L5 hit	[.] 0x0000000000009b0e	mlc	[.] 0x00007fce43f59480`
+- 修正后预期输出：
+  `0.02%	1	3644	L2 MHB hit	[.] 0x0000000000009b0e	mlc	[.] 0x00007fce43f59480`
+
+#问题根因
+在 `tools/perf/util/mem-events.c` 文件中，`mem_lvlnum` 数组缺少对 `PERF_MEM_LVLNUM_L2_MHB` 和 `PERF_MEM_LVLNUM_MSC` 等枚举值的字符串映射。
+当解析到这些未定义的层级时，函数 `perf_mem__lvl_scnprintf` 找不到对应的字符串，导致错误地回退到默认格式化逻辑 `L%d`。例如，L2 MHB 对应的数值为 0x05，被错误地格式化为 "L5"。
+
+#解决方案
+1. 在 `mem_lvlnum` 数组中补全缺失的映射项，包括 L1、L2、L3、L4、L2 MHB 和 MSC（Memory-side Cache）。
+2. 优化默认格式化字符串，将未识别层级的输出从 "L%d" 修改为 "Unknown level %d"，以避免产生误导性的输出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ea887b5f530e308db56b44bf5ac7dadd36632f80

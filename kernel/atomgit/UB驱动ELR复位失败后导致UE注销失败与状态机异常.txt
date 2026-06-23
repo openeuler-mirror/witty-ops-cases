@@ -1,0 +1,21 @@
+#标题
+UB驱动ELR复位失败后导致UE注销失败与状态机异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当ELR（Entity Level Reset）复位失败后，cmdq（命令队列）进入禁用状态。此时进行UE（Ultra Entity）注销操作时，由于cmdq不可用，命令无法发送给固件，导致注销失败。这进而引发状态机不一致，并导致后续的重注册失败。
+
+#主要错误日志
+- `ubase_warn(udev, "cmdq is disabled. try to restore it.\n");`
+- `ubase_err(udev, "failed to restore cmdq, ret = %d.\n", ret);`
+
+#问题根因
+当ELR复位失败时，cmdq状态转变为 `UBASE_STATE_CMD_DISABLE`。在UE注销流程中，驱动依赖cmdq向固件发送销毁上下文资源、禁用混杂模式、恢复QoS等配置命令。由于cmdq处于禁用状态，命令传输失败，导致无法正常注销，残留配置并引发状态机不一致。
+
+#解决方案
+在 `ubase_dev_uninit` 函数中增加 cmdq 重初始化逻辑。检测到 `UBASE_STATE_CMD_DISABLE` 状态时，调用 `ubase_cmd_init` 重新初始化 cmdq，使其恢复可用状态，从而确保后续的注销命令能成功发送给固件，修复状态机不一致问题。同时引入 `UBASE_STATE_REMOVING_B` 标志位防止在移除过程中进行不必要的复位错误处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ea21419f8c44efc0d9e7bf9fa7d8c1072fb019ef

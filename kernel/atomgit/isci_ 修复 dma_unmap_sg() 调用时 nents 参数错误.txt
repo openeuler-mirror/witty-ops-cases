@@ -1,0 +1,20 @@
+#标题
+isci: 修复 dma_unmap_sg() 调用时 nents 参数错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ISCI 驱动（Intel C600 SAS Controller）进行 SCSI 数据传输任务时，若 I/O 请求未使用 ACPI 匹配，驱动程序在执行 DMA 取消映射操作时传入错误的散列表项数（nents）。这可能导致 DMA 映射与取消映射参数不一致，进而引发内核 DMA 子系统异常、内存泄露或数据损坏等不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 DMA API 规范，`dma_unmap_sg()` 函数的 `nents` 参数必须传入与 `dma_map_sg()` 相同的值，即原始的散列表项数，而不是 `dma_map_sg()` 返回的映射后的条目数。代码中错误地使用了 `request->num_sg_entries`（映射后的条目数）作为参数，违反了 DMA API 的调用约定。正确的参数应为 `task->num_scatter`，即原始的散列表项数。
+
+#解决方案
+修改 `drivers/scsi/isci/request.c` 文件中 `isci_request_io_request_complete` 函数的代码，将 `dma_unmap_sg()` 的第三个参数由 `request->num_sg_entries` 修正为 `task->num_scatter`，确保 DMA 取消映射时传入的 nents 值与映射时一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9e9a9685f4b353cf9f007f5dfe2e73cf2c664077

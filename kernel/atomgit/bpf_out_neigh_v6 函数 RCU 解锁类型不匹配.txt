@@ -1,0 +1,23 @@
+#标题
+bpf_out_neigh_v6 函数 RCU 解锁类型不匹配
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `bpf_out_neigh_v6` 函数中，RCU 读临界区的加锁与解锁操作类型不匹配。代码使用 `rcu_read_lock()` 进入临界区，但在特定分支中错误地使用了 `rcu_read_unlock_bh()` 进行解锁。这种不匹配可能导致内核内部同步状态异常，引发潜在的并发问题或不可预期的内核行为。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，该问题由静态分析工具发现。根本原因是代码逻辑错误：
+1. 函数入口处使用 `rcu_read_lock()` 开启 RCU 读临界区。
+2. 在之前的代码提交 `09eed1192cec` 切换 RCU 机制后，某处分支未同步更新，保留了旧的 `rcu_read_unlock_bh()` 调用。
+3. 这导致了 `rcu_read_lock()` 与 `rcu_read_unlock_bh()` 配对使用，违反了 RCU 锁定规则。
+
+#解决方案
+修正 RCU 解锁类型，将错误的 `rcu_read_unlock_bh()` 替换为正确的 `rcu_read_unlock()`，确保 RCU 临界区的进入与退出操作配对一致，防止同步问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4b591a0239741e88f0bc372915fb713efb30e150

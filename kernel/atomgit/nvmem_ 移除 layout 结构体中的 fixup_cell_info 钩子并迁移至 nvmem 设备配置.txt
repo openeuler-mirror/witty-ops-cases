@@ -1,0 +1,23 @@
+#标题
+nvmem: 移除 layout 结构体中的 fixup_cell_info 钩子并迁移至 nvmem 设备配置
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NVMEM 子系统中，部分 Provider（如 imx-ocotp, mtk-efuse）为了在添加 cell 前修改 cell 信息（如设置 `read_post_process` 回调），必须实例化一个冗余的 `nvmem_layout` 结构体。这种设计导致了不必要的结构体定义和初始化代码，增加了代码复杂度和维护成本，且 `layout` 抽象在此场景下显得过于厚重。
+
+#主要错误日志
+未知
+
+#问题根因
+`fixup_cell_info` 回调钩子原本定义在 `nvmem_layout` 结构体中。实际上，该钩子主要用于 Provider 对 cell 信息进行修正，与 Layout 的核心功能关联不大。Provider 为了使用该钩子，被迫创建并注册一个仅包含该钩子的空 `nvmem_layout` 实例，这是设计上的不合理之处。
+
+#解决方案
+将 `fixup_cell_info` 钩子从 `nvmem_layout` 结构体移动到 `nvmem_device` 结构体中，并将其加入 `nvmem_config` 配置结构以便 Provider 直接传递。
+1. 在 `include/linux/nvmem-provider.h` 中，将 `fixup_dt_cell_info` 回调添加到 `struct nvmem_config` 和 `struct nvmem_device` 定义中，同时从 `struct nvmem_layout` 中移除 `fixup_cell_info`。
+2. 在 `drivers/nvmem/core.c` 中，修改 `nvmem_add_cells_from_dt` 函数，直接调用 `nvmem->fixup_dt_cell_info` 而非通过 `layout` 调用；并在 `nvmem_register` 中初始化该回调。
+3. 更新 `drivers/nvmem/imx-ocotp.c` 和 `drivers/nvmem/mtk-efuse.c` 驱动，移除冗余的 `nvmem_layout` 结构体定义，改为在 `nvmem_config` 中直接赋值 `fixup_dt_cell_info` 回调。同时将回调函数名从 `fixup_cell_info` 重命名为 `fixup_dt_cell_info` 以明确其用途。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c6e32491e0064e52754f535ea7510e9c46fcd0eb

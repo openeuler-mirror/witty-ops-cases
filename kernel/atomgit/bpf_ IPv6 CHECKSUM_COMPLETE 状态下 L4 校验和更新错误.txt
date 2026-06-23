@@ -1,0 +1,29 @@
+#标题
+bpf: IPv6 CHECKSUM_COMPLETE 状态下 L4 校验和更新错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 BPF 程序（如 Cilium）处理 IPv6 报文时，若调用 `bpf_csum_diff` 和 `bpf_l4_csum_replace` 对报文进行反向 SNAT（修改 IPv6 地址）操作，会导致 `skb->csum` 计算出错误的值。这会影响后续网络协议栈对报文的校验和处理逻辑，可能导致报文被错误丢弃或校验失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `CHECKSUM_COMPLETE` 状态下处理 IPv6 报文时，`inet_proto_csum_replace_by_diff` 函数的逻辑存在缺陷。
+当修改 IPv6 地址后更新 L4 校验和时：
+1. 对于 IPv6 报文，IPv6 地址的变更与 L4 校验和的更新在 `skb->csum` 计算上是相互抵消的（因为校验和的设计初衷就是包含伪首部，对地址变更进行补偿）。
+2. 现有代码在更新 L4 header checksum 后，又错误地更新了 `skb->csum`（代码第 7 行 `skb->csum = ~csum_sub(diff, skb->csum);`）。
+3. 由于步骤 1 中的抵消效应，此处不应再次更新 `skb->csum`，否则会导致 `skb->csum` 值无效。
+与之对比，IPv4 报文因为涉及 IP checksum、L4 checksum 和地址三处变更，不存在此抵消问题，而 IPv6 没有 IP checksum，逻辑处理应当不同。
+
+#解决方案
+在 `bpf_l4_csum_replace` 机制中引入新标志位 `BPF_F_IPV6` 用于标识当前处理的是 IPv6 报文。
+具体修改如下：
+1. 在 `include/uapi/linux/bpf.h` 中新增标志位定义 `BPF_F_IPV6 = (1ULL << 7)`。
+2. 修改 `net/core/filter.c` 中的 `bpf_l4_csum_replace` 函数，解析 `BPF_F_IPV6` 标志。
+3. 将该标志传递给 `inet_proto_csum_replace_by_diff` 函数。当该标志置位时，跳过对 `skb->csum` 的更新操作，从而修正 IPv6 环境下的校验和计算逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0cb82fc5d26322996538ac8e0c08f18f111f28ae

@@ -1,0 +1,20 @@
+#标题
+IB/sa: sa_local_svc_timeout_ms 读取存在竞态条件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多线程并发管理超时设置的场景下，计算超时差值（delta）时读取 `sa_local_svc_timeout_ms` 变量存在竞态风险。这可能导致读取到的值与实际状态不一致，进而导致超时计算错误或定时器行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ib_nl_handle_set_timeout` 中，计算 `delta = timeout - sa_local_svc_timeout_ms` 时未持有 `ib_nl_request_lock` 锁。虽然实际发生问题的概率较低，但如果多个本地服务线程同时管理超时设置，此时读取 `sa_local_svc_timeout_ms` 可能读到被其他线程修改过程中的中间值，从而引发竞态条件。
+
+#解决方案
+将 `spin_lock_irqsave(&ib_nl_request_lock, flags)` 的加锁操作前移，确保在读取 `sa_local_svc_timeout_ms` 进行差值计算之前就已经持有锁，保证读取操作的原子性与一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6bae512bd690d180cb7ca9f670aba83f86d55ebf

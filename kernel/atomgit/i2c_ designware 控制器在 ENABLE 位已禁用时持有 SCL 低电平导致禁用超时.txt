@@ -1,0 +1,22 @@
+#标题
+i2c: designware 控制器在 ENABLE 位已禁用时持有 SCL 低电平导致禁用超时
+
+#内核版本
+OLK-6.6
+
+#问题现象
+I2C 控制器在特定情况下（如 STOP_DET 发生后立即禁用 IC_ENABLE）会出现 SCL 被拉低的现象，此时若 ENABLE 位已处于禁用状态，尝试写入 ABORT 位无效，导致后续 I2C 事务无法进行，系统报告总线就绪超时和适配器禁用超时。
+
+#主要错误日志
+i2c_designware e95e0000.i2c: timeout waiting for bus ready
+i2c_designware e95e0000.i2c: timeout in disabling adapter
+[推断] i2c_designware e95e0000.i2c: controller active
+
+#问题根因
+当 I2C 控制器持有 SCL 低电平时，如果 IC_ENABLE 寄存器的 ENABLE 位（bit 0）已经被禁用，此时硬件会忽略任何对 ABORT 位（bit 1）的写入操作。原代码逻辑未检查 ENABLE 位的状态就直接尝试写入 ABORT 位，导致 ABORT 命令失效，控制器无法从持有 SCL 的状态恢复，进而导致禁用流程超时。
+
+#解决方案
+在尝试写入 ABORT 位进行终止操作前，增加对 IC_ENABLE 寄存器 ENABLE 位的检查。如果发现 ENABLE 位处于禁用状态，则先将其置位（使能），并等待足够的时间（10倍最高支持频率的信号周期，如 400KHz 下为 25us）以确保使能生效，随后再设置 ABORT 位。此外，在禁用适配器前增加状态检查，若控制器仍处于活动状态则打印错误日志提醒。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad372588aa183977d1787d4787e25b63912a8012

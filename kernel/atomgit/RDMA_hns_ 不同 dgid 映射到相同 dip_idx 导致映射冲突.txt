@@ -1,0 +1,29 @@
+#标题
+RDMA/hns: 不同 dgid 映射到相同 dip_idx 导致映射冲突
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 HNS RDMA 驱动的 DIP（Destination IP）算法时，不同的目的 GID（dgid）被错误地映射到了同一个 dip_idx 索引上。这打破了 DIP 算法要求的 dgid 与 dip_idx 一对一映射的约束，可能导致 RDMA 连接的拥塞控制或路径选择出现异常或冲突。
+
+#主要错误日志
+未知
+
+#问题根因
+DIP 算法要求 dgid 与 dip_idx 必须是一对一映射。原实现中使用 `spare_idx` 队列存储使用 DIP 算法的 QPN（Queue Pair Number），当出现新的 dgid 时，直接从 `spare_idx` 中取出一个 QPN 作为 dip_idx。该方法缺乏对 QPN 的去重机制，导致多个不同的 dgid 可能获取到相同的 dip_idx，从而破坏了一对一映射的要求。
+
+#解决方案
+将原有的 `spare_idx` 队列机制替换为 `xarray` 结构，并引入引用计数 `qp_cnt` 来管理 dip_idx 的使用状态：
+1.  **数据结构变更**：删除 `hns_roce_idx_table` 和 `dip_list`，在 `hns_roce_qp_table` 中引入 `xarray dip_xa`，在 `hns_roce_dip` 结构体中引入 `qp_cnt` 计数器。
+2.  **状态管理**：利用 xarray 和 refcnt 实现状态机：
+    *   索引处条目为空：表示 dip_idx 未创建。
+    *   条目存在且 refcnt 为 0：表示 dip_idx 已创建但未被使用。
+    *   条目存在且 refcnt 非 0：表示 dip_idx 正在被使用。
+3.  **逻辑修复**：
+    *   在分配 dip_idx 时，通过遍历 xarray 查找已存在且 dgid 匹配的项，若存在则增加引用计数。
+    *   若不存在匹配项，则查找引用计数为 0 的空闲项进行复用，确保 dgid 唯一映射。
+    *   在销毁 QP 时，减少对应的引用计数，若计数归零则清除 dgid 信息以供复用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5da61758eb8fa0ea2aae3153bb43298ae5be676b

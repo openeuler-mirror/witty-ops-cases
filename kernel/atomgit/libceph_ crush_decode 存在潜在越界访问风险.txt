@@ -1,0 +1,21 @@
+#标题
+libceph: crush_decode 存在潜在越界访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统处理包含 CRUSH map 的 CEPH_MSG_OSD_MAP 类型消息时，若消息中 bucket 的两个算法字段（alg 与 b->alg）不一致，可能导致内核发生越界访问。此外，在处理此类异常数据后的清理（destroy）阶段，也可能因算法字段不匹配引发二次越界访问或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `crush_decode` 函数解析 CRUSH map 时，使用第一个算法字段（alg）来为特定类型的 bucket 分配内存，但在后续处理及销毁过程中却使用了 bucket 内部的第二个算法字段（b->alg）。如果这两个字段的值不一致，内核会按照错误的算法类型处理或释放内存，从而导致越界访问。
+
+#解决方案
+1. 在 `crush_decode` 中增加校验，比较 `alg` 与 `b->alg` 是否一致，若不一致则将 `b->alg` 置为 0（防止销毁时再次越界）并跳转至错误处理流程。
+2. 将各具体算法类型的 `crush_destroy_bucket_*` 函数中的 `kfree(b)` 调用移除，统一移至通用函数 `crush_destroy_bucket` 中执行。这确保了即使 `b->alg` 被强制修正为 0，内存也能被正确释放，避免内存泄漏或非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a3319e00d867a77c0cbaadaf39f64515c027e8c9

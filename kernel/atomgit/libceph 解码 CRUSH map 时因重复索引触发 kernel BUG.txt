@@ -1,0 +1,20 @@
+#标题
+libceph 解码 CRUSH map 时因重复索引触发 kernel BUG
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当收到包含 CRUSH map 的 CEPH_MSG_OSD_MAP 消息时，如果消息中存在两个具有相同 `choose_args_index` 的 `crush_choose_arg_map` 结构（可能是损坏的消息），内核在尝试将第二个结构插入红黑树时会触发断言，导致 kernel BUG。
+
+#主要错误日志
+kernel BUG at insert_choose_arg_map (断言失败触发)
+
+#问题根因
+在 `decode_choose_args()` 函数中，解析逻辑直接调用 `insert_choose_arg_map()` 将解析出的 `crush_choose_arg_map` 插入红黑树。该插入函数包含断言检查，假定索引唯一。如果收到损坏的消息，其中包含重复的 `choose_args_index`，插入操作违反断言，从而触发 kernel BUG。
+
+#解决方案
+修改 `decode_choose_args()` 函数，将原本的断言式插入 `insert_choose_arg_map()` 替换为非断言式插入函数 `__insert_choose_arg_map()`。增加对插入结果的检查，如果插入失败（返回 NULL，表明索引已存在），则返回 `-EEXIST` 错误并拒绝该消息，从而避免系统崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/51dda480b01b17e8a4cc5494a6c76b4a136dda8b

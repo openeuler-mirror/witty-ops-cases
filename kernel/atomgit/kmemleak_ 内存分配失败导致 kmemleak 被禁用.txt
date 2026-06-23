@@ -1,0 +1,23 @@
+#标题
+kmemleak: 内存分配失败导致 kmemleak 被禁用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 kmemleak 内存泄漏检测功能的系统中，当内存压力较大或内存碎片化严重时，尝试分配 `kmemleak_object` 结构体失败。此故障会导致 kmemleak 模块自动禁用，系统失去内存泄漏检测能力。该问题的根因在于 `__create_object` 函数持有全局自旋锁 `kmemleak_lock` 进行内存分配，导致锁持有时间过长或因内存分配阻塞而引发潜在的性能抖动与竞争问题。
+
+#主要错误日志
+kmemleak: Cannot allocate a kmemleak_object structure
+
+#问题根因
+`__create_object()` 函数由两部分逻辑组成：第一部分负责分配并初始化 kmemleak 对象，第二部分负责将该对象插入对象树。原有代码中，整个函数流程都需要持有全局锁 `kmemleak_lock`。这导致在进行内存分配（第一部分）时也持有该锁，而内存分配可能涉及复杂的内存回收路径，长时间持有自旋锁会严重影响系统性能，且分配失败时直接禁用 kmemleak 的处理过于粗糙。
+
+#解决方案
+将 `__create_object()` 函数拆分为两个独立的函数：
+1. `__alloc_object()`：仅负责分配 kmemleak 对象内存，不需要持有 `kmemleak_lock`。
+2. `__link_object()`：负责初始化对象并将其插入对象树，该过程由 `kmemleak_lock` 保护。
+通过这种拆分，缩小了锁的保护范围，避免了在内存分配阶段持有全局锁，从而减少了锁竞争和潜在的性能问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cc0c8bcf1671da37cbd0fbc8b25d38c623d17320

@@ -1,0 +1,26 @@
+#标题
+hrtimer: 实时任务定时器松弛值处理不一致导致延时增加及 procfs 显示错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+实时任务在使用定时等待（如条件变量）时，定时器被意外施加了非零的松弛延时，导致实时任务响应延迟，影响了实时性能。
+同时，通过 procfs 接口（`/proc/<pid>/timerslack_ns`）查询实时任务的 `timerslack_ns` 值时，显示为非零值，这与手册页中声明的“实时调度策略下的线程不应用定时器松弛”描述不符，导致用户态观测值与内核实际行为不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在处理 hrtimer 时，虽然部分代码路径考虑了实时任务应将 slack 设为 0，但逻辑应用不一致：
+1. `hrtimer_nanosleep` 和 `schedule_hrtimeout_range_clock` 等函数中，虽然针对实时任务进行了特殊处理，但并未同步更新任务结构体中的 `timer_slack_ns` 字段，导致下游代码和 procfs 接口读取到的值不正确。
+2. 实时任务的 `timer_slack_ns` 属性未在调度策略设置时被强制初始化为 0，导致系统默认值或其他设置值残留，违背了实时任务不应被延时调度的原则。
+
+#解决方案
+将实时任务的定时器松弛逻辑统一收敛到任务属性 `timer_slack_ns` 的管理上，删除 hrtimer 代码路径中的特殊判断逻辑：
+1. 在调度器核心代码 (`kernel/sched/core.c`) 中，当任务切换为实时调度策略时，强制将其 `timer_slack_ns` 设置为 0；当切换回非实时策略时，恢复为默认值。
+2. 在 prctl 系统调用 (`kernel/sys.c`) 和 procfs 写入接口 (`fs/proc/base.c`) 中，增加对实时任务的判断，拒绝设置非零的松弛值或强制保持为 0。
+3. 移除 `kernel/time/hrtimer.c` 和 `fs/select.c` 中针对实时任务的硬编码 slack 覆盖逻辑，直接使用任务结构体中的 `timer_slack_ns` 值，确保逻辑统一和 procfs 显示值的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6c1212a9e5c3ad81ee5d0807749492aa1e61bbcd

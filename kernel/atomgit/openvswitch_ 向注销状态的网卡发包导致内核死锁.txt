@@ -1,0 +1,21 @@
+#标题
+openvswitch: 向注销状态的网卡发包导致内核死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 OVS 向正在注销且载波状态仍为 ON 的网卡（如 dummy 设备）发送数据包时，内核陷入无限循环导致死锁，系统无响应，只能通过重启恢复。该问题常在 OVS 部署环境中使用 dummy 设备作为 tcpdump 抓包接收端时触发。
+
+#主要错误日志
+未知
+
+#问题根因
+在设备注销过程中，`dev->real_num_tx_queues` 会变为 0。当 OVS 尝试向此类设备发送数据包时，调用链 `do_output -> ovs_vport_send -> dev_queue_xmit -> skb_tx_hash` 中，`skb_tx_hash` 函数内的 `while (unlikely(hash >= qcount))` 循环因 `qcount` 为 0 而变成无限循环，导致内核永久锁死。
+此前代码仅检查 `netif_carrier_ok`，这对于 dummy 等不实现 `.ndo_stop` 且在注销时载波状态仍为 ON 的设备无法生效。
+
+#解决方案
+在 OVS 发送数据包的 `do_output` 函数中，增加对设备运行状态 `netif_running` 的检查。仅当设备存在、处于运行状态且载波状态正常时才进行发包。这确保了在设备注销过程中（此时运行状态已被内核置为非运行），数据包不会被发送到队列数已归零的设备上，从而避免死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/00a44093c745b52217423270126ed674f9f6a83c

@@ -1,0 +1,32 @@
+#标题
+GRE 设备 IPv6 链路本地地址生成异常及 SLAAC 功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+GRE 设备无法正确生成 IPv6 链路本地地址，导致 IPv6 连接性受影响。具体表现为：
+1. 配置了 `IN6_ADDR_GEN_MODE_RANDOM` 或 `IN6_ADDR_GEN_MODE_STABLE_PRIVACY` 地址生成模式的 GRE 接口，内核忽略该配置，未生成对应模式的地址。
+2. GRE 接口不发送路由请求报文，导致 SLAAC（无状态地址自动配置）流程无法启动，直到接口收到路由通告。
+3. 特定的 GRE over IPv4 场景下（如本地隧道端点地址未指定），IPv6 链路本地地址生成逻辑存在缺陷。
+
+#主要错误日志
+未知
+
+#问题根因
+问题的根本原因是 commit e5dd729460ca 引入了 `add_v4_addrs()` 函数来处理 GRE 设备的 IPv6 链路本地地址生成，但该函数存在以下设计缺陷：
+1. `add_v4_addrs()` 未正确集成到 IPv6 邻居发现机制中，导致不会发送 Router Solicitation 报文。
+2. `add_v4_addrs()` 忽略了接口的 `addr_gen_mode` 配置（如 `IN6_ADDR_GEN_MODE_RANDOM`），破坏了地址生成模式的灵活性。
+3. 之前的修复尝试错误地扩大了 `add_v4_addrs()` 的使用范围，导致本应使用标准 `addrconf_addr_gen()` 的场景也受到了影响。
+
+#解决方案
+修正 GRE 设备的 IPv6 地址生成逻辑，限制 `add_v4_addrs()` 的使用范围，并恢复标准生成函数的主导地位：
+1. 默认使用标准的 `addrconf_addr_gen()` 函数生成 IPv6 链路本地地址。
+2. 仅在极少数特定场景下回退到 `add_v4_addrs()`，该场景必须同时满足以下条件：
+   - 设备类型为 IPv4 GRE (`ARPHRD_IPGRE`)。
+   - 本地隧道端点地址为 0 (`INADDR_ANY`)。
+   - 地址生成模式为 EUI64 (`IN6_ADDR_GEN_MODE_EUI64`)。
+3. 移除 `add_v4_addrs()` 中对 ip6gre 接口的特殊处理代码，因为 ip6gre 接口现在统一使用 `addrconf_addr_gen()`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4fe10fff8f44296522866ca47f03ba2108fc614c

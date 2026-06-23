@@ -1,0 +1,28 @@
+#标题
+obmm: ptrace/GDB 访问导出区域 VMA 失败及 mmap 校验缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 GDB 或 ptrace 工具调试进程时，无法正常访问 OBMM（OpenEuler Binary Memory Management）导出区域（export region）的内存，导致调试功能异常。同时，在进行内存映射操作时，系统可能接受不支持的 MAP_PRIVATE 映射，或在更新区域权限时因遍历逻辑错误导致操作失败或内存不一致。
+
+#主要错误日志
+- 推断：`pr_warn("Unexpected fault\n");`
+- 推断：`pr_err("mmap region %d: MAP_PRIVATE is not supported, use MAP_SHARED\n", reg->regionid);`
+- 推断：`pr_err("VMA does not belong to this region: vma=[%#lx, %#lx)\n", vma->vm_start, vma->vm_end);`
+
+#问题根因
+1. **VMA 访问逻辑缺陷**：原有的 `obmm_vma_access` 函数使用了不正确的 `ioremap` 方式处理 PFNMAP 类型的 VMA，且在处理页表项时存在 TOCTOU 竞态条件。对于导出类型的区域，错误地使用了 IO 映射而非通过 `struct page` 进行内核虚拟映射，导致访问失败。
+2. **页表遍历跳过问题**：内核默认的页表遍历逻辑通常会跳过 `VM_PFNMAP` 区域，导致 `update_vma_page_range` 无法正确更新此类 VMA 的页表权限。
+3. **mmap 标志校验缺失**：`obmm_shm_fops_mmap` 未检查 `VM_MAYSHARE` 标志，允许了不支持且可能导致问题的 `MAP_PRIVATE` 映射。
+4. **vm_pgoff 计算错误**：在 `map_export_region` 中，使用本地保存的 `orig_pgoff` 而非 VMA 自身的 `vm_pgoff` 进行偏移计算，导致映射地址计算偏差。
+
+#解决方案
+1. **重写 VMA 访问接口**：移除原有的 `follow_pte` 加 `ioremap` 实现逻辑，改为使用自定义的 `obmm_lookup_pfn` 函数安全地查找 PFN。针对导出区域使用 `pfn_to_page` 配合 `vmap` 进行映射，针对导入区域使用 `ioremap_prot`，确保内核访问路径正确且安全。
+2. **修复页表遍历**：在 `update_vma_page_range` 的 `mm_walk_ops` 中注册 `.test_walk` 回调函数（`obmm_walk_test`），返回 0 以强制内核遍历 `VM_PFNMAP` 区域的页表，确保权限更新生效。
+3. **增加 mmap 校验**：在 `obmm_shm_fops_mmap` 入口处增加检查，拒绝 `MAP_PRIVATE` 映射请求，强制使用 `MAP_SHARED`。
+4. **修正偏移计算**：删除 `map_range_info` 结构体中的 `orig_pgoff` 字段，直接使用 VMA 结构体中的 `vm_pgoff` 进行偏移计算，保证计算一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c57ea10c8d51d5d3a7191e86156a41fa5eff1e3a

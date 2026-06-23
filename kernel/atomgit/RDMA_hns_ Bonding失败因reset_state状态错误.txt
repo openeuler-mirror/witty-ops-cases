@@ -1,0 +1,20 @@
+#标题
+RDMA/hns: Bonding失败因reset_state状态错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在RoCE驱动复位过程中移除驱动时，导致RoCE的复位流程未能完全结束。此时存储在NIC驱动中的RoCE句柄的reset_state停留在中间状态（如HNS_ROCE_STATE_RST_DOWN或HNS_ROCE_STATE_RST_UNINIT）。即使重新初始化RoCE驱动，该reset_state也无法被清除，最终导致依赖reset_state判断的RoCE Bonding功能失败。
+
+#主要错误日志
+未知
+
+#问题根因
+RoCE Bonding功能通过检查`handle->rinfo.reset_state`来判断设备是否处于复位状态。当RoCE驱动在复位过程中被移除时，复位流程中断，导致NIC驱动中保存的reset_state残留为中间状态（非HNS_ROCE_STATE_NON_RST或HNS_ROCE_STATE_RST_INITED）。该状态在驱动重新初始化后未被清除，导致Bonding逻辑误判设备状态从而失败。
+
+#解决方案
+放弃使用不可靠的`handle->rinfo.reset_state`进行状态判断，改为调用NIC层提供的标准API接口`.ae_dev_resetting()`和`.get_hw_reset_stat()`来检测复位状态。该修改使Bonding逻辑中的复位检测与RoCE驱动其他部分的复位检测机制保持一致，规避了状态残留导致的误判问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/07761b30fb432a1726d4c66b970759fc4de82016

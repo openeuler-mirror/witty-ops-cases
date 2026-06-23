@@ -1,0 +1,25 @@
+#标题
+parisc架构cacheflush系统调用中I/D缓存刷新指令使用错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 parisc 架构上调用 `cacheflush` 系统调用时，传入 `DCACHE` 标志本应刷新数据缓存，实际却执行了指令缓存刷新；传入 `ICACHE` 标志本应刷新指令缓存，实际却执行了数据缓存刷新。这导致缓存一致性操作失效，可能引发用户程序执行行为异常或数据不一致问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `SYSCALL_DEFINE3(cacheflush, ...)` 函数实现中，汇编刷新指令被错误地交换了位置：
+1. 在处理 `DCACHE` 标志的代码分支中，错误地使用了 `fic`（Flush Instruction Cache）指令。
+2. 在处理 `ICACHE` 标志的代码分支中，错误地使用了 `fdc`（Flush Data Cache）指令。
+这是自 v6.5 版本引入该功能时的代码逻辑错误。
+
+#解决方案
+修正 `arch/parisc/kernel/cache.c` 中的汇编代码逻辑，确保缓存标志与指令正确对应：
+1. 在 `if (cache & DCACHE)` 分支中，将 `fic,m` 指令修改为 `fdc,m`，以正确刷新数据缓存。
+2. 在 `if (cache & ICACHE)` 分支中，将 `fdc,m` 指令修改为 `fic,m`，以正确刷新指令缓存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bc9d51c15767e0506ac24ad7705a0bf591a98b69

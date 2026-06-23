@@ -1,0 +1,27 @@
+#标题
+RDMA/bnxt_re 内核态创建 SRQ 时触发除零错误导致内核恐慌
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 NVMe Target 并开启 `use_srq` 选项时，内核在创建 SRQ（共享接收队列）过程中触发除零错误（divide error），导致系统发生 Panic（Oops）。调用栈显示崩溃发生在 `bnxt_qplib_alloc_init_hwq` 函数中。
+
+#主要错误日志
+[  566.393619] Oops: divide error: 0000 [#1] PREEMPT SMP NOPTI
+[  566.393847]  ? bnxt_qplib_alloc_init_hwq+0x1d4/0x580 [bnxt_re]
+[  566.393923]  ? bnxt_qplib_alloc_init_hwq+0x1d4/0x580 [bnxt_re]
+[  566.393966]  ? bnxt_qplib_alloc_init_hwq+0x1d4/0x580 [bnxt_re]
+[  566.393997]  bnxt_qplib_create_srq+0xc9/0x340 [bnxt_re]
+[  566.394040]  bnxt_re_create_srq+0x335/0x3b0 [bnxt_re]
+[  566.394090]  ib_create_srq_user+0xa7/0x150 [ib_core]
+[  566.394147]  nvmet_rdma_queue_connect+0x7d0/0xbe0 [nvmet_rdma]
+
+#问题根因
+在 `bnxt_re_create_srq` 函数中，页大小和页移位信息仅针对用户态 SRQ 进行了设置。当创建内核态 SRQ 时，`srq->qplib_srq.sg_info.pgsize` 和 `pgshft` 未被初始化（默认为 0）。后续在 `bnxt_qplib_alloc_init_hwq` 函数中涉及除法运算时，使用了未初始化的页移位或页大小，导致除零错误。
+
+#解决方案
+在 `bnxt_re_create_srq` 函数中，无条件地设置 SRQ 的页大小和页移位信息（`srq->qplib_srq.sg_info.pgsize = PAGE_SIZE` 和 `srq->qplib_srq.sg_info.pgshft = PAGE_SHIFT`），确保内核态 SRQ 也拥有正确的页属性，避免后续计算发生除零错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bcb817fe12c6e35a4888b7fa70ac196cc3f22f2a

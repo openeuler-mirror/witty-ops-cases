@@ -1,0 +1,21 @@
+#标题
+RDS 信息泄露漏洞致内核栈数据暴露给用户空间
+
+#内核版本
+OLK-6.6
+
+#问题现象
+本地无特权用户通过 AF_RDS 套接字调用 `getsockopt(SOL_RDS, RDS_INFO_IB_CONNECTIONS)` 时，若底层 RDS 连接未处于 RDS_CONN_UP 状态，返回的 68 字节数据结构中会包含 26 字节的内核栈垃圾数据，其中包括内核文本/数据指针，导致内核内存信息泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+`rds_for_each_conn_info()` 和 `rds_walk_conn_path_info()` 函数将调用者分配的栈上 u64 缓冲区传递给 per-connection 访问者函数（visitor），随后通过 `rds_info_copy()` 将完整的 `item_len` 字节拷贝回用户空间。
+当 `rds_ib_conn_info_visitor()` 和 `rds6_ib_conn_info_visitor()` 处理非 RDS_CONN_UP 状态的连接时，仅写入输出结构体的部分字段，导致多个 u32 字段（如 max_send_wr 等）和结构体对齐空洞保留了栈上原有内容，这些未初始化的栈数据被直接拷贝到用户空间，造成内核指针等敏感信息泄露。
+
+#解决方案
+在 `rds_for_each_conn_info()` 和 `rds_walk_conn_path_info()` 中，于调用 visitor 函数之前，使用 `memset(buffer, 0, item_len)` 将 per-item 缓冲区清零。这确保了 visitor 未写入的字段（包括隐式对齐填充字节）不会泄露栈内容到用户空间。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/169462c6af33bd633001ee0d81573d3f32bfc02c

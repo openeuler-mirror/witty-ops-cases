@@ -1,0 +1,24 @@
+#标题
+net: skb_may_tx_timestamp() 在中断上下文死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+部分网卡驱动通过独立的中断（IRQ）接收时间戳并在中断处理程序中完成 TX 时间戳处理。当 CPU 核心已经持有 `sock::sk_callback_lock` 写锁时，若此时发生中断并调用 `skb_may_tx_timestamp()`，该函数尝试获取 `sock::sk_callback_lock` 读锁，导致自死锁，系统挂起或响应异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`skb_may_tx_timestamp()` 函数内部使用 `read_lock_bh(&sk->sk_callback_lock)` 获取锁。该锁在中断上下文（IRQ context）中是不安全的，仅在软中断中允许使用。
+根因在于：某些驱动在硬中断上下文中调用该函数，如果此时对应的 CPU 核心已经持有该锁的写锁，将导致死锁。
+
+#解决方案
+移除 `skb_may_tx_timestamp()` 中的锁操作，改用 RCU 读锁保护。
+1. 利用 RCU 机制保证 socket 结构体及其 `sk_socket`、`file` 成员在访问期间有效。
+2. 使用 `READ_ONCE()` 读取 `sk->sk_socket` 和 `sock->file` 指针，防止编译器优化导致读取不一致。
+3. 在 `sk_set_socket()` 和 `__sock_release()` 中使用 `WRITE_ONCE()` 设置指针为 NULL，确保与读取侧的同步，避免竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d4a930c47f4efe68ce0e0258f19e5223c29d972

@@ -1,0 +1,22 @@
+#标题
+stmmac: TSO DMA API 使用错误导致 Oops 及内存释放异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 stmmac 网卡驱动进行 TSO（TCP Segmentation Offload）传输时，若硬件支持 64 位 DMA 地址（`priv->dma_cap.addr64 > 32`），内核会发生 Oops 或崩溃。系统运行不稳定，可能导致网络发送队列停滞或内存破坏。
+
+#主要错误日志
+- dwc-eth-dwmac 2490000.ethernet eth0: Tx DMA map failed
+- DMA-API: dwc-eth-dwmac 2490000.ethernet: device driver tries to +free DMA memory it has not allocated [device address=0x000000ffffcf65c0] [size=66 bytes]
+
+#问题根因
+之前的修复提交 66600fac7a98 将 `tx_skbuff_dma[]` 结构体成员的赋值操作移动到了 `stmmac_tso_xmit()` 函数的更后位置。然而，当 `priv->dma_cap.addr64 > 32` 时，代码逻辑中对 `des` 变量进行了偏移操作（增加了 `proto_hdr_len`）。这导致传递给 `stmmac_tso_allocator()` 的 DMA 地址（cookie）与最初通过 `dma_map_single()` 映射返回的原始地址不一致。
+根据 DMA API 要求，传递给 `dma_unmap_single()` 的地址必须与映射时返回的地址完全一致。由于保存和后续使用的是偏移后的地址，导致在 `stmmac_tx_clean()` 清理阶段解除映射时传入错误的 DMA cookie，引发 DMA API 校验失败或内存管理异常。
+
+#解决方案
+修正 DMA 地址变量的使用逻辑。引入新变量 `tso_des` 用于存储偏移后的 DMA 地址，并将其传递给 `stmmac_tso_allocator()` 函数；而原始变量 `des` 保持为 `dma_map_single()` 返回的原始 DMA cookie，用于后续正确的存储和解除映射操作，确保 DMA mapping/unmapping 的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5dcf3a5b8360608fcb5d475f6b4580e64a68d97a

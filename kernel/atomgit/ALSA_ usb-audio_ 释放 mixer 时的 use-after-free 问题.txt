@@ -1,0 +1,27 @@
+#标题
+ALSA: usb-audio: 释放 mixer 时的 use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `snd_usb_create_mixer()` 失败时，`snd_usb_mixer_free()` 释放了 `mixer->id_elems`，但已添加到声卡的控件仍引用已释放的内存。随后在 `snd_card_register()` 运行时，OSS mixer 层调用其回调函数触发 use-after-free 读操作，可能导致内核崩溃或数据损坏。
+
+#主要错误日志
+Call trace:
+  get_ctl_value+0x63f/0x820 sound/usb/mixer.c:411
+  get_min_max_with_quirks.isra.0+0x240/0x1f40 sound/usb/mixer.c:1241
+  mixer_ctl_feature_info+0x26b/0x490 sound/usb/mixer.c:1381
+  snd_mixer_oss_build_test+0x174/0x3a0 sound/core/oss/mixer_oss.c:887
+  ...
+  snd_card_register+0x4ed/0x6d0 sound/core/init.c:923
+  usb_audio_probe+0x5ef/0x2a90 sound/usb/card.c:1025
+
+#问题根因
+在 `snd_usb_create_mixer()` 失败的清理路径中，`snd_usb_mixer_free()` 仅释放了 `mixer->id_elems` 内存，但未先移除已添加到声卡控制层的控件。这导致声卡控件仍然持有指向已释放内存的指针（悬垂指针），当后续 `snd_card_register()` 触发 OSS mixer 回调时引发 use-after-free。
+
+#解决方案
+在释放 `id_elems` 内存前，先遍历所有 mixer 控件并调用 `snd_ctl_remove()` 将其从声卡中移除。由于 `snd_ctl_remove()` 会释放当前元素，因此需要先保存 `next` 指针以确保链表遍历能继续进行，修复提交通过在 `snd_usb_mixer_free()` 中增加遍历移除逻辑解决了该问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3030092d37f3caf59a0f09969a1978f43d2e4d78

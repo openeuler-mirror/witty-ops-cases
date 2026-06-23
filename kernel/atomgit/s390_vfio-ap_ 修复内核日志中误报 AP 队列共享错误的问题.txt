@@ -1,0 +1,37 @@
+#标题
+s390/vfio-ap: 修复内核日志中误报 AP 队列共享错误的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 s390 架构的 vfio-ap 设备驱动中，当用户执行以下两种操作时，内核日志会打印不准确且具有误导性的错误信息：
+1. 将适配器或域分配给 vfio_ap mediated device 时，如果涉及的 AP 队列已分配给**另一个** mediated device（违反队列共享规则）。
+2. 通过 AP 总线驱动的 sysfs 接口为宿主机驱动保留适配器或域时，如果涉及的 AP 队列正被 vfio_ap mediated device 使用。
+
+具体表现为：当用户尝试将队列分配给**同一个**它已经所属的 mediated device 时（这是合法操作，驱动应忽略此分配），内核却错误地打印日志声称该队列“已经分配”给该 mdev，并禁止“重新分配”，导致日志信息与实际合法行为不符，干扰运维判断。
+
+#主要错误日志
+错误日志示例（修复前）：
+`vfio_ap_mdev e1839397-51a0-4e3c-91e0-c3b9c3d3047d: Userspace may not re-assign queue 00.0028 already assigned to e1839397-51a0-4e3c-91e0-c3b9c3d3047d`
+
+修复后的正确日志示例：
+1. 分配冲突时：
+`vfio_ap_mdev 0fe903a0-a323-44db-9daf-134c68627d61: Userspace may not assign queue 00.0033 to mdev: already assigned to 62177883-f1bb-47f0-914d-32a22e3a8804`
+2. 保留冲突时：
+`vfio_ap_mdev 62177883-f1bb-47f0-914d-32a22e3a8804: Can not reserve queue 00.0033 for host driver: in use by mdev`
+
+#问题根因
+问题根源在于 `vfio_ap_mdev_verify_no_sharing` 函数的逻辑判断不完整。该函数在遍历检查 AP 队列是否已被其他 mediated device 占用时，未将“当前正在进行分配操作的 mdev 自身”排除在检查范围之外。
+代码通过指针比较 `if (mdev_apm == matrix_mdev->matrix.apm ...)` 来跳过自身，但在日志打印逻辑中，它错误地将报告错误的设备（assignee）同时作为了日志中“已占用设备”的来源。这导致当队列实际上是被“当前 mdev”占用时，驱动依然打印“不能重新分配”的错误，而没有区分“被自己占用（合法）”和“被他人占用（非法）”的情况。
+
+#解决方案
+1. 修改 `vfio_ap_mdev_verify_no_sharing` 函数签名，增加 `assignee` 参数用于明确标识当前发起分配动作的 mediated device。
+2. 优化判断逻辑，直接使用 `if (assignee == assigned_to)` 来跳过对自身的共享检查，替代原来基于指针比较的脆弱判断。
+3. 重构日志打印逻辑：
+   - 对于 mdev 分配场景（assignee 不为空），调用 `vfio_ap_mdev_log_sharing_err` 准确打印“尝试分配给 mdev X，但已被 mdev Y 占用”的信息。
+   - 对于宿主机保留场景（assignee 为空），新增 `vfio_ap_mdev_log_in_use_err` 函数，专门打印“无法为宿主机保留队列，正被 mdev 使用”的信息。
+4. 更新相关的宏定义和调用点，确保错误信息描述清晰且场景准确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/70a07c88151ba6a84ac20040c20e33e891379e98

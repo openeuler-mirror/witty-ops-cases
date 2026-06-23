@@ -1,0 +1,20 @@
+#标题
+JFS readdir 操作中数组越界读导致内核崩溃或数据破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读取 JFS 文件系统目录时，如果目录结构损坏（例如 `stbl` 数组包含非法负值），内核会发生数组越界读。这可能导致内核崩溃、Oops 或内存数据破坏，该问题可通过 syzkaller 复现。
+
+#主要错误日志
+jfs: add_missing_indices: Invalid stbl[%d] = %d for inode %ld, block = %lld
+
+#问题根因
+JFS 目录项读取函数 `add_missing_indices` 中，`stbl` 被定义为 `s8` 类型指针，其值本应指向 slot 的偏移量（范围 0 到 127）。代码在遍历 `stbl` 时，未对索引值进行边界检查。若文件系统存在损坏或异常，`stbl[i]` 可能出现负值，导致后续访问 `p->slot[stbl[i]]` 时发生数组越界读。
+
+#解决方案
+在 `add_missing_indices` 函数的循环中增加对 `stbl[i]` 的边界检查。若检测到值小于 0，则打印错误日志并返回 `-EIO` 错误码，同时调用 `DT_PUTPAGE` 和 `txAbort` 清理资源并终止事务；修改函数返回值为 `int` 类型，并在上层调用者 `jfs_readdir` 中检查返回值，若返回错误则立即退出读目录流程，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5db3e3b59f3fa5dd38c791069ecc7dbaf9c14e89

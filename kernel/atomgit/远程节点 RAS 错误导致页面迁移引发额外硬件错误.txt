@@ -1,0 +1,22 @@
+#标题
+远程节点 RAS 错误导致页面迁移引发额外硬件错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统某个远程节点发生严重 RAS（Reliability, Availability, and Serviceability）错误时，如果内核尝试将该节点上的页面迁移到其他节点，会触发额外的 SEA（Synchronous External Abort）通知，导致更多的硬件错误。在错误处理流程中，系统未能有效阻止对已损坏节点的内存操作。
+
+#主要错误日志
+未知
+
+#问题根因
+在原有的实现中，`ghes_handle_critical_ras()` 函数仅处理了当前进程的错误标记，未将发生错误的节点标记为“关键错误”状态。因此，在后续的内存管理流程中（如 `folio_migrate_mc_copy`），内核无法感知源页面所在的节点已经发生严重故障，仍然尝试从该故障节点读取/迁移数据，导致触发额外的硬件异常。
+
+#解决方案
+1. 在节点数据结构 `pgdat_flags` 中新增 `PGDAT_CRITICAL_ERR` 标志位，用于标记节点处于关键错误状态。
+2. 修改 `ghes_handle_critical_ras()` 逻辑，当检测到远程节点发生严重 RAS 错误且标志为 `MF_ACTION_REQUIRED` 时，调用 `set_node_critical_err()` 设置该节点的错误标志。
+3. 在页面迁移函数 `folio_migrate_mc_copy()` 中增加检查逻辑，如果源页面所在的节点被标记为 `node_is_critical_err()`，则直接返回 `-EHWPOISON`，阻止迁移操作，从而避免访问已损坏的内存节点引发二次硬件错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d7d602fb8443265d75723c7abc05c27122c4ec7

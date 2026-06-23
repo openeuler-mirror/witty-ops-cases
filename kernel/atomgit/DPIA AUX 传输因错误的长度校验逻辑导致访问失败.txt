@@ -1,0 +1,20 @@
+#标题
+DPIA AUX 传输因错误的长度校验逻辑导致访问失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 DPIA（DisplayPort over USB-C）AUX 传输读操作时，若请求的数据长度与底层固件返回的实际数据长度不一致，内核会错误地将此行为判定为非法回复。这会导致 AUX 读取操作异常中止，影响显示设备的正常枚举或功能交互。
+
+#主要错误日志
+- DRM_WARN("invalid read length %d from DPIA AUX 0x%x(%d)!\n", ...)
+
+#问题根因
+在函数 `amdgpu_dm_process_dmub_aux_transfer_sync` 中，代码错误地校验了“请求长度是否等于回复长度”。根据 DisplayPort 规范，"Request length != reply length"（请求长度不等于回复长度）属于预期的正常行为（例如读取 EDID 时常出现此情况），并非非法回复。代码中的该校验逻辑将合法场景误判为错误，并设置了 `AUX_RET_ERROR_INVALID_REPLY` 状态，导致流程提前退出，无法正确拷贝已返回的有效数据。
+
+#解决方案
+移除 `amdgpu_dm_process_dmub_aux_transfer_sync` 函数中关于“请求长度与回复长度一致性”的错误校验逻辑。修改后，只要收到 `AUX_TRANSACTION_REPLY_AUX_ACK` 响应且长度非零，即直接执行数据拷贝，不再进行错误的长度比对与失败跳转。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d19f1685b7fc3051e6cab265b74189c6f475de9a

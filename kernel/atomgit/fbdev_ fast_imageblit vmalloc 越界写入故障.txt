@@ -1,0 +1,26 @@
+#标题
+fbdev: fast_imageblit vmalloc 越界写入故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户态程序通过 ioctl `FBIOPUT_CON2FBMAP` 将控制台映射到新的帧缓冲区时，若控制台重置失败，系统仍继续执行屏幕更新操作。这导致 `vc_data` 结构体引用仍指向旧帧缓冲区，而显示变量已映射到新帧缓冲区，最终在 `fast_imageblit()` 函数中触发 vmalloc 越界写入。
+
+#主要错误日志
+未知
+
+#问题根因
+在执行 `FBIOPUT_CON2FBMAP` ioctl 时，代码尝试根据新帧缓冲区的信息调整控制台大小。
+根因在于 `fbcon_set_disp` 函数中：
+1. 调用 `vc_resize` 进行重置，但未正确处理其返回值（重置可能失败）。
+2. 随后仅检查 `con_is_visible(vc)` 即调用 `update_screen(vc)`。
+当 `vc_resize` 失败时，内核仍然继续更新屏幕，此时 `vc_data` 相关数据对应旧帧缓冲区，而显示变量对应新帧缓冲区，这种不一致最终导致了越界写入。
+
+#解决方案
+修改 `drivers/video/fbdev/core/fbcon.c` 中的逻辑：
+1. 在 `fbcon_set_disp` 函数中，增加对 `vc_resize` 返回值的检查。只有当 `vc_resize` 执行成功（返回 0）且控制台可见时，才调用 `update_screen` 进行屏幕更新。
+2. 在 `con2fb_init_display` 函数中增加保护判断，仅当 `fg_console` 不等于目标 unit 时才执行 `update_screen`，防止在不一致的状态下更新屏幕。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab1dfdefc13ab2dce190b92ddc0ab54d93d9c72a

@@ -1,0 +1,23 @@
+#标题
+NCSI 获取 MAC 地址处理过程中因非法锁操作导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NCSI（Network Controller Sideband Interface）处理 OEM Get MAC Address (GMA) 响应包时，系统触发内核 panic 或 oops，调用栈显示在 softirq 上下文中尝试获取 RTNL 锁导致非法睡眠或锁检测报错。
+
+#主要错误日志
+NCSI: 'Writing MAC address to device failed\n
+
+#问题根因
+NCSI 响应处理函数 `ncsi_rsp_handler_oem_gma` 运行在 atomic softirq 上下文中，但该函数直接调用了 `dev_set_mac_address`，该函数内部需要获取 RTNL 锁。在 atomic 上下文中获取 RTNL 锁是不允许的，因为 RTNL 是睡眠锁，由此导致了内核崩溃或锁验证机制（如 lockdep）报错。
+
+#解决方案
+将设置 MAC 地址的操作从响应处理函数（softirq 上下文）中移除，改为延迟到 NCSI 配置状态机的工作队列上下文中执行。具体修改如下：
+1. 在 `ncsi_dev_priv` 结构体中新增 `pending_mac` 字段，用于暂存从响应中获取的 MAC 地址。
+2. 在响应处理函数 `ncsi_rsp_handler_oem_gma` 中，仅将获取的 MAC 地址保存到 `pending_mac`，不再直接调用 `dev_set_mac_address`。
+3. 在 NCSI 配置状态机 `ncsi_configure_channel` 中新增 `ncsi_dev_state_config_apply_mac` 状态步骤，在该步骤中调用 `rtnl_lock()` 和 `dev_set_mac_address()` 完成硬件地址的设置，确保该操作运行在允许睡眠的进程上下文中。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5350559330d4907540be426ebabbbc9d419e2635

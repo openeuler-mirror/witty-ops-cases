@@ -1,0 +1,20 @@
+#标题
+ASoC: qcom: sdm845: 缺失 snd_soc_dai_set_channel_map 返回值检查导致错误未处理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm sdm845 平台的 slimbus 音频通路配置过程中，函数 `sdm845_slim_snd_hw_params()` 调用 `snd_soc_dai_set_channel_map()` 设置通道映射时，若函数执行失败（且非不支持错误），系统未能捕获该错误并立即返回，而是继续执行后续流程。这可能导致音频硬件参数配置处于不一致状态，引发音频播放或录音功能异常，且无法定位具体的配置失败原因。
+
+#主要错误日志
+- `failed to set cpu chan map, err:%d\n`（新增的打印，用于指示通道映射设置失败）
+
+#问题根因
+函数 `sdm845_slim_snd_hw_params()` 调用 `snd_soc_dai_set_channel_map()` 后未检查其返回值。参考 `msm_snd_hw_params()` 的实现，该处应当有相应的错误处理机制。由于缺乏返回值检查，导致底层驱动设置错误被忽略，无法及时中止流程并上报错误。
+
+#解决方案
+在 `sdm845_slim_snd_hw_params()` 函数中增加对 `snd_soc_dai_set_channel_map()` 返回值的检查。若返回值不为 0 且不为 `-ENOTSUPP`（表示该功能不支持，此种情况下通常视为可接受），则调用 `dev_err()` 打印错误日志并直接返回错误码，终止当前硬件参数配置流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/446ec8a96cb14d44f9797caec11a38d56fd1358d

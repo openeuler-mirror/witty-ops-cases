@@ -1,0 +1,32 @@
+#标题
+dm设备注入io-timeout-fail导致请求泄漏及任务挂死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在DM（Device Mapper）设备上注入 io-timeout-fail 错误后，进行读写操作并注销从设备（如 iSCSI），系统出现请求泄漏，导致进程处于不可中断睡眠状态（D状态）长时间挂起，触发 hung_task 检测告警。
+
+#主要错误日志
+[  862.243768] INFO: task kworker/u514:2:151 blocked for more than 122 seconds.
+[  862.244133]       Tainted: G            E       6.19.0-rc1+ #51
+[  862.244337] "echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+[  862.245024] Workqueue: iscsi_ctrl_3:1 __iscsi_unbind_session [scsi_transport_iscsi]
+[  862.245587]  <TASK>
+[  862.245814]  __schedule+0x810/0x15c0
+[  862.246760]  schedule+0x69/0x180
+[  862.246760]  blk_mq_freeze_queue_wait+0xde/0x120
+[  862.247893]  elevator_set_none+0x87/0xf0
+[  862.248995]  __del_gendisk+0x231/0x7e0
+[  862.252095]  __scsi_remove_device+0x293/0x360
+[  862.252654]  __iscsi_unbind_session+0x18a/0x3e0 [scsi_transport_iscsi]
+[  862.256037]  </TASK>
+
+#问题根因
+内核提交 15f73f5b3e59 ("blk-mq: move failure injection out of blk_mq_complete_request") 之后，驱动程序需要自行调用 blk_should_fake_timeout() 来处理超时故障注入。DM 驱动代码中虽然调用了 blk_should_fake_timeout()，但并未实现自身的 timeout 处理方法，而是依赖从设备的超时处理。当向 DM 设备注入 io-timeout-fail 时，blk_should_fake_timeout() 返回真，导致 blk_mq_complete_request() 跳过执行，请求无法完成（泄漏），进而引发任务无限期挂起。
+
+#解决方案
+移除 dm-rq.c 中 dm_complete_request 函数内对 blk_should_fake_timeout() 的检查逻辑，直接调用 blk_mq_complete_request()。因为 DM 自身没有原生超时处理机制，不应尝试伪造超时，否则会导致请求无法正常完成。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f34bac63b21c138711ff6fd77591915dec49ded

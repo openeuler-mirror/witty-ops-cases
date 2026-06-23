@@ -1,0 +1,21 @@
+#标题
+AppArmor DFA 起始状态越界校验缺失导致潜在内存非法访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 AppArmor 策略时，如果策略数据中的 DFA（确定性有限状态自动机）起始状态（start state）数值超出了 DFA 表的实际长度范围，内核可能发生内存越界访问，进而导致系统崩溃或内核内存破坏。
+
+#主要错误日志
+推断日志格式：
+AppArmor error: invalid dfa start state
+
+#问题根因
+内核在解包 AppArmor 策略（`unpack_pdb` 函数）时，未对 `policy->start[0]` 和 `policy->start[AA_CLASS_FILE]` 的值进行有效性校验。当用户空间提供的策略数据被解包时，这些起始状态值可能被设置得大于或等于 DFA 表的总状态数（`state_count`），导致后续在使用这些起始状态索引访问 DFA 表时发生越界。
+
+#解决方案
+在 `security/apparmor/policy_unpack.c` 的 `unpack_pdb` 函数中增加防御性校验逻辑。在设置完起始状态后，读取 DFA 表的长度（`td_lolen`），强制校验 `policy->start[0]` 和 `policy->start[AA_CLASS_FILE]` 是否小于 `state_count`。如果校验失败，返回错误信息 "invalid dfa start state" 并终止策略加载，防止非法数据进入内核。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d4913ae882e1fcb7e4d612308ac470c415f45516

@@ -1,0 +1,20 @@
+#标题
+SDEI watchdog 状态机在重启流程中处理异常导致状态错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在重启或 CPU 电源管理状态切换过程中，SDEI（Software Delegated Exception Interface）watchdog 的状态机可能发生错误的状态转换。例如，在事件已经注销后仍然尝试执行禁用操作，或者在 CPU 退出低功耗状态时未能正确重新使能 EL3 安全定时器，导致看门狗功能失效或状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+SDEI watchdog 的 PM（Power Management）通知回调函数中，缺乏对事件当前状态的判断。代码直接根据 CPU PM 动作执行禁用或使能操作，未检查事件是否已注册或使能，导致了如“注销后再次禁用”等非法状态转换。此外，在 CPU 从低功耗空闲状态退出时，未正确调用使能函数来恢复 EL3 安全定时器。
+
+#解决方案
+在 `sdei_watchdog_pm_notifier` 函数中增加了状态检查逻辑。在执行禁用或使能操作前，先调用新增的 `sdei_api_event_status` 接口查询事件的当前状态。如果状态不满足操作条件（如结果为 0 表示未注册/未使能），则直接返回成功，跳过后续操作，从而防止非法状态转换并确保 EL3 安全定时器得到正确处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a98d9324dda475aa0740bfd36ab7c708b2cda724

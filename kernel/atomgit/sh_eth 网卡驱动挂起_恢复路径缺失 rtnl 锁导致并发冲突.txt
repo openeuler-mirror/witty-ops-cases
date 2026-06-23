@@ -1,0 +1,20 @@
+#标题
+sh_eth 网卡驱动挂起/恢复路径缺失 rtnl 锁导致并发冲突
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统执行挂起或恢复操作期间，调用 `sh_eth_close`、`sh_eth_open` 或 wol（Wake-on-LAN）相关操作时，因缺少 rtnl 锁保护，可能与正在进行的 ndo（Network Device Operations）操作发生竞争冲突，导致内核状态不一致或系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `sh_eth_suspend` 和 `sh_eth_resume` 函数中，执行 `sh_eth_close`、`sh_eth_open` 以及 wol 操作时，未持有 rtnl 锁。这违反了驱动接口规范，导致这些操作未与正在进行的其他 ndo 操作进行互斥，进而引发冲突。
+
+#解决方案
+在 `sh_eth_suspend` 和 `sh_eth_resume` 函数中涉及设备状态变更的关键代码段前后，分别添加 `rtnl_lock()` 和 `rtnl_unlock()` 调用，确保在调用 `sh_eth_close`、`sh_eth_open` 及 wol 操作时持有 rtnl 锁，防止并发冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8a71102912d4501c896f6a5b8e43edf420368787

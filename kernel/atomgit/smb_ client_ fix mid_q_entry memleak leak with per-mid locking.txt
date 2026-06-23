@@ -1,0 +1,26 @@
+#标题
+smb: client: fix mid_q_entry memleak leak with per-mid locking
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SMB客户端在处理请求过程中发生 `mid_q_entry` 结构体内存泄漏。在并发场景下，特别是在请求取消或连接重置时，可能导致内核内存资源持续耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `mid_q_entry` 结构体的回调函数执行与状态检查存在并发竞争。原有代码使用 `server->mid_lock` 全局锁来保护 `mid_state` 的检查和 `callback` 的设置，但在执行回调函数时未进行原子保护。这导致在某些竞争条件下，回调函数可能被执行多次，或者回调指针被错误地覆盖（如设置为 `release_mid` 或 `cifs_cancelled_callback`），破坏了 `mid_q_entry` 的正常生命周期管理，从而导致内存泄漏。
+
+#解决方案
+引入针对单个 `mid_q_entry` 的细粒度自旋锁 `mid_lock`，替代全局锁 `server->mid_lock` 来保护 mid 条目的回调字段，并封装 `mid_execute_callback` 函数确保回调执行的原子性。
+具体修改包括：
+1. 在 `struct mid_q_entry` 结构体中新增 `spinlock_t mid_lock` 成员。
+2. 新增内联函数 `mid_execute_callback`，在锁保护下获取回调指针并将其置空，确保回调函数仅被执行一次，防止并发重复执行。
+3. 在 `alloc_mid` 和 `smb2_mid_entry_alloc` 分配函数中初始化该锁。
+4. 将所有直接调用 `mid->callback(mid)` 的位置替换为 `mid_execute_callback(mid)`。
+5. 修改取消请求的逻辑，使用 `mid_lock` 替代 `server->mid_lock`，并直接检查 `callback` 指针是否存在来判断请求状态，修正了锁保护范围。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4fadfc0eeb0b66c4c3fa73e4cbd95992e53f42ed

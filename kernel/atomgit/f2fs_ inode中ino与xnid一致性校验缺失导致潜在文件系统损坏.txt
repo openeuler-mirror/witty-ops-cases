@@ -1,0 +1,20 @@
+#标题
+f2fs: inode中ino与xnid一致性校验缺失导致潜在文件系统损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载或访问f2fs文件系统时，内核在执行inode健全性检查时可能检测到数据结构不一致。若inode的节点编号与扩展属性节点ID相同，将触发警告并判定inode无效，可能导致文件系统挂载失败或文件访问错误。
+
+#主要错误日志
+f2fs_warn(sbi, "%s: corrupted inode i_ino=%lx, xnid=%x, run fsck to fix.", __func__, inode->i_ino, fi->i_xattr_nid);
+
+#问题根因
+内核缺少对f2fs inode中`ino_of_node(node_page)`与`fi->i_xattr_nid`的一致性检查。在异常情况下，inode的节点编号可能被错误地设置为与扩展属性节点ID（xattr nid）相同，这种元数据损坏未被早期检测出来。
+
+#解决方案
+在`fs/f2fs/inode.c`的`sanity_check_inode`函数中新增判断逻辑：检查`ino_of_node(node_page)`是否等于`fi->i_xattr_nid`。如果两者相等，说明inode元数据已损坏，此时调用`f2fs_warn`打印警告日志并返回`false`以阻止该损坏的inode被使用，提示用户运行fsck修复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a3a9809691b7f5a565638a5ae272758de674bab7

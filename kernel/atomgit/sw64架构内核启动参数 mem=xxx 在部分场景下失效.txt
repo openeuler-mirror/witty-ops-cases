@@ -1,0 +1,23 @@
+#标题
+sw64架构内核启动参数 mem=xxx 在部分场景下失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构系统中，通过内核启动参数 `mem=xxx` 限制物理内存大小时，该限制在某些情况下无法生效。特别是在 `efi_init()` 已经添加了内存区域后，原有的内存截断逻辑未能正确剔除指定范围之外的内存，导致系统实际可用内存与配置参数不符。
+
+#主要错误日志
+未知
+
+#问题根因
+原有代码策略存在缺陷，尝试通过添加 `[start, start + size)` 与可用物理内存的交集来限制内存。然而，`efi_init()` 函数在添加内存时并未考虑 `mem=xxx` 参数设定的限制范围。这导致后续处理时，无法正确移除不应被使用的内存区域，从而导致内存限制失效。
+
+#解决方案
+修改 `sw64_memblock_init()` 函数，在所有内存添加完成后（`efi_init()` 执行完毕），显式调用 `memblock_remove` 移除指定范围之外的内存。具体措施包括：
+1. 移除 `mem_detect()` 函数中对 `mem_start` 和 `mem_size_limit` 的错误处理逻辑。
+2. 将 `mem_start` 的对齐调整逻辑提前到 `setup_mem_size()` 解析阶段。
+3. 在 `sw64_memblock_init()` 中判断 `mem_size_limit` 是否设置，若设置则显式移除 `[0, mem_start)` 区间和 `[mem_start + mem_size_limit, PHYS_ADDR_MAX)` 区间的内存，确保内存限制生效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d4b6737cc5a60cc844a009f833c9ab8cef7ee533

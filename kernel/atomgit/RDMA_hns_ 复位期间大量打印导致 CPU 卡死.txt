@@ -1,0 +1,26 @@
+#标题
+RDMA/hns: 复位期间大量打印导致 CPU 卡死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设备复位期间，销毁 QP、CQ、MR 等资源的命令可能失败并触发大量错误日志打印。当销毁的资源数量巨大时，频繁的日志输出会导致 CPU 卡死（cpu stuck）。
+
+#主要错误日志
+- "DESTROY_CQ failed (%d) for CQN %06lx\n"
+- "failed to modify qp to init, ret = %d.\n"
+- "failed to post wqe for free mr, ret = %d.\n"
+- （推断）"failed to post WQE, QP state %u!\n"
+- （推断）"failed to post WQE, dev state %d!\n"
+- （推断）"Illegal state for QP!\n"
+
+#问题根因
+在复位过程中，销毁资源的命令失败会触发错误日志打印。由于此时可能涉及大量资源的销毁，导致日志打印量激增，系统忙于处理控制台输出或日志缓冲，最终引发 CPU 卡死。此外，部分路径未使用限速版本的打印函数，加剧了问题。
+
+#解决方案
+1. 删除不必要的日志打印（如 QP 状态检查时的打印、post WQE 失败时的部分打印），仅保留错误码返回。
+2. 将关键错误路径（如 `free_mr_modify_rsv_qp` 中修改 QP 失败）的打印函数替换为限速版本（如 `ibdev_err_ratelimited`），防止日志洪泛。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a2393d429158a967083387dbc0eae505d00db65f

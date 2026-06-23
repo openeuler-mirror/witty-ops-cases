@@ -1,0 +1,20 @@
+#标题
+drm/msm/dsi/dsi_phy_10nm: 初始化时 VCO 速率缺失导致时钟层级异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动初始化过程中，若 VCO 速率未被保存，系统在后续 probe/enable 阶段尝试恢复状态时会将 VCO 频率错误地设置为 0 Hz。这会导致时钟层级（clock hierarchy）配置混乱，可能引发显示子系统异常。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `dsi_pll_10nm_init()` 中无条件保存当前状态，但仅保存了部分分频寄存器，未保存 VCO 速率（vco_current_rate）。当后续调用 `dsi_10nm_pll_restore_state()` 恢复状态时，会以 `vco_current_rate=0` 调用 `dsi_pll_10nm_vco_set_rate()`，从而将时钟树的频率覆盖为 0，破坏了时钟层级配置。
+
+#解决方案
+在 `dsi_pll_10nm_init()` 函数中增加检查逻辑：如果 VCO 速率未被配置（即 `dsi_pll_10nm_vco_recalc_rate` 返回 0），则将 `vco_current_rate` 初始化为最小 PLL 频率（`min_pll_rate`），以避免在恢复状态时将时钟配置为 0 Hz。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2409764117e8ddaea190de06f58794db08187686

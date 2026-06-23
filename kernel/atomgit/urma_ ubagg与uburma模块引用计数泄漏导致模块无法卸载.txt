@@ -1,0 +1,35 @@
+#标题
+urma: ubagg与uburma模块引用计数泄漏导致模块无法卸载
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行流量生成或使用 bonding_dev 设备建立连接后，ubagg 内核模块无法被卸载（rmmod 操作失败或挂起），系统存在引用计数泄漏。
+
+#主要错误日志
+- "Failed to get physical device:%s"
+- "ubagg user ctl has no enough space, buffer size:%u, needed size:%lu"
+- "copy to user fail, ret:%d"
+- "Failed to register mad agent.\n"
+- "Invalid udata out len:%u\n"
+- "Failed to send jetty info resp message.\n"
+- "ubcore device release in another proccess.\n"
+
+#问题根因
+该故障由多处引用计数管理不当引起：
+1. **查找逻辑未增加引用**：`ubagg_find_dev_by_name` 函数找到设备后直接返回，未调用 `ubagg_dev_ref_get` 增加引用计数，导致调用者使用完毕释放时引用计数失衡。
+2. **错误路径缺少释放**：`ubagg_get_physical_device`、`ubcm_add_device` 及 `ubcore_connect_exchange_udata_when_import_*` 系列函数在错误处理分支（如拷贝失败、参数校验失败）直接返回，未调用对应的 `ref_put` 操作，导致引用计数泄漏。
+3. **冗余引用操作**：`ubagg_clear_dev_list` 中存在多余的 `ubagg_dev_ref_put` 调用，导致双重释放风险；`add_dev_to_list` 中存在冗余的 `ref_get`。
+4. **关闭逻辑遗漏释放**：`uburma_close` 函数在 `ubc_dev` 为 NULL 的分支中，未调用 `kref_put` 释放 file 结构体的引用，导致文件对象无法释放。
+
+#解决方案
+通过以下修改修复引用计数 imbalance 问题：
+1. 在 `ubagg_find_dev_by_name` 返回设备指针前增加 `ubagg_dev_ref_get` 调用。
+2. 在 `ubagg_get_physical_device` 的所有错误返回路径添加 `ubagg_dev_ref_put`。
+3. 在 `ubcm_add_device` 和 `ubcore_connect_exchange_udata_when_import_*` 的错误路径补充对应的 `put` 操作。
+4. 移除 `ubagg_clear_dev_list` 和 `add_dev_to_list` 中的冗余引用计数操作，并在清理列表时调整锁逻辑以避免死锁。
+5. 在 `uburma_close` 的 `ubc_dev` 为 NULL 分支中补充 `kref_put(&file->ref, uburma_release_file)` 调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/061acf5e709d399a9b23c4bedce575e2bb087796

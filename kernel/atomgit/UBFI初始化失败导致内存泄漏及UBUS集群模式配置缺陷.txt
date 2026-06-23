@@ -1,0 +1,39 @@
+#标题
+UBFI初始化失败导致内存泄漏及UBUS集群模式配置缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. UBFI子系统初始化过程中，若`handle_ubrt`执行失败，此前已分配的UBRT表内存（如ACPI表或DTS表）未被释放，导致内核内存泄漏。
+2. UBUS在集群模式（cluster mode）下，未正确跳过MMIO基地址与MATT地址的硬件寄存器校验，可能导致地址匹配检查错误或寄存器访问异常。
+3. UBUS虚拟设备管理（VDM）模块在进行UE（Unit Entity）注册与注销操作时，缺乏并发锁保护，存在竞态条件风险。
+4. UBC（UB Bus Controller）配置逻辑在集群模式下存在误操作，如错误配置`cfg0`或未正确处理资源清理。
+
+#主要错误日志
+- `can't get ub information from firmware, ret=%d`
+- `failed to handle ubrt, ret=%d`
+- `ubios table size is invalid, total_size=0x%x`
+- `Failed to access decoder MMIO BA`
+- `decoder MMIO address does not match HW reg`
+- `Failed to access decoder MATT BA`
+- `decoder MATT address does not match HW reg`
+- `Create %s failed, ret=%d`
+
+#问题根因
+1. **内存泄漏**：`ubfi_init` 函数在调用 `handle_ubrt` 失败后直接返回错误码，未调用 `ubfi_put_ubrt()` 释放此前 `ubfi_get_ubrt()` 获取并分配的内存资源。
+2. **集群模式逻辑缺陷**：`set_mmio_base_reg` 和 `set_page_table_reg` 等函数中，缺少对 `ubc->cluster` 模式的判断，导致在集群模式下执行了不必要的硬件地址校验，且校验逻辑可能因硬件状态不匹配而失败。
+3. **并发安全漏洞**：`ub_idevice_ue_add_handler` 和 `ub_idevice_ue_rls_handler` 函数使用自定义的 `spinlock` 保护不完整，且未使用标准的设备锁（`device_lock`），导致在UE注册/注销过程中存在并发安全隐患。
+4. **初始化流程顺序错误**：`ub_static_bus_instance_init` 被错误地放置在 `ub_start_ent` 中执行，对于 `ibus_controller` 类设备，这导致在集群模式下的初始化顺序不正确；同时在集群模式下未正确屏蔽 `eu_table` 与错误消息队列的相关配置。
+
+#解决方案
+1. **修复内存泄漏**：在 `ubfi_init` 函数中增加错误处理分支，当 `handle_ubrt` 返回失败时，显式调用 `ubfi_put_ubrt()` 释放资源。
+2. **修正集群模式逻辑**：在 `set_mmio_base_reg` 和 `set_page_table_reg` 函数中增加 `if (!ent->ubc->cluster)` 判断，跳过集群模式下的硬件地址校验逻辑；同时调整 `ub_get_decoder_mmio_base` 增加地址有效性检查，并修正 MMIO 范围计算逻辑。
+3. **增强并发安全**：移除 VDM 模块中原有的 `spin_lock`，改用 `device_trylock(&pue->dev)` 和 `device_unlock(&pue->dev)` 对 UE 注册与注销关键路径进行加锁保护。
+4. **重构初始化流程**：
+   - 将 `ub_static_bus_instance_init` 移至 `ub_entity_add` 中执行，确保初始化时机正确。
+   - 在 `ub_enum_entities_active`、`ub_component_service_register`、`ub_set_user_info` 等多处函数中增加 `uent->ubc->cluster` 条件判断，跳过集群模式下不适用的配置步骤（如 `cfg0` 配置、`eu_table` 初始化等）。
+   - 删除 `ub_enable_err_msq_ctrl` 相关冗余代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d80b9970681139376cf12bc9145051760176bb95

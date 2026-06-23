@@ -1,0 +1,22 @@
+#标题
+usb: gadget: f_phonet: skb frags[] 数组溢出漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 Linux 设备作为 USB gadget 暴露 Phonet 功能时，恶意的 USB 主机可以通过发送无界限的整页（PAGE_SIZE）OUT 传输包，导致内核堆内存溢出。具体表现为：
+1. 若主机持续发送长度精确为 PAGE_SIZE 的数据包，接收逻辑无法正常终结 skb，导致持续向 skb 添加分片。
+2. 当分片数量超过 MAX_SKB_FRAGS（默认为 17）时，后续的分片写入将覆盖堆上 skb_shared_info 结构相邻的内存区域，造成内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `pn_rx_complete()` 函数中，skb 的终结逻辑仅当 `req->actual < req->length` 时触发。由于 `req->length` 被设置为 PAGE_SIZE，如果恶意主机发送的数据包长度总是精确等于 PAGE_SIZE，上述条件永远不满足，导致 `fp->rx.skb` 无法重置。每次完成传输都会通过 `skb_add_rx_frag()` 增加一个新的分片，最终导致 `skb_shared_info->frags[]` 数组越界，溢出写入相邻堆内存。
+
+#解决方案
+在 `pn_rx_complete()` 函数中增加对 `skb` 分片数量的检查。当 `skb_shinfo(skb)->nr_frags` 达到或超过 `MAX_SKB_FRAGS` 限制时，直接丢弃该 skb，重置 `fp->rx.skb` 指针，并增加 `rx_length_errors` 计数，从而防止内存越界写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a8c803ca994a880676dc96aa7aad345562338cf5

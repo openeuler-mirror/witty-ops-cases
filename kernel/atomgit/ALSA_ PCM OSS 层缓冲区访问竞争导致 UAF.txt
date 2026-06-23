@@ -1,0 +1,20 @@
+#标题
+ALSA: PCM OSS 层缓冲区访问竞争导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PCM OSS 层初始化或重新配置流期间，由于对 `runtime->dma_area` 的访问未加锁，该区域可能被并发释放，导致释放后使用。该漏洞由 syzbot 检测并报告。
+
+#主要错误日志
+未知
+
+#问题根因
+PCM OSS 层在流初始化或重配置时，会调用 `snd_pcm_format_set_silence()` 清空 `runtime->dma_area` 缓冲区。该操作在 PCM ops 之外执行，缺乏必要的锁保护。与此同时，`runtime->dma_area` 指向的内存区域可能被并发释放，导致 UAF（释放后使用）漏洞。
+
+#解决方案
+将缓冲区静音数据的填充操作从 PCM OSS 层移动到 PCM 核心（`sound/core/pcm_native.c`）中执行。新增函数 `snd_pcm_runtime_buffer_set_silence()`，在操作前后分别调用 `snd_pcm_buffer_access_lock()` 和 `snd_pcm_buffer_access_unlock()`，确保在访问缓冲区期间持有锁，防止内存被并发释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/518a2e1566ff1e8207aca8d416428003d176c455

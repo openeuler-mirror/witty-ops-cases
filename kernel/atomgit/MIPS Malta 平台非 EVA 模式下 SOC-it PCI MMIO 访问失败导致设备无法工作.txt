@@ -1,0 +1,22 @@
+#标题
+MIPS Malta 平台非 EVA 模式下 SOC-it PCI MMIO 访问失败导致设备无法工作
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MIPS Malta 平台非 EVA 配置下，使用 SOC-it 系列系统控制器时，对 PCI MMIO 窗口的访问无法到达目标设备，导致使用 MMIO 的 PCI 设备无法正常工作。具体表现为网卡驱动（如 defxx）无法读取适配器的工厂 MAC 地址，设备初始化失败。
+
+#主要错误日志
+- 0000:00:12.0: Could not read adapter factory MAC address!
+
+#问题根因
+在非 EVA 配置中，PHYS_OFFSET 被设置为 0，导致 PCI_BAR0 被写入空掩码（empty mask）。这使得所有地址都匹配来自 PCI 的传入 DMA 访问，从而干扰了系统控制器的逻辑，导致针对 PCI MMIO 窗口的传出总线周期无法正确到达预期设备。此外，若使用较宽的掩码（如 0x80000000 或 0xe0000000），会导致地址匹配范围与起始于 0x10000000 的 PCI MMIO 窗口重叠，同样引发故障。
+
+#解决方案
+修改 `malta-init.c` 中的初始化逻辑，针对非 EVA 模式进行修正：
+1. 对于非 EVA 模式（PHYS_OFFSET 为 0），将 PCI_BAR0 的掩码强制设置为 `0xf0000000`，覆盖非 EVA 模式下最大 256 MiB 的 RAM，避免覆盖 PCI MMIO 窗口。
+2. 调整 MSC01_PCI_P2SCMSKL 和 MSC01_PCI_P2SCMAPL 的写入逻辑，确保 PCI_P2SCMSKL 与 PCI_BAR0 匹配，PCI_P2SCMAPL 与 PCI_HEAD4 保持一致以实现身份映射。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/500c6cac1b2c46d62109e729a2d829f0c8183fad

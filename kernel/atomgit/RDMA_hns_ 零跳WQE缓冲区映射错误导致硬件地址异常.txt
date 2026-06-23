@@ -1,0 +1,24 @@
+#标题
+RDMA/hns: 零跳WQE缓冲区映射错误导致硬件地址异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HNS RDMA 驱动中，当 WQE（Work Queue Element）缓冲区的三个区域存在部分区域为零跳而其他区域非零跳的混合配置时，由于零跳区域未被映射，违反了硬件关于“SQ buffer、SGE buffer、RQ buffer 必须按固定顺序映射并设置给硬件”的限制，导致硬件处理时发生地址错误。
+
+#主要错误日志
+未知
+
+#问题根因
+受硬件限制，WQE 缓冲区的三个区域必须按固定顺序（SQ buffer、SGE buffer、RQ buffer）映射并设置给硬件。原代码逻辑中，当某个区域的 `hopnum` 为 0（零跳）时，`hns_roce_mtr_map` 函数会直接跳过该区域的映射处理。若此时其他区域非零跳，这种“跳过”操作破坏了映射顺序的完整性，违反了硬件限制，从而导致硬件地址错误。
+
+#解决方案
+修改 WQE 缓冲区映射逻辑，确保零跳区域也参与映射流程以符合硬件顺序要求：
+1. 在 `hns_roce_mr.c` 中移除 `hns_roce_mtr_map` 函数里针对 `hopnum == 0` 区域的直接跳过逻辑，使其进入后续处理流程。
+2. 在 `hns_roce_hem.c` 中完善零跳区域的内存管理，为 `hns_roce_hem_item` 结构添加 `exist_bt` 标志位。
+3. 调整 `alloc_fake_root_bt` 函数逻辑，当 `hopnum` 为 0 时，不再复用上级 `root_ba`，而是通过 `dma_alloc` 申请内存，并返回 0 以确保不占用根页表项。
+4. 修正 `hns_roce_hem_list_calc_root_ba` 计算逻辑，跳过 `hopnum` 为 0 的区域统计，避免错误的内存预分配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f50b308ca56f5e33d875ecdb4dc080958b51adb7

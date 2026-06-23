@@ -1,0 +1,26 @@
+#标题
+xfrm: replay: GSO 场景下 ESN oseq_hi 更新逻辑错误导致序列号回绕处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在发送启用 GSO（Generic Segmentation Offload）的数据包且发生序列号回绕时，若首段序列号（seq.low）未回绕而末段序列号已回绕，内核未能正确更新 `replay_esn->oseq_hi`（高位序列号）。这会导致 IPsec ESN（Extended Sequence Number）序列号状态机逻辑错误，可能引发抗重放窗口计算异常或数据包被对端丢弃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `xfrm_replay_overflow_offload_esn` 函数中，原有逻辑仅判断 `xo->seq.low < replay_esn->oseq` 来决定是否更新高位序列号 `oseq_hi`。
+当发送 `gso_segs=3` 且旧 `oseq=0xfffffffe` 时：
+1. `xo->seq.low` 计算为 `0xffffffff`（大于 `oseq`）。
+2. 末段序列号 `oseq` 计算为 `0x1`（小于 `replay_esn->oseq`）。
+此时满足回绕条件（`oseq < replay_esn->oseq`），但由于 `xo->seq.low` 未小于 `replay_esn->oseq`，原代码跳过了 `replay_esn->oseq_hi` 的更新，导致高位序列号状态与实际发送情况不符。
+
+#解决方案
+修改 `xfrm_replay_overflow_offload_esn` 函数中的判断逻辑顺序：
+1. 优先根据末段序列号是否回绕（`oseq < replay_esn->oseq`）来决定是否增加并更新 `replay_esn->oseq_hi`。
+2. 在确认高位更新后，再嵌套判断首段序列号是否回绕（`xo->seq.low < replay_esn->oseq`），以正确设置当前 skb 和 xo 结构中的高位值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/15288210be9ba4fbed55920aae1d318e988d4a9d

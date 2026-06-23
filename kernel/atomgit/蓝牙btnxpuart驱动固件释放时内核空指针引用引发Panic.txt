@@ -1,0 +1,27 @@
+#标题
+蓝牙btnxpuart驱动固件释放时内核空指针引用引发Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行WLAN与蓝牙（BT）固件并发下载的压测场景下，因硬件缺陷导致芯片仅发送一次引导加载程序签名。驱动进入固件下载模式后等待超时（60秒），在调用 release_firmware 释放固件时触发内核 Panic，系统崩溃。
+
+#主要错误日志
+[ 2601.949184] Unable to handle kernel paging request at virtual address 0000312e6f006573
+[ 2601.992087] Internal error: Oops: 0000000096000021 [#1] PREEMPT SMP
+[ 2602.010191] pc : _raw_spin_lock+0x34/0x68
+[ 2602.010201] lr : free_fw_priv+0x20/0xfc
+[ 2602.083354] Call trace:
+[ 2602.083356]  _raw_spin_lock+0x34/0x68
+[ 2602.083364]  release_firmware+0x48/0x6c
+[ 2602.083370]  nxp_setup+0x3c4/0x540 [btnxpuart]
+
+#问题根因
+在固件下载流程中，如果芯片未连续发送引导加载程序签名，驱动程序将不会请求固件文件，导致 `nxpdev->fw` 指针未被初始化（或为空/非法值）。当固件下载超时（60秒）后，代码无条件执行 `release_firmware(nxpdev->fw)`，尝试释放无效的固件指针，从而引发内核 Panic。
+
+#解决方案
+在调用 `release_firmware` 前，增加对 `nxpdev->fw` 指针及 `nxpdev->fw_name` 有效性的检查。仅当固件指针有效且固件名称非空时，才执行释放操作和内存清零，避免释放空指针或非法指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/923be614304ea231d3820c28fa665bd98bea7fd8

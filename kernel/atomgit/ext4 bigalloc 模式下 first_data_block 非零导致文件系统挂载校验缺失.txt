@@ -1,0 +1,20 @@
+#标题
+ext4 bigalloc 模式下 first_data_block 非零导致文件系统挂载校验缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 bigalloc 特性的 ext4 文件系统中，若 super block 中的 s_first_data_block 字段非零，系统未能正确识别并拒绝该无效配置，可能导致后续文件系统操作出现异常或触发潜在的安全风险（CVE-2026-31447）。
+
+#主要错误日志
+- 推断日志（基于补丁新增的打印）：`EXT4-fs warning: bad geometry: bigalloc file system with non-zero first_data_block`
+
+#问题根因
+根据 ext4 文件系统设计规范，bigalloc 模式要求 chunk size 与 cluster size 对齐，这隐含了 first_data_block 必须为零的约束。原代码在 `ext4_feature_set_ok` 函数中缺失了对 `ext4_has_feature_bigalloc` 与 `s_first_data_block` 非零这一冲突条件的校验，导致几何参数错误的文件系统可能被错误地接受。
+
+#解决方案
+在 `fs/ext4/super.c` 的 `ext4_feature_set_ok` 函数中增加逻辑判断：检测文件系统是否启用了 bigalloc 特性，并校验 super block 中的 `s_first_data_block` 是否为零。若 bigalloc 启用且 `s_first_data_block` 不为零，则输出警告日志并返回 0 拒绝挂载，从而修复 CVE-2026-31447。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/afb3275be756db4769369771acd302d3e297db7e

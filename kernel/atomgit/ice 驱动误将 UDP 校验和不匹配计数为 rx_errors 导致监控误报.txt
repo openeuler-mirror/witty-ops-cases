@@ -1,0 +1,21 @@
+#标题
+ice 驱动误将 UDP 校验和不匹配计数为 rx_errors 导致监控误报
+
+#内核版本
+OLK-6.6
+
+#问题现象
+网络接口统计信息中的 `rx_errors` 计数异常增加，导致基于 `rx_errors` 的监控系统触发虚假告警，误导运维人员认为网卡、线缆或交换机端口存在硬件故障。实际上，系统中存在带有错误 UDP 校验和的数据包，这些数据包已被传递给协议栈处理，并非硬件丢包。
+
+#主要错误日志
+未知
+
+#问题根因
+Intel ice 驱动程序自早期版本起，错误地将接收到的 UDP 校验和不匹配计数累加到 `rtnl_link_stats64` 结构体的 `rx_errors` 成员中。
+根据 `if_link.h` 的定义与其他驱动的实现惯例，`rx_errors` 应仅用于统计导致硬件丢包的 L2 层错误。而 UDP 校验和错误属于 L4 层问题，数据包已成功接收并传递给协议栈（随后可能被协议栈统计为 `UDP_MIB_CSUMERRORS`），不应计入 `rx_errors`。这种统计方式导致了监控指标的“假阳性”。
+
+#解决方案
+修改 `drivers/net/ethernet/intel/ice/ice_main.c` 文件中的 `ice_update_vsi_stats` 函数，从 `rx_errors` 的累加计算逻辑中移除 `pf->hw_csum_rx_error` 变量。这使得驱动行为与其他主流驱动（如 bnxt_en、mlx5）保持一致，确保 `rx_errors` 仅反映真实的硬件接收错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cca59e628bfbd18bbf57dc9de20d366ddcb35e57

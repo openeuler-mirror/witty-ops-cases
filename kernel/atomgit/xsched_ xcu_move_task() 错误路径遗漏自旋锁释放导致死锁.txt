@@ -1,0 +1,21 @@
+#标题
+xsched: xcu_move_task() 错误路径遗漏自旋锁释放导致死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 xsched 子系统的 XCU 控制组任务迁移过程中，若 `old_xcg` 与 `xse->parent_grp` 不匹配，内核触发 `WARN_ON` 警告。由于错误处理路径直接返回而未释放持有的自旋锁 `old_xcg->lock`，导致该锁永久被持有，后续任何试图获取该锁的操作将陷入死锁状态，进而引发系统挂起或相关功能不可用。
+
+#主要错误日志
+[内核日志可能包含如下警告信息]
+WARNING: CPU: ... PID: ... at kernel/xsched/cgroup.c:... xcu_move_task+0x.../0x...
+
+#问题根因
+函数 `xcu_move_task()` 在处理异常分支时存在逻辑缺陷。当代码检测到 `old_xcg != xse->parent_grp` 这一非预期状态并触发 `WARN_ON` 后，函数直接执行了 `return` 操作返回，但此时进程仍持有 `old_xcg->lock` 自旋锁。错误路径遗漏了锁释放操作，导致了潜在的死锁风险。
+
+#解决方案
+在 `xcu_move_task()` 函数的 `WARN_ON` 错误处理分支中，在执行 `return` 返回之前，显式调用 `spin_unlock(&old_xcg->lock)` 释放自旋锁，确保锁资源被正确释放，避免死锁发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/342c05fe03b1513e191181d4af270bbc88dc015c

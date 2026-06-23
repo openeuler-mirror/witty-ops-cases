@@ -1,0 +1,20 @@
+#标题
+urma: ubcore_sock 初始化时内核线程启动失败检测错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 urma 模块初始化过程中（`ubcore_sock_init`），当创建内核线程 `sk_event_loop` 失败时，系统未能正确捕获错误状态。由于使用了错误的空指针检查逻辑（`!ss.daemon`）来判断 `kthread_run` 的返回值，导致无法识别线程创建失败的情况，进而可能导致后续代码访问无效指针或引发内核崩溃。
+
+#主要错误日志
+ubcore_log_err("sock thread launch failed");
+
+#问题根因
+在 `ubcore_sock_init` 函数中，调用 `kthread_run` 创建内核线程后，代码使用 `!ss.daemon` 进行检查。然而，`kthread_run` 在失败时返回的是 `ERR_PTR` 类型的错误指针（非 NULL），而不是 NULL。因此，原来的判断条件 `!ss.daemon` 恒为假（因为错误指针不为 NULL），导致错误处理分支永远不会被执行。
+
+#解决方案
+修正 `kthread_run` 返回值的检查方式。将原本错误的空指针检查 `if (!ss.daemon)` 修改为正确的错误指针检查 `if (IS_ERR(ss.daemon))`，以便在内核线程创建失败时正确进入错误处理流程并返回 `-EINVAL`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/117c5ef40d1171659337836d7d7afc36d9dc38bd

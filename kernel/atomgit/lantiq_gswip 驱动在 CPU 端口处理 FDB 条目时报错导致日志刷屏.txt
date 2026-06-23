@@ -1,0 +1,24 @@
+#标题
+lantiq_gswip 驱动在 CPU 端口处理 FDB 条目时报错导致日志刷屏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 lantiq_gswip 驱动运行的 DSA 网络交换机环境中，当系统尝试向 CPU 端口添加网桥 FDB（转发数据库）条目时，驱动程序返回 `-EINVAL`（无效参数）错误。这导致内核日志中持续打印失败信息，例如 "failed to add ... to fdb: -22"，虽然网络接口仍能进入混杂模式，但日志刷屏干扰了正常运维。
+
+#主要错误日志
+[  174.050000] gswip 1e108000.switch: port 2 failed to add fa:aa:72:f4:8b:1e vid 1 to fdb: -22
+[  174.060000] gswip 1e108000.switch lan2: entered promiscuous mode
+[  174.070000] gswip 1e108000.switch: port 2 failed to add 00:01:02:03:04:02 vid 0 to fdb: -22
+[  174.090000] gswip 1e108000.switch: port 2 failed to add 00:01:02:03:04:02 vid 1 to fdb: -22
+[  174.090000] gswip 1e108000.switch: port 2 failed to delete fa:aa:72:f4:8b:1e vid 1 from fdb: -2
+
+#问题根因
+内核 DSA 子系统在较早版本中引入了一项功能，即调用 `ds->ops->port_fdb_add()` 对 CPU 端口进行操作，但当时 `lantiq_gswip` 驱动尚未准备好处理此类请求。驱动内部的 `gswip_port_fdb()` 函数在无法获取发起 FDB 事件的网桥（bridge）句柄时（这种情况在 CPU 端口上发生），直接返回 `-EINVAL`。这并非真正的故障，而是驱动对 CPU 端口 FDB 操作缺乏支持导致的误报，因为当时还没有 API 可以正确获取 CPU 端口对应的 `db.bridge.dev` 参数。
+
+#解决方案
+修改 `drivers/net/dsa/lantiq_gswip.c` 中的 `gswip_port_fdb` 函数。当检测到无法获取 `bridge` 句柄时（即 CPU 端口场景），不再返回 `-EINVAL` 错误码，而是直接返回 `0`（成功）。此举旨在抑制不必要的错误日志，实际上是以一种和平的方式表明该驱动不支持主机过滤功能，且不会产生其他负面影响。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d6c416fc4a0f7be74da02da06af3497f0fa94c1d

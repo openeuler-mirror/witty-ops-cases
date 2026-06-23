@@ -1,0 +1,20 @@
+#标题
+Input: ads7846 驱动模块卸载后无法再次加载
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ads7846 触摸屏驱动模块在执行卸载操作后，再次尝试加载驱动时失败，导致驱动无法正常工作。
+
+#主要错误日志
+[   XX.XXXXX] ads7846: failed to request pendown GPIO
+
+#问题根因
+在修复前的代码重构中，错误地将 `devm_gpiod_get()` 替换为了 `gpiod_get()`。`gpiod_get()` 是非托管（non-devm）的资源申请方式，导致在驱动模块移除时，内核无法自动释放该 GPIO 资源。这使得 GPIO 处于一直占用状态，进而导致后续再次加载驱动时，申请 GPIO 失败。
+
+#解决方案
+将 `drivers/input/touchscreen/ads7846.c` 文件中 `ads7846_setup_pendown` 函数内的 GPIO 申请接口从 `gpiod_get` 恢复为 `devm_gpiod_get`。使用托管资源接口后，驱动模块移除时内核将自动释放 GPIO 资源，解决了资源泄漏导致的无法重新加载问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e2a87a02ff9c9154793c5ed98bf228026f8faa07

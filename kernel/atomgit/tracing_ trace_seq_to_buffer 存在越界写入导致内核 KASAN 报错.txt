@@ -1,0 +1,22 @@
+#标题
+tracing: trace_seq_to_buffer 存在越界写入导致内核 KASAN 报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 tracing_splice_read_pipe 功能时，内核触发 KASAN 检测错误 "BUG: KASAN: slab-out-of-bounds"，导致系统可能发生 panic 或内存破坏。具体表现为进程在执行 trace_seq_to_buffer 函数时，尝试向页面地址写入超过 PAGE_SIZE 的数据（如 4507 字节），引发越界写入。
+
+#主要错误日志
+BUG: KASAN: slab-out-of-bounds in trace_seq_to_buffer kernel/trace/trace.c:1830 [inline]
+BUG: KASAN: slab-out-of-bounds in tracing_splice_read_pipe+0x6be/0xdd0 kernel/trace/trace.c:6822
+Write of size 4507 at addr ffff888032b6b000 by task syz.2.320/7260
+
+#问题根因
+trace_seq_to_buffer() 函数在拷贝数据时，直接使用 trace_seq_used(&iter->seq) 的返回值作为拷贝长度，未检查该长度是否超过了目标页面的大小（PAGE_SIZE）。当待拷贝的数据量超过 PAGE_SIZE 时，会导致越界写入。
+
+#解决方案
+在调用 trace_seq_to_buffer() 时，使用 min((size_t)trace_seq_used(&iter->seq), PAGE_SIZE) 限制拷贝长度，确保拷贝大小不超过一个页面。同时，将 spd.partial[i].len 的赋值修改为实际返回的拷贝长度 ret，以准确反映写入的数据量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba614a8ee5271c71d9f6e874d8677839215d6b97

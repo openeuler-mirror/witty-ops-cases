@@ -1,0 +1,23 @@
+#标题
+b53驱动在VLAN感知桥模式下未配置PVID导致STP等管理协议失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Broadcom RoboSwitch (b53驱动) 且配置为 VLAN aware bridge 的场景下，如果未配置 PVID (Port VLAN ID)，STP (生成树协议) 及其他管理协议无法正常工作。系统表现为相关的保留组播流量被错误丢弃或无法正常转发，导致网络拓扑管理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+b53 驱动在启用 VLAN 功能时（`enable` 为 true），强制设置了 `VC1_RX_MCST_FWD_EN` 标志位。该标志会导致组播转发检查 VLAN 成员资格。当未配置 PVID 时，保留的组播帧（如 STP BPDU）因不属于任何 VLAN 成员而被丢弃，从而阻断了管理协议的通信。
+
+#解决方案
+修改 `drivers/net/dsa/b53/b53_common.c` 中的 `b53_enable_vlan` 函数逻辑：
+1. 在函数开头无条件清除 `VC1_RX_MCST_FWD_EN` 标志位。
+2. 在启用 VLAN 的分支中，不再设置 `VC1_RX_MCST_FWD_EN` 标志位。
+此举允许保留组播帧忽略 VLAN 成员资格检查，确保 STP 等协议在无 PVID 配置时仍能正常收发。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ef29f08dacb12fdc144a4e584a3631d5faf7a07b

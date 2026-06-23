@@ -1,0 +1,30 @@
+#标题
+comedi: c6xdigio: 修复无效 PNP 驱动注销导致的内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载并使用 c6xdigio 驱动时，若驱动附加过程（`c6xdigio_attach`）在调用 `pnp_register_driver` 之前失败，或者 `pnp_register_driver` 调用本身失败（但被旧代码忽略），随后的设备注销流程会无条件调用 `pnp_unregister_driver`。由于此前并未成功注册 PNP 驱动，这将触发内核驱动核心的 sanity check，导致内核打印 WARNING 堆栈信息 "Unexpected driver unregister!"。
+
+#主要错误日志
+Unexpected driver unregister!
+WARNING: CPU: 0 PID: 5970 at drivers/base/driver.c:273 driver_unregister drivers/base/driver.c:273 [inline]
+WARNING: CPU: 0 PID: 5970 at drivers/base/driver.c:273 driver_unregister+0x90/0xb0 drivers/base/driver.c:270
+
+#问题根因
+驱动 `c6xdigio` 的逻辑缺陷在于 PNP 驱动的注册与注销生命周期管理不当：
+1. 在 `c6xdigio_attach` 中调用 `pnp_register_driver()` 时忽略了返回值，且并未保证该函数一定被调用（可能在之前返回错误）。
+2. 在 `c6xdigio_detach` 中无条件调用 `pnp_unregister_driver()`。
+这导致在没有成功注册 PNP 驱动的情况下执行了注销操作，从而触发 `driver_unregister` 中的警告。此外，PNP 驱动注册本应在模块初始化阶段进行，而非设备附加阶段。
+
+#解决方案
+重构驱动生命周期管理，将 PNP 驱动的注册与注销移至模块初始化（`module_init`）与退出（`module_exit`）阶段：
+1. 移除 `c6xdigio_attach` 中的 `pnp_register_driver` 调用。
+2. 移除 `c6xdigio_detach` 函数，直接使用 `comedi_legacy_detach` 作为 detach 回调。
+3. 新增 `c6xdigio_module_init` 函数，在此处先注册 Comedi 驱动，随后注册 PNP 驱动，并检查 `CONFIG_PNP` 配置与注册结果。若 PNP 注册失败仅打印警告并忽略错误（保持兼容性），若成功则设置标志位。
+4. 新增 `c6xdigio_module_exit` 函数，仅当 PNP 注册成功（标志位为真）时才调用 `pnp_unregister_driver`，随后注销 Comedi 驱动。
+这样确保了 PNP 驱动注销操作与注册操作严格配对，且只在模块生命周期内执行一次。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d12853f3a0e693b493ad076dc8a033f40a457d93

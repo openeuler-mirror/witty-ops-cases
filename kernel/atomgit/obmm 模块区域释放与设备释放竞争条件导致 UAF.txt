@@ -1,0 +1,20 @@
+#标题
+obmm 模块区域释放与设备释放竞争条件导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+由于 Linux inode 缓存机制的影响，OBMM（OpenEuler Buffer Management Module）区域（region）中内嵌的设备（device）其释放回调函数可能在区域内存被 kfree 释放后才执行。这会导致释放回调函数操作已释放的内存，从而引发 Use-After-Free（UAF）漏洞，可能造成内核崩溃或内存数据被篡改。
+
+#主要错误日志
+未知
+
+#问题根因
+由于 Linux inode 缓存机制的存在，device 结构体中内嵌的 inode 可能会持有额外的引用计数，导致设备的释放回调执行滞后。具体流程为：OBMM 区域通过 kfree(region) 被释放后，其内嵌的 device 结构体并未立即释放，随后的设备释放回调函数仍然会访问该已释放的 region 内存，从而触发 Use-After-Free。
+
+#解决方案
+在 OBMM 区域结构体 `struct obmm_region` 中新增原子变量 `device_released` 用于同步。在添加设备时将其初始化为 0，在设备释放回调函数 `obmm_shm_dev_release` 中将其置为 1。在区域内存释放前（如 `free_export_region`、`obmm_import` 错误路径、`obmm_unimport` 中），调用新增的 `wait_until_dev_released` 函数进行忙等待，确保设备释放回调已执行完毕（`device_released` 变为 1），再执行内存释放操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0923efc7df209ddc774e3dedb51461ca57d8d91e

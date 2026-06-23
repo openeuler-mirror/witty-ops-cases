@@ -1,0 +1,26 @@
+#标题
+unic 网卡并发激活/复位死锁及 TX 超时误复位问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 网卡在并发执行激活和复位操作时，可能触发死锁或内核状态异常，导致功能失效。
+2. 网卡发生 TX timeout 时，直接触发设备复位，可能导致业务中断扩大或非预期的复位行为。
+
+#主要错误日志
+- failed to process activate event, device is not ready.
+- failed to process deactivate event, device is not ready.
+
+#问题根因
+1. **并发死锁风险**：`unic_activate_handler` 调用 `unic_activate_event_process` 或 `unic_deactivate_event_process` 时，内部逻辑加锁顺序与 `rtnl_lock` 交互不当。原代码在 `unic_activate_event_process` 和 `unic_deactivate_event_process` 内部获取 `rtnl_lock`，而在处理 deactivate 状态时又尝试获取其他锁，导致并发场景下死锁或状态判断错误。
+2. **TX Timeout 处理不当**：在 `unic_tx_timeout` 回调中直接调用 `ubase_reset_event` 触发设备复位，这种在超时处理函数中直接进行重置的操作不符合内核最佳实践，容易引发并发问题。
+
+#解决方案
+1. **优化并发处理逻辑**：将 `rtnl_lock()` 的加锁位置上移至 `unic_activate_handler` 入口处，确保在处理激活/去激活事件时全程持有 RTNL 锁，避免子函数内部重复加锁及锁竞争。同时调整了状态检查（`UNIC_STATE_DEACTIVATE`、`UNIC_STATE_DISABLED`）的先后顺序，确保状态流转的正确性。
+2. **移除 TX Timeout 复位**：从 `unic_tx_timeout` 函数中移除 `ubase_reset_event` 调用，避免在中断或软中断上下文中直接触发设备复位。
+3. **调整超时时间**：将看门狗超时时间 `UNIC_WATCHDOG_TIMEOUT` 从 5HZ (5秒) 调整为 30HZ (30秒)，以适应更长的处理延迟。
+4. **增强 DFX 能力**：新增了管理表（mng_tbl_list_hw）的查询与导出功能，便于故障定位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e471549f8f905e1a466b9aff8d6eba0faa414378

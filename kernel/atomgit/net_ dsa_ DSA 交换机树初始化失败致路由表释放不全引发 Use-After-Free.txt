@@ -1,0 +1,43 @@
+#标题
+net: dsa: DSA 交换机树初始化失败致路由表释放不全引发 Use-After-Free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DSA（Distributed Switch Architecture）交换机树初始化过程中，若最后一个交换机（Switch N）探测失败（例如返回 -EPROBE_DEFER），会导致内核发生 slab-use-after-free 错误。该问题触发 KASAN 检测报告，表现为在 `mv88e6xxx_setup_upstream_port` 函数中读取已释放内存地址。
+
+#主要错误日志
+```
+==================================================================
+BUG: KASAN: slab-use-after-free in mv88e6xxx_setup_upstream_port+0x240/0x568
+Read of size 8 at addr ffff000004f56020 by task kworker/u8:3/42
+
+Call trace:
+ __asan_report_load8_noabort+0x20/0x30
+ mv88e6xxx_setup_upstream_port+0x240/0x568
+ mv88e6xxx_setup+0xebc/0x1eb0
+ dsa_register_switch+0x1af4/0x2ae0
+ ...
+
+Allocated by task 42:
+ ...
+ dsa_switch_touch_ports+0x174/0x3d8
+ dsa_register_switch+0x800/0x2ae0
+ ...
+
+Freed by task 42:
+ ...
+ kfree+0x138/0x418
+ dsa_register_switch+0x2694/0x2ae0
+ ...
+```
+
+#问题根因
+在 DSA 交换机树的设置流程中，前 N-1 个交换机已成功探测并分配了持久化内存（包括 `dst->ports` 和 `dst->rtable`）。当第 N 个交换机探测失败时，其自身的内存会被释放并从 `dst->ports` 中移除。然而，由 `dsa_link_touch()` 创建并指向该交换机端口的 `dst->rtable`（路由表）元素未被清理。这些残留的悬空指针在后续被解引用时触发了 Use-After-Free 漏洞。
+
+#解决方案
+在 `dsa_tree_setup` 函数的错误处理路径中增加路由表清理逻辑。重构 `dsa_tree_teardown` 中的路由表销毁代码为独立函数 `dsa_tree_teardown_routing_table`，并在设置失败时（如 `dsa_tree_setup_cpu_ports` 或后续步骤失败时）调用该函数彻底清除路由表，防止悬空指针遗留。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b5483ca08976c3539f721dd6ed8c831c85efeda9

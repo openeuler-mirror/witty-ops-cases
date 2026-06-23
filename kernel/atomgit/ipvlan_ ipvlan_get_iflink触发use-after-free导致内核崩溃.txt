@@ -1,0 +1,39 @@
+#标题
+ipvlan: ipvlan_get_iflink触发use-after-free导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 ipvlan 设备的 linkwatch 事件时，若下层物理设备已被释放注销，内核在调用 `ipvlan_get_iflink()` 读取 `ipvlan->phy_dev` 时触发 Use-After-Free (UAF)。KASAN 检测器报告了非法的内存读取，导致内核崩溃或系统不稳定。
+
+#主要错误日志
+```
+BUG: KASAN: slab-use-after-free in ipvlan_get_iflink+0x84/0x88 drivers/net/ipvlan/ipvlan_main.c:353
+Read of size 4 at addr ffff0000d768c0e0 by task kworker/u8:35/6944
+Workqueue: events_unbound linkwatch_event
+Call trace:
+ ipvlan_get_iflink+0x84/0x88
+ dev_get_iflink+0x7c/0xd8
+ default_operstate net/core/link_watch.c:45 [inline]
+ rfc2863_policy+0x144/0x360 net/core/link_watch.c:72
+ linkwatch_do_dev+0x60/0x228 net/core/link_watch.c:175
+...
+Allocated by task 9303:
+ alloc_netdev_mqs+0xb4/0x1118 net/core/dev.c:11209
+...
+Freed by task 10200:
+ netdev_run_todo+0xdd8/0xf48 net/core/dev.c:10924
+```
+
+#问题根因
+ipvlan 设备未像 vlan 和 macvlan 那样持有下层设备的引用计数。
+当 ipvlan 设备触发 linkwatch 工作队列时，下层设备可能已经被注销并释放。此时，`default_operstate()` 函数调用 `dev_get_iflink()` 获取接口链接状态，进而调用 ipvlan 的 `ndo_get_iflink` 回调函数（`ipvlan_get_iflink`），尝试访问已释放的 `ipvlan->phy_dev` 设备指针，导致 Use-After-Free。
+
+#解决方案
+修改 `default_operstate()` 函数逻辑，增加对设备注册状态的判断。
+若设备状态 `dev->reg_state` 小于等于 `NETREG_REGISTERED`（即设备处于已注册或更早状态），正常调用 `dev_get_iflink()` 获取 iflink；
+若设备状态已处于注销流程中（如 `NETREG_UNREGISTERED`），则不再调用 `dev_get_iflink()` 访问可能的无效下层设备，而是直接使用设备自身的 `dev->ifindex`，从而避免在设备注销期间访问已释放的下层数据结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d2130e21beb86db8356b8faf5ea7df6e93ef9887

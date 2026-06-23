@@ -1,0 +1,24 @@
+#标题
+crypto: hisilicon/qm - 设备启动时未清除历史任务信息导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在华为加密队列管理器（QM）设备重新启动或复位后，由于 DMA 内存中残留了上一次运行的历史任务信息，可能导致设备行为异常或功能故障。此外，若 DMA 虚拟地址异常为空，系统将触发 WARN_ON 预警。
+
+#主要错误日志
+- Set eqc failed!
+- dma virtual address should not be NULL
+
+#问题根因
+问题根因在于设备初始化流程设计不当：
+1. **残留数据处理不当**：原代码在设备停止流程（`qm_invalid_queues`）中清除 DMA 内存，但在设备启动流程（`__hisi_qm_start` -> `qm_eq_aeq_ctx_cfg`）中未清除历史任务信息。这导致设备启动时 DMA 内存中仍保留了上一次运行的数据，干扰了当前的设备状态。
+2. **异常检查机制不健壮**：原代码使用 `WARN_ON(!qm->qdma.va)` 仅打印警告堆栈，并未阻止后续流程，若地址为空可能导致空指针访问或不可预期的行为。
+
+#解决方案
+1. **调整内存清理时机**：将 `memset(qm->qdma.va, 0, qm->qdma.size)` 操作从设备停止函数 `qm_invalid_queues` 移动至设备启动函数 `qm_eq_aeq_ctx_cfg` 中，确保在设备使能前清除之前残留的任务信息。
+2. **增强异常校验**：将 `WARN_ON(!qm->qdma.va)` 替换为显式的指针检查逻辑 `if (unlikely(!qm->qdma.va))`。当地址为空时，调用 `dev_err` 打印错误日志并返回 `-EINVAL`，直接终止启动流程以避免系统异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3ab98d982833d6d4f3aec0b750686c2659da323

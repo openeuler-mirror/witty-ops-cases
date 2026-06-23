@@ -1,0 +1,22 @@
+#标题
+ksmbd: fix potential OOB in get_file_all_info() for compound requests
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SMB 复合请求（Compound Request）包含 QUERY_DIRECTORY 和 QUERY_INFO (FILE_ALL_INFORMATION) 两个命令，且第一个命令消耗了几乎全部的 max_trans_size 空间时，后续处理 get_file_all_info() 会发生越界写。具体表现为内核内存越界写入，可能导致内存损坏或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 get_file_all_info() 中，将文件名复制到 smb2_file_all_info 结构体的 FileName 字段之前，缺少对客户端提供的 OutputBufferLength 的校验。如果文件名长度超过了可用的缓冲区空间，smbConvertToUTF16() 函数会直接使用 PATH_MAX 作为长度进行转换，导致写入越界，覆盖了响应缓冲区之外的内存。
+
+#解决方案
+1. 在 get_file_all_info() 函数中增加校验逻辑，使用 smb2_calc_max_out_buf_len() 计算实际剩余的可用缓冲区大小。
+2. 比较文件名转换后所需空间与剩余缓冲区大小，若空间不足则直接返回 -EINVAL 错误，避免越界写入。
+3. 修正 smbConvertToUTF16() 调用参数，使用实际的文件名长度（通过 strlen 获取并与 PATH_MAX 取小）替代原本直接使用的 PATH_MAX，确保只拷贝有效数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c14a801f06480567ce5d9790dd33cea6fad1db2a

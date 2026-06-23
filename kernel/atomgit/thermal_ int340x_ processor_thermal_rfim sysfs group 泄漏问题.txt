@@ -1,0 +1,20 @@
+#标题
+thermal: int340x: processor_thermal_rfim sysfs group 泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理器热管理驱动（int340x）中，当 DLVR sysfs 组创建失败时，驱动程序未正确清理此前已成功创建的 FIVR sysfs 组。这导致系统内存泄漏（sysfs group leak），在设备注册失败或重试场景下可能积累无效的 sysfs 条目。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `proc_thermal_rfim_add()` 中，代码逻辑先创建了 FIVR sysfs 组，随后尝试创建 DLVR sysfs 组。当 DLVR sysfs 组创建失败（`sysfs_create_group` 返回非 0 值）时，函数直接返回错误码，未检查并移除此前已创建的 FIVR sysfs 组，导致资源未被释放。
+
+#解决方案
+在 DLVR sysfs 组创建失败的错误处理路径中，增加对 FIVR feature 的检查逻辑。如果当前设备支持 FIVR 特性（`PROC_THERMAL_FEATURE_FIVR`），则调用 `sysfs_remove_group` 移除已创建的 FIVR 组，确保资源正确释放后再返回错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2df77e1240f5ebce0b1370265e7b099d60067723

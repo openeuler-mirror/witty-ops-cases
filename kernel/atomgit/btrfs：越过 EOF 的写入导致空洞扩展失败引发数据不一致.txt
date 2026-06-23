@@ -1,0 +1,26 @@
+#标题
+btrfs：越过 EOF 的写入导致空洞扩展失败引发数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Btrfs 文件系统中，当文件大小非扇区对齐且写入偏移量大于文件当前大小但仍位于文件大小的同一页面内时，写入操作未能将文件范围 [old_i_size, write_offset) 清零。这导致原本应显示为空洞（全零）的区域读取到了旧数据（垃圾数据），触发 fstests 测试用例 generic/363 失败，报告 "READ BAD DATA" 错误。
+
+#主要错误日志
+READ BAD DATA: offset = 0xdcad, size = 0xd921, fname = /home/fdmanana/btrfs-tests/dev/junk
+OFFSET      GOOD    BAD     RANGE
+0x1609d     0x0000  0x3104  0x0
+operation# (mod 256) for the bad data may be 4
+0x1609e     0x0000  0x0472  0x1
+operation# (mod 256) for the bad data may be 4
+
+#问题根因
+在函数 `btrfs_write_check()` 中，判断是否需要扩展空洞的逻辑使用了写入偏移 `pos` 的向下扇区对齐值 `start_pos`（`round_down(pos, fs_info->sectorsize)`）。
+若文件当前大小 `i_size` 非扇区对齐，且写入偏移 `pos` 大于 `i_size` 但 `pos` 向下对齐后的 `start_pos` 仍小于 `i_size`，条件判断 `if (start_pos > oldsize)` 为假。这导致 `btrfs_cont_expand()` 未被调用，跳过了对 [i_size, pos) 范围的清零操作，导致该范围内保留了旧数据而非预期的空洞。
+
+#解决方案
+修改 `btrfs_write_check()` 函数中的判断逻辑，移除中间变量 `start_pos`，直接使用未对齐的写入偏移 `pos` 与文件当前大小 `oldsize` 进行比较（即 `if (pos > oldsize)`）。这确保了只要写入位置超出文件当前大小，就会触发空洞扩展逻辑，正确清零 [oldsize, pos) 范围内的数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/92ecb2589a1c99aa4cf514d88926da3b702d037b

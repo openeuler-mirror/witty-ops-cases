@@ -1,0 +1,20 @@
+#标题
+XFS 缓冲区项目初始化内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 XFS 文件系统操作过程中，若遇到缓冲区项目脏位图大小不足的情况（即需要记录的数据块过大），内核在处理该错误路径时未释放已分配的内存，导致内存泄漏。
+
+#主要错误日志
+xfs_err(mp, "buffer item dirty bitmap (%u uints) too small to reflect %u bytes!", ...);
+
+#问题根因
+在函数 `xfs_buf_item_init` 中，调用 `xfs_buf_item_get_format()` 可能会为 `bip->bli_formats` 分配内存。随后的代码逻辑检查 `map_size` 是否大于 `XFS_BLF_DATAMAP_SIZE`，如果大于则判定为错误并跳转到错误处理分支。在该错误处理分支中，代码只执行了 `kmem_cache_free(xfs_buf_item_cache, bip)` 释放 `bip` 结构体本身，但遗漏了释放 `xfs_buf_item_get_format()` 先前已分配的 `bli_formats` 内存，从而导致内存泄漏。
+
+#解决方案
+在错误处理路径中，于释放 `bip` 对象之前，增加调用 `xfs_buf_item_free_format(bip)` 函数，确保 `bli_formats` 指向的内存被正确释放，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/de5045050e4e300591606418e63b39213312c25c

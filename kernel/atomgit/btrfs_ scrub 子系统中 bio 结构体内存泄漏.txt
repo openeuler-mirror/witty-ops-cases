@@ -1,0 +1,20 @@
+#标题
+btrfs: scrub 子系统中 bio 结构体内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 Btrfs 文件系统 RAID56 校验清洗操作时，若遇到 `btrfs_map_block` 映射失败或 `raid56_alloc_missing_rbio` 分配失败的错误路径，内核未能正确释放先前分配的 bio 结构体，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `scrub_raid56_parity_stripe()` 通过 `bio_alloc()` 分配了一个 bio 结构体，但在后续的两个错误处理分支（`btrfs_map_block` 返回错误和 `raid56_alloc_missing_rbio` 返回 NULL）中，仅释放了其他资源（如 bioc 和递减计数器），却遗漏了调用 `bio_put()` 来释放 bio 的引用，从而导致内存泄漏。
+
+#解决方案
+在 `scrub_raid56_parity_stripe()` 函数的两个相应错误处理路径中添加 `bio_put(bio)` 调用，确保在函数退出前正确释放 bio 结构体，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fac8df9cfc9de72f39e0eb5dc613d1e56172bb7c

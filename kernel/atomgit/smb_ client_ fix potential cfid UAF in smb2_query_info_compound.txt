@@ -1,0 +1,20 @@
+#标题
+smb: client: fix potential cfid UAF in smb2_query_info_compound
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB 客户端执行 `smb2_query_info_compound` 相关操作时，若发生重放（replay），可能导致 `cfid` 指针未被正确重置，进而引发 Use-After-Free（UAF）内存访问错误，造成内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `smb2_query_info_compound` 中，局部变量 `struct cached_fid *cfid` 在定义时被初始化为 `NULL`。然而，在 `replay_again` 标签处的重放逻辑中，代码会重新初始化多个变量以准备重新执行请求，但遗漏了对 `cfid` 变量的重置。这导致在重试路径中，`cfid` 可能持有上一次迭代中已释放或失效的指针值，从而引发 UAF 风险。
+
+#解决方案
+将 `cfid` 的初始化从变量声明处移至 `replay_again` 标签之后。这确保了在每次重试（replay）路径中，`cfid` 都会被正确重置为 `NULL`，避免引用残留的无效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ffb45b1e153df10c960686b16bac5946999a5b6d

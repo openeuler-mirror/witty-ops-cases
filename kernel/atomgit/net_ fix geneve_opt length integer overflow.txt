@@ -1,0 +1,27 @@
+#标题
+net: fix geneve_opt length integer overflow
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 GENEVE 选项数据时，若数据长度设置为 128 字节，内核在处理 `nla_policy` 验证时可能发生整数溢出。该溢出会导致后续的内存分配或数据拷贝逻辑出现异常，可能引发内核 panic、内存越界访问或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`geneve_opt` 结构中包含一个 4 字节的头部（`opt_len`），在解析用户传入的 GENEVE 数据选项时，内核需要将用户数据长度加上头部偏移量（通常是 4 字节）。
+代码中定义的 `nla_policy` `.len` 为 128。当用户传入 128 字节的数据时，内部计算总长度的逻辑（如 `nla_len(info->attrs[...]) + 4`）会发生整数溢出，导致计算出的总大小错误（例如回绕到较小的值），进而引发内存分配过小或缓冲区溢出问题。
+
+#解决方案
+将涉及 GENEVE 数据选项的 `nla_policy` 结构中的最大长度限制（`.len`）从 128 字节修改为 127 字节。
+修改涉及的文件和位置包括：
+1. `net/ipv4/ip_tunnel_core.c` 中的 `geneve_opt_policy`。
+2. `net/netfilter/nft_tunnel.c` 中的 `nft_tunnel_opts_geneve_policy`。
+3. `net/sched/act_tunnel_key.c` 中的 `geneve_opt_policy`。
+4. `net/sched/cls_flower.c` 中的 `geneve_opt_policy`。
+通过将限制减少 1 字节，确保加上 4 字节头部偏移后不会发生整数溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/18e6cfa10b5c39a03e0775f77f27500d1d390655

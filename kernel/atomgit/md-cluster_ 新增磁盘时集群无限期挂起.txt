@@ -1,0 +1,23 @@
+#标题
+md-cluster: 新增磁盘时集群无限期挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在集群环境中添加新磁盘时，如果添加过程中发生超时，且 `recv_daemon()` 绕过了对 `ack_lockres:CR` 的解锁操作，会导致集群无限期挂起。
+
+#主要错误日志
+- `pr_err("locking DLM '%s' timeout!\n", res->name);`
+- `pr_err("md-cluster: failed to get EX on MESSAGE (%d)\n", error);`
+- `pr_err("md-cluster: failed convert to NL on MESSAGE(%d)\n", unlock_error);`
+
+#问题根因
+先前的修复提交 `1bbe254e4336` 虽然语法正确，但不符合实际的集群代码逻辑。当添加新磁盘发生超时时，如果 `recv_daemon()` 未正确释放锁（bypasses the unlock for ack_lockres:CR），其他节点将一直等待获取 EX 锁，从而导致整个集群挂起。此外，旧的 `dlm_lock_sync()` 函数采用永久等待（wait_event）机制，无法应对此类锁等待异常。
+
+#解决方案
+1. 修改 `dlm_lock_sync()` 函数，将无限等待行为改为带超时的等待（使用 `wait_event_timeout`），超时时间设为 30 秒（`WAIT_DLM_LOCK_TIMEOUT`）。若获取锁超时，打印错误日志并返回 `-EBUSY`，防止无限挂起。
+2. 修改 `__sendmsg()` 函数逻辑，使其在发生错误时正确返回错误码，而不是返回 0（成功），同时优化了 `message_lockres` 解锁失败时的处理逻辑，移除了可能导致死循环的错误处理路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/76f8b498fa64c1c59d7a0beae8b7d5f75050ea9e

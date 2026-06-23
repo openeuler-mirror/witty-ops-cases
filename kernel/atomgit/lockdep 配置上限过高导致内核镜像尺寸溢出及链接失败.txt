@@ -1,0 +1,25 @@
+#标题
+lockdep 配置上限过高导致内核镜像尺寸溢出及链接失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 PROVE_LOCKING 并将 LOCKDEP_BITS 等配置项设置为较大值（如 30）时，编译阶段会出现链接器错误，提示内核镜像大小超出限制或 BSS 段地址空间回绕，导致构建无法完成。
+
+#主要错误日志
+- ld: kernel image bigger than KERNEL_IMAGE_SIZE
+- ld: section .bss VMA wraps around address space
+
+#问题根因
+Lockdep 机制使用静态数组存储锁依赖信息，其大小通过 LOCKDEP_*_BITS 配置项决定。初始代码中这些配置项的上限设置为 30（bit shift），这导致单个符号所需的静态内存高达数 GiB。过大的静态内存分配超出了内核镜像大小限制（KERNEL_IMAGE_SIZE）及虚拟内存地址空间范围，从而触发链接器报错。
+
+#解决方案
+修正 lib/Kconfig.debug 中相关配置项的范围上限，将其调整为可避免内存溢出的最大值：
+1. 将 LOCKDEP_BITS 的范围上限从 30 降低为 24。
+2. 将 LOCKDEP_STACK_TRACE_BITS 的范围上限从 30 降低为 26。
+3. 将 LOCKDEP_STACK_TRACE_HASH_BITS 的范围上限从 30 降低为 26。
+4. 将 LOCKDEP_CIRCULAR_QUEUE_BITS 的范围上限从 30 降低为 26。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1a5fb62552d0dc4d9301f4342572362f6927267a

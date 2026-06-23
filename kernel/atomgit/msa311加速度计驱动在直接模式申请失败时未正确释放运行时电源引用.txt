@@ -1,0 +1,20 @@
+#标题
+msa311加速度计驱动在直接模式申请失败时未正确释放运行时电源引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MSA311 加速度计驱动程序执行读取数据（`msa311_read_raw_data`）或写入采样频率（`msa311_write_samp_freq`）操作时，若 `iio_device_claim_direct_mode` 成功但随后的 `pm_runtime_resume_and_get` 获取电源引用失败，系统将出现引用计数泄漏。具体表现为设备电源状态管理异常，可能导致设备无法正常进入挂起模式或后续电源管理操作受阻。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中原有的调用顺序是先执行 `pm_runtime_resume_and_get` 获取电源引用，再执行 `iio_device_claim_direct_mode` 申请直接模式。为了简化处理逻辑，补丁调整了这两个函数的调用顺序（先申请直接模式，再获取电源引用）。但在调整顺序后的错误处理路径中，当 `pm_runtime_resume_and_get` 失败时，代码直接返回了错误码，遗漏了在此之前已成功执行的 `iio_device_claim_direct_mode` 的释放操作（即缺少 `iio_device_release_direct_mode` 调用），导致直接模式未被正确释放。
+
+#解决方案
+调整 `iio_device_claim_direct_mode` 与 `pm_runtime_resume_and_get` 的调用顺序，并在 `pm_runtime_resume_and_get` 失败的错误处理分支中增加 `iio_device_release_direct_mode` 调用，确保在获取电源引用失败时能正确释放已申请的直接模式，避免资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fe0e78026ec84e699c7eb055ccd4ed8461a4d9c3

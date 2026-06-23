@@ -1,0 +1,23 @@
+#标题
+tegra-video: __tegra_channel_try_format 函数内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Tegra 视频捕获驱动中，当调用 `__tegra_channel_try_format` 函数时，若内部 `v4l2_subdev_call` 调用失败（例如 `get_selection` 或 `set_fmt` 操作出错），函数直接返回错误码，导致此前通过 `__v4l2_subdev_state_alloc()` 分配的 `sd_state` 对象未被释放，造成内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__tegra_channel_try_format` 函数中，代码分配了 `sd_state` 对象，但在两个特定的错误处理路径中（`v4l2_subdev_call` 调用 `get_selection` 或 `set_fmt` 失败时），代码直接返回了错误值，跳过了函数末尾的 `__v4l2_subdev_state_free(sd_state)` 调用。这违反了资源分配后必须释放的原则，导致内存泄漏。
+
+#解决方案
+修改 `__tegra_channel_try_format` 函数的错误处理逻辑：
+1. 将函数返回值变量 `ret` 初始化为 0。
+2. 在 `v4l2_subdev_call` 失败的错误路径中，不再直接 `return`，而是将错误码赋值给 `ret` 并跳转至新增的 `out_free` 标签。
+3. 在 `out_free` 标签处统一执行 `__v4l2_subdev_state_free(sd_state)` 释放内存，随后返回 `ret`。这确保了无论函数正常执行完毕还是因错误退出，分配的内存都能被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/340d8da714a0538e31951fc50303171d59fe7185

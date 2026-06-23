@@ -1,0 +1,34 @@
+#标题
+arm64: Spectre-BHB MIDR 数组缺少哨兵导致内核启动崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在启动阶段发生 Kernel panic，触发 aarch64 BRK 异常。该问题在开启 UBSAN 的情况下更容易复现，具体表现为 `is_midr_in_range_list()` 函数在遍历 Spectre-BHB MIDR 数组时越界访问，导致初始化流程崩溃。
+
+#主要错误日志
+Internal error: aarch64 BRK: 00000000f2000001 [#1] PREEMPT SMP
+pstate: 804000c5 (Nzcv daIF +PAN -UAO -TCO -DIT -SSBS BTYPE=--)
+pc : spectre_bhb_loop_affected+0x28/0x30
+lr : is_spectre_bhb_affected+0x170/0x190
+Call trace:
+ spectre_bhb_loop_affected+0x28/0x30
+ update_cpu_capabilities+0xc0/0x184
+ init_cpu_features+0x188/0x1a4
+ cpuinfo_store_boot_cpu+0x4c/0x60
+ smp_prepare_boot_cpu+0x38/0x54
+ start_kernel+0x8c/0x478
+ __primary_switched+0xc8/0xd4
+Code: 6b09011f 54000061 52801080 d65f03c0 (d4200020)
+---[ end trace 0000000000000000 ]---
+Kernel panic - not syncing: aarch64 BRK: Fatal exception
+
+#问题根因
+在之前的补丁提交中，为 Spectre-BHB 变通方案添加了新的 ARM CPU 核心到 MIDR 数组（`spectre_bhb_k132_list` 和 `spectre_bhb_k38_list`），但遗漏了数组末尾必须的哨兵条目（sentinel entry，即 `{}`）。这导致 `is_midr_in_range_list()` 函数在匹配失败时无法检测到数组结尾，继续向后读取内存，引发越界访问并触发 UBSAN 检测到的 BRK 异常。
+
+#解决方案
+在 `arch/arm64/kernel/proton-pack.c` 文件中的 `spectre_bhb_k132_list` 和 `spectre_bhb_k38_list` 数组定义末尾，分别添加空的哨兵条目 `{}`，确保数组遍历函数能正确终止。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/df6c50ecbe11fe302bce99ffd2d228bf5fb64e45

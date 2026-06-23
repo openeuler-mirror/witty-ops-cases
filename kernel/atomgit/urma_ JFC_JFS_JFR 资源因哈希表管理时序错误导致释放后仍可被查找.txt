@@ -1,0 +1,31 @@
+#标题
+urma: JFC/JFS/JFR 资源因哈希表管理时序错误导致释放后仍可被查找
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核模块 urma 在处理 JFC（Jetty File Context）、JFS（Jetty File System）、JFR（Jetty File Region）资源时，如果在 alloc 阶段成功将对象加入哈希表，但在 active 阶段失败，后续执行 free 操作时，对象已从哈希表移除。这导致一种特殊的引用计数或生命周期管理问题：对象已被标记为无效或正在释放，但在某些查找路径下仍可能被错误地获取，或者因为 active 失败导致对象状态不一致（如 JFC 未激活时 JFS/JFR 尝试激活）。此外，代码中存在宏定义使用错误（UBCORE_JFS_BIND_JFC 被误用于 JFR 绑定操作）。
+
+#主要错误日志
+- "Failed to add jfc to hash_table, ret is %d.\n"
+- "Failed to add jfs, ret: %d.\n"
+- "Failed to add jfr.\n"
+- "jfs cfg is not supported.\n"
+- "jfc in jfs has not activated.\n"
+- "jfc in jfr has not activated.\n"
+- "failed to set opt of ubcore_jfr, jfr_id:%u, ret is %d.\n"
+
+#问题根因
+1. **生命周期管理时序错误**：原有的代码逻辑在 `alloc` 阶段就将对象添加到全局哈希表中，并在 `free` 阶段移除。然而，`active` 阶段可能失败，此时对象已处于哈希表中但未真正激活，或者 alloc 失败回滚时处理不一致。修复方案调整为在 `active` 成功时添加到哈希表，在 `deactive` 时移除，确保只有真正激活的对象才对外可见。
+2. **依赖关系检查缺失**：JFS 和 JFR 的激活流程未检查其依赖的 JFC 是否已激活，导致状态机不一致。
+3. **代码错误**：JFR 设置选项时使用了错误的宏 `UBCORE_JFS_BIND_JFC` 而非 `UBCORE_JFR_BIND_JFC`，导致逻辑判断错误。
+
+#解决方案
+1. **调整哈希表管理时机**：将 JFC、JFS、JFR 对象添加到哈希表的操作从 `alloc` 阶段移动到 `active` 阶段；将移除操作从 `free` 阶段移动到 `deactive` 阶段。确保只有处于 Active 状态的资源才能通过哈希表被查找到。
+2. **完善激活前检查**：在 JFS 和 JFR 的 `active` 流程中增加检查，确保其关联的 JFC 已经处于激活状态（`is_actived == true`），防止资源状态不一致。
+3. **修正宏定义引用**：将 `ubcore_set_jfr_opt` 函数中误用的 `UBCORE_JFS_BIND_JFC` 宏替换为正确的 `UBCORE_JFR_BIND_JFC`。
+4. **移除冗余检查**：将部分配置检查逻辑（如 trans_mode 和 cfg check）从 `alloc` 阶段移动到 `active` 阶段，确保检查时机正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8cbe10c5e3c782fea2d70e86bfc0f9ae359bd815

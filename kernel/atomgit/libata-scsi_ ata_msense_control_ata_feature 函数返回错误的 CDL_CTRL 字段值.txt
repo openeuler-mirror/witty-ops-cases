@@ -1,0 +1,20 @@
+#标题
+libata-scsi: ata_msense_control_ata_feature 函数返回错误的 CDL_CTRL 字段值
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 MODE SENSE 命令查询 ATA features control mode page 时，无论用户是否启用了 CDL（Command Duration Limits）功能，系统始终返回 CDL_CTRL 字段值为 0x02，导致返回的状态与实际配置不符，违反 T10 SAT-6 规范要求。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ata_msense_control_ata_feature()` 在判断 CDL_CTRL 字段值时，错误地检查了 `ATA_DFLAG_CDL` 标志位（仅表示设备支持 CDL），而根据 T10 SAT-6 规范，应返回最后一次设置的 CDL_CTRL 值。代码未正确检查表示用户是否已启用该功能的 `ATA_DFLAG_CDL_ENABLED` 标志位，导致在功能未启用时错误地返回了启用状态值 0x02。
+
+#解决方案
+修改 `drivers/ata/libata-scsi.c` 文件中的 `ata_msense_control_ata_feature` 函数，将判断条件从检查 `ATA_DFLAG_CDL` 标志改为检查 `ATA_DFLAG_CDL_ENABLED` 标志。当该标志置位时返回 0x02（表示 T2A 和 T2B 页面已启用），否则返回 0，确保 MODE SENSE 返回值真实反映 CDL 功能的开启状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e9e9f48f79a7afc3e7856669c1e799e5adad7e34

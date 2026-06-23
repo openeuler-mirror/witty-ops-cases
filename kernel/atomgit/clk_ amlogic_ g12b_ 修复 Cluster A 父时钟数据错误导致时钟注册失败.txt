@@ -1,0 +1,22 @@
+#标题
+clk: amlogic: g12b: 修复 Cluster A 父时钟数据错误导致时钟注册失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Amlogic G12B 平台上，多个依赖 Cluster A CPU 时钟的子时钟（如 `cpu_clk_div16_en`、`cpu_clk_apb_div` 等）初始化异常。由于代码硬编码引用了 G12A 的 `cpu_clk` 结构体指针作为父时钟，而 G12B 的 Cluster A CPU 时钟父源与 G12A 不同，导致驱动提供的父时钟硬件指针在 G12B 上实际上并未被注册，进而导致相关时钟链路无法正确构建或功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+在 G12A 和 G12B 双平台共用的时钟驱动代码中，部分时钟（`g12a_cpu_clk_div16_en`、`g12a_cpu_clk_apb_div`、`g12a_cpu_clk_atb_div`、`g12a_cpu_clk_axi_div`）通过 `parent_hws` 字段直接引用了 `g12a_cpu_clk.hw` 这一硬件指针。
+G12B 芯片的 Cluster A CPU 时钟父源定义与 G12A 不同，具有不同的 `struct clk_hw`。代码中提供的 `g12a_cpu_clk.hw` 指针在 G12B 平台上并未对应注册有效的时钟，导致 CCF（Common Clock Framework）无法找到正确的父时钟。
+
+#解决方案
+将受影响的时钟定义中的父时钟描述方式从直接引用硬件指针（`parent_hws`）改为使用全局命名空间字符串（`parent_data` + `.name = "cpu_clk"`）。
+通过回退到全局命名机制，让 CCF 框架根据名称 "cpu_clk" 动态查找匹配的时钟硬件，从而自动适配 G12A 和 G12B 不同的 CPU 时钟实现，修复了 G12B 上父时钟未注册的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e31363e76617f6e163c5299edfd3ccf89e413764

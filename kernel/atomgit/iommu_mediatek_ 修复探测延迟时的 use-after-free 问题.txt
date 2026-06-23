@@ -1,0 +1,20 @@
+#标题
+iommu/mediatek: 修复探测延迟时的 use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MediaTek IOMMU 驱动加载过程中，如果 larb 设备尚未绑定到其驱动导致 IOMMU 驱动探测被延迟，此时驱动程序错误地释放了 larb 设备的引用计数。这会导致潜在的 use-after-free（释放后使用）故障，可能引发内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `mtk_iommu_mm_dts_parse` 函数中，无论是在成功查找 larb 设备后还是在错误处理路径中，都错误地调用了 `platform_device_put(plarbdev)` 释放了设备的引用计数。当探测发生延迟时，这些本应保留的引用被提前释放，导致后续访问已释放内存的风险。
+
+#解决方案
+移除遍历解析 larb 设备循环中多余的 `platform_device_put(plarbdev)` 调用，确保在 IOMMU 驱动绑定期间保留对 larb 设备的引用。同时，在驱动的 `probe` 错误处理路径（`err_list_del`）和 `remove` 路径中，新增遍历释放逻辑（调用 `put_device`），确保驱动卸载或失败时正确释放之前获取的设备引用，修复引用计数管理逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/04836c4fbf50af443bf2abfd05bb4c6bce9ae445

@@ -1,0 +1,24 @@
+#标题
+bpf: 修复 CONST_PTR_TO_MAP 类型指针未被视为非空导致的验证器逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+BPF 验证器在处理 `CONST_PTR_TO_MAP` 类型的寄存器时，未能正确识别该类型指针不可能为空（non-nullable），导致验证器错误地探索了寄存器与 0 比较的分支（`rX == 0`），引发了不正确的验证路径分析。这导致原本应该通过的合法 BPF 程序（特别是涉及 map 指针与 0 比较的场景）可能在非特权（unpriv）模式下失败，或者产生冗余的死代码路径分析。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `kernel/bpf/verifier.c` 的 `reg_not_null()` 函数中，判定寄存器值是否非空的类型检查列表缺失了 `CONST_PTR_TO_MAP`。
+根因分析如下：
+1. 根据定义，`CONST_PTR_TO_MAP` 类型的指针在运行时不可能为空（null）。
+2. 由于 `reg_not_null()` 函数未包含对该类型的检查，验证器在 `check_cond_jmp_op()` 中遇到此类寄存器与 0 的比较判断时，误认为该指针可能为空。
+3. 这导致验证器错误地探索了本应被优化掉或视为无效的“指针为空”分支，破坏了验证逻辑的正确性。
+
+#解决方案
+修改内核文件 `kernel/bpf/verifier.c` 中的 `reg_not_null()` 函数，在返回 `true` 的类型检查条件中追加 `type == CONST_PTR_TO_MAP`。这确保了验证器正确识别 map 指针为非空值，从而在条件跳转检查中跳过对 `rX == 0` 分支的错误探索，同时修正了相关 selftest 的预期结果。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56d5677456722229a7d0792e3fd7cc0311e28f98

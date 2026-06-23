@@ -1,0 +1,20 @@
+#标题
+NFSv4/pNFS 因唤醒竞态导致写回挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在 NFS 写回过程中出现挂起。多个任务等待同一个页锁，同时有任务在 pnfs_update_layout() 函数中等待 NFS_LAYOUT_DRAIN 位清除，但此时 pnfs_layout_hdr 结构体的 plh_outstanding 计数已经归零，导致任务无法被唤醒而持续阻塞。
+
+#主要错误日志
+未知
+
+#问题根因
+这是一个唤醒者与等待者之间的竞态问题。在 nfs_layoutget_end() 函数中，当 plh_outstanding 计数减至零并清除 NFS_LAYOUT_DRAIN 位后，直接调用 wake_up_bit() 唤醒等待任务。由于缺少内存屏障，可能导致等待任务未能及时观察到位状态的变化，从而错过唤醒信号，类似于此前修复的 "SUNRPC: Fix a race to wake a sync task" 问题。
+
+#解决方案
+在 nfs_layoutget_end() 函数中，于 test_and_clear_bit() 操作之后、wake_up_bit() 调用之前，添加 smp_mb__after_atomic() 内存屏障。这确保了位清除操作与唤醒操作之间的顺序，保证了等待任务能正确观察到状态变化并被唤醒。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b7634d32ee76434caadf774680ccb8b6b255f843

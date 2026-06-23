@@ -1,0 +1,20 @@
+#标题
+quota: 在冻结文件系统时 quotactl 与 freeze_super 发生死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当文件系统处于冻结状态时，quotactl_block() 进入重试循环等待文件系统解冻，此时系统发生活锁。具体表现为：冻结进程挂起，而 quota 进程 CPU 使用率达到 100%，系统陷入无响应状态。该问题在非抢占式内核上极易复现，尤其是在同一 CPU 上同时执行文件系统冻结/解冻操作和 quota 开关操作时。
+
+#主要错误日志
+未知
+
+#问题根因
+在非抢占式内核中，quotactl_block() 的重试循环内执行 sb_start_write() - sb_end_write() 操作对时，没有包含调度点，导致该进程一直占用 CPU 无法让出。这阻止了该 CPU 进入 RCU 静止状态。此时，freeze_super() 中的 sb_wait_write() 调用 percpu_down_write() 触发的 synchronize_rcu() 无限期等待该 CPU 报告静止状态，从而导致 quota 进程无限自旋等待 freezer 推进，而 freezer 又被 RCU 同步阻塞，形成活锁。
+
+#解决方案
+在 quotactl_block() 函数的重试循环中增加 cond_resched() 调用。该调用作为一个调度点，不仅允许进程让出 CPU，还充当了 RCU 静止状态，使得 percpu_down_write() 中的 synchronize_rcu() 能够完成，从而打破活锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9f2ab93950685a547099d7bb0cc34591f307be6c

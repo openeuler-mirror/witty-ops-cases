@@ -1,0 +1,39 @@
+#标题
+ext4: ext4_ext_insert_extent 函数存在释放后使用(UAF)漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ext4 文件系统执行写回操作时，内核触发 KASAN 检测到的 slab-use-after-free 错误，导致内核崩溃或内存破坏。具体表现为在 `ext4_ext_insert_extent` 函数中访问了已被释放的内存地址。
+
+#主要错误日志
+```
+==================================================================
+BUG: KASAN: slab-use-after-free in ext4_ext_insert_extent+0x26d4/0x3330
+Read of size 8 at addr ffff8881027bf7d0 by task kworker/u36:1/179
+CPU: 3 UID: 0 PID: 179 Comm: kworker/u6:1 Not tainted 6.11.0-rc2-dirty #866
+Call Trace:
+ <TASK>
+ ext4_ext_insert_extent+0x26d4/0x3330
+ ext4_ext_map_blocks+0xe22/0x2d40
+ ext4_map_blocks+0x71e/0x1700
+ ext4_do_writepages+0x1290/0x2800
+[...]
+
+Freed by task 179:
+ kfree+0xcb/0x240
+ ext4_find_extent+0x7c0/0x1f70
+ ext4_ext_insert_extent+0xa26/0x3330
+[...]
+==================================================================
+```
+
+#问题根因
+在 `ext4_ext_insert_extent` 函数中，调用 `ext4_ext_create_new_leaf(ppath)` 可能会重新分配 path 结构体内存。此时 `ppath` 指针指向的内存地址已更新（例如从旧地址 2000 变更为新地址 3000），但函数内部局部变量 `path` 仍然持有旧的内存地址（2000）。后续代码继续使用该过期的 `path` 变量访问内存，导致访问已被释放的内存。
+
+#解决方案
+在调用 `ext4_ext_create_new_leaf` 函数返回后，立即通过 `path = *ppath` 更新局部变量 `path` 的值，确保其指向最新分配的内存地址，从而避免使用已释放的旧指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2a5df046cc48a0e61fb80566aa155f50ba0d1649

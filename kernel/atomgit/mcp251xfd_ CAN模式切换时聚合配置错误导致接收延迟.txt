@@ -1,0 +1,23 @@
+#标题
+mcp251xfd: CAN模式切换时聚合配置错误导致接收延迟
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mcp251xfd 驱动中，当用户禁用了中断聚合（coalescing）配置并切换 CAN 模式（如从 CAN-CC 切换到 CAN-FD）时，新模式会错误地被配置为启用聚合状态。这导致 CAN-FD 帧的接收出现非预期的延迟。
+
+#主要错误日志
+未知
+
+#问题根因
+该问题由提交 50ea5449c563 引入。根因在于内核内部判断聚合是否禁用的标准与 ethtool 传递的标准不一致：
+- 驱动内部使用 `priv->{rx,tx}_obj_num_coalesce_irq = 0` 表示禁用聚合。
+- ethtool 使用 `usecs = 0` 和 `max_frames = 1` 表示禁用聚合。
+在切换模式调用 `can_ram_get_layout()` 时，代码直接将驱动内部的 `0` 赋值给 `struct ethtool_coalesce` 的相关字段，导致 `can_ram_get_layout()` 误判为需要启用聚合，从而触发了错误的聚合配置逻辑。
+
+#解决方案
+修改 `mcp251xfd_ring_alloc()` 函数中的赋值逻辑，在构造 `struct ethtool_coalesce` 对象时进行修正：如果检测到驱动内部的聚合计数（`rx_obj_num_coalesce_irq` 或 `tx_obj_num_coalesce_irq`）为 0，则将传递给 `can_ram_get_layout()` 的 `rx_max_coalesced_frames_irq` 或 `tx_max_coalesced_frames_irq` 显式设置为 1，以符合 ethtool 定义的“禁用聚合”的语义，确保模式切换后聚合状态正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/733b43cc90c552e8e5adc549cfb5396d951fff8e

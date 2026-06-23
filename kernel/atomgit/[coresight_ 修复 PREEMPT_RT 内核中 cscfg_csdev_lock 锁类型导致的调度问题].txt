@@ -1,0 +1,20 @@
+#标题
+[coresight: 修复 PREEMPT_RT 内核中 cscfg_csdev_lock 锁类型导致的调度问题]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+在开启 PREEMPT_RT 的内核中，调用 `perf_event_task_sched_out()` 或 `perf_event_task_sched_in()` 时，由于持有 `coresight_device->cscfg_csdev_lock` 锁，可能触发调度相关的 BUG 或死锁警告。具体表现为在持有 `rq_lock`（raw_spinlock_t）的情况下尝试获取一个可能睡眠的锁（spinlock_t），违反了 PREEMPT_RT 下锁的语义约束。
+
+#主要错误日志
+未知
+
+#问题根因
+在 PREEMPT_RT 内核中，普通的 `spinlock_t` 是可睡眠的。然而，`coresight_device->cscfg_csdev_lock` 锁会在 `perf_event_task_sched_out()/in()` 调用链中被持有。这两个函数是在获取了 `rq_lock`（这是一个不可睡眠的 `raw_spinlock_t`）之后被调用的。根据内核锁的规则，在持有不可睡眠锁（`raw_spinlock_t`）期间获取可睡眠锁（`spinlock_t`）是非法的，这导致了上述冲突。
+
+#解决方案
+将 `coresight_device` 结构体中的 `cscfg_csdev_lock` 字段类型从 `spinlock_t` 修改为 `raw_spinlock_t`，并将所有相关的锁操作函数（如 `spin_lock_irqsave`）相应替换为 `raw_spin_lock_irqsave` 等变体，以确保该锁在 PREEMPT_RT 环境下保持不可睡眠属性，从而符合调用链上下文的约束。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/80b71e9bdd840621c3084ddad164b1a44f09d109

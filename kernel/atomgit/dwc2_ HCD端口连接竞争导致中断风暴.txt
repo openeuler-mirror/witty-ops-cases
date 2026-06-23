@@ -1,0 +1,42 @@
+#标题
+dwc2: HCD端口连接竞争导致中断风暴
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在无板载USB集线器的树莓派设备上，频繁的设备重连接触发了DWC2主机控制器驱动进入主机时钟门控模式后，引发中断风暴。系统检测到中断未被处理，最终禁用了相应的USB中断号，导致USB功能异常。
+
+#主要错误日志
+usb 1-1: USB disconnect, device number 25
+dwc2 3f980000.usb: _dwc2_hcd_suspend: port_connect_status: 1
+dwc2 3f980000.usb: Entering host clock gating.
+Disabling IRQ #66
+irq 66: nobody cared (try booting with the "irqpoll" option)
+CPU: 0 UID: 0 PID: 0 Comm: swapper/0 Not tainted 6.12.0-gc1bb81b13202-dirty #322
+Hardware name: BCM2835
+Call trace:
+ unwind_backtrace from show_stack+0x10/0x14
+ show_stack from dump_stack_lvl+0x50/0x64
+ dump_stack_lvl from __report_bad_irq+0x38/0xc0
+ __report_bad_irq from note_interrupt+0x2ac/0x2f4
+ note_interrupt from handle_irq_event+0x88/0x8c
+ handle_irq_event from handle_level_irq+0xb4/0x1ac
+ handle_level_irq from generic_handle_domain_irq+0x24/0x34
+ generic_handle_domain_irq from bcm2836_chained_handle_irq+0x24/0x28
+ bcm2836_chained_handle_irq from generic_handle_domain_irq+0x24/0x34
+ generic_handle_domain_irq from generic_handle_arch_irq+0x34/0x44
+ generic_handle_arch_irq from __irq_svc+0x88/0xb0
+handlers:
+ [<e3a25c00>] dwc2_handle_common_intr
+ [<58bf98a3>] usb_hcd_irq
+Disabling IRQ #66
+
+#问题根因
+问题由 `_dwc2_hcd_suspend()` 函数与端口中断处理函数之间的竞争条件引起。在判断是否进入挂起或时钟门控模式时，代码原先依赖 `hsotg->flags.b.port_connect_status` 标志位。当设备断开连接时，端口中断会更新该标志位，但在竞争场景下，`_dwc2_hcd_suspend()` 可能读取到过期的状态值（即标志位仍为1，表示已连接，但实际上物理连接已断开）。这导致驱动错误地进入了主机时钟门控模式，此时由于硬件状态不一致，触发了无人处理的中断风暴。
+
+#解决方案
+修改 `_dwc2_hcd_suspend()` 函数中的连接状态检查逻辑，不再依赖可能过期的软件标志位 `hsotg->flags.b.port_connect_status`，而是直接读取硬件端口寄存器 `HPRT0` 的连接状态位（`HPRT0_CONNSTS`）来获取实时的物理连接状态。这样可以避免因软件标志与硬件实际状态不同步而导致的竞争问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bcb0086e8f64b723c8562203c5758f0991c81d81

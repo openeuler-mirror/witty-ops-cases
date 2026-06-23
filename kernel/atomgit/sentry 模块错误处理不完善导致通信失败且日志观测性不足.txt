@@ -1,0 +1,37 @@
+#标题
+sentry 模块错误处理不完善导致通信失败且日志观测性不足
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 URMA 通信过程中，若发送 ACK 消息失败（返回 `COMM_PARM_NOT_SET` 或 `-ENODEV`），内核未打印错误日志，导致问题难以定位。
+2. 当锁竞争激烈导致 `mutex_trylock` 失败时，发送函数错误地返回 0（成功），掩盖了消息发送失败的事实。
+3. 成功发送 ACK 消息时缺少成功日志，无法确认通信状态。
+4. 部分关键错误路径（如未知消息类型、tjetty 指针为空、eid 不匹配等）缺少日志记录或日志信息不全。
+5. 发送线程创建失败时，日志未包含来源 EID 信息。
+
+#主要错误日志
+- `pr_err("%s: urma_send ack failed, ret is %d, skip sending ack msg\n", __func__, ret);`
+- `pr_warn("%s: lock busy, skip polling jfc, die index is %d\n", __func__, die_index);`
+- `pr_warn("%s: lock busy, skip sending msg to %s, msg type is %d\n", ...);`
+- `pr_err("%s: tjetty is NULL, unable to send msg to %s, msg type is %d\n", ...);`
+- `pr_err("%s: get unknown msg type, msg from %s\n", __func__, ...);`
+- `pr_err("%s: skip broadcasting messages to all nodes, msg type is %d", __func__, ...);`
+- `pr_err("urma_send: msg format invalid, dst eid is %s\n", dst_eid);`
+- `pr_err("Failed to create child thread to process msg from %s\n", ...);`
+
+#问题根因
+1. **错误处理逻辑缺陷**：在 `sentry_post_jetty_send_wr` 函数中，当 `mutex_trylock` 获取锁失败时，直接返回 0，导致调用者误认为发送成功；`urma_send_to_given_node` 中对 `node_idx` 的错误检查处理不当。
+2. **日志记录缺失**：在 `urma_send` 重试循环中，对于 `COMM_PARM_NOT_SET` 和 `-ENODEV` 错误直接 break 跳出，未留下日志痕迹；多处关键失败路径（如 `tjetty` 为空、消息类型未知）未添加 `pr_err` 日志。
+3. **状态反馈缺失**：原逻辑未统计 URMA ACK 的成功次数，导致无法判断 ACK 是否真正发送成功，且缺少发送成功的确认日志。
+
+#解决方案
+1. **修复返回值逻辑**：修改 `sentry_post_jetty_send_wr` 中锁竞争失败时的返回值，从 0 改为 `-EBUSY`；修改 `urma_send_to_given_node` 中 `node_idx` 无效时的返回值，从 0 改为 `-EINVAL`。
+2. **完善错误统计**：新增 `urma_ack_success_num` 计数器，只有当 `urma_send` 返回 `URMA_ACK_SUCCESS` 时才增加计数；最终判断发送成功需满足 `urma_ack_success_num > 0`。
+3. **增强日志观测性**：
+   - 在关键错误路径添加详细的 `pr_err` 日志，包含函数名、返回值、目标 EID、消息类型等上下文信息。
+   - 在锁忙碌路径添加 `pr_warn` 日志。
+   - 添加发送成功的 `pr_info` 日志，便于追踪正常通信流程。
+   - 优化已有日志格式，补充缺失的关键参数（如来源 EID）。
+4. **定义成功返回码**：在头文件中定义 `URMA_ACK_SUCCESS` 为 1，统一 URMA 发送成功的返回值标准。

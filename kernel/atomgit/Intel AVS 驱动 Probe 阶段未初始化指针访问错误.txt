@@ -1,0 +1,20 @@
+#标题
+Intel AVS 驱动 Probe 阶段未初始化指针访问错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel AVS (Audio Voice Speech) 驱动加载过程中，若 `pcim_request_all_regions()` 函数调用失败，驱动程序进入错误处理路径时会操作未初始化的 `bus` 指针，导致内核崩溃或不可预期的行为。该问题由静态分析工具 Coverity 发现。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `avs_pci_probe` 中，指针变量 `bus` 的赋值（`bus = &adev->base.core`）原本位于 `pcim_request_all_regions()` 调用之后。当 `pcim_request_all_regions()` 执行失败并返回错误时，代码直接返回，跳过了 `bus` 的初始化步骤。然而，该失败分支或其后的清理逻辑（Commit 描述中提及的 error path）试图访问或操作 `bus` 指针，导致访问了未初始化的内存地址。
+
+#解决方案
+将 `bus` 指针的初始化赋值语句（`bus = &adev->base.core`）提前至 `adev` 内存分配成功之后、`pcim_request_all_regions()` 调用之前。这确保了无论后续的资源请求是否成功，`bus` 指针始终处于有效的初始化状态，避免在错误处理流程中引用未初始化的指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/da99238e194edca81294639b5925608e9990c21c

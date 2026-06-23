@@ -1,0 +1,24 @@
+#标题
+arm-smmu-v3 修复 STE.SHCFG 字段访问不符合架构规范的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM SMMU v3 驱动中，当配置 Stream Table Entry (STE) 时，驱动程序会无条件地将 SHCFG 字段设置为 "Use Incoming"（值为 0b01）。然而，根据 ARM 架构规范（ARM IHI 0070 F.b），当 SMMU_IDR1.ATTR_TYPES_OVR 为 0 时，SHCFG 字段应为 RES0（硬件忽略写入，强制使用传入的共享属性），此时写入非零值属于违反架构规范的行为。虽然 Commit 信息指出目前可能没有硬件受此影响，但这属于驱动层的配置错误。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 ARM 架构规范，STE 中的属性字段（如 NSCFG, PRIVCFG, INSTCFG）通常使用值 0 表示 "Use Incoming"，但 SHCFG 字段的定义不同，其 "Use Incoming" 对应值为 0b01。
+驱动程序目前的逻辑未区分硬件特性，直接将 SHCFG 硬编码为 STRTAB_STE_1_SHCFG_INCOMING (0b01)。
+根本原因在于：当 SMMU_IDR1 寄存器中的 ATTR_TYPES_OVR 位为 0 时，SHCFG 字段在架构上被定义为 RES0。驱动程序忽略了对该硬件特性的检查，导致在不支持 ATTR_TYPES_OVR 的硬件上错误地写入了非零值，不符合架构规范。
+
+#解决方案
+1. 新增硬件特性检测：在 SMMU 设备探测阶段（`arm_smmu_device_hw_probe`），读取 IDR1 寄存器的第 27 位（IDR1_ATTR_TYPES_OVR），如果该位置位，则设置 `ARM_SMMU_FEAT_ATTR_TYPES_OVR` 特性标志。
+2. 修正 STE 配置逻辑：修改 `arm_smmu_make_bypass_ste` 和 `arm_smmu_make_s2_domain_ste` 函数，仅在 `smmu->features` 包含 `ARM_SMMU_FEAT_ATTR_TYPES_OVR` 标志时，才将 SHCFG 配置为 "Use Incoming"；否则保持该字段为 0（RES0），符合架构规范。
+3. 接口调整：相关函数接口增加了 `struct arm_smmu_device *smmu` 参数传递，以便获取硬件特性信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/acc033f569b786230999cce6d53385e1a95462b9

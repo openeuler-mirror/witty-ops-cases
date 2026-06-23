@@ -1,0 +1,20 @@
+#标题
+MPTCP fallback 套接字 ACK 生成随机异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 MPTCP 套接字回退到普通 TCP（fallback）模式时，由于未正确跟踪接收窗口状态，导致在 recvmsg() 过程中 ACK 的生成行为变得非常随机（quite random），影响了数据接收确认的正常逻辑。
+
+#主要错误日志
+未知
+
+#问题根因
+mptcp_cleanup_rbuf() 函数依赖 msk->old_wspace 字段来获取最近一次发送的 MPTCP 级接收窗口信息，该字段由 mptcp_write_options() 函数在发送 ACK 时更新。然而，回退套接字不会添加任何 MPTCP 选项，导致 mptcp_write_options() 从未被调用，msk->old_wspace 的值一直处于过期状态，进而导致 recvmsg() 时的 ACK 生成逻辑异常。
+
+#解决方案
+修改 mptcp_established_options() 函数，即使在 fallback 模式下也返回 true，确保后续 mptcp_write_options() 被调用。同时，在 mptcp_write_options() 中新增对无子选项情况的处理逻辑，针对 fallback 场景调用新增的 mptcp_track_rwin() 函数，仅更新 msk->old_wspace 窗口信息，而不发送实际的 MPTCP 选项。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5ed253cd424c350424a62c171b0d84bbb85ad913

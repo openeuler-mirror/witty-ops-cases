@@ -1,0 +1,22 @@
+#标题
+UMMU 模块因引用未定义 Kconfig 宏导致内存分配策略失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+UMMU 模块代码中引用了 `CONFIG_UB_HIGHUSER_MOVABLE` 配置宏，但该宏在 Kconfig 中并未定义。这导致 `IS_ENABLED(CONFIG_UB_HIGHUSER_MOVABLE)` 始终返回假（false），使得在非镜像系统上本应生效的 `GFP_HIGHUSER_MOVABLE` 分配策略无法生效，代码逻辑强制回退到默认 GFP 标志，影响了内存碎片整理和迁移能力。
+
+#主要错误日志
+未知
+
+#问题根因
+先前提交（543af7a75b8a）引入了使用 `CONFIG_UB_HIGHUSER_MOVABLE` 来控制内存分配行为的逻辑，但未在 Kconfig 文件中添加该配置选项的定义。这导致该配置项在内核配置系统中实际不存在且不可配置，宏定义检查始终失败，相关内存分配优化功能意外失效。
+
+#解决方案
+1. 在 `drivers/iommu/hisilicon/Kconfig` 中新增专用配置项 `UB_UMMU_HIGHUSER_MOVABLE_ALLOC`，依赖于 ARM64 架构，默认值为关闭（default n）。
+2. 修改 `drivers/iommu/hisilicon/ummu.h` 中的 `UMMU_GFP` 宏定义，将原有的错误宏名 `CONFIG_UB_HIGHUSER_MOVABLE` 替换为新定义的 `CONFIG_UB_UMMU_HIGHUSER_MOVABLE_ALLOC`。
+3. 在 `openeuler_defconfig` 中显式关闭该选项（`# CONFIG_UB_UMMU_HIGHUSER_MOVABLE_ALLOC is not set`），确保默认行为可控。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ea057f6c805484fe96c69c42e2819ca7e6b93ac

@@ -1,0 +1,21 @@
+#标题
+mlx5 E-Switch 切换 switchdev 模式失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+用户在尝试将 mlx5 设备的 E-Switch 切换到 switchdev（offloads）模式时失败，操作无法完成。
+
+#主要错误日志
+Error: mlx5_core: Failed setting eswitch to offloads.
+kernel answers: Invalid argument
+
+#问题根因
+在创建默认 GID 条目时，代码未初始化源 MAC 地址变量。这导致栈上的随机比特被作为源 MAC 地址传递给固件。当这些随机比特恰好组成一个组播地址时，固件校验失败并返回错误，从而阻止了 E-Switch 模式的切换。
+
+#解决方案
+在 `mlx5_rdma_add_roce_addr` 函数中定义 `mac` 数组变量时直接进行初始化（即 `u8 mac[ETH_ALEN] = {};`），确保源 MAC 地址为零。由于该默认 GID 条目仅用于回环流量，使用全零的单播地址即可满足固件要求，从而避免随机组播地址导致的错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/47d32ee6dc027a84f118d8fea09330199f7a3670

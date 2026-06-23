@@ -1,0 +1,33 @@
+#标题
+ub: cdma ioctl 接口处理异常返回错误码不当及日志缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+CDMA 驱动的 ioctl 接口在处理非法命令或参数时行为不符合预期：
+1. 当传入无效的命令类型（cmd type）或无效的命令编号（nr）时，部分路径未返回正确的错误码（-ENOIOCTLCMD），而是错误地返回 -EINVAL。
+2. 当传入无效命令时，内核日志中缺乏相应的错误记录，导致问题难以定位。
+3. `cdma_cmd_parse` 函数在遇到无效命令时，错误码返回不一致。
+
+#主要错误日志
+- jfce ioctl invalid parameter.
+- jfce ioctl invalid cmd type, cmd = %u.
+- jfce ioctl wrong nr = %u.
+- jfae ioctl invalid parameter.
+- jfae ioctl invalid cmd type, cmd = %u.
+- invalid cdma user command or no handler, command = %u
+
+#问题根因
+驱动代码 `cdma_event.c` 和 `cdma_ioctl.c` 中对 ioctl 命令的校验逻辑不完善：
+1. `cdma_jfce_ioctl` 中，校验 cmd type 失败时未返回正确的错误码，且对于 default 分支的无效 nr 缺少日志记录。
+2. `cdma_jfae_ioctl` 中，校验 cmd type 失败时缺少日志记录。
+3. `cdma_cmd_parse` 中，遇到无效用户命令时，返回值 -EINVAL 不符合处理未知命令的惯例（应为 -ENOIOCTLCMD）。
+
+#解决方案
+1. 在 `cdma_jfce_ioctl` 和 `cdma_jfae_ioctl` 函数中增加对 cmd type 校验失败的日志打印。
+2. 在 `cdma_jfce_ioctl` 的 switch default 分支增加日志打印，并移除不必要的 break，使其自然返回 -ENOIOCTLCMD。
+3. 将 `cdma_jfce_ioctl`、`cdma_jfae_ioctl` 以及 `cdma_cmd_parse` 中处理无效命令时的返回值统一修正为 -ENOIOCTLCMD。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/363f37f662125dd5e1d06f96f5b6f447c007d8eb

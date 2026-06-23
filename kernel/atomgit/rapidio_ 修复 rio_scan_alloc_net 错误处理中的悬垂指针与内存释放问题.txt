@@ -1,0 +1,22 @@
+#标题
+rapidio: 修复 rio_scan_alloc_net 错误处理中的悬垂指针与内存释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RapidIO 子系统扫描分配网络（`rio_scan_alloc_net`）过程中，若目标 ID 表（destID table）分配失败，错误处理路径执行完毕后，`mport->net` 指针未被清零，依旧指向已释放的内存地址，形成悬垂指针。后续代码若访问该指针可能导致 Use-After-Free 引发的内核崩溃或数据损坏。
+
+#主要错误日志
+RIO: failed to allocate destID table
+
+#问题根因
+在 `rio_scan_alloc_net` 函数中，当 `idtab` 分配失败时，代码进入错误处理分支。此时 `net` 结构体尚未通过 `rio_add_net()` 注册到系统中，因此无需调用 `rio_free_net()` 进行复杂的释放操作。原代码错误地调用了 `rio_free_net()`，且未将 `mport->net` 指针置为 NULL，导致该指针指向了已释放的内存，留下悬垂指针隐患。
+
+#解决方案
+修改错误处理路径中的内存释放逻辑：
+1. 将 `rio_free_net(net)` 替换为简单的 `kfree(net)`，因为此时 net 尚未注册，直接释放内存即可。
+2. 显式设置 `mport->net = NULL`，防止产生悬垂指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5ebb8a0dbb14fd6d899b925d30931290ac3c55cf

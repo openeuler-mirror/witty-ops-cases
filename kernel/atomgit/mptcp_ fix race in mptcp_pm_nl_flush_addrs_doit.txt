@@ -1,0 +1,24 @@
+#标题
+mptcp: fix race in mptcp_pm_nl_flush_addrs_doit
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 MPTCP PM netlink 接口执行 `mptcp_pm_nl_flush_addrs_doit` 刷新地址列表操作时，存在并发竞态风险。在释放锁之后、实际释放内存之前的窗口期内，若其他线程修改了列表，可能导致内核崩溃或内存腐败。
+
+#主要错误日志
+未知
+
+#问题根因
+在原代码实现中，`list_splice_init` 将 `pernet->local_addr_list` 移动到栈上的 `free_list` 后即释放锁。随后直接操作 `free_list` 进行内存释放。这个过程存在竞态条件：在 `spin_unlock_bh` 之后，其他线程可能操作 `pernet->local_addr_list`，导致正在处理的链表节点指针发生改变或被重用，从而引发崩溃。此外，原代码逻辑未正确处理 `local_addr_list` 的 RCU 保护机制。
+
+#解决方案
+修复方案将链表操作改为 RCU 安全模式：
+1. 不再使用 `list_splice_init`，而是直接将 `free_list` 指向 `pernet->local_addr_list`，并使用 `INIT_LIST_HEAD_RCU` 重新初始化 `pernet->local_addr_list`，使旧链表在 RCU 保护下安全脱离。
+2. 解锁后，调用 `synchronize_rcu()` 等待所有 RCU 读侧临界区完成，确保没有其他线程仍在访问旧链表。
+3. 在释放内存前，修正 `free_list` 内部指针，使其指向自身形成独立链表，避免释放时引用 `pernet->local_addr_list` 带来的潜在竞态。
+4. 增加了链表为空的检查，优化无效操作场景。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b82cdd1647abab4479f594ff5ec1a604d920b48c

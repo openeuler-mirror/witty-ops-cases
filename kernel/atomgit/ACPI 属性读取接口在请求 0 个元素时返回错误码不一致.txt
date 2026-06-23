@@ -1,0 +1,25 @@
+#标题
+ACPI 属性读取接口在请求 0 个元素时返回错误码不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用者通过 ACPI 属性接口尝试读取数组中的 0 个元素（nval == 0）时，内核行为与 Open Firmware (OF) 接口实现不一致：
+1. 对于整型数组，ACPI 接口返回 `-EINVAL`，而 OF 接口正常返回 `0`。
+2. 对于字符串数组，ACPI 接口返回 `-EINVAL`，而 OF 接口返回 `-ENODATA`。
+这种差异导致统一设备属性接口在处理边界条件时表现不符合预期，可能影响驱动程序的兼容性逻辑判断。
+
+#主要错误日志
+未知
+
+#问题根因
+`acpi_data_prop_read` 函数在处理 `nval == 0` 的边界情况时逻辑有误，过早地返回了 `-EINVAL`，且处理字符串数组时未遵循与 OF 接口一致的规范（即数据为空应返回 `-ENODATA`），导致 ACPI 与 OF 两种固件属性处理接口的行为不统一。
+
+#解决方案
+修改 `drivers/acpi/property.c` 文件中的逻辑：
+1. 删除针对整型数组等类型在循环后统一判断 `nval == 0` 返回 `-EINVAL` 的代码，使其能够正常返回 0，与 OF 行为对齐。
+2. 在 `DEV_PROP_STRING` 分支中，增加对 `nval`（经过 min_t 处理后）是否为 0 的判断，若为 0 则返回 `-ENODATA`，与 OF 行为对齐。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ef9296bfc08a28507a426ff6574225ef451b2410

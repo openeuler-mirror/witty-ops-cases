@@ -1,0 +1,36 @@
+#标题
+sentry 模块错误处理缺陷导致通信状态误判及日志丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. URMA 通信类型下，ACK 确认机制失效，可能导致通信状态误判（误报成功或失败）。
+2. 设备不可用（-ENODEV）或互斥锁竞争时，消息发送失败但调用者无法感知（原本返回 0 或被忽略），导致消息静默丢弃。
+3. 目标 EID 不匹配时，发送接口返回 0 而非错误码，导致上层业务无法正确处理异常。
+4. 故障排查困难，关键流程（如 ACK 发送失败、锁竞争、EID 匹配失败）缺乏日志记录。
+
+#主要错误日志
+- `pr_err("%s: urma_send ack failed, ret is %d, skip sending ack msg\n", __func__, ret);`
+- `pr_warn("%s: lock busy, skip polling jfc, die index is %d\n", __func__, die_index);`
+- `pr_warn("%s: lock busy, skip sending msg to %s, msg type is %d\n", __func__, ...);`
+- `pr_err("%s: tjetty is NULL, unable to send msg to %s, msg type is %d\n", __func__, ...);`
+- `pr_err("urma_send: msg format invalid, dst eid is %s\n", dst_eid);`
+- `pr_err("%s: get unknown msg type, msg from %s\n", __func__, ...);`
+- `pr_warn("Failed to send %s ack message to client (cna:%u, eid:%s)\n", ...);`
+- `pr_info("send %s ack message to client (cna:%u, eid:%s) success\n", ...);`
+
+#问题根因
+1. **ACK 检测逻辑错误**：在 URMA 通信中，使用 `ret <= 0` 判断 ACK 发送是否成功，但在重试循环中 `ret` 仅为最后一次发送的返回值，未累计成功次数，导致判断逻辑失效。
+2. **错误码处理缺失**：在 ACK 重试循环中未处理 `-ENODEV` 返回值，且在互斥锁竞争时返回 0 而非 `-EBUSY`，掩盖了设备缺失或资源繁忙的错误状态。
+3. **返回值语义错误**：`urma_send_to_given_node` 函数在 EID 不匹配时返回 0，且正常发送成功时返回的是计数器值而非标准的成功/错误码，混淆了调用者对执行结果的判断。
+4. **日志可观测性不足**：多处关键错误分支（如 EID 无效、线程创建失败、消息类型未知）缺少日志打印，且部分日志缺少关键参数（如 msg type、dst eid），导致故障定位困难。
+
+#解决方案
+1. **修复 ACK 成功判定**：引入 `urma_ack_success_num` 计数器，仅当返回值为 `URMA_ACK_SUCCESS` 时累加，最终依据计数器值判断 ACK 是否成功；同时定义 `URMA_ACK_SUCCESS` 宏为 1 统一返回值语义。
+2. **完善错误码返回**：在锁竞争时返回 `-EBUSY`，在 EID 不匹配时返回 `-EINVAL`；修正 `urma_send_to_given_node` 返回值为标准错误码或 `URMA_ACK_SUCCESS`。
+3. **增强错误处理分支**：在 ACK 重试循环中增加对 `-ENODEV` 的判断，若设备不存在则跳出循环并记录错误日志。
+4. **补充关键日志**：在 `send_msg_to_userspace_and_ack`、`process_remote_event_msg`、`update_remote_recv_cnt` 等函数的关键路径增加包含函数名、EID、消息类型等上下文信息的日志打印，提升可观测性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31ebcd8c8b7f37a1a63b0014e3ac17f4e1a73d87

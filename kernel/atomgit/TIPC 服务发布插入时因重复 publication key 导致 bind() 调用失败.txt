@@ -1,0 +1,29 @@
+#标题
+TIPC 服务发布插入时因重复 publication key 导致 bind() 调用失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+应用程序在调用 TIPC API 的 bind() 函数将类型/实例绑定到套接字时，内核拒绝插入命名表项，导致 bind() 系统调用失败，返回错误码 EINVAL ("Invalid argument")。
+
+具体复现场景如下：
+1. Socket 1（端口 ID 为 20062001）首次绑定 Type 1000, Instance 1，生成 key1=20062002 并成功插入。
+2. Socket 1 再次绑定相同的 Type 1000, Instance 1，生成 key2=20062003 并成功插入。
+3. Socket 2（端口 ID 为 20062002）尝试绑定 Type 1000, Instance 1，计算公式生成 key3=20062003。
+4. 由于 key3 与已存在的 key2 数值相同，内核误判为重复项，导致 Socket 2 的 bind() 操作失败。
+
+#主要错误日志
+未知
+（注：代码中仅包含 `pr_debug` 调试信息，无常规错误日志输出。调试日志原文如下：
+`pr_debug("Failed to bind duplicate %u,%u,%u/%u:%u/%u/%u\n", ...)`
+）
+
+#问题根因
+TIPC 使用公式 `key = socket portid + number of bindings + 1` 来计算 publication 的唯一标识 key。虽然 socket portid 是随机的，但 "number of bindings" 的线性递增特性导致 key 的唯一性无法保证。当不同 Socket 的 portid 差值恰好等于其绑定次数的差值时，会产生相同的 key。在 `tipc_service_insert_publ` 函数中，检查重复 key 的逻辑仅比较了 key 值和 node 节点，未检查 port ID (`sk.ref`)，导致不同 Socket 生成的相同 key 被误判为重复条目而被拒绝插入。
+
+#解决方案
+修改 `net/tipc/name_table.c` 中的 `tipc_service_insert_publ` 和 `tipc_service_remove_publ` 函数。在判断 publication 是否已存在的逻辑中，增加对 port ID (`sk.ref`) 的校验。确保只有当 key、port ID 和 node 均相同时，才判定为重复条目，从而保证 key 在同一 port ID 和 node 范围内的唯一性，避免误判。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/602f20db6de1cfebda9623fee4ea06aa826b5c7a

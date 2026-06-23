@@ -1,0 +1,20 @@
+#标题
+PCI: brcmstb: Fix missing of_node_put() in brcm_pcie_probe()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Broadcom STB PCIe 控制器驱动 probing 过程中，若启用了 MSI 支持，会导致设备树节点引用计数泄漏（object reference leak）。具体表现为内核每次执行 `brcm_pcie_probe` 成功时，对应的 device node 引用计数未被正确释放，可能导致内存资源无法回收。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `brcm_pcie_probe` 函数中调用 `of_parse_phandle()` 获取 `msi-parent` 对应的设备树节点，该函数会增加节点的引用计数（refcount）。然而，原有代码在节点使用完毕后未调用 `of_node_put()` 来减少引用计数，导致节点引用计数泄漏。
+
+#解决方案
+在 `brcm_pcie_probe` 函数中，针对 MSI 初始化逻辑进行重构。在调用 `of_parse_phandle()` 获取节点并在判断 `msi_np == pcie->np` 或执行相关操作后，必须显式调用 `of_node_put(msi_np)` 以释放节点引用，防止引用计数泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4a192080e29a5ab1f4abba0e58dea61638cd8645

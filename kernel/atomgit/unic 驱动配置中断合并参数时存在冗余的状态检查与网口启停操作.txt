@@ -1,0 +1,24 @@
+#标题
+unic 驱动配置中断合并参数时存在冗余的状态检查与网口启停操作
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 ethtool 配置网卡中断合并参数时，驱动层可能会错误地返回 -EBUSY，导致配置失败；或者在配置过程中执行了不必要的网卡关闭与重启动作，增加了配置流程的复杂性与潜在风险。
+
+#主要错误日志
+- "failed to set coalesce, due to dev deacitve.\n"（推断场景：之前代码在设备处于 deactivate 状态时报错）
+- "failed to set net open, ret = %d.\n"（推断场景：之前代码在尝试恢复网口开启时报错）
+
+#问题根因
+在 `unic_set_coalesce` 函数中，代码逻辑存在冗余：
+1. 增加了不必要的 `UNIC_STATE_DEACTIVATE` 状态检查，拦截了本应允许的配置操作；
+2. 在修改参数流程中，调用 `unic_net_stop_no_link_change` 和 `unic_net_open_no_link_change` 对网口进行了不必要的启停操作。
+实际上，配置参数时仅需关闭协议栈与链路的配合（deactivate 流程处理），现有的状态检查与网口启停逻辑经分析是多余的。
+
+#解决方案
+移除 `unic_set_coalesce` 函数中对 `UNIC_STATE_DEACTIVATE` 标志位的检查，同时删除 `unic_net_stop_no_link_change` 与 `unic_net_open_no_link_change` 的调用，简化配置流程，确保参数配置可以在无需额外网口启停干扰的情况下正确执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/300514e725420aa5309724a6f8e5f43845602ac3

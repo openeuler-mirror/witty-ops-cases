@@ -1,0 +1,22 @@
+#标题
+RDMA/bnxt_re: 变量 WQE 模式下 MSN 表大小错误导致重传路径越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 Variable WQE（可变 WQE）模式的 Genp7 适配器上，创建 QP 时若启用了 Variable WQE 模式，MSN（Message Sequence Number）表的大小被错误地设置为 SQ 深度的大小。这会导致在重传路径上发生回绕问题，可能引发内存越界访问或数据损坏，进而影响 RDMA 连接的稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bnxt_qplib_create_qp` 函数中，计算 MSN 表大小（`aux_depth`）时，代码未对 WQE 模式进行区分。原逻辑统一使用 SQ 深度作为 MSN 表大小，但实际上在 Variable WQE 模式下，MSN 表的大小应为 SQ 深度的一半。由于表大小设置过大（相对于实际需要的索引范围），导致了重传路径上的回绕问题。
+
+#解决方案
+修改 `drivers/infiniband/hw/bnxt_re/qplib_fp.c` 文件中的 `bnxt_qplib_create_qp` 函数。在设置 MSN 表深度时增加模式判断：
+- 若 `qp->wqe_mode` 为 `BNXT_QPLIB_WQE_MODE_STATIC`（静态模式），MSN 表大小保持为 SQ 深度。
+- 若为其他模式（Variable WQE），MSN 表大小设置为 SQ 深度的一半（除以 2）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca5374bfec6ffc8e62a64dfff0280941bdb3a277

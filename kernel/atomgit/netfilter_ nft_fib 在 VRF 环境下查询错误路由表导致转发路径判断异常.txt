@@ -1,0 +1,23 @@
+#标题
+netfilter: nft_fib 在 VRF 环境下查询错误路由表导致转发路径判断异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了 VRF（Virtual Routing and Forwarding）的设备上使用 nftables fib 表达式进行路由查找时，如果未配置严格匹配条件（如未使用 iif 关键字），内核会错误地查询主路由表而非 VRF 对应的路由表。这导致 fib 模块返回错误的查询结果，进而影响后续的策略路由或转发决策，造成网络流量转发路径异常或不通。
+
+#主要错误日志
+未知
+
+#问题根因
+在 nft_fib_ipv4 和 nft_fib_ipv6 的实现中，`flowi4_l3mdev` 和 `flowi6_l3mdev` 字段（用于指定 L3 主设备索引以关联 VRF 路由域）的赋值被错误地限制在 `NFTA_FIB_F_IIF` 标志存在的条件分支内。这导致在非严格匹配模式下，查找结构体未初始化 l3mdev 字段，内核默认搜索主路由表，从而返回了非预期的路由信息。
+
+#解决方案
+将 `flowi4_l3mdev` 和 `flowi6_l3mdev` 字段的初始化逻辑从条件分支中移出，改为无条件初始化。具体修改包括：
+1. 在 IPv4 的 `nft_fib4_eval` 函数中，将 `flowi4_l3mdev` 的赋值移至结构体初始化列表中，直接使用 `l3mdev_master_ifindex_rcu(nft_in(pkt))` 获取入口设备的 VRF 主索引。
+2. 在 IPv6 的相关函数中，同样确保 `flowi6_l3mdev` 字段在查找前被无条件设置。
+此举确保了无论是否配置了严格匹配标志，路由查找均能定位到正确的 VRF 路由表。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5c0fcd36a08e65de22d5c0180dd5c45fb548fb64

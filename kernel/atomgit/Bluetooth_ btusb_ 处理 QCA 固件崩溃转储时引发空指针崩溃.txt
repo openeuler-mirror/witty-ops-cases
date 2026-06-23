@@ -1,0 +1,25 @@
+#标题
+Bluetooth: btusb: 处理 QCA 固件崩溃转储时引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 WCN7851 (设备 ID 0489:e0f3) 蓝牙设备上处理 QCA 固件崩溃转储（coredump）时，内核发生空指针引用，导致崩溃。具体触发场景为 `hci_devcd_rx` 工作队列处理 ACL 数据包时。
+
+#主要错误日志
+[ 93.672166] Bluetooth: hci0: ACL memdump size(589824)
+[ 93.672475] BUG: kernel NULL pointer dereference, address: 0000000000000008
+[ 93.672517] Workqueue: hci0 hci_devcd_rx [bluetooth]
+[ 93.672598] RIP: 0010:skb_dequeue+0x50/0x80
+
+#问题根因
+`handle_dump_pkt_qca()` 函数返回值逻辑错误。当成功处理转储包时，该函数错误地返回了 `hci_devcd_init()` 的返回值（成功时为 0）。调用者（`btusb_recv_acl_qca` 或 `btusb_recv_evt_qca`）将返回值 0 误判为“未处理该包”，进而将 skb 继续传递给 `hci_recv_frame()`，导致该 skb 被提前释放。随后，`hci_devcd_rx()` 尝试从转储队列中出队同一个已被释放的 skb，从而引发空指针引用。
+
+#解决方案
+1. 修正 `handle_dump_pkt_qca()` 的返回值约定，使其遵循内核惯例：成功返回 0，失败返回负错误码。
+2. 将转储包的检测逻辑分离为独立的 `acl_pkt_is_dump_qca()` 和 `evt_pkt_is_dump_qca()` 函数，提升代码可读性。
+3. 在 `btusb_recv_acl_qca()` 和 `btusb_recv_evt_qca()` 中，先调用检测函数确认是转储包后，再调用处理函数。若处理成功（返回 0），则直接返回，避免数据包被重复处理或提前释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/751d4532290b3666543e9ce9c036efc0a986e0f7

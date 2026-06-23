@@ -1,0 +1,21 @@
+#标题
+bnxt_en: XDP多缓冲程序 attached 时修改 MTU 导致接收环参数设置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当网卡加载了支持多缓冲（multi-buffer）的 XDP 程序时，若修改 MTU，会导致接收环（receive ring）参数设置错误，可能引发网络数据包处理异常或丢包。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bnxt_change_mtu` 流程中，MTU 的变更可能影响聚合环（AGG ring）的设置需求。如果加载的 XDP 程序支持多缓冲（xdp_has_frags），网卡需要启用聚合环。由于之前在设置 `page_mode` 时直接去除了 `BNXT_FLAG_AGG_RINGS` 标志位，且 MTU 变更时未重新校验并应用 XDP 相关的接收模式配置，导致聚合环设置与 XDP 程序需求不匹配。
+
+#解决方案
+1. 修改 `bnxt_set_rx_skb_mode` 函数逻辑，在设置 `page_mode` 时，同时清除 `BNXT_FLAG_NO_AGG_RINGS` 标志，允许后续逻辑根据实际需求重新启用聚合环。
+2. 在 `bnxt_change_mtu` 函数中，增加对 XDP 程序是否存在的判断，若存在则重新调用 `bnxt_set_rx_skb_mode` 更新接收环参数和 `rx_skb_func`，确保 XDP 多缓冲场景下的配置正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/50e985c0c5d781dc502818a3eecb0724968ff995

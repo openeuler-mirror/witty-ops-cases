@@ -1,0 +1,20 @@
+#标题
+enetc驱动xdp_tx统计数据统计错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用enetc网卡驱动进行XDP_TX操作时，驱动的`xdp_tx`统计计数器数值异常偏大。该统计项本意是记录发送的XDP帧数量，但实际运行中统计值远大于实际发送帧数，导致用户通过`ethtool`或类似工具查看网络统计信息时，XDP发送计数值不符合预期，造成监控数据失真。
+
+#主要错误日志
+未知
+
+#问题根因
+在`enetc_clean_rx_ring_xdp`函数中，当XDP_TX enqueue成功时，代码错误地使用`xdp_tx_bd_cnt`（发送缓冲区描述符BD的数量）来增加`tx_ring->stats.xdp_tx`计数器。根据设计意图，`xdp_tx`应当用于统计发送的XDP帧数量，而不是底层BD的数量。一个帧可能对应多个BD，因此导致统计数据被错误放大。
+
+#解决方案
+修改`drivers/net/ethernet/freescale/enetc/enetc.c`文件中的统计逻辑，将`tx_ring->stats.xdp_tx`的增加量从`xdp_tx_bd_cnt`修正为固定值`1`，以确保每次成功发送XDP帧时仅增加1次计数，准确反映帧发送数量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4a635bd516acdaa928f5cffb5b67db5ad0273765

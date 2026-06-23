@@ -1,0 +1,28 @@
+#标题
+ocfs2: 非一致性Freefrag扫描触发位图越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+构造特殊的OCFS2文件系统镜像，在调用 `OCFS2_IOC_INFO` 接口并设置 `OCFS2_INFO_FL_NON_COHERENT` 标志位进行 freefrag 扫描时，触发 KASAN 检测到的越界读取或释放后使用错误，导致内核崩溃或内存破坏。
+
+#主要错误日志
+```
+BUG: KASAN: use-after-free in ocfs2_info_freefrag_scan_chain fs/ocfs2/ioctl.c:495 [inline]
+BUG: KASAN: use-after-free in ocfs2_info_freefrag_scan_bitmap fs/ocfs2/ioctl.c:588 [inline]
+Read of size 8 at addr ffff888031bce000 by task syz.0.636/1435
+```
+
+#问题根因
+在进行非一致性（non-coherent）freefrag 扫描时，`ocfs2_info_freefrag_scan_chain()` 函数直接使用磁盘上的 `bg_bits` 字段作为位图扫描的边界限制。
+一致性路径通过 `ocfs2_read_group_descriptor()` 读取组描述符，该函数会校验 `bg_bits` 的有效性；而非一致性路径使用 `ocfs2_read_blocks_sync()` 直接读取原始数据块并跳过了校验。因此，恶意构造的文件系统可以提供非法的超大 `bg_bits` 值，导致位图遍历越界，访问到缓冲区之外的内存区域。
+
+#解决方案
+在 `ocfs2_info_freefrag_scan_chain()` 函数中增加对 `bg_bits` 的校验与限制：
+1. 根据文件系统格式通过 `ocfs2_group_bitmap_size()` 计算位图的实际最大容量 `max_bitmap_bits`。
+2. 比较磁盘读取的 `bg_bits` 与计算出的 `max_bitmap_bits`。
+3. 若 `bg_bits` 超出限制，打印错误日志并将扫描边界 `max_bits` 钳位到 `max_bitmap_bits`，防止越界访问，同时允许 freefrag 报告流程继续执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2a5b8738d928a645b8d8d1be581bc1e39ebe8bd2

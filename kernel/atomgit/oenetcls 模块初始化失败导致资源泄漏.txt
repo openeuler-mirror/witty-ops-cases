@@ -1,0 +1,22 @@
+#标题
+oenetcls 模块初始化失败导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在初始化 oenetcls 模块时，若 ntuple 或 flow 模式的资源初始化步骤（如工作队列创建、流表初始化）失败，模块未正确释放已分配的资源，导致内存泄漏。
+
+#主要错误日志
+oecls_debug("alloc_ordered_workqueue fails\n");
+
+#问题根因
+`oecls_init` 函数在调用 `oecls_ntuple_res_init` 或 `oecls_flow_res_init` 时，忽略了其返回值，未进行错误处理。同时，这两个初始化函数内部在遇到失败分支时直接返回，未回滚之前已成功分配的资源（如已创建的工作队列或已初始化的流表），导致资源泄漏。
+
+#解决方案
+1. 将 `oecls_ntuple_res_init` 和 `oecls_flow_res_init` 的返回类型从 void 修改为 int，使其能够向上层返回错误码。
+2. 在初始化函数内部增加错误处理逻辑：若后续步骤失败，则调用对应的清理函数释放之前已分配的资源。
+3. 在 `oecls_init` 主函数中检查初始化函数的返回值，若返回错误则跳转至错误处理标签 `clean_rxq` 进行资源回滚。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/15ef092d637bc84e09ba0e10ae915c6a0829340a

@@ -1,0 +1,27 @@
+#标题
+vidtv: 修复 vidtv_mux_stop_thread 中的空指针引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 vidtv 驱动中，若 `vidtv_mux_init` 初始化失败，`dvb->mux` 指针为空。此时若调用 `vidtv_mux_stop_thread` 停止线程，将触发内核空指针引用，导致内核崩溃。
+
+#主要错误日志
+```
+KASAN: null-ptr-deref in range [0x0000000000000128-0x000000000000012f]
+RIP: 0010:vidtv_mux_stop_thread+0x26/0x80 drivers/media/test-drivers/vidtv/vidtv_mux.c:471
+```
+```
+[推断] dev_warn_ratelimited(dev, "No streaming. Skipping.\n");
+```
+
+#问题根因
+在 `vidtv_start_streaming` 函数中，代码将 `dvb->streaming` 设置为 `true` 的时机过早，位于 `vidtv_mux_init` 调用之前。当 `vidtv_mux_init` 初始化失败（返回 NULL）导致函数提前返回错误时，`dvb->streaming` 状态仍被标记为 `true`。随后在停止流传输的过程中，代码直接调用 `vidtv_mux_stop_thread(dvb->mux)`，此时 `dvb->mux` 为 NULL，从而触发了空指针引用错误。
+
+#解决方案
+1. 调整初始化顺序：将 `dvb->streaming = true` 的赋值操作移动到 `vidtv_mux_init` 成功执行之后，确保只有在 mux 资源初始化成功后才标记流传输状态。
+2. 增加防御性检查：在 `vidtv_stop_streaming` 函数入口处增加对 `dvb->streaming` 状态的检查，若未处于流传输状态则直接返回，避免执行后续可能导致崩溃的操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01e061f872ea401872e28f708e53de98c1734a51

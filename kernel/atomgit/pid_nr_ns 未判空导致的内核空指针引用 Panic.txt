@@ -1,0 +1,30 @@
+#标题
+pid_nr_ns 未判空导致的内核空指针引用 Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在调用 `__task_pid_nr_ns` 函数时，若 `task_active_pid_ns` 返回 NULL，进一步调用 `pid_nr_ns` 会触发空指针引用，导致内核 Panic。系统输出 "Unable to handle kernel NULL pointer dereference" 并崩溃，常见于进程退出或中断处理上下文中。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address 0000000000000058
+Mem abort info:
+ESR = 0x0000000096000007
+EC = 0x25: DABT (current EL), IL = 32 bits
+FSC = 0x07: level 3 translation fault
+pc : __task_pid_nr_ns+0x74/0xd0
+lr : __task_pid_nr_ns+0x24/0xd0
+Call trace:
+ __task_pid_nr_ns+0x74/0xd0
+ ...
+Kernel panic - not syncing: Oops: Fatal exception in interrupt
+
+#问题根因
+在函数 `pid_nr_ns` 中，代码逻辑仅检查了 `pid` 是否为空，但未对传入的参数 `ns` 进行有效性校验。当调用者（如 `__task_pid_nr_ns`）通过 `task_active_pid_ns(current)` 获取命名空间时，该函数可能返回 NULL。随后在条件判断 `ns->level <= pid->level` 中直接访问 `ns->level`，触发了空指针解引用。
+
+#解决方案
+在 `kernel/pid.c` 文件的 `pid_nr_ns` 函数中，增加对 `ns` 指针的判断。将原判断条件 `if (pid && ns->level <= pid->level)` 修改为 `if (pid && ns && ns->level <= pid->level)`，确保在访问 `ns` 成员前其值非空，从而避免空指针引用导致的内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c33889de7d4d176f540376a383fe94081c58f82f

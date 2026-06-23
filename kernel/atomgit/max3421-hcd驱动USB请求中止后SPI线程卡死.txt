@@ -1,0 +1,22 @@
+#标题
+max3421-hcd驱动USB请求中止后SPI线程卡死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当通过max3421-hcd驱动中止当前的USB请求（URB）时，SPI线程停止响应，无法处理后续的任何USB请求，导致相关USB设备通信瘫痪。
+
+#主要错误日志
+未知
+
+#问题根因
+在处理URB中止（unlink）逻辑时，如果被中止的URB恰好是当前正在处理的URB（`curr_urb`），代码逻辑错误地直接将该URB从端点移除并返还给USB核心层，但未将`curr_urb`指针置为NULL。这导致后续逻辑判断认为仍有URB正在处理中，从而不再从队列中取出新的请求，造成SPI线程不再响应任何请求。
+
+#解决方案
+在`max3421_check_unlink`函数中增加判断逻辑：
+1. 若被中止的URB是当前正在处理的URB（`curr_urb`），则设置`urb_done`标志为1，触发URB的正确处理流程；同时清除`MAX3421_HI_HXFRDN_BIT`和`MAX3421_HI_RCVDAV_BIT`中断位，防止产生不应出现的中断。
+2. 若被中止的URB不是当前URB，则保持原有逻辑，直接移除并返还URB。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/43bbca71d37c1a8aa3674cbf9d2dc39ad2610caf

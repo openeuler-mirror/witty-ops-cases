@@ -1,0 +1,38 @@
+#标题
+net: mscc: ocelot: 延时工作队列释放后使用导致 UAF 及内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 ocelot-switch 设备驱动模块时，触发内核 WARNING 并打印调用栈。如果设备初始化失败或资源销毁时，存在延时工作队列项在销毁后仍被调度入队的情况，构成释放后使用（UAF）漏洞。
+
+#主要错误日志
+workqueue: cannot queue ocelot_check_stats_work on wq ocelot-switch-stats
+WARNING: CPU: 2 PID: 0 at kernel/workqueue.c:2255 __queue_work+0x875/0xaf0
+...
+RIP: 0010:__queue_work+0x875/0xaf0
+...
+Call Trace:
+ <IRQ>
+ ? kasan_report+0xc6/0xf0
+ ? __pfx_delayed_work_timer_fn+0x10/0x10
+ call_timer_fn+0x25/0x1c0
+ __run_timer_base.part.0+0x3be/0x8c0
+ ...
+ irq_exit_rcu+0xaf/0xe0
+ sysvec_apic_timer_interrupt+0x70/0x80
+ </IRQ>
+
+#问题根因
+在 `ocelot_stats_deinit()` 函数中，原代码使用 `cancel_delayed_work()` 来取消循环延时工作项 `ocelot->stats_work`。
+1. `cancel_delayed_work()` 无法取消正在执行的工作项。
+2. 虽然 `destroy_workqueue()` 会等待工作队列中待处理的工作项完成，但它无法阻止延时工作项在 `ocelot_check_stats_work()` 函数内部被重新调度。这是因为延时工作项只有在定时器到期后才会入队，在定时器到期前，`destroy_workqueue()` 无法感知该待处理工作项。
+3. 当工作队列看似为空被销毁后，定时器到期，延时工作项尝试再次入队，导致访问已释放的工作队列内存（UAF）。
+
+#解决方案
+将 `ocelot_stats_deinit()` 函数中的 `cancel_delayed_work()` 替换为 `disable_delayed_work_sync()`。
+该函数能保证正确取消延时工作项，并确保任何当前正在执行的工作项完成，防止在工作队列销毁后再次被调度。该修复已确认不会引起死锁，因为调用上下文未持有工作项所需的锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0ffc63534f4aab07f8fd41bebe9221ae7bd0c4d8

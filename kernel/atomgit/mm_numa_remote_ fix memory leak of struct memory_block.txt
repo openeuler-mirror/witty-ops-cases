@@ -1,0 +1,20 @@
+#标题
+mm/numa_remote: fix memory leak of struct memory_block
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在启用 CONFIG_NUMA_REMOTE 配置的情况下，调用 `check_memory_block_nid`、`check_memory_block_pre_online` 或 `set_memory_block_pre_online` 函数时，会导致 `struct memory_block` 结构体的引用计数无法归零，造成内核内存泄漏。随着时间推移，系统可用内存可能持续减少。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `check_memory_block_nid()`、`check_memory_block_pre_online()` 和 `set_memory_block_pre_online()` 内部调用了 `find_memory_block_by_id()` 获取 memory_block 对象，该函数会增加设备对象的引用计数。然而，上述三个函数在使用完毕后遗漏了调用 `put_device()` 来释放引用。这导致 `struct memory_block` 的引用计数永远不会降至零，从而引发内存泄漏。
+
+#解决方案
+在相关函数逻辑中补充缺失的 `put_device()` 调用以正确释放引用计数。同时，重构代码提取公共逻辑至新的辅助函数 `check_memory_block_state`，并在该辅助函数及 `set_memory_block_pre_online` 中统一添加 `put_device(&mem->dev)` 调用，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3de70904b30adf7e96d517460d9d3b3594b1dfda

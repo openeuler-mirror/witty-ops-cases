@@ -1,0 +1,21 @@
+#标题
+xilinx_dma 驱动因未初始化 addr_width 导致 probe 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当设备树中缺少可选属性 "xlnx,addrwidth" 时，驱动中的 addr_width 变量保持未初始化状态（包含垃圾值）。这会导致错误的 DMA 掩码配置，进而引发驱动 probe（探测）失败，设备无法正常工作。
+
+#主要错误日志
+- dev_warn(xdev->dev, "missing xlnx,addrwidth property, using default value %d\n", XILINX_DMA_DFAULT_ADDRWIDTH);
+（注：修复前日志仅为 "missing xlnx,addrwidth property\n"，修复后增加了默认值提示；probe 失败通常伴随内核日志中的设备初始化错误信息）
+
+#问题根因
+在驱动 probe 过程中，变量 `addr_width` 声明时未进行初始化。当设备树节点缺少可选属性 "xlnx,addrwidth" 时，`of_property_read_u32` 读取失败，代码仅打印警告但未给 `addr_width` 赋值。此时 `addr_width` 包含随机垃圾值，导致后续 DMA 掩码配置逻辑判断错误，最终致使 probe 失败。
+
+#解决方案
+在变量声明处将 `addr_width` 初始化为默认宏定义 `XILINX_DMA_DFAULT_ADDRWIDTH`（即 32 位地址宽度）。同时，优化警告日志，明确提示当属性缺失时使用了何种默认值，确保代码逻辑健壮性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5e4f14dc5982b6a55ce3818c1776483c11536b17

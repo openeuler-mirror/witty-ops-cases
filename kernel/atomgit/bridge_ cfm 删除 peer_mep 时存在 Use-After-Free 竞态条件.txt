@@ -1,0 +1,24 @@
+#标题
+bridge: cfm 删除 peer_mep 时存在 Use-After-Free 竞态条件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除 CFM（Connectivity Fault Management）的 peer MEP（Maintenance association End Point）时，存在竞态条件风险。若此时 `br_cfm_frame_rx()` 正在软中断上下文中运行，它可能在延迟工作队列 `ccm_rx_dwork` 被取消后、内存被释放前重新调度该工作。这将导致工作队列回调函数在已释放的 `peer_mep` 结构体上运行，引发内核 Use-After-Free 故障或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 `mep_delete_implementation()` 和 `br_cfm_cc_peer_mep_remove()` 函数中删除 peer_mep 的逻辑存在时间窗口。
+原有的处理流程是先调用 `cancel_delayed_work_sync()` 取消延迟工作，然后从哈希表中删除节点并调用 `kfree_rcu()` 释放内存。
+然而，`br_cfm_frame_rx()` 运行在 RCU 读侧临界区（软中断上下文），它可以在 `cancel_delayed_work_sync()` 返回后、`kfree_rcu()` 执行前，通过 `ccm_rx_timer_start()` 成功调用 `queue_delayed_work()` 重新调度该工作项。
+因为此时 `peer_mep` 尚未从哈希表中移除（或刚移除但 RCU 保护期未过），且工作队列未被禁用，导致重新调度成功。随后的工作队列处理函数将在已经释放的内存上执行，造成 UAF。
+
+#解决方案
+将 peer MEP 删除路径中的 `cancel_delayed_work_sync()` 替换为 `disable_delayed_work_sync()`。
+`disable_delayed_work_sync()` 不仅会等待正在运行的工作完成，还会禁用该延迟工作项，使得后续来自 `br_cfm_frame_rx()` 的 `queue_delayed_work()` 调用被静默拒绝，从而消除了竞态窗口，防止在释放内存后工作项被重新调度。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c61e54857d5be59d1c0a318868011a1d9271e3f7

@@ -1,0 +1,23 @@
+#标题
+LoongArch KVM 虚拟机重启因 extioi 数据未清零导致挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+LoongArch 架构下的 KVM 虚拟机在执行重启操作时发生挂起，无法正常完成重启流程。
+
+#主要错误日志
+未知
+
+#问题根因
+虚拟机重启时，extioi（扩展 I/O 中断控制器）的数据结构未进行清零操作，导致其中残留了上次运行设置的中断位。这些残留的中断位干扰了虚拟机重启后的正常初始化流程，进而导致虚拟机挂起。
+
+#解决方案
+在 KVM 处理 VCPU 重置的逻辑中（`kvm_set_one_reg` 函数的 `KVM_REG_LOONGARCH_VCPU_RESET` 分支），增加对 extioi 设备的复位处理。
+具体修改：
+1. 新增 `kvm_loongarch_reset_extioi` 函数，该函数通过 `memset` 将 extioi 结构体中从 `nodetype` 开始到结构体末尾的数据清零。
+2. 在 VCPU 重置逻辑中，判断当前 VCPU ID 是否为 0，若是（即主 CPU），则调用 `kvm_loongarch_reset_extioi` 函数对 extioi 状态进行重置，确保重启时环境干净。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f51feae0adc4c1f6cfc24a72fad0453575f5485c

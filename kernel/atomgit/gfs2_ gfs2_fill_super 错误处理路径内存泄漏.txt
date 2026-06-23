@@ -1,0 +1,35 @@
+#标题
+gfs2: gfs2_fill_super 错误处理路径内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+GFS2 文件系统在挂载过程中，若从只读模式切换为读写模式失败（如 gfs2_freeze_lock_shared 或 gfs2_make_fs_rw 返回错误），会导致内核对象内存泄漏。
+具体表现为：
+1. 内核线程对象（thread_struct, task_struct 等）泄漏：当 gfs2_freeze_lock_shared 失败时，此前 init_threads 创建的 logd 和 quotad 线程未被销毁。
+2. Quota 位图缓冲区泄漏（8192 字节）：当 gfs2_make_fs_rw 失败或文件系统处于 withdraw 状态时，gfs2_quota_init 分配的内存未被释放。
+
+#主要错误日志
+unreferenced object 0xffff88801d7bca80 (size 4480):
+  copy_process+0x3a1/0x4670 kernel/fork.c:2422
+  kernel_clone+0xf3/0x6e0 kernel/fork.c:2779
+  kthread_create_on_node+0x100/0x150 kernel/kthread.c:478
+  init_threads+0xab/0x350 fs/gfs2/ops_fstype.c:611
+  gfs2_fill_super+0xe5c/0x1240 fs/gfs2/ops_fstype.c:1265
+
+unreferenced object 0xffff88812de7c000 (size 8192):
+  gfs2_quota_init+0xe5/0x820 fs/gfs2/quota.c:1409
+  gfs2_make_fs_rw+0x7a/0xe0 fs/gfs2/super.c:149
+  gfs2_fill_super+0xfbb/0x1240 fs/gfs2/ops_fstype.c:1275
+
+#问题根因
+1. 线程泄漏：在 gfs2_fill_super 函数中，当 gfs2_freeze_lock_shared() 调用失败时，代码跳转至 fail_per_node 标签。该标签处理路径中未调用 gfs2_destroy_threads()，导致已创建的内核线程未被销毁。
+2. Quota 内存泄漏：在 gfs2_make_fs_rw 函数中，当 quota 初始化成功但文件系统处于 withdrawing 或 withdrawn 状态时，缺少对 gfs2_quota_cleanup() 的调用，导致 quota bitmap 内存未释放。
+
+#解决方案
+1. 调整线程清理位置：将 gfs2_destroy_threads(sdp) 的调用从 gfs2_freeze_unlock 之后移动到 fail_per_node 标签处。确保所有错误路径（包括 gfs2_freeze_lock_shared 失败）均能执行线程销毁逻辑。
+2. 增加 Quota 清理逻辑：在 gfs2_make_fs_rw 中，若 gfs2_quota_init 成功但检测到文件系统正处于 withdrawing 或 withdrawn 状态，在返回错误前显式调用 gfs2_quota_cleanup(sdp) 释放内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/397efa0a40afac090ed45dbf477bb7a1870e1f41

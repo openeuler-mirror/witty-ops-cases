@@ -1,0 +1,26 @@
+#标题
+sunrpc: rpcb_register_inet/inet6 未校验内存分配导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `rpcb_register_inet4` 或 `rpcb_register_inet6` 函数时，若内存分配失败，会触发内核空指针引用，导致内核崩溃。系统日志显示 "BUG: unable to handle kernel NULL pointer dereference"，CR2 寄存器指向 0x0。该故障可通过 Syzkaller 工具复现。
+
+#主要错误日志
+BUG: unable to handle kernel NULL pointer dereference in rpcb_enc_getaddr
+RIP: strlen+0x0/0x20 lib/string.c:425
+Call Trace:
+__fortify_strlen include/linux/fortify-string.h:228 [inline]
+encode_rpcb_string+0x21/0x70 net/sunrpc/rpcb_clnt.c:889
+rpcb_enc_getaddr+0x50/0x70 net/sunrpc/rpcb_clnt.c:909
+...
+
+#问题根因
+函数 `rpcb_register_inet4` 和 `rpcb_register_inet6` 调用 `rpc_sockaddr2uaddr()` 分配内存并赋值给 `map->r_addr`，但未对返回值进行 NULL 校验。当内存分配失败返回 NULL 时，该 NULL 指针被传递给 `encode_rpcb_string()`，进而在执行 `strlen()` 时触发空指针解引用导致崩溃。
+
+#解决方案
+在 `rpcb_register_inet4` 和 `rpcb_register_inet6` 函数中，对 `rpc_sockaddr2uaddr()` 的返回值增加 NULL 判断。如果返回值为 NULL，则立即返回 `-ENOMEM`，防止 NULL 指针传递给下游编码函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a36640f073899a503095a821d5fd4795b7d050f8

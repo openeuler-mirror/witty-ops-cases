@@ -1,0 +1,21 @@
+#标题
+ALSA USB MIDI 驱动移除时因 timer 未正确停止导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当移除 USB MIDI 设备时，驱动在断开连接过程中未能彻底停止 error_timer，导致该定时器可能在相关数据结构释放后继续触发回调，引发内核崩溃（kernel panic）或释放后使用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `snd_usbmidi_disconnect` 函数中，代码使用 `del_timer_sync(&umidi->error_timer)` 来删除定时器。该函数仅从系统中移除定时器，但并未将其状态完全置为“关闭”。如果定时器此时正在运行或处于待处理状态，在某些竞争条件下，它可能被重新激活或其回调函数可能在 `snd_usbmidi_free` 释放 `umidi` 结构体后继续执行，从而导致访问已释放内存。
+
+#解决方案
+1. 将 `snd_usbmidi_disconnect` 中的 `del_timer_sync` 替换为 `timer_shutdown_sync`。`timer_shutdown_sync` 会确保定时器完全停止且无法再次被激活，防止在设备移除过程中发生释放后使用。
+2. 修正 `snd_usbmidi_free` 流程，确保在释放资源前正确调用断开连接逻辑，并简化 endpoint 指针的释放逻辑，直接调用 `kfree(ep->out)` 以避免潜在的对象销毁不一致问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f4b63465ef3bc33875f127f0fad753278ce0e31

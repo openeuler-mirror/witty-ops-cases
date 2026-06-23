@@ -1,0 +1,23 @@
+#标题
+bnxt_en: Fix memory corruption when FW resources change during ifdown
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在固件资源或能力发生变化（如固件重置场景）时，驱动程序重新初始化过程中发生内存破坏。具体表现为调用 `bnxt_set_dflt_rings()` 时，未正确考虑 `bp->num_tc` 的值（可能大于 1），导致 `bp->tx_ring[]` 数组分配过小，进而引发内存越界写入。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `bnxt_set_dflt_rings()` 在计算 TX 队列数量时，假定其总是在任何 TC（Traffic Class）创建之前被调用，因此未将 `bp->num_tc` 纳入计算，仅假设其值为 0 或 1。
+在固件资源变更场景下，驱动收到固件返回的标志位后会执行重新初始化流程，调用 `bnxt_cancel_reservations()`，进而触发 `bnxt_init_dflt_ring_mode()` 调用 `bnxt_set_dflt_rings()`。此时 `bp->num_tc` 可能大于 1，导致计算的 TX Ring 数量不正确，`bp->tx_ring[]` 尺寸过小，最终在 `bnxt_alloc_cp_rings()` 中引发内存破坏。
+
+#解决方案
+修改 TX Ring 数量的计算逻辑，确保在相关代码路径中根据 `bp->num_tc` 正确缩放 TX Ring 数量。
+1. 新增两个辅助函数 `bnxt_tx_nr_rings()` 和 `bnxt_tx_nr_rings_per_tc()`，用于正确计算总的 TX Ring 数量以及每个 TC 的 TX Ring 数量。
+2. 在 `bnxt_set_dflt_rings()` 和 `bnxt_trim_dflt_sh_rings()` 等相关位置调用这两个辅助函数，替代原有的简单赋值逻辑，修复内存破坏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cfc2ea22712c8e526a2c5fab36181c7f7b414c3f

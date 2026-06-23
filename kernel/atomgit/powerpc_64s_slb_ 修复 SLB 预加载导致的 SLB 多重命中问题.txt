@@ -1,0 +1,34 @@
+#标题
+powerpc/64s/slb: 修复 SLB 预加载导致的 SLB 多重命中问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Hash MMU 的 PowerPC 系统中，当进程在 CPU 间迁移并发生上下文切换时，若 prev 和 next 的 mm_struct 相同，内核会跳过 `switch_mmu_context()`。这导致硬件 SLB 与软件预加载缓存不一致。当内核后续尝试向硬件 SLB 中添加已存在于硬件但已从软件缓存中驱逐的条目时，会触发 SLB 多重命中错误，导致内核触发 WARNING 并打印调用栈。
+
+#主要错误日志
+```
+WARNING: CPU: 0 PID: 1810970 at arch/powerpc/mm/book3s64/slb.c:62 assert_slb_presence+0x2c/0x50
+Modules linked in:
+CPU: 0 UID: 0 PID: 1810970 Comm: dd Not tainted 6.16.0-rc3-dirty #12
+Hardware name: IBM pSeries (emulated by qemu) POWER8 (architected)
+NIP [c00000000015426c] assert_slb_presence+0x2c/0x50
+LR [c0000000001543b4] slb_insert_entry+0x124/0x390
+Call Trace:
+  0x7fffceb5ffff (unreliable)
+  preload_new_slb_context+0x100/0x1a0
+  start_thread+0x26c/0x420
+  load_elf_binary+0x1b04/0x1c40
+```
+
+#问题根因
+在 Hash MMU 系统中，软件 SLB 预加载缓存会定期驱逐旧条目。当进程在 CPU 间迁移时，如果新 CPU 上 prev 和 next 的 mm_struct 相同（如 swapper/kernel 线程），内核跳过 `switch_mmu_context()`，导致该 CPU 上的硬件 SLB 未被刷新以同步软件缓存的状态。
+具体流程为：进程在 CPU1 上运行时，某个 SLB 条目从软件缓存和硬件 SLB 中被驱逐；随后进程迁移回 CPU0，由于跳过了 MMU 上下文切换，CPU0 硬件 SLB 中仍保留着该旧条目；最后在 `start_thread` 阶段，`preload_new_slb_context()` 尝试重新加载该条目，导致硬件 SLB 中出现重复条目，引发 SLB 多重命中错误。
+
+#解决方案
+删除 `preload_new_slb_context` 和 `slb_setup_new_exec` 两个函数，移除冗余的 SLB 预加载逻辑。
+在 `exec` 早期阶段，硬件 SLB 已被清空，必要的条目已由 `switch_slb` 从软件预加载缓存重新加载。移除这两个函数避免了重复加载导致的硬件 SLB 与软件缓存不一致问题，同时经测试验证对进程切换性能和 SLB 故障数量无负面影响。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ddd2cfa3d3a1b010eb89b8341a4eca0b088a8c65

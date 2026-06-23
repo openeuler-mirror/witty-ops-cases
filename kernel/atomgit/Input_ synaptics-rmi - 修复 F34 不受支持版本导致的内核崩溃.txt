@@ -1,0 +1,23 @@
+#标题
+Input: synaptics-rmi - 修复 F34 不受支持版本导致的内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RMI 设备的 F34 功能探测失败时，Sysfs 固件更新接口仍然可用。此时若访问该接口，代码会检查 F34 容器指针是否存在，随后尝试使用挂载到子设备上的驱动数据。由于 F34 在探测失败前已过早赋值驱动数据，留下了悬空指针，导致访问时发生内核崩溃。
+
+#主要错误日志
+[推断] dmesg 中可能出现以下日志：
+rmi_firmware_update: No F34 present!
+rmi_firmware_update: No valid F34 present!
+
+#问题根因
+F34 驱动在 probe 过程中调用 `dev_set_drvdata()` 的时机过早。它在确认 probe 是否成功之前就已将函数数据挂载到子设备上。当 probe 最终失败时，Sysfs 接口虽然检查到了 F34 "container" 指针的存在，但访问到的却是无效的陈旧驱动数据指针，从而引发崩溃。
+
+#解决方案
+1. 推迟 `dev_set_drvdata()` 的调用时机，确保仅在 probe 确认成功后才设置驱动数据。
+2. 在 Sysfs 相关的读写回调函数（如 `rmi_driver_bootloader_id_show`、`rmi_firmware_update` 等）中增加对 `dev_get_drvdata()` 返回值的校验，若数据无效则返回 `-ENODEV`，防止访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/882df4b1d66b8501fa89e64b19be16100055152a

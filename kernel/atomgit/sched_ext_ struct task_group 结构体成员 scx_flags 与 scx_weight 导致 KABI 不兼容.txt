@@ -1,0 +1,20 @@
+#标题
+sched_ext: struct task_group 结构体成员 scx_flags 与 scx_weight 导致 KABI 不兼容
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_EXT_GROUP_SCHED 配置项的情况下，内核结构体 `task_group` 新增了 `scx_flags` 和 `scx_weight` 成员，导致结构体布局发生变化，破坏了内核应用程序二进制接口（KABI）的稳定性，可能引发内核模块加载失败、系统崩溃或不可预知的运行时错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在提交 86703c0f7ff5 ("sched_ext: Add cgroup support") 中，直接在 `struct task_group` 内部通过条件编译新增了 `u32 scx_flags` 和 `u32 scx_weight` 字段，未使用 KABI 预留机制，导致结构体大小或成员偏移量改变，破坏了 KABI 兼容性。
+
+#解决方案
+利用 KABI 预留机制修复结构体布局。将原本直接新增的 `scx_flags` 和 `scx_weight` 字段移除，改为使用 `struct task_group` 中预留的 `KABI_RESERVE(3)` 空间。通过 `KABI_USE2(3, u32 scx_flags, u32 scx_weight)` 宏在预留空间中定义这两个成员，从而在不改变结构体既有布局的前提下扩展功能，保证 KABI 兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/99580add1bfe66bd6c6bc587e538a6ed63d8c028

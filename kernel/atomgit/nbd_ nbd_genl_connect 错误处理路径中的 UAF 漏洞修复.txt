@@ -1,0 +1,20 @@
+#标题
+nbd: nbd_genl_connect 错误处理路径中的 UAF 漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `nbd_genl_connect` 函数配置 NBD 设备时，若在设置 `backend identifier` 过程中出现错误（如内存分配失败导致跳转至 `out` 标签），系统可能发生 Use-After-Free（UAF）漏洞，导致内核崩溃或内存被非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复前的代码逻辑中，`nbd_start_device()` 被过早调用。如果 `nbd_start_device()` 成功执行，但后续的 `nla_strdup` 分配 `backend identifier` 失败或其他相关检查未通过，代码会跳转至 `out` 标签进行错误处理退出。然而，此时设备已经被启动，而在错误退出路径中可能会释放相关资源（如 config），导致已启动的设备引用了被释放的内存，从而引发 UAF。
+
+#解决方案
+调整 `nbd_start_device()` 的调用位置，将其移动到 `backend identifier` 设置完成且相关检查通过之后、错误退出标签 `out` 之前。确保只有在所有配置参数设置成功后才启动设备，避免在配置失败回滚时因设备已启动而引用已释放的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d154a6d97d4a65e3e07767bd0cc92aeec2dc91d6

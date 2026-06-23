@@ -1,0 +1,21 @@
+#标题
+ksmbd 写入目录导致 __kernel_write_iter 触发内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当尝试通过 ksmbd 向一个目录写入数据时，内核触发 WARNING 警告，调用栈指向 `__kernel_write_iter` 函数。这表明 ksmbd 未能在 VFS 层写入操作前正确拦截针对目录的非法写入请求。
+
+#主要错误日志
+[ 2110.972290] ------------[ cut here ]------------
+[ 2110.972301] WARNING: CPU: 3 PID: 735 at fs/read_write.c:599 __kernel_write_iter+0x21b/0x280
+
+#问题根因
+ksmbd 在处理写入请求时，仅检查了文件的访问权限（`FILE_WRITE_DATA_LE` 和 `FILE_APPEND_DATA_LE`），但未检查目标对象是否为目录。`__kernel_write_iter` 函数不允许对目录进行写入操作，当 ksmbd 将目录文件指针传递给该函数时，触发了内核内部的 WARNING。
+
+#解决方案
+在 `ksmbd_vfs_write` 函数中增加对目标文件类型的检查。在检查写入权限的同时，使用 `S_ISDIR` 宏判断目标 inode 是否为目录，如果是目录则直接拒绝写入并返回 `-EACCES` 错误，从而在进入底层 VFS 写入流程前拦截非法操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1e88c1a40819875d764cd0232393a9ff06d21b4a

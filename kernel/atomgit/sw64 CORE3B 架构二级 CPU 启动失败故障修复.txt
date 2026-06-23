@@ -1,0 +1,22 @@
+#标题
+sw64 CORE3B 架构二级 CPU 启动失败故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Sunway CORE3B 架构上启动二级 CPU 时，系统出现启动错误。原因是 `secondary_cpu_start()` 函数中 `set_secondary_ready()` 与 `reset_cpu()` 之间的时间间隔过长，导致二级 CPU 在此期间提前进入内核，引发启动流程异常。
+
+#主要错误日志
+未知
+
+#问题根因
+CORE3B 与 CORE4 架构在二级 CPU 启动等待机制上存在差异：CORE3B 在 hmcode 中使用循环忙等待标志位，而 CORE4 使用 HALT 指令进行优化。原代码未区分架构差异，在 `secondary_cpu_start()` 中统一调用了 `reset_cpu()`。对于 CORE3B，由于 `set_secondary_ready()` 与 `reset_cpu()` 之间的时间间隔可能过长，导致二级 CPU 在等待期间已经进入内核，从而触发启动故障。
+
+#解决方案
+针对 CORE3B 架构调整 CPU 启动流程：
+1. 在 `secondary_cpu_start()` 函数中，通过 `#ifdef CONFIG_SUBARCH_C4` 条件编译，移除针对 CORE3B 的 `reset_cpu()` 调用，防止启动时序错误。
+2. 在 `__cpu_up()` 函数中，通过 `#ifdef CONFIG_SUBARCH_C3B` 条件编译，为 CORE3B 新增 `reset_cpu()` 调用，确保 CPU 从 offline 转换为 online 状态时的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a678cdc5a25765886b56eb6325241a9407f52b21

@@ -1,0 +1,20 @@
+#标题
+x86/tdx: SEAMCALL 失败引发 VMFailInvalid 时错误保存输出寄存器
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SEAMCALL 指令执行失败并返回 VMFailInvalid 状态时，内核代码未跳过保存输出寄存器的步骤。由于此时 TDX 模块（SEAM 软件）没有机会设置任何输出寄存器，导致内核保存了无效的寄存器值到输出结构体中，可能引发后续逻辑处理错误或状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在处理 SEAMCALL 调用时，代码逻辑未正确处理 VMFailInvalid 错误路径。当 SEAMCALL 失败且为 VMFailInvalid 时，SEAM 软件无法设置输出寄存器，但原有代码在设置错误返回值后未直接退出，而是继续执行保存输出寄存器的指令，导致将无效数据写入内存结构体。
+
+#解决方案
+修改 `tdxcall.S` 中的汇编逻辑，在检测到 SEAMCALL 发生 VMFailInvalid（carry flag 置位）时，直接跳转到退出标签 `.Lout`，跳过输出寄存器的保存过程；同时在此路径上将无用的输出指针从栈中弹出以恢复栈平衡。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1cabd3355f74c3fa4daedd9db9c9908eed30ebce

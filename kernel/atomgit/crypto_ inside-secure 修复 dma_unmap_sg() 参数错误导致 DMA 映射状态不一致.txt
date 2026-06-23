@@ -1,0 +1,20 @@
+#标题
+crypto: inside-secure 修复 dma_unmap_sg() 参数错误导致 DMA 映射状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Inside Secure 安全加密引擎驱动进行数据处理时，可能因 DMA 缓冲区解除映射（unmap）操作参数传递错误，导致内核 DMA 子系统映射状态不一致，可能引发内存泄漏、系统崩溃或后续加密操作异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在驱动代码 `safexcel_hash.c` 中，调用 `dma_unmap_sg()` 函数时错误地使用了 `sreq->nents`（即 `dma_map_sg` 的返回值）作为 nents 参数。根据 DMA API 规范，`dma_unmap_sg()` 应该使用与 `dma_map_sg()` 相同的 nents 值（即传入的原 scatterlist 条目数），而不是 map 函数返回的已映射条目数。这种参数不匹配违反了 DMA 映射对的调用约定。
+
+#解决方案
+修改 `safexcel_handle_req_result` 和 `safexcel_ahash_send_req` 函数中的 `dma_unmap_sg()` 调用，将原来传递的 `sreq->nents` 或 `req->nents` 替换为 `sg_nents_for_len(areq->src, areq->nbytes)`。这确保了解除映射时使用的是原始 scatterlist 的条目数，与映射时的参数保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9b64137861992eff21dd7d939630d2107fae4d58

@@ -1,0 +1,24 @@
+#标题
+wifi: mt76: mt7915 修复 CTS 保护机制支持不完整问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动在处理 `use_cts_prot` 支持时存在缺陷，导致无法正确调整行为以兼容老旧的 802.11g/n 设备。特别是在涉及隐藏 SSID 或管理传统客户端的场景下，CTS 保护帧未能按预期启用或禁用，影响无线网络的兼容性与稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+之前的实现仅通过寄存器位操作简单设置 RTS/CTS，未正确处理 HT 操作模式下的保护策略。修复前的代码路径缺少对 HT 保护模式（如 NONMEMBER、20MHZ、NONHT_MIXED）的处理逻辑，且未通过 MCU 固件接口正确下发保护参数（包括 RTS 阈值、HE RTS 阈值等），导致驱动无法根据 BSS 变更正确调整 CTS 保护行为。
+
+#解决方案
+1. 删除原有简陋的寄存器操作函数 `mt7915_mac_enable_rtscts`。
+2. 新增 `mt7915_mcu_set_protection` 函数，通过 MCU 固件命令 `BSS_INFO_UPDATE` 正确设置保护参数。
+3. 在新函数中完整处理 HT 操作模式的保护类型（PROT_NONMEMBER、PROT_20MHZ、PROT_NONHT_MIXED）以及 Non-GF 站点和 Legacy ERP 的标志位。
+4. 修正 RTS 阈值的获取与设置逻辑，优先复用当前配置，若无效则使用默认值 `MT7915_RTS_LEN_THRES` (0x92b)。
+5. 在 `mt7915_bss_info_changed` 回调中，将触发条件扩展为 `BSS_CHANGED_HT` 或 `BSS_CHANGED_ERP_CTS_PROT`，并调用新的 `mt7915_mcu_set_protection` 函数以确保兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/802fdae6d92d9b38361a8dcb109d6babf1dd4bc1

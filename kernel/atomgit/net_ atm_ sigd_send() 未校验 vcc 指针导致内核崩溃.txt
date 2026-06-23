@@ -1,0 +1,21 @@
+#标题
+net: atm: sigd_send() 未校验 vcc 指针导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+恶意或异常的 ATM signaling daemon 通过 `sendmsg` 向内核发送伪造的 `vcc` 指针（例如伪造地址 `0xdeadbeef`），内核在 `sigd_send()` 函数中直接解引用该非法指针，导致内核崩溃或内存破坏。
+
+#主要错误日志
+- pr_debug("invalid vcc pointer in msg\n")
+- pr_debug("invalid listen_vcc pointer in msg\n")
+
+#问题根因
+ATM 发送路径（`sendmsg` -> `vcc_sendmsg` -> `sigd_send`）直接读取来自用户空间的 `msg->vcc` 指针并使用，未进行任何有效性校验。虽然正常流程中内核会将 `vcc` 指针发给 daemon 且期望其原样返回，但恶意 daemon 可以篡改此指针为任意值，内核直接解引用导致崩溃。
+
+#解决方案
+引入 `find_get_vcc()` 函数对来自用户空间的 `vcc` 指针进行合法性校验。该函数通过遍历 `vcc_hash` 哈希表来确认指针是否指向一个已注册的 VCC，若找到则通过 `sock_hold()` 增加引用计数以防止并发释放，保证内存安全；若未找到则返回 NULL 并返回 `-EINVAL` 错误，拒绝处理非法请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/be3a7bd15ed9c89d1ffec63db52e434ae200bd65

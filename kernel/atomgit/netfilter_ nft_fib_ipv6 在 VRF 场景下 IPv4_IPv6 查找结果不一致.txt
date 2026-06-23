@@ -1,0 +1,34 @@
+#标题
+netfilter: nft_fib_ipv6 在 VRF 场景下 IPv4/IPv6 查找结果不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 nftables FIB 表达式配合 VRF（Virtual Routing and Forwarding）设备时，IPv4 与 IPv6 协议栈的行为表现不一致。
+具体现象：执行 `fib daddr . iif oif` 查找时，IPv4 会返回 VRF 设备接口名（如 tvrf），而 IPv6 却返回真实的底层入接口设备名（如 veth0）。这导致在第二轮查找（incoming device 变更为 VRF 设备）时，IPv6 无法像 IPv4 那样正确匹配到 VRF 设备，导致规则查找失败。
+测试用例报错示例：
+```
+get element inet t fibif6iif { tvrf . dead:1::99 . tvrf }
+FAIL: did not find tvrf . dead:1::99 . tvrf in fibif6iif
+```
+
+#主要错误日志
+未知
+
+#问题根因
+IPv6 的 FIB 查找逻辑（`nft_fib6_eval` 函数）在处理结果时，直接将路由查找到的设备（`rt->rt6i_idev->dev`，即真实设备）存储返回，未正确处理 VRF master 设备的场景。
+相比之下，IPv4 的实现会根据输入接口（iif）与路由设备的归属关系进行判断：若路由设备归属于输入接口（即输入接口为 VRF master），则返回输入接口（VRF 设备），否则才返回真实设备。IPv6 缺失了这一层逻辑判断，导致其总是返回真实设备而非 VRF 设备，违反了 nft 文档中关于 "iif: if fib lookup provides a route then check its output interface is identical to the packets input interface" 的定义。
+
+#解决方案
+修改 `net/ipv6/netfilter/nft_fib_ipv6.c` 中的 `nft_fib6_eval` 函数逻辑，使其行为与 IPv4 对齐。
+具体修改：
+引入变量 `found` 用于存储最终结果。
+1. 若未指定输入接口（oif 为空），结果为路由查找到的设备。
+2. 若指定了输入接口（oif），检查其与路由设备的关系：
+   - 若输入接口就是路由设备，或者输入接口是路由设备的 VRF master 设备，则结果存储为输入接口（即 VRF 设备）。
+   - 否则不存储结果（保持未找到状态）。
+最后将 `nft_fib_store_result` 的参数从固定的路由设备改为判断后的 `found` 变量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/24683d7ade616f6bcdec1c054432291ffc3060e4

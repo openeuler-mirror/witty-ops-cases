@@ -1,0 +1,23 @@
+#标题
+KVM: arm64: Realm 虚拟机错误暴露调试能力导致功能不支持
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 架构下运行 Realm guest（Realm 虚拟机）时，KVM 模块错误地向用户态暴露了 `KVM_CAP_SET_GUEST_DEBUG` 能力以及非零的硬件断点/观察点数量。由于 RMM v1.0 规范未提供 Host 对 Realm guest 执行调试操作的机制，这导致用户态工具（如调试器）误以为支持调试功能，但在实际尝试设置断点或调试时会发生功能异常或失败。
+
+#主要错误日志
+未知
+
+#问题根因
+RMM v1.0 规范未提供 Host 对 guest 执行调试操作的机制，但内核代码在处理 `kvm_vm_ioctl_check_extension` 时，未针对 Realm guest 进行特殊判断。原代码无条件返回调试能力支持，导致 Realm guest 错误地声明了其不支持的调试功能。
+
+#解决方案
+在 `kvm_vm_ioctl_check_extension` 函数中增加 `kvm_is_realm(kvm)` 判断逻辑：
+1. 对于 `KVM_CAP_SET_GUEST_DEBUG`，仅在非 Realm guest 时返回支持（r = 1），Realm guest 返回 0。
+2. 对于 `KVM_CAP_GUEST_DEBUG_HW_BPS`（硬件断点数量），若为 Realm guest 则返回 0，否则返回实际硬件断点数。
+3. 对于 `KVM_CAP_GUEST_DEBUG_HW_WPS`（硬件观察点数量），若为 Realm guest 则返回 0，否则返回实际硬件观察点数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c32d0a3f43f42f53a0e738683d49d70a54b8b97e

@@ -1,0 +1,29 @@
+#标题
+tracing: 修复 histogram 中全限定变量引用的打印格式错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 histogram（直方图）触发器中使用全限定变量引用（fully-qualified variable reference，语法为 `subsys.event.$var`）时，功能解析正常，但在打印 histogram 规格信息时显示格式错误。
+变量引用中的 `$` 符号被错误地放置在全限定名称的开头（显示为 `$subsys.event.var`），而不是正确的变量名前（应为 `subsys.event.$var`）。
+
+示例对比：
+- 修复前：`trigger info: ... wakeup_lat=common_timestamp.usecs-$sched.sched_wakeup.ts0 ...`
+- 修复后：`trigger info: ... wakeup_lat=common_timestamp.usecs-sched.sched_wakeup.$ts0 ...`
+
+#主要错误日志
+未知
+
+#问题根因
+内核代码在处理变量引用打印时，逻辑判断不严谨。
+1. 在 `hist_field_name` 函数中，构造全限定变量名字符串时，格式字符串固定为 `"%s.%s.%s"`，未针对变量引用类型将 `$` 前缀置于变量名部分。
+2. 在 `expr_field_str` 和 `hist_field_print` 函数中，只要检测到 `HIST_FIELD_FL_VAR_REF` 标志就会添加 `$` 前缀，未考虑到全限定变量引用（包含 `system` 字段）的情形，导致 `$` 被错误地添加到整个全限定名称的最前端，而不是变量名前。
+
+#解决方案
+修改 `kernel/trace/trace_events_hist.c` 文件中的相关打印逻辑：
+1. 在 `hist_field_name` 函数中，判断若字段为变量引用（`HIST_FIELD_FL_VAR_REF`），则使用格式 `"%s.%s.$%s"` 构造全限定名称，确保 `$` 位于变量名前。
+2. 在 `expr_field_str` 和 `hist_field_print` 函数中，增加对 `field->system` 是否为空的判断。仅当字段不是全限定引用（即 `system` 为空）时，才手动添加 `$` 前缀，避免在全限定名称前重复添加错误的符号。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5c6e7cdfe65606c63e49f37b0ef672ecf22c50f6

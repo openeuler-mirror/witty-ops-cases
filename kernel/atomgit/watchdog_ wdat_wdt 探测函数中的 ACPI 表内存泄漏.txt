@@ -1,0 +1,21 @@
+#标题
+watchdog: wdat_wdt 探测函数中的 ACPI 表内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 wdat_wdt 驱动过程中，若因硬件资源缺失、参数校验失败或内存分配失败等原因导致探测（probe）函数提前退出，此前已获取的 WDAT ACPI 表内存无法被释放，造成内核内存永久泄漏。随着设备反复尝试初始化或重载驱动，系统内存会逐渐减少。
+
+#主要错误日志
+- "Unsupported resource\n"
+- "I/O resource not found\n"
+
+#问题根因
+wdat_wdt_probe() 函数在初始化流程开始时调用 acpi_get_table() 获取了 WDAT ACPI 表指针，但在后续的错误处理分支中，直接使用了 return 返回错误码，未调用 acpi_put_table() 释放表引用。这导致在探测失败的场景下，ACPI 表的内存引用计数未减少，从而引发内存泄漏。
+
+#解决方案
+修改 wdat_wdt_probe() 函数的错误处理逻辑，将所有直接的 return 语句修改为设置错误码 ret 并跳转至统一的清理标签 out_put_table。在该标签处统一调用 acpi_put_table() 确保 ACPI 表资源被正确释放，最后返回错误码。同时，在探测成功的路径上，也需要显式调用 acpi_put_table() 释放表引用（通常获取表信息后已不再需要持有该表）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c7815c38f3402e421e57a43df2304f47dd82ec51

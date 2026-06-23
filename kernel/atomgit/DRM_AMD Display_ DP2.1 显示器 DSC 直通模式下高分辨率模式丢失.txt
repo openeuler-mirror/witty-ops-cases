@@ -1,0 +1,22 @@
+#标题
+DRM/AMD Display: DP2.1 显示器 DSC 直通模式下高分辨率模式丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Source --> DP2.1 MST hub --> DP1.4/2.1 monitor 的硬件拓扑下，当通过显示器菜单将链路从 DP1.4 切换到 DP2.1 时，高于 4k120 的显示模式（如 4k240）在模式验证过程中全部被截断丢失，无法启用 DSC 直通功能；切回 DP1.4 后，所有最高至 4k240 的模式均恢复正常可用。
+
+#主要错误日志
+未知
+
+#问题根因
+DP2.1 链路相比 DP1.4 链路拥有更大的 full_pbn 值。在 `kbps_from_pbn` 函数进行 PBN 到 kbps 的转换计算过程中，由于内部计算变量 `kbps` 定义为 `unsigned int`（32位无符号整型），无法承载 DP2.1 场景下的大数值运算，导致整型溢出，进而导致模式验证失败。
+
+#解决方案
+修改 `drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm_mst_types.c` 文件中的 `kbps_from_pbn` 函数：
+1. 将局部计算变量 `kbps` 的数据类型从 `unsigned int` 修改为 `uint64_t`（64位无符号整型），以容纳 DP2.1 大带宽下的计算中间值，防止溢出。
+2. 相应调整函数返回值类型及转换逻辑，确保计算过程数据类型匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f84d21161aed95541966631fb073cef98eb07cd

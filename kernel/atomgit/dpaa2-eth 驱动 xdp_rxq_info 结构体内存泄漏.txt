@@ -1,0 +1,25 @@
+#标题
+dpaa2-eth 驱动 xdp_rxq_info 结构体内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+dpaa2-eth 驱动在使用 XDP 功能时，若在注册 `xdp_rxq_info` 后的初始化流程中遇到错误退出，或者在驱动卸载（remove）时，未能正确释放已注册的 `xdp_rxq_info` 结构体，导致内核内存资源泄漏。
+
+#主要错误日志
+[    X.XXXXXX] dpaa2-eth dpni.X: xdp_rxq_info_reg_mem_model failed
+
+#问题根因
+驱动程序通过 `xdp_rxq_info_reg()` 注册了 `xdp_rxq_info` 结构体，但在两个关键路径中缺失了对应的注销操作 `xdp_rxq_info_unreg()`：
+1.  **初始化错误路径：** 在 `dpaa2_eth_bind_dpni` 函数中，若后续步骤（如 `dpni_get_qdid`）失败直接返回，未清理之前已注册的资源；在 `dpaa2_eth_setup_rx_flow` 中，若 `xdp_rxq_info_reg_mem_model` 失败，未注销已注册的 rxq。
+2.  **驱动移除路径：** 在 `dpaa2_eth_remove` 函数中，未调用注销接口释放资源。
+
+#解决方案
+1.  在 `dpaa2_eth_setup_rx_flow` 函数的错误处理路径中，增加 `xdp_rxq_info_unreg()` 调用。
+2.  新增 `dpaa2_eth_free_rx_xdp_rxq` 辅助函数，用于统一遍历并注销所有已注册的 `xdp_rxq_info`。
+3.  在 `dpaa2_eth_bind_dpni` 函数的错误处理路径（标签 `out`）中，增加循环注销逻辑。
+4.  在 `dpaa2_eth_probe` 的错误处理路径和 `dpaa2_eth_remove` 中，显式调用 `dpaa2_eth_free_rx_xdp_rxq` 确保资源释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9b95e1996e9cf0ffcc8a34aa2ed569eeb3212f17

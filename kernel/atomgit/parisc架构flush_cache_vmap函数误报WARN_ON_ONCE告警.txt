@@ -1,0 +1,20 @@
+#标题
+parisc架构flush_cache_vmap函数误报WARN_ON_ONCE告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在PA-RISC架构上，当内核调用flush_cache_vmap函数刷新缓存时，若find_vm_area查找失败（例如在module_alloc流程中使用了特殊的vmalloc地址范围），内核会触发WARN_ON_ONCE告警并打印调用栈。该告警属于误报，虽然不影响系统运行稳定性，但会干扰内核日志审查并造成不必要的告警噪音。
+
+#主要错误日志
+WARNING: CPU: X PID: X at arch/parisc/kernel/cache.c:XXX flush_cache_vmap+0xXX/0xXX
+
+#问题根因
+flush_cache_vmap函数内部调用find_vm_area查找vm区间，如果查找失败，原先的逻辑会触发WARN_ON_ONCE告警。但实际上，module_alloc等场景使用的vmalloc地址可能不在标准vmalloc管理区域内，导致find_vm_area返回NULL，这是预期内的合法情况，不应视为异常或错误，因此原WARN_ON_ONCE检查条件过于严格导致了误报。
+
+#解决方案
+移除flush_cache_vmap函数中对find_vm_area返回值的WARN_ON_ONCE检查。当find_vm_area返回NULL时，直接执行flush_cache_all()进行全量缓存刷新并正常返回，不再打印告警日志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a14cad6a470b4a98ba9f399c323e8ae840d99d6e

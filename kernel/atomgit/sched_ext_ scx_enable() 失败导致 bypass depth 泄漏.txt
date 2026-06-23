@@ -1,0 +1,22 @@
+#标题
+sched_ext: scx_enable() 失败导致 bypass depth 泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `scx_enable()` 在任务初始化阶段（如 `scx_cgroup_init()` 或 `scx_init_task()`）失败时，系统无法正确退出 bypass 模式。这导致系统的 bypass depth 计数残留为 1 而非 0，使得系统在 `scx_enable()` 失败后永久处于 bypass 模式。
+
+#主要错误日志
+未知
+
+#问题根因
+`scx_enable()` 调用 `scx_bypass(true)` 初始化 bypass 模式，成功后调用 `scx_bypass(false)` 退出。如果在任务初始化期间失败，代码跳转到 `err_disable` 处理路径，此时 bypass 模式仍处于激活状态。随后 `scx_disable_workfn()` 执行时会调用属于自己的 `scx_bypass(true/false)`，导致 bypass depth 在原有基础上叠加（增加 1 并减少 1），最终 depth 停留在 1 而不是 0。
+
+#解决方案
+通过引入静态变量 `scx_ops_bypassed_for_enable` 来追踪 `scx_ops_enable()` 是否已激活 bypass 模式。
+1. 在 `scx_ops_enable()` 中调用 `scx_ops_bypass(true)` 后，将标记置为 true；在成功路径调用 `scx_ops_bypass(false)` 前，将标记置为 false。
+2. 在 `scx_ops_disable_workfn()` 清理资源时，检查该标记。如果为 true，说明 enable 失败导致了 bypass 泄漏，此时额外调用一次 `scx_ops_bypass(false)` 以平衡 bypass depth，并重置标记。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d8ec8ff46394a72a1f7a69d3b9f1a40278de3e41

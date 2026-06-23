@@ -1,0 +1,21 @@
+#标题
+PM: sleep: direct-complete 设备恢复逻辑错误导致错误日志打印
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统挂起-恢复循环过程中，如果挂起流程在 dpm_suspend() 阶段被中止，后续调用 dpm_resume() 时，对于配置了 direct_complete 的设备，内核会打印令人惊恐的错误日志，且设备未被按预期跳过。
+
+#主要错误日志
+未知（Commit 信息仅描述为 "scary error messages"，未提供具体日志原文）
+
+#问题根因
+Commit 03f1444016b7 在处理 direct_complete 设备错误路径时，设置了 power.is_suspended 标志，但在 device_resume() 函数中，清理该标志的操作（dev->power.is_suspended = false）被放在了错误的位置（函数末尾）。
+这导致对于 direct_complete 设备，若在特定恢复路径中提前返回，power.is_suspended 标志未被清除。当下一次系统挂起-恢复循环在 dpm_suspend() 阶段中止时，残留的 is_suspended 标志导致 device_resume() 无法正确跳过这些设备，从而触发错误日志。
+
+#解决方案
+将 device_resume() 中清理 power.is_suspended 标志的操作移动到函数更靠前的位置（紧接在 is_suspended 检查之后），确保所有被该函数处理的设备都能在第一时间清除该标志，防止标志残留影响后续逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ba6c040b5e52e7bc73e9e10b416e34447089cfe

@@ -1,0 +1,20 @@
+#标题
+pinctrl: cy8c95x0 驱动 Probe 失败时错误地返回正值
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Cypress cy8c95x0 pinctrl 驱动在加载过程中，若中断状态寄存器清除失败，驱动 Probe 函数向用户空间返回了一个正数值，而非预期的负错误码。
+
+#主要错误日志
+failed to clear irq status register
+
+#问题根因
+在 `cy8c95x0_irq_setup` 函数中，调用 `cy8c95x0_irq_pending` 清除中断状态寄存器时，若返回值非零（表示失败），代码直接将该返回值传递给 `dev_err_probe`。由于此时返回值为正数，导致驱动核心将 Probe 错误码误判为成功或返回非法的错误码给用户空间。
+
+#解决方案
+修改 `drivers/pinctrl/pinctrl-cy8c95x0.c` 文件中的错误处理逻辑。当 `cy8c95x0_irq_pending` 返回非零值时，显式传递 `-EBUSY` 错误码给 `dev_err_probe` 函数，确保 Probe 失败时向用户空间返回正确的负值错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9f3f6c1c7291dd4daa63e45a80ee09691b8dcdbf

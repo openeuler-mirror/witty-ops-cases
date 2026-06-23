@@ -1,0 +1,23 @@
+#标题
+nvme: 修复初始化阶段路径错误处理与内存泄漏风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 NVMe 控制器初始化或连接状态不稳定时，若发生连接丢失，`nvme_set_queue_count` 函数未能正确识别并处理该错误，可能导致初始化流程异常或挂起。
+2. 在 NVMe effects log 初始化过程中，若 xarray 存储操作因内存不足等原因失败，会导致内存泄漏，且未返回错误状态，可能引发后续访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **路径错误处理缺失**：`nvme_set_queue_count` 仅检查了 `status < 0` 的内核内部错误，未处理 `status == NVME_SC_HOST_PATH_ERROR` 的情况。当主机端发生路径错误（如连接丢失）时，代码未进入错误处理路径。
+2. **内存泄漏与错误处理缺失**：`nvme_get_effects_log` 和 `nvme_init_effects` 中使用 `xa_store` 存储数据时，未检查返回值是否为错误状态。若 `xa_store` 失败（返回 `xa_err`），之前分配的内存未被释放，且函数未返回错误码，导致内存泄漏和状态不一致。
+
+#解决方案
+1. 在 `nvme_set_queue_count` 函数中增加对 `NVME_SC_HOST_PATH_ERROR` 状态的判断。当检测到内核错误或主机路径错误时，直接返回错误状态，确保控制器无法通信时能正确进入错误处理流程。
+2. 修改 `nvme_get_effects_log` 和新增的 `nvme_init_effects_log` 函数逻辑，在调用 `xa_store` 后检查返回指针是否为错误状态。若存储失败，立即释放已分配的内存并返回对应的错误码，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/304c7f18d674a3cbb439f7ee346622b2e6c5bc9e

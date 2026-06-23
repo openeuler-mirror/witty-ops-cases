@@ -1,0 +1,26 @@
+#标题
+net: phy: 修复 phy_uses_state_machine() 逻辑错误导致的状态机异常运行
+
+#内核版本
+OLK-6.6
+
+#问题现象
+PHY 子系统在挂起和恢复路径中对状态机的控制逻辑异常，导致在以下两种场景下错误地启动了 PHY 状态机：
+1. PHY 设备从未挂载到网络设备时。
+2. PHY 设备从网络设备断开连接后。
+这可能导致内核在不期望的状态下尝试运行 PHY 状态机，引发潜在的功能异常或稳定性问题。
+
+#主要错误日志
+未知
+
+#问题根因
+ commit fc75ea20ffb4 修改了判断 PHY 是否使用状态机的条件。原代码逻辑 `phydev->attached_dev && phydev->adjust_link` 在 phylink 使用驱动时判断错误，修正尝试引入了新逻辑：
+`phydev->phy_link_change == phy_link_change ? phydev->attached_dev && phydev->adjust_link : true`
+该修正逻辑在 `phydev->phy_link_change` 不等于 `phy_link_change` 时直接返回 `true`，导致在 PHY 未挂载或已断开连接的情况下（此时 `phy_link_change` 可能非空），错误地判定为需要使用状态机。
+
+#解决方案
+1. 修改 `phy_uses_state_machine()` 函数，当 `phydev->phy_link_change` 指针为 NULL 时直接返回 false，确保未挂载的 PHY 设备不会错误地启动状态机。
+2. 在 `phy_detach()` 函数中显式将 `phydev->phy_link_change` 设置为 NULL，确保 PHY 断开连接后状态机正确停止运行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eb755c9fe5194af143e3f4e596f04cb987125326

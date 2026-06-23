@@ -1,0 +1,20 @@
+#标题
+md/raid1: raid1_run 函数中无活跃 rdev 时的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 raid1 阵列时，如果阵列没有活跃的 rdev（例如 `conf->raid_disks - mddev->degraded < 1`），`raid1_run` 函数会返回失败，但此前分配的 `conf` 结构体内存未被释放，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `raid1_run` 函数的错误处理路径中（具体为检测到无活跃 rdev 时），代码仅注销了恢复线程 `md_unregister_thread`，但未调用 `raid1_free` 来释放已经分配的 `conf` 结构体内存，导致内存泄漏。此问题也存在于 `raid1_set_limits()` 失败的场景中。
+
+#解决方案
+在 `raid1_run` 函数的错误处理路径中，增加对 `raid1_free` 函数的调用。具体修改是在判断阵列无足够活跃磁盘并注销线程后，检查并释放 `conf` 内存，确保资源被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e34f24724b4bbc4801c47dc828193dafe8bcad76

@@ -1,0 +1,21 @@
+#标题
+ibmasm: heap over-read in ibmasm_send_i2o_message()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+root 用户可以通过写入包含伪造头字段的小缓冲区，触发内核堆内存越界读取。memcpy_toio() 会读取分配区域之外最多约 65 KB 的相邻内核堆内存数据，并将这些数据通过 MMIO 转发给服务处理器。此外，若头字段验证失败但未在获取 MFA 前返回，会导致 I2O 消息帧泄漏，永久耗尽控制器的空闲帧池。
+
+#主要错误日志
+未知
+
+#问题根因
+ibmasm_send_i2o_message() 函数使用 get_dot_command_size() 计算 memcpy_toio() 的字节数，但该值派生自用户控制的 dot_command_header 字段（command_size: u8, data_size: u16），且从未针对实际分配大小进行校验。同时，command_size 也未针对 I2O 消息帧大小进行限制。
+
+#解决方案
+1. 在调用 get_mfa_inbound() 获取硬件帧之前，先调用 get_dot_command_size() 计算命令大小，并校验其是否超过 command->buffer_size。如果超过则直接返回失败，避免泄漏 I2O 消息帧。
+2. 在执行 memcpy_toio() 前，将 command_size 限制（clamp）在 I2O_COMMAND_SIZE 以内，确保 MMIO 写入不越界，并修正 header.message_size 的计算。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e59fb44644c762effc0d493104fe5ba72d184664

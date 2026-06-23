@@ -1,0 +1,20 @@
+#标题
+sw64 架构在 ACPI 禁用且第二节点无内存时 NUMA 初始化异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构下，当 ACPI 被禁用且第二个 NUMA 节点上没有物理内存时，系统无法正确注册该第二个节点。导致所有 CPU 都被错误地注册分配到第一个节点上，破坏了 NUMA 拓扑结构的正确性，影响后续的内存分配与调度亲和性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `setup_arch` 阶段，如果检测到 `acpi_disabled`，代码会直接调用 `cpu_set_node()` 进行 CPU 节点映射设置。此时 `cpu_set_node()` 的逻辑依赖 `node_online_map` 来确定有效的节点。由于内存初始化流程尚未完成，如果第二个节点上没有内存，该节点就不会被标记为 online。因此，`cpu_set_node()` 在遍历 CPU 时，会因为目标节点不在 `node_online_map` 中，而将所有 CPU 都回退分配给第一个有效节点（node 0），导致第二节点丢失。
+
+#解决方案
+将 `cpu_set_node()` 的调用位置从 `setup_arch()` 移动至 `numa_init()` 流程内部的 `manual_numa_init()` 函数中，确保在设置 CPU 节点映射前，NUMA 节点信息已经完成解析和初始化。同时修改了 `cpu_set_node()` 的实现逻辑，不再依赖 `node_online_map` 进行回退查找，而是直接根据 `rcid_to_domain_id` 设置 CPU 所属节点，并调用 `node_set` 显式设置 `numa_nodes_parsed`，从而保证即使节点当前无内存也能正确注册节点拓扑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b2cebaebe30c182f9d583932a34f5b09d99a81fe

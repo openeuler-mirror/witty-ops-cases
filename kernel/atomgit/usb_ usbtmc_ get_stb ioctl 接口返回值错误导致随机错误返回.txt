@@ -1,0 +1,21 @@
+#标题
+usb: usbtmc: get_stb ioctl 接口返回值错误导致随机错误返回
+
+#内核版本
+OLK-6.6
+
+#问题现象
+用户空间程序调用 `usbtmc` 的 `get_stb` ioctl 接口获取状态字节时，在等待时间较长（剩余 jiffies 大于 INT_MAX）的情况下，接口会返回错误的随机负值；在等待时间正常的情况下，接口错误地返回剩余 jiffies 数而非 0，导致用户空间无法正确判断操作是否成功。
+
+#主要错误日志
+未知
+
+#问题根因
+内核函数 `wait_event_interruptible_timeout` 返回值类型为 `long`（表示剩余 jiffies），但在代码中被错误地赋值给 `int` 类型变量。当剩余 jiffies 值超过 `INT_MAX` 时，发生整型溢出，导致变量变为负值，从而引发错误的 ioctl 返回。此外，正常返回时直接将剩余 jiffies 传给用户空间，而用户空间期望成功时返回 0。
+
+#解决方案
+1. 新增 `long` 类型变量 `wait_rv` 用于接收 `wait_event_interruptible_timeout` 的返回值，防止整型溢出。
+2. 在函数退出前，显式将返回值 `rv` 设置为 0，确保成功执行时用户空间收到正确的返回码，而非无意义的剩余 jiffies。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/641e49f211aed76e34ef6e5c852a86627708c93f

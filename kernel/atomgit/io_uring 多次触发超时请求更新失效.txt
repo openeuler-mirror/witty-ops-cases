@@ -1,0 +1,20 @@
+#标题
+io_uring 多次触发超时请求更新失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+对 io_uring 的 multishot timeout（多次触发超时）请求进行更新时，只有第一次触发的超时行为遵循了新的超时值，后续所有的重试触发仍然继续使用旧的超时值，导致超时控制逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `io_timeout_update` 函数中处理超时更新时，仅更新了 `hrtimer_start` 传入的参数，但未将新的超时值同步更新到 `struct io_timeout_data` 结构体的 `ts` 字段中。由于 multishot 模式下的后续重试逻辑依赖存储在 `io_timeout_data` 中的旧值，导致更新操作无法在后续触发中生效。
+
+#解决方案
+在 `io_timeout_update` 函数中，在启动定时器前，显式将传入的新超时值 `ts` 赋值给 `data->ts`，确保存储在 `io_timeout_data` 中的时间值与定时器启动参数一致，从而保证后续重试使用正确的超时时间。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a3e8f289b61097997d5b4a69257b96cec91239cb

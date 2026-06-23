@@ -1,0 +1,24 @@
+#标题
+urma: jetty_grp 计数边界检查错误及选项校验上下文缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在向 jetty_grp 添加 jetty 时，计数未达到最大值上限（等于最大值）时被错误拒绝，导致无法充分利用资源，功能受阻。
+2. 在调用 `ubcore_set_jetty_opt` 或 `ubcore_get_jetty_opt` 接口进行选项配置或获取时，校验逻辑因缺少实际的 mask 上下文（传入为 NULL），可能导致选项校验不准确或错误返回。
+
+#主要错误日志
+- "jetty_grp jetty cnt:%u, max_jetty in grp:%u.\n"
+- "invalid opt.\n"
+
+#问题根因
+1. **边界检查错误（Off-by-one）**：在 `check_jetty_check_dev_cap` 函数中，判断条件 `jetty_cnt >= max_jetty_in_jetty_grp` 错误地将合法的边界值（等于最大值）视为溢出，导致少允许一个 jetty 实例。
+2. **参数传递错误**：`ubcore_set_jetty_opt` 和 `ubcore_get_jetty_opt` 函数在调用 `ubcore_check_opt_valid` 时，第一个参数错误地传递了 `NULL`，而非实际的选项掩码地址 `&jetty->jetty_opt.jfs_opt.jfs_opt_mask.value`，导致校验函数无法获取正确的上下文进行合法性检查。
+
+#解决方案
+1. 修正 `check_jetty_check_dev_cap` 中的判断条件，将 `>=` 修改为 `>`，允许 `jetty_cnt` 达到 `max_jetty_in_jetty_grp` 的数值。
+2. 修正 `ubcore_set_jetty_opt` 和 `ubcore_get_jetty_opt` 中的调用参数，将 `NULL` 替换为 `&jetty->jetty_opt.jfs_opt.jfs_opt_mask.value`，确保选项校验拥有正确的上下文。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e093cce5fa8ab9b7cc6a1923140ffe3589bbfeca

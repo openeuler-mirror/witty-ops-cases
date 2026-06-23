@@ -1,0 +1,20 @@
+#标题
+powerpc/book3s64/hugetlb：fadump 激活时大页禁用失效问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 fadump（Firmware Assisted Dump）功能的 PowerPC 系统上，内核大页（Hugepages）本应被禁用以避免转储机制冲突，但由于内核代码变更，大页支持被错误地重新启用。这违反了 fadump 激活期间禁用大页的设计约束，可能导致 fadump 机制无法正常工作或内核崩溃转储不完整。
+
+#主要错误日志
+未知
+
+#问题根因
+先前提交 8597538712eb 通过在 `hugetlbpage_init()` 中提前返回并不填充 `hpage_shift`/`HPAGE_SHIFT` 来禁用大页。然而，后续提交 2354ad252b66 ("powerpc/mm: Update default hugetlb size early") 将 `hpage_shift`/`HPAGE_SHIFT` 的分配移到了早期启动阶段，导致即使 `hugetlbpage_init()` 提前返回，`HPAGE_SHIFT` 也已被赋值。这使得原有的禁用逻辑失效，大页在 fadump 激活时被错误地重新启用。
+
+#解决方案
+在 PowerPC 架构下实现自定义的 `hugepages_supported()` 函数。该函数直接检查全局变量 `hugetlb_disabled` 的状态，若为真则返回 false，否则检查 `HPAGE_SHIFT` 是否非零。通过此方法，确保在 fadump 激活时禁用大页的逻辑独立于 `hpage_shift`/`HPAGE_SHIFT` 的赋值时机，从而正确生效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c55c6ab00604639331c377d8d876930614bc04f4

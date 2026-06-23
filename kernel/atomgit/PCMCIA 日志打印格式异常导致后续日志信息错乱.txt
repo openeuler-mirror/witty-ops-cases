@@ -1,0 +1,24 @@
+#标题
+PCMCIA 日志打印格式异常导致后续日志信息错乱
+
+#内核版本
+OLK-6.6
+
+#问题现象
+PCMCIA 子系统的 IO 端口和内存探测日志信息显示混乱。由于 `dev_info` 调用自动追加了换行符，导致后续本应接续打印的内容（通过 `pr_cont` 输出）被强制换行，破坏了日志的可读性，使得原本应在同一行显示的探测结果被分割错位。
+
+#主要错误日志
+推断日志示例如下（首行末尾不应换行）：
+```
+pcmcia_socket cs: IO port probe 0x100-0x1ff:
+ [后续本应接续的日志内容被换行显示]
+```
+
+#问题根因
+在提交 f2e6cf76751d ("pcmcia: Convert dev_printk to dev_<level>") 中，代码被转换为使用 `dev_info()` 打印前导信息，随后使用 `pr_cont()` 打印后续内容。然而，`dev_info` 内部调用 `vprintk_store` 时会设置 `LOG_NEWLINE` 标志，强制在消息末尾追加换行符。这导致后续的 `pr_cont()` 无法接续在同一行打印，破坏了日志格式。
+
+#解决方案
+将 `drivers/pcmcia/rsrc_nonstatic.c` 文件中 `do_io_probe` 和 `do_mem_probe` 函数里的 `dev_info()` 调用修改为 `pr_info()`。通过手动传入 `dev_name(&s->dev)` 作为设备名参数，避免了 `dev_info` 自动追加换行符的行为，从而允许后续的 `pr_cont()` 能够正确接续打印，修复日志格式错乱问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d1c40a16e4c1e0ff745d8614a7ad0ced0cc44be6

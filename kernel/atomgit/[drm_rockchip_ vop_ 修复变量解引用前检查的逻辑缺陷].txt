@@ -1,0 +1,20 @@
+#标题
+[drm/rockchip: vop: 修复变量解引用前检查的逻辑缺陷]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[内核静态代码分析工具（如Smatch）报告警告，指出在函数 vop_plane_atomic_async_check 中，变量 'state' 在第1077行被解引用使用，但在后续第1096行才进行非空检查，存在潜在的空指针解引用风险。]
+
+#主要错误日志
+drivers/gpu/drm/rockchip/rockchip_drm_vop.c:1096 vop_plane_atomic_async_check() warn: variable dereferenced before check 'state' (see line 1077)
+
+#问题根因
+[代码逻辑错误。在调用 drm_atomic_get_existing_crtc_state 函数时，代码先判断 `if (state)` 是否为真，假设 `state` 可能为空；但在函数入口处或之前的逻辑中，`state` 实际上已经被解引用（`plane->state->fb` 的访问隐含了对 state 的依赖，或者工具判定 state 早已非空）。此外，根据提交信息说明，'state' 实际上不可能为 NULL，真正需要进行存在性检查的是 `crtc_state`。代码原本对 `state` 的检查是多余且逻辑顺序错误的。]
+
+#解决方案
+[移除对 `state` 变量的非空检查，直接调用 `drm_atomic_get_existing_crtc_state` 获取 `crtc_state`。随后检查 `crtc_state` 是否获取成功，若 `crtc_state` 为空，则使用 `plane->crtc->state` 作为回退值，以此修正变量解引用与检查顺序不当的问题。]
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5e1ca6e3a4c98fab55e4ddb2c5b7235185542e21

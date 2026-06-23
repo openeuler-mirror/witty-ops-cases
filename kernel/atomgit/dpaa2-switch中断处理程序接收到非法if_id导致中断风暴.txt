@@ -1,0 +1,20 @@
+#标题
+dpaa2-switch中断处理程序接收到非法if_id导致中断风暴
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当dpaa2-switch驱动的中断处理程序接收到一个超出范围的非法if_id时，系统陷入中断风暴，可能导致CPU负载过高或系统响应缓慢。
+
+#主要错误日志
+dev_err(dev, "Invalid if_id %d in IRQ status\n", if_id);
+
+#问题根因
+上一个修复提交（Commit 31a7a0bbeb00）为了防止越界访问，在IRQ handler中增加了对if_id的范围检查。然而，当检测到if_id越界时，代码直接跳转退出（goto out），导致未调用`dpsw_clear_irq_status`清除中断状态。这使得中断控制器认为中断未被处理，从而反复触发中断，形成中断风暴。
+
+#解决方案
+修改中断处理逻辑，在检测到非法if_id打印错误日志后，跳转至中断状态清理标签（`out_clear`），确保执行`dpsw_clear_irq_status`操作以清除中断状态，从而避免中断风暴。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e12a4e06bd0820f35a3c046e7e1944dba0ddd61f

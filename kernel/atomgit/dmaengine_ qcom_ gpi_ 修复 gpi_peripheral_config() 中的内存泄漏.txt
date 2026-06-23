@@ -1,0 +1,20 @@
+#标题
+dmaengine: qcom: gpi: 修复 gpi_peripheral_config() 中的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 QCOM GPI DMA 驱动进行设备配置时，若系统内存紧张导致 `krealloc` 分配失败，会导致原先已分配的内存块引用丢失，造成内核内存泄漏。该问题通过静态代码分析和代码审查发现，属于逻辑缺陷。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `gpi_peripheral_config()` 中，代码直接将 `krealloc()` 的返回值赋给 `gchan->config`。当 `gchan->config` 原本指向有效内存，而 `krealloc()` 因内存不足返回 NULL 时，`gchan->config` 被直接置为 NULL，导致原先分配的内存地址丢失且无法释放，从而造成内存泄漏。
+
+#解决方案
+引入临时变量 `new_config` 来接收 `krealloc()` 的返回值。仅在 `krealloc()` 分配成功（非 NULL）时，才将 `gchan->config` 更新为新的内存地址；若分配失败，则保持 `gchan->config` 指向原有的内存块，避免引用丢失。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cd51f13fd287b83436bdc112121c36f8aee05f85

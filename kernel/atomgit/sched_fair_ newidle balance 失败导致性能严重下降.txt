@@ -1,0 +1,24 @@
+#标题
+sched/fair: newidle balance 失败导致性能严重下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+运行 schbench 压测时出现严重的性能回退（Regression）。在特定负载场景下（4个消息线程绑定了前4个CPU，1024个工作线程分布在其余CPU），RPS（Requests Per Second）从 5.4M 下降至 3.4M。
+内核行为表现为：前几个 CPU 持续繁忙唤醒工作线程，其余 CPU 频繁进出空闲状态。通过 schedstat 和性能分析发现，newidle balance（新空闲负载均衡）操作次数异常增多（约 100 倍），工作线程约 20% 的 CPU 时间消耗在 newidle balance 上，且绝大多数 newidle balance 尝试未能找到繁忙的组（即均衡失败）。
+
+#主要错误日志
+未知
+
+#问题根因
+该问题由提交 c5b0a7eefc（"sched/fair: Remove sysctl_sched_migration_cost condition"）引入。
+在该提交后，当 newidle balance（新空闲负载均衡）尝试失败时，内核未正确调整 `sd->max_newidle_lb_cost`（该域的最大新空闲负载均衡开销）。这导致调度器认为 newidle balance 的开销很低，从而在 CPU 进出空闲时过于频繁地触发该操作。实际上，频繁且失败的负载均衡消耗了大量 CPU 时间，导致了整体性能下降。
+
+#解决方案
+修改 `kernel/sched/fair.c`，调整 newidle balance 的开销记录逻辑：
+1. **增加失败开销**：当 newidle balance 未成功迁移任务（`!pulled_task`）时，人为提高计算出的开销值（设为原 `max_newidle_lb_cost` 的 1.5 倍），促使调度器减少后续对该操作的触发频率。
+2. **设置开销上限**：在 `update_newidle_cost()` 函数中，限制 `sd->max_newidle_lb_cost` 的最大值不超过 `sysctl_sched_migration_cost + 200`，防止开销值无限增长导致调度器完全停止执行 newidle balance。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/02fd7219b8f1084e02289c38632696783edb10d4

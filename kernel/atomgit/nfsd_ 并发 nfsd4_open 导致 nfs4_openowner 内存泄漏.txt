@@ -1,0 +1,34 @@
+#标题
+nfsd: 并发 nfsd4_open 导致 nfs4_openowner 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFS 客户端执行强制卸载（umount -f）期间并发打开文件，触发 NFS 服务端内存泄漏。当尝试通过向 `/proc/fs/nfsd/threads` 写入 0 来关闭 nfsd 线程时，内核打印 Slab 缓存销毁失败的警告，提示 `nfsd_file` 和 `nfsd_file_mark_slab` 中仍有对象存活（Objects remaining），导致系统无法正常关闭 NFS 服务。
+
+#主要错误日志
+BUG nfsd_file (Not tainted): Objects remaining in nfsd_file on __kmem_cache_shutdown()
+-----------------------------------------------------------------------
+Slab 0xffd4000004438a80 objects=34 used=1 fp=0xff11000110e2ad28
+flags=0x17ffffc0000240(workingset|head|node=0|zone=2|lastcpupid=0x1fffff)
+CPU: 4 UID: 0 PID: 757 Comm: sh Not tainted 6.12.0-rc6+ #19
+...
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x53/0x70
+ slab_err+0xb0/0xf0
+ __kmem_cache_shutdown+0x15c/0x310
+ kmem_cache_destroy+0x66/0x160
+ nfsd_file_cache_shutdown+0xac/0x210 [nfsd]
+ nfsd_destroy_serv+0x251/0x2a0 [nfsd]
+ ...
+
+#问题根因
+当 NFS 客户端因强制卸载重试发送两个 rpc_task 同时打开同一文件时，服务端两个 nfsd 线程并发处理该请求。如果 nfsd2 在 nfsd1 完成确认（CONFIRMED）之前发现了新分配的 openowner（oo1），会将其释放并移出哈希表。然而，nfsd1 随后在 `init_open_stateid` 中仍持有并使用这个已被释放/unhashed 的 openowner 指针，导致关联的 stateid、nfsd_file 等资源脱离 client 管理列表，造成内存泄漏。
+
+#解决方案
+在 `init_open_stateid` 函数中增加对 `nfs4_openowner` 状态的检查。新增辅助函数 `nfs4_openowner_unhashed` 判断 openowner 是否已被移出哈希表。若发现 openowner 已 unhashed，则释放互斥锁并返回 NULL，中止当前 open 处理流程，避免使用无效指针造成资源泄漏。同时，在调用处增加对返回值的检查，若为 NULL 则返回 `nfserr_jukebox` 错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c618349a16721221266358288bd2cdf30cba6c5e

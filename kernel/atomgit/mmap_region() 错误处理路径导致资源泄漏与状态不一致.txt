@@ -1,0 +1,27 @@
+#标题
+mmap_region() 错误处理路径导致资源泄漏与状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `mmap_region()` 进行内存映射时，若在处理文件后映射的 VMA（file-backed VMA）过程中发生错误（如驱动 mmap 钩子执行失败或架构标志校验失败），内核未能正确清理资源。这会导致内存泄漏、文件引用计数泄漏，以及进程内存管理结构（VMA 树）状态不一致。在特定错误路径下，可能导致后续操作异常或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+`mmap_region()` 函数控制流极其复杂（类似意大利面条式代码），错误处理逻辑分散且不完整。根本原因在于：
+1. 部分关键检查（如 `arch_validate_flags`、`map_deny_write_exec`）被放置在调用驱动 mmap 钩子之后执行。如果这些检查失败，内核必须撤销驱动已完成的操作，但现有的清理逻辑无法正确处理这种“部分完成”的状态。
+2. `mapping_map_writable()` 的调用与错误处理路径中的 `mapping_unmap_writable()` 释放逻辑配对不当，导致在错误路径下可能遗漏释放操作。
+3. 内存迭代器（iterator）的预分配发生在潜在失败点之后，导致错误处理逻辑必须处理复杂的回滚流程，极易引入遗漏。
+
+#解决方案
+重构 `mmap_region()` 的代码结构，将核心逻辑移至内部函数 `__mmap_region()`，并通过新增外层封装函数 `__mmap_region_ext()` 实现防御性编程：
+1. **前置检查**：将 `map_deny_write_exec()` 和 `arch_validate_flags()` 等检查移至实际映射操作之前，确保在执行不可逆操作前捕获所有可能的错误。
+2. **预分配资源**：将 VMA 迭代器内存预分配（`vma_iter_prealloc`）提前，避免在驱动钩子执行后才分配内存导致的复杂回滚需求。
+3. **修正写映射计数**：在 `__mmap_region_ext` 中统一处理 `mapping_map_writable()`，确保无论 `__mmap_region` 成功与否，都能无条件、成对地调用 `mapping_unmap_writable()` 释放计数。
+4. **简化错误路径**：由于所有可能的失败点已前置处理，`__mmap_region` 内部不再需要在错误路径下调用 `vma_close` 或执行复杂的 unmap 回滚，只需简单的资源释放，从而消除了整类错误处理缺陷。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4b5e708273e272afdd21dcf1845898e2a5b51e6c

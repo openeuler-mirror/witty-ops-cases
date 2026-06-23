@@ -1,0 +1,22 @@
+#标题
+Open vSwitch隧道销毁函数存在引用计数死锁风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ovs_netdev_tunnel_destroy` 函数销毁 Open vSwitch 网络设备隧道端口时，若存在设备引用尚未释放的情况，系统可能会发生挂起（阻塞）。具体表现为进程在销毁操作中长期处于不可中断睡眠状态（D状态），无法继续执行，影响网络命名空间或设备的正常清理与释放。
+
+#主要错误日志
+未知
+
+#问题根因
+根本原因是 `ovs_netdev_tunnel_destroy` 函数中 `call_rcu` 回调与 `rtnl_unlock` 的调用顺序错误。
+原代码逻辑先调用 `rtnl_unlock` 再调用 `call_rcu`。由于 `rtnl_unlock` 内部会触发 `netdev_run_todo`，该函数会阻塞等待所有网络设备的引用被释放。然而，设备资源的最终释放（减少引用计数）依赖于 `call_rcu` 触发的 `vport_netdev_free` 回调。如果 `call_rcu` 排在 `rtnl_unlock` 之后，`netdev_run_todo` 会先等待引用释放，而引用释放又必须等到 RCU 回调执行，从而导致循环等待，引发死锁或长时间阻塞。
+
+#解决方案
+调整代码执行顺序，将 `call_rcu(&vport->rcu, vport_netdev_free)` 移至 `rtnl_unlock` 之前执行。
+这样确保了 RCU 回调先被注册，设备引用计数能通过 RCU 机制尽快减少，从而避免 `rtnl_unlock` 内部的 `netdev_run_todo` 因等待引用释放而发生阻塞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/48e191157bce7746a8ef08d4e02901af32328b1a

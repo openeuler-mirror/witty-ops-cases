@@ -1,0 +1,20 @@
+#标题
+net: sk_is_readable() 函数 TOCTOU 竞态条件导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 socket 从 sockmap 中移除时，如果 `sk_is_readable()` 函数内部发生竞态条件，可能导致内核发生空指针解引用。该问题发生在 socket 被移除 sockmap 且 `sk_psock_put()` 执行完毕后，此时 `sk->sk_prot` 被恢复，其 `sock_is_readable` 函数指针变为 NULL。若此时 `sk_is_readable()` 中重新加载了 `sk->sk_prot`，将触发崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+`sk_is_readable()` 函数存在 TOCTOU（Time-of-check to time-of-use）竞态问题。代码首先检查 `sk->sk_prot->sock_is_readable` 是否存在，随后调用该函数指针。在检查与使用之间，如果 socket 从 sockmap 移除，`sk->sk_prot` 会被恢复原状，导致 `sk->sk_prot->sock_is_readable` 变为 NULL。如果编译器或 CPU 重新加载了 `sk->sk_prot` 的值，则会导致在调用时引发空指针解引用。
+
+#解决方案
+使用 `READ_ONCE` 读取 `sk->sk_prot` 指针并将其存储在局部变量 `prot` 中。在后续的检查和调用中均使用该局部变量，从而确保在检查与使用期间指针的值保持一致，防止因重加载导致的 NULL 指针调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/78a7ad0d6dacbb2cb39e13e146f4f64d43593800

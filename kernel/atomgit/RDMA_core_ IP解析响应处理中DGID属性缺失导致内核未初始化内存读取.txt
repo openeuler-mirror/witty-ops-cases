@@ -1,0 +1,37 @@
+#标题
+RDMA/core: IP解析响应处理中DGID属性缺失导致内核未初始化内存读取
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户空间针对内核发起的 `RDMA_NL_LS_OP_IP_RESOLVE` 查询响应未提供 DGID（Destination GID）属性时，内核在处理该 netlink 响应过程中会读取栈上的未初始化内存。
+该现象可通过内核内存检测工具（KMSAN）观测到 "uninit-value" 错误，导致内核打印相关调用栈信息，严重时可引发内核崩溃或内存破坏。
+
+#主要错误日志
+BUG: KMSAN: uninit-value in hex_byte_pack include/linux/hex.h:13 [inline]
+BUG: KMSAN: uninit-value in ip6_string+0xef4/0x13a0 lib/vsprintf.c:1490
+ hex_byte_pack include/linux/hex.h:13 [inline]
+ ip6_string+0xef4/0x13a0 lib/vsprintf.c:1490
+ ip6_addr_string+0x18a/0x3e0 lib/vsprintf.c:1509
+ ip_addr_string+0x245/0xee0 lib/vsprintf.c:1633
+ pointer+0xc09/0x1bd0 lib/vsprintf.c:2542
+ vsnprintf+0xf8a/0x1bd0 lib/vsprintf.c:2930
+ ...
+ ib_nl_process_good_ip_rsep drivers/infiniband/core/addr.c:128 [inline]
+ ib_nl_handle_ip_res_resp+0x963/0x9d0 drivers/infiniband/core/addr.c:141
+
+#问题根因
+在函数 `ib_nl_process_good_ip_rsep` 中，代码使用循环遍历 netlink 属性查找 `LS_NLA_TYPE_DGID`。
+根据 RDMA netlink 协议规范，`RDMA_NL_LS_OP_IP_RESOLVE` 的响应应当包含 `LS_NLA_TYPE_DGID` 属性，但如果用户空间发送的响应中缺少该属性，循环遍历逻辑未能正确处理“未找到”的情况。
+此时代码未校验 DGID 是否存在就直接执行 `memcpy`，导致读取了栈上未初始化的变量 `gid` 的内容，进而引发未初始化内存读取漏洞（CVE-2025-71096）。
+
+#解决方案
+修改 `drivers/infiniband/core/addr.c` 中的响应处理逻辑：
+1. 移除原先的手动循环遍历属性逻辑（`nla_for_each_attr`）。
+2. 改用标准的 `nla_parse_deprecated` 函数解析 netlink 属性并填充 `tb` 数组。
+3. 在解析后增加对 `tb[LS_NLA_TYPE_DGID]` 的非空检查，若该属性不存在（为 NULL），则直接返回，拒绝处理该无效响应。
+4. 仅在属性存在时，通过 `nla_data(tb[LS_NLA_TYPE_DGID])` 安全地获取数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d622275726ed7a90252bb0d5fb09e5c6aa2c08b3

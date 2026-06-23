@@ -1,0 +1,29 @@
+#标题
+dma-mapping: 修复 dma_free_attrs 缺少 inline 关键字导致的编译警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 UML（User-Mode Linux）构建并启用 Rust 支持时，编译过程触发 `-Wstatic-in-inline` 警告。具体表现为编译器检测到静态函数 `dma_free_attrs` 被一个具有外部链接的内联函数（`rust_helper_dma_free_attrs`）调用，导致编译警告产生。
+
+#主要错误日志
+```text
+In file included from rust/helpers/helpers.c:59:
+rust/helpers/dma.c:17:2: warning: static function 'dma_free_attrs' is used in an inline function with external linkage [-Wstatic-in-inline]
+   17 |         dma_free_attrs(dev, size, cpu_addr, dma_handle, attrs);
+      |         ^
+rust/helpers/dma.c:12:1: note: use 'static' to give inline function 'rust_helper_dma_free_attrs' internal linkage
+   12 | __rust_helper void rust_helper_dma_free_attrs(struct device *dev, size_t size,
+      | ^
+      | static
+```
+
+#问题根因
+当引入 `dma_free_attrs` 作为 DMA API 的存根（stub）时，遗漏了 `inline` 关键字标记。这导致该函数被定义为静态（static）但非内联，当其被具有外部链接的辅助函数调用时，触发了编译器的 `-Wstatic-in-inline` 检查规则。
+
+#解决方案
+在 `include/linux/dma-mapping.h` 文件中，为 `dma_free_attrs` 函数定义补充缺失的 `inline` 关键字，使其与其他 DMA 存根函数保持一致，从而消除编译警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/54b24c80d95c2dcfadcbff4cff46344093a0feff

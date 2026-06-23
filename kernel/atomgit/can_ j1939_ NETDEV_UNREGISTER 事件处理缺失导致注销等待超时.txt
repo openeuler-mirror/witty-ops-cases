@@ -1,0 +1,25 @@
+#标题
+can: j1939: NETDEV_UNREGISTER 事件处理缺失导致注销等待超时
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 J1939 协议使用的网络设备（如 vcan0）时，系统无法完成卸载操作。内核持续等待设备引用计数归零，导致卸载进程挂起或报错，出现 "unregister_netdevice: waiting for vcan0 to become free. Usage count = 2" 的提示。
+
+#主要错误日志
+unregister_netdevice: waiting for vcan0 to become free. Usage count = 2
+
+#问题根因
+J1939 子系统在处理 NETDEV_UNREGISTER 事件通知时，代码逻辑缺失。具体原因为：
+1. 未调用 j1939_cancel_active_session() 取消活跃会话。
+2. 未调用 j1939_sk_queue_drop_all()（通过 j1939_sk_netdev_event_netdown 调用）清理报文队列。
+这导致在调用 j1939_sk_release() 时跳过了必要的清理步骤，网络设备的引用计数无法正常释放，从而导致设备注销失败。
+
+#解决方案
+在 net/can/j1939/main.c 文件的 j1939_netdev_notify 函数中，针对 NETDEV_UNREGISTER 事件分支，补充缺失的清理函数调用：
+1. 添加调用 j1939_cancel_active_session(priv, NULL) 以取消所有活跃会话。
+2. 添加调用 j1939_sk_netdev_event_netdown(priv) 以处理网络下行事件并清理队列。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d2b2c84cf87f51c484659022bdde3b079be8670a

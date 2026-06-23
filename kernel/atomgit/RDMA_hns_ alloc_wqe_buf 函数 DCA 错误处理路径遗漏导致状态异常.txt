@@ -1,0 +1,20 @@
+#标题
+RDMA/hns: alloc_wqe_buf 函数 DCA 错误处理路径遗漏导致状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hns RoCE 驱动的 `alloc_wqe_buf` 函数中，当 `hns_roce_map_dca_safe_page()` 调用失败时，驱动未正确执行 DCA（Dynamic Context Attachment）的清理或禁用操作。该问题导致 DCA 状态管理不一致，可能在后续流程中引发系统 RAS（Reliability, Availability, and Serviceability）错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `alloc_wqe_buf` 函数的原有逻辑中，`hns_roce_disable_dca()` 仅在 `hns_roce_create_mtr()` 失败（即 `IS_ERR(hr_qp->mtr)` 为真）时被调用。当 `hns_roce_create_mtr()` 成功但后续的 `hns_roce_map_dca_safe_page()` 失败时，错误处理路径遗漏了对 `hns_roce_disable_dca()` 的调用，导致 DCA 资源或状态未被正确清理。
+
+#解决方案
+修改 `alloc_wqe_buf` 函数的错误处理逻辑，将 `hns_roce_disable_dca()` 的调用移至统一的错误处理出口。具体修改为：不再仅在 mtr 创建失败分支中处理，而是在函数返回前统一判断，只要存在错误返回值（`ret` 非 0）且 DCA 使能（`dca_en` 为真），即调用 `hns_roce_disable_dca()` 进行清理，确保所有错误路径都能正确恢复 DCA 状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b6ff92cad74bcf07b0241dd6f9a8f2b7d4e079c3

@@ -1,0 +1,28 @@
+#标题
+iavf 接口 down/up 过程中因 VLAN 过滤器删除再添加时序导致网络流量阻断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当启用了 spoofcheck（欺骗检查）的 VF（虚拟功能）接口执行 down/up 操作时，VF 驱动会向 PF（物理功能）发送删除所有 VLAN 过滤器的请求，随后再重新添加。在此 DEL+ADD 循环期间，存在一个时间窗口，此时 VLAN 过滤器列表不完整。由于 PF 在添加第一个非零 VLAN 时会启用 TX VLAN 过滤功能，导致尚未重新添加的 VLAN 流量被阻断，造成业务网络中断或不可达。
+
+#主要错误日志
+未知
+
+#问题根因
+当 VF 接口关闭时，驱动逻辑会将状态从 ACTIVE 切换为 DISABLE，并向 PF 发送 DEL_VLAN 请求将过滤器标记为 INACTIVE；接口开启时再重新添加。这种设计导致了不必要的 DEL+ADD 循环：
+1. PF 通过 VIRTCHNL_OP_DISABLE_QUEUES 已经禁止了收发队列，此时保留 VLAN 过滤器并无危害。
+2. DEL+ADD 过程引入了竞态窗口，在 spoofcheck 开启时，PF 侧的 TX VLAN 过滤会拦截那些尚未重新添加的 VLAN 数据包，导致流量异常。
+
+#解决方案
+移除接口 down/up 流程中针对 VLAN 过滤器的 DISABLE/INACTIVE 状态机制及相应的删除/恢复逻辑。具体修改包括：
+1. 移除 `IAVF_VLAN_DISABLE` 和 `IAVF_VLAN_INACTIVE` 枚举值。
+2. 删除 `iavf_restore_filters` 函数及其在 `iavf_open` 中的调用。
+3. 将 `iavf_clear_mac_vlan_filters` 重命名为 `iavf_clear_mac_filters`，移除其中处理 VLAN 过滤器的逻辑。
+4. 移除 `iavf_down()` 中调度 DEL_VLAN_FILTER 的相关代码。
+5. 清理 `iavf_del_vlans()` 中对 DISABLE/INACTIVE 状态的处理。
+修复后，VLAN 过滤器在 down/up 周期中保持 ACTIVE 状态，仅在显式用户删除或 PF/VF 重置时才进行变更。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a2ad5d2ccfc76de754c2fe5da0f5c5d82acf28dd

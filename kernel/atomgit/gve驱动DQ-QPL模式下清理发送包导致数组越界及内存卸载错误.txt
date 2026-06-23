@@ -1,0 +1,40 @@
+#标题
+gve驱动DQ-QPL模式下清理发送包导致数组越界及内存卸载错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DQ-QPL 模式下，当内核执行发送队列的清理操作（如关闭网卡或重置）时，触发 UBSAN（Undefined Behavior Sanitizer）数组越界警告，并可能导致驱动尝试对错误的内存地址执行 unmap 操作。具体表现为：
+1. 内核日志中出现 `UBSAN: array-index-out-of-bounds` 报错。
+2. 调用栈显示报错位于 `gve_tx_stop_ring_dqo` -> `gve_tx_clean_pending_packets` 函数中。
+3. 可能引发内存管理相关的异常行为。
+
+#主要错误日志
+UBSAN: array-index-out-of-bounds in
+drivers/net/ethernet/drivers/net/ethernet/google/gve/gve_tx_dqo.c:178:5 index 18 is out of
+range for type 'dma_addr_t[18]' (aka 'unsigned long long[18]')
+Workqueue: gve gve_service_task [gve]
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x33/0xa0
+ __ubsan_handle_out_of_bounds+0xdc/0x110
+ gve_tx_stop_ring_dqo+0x182/0x200 [gve]
+ gve_close+0x1be/0x450 [gve]
+ gve_reset+0x99/0x120 [gve]
+ gve_service_task+0x61/0x100 [gve]
+ process_scheduled_works+0x1e9/0x380
+
+#问题根因
+在 DQ-QPL 模式下，函数 `gve_tx_clean_pending_packets()` 错误地使用了 RDA 模式的缓冲区清理逻辑：
+1. **数组越界**：代码循环次数依据 `num_bufs`（在 QPL 模式下统计 2K 大小的块数量），该值可能显著超过 `dma` 数组的大小（固定为 18），从而导致数组越界访问。
+2. **错误内存操作**：`dma` 数组与 `tx_qpl_buf_ids` 共用存储空间（union 结构）。代码错误地将 QPL 模式下的缓冲区 ID 当作 DMA 地址进行 unmap 操作，导致尝试取消映射错误的内存位置。
+
+#解决方案
+修改 `gve_tx_clean_pending_packets()` 函数，在处理 pending packets 时增加模式判断逻辑：
+1. 检查 `tx->dqo.qpl` 标志位判断是否处于 QPL 模式。
+2. 若为 QPL 模式，调用 `gve_free_tx_qpl_bufs()` 函数来正确回收缓冲区。
+3. 若为非 QPL 模式（RDA），则调用 `gve_unmap_packet()` 函数执行 DMA unmap 操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/86fdee2e16412c0254c1ea1adc31f1bb64dceb0a

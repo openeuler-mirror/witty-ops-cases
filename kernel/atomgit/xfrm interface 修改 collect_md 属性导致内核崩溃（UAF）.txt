@@ -1,0 +1,24 @@
+#标题
+xfrm interface 修改 collect_md 属性导致内核崩溃（UAF）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 xfrm interface 接口上调用 changelink 尝试修改配置时，若接口已设置为 collect_md 模式，内核未正确拦截该操作，导致接口被错误地加入哈希表。随后在销毁网络命名空间（netns taken down）时触发 use-after-free，引发内核 Oops（kernel BUG at net/core/dev.c），导致系统崩溃。
+
+#主要错误日志
+[    8.516540] kernel BUG at net/core/dev:12029!
+[    8.516552] Oops: invalid opcode: 0000 [#1] SMP NOPTI
+[    8.516579] RIP: 0010:unregister_netdevice_many_notify+0x101/0xab0
+[    8.516659]  cleanup_net+0x1ad/0x2e0
+
+#问题根因
+collect_md 属性只能在 xfrm 接口创建时设置，修改接口（changelink）时应拒绝此操作。原有代码的校验逻辑依赖于 `xfrmi_locate()` 函数返回的 `xi` 指针，但该函数并不查找 collect_md 类型的接口，导致针对 collect_md 接口的校验检查从未被执行。
+这使得 changelink 操作错误地将本应独占的 collect_md 接口 `xi` 放入了 `xfrmi_net->xfrmi` 哈希表中。由于该接口同时也存在于 `xfrmi_net->collect_md_xfrmi` 指针中，销毁网络命名空间时引发了 double free（双重释放）。
+
+#解决方案
+将 `xfrmi_changelink` 函数中的校验逻辑提前，直接使用 `netdev_priv(dev)` 获取接口信息 `xi` 进行检查。修改后的逻辑判断 `if (p.collect_md || xi->p.collect_md)`，确保只要接口当前处于 collect_md 模式或试图修改为该模式，均直接返回错误 `-EINVAL`，从而防止非法修改和后续的 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/80d9e23ec40652f77943ab9d99ff77c48ad2c280

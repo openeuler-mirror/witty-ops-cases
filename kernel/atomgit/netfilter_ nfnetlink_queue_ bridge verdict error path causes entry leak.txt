@@ -1,0 +1,20 @@
+#标题
+netfilter: nfnetlink_queue: bridge verdict error path causes entry leak
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理网桥（PF_BRIDGE）数据包的判决时，如果解析 VLAN 属性失败（例如存在 NFQA_VLAN 但缺少 NFQA_VLAN_TCI），内核会发生内存泄漏。具体表现为内核内存被耗尽，相关对象的引用计数（net_device refcounts, struct net refcount）持续增加且无法释放。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `nfqnl_recv_verdict()` 调用 `find_dequeue_entry()` 将队列条目移出队列并获取其所有权。针对 PF_BRIDGE 数据包，后续调用 `nfqa_parse_bridge()` 解析属性。当 `nfqa_parse_bridge()` 返回错误时，函数直接返回，未对已出队的 `nf_queue_entry` 及其关联的 `sk_buff` 进行释放，导致 entry、sk_buff 及其持有的引用计数全部泄漏。
+
+#解决方案
+在 `nfqa_parse_bridge()` 返回错误的处理路径中，调用 `nfqnl_reinject(entry, NF_DROP)` 来释放队列条目。这确保了 entry 及其相关资源被正确释放，逻辑与该文件中其他错误处理保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1109e8370fd25a9a6ad65eb7e3aebe16a28154c8

@@ -1,0 +1,22 @@
+#标题
+Hygon CPU FPU 状态在原子与非原子上下文切换时损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hygon CPU 上，当内核线程在原子上下文（使用 `kernel_fpu_begin/end`）与非原子上下文（使用 `kernel_fpu_begin_nonatomic/end_nonatomic`）交替使用 FPU 时，FPU 状态可能发生损坏。具体表现为在调用 `kernel_fpu_begin` 或 `kernel_fpu_end` 时，如果此时线程正持有非原子 FPU 上下文（`TIF_USING_FPU_NONATOMIC` 标志位置位），原有的检查机制仅触发警告，并未正确保存或恢复 FPU 寄存器状态，导致后续计算错误或潜在的系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+原有的 `check_using_kernel_fpu` 实现仅为空函数或仅包含 `WARN_ON_ONCE` 检查，缺乏实质性的状态保存与恢复逻辑。当进程在非原子 FPU 操作期间被中断，并在中断处理程序中调用原子 FPU 操作时，原子操作会覆盖 FPU 寄存器；当原子操作结束返回后，原有的非原子上下文状态丢失。此外，`kernel_fpu_begin_nonatomic_mask` 函数在保存 FPU 状态期间未关闭中断（`local_irq_save`），若此时发生中断嵌套，也可能破坏 FPU 状态保存过程的完整性。
+
+#解决方案
+1. 增强 `check_using_kernel_fpu` 函数功能：当检测到 `TIF_USING_FPU_NONATOMIC` 标志位时，根据上下文进行相应处理。若在 `kernel_fpu_begin`（入口）检测到该标志，将当前寄存器状态保存至内核 FPU 状态区域；若在 `kernel_fpu_end`（出口）检测到该标志，从内核 FPU 状态区域恢复寄存器值，从而防止状态损坏。
+2. 修复并发风险：在 `kernel_fpu_begin_nonatomic_mask` 函数中，在操作 FPU 状态（检查、保存）前后增加 `local_irq_save` 和 `local_irq_restore`，确保在保存 FPU 状态过程中中断被屏蔽，防止因中断嵌套导致的状态不一致。
+3. 调整检查逻辑顺序：优先检查空间大小和嵌套情况，并在开启中断保护后进行 `TIF_USING_FPU_NONATOMIC` 标志检查与状态保存操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/20f95451b7d674901b1207973ef6d9ce7d5c344d

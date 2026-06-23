@@ -1,0 +1,31 @@
+#标题
+UB/UDMA驱动重启流程阻塞导致系统重启时间过长
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统执行重启操作时，耗时异常漫长，无法快速完成关机流程。
+具体表现为驱动卸载过程中，控制队列等待响应超时，或资源释放流程陷入长时间重试/等待状态。
+
+#主要错误日志
+- 推断：ubase: ctrlq wait resp timeout, seq = %u, opcode = 0x%x, service_type = 0x%x.
+- 推断：ubase: wait activate dev resp timeout(%u ms), bus_ue_id = %u, msn = %u.
+- 推断：udma: wait flush done timeout.
+- 推断：udma: udma close ue rx failed in remove process.
+- unic remove start.
+- ubase shutdown start.
+
+#问题根因
+在系统重启流程中，驱动设备处于关闭状态，此时硬件可能无法正常响应驱动发送的命令。
+原有代码逻辑未区分正常运行态与重启/关机态，在重启过程中依然使用正常的超时时间（如8秒）等待硬件响应，或者反复重试资源释放操作（如关闭UE RX），导致驱动卸载流程阻塞，进而拖慢整个系统的重启速度。
+
+#解决方案
+1. 引入设备关闭状态标志（`UBASE_STATE_SHUTDOWN`），并在重启流程开始时置位，用于区分正常操作与重启/关机流程。
+2. 优化超时等待策略：在检测到设备处于关闭状态时，大幅缩短控制队列命令等待超时时间（由默认值调整为500ms），并缩短激活设备响应超时时间（由10s调整为1s）。
+3. 跳过非必要操作：在关闭状态下，跳过耗时的资源释放、NAPI删除及部分初始化注册流程，快速释放资源。
+4. 增加重启流程中的容错处理：在资源释放失败时（如`udma_close_ue_rx`），检测到关闭状态后直接退出循环，避免无限重试阻塞重启。
+5. 统一JFS上下文超时时间配置，移除条件编译，统一使用较长的超时值（64s）以适应不同场景。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f0af33ea5888ce2ec14d1b43cbaef75f33a83627

@@ -1,0 +1,21 @@
+#标题
+iommu/vt-d: 修复 acpi_rmrr_andd_probe 中的空指针引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RMRR (Reserved Memory Region Reporting) 相关的 ACPI 设备探测过程中，若设备结构体 `dev` 的 `iommu` 成员未初始化（为 NULL），调用 `acpi_rmrr_device_create_direct_mappings` 时会引发内核空指针引用（NULL pointer dereference），导致内核 panic 或 oops。
+
+#主要错误日志
+pr_err("cannot get acpi devie corresponding pci_device\n");
+
+#问题根因
+在函数 `acpi_rmrr_andd_probe` 中，结构体 `dev` 的 `iommu` 指针可能未被赋值（即为 NULL），但后续调用的 `acpi_rmrr_device_create_direct_mappings` 函数依赖该指针进行操作，从而触发了空指针引用。此外，代码中通过 `pci_get_slot` 获取了 `pci_device` 但未在函数返回前释放，存在引用计数泄露问题。
+
+#解决方案
+1. **修复空指针引用**：在调用映射创建函数前，检查 `dev->iommu` 是否为空，若为空则将其指向对应的 PCI 设备 (`pci_device->dev`) 的 `iommu` 成员，确保指针有效。
+2. **修复资源泄露**：在函数返回前增加 `pci_dev_put(pci_device)` 调用，正确释放对 PCI 设备的引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3b218b261c8c05f8b0d76d1cca0768e6beac2ed6

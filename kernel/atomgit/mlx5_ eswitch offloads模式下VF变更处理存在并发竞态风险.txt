@@ -1,0 +1,24 @@
+#标题
+mlx5: eswitch offloads模式下VF变更处理存在并发竞态风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在mlx5网卡eswitch offloads模式下，当快速进行模式切换或VF数量变更时，内核可能并发处理过时的work handler，导致对已释放或重配置的资源进行非法访问或操作，可能引发内核崩溃或数据结构不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在eswitch offloads模式下，事件处理器通过工作队列异步处理VF变更事件。当发生模式切换时，`mlx5_eswitch_event_handler_unregister`仅注销了通知链，但未等待或取消正在执行的队列工作。这导致旧的work handler可能在模式切换后继续执行，操作已不再有效的上下文，从而引发并发竞态问题。
+
+#解决方案
+引入代际机制来识别并丢弃过时的工作任务：
+1. 在`mlx5_esw_functions`结构体中增加原子变量`generation`。
+2. 在调度工作队列时，记录当前的`generation`值到`host_work->work_gen`。
+3. 在模式切换注销处理函数中增加`generation`计数，标记旧任务失效。
+4. 在`esw_vfs_changed_event_handler`执行前校验`work_gen`与当前`generation`是否一致，若不一致则直接跳过处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8266066dd21165869a1c64f0f54968c8e010426e

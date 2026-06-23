@@ -1,0 +1,26 @@
+#标题
+BPF验证器MEM_UNINIT语义重载导致只读内存绕过写保护漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+BPF验证器存在安全缺陷，当传递给BPF helper的缓冲区大小寄存器包含非固定值（变量访问）时，验证器错误地绕过了内存写保护检查。利用此缺陷，恶意BPF程序能够成功向标记为只读的内存区域（如 `.rodata` 全局 maps）写入数据，破坏了内核内存的只读属性，可能导致权限提升或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 BPF 验证器中 `MEM_UNINIT` 标志位的语义被错误地重载。
+1. `MEM_UNINIT` 最初的设计含义是“传递给 BPF helper 的缓冲区不需要初始化”。
+2. 后来该标志被隐式赋予了“该缓冲区正在被写入”的额外含义。
+3. 在 `check_mem_size_reg()` 函数中，针对非特权程序的变量访问场景，代码逻辑会将 `meta` 指针置为 NULL，本意是强制用户初始化缓冲区。但由于 `MEM_UNINIT` 的双重含义，当 `meta` 为 NULL 时，验证器误认为该内存操作仅为读取，从而错误地跳过了对内存写权限的检查，导致本应禁止的写操作被放行。
+
+#解决方案
+将 `MEM_UNINIT` 恢复为其原始语义（即仅表示缓冲区未初始化），并引入 `MEM_WRITE` 标志明确表示写操作属性。
+1. 修改 `check_helper_mem_access` 等相关函数接口，显式传递 `enum bpf_access_type` 参数（`BPF_READ` 或 `BPF_WRITE`），替代之前依赖 `meta->raw_mode` 的隐式判断逻辑。
+2. 在检查 `PTR_TO_MAP_KEY`、`PTR_TO_MEM`、`PTR_TO_BUF` 等类型时，直接根据传入的 `access_type` 判断是否允许写操作，若为只读内存且类型为 `BPF_WRITE` 则拒绝访问。
+3. 在 `check_mem_reg()` 和 `check_kfunc_mem_size_reg()` 中，显式并发地检查 `BPF_READ` 和 `BPF_WRITE` 两种访问权限，确保验证器正确拦截非法写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8f2f77c4b17ce77e71b10d5c62a48687f27c4f27

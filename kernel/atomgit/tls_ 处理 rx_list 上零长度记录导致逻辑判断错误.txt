@@ -1,0 +1,25 @@
+#标题
+tls: 处理 rx_list 上零长度记录导致逻辑判断错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 TLS 接收数据时，若 `rx_list` 中存在零长度记录，`recvmsg` 系统调用可能错误地提前退出处理循环，导致后续数据无法正常接收或数据处理逻辑异常。具体表现为在处理完 `rx_list` 中的记录后，程序错误地跳过了后续正常数据的解密或接收流程。
+
+#主要错误日志
+未知
+
+#问题根因
+`tls_sw_recvmsg` 函数在处理 `rx_list` 时，对控制变量 `control`（记录内容类型）的初始化与检查逻辑存在缺陷。
+根据修复补丁，原有的判断条件 `if (len <= copied || (copied && control != TLS_RECORD_TYPE_DATA) || rx_more)` 存在漏洞：当 `rx_list` 中的记录为零长度时，`copied` 可能为 0，此时 `control` 变量尚未被正确设置为有效的记录类型（因为未进入内容类型设置分支），保留了未初始化或不正确的值。
+这导致条件判断失误，程序误以为遇到了非 DATA 类型记录或满足退出条件，从而错误地结束了接收过程。实际上，应确保 `control` 变量仅在有效时才参与类型判断，且允许处理零长度记录的情况。
+
+#解决方案
+修改 `net/tls/tls_sw.c` 文件中的逻辑：
+1.  引入注释说明 `recvmsg` 返回的所有记录必须类型相同，且 0 不是有效的内容类型，用作“尚未报告类型”的初始状态。
+2.  调整 `tls_sw_recvmsg` 中的判断条件：将 `(copied && control != TLS_RECORD_TYPE_DATA)` 修改为 `(control && control != TLS_RECORD_TYPE_DATA)`。
+3.  该修改确保只有当 `control` 变量被实际设置为有效值（非 0）时，才检查其是否为非 DATA 类型；避免了因零长度记录导致 `control` 未设置而引发的错误分支跳转。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ddaa7097b5ef64d802a85e9eeab9742e3948c2a9

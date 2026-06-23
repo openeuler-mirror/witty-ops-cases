@@ -1,0 +1,20 @@
+#标题
+bpf, test_run: LIVE_FRAME页面回收后更新导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核发生内存泄漏。该问题由 Syzbot 检测发现，表现为 page_pool 中的页面未被正确归还。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bpf/test_run` 代码逻辑中，当检测到页面被修改后，会调用 `xdp_update_frame_from_buff()` 重新初始化 `xdp_frame` 结构体。然而，该函数并未更新 `frame->mem` 成员。这导致 `frame->mem` 未被正确重置，进而导致 page_pool 的页面无法被正确归还，引发内存泄漏。
+
+#解决方案
+在重置 `xdp_frame` 上下文时，显式补充对 `frame->mem` 的赋值操作。在 `reset_ctx` 函数中调用 `xdp_update_frame_from_buff()` 后，增加 `head->frame->mem = head->orig_ctx.rxq->mem;` 语句，确保 `frame->mem` 被正确初始化，修复页面无法归还的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/958ca0278860c87cecae0f840768047cf2e9ae82

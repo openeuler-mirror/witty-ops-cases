@@ -1,0 +1,34 @@
+#标题
+tracing/osnoise: 开启 stack saving 时 timerlat_dump_stack 触发内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 timerlat 并开启堆栈保存功能时，内核触发缓冲区溢出检测并引发 Panic。具体表现为 memcpy 操作检测到写入大小（88 字节）超过了缓冲区大小（0 字节），导致内核发出 WARNING 并最终崩溃。
+
+#主要错误日志
+memcpy: detected buffer overflow: 88 byte write of buffer size 0
+WARNING: CPU: 2 PID: 8153 at lib/string_helpers.c:1032 __fortify_report+0x55/0xa0
+CPU: 2 UID: 0 PID: 8153 Comm: timerlatu/2 Kdump: loaded Not tainted 6.15.3-200.fc42.x86_64 #1 PREEMPT(lazy)
+Call Trace:
+ <TASK>
+ ? trace_buffer_lock_reserve+0x2a/0x60
+ __fortify_panic+0xd/0xf
+ __timerlat_dump_stack.cold+0xd/0xd
+ timerlat_dump_stack.part.0+0x47/0x80
+ timerlat_fd_read+0x36d/0x390
+ vfs_read+0xe2/0x390
+ ksys_read+0x73/0xe0
+ do_syscall_64+0x7b/0x160
+ entry_SYSCALL_64_after_hwframe+0x76/0x7e
+
+#问题根因
+在 `__timerlat_dump_stack()` 函数中，`struct stack_entry` 的 `caller` 字段使用了 `__counted_by(size)` 属性进行边界检查。代码原先先执行 `memcpy` 将数据拷贝到 `entry->caller`，随后才设置 `entry->size`。
+在 `memcpy` 执行时，`entry->size` 尚未被赋值，此时其值为 ringbuffer 中的残留数据（垃圾数据），在某些情况下该值为 0。这导致 FORTIFY_SOURCE 机制在进行越界检查时，误判缓冲区大小为 0，而实际写入了数据（如 88 字节），从而触发缓冲区溢出告警并导致内核崩溃。
+
+#解决方案
+调整代码执行顺序，在执行 `memcpy` 拷贝堆栈数据之前，先设置 `entry->size` 字段。这样可以让 `__counted_by` 机制正确识别目标缓冲区的大小，避免误报缓冲区溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ff0e6703458c35a646ccbca9db3e549f76ee4b03

@@ -1,0 +1,20 @@
+#标题
+netfilter: nfnetlink_osf: fix potential NULL dereference in ttl check
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 nfnetlink_osf 进行被动 OS 指纹识别时，若 TTL 检查逻辑涉及本地接口查找，且 skb->dev 指针无效（为 NULL），将导致内核发生空指针解引用，进而引发 kernel panic 或 oops。此外，在容器和虚拟交换等现代网络环境中，原有的子网判断逻辑可能导致 TTL 检查结果不准确。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `nf_osf_ttl()` 在执行 TTL 检查时，直接访问 `skb->dev` 以获取本地接口地址（`__in_dev_get_rcu(skb->dev)`），但未验证 `skb->dev` 指针是否有效。当设备指针为 NULL 时，触发空指针解引用。同时，原实现通过遍历接口地址来判断源地址是否属于同一子网，该假设在现代容器化与虚拟化网络场景下已不再适用。
+
+#解决方案
+移除对 `skb->dev` 的直接引用及相关的本地接口地址查找循环。重构 `nf_osf_ttl()` 函数，使用 switch 语句直接根据 `ttl_check` 参数类型（如 `NF_OSF_TTL_TRUE`、`NF_OSF_TTL_NOCHECK`、`NF_OSF_TTL_LESS`）对 TTL 值进行判定，从而消除对设备指针的依赖并修复空指针隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f13f06d07fcfb033950cf62f15f1e3a3f002ccfd

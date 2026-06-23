@@ -1,0 +1,25 @@
+#标题
+ASoC: rsnd: HiHope 板卡因 endpoint 解析错误导致探测失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HiHope 开发板上，如果设备树中定义了单端口配置，音频驱动 Probe 过程中发生失败，导致声卡无法正常初始化。该问题是在引入多 Component 支持的补丁合入后出现的回归问题。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit 547b02f74e4a ("ASoC: rsnd: enable multi Component support for Audio Graph Card/Card2") 增加了对多端口的支持，但在处理单端口配置时，代码逻辑使用了错误的设备节点指针来获取 endpoint。
+具体来说，在 `rsnd_dai_of_node` 和 `rsnd_dai_probe` 函数中，对于仅有 `port` 节点而无 `ports` 包装节点的设备树结构，代码错误地将 `ports` 指针（此时指向 `port`）传递给解析函数，导致无法正确检索到 endpoint 节点，从而引发探测失败。
+
+#解决方案
+修正 `rsnd_dai_of_node()` 和 `rsnd_dai_probe()` 函数中的节点指针逻辑：
+1. 判断节点名称是否为 "ports"。
+2. 如果是 "ports" 多端口容器，则使用该 `ports` 节点指针。
+3. 如果是 "port" 单端口节点，则使用传入的父节点指针 `np`。
+此修复确保了在单端口和多端口两种配置下，endpoint 均能被正确解析，恢复了对 HiHope 板卡的兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e0913fb6f8cb94ef08a78815785721bd47e78a0d

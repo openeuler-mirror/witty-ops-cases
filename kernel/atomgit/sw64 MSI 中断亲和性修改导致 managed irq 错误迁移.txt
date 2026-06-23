@@ -1,0 +1,20 @@
+#标题
+sw64 MSI 中断亲和性修改导致 managed irq 错误迁移
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构下，当 managed irq（受管理的中断）的亲和性掩码与 cpu_online_mask 没有交集时（例如中断绑定的 CPU 已下线），系统未正确处理该中断，而是将其错误地迁移至某个在线 CPU。这违反了 managed irq 的管理语义，可能导致中断路由错误或系统状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__assign_irq_vector` 函数处理 managed irq 时，代码计算了亲和性掩码与在线 CPU 掩码的交集（`cpumask_and(&searchmask, mask, cpu_online_mask)`），但未检查结果是否为空。如果交集为空，代码逻辑未停止后续处理，导致中断被强制迁移到在线 CPU，而非被禁用。根据设计，若 managed irq 的亲和性与在线 CPU 无交集，应当禁用该中断而不是进行迁移。
+
+#解决方案
+在 `drivers/irqchip/irq-sunway-msi.c` 和 `drivers/irqchip/irq-sunway-msi-v2.c` 的 `__assign_irq_vector` 函数中增加检查逻辑：在计算掩码交集后，立即判断 `searchmask` 是否为空。若为空，则直接返回 `-EINVAL`，阻止后续的中断迁移操作，确保 managed irq 在无可用 CPU 时正确失效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8dc021978c9f94594cd55538e4e6fb056689d318

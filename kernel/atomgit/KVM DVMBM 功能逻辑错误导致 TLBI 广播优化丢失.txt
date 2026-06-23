@@ -1,0 +1,25 @@
+#标题
+KVM DVMBM 功能逻辑错误导致 TLBI 广播优化丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HiSilicon 平台上运行 KVM 虚拟化负载时，DVMBM（Distributed Virtual Memory Broadcast Mechanism）相关的 TLBI 广播优化功能失效。具体表现为：
+1. 功能判断逻辑错误，当用户通过内核参数启用 dvmbm_enabled 时，函数 `hisi_dvmbm_supported` 可能错误地返回 false，导致优化功能未开启。
+2. 优化状态管理不当，在 vcpu_load/vcpu_put 调度路径中缺乏正确的硬件状态切换，导致在非必要的场景下优化丢失或状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+代码逻辑存在两处严重缺陷：
+1. `hisi_dvmbm_supported` 函数逻辑颠倒：原代码在检测到用户启用参数（dvmbm_enabled）后，先执行了 `on_each_cpu(hardware_disable_dvmbm, ...)` 关闭功能，随即判断参数未开启直接返回 false，导致即使在启用状态下也无法真正开启硬件功能。
+2. 调度路径缺失硬件控制：在 `kvm_tlbi_dvmbm_vcpu_load` 和 `kvm_tlbi_dvmbm_vcpu_put` 的调度流程中，缺失了对 `hardware_enable_dvmbm` 和 `hardware_disable_dvmbm` 的调用，导致 DVMBM 硬件特性无法随 VCPU 的调度上下文正确生效或关闭，丢失了 TLBI 广播优化机会。
+
+#解决方案
+1. 修正功能探测逻辑：重构 `hisi_dvmbm_supported` 函数，移除错误的条件分支。统一先重置硬件状态（disable），随后直接返回用户设定的 `dvmbm_enabled` 参数值，由上层调用者决定是否开启。
+2. 补全调度路径控制：在 `kvm_tlbi_dvmbm_vcpu_load` 中增加 `hardware_enable_dvmbm()` 调用以在加载 VCPU 时开启优化；在 `kvm_tlbi_dvmbm_vcpu_put` 中增加 `hardware_disable_dvmbm(NULL)` 调用以在切换出 VCPU 时关闭优化，确保硬件状态与 VCPU 调度上下文同步。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14b81f27ec8b0fec8e80aa3b2a24b1575bb7c748

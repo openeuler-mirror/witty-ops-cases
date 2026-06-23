@@ -1,0 +1,21 @@
+#标题
+Keem Bay OCS HCU 驱动未检查 sg_nents_for_len 返回值导致潜在异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Keem Bay OCS HCU 加密驱动处理 DMA 请求时，若 `sg_nents_for_len` 函数执行出错（返回负值），驱动程序未进行错误检查直接将错误值作为有效的 scatter/gather 条目数量使用。这可能导致后续的 DMA 映射操作处理非法地址或数量，引发内核异常或不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `sg_nents_for_len()` 返回值为 int 类型，当发生错误时返回负数。但在 `kmb_ocs_dma_prepare` 函数中，用于接收返回值的变量 `nents` 被错误地定义为 `size_t`（无符号类型）。这导致无法通过小于 0 的判断来检测错误。同时，代码逻辑中缺失了对该函数返回值的错误检查，直接将返回值用于后续的 DMA 映射处理。
+
+#解决方案
+1. 将变量 `nents` 的数据类型从 `size_t` 修改为 `int`，以正确承载负数错误码。
+2. 在调用 `sg_nents_for_len()` 后增加返回值检查逻辑，若返回值小于 0，则直接向上层返回该错误码，终止当前 DMA 准备流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9e37f60b65cc93cfd324e08f36de54f54295b072

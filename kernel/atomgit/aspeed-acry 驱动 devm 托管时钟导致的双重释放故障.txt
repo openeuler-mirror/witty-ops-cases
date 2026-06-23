@@ -1,0 +1,20 @@
+#标题
+aspeed-acry 驱动 devm 托管时钟导致的双重释放故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 aspeed ACRY RSA 加密驱动时，若驱动初始化流程中发生错误回退，或驱动被卸载，内核会发生双重释放错误。具体表现为驱动detach过程中，系统试图释放已被 devres 自动释放的时钟资源，破坏了内存管理的完整性。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码中使用了 devm_clk_get_enabled() 函数来获取并使能时钟，该函数申请的资源由 devres 机制托管，在驱动卸载时会自动执行 disable 和 unprepare 操作。然而，代码在 aspeed_acry_probe 的错误处理路径和 aspeed_acry_remove 函数中，又显式调用了 clk_disable_unprepare() 进行手动清理。这导致同一时钟资源被释放两次，引发双重释放问题。
+
+#解决方案
+删除 aspeed_acry_probe 函数错误处理路径（clk_exit 标签处）和 aspeed_acry_remove 函数中对 clk_disable_unprepare() 的显式调用，完全依赖 devm 机制进行时钟资源的管理与释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/331c670e6f7d85b93a17a9d3b091b0fff73a1f79

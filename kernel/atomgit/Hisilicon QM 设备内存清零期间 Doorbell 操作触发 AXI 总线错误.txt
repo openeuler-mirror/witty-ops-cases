@@ -1,0 +1,24 @@
+#标题
+Hisilicon QM 设备内存清零期间 Doorbell 操作触发 AXI 总线错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设备复位流程中，当设备内存被清零后，若软件在此期间发起 Doorbell 操作，硬件在处理该 Doorbell 时会触发 AXI 总线错误。该错误由内存清零导致硬件访问地址 0 引起。
+
+#主要错误日志
+未知
+
+#问题根因
+在控制器复位过程中，软件先清除了设备内存，随后发送了 Doorbell 操作。由于内存已被清空，硬件在处理 Doorbell 时访问了无效地址（如地址 0），从而触发了 AXI 错误。该问题出现的根本原因是在内存初始化完成的窗口期内，未对 AXI 错误进行屏蔽保护。
+
+#解决方案
+在内存初始化（memory init）之前先屏蔽 AXI 错误，待操作完成后再解除屏蔽。具体修改如下：
+1. 在 `hisi_qm` 驱动中新增 `disable_axi_error` 和 `enable_axi_error` 回调函数，并在 QM、HPRE、SEC、ZIP 各算法驱动中实现该接口。
+2. 定义各设备的 `AXI_ERROR_MASK`（如 QM 为 `QM_RAS_AXI_ERROR`，HPRE 为 `HPRE_AXI_ERROR_MASK` 等）。
+3. 在 `qm_controller_reset_done` 流程中，在调用 `hisi_qm_dev_err_init` 之后、`open_axi_master_ooo` 之前调用 `qm_disable_axi_error` 屏蔽错误，待操作结束后调用 `qm_enable_axi_error` 恢复。
+4. 屏蔽/解除屏蔽操作通过写入相应的中断掩码寄存器（如 `QM_ABNORMAL_INT_MASK`）和 OOO 关闭选择寄存器（如 `QM_OOO_SHUTDOWN_SEL`）实现。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fab862e98462dfa0a09400ae8c936c3ac5ba1b33

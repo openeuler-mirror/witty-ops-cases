@@ -1,0 +1,20 @@
+#标题
+urma: 修复 jetty 资源释放函数调用错误并移除调试日志
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 urma 模块处理 jetty 导入（import）流程中，若 TLV 数据追加（tlv_append）失败，系统无法正确清理已分配的 jetty 资源，导致资源泄漏或对象状态不一致。
+
+#主要错误日志
+ubcore_log_err("get primary eid failed, ret = %d\n", ret);
+
+#问题根因
+在 `uburma_cmd_import_jetty_async` 函数的错误处理路径中，当 `uburma_tlv_append` 失败时，原代码错误地调用了 `ubcore_unimport_jetty_async` 并执行 `uobj_alloc_abort`。这不符合该函数上下文的资源释放逻辑，应调用 `uburma_unimport_jetty` 来正确释放句柄资源。此外，代码中遗留了不必要的调试日志打印，干扰了正常日志记录。
+
+#解决方案
+修正 `uburma_cmd_import_jetty_async` 中的错误处理逻辑：将 `ubcore_unimport_jetty_async` 和 `uobj_alloc_abort` 的调用替换为 `uburma_unimport_jetty`，确保资源正确释放。同时，删除 `ubmad_post_send` 函数中用于调试的 `ubcore_log_err` 打印，保持代码整洁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad70bb1b9a9489cf9303d24a234267caf273bd01

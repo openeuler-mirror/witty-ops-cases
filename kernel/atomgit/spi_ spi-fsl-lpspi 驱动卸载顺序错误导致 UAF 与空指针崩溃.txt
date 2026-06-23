@@ -1,0 +1,33 @@
+#标题
+spi: spi-fsl-lpspi 驱动卸载顺序错误导致 UAF 与空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动卸载过程中，若此时正在进行 SPI 传输，内核会触发 NULL 指针解引用错误，导致崩溃。具体表现为 `fsl_lpspi_remove()` 执行后，DMA 通道已被同步释放，但由于 SPI 控制器尚未注销，正在运行的传输试图访问已释放的资源，引发 Use-After-Free。
+
+#主要错误日志
+- fsl_lpspi 42550000.spi: I/O Error in DMA RX
+- Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
+- Call trace:
+  - fsl_lpspi_dma_transfer+0x260/0x340 [spi_fsl_lpspi]
+  - fsl_lpspi_transfer_one+0x198/0x448 [spi_fsl_lpspi]
+  - spi_transfer_one_message+0x49c/0x7c8
+  - __spi_pump_transfer_message+0x120/0x420
+  - __spi_sync+0x2c4/0x520
+  - spi_sync+0x34/0x60
+  - spidev_message+0x20c/0x378 [spidev]
+  - spidev_ioctl+0x398/0x750 [spidev]
+
+#问题根因
+驱动存在卸载顺序错误。在 `fsl_lpspi_probe()` 中使用了 `devm_spi_register_controller()`，该函数会延迟 SPI 控制器的注销，使其在 `fsl_lpspi_remove()` 函数返回之后才执行。而在 `fsl_lpspi_remove()` 函数中，代码同步地拆除了 DMA 通道。这导致了一个时间窗口：`fsl_lpspi_remove()` 返回前 DMA 已被释放，但 SPI 控制器仍未注销，此时若有正在进行的 SPI 传输，会触发对已释放 DMA 资源的使用，导致 UAF 和空指针崩溃。
+
+#解决方案
+将 SPI 控制器的注册方式从托管方式改为手动管理，确保卸载顺序正确：
+1. 在 `fsl_lpspi_probe()` 中，将 `devm_spi_register_controller()` 替换为 `spi_register_controller()`。
+2. 在 `fsl_lpspi_remove()` 中，在调用 `fsl_lpspi_dma_exit()` 释放 DMA 资源之前，显式调用 `spi_unregister_controller()`。
+此举确保了在释放底层 DMA 资源前，SPI 设备已停止工作并被注销，消除了 UAF 隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ea8181a84172bf4ced0d5883a9b2d0df64cdd5dc

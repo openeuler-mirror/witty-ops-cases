@@ -1,0 +1,28 @@
+#标题
+FLR前错误报告禁用失效导致重置逻辑异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行函数级重置（FLR）过程中，驱动程序尝试禁用设备错误报告。但在等待设备重置完成期间，如果错误被恢复，错误位会被重新使能，导致之前禁用错误报告的操作失效。这可能导致在FLR过程中出现不可预期的错误干扰或重置流程异常，严重时可能导致重置失败或设备状态不一致。
+
+#主要错误日志
+- `pci_err(pdev, "FLR not ready!\n");`
+- `pci_err(pdev, "the hardware error was not recovered!\n");`
+- `pci_err(pdev, "Failed to stop QM, ret = %d.\n", ret);`
+- `pci_err(pdev, "failed to stop by vfs in FLR!\n");`
+- `pci_info(pdev, "FLR resetting prepare failed!\n");`
+
+#问题根因
+在执行FLR（Function Level Reset）之前，驱动程序首先调用 `qm_dev_err_uninit` 禁用设备错误报告，然后等待设备重置完成。然而，在等待期间如果错误被恢复（error recovered），硬件错误位会被重新使能，导致之前的禁用操作无效，使得错误报告在FLR关键路径上处于未禁用状态。
+
+#解决方案
+调整FLR准备阶段的逻辑顺序。修改为先检测设备是否存在错误，只有在确认无错误的情况下才执行禁用错误报告的操作，随后进行FLR。具体改动包括：
+1. 将错误检测和禁用逻辑放入循环中，确保在无错误状态下才退出循环进行后续FLR操作。
+2. 如果检测到错误，则清除复位位并等待一段时间重试，防止在错误未恢复时强行执行FLR。
+3. 增加了超时处理机制，若错误长时间未恢复则报错退出。
+4. 优化了 `hisi_qm_stop` 失败时的处理路径，确保资源正确释放和状态正确设置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/194d888d280e4f7e6a9298df12f2db2c65c2715d

@@ -1,0 +1,40 @@
+#标题
+rpmsg: glink rpmsg 设备引用泄露导致 sysfs 重复创建故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在测试 rpmsg-char 接口时，系统检测到 sysfs 尝试创建重复的文件名，触发内核警告堆栈。由于 rpmsg 设备指针泄露，导致设备无法正常注销，后续尝试注册同名设备时失败。
+
+#主要错误日志
+sysfs: cannot create duplicate filename '/devices/platform/soc@0/3700000.remoteproc/remoteproc/remoteproc1/3700000.remoteproc:glink-edge/3700000.remoteproc:glink-edge.adsp_apps.-1.-1'
+[  114.115347] CPU: 0 UID: 0 PID: 9 Comm: kworker/0:0 Not tainted 6.16.0-rc4 #7 PREEMPT
+[  114.115355] Hardware name: Qualcomm Technologies, Inc. Robotics RB3gen2 (DT)
+[  114.115358] Workqueue: events qcom_glink_work
+[  114.115371] Call trace:
+[  114.115374]  show_stack+0x18/0x24 (C)
+[  114.115382]  dump_stack_lvl+0x60/0x80
+[  114.115388]  dump_stack+0x18/0x24
+[  114.115393]  sysfs_warn_dup+0x64/0x80
+[  114.115402]  sysfs_create_dir_ns+0xf4/0x120
+[  114.115409]  kobject_add_internal+0x98/0x260
+[  114.115416]  kobject_add+0x9c/0x108
+[  114.115421]  device_add+0xc4/0x7a0
+[  114.115429]  rpmsg_register_device+0x5c/0xb0
+[  114.115434]  qcom_glink_work+0x4bc/0x820
+[  114.115438]  process_one_work+0x148/0x284
+[  114.115446]  worker_thread+0x2c4/0x3e0
+[  114.115452]  kthread+0x12c/0x204
+[  114.115457]  ret_from_fork+0x10/0x20
+[  114.115464] kobject: kobject_add_internal failed for 3700000.remoteproc:glink-edge.adsp_apps.-1.-1 with -EEXIST, don't try to register things with the same name in the same directory.
+[  114.250045] rpmsg 3700000.remoteproc:glink-edge.adsp_apps.-1.-1: device_add failed: -17
+
+#问题根因
+在 `qcom_glink_destroy_ept` 函数中，代码直接将 `channel->rpdev` 设置为 NULL，而没有先调用 `rpmsg_unregister_device` 进行注销。这导致了 rpmsg 设备指针泄露。后续尝试注销该设备时，因为 `rpdev` 已经为 NULL，注销操作失败，导致设备对象残留，进而引发后续注册同名设备时出现 sysfs 重复文件名错误。
+
+#解决方案
+在将 `channel->rpdev` 置为 NULL 之前，检查该指针是否存在。如果存在，则构造 `rpmsg_channel_info` 结构体，并调用 `rpmsg_unregister_device` 函数正确注销设备，从而避免设备泄露。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8312df4f0e62d0509a7720f9938a0ac21ba78159

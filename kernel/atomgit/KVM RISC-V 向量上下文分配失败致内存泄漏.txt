@@ -1,0 +1,20 @@
+#标题
+KVM RISC-V 向量上下文分配失败致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V 架构的 KVM 虚拟化场景下，当创建 VCPU 并分配向量上下文时，若 `host_context` 的向量数据分配失败（内存不足），此前已成功分配的 `guest_context` 向量数据未被释放。此缺陷导致内存泄漏，长时间运行或频繁创建销毁 VCPU 可能导致系统可用内存减少。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `kvm_riscv_vcpu_alloc_vector_context` 中，代码逻辑先为 `guest_context.vector.datap` 分配了内存，随后为 `host_context.vector.datap` 分配内存。当 `host_context.vector.datap` 分配失败（返回 NULL）时，函数直接返回 `-ENOMEM`，但未释放之前已分配的 `guest_context.vector.datap`，导致内存泄漏。
+
+#解决方案
+在 `host_context.vector.datap` 分配失败的分支中，增加对 `guest_context.vector.datap` 的释放操作，并将指针置为 NULL，确保资源被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31fca0fa6bc5f4b46a9400ede3a5e1dae55624c6

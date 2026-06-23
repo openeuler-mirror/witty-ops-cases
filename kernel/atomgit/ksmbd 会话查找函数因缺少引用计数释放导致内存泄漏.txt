@@ -1,0 +1,20 @@
+#标题
+ksmbd 会话查找函数因缺少引用计数释放导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd（内核 SMB 服务器）处理会话查找时，若会话状态非 `SMB2_SESSION_VALID`，函数会返回 NULL，但此前未释放对会话对象的引用计数。这会导致会话对象的引用计数无法归零，进而造成内核内存泄漏（memory leak）。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ksmbd_session_lookup_all` 中，通过 `ksmbd_session_lookup` 或 `ksmbd_session_lookup_slowpath` 获取会话对象 `sess` 时，会增加对象的引用计数。当会话状态不为 `SMB2_SESSION_VALID` 时，代码逻辑直接将 `sess` 指针置为 NULL 并返回，遗漏了释放引用计数（调用 `ksmbd_user_session_put`）的操作，导致对象无法被正常释放。
+
+#解决方案
+在 `fs/smb/server/mgmt/user_session.c` 的 `ksmbd_session_lookup_all` 函数中，当检测到会话状态无效时，在将指针置为 NULL 之前，增加调用 `ksmbd_user_session_put(sess)` 以正确释放引用计数，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/608935ebf21acc3c2eca6f3e48de4f9949058546

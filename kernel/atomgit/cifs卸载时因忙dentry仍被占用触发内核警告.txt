@@ -1,0 +1,25 @@
+#标题
+cifs卸载时因忙dentry仍被占用触发内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 CIFS 文件系统时，若此时正在关闭文件（close 操作），会触发内核警告 `BUG: Dentry ... still in use`。这是因为在卸载过程中，仍有后台任务持有 dentry 引用，导致卸载检查失败。
+
+#主要错误日志
+BUG: Dentry 00000000a14a6845{i=c,n=file}  still in use (1) [unmount of cifs cifs]
+
+#问题根因
+自从提交 340cea84f691c ("cifs: open files should not hold ref on superblock") 后，CIFS 文件仅持有 dentry 的引用计数。问题发生的详细流程如下：
+1. 进程 A 打开文件，CIFS 层通过 `dget` 增加引用计数，随后关闭文件时将关闭任务放入 `deferredclose_wq` 工作队列延迟执行，此时 `dput` 将引用计数减为 1。
+2. 进程 B 执行卸载操作，调用 `cifs_kill_sb`。
+3. `cifs_kill_sb` 调用 `cifs_close_all_deferred_files_sb` 尝试清理延迟关闭的文件，但因为对应的 `cfile` 已从链表中删除（或未被正确识别），清理操作未生效，未执行 `_cifsFileInfo_put`。
+4. 随后调用 `kill_anon_super` -> `generic_shutdown_super` -> `shrink_dcache_for_umount`，此时检查发现 dentry 引用计数仍为 1，触发 `WARN` 警告。
+5. 与此同时，kworker 执行延迟关闭任务 `smb2_deferred_work_close`，最终释放 dentry 引用，但为时已晚，卸载流程已检测到引用泄漏。
+
+#解决方案
+在 `cifs_kill_sb` 函数中调用 `kill_anon_super` 之前，增加对 `deferredclose_wq` 工作队列的刷新操作（`flush_workqueue`）。这确保了所有挂起的延迟关闭任务在卸载流程检查 dentry 引用之前执行完毕，从而正确释放 dentry 引用，避免触发“dentry 仍被使用”的警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/567426fc9bfbb962cb18f1bb9e6f66d488359b03

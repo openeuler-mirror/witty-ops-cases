@@ -1,0 +1,20 @@
+#标题
+vhost_net: vhost_net_busy_poll 中因抢占禁用导致的非法睡眠内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中触发内核报告 "sleeping function called from invalid context" 错误，导致内核崩溃或调用栈异常。该问题由 syzbot 发现，发生在 vhost_net_busy_poll() 函数执行过程中。
+
+#主要错误日志
+BUG: sleeping function called from invalid context in vhost_net_busy_poll
+
+#问题根因
+Commit 030881372460 引入的 busy-poll 循环使用了 preempt_disable()/preempt_enable() 对，但在循环内部的迭代过程中调用了可能睡眠的函数。禁用抢占的初衷是为了保证基于 local_clock() 的超时计时在单个 CPU 上运行，而非 busy-poll 本身的强制要求。在抢占禁用的上下文中调用睡眠函数导致了非法上下文睡眠问题。
+
+#解决方案
+将 vhost_net_busy_poll() 函数中的 preempt_disable() 替换为 migrate_disable()，并在函数结尾将 preempt_enable() 替换为 migrate_enable()。migrate_disable() 足以满足绑定 CPU 进行时钟计算的需求，同时允许进程被抢占，从而避免了在禁用抢占上下文中调用睡眠函数引发的错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/91d720a8172c4a0b58e375709a8c6b02b2f1bcc9

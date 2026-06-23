@@ -1,0 +1,27 @@
+#标题
+mm: 修复 lazy mmu 模式文档与嵌套调用缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+代码审查发现 `arch_[enter|leave]_lazy_mmu_mode()` 的实现语义混乱，存在多处潜在缺陷：
+1. **嵌套调用风险**：默认的 `set_ptes()` 实现中调用了 lazy mmu 模式接口，若外层调用者已处于 lazy mmu 模式，将导致嵌套调用，而部分架构（如 powerpc）无法处理嵌套情况。
+2. **抢占与迁移风险**：内核 PTE 更新路径下未持有锁，lazy mmu 区域可能发生抢占或 CPU 迁移，导致 x86 和 sparc 架构下的实现出现不一致或崩溃（Sparc 被认为在抢占面前完全不可用）。
+3. **上下文风险**：文档未明确禁止在中断上下文中使用该模式。
+
+#主要错误日志
+未知
+
+#问题根因
+Lazy MMU 模式的语义定义不清晰，导致各架构实现逻辑不一致：
+1. `set_ptes()` 的通用实现中自动包含了 `arch_enter_lazy_mmu_mode()` 调用，导致在使用该接口时极易意外触发 lazy mmu 区域的嵌套。
+2. 早期设计假定 lazy mmu 区域由页表锁保护且不可抢占，但在内核映射更新路径（如 `apply_to_pte_range`）中并未持有锁，打破了该假定。
+3. 不同架构对抢占和嵌套的处理方式存在冲突（如 x86 尝试支持嵌套但破坏了抢占支持，powerpc 禁用抢占，sparc 存在缺陷），缺乏统一的规范约束。
+
+#解决方案
+1. **修正代码逻辑**：移除 `set_ptes()` 默认实现中的 `arch_enter_lazy_mmu_mode()` 和 `arch_leave_lazy_mmu_mode()` 调用，禁止在该通用接口中隐式开启 lazy mmu 模式，从而消除嵌套风险。
+2. **更新文档规范**：明确 `arch_[enter|leave]_lazy_mmu_mode()` 的语义约束，规定该模式不可嵌套、不可用于中断上下文，且必须假设抢占可能开启、CPU 迁移可能发生，各架构实现需据此进行适配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c083f3302c97c2034308e68b4e5d03edfd0a4a9d

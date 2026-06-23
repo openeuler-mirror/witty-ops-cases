@@ -1,0 +1,20 @@
+#标题
+usbnet 驱动网络设备命名回归故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+USB 网络设备在探测过程中，原本应根据硬件地址特征正确命名为 "eth%d"，但受先前补丁影响，网络设备名称判断逻辑失效，导致设备命名异常（无法正确识别为 eth 设备），破坏了原有的命名约定。
+
+#主要错误日志
+未知
+
+#问题根因
+先前的修复补丁（bab8eb0dd4cb9 "usbnet: modern method to get random MAC"）改变了 MAC 地址的初始化时序。在调用 bind() 函数之前，网络设备不再拥有随机 MAC 地址，而是保持为零地址。原有的代码逻辑通过检查 `net->dev_addr[0]` 的本地分配位（bit 0x02）来判断 bind() 是否修改了 MAC 地址，但在 MAC 地址全零的情况下，该检查结果始终为否定，导致判断逻辑错误，无法正确识别命名约定。
+
+#解决方案
+修改 `drivers/net/usb/usbnet.c` 中的判断条件，不再依赖本地分配位检查，改为使用 `is_zero_ether_addr(net->dev_addr)` 函数。通过检查 MAC 地址是否为零来判断 bind() 是否已修改了 MAC 地址，从而正确恢复网络设备的命名逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0a0f154c74af22625119a99074e2e3caa4a1fadf

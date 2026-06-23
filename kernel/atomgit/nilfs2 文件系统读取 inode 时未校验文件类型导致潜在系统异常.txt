@@ -1,0 +1,20 @@
+#标题
+nilfs2 文件系统读取 inode 时未校验文件类型导致潜在系统异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 nilfs2 文件系统中存在包含无效文件类型位的 inode 时，读取该 inode 会导致系统判定错误或逻辑异常。若不修复，内核可能尝试使用未正确初始化或不适用的操作结构处理该 inode，进而在后续操作中引发不可预期的行为或文件系统错误。
+
+#主要错误日志
+nilfs_error: invalid file type bits in mode 0%o for inode %lu
+
+#问题根因
+在 `__nilfs_read_inode` 函数中，原始代码对 inode 类型的判断逻辑不够严谨。当 `inode->i_mode` 不属于常规文件、目录、符号链接、字符设备、块设备、FIFO 或套接字中的任何一种时，代码错误地进入了 `else` 分支。这导致内核将无效类型的 inode 当作特殊 inode 处理，调用了 `init_special_inode`，未对非法的文件类型模式进行拦截和报错。
+
+#解决方案
+在 `__nilfs_read_inode` 函数中增加严格的文件类型校验逻辑。修改 `else` 分支为显式检查 `S_ISCHR`、`S_ISBLK`、`S_ISFIFO` 和 `ISSOCK`。若文件类型均不匹配，则新增 `else` 分支调用 `nilfs_error` 报告 "invalid file type bits" 错误，并返回 `-EIO` 错误码，拒绝读取该无效 inode。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b079a6f75a61fda6bf20c41c5f38f67f952e28b0

@@ -1,0 +1,20 @@
+#标题
+af_packet: tpacket_snd 函数中 SO_SNDTIMEO 约束失效问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `tpacket_snd` 进行数据包发送时，若发生阻塞等待（`ph` 为 NULL 且需要等待），`SO_SNDTIMEO` 设置的超时时间约束失效，导致实际等待时间远超用户设置的套接字发送超时阈值。
+
+#主要错误日志
+未知
+
+#问题根因
+由于提交 581073f626e3 ("af_packet: do not call packet_read_pending() from tpacket_destruct_skb()") 的变更，`tpacket_destruct_skb()` 执行时会标记 `skb_completion` 为完成状态。当 `wait_for_completion_interruptible_timeout()` 返回完成时，`pending_refcnt` 可能尚未减至零。因此，当 `ph` 为 NULL 时，等待函数可能需要被多次调用。原代码在每次循环等待时都重新调用 `sock_sndtimeo()` 获取超时时间，这导致每次循环都重置了超时计时，使得总的等待时间可能远超最初设定的 `SO_SNDTIMEO` 值。
+
+#解决方案
+将 `sock_sndtimeo()` 的调用位置从循环内部移至循环外部（`do-while` 循环之前），确保超时时间仅在初始化时计算一次。这样在后续的循环等待中，`wait_for_completion_interruptible_timeout()` 基于剩余时间进行递减，从而正确生效 `SO_SNDTIMEO` 的约束。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/21ce885e2221ff094e1198cfdf764be5ab3693a3

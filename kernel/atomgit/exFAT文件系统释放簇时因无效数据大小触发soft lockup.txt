@@ -1,0 +1,23 @@
+#标题
+exFAT文件系统释放簇时因无效数据大小触发soft lockup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当文件或目录项的数据大小（data size）无效时，`__exfat_free_cluster` 函数中的位图清除循环会长时间占用 CPU 不释放，导致内核发生 soft lockup，系统响应迟滞或挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__exfat_free_cluster` 函数处理 `ALLOC_NO_FAT_CHAIN` 情况时，如果文件/目录项的数据大小无效，循环条件 `num_clusters < p_chain->size` 会导致循环执行次数过多。更关键的是，原代码在 `exfat_clear_bitmap` 中没有检查位图状态，如果待清除的簇位图已经是清除状态（clear），函数仍会继续尝试清除并更新缓冲区头，导致无效的长时间循环操作，从而引发 soft lockup。
+
+#解决方案
+修改 `exfat_clear_bitmap` 函数及其调用逻辑：
+1. 修改 `exfat_clear_bitmap` 返回值类型为 `int`，使其具备错误反馈能力。
+2. 在 `exfat_clear_bitmap` 内部增加检查：如果待清除的位图位已经是 0（clear 状态），直接返回 `-EIO` 错误，避免无意义的重复清除操作。
+3. 在 `__exfat_free_cluster` 的循环调用逻辑中，检查 `exfat_clear_bitmap` 的返回值，如果返回错误（如检测到位图已清除），立即跳出循环，终止耗时的无效遍历。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/263ecb3ccf014d7ab1b6d4c6151866b2f634e734

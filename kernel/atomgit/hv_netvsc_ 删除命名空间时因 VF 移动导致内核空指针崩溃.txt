@@ -1,0 +1,36 @@
+#标题
+hv_netvsc: 删除命名空间时因 VF 移动导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除包含 netvsc NIC 和 VF（虚拟功能）的命名空间时，内核发生空指针解引用并触发 Panic。
+具体场景为：当 netvsc NIC 被移回默认命名空间并重新注册时，它会自动将 VF NIC 也带回默认命名空间。这一行为干扰了内核 `default_device_exit_net()` 函数中的 `for_each_netdev_safe` 循环，导致循环无法正确检测到列表末尾，从而触发了空指针崩溃。
+
+#主要错误日志
+- mana 7870:00:00.0 enP30832s1: Moved VF to namespace with: eth0
+- BUG: kernel NULL pointer dereference, address: 0000000000000010
+- #PF: supervisor read access in kernel mode
+- #PF: error_code(0x0000) - not-present page
+- Oops: Oops: 0000 [#1] SMP NOPTI
+- Workqueue: netns cleanup_net
+- RIP: 0010:default_device_exit_batch+0x16c/0x3f0
+- Call Trace:
+  - ops_undo_list+0x100/0x220
+  - cleanup_net+0x1b8/0x300
+  - process_one_work+0x184/0x340
+
+#问题根因
+现有代码在 netvsc NIC 接收到 `NETDEV_REGISTER` 事件时，直接将 VF NIC 移动到新的命名空间。在删除命名空间的过程中，`default_device_exit_batch()` >> `default_device_exit_net()` 被调用。当 netvsc NIC 被移回并在默认命名空间中注册时，它会自动将 VF NIC 带回默认命名空间。这导致 `default_device_exit_net()` 中的 `for_each_netdev_safe` 循环无法检测到列表末尾，从而命中空指针。
+
+#解决方案
+将命名空间变更操作移至工作队列中执行，并在执行时获取 `rtnl_lock` 锁。这样可以避免在 `default_device_exit_net()` 使用网络设备列表时修改该列表，从而防止遍历循环出错。
+具体修改包括：
+1. 在 `net_device_context` 结构体中新增 `vfns_work` 延迟工作项。
+2. 新增 `netvsc_vfns_work` 函数，负责在持有 `rtnl_lock` 的情况下调用 `netvsc_event_set_vf_ns`。
+3. 修改 `netvsc_netdev_event` 函数，在处理 `NETDEV_REGISTER` 事件时，不再直接调用 `netvsc_event_set_vf_ns`，而是调度 `vfns_work` 执行。
+4. 在 `netvsc_remove` 和 `netvsc_suspend` 路径中增加对 `vfns_work` 的取消同步操作，确保资源释放时的安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/77d660f80e91ddfa2922fadafa979f5cabbe8dc0

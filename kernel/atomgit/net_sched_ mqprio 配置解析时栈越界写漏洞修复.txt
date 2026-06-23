@@ -1,0 +1,20 @@
+#标题
+net/sched: mqprio 配置解析时栈越界写漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 mqprio（Multiqueue Priority Qdisc）时，若用户空间传入的 `TCA_MQPRIO_TC_ENTRY_INDEX` 参数值为 16（即 `TC_QOPT_MAX_QUEUE`），将触发内核栈越界写。该越界写发生在 `fp[]` 数组上，写入长度为 4 字节。由于 `fp[]` 数组仅能容纳 16 个元素（有效索引范围 0-15），索引 16 越出了数组边界，可能导致内核数据损坏或引发内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在解析 mqprio 参数时，`TCA_MQPRIO_TC_ENTRY_INDEX` 的 NLA 策略定义为 `NLA_POLICY_MAX(NLA_U32, TC_QOPT_MAX_QUEUE)`。该校验逻辑允许传入值为 16（`TC_QOPT_MAX_QUEUE` 的值）。然而，内核栈上的 `fp[]` 数组大小仅为 16，其合法访问下标为 0 到 15。当校验通过值为 16 时，后续代码直接将其作为下标写入 `fp[]` 数组，导致发生 4 字节的栈越界写。
+
+#解决方案
+修改 `net/sched/sch_mqprio.c` 中的 `mqprio_tc_entry_policy` 策略定义，将 `TCA_MQPRIO_TC_ENTRY_INDEX` 的最大值限制从 `TC_QOPT_MAX_QUEUE` 修正为 `TC_QOPT_MAX_QUEUE - 1`，从而严格限制索引值在数组合法范围内（0-15），防止越界写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9b0196cd39763416ab37612079ffbf258275e57

@@ -1,0 +1,21 @@
+#标题
+libceph: auth 消息处理导致 slab-out-of-bounds 访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当收到（可能被损坏的）类型为 CEPH_MSG_AUTH_REPLY 的消息，且其 result 字段包含正值时，内核会将其视为错误码并尝试发送预分配的 CEPH_MSG_AUTH 消息。此时 result 值被错误地解释为发送段的长度。如果该值大于分配的内存缓冲区大小，将发生越界访问，导致内存越界读取或系统崩溃。
+
+#主要错误日志
+auth protocol '%s' mauth authentication failed: %d
+
+#问题根因
+在 `ceph_handle_auth_reply()` 函数中，对 `result` 字段的判断逻辑存在缺陷。原代码使用 `if (result)` 来判断错误，导致正值也被视为错误。随后在处理流程中，该正值被误用作待发送消息的前段大小（front segment size）。当该值超过预分配缓冲区的大小时，触发了 slab-out-of-bounds 访问漏洞。
+
+#解决方案
+1. 修改 `ceph_handle_auth_reply()` 中的错误判断逻辑，将 `if (result)` 改为 `if (result < 0)`，确保只有负值才被视为错误码，正值与零值均视为成功。
+2. 在 `__send_prepared_auth_request()` 函数中新增 `BUG_ON(len > monc->m_auth->front_alloc_len)` 检查，防止发送长度超过分配边界，从而拦截潜在的逻辑错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fc759e48fb2acd09a2e5dcc6c7a73bd07e2a7861

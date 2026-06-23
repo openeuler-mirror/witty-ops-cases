@@ -1,0 +1,22 @@
+#标题
+writeback: 修复 dirtytime_expire_interval 设为 0 时导致的 100% CPU 占用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统参数 `vm.dirtytime_expire_seconds` 被设置为 0 时，内核工作队列进程（kworker）的 CPU 使用率瞬间飙升。测试数据显示，修复前 kworker CPU 占用率可达到约 73%（极端情况下可达 100%），形成无限忙循环，导致系统负载异常。
+
+#主要错误日志
+未知
+
+#问题根因
+当 `vm.dirtytime_expire_seconds` 设置为 0 时，`dirtytime_expire_interval` 变量值变为 0。函数 `wakeup_dirtytime_writeback()` 调用 `schedule_delayed_work()` 时传入延迟为 0，导致延迟工作被立即执行。该工作函数执行完毕后再次以 0 延迟调度自身，从而创建了一个无限忙循环，持续消耗 CPU 资源。
+
+#解决方案
+通过增加非零判断防护来修复该问题：
+1. 在 `wakeup_dirtytime_writeback()` 和 `start_dirtytime_writeback()` 函数中，仅当 `dirtytime_expire_interval` 非 0 时才调度延迟工作。
+2. 在 `dirtytime_interval_handler()` 函数中，若将间隔设置为 0，则调用 `cancel_delayed_work_sync()` 取消现有的延迟工作；若设置为非 0 值，则重新调度工作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3f4854b27522b606a386a07720001a26773d9528

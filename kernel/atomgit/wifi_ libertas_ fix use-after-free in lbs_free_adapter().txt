@@ -1,0 +1,20 @@
+#标题
+wifi: libertas: fix use-after-free in lbs_free_adapter()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 libertas 无线网卡驱动或释放适配器资源时，内核可能发生 Use-After-Free 故障。具体表现为在 `lbs_free_adapter` 函数执行期间或之后，定时器回调函数试图访问已经被释放的 `priv` 结构体内存，可能导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `lbs_free_adapter` 函数中，原代码使用 `del_timer` 接口删除定时器。`del_timer` 仅负责将定时器从系统中移除，不会等待定时器回调函数执行完毕。如果定时器回调正在其他 CPU 上运行，`lbs_free_adapter` 可能继续执行并释放了 `priv` 指向的内存，导致定时器回调函数随后访问该内存时发生 Use-After-Free。
+
+#解决方案
+将 `lbs_free_adapter` 函数中删除 `command_timer` 和 `tx_lockup_timer` 的接口从 `del_timer` 修改为 `timer_delete_sync`。`timer_delete_sync` 会等待定时器回调函数执行结束，确保在释放内存前没有任何定时器回调在运行，从而消除竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f48ee8cab1379f59d0393bb18c8413cb05cd460d

@@ -1,0 +1,26 @@
+#标题
+dm cache: 缩容时 dirty bitset 迭代越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 dm-cache 快速设备进行缩容操作时，触发 KASAN 检测到的 vmalloc 越界访问错误。具体表现为在执行 `dmsetup resume` 恢复设备时，内核在检查脏位图过程中访问了分配区域之外的内存地址。
+
+#主要错误日志
+BUG: KASAN: vmalloc-out-of-bounds in cache_preresume+0x269/0x7b0
+Read of size 8 at addr ffffc900000f3080 by task dmsetup/131
+The buggy address belongs to the virtual mapping at
+ [ffffc900000f3000, ffffc900000f5000) created by:
+ cache_ctr+0x176a/0x35f0
+Memory state around the buggy address:
+ >ffffc900000f3080: f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8
+
+#问题根因
+在 dm-cache 缩容检查脏块的循环逻辑中，索引变量 `new_size` 的自增位置错误（使用了 pre-increment 风格逻辑）。代码在检查当前索引之前先增加了索引值，导致在迭代 dirty bitset 时跳过了起始检查位，并最终导致索引越界访问了 bitset 范围之外的内存。
+
+#解决方案
+调整循环内索引变量的更新顺序，将 `new_size` 的自增操作 `to_cblock(from_cblock(new_size) + 1)` 移至 `is_dirty` 检查之后，确保从正确的起始位置开始遍历检查脏块，避免越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5f35fe39e5d57d8c44f7480b2a93e0a64e7cf003

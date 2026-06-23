@@ -1,0 +1,20 @@
+#标题
+perf/core: Fix pmus_lock vs. pmus_srcu ordering
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 perf_pmu_unregister 流程时，由于 `pmus_lock` 与 `pmus_srcu` 的锁获取顺序不当，可能触发死锁或上下文切换相关的问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `perf_pmu_unregister` 函数中，锁 `pmus_lock` 的持有时间过长。代码在持有 `pmus_lock` 的情况下进行了 `synchronize_rcu()` 等耗时操作。而在其他路径（如 `pmus_srcu` 相关路径）中可能存在相反的锁获取顺序，从而导致了锁顺序反转引发的潜在死锁风险。
+
+#解决方案
+调整 `perf_pmu_unregister` 中的代码执行顺序，缩短 `pmus_lock` 临界区的范围。将 `idr_remove` 操作移到 `mutex_unlock` 之前，确保在释放锁之后再执行 `synchronize_rcu()` 及其他清理操作，从而修复锁顺序问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c6172f7ac6e63f5b714b12ad8761ce0f629da304

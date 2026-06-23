@@ -1,0 +1,22 @@
+#标题
+usb: cdnsp 未能正确识别 USB 3.2 SuperSpeedPlus x2 传输速率
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当连接 USB 3.2 Gen1 x2 或 Gen2 x2 设备时，驱动程序无法正确识别其速率。系统将此类设备错误地识别为非 SuperSpeed Plus 速率，导致设备无法在预期的最高速度模式下运行，造成性能损失。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序 `cdnsp_port_speed` 函数在判断端口速率时，仅检查了 `DEV_SUPERSPEEDPLUS` 宏（对应 PORTSC 寄存器中速度字段值为 0x5 的情况）。根据代码 diff 分析，硬件寄存器定义中存在 `XDEV_SSP1x2` (0x6) 和 `XDEV_SSP2x2` (0x7) 两个速度状态位，分别代表 SuperSpeedPlus Gen1 x2 和 Gen2 x2。由于原代码逻辑缺失了对这两个状态位的判断，导致无法识别 USB 3.2 x2 速率，将其归类为其他低速或错误状态。
+
+#解决方案
+扩展驱动程序的速度检测逻辑。
+1. 在头文件中新增 `XDEV_SSP1x2` 和 `XDEV_SSP2x2` 的寄存器位定义，以及对应的判断宏 `DEV_SSP_GEN1x2` 和 `DEV_SSP_GEN2x2`。
+2. 修改 `cdnsp_port_speed` 函数，在原有的 `DEV_SUPERSPEEDPLUS` 判断条件中，增加对 `DEV_SSP_GEN1x2` 和 `DEV_SSP_GEN2x2` 的检查。凡是符合这三种状态之一的端口，均返回 `USB_SPEED_SUPER_PLUS`，从而正确识别 USB 3.2 x2 设备速率。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/07f513b4634d5553d52faa9a332df67f7e711ff5

@@ -1,0 +1,20 @@
+#标题
+riscv: kprobes 单步执行槽地址计算错误导致指令存储错乱
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V 架构下使用 kprobes 功能时，kprobe 插槽中的指令存储发生错乱，导致写入内存的实际指令数据与预期不符。例如，预期写入的 `ebreak` 指令未出现在正确的内存偏移位置，而是被错误地写入到了 4 倍距离以外的地址，导致 kprobes 机制无法正常工作。
+
+#主要错误日志
+未知
+
+#问题根因
+`p->ainsn.api.insn` 是一个指向 `u32` 类型的指针。在对其进行算术运算时，编译器会自动乘以 `sizeof(u32)`（即 4 倍）。代码中原意是进行字节偏移计算，但 `p->ainsn.api.insn + offset` 实际上偏移了 `offset * 4` 个字节。这导致后续的 `patch_text_nosync` 函数将数据写入了错误的内存地址。
+
+#解决方案
+在进行指针算术运算前，先将 `p->ainsn.api.insn` 强制转换为 `(void *)` 类型。这样可以避免编译器进行默认的类型大小乘法运算，确保地址计算正确。修改后的代码为：`patch_text_nosync((void *)p->ainsn.api.insn + offset, &insn, 1);`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e8c7264d2163000859d3c4c46f68a0e7bb3b3869

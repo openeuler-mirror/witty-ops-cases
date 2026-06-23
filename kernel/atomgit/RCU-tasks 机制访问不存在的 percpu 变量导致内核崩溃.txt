@@ -1,0 +1,23 @@
+#标题
+RCU-tasks 机制访问不存在的 percpu 变量导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非连续 CPU 编号或 CPU 热插拔场景下，RCU-tasks 机制在执行回调处理时，可能访问不存在的 percpu 变量，导致内核访问非法地址，引发 kernel oops 或系统崩溃。同时，在进程退出（do_exit）阶段，RCU-tasks 机制可能产生死锁。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **访问越界根因**：原代码在 `rcu_tasks_need_gpcb` 和 `rcu_tasks_invoke_cbs` 函数中，使用 `nr_cpu_ids` 或直接计算的 CPU 索引来遍历和访问 percpu 变量。在 CPU 编号不连续（如存在离线 CPU 或空洞）的系统上，计算的索引可能指向不存在的 CPU 或越界，导致访问非法内存。
+2. **死锁根因**：原实现中 `do_exit()` 路径与 RCU-tasks 回调处理存在锁竞争，可能导致死锁。
+
+#解决方案
+1. **引入索引映射机制**：新增 `rtpcp_array` 数组和 `rcu_task_cpu_ids` 变量，确保 CPU 编号与数组索引的一一对应关系，通过数组索引而非直接计算 CPU ID 来访问 percpu 变量，避免越界访问。
+2. **增加 CPU 可用性检查**：在遍历 CPU 时增加 `cpu_possible(cpu)` 检查，确保只处理有效的 CPU。
+3. **修复死锁问题**：在 `task_struct` 中新增 `rcu_tasks_exit_cpu` 和 `rcu_tasks_exit_list` 字段，并在 `rcu_tasks_percpu` 结构中新增 `rtp_exit_list`，通过引入退出列表机制，将进程退出操作与 RCU-tasks 回调处理解耦，消除死锁隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3b0aa90ebb89b65d682221bef5ec14937f74e43e

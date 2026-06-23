@@ -1,0 +1,20 @@
+#标题
+IPVS do_output_route4 函数 saddr 变量未初始化导致潜在内核错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IPVS 模块处理 IPv4 报文转发路由时，若调用 `do_output_route4` 函数的过程中发生路由查找重试（retry），且函数参数 `ret_saddr` 传入为 NULL，可能导致内核读取未初始化的栈变量 `saddr`，引发未定义行为或内核 Panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `do_output_route4` 函数的原有实现逻辑中，局部变量 `saddr` 未进行初始化。在特定代码路径（goto retry）下，如果 `ret_saddr` 指针为 NULL，函数内部仍可能引用未初始化的 `saddr` 变量值进行判断或更新操作，导致访问未初始化的内存值。此外，上层调用函数 `__ip_vs_get_out_rt` 中也存在局部变量 `saddr` 初始化但逻辑复杂的问题，增加了状态管理的风险。
+
+#解决方案
+重构 `do_output_route4` 函数的 saddr 处理逻辑，移除独立的局部变量 `saddr`，直接通过 `fl4.saddr` 获取源地址。修改函数签名与实现，仅在路由查找成功且 `ret_saddr` 指针非空时，将 `fl4.saddr` 赋值给 `*ret_saddr`，从而避免了引用未初始化变量的问题。同时简化了重试逻辑，移除了不必要的 `loop` 变量和中间层的局部变量传递。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7d7c80ed4798e7aa1744a325c83fae826d3e66e4

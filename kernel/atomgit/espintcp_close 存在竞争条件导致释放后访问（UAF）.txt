@@ -1,0 +1,29 @@
+#标题
+espintcp_close 存在竞争条件导致释放后访问（UAF）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在关闭 espintcp 连接时，若存在并发流量（如 Delayed ACK 处理或软中断上下文），可能导致内核访问已释放的 espintcp 上下文（ctx）或 sock 结构，引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `espintcp_close()` 函数中调用 `cancel_work_sync()` 取消工作队列时，存在竞争窗口。其他执行路径（如 `espintcp_write_space`）仍可在 `cancel_work_sync()` 返回后、资源释放前调度新的 work。导致 `espintcp_tx_work()` 工作线程后续执行时引用了已被释放的 `espintcp ctx` 或 `sk`。
+
+竞争场景如下：
+```
+           cpu0                             cpu1
+  espintcp_close()
+    cancel_work_sync(&ctx->work);
+                                     espintcp_write_space()
+                                       schedule_work(&ctx->work);
+```
+
+#解决方案
+将 `espintcp_close()` 中的 `cancel_work_sync()` 替换为 `disable_work_sync()`。`disable_work_sync()` 能够禁止工作队列的再次调度，从而彻底杜绝在关闭流程中工作队列被重新调度导致的释放后访问问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b9a308d603afc2469f05865bbf7684d579460a1d

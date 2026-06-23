@@ -1,0 +1,20 @@
+#标题
+sch_choke: 读取 Qdisc 统计信息时存在数据竞争隐患
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发环境下，当用户态程序读取 sch_choke Qdisc 的统计信息（通过 `choke_dump_stats`）时，该函数读取的部分统计字段（如 `matched`、`forced_drop` 等）正被数据包处理路径（`choke_enqueue`）并发修改。由于缺乏适当的同步机制，可能导致读取到的统计数据不一致，且 KCSAN 等数据竞争检测工具可能报告内核数据竞争警告。
+
+#主要错误日志
+未知
+
+#问题根因
+`choke_dump_stats()` 函数虽然持有 RTNL 锁，但并未持有 Qdisc 自身的自旋锁，因此在读取统计字段时，这些字段可能正被运行在快速路径上的 `choke_enqueue()` 函数修改。统计字段的读取和修改操作均未使用 `READ_ONCE()` 或 `WRITE_ONCE()` 注解，导致编译器可能进行优化拆分，从而引发数据竞争。
+
+#解决方案
+在 `choke_enqueue()` 函数中，对所有统计字段的更新操作使用 `WRITE_ONCE()` 进行封装，确保写入操作的原子性和可见性；在 `choke_dump_stats()` 函数中，对统计字段的读取操作使用 `READ_ONCE()` 进行封装，防止编译器优化导致读取不一致，从而消除潜在的数据竞争风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0c1c3b60961a4905de46c9a8cbfe25229cc12ad3

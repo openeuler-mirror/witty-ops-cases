@@ -1,0 +1,23 @@
+#标题
+dpaa2-eth: MAC endpoint handling 设备引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动在处理 MAC endpoint 连接时，若遇到设备类型不匹配或内存分配失败等异常分支，导致设备引用计数未被正确释放。此问题通过代码审查发现，属于内核对象生命周期管理缺陷，长期运行可能导致设备对象无法被正确释放或资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+`dpaa2_eth_connect_mac()` 函数调用 `fsl_mc_get_endpoint()` 获取设备指针，该函数内部通过 `device_find_child()` 查找设备并隐式调用了 `get_device()` 增加了设备的引用计数。然而，在后续的异常处理路径中（如设备类型检查失败 `dpmac_dev->dev.type != &fsl_mc_bus_dpmac_type` 或内存分配 `kzalloc` 失败），代码直接返回错误，未能调用 `put_device()` 减少引用计数，导致设备引用计数泄漏。
+
+#解决方案
+修改 `dpaa2_eth_connect_mac()` 函数的错误处理路径：
+1. 将设备类型检查失败的分支从直接返回改为跳转至错误处理标签 `out_put_device`。
+2. 将内存分配失败的分支从直接返回改为跳转至错误处理标签 `out_put_device`。
+3. 新增 `out_put_device` 标签，在函数退出前显式调用 `put_device(&dpmac_dev->dev)` 释放引用计数，确保资源正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6bc1d5fd717cce7e6badb7cd9723ba013d352984

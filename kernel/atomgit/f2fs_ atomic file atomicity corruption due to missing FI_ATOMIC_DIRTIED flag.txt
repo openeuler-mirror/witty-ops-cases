@@ -1,0 +1,21 @@
+#标题
+f2fs: atomic file atomicity corruption due to missing FI_ATOMIC_DIRTIED flag
+
+#内核版本
+OLK-6.6
+
+#问题现象
+f2fs 原子文件发生原子性破坏，具体表现为旧文件大小与新数据不匹配。
+
+#主要错误日志
+未知
+
+#问题根因
+在特定的调用栈中（f2fs_file_write_iter -> f2fs_map_blocks -> f2fs_reserve_new_blocks -> inc_valid_block_count -> __mark_inode_dirty -> f2fs_dirty_inode），FI_DIRTY_INODE 被置位，但 FI_ATOMIC_DIRTIED 未被置位。
+在 `f2fs_inode_dirtied` 函数中，原逻辑仅当 `f2fs_mark_inode_dirty_sync` 被调用时才设置 FI_ATOMIC_DIRTIED 标志，而 `f2fs_dirty_inode` 的调用路径遗漏了该设置。这导致在提交原子操作时，Writeback 线程清除 FI_DIRTY_INODE 后，无法正确恢复状态并更新 i_size，从而引发数据不一致。
+
+#解决方案
+修改 `f2fs_inode_dirtied` 函数逻辑，只要该函数处理了 inode 的 dirty 标记（即 `!ret`）且该文件为原子文件，就强制设置 FI_ATOMIC_DIRTIED 标志。这确保了无论通过何种路径标记 inode 为 dirty，都能在原子提交过程中正确处理 inode 状态和文件大小更新。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1d425576c992c594b44941b4f09efdc53aa88fb

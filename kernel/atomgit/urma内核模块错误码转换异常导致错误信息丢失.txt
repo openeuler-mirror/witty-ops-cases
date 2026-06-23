@@ -1,0 +1,29 @@
+#标题
+urma内核模块错误码转换异常导致错误信息丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在URMA（User-space Remote Memory Access）子系统运行过程中，当底层驱动程序（driver ops）调用失败时，上层逻辑统一将具体的错误返回值强制转换为通用的 `-UBCORE_DRV_ERRNO`。
+这导致上层调用者无法获取底层驱动返回的真实错误码，掩盖了实际的故障原因（如内存不足、设备繁忙、参数无效等），增加了故障定位的难度。同时，部分日志打印缺少具体的返回值信息，不利于问题排查。
+
+#主要错误日志
+- [DRV_ERROR]Failed to deactivate tp, ret: %d.
+- failed to send_msg, ret: %d.
+- Failed to get tp list, ret: %d, tp_cnt: %u.
+- [DRV_ERROR]Failed to modify jfc, jfc_id:%u, ret: %d.
+- [DRV] failed to destroy jfc, dev_name: %s, jfc_id: %u, ret: %d
+- failed to alloc jfs, ret is %d.
+- [DRV_ERROR]Failed to active tp, ret: %d, dev_name: %s.
+- bind jetty failed, ret: %d.
+
+#问题根因
+URMA内核模块（ubcore）在处理底层驱动回调函数返回值时存在逻辑缺陷。代码中大量使用了强制转换 `return -UBCORE_DRV_ERRNO;` 的处理方式，不管底层驱动返回何种具体的错误码（如 -ENOMEM, -EINVAL 等），上层函数均直接丢弃原值并返回固定的通用错误码。此外，在 `ubcore_get_tp_list` 等函数中，错误处理逻辑甚至错误地拦截了驱动返回值，统一替换为固定错误码返回，导致错误信息在层层传递中丢失。
+
+#解决方案
+修改 ubcore 子系统各关键函数的错误处理逻辑，移除强制转换返回 `-UBCORE_DRV_ERRNO` 的代码，改为直接透传底层驱动返回的真实错误码 `return ret;`。
+同时，优化部分日志打印接口，在报错时补充打印具体的返回值 `ret`，确保错误现场可追溯。对于特定逻辑（如 `ubcore_import_jfr`），使用 `UBCORE_CHECK_RETURN_ERR_PTR` 宏确保错误指针的正确传递，保证错误信息的完整性和准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/54b00314be3af035b879edd232616d71bcac7f0d

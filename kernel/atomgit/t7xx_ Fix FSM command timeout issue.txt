@@ -1,0 +1,25 @@
+#标题
+t7xx: Fix FSM command timeout issue
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 t7xx WWAN 驱动运行过程中，FSM（有限状态机）命令处理逻辑存在 Use-After-Freeze 风险。当发送带有等待完成标志的命令且触发超时（-ETIMEDOUT）时，命令结构体内存被提前释放，而内核调度器随后尝试访问已释放内存中的 `completion` 变量导致系统崩溃或内核异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `t7xx_fsm_append_cmd` 函数中，`completion` 结构体是在栈上通过 `DECLARE_COMPLETION_ONSTACK` 声明的。当命令处理超时（`wait_for_completion_timeout` 返回 0）时，函数直接返回 `-ETIMEDOUT`，导致栈上的 `completion` 变量生命周期结束并被释放。然而，此时命令结构体（`cmd`）仍可能持有指向该栈变量的指针（`cmd->done`），若后续命令处理逻辑试图访问该指针，将引发 Use-After-Free 错误。此外，超时路径中未释放命令结构体的引用计数，导致内存泄漏。
+
+#解决方案
+将 `completion` 结构体从栈变量改为嵌入到 `t7xx_fsm_command` 结构体中，使其生命周期与命令结构体绑定。
+引入 `kref` 引用计数机制来管理命令结构体的生命周期：
+1. 初始化命令时初始化 `kref`。
+2. 入队命令时增加引用计数。
+3. 完成命令处理时通过 `kref_put` 减少引用计数，并在引用计数归零时释放内存。
+4. 修复超时处理逻辑：在超时发生时，正确返回 `-ETIMEDOUT`，并通过 `kref_put` 释放对命令结构体的引用，避免内存泄漏和野指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e53ef970e5515bd9f82c77b93b736bd8769a7a9f

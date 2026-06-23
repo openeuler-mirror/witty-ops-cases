@@ -1,0 +1,20 @@
+#标题
+net_sched: qfq 使用 netem 子 qdisc 导致 double list add 引发内存损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 QFQ qdisc 配置了 netem 作为子 qdisc 的场景下，由于 netem 的重传机制导致 QFQ 的 enqueue 回调重入。这会导致同一个 class 被重复添加到 `agg->active` 链表中，触发内核内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 QFQ 队列调度算法中，原代码通过判断队列长度是否为空（`!cl->qdisc->q.qlen`）来决定是否将 class 激活并添加到 active 链表。当 netem 作为子 qdisc 时，其内部逻辑会使父 qdisc（QFQ）的 enqueue 回调重入。在重入场景下，队列长度已不为 0，原逻辑错误地跳过了处理，导致后续逻辑再次将该 class 添加到链表，造成 double list add，进而引发内存结构损坏。
+
+#解决方案
+修改 `qfq_enqueue` 函数的判断逻辑，不再依据队列长度判断激活状态，而是引入辅助函数 `cl_is_active` 直接检查 class 结构体中的 `alist` 链表节点是否为空。若 class 已处于 active 状态（链表非空），则跳过添加操作，从而避免在重入场景下重复添加节点导致的内存损坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9349f5c9c176fe3457f28a0b570515aee2b1f317

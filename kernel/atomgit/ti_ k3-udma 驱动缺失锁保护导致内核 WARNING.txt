@@ -1,0 +1,27 @@
+#标题
+ti: k3-udma 驱动缺失锁保护导致内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能内核锁验证器的情况下，系统启动或运行过程中触发内核 WARNING。具体表现为 `udma_start` 函数检测到锁上下文缺失，打印调用栈并记录警告信息。
+
+#主要错误日志
+[    4.128073] WARNING: CPU: 0 PID: 746 at drivers/dma/ti/../virt-dma.h:169 udma_start.isra.0+0x34/0x238
+[    4.137352] CPU: 0 UID: 0 PID: 746 Comm: kworker/0:3 Not tainted 6.12.9-arm64 #28
+[    4.144867] Hardware name: pp-v12 (DT)
+[    4.148648] Workqueue: events udma_check_tx_completion
+...
+[    4.247463]  udma_start.isra.0+0x34/0x238
+[    4.251509]  udma_check_tx_completion+0xd0/0xdc
+[    4.256076]  process_one_work+0x244/0x3fc
+
+#问题根因
+在 `udma_check_tx_completion` 函数中，访问 DMA 描述符及相关数据结构时，缺少对 `uc->vc.lock` 自旋锁的持有操作。当开启锁验证器时，内核检测到在 `udma_start` 路径中访问受保护数据未加锁，从而触发 WARNING 警告。
+
+#解决方案
+在 `udma_check_tx_completion` 函数的主循环中添加锁保护机制。具体修改为：在循环开始处调用 `spin_lock_irqsave` 获取锁，在循环继续执行 `usleep_range` 前以及循环退出前调用 `spin_unlock_irqrestore` 释放锁，确保对共享资源的安全访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb7d2478a104c735df7d5ec9b980c1497b934090

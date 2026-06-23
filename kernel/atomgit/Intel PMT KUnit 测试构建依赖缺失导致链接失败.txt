@@ -1,0 +1,22 @@
+#标题
+Intel PMT KUnit 测试构建依赖缺失导致链接失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译内核时，若配置了 `INTEL_PMT_TELEMETRY=m`（作为可加载模块），同时将 `INTEL_PMT_KUNIT_TEST` 设置为内建（built-in），会导致链接阶段出现 `undefined reference` 错误，构建过程中断。
+
+#主要错误日志
+x86_64-linux-ld: drivers/platform/x86/intel/pmt/discovery-kunit.o: in function `test_intel_pmt_get_regions_by_feature':
+discovery-kunit.c:(.text+0x29d): undefined reference to `intel_pmt_get_regions_by_feature'
+x86_64-linux-ld: discovery-kunit.c:(.text+0x2c3): undefined reference to `intel_pmt_put_feature_group'
+
+#问题根因
+KUnit 测试代码 `discovery-kunit.c` 调用了 `intel_pmt_get_regions_by_feature` 和 `intel_pmt_put_feature_group` 这两个符号，这些符号由 `INTEL_PMT_TELEMETRY` 模块提供。Kconfig 配置中缺少对 `INTEL_PMT_TELEMETRY` 的依赖约束，导致当 `INTEL_PMT_TELEMETRY` 被配置为模块（m）而 KUnit 测试被配置为内建（y）时，内建代码无法链接到模块中的符号，从而引发“undefined reference”错误。
+
+#解决方案
+修改 `drivers/platform/x86/intel/pmt/Kconfig` 文件，在 `config INTEL_PMT_KUNIT_TEST` 中增加依赖条件：`depends on INTEL_PMT_TELEMETRY || !INTEL_PMT_TELEMETRY`。该依赖确保了：如果 `INTEL_PMT_TELEMETRY` 存在，KUnit 测试必须与其保持一致的构建状态（同为模块或同为核心内建），从而避免模块符号对内建代码不可见的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bb6f71835056eddf18afadaed8ae6cc8e72e3780

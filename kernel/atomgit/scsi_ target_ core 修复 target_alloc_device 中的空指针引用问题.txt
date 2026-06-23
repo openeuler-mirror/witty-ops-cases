@@ -1,0 +1,28 @@
+#标题
+scsi: target: core 修复 target_alloc_device 中的空指针引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在初始化 target_core_mod 模块并调用 core_dev_setup_virtual_lun0 时，若内存分配失败，系统会触发 KASAN 报告的空指针引用。导致内核崩溃，调用栈显示崩溃发生在 target_core_init_configfs 初始化过程中。
+
+#主要错误日志
+BUG: KASAN: null-ptr-deref in target_alloc_device+0xbc4/0xbe0 [target_core_mod]
+...
+ kasan_report+0xb9/0xf0
+ target_alloc_device+0xbc4/0xbe0 [target_core_mod]
+ core_dev_setup_virtual_lun0+0xef/0x1f0 [target_core_mod]
+ target_core_init_configfs+0x205/0x420 [target_core_mod]
+ do_one_initcall+0xdd/0x4e0
+...
+ entry_SYSCALL_64_after_hwframe+0x76/0x7e
+
+#问题根因
+在函数 target_alloc_device() 中，当为 dev->queues 分配内存失败时，错误处理代码试图调用 dev->transport->free_device(dev) 来释放 dev 结构体。然而，此时 dev->transport 尚未初始化，导致访问了空指针，引发 null-ptr-deref。
+
+#解决方案
+修改内存分配失败时的释放逻辑，使用已初始化的 hba->backend->ops->free_device(dev) 替代 dev->transport->free_device(dev) 来释放设备结构体，确保调用有效的函数指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/35dbdd642780d07f1c0bdad6591e19cb055ea076

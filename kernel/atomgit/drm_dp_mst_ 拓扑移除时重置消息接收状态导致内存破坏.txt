@@ -1,0 +1,25 @@
+#标题
+drm/dp_mst: 拓扑移除时重置消息接收状态导致内存破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 MST（Multi-Stream Transport）拓扑在接收 sideband 消息（如下行回复或上行请求）的过程中被移除时，系统可能会发生内存破坏。该问题由并发竞争引起：一个线程通过 `drm_dp_mst_topology_mgr_set_mst(false)` 重置接收状态，同时另一个线程正在通过 `drm_dp_mst_handle_down_rep()` 或 `drm_dp_mst_handle_up_req()` 读取/解析消息。由于读取/解析线程未持有锁，可能导致内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 MST 拓扑移除过程中，`drm_dp_mst_topology_mgr_set_mst(false)` 会直接清零 `down_rep_recv` 和 `up_req_recv` 状态。与此同时，消息处理线程可能在无锁保护的情况下访问这些接收状态结构体。这种并发访问导致了竞争条件，进而引发内存破坏。问题的引入源于 commit 1d082618bbf3 ("drm/display/dp_mst: Fix down/up message handling after sink disconnect")。
+
+#解决方案
+将消息接收状态的重置操作从拓扑移除函数中移出，改为延迟到消息处理流程中执行。具体修改如下：
+1. 在 `drm_dp_mst_topology_mgr` 结构体中新增布尔标志位 `reset_rx_state`。
+2. 在 `drm_dp_mst_topology_mgr_set_mst(false)` 路径中，不再直接调用 `memset` 清零接收状态，而是将 `reset_rx_state` 标志置为 true。
+3. 新增 `update_msg_rx_state()` 函数，在消息处理入口 `drm_dp_mst_hpd_irq_handle_event()` 中调用该函数。
+4. `update_msg_rx_state()` 会在持有锁 `mgr->lock` 的情况下检查 `reset_rx_state` 标志，如果为 true 则安全地重置 `down_rep_recv` 和 `up_req_recv` 状态。
+此方案确保了状态重置操作与消息读取/解析操作之间的同步，避免了竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c07c79d038c60e6fc6d4897216ddcdf09d0893e

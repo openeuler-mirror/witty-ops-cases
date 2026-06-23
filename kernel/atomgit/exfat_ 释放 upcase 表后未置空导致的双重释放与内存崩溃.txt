@@ -1,0 +1,20 @@
+#标题
+exfat: 释放 upcase 表后未置空导致的双重释放与内存崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在使用 exfat 文件系统时，若发生模块卸载、文件系统 remount 或错误处理路径下的资源回收，可能触发内核内存管理错误。具体表现为内核 panic 或 KASAN（Kernel Address Sanitizer）报告 "double-free" 或 "invalid-free" 异常，导致系统崩溃或死锁。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `exfat_free_upcase_table` 函数中，调用 `kvfree(sbi->vol_utbl)` 释放内存后，未将指针 `sbi->vol_utbl` 置为 NULL。这导致该指针成为悬空指针。如果在后续流程中再次调用该释放函数或错误处理逻辑错误地复用该指针，将引发双重释放漏洞（CVE-2025-38206），破坏内核内存管理结构。
+
+#解决方案
+在 `fs/exfat/nls.c` 文件的 `exfat_free_upcase_table` 函数中，于 `kvfree(sbi->vol_utbl)` 之后显式添加 `sbi->vol_utbl = NULL;` 语句。通过在释放内存后立即将指针置空，防止后续代码误操作悬空指针引发双重释放问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4c7860df361679acdd890108bfb80d25f9abb36f

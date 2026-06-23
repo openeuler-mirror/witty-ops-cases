@@ -1,0 +1,22 @@
+#标题
+NUMA balancing 统计计数重复调用导致统计结果异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 NUMA 页面故障过程中，如果发生 NUMA 迁移失败且页表项（PTE）在二次检查时发生变化，内核会错误地继续调用 `task_numa_fault()` 函数。这导致该函数被非预期的多次调用，造成 NUMA 故障统计计数重复，进而可能导致 NUMA 均衡决策出现偏差（难以确定具体是正向还是负向性能影响）。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit b99a342d4f11 ("NUMA balancing: reduce TLB flush via delaying mapping on hint page fault") 重构了 `do_numa_page()` 函数。在重构后的代码逻辑中，当 NUMA 页面迁移失败时，代码会重新获取 PTE 锁并检查 PTE 是否发生变化。如果 PTE 发生变化（`!pte_same()` 为真），代码虽然释放了锁，但未立即返回，而是跳转到了 `out` 标签处继续执行。这导致在 PTE 已变更的情况下，依然执行了 `task_numa_fault()` 进行统计，违背了“只有恢复页表的进程才应调用该函数以避免重复计数”的设计原则。
+
+#解决方案
+修改 `do_numa_page()` 函数中的控制流，将所有 PTE 变更检查点（`!pte_same()`）的处理逻辑从跳转（`goto out`）改为立即返回（`return 0`）。具体包括：
+1. 在迁移失败路径中，如果 PTE 检查发现页表项已改变，直接返回 0，不再跳转到 `out` 标签执行统计。
+2. 调整 `task_numa_fault()` 的调用位置，确保仅在迁移成功或迁移失败但 PTE 未变的正常路径上调用，保证统计计数的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3bfa35ccde9e52ca74fed047eb4d89be32dd9e5e

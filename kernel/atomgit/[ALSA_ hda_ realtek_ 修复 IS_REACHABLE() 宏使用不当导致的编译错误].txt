@@ -1,0 +1,28 @@
+#标题
+[ALSA: hda: realtek: 修复 IS_REACHABLE() 宏使用不当导致的编译错误]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[在编译内核时，sound/pci/hda/patch_realtek.c 文件触发编译错误，导致构建失败。具体表现为宏展开后试图将 NULL 指针作为函数调用，报错信息显示 "called object is not a function or function pointer"。]
+
+#主要错误日志
+[sound/pci/hda/patch_realtek.c: In function 'alc233_fixup_lenovo_low_en_micmute_led':
+include/linux/stddef.h:9:14: error: called object is not a function or function pointer
+    9 | #define NULL ((void *)0)
+      |              ^
+sound/pci/hda/patch_realtek.c:5041:49: note: in expansion of macro 'NULL'
+ 5041 | #define alc233_fixup_lenovo_line2_mic_hotkey    NULL
+      |                                                 ^~~~
+sound/pci/hda/patch_realtek.c:5063:9: note: in expansion of macro 'alc233_fixup_lenovo_line2_mic_hotkey'
+ 5063 |         alc233_fixup_lenovo_line2_mic_hotkey(codec, fix, action);]
+
+#问题根因
+[代码中使用 IS_REACHABLE(CONFIG_INPUT) 宏来条件编译输入子系统相关的回调函数。当 CONFIG_INPUT 配置为模块而 HDA 驱动内建到内核时，IS_REACHABLE() 判定为不可达，导致代码将相关函数定义为 NULL。但在某些调用点（如 alc233_fixup_lenovo_low_en_micmute_led 函数中），代码直接调用这些“函数”，导致宏展开后变成了 NULL(codec, fix, action) 的非法调用。这是一个关于内核配置依赖的逻辑错误，原有的 IS_REACHABLE() 使用方式在此场景下并不合适。]
+
+#解决方案
+[移除 IS_REACHABLE(CONFIG_INPUT) 的条件编译检查，并在 Kconfig 中为 SND_HDA_CODEC_REALTEK 选项增加硬性依赖 "depends on INPUT"。这确保了当 Realtek HDA 编解码器支持被编译时，Input 子系统必然可用，从而避免了将回调函数定义为 NULL 的歧义情况，彻底消除了编译错误。]
+
+#来源
+[https://atomgit.com/openeuler/kernel/commit/46e0adcb530cf3323f7e7ec1e6fe7a2c731836b6]

@@ -1,0 +1,37 @@
+#标题
+nvme: admin request_queue 生命周期管理不当导致释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 NVMe 控制器后，命名空间仍尝试访问已释放的 admin request_queue，导致内核崩溃并触发 KASAN 检测到的 slab-use-after-free 错误。具体表现为在执行 ioctl 操作或相关任务（如 nvme 进程）时，系统调用栈中出现 `BUG: KASAN: slab-use-after-free` 报错。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in blk_queue_enter+0x41c/0x4a0
+Read of size 8 at addr ffff88c0a53819f8 by task nvme/3287
+CPU: 67 UID: 0 PID: 3287 Comm: nvme Tainted: G            E       6.13.2-ga1582f1a031e #15
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x4f/0x60
+ print_report+0xc4/0x620
+ kasan_report+0xab/0xe0
+ blk_queue_enter+0x41c/0x4a0
+ blk_mq_alloc_request+0x2b7/0x6b0
+ nvme_submit_user_cmd+0xa9/0x330
+ nvme_user_cmd.isra.0+0x240/0x3f0
+ nvme_ioctl+0x7c/0x2c0
+ blkdev_ioctl+0x1a8/0x4d0
+ __x64_sys_ioctl+0x129/0x190
+ do_syscall_64+0x5b/0x160
+ entry_SYSCALL_64_after_hwframe+0x4b/0x53
+ </TASK>
+
+#问题根因
+命名空间可以访问控制器的 admin request_queue，但在控制器卸载过程中，`nvme_remove_admin_tag_set` 函数过早地调用了 `blk_put_queue(ctrl->admin_q)`。这导致 admin request_queue 的引用计数过早归零并被释放，而此时命名空间仍持有对该队列的引用，后续访问时触发了 use-after-free 错误。
+
+#解决方案
+调整 admin request_queue 的释放时机。将 `blk_put_queue(ctrl->admin_q)` 调用从 `nvme_remove_admin_tag_set` 函数中移除，并将其移动到 `nvme_free_ctrl` 函数中执行。这确保了只有在所有控制器引用都被释放后，才进行 admin request_queue 的释放操作，从而避免悬垂指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6e35da985b85077dd75f17facd83fe9058f6bfd2

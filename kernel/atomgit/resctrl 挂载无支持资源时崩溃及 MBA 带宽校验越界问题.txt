@@ -1,0 +1,24 @@
+#标题
+resctrl 挂载无支持资源时崩溃及 MBA 带宽校验越界问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 系统不支持 RDT（Resource Director Technology）或 MPAM 资源时，尝试挂载 resctrl 文件系统会导致内核崩溃。
+2. 在部分架构（如 AMD 或 MPAM）下，resctrl 的 MBA（Memory Bandwidth Allocation）业务逻辑中，带宽校验范围使用 `default_ctrl` 作为最大值，导致写入超过特定硬件限制的值时引发异常或校验错误。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **挂载崩溃**：函数 `closid_init()` 在执行时未检查是否存在有效的资源 schema（即 `rdt_min_closid` 是否有效），直接进行 bitmap 分配和操作导致空指针或越界访问；同时未处理内存分配失败的情况。
+2. **MBA 校验错误**：`bw_validate()` 函数错误地使用 `default_ctrl` 作为带宽最大值的校验标准。实际上，`default_ctrl` 在 MPAM 等场景下可能被设置为 0 或其他重置值，而不是硬件支持的最大带宽能力值，导致合法的带宽设置被错误拒绝或非法值被错误接受。
+
+#解决方案
+1. **增强挂载健壮性**：修改 `closid_init()` 函数，增加对 `rdt_min_closid` 有效性的检查（若为 `~0` 则返回 `-EOPNOTSUPP`），并增加 `bitmap_alloc` 的内存分配失败检查（返回 `-ENOMEM`），同时在调用处处理这些错误返回值以避免崩溃。
+2. **修正带宽校验逻辑**：在 `struct resctrl_membw` 结构体中新增 `max_bw` 字段，用于准确存储硬件支持的最大带宽值。在资源初始化阶段（如 Intel、AMD 及 MPAM 的资源初始化函数中）正确设置该值。
+3. **更新校验入口**：将 `fs/resctrl/ctrlmondata.c` 中的 `bw_validate()` 校验逻辑从对比 `r->default_ctrl` 修改为对比 `r->membw.max_bw`，确保带宽校验范围正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f6fd4cdadb171b0cb7f3dad5b71441cfcb5b0d61

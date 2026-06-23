@@ -1,0 +1,20 @@
+#标题
+ext4事务等待逻辑误判tid 0为无效值导致潜在的数据一致性问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ext4文件系统进行截断操作时，若当前正在提交的事务ID（t_tid）恰好为0，内核会错误地跳过等待该事务提交完成的步骤。这可能导致后续操作在事务未完全落盘的情况下继续执行，破坏事务的原子性，极端情况下可能导致数据不一致或文件系统状态错误。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ext4_wait_for_tail_page_commit()` 错误地假设 `0` 不是有效的事务ID（tid）。代码逻辑中仅检查 `commit_tid` 是否非零来决定是否调用 `jbd2_log_wait_commit`。然而，`tid_t` 类型本质上是无符号整数，`0` 是完全合法的事务ID值。当 `journal->j_committing_transaction->t_tid` 为 `0` 时，原有的 `if (commit_tid)` 判断为假，导致系统跳过等待事务提交的过程，引发逻辑错误。
+
+#解决方案
+修改 `fs/ext4/inode.c` 中的 `ext4_wait_for_tail_page_commit` 函数，不再依赖 `tid` 是否为 0 来判断是否有正在提交的事务。引入布尔变量 `has_transaction`，在持有 `j_state_lock` 锁时，先检查 `journal->j_committing_transaction` 是否存在。如果存在，则记录其 `tid` 并将 `has_transaction` 置为真。最后根据 `has_transaction` 的状态决定是否调用 `jbd2_log_wait_commit`，从而修复对 tid 0 的错误假设。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b14d6ef523acac690fae41d91d2813f21f905d88

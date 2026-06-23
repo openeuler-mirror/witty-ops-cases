@@ -1,0 +1,20 @@
+#标题
+Bluetooth: L2CAP: Fix accepting multiple L2CAP_ECRED_CONN_REQ
+
+#内核版本
+OLK-6.6
+
+#问题现象
+蓝牙 L2CAP 层在处理 L2CAP_ECRED_CONN_REQ 请求时，未严格校验命令标识符，导致多个请求被错误标记为 pending（FLAG_DEFER_SETUP）。这会导致 `l2cap_ecred_rsp_defer` 函数中分配的 CID 数量超过 `L2CAP_ECRED_MAX_CID`（5个），引发内存溢出。
+
+#主要错误日志
+未知
+
+#问题根因
+代码尝试接受请求时未检查命令标识符是否已被使用。根据蓝牙核心规范，同一信令通道上的每个后续请求或指示应使用不同的 Identifier。当前代码缺陷允许使用相同标识符的后续请求被标记为 pending，导致后续处理中 CID 分配计数溢出。
+
+#解决方案
+在 `l2cap_ecred_conn_req` 函数中增加校验逻辑，通过调用 `__l2cap_chan_list_id` 检查当前是否存在具有相同标识符的 pending 通道。如果存在（即 `num_scid` 不为 0），则直接拒绝该请求并返回 `L2CAP_CR_LE_INVALID_PARAMS` 错误码，防止溢出发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4bed003827758db7dbf271eb699a5a4d4e2c391c

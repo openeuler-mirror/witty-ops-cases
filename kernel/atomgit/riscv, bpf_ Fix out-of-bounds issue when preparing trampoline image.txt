@@ -1,0 +1,22 @@
+#标题
+riscv, bpf: Fix out-of-bounds issue when preparing trampoline image
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V 架构下使用 BPF trampoline 功能时，由于内存分配阶段估算的指令长度与实际写入阶段的指令长度不一致，可能导致指令写入时发生内存越界。这会破坏内核内存数据，引发内核 Crash 或其他不可预测的系统异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 BPF trampoline 的处理流程中，内存分配基于 "dry run"（试运行）阶段计算出的镜像大小。然而，在提交 26ef208c209a 之后，`im` 参数在 dry run 阶段和 real patch 阶段不一致。在 RV64 架构下，`emit_imm` 函数根据 `im` 地址的数值大小生成指令，不同的地址值可能生成不同数量的指令。dry run 阶段计算的指令数量可能少于 real patch 阶段实际生成的指令数量，从而导致预分配的内存空间不足，引发越界问题。
+
+#解决方案
+1. 定义一个特定常量 `RV_MAX_COUNT_IMM` (0x7FFF7FF7FF7FF7FF)，该值能确保 `emit_imm` 函数生成最大数量的指令。
+2. 在 dry run 阶段（即 `ctx->insns` 为空时），使用 `RV_MAX_COUNT_IMM` 替代真实的 `im` 地址进行模拟发射，确保 dry run 阶段计算出的 trampoline 镜像大小足够容纳 real patch 阶段可能的最大指令数。
+3. 增加 WARN_ON 校验机制，如果在写入阶段发现实际需要的空间超过了预分配的空间，则返回 -E2BIG 错误，防止越界写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/92da05ec74dd3d277fd4de2dae61fe846b2b3875

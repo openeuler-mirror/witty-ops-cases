@@ -1,0 +1,20 @@
+#标题
+rxrpc.socket设置与I/O线程创建竞态导致内核Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 rxrpc_open_socket() 执行过程中，存在 socket 设置与 I/O 线程创建之间的时间窗口。如果在此窗口期内有 UDP 数据包到达并触发 rxrpc_encap_rcv() 回调，内核会尝试唤醒尚未创建完成的 I/O 线程，从而导致内核 Oops（空指针或无效地址访问）。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根源在于 socket 创建与 I/O 线程启动之间存在竞态条件。在 rxrpc_open_socket() 中，socket 先被设置，随后才创建并赋值 I/O 线程。在这两个步骤之间，若有数据包进入 rxrpc_encap_rcv()，代码逻辑会调用 wake_up_process(local->io_thread)，此时 local->io_thread 尚未赋值（为 NULL），导致内核崩溃。
+
+#解决方案
+通过在 rxrpc_encap_rcv() 中增加对 local->io_thread 是否存在的检查来修复。如果 I/O 线程尚不存在，直接丢弃当前数据包，避免唤醒操作引发的 Oops。同时，使用 READ_ONCE/WRITE_ONCE 宏来安全地访问和修改 local->io_thread 指针，防止编译器优化导致的读取错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3563822b0c9b45b1c2213f7e69a069bda6e6ad9a

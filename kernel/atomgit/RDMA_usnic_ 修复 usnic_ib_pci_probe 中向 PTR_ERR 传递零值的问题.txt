@@ -1,0 +1,21 @@
+#标题
+RDMA/usnic: 修复 usnic_ib_pci_probe 中向 PTR_ERR 传递零值的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 usnic_ib_pci_probe 函数执行过程中，若 usnic_ib_device_add 分配失败，代码逻辑错误地将 0 传递给了 PTR_ERR 宏。这会导致静态代码分析工具（如 Smatch）报错："passing zero to 'PTR_ERR'"，同时也可能导致后续错误处理逻辑中无法正确获取和打印真实的错误码，影响故障定位。
+
+#主要错误日志
+usnic_err("Failed to discover pf of vnic %s with err%d\n", pci_name(pdev), err);
+// 注：修复前日志格式为 "with err%ld" 且可能打印错误值
+
+#问题根因
+在 usnic_ib_device_add 函数中，当设备上下文分配失败时，原代码返回了 ERR_PTR(-EFAULT)，但在部分路径下仍可能被当作 NULL 处理。在调用链上层 usnic_ib_discover_pf 和 usnic_ib_pci_probe 中，使用了 IS_ERR_OR_NULL 宏进行检查，并尝试对 NULL 指针调用 PTR_ERR，导致传递 0 给 PTR_ERR，这在内核中是未定义或不合理的行为。
+
+#解决方案
+修改 usnic_ib_device_add 函数，在设备上下文分配失败时直接返回 NULL 而非 ERR_PTR(-EFAULT)。同时，修改上层调用者 usnic_ib_discover_pf 和 usnic_ib_pci_probe 的错误处理逻辑：将 IS_ERR_OR_NULL 检查改为明确的 IS_ERR 检查或 NULL 检查，确保在指针为 NULL 时不再调用 PTR_ERR，而是直接返回 -EFAULT，从而避免向 PTR_ERR 传递零值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dd448e9f55b40ddca976d56d8b40d0490330a52a

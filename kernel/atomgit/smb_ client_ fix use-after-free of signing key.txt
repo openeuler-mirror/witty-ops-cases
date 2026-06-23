@@ -1,0 +1,28 @@
+#标题
+smb: client: fix use-after-free of signing key
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 SMB2.1 + sign 挂载时，内核发生 `use-after-free` 错误。该问题由并发竞态条件引发：当任务 A 正在执行 `cifs_setup_session()` 并释放认证密钥（`kfree_sensitive`）时，任务 B 同时尝试计算签名（`smb2_calc_signature`）并访问该密钥，导致访问已释放内存。
+
+#主要错误日志
+cifs_server_dbg(FYI, "%s: [sesid=0x%llx] couldn't find signing key: %d\n", __func__, sid, rc);
+
+#问题根因
+问题根因在于 `smb2_calc_signature()` 在获取 session 进行签名计算时，缺乏对 session 状态的有效检查，从而引发了 Use-After-Free（UAF）漏洞。
+具体竞态过程如下：
+- 任务 A（挂载路径）：`cifs_mount()` -> `cifs_get_smb_ses()` -> `cifs_setup_session()` -> `kfree_sensitive()` 释放了 `ses->auth_key.response`。
+- 任务 B（请求路径）：`cifs_send_recv()` -> `compound_send_recv()` -> `smb2_setup_request()` -> `smb2_calc_signature()` -> `crypto_shash_setkey()` 此时访问 `ses->auth_key.response` 触发 UAF。
+
+#解决方案
+在获取签名密钥时增加对 session 状态的检查，确保仅在 session 状态有效时才访问 `auth_key.response`。
+具体修改：
+1. 重构 `smb2_get_sign_key()` 函数，在查找 session 后持有 `ses->ses_lock` 锁。
+2. 检查 `ses->ses_status` 状态，仅在状态为 `SES_GOOD` 或 `SES_EXITING` 时才认为密钥有效并拷贝使用。
+3. 对于其他状态返回 `-EAGAIN`，若密钥指针为空返回 `-EIO`，从而避免访问已释放的内存。
+4. 修正 `smb3_calc_signature` 调用正确的密钥获取函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5bf11279980aa73a93b7adce09ec921880302c32

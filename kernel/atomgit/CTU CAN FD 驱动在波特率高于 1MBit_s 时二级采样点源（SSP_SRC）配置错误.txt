@@ -1,0 +1,20 @@
+#标题
+CTU CAN FD 驱动在波特率高于 1MBit/s 时二级采样点源（SSP_SRC）配置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 CAN 总线数据波特率配置高于 1 MBit/s 时，CTU CAN FD 控制器的二级采样点源被错误地设置为 "SSP is not used"（不使用二级采样），导致控制器无法正确处理发送器延迟，可能导致高波特率下的通信异常或丢包。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码在设置二级采样点（SSP）配置寄存器时存在历史遗留错误。当数据比特率高于 1 MBit/s 时，代码将 `SSP_SRC` 字段错误地写入了 `0x1`（对应 `SSP_SRC_NO_SSP`，即不使用 SSP）。根据 CTU CAN FD IP 核数据手册（章节 3.1.46 SSP_CFG 和 2.8.3 Secondary sampling point），正确的默认值应为 `0x0`（对应 `SSP_SRC_MEAS_N_OFFSET`），即 SSP 位置应等于测量到的发送器延迟加上 SSP 偏移量。
+
+#解决方案
+修正 `ctucanfd_base.c` 中 `ctucan_set_secondary_sample_point` 函数的寄存器写入逻辑，将 `REG_TRV_DELAY_SSP_SRC` 字段的值从 `0x1` 修改为 `0x0`，确保在高波特率下正确启用二级采样点功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/935449491a9eb4b6881a1f6b49570d93d324d349

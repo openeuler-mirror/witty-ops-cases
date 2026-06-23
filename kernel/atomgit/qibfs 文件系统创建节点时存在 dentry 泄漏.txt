@@ -1,0 +1,20 @@
+#标题
+qibfs 文件系统创建节点时存在 dentry 泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 qibfs 文件系统中调用 `qibfs_mknod` 创建节点时，若 `new_inode` 分配失败，函数会直接返回错误，导致传入的 `dentry` 对象未被释放，造成内存泄漏（dentry leak）。该问题关联 CVE-2025-37983。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `qibfs_mknod` 函数中，当 `new_inode` 返回 NULL（即 inode 分配失败）时，代码路径跳转至 `bail` 标签返回错误码 `-EPERM`。在此之前，函数接收到的 `dentry` 参数没有被释放（dput），导致该 dentry 引用计数无法正确减少，从而引起内存泄漏。
+
+#解决方案
+在 `new_inode` 失败的判断分支中，跳转前增加 `dput(dentry)` 调用，确保释放 dentry 引用，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd52c9b488380fc8aec229f368e6472577b19c78

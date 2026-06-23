@@ -1,0 +1,23 @@
+#标题
+sched/fair: CPU亲和性导致新线程负载均衡失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在负载频繁派生新线程的场景下，系统观察到负载不均衡现象。
+具体表现为：当工作负载因 CPU 亲和性限制只能运行在部分 CPU 上时（例如 Group1: CPU 0-7 全部可用，Group2: CPU 8-11 可用，CPU 12-15 不可用），调度器在为新线程寻找目标组时，误判 Group2 拥有更多空闲 CPU，导致大量新派生的线程被堆积在 CPU 8-11 上，而 CPU 0-7 却处于空闲状态。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `update_sg_wakeup_stats()` 函数统计调度组负载时，遍历了该组内所有的 CPU（使用 `for_each_cpu` 遍历 `sched_group_span`），而未考虑被唤醒任务（新线程）的 CPU 亲和性限制。
+这导致统计包含了任务无法运行的 CPU（如示例中的 CPU 12-15），使得调度器误认为该组有更多空闲资源，从而错误地选择了负载更重的目标组。
+
+#解决方案
+修改 `kernel/sched/fair.c` 中的 `update_sg_wakeup_stats()` 函数，将 CPU 遍历逻辑从 `for_each_cpu(i, sched_group_span(group))` 修改为 `for_each_cpu_and(i, sched_group_span(group), p->cpus_ptr)`。
+该修改确保在计算调度组统计信息时，仅统计任务被允许运行的 CPU，从而避免因统计了不可用 CPU 而导致的负载均衡误判。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c23fc9f759f654b9f0d109a03f81183f6ed6309

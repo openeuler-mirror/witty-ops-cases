@@ -1,0 +1,24 @@
+#标题
+libceph 未重置 sparse-read 状态导致 OSD 重连后故障循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 OSD 连接在 sparse-read（稀疏读）操作中途断开或状态机返回错误时，OSD 客户端未能重置 sparse-read 状态。在连接重建并重试操作时，客户端会将新回复的开头误认为是旧回复的延续，导致 sparse-read 机制进入持续失败状态且无法恢复，系统陷入报错循环。
+
+#主要错误日志
+libceph:  [0] got 0 extents
+libceph: data len 142248331 != extent len 0
+libceph: osd0 (1)...:6801 socket error on read
+libceph: data len 142248331 != extent len 0
+libceph: osd0 (1)...:6801 socket error on read
+
+#问题根因
+在 `osd_fault` 处理流程中，连接被遗弃并重建时，未重置 OSD 客户端的 sparse-read 状态（`o_sparse_op_idx` 和 `o_sparse_read`）。这导致随后的重试操作使用了脏的残留状态，将新回复误解析为旧回复的延续，进而触发解析错误与无限循环。
+
+#解决方案
+在 `osd_fault` 函数中增加状态重置逻辑：将 `osd->o_sparse_op_idx` 设置为 -1，并调用 `ceph_init_sparse_read` 初始化 `osd->o_sparse_read` 结构，确保重试操作从干净的状态开始。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a56ec4390ac2df9168558d14eef8674e6cc4a68e

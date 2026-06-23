@@ -1,0 +1,20 @@
+#标题
+dell-wmi-sysman 驱动卸载或初始化失败时错误释放设备导致系统异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载或卸载 Dell Systems Management Driver (dell-wmi-sysman) 时，若驱动初始化失败回退或执行模块卸载操作，可能会因为错误的设备注销函数调用，导致非预期的设备被移除或内核对象管理混乱。
+
+#主要错误日志
+未知
+
+#问题根因
+`firmware_attributes_class` 下的设备没有唯一的 `dev_t`（设备号）。原代码在设备注销时使用了 `device_destroy()` 函数，该函数会根据给定的 `dev_t`（代码中为 MKDEV(0, 0)）匹配设备。由于 `dev_t` 不唯一，这种匹配机制可能会错误地匹配到具有相同设备号的任意设备，而不是原本需要注销的设备，从而导致错误的设备销毁。
+
+#解决方案
+将 `sysman_init` 错误处理路径和 `sysman_exit` 卸载路径中的 `device_destroy(&firmware_attributes_class, MKDEV(0, 0))` 替换为 `device_unregister(wmi_priv.class_dev)`。修改后直接对具体的 `class_dev` 设备对象进行注销，避免了因设备号不唯一导致的误匹配问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/372009ad798610d5a475b0cab1a84024ee257684

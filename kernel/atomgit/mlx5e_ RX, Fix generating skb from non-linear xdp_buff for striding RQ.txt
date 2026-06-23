@@ -1,0 +1,24 @@
+#标题
+mlx5e: RX, Fix generating skb from non-linear xdp_buff for striding RQ
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 Striding RQ (mpwrq) 模式并配置 XDP 程序处理非线性（non-linear）数据包时，内核可能发生内存崩溃。该问题源于在处理 XDP 程序返回并通过后，内核使用了栈上的临时变量 `mxbuf` 来构建 skb，导致数据结构引用失效，进而引发系统 panic 或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `mlx5e_skb_from_cqe_mpwrq_nonlinear` 中，处理 XDP 程序的逻辑使用了栈上分配的局部变量 `struct mlx5e_xdp_buff mxbuf`。当 XDP 程序处理非碎片页（non-fragmented pages）并调整数据包大小时，其内部状态（如 `data_end` 指针）会被修改。代码随后尝试使用该栈上变量的数据来构建 socket buffer (skb)。
+由于栈变量在函数返回后失效，或者 XDP 处理逻辑中对该变量的生命周期管理不当，导致生成的 skb 引用了无效的内存区域或包含了错误的元数据。对于线性 RQ 的修复已经将 `mxbuf` 移入了 `struct mlx5e_rq` 结构体中以持久化存储，但 Striding RQ 的相关路径此前未做相同处理。
+
+#解决方案
+参照线性 RQ 的修复方案，将 `struct mlx5e_xdp_buff` 结构体实例从栈空间移动到持久化的 `struct mlx5e_rq` 结构体成员 `mxbuf` 中，确保在 XDP 处理流程及后续 skb 构建过程中，`xdp_buff` 数据结构一直处于有效内存区域。具体涉及修改：
+1. 在 `struct mlx5e_rq` 定义中添加 `struct mlx5e_xdp_buff mxbuf` 成员。
+2. 在 `mlx5e_skb_from_cqe_mpwrq_nonlinear` 和其他相关 RX 处理函数中，将局部变量 `mxbuf` 替换为 `&rq->mxbuf`。
+3. 同步修复了 XDP 处理后 frags 计数和 truesize 的计算逻辑，确保内存回收和 skb 构建的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4c71e0316c0b7eb880ccc46911d131810f6cfc09

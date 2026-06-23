@@ -1,0 +1,20 @@
+#标题
+uio: uio_fsl_elbc_gpcm 探测过程中缺省指针检查导致潜在空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动 `uio_fsl_elbc_gpcm` 的探测函数 `uio_fsl_elbc_gpcm_probe` 中，调用 `devm_kasprintf` 生成内存区域名称字符串时，若内存分配失败返回 NULL，后续代码直接使用了该返回值，可能导致内核发生空指针解引用，进而引发 kernel panic 或 oops。
+
+#主要错误日志
+未知
+
+#问题根因
+`devm_kasprintf()` 函数在内存分配失败时会返回 NULL 指针。原代码在 `uio_fsl_elbc_gpcm_probe` 函数中直接将其返回值赋给 `info->mem[0].name` 而未进行有效性检查，若返回 NULL，后续对该成员的访问将导致空指针解引用错误。
+
+#解决方案
+在 `uio_fsl_elbc_gpcm_probe` 函数中，对 `devm_kasprintf()` 的返回值增加判断逻辑。如果返回值为 NULL，则将错误码置为 `-ENODEV`，并跳转至错误处理标签 `out_err3` 执行清理操作（如调用 `iounmap`），最后返回错误以避免故障发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad799645a9e18ae7dbb08cbda7257688f598130b

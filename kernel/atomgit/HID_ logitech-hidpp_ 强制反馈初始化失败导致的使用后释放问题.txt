@@ -1,0 +1,21 @@
+#标题
+HID: logitech-hidpp: 强制反馈初始化失败导致的使用后释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Logitech G920 设备在驱动加载过程中，若强制反馈初始化失败，驱动程序继续执行后续的 hid_hw_start 流程。这会导致内核发生 Use-After-Free（使用后释放）错误，引发内核崩溃或内存损坏。
+
+#主要错误日志
+[推断] 内核日志中可能出现如下告警信息：
+hid_warn: Unable to initialize force feedback support, errno -[errno]
+
+#问题根因
+在 `hidpp_probe` 函数中，当 `hidpp_ff_init` 初始化失败时，代码仅打印了警告日志，但未将返回值 `ret` 重置为 0。这导致函数带着错误返回值 `ret` 继续运行，破坏了后续的设备注册与内存管理逻辑，最终触发 Use-After-Free。
+
+#解决方案
+修改 `drivers/hid/hid-logitech-hidpp.c` 文件。在 `hidpp_ff_init` 失败的分支中，打印告警日志后，将返回值 `ret` 显式赋值为 0，使驱动忽略强制反馈初始化失败的影响，继续正常加载设备，防止错误码向下传递引发更严重的内存问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/056c488bac44a091914014d3d05e81c48c42f3dc

@@ -1,0 +1,29 @@
+#标题
+mptcp: fix soft lockup in mptcp_recvmsg()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 `MSG_PEEK` 与 `MSG_WAITALL` 标志进行数据接收时，系统触发 soft lockup（软死锁），CPU 长时间卡在 `mptcp_recvmsg` 函数流程中，导致进程无法调度。
+
+#主要错误日志
+watchdog: BUG: soft lockup - CPU#2 stuck for 156s! [server:1963]
+CPU: 2 UID: 0 PID: 1963 Comm: server Not tainted 6.19.0-rc8 #61 PREEMPT(none)
+RIP: 0010:sk_wait_data+0x15/0x190
+Call Trace:
+ <TASK>
+ mptcp_recvmsg+0x547/0x8c0 net/mptcp/protocol.c:2329
+ inet_recvmsg+0x11f/0x130 net/ipv4/af_inet.c:891
+ sock_recv_msg+0x94/0xc0 net/socket.c:1100
+ __sys_recvfrom+0xb2/0x130 net/socket.c:2256
+ ...
+
+#问题根因
+在使用 `MSG_PEEK` 标志接收数据时，skb 不会从 `sk_receive_queue` 中移除。这导致后续的 `sk_wait_data()` 函数总是检测到队列中有可用数据，因此从不执行真正的等待操作，而是立即返回并再次尝试读取。由于数据实际上并未被“消费”（仍存在于队列中），接收循环陷入无限循环，最终导致 CPU 软死锁。
+
+#解决方案
+在 `mptcp_recvmsg` 函数中增加对 `MSG_PEEK` 场景的特殊处理。当遇到空读取（bytes_read == 0）且设置了 `MSG_PEEK` 选项时，主动调用 `__mptcp_move_skbs()` 尝试将剩余报文从 `sk->sk_receive_queue` 迁移到 `msk->receive_queue`。如果迁移成功导致队列发生变化，则重试接收循环；否则，调用 `sk_wait_data()` 进入正常的等待状态，从而打破死锁循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f17de59bac7b8f7d218b0cc0f225f936b0baedba

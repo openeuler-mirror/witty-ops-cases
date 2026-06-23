@@ -1,0 +1,21 @@
+#标题
+igb 驱动在非致命错误恢复后错误地重新启动设备
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 igb 网卡设备发生非致命错误并进行复位恢复流程时，设备状态并未真正处于关闭（down）状态，但驱动逻辑仍尝试执行设备启动操作，可能导致设备状态混乱或引发不必要的重启失败错误日志。
+
+#主要错误日志
+- `igb_up failed after reset`（推断可能在此场景下触发）
+- `Resuming from non-fatal error, do nothing.`（修复后新增的调试日志）
+
+#问题根因
+在 `igb_io_resume` 函数中，仅检查了 `netif_running(netdev)` 判断网络接口是否运行，但未检查适配器内部状态 `__IGB_DOWN`。对于非致命错误的恢复场景，设备可能并未完全关闭（即 `__IGB_DOWN` 位未被置位），此时直接调用 `igb_up` 会尝试重新启动一个已经处于运行状态的设备，导致逻辑错误或启动失败。
+
+#解决方案
+在 `igb_io_resume` 函数中调用 `igb_up` 之前增加对 `adapter->state` 中 `__IGB_DOWN` 位的检查。如果设备未处于关闭状态（`__IGB_DOWN` 位为 0），说明这是从非致命错误中恢复，无需重新启动设备，直接返回并打印调试日志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d2182fcadba3dabce4f41e10b07835da7f2c5936

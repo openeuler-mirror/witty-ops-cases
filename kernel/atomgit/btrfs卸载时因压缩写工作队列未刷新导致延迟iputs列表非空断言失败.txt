@@ -1,0 +1,26 @@
+#标题
+btrfs卸载时因压缩写工作队列未刷新导致延迟iputs列表非空断言失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 btrfs 文件系统卸载操作时，如果系统正在进行压缩写操作，内核会触发断言失败。具体表现为在 `close_ctree()` 函数中，经过 `btrfs_run_delayed_iputs()` 和 `btrfs_commit_super()` 处理后，检查发现 `delayed_iputs` 链表非空，导致内核 panic 或警告。
+
+#主要错误日志
+ASSERT(list_empty(&fs_info->delayed_iputs))
+
+#问题根因
+在 `close_ctree()` 执行过程中，压缩写工作队列（`compressed_write_workers`）与有序_extent_完成工作队列（`endio_write_workers`）之间存在依赖关系未正确处理。具体流程如下：
+1. 系统先刷新了 `endio_write_workers` 队列；
+2. 随后一个压缩写 BIO 完成，其回调函数将任务加入 `endio_write_workers` 队列；
+3. 内核继续执行延迟 iputs 清理和超级块提交；
+4. 在断言检查前，步骤 2 中入队的任务执行，产生新的延迟 iput；
+5. 此时 `delayed_iputs` 链表不为空，触发断言失败。
+根本原因是卸载流程中刷新工作队列的顺序不当，未先刷新上游的压缩写工作队列。
+
+#解决方案
+在 `close_ctree()` 函数中，在刷新 `endio_write_workers` 队列之前，先显式刷新 `fs_info->compressed_write_workers` 工作队列。这确保了所有压缩写相关的任务在处理有序_extent_完成队列之前已全部完成，从而避免了新的延迟 iput 在卸载清理后期产生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1eb157494aa71e4ec82bb033f5589eda696b54bd

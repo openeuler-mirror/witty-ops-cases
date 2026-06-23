@@ -1,0 +1,24 @@
+#标题
+f2fs: 修复 total_valid_block_count 一致性检查缺失导致的潜在断言失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 F2FS 文件系统运行过程中，若存在元数据不一致（如 total_valid_block_count 计数异常），在执行块计数减少操作（dec_valid_block_count）时，可能触发 `f2fs_bug_on` 导致内核 panic 或系统异常重启。
+
+#主要错误日志
+- 推断日志：f2fs_warn(sbi, "Inconsistent total_valid_block_count:%u, ino:%lu, count:%u", sbi->total_valid_block_count, inode->i_ino, count);
+
+#问题根因
+代码原先在 `dec_valid_block_count` 函数中直接使用 `f2fs_bug_on` 检查 `sbi->total_valid_block_count` 是否小于 `count`。若文件系统元数据出现不一致，该断言会直接触发 kernel panic，系统稳定性差且未尝试修复或标记错误状态。
+
+#解决方案
+将 `f2fs_bug_on` 断言修改为容错处理逻辑。当检测到 `sbi->total_valid_block_count` 小于 `count` 时：
+1. 打印警告日志提示不一致信息。
+2. 将 `sbi->total_valid_block_count` 重置为 0，防止下溢。
+3. 设置 `SBI_NEED_FSCK` 标志，提示文件系统需要在下次挂载时进行一致性检查。
+若计数正常，则正常执行减法操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae77be94b0ea693bc9d309326283178beed1fe67

@@ -1,0 +1,20 @@
+#标题
+NFSv4.0 异步 open 操作中的 use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当两个线程同时打开文件，且在收到回复前被迫中止时，nfs4_opendata_free() 中调用的 nfs_release_seqid() 会导致对另一个线程已失效 rpc_task 指针的 use-after-free 访问。
+
+#主要错误日志
+未知
+
+#问题根因
+当 RPC 调用在 nfs_wait_on_sequence() 完成之前被中止时，nfs4_open_release() 未能及时调用 nfs_release_seqid() 释放序列号，导致在后续清理流程（nfs4_opendata_free）中访问了已经被释放的 rpc_task 指针。
+
+#解决方案
+修改 fs/nfs/nfs4proc.c 中的 nfs4_open_release 函数逻辑，调整错误处理流程的顺序。当检测到 RPC 调用出错（rpc_status != 0）或未完成（!rpc_done）时，立即调用 nfs_release_seqid(data->o_arg.seqid) 并跳转到 out_free 标签，确保在 rpc_task 被释放前完成序列号的释放，避免 use-after-free。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e05408647da2a93c59293706c41f0a38cf774918

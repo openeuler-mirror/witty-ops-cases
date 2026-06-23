@@ -1,0 +1,21 @@
+#标题
+scsi: ufs: exynos: 修复寄存器编程错误导致 UBSAN 移位越界告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Google gs101 平台上，当 UFS 的传输请求槽数为 32 时，驱动程序触发 UBSAN（Undefined Behavior Sanitizer）移位越界告警。同时，由于计算结果错误，导致 `HCI_UTRL_NEXUS_TYPE` 寄存器被错误地写入 0，影响 UFS 设备的正常初始化或数据传输能力。
+
+#主要错误日志
+UBSAN: shift-out-of-bounds in drivers/ufs/host/ufs-exynos.c:1113:21
+shift exponent 32 is too large for 32-bit type 'int'
+
+#问题根因
+代码中使用 `(1 << hba->nutrs) - 1` 计算寄存器值，左操作数 `1` 被编译器视为 `int` 类型（32位）。当 `nutrs` 值为 32 时，左移位数超过了 `int` 类型的位宽（31位），导致未定义的行为。在 gs101 平台上，这导致计算结果错误变为 0，而非预期的 0xffffffff。
+
+#解决方案
+使用内核宏 `BIT()` 替代直接的移位操作 `1 <<`。`BIT()` 宏会自动进行正确的类型转换（扩展为 unsigned long 类型），从而支持大于等于 32 位的移位操作。修改后，代码能正确计算并写入 `HCI_UTRL_NEXUS_TYPE` 和 `HCI_UTMRL_NEXUS_TYPE` 寄存器值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5c29bdacac2a145df9949712342e8b8602718e72

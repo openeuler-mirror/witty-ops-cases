@@ -1,0 +1,20 @@
+#标题
+vxlan: vnifilter: 修复默认 FDB 表项删除时的未加锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除 vxlan 设备的 VNI 过滤器（vnifilter）且存在默认 FDB 表项（remote_ip 不为空）时，内核在调用 `__vxlan_fdb_delete` 函数删除 FDB 表项过程中未持有必要的 hash 锁。这可能导致在并发操作 FDB 表时发生数据竞争，进而引发内核崩溃、内存损坏或 FDB 表项异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `vxlan_vni_delete_group` 函数中，删除默认 FDB 表项（`__vxlan_fdb_delete`）的代码路径缺少对应的 `spin_lock_bh` 锁保护。在进行 FDB 表项删除操作时，必须持有 `vxlan->hash_lock[hash_index]` 锁以防止并发冲突，但原代码逻辑中遗漏了加锁与解锁步骤。
+
+#解决方案
+在调用 `__vxlan_fdb_delete` 删除默认 FDB 表项前，根据 `all_zeros_mac` 和 `vni` 计算出 `hash_index`，并调用 `spin_lock_bh` 获取对应的哈希锁；在删除操作完成后，调用 `spin_unlock_bh` 释放锁。确保 FDB 删除操作在锁保护下进行，避免并发问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9ddfc082c6e3d39e54f77315d2339a3dd98f66e9

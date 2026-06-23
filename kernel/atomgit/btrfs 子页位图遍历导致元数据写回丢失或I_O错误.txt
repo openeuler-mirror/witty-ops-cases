@@ -1,0 +1,20 @@
+#标题
+btrfs 子页位图遍历导致元数据写回丢失或I/O错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 subpage（子页）特性的 Btrfs 文件系统上，进行元数据写回时，由于位图起始位计算错误，导致部分 extent buffer 未被正确识别和处理。可能造成元数据写回丢失、数据不一致，或在运行时触发文件系统错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `submit_eb_subpage` 函数中，当通过 `bit_start` 遍历子页位图且当前位未设置 `EXTENT_LOCKED` 等状态时，原代码仅执行 `bit_start++` 将起始位加 1。然而，在 subpage 场景下，一个 extent buffer 可能跨越多个 sector，循环迭代时应按 `sectors_per_node`（节点扇区数）为步长进行跳转。错误的步长导致跳过了同一个 extent buffer 占用的其他位或错误定位下一个 extent buffer，进而导致写回逻辑异常。
+
+#解决方案
+修改 `fs/btrfs/extent_io.c` 文件中的 `submit_eb_subpage` 函数，将循环中的步进逻辑从 `bit_start++` 修正为 `bit_start += sectors_per_node`，确保每次循环正确跳过当前 extent buffer 占用的所有扇区位，保证后续遍历的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/603a864ace043e65ce3be4c0bb7d51ab5e6dc757

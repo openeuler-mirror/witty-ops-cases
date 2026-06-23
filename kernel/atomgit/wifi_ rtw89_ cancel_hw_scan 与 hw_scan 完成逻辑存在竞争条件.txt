@@ -1,0 +1,20 @@
+#标题
+wifi: rtw89: cancel_hw_scan 与 hw_scan 完成逻辑存在竞争条件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 rtw89 无线网卡驱动中，当调用 `cancel_hw_scan` 接口取消硬件扫描时，若与硬件扫描完成流程并发执行，会触发竞争条件。这可能导致驱动状态不一致，进而引发扫描功能异常或潜在的内存访问错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `rtw89_ops_cancel_hw_scan` 函数中，检查 `rtwdev->scanning` 标志位与后续获取互斥锁 `mutex_lock` 的操作不是原子的。原代码在获取锁之前先检查了 `scanning` 状态，如果此时硬件扫描刚好完成并更新了状态，`cancel_hw_scan` 可能会在错误的判断下直接返回，或者操作一个已经失效的扫描状态，从而导致竞争风险。
+
+#解决方案
+将 `scanning` 状态检查移动到互斥锁保护区域内。在 `rtw89_ops_cancel_hw_scan` 中，先获取 `mutex_lock`，再检查 `rtwdev->scanning` 状态。如果非扫描状态则直接跳转到 `out` 标签释放锁并退出，否则执行 `rtw89_hw_scan_abort`，确保状态检查与扫描中止操作在锁保护下原子执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a4c40343c0b335748445fdeefe1da8dd91848338

@@ -1,0 +1,22 @@
+#标题
+ocfs2/dlm: DLM_QUERY_REGION消息qr_numregions字段校验缺失导致越界读取
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 DLM_QUERY_REGION 网络消息时，若消息中 `qr_numregions` 字段被 crafted（构造）为超过 `O2NM_MAX_REGIONS` (32) 的值，会导致内核在 `dlm_match_regions()` 函数中发生越界读取（out-of-bounds reads），可能造成内存信息泄露或内核崩溃。
+
+#主要错误日志
+```
+Domain %s: Joining node %d has invalid number of heartbeat regions %u
+```
+
+#问题根因
+`dlm_match_regions()` 函数直接使用来自网络的 DLM_QUERY_REGION 消息中的 `qr_numregions` 字段作为循环边界，未检查其是否超过 `qr_regions` 缓冲区的大小限制 `O2NM_MAX_REGIONS`。由于 o2net 层仅校验消息字节长度而不限制字段值，攻击者可构造恶意消息将 `qr_numregions` 设置为最大 255，导致循环读取越界。
+
+#解决方案
+在 `dlm_match_regions()` 函数的循环遍历前增加边界检查，若 `qr_numregions` 大于 `O2NM_MAX_REGIONS`，则打印错误日志并返回 `-EINVAL` 错误，拒绝处理该非法消息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8f2fba2896c10432a7dd316d6ba76e805adeb0c7

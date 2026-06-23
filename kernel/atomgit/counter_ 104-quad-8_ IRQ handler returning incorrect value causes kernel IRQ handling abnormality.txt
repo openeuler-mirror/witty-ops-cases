@@ -1,0 +1,25 @@
+#标题
+counter: 104-quad-8: IRQ handler returning incorrect value causes kernel IRQ handling abnormality
+
+#内核版本
+OLK-6.6
+
+#问题现象
+104-quad-8 计数器驱动的中断处理函数 `quad8_irq_handler` 在处理 regmap 操作失败时，错误地返回了负数的错误码（如 -EIO 等），而不是返回 `irqreturn_t` 枚举值。这可能导致 Linux 内核中断处理子系统行为异常，具体取决于对中断返回值的判断逻辑。修复方案在读取中断状态失败时返回 IRQ_NONE，在清除中断失败时返回 IRQ_HANDLED 以防止内核因误判为虚假中断风暴而禁用该 IRQ 线。
+
+#主要错误日志
+- "Attempt to read Interrupt Status Register failed: %d\n" (推断：dev_WARN_ONCE 打印)
+- "Attempt to clear pending interrupts by writing to Channel Operation Register failed: %d\n" (推断：dev_WARN_ONCE 打印)
+- "invalid interrupt trigger function %u configured for channel %lu\n" (推断：dev_WARN_ONCE 打印)
+
+#问题根因
+`quad8_irq_handler()` 函数本应返回 `irqreturn_t` 枚举值（如 IRQ_HANDLED 或 IRQ_NONE），但在 regmap_read 或 regmap_write 操作失败时，直接返回了 regmap 的负数错误码。这违反了 IRQ handler 的接口契约，可能导致内核中断核心层无法正确识别中断处理状态。
+
+#解决方案
+修改 `quad8_irq_handler` 函数的错误处理逻辑：
+1. 当读取中断状态寄存器失败时，打印警告日志并返回 IRQ_NONE，表示中断未被处理。
+2. 当清除挂起中断（写 Channel Operation Register）失败时，打印警告日志并返回 IRQ_HANDLED。这样做的目的是防止内核认为发生了虚假中断风暴从而禁用该 IRQ 线。
+3. 将原有的 WARN_ONCE 调用改为 dev_WARN_ONCE，增加设备上下文信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b3b908d9728c36c1a4b66396897dbfb60c8ada38

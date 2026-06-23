@@ -1,0 +1,24 @@
+#标题
+userfaultfd 并发 GUP 场景下 release 挂死问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发 GUP（get_user_pages）操作期间关闭 userfaultfd 时，系统发生挂死。具体表现为：
+1. 在 Firecracker 使用场景中，当远程处理缺页的进程释放 userfaultfd 时，若恰好遇到 KVM 为处理二级 MMU 缺页而进行的 GUP 操作，会导致系统挂死。
+2. 在执行 mlockall() 操作（内部类似 GUP 流程）时，若并发释放 userfaultfd，同样会触发该挂死问题。
+该问题本质是一个活锁，导致释放 userfaultfd 的线程无法获取 mmap_lock 写锁而无法推进。
+
+#主要错误日志
+未知
+
+#问题根因
+在并发 GUP 场景下，如果 userfaultfd 已经被释放（ctx->released 为真），内核原有的处理逻辑返回 `VM_FAULT_NOPAGE`。对于普通的缺页处理路径，这能正常工作；但对于 GUP 路径（如 `faultin_page()` 函数），`VM_FAULT_NOPAGE` 被视为“缺页已解决”，GUP 会持有 mmap 读锁再次尝试查找页面，发现页面不存在后再次陷入处理流程，形成循环。由于 GUP 线程一直未释放 mmap 读锁，导致正在尝试获取 mmap 写锁以完成 release 操作的线程被阻塞，从而形成活锁。
+
+#解决方案
+修改 `handle_userfault` 函数逻辑，当检测到 userfaultfd 已经 released 时，不再返回 `VM_FAULT_NOPAGE`，而是主动释放 mmap 读锁并返回 `VM_FAULT_RETRY`。
+此举强制 GUP 线程立即释放 mmap 锁并退出当前循环，确保释放 userfaultfd 的线程能够获取 mmap 写锁继续执行，从而打破活锁僵局。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/655e7d7264e78bb18b703c205e1a4d95c8d6760d

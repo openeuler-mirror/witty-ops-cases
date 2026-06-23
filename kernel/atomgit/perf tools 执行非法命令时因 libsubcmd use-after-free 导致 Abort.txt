@@ -1,0 +1,22 @@
+#标题
+perf tools 执行非法命令时因 libsubcmd use-after-free 导致 Abort
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户执行 perf 的非法命令（如 `perf bad-command`）时，程序异常终止并打印 "Aborted (core dumped)"。虽然提示了命令不存在，但进程未正常退出而是发生崩溃。
+
+#主要错误日志
+perf: 'bad-command' is not a perf-command. See 'perf --help'.
+Aborted (core dumped)
+
+#问题根因
+在 `libsubcmd` 库的 `exclude_cmds()` 函数中存在释放后使用漏洞。当该函数移除匹配的条目时，逻辑错误导致指针被错误释放。
+具体流程如下：在处理数组移位时，代码先释放了目标位置原有的指针（假设为 B），然后将源位置的指针（假设为 C）复制到该目标位置。然而，源位置的指针随后在移位过程中被标记为 NULL 或被释放逻辑处理。关键问题在于，当进行连续移位操作时，代码释放了 `cmds->names[ci]`，但该指针刚被赋值给 `cmds->names[cj]`（且二者指向同一内存区域），导致 `cmds->names[cj]` 指向了已释放的内存，后续访问该指针引发崩溃。
+
+#解决方案
+修改 `tools/lib/subcmd/help.c` 中的 `exclude_cmds()` 函数逻辑。在移动数组条目时，不再直接释放目标条目，而是先将源条目指针赋值给目标位置，再将源位置置为 NULL。移位操作结束后，通过断言检查确保剩余位置均为 NULL，避免重复释放或访问已释放内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e516bc0e0decfb286726e043e143c303e202e787

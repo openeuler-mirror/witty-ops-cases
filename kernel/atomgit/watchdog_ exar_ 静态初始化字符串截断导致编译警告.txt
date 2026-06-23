@@ -1,0 +1,24 @@
+#标题
+watchdog: exar: 静态初始化字符串截断导致编译警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 GCC 15 编译内核时，由于 `-Wunterminated-string-initialization` 选项检查，编译器报出警告，提示初始化字符串过长，导致 NUL 终止符被截断。
+
+#主要错误日志
+```
+drivers/watchdog/exar_wdt.c:224:27: warning: initializer-string for array of 'unsigned char' truncates NUL terminator but destination lacks 'nonstring' attribute (33 chars into 32 available) [-Wunterminated-string-initialization]
+  224 |         .identity       = "Exar/MaxLinear XR28V38x Watchdog",
+      |                           ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+```
+
+#问题根因
+`struct watchdog_info` 结构体中的 `identity` 字段长度受 UAPI 限制固定为 32 字节。驱动初始化时赋值的字符串 "Exar/MaxLinear XR28V38x Watchdog" 长度为 33 字节（含 NUL），超出了目标数组可用空间，导致 NUL 终止符被截断，引发编译器警告。
+
+#解决方案
+缩短 `identity` 字段的初始化字符串，将其从 "Exar/MaxLinear XR28V38x Watchdog" 修改为 "Exar XR28V38x Watchdog"，确保字符串长度（含 NUL）不超过 32 字节，从而符合 UAPI 定义且消除截断警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4dfea9497e68ececb0e598a7f46d011eb7eb70f4

@@ -1,0 +1,20 @@
+#标题
+nf_conntrack_h323 解码整数时越界访问导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 H.323 协议数据包时，若接收到特定的恶意或畸形报文，内核在 `decode_int` 函数中进行整数解码处理时，可能触发越界访问，导致内核 panic 或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `net/netfilter/nf_conntrack_h323_asn1.c` 文件的 `decode_int` 函数中，解析逻辑先计算了长度 `len`，随即调用 `BYTE_ALIGN` 进行字节对齐，但在对齐和读取数据之前，未使用 `nf_h323_error_boundary` 对后续要读取的数据长度 `len` 进行边界检查。这导致后续的 `get_uint` 操作可能读取超出数据包缓冲区范围的内存，引发越界访问。
+
+#解决方案
+在计算完 `len` 变量后、执行 `BYTE_ALIGN` 前，增加对 `len` 长度的边界检查调用 `nf_h323_error_boundary(bs, len, 0)`。如果检查发现数据越界，函数直接返回 `H323_ERROR_BOUND` 错误，从而避免非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4957b30389da087fd9ae374bf2391b458f866c38

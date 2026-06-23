@@ -1,0 +1,20 @@
+#标题
+drm/nouveau: 修复 nouveau_fence_context_kill 中的 WARN_ON 触发问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Nouveau 驱动中，当发生竞态条件时，即 fence 已经由 `nouveau_fence_done()` 标记为完成（signaled）但尚未从 pending 列表移除，此时若调用 `nouveau_fence_context_kill()`，会尝试对一个已经处于 signaled 状态的 fence 设置错误码。这违反了内核 dma-fence 机制的预期，导致触发 WARN_ON 警告，表明存在内部逻辑错误。
+
+#主要错误日志
+未知
+
+#问题根因
+Nouveau 驱动设计上预期 fence 仅通过 `nouveau_fence_signal()` 进行触发，但实际上 `nouveau_fence_done()` 也可以触发 fence。当 `nouveau_fence_done()` 触发 fence 后（发生竞态），该 fence 会暂时保留在 pending 列表中，直到 `nouveau_fence_update()` 将其移除。如果在此期间调用了 `nouveau_fence_context_kill()`，该函数会遍历 pending 列表并尝试对这些 fence 设置 error 状态。对已经 signaled 的 fence 设置 error 是非法操作，从而导致了 BUG_ON 或 WARN_ON 触发。
+
+#解决方案
+在 `nouveau_fence_context_kill()` 函数中设置 error 之前，增加对 fence 状态的检查。具体修改为：在 `if (error)` 判断条件中追加 `&& !dma_fence_is_signaled_locked(&fence->base)` 判断，确保仅对未处于 signaled 状态的 fence 设置 error 码，从而避免对已完成 fence 的非法操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/09e3f6429272ef799f83cd8bde448f0eff3f0cb2

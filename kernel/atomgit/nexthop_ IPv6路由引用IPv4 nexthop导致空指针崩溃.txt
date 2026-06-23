@@ -1,0 +1,20 @@
+#标题
+nexthop: IPv6路由引用IPv4 nexthop导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当IPv6 nexthop被替换为IPv4 nexthop时，由于nexthop组的`has_v4`标志位未更新，导致IPv6路由错误地附加到仅包含AF_INET成员的组中。后续进行路由查找时，调用`nexthop_fib6_nh()`返回NULL，引发空指针解引用，造成内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在替换nexthop时，代码逻辑遗漏了从AF_INET6替换为AF_INET的场景。原有的`nh_group_v4_update`更新逻辑仅在旧类型为AF_INET且新类型为AF_INET6时触发，导致反向替换时组内的`has_v4`标志位保持为过期的`false`状态。这绕过了`fib6_check_nexthop`的检查，使得IPv6路由成功引用了实际上只包含IPv4成员的nexthop组，最终在路由查找时触发NULL指针解引用。
+
+#解决方案
+修改`net/ipv4/nexthop.c`中的`replace_nexthop_single`函数，将触发组更新的条件从特定的地址族转换（AF_INET转AF_INET6）修改为通用的地址族变更检查。只要新旧nexthop的family不同，就调用更新逻辑修正`has_v4`标志位，防止状态不一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ffe6b0b9bec54ed40f7043129092a0a4860e945

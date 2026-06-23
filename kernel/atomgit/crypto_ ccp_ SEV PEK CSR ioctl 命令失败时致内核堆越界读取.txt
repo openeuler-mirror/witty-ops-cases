@@ -1,0 +1,30 @@
+#标题
+crypto: ccp: SEV PEK CSR ioctl 命令失败时致内核堆越界读取
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 SEV PEK CSR ioctl 接口时，如果固件命令执行失败（特别是由于用户空间缓冲区长度不足导致的情况），驱动程序仍尝试将数据拷贝到用户空间。此行为导致内核读取并泄露内核堆中的越界数据，触发 KASAN 检测报错（slab-out-of-bounds），甚至可能通过 instrument_copy_to_user 泄露内核内存信息。
+
+#主要错误日志
+BUG: KASAN: slab-out-of-bounds in instrument_copy_to_user ../include/linux/instrumented.h:129 [inline]
+BUG: KASAN: slab-out-of-bounds in _inline_copy_to_user ../include/linux/uaccess.h:205 [inline]
+BUG: KASAN: slab-out-of-bounds in _copy_to_user+0x66/0xa0 ../lib/usercopy.c:26
+Read of size 2084 at addr ffff898144612e20 by task syz.9.219/21405
+Call Trace:
+ dump_stack_lvl+0xc5/0x110
+ kasan_report+0xa2/0xe0
+ kasan_check_range+0x264/0x2c0
+ _copy_to_user+0x66/0xa0
+ sev_ioctl_do_pek_csr+0x31f/0x590 ../drivers/crypto/ccp/sev-dev.c:1872
+ sev_ioctl+0x3a4/0x490
+
+#问题根因
+在 `sev_ioctl_do_pek_csr` 函数中，逻辑未在固件命令执行失败时立即终止流程。当固件命令因无效长度（用户缓冲区过小）失败时，固件会在 `data.len` 中返回其所需的实际长度。驱动程序不加判断地使用该长度更新 `input.length`，随后执行 `copy_to_user` 操作，导致从内核分配的较小缓冲区中读取超过其边界的数据（越界读取），并将数据泄露至用户空间。
+
+#解决方案
+在执行 `copy_to_user` 拷贝 CSR blob 数据前，增加对固件命令执行结果 `ret` 和错误码 `argp->error` 的检查。如果命令执行失败，直接跳转到 `e_free_blob` 进行清理并退出，不再尝试拷贝数据。同时增加 `WARN_ON_ONCE` 警告以捕获驱动状态不一致的情况（即驱动认为成功但固件返回错误）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2b6dce34bb5abad5c85ad403c8ac651a33ce6df2

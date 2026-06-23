@@ -1,0 +1,28 @@
+#标题
+rseq selftests mm_cid 测试失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 rseq selftests 的 run_param_test.sh 脚本时，mm_cid 相关测试项失败。测试输出显示 "Error: cpu id getter unavailable"，导致 mm_cid 测试无法正常运行。
+
+#主要错误日志
+Error: cpu id getter unavailable
+
+#问题根因
+该故障由 GNU C library (glibc) 的变更引发，具体为 glibc commit 2e456ccf0c34 ("Linux: Make __rseq_size useful for feature detection (bug 31965)")。
+根本原因在于 rseq selftests 代码逻辑与新版 glibc 对 `__rseq_size` 的定义不匹配：
+1. 代码中错误地使用 `rseq_feature_size` 变量来判断 rseq 特性（如 node_id 和 mm_cid）是否可用。
+2. 随着新版 glibc 的更新，`__rseq_size` 的语义发生变化，旧代码在处理 glibc 提供的 `__rseq_size`（可能为 20 或 32）与内核实际支持的 feature size 时逻辑混乱，导致 `rseq_feature_size` 计算错误。
+3. 检查函数 `rseq_mm_cid_available()` 因读取到错误的 size 值（过小），误判内核不支持 mm_cid 特性，从而返回 false 并报错。
+
+#解决方案
+修改 `tools/testing/selftests/rseq/rseq.c` 和 `rseq.h`，适配 glibc 的接口变更：
+1. 移除全局变量 `rseq_feature_size`，统一使用 `rseq_size` 作为判断特性是否可用的依据。
+2. 新增 `get_rseq_min_alloc_size()` 和 `get_rseq_kernel_feature_size()` 辅助函数，分别用于获取分配大小和内核支持的特性大小。
+3. 重构 `rseq_init()` 函数逻辑，针对 glibc 旧版本（`__rseq_size` 为 20 或 32）进行特殊处理。在这些特殊情况下，`rseq_size` 取 min(32, kernel_feature_size)；其他情况直接使用 glibc 提供的 `libc_rseq_size`。
+4. 将 `rseq_node_id_available()` 和 `rseq_mm_cid_available()` 函数中的判断条件从 `rseq_feature_size >= ...` 修改为 `rseq_size >= ...`，确保正确检测特性可用性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/53b57054735c820fd855874118b95275a0c5d035

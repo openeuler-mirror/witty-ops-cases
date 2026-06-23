@@ -1,0 +1,24 @@
+#标题
+thermal: core: thermal zone governor cleanup issues
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 thermal_zone_device_register_with_trips() 注册失败时，未正确清理已绑定的 governor，导致内存泄漏。
+2. 在注销 thermal zone 设备时（thermal_zone_device_unregister），未持有热区锁即调用 thermal_set_governor()，可能因与 sysfs 接口的 governor 更新操作并发而导致竞态条件，引发 use-after-free。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 注册错误路径处理缺失：在 thermal_zone_device_register_with_trips() 流程中，若在 governor 绑定之后、设备注册完成之前发生错误（如 thermal_zone_create_device_groups 失败），代码直接跳转至 remove_id 标签，遗漏了对 governor 的清理操作。
+2. 锁保护缺失：thermal_zone_device_unregister() 函数中调用 thermal_set_governor(tz, NULL) 前未获取 thermal zone 锁，而 sysfs 接口路径下的 governor 更新会持有该锁，二者并发时将触发 use-after-free。
+
+#解决方案
+1. 在 thermal_release() 函数中增加 thermal_set_governor(tz, NULL) 调用，确保在设备释放时移除 governor。
+2. 在 thermal_zone_device_register_with_trips() 的错误处理路径（groups 创建失败分支）中增加 thermal_set_governor(tz, NULL) 调用，清理已绑定的 governor 防止内存泄漏。
+3. 移除 thermal_zone_device_unregister() 中原有的 thermal_set_governor(tz, NULL) 调用，将其转移至持有锁的 thermal_release() 中执行，避免竞态风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ddda630bdeda638af07f57c67b1846e123cf87f6

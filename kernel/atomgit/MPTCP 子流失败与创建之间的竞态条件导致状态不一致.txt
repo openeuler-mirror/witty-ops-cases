@@ -1,0 +1,23 @@
+#标题
+MPTCP 子流失败与创建之间的竞态条件导致状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+MPTCP 协议在处理子流失败（subflow fail）与新建子流的过程中存在竞态条件。当一端发送或接收 MP_FAIL 选项（例如数据校验失败时）触发无限回退机制的同时，若系统允许新建额外的子流，将导致连接状态不一致，可能引发连接行为异常或功能受损。该问题比此前修复的类似竞态更难触发，但逻辑缺陷依然存在。
+
+#主要错误日志
+未知
+
+#问题根因
+在 MPTCP 连接中，子流失败处理逻辑与子流创建逻辑缺乏同步保护。具体而言，`allow_infinite_fallback` 字段的写入操作未在所有路径上持有 `fallback_lock` 锁，且缺乏一个明确的状态标志来禁止在 socket 进入失败处理状态后继续创建新的子流。这导致了在处理 MP_FAIL 消息时，无法原子性地阻止新子流的加入，从而产生竞态窗口。
+
+#解决方案
+引入一个新的布尔字段 `allow_subflows` 用于明确跟踪“允许创建子流”的状态，该字段受 `fallback_lock` 保护。修改逻辑如下：
+1. 在 socket 初始化时将 `allow_subflows` 置为 true。
+2. 在 `mptcp_subflow_fail` 和 `mptcp_pm_mp_fail_received` 等失败处理路径中，在持有 `fallback_lock` 的情况下将 `allow_subflows` 置为 false，确保一旦进入失败处理流程，后续的子流创建请求（如 `mptcp_finish_join`）会被拒绝。
+3. 移除 `allow_infinite_fallback` 写操作上的 `WRITE_ONCE` 注解，因为该字段现在始终在锁保护下访问，保证了操作的原子性与一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/501d0b01e23f761d98ee93cb4d66cddffc445932

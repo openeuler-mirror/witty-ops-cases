@@ -1,0 +1,20 @@
+#标题
+of/irq: 修复 API of_irq_parse_raw() 中的设备节点引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `of_irq_parse_raw()` API 解析中断时，如果设备节点既是控制器又是连接节点，会导致该节点的引用计数（refcount）被错误地增加两次，从而造成引用计数泄漏。这种泄漏会导致设备节点无法被正常释放，可能引发内存泄漏问题，长期运行可能影响系统稳定性或导致设备热插拔失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `of_irq_parse_raw()` 函数中，当节点 `@out_irq->np` 是一个组合节点（既作为控制器又作为连接节点）时，函数会因为条件 `(@ipar == @newpar)` 而直接返回。在此之前，代码逻辑中已经获取了 `@ipar` 的引用计数，而在处理 `interrupt-map` 时，`of_irq_parse_imap_parent()` 函数又通过其别名 `@newpar` 再次增加了同一个节点的引用计数。当函数检测到 `ipar == newpar` 并返回时，没有对第二次增加的引用计数进行释放操作，导致该节点的引用计数多加了 1，从而引起泄漏。
+
+#解决方案
+在函数 `of_irq_parse_raw()` 中，当满足 `(@ipar == @newpar)` 条件返回之前，显式调用 `of_node_put(ipar)` 来抵消由 `of_irq_parse_imap_parent()` 多余增加的引用计数。同时，在函数注释中补充说明成功返回时节点 `@out_irq->np` 的引用计数会增加 1，以明确 API 的行为契约。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/112f93f86de5e9dad3baf1a21e81f7e63ead735b

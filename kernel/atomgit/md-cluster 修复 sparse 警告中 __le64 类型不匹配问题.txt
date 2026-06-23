@@ -1,0 +1,29 @@
+#标题
+md-cluster 修复 sparse 警告中 __le64 类型不匹配问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译或使用 sparse 工具进行静态代码检查时，drivers/md/md-cluster.c 文件触发多处类型不匹配警告：
+- 赋值时基类型不同。
+- __le64 类型降级为整数。
+具体警告信息包括“incorrect type in assignment (different base types)”以及“restricted __le64 degrades to integer”。
+
+#主要错误日志
+drivers/md/md-cluster.c:1220:22: warning: incorrect type in assignment (different base types)
+drivers/md/md-cluster.c:1220:22:    expected unsigned long my_sync_size
+drivers/md/md-cluster.c:1220:22:    got restricted __le64 [usertype] sync_size
+drivers/md/md-cluster.c:1252:35: warning: incorrect type in assignment (different base types)
+drivers/md/md-cluster.c:1252:35:    expected unsigned long sync_size
+drivers/md/md-cluster.c:1252:35:    got restricted __le64 [usertype] sync_size
+drivers/md/md-cluster.c:1253:41: warning: restricted __le64 degrades to integer
+
+#问题根因
+代码中直接将 `sb->sync_size`（__le64 类型，即小端序 64 位变量）赋值给 `unsigned long` 类型的局部变量（如 `my_sync_size` 和 `sync_size`），未进行类型转换，导致 endianness 相关的 sparse 静态检查警告。
+
+#解决方案
+在涉及 `sync_size` 赋值与比较的地方，使用 `le64_to_cpu()` 函数将 __le64 类型正确转换为 CPU 可使用的整数值，消除类型不匹配警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a0edd109de6c6ad4878c7d3fb5bfb3d1317977df

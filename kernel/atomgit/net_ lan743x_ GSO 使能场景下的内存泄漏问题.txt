@@ -1,0 +1,24 @@
+#标题
+net: lan743x: GSO 使能场景下的内存泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统开启 GSO（Generic Segmentation Offload）功能时，驱动在处理网络数据包发送过程中会导致 skb 结构体内存泄漏。随着流量持续，系统内存逐渐耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+在 GSO 使能的场景下，驱动函数 `lan743x_tx_frame_add_lso` 处理逻辑中，仅设置了 `TX_DESC_DATA0_LS_` 和 `TX_DESC_DATA0_IOC_` 标志位，但未更新 `tx->frame_last` 指针。
+由于 `lan743x_tx_frame_end` 函数依赖 `tx->frame_last` 来定位并保存 skb 指针，该指针未更新导致对应的 `buffer_info` 结构体未能正确关联 skb。后续清理发送描述符环时，因找不到正确的 skb 指针而无法释放内存，从而导致内存泄漏。
+
+#解决方案
+1. 在 `lan743x_tx` 结构体中新增 `frame_last` 成员变量，用于记录最后一个有效描述符的索引。
+2. 在 `lan743x_tx_frame_add_lso` 函数中，当设置 LS（Last Segment）标志时，同步更新 `tx->frame_last = tx->frame_first`，确保指针指向正确的描述符。
+3. 在 `lan743x_tx_frame_end` 函数中，直接使用 `tx->frame_last` 索引来获取 `buffer_info` 并保存 skb 指针，而非使用 `tx->frame_tail`，确保 skb 与正确的描述符关联以便后续释放。
+4. 在错误处理路径 `lan743x_tx_frame_add_fragment` 中，重置 `tx->frame_last` 为 0，防止残留数据影响后续处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b4dc94a247711a4de16d3be50349778079a6ff2d

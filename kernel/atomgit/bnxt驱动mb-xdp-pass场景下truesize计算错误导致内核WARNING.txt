@@ -1,0 +1,38 @@
+#标题
+bnxt驱动mb-xdp-pass场景下truesize计算错误导致内核WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了mb（multi-buffer）XDP程序且回行动作为XDP_PASS的场景下，当接收到大数据包（如MTU 9000环境下的ping包）时，内核在处理分片重组时会触发skb_try_coalesce函数的内存核算警告。系统打印WARNING栈信息，导致网络接收流程异常。
+
+#主要错误日志
+------------[ cut here ]------------
+WARNING: CPU: 2 PID: 0 at net/core/skbuff.c:6072 skb_try_coalesce+0x504/0x590
+Modules linked in: xt_nat xt_tcpudp veth af_packet xt_conntrack nft_chain_nat xt_MASQUERADE nf_conntrack_netlink xfrm_user xt_addrtype nft_coms
+CPU: 2 UID: 0 PID: 0 Comm: swapper/2 Not tainted 6.14.0-rc2+ #3
+RIP: 0010:skb_try_coalesce+0x504/0x590
+Call Trace:
+ <IRQ>
+ ? __warn+0x84/0x130
+ ? skb_try_coalesce+0x504/0x590
+ ? report_bug+0x18a/0x1a0
+ ? handle_bug+0x53/0x90
+ ? exc_invalid_op+0x14/0x70
+ ? asm_exc_invalid_op+0x16/0x20
+ ? skb_try_coalesce+0x504/0x590
+ inet_frag_reasm_finish+0x11f/0x2e0
+ ip_defrag+0x37a/0x900
+ ip_local_deliver+0x51/0x120
+
+#问题根因
+在bnxt驱动的bnxt_rx_pkt函数中，当mb-xdp模式返回XDP_PASS时，数据包从xdp_buff转换为sk_buff。此时，bnxt_xdp_build_skb()函数调用xdp_update_skb_shared_info()更新skb的共享信息。
+代码传递了错误的truesize参数（`BNXT_RX_PAGE_SIZE * sinfo->nr_frags`）。问题的根源在于：napi_build_skb()初始化skb时会清零skb_shared_info区域，导致在调用bnxt_xdp_build_skb()时，sinfo->nr_frags的值已经不可靠（被重置）。因此后续计算truesize时读取到的nr_frags值不正确，导致skb的truesize核算失败，进而在skb_try_coalesce中触发校验告警。
+
+#解决方案
+1. 在bnxt_rx_pkt()处理流程中，提前判断xdp_buff是否有frags，如果有，则从xdp_buff中获取sinfo并保存nr_frags值到临时变量agg_bufs；若无则置0。这步操作必须在skb_shared_info被napi_build_skb()清零之前完成。
+2. 在bnxt_xdp_build_skb()函数中，修改xdp_update_skb_shared_info()的调用参数，使用传入的正确的num_frags参数（基于步骤1保存的值）来计算truesize（`BNXT_RX_PAGE_SIZE * num_frags`），而不是读取已被清零的sinfo->nr_frags。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e9072a102b912b8deade3e5ccb79e0fa3bbc2038

@@ -1,0 +1,24 @@
+#标题
+s390/cpum_cf: 修复内核编译时变量未初始化警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译 s390 架构内核代码时，编译器报错提示变量 'err' 在使用时未初始化（warning: variable 'err' is uninitialized when used here）。该问题出现在 `cpumf_pmu_event_init` 函数中，当 `is_sampling_event(event)` 条件成立时，代码尝试返回未初始化的 `err` 变量。
+
+#主要错误日志
+```text
+arch/s390/kernel/perf_cpum_cf.c:858:10: warning: variable 'err' is uninitialized when used here [-Wuninitialized]
+  858 |                 return err;
+      |                        ^~~
+```
+
+#问题根因
+上游补丁 ce971233242b 在合入 6.6 版本时，缺少了其隐式依赖的上游补丁 aa1ac98268cd（该补丁包含了对 `err` 变量初始化为 `-ENOENT` 的修改）。由于缺少此依赖，且原有代码逻辑在 `else` 分支直接返回 `-ENOENT`，合入后的代码逻辑发生变化，导致在特定分支（如采样事件分支）下返回了未初始化的 `err` 变量。
+
+#解决方案
+参考上游补丁 aa1ac98268cd 的做法，在变量声明处直接将 `err` 初始化为 `-ENOENT`，从而消除编译警告并确保默认返回值正确。代码变更将 `int err;` 修改为 `int err = -ENOENT;`，同时移除了冗余的 `else return -ENOENT;` 分支。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/987405aa232a54ce291ef0e6caf589a05829e70b

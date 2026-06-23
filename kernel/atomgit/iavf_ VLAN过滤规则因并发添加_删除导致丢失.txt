@@ -1,0 +1,20 @@
+#标题
+iavf: VLAN过滤规则因并发添加/删除导致丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发执行VLAN的添加与删除操作时，驱动中显示VLAN过滤规则状态为 ACTIVE，但实际上该规则已从网卡（NIC）硬件中移除。这导致该VLAN的所有流量因欺骗校验被丢弃，网络通信中断。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `iavf_add_vlan()` 函数处理逻辑中，当发现VLAN过滤器处于 `IAVF_VLAN_REMOVE` 状态时，原代码直接将其状态转换为 `IAVF_VLAN_ACTIVE`，试图取消待处理的删除请求。然而，此时无法保证 `iavf_del_vlans()` 是否已经处理完删除请求并将规则从PF（Physical Function）移除。如果删除操作已经完成，驱动中的状态将错误地显示为 ACTIVE，而硬件中已无此规则，导致后续 `iavf_add_vlans()` 不再重新下发规则，造成流量丢失。
+
+#解决方案
+修改 `iavf_add_vlan()` 的处理逻辑：当发现过滤器处于 `IAVF_VLAN_REMOVE` 状态时，不再直接将其置为 `IAVF_VLAN_ACTIVE`，而是将状态转移为 `IAVF_VLAN_ADD`，并调度 `IAVF_FLAG_AQ_ADD_VLAN_FILTER` 请求。这确保了即使删除操作已完成，驱动也会重新向硬件下发添加规则请求（重复添加操作在PF上是幂等的），从而修复规则丢失问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cbdfa7086ee9010a521743726939afa47a36cd77

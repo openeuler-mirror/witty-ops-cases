@@ -1,0 +1,23 @@
+#标题
+urma/ubcore: 连接建立字段赋值反序与去活化流程判断缺失导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在建立连接请求处理过程中，由于 jetty_id 字段赋值反序，可能导致连接建立失败或配置错误。
+2. 在非 RC 模式的内核态场景下，调用 `ubcore_adapter_layer_disconnect` 时，未按预期传入 `udata`，导致去活化操作未能正确应用到当前进程上下文。
+
+#主要错误日志
+ubcore_log_err("Failed to deactivate tp\n");
+
+#问题根因
+1. `handle_create_req` 函数中，结构体 `key` 的 `local_jetty_id` 与 `peer_jetty_id` 赋值来源搞反，使用了错误的源和目的 ID。
+2. `ubcore_adapter_layer_disconnect` 函数中的逻辑判断缺失，原有代码仅在判断 `vtpn->uspace` 为真时传入 `udata`，但在 `vtpn->trans_mode` 为 RC 模式时强制传入 NULL，导致非 RC 模式下的内核态路径逻辑被 RC 模式的处理覆盖，未正确处理 `udata` 传递。
+
+#解决方案
+1. 修正 `handle_create_req` 中的赋值逻辑，交换 `req->src_jetty_id` 与 `req->dst_jetty_id` 的赋值目标，确保 `local_jetty_id` 取自 `dst`，`peer_jetty_id` 取自 `src`。
+2. 重构 `ubcore_adapter_layer_disconnect` 中的去活化调用逻辑，增加对传输模式 `UBCORE_TP_RC` 的优先判断。若是 RC 模式直接传入 NULL；否则，根据 `vtpn->uspace` 标志决定是否传入 `udata`，修复非 RC 模式下内核态的去活化处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/33410a3c05cacab2a8e3912ca3cc59c50511e6f0

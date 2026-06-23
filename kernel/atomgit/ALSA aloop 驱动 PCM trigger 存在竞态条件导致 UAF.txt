@@ -1,0 +1,20 @@
+#标题
+ALSA aloop 驱动 PCM trigger 存在竞态条件导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在频繁触发 PCM trigger 操作的同时打开/关闭关联流时，触发内核 UAF（Use-After-Free）漏洞，可能导致内核崩溃或系统异常。该问题由 syzbot fuzzing 工具发现。
+
+#主要错误日志
+未知
+
+#问题根因
+ALSA aloop 驱动的 PCM trigger 回调函数中，对 PCM 状态的检查和关联流的停止操作均在 cable->lock 自旋锁之外执行。当程序在打开/关闭关联流的同时频繁触发 trigger 操作时，这种无锁保护的操作会导致竞态访问，进而引发 UAF 漏洞。
+
+#解决方案
+将 loopback_check_format() 函数中的核心代码逻辑移入 cable->lock 自旋锁的保护范围内（使用 scoped_guard），并增加了对 dpcm_play、dpcm_capt 及其 runtime 的 NULL 检查。同时，修复了在锁内检查 capture PCM 状态、锁外执行停止操作的逻辑，将 capture 流的停止操作移至锁外执行以避免死锁风险，从而消除了竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f7a16382e6430dd951c04469eddc1d559d28d9de

@@ -1,0 +1,27 @@
+#标题
+userfaultfd per-VMA锁及并发操作导致的内核崩溃与数据竞争
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在使用 userfaultfd 机制进行内存操作（如 copy、zeropage、writeprotect）时，若系统开启 CONFIG_PER_VMA_LOCK，并发执行非协作事件（如 mremap、fork、unmap）可能导致内核崩溃或数据不一致。
+2. 进行 userfaultfd 操作时可能出现 VM_BUG_ON 或一般保护错误，具体表现为访问非法内存地址或 VMA 结构体被非法访问。
+3. 调用 `mfill_atomic` 相关操作时，可能因锁保护缺失导致对 `mmap_changing` 计数器的读写竞争，引发不可预知的内核行为。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **锁机制缺失**：`userfaultfd_ctx` 结构体中的 `mmap_changing` 计数器在多个并发路径（如 fork、mremap、unmap）中被修改，但修改过程缺乏锁保护，导致数据竞争。
+2. **锁序与类型错误**：在 per-VMA 锁模式下，`mfill_atomic` 等函数仅持有 VMA 锁就尝试访问与修改共享数据，未正确持有 `map_changing_lock` 读写信号量，且错误地将 VMA 锁用于不适合的场景（如 hugetlb 处理中错误的释放操作）。
+3. **接口设计缺陷**：内核接口函数（如 `mfill_atomic_copy`）直接传递 `atomic_t *mmap_changing` 指针，导致底层函数无法访问 `userfaultfd_ctx` 上下文以获取必要的锁，破坏了并发保护的完整性。
+
+#解决方案
+1. **引入专用锁**：在 `userfaultfd_ctx` 结构体中新增 `struct rw_semaphore map_changing_lock` 读写信号量，并在初始化时调用 `init_rwsem` 进行初始化。
+2. **完善并发保护**：在所有修改 `mmap_changing` 计数器的路径（dup_userfaultfd、mremap_userfaultfd_prep、userfaultfd_remove、userfaultfd_unmap_prep）中，使用 `down_write` 和 `up_write` 包裹 `atomic_inc` 操作，确保写操作的原子性。
+3. **重构接口与锁序**：修改 `mfill_atomic_copy`、`mfill_atomic_zeropage`、`mwriteprotect_range` 等接口，将参数类型从 `atomic_t *mmap_changing` 改为 `struct userfaultfd_ctx *ctx`，使底层函数能正确持有 `map_changing_lock` 的读锁来检查 `mmap_changing` 状态。
+4. **修正 per-VMA 锁逻辑**：新增 `uffd_lock_vma` 与 `uffd_mfill_lock` 函数，针对 per-VMA 锁模式实现了独立的 VMA 查找与锁定逻辑，确保在必要时回退到 mmap_lock，并在操作结束时正确释放持有的锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae2caf4876288dd7da9ee474694fad86b78f5216

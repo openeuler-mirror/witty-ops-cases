@@ -1,0 +1,29 @@
+#标题
+aqc111驱动USB读取错误处理不当导致内存未初始化漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动探测阶段，若USB读取操作返回的数据长度小于预期，驱动未正确处理该错误，导致MAC地址仅部分初始化。系统触发KMSAN（Kernel Memory Sanitizer）告警，检测到“uninit-value”（未初始化值）的使用风险。
+
+#主要错误日志
+BUG: KMSAN: uninit-value in is_valid_ether_addr include/linux/etherdevice.h:208 [inline]
+BUG: KMSAN: uninit-value in usbnet_probe+0x2e57/0x4390 drivers/net/usb/usbnet.c:1830
+Uninit was stored to memory at:
+ dev_addr_mod+0xb0/0x550 net/core/dev_addr_lists.c:582
+ aqc111_bind+0x35f/0x1150 drivers/net/usb/aqc111.c:717
+推断修复后的日志打印：
+Failed to read(0x%x) reg index 0x%04x: %d
+
+#问题根因
+`aqc111_read_cmd` 和 `aqc111_read_cmd_nopm` 函数对 `usbnet_read_cmd` 返回值的检查逻辑不完善。原代码仅检查返回值是否小于0（即是否出错），未检查读取的字节数是否小于请求的 `size`。当USB读取操作返回的字节数不足时，缓冲区中部分内存保持未初始化状态，导致后续使用该数据（如设置MAC地址）时触发内存安全告警。
+
+#解决方案
+修改 `aqc111_read_cmd` 与 `aqc111_read_cmd_nopm` 函数的错误检查逻辑：
+1. 将判断条件从 `ret < 0` 修改为 `ret < size`，确保读取的字节数符合预期。
+2. 当读取长度不足时，若原返回值非负，则将错误码设置为 `-ENODATA`；若原返回值为负，则保留原错误码。
+3. 在错误路径中统一调用 `netdev_warn` 打印警告日志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e9d3be401a5504f6af087e2d9bd48e24c581e2ab

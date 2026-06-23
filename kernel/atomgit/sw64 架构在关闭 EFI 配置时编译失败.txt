@@ -1,0 +1,21 @@
+#标题
+sw64 架构在关闭 EFI 配置时编译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构下编译内核时，若配置项 `CONFIG_EFI` 未选中（设置为 n），编译过程报错中断，提示存在未定义的引用。具体表现为 `dmi_get_string`、`find_dmi_processor_version` 等函数定义了但未被使用，导致编译警告或错误。
+
+#主要错误日志
+未知
+
+#问题根因
+源码中定义了 `dmi_get_string` 等静态辅助函数，并在 `get_model_id` 等函数中无条件调用 `dmi_walk`。由于 `sunway_bios_version` 变量及 SMBIOS 相关依赖仅在 `CONFIG_EFI` 配置开启时有效，当 `CONFIG_EFI=n` 时，这些函数调用不仅无意义，且依赖的数据结构可能不可用，导致编译器报出“定义未使用”的错误。
+
+#解决方案
+1. 为 `dmi_get_string`、`find_dmi_processor_version` 等静态辅助函数添加 `__maybe_unused` 属性，允许其在特定配置下不被调用而不触发编译警告。
+2. 使用 `#ifdef CONFIG_EFI` 宏将 `dmi_walk` 的调用逻辑包裹起来，确保仅在 EFI 配置开启时编译和执行相关代码，从而修复编译错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/163d26429f85338c6eed96ede3bfb561098c28cf

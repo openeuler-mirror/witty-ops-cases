@@ -1,0 +1,20 @@
+#标题
+mtk_eth_soc 网卡驱动在 4GB+ RAM 环境下触发 SER 导致内核恐慌
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统内存大于 4GB 且支持 36 位 DMA 寻址的 MT7988 平台上，当网卡的接收处理函数 `mtk_poll_rx` 检测到 `MTK_RESETTING` 标志时，系统发生 panic（内核恐慌）。故障发生在重置或数据包处理过程中，由于 DMA 地址处理不当导致内存访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mtk_poll_rx()` 函数中，当检测到 `MTK_RESETTING` 标志时，代码直接跳转到 `release_desc` 标签处执行。在此路径下，原代码逻辑仅在 `dma_addr` 不等于 `DMA_MAPPING_ERROR` 时才会更新 `rxd->rxd2` 的高位地址字段。而在 `MTK_RESETTING` 跳转路径下，`dma_addr` 变量状态可能无效或未被正确设置，导致 `rxd->rxd2` 的高位地址部分未被正确填充。随后 `mtk_rx_clean` 函数处理该描述符时，使用了错误的 SDP（存贮描述符指针），触发了内核恐慌。
+
+#解决方案
+修改 `mtk_poll_rx()` 函数中 `release_desc` 标签处的逻辑。将 36 位 DMA 地址的高位部分处理逻辑移至无条件执行区域：如果 `dma_addr` 无效（等于 `DMA_MAPPING_ERROR`），则从现有描述符中读取并保留原有的高位地址；如果有效，则根据新的 DMA 地址计算并填充高位地址。这确保了在复位或错误跳转路径下，描述符中的地址信息依然完整有效，避免后续处理时读取到错误地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8599bb6014e650d75fe1c4567e5332b31796135d

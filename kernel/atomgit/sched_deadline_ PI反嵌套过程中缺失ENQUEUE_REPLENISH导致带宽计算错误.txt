@@ -1,0 +1,32 @@
+#标题
+sched/deadline: PI反嵌套过程中缺失ENQUEUE_REPLENISH导致带宽计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在RT内核的大规模机器上运行 `stress-ng --schedpolicy 0` 时，内核触发 WARNING 并伴随带宽计算下溢。具体表现为内核报警告 "DL de-boosted task PID ...: REPLENISH flag missing"，随后出现 `running_bw underflow`。
+
+#主要错误日志
+sched: DL de-boosted task PID 22725: REPLENISH flag missing
+WARNING: CPU: 93 PID: 0 at kernel/sched/deadline.c:239 dequeue_task_dl+0x15c/0x1f8
+... (running_bw underflow)
+Call trace:
+ dequeue_task_dl+0x15c/0x1f8 (P)
+ dequeue_task+0x80/0x168
+ activate_task+0x24/0x50
+ push_dl_task+0x264/0x2e0
+ dl_task_timer+0x1b0/0x228
+ __hrtimer_run_queues+0x188/0x378
+ hrtimer_interrupt+0xfc/0x260
+
+#问题根因
+当 SCHED_DEADLINE 任务（锁持有者）通过 `sched_setscheduler()` 被修改为更低优先级的调度类时，若该任务当前持有 PI mutex 且之前未继承捐赠者的参数（例如当时其截止时间更短），系统未能正确处理优先级继承（PI）逻辑。
+具体而言，系统未检测到该任务需要从潜在的 DEADLINE 捐赠者（donor）继承参数，导致 `enqueue_task_dl()` 无法识别该任务处于 boost 状态，且未设置 `ENQUEUE_REPLENISH` 标志，进而引发带宽计算错误。
+
+#解决方案
+在 `__sched_setscheduler()` 流程中新增 `__setscheduler_dl_pi()` 函数调用。
+该修复逻辑检测 DEADLINE 任务（或被 boost 的任务）是否被设置为更低优先级类。如果是，函数会检查是否存在高优先级的 PI 任务，若存在则继承其 DEADLINE 参数并设置 `ENQUEUE_REPLENISH` 标志，确保下一次入队操作时带宽统计正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ff0fd04bfbb3adfc6cfca2de3c578090553dba5d

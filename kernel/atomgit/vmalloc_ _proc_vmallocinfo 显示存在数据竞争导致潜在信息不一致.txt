@@ -1,0 +1,25 @@
+#标题
+vmalloc: /proc/vmallocinfo 显示存在数据竞争导致潜在信息不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 CONFIG_NUMA 的系统中，读取 `/proc/vmallocinfo` 时，内核可能访问到未完全初始化的 `vm_struct` 结构体。由于 `show_numa_info()` 与 `vm_struct` 初始化流程之间存在数据竞争，可能导致读取到的 `pages` 指针或相关字段值异常，进而引发内核态空指针崩溃或读取到错误的内存统计信息。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `vmalloc_info_show()`（以及同步变更涉及的 `vread_iter()`）与 `clear_vm_uninitialized_flag()` 之间缺乏正确的内存屏障同步机制。具体原因如下：
+1. 原有代码中，读端（`show_numa_info`）虽然检查了 `VM_UNINITIALIZED` 标志，但内存屏障 `smp_rmb()` 的位置放置不当，或者检查逻辑位于私有数据分配环节之外，导致读端可能在看到 `VM_UNINITIALIZED` 标志清除后，依然读到未初始化完成的 `vm` 结构体字段。
+2. 写端在清除 `VM_UNINITIALIZED` 标志前使用了 `smp_wmb()`，但读端未在正确的路径或位置使用对应的 `smp_rmb()` 进行保序，导致存在竞态窗口，读端可能访问到尚在初始化中的数据。
+
+#解决方案
+修复了读端与写端的数据竞争问题，调整了并发控制逻辑：
+1. **调整内存屏障位置**：将 `smp_rmb()` 移至 `vmalloc_info_show()` 函数的主循环中，在确认 `VM_UNINITIALIZED` 标志已清除后立即调用，确保后续对 `vm` 结构体字段的读取能看到写端初始化完成后的正确值。
+2. **跳过未初始化区域**：在 `vmalloc_info_show()` 中直接检查 `v->flags & VM_UNINITIALIZED`，若该标志置位则直接跳过该 vm 区域，避免读取未初始化完成的结构。
+3. **重构 NUMA 计数器管理**：将 `counters` 内存分配从模块初始化时的全局私有数据改为在 `vmalloc_info_show()` 函数内部动态分配与释放，修复了与 `seq_file` 私有数据生命周期相关的潜在问题，并调整了 `show_numa_info()` 的函数签名以传递该计数器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/82e24d9d28f9a697b46eaf4afc3a28cdefeb11e5

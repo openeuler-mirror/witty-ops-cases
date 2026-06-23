@@ -1,0 +1,29 @@
+#标题
+NFSD 注册与 exports_proc 接口竞态导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发执行 NFS 导出操作（`exportfs -r`）和 nfsd 文件系统挂载/卸载（`mount -t nfsd`）时，内核发生空指针解引用或分页错误，导致 Kernel Oops/panic。崩溃点通常发生在 `exports_net_open()` 或 `cache_seq_next_rcu()` 函数中。
+
+#主要错误日志
+1. 5.4 内核 ARM64 环境：
+Unable to handle kernel NULL pointer dereference at virtual address 0000000000000010
+PC is at : exports_net_open+0x50/0x68 [nfsd]
+
+2. 6.14 内核环境：
+Unable to handle kernel paging request at virtual address 00001f4800001f48
+pc : cache_seq_next_rcu+0x78/0xa4
+
+#问题根因
+`init_nfsd()` 函数中，`create_proc_exports_entry()` 的调用时机过早。它在 `register_pernet_subsys()` 之前被调用，导致 proc 接口先于 per-net 数据结构对用户空间可见。当出现以下竞态条件时：
+(i) 一个线程正在执行 `exportfs -r` 触发模块初始化；
+(ii) 另一个线程执行 `mount -t nfsd none /proc/fs/nfsd`；
+用户空间可以在 per-net 数据（如 `nn->svc)`）初始化完成之前打开 `/proc/fs/nfs/exports` 文件，导致访问未初始化的指针引发内核崩溃。
+
+#解决方案
+调整 `init_nfsd()` 中的初始化顺序，将 `create_proc_exports_entry()` 的调用移至 `register_pernet_subsys()` 和 `register_filesystem()` 之后，确保 proc 接口对用户空间可见前，底层数据结构已完成初始化；相应地，在 `exit_nfsd()` 中将清理操作 `remove_proc_entry()` 移至最前，确保先关闭用户空间接口再释放底层资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f61145d5b17bd644237ea7549c8cfae8aa9f3cae

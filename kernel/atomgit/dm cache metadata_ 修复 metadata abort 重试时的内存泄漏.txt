@@ -1,0 +1,35 @@
+#标题
+dm cache metadata: 修复 metadata abort 重试时的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设备映射器缓存（dm-cache）元数据处于只读状态下重新加载表并恢复时，系统发生内存泄漏。具体表现为 `dmsetup resume` 操作触发内核内存分配未被释放。
+
+#主要错误日志
+```
+unreferenced object 0xffff8880080c2010 (size 16):
+  comm "dmsetup", pid 132, jiffies 4294982580
+  hex dump (first 16 bytes):
+    00 38 b9 07 80 88 ff ff 6a 6b 6b 6b 6b 6b 6b a5 ...
+  backtrace (crc 3118f31c):
+    kmemleak_alloc+0x28/0x40
+    __kmalloc_cache_noprof+0x3d9/0x510
+    dm_block_manager_create+0x51/0x140
+    dm_cache_metadata_abort+0x85/0x320
+    metadata_operation_failed+0x103/0x1e0
+    cache_preresume+0xacd/0xe70
+    dm_table_resume_targets+0xd3/0x320
+    __dm_resume+0x1b/0xf0
+    dm_resume+0x127/0x170
+```
+
+#问题根因
+在 `dm_cache_metadata_abort` 函数中，当因为 block_manager 处于只读状态而无法获取 root_lock 时，函数在获取锁之前已经创建了一个临时的 block_manager（new_bm）。如果获取锁失败（例如 `cmd_write_lock` 检测到 `fail_io` 并返回 false），代码逻辑未正确释放这个刚创建的 temporary block_manager，直接退出了函数，从而导致内存泄漏。
+
+#解决方案
+修改 `dm_cache_metadata_abort` 函数的锁获取逻辑。新增 `WRITE_LOCK_OR_GOTO` 宏，将 `cmd_write_lock` 的调用与错误处理跳转结合。当 `cmd_write_lock` 失败（包括检测到 `fail_io` 的情况）时，直接跳转到 `out` 标签进行清理。由于 `out` 标签处的代码逻辑会处理已存在的 block_manager，这确保了在锁获取失败或 IO 故障分支中，新创建但未使用的 block_manager 能被正确销毁或处理，从而修复内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d038daae21eca5beae580620d6e09cafc83c035c

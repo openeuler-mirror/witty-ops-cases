@@ -1,0 +1,22 @@
+#标题
+SMB客户端DACL校验不足导致越界读写
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当连接到恶意SMB服务器时，服务器返回一个经过截断但包含有效头部的DACL（自由访问控制列表）。由于内核在执行chmod/chown操作重建安全描述符时，未对DACL主体结构进行完整校验，导致在`replace_sids_and_copy_aces()`或`set_chmod_dacl()`函数处理ACE（访问控制项）时发生越界读取或写入，可能造成内核内存破坏或信息泄露。
+
+#主要错误日志
+- `ACL too small to parse DACL`
+- `ACL too small to parse ACE`
+- `Server returned illegal ACL size`（推断，原校验点报错）
+
+#问题根因
+`build_sec_desc()`和`id_mode_to_cifs_acl()`函数根据服务器提供的`dacloffset`派生DACL指针，并使用传入的ACL重建chmod/chown安全描述符。原有的修复仅检查了`struct smb_acl`头部是否溢出，但重写辅助函数仍依据`pdacl->num_aces`遍历ACE，未对传入的DACL主体进行结构性校验。恶意服务器可返回声称包含多个ACE但实际被截断的DACL，从而驱动比较或复制操作越界访问攻击者控制的ACE区域。
+
+#解决方案
+将DACL结构性检查逻辑抽取为独立的`validate_dacl()`函数。该函数不仅校验DACL头部，还遍历并验证每一个ACE是否处于DACL边界之内、SID子授权数是否合法。在`parse_dacl()`、`build_sec_desc()`及`id_mode_to_cifs_acl()`的关键路径上调用该统一校验函数，确保读取侧解析与写入侧重写路径对DACL格式的认定一致，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d5f163bb47f4dd338d46f1aebec17484b2601fb2

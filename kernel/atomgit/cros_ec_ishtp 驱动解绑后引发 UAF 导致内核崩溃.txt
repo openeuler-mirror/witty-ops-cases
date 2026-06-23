@@ -1,0 +1,20 @@
+#标题
+cros_ec_ishtp 驱动解绑后引发 UAF 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行驱动解绑操作后，内核线程 `cros_ec_console_log_work` 仍在访问已释放的设备资源，导致发生 Use-After-Free (UAF) 并引发内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `.remove()` 回调函数中未调用 `cros_ec_unregister` 来注销 EC 设备。正确的流程应同步关闭子设备，但原代码遗漏了这一步，导致驱动解绑后，相关的内核线程（如 `cros_ec_console_log_work`）未能停止，继续访问了已经被释放的设备数据结构，从而触发 UAF。
+
+#解决方案
+在 `cros_ec_ishtp_remove` 函数中，添加对 `cros_ec_unregister(client_data->ec_dev)` 的调用。这确保了在驱动卸载过程中，子设备能够被正确注销并同步关闭，防止 UAF 发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9c629c3b087243a442f2f6393c43fc7631cc5f32

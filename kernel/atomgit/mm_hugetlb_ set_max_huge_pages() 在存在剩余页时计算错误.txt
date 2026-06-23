@@ -1,0 +1,20 @@
+#标题
+mm/hugetlb: set_max_huge_pages() 在存在剩余页时计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统存在 surplus huge pages（剩余大页）的情况下，通过 sysctl 或其他方式调整大页池的最大页面数时，`set_max_huge_pages()` 函数对 `min_count` 的计算出现偏差。由于计算逻辑错误，导致对 persistent pages（持久页面）数量的判断失误，进而可能导致大页池缩容行为不符合预期，或引发内存管理状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在计算 `min_count`（期望的持久页面数量）时，原代码使用公式 `resv_huge_pages + persistent_huge_pages() - free_huge_pages`。当系统中存在空闲的 surplus huge pages 时，这部分页面既被包含在 `free_huge_pages` 中，也隐含在 `persistent_huge_pages()` 与 surplus 的差值关系中，导致在减去 `free_huge_pages` 时对这部分空闲剩余页面进行了重复扣除。这些空闲剩余页面通常来源于 HVO（HugeTLB Vmemmap Optimization）恢复 vmemmap 失败的场景。
+
+#解决方案
+修正 `min_count` 的计算逻辑。引入 `persistent_free_count` 变量，先计算实际空闲的持久页面数量。如果 `free_huge_pages` 大于 `persistent_huge_pages()`，说明存在空闲的剩余页面，需在计算 `persistent_free_count` 时减去 `surplus_huge_pages`（若剩余页面数少于空闲页面数，则持久空闲数记为0），最后使用正确的 `persistent_free_count` 计算 `min_count`，避免了重复扣除的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bbc128f02c8cfb1fc7e0bec646801b60c074b8a9

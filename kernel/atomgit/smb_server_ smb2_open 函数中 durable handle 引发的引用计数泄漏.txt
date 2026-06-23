@@ -1,0 +1,24 @@
+#标题
+smb/server: smb2_open 函数中 durable handle 引发的引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB2 OPEN 请求处理过程中，若 `ksmbd_override_fsids()` 调用失败，会导致 `dh_info.fp` 指向的文件指针（durable handle）发生引用计数泄漏。该文件指针虽然已插入会话文件表，但因未正确释放，将一直驻留在会话文件表中，直到会话关闭才会被清理，造成资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `smb2_open()` 中，代码逻辑存在时序错误：
+1. `ksmbd_reopen_durable_fd()` 成功执行，将 `dh_info.fp` 插入到了会话文件表中。
+2. 随后调用 `ksmbd_override_fsids()`，若该函数失败，代码跳转至 `err_out2` 标签。
+3. 在错误处理路径 `err_out2` 中，清理逻辑依赖于变量 `fp` 是否为 NULL。由于原代码中 `fp = dh_info.fp;` 赋值操作位于 `ksmbd_override_fsids()` 检查之后，导致进入错误路径时 `fp` 仍为 NULL。
+4. 因此，`ksmbd_fd_put(work, fp)` 不会被调用，导致已插入会话文件表的 durable handle 无法释放，引发泄漏。
+
+#解决方案
+将 `fp = dh_info.fp;` 赋值语句移动到 `ksmbd_override_fsids()` 调用之前。这样在 `ksmbd_override_fsids()` 失败跳转到错误处理流程时，`fp` 指针已正确指向 `dh_info.fp`，确保资源能被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6680121e63f4c94c96079be07a2e4f167601b9c3

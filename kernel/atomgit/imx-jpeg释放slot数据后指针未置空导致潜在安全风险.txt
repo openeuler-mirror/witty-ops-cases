@@ -1,0 +1,20 @@
+#标题
+imx-jpeg释放slot数据后指针未置空导致潜在安全风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `mxc_jpeg_free_slot_data()` 释放内存后，相关的指针变量未重置为 NULL，句柄未重置为 0。若该函数被多次调用或后续逻辑误引用了已释放的指针，可能导致 Use-After-Free 风险或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `mxc_jpeg_free_slot_data()` 在调用 `dma_free_coherent` 释放内存后，未将 `jpeg->slot_data` 下的指针成员（如 `desc`、`cfg_desc`、`cfg_stream_vaddr`）置 NULL，也未将对应的句柄成员（`desc_handle`、`cfg_desc_handle`、`cfg_stream_handle`）置 0。这导致 `mxc_jpeg_alloc_slot_data()` 和 `mxc_jpeg_free_slot_data()` 函数无法安全地被多次调用。
+
+#解决方案
+在 `mxc_jpeg_free_slot_data()` 函数中，每执行完一处 `dma_free_coherent` 释放操作后，立即将相应的指针成员赋值为 NULL，将句柄成员赋值为 0，防止后续出现悬垂指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/95f7eb874b6b26ba9e0fe221b9cbd120682043c3

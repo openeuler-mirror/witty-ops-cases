@@ -1,0 +1,20 @@
+#标题
+Bluetooth: l2cap_sock_cleanup_listen 存在 use-after-free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在释放 L2CAP 套接字时，若并发操作导致 `l2cap_sock_cleanup_listen` 函数访问已被释放的内存，将触发内核 use-after-free 故障，可能导致内核 panic 或系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `l2cap_sock_release` 函数中，调用 `l2cap_sock_cleanup_listen(sk)` 进行监听套接字清理之前，未持有套接字锁。这导致了竞态条件，使得在清理过程中套接字可能被其他线程释放或修改，从而引发 use-after-free 问题。
+
+#解决方案
+在调用 `l2cap_sock_cleanup_listen(sk)` 前后增加套接字锁的获取与释放操作。具体修改为使用 `lock_sock_nested(sk, L2CAP_NESTING_PARENT)` 锁定套接字，清理完成后调用 `release_sock(sk)` 释放锁，以此确保清理过程中套接字状态的安全性与一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bc2ee8a789087459d9852f01e10d2f31abf5a13d

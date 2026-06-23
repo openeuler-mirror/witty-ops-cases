@@ -1,0 +1,20 @@
+#标题
+PCI: AER: 修复 do_recovery 流程中的死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 PCIe AER（高级错误报告）恢复流程（do_recovery）时，系统发生死锁。具体表现为在处理 AER 错误回调函数时，系统挂起或响应停滞，无法完成恢复流程。
+
+#主要错误日志
+AER: recovery handler failed: %d
+
+#问题根因
+在 `do_recovery` 流程中，`pci_walk_bus` 函数持有 `pci_lock` 锁遍历设备列表，并在遍历过程中调用回调函数（如 `report_resume` 等）。如果这些回调函数内部尝试获取设备锁或执行其他可能睡眠的操作，将导致与已持有的 `pci_lock` 发生锁冲突或调度死锁，从而导致系统死锁。
+
+#解决方案
+重构 `pci_walk_bus` 的调用逻辑，避免在持有锁的情况下执行回调。引入 `aer_pci_walk_bus` 函数，该函数首先通过 `pci_walk_bus` 将受影响的设备引用获取并保存到一个临时链表中（此过程持有锁但逻辑简单），随后遍历该临时链表，在释放锁的状态下执行具体的错误恢复回调函数。这样将设备遍历与回调执行解耦，消除了死锁风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8382e5fc4db31572a2be5a540ea7e11ac725e3d8

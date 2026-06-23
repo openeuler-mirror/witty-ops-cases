@@ -1,0 +1,36 @@
+#标题
+ath11k WLAN恢复流程中arvifs链表节点损坏引发内核panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行WLAN恢复流程时，若恰逢vif删除操作正在进行，内核会检测到链表节点状态无效，从而触发内核panic。具体表现为系统崩溃，并打印调用栈信息。
+
+#主要错误日志
+Call trace:
+__list_del_entry_valid_or_report+0xb8/0xd0
+ath11k_mac_op_remove_interface+0xb0/0x27c [ath11k]
+drv_remove_interface+0x48/0x194 [mac80211]
+ieee80211_do_stop+0x6e0/0x844 [mac80211]
+ieee80211_stop+0x44/0x17c [mac80211]
+__dev_close_many+0xac/0x150
+__dev_change_flags+0x194/0x234
+dev_change_flags+0x24/0x6c
+devinet_ioctl+0x3a0/0x670
+inet_ioctl+0x200/0x248
+sock_do_ioctl+0x60/0x118
+sock_ioctl+0x274/0x35c
+__arm64_sys_ioctl+0xac/0xf0
+invoke_syscall+0x48/0x114
+
+#问题根因
+在当前的WLAN恢复代码流程中，`ath11k_core_halt()`函数仅重新初始化了`arvifs`链表头。这会导致紧随链表头之后的节点变成无效节点。因为该节点的`prev`指针仍然指向链表头`arvifs`，但链表头`arvifs`的`next`指针已不再指向该节点。
+当WLAN恢复发生在vif删除操作执行过程中（具体是在`ath11k_mac_op_remove_interface()`函数获取`spin_lock_bh(&ar->data_lock)`之前），`list_del()`会检测到上述无效的链表状态，从而触发kernel panic。
+
+#解决方案
+在WLAN halt阶段，修复方案从链表头`arvifs`中移除并重新初始化所有的vif链表节点。
+具体代码修改为：在持有`ar->data_lock`锁的保护下，遍历`arvifs`链表，对每个节点执行`list_del_init()`操作。重新初始化使得链表节点变为有效状态，确保后续`ath11k_mac_op_remove_interface()`中的`list_del()`操作能够正常执行，避免触发panic。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6f7ad705585ea4346dc653b89200627a4023fd78

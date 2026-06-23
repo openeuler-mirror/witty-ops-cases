@@ -1,0 +1,31 @@
+#标题
+bpf_msg_pop_data 函数多个逻辑缺陷导致内存泄漏与异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 调用 `bpf_msg_pop_data` 时若 `len` 参数为 0，函数错误地继续执行并触发无效的内存操作或判断逻辑。
+2. 在部分数据处理路径中，scatterlist 元素的页面引用计数未正确递减，导致内存泄漏（Memory Leak）。
+3. 边界检查逻辑存在 off-by-one 错误，可能导致合法的数据弹出操作被错误拒绝。
+4. 变量 `a` 的计算逻辑错误（未减去 `offset`），导致数据截断位置计算偏差，引发数据处理异常或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **内存泄漏**：`sk_msg_shift_left` 函数在移除 scatterlist 元素前未调用 `put_page` 释放页面引用；在数据重新分配路径中，`sge->length` 被提前修改导致原有页面引用未被正确释放。
+2. **逻辑缺陷**：`bpf_msg_pop_data` 函数开头未对 `len == 0` 的情况做直接返回处理。
+3. **边界检查错误**：判断条件 `last >= msg->sg.size` 错误地禁止了弹出至消息末尾的操作，正确的逻辑应为 `last > msg->sg.size`。
+4. **计算错误**：变量 `a`（截断位置）直接赋值为 `start`，未正确计算相对偏移量 `start - offset`，导致后续 `b`（剩余长度）计算错误，进而影响数据拷贝和元数据更新逻辑。
+
+#解决方案
+1. 在 `sk_msg_shift_left` 函数中移除元素前增加 `put_page(sg_page(sge))` 调用，防止内存泄漏。
+2. 在 `bpf_msg_pop_data` 入口处增加判断：若 `len == 0` 则直接返回 0，避免无效操作。
+3. 修正边界检查条件，将 `>=` 改为 `>`，允许弹出数据至消息末尾。
+4. 修正变量 `a` 的赋值逻辑，改为 `a = start - offset`，确保后续 `b` 的计算及数据拷贝逻辑正确。
+5. 移除数据重分配路径中多余的 `sge->length = a` 赋值，防止在获取 `orig` 页面前破坏 scatterlist 结构。
+6. 调整剩余数据 pop 逻辑，移除多余的 `sk_msg_iter_var_next(i)` 调用及冗余的条件判断，确保循环迭代与 pop 长度递减准确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a71a62a9d1e81f1c5fe11029b8bd7abb6d649eb7

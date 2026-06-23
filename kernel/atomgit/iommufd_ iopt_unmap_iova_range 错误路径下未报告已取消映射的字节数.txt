@@ -1,0 +1,21 @@
+#标题
+iommufd: iopt_unmap_iova_range 错误路径下未报告已取消映射的字节数
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 iommufd 子系统中，当 `iopt_unmap_iova_range` 函数遇到错误（如死锁 `-EDEADLOCK`）并返回非零值（rc != 0）时，调用者尝试读取已取消映射的字节数，但该数值未被正确报告。此外，在触发死锁保护机制时，内核会产生调用栈警告。
+
+#主要错误日志
+- 推断日志（由 WARN_ON 触发）：
+  `WARNING: CPU: ... at drivers/iommu/iommufd/io_pagetable.c:... iopt_unmap_iova_range+0x.../0x...`
+
+#问题根因
+在 `iopt_unmap_iova_range` 函数中，当循环重试次数超过 100 次触发 `WARN_ON` 时，代码直接返回了 `-EDEADLOCK` 错误码，跳过了后续 `out_unmapped` 标签的处理逻辑。这导致 `unmapped` 参数未被赋值为 `unmapped_bytes`，使得调用者在错误路径下无法获取到正确的已取消映射字节数。
+
+#解决方案
+修改 `iopt_unmap_iova_range` 函数的错误处理路径。在检测到死锁（tries > 100）时，不再直接返回错误码，而是将错误码赋值给 `rc` 变量，并通过 `goto out_unmapped` 跳转到统一的出口处。在 `out_unmapped` 标签处，确保在返回错误码之前，将已统计的 `unmapped_bytes` 赋值给 `*unmapped`，从而修复错误路径下数据缺失的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d35a301102b90167664635efd30725c17806c3ce

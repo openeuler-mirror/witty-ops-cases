@@ -1,0 +1,28 @@
+#标题
+NFSv4 unlock 路径内存不足导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统内存不足时，NFSv4 unlock 操作在获取锁上下文失败后，错误地将返回的错误指针（-ENOMEM）当作有效结构体处理，导致在执行 RPC 任务时触发内核空指针引用，进而引发 Oops 并导致系统崩溃。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 000000000000000c
+Oops: Oops: 0000 [#1] SMP PTI
+RIP: 0010:nfs4_locku_prepare+0x35/0xc2
+Call Trace:
+ __rpc_execute+0xbc/0x480
+ rpc_async_schedule+0x2f/0x40
+ process_one_work+0x232/0x5d0
+ worker_thread+0x1da/0x3d0
+ kthread+0x10d/0x240
+
+#问题根因
+在 `nfs4_alloc_unlockdata` 函数中，调用 `nfs_get_lock_context(ctx)` 获取锁上下文时，若内存不足该函数会返回错误指针（如 -ENOMEM，对应 PTR_ERR 为负值）。原代码逻辑未对返回值进行有效性检查，直接将错误指针赋值给 `p->l_ctx`。随后在 `nfs4_locku_prepare` 中访问 `p->l_ctx` 成员时，由于指针无效（在示例中访问了偏移量 0xc 的地址），触发了 NULL pointer dereference（实际是对错误指针的解引用）。
+
+#解决方案
+在 `nfs4_alloc_unlockdata` 函数中增加对 `nfs_get_lock_context()` 返回值的检查。若返回值为错误指针（IS_ERR 为真），则释放已分配的 `nfs4_unlockdata` 内存并返回 NULL，以此终止后续的 `rpc_run_task` 流程，避免无效指针被传递到 RPC 层引发崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c761530eb75989c9deb09b62f6cb4042ec22b718

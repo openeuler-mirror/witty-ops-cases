@@ -1,0 +1,20 @@
+#标题
+ext4: 校正索引时未验证 p_idx 边界导致越界读取
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当磁盘上的 ext4 extent header 包含被破坏或精心构造的 `eh_entries` 值时，`ext4_ext_correct_indexes` 函数在访问 `path[k].p_idx->ei_block` 时，`p_idx` 可能指向已分配缓冲区的末尾之后，导致发生 slab-out-of-bounds read（堆越界读取）。
+
+#主要错误日志
+EXT4-fs error (device [dev]): ext4_ext_correct_indexes: [inode]: path[%d].p_idx %p > EXT_LAST_INDEX %p
+
+#问题根因
+`ext4_ext_correct_indexes()` 函数在修正索引条目时，在访问 `path[k].p_idx->ei_block` 之前，未验证 `p_idx` 是否落在该层级索引条目的有效范围内。如果磁盘数据损坏导致 `eh_entries` 值异常，`p_idx` 指针将越界，引发内存读取错误。
+
+#解决方案
+在 `ext4_ext_correct_indexes()` 函数中，于访问 `p_idx` 之前增加边界检查。分别在 while 循环之前和循环内部，通过 `EXT_LAST_INDEX()` 校验 `path[k].p_idx` 是否有效。如果指针越界，调用 `EXT4_ERROR_INODE` 记录错误并返回 `-EFSCORRUPTED`，从而避免越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/664d2be8a1efb4a18a911ff623bebc94bdb145e1

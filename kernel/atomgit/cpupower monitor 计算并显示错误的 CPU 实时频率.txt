@@ -1,0 +1,31 @@
+#标题
+cpupower monitor 计算并显示错误的 CPU 实时频率
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `cpupower monitor` 命令监控 CPU 频率时，计算出的 TSC MHz 远低于实际频率（例如实际频率为 4108 MHz，显示仅为 2279 MHz）。与 `/proc/cpuinfo` 中显示的频率相比，`cpupower monitor` 的 Freq 列数值明显偏小，无法正确反映系统在高负载（100% busy）下的真实频率。
+
+#主要错误日志
+无相关内核日志。该问题主要体现在工具输出数值错误：
+```text
+before fix (System 100% busy):
+    | Mperf              || Idle_Stats
+ CPU| C0   | Cx   | Freq  || POLL | C1   | C2
+ 171|  0.77| 99.23|  2279||  0.00|  0.00|  0.00
+```
+对比 `/proc/cpuinfo`：
+```text
+processor : 171
+cpu MHz   : 4108.498
+```
+
+#问题根因
+在之前的提交 'cpupower: Make TSC read per CPU for Mperf monitor' 中，代码将 TSC 计数器读取修改为针对每个 CPU 进行，但时间差（time diff）的计算仍保持全局变量（从所有 CPU 的开始时刻到所有 CPU 的结束时刻）。这导致在计算单个 CPU 的频率时，时间差分值相对于该 CPU 的 TSC 计数差值过大，从而导致计算出的 TSC_MHz 远低于实际值。
+
+#解决方案
+将时间记录变量 `time_start` 和 `time_end` 从全局变量改为针对每个 CPU 的数组，并在每个 CPU 的测量开始和结束函数中分别调用 `clock_gettime` 记录时间。确保频率计算时使用的是单个 CPU 对应的时间差，从而修正 TSC MHz 计算公式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4384fbc0ef251e4bb25508253e7e917c592740c8

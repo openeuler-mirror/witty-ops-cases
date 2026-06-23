@@ -1,0 +1,20 @@
+#标题
+ACPI/IORT: iort_rmr_alloc_sids 函数内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IORT（IO Remapping Table）模块处理 RMR（Reserved Memory Region）节点的 SIDs（Stream IDs）合并过程中，若 `krealloc_array` 因内存不足等原因分配失败，原指针 `sids` 未被释放即返回 NULL，导致已分配的内存块无法被回收，产生内存泄漏。该问题主要影响内核内存资源的正确性。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `iort_rmr_alloc_sids` 使用 `krealloc_array` 尝试扩容数组。当 `krealloc_array` 失败返回 NULL 时，代码逻辑直接返回了 NULL，但忽略了 `krealloc_array` 的特性：当分配失败时，它不会释放原有的内存指针（即参数 `sids`）。因此，调用者失去对原 `sids` 内存块的引用，且该内存块未被释放，导致内存泄漏。
+
+#解决方案
+在 `krealloc_array` 返回 NULL 的错误处理分支中，显式调用 `kfree(sids)` 释放原有内存，确保资源被正确回收后再返回 NULL。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/168e029a9e4d8300e9779b8559d1e125a869533f

@@ -1,0 +1,20 @@
+#标题
+clk: of_clk_get_parent_name() 函数 OF node 引用泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `of_clk_get_parent_name()` 函数时，若设备树中存在 `clock-indices` 属性但未找到对应的索引，函数会直接返回 NULL。在此错误路径下，未释放已获取的设备节点引用计数（OF node reference），导致内核对象引用计数泄漏。长期运行可能导致内核内存资源耗尽或设备树节点相关功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`of_clk_get_parent_name()` 函数在处理 `clock-indices` 属性时，如果遍历结束仍未找到匹配的索引（`!found`），代码逻辑直接执行 `return NULL` 返回。此时，此前通过 `of_parse_phandle_with_args` 或类似逻辑解析并存放在 `clkspec.np` 中的设备节点指针未被释放，导致引用计数泄漏。该缺陷自 commit 8da411cc1964 引入。
+
+#解决方案
+在 `clock-indices` 查找失败的错误返回路径上，增加 `of_node_put(clkspec.np)` 调用，确保在返回 NULL 前正确释放设备节点的引用计数，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b16f061415ee7bfdc9bcaa89e9eaed10cd295927

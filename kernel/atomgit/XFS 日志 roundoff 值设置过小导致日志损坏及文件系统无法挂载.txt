@@ -1,0 +1,30 @@
+#标题
+XFS 日志 roundoff 值设置过小导致日志损坏及文件系统无法挂载
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在具有 4k 物理扇区的磁盘上，当超级块未列出日志条带单元时，文件系统发生日志损坏，导致挂载失败。
+具体表现为：
+1. 执行 generic/617 测试用例时失败。
+2. 挂载过程中检测到“Torn write (CRC failure)”。
+3. 内核报错“failed to locate log tail”，最终返回错误码 -74，文件系统不可用。
+
+#主要错误日志
+XFS (sda1): Mounting V5 Filesystem ff3121ca-26e6-4b77-b742-aaff9a449e1c
+XFS (sda1): Torn write (CRC failure) detected at log block 0x318e. Truncating head block from 0x3197.
+XFS (sda1): failed to locate log tail
+XFS (sda1): log mount/recovery failed: error -74
+XFS (sda1): log mount failed
+
+#问题根因
+当超级块中 `sb_logsunit` 为 0（即未设置日志条带单元）时，内核代码逻辑错误地将 `l_iclog_roundoff` 强制设置为 512 字节（BBSIZE）。
+而在磁盘物理扇区大小为 4096 字节的场景下，该 roundoff 值过小，导致日志 I/O 操作未正确对齐，进而引发 CRC 校验失败和日志损坏。
+
+#解决方案
+修改 `xlog_alloc_log` 函数中的 roundoff 赋值逻辑，增加对 `sb_logsectsize` 的判断：
+如果 `sb_logsunit` 不大于 1，则检查 `sb_logsectsize` 是否大于 0。如果是，则将 `l_iclog_roundoff` 设置为 `sb_logsectsize`，确保 roundoff 值至少匹配日志扇区大小，从而避免因对齐问题导致的日志损坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e82322cc70860d910d8a8b8eb7d1b28879cab76e

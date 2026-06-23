@@ -1,0 +1,20 @@
+#标题
+OBMM 内存清理线程因依赖驱动缺失导致死循环刷屏引发系统挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统未加载 hisi_soc_hha 驱动时，OBMM 模块依赖的 cache 维护接口报错。此时 `conti_clear_thread` 线程会陷入死循环，持续尝试清理 `memseg_uncleared` 队列中的元素，导致内核空间不断打印错误日志，进而引发系统挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+OBMM 模块依赖 `hisi_soc_cache_maintain` 接口进行 cache 维护操作。当底层的 `hisi_soc_hha` 驱动未加载时，该接口必定报错。故障发生时，`conti_clear_thread` 在清理失败后未做延时或退避处理，立即重试清理操作，导致错误日志被持续高频打印，最终致使系统挂起。
+
+#解决方案
+在 `conti_clear_thread` 线程的主循环中增加错误处理逻辑：当 `conti_clear_memseg` 执行失败（返回非 0）时，调用 `msleep_interruptible` 休眠 10 秒（10000ms）后再进行下一次重试。此举避免了高频死循环调用和日志刷屏，防止系统挂起。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0c75f8c961aeadec3f3fc8131b77805c3b869e7c

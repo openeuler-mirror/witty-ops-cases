@@ -1,0 +1,24 @@
+#标题
+xfs: AIL为空时tail lsn追踪错误导致日志恢复失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当活动项列表（AIL）为空时，系统错误地追踪 tail LSN。在此状态下，如果新的日志（Checkpoint N+1）被刷入磁盘，且记录的 tail LSN 被错误地标记为 Checkpoint N 的 commit LSN，一旦系统发生崩溃，将导致无法恢复 Checkpoint N 的数据，造成数据不一致或丢失。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `xlog_cil_ail_insert()` 中，将上下文中的项插入 AIL 时，`ail_head_lsn` 的更新与项的实际插入操作不是原子的，且未受 `ail_lock` 或 `log->l_icloglock` 保护。
+这留下了一个窗口期：当 AIL 为空时，文件系统使用 `ail_head_lsn` 来追踪 tail LSN。如果此时 Checkpoint N 的项尚未写入元数据区域（未完成插入），但 `ail_head_lsn` 已更新，会导致 iclog 记录错误的 tail LSN。此时若发生崩溃，系统会认为 Checkpoint N 不需要恢复，从而导致数据丢失。
+
+#解决方案
+引入新变量 `ail_tail_lsn` 专门用于追踪 AIL 为空时的 tail LSN。
+1. 在 AIL 插入开始前，将 `ail_tail_lsn` 设置为 Checkpoint N 的 start LSN，确保崩溃时能恢复 Checkpoint N。
+2. 在 AIL 插入完成后，将 `ail_tail_lsn` 更新为 Checkpoint N 的 commit LSN。
+3. 修改 `__xfs_ail_assign_tail_lsn` 函数，当 AIL 为空时使用 `ail_tail_lsn` 而非 `ail_head_lsn` 来计算和赋值日志的 tail lsn。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a149bf48c6626f0b04d52ae364c8390725850443

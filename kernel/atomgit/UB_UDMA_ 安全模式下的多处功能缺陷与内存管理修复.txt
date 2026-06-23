@@ -1,0 +1,40 @@
+#标题
+UB/UDMA: 安全模式下的多处功能缺陷与内存管理修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在销毁 JFC（Jetty Flow Control）或 Jetty/JFS 时，由于硬件版本判断缺失，在非 A_0/K_0 版本硬件上执行了不必要的硬件状态查询，可能导致流程卡顿或异常等待。
+2. 在 JFS 发送流程中，对溢出状态的检查逻辑不够严谨，在某些特定状态下可能错误地触发 overflow 检查，导致报错 "JFS overflow" 并返回 -ENOMEM，阻塞业务发送。
+3. 在 UDMA 设备处于非正常状态（如初始化未完成或已注销）时处理 EID 更新事件，可能触发空指针访问或非法内存访问，导致内核 panic 或数据损坏。
+4. 内存管理存在缺陷：区间树（Segment Tree）销毁时未释放顶层结构体内存；区间列表销毁后头尾指针未置空，可能导致 Use-After-Free 或重复释放风险；内存分配失败时的回滚机制不完善，可能导致内存泄漏。
+
+#主要错误日志
+- dev_err(udma_dev->dev, "udma dev does not exist!\n"); // 旧日志，补丁修正了错误码和描述
+- dev_err(udma_dev->dev, "JFS overflow, wqebb_cnt:%u.\n", wqebb_cnt);
+- dev_err(ctx->dev->dev, "segment have invalid parameter,ret = %d.\n", ret);
+- dev_err(ctx->dev->dev, "kzalloc memory failed in udma_seg_push_down_update while register VM.\n"); // 新增日志
+- dev_err(ctx->dev->dev, "the mv_start and/or mv_end of VMA was modified.\n"); // 新增日志
+
+#问题根因
+1. **硬件版本兼容性问题**：代码中多处针对特定硬件版本（A_0/K_0）的 quirk 或处理逻辑（如 `udma_modify_jetty_precondition`、`udma_query_jfc_destroy_done`）未添加版本判断，导致在不支持的硬件上执行了错误或冗余的操作。
+2. **状态检查不严谨**：`udma_post_one_wr` 函数中，未检查 doorbell 状态（`db_status`）即进行溢出检查，导致逻辑误判。
+3. **生命周期管理漏洞**：
+   - `udma_seg_tree_destroy` 函数仅释放了节点内存，漏掉了顶层 `udma_seg_tree` 结构体本身的内存释放。
+   - `udma_range_list_destroy` 函数释放了链表节点，但未将 `head`/`tail` 指针置 NULL，留下悬垂指针。
+   - 区间树更新过程中内存分配失败时，缺乏回滚机制，导致树状态不一致。
+4. **错误码定义混乱**：使用了非标准的内部宏定义 `EDRVNO`，且与标准错误码混淆，影响了错误处理的准确性。
+
+#解决方案
+1. **完善硬件版本判断**：在 `udma_destroy_jetty_precondition`、`udma_batch_destroy_jetty_precondition`、`udma_modify_jetty_state`、`udma_modify_jfs_state` 和 `udma_destroy_and_flush_jfc` 等函数中，增加 `hw_ver` 判断，确保特定逻辑仅在 A_0/K_0 版本硬件上执行。
+2. **修正溢出检查条件**：在 `udma_post_one_wr` 的溢出检查条件中增加 `sq->db_status == 0` 判断，避免误报。
+3. **修复内存管理与回滚机制**：
+   - 修改 `udma_seg_tree_destroy`，增加对 `tree` 指针本身的 `kfree`。
+   - 修改 `udma_range_list_destroy`，释放后将 `head` 和 `tail` 指针置 NULL。
+   - 引入 `udma_rollback_seg_tree` 函数，在 `udma_seg_update_range` 失败时执行回滚，确保数据一致性。
+   - 增加 `vm_start`/`vm_end` 字段记录 VMA 信息，并在 `udma_seg_range_occupy` 中增加校验，防止 VMA 被意外修改。
+4. **规范化错误处理**：移除私有宏 `EDRVNO`，使用标准定义 `EDRVNOEXIST` (255)，修正设备状态异常时的日志输出为 "udma dev is not ready!"，并调整相关响应逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b39e55874b17cbdf828b207e933f52a8f76e0d8a

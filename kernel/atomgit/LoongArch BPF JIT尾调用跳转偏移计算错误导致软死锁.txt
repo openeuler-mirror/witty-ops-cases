@@ -1,0 +1,21 @@
+#标题
+LoongArch BPF JIT尾调用跳转偏移计算错误导致软死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 BPF 尾调用相关的自测用例（如 `tailcalls/tailcall_bpf2bpf_1`）时，触发内核软死锁，导致 CPU 长时间卡死，进程无法继续执行。
+
+#主要错误日志
+watchdog: BUG: soft lockup - CPU#2 stuck for 26s! [test_progs:25056]
+（推断）tail_call out_offset = %d, expected %d!
+
+#问题根因
+在 `bpf_int_jit_compile()` 的额外 pass 中，JIT 上下文初始化被跳过，导致跳转偏移量计算未正确执行，`out_offset` 保持初始值 `-1`。这使得 `emit_bpf_tail_call` 中的 `jmp_offset` 计算结果为负数，进而生成了错误的机器码指令，跳转到了错误的位置。
+
+#解决方案
+修改 `emit_bpf_tail_call` 函数，移除依赖全局静态变量 `out_offset` 的逻辑，改为通过传入的指令索引 `insn` 动态计算尾调用指令的空间大小 (`tc_ninsn`)，并基于此修正跳转偏移量 `jmp_offset` 的计算方式，确保生成的跳转指令目标地址正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6cd24ba0b195e9cdb609b54b073f2b52085ea0b3

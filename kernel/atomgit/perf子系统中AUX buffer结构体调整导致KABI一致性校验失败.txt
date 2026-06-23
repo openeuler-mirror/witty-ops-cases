@@ -1,0 +1,20 @@
+#标题
+perf子系统中AUX buffer结构体调整导致KABI一致性校验失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+由于上游补丁 "perf/aux: Fix AUX buffer serialization" 在 `perf_buffer` 结构体中间新增了 `aux_mutex` 成员，破坏了内核ABI（KABI）稳定性。这会导致依赖KABI一致性校验的系统在加载或校验内核模块时失败，或者因结构体偏移量变化引发未定义的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+引入的修复补丁（45bfb2e50471）为了解决AUX buffer序列化问题，直接在 `perf_buffer` 结构体内部新增了 `struct mutex aux_mutex` 成员。在openEuler内核中，该改动破坏了结构体布局的KABI兼容性，触发了KABI breakage问题。
+
+#解决方案
+保持 `perf_buffer` 原有结构体布局不变，定义一个新的扩展结构体 `perf_buffer_ext`。将 `aux_mutex` 成员移动到 `perf_buffer_ext` 结构体的最前方，随后紧接 `perf_buffer` 成员。同时，修改 `rb_alloc`、`rb_free`、`ring_buffer_init` 以及 `perf_mmap` 等相关函数，利用 `container_of` 机制在 `perf_buffer` 指针与 `perf_buffer_ext` 指针之间进行转换，从而在保留上游修复功能的同时解决KABI破坏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f16864a7b69ae775069c2e7a382c695e94b38631

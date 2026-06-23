@@ -1,0 +1,24 @@
+#标题
+usb: typec: displayport: 修复潜在死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 USB Type-C DisplayPort alternate mode 时可能发生死锁，导致相关功能无法正常退出或响应，系统调用链挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+死锁由于 `cros_typec_altmode_data::mutex` 的递归获取而发生。
+调用链如下：
+1. `cros_typec_altmode_work()` 获取互斥锁（mutex）。
+2. 调用链 `typec_altmode_vdm()` -> `dp_altmode_vdm()` -> `typec_altmode_exit()` -> `cros_typec_altmode_exit()`。
+3. `cros_typec_altmode_exit()` 尝试再次获取同一个互斥锁，导致死锁。
+
+#解决方案
+不在互斥锁保护的上下文中直接调用 `typec_altmode_exit()`，而是通过设置状态 `dp->state = DP_STATE_EXIT` 将该调用推迟执行，从而避免递归锁获取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b5767054dccae7e738e83264fc9a68e7ddcad257

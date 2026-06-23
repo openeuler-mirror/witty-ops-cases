@@ -1,0 +1,27 @@
+#标题
+ub/udma: 虚拟内存区域（VMA）重叠注册校验缺失导致潜在内存越界风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UDMA 驱动进行内存注册时，若两个重叠的虚拟地址段对应不同的 VMA（Virtual Memory Area），系统未能正确拦截该操作。这可能导致内核内存管理混乱或数据损坏，严重时可能引发内核 Panic 或不可预见的系统行为。该补丁优化了重复注册流程，增加了对 VMA 一致性的校验。
+
+#主要错误日志
+- "the mv_start and/or mv_end of VMA was modified.\n"（推断：当检测到重叠区域的 VMA 属性不一致时打印）
+- "segment have invalid parameter,ret = %d.\n"
+- "failed to init segment_range.\n"
+- "failed to store segment_range, ret=%d.\n"
+- "kzalloc memory failed in udma_seg_push_down_update while register VM.\n"
+
+#问题根因
+在先前的实现中，UDMA 驱动的段树管理机制未记录和校验虚拟内存区域（VMA）的边界信息。当进行内存注册时，仅检查了地址范围的占用情况，未验证重叠区域是否属于同一个 VMA。如果两个重叠的虚拟地址段对应不同的 VMA，系统应该报错并拦截，但旧代码未执行此校验，导致错误的内存映射关系被接受。
+
+#解决方案
+1. **扩展数据结构**：在 `udma_seg_tree_node` 结构体中新增 `vm_start` 和 `vm_end` 字段，用于记录注册时的 VMA 边界；在 `udma_segment` 结构体中新增相应字段用于传递 VMA 信息。
+2. **增加校验逻辑**：实现 `udma_seg_range_check` 函数与 `range_check_occupy` 回调。在执行 `udma_seg_range_occupy` 占用操作前，先调用该校验函数。
+3. **拦截非法操作**：如果发现重叠地址范围对应不同的 VMA（即 `node->vm_start` 与当前 `seg->vm_start` 不一致），校验函数返回错误，从而阻止该次注册操作并打印错误日志。
+4. **重构段树管理**：将原有的 `seg_node` 重构为 `seg_tree` 结构，封装根节点与锁，优化了内存分配失败时的回滚处理逻辑，确保资源正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/10f3513bec00ae0ca5ba4f5ec1e5f19a1f3c918e

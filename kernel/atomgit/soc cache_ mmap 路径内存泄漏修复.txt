@@ -1,0 +1,20 @@
+#标题
+soc cache: mmap 路径内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HiSilicon SoC cache 驱动的 mmap 接口处理中，当 `vma->vm_pgoff` 大于 `PAGE_SIZE` 时，函数直接返回 `-EINVAL` 错误，导致此前步骤中已分配或初始化的资源（如通过 `hisi_soc_cache_mmap_kapi` 获取的资源）未能正确清理，进而引发内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hisi_soc_cache_mmap` 函数中，针对 `vma->vm_pgoff` 参数的校验逻辑处理不当。当校验失败（`vma->vm_pgoff > PAGE_SIZE`）时，代码直接执行 `return -EINVAL` 返回，跳过了函数末尾的错误处理标签 `out_clr`，导致错误路径上已持有的资源未被释放，造成内存泄漏。
+
+#解决方案
+修改错误处理逻辑，将校验失败时的直接返回改为设置错误码 `ret = -EINVAL` 并跳转至 `out_clr` 标签。这确保了在参数校验失败退出前，能执行必要的资源清理流程，修复了内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eae8c03a003ca9fb05ed98700758b7c145ae41d4

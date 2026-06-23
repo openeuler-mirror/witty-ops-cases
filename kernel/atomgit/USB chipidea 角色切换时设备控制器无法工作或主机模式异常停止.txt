@@ -1,0 +1,21 @@
+#标题
+USB chipidea 角色切换时设备控制器无法工作或主机模式异常停止
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 USB role switch 进行角色切换时（例如从主机模式切换到设备模式），若 ID 和 VBUS 中断同时触发，可能导致设备控制器完全无法工作。此外，在特定条件下，若 ID 和 VBUS 中断同时发生且目标模式为主机模式，可能导致主机模式停止工作。
+
+#主要错误日志
+未知
+
+#问题根因
+`ci_irq_handler()` 函数原先的设计每次调用仅处理单个事件（要么处理 ID 变化，要么处理 VBUS 变化），并在处理完一个事件后直接返回 `IRQ_HANDLED`。当 USB 角色切换触发 IRQ 时，ID 和 VBUS 变化往往同时发生。如果只处理了 ID 事件而忽略了 VBUS 事件，会导致切换到设备模式后设备控制器无法启动运行。另外，修改后的逻辑引入了新风险：如果 ID 和 VBUS IRQ 同时发生且目标模式为主机，原先的逻辑会错误地排队 VBUS 事件，导致 `ci_handle_vbus_change()` 调用 `usb_gadget_vbus_connect()`，随后 USBMODE 被切换至设备模式，致使主机模式异常停止。
+
+#解决方案
+1. 修改 `ci_irq_handler()` 逻辑，允许其在一次调用中同时处理 ID 和 VBUS 变化事件，而不是处理一个就立即返回。
+2. 在 `ci_handle_vbus_change()` 函数开头增加角色检查，如果当前角色不是设备模式（`CI_ROLE_GADGET`），则直接返回跳过 VBUS 事件处理，防止在主机模式下错误触发设备逻辑导致主机停止工作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc9aa3761362c25a0aca0ae219152ced8c1dcaeb

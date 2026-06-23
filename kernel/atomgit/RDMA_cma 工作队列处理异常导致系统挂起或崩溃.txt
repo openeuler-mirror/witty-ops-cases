@@ -1,0 +1,23 @@
+#标题
+RDMA/cma 工作队列处理异常导致系统挂起或崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 当 `cma_netevent_callback` 函数执行失败时，系统发生挂起，无响应。
+2. 在 `cma_netevent_work_handler` 处理过程中可能发生 workqueue crash（工作队列崩溃）。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **初始化时机错误**：原代码在 `cma_netevent_callback` 回调函数中调用 `INIT_WORK` 对 `id_priv->id.net_work` 进行初始化。如果此时工作项已经被添加到队列中或正在执行，这种并发初始化会导致内存损坏，进而引发 workqueue crash。
+2. **资源泄漏与挂起风险**：原代码无条件调用 `queue_work`，未检查其返回值。若 `queue_work` 失败（例如工作项已在队列中），代码仍持有 `current_id` 的引用计数，且不会执行清理操作，导致逻辑错误进而引发系统挂起。
+
+#解决方案
+1. 将 `INIT_WORK` 的初始化操作移至 ID 创建阶段（`__rdma_create_id` 函数中），避免在回调路径中重复初始化正在使用的工作队列结构，从而消除并发导致的崩溃风险。
+2. 在 `cma_netevent_callback` 中增加 `queue_work` 的返回值检查。如果入队失败（返回 0），则立即调用 `cma_id_put` 释放之前获取的 ID 引用，防止引用计数泄漏和挂起问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/980da450b7e7cb7cd82c66a9a2d4537f3b0fa4b5

@@ -1,0 +1,20 @@
+#标题
+sunrpc: 修复零长度校验和导致的空指针解引用漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 RPC 请求时，若 GSS Kerberos 认证头中包含零长度的校验和，内核在后续处理函数 `gss_krb5_verify_mic_v2()` 中访问 `checksum.data` 时会触发空指针解引用，导致内核 panic 或 Oops，造成服务不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `xdr_stream_decode_opaque_auth()` 中，当传入的 `checksum.len` 为 0 时，会导致 `checksum.data` 被设置为 NULL。然而，`svcauth_gss.c` 中的 `svcauth_gss_verify_header()` 函数未对 `checksum.len` 进行有效检查，直接放行了该异常数据。后续调用 `gss_krb5_verify_mic_v2()` 访问 `checksum.data` 时触发 NPD（Null Pointer Dereference）。
+
+#解决方案
+在 `svcauth_gss_verify_header()` 函数中增加校验条件，确保 `checksum.len` 的值不小于 `XDR_UNIT`（即检查长度是否有效）。如果校验失败，将请求的认证状态设置为 `rpc_autherr_badverf` 并拒绝该请求，从而防止空指针进入后续处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/30406efa8fff5da1223d76e15844c0e8f7d71b9c

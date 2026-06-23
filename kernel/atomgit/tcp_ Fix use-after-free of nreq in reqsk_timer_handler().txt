@@ -1,0 +1,21 @@
+#标题
+tcp: Fix use-after-free of nreq in reqsk_timer_handler()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TCP 连接处理过程中，当触发 `reqsk_timer_handler` 定时器处理函数进行请求丢弃（drop）操作时，内核发生引用计数错误，导致 `use-after-free` 故障。该问题可能引发内核崩溃、内存损坏或系统异常重启。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `reqsk_timer_handler` 函数的 `drop` 标签处理流程中，代码逻辑先调用 `__inet_csk_reqsk_queue_drop(sk_listener, oreq, true)` 处理了 `oreq`，随后却错误地调用了 `reqsk_put(req)`。
+此时 `req` 指针已不再有效或不应在此处释放，正确的操作应对 `oreq` 进行引用计数释放。该错误导致了 `use-after-free`，即对已释放或错误的内存对象进行了操作。
+
+#解决方案
+修正 `reqsk_timer_handler` 函数中的引用计数释放对象，将 `drop` 标签下的 `reqsk_put(req)` 修改为 `reqsk_put(oreq)`，确保释放的是正确的 request socket 对象，避免内存违规访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e082d764f9209112bf4cb708b928480424098bd4

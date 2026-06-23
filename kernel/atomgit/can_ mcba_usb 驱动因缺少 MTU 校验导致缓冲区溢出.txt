@@ -1,0 +1,22 @@
+#标题
+can: mcba_usb 驱动因缺少 MTU 校验导致缓冲区溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+攻击者可以通过手动设置设备 MTU 为非法大值（例如 9999），结合 PF_PACKET socket 发送特制的 CAN XL 帧，绕过框架校验直达驱动发送函数。驱动在处理该恶意帧时，会误将 CAN XL 帧的 flags 字段当作数据长度（dlc），导致 `memcpy` 操作发生越界写入，引发内核缓冲区溢出。
+
+#主要错误日志
+未知
+
+#问题根因
+`mcba_usb` 驱动未填充 `net_device_ops` 结构体中的 `ndo_change_mtu` 回调函数。
+这导致系统允许将接口 MTU 设置为超过硬件处理能力的值。当攻击者通过 `PF_PACKET` 直接向驱动注入数据时，驱动的 `mcba_usb_start_xmit` 函数未对数据帧长度进行有效校验，直接将恶意帧中的 `flags` 字段（如 0xff）当作长度进行 `memcpy` 操作，从而触发缓冲区溢出。
+
+#解决方案
+在驱动的 `net_device_ops` 结构体中添加 `.ndo_change_mtu = can_change_mtu` 成员。
+该修复确保接口 MTU 不能被设置为大于 `CAN_MTU` 的值，从根源上阻止了恶意超大帧进入驱动发送路径，避免了缓冲区溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fc172f2070e4942f4346be49962f8c5e115e1157

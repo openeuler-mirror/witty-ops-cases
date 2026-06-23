@@ -1,0 +1,20 @@
+#标题
+s390/sclp: 修复 SCCB 地址检查导致的空指针访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 s390 架构下，当 SCLP（Service Call Logical Processor）中断处理程序接收到 `finished_sccb` 参数为 0（即 NULL 地址）时，代码逻辑直接对其执行 `__va()` 转换操作。这会导致将 NULL 指针转换为无效的内核虚拟地址，进而可能引发空指针解引用（Oops）或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ok_response` 和 `sclp_interrupt_handler` 函数中，代码直接使用 `(struct sccb_header *)__va(sccb_int)` 进行强制类型转换。当 `sccb_int` 值为 0 时，`__va(0)` 不会返回 NULL，而是返回一个非零的错误虚拟地址。后续代码在检查 `sccb` 指针时误判其非空，从而导致对无效地址的访问。
+
+#解决方案
+引入辅助函数 `sclpint_to_sccb`，在转换前先判断输入参数 `sccb_int` 是否为 0：若为 0 则直接返回 NULL，否则才执行 `__va()` 转换。修复了 `ok_response` 和 `sclp_interrupt_handler` 中的调用点，确保对 NULL 地址的处理逻辑正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/68c705b1ed3dbb2759ac252af2523b192c60e11c

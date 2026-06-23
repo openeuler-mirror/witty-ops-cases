@@ -1,0 +1,23 @@
+#标题
+hns3 网卡中断残留导致虚拟机重启后中断丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 VF 直通给虚拟机使用时，若虚拟机被强制杀死（killed），网卡引擎中可能残留未被处理的中断状态。该残留中断无法通过 FLR 或 TQP 复位清除。当虚拟机重启并重新加载驱动时，在 `enable_irq` 过程中，第一个中断向量的中断可能被丢弃，导致该向量对应的功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hns3_vector_enable` 函数中，中断使能操作 `enable_irq` 与向量使能操作 `hns3_mask_vector_irq` 在同一个循环中交替执行。当存在中断残留时，这种交错执行顺序导致在某些场景下（特别是 VF 直通虚拟机重启场景）中断被错误丢弃或无法正确响应。VFIO 层面的 `enable_irq` 行为与网卡中断残留状态相互作用，加剧了该问题。
+
+#解决方案
+重构中断与队列的使能/去使能逻辑，将向量中断使能过程移出 `enable_irq` 循环。具体修改为：
+1.  新增 `hns3_enable_irqs_and_tqps` 和 `hns3_disable_irqs_and_tqps` 统一处理函数。
+2.  调整执行顺序，先统一调用 `hns3_irq_enable`（执行 `enable_irq`），再统一调用 `hns3_mask_vector_irq`（使能向量），最后使能队列。
+3.  通过分离中断使能与向量掩码设置的步骤，解决了中断残留导致的中断丢失问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/73dd10dec0e351fd40a1f43653f4de7725fd506f

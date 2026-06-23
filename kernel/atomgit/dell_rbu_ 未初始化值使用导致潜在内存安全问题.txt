@@ -1,0 +1,20 @@
+#标题
+dell_rbu: 未初始化值使用导致潜在内存安全问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在向 `dell_rbu` 模块的 `packet_size` sysfs 接口写入数据时，若用户提供的缓冲区内容无法被正确解析，内核可能使用未初始化的临时变量 `temp` 进行后续操作。该问题由静态分析工具（Svace）发现，可能导致不可预期的行为或内存状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `packet_size_write` 函数中，原代码使用 `sscanf(buffer, "%lu", &temp)` 解析用户输入。如果 `sscanf` 解析失败（例如用户输入了非数字字符），变量 `temp` 将保持未初始化状态，且代码未检查 `sscanf` 的返回值。随后，未初始化的 `temp` 变量被用于逻辑判断和赋值操作（`if (temp < 0xffffffff)`），导致未定义行为。
+
+#解决方案
+使用内核标准转换辅助函数 `kstrtoul()` 替代 `sscanf()`，该函数会严格检查转换是否成功。在执行后续操作前，显式检查 `kstrtoul()` 的返回值：若转换失败则直接返回 `-EINVAL`，确保只有在变量 `temp` 被正确初始化和赋值后才继续执行流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9b206063337885fcfed111564efc7b4160ddcad5

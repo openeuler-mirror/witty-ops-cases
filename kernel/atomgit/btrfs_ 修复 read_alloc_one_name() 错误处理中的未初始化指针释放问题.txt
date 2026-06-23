@@ -1,0 +1,20 @@
+#标题
+btrfs: 修复 read_alloc_one_name() 错误处理中的未初始化指针释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Btrfs 文件系统进行日志回放或检查操作时，若内存分配失败（kmalloc 失败），可能导致释放未初始化的指针，进而引发内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `read_alloc_one_name()` 在传入的 `fscrypt_str` 结构体未初始化的情况下被调用。当该函数内部的 `kmalloc` 分配缓冲区失败时，它不会初始化 `fscrypt_str.name` 字段。随后在错误处理路径中释放该结构体时，可能会尝试释放 `name` 字段中未初始化的指针值，导致 UAF（释放未初始化指针）或内存崩溃。该问题是由提交 e43eec81c516 ("btrfs: use struct qstr instead of name and namelen pairs") 引入的回归缺陷。
+
+#解决方案
+在调用 `read_alloc_one_name()` 之前，显式初始化 `fscrypt_str` 结构体变量。补丁通过将 `struct fscrypt_str name;` 修改为 `struct fscrypt_str name = { 0 };`，确保在内存分配失败的场景下，`name` 指针为 NULL 而非随机值，从而避免释放无效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d646a90cfc56ae634ba444e42b3ed2389d7df148

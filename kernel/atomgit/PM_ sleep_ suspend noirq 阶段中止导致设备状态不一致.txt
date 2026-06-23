@@ -1,0 +1,21 @@
+#标题
+PM: sleep: suspend noirq 阶段中止导致设备状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统挂起在 "noirq" 阶段被中止（例如设备回调返回错误）时，部分设备的 `power.is_noirq_suspended` 未被设置。在后续的恢复过程中，`device_resume_noirq()` 会提前返回，导致这些设备的 noirq 回调未被执行。
+若这些设备被 `device_suspend_late()` 留在挂起状态且 `power.must_resume` 被置位，系统将错误地执行 early resume，导致设备状态不一致（例如 early resume 逻辑错误地依赖于未发生的 noirq resume）。
+
+#主要错误日志
+未知
+
+#问题根因
+当系统挂起在 noirq 阶段异常中止时，某些设备的 `power.is_noirq_suspended` 保持未设置状态。此时 `device_resume_noirq()` 会直接跳过这些设备，但未清除 `power.must_resume` 标志。这导致后续 `device_resume_early()` 错误地认为需要恢复设备，执行了 early resume，破坏了设备状态的完整性，特别是当 early resume 依赖于本应执行但未执行的 noirq resume 时。
+
+#解决方案
+在 `device_resume_noirq()` 函数中，针对 `power.is_noirq_suspended` 未设置（即 noirq suspend 回调未运行）的设备，检查其是否已被留在挂起状态（通过 `dev_pm_skip_suspend(dev)` 判断）。若是，则清除 `power.must_resume` 标志（设为 false），从而确保 `device_resume_early()` 也会跳过该设备，使其保持挂起状态，避免状态不一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/336d19cf74509a992cd5c3e26480c9343481697e

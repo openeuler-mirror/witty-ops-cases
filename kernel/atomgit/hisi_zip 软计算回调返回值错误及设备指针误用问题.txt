@@ -1,0 +1,22 @@
+#标题
+hisi_zip 软计算回调返回值错误及设备指针误用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 hisi_zip 驱动的软计算模式进行压缩或解压缩操作时，回调函数报告执行失败，返回错误的 I/O 状态码，导致压缩/解压缩流程异常终止。
+
+#主要错误日志
+pr_err("failed to do fallback %s work, ret=%d\n", algo, ret);
+
+#问题根因
+1. **回调返回值错误**：在 `hisi_zip_fallback_do_work` 函数中，当软计算操作失败时，错误码被硬编码为 `-EIO` 并传递给 `acomp_request_complete`，导致上层调用者无法获取真实的错误原因（变量 `ret`）。
+2. **设备指针误用**：在 `hisi_zip_acompress` 和 `hisi_zip_adecompress` 函数中，`dev` 指针的初始化发生在判断 `ctx->fallback` 之前。当使用软计算时，代码逻辑本不应访问硬件设备相关结构，但此处解引用了 `qp_ctx->qp->qm->pdev->dev`，这在软计算路径下是不必要的，且可能导致潜在的访问异常。
+
+#解决方案
+1. 修正回调返回值逻辑，将 `acomp_request_complete` 的参数由固定的错误码改为实际的返回值 `ret`，确保错误状态准确传递。
+2. 将 `dev` 指针的初始化代码移动到 `ctx->fallback` 判断之后，确保仅在非软计算（硬件加速）路径下才获取设备指针，避免在软计算路径下访问不必要的设备资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3e7e3994275bcbdad06a58fa691bb6f50fde68f

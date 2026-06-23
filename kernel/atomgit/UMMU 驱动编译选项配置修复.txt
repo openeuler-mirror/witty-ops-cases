@@ -1,0 +1,24 @@
+#标题
+UMMU 驱动编译选项配置修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在禁用 CONFIG_ACPI 或 CONFIG_OF 编译选项的内核配置环境下编译 UMMU 驱动时，编译失败。同时，代码中存在未使用的宏定义以及静态内联函数定义不一致等代码规范问题。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码中直接引用了 `hisi_ummu_of_match` 和 `hisi_ummu_acpi_match` 匹配表，未使用 `of_match_ptr` 和 `ACPI_PTR` 宏进行包裹，导致在禁用相关配置选项时出现编译错误（引用未定义的变量）。此外，部分代码（如 `drivers/ub/ubfi/ummu.c` 中的 ACPI 相关函数）未正确使用 `#ifdef` 保护，导致在非 ACPI 环境下可能产生编译警告或错误。
+
+#解决方案
+1. 在 `drivers/iommu/hisilicon/ummu_main.c` 和 `drivers/perf/hisilicon/ummu_pmu.c` 中引入 `<linux/acpi.h>` 和 `<linux/of.h>` 头文件。
+2. 使用 `#ifdef CONFIG_OF` 和 `#ifdef CONFIG_ACPI` 宏包裹相应的设备匹配表定义。
+3. 将 `.of_match_table` 和 `.acpi_match_table` 的赋值分别修改为使用 `of_match_ptr()` 和 `ACPI_PTR()` 宏，确保在配置禁用时返回 NULL。
+4. 修正 `drivers/ub/ubfi/ummu.c` 中 `CONFIG_ACPI` 宏的位置，确保仅在 ACPI 配置开启时编译相关回调函数。
+5. 清理 `drivers/iommu/hisilicon/perm_table.c` 中未使用的宏定义 `GET_LEVEL_INDEX_RANGE`，并修正代码缩进与格式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3a6d8249afbb244a4ce5308f9d2ea21f2ef2c1c9

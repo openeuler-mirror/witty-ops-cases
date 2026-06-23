@@ -1,0 +1,27 @@
+#标题
+ice驱动在aarch64架构下因非对齐访问导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在aarch64架构下加载 ice 驱动进行探测（probing）时，内核触发异常崩溃。具体表现为驱动初始化 LAG（链路聚合）功能时，发生数据对齐错误，导致 Oops 并引发 Kernel Panic，系统停止同步。
+
+#主要错误日志
+[   17.599009] Unable to handle kernel paging request at virtual address ffff07ff9c6dc004
+[   17.599011] Mem abort info:
+[   17.599011]   ESR = 0x0000000096000021
+[   17.599013]   SET = 0, FnV = 0
+[   17.599014]   FSC = 0x21: alignment fault
+[   17.599025] Internal error: Oops: 0000000096000021 [#1] SMP
+[   17.599053] pc : ice_create_lag_recipe.constprop.0+0xbc/0x11c [ice]
+[   17.599275] Kernel panic - not syncing: Oops: Fatal exception
+
+#问题根因
+结构体中的 `new_rcp->recipe_bitmap` 被定义为一个 8 字节的数组，但其内存对齐仅为 4 字节。代码中直接将其强制转换为 `unsigned long` 指针并调用 `set_bit` 进行写操作，这要求变量必须按字长对齐（在 64 位系统上通常要求 8 字节对齐）。由于实际地址未对齐，导致 CPU 触发对齐错误异常。
+
+#解决方案
+移除强制类型转换及 `bitmap_zero`/`set_bit` 的调用组合，改用 `put_unaligned_le64` 宏直接将数据写入 `recipe_bitmap`。该函数专门用于处理非对齐内存的写入，避免了 CPU 对齐检查异常，同时也符合 ICE 命令中数值通常为小端序的规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6b1d9f4222535f93aae34168014889c747fa3847

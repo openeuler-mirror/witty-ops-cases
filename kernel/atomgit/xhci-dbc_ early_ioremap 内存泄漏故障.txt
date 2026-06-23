@@ -1,0 +1,30 @@
+#标题
+xhci-dbc: early_ioremap 内存泄漏故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用内核参数 `earlyprintk=xdbc,keep` 但硬件环境未正确配置的情况下，系统启动过程中触发 `check_early_ioremap_leak` 检测告警，报告检测到 early ioremap 区域泄漏，并打印调用栈警告。
+
+#主要错误日志
+```
+[ ] xhci_dbc:early_xdbc_parse_parameter: dbgp_num: 0
+...
+[ ] xhci_dbc:early_xdbc_setup_hardware: failed to setup the connection to host
+...
+[ ] calling  check_early_ioremap_leak+0x0/0x70 @ 1
+[ ] ------------[ cut here ]------------
+[ ] Debug warning: early ioremap leak of 1 areas detected.
+    please boot with early_ioremap_debug and report the dmesg.
+[ ] WARNING: CPU: 11 PID: 1 at mm/early_ioremap.c:90 check_early_ioremap_leak+0x4e/0x70
+```
+
+#问题根因
+当 `early_xdbc_setup_hardware()` 函数执行失败（例如无法建立与主机的连接）时，退出前未调用 `early_iounmap()` 释放先前映射的 `xdbc.xhci_base` 区域。由于 `xdbc_init()` 不会处理此清理工作，导致 early ioremap 资源泄漏。
+
+#解决方案
+在 `early_xdbc_setup_hardware()` 函数的错误处理路径中，增加对 `xhci_base` 的释放逻辑。具体修复措施为：在硬件设置失败分支中显式调用 `early_iounmap(xdbc.xhci_base, xdbc.xhci_length)`，并将相关指针置空（NULL）且长度重置为 0，防止资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eb26c1aaa5ffbb356d65df0d0843398abdf01571

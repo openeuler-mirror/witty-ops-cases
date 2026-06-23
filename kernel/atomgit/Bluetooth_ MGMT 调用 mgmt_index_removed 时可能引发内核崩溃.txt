@@ -1,0 +1,25 @@
+#标题
+Bluetooth: MGMT 调用 mgmt_index_removed 时可能引发内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理蓝牙管理接口的 `mgmt_index_removed` 函数时，如果 `cmd_sync` 队列中仍有待处理的命令，可能会导致内核崩溃。崩溃表现为释放后使用或列表破坏引发的 Oops。
+
+#主要错误日志
+```
+0x0000053D: __list_del_entry_valid_or_report+0x98/0xdc
+0x0000053D: mgmt_pending_remove+0x18/0x58 [bluetooth]
+0x0000053E: mgmt_remove_adv_monitor_complete+0x80/0x108 [bluetooth]
+0x0000053E: hci_cmd_sync_work+0xbc/0x164 [bluetooth]
+```
+
+#问题根因
+当调用 `mgmt_index_removed` 时，会遍历并移除 pending 命令队列中的条目。如果此时 `cmd_sync` 队列中仍有命令在执行，且这些命令使用了即将被移除的 pending 命令作为 `user_data`，那么当 pending 命令被释放后，`cmd_sync` 回调函数（如 `mgmt_remove_adv_monitor_complete`）仍试图访问该数据结构，导致 Use-After-Free 或列表操作异常从而引发崩溃。
+
+#解决方案
+在 `cmd_complete_rsp` 函数中增加 `hci_cmd_sync_dequeue` 调用，在移除并释放 pending 命令之前，先将 `cmd_sync` 队列中使用该命令作为数据的条目出队。同时，重构了 `mgmt_index_removed` 和 `__mgmt_power_off` 函数，使用 `struct cmd_lookup` 结构体传递状态，以便在清理流程中正确处理命令同步队列，防止访问已释放的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/780f6d5c5ca422d04cd8a96152a09c60a9695f8a

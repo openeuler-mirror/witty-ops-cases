@@ -1,0 +1,24 @@
+#标题
+libbpf 修复 struct_ops maps 和 progs 无法正确解析模块 BTF 类型 ID 的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 struct_ops 功能时，如果涉及的 BPF 程序或 map 定义在内核模块中，libbpf 无法正确找到对应的模块 BTF，导致内核无法正确解析类型 ID。这会导致 struct_ops 对象加载失败，或者 BPF 程序附加失败，用户在加载依赖模块 BTF 的 struct_ops 应用时遇到错误。
+
+#主要错误日志
+libbpf: struct_ops init_kern: struct [struct_name] is not found in kernel BTF
+
+#问题根因
+libbpf 在查找 struct_ops 的内核类型时，默认仅在内核 vmlinux BTF 中查找。如果对应的 struct_ops 定义在可加载的内核模块中，libbpf 缺少逻辑去定位并传递正确的模块 BTF 信息给内核，导致内核无法在正确的 BTF 对象中解析类型 ID。
+
+#解决方案
+修改 libbpf 逻辑，使其在初始化 struct_ops 时能够搜索并定位正确的模块 BTF：
+1. 在 `bpf_map` 结构中新增 `mod_btf_fd` 字段，用于存储模块 BTF 的文件描述符。
+2. 更新 `find_struct_ops_kern_types` 函数，使其能通过 `find_ksym_btf_id` 在模块 BTF 中查找类型。
+3. 在创建 map 时，将找到的模块 BTF FD 通过 `value_type_btf_obj_fd` 属性传递给内核，并设置 `BPF_F_VTYPE_BTF_OBJ_FD` 标志。
+4. 对于 struct_ops 程序，将其 `attach_btf_obj_fd` 设置为对应模块 BTF 的 FD，确保内核能正确关联 BTF 对象。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c39516fb6da5cdc51b8865c0ec757f8b4f0607ec

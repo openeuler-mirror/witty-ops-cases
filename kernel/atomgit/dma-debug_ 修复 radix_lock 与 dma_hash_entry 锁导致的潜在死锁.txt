@@ -1,0 +1,24 @@
+#标题
+dma-debug: 修复 radix_lock 与 dma_hash_entry 锁导致的潜在死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在特定并发场景下触发死锁，导致系统挂起或相关进程处于不可中断睡眠状态（D状态）。该问题尤其容易在涉及 DMA 调试接口、内存回收（kswapd）以及硬件追踪驱动（如 Arm Coresight etm/etr tmc） perf 事件调度的复杂负载下发生。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `check_unmap()` 函数中，调用顺序导致了 ABBA 死锁：
+1. `check_unmap()` 在持有 `dma_hash_entry[idx].lock`（哈希桶锁）的情况下调用 `dma_entry_free()`。
+2. `dma_entry_free()` 内部会尝试获取 `radix_lock`。
+3. 与此同时，其他执行路径（如 `add_dma_entry` 扩展 radix tree 时唤醒 kswapd，或 `check_sync` 在持有 `rq_lock` 时操作 DMA 哈希表）可能以相反的顺序获取这些锁（如先 `radix_lock` 后 `dma_hash_entry` 锁，或先 `rq_lock` 后 `dma_hash_entry` 锁）。
+这种锁获取顺序的冲突（`dma_hash_entry` -> `radix_lock` 与 `radix_lock` -> `dma_hash_entry`）导致了死锁。
+
+#解决方案
+调整 `check_unmap()` 函数中的锁持有范围与释放时机。在删除哈希表条目后，先调用 `put_hash_bucket()` 释放 `dma_hash_entry[idx].lock`，然后再调用 `dma_entry_free()`。这确保了在获取 `radix_lock` 之前已释放哈希桶锁，从而打破了 ABBA 死锁链条。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c6662dd0dd6ff7b179a8f15090ee0cbede95e511

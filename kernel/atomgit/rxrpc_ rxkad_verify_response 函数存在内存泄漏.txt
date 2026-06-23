@@ -1,0 +1,24 @@
+#标题
+rxrpc: rxkad_verify_response 函数存在内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 RxRPC 连接响应时，若 `rxkad_verify_response` 函数遇到特定错误路径（如协议错误或校验失败），已分配的内存对象（kerberos ticket 或 response 结构体）以及服务器密钥（server key）未被正确释放，导致内核内存泄漏。长期运行可能导致系统内存耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `rxkad_verify_response` 的错误处理路径分散，存在多个 `goto` 标签（如 `protocol_error`、`temporary_error` 等）。在部分错误跳转路径中，代码未执行 `kfree(ticket)` 或 `key_put(server_key)` 操作，导致资源泄漏。具体而言，当函数在分配 ticket 或查找 server key 后，若后续校验步骤（如版本检查、包长度检查、校验和验证等）失败，程序跳转至错误处理标签时遗漏了资源释放逻辑。
+
+#解决方案
+重构 `rxkad_verify_response` 函数的错误处理逻辑：
+1. 将 `ticket` 指针初始化为 `NULL`。
+2. 移除原有的多个分散的错误处理标签（`protocol_error`、`temporary_error` 等），统一合并为一个 `error` 标签。
+3. 在 `error` 标签处集中执行资源释放操作，包括 `kfree(ticket)`、`kfree(response)` 和 `key_put(server_key)`。
+4. 将所有异常跳转指令统一指向该公共错误处理入口，确保所有错误路径均能正确释放所有已分配的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aa4c9a525ecf57564791cd9300800da3391b5d2c

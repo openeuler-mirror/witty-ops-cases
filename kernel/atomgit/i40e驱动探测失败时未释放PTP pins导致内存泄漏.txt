@@ -1,0 +1,22 @@
+#标题
+i40e驱动探测失败时未释放PTP pins导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 i40e 驱动过程中，若探测阶段发生失败（probe failure），此前已分配的 PTP pin 结构体内存未被正确释放，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+PTP pin 结构体内存在探测早期通过 `i40e_ptp_alloc_pins` 分配，但在探测失败的错误处理路径中，缺少对应的释放函数调用。这导致驱动初始化失败退出时，已分配的内存未被回收，且 `pin_config` 指针未置空。该问题自引入 `i40e_ptp_alloc_pins` 时就已存在。
+
+#解决方案
+1. 在 `i40e_probe` 函数的错误处理路径 `err_switch_setup` 标签处增加调用 `i40e_ptp_free_pins(pf)`，确保探测失败时释放 PTP pins 内存。
+2. 将 `i40e_ptp_free_pins` 函数从 static 修改为全局可见，并在头文件中声明。
+3. 在 `i40e_ptp_free_pins` 函数内部，释放内存后将 `pf->ptp_caps.pin_config` 指针置为 NULL，防止悬垂指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/035d4d5ea668e92bf0cd4f60a9cb833d55c3a25b

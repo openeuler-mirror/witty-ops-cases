@@ -1,0 +1,23 @@
+#标题
+can: ucan: strscpy() 导致的源缓冲区越界读取
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UCAN USB 设备驱动加载过程中（ucan_probe），获取固件字符串时触发内核越界读取。该问题是由于 `strscpy()` 函数在处理非 NUL 结尾的源字符串时，会读取比预期多一个字节以判断是否发生截断。如果源缓冲区未以 NUL 结尾且刚好填满，将导致读取源缓冲区之外的 1 个字节。
+
+#主要错误日志
+未知
+
+#问题根因
+上一个修复提交（"can: ucan: use strscpy() to instead of strncpy()"）错误地将 `strncpy` 替换为 `strscpy`。`strncpy(dest, src, len)` 最多读取 `len` 个字节，而 `strscpy(dest, src, len + 1)` 为了检查截断情况，会读取最多 `len + 1` 个字节。
+在 UCAN 驱动中，从 USB 设备获取的固件字符串（`up->ctl_msg_buffer->raw`）可能填满缓冲区且非 NUL 结尾。调用 `strscpy(firmware_str, up->ctl_msg_buffer->raw, sizeof(union ucan_ctl_payload) + 1)` 时，源参数 `up->ctl_msg_buffer->raw` 的大小仅为 `sizeof(union ucan_ctl_payload)`，导致 `strscpy` 多读取 1 个字节，造成越界读取。
+
+#解决方案
+1. 移除中间缓冲区 `firmware_str` 和多余的拷贝逻辑。
+2. 重构 `ucan_device_request_in` 为 `ucan_get_fw_str`，使其直接处理字符串获取和 NUL 终止逻辑。在 `usb_control_msg` 返回后，立即在缓冲区对应位置写入 `\0` 确保字符串正确终止，避免后续处理中的越界读取。
+3. 将 `union ucan_ctl_payload` 中的 `raw` 字段重命名为 `fw_str` 并明确其类型，提高代码可读性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1099575b5c9198a332746d3ff593dfb267b77db7

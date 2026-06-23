@@ -1,0 +1,26 @@
+#标题
+hisi_zip: 硬件繁忙或复位期间压缩请求失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HiSilicon ZIP 加速器硬件出现拥塞或正在进行复位操作时，上层发出的压缩/解压缩请求直接失败，无法正常处理业务流量，导致系统可靠性和服务连续性降低。
+
+#主要错误日志
+- dev_dbg(&qp_ctx->qp->qm->pdev->dev, "req cache is full!\n");
+- dev_err(dev, "failed to map the dst buffer to hw sgl (%ld)!\n", PTR_ERR(req->hw_dst));
+- dev_dbg_ratelimited(dev, "failed to send request!\n"); (推断：原代码在发送失败时打印此日志)
+
+#问题根因
+驱动程序缺少 backlog（积压队列）机制。当硬件设备忙（返回 -EBUSY）或请求缓存已满时，驱动直接向上层返回错误（如 -EAGAIN），未将请求加入队列排队等待，导致硬件繁忙瞬间的请求丢失或失败。
+
+#解决方案
+1. 在驱动中实现 backlog 机制，在 `hisi_zip_req` 结构体中增加 `list` 成员用于链表管理。
+2. 新增 `hisi_zip_enqueue_backlog` 函数，当硬件发送返回 -EBUSY 时，将请求挂入 `qp->backlog.list` 队列。
+3. 新增 `hisi_zip_send_backlog` 函数，在硬件完成中断回调（`hisi_zip_acomp_cb`）中触发，尝试重新发送积压队列中的请求。
+4. 新增 `hisi_zip_send_backlog_soft` 函数，当积压请求仍无法发送到硬件时，自动回退使用软件算法（fallback）处理请求，确保业务不中断。
+5. 重构 `hisi_zip_create_req` 和 `hisi_zip_do_work` 等函数，使其支持请求状态的流转和 backlog 流程的集成。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/276305d6332abbf63e2b27f62cd250a784884426

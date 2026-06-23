@@ -1,0 +1,28 @@
+#标题
+KVM虚拟机创建失败及SGI中断状态读取错误(Hip10芯片勘误)
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在Hip10或Hip10C芯片平台上创建大规格虚拟机失败。
+2. 在Hip10芯片平台上，虚拟机在处理硬件SGI（Software Generated Interrupt）中断时，可能读取到错误的中断pending状态，导致中断处理逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **创建失败根因**：在 `allocate_vpe_l1_table` 函数中，计算VPE（Virtual Processing Element）L1表页数时逻辑有误。原代码在非间接表（indirect）模式下直接将页数硬编码为1，未正确根据 `ITS_MAX_VPEID` 和每页条目数（epp）计算所需页数，导致大规格VM内存分配不足或配置错误。同时，代码未正确检测硬件是否支持间接表特性。
+2. **中断状态错误根因**：Hip10芯片存在Erratum 162200806，读取硬件SGI中断状态时存在缺陷。原代码尝试通过 `irq_get_irqchip_state` 读取Host中断控制器的状态，这在受影响的芯片上会返回错误或错误值。
+3. **勘误标识错误**：原代码将硬件勘误标识为 `HIP09`，但实际受影响的是 `Hip10` 和 `Hip10C` 芯片，导致勘误未能正确匹配生效。此外，Erratum 162200803 需排除 GICv4.1 场景。
+
+#解决方案
+1. **修复VPE表分配逻辑**：在 `allocate_vpe_l1_table` 中增加对 `GICR_VPROPBASER_4_1_INDIRECT` 特性的探测。若硬件不支持间接表，则根据 `ITS_MAX_VPEID` 正确计算所需的连续物理页数量（`npg`），而不是固定为1页。
+2. **修复SGI状态读取逻辑**：针对Erratum 162200806，修改 `__read_pending` 函数。对于受影响的Hip10芯片，直接读取虚拟中断pending页面的内存位图来判断SGI状态，不再依赖有缺陷的 `irq_get_irqchip_state` 接口。
+3. **修正勘误适用范围**：
+   - 将原 `HIP09` 相关的宏定义重构为 `FLAGS_WORKAROUND_HIP10_ERRATUM_162200803` 和 `FLAGS_WORKAROUND_HIP10_ERRATUM_162200806`。
+   - 更新设备匹配表，增加对 `Hip10C`（IIDR 0x00061736）的支持，并修正 `Hip10` 的匹配逻辑。
+   - 在KVM信息设置时，严格区分GICv4与GICv4.1场景，确保Erratum 162200803 仅应用于非GICv4.1场景，Erratum 162200806 应用于GICv4.1场景。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3bf6add9ff5f2a5299a4aa7f0f2e6878c1efe01

@@ -1,0 +1,20 @@
+#标题
+rtlwifi: 修复 _rtl_pci_rx_interrupt 中可能的 skb 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Realtek rtlwifi 无线网卡驱动接收数据时，若 DMA 映射失败，会导致 `sk_buff` 结构体内存泄漏。该问题可能表现为系统长时间运行后网络接收性能下降，或观察到与无线网卡相关的内存占用持续增长（内存泄漏）。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `_rtl_pci_init_one_rxdesc()` 在处理新分配的 `skb` 时可能因为 DMA 映射错误而失败。当该函数失败时，新的 `skb` 并未被保存到接收环形缓冲区中，导致该 `skb` 指针未被任何地方记录或释放，从而造成了内存泄漏。
+
+#解决方案
+在调用 `_rtl_pci_init_one_rxdesc()` 后增加返回值检查。如果该函数初始化失败，判断是否存在新分配的 `skb`（`new_skb`），若存在则调用 `dev_kfree_skb_any()` 释放该 `skb` 内存，防止资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5f0c84931d632c8fc55568ce43ef2689df2421dd

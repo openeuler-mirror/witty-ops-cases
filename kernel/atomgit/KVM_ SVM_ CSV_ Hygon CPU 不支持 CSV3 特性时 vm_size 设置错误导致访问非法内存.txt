@@ -1,0 +1,23 @@
+#标题
+KVM: SVM: CSV: Hygon CPU 不支持 CSV3 特性时 vm_size 设置错误导致访问非法内存
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hygon C86-4G 之前的 CPU 上，如果用户态程序请求使用 CSV3 的 KVM ioctl 接口，会导致内核访问未分配的内存区域。
+由于 `vm_size` 未正确设置，内核结构体 `struct kvm_svm_csv` 中的 `csv_info` 字段未被分配，相关 ioctl 处理函数在尝试访问 `csv_info.csv3_active` 字段时，会读取到非法内存地址或未初始化的数据，可能导致虚拟机运行异常或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `csv_init()` 函数中，变量 `ops->vm_size`（用于确定 KVM 虚拟机结构体的分配大小）被错误地放置在 `boot_cpu_has(X86_FEATURE_CSV3)` 的条件判断分支内。
+当 Hygon CPU 不支持 CSV3 特性时，`vm_size` 保持为 `sizeof(struct kvm_svm)`，导致分配的内存不足以容纳 `struct kvm_svm_csv` 结构体（该结构体包含 `kvm_svm` 和 `csv_info` 两个成员）。
+随后，当用户态调用 CSV3 相关的 ioctl 接口时，代码强制将结构体转换为 `struct kvm_svm_csv` 并尝试访问其 `csv_info` 成员，由于该部分内存未被实际分配，引发了非法内存访问。
+
+#解决方案
+将 `ops->vm_size = sizeof(struct kvm_svm_csv);` 语句移出 `if (boot_cpu_has(X86_FEATURE_SEV_ES) && boot_cpu_has(X86_FEATURE_CSV3))` 条件判断块，确保无论 CPU 是否支持 CSV3 特性，KVM 都会分配足够大的 `struct kvm_svm_csv` 结构体内存，从而避免访问越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf184b49004e899e7a04961cd705358b0b580d61

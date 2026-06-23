@@ -1,0 +1,22 @@
+#标题
+RDMA/siw: siw_tcp_sendpages 函数参数错误导致越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 MSG_SPLICE_PAGES 且 sendpage_ok() 返回 false 的场景下（例如涉及特定 slab 分配器的变化时），内核发生越界内存访问崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `siw_tcp_sendpages` 函数中，调用 `iov_iter_bvec` 和 `tcp_sendmsg_locked` 时，错误地使用了剩余总大小 `size` 作为参数，而非当前页面的实际字节数 `bytes`。这导致构造的 iov_iter 长度超出当前 bvec（页面片段）的实际范围。当数据传输路径进入非 MSG_SPLICE_PAGES 的拷贝分支时，`copy_from_iter` 会根据错误的 iter 长度进行拷贝，从而引发越界访问。
+
+#解决方案
+修正 `siw_tcp_sendpages` 函数中的参数传递错误：
+1. 将 `iov_iter_bvec` 的字节计数参数从 `size` 修正为 `bytes`，确保迭代器仅覆盖当前页面片段。
+2. 将 `tcp_sendmsg_locked` 的发送大小参数从 `size` 修正为 `bytes`，确保发送请求的字节数与迭代器一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d59e746dd631292d7bfd6c2c3a4645696f33817e

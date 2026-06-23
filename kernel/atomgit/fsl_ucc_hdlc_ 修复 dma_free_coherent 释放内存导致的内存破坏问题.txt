@@ -1,0 +1,20 @@
+#标题
+fsl_ucc_hdlc: 修复 dma_free_coherent 释放内存导致的内存破坏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 fsl_ucc_hdlc 驱动或设备初始化失败进行内存清理时，由于 DMA 内存释放逻辑错误，可能导致内核内存破坏。这会引发不可预期的内核崩溃或系统不稳定，具体表现为模块卸载过程中的 kernel oops 或内存相关错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在驱动初始化函数 `uhdlc_init()` 中，`priv->rx_buffer` 和 `priv->tx_buffer` 是作为连续的内存块一次性分配的。但在内存清理函数 `uhdlc_memclean()` 中，代码错误地试图将它们当作两个独立的缓冲区分别调用 `dma_free_coherent()` 进行释放。对同一块连续物理内存进行两次释放操作，破坏了内核 DMA 子系统的内存管理结构。
+
+#解决方案
+修改 `uhdlc_memclean()` 函数中的内存释放逻辑。不再分别释放 rx 和 tx 缓冲区，而是调用一次 `dma_free_coherent()` 释放整个连续缓冲区，传入的总大小修正为 `(RX_BD_RING_LEN + TX_BD_RING_LEN) * MAX_RX_BUF_LENGTH`，并同时清零 `tx_buffer` 和 `dma_tx_addr` 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c38a6ceb8f502a63ec24db8f8e1e32fd8ba1660b

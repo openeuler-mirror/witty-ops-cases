@@ -1,0 +1,24 @@
+#标题
+drm/msm: debugfs 操作致死锁潜在风险修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 debugfs 接口查看 MSM GPU GEM 对象信息（如调用 `msm_gem_describe`）时，针对 `_NO_SHARE` 类型的缓冲区，可能触发死锁。该死锁涉及 `msm_gem_vm_close()` 流程，导致系统挂起或相关进程处于不可中断的睡眠状态（D 状态）。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于锁获取顺序不一致导致的死锁（Lock Inversion）。
+在 `msm_gem_describe()` 函数中，代码试图在持有 `priv->obj_lock` 的情况下获取共享 VM 的 `reservation lock`（`resv`）。
+而在 `msm_gem_vm_close()` 流程中，可能发生相反的锁获取顺序：在持有 VM `reservation lock` 的情况下释放 GEM 对象的最后一个引用，进而触发 `msm_gem_free_object()`，该函数需要获取 `priv->obj_lock`。
+这就形成了一个典型的 ABBA 死锁场景：`obj_lock` -> `resv` 与 `resv` -> `obj_lock` 发生冲突。
+
+#解决方案
+将 `msm_gem_describe()` 函数中的锁获取方式从阻塞式锁定（`msm_gem_lock`）修改为尝试锁定（`msm_gem_trylock`）。
+若无法立即获取锁，函数直接返回跳过当前对象，不再等待。由于该接口仅用于 debugfs 统计展示，非核心功能，若因锁冲突跳过个别对象导致统计计数略微偏少（undercount），是可以接受的代价，从而以非阻塞方式彻底消除了死锁风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1226967e2eeb1f6bcf4d2ff71c3965b535fec5c3

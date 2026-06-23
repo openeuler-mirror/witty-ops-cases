@@ -1,0 +1,24 @@
+#标题
+urma在shared-ctp场景下查询主机EID失败导致连接建立异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 shared-CTP（共享CTP）场景下，当查询主机 EID（Host EID）信息失败时，URMA 模块错误地直接返回失败（-ENOENT），导致连接无法正常建立。这违背了设计预期：查询失败时应回退使用端口 EID（Port EID）以保证连接功能正常。
+
+#主要错误日志
+- "Failed to lookup host info in create req.\n"
+- "Failed to lookup host info in destroy req, ret=%d\n"
+- "Failed to lookup local host eid, ret=%d, local_port_eid=" EID_FMT "\n"
+- "Failed to lookup peer host eid, ret=%d, peer_port_eid=" EID_FMT "\n"
+- "Failed to lookup host info in isref_req, ret=%d\n"
+
+#问题根因
+函数 `ubcore_lookup_host_info_local_and_peer` 在查询主机信息失败时直接返回了错误码（-ENOENT），而调用方在接收到错误后立即中止了连接流程。实际上，在 shared-CTP 场景下，查询失败属于可接受的降级场景，应回退使用端口 EID 继续运行，而不是直接报错退出。
+
+#解决方案
+修改 `ubcore_lookup_host_info_local_and_peer` 函数的返回值类型为 void，移除错误码返回逻辑。在函数内部，当查询主机 EID 失败时，仅打印告警日志（`ubcore_log_warn_rl`），不再作为错误处理，允许后续流程继续执行，从而自动回退使用端口 EID 建立连接。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5e53cc1565dd73edc51e659d62621247ffc2e6b2

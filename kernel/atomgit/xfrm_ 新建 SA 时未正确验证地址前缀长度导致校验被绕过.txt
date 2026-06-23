@@ -1,0 +1,20 @@
+#标题
+xfrm: 新建 SA 时未正确验证地址前缀长度导致校验被绕过
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户创建安全联盟（SA）时，若指定 `sel.family` 为 AF_UNSPEC 并设置超出协议族范围的 `prefixlen_s`（例如在 IPv4 SA 上设置 128 位前缀），内核未能正确拦截该非法配置。这可能导致后续内核态使用该 SA 时出现异常行为或状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `verify_newsa_info` 函数中，地址前缀长度（`prefixlen_s/d`）的验证逻辑依赖于 `p->sel.family`。当用户态传入 `sel.family` 为 AF_UNSPEC 时，验证逻辑直接跳过（break），未对前缀长度进行限制。然而，后续 `copy_from_user_state` 函数会将 SA 的族（`x->sel.family`）设置为用户传入的 `p->family`（如 AF_INET）。这意味着验证阶段使用了错误的族信息（AF_UNSPEC），导致非法的前缀长度（如 IPv4 下设置 128 位前缀）通过了验证，而实际使用时却是按 IPv4 处理。
+
+#解决方案
+在 `verify_newsa_info` 函数中增加判断逻辑：如果选择器族（`sel.family`）未设置（为 AF_UNSPEC）且未指定 `XFRM_STATE_AF_UNSPEC` 标志，则将验证用的族变量设置为 SA 自身的族（`p->family`）。确保后续的前缀长度验证使用正确的协议族进行校验，从而拒绝非法的前缀配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e5444d24f368c90783012ab114dacb64832fa7d8

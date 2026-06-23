@@ -1,0 +1,20 @@
+#标题
+Bluetooth: btnxpuart驱动发送数据截断导致控制器挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行压力测试时，观察到明显的控制器挂起现象。主机发送了截断的payload数据，紧接着发送HCI命令。控制器错误地将后续的HCI命令识别为前一个截断payload的一部分，导致HCI命令无法被正确解析和处理，最终引发命令超时。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `btnxpuart_tx_work` 函数中调用 `serdev_device_write_buf` 发送数据后，未等待数据实际发送完成就继续处理。这导致在连续发送数据或命令时，主机发送了截断的payload，随后发送的HCI命令在控制器端被误认为是前一个未完成payload的一部分，导致控制器状态错乱和命令超时。
+
+#解决方案
+在 `serdev_device_write_buf` 调用之后，增加 `serdev_device_wait_until_sent` 函数调用。该修改确保每次写入缓冲区的数据都能完全发送完毕后，再进行后续处理，从而避免发送截断数据和命令混淆的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/37c10e5aaa656cee6ce70cc62b14928ed4ca983f

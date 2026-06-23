@@ -1,0 +1,26 @@
+#标题
+net: ipa: v4.7 资源组名称定义错误导致配置不匹配
+
+#内核版本
+OLK-6.6
+
+#问题现象
+IPA v4.7 驱动在初始化或运行过程中，因资源组枚举定义与硬件实际定义不一致，导致资源分配配置错误。具体表现为下行资源组使用了错误的命名后缀（_DPL），且存在多余的枚举值，可能导致资源限制配置失效或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 IPA v4.7 的数据定义代码中，枚举 `ipa_rsrc_group_id` 的定义有误：
+1. 源资源组中错误地定义了 `IPA_RSRC_GROUP_SRC_UC_RX_Q`，而实际上该版本只有一个组。
+2. 目的资源组名称被错误定义为 `IPA_RSRC_GROUP_DST_UL_DL_DPL`（带有 _DPL 后缀），但根据硬件规范，正确的名称应为 `IPA_RSRC_GROUP_DST_UL_DL`。
+这导致驱动代码中的资源组 ID 与硬件资源组映射不一致。
+
+#解决方案
+修改 `drivers/net/ipa/data/ipa_data-v4.7.c` 文件：
+1. 删除源资源组中多余的 `IPA_RSRC_GROUP_SRC_UC_RX_Q` 定义。
+2. 将目的资源组枚举名称 `IPA_RSRC_GROUP_DST_UL_DL_DPL` 修正为 `IPA_RSRC_GROUP_DST_UL_DL`。
+3. 同步更新所有引用该资源组名称的地方，包括端点配置（`ipa_gsi_endpoint_data`）和资源限制配置（`ipa_resource_dst`），确保 `resource_group` 字段和 `limits` 索引使用正确的枚举值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/04e6348ecb63d67397d4e3a9508c0507a64d4b74

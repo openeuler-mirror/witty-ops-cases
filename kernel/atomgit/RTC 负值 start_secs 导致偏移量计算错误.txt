@@ -1,0 +1,20 @@
+#标题
+RTC 负值 start_secs 导致偏移量计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 RTC 设备的 `start_secs` 属性为负数时，内核在进行范围判断时因符号类型转换问题，错误地判定该负值大于无符号的 `range_max`，导致 `offset_secs` 计算逻辑进入错误分支，最终导致 RTC 时间范围偏移量计算不正确。该问题主要影响使用 `rtc-mt6397` 驱动的设备。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中的比较操作 `rtc->start_secs > rtc->range_max` 存在类型不匹配问题。`start_secs` 为有符号类型，而 `range_max` 为无符号类型。根据 C 语言整型提升规则，当 `start_secs` 为负数时，会被隐式转换为一个极大的无符号正数，导致比较结果意外为真，从而触发了错误的偏移量计算逻辑。
+
+#解决方案
+修改 `drivers/rtc/class.c` 中的判断条件，在比较前增加对 `start_secs` 的符号检查。将原判断语句修改为 `if ((rtc->start_secs >= 0 && rtc->start_secs > rtc->range_max) || ...)`，确保只有当 `start_secs` 为非负数且确实大于 `range_max` 时，逻辑才成立，从而正确处理负值情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e610c8a1b604540be1baf6961b12d98da5ac9d27

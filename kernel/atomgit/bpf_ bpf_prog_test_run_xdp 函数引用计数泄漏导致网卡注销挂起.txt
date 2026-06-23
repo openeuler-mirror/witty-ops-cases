@@ -1,0 +1,21 @@
+#标题
+bpf: bpf_prog_test_run_xdp 函数引用计数泄漏导致网卡注销挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 BPF 程序测试（bpf_prog_test_run_xdp）并触发特定错误路径时，导致网络设备引用计数未释放。系统在尝试注销网络设备（如 sit0）时陷入无限等待，持续打印 "unregister_netdevice: waiting for sit0 to become free. Usage count = 2" 警告信息，导致设备无法正常卸载。
+
+#主要错误日志
+unregister_netdevice: waiting for sit0 to become free. Usage count = 2
+
+#问题根因
+根据代码分析，在 commit 1c1949982524 ("bpf: introduce frags support to bpf_prog_test_run_xdp()") 引入 frags 支持时，遗漏了错误处理路径的清理工作。
+具体原因为：函数 `bpf_prog_test_run_xdp` 调用 `xdp_convert_md_to_buff()` 获取了网络设备的引用计数（refcount）。按照设计，该引用计数应由 `xdp_convert_buff_to_md()` 释放。然而，当程序在处理 frags 分片过程中遇到错误（如 `MAX_SKB_FRAGS` 达到上限、页面分配失败或用户空间数据拷贝失败）时，代码直接跳转至 `out` 标签返回，跳过了 `xdp_convert_buff_to_md()` 的调用，导致该网络设备的引用计数发生泄漏。
+
+#解决方案
+修改 `net/bpf/test_run.c` 文件中的错误处理跳转逻辑。将处理 frags 分片时的三个错误处理场景（`MAX_SKB_FRAGS` 检查失败、`alloc_page` 失败、`copy_from_user` 失败）的跳转目标从 `out` 修改为 `out_put_dev`。这确保了在发生错误退出前，能够正确执行 `xdp_convert_buff_to_md()` 函数，从而释放持有的网络设备引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c98aec60aff26f340706a1425e6c2fffc02196c6

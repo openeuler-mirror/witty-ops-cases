@@ -1,0 +1,20 @@
+#标题
+hct: 执行 madvise 导致 VMA 划分引起的 vm_start 计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `madvise` 系统调用时，如果连续的 VMA（虚拟内存区域）被划分为多个部分，会导致驱动在处理后续缺页中断时计算页面索引出错，进而引发内存访问异常或功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+当用户进程对驱动的 mmap 区域执行 `madvise` 操作时，内核可能会将原本连续的 VMA 区域分割成若干个小块。驱动原有的缺页处理函数 `hct_cdev_vma_fault` 直接从当前的 `vm_area_struct` 指针获取 `vm_start` 来计算页偏移。由于 VMA 被分割，此时获取的 `vm_start` 可能已经不是映射时的起始地址，导致计算出的 `pgoff`（页面索引）错误，无法正确映射到预期的物理页。
+
+#解决方案
+在驱动的私有数据结构 `hct_private` 中新增 `vm_start` 字段，在 `mmap` 阶段记录初始的虚拟内存起始地址。修改缺页处理函数 `hct_cdev_vma_fault`，不再依赖可能变化的 `vma->vm_start`，而是使用保存的 `private->vm_start` 来计算页面索引，确保即使 VMA 被分割也能正确计算偏移量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc2457f0de2abf6e1fede9f287c186be17766fd8

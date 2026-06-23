@@ -1,0 +1,29 @@
+#标题
+ftrace与livepatch并发导致BPF fexit程序无法挂载
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当对同一函数同时使用 livepatch 和 BPF fexit 程序时，BPF trampoline 在调用 `register_ftrace_direct()` 时失败。第一次调用返回 `-EAGAIN`，第二次调用虽然成功但未能正确清理前一次失败留下的状态，导致 BPF trampoline 最终无法挂载。
+复现步骤如下：
+1. 加载 livepatch 模块：`insmod samples/livepatch/livepatch-sample.ko`
+2. 使用 bpftrace 挂载 fexit 探针：`bpftrace -e 'fexit:cmdline_proc_show {}'`
+3. 命令执行失败，报错：`ERROR: Unable to attach probe: fexit:vmlinux:cmdline_proc_show...`
+
+#主要错误日志
+ERROR: Unable to attach probe: fexit:vmlinux:cmdline_proc_show...
+
+#问题根因
+当 livepatch 依附于某个函数，且该函数同时被带有 fexit 程序的 BPF trampoline 挂载时，BPF trampoline 代码会调用 `register_ftrace_direct()`。在此过程中，该函数会被调用两次：第一次调用失败并返回 `-EAGAIN`，第二次调用成功。
+根本原因在于：在第一次调用失败（`-EAGAIN`）后，代码逻辑未对 `ftrace_hash` 以及 `ops->func`、`ops->trampoline` 进行清理。残留的状态数据导致后续的 BPF trampoline 无法正确执行 attach 操作。该问题由提交 d05cb470663a ("ftrace: Fix modification of direct_function hash while in use") 引入。
+
+#解决方案
+在 `register_ftrace_direct()` 函数中增加错误处理逻辑。当 `register_ftrace_function_nolock(ops)` 调用失败时，立即调用新增的辅助函数 `reset_direct()` 清理现场。
+`reset_direct()` 函数负责执行两项清理操作：
+1. 调用 `remove_direct_functions_hash()` 从 hash 表中移除对应的地址。
+2. 重置 `ops->func` 为 NULL，重置 `ops->trampoline` 为 0。
+同时，将原本位于 `unregister_ftrace_direct()` 中的清理逻辑也统一迁移至 `reset_direct()` 函数中，以保证代码逻辑的一致性和复用性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c6ef788c2ca68fb7cefbdc77219c3d089012db4d

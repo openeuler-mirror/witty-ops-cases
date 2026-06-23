@@ -1,0 +1,24 @@
+#标题
+spi: tegra114: fix controller deregistration
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Tegra114 SPI 控制器驱动卸载（unbind/remove）过程中，内核可能发生崩溃或出现不可预测的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 probe 阶段使用了 devm_spi_register_master() 进行注册，该函数是资源托管版本。在驱动 remove 时，内核自动释放资源的顺序导致 SPI 控制器在底层的 clocks 等资源被禁用之后才被注销。这导致控制器子系统访问已被禁用的资源，引发 use-after-free 或内核崩溃。
+
+#解决方案
+将 SPI 控制器的注册方式从托管模式改为手动管理模式，以严格控制注销顺序。
+1. 将 `probe` 函数中的 `devm_spi_register_master()` 替换为 `spi_register_master()`。
+2. 在 `remove` 函数中，显式调用 `spi_master_get` 增加引用计数。
+3. 在释放中断、DMA 通道、禁用时钟等底层资源之前，先调用 `spi_unregister_master` 注销控制器。
+4. 最后调用 `spi_master_put` 减少引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/afff63fe00ddd91d924eee5b35f1811907b31c4f

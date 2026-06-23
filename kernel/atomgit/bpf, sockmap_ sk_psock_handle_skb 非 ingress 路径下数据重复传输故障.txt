@@ -1,0 +1,24 @@
+#标题
+bpf, sockmap: sk_psock_handle_skb 非 ingress 路径下数据重复传输故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BPF sockmap 场景下，当通过 sk_psock_handle_skb() 发送数据且受 snd_buf 限制发生部分发送时，重试路径逻辑存在缺陷。系统在重试时会重新发送整个 skb 数据，而不是从之前记录的偏移量继续发送，导致接收端收到重复的数据。
+
+#主要错误日志
+未知
+
+#问题根因
+在 sk_psock_backlog() 处理过程中，state->len 状态检查的位置放置不当。
+原代码在 while 循环开始处获取新 skb 之前检查了 state->len，但在获取新 skb 后，len 和 off 变量会被 skb->len 和 0 覆盖重置，导致之前保存的部分发送状态丢失。
+这导致重试逻辑无法正确消费之前保留的偏移量和长度状态，进而重发了完整的数据包。
+
+#解决方案
+调整 sk_psock_backlog() 函数中的逻辑顺序：
+1. 将 state->len 的状态检查逻辑移动到 skb 状态初始化之后，确保在处理新 skb 或恢复部分发送状态时，优先使用 state 中保存的 off 和 len 值。
+2. 在 skb 发送完成并出队后，显式调用 sk_psock_skb_state() 清空 state 状态，防止状态残留影响后续处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6bbc139371077d84dd657e069c0b9e7e241dac08

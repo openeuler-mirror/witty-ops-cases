@@ -1,0 +1,20 @@
+#标题
+timer-ti-dm: child node refcount handling bug
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 dra7 timer wrap errata i940 时，由于未正确释放设备树节点的引用计数，导致内存资源泄漏。
+
+#主要错误日志
+pr_warn_once("ARM architected timer wrap issue i940 detected\n");
+
+#问题根因
+在函数 `dmtimer_percpu_quirk_init` 中调用 `of_find_compatible_node()` 查找 "arm,armv7-timer" 节点时，该函数会增加节点的引用计数。代码后续逻辑未在所有执行路径（包括 `of_device_is_available` 判断后的路径）中调用 `of_node_put()` 将引用计数递减，导致节点引用计数泄漏，造成内存资源泄露。
+
+#解决方案
+通过引入 `__free(device_node)` 清理属性自动管理设备节点引用计数。将局部变量 `arm_timer` 声明为 `struct device_node *arm_timer __free(device_node)`，当变量超出作用域时，编译器会自动调用 `of_node_put()` 释放引用，从而确保资源被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fe503741e0976c0d1e2751741f7638da7cfc68cf

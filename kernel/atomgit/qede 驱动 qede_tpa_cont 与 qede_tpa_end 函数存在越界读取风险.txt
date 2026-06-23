@@ -1,0 +1,20 @@
+#标题
+qede 驱动 qede_tpa_cont 与 qede_tpa_end 函数存在越界读取风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 QLogic qede 网卡驱动的高效 GRO（Generic Receive Offload）数据包聚合时，若硬件提供的 CQE（Completion Queue Entry）数据结构中 `len_list[]` 数组缺失零长度结束符或数据异常 malformed，驱动程序中的循环将无法正常终止，导致越界读取内存。该缺陷可被触发导致内核内存数据泄露、系统崩溃或潜在的权限提升。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序中的 `qede_tpa_cont()` 和 `qede_tpa_end()` 函数在遍历 `cqe->len_list[]` 数组时，仅依赖零长度结束符作为循环终止条件（`for (i = 0; cqe->len_list[i]; i++)`）。如果硬件传来的数据中缺少该结束符，循环将越过固定大小数组的边界继续访问内存。
+
+#解决方案
+在 `qede_tpa_cont()` 和 `qede_tpa_end()` 函数的循环条件中增加显式的边界检查。使用 `ARRAY_SIZE()` 宏限制循环索引 `i` 不超过 `len_list` 数组的大小，防止潜在的越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/96a2d4fbf99720078fbc840152933fd68050ae88

@@ -1,0 +1,29 @@
+#标题
+bcache: 注册时内存分配失败导致 cache_set_flush 空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在注册 bcache 设备过程中，若内存分配失败，系统触发空指针解引用导致内核崩溃。具体表现为：
+1. 内核日志显示 "cannot allocate memory" 错误。
+2. 随后触发 "BUG: unable to handle kernel NULL pointer dereference"。
+3. Oops 信息指向 `cache_set_flush` 函数，调用栈显示在 workqueue 处理过程中崩溃。
+
+#主要错误日志
+[  846.713242] bcache: register_bcache() error : failed to register device
+[  846.713768] BUG: unable to handle kernel NULL pointer dereference at 00000000000009f8
+[  846.715472] CPU: 19 PID: 5057 Comm: kworker/19:16 Kdump: loaded Tainted: G           OE    --------- -  - 4.18.0-147.5.1.el8_1.5es.3.x86_64 #1
+[  846.716451] Workqueue: events cache_set_flush [bcache]
+[  846.717155] RIP: 0010:cache_set_flush+0xc9/0x1b0 [bcache]
+
+#问题根因
+在 `bch_cache_set_alloc` 函数中，当内存分配失败（如 LINE#1860-1874 检查失败）时，代码跳转到 `err` 标签并调用 `bch_cache_set_unregister` 进行清理。
+由于分配失败，`register_cache_set` 函数中的 `ca->set` 和 `c->cache[]` 赋值操作并未执行，导致 `c->cache[]` 为 NULL。
+清理流程调用 `cache_set_flush` 时，宏 `for_each_cache` 遍历 `c->cache[]` 得到一个 NULL 指针 `ca`。代码未对 `ca` 进行 NULL 检查直接访问 `ca->alloc_thread`，从而触发空指针解引用崩溃。
+
+#解决方案
+在 `cache_set_flush` 函数中访问 `ca->alloc_thread` 之前增加对 `ca` 指针的 NULL 检查。确保在清理流程中，若缓存设备结构体指针未初始化（为 NULL），则跳过对该成员的访问，避免内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cc88c9d67bdfaa115edd26276d8b9ab192ebd851

@@ -1,0 +1,25 @@
+#标题
+ibmvnic 统计计数定义未随结构体更新导致统计信息显示不全
+
+#内核版本
+OLK-6.6
+
+#问题现象
+由于统计数组大小定义（NUM_TX_STATS/NUM_RX_STATS）与实际结构体字段数量不一致，导致内核在处理 ibmvnic 网卡统计信息时发生数组越界或索引错误。用户通过 ethtool 等工具查看网卡统计信息时，会出现统计信息上报不完整、部分新增统计项（如 tx direct/batched）丢失或数据错误的现象。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中 `NUM_TX_STATS` 和 `NUM_RX_STATS` 宏定义为硬编码的常量值（分别为 3），而对应的 `ibmvnic_{rx,tx}_queue_stats` 结构体在后续演进中新增了字段（如 commit 2ee73c54a615 新增了第四个 TX 统计字段 `dropped_packets`），但宏定义值未同步更新。这导致统计数组的大小基于错误的计数（3 而非 4）进行分配和遍历，造成了统计数组大小与结构体实际大小不匹配，从而引发统计信息索引错误和数据上报不全。
+
+#解决方案
+移除硬编码的常量定义，改为使用 `sizeof` 运算符动态计算结构体中的字段数量。具体修改如下：
+1. 删除原有的 `#define NUM_TX_STATS 3` 和 `#define NUM_RX_STATS 3` 定义。
+2. 新增基于结构体大小的计算宏：
+   `#define NUM_TX_STATS (sizeof(struct ibmvnic_tx_queue_stats) / sizeof(u64))`
+   `#define NUM_RX_STATS (sizeof(struct ibmvnic_rx_queue_stats) / sizeof(u64))`
+该修复确保了当结构体新增字段时，统计计数能自动更新，保证统计数组大小始终与结构体一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae69d981aad6c5fc182a80526dc91a6f6e8476ac

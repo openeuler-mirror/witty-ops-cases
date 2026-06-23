@@ -1,0 +1,24 @@
+#标题
+padata 子系统 parallel_data 结构体 UAF（Use-After-Free）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在运行 padata 相关任务时，由于并发控制缺陷，可能导致 `parallel_data` 结构体在被访问时已被释放，引发内核崩溃或数据竞争。该问题属于 UAF（释放后使用）类型的内存安全故障。
+
+#主要错误日志
+未知
+
+#问题根因
+在原有的实现中，`padata_reorder` 函数试图通过 `pd->lock` 自旋锁和 `smp_mb` 内存屏障来同步对 `parallel_data`（pd）的访问。然而，这种锁定机制无法完全防止并发场景下的竞态条件。具体而言，当一个上下文（如 `padata_serial_worker`）尝试处理重排序队列时，另一个上下文可能已经释放或正在释放 `pd` 结构体，导致 UAF 问题。原有的 `pd->lock` 无法提供足够的保护来确保在访问 pd 成员时 pd 对象仍然有效。
+
+#解决方案
+彻底重构 `padata_reorder` 的并发控制机制，移除有缺陷的 `pd->lock` 和 `reorder_work` 机制。新的实现改变了重排序的逻辑流向：
+1. 删除 `struct parallel_data` 中的 `lock` 和 `reorder_work` 字段。
+2. 将 `padata_reorder` 的调用时机调整为仅在 `padata_do_serial` 中发现当前任务正是下一个需要处理的序列号时直接调用，避免了原有机制中复杂的异步工作队列调度。
+3. 新的逻辑通过直接处理和队列传递的方式，消除了原有锁竞争导致的 UAF 风险，确保了 pd 对象在访问期间的有效性。
+4. 移除了 `padata_free_shell` 中不必要的 `synchronize_rcu` 调用，因为新的实现不再依赖该同步点来防止 UAF。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/212778cefe9df205f6ff81a220247a6abc0c7e50

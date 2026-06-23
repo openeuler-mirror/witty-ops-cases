@@ -1,0 +1,20 @@
+#标题
+media: dvb-frontends: w7090p 空指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `w7090p_tuner_write_serpar` 和 `w7090p_tuner_read_serpar` 函数时，若用户空间传入的 `msg[0].buf` 为空指针且 `msg[0].len` 为 0，现有检查逻辑会通过，导致后续代码直接访问 `msg[0].buf[2]` 或 `msg[0].buf[0]` 时触发空指针解引用，进而引发内核 panic 或 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+`msg` 结构体由用户空间控制。在原代码逻辑中，仅检查了 `msg[0].buf` 指针本身，未校验 `msg[0].len` 的长度。当 `msg[0].buf` 为 NULL 且 `msg[0].len` 为 0 时，指针检查通过，代码继续执行并尝试访问缓冲区内的数据（如 `msg[0].buf[2]`），从而触发空指针解引用漏洞（CVE-2025-38693）。
+
+#解决方案
+在 `w7090p_tuner_write_serpar` 函数中增加长度校验：若 `msg[0].len < 3` 则直接返回 `-EOPNOTSUPP`；在 `w7090p_tuner_read_serpar` 函数中增加长度校验：若 `msg[0].len < 1` 或 `msg[1].len < 2` 则直接返回 `-EOPNOTSUPP`。通过在访问缓冲区数据前校验长度，防止越界或空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fdc9dd1bd02d76b007939e04334be716a9f5826f

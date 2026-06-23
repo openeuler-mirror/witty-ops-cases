@@ -1,0 +1,23 @@
+#标题
+ath11k: 修复监控模式目的环形缓冲区并发访问导致的竞态故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ath11k 无线网卡驱动处理监控模式下的接收数据时，由于缺少对目的环形缓冲区的锁保护，在多核并发访问或中断上下文竞争场景下，可能导致内核崩溃、内存数据损坏或数据包处理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ath11k_dp_rx_mon_dest_process` 和 `ath11k_dp_full_mon_process_rx` 函数中，操作 `mon_dst_srng` 指向的环形缓冲区前，未获取对应的自旋锁 `mon_dst_srng->lock`。这导致对该共享资源的访问未被保护，引发了竞态条件。
+
+#解决方案
+在访问目的环形缓冲区前后，显式添加自旋锁的获取与释放操作：
+1. 在 `ath11k_dp_rx_mon_dest_process` 函数中，于 `ath11k_hal_srng_access_begin` 调用前加锁 `spin_lock_bh(&mon_dst_srng->lock)`，于 `ath11k_hal_srng_access_end` 调用后解锁 `spin_unlock_bh(&mon_dst_srng->lock)`。
+2. 在 `ath11k_dp_full_mon_process_rx` 函数中，同样在访问环形缓冲区前加锁，访问结束后解锁。
+3. 同时修正了 `mon_dst_srng` 的变量类型声明，由 `void *` 更正为 `struct hal_srng *`，以正确引用其锁成员。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eb9199c3e2adc5c730ef30337cf0bdd78ed6f31a

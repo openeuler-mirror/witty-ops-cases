@@ -1,0 +1,28 @@
+#标题
+tun: tun_napi_alloc_frags 函数导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统触发 kernel BUG 并导致 Oops，具体表现为在 `__pskb_pull_tail` 函数中触发 invalid opcode 错误，系统调用栈显示与 tun 设备的写入操作 (`tun_chr_write_iter`) 及后续的网络包处理流程相关。该问题由 syzbot 发现。
+
+#主要错误日志
+kernel BUG at net/core/skbuff.c:2849 !
+Oops: invalid opcode: 0000 [#1] PREEMPT SMP KASAN PTI
+RIP: 0010:__pskb_pull_tail+0x1568/0x1570 net/core/skbuff.c:2848
+Call Trace:
+ skb_cow_data+0x2da/0xcb0 net/core/skbuff.c:5284
+ tipc_aead_decrypt net/tipc/crypto.c:894 [inline]
+ ...
+ tun_get_user+0x2ea0/0x4890 drivers/net/tun.c:1982
+ tun_chr_write_iter+0x10d/0x1f0 drivers/net/tun.c:2057
+
+#问题根因
+在 `tun_napi_alloc_frags` 函数中，遍历 `iovec` 段的循环逻辑存在错误。原代码在每次循环迭代中均获取第一个 `iovec` 指针 (`iter_iov(it)`)，而不是获取当前索引对应的 `iovec` 指针。这导致代码重复处理第一个段而忽略后续段，最终生成了格式错误的 skb（malformed skb），进而引发内核 BUG。
+
+#解决方案
+修改 `tun_napi_alloc_frags` 函数中的循环逻辑，在获取 `iovec` 指针时加上循环变量 `i`，确保每次循环正确索引到对应的 `iovec` 结构。代码变更为：`const struct iovec *iov = iter_iov(it) + i;`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8cc8b938b4a517ab973db5d134b294940b5e94be

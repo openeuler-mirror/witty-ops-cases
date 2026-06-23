@@ -1,0 +1,29 @@
+#标题
+usbip: RT内核下spinlock与中断禁用冲突导致睡眠函数调用异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 PREEMPT_RT（实时抢占）内核配置的场景下，USB IP（vhci_hcd）模块处理 URB 提交时触发内核合法性检查告警。系统检测到在无效上下文中调用了睡眠函数，导致调用栈转储。
+
+#主要错误日志
+BUG: sleeping function called from invalid context at kernel/locking/spinlock_rt.c:48
+Call Trace:
+ dump_stack_lvl+0x189/0x250 lib/dump_stack.c:120
+ rt_spin_lock+0xc7/0x2c0 kernel/locking/spinlock_rt.c:57
+ spin_lock include/linux/spinlock_rt.h:44 [inline]
+ mon_bus_complete drivers/usb/mon/mon_main.c:134 [inline]
+ mon_complete+0x5c/0x200 drivers/usb/mon/mon_main.c:147
+ usbmon_urb_complete include/linux/usb/hcd.h:738 [inline]
+ __usb_hcd_giveback_urb+0x254/0x5e0 drivers/usb/core/hcd.c:1647
+ vhci_urb_enqueue+0xb4f/0xe70 drivers/usb/usbip/vhci_hcd.c:818
+
+#问题根因
+在 PREEMPT_RT 内核中，spinlock_t 被转换为可睡眠的锁。原代码逻辑在调用 `usb_hcd_giveback_urb()` 前后，通过 `local_irq_disable()` 和 `local_irq_enable()` 手动禁用和开启中断，试图满足该函数的中断禁用要求。然而，在函数调用路径内部（如 mon_complete），代码尝试再次获取 `spinlock_t`。由于此时中断已被禁用且锁已变为可睡眠锁，导致了 "在无效上下文调用睡眠函数" 的冲突。
+
+#解决方案
+调整锁与中断的控制范围。不再手动禁用中断，而是通过提前释放 spinlock、调用 `usb_hcd_giveback_urb` 后再重新获取 spinlock 的方式，避免在持有可睡眠锁或禁用中断的情况下进入可能引发调度的代码路径，从而符合 RT 内核的同步约束。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3b276f69fe59087444f5113292fccfda0ee96d63

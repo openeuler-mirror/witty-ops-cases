@@ -1,0 +1,20 @@
+#标题
+enetc驱动TSO发送缓冲区映射存在差一错误导致内存释放异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ENETC 驱动进行软件 TSO（TCP Segmentation Offload）发送时，若 `enetc_map_tx_tso_data` 映射失败，错误处理路径 `err_chained_bd` 会错误地多释放一个 `tx_swbd` 结构。这会导致释放了不应释放的描述符，可能引发内存损坏、内核崩溃或后续网络发送队列异常。
+
+#主要错误日志
+dev_err(tx_ring->dev, "DMA map error");
+
+#问题根因
+在 `enetc_map_tx_tso_buffs` 函数中，`err_chained_bd` 标签处的错误处理逻辑存在差一错误。原代码在循环释放已分配的缓冲区时，逻辑处理不当导致释放次数比预期多一次，即释放了不属于当前帧的描述符。相比之下，`err_map_data` 路径不存在此问题，两处错误处理逻辑不一致。
+
+#解决方案
+重构错误处理逻辑以修复差一错误并统一处理方式。当 `enetc_map_tx_tso_data` 映射失败时，修正计数器 `i` 的回退逻辑（处理 `i` 为 0 时的边界情况），并将 `err_chained_bd` 标签处的自定义释放循环替换为统一的 `enetc_unwind_tx_frame` 函数调用，确保只释放当前帧正确数量的缓冲区。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/80dcfb7e65ba0c26952d1ac3ba799da73eccb850

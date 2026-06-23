@@ -1,0 +1,23 @@
+#标题
+SPE boost 功能未按预期启用及续跑处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在未传递 `enable_mm_spe_boost` 内核启动参数的情况下，只要硬件支持，SPE boost 功能便被错误地启用，违反了显式 opt-in 设计原则，可能导致非预期的性能影响。
+2. 在 SPE 采样续跑（continuation）场景下，SPE boost 功能寄存器未被正确重置或配置，导致功能状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 代码逻辑缺少对启动参数 `enable_mm_spe_boost` 的检查：在 `mm_spe_start` 和 `mm_spe_sample_para_init` 函数中，仅判断了硬件是否支持（`spe->support_boost_spe`），未结合用户配置参数（`mm_spe_boost_enable`）进行综合判断，导致功能被意外启用。
+2. 续跑逻辑缺失：`mm_spe_continue` 函数中缺少对 SPE boost 寄存器（SYS_OMHTPG_EL1）的重新配置逻辑，导致续跑时功能状态未正确维持或重置。
+
+#解决方案
+1. 增加 cmdline 参数校验：在 `mm_spe_start` 和 `mm_spe_sample_para_init` 函数的条件判断中，增加 `&& mm_spe_boost_enable` 条件，确保仅在用户通过启动参数显式开启时才启用 SPE boost 功能。
+2. 补全续跑逻辑：在 `mm_spe_continue` 函数中增加判断逻辑，若硬件支持且参数已开启，则重新写入 SYS_OMHTPG_EL1 寄存器，确保续跑场景下功能寄存器被正确配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b7da8b02ced3ed99161250398593b202561bf05

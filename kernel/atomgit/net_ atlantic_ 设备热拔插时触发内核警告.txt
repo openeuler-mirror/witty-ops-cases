@@ -1,0 +1,40 @@
+#标题
+net: atlantic: 设备热拔插时触发内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 AQC113 网卡（如通过 Thunderbolt 连接）进行 iperf 流量传输的过程中执行热拔插操作时，内核触发 WARNING 警告。调用栈显示警告发生在 `aq_a2_fw_deinit` 函数中，触发路径为 `unregister_netdev` -> `aq_pci_remove`。
+
+#主要错误日志
+[  104.595913] Call Trace:
+[  104.595915]  <TASK>
+[  104.595918]  ? show_regs+0x6c/0x80
+[  104.595923]  ? __warn+0x8d/0x150
+[  104.595925]  ? aq_a2_fw_deinit+0xcf/0xe0 [atlantic]
+[  104.595934]  ? report_bug+0x182/0x1b0
+[  104.595938]  ? handle_bug+0x6e/0xb0
+[  104.595940]  ? exc_invalid_op+0x18/0x80
+[  104.595942]  ? asm_exc_invalid_op+0x1b/0x20
+[  104.595944]  ? aq_a2_fw_deinit+0xcf/0xe0 [atlantic]
+[  104.595952]  ? aq_a2_fw_deinit+0xcf/0xe0 [atlantic]
+[  104.595959]  aq_nic_deinit.part.0+0xbd/0xf0 [atlantic]
+[  104.595964]  aq_nic_deinit+0x17/0x30 [atlantic]
+[  104.595970]  aq_ndev_close+0x2b/0x40 [atlantic]
+[  104.595975]  __dev_close_many+0xad/0x160
+[  104.595978]  dev_close_many+0x99/0x170
+[  104.595979]  unregister_netdevice_many_notify+0x18b/0xb20
+[  104.595981]  ? __call_rcu_common+0xcd/0x700
+[  104.595984]  unregister_netdevice_queue+0xc6/0x110
+[  104.595986]  unregister_netdev+0x1c/0x30
+[  104.595988]  aq_pci_remove+0xb1/0xc0 [atlantic]
+
+#问题根因
+在设备热拔插后，驱动程序执行去初始化流程（`aq_nic_deinit`）时，未检查 PCI 设备是否仍然存在。固件去初始化（`aq_a2_fw_deinit`）执行了不必要的 MMIO 访问，由于设备已移除，`readx_poll_timeout_atomic` 超时导致触发 WARNING。
+
+#解决方案
+在 `aq_nic_deinit` 函数中调用固件去初始化之前，增加 `pci_device_is_present` 检查。如果 PCI 设备已不存在，则跳过固件去初始化操作，从而避免对已移除设备进行 MMIO 访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a50fe85ca533caa03a7e9357339f3bbc0fe05c3e

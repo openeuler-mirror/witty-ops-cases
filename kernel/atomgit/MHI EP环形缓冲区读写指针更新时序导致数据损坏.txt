@@ -1,0 +1,20 @@
+#标题
+MHI EP环形缓冲区读写指针更新时序导致数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在MHI（Mobile High-Definition Interface）EP（Endpoint）驱动进行环形缓冲区管理时，由于读指针（rd_offset）在数据实际写入缓冲区之前就被更新，导致Host端可能读取到未初始化或不完整的数据元素，进而引发数据损坏。此问题在高并发或竞态条件下尤为明显。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `mhi_ep_ring_add_element` 中，代码逻辑先调用了 `mhi_ep_ring_inc_index(ring)` 增加了读指针偏移量，然后才执行 `mhi_cntrl->write_sync` 将数据写入缓冲区。这种顺序导致了时间窗口，Host端可能在此窗口期内看到已更新的读指针，但对应的缓冲区内存区域尚未完成数据写入，从而访问到了无效数据。
+
+#解决方案
+调整代码执行顺序，确保数据写入操作完成后再更新读指针。具体修改为：先执行 `mhi_cntrl->write_sync` 将元素写入缓冲区，待写入成功后，再调用 `mhi_ep_ring_inc_index(ring)` 更新读指针偏移量，最后更新环形上下文中的 rp 指针，从而消除竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/88717ad659f2b82830d5279e2f0e989a995876e1

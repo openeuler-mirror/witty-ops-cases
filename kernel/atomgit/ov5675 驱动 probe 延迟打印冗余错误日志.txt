@@ -1,0 +1,20 @@
+#标题
+ov5675 驱动 probe 延迟打印冗余错误日志
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动或设备加载过程中，ov5675 摄像头传感器驱动在 probe 阶段遇到资源暂时不可用（如 regulator 或 clock 未就绪）触发延迟探测时，内核日志中会打印错误级别的日志信息，对用户造成误导，干扰正常的故障排查。
+
+#主要错误日志
+ov5675 24-0010: failed to get HW configuration: -517
+
+#问题根因
+在 `ov5675_probe` 函数中，调用 `ov5675_get_hwconfig` 获取硬件配置失败时，代码无条件地调用了 `dev_err` 打印错误日志。当返回值为 `-517` (EPROBE_DEFER) 时，这属于正常的探测延迟行为，不应作为错误记录。此时打印错误日志属于冗余信息，会导致内核日志被无效的错误信息刷屏或误导开发者。
+
+#解决方案
+修改 `ov5675_probe` 函数，移除 `ov5675_get_hwconfig` 调用失败时的 `dev_err` 打印代码。改为直接返回错误码，让内核核心层处理 probe deferral 逻辑（其他如 clock 和 regulator 的查找错误已在底层使用 `dev_err_probe` 正确处理），从而消除无效的错误日志输出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/95c9495bb3e74654fae7f66b44ac31d8fa64b125

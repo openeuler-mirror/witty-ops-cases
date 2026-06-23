@@ -1,0 +1,27 @@
+#标题
+usb: ehci-hcd: 修复时钟处理例程的调用平衡问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ehci_hcd_sh_probe 探测过程中，若时钟启用（clk_enable）失败或后续步骤出错，驱动未正确清理已启用的时钟资源，导致时钟引用计数不平衡。这会导致驱动加载失败后资源泄漏，或影响相关时钟控制器的状态管理。
+
+#主要错误日志
+未知
+
+#问题根因
+在原有的代码逻辑中：
+1. `clk_enable(priv->fclk)` 和 `clk_enable(priv->iclk)` 的返回值未被检查，若启用失败（返回非0），代码继续执行后续逻辑。
+2. 如果 `clk_enable` 成功但在后续 `usb_add_hcd` 失败时，错误处理路径 `fail_add_hcd` 仅禁用了 `iclk`，遗漏了禁用 `fclk`。
+这违反了资源管理的平衡原则：如果时钟未成功启用，不应在错误路径中禁用；如果已成功启用，必须在所有错误路径中禁用。
+
+#解决方案
+修改 `drivers/usb/host/ehci-sh.c` 中的 `ehci_hcd_sh_probe` 函数：
+1. 增加 `clk_enable` 返回值的检查逻辑。
+2. 若 `fclk` 启用失败，直接跳转到 `fail_request_resource` 标签（不执行 disable）。
+3. 若 `iclk` 启用失败，跳转到新增的 `fail_iclk` 标签，在此处仅禁用已成功启用的 `fclk`。
+4. 调整 `fail_add_hcd` 标签的位置，确保在 `usb_add_hcd` 失败时，依次禁用 `iclk` 和 `fclk`，保证所有已获取的资源都能被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2525a22c2c2bc0259984d528a6c83ff9d057bbd3

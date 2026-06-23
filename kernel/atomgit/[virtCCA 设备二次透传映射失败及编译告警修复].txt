@@ -1,0 +1,25 @@
+#标题
+[virtCCA 设备二次透传映射失败及编译告警修复]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[1. 编译告警：在关闭 ARM_PMU 编译选项的场景下，出现 'struct kvm_pmu' 无 'irq_level' 成员及 'arm_pmu_set_phys_irq' 隐式声明错误。
+2. 编译告警：vfio 相关函数注释参数与实际不符。
+3. 功能故障：virtCCA 场景下设备进行第二次透传时映射失败。]
+
+#主要错误日志
+[未知]
+
+#问题根因
+[1. 编译问题：函数 `arm_pmu_set_phys_irq` 的声明依赖宏 CONFIG_HISI_VIRTCCA_HOST，但未正确依赖 CONFIG_ARM_PMU，导致在 PMU 关闭时引用了未定义的接口；同时函数 `kvm_cvm_create_dev_ttt_levels` 缺少 static 定义导致无原型告警。
+2. 功能故障：结构体 `obj` 在初始化时未清零 `msi_addr` 成员，且 `cmd` 数组未初始化，导致设备二次透传时残留的 MSI 地址数据引起映射失败。]
+
+#解决方案
+[1. 修复编译依赖：将 `arm_pmu_set_phys_irq` 的声明与定义条件修改为 `#if defined(CONFIG_ARM_PMU) && defined(CONFIG_HISI_VIRTCCA_HOST)`，否则定义为空宏；为 `kvm_cvm_create_dev_ttt_levels` 添加 `static` 关键字。
+2. 修复初始化逻辑：在 `add_cc_dev_obj` 函数中显式将 `obj->msi_addr` 初始化为 0；在 `virtcca_tmi_dev_attach` 函数中清零 `cmd` 数组。
+3. 修正代码注释：更新 `cvm_vfio_add_kvm_to_smmu_domain` 和 `find_arm_smmu_domain` 函数的注释，使其与实际参数匹配。]
+
+#来源
+[https://atomgit.com/openeuler/kernel/commit/e11dfd5f1c0296510fb000bf11c0cea6e1659efd]

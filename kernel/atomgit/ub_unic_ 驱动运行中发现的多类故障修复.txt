@@ -1,0 +1,38 @@
+#标题
+ub/unic: 驱动运行中发现的多类故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+该 Commit 修复了驱动运行中发现的多个故障现象：
+1. **网络带宽抖动**：运行过程中网络带宽出现不稳定、抖动现象。
+2. **死锁**：大量日志打印导致 ctrlq crq 任务出现死锁。
+3. **统计信息丢失**：设置 coalesce（中断聚合）参数时，TX/RX 流量统计数据丢失归零。
+4. **并发故障**：停止 RX 流与复位（reset）操作并发执行时，udma 设备的 EID 被异常删除。
+5. **队列数量异常**：TC（流量类别）数量变更时，每个 TC 的默认队列数量未正确恢复。
+
+#主要错误日志
+- `failed to backup txrx stats, ret = %d.\n` (推断场景：设置 coalesce 参数时内存分配失败)
+- `failed to change rss_size, ret = %d.\n`
+- `seq is invalid, opcode = 0x%x, service_type = 0x%x, seq = %u.\n`
+- `ubase log rate is limited, ctrlq_self_seq_invalid_log_cnt = %u, ctrlq_other_seq_invalid_log_cnt = %u.\n`
+- `waitting for reset done in deactivate process.\n`
+- `wait reset done timeout.\n`
+- `skip activate dev while resetting.\n`
+
+#问题根因
+1. **带宽抖动与统计丢失**：修改 RSS_size 或设置 coalesce 参数涉及队列的销毁与重建过程，该过程中未能正确处理状态位（如 `UNIC_STATE_CHANNEL_INVALID`）或未备份/恢复流量统计数据，导致数据丢失或状态不一致。
+2. **死锁**：ctrlq 模块在处理消息时，若遇到大量无效 seq 序列号，触发过量日志打印，导致软锁死或死锁。
+3. **结构不匹配**：`ubase aeqe` 结构定义与固件协议不匹配，导致通信解析错误。
+4. **并发冲突**：停止接收流与设备复位流程缺乏适当的同步保护（如 `UBASE_STATE_RST_HANDLING_B` 状态检查），导致资源竞争和 EID 错误删除。
+5. **代码冗余**：存在非集群模式（non-cluster）的死代码路径，干扰逻辑或导致状态判断错误。
+
+#解决方案
+1. **统计保持**：在 `unic_set_coalesce` 流程中增加 `unic_backup_stats` 和 `unic_restore_stats` 接口，在重建队列前后分别调用，确保统计数据的连续性。
+2. **状态同步与保护**：
+   - 在 `unic_change_rss_size` 和 `unic_modify_channels` 中设置 `UNIC_STATE_CHANNEL_INVALID` 标志位，防止状态不一致。
+   - 引入 `UBASE_STATE_RST_HANDLING_B` 和 `UBASE_STATE_RST_WAIT_DEACTIVE_B` 状态位，在激活/去激活流程中增加复位状态检测与等待逻辑，解决并发冲突。
+3. **日志限流**：在 ctrlq 处理流程中引入 `ubase_warn_rl` 宏和 `ratelimit_state` 机制，限制无效序列号日志的打印频率，并在轮询预算用尽时重新调度任务，防止死锁。
+4. **结构修正**：修正 `ubase_ctrlq_query_sl_resp` 结构体定义，调整 `rc_max_cnt` 字段位置以匹配协议。
+5. **逻辑优化**：移除非集群模式相关冗余代码；修正 TC 变更时 RSS_size 的恢复逻辑；修复 debugfs 中 fw_ver 显示格式；更新 IP 查询接口调用。

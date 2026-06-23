@@ -1,0 +1,20 @@
+#标题
+ppp: pad_compress_skb 函数内存泄漏漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 PPP 协议进行数据传输并开启压缩功能时，若 `pad_compress_skb` 函数内部的 `alloc_skb()` 分配失败，会导致原 `skb` 内存泄漏。该问题属于资源泄漏类故障，通常在系统内存紧张或网络负载极高时触发，表现为内核内存占用持续增长，无法被正常释放。
+
+#主要错误日志
+ppp: compressor dropped pkt
+
+#问题根因
+在 `pad_compress_skb` 函数中，当压缩器处理失败或内存分配失败时，函数会返回 NULL。原代码逻辑在返回 NULL 前错误地调用了 `kfree_skb(skb)` 释放了原始 skb，或者在某些错误路径下未正确处理 skb 的引用计数。而在调用者 `ppp_send_frame` 中，当 `pad_compress_skb` 返回 NULL 时，代码跳转到 `drop` 标签并执行 `kfree_skb(skb)`。这导致若 `pad_compress_skb` 内部已经释放了 skb，则此处为重复释放；若内部未释放但返回 NULL，调用者手中的指针丢失，导致内存泄漏。根本原因是对 skb 所有权转移的语义定义不明确，未遵循类似 `realloc()` 的语义（仅当新内存分配成功时才释放旧内存）。
+
+#解决方案
+修正 `pad_compress_skb` 的错误处理路径，移除函数内部对原始 skb 的释放操作，确保函数在失败时返回 NULL 且不破坏调用者持有的原始 skb 对象。同时修改调用者 `ppp_send_frame` 的逻辑，使用临时变量 `new_skb` 接收返回值，仅当 `new_skb` 非 NULL 时才更新 `skb` 指针，否则保留原始 `skb` 并跳转至 `drop` 标签进行统一释放，从而避免内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6d1dba780756a1bd7dec00b61feaa0cfe3519c20

@@ -1,0 +1,23 @@
+#标题
+Keem Bay OCS HCU 驱动 dma_unmap_sg() 参数错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Keem Bay OCS HCU 加密驱动在进行 DMA 清理时，`dma_unmap_sg()` 函数被传入了错误的 `nents` 参数值。这会导致 DMA 映射解除操作与之前的映射操作不匹配，可能引发 DMA 相关的内存管理错误、内核数据结构不一致或潜在的内存泄露风险。
+
+#主要错误日志
+未知
+
+#问题根因
+根据内核 DMA API 规范，`dma_unmap_sg()` 函数的 `nents` 参数必须传入与 `dma_map_sg()` 调用时相同的 scatterlist 条目数（即原始的 `nents`），而不能使用 `dma_map_sg()` 的返回值。
+在代码实现中，`dma_map_sg()` 的返回值（实际映射的 DMA 条目数）被保存并用于后续的 `dma_unmap_sg()` 调用，违反了 API 约定。
+
+#解决方案
+在驱动程序的上下文结构体 `ocs_hcu_rctx` 中新增成员变量 `nents`，用于保存原始的 scatterlist 条目数。
+在 DMA 映射阶段（`kmb_ocs_dma_prepare` 函数中），在调用 `dma_map_sg()` 前将原始 `nents` 值保存到 `rctx->nents` 中。
+在 DMA 清理阶段（`kmb_ocs_hcu_dma_cleanup` 函数中），调用 `dma_unmap_sg()` 时使用保存的 `rctx->nents` 作为参数，而非之前使用的映射后条目数 `rctx->sg_dma_nents`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e0a49a802e135d38f33a5e158e95dc8b4db7db39

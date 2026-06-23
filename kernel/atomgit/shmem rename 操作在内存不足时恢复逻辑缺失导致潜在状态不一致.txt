@@ -1,0 +1,23 @@
+#标题
+shmem rename 操作在内存不足时恢复逻辑缺失导致潜在状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统内存严重不足的情况下，执行 shmem 文件系统的 rename 操作（包括 rename_exchange）时，maple_tree 插入可能失败。此时 `simple_offset_rename()` 和 `simple_offset_rename_exchange()` 无法正确恢复原有状态。此外，若 `shmem_whiteout()` 成功执行后，后续 rename 步骤失败，会导致系统状态不一致，违反了 `shmem_whiteout()` 成功后必须进行 `d_move()` 的预期约定。
+
+#主要错误日志
+未知
+
+#问题根因
+1. `simple_offset_rename()` 和 `simple_offset_rename_exchange()` 在处理 maple_tree 插入失败时缺乏正确的错误恢复路径，导致元数据状态不一致。
+2. `shmem_rename2()` 的执行顺序存在问题：它在调用可能失败的 `simple_offset_rename()` 之前就执行了 `shmem_whiteout()`。根据设计约定，`shmem_whiteout()` 一旦成功，调用者必须继续执行 `d_move()`，而之前的逻辑允许在 whiteout 成功后因 rename 失败而退出，破坏了该约定。
+
+#解决方案
+1. 调整操作顺序与预分配策略：对于 `simple_offset_rename()`，改为在 `shmem_rename2()` 中预先插入目标条目到新目录的 maple_tree 中，确保后续操作不再包含可能失败的内存分配步骤。
+2. 利用 maple_tree 特性优化：利用 `mtree_store()` 在索引已存在时不会失败（作为单例替换）的特性，重构 `simple_offset_rename_exchange()` 的逻辑，确保交换操作要么全做要么不做，并在失败时正确恢复。
+3. 修复 `simple_offset_rename()` 逻辑：移除该函数的返回值（改为 void），强制要求调用者在调用前已获取 slot，并增加 `WARN_ON` 检查以确保前提条件满足。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f5759f268d384610746aa26307dfe3fee7e266bf

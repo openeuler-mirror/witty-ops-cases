@@ -1,0 +1,20 @@
+#标题
+btrfs: 日志回放处理 extrefs 迭代时因变量未初始化导致非法内存访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Btrfs 文件系统进行日志回放过程中，函数 `__inode_add_ref` 处理扩展引用时，若代码执行路径跳转到 `next` 标签进入下一次循环迭代，会访问到未定义的 `victim_name.len` 值。这导致使用错误的长度值进行内存访问，引发非法内存访问或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__add_inode_ref` 函数处理 extrefs 的循环中，变量 `victim_name.len` 初始化（赋值）的位置在条件判断 `if (btrfs_inode_extref_parent(...))` 之后。当该条件判断成立触发 `goto next` 跳转时，`victim_name.len` 尚未被赋值，保留了未定义的栈内存值。在下一次循环迭代中，该未定义的长度值被使用，导致内存访问越界或错误。
+
+#解决方案
+调整代码执行顺序，在获取 extref 指针后立即初始化 `victim_name.len`（赋值为当前 extref 的名称长度 `btrfs_inode_extref_name_len`），确保在后续任何可能跳转到 `next` 标签的代码路径执行前，该变量已被正确初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce609bb6ee913095a9f094fb8363a2c67c418272

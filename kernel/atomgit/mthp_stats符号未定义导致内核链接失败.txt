@@ -1,0 +1,22 @@
+#标题
+mthp_stats符号未定义导致内核链接失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核配置选项 CONFIG_SYSFS 未启用（CONFIG_SYSFS=n）的情况下，编译链接内核时失败，出现未定义引用错误，导致无法生成最终的内核镜像。
+
+#主要错误日志
+s390-linux-ld: mm/memory.o: in function `count_mthp_stat':
+>> include/linux/huge_mm.h:285:(.text+0x191c): undefined reference to `mthp_stats'
+s390-linux-ld: mm/huge_memory.o:(.rodata+0x10): undefined reference to `mthp_stats'
+
+#问题根因
+`mthp_stats` 变量及其相关定义仅在 CONFIG_SYSFS 配置启用时才被编译进内核。然而，头文件 `include/linux/huge_mm.h` 中的内联函数 `count_mthp_stat` 在未通过预处理宏保护的情况下直接引用了 `mthp_stats` 变量。当 CONFIG_SYSFS=n 时，变量定义缺失，但 `count_mthp_stat` 函数代码依然存在并被调用，从而导致链接阶段的“undefined reference”错误。
+
+#解决方案
+在头文件 `include/linux/huge_mm.h` 中增加 `#ifdef CONFIG_SYSFS` 条件编译保护。将 `mthp_stats` 变量的声明以及 `count_mthp_stat` 函数的实现包裹在条件编译块中，确保仅在 CONFIG_SYSFS 定义时有效；否则提供一个空的 `count_mthp_stat` 内联函数作为替代，避免引用不存在的符号。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8238b7ab22dbb1cc3568834dd237395884f11040

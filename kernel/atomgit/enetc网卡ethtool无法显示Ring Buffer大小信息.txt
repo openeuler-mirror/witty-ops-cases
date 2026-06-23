@@ -1,0 +1,20 @@
+#标题
+enetc网卡ethtool无法显示Ring Buffer大小信息
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `ethtool --show-ring` 命令查询网卡队列环形缓冲区大小时，输出结果中缺失 `rx_pending` 和 `tx_pending` 字段信息，导致用户无法获取当前网卡的Ring Buffer配置。
+
+#主要错误日志
+未知
+
+#问题根因
+内核ethtool的ring参数获取路径迁移到了新的netlink接口。在该接口的实现逻辑 `rings_fill_reply()` 中，只有当 `rx_max_pending` 和 `tx_max_pending` 的值非零时，才会发送 `rx_pending` 和 `tx_pending` 字段。驱动程序 `enetc_get_ringparam()` 原先只设置了 `rx_pending` 和 `tx_pending`，未设置 `rx_max_pending` 和 `tx_max_pending`（默认值为0），导致netlink接口判断逻辑失效，不输出相关字段。
+
+#解决方案
+在 `enetc_get_ringparam()` 函数中补充设置 `rx_max_pending` 和 `tx_max_pending` 的值。为了避免用户误以为Ring Buffer大小可以修改（当前驱动未实现修改接口），将这两个最大值参数设置为与当前实际使用值 `priv->rx_bd_count` 和 `priv->tx_bd_count` 相同。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/beed85286c6736691bae42669daf2da3dc1f864a

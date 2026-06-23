@@ -1,0 +1,22 @@
+#标题
+irqchip/sifive-plic: 中断亲和性设置导致中断冻结
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 UART 串口转储大文件（产生大量中断）的同时，频繁修改 UART 中断的亲和性设置，UART 端口几乎瞬间变得无响应（冻结），中断处理流程卡死。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 PLIC 规范，如果中断完成消息对应的 ID 未在目标上启用，该完成消息会被忽略。
+在内核处理中断过程中，如果中断亲和性发生变更，可能导致当前处理中断的 CPU 的 enable bit 被清零。此时，内核逻辑中的 `irqd_irq_disabled(d)` 检查返回 false（认为中断未禁用），导致 `plic_irq_eoi()` 不发送完成消息或发送无效消息。
+由于硬件层面的 enable bit 已经为零（因亲和性切换导致），PLIC 忽略了完成消息，导致该中断无法被正确 EOI，进而后续中断无法再次触发，造成中断“冻结”。
+
+#解决方案
+修改 `plic_irq_eoi()` 函数，不再依赖 `irqd_irq_disabled(d)` 进行判断，而是直接读取 PLIC 硬件寄存器中的 enable bit 状态。如果发现 enable bit 为 0，则临时使能该中断位，写入 CLAIM 寄存器完成 EOI 操作，随后再将其禁用，确保 PLIC 硬件正确接收并处理中断完成消息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/774c06f7f68444ec4a0acab84be999d9d167135c

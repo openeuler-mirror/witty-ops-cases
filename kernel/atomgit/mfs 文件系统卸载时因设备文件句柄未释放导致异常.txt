@@ -1,0 +1,24 @@
+#标题
+mfs 文件系统卸载时因设备文件句柄未释放导致异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 mfs 文件系统时，若用户态程序未及时关闭设备文件句柄，内核会持续打印告警信息 "Pending until close the /dev/mfs%u..."，并可能导致进程挂起无法退出，或因内存屏障缺失及事件引用计数处理不当引发内核异常。
+
+#主要错误日志
+pr_warn("Pending until close the /dev/mfs%u...\n", sbi->minor);
+
+#问题根因
+1. **并发与内存屏障缺失**：在 `mfs_kill_sb` 与 `mfs_post_event_read` 的并发场景中，缺乏必要的内存屏障指令，导致 CPU 可能读取到旧的标志位状态，无法及时感知设备已关闭或数据已就绪，造成状态判断错误。
+2. **事件引用计数管理错误**：在 `mfs_dev_read` 函数中，对于异步且读取失败的事件，代码无条件调用了 `put_mfs_event(event)`，导致引用计数被错误释放，引发潜在的安全隐患。
+3. **释放顺序不当**：`kill_anon_super(sb)` 调用时机过早，应在 `mfs_destroy_events(sb)` 之后执行，以确保资源释放顺序正确。
+
+#解决方案
+1. **增加内存屏障**：在 `mfs_post_event_read` 中设置标志位检查前增加 `smp_mb__before_atomic()`；在 `mfs_kill_sb` 循环检查 `MFS_CACHE_OPENED` 前后分别增加 `smp_mb__before_atomic()` 和 `smp_mb__after_atomic()`，确保标志位状态的可见性与实时性。
+2. **修正引用计数释放逻辑**：在 `mfs_dev_read` 中，仅在读取成功或事件为同步类型时才调用 `put_mfs_event(event)`，避免对未读异步事件的错误释放。
+3. **调整函数调用顺序**：将 `kill_anon_super(sb)` 移至 `mfs_destroy_events(sb)` 之后，保证事件资源先于超级块释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/413fe59d34c4290962117dc94e86f8e38aee2650

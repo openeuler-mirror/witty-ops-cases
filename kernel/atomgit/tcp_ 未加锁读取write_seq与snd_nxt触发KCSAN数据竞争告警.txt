@@ -1,0 +1,20 @@
+#标题
+tcp: 未加锁读取write_seq与snd_nxt触发KCSAN数据竞争告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行 KCSAN（内核动态竞态检测工具）时，检测到 `tcp_get_timestamping_opt_stats` 函数中存在数据竞争。该函数在无锁状态下访问 `tp->write_seq` 和 `tp->snd_nxt`，因缺乏适当的标记注解，导致内核产生数据竞争告警，干扰并发正确性检测。
+
+#主要错误日志
+未知
+
+#问题根因
+`tcp_get_timestamping_opt_stats()` 函数被设计为故意在无锁环境下运行。在读取 `tp->write_seq` 和 `tp->snd_nxt` 这两个可能被其他线程并发写入的变量时，代码直接进行了普通内存访问。由于对应的写入端已经使用了 `WRITE_ONCE()` 注解，读取端必须配套使用 `READ_ONCE()` 以向 KCSAN 工具表明该并发访问是预期的，缺少该注解导致 KCSAN 报告数据竞争。
+
+#解决方案
+在读取 `tp->write_seq` 和 `tp->snd_nxt` 时添加 `READ_ONCE()` 注解，确保符合无锁编程规范并消除 KCSAN 误报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0d4b9f613e8df416a625f2cf8dce126065217237

@@ -1,0 +1,20 @@
+#标题
+vsock/virtio: 传输层不匹配导致 accept 队列计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `vsock_assign_transport()` 函数执行失败或选择了不同的传输层时，监听套接字的 accept 队列计数（`sk_ack_backlog`）会发生泄漏。在经过大约 `backlog+1` 次此类失败后，`sk_acceptq_is_full()` 将一直返回 true，导致监听器拒绝所有新连接，服务不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `virtio_transport_recv_listen()` 函数中，代码逻辑在调用 `vsock_assign_transport()` 进行传输层验证之前就调用了 `sk_acceptq_added(sk)` 增加队列计数。如果后续传输层分配失败或选择不一致，错误处理路径直接返回，却没有调用 `sk_acceptq_removed(sk)` 减少计数，导致 `sk_ack_backlog` 被永久增加。
+
+#解决方案
+将 `sk_acceptq_added(sk)` 函数调用移动到传输层验证完成之后执行。这确保了只有在传输层成功确定后才增加 accept 队列计数，从而避免了计数泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7d31243598cb8b32b5ac7d3ee92209ce979f6988

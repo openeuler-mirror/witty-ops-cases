@@ -1,0 +1,27 @@
+#标题
+LS7A EHCI 控制器 HCCPARAMS 寄存器 EECP 字段读取错误导致启动时报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在搭载 LS7A 芯片的平台上启动系统时，内核日志中大量打印 "EHCI: unrecognized capability ff" 错误信息，影响启动日志的整洁性。
+
+#主要错误日志
+[    0.581675] pci 0000:00:04.1: EHCI: unrecognized capability ff
+[    0.581699] pci 0000:00:04.1: EHCI: unrecognized capability ff
+[    0.581716] pci 0000:00:04.1: EHCI: unrecognized capability ff
+[    0.581851] pci 0000:00:04.1: EHCI: unrecognized capability ff
+[    0.581916] pci 0000:00:05.1: EHCI: unrecognized capability ff
+[    0.581951] pci 0000:00:05.1: EHCI: unrecognized capability ff
+[    0.582704] pci 0000:00:05.1: EHCI: unrecognized capability ff
+[    0.582799] pci 0000:00:05.1: EHCI: unrecognized capability ff
+
+#问题根因
+LS7A EHCI 控制器存在硬件缺陷，该控制器实际上没有扩展功能，HCCPARAMS 寄存器中的 EECP（EHCI Extended Capabilities Pointer）字段本应为 0x0，但读取结果为 0xa0。这导致驱动程序错误地尝试解析非存在的扩展功能，从而产生大量错误日志。
+
+#解决方案
+在 `drivers/usb/host/pci-quirks.c` 中针对 LS7A EHCI 控制器（Vendor ID 为 PCI_VENDOR_ID_LOONGSON，Device ID 为 0x7a14）增加特异性处理代码，通过清除 HCCPARAMS 寄存器中的 EECP 字段（掩码操作 `hcc_params &= ~(0xffL << 8)`），屏蔽错误的硬件返回值，避免后续解析流程触发错误日志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4565401547af1847ad172e2fa954fbf6f8af4fe4

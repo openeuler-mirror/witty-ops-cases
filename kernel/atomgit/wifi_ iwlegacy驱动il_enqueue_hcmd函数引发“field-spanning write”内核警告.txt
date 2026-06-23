@@ -1,0 +1,26 @@
+#标题
+wifi: iwlegacy驱动il_enqueue_hcmd函数引发“field-spanning write”内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 iwlegacy 无线驱动发送大尺寸命令时，内核运行时触发检测到跨字段写入的警告。此问题发生在调用 `il_enqueue_hcmd` 函数时，虽然系统可能继续运行，但会产生内核警告堆栈跟踪，影响系统日志洁净度并可能触发内核恐慌，具体取决于系统配置。
+
+#主要错误日志
+memcpy: detected field-spanning write (size 1014) of single field "&out_cmd->cmd.payload" at drivers/net/wireless/intel/iwlegacy/common.c:3170 (size 320)
+
+#问题根因
+iwlegacy 驱动的命令缓冲区支持默认大小（320字节）和巨大缓冲区。
+代码中定义的 `struct il_device_cmd` 结构体仅描述了默认缓冲区，其 payload 字段大小固定为 320 字节。
+在函数 `il_enqueue_hcmd` 中处理巨大缓冲区时，代码直接使用 `memcpy` 向 `&out_cmd->cmd.payload` 拷贝数据。当实际拷贝长度超过结构体定义的 320 字节时，内核的 fortify 机制检测到写入操作越过了结构体单个字段的边界，从而触发“field-spanning write”警告。
+
+#解决方案
+1. 新增结构体定义：在头文件中定义 `struct il_device_cmd_huge` 结构体，其 payload 字段大小扩展至 `IL_MAX_CMD_SIZE`，以正确描述巨大缓冲区的内存布局。
+2. 修复写入逻辑：修改 `il_enqueue_hcmd` 函数，根据命令标志位 `CMD_SIZE_HUGE` 判断当前使用的缓冲区类型。
+   - 若为巨大缓冲区，将命令缓冲区指针强制转换为 `struct il_device_cmd_huge *` 类型，获取正确的 payload 指针。
+   - 若为默认缓冲区，使用原有的 payload 指针。
+   - 使用计算出的正确 payload 指针进行 `memcpy` 操作，避免编译器与运行时检查机制误判越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/954841aaf8fef590ad1e17f4ab18076d4a53ed91

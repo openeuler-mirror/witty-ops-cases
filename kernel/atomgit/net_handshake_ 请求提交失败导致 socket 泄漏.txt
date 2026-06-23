@@ -1,0 +1,20 @@
+#标题
+net/handshake: 请求提交失败导致 socket 泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 handshake_req_submit() 函数在请求被哈希（hashed）之前提交失败时，socket 的原始析构函数无法被恢复。导致后续 handshake_sk_destruct() 提前返回，原析构函数未执行，进而引发 socket 泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+handshake_req_submit() 函数在执行过程中替换了 sk->sk_destruct，但当提交失败且请求尚未被哈希时，代码直接跳转至错误处理路径，未将 sk->sk_destruct 恢复为原始的析构函数。这导致 socket 析构流程不完整，从而造成内存泄漏。
+
+#解决方案
+在 handshake_req_submit() 函数的错误处理路径（out_err 标签处）增加代码，将 req->hr_sk->sk_destruct 恢复为原始值 req->hr_odestruct，确保 socket 在销毁时能正确执行原析构逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c566221dd1beaeeb26c60a70d1610b64e2803ff4

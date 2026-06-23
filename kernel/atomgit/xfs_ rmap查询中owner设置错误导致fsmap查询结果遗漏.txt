@@ -1,0 +1,21 @@
+#标题
+xfs: rmap查询中owner设置错误导致fsmap查询结果遗漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `xfs_io` 工具执行 `fsmap` 查询时，若指定了特定的块范围（如 `-d 0 3`），预期应返回该范围内的元数据记录，但实际查询结果为空，无法获取到本应存在的记录（如 "static fs metadata"）。而在不指定范围的全量查询中，相关记录可以正常显示。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 `xfs_fsmap_owner_to_rmap` 函数对 owner 的转换逻辑处理不当。
+在进行 fsmap 查询时，如果调用者未指定 owner（即传入 -1ULL），函数错误地将其统一转换为 0。这导致在处理最后一个 AG（Allocation Group）时，`info->high.rm_owner` 被错误地设置为 0 而非预期的 `ULLONG_MAX`。由于 0 小于 rmap btree 中实际记录的 owner 值，导致比较逻辑错误，进而引发查询结果为空的数据遗漏问题。
+
+#解决方案
+修改 `fs/xfs/xfs_fsmap.c` 文件中的 `xfs_fsmap_owner_to_rmap` 函数。当传入的 `src->fmr_owner` 为 0 或 -1ULL 时，直接将其赋值给 `dest->rm_owner`，而不是强制赋值为 0。这样确保了在最高 owner 边界检查时使用正确的 `ULLONG_MAX` 值，从而修复查询结果遗漏的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/746cc88b65bd3623eab366ef61530c27e4591325

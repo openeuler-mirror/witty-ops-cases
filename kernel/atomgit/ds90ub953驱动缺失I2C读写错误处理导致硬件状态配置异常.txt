@@ -1,0 +1,24 @@
+#标题
+ds90ub953驱动缺失I2C读写错误处理导致硬件状态配置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ds90ub953 FPD-Link III 串行器驱动在初始化、GPIO 探测及时钟输出配置过程中，若发生 I2C 通信故障（如读写寄存器失败），驱动程序忽略错误返回值继续执行，可能导致硬件寄存器配置未生效、设备状态与软件预期不一致，进而引发功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码中 `ub953_gpiochip_probe`、`ub953_write_clkout_regs`、`ub953_hw_init` 等函数在调用 `ub953_write` 进行寄存器写入时，未检查返回值或未向上传递错误码，导致 I2C 读写失败无法被感知和处理。
+
+#解决方案
+在相关的 I2C 写操作函数中增加返回值检查逻辑。具体修复点包括：
+1. 在 `ub953_gpiochip_probe` 函数中，对 `UB953_REG_LOCAL_GPIO_DATA` 和 `UB953_REG_GPIO_INPUT_CTRL` 的写操作增加返回值判断，失败时直接返回错误。
+2. 将 `ub953_write_clkout_regs` 函数返回类型由 void 修改为 int，并在写入 `UB953_REG_CLKOUT_CTRL0` 和 `UB953_REG_CLKOUT_CTRL1` 时检查返回值，向上游调用者传递错误。
+3. 在 `ub953_clkout_set_rate` 和 `ub953_register_clkout` 中处理 `ub953_write_clkout_regs` 返回的错误。
+4. 在 `ub953_hw_init` 函数中，对 `UB953_REG_GENERAL_CFG` 的写操作增加返回值检查，失败时返回错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5c39621a88d110817bd7f251a7a264844555dd5a

@@ -1,0 +1,20 @@
+#标题
+sw64 架构下用户态直接调 inb/outb 访问 LPC Legacy IO 空间失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构的“俊章”和“俊章_v2”芯片上，当用户态用户直接使用 inb/outb 指令访问 LPC Legacy IO 空间时，会被转换为访问非法地址空间，导致 IO 访问失败或系统异常。尽管 LPC 驱动通过 ACPI/DTS 获取新地址空间的方式可以正常工作，但直接的用户态 IO 访问路径因未应用硬件缺陷规避方案而失效。
+
+#主要错误日志
+未知
+
+#问题根因
+芯片 junzhang 和 junzhang_v2 存在硬件缺陷，无法正常识别对 LPC Legacy IO 空间的访问。虽然之前的补丁通过借用内存 IO 地址空间的方式在 LPC 驱动层规避了该问题，但全局的 `ioport_map` 实现（影响 inb/outb 等直接访问路径）仍使用原始的 Legacy IO 空间地址。当用户直接从用户态发起 inb/outb 访问时，因未根据芯片类型调整 IO 基址，导致访问了非法的地址空间。
+
+#解决方案
+在内核启动阶段（`setup_arch`）增加 `setup_legacy_io` 函数，根据当前芯片类型全局初始化 `legacy_io_base` 和 `legacy_io_shift` 变量。针对 junzhang 和 junzhang_v2 芯片，将 `legacy_io_base` 设置为 `LPC_MEM_IO` 并启用地址偏移，修改 `ioport_map` 函数使用这两个全局变量进行地址映射，从而统一解决了直接 IO 访问路径的硬件规避问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e215e47e85761e3b88b86e03a7fab668cc6e1764

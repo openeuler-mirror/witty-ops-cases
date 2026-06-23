@@ -1,0 +1,31 @@
+#标题
+ubcore: 通过 eid 对查询路由列表功能修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+调用 `ubcore_get_topo_eid` 接口查询一对 ubcore bonding eid 之间的路由时，无法正确获取所有路由信息。该功能旨在查询 primary eids 和 port eids，但在修复前，逻辑存在缺陷，导致查询结果不完整或不正确。
+
+#主要错误日志
+- "Failed to get topo port eid, src_v_eid: " EID_FMT ", dst_v_eid: " EID_FMT ".\n"
+- "Failed to get src_p_eid, src_v_eid: " EID_FMT ".\n"
+- "Failed to get dst_p_eid, dst_v_eid: " EID_FMT ".\n"
+- "Invalid parameter.\n"
+- "Invalid tp tpye: %u.\n"
+
+#问题根因
+原有的 `ubcore_get_topo_eid` 实现逻辑仅针对单一目的进行了设计，无法满足查询一对 eid 间所有路由（包括 primary eids 和 port eids）的需求。具体体现在：
+1. `ubcore_get_topo_port_eid` 和 `ubcore_get_topo_primary_eid` 的查找逻辑不完善，未覆盖所有场景（如 IODIE_NUM 维度的遍历缺失或逻辑错误），导致无法正确遍历拓扑信息获取完整路由。
+2. 接口设计不合理，仅返回单一的物理 eid 对，而非路由列表，无法承载查询“所有路由”的需求。
+
+#解决方案
+重构查询接口，将原有的 `ubcore_get_topo_eid` 替换为 `ubcore_get_route_list`，主要修改如下：
+1. **接口重构**：修改 API 定义，输入参数改为 `ubcore_route` 结构体（包含 src/dst eid），输出参数改为 `ubcore_route_list` 结构体，支持返回多条路由记录。
+2. **逻辑修复**：
+   - 新增 `ubcore_get_route_port_eid` 函数，修正遍历逻辑，增加了对 `IODIE_NUM` 的循环遍历，确保能查找到所有匹配的 port eid 路由。
+   - 新增 `ubcore_get_route_primary_eid` 函数，优化 primary eid 的查找逻辑，遍历拓扑节点并填充路由列表。
+3. **命令处理扩展**：在 TLV 处理器和 UVS 命令处理中新增 `UBCORE_CMD_GET_ROUTE_LIST` 的支持，完善了命令的解析与响应流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c78127c4b6ebb6d94cf2155af3831407143cc084

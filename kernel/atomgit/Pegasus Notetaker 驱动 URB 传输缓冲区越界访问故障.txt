@@ -1,0 +1,20 @@
+#标题
+Pegasus Notetaker 驱动 URB 传输缓冲区越界访问故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当接入恶意 USB 设备并提供伪造的端点描述符时，驱动程序会分配一个极小的 URB 传输缓冲区。若设备随后发送包含特定模式（首字节为 0x80 或 0x42）的中断数据包，内核在 `pegasus_parse_packet` 函数中解析数据包时，将访问超出缓冲区范围的内存，导致内存越界访问。
+
+#主要错误日志
+[    ] pegasus 1-1:1.0: packet size is too small (X)
+
+#问题根因
+在 `pegasus_notetaker` 驱动的 `pegasus_probe()` 函数中，直接使用 USB 端点描述符中的 `wMaxPacketSize` 值来分配 URB 传输缓冲区。攻击者可以通过恶意 USB 描述符强制分配一个非常小的缓冲区。随后，当设备发送数据包时，`pegasus_parse_packet()` 函数在解析数据前未校验缓冲区大小是否足够，导致越界内存访问。
+
+#解决方案
+在 `pegasus_probe()` 函数中增加对 `wMaxPacketSize` 的合法性校验。定义宏 `NOTETAKER_PACKET_SIZE` 为协议要求的最小数据包长度（6 字节），若从端点获取的 `data_len` 小于此值，则判定为无效设备，打印错误日志并终止探测流程，返回 `-EINVAL` 错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4b1bf2d2d93ba749ae842d67c47bd27a8d698d02

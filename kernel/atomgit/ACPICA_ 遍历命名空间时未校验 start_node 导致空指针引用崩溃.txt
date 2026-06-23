@@ -1,0 +1,23 @@
+#标题
+ACPICA: 遍历命名空间时未校验 start_node 导致空指针引用崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Honor Magicbook 14 Pro 设备上启动 Linux 内核时发生崩溃。
+具体表现为在 `acpi_ns_walk_namespace` 函数中访问 `parent_node` 成员时触发空指针引用，导致内核崩溃，即使 `start_node` 等于 `ACPI_ROOT_OBJECT` 也会发生。
+
+#主要错误日志
+未知
+
+#问题根因
+虽然之前的补丁 "ACPICA: Avoid walking the ACPI Namespace if it is not there" 修复了 `start_node` 和 `acpi_gbl_root_node` 均为 NULL 的情况，但在特定硬件（如 Honor Magicbook 14 Pro，存在错误的 DSDT 表）上，当 `start_node` 被判定为 `ACPI_ROOT_OBJECT` 并尝试赋值为 `acpi_gbl_root_node`（此时可能为无效值）或直接使用时，代码逻辑未能在进入后续路径前正确拦截 NULL 的 `start_node`。
+旧代码仅在 `start_node == ACPI_ROOT_OBJECT` 的条件分支内检查 `start_node` 是否为 NULL，导致若 `start_node` 在其他路径下为 NULL（或转换后仍为 NULL 但未再次校验）时，代码继续执行并在 `acpi_ns_get_next_node()` 中访问其成员引发空指针引用。
+
+#解决方案
+将 `start_node` 的 NULL 检查逻辑从 `if (start_node == ACPI_ROOT_OBJECT)` 条件块内部移出。
+无论 `start_node` 是否为 `ACPI_ROOT_OBJECT`，在后续操作前统一检查 `start_node` 是否为 NULL。如果为 NULL，直接返回 `AE_NO_NAMESPACE` 状态，从而避免后续遍历过程中的空指针引用崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/032cef522e93da91002acdc8e3a4303f88a57aea

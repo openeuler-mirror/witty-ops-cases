@@ -1,0 +1,29 @@
+#标题
+drm/dp_mst: 修复 MST 拓扑 RAD 地址打印错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DRM MST（Multi-Stream Transport）侧带消息处理中，RAD（Relative Address）的打印输出不正确。具体表现为：当通过内核日志或调试信息查看 MST 拓扑结构时，分支设备的相对地址显示错误，无法反映真实的级联拓扑关系。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `drm_dp_mst_rad_to_str()` 在解析 RAD 数组时存在两个逻辑错误：
+1. **掩码使用错误**：代码使用了 `BIT_MASK(4)`（即 0x10）来获取低半字节，正确的掩码应为 `0xF`。
+2. **索引计算与遍历范围错误**：
+   - 原代码遍历时直接使用 `i` 作为索引，未正确处理 RAD 数组的打包存储逻辑（每个 u8 存储两个 LCT 的端口信息）。
+   - 原代码循环从 `i = 0` 开始，但 RAD 数组仅在 LCT（Link Count）大于等于 1 时有效，且起始处理逻辑应调整以匹配 nibble 的存储顺序。这导致解析出的地址数据与实际拓扑不符。
+
+#解决方案
+修改 `drivers/gpu/drm/display/drm_dp_mst_topology.c` 中的 `drm_dp_mst_rad_to_str` 函数：
+1. 将掩码从 `BIT_MASK(4)` 修正为 `0xF`，以正确提取低 4 位。
+2. 调整循环起始值从 `i = 0` 改为 `i = 1`，因为 RAD 数组仅在 LCT >= 1 时有意义。
+3. 修正数组访问索引，将 `rad[i / 2]` 改为 `rad[(i - 1) / 2]`，正确处理半字节的打包顺序。
+4. 初始化 `unpacked_rad` 数组为全 0，防止未初始化数据干扰。
+同时，在头文件中补充了 `rad` 字段的 Kdoc 注释，明确了 nibble 的存储顺序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22adf33ccc274c71661bdc9b0087b81979a19500

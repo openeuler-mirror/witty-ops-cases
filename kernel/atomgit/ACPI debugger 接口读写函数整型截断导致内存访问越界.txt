@@ -1,0 +1,23 @@
+#标题
+ACPI debugger 接口读写函数整型截断导致内存访问越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ACPI debugger 接口进行读写操作时，若传入较大的 count 值（size_t 类型），在函数内部转换为 int 类型参数时会发生截断，导致数值变为负数。该负值参与运算后，进一步导致 copy_to_user() 或 copy_from_user() 尝试处理超出缓冲区限制的超大空间，引发非预期的内存访问行为或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+ACPI debugger 的辅助函数 acpi_aml_read_user() 和 acpi_aml_write_user() 错误地使用 "int" 作为长度参数类型。当文件操作接口传入较大的 "size_t count" 时，强制类型转换导致整型截断，产生负值。该负值在 min() 计算中被选中，随后在 copy_to_user() 或 copy_from_user() 调用中，因这些函数的 size 参数为无符号类型，负值被解释为巨大的正整数，从而导致越界访问。
+
+#解决方案
+修复数据类型不一致问题，具体措施如下：
+1. 将 acpi_aml_read_user() 和 acpi_aml_write_user() 的长度参数类型从 "int" 修改为 "size_t"，符合无符号大小语义。
+2. 将相关函数的返回值及局部变量类型修改为 "ssize_t"，以符合内核文件操作规范。
+3. 使用 min_t(size_t, ...) 替代 min()，确保在 circ_count_to_end() 等计算中进行类型安全的比较，防止整型溢出或符号问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0ac7fd460b24dd5992f96f5ea20bb5b29eba220f

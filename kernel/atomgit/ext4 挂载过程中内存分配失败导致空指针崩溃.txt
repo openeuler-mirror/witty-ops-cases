@@ -1,0 +1,37 @@
+#标题
+ext4 挂载过程中内存分配失败导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载 ext4 文件系统时，若内存不足导致 groupinfo slab cache 分配失败，内核在清理资源过程中触发空指针解引用，进而引发 Oops 并导致挂载失败。
+
+#主要错误日志
+EXT4-fs: no memory for groupinfo slab cache
+BUG: kernel NULL pointer dereference, address: 0000000000000000
+PGD 0 P4D 0
+Oops: Oops: 0002 [#1] SMP PTI
+CPU:2 UID: 0 PID: 87 Comm:mount Not tainted 6.17.0-rc2 #1134 PREEMPT(none)
+RIP: 0010:_raw_spin_lock_irqsave+0x1b/0x40
+Call Trace:
+ <TASK>
+ xa_destroy+0x61/0x130
+ ext4_mb_init+0x483/0x540
+ __ext4_fill_super+0x116d/0x17b0
+ ext4_fill_super+0xd3/0x280
+ get_tree_bdev_flags+0x132/0x1d0
+ vfs_get_tree+0x29/0xd0
+ do_new_mount+0x197/0x300
+ __x64_sys_mount+0x116/0x150
+ do_syscall_64+0x50/0x1c0
+ entry_SYSCALL_64_after_hwframe+0x76/0x7e
+
+#问题根因
+在 `ext4_mb_init()` 函数中，当 `sbi->s_mb_avg_fragment_size` 未初始化（例如 groupinfo slab cache 分配失败导致提前进入错误处理流程）时，代码仍会调用 `ext4_mb_avg_fragment_size_destroy()`。由于该销毁函数内部缺乏对指针是否为空的检查，直接对空指针进行操作，从而触发空指针解引用。
+
+#解决方案
+在 `ext4_mb_avg_fragment_size_destroy()` 和 `ext4_mb_largest_free_orders_destroy()` 函数入口处增加空指针检查逻辑，若指针未初始化则直接返回，避免对空指针进行解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3d54d13d7a52e2ad8bcf0f55645f63aa99c9ad50

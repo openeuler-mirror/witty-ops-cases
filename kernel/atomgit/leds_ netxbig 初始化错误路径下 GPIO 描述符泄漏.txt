@@ -1,0 +1,21 @@
+#标题
+leds: netxbig 初始化错误路径下 GPIO 描述符泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 leds-netxbig 驱动初始化过程中，若设备树中 GPIO 资源配置存在问题或获取 GPIO 中途发生错误（如获取 "addr"、"data" 或 "enable" GPIO 失败），驱动将直接返回错误码退出。此时，此前已成功获取的 GPIO 描述符未被释放，导致 GPIO 资源泄漏。长期或重复触发可能导致系统 GPIO 资源耗尽，影响后续设备正常初始化。
+
+#主要错误日志
+- "Failed to count GPIOs in DT property data-gpios\n"
+- "Failed to get GPIO from DT property enable-gpio\n"
+
+#问题根因
+函数 `netxbig_gpio_ext_get()` 在获取 GPIO 描述符时，若在初始化中途（例如已获取部分 "addr" 或 "data" GPIO 后）遇到错误，代码逻辑直接 return 返回，未执行释放操作。虽然注册了 `devm_add_action_or_reset()` 清理回调，但该回调仅在函数成功返回后生效，因此在错误路径下无法触发，造成已获取的 GPIO 描述符泄漏。
+
+#解决方案
+在函数中增加 goto 标签的错误处理机制。当获取 GPIO 失败或后续步骤出错时，跳转至对应的错误处理标签（如 `err_free_data`、`err_free_addr`），通过循环调用 `gpiod_put()` 主动释放此前已获取的所有 GPIO 描述符，然后再返回错误码，确保资源不泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/02bb3ff2c44696b6c3c019a6c0e936f437fbba9c

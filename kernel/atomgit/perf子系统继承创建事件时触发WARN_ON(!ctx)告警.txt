@@ -1,0 +1,20 @@
+#标题
+perf子系统继承创建事件时触发WARN_ON(!ctx)告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `inherit_event` 函数进行性能事件继承的过程中，若子事件（child_event）分配成功后的初始化阶段遇到错误（如 `find_get_pmu_context` 失败）并进入错误处理路径，内核会触发 `WARN_ON(!ctx)` 告警。该问题由 syzbot 发现。
+
+#主要错误日志
+[断言失败] WARN_ON(!ctx) in __free_event()
+
+#问题根因
+在 `inherit_event` 函数中，`child_event->ctx` 的赋值操作被放置在多个可能失败的检查点之后。如果在 `child_event->ctx` 赋值前发生错误（例如 `find_get_pmu_context` 失败），代码会调用 `free_event` 进行清理。清理代码路径中的 `WARN_ON_ONCE()` 检查假设 `event->ctx` 非空（前提是 `pmu_ctx` 有效），但由于此时 `ctx` 尚未赋值，导致触发告警。这是一个由于代码演进过程中，初始化顺序与清理代码假设不一致导致的问题。
+
+#解决方案
+调整 `inherit_event` 函数中的初始化顺序。将 `get_ctx(child_ctx)` 和 `child_event->ctx = child_ctx` 的操作移至子事件分配成功后立即执行。这确保了在执行后续可能失败的初始化步骤（如 `find_get_pmu_context`）之前，`child_event->ctx` 已经被正确赋值，从而满足清理代码的假设条件，避免告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/68325693730fd67b92949eadd0f0b0e4c242a72d

@@ -1,0 +1,20 @@
+#标题
+mtd: rawnand: arasan: 修复双片选信号同时有效导致读写异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设备树中配置两个片选，且第二个片选为非原生 GPIO 时，会出现 GPIO 片选和第一个原生片选同时有效的情况。这种双重断言会导致 NAND 控制器执行错误的读和写操作。通过示波器测试可以观测到此信号异常。
+
+#主要错误日志
+Assign a single native CS when using GPIOs
+
+#问题根因
+当 nfc->ncs <= 2 时，变量 nfc->spare_cs 因静态初始化默认值为 0。在 anfc_assert_cs() 函数中选中第二个（基于 GPIO 的）片选时，代码检测到其为 GPIO 片选，于是将 nfc->native_cs 赋值为 0，导致 NAND 控制器寄存器错误地选中了原生片选 0。此时 GPIO 片选也处于有效状态，造成两个片选同时有效。
+
+#解决方案
+修改 anfc_parse_cs 函数中的判断逻辑。将 nfc->ncs > 2 的判断条件移至内层，确保只要 nfc->cs_array 存在就进入逻辑处理，从而正确初始化 spare_cs，避免在双片选场景下使用默认的静态初始化值 0，防止原生片选被错误选中。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75d91387ccf9945bf803fcf8c5932b9b79aeb65f

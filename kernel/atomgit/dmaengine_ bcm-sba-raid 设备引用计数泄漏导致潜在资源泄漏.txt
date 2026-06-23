@@ -1,0 +1,20 @@
+#标题
+dmaengine: bcm-sba-raid 设备引用计数泄漏导致潜在资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Broadcom SBA RAID 驱动在初始化失败或驱动卸载时，未释放 mailbox 设备的引用计数，导致内核资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `sba_probe` 函数中使用 `mbox_request_channel` 或相关查找机制获取 mailbox 设备时增加了引用计数，但在 `sba_prealloc_channel_resources` 调用失败的错误处理路径中，直接跳转到了释放 mbox channel 的步骤，遗漏了 `put_device(sba->mbox_dev)` 操作；同样在 `sba_remove` 移除驱动时也遗漏了该操作。
+
+#解决方案
+在 `sba_probe` 的错误处理路径中增加 `fail_put_mbox` 标签，用于调用 `put_device(sba->mbox_dev)` 释放设备引用；同时修改错误跳转逻辑，使资源分配失败时正确跳转到该标签。在 `sba_remove` 函数中，在释放 mbox channel 之前显式调用 `put_device(sba->mbox_dev)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4a7cf7c0e0082a3d7020efafd41e6de4e7644e85

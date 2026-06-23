@@ -1,0 +1,20 @@
+#标题
+uvcvideo: 错误路径下释放内存导致的双重释放（Double Free）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB 视频类（UVC）设备驱动初始化过程中，若 `uvc_status_init` 函数因内存不足导致 `usb_alloc_urb` 分配失败，驱动会进入错误处理路径。随后在设备注销或清理流程调用 `uvc_status_cleanup` 时，触发内核内存管理的双重释放（Double Free），可能导致系统崩溃、内存污染或其他不可预期的异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `uvc_status_init` 函数中，当 `usb_alloc_urb(0, GFP_KERNEL)` 返回失败（NULL）时，错误处理分支执行了 `kfree(dev->status)` 释放内存。然而，释放后未将 `dev->status` 指针置为 NULL。这导致后续调用 `uvc_status_cleanup()` 时，`kfree()` 再次尝试释放同一块内存，从而引发双重释放错误。
+
+#解决方案
+在 `uvc_status_init` 函数的错误处理路径中，即在 `kfree(dev->status)` 之后，立即将 `dev->status` 指针设置为 NULL。这样可以防止后续清理函数对同一指针进行重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/57a89a856ab908c880574749c90c1c5f362c6d54

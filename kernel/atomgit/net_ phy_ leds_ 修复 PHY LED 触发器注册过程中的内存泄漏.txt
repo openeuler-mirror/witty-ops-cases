@@ -1,0 +1,22 @@
+#标题
+net: phy: leds: 修复 PHY LED 触发器注册过程中的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在路由器上进行网络重启测试时，系统内存逐渐耗尽导致 OOM（Out Of Memory），经过追踪确认为 PHY LED 触发器代码模块存在内存泄漏。此外，由于使用了 devm API 管理内存，kmemleak 工具无法检测到该泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+devm API 的误用。PHY LED 触发器的注册函数 (`phy_led_triggers_register`) 是在 `phy_attach_direct` 中调用的，而非 `phy_probe`；注销函数 (`phy_led_triggers_unregister`) 是在 `phy_detach` 中调用的，而非 `phy_remove`。这意味着对于同一个 PHY 设备，注册和注销函数可能会被多次调用。然而，使用 `devm_kzalloc` 分配的内存在驱动解绑前不会被释放，导致在多次 attach/detach 循环中发生内存泄漏。
+
+#解决方案
+放弃使用托管内存分配 API，改用标准内存分配函数并手动释放：
+1. 将 `phy_led_triggers_register` 中的 `devm_kzalloc` 和 `devm_kcalloc` 替换为 `kzalloc` 和 `kcalloc`。
+2. 在错误处理路径和 `phy_led_triggers_unregister` 函数中，显式调用 `kfree` 释放 `phy->led_link_trigger` 和 `phy->phy_led_triggers` 指向的内存，并将指针置为 NULL。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/022947924d4374a726cdec682ef9b3ab110f468f

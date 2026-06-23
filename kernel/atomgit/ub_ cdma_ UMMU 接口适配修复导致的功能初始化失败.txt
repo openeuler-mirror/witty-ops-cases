@@ -1,0 +1,38 @@
+#标题
+ub: cdma: UMMU 接口适配修复导致的功能初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. CDMA 驱动在初始化过程中绑定设备 SVA（Shared Virtual Address）失败，导致驱动加载或上下文创建异常。
+2. 系统可能在并发访问 CDMA 设备属性（如 eu_num）时读取到不一致的数据，存在潜在的数据竞争风险。
+3. 驱动无法正确检测或启用 IOPF（I/O Page Fault）特性。
+
+#主要错误日志
+- `ksva bind device failed.`
+- `get ksva tid failed, ret = %d.`
+- `get sva tid failed, ret = %d.`
+- `grant seg failed, ret = %d.`
+- `sva grant range for cdma device failed, ret = %d.`
+- `no eu in cdma dev eid = 0x%x.`
+
+#问题根因
+1. **接口不兼容**：CDMA 驱动使用了旧的 UMMU 子系统接口（如 `ummu_ksva_bind_device`），该接口返回值逻辑与内核标准 IOMMU 接口不一致。旧代码错误地检查 `!ctx->sva` 来判断失败，而新接口返回的是 `ERR_PTR`，导致判断逻辑失效，掩盖了真实的错误状态。
+2. **返回值检查错误**：由于接口变更，`IS_ERR` 应该被用于检查返回值，原代码未适配此变更。
+3. **并发保护缺失**：在 `dma_get_device_list` 等接口中访问设备关键属性（`eu_num`, `eus`）时缺乏锁保护，在并发调用场景下可能导致数据竞争。
+4. **特性判断错误**：IOPF 特性的判断使用了错误的位掩码操作（`ummu_features & 1`），未使用正确的宏定义 `HW_CAP_IOPF`，可能导致功能异常。
+
+#解决方案
+1. **适配新接口**：将 UMMU 旧接口调用替换为新的 IOMMU 标准接口：
+   - `ummu_ksva_bind_device` -> `iommu_ksva_bind_device`
+   - `ummu_ksva_unbind_device` -> `iommu_ksva_unbind_device`
+   - `ummu_sva_unbind_device` -> `iommu_sva_unbind_device_isolated`
+   - `ummu_sva_grant_range` -> `iommu_sva_grant`
+   - `ummu_sva_ungrant_range` -> `iommu_sva_ungrant`
+2. **修正错误检查逻辑**：将 SVA 绑定返回值的检查方式从 `if (!ctx->sva)` 修改为 `if (IS_ERR(ctx->sva))`，以正确处理 `ERR_PTR` 返回值。
+3. **增加并发锁保护**：在 `dma_get_device_list`、`dma_get_device_by_eid` 及 debugfs/ioctl 相关的设备属性读取流程中，增加 `mutex_lock(&cdev->eu_mutex)` 保护，防止并发访问导致的数据不一致。
+4. **修正特性检测位**：将 IOPF 特性检测代码修正为 `cdev->iopf_feature = ummu_features & HW_CAP_IOPF`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad2e0450718434eeed4f2ee2f42076b222960f4b

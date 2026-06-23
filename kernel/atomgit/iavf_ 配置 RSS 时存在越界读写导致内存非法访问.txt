@@ -1,0 +1,22 @@
+#标题
+iavf: 配置 RSS 时存在越界读写导致内存非法访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 iavf 驱动的 RSS（Receive Side Scaling）哈希密钥和查找表时，触发 KASAN 检测到的 slab 越界访问。系统日志中出现 "BUG: KASAN: slab-out-of-bounds" 报错，导致内核线程（如 iavf_watchdog_task）崩溃或引发系统不稳定。同时存在对设备寄存器越界写入的风险。
+
+#主要错误日志
+BUG: KASAN: slab-out-of-bounds in iavf_config_rss+0x619/0x800
+Read of size 4 at addr ffff888102c50134 by task kworker/u8:6/63
+The buggy address is located 0 bytes to the right of allocated 52-byte region [ffff888102c50100, ffff888102c50134)
+
+#问题根因
+在函数 `iavf_config_rss_reg` 中，循环判断条件使用了 `i <= adapter->rss_{key,lut}_size / 4`。由于 `rss_{key,lut}_size / 4` 计算出的是 DWORD 数量（即数组元素个数），合法的最大索引应为该值减 1。使用 `<=` 导致循环多执行一次，从而引发对内存的越界读取和对设备寄存器的越界写入。
+
+#解决方案
+修改 `iavf_config_rss_reg` 函数中的循环条件，将 `<=` 替换为 `<`，确保循环变量 `i` 不超过数组实际定义的边界，从而修复越界读写问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/48e44c026b0ea5caeb3ba7b113d239c83161c686

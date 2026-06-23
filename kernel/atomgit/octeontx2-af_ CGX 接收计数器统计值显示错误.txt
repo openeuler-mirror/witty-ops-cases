@@ -1,0 +1,21 @@
+#标题
+octeontx2-af: CGX 接收计数器统计值显示错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Marvell OcteonTX2 AF 驱动中，读取 CGX（Command and Management Interface）的接收统计计数器时，部分计数器（CGX_CMR_RX_STAT9-12）显示的数值为陈旧数据，导致网络接收统计数据不准确，无法反映真实的硬件计数状态。
+
+#主要错误日志
+未知
+
+#问题根因
+CGX 块支持 4 个逻辑 MAC（LMAC），其中接收计数器 CGX_CMR_RX_STAT0-8 是每个 LMAC 独立的，而 CGX_CMR_RX_STAT9-12 是每个 CGX 块全局共享的。
+由于之前提交的补丁（66208910e57a）存在缺陷，在读取全局统计计数器（STAT9-12）时未正确处理 LMAC ID 参数。代码直接使用传入的 `lmac_id` 去读取全局寄存器，导致读取到的寄存器偏移量错误，从而获取到了陈旧且不正确的计数值。
+
+#解决方案
+修改 `cgx_get_rx_stats` 函数逻辑，在读取寄存器前判断请求的计数器索引。如果索引 `idx` 大于等于全局计数器起始索引（CGX_RX_STAT_GLOBAL_INDEX，即 STAT9-12），强制将 `lmac_id` 设置为 0，确保使用正确的寄存器偏移量来读取全局 CGX 统计数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ed820195658c882c86d1adeecd46d89d0b35c93b

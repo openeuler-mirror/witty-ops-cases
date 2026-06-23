@@ -1,0 +1,24 @@
+#标题
+arm64: RME环境下KVM_GET_REG_LIST返回寄存器列表不准确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在arm64 RME（Realm Management Extension）环境下，用户态通过KVM_GET_REG_LIST ioctl查询虚拟机寄存器列表时，内核返回的列表不准确。该列表包含了当前Realm模式下不支持或不应该由用户空间配置的寄存器（如通用定时器寄存器、固件寄存器、部分系统寄存器及SVE寄存器等），导致用户空间无法正确获知Realm虚拟机的真实寄存器视图。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在实现KVM_GET_REG_LIST接口时，未针对RME Realm虚拟机的特殊架构约束进行区分处理。代码逻辑中关于寄存器数量的计算（如num_timer_regs、kvm_arm_get_fw_num_regs等）和寄存器索引的拷贝函数均未判断`kvm_is_realm(vcpu->kvm)`条件，导致在Realm模式下依然向用户空间暴露了与普通虚拟机相同的寄存器集合，这包括了Realm模式下不存在或已被禁用的寄存器。
+
+#解决方案
+在KVM寄存器列表生成相关的代码路径中增加对RME Realm虚拟机的判断逻辑。具体修改包括：
+1. 定时器寄存器：在`num_timer_regs`和`copy_timer_indices`函数中增加判断，若为Realm虚拟机则返回数量为0，不拷贝相关寄存器。
+2. SVE寄存器：在`num_sve_regs`和`copy_sve_reg_indices`函数中限制Realm虚拟机仅返回`KVM_REG_ARM64_SVE_VLS`寄存器。
+3. 固件寄存器：修改`kvm_arm_get_fw_num_regs`和`kvm_arm_copy_fw_reg_indices`，Realm虚拟机返回数量为0。
+4. 系统寄存器：引入`kvm_realm_sys_reg_hidden_user`函数，在遍历系统寄存器表时过滤掉Realm模式下不应暴露的寄存器；同时修改`num_invariant_regs`和`num_demux_regs`逻辑，对Realm虚拟机返回0以隐藏不变寄存器和CCSIDR寄存器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/007432d9b0fc4f2dca824e5af166b90dc10b2d19

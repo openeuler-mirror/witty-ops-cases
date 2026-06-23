@@ -1,0 +1,20 @@
+#标题
+Bluetooth: CIS Established 事件处理中 BN 为 0 时 MTU 设置错误导致 ISO Data Path 建立失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在蓝牙 CIS（Connected Isochronous Stream）建立过程中，当某个方向的 BN（Burst Number）为 0 时（即该方向无等时数据传输），系统后续尝试为该已禁用的方向执行 LE Setup ISO Data Path 操作失败。
+
+#主要错误日志
+未知
+
+#问题根因
+根据蓝牙核心规范（Core v6.1），CIS Established 事件中 BN == 0x00 表示对应方向无等时数据，此时 SDU MTU 应设置为 0。然而内核代码未检查 BN 值，直接使用了硬件报告的 Max_PDU 值作为 MTU。Intel AX210 网卡在 Framed CIS 模式下，即便 BN 为 0 也会上报非零的 Max_PDU，导致内核错误地配置了非零 MTU，进而尝试对规范禁止的禁用方向建立 Data Path，引发失败。
+
+#解决方案
+在处理 `hci_le_cis_estabilished_evt` 事件时，增加对 BN 字段的判断逻辑：若对应方向的 BN 为 0，则强制将该方向的 SDU MTU 设置为 0，否则使用硬件上报的 PDU 值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a5dfc80240fb35213b95ba27141c3d9c21db3ef9

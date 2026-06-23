@@ -1,0 +1,39 @@
+#标题
+RDMA/hns：DCA内存地址信息泄露及SCC参数配置错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. DCA（Dynamic Connection Attachment）内存的 key 属性中直接包含内存指针，导致内核地址信息通过 sysfs 或其他接口泄露给用户态，存在安全隐患。
+2. 在配置 DCQCN、LDCP、HC3 等拥塞控制算法参数时，部分参数（如 TKP、GAMMA、BETA 等）的有效范围定义过宽或错误，导致配置了不符合硬件规格的参数值。
+3. 配置 SCC（Switch Congestion Control）参数失败时，驱动未及时回滚或更新用户态可见的参数缓存，导致用户看到的配置状态与实际硬件生效状态不一致。
+4. 误用格式化字符串（如 `%x` 打印有符号十进制数），导致日志信息显示不直观或产生误导。
+5. 在发送大报文负载时，可能因 ACK 请求频率（ACK_REQ_FREQ）设置不当引发非预期的重传。
+
+#主要错误日志
+- drivers/infiniband/hw/hns/hns_roce_mr.c:
+  `ibdev_err(ibdev, "invalid buf attr, region count %u, page shift %u.\n", ...)`
+- drivers/infiniband/hw/hns/hns_roce_qp.c:
+  `ibdev_err(ibdev, "create QP type %d failed(%d)\n", ...)`
+- drivers/infiniband/hw/hns/hns_roce_srq.c:
+  `dev_err(hr_dev->dev, "hns_roce:Unexpected event type %d on SRQ %06lx\n", ...)`
+- drivers/infiniband/hw/hns/hns_roce_hw_v2.c:
+  `ibdev_err_ratelimited(&hr_dev->ib_dev, "failed to configure scc param, opcode: 0x%x, ret = %d.\n", ...)`
+
+#问题根因
+1. **信息泄露**：在 `hns_roce_dca.c` 的 `add_dca_mem` 函数中，直接将内核内存指针 `(u64)mem` 赋值给 `attr.key`，该 key 值后续可能暴露给用户态。
+2. **参数范围错误**：宏定义中拥塞控制参数的最大值（如 `HNS_ROCE_DCQCN_TKP_MAX`、`HNS_ROCE_LDCP_GAMMA_MAX` 等）设置超过了硬件手册规定的有效范围（例如 TKP 应最大为 10，部分参数最大为 7），且 HC3 算法参数缺少最小值约束。
+3. **状态不一致**：`hns_roce_v2_config_scc_param` 函数在硬件配置失败时直接返回错误，未将 `scc_param->param` 更新为最新的配置值 `latest_param`，导致用户查询到的参数与实际不符。
+4. **逻辑缺陷**：`ACK_REQ_FREQ` 的计算逻辑未考虑 MTU 大小及特定拥塞控制算法（LDCP、HC3）的约束，导致在大报文场景下触发非预期行为。
+5. **代码风格问题**：部分日志打印使用了不匹配的格式化字符（如用 `0x%x` 打印十进制数）。
+
+#解决方案
+1. **修复信息泄露**：引入 SipHash 机制，使用随机生成的密钥 `dca_safe_hash_key` 对内存地址进行哈希处理，将哈希值作为 `attr.key`，从而消除地址泄露风险。
+2. **修正参数范围**：修正 DCQCN、LDCP、DIP、HC3 等拥塞控制算法相关参数的宏定义范围（如将 TKP_MAX 改为 10，GAMMA_MAX 改为 7，增加 HC3 相关参数的 MIN 值），确保参数值符合硬件规格。
+3. **修复状态同步**：在 `hns_roce_v2_config_scc_param` 失败处理路径中，增加 `memcpy(scc_param->param, scc_param->latest_param, ...)` 操作，确保即使配置失败也能更新参数缓存，或保持一致性。
+4. **优化 ACK 频率**：重新设计 `ACK_REQ_FREQ` 的计算逻辑，根据 MTU 动态计算值（限制最大报文长度为 64K），并对 LDCP 和 HC3 算法强制使用特定值，优化硬件性能并避免非预期重传。
+5. **修正日志格式**：统一修正日志打印中的格式化字符串，使其与变量类型匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c81824893b87edffa39389711d160c2dd5a03e1e

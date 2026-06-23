@@ -1,0 +1,22 @@
+#标题
+nft_quota 在配额耗尽瞬间匹配逻辑错误导致提前中断匹配
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 nft_quota 进行流量配额匹配时，当已消耗字节数刚好等于配额大小时，匹配行为异常。具体表现为：当 consumed bytes 等于 quota 时，规则匹配立即中断（返回 NFT_BREAK），导致流量被提前阻断或策略未按预期执行。与 xt_quota 的行为不一致，nft_quota 的有效匹配范围错误地局限在 [0, quota - 1]，而非预期的 [0, quota]。
+
+#主要错误日志
+未知
+
+#问题根因
+nft_quota 模块在判断是否超额（nft_overquota）时，逻辑判断条件有误。原代码使用 `consumed >= quota` 来判断是否“超额”，这导致当消耗量刚好达到配额界限时被判定为“已超额”并停止匹配。而正确的行为应与 xt_quota 保持一致，即在配额刚好耗尽时仍属于正常匹配范围，只有当消耗量严格大于配额（`consumed > quota`）时才应判定为“超额”。
+
+#解决方案
+修改 `net/netfilter/nft_quota.c` 中的 `nft_overquota` 函数逻辑：
+1.  将超额判断条件从 `consumed >= quota` 修改为 `consumed > quota`，确保消耗量等于配额时不被视为“超额”，从而将匹配范围修正为 [0, quota]。
+2.  引入新的 `report` 变量用于状态通知逻辑，当 `consumed >= quota` 时标记配额耗尽状态，触发 `NFT_QUOTA_DEPLETED_BIT` 设置和通知，从而解耦“匹配判断”与“状态通知”的逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/13862ce78e23a5e0fa4042695b5212bf5fd20033

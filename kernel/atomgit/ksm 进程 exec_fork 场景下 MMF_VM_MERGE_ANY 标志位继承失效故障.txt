@@ -1,0 +1,25 @@
+#标题
+ksm 进程 exec/fork 场景下 MMF_VM_MERGE_ANY 标志位继承失效故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 KSM（Kernel Samepage Merging）扫描频率被设置为极高的情况下，进程在执行 exec 或 fork 操作时，MMF_VM_MERGE_ANY 标志位的继承可能会失败。具体表现为：父进程设置了 MMF_VM_MERGE_ANY 标志，但新 exec 的进程在启动后丢失了该标志，导致后续的 VMA 无法被 ksmd 强制扫描，进程的内存合并功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+该问题由两个层面的原因共同导致：
+1. **时序问题**：在 `do_execve` 流程中，`ksm_execve()` 被调用得过早，导致新的 mm_struct 被过早加入 ksm_mm_slot 列表。
+2. **逻辑缺陷**：在此期间，ksmd 可能已经完成了一次扫描，发现该新的 mm_struct 尚无可合并的 VMA（VM_MERGEABLE），根据原有逻辑错误地清除了 MMF_VM_MERGE_ANY 标志位。
+这导致进程尚未正式开始运行或分配匿名 VMA 前，其继承的 MMF_VM_MERGE_ANY 标志已被清除。
+
+#解决方案
+通过修改 `mm/ksm.c` 中的扫描和添加逻辑进行修复：
+1. **保留标志位**：在 `scan_get_next_rmap_item` 函数中，当 ksmd 扫描发现没有 mergeable VMA 时，仅清除 MMF_VM_MERGEABLE 标志，**不再清除 MMF_VM_MERGE_ANY 标志**。这是为了防止刚加入扫描列表但尚未正式运行的进程丢失其继承的合并属性。
+2. **重新检查与注册**：在 `ksm_add_vma` 函数中，当进程带有 MMF_VM_MERGE_ANY 标志时，额外检查 MMF_VM_MERGEABLE 标志是否因 ksmd 提前扫描而被意外清除。如果发现该标志丢失，调用 `__ksm_enter(mm)` 重新创建 mm_slot 并将其加入 `ksm_scan_list`，确保进程能恢复 KSM 扫描功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/59ffcf9b977ad41c595e02b2bfa4741cca06536e

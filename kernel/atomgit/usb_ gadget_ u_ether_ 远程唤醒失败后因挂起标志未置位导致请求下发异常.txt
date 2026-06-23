@@ -1,0 +1,20 @@
+#标题
+usb: gadget: u_ether: 远程唤醒失败后因挂起标志未置位导致请求下发异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 UDC（USB Device Controller）处于挂起状态且有数据传输挂起时，u_ether 驱动尝试向主机发起远程唤醒。若远程唤醒操作失败，UDC 仍保持挂起状态，但驱动的 `is_suspend` 标志位未被正确设置。此状态不一致导致后续的 `eth_start_xmit()` 函数误认为设备处于活动状态，继续向已挂起的 UDC 队列下发 USB 请求，可能导致传输失败或系统异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `gether_suspend()` 函数中，当存在挂起的传输时调用 `ether_wakeup_host()` 尝试唤醒主机。原代码逻辑中，无论远程唤醒是否成功，函数都直接返回，未继续执行设置 `link->is_suspend = true` 的代码路径。因此，当远程唤醒失败时，UDC 维持挂起状态，而驱动却未标记挂起标志，造成后续数据包发送逻辑判断错误。
+
+#解决方案
+修改 `gether_suspend()` 函数的逻辑，检查 `ether_wakeup_host()` 的返回值。仅当远程唤醒成功时才提前返回；若远程唤醒失败，程序继续向下执行，正确设置 `is_suspend` 标志位，确保设备状态与驱动标记一致，防止在 UDC 挂起期间错误地提交 USB 请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4770b2695ce912a109b5af735f5520c06ddbdc01

@@ -1,0 +1,21 @@
+#标题
+Dell系统S4休眠唤醒后触控板因I2C总线仲裁错误失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Dell 系统在执行 S4（休眠）镜像恢复后，触控板无法正常工作。该问题发生在 i2c-hid 模块未包含在启动内核或 initramfs 中（仅存在于 rootfs）的场景下。
+
+#主要错误日志
+未知
+
+#问题根因
+Dell 系统利用 EC（嵌入式控制器）模拟触控板，当 ACPI 触控板 _DSM 方法未被调用时，该模拟功能会作为 I2C 总线上的第二主控端运行。正常加载 i2c-hid 模块会触发 _DSM 调用从而禁用 EC 模拟。
+若 i2c-hid 模块不在用于 S4 镜像恢复的启动内核中，_DSM 在初始化阶段未被调用，导致 I2C 总线上存在两个主控端（主机端与 EC 模拟端），引发总线仲裁错误，进而导致触控板失效。
+
+#解决方案
+修改 PM（电源管理）回调机制，不再使用 SYSTEM_SLEEP_PM_OPS() 宏，转而使用显式的回调函数。新增专门的 `.restore` 回调函数 `i2c_hid_core_pm_restore`，确保在 S4 镜像恢复路径上显式调用 `_DSM` 方法（通过 `i2c_hid_acpi_restore_sequence` 实现），从而正确禁用 EC 模拟，避免 I2C 总线冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/46c628085465aee8571c7aab94fd2ec8b94d7cb7

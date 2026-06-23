@@ -1,0 +1,20 @@
+#标题
+Hygon CSV3 VM 直通设备时因并发锁定共享页面导致引用计数不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在将设备直通给 Hygon CSV3 虚拟机时，KVM 侧和 VFIO 侧并发地对共享页面进行 pin 操作，导致页面的引用计数出现不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+CSV3 虚拟机管理代码在锁定共享页面时使用了读锁，导致 KVM 侧和 VFIO 设备直通侧可以并发获取读锁并同时执行 pin_user_pages 操作，进而引发页面引用计数不一致的问题。
+
+#解决方案
+将 CSV3 虚拟机管理代码中的内存映射锁由读锁改为写锁，并将 `pin_user_pages_fast` 调用改为 `pin_user_pages`，在调用前获取 `mmap_write_lock`，调用后释放。通过强制使用写锁，阻止了 CSV3 管理侧与 VFIO 侧的并发读锁操作，从而解决了引用计数不一致问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d8d610d3574911dd83381dbafd4340f1575d91a9

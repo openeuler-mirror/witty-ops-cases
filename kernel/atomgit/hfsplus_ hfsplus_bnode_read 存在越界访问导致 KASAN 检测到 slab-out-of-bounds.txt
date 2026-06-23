@@ -1,0 +1,42 @@
+#标题
+hfsplus: hfsplus_bnode_read 存在越界访问导致 KASAN 检测到 slab-out-of-bounds
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在执行 HFS+ 文件系统相关操作（如删除文件 unlink）时，触发 KASAN 检测机制，报告 slab-out-of-bounds 错误。具体表现为进程在调用 `hfsplus_bnode_read` 函数时，尝试读取已分配内存区域之外的地址，导致内核崩溃或异常日志输出。
+
+#主要错误日志
+```
+[  174.852709][ T9784] BUG: KASAN: slab-out-of-bounds in hfsplus_bnode_read+0x2f4/0x360
+[  174.853412][ T9784] Read of size 8 at addr ffff88810b5fc6c0 by task repro/9784
+[  174.854281][ T9784] CPU: 1 UID: 0 PID: 9784 Comm: repro Not tainted 6.16.0-rc3 #7 PREEMPT(full)
+...
+[  174.854362][ T9784]  hfsplus_bnode_dump+0x2ec/0x380
+[  174.854411][ T9784]  __hfsplus_delete_attr+0x290/0x3a0
+[  174.854469][ T9784]  hfsplus_delete_all_attrs+0x262/0x320
+[  174.854483][ T9784]  hfsplus_delete_cat+0x845/0xde0
+[  174.854516][ T9784]  hfsplus_unlink+0x1ca/0x7c0
+...
+[  174.887507][ T9784] The buggy address is located 40 bytes to the right of
+[  174.887507][ T9784]  allocated 152-byte region [ffff88810b5fc600, ffff88810b5fc698)
+```
+（推断）修复后可能出现的告警日志：
+```
+requested invalid offset: NODE: id %u, type %#x, height %u, node_size %u, offset %d
+requested length has been corrected: NODE: id %u, type %#x, height %u, node_size %u, offset %d, requested_len %d, corrected_len %d
+requested zero length: NODE: id %u, type %#x, height %u, node_size %u, offset %d, len %d
+```
+
+#问题根因
+HFS+ 文件系统的 bnode 处理函数（如 `hfsplus_bnode_read`）在接受传入的偏移量和长度参数时，未对其进行有效性检查。如果传入的偏移量或长度值不正确（例如超出节点大小的范围），代码会直接进行内存访问操作，从而导致越界访问已分配的内存区域，触发 KASAN 报错或系统崩溃。
+
+#解决方案
+在 `fs/hfsplus/bnode.c` 中引入边界检查机制：
+1. 新增 `is_bnode_offset_valid()` 函数，用于验证请求的偏移量是否小于节点大小，防止非法偏移。
+2. 新增 `check_and_correct_requested_length()` 函数，用于检查请求的长度是否超出节点边界，若超出则自动修正长度以防止越界访问。
+3. 在 `hfsplus_bnode_read`、`hfsplus_bnode_write`、`hfsplus_bnode_clear`、`hfsplus_bnode_copy` 和 `hfsplus_bnode_move` 等关键函数入口处添加上述检查逻辑，确保所有 bnode 读写操作均在合法的内存范围内进行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e5fd8fdcc6ba6e024cf6d5895935db64bab99221

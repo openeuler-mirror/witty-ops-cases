@@ -1,0 +1,23 @@
+#标题
+amd-xgbe: 修复挂起/恢复过程中的原子上下文睡眠问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 AMD XGBE 以太网控制器的系统上，执行挂起或恢复操作时，系统触发崩溃或调用栈警告，导致挂起/恢复流程失败。
+
+#主要错误日志
+BUG: scheduling while atomic
+
+#问题根因
+在 `xgbe_powerdown()` 和 `xgbe_powerup()` 函数中，代码在持有自旋锁（`spin_lock_irqsave`）的情况下调用了可能引起睡眠的函数：
+1. `napi_disable()` 在等待 NAPI 轮询完成时可能睡眠。
+2. `flush_workqueue()` 在等待挂起的工作项时可能睡眠。
+在原子上下文（持有自旋锁）中调用这些睡眠函数导致了 "scheduling while atomic" 错误。实际上，这些函数由 PM 核心调用，其路径已被序列化，因此这里的自旋锁保护是多余的。
+
+#解决方案
+移除 `xgbe_powerdown()` 和 `xgbe_powerup()` 函数中的 `spin_lock_irqsave` 与 `spin_unlock_irqrestore` 调用，并彻底删除 `struct xgbe_prv_data` 中不再需要的 `lock` 成员及其初始化代码，从而避免在原子上下文中睡眠。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4764b547b5b3b4258685336d5efb8ce96799879f

@@ -1,0 +1,22 @@
+#标题
+mtd: ofpart 分区解析器因 of_node 引用计数失衡导致释放错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 MTD 设备执行重复的 bind/unbind 操作时，内核检测到 Device Node 引用计数错误。系统打印出 `of_node_release()` 检测到错误的 `of_node_put()` 调用警告，并显示具体的设备节点路径。此现象会导致内核引用计数机制紊乱，可能引发后续的内存访问异常或系统不稳定。
+
+#主要错误日志
+OF: ERROR: of_node_release() detected bad of_node_put() on /soc/spi@80007000/flash@0/partitions/partition@0
+
+#问题根因
+在修复提交 7cce81df7d26 引入的逻辑中，`parse_fixed_partitions()` 函数在所有退出路径上都调用了 `of_node_put(ofpart_node)`。
+当处理拥有父节点的专用分区时，代码将 `mtd_node` 直接赋值给 `ofpart_node`，此时并未增加该节点的引用计数（未调用 `of_node_get()`）。然而，函数退出时却无条件执行了 `of_node_put()`，导致引用计数被错误地递减。
+在反复进行 MTD 设备的 bind/unbind 操作过程中，这种不平衡的减法操作最终导致引用计数降为 0，触发了内核对非法节点释放的防护性报错。
+
+#解决方案
+在将 `mtd_node` 赋值给 `ofpart_node` 时，显式调用 `of_node_get(mtd_node)` 以增加节点的引用计数。这样可以平衡后续退出路径中调用的 `of_node_put()`，确保引用计数的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e239490b67f82364ca74c7639e0ab5f2bce80f0a

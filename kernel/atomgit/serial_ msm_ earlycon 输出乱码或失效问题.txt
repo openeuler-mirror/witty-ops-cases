@@ -1,0 +1,20 @@
+#标题
+serial: msm: earlycon 输出乱码或失效问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 MSM UART DM 控制器的 earlycon 功能时，若 Bootloader 使用了单字符模式，会导致内核早期控制台输出乱码，具体表现为每隔 4 个字符才显示一个字符；若 Bootloader 使用了 DMA 模式，输出可能会完全失败。只有在后续完整串口驱动加载并重新初始化端口后，输出才能恢复正常。
+
+#主要错误日志
+[ 00oni pi  000xf0[ 00i s 5rm9(l)l s 1  1 SPMTA 7:C 5[ 00A ade k d[ 00ano:ameoi .Q1B[ 00ac _idaM00080oo'
+
+#问题根因
+MSM UART DM 控制器支持多种工作模式（如 DMA 模式或单字符模式）。`__msm_console_write()` 函数在 earlycon 阶段总是一次写入 4 个字符，但代码未检查或设置 Bootloader 遗留的工作模式。当 Bootloader 使用单字符模式时，硬件配置与写入方式不匹配，导致输出乱码（仅每第 4 个字符显示）；当 Bootloader 使用 DMA 模式时，输出可能直接失败。
+
+#解决方案
+在 `msm_serial_early_console_setup_dm` 初始化阶段，通过清除 `UARTDM_DMEN` 寄存器禁用 DMA/单字符模式，并依次发送复位接收、复位发送和使能发送命令，强制将发送器置于预期的默认状态，确保 earlycon 写入操作能正确执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c22357128e55ed0b9aacd2afc4878ecdfa81cc87

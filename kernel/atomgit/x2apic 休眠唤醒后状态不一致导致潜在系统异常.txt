@@ -1,0 +1,20 @@
+#标题
+x2apic 休眠唤醒后状态不一致导致潜在系统异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在休眠唤醒过程中，如果固件错误地重新启用了 x2apic 模式，会导致内核与硬件状态不一致。系统会检测到此异常状态，打印警告日志并尝试关闭 x2apic，这可能影响中断控制器的正常工作。
+
+#主要错误日志
+x2apic: re-enabled by firmware during resume. Disabling
+
+#问题根因
+在系统休眠唤醒流程中，BIOS/固件可能违规重新启用了 x2apic。内核原有的 `lapic_resume` 逻辑在处理非 x2apic 模式恢复时，未检查固件是否篡改了 x2apic 的启用状态。若固件开启了 x2apic 而内核仍认为处于 xapic 模式，会导致 APIC 状态不一致，进而引发系统故障。
+
+#解决方案
+在 `lapic_resume` 函数的非 x2apic 模式分支中增加状态检查逻辑：调用 `x2apic_enabled()` 检测固件是否在唤醒过程中开启了 x2apic。如果检测到已开启，使用 `pr_warn_once` 打印警告日志，并调用 `__x2apic_disable()` 强制关闭 x2apic 以恢复内核预期的硬件状态。同时补全了 `CONFIG_X86_X2APIC` 未配置时的 `__x2apic_disable` 空桩函数定义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/18dcba36bee87a247dfc1ebbe1708855ce65f92d

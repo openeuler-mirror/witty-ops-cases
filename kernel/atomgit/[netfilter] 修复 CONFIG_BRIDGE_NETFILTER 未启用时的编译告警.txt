@@ -1,0 +1,29 @@
+#标题
+[netfilter] 修复 CONFIG_BRIDGE_NETFILTER 未启用时的编译告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 x86_64 defconfig 配置下（未启用 CONFIG_BRIDGE_NETFILTER），使用 gcc-14 并开启 W=1 编译选项编译内核时，编译过程因警告被视作错误而中断。具体表现为 `nf_reject_ipv4.c` 和 `nf_reject_ipv6.c` 文件中存在“变量已赋值但未使用”的编译错误。
+
+#主要错误日志
+net/ipv4/netfilter/nf_reject_ipv4.c: In function 'nf_send_reset':
+net/ipv4/netfilter/nf_reject_ipv4.c:243:23: error: variable 'niph' set but not used [-Werror=unused-but-set-variable]
+  243 |         struct iphdr *niph;
+      |                       ^~~~
+cc1: all warnings being treated as errors
+net/ipv6/netfilter/nf_reject_ipv6.c: In function 'nf_send_reset6':
+net/ipv6/netfilter/nf_reject_ipv6.c:286:25: error: variable 'ip6h' set but not used [-Werror=unused-but-set-variable]
+  286 |         struct ipv6hdr *ip6h;
+      |                         ^~~~
+cc1: all warnings being treated as errors
+
+#问题根因
+在 `nf_send_reset` 和 `nf_send_reset6` 函数中，定义了局部变量 `niph` 和 `ip6h` 并进行了赋值。然而，这些变量仅在 `CONFIG_BRIDGE_NETFILTER` 宏启用时的代码块中被使用。当 `CONFIG_BRIDGE_NETFILTER=n` 时，这部分代码不参与编译，导致变量处于“已赋值但未使用”的状态，从而触发 gcc-14 的 `-Werror=unused-but-set-variable` 错误。
+
+#解决方案
+将仅用于网桥网络过滤逻辑的局部变量 `niph` 和 `ip6h` 的定义与初始化移动到 `if (nf_bridge_info_exists(oldskb))` 条件判断块内部。通过缩小变量的作用域，确保这些变量仅在 `CONFIG_BRIDGE_NETFILTER` 启用时存在并使用，从而消除未启用该配置时的编译告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31df12ce886728b4d0131132fa970a81a9accddd

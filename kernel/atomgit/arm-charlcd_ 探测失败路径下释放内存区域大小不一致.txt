@@ -1,0 +1,22 @@
+#标题
+arm-charlcd: 探测失败路径下释放内存区域大小不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 charlcd_probe() 函数执行过程中，若因某些步骤失败（如 iounmap 之后）进入错误处理路径 `out_no_memregion` 时，内核调用 `release_mem_region()` 释放内存资源。由于释放的大小参数使用了硬编码的 `SZ_4K` 而非实际申请的 `lcd->physize`，导致释放的资源大小与之前通过 `request_mem_region()` 申请的大小不匹配，可能引发资源泄露或资源管理混乱。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，`request_mem_region()` 与对应的 `release_mem_region()` 必须采用相同的大小参数。
+在之前的代码逻辑中（已移除的 charlcd_remove 函数）处理正确，但在 charlcd_probe() 的错误处理路径中，代码错误地使用了硬编码的 `SZ_4K` 作为释放大小，未使用记录实际申请大小的变量 `lcd->physize`。
+
+#解决方案
+修改 `drivers/auxdisplay/arm-charlcd.c` 文件中 `charlcd_probe` 函数的错误处理路径代码。
+将 `out_no_memregion` 标签处的 `release_mem_region(lcd->phybase, SZ_4K);` 修改为 `release_mem_region(lcd->phybase, lcd->physize);`，确保释放操作传入的大小参数与申请时一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7bdd95a66354855e2ded920ce9ab97ec580653ef

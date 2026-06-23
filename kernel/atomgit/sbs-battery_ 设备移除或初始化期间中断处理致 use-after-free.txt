@@ -1,0 +1,20 @@
+#标题
+sbs-battery: 设备移除或初始化期间中断处理致 use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在移除 sbs-battery 设备或初始化探测（probe）过程中，可能发生内核崩溃或内存静默损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序中 `devm_request_threaded_irq` 的调用时机早于 `devm_power_supply_register` 的注册时机。由于 `devm` 资源释放遵循反向顺序，导致在设备移除时，`power_supply` 句柄先于 IRQ 处理程序被释放；此时若中断恰好触发，IRQ 处理程序将调用 `power_supply_changed()` 操作已释放的句柄，从而引发 use-after-free。此外，在 probe 阶段也存在中断在句柄注册前触发导致使用未初始化句柄的竞态风险。
+
+#解决方案
+调整代码执行顺序，确保 `power_supply` 句柄的注册先于 IRQ 的请求。具体通过移动代码块，将 `devm_request_threaded_irq` 及相关 GPIO 检测逻辑置于 `devm_power_supply_register` 之后执行，保证中断处理时句柄已有效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7bc9eeba2f4962593673a906f12c2e6fd574a66a

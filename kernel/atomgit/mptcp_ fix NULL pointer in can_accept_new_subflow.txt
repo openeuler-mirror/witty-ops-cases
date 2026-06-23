@@ -1,0 +1,20 @@
+#标题
+mptcp: fix NULL pointer in can_accept_new_subflow
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 MPTCP MP_JOIN 子流连接请求时，内核可能发生空指针引用错误。具体表现为在 TCP 三次握手第三次 ACK 到达时，服务端内核触发 panic 或 Oops，导致连接建立失败或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `subflow_syn_recv_sock` 函数处理 MP_JOIN 请求流程中，原代码逻辑存在缺陷：在尚未确认 `subflow_req->msk` 指针有效性的情况下，过早调用了 `mptcp_can_accept_new_subflow(subflow_req->msk)` 和 `subflow_hmac_valid` 函数。由于此时 `msk`（MPTCP socket 结构）可能为 NULL，导致内核在解引用该指针时触发空指针访问错误。
+
+#解决方案
+调整 MP_JOIN 请求的校验逻辑顺序，将 `subflow_hmac_valid` 和 `mptcp_can_accept_new_subflow` 的调用时机移至 `create_child` 标签之后、完全创建子套接字之前。确保仅在成功创建子流上下文后进行 HMAC 校验和新建子流权限检查。若校验失败，增加发送 RST 报文（MPTCP_RST_EPROHIBIT）并跳转至 `dispose_child` 进行资源清理，从而避免空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cb3fbde73bf936278b3497d03e6145a51011f3f7

@@ -1,0 +1,20 @@
+#标题
+rtnetlink: 未初始化栈变量导致内核栈信息泄露漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+本地无特权进程可通过 NETLINK_ROUTE 发送 RTM_GETLINK 请求，导致内核向用户空间泄露未初始化的内核栈内存数据（每个 VF 泄露约 26 字节）。开启 KASAN 栈仪器或 KMSAN 时可检测到该非法内存访问。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `rtnl_fill_vfinfo()` 中声明了结构体 `struct ifla_vf_broadcast vf_broadcast` 但未进行初始化。随后的 `memcpy` 操作仅根据 `dev->addr_len`（以太网通常为 6 字节）写入了部分数据，导致该结构体剩余 26 字节保留了栈上的旧数据。最终该结构体通过 `nla_put()` 完整发送至用户空间，造成信息泄露。
+
+#解决方案
+在进行数据拷贝前，使用 `memset` 将结构体 `vf_broadcast` 清零，确保未写入的字节不包含敏感的栈残留数据。此修复方式与同函数中其他 `vf_*` 结构体的处理方式保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b0d6b9f77ccbf155ae47b92da0b587227e1ece09

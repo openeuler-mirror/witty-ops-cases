@@ -1,0 +1,20 @@
+#标题
+xHCI 控制器热拔插时打印无效错误日志
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 USB4 扩展坞（USB4 dock）从系统上被意外拔出（热拔插）时，内核日志中会显示 "xHCI host controller not responding, assume dead" 等错误信息。这是由于设备已被物理移除，无法响应 Ring 事件，控制器进入清理流程。此现象属于预期行为，错误日志对用户和问题排查没有实际价值，反而可能造成干扰或误导。
+
+#主要错误日志
+xHCI host controller not responding, assume dead
+
+#问题根因
+当 USB4 扩展坞被意外拔出时，硬件无法响应 Ring 事件。PCI 核心处理了意外移除事件并通知 XHCI 驱动，驱动会设置 `XHCI_STATE_REMOVING` 标志位。但在 `xhci_hc_died` 函数执行清理流程时，未判断该标志位，导致仍然打印出控制器无响应的错误日志，实际上这只是正常的设备移除过程。
+
+#解决方案
+在 `xhci_hc_died` 函数中增加对 `XHCI_STATE_REMOVING` 状态的判断逻辑。仅当控制器未被标记为正在移除（`notify` 变量为真）时，才打印控制器无响应的错误日志并通知 USB 核心主机已死亡；若处于移除状态，则跳过错误日志打印，避免刷屏干扰。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5b37926fe26c6d3cb39ed65316a4b76adde0fc88

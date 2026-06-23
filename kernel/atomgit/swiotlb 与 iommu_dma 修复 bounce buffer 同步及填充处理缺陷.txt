@@ -1,0 +1,26 @@
+#标题
+swiotlb 与 iommu/dma 修复 bounce buffer 同步及填充处理缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在使用 SWIOTLB 进行 DMA bounce buffer 处理时，如果设备对齐要求导致分配存在偏移，`swiotlb_bounce()` 函数在进行部分同步操作时可能发生错误，导致数据损坏或内核警告。
+2. 对于不可信设备，DMA 映射时未正确清零 bounce buffer 的 pre-padding 和 post-padding 区域，可能导致内核敏感数据泄露给外部设备。
+
+#主要错误日志
+推断日志（基于补丁移除的 dev_WARN_ONCE 逻辑）：
+"Access before mapping start detected. orig offset %u, requested offset %u.\n"
+"Buffer overflow detected. Allocation size: %zu. Mapping size: %zu+%u.\n"
+
+#问题根因
+1. **swiotlb 同步计算错误**：`swiotlb_bounce()` 函数在计算偏移量时，错误地将 `tlb_addr` 的 slot 内偏移与 `orig_addr` 的对齐偏移直接比较。当 `tlb_addr` 指向分配区域的非首 slot 且存在对齐偏移时，计算出的 `tlb_offset` 可能为负值或错误值，原代码未正确处理负偏移场景，导致判定为 "Access before mapping start" 或 "Buffer overflow"。
+2. **iommu/dma 填充区清零缺陷**：在 `iommu_dma_map_page()` 中，对不可信设备的 bounce buffer 填充区清零逻辑不完善。原代码仅简单计算 `aligned_size` 并清零，未正确区分并处理 pre-padding 和 post-padding，且在某些条件下可能跳过清零操作，导致不可信设备能读取到未初始化的内核数据。
+
+#解决方案
+1. **重构 swiotlb 偏移计算**：修改 `swiotlb_bounce()` 函数，允许 `tlb_offset` 为负值以处理跨越 slot 的对齐偏移场景，并更新相关计算逻辑以正确处理部分同步。
+2. **扩展 slot 结构与分配逻辑**：在 `io_tlb_slot` 结构体中新增 `pad_slots` 字段记录前置填充 slot 数量，并修改 `swiotlb_align_offset()` 和 `swiotlb_tbl_map_single()` 以支持更复杂的对齐需求（`alloc_align_mask`）。
+3. **修正 iommu/dma 填充区清零**：移除 `swiotlb_tbl_map_single()` 的 `alloc_size` 参数，改为内部计算。在 `iommu_dma_map_page()` 中，针对不可信设备显式计算并使用 `memset` 分别清零 pre-padding 和 post-padding 区域，防止数据泄露。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/367e8c275a728416c4dbdd2c8364b67171103edb

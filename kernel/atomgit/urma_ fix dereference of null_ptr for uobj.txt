@@ -1,0 +1,24 @@
+#标题
+urma: fix dereference of null_ptr for uobj
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 uburma 模块调用 `uobj_alloc_begin` 函数时，若底层 `type_class->alloc_begin` 返回 NULL 指针，内核将对 NULL 指针进行解引用（`uobj->class_id = class_id`），导致内核发生空指针解引用（NULL Pointer Dereference）错误，可能引发 panic 或 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `uobj_alloc_begin` 调用 `type->type_class->alloc_begin` 获取对象 `uobj` 后，原代码直接对 `uobj` 进行解引用赋值（`uobj->class_id = class_id`），随后才使用 `IS_ERR(uobj)` 检查错误。此逻辑存在两个缺陷：
+1. 未处理 `alloc_begin` 返回 NULL 指针的情况，导致后续解引用操作触发空指针访问。
+2. 错误检查顺序颠倒，先解引用后检查错误，无法避免异常指针的访问。
+
+#解决方案
+调整代码逻辑，在解引用 `uobj` 之前先进行有效性检查：
+1. 将错误检查宏从 `IS_ERR(uobj)` 修改为 `IS_ERR_OR_NULL(uobj)`，以覆盖返回 NULL 的场景。
+2. 将指针有效性检查逻辑前移，确保只有在 `uobj` 非 NULL 且非 ERR 时才执行 `uobj->class_id = class_id` 赋值操作，否则提前释放信号量并返回。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f5d52a4bab956bbdf22dbc5be73ec013df15e91f

@@ -1,0 +1,20 @@
+#标题
+KVM: SVM 处理 DEBUGCTL 寄存器因 AMD 架构变更导致兼容性问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 BusLockTrap 功能的 AMD CPU 上运行 KVM 虚拟机时，由于 AMD 修改了 DEBUGCTL 寄存器（MSR_IA32_DEBUGCTLMSR）第 2:5 位的架构定义，导致旧版本 KVM 虚拟化行为与新硬件架构不兼容。旧版硬件上这些位控制外部性能监控/断点引脚，而新版硬件将其重新定义为 Bus Lock #DB Trap 控制位及保留位。若不处理，可能导致 Guest 尝试设置这些位时行为异常或引发不可预期的硬件行为。
+
+#主要错误日志
+未知
+
+#问题根因
+AMD 修改了 DEBUGCTL 寄存器第 2:5 位的架构行为。在支持 BusLockTrap 的 CPU 上，第 2 位被重定义为 BLCKDB，第 5:3 位被保留（Must Be Zero）。而旧版 KVM 允许 Guest 设置这些位，但并未真正虚拟化旧版定义的“外部引脚控制”功能，也未屏蔽新版定义下的保留位，导致在新旧 CPU 架构间出现向后兼容性问题。
+
+#解决方案
+在 `svm_set_msr` 函数中，对 Guest 写入的 DEBUGCTL 值进行修正，通过 `data &= ~GENMASK(5, 2)` 将第 2:5 位强制清零。同时更新 `DEBUGCTL_RESERVED_BITS` 宏定义为 `~(DEBUGCTLMSR_BTF | DEBUGCTLMSR_LBR)`，以确保只保留 LBR 和 BTF 功能位的有效性，屏蔽掉发生架构变更的位，从而维持 Guest 的向后兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1b50c359d7d81abe53077cca72326d644480f082

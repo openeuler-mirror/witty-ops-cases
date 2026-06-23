@@ -1,0 +1,25 @@
+#标题
+x86/amd: CPUID 0x80000008 解析器错误设置 SMT 域导致拓扑识别错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+AMD 处理器环境下，内核在解析 CPUID 0x80000008 叶片时错误地初始化了 SMT（超线程）域层级。这会导致 CPU 拓扑结构识别不正确，系统可能无法正确识别物理核与逻辑线程的关系，影响调度器性能及与 CPU 拓扑相关的功能。
+
+#主要错误日志
+未知
+
+#问题根因
+CPUID 0x80000008 ECX 寄存器中的 `cpu_nthreads` 字段描述的是封装中的线程总数，而不是每个物理核心的线程数。
+解析器错误地使用该值来初始化 SMT 域层级。正确的逻辑应当是根据 `cpu_nthreads` 设置 CORE 域层级，并将 SMT 域预设为每个核心一个线程（单线程），随后再由其他解析器（如 leaf 0x8000001e）根据实际情况更新 SMT 域。
+
+#解决方案
+修改 `arch/x86/kernel/cpu/topology_amd.c` 中的解析逻辑：
+1. 不再使用 `ecx.cpu_nthreads` 设置 `TOPO_SMT_DOMAIN`。
+2. 将 SMT 域默认更新为 0 shift（即假设每核单线程），以防没有其他解析器介入时状态正确。
+3. 使用 `ecx.cpu_nthreads` 设置 `TOPO_CORE_DOMAIN`，正确反映封装内的核心/线程总数宽度。
+4. 调整后续 `parse_8000_001e` 函数的逻辑，在 leaf 0xb 不可用时，基于已设置好的 CORE 域仅更新 SMT 域，避免错误传播。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/85efc9220e9d5af056c72e8a4d23f63ce2ee3dd2

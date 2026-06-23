@@ -1,0 +1,20 @@
+#标题
+pinctrl: sunxi 驱动中 krealloc 失败导致的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sunxi pinctrl 驱动解析设备树节点时，若内存重新分配（krealloc）失败，函数直接返回错误码，导致之前通过 kmalloc_array 分配的内存块未被释放，造成内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `sunxi_pctrl_dt_node_to_map()` 中，当 `krealloc()` 尝试调整 `pinctrl_map` 数组大小失败时，代码直接返回 `-ENOMEM`，未释放之前已分配的 `*map` 缓冲区。这导致了原始 `kmalloc_array` 分配的内存发生泄漏。
+
+#解决方案
+在 `krealloc` 失败的分支中，不再直接返回错误码，而是设置错误码 `ret = -ENOMEM` 后跳转至现有的错误处理标签 `err_free_map`，确保在返回前释放已分配的内存资源，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0a92712a4088ddfbfc883b8b0766b37264b29fb4

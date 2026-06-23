@@ -1,0 +1,20 @@
+#标题
+net_sched: hfsc: Fix a potential UAF in hfsc_dequeue() too
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HFSC (Hierarchical Fair Service Curve) 流量调度分类器的出队过程中，存在潜在的 Use-After-Free (UAF) 风险。当 HFSC 分类器嵌套使用某些特定的子 qdisc（如 netem 或 codel）时，如果子 qdisc 在 peek（预窥）操作期间将队列清空，会导致 HFSC 分类器误判队列状态，进而可能访问已释放的内存或导致内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hfsc_dequeue()` 函数中，代码先获取子 qdisc 的队列长度，随后调用 `qdisc_peek_len()` 进行窥视操作。然而，部分 qdisc 实现（例如 netem 和 codel）在执行 peek 操作时可能会产生副作用，即将队列清空。原代码在 peek 操作后未再次检查队列长度 `cl->qdisc->q.qlen`，直接基于之前的检查结果调用 `update_ed` 或 `update_d` 函数。如果队列已被 peek 操作清空，此时操作基于无效的队列状态进行，从而引发 UAF 或其他内存访问错误。
+
+#解决方案
+在 `qdisc_peek_len()` 调用之后、执行状态更新（`update_ed` 或 `update_d`）之前，增加对子 qdisc 队列长度 `cl->qdisc->q.qlen` 的二次检查。确保仅在队列非空时才执行后续的更新操作，防止因队列在 peek 过程中被清空而导致的 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3132bd4ec2c550753697746216ba73e4fd5b4ee1

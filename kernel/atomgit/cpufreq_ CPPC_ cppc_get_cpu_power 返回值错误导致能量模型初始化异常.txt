@@ -1,0 +1,20 @@
+#标题
+cpufreq: CPPC: cppc_get_cpu_power 返回值错误导致能量模型初始化异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用 `cppc_get_cpu_power()` 获取 CPU 功率时，若 `cpufreq_cpu_get_raw()` 返回的 policy 为 NULL，函数错误地返回 0。这导致内核能量模型（EM）在 `em_create_perf_table()` 中进行后续处理时，无法正确检测到功率获取失败的情况，可能引发无效的内存访问或导致能量模型表创建逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `cppc_get_cpu_power()` 中，当 `policy` 指针为 NULL 时，原代码返回了 0。根据内核能量模型核心逻辑，它会首先检查 `active_power()` 回调函数的返回值。如果回调失败，应返回负值错误码告知核心层。返回 0 导致核心层误认为成功，但在后续的 `em_create_perf_table()` 中，零值检查失效（因为返回 0 被误判为合法值），且此时 power 变量可能处于未初始化状态，从而引发问题。
+
+#解决方案
+修改 `drivers/cpufreq/cppc_cpufreq.c` 文件中的 `cppc_get_cpu_power()` 函数。当 `policy` 为 NULL 时，将返回值从 0 修改为 `-EINVAL`，明确向内核能量模型核心层指示回调失败，避免后续逻辑异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/645250e68f3a237e5c797224fee6b6be589ad45f

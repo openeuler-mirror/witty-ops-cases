@@ -1,0 +1,22 @@
+#标题
+usb: core: hcd: 修复 SINGLE_STEP_SET_FEATURE 测试中访问未映射内存的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 USB SINGLE_STEP_SET_FEATURE 测试时，若系统配备了 IOMMU，测试流程无法完成。SETUP 阶段完成后，USB 控制器在接收设备描述符（device descriptor）时尝试访问内存，但该内存区域的 DMA 映射已被取消，导致内存访问被 IOMMU 阻塞。
+
+#主要错误日志
+未知
+
+#问题根因
+USB 核心层在 SETUP 阶段完成后会取消映射 urb->transfer_dma。随后 USB 控制器在接收设备描述符（IN stage）时再次访问该内存区域，此时内存已处于未映射状态。若系统配置了 IOMMU，该非法内存访问会被拦截，导致测试无法完成。
+
+#解决方案
+在 IN 阶段开始前，再次调用 map_urb_for_dma() 重新建立 DMA 映射。同时，为避免对 urb->transfer_buffer 进行冗余映射：
+1. 在首次映射前设置 URB_NO_TRANSFER_DMA_MAP 标志，跳过 transfer_buffer 的映射；
+2. 在第二次映射前清除 URB_NO_TRANSFER_DMA_MAP 标志，确保 IN 阶段的 DMA 映射正常执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/44e1ed2c68e6347f1bd75061251419599c7acbb6

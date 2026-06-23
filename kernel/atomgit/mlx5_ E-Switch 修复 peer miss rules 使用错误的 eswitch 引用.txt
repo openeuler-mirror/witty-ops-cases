@@ -1,0 +1,20 @@
+#标题
+mlx5: E-Switch 修复 peer miss rules 使用错误的 eswitch 引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了新固件的双 E-Switch 环境下，若本地设备和 Peer 设备配置的 VF（Virtual Function）数量不一致，驱动在添加或删除 FDB peer miss rules 时会发生错误。这可能导致流规则创建失败、内存访问越界或网络转发行为异常，特别是在 VF 数量较少的一端无法正确处理来自对端的流量。
+
+#主要错误日志
+esw_warn(esw->dev, "FDB: Failed to add peer miss flow rule err %d\n", err);
+
+#问题根因
+原始设计假设本地 E-Switch 和 Peer E-Switch 拥有相同数量的 VF。但在新固件中，两者可以通过 mlxconfig 配置不同数量的 VF。代码在处理 peer miss rules 时，错误地使用了本地设备的 eswitch 结构和 `total_vports`/`mlx5_core_max_vfs` 计数来遍历和操作对端设备的规则，导致在 VF 数量不匹配时产生逻辑错误。
+
+#解决方案
+修改 `esw_add_fdb_peer_miss_rules` 和 `esw_del_fdb_peer_miss_rules` 函数，将原本依赖本地 eswitch 的逻辑改为使用 peer 设备的 eswitch 引用（`peer_esw`）及其对应的 VF 计数（`mlx5_core_max_vfs(peer_dev)` 等），确保规则操作基于对端设备的实际配置进行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e40dbc599cacaeccba831fbddb167e07f1bbe146

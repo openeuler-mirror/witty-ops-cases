@@ -1,0 +1,22 @@
+#标题
+tlv320aic3007 Class-D 功放初始化失败导致音频功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 reset GPIO 引脚控制 tlv320aic3007 编解码器的场景下，驱动加载过程中 Class-D 功放初始化失败，内核日志中报错 "Failed to init class D: -5"（-EIO）。即使不使用 reset GPIO，Class-D 的初始化序列也会被随后的软复位操作覆盖，导致配置无效，影响音频播放功能。
+
+#主要错误日志
+[   xx.xxxxxx] tlv320aic3x i2c-xxxx: Failed to init class D: -5
+
+#问题根因
+驱动在 probe 阶段使用 `regmap_register_patch()` 注册 Class-D 初始化序列，该函数会绕过 regcache 立即写入硬件寄存器。问题在于：
+1. 在使用 reset GPIO 的场景下，驱动请求 GPIO 后编解码器处于复位状态，此时立即进行硬件 I/O 操作会失败，返回 -EIO。
+2. 即使写入成功，后续 `aic3x_init()` 中执行的 codec 软复位操作会将刚写入的 Class-D 配置清空，导致初始化序列失效。
+
+#解决方案
+将 Class-D 功放初始化序列从 probe 函数移至 `aic3x_set_power()` 函数中执行，并置于 codec 正常上电流程之后、regcache 同步之前。使用 `regmap_multi_reg_write_bypassed()` 函数确保 Class-D 初始化按 datasheet 要求的顺序执行且不被缓存，从而避免复位状态下写入失败及软复位导致的配置丢失问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1eb6488c38f4477598a09d166c69280de976686b

@@ -1,0 +1,36 @@
+#标题
+cgroup IFS 子系统构建失败、空指针崩溃及版本不兼容问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 arm32 架构上编译内核时出现构建错误。
+2. 在特定配置下内核编译报错，提示与 `CONFIG_SCHED_INFO` 相关的依赖缺失。
+3. 系统运行时，IFS 子系统可能触发空指针解引用。
+4. 在不支持 TSC 的系统上，IFS 子系统加载失败导致功能不可用。
+5. 在 cgroup v1 挂载层级下，`interference.stat` 文件缺失。
+6. 在 cgroup v1 与 v2 混合挂载场景下访问 `interference.stat` 返回操作不支持错误。
+
+#主要错误日志
+- `pr_warn("IFS: no constant tsc, use default clocksource as time source\n");`
+- `pr_info("cgroup version mismatch: subsystem %s, cgroup %s\n", ...);`
+- 用户态报错：`cat: interference.stat: Operation not supported`
+- 内核日志：`[ 1060.893809] cgroup version mismatch: subsystem v1, cgroup v2`
+
+#问题根因
+1. **构建错误**：IFS 子系统未限制架构依赖，导致在不支持的 arm32 架构上编译失败；且未显式依赖 `CONFIG_SCHED_INFO`，导致特定配置下符号缺失。
+2. **空指针崩溃**：代码逻辑中未对指针有效性进行充分检查即进行解引用操作。
+3. **TSC 依赖**：原代码强制依赖 TSC（时间戳计数器），若无 TSC 则直接退出初始化，导致 IFS 功能整体失效。
+4. **v1 层级缺失**：cgroup v1 层级下的文件初始化逻辑存在缺陷。
+5. **版本不兼容**：IFS 子系统与 cgroup 版本（v1/v2）之间存在不匹配检查机制缺失，导致在混合挂载场景下行为异常。
+
+#解决方案
+1. **架构与依赖修复**：在 Kconfig 中限制 `CONFIG_CGROUP_IFS` 仅依赖于 X86 或 ARM64 架构，并增加 `select SCHED_INFO` 依赖。
+2. **空指针修复**：代码中增加空指针判断逻辑，避免解引用错误。
+3. **TSC 回退机制**：引入 `cgrp_ifs_tsc_available` 静态键，当 TSC 不可用时，自动回退使用 `sched_clock()` 作为时钟源，确保 IFS 功能在无 TSC 系统上正常运行。
+4. **v1 层级修复**：修正代码逻辑确保 `interference.stat` 文件在 cgroup v1 层级下正确创建。
+5. **版本兼容性检查**：在 `cgroup_ifs_show` 函数中增加版本一致性检查，若 IFS 子系统版本（v1/v2）与当前 cgroup 挂载类型不匹配，返回 `-EOPNOTSUPP` 并打印日志提示。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/423fccda72fc2b78107cc119a1755d968c2c36de

@@ -1,0 +1,20 @@
+#标题
+蓝牙 hci_ll 驱动固件资源泄露修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在蓝牙 LL 协议驱动加载固件过程中，若 `request_firmware()` 获取固件成功，但固件内容无效（数据为空或大小为零），驱动程序直接返回错误，导致固件资源未被释放，引发内核资源泄露。
+
+#主要错误日志
+bt_dev_err(lldev->hu.hdev, "request_firmware failed(errno %d) for %s", err, bts_scr_name);
+
+#问题根因
+在 `download_firmware()` 函数中，调用 `request_firmware()` 成功后，代码检查了固件数据的有效性（`!fw->data || !fw->size`）。当检查失败时，函数直接返回 `-EINVAL`，但遗漏了调用 `release_firmware(fw)` 来释放已获取的固件资源。
+
+#解决方案
+在固件内容校验失败的错误处理路径中，增加对 `release_firmware(fw)` 的调用。具体逻辑为：如果 `request_firmware()` 返回值 `err` 为 0（即获取成功），则在返回前显式调用 `release_firmware(fw)` 释放资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/38db80d0496839b2042bd1269db49aec798d009b

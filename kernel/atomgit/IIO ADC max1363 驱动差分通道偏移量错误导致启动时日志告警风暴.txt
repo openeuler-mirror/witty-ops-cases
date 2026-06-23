@@ -1,0 +1,31 @@
+#标题
+IIO ADC max1363 驱动差分通道偏移量错误导致启动时日志告警风暴
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 MAX11601 芯片的开发板上启动系统时，内核日志中出现大量重复的 "available_scan_mask" 相关告警信息，导致启动过程中产生日志风暴。
+
+#主要错误日志
+max1363 1-0064: available_scan_mask 8 subset of 0. Never used
+max1363 1-0064: available_scan_mask 9 subset of 0. Never used
+max1363 1-0064: available_scan_mask 10 subset of 0. Never used
+max1363 1-0064: available_scan_mask 11 subset of 0. Never used
+max1363 1-0064: available_scan_mask 12 subset of 0. Never used
+max1363 1-0064: available_scan_mask 13 subset of 0. Never used
+...
+
+#问题根因
+在 `MAX1363_4X_CHANS()` 和 `MAX1363_8X_CHANS()` 宏定义中，差分通道的索引偏移量设置错误。
+驱动代码 `max1363_mode_table[]` 中定义的差分通道映射使用的是 12-23 的位索引（例如 `MAX1363_MODE_DIFF_SINGLE(0, 1, 1 << 12)`），而宏定义中错误地使用了 4-7 和 8-15 等偏移量。这导致扫描掩码校验失败，触发了 IIO 子系统的 Sanity Check 告警。
+
+#解决方案
+修正 `drivers/iio/adc/max1363.c` 中 `MAX1363_4X_CHANS` 和 `MAX1363_8X_CHANS` 宏定义里的通道索引参数。
+将差分通道的索引值调整为与 `max1363_mode_table[]` 中定义的位偏移一致：
+- 对于 4X 通道，将索引从 4-7 修正为 12/13/18/19。
+- 对于 8X 通道，将索引从 8-15 修正为 12-15 和 18-21。
+确保扫描掩码数组有效，从而消除告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d8b9c58fe63f5ec642342639c05573c5332848d

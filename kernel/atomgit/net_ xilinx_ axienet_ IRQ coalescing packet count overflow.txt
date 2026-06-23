@@ -1,0 +1,20 @@
+#标题
+net: xilinx: axienet: IRQ coalescing packet count overflow
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户通过 ethtool 工具设置网卡中断合并参数，且指定的接收或发送帧数大于 255（例如执行 `ethtool -C ethX rx-frames 256`）时，参数值无法正确写入寄存器而发生溢出。这导致实际生效的中断合并帧数被错误地解析为 0，从而引发中断合并功能异常（如预期超时时间变为 0us）。
+
+#主要错误日志
+"frames must be less than 256"（推断：设置非法值后内核返回给用户态的错误提示）
+
+#问题根因
+硬件寄存器用于存储中断合并帧数的字段位宽限制为 8 位，最大仅支持 255。驱动程序在处理 ethtool 设置参数时，未对用户输入的 `rx_max_coalesced_frames` 和 `tx_max_coalesced_frames` 进行范围校验，导致大于 255 的数值写入寄存器时发生截断溢出，进而配置失效。
+
+#解决方案
+在驱动接口函数 `axienet_ethtools_set_coalesce` 中增加边界检查逻辑。如果用户配置的 `rx_max_coalesced_frames` 或 `tx_max_coalesced_frames` 大于 255，则直接返回 `-EINVAL` 错误，并通过 `NL_SET_ERR_MSG` 提示 "frames must be less than 256"，阻止非法值写入硬件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c1c3770ff34cc0e6cb9416d283e5996292dfaa5a

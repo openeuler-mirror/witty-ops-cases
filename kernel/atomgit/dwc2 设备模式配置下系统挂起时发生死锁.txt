@@ -1,0 +1,20 @@
+#标题
+dwc2 设备模式配置下系统挂起时发生死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 dwc2 控制器被配置为外设模式（peripheral mode）时，系统在执行挂起流程中会发生死锁挂起，导致系统无法正常进入休眠状态。
+
+#主要错误日志
+未知
+
+#问题根因
+在外设模式下，dwc2 驱动在 probe 阶段会调用 `dwc2_lowlevel_hw_disable` 禁用 PHY 控制器、时钟和电源等底层硬件资源。然而，`dwc2_suspend` 函数在检查设备模式（调用 `dwc2_is_device_mode` 读取寄存器）之前，并未检查底层硬件是否已处于使能状态。由于此时硬件资源（时钟、电源等）已被关闭，对寄存器的读取操作导致系统挂起。
+
+#解决方案
+在 `dwc2_suspend` 和 `dwc2_resume` 函数入口处增加 `ll_hw_enabled` 状态检查。如果底层硬件未使能，则直接返回 0 跳过后续操作，避免在硬件未加电情况下访问寄存器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01eedbb0be0cc0ddc10fc299e70a3bab1aeb162c

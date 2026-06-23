@@ -1,0 +1,49 @@
+#标题
+KVM: arm64: FPSIMD寄存器保存时softirq掩码处理不当导致spinlock死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在修复了之前的内核BUG()问题后，系统在运行KVM虚拟化负载时触发spinlock递归/死锁，导致内核打印 `BUG: spinlock recursion` 并打印调用栈，系统稳定性受影响。
+
+#主要错误日志
+```
+BUG: spinlock recursion on CPU#7, CPU 3/KVM/57616
+ lock: 0xffff3045ef850240, .magic: dead4ead, .owner: CPU 3/KVM/57616, .owner_cpu: 7
+CPU: 7 PID: 57616 Comm: CPU 3/KVM Tainted: G           O       6.1.152 #1
+...
+Call trace:
+ dump_backtrace+0xe4/0x110
+ show_stack+0x20/0x30
+ dump_stack_lvl+0x6c/0x88
+ dump_stack+0x18/0x34
+ spin_dump+0x98/0xac
+ do_raw_spin_lock+0x70/0x128
+ _raw_spin_lock+0x18/0x28
+ raw_spin_rq_lock_nested+0x18/0x28
+ update_blocked_averages+0x70/0x550
+ run_rebalance_domains+0x50/0x70
+ handle_softirqs+0x198/0x328
+ __do_softirq+0x1c/0x28
+ ____do_softirq+0x18/0x28
+ call_on_irq_stack+0x30/0x48
+ do_softirq_own_stack+0x24/0x30
+ do_softirq+0x74/0x90
+ __local_bh_enable_ip+0x64/0x80
+ fpsimd_save_and_flush_cpu_state+0x5c/0x68
+ kvm_arch_vcpu_put_fp+0x4c/0x88
+ kvm_arch_vcpu_put+0x28/0x88
+ kvm_sched_out+0x38/0x58
+ __schedule+0x55c/0x6c8
+ schedule+0x60/0xa8
+```
+
+#问题根因
+之前的修复（commit 28b82be094e2）为了解决内核BUG()问题，确保在fpsimd寄存器保存操作期间禁用softirqs，但这引入了新的问题：当重新启用softirqs时（`__local_bh_enable_ip`），如果有待处理的softirqs被处理，且此时已持有其他锁（如调度器相关的锁），会导致死锁或spinlock递归。根本原因是在保存FPSIMD寄存器期间，仅屏蔽softirq不足以防止在临界区内因softirq处理而引发的锁竞争。
+
+#解决方案
+在 `fpsimd_save_and_flush_cpu_state` 函数中，除了禁用softirq外，额外禁用硬中断。通过使用 `local_irq_save` 和 `local_irq_restore` 保护临界区，替代单纯的获取/释放 FPSIMD 上下文操作，防止在保存寄存器状态时因中断或软中断处理导致的死锁风险。具体代码变更为：在函数入口保存中断标志并禁用中断，使用 `__get_cpu_fpsimd_context` 和 `__put_cpu_fpsimd_context` 操作上下文，最后恢复中断标志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d73af241f7c5cc79731135d99afb547e7f9dcb16

@@ -1,0 +1,22 @@
+#标题
+usb: dwc2: gadget: Fix spin_lock/unlock mismatch in dwc2_hsotg_udc_stop()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `dwc2_hsotg_udc_stop` 函数停止 UDC 时，如果设备处于挂起（suspended）状态且启用了时钟门控，会触发内核锁状态异常：
+1. 尝试对未持有的锁进行释放，导致未定义行为；
+2. 函数后续代码中调用 `spin_lock_irqsave()` 时发生死锁。
+
+#主要错误日志
+未知
+
+#问题根因
+`dwc2_hsotg_udc_stop()` 函数在调用 `dwc2_gadget_exit_clock_gating()` 时未持有 `hsotg->lock` 锁。而 `dwc2_gadget_exit_clock_gating()` 内部调用的 `call_gadget()` 宏预期该锁已被持有，并在其内部执行了 `spin_unlock` 和 `spin_lock` 操作。这导致在未持锁状态下执行了解锁操作，并在函数返回后锁仍处于持有状态，进而引发后续死锁。
+
+#解决方案
+在 `dwc2_hsotg_udc_stop()` 函数中，于调用 `dwc2_gadget_exit_clock_gating()` 前后增加配对的锁操作：先调用 `spin_lock_irqsave` 获取锁，函数执行完毕后调用 `spin_unlock_irqrestore` 释放锁，以满足 `call_gadget()` 宏的锁依赖要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/998a71c6d032f4ab6dc7a1bc9ba115c6cac4208a

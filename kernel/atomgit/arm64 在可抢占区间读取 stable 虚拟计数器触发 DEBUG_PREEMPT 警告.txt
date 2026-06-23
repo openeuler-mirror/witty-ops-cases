@@ -1,0 +1,21 @@
+#标题
+arm64 在可抢占区间读取 stable 虚拟计数器触发 DEBUG_PREEMPT 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 CONFIG_DEBUG_PREEMPT 配置的 ARM64 系统上，内核运行过程中产生不应出现的 preemption 相关警告信息。具体表现为调用 __arch_counter_get_cntvct_stable() 读取计数器时，在未禁止抢占的情况下访问了 per-CPU 变量。
+
+#主要错误日志
+未知
+（注：Commit message 仅提及 "well deserves warnings" 和 "warnings"，未包含具体的内核日志文本，推测为 "BUG: using smp_processor_id() in preemptible" 等典型 DEBUG_PREEMPT 警告，但无原文。）
+
+#问题根因
+在 `arm64/lib/delay.c` 中，`__delay_cycles` 宏直接调用 `__arch_counter_get_cntvct_stable()` 来获取虚拟计数器值。该函数内部会访问 per-CPU 变量，但调用路径位于可抢占区间，且未禁止抢占，导致在开启了 `CONFIG_DEBUG_PREEMPT` 的内核中触发警告。
+
+#解决方案
+将 `__delay_cycles` 从宏定义修改为内联函数，在读取计数器前通过 `guard(preempt_notrace)` 自动增加抢占计数以禁止抢占，读取完成后自动恢复，从而避免在访问 per-CPU 变量时处于可抢占状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f762f36a463711f9a417d78904972a23abd53342

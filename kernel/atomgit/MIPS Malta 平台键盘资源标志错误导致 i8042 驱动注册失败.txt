@@ -1,0 +1,29 @@
+#标题
+MIPS Malta 平台键盘资源标志错误导致 i8042 驱动注册失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MIPS Malta 平台上，PS/2 键盘和鼠标设备无法使用。系统启动时 i8042 驱动注册失败，导致无法通过 PS/2 接口进行输入交互。
+
+#主要错误日志
+修复后正常输出的日志如下（故障时此日志缺失或注册失败）：
+```
+serio: i8042 KBD port at 0x60,0x64 irq 1
+serio: i8042 AUX port at 0x60,0x64 irq 12
+```
+修复后资源列表显示如下：
+```
+00000060-0000006f : keyboard
+  00000060-0000006f : i8042
+```
+
+#问题根因
+MIPS Malta 平台代码在注册 PCI 南桥遗留端口 I/O PS/2 键盘范围（0x60-0x6f）时，将其作为标准资源并标记为 `IORESOURCE_BUSY`。这导致 i8042 驱动在 `i8042_platform_init()` 函数中调用资源请求（request_region）时失败，从而无法完成驱动注册。
+
+#解决方案
+修改文件 `arch/mips/mti-malta/malta-setup.c`，将 `standard_io_resources` 数组中 "keyboard" 资源的 flags 字段从 `IORESOURCE_IO | IORESOURCE_BUSY` 修改为 `IORESOURCE_IO`，移除 `IORESOURCE_BUSY` 标记。这使得 i8042 驱动能够成功申请该 I/O 端口资源并完成注册。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/72ce71900b0d0f582ef5172c70a725a2634c7b79

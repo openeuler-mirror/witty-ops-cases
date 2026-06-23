@@ -1,0 +1,33 @@
+#标题
+AFS 异步调用唤醒导致 spinlock 递归死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在处理 AFS（Andrew File System）异步调用时，触发 spinlock 递归错误，导致内核 Oops。具体表现为在 `krxrpcio` 内核线程中检测到自旋锁递归持有，系统可能陷入死锁或崩溃，影响 AFS 文件系统的正常通信与操作。
+
+#主要错误日志
+BUG: spinlock recursion on CPU#0, krxrpcio/7001/1646
+ lock: 0xffff888141399b30, .magic: dead4ead, .owner: krxrpcio/7001/1646, .owner_cpu: 0
+CPU: 0 UID: 0 PID: 1646 Comm: krxrpcio/7001 Not tainted 6.12.0-rc2-build3+ #4351
+Call Trace:
+ do_raw_spin_lock+0x3c/0x90
+ rxrpc_kernel_shutdown_call+0x83/0xb0
+ afs_put_call+0xd7/0x180
+ rxrpc_notify_socket+0xa0/0x190
+ rxrpc_input_split_jumbo+0x198/0x1d0
+ rxrpc_input_data+0x14b/0x1e0
+ ...
+
+#问题根因
+`afs_wake_up_async_call()` 函数在 AF_RXRPC 模块持有 `->notify_lock` 锁的上下文中被调用。该函数尝试获取 `afs_call` 结构体的引用并将其放入工作队列，如果 `afs_call` 已经在队列中，则需要释放多余的引用。调用 `afs_put_call()` 时，如果引用计数降为 0，会调用 `rxrpc_kernel_shutdown_call()` 回调进入 AF_RXRPC 层，该函数尝试再次获取 `->notify_lock`，从而导致 spinlock 递归死锁。
+
+#解决方案
+引入延迟释放机制，避免在持有 `->notify_lock` 的上下文中直接进行可能导致锁递归的清理操作。
+1. 在 `afs_call` 结构体中新增 `free_work` 工作队列字段。
+2. 新增 `afs_deferred_put_call()` 函数，当需要释放引用且引用计数降为 0 时，不直接释放资源，而是将清理工作调度到 `free_work` 工作队列中延迟执行。
+3. 将 `afs_wake_up_async_call()` 中原有的 `afs_put_call()` 调用替换为 `afs_deferred_put_call()`，从而打破锁的递归持有路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b9cd9e78f1c82407acd7ffc69a8ca3254b131911

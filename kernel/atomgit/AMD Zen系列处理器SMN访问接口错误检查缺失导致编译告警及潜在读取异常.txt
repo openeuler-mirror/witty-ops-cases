@@ -1,0 +1,26 @@
+#标题
+AMD Zen系列处理器SMN访问接口错误检查缺失导致编译告警及潜在读取异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在应用上游 stricter SMN access 补丁后，编译内核时触发 `-Wunused-result` 编译警告，提示 `amd_smn_read()` 的返回值被忽略。
+2. Hygon特定函数 `k10temp_get_ccd_support_2nd()` 和 `hygon_read_temp()` 未检查 SMN 读取结果，若硬件访问失败（如返回 PCI 错误响应），可能导致驱动程序使用错误的寄存器值进行逻辑判断或温度计算。
+
+#主要错误日志
+编译警告（推断）：
+warning: ignoring return value of ‘amd_smn_read’, declared with attribute warn_unused_result
+
+#问题根因
+SMN（System Management Network）访问通过 PCI 配置空间的索引/数据对间接实现，可能因多种原因失败（如返回全 0xFF 的 PCI 错误响应）。
+上游代码增强了 `amd_smn_read()` 和 `amd_smn_write()` 接口，增加了 `__must_check` 属性，强制调用者检查返回值。但 Hygon 特定的温度读取逻辑未同步更新，依然忽略了返回值，导致编译警告，且无法正确处理 SMN 访问失败的情况。
+
+#解决方案
+1. 在 `amd_smn_read()` 和 `amd_smn_write()` 函数声明中添加 `__must_check` 属性，强制调用者处理返回值。
+2. 修改 `drivers/hwmon/k10temp.c` 中的 Hygon 相关代码以处理错误返回：
+   - 在 `k10temp_get_ccd_support_2nd()` 函数中，增加对 `amd_smn_read()` 返回值的判断，若读取失败则跳过当前 CCD 探测。
+   - 在 `hygon_read_temp()` 函数中，增加对 `amd_smn_read()` 返回值的判断，若读取失败则将寄存器值置为 0，避免使用错误数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5b9575bfc36807bb492d9003b857c2f6698635a4

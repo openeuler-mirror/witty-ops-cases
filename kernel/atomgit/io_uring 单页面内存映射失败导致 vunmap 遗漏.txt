@@ -1,0 +1,20 @@
+#标题
+io_uring 单页面内存映射失败导致 vunmap 遗漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 io_uring 分配环形缓冲区内存时，若系统无法分配复合页，代码会回退尝试分配单页并进行 vmap 映射。然而，在此特定路径下，后续的取消映射操作（vunmap）会被错误地跳过，导致内核虚拟地址空间泄漏（vmap 区域未释放）。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `io_pages_unmap()` 包含一项优化逻辑：当仅涉及单个页面时，假定无需执行 `vunmap`。但在配对的 `io_pages_map()` 函数中，如果 `io_mem_alloc_compound()` 分配复合页失败，代码会尝试调用 `io_mem_alloc_single()`，该函数会执行 `vmap` 操作。这导致了状态不一致：内存确实经过了 `vmap` 映射，但清理逻辑因“单页面”条件误判而遗漏了 `vunmap`，造成内存映射资源泄漏。
+
+#解决方案
+在 `io_pages_map()` 函数中，当 `io_mem_alloc_compound()` 失败时，增加判断：如果请求的页面数量为 1，则直接跳转至失败处理流程（fail），不再尝试调用 `io_mem_alloc_single()` 进行 vmap。此举避免了在单页面场景下进入 vmap 路径，从而消除了与 `io_pages_unmap()` 逻辑的不匹配问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5a978e6d298c2a00bdb7fd58ef17a1fd2281552f

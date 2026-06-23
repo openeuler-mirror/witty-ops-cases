@@ -1,0 +1,21 @@
+#标题
+arm64/mpam: percent_to_mbw_max 函数百分位转换掩码计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 MPAM (Memory System Resource Partitioning and Monitoring) 框架下，通过 resctrl 文件系统配置内存带宽（Memory Bandwidth, MB）资源的上限（mbw_max）时，输入特定百分比值进行配置可能失败或配置值与预期不符。由于内核将用户输入的百分比转换为硬件寄存器支持的定点数格式时计算错误，导致带宽限制功能异常，无法正确生效或生效了错误的限制值。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `percent_to_mbw_max` 函数中，将百分比值转换为定点数格式后进行掩码截断操作时，`GENMASK` 宏的参数计算错误。
+原代码 `value &= GENMASK(15, 15 - cprops->bwa_wd)` 定义的掩码范围比实际需要的位数少了一位（例如若 `bwa_wd` 为宽度，则掩码应覆盖从最高位开始的 `bwa_wd` 位），导致在格式化过程中丢失了关键的数值位，从而产生错误的转换结果。
+
+#解决方案
+修正 `drivers/platform/mpam/mpam_resctrl.c` 文件中 `percent_to_mbw_max` 函数的掩码计算逻辑。将 `GENMASK(15, 15 - cprops->bwa_wd)` 修改为 `GENMASK(15, 15 - cprops->bwa_wd + 1)`，确保掩码能够正确覆盖所有有效的带宽位宽，保证百分位到定点数的转换结果正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bd0e745d4dd3aadf497def21e2c89ce0b8bdfbcd

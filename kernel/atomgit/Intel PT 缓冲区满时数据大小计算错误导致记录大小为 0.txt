@@ -1,0 +1,28 @@
+#标题
+Intel PT 缓冲区满时数据大小计算错误导致记录大小为 0
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Intel PT 进行性能记录时，若使用非常小的缓冲区（例如 8K），当追踪数据缓冲区从空状态迅速填满时，`PERF_RECORD_AUX` 记录会报告截断标志 `[T]`，但显示的数据大小 `size` 为 0。这导致虽然缓冲区已满且有数据写入，但工具显示写入量为 0，数据统计不准确。
+
+#主要错误日志
+```
+$ perf script -D --no-itrace | grep AUX | grep -F '[T]'
+Warning:
+AUX data lost 2 times out of 3!
+
+5 19462712368111 0x19710 [0x40]: PERF_RECORD_AUX offset: 0 size: 0 flags: 0x1 [T]
+```
+
+#问题根因
+当 Intel PT 硬件追踪缓冲区从空状态迅速填满时，驱动程序在更新缓冲区位置之前缓冲区已满。驱动程序计算数据大小时，先计算新的缓冲区位置，再根据新旧位置差值计算大小。如果缓冲区刚好填满并回绕，新旧位置可能相同，导致计算出的数据大小差值为 0，而不是实际的整个缓冲区大小。这是因为代码未能正确识别缓冲区指针已经过了一次回绕。
+
+#解决方案
+在 `pt_buffer` 结构体中新增 `wrapped` 标志位。
+1. 在 `pt_buffer_advance` 函数中，当缓冲区指针回绕到第一个 topa 表时，设置 `wrapped` 标志为 true。
+2. 在 `pt_update_head` 函数计算数据大小时，检查 `wrapped` 标志。如果发现新位置等于旧位置且 `wrapped` 为真，说明缓冲区已完整写满并回绕，此时将计算基准值 `base` 加上缓冲区总大小，从而正确计算出完整的数据大小。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5fc7c6bde6a3b85bbecbd6519da24cc307b2ed59

@@ -1,0 +1,21 @@
+#标题
+media: tuner: xc5000 释放后访问导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载或释放 xc5000 tuner 设备驱动时，内核发生 Use-After-Free 错误，可能导致内核 panic 或内存数据损坏。具体表现为在 `xc5000_release` 函数执行过程中或之后，访问已释放的资源引发系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `xc5000_release` 函数中，原有代码使用 `cancel_delayed_work()` 来取消延迟工作队列。该函数是非阻塞的，仅发送取消请求但不等待正在执行的处理函数结束。如果 `timer_sleep` 工作队列的处理函数正在运行，`cancel_delayed_work()` 会立即返回，随后 `hybrid_tuner_release_state(priv)` 释放了 `priv` 结构体内存。此时，正在运行的工作队列处理函数继续访问已释放的 `priv` 内存，触发 Use-After-Free 漏洞（CVE-2025-39994）。
+
+#解决方案
+1. 将 `xc5000_release` 函数中的 `cancel_delayed_work()` 替换为 `cancel_delayed_work_sync()`。后者是同步函数，会等待正在执行的工作处理函数彻底结束后才返回，从而避免在处理函数运行期间释放内存资源。
+2. 重构了固件加载逻辑，移除了 `priv->firmware` 指针的持久缓存机制，改为在需要时加载并在使用后立即释放，消除了固件缓存相关的内存管理风险。同时引入 `priv->inited` 布尔标志位替代原 `priv->firmware` 指针用于判断设备初始化状态，修正了 `xc5000_resume` 中的逻辑判断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a5e620bf98eff09ab755416af4ed122e6c7fa7d4

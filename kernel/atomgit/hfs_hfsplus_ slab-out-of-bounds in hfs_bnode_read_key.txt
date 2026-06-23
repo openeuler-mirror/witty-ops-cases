@@ -1,0 +1,31 @@
+#标题
+hfs/hfsplus: slab-out-of-bounds in hfs_bnode_read_key
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HFS/HFS+ 文件系统子系统中触发 KASAN 检测到的 slab-out-of-bounds 越界写错误。当执行 mkdir 操作时，由于密钥长度异常导致内存越界访问，可能引发内核 Panic 或系统不稳定。
+
+#主要错误日志
+```
+BUG: KASAN: slab-out-of-bounds in memcpy_from_page include/linux/highmem.h:423 [inline]
+BUG: KASAN: slab-out-of-bounds in hfs_bnode_read fs/hfs/bnode.c:35 [inline]
+BUG: KASAN: slab-out-of-bounds in hfs_bnode_read_key+0x314/0x450 fs/hfs/bnode.c:70
+Write of size 94 at addr ffff8880123cd100 by task syz-executor237/5102
+```
+```
+hfs: Invalid key length: %d
+```
+```
+hfsplus: Invalid key length: %d
+```
+
+#问题根因
+在 `hfs_bnode_read_key` 函数中，代码未对从磁盘读取的 `key_len` 进行有效性校验。当文件系统元数据损坏或被恶意构造时，`key_len` 可能超出缓冲区 `hfs_btree_key` 或 `hfsplus_btree_key` 的实际大小，导致 `hfs_bnode_read` 内部调用 `memcpy` 时发生越界写操作。
+
+#解决方案
+在调用 `hfs_bnode_read` 读取数据前增加校验逻辑，检查 `key_len` 是否小于 1 或大于对应结构体的大小。如果校验失败，则将密钥缓冲区清零并直接返回，同时打印错误日志，从而防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/20cb317e64a661dda3047cf866a4ec1b753b273c

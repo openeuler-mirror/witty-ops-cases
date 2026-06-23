@@ -1,0 +1,22 @@
+#标题
+urma: 修复批量清理中的 jfce UAF 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 uburma 模块的批量清理操作时，可能出现 Use-After-Free (UAF) 问题，导致内核内存被非法访问或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `uburma_release_jfce_event` 函数中，释放 `jfce` 对象（通过 `uobj_put`）后，指针 `jfc_uobj->jfce` 未被置空。由于检查条件仅使用 `IS_ERR` 判断，遗漏了对 NULL 指针的检查。在批量清理等场景下，该指针可能被再次访问，导致对已释放内存的 UAF 访问。
+
+#解决方案
+修改 `uburma_release_jfce_event` 函数：
+1. 将判断条件从 `!IS_ERR(jfc_uobj->jfce)` 修改为 `!IS_ERR_OR_NULL(jfc_uobj->jfce)`，防止对 NULL 指针的错误处理。
+2. 在调用 `uobj_put(jfc_uobj->jfce)` 释放对象后，立即将 `jfc_uobj->jfce` 置为 NULL，防止产生悬垂指针引发的 UAF。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dad7a3ba8f064093a144fb320dc60a9272bd55ac

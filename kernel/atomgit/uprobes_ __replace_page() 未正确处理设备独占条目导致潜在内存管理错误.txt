@@ -1,0 +1,26 @@
+#标题
+uprobes: __replace_page() 未正确处理设备独占条目导致潜在内存管理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 uprobes 功能时，如果内存页面处于设备独占（device-exclusive）状态，`__replace_page()` 函数在处理过程中可能因竞态条件读取到无效的 PTE 信息。这可能导致 `pte_pfn()` 在非present的PTE上获取到垃圾数据，进而错误地调整 mapcount 计数，引发内核内存管理状态不一致，可能导致后续的内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+自从引入 commit b756a3b5e7ea ("mm: device exclusive memory access") 后，`page_vma_mapped_walk()` 可能返回设备独占条目（device-exclusive entries，即 PFN swap PTEs）。
+`__replace_page()` 函数未对这种情况进行处理。当发生 GUP（get_user_pages）与 `__replace_page()` 锁定 folio 之间的竞态时，代码路径可能遇到非 present 的 PTE。此时：
+1. 对非 present 的 PTE 调用 `pte_pfn()` 可能返回无意义的垃圾值。
+2. 代码错误地处理了 mapcount，而在创建设备独占条目时 mapcount 已经通过 `folio_remove_rmap_pte()` 进行了调整，导致计数混乱。
+
+#解决方案
+在 `__replace_page()` 函数中增加对非 present PTE（如设备独占条目）的检测逻辑。具体修改为：
+1. 在 `page_vma_mapped_walk()` 返回后，获取当前的 PTE。
+2. 判断 `pte_present(pte)` 是否为真。
+3. 如果 PTE 不存在（`!pte_present`），则视为 PFN swap PTE，调用 `page_vma_mapped_walk_done` 并跳转到 unlock 路径，直接返回让 GUP 再次处理以修复该情况，避免对无效 PTE 进行后续操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/577fb64041c440a0909a2c607e814c24d0078074

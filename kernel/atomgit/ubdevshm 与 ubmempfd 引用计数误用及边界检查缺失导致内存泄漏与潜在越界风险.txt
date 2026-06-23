@@ -1,0 +1,37 @@
+#标题
+ubdevshm 与 ubmempfd 引用计数误用及边界检查缺失导致内存泄漏与潜在越界风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在执行 `ubdevshm_register_segment` 或 `ubdevshm_grant_access` 等操作时，可能出现内核内存泄漏（reference leak），导致 `task_struct` 对象无法被正常释放。
+2. 在 `ubdevshm` 进行共享内存区域重叠检查时，由于边界计算错误，可能导致错误的区域重叠判断，进而引发功能异常或后续内存访问越界。
+3. `ubmempfd` 模块在进行用户态请求校验时，对 `size` 和 `areas_num` 缺乏上限检查，恶意或异常的输入可能导致内核整数溢出或拒绝服务攻击。
+4. 进程注销或通信失败时，可能出现无效指针访问或上下文查找失败。
+
+#主要错误日志
+- register segment can not find task: current tgid: %d, start_time: %llx
+- is_exist: %d, role->tgid: %u, role->aux: %llx
+- invalid shm_container_id[%u] without matching cntr
+- find access ctx inner[%u] failed
+- user tgid trans failed
+- Failed to get task_struct for tgid %d
+- tgid[%d] is same with peer task
+- Invalid size.
+- Failed to check req size, req size %zu, areas num %llu
+
+#问题根因
+1. **引用计数误用**：在 `get_task_by_tgid` 函数中，错误地调用了 `get_task_struct(tsk)` 增加引用计数，但实际上 `get_pid_task` 已经获取了引用，导致引用计数多算了一次；在 `get_task_by_peer_tgid` 中，当找到非 peer 任务时未释放已获取的引用，导致内存泄漏。
+2. **边界检查逻辑错误**：`shm_area_find_overlap` 函数在计算区域结束地址 `end_area` 时，未对地址执行 `-1` 操作（`min(a->va + a->size, b->va + b->size)`），导致对最后一个字节的覆盖判断错误。
+3. **输入校验缺失**：`ubmempfd_info_check` 未对传入的 `size` 进行非零和上限检查，`ubmempfd_check_req` 未对 `areas_num` 进行上限检查，存在安全隐患。
+4. **并发与上下文管理缺陷**：在多操作并发场景下，`find_get_access_ctx` 可能返回已存在的上下文，而原逻辑未处理此情况直接使用，导致引用计数或状态异常。
+
+#解决方案
+1. **修复引用计数**：移除 `get_task_by_tgid` 中多余的 `get_task_struct` 调用；在 `get_task_by_peer_tgid` 中，对于非目标任务的分支增加 `put_task_struct(tsk)` 以释放引用。
+2. **修正边界检查**：将 `shm_area_find_overlap` 中的 `end_area` 计算修正为 `min(a->va + a->size - 1, b->va + b->size - 1)`。
+3. **增加输入校验**：在 `ubmempfd` 中增加 `UBMEMPFD_MAX_SIZE` 和 `UBMEMPFD_MAX_AREA_NUM` 宏定义，并在校验函数中增加对 `size` 和 `areas_num` 的上限判断，拒绝非法参数。
+4. **优化日志与错误处理**：统一将 `tgid` 等标识符的打印格式从 `%d` 改为 `%u`（无符号整型）；重构 `ubdevshm_acquire_uba` 和 `ubdevshm_grant_access` 等函数，抽取公共逻辑并完善对查找失败、上下文冲突等场景的错误处理路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/66ce98456f66f0a2279c5a498ada88a40ee2fe42

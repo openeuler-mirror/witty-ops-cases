@@ -1,0 +1,23 @@
+#标题
+mlxsw_spectrum 组播路由统计更新时发生 slab-use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在更新组播路由统计信息时，内核触发 KASAN 检测到的 slab-use-after-free 错误。具体表现为在 `mlxsw_sp_mr_stats_update` 函数遍历路由链表时，读取了已被释放的内存地址，可能导致内核崩溃或数据损坏。
+
+#主要错误日志
+```
+BUG: KASAN: slab-use-after-free in mlxsw_sp_mr_stats_update+0x4a5/0x540 drivers/net/ethernet/mellanox/mlxsw/spectrum_mr.c:1006 [mlxsw_spectrum]
+Read of size 8 at addr ffff8881523c2fa8 by task kworker/2:5/22043
+```
+
+#问题根因
+先前的补丁引入了一个专用的互斥锁（mutex）来保护组播路由链表，防止其在驱动程序遍历链表更新统计信息时发生改变。然而，在路由替换流程中遗漏了一处链表项删除操作，未在删除 `mr_orig_route->node` 前获取该互斥锁。这导致并发场景下，统计更新工作队列正在遍历链表时，路由项被删除并释放，从而引发 use-after-free。
+
+#解决方案
+在 `mlxsw_sp_mr_route_add` 函数中删除旧路由链表项 `mr_orig_route->node` 之前，获取互斥锁 `mr_table->route_list_lock`，删除操作完成后释放锁。以此确保链表操作的原子性，避免与统计更新遍历流程发生竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b4936ca7256038a34bef37400b895de9b70620e3

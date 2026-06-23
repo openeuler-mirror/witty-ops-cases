@@ -1,0 +1,20 @@
+#标题
+neigh_xmit 函数在邻居表未初始化时导致 SKB 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用 `neigh_xmit()` 函数时，如果传入的邻居表索引（如 NEIGH_ND_TABLE）对应的表未初始化（例如在 IPv6 被禁用的情况下），函数会返回 -EAFNOSUPPORT 错误码，但未释放传入的 SKB 数据结构，导致 SKB 内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+`neigh_xmit` 函数的设计初衷是始终释放或发送 SKB，但在处理邻居表不存在的异常路径时存在缺陷。具体原因为：当 `neigh_tables[index]` 为 NULL 时，代码逻辑直接跳转到 `out_unlock` 标签解锁并返回错误码，遗漏了跳转到 `out_kfree_skb` 标签执行 `kfree_skb(skb)` 的步骤，从而导致 SKB 泄漏。
+
+#解决方案
+修改 `neigh_xmit` 函数中邻居表查找失败的分支逻辑，在返回错误前手动调用 `rcu_read_unlock()` 并跳转到 `out_kfree_skb` 标签处执行 SKB 释放操作，确保在该异常路径下也能正确释放 SKB 所有权，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba27cfb0c6527d7d14f179735d488191d2c95172

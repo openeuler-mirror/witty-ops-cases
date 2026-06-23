@@ -1,0 +1,47 @@
+#标题
+rust-analyzer 缺少宏 crate 依赖导致代码跳转失败及误报警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 rust-analyzer 进行 Linux 内核 Rust 代码开发时，`macros` crate 的依赖项缺失导致 IDE 功能异常：
+1. 无法进行 "转到定义"（go-to-definition）和自动补全。
+2. rust-analyzer 发出错误的警告信息，例如将 `None` 变量误报为命名风格错误。
+
+#主要错误日志
+```
+{
+	"resource": "/Users/tamird/src/linux/rust/macros/module.rs",
+	"owner": "_generated_diagnostic_collection_name_#1",
+	"code": {
+		"value": "non_snake_case",
+		"target": {
+			"$mid": 1,
+			"path": "/rustc/",
+			"scheme": "https",
+			"authority": "doc.rust-lang.org",
+			"query": "search=non_snake_case"
+		}
+	},
+	"severity": 4,
+	"message": "Variable `None` should have snake_case name, e.g. `none`",
+	"source": "rust-analyzer",
+	"startLineNumber": 123,
+	"startColumn": 17,
+	"endLineNumber": 123,
+	"endColumn": 21
+}
+```
+
+#问题根因
+`macros` crate 自引入以来一直依赖 `std` 和 `proc_macro`，但在脚本 `generate_rust_analyzer.py` 初始提交时遗漏了这些依赖配置。这导致 rust-analyzer 无法正确解析符号来源，从而引发功能缺失和误报。
+
+#解决方案
+修改 `scripts/generate_rust_analyzer.py` 脚本：
+1. 重构代码，新增 `append_sysroot_crate` 辅助函数以标准化 sysroot crate 的添加流程。
+2. 显式添加 `std` 和 `proc_macro` 这两个 sysroot crate，并正确配置其依赖关系（`std` 依赖 `alloc` 和 `core`，`proc_macro` 依赖 `core` 和 `std`）。
+3. 在 `macros` crate 的配置中，将 `deps` 参数从空列表修改为 `["std", "proc_macro"]`，补齐缺失的依赖项。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ff5455fef57fbdabf0240cbdcfcf6b33902e3e19

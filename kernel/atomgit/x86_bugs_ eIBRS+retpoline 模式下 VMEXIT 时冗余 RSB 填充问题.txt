@@ -1,0 +1,20 @@
+#标题
+x86/bugs: eIBRS+retpoline 模式下 VMEXIT 时冗余 RSB 填充问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 eIBRS（Enhanced Indirect Branch Restricted Speculation）和 retpoline 防御机制的系统中，虚拟机退出（VMEXIT）时内核执行了多余的 RSB（Return Stack Buffer）填充操作。此问题不会导致系统崩溃或产生错误日志，但属于安全防御策略中的过度缓解，造成了不必要的性能开销。
+
+#主要错误日志
+未知
+
+#问题根因
+eIBRS 硬件特性已经能够有效防御 guest->host 的 RSB 下溢/投毒攻击，且 retpoline 本身具有平衡的 CALL/RET 指令流。因此在 eIBRS 和 retpoline 同时启用的组合场景下，现有的全量 RSB 填充机制属于过度防御，根本原因是对该组合场景下的安全模型理解不准确，导致执行了冗余的安全缓解操作。
+
+#解决方案
+调整 `spectre_v2_determine_rsb_fill_type_at_vmexit` 函数中的逻辑判断。将 `SPECTRE_V2_EIBRS_RETPOLINE` 场景的处理逻辑从执行全量 RSB 填充（`X86_FEATURE_RSB_VMEXIT`）调整为视情况执行轻量级缓解（`X86_FEATURE_RSB_VMEXIT_LITE`）或直接禁用填充。具体修改是移动 `SPECTRE_V2_EIBRS_RETPOLINE` 的 switch case 分支，使其落入轻量级处理逻辑中，从而去除冗余的全量 RSB 填充以优化性能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7422609fac9493e88bed276e8c537218e9d41eb6

@@ -1,0 +1,22 @@
+#标题
+smb: client: check_wsl_eas 存在堆越界读取漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SMB 客户端的 WSL 扩展属性（EA）响应时，由于边界检查计算错误，当恶意服务器构造特定的 EA 响应数据（最后一个 EA 放置在响应结尾 8 字节范围内）时，可能触发越界读取。该漏洞可导致内核堆内存泄露（最多 8 字节），攻击者可利用泄露的数据影响 WSL xattr 的解析逻辑。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `check_wsl_eas` 函数中，边界检查逻辑使用了错误的基准指针。代码使用了 `(u8 *)ea + nlen + 1 + vlen` 来计算结束位置，但实际上 EA 的数据内容（name 和 value）位于 `ea->ea_data` 处，该处相对于 `ea` 指针有 `sizeof(struct smb2_file_full_ea_info)`（即 8 字节）的偏移。
+原有的检查仅保证了 8 字节的头部在边界内，导致当最后一个 EA 紧邻响应缓冲区末尾时，后续的 `strncmp()` 读取操作会访问超出 `iov` 范围的内存。
+
+#解决方案
+修正边界检查的计算逻辑，将基准指针由 `ea` 改为 `ea->ea_data`。
+修改后的检查语句为 `(u8 *)ea->ea_data + nlen + 1 + vlen > end`，确保对 EA 名称和值长度的校验基于正确的数据起始偏移，防止越界读取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3ade407fa65a44d7f8f0cb2668f72a1aa5784e4d

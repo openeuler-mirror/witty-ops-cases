@@ -1,0 +1,24 @@
+#标题
+e1000e驱动e1000_set_eeprom函数堆溢出漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 e1000e 网卡驱动的 e1000_set_eeprom 接口修改 EEPROM 内容时，若传入的 eeprom->offset 与 eeprom->len 参数之和超过了 EEPROM 的实际容量（hw->nvm.word_size * 2），将导致堆缓冲区溢出。攻击者可能利用此漏洞通过特定参数触发内核堆溢出，造成系统崩溃或权限提升。
+
+#主要错误日志
+未知
+
+#问题根因
+e1000_set_eeprom 函数在处理 EEPROM 写入请求时，未对用户传入的 eeprom->offset（偏移量）和 eeprom->len（长度）进行溢出与边界校验。原代码仅单独判断了 offset 是否小于 max_len，但未检查 offset + len 是否溢出或超出 max_len 限制，导致在计算 last_word 和进行内存拷贝时发生越界访问。
+
+#解决方案
+在函数 e1000_set_eeprom 中添加输入验证逻辑：
+1. 使用 check_add_overflow 宏检查 eeprom->offset 与 eeprom->len 相加是否发生整数溢出。
+2. 检查二者之和（total_len）是否超过了 EEPROM 的最大长度限制（max_len）。
+3. 如果校验失败，直接返回 -EFBIG 错误码，阻止越界操作。
+同时，将相关变量类型调整为 size_t 以适配内存大小计算，并调整代码声明顺序符合规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3668ed7527171f308af51bfc76c72dc93098f166

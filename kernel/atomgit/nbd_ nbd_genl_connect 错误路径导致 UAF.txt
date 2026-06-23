@@ -1,0 +1,46 @@
+#标题
+nbd: nbd_genl_connect 错误路径导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NBD 设备连接过程中，若 `nbd_genl_connect` 在调用 `nbd_start_device` 后、设置 backend 标识前发生错误（如 `nla_strdup` 失败），设备未正确停止，导致 `recv_work` 工作队列继续访问已被释放的配置结构体，引发内核崩溃。
+
+#主要错误日志
+block nbd6: Receive control failed (result -104)
+block nbd6: shutting down sockets
+==================================================================
+BUG: KASAN: slab-use-after-free in recv_work+0x694/0xa80 drivers/block/nbd.c:1022
+Write of size 4 at addr ffff8880295de478 by task kworker/u33:0/67
+CPU: 2 UID: 0 PID: 67 Comm: kworker/u33:0 Not tainted 6.15.0-rc5-syzkaller-00123-g2c89c1b655c0 #0 PREEMPT(full)
+Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.3-debian-1.16.3-2~bpo12+1 04/01/2014
+Workqueue: nbd6-recv recv_work
+Call Trace:
+ <TASK>
+ __dump_stack lib/dump_stack.c:94 [inline]
+ dump_stack_lvl+0x116/0x1f0 lib/dump_stack.c:120
+ print_address_description mm/kasan/report.c:408 [inline]
+ print_report+0xc3/0x670 mm/kasan/report.c:521
+ kasan_report+0xe0/0x110 mm/kasan/report.c:634
+ check_region_inline mm/kasan/generic.c:183 [inline]
+ kasan_check_range+0xef/0x1a0 mm/kasan/generic.c:189
+ instrument_atomic_read_write include/linux/instrumented.h:96 [inline]
+ atomic_dec include/linux/atomic/atomic-instrumented.h:592 [inline]
+ recv_work+0x694/0xa80 drivers/block/nbd.c:1022
+ process_one_work+0x9cc/0x1b70 kernel/workqueue.c:3238
+ process_scheduled_works kernel/workqueue.c:3319 [inline]
+ worker_thread+0x6c8/0xf10 kernel/workqueue.c:3400
+ kthread+0x3c2/0x780 kernel/kthread.c:464
+ ret_from_fork+0x45/0x80 arch/x86/kernel/process.c:153
+ ret_from_fork_asm+0x1a/0x30 arch/x86/entry/entry_64.S:245
+ </TASK>
+
+#问题根因
+`nbd_genl_connect()` 函数在调用 `nbd_start_device()` 后，如果后续步骤（如 `nla_strdup` 分配 backend identifier）失败进入错误处理路径，没有正确停止设备。这导致错误路径执行 `nbd->config` 的释放操作（put），而此时 `recv_work` 仍在运行并尝试访问该 config，从而引发 Use-After-Free。
+
+#解决方案
+调整 `nbd_start_device()` 的调用位置，将其移至 backend 文件创建和标识符分配完成之后。确保只有在所有资源配置成功后才启动设备，避免在错误路径中出现设备已启动但配置未就绪的情况，从而防止 config 被提前释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b071a4ae1bbf74ad3ea8d4de565749209902b48

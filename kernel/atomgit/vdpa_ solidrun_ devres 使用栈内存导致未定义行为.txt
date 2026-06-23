@@ -1,0 +1,20 @@
+#标题
+vdpa: solidrun: devres 使用栈内存导致未定义行为
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SolidNET DPU 驱动（vdpa）中，`psnet_open_pf_bar()` 和 `snet_open_vf_bar()` 函数将字符串变量放置在栈上，随后将该栈内存传递给 `pcim_iomap_regions()`。由于栈内存在函数返回后会被释放，而相关字符串在后续可能被使用，导致访问已失效的栈内存，引发未定义行为。
+
+#主要错误日志
+SNET_ERR(pdev, "Failed to request and map PCI BARs\n");
+
+#问题根因
+在 `psnet_open_pf_bar()` 和 `snet_open_vf_bar()` 函数中，用于存放设备资源名称的字符数组 `name[50]` 定义在栈上。该栈变量的地址被传递给 `pcim_iomap_regions()` 函数。由于 `pcim_iomap_regions()` 及其调用的函数并未对该字符串进行拷贝，而是直接保存了该指针引用。当函数返回后，栈帧销毁，该指针指向的内存失效。若后续代码尝试使用该字符串名称，便会访问已释放的栈内存，从而触发未定义行为。
+
+#解决方案
+将栈上的字符数组修改为通过 `devm_kasprintf()` 在堆上动态分配内存。这样可以确保字符串的生命周期与设备绑定，在设备资源管理周期内始终有效。同时增加对 `devm_kasprintf()` 返回值的检查，若分配失败则返回 `-ENOMEM`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/07d0deb79eec3121cc82eed40f236a84d09dff4c

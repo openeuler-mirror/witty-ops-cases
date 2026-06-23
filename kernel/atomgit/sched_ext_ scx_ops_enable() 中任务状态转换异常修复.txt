@@ -1,0 +1,23 @@
+#标题
+sched_ext: scx_ops_enable() 中任务状态转换异常修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能 sched_ext 调度器时，若有程序持续将任务在 SCHED_OTHER 和 SCHED_SCX 之间切换，会触发任务状态转换错误，导致内核抛出 WARNING 并打印无效状态转换日志。具体表现为 CPU 触发警告栈回溯，涉及 `scx_ops_enable_task` 函数。
+
+#主要错误日志
+- sched_ext: Invalid task state transition 1 -> 3 for fish[1526]
+- WARNING: CPU: 2 PID: 1615 at kernel/sched/ext.c:3393 scx_ops_enable_task+0x1a1/0x200
+- RIP: 0010:scx_ops_enable_task+0x1a1/0x200
+
+#问题根因
+`scx_ops_enable()` 函数包含两个任务循环，第一个循环调用 `scx_ops_init_task()` 后将任务留在 `SCX_TASK_INIT` 状态，直到第二个循环才将其切换为 `SCX_TASK_READY`。
+在 `fork` 路径中，`INIT` 与 `READY` 状态的区分用于判断任务是否完成 fork。但在 `enable` 路径中，两个循环之间保持 `INIT` 状态与 `fork` 路径的逻辑不一致。当此时有并发操作尝试切换任务调度类时，检测到非法的任务状态转换（1 -> 3），从而触发警告。
+
+#解决方案
+在 `scx_ops_enable()` 的第一个循环中，当 `scx_ops_init_task()` 成功后立即将任务状态转换为 `SCX_TASK_READY`，而不是推迟到第二个循环。这消除了中间的不一致状态，确保状态转换逻辑正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/834e57c6414d46808626abaadb76bcb2100f09ea

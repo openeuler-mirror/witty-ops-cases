@@ -1,0 +1,29 @@
+#标题
+mlx5e 驱动卸载时因空指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在测试 mlx5_core 驱动过程中（如中断 modprobe 操作），若 profile 初始化失败且回滚也失败，随后在卸载驱动（rmmod）时会触发内核空指针解引用，导致系统崩溃。
+
+#主要错误日志
+```
+[  734.525513] workqueue: Failed to create a rescuer kthread for wq "mlx5e": -EINTR
+[  734.557372] mlx5_core 0000:08:00.1: mlx5e_netdev_init_profile:6235:(pid 6086): mlx5e_priv_init failed, err=-12
+[  734.559187] mlx5_core 0000:08:00.1 eth3: mlx5e_netdev_change_profile: new profile init failed, -12
+[  734.560153] workqueue: Failed to create a rescuer kthread for wq "mlx5e": -EINTR
+[  734.589378] mlx5_core 0000:08:00.1: mlx5e_netdev_init_profile:6235:(pid 6086): mlx5e_priv_init failed, err=-12
+[  734.591136] mlx5_core 0000:08:00.1 eth3: mlx5e_netdev_change_profile: failed to rollback to orig profile, -12
+[  745.537492] BUG: kernel NULL pointer dereference, address: 0000000000000008
+[  745.556166] ? mlx5e_remove+0x6b/0xb0 [mlx5_core]
+```
+
+#问题根因
+当 `mlx5e_netdev_change_profile` 中 profile 初始化失败（如内存不足或信号中断）且回滚操作也失败时，netdev 的 `profile` 变量被置为 NULL。在后续驱动卸载流程 `_mlx5e_remove` 中，代码直接调用 `priv->profile->cleanup(priv)`，未检查 `priv->profile` 是否有效，从而触发了 NULL 指针解引用导致内核崩溃。
+
+#解决方案
+在调用 `profile->cleanup` 前增加 `priv->profile` 的非空检查。如果 profile 指针为 NULL（即表示之前已发生过回滚失败），则跳过 cleanup 操作，避免空指针崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a4ce0ce6ba230e6e8d01a0f0de910731994d7dcb

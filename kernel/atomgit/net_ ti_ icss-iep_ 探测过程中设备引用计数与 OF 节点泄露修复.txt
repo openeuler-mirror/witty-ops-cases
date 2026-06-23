@@ -1,0 +1,29 @@
+#标题
+net: ti: icss-iep: 探测过程中设备引用计数与 OF 节点泄露修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动探测阶段查找 IEP 设备时，存在内核资源泄露问题。具体表现为：
+1. 当 IEP 设备节点不可用时，未释放已获取的 OF 节点引用，导致 OF 节点引用计数泄露。
+2. 当 IEP 设备获取失败（如驱动未就绪）或设备忙时，未释放已获取的设备结构体引用，导致设备引用计数泄露。
+3. 查找成功时错误地多增加了一次设备引用计数，导致设备无法被正确释放。
+
+#主要错误日志
+IEP is already acquired by %s
+
+#问题根因
+函数 `icss_iep_get_idx` 在处理错误路径和正常路径时存在引用计数管理缺陷：
+1. 在检查 `of_device_is_available` 失败时，直接返回错误，未调用 `of_node_put` 释放 `of_parse_phandle` 获取的节点引用。
+2. 在查找设备失败或设备忙的错误路径中，直接返回错误指针，未调用 `put_device` 释放 `of_find_device_by_node` 获取的设备引用。
+3. 在成功查找设备后，原代码调用了不必要的 `get_device`，导致设备引用计数多加了 1，使得后续 `icss_iep_put` 无法真正释放设备。
+
+#解决方案
+修改 `icss_iep_get_idx` 函数，修正引用计数处理逻辑：
+1. 在 `of_device_is_available` 检查失败的分支中增加 `of_node_put(iep_np)` 调用。
+2. 新增 `err_put_pdev` 标签，在设备未就绪（-EPROBE_DEFER）或设备忙（-EBUSY）的错误分支中，跳转至该标签执行 `put_device(&pdev->dev)` 以释放设备引用。
+3. 移除成功路径末尾多余的 `get_device(iep->dev)` 调用，确保设备引用计数平衡。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4171f40d1c00cf0858c8407b898687d443c0ffa2

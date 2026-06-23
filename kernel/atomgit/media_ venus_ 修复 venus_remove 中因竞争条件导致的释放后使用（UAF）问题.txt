@@ -1,0 +1,21 @@
+#标题
+media: venus: 修复 venus_remove 中因竞争条件导致的释放后使用（UAF）问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 Venus 设备驱动（调用 venus_remove）的过程中，如果此时恰好正在处理系统错误（venus_sys_error_handler 执行中），内核可能会发生释放后使用，导致系统崩溃或内存被破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `venus_probe` 中，`core->work` 绑定了处理错误的函数 `venus_sys_error_handler`。该工作队列使用 `core->sys_err_done` 进行同步。
+当调用 `venus_remove` 时，如果 `venus_sys_error_handler` 正在 CPU1 上执行，而 CPU0 同时执行移除操作（`venus_remove` -> `hfi_destroy` -> `venus_hfi_destroy` -> `kfree(hdev)`），此时 CPU1 上的工作队列尚未结束，后续调用 `hfi_reinit` -> `venus_hfi_queues_reinit` 时会尝试使用已经被释放的 `hdev`，从而触发 UAF。
+
+#解决方案
+在 `venus_remove` 函数中，销毁资源前增加 `cancel_delayed_work_sync(&core->work)` 调用，确保在移除设备前取消并等待正在进行的错误处理工作完成，防止竞争条件导致的释放后使用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/567dd8fe0e94bd38ad0319a49e1be7eff1dd3f9e

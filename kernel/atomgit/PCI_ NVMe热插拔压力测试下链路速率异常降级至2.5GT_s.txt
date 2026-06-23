@@ -1,0 +1,20 @@
+#标题
+PCI: NVMe热插拔压力测试下链路速率异常降级至2.5GT/s
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行极端热插拔压力测试（如NVMe设备插拔50次）时，PCIe链路速率会被永久降级至 2.5 GT/s，导致设备性能严重下降。测试中观测到由于插卡时的轻微抖动，中断上报了两次“Card present”事件，导致链路速率被错误锁定在 Gen1 速度，无法恢复至更高速率。
+
+#主要错误日志
+pci_info(dev, "removing 2.5GT/s downstream link speed restriction\n");
+
+#问题根因
+在热插拔过程中，由于硬件抖动导致“Card present”信号被中断上报两次。第一次链路激活失败触发了 ASMedia 芯片的规避机制，导致 Root Port 的链路速率被错误地降级为 2.5GT/s。由于原有代码逻辑将 ASMedia 白名单检查置于链路训练恢复逻辑内部，如果链路随后在 2.5GT/s 下训练成功，非 ASMedia 设备或特定场景下的恢复逻辑不会被执行，导致设备卡在 Gen1 速度。
+
+#解决方案
+将 ASMedia 设备白名单检查逻辑前移至函数入口处判断。仅在设备匹配 ASMedia PCIe 交换机白名单时才允许执行后续的链路重训练逻辑，从而避免对其他设备错误应用规避措施导致速率被锁定在 2.5GT/s。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e9e65394049def0fe6cbbed9a13eaaf806620e5

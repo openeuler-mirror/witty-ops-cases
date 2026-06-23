@@ -1,0 +1,25 @@
+#标题
+mlx5e IPSEC ASO上下文并发访问导致数据竞争
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Mellanox mlx5 网卡进行 IPsec 卸载时，驱动程序处理 IPsec 生命周期限制或 ESN 事件时可能出现异常行为。由于多个 SA（Security Association）条目共享并修改同一个 ASO 上下文区域，导致数据竞争，使得内核读取到的 IPsec 状态数据（如软/硬生命周期标志、ESN 事件状态、包计数器等）可能被其他并发操作覆盖或篡改，引发功能逻辑判断错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 IPsec 卸载处理流程中，`mlx5e_ipsec_handle_limits` 和 `mlx5e_ipsec_handle_event` 等函数在读取 IPsec ASO（Advanced Steering Operation）上下文时，错误地访问了全局共享的 `aso->ctx` 指针，而非特定 SA 条目独有的上下文副本。
+根本原因是 `mlx5e_ipsec_aso_query` 函数虽然查询了硬件状态，但未将查询结果保存到 `sa_entry` 的私有存储中，导致后续处理逻辑被迫访问全局共享区域。当多个 SA 条目并发执行查询和事件处理时，会发生数据竞争，导致读取的状态不一致。
+
+#解决方案
+将 ASO 上下文的存储位置从全局共享的 `ipsec->aso->ctx` 修改为 `sa_entry` 结构体内的私有成员 `ctx`。
+具体修改如下：
+1. 在 `struct mlx5e_ipsec_sa_entry` 结构体中新增 `u8 ctx[MLX5_ST_SZ_BYTES(ipsec_aso)]` 成员，用于存储该 SA 条目专属的 ASO 上下文。
+2. 修改 `mlx5e_ipsec_aso_query` 函数，在成功查询到硬件状态后，通过 `memcpy` 将 `aso->ctx` 的数据拷贝到 `sa_entry->ctx` 中。
+3. 修改 `mlx5e_ipsec_handle_limits` 和 `mlx5e_ipsec_handle_event` 函数中的 `MLX5_GET` 调用，将数据源从共享的 `aso->ctx` 改为 `sa_entry->ctx`，确保每个 SA 条目独立访问自身的上下文数据，消除并发竞争风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14c52e7c3c2efbbb8d7d3549c32790623c02b9e7

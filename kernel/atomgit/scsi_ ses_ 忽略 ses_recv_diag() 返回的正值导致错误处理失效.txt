@@ -1,0 +1,20 @@
+#标题
+scsi: ses: 忽略 ses_recv_diag() 返回的正值导致错误处理失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SCSI Enclosure Services (SES) 设备在接收诊断页（Receive Diagnostics）操作返回正值（即 SCSI 错误状态）时，内核未能正确识别该错误并进行处理。这可能导致驱动程序继续使用无效或过时的诊断页数据，进而引发后续的内存访问异常、设备状态判断错误或系统 Panic。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ses_recv_diag()` 在遇到错误时可能返回正值（表示 SCSI 错误），也可能返回负值（表示内核层面的错误）。在 `ses_get_page2_descriptor()` 函数中，原有的条件判断 `if (ses_recv_diag(...) < 0)` 仅检查了负值返回，忽略了正值返回的情况。根据 SCSI 子系统的约定，正值同样代表操作失败，因此原有的判断逻辑导致错误被遗漏，程序未按预期返回 NULL，而是继续执行后续逻辑。
+
+#解决方案
+修改 `drivers/scsi/ses.c` 中 `ses_get_page2_descriptor()` 函数的错误检查逻辑。将 `ses_recv_diag()` 返回值的判断条件从 `< 0` 修改为直接判断返回值（即非零即真）。这确保了无论是返回负值还是正值，只要函数调用失败，都会正确返回 NULL，从而避免使用无效数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/61cf62d0f93fbea750fc084b52adf321db59b006

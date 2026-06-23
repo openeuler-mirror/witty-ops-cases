@@ -1,0 +1,27 @@
+#标题
+can: usb: etas_es58x: 修复读取批量回调中 URB 提交失败导致的资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 ES58x USB CAN 设备在读取批量回调中重新提交 URB（usb_submit_urb）失败时，系统无法正确处理已锚定的 URB 资源。这会导致 URB 结构体及其相关的数据缓冲区被内核遗弃而无法释放，造成内存泄漏。若失败原因为 -ENODEV（设备断开），可能伴随网络设备未能正确分离的潜在风险。
+
+#主要错误日志
+dev_err_ratelimited(dev, "Failed resubmitting read bulk urb: %pe\n", ERR_PTR(ret));
+
+#问题根因
+在 `es58x_read_bulk_callback` 函数的 `resubmit_urb` 标签处，代码逻辑存在错误：
+1. 原代码在调用 `usb_submit_urb` 之前没有调用 `usb_anchor_urb` 将 URB 锚定到接收链表。
+2. 当 `usb_submit_urb` 提交失败时，原代码仅打印错误日志或执行设备分离操作，但没有对 URB 进行解锚或释放处理。
+由于未锚定，提交失败后 URB 变成了“孤儿”资源，既不在驱动管理的链表中，也未成功提交给 USB 核心，导致内存泄漏。
+
+#解决方案
+修改 `drivers/net/can/usb/etas_es58x/es58x_core.c` 中的 URB 提交流程：
+1. 在调用 `usb_submit_urb` 之前，先调用 `usb_anchor_urb` 将 URB 锚定到 `es58x_dev->rx_urbs` 链表中。
+2. 检查 `usb_submit_urb` 的返回值，若成功（返回 0）则直接返回。
+3. 若 `usb_submit_urb` 失败，立即调用 `usb_unanchor_urb` 解除之前的锚定，以便 USB 核心或驱动能正确处理该 URB（通常后续会释放），从而避免资源泄漏。
+4. 调整错误处理分支逻辑，移除不必要的条件判断，确保所有非 ENODEV 的失败情况都能正确打印错误日志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab7cea9014dae236aaab4f018801ef0ce5526bd4

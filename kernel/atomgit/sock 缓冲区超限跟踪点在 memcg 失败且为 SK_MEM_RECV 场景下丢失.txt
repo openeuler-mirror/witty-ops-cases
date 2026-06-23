@@ -1,0 +1,20 @@
+#标题
+sock 缓冲区超限跟踪点在 memcg 失败且为 SK_MEM_RECV 场景下丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 socket 内存分配因 memcg 限制失败且内存类型为 SK_MEM_RECV 时，`sock_exceed_buf_limit` 跟踪点事件未被触发，导致无法通过该跟踪点观测到接收方向的内存限制故障。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__sk_mem_raise_allocated()` 函数中，触发 `trace_sock_exceed_buf_limit` 的条件判断逻辑错误。原代码逻辑为 `if (kind == SK_MEM_SEND || (kind == SK_MEM_RECV && charged))`，该判断限制了仅在 memcg 成功计费（charged 为真）或发送类型时才触发事件。这导致当 memcg 计费失败（charged 为假）且类型为 SK_MEM_RECV 时，事件被错误地抑制，而 SK_MEM_SEND 类型在 memcg 失败时仍能触发事件，行为不一致。
+
+#解决方案
+移除 `trace_sock_exceed_buf_limit` 调用前的条件判断，将其改为无条件执行。这样可以恢复对 SK_MEM_RECV 类型在 memcg 失败时的事件记录，确保所有缓冲区超限场景都能被跟踪。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cfad4ccc6f35bd5ee632295baf0404e5ecee7abd

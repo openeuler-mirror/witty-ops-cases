@@ -1,0 +1,26 @@
+#标题
+ext4 快速符号链接检测错误导致 inode 校验失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+对设置了扩展属性（xattr）的快速符号链接执行卸载并重新挂载后，访问该链接时报错 "Structure needs cleaning"，dmesg 显示 inode 校验错误。具体复现步骤如下：
+1. 创建符号链接：`ln -s foo /mnt/tmp/bar`
+2. 设置大扩展属性：`setfattr -h -n trusted.test -v "$(yes | head -n 4000)" /mnt/tmp/bar`
+3. 卸载并重新挂载：`umount /mnt/tmp; mount /mnt/tmp`
+4. 列出目录：`ls -l /mnt/tmp`
+
+#主要错误日志
+EXT4-fs error (device dm-8): __ext4_iget:5098: inode #24578: block 7303014: comm ls: invalid block
+
+#问题根因
+在存在外部 xattr inode 的情况下，快速符号链接的检测逻辑不正确。
+函数 `ext4_inode_is_fast_symlink()` 错误地检查了 inode 的 `EXT4_EA_INODE_FL` 标志位，而该标志位仅设置在 xattr inode 自身上，并未设置在使用该 xattr 的 inode 上。
+这导致当快速符号链接没有 xattr block（`i_file_acl == 0`）但拥有增加 `i_blocks` 的外部 xattr inode 时，检测函数错误地判定其不是快速符号链接。随后 `__ext4_iget()` 调用 `ext4_ind_check_inode()` 验证 `i_data[]` 时，将符号链接目标字符串（如 "foo"）误判为无效的 block 号，从而报告 inode 损坏。
+
+#解决方案
+修改 `fs/ext4/inode.c` 中的 `ext4_inode_is_fast_symlink()` 函数，将检查条件从判断 inode 标志 `EXT4_EA_INODE_FL` 改为检查 superblock 的特性标志 `EXT4_FEATURE_INCOMPAT_EA_INODE`（通过 `ext4_has_feature_ea_inode(inode->i_sb)` 实现），以正确识别使用外部 xattr inode 的快速符号链接。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/128b9f9dfe5f81069db33fdb2abc6e262c01b4dd

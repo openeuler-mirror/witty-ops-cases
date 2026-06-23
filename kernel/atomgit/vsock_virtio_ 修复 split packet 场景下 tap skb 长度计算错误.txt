@@ -1,0 +1,23 @@
+#标题
+vsock/virtio: 修复 split packet 场景下 tap skb 长度计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 vsock 监控场景下，当数据包因 RX buffer 限制被分割为多个片段时，vsockmon tap 设备接收到的 skb 数据长度计算错误。系统使用原始 skb 的数据长度代替了包头中记录的实际载荷长度，导致 tap 设备捕获的数据包内容或长度与实际发送的不一致，影响流量监控与抓包分析的准确性。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 commit 71dc9ec9ac7d ("virtio/vsock: replace virtio_vsock_pkt with sk_buff") 的代码转换遗漏。
+在 `virtio_transport_build_skb()` 函数中，构建交付给 vsockmon tap 设备的新 skb 时，代码错误地使用了 `pkt->len`（原始 skb 数据长度）作为载荷长度。
+实际上，原始数据包可能为了适应 RX buffer 而被拆分，正确的载荷长度应从包头 `pkt_hdr->len` 字段获取，该字段在发送时已正确更新为分片大小。
+
+#解决方案
+修改 `net/vmw_vsock/virtio_transport_common.c` 文件中的 `virtio_transport_build_skb` 函数：
+将 payload_len 的赋值从 `pkt->len` 修正为 `le32_to_cpu(pkt_hdr->len)`，以确保在数据包分片场景下使用包头中记录的正确载荷长度。同时更新了相关的代码注释以反映当前逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4784b857c74602e7031a63672ad4c3439c0ffcac

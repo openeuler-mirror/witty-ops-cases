@@ -1,0 +1,26 @@
+#标题
+mpi3mr: 软复位期间因 I/O 或 Admin 队列轮询线程未退出导致控制器不可恢复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 mpi3mr 控制器软复位过程中，若 Admin 或 I/O 回复队列的轮询线程在超时时间（10秒）内仍在处理回复，软复位流程将失败。此时系统会将该控制器标记为“不可恢复”状态，导致存储设备无法继续正常使用。
+
+#主要错误日志
+[   ] mpi3mr: Soft reset failed due to an Admin or I/O queue polling
+[   ] mpi3mr: thread still processing replies even after a 10 second
+[   ] mpi3mr: timeout. Marking the controller as unrecoverable!
+
+#问题根因
+在控制器软复位处理流程中，驱动程序通过 `mpi3mr_ioc_disable_intr` 禁用了中断，但未设置同步标志位来阻止 Admin 和 I/O 队列的回复处理逻辑继续运行。这导致软复位后续阶段无法确保队列处理线程已安全退出，可能引发竞争条件或复位流程卡死。
+
+#解决方案
+1. 在驱动结构体中新增 `io_admin_reset_sync` 字段，用于管理复位期间的 I/O 操作状态。
+2. 在软复位处理函数 `mpi3mr_soft_reset_handler` 中，禁用中断后立即将 `io_admin_reset_sync` 置为 1。
+3. 修改 `mpi3mr_process_admin_reply_q` 和 `mpi3mr_process_op_reply_q` 函数，在处理循环中增加对 `io_admin_reset_sync` 标志的检查，若该标志置位则立即跳出处理循环。
+4. 新增 `mpi3mr_check_op_admin_proc` 函数，在发起软复位后轮询检查 Admin 和 I/O 队列是否仍在使用（`in_use`），最多等待 10 秒。若超时后队列仍被占用，则打印错误日志并将控制器标记为 `unrecoverable`。
+5. 在重初始化流程 `mpi3mr_reinit_ioc` 中，将 `io_admin_reset_sync` 重置为 0 以恢复正常操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f445d530a4c799b22cc43afdcde83e40477dc59d

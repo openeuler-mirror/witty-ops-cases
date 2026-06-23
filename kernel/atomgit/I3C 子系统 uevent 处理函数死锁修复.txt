@@ -1,0 +1,20 @@
+#标题
+I3C 子系统 uevent 处理函数死锁修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 I3C 设备热插拔或触发 uevent 事件时，内核可能发生死锁，导致对应进程挂起（D 状态），无法正常响应设备事件。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `i3c_device_uevent` 函数中，代码调用 `i3c_device_get_info()` 来获取设备信息。该函数内部会尝试获取 `i3cdev->desc` 相关的锁（或其内部调用的函数持有锁），而调用上下文可能已经持有该锁或处于不适宜睡眠/锁竞争的状态，从而引发锁竞争导致死锁。
+
+#解决方案
+修改 `drivers/i3c/master.c` 中的 `i3c_device_uevent` 函数，移除 `i3c_device_get_info()` 的调用，改为直接读取 `i3cdev->desc->info` 成员。这避免了不必要的锁获取操作，从而消除了死锁风险。修改前需增加 `i3cdev->desc` 的非空检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1e23c363771988286fa7b6b3c1b2b1e44d2023ff

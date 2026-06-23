@@ -1,0 +1,20 @@
+#标题
+mremap 导致 uprobe pte 被覆盖引发 Bad rss-counter 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核触发 BUG 提示 RSS 计数器状态错误：`BUG: Bad rss-counter state mm:... type:MM_ANONPAGES val:1`。该问题可通过特定的 mremap 操作序列复现：在文件偏移量 0 处注册 uprobe 后进行 mmap，接着通过 mremap 将部分 VMA 移动到新地址，再通过 mremap 移回原地址。在移回过程中，VMA 合并操作会错误地安装新的 uprobe 匿名页，随后 move_page_tables 使用 set_pte_at 重映射原有的 uprobe PTE 时覆盖了新安装的 PTE，导致原 PTE 变成孤立项且未被正确管理。
+
+#主要错误日志
+BUG: Bad rss-counter state mm:00000000b4a60fca type:MM_ANONPAGES val:1
+
+#问题根因
+在 `copy_vma` 流程（如 mremap 操作）中，当 VMA 发生合并时，`vma_merge` -> `vma_complete` 路径会调用 `uprobe_mmap` 在合并后的 VMA 中安装 uprobe 匿名页。然而，随后的 `move_page_tables` 步骤会通过 `set_pte_at` 将原 VMA 中的 uprobe PTE 重映射到合并后的 VMA 中，这直接覆盖了刚才 `uprobe_mmap` 新安装的 PTE。新安装的 PTE 被覆盖导致其成为孤立项，从而引发 RSS 计数错误。
+
+#解决方案
+在 `vma_merge` 函数及其相关数据结构中增加 `skip_vma_uprobe` 标志位。在 `copy_vma` 处理流程中，如果 VMA 可能包含 uprobe PTE 且即将进行合并，调用 `vma_merge` 时将该标志置为 true。在 `vma_complete` 执行阶段，检查该标志，如果为 true 则跳过 `uprobe_mmap` 调用，避免在 `move_page_tables` 迁移页表之前错误地安装多余的 uprobe PTE，从而防止 PTE 覆盖和孤立。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b421b23ba4d1200cdd6c6f8318c2634953c8e9a5

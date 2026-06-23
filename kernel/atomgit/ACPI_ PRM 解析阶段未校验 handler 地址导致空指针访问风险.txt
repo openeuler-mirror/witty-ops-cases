@@ -1,0 +1,26 @@
+#标题
+ACPI: PRM 解析阶段未校验 handler 地址导致空指针访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统启动或 ACPI PRM (Platform Runtime Mechanism) 模块解析 PRMT 表时，若固件提供的 handler_info 中 handler_address 为 0，或者内核无法将 handler 的物理地址（PA）映射为有效的虚拟地址（VA），内核将继续尝试处理该无效条目。这可能导致后续访问空指针或无效地址，引发内核异常或功能失效。
+
+#主要错误日志
+- "Skipping handler with NULL address for GUID: %pUL"（推断：当 handler_address 为 NULL 时打印）
+- "Failed to find VA of handler for GUID: %pUL, PA: 0x%llx"（当物理地址无法映射为虚拟地址时打印）
+
+#问题根因
+ACPI PRM 模块在解析 handler 信息时缺乏防御性编程：
+1. 未检查固件传入的 `handler_info->handler_address` 是否为 NULL（0）。
+2. 当 `efi_pa_va_lookup` 无法找到有效虚拟地址（返回 NULL）时，代码仅打印警告但未终止对该 handler 的后续处理。
+这导致结构体 `th` 中的 `handler_addr` 可能为 NULL，后续代码若直接使用该指针将引发空指针访问错误。
+
+#解决方案
+在 `drivers/acpi/prmt.c` 的 `acpi_parse_prmt` 函数中增加防御性检查：
+1. 在处理 handler 之前，检查 `handler_info->handler_address` 是否为 NULL。如果是，打印提示信息并跳过当前 handler（continue）。
+2. 在调用 `efi_pa_va_lookup` 获取虚拟地址后，检查返回值 `th->handler_addr` 是否为 NULL。如果是，打印警告信息并跳过当前 handler（continue），避免后续代码使用无效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/52fd4aa473091145043ca93e5deeb66a18d0b77c

@@ -1,0 +1,20 @@
+#标题
+x86/mm: flush_tlb_range() 在清除普通 PMD 时刷新行为错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `collapse_pte_mapped_thp` 流程时，系统调用 `flush_tlb_range()` 来清除普通的 PMD 表项（指向页表的 PMD）及其指向的页表中的 PTE 表项。由于该函数错误地设置了 `freed_tables` 参数为 false，导致 TLB 刷新行为不正确，可能引发内存管理状态不一致或潜在的内存损坏风险。
+
+#主要错误日志
+未知
+
+#问题根因
+x86 架构下的 `flush_tlb_range()` 在处理页表移除场景（如 `collapse_pte_mapped_thp` 中的 `pmdp_collapse_flush`）时，错误地传递了 `freed_tables=false` 参数。这导致该函数无法正确识别这是一个涉及页表释放的操作，从而可能触发了错误的 TLB 失效优化逻辑（如末级转化缓存优化），而 arm64 版本则正确地处理了此类场景。
+
+#解决方案
+修改 `arch/x86/include/asm/tlbflush.h` 中的 `flush_tlb_range()` 宏定义，将调用 `flush_tlb_mm_range()` 时的最后一个参数（`freed_tables`）从 `false` 修改为 `true`，确保在刷新范围时正确标记涉及页表释放的操作，避免错误的优化行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/84c653090a181238fa0cc0150728826ef4d03dd2

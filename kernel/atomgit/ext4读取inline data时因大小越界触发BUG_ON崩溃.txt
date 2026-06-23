@@ -1,0 +1,21 @@
+#标题
+ext4读取inline data时因大小越界触发BUG_ON崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当读取ext4文件系统的inline data时，若inline size超过PAGE_SIZE，内核会触发BUG_ON崩溃，导致系统异常终止当前进程或宕机。
+
+#主要错误日志
+- 触发条件：`BUG_ON(len > PAGE_SIZE);`
+- 修复后预期日志：`ext4_error_inode: inline size [len] exceeds PAGE_SIZE`
+
+#问题根因
+在函数 `ext4_read_inline_folio` 中，代码使用 `BUG_ON(len > PAGE_SIZE)` 来校验inline data的长度。当文件系统出现损坏或异常导致 `len` 大于 `PAGE_SIZE` 时，内核直接触发panic，而不是以更优雅的方式处理错误并报告文件系统损坏。
+
+#解决方案
+移除 `BUG_ON` 宏调用，改为增加条件判断：当 `len > PAGE_SIZE` 时，调用 `ext4_error_inode` 记录详细的错误信息，返回 `-EFSCORRUPTED` 错误码，并释放相关缓冲头，从而避免内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3572872994ca8bab656b0e6723fdeacecc593c34

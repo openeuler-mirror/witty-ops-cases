@@ -1,0 +1,26 @@
+#标题
+task_work子系统因NMI与调度器竞争导致任务工作遗漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在NMI上下文中使用 task_work_add 添加任务工作项时，若恰好碰上目标任务正在进行上下文切换（__schedule），可能导致该任务工作项被遗漏处理。目标任务在返回用户态或退出时跳过了本应执行的 task work，导致相关的内核回调逻辑未按预期执行。
+
+#主要错误日志
+未知
+
+#问题根因
+这是一个NMI与中断及调度器之间的竞争条件问题。根因分析如下：
+1. **NMI中断时机**：NMI可以在任何时刻打断CPU执行流，包括 `__schedule()` 关闭中断期间。
+2. **竞争窗口**：当 `__schedule()` 正在进行上下文切换（`current = next`）且本地中断关闭时，若触发NMI并在NMI中调用 `task_work_add(current, work, TWA_NMI_CURRENT)`，代码会排队一个irq_work。
+3. **错误的标志设置对象**：随后当 `__schedule()` 重新开启中断时，该排队的irq_work触发中断处理函数 `task_work_set_notify_irq()`。此时该函数调用 `test_and_set_tsk_thread_flag(current, TIF_NOTIFY_RESUME)`。
+4. **后果**：此时 `current` 已经指向了被切换进来的新任务，而不是之前NMI中目标的原任务。这导致 `TIF_NOTIFY_RESUME` 标志被错误地设置在了新任务上，而真正需要处理 task work 的原任务则丢失了该标志，从而错过了处理时机。
+
+#解决方案
+修改 `task_work_add` 在 `TWA_NMI_CURRENT` 模式下的处理逻辑，并简化 irq_work 处理函数：
+1. **提前设置标志**：在 `task_work_add` 的 `TWA_NMI_CURRENT` 分支中，直接调用 `set_tsk_thread_flag(current, TIF_NOTIFY_RESUME)` 设置标志。这确保了标志是设置在正确的目标任务上。
+2. **简化 IPI 逻辑**：将 `task_work_set_notify_irq` 函数体置为空。此时 `TWA_NMI_CURRENT` 模式下的 irq_work 仅作为一个“无操作”的核间中断（IPI）存在，其目的是触发目标CPU的退出内核路径检查，而不再负责设置标志位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aa1c86893023e55d3b629315ab3304ef4fa0a823

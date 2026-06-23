@@ -1,0 +1,20 @@
+#标题
+drm/amd/pm: 修复固件信息指针未校验导致的空指针解引用风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD 显卡电源管理模块处理 PPTable 时，如果获取固件信息失败，驱动程序未对返回指针进行有效性检查直接使用，存在空指针解引用风险，可能导致内核崩溃或驱动初始化失败。
+
+#主要错误日志
+"Missing firmware info!"
+
+#问题根因
+函数 `init_overdrive_limits` 调用 `smu_atom_get_data_table` 获取 `fw_info` 指针后，未检查该指针是否为空（NULL）即直接访问其成员变量（如 `ucTableFormatRevision`）。若数据表获取失败返回空指针，将引发空指针解引用错误。该问题由 Coverity 静态分析工具检出。
+
+#解决方案
+在调用 `smu_atom_get_data_table` 获取 `fw_info` 后，立即使用 `PP_ASSERT_WITH_CODE` 宏增加非空判断。若指针为空，打印错误日志 "Missing firmware info!" 并返回 `-EINVAL` 错误码，阻止后续代码访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/af467918554fde7ed5568f17d7cd8370bed9cc17

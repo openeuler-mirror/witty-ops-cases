@@ -1,0 +1,20 @@
+#标题
+amdgpu gfx11 KGQ 初始化时 wptr 指针重置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU gfx11 模块初始化图形队列（KGQ）时，由于 wptr（写指针）重置操作不完整，仅更新了 64 位值的低 32 位，导致 wptr 值异常。这可能导致硬件队列初始化状态不一致，进而引发图形渲染或计算任务提交时的功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+wptr 是一个 64 位的值，但在 KGQ（Kernel Graphics Queue）初始化队列重置过程中，代码仅将 `*ring->wptr_cpu_addr` 赋值为 0，该操作在 64 位环境下可能只更新了 32 位，未能正确清零完整的 64 位寄存器。这与 KCQ（Kernel Compute Queue）的处理逻辑不一致，导致了潜在的状态错误。
+
+#解决方案
+修改 `drivers/gpu/drm/amd/amdgpu/gfx_v11_0.c` 文件中的 `gfx_v11_0_gfx_init_queue` 函数，将直接赋值操作 `*ring->wptr_cpu_addr = 0` 修改为使用 `atomic64_set((atomic64_t *)ring->wptr_cpu_addr, 0)`，确保 64 位 wptr 值被完整更新，与 KCQ 的处理方式保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b977a728585910ee9b808376fa653c04f61d8554

@@ -1,0 +1,26 @@
+#标题
+ummu 模块未正确屏蔽 iommu.passthrough 参数导致 UB 功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PCI 和 UB（UniBio?）混合运行的场景下，如果内核启动参数配置了 `iommu.passthrough=1`（旨在让 PCI 设备直通），会导致 UB 设备功能异常。这是因为 ummu 协议不支持 passthrough（直通/透传）功能，但驱动错误地响应了全局直通配置，导致 UB 设备无法正常工作。
+
+#主要错误日志
+未知
+
+#问题根因
+ummu 协议定义其默认工作模式为 DMA 模式，不支持 passthrough 功能。
+在函数 `ummu_def_domain_type` 中，原代码逻辑直接调用了 `iommu_default_passthrough()` 判断是否使用直通模式。当系统配置 `iommu.passthrough=1` 时，该函数返回真，导致 ummu 错误地设置为 `IOMMU_DOMAIN_IDENTITY`（直通模式），违反了 ummu 协议规定，从而引发 UB 功能异常。
+
+#解决方案
+修改 `drivers/iommu/hisilicon/iommu.c` 中的 `ummu_def_domain_type` 函数逻辑：
+1. 移除对 `iommu_default_passthrough()` 的调用，不再根据全局参数设置直通模式。
+2. 根据 `iommu_default_dma_strict()` 的返回值决定域类型：
+   - 若非严格 DMA 模式，返回 `IOMMU_DOMAIN_DMA_FQ`（DMA FQ 模式）。
+   - 否则返回 `IOMMU_DOMAIN_DMA`（DMA 模式）。
+此修改强制 ummu 设备工作在 DMA 模式下，屏蔽了全局 `iommu.passthrough=1` 参数对 ummu 设备的影响。同时，在内核核心层（`iommu.c` 和 `iommu.h`）新增并导出了 `iommu_default_dma_strict` 接口以支持该判断逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca1f5e0a327d9fe0dc0fee89c8fb2e499ad2d05a

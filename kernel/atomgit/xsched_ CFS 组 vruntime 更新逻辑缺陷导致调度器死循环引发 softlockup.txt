@@ -1,0 +1,25 @@
+#标题
+xsched: CFS 组 vruntime 更新逻辑缺陷导致调度器死循环引发 softlockup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核调度器在处理 CFS 组调度时进入忙循环（busy infinite loop），导致 CPU 无法释放，最终触发 softlockup。具体表现为 `__raw_pick_next_ctx()` 持续返回 NULL，`xsched_schedule()` 无法选出下一个可运行实体从而陷入死循环。
+
+#主要错误日志
+- 推断日志（基于补丁新增的调试信息）：
+  `XSCHED_DEBUG("the xse this xcu [%u] is trying to pick is NULL @ %s\n", xcu->id, __func__);`
+- 现象相关日志：
+  `softlockup: CPU#X stuck for XXs!`
+
+#问题根因
+前一次提交（6861f0e578d7）为了修复多任务运行时的 shares 统计错误，将 CFS 组 vruntime 的更新改为使用 `sum_exec_runtime` 进行计算。这导致在某些场景下，`__raw_pick_next_ctx()` 无法正确选取调度实体，持续返回 NULL，进而导致 `xsched_schedule()` 进入无限循环。
+
+#解决方案
+1. 修复 vruntime 计算逻辑：恢复从第一个可运行实体（runnable entity）的 `xruntime` 派生组 vruntime 的方式，而不是使用 `sum_exec_runtime`。这保留了之前的除零保护（divide-by-zero protection），同时避免了死循环。
+2. 增强空值检查：在 `pick_next_ctx_fair` 函数中优化循环逻辑，增加对 `xse` 为 NULL 的检查，若检测到空值则打印调试信息并返回 NULL，防止调度器空转。
+3. 恢复默认权重：将 `XSCHED_CFS_WEIGHT_DFLT` 从 1 恢复为 1024。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/498430ad999fb39cfa59d61f2b99da5bf869b640

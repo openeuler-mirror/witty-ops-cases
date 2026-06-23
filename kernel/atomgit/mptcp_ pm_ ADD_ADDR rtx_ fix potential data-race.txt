@@ -1,0 +1,24 @@
+#标题
+mptcp: pm: ADD_ADDR rtx: fix potential data-race
+
+#内核版本
+OLK-6.6
+
+#问题现象
+MPTCP PM（Path Manager）的 ADD_ADDR 重传定时器回调函数 `mptcp_pm_add_timer` 在软中断上下文中执行时，可能与正在占用套接字的进程上下文发生数据竞争。这种并发访问可能导致内核数据结构不一致或不可预测的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+`mptcp_pm_add_timer()` 函数作为定时器回调函数在软中断上下文中执行。在修复前，代码直接操作套接字相关数据而未持有套接字锁。当套接字正被用户进程占用时，软中断上下文的定时器回调与进程上下文对同一数据的并发访问构成了潜在的数据竞争。
+
+#解决方案
+在 `mptcp_pm_add_timer()` 函数中引入套接字锁保护机制。具体修改如下：
+1. 在进入关键逻辑前调用 `bh_lock_sock(sk)` 获取锁。
+2. 检查套接字是否被用户占用（`sock_owned_by_user(sk)`），若被占用则重置定时器（延迟 HZ/20 后重试）并直接退出，避免竞争。
+3. 在函数退出路径 `out` 标签处增加 `bh_unlock_sock(sk)` 释放锁。
+此举确保了定时器回调与用户进程对套接字的互斥访问，消除了数据竞争风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bfdd977361c15ffa2c42bba7fe38b98c7dab3a80

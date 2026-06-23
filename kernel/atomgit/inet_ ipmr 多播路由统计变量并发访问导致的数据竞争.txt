@@ -1,0 +1,20 @@
+#标题
+inet: ipmr 多播路由统计变量并发访问导致的数据竞争
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多核环境下处理 IP 多播路由转发（ip_mr_forward / ip6_mr_forward）时，内核可能发生数据竞争。该问题可能导致多播路由统计信息（如转发字节数、包数、错误接口计数）不准确，严重时可能导致内核状态不一致。此问题通常由 KASAN (Kernel Address Sanitizer) 或并发检测工具发现，表现为数据竞争警告。
+
+#主要错误日志
+未知
+
+#问题根因
+struct mr_mfc 结构体中的 bytes、pkt、wrong_if 以及 lastuse 字段在 ip_mr_forward() 和 ip6_mr_forward() 函数中被并发更新（无锁保护），同时也被其他函数读取。这种并发读写操作未使用原子操作或 WRITE_ONCE/READ_ONCE 宏保护，导致了数据竞争。
+
+#解决方案
+将 struct mr_mfc 中的 bytes、pkt 和 wrong_if 字段类型修改为 atomic_long_t，并使用 atomic_long_inc、atomic_long_add、atomic_long_read、atomic_long_set 等原子操作函数替代普通读写；对 lastuse 字段使用 WRITE_ONCE() 和 READ_ONCE() 宏来防止编译器优化导致的并发问题，从而消除数据竞争隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f8ec74e9975eecf5d3c10febe0b46fcaf5e31ac3

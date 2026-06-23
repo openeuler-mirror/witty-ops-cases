@@ -1,0 +1,20 @@
+#标题
+spi-mxs: DMA标志缺失导致片选信号提前失效故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 MXS SPI 驱动进行数据传输时，片选信号被过早地置为无效，导致 SPI 通信过程出现毛刺，数据传输完整性受损，外设通信异常。
+
+#主要错误日志
+未知
+
+#问题根因
+先前对 mxs-dma 引擎的更新引入了一个新的自定义标志，但 MXS SPI 驱动未同步更新。代码中错误地使用了通用标志 `DMA_CTRL_ACK`，而未使用特定的 `MXS_DMA_CTRL_WAIT4END` 标志。这导致 DMA 控制器在传输真正结束前就认为操作完成，进而导致片选信号在数据传输尚未完全结束时被提前拉高。
+
+#解决方案
+修改 `drivers/spi/spi-mxs.c` 文件，引入 `linux/dma/mxs-dma.h` 头文件，并将 `mxs_spi_txrx_dma` 函数中 `dmaengine_prep_slave_sg` 调用时的 `DMA_CTRL_ACK` 标志替换为 `MXS_DMA_CTRL_WAIT4END`，以确保 DMA 等待传输结束后再释放总线控制，从而保证片选信号时序正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/918f9595d80daf64dcc13264ed0c980d3a4f1cbc

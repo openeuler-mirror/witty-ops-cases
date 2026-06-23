@@ -1,0 +1,32 @@
+#标题
+ubus: 集群模式下端口重置功能缺陷及热插拔能力检查缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在集群模式（cluster mode）下，通过 sysfs 接口执行端口重置（port reset）操作时，系统返回失败或引发非预期行为。
+2. 在移除 hisi_ubus 内核模块（执行 rmmod hisi_ubus）期间，若正在杀死 QEMU 进程，内核可能会产生调用栈追踪，导致模块卸载异常或内核不稳定。
+3. 热插拔服务未检查硬件槽位的能力位，可能导致在不支持电源控制的槽位上错误执行电源操作，或在无设备在位检测能力的槽位上误报状态。
+
+#主要错误日志
+- 集群模式端口重置错误：
+  `ub_err(port->uent, "Port reset is not supported by sysfs in cluster mode\n");`
+- 热插拔链路枚举失败日志（推断）：
+  `ub_err(slot->uent, "enum at slot%u failed, ret=%d\n", slot->slot_id, ret);`
+
+#问题根因
+1. **端口重置逻辑缺陷**：`port_reset_store` 函数未对集群模式进行场景区分。在集群模式下，端口重置操作涉及多节点协同或特定约束，直接通过 sysfs 触发单节点重置会导致状态不一致或操作非法。
+2. **模块卸载资源释放冲突**：`message_probe_device` 和 `message_remove_device` 接口在通用代码层调用了特定的 `probe_dev` 和 `remove_dev` 回调，而这些回调在 Hisilicon 实现中为空函数。这种冗余调用链条在模块卸载与进程终止并发时可能引发引用计数或锁竞争问题，导致 calltrace。
+3. **热插拔能力检查缺失**：热插拔逻辑中缺乏对槽位电源控制能力（`UB_SLOT_PWCS`）的检查。代码默认所有槽位都支持电源控制，在调用 `ubhp_set_slot_power` 等函数时，可能对不支持电源控制的槽位发送错误指令。
+
+#解决方案
+1. **禁止集群模式下的 sysfs 端口重置**：在 `drivers/ub/ubus/port.c` 的 `port_reset_store` 函数中增加判断逻辑，若控制器处于集群模式（`port->uent->ubc->cluster` 为真），则直接返回 `-EINVAL` 并打印错误日志，拒绝执行重置。
+2. **优化设备探测与移除流程**：移除 `drivers/ub/ubus/msg.c` 中对 `ops->probe_dev` 和 `ops->remove_dev` 的调用逻辑，并删除 Hisilicon 驱动中的相关空回调实现。将 `mdev` 的赋值逻辑简化，减少函数调用层级，避免模块卸载时的潜在竞争风险。
+3. **增强热插拔能力检查机制**：
+   - 在 `include/uapi/ub/ubus/ubus_regs.h` 中增加 `UB_SLOT_PWCS` 宏定义用于标识槽位电源控制能力。
+   - 在 `hotplug.h` 中增加 `PWR(slot)` 宏检查。
+   - 在 `hotplug_ctrl.c` 和 `hotplug_core.c` 中，所有涉及电源操作、在位检测和按钮事件的处理路径上，均增加 `PWR(slot)`、`PRESENT(slot)` 等能力检查，确保仅在硬件支持时才执行相应操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2486b7d64f168a6385ac5cb771e7bb993c41753a

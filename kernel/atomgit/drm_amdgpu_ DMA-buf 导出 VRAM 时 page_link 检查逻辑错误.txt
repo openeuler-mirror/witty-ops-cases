@@ -1,0 +1,21 @@
+#标题
+drm/amdgpu: DMA-buf 导出 VRAM 时 page_link 检查逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 DMA-buf 机制导出 VRAM 进行映射时，如果映射的是单个 VRAM 页面或适配单个 sg 条目的连续块，内核对 `page_link` 的检查逻辑可能失效，导致错误的代码路径被执行。这可能导致驱动错误地判断映射对象的类型（struct pages 还是 VRAM），进而引发内存管理错误或资源释放异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `amdgpu_dma_buf_unmap` 函数中，代码直接检查 `sgt->sgl->page_link` 是否非零来判断是否映射了 struct pages。然而，scatterlist 的 `page_link` 成员其低位用于存储标志位（如 `SG_END`、`SG_CHAIN`）。
+当映射单个 VRAM 页面或连续块时，scatterlist 仅包含一个条目，此时该条目的 `page_link` 低位可能被设置了 `SG_END` 标志。这导致 `page_link` 的值非零，从而错误地触发了针对 struct pages 的解映射流程，而实际上映射的可能是 VRAM。
+
+#解决方案
+修改 `amdgpu_dma_buf_unmap` 中的判断逻辑，使用 `sg_page(sgt->sgl)` 辅助函数代替直接访问 `page_link`。`sg_page()` 函数会正确处理 `page_link` 中的低位标志位，仅提取出有效的 struct page 指针。如果返回值为 NULL，则说明映射的是 VRAM；反之则为 struct pages。修改后的代码能够准确区分映射类型并执行相应的解映射操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c8e38337fe73179ed8a4700b497ed7e28c51d3b

@@ -1,0 +1,22 @@
+#标题
+idxd: idxd_setup_groups 错误处理路径中的内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `idxd_setup_groups()` 函数执行过程中，若因设备名称设置失败（`dev_set_name` 返回错误）或其他错误导致函数退出，此前已分配的 group 结构体内存未被释放，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `idxd_setup_groups()` 的错误处理路径中，代码逻辑不完整。当 `dev_set_name` 失败时，虽然调用了 `put_device(conf_dev)`，但遗漏了调用 `kfree(group)` 来释放刚分配的 group 内存。此外，在遍历清理已分配 groups 的错误分支中，也仅执行了 `put_device` 而遗漏了对应的 `kfree` 操作，导致内存泄漏。
+
+#解决方案
+在错误处理路径中补充缺失的内存释放调用：
+1. 当 `dev_set_name` 失败时，在 `put_device` 后增加 `kfree(group)`。
+2. 在函数末尾的 err 标签后的清理循环中，在 `put_device` 后增加 `kfree(group)`，确保资源按申请的逆序释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aa80f4af70b1731c83da26dbdc073dccb97ef1f4

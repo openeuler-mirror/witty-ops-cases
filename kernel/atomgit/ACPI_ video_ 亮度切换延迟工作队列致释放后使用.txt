@@ -1,0 +1,20 @@
+#标题
+ACPI: video: 亮度切换延迟工作队列致释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 ACPI 视频设备过程中，若 `switch_brightness_work` 延迟工作队列恰好在资源释放后执行，会导致内核发生释放后使用，可能引发内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`switch_brightness_work` 延迟工作任务会访问 `device->brightness` 和 `device->backlight` 指针。在设备移除流程中，`acpi_video_dev_unregister_backlight()` 会释放这些资源，但未等待该工作队列执行完毕。如果工作队列在资源释放后、但在取消前执行，`acpi_video_switch_brightness()` 在解引用 `device->brightness` 或 `device->backlight` 时即触发 use-after-free。
+
+#解决方案
+在 `acpi_video_bus_remove_notify_handler()` 函数中，针对每个视频设备移除通知处理器后，立即调用 `cancel_delayed_work_sync()` 取消 `switch_brightness_work` 延迟工作。该操作确保工作队列在内存释放前已完成或被取消，从而避免竞争条件导致的释放后使用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c8da059e7d11ffffb50f1c5d969e69f7769cf10b

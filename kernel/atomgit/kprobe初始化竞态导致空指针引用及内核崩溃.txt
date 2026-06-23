@@ -1,0 +1,31 @@
+#标题
+kprobe初始化竞态导致空指针引用及内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理kprobe事件时触发空指针引用，导致内核崩溃。具体表现为无法处理内核分页请求，PC指针指向 `kprobe_perf_func` 函数，系统可能伴随Oops或Panic重启。
+
+#主要错误日志
+[1135630.084782] Unable to handle kernel paging request at virtual address 0000710a04630000
+[1135630.269239] pc : kprobe_perf_func+0x30/0x260
+[1135630.277643] lr : kprobe_dispatcher+0x44/0x60
+[1135630.429410] Call trace:
+[1135630.434828]  kprobe_perf_func+0x30/0x260
+[1135630.441661]  kprobe_dispatcher+0x44/0x60
+[1135630.448396]  aggr_pre_handler+0x70/0xc8
+[1135630.454959]  kprobe_breakpoint_handler+0x140/0x1e0
+
+#问题根因
+kprobe激活与perf_events初始化之间存在竞态条件。
+在 `perf_kprobe_init` 执行过程中，CPU0 先赋值 `tp_event->perf_events`，再通过 `tp_event->class->reg` 启用 kprobe 功能。由于缺少内存屏障，当 CPU0 完成步骤（2）启用 kprobe 后，CPU1（触发 kprobe）可能看到 `TP_FLAG_PROFILE` 标志位已置位，但尚未看到 `perf_events` 指针赋值（仍为 NULL）。此时 CPU1 进入 `kprobe_perf_func` 访问 `call->perf_events` 时触发空指针引用崩溃。
+
+#解决方案
+引入配对的读写内存屏障来保证内存访问顺序：
+1. 在设置标志位时，使用 `smp_store_release` 原语，确保之前的 `perf_events` 赋值操作对其他 CPU 可见。
+2. 在读取标志位时，新增 `trace_probe_load_flag` 函数并使用 `smp_load_acquire` 原语，确保如果看到标志位置位，必定能看到 `perf_events` 已正确赋值。
+此修复确保了 CPU 在看到 kprobe 功能启用时，必定能看到 `perf_events` 已完成初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/96f769e200941b60c36c7ee70f528722a334797f

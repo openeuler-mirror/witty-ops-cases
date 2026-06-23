@@ -1,0 +1,59 @@
+#标题
+RDMA/rxe: SRQ resize 失败导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA 软件驱动中，当连续两次调用 `ibv_modify_srq()` 且满足特定错误条件时，触发内核空指针解引用，导致系统崩溃。具体表现为第一次调用在 `rxe_queue_resize()` 处失败，导致 `srq->rq.queue` 被置为 NULL；第二次调用在访问 `srq->rq.queue->buf->index_mask` 时引发 panic。
+
+#主要错误日志
+Call Trace:
+<TASK>
+rxe_modify_srq+0x170/0x480 [rdma_rxe]
+? __pfx_rxe_modify_srq+0x10/0x10 [rdma_rxe]
+? uverbs_try_lock_object+0x4f/0xa0 [ib_uverbs]
+? rdma_lookup_get_uobject+0x1f0/0x380 [ib_uverbs]
+ib_uverbs_modify_srq+0x204/0x290 [ib_uverbs]
+? __pfx_ib_uverbs_modify_srq+0x10/0x10 [ib_uverbs]
+? tryinc_node_nr_active+0xe6/0x150
+? uverbs_fill_udata+0xed/0x4f0 [ib_uverbs]
+ib_uverbs_handler_UVERBS_METHOD_INVOKE_WRITE+0x2c0/0x470 [ib_uverbs]
+? __pfx_ib_uverbs_handler_UVERBS_METHOD_INVOKE_WRITE+0x10/0x10 [ib_uverbs]
+? uverbs_fill_udata+0xed/0x4f0 [ib_uverbs]
+ib_uverbs_run_method+0x55a/0x6e0 [ib_uverbs]
+? __pfx_ib_uverbs_handler_UVERBS_METHOD_INVOKE_WRITE+0x10/0x10 [ib_uverbs]
+ib_uverbs_cmd_verbs+0x54d/0x800 [ib_uverbs]
+? __pfx_ib_uverbs_cmd_verbs+0x10/0x10 [ib_uverbs]
+? __pfx___raw_spin_lock_irqsave+0x10/0x10
+? __pfx_do_vfs_ioctl+0x10/0x10
+? ioctl_has_perm.constprop.0.isra.0+0x2c7/0x4c0
+? __pfx_ioctl_has_perm.constprop.0.isra.0+0x10/0x10
+ib_uverbs_ioctl+0x13e/0x220 [ib_uverbs]
+? __pfx_ib_uverbs_ioctl+0x10/0x10 [ib_uverbs]
+__x64_sys_ioctl+0x138/0x1c0
+do_syscall_64+0x82/0x250
+? fdget_pos+0x58/0x4c0
+? ksys_write+0xf3/0x1c0
+? __pfx_ksys_write+0x10/0x10
+? do_syscall_64+0xc8/0x250
+? __pfx_vm_mmap_pgoff+0x10/0x10
+? fget+0x173/0x230
+? fput+0x2a/0x80
+? ksys_mmap_pgoff+0x224/0x4c0
+? do_syscall_64+0xc8/0x250
+? do_user_addr_fault+0x37b/0xfe0
+? clear_bhb_loop+0x50/0xa0
+? clear_bhb_loop+0x50/0xa0
+? clear_bhb_loop+0x50/0xa0
+entry_SYSCALL_64_after_hwframe+0x76/0x7e
+
+#问题根因
+函数 `rxe_srq_from_attr()` 在处理 SRQ（共享接收队列）属性修改时，若 `rxe_queue_resize()` 执行失败，原有代码逻辑会跳转到 `err_free` 标签执行清理操作。此清理操作会调用 `rxe_queue_cleanup(q)` 并将 `srq->rq.queue` 设置为 NULL。
+然而，该操作是不正确的。当 resize 失败时，原有的 queue 指针仍然有效且不应被释放或置空。错误地将 queue 置空后，后续的 `rxe_srq_chk_attr()` 函数在检查属性时，直接访问 `srq->rq.queue->buf->index_mask`，从而触发空指针解引用错误。
+
+#解决方案
+修改 `drivers/infiniband/sw/rxe/rxe_srq.c` 文件中的 `rxe_srq_from_attr` 函数。当 `rxe_queue_resize()` 调用失败时，直接返回错误码，不再执行多余的清理和置空操作。这确保了在 resize 失败时，原有的 `srq->rq.queue` 指针保持有效，避免了后续访问时的空指针崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1fb9216d31bd02bf2460f904785ab26fd22d08b6

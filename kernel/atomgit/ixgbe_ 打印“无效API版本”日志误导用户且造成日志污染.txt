@@ -1,0 +1,23 @@
+#标题
+ixgbe: 打印“无效API版本”日志误导用户且造成日志污染
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Linux 环境下使用 ixgbe PF 驱动时，当连接的 ixgbevf VF 驱动尝试协商邮箱 API v1.5 版本时，系统日志中会打印一条信息级别（info level）的日志，提示“requested invalid api version”。由于 Linux PF 驱动当前仅支持 v1.4，不支持 v1.5，但 v1.5 本身是合法版本（用于兼容 ESX VMWare PF），该错误提示会误导用户认为 VF 发起了无效请求，且在正常的多版本协商场景下产生不必要的日志噪音。
+
+#主要错误日志
+VF 0 requested invalid api version 6
+（注：此处“6”对应 Commit Message 中提到的 v1.5 相关协商版本号，原文示例为“VF 0 requested invalid api version 6”，修复后日志内容变更为“unsupported api version”。）
+
+#问题根因
+ixgbe PF 驱动在 `ixgbe_negotiate_vf_api` 函数中处理 VF API 版本协商失败时，使用了 `e_info`（信息级别）打印日志，并将不支持的情况描述为“invalid”（无效）。实际上，VF 尝试使用更高版本的 API（如 v1.5）是正常的协商行为，Linux PF 仅是不支持该版本，并非 VF 请求本身非法。使用“invalid”措辞且以信息级别打印，导致用户误解并污染系统日志。
+
+#解决方案
+1. 将日志打印级别从 `e_info` 降低为 `e_dbg`（调试级别），使其不在默认日志输出中显示，避免干扰用户。
+2. 修改日志提示信息，将“invalid api version”（无效 API 版本）改为“unsupported api version”（不支持的 API 版本），准确反映当前 PF 不支持该版本但请求本身合法的事实。
+3. 在代码头文件中新增 `e_dbg` 宏定义以支持该修改。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bcc0a4a69d244ac1f9f5adc25b914f50e2303f8d

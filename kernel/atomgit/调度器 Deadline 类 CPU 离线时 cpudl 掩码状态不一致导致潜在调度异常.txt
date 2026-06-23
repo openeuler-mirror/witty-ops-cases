@@ -1,0 +1,23 @@
+#标题
+调度器 Deadline 类 CPU 离线时 cpudl 掩码状态不一致导致潜在调度异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CPU 热插拔（Hotplug）场景下，当 CPU 执行 Offline 操作时，内核未能正确清理 `cpudl` 结构中的 `free_cpus` 掩码位。这导致该 CPU 虽然已经下线，但在 Deadline 调度器的数据结构中仍被标记为“空闲”或“可用”，可能引发后续的调度逻辑错误、任务错误分发到离线 CPU，或导致内核数据结构状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+原有的 `rq_offline_dl` 函数在处理 CPU 下线时，先调用 `cpudl_clear` 清除堆数据，随后调用 `cpudl_clear_freecpu` 清除 `free_cpus` 位。然而，`cpudl_clear` 函数内部逻辑存在缺陷，无论 CPU 是否在线，都会执行 `cpumask_set_cpu(cpu, cp->free_cpus)`，即强制将当前 CPU 设置为空闲状态。这导致 `rq_offline_dl` 中的清理操作顺序颠倒：先被错误地设置为“空闲”，随后的清理操作可能未能完全修正状态，或者逻辑上存在冗余与冲突。根本原因是 `cpudl_clear` 未区分 CPU 的在线/离线状态，导致离线 CPU 在特定代码路径下仍被错误地标记为可用。
+
+#解决方案
+1. 修改 `cpudl_clear` 函数接口，增加 `bool online` 参数，用于指示 CPU 的在线状态。
+2. 在 `cpudl_clear` 内部根据 `online` 参数决定掩码操作：若 `online` 为真，则将 CPU 设置到 `free_cpus` 掩码中；若为假（离线），则从 `free_cpus` 掩码中清除该 CPU。
+3. 删除冗余的 `cpudl_set_freecpu` 和 `cpudl_clear_freecpu` 接口函数，将掩码维护逻辑统一收敛到 `cpudl_set` 和修改后的 `cpudl_clear` 中。
+4. 更新调用点：在 `dec_dl_deadline` 和 `rq_online_dl` 中传入正确的在线状态；在 `rq_offline_dl` 中调用 `cpudl_clear` 时显式传入 `false`，确保离线 CPU 被正确从 `free_cpus` 中移除。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3ec177237edb93aa296774679dc4fe35879e5f30

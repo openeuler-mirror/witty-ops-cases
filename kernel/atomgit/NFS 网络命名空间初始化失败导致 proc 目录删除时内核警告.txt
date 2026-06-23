@@ -1,0 +1,24 @@
+#标题
+NFS 网络命名空间初始化失败导致 proc 目录删除时内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 nfs_fs_proc_net_init() 函数执行失败（如故障注入导致内存分配失败）的场景下，系统未正确清理已创建的 `/proc/net/rpc/nfs` 目录。后续在清理网络命名空间时，`rpc_proc_exit()` 尝试删除 `/proc/net/rpc` 目录，因该目录非空（残留 `nfs` 子目录），触发内核 WARNING，提示正在删除非空目录。
+
+#主要错误日志
+- `remove_proc_entry: removing non-empty directory 'net/rpc', leaking at least 'nfs'`
+- `WARNING: CPU: 1 PID: 6120 at fs/proc/generic.c:727 remove_proc_entry+0x45e/0x530 fs/proc/generic.c:727`
+
+#问题根因
+`nfs_net_init()` 函数缺少完善的错误处理路径。当 `nfs_fs_proc_net_init()` 调用失败时，函数直接返回错误，未回滚之前由 `rpc_proc_register()` 创建的 `/proc/net/rpc/nfs` 条目。这导致在随后的清理流程中，`sunrpc` 模块尝试删除父目录 `/proc/net/rpc` 时发现其不为空，从而触发 WARNING。
+
+#解决方案
+在 `nfs_net_init()` 中增加错误处理标签（goto 标签），实现链式回滚。具体修改为：
+1. 当 `rpc_proc_register()` 失败时，跳转至 `err_proc_rpc` 标签执行 `nfs_clients_exit(net)` 清理。
+2. 当 `nfs_fs_proc_net_init()` 失败时，跳转至 `err_proc_nfs` 标签，先调用 `rpc_proc_unregister(net, "nfs")` 移除已创建的 proc 条目，再执行 `nfs_clients_exit(net)` 清理。
+这确保了初始化失败时所有已分配资源都能被正确释放，避免残留项导致内核警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8679a656f89c2b3bea6191f7eb0134e77180cd40

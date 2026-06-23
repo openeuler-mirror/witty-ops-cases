@@ -1,0 +1,20 @@
+#标题
+spi-nor debugfs 接口 flags 打印错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当访问 SPI NOR 设备的 debugfs 参数接口（如 `params` 文件）时，内核可能发生内存越界访问。具体表现为读取到的 flags 标志位信息不正确，或者在内核日志中触发 slab 毒值错误、内核 panic（如 KASAN 报告越界读写）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `drivers/mtd/spi-nor/debugfs.c` 的 `spi_nor_params_show` 函数中，调用 `spi_nor_print_flags` 时，参数传递错误。原代码使用 `sizeof(snor_f_names)` 计算数组大小，由于 `snor_f_names` 被定义为指针（或 decay 为指针），`sizeof` 返回的是指针的大小（如 8 字节）而非数组的实际元素个数。这导致传入的数组长度远小于实际长度，引发函数内部访问数组越界。
+
+#解决方案
+修复数组长度计算方式。引入 `<linux/array_size.h>` 头文件，并将 `sizeof(snor_f_names)` 替换为 `ARRAY_SIZE(snor_f_names)`，确保传入的是数组的实际元素个数，防止内存越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/13252b14ba9e2970a1ec1646c60adfe916943fbb

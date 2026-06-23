@@ -1,0 +1,20 @@
+#标题
+clk: renesas: r9a06g032 驱动 probe 失败时的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Renesas R9A06G032 时钟驱动在初始化过程中，若 `probe` 函数在寄存器映射成功后的后续步骤（如 `of_clk_add_provider()` 或 `r9a06g032_add_clk_domain()`）失败，会导致之前通过 `of_iomap()` 映射的寄存器内存区域无法释放，造成内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码使用 `of_iomap()` 映射寄存器，但在 `probe` 失败的错误处理路径中缺少对应的 `iounmap()` 调用。当驱动初始化中途失败时，映射的内存未被归还给系统，导致内存泄漏。
+
+#解决方案
+将 `of_iomap()` 替换为托管版本 `devm_of_iomap()`。利用托管设备资源机制，在 `probe` 失败时自动取消映射寄存器区域，从而修复内存泄漏问题。同时更新了错误检查逻辑，使用 `IS_ERR()` 和 `PTR_ERR()` 处理返回值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14427552f0b2c3a5f4252ea61397270f8a3a0374

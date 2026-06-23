@@ -1,0 +1,20 @@
+#标题
+文件句柄编码失败时内核断言误触发
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在执行文件句柄编码操作失败时（例如使用 overlayfs、inotify 并触发 drop_caches 的场景），内核误触发 WARN_ON 或 WARN_ONCE 断言，导致调用栈打印或系统日志中出现非预期的警告信息。实际上编码失败属于预期内的可处理错误，不应触发断言。
+
+#主要错误日志
+Can't encode file handler for inotify: %d\n
+
+#问题根因
+文件系统层的 `->encode_fh()` 方法在某些情况下编码失败是合法的预期行为（例如 legacy 用户如 nfsd 和 name_to_handle_at 系统调用均能正确处理此失败）。但在 `fs/notify/fdinfo.c` 和 `fs/overlayfs/copy_up.c` 中，代码错误地使用了 `WARN_ON` 或 `WARN_ONCE` 对此类失败进行断言，导致在正常的失败路径上错误地触发了内核警告。
+
+#解决方案
+移除 `fs/notify/fdinfo.c` 中 `exportfs_encode_fid` 失败时的 `WARN_ONCE` 调用；修改 `fs/overlayfs/copy_up.c` 中的错误检查逻辑，移除对 `fh_type < 0` 和 `fh_type == FILEID_INVALID` 的 `WARN_ON` 断言，将其改为常规的错误检查，从而“放宽”对编码失败的断言限制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b26d84a492aab43ac7947c05dccf44d134ec9f9

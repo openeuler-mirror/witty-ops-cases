@@ -1,0 +1,21 @@
+#标题
+axis-fifo: write操作大包未校验导致超时与潜在硬件错误风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `axis-fifo` 驱动中，当用户态通过 `write()` 发送大于 `tx_fifo_depth - 4` words 的数据包时，系统不再返回 `-EINVAL` 拒绝请求。相反，请求会在 `wait_event_interruptible_timeout()` 中超时并返回 `-EAGAIN`。这导致用户态误以为应重试，实际上请求永远无法成功，同时阻塞了其他任务对 FIFO 的写入操作。若数据实际触达硬件，还可能触发“Transmit Packet Overrun Error”中断，导致发送电路需要复位才能恢复。
+
+#主要错误日志
+未知
+（注：Commit 信息指出为了防止刷屏已移除原有的 `dev_err` 日志打印，且故障主要表现为系统调用返回值异常 `-EAGAIN` 而非内核日志报错。）
+
+#问题根因
+自 commit 2ca34b508774 修正 `tx_fifo_depth` 校验逻辑后，最大包长校验条件错误地放宽为 `words_to_write > fifo->tx_fifo_depth`。根据 AXI4-Stream FIFO 手册（PG080），最大有效包长应为 `tx_fifo_depth - 4` words。错误的校验条件允许了非法的大包通过验证进入发送流程，导致唤醒条件永远无法满足从而超时，且存在触发硬件发送超限错误的风险。
+
+#解决方案
+修改 `drivers/staging/axis-fifo/axis-fifo.c` 中的包长校验逻辑，将判断条件从 `words_to_write > fifo->tx_fifo_depth` 恢复为 `words_to_write > (fifo->tx_fifo_depth - 4)`。对于超过最大有效长度的数据包，直接返回 `-EINVAL`，并在代码中补充注释说明该限制源于硬件 FIFO 存储转发模式的要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/83e79400e45b0214848d171448d05f59a2006d16

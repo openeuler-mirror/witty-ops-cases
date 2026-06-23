@@ -1,0 +1,20 @@
+#标题
+raid5：修复 aligned read 重试路径中的 release_stripe 锁缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RAID5 重试对齐读取操作的路径中，当 `add_stripe_bio` 失败时，系统调用 `raid5_release_stripe` 释放 stripe 可能导致竞态条件或内核崩溃，因为该函数在调用时未持有必要的锁（`device_lock`）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `retry_aligned_read` 函数中，如果 `add_stripe_bio` 返回失败，原代码直接调用 `raid5_release_stripe(sh)` 来释放 stripe head。然而，`raid5_release_stripe` 的部分释放逻辑需要持有 `conf->device_lock` 自旋锁才能安全执行，直接调用导致了锁缺失问题。
+
+#解决方案
+在 `add_stripe_bio` 失败的分支中，移除对 `raid5_release_stripe` 的直接调用。改为显式获取 `conf->device_lock` 自旋锁，手动计算 hash 索引，然后调用底层的 `__release_stripe` 函数将 stripe head 放入 `temp_inactive_list` 列表中，最后释放锁。这确保了释放流程在正确的锁保护下进行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a69647ad13abd1460b0f5d67ab7382284f7e3bdf

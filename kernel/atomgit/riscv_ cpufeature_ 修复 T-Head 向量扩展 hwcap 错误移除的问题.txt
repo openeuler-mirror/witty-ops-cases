@@ -1,0 +1,22 @@
+#标题
+riscv: cpufeature: 修复 T-Head 向量扩展 hwcap 错误移除的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 T-Head CPU 平台上，内核启动过程中解析设备树（DT）时，错误地移除了向量扩展的 hwcap 标志。这导致用户态程序无法正确识别 CPU 的向量扩展能力，相关的向量指令功能不可用或被错误禁用。
+
+#主要错误日志
+未知
+
+#问题根因
+`riscv_cpuinfo` 结构体中的 `mvendorid` 和 `marchid` 成员在设备树解析阶段尚未被填充，因为它们只有在所有 harts 核心完成启动后才会进行初始化。
+原代码在 DT 解析过程中调用 `riscv_cached_mvendorid` 和 `riscv_cached_marchid` 读取这些值，读取到的数据不正确（通常为 0），导致针对旧版 T-Head CPU 的条件判断逻辑 `riscv_cached_mvendorid(cpu) == THEAD_VENDOR_ID && riscv_cached_marchid(cpu) == 0x0` 错误命中，从而错误地清除了向量扩展的 hwcap 标志。
+
+#解决方案
+修改 `riscv_fill_hwcap_from_isa_string` 函数，在解析设备树之前，使用新增的 `riscv_get_mvendorid` 和 `riscv_get_marchid` 接口直接从启动 hart 获取 `mvendorid` 和 `marchid`。
+同时优化 `riscv_cpuinfo_starting` 函数，仅在 `mvendorid` 和 `marchid` 未初始化时才进行读取赋值，避免覆盖早期获取的值。这样确保了在 DT 解析阶段能够使用正确的厂商 ID 和架构 ID 进行判断，避免了向量扩展能力的错误移除。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/92c4fdc6031c4c5e4646f60ed4298aed47ffdecf

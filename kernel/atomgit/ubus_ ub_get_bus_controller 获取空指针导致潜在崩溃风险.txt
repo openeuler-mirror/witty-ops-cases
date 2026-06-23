@@ -1,0 +1,25 @@
+#标题
+ubus: ub_get_bus_controller 获取空指针导致潜在崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ub_get_bus_controller` 函数获取总线控制器时，若管理子系统操作接口未初始化（`manage_subsystem_ops` 为空），或者控制器实体（`ub_entity`）为空，函数未能正确处理空指针情况。这可能导致后续流程访问空指针引发内核崩溃，或在列表遍历过程中内存访问异常。
+
+#主要错误日志
+- manage subsystem ops is null
+- ubc list num over max num %u
+- The ub_entity of ubc is null
+- %s: input parameters invalid
+
+#问题根因
+函数 `ub_get_bus_controller` 缺少对全局变量 `manage_subsystem_ops` 的非空校验，导致在子系统未就绪时继续执行引发错误；同时，在遍历 `ubc_list` 获取实体时，未对 `ub_entity_get` 返回值进行校验，若 `ubc->uent` 为空将导致空指针引用；此外，异常退出路径未统一跳转至清理流程，可能导致资源泄露或状态不一致。
+
+#解决方案
+1. 在函数入口处增加对 `manage_subsystem_ops` 的非空检查，若为空则打印错误日志并返回 `-EINVAL`。
+2. 在遍历链表获取 `ub_entity` 时，增加对 `ub_entity_get` 返回值的非空校验，若获取失败则打印错误日志并通过 `goto` 跳转到清理标签。
+3. 统一错误处理路径，引入 `ubc_put` 标签，在内存超限或实体获取失败等异常场景下，跳转至该标签执行 `ub_put_bus_controller` 进行资源清理，并返回相应的错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/539643475d9fa14c6e679642c1d0331e826f40ce

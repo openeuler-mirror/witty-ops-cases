@@ -1,0 +1,25 @@
+#标题
+perf 事件切换至 OFF/ERROR 状态时遗漏 cgroup 状态清理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Perf 性能监控场景下，当事件因故障或依赖关系被切换至 OFF 或 ERROR 状态时，系统未正确调用 `perf_cgroup_event_disable()` 清理 cgroup 相关状态。这可能导致 cgroup 统计信息不一致，或在特定条件下触发内核 panic（如 Commit Message 中提到的追踪 `missing perf_cgroup_event_disable()` 问题）。
+
+#主要错误日志
+未知
+
+#问题根因
+在内核事件调度逻辑中，`perf_put_aux_event()` 和 `perf_remove_sibling_event()` 等函数在将事件状态切换为 ERROR 时，仅调用了 `event_sched_out()` 和 `perf_event_set_state()`，遗漏了 `perf_cgroup_event_disable()` 的调用。
+根据内核规则，任何切换至 OFF 或 ERROR 状态的事件都必须调用 `perf_cgroup_event_disable()` 来同步 cgroup 状态。由于相关禁用路径未统一处理该逻辑，导致状态不一致。
+
+#解决方案
+重构并统一事件的禁用路径：
+1. 新增静态内联函数 `__event_disable()`，封装了 `event_sched_out()`、`perf_cgroup_event_disable()` 和 `perf_event_set_state()` 三个步骤，确保状态切换时 cgroup 状态被正确清理。
+2. 将 `perf_put_aux_event()` 中设置 ERROR 状态的逻辑替换为调用 `__event_disable()`。
+3. 将 `perf_group_detach()` 中处理 `PERF_EV_CAP_SIBLING` 事件的逻辑（原 `perf_remove_sibling_event`）替换为调用 `__event_disable()`。
+4. 在 `__perf_event_disable()` 中使用 `__event_disable()` 替代原有的分散调用，统一处理 OFF 状态切换。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2adaf8d2b5f7d6a19ee64ff13c6cc7cb2d3c6f5b

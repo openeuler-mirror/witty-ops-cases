@@ -1,0 +1,24 @@
+#标题
+Bluetooth: Broadcast Sink BIS 状态未正确标记为已连接
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 Broadcast Sink 接收到 `HCI_EVT_LE_BIG_SYNC_ESTABLISHED` 事件且状态为成功（0x00）时，对应的 BIS（Broadcast Isochronous Stream）连接状态未正确设置为 `BT_CONNECTED`，而是维持在 `BT_OPEN` 状态。这导致连接状态无效，且未生成对应的 debugfs 和 sysfs 接口文件，影响后续对 Broadcast Sink BIS 连接的管理与操作。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `hci_le_big_sync_established_evt` 处理逻辑中，当 `ev->status` 为 0（成功）时，代码仅设置了 `HCI_CONN_BIG_SYNC` 标志位并调用 `hci_iso_setup_path`，但遗漏了将 `bis->state` 更新为 `BT_CONNECTED` 的步骤，同时也未调用 `hci_debugfs_create_conn` 和 `hci_conn_add_sysfs` 来创建相应的系统接口。这导致 BIS 连接在内核内部状态显示为未打开（`BT_OPEN`），与实际建立连接的成功状态不符。
+
+#解决方案
+在 `net/bluetooth/hci_event.c` 文件的 `hci_le_big_sync_established_evt` 函数中，针对 `ev->status` 为成功的情况，补充以下操作：
+1. 将 BIS 连接状态 `bis->state` 设置为 `BT_CONNECTED`。
+2. 调用 `hci_debugfs_create_conn(bis)` 创建 debugfs 条目。
+3. 调用 `hci_conn_add_sysfs(bis)` 创建 sysfs 设备条目。
+此修复确保 BIS 连接在同步建立成功后，其状态和系统接口与 Broadcast Source BIS 及 CIS 连接的处理逻辑保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c20ad8312fd77d2be5c599538ca83b9de5397b2b

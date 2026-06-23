@@ -1,0 +1,29 @@
+#标题
+KVM ioeventfd 批量处理并发致内存释放后使用及崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在频繁进行 KVM ioeventfd 的添加和删除操作（批量处理模式）时，可能引发内核并发问题，导致内核崩溃或内存不一致。具体表现为虚拟机运行过程中触发 panic 或 Oops，或在进行 VM 销毁时出现 Use-After-Free 现象。
+
+#主要错误日志
+未知
+
+#问题根因
+问题引入于提交 `2dcf53278783 ("eventfd:Introduce the eventfd batch processing interface")`。
+根因在于 `kvm_shadow_list` 的生命周期管理不当，导致频繁的链表增删操作引发并发风险：
+1. **并发访问风险**：原实现在批量处理开始时动态创建 `kvm_shadow` 并加入全局链表，处理结束时删除并释放。频繁的链表操作缺乏有效保护，增加了锁竞争并可能引发并发问题。
+2. **生命周期不匹配**：`kvm_shadow` 用于暂存批量处理期间的 eventfd 信息，但其生命周期独立于 `kvm` 结构体。在 `kvm_destroy_vm` 销毁流程中，代码逻辑未严格对齐，可能导致正在使用的 `kvm_shadow` 被提前释放（Use-After-Free）。
+3. **空指针风险**：`kvm_iodevice_destructor` 等函数未对指针进行有效性检查，在异常路径下可能触发空指针访问。
+
+#解决方案
+将 `kvm_shadow` 的生命周期与 `kvm` 虚拟机实例对齐，消除频繁的链表操作和并发风险：
+1. **生命周期对齐**：在创建 VM（`kvm_create_vm`）时分配 `kvm_shadow` 结构，在销毁 VM（`kvm_destroy_vm`）时释放，全程受 `kvm_lock` 保护，避免频繁分配释放。
+2. **引入状态标志**：在 `kvm_shadow` 结构中增加 `in_shadow` 布尔字段，用于标识当前是否处于 ioeventfd 批量处理模式，替代原先的“存在即生效”逻辑。
+3. **修复 RCU 保护**：`kvm_find_shadow` 查找函数改为使用 `rcu_read_lock` 保护链表遍历，确保读取安全。
+4. **完善空指针检查**：在 `kvm_iodevice_destructor` 中增加对 `dev` 及 `ops` 的有效性检查。
+5. **精确控制作用域**：仅对 ioeventfd 类型的设备启用 shadow 模式逻辑，普通设备操作保持原有路径，减少副作用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f7ea33e41702cd98e7be0e367fc3ca00831a2d2f

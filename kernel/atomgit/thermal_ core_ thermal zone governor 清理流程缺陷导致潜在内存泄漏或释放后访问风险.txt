@@ -1,0 +1,26 @@
+#标题
+thermal: core: thermal zone governor 清理流程缺陷导致潜在内存泄漏或释放后访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载或注册 thermal zone 设备失败的场景下，热调速器未正确清理。这可能导致：
+1. 设备注销时，governor 未在正确的上下文中清理，可能引发释放后使用或竞态条件。
+2. 设备注册失败时，governor 未被清理，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 thermal zone 设备注销和注册失败时的清理逻辑不当：
+1. 在注销流程中，`thermal_set_governor(tz, NULL)` 被调用的时机过早（在 `cancel_delayed_work_sync` 之后，但在设备释放回调 `thermal_release` 之前）。由于设备释放是在锁保护之外或稍后的异步过程中发生的，过早清理 governor 可能导致状态不一致。
+2. 在注册失败的处理路径中，当 `thermal_zone_create_device_groups` 失败时，代码直接跳转到 `remove_id` 标签，遗漏了对 `thermal_set_governor` 的调用，导致已分配的 governor 资源未被释放，造成内存泄漏。
+
+#解决方案
+对 thermal core 的清理流程进行重构：
+1. 将 `thermal_set_governor(tz, NULL)` 从注销函数 `thermal_zone_device_unregister` 中移除，移动到设备释放回调函数 `thermal_release` 中执行。这确保了 governor 在设备结构体最终释放前被正确清理，避免竞态。
+2. 在注册函数 `thermal_zone_device_register_with_trips` 的错误处理路径中，针对 `thermal_zone_create_device_groups` 失败的情况，增加 `thermal_set_governor(tz, NULL)` 调用，确保回滚时释放已初始化的 governor 资源，修复内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1f8008eb997256a884a06b8d690ad09c0b583379

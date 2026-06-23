@@ -1,0 +1,20 @@
+#标题
+rxrpc: 缺少锁保护导致呼叫挂起及列表损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+若一个 RxRPC 呼叫在排队等待连接与 I/O 线程处理之间被中止（例如 kafs 收到信号），该呼叫会从 `local->new_client_calls` 列表中移除。由于移除操作未持有锁，可能导致竞争发生，进而导致列表中的其他呼叫消失，引发呼叫挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `rxrpc_disconnect_client_call()` 函数中，当呼叫处于等待连接状态时，代码直接调用 `list_del_init(&call->wait_link)` 将呼叫从链表中移除，但此时并未持有 `client_call_lock` 锁。这与 I/O 线程中持有该锁操作列表的逻辑存在竞争，导致链表结构损坏，使得其他呼叫丢失。
+
+#解决方案
+在 `rxrpc_disconnect_client_call()` 函数中删除 `call->wait_link` 之前，增加 `spin_lock(&local->client_call_lock)` 锁的获取操作，删除后释放锁。通过加锁保护链表移除操作，避免并发竞争导致的列表损坏。同时在连接处理路径中增加 tracepoint `rxrpc_call_see_waiting_call` 以便于观测。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/51f10f430f3ab0ac07f36937a031290850d754fa

@@ -1,0 +1,20 @@
+#标题
+usbnet: rx_complete 处理时触发空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB 网络设备断开连接的过程中，若发生竞态条件，内核在处理接收完成例程（rx_complete）时触发空指针解引用，导致 Kernel Panic。
+
+#主要错误日志
+未知
+
+#问题根因
+关键路径缺少 `usbnet_going_away` 检查。`usb_submit_urb` 函数未校验 `usbnet_going_away` 状态，而 `__usbnet_queue_skb` 函数包含该校验。这种不一致导致竞态条件：URB 请求提交成功，但对应的 SKB 数据未能加入队列。后续处理流程（如 rx_complete → defer_bh → __skb_unlink）尝试访问 `skb->next` 时引发空指针解引用。
+
+#解决方案
+在 `rx_submit` 函数提交 URB 前的判断条件中增加 `!usbnet_going_away(dev)` 检查。这确保了当设备处于 going_away 状态时不会提交 URB，从而避免 URB 提交成功但 SKB 入队失败的不一致状态，防止后续访问无效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/08552bcd4e59d9bd8876b0c25722ffecbecf4897

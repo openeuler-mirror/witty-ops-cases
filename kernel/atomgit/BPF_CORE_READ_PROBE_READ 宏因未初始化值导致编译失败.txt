@@ -1,0 +1,27 @@
+#标题
+BPF_CORE_READ/PROBE_READ 宏因未初始化值导致编译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用最新版本的 LLVM（Clang）编译 BPF selftests 时，构建过程报错中断。编译器检测到 `BPF_CORE_READ` 宏内部定义的变量 `__r` 存在未初始化问题，且该问题与 `const` 修饰符继承相关，触发了 `-Wdefault-const-init-unsafe` 警告（被视为错误）。
+
+#主要错误日志
+```
+progs/profiler.inc.h:710:31: error: default initialization of an object of type 'typeof ((parent_task)->real_cred->uid.val)' (aka 'const unsigned int') leaves the object uninitialized and is incompatible with C++ [-Werror,-Wdefault-const-init-unsafe]
+  710 |         proc_exec_data->parent_uid = BPF_CORE_READ(parent_task, real_cred, uid.val);
+      |                                      ^
+tools/testing/selftests/bpf/tools/include/bpf/bpf_core_read.h:520:35: note: expanded from macro 'BPF_CORE_READ'
+  520 |         ___type((src), a, ##__VA_ARGS__) __r;
+      |                                          ^
+```
+
+#问题根因
+`BPF_CORE_READ` 及相关宏在定义临时变量 `__r` 时，使用了 `___type` 宏来确定变量类型。`___type` 宏原本使用 `typeof` 获取指针解引用后的类型，但 `typeof` 会继承路径中间类型的 `const` 修饰符。当目标成员类型带有 `const` 属性时，默认初始化（如 `const unsigned int __r;`）在较新的 Clang 编译器中被视为未初始化且不安全，从而引发编译错误。
+
+#解决方案
+修改 `tools/lib/bpf/bpf_core_read.h` 中的 `___type` 宏定义。对于 Clang 19 及以上版本或 GCC 14 及以上版本，使用 `__typeof_unqual__` 替代 `typeof`。`__typeof_unqual__` 能够去除类型中的限定符（如 `const`），从而避免因 `const` 继承导致的未初始化变量编译错误。对于不支持 `__typeof_unqual__` 的旧编译器，保留原有 `typeof` 实现，因为旧版本不会报告此问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c1aca85b3f8a02b1948340276afd153fe8beeb28

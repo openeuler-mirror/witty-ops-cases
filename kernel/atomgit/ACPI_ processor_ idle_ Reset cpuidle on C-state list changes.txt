@@ -1,0 +1,24 @@
+#标题
+ACPI: processor: idle: Reset cpuidle on C-state list changes
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在ACPI处理器空闲状态（C-state）发生变化（如热插拔或LPI状态更新）时，可能导致cpuidle驱动状态与实际硬件状态不一致，引发空闲状态管理混乱或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+原有的实现中，cpuidle_driver的注册/注销逻辑与ACPI处理器设备的启动流程耦合不够紧密。在处理C-state列表变更时，缺少对cpuidle设备的重置（reset）机制，导致驱动无法正确响应动态变化的C-state配置。
+
+#解决方案
+重构了ACPI处理器空闲驱动的初始化与注销流程：
+1. 将acpi_idle_driver结构体改为静态定义，不再全局导出，增加封装性。
+2. 新增`acpi_processor_register_idle_driver`和`acpi_processor_unregister_idle_driver`接口，在驱动初始化和退出时显式注册和注销cpuidle驱动。
+3. 在`__acpi_processor_start`中移除了对特定cpuidle driver的判断逻辑，统一调用`acpi_processor_power_init`。
+4. 新增`cpuidle_unregister_device_no_lock`接口，用于在持有锁的情况下安全注销cpuidle设备，支持在C-state变更时正确重置cpuidle状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/018e1fce70c6b550129f819d4293d3f7ef389298

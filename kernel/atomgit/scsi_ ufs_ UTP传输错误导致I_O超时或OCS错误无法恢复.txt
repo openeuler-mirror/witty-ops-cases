@@ -1,0 +1,25 @@
+#标题
+scsi: ufs: UTP传输错误导致I/O超时或OCS错误无法恢复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当UFS主机控制器发生独立的UTP（UFS Transfer Protocol）错误时，系统无法自动恢复该错误。这会导致I/O请求超时，或者产生OCS（Overall Command Status）错误，最终报告I/O error，影响存储设备的正常读写操作。
+
+#主要错误日志
+- sd 0:0:0:0: [sda] tag#38 UNKNOWN(0x2003) Result: hostbyte=0x07 driverbyte=DRIVER_OK cmd_age=0s
+- sd 0:0:0:0: [sda] tag#38 CDB: opcode=0x28 28 00 00 51 24 e2 00 00 08 00
+- I/O error, dev sda, sector 42542864 op 0x0:(READ) flags 0x80700 phys_seg 8 prio class 2
+- OCS error from controller = 9 for tag 39
+- pa_err[1] = 0x80000010 at 2667224756 us
+- fatal_err[0] = 0x804 at 2667282836 us
+
+#问题根因
+UFS驱动程序的错误处理逻辑中，宏定义 `INT_FATAL_ERRORS` 未包含 `UTP_ERROR` 标志位。当发生孤立的UTP错误时，驱动程序未将其视为致命错误进行处理，导致不会触发控制器复位（reset）操作，进而导致I/O挂起超时或报告OCS错误。
+
+#解决方案
+在头文件 `include/ufs/ufshci.h` 中，将 `UTP_ERROR` (0x1000) 标志位添加到 `INT_FATAL_ERRORS` 宏定义中。这使得当UTP错误发生时，中断处理程序能正确识别其为致命错误并触发控制器复位流程，从而恢复设备正常工作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3baad571ee811552cfd29bfcea01234f28bd2ae

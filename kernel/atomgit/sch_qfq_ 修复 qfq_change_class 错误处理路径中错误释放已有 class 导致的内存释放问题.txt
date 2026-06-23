@@ -1,0 +1,21 @@
+#标题
+sch_qfq: 修复 qfq_change_class 错误处理路径中错误释放已有 class 导致的内存释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在修改 QFQ (Quick Fair Queueing) 调度器的 class 参数时，如果参数校验失败或配置过程中发生错误，函数进入错误处理路径。此时，若该 class 是先前已存在的（existing），系统会错误地释放该 class 及其关联的 qdisc 结构。这会导致该 class 指针指向已释放的内存（UAF），后续继续使用该 class 时将引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `qfq_change_class` 的错误处理标签 `destroy_class` 中，代码逻辑未区分当前操作是“创建新 class 失败”还是“修改现有 class 失败”。
+对于修改现有 class 的场景，class 结构体 `cl` 是直接引用的已有对象，不应被释放。然而原代码无条件执行了 `qdisc_put(cl->qdisc)` 和 `kfree(cl)`，导致对现有的活跃 class 进行了错误的释放操作。
+
+#解决方案
+在 `destroy_class` 错误处理路径中增加对 `existing` 变量的判断。仅当 class 不是已存在的（即 `!existing`，代表是新创建的临时对象）时，才执行释放 qdisc 和 class 内存的清理操作，避免误删已存在的 class 对象。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a88cdd389e0ccbb45ace4e32d4ecb02fbb583cf0

@@ -1,0 +1,25 @@
+#标题
+bpf: Fix WARN() in get_bpf_raw_tp_regs
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核触发 WARN_ON_ONCE 警告，导致 syzkaller 报告故障。具体表现为在执行 BPF 程序调用 `bpf_get_stack_raw_tp` 时，若发生 tracepoint（如 `trace_mmap_lock_acquire_returned`）嵌套调用，`get_bpf_raw_tp_regs` 函数检测到嵌套层级越界并打印警告日志。
+
+#主要错误日志
+WARNING: CPU: 3 PID: 5971 at kernel/trace/bpf_trace.c:1861 get_bpf_raw_tp_regs+0xa4/0x100 kernel/trace/bpf_trace.c:1861
+RIP: 0010:get_bpf_raw_tp_regs+0xa4/0x100 kernel/trace/bpf_trace.c:1861
+Call Trace:
+ ____bpf_get_stack_raw_tp kernel/trace/bpf_trace.c:1934 [inline]
+ bpf_get_stack_raw_tp+0x24/0x160 kernel/trace/bpf_trace.c:1931
+ ...
+
+#问题根因
+在特定 corner case 下（如 `trace_mmap_lock_acquire_returned` 这类 tracepoint），BPF 程序的执行可能引发嵌套调用。现有代码中 `get_bpf_raw_tp_regs` 使用 `WARN_ON_ONCE` 检查嵌套层级 `nest_level`，当嵌套发生导致 `nest_level` 超过数组大小时，触发内核警告。虽然嵌套调用问题未来会有更通用的解决方案，但当前不应触发 WARN。
+
+#解决方案
+移除 `get_bpf_raw_tp_regs` 函数中的 `WARN_ON_ONCE` 判断，仅保留越界检查逻辑。当检测到嵌套层级越界时，直接递减计数并返回 `ERR_PTR(-EBUSY)`，避免触发不必要的内核警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3e28106bffbfd60f0912d79f8d4e0ccdc0d649d4

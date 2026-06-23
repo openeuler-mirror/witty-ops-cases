@@ -1,0 +1,29 @@
+#标题
+nvme: nvme_pr_read_keys 大内存分配触发 page_alloc 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户空间向 `nvme_pr_read_keys` 函数传入一个较大的 `num_keys` 值时，内核尝试分配大块连续物理内存（最大可达 4MB）。当分配阶超过 `MAX_PAGE_ORDER` 时，触发页面分配器的 WARNING，导致内核抛出调用栈告警，影响系统稳定性。
+
+#主要错误日志
+WARNING: mm/page_alloc.c:5216 at __alloc_frozen_pages_noprof+0x5aa/0x2300
+RIP: 0010:__alloc_frozen_pages_noprof+0x5aa/0x2300 mm/page_alloc.c:5216
+Call Trace:
+ alloc_pages_mpol+0x236/0x4d0
+ alloc_frozen_pages_noprof+0x149/0x180
+ ___kmalloc_large_node+0x10c/0x140
+ __kmalloc_noprof+0x483/0x6f0
+ nvme_pr_read_keys+0x8f/0x4c0 drivers/nvme/host/pr.c:245
+
+#问题根因
+`nvme_pr_read_keys()` 函数直接使用来自用户空间的 `num_keys` 参数，通过 `struct_size()` 计算分配大小并调用 `kzalloc()`。
+虽然 `num_keys` 有上限 `PR_KEYS_MAX` (64K)，但在极端情况下计算出的分配大小可达 4MB。`kzalloc()` 尝试分配连续物理内存，当请求的分配阶超过 `MAX_PAGE_ORDER` 时，内核无法满足该请求并触发 `mm/page_alloc.c` 中的警告信息。
+
+#解决方案
+将内存分配函数由 `kzalloc()` 替换为 `kvzalloc()`，对应的释放函数由 `kfree()` 替换为 `kvfree()`。
+`kvzalloc()` 在处理大块内存请求时，若连续物理内存不可用，会自动回退使用 vmalloc 机制（虚拟连续、物理不连续），从而避免触发高阶内存分配警告，成功完成内存分配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3d057c90da40820ad528ce1178af6fe0034a02af

@@ -1,0 +1,20 @@
+#标题
+atm: clip: clip_push函数NULL指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ATM子系统中，当调用 vcc_destroy_socket() 触发 clip_push() 时，若传入的 skb 指针为 NULL，内核会发生崩溃。崩溃发生在访问 skb->truesize 进行内存归还操作时，导致了 NULL 指针解引用。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference
+
+#问题根因
+前置修复提交（93a2014afbac）遗漏了 vcc_destroy_socket() 会以 NULL skb 调用 clip_push() 的场景。原代码逻辑中，先判断 `!clip_devs`，在该分支内直接访问 `skb->truesize`，但未先校验 `skb` 是否为 NULL。当 skb 为 NULL 时，直接访问其成员导致解引用错误。
+
+#解决方案
+调整代码逻辑顺序，在 clip_push() 函数中优先检查 skb 是否为 NULL。先将 `skb` 的 NULL 检查逻辑移到 `clip_devs` 检查之前，确保在访问 `skb->truesize` 之前已确认 skb 有效；若 skb 为 NULL 则直接返回，避免了空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/98dba1861ae45431810e6d232e9d89f09ea54982

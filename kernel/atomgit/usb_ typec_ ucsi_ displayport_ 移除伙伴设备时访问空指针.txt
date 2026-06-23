@@ -1,0 +1,20 @@
+#标题
+usb: typec: ucsi: displayport: 移除伙伴设备时访问空指针
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 DisplayPort 伙伴设备时，如果 `dp->work` 正在执行或已调度，由于未取消该工作队列，可能导致工作队列在设备数据被清理后继续访问已释放或清零的资源，从而引发空指针访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ucsi_displayport_remove_partner` 中，移除设备伙伴时直接对 `dp->data.conf`、`dp->data.status` 等关键数据成员进行了清零操作，但未先调用 `cancel_work_sync` 取消正在运行或挂起的 `dp->work`。这导致工作队列中的任务可能在数据被清零后仍然尝试访问这些数据结构，触发了 NULL pointer access。
+
+#解决方案
+在 `ucsi_displayport_remove_partner` 函数中清理数据之前，增加 `cancel_work_sync(&dp->work)` 调用，确保在清理资源前所有待处理的工作任务已完成，避免并发访问导致的空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6dbd0f6878f13705570c9075f39ff6d9f69a5322

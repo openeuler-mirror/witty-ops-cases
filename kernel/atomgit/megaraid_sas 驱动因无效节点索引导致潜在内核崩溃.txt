@@ -1,0 +1,20 @@
+#标题
+megaraid_sas 驱动因无效节点索引导致潜在内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 megaraid_sas 驱动的 "balanced" 性能模式下，如果设备未正确绑定到特定的 NUMA 节点（即 `dev_to_node` 返回 `NUMA_NO_NODE`），驱动程序会将该无效值作为索引传递给 `cpumask_of_node` 函数。这会导致内核访问非法内存地址，进而引发 kernel oops 或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `megasas_set_high_iops_queue_affinity_and_hint` 函数中，代码直接调用 `cpumask_of_node(dev_to_node(&instance->pdev->dev))` 获取 CPU 掩码，未对返回的节点 ID 进行有效性检查。当设备节点 ID 为 `NUMA_NO_NODE`（通常定义为 -1）时，该无效值被直接传入 `cpumask_of_node` 导致数组越界访问。
+
+#解决方案
+在调用 `cpumask_of_node` 前增加节点 ID 有效性检查。具体修改为：先将 `dev_to_node` 的返回值存入变量 `nid`，判断若 `nid` 等于 `NUMA_NO_NODE`，则将其重置为 0（节点 0），确保传给 `cpumask_of_node` 的索引始终有效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/65a146fa77b5cff9bb07725ed7ccabb9670bfb54

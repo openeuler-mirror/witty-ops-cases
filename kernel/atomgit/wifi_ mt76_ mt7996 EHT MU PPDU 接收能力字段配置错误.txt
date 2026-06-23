@@ -1,0 +1,26 @@
+#标题
+wifi: mt76: mt7996 EHT MU PPDU 接收能力字段配置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+mt7996 驱动向系统注册的 EHT (Extended High Throughput) Phy 能力元素中，"Maximum number of supported EHT LTFs" 字段值设置错误，且缺少 "EHT MU PPDU With 4x EHT-LTF And 0.8us GI" 能力标识。这导致硬件实际支持的能力与上报给无线子系统的能力不匹配，可能导致上层协议或应用无法正确识别和使用该硬件的高级 EHT 功能，影响特定模式下的无线传输性能或兼容性。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在初始化 EHT 能力时存在两处代码逻辑错误：
+1. 在设置 `phy_cap_info[5]` 时，`IEEE80211_EHT_PHY_CAP5_MAX_NUM_SUPP_EHT_LTF_MASK` 的值是从 `0x11` 中错误提取的，导致 "Maximum number of supported EHT LTFs" 设置不正确。
+2. 在设置 `phy_cap_info[6]` 时，错误地移除了对 "Maximum number of supported EHT LTFs" 的补充设置。
+3. 未在 `phy_cap_info[4]` 中设置 `IEEE80211_EHT_PHY_CAP4_EHT_MU_PPDU_4_EHT_LTF_08_GI` 标志，导致硬件支持的 "EHT MU PPDU With 4x EHT-LTF And 0.8us GI" 能力未上报。
+
+#解决方案
+修改 `drivers/net/wireless/mediatek/mt76/mt7996/init.c` 文件中的 `mt7996_init_eht_caps` 函数：
+1. 在 `eht_cap_elem->phy_cap_info[4]` 中添加 `IEEE80211_EHT_PHY_CAP4_EHT_MU_PPDU_4_EHT_LTF_08_GI` 宏，以正确声明硬件支持该能力。
+2. 修正 `eht_cap_elem->phy_cap_info[5]` 中的编码逻辑，将 `u8_get_bits(0x11, GENMASK(1, 0))` 改为 `u8_get_bits(1, GENMASK(1, 0))`。
+3. 移除 `eht_cap_elem->phy_cap_info[6]` 中冗余的 `MAX_NUM_SUPP_EHT_LTF_MASK` 设置代码，保留 `MCS15_SUPP_MASK` 的相关逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/57075828901ab73a35f35d6626b696376909f58e

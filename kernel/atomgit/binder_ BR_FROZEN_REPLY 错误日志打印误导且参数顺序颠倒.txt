@@ -1,0 +1,28 @@
+#标题
+binder: BR_FROZEN_REPLY 错误日志打印误导且参数顺序颠倒
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Binder 通信失败时，内核日志打印的错误信息存在误导性：
+1. 当目标进程处于冻结（frozen）状态导致事务失败时，日志错误地报告为 "dead process or thread"（进程或线程已死亡），掩盖了真实的冻结状态。
+2. 日志中打印的 PID 和 TID 参数顺序颠倒，导致开发者看到错误的进程/线程 ID 映射关系。
+
+#主要错误日志
+[推断] 修复前日志格式：
+%d:%d dead process or thread\n
+（注：参数顺序为 thread->pid, proc->pid，且未区分 frozen 状态）
+
+#问题根因
+在 `binder_transaction` 函数的 `err_dead_proc_or_thread` 错误处理标签处，代码逻辑存在两个缺陷：
+1. 日志内容判断缺失：未根据 `return_error` 变量判断当前错误具体是 `BR_FROZEN_REPLY` 还是 `BR_DEAD_REPLY`，统一打印为 "dead process or thread"，导致无法区分目标是被冻结还是已死亡。
+2. 参数传递错误：`binder_txn_error` 函数调用时，传入参数顺序为 `thread->pid` 和 `proc->pid`，与日志格式字符串中暗示的 "pid:tid" 顺序不符，导致打印信息错位。
+
+#解决方案
+修改 `drivers/android/binder.c` 中的日志打印逻辑：
+1. 修正参数顺序：调整为先打印 `proc->pid`，后打印 `thread->pid`，符合 "pid:tid" 的常规阅读习惯。
+2. 细化错误描述：增加三元运算符判断 `return_error`，若错误码为 `BR_FROZEN_REPLY` 则打印 "frozen"，否则打印 "dead"，确保日志信息准确反映目标进程的实际状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c7fa95faedbc50b233834e005d38f493be66fa80

@@ -1,0 +1,27 @@
+#标题
+RDMA/hns: rsv_qp双重释放导致内核链表损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在HIP08修订版本的RoCE驱动初始化错误流程中，触发内核WARNING，报告list_del corruption。系统检测到链表节点的next指针指向了LIST_POISON1（内存已被释放或损坏的标志地址）。具体表现为驱动加载或复位初始化过程中，内核崩溃并打印调用栈。
+
+#主要错误日志
+[23776.119039] list_del corruption, ffff589732eb9b50->next is LIST_POISON1 (dead000000000100)
+[23776.128188] WARNING: CPU: 8 PID: 1047115 at lib/list_debug.c:53 __list_del_entry_valid+0x148/0x240
+[23776.420948]  hns_roce_qp_remove+0x4c/0x3f0 [hns_roce_hw_v2]
+[23776.428414]  hns_roce_v2_destroy_qp_common+0x1dc/0x5f4 [hns_roce_hw_v2]
+[23776.435272]  free_mr_exit+0x6c/0x120 [hns_roce_hw_v2]
+[23776.447514]  hns_roce_exit+0x118/0x350 [hns_roce_hw_v2]
+
+#问题根因
+rsv_qp（保留队列对）在错误处理流程中被重复释放（double destruction）。
+在驱动初始化失败时，`free_mr_init()` 函数内部首先释放了 rsv_qp；随后错误处理流程跳转至 `hns_roce_exit()`，该函数试图再次销毁同一个 rsv_qp，导致链表操作异常（list_del corruption）。
+
+#解决方案
+调整 `free_mr_init()` 的调用位置，将其提前至 `hns_roce_v2_init()` 函数开头执行。
+修改错误处理逻辑：当后续步骤（如 `hns_roce_v2_get_reset_page`）失败时，直接跳转到新增的错误处理标签 `error_get_reset_page_failed`，并在此处通过 `free_mr_exit()` 进行准确的资源回滚。这避免了原逻辑中因初始化失败调用 `hns_roce_exit()` 而引发的重复释放问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2d85cd41ec6f7eecc0b358d4a802983c6549b8bc

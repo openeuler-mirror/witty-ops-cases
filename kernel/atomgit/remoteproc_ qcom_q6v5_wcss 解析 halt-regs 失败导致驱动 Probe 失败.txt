@@ -1,0 +1,22 @@
+#标题
+remoteproc: qcom_q6v5_wcss 解析 halt-regs 失败导致驱动 Probe 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Qualcomm WCSS remoteproc 驱动在加载执行 probe 流程时失败，导致相关远程处理器设备无法正常初始化。
+
+#主要错误日志
+未知
+
+#问题根因
+设备树属性 "qcom,halt-regs" 由一个 phandle 引用和三个 syscon 偏移量组成，共包含 4 个整数。旧代码错误地将 `MAX_HALT_REG` 定义为 3，且直接从索引 0 开始读取数据。
+这导致 `of_property_read_variable_u32_array()` 在读取数据时检测到数组长度超过预期（3 < 4），返回 -EOVERFLOW 错误，进而导致 .probe() 函数执行失败。同时，即使读取成功，代码也会错误地将 phandle（索引 0）当作寄存器偏移量使用。
+
+#解决方案
+1. 将宏定义 `MAX_HALT_REG` 从 3 修改为 4，以容纳 phandle 加上三个偏移量的完整数据结构。
+2. 调整寄存器偏移量的读取索引，跳过索引 0（phandle），正确从索引 1、2、3 处获取 `halt_q6`、`halt_wcss` 和 `halt_nc` 的偏移值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6848ddc5dd3b76cce06c6f26c04de16d827976fa

@@ -1,0 +1,24 @@
+#标题
+sched/cputime: Fix time overflow in cputime_adjust
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核进行 CPU 时间统计调整（cputime_adjust）的过程中，当 `stime` 与 `utime` 的累加和发生 u64 整数溢出时，会导致计算结果错误或时间统计异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cputime_adjust` 函数中，计算缩放比例时直接执行 `stime + utime` 操作作为除数。由于 `stime` 和 `utime` 均为 u64 类型，当两者数值极大时，相加会产生无符号整数溢出（wrap around），导致和值变小甚至为零，进而导致后续的 `mul_u64_u64_div_u64` 计算得出错误的时间值。
+
+#解决方案
+在计算 `stime + utime` 之和前增加溢出检测机制：
+1. 引入临时变量 `s`、`u` 和 `sum`。
+2. 检测 `sum < s` 以判断是否发生溢出。
+3. 若发生溢出，将 `s` 和 `u` 同时右移一位（除以 2），在不损失比例精度的前提下防止溢出，并重新计算 `sum`。
+4. 使用处理后的安全数值进行后续的乘除运算，确保时间统计的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d1c3e690cb92abce3c832eccbae2edb437fc8b60

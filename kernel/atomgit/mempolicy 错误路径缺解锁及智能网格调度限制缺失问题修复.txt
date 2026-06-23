@@ -1,0 +1,27 @@
+#标题
+mempolicy 错误路径缺解锁及智能网格调度限制缺失问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在进行内存策略迁移（如 `mbind` 相关操作）时，若进程没有有效的 VMA（`find_vma` 返回 NULL），内核直接返回 0 退出函数，此时 `mmap_read_lock` 持有的 mmap_sem 读写信号量未被释放，导致读写锁泄露。这可能进一步导致后续对该 mm_struct 的锁操作死锁或阻塞。
+2. 智能网格调度（smart grid scheduling）策略被意外应用到了不期望的内存分配路径，导致内存策略（如 MPOL_INTERLEAVE）的行为不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **缺解锁根因**：在 `migrate_to_node` 函数中，代码逻辑先调用了 `mmap_read_lock(mm)` 获取读锁，随后检查 `find_vma(mm, 0)` 的结果。当 `find_vma` 返回 NULL 时，代码直接 `return 0`，跳过了后续代码逻辑，导致 `mmap_read_unlock(mm)` 未被执行，从而造成锁泄露。
+2. **调度策略根因**：社区主线合并的内存策略补丁修改了 `alloc_pages_mpol` 的实现逻辑，影响了 openEuler 特有的智能网格调度（smart grid）功能。原有的实现方式在策略分支处理中未正确隔离或传递控制参数，导致智能网格调度未被正确限制在 `vma_alloc_folio` 路径中，或者在 `policy_nodemask` 阶段过早介入 interleave 节点选择。
+
+#解决方案
+1. **修复锁泄露**：在 `mm/mempolicy.c` 的 `migrate_to_node` 函数中，针对 `!vma` 的错误分支，在返回前增加 `mmap_read_unlock(mm)` 调用，确保锁资源被正确释放。
+2. **修复调度限制**：
+   - 重构函数接口，将 `alloc_pages_mpol` 重命名为 `__alloc_pages_mpol`，并新增 `bool use_smart_grid` 参数，用于显式控制是否启用智能网格调度策略。
+   - 新增封装函数 `alloc_pages_mpol`，默认以 `false` 参数调用 `__alloc_pages_mpol`，保持原有通用分配路径不启用智能网格调度。
+   - 在 `vma_alloc_folio` 调用路径中，显式调用 `__alloc_pages_mpol` 并将 `use_smart_grid` 置为 `true`，确保该调度策略仅在 VMA 分配路径生效。
+   - 将智能网格调度的节点选择逻辑从 `policy_nodemask` 移至 `__alloc_pages_mpol` 函数内部，依据 `use_smart_grid` 参数判断是否执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/79aa4f2e99baed837a6933aa6b1a852197d30b91

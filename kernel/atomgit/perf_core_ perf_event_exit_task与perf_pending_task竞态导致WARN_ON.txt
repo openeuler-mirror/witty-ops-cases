@@ -1,0 +1,21 @@
+#标题
+perf/core: perf_event_exit_task与perf_pending_task竞态导致WARN_ON
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `begin_new_exec()` 过程中调用 `perf_event_exit_task()` 时，由于任务尚未设置 `PF_EXITING` 标志，`perf_sigtrap()` 继续执行并触发内核警告 `WARN_ON_ONCE(event->ctx->task != current)`。
+
+#主要错误日志
+[内核日志] WARNING: CPU: ... at kernel/events/core.c:... perf_sigtrap+0x.../0x...
+(注：日志由 WARN_ON_ONCE 触发，具体调用栈包含 perf_sigtrap)
+
+#问题根因
+`perf_event_exit_task()` 与 `perf_pending_task()` 之间存在竞态条件。在 `begin_new_exec()` 执行期间调用 `perf_event_exit_task()` 时，当前任务（current）的 `PF_EXITING` 标志尚未置位，导致 `perf_sigtrap()` 未能正确退出，继续执行后检测到上下文任务状态不一致，从而触发警告。
+
+#解决方案
+在 `perf_sigtrap()` 函数的退出检查逻辑中，增加对 `event->ctx->task` 是否为 `TASK_TOMBSTONE` 的判断。若任务状态为 `TASK_TOMBSTONE`，函数直接返回，避免在任务退出过程中继续处理信号陷阱。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bcfaa6b773c75f16d8cf62e7ad7217955193ff98

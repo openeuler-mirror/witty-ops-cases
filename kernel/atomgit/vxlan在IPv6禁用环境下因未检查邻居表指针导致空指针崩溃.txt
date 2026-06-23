@@ -1,0 +1,20 @@
+#标题
+vxlan在IPv6禁用环境下因未检查邻居表指针导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统启动参数配置了 `ipv6.disable=1` 时，若触发 VXLAN 模块的 IPv6 报文处理流程（如 `route_shortcircuit` 函数），会导致内核访问空指针引发崩溃（Oops/Panic）。
+
+#主要错误日志
+未知
+
+#问题根因
+在内核启动阶段通过 `ipv6.disable=1` 禁用 IPv6 时，内核未初始化 IPv6 的邻居发现表（`nd_tbl`），导致 `ipv6_stub->nd_tbl` 指针为空。VXLAN 模块的 `route_shortcircuit` 函数在进行 IPv6 路由短路处理时，未对该指针进行有效性检查就直接使用，从而触发了空指针解引用。
+
+#解决方案
+在 `drivers/net/vxlan/vxlan_core.c` 文件的 `route_shortcircuit` 函数中，增加对 `ipv6_stub->nd_tbl` 指针的非空校验。如果指针为空（即 IPv6 被禁用），函数直接返回 false，避免后续代码访问空指针，从而防止内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6a22d32c3bce000239acd27f86ce9b89c4d6e3bb

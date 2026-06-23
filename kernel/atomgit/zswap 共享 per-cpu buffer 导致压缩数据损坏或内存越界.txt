@@ -1,0 +1,31 @@
+#标题
+zswap 共享 per-cpu buffer 导致压缩数据损坏或内存越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 zswap 功能时，若动态切换 zpool 类型或压缩算法，或在使用硬件加速器进行压缩/解压缩时，可能出现数据损坏、内存越界或系统崩溃。具体表现为：
+1. 进程在访问 swap-in 的页面时发生 Segmentation Fault 或数据错误。
+2. 使用硬件压缩加速器时，可能因目标缓冲区大小检查缺失导致缓冲区溢出。
+3. 在高并发场景下，因 per-cpu 锁竞争导致性能下降或潜在的状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在旧的设计中，zswap 使用全局共享的 per-cpu 变量 `zswap_dstmem` 和 `zswap_mutex`。
+1. **资源共享冲突**：当用户在运行时动态更改 zpool 类型或压缩算法时，一个 CPU 上可能存在多个 zpool，它们共享同一个 `zswap_dstmem` 和 `zswap_mutex`。这导致不同压缩上下文的数据相互覆盖，破坏数据完整性。
+2. **缓冲区溢出风险**：对于硬件压缩加速器，如果发生“过度压缩”，压缩后数据可能超过 `PAGE_SIZE`。原有的 per-cpu buffer 虽然分配了 `PAGE_SIZE * 2`，但缺乏明确的上下文隔离保护，且硬件加速器可能不检查目标缓冲区大小，存在溢出风险。
+3. **生命周期管理不当**：mutex 和 buffer 的生命周期未与 `acomp_ctx`（异步压缩上下文）绑定，导致资源管理混乱。
+
+#解决方案
+将 per-cpu 的 mutex 和 buffer 改为 `per-acomp_ctx`（每个压缩上下文独立拥有），使其成为 `acomp_ctx` 结构体的内嵌成员：
+1. 修改 `struct crypto_acomp_ctx` 结构体，将 `mutex` 指针改为内嵌的 `struct mutex mutex`，将 `dstmem` 指针改为 `u8 *buffer`。
+2. 在 `zswap_cpu_comp_prepare` 中初始化 mutex 并为 buffer 分配 `PAGE_SIZE * 2` 大小的内存，确保每个压缩上下文拥有独立的缓冲区和锁。
+3. 移除全局的 `DEFINE_PER_CPU` 定义 `zswap_dstmem` 和 `zswap_mutex`，以及相关的 `zswap_dstmem_prepare` 和 `zswap_dstmem_dead` 回调函数。
+4. 在压缩和解压缩流程中，直接使用 `acomp_ctx->mutex` 和 `acomp_ctx->buffer`，确保操作隔离。
+5. 保留 `CPUHP_MM_ZSWP_MEM_PREPARE` 枚举值以保持 KABI 稳定，但移除其对应的 cpuhp 回调注册。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e4cf535bbf1b8dc9080027fec61e61281c148568

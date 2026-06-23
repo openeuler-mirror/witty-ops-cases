@@ -1,0 +1,23 @@
+#标题
+ice_set_ringparam 函数内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ethtool 工具调整网卡环形参数时，若 Rx（接收）环形队列分配内存失败，驱动程序在错误处理路径中未释放之前已成功分配的 XDP rings 内存，导致内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ice_set_ringparam` 函数中，错误处理逻辑存在缺陷。当 `kcalloc(vsi->num_rxq, ...)` 分配 Rx rings 失败，或者后续在循环中分配 Rx rings 失败时，代码直接跳转至 `done` 或 `free_tx` 标签。这导致在跳转过程中遗漏了对之前已分配的 `xdp_rings` 内存的释放操作，从而导致内存泄漏。
+
+#解决方案
+修改 `ice_set_ringparam` 函数的错误跳转逻辑：
+1. 在函数末尾新增 `free_xdp` 标签，用于处理 XDP rings 的释放逻辑。
+2. 将 Rx rings 分配失败处的 `goto` 语句目标从 `done` 和 `free_tx` 修改为 `free_xdp`。
+3. 在 `free_xdp` 标签下遍历并释放 `xdp_rings` 相关资源，随后继续执行原有的 `free_tx` 流程，确保所有已分配资源都能被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9410db211c53fd44e68794fcb4c9e68803962386

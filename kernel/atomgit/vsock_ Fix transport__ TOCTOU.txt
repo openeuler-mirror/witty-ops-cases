@@ -1,0 +1,32 @@
+#标题
+vsock: Fix transport_* TOCTOU
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在处理 vsock 连接时触发内核缺页异常，导致内核崩溃。具体表现为调用 `vsock_assign_transport` 函数时发生 Oops，调用栈显示流程始于 `vsock_connect` 系统调用。
+
+#主要错误日志
+BUG: unable to handle page fault for address: fffffbfff8056000
+Oops: Oops: 0000 [#1] SMP KASAN
+RIP: 0010:vsock_assign_transport+0x366/0x600
+Call Trace:
+ vsock_connect+0x59c/0xc40
+ __sys_connect+0xe8/0x100
+ __x64_sys_connect+0x6e/0xc0
+ do_syscall_64+0x92/0x1c0
+ entry_SYSCALL_64_after_hwframe+0x4b/0x53
+
+#问题根因
+Transport assignment may race with module unload. 在分配传输层（transport）时，相关指针（如 `new_transport`）存在 Time-Of-Check-To-Time-Of-Use (TOCTOU) 竞争条件。传输层分配过程与模块卸载流程之间存在竞态，导致 `new_transport` 指针在获取引用前变为悬空指针，进而引发非法内存访问。
+
+#解决方案
+引入互斥锁 `vsock_register_mutex` 对传输层分配逻辑进行保护，防止竞态条件：
+1. 在 `vsock_assign_transport` 函数中添加 `mutex_lock(&vsock_register_mutex)` 保护关键区域。
+2. 在成功调用 `try_module_get()` 获取模块引用后再释放互斥锁，确保在检查和使用传输层指针期间模块不会被卸载。
+3. 在函数的错误处理路径及正常返回路径中均添加对应的 `mutex_unlock` 操作。
+4. 在 `vsock_use_local_transport` 函数中增加 `lockdep_assert_held` 断言，确保调用时锁已被持有。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d95736fd4058fd24d8202c180723cd63853e537

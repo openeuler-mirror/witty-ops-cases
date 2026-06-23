@@ -1,0 +1,41 @@
+#标题
+clk: mtmips: 旧款 Ralink SoC 时钟探测顺序错误导致内核启动告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在旧款 Ralink SoC（RT2880、RT305x、RT3883）设备启动过程中，内核时钟子系统初始化时触发 WARNING。由于 `xtal` 时钟定义在 fixed clocks 中而非 base clocks 中，导致探测顺序错误，其他时钟在 `xtal` 未探测完成时尝试重算速率。
+
+#主要错误日志
+WARNING: CPU: 0 PID: 0 at drivers/clk/ralink/clk-mtmips.c:499 rt3883_bus_recalc_rate+0x98/0x138
+Modules linked in:
+CPU: 0 PID: 0 Comm: swapper Not tainted 6.6.43 #0
+Stack : 805e58d0 00000000 00000004 8004f950 00000000 00000004 00000000 00000000
+...
+Call Trace:
+[<800065d0>] show_stack+0x64/0xf4
+[<804bca14>] dump_stack_lvl+0x38/0x60
+[<800218ac>] __warn+0x94/0xe4
+[<8002195c>] warn_slowpath_fmt+0x60/0x94
+[<80259ff8>] rt3883_bus_recalc_rate+0x98/0x138
+[<80254530>] __clk_register+0x568/0x688
+[<80254838>] of_clk_hw_register+0x18/0x6c
+[<8070b910>] rt2880_clk_of_clk_init_driver+0x18c/0x594
+[<8070b628>] of_clk_init+0x1c0/0x23c
+[<806fc448>] plat_time_init+0x58/0x18c
+[<806fdaf0>] time_init+0x10/0x6c
+[<806f9bc4>] start_kernel+0x458/0x67c
+---[ end trace 0000000000000000 ]---
+
+#问题根因
+Base clocks 是最先被探测的，是 fixed、factor 和 peripheral clocks 的真实依赖。对于旧款 Ralink SoCs（RT2880、RT305x 和 RT3883），`xtal` 必须首先被定义。原代码中 `xtal` 被定义在 fixed clocks 数组中（如 `rt305x_fixed_clocks`），这导致当 fixed clocks 被探测时，它们会被延迟直到 `xtal` 被探测完毕，但在此时序之前调用 `rt3883_bus_recalc_rate` 等函数会触发警告。
+
+#解决方案
+将 `xtal` 时钟从 fixed clocks 数组移动到 base clocks 数组中，确保其优先被探测。
+1. 新增 `rt2880_xtal_recalc_rate` 函数，直接返回预期的 40MHz 频率。
+2. 在 `rt2880_clks_base`、`rt305x_clks_base` 和 `rt3883_clks_base` 数组中增加 `xtal` 的定义，使用新增的 recalc_rate 函数。
+3. 移除 `rt305x_fixed_clocks` 数组定义，并将相关 SoC 的 `clk_fixed` 配置置为 NULL，数量置为 0，从而修正探测顺序，消除启动告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ec1152890db07fbb85d17c0e8af0ba7459cc6a7e

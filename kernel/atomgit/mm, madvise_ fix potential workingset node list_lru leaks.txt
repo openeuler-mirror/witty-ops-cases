@@ -1,0 +1,21 @@
+#标题
+mm, madvise: fix potential workingset node list_lru leaks
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行文件合并操作（如 khugepaged 的 collapse_file）时，若不正确地设置 workingset node 更新回调，可能导致 `list_lru` 结构体中的 `workingset node` 发生泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+`mapping_set_update` 宏定义原本位于 `<linux/swap.h>` 头文件中，导致部分模块（如 `mm/khugepaged.c`）在使用 XArray API 时未能调用该宏进行 workingset node 的跟踪设置。这使得在处理文件映射页时，缺少必要的 LRU 列表更新逻辑，从而导致 workingset node 在 `list_lru` 中泄漏。
+
+#解决方案
+1. 将 `mapping_set_update` 宏及相关声明（`workingset_update_node`, `shadow_nodes`）从 `<linux/swap.h>` 移动到 `mm/internal.h` 中，限制其仅在内核内存管理子模块内部使用。
+2. 在 `mm/khugepaged.c` 的 `collapse_file` 函数中，补充调用 `mapping_set_update(&xas, mapping)`，确保在折叠文件页时正确设置 workingset node 的更新回调，修复泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/81f8d0d895f25727127b11dfacd980f4b2505dc5

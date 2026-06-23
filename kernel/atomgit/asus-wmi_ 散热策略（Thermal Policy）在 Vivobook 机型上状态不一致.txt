@@ -1,0 +1,24 @@
+#标题
+asus-wmi: 散热策略（Thermal Policy）在 Vivobook 机型上状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在华硕 Vivobook 系列笔记本上通过 platform profile API 修改散热策略（thermal policy）时，驱动内部存储的策略模式变量 `throttle_thermal_policy_mode` 会被错误地存储为 Vivobook 专用的私有值，而非通用的标准值。这导致驱动内部状态与实际注册给 platform profile 子系统的状态不一致，进而可能导致用户空间通过 sysfs 或其他接口读取到的策略状态与实际设定不符，或在切换散热模式时逻辑混乱。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `asus_wmi_platform_profile_set` 中设置散热策略时，直接调用了 `asus_wmi_platform_profile_to_vivo` 将标准策略值转换为 Vivobook 专用值并存入变量 `throttle_thermal_policy_mode`。而在其他代码路径（如读取策略或初始化）中，该变量通常存储的是标准策略值。这种不一致的处理逻辑导致驱动核心变量存储的值随代码路径不同而变化，既包含标准值也包含特定硬件值，破坏了数据的一致性。
+
+#解决方案
+修改驱动逻辑，确保 `throttle_thermal_policy_mode` 变量始终存储标准的散热策略值（如 `ASUS_THROTTLE_THERMAL_POLICY_DEFAULT`）。
+1. 删除 `asus_wmi_platform_profile_to_vivo` 和 `asus_wmi_platform_profile_mode_from_vivo` 两个转换函数。
+2. 在 `asus_wmi_platform_profile_set` 中，直接将标准策略值存入 `throttle_thermal_policy_mode`，不再进行转换。
+3. 将值的转换逻辑下沉到硬件写入函数 `throttle_thermal_policy_write` 中：在向硬件写入前，检查设备标识，如果是 Vivobook 设备，则将标准值转换为 Vivobook 专用值后再写入硬件。
+此举统一了驱动内部的状态管理，仅在与硬件交互时进行必要的值映射。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/933ec6fe2bde15e9a03b10be01e3300908f92660

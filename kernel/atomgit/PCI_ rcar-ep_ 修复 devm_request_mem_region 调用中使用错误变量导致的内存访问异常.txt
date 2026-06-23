@@ -1,0 +1,28 @@
+#标题
+PCI: rcar-ep: 修复 devm_request_mem_region 调用中使用错误变量导致的内存访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动后，通过 `cat /proc/iomem` 查看内存资源时，PCI 控制器对应的资源名称显示为空或乱码（garbage），例如：
+```
+30000000-37ffffff :
+38000000-3fffffff :
+```
+严重情况下，若内存中未找到 NULL 终止符，字符串迭代器可能越界访问栈顶未映射的内存区域，导致系统崩溃。
+
+#主要错误日志
+- 正常情况下的资源名称应为 `memory2`、`memory3` 等，故障时显示为空或乱码。
+- 若资源请求失败（虽然本次修复主要针对名称错误，但错误路径存在打印），日志推断如下：
+  `pci-rcar-ep 0000:00:00.0: Cannot request memory region %s.\n`（注：实际日志中变量内容可能异常）
+
+#问题根因
+在函数 `rcar_pcie_parse_outbound_ranges()` 中调用 `devm_request_mem_region()` 时，错误地使用了一个栈上的局部字符串变量 `outbound_name` 作为资源名称。
+该变量生命周期仅限于函数栈帧，且内容可能未正确初始化或已失效，导致 `/proc/iomem` 接口读取资源名称时访问到无效内存或垃圾数据。
+
+#解决方案
+修改 `drivers/pci/controller/pcie-rcar-ep.c` 文件，将 `devm_request_mem_region()` 调用中的 `outbound_name` 参数替换为 `res->name`，直接使用资源结构体中已定义的名称。修复后 `/proc/iomem` 输出将正确显示资源名称（如 memory2、memory3）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/409f6a89833af6b2f62c897eb944eaa6959a9cd3

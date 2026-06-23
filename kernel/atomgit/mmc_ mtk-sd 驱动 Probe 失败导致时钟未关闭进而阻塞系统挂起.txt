@@ -1,0 +1,25 @@
+#标题
+mmc: mtk-sd 驱动 Probe 失败导致时钟未关闭进而阻塞系统挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MT8196 Chromebook 设备上，当 SDCard 驱动 Probe 过程中 `msdc_ungate_clock()` 轮询时钟稳定超时返回 `-ETIMEOUT` 导致 Probe 失败时，之前已使能的时钟未被正确关闭。这导致 MMC 相关时钟在系统挂起过程中保持开启状态，进而阻塞系统挂起流程。
+
+#主要错误日志
+[  129.059253] clk_chk_dev_pm_suspend()
+[  129.350119] suspend warning: msdcpll is on
+[  129.354494] [ck_msdc30_1_sel : enabled, 1, 1, 191999939,   ck_msdcpll_d2]
+[  129.362787] [ck_msdcpll_d2   : enabled, 1, 1, 191999939,         msdcpll]
+[  129.371041] [ck_msdc30_1_ck  : enabled, 1, 1, 191999939, ck_msdc30_1_sel]
+[  129.379295] [msdcpll         : enabled, 1, 1, 383999878,          clk26m]
+
+#问题根因
+在 Probe 函数的错误处理流程中，当某些步骤失败时跳转到 `release_mem` 标签并返回。此时如果时钟（部分或全部）已经使能，由于 Runtime PM 尚未启用，`msdc_runtime_suspend` 不会被调用，导致时钟无法被关闭。
+
+#解决方案
+新增 `release_clk` 标签并重新排序错误处理函数，确保在 Probe 失败后能正确执行 `msdc_deinit_hw` 和 `msdc_gate_clock`，从而关闭已使能的时钟。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0ee5bb699a79c09aabfaec85bf022fa523248902

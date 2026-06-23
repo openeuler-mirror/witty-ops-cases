@@ -1,0 +1,20 @@
+#标题
+change_mnt_propagation() 对非共享挂载执行冗余操作修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `change_mnt_propagation()` 函数更改挂载点的传播属性时，对于非 `IS_MNT_SHARED` 状态的挂载点，代码逻辑仍会错误地调用 `do_make_slave()` 函数。虽然这不会引发内核崩溃或立即可见的错误日志，但会导致内核执行无意义的冗余操作，增加了不必要的开销。
+
+#主要错误日志
+未知
+
+#问题根因
+根据代码分析，`mnt->mnt_share` 和 `mnt->mnt_slave_list` 链表在 `IS_MNT_SHARED(mnt)` 为假时保证为空。原代码在 `do_make_slave()` 内部虽然检查了 `mnt->mnt_share` 是否为空，但在此条件下仍执行了 `mnt_release_group_id(mnt)` 和 `CLEAR_MNT_SHARED(mnt)` 操作。实际上，如果挂载点本身不是共享状态（`IS_MNT_SHARED` 为假），这些清理和标志清除操作完全是多余的。根本原因在于 `change_mnt_propagation()` 调用 `do_make_slave()` 前缺乏对 `IS_MNT_SHARED` 状态的判断，导致逻辑不够严谨和高效。
+
+#解决方案
+在 `change_mnt_propagation()` 函数中，调用 `do_make_slave()` 之前增加 `IS_MNT_SHARED(mnt)` 判断条件。仅当挂载点处于共享状态时才执行 `do_make_slave()` 操作，从而避免对非共享挂载点执行冗余的状态清理代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/662acd4377c43b29128d8b1cb0ad9ede65e81a20

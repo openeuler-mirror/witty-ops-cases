@@ -1,0 +1,20 @@
+#标题
+EDAC/i10nm: 修复 HBM 伪通道 0 的 RRL（retry_rd_err_log）配置丢失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 i10nm_edac 驱动时，若使用模块参数 `retry_rd_err_log=2`（Linux RRL 控制模式），HBM（高带宽内存）伪通道 0 的默认 RRL 配置会被伪通道 1 的配置覆盖。导致驱动卸载时，伪通道 0 的寄存器被错误地恢复为伪通道 1 的数值，造成硬件寄存器状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在现有代码逻辑中，对于 HBM 内存，同一个通道（channel）下的两个伪通道（pseudo channel 0 和 pseudo channel 1）在保存默认 RRL 配置时，复用了同一个存储位置。具体表现为：伪通道 1 的 RRL 配置在加载驱动时覆盖了之前保存的伪通道 0 的配置，导致伪通道 0 的原始配置丢失。
+
+#解决方案
+修改 `skx_channel` 结构体，将原来用于保存 RRL 配置的单个变量扩展为二维数组 `u32 rrl_ctl[2][NUM_RRL_SET]`，为每个通道提供两组独立的 RRL 控制寄存器存储空间。同时更新 `__enable_retry_rd_err_log` 函数接口，增加传入存储地址的参数，确保伪通道 0 和伪通道 1 分别保存和恢复各自的默认配置，避免互相覆盖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cdf4003243bfe36a04603e43a63ed61e09179c41

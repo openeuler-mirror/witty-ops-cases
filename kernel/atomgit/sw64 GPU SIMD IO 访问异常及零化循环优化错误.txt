@@ -1,0 +1,24 @@
+#标题
+sw64 GPU SIMD IO 访问异常及零化循环优化错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构下使用 AMD GPU 时，涉及 VRAM 访问及 IO 空间零初始化的场景可能出现功能异常。具体表现为：
+1. 显存 VRAM 地址未正确标记为 iomem 类型，导致系统可能错误地调用 memcpy 进行 IO 内存拷贝，引发访问错误。
+2. GCC 12.3 编译器针对 IO 空间的清零循环进行了错误优化，将其转换为 memset 调用，导致 IO 空间写入行为不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **IO 内存类型标记缺失**：在 `ttm_resource.c` 中，连续的 VRAM 地址未设置 `iosys_map_set_vaddr_iomem`，导致后续内存操作被当作普通内存处理，可能触发错误的 memcpy 行为。
+2. **编译器过度优化**：在 `amdgpu_uvd.c` 中，存在向 IO 空间写入零值的循环，GCC 12.3 编译器将其优化为 `memset` 调用。由于目标地址是 IO 空间，这种优化导致了错误的访问方式。
+
+#解决方案
+1. 在 `ttm_kmap_iter_linear_io_init` 函数中，针对 sw64 架构增加条件编译，使用 `iosys_map_set_vaddr_iomem` 将显存地址标记为 iomem 类型，避免标准 memcpy 操作。
+2. 在 `amdgpu_uvd_get_create_msg` 函数中，针对 sw64 架构将消息指针 `msg` 声明为 `volatile uint32_t *`，禁止编译器将该指针指向的零化循环优化为 memset 调用，确保对 IO 空间的正确写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f2864f343cbf8f5c7784894dfec53664464bcac9

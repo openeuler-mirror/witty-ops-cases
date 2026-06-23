@@ -1,0 +1,20 @@
+#标题
+scsi: ufs: core: Fix another deadlock during RTC update
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UFS 设备更新 RTC（实时时钟）过程中，系统发生死锁。具体表现为 `ufshcd_rtc_work` 工作队列执行时，若 PM usage_count 为 0，会触发 runtime suspend 流程，而该流程会等待 `ufshcd_rtc_work` 执行完毕，从而导致互相等待的死锁状态。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ufshcd_update_rtc` 函数中，代码调用了 `ufshcd_rpm_put_sync()` 进行同步运行时电源管理操作。当 PM 的 usage_count 为 0 时，该同步调用会进入 runtime suspend 回调。然而，runtime suspend 回调逻辑中会等待 `ufshcd_rtc_work` 工作队列刷新结束，而 `ufshcd_rtc_work` 此时正持有资源并等待 suspend 流程完成，最终导致循环等待，引发死锁。
+
+#解决方案
+将 `ufshcd_update_rtc` 函数中的 `ufshcd_rpm_put_sync(hba)` 替换为 `ufshcd_rpm_put(hba)`。使用异步方式释放电源引用，避免在 RTC 更新流程中阻塞进入 runtime suspend 回调，从而打破死锁条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/da239d1ed6b0dc77fa4e0a37c3c0aa8445982333

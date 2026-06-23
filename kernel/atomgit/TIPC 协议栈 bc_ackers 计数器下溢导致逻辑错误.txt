@@ -1,0 +1,20 @@
+#标题
+TIPC 协议栈 bc_ackers 计数器下溢导致逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TIPC（Transparent Inter-Process Communication）通信组播场景下，当对端发送重复的 GRP_ACK_MSG 消息时，接收端内核协议栈处理逻辑存在缺陷。具体表现为内核内部维护的 `grp->bc_ackers` 计数器发生下溢，破坏了组播确认机制的计数逻辑，可能导致后续的流控或窗口处理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tipc_group_proto_rcv` 函数处理 `GRP_ACK_MSG` 消息时，代码直接将接收到的确认值赋值给 `m->bc_acked`，并随后执行 `--grp->bc_ackers` 操作。该逻辑未对重复或过期的 ACK 消息进行过滤。如果收到一个确认值小于或等于当前已确认值的重复 GRP_ACK_MSG，函数依然会继续执行并减少 `grp->bc_ackers` 计数器。这种非预期的递减操作导致了 `bc_ackers` 计数器的下溢。
+
+#解决方案
+在处理 `GRP_ACK_MSG` 时增加有效性检查。在更新 `m->bc_acked` 之前，先判断消息中携带的确认值 `acked` 是否大于当前的 `m->bc_acked`。如果 `acked` 小于或等于当前值，则视为重复或过期报文直接返回，不再处理，从而避免错误地减少 `bc_ackers` 计数器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c2bed75a26255fe64b319a113435a78e5c4ebf5

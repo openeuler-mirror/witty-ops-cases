@@ -1,0 +1,20 @@
+#标题
+f2fs: change_curseg 未检查 curseg->inited 导致写入空摘要块
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `__f2fs_init_atgc_curseg` -> `get_atssr_segment` 流程时，由于 `curseg->segno` 为 `NULL_SEGNO`，表示当前没有有效的摘要块。若此时未检查 `curseg->inited` 状态直接执行写入操作，会导致写入无效或错误的摘要页面数据。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `change_curseg` 函数中，执行 `write_sum_page` 写入摘要页之前，缺少对 `curseg->inited` 标志位的检查。在特定调用路径（如 `__f2fs_init_atgc_curseg` 调用 `get_atssr_segment`）下，`curseg->segno` 尚未初始化（值为 `NULL_SEGNO`），此时不应执行摘要页写入操作，否则会将无效数据写入磁盘对应位置。
+
+#解决方案
+在 `change_curseg` 函数中调用 `write_sum_page` 之前增加判断条件：仅当 `curseg->inited` 为真时，才执行 `write_sum_page` 操作，从而避免写入未初始化的摘要块。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/07987c7128672f6bb0c55cad03005d9f0a49e63f

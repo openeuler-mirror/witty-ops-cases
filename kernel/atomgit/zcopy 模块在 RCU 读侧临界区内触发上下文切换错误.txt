@@ -1,0 +1,23 @@
+#标题
+zcopy 模块在 RCU 读侧临界区内触发上下文切换错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核运行过程中触发上下文切换错误（Context switch within RCU read-side error），该错误通常由在 RCU 读侧临界区内调用可能睡眠的函数（如 `spin_lock` 竞争）引起。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `attach_pte_range` 函数中，通过 `zcopy_pte_offset_map` 获取页表项指针（`src_ptep` 和 `dst_ptep`）后，在持有 `spin_lock` 的情况下，代码路径可能在 RCU 读侧临界区内发生上下文切换。其深层原因是 `pte_offset_map` 相关接口的使用不匹配，在锁定路径中未正确保存原始页表指针，导致后续 `pte_unmap` 操作可能发生在不正确的上下文或时机，从而引发 RCU 相关的上下文切换违规。
+
+#解决方案
+修正 `attach_pte_range` 函数中的页表指针映射与释放逻辑：
+1. 引入 `orig_src_ptep` 和 `orig_dst_ptep` 变量，在 `zcopy_pte_offset_map` 映射后立即保存原始指针。
+2. 在函数返回前的 `out` 标签处，确保在释放自旋锁（`spin_unlock`）之后，使用保存的原始指针调用 `pte_unmap` 进行解映射。
+此举确保了页表项的正确解映射，避免了在 RCU 读侧临界区内因不当操作引发的上下文切换问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f0dd063a23638ea4e52f9469d4de2234c758c9c7

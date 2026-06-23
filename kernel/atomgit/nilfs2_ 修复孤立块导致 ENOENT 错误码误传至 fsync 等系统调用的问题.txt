@@ -1,0 +1,20 @@
+#标题
+nilfs2: 修复孤立块导致 ENOENT 错误码误传至 fsync 等系统调用的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 nilfs2 文件系统尝试写入日志时，如果起始块是孤立的（不属于 B 树），`nilfs_btree_propagate()` 函数会将内部错误码 `-ENOENT` 传播给日志写入器。这导致该错误码被错误地返回给用户态系统调用（如 `fsync()`），使得调用失败并返回 `ENOENT`（无此文件或目录），而非预期的 `EINVAL`（无效参数）或表明元数据损坏的错误。同时内核日志会打印关于“writing node/leaf block does not appear in b-tree”的严重错误信息。
+
+#主要错误日志
+nilfs2: writing node/leaf block does not appear in b-tree (ino=%lu) at key=%llu, level=%d
+
+#问题根因
+在 `nilfs_btree_propagate()` 函数中，当处理已修改的数据块或 B 树节点块以准备写入日志时，如果起始块不属于 B 树（即块是孤立的），内部的 `nilfs_btree_do_lookup()` 调用会失败并返回 `-ENOENT`。由于代码逻辑未对该特定的内部错误码进行转换，导致 `-ENOENT` 被直接传播到底层的日志写入器，并最终错误地返回给 `fsync()` 等系统调用，误导用户程序。
+
+#解决方案
+在 `nilfs_btree_propagate()` 函数中增加判断逻辑：当 `nilfs_btree_do_lookup()` 返回 `-ENOENT` 时，在打印临界日志的同时，将错误码从 `-ENOENT` 修改为 `-EINVAL`。这防止了内部查找错误码泄露到用户空间，并让 bmap 层能够正确检测到元数据损坏并转换错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6511e7667ce624ed8de14c734569aa4e6f4ec47b

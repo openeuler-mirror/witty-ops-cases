@@ -1,0 +1,20 @@
+#标题
+smb/server: parse_durable_handle_context 函数引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB2 协议处理中，当命令为重放操作且 `parse_durable_handle_context` 函数返回 `-ENOEXEC` 错误时，未释放 `ksmbd_file` 结构体的引用计数，导致引用计数泄漏，可能导致文件资源无法及时释放或服务器资源耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `parse_durable_handle_context` 函数处理逻辑中，当检测到 Client GUID 不匹配且请求头标记了 `SMB2_FLAGS_REPLAY_OPERATION` 时，代码流程会返回 `-ENOEXEC` 错误并跳转至 `out` 标签。在此之前，代码未调用 `ksmbd_put_durable_fd` 减少对应文件句柄（`dh_info->fp`）的引用计数，从而导致引用计数泄漏。
+
+#解决方案
+在错误处理路径中增加引用计数释放操作。具体修改为：在 `err = -ENOEXEC;` 赋值后、`goto out;` 之前，调用 `ksmbd_put_durable_fd(dh_info->fp);` 以确保在返回错误前正确释放文件引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/19daf98d9e3b5d22f8e021cd7c1ca81eb1a75afc

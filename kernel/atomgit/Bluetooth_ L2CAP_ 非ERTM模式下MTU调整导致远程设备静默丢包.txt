@@ -1,0 +1,25 @@
+#标题
+Bluetooth: L2CAP: 非ERTM模式下MTU调整导致远程设备静默丢包
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在蓝牙L2CAP连接配置过程中，若配置请求未包含MTU选项，内核尝试调整出站MTU（outgoing MTU）会导致部分远程设备（特别是使用旧传输模式的设备）无法检测到该调整，从而引起远程设备静默丢弃数据包。这导致上层音频服务（如PipeWire）或蓝牙连接出现异常，表现为音频传输中断或连接不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于`l2cap_parse_conf_req`函数中的MTU处理逻辑错误。配置请求仅配置发起请求的对端入站方向，不应随意使用另一方向的MTU。
+根据蓝牙核心规范（Core 6.1, Vol 3, Part A, Section 4.5），响应包中的配置参数值应是对请求包中参数值的“调整”。原代码在请求未提供MTU时，错误地使用了`chan->imtu`进行设置。
+此外，该调整行为应仅限于ERTM（Enhanced Retransmission Mode）通道。对于旧模式，远程协议栈可能无法检测到MTU调整，导致其静默丢包。
+
+#解决方案
+修改`net/bluetooth/l2cap_core.c`中`l2cap_parse_conf_req`函数的MTU默认值处理逻辑：
+1. 当配置请求中未提供MTU（mtu == 0）时，不再直接使用`chan->imtu`。
+2. 增加模式判断：仅当通道模式为ERTM（`chan->mode == L2CAP_MODE_ERTM`）且输出MTU（`chan->omtu`）已设置且非默认值时，才将其作为调整值（`mtu = chan->omtu`）。
+3. 对于非ERTM模式或未设置omtu的情况，直接使用默认MTU值（`L2CAP_DEFAULT_MTU`），避免因不当调整导致旧设备丢包。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2f73d97da9a6c97b6183f747d19c9e80759a29bf

@@ -1,0 +1,20 @@
+#标题
+nvdimm 异步设备注册释放父设备引用计数异常导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 nvdimm 总线进行异步设备注册过程中，若 `device_add` 失败，内核可能访问已释放的内存指针，导致系统崩溃或触发 UAF（Use-After-Free）相关的内核警告（如 slab check 错误或 oops）。该问题触发路径与 CVE-2026-31399 相关。
+
+#主要错误日志
+dev_err(dev, "%s: failed\n", __func__);
+
+#问题根因
+在 `nd_async_device_register` 函数中，当 `device_add(dev)` 执行失败时，代码逻辑会首先调用 `put_device(dev)` 释放设备对象及其内嵌的 kobject 引用。由于 kobject 的释放会触发父设备引用计数的减少（kobject_unparent），此时 `dev->parent` 可能已被置空或失效。随后代码继续执行 `put_device(dev->parent)` 时，一方面访问了可能已不存在的 `dev` 指针（UAF），另一方面可能导致父设备引用计数管理错误。
+
+#解决方案
+在函数入口处先将 `dev->parent` 保存到局部变量 `parent` 中。在处理 `device_add` 失败或函数退出时，直接使用保存的局部变量 `parent` 进行判断和引用计数释放，避免在 `put_device(dev)` 执行后访问 `dev->parent` 成员，从而修复 UAF 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3fbbe5a294789e86351a606554cb67db9426c0e

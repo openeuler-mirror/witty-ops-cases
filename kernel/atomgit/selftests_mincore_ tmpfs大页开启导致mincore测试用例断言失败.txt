@@ -1,0 +1,25 @@
+#标题
+selftests/mincore: tmpfs大页开启导致mincore测试用例断言失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统内核启动命令行包含 `transparent_hugepage_tmpfs=always` 参数时，运行 mincore 自测用例失败。具体表现为 `check_tmpfs_mmap` 测试项出现断言错误，提示在内存中发现了预读页面，预期预读页数为 0，但实际检测到 511 个。
+
+#主要错误日志
+mincore_selftest.c:359:check_tmpfs_mmap:Expected ra_pages (511) == 0 (0)
+mincore_selftest.c:360:check_tmpfs_mmap:Read-ahead pages found in memory
+check_tmpfs_mmap: Test terminated by assertion
+          FAIL  global.check_tmpfs_mmap
+not ok 5 global.check_tmpfs_mmap
+FAILED: 4 / 5 tests passed
+
+#问题根因
+系统启用了 tmpfs 大页分配策略（`transparent_hugepage_tmpfs=always`），导致 tmpfs 挂载点（如 /dev/shm）使用大页而非传统的小页。原有的测试用例 `check_tmpfs_mmap` 仍假设 tmpfs 分配的是小页，并据此检查预读逻辑，导致验证预读页数时触发断言失败。实际上 tmpfs 使用大页后，不再适用原有的预读页检查逻辑。
+
+#解决方案
+删除 `check_tmpfs_mmap` 测试用例中针对 tmpfs 预读页的检查代码。由于 tmpfs 已支持大页分配，不再需要强制校验预读页数为 0 的逻辑，移除相关断言代码以适配新的内存分配行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eae352a1259a0f6e2ded600923bea91a893c9888

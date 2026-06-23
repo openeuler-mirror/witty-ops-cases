@@ -1,0 +1,20 @@
+#标题
+drm/sched: 依赖进程被杀导致调度器挂起问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当应用程序 A 提交作业，应用程序 B 提交依赖于 A 的 fence 的作业时，如果应用程序 A 在其作业运行前被杀掉（killed），会导致 GPU 调度器进入休眠状态无法唤醒，进而导致应用程序 B 发生挂起（Hang）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `drm_sched_entity_add_dependency_cb()` 函数中存在一处优化逻辑，该逻辑使用 `drm_sched_entity_clear_dep()` 回调函数仅清除依赖关系，而不唤醒调度器。当应用 A 被杀导致其作业无法运行时，该回调被触发，仅清除了依赖项却未唤醒调度器，导致调度器错误地进入休眠状态，从而引起依赖该 fence 的应用 B 挂起。
+
+#解决方案
+移除引起问题的优化代码，删除 `drm_sched_entity_clear_dep()` 函数及其调用。修改依赖处理逻辑，确保在清除依赖时始终调用 `drm_sched_wakeup_if_can_queue()` 唤醒调度器，从而保证调度器能正常处理后续作业。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/86a682044843eef434deb7d95b96ae8b628cf0f6

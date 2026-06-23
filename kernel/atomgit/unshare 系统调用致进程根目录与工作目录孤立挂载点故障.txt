@@ -1,0 +1,22 @@
+#标题
+unshare 系统调用致进程根目录与工作目录孤立挂载点故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当进程调用 `unshare(2)` 并同时指定 `CLONE_NEWNS` 与 `CLONE_NEWCGROUP` 标志时，若当前进程的 `fs_struct` 未被共享（`users == 1`）且后续 `copy_cgroup_ns()` 执行失败（例如内存不足返回 `-ENOMEM`），系统调用最终返回失败。然而，调用进程的根目录（`root`）和当前工作目录（`pwd`）已被错误地移动到一个已被销毁（detached）的挂载命名空间中，导致进程处于异常状态。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `unshare_fs()` 函数中，原逻辑判断如果 `fs->users == 1`（即 `fs_struct` 未共享），则直接返回，不进行 `fs_struct` 的拷贝。
+当 `unshare(2)` 标志包含 `CLONE_NEWNS` 时，`copy_mnt_ns()` 会使用当前的 `fs_struct`。如果 `fs_struct` 未被拷贝，`copy_mnt_ns()` 可能会直接修改当前进程的 `fs->pwd` 和 `fs->root` 指向新命名空间的挂载点。
+一旦后续的 `copy_cgroup_ns()` 等操作失败，新建的挂载命名空间会被销毁，但当前进程的 `pwd` 和 `root` 仍指向该已销毁命名空间中的挂载点，形成孤立挂载点，导致状态不一致。
+
+#解决方案
+修改 `kernel/fork.c` 中的 `unshare_fs()` 函数逻辑，增加对 `CLONE_NEWNS` 标志的检查。如果 `unshare_flags` 包含 `CLONE_NEWNS`，则强制调用 `copy_fs_struct()` 创建新的 `fs_struct` 副本，不再仅依赖 `fs->users == 1` 来跳过拷贝。这确保了在创建新挂载命名空间时，文件系统上下文是独立的，避免了后续命名空间创建失败时影响当前进程的文件路径状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0e6bcf2d2a87be6f17fb1b3ccf3f03e7547dce4f

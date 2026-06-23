@@ -1,0 +1,43 @@
+#标题
+rcu-tasks: 访问不存在的 percpu rtpcp 变量导致内核缺页异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核编译时开启 CONFIG_FORCE_NR_CPUS=y 选项时，nr_cpu_ids 被定义为 NR_CPUS（而非实际可能的 CPU 数量），导致 RCU Tasks 机制在初始化和回调处理过程中访问了无效的 CPU 编号对应的 percpu 内存区域，从而触发内核缺页异常，系统发生 panic 并崩溃。
+
+#主要错误日志
+BUG: unable to handle page fault for address: ffffffff9911c8c8
+Oops: 0000 [#1] PREEMPT SMP PTI
+CPU: 0 PID: 15 Comm: rcu_tasks_trace Tainted: G W
+RIP: 0010:rcu_tasks_need_gpcb+0x25d/0x2c0
+Call Trace:
+<TASK>
+? __die+0x23/0x80
+? page_fault_oops+0xa4/0x180
+? exc_page_fault+0x152/0x180
+? asm_exc_page_fault+0x26/0x40
+? rcu_tasks_need_gpcb+0x25d/0x2c0
+? __pfx_rcu_tasks_kthread+0x40/0x40
+rcu_tasks_one_gp+0x69/0x180
+rcu_tasks_kthread+0x94/0xc0
+kthread+0xe8/0x140
+? __pfx_kthread+0x40/0x40
+ret_from_fork+0x34/0x80
+? __pfx_kthread+0x40/0x40
+ret_from_fork_asm+0x1b/0x80
+</TASK>
+
+#问题根因
+在开启 CONFIG_FORCE_NR_CPUS=y 的内核中，nr_cpu_ids 被静态定义为 NR_CPUS（例如 512），而不是系统实际可能的 CPU 数量。rcu_tasks_need_gpcb() 函数使用 nr_cpu_ids 作为循环边界去遍历 percpu 变量 rtp->rtpcpu，导致访问了实际不存在（未分配内存）的 CPU 对应的 percpu 指针，引发 page fault。此外，CPU 编号可能存在空洞，直接使用连续的 CPU ID 索引数组也会导致越界访问。
+
+#解决方案
+引入新的全局变量 rcu_task_cpu_ids 来记录实际最大可能的 CPU 数量，并在结构体中新增 rtpcp_array 数组用于存储按顺序索引的 rcu_tasks_percpu 指针。
+1.  在 cblist_init_generic() 初始化阶段，遍历所有 possible 的 CPU，分配并填充 rtpcp_array，同时计算出最大的 CPU 编号加一作为 rcu_task_cpu_ids。
+2.  将原代码中涉及循环边界判断的地方（如 percpu_enqueue_lim、percpu_dequeue_lim 的比较），从使用 nr_cpu_ids 替换为使用 rcu_task_cpu_ids。
+3.  在遍历 CPU 时增加 cpu_possible(cpu) 检查，跳过不存在的 CPU 编号空洞，防止访问未分配的 percpu 区域。
+4.  调整 rcu_tasks_invoke_cbs() 中的逻辑，使用索引和 rtpcp_array 进行访问，确保只处理有效的 CPU 结构体。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3173f482552dd6d1254b8c8073abdc6011d61a2a

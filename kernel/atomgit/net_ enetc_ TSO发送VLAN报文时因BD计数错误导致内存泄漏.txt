@@ -1,0 +1,20 @@
+#标题
+net: enetc: TSO发送VLAN报文时因BD计数错误导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 enetc 网卡驱动进行 TSO（TCP Segmentation Offload）发送时，如果 skb 数据包带有 VLAN 标签，驱动会使用扩展 BD（extended BD）。在此场景下，若发送过程中出现错误需要回滚或释放资源，会导致释放的 tx_swbd（发送软件缓冲区描述符）数量少于实际分配的数量，造成内存泄漏或 DMA 映射未及时释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `enetc_map_tx_tso_buffs` 中调用 `enetc_map_tx_tso_hdr` 创建 TSO 头时，计数变量 `count` 固定增加 1。但当 skb 带有 VLAN 标签时，`enetc_map_tx_tso_hdr` 内部会使用扩展 BD，这实际上消耗了 2 个 BD 描述符。由于调用者处的 `count++` 仅增加了 1，导致统计的 BD 数量与实际使用的硬件 BD 数量不一致。当发送流程后续出错进行清理时，错误的计数会导致部分 BD 资源未被正确释放。
+
+#解决方案
+修改 `enetc_map_tx_tso_hdr` 函数的返回值类型为 int，使其返回实际使用的 BD 数量（若使用扩展 BD 则返回 2，否则返回 1）。在调用者 `enetc_map_tx_tso_buffs` 中，移除固定的 `count++` 操作，改为累加 `enetc_map_tx_tso_hdr` 的返回值，从而确保 BD 计数准确，保证后续错误处理路径能正确释放所有已分配的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce74efaf807e5e9bea819358932bfba22317820c

@@ -1,0 +1,27 @@
+#标题
+perf callchain: Stitch LBR 功能导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `perf record` 记录 LBR 调用链数据并使用 `perf report --stitch-lbr` 进行分析时，会发生内存泄漏。通过内存泄漏检测工具（如 LeakSanitizer）可以观测到内存资源未被正确释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 Stitch LBR（Last Branch Record）调用链拼接功能的实现中，`struct callchain_cursor_node` 内嵌的 `struct map_symbol` 成员包含引用计数的 `maps` 和 `map` 对象。
+根本原因包括：
+1. 在保存和使用 LBR 光标节点时，未对 `maps` 和 `map` 成员执行 `_get` 操作增加引用计数，也未在释放时通过 `map_symbol__exit()` 减少引用计数。
+2. 在 `resolve_lbr_callchain_sample()` 函数中，使用 `list_replace_init()` 移动链表时，仅移动了链表头而未移动整个链表，导致节点泄漏。
+3. 当 `stitch_nodes` 被放回 free list 时，未正确释放其 `map_symbols` 的引用。
+
+#解决方案
+1. 在 `save_lbr_cursor_node` 函数中，拷贝节点前先调用 `map_symbol__exit()` 清理旧引用，拷贝后使用 `maps__get()` 和 `map__get()` 正确增加新引用计数。
+2. 在 `alloc_lbr_stitch` 中记录 `prev_lbr_cursor` 数组的大小，以便后续遍历释放。
+3. 在 `resolve_lbr_callchain_sample` 中将 `list_replace_init()` 替换为 `list_splice_init()`，确保整个链表被正确移动；在移动节点到 free list 前，遍历链表调用 `map_symbol__exit()` 释放引用。
+4. 在 `thread__free_stitch_list` 函数中，遍历 `prev_lbr_cursor` 数组及两个链表，确保调用 `map_symbol__exit()` 释放所有 `map_symbol` 的引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31ba5b9f8ece749347a43c5ce49ce9bd1ec80905

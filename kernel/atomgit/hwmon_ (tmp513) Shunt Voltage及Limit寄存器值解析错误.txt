@@ -1,0 +1,27 @@
+#标题
+hwmon: (tmp513) Shunt Voltage及Limit寄存器值解析错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动读取的 Shunt Voltage Register（分流电压寄存器）和 Shunt Limit Registers（分流限值寄存器）的数值不符合 TMP512/TMP513 规范要求。
+具体表现为：
+1. 对于 Shunt Voltage Register，当 PGA=8 且寄存器原始值为 0x8300 时，规范要求计算值为 -32000，但驱动实际计算结果为 33536。
+2. 对于 Shunt Limit Register，当寄存器原始值为 0x8300 且 PGA=1 时，规范要求计算值为 -32000，但驱动实际计算结果为 768。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在将寄存器原始值转换为有符号整数时存在两个缺陷：
+1. 符号位索引计算存在差一错误，导致符号扩展不正确。
+2. 错误地将仅适用于 Shunt Voltage Register 的 PGA 偏移量应用到了 Shunt Limit Registers 上。根据数据手册，Shunt Limit Registers 是 16 位二进制补码，不应受 PGA 设置影响。
+
+#解决方案
+修正 `tmp51x_get_value` 函数中的符号扩展逻辑：
+1. 修复 `tmp51x_get_pga_shift` 函数的注释与逻辑，确保 PGA 增益移位计算正确。
+2. 在处理寄存器值时区分寄存器类型：对于 Shunt Current Result 寄存器，使用 `16 - tmp51x_get_pga_shift(data)` 作为符号位索引；对于其他 Shunt Limit 寄存器，固定使用 15 作为符号位索引，并修正注释说明。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac963865c01dd5801df55573cc7eb473c7440301

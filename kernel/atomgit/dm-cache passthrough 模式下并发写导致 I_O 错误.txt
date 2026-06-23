@@ -1,0 +1,22 @@
+#标题
+dm-cache passthrough 模式下并发写导致 I/O 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 dm-cache 处于 passthrough（直通）模式时，若多个进程对同一数据块进行并发写入，其中一个进程可能会意外收到 I/O 错误（Input/output error），导致写入失败。
+
+#主要错误日志
+fio: io_u error on file /dev/mapper/cache: Input/output error: write offset=4096, buflen=4096
+fio: pid=106, err=5/file:io_u.c:2008, func=io_u error, error=Input/output error
+test: (groupid=0, jobs=1): err= 5 (file:io_u.c:2008, func=io_u error, error=Input/output error): pid=106
+
+#问题根因
+在 passthrough 模式下处理并发写入同一块时，`invalidate_lock` 函数尝试获取 bio prison cell 锁可能会失败。原代码逻辑中，当锁获取失败（返回 r < 0）时，直接调用 `invalidate_complete` 结束请求并返回错误，未正确处理已挂起的 `overwrite_bio`，导致 dm-cache 错误地向应用层返回 I/O 错误，而不是通过重试机制处理并发冲突。
+
+#解决方案
+在 `invalidate_lock` 函数中，当 cell 锁获取失败时，增加对 `overwrite_bio` 的处理逻辑：检查是否存在待处理的 `overwrite_bio`，若存在则将其通过 `defer_bio` 进行延迟重试，以此确保在锁冲突时能够正确排队处理 I/O 请求，避免直接返回 I/O 错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8cdad11dea0a5f8d194e0971006d2c9281aba9be

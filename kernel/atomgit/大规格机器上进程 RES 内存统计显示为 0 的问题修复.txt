@@ -1,0 +1,20 @@
+#标题
+大规格机器上进程 RES 内存统计显示为 0 的问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在某些 CPU 数量较多且运行 64K 页大小内核的大型机器上，通过 top 命令查看进程时，发现部分进程的 RES（驻留内存）字段始终显示为 0，导致用户无法获取真实的内存使用情况，产生困惑。同时，读取 /proc/<pid>/status 接口时，VmRSS、RssAnon 和 RssFile 等指标也可能显示为 0。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在提交 f1a7941243c1 ("mm: convert mm's rss stats into percpu_counter") 中将 mm 的 rss 统计转换为 percpu_counter。在大型机器上，percpu counter 的 batch size 非常大，导致大量的计数值被缓存在 percpu 变量中。原代码在获取内存统计值时使用 `get_mm_counter()` 读取计数器，该函数仅读取当前 CPU 的缓存值或概略值，未同步其他 CPU 的缓存数据，导致在统计值未超过 batch 阈值时，读取结果为 0。
+
+#解决方案
+修改 `fs/proc/task_mmu.c` 中的统计接口函数 `task_mem()` 和 `task_statm()`，将获取内存计数器的函数调用从 `get_mm_counter()` 替换为 `get_mm_counter_sum()`。`get_mm_counter_sum()` 内部通过持有 `fbc->lock` 读取 percpu_counter 的精确总值，从而确保向用户展示准确的内存统计数据。虽然加锁操作会增加少量开销，但该路径非性能关键路径，且测试验证对系统整体性能影响极小。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2dfd0595240f27e546e796ea3984777c1298a36e

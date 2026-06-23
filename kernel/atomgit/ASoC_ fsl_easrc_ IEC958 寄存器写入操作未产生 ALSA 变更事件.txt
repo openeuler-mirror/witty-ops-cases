@@ -1,0 +1,21 @@
+#标题
+ASoC: fsl_easrc: IEC958 寄存器写入操作未产生 ALSA 变更事件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 fsl_easrc 设备的 IEC958 相关寄存器进行写入操作时，ALSA 控制层未能生成相应的变更事件，导致上层应用或系统无法感知到控件值的状态变化。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 ALSA 控制接口规范，控件的 put 操作函数应在值发生改变时返回 1，未改变时返回 0，错误时返回负值。
+原函数 `fsl_easrc_set_reg()` 调用 `snd_soc_component_write()` 进行写入，该函数仅返回 0（成功）或负错误码。这导致无论寄存器值是否实际被修改，该函数始终返回 0，致使 ALSA 核心层误判为“未改变”，从而不生成变更事件。
+
+#解决方案
+将寄存器写入逻辑由 `snd_soc_component_write()` 替换为 `regmap_update_bits_check()`。该函数会在执行写操作的同时检查新值与旧值是否一致，并通过输出参数 `changed` 返回是否发生了实质写入。最终将 `changed` 变量作为函数返回值，确保寄存器值变更时正确向 ALSA 层上报事件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/19f0e1b973827d525c16fa3b46f55321c6dfdd92

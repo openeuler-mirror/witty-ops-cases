@@ -1,0 +1,20 @@
+#标题
+Bluetooth: L2CAP LE连接请求缺失密钥长度校验导致安全合规失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在处理蓝牙 L2CAP LE 连接请求（L2CAP_LE_CONN_REQ）时，未校验加密密钥长度是否符合安全要求。这导致在执行蓝牙核心规范测试用例 L2CAP/LE/CFC/BV-15-C 时失败，测试方预期返回 `L2CAP_CR_LE_BAD_KEY_SIZE` 响应码，但内核未正确返回该错误码，导致功能不符合标准规范。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `l2cap_le_connect_req` 处理逻辑中，缺少对加密密钥长度的校验步骤。根据规范要求，接收到连接请求时必须判断密钥长度是否足够支持当前安全等级，但原代码未调用 `l2cap_check_enc_key_size` 进行检查，导致无法识别并拒绝密钥长度不足的连接请求。
+
+#解决方案
+在 `net/bluetooth/l2cap_core.c` 文件的 `l2cap_le_connect_req` 函数中增加密钥长度校验逻辑。在处理动态 CID 范围检查之前，调用 `l2cap_check_enc_key_size` 函数检查 `conn->hcon` 与 `pchan` 的密钥长度；若检查失败，将结果变量 `result` 设置为 `L2CAP_CR_LE_BAD_KEY_SIZE` 并跳转至响应解锁流程，从而拒绝不合规的连接请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3dd042e44646c3ad16449d300b6634d2ff4d6933

@@ -1,0 +1,34 @@
+#标题
+urma: CTP连接复用机制缺失CNA层级导致连接查找失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用共享CTP（shared_ctp）功能的场景下，系统仅支持基于EID级别的连接复用。当网络环境需要基于CNA（Cluster Network Address）地址进行连接复用时，由于复用查找逻辑缺失CNA层级的关键字匹配，导致无法命中已有的TPID复用表项。这会导致系统无法正确复用现有连接资源，可能引发连接建立失败、资源浪费或后续的查找报错。
+
+#主要错误日志
+- "Failed to lookup host info in create req.\n"
+- "Failed to lookup host info in destroy req, ret=%d\n"
+- "tpid not found in tpid_reuse table in handle destroy req.\n"
+
+#问题根因
+问题根因在于 `ubcore_tpid_list_key` 结构体及相关的哈希表查找逻辑未包含 `local_cna` 和 `peer_cna` 字段。
+1. 原实现在启用共享CTP时，仅使用 `local_eid` 和 `peer_eid` 等字段构建复用表的键值。
+2. 缺少 CNA 字段导致无法支持 CNA 级别的连接复用。
+3. 在查找 `TPID_REUSE` 表时，没有执行“先查 EID 级别，若未命中再查 CNA 级别”的两阶段查找逻辑，导致在特定场景下无法找到正确的复用对象。
+
+#解决方案
+1. **扩展关键字结构体**：在 `ubcore_tpid_list_key` 中新增 `local_cna` 和 `peer_cna` 字段，用于存储源和目的 CNA 地址。
+2. **实现 CNA 信息获取与存储**：
+   - 修改 `ubcore_lookup_host_info_local_and_peer` 函数，增加 `local_cna` 和 `peer_cna` 输出参数，从 `host_info` 中提取 CNA 信息。
+   - 在 `ubcore_cmd_host_eid_batch` 结构体及处理逻辑中添加对 `cnas` 数组的支持，确保 CNA 数据能通过 UVS 命令下发并存储到 host_info trie 中。
+3. **重构查找逻辑**：实现两阶段哈希表查找机制。在所有 TPID 复用路径（create/bind/destroy/isref 等）中：
+   - 第一阶段：优先使用 EID 构建键值进行查找。
+   - 第二阶段：若第一阶段未命中且使能了共享 CTP，则调用新增的 `ubcore_fill_tpid_reuse_key_cna` 辅助函数，将 EID 字段置零并填入 CNA 地址，再次进行查找。
+4. **辅助函数与初始化**：
+   - 新增 `ubcore_net_addr_is_zero` 辅助函数用于检查 CNA 地址有效性。
+   - 在相关键值填充函数（如 `ubcore_fill_tpid_reuse_key`）中显式初始化 CNA 字段为 0，防止野值干扰。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9903e03cdae54a55b66fb962c269dc4b3c890557

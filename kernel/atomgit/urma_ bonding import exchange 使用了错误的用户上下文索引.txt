@@ -1,0 +1,26 @@
+#标题
+urma: bonding import exchange 使用了错误的用户上下文索引
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 urma 模块进行 bonding import exchange 操作（涉及 seg 或 jetty）时，内核总是固定使用索引 0（`ues[0]`）来查找物理设备和 primary_eid，忽略了用户态实际传入的 `ue_idx`。这导致在非零索引的场景下，驱动可能绑定到错误的物理设备或查找到错误的端点 ID，进而引发后续连接建立失败或数据通路异常。
+
+#主要错误日志
+ubcore_log_err("udata or udrv_data is null.\n");
+ubcore_log_err("invalid udata in_addr or in_len:%u.\n", udata->udrv_data->in_len);
+ubcore_log_err("failed to copy ue_idx from user, byte:%lu.\n", byte);
+ubcore_log_err("invalid ue_idx:%u.\n", *ue_idx);
+ubcore_log_err("Invalid ue_id: %u.\n", ue_id);
+
+#问题根因
+在 `ubcore_connect_exchange_udata_when_import_seg` 和 `ubcore_connect_exchange_udata_when_import_jetty` 函数的处理流程中，调用 `ubcore_find_physical_device` 和 `ubcore_get_primary_eid_by_agg_eid` 时，代码中直接硬编码了索引 0（如 `ues[0].primary_eid`），未从用户传入的 `udata` 中解析并传递正确的 `ue_idx` 参数。这导致多卡或多单元场景下无法定位到正确的物理设备资源。
+
+#解决方案
+1. 新增 `ubcore_get_bonding_ue_idx_from_udata` 函数，用于从用户态数据（udata）中解析并校验 `ue_idx`，包括空指针检查、长度校验、copy_from_user 安全检查及数值范围（IODIE_NUM）校验。
+2. 修改 `ubcore_find_physical_device` 和 `ubcore_get_primary_eid_by_agg_eid` 函数签名，增加 `ue_id`（或 `ue_idx`）参数。
+3. 在查找逻辑中使用传入的 `ue_id` 索引（如 `ues[ue_id].primary_eid`）替代原先硬编码的 `ues[0]`，确保使用用户指定的设备单元进行连接交换。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6f0bc57530969039f0fb38a36be6589d915c046e

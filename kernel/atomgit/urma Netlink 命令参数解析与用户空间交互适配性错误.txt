@@ -1,0 +1,33 @@
+#标题
+urma Netlink 命令参数解析与用户空间交互适配性错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 Netlink 接口调用 `UBCORE_CMD_SET_SL`、`UBCORE_CMD_QUERY_STATS`、`UBCORE_CMD_QUERY_RES` 和 `UBCORE_CMD_PERF_SHOW` 等命令时，因参数解析方式不兼容，导致命令执行失败或无法正确获取返回数据。具体表现为：
+1. 设置 SL（Service Level）操作失败，内核日志打印 "info attr invalid!"。
+2. 查询统计信息或资源信息时失败，内核日志提示 "find dev failed" 或 "Invalid argument"。
+3. 性能展示命令执行时出现内存分配失败或数据拷贝错误。
+
+#主要错误日志
+- `ubcore_log_err("info attr invalid!\n");`
+- `ubcore_log_err("find dev failed, dev:%s, arg_in: %s.\n", ...);`
+- `ubcore_log_err("Invalid argument.\n");`
+- `ubcore_log_err("Failed to copy from user.\n");`
+- `ubcore_log_err("Failed to copy to user, ret = %d\n", ret);`
+
+#问题根因
+`ubcore_genl.c` 中的 Netlink 属性策略（`ubcore_policy`）定义缺失，未包含 `UBCORE_ATTR_SL`、`UBCORE_ATTR_STATS` 等关键属性的定义，导致 Netlink 核心层无法正确解析用户下发的属性数据。同时，命令处理函数（如 `ubcore_set_sl`、`ubcore_query_stats_ops`）采用了旧式的 `copy_from_user` 方式通过指针获取数据，而非标准的 Netlink 属性解析接口（`nla_get_*`），导致用户空间与内核空间交互适配性差，参数传递失败。
+
+#解决方案
+1. **补充 Netlink 属性策略定义**：在 `ubcore_genl.c` 的 `ubcore_policy` 数组中新增 `UBCORE_ATTR_SL`、`UBCORE_ATTR_PRIORITY`、`UBCORE_ATTR_STATS` 等必要的属性类型定义，确保 Netlink 层能正确解析接收到的数据。
+2. **重构命令处理函数**：
+   - 移除通过 `UBCORE_HDR_ARGS_ADDR` 和 `copy_from_user` 获取参数的旧逻辑。
+   - 改用标准的 Netlink 接口（如 `nla_get_u32`、`nla_data`）直接从 `info->attrs` 中提取参数。
+3. **优化应答数据返回方式**：
+   - 对于 `ubcore_query_stats_ops` 和 `ubcore_perf_show_ops`，移除 `copy_to_user` 逻辑。
+   - 改用 `genlmsg_new`、`genlmsg_put_reply`、`nla_put` 和 `genlmsg_reply` 等 Netlink 标准 API 构建并发送回复消息，确保数据能正确回传给用户空间。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8064d5a29bdc32a12a79af91de3e4e39967c0c29

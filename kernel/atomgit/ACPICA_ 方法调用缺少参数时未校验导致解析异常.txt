@@ -1,0 +1,20 @@
+#标题
+ACPICA: 方法调用缺少参数时未校验导致解析异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 ACPI 控制方法时，如果传入的参数数量少于方法定义所需的参数数量，内核未进行有效性校验直接继续执行，可能导致后续解析流程访问未初始化的参数对象，引发不可预期的行为或 AML 解释器异常。
+
+#主要错误日志
+ACPI Error: Missing argument for method [XXXX] (根据代码推断，其中 XXXX 为具体的方法节点名称)
+
+#问题根因
+ACPICA 子系统在 `acpi_ds_call_control_method` 函数处理控制方法调用时，缺乏对传入参数数量与方法定义参数数量的一致性校验。当 `this_walk_state->num_operands` 小于 `obj_desc->method.param_count` 时，代码未拦截该异常调用，导致方法在参数缺失的状态下被执行。
+
+#解决方案
+在 `acpi_ds_call_control_method` 函数中增加参数数量校验逻辑。在执行方法前，比较当前操作数数量与方法所需的参数计数。若参数缺失，调用 `ACPI_ERROR` 打印错误日志并返回 `AE_AML_UNINITIALIZED_ARG` 状态码，拒绝执行该方法调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f63dd95ba7abdb5200ad7574d76f30828064ea8c

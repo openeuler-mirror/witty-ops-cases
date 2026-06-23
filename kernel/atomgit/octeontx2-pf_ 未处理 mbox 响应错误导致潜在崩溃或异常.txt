@@ -1,0 +1,22 @@
+#标题
+octeontx2-pf: 未处理 mbox 响应错误导致潜在崩溃或异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `otx2_get_pauseparam` 或 `otx2_set_fecparam` 接口时，若底层通信获取响应失败（`otx2_mbox_get_rsp` 返回错误指针），驱动程序未对错误进行检查便直接访问响应数据结构成员。这会导致内核访问无效内存地址，可能引发 NULL 指针解引用、Kernel Panic 或数据损坏等不可预知的异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码在调用 `otx2_mbox_get_rsp` 获取 mailbox 响应后，缺乏对返回指针的有效性检查（是否为 ERR_PTR）。当该函数返回错误指针时，代码直接解引用该指针以获取 `rx_pause`、`tx_pause` 或 `fec` 等成员，导致内核崩溃或逻辑错误。
+
+#解决方案
+在 `otx2_ethtool.c` 的 `otx2_get_pauseparam` 和 `otx2_set_fecparam` 函数中增加返回值检查逻辑。调用 `otx2_mbox_get_rsp` 后，立即使用 `IS_ERR(rsp)` 判断是否出错：
+1. 在 `otx2_get_pauseparam` 中，若出错则解锁 mailbox 互斥锁并直接返回。
+2. 在 `otx2_set_fecparam` 中，若出错则通过 `PTR_ERR(rsp)` 获取错误码，并跳转到错误处理标签 `end` 进行资源清理和返回。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/afca9e170543e53a8e04ce59d92a4d7d51eb43f2

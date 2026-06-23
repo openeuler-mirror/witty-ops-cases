@@ -1,0 +1,20 @@
+#标题
+网桥 MST 模式下端口删除期间因状态旁路导致的 UAF 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 MST（Multiple Spanning Tree）模式且关闭 VLAN 过滤功能的网桥环境中，删除端口时触发 Use-After-Free（UAF）漏洞。由于删除操作与 FDB（转发数据库）学习存在竞争条件，端口在被禁用并刷新 FDB 后，仍可能因 MST 旁路了端口状态检查而创建新的 FDB 条目，导致内核访问已释放的内存。
+
+#主要错误日志
+未知
+
+#问题根因
+根因是 `br_mst_is_enabled` 函数仅检查了网桥设备的 MST 配置，未检查端口自身的存活状态。在端口删除过程中，端口状态被置为 DISABLED 且 FDB 已刷新，但由于 MST 模式开启，代码逻辑直接旁路了端口状态检查（强制认为状态为 FORWARDING），导致在端口即将销毁时仍触发 FDB 学习，引发 UAF。
+
+#解决方案
+修改 `br_mst_is_enabled` 函数实现，增加对端口 VLAN 组（`p->vlgrp`）的检查。端口删除时 VLAN 组会被初始化为 NULL，该检查可防止在端口处于删除中间状态时旁路端口状态检查，从而避免非法的 FDB 学习。涉及文件 `net/bridge/br_forward.c`、`net/bridge/br_input.c` 和 `net/bridge/br_private.h`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4dd609ec12d8d980e421505081b8d3fb8952cc80

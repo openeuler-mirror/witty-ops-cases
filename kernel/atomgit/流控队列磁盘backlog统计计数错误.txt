@@ -1,0 +1,23 @@
+#标题
+流控队列磁盘backlog统计计数错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+修改流控策略限制时，内核统计数据出现偏差。具体表现为：当 Qdisc limit 降低触发丢包时，`backlog` 统计值未能正确更新，且 `qdisc_tree_reduce_backlog` 函数接收到的丢包字节数参数计算逻辑存在错误，可能导致上层父类 Qdisc 的队列统计信息不一致。在 `gso_skb` 队列或 `sch->q` 队列直接出队时，未同步减少 backlog 统计。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `qdisc_dequeue_internal` 函数及其调用者对 backlog 统计的处理不一致：
+1. 在 `qdisc_dequeue_internal` 函数中，当从 `gso_skb` 队列或通过 `__qdisc_dequeue_head` 直接出队时，没有调用 `qdisc_qstats_backlog_dec` 减少 backlog 统计，导致 backlog 累加不减少。
+2. 在多个流控算法（如 codel, fq, fq_codel, fq_pie, hhf, pie）的 change 函数中，当因 limit 降低而丢弃数据包时，`qdisc_tree_reduce_backlog` 的参数计算使用了 `qlen - sch->q.qlen` 或差值计算方式，未正确累计实际丢弃的包数和字节数，且部分场景下重复调用了 backlog 减少接口。
+
+#解决方案
+1. 修改 `include/net/sch_generic.h` 中的 `qdisc_dequeue_internal` 函数：在 `gso_skb` 出队路径和 `direct` 模式下的 `__qdisc_dequeue_head` 出队路径中，增加调用 `qdisc_qstats_backlog_dec(sch, skb)` 以确保 backlog 统计正确递减。
+2. 修改 `sch_codel.c`, `sch_fq.c`, `sch_fq_codel.c`, `sch_fq_pie.c`, `sch_hhf.c`, `sch_pie.c` 等文件中的 change 函数：移除之前基于差值的统计计算逻辑，改为定义独立的 `dropped_pkts` 和 `dropped_bytes` 变量。在丢包循环中，对每个成功出队的 skb 累加计数，并检查 skb 是否为空。最后统一使用准确统计的 `dropped_pkts` 和 `dropped_bytes` 调用 `qdisc_tree_reduce_backlog`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d5f9385a50f7b12935aa60bd0b7c73f0cd046202

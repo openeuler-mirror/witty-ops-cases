@@ -1,0 +1,28 @@
+#标题
+NCI NFC 控制器零长度专有通知报文被错误丢弃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统无法正确接收并处理 NCI NFC 控制器发送的零长度负载专有通知报文。在硬件发送此类报文（如 RF 发射器启动失败通知）时，驱动层直接将其视为无效报文丢弃，导致上层无法感知硬件错误状态，无法获取具体的故障信息（如电源或配置错误提示）。
+
+#主要错误日志
+- 修复前（报文被丢弃，无后续处理日志）：
+  `kernel: nci: nci_recv_frame: len 3`
+- 修复后（正常接收并打印硬件故障信息）：
+  `kernel: nci: nci_recv_frame: len 3`
+  `kernel: nci: nci_ntf_packet: NCI RX: MT=ntf, PBF=0, GID=0x1, OID=0x23, plen=0`
+  `kernel: nci: nci_ntf_packet: unknown ntf opcode 0x123`
+  `kernel: nfc nfc0: NFC: RF transmitter couldn't start. Bad power and/or configuration?`
+
+#问题根因
+在 `nci_valid_size` 函数中，原有的校验逻辑错误地拒绝了所有负载长度（plen）为 0 的 NCI 数据包。然而，NCI NFC 控制器规范允许专有 OID（操作码范围 0x20 - 0x3F）的通知报文携带零长度负载。这导致合法的专有通知报文（例如 NXP NCI 的 RF_TXLDO_ERROR_NTF）被错误判定为无效而丢弃。
+
+#解决方案
+修改 `net/nfc/nci/core.c` 中的 `nci_valid_size` 函数逻辑，将零长度负载的校验逻辑独立处理：
+1. 取消对所有报文必须具有非零负载长度的强制检查。
+2. 当检测到负载长度为 0 时，进一步判断报文类型是否为通知包（NTF）且 OID 是否处于专有范围（0x20 - 0x3F）。若是，则视为合法报文允许通过；否则返回 false 拒绝。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/789db1ae5c8f335a798a1aefd6c0db597f8e1393

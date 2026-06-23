@@ -1,0 +1,21 @@
+#标题
+nfp: nfp_encode_basic_qdr() 函数调用参数顺序错误导致地址编码异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Netronome nfp 网卡驱动在执行 CPP（Command Push Pull）地址编码操作时，因参数传递顺序错误，导致 `nfp_encode_basic_qdr()` 函数接收到错误的 CPP 目标类型和目标 Island ID。这可能导致地址验证失败，或在特定配置下（如 dest_island 为 -1 时）意外通过验证但指向错误的地址位置，进而引发硬件访问异常或功能故障。
+
+#主要错误日志
+- `nfp_target: decode dest_island failed: %d`
+- `nfp_target: dest_island mismatch: current (%d) != decoded (%d)`
+
+#问题根因
+函数 `nfp_encode_basic_qdr` 的定义参数顺序为 `(u64 addr, int dest_island, int cpp_tgt, ...)`，但在所有调用该函数的位置，实参 `dest_island` 和 `cpp_tgt` 的传入顺序发生了互换。这导致函数内部将 `dest_island` 的值误当作 CPP target 处理，将 `cpp_tgt` 的值误当作 destination island ID 处理，破坏了后续的地址解码与校验逻辑。
+
+#解决方案
+修正 `nfp_encode_basic_qdr()` 所有调用点的参数顺序，确保 `dest_island` 和 `cpp_tgt` 与函数定义一致。同时，在函数内部错误返回路径中增加 `pr_warn()` 打印，以便在地址验证失败时提供明确的内核日志信息，辅助后续问题定位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5e3a0b340e3e2b8159dd589437d52a79991dd6d7

@@ -1,0 +1,32 @@
+#标题
+rcu_read_unlock() 开启 ftrace 时触发 raise_softirq_irqoff 死循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 ftrace 功能的场景下，内核执行 `rcu_read_unlock()` 时陷入死循环。系统触发 WARNING 并打印调用栈，栈信息显示在 `raise_softirq_irqoff`、`trace_event_raw_event_softirq`、`__ftrace_trace_stack` 和 `rcu_read_unlock_special` 之间无限循环嵌套调用，导致 CPU 无法调度，系统失去响应。
+
+#主要错误日志
+WARNING: CPU: 0 PID: 0 at kernel/trace/trace.c:3021 __ftrace_trace_stack.constprop.0+0x172/0x180
+...
+Call Trace:
+ <IRQ>
+ trace_buffer_unlock_commit_regs+0x6d/0x220
+ trace_event_buffer_commit+0x5c/0x260
+ trace_event_raw_event_softirq+0x47/0x80
+ raise_softirq_irqoff+0x6e/0xa0
+ rcu_read_unlock_special+0xb1/0x160
+ unwind_next_frame+0x203/0x9b0
+ ...
+ __raise_softirq_irqoff+0x61/0x80
+ __flush_smp_call_function_queue+0x115/0x420
+
+#问题根因
+Commit 5f5fa7ea89dc ("rcu: Don't use negative nesting depth in __rcu_read_unlock()") 移除了 `__rcu_read_unlock()` 中的递归保护代码。当开启 ftrace 时，`rcu_read_unlock_special()` 调用 `raise_softirq_irqoff()` 会触发软中断跟踪事件（trace_event_softirq），进而调用 `__ftrace_trace_stack`。在栈回溯过程中，如果再次触发了 RCU 相关逻辑，会导致再次调用 `rcu_read_unlock_special()`，从而形成 `raise_softirq_irqoff -> trace -> stack unwind -> rcu_read_unlock_special -> raise_softirq_irqoff` 的死循环。此前针对 IRQ work 的修复（Commit b41642c87716）未覆盖 Softirq 场景，导致此漏洞存在。
+
+#解决方案
+参考 IRQ work 的修复方案，在 `rcu_read_unlock_special()` 函数中调用 `raise_softirq_irqoff()` 之前增加状态检查。具体修改为：将原 `defer_qs_iw_pending` 标志重命名为更通用的 `defer_qs_pending`，并在调用 `raise_softirq_irqoff(RCU_SOFTIRQ)` 前检查该标志是否已置位。若未置位则将其设为 `DEFER_QS_PENDING` 并触发 softirq，若已置位则跳过，从而避免重复触发 softirq 导致的死循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9ab23c18d7ee0c4735c7226edcde289849e5604a

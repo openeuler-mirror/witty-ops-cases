@@ -1,0 +1,25 @@
+#标题
+exynos_drm_vidi 内核模块直接解引用用户指针导致任意内核内存访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `vidi_connection_ioctl` 函数处理过程中，内核直接解引用用户空间传入的 `edid` 指针。这可能导致内核崩溃，更严重的是允许用户空间程序访问任意内核内存地址，造成信息泄露或权限提升，构成安全漏洞。
+
+#主要错误日志
+- DRM_DEV_DEBUG_KMS(ctx->dev, "edid data is invalid.\n")
+- DRM_DEV_DEBUG_KMS(ctx->dev, "failed to allocate raw_edid.\n")
+
+#问题根因
+在 `vidi_connection_ioctl()` 函数中，代码直接将用户空间传入的指针 `vidi->edid` 强制转换为内核指针 `(struct edid *)(unsigned long)` 并直接访问。由于未使用 `copy_from_user()` 等安全函数进行数据拷贝，内核直接访问了用户空间地址，违反了内核与用户空间数据交互的安全原则，导致任意内核内存访问风险。
+
+#解决方案
+修改 `vidi_connection_ioctl()` 函数的数据处理逻辑：
+1. 定义一个内核态的临时结构体变量 `struct edid edid_buf`。
+2. 使用 `u64_to_user_ptr()` 宏获取用户空间指针。
+3. 使用 `copy_from_user()` 将用户空间的数据安全拷贝到内核态的 `edid_buf` 中，若拷贝失败则返回 `-EFAULT`。
+4. 后续的 `drm_edid_is_valid()` 校验与 `drm_edid_duplicate()` 操作均基于内核态的 `edid_buf` 进行，避免直接操作用户空间指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4087be99f64183f092fddfae12ff7cd22aa4d312

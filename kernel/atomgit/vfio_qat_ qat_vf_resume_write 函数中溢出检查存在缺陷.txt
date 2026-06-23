@@ -1,0 +1,20 @@
+#标题
+vfio/qat: qat_vf_resume_write 函数中溢出检查存在缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel QAT SR-IOV VF 设备驱动加载或恢复过程中，若用户空间传递的数据长度（`len`）大于 `LONG_MAX`（例如接近 `SIZE_MAX` 的值），内核溢出检查逻辑可能失效。虽然后续的 `copy_from_user` 会阻止非法拷贝并返回 `-EFAULT`，但该缺陷导致前置的边界检查被绕过，且与预期的 `-EOVERFLOW` 返回值不符。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `qat_vf_resume_write()` 函数中，无符号变量 `size_t len` 被强制转换为有符号类型 `loff_t` 后传递给 `check_add_overflow()` 函数。由于目标类型为有符号数，当 `len` 值很大（大于 `LONG_MAX`）时，转换后变为负数，导致 `check_add_overflow()` 判断失误，未能正确检测到溢出。
+
+#解决方案
+移除 `check_add_overflow()` 调用中对 `len` 变量的 `(loff_t)` 强制类型转换，直接传递 `len`，确保溢出检查函数正确处理无符号数值，从而准确识别溢出情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/24816d89420a61299d0a727f8212af36cef30d12

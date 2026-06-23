@@ -1,0 +1,23 @@
+#标题
+SCSI 子系统错误处理唤醒竞态条件导致 IO 挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在高并发或故障恢复场景下，SCSI 错误处理（EH）线程可能无法被正确唤醒，导致 SCSI 设备的 IO 请求出现挂起，系统无法及时处理磁盘故障或超时命令，进而引发业务阻塞或存储服务不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+该故障由两处并发竞态条件引起：
+1. 在 `scsi_eh_inc_host_failed` 函数中，原逻辑在持有锁的情况下计算 `busy` 计数，随后才增加 `host_failed` 计数器。这导致在锁释放与增加 `host_failed` 之间存在时间窗口，使得 `scsi_dec_host_busy` 中的唤醒检查误判，从而错过错误处理线程的唤醒信号。
+2. 在 `scsi_dec_host_busy` 函数中，清除 `SCMD_STATE_INFLIGHT` 状态位与读取 `scsi_host_busy` 计数之间存在内存乱序风险。如果不加内存屏障，CPU 可能先读取了旧的 `busy` 计数，而延迟了状态位的清除可见性，导致所有 CPU 均认为仍有请求未完成或未超时，从而均不触发 EH 唤醒。
+
+#解决方案
+1. 调整锁保护范围与执行顺序：在 `scsi_eh_inc_host_failed` 中，先将 `host_failed` 计数加 1 并释放锁，随后再计算 `busy` 值，最后重新获取锁并调用 `scsi_eh_wakeup`，确保 `host_failed` 的增加对其他 CPU 可见，避免唤醒遗漏。
+2. 增加内存屏障：在 `scsi_dec_host_busy` 清除 `SCMD_STATE_INFLIGHT` 之后、读取 `scsi_host_busy` 之前插入 `smp_mb()` 内存屏障，确保状态位的清除在其他 CPU 读取忙碌计数之前已完全可见，防止因指令重排导致的竞态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0800d4343ccff2555fdcba9bbe2e2a36b6199a9c

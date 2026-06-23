@@ -1,0 +1,27 @@
+#标题
+ACPICA: acpi parse 和 parseext 缓存泄漏问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中，ACPI 解析器相关的内核内存对象（parse object）未被正确释放，导致内核内存泄漏。在执行 ACPI 方法解析时，若遇到 `AE_CTRL_TERMINATE` 控制信号或其他解析错误，内存泄漏现象尤为明显。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `acpi_ps_complete_final_op` 中，处理解析状态机退出逻辑存在缺陷：
+1. 当解析状态为 `AE_CTRL_TERMINATE` 时，原代码逻辑直接返回，跳过了后续的 `acpi_ps_pop_scope` 清理循环，导致栈上的 parse object 未被弹出和释放。
+2. 当解析过程中发生错误（`ACPI_FAILURE(status)`）时，代码直接返回，同样跳过了清理流程。
+这导致在异常或控制流退出路径上，用于解析操作的缓存对象发生泄漏。
+
+#解决方案
+重构 `acpi_ps_complete_final_op` 函数的错误处理与退出逻辑：
+1. 引入 `ascending` 布尔变量来控制是否执行 `ascending_callback`，取代原有的直接 `return` 逻辑。
+2. 当遇到 `AE_CTRL_TERMINATE` 或解析错误时，不再直接退出函数，而是将 `ascending` 置为 `FALSE`，并记录返回状态 `return_status`。
+3. 确保代码继续执行 `acpi_ps_complete_this_op` 清理当前操作对象，并继续执行后续的 `do...while` 循环，直到调用 `acpi_ps_pop_scope` 将所有栈上的 parse object 清理完毕。
+4. 最终返回记录的 `return_status`，保证资源正确释放的同时正确传递返回状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/731cf625df02f31d792398cabfa812fa01f1161a

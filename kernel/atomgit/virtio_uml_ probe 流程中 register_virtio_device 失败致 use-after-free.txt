@@ -1,0 +1,20 @@
+#标题
+virtio_uml: probe 流程中 register_virtio_device 失败致 use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 User-Mode Linux (UML) 环境下加载 virtio_uml 驱动时，若 `register_virtio_device` 注册失败，内核会发生 use-after-free 错误。由于错误处理路径中调用 `put_device` 释放了设备结构体，但函数随后继续执行并返回，导致后续对已释放内存的访问或状态引用异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `virtio_uml_probe` 函数中，当 `register_virtio_device` 调用失败时，代码执行了 `put_device(&vu_dev->vdev.dev)` 来释放设备引用。然而，释放后并未立即返回，而是继续向下执行并返回 rc 错误码。这导致在 `put_device` 释放设备后，函数仍未退出当前上下文，触发了 use-after-free 问题。
+
+#解决方案
+修改 `virtio_uml_probe` 函数的错误处理路径：在 `register_virtio_device` 失败分支中，调用 `put_device` 释放设备后，立即增加 `return rc` 语句返回，确保函数不再继续执行后续代码，从而避免对已释放设备的访问。同时，修正成功路径的返回值从 `return rc` 改为 `return 0` 以保证逻辑正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d20141cec400520a9d44f17bf0b094084e0c5cee

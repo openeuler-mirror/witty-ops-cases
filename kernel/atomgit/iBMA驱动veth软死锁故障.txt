@@ -1,0 +1,20 @@
+#标题
+iBMA驱动veth软死锁故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+iBMA驱动的veth功能触发soft lockup（软死锁），导致系统响应异常或卡顿。
+
+#主要错误日志
+未知
+
+#问题根因
+在`submit_dma_queue_sq`函数中，通过`wmb()`写内存屏障将SQ（Submission Queue）缓冲区描述符写入本地SQ后，缺乏必要的同步机制。由于CPU写操作可能与DMA控制器的读取操作存在乱序或未完成同步，导致DMA控制器未及时看到更新的SQ描述符，从而引发驱动流程停滞，最终导致soft lockup。
+
+#解决方案
+在设置SQ tail之前，增加一次DMA预读取同步操作。具体为：显式调用`readl`读取SQ缓冲区描述符的最后一个u32数据。该操作确保之前的写操作（缓冲区描述符）已完全刷新到设备侧，实现CPU与DMA控制器之间的数据同步，从而避免死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c3ea63d56c76f1ee54838703d70f4bda01bcb2aa

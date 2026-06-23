@@ -1,0 +1,24 @@
+#标题
+udf: inode_bmap错误处理缺陷导致潜在内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在UDF文件系统执行特定操作（如ftruncate文件截断）时，若底层辅助函数`udf_next_aext()`遇到错误，`inode_bmap()`无法正确传递错误码，导致调用者（如`udf_extend_file()`）无法感知异常。这可能导致内核在无效的内存偏移或状态下继续操作，进而引发系统崩溃或内核恐慌。该问题由syzbot syzkaller工具发现。
+
+#主要错误日志
+未知
+
+#问题根因
+`inode_bmap()` 函数原本的返回值类型为 `int8_t`，用于返回 extent 类型。当其调用的 `udf_next_aext()` 函数内部发生错误时（例如读取磁盘块失败），`inode_bmap()` 仅返回 -1，掩盖了具体的错误码（errno）。由于无法区分“到达EOF”和“发生I/O错误”这两种情况，上层调用者无法进行正确的错误处理流程，导致系统在不稳定的状态下继续运行。
+
+#解决方案
+重构 `inode_bmap()` 函数的返回值机制，将其改为返回 `int` 类型的错误码或状态标识：
+1.  将返回值类型从 `int8_t` 修改为 `int`，约定返回 1 表示成功，0 表示到达 EOF，负值表示具体错误码。
+2.  新增 `etype` 指针参数用于回传 extent 类型。
+3.  修改函数内部逻辑，使其能将 `udf_next_aext()` 的错误码正确向上传递。
+4.  同步修改所有调用 `inode_bmap()` 的位置（包括 `udf_map_block`、`udf_extend_file`、`udf_truncate_extents` 等），使其适配新的接口，并显式检查返回值中的错误状态，避免在错误发生后继续执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5406dd0c0ad781ed420c4a37a771c79ad6dcc31c

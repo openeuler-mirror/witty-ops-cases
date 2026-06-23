@@ -1,0 +1,24 @@
+#标题
+net: phy: leds: 修复 phy_led_triggers 注册与注销流程中的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PHY 设备驱动运行过程中，特别是进行设备注销或注册失败的场景下，内核内存会发生泄漏。若进行相关测试（如 kmemleak 检测），可观测到 `phy_led_trigger` 相关结构的内存块未被正确释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `phy_led_triggers_register` 函数中，`phy->led_link_trigger` 和 `phy->phy_led_triggers` 使用了托管内存分配函数（如 `devm_kzalloc`）。然而，在后续的错误处理路径（如 `led_trigger_register` 失败时的 `goto` 分支）以及 `phy_led_triggers_unregister` 函数中，代码显式调用了 `kfree`（或补丁前尝试用 `devm_kfree` 但逻辑不完整）来释放内存。
+由于 `phy_led_triggers_unregister` 仅执行注销操作，并不触发设备资源的自动释放，导致这些托管内存无法被设备资源管理器自动回收，也没有在代码逻辑中被有效释放，从而造成内存泄漏。
+
+#解决方案
+将内存分配方式从托管内存（`devm_kzalloc`/`devm_kcalloc`）改为非托管内存（`kzalloc`/`kcalloc`），并修改对应的释放逻辑：
+1. 在 `phy_led_triggers_register` 中，将 `devm_kzalloc` 替换为 `kzalloc`，将 `devm_kcalloc` 替换为 `kcalloc`。
+2. 在注册失败处理的错误分支中，将 `devm_kfree` 替换为 `kfree`，确保失败路径内存被正确释放。
+3. 在 `phy_led_triggers_unregister` 函数中，补充调用 `kfree` 显式释放 `phy->phy_led_triggers` 和 `phy->led_link_trigger`，并将指针置空。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8f5fd0d66d799f75491e382b0b1e2eaf936a1233

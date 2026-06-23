@@ -1,0 +1,20 @@
+#标题
+hns3驱动PHY寄存器读取失败时错误码丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `hclge_mii_ioctl` 进行 PHY 寄存器读取操作（SIOCGMIIREG）时，即使底层硬件读取失败，ioctl 调用依然返回成功（返回值 0），导致上层应用或工具无法感知读取操作已失败，可能错误地使用了无效的寄存器值。
+
+#主要错误日志
+"failed to read phy reg, ret = %d.\n"
+
+#问题根因
+函数 `hclge_read_phy_reg` 原实现将命令发送失败的错误码打印日志后直接丢弃，函数返回值为读取的寄存器值（u16 类型），无法向上层传递错误状态。调用方 `hclge_mii_ioctl` 在处理 `SIOCGMIIREG` 命令时，未检查读取结果的有效性，无条件返回 0，导致错误被掩盖。
+
+#解决方案
+修改 `hclge_read_phy_reg` 函数原型，将返回值类型由 `u16` 改为 `int` 用于传递错误码，并通过指针参数回传读取的寄存器值。在函数内部，当命令发送失败时直接返回错误码。同步修改 `hclge_mii_ioctl` 调用逻辑，直接返回 `hclge_read_phy_reg` 的执行结果，确保底层错误能正确传递给用户态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e978f8c944e321224e0d62bb8f556a40a70c9b62

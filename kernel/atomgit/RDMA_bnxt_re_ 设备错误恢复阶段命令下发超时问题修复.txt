@@ -1,0 +1,22 @@
+#标题
+RDMA/bnxt_re: 设备错误恢复阶段命令下发超时问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA bnxt_re 设备处于错误恢复流程（Error Recovery）期间，特别是设备处于 `ERR_DEVICE_DETACHED` 状态时，驱动程序继续向固件发送命令。由于此时固件无法处理命令，导致命令执行超时（timeout），进而引发错误恢复序列异常或阻塞。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **错误状态处理不当**：函数 `__send_message_basic_sanity()` 检测到设备处于 `ERR_DEVICE_DETACHED` 状态时，原本返回的是经过映射的错误码，未能准确传达“设备不存在/不可用”的含义，导致上层逻辑可能尝试重试或等待。
+2. **无效操作引发副作用**：在 `bnxt_re_dev_stop()` 函数中调用了 `bnxt_re_modify_qp()` 尝试修改 QP 状态。该操作在设备停止过程中被视为无效，且可能触发额外的命令下发，干扰了错误恢复流程。
+
+#解决方案
+1. **修正错误返回码**：修改 `__send_message_basic_sanity()`，当检测到 `ERR_DEVICE_DETACHED` 标志位时，直接返回 `-ENXIO`，明确指示设备不可用状态，避免驱动继续尝试向固件发送命令。
+2. **移除无效调用**：从 `bnxt_re_dev_stop()` 中移除 `bnxt_re_modify_qp()` 的调用代码，确保在设备停止过程中不再尝试修改 QP 状态，简化错误处理路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/27f12afd6fd7af3e40809e2773ac58b587f79e05

@@ -1,0 +1,22 @@
+#标题
+smb3: mount to ksmbd 触发 KASAN slab-out-of-bounds
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 KASAN 的环境下，挂载（mount）至 ksmbd 服务时，内核触发 KASAN 检测到的越界读取错误，导致 `mount` 进程崩溃或报告异常。
+
+#主要错误日志
+BUG: KASAN: slab-out-of-bounds in parse_server_interfaces+0x14ee/0x1880 [cifs]
+Read of size 4 at addr ffff8881433dba98 by task mount/9827
+cifs_dbg(VFS): "%s: invalid Next pointer %zu > %zd\n" (推断，修复补丁新增的告警日志)
+
+#问题根因
+`parse_server_interfaces` 函数在解析服务器接口信息时，缺少对 `Next` 指针的有效性检查。当服务器返回的数据中 `Next` 指针指向超出缓冲区末尾的位置时，循环继续解析导致读取越界。
+
+#解决方案
+在 `fs/smb/client/smb2ops.c` 的 `parse_server_interfaces` 函数循环中增加边界检查：判断 `next` 值是否大于剩余字节数 `bytes_left`。如果超出则打印 VFS 错误日志并返回 `-EINVAL`，防止指针越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e6d9b9ce3b80f55355c97c01b971fcaa2d05aa00

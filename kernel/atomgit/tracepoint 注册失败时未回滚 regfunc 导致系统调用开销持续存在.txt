@@ -1,0 +1,24 @@
+#标题
+tracepoint 注册失败时未回滚 regfunc 导致系统调用开销持续存在
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内存压力下注册 tracepoint 失败（如 -ENOMEM）时，系统出现资源泄漏。对于 syscall 类型的 tracepoint，具体表现为：
+1. sys_tracepoint_refcount 计数器卡在非零值，无法归零。
+2. 所有进程的 SYSCALL_TRACEPOINT 标志位被设置且无法清除。
+3. 系统持续承受 syscall 进入/退出的跟踪开销，直到重启才能恢复。
+
+#主要错误日志
+未知
+
+#问题根因
+在 tracepoint 状态从 0 变为 1 的过程中，`tracepoint_add_func()` 会先调用 `ext->regfunc()`（例如设置系统调用跟踪标志），随后尝试通过 `func_add()` 安装新的探测函数。
+如果 `func_add()` 执行失败（例如 `allocate_probes()` 分配内存失败返回 -ENOMEM），函数直接返回错误，但未调用对应的 `ext->unregfunc()` 进行清理。这导致 `regfunc()` 产生的副作用（如引用计数增加、标志位设置）保留在系统中，造成了状态不一致和性能开销泄漏。
+
+#解决方案
+在 `tracepoint_add_func()` 函数中，针对 `func_add()` 失败的错误处理路径增加回滚逻辑。具体修改为：判断若存在 `unregfunc` 且静态键（static key）未启用（符合 0->1 失败的上下文），则调用 `tp->unregfunc()` 进行清理。此举确保了注册过程的对称性，失败时能正确撤销 `regfunc()` 产生的影响。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/32c55f5b4c18d58e5d2ae6dfe654e6afcc5e7b0c

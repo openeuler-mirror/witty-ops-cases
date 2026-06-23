@@ -1,0 +1,27 @@
+#标题
+f2fs extent node 破坏与回写竞态导致 kernel panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 f2fs 文件系统中，当执行 inode 销毁流程（如 iput -> f2fs_drop_inode）时，若此时并发 kworker 正在进行回写操作，会触发竞态条件。该竞态导致 `__destroy_extent_node` 中的 `node_cnt` 计数不为 0，进而触发 `f2fs_bug_on()` 导致内核 panic 或 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+`f2fs_destroy_extent_node()` 在清理 extent 节点之前未设置 `FI_NO_EXTENT` 标志。当该函数被 `f2fs_drop_inode()` 调用且 `I_SYNC` 已置位时，并发的 kworker 回写线程可能会向同一个 extent tree 中插入新的 extent 节点。
+具体竞态过程如下：
+1. 销毁线程：执行 `__destroy_extent_node` 循环，持有 `et->lock` 锁释放节点，释放后 node_cnt 减为 0。
+2. 回写线程：在销毁线程释放锁的间隙，调用 `__writeback_single_inode` -> `f2fs_update_read_extent_cache` -> `__update_extent_tree_range`。
+3. 由于未检查到 `FI_NO_EXTENT` 标志（或该标志仅针对 EX_READ 类型检查），回写线程成功插入了新的 extent 节点。
+4. 销毁线程：循环退出后检测到 `node_cnt > 0`（因为回写线程插入了新节点），触发 `f2fs_bug_on(node_cnt)` 异常。
+此外，原代码中 `__update_extent_tree_range()` 仅对 EX_READ 类型检查 `FI_NO_EXTENT`，导致 EX_BLOCK_AGE 类型的更新完全未受保护。
+
+#解决方案
+1. 在 `__destroy_extent_node()` 函数中，持有 `et->lock` 锁时检查并设置 `FI_NO_EXTENT` 标志，确保在销毁过程中阻止新节点插入，保持与其他调用者（如 `__update_extent_tree_range` 和 `__drop_extent_tree`）的一致性。
+2. 修改 `__may_extent_tree()` 和 `__update_extent_tree_range()` 函数，将对 `FI_NO_EXTENT` 标志的检查提前并统一应用到所有 extent 类型（包括 EX_READ 和 EX_BLOCK_AGE），确保在设置该标志后，所有类型的 extent 更新操作都能正确退出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c696eb630ed34775da8263ae6bc5d8fd7b59710f

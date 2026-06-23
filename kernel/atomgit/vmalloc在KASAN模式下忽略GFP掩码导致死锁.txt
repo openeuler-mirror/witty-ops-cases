@@ -1,0 +1,23 @@
+#标题
+vmalloc在KASAN模式下忽略GFP掩码导致死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 XFS 文件系统时，由于其调用 vmalloc 传入 GFP_NOFS 标志，但在 KASAN 开启的情况下，`kasan_populate_vmalloc()` 及其辅助函数忽略了调用者传入的 gfp_mask，强制使用硬编码的 GFP_KERNEL 标志进行内存分配和页表操作。这破坏了 GFP_NOFS/GFP_NOIO 的语义，导致系统发生死锁。
+
+#主要错误日志
+未知
+
+#问题根因
+`kasan_populate_vmalloc()` 及其辅助函数在进行影子内存填充时，忽略了调用者传入的 `gfp_mask`，始终使用硬编码的 `GFP_KERNEL` 标志进行内存分配。此外，在 `apply_to_page_range()` 调用期间进行的页表分配也忽略了外部的 `gfp_mask`。这导致 `vmalloc` 原本支持的 GFP_NOFS 和 GFP_NOIO 分配语义失效，在 XFS 等调用 `vmalloc(GFP_NOFS)` 的场景下引发死锁。
+
+#解决方案
+修改 `kasan_populate_vmalloc()` 及相关内部函数，使其接受并传递 `gfp_mask` 参数：
+1. 将 `gfp_mask` 向下传递给 `alloc_pages_bulk()` 和 `__get_free_page()` 等内存分配接口。
+2. 在 `apply_to_page_range()` 调用前后，根据 `gfp_mask` 的类型（GFP_NOFS 或 GFP_NOIO）使用 `memalloc_nofs_save()/restore()` 或 `memalloc_noio_save()/restore()` 包装，以强制执行相应的内存分配约束，保证页表分配也遵循调用者的意图。
+3. 同步更新 vmalloc.c 和 percpu 分配器中的调用点。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c147c3587d20d8b3283e9aa68382624540763345

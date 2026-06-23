@@ -1,0 +1,22 @@
+#标题
+iommu/amd: 更新 DTE 时因覆盖默认字段导致配置丢失风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD IOMMU 驱动更新设备表项（DTE）的 Host Page Table Root 字段时，错误地覆盖了之前由 `make_clear_dte()` 函数写入的默认必填字段（如 DTE[V] 有效位）。虽然当前代码逻辑中存在冗余赋值掩盖了该问题，但逻辑上存在配置丢失的风险，可能导致 IOMMU 设备行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `set_dte_entry()` 函数中，更新页表根指针（page table root）时使用了赋值操作（`=`）而非按位或操作（`|=`）。这导致 `new.data[0]` 中原有的默认字段值（如 DTE_FLAG_V）被直接覆盖重写，破坏了 DTE 的初始配置状态。
+
+#解决方案
+修改 `drivers/iommu/amd/iommu.c` 文件中的 `set_dte_entry()` 函数：
+1. 将页表根指针的更新方式从直接赋值修改为按位或赋值（`new.data[0] |= ...`），以保留 `make_clear_dte()` 设置的默认字段。
+2. 移除后续冗余的 `DTE_FLAG_V` 赋值语句，因为默认字段已被正确保留，无需重复设置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e3cd879c68520e9ef2667b6c903192fa29a270c0

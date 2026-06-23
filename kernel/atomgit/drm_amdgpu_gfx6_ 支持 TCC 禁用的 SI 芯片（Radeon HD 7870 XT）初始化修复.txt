@@ -1,0 +1,26 @@
+#标题
+drm/amdgpu/gfx6: 支持 TCC 禁用的 SI 芯片（Radeon HD 7870 XT）初始化修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Radeon HD 7870 XT（Tahiti LE）显卡在 Linux 开源驱动下无法正常工作，此前从未成功运行过。由于该型号属于“Harvested”芯片（部分功能单元被屏蔽的廉价版），部分 TCC（Texture Channel Caches）和内存通道被硬件禁用，导致驱动初始化配置不当，可能引发图形功能异常或严重的游戏性能下降。
+
+#主要错误日志
+未知
+
+#问题根因
+部分 SI（Southern Islands）架构芯片如 Radeon HD 7870 XT 属于“Harvested”版本，其部分 TCC（L2 缓存相关）在硬件层面已被禁用和熔断。驱动程序在初始化时未检测和处理被禁用的 TCC，导致：
+1. TCP（Texture Cache Pipe）通道仍在尝试使用已被禁用的 TCC。
+2. `TCP_ADDR_CONFIG` 寄存器中的 `NUM_TCC_BANKS` 数量设置错误，导致缓存抖动。
+这导致硬件配置错误，引发功能失效或性能严重受损。
+
+#解决方案
+在 `gfx_v6_0_constants_init` 流程中新增 `gfx_v6_0_setup_tcc` 函数，专门处理 TCC 禁用的情况：
+1. 读取 `CGTS_TCC_DISABLE` 和 `CGTS_USER_TCC_DISABLE` 寄存器，获取当前被禁用的 TCC 掩码。
+2. 若存在被禁用的 TCC，则重新映射 `TCP_CHAN_STEER_LO/HI` 寄存器，确保 TCP 通道跳过被禁用的 TCC，仅使用活跃的 TCC，并保持原有的映射顺序以维持最佳性能。
+3. 更新 `TCP_ADDR_CONFIG` 寄存器中的 `NUM_TCC_BANKS` 字段，将其限制为实际活跃的 TCC 数量，避免因重复使用同一 TCC 导致的缓存抖动。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c501db8a6a805fdf5044d35828933f42a353f78a

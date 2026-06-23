@@ -1,0 +1,20 @@
+#标题
+xfs: 条件性限制 S_DAX 状态下 FS_XFLAG_REALTIME 标志位的修改
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在文件已启用 S_DAX 标志（fsdax 访问模式）的情况下，用户试图修改文件的 REALTIME 标志位时，内核未进行充分的设备兼容性检查。这可能导致在数据设备或实时设备不支持 fsdax 模式的情况下错误地切换设备标志，从而引发潜在的内存损坏、数据访问错误或内核崩溃风险；特别是在修改标志的线程与正在进行写入操作的线程之间存在竞态条件时。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于内核未对已启用 S_DAX 标志的文件进行严格的设备能力校验。当文件处于 S_DAX 模式时，如果允许随意修改 REALTIME 标志（即切换数据存储设备），而目标设备（datadev 或 rtdev）不支持 fsdax，将导致访问模式不一致。此外，setattr 线程可能与其他已进入写入路径的线程发生竞态，导致严重的并发问题。该缺陷引入于提交 ba23cba9b3bdc ("fs: allow per-device dax status checking for filesystems")。
+
+#解决方案
+在 `xfs_ioctl_setattr_xflags` 函数中增加检查逻辑：如果文件当前设置了 S_DAX 标志，则必须确保主数据设备（`m_ddev_targp`）支持 fsdax，且若存在实时设备（`m_rtdev_targp`），该设备也必须支持 fsdax。若上述条件不满足，则禁止修改 REALTIME 标志并返回 `-EINVAL` 错误，以此防止不兼容的设备切换和潜在的竞态风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/18cfc7afee8c9c560673c40aae15aade7727d95c

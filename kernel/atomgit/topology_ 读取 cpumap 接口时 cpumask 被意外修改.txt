@@ -1,0 +1,20 @@
+#标题
+topology: 读取 cpumap 接口时 cpumask 被意外修改
+
+#内核版本
+OLK-6.6
+
+#问题现象
+读取系统中 topology 相关的 cpumap 接口文件（如 `core_siblings`、`thread_siblings` 等）时，用户态获取到的 CPU 掩码信息可能被损坏或发生改变，导致看到的 CPU 拓扑信息与实际不一致，影响依赖拓扑信息的上层应用调度或诊断。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `topology.c` 的 `name##_read` 和 `name##_list_read` 函数中，直接将 `topology_##mask(dev->id)` 作为参数传递给 `cpumap_print_bitmask_to_buf` 和 `cpumap_print_list_to_buf` 函数。这两个打印函数内部可能会修改传入的 cpumask 参数，导致原始的拓扑位掩码被意外篡改。
+
+#解决方案
+在读取并打印 cpumask 之前，先分配一个临时的 cpumask 变量，将原始掩码拷贝到临时变量中，然后将临时变量传递给打印函数。这样确保了原始的拓扑 cpumask 保持不变，避免了副作用。具体修改为：增加 `alloc_cpumask_var` 分配内存，使用 `cpumask_copy` 拷贝数据，处理完后调用 `free_cpumask_var` 释放内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0e868d3d053a96a511193185182c245585d32f42

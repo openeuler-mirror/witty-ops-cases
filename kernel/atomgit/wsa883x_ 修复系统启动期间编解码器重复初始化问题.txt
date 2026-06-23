@@ -1,0 +1,28 @@
+#标题
+wsa883x: 修复系统启动期间编解码器重复初始化问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Lenovo ThinkPad X13s 等设备启动过程中，WSA883X 音频编解码器被反复多次初始化。通过内核日志可观察到同一设备在短时间内打印了多次版本信息，表明初始化流程未被正确保护，导致了不必要的重复操作。
+
+#主要错误日志
+[   11.614523] wsa883x-codec sdw:1:0:0217:0202:00:1: WSA883X Version 1_1, Variant: WSA8835_V2
+[   11.618022] wsa883x-codec sdw:1:0:0217:0202:00:1: WSA883X Version 1_1, Variant: WSA8835_V2
+[   11.621377] wsa883x-codec sdw:1:0:0217:0202:00:1: WSA883X Version 1_1, Variant: WSA8835_V2
+[   11.624065] wsa883x-codec sdw:1:0:0217:0202:00:1: WSA883X Version 1_1, Variant: WSA8835_V2
+[   11.631382] wsa883x-codec sdw:1:0:0217:0202:00:2: WSA883X Version 1_1, Variant: WSA8835_V2
+[   11.634424] wsa883x-codec sdw:1:0:0217:0202:00:2: WSA883X Version 1_1, Variant: WSA8835_V2
+
+#问题根因
+SoundWire 总线的 `update_status()` 回调函数在设备状态未发生变化时（即多次收到相同的 ATTACHED 状态）也会被调用。原代码逻辑未判断状态是否发生了实际转换（从 UNATTACHED 到 ATTACHED），导致编解码器在启动阶段被重复初始化。
+
+#解决方案
+在 `wsa883x_priv` 结构体中新增 `hw_init` 布尔标志位。
+1. 在初始化函数 `wsa883x_init()` 入口处检查 `hw_init`，若已初始化则直接返回，避免重复执行。
+2. 初始化成功后将 `hw_init` 置为 true。
+3. 在状态更新回调 `wsa883x_update_status()` 中，若检测到设备状态变为 `SDW_SLAVE_UNATTACHED`，则将 `hw_init` 重置为 false，确保设备重新挂载时能正确初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/81232d67bb65a203cbc0daad696c9bbeeb97ca66

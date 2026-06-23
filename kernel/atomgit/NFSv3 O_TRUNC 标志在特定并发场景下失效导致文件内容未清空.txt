@@ -1,0 +1,20 @@
+#标题
+NFSv3 O_TRUNC 标志在特定并发场景下失效导致文件内容未清空
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当两个客户端同时挂载同一个 NFSv3 目录时，若 client1 首先访问某文件产生 negative dentry（负缓存项），随后 client2 创建该文件并写入数据，接着 client1 使用 O_TRUNC 标志打开该文件（如 `echo HELLO > afile`）并写入新数据，最后读取文件内容时，会发现新写入的数据追加在旧数据之后，而非预期的覆盖旧数据。即 O_TRUNC 标志未生效，文件未被截断。
+
+#主要错误日志
+未知
+
+#问题根因
+在 NFSv3 代码路径中，未实现 `atomic_open` 接口。当执行 `lookup_open()` 时，如果存在 negative dentry，内核会进入 "just create a file" 分支。该分支假设文件将由当前操作创建，因此设置了 `FMODE_CREATED` 标志。由于 `do_open()` 检测到 `FMODE_CREATED` 被设置，会主动清除 `O_TRUNC` 标志。然而，实际上文件可能已被其他客户端创建，导致当前操作本质上是“打开已存在文件”而非“创建新文件”，从而导致 `O_TRUNC` 被错误地清除，文件内容未被截断。
+
+#解决方案
+为 NFSv2 和 NFSv3 实现 `atomic_open` 方法（`nfs_atomic_open_v23`）。该实现复用了 `lookup_open()` 的部分逻辑，但在处理 `O_CREAT` 时引入了 `nfs_do_create` 函数。`nfs_do_create` 函数在执行创建操作前会显式检查 `O_TRUNC` 标志，若存在则设置 `ATTR_SIZE` 属性将文件大小截断为 0，从而确保在打开已由其他客户端创建的文件时，`O_TRUNC` 标志能被正确处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/946781da7ea985e9dca1a1d683782a1353d03740

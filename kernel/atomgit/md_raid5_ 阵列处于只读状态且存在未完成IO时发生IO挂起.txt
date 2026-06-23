@@ -1,0 +1,25 @@
+#标题
+md/raid5: 阵列处于只读状态且存在未完成IO时发生IO挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RAID10（或 RAID5）阵列中进行测试，删除阵列中所有磁盘后执行读操作，系统发生 IO 挂起。具体复现步骤如下：
+1. 创建 raid10 阵列（/dev/md0）。
+2. 依次删除底层所有磁盘。
+3. 执行 dd 读操作，进程无法退出且 IO 无响应。
+
+#主要错误日志
+未知
+
+#问题根因
+当阵列中所有磁盘被移除且 IO 失败处理流程中设置 badblocks 失败时，阵列状态变为只读，并置位 `MD_SB_CHANGE_PENDING` 标志。
+由于代码逻辑未区分读写状态，在处理失败的条带时，`handle_stripe` 检测到 `MD_SB_CHANGE_PENDING` 置位后仅重新排队条带而不进行处理；随后 `raid5d` 线程尝试更新超级块，但因阵列只读导致 `MD_SB_CHANGE_PENDING` 无法清除，进而陷入死循环，导致 IO 永久挂起。
+
+#解决方案
+修改 `drivers/md/raid5.c`，在检查 `MD_SB_CHANGE_PENDING` 标志前增加 `md_is_rdwr()` 判断。
+对于只读阵列，跳过对 `MD_SB_CHANGE_PENDING` 的检查，允许条带处理流程继续执行，从而避免死循环导致的 IO 挂起。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4a564218592d60c738e31d24fb49b2325c68b448

@@ -1,0 +1,20 @@
+#标题
+fs/dcache: 修复 shrink_dentry_list 中的错误解锁平衡问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行目录项收缩流程时，内核检测到锁状态不平衡，导致系统报错，可能引发内核 Panic 或调用栈转储，影响文件系统操作的稳定性。
+
+#主要错误日志
+BUG: bad unlock balance in shrink_dentry_list!
+
+#问题根因
+在 `shrink_lock_dentry` 函数中，当获取嵌套锁（`dentry->d_lock`）后，代码仅检查了引用计数（`dentry->d_lockref.count`）是否为 0。若此时 `dentry->d_inode` 已发生变化（即 `inode != dentry->d_inode`），函数逻辑未能正确处理，导致后续流程中出现双重解锁或在持有锁的情况下错误跳转，破坏了锁的平衡性。
+
+#解决方案
+在 `shrink_lock_dentry` 函数中增加对 inode 一致性的校验。在持有 `dentry->d_lock` 后，将判断条件从单一检查引用计数修改为同时检查引用计数和 inode 是否匹配（`!dentry->d_lockref.count && inode == dentry->d_inode`），确保仅在状态一致时返回 true，否则正确释放父目录锁并跳转到 out 标签处理，从而避免错误的解锁流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/edd6049508f7dda4bd8563c8253833277ad917d1

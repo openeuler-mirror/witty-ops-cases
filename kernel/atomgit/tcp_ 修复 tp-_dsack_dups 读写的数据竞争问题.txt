@@ -1,0 +1,22 @@
+#标题
+tcp: 修复 tp->dsack_dups 读写的数据竞争问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 KCSAN（内核并发访问检测器）的情况下，内核报告发现数据竞争。具体表现为 `tcp_get_timestamping_opt_stats()` 函数在无锁状态下读取 `tp->dsack_dups` 时，可能与 `tcp_dsack_seen()` 函数中对该变量的写入操作发生并发冲突，触发 KCSAN 警告。
+
+#主要错误日志
+未知
+
+#问题根因
+`tcp_get_timestamping_opt_stats()` 函数被设计为有意在无锁状态下运行以提高性能，而代码中直接读取 `tp->dsack_dups` 变量未使用 `READ_ONCE()` 注解。与此同时，`tcp_input.c` 中的 `tcp_dsack_seen()` 函数会修改该变量。由于缺乏适当的并发访问标注，KCSAN 检测到这种无锁读取与写入之间存在潜在的数据竞争风险。
+
+#解决方案
+遵循内核并发访问规范，对 `tp->dsack_dups` 的读写操作添加注解以消除数据竞争告警：
+1. 在 `tcp_get_timestamping_opt_stats()` 中读取 `tp->dsack_dups` 时，添加 `READ_ONCE()` 包装，确保读取操作的原子性可见性。
+2. 在 `tcp_dsack_seen()` 中更新 `tp->dsack_dups` 时，添加 `WRITE_ONCE()` 包装，确保写入操作的原子性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/62477219e7179b250485b2189cf88f8afbd8289c

@@ -1,0 +1,28 @@
+#标题
+imx214 摄像头传感器驱动链路频率校验错误导致初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 imx214 摄像头传感器的设备在驱动初始化过程中，因链路频率校验不匹配导致探测失败，设备无法正常工作。在设备树（DT）配置了正确硬件频率的情况下，驱动仍错误地拒绝加载，提示频率不支持。
+
+#主要错误日志
+- `link-frequencies 480000000 not supported, Please review your DT`
+- `link-frequencies 600000000 not supported, please review your DT`（推断，修复后若DT不匹配且非旧值时的报错）
+
+#问题根因
+驱动代码中宏定义的 `IMX214_DEFAULT_LINK_FREQ` 值长期错误地设定为 480000000（480MHz）。
+根据 Sony IMX214 传感器手册（Section 3.1.4 与 5.3）及 PLL 寄存器配置计算：
+1. 在 24MHz 输入时钟、单 PLL 模式下，OPPXCK 为 120MHz。
+2. 输出比特率计算公式为 `OPPXCK * reg 0x113[7:0]`，即 `120MHz * 10 = 1200Mbit/s`。
+3. 考虑 DDR 倍频，实际链路频率应为 600MHz。
+驱动定义的错误值（480MHz）与硬件实际规格（600MHz）不符，导致驱动在校验设备树提供的频率时失败。
+
+#解决方案
+1. 修正宏定义：将 `IMX214_DEFAULT_LINK_FREQ` 从 480000000 修改为 600000000，使其与硬件规格匹配。
+2. 兼容性处理：新增 `IMX214_DEFAULT_LINK_FREQ_LEGACY` 宏保留旧值 480000000。
+3. 优化校验逻辑：在校验设备树频率时，优先匹配新的正确频率；若匹配失败且设备树配置为旧频率，则打印警告信息并继续执行以保持向后兼容；若两者均不匹配，则返回错误并使用 `dev_err_probe` 记录日志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58163e4105ac28cb4ebfc85f7c424b48bfa2c783

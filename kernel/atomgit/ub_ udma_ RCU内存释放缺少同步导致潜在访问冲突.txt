@@ -1,0 +1,24 @@
+#标题
+ub: udma: RCU内存释放缺少同步导致潜在访问冲突
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 udma 驱动执行 check tp active 流程时，若驱动需要释放 RCU 内存，由于缺少同步操作，可能导致内存被过早释放引发 Use-After-Free 或内核崩溃；同时发现部分控制队列接口未对 service_ver 进行校验。
+
+#主要错误日志
+dev_err(udev->dev, "unsupported service version (%u).\n", service_ver);
+dev_err(udev->dev, "check tp status failed, ret(%d).\n", ret);
+dev_err(udev->dev, "send check tp active ctrlq msg failed, ret(%d).\n", ret);
+
+#问题根因
+在 `udma_ctrlq_check_tp_status` 和 `udma_ctrlq_check_tp_active` 函数中，内存释放逻辑存在问题。代码在 RCU 读临界区外直接调用 `kfree` 释放内存，或者在需要 RCU 释放的场景下直接释放，未执行 RCU 同步操作。根据 Commit 描述，若驱动需要释放 RCU 内存，必须执行操作以同步 RCU 信息，否则可能导致内存访问冲突。
+
+#解决方案
+1. 定义包含 `rcu_head` 的包装结构体 `udma_tp_active_req_info` 和 `udma_tp_active_rsq_info`，将原有的请求和响应信息结构体封装其中。
+2. 将原来的 `kfree` 调用替换为 `kfree_rcu`，确保在 RCU 读侧临界区完全退出前，内存不会被释放，从而修复潜在的内存访问冲突。
+3. 增加对 `service_ver` 的校验，拒绝不支持的版本（非 UBASE_CTRLQ_SER_VER_01），返回 `-EOPNOTSUPP`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9a683f1a29e063f6b1a7fd248a7cbecfa1677e4c

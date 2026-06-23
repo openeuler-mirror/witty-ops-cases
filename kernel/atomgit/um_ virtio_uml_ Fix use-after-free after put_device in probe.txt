@@ -1,0 +1,20 @@
+#标题
+um: virtio_uml: Fix use-after-free after put_device in probe
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 virtio_uml_probe() 函数中，当 register_virtio_device() 注册失败时，代码逻辑错误地继续执行并将 `vu_dev->registered` 标记为 1，随后返回错误码。这导致设备状态与实际情况不符（设备已释放或未注册但标记为已注册），进而引发释放后使用或其它内核异常问题。
+
+#主要错误日志
+未知
+
+#问题根因
+当 `register_virtio_device()` 失败时，代码调用了 `put_device(&vu_dev->vdev.dev)` 释放设备引用，但并未立即返回，而是继续向下执行了 `vu_dev->registered = 1` 赋值操作。由于设备注册实际上已失败且引用计数已减少，该错误的赋值操作导致了后续潜在的 use-after-free 或状态不一致问题。
+
+#解决方案
+修改 `virtio_uml_probe` 函数中的错误处理路径：当 `register_virtio_device()` 返回失败（rc 不为 0）时，在调用 `put_device` 后立即 `return rc` 退出函数，避免执行后续的 `vu_dev->registered = 1` 语句；同时将函数成功执行的返回值从变量 `rc` 显式修改为 `0`，确保逻辑正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4421669a7632b4efe25bc7e9135eaea8d5847fa0

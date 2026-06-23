@@ -1,0 +1,22 @@
+#标题
+RDMA/bnxt_re: PDE/PBL表内存分配使用错误页大小问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 bnxt_qplib_alloc_init_hwq() 函数中分配 PDE 表和 PBL 表内存时，使用了错误的页面大小（pg_size 和 PAGE_SIZE），导致驱动程序内存分配逻辑不符合硬件要求，可能引发 RDMA 功能异常或硬件队列初始化失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bnxt_qplib_alloc_init_hwq()` 函数中，驱动程序在分配 PDE 表内存时错误地使用了传入的 `pg_size` 变量值，而在分配 PBL 表内存时错误地使用了系统宏 `PAGE_SIZE`。根据硬件规范，这两处分配均应使用固定的 4K 页面大小（ROCE_PG_SIZE_4K），错误的页面大小导致内存分配不符合预期。
+
+#解决方案
+修改 `drivers/infiniband/hw/bnxt_re/qplib_res.c` 文件中的 `bnxt_qplib_alloc_init_hwq` 函数：
+1. 将 PDE 表分配处的 `sginfo.pgsize = npde * pg_size;` 修改为 `sginfo.pgsize = npde * ROCE_PG_SIZE_4K;`，强制使用 4K 页面大小。
+2. 将 PBL 表分配处的 `sginfo.pgsize = PAGE_SIZE;` 修改为 `sginfo.pgsize = ROCE_PG_SIZE_4K;`，确保 PBL 表也使用正确的 4K 页面大小。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/df2f93041803c74be974f37cdd8be64693cf7a62

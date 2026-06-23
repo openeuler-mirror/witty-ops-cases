@@ -1,0 +1,20 @@
+#标题
+libfs: tmpfs目录并发删除导致getdents读取到重复目录项
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在tmpfs文件系统中，当目录下存在大量文件时，若在执行`ls`列出目录（底层调用`getdents`）的过程中并发执行`rm`删除文件操作，会导致`ls`的输出中出现重复的目录项。例如，创建1026个文件，在第一轮`getdents`调用读取部分条目后，若并发删除了未读取的某个文件（如file4），后续的`getdents`调用本应返回剩余文件，却错误地返回了上一轮已返回过的文件（如file5）。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因位于`offset_dir_lookup`函数中。该函数使用`mas_find`函数来确定当前`getdents`调用的起始位置。`mas_find`的行为是定位大于或等于`mas->index`的第一个位置。当中间的某个文件（如file4）被删除后，映射中的位置索引发生变化，导致`mas_find`错误地返回了大于目标索引且已被上一轮遍历过的条目（如file5），从而引发重复返回目录项的问题。
+
+#解决方案
+将`offset_dir_lookup`函数中的`mas_find`调用替换为`mas_find_rev`。`mas_find_rev`函数用于查找小于或等于`mas->index`的第一个位置，能够正确处理因并发删除导致的索引空洞问题，确保从正确的位置开始遍历，从而避免返回重复的目录项。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0d13e0e1be6b1524a777989fd14f7540bde6d629

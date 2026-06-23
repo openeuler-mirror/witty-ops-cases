@@ -1,0 +1,20 @@
+#标题
+ksmbd: smb2_lock 函数存在 use-after-free 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 处理 SMB2 锁请求时，若 `smb_lock->zero_len` 标志位被置位，在错误处理路径中会触发 use-after-free（释放后使用）漏洞，可能导致内核崩溃或内存被非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在原代码逻辑中，当 `smb_lock->zero_len` 为真时，代码会直接跳转到 `skip` 标签，跳过了 `list_del(&smb_lock->llist)` 的执行。与此同时，`flock` 指针在跳转前未更新为 `smb_lock->fl`，保留了旧的值。这导致在后续的错误处理流程中，操作的是旧的 flock 且链表状态不一致，从而引发 use-after-free。
+
+#解决方案
+调整代码执行顺序，将 `flock` 的赋值和 `llist` 的删除操作提前到 `smb_lock->zero_len` 判断之前执行。这样无论是否跳过锁操作，`flock` 都指向正确的锁结构，且链表项已被正确移除，避免了释放后使用的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/109bccb4226cac5613bf3bcc6078203341a03327

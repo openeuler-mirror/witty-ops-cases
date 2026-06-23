@@ -1,0 +1,20 @@
+#标题
+livepatch 与 kretprobe 冲突导致内核警告告警误报
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在同时使用 livepatch 和 kretprobe 功能时，内核日志中可能出现 `WARNING` 相关的栈回溯信息，导致不必要的告警干扰。
+
+#主要错误日志
+WARNING: CPU: ... PID: ... at kernel/trace/rethook.c:... rethook_find_ret_addr+0x.../0x...
+
+#问题根因
+在 `rethook_find_ret_addr` 函数中，校验逻辑使用了 `WARN_ON_ONCE(tsk != current && task_is_running(tsk))`。当 livepatch 与 kretprobe 存在冲突场景时，该检查条件被触发，导致内核抛出警告。实际上该场景不应视为需要警告的异常情况。
+
+#解决方案
+修改 `kernel/trace/rethook.c` 文件中的逻辑，将 `WARN_ON_ONCE(tsk != current && task_is_running(tsk))` 修改为 `(tsk != current && tsk->on_cpu)`。此举移除了不必要的 `WARN_ON_ONCE` 警告调用，仅保留返回 0 的逻辑处理，消除了误报的内核警告信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb5ae9a6e694fc0894e283a5d946f999ee9b188a

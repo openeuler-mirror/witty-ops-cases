@@ -1,0 +1,21 @@
+#标题
+blk-throttle在极低IOPS限制下导致实际控制值低于配置值
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对块设备配置极低的IOPS限制（例如设置为5）时，实际观测到的IOPS会低于配置值（例如实测仅为3），导致IO节流控制精度不足，无法达到预期的限制效果。
+
+#主要错误日志
+未知
+
+#问题根因
+内核通过 `calculate_io_allowed()` 计算时间片内的允许IOPS，公式为 `limit * HZ / throtl_slice`。当用户配置的 `iops_limit` 极低时，该公式的计算结果可能向下取整为0，导致在当前时间片内允许的IO数量为0。这会引发IO派发缺失，进而导致实际IO控制值低于用户配置的限制。
+
+#解决方案
+在 `tg_within_iops_limit()` 函数中修正等待时间的计算逻辑，确保计算出的等待时间 `jiffy_wait` 至少能允许派发一个IO请求。具体修复代码如下：
+`jiffy_wait = max(jiffy_wait, HZ / iops_limit + 1);`
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa934855d56ab0d08c5f38c989a8045bb486eff5

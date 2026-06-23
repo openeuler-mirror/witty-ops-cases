@@ -1,0 +1,26 @@
+#标题
+调度器 dynamic_affinity 机制在 CPU 离线或实时任务占用场景下的选核缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 当 prefer_cpus（首选 CPU）处于 offline 状态时，系统在选核逻辑中仍尝试访问这些 CPU，可能导致内核崩溃或访问非法地址。
+2. 在 CI 测试环境中，当 prefer_cpus 不满足选核条件（如容量不足）时，系统未正确回退到 select_cpus，导致任务无法正确调度到可用 CPU 上。
+3. 当 CPU 上运行实时（RT）任务时，调度器仍使用旧的 CPU 容量值进行计算，导致容量计算不准确，进而影响任务均衡决策。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **CPU 离线处理缺陷**：在遍历 `p->prefer_cpus` 时未检查 CPU 是否在线，直接对离线 CPU 进行容量和负载计算。
+2. **选核逻辑判断不完整**：在 `tg_capacity` 较低（如所有首选 CPU 离线或无 CFS 容量）导致选核条件不满足时，代码逻辑未重置 `idlest_cpu`，导致上层调用者可能使用无效的 `idlest_cpu` 进行选核。
+3. **容量计算滞后**：在实时任务运行期间，原有逻辑直接使用 `capacity_of(cpu)` 获取静态容量，未考虑实时任务对 CPU 算力的实时占用，导致算力评估虚高。
+
+#解决方案
+1. **过滤离线 CPU**：将遍历首选 CPU 的宏从 `for_each_cpu` 修改为 `for_each_cpu_and(cpu, p->prefer_cpus, cpu_online_mask)`，确保仅处理在线 CPU。
+2. **修正容量计算逻辑**：引入 `calc_cpu_capacity` 实时计算函数。在遍历 CPU 时，若检测到该 CPU 运行实时任务（`rt_nr_running` 不为 0），则调用 `calc_cpu_capacity` 实时计算剩余容量，否则使用 `capacity_of`。
+3. **完善选核回退机制**：增加 `nr_cpus_valid` 计数器统计有效 CPU 数量。修正判断逻辑，当 `tg_capacity` 小于等于有效 CPU 数量（意味着所有首选 CPU 无有效容量或全部离线）时，判定条件失败，并增加 `else if (idlest_cpu)` 分支将 `*idlest_cpu` 重置为 -1，防止错误选核。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/073dfc8577acd8db37158c5b9c36b6ca227e6f8b

@@ -1,0 +1,29 @@
+#标题
+hwmon: (k10temp) 未检查 amd_smn_read 返回值导致无效数据处理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+k10temp 驱动在读取 AMD 处理器温度寄存器时，若硬件或固件异常导致 `amd_smn_read` 读取失败，驱动未捕获错误返回值，导致以下潜在现象：
+1. 保存并使用了无效的寄存器值（如 0xFFFFFFFF），可能导致温度计算错误或逻辑判断失误。
+2. 在计算温度偏移量时（如 `*val = (regval & ZEN_CCD_TEMP_MASK) * 125 - 49000`），若寄存器值异常可能导致计算下溢或不可预期的温度读数。
+3. CCD（Core Complex Die）探测过程中，可能因读取失败返回的错误值被误判为有效的温度状态位。
+
+#主要错误日志
+未知
+
+#问题根因
+k10temp 驱动在多处调用 `amd_smn_read()` 函数时，未检查其返回值。当 SMN（System Management Network）读取操作失败时（例如设备不可访问或返回 PCI 错误响应），驱动程序未做任何错误处理，直接使用了读取到的无效数据。具体情况包括：
+1. `read_tempreg_nb_zen()` 函数未处理读取失败，可能保存无效值。
+2. `k10temp_read_temp()` 函数直接使用未经验证的数据进行温度计算，存在隐患。
+3. `k10temp_get_ccd_support()` 函数在遍历 CCD 时，若读取失败返回 `PCI_ERROR_RESPONSE` (0xFFFFFFFF)，其高位比特可能被误识别为 `ZEN_CCD_TEMP_VALID`，导致错误的 CCD 支持位图。
+
+#解决方案
+在调用 `amd_smn_read()` 后增加返回值检查，根据不同场景采取相应的错误恢复措施：
+1. **read_tempreg_nb_zen()**：若读取失败，将寄存器值强制置为 0，强制执行 Read-as-Zero 行为以避免使用垃圾数据。
+2. **k10temp_read_temp()**：若读取失败，直接向上层返回错误码，终止当前温度读取流程，防止无效数据参与运算。
+3. **k10temp_get_ccd_support()**：若读取失败，跳过当前 CCD 的检查循环，继续探测下一个 CCD，避免因单个 CCD 读取失败导致错误的位图设置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e96176d836cba9b86738a722d7f234332790031

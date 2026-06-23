@@ -1,0 +1,24 @@
+#标题
+cachefiles: dentry 泄漏导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 cachefiles 模块处理缓存对象时，`cachefiles_open_file` 函数的多个返回路径中存在 dentry 对象引用计数未释放的问题。这会导致 dentry 结构体发生内存泄漏，随着时间推移可能耗尽系统内存资源。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cachefiles_open_file` 函数中，调用者 `cachefiles_look_up_object` 传入了一个 dentry 引用，但在 `cachefiles_open_file` 的正常成功路径、`check_failed` 错误处理路径以及 `error` 标签处理路径中，均尝试调用 `dput(dentry)` 释放引用。
+然而，当 `cachefiles_open_file` 返回后，调用者 `cachefiles_look_up_object` 无论接收到返回值是 true 还是 false，都无法再次释放该 dentry（因为引用已在子函数中被释放或不该被释放），这导致了逻辑混乱。具体表现为：
+1. 若 `cachefiles_open_file` 返回 true，其内部已经调用了 `dput`，但调用者期望持有或释放该 dentry 的逻辑被打破，可能导致双重释放或引用计数错误。
+2. 修复前的逻辑在错误路径和成功路径中均包含 `dput`，打破了谁申请谁释放的原则，导致 dentry 引用计数管理混乱，进而引发泄漏或潜在的 UAF（Use After Free）风险。
+
+#解决方案
+调整 dentry 引用计数的释放位置，遵循“谁调用谁释放”的原则。
+将 `dput(dentry)` 的调用从 `cachefiles_open_file` 函数内部移至其调用者 `cachefiles_look_up_object` 中。具体修改为：在 `cachefiles_look_up_object` 调用 `cachefiles_open_file` 之后，统一执行 `dput(dentry)`，确保无论 `cachefiles_open_file` 成功与否，dentry 均能被正确释放且仅释放一次。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/518cee10988922f74765ca04b82e168d8730cfb9

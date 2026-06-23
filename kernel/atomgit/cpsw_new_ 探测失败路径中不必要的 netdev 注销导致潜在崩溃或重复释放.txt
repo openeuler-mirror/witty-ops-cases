@@ -1,0 +1,22 @@
+#标题
+cpsw_new: 探测失败路径中不必要的 netdev 注销导致潜在崩溃或重复释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 cpsw_probe() 函数执行过程中，若在 `cpsw_register_ports()` 调用之前或者在 `cpsw_register_ports()` 内部已经失败的情况下触发错误处理流程，驱动程序会错误地调用 `cpsw_unregister_ports()`。这可能导致内核崩溃或内存释放异常。
+
+#主要错误日志
+未知
+
+#问题根因
+当前 `cpsw_probe()` 的错误处理逻辑存在两个缺陷：
+1. 错误处理跳转标签使用不当，导致 `cpsw_unregister_ports()` 可能在 `cpsw_register_ports()` 执行之前就被调用（即尝试注销未注册的端口）。
+2. 如果 `register_netdev()` 在 `cpsw_register_ports()` 内部失败，该函数内部已处理了注销逻辑，但错误返回后，`cpsw_probe()` 的错误路径会再次调用 `cpsw_unregister_ports()`，导致重复注销。
+
+#解决方案
+修改 `cpsw_probe()` 中的错误处理跳转逻辑。将 `cpsw_create_ports()` 失败、IRQ 请求失败以及 `cpsw_register_notifiers()` 失败时的跳转目标从 `clean_unregister_netdev` 修改为 `clean_cpts`。同时移除了冗余的 `clean_unregister_netdev` 标签及其对应的 `cpsw_unregister_ports()` 调用，确保在错误路径中不会发生不必要的 netdev 注销操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a117b6187baff340d19ae548e4e16820bfddeb6d

@@ -1,0 +1,20 @@
+#标题
+tun：修复因组权限检查引入的权限控制回归问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 TUN 设备未设置 owner 或 group 参数时，原本应允许普通用户访问，但现因此在调用 `tun_set_iff` 时返回 `-EPERM` 权限错误，强制要求进程具备 `CAP_NET_ADMIN` 权限，导致非特权用户无法正常打开或使用该类 TUN 设备，造成功能回归。
+
+#主要错误日志
+未知
+
+#问题根因
+上游提交 3ca459eaba1b ("tun: fix group permission check") 修改了权限检查逻辑。在该逻辑下，如果 TUN 设备的 `tun->owner` 和 `tun->group` 均未设置（即都不合法），权限检查函数 `tun_capable` 会错误地判定为无权限，进而要求进程必须拥有 `CAP_NET_ADMIN` 能力。这与“未设置 owner/group 时允许访问”的设计预期不符，导致了非预期的权限拒绝回归。
+
+#解决方案
+通过纯 Git 回退操作还原了 commit 3ca459eaba1b 的修改。将权限检查逻辑恢复为原状：仅当 owner 或 group 已设置且当前进程不匹配时，才检查是否具备 `CAP_NET_ADMIN` 权限；若 owner/group 未设置，则不再强制要求 `CAP_NET_ADMIN`，从而修复权限检查过严的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a7873e8b2851296999faa8361315dacbf48c909d

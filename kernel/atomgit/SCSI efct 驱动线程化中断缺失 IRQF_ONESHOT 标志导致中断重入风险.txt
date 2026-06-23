@@ -1,0 +1,20 @@
+#标题
+SCSI efct 驱动线程化中断缺失 IRQF_ONESHOT 标志导致中断重入风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 efct 驱动的线程化中断处理时，由于未设置 IRQF_ONESHOT 标志，中断源在线程处理程序运行期间未被屏蔽。这导致中断可能在 threaded handler 尚未执行完毕时再次触发，产生中断重入，可能导致系统不稳定、数据竞争或中断风暴。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动调用 `request_threaded_irq` 注册线程化中断时，使用了一个仅返回 `IRQ_WAKE_THREAD` 的自定义主处理函数 `efct_intr_msix`，且未设置 `IRQF_ONESHOT` 标志。根据内核中断子系统设计，线程化中断若无专用主处理函数，必须设置 `IRQF_ONESHOT` 以在线程处理期间屏蔽中断源。当前实现导致中断处理线程运行时中断线路处于未屏蔽状态，引发中断重入。
+
+#解决方案
+移除冗余的自定义主处理函数 `efct_intr_msix`，在调用 `request_threaded_irq` 时将主处理函数参数置为 NULL（使用内核默认的 `irq_default_primary_handler`），并添加 `IRQF_ONESHOT` 标志。这确保了在线程处理程序执行期间中断源被正确屏蔽，直到处理完成。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/782caabed10518e145619932bd8d55d855801432

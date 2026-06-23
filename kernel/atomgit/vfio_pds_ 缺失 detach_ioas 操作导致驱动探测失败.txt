@@ -1,0 +1,21 @@
+#标题
+vfio/pds: 缺失 detach_ioas 操作导致驱动探测失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当开启 CONFIG_IOMMUFD 配置且设备绑定到 pds_vfio_pci 驱动时，内核触发 WARN_ON() 警告，随后驱动探测失败，错误码为 -22（Invalid argument）。
+
+#主要错误日志
+WARNING: CPU: 0 PID: 5040 at drivers/vfio/vfio_main.c:317 __vfio_register_dev+0x130/0x140 [vfio]
+pds_vfio_pci 0000:08:00.1: probe with driver pds_vfio_pci failed with error -22
+
+#问题根因
+驱动结构体 `pds_vfio_ops` 中的 `vfio_device_ops.detach_ioas` 回调函数指针未初始化设置。在 CONFIG_IOMMUFD 启用的情况下，VFIO 核心层注册设备时检测到该指针为空，触发 WARN_ON 并导致注册失败。
+
+#解决方案
+在 `drivers/vfio/pci/pds/vfio_dev.c` 文件的 `pds_vfio_ops` 结构体定义中，添加对 `.detach_ioas` 的赋值，将其指向通用的 `vfio_iommufd_physical_detach_ioas` 函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/44dc0eb09bb057d8b82e53cd5b486fb2e4d497ae

@@ -1,0 +1,20 @@
+#标题
+ub: udma 修复获取 tp list 流程中的错误处理 bug
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 get tp list 流程时，udma 从 ubase 获取信息的过程中若发生失败，驱动程序未正确存储相关失败信息，而是直接返回了失败，导致错误状态未正确传递。
+
+#主要错误日志
+udma send mue2ue msg failed, opcode = %u.
+
+#问题根因
+在 `udma_send_ue_msg` 函数中，发送响应消息 `ubase_ctrlq_send_mue2ue_resp` 时，错误码参数被硬编码为 `EINVAL`。这导致在 `udma_handle_ue_rsp_msg` 的错误处理路径 `err_and_send_ue_msg` 中，无法将 `ubase_ctrlq_parse_ue_msg` 解析出的真实错误结果传递给响应消息，而是覆盖为了固定的 `EINVAL`。
+
+#解决方案
+修改 `udma_send_ue_msg` 函数接口，增加 `is_resp` 布尔参数用于区分消息类型。当处理响应消息（`is_resp` 为真）时，先调用 `ubase_ctrlq_parse_ue_msg` 解析消息获取真实的返回结果 `result`，并将其传递给 `ubase_ctrlq_send_mue2ue_resp`；否则使用 `EINVAL` 作为默认错误码，从而确保失败信息能被正确存储和传递。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1a64406f8d363b09ca8e7a1c9c4e9daedec5839e

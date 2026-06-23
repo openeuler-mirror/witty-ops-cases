@@ -1,0 +1,20 @@
+#标题
+Bluetooth: ISO 修复 iso_sock_timeout 中的 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 Bluetooth ISO socket 超时或连接删除时，若 `iso_conn_lock` 竞争失败导致等待，`conn->sk` 指向的 socket 可能已被释放或解链。此时继续访问该指针将引发 Use-After-Free（UAF），导致内核 panic 或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `iso_sock_timeout` 和 `iso_conn_del` 函数中，获取 `iso_conn_lock` 锁之前未充分校验 socket 生命周期。当进程在等待 `iso_conn_lock` 时，`conn->sk` 可能已被其他执行流 unlink 或 free，导致锁获取成功后访问了一个无效或已释放的 socket 指针。
+
+#解决方案
+引入一个新的辅助函数 `iso_sock_hold`，在获取 socket 引用前增加有效性检查。该函数通过调用 `bt_sock_linked(&iso_sk_list, conn->sk)` 检查 socket 是否仍在链表中，以此判断其是否有效。仅当 socket 有效时才增加引用计数并返回，否则返回 NULL，从而避免对已释放内存的访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/037f3a8cb5db2de52cbea6167504ad61594c8b45

@@ -1,0 +1,20 @@
+#标题
+block: fix resource leak in blk_register_queue() error path
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在块设备队列注册过程中，若 `blk_mq_sysfs_register()` 执行成功，但后续步骤（如 debugfs 初始化或锁操作后）遇到错误导致函数返回失败，系统无法正确清理已分配的 blk_mq_sysfs 资源，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `blk_register_queue` 的错误处理路径中，代码逻辑未对 `blk_mq_sysfs_register()` 成功分配的资源进行回滚操作。具体而言，当函数在 `blk_mq_sysfs_register()` 成功之后、完全注册完成之前遇到错误退出时，缺少对 `blk_mq_sysfs_unregister()` 的调用，导致资源无法释放。
+
+#解决方案
+在 `blk_register_queue` 函数的错误处理标签 `out_debugfs_remove` 处添加资源清理逻辑。在释放锁之前，判断队列是否为多队列模式（`queue_is_mq(q)`），如果是，则调用 `blk_mq_sysfs_unregister(disk)` 注销已注册的 sysfs 资源，确保错误路径下的资源正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01cf5be5c34dab44daa202b714ed7c6231e8b70e

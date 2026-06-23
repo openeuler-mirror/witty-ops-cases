@@ -1,0 +1,24 @@
+#标题
+riscv: kfence_protect_page 在中断上下文触发 SMP 调用警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V 架构上启用 KFENCE 功能时，系统启动或运行过程中触发内核 WARNING。调用栈显示在中断处理程序（如 virtblk_done）调用 kfree 时，经由 kfence_protect_page 函数刷新 TLB，最终在 `smp_call_function_many_cond` 处触发警告，提示在禁用中断（irqs disabled）的情况下使用了可能引发 IPIs（处理器间中断）的函数。
+
+#主要错误日志
+[    3.455330] WARNING: CPU: 1 PID: 0 at kernel/smp.c:815 smp_call_function_many_cond+0x452/0x520
+[    3.457416] Hardware name: QEMU QEMU Virtual Machine, BIOS
+[    3.458373] [<ffffffff800b669a>] smp_call_function_many_cond+0x452/0x520
+[    3.458625] [<ffffffff8000e4ca>] __flush_tlb_range+0x118/0x1ca
+[    3.458683] [<ffffffff801ea56a>] kfence_protect+0xc0/0xce
+
+#问题根因
+`kfence_protect_page()` 函数内部调用了 `flush_tlb_kernel_range()`。在某些 RISC-V 实现中，`flush_tlb_kernel_range()` 会通过 IPIs（处理器间中断）来刷新所有核心的 TLB。然而，`kfence_protect_page()` 可能会被在中断禁用（irqs disabled）的上下文中调用（例如中断处理程序中的 kfree），此时触发 IPIs 会在 `smp_call_function_many_cond` 中引发 WARNING，因为该函数不允许在禁用中断时进行跨核调用。
+
+#解决方案
+修改 `kfence_protect_page()` 中的 TLB 刷新策略。将全量刷新函数 `flush_tlb_kernel_range()` 替换为仅刷新本地 CPU TLB 的 `local_flush_tlb_kernel_range()`。同时，使用 `preempt_disable()` 和 `preempt_enable()` 包裹该调用以防止迁移。KFENCE 机制可以容忍其他 CPU 上的陈旧 TLB 条目，通过后续的缺页异常进行懒处理来解决一致性问题，从而避免了在不可休眠/中断禁用上下文中使用 IPIs 的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/11079afd46550a4ced9b104f3403e28f181948f2

@@ -1,0 +1,29 @@
+#标题
+iio: gts-helper: Fix memory leaks in iio_gts_build_avail_scale_table
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 `iio-test-gts` 模块执行 `modprobe` 加载和 `rmmod` 卸载操作后，系统发生内存泄漏。通过 kmemleak 检测到多处未释放的内存对象，具体表现为多次 size 64 和 size 16 的内存泄漏。
+
+#主要错误日志
+unreferenced object 0xffffff80c810be00 (size 64):
+  comm "kunit_try_catch", pid 1654, jiffies 4294913981
+  hex dump (first 32 bytes):
+    02 00 00 00 08 00 00 00 20 00 00 00 40 00 00 00  ........ ...@...
+    80 00 00 00 00 02 00 00 00 04 00 00 00 08 00 00  ................
+  backtrace (crc a63d875e):
+    [<0000000028c1b3c2>] kmemleak_alloc+0x34/0x40
+    [<000000001d6ecc87>] __kmalloc_noprof+0x2bc/0x3c0
+    [<00000000393795c1>] devm_iio_init_iio_gts+0x4b4/0x16f4
+    ...
+
+#问题根因
+在 `iio_gts_build_avail_scale_table()` 函数中，`gts->num_itime` 循环内分配的 `per_time_gains[i]` 内存指针在退出前未被释放。代码逻辑中仅释放了 `per_time_gains` 指针数组本身，但遗漏了释放数组中每个元素指向的内存空间，导致内存泄漏。
+
+#解决方案
+在函数返回前增加遍历逻辑，释放 `per_time_gains` 数组中每个已分配的元素（`per_time_gains[i]`），确保所有动态分配的内存均被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/06adc69a6a1bb9f6b5d0eb29c56f8fc1984cc099

@@ -1,0 +1,20 @@
+#标题
+wifi: ath11k: 修复回收 monitor destination ring 时的 RCU stall 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ath11k 驱动回收 monitor destination ring 数据的过程中，系统触发 RCU stall（RCU 停顿）告警。该问题源于代码逻辑在遇到无效 buffer_id 时错误地跳出了处理循环，导致锁未被正确释放或处理流程异常中断，进而引发 RCU stall。
+
+#主要错误日志
+RCU stall 相关的内核告警日志（具体日志格式取决于内核配置，通常包含 "rcu_sched self-detected stall on CPU" 或 "rcu_preempt detected expedited stalls" 等关键字）。
+
+#问题根因
+在函数 `ath11k_dp_rx_mon_mpdu_pop` 和 `ath11k_dp_rx_full_mon_mpdu_pop` 中，当通过 `buf_id` 查找 msdu 发现结果为空（invalid buf_id）时，原有代码逻辑使用了 `break` 语句直接跳出循环。这导致 ring 的处理流程非正常退出，可能造成后续资源回收或锁释放路径被跳过，从而引发 RCU stall。
+
+#解决方案
+将处理无效 `buf_id` 的逻辑从 `break` 修改为 `goto next_msdu`。此举确保了当遇到无效 buffer 时，代码跳过当前条目继续处理下一个 msdu，而不是直接终止整个 ring 的回收流程，从而避免了 RCU stall 的发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e556824c4dd2441c8d5096142b344a5fd01a05a0

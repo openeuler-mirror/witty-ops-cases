@@ -1,0 +1,20 @@
+#标题
+NFSD nfsd4_process_cb_update 函数空指针引用导致 Segfault
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFS 服务端回调（backchannel）恢复过程中，若 `__nfsd4_find_backchannel()` 未找到可用的反向通道会话，`setup_callback_client()` 函数会尝试对空指针 `@ses` 进行解引用，导致内核段错误，进而引发内核崩溃或重启。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `nfsd4_process_cb_update` 中，局部变量 `@ses` 被初始化为 NULL。当代码逻辑中未找到可用的 backchannel session 时，`@ses` 仍保持为 NULL。后续代码在调用 `setup_callback_client(clp, &conn, ses)` 时，未对 `@ses` 进行非空检查直接使用，导致了 NULL 指针解引用。
+
+#解决方案
+在调用 `setup_callback_client()` 之前增加对相关上下文指针（补丁中体现为 `c` 或 `ses` 的有效性依赖）的非空校验。如果指针为空（即未找到有效会话），函数直接返回，避免后续解引用操作，从而防止内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c0929d079aa4fcd1711b4d23dfb2de8803165bf

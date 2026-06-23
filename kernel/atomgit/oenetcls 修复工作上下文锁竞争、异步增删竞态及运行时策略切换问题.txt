@@ -1,0 +1,26 @@
+#标题
+oenetcls 修复工作上下文锁竞争、异步增删竞态及运行时策略切换问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在对 socket 进行异步规则添加或删除操作时，可能触发内核崩溃或内存非法访问。
+2. 在修改 `rps_policy` 或 `lo_rps_policy` 模块参数时，可能触发内核空指针引用或 Use-After-Free 错误。
+3. 系统运行过程中可能出现 socket 规则管理异常，导致网络分类功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **锁竞争与上下文访问问题**：在 workqueue 的 worker 上下文中直接访问 `struct sock` 指针（如 `sk->sk_family`、`sk->sk_v6_rcv_saddr` 等）是不安全的。原代码在调度 work 之前未保存 socket 的必要信息，worker 执行时 socket 可能已被释放或修改，导致竞态条件。
+2. **异步增删竞态**：在 `del_ntuple_rule` 函数中，原代码在提交 work 之前执行 `has_sock_rule` 检查，这导致了 TOCTOU（Time-of-check to time-of-use）竞态，且在 worker 执行期间对 `oecls_sk_rules` 的锁定保护不完整。
+3. **运行时策略切换风险**：模块参数 `rps_policy` 和 `lo_rps_policy` 被定义为 `0644` 权限，允许运行时修改。这允许用户在运行时改变策略，触发 socket 规则相关的处理逻辑，进而可能访问到已释放的 socket 或网络命名空间，引发崩溃。
+
+#解决方案
+1. **引入 Socket 快照机制**：在 `struct cfg_param` 中新增 `sk_snapshot` 结构体，在调度 work 之前（如 `add_ntuple_rule` 和 `del_ntuple_rule` 中）同步保存 socket 的关键字段（网络命名空间 `net`、协议族 `family`、端口 `lport`、IPv4/IPv6 地址等），并持有网络命名空间引用（`get_net`）。worker 函数 `cfg_work` 改为访问快照数据而非 socket 指针，确保数据一致性。
+2. **修复异步删除逻辑**：将 `has_sock_rule` 检查移至 `cfg_work` worker 函数内部执行，并在检查及后续操作期间持有 `oecls_sk_rules` 互斥锁，确保删除操作的原子性和安全性。
+3. **禁止运行时策略修改**：将 `rps_policy` 和 `lo_rps_policy` 模块参数的权限从 `0644` 修改为 `0444`，禁止运行时通过 sysfs 修改策略，规避因此引发的并发崩溃风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e967b2cb8d490437cdd0d076d0d236eb7c358045

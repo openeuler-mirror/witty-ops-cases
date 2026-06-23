@@ -1,0 +1,20 @@
+#标题
+调度器动态亲和性机制在CPU被RT任务占满时错误选择prefer_cpu
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在动态亲和性（dynamic_affinity）场景下，当某个 CPU 被 RT（实时）任务 100% 占用时，该 CPU 上的 CFS 任务 util_avg 为 0 但 CPU capacity 不为 0。在此场景下，系统在核心选择（core selection）过程中，总是会错误地将 prefer_cpu 选为 idlest_cpu，导致调度决策异常，引发 CI 测试失败。
+
+#主要错误日志
+未知
+
+#问题根因
+修复先前“prefer_cpu offline 问题”的提交（aed539da59ad）在处理逻辑中删除了对 prefer_cpu 设置 capacity 和 prefer_cpumask 权重的判断。这导致在 CPU 被 RT 任务占满（CFS 任务 util_avg 为 0 但 capacity 不为 0）的情况下，dynamic_affinity 机制无法正确识别，依然总是选择 prefer_cpu 作为 idlest_cpu。
+
+#解决方案
+在 `set_task_select_cpus` 函数中增加对有效 prefer_cpu 容量和权重的检查。引入 `nr_cpus_valid` 变量统计有效 CPU 数量，并在判断是否选择 prefer_cpus 时，增加条件 `tg_capacity > nr_cpus_valid`。这确保了在所有 prefer_cpus 离线或所有 prefer_cpus 无 CFS 容量的情况下，能够正确选择 cpus_ptr，避免错误选择。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/947622601c1c9456590b57518a81489a5063316b
