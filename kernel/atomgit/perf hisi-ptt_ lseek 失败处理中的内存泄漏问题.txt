@@ -1,0 +1,20 @@
+#标题
+perf hisi-ptt: lseek 失败处理中的内存泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 perf 工具处理 hisi-ptt (HiSilicon PCIe Trace Tool) 辅助跟踪事件时，若文件偏移量查询操作（lseek）失败，会导致先前分配的内存未被释放，进而造成内存泄漏。随着多次失败操作的发生，系统可用内存可能逐渐减少。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `hisi_ptt_process_auxtrace_event` 中，代码逻辑先通过 `malloc` 或类似机制分配了内存指针 `data`。随后在尝试获取文件当前偏移量时（调用 `lseek`），如果 `lseek` 返回 -1 表示失败，代码直接返回了错误码 `-errno`，但遗漏了释放先前已分配的 `data` 内存，导致内存泄漏。
+
+#解决方案
+在 `lseek` 失败的分支处理中，增加 `free(data)` 操作。在返回 `-errno` 错误码之前，先释放已分配的内存资源，确保内存得到正确管理，避免泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9ad87fb64e9f84f5bd71b55b57af12561afa545

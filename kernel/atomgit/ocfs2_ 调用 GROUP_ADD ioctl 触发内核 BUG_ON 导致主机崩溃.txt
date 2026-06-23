@@ -1,0 +1,34 @@
+#标题
+ocfs2: 调用 GROUP_ADD ioctl 触发内核 BUG_ON 导致主机崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户调用 OCFS2_IOC_GROUP_ADD 接口进行在线扩容时，若传入特定的用户可控参数，将触发内核 `BUG_ON` 导致系统崩溃（Oops: invalid opcode）。故障现场显示内核直接在 `ocfs2_set_new_buffer_uptodate` 函数中触发 panic，调用链追踪至 `ocfs2_group_add` 及 ioctl 相关系统调用路径。
+
+#主要错误日志
+kernel BUG at fs/ocfs2/uptodate.c:509!
+Oops: invalid opcode: 0000 [#1] SMP KASAN NOPTI
+RIP: 0010:ocfs2_set_new_buffer_uptodate+0x194/0x1e0 fs/ocfs2/uptodate.c:509
+Call Trace:
+ ocfs2_group_add+0x3f1/0x1510 fs/ocfs2/resize.c:507
+ ocfs2_ioctl+0x309/0x6e0 fs/ocfs2/ioctl.c:887
+ vfs_ioctl fs/ioctl.c:51 [inline]
+ __do_sys_ioctl fs/ioctl.c:597 [inline]
+ __x64_sys_ioctl+0x197/0x1e0 fs/ioctl.c:583
+
+#问题根因
+在 `ocfs2_group_add` 函数中，代码逻辑顺序错误：
+1. 代码在调用 `ocfs2_verify_group_and_input()` 验证用户传入的 group 块号有效性之前，就先调用了 `ocfs2_set_new_buffer_uptodate()` 将其加入元数据缓存。
+2. `ocfs2_set_new_buffer_uptodate()` 函数假定操作的块是新分配的元数据，会断言该块不在指定的元数据缓存中。若用户传入了一个已存在于缓存中的块号，将直接触发 `BUG_ON`。
+3. 同时，代码使用了 `INODE_CACHE(inode)` 作为缓存上下文，但 group 描述符实际上属于 `main_bm_inode`，导致缓存上下文不一致，后续的日志访问与清理路径均使用 `main_bm_inode` 的缓存。
+
+#解决方案
+调整 `ocfs2_group_add` 函数中的执行顺序与缓存上下文：
+1. 将 `ocfs2_set_new_buffer_uptodate()` 调用移动到 `ocfs2_verify_group_and_input()` 成功返回之后执行，确保在缓存前先验证磁盘块的有效性。
+2. 将缓存操作的目标从 `INODE_CACHE(inode)` 修正为 `INODE_CACHE(main_bm_inode)`，确保与后续日志及清理路径使用的缓存上下文保持一致。
+3. 单独处理验证失败后的清理逻辑，保证只有在 buffer 确实被插入缓存后，失败路径才执行移除操作，维持 buffer 生命周期的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/89a7a7d3ce83b721fe13d305637966c44be1b570

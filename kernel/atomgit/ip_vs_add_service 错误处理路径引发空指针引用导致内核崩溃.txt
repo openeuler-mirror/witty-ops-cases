@@ -1,0 +1,27 @@
+#标题
+ip_vs_add_service 错误处理路径引发空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 IPVS 服务时，若 `ip_vs_start_estimator` 初始化失败，内核在处理错误回收流程时会触发空指针引用，导致系统产生 general protection fault 并引发 Panic（Oops）。
+
+#主要错误日志
+Oops: general protection fault, [..] [#1] PREEMPT SMP KASAN NOPTI
+KASAN: null-ptr-deref in range [0x0000000000000030-0x0000000000000037]
+RIP: 0010:ip_vs_unbind_scheduler (net/netfilter/ipvs/ip_vs_sched.c:69)
+Call Trace:
+ <TASK>
+ ip_vs_add_service.isra.0 (net/netfilter/ipvs/ip_vs_ctl.c:1500)
+ do_ip_vs_set_ctl (net/netfilter/ipvs/ip_vs_ctl.c:2809)
+ nf_setsockopt (net/netfilter/nf_sockopt.c:102)
+
+#问题根因
+在 `ip_vs_add_service` 函数中，当 `ip_vs_bind_scheduler()` 成功执行后，代码将局部变量 `sched` 置为 `NULL`。如果随后的 `ip_vs_start_estimator()` 调用失败，代码跳转到 `out_err` 标签进行清理，此时调用 `ip_vs_unbind_scheduler(svc, sched)` 传入的 `sched` 参数为 `NULL`。虽然 `ip_vs_unbind_scheduler` 内部对 `svc->scheduler` 进行了非空检查（因为绑定已成功），但其后直接解引用了 `sched` 参数（如 `sched->done_service`），从而触发了空指针引用错误。
+
+#解决方案
+删除 `ip_vs_add_service` 函数中 `ip_vs_bind_scheduler()` 成功后将 `sched` 变量置为 `NULL` 的赋值语句。`ip_vs_unbind_scheduler()` 函数已通过 `svc->scheduler` 判断调度器是否已安装，保持 `sched` 指针非空可以确保在错误处理路径中正确传递调度器指针给 `ip_vs_unbind_scheduler()` 和 `ip_vs_scheduler_put()`，避免空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/91da046fda7c2309257d400a81d02ab981a0bdee

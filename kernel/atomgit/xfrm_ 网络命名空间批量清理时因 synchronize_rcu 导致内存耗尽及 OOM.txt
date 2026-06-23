@@ -1,0 +1,28 @@
+#标题
+xfrm: 网络命名空间批量清理时因 synchronize_rcu 导致内存耗尽及 OOM
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行高频率网络命名空间销毁操作（如每秒约 13 次 `unshare(CLONE_NEWNET)`）时，系统出现严重的性能瓶颈与资源耗尽：
+1.  `cleanup_net()` 进程与 `netns_wq` rescuer 内核线程长时间处于 D 状态（不可中断睡眠），卡在 `xfrm_policy_fini()` 函数中。
+2.  清理队列中积压大量待销毁的 `struct net` 对象（观测到超过 30 万个）。
+3.  系统内存占用异常，`/proc/meminfo` 中 Percpu 内存占用在 256 核主机上飙升至 130GB 以上。
+4.  最终触发 Memory Cgroup OOM（Out of Memory）导致进程被杀。
+
+#主要错误日志
+未知
+
+#问题根因
+`xfrm_policy_fini()` 函数在网络命名空间销毁的 `.exit` 回调中直接调用了 `synchronize_rcu()`。根据 `pernet_operations` 文档说明，`.exit` 阶段不应用于阻塞 RCU 原语。
+当批量清理 N 个网络命名空间时，`.exit` 回调被串行调用，导致系统需要经历 N 个完整的 RCU 宽限期（Grace Period），极大地拖慢了清理速度，导致 `struct net` 对象回收不及时、内核 Percpu 内存累积并最终引发 OOM。
+
+#解决方案
+遵循 `pernet_operations` 文档建议，将命名空间退出逻辑拆分为 `.pre_exit` 和 `.exit` 两阶段：
+1.  将 `xfrm_policy_fini()` 中的策略刷新工作（`disable_work_sync`、`flush_work`、`xfrm_policy_flush`）移动到新增的 `.pre_exit` 回调（`xfrm_net_pre_exit`）中执行。
+2.  在 `.exit` 回调中仅保留哈希表的释放逻辑。
+3.  利用内核网络命名空间清理机制保证：在 `.pre_exit` 和 `.exit` 调用之间，系统会自动执行 `synchronize_rcu_expedited()`。此举将 RCU 同步开销从 O(N) 降为 O(1)，解决了批量清理时的阻塞与资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c1ec5243c321de5dc9f0b648ac89064d97ed69f

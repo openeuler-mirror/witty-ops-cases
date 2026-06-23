@@ -1,0 +1,20 @@
+#标题
+rxrpc 非XDR路径票据长度校验缺失触发内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+非特权用户通过非 XDR 路径（payload <= 28 字节）构造并提供一个超大 ticket length 的 key payload。当该 key 随后被读取（通过 rxrpc_read）时，计算的 token 大小（toksize）超过 AFSTOKEN_LENGTH_MAX，从而触发内核 WARN_ON() 警告。
+
+#主要错误日志
+[ 2001.302904] WARNING: CPU: 2 PID: 2108 at net/rxrpc/key.c:778 rxrpc_read+0x109/0x5c0 [rxrpc]
+
+#问题根因
+在 rxrpc_preparse() 函数中，存在 XDR 和非 XDR 两条路径用于解析 key payload。XDR 路径（rxrpc_preparse_xdr_rxkad）正确地校验了 ticket length 不超过 AFSTOKEN_RK_TIX_MAX，但非 XDR 路径缺失了该校验。这允许攻击者传入非常大的 ticket length，导致后续读取操作计算出的 token 大小溢出上限并触发警告。
+
+#解决方案
+在 rxrpc_preparse() 的非 XDR 解析路径中增加校验逻辑，检查 v1->ticket_length 是否大于 AFSTOKEN_RK_TIX_MAX，如果超过则返回 -EKEYREJECTED 错误，从而使非 XDR 路径与 XDR 路径的安全检查保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc105c9e98bb798985ddd309f614525c87e83454

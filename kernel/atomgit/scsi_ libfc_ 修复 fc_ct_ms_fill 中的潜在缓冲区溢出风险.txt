@@ -1,0 +1,24 @@
+#标题
+scsi: libfc: 修复 fc_ct_ms_fill 中的潜在缓冲区溢出风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `W=1` 编译选项构建内核时，编译器报出 `-Werror=format-truncation` 错误，导致编译失败。编译器检测到 `snprintf` 在格式化 OS 名称和版本信息时，输出可能超过目标缓冲区的大小（128字节），存在截断风险。
+
+#主要错误日志
+drivers/scsi/libfc/fc_encode.h: In function ‘fc_ct_ms_fill.constprop’:
+drivers/scsi/libfc/fc_encode.h:359:30: error: ‘%s’ directive output may be truncated writing up to 64 bytes into a region of size between 62 and 126 [-Werror=format-truncation=]
+  359 |                         "%s v%s",
+      |                              ^~
+drivers/scsi/libfc/fc_encode.h:357:17: note: ‘snprintf’ output between 3 and 131 bytes into a destination of size 128
+
+#问题根因
+函数 `fc_ct_ms_fill()` 使用 `snprintf` 和格式字符串 `"%s v%s"` 将 `init_utsname()->sysname` 和 `init_utsname()->release` 写入 `entry->value`。由于源字符串是未绑定长度的（最大可达 64 字节），拼接后的总长度可能超过目标缓冲区的大小限制 `FC_FDMI_HBA_ATTR_OSNAMEVERSION_LEN`（128 字节），从而触发编译器的缓冲区溢出警告。
+
+#解决方案
+修改 `snprintf` 的格式字符串，将 `"%s v%s"` 更改为 `"%.62s v%.62s"`。通过指定精度限制（`.62`），强制截断 `sysname` 和 `release` 字符串，确保两者加上中间的分隔符和结束符后，总长度不会超过 128 字节的缓冲区限制，从而消除溢出风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f0d3a00e43f60d3ca4f93628042ea9bbe9ad1547

@@ -1,0 +1,26 @@
+#标题
+fbcon: fbcon_do_set_font 函数整数溢出导致堆缓冲区越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在控制台设置字体（fbcon）时，若用户传入特制的字体参数（高度 h、宽度 pitch、字符数量 charcount），可触发内核整数溢出。该溢出导致内存分配的大小小于实际拷贝数据的大小，进而在后续拷贝字体数据时发生堆缓冲区溢出。此漏洞可能被恶意利用造成系统崩溃或权限提升。
+
+#主要错误日志
+未知
+
+#问题根因
+fbcon_do_set_font() 函数在进行字体大小计算和内存分配时存在两处整数溢出漏洞：
+1. CALC_FONTSZ(h, pitch, charcount) 宏执行 `h * pitch * charcount` 乘法运算时，用户控制的参数可能超出整型表示范围发生溢出。
+2. `FONT_EXTRA_WORDS * sizeof(int) + size` 加法运算也可能发生溢出。
+上述溢出导致 kmalloc 分配的内存块 size 远小于预期，后续执行字体数据拷贝时引发堆缓冲区越界写入。
+
+#解决方案
+在内核版本 OLK-6.6 中增加了显式的溢出检查逻辑：
+1. 使用 `check_mul_overflow()` 分别检查 `h * pitch` 以及结果与 `charcount` 的乘法运算，若溢出直接返回 -EINVAL。
+2. 使用 `check_add_overflow()` 检查 `FONT_EXTRA_WORDS * sizeof(int) + size` 的加法运算，若溢出直接返回 -EINVAL。
+3. 只有在所有校验通过后，才使用计算出的 size 进行 kmalloc 内存分配，确保分配大小安全。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f93ac438cec71ecd3395b3a23568a456660e06cb

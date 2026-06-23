@@ -1,0 +1,20 @@
+#标题
+USB gadget dummy-hcd 驱动导致 "task hung" 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中出现任务挂起，具体表现为调用 `usb_kill_urb()` 时进程无法返回，导致任务挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+在将 dummy-hcd 驱动从普通定时器切换到 hrtimer 时，代码逻辑错误地用 `hrtimer_active()` 替换了 `timer_pending()`。这两个 API 存在关键差异：`timer_pending()` 仅在定时器已排队但回调未运行时返回 True，而 `hrtimer_active()` 在定时器已排队或回调正在运行时均返回 True。这种差异导致 `dummy_urb_enqueue()` 误判定时器回调尚未启动（实际上回调即将结束），从而未重启 hrtimer。这导致驱动无法出队刚入队的 URB，最终引发 `usb_kill_urb()` 挂起。
+
+#解决方案
+在驱动结构体中新增 `timer_pending` 位字段，用于手动跟踪定时器的排队状态。在定时器回调开始时清除该标志，在定时器启动时设置该标志。修改 `dummy_urb_enqueue()`、`dummy_urb_dequeue()`、`dummy_timer()` 和 `dummy_bus_resume()` 等函数，使用该标志替代 `hrtimer_active()` 进行状态判断，确保定时器能被正确重启，从而避免 URB 处理停滞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/123b130a7f790b5c916c375cd951af84254c510c

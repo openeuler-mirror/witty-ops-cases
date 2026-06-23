@@ -1,0 +1,28 @@
+#标题
+batman-adv: TT changes list 无限增长导致重复发送旧数据
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 TT（Translation Table）变更列表过大无法放入单个数据包（受 MTU 限制）时，系统发送空 OGM 包但未能清理变更列表。这导致：
+1. 变更列表从该节点开始无限增长，无法被清理。
+2. 节点持续响应携带旧变更数据的 TT 请求，而不是预期的空响应或全量表。
+3. 在每个 OGM 间隔重复创建空 OGM，等待本地变更被清除，但实际无法清除。
+
+#主要错误日志
+未知
+
+#问题根因
+当 TT 变更数据长度超过 MTU 限制时，代码逻辑仅将 `tt_diff_len` 置零以发送空 OGM，但未实际清空 `tt.changes_list` 也未将 `tt_diff_entries_num` 置零。这导致：
+1. `tt.last_changeset` 未被正确构建（保留了旧数据），导致响应错误的 TT 请求。
+2. 变更列表未被清理，导致列表无限增长，且持续发送相同的旧变更响应。
+
+#解决方案
+在 TT 变更数据超过 MTU 限制时，除了将数据长度置零外，还需要显式丢弃当前的变更记录。
+1. 新增 `drop_changes` 标志位。
+2. 当检测到 `tt_diff_len > mtu` 时，将 `tt_diff_entries_num` 设置为 0。
+3. 设置 `drop_changes` 为 true，确保后续逻辑能正确处理列表清理，而不是跳过清理步骤（修复了原逻辑中 `tt_diff_len == 0` 时直接跳过列表处理的问题）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/30b18dece8fb9e8ea51fb901ecccdf60c2c03e5a

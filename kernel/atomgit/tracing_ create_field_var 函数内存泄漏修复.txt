@@ -1,0 +1,23 @@
+#标题
+tracing: create_field_var 函数内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核 tracing 子系统中使用 hist trigger 功能时，若在 `create_field_var()` 函数执行过程中遇到错误路径（如创建变量失败或内存分配不足），会导致内核内存泄漏。随着此类错误路径的多次触发，系统可用内存会逐渐减少。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `create_field_var()` 中，指针 `val` 是通过 `parse_atom()` 调用 `create_hist_field()` 分配的，包含了复杂的内部结构；指针 `var` 是通过 `create_var()` 分配的，该函数内部还分配了 `var->type` 和 `var->var.name`。
+在错误处理路径中，代码仅使用 `kfree()` 释放 `val` 和 `var`，未递归释放其内部成员（如 `var->type`、`var->var.name`）及子结构，导致内存无法正确回收。
+
+#解决方案
+修改 `create_field_var()` 函数中的错误处理逻辑：
+1. 将对 `val` 的释放方式从 `kfree(val)` 改为调用 `destroy_hist_field(val, 0)`，以正确释放该结构及其内部资源。
+2. 在释放 `var` 之前，显式调用 `kfree_const(var->type)` 和 `kfree(var->var.name)` 释放其内部成员，随后再执行 `kfree(var)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/39c9c59f3eb4a56211cb596665b8c66339a73ea5

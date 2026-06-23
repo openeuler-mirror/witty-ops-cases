@@ -1,0 +1,21 @@
+#标题
+sky81452-backlight 未检查 devm_gpiod_get_optional 返回值导致潜在异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在解析设备树过程中，若 GPIO 获取发生错误（而非简单的 GPIO 缺失），驱动程序未捕获该错误并继续执行，可能导致后续使用无效指针引发内核崩溃或功能异常。
+
+#主要错误日志
+推断日志：
+failed to get gpio
+
+#问题根因
+`devm_gpiod_get_optional()` 函数在发生真实的 GPIO 获取错误时会返回 ERR_PTR 指针，而不仅仅是表示 GPIO 缺失的 NULL。代码中原先缺少对 `IS_ERR()` 的检查，导致错误情况被忽略，程序继续持有无效指针运行。
+
+#解决方案
+在 `sky81452_bl_parse_dt()` 函数中调用 `devm_gpiod_get_optional()` 获取 GPIO 后，增加 `IS_ERR()` 判断逻辑。若检测到错误指针，调用 `dev_err_cast_probe()` 打印错误日志并直接返回错误码，终止加载流程以避免后续风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d5af26dfa33dba6df052ddf3f96c8910081c13b2

@@ -1,0 +1,23 @@
+#标题
+ACPI: processor: 修复 acpi_processor_errata_piix4() 中的 UAF 与日志误打印问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定 PIIX4 芯片组环境下，内核发生 Use-After-Free（UAF）导致系统不稳定或崩溃；同时在未设置相应 errata 标志时，内核日志错误地打印了 errata 启用的调试信息。
+
+#主要错误日志
+Bus master activity detection (BM-IDE) erratum enabled
+Type-F DMA livelock erratum (C3 disabled)
+
+#问题根因
+前一次修复补丁（commit f132e089fe89）在处理 NULL 指针解引用问题时引入了新缺陷：
+1. 在调用 `pci_dev_put(isa_dev)` 和 `pci_dev_put(ide_dev)` 释放设备对象引用后，代码仍尝试通过这些设备指针打印调试日志，导致 Use-After-Free。
+2. 调试日志的打印逻辑位于条件判断之外，导致即使 errata 标志位（如 `errata.piix4.bmisx` 或 `errata.piix4.fdma`）未被设置，日志仍可能被打印，产生误导性信息。
+
+#解决方案
+将调试信息的打印逻辑移动到设置 errata 标志位的代码块内部（即 `if` 分支内部），确保只有在成功设置标志位时才打印日志，且打印操作发生在 `pci_dev_put()` 释放设备引用之前，从而避免 Use-After-Free 和日志误打印。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a2b20d135e0d40a091bc799202350cb36b93d979

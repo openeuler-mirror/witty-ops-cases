@@ -1,0 +1,24 @@
+#标题
+wifi: rtw89: 6 GHz频段接收异常报文导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 rtw89 驱动支持的硬件上，当芯片实际上不支持 6 GHz 频段，但接收（RX）报告异常导致软件误判数据包来自 6 GHz 频段时，内核会发生空指针解引用，导致系统崩溃。该问题发生概率较低，属于特定条件下的异常报文处理缺陷。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000032
+#PF: supervisor read access in kernel mode
+#PF: error_code(0x0000) - not-present page
+Oops: 0000 [#1] PREEMPT SMP NOPTI
+RIP: 0010:rtw89_vif_rx_stats_iter+0xd2/0x310 [rtw89_core]
+
+#问题根因
+由于 RX report 极偶发地出现异常，导致软件层误认为接收到的数据包位于 6 GHz 频段，即使芯片实际上并不支持该频段。由于软件不会为不支持的频段初始化相关数据结构，后续在调用链 `rtw89_vif_rx_stats_iter() -> rtw89_core_cancel_6ghz_probe_tx()` 中访问未初始化的资源时，触发了空指针解引用。
+
+#解决方案
+在 `rtw89_core_cancel_6ghz_probe_tx` 函数中增加防御性检查。在处理 6 GHz 相关逻辑前，先判断当前芯片是否支持 6 GHz 频段（检查 `rtwdev->chip->support_bands`）。若不支持，则打印调试日志并直接返回，避免后续流程触发空指针崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/798ba73a5e333dfc270ba38689e1921d75d81e6b

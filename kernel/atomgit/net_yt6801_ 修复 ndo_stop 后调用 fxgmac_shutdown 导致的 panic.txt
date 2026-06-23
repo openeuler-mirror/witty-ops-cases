@@ -1,0 +1,20 @@
+#标题
+net:yt6801: 修复 ndo_stop 后调用 fxgmac_shutdown 导致的 panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在网卡设备已关闭（调用 `ndo_stop` / `fxgmac_close`）的状态下，系统执行关机流程调用 `fxgmac_shutdown` 时触发内核 panic。
+
+#主要错误日志
+未知
+
+#问题根因
+`fxgmac_shutdown` 调用 `fxgmac_net_powerdown` 进行电源管理处理时，仅检查了 `FXGMAC_POWER_STATE_UP` 标志位，未检查设备当前的 `dev_state` 状态。当设备已经处于 `FXGMAC_DEV_CLOSE` 状态时，驱动仍然尝试执行停止队列、carrier off 等硬件操作，导致访问已释放或未初始化的资源引发 panic。
+
+#解决方案
+在 `fxgmac_net_powerdown` 函数中增加对 `dev_state` 的判断，若检测到设备状态为 `FXGMAC_DEV_CLOSE`，则直接返回 0，避免重复执行关闭流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b25f495e7efaa3367ebb6765444f1d1f265c6cdf

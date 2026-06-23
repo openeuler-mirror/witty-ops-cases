@@ -1,0 +1,20 @@
+#标题
+ISST 驱动因最后一个资源无效错误返回导致功能加载失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel Speed Select Technology (ISST) 驱动加载过程中，若硬件部分填充（partially populate）了资源，且仅最后一个资源条目无效（如 MMIO 区域为 0xFFs），驱动程序 `tpmi_sst_dev_add` 会错误地返回失败状态。这导致即使存在其他有效的资源，该设备也无法被正确添加和初始化，相关功能无法使用。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `tpmi_sst_dev_add()` 在循环遍历资源调用 `sst_main()` 时，会将返回值保存在 `ret` 变量中。当最后一个资源条目无效导致 `sst_main()` 失败时，`ret` 变量保存了该失败状态。函数在循环结束后直接返回了 `ret`，导致即使前面已经成功处理了有效的资源，函数整体仍返回错误码，掩盖了有效资源已存在的事实。
+
+#解决方案
+修改 `drivers/platform/x86/intel/speed_select_if/isst_tpmi_core.c` 中的逻辑，不再将 `sst_main()` 的返回值赋给 `ret` 变量。此时，如果循环中遇到无效资源直接跳过即可。函数是否返回错误由后续的 `!inst` 检查决定：如果没有任何有效资源被实例化，才返回 `-ENODEV`；否则返回 0 表示成功。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/640259e9bf063500ef435228ba7dd934118ccaca

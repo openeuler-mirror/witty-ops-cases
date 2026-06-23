@@ -1,0 +1,30 @@
+#标题
+spi: spidev锁顺序反转导致死锁或lockdep告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多线程环境下同时操作同一个 spidev 文件描述符进行 write()/read() 和 ioctl() 调用时，触发内核 lockdep 机制发出循环锁定依赖告警，严重时导致内核死锁。
+
+#主要错误日志
+WARNING: possible circular locking dependency detected
+spidev_ioctl() -> mutex_lock(&spidev->buf_lock)
+spidev_sync_write() -> mutex_lock(&spidev->spi_lock)
+*** DEADLOCK ***
+
+#问题根因
+spidev 驱动程序使用了 `spi_lock` 和 `buf_lock` 两个互斥锁，但在不同代码路径中获取锁的顺序不一致：
+1. write()/read() 路径：先获取 `buf_lock`，再获取 `spi_lock`。
+2. ioctl() 路径：先获取 `spi_lock`，再获取 `buf_lock`。
+这种 AB-BA 锁定模式违反了锁链规则，导致了潜在的死锁条件。
+
+#解决方案
+简化锁定模型，移除 `buf_lock`，统一使用 `spi_lock` 进行串行化访问。
+1. 删除结构体 `spidev_data` 中的 `buf_lock` 成员及其初始化代码。
+2. 移除 `spidev_sync` 中间函数，直接调用 `spidev_sync_unlocked`。
+3. 修改 `spidev_read` 和 `spidev_write` 函数，将原有的 `buf_lock` 替换为 `spi_lock`，并增加对 `spidev->spi` 是否为空的检查以处理设备移除场景。
+4. 移除 `spidev_ioctl` 和 `spidev_compat_ioc_message` 中对 `buf_lock` 的获取与释放操作，仅保留 `spi_lock`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/391eb22699c62e79929a0286c90821b10c943970

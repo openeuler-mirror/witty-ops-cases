@@ -1,0 +1,24 @@
+#标题
+dmaengine: idxd: 修复 idxd_alloc 函数错误处理路径中的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 idxd_alloc 函数执行过程中，若 ida_alloc、bitmap_zalloc_node 或 dev_set_name 等步骤因错误而失败退出函数时，之前步骤中已分配的内存资源（如 idxd 结构体、opcap_bmap 位图或 ida 资源）未被正确释放，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 idxd_alloc 在错误处理路径上未正确释放已分配的资源。当函数在后续步骤（如 bitmap 分配或设备命名设置）失败时，直接返回 NULL，但未回滚之前成功分配的 idxd 结构体内存、ida id 或 opcap_bmap，导致资源泄漏。
+
+#解决方案
+修改错误处理路径，使用 goto 跳转到对应的错误处理标签（err_ida、err_opcap、err_name），按照资源分配的相反顺序依次释放已分配的资源：
+1. 若 dev_set_name 失败，调用 put_device 和 bitmap_free，并释放 ida。
+2. 若 bitmap_zalloc_node 失败，释放 ida 并释放 idxd 结构体。
+3. 若 ida_alloc 失败，释放 idxd 结构体。
+以此确保在任何步骤失败时，所有已分配的资源都能被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9e05feb7b1aac88fe94babd106926e657f119620

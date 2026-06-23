@@ -1,0 +1,24 @@
+#标题
+bpf_msg_push_data 在消息末尾推送数据返回 EINVAL 及迭代逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `test_sockmap` 进行测试时，调用 `bpf_msg_push_data` 在消息末尾推送数据会错误地返回 `-EINVAL`，导致功能异常。此外，在处理 sk_msg_elem 迭代时，存在潜在的逻辑错误，可能导致迭代器处理不当。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **边界检查过严**：在第一个循环结束后，代码检查 `if (start >= offset + l)` 来判断是否应返回 `-EINVAL`。当 `bpf_msg_push_data` 试图在消息末尾追加数据时，`start` 等于 `offset + l`，该判断条件误报错误，导致合法操作返回 `-EINVAL`。
+2. **迭代器逻辑冗余与混乱**：在 `if (start - offset)` 代码块中，迭代器 `i` 可能指向最后一个 `sk_msg_elem`，此时 `sk_msg_iter_next(msg, end)` 可能被多余地调用两次（另一次在 `if (!copy)` 块中），实际上只需要一次。这导致代码逻辑混乱且迭代行为不正确。
+
+#解决方案
+1. **修正边界判断**：将边界检查条件从 `if (start >= offset + l)` 修改为 `if (start > offset + l)`，允许在消息末尾进行数据推送操作。
+2. **重构迭代逻辑**：
+   - 在 `if (start - offset)` 和之前的散列表处理逻辑中，增加对 `i == msg->sg.end` 的判断，并调用 `sk_msg_iter_var_prev(i)` 进行修正。
+   - 调整 `sk_msg_iter_next(msg, end)` 的调用位置，确保只执行一次，并重构循环逻辑以清晰处理 `sge`、`nsge` 和 `nnsge` 的移动与赋值，修复在特定条件下迭代器越界或逻辑错误的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/60a85f5f2292e309a06e88a14f4c835a47ede227

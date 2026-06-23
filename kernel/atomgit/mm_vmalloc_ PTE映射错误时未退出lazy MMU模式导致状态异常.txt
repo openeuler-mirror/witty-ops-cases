@@ -1,0 +1,20 @@
+#标题
+mm/vmalloc: PTE映射错误时未退出lazy MMU模式导致状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 vmalloc 相关的 PTE 映射操作时，若遇到映射错误（如页表项非空、页面指针为空或 PFN 无效），内核会触发 WARN_ON 警告并尝试返回错误码。由于 `vmap_pages_pte_range` 函数在进入 lazy MMU 模式后，在错误处理分支未正确退出该模式，导致系统处于不正确的 MMU 上下文状态，可能引发后续内存管理操作异常或不稳定行为。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `vmap_pages_pte_range()` 在执行映射前进入了 lazy MMU 模式，但在代码执行过程中遇到错误（如 `-EBUSY`、`-ENOMEM`、`-EINVAL`）并通过 `return` 直接退出函数时，未能成对调用退出 lazy MMU 模式的接口，导致系统滞留在 lazy MMU 模式中。
+
+#解决方案
+修改 `vmap_pages_pte_range` 函数的错误处理逻辑，将原来的直接 `return` 错误码修改为 `break` 跳出循环，确保函数能统一执行后续的退出 lazy MMU 模式流程，然后再返回错误码，从而保证 MMU 模式的状态一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b0232289e16e69689c9a18e780ff4056ee89a69b

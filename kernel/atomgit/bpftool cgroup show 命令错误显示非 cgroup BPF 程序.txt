@@ -1,0 +1,34 @@
+#标题
+bpftool cgroup show 命令错误显示非 cgroup BPF 程序
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `bpftool cgroup show` 命令时，错误地显示了非 cgroup 类型的 BPF 程序（如 netkit 程序）。当 netkit 设备的 ifindex 恰好与 cgroup_fd 的值（通常为 3）相同时，该 netkit 程序会出现在 cgroup 的查询结果中。
+
+#主要错误日志
+```
+> ip -d link show dev nk1
+3: nk1@if2: ...
+    link/ether ...
+    netkit mode ...
+
+> bpftool net show
+tc:
+nk1(3) netkit/peer tw_ns_nk2phy prog_id 469447
+
+> bpftool cgroup show /sys/fs/cgroup/...
+ID       AttachType      AttachFlags     Name
+...      ...                             ...
+469447   netkit_peer                     tw_ns_nk2phy
+```
+
+#问题根因
+在 `uapi/linux/bpf.h` 中，`target_fd`（此处为 cgroup_fd）与 `target_ifindex` 处于一个 union 结构中。bpftool 在遍历 BPF 附着类型时，错误地遍历了所有 `__MAX_BPF_ATTACH_TYPE`，其中包含了 netkit 等非 cgroup 的附着类型。当 cgroup_fd 的值（通常为 3）恰好与 netkit 设备的 ifindex 相同时，内核逻辑误将 netkit 程序匹配为该 cgroup 的程序并返回给 bpftool。
+
+#解决方案
+修改 `tools/bpf/bpftool/cgroup.c`，将遍历 BPF 附着类型的方式从遍历所有 `__MAX_BPF_ATTACH_TYPE` 改为仅遍历 `cgroup_attach_types[]` 数组。该数组明确定义了属于 cgroup 的附着类型，从而过滤掉 netkit 等非 cgroup 类型的干扰，确保 `bpftool cgroup show` 命令仅显示 cgroup BPF 程序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6375da968b3528496cc4eba984dd9afec94af5c4

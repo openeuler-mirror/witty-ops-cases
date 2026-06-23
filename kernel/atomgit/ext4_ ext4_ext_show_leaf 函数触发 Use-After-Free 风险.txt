@@ -1,0 +1,20 @@
+#标题
+ext4: ext4_ext_show_leaf 函数触发 Use-After-Free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 EXT_DEBUG 配置的情况下，ext4 文件系统进行_extent_分割操作时，可能触发 Use-After-Free 故障。该问题仅影响调试功能，不影响实际业务数据一致性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ext4_split_extent` 和 `ext4_ext_handle_unwritten_extents` 函数中，代码在调用路径中保存了 `path = *ppath`。随后调用的 `ext4_find_extent` 函数可能因错误释放 `path` 或重新分配内存。如果发生重分配或释放，原先保存的 `path` 指针将指向已释放的内存。当后续调用 `ext4_ext_show_leaf(inode, path)` 访问该指针时，即触发 Use-After-Free。
+
+#解决方案
+移除本地缓存的 `path` 变量，直接将 `*ppath` 作为参数传递给 `ext4_ext_show_leaf` 函数，确保使用的是经过 `ext4_find_extent` 更新后的最新、有效的路径指针。同时修正了函数 `ext4_split_extent` 注释中的拼写错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2d9ee808e32463888c5caa162e67c4fd44ec9a20

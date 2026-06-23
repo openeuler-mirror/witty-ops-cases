@@ -1,0 +1,28 @@
+#标题
+XFS filestream 分配器选 AG 时未初始化指针导致潜在崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 XFS 文件流分配器在主循环中无法找到合适的分配组（AG）时，尝试寻找一个兜底的 AG。在此过程中，由于代码逻辑错误，`pag` 指针可能未被正确初始化就被使用，导致内核崩溃或访问非法内存地址。该问题由 syzbot 发现。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `xfs_filestream_pick_ag` 中，当主循环未能找到合适的 AG 时，代码进入“last resort”（最后手段）分支。原代码逻辑试图通过 `for_each_perag_wrap` 循环来获取一个在线 AG，但该循环使用了 `args->pag` 作为迭代变量，而后续代码期望 `pag` 变量被正确设置。
+具体问题在于：
+1. 变量 `pag` 在循环外未被初始化。
+2. 循环语句 `for_each_perag_wrap(args->mp, 0, start_agno, args->pag)` 直接修改了 `args->pag`，而没有给局部变量 `pag` 赋值。
+3. 循环退出后，代码直接使用了可能未初始化的 `pag` 指针（或者逻辑错误的指针）进行引用计数增加和赋值操作，导致未定义行为或崩溃。
+
+#解决方案
+重构“last resort”查找逻辑，复用已有的 `max_pag` 指针来存储找到的 AG：
+1. 修改 `for_each_perag_wrap` 循环，将迭代变量从未使用的 `args->pag` 改为局部变量 `pag`，并在循环内部将找到的 AG 赋值给 `max_pag`。
+2. 增加对 `max_pag` 的非空检查，如果文件系统中完全没有 AG 可选，直接返回 `-ENOSPC` 错误，防止空指针泄露。
+3. 统一在循环外通过 `pag = max_pag` 赋值，确保后续操作使用的是有效的、已初始化的指针。
+4. 同步修改 trace 点参数，移除冗余的 `free` 参数，直接从 `pag` 结构体获取空闲块信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5c53e32a46603b1c11bbf91366e6d73f399f24ae

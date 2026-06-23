@@ -1,0 +1,20 @@
+#标题
+net: ipa: 修复 IPA v5.0+ 版本 EV_PER_EE 解码错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IPA v5.0+ 硬件版本上，内核驱动初始化过程中 `gsi_ring_setup` 函数对事件通道数量的探测逻辑存在错误。由于未正确读取 HW_PARAM_4 寄存器值，导致 `reg_decode` 解码时使用了错误的输入数据。这可能引发事件通道数量计算错误，进而导致 GSI (Generic Software Interface) 初始化失败或数据通路异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 IPA v5.0+ 版本中，获取 EV_PER_EE（每个执行环境的事件通道数）的寄存器已从 HW_PARAM_2 变更为 HW_PARAM_4。代码逻辑虽然正确切换了 `reg` 指向 HW_PARAM_4，但遗漏了对该寄存器值的读取操作（即执行 `ioread32`），导致变量 `val` 仍然保留为旧寄存器 HW_PARAM_2 的值。此时对 HW_PARAM_4 寄存器定义进行解码时使用了错误的 `val` 值，从而导致解码结果错误。
+
+#解决方案
+在 `gsi_ring_setup` 函数中，针对 IPA v5.0+ 的处理分支，在将 `reg` 指向 HW_PARAM_4 后，显式调用 `ioread32(gsi->virt + reg_offset(reg))` 读取该寄存器的实际值并更新 `val` 变量，确保后续 `reg_decode` 函数解码 EV_PER_EE 时使用正确的寄存器数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6efa2c12e50e6b1e6daa201d7ebc2ca0bebecb1b

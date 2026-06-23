@@ -1,0 +1,20 @@
+#标题
+ntfs3: 重命名失败后的错误处理逻辑导致潜在 inode 状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NTFS3 文件系统执行 rename 操作时，若新名称添加成功但在移除旧名称时失败，且随后的回滚操作（移除新名称）也失败，系统会将该 inode 标记为“bad inode”（坏节点）。此行为过于激进，可能导致文件系统对象不必要的不可用或状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ni_rename` 函数的实现中，当 `ni_add_name` 成功但 `ni_remove_name` 失败时，代码尝试回滚（移除刚添加的新名称）。如果回滚操作也失败，原代码逻辑通过设置 `is_bad` 标志并在调用链上层执行 `_ntfs_bad_inode(inode)` 来将 inode 标记为坏。这种处理方式在 rename 交互失败时直接破坏了 inode 的有效性，属于错误的异常处理路径。
+
+#解决方案
+移除 `ni_rename` 函数中对 `is_bad` 标志的设置逻辑及其传递。修改后的代码在 rename 失败且回滚也失败的场景下，不再将 inode 标记为 bad inode，而是使用 `WARN_ON` 记录该异常情况，保留 inode 现有状态，避免因错误处理不当导致文件不可访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3d934208ea3efb37f7f6cea70869b0c1057ee13f

@@ -1,0 +1,27 @@
+#标题
+KVM SVM 虚拟机迁移后 LBR 状态丢失导致性能分析功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+KVM 虚拟机在使用用户态工具（如 QEMU）进行保存/恢复或迁移操作时，LBR（Last Branch Record）相关状态丢失。具体表现为：
+1. 调用 `KVM_GET_MSR_INDEX_LIST` 接口时未返回 `MSR_IA32_DEBUGCTLMSR` 及 LBR 相关 MSR，导致用户态工具无法感知这些寄存器需要保存。
+2. 用户态尝试通过 `KVM_SET_MSRS` 恢复 LBR MSR 时写入失败。
+3. 在嵌套虚拟化场景下，L2 运行期间保存的状态恢复到 L1 时，LBR 数据未正确从 VMCB01 复制，导致 LBR 记录错乱或丢失。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **MSR 列表缺失**：内核代码中 `msrs_to_save_base` 数组未包含 `MSR_IA32_DEBUGCTLMSR` 和 LBR MSRs（`MSR_IA32_LASTBRANCHFROMIP` 等），导致 KVM 未向用户态报告这些寄存器需要保存。
+2. **写入权限缺失**：SVM 模拟器中缺少对 LBR MSRs 的 `set_msr` 处理逻辑，导致用户态工具无法通过 `KVM_SET_MSRS` 恢复这些寄存器值。
+3. **嵌套状态复制遗漏**：在 `svm_copy_vmrun_state()` 函数中，未将 LBR 相关字段（`dbgctl`, `br_from`, `br_to` 等）从源 VMCB 保存区域复制到目标区域，导致嵌套场景下状态丢失。
+
+#解决方案
+1. **扩展 MSR 列表**：在 `arch/x86/kvm/x86.c` 的 `msrs_to_save_base` 数组中添加 `MSR_IA32_DEBUGCTLMSR` 及 LBR 相关 MSR，使其对用户态可见。
+2. **实现 LBR MSR 写入支持**：在 `arch/x86/kvm/svm/svm.c` 的 `svm_set_msr` 函数中增加对 `MSR_IA32_LASTBRANCHFROMIP`、`MSR_IA32_LASTBRANCHTOIP` 等寄存器的处理 case，允许来自用户态的写入请求，并标记 VMCB 为脏页。
+3. **修复嵌套状态复制**：在 `arch/x86/kvm/svm/nested.c` 的 `svm_copy_vmrun_state()` 函数中，增加对 `dbgctl`、`br_from`、`br_to` 等字段的显式复制逻辑，并清除保留位，确保 L1 状态正确恢复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5bb579048146c2f829462e59f54b539ebdb394de

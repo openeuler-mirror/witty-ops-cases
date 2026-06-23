@@ -1,0 +1,20 @@
+#标题
+ucounts: mq_perf测试在rlimit测试中报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+运行 mq_perf_tests 测试套件时，在 rlimit 测试项中报告错误，导致测试失败。具体表现为当传入 RLIM_INFINITY 作为限制参数时，计算出的最大值可能小于 0，引发非预期的判断逻辑。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于提交 d8043c5873a0 ("ucounts: reimplement rlimit with percpu_counter")。该提交引入了 limit 参数作为输入，但参数类型定义为 `long`。当用户空间传入 `RLIM_INFINITY`（通常定义为无符号长整型的最大值）时，作为有符号长整型 `long` 处理会导致数值被解释为负数。在计算最大值时（如使用 `min` 宏），负数参与比较导致计算出的最大值可能小于 0，从而引发逻辑错误。
+
+#解决方案
+将相关函数接口中的 limit 参数类型从 `long` 修改为 `unsigned long`，确保能正确处理 RLIM_INFINITY 等大值无符号参数。同时，将内部的比较逻辑由 `min(limit, max)` 显式修改为 `limit < max ? limit : max` 的三元运算符形式，避免因类型转换导致的符号位扩展问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cac9b324f7062f9221e1f36d588e42354e5e7bfe

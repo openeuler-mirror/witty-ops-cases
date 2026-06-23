@@ -1,0 +1,32 @@
+#标题
+hugetlb: fork时因PMD共享计数追踪错误导致soft lockup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在禁用lazy page table copy功能（即回退了commit bcd51a3c679d）的情况下，使用hugetlb进行fork()操作时，若涉及PMD共享，系统会迅速发生死锁。具体表现为CPU卡死，触发soft lockup检测，进程无法完成复制操作。
+
+#主要错误日志
+[  239.446559] watchdog: BUG: soft lockup - CPU#75 stuck for 27s!
+[  239.446611] RIP: 0010:native_queued_spin_lock_slowpath+0x7e/0x2e0
+[  239.446631] Call Trace:
+[  239.446633]  <TASK>
+[  239.446636]  _raw_spin_lock+0x3f/0x60
+[  239.446639]  copy_hugetlb_page_range+0x258/0xb50
+[  239.446645]  copy_page_range+0x22b/0x2c0
+[  239.446651]  dup_mmap+0x3e2/0x770
+[  239.446654]  dup_mm.constprop.0+0x5e/0x230
+[  239.446657]  copy_process+0xd17/0x1760
+[  239.446660]  kernel_clone+0xc0/0x3e0
+[  239.446661]  __do_sys_clone+0x65/0xa0
+[  239.446664]  do_syscall_64+0x82/0x930
+
+#问题根因
+commit 59d9094df3d79 ("mm: hugetlb: independent PMD page table shared count") 引入了 `->pt_share_count` 专门用于追踪 hugetlb PMD 共享计数，但遗漏了对 `copy_hugetlb_page_range()` 函数的适配修改。该函数仍然错误地依赖 `page_count()` 来判断页表是否共享，导致判断逻辑失效，进而引发死锁。
+
+#解决方案
+修改 `copy_hugetlb_page_range()` 函数，将原本依赖 `page_count(virt_to_page(dst_pte))` 的判断逻辑，更改为使用专用的 `ptdesc_pmd_is_shared(virt_to_ptdesc(dst_pte))` 接口来正确检查PMD页表是否被共享。同时，新增并使用 `ptdesc_pmd_is_shared` 辅助函数替代直接读取 `ptdesc_pmd_pts_count`，以简化代码逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f9ebe960a3df9d958fac3f9a570e9891c6707fc

@@ -1,0 +1,22 @@
+#标题
+drm/amd/display: dce_hwseq 空指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 eDP 显示信号处理流程中，当调用 `dce110_blank_stream` 函数时，若 `link->dc->hwseq`（即 `hws`）为空指针，且 `link->skip_implict_edp_power_control` 为假时，代码尝试访问 `hws->funcs.edp_backlight_control` 会触发空指针解引用，导致内核 Oops 或系统崩溃。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference
+Unable to handle kernel NULL pointer dereference at virtual address 0x...
+RIP: dce110_blank_stream+0x.../0x...
+
+#问题根因
+函数 `dce110_blank_stream` 从 `link->dc->hwseq` 获取了 `hws` 指针，但在调用 `hws->funcs.edp_backlight_control` 进行背光控制前，未检查 `hws` 是否为空。在特定硬件初始化异常或状态不一致的情况下，`hws` 可能为 NULL，导致解引用失败。
+
+#解决方案
+在 `dce110_blank_stream` 函数中，增加对 `hws` 指针的有效性检查。在原有的条件判断 `!link->skip_implict_edp_power_control` 基础上，追加 `&& hws` 判断，确保 `hws` 非空时才执行背光控制操作，从而避免空指针解引用风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/17b5ee4123ae14d647ccbc608990cd3d4c0a3374

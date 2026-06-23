@@ -1,0 +1,21 @@
+#标题
+brcmfmac: P2P发现功能因探测请求缺失P2P IE而失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+P2P（Peer-to-Peer）发现功能失效，其他P2P设备无法发现本机设备。具体表现为在进行P2P扫描时，固件未将P2P Information Element (IE) 添加到发出的探测请求帧中，导致对端P2P设备无法识别本机，造成P2P业务回归问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在提交 bd99a3013bdc ("brcmfmac: move configuration of probe request IEs") 中，probe request MGMT IE 的添加操作 `brcmf_vif_set_mgmt_ie()` 从 `brcmf_p2p_scan_prep()` 移动到了 `brcmf_cfg80211_scan()`。
+由于代码移动后，`brcmf_cfg80211_scan()` 函数内部在调用 `brcmf_vif_set_mgmt_ie()` 之前，过早地将用于添加 Probe Request P2P IE 的 vif 结构体指针从 `P2PAPI_BSSCFG_DEVICE` vif 错误地修改为了 `P2PAPI_BSSCFG_PRIMARY` vif。这导致固件无法在正确的接口上配置 P2P IE，进而停止向 P2P 发现探测请求帧中添加 P2P IE。
+
+#解决方案
+在 `brcmf_cfg80211_scan()` 函数中，调整 vif 指针的赋值时机。确保直到 `brcmf_vif_set_mgmt_ie()` 函数执行完成后，再进行 vif 指针的替换（从 P2PAPI_BSSCFG_DEVICE 到 P2PAPI_BSSCFG_PRIMARY），从而保证固件能正确接收到 P2P IE 配置并添加到发出的帧中。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9da620ff859b5e88f0de651787beba1eaf302043

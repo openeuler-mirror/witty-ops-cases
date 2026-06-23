@@ -1,0 +1,22 @@
+#标题
+urma 设备切换命名空间引发空指针解址导致调用栈追踪
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 drain_workqueue 后删除 jetty 时，若硬件上报 flush_err_done 状态，代码未对 CR（Completion Report）的状态进行特殊处理。此时 user_ctx 已非法，继续解引用 user_ctx 导致内核调用栈追踪。
+
+#主要错误日志
+- `Tx status error. status %d, comp_len %u.`
+- `Send WR flushed or cr user_ctx is NULL.`
+
+#问题根因
+并发处理不当导致。在设备删除流程中，代码先调用 drain_workqueue，随后删除 jetty。此时硬件可能仍在上报 flush_err_done 事件，而对应的 CR user_ctx 已经变为非法指针。由于代码未检查 CR 的错误状态（如 `UBCORE_CR_WR_FLUSH_ERR_DONE`）就直接解引用 user_ctx，从而触发 panic 或 oops。
+
+#解决方案
+1. 在 `ping_wq_on_sended` 函数中增加对 `cr->status` 的判断，若状态为 `UBCORE_CR_WR_FLUSH_ERR_DONE` 或 `cr->user_ctx` 为 0，则直接返回，避免解引用非法指针。
+2. 引入自旋锁 `wq_lock` 保护 workqueue 指针与 `queue_work` 操作。在移除设备时，先持有锁将 `ctx->wq` 置空，阻止新事件入队，然后再执行 `drrain_workqueue`，最后销毁 workqueue，以此消除并发风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75cf58b13c58534faedbe6805be4d09ddf9219d1

@@ -1,0 +1,20 @@
+#标题
+Bluetooth: L2CAP: l2cap_ecred_reconf_rsp 函数类型混淆导致数据解析错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Bluetooth L2CAP 增强信用模式下的重配置响应处理流程中，存在类型混淆问题。一方面，由于使用了错误的结构体大小进行长度校验（校验要求 8 字节而非正确的 2 字节），导致合法的 L2CAP_ECRED_RECONF_RSP 数据包被错误拒绝，函数返回 -EPROTO 错误；另一方面，解析结果字段时从错误的偏移量（offset 6 而非 offset 0）读取数据，导致获取到错误的重配置结果值。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `l2cap_ecred_reconf_rsp()` 在处理传入数据时，错误地将数据强制转换为 `struct l2cap_ecred_conn_rsp`（ECRED 连接响应结构体，大小 8 字节，result 字段位于偏移量 6），而非正确的 `struct l2cap_ecred_reconf_rsp`（ECRED 重配置响应结构体，大小 2 字节，result 字段位于偏移量 0）。这种类型混淆导致了长度检查逻辑错误和结果数据读取偏移错误。
+
+#解决方案
+将 `l2cap_ecred_reconf_rsp()` 函数中的指针类型转换修正为正确的 `struct l2cap_ecred_reconf_rsp`。同时，修正调试日志打印逻辑，使用已经过字节序转换的 `result` 变量而非原始的 `__le16` 字段进行打印。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/943406a96a2e643c2d6d00d2a8e021eb0200a6ea

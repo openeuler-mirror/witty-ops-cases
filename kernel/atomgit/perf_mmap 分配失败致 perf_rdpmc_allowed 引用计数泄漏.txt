@@ -1,0 +1,20 @@
+#标题
+perf_mmap 分配失败致 perf_rdpmc_allowed 引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 perf_mmap() 分配缓冲区失败时，内核仍错误地调用了相关事件的 event_mapped() 回调函数。在 X86 架构下，这会导致 perf_rdpmc_allowed 引用计数被增加，但由于映射失败，后续的 perf_mmap_close() 不会被调用，导致该引用计数无法递减，从而引发引用计数泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 perf_mmap() 函数中，即使缓冲区分配失败（ret 不为 0），代码仍继续执行并调用了 event_mapped() 回调。对于 X86 架构，该回调会增加 perf_rdpmc_allowed 引用计数。由于映射过程已失败，vma 未成功建立，perf_mmap_close() 永远不会被触发，导致之前增加的引用计数无法被抵消，造成泄漏。
+
+#解决方案
+在 perf_mmap() 函数中，于解锁 mutex 后立即检查返回值 ret。若 ret 不为 0（即分配失败），则直接返回错误码，跳过后续的 event_mapped() 回调处理，从而避免引用计数泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bbb76cd4c04ef16ec3662e5f570d3d50a9822f29

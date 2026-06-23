@@ -1,0 +1,31 @@
+#标题
+ dccp: dccp_feat_change_recv 函数内存泄漏故障
+
+#内核版本
+ OLK-6.6
+
+#问题现象
+ 在处理 DCCP 协议的 Change feature-negotiation 选项时，若 dccp_feat_push_confirm() 函数调用失败，系统会发生内存泄漏。通过 kmemleak 工具可观测到未释放的内核对象，且可追踪到泄露发生在 dccp_feat_change_recv 函数处理 SP feature 且无需协调（entry 为 NULL）的分支路径中。
+
+#主要错误日志
+ unreferenced object 0xffff88801d4ab488 (size 8):
+  comm "syz-executor310", pid 1127, jiffies 4295085598 (age 41.666s)
+  hex dump (first 8 bytes):
+    01 b4 4a 1d 80 88 ff ff                          ..J.....
+  backtrace:
+    [<00000000db7cabfe>] kmemdup+0x23/0x50 mm/util.c:128
+    [<0000000019b38405>] dccp_feat_clone_sp_val net/dccp/feat.c:371 [inline]
+    [<0000000019b38405>] dccp_feat_change_recv net/dccp/feat.c:1145 [inline]
+    [<0000000019b38405>] dccp_feat_parse_options+0x1196/0x2180 net/dccp/feat.c:1416
+    [<00000000b1f6d94a>] dccp_parse_options+0xa2a/0x1260 net/dccp/options.c:125
+    [<0000000030d7b621>] dccp_rcv_state_process+0x197/0x13d0 net/dccp/input.c:650
+    ... (后续调用栈省略)
+
+#问题根因
+ 在 dccp_feat_change_recv 函数中，当接收到新的 SP feature 值且不需要协调（即 `entry == NULL` 分支）时，代码会调用 dccp_feat_clone_sp_val 分配内存以存储新值。随后调用 dccp_feat_push_confirm 进行处理，如果该函数调用失败，原有代码直接返回错误，却未释放此前为 fval.sp.vec 分配的内存，导致内存泄漏。
+
+#解决方案
+ 在 dccp_feat_push_confirm 调用失败时，增加对 fval.sp.vec 的内存释放逻辑（调用 kfree），并返回 DCCP_RESET_CODE_TOO_BUSY 错误码，确保资源正确回收。
+
+#来源
+ https://atomgit.com/openeuler/kernel/commit/7b26e91951d7e8c1d97c287b7e5dcb42e64c4847

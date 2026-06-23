@@ -1,0 +1,23 @@
+#标题
+can: sun4i_can: 修复错误计数器统计不准确问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Allwinner A10/A20 CAN 控制器发生总线错误中断时，系统的网络设备统计信息中，接收错误计数器（rx_errors）会在发送错误发生时被错误地递增，而发送错误计数器（tx_errors）始终保持不变。这导致用户无法通过 `ip -s link` 或 `/proc/net/dev` 等接口获取正确的 CAN 总线收发错误统计数据，影响故障诊断与链路质量监控。
+
+#主要错误日志
+bus error interrupt
+
+#问题根因
+`sun4i_can_err()` 函数在处理总线错误中断时逻辑存在缺陷：原代码无条件地递增 `stats->rx_errors`，完全忽略了状态寄存器（STA）中 `STA_ERR_DIR` 标志位的值。根据硬件设计，`STA_ERR_DIR` 标志位用于指示当前错误发生在接收阶段还是发送阶段，原代码未根据该标志区分错误方向，导致统计逻辑错误。
+
+#解决方案
+修改 `drivers/net/can/sun4i_can.c` 中的错误处理逻辑：
+1. 将 `ecc` 寄存器读取操作提前，确保在判断逻辑前获取到错误状态。
+2. 移除无条件递增 `stats->rx_errors` 的代码。
+3. 新增对 `SUN4I_STA_ERR_DIR` 标志位的判断逻辑：若标志位为 0（表示发送错误），则递增 `stats->tx_errors`；否则（表示接收错误），递增 `stats->rx_errors`。以此确保收发错误统计与硬件实际状态一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/af889e22830588db67cd77ab9d7b1916a9acdb25

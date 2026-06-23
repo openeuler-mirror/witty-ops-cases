@@ -1,0 +1,24 @@
+#标题
+can: hi311x: hi3110_can_ist() 错误统计计数异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Holt HI-311x CAN 控制器驱动时，CAN 总线发生错误时，内核统计信息不准确。具体表现为：当 CAN 总线发生位错误或应答错误时，这些本质属于发送阶段的错误被错误地统计到接收错误计数器（rx_errors）中，导致 `ip -s link show can0` 等命令显示的错误统计与实际链路故障类型不符。
+
+#主要错误日志
+[   xx.xxxx] hi311x spi0.0: Bus Error
+（注：依据代码 diff 中保留的 `netdev_dbg(priv->net, "Bus Error\n");` 推断）
+
+#问题根因
+`hi3110_can_ist()` 函数在处理 CAN 协议错误中断时，逻辑存在缺陷。代码在检测到协议错误掩码（`HI3110_ERR_PROTOCOL_MASK`）后，无条件地增加接收错误计数器（`priv->net->stats.rx_errors++`），未根据具体的错误类型进行区分。实际上，位错误（`HI3110_ERR_BITERR`）和应答错误（`HI3110_ERR_ACKERR`）发生在发送过程中，理应增加发送错误计数器（`tx_errors`），而非接收错误计数器。
+
+#解决方案
+修改 `hi3110_can_ist()` 函数中的错误处理逻辑，根据 `eflag` 标志位区分错误类型并更新相应的统计计数器：
+1. 对于位错误（`HI3110_ERR_BITERR`）和应答错误（`HI3110_ERR_ACKERR`），增加 `tx_errors` 计数。
+2. 对于格式错误（`HI3110_ERR_FRMERR`）、填充错误（`HI3110_ERR_STUFERR`）和 CRC 错误（`HI3110_ERR_CRCERR`），增加 `rx_errors` 计数。
+3. 同时修复了 `alloc_can_err_skb` 分配失败时的处理逻辑，防止空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31f8564c618d1126bf84bd18143b3566497504a9

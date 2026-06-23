@@ -1,0 +1,28 @@
+#标题
+octeon_ep驱动中断处理重构导致特定中断事件未被正确处理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在采用单一通用中断处理函数处理所有非队列中断时，若第一个检查的中断事件（如 OEI_RINT）被处理并返回，后续其他中断事件（如输入/输出环错误、VF错误、DMA错误等）将被忽略，导致这些中断无法得到及时响应和处理，进而引发功能异常或错误状态丢失。
+
+#主要错误日志
+- Received OEI_RINT intr: 0x%llx
+- Received IRERR_RINT intr: 0x%llx
+- Received ORERR_RINT intr: 0x%llx
+- Received VFIRE_RINT intr: 0x%llx
+- Received VFORE_RINT intr: 0x%llx
+- Received DMA_VF_RINT intr: 0x%llx
+- Received PP_VF_RINT intr: 0x%llx
+- Received MISC_RINT intr: 0x%llx
+- Reserved interrupts raised; Ignore
+
+#问题根因
+原有的 `octep_non_ioq_intr_handler_cn93_pf` 中断处理函数设计存在缺陷：函数内部针对不同中断源进行串行检查，一旦某个中断状态位被检测到并处理，代码即执行 `goto irq_handled` 跳转并返回。这导致在同一个中断上下文中，如果同时触发了多个中断源，排在后面的中断源将被跳过，无法得到处理。
+
+#解决方案
+重构中断处理机制，将原本单一的通用中断处理函数拆分为多个独立的中断处理函数（如 `octep_ire_intr_handler_cn93_pf`、`octep_ore_intr_handler_cn93_pf` 等）。在请求 IRQ 时，根据中断名称将不同的中断向量注册到对应的专用处理函数中，确保每种中断事件都有独立的处理入口，互不干扰，从而保证所有中断事件都能被正确检测和处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a7affbecfac1259ca4deda1632858e92f3a6ac37

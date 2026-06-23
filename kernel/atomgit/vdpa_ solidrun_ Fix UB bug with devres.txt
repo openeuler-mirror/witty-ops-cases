@@ -1,0 +1,23 @@
+#标题
+vdpa: solidrun: Fix UB bug with devres
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 solidrun vdpa 设备驱动时，如果 PCI 设备名称较长，可能导致内核栈溢出或内存访问越界（UB），具体表现为内核panic或驱动加载失败。
+
+#主要错误日志
+SNET_ERR(pdev, "Failed to request and map PCI BARs\n")
+
+#问题根因
+驱动在函数 `psnet_open_pf_bar` 和 `snet_open_vf_bar` 中定义了固定大小的栈变量 `char name[50]`，并使用 `snprintf` 将 PCI 设备名称拼接到该数组中。当 `pci_name(pdev)` 返回的字符串过长时，拼接后的字符串长度可能超过 50 字节，导致缓冲区溢出，引发未定义行为。
+
+#解决方案
+将栈上的固定大小字符数组替换为动态分配的内存。具体修改：
+1. 将 `char name[50]` 替换为 `char *name`。
+2. 使用 `devm_kasprintf` 动态生成字符串，该函数会自动处理内存分配并返回正确长度的字符串。
+3. 增加 `devm_kasprintf` 返回值的内存分配失败检查，若返回 NULL 则返回 `-ENOMEM`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b69e9a08779e6e6c8a5b96579d3c4bc202b22150

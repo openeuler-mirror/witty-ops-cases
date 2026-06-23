@@ -1,0 +1,20 @@
+#标题
+perf/core: pmus_lock 与 pmus_srcu 锁序错误导致 lockdep 报警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 PMU 设备注销操作（如卸载性能事件相关的内核模块）时，触发 lockdep 死锁检测报警，提示锁顺序冲突。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit a63fbed776c7 ("perf/tracing/cpuhotplug: Fix locking order") 将 pmus_lock 放置在 pmus_srcu 内部（或导致 pmus_lock 与 pmus_srcu 的嵌套持有），这导致在 perf_pmu_unregister() 函数中违反了锁的依赖顺序，从而触发 lockdep 报警。具体冲突在于 synchronize_srcu() 等待 SRCU 读临界区结束时，可能仍在持有 pmus_lock，造成了锁序颠倒。
+
+#解决方案
+调整 pmus_lock 锁的持有范围。在 perf_pmu_unregister() 中，仅在对 pmu_idr 和 pmus 链表进行修改操作时持有 pmus_lock，修改完成后立即释放锁。避免在持有 pmus_lock 的情况下调用 synchronize_srcu() 或 synchronize_rcu()，从而修正了锁的依赖关系，解决了 lockdep 报警问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1239cab74239a580572f7380e164a4db2b1eb31b

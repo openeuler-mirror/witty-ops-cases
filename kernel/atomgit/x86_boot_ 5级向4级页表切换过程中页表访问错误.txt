@@ -1,0 +1,24 @@
+#标题
+x86/boot: 5级向4级页表切换过程中页表访问错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 x86_64 架构下，当系统从 5 级分页（5-level paging）切换到 4 级分页（4-level paging）时，引导阶段代码错误地解析 CR3 寄存器值和页表项。由于未正确屏蔽 CR3 中的元数据位（如 SME 或 LAM 位）以及 PGD（页全局目录）中的高位标志（如 `_PAGE_BIT_NOPTISHADOW`），可能导致访问错误的物理地址，进而引发引导失败或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+现有代码在处理 5 级到 4 级分页转换时，直接对 `__native_read_cr3()` 返回的原始 CR3 寄存器值应用 `PAGE_MASK` 进行掩码操作，存在以下缺陷：
+1. `__native_read_cr3()` 返回值包含 CR3 寄存器中的非地址标志位，且高于系统物理地址宽度的位未被屏蔽。
+2. 使用 `PAGE_MASK` 屏蔽 PGD 表项值时，未能正确处理第 51 位以上的标志位（特别是 `_PAGE_BIT_NOPTISHADOW`），导致生成的地址错误。
+
+#解决方案
+使用正确的访问器函数和掩码宏替换原有的直接操作：
+1. 使用 `native_read_cr3_pa()` 替代 `__native_read_cr3()`。该函数使用 `CR3_ADDR_MASK` 正确屏蔽了 CR3 中的元数据位（如 SME、LAM 相关位），确保获取纯净的物理地址。
+2. 使用 `PTE_PFN_MASK` 替代 `PAGE_MASK` 对 PGD 表项值进行掩码操作，以正确处理包括 `_PAGE_BIT_NOPTISHADOW` 在内的高位标志，确保页表基址提取的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b429f6633b46c2edb8a236b03d833d1623e84270

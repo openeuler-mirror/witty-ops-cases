@@ -1,0 +1,20 @@
+#标题
+ASoC: fsl_xcvr: 修复因重复持有读写锁导致的死锁及挂起问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 ALSA 控制元素写入操作时，系统发生死锁，导致相关进程处于不可中断睡眠状态（hung task），系统响应挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+前一个修复补丁（commit f51424872760）错误地在 `fsl_xcvr_mode_put()` 函数中尝试获取 `card->controls_rwsem` 的读锁。然而，该函数是由 ALSA 核心层的 `snd_ctl_elem_write()` 函数调用的，上层调用者已经持有了 `controls_rwsem` 的写锁。在同一线程中，持有写锁的同时再次尝试获取读锁，导致了死锁。
+
+#解决方案
+撤销错误的锁操作，移除 `fsl_xcvr_mode_put()` 函数中对 `controls_rwsem` 的 `down_read()` 和 `up_read()` 调用。由于上层调用路径已持有该锁，无需在此处重复加锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/930a1b099c7e04d41c442cb22b7a1f1b703673f4

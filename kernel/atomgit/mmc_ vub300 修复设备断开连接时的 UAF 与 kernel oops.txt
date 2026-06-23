@@ -1,0 +1,20 @@
+#标题
+mmc: vub300 修复设备断开连接时的 UAF 与 kernel oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 vub300 SDIO 读卡器设备断开连接时，内核可能发生 Use-After-Free 或产生 kernel oops，导致系统不稳定或崩溃。
+
+#主要错误日志
+USB vub300 remote SDIO host controller[%d] now disconnected
+
+#问题根因
+在 `vub300_disconnect` 函数中，`kref_put` 被调用在 `mmc_remove_host` 之前。这导致引用计数可能过早归零，从而释放了 `vub300` 结构体。随后的 `mmc_remove_host` 函数调用访问了已经被释放的结构体内存，触发了 Use-After-Free 问题。
+
+#解决方案
+调整函数调用顺序，先执行 `mmc_remove_host` 停止主机控制器并确保所有 I/O 操作结束，然后再调用 `kref_put` 释放对象引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/35d137ec0a1999542e6de3e1d2c095814f75e50e

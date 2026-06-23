@@ -1,0 +1,23 @@
+#标题
+wifi: rtl8xxxu驱动潜在未初始化值使用导致数据不一致风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 rtl8xxxu 无线网卡驱动时，函数 `rtl8xxxu_update_ra_report()` 中的局部变量 `mcs` 和 `nss` 可能未经初始化即被使用。当处理非预期的 rate index（既非 Legacy rates 也非标准 HT rates）时，辅助函数 `rtl8xxxu_desc_to_mcsrate()` 未对这些输出参数赋值便返回，导致后续 `cfg80211_calculate_bitrate` 等函数使用栈上的随机垃圾值，可能引发无线速率报告错误或不可预知的内核行为。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `rtl8xxxu_update_ra_report()` 定义了局部变量 `mcs` 和 `nss`，并将其作为输出参数传递给辅助函数 `rtl8xxxu_desc_to_mcsrate()`。该辅助函数的逻辑仅处理了 HT rates（MCS0-15），对于 Legacy rates 直接返回，且未对 `mcs` 和 `nss` 进行初始化或赋值。如果传入的 rate 属于 Legacy rates 或未定义的 rate，主函数后续代码将直接使用这些未初始化的变量值。
+
+#解决方案
+移除辅助函数 `rtl8xxxu_desc_to_mcsrate()`，将其逻辑直接内联到 `rtl8xxxu_update_ra_report()` 中，并重构处理流程以确保所有分支均显式处理：
+1. 对于 Legacy rates（rate <= DESC_RATE_54M）：仅设置 legacy bitrate，不涉及 mcs/nss 变量。
+2. 对于 HT rates（DESC_RATE_MCS0 <= rate <= DESC_RATE_MCS15）：显式设置 MCS flags、mcs index 以及 nss（根据 rate 判断为 1 或 2）。
+3. 对于其他无效 rate：直接 return 提前退出，避免使用未初始化变量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fab0a28f621a3985930efc2c06c204cc90e6cef2

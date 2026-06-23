@@ -1,0 +1,24 @@
+#标题
+UDP socket地址变更与rehash重哈希竞争导致接收丢包
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在UDP socket执行地址变更操作期间，若同时进行接收端查找，会出现概率性的数据包接收失败或丢包现象。具体表现为：当 `__ip4_datagram_connect` 设置了新的 `sk_rcv_saddr` 但尚未完成重哈希操作时，接收路径的 socket 查找函数因哈希表未更新而无法找到对应的 socket，导致数据包被当作无法投递而丢弃。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因是 UDP socket 地址变更与接收查找之间存在竞争条件：
+1. `__ip4_datagram_connect()` 函数首先设置了新的 socket 接收地址 `sk_rcv_saddr`；
+2. 此时接收侧的查找函数被调用，读取到了新的 `sk_rcv_saddr`；
+3. 但此时 socket 尚未执行重哈希操作更新二级哈希和四元组哈希表；
+4. 导致查找函数在旧的哈希表中无法匹配到该 socket，查找结果为空，引发丢包。
+
+#解决方案
+在 `__udp4_lib_lookup` 和 `__udp6_lib_lookup` 函数中增加一级哈希查找作为回退机制。当常规的二级哈希查找未能找到 socket 时，调用新增的 `udp4_lib_lookup1`（IPv4）或 `udp6_lib_lookup1`（IPv6）函数。该函数仅基于目的端口进行一级哈希查找，不依赖于可能处于更新中间状态的二级哈希表，从而兼容地址变更期间哈希表尚未更新的情况，修复了该竞争条件导致的丢包问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e46f2f4e8f235ba3e1f8191261d3ccc307b71ce

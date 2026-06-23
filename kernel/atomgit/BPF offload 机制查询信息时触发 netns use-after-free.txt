@@ -1,0 +1,20 @@
+#标题
+BPF offload 机制查询信息时触发 netns use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在查询 offload 模式的 BPF map 或 program 信息时，若相关联的网络设备正在经历命名空间销毁流程，内核会检测到 refcount 计数异常，触发 use-after-free 警告，可能导致内核 panic 或系统不稳定。
+
+#主要错误日志
+refcount_t: addition on 0; use-after-free.
+
+#问题根因
+在 `bpf_map_offload_info_fill_ns()` 和 `bpf_prog_offload_info_fill_ns()` 函数中，通过 `get_net(dev_net(offmap->netdev))` 获取网络命名空间。虽然 `rtnl_lock` 和 `bpf_devs_lock` 保证了 netdev 指针本身的有效性，但无法阻止其所属 netns 的引用计数在并发场景下降至 0。当 netns 引用计数已经为 0 时，`get_net()` 强行执行加 1 操作，触发了 refcount_t 机制对“0 值加法”的检查与报错。
+
+#解决方案
+将 `get_net()` 替换为 `maybe_get_net()`。`maybe_get_net()` 内部使用 `refcount_inc_not_zero()`，仅当引用计数不为 0 时才增加引用，否则返回 NULL。若返回 NULL，`ns_get_path_cb()` 会处理失败情况并向上层返回 `-ENOENT`，这是处理正在销毁中的 netns 的正确逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ec0362c04066e2815e34769920c67048ccb33272

@@ -1,0 +1,20 @@
+#标题
+exynos4-is: FIMC-IS设备节点引用计数泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 exynos4-is 媒体设备驱动中，函数 `fimc_md_is_isp_available()` 被调用以检查 FIMC-IS 是否可用。该函数内部通过 `of_get_child_by_name()` 获取设备节点，但未在后续流程中释放该节点的引用计数。这导致了设备树（OF）节点引用计数泄漏，可能会影响系统的设备树资源管理，阻碍相关设备节点的正常释放或卸载。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fimc_md_is_isp_available()` 函数中，调用 `of_get_child_by_name()` 成功获取设备节点后，增加了该节点的引用计数，但代码逻辑结束时未调用 `of_node_put()` 来减少引用计数。根据内核设备树资源管理规则，通过 `of_get_*` 系列函数获取的节点必须在不再使用时释放，否则将导致引用计数泄漏。
+
+#解决方案
+修改 `drivers/media/platform/samsung/exynos4-is/media-dev.h` 文件中的 `fimc_md_is_isp_available()` 函数。引入 `__free(device_node)` 自动清理机制（即使用 `struct device_node *child __free(device_node)` 定义变量），当变量离开作用域时，编译器会自动插入 `of_node_put()` 调用，从而确保设备节点引用计数被正确释放，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9d43ba1578b1b41606dba44f933f5528f86da097

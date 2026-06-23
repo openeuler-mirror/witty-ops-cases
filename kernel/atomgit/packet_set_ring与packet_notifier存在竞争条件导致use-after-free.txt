@@ -1,0 +1,21 @@
+#标题
+packet_set_ring与packet_notifier存在竞争条件导致use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `packet_set_ring` 设置 ring buffer 时，若与 `packet_notifier` 并发执行，可能触发内核 panic 或内存 UAF（Use-After-Free）故障。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `packet_set_ring` 函数中，清理 `po->num`（设置为 0）和调用 `__unregister_prot_hook` 的操作被包含在同一个 `if (was_running)` 条件判断中。
+当发生竞争时，`packet_notifier` 可能会在 `po->num` 被清理之前被触发，此时由于 `po->num` 仍为原值，`packet_notifier` 可能执行不恰当的钩子注册或注销逻辑。若此时 `packet_set_ring` 正在释放或重新分配相关资源，将导致状态不一致或对已释放内存的访问（UAF）。
+
+#解决方案
+将 `WRITE_ONCE(po->num, 0)` 操作移至 `if (was_running)` 条件判断之外执行。这确保了在进行 hook 注销操作前，`po->num` 已经被清零，从而避免 `packet_notifier` 在竞争窗口期内基于旧的 `po->num` 值进行错误操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c6546b3e5bcddf830166fd0a0db21e4cbbd276a9

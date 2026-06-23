@@ -1,0 +1,31 @@
+#标题
+mptcp_connect.sh 自测脚本输出格式错位
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 MPTCP 自测脚本 `mptcp_connect.sh` 时，控制台输出的日志格式存在对齐问题。首行输出的 `[ OK ]` 标记与后续输出的测试结果列不对齐，且 "INFO: validating network environment" 行缺乏结果反馈，导致测试输出视觉效果混乱，影响可读性。
+
+具体表现如下：
+New MPTCP socket can be blocked via sysctl              [ OK ]
+INFO: validating network environment with pings
+ns1 MPTCP -> ns1 (10.0.1.1:10000      ) MPTCP   (duration   184ms) [ OK ]
+
+#主要错误日志
+无（此问题为脚本输出格式异常，不涉及内核运行时错误日志）
+
+#问题根因
+脚本 `mptcp_connect.sh` 中 `printf` 格式化字符串设置不当：
+1. 首行 "New MPTCP socket can be blocked..." 使用 `echo -e` 与 `\t` 制表符进行对齐，而后续行使用固定宽度格式化，导致首行与后续行的 `[ OK ]` 无法对齐。
+2. "INFO: validating network environment" 行仅打印了信息头，未预留固定宽度的格式化空间，也未打印 `[ OK ]` 结果标记，导致该行与其他测试结果行风格不一致。
+
+#解决方案
+修改自测脚本 `tools/testing/selftests/net/mptcp/mptcp_connect.sh` 中的输出逻辑：
+1. 新增 `print_larger_title` 函数，使用 `printf "%-69s"` 统一设置长标题行的宽度（因无时长显示，需更宽字段）。
+2. 将 "New MPTCP socket can be blocked via sysctl" 和 "Validating network environment with pings" 两行改为调用 `print_larger_title` 函数进行输出。
+3. 为 "Validating network environment with pings" 行末尾补充 `echo "[ OK ]"`，保持测试结果一致性。
+4. 将 `do_transfer` 函数中的 `printf "%s\t"` 修改为 `printf "%-50s"`，使用固定字符宽度替代制表符，确保与标题行对齐。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/386e02c770332d654da9d638c819ae02c0bb9175

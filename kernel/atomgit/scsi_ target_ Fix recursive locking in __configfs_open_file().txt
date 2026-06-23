@@ -1,0 +1,24 @@
+#标题
+scsi: target: Fix recursive locking in __configfs_open_file()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 target_core_configfs 的 dbroot 参数时，若写入一个无效路径或非目录路径，内核在处理过程中会触发递归锁死锁，导致系统挂起或相关进程无法继续执行。
+
+#主要错误日志
+db_root: cannot open: %s
+db_root: not a directory: %s
+
+#问题根因
+原代码在 `target_core_item_dbroot_store` 函数中通过 `filp_open` 来验证用户输入的路径合法性。`filp_open` 内部在打开文件时会尝试获取 `configfs_mutex` 或相关 configfs 读写锁，而调用者所在的上下文（`__configfs_open_file`）已经持有了一把锁（通常是 `configfs_dirent_lock` 或 `i_mutex`），从而导致了递归锁定。
+
+#解决方案
+将路径验证方式从使用文件系统接口的 `filp_open` 替换为更底层的路径查找接口 `kern_path`。
+1. 移除 `filp_open` 调用，避免触发文件打开操作中的锁竞争。
+2. 使用 `kern_path(db_root_stage, LOOKUP_FOLLOW | LOOKUP_DIRECTORY, &path)` 直接查找路径结构。
+3. 通过检查 `kern_path` 返回值以及 `LOOKUP_DIRECTORY` 标志来验证路径是否存在且为目录，验证通过后调用 `path_put` 释放路径引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01873372241308c585b5e8d90b07e9ebe4b1b6e0

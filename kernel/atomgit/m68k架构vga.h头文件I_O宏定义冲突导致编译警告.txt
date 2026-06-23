@@ -1,0 +1,28 @@
+#标题
+m68k架构vga.h头文件I/O宏定义冲突导致编译警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在m68k架构的nommu平台下编译内核代码（如 `drivers/video/aperture.c`）时，编译器报错提示宏重定义警告，导致构建过程出现异常。
+
+#主要错误日志
+```text
+arch/m68k/include/asm/raw_io.h:39: warning: "__raw_readb" redefined
+   39 | #define __raw_readb in_8
+...
+arch/m68k/include/asm/io_no.h:16: note: this is the location of the previous definition
+   16 | #define __raw_readb(addr) \
+```
+
+#问题根因
+在非PCI（`#ifndef CONFIG_PCI`）配置下，`arch/m68k/include/asm/vga.h` 文件直接包含了 `<asm/raw_io.h>`。而在nommu平台上，通过其他依赖路径（如 `<linux/io.h>`）已经包含了 `<asm/io_no.h>`。这两个头文件分别对 `__raw_readb` 等 I/O 宏进行了定义，导致编译时出现宏重定义冲突。
+
+#解决方案
+修改 `arch/m68k/include/asm/vga.h` 文件：
+1. 将 `#include <asm/raw_io.h>` 替换为 `#include <asm/io.h>`。`<asm/io.h>` 会根据平台配置自动处理依赖，避免在nommu平台上引入冲突的 `raw_io.h`。
+2. 更新宏定义，将 `readb`、`writeb`、`writew` 的实现从 `raw_inb`、`raw_outb`、`raw_outw` 修改为通用的 `__raw_readb`、`__raw_writeb`、`__raw_writew`，以确保符号可用性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/569c6fd2386d5452fcda761f6840b8b53f1ba053

@@ -1,0 +1,21 @@
+#标题
+hisi_qm 未检查 uacce_alloc 返回标志位导致 SVA 使能失败未处理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当硬件加速器（hisi_qm）在注册 uacce 设备时，如果底层不支持或无法开启 SVA（Shared Virtual Addressing）功能，uacce_alloc 函数会自动清除相关标志位并返回成功。由于驱动未对返回的标志位进行检查，导致驱动继续加载，但实际功能（SVA）未生效，且未回滚资源，可能导致后续业务使用异常或资源泄露。
+
+#主要错误日志
+- pci_err(pdev, "fail to alloc uacce device\n!");
+- pci_err(pdev, "fail to enable sva\n!");
+
+#问题根因
+uacce_alloc 函数的实现逻辑是：如果 SVA 使能失败，它会清除 uacce->flags 中的 UACCE_DEV_SVA 位并返回设备指针，而不是返回错误指针（ERR_PTR）。当前 hisi_qm 驱动代码仅使用 IS_ERR 检查返回值，忽略了 flags 标志位的变化。这意味着即使 SVA 功能协商失败（flags 发生改变），驱动也会认为初始化成功继续执行，从而保留了未预期的设备状态。
+
+#解决方案
+在调用 uacce_alloc 前保存传入的 interface.flags，调用返回后比对保存的 flags 与 interface.flags 是否一致。若不一致，说明 SVA 使能失败，此时需打印错误日志，调用 uacce_remove 移除已分配的 uacce 设备，并返回 -EINVAL 错误码以终止初始化流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3cbc990840bc02e224df9b1280b63dc3f28579eb

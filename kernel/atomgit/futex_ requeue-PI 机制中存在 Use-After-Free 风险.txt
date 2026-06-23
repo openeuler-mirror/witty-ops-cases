@@ -1,0 +1,21 @@
+#标题
+futex: requeue-PI 机制中存在 Use-After-Free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 futex requeue-PI（优先级继承重排队）操作过程中，如果唤醒等待进程（waiter）的逻辑处理不当，可能会引发内核 Use-After-Free 故障，导致系统不稳定或崩溃。
+
+#主要错误日志
+WARN_ON(!q->rt_waiter);
+
+#问题根因
+在 `requeue_pi_wake_futex` 函数中，`q->task` 成员被多次访问且中间夹杂了其他操作。具体流程为：先更新 `q->key`，调用 `__futex_unqueue(q)` 解除队列，然后执行 `futex_requeue_pi_complete(q, 1)` 标记完成状态，最后才调用 `wake_up_state(q->task, TASK_NORMAL)` 唤醒任务。
+在此过程中，`q->task` 指向的任务可能因为状态改变而在唤醒前的某个时刻退出或被清理，导致在 `wake_up_state` 调用时访问 `q->task` 产生竞态条件，进而触发 Use-After-Free。
+
+#解决方案
+在访问 `q->task` 之前，使用 `READ_ONCE` 宏将其值读取并存储到一个局部变量 `task` 中。后续的唤醒操作直接使用该局部变量，确保在整个唤醒过程中引用的任务指针稳定，避免因并发修改导致的 Use-After-Free 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/923d7e38d0e74b4ae16ccb56d089c2210d2ea5d3

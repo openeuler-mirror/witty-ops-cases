@@ -1,0 +1,34 @@
+#标题
+sched_ext 启用时因跳过已死亡任务处理不当导致无效任务状态转换告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 sched_ext 调度器时，可能触发无效的任务状态转换。该问题可通过循环运行 hotplug 自测轻松复现，导致内核抛出 WARNING 并打印调用栈。
+
+#主要错误日志
+sched_ext: Invalid task state transition 0 -> 3 for fish[770]
+WARNING: CPU: 18 PID: 787 at kernel/sched/ext.c:3862 scx_set_task_state+0x7c/0xc0
+...
+RIP: 0010:scx_set_task_state+0x7c/0xc0
+...
+Call Trace:
+ <TASK>
+ scx_enable_task+0x11f/0x2e0
+ switching_to_scx+0x24/0x110
+ scx_enable.isra.0+0xd14/0x13d0
+ bpf_struct_ops_link_create+0x136/0x1a0
+ __sys_bpf+0x1edd/0x2c30
+ __x64_sys_bpf+0x21/0x30
+ do_syscall_64+0xbb/0x370
+ entry_SYSCALL_64_after_hwframe+0x77/0x7f
+
+#问题根因
+在启用 sched_ext 调度器进行调度类切换时，代码逻辑跳过了对已死亡任务（usage counter 已置零）的初始化，但未在调度类转换阶段将其排除。这导致对已死亡任务进行了无效的状态转换操作，从而触发状态检查告警。
+
+#解决方案
+在调度类切换循环中增加对任务引用计数的检查（调用 tryget_task_struct）。如果任务已死亡（引用计数为 0），则直接跳过该任务，不进行后续的 dequeue/enqueue 及状态转换操作，从而避免无效的任务状态转换。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e894b56ceea02ba50445411283d0c3272f342b70

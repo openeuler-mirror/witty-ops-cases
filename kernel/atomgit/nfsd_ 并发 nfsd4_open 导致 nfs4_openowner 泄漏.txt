@@ -1,0 +1,22 @@
+#标题
+nfsd: 并发 nfsd4_open 导致 nfs4_openowner 泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发执行 nfsd4_open 操作时，nfs4_openowner 结构体发生内存泄漏。系统运行一段时间后，可观察到内核内存占用持续增长，且无法释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `init_open_stateid` 函数处理过程中，并发竞争导致 `nfs4_openowner` 被置为 unhashed 状态（即从哈希表和客户端链表中移除，准备销毁）。然而，代码逻辑中未对此状态进行检查，继续对该 openowner 进行处理并可能导致引用计数管理混乱，最终导致该结构体无法被正确释放，引发内存泄漏。
+
+#解决方案
+1. 新增辅助函数 `nfs4_openowner_unhashed`，用于检查 openowner 是否已从哈希表和客户端链表中移除。
+2. 在 `init_open_stateid` 函数中加锁后，立即调用该检查函数。若发现 openowner 已处于 unhashed 状态，则释放锁资源并将状态置为 NULL，直接返回，避免继续处理已失效的 openowner。
+3. 在上层调用函数 `nfsd4_process_open2` 中增加对 `init_open_stateid` 返回 NULL 的判断，若为 NULL 则返回 `nfserr_jukebox` 错误码，保证流程的健壮性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/813fd722d9cab7758c1cae9ab6589ce164f8d958

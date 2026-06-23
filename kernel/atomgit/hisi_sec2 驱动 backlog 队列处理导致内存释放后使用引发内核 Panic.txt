@@ -1,0 +1,40 @@
+#标题
+hisi_sec2 驱动 backlog 队列处理导致内存释放后使用引发内核 Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当硬件队列处理的数据包数量大于 512 时，SEC 驱动会将数据包加入 backlog 链表并向调用者返回 -EBUSY。在某些情况下，backlog 链表中的数据包可能已完成处理但未从链表中删除，此时若继续操作该链表（删除操作）会访问已释放的内存，导致系统 Panic。
+
+#主要错误日志
+[  169.430697][ T1354] CPU: 27 PID: 1354 Comm: kworker/u262:1 Kdump: loaded Not tainted 5.10.0+ #1
+[  169.439678][ T1354] Hardware name: Huawei TaiShan 200 (Model 2280)/BC82AMDD, BIOS 2280-V2 CS V5.B211.01 11/10/2021
+[  169.450421][ T1354] Workqueue: 0000:76:00.0 qm_work_process [hisi_qm]
+[  169.457050][ T1354] Call trace:
+[  169.460285][ T1354]  dump_backtrace+0x0/0x300
+[  169.464780][ T1354]  show_stack+0x20/0x30
+[  169.468936][ T1354]  dump_stack+0x104/0x17c
+[  169.473240][ T1354]  print_address_description.constprop.0+0x68/0x204
+[  169.479889][ T1354]  __kasan_report+0xe0/0x140
+[  169.484463][ T1354]  kasan_report+0x44/0xe0
+[  169.488771][ T1354]  __asan_load8+0x94/0xd0
+[  169.493088][ T1354]  __list_del_entry_valid+0x20/0x180
+[  169.498408][ T1354]  sec_back_req_clear+0x184/0x2dc [hisi_sec2]
+[  169.504494][ T1354]  sec_skcipher_callback+0x84/0x150 [hisi_sec2]
+[  169.510800][ T1354]  sec_req_cb+0x1d4/0x334 [hisi_sec2]
+[  169.516227][ T1354]  qm_poll_req_cb+0x170/0x20c [hisi_qm]
+[  169.524821][ T1354]  qm_work_process+0xf8/0x124 [hisi_qm]
+[  169.533436][ T1354]  process_one_work+0x3a8/0x860
+[  169.541063][ T1354]  worker_thread+0x280/0x670
+[  169.548349][ T1354]  kthread+0x18c/0x1d0
+[  169.555169][ T1354]  ret_from_fork+0x10/0x18
+
+#问题根因
+在发送线程数大于 512 的情况下，backlog 链表中的数据包可能已经处理完成，但未被正确地从链表中删除。驱动程序后续尝试删除该链表项时，访问了已经释放的 req 内存，触发了内存 UAF（Use-After-Free）问题。
+
+#解决方案
+移除 backlog 链表机制，改用 `sec_req` 结构体中的 `fake_busy` 标志位来判断是否需要唤醒发送线程。在回调函数中，根据 `fake_busy` 标志直接调用用户的完成回调，确保在释放 req 内存之前正确唤醒线程，避免了链表操作的 UAF 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2816b110a70a7b60adb5164073a9dddf273aabcc

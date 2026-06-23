@@ -1,0 +1,22 @@
+#标题
+wifi: mwifiex: 修复扫描中 memcpy 越界写入警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MT8173 Chromebook (mt8173-elm-hana) 设备上，当 mwifiex 驱动进行扫描操作时，内核检测到 memcpy 进行了跨字段写入，触发 WARNING 并打印调用栈。此时设备已连接到某个 SSID 长度为 6 的网络。
+
+#主要错误日志
+[  356.775250] ------------[ cut here ]------------
+[  356.784543] memcpy: detected field-spanning write (size 6) of single field "wildcard_ssid_tlv->ssid" at drivers/net/wireless/marvell/mwifiex/scan.c:904 (size 1)
+[  356.813403] WARNING: CPU: 3 PID: 742 at drivers/net/wireless/marvell/mwifiex/scan.c:904 mwifiex_scan_networks+0x4fc/0xf28 [mwifiex]
+
+#问题根因
+结构体 `struct mwifiex_ie_types_wildcard_ssid_params` 中使用了一个单元素数组 `u8 ssid[1]` 作为柔性数组占位符。在扫描逻辑中，代码直接将实际长度的 SSID（如长度为 6）通过 memcpy 拷贝到该字段中。由于编译器或内核动态检查工具将 `ssid[1]` 视为一个仅占 1 字节的独立字段，写入超过 1 字节的数据被判定为非法的跨字段写入，从而触发警告。
+
+#解决方案
+将结构体 `mwifiex_ie_types_wildcard_ssid_params` 中的 `u8 ssid[1]` 修改为标准的柔性数组成员 `u8 ssid[]`。此修改消除了编译器对数组边界的误判，允许合法的变长数据写入，从而修复了该警告问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b5e4f470ccfe9510b6d0c49a263c27a4aa65ab33

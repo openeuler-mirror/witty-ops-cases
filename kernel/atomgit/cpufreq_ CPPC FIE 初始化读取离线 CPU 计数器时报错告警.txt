@@ -1,0 +1,21 @@
+#标题
+cpufreq: CPPC FIE 初始化读取离线 CPU 计数器时报错告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CPPC FIE（Frequency Invariance Engine）初始化阶段，当驱动尝试读取 CPU 性能计数器时，若目标 CPU 处于 offline 状态，内核日志中会打印 Warning 级别的错误信息。实际上，FIE 功能是可选的，且读取离线 CPU 计数器失败属于预期行为，不应该产生告警日志，这导致了非预期的日志噪音。
+
+#主要错误日志
+cppc_cpufreq_cpu_fie_init: failed to read perf counters for cpu:%d: %d
+
+#问题根因
+在 CPPC FIE 初始化过程中，代码逻辑未正确处理 CPU 离线的场景。当 `cppc_get_perf_ctrs` 读取失败时，原逻辑直接调用 `pr_warn` 打印告警。实际上，如果在驱动注册期间 CPU 处于 offline 状态，读取失败是正常的预期结果，不需要告警；同时，FIE 功能本身是可选特性，初始化失败不应以 Warning 级别打扰用户。
+
+#解决方案
+1. 调整日志级别：将读取性能计数器失败的打印信息从 `pr_warn` 修改为 `pr_debug`，因为 FIE 是可选功能。
+2. 优化判断逻辑：仅在 CPU 处于 online 状态且读取失败时才中断初始化流程并打印调试日志；如果 CPU 已 offline，则视为预期行为，不进行告警也不中断流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb531703b2355a6e597981d259d421752bbba81c

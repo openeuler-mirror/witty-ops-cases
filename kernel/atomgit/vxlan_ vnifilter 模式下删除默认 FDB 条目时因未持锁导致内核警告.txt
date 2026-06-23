@@ -1,0 +1,28 @@
+#标题
+vxlan: vnifilter 模式下删除默认 FDB 条目时因未持锁导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 VXLAN 设备配置为 `vnifilter` 模式时，如果删除一个配置了默认远端地址的 VNI，内核会触发 lockdep 警告并打印 WARN_ON 日志。该问题源于删除 FDB 条目时未持有必要的哈希锁，破坏了锁的正确使用规则。
+
+#主要错误日志
+WARNING: CPU: 3 PID: 392 at drivers/net/vxlan/vxlan_core.c:417 vxlan_find_mac+0x17f/0x1a0
+RIP: 0010:vxlan_find_mac+0x17f/0x1a0
+Call Trace:
+ __vxlan_fdb_delete+0xbe/0x560
+ vxlan_vni_delete_group+0x2ba/0x940
+ vxlan_vni_del.isra.0+0x15f/0x580
+ vxlan_process_vni_filter+0x38b/0x7b0
+ vxlan_vnifilter_process+0x3bb/0x510
+ rtnetlink_rcv_msg+0x2f7/0xb70
+
+#问题根因
+当 VXLAN 设备处于 `vnifilter` 模式并删除 VNI 时，代码逻辑会删除与默认远端关联的 FDB 条目。在该过程中，函数 `__vxlan_fdb_delete` 被调用时未持有 `hash_lock` 锁。由于 `vxlan_find_mac` 函数内部添加了必须持有该锁的 lockdep 注解检查，未持锁的调用触发了警告。
+
+#解决方案
+在 `vxlan_vni_delete_group` 函数中调用 `__vxlan_fdb_delete` 删除默认 FDB 条目之前，先计算哈希索引并获取对应的 `hash_lock` 自旋锁，删除操作完成后释放锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e645a5a0ede7e48c05fc59c67d3bce976b59b470

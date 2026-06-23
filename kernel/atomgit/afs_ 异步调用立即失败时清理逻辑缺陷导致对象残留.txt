@@ -1,0 +1,26 @@
+#标题
+afs: 异步调用立即失败时清理逻辑缺陷导致对象残留
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 AFS 异步调用启动后，若因信号中断导致数据发送失败，调用对象无法被正确清理。在 `/proc/net/rxrpc/calls` 接口中可以看到残留的调用记录，这些记录显示调用已被中止（aborted），中止代码为 6（RX_USER_ABORT），但相关资源未被释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `afs_make_call()` 函数中，当异步调用在发送数据阶段失败（如接收到信号）进入 `error_do_abort` 处理流程时，代码逻辑存在缺陷：
+1. 调用 `rxrpc_kernel_abort_call` 中止调用后，尝试直接取消来自 rxrpc 的通知。
+2. 这导致与 rxrpc 完成通知之间的竞争，使得异步 FetchData 等操作无法正确终止 netfs 子请求。
+3. 最终导致调用对象未被清理，造成内存泄漏和调用记录残留。
+
+#解决方案
+修改 `fs/afs/rxrpc.c` 中的错误处理逻辑：
+1. 在 `error_do_abort` 标签处，对于异步调用（`call->async` 为真），执行中止操作后直接返回，将清理工作交给 rxrpc 的完成通知处理函数处理，而不是尝试在当前流程中强制清理或取消通知。
+2. 新增 `afs_see_call` 辅助函数及相关 trace 点（`afs_call_trace_async_abort`、`afs_call_trace_async_kill`），以便更好地追踪异步调用的生命周期状态。
+3. 调整 `afs_deliver_to_call` 中的状态设置逻辑，配合修复确保状态流转正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/74def7daa9b6639eb5fcebe1dd9589b81c0b2d39

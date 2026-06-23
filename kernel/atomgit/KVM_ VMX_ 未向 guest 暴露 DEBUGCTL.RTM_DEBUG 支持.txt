@@ -1,0 +1,20 @@
+#标题
+KVM: VMX: 未向 guest 暴露 DEBUGCTL.RTM_DEBUG 支持
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 RTM（Restricted Transactional Memory）特性的 guest 中，尝试设置 DEBUGCTL 寄存器的 RTM_DEBUG 位（Bit 15）失败。KVM 当前未将该位标记为支持，导致 guest 无法使用 RTM 调试功能，且在后续引入对 vmcs12.GUEST_DEBUGCTL 的一致性检查时可能导致现有 guest 运行异常。
+
+#主要错误日志
+未知
+
+#问题根因
+KVM 在 `vmx_get_supported_debugctl` 函数中遗漏了对 `DEBUGCTLMSR_RTM_DEBUG` 位的处理。虽然硬件和 guest CPUID 均支持 RTM，但 KVM 未将 RTM_DEBUG 作为支持的调试特性暴露给 guest，导致 guest 无法利用该功能调试 RTM 事务中止。
+
+#解决方案
+在 `arch/x86/kvm/vmx/vmx.c` 的 `vmx_get_supported_debugctl` 函数中增加判断逻辑：当宿主机支持 RTM 特性且（host_initiated 为真或 guest CPUID 支持 RTM）时，将 `DEBUGCTLMSR_RTM_DEBUG` 位加入到支持的 debugctl 掩码中，从而允许 guest 设置该位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4e2ad7f28b17371f703953adfe337f5846cd9b69

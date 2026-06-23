@@ -1,0 +1,20 @@
+#标题
+ftrace: 栈追踪过滤器命令导致抢占计数错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ftrace 的 stacktrace filter 命令时，由于抢占计数（preemption count）处理逻辑错误，导致系统抢占状态记录不准确，可能引发内核状态不一致或调度相关的异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `trace_stack` 函数中调用 `__trace_stack` 时，错误地使用了 `tracing_gen_ctx()` 来生成跟踪上下文。该函数会增加抢占计数，而在此处应当使用 `tracing_gen_ctx_dec()`，后者会减少抢占计数以抵消 `ftrace_caller` 中已经增加的计数，从而保证抢占状态的正确性。原代码导致抢占计数被重复增加，破坏了抢占计数的准确性。
+
+#解决方案
+修改 `kernel/trace/trace_functions.c` 文件中的 `trace_stack` 函数，将 `tracing_gen_ctx()` 调用替换为 `tracing_gen_ctx_dec()`，并简化了代码结构，直接在函数调用参数中生成上下文，确保传递给 `__trace_stack` 的跟踪上下文中包含正确的抢占计数信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/247992bda89c6147efd76aa002d8757ced22d315

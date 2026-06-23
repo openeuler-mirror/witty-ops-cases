@@ -1,0 +1,20 @@
+#标题
+mfd: mt6397-irq 初始化错误路径中遗漏释放 IRQ 域导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mt6397_irq_init() 函数执行过程中，若 irq_domain_create_linear() 成功，但后续的 devm_request_threaded_irq() 注册失败，函数直接返回，导致已分配的 IRQ domain 资源未被释放，造成内核资源泄漏。
+
+#主要错误日志
+dev_err(chip->dev, "failed to register irq=%d; err: %d\n", chip->irq, ret);
+
+#问题根因
+mt6397_irq_init() 函数缺少完善的错误处理逻辑。具体原因为：当 devm_request_threaded_irq() 失败时，代码路径直接返回错误码，未调用 irq_domain_remove() 清理此前 irq_domain_create_linear() 成功分配的资源。
+
+#解决方案
+在 devm_request_threaded_irq() 失败的错误处理分支中，增加调用 irq_domain_remove(chip->irq_domain) 以释放已分配的 IRQ 域，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b0f65f1aadb8a0a1251999e0c9ed9f852ecd9e3c

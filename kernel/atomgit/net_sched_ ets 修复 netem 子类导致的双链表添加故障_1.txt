@@ -1,0 +1,20 @@
+#标题
+net_sched: ets 修复 netem 子类导致的双链表添加故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定使用场景下，当 ETS qdisc 的子类为 netem 时，netem 的重入行为会导致 ETS 的入队回调函数被重入。这会导致同一个分类器被重复添加到活跃链表中，进而引发内核内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+当 ETS qdisc 拥有 netem 子类 qdisc 时，netem 的内部逻辑可能导致父 qdisc 的 enqueue 回调重入。在 ETS 的实现中，原代码仅通过检查 `qlen` 是否为 0 来判断是否为首个数据包，并据此将分类器添加到 `active_list`。在重入场景下，这种检查机制失效，导致同一个分类器被添加到链表两次，造成内存破坏。
+
+#解决方案
+在 ETS qdisc 的入队逻辑中，将原有的 `qlen` 零检查替换为 `cl_is_active` 检查。新增 `cl_is_active` 函数通过判断 `list_empty(&cl->alist)` 来确定分类器是否已经在活跃链表中。如果分类器已经处于活跃状态，则不再重复添加，从而修复了重入导致的 double list add 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aeb04858c4906fc5ecc71f6c7aeddd8028120e5f

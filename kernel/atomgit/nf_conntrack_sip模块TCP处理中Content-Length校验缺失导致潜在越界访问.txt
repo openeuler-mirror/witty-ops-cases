@@ -1,0 +1,22 @@
+#标题
+nf_conntrack_sip模块TCP处理中Content-Length校验缺失导致潜在越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理SIP协议的TCP连接跟踪时，若接收到的SIP消息中Content-Length头字段值（clen）超过了实际数据长度（datalen），内核可能继续执行解析逻辑，导致后续的数据指针操作越界，引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `sip_help_tcp` 中，变量 `clen` 用于表示SIP消息体的内容长度。原代码逻辑未对 `clen` 与实际数据长度 `datalen` 进行边界校验。如果恶意构造的SIP报文中 `Content-Length` 值大于实际承载的数据长度，代码将继续尝试处理超出范围的数据区域，导致越界访问。
+
+#解决方案
+在 `net/netfilter/nf_conntrack_sip.c` 文件中修改 `sip_help_tcp` 函数：
+1. 将变量 `clen` 的类型从 `unsigned int` 修改为 `unsigned long` 以适配长度计算。
+2. 在解析消息体之前增加边界检查：如果 `clen` 大于 `datalen`，立即通过 `break` 跳出处理循环，停止解析该消息，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/005b4ec5b394f14036218d9d9d796a958fc415a7

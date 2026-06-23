@@ -1,0 +1,24 @@
+#标题
+pinctrl-pic32: 修复驱动探测过程中的时钟资源泄露问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 pinctrl-pic32 驱动的 probe 阶段，若时钟获取成功后的后续初始化步骤失败（如 `pic32_pinctrl_probe` 中的第 2208 行附近，或 `pic32_gpio_probe` 中的第 2264、2272 行附近），之前通过 `clk_prepare_enable()` 使能的时钟未被正确释放，导致资源泄露。
+
+#主要错误日志
+- 推断：`Failed to get and enable clock` (修复后，当时钟获取或使能失败时打印)
+- 原日志片段（修复前）：`clk get failed` 或 `clk enable failed`
+
+#问题根因
+驱动在调用 `clk_prepare_enable()` 成功后，如果在后续执行路径中遇到错误并退出（return），未调用对应的禁用和释放接口。这导致了时钟资源被持续占用且无法释放。具体由 Smatch 静态分析工具检测到：
+1. `drivers/pinctrl/pinctrl-pic32.c:2211` 警告 `pctl->clk` 未释放。
+2. `drivers/pinctrl/pinctrl-pic32.c:2274` 警告 `bank->clk` 未释放。
+
+#解决方案
+使用设备资源管理版本的函数 `devm_clk_get_enabled()` 替换原有的 `devm_clk_get()` 和 `clk_prepare_enable()` 组合。
+该函数会自动管理时钟资源的生命周期，当驱动探测失败或设备被移除时，内核会自动释放并禁用时钟，从而彻底避免了手动管理带来的资源泄露风险。同时更新了错误日志信息以反映新的操作逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6440cb2946436fb4601c386eff730004d0aa8f3d

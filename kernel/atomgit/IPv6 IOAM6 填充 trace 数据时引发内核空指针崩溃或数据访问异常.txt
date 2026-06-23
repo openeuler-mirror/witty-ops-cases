@@ -1,0 +1,30 @@
+#标题
+IPv6 IOAM6 填充 trace 数据时引发内核空指针崩溃或数据访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 IPv6 IOAM6（In-situ Operations, Administration, and Maintenance）功能并配置 trace 数据收集时，内核在处理数据包转发路径过程中可能发生内核崩溃或访问非法内存地址。具体表现为：
+1. 内核触发 Oops 或 panic，调用栈显示在 `__ioam6_fill_trace_data` 函数中。
+2. 在读取网卡设备（`net_device`）或 IPv6 设备配置（`inet6_dev`）相关字段时发生空指针解引用。
+3. 在特殊队列映射情况下（如 `queue_mapping` 大于等于发送队列数），可能触发 `BUG` 或 `kernel NULL pointer dereference`。
+
+#主要错误日志
+未知
+
+#问题根因
+该故障由 `__ioam6_fill_trace_data` 函数中的多处指针使用不当和并发保护缺失引起：
+1. **空指针解引用风险**：代码直接使用 `skb_dst(skb)->dev` 获取设备指针，虽然注释声称此时不为空，但后续逻辑中并未对 `inet6_dev` 指针进行有效性检查即直接访问，且未考虑 `skb->dev` 为空时的防御性处理。
+2. **并发访问风险**：代码直接读取 `sysctl` 和配置字段（如 `ioam6_id`），未使用 `READ_ONCE` 宏，可能导致读取过程中数据不一致或编译器优化导致的异常行为。
+3. **队列映射检查缺失**：在计算 `skb_get_tx_queue` 时，未校验 `skb_get_queue_mapping(skb)` 是否大于等于 `dev->num_tx_queues`，当映射值越界时会导致越界访问；同时访问 Qdisc 统计信息时未持有锁（`qdisc_lock`），可能导致竞态条件。
+
+#解决方案
+应用补丁修改 `net/ipv6/ioam6.c` 文件，修复措施如下：
+1. **引入设备变量与防御性检查**：使用 `skb_dst_dev_rcu(skb)` 获取设备并提取 `inet6_dev` (idev)，同时安全获取 `skb->dev` 对应的 `i_skb_dev`。在访问设备配置前增加 NULL 检查（如 `!idev` 或 `!i_skb_dev` 时返回 UNAVAILABLE）。
+2. **增加队列映射边界检查**：在获取发送队列前，增加判断 `skb_get_queue_mapping(skb) >= dev->num_tx_queues`，若越界则直接返回 `IOAM6_U32_UNAVAILABLE`，防止数组越界访问。
+3. **加锁保护统计读取**：在调用 `qdisc_qstats_qlen_backlog` 获取队列统计信息时，使用 `spin_lock_bh` 和 `spin_unlock_bh` 保护 `qdisc_lock(qdisc)`，防止并发访问冲突。
+4. **使用原子读取宏**：将所有读取 `sysctl` 和配置字段（如 `ioam6_id`、`ioam6_id_wide`）的操作改为 `READ_ONCE` 宏调用，确保读取操作的原子性和数据一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c8b713064cc6a0a6bd7342932359199c01cf4b66

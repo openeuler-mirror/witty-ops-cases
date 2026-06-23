@@ -1,0 +1,20 @@
+#标题
+btrfs：日志回放时 extref key 设置错误导致数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Btrfs 文件系统进行日志回放（log replay）过程中，处理扩展引用项时，因搜索键值的偏移量设置错误，导致无法正确查找或匹配父目录的引用信息。这可能导致回放逻辑判断失误，引发文件系统元数据不一致，或在特定场景下导致回放失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `replay_one_name()` 中设置 extref 项的搜索键（`search_key`）时，错误地将 `key->objectid`（父目录的对象 ID）直接赋值给了 `search_key.offset`。根据 Btrfs 的设计，extref 项的 offset 不应是父目录的对象 ID，而应是通过父目录对象 ID 和文件名计算出的哈希值（`btrfs_extref_hash`）。若直接使用父目录对象 ID 作为偏移量，将无法正确索引 extref 项。
+
+#解决方案
+修改 `fs/btrfs/tree-log.c` 文件中 `replay_one_name` 函数的实现，将 `search_key.offset` 的赋值修正为调用 `btrfs_extref_hash(key->objectid, name.name, name.len)`，确保 offset 被正确设置为父目录对象 ID 与文件名计算得出的哈希值，从而正确匹配 extref 项。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6eeef4c65ffd3273f8c56ff17dab61fe7b451b21

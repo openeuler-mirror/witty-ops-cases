@@ -1,0 +1,24 @@
+#标题
+be2net: TCP序列号打印因字节序转换错误导致日志显示不准确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 be2net 网卡驱动发生 TX timeout（发送超时）时，内核日志中打印的 TCP 序列号和确认号显示为错误的值。由于代码使用了错误的转换函数和数据格式，导致调试信息无法反映真实的 TCP 序列状态，干扰了网络故障排查。
+
+#主要错误日志
+[推断] TX timeout 触发时的调试日志上下文：
+dev_info(dev, "TCP sequence num %d\n", ntohs(tcphdr->seq));
+dev_info(dev, "TCP ack_seq %d\n", ntohs(tcphdr->ack_seq));
+
+#问题根因
+TCP 头部的 seq 和 ack_seq 字段是 32 位网络字节序（__be32）。原代码错误地使用了 `ntohs()` 函数进行转换，该函数仅适用于 16 位数值，导致 32 位序列号转换截断或错误；同时使用了 `%d` 格式化符号打印本应为无符号的数值。两者共同作用导致日志输出结果不正确。
+
+#解决方案
+修改 `drivers/net/ethernet/emulex/benet/be_main.c` 中的 `be_tx_timeout` 函数：
+1. 将 TCP 序列号和确认号的转换函数从 `ntohs()` 修正为 `ntohl()`，以正确处理 32 位网络字节序到主机字节序的转换。
+2. 将打印格式化符号从 `%d` 修改为 `%u`，以正确表示无符号整型数值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/32f9548627a072b126dbb4b47338f8b5ef6ae00b

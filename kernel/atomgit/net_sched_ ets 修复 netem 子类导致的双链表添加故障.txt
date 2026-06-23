@@ -1,0 +1,26 @@
+#标题
+net_sched: ets 修复 netem 子类导致的双链表添加故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ETS（Enhanced Transmission Selection）qdisc 且子类配置为 netem qdisc 的场景下，当发生数据包入队时，可能出现列表结构损坏。由于判断队列是否为空的逻辑未考虑子 qdisc 内部可能存在数据包的情况，导致活动列表被重复添加同一个 class 结构，引发内核链表崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ets_qdisc_enqueue` 函数中，原代码使用 `!cl->qdisc->q.qlen`（子 qdisc 的队列长度）来判断一个 class 是否是“首次”变活跃，并据此将其加入 ETS 的活动列表 `active`。
+当子 qdisc 为 netem 时，netem 可能会持有数据包进行延迟发送，导致其内部队列长度不为零。因此，当后续数据包入队时，`first` 变量被判定为 false，跳过了添加列表的操作。然而，实际情况是该 class 可能已经不在活动列表中（例如之前的包已被 netem 处理）。反之，如果逻辑判断失误导致同一个 class 被多次执行 `list_add_tail` 加入活动列表，会导致链表指针指向自身或破坏链表完整性，造成“double list add”错误。
+
+解决方案是引入 `cl_is_active` 函数，通过检查 `list_empty(&cl->alist)` 来直接判断该 class 是否已经在活动列表中，而不是依赖子 qdisc 的队列长度进行推断。
+
+#解决方案
+修改 `net/sched/sch_ets.c` 文件：
+1. 新增辅助函数 `cl_is_active`，通过检查 `list_empty(&cl->alist)` 来判断 class 是否处于活动状态。
+2. 删除原代码中基于子 qdisc 队列长度的 `first` 变量及其赋值逻辑。
+3. 将入队逻辑中的判断条件 `first` 替换为 `!cl_is_active(cl)`，确保仅在 class 未处于活动列表时才执行 `list_add_tail` 操作，从而避免重复添加导致的链表破坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f01c4b69380f2e496c9e0fb46734fab127b00b3

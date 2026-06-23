@@ -1,0 +1,21 @@
+#标题
+IPv6 AH输出触发field-spanning memcpy警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在IPv6 AH（Authentication Header）输出流程中，内核触发fortify-string机制警告，导致WARN_ON。具体表现为在`ah6_output`函数执行时，内核检测到跨越字段边界的内存写入，即写入大小超过了IPv6地址字段的16字节限制。
+
+#主要错误日志
+memcpy: detected field-spanning write (size 40) of single field "&top_iph->saddr" at net/ipv6/ah6.c:439 (size 16)
+WARNING: CPU: 0 PID: 8838 at net/ipv6/ah6.c:439 ah6_output+0xe7e/0x14e0 net/ipv6/ah6.c:439
+
+#问题根因
+在`ah6_output()`和`ah6_output_done()`函数中，代码试图使用单个`memcpy`操作将扩展头部复制到IPv6地址字段（`saddr`或`daddr`）及其后续内存区域。由于扩展头部紧接在IPv6头部之后存放，这种操作实际上是安全的，但编译器的fortify-string检查机制将其误报为越界写入，因为它检测到写入大小（如40字节）超过了单个地址字段的大小（16字节）。
+
+#解决方案
+修复方案将原来的单次大块内存拷贝操作拆分为两个独立的步骤：首先正确拷贝IPv6地址字段，然后再拷贝后续的扩展头部。为此引入了两个辅助函数`ah6_save_hdrs`和`ah6_restore_hdrs`来封装这一逻辑，既解决了编译器误报警告，也消除了代码冗余。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9565c18610e10e0f044f8b9d2a29573ef92546f4

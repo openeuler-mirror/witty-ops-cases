@@ -1,0 +1,33 @@
+#标题
+tcp: tcp_ofo_queue() 函数计算 DUP SACK 范围错误导致违反 RFC 2883 协议
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TCP 接收乱序队列（OFO queue）处理过程中，当新到达的 TCP 段覆盖了队列中多个 skb 且序列号等于 rcv_nxt 时，服务器发送的 DUP SACK 范围错误地包含了过多的重复数据范围。该行为违反了 RFC 2883 协议规定。
+
+具体报文交互示例如下：
+1. client > server: seq 501:1001
+2. server > client: SACK {501:1001}
+3. client > server: seq 1501:2001
+4. server > client: SACK {1501:2001} {501:1001}
+5. client > server: seq 1:2001 (携带 2000 字节数据，覆盖了之前的两个段)
+6. server > client: **故障现象**：SACK {501:2001} (范围过大)
+   **预期行为**：SACK {501:1001}
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tcp_ofo_queue()` 函数中处理 DUP SACK 扩展逻辑时存在变量赋值错误。代码逻辑判断如果 skb 的结束序列号（end_seq）小于当前的 dsack_high，应调整 dsack 范围以避免包含过多的重复区域。然而原代码错误地将 `TCP_SKB_CB(skb)->end_seq` 赋值给了 `dsack_high`，而非用于计算当前 dsack 范围的临时变量 `dsack`。这导致后续计算中使用了错误的边界值，最终生成了超出实际重复数据范围的 DUP SACK。
+
+#解决方案
+修改 `net/ipv4/tcp_input.c` 文件中 `tcp_ofo_queue()` 函数的逻辑，将条件语句内的赋值目标从 `dsack_high` 修正为 `dsack`。
+具体变更：
+- 修正前：`dsack_high = TCP_SKB_CB(skb)->end_seq;`
+- 修正后：`dsack = TCP_SKB_CB(skb)->end_seq;`
+这样可以确保在调用 `tcp_dsack_extend()` 时传入正确的、缩小后的重复数据范围，符合 RFC 2883 标准。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3bf45336feb201249ba3cc6d74401ca6f5c3931e

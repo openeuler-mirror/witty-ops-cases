@@ -1,0 +1,32 @@
+#标题
+LoongArch S3 休眠过程中内核警告打印
+
+#内核版本
+OLK-6.6
+
+#问题现象
+LoongArch 架构系统在执行 S3 休眠流程时，内核触发 WARNING 警告。调用栈显示在 `enable_gpe_wakeup()` 返回后，CPU 处于中断开启状态，导致后续 `ktime_get()` 等函数在错误上下文中被调用。
+
+#主要错误日志
+[ C0] WARNING: ... at kernel/time/timekeeping.c:845 ktime_get+0xbc/0xc8
+[ C0] Call Trace:
+[ C0] [<90000000002243b4>] show_stack+0x64/0x188
+[ C0] [<900000000164673c>] dump_stack_lvl+0x60/0x88
+[ C0] [<90000000002687e4>] __warn+0x8c/0x148
+[ C0] [<90000000015e9978>] report_bug+0x1c0/0x2b0
+[ C0] [<90000000016478e4>] do_bp+0x204/0x3b8
+[ C0] [<90000000025b1924>] exception_handlers+0x1924/0x10000
+[ C0] [<9000000000343bbc>] ktime_get+0xbc/0xc8
+[ C0] [<9000000000354c08>] tick_sched_timer+0x30/0xb0
+[ C0] [<90000000003408e0>] __hrtimer_run_queues+0x160/0x378
+[ C0] [<9000000000341f14>] hrtimer_interrupt+0x144/0x388
+...
+
+#问题根因
+`enable_gpe_wakeup()` 函数调用 `acpi_enable_all_wakeup_gpes()` 时，该函数内部使用 mutex 保护 `acpi_hw_enable_all_wakeup_gpes()`。mutex 的获取操作（`acpi_ut_acquire_mutex`）可能触发进程调度（`preempt_schedule_common`），导致线程切换。这使得 `enable_gpe_wakeup()` 返回后 CPU 处于中断开启状态，破坏了 S3 休眠流程中的上下文约束，从而触发警告。
+
+#解决方案
+在 `enable_gpe_wakeup()` 函数中，直接调用 `acpi_hw_enable_all_wakeup_gpes()` 替代原有的 `acpi_enable_all_wakeup_gpes()`。因为 `loongarch_acpi_suspend()` 执行期间不存在并发问题，可以直接调用底层硬件函数而无需 mutex 保护，从而避免因 mutex 竞争导致的线程调度。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c3df3f853a39168691b47b205a0397a2a11f3715

@@ -1,0 +1,28 @@
+#标题
+KSM fork过程中mm_struct计数器处理错误导致统计不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+KSM相关计数器（ksm_merging_pages、ksm_rmap_items、ksm_zero_pages）在fork过程中统计混乱。具体表现为：
+1. 父进程开启KSM合并页面后，子进程继承fork时的计数器值，但并未继承对应的rmap_items结构。
+2. 子进程触发unmerge操作时，因无实际rmap_items，导致计数器无法正确递减，数值残留。
+3. ksm_zero_pages全局计数器在fork时未递增，导致后续unmerge时全局计数器被错误递减，出现负数或统计偏差。
+自测用例结果表现：
+- 修复前：`not ok 10 ksm_merging_page in child: 32`（数值错误继承）。
+- 修复后：`ok 10 ksm_merging_pages is not inherited after fork`。
+
+#主要错误日志
+未知
+
+#问题根因
+在fork过程中，`ksm_fork`函数直接复制了父进程mm_struct中的KSM计数器（`ksm_merging_pages`、`ksm_rmap_items`），但对应的反向映射项并未复制给子进程。这导致子进程拥有非零的计数器值却无实际关联的页面结构，造成后续操作中计数器无法正确更新。同时，`ksm_zero_pages`进程级计数器被继承，但全局计数器未相应增加，破坏了全局与进程级统计的一致性。
+
+#解决方案
+在fork处理函数`ksm_fork`中增加修正逻辑：
+1. 将子进程mm_struct中的`ksm_merging_pages`和`ksm_rmap_items`重置为0，确保子进程不继承父进程的合并页面统计。
+2. 读取子进程继承的`ksm_zero_pages`值，并将其累加到全局变量`ksm_zero_pages`中，确保全局统计数据的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/62d67c0aee60b01cc4d5a6a8cc12345a2f95fa6a

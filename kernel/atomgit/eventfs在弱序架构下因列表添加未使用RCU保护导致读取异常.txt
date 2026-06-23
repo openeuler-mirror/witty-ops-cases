@@ -1,0 +1,20 @@
+#标题
+eventfs在弱序架构下因列表添加未使用RCU保护导致读取异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在弱序架构（weakly-ordered architectures）上，当SRCU读取者（如eventfs_iterate函数）遍历eventfs子目录列表时，可能会观测到新插入的目录项，但该目录项的列表指针和字段尚未对其可见。这可能导致内核读取到未初始化或不完整的数据，进而引发不可预知的内核行为或崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的修复中，eventfs的删除操作（list_del_rcu）和遍历操作（list_for_each_entry_srcu）已经使用了SRCU保护机制，但在eventfs_create_dir函数中插入子目录项的操作仍然使用普通的list_add_tail。在弱序架构下，普通的list_add_tail可能导致新的列表项在内部字段初始化完成之前就对SRCU读取者可见，从而破坏了RCU保护的读写一致性。
+
+#解决方案
+将eventfs_create_dir函数中的list_add_tail替换为list_add_tail_rcu。这确保了列表项的发布与现有的list_del_rcu和list_for_each_entry_srcu配对使用，保证了在弱序架构下列表项字段在对其可见之前已正确初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8852649587c3a5780b757db84e66a317bb758431

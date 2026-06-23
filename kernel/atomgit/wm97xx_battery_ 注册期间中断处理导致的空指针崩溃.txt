@@ -1,0 +1,20 @@
+#标题
+wm97xx_battery: 注册期间中断处理导致的空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动 probe 阶段，如果中断在 `power_supply` 注册之前触发，中断处理函数调用 `power_supply_changed()` 时会访问未初始化的句柄，导致内核发生 NULL 指针引用。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `probe()` 函数中调用 `request_irq()` 的时机过早，先于 `power_supply_register()`。若此时中断触发，`wm97xx_bat_update()` 在中断上下文中调用 `power_supply_changed()` 时使用了未初始化的 `power_supply` 句柄，从而引发空指针崩溃。
+
+#解决方案
+调整初始化顺序，将 `request_irq()` 移至 `power_supply_register()` 之后执行，确保中断触发时 `power_supply` 句柄已有效注册。同时更新错误处理路径：移除中断请求的错误回滚逻辑，新增电源供应注销和内存释放的错误回滚逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9e6c01973a583ad390d870db943d0d88e4b4a294

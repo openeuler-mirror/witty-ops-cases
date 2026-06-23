@@ -1,0 +1,20 @@
+#标题
+ocfs2_fault() 在 VM_FAULT_RETRY 场景下的释放后使用（UAF）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `ocfs2_fault()` 调用 `filemap_fault()` 并返回 `VM_FAULT_RETRY` 时，若此时并发执行 `munmap()` 操作，内核会发生释放后使用。具体表现为：`filemap_fault()` 返回前可能释放 `mmap_lock`，导致 `vma` 结构体被并发释放，随后 `ocfs2_fault()` 中的 tracepoint 函数 `trace_ocfs2_fault()` 引用已释放的 `vma` 指针，触发内核 panic 或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 `mm/filemap.c` 文档说明，`filemap_fault()` 可能在返回 `VM_FAULT_RETRY` 之前释放 `mmap_lock`。在此窗口期内，并发的 `munmap()` 调用会通过 `remove_vma()` 释放 `vm_area_struct` 结构体。`ocfs2_fault()` 函数在调用 `filemap_fault()` 前保存了 `vma` 指针，在函数返回后，`trace_ocfs2_fault()` 试图解引用该指针，导致访问已释放内存。
+
+#解决方案
+在调用 `filemap_fault()` 之前，提前将 `ip_blkno` 保存为普通整数值，并修改 `trace_ocfs2_fault()` 的调用，移除对 `vma` 指针的传递与引用。因为 `ip_blkno` 是值拷贝，无论后续 `vma` 或 `inode` 状态如何变化，该值均有效，从而避免了释放后使用风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/64a5c333221fd51caee2f9c6b00540417a75ff6c

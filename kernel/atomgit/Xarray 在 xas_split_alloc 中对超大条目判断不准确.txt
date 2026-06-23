@@ -1,0 +1,20 @@
+#标题
+Xarray 在 xas_split_alloc 中对超大条目判断不准确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Xarray 分配分裂节点过程中，当条目的 order 值满足条件 `xas->xa_shift + 2 * XA_CHUNK_SHIFT == order` 时，逻辑上需要两级 xa_node 进行扩展，属于不支持的大条目场景。但由于判断条件遗漏了等于的情况，内核未能正确识别该类超大条目，反而继续向下执行，触发 WARN_ON 告警并可能导致后续内存分配或处理逻辑异常。
+
+#主要错误日志
+- `WARN_ON(xas->xa_shift + 2 * XA_CHUNK_SHIFT < order)` （修复前的检查点日志）
+
+#问题根因
+在 `xas_split_alloc` 函数中，判断是否为“超大条目”的条件设计有误。代码原判断条件为 `xas->xa_shift + 2 * XA_CHUNK_SHIFT < order`，仅将需要超过两级 xa_node 的情况视为超大条目。然而，当 order 正好等于 `xas->xa_shift + 2 * XA_CHUNK_SHIFT` 时，同样需要两级 xa_node 进行扩展，这也属于不支持的大条目范围，但原逻辑未能将其识别并拒绝，导致判断不完整。
+
+#解决方案
+修改 `lib/xarray.c` 中 `xas_split_alloc` 函数的判断条件，将 `xas->xa_shift + 2 * XA_CHUNK_SHIFT < order` 更正为 `xas->xa_shift + 2 * XA_CHUNK_SHIFT <= order`。此举确保了对于需要两级 xa_node 的边界情况（即等于的情况）也能被正确识别为大条目并跳过处理，从而修正了逻辑判断的漏洞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/95bf7ebd5ac80d6fb2b93db14b87373dac8c318b

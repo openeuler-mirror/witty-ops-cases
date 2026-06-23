@@ -1,0 +1,34 @@
+#标题
+lockdep: PREEMPT_RT 模式下软中断等待上下文检查失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PREEMPT_RT 配置下，内核 lockdep 自检失败。具体表现为 lockdep 自测中的 "wait context tests" 测试项异常，在 "in softirq context" 场景下对 mutex 的使用检查标记为 FAILED，而预期结果应为通过。这导致系统在启动早期或运行时无法正确检测软中断上下文中的锁误用问题。
+
+#主要错误日志
+lockdep 自测输出如下：
+```text
+    | wait context tests |
+    --------------------------------------------------------------------------
+                                   | rcu  | raw  | spin |mutex |
+    --------------------------------------------------------------------------
+                 in hardirq context:  ok  |  ok  |  ok  |  ok  |
+  in hardirq context (not threaded):  ok  |  ok  |  ok  |  ok  |
+                 in softirq context:  ok  |  ok  |  ok  |FAILED|
+```
+
+#问题根因
+自内核版本 6.6.93 起（引入提交 0c1d7a2c2d32 "lockdep: Remove softirq accounting on PREEMPT_RT."），PREEMPT_RT 模式下移除了 softirq accounting 相关逻辑。这导致 lockdep 在进行等待上下文检查时，无法正确识别软中断上下文。具体而言，在 "in softirq context" 自测场景中，`local_bh_disable()` 在启动早期被调用时伴随抢占禁用，但由于缺乏相应的 lockdep 映射机制，锁验证器无法捕捉到 `local_lock` 未获取的情况，从而导致检查失败。
+
+#解决方案
+在 `kernel/softirq.c` 中引入 `bh_lock_map` 锁映射机制，专门用于 PREEMPT_RT 配置下的软中断上下文追踪。
+主要修改包括：
+1. 定义 `bh_lock_map` 结构，配置其等待类型为 `LD_WAIT_CONFIG` 以适应 PREEMPT_RT 下软中断的可抢占特性。
+2. 在 `__local_bh_disable_ip()` 函数中增加 `lock_map_acquire_read(&bh_lock_map)` 调用。
+3. 在 `__local_bh_enable_ip()` 和 `ksoftirqd_run_end()` 函数中增加 `lock_map_release(&bh_lock_map)` 调用。
+通过上述修改，lockdep 能够正确追踪软中断禁用区域，从而修复等待上下文检查失败的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/821b98eed96d9475e042cb60faa617e8dc0a8daa

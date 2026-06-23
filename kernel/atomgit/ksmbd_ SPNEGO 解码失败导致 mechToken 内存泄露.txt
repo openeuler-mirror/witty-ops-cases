@@ -1,0 +1,30 @@
+#标题
+ksmbd: SPNEGO 解码失败导致 mechToken 内存泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 服务中，未经认证的客户端发送特制的 SPNEGO blob 数据，如果数据中的 `mechListMIC` 等后续元素格式错误导致解码失败，已分配的 `conn->mechToken` 内存将不会被释放。这会导致服务器端发生缓慢的内存泄露，攻击者无需通过身份认证即可触发此问题。
+
+#主要错误日志
+未知
+
+#问题根因
+内核 ASN.1 BER 解码器在解析过程中增量调用回调函数。当 `ksmbd_decode_negTokenInit()` 解析到 `mechToken` 元素时，会调用 `ksmbd_neg_token_alloc()` 分配内存。
+如果同一 blob 中后续元素（如 `mechListMIC`）格式错误（例如越界），解码器将在分配内存后返回非零值（失败）。此时 `decode_negotiation_token()` 会将 `conn->use_spnego` 设置为 false。
+在 `smb2_sess_setup()` 的清理路径中，释放 `mechToken` 的操作被错误地绑定在 `conn->use_spnego` 为真的条件判断中：
+```c
+if (conn->use_spnego && conn->mechToken) {
+    kfree(conn->mechToken);
+    ...
+}
+```
+由于解码失败导致 `use_spnego` 为 false，`kfree` 被跳过，从而导致内存泄露。
+
+#解决方案
+1. 在 `smb2_sess_setup()` 的错误处理路径中，移除对 `conn->use_spnego` 的检查，只要 `conn->mechToken` 存在即进行释放，确保内存正确回收。
+2. 在 `ksmbd_conn_free()` 函数中增加对 `conn->mechToken` 的释放操作，作为兜底清理措施，防止其他潜在路径遗漏释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5b8c57bd7fad94242db36caffd7e2519f7a839d4

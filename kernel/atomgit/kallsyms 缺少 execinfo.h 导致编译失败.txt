@@ -1,0 +1,20 @@
+#标题
+kallsyms 缺少 execinfo.h 导致编译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 musl libc（如 Alpine Linux 环境）编译内核代码时，由于 `execinfo.h` 头文件不存在且未被正确处理，导致编译过程中出现文件缺失错误，构建无法继续。
+
+#主要错误日志
+未知（编译错误通常输出 "fatal error: execinfo.h: No such file or directory"，但 Commit 信息中未显式提供具体日志原文）
+
+#问题根因
+某些 C 库（如 musl libc）未提供 `execinfo.h` 头文件，因为该头文件并不属于 POSIX 标准。在引入 commit c104c16073b7 ("Kunit to check the longest symbol length") 后，`linux/kallsyms.h` 被包含进构建过程，而 `tools/include/linux/kallsyms.h` 中无条件引用了 `<execinfo.h>`，导致在不支持该头文件的编译环境中构建失败。
+
+#解决方案
+修改 `tools/include/linux/kallsyms.h`，增加编译选项判断：仅当定义了 `HAVE_BACKTRACE_SUPPORT` 时才包含 `<execinfo.h>` 并实现 `print_ip_sym` 函数功能；否则，将 `print_ip_sym` 定义为空内联函数。此举确保了在不支持 backtrace 的环境（如 musl libc）下代码能够正常编译通过。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c9b68cc42f48334b6141fa1de65ea7eef257ee43

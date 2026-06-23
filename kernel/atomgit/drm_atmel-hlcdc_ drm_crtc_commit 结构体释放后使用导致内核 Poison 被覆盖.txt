@@ -1,0 +1,31 @@
+#标题
+drm/atmel-hlcdc: drm_crtc_commit 结构体释放后使用导致内核 Poison 被覆盖
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在关闭并重新打开 DRM 设备节点时（此时另有如 fbdev 等 DRM 客户端仍 attached），内核检测到 kmalloc-64 缓冲区的 Poison 被覆盖。系统输出 "Poison overwritten" 错误信息，触发了 use-after-free 问题。
+
+#主要错误日志
+```
+=============================================================================
+BUG kmalloc-64 (Not tainted): Poison overwritten
+-----------------------------------------------------------------------------
+
+0xc611b344-0xc611b344 @offset=836. First byte 0x6a instead of 0x6b
+FIX kmalloc-64: Restoring Poison 0xc611b344-0xc611b344=0x6b
+Allocated in drm_atomic_helper_setup_commit+0x1e8/0x7bc age=178 cpu=0
+pid=29
+Freed in drm_atomic_helper_commit_hw_done+0x100/0x150 age=8 cpu=0
+pid=169
+```
+
+#问题根因
+在 `atmel_hlcdc_plane_atomic_duplicate_state()` 函数中，复制 `atmel_hlcdc_plane` 状态结构体时，没有正确复制底层的 `drm_plane_state`。具体表现为 `state->commit` 指针仍然指向旧状态的 commit 对象。当旧的 commit 对象被释放后，该指针变为悬空指针，在下一次调用 `drm_atomic_commit()` 时访问该指针导致 use-after-free。
+
+#解决方案
+修改 `atmel_hlcdc_plane_atomic_duplicate_state()` 函数，调用 `__drm_atomic_helper_plane_duplicate_state()` 函数来正确克隆基础的 `drm_plane_state`（包括 `->commit` 指针），替代原先仅处理 framebuffer 引用计数的逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b67b5ceac6e283bf01c44b9ace5442240f0bab94

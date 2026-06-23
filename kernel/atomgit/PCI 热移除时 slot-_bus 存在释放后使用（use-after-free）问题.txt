@@ -1,0 +1,23 @@
+#标题
+PCI 热移除时 slot->bus 存在释放后使用（use-after-free）问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 PCI 设备热移除（hot remove）操作时，内核触发 use-after-free 错误。具体表现为在移除 PCI 插槽（slot）过程中，访问已释放的 `slot->bus` 指针，可能导致内核 panic 或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 PCI 插槽创建函数 `pci_create_slot` 中，将 `parent` 总线指针直接赋值给 `slot->bus`，未增加该总线对象的引用计数。当 PCI 插槽被移除时，`pci_slot_release` 函数执行 `list_del` 和 `kfree` 操作释放了 slot 对象。由于缺少对 `slot->bus` 引用计数的维护（put 操作），导致 `slot->bus` 指针在总线被移除后变成悬垂指针，后续对该指针的访问构成了释放后使用。
+
+#解决方案
+通过引入引用计数机制保护 `slot->bus` 指针：
+1. 在 `pci_create_slot` 函数中，使用 `pci_bus_get(parent)` 获取总线引用后再赋值给 `slot->bus`，确保在 slot 生命周期内总线对象不会被提前释放。
+2. 在 `pci_slot_release` 函数中，释放 slot 对象前调用 `pci_bus_put(slot->bus)` 释放总线引用，维持引用计数平衡。
+3. 在 `pci_create_slot` 的错误处理路径中，若 `make_slot_name` 失败，需调用 `pci_bus_put(slot->bus)` 回滚之前获取的引用计数，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/efd2b2d83bddb5e6d1dde644dac7e1618d3fb221

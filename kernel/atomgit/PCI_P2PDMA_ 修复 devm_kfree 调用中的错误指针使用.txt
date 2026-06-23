@@ -1,0 +1,20 @@
+#标题
+PCI/P2PDMA: 修复 devm_kfree 调用中的错误指针使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PCI P2PDMA 模块的 `pci_p2pdma_add_resource()` 函数错误处理路径中，当执行到 `pgmap_free` 标签进行内存回收时，传入 `devm_kfree()` 的参数有误。这会导致内存释放操作针对错误的地址执行，可能引发内存泄漏或内核内存管理组件异常，具体表现为 P2PDMA 资源添加失败后的清理流程不可靠。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `pci_p2pdma_add_resource()` 函数中，内存通过 `devm_kzalloc` 分配给了指针变量 `p2p_pgmap`（指向结构体基地址），而 `pgmap` 仅指向该结构体内部的成员变量。在错误处理路径 `pgmap_free` 标签处，代码错误地将 `pgmap`（成员地址）而不是 `p2p_pgmap`（分配的基地址）传递给了 `devm_kfree()`，导致释放了错误的指针地址。
+
+#解决方案
+修改 `drivers/pci/p2pdma.c` 文件中 `pgmap_free` 标签处的代码，将 `devm_kfree(&pdev->dev, pgmap)` 更正为 `devm_kfree(&pdev->dev, p2p_pgmap)`，确保传入内存分配时的原始指针变量，从而正确释放内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/93914439af252d66e233c19e130ad17c41c4660b

@@ -1,0 +1,20 @@
+#标题
+dmaengine: ti: udma_probe 中缺少 devm_kasprintf 返回值检查导致潜在空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TI K3 DMA 驱动加载过程中，若内核内存分配失败，`devm_kasprintf` 函数将返回 NULL。由于驱动代码未对返回值进行检查，后续代码直接使用该空指针，导致内核发生 NULL Pointer Dereference（空指针解引用），引发内核 panic 或 oops，进而导致系统崩溃或模块加载失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `udma_probe` 函数中，调用 `devm_kasprintf` 分配并格式化通道名称（`uc->name`）时，代码未检查该函数的返回值是否为 NULL。在内存不足（OOM）等极端场景下，`devm_kasprintf` 返回 NULL，后续代码若解引用 `uc->name` 将触发空指针异常。
+
+#解决方案
+在 `devm_kasprintf` 赋值后增加返回值检查逻辑。如果返回值为 NULL，`udma_probe` 函数立即返回 `-ENOMEM`，提前终止探测流程，避免后续空指针解引用风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0bbacbadbc547267a5900f26cc5523760628f233

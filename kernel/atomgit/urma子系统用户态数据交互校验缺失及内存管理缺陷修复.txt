@@ -1,0 +1,36 @@
+#标题
+urma子系统用户态数据交互校验缺失及内存管理缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **内核崩溃或内存越界访问**：在调用 `ubagg_get_seg_info`、`ubagg_create_jfr`、`ubagg_create_jetty`、`ubagg_register_seg` 等接口时，若用户态传入的 `out.len` 或 `in_len` 小于内核期望的结构体大小，可能导致内核向用户态非法写入数据或读取越界内存。
+2. **系统宕机或数据损坏**：`ubcore_cm_recv` 接收消息时，若 `payload_len` 小于消息头大小 `MSG_HDR_SIZE`，触发内存越界拷贝。
+3. **内存泄漏**：在 `uburma_cmd_delete_jfs_batch` 批量删除操作中，若中间某个对象查找失败，已查找成功的对象未被释放，导致内存泄漏。
+4. **列表操作崩溃**：`uburma_write_event_with_free_fn` 中事件节点未初始化即加入链表，可能导致链表损坏或内核崩溃。
+5. **潜在死锁或警告**：`uburma_unmap_vma_pages` 在未持有锁的情况下调用 `lockdep_assert_held`，可能触发误报警告或掩盖真实的并发问题。
+
+#主要错误日志
+- `ubagg_log_err("Failed to find seg.\n")`
+- `ubagg_log_err("Invalid user out");`
+- `ubagg_log_err("invalid udrv_data in_len.\n");`
+- `ubcore_log_err("Invalid recv_cr payload");`
+- `uburma_log_err("failed to find jfs, index is %d.\n", i);`
+- `uburma_log_err("Invalid parameter.\n");`
+- `uburma_log_err("Failed to copy data to user space, ret:%d.\n", ret);`
+
+#问题根因
+1. **输入校验缺失**：多个 IOCTL 接口在执行 `copy_from_user` 或 `copy_to_user` 前，未校验用户态传入的缓冲区长度 `len` 是否满足内核结构体大小要求，导致堆溢出或越界读写。
+2. **逻辑错误**：`uburma_cmd_delete_jfs_batch` 中错误处理路径直接跳转至 `free_uobj_arr`，遗漏了对已成功获取对象的引用计数释放，造成内存泄漏。
+3. **初始化遗漏**：`uburma_write_event_with_free_fn` 分配事件结构体后，未调用 `INIT_LIST_HEAD` 初始化链表节点，导致链表指针随机。
+4. **重构残留**：`uburma_unmap_vma_pages` 中保留了不合理的锁断言检查；`ubcore_sock.c` 移除了不再使用的监听和接收函数。
+
+#解决方案
+1. **增强输入校验**：在 `ubagg_ioctl.c`、`ubagg_seg.c`、`ubcore_cm.c`、`uburma_cmd.c` 的相关函数入口处，增加对用户态传入长度 `in_len`/`out.len`/`payload_len` 的合法性检查，确保不小于目标结构体大小，否则返回错误并打印日志。
+2. **修复内存泄漏**：修正 `uburma_cmd_delete_jfs_batch` 的错误处理逻辑，在查找失败时先调用 `uobj_put_batch` 和 `uobj_put_del_batch` 释放已获取的对象，再跳转至释放内存。
+3. **修复链表操作**：在 `uburma_write_event_with_free_fn` 中添加 `INIT_LIST_HEAD` 对 `node` 和 `obj_node` 的初始化。
+4. **代码清理**：移除 `uburma_unmap_vma_pages` 中不合理的 `lockdep_assert_held` 断言，并删除 `ubcore_sock.c` 中废弃的 Socket 监听与接收相关代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bd146f9ad39522d98d275a71701f9b88b69848fa

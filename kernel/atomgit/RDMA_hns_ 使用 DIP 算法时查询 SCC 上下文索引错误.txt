@@ -1,0 +1,20 @@
+#标题
+RDMA/hns: 使用 DIP 算法时查询 SCC 上下文索引错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 DIP（Destination IP）算法时，所有与同一目的 IP 建立连接的 QP 共享同一个 SCC 上下文。当前实现错误地使用 QP 号（qpn）作为索引去查询 SCC 上下文，由于 dip_idx 不一定等于 qpn，导致查询到错误的 SCC 上下文信息。
+
+#主要错误日志
+ibdev_warn_ratelimited: "failed to query SCCC, ret = %d.\n"
+
+#问题根因
+在使用 DIP 算法场景下，驱动程序在查询 SCC 上下文时，直接使用了 QP 号（qpn）作为索引参数。然而，DIP 算法要求共享同一目的 IP 的所有 QP 使用同一个 SCC，其索引由 dip_idx 决定。由于 dip_idx 与 qpn 不一定相等，导致内核查询到了错误的 SCC 上下文内容。
+
+#解决方案
+修改 `hns_roce_fill_res_qp_entry_raw` 函数逻辑，在查询 SCC 上下文前判断 QP 的拥塞类型。若为 DIP 算法（CONG_TYPE_DIP），则使用 `hr_qp->dip->dip_idx` 作为查询索引；否则继续使用 `qpn` 作为索引。同时更新底层 `hns_roce_v2_query_sccc` 函数接口参数名以准确反映其索引含义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/19567c78756d36b0ff7a8893e4595bf70fdc5119

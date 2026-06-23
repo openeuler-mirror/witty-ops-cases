@@ -1,0 +1,20 @@
+#标题
+mac802154: RCU读锁释放后访问内存导致潜在Use-After-Free风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `mac802154_scan_worker` 函数执行过程中，代码在退出了 RCU 读端临界区后，依然尝试访问 `scan_req->type` 字段。这种行为违反了 RCU 使用规则，可能导致不可预测的行为，包括访问已释放的内存或引发 Use-After-Free 问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mac802154_scan_worker` 函数中，`scan_req->type` 字段的访问发生在 RCU 读端临界区解锁之后。根据 RCU 规则，RCU 读锁解锁后，受 RCU 保护的指针（如 `scan_req`）所指向的内存可能已被其他线程更新或释放，此时直接访问该内存区域是非法的，存在严重的内存安全风险。
+
+#解决方案
+在 RCU 读端临界区内，先将 `scan_req->type` 的值保存到一个局部变量 `scan_req_type` 中。在 RCU 锁释放后，使用该局部变量 `scan_req_type` 替代直接访问 `scan_req->type`，从而确保在临界区外访问的是安全的数据副本，避免违规内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6a7b0fe9f693c9677885fb1b40839a55039a5564

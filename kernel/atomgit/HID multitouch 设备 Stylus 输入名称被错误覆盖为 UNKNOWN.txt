@@ -1,0 +1,24 @@
+#标题
+HID multitouch 设备 Stylus 输入名称被错误覆盖为 UNKNOWN
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 multitouch 设备上，HID_DG_PEN 类型的触控笔输入设备在注册时，其名称后缀被错误地覆盖为 "UNKNOWN"，而非预期的 "Stylus"。通过内核日志可以观察到输入设备名称显示异常（例如 "ELAN9008:00 04F3:2E14 UNKNOWN"），这可能导致依赖设备名称进行识别或配置的用户态工具失效。
+
+#主要错误日志
+修复前日志：
+`[    0.470981] input: ELAN9008:00 04F3:2E14 UNKNOWN as /devices/pci0000:00/0000:00:15.1/i2c_designware.1/i2c-16/i2c-ELAN9008:00/0018:04F3:2E14.0001/input/input8`
+
+修复后日志：
+`[    0.474332] input: ELAN9008:00 04F3:2E14 Stylus as /devices/pci0000:00/0000:00:15.1/i2c_designware.1/i2c-16/i2c-ELAN9008:00/0018:04F3:2E14.0001/input/input8`
+
+#问题根因
+根据提交 c0ee1d571626 ("HID: hid-input: Add suffix also for HID_DG_PEN")，HID_DG_PEN 设备应当拥有 "Stylus" 后缀。然而，在 multitouch 驱动中，该后缀逻辑被覆盖了。具体原因是 `mt_input_configured` 函数未将 `HID_DG_PEN` 加入不覆盖后缀的处理列表（switch-case 分支），导致其名称处理逻辑未正确保留 HID core 分配的 "Stylus" 后缀，转而被设置为 "UNKNOWN"。
+
+#解决方案
+在 `drivers/hid/hid-multitouch.c` 文件的 `mt_input_configured` 函数中，将 `HID_DG_PEN` 添加到 switch 语句的 case 列表中。这使得该类型设备直接由 HID core 处理名称后缀，不被 multitouch 驱动覆盖，从而正确显示 "Stylus" 后缀。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/74d1fd203883878b91eacfe554becf2c2b411abe

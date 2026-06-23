@@ -1,0 +1,20 @@
+#标题
+dmaengine: dw: dmamux: 路由分配失败时的 OF node 引用泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RZN1 DMA 路由分配过程中，若发生路由分配失败（如通道忙碌），之前已获取的 DMA master 设备树节点（OF node）引用未被释放，导致内核对象引用计数泄漏。长期运行可能导致设备树节点无法正常释放或系统资源耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `rzn1_dmamux_route_allocate` 中，当调用 `test_and_set_bit` 检测到通道已被占用（返回 `-EBUSY`）时，代码直接跳转到 `free_map` 标签进行清理。然而，函数入口处通过 `of_parse_phandle_with_args` 或类似机制获取的 `dma_spec->np` 引用在错误处理路径中被遗漏，未调用 `of_node_put` 进行释放，从而导致 OF node 引用计数泄漏。
+
+#解决方案
+修改错误处理跳转逻辑，将通道忙碌失败情景下的跳转目标从 `free_map` 修改为新增加的 `put_dma_spec_np` 标签。在 `put_dma_spec_np` 处增加 `of_node_put(dma_spec->np)` 调用以正确释放设备树节点引用，随后再流入 `free_map` 标签释放内存，确保资源清理顺序正确且无遗漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/10cef1a7acdd7f3895f7436d99cbe3101b72350b

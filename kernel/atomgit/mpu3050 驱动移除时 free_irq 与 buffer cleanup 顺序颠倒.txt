@@ -1,0 +1,20 @@
+#标题
+mpu3050 驱动移除时 free_irq 与 buffer cleanup 顺序颠倒
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 MPU-3050 陀螺仪驱动模块时，由于资源释放顺序违反 LIFO（后进先出）原则，可能导致内核产生警告或引发空指针引用异常，破坏驱动移除路径的稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动的初始化流程是先申请 IRQ，后初始化 triggered buffer。但在移除路径（`mpu3050_common_remove`）中，代码先调用了 `iio_triggered_buffer_cleanup()`，后调用 `free_irq()`。这违反了资源释放应与申请顺序相反（LIFO）的原则，导致在 IRQ 仍可能被处理时 buffer 已被清理，引发释放顺序错误。
+
+#解决方案
+调整 `mpu3050_common_remove` 函数中的资源释放顺序，将 `free_irq()` 调用移至 `iio_triggered_buffer_cleanup()` 之前，确保先释放中断资源，再清理缓冲区，符合驱动初始化与去初始化的 LIFO 逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3d76342b0b2227fec8e103c2261f36e3a635fbe4

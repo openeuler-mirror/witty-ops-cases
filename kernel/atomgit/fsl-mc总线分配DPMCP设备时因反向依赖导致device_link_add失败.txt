@@ -1,0 +1,20 @@
+#标题
+fsl-mc总线分配DPMCP设备时因反向依赖导致device_link_add失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在DPAA2系统中，当root DPRC设备尝试分配一个新的DPMCP设备用于UAPI交互（即MC firmware的用户空间访问）时，`fsl_mc_portal_allocate` 函数返回 `-EINVAL` 错误，导致MC portal分配失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在尝试为root DPRC（consumer）与新分配的DPMCP设备（supplier）之间添加设备链接（device link）时，代码未检查二者之间的父子关系。由于DPMCP设备实际上是DPRC设备的子设备，这种“父设备依赖子设备”的反向依赖关系是不被允许的，导致 `device_link_add` 调用失败，进而使整个分配流程返回 `-EINVAL`。
+
+#解决方案
+在 `fsl_mc_portal_allocate` 函数中增加判断逻辑：如果请求分配 portal 的设备 `mc_dev` 是 root DPRC 设备本身（即 `mc_dev == mc_bus_dev`），则跳过 `device_link_add` 的调用，避免创建非法的反向依赖关系；仅对非 root DPRC 的设备添加设备链接。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ff6c9bc59bde95364df9dd721bebf470c4163de

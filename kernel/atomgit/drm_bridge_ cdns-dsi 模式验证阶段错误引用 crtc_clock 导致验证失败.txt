@@ -1,0 +1,20 @@
+#标题
+drm/bridge: cdns-dsi 模式验证阶段错误引用 crtc_clock 导致验证失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 DRM bridge 模式验证（mode_valid）阶段，驱动程序错误地使用了尚未生成的 `crtc_clock` 参数，导致 D-Phy 配置检查失败，进而导致模式验证无法通过。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cdns_dsi_check_conf` 函数中，代码无条件地使用了 `mode->crtc_clock` 参数来计算 D-Phy 配置。然而，`crtc_*` 相关的参数在模式验证阶段尚未从常规参数中生成（或复制），只有在 bridge enable 阶段才可用。驱动中其他部分在验证阶段均使用常规参数（如 `mode->clock`），唯独此处错误地引用了 `crtc_clock`，导致了逻辑错误。
+
+#解决方案
+修改 `cdns_dsi_check_conf` 函数，引入局部变量 `mode_clock`。根据调用上下文（通过 `mode_valid_check` 参数判断）区分处理：若处于模式验证阶段，使用 `mode->clock`；若处于其他阶段（如 bridge enable），使用 `mode->crtc_clock`。随后将 `phy_mipi_dphy_get_default_config` 函数的时钟参数输入源从固定的 `mode->crtc_clock` 替换为新的 `mode_clock` 变量，确保验证阶段使用正确的时钟参数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/03b66735553277411b825347b0e0cb732ef0f1f4

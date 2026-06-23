@@ -1,0 +1,25 @@
+#标题
+AMD显卡嵌入式面板因缺失DDC导致显示异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+部分主板厂商的嵌入式面板（Embedded Panel）未配备 DDC 通道，导致内核无法正常读取显示器 EDID 信息，进而导致显示模式识别异常或显示输出功能失效。该问题影响了无 DDC 支持的嵌入式连接器的正常使用。
+
+#主要错误日志
+未知
+
+#问题根因
+部分主板厂商将嵌入式面板的 EDID 信息硬编码在 VBIOS 中。当面板没有 DDC 时，内核驱动未能从 VBIOS 中读取这部分硬编码的 EDID 及面板物理尺寸信息，导致驱动无法获取正确的显示配置数据。相比之下，旧版 non-DC 显示代码（如 `amdgpu_atombios_encoder_get_lcd_info`）支持该读取逻辑，而当前 DC 驱动缺失该功能。
+
+#解决方案
+扩展 BIOS Parser 解析逻辑，增加对 VBIOS 中嵌入式面板扩展信息的读取支持。
+1. 在 `bios_parser.c` 中新增 `get_embedded_panel_extra_info` 函数，用于解析 VBIOS LCD_Info 表中的扩展记录。
+2. 支持解析 `LCD_FAKE_EDID_PATCH_RECORD_TYPE` 类型记录，从中提取硬编码的 EDID 数据及其大小。
+3. 支持解析 `LCD_PANEL_RESOLUTION_RECORD_TYPE` 类型记录，从中提取面板的物理宽度和高度。
+4. 更新 `embedded_panel_info` 数据结构，新增 `fake_edid`、`fake_edid_size`、`panel_width_mm` 和 `panel_height_mm` 字段以存储读取到的信息。
+5. 在 `get_embedded_panel_info_v1_2` 和 `get_embedded_panel_info_v1_3` 函数中调用新增的解析函数，确保在存在扩展信息表时自动加载 EDID 数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/05ed206af2e28bb52b45122b5439e34933cdd630

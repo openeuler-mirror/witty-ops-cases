@@ -1,0 +1,20 @@
+#标题
+CXL DRAM事件记录内存事件类型解码错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在解析CXL DRAM事件记录时，内存事件类型字段的显示名称错误。例如，当事件类型值为0x1时，系统错误地将其报告为“Invalid Address”（属于General Media Event Record的定义），而非CXL规范定义的“Scrub Media ECC Error”（属于DRAM Event Record的定义）。这导致用户在trace日志中看到的事件类型描述与实际硬件发生的故障类型不符，影响故障诊断的准确性。
+
+#主要错误日志
+未知
+
+#问题根因
+内核代码在处理CXL DRAM Event Record时，错误地复用了General Media Event Record (GMER) 的内存事件类型解码函数 `show_mem_event_type`。根据CXL spec rev 3.0 section 8.2.9.2.1.2，DRAM Event Record与General Media Event Record的内存事件类型定义不同（例如值0x01在GMER中代表Invalid Address，而在DRAM中代表Scrub Media ECC Error）。代码未对两者进行区分，导致解码时使用了错误的映射表。
+
+#解决方案
+在 `drivers/cxl/core/trace.h` 中为DRAM Event Record新增独立的内存事件类型定义宏 `CXL_DER_MEM_EVT_TYPE_*` 及其对应的显示函数 `show_dram_mem_event_type`。将 `cxl_dram` 事件跟踪点中的类型显示调用从 `show_mem_event_type`（现已重命名为 `show_gmer_mem_event_type`）替换为新的 `show_dram_mem_event_type`，以确保DRAM事件类型按照CXL规范正确解码显示。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0891d74adf2de938e9bed51bf584566c245089f7

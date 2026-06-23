@@ -1,0 +1,23 @@
+#标题
+ftrace: register_ftrace_direct 中哈希大小计算错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `register_ftrace_direct()` 函数注册 ftrace 直接操作时，哈希表的大小计算逻辑存在错误。具体表现为：哈希表的最大位数被错误地限制为 `fls(32)`（即 5 位），这远远小于系统定义的最大值 `FTRACE_HASH_MAX_BITS`。这导致在处理大量 trace 条目时，哈希表过早达到容量上限，引发哈希冲突概率急剧上升，进而导致 ftrace 功能性能严重下降或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `register_ftrace_direct()` 函数中，分配新哈希表的代码逻辑存在笔误。原代码在计算哈希大小时，将 `size`（条目计数）与 32 进行比较，如果超过 32 则强制将 `size` 设为 32，随后对 32 进行 `fls` 运算得到 5。这使得哈希表的最大位数被错误地锁定在 5 位，而非使用宏定义 `FTRACE_HASH_MAX_BITS` 所允许的系统最大值。
+
+#解决方案
+修正 `register_ftrace_direct()` 中哈希大小的计算逻辑：
+1. 先对条目数量 `size` 执行 `fls` 运算得到哈希位数。
+2. 判断该位数是否超过系统限制 `FTRACE_HASH_MAX_BITS`，若超过则截断为最大值。
+3. 使用修正后的位数调用 `alloc_ftrace_hash` 分配哈希表，确保哈希表容量符合预期。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1748930d56fb92e5c5e28b29f96a6f1faef8d118

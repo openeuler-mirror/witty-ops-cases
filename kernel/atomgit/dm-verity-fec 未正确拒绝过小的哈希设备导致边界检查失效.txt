@@ -1,0 +1,21 @@
+#标题
+dm-verity-fec 未正确拒绝过小的哈希设备导致边界检查失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 dm-verity 的前向纠错（FEC）功能时，如果配置的哈希设备（hash device）大小不足，系统未能正确检测并拒绝该配置。这可能导致在设备偏移量（hash_start）非零的情况下，错误地判定哈希设备大小合法，从而在后续访问中引发越界访问或数据损坏风险。
+
+#主要错误日志
+推断日志（基于代码逻辑）：
+device-mapper: verity-fec: Hash device is too small for fec_blocks
+
+#问题根因
+在 `verity_fec_ctr()` 函数中，校验哈希设备大小时，`dm_bufio_get_device_size(v->bufio)` 返回的是相对于 0 的设备大小，未考虑 `hash_start` 偏移量。代码在计算所需大小时仅比较 `f->hash_blocks`，遗漏了 `v->hash_start`，导致未能正确识别出“哈希设备大小（相对于起始位置）不足以容纳 FEC 所需块”的情况。
+
+#解决方案
+修改 `drivers/md/dm-verity-fec.c` 中的大小校验逻辑，在判断哈希设备是否足够大时，将 `v->hash_start` 纳入计算范围。修正后的判断条件为：若 `dm_bufio_get_device_size(v->bufio)` 小于 `v->hash_start + f->hash_blocks`，则判定设备过小并返回错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e647513c6707ffbf34074d181d6af75973fec917

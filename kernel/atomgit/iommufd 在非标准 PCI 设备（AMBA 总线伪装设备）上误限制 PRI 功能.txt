@@ -1,0 +1,20 @@
+#标题
+iommufd 在非标准 PCI 设备（AMBA 总线伪装设备）上误限制 PRI 功能
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 PASID 和 Stall（相当于 PRI）功能的 AMBA 总线设备（在系统中显示为 PCI 设备，如某些 HiSilicon 设备）上，尝试启用 IOPF（I/O Page Fault）功能时失败。由于内核错误地认为这些“伪装”PCI 设备受限于 SRIOV VF 的 PRI 共享资源问题，导致相关功能无法正常使用。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `iommufd_fault_iopf_enable` 中存在过度的限制逻辑。原代码在判断设备为 PCI 虚拟功能时，直接返回 `-EINVAL` 拒绝启用，这是为了防止 SRIOV VF 与 PF 共享 PRI 资源导致冲突。然而，部分设备虽然表现为 PCI 设备（dev_is_pci 为真）且具备 SRIOV 能力，但实际上是挂在 AMBA 总线上的设备，它们拥有独立的 PASID 和 Stall 能力，不属于 PCI/SRIOV 的 PRI 共享资源模型，因此被误拦截。
+
+#解决方案
+修改 `drivers/iommu/iommufd/fault.c` 中的 `iommufd_fault_iopf_enable` 函数逻辑。在判断是否拦截时，增加对 `pci_pri_supported` 的检查。仅当设备既是 PCI 虚拟功能，且确实支持 PRI 时才返回错误；对于不支持 PRI 的“伪装” PCI 设备（实际依赖 AMBA 总线的 Stall 机制），允许其正常通过检查并启用功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c327e4236020b8d3cbe30a436778584cb95e93cd

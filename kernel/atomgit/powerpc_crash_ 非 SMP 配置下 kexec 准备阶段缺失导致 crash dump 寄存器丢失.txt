@@ -1,0 +1,22 @@
+#标题
+powerpc/crash: 非 SMP 配置下 kexec 准备阶段缺失导致 crash dump 寄存器丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非 SMP（Non-SMP）配置的 PowerPC 系统中，发生崩溃并触发 kexec 时，生成的核心转储文件中缺少 NT_PRSTATUS elf note，导致无法正确保存和查看崩溃时的 CPU 寄存器数据，影响故障分析。
+
+#主要错误日志
+未知
+
+#问题根因
+在非 SMP 配置下，`crash_smp_send_stop()` 函数在崩溃关闭路径中不会执行后续的准备工作。这导致 `crash_kexec_prepare()` 函数从未被调用，进而使得 `crashing_cpu` 变量从未被设置。由于 `crashing_cpu` 变量值为空，`crash_save_cpu()` 函数判断逻辑失效，无法将 CPU 寄存器信息存储到核心转储文件中。
+
+#解决方案
+在 `default_machine_crash_shutdown` 函数中增加内核配置判断：
+1. 若开启了 `CONFIG_SMP`，则保持原有逻辑调用 `crash_smp_send_stop()`；
+2. 若未开启 `CONFIG_SMP`（非 SMP 配置），则直接调用 `crash_kexec_prepare()` 以确保 `crashing_cpu` 被正确设置，从而保证 `crash_save_cpu` 能正常保存寄存器信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e25f0d4d39232fad009f564a95a5585bcc9a95a3

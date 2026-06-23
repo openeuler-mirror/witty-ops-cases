@@ -1,0 +1,23 @@
+#标题
+ksmbd: fix use-after-free in ksmbd_session_rpc_open
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 ksmbd Session RPC 操作时，由于 `ksmbd_session_rpc_open()` 与 `__session_rpc_close()` 函数之间存在竞态条件，导致发生 Use-After-Free（UAF）内存安全问题。
+
+#主要错误日志
+未知
+
+#问题根因
+A UAF issue can occur due to a race condition between ksmbd_session_rpc_open() and __session_rpc_close(). 当并发执行 RPC 打开与关闭操作时，缺乏有效的锁保护机制，导致对已释放内存的非法访问。
+
+#解决方案
+在 session 结构体中引入 `rpc_lock` 读写信号量：
+1. 在 `ksmbd_session_rpc_open()` 函数中添加 `down_read(&sess->rpc_lock)` 和 `up_read(&sess->rpc_lock)` 保护，确保在操作 rpc_handle_list 和分配 ID 期间不被并发修改。
+2. 在 `ksmbd_session_rpc_close()` 和 `ksmbd_session_rpc_clear_list()` 函数中添加 `down_write(&sess->rpc_lock)` 和 `up_write(&sess->rpc_lock)` 保护，防止关闭操作与打开操作发生竞态。
+3. 在 session 创建函数 `__session_create()` 中初始化该锁 `init_rwsem(&sess->rpc_lock)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e0f8ca6e47f7a9392a6bf0aa57f9acda353180e9

@@ -1,0 +1,26 @@
+#标题
+sw64架构huge_pte_offset函数在PMD未呈现时返回值错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构下，当调用 `huge_pte_offset()` 函数处理 HugeTLB 页面时，若检测到 PMD 项为“unpresent”（未呈现）状态，函数错误地返回了 NULL，而不是期望的 PMD 地址。这可能导致后续流程因获取不到正确的页表项地址而发生异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `huge_pte_offset()` 函数的原有逻辑中，处理 CONT_PMD_SIZE 场景时，代码通过 `!pmd_present(*pmd)` 判断直接返回 NULL。然而，当 PMD 处于“未呈现”状态时，正确的处理逻辑应当是根据情况返回 PMD 的地址（以便调用者进行后续处理，如页表项分配），而不是直接返回 NULL。该逻辑错误导致函数在特定条件下返回了非预期的 NULL 指针。
+
+#解决方案
+修改 `arch/sw_64/mm/hugetlbpage.c` 文件中的 `huge_pte_offset()` 函数逻辑：
+1. 增加对页面大小 `sz` 的判断，区分 `CONT_PMD_SIZE` 和 `PMD_SIZE` 两种情况。
+2. 针对 `CONT_PMD_SIZE` 场景，将原先的 `!pmd_present(*pmd)` 判断修改为 `!pmd_none(*pmd)`。
+   - 若 PMD 非空（`!pmd_none`），则映射并返回 PTE 地址。
+   - 若 PMD 为空（`pmd_none`），则返回 NULL。
+3. 针对 `PMD_SIZE` 场景，直接返回 PMD 地址。
+此修复确保了在 PMD 未呈现时，函数能根据上下文返回预期的正确值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/03c0360ae1c0d6f7d5de2d66e06cc1bb2c15485d

@@ -1,0 +1,21 @@
+#标题
+ub: hisi-ubus 修复 MUE 注销消息响应时序错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 MUE（Module Unlink Entity）注销消息时，若注销成功，系统会先调用 `ub_disable_ent` 禁用实体，随后才发送响应消息。此异常时序可能导致响应消息发送失败或行为未定义，进而影响注销流程的正确性。此外，在设备实体释放和 IRQ 域创建失败的日志中，缺少关键的识别信息或级别设置不当，不利于故障定位。
+
+#主要错误日志
+- `pr_err("Create device irq domain failed.\n");`（推断：由 pr_info 修改而来，用于明确错误）
+- `pr_info("uent[%#x] release\n", uent_num);`（推断：增加了实体编号 uent_num 的打印）
+
+#问题根因
+MUE 注销处理函数 `ub_idevice_pue_rls_handler` 中，响应发送函数 `ub_vdm_msg_rsp` 的调用位置错误。代码逻辑在响应发送前执行了 `ub_disable_ent` 操作，该操作可能导致设备状态改变或资源不可用，从而导致响应消息无法正确发送或时序错误。
+
+#解决方案
+调整 `ub_vdm_msg_rsp` 与 `ub_disable_ent` 的调用顺序，确保在发送响应消息后再执行实体禁用操作。同时，优化日志打印：将 IRQ 域创建失败的日志级别由 `pr_info` 修正为 `pr_err`，并在实体释放日志中增加 `uent_num` 信息以便追踪。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c1dc8aca8e80c267b625ab95c3522ca81424fd77

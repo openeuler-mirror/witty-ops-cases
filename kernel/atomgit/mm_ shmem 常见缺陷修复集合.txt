@@ -1,0 +1,32 @@
+#标题
+mm: shmem 常见缺陷修复集合
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 使用 `within_size` 策略分配大页时，索引对齐计算错误，导致分配行为不符合预期。
+2. 在 shmem 收缩（shrink）过程中，`shmem_falloc->nr_unswapped` 计数更新错误，未能正确统计未换出的页数，可能导致统计信息不准或相关逻辑异常。
+3. `ShmemHugePages` 统计计数在换出（swapout）或替换操作时更新不准确，影响内存监控数据的正确性。
+4. 文档中 `FileHugeMapped` 字段名称有误，误导用户查询 `/proc/PID/smaps`。
+5. `shmem_unused_huge_shrink` 函数在大页回收时的计算逻辑存在差一错误及收缩范围限制，导致回收效率低或逻辑不完整。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **索引对齐错误**：`shmem_allowable_huge_orders` 中 `round_up(index + 1, order)` 实际上是对 `index + 1` 进行了对齐，而不是基于 `order` 对应的页面数进行对齐，导致后续的 `i_size` 判断逻辑失效。
+2. **统计计数遗漏**：`shmem_writepage` 中增加 `nr_unswapped` 时仅加了 1，未考虑到大页场景下实际包含的页数（`nr_pages`）；同样，`shmem_replace_folio` 和 `shmem_delete_from_page_cache` 中对 `NR_SHMEM_THPS` 的统计维护不全。
+3. **差一错误**：`shmem_get_folio_gfp` 判断文件大小是否超出 folio 范围时，使用 `folio_next_index(folio) - 1` 导致边界判断偏差。
+4. **收缩逻辑缺陷**：`shmem_unused_huge_shrink` 仅针对特定大小进行处理，且未正确计算可释放的页面数量，部分逻辑（如 `to_remove` 列表处理）冗余或错误。
+5. **文档笔误**：Documentation 文件中将 `FilePmdMapped` 错误地写成了 `FileHugeMapped`。
+
+#解决方案
+1. **修正索引对齐逻辑**：将 `round_up(index + 1, order)` 修改为 `aligned_index = round_up(index + 1, 1 << order)`，确保索引按页面数正确对齐。
+2. **修正统计计数**：在 `shmem_writepage` 中将 `shmem_falloc->nr_unswapped++` 改为 `shmem_falloc->nr_unswapped += nr_pages`；引入 `shmem_update_stats` 辅助函数统一处理 `NR_FILE_PAGES`、`NR_SHMEM` 和 `NR_SHMEM_THPS` 的更新，确保换出、替换和删除操作中统计数据一致。
+3. **修正边界判断**：将 `folio_next_index(folio) - 1` 修正为 `folio_next_index(folio)`。
+4. **扩展收缩功能**：重构 `shmem_unused_huge_shrink`，移除 `to_remove` 列表的冗余逻辑，优化文件末尾大页的判断与分割逻辑，并将功能扩展至支持所有大小的大页（不仅仅限于 PMD）。
+5. **修正文档**：将文档中的 `FileHugeMapped` 更正为 `FilePmdMapped`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ed17ddff98f1fd00a980df5b8abbbf8aa838e533

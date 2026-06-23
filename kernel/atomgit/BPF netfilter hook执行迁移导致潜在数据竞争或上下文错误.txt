@@ -1,0 +1,20 @@
+#标题
+BPF netfilter hook执行迁移导致潜在数据竞争或上下文错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在nf_hook_run_bpf函数执行BPF程序时，由于未禁用CPU迁移，程序可能在执行过程中被调度迁移至其他CPU运行。这可能导致并发访问安全问题、per-cpu变量访问错误或上下文不一致，进而引发内核panic或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在net/netfilter/nf_bpf_link.c的nf_hook_run_bpf函数中，原代码使用bpf_prog_run宏运行BPF程序。该宏允许在程序执行期间发生CPU迁移。对于netfilter hook此类需要稳定上下文的场景，若BPF程序在执行期间被迁移到其他CPU，可能破坏预期的执行环境或导致与CPU相关的状态不一致。
+
+#解决方案
+将bpf_prog_run(prog, &ctx)替换为bpf_prog_run_pin_on_cpu(prog, &ctx)。后者在执行BPF程序前会自动禁用CPU迁移，确保程序在当前CPU上完成执行，从而保证上下文稳定性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f202a7a9e1ae789607fa9de87751a5d1dbd14202

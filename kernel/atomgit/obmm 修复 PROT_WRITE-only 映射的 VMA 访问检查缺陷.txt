@@ -1,0 +1,20 @@
+#标题
+obmm 修复 PROT_WRITE-only 映射的 VMA 访问检查缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ptrace 或 GDB 读取 ARM64 架构下仅具有写权限（PROT_WRITE-only）的内存映射区域时，访问请求被错误拒绝，导致无法正常读取该内存区域的内容。
+
+#主要错误日志
+未知
+
+#问题根因
+`obmm_vma_access()` 函数在检查权限时逻辑有误，当 `vm_flags` 未设置 `VM_READ` 标志时直接拒绝读取访问。然而在 ARM64 架构上，硬件不支持只写的页表项，因此 `PROT_WRITE-only` 的 mmap 映射实际上也会生成可读的页表项。原有的检查逻辑未考虑这一架构特性，导致拒绝了合法的读操作。
+
+#解决方案
+修改 `obmm_vma_access()` 中的权限检查逻辑，将判断条件从仅检查 `VM_READ` 标志改为检查 `VM_READ` 或 `VM_WRITE` 标志。这允许 ptrace/GDB 读取那些具有写权限（即使没有显式读权限）的内存映射，修正了 ARM64 架构下的行为偏差。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d23b838676c7f1bc980be039be4c280718b544b1

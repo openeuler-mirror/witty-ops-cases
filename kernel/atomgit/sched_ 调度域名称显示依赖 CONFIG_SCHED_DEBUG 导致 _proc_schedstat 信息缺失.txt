@@ -1,0 +1,26 @@
+#标题
+sched: 调度域名称显示依赖 CONFIG_SCHED_DEBUG 导致 /proc/schedstat 信息缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在未开启 CONFIG_SCHED_DEBUG 配置项的内核中，查看 /proc/schedstat 文件时，调度域统计信息仅显示 domain level（域级别数字），不显示具体的调度域名称（如 NUMA、SMT 等）。这导致诸如 `perf sched stats` 等工具无法有效聚合和分析域级别的调度统计数据，影响系统性能观测能力。
+
+#主要错误日志
+推断日志（当拓扑结构异常且未开启 CONFIG_SCHED_DEBUG 时，修复前无法打印域名）：
+`BUG: arch topology borken`
+`     the %s domain not a subset of the %s domain`
+
+#问题根因
+调度域结构体 `struct sched_domain` 及 `struct sched_domain_topology_level` 中的 `name` 字段以及 `SD_INIT_NAME` 宏定义被 `CONFIG_SCHED_DEBUG` 宏保护。在非调试模式下编译时，这些定义被忽略，导致调度域初始化时无法设置名称，进而导致 /proc/schedstat 输出缺失域名信息。
+
+#解决方案
+将调度域名称相关的代码移出 `CONFIG_SCHED_DEBUG` 的条件编译范围，使其成为内核默认功能。具体修改包括：
+1. 移除 `include/linux/sched/topology.h` 中 `struct sched_domain` 和 `struct sched_domain_topology_level` 结构体内 `name` 字段的 `#ifdef CONFIG_SCHED_DEBUG` 限制。
+2. 移除 `SD_INIT_NAME` 宏定义的 `#ifdef CONFIG_SCHED_DEBUG` 限制，确保在非调试模式下也能初始化调度域名称。
+3. 移除 `kernel/sched/topology.c` 中 `sd_init` 函数内赋值 `.name = tl->name` 的条件编译限制。
+4. 移除拓扑构建错误检查代码块中打印域名信息的 `#ifdef CONFIG_SCHED_DEBUG` 限制，确保错误现场能完整输出域名。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d09bcf393541d25b2791485ac08757c9638b4da

@@ -1,0 +1,20 @@
+#标题
+HID: asus 设备 probe 阶段非必要中止导致设备无法正常驱动
+
+#内核版本
+OLK-6.6
+
+#问题现象
+部分 Asus 设备在内核加载驱动过程中，`asus_probe` 函数异常中止并报错返回，导致设备控制权转移给 `hid-generic`，而非预期的 `hid-asus` 驱动，致使设备特定功能（如 TouchPad 多指触控等）不可用或异常。
+
+#主要错误日志
+asus 0003:0B05:1932.0001: Asus input not registered
+
+#问题根因
+在修复先前 UAF 漏洞（Commit d3af6ca9a8c3）时引入了逻辑错误。代码在 `drvdata->input` 为空或设备未被 `HID_CLAIMED_INPUT` 标记时，直接中止 probe。实际上，`drvdata->input` 为空并不总是异常情况（例如只有 usages 被映射时 input 才非空），导致正常流程被误判为错误而提前中止。
+
+#解决方案
+修改 `drivers/hid/hid-asus.c` 中的 `asus_probe` 函数逻辑，将原本的“非此即彼中止”逻辑改为“条件满足才执行”逻辑。只有当 `drvdata->input` 存在且设备被 `HID_CLAIMED_INPUT` 标记时，才执行 input 名称设置及 multitouch 启动操作，否则直接正常返回，避免不必要的 probe 中止。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e370ca777b0d6515e0f3d8fe324a32f626cd560e

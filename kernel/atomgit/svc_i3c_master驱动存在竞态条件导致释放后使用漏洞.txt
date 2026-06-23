@@ -1,0 +1,20 @@
+#标题
+svc_i3c_master驱动存在竞态条件导致释放后使用漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 svc_i3c_master 驱动设备时，若此时中断处理程序正在执行，可能触发竞态条件，导致内核发生 Use-After-Free（释放后使用）错误，可能引起内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `svc_i3c_master_remove` 函数中，驱动直接调用 `i3c_master_unregister` 注销设备，但未确保正在执行的工作队列 `hj_work` 已完成。如果工作队列正在运行且持有或访问了 master 数据结构，而 remove 流程继续执行并释放了该结构，就会导致工作队列在后续执行中访问已释放的内存，从而触发 Use-After-Free 漏洞。
+
+#解决方案
+在 `svc_i3c_master_remove` 函数中，于调用 `i3c_master_unregister` 之前，增加 `cancel_work_sync(&master->hj_work)` 调用。该函数会同步取消工作队列，确保 `hj_work` 在驱动资源释放前已执行完毕或被取消，从而消除竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dd305374f090b7480812f0e813e86d459620d84b

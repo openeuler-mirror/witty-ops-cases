@@ -1,0 +1,22 @@
+#标题
+bpf: Fix regsafe() for pointers to packet
+
+#内核版本
+OLK-6.6
+
+#问题现象
+BPF 程序验证器在处理指向数据包的指针时，当旧寄存器状态（rold）的 range 为 BEYOND_PKT_END 且当前寄存器状态（rcur）的 range 为 N 时，regsafe() 函数可能错误地返回 true。这导致验证器误判状态等价，从而剪枝掉本应继续探索的验证路径，最终导致包含有效数据包范围的状态未被正确探索（验证遗漏）。
+
+#主要错误日志
+未知
+
+#问题根因
+在内核 BPF 验证器的 regsafe() 函数逻辑中，对于 range 字段的处理存在缺陷。当涉及 BEYOND_PKT_END 或 AT_PKT_END（在代码中表示为负值）的特殊指针范围比较时，原代码未区分负值（特殊标记）与正值（普通范围）的情况，直接进行数值大小比较。这导致在 rold->range 为 BEYOND_PKT_END（负值）而 rcur->range 为正常数值（正值）时，比较逻辑失效，错误地认为旧状态涵盖当前状态，从而引发验证路径被错误剪枝的 Bug。
+
+#解决方案
+修改 kernel/bpf/verifier.c 中的 regsafe() 函数，在比较寄存器 range 字段前增加对负值的判断：
+1. 若 rold->range 或 rcur->range 小于 0（即代表 BEYOND_PKT_END 或 AT_PKT_END 等特殊状态），则必须要求两者 range 完全相等，否则返回 false。
+2. 仅当两者 range 均大于等于 0 时，才沿用原有的 rold->range > rcur->range 判断逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0518aef17676377162eaccb4a5980dba1b156544

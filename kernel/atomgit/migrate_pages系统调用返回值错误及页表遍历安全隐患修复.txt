@@ -1,0 +1,25 @@
+#标题
+migrate_pages系统调用返回值错误及页表遍历安全隐患修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+调用 `move_pages` 系统调用迁移内存页面时，返回值不正确，无法准确反馈迁移状态（如迁移成功、页面不存在或权限不足等）。此外，在处理大页或非当前页表项时，内核可能因缺少 `pmd_leaf`/`pud_leaf` 的 present 检查而引发潜在的内存管理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. `add_page_for_migration` 函数原实现基于 `follow_page`，无法正确处理某些特殊页面（如共享零页、设备映射页），且共享页面判断逻辑（`page_mapcount(page) > 1`）不准确，导致返回值错误。
+2. 原页表遍历逻辑在使用 `pmd_leaf()` 和 `pud_leaf()` 判断大页时，未前置检查页表项是否 present（存在），在某些架构或场景下可能导致判断失误或不稳定。
+3. 缺少对 HugeTLB VMA 在页表遍历期间的锁保护机制。
+
+#解决方案
+1. 引入新的 `folio_walk_start()` 和 `folio_walk_end()` 接口替代原有的 `follow_page()` 逻辑，重构 `add_page_for_migration` 函数。
+2. 在 `folio_walk_start` 中增加严格的页表项 present 检查，确保在调用 `pmd_leaf`/`pud_leaf` 前页表项有效。
+3. 新增 `vma_pgtable_walk_begin/end` 接口，在遍历 HugeTLB VMA 时持有 `hugetlb_vma_lock_read` 锁，防止并发修改。
+4. 优化迁移判断逻辑，使用 `folio_likely_mapped_shared()` 替代 `page_mapcount` 检查，正确处理零页和设备页，修正 `move_pages` 的返回状态码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a7f4bf73c34996ee6cdda292e8f906a9c30879de

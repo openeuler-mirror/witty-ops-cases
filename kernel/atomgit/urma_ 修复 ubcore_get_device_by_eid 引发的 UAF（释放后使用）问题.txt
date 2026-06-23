@@ -1,0 +1,24 @@
+#标题
+urma: 修复 ubcore_get_device_by_eid 引发的 UAF（释放后使用）问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ubcore_get_device_by_eid` 函数获取设备后，若未增加引用计数或在后续流程中未正确释放引用，会导致设备对象被提前释放，引发 UAF（Use-After-Free）内存故障，可能导致内核 panic 或数据结构损坏。
+
+#主要错误日志
+ubagg_log_err("Invalid parameter\n")
+ubcore_log_err("Failed to get eid index\n")
+ubcore_log_err("Failed to call cm eid ops\n")
+
+#问题根因
+`ubcore_get_device_by_eid` 函数在查找到目标设备后，未调用 `ubcore_get_device` 增加设备的引用计数。这导致在相关代码路径（如 `ubagg` 和 `ubcore_uvs_cmd` 模块）中，设备指针在使用过程中可能已被其他线程释放，从而发生 UAF。此外，部分错误处理路径和正常流程中缺少对设备引用计数的释放操作，加剧了引用计数管理的混乱。
+
+#解决方案
+1. 在 `ubcore_get_device_by_eid` 函数中，匹配到目标设备后立即调用 `ubcore_get_device(target)` 增加引用计数，确保设备在返回给调用者时是安全的。
+2. 在 `ubagg` 模块的 `init_ubagg_dev` 和 `ubagg_get_dev_name` 函数中，使用设备后增加调用 `ubagg_put_ubcore_device(dev)` 以正确释放引用。
+3. 在 `ubcore_uvs_cmd` 模块的 `ubcore_create_jetty_rsrc` 函数中，补充错误处理路径和正常流程下的 `ubcore_put_device(dev)` 调用，防止引用计数泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/68dfaa91000df120cbfec12d11024b6e1d913bdc

@@ -1,0 +1,29 @@
+#标题
+urma: 修复 uburma 和 ubcore 模块中的资源泄露问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 uburma 和 ubcore 模块的特定错误处理路径中存在资源泄露问题，具体表现为：
+1. `uburma_cmd_free_token_id` 函数中，当 token_id 校验失败时，未释放先前获取的 uobj 对象，导致对象泄露。
+2. `uburma_mmap` 函数中，若 mmap 成功但后续 priv 内存分配失败，未正确返回错误码且未处理已成功的映射，导致状态异常。
+3. `ubcore_get_topo_info` 函数中，当从用户空间拷贝数据失败时，未释放已分配的 arg 内存，导致内存泄露。
+
+#主要错误日志
+ubcore_log_err("topo map is empty!\n");
+
+#问题根因
+1. **uobj 泄露**：在 `uburma_cmd_free_token_id` 中，`uobj_get_del()` 获取了 uobj 对象，但在 token_id 不匹配返回 -EPERM 时，遗漏了调用 `uobj_put_del()` 进行释放。
+2. **内存泄露**：在 `ubcore_get_topo_info` 中，`kmalloc` 分配的 arg 内存仅在 `copy_from_user` 失败时未调用 `kfree` 进行释放。
+3. **错误处理缺失**：在 `uburma_mmap` 中，`ops->mmap` 调用成功后，若 `kzalloc` 分配 priv 失败，代码跳转至解锁路径但未设置返回值 `ret` 为 -ENOMEM（且未回滚 mmap 操作），导致函数可能错误地返回 0（成功）。
+
+#解决方案
+1. 在 `uburma_cmd_free_token_id` 的 token_id 校验失败分支中，增加 `uobj_put_del(uobj)` 调用以释放对象。
+2. 在 `ubcore_get_topo_info` 的 `copy_from_user` 失败分支中，增加 `kfree(arg)` 以释放内存。
+3. 在 `uburma_mmap` 中：
+   - 调整逻辑，确保仅在 `ops->mmap` 成功后才注册 umap priv。
+   - 在 `kzalloc` 失败分支中，显式设置 `ret = -ENOMEM`，确保错误码正确返回。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9d9bb61bad4a288d366b3964be72dc1bb844eee

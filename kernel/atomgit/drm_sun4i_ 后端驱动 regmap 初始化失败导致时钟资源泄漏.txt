@@ -1,0 +1,20 @@
+#标题
+drm/sun4i: 后端驱动 regmap 初始化失败导致时钟资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sun4i 后端驱动绑定过程中，若 `devm_regmap_init_mmio()` 函数初始化失败，驱动程序直接返回错误码，导致此前已使能的三个时钟（bus clock、mod clock、ram clock）未被正确关闭和释放，造成时钟资源泄漏。
+
+#主要错误日志
+[    ] dev_err(dev, "Couldn't create the backend regmap\n");
+
+#问题根因
+在 `sun4i_backend_bind` 函数中，调用 `devm_regmap_init_mmio()` 创建 regmap 失败后的错误处理路径（error path）不完整。代码在检测到 `IS_ERR(backend->engine.regs)` 后直接返回了 PTR_ERR 错误值，跳过了后续的资源清理逻辑，导致之前通过 `clk_prepare_enable` 使能的三个时钟未被对应的 `clk_disable_unprepare` 调用所释放。
+
+#解决方案
+修改错误处理路径，将原来的直接 `return PTR_ERR(...)` 改为先保存错误码到 `ret` 变量，然后通过 `goto err_disable_ram_clk` 跳转至函数末尾的标准资源清理流程。这样可以确保在 regmap 初始化失败时，已使能的时钟能够被正确关闭和释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4afec33aad62a00a56c8c72dc93c111ae533bad0

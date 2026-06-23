@@ -1,0 +1,26 @@
+#标题
+[urma] 首次建连场景下 tjetty 缺失导致连接建立失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统重启后进行首次连接创建时，若内核接收建连请求（receiving request）先于发送建连请求，会导致 tjetty 缺失，进而导致连接创建失败。
+
+#主要错误日志
+ubcore_log_err("try to repost response failed, msn = %llu, seid ...\n");
+ubcore_log_err_rl("Invalid eid "EID_FMT".\n", ...);
+ubcore_log_err_rl("cast eid to ubcm failed.\n");
+ubcore_log_err_rl("Failed to get primary eid array, ret: %d.\n", ...);
+
+#问题根因
+在系统重启后的首次连接创建过程中，tjetty 的创建原本仅依赖于发送流程。如果内核在发送建连请求之前就收到了对端的建连请求，接收流程中尚未创建 tjetty，导致 tjetty 缺失，从而引发连接创建失败。
+
+#解决方案
+在接收流程中增加 tjetty 的创建逻辑。具体修改包括：
+1. 新增 `ubmad_find_and_create_tgt_hash_node` 函数，将查找与创建 hash node 的操作合并，并在查找失败时自动创建。
+2. 在接收处理函数 `ubmad_try_repost_all_response` 中，若发现 tjetty 不存在，则调用 `ubmad_import_jetty` 进行创建，随后调用新函数处理 hash node，确保接收流程具备 tjetty 创建能力。
+3. 将部分高频日志打印接口由 `ubcore_log_err` 替换为 `ubcore_log_err_rl` 以进行速率限制，避免日志风暴。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/faf3b3cd169a5180dd088502e19c65d3b9e771e2

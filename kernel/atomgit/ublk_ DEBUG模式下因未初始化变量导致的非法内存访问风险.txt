@@ -1,0 +1,25 @@
+#标题
+ublk: DEBUG模式下因未初始化变量导致的非法内存访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 DEBUG 宏的编译环境下，使用 Clang 编译内核时触发编译报错，提示变量 `io` 可能未初始化即被使用。若忽略该警告继续运行，在特定代码路径下（tag 越界）会访问未初始化的指针，导致系统崩溃或内存非法访问。
+
+#主要错误日志
+drivers/block/ublk_drv.c:2403:6: error: variable 'io' is used uninitialized whenever 'if' condition is true [-Werror,-Wsometimes-uninitialized]
+ 2403 |         if (tag >= ub->dev_info.queue_depth)
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+drivers/block/ublk_drv.c:2492:32: note: uninitialized use occurs here
+ 2492 |                         __func__, cmd_op, tag, ret, io->flags);
+
+#问题根因
+在 `__ublk_ch_uring_cmd` 函数中，指针变量 `io` 定义时未初始化。当代码执行路径满足 `tag >= ub->dev_info.queue_depth` 条件时，函数会直接跳转到 `out` 标签退出。此时 `io` 尚未被赋值，处于未初始化状态，但 `out` 标签处的 `pr_devel` 调试日志代码无条件解引用了 `io->flags`，从而导致对未初始化地址的非法访问。
+
+#解决方案
+1. 将 `io` 指针初始化为 `NULL`，确保其在任何执行路径下都有确定的初始值。
+2. 修改 `out` 标签处的日志打印逻辑，在访问 `io->flags` 前增加指针有效性检查（使用三元运算符 `io ? io->flags : 0`），防止解引用空指针或未初始化指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/50475a6b89dea0c2417a53c7f9272db7ef901121

@@ -1,0 +1,24 @@
+#标题
+net: mana: 修复 add_adev() 错误处理路径中的 use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `auxiliary_device_add()` 调用失败的情况下，驱动错误处理路径触发 use-after-free。具体表现为：当代码执行 `auxiliary_device_uninit(adev)` 时，会通过 release 回调函数 `adev_release()` 释放包含 `adev` 的 `struct mana_adev` 内存。随后代码 fall-through 到 `init_fail` 标签处，试图访问 `adev->id` 以释放索引 ID，此时 `adev` 指针已指向被释放的内存，导致内核发生 use-after-free 错误或潜在的 panic/oops。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 `add_adev()` 函数的错误处理逻辑顺序不当。
+1. `auxiliary_device_add()` 失败后，代码跳转至 `add_fail` 并调用 `auxiliary_device_uninit(adev)`。
+2. `auxiliary_device_uninit()` 会触发设备 release 回调 `adev_release()`，该函数会 `kfree` 掉包含 `adev` 结构体的 `mana_adev` 内存。
+3. 然而，错误处理流程并未结束，而是继续 fall-through 到 `init_fail` 标签执行 `mana_adev_idx_free(adev->id)`。
+4. 此时访问 `adev->id` 即是在访问已被释放的内存，从而触发 use-after-free。
+
+#解决方案
+在调用 `auxiliary_device_add()` 之前，将分配到的 auxiliary device ID 保存到一个局部变量 `id` 中。在后续的清理路径（`init_fail` 标签处）中，使用该局部变量 `id` 而不是 `adev->id` 来调用 `mana_adev_idx_free()`。这样即使 `adev` 所在的内存已被释放，清理逻辑依然可以安全地释放 ID 资源，避免了访问悬垂指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/366c2d13ac15dc48ae979232cf51200255a7f8f1

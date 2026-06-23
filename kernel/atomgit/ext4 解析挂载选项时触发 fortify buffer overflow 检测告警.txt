@@ -1,0 +1,34 @@
+#标题
+ext4 解析挂载选项时触发 fortify buffer overflow 检测告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ext4 文件系统挂载过程中，解析 superblock 中的挂载选项（s_mount_opts）时，触发内核 fortify 机制检测到的缓冲区溢出告警。由于使用 `strscpy_pad()` 将非 NUL 结尾的字符串拷贝到更大的缓冲区时处理不当，导致内核抛出警告栈并中断挂载流程。
+
+#主要错误日志
+strnlen: detected buffer overflow: 65 byte read of buffer size 64
+WARNING: CPU: 0 PID: 28655 at lib/string_helpers.c:1032 __fortify_report+0x96/0xc0 lib/string_helpers.c:1032
+Modules linked in:
+CPU: 0 UID: 0 PID: 28655 Comm: syz-executor.3 Not tainted 6.12.54-syzkaller-00144-g5f0270f1ba00 #0
+Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014
+RIP: 0010:__fortify_report+0x96/0xc0 lib/string_helpers.c:1032
+Call Trace:
+ <TASK>
+ __fortify_panic+0x1f/0x30 lib/string_helpers.c:1039
+ strnlen include/linux/fortify-string.h:235 [inline]
+ sized_strscpy include/linux/fortify-string.h:309 [inline]
+ parse_apply_sb_mount_options fs/ext4/super.c:2504 [inline]
+ __ext4_fill_super fs/ext4/super.c:5261 [inline]
+ ext4_fill_super+0x3c35/0xad00 fs/ext4/super.c:5706
+
+#问题根因
+`parse_apply_sb_mount_options()` 函数中定义的局部缓冲区 `s_mount_opts` 大小为 65 字节，而 ext4 superblock 中的 `sbi->s_es->s_mount_opts` 域定义大小为 64 字节。
+当用户空间提供的挂载选项字符串填满了 64 字节且未包含 NUL 结尾符时，`strscpy_pad()` 会尝试读取源字符串的第 65 个字节（即读取 65 字节），这超过了源缓冲区 64 字节的大小，从而触发 fortify 机制的缓冲区溢出检测。
+
+#解决方案
+将局部缓冲区 `s_mount_opts` 的大小从 65 字节修正为 64 字节，使其与源数据 `sbi->s_es->s_mount_opts` 的大小严格匹配，避免越界读取。同时，增加对 `strscpy_pad()` 返回值的检查，若拷贝失败（如源字符串过长无法截断放入目标缓冲区），则返回 `-E2BIG` 错误码，防止非 NUL 结尾的字符串继续处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/02ec9875049bd025b635eaac613d452cd6a4ddbc

@@ -1,0 +1,24 @@
+#标题
+[urma] jetty_grp 计数边界检查错误及 opt_mask 参数传递缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在向 jetty_grp 添加 jetty 时，当数量达到最大容量限制（max_jetty_in_jetty_grp）时，本应失败的创建操作却成功执行，导致 jetty_grp 中的 jetty 计数越界，可能引发后续内存越界访问或数据结构损坏。
+2. 在调用 `ubcore_set_jetty_opt` 或 `ubcore_get_jetty_opt` 接口进行属性配置或查询时，由于缺少必要的 opt_mask 参数传递，导致参数校验逻辑不完整，接口调用可能异常或无法正确生效。
+
+#主要错误日志
+- "jetty_grp jetty cnt:%u, max_jetty in grp:%u.\n"（推断：在计数越界时打印）
+- "invalid opt.\n"（推断：在 opt 参数校验失败时打印）
+
+#问题根因
+1. **边界检查逻辑错误**：在 `check_jetty_check_dev_cap` 函数中，判断 jetty_cnt 是否超限的条件写成了 `>=`，而实际语义应为“超过最大值才不允许”，正确的逻辑应为 `>`。这导致当 jetty_cnt 等于 max_jetty_in_jetty_grp 时（即已满），判断条件不成立，程序继续执行并增加计数，从而违反了容量限制。
+2. **函数调用参数缺失**：在 `ubcore_set_jetty_opt` 和 `ubcore_get_jetty_opt` 函数中，调用 `ubcore_check_opt_valid` 时，第一个参数（opt_mask 指针）传递的是 `NULL`，而非 `&jetty->jetty_opt.jfs_opt.jfs_opt_mask.value`。这导致校验函数无法获取实际的 opt_mask 状态，无法进行有效的合法性检查。
+
+#解决方案
+1. 修正 `check_jetty_check_dev_cap` 中的比较运算符，将 `if (cfg->jetty_grp->jetty_cnt >= cap->max_jetty_in_jetty_grp)` 修改为 `if (cfg->jetty_grp->jetty_cnt > cap->max_jetty_in_jetty_grp)`，确保在达到最大容量时正确拦截。
+2. 修正 `ubcore_set_jetty_opt` 和 `ubcore_get_jetty_opt` 中 `ubcore_check_opt_valid` 的调用，将第一个参数由 `NULL` 修正为 `&jetty->jetty_opt.jfs_opt.jfs_opt_mask.value`，确保传入正确的 opt_mask 指针以执行完整的参数校验。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d849cf0245309d1cb73ac8af6e79c05bdfbb6e49

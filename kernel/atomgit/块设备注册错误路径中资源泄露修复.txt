@@ -1,0 +1,20 @@
+#标题
+块设备注册错误路径中资源泄露修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `blk_register_queue()` 函数执行过程中，若因某些原因（如 debugfs 初始化失败等）进入错误处理路径，会导致关联的 kobject 引用计数泄露或相关资源未被正确释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `blk_register_queue()` 函数中，当注册流程在 `out_debugfs_remove` 标签处失败并退出时，代码仅了解锁并跳转至 `out_put_queue_kobj`。此时如果队列是基于 MQ（多队列）模式的，此前在函数入口处注册的 MQ sysfs 接口（通过 `blk_mq_sysfs_register` 注册）未被相应的注销函数 `blk_mq_sysfs_unregister` 清理，从而导致资源泄露。
+
+#解决方案
+在 `blk_register_queue()` 的错误处理路径 `out_debugfs_remove` 中，增加对多队列模式的判断。如果当前队列为 MQ 模式（`queue_is_mq(q)` 为真），则调用 `blk_mq_sysfs_unregister(disk)` 进行资源回收，确保错误发生时资源被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf197758b04f43e61ebab66520f1420c1b64853c

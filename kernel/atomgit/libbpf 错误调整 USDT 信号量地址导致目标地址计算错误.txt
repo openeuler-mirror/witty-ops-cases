@@ -1,0 +1,20 @@
+#标题
+libbpf 错误调整 USDT 信号量地址导致目标地址计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 libbpf 挂载 USDT（User Statically Defined Tracing）探针时，若目标二进制文件中存在 `.stapsdt.base` 节（section），但特定的 USDT note 并未引用该基地址，libbpf 仍会强行进行地址调整。这导致计算出的 USDT 目标地址完全错误，进而导致 USDT 挂载失败或挂载到错误的地址。
+
+#主要错误日志
+未知
+
+#问题根因
+USDT ELF note 可以选择性地记录 `.stapsdt.base` 的偏移量用于调整目标挂载地址。现有代码逻辑在发现目标二进制中存在 `.stapsdt.base` 节时，会无条件地进行地址调整计算（`usdt_abs_ip += base_addr - note.base_addr`）。这忽略了一个边界情况：当 `.stapsdt.base` 节存在，但当前的 USDT note 并未记录对它的引用（即 `note.base_addr` 缺失）时，这种无条件调整会导致目标地址计算错误。
+
+#解决方案
+修改 `tools/lib/bpf/usdt.c` 中的判断逻辑，增加对 `note.base_addr` 的检查。只有当 `base_addr`（`.stapsdt.base` 节存在）且 `note.base_addr`（USDT note 记录了引用）同时存在时，才执行地址调整操作，避免了错误地址的计算。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0eb64845bb423e2432cd7a87f1f7e92b57fabbad

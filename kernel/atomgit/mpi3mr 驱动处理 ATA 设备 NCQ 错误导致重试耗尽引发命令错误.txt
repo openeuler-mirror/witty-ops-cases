@@ -1,0 +1,20 @@
+#标题
+mpi3mr 驱动处理 ATA 设备 NCQ 错误导致重试耗尽引发命令错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 mpi3mr 驱动控制的 SAS HBA 连接 ATA 设备时，若发生 NCQ 命令失败，伴随的其他 NCQ 命令（collateral NCQ abort commands）会被终止。这些被连带终止的命令在多次重试后可能耗尽重试计数，导致本应成功的命令意外失败，违反 SAT 规范，引发难以调试的命令错误。
+
+#主要错误日志
+ioc log information: 0x31080000
+
+#问题根因
+根据 ATA 错误模型，当一个 NCQ 命令失败时，所有排队的 NCQ 命令都会被中止（abort）。在 mpi3mr 驱动中，`mpi3mr_process_op_reply_desc()` 函数对于状态为 `MPI3_IOCSTATUS_SCSI_IOC_TERMINATED` 的命令，统一使用 `DID_SOFT_ERROR` 强制重试。这会导致被连带中止的 NCQ 命令的重试计数器递增。如果设备上其他 NCQ 命令频繁失败（例如读取坏道），被连带中止的命令会因为重试计数耗尽而返回错误，而不是按 SAT 规范要求立即无惩罚重试。
+
+#解决方案
+修改 `mpi3mr_process_op_reply_desc()` 函数中对 `MPI3_IOCSTATUS_SCSI_IOC_TERMINATED` 状态的处理逻辑：检查 `ioc_loginfo` 是否为指示 NCQ 连带中止的 `0x31080000`。如果是，则使用 `DID_IMM_RETRY` 作为 SCSI 结果，强制立即重试且不增加重试计数；否则维持原有的 `DID_SOFT_ERROR` 处理逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0c4da99e8d17f0213814b1691ab35607e1101791

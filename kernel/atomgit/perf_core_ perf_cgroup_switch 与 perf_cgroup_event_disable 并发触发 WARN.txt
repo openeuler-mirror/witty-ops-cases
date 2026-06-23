@@ -1,0 +1,23 @@
+#标题
+perf/core: perf_cgroup_switch 与 perf_cgroup_event_disable 并发触发 WARN
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CPU0 上执行 perf_cgroup_switch 期间，若 CPU1 并发执行 perf_cgroup_event_disable 禁用 perf event，会触发内核警告 WARN_ON_ONCE。具体表现为系统日志中出现警告栈信息，伴随可能的内核 Oops 或系统稳定性风险。
+
+#主要错误日志
+[  N] WARNING: CPU: 0 PID: N at kernel/events/core.c:perf_cgroup_switch+0xXX/0xXX
+[  N] Call trace:
+[  N]  perf_cgroup_switch+0xXX/0xXX
+[  N]  ...
+
+#问题根因
+CPU0 上的 perf_cgroup_switch 与 CPU1 上的 perf_cgroup_event_disable 存在并发竞争。当在 CPU0 创建新的 perf cgroup event 后，可能未触发重编程导致 ctx->is_active 为 0。此时 CPU1 禁用该 event 时可以直接执行 __perf_remove_from_context（针对 CPU0），进而调用 perf_cgroup_event_disable 将 ctx->nr_cgroups 减至 0。与此同时，CPU0 上的 perf_cgroup_switch 已经通过了 `cpuctx->cgrp` 的非空检查，但在后续流程中因 ctx->nr_cgroups 已被 CPU1 修改为 0，从而触发 `WARN_ON_ONCE(cpuctx->ctx.nr_cgroups == 0)`。
+
+#解决方案
+在 perf_cgroup_switch 函数中使用 guard 机制加锁，并在持有锁后重新检查 cpuctx->cgrp 是否为 NULL。通过引入 `guard(perf_ctx_lock)` 自动管理锁的释放，并在临界区内增加 `if (READ_ONCE(cpuctx->cgrp) == NULL) return;` 判断，防止与 perf_remove_from_context 的并发竞争，避免在 nr_cgroups 为 0 时继续执行后续逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/37bf80ef6350e2498bbec7320f63aabe3e90136e

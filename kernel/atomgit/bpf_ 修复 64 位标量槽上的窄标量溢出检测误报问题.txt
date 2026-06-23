@@ -1,0 +1,21 @@
+#标题
+bpf: 修复 64 位标量槽上的窄标量溢出检测误报问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BPF 程序执行过程中，当尝试向已溢出的 64 位标量寄存器槽写入窄数据（narrow scalar spill，即 size 不等于 BPF_REG_SIZE）时，BPF 校验器错误地拒绝了该操作，导致程序加载失败。
+
+#主要错误日志
+attempt to corrupt spilled pointer on stack
+
+#问题根因
+在 `check_stack_write_fixed_off` 函数中，校验逻辑在检查栈写操作时，仅判断了栈槽是否已溢出寄存器（`is_spilled_reg`），但未进一步区分该溢出寄存器是指针类型还是标量类型。
+在内核配置禁用指针泄露（`!env->allow_ptr_leaks`）的场景下，如果写入尺寸不是完整的寄存器大小，逻辑会错误地判定为“试图破坏栈上的指针”，从而阻止了合法的窄标量数据写入操作。实际上，如果栈槽中已有的是标量寄存器，窄写入是允许的。
+
+#解决方案
+在 `check_stack_write_fixed_off` 函数的条件判断中增加 `!is_spilled_scalar_reg(&state->stack[spi])` 检查。修复后的逻辑确保只有当栈槽中保存的是非标量（即指针类型）时，才执行窄写入保护逻辑，从而允许对已溢出的标量寄存器槽进行窄写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae05f7e5646f6b53f8a54ee8b27ae32c5f6554e7

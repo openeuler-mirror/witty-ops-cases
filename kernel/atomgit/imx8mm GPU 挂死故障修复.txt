@@ -1,0 +1,22 @@
+#标题
+imx8mm GPU 挂死故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i.MX8MM 平台上，当 GPU2D 或 GPU3D 电源域进行上下电操作时，系统出现 GPU 挂死。具体表现为不可预测的总线行为以及 GPU 功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+i.MX8MM 的 GPUMIX、GPU2D 和 GPU3D 模块共享一个公共复位域。硬件限制导致对 GPU2D 或 GPU3D 断电/上电会触发 GPUMIX 域（包含 ADB400 端口）的复位。硬件要求 ADB400 接口必须在复位前处于断电模式。
+根因在于：当前的 GPUMIX 和 GPU2D/3D 电源域依赖运行时 PM（runtime PM）处理依赖顺序，在某些极端情况下，GPUMIX 的断电序列被跳过，导致 ADB400 端口在 GPU2D/3D 复位时仍处于活动状态。这使得活动的 ADB400 端口被意外复位，从而引发总线行为异常和 GPU 挂死。
+
+#解决方案
+修正电源域控制逻辑，调整 `IMX8MM_GPU_HSK_PWRDNACKN` 和 `IMX8MM_GPU_HSK_PWRDNREQN` 的位定义（合并掩码），并移除了 GPUMIX 域独立的 `hskreq` 和 `hskack` 配置。
+此举确保 GPUMIX ADB400 端口作为 GPU 电源域开关序列的一部分被显式地断电和上电，从而保证了正确的硬件操作顺序，防止在 ADB400 活动时发生错误的复位操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c2dd23afd95429a603359e4b08b9caf8af42aece

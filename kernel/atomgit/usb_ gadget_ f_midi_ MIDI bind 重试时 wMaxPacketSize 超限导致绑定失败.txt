@@ -1,0 +1,20 @@
+#标题
+usb: gadget: f_midi: MIDI bind 重试时 wMaxPacketSize 超限导致绑定失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB Gadget MIDI 功能绑定过程中，若首次绑定失败（如 UDC 写入失败）或发生运行时组合变更（如 MIDI,ADB 切换至 MIDI）触发重试绑定时，由于 wMaxPacketSize 值残留，可能导致 MIDI 功能绑定失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 f_midi_bind 函数末尾会将批量端点的 wMaxPacketSize 设置为 1024 字节。当首次绑定失败并尝试重新绑定时，该值未被重置。此时，如果底层控制器（如配置为仅支持 HS 速度的 dwc3）的 TX/RX FIFO maxpacket 限制为 512 字节，上一次残留的 1024 字节的 wMaxPacketSize 将超过 ep->maxpacket_limit，导致端点申请失败。
+
+#解决方案
+在申领端点之前，显式将 bulk_in_desc 和 bulk_out_desc 的 wMaxPacketSize 重置为 64 字节（FS 批量传输的最大包大小）。这确保了在重试绑定场景下，wMaxPacketSize 不会超过硬件限制，并符合其他功能驱动在端点申领前将描述符视为全速（FS）状态的处理惯例。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/edf4358f9dd711d9d16b45b812dffd459c9c544d

@@ -1,0 +1,20 @@
+#标题
+smb: client: change notify 未校验缓冲区导致潜在越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SMB2 change notify 响应时，内核未对 `smb2_validate_iov()` 的返回值进行检查。若服务器提供的 `OutputBufferOffset` 或 `OutputBufferLength` 非法，内核将基于错误参数执行 `kmemdup` 操作，可能导致内核内存越界读取或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`SMB2_change_notify` 函数调用了 `smb2_validate_iov()` 对服务器返回的数据缓冲区进行校验，但忽略了该函数的返回值。随后的代码直接使用服务器提供的 `OutputBufferOffset` 和 `OutputBufferLength` 进行内存拷贝，当数据校验失败时未及时中止流程，导致使用了无效的偏移或长度值。
+
+#解决方案
+修改 `fs/smb/client/smb2pdu.c`，捕获 `smb2_validate_iov()` 的返回值并保存至 `rc` 变量中。若返回值非零（即校验失败），立即跳转至 `cnotify_exit` 退出函数，避免后续基于无效缓冲区信息的内存操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/de5a3bf5262bbfd7241debfdd07cace021c4b4b5

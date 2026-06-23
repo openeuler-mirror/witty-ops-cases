@@ -1,0 +1,21 @@
+#标题
+clk: qcom: clk-alpha-pll alpha mode配置错误导致PLL输出频率异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Qualcomm平台多个PLL（如ubi32_pll, nss_crypto_pll, gpll8, gpu_cc_pll0等）输出频率与预期配置不符，导致硬件功能异常。例如 IPQ6018 平台 ubi32_pll 预期频率为 1497.6 MHz，实际仅为 1488.0 MHz；SDM660 平台 mmpll5 预期 825.0 MHz，实际为 806.4 MHz。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `clk_alpha_pll_configure` 函数中，配置 alpha 模式时，`config->alpha_en_mask` 和 `config->alpha_mode_mask` 的值被累加到了写入寄存器的 `val` 参数中，但未同时将这些掩码值累加到 `regmap_update_bits` 函数的位掩码参数 `mask` 中。
+这导致 `regmap_update_bits` 执行时，目标位的掩码为 0，寄存器中的相应位（USER_CTL 寄存器中的 alpha 使能和模式位）从未被实际修改，PLL 持续工作在错误的配置模式下。
+
+#解决方案
+修改 `drivers/clk/qcom/clk-alpha-pll.c` 文件中的 `clk_alpha_pll_configure` 函数，在调用 `regmap_update_bits` 之前，将 `config->alpha_en_mask` 和 `config->alpha_mode_mask` 添加到局部变量 `mask` 中，确保这些配置位能被正确写入寄存器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/be9d71152c5567962d577b32e73ff998a5c7107f

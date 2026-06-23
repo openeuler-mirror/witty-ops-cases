@@ -1,0 +1,22 @@
+#标题
+ivtv驱动DMA映射失败未检查导致潜在内存访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ivtv驱动在进行YUV blanking buffer的DMA映射时，未对映射结果进行有效性检查。若DMA映射失败，驱动程序仍尝试使用无效的DMA地址进行数据传输，可能导致内核内存访问异常、数据损坏或I/O子系统不可预测的行为。
+
+#主要错误日志
+IVTV_DEBUG_WARN("Failed to dma_map yuv blanking buffer\n");
+
+#问题根因
+驱动程序在调用 `dma_map_single` 映射YUV blanking buffer后，缺少对返回值的错误检查。DMA映射函数可能失败并返回错误值，但原代码未通过 `dma_mapping_error` 进行检测，直接使用了可能无效的DMA地址。此外，原代码错误地使用 `blanking_dmaptr`（DMA地址，0也是合法值）来判断buffer是否就绪，而非使用 `blanking_ptr`（CPU侧虚拟地址指针），导致逻辑判断不严谨。
+
+#解决方案
+1. 在 `dma_map_single` 调用后增加 `dma_mapping_error` 检查逻辑。
+2. 若映射失败，释放已分配的缓冲区内存 (`kfree(yi->blanking_ptr)`)，将指针置空 (`yi->blanking_ptr = NULL`) 并将DMA地址清零 (`yi->blanking_dmaptr = 0`)，同时打印警告日志。
+3. 修正相关条件判断语句，使用 `yi->blanking_ptr` 而非 `yi->blanking_dmaptr` 来判断buffer是否有效，避免因DMA地址为0（合法物理地址）导致的误判。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2482adfa2145eb7c10c5d5473060b154b5dd2181

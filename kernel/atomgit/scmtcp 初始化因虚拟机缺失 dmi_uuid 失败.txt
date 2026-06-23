@@ -1,0 +1,23 @@
+#标题
+scmtcp 初始化因虚拟机缺失 dmi_uuid 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在部分虚拟机场景下，因缺少 `/sys/class/dmi/id/product_uuid` 文件，导致 scmtcp 模块初始化失败，进而影响 scmtcp 功能的正常使用。
+
+#主要错误日志
+未知
+
+#问题根因
+scmtcp 机制使用 `dmi_uuid` 来校验是否为回环。代码中 `file_htable_init` 函数直接调用 `read_proc_uuid` 读取 `/sys/class/dmi/id/product_uuid`，若该文件不存在（部分虚拟机无此 DMI 信息），函数返回错误码（如 -ENOENT），导致初始化流程中止且未做容错处理。
+
+#解决方案
+修改 `file_htable_init` 函数逻辑，增加对 DMI UUID 缺失的容错处理：
+1. 尝试读取 `/sys/class/dmi/id/product_uuid`，若返回值为 -ENOENT（文件不存在），则忽略该错误继续执行，而非直接返回错误。
+2. 若 DMI UUID 读取失败，降级尝试读取 `/proc/sys/kernel/random/boot_id` 作为替代。
+3. 若两者均不可用，则忽略错误返回 0，允许初始化流程继续，避免因缺失 UUID 导致模块功能完全不可用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/627d888988c6498accbec48a3b260ff28b3e2316

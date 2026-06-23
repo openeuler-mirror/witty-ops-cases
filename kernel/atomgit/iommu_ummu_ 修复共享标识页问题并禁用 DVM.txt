@@ -1,0 +1,36 @@
+#标题
+iommu/ummu: 修复共享标识页问题并禁用 DVM
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在特定硬件条件下，TLB Invalidate（TLBI）指令的范围计算可能溢出或异常，导致 TLB 刷新不彻底，进而引发内存一致性错误或 DMA 操作异常。
+2. SVA（Shared Virtual Addressing）域的页大小位图（pgsize_bitmap）未正确设置，可能导致内存管理逻辑异常。
+3. 设备移除或进程退出时，`logic_ummu_mm_arch_invalidate_secondary_tlbs` 函数在并发场景下可能因获取读写信号量失败而直接返回，导致 TLB 刷新流程被静默丢弃，内存映射未及时清理。
+4. Identity Domain（身份映射域）的处理逻辑存在冗余代码，且在 `hw_bypass` 模式下配置可能不完整，影响直通设备地址映射的正确性。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **TLBI 指令参数计算错误**：在计算 TLBI 的 `scale` 参数时，未限制其最大值。在某些硬件实现上，scale 值不能超过特定限制（如 15），原代码使用 `__ffs(num_pages)` 可能导致生成的 scale 值越界，引发硬件错误或功能失效。同时，`num` 计算结果为 0 时处理不当。
+2. **并发锁机制缺陷**：`logic_ummu_mm_arch_invalidate_secondary_tlbs` 使用 `down_read_trylock`，当锁争用激烈时，获取锁失败会直接退出，导致必要的 TLB 刷新操作被跳过。
+3. **域配置与初始化不完整**：SVA 域未设置 `pgsize_bitmap`；Identity Domain 在非 bypass 模式下依赖共享页表，但页表操作（`pgtbl_ops`）被错误释放；在 bypass 模式下，TCT 描述符中 `matt_bypass` 标志位未正确设置。
+4. **硬件特性适配缺失**：针对特定硬件型号（如 IIDR 为 0x20 的版本），缺少必要的特性屏蔽（如 DVM、BTM）和参数限制（如 TLBI scale 限制）。
+
+#解决方案
+1. **修复 TLBI 范围刷新逻辑**：
+   - 引入 `max_scale` 变量，对于需要限制 scale 的硬件，将 scale 限制在硬件允许范围内（如 15）。
+   - 修正 `num` 参数计算，确保当 `(num_pages >> scale) & CMD_TLBI_RANGE_NUM_MAX` 结果为 0 时，强制设置为最大值，避免无效指令。
+2. **修复并发锁逻辑**：
+   - 将 `down_read_trylock` 改为 `down_read`，确保 TLB 刷新操作必须执行，避免因锁冲突导致刷新遗漏。
+3. **完善 Domain 管理与配置**：
+   - 为 SVA 域显式设置 `pgsize_bitmap` 为 `PAGE_SIZE`。
+   - 重构 Identity Domain 处理：移除冗余的全局 identity device 管理代码；在释放 domain 时，跳过 Identity 类型 domain 的 `pgtbl_ops` 释放（因复用自全局共享页表）；在 TCT 描述符写入时，根据 `matt_bypass` 标志正确配置 bypass 模式下的寄存器值。
+   - 统一 SVA 域的 TLBI 场景选择，使用 `UMMU_TLBI_SCENE_SVA` 替代 `UMMU_TLBI_SCENE_DMA`。
+4. **更新硬件特性探测**：
+   - 对特定硬件版本（IIDR 0x20），显式添加 `UMMU_OPT_TLBI_LIMIT_SCALE` 等限制选项，并禁用 `BTM` 特性以规避 DVM 相关问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f093a9f6ee5a4b8a89c56630915d80e0ea1ada83

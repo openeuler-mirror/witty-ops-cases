@@ -1,0 +1,25 @@
+#标题
+net/cls_cgroup: 修复 qdisc 运行期间 task_get_classid() 获取错误 classid 的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 netem qdisc 进行 TCP 延迟注入测试时，CLS BPF 程序无法正常工作。当多个任务共享同一个 qdisc 时，`task_get_classid()` 函数会获取到错误的 classid，导致流量分类失效。
+该问题在以下复现步骤中必现：
+1. 对网卡接口添加网络延迟（如：`tc qdisc add dev bond0 root netem delay 1.5ms`）。
+2. 创建两个不同的 net_cls cgroups，并在每个 cgroup 中运行网络密集型任务。
+3. 从这两个任务并行发起 TCP 流量到外部服务器。
+在此场景下，内核会在 Task-B 的上下文中处理来自 Task-A 的 SKB，导致获取到错误的 classid。
+
+#主要错误日志
+未知
+
+#问题根因
+问题发生在多个任务共享单个 qdisc 的场景下。`__qdisc_run()` 可能会发送由不同任务创建的 SKB。原代码中 `task_get_classid()` 通过 `current` 任务上下文获取 classid（逻辑判断使用 `in_serving_softirq()`），而在上述场景中，当前运行的上下文与 SKB 的源任务不一致，导致检索到错误的 classid。
+
+#解决方案
+修改 `include/net/cls_cgroup.h` 中的 `task_get_classid()` 函数逻辑。由于 `dev_queue_xmit()` 总是禁用 bottom halves (bh)，修复方案将判断条件从 `in_serving_softirq()` 改为 `softirq_count()`。这样可以正确处理在 bh 禁用上下文下的 classid 获取逻辑，确保获取到正确的 classid。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d7667ef8c62c88ff28a75da3812f53998ac66bbf

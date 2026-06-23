@@ -1,0 +1,28 @@
+#标题
+ufs: mediatek: 恢复失败处理不当导致 I/O 挂死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统从挂起状态恢复时，若 UFS 设备 resume 操作失败且链路恢复也失败，驱动程序错误地返回了失败状态，导致上层 I/O 请求挂死，系统无法正常进行存储读写。
+
+#主要错误日志
+[   37.123456] ufshcd-mtk 11270000.ufshc: Device PM: req=0, status:0, err=0
+（注：此日志为推断格式，实际数值取决于设备电源状态，原文代码如下）
+dev_err(hba->dev, "Device PM: req=%d, status:%d, err:%d\n",
+        hba->dev->power.request,
+        hba->dev->power.runtime_status,
+        hba->dev->power.runtime_error);
+
+#问题根因
+在 `ufs_mtk_resume` 函数中，当 resume 失败进入 `fail` 标签处理时，代码直接调用并返回 `ufshcd_link_recovery` 的结果。如果链路恢复失败，函数会向调用者返回错误码。这会导致上层机制处理异常，最终引发 I/O hang（挂死）。
+
+#解决方案
+修改 `ufs_mtk_resume` 函数的错误处理逻辑：
+1. 在 resume 失败时调用 `ufshcd_link_recovery` 尝试恢复链路。
+2. 若链路恢复也失败，通过 `dev_err` 打印设备电源状态细节（包括 request、runtime_status、runtime_error），便于问题定位。
+3. 无论恢复是否成功，函数均返回 0，以防止上层因接收错误返回值而触发 I/O 挂死。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7d55c79589216a43f874f318c4cdac38924c86e0

@@ -1,0 +1,30 @@
+#标题
+drm/amd/display: modeset与cursor原子操作并发导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+运行 IGT kms_cursor_legacy 测试用例（long-nonblocking-modeset-vs-cursor-atomic）时，系统触发空指针引用崩溃。该问题在同时连接 eDP 面板和 DP 显示器的情况下可复现。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000000
+#PF: supervisor read access in kernel mode
+#PF: error_code(0x0000) - not-present page
+Oops: Oops: 0000 [#1] SMP NOPTI
+RIP: 0010:dc_stream_get_scanoutpos+0x34/0x130 [amdgpu]
+Call Trace:
+ <TASK>
+ dm_crtc_get_scanoutpos+0xd7/0x180 [amdgpu]
+ amdgpu_display_get_crtc_scanoutpos+0x86/0x1c0 [amdgpu]
+ drm_crtc_vblank_helper_get_vblank_timestamp_internal
+ drm_atomic_helper_wait_for_fences+0x81/0x1f0
+
+#问题根因
+在 `dc_stream_get_scanoutpos` 函数中，代码直接访问 `stream->ctx->dc` 而未检查 `stream->ctx` 是否为空。在特定并发场景下（如 modeset 与 cursor 原子操作竞争），`stream->ctx` 可能为 NULL，导致解引用空指针引发内核崩溃。
+
+#解决方案
+在访问 `stream->ctx` 成员之前增加非空检查。如果 `stream->ctx` 为 NULL，函数直接返回 false，避免后续的解引用操作，从而防止内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/271fb1f04b4df4d6102d16388e0ac558f4d14181

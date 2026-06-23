@@ -1,0 +1,23 @@
+#标题
+pNFS block/scsi layout解码未初始化指针解引用及RPC超限故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在pNFS使用block或scsi layout时，当编码extents进行第三次重试时触发内核崩溃；在处理大文件写入且未预分配空间时，可能导致客户端构建的layoutcommit数据超过服务端RPC接收上限。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ext_tree_prepare_commit` 中，当重新分配更大的缓冲区以重试编码extents时，指针数组 `layoutupdate_pages` 仅在重试循环结束后才被初始化。然而，函数 `ext_tree_free_commitdata` 在每次循环迭代中都会被调用并尝试访问该数组中的页指针，导致解引用未初始化的指针。
+此外，原代码未对缓冲区大小设置合理上限，当extent数量过多时，计算出的buffer_size可能超过服务端允许的最大RPC尺寸。
+
+#解决方案
+1. 移除重试循环逻辑（`goto retry`），在重新分配缓冲区后直接再次调用 `ext_tree_encode_commit` 进行编码，确保在调用可能释放资源的错误处理逻辑前，相关指针已处于正确状态。
+2. 移除动态计算的 `ext_tree_layoutupdate_size`，将缓冲区大小直接限制为 `NFS_SERVER(arg->inode)->wsize`，确保layoutcommit数据不超过服务端RPC限制。
+3. 修正函数返回值逻辑，确保在编码过程中正确返回错误码（如 -ENOSPC 或 -ENOMEM）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4146957e4d1d2b08a24a4c2a6075b23ee1824990

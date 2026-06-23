@@ -1,0 +1,20 @@
+#标题
+amdgpu: amdgpu_ras_init 函数内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 驱动初始化过程中，若 `amdgpu_nbio_ras_sw_init()` 函数执行失败，会导致系统内存泄漏。由于这是初始化阶段的错误处理路径问题，外部可观测现象通常表现为驱动加载失败，且随着失败次数增加或特定场景下的反复初始化尝试，系统可用内存逐渐减少。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `amdgpu_ras_init()` 函数中，当调用 `amdgpu_nbio_ras_sw_init()` 失败时，代码逻辑直接返回了错误码，而未跳转到内存释放的标签（release_con）。这导致先前已经分配的 `con` 结构体内存未被释放，从而引发内存泄漏。
+
+#解决方案
+修改 `amdgpu_ras_init()` 函数的错误处理逻辑。当 `amdgpu_nbio_ras_sw_init()` 返回错误时，不再直接 `return r`，而是通过 `goto release_con` 跳转至统一的错误处理入口，确保在返回错误码前正确释放已分配的内存资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c3ca3a3fcb8bee2b5a67cec1db69f24aed5d9f07

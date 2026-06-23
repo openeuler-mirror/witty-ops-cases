@@ -1,0 +1,25 @@
+#标题
+hfsplus: slab-out-of-bounds read in hfsplus_strcasecmp
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HFS+ 文件系统操作期间，KASAN 检测到发生 slab-out-of-bounds 越界读取错误。该问题可在执行文件查找（如 umount 触发的 lookup 流程）时触发，导致内核内存访问违规，严重时可引发系统崩溃或被利用进行权限提升（关联 CVE-2025-40088）。
+
+#主要错误日志
+[  117.318353][ T9855] BUG: KASAN: slab-out-of-bounds in hfsplus_strcasecmp+0x1bc/0x490
+[  117.318991][ T9855] Read of size 2 at addr ffff88802160f40c by task repro/9855
+[  117.320189][ T9855] The buggy address is located 0 bytes to the right of allocated 1036-byte region [ffff88802160f000, ffff88802160f40c)
+[  117.320065][ T9855]  walk_component+0x2f0/0x430
+[  117.320073][ T9855]  path_lookupat+0x169/0x440
+[  117.387204][ T9855] >ffff88802160f400: 00 04 fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+
+#问题根因
+`hfsplus_strcasecmp()` 和 `hfsplus_strcmp()` 函数在处理 `hfsplus_unistr` 结构体时，未对字符串长度字段进行有效性校验。如果文件系统元数据中的长度字段大于 `HFSPLUS_MAX_STRLEN`，代码会直接使用该长度进行遍历比较，导致读取操作超出已分配内存的边界，引发越界读取。
+
+#解决方案
+在 `hfsplus_strcasecmp()` 和 `hfsplus_strcmp()` 函数中增加长度校验逻辑。如果传入的字符串长度超过 `HFSPLUS_MAX_STRLEN`，则将其强制修正为 `HFSPLUS_MAX_STRLEN`，并打印错误日志提示长度异常，从而防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/61f36e0e209475845ea874b83838cc85606efb9c

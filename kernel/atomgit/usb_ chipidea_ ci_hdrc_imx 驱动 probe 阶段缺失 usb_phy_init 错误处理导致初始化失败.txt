@@ -1,0 +1,21 @@
+#标题
+usb: chipidea: ci_hdrc_imx 驱动 probe 阶段缺失 usb_phy_init 错误处理导致初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 imx 平台 USB 驱动加载过程中，若底层 USB PHY 初始化失败（例如时钟准备/使能失败），驱动未能捕获错误并继续执行后续流程，导致设备探测流程异常，可能引发设备功能不可用或内核状态不一致。
+
+#主要错误日志
+- `dev_err(dev, "Failed to init phy\n");`
+
+#问题根因
+驱动程序在调用 `usb_phy_init()` 函数时未检查其返回值。`usb_phy_init()` 可能会返回错误码（例如在底层实现中时钟准备或使能失败时），但驱动原有逻辑忽略了该错误，既未终止 probe 流程，也未在后续的 probe 错误退出路径中调用对应的 `usb_phy_shutdown()` 进行资源回滚。
+
+#解决方案
+1. 捕获 `usb_phy_init()` 的返回值，若返回错误，则打印错误日志并跳转至错误处理标签（`err_clk`）退出。
+2. 新增 `phy_shutdown` 标签用于资源回滚，在 probe 失败路径上检查 `override_phy_control` 标志，若已初始化 PHY 则调用 `usb_phy_shutdown()` 关闭 PHY，确保资源正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0dff97a40567685ea0c02d699b47f2745bab1cde

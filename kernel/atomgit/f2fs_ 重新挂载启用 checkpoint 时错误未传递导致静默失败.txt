@@ -1,0 +1,22 @@
+#标题
+f2fs: 重新挂载启用 checkpoint 时错误未传递导致静默失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 f2fs 文件系统重新挂载（remount）过程中启用 checkpoint（checkpoint disable 模式切换回正常模式）时，若底层同步操作失败，内核未将错误状态返回给用户态。这导致用户态程序误认为挂载参数变更成功，但实际上文件系统状态可能不一致，表现为静默失败。
+
+#主要错误日志
+- f2fs_err(sbi, "f2fs_enable_checkpoint sync_fs failed, ret: %d", ret);
+
+#问题根因
+函数 `f2fs_enable_checkpoint` 原返回类型为 void，在内部调用 `f2fs_sync_fs` 进行同步时，未捕获并向上传递其返回值。导致调用者（如 `f2fs_remount` 和 `f2fs_fill_super`）无法感知同步失败，进而无法向用户态返回错误。
+
+#解决方案
+将 `f2fs_enable_checkpoint` 函数返回类型由 void 修改为 int，增加错误码返回机制。
+1. 在 `f2fs_enable_checkpoint` 中接收 `f2fs_sync_fs` 的返回值，若失败则打印错误日志并向上返回错误码。
+2. 修改 `f2fs_remount` 和 `f2fs_fill_super` 中的调用逻辑，检查 `f2fs_enable_checkpoint` 的返回值，若返回错误则进行回滚或跳转至错误处理流程，确保用户态能正确感知操作失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/42553b04744a3cf6e52b77be97aa238cd3c895cb

@@ -1,0 +1,29 @@
+#标题
+dm: remove/resume 竞态导致队列启停不平衡引发内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当设备映射器的移除操作与恢复操作发生竞态时，触发内核 WARNING 警告。具体场景为：在 dm remove 过程中，如果同时发生 resume 操作，会导致请求队列未正确停止却被尝试启动，从而引发状态不平衡。
+
+#主要错误日志
+WARNING: at block/blk-mq.c blk_mq_unquiesce_queue+0xa0/0xc0
+Call Trace:
+ <TASK>
+ dm_start_queue+0x16/0x20 [dm_mod]
+ __dm_resume+0xac/0xb0 [dm_mod]
+ dm_resume+0x12d/0x150 [dm_mod]
+ do_resume+0x2c2/0x420 [dm_mod]
+ dev_suspend+0x30/0x130 [dm_mod]
+ ctl_ioctl+0x402/0x570 [dm_mod]
+ dm_ctl_ioctl+0x23/0x30 [dm_mod]
+
+#问题根因
+当 dm remove 与 resume 发生竞态时，`__dm_destroy()` 设置了 `DMF_SUSPENDED` 标志，但实际上并未静默请求队列。随后在 `__dm_resume()` 中，针对基于请求的设备会调用 `dm_start_queue()`。这导致 `blk_mq_unquiesce_queue()` 在 `q->quiesce_depth == 0` 的情况下被调用，触发了不平衡的队列启停逻辑，从而引发 WARNING。
+
+#解决方案
+在 `dm_resume()` 函数中增加对 `DMF_FREEING` 标志的检查。如果 mapped device 正在被销毁（即设置了 `DMF_FREEING`），则直接跳过恢复操作并退出。这防止了在 remove/resume 竞态期间对队列进行不平衡的启动/停止操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9137e137df90b5698ebd4cdcf54c1df88d4df17f

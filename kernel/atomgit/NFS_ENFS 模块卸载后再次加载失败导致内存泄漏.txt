@@ -1,0 +1,22 @@
+#标题
+NFS/ENFS 模块卸载后再次加载失败导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 enfs 模块后再次添加该模块时，无法找到原有的 shard_view_ctrl 结构体，导致内存泄漏。系统功能表现异常，重复加载模块无法复用前次状态。
+
+#主要错误日志
+enfs_log_info("existing shard ctrl is obtained.\n")
+enfs_log_error("shard view ctrl alloc failed.\n")
+
+#问题根因
+在移除 enfs 模块时，未释放 shard_view_ctrl 内存并将其指针置空。这导致再次加载模块时，代码逻辑检测到旧指针存在（通过 enfs_adapter_get_data），误判为“已存在”并直接返回旧指针，但实际上该内存区域已失效或不再有效，造成内存泄漏及管理混乱。
+
+#解决方案
+1. 在模块退出函数 enfs_shard_exit 中调用清理函数时，增加 shard_view_ctrl 的释放逻辑（kfree）并将全局指针置为 NULL。
+2. 删除 enfs_adapter.c 中冗余的 enfs_adapter_get_data 和 enfs_adapter_set_data 接口及其关联的全局变量，确保每次模块初始化时重新分配内存，避免引用残留指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/068e87b7ffc2d168cedd409e48e262b8dc0b9017

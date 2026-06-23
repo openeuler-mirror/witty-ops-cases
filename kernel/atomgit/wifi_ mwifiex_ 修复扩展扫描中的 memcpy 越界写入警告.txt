@@ -1,0 +1,25 @@
+#标题
+wifi: mwifiex: 修复扩展扫描中的 memcpy 越界写入警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行 wifi 扩展扫描操作时触发运行时警告。系统日志记录到 `memcpy` 检测到跨字段写入，进程在 `mwifiex_cmd_802_11_scan_ext` 函数处触发 WARNING，调用栈指向 `drivers/net/wireless/marvell/mwifiex/scan.c`。
+
+#主要错误日志
+```
+elo 16 17:51:58 surfacebook kernel: ------------[ cut here ]------------
+elo 16 17:51:58 surfacebook kernel: memcpy: detected field-spanning write (size 243) of single field "ext_scan->tlv_buffer" at drivers/net/wireless/marvell/mwifiex/scan.c:2239 (size 1)
+elo 16 17:51:58 surfacebook kernel: WARNING: CPU: 0 PID: 498 at drivers/net/wireless/marvell/mwifiex/scan.c:2239 mwifiex_cmd_802_11_scan_ext+0x83/0x90 [mwifiex]
+```
+
+#问题根因
+结构体 `struct host_cmd_ds_802_11_scan_ext` 中定义了单元素数组 `u8 tlv_buffer[1]`，而实际代码执行 `memcpy` 时向该字段写入了超过 1 字节的数据（如 243 字节）。在开启了相关硬化编译选项（如 `CONFIG_FORTIFY_SOURCE`）的内核中，编译器将单元素数组视为固定大小字段，检测到写入长度超过字段定义大小，从而触发 "field-spanning write" 警告。
+
+#解决方案
+1. 将结构体 `struct host_cmd_ds_802_11_scan_ext` 中的单元素数组 `u8 tlv_buffer[1]` 修改为柔性数组成员 `u8 tlv_buffer[]`，以正确表示该处为变长数据。
+2. 修正 `mwifiex_ret_802_11_scan_ext` 函数中计算剩余缓冲区大小的逻辑，去除针对单元素数组填充的 `-1` 偏移量修正，即从 `sizeof(*ext_scan_resp) - 1` 改为 `sizeof(*ext_scan_resp)`，确保内存计算准确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/43ff30605daf99225c44babe42dc9b0adad091d9

@@ -1,0 +1,22 @@
+#标题
+sja1105: fix kasan out-of-bounds warning in sja1105_table_delete_entry
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sja1105 驱动删除表项时触发 KASAN 越界访问警告。具体表现为调用 `sja1105_table_delete_entry` 删除最后一个元素时，`memmove` 操作访问了越界的内存地址。虽然越界访问的元素并未被实际激活使用，但如果该越界元素位于未映射的页面中，可能会导致内核崩溃。
+
+#主要错误日志
+KASAN: out-of-bounds warning in sja1105_table_delete_entry
+
+#问题根因
+代码逻辑存在两个缺陷：
+1. 当删除最后一个元素时，不需要将元素 `[i + 1, end)` 移动覆盖它，此时元素 `i + 1` 实际上已经越界。
+2. `memmove` 的长度计算有误，应移动 `size - i - 1` 个元素，原代码未减去 1 导致访问越界。
+
+#解决方案
+在执行 `memmove` 前增加边界检查，仅当 `i + 1 < table->entry_count` 时才执行移动操作；同时修正 `memmove` 的长度参数，将 `(table->entry_count - i)` 修改为 `(table->entry_count - i - 1)`，确保只访问有效的表项内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d640382eb2c782b0d18c964b140a0bc49013927c

@@ -1,0 +1,37 @@
+#标题
+NFC子系统关闭设备时内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在关闭NFC设备（如执行 `nci_close_device`）时，若存在正在进行的数据交换事务，会导致内核对象引用计数未正确释放。自动化测试工具（NIPA）检测到 “unreferenced object” 内存泄漏，泄漏对象大小为 2048 字节，关联进程为 “nci_dev”。
+
+#主要错误日志
+```
+unreferenced object 0xff1100000f435000 (size 2048):
+  comm "nci_dev", pid 3954, jiffies 4295441245
+  hex dump (first 32 bytes):
+    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+    27 00 01 40 00 00 00 00 00 00 00 00 00 00 00 00  '..@............
+  backtrace (crc ec2b3c5):
+    __kmalloc_noprof+0x4db/0x730
+    sk_prot_alloc.isra.0+0xe4/0x1d0
+    sk_alloc+0x36/0x760
+    rawsock_create+0xd1/0x540
+    nfc_sock_create+0x11f/0x280
+    __sock_create+0x22d/0x630
+    __sys_socket+0x115/0x1d0
+    __x64_sys_socket+0x72/0xd0
+    do_syscall_64+0x117/0xfc0
+    entry_SYSCALL_64_after_hwframe+0x4b/0x53
+```
+
+#问题根因
+在 `nci_close_device()` 函数中，关闭设备流程未处理正在进行的数据交换。数据交换回调函数（例如 `rawsock_data_exchange_complete`）持有 socket 引用，若关闭设备时未调用该回调完成清理，将导致 socket 对象无法释放，从而造成内存泄漏。
+
+#解决方案
+在 `nci_close_device()` 函数中增加逻辑判断：检查 `NCI_DATA_EXCHANGE` 标志位。如果该标志位置位，表明当前有挂起的数据交换，此时需主动调用 `nci_data_exchange_complete(ndev, NULL, ndev->cur_conn_id, -ENODEV)` 来完成该事务，确保释放相关引用，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/112e79ea3ffe30366988c3575d74c762fafd9f7c

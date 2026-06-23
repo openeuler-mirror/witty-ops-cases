@@ -1,0 +1,23 @@
+#标题
+fp-stress 子进程启动失败导致日志丢失或测试死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 arm64 fp-stress 自测程序时，若子进程在 fork() 和 exec() 之间发生错误（如 dup2 或 execl 失败），错误信息会输出到 stderr。由于 stderr 未被子进程信息注释，导致诊断困难。此外，若父进程未捕获子进程的退出信号，可能会因等待子进程输出而死锁。
+
+#主要错误日志
+- dup2() %d
+- read(startp pipe) failed: %s (%d)
+- %d bytes of data on startup pipe
+- execl(%s) failed: %d (%s)
+
+#问题根因
+fp-stress 在子进程启动阶段，将错误日志打印到 stderr。由于 stderr 缺少子进程的上下文注释信息，且输出流机制问题，导致故障诊断信息不全，并可能引发父进程等待子进程输出的死锁问题。
+
+#解决方案
+将子进程启动过程中的错误日志输出（包括 dup2、read 和 execl 失败的场景）从 fprintf(stderr, ...) 修改为 printf(...)，即将日志重定向到 stdout，确保日志能被正确注释并提升程序健壮性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/39760ebfd105597499f27c52401045a5091d1a9d

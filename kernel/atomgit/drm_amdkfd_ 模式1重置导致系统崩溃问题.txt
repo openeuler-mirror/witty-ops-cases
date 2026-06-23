@@ -1,0 +1,20 @@
+#标题
+drm/amdkfd: 模式1重置导致系统崩溃问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 GPU mode1 重置操作期间，如果进程退出，系统会发生崩溃。这是因为在进程释放资源时，GPU 可能正处于重置过程中，此时用户队列可能仍在运行，导致释放过程发生异常进而引发崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+当 GPU 处于重置状态时，用户队列可能仍在运行。若此时进程退出并执行释放流程，代码未等待 GPU 重置完成即进行资源清理，导致状态冲突引发 crash。
+
+#解决方案
+在进程退出释放资源流程中（`kfd_process_wq_release` 函数），增加对 GPU 重置状态的等待逻辑。新增 `kfd_process_wait_gpu_reset_complete` 函数，通过刷新（flush）每个 GPU 设备的 `reset_domain->wq` 工作队列，确保在清理资源前等待所有正在进行的 GPU 重置操作完成，从而避免崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9670f4a7b627c0debc2a681fe378e18e663664ad

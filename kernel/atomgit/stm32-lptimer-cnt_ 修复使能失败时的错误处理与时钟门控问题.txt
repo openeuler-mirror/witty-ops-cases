@@ -1,0 +1,23 @@
+#标题
+stm32-lptimer-cnt: 修复使能失败时的错误处理与时钟门控问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 STM32 LPTimer 运行于慢时钟场景下，计数器使能过程中可能触发超时错误。由于错误处理流程缺失，此时内核 sysfs 接口中的 'enable' 状态错误地显示为已使能（enabled），但实际硬件并未成功启动，导致计数器功能状态与实际不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `stm32_lptim_set_enable_state` 函数中，写入 CMP 和 ARR 寄存器并轮询 ISR 状态位时，时钟尚未被使能。当 LPTimer 运行在慢时钟下且时钟在轮询期间被门控，`regmap_read_poll_timeout` 会返回超时错误。
+此外，在超时发生时，控制寄存器（CR）中的 STM32_LPTIM_ENABLE 位已经被置位，但代码在错误返回路径中没有清除该位，导致 `stm32_lptim_is_enabled()` 读取 CR 时误判计数器处于使能状态。
+
+#解决方案
+调整时钟使能时机并完善错误处理路径：
+1. 将 `clk_enable` 调用提前至写入 CMP、ARR 寄存器及轮询 ISR 位之前，确保操作期间时钟稳定，避免因时钟门控导致的超时。
+2. 在错误处理路径（error path）中增加清理逻辑：若后续操作失败，需清除 CR 寄存器中的 ENABLE 位并调用 `clk_disable` 禁用时钟，确保软硬件状态一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/def5e0ec6539a31b0d9420a169293cffba00f246

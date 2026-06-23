@@ -1,0 +1,24 @@
+#标题
+md-cluster启动阶段NULL指针引用导致内核panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MD 阵列启动序列（md_run）期间，若此时恰好收到来自远程节点的 METADATA_UPDATED 消息，会触发 `process_metadata_update()` 函数。由于此时 `mddev->thread` 尚未初始化（为 NULL），函数对其进行解引用时会引发 NULL pointer dereference，导致内核 panic。
+
+#主要错误日志
+`md-cluster: Received metadata update but MD thread is not ready`
+
+#问题根因
+在 MD 阵列启动过程中存在一个竞态条件窗口：
+1. `bitmap_load()` 调用 `md_cluster_ops->join()` 启动了 `cluster_recv` 线程；
+2. 此时 `recv_daemon` 已处于活动状态并开始处理消息；
+3. 但 `mddev->thread`（主 MD 线程）直到 `md_run()` 的后续步骤才会被初始化。
+在此窗口期内，如果收到 METADATA_UPDATED 消息，`process_metadata_update()` 会通过 `rcu_dereference_protected` 获取到 NULL 指针，并在随后的 `wait_event` 宏中盲目解引用该指针导致崩溃。虽然代码注释声称 daemon 线程必须存在，但实际启动逻辑无法保证这一点。
+
+#解决方案
+在 `drivers/md/md-cluster.c` 的 `process_metadata_update()` 函数中增加对 `thread` 指针的非空校验。如果指针为 NULL，则打印警告日志、释放持有的锁（`no_new_dev_lockres`）并直接返回，忽略此次更新请求，从而避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb7bf27adc29b61eb7da7a8d6467ed1e30cae1b7

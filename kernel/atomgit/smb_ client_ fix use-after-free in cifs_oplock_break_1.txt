@@ -1,0 +1,22 @@
+#标题
+smb: client: fix use-after-free in cifs_oplock_break
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载（unmount）CIFS/SMB文件系统过程中，若此时正在处理 oplock break（机会锁中断），内核会发生竞态条件，导致 `cifs_oplock_break` 函数访问了已被释放的 `cinode` 结构体，引发 use-after-free（UAF）漏洞，可能导致内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因是 `cifs_oplock_break()` 函数与卸载流程之间存在竞态条件。
+在 `cifs_oplock_break()` 执行过程中，调用 `_cifsFileInfo_put(cfile)` 可能会触发 `cifs_sb_deactive()` 释放超级块的最后一个引用。这会立即启动 RCU 回调流程清理 inode（`kill_sb` -> `evict_inodes` -> `kmem_cache_free(cinode)`）。
+然而，`cifs_oplock_break()` 函数在 `_cifsFileInfo_put()` 返回后，仍继续尝试获取 `cinode->open_file_lock` 锁并调用 `cifs_done_oplock_break(cinode)`。此时 `cinode` 内存已被释放，从而导致 use-after-free。
+
+#解决方案
+在 `cifs_oplock_break` 函数开始处理前，通过调用 `cifs_sb_active(sb)` 持有超级块的一个额外引用计数，确保在整个 oplock break 操作期间，超级块及其关联的 inode 保持有效，防止因卸载流程提前释放资源。在函数退出前（`out` 标签处）调用 `cifs_sb_deactive(sb)` 释放该引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb8560193180f651b099ef5e4b1de1bb27f5d611

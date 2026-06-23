@@ -1,0 +1,23 @@
+#标题
+svcrdma 模块初始化时 percpu_counter 资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 svc_rdma_proc_init 函数初始化过程中，若后续步骤（如注册 sysctl 表）失败，之前已成功初始化的 percpu_counter 变量未被销毁，导致内存资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `svc_rdma_proc_init` 的错误处理逻辑不完整。在初始化 `svcrdma_stat_read`、`svcrdma_stat_recv`、`svcrdma_stat_sq_starve` 和 `svcrdma_stat_write` 等多个 percpu_counter 变量的过程中，如果中间某个变量的初始化失败，或者最后的 `register_sysctl` 失败，代码直接跳转到返回错误码的分支，遗漏了对之前已成功初始化的变量的 `percpu_counter_destroy` 操作，从而造成资源泄漏。
+
+#解决方案
+重构 `svc_rdma_proc_init` 函数的错误处理路径，引入多个标签（label）实现分段回滚。确保在初始化失败或注册失败时，按照初始化的逆序依次调用 `percpu_counter_destroy` 销毁已分配的资源。具体包括：
+1. 为每个 percpu_counter 初始化步骤设置独立的错误跳转标签（err_read, err_recv, err_sq, err_write）。
+2. 在 `register_sysctl` 失败时，显式销毁 `svcrdma_stat_write` 并返回 -ENOMEM。
+3. 各错误标签分别负责销毁对应的变量并跳转到上一阶段的清理标签，保证无泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a5031f93400a2bba42a1a3754d3493fa6578185f

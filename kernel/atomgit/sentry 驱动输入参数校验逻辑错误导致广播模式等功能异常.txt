@@ -1,0 +1,26 @@
+#标题
+sentry 驱动输入参数校验逻辑错误导致广播模式等功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sentry 驱动中，当使用广播模式（broadcast mode）调用 `urma_send` 接口时，因校验逻辑错误地将 `dst_eid` 为空判断为非法参数，导致数据发送失败。此外，`process_multi_eid_string` 接口中对 `eid_max_num` 的校验条件不合理，可能拒绝合法的 EID 数量配置（例如配置 `--server_eid` 时最大支持 32 个，但被错误限制）。
+
+#主要错误日志
+- `pr_err("Invalid param, failed to process multi eid string\n");`
+- `pr_err("%s: Invalid param, failed to send data\n", __func__);`
+- `pr_err("Invalid eid num, failed to create urma resource\n");`
+
+#问题根因
+1. `urma_send` 函数的参数校验逻辑未区分广播模式：在广播模式下 `dst_eid` 合法取值为 NULL，但代码中 `!dst_eid` 的判断导致广播模式被误判为参数错误。
+2. `process_multi_eid_string` 函数中 `eid_max_num > MAX_DIE_NUM` 的校验逻辑有误，混淆了不同场景下的 EID 数量上限（如 `--eid` 场景上限为 2，`--server_eid` 场景上限为 32），导致合法的输入参数被拒绝。
+3. `sentry_create_urma_resource` 函数中对 `eid_num` 的全局校验限制了上层功能的灵活性，且该限制应当由具体的处理函数根据场景判断。
+
+#解决方案
+1. 移除 `sentry_create_urma_resource` 函数中对 `eid_num > MAX_DIE_NUM` 的全局强制校验。
+2. 修改 `process_multi_eid_string` 函数，删除对 `eid_max_num > MAX_DIE_NUM` 的错误检查，允许传入更大的 EID 数量上限。
+3. 修正 `urma_send` 函数的参数校验逻辑，移除 `!dst_eid` 判断，允许 `dst_eid` 为空以支持广播模式，并增加注释说明。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d52ef105cc6bbeffe5907e502e8ca36f1f68c1ab

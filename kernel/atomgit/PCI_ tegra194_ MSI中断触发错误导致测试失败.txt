@@ -1,0 +1,23 @@
+#标题
+PCI: tegra194: MSI中断触发错误导致测试失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Tegra194 PCIe endpoint 驱动在触发 MSI 中断时使用了错误的向量，导致 PCI endpoint Kselftest 中的 MSI_TEST 测试用例执行失败。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `pci_epc_raise_irq()` 传入的中断号范围是 1-N（N 对于 MSI 为 32），但 `tegra_pcie_ep_raise_msi_irq()` 错误地直接将中断号作为 MSI 向量索引使用（例如中断号 1 对应索引 0）。这导致写入了错误的 MSI 向量值到硬件寄存器 `APPL_MSI_CTRL_1` 中，从而触发了错误的中断。
+
+#解决方案
+修改 `tegra_pcie_ep_raise_msi_irq` 函数，将传入的 interrupt number（中断号）转换为正确的 MSI vector（向量索引）。
+具体代码变更为：
+1. 将中断号上限检查从 `irq > 31` 修正为 `irq > 32`。
+2. 写入寄存器时，将 `BIT(irq)` 修正为 `BIT(irq - 1)`，确保中断号 1 对应向量 0，以此类推。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a5039d20e2bfbe9654481413c9d6d705d496da53

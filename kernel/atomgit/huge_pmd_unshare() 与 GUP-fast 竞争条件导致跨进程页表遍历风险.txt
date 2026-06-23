@@ -1,0 +1,20 @@
+#标题
+huge_pmd_unshare() 与 GUP-fast 竞争条件导致跨进程页表遍历风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发环境下，当 `huge_pmd_unshare()` 释放共享页表时，若与 `gup_fast()` 发生竞争，`gup_fast()` 可能会遍历到另一个进程的页表。虽然该问题不会立即导致内核内存损坏，但属于异常且非预期的行为，存在潜在的安全与稳定性风险。
+
+#主要错误日志
+未知
+
+#问题根因
+`huge_pmd_unshare()` 在释放一个可能被多个进程共享的页表引用时，该页表可能会被转换为另一个进程中使用的普通页表。如果在转换过程中恰好发生了并发的 `gup_fast()` 操作，`gup_fast()` 可能会错误地遍历到另一个进程的页表。根本原因在于释放共享页表操作缺乏必要的同步机制，无法确保并发的 `gup_fast()` 已经完成。
+
+#解决方案
+在 `huge_pmd_unshare()` 中调用 `pud_clear()` 清除页表项之后、实际释放页表之前，显式调用 `tlb_remove_table_sync_one()` 发送广播 IPI。该操作可强制等待其他线程中正在进行的 `gup_fast()` 完成执行，从而确保在页表被重新用作普通页表前，所有潜在的并发访问均已结束。此修复方法类似于 khugepaged 在 THP collapse（大页折叠）时移除页表的处理逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3ec997d3bf08746fdc6bab1923a07ab2023a5e9d

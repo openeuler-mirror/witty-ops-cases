@@ -1,0 +1,28 @@
+#标题
+efi: cper: Add Zhaoxin/Centaur ZDI/ZPI error decode
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Zhaoxin/Centaur 处理器发生 ZDI（芯片间互联接口）或 ZPI（插槽间互联接口）错误时，BIOS 通过 SMI 中断采集错误信息并填充到 CPER（Common Platform Error Record）结构中通知操作系统。但在当前内核版本下，APEI 驱动打印的通用处理器错误信息可读性较差，用户难以直观分辨是 ZDI 错误还是 ZPI 错误，也无法清晰获取总线号、设备号、APIC ID 及具体的错误类型，不利于故障定位与分析。
+
+#主要错误日志
+推断（修复后新增的关键日志格式）：
+"%s general processor error(zpi error)"
+"%s general processor error(zdi error)"
+"%s general processor error(unknown error)"
+"%s bus number %llx device number %llx function number 0"
+"%s apic id %lld error_type: %s"
+
+#问题根因
+UEFI 规范未定义 ZDI/ZPI 错误的专用 Section Type，Zhaoxin 平台使用 Generic Processor Error Section 类型来承载此类错误信息。内核原有的 `cper_print_proc_generic` 函数仅打印通用的寄存器值（如 requestor_id、responder_id），未针对 Zhaoxin/Centaur CPU 的特定硬件定义进行解析和格式化输出，导致输出的日志信息晦涩难懂。
+
+#解决方案
+在 `drivers/firmware/efi/cper.c` 中针对 Zhaoxin/Centaur 厂商增加特定解析逻辑：
+1. 新增 `zdi_zpi_err_type_strs` 字符串数组，用于将错误编码映射为可读的字符串描述（如 "Training Error Status"、"Data Link Protocol Error Status" 等）。
+2. 新增 `cper_print_proc_generic_zdi_zpi` 函数，根据 `requestor_id` 的低 8 位判断错误类型（值为 7 为 ZPI 错误，值为 6 为 ZDI 错误），并进一步解析打印总线号、设备号、APIC ID 以及具体的错误类型。
+3. 在 `cper_print_proc_generic` 函数末尾调用上述新增的解析函数，实现在故障发生时输出清晰、结构化的 ZDI/ZPI 错误日志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1d55b3ee1275658c4dc3c589cee772ddb3bdf40

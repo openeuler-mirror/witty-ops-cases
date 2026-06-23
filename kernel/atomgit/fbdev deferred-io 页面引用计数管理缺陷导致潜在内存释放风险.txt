@@ -1,0 +1,20 @@
+#标题
+fbdev deferred-io 页面引用计数管理缺陷导致潜在内存释放风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 fbdev deferred-io 机制时，若页面查找失败，代码路径仍可能尝试对无效页面进行操作；或者在并发场景下，对 framebuffer 页面的引用计数管理不一致，可能导致内核访问已释放的页面，引发内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `fb_deferred_io_fault` 中，获取页面的操作 `fb_deferred_io_page` 与增加页面引用计数的操作 `get_page` 是分开执行的。这种逻辑并未保证无条件持有页面引用，存在引用计数管理的漏洞，无法保证代码始终持有 framebuffer 页面的有效引用。
+
+#解决方案
+重构 `fb_deferred_io_page` 函数为 `fb_deferred_io_get_page`，将 `get_page()` 调用移至该函数内部。在查找到页面后无条件调用 `get_page()`，确保每次成功获取页面时都同步增加引用计数，从而保证代码总是持有页面的有效引用，修复潜在的引用计数泄漏或 use-after-free 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8e11b0b0dd44dc61b021b7df62ffc724966f599f

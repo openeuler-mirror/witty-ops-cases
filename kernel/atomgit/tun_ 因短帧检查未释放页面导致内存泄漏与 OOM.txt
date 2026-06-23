@@ -1,0 +1,20 @@
+#标题
+tun: 因短帧检查未释放页面导致内存泄漏与 OOM
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当本地进程打开 /dev/net/tun 和 /dev/vhost-net，并将 tun/tap 设备作为 vhost-net 后端时，若发送（TX）描述符的长度减去 virtio-net 头部后小于 ETH_HLEN（以太网头部长度），将触发内存泄漏。在高并发提交循环下，会耗尽主机内存并触发 OOM Panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tun_xdp_one()` 函数中，当帧长度小于 `ETH_HLEN` 时直接返回 `-EINVAL`，但未释放由 `vhost_net_build_xdp()` 分配的页面（page）。调用者 `tun_sendmsg()` 丢弃了该错误返回值并返回 `total_len`，导致 `vhost_tx_batch()` 认为操作成功，从而未释放该页面，每次短帧错误均泄漏一个 page-frag chunk。
+
+#解决方案
+在 `tun_xdp_one()` 函数中，当检测到 `datasize < ETH_HLEN` 返回 `-EINVAL` 之前，调用 `put_page(virt_to_head_page(xdp->data))` 释放已分配的页面，确保资源正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c1ce4e155e713b77744d4ef5ed30c08f28dde52f

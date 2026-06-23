@@ -1,0 +1,24 @@
+#标题
+usb: dwc3: gadget: 处理未分配端点引发的空指针访问与虚假事件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB dwc3 设备控制器驱动初始化过程中或运行过程中，如果涉及保留端点未被分配的情况，内核可能会发生空指针访问导致崩溃。此外，在端点中断处理过程中，若遇到未分配的端点产生的虚假事件，可能出现不可预期的行为或内核告警。
+
+#主要错误日志
+- `dev_warn(dwc->dev, "spurious event, endpoint %u is not allocated\n", epnum);` （推断：来自 `dwc3_endpoint_interrupt` 函数）
+
+#问题根因
+驱动代码在遍历端点数组（`dwc->eps[]`）时，未考虑到某些保留端点可能在初始化阶段未被分配内存，导致数组中对应项为 NULL。多个关键函数（如 `dwc3_gadget_start_config`、`dwc3_gadget_clear_tx_fifos`、`dwc3_gadget_endpoint_trbs_complete` 以及 `dwc3_endpoint_interrupt`）直接使用循环变量索引访问端点结构体，未进行空指针检查，从而引发 NULL Pointer Dereference。
+
+#解决方案
+在涉及端点遍历的相关函数中增加对 `dwc->eps[i]` 或 `dwc->eps[num]` 的非空检查。具体修改如下：
+1. 在 `dwc3_gadget_start_config` 循环中，取出端点指针后判断 `if (!dep)` 则跳过。
+2. 在 `dwc3_gadget_clear_tx_fifos` 循环中，增加空指针检查。
+3. 在 `dwc3_gadget_endpoint_trbs_complete` 循环中，增加空指针检查。
+4. 在 `dwc3_endpoint_interrupt` 入口处，增加空指针检查，若端点未分配则打印告警日志并直接返回，避免后续操作引发崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/894a7d681c497c16a430f5ef3b4df0c77bb439cf

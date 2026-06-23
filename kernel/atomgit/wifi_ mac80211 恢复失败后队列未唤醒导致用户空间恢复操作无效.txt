@@ -1,0 +1,21 @@
+#标题
+wifi: mac80211 恢复失败后队列未唤醒导致用户空间恢复操作无效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统从挂起状态恢复时，若硬件变为不可用，内核会发出警告日志，随后用户空间尝试通过将接口 down/up 来恢复网络功能，但该操作无法成功，网络流量无法恢复。
+
+#主要错误日志
+- WARN(1, "Hardware became unavailable during restart.\n");
+- WARN(1, "Hardware became unavailable upon resume. This could be a software issue prior to suspend or a hardware issue.\n");
+
+#问题根因
+在 resume 流程失败时，驱动调用了 `ieee80211_handle_reconfig_failure` 进行处理，但在此之前未清除 `IEEE80211_QUEUE_STOP_REASON_SUSPEND` 这一队列停止原因。这导致传输队列继续保持停止状态，用户空间发起的接口重启（down/up）操作无法唤醒队列，从而阻塞了流量传输，导致恢复尝试失败。
+
+#解决方案
+在 `ieee80211_reconfig` 函数中，当检测到硬件不可用（resume 失败）时，在调用 `ieee80211_handle_reconfig_failure` 之前，显式调用 `ieee80211_wake_queues_by_reason` 清除 `IEEE80211_QUEUE_STOP_REASON_SUSPEND` 标志，确保队列被唤醒，从而允许用户空间的恢复操作能够正常进行数据传输。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d1947b5e8a7e17882a9089cff1e9b78afbc46569

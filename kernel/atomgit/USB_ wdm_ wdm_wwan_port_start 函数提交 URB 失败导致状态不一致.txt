@@ -1,0 +1,20 @@
+#标题
+USB: wdm: wdm_wwan_port_start 函数提交 URB 失败导致状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 wdm_wwan_port_start 函数执行过程中，如果 `usb_submit_urb` 提交失败，系统未能正确回滚之前所做的初始化操作（如开启 TX、增加电源引用计数、设置 IN_USE 标志），导致驱动内部状态不一致，可能引发资源泄漏、电源引用计数错误或后续操作异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `wdm_wwan_port_start` 在调用 `usb_submit_urb(desc->validity, GFP_KERNEL)` 失败时直接返回了错误码，但未对失败前的操作进行清理。具体遗漏的清理步骤包括：未关闭 wwan_port 的 TX 流控、未减少电源管理引用计数、未清除 `WDM_WWAN_IN_USE` 状态标志位。
+
+#解决方案
+在 `usb_submit_urb` 执行失败时，增加错误处理路径以恢复现场。具体措施为：检查 `usb_submit_urb` 返回值，若小于 0（失败），则依次执行 `wwan_port_txoff(port)` 关闭 TX，调用 `desc->manage_power(desc->intf, 0)` 释放电源引用，并最后清除 `WDM_WWAN_IN_USE` 标志位以防止状态残留，最后返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f818cb05889ca88b4126f4cf10f11b05f13570f3

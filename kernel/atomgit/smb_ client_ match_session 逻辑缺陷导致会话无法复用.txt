@@ -1,0 +1,30 @@
+#标题
+smb: client: match_session 逻辑缺陷导致会话无法复用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 CIFS/SMB 挂载时，即使使用相同的凭据和服务器地址，若挂载参数中指定了安全类型（如 `sec=ntlmssp`），内核未能正确复用现有的 SMB 会话。这导致系统创建了多个冗余的会话，增加了服务器负载并消耗了额外的资源。
+
+复现步骤如下：
+1. 使用默认凭据挂载共享：`mount.cifs //server/share /mnt/a -o credentials=creds`
+2. 指定安全类型挂载同一路径：`mount.cifs //server/share /mnt/b -o credentials=creds,sec=ntlmssp`
+3. 查看会话数量：`cat /proc/fs/cifs/DebugData | grep SessionId | wc -l`，发现会话数量增加而非复用。
+
+#主要错误日志
+未知
+
+#问题根因
+`match_session()` 函数在比较会话安全类型时逻辑存在缺陷。原代码直接比较用户传入的上下文安全类型（`ctx->sectype`）与会话的安全类型（`ses->sectype`），未考虑到当用户未指定安全类型（Unspecified）时，经过服务器协商后的实际安全类型可能与现有会话一致的情况。
+具体表现为，旧代码仅简单判断 `ctx->sectype != ses->sectype` 就返回不匹配（忽略了 Unspecified 的情况），导致本应匹配的会话被判定为不匹配，从而触发新会话的创建。
+
+#解决方案
+修改 `match_session()` 函数的安全类型比较逻辑：
+1. 引入服务器指针和实际安全类型变量。
+2. 不再直接比较原始的 `ctx->sectype` 和 `ses->sectype`，而是调用 `server->ops->select_sectype()` 获取经过服务器协商后的实际安全类型（`ctx_sec` 和 `ses_sec`）。
+3. 只有当协商后的实际安全类型不一致时，才判定为会话不匹配。
+此修复确保了在用户指定特定安全类型（如 NTLMSSP）与未指定（默认协商）但实际安全机制相同时，能够正确匹配并复用现有会话。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ebd27fc258199031e9e91278b7a144fcc7b57a63

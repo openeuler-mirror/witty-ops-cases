@@ -1,0 +1,20 @@
+#标题
+min_free_kbytes 警告信息风暴导致日志刷屏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统运行过程中，当用户设置的 `min_free_kbytes` 值优先级高于系统计算出的推荐值时，内核会持续打印警告信息。由于该检查逻辑可能被频繁触发，导致内核日志（dmesg）出现“报错风暴”，大量重复的警告信息刷屏，可能掩盖其他重要日志或影响系统性能。
+
+#主要错误日志
+min_free_kbytes is not updated to %d because user defined value %d is preferred
+
+#问题根因
+内核函数 `calculate_min_free_kbytes` 中，当系统计算出的 `new_min_free_kbytes` 值小于用户定义的 `user_min_free_kbytes` 时，代码逻辑使用 `pr_warn` 打印警告信息。由于该函数可能被频繁调用，且该条件一旦满足通常会持续满足，导致内核使用普通打印接口（`pr_warn`）反复向日志缓冲区写入相同的警告，引发日志风暴。
+
+#解决方案
+将 `mm/page_alloc.c` 文件中 `calculate_min_free_kbytes` 函数内的打印接口由 `pr_warn` 修改为 `pr_warn_once`。此修改确保在系统运行期间，该特定警告条件即便被多次触发，内核也仅打印一次警告信息，从而有效避免了短时间内的报错风暴。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2a1cfde4f294d2476750ff60115b42d46fd634ce

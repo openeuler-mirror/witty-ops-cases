@@ -1,0 +1,24 @@
+#标题
+SMB客户端协商超时机制引发竞态导致访问失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SMB 服务器重启后，客户端立即访问挂载点时，操作失败并返回 "Host is down" 错误；若访问前有延迟则可正常工作。具体复现步骤如下：
+1. 挂载 SMB 共享并访问正常。
+2. 重启 SMB 服务器并重新启动服务。
+3. 立即执行 `ls /mnt` 访问挂载点，提示 `ls: cannot access '/mnt': Host is down`。
+
+#主要错误日志
+- 用户态报错：`ls: cannot access '/mnt': Host is down`
+- 内核返回错误码：`-EHOSTDOWN`
+
+#问题根因
+问题由协商与重连之间的竞态条件引起。原有的协商超时机制使用 `lstrp`（最后一次收到响应的时间）作为基准计算 20 秒超时。当服务器重启时，如果协商过程启动但尚未完成，`server_unresponsive()` 函数会错误地判断超时，从而触发 `cifs_reconnect()`。这会导致正在进行的协商请求被中止（mid_state 设为 MID_RETRY_NEEDED），进程收到 `-EAGAIN` 并最终转换为 `-EHOSTDOWN`，导致访问失败。
+
+#解决方案
+在 `TCP_Server_Info` 结构体中新增 `neg_start` 字段，用于精确记录协商过程开始的时间戳。修改 `server_unresponsive()` 函数中的超时判定逻辑，将时间基准从 `lstrp` 改为 `neg_start`，确保只有在协商实际运行超过 20 秒后才触发超时重连，避免误判和干扰正常的重连恢复流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0166ef5e068970688e5c1f7a841360e4fd947390

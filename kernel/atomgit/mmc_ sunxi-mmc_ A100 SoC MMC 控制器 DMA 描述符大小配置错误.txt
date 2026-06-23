@@ -1,0 +1,23 @@
+#标题
+mmc: sunxi-mmc: A100 SoC MMC 控制器 DMA 描述符大小配置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Allwinner A100/A133 SoC 平台上使用 MMC/SD/SDIO 或 eMMC 控制器时，由于驱动错误地配置了 DMA 描述符大小（配置为 64K），超出了硬件实际支持的 8K 限制，导致数据传输异常或设备功能无法正常工作。同时，H616 SoC 受此前代码逻辑影响，可能被错误匹配到不兼容的配置。
+
+#主要错误日志
+未知
+
+#问题根因
+Allwinner A100/A133 SoC 的 MMC 控制器仅支持 8K 大小的 DMA 块（Descriptor size bits 为 13 位），但驱动代码中的 `sun50i_a100_cfg` 配置错误地将 `idma_des_size_bits` 设为 16（对应 64K DMA 块）。此外，H616 SoC 原本 fallback 到 A100 的兼容字符串，因此也需要显式匹配以避免使用错误的 A100 配置。
+
+#解决方案
+修正 MMC 控制器的设备匹配表与配置结构：
+1. 将 A100 兼容字符串 `allwinner,sun50i-a100-mmc` 的匹配数据指向 `sun20i_d1_cfg`（支持 8K DMA 块），以匹配其真实硬件能力。
+2. 新增 `sun50i_h616_cfg` 配置结构（支持 64K DMA 块），并显式添加 H616 兼容字符串 `allwinner,sun50i-h616-mmc` 的匹配项，防止其错误匹配到 A100 配置。
+3. 移除原有配置中冗余的 `clk_delays = NULL` 赋值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/23e1d75b751e6b6cfe502a38ccd57b95b13d51f9

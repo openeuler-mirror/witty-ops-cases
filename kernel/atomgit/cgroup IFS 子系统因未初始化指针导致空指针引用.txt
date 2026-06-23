@@ -1,0 +1,20 @@
+#标题
+cgroup IFS 子系统因未初始化指针导致空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统未检测到恒定 TSC（constant Tsc）时，IFS 子系统在 `cgroup_ifs_tsc_init` 中禁用自身，但未能正确更新全局开关状态。这导致后续流程错误地调用 `cgroup_ifs_add_files` 函数，尝试访问未初始化的 `cgroup_ifs_files` 指针，从而引发内核空指针引用错误。
+
+#主要错误日志
+- "Disable CGROUP IFS: no constant tsc"
+
+#问题根因
+IFS 子系统在 `cgroup_ifs_tsc_init()` 中检测到 TSC 不可用时，虽然跳过了 `cgroup_ifs_files` 的初始化并返回错误，但未将全局变量 `ifs_enable` 置为 false。由于 `ifs_enable` 保持为 true，内核后续执行路径误以为 IFS 功能可用，调用了依赖 `cgroup_ifs_files` 的函数，导致访问未初始化的指针引发空指针引用。
+
+#解决方案
+在 `cgroup_ifs_tsc_init()` 函数中，当检测不到恒定 TSC 需要禁用 IFS 功能时，显式将全局变量 `ifs_enable` 设置为 false，确保状态一致性，防止后续代码错误调用未初始化的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ea7d6f2c3a100b1474166d222f955c8805c063b3

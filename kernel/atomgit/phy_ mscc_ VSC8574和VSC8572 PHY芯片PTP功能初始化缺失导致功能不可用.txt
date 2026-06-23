@@ -1,0 +1,21 @@
+#标题
+phy: mscc: VSC8574和VSC8572 PHY芯片PTP功能初始化缺失导致功能不可用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 VSC8574 和 VSC8572 PHY 设备上启用 PTP（精确时间协议）功能时，功能无法正常使用。虽然系统不会发生崩溃，但 PTP 设备未能成功创建，导致用户无法使用这些 PHY 芯片的 PTP 功能。表现为同一 PTP 时钟域下的部分 PHY 设备缺少 PTP 功能接口。
+
+#主要错误日志
+未知
+
+#问题根因
+PTP 初始化过程分为两个阶段：第一阶段在 probe 时执行，负责初始化锁、队列并调用 ptp_clock_register() 创建 PTP 设备；第二阶段在 config_init() 时执行，负责初始化硬件 PTP。
+根因在于驱动代码中 VSC8574 和 VSC8572 错误地绑定到了 `vsc8574_probe` 函数。该函数仅执行了第二阶段的硬件初始化，遗漏了第一阶段的关键步骤，导致 `ptp_clock_register()` 从未被调用，PTP 设备未能注册到系统中。相比其他正常工作的 PHY（如 VSC8584），这两个型号的驱动钩子配置错误。
+
+#解决方案
+修改驱动文件 `drivers/net/phy/mscc/mscc_main.c`，将 VSC8574 和 VSC8572 设备的 `.probe` 钩子函数指针从 `vsc8574_probe` 修改为 `vsc8584_probe`，同时将 `.handle_interrupt` 钩子修改为 `vsc8584_handle_interrupt`。这确保了 PTP 初始化的第一阶段代码能够正确执行，从而完整初始化 PTP 功能并注册设备。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/127762903d51cddc11c728e4cff9146564a75bd7

@@ -1,0 +1,20 @@
+#标题
+KVM nSVM嵌套VMRUN映射失败未正确注入#GP异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在KVM嵌套虚拟化场景下（nSVM），当执行nested VMRUN指令时，若映射VMCB12（Virtual Machine Control Block）失败（例如返回-EFAULT），系统未向客户机注入一般保护性异常（#GP），而是错误地跳过该指令继续执行。这导致客户机无法感知VMCB地址无效或映射错误，可能导致客户机状态不一致或后续不可预测的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `nested_svm_vmrun` 中，调用 `kvm_vcpu_map` 映射 VMCB12 失败时的处理逻辑存在缺陷。原代码仅当 `kvm_vcpu_map` 返回 `-EINVAL` 时才注入 #GP，若返回其他错误码（如 `-EFAULT`，通常由创建主机映射失败引起），代码会直接跳过模拟指令并返回，未注入任何异常。这种差异化处理没有合理依据，导致部分映射失败场景下客户机行为异常。
+
+#解决方案
+修改 `nested_svm_vmrun` 中的错误处理逻辑，只要 `kvm_vcpu_map` 返回非零值（即任何失败情况），统一向客户机注入 #GP 异常，并删除对特定错误码 `-EINVAL` 的判断及原有的 `kvm_skip_emulated_instruction` 分支。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3d7fa83a4c4a024136a3acfbe4cdceaeb491e45e

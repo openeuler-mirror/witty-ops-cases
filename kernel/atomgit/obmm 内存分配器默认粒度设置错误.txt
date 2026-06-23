@@ -1,0 +1,21 @@
+#标题
+obmm 内存分配器默认粒度设置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当加载 obmm 模块时，若用户未指定 `mem_allocator_granu` 参数，内存分配器未能使用正确的默认粒度。在默认使用 `buddy_highmem` 分配器时，系统未正确设置内存段大小（`__obmm_memseg_size`），导致内存池分配行为与预期不符（预期应使用 PMD_SIZE 作为默认粒度），可能引发内存分配或映射层面的功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `init_mem_allocator_granu` 函数中，设置默认内存段大小的逻辑存在缺陷。原代码仅判断了 `aid == ALLOCATOR_HUGETLB_PMD` 的情况，导致当分配器类型为其他类型（如默认的 `buddy_highmem`）时，`__obmm_memseg_size` 未被初始化为 `PMD_SIZE`，从而导致默认粒度配置失效。同时，模块参数描述中也未正确更新默认分配器的说明。
+
+#解决方案
+1. 修改 `init_mem_allocator_granu` 函数逻辑，将原本的 `else if (aid == ALLOCATOR_HUGETLB_PMD)` 改为 `else`，确保除 `ALLOCATOR_HUGETLB_PUD` 外的所有情况（包括默认的 `buddy_highmem`）均将 `__obmm_memseg_size` 设置为 `PMD_SIZE`。
+2. 更新模块参数 `mempool_allocator` 的描述信息，将默认行为说明从 "use kernel cmdline pmd_mapping to select" 更正为 "use buddy_highmem allocator"。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ea4c8becb21ef7761cb9948ac5a6a5e748deef98

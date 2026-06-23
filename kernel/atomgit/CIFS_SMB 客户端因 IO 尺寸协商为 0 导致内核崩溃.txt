@@ -1,0 +1,23 @@
+#标题
+CIFS/SMB 客户端因 IO 尺寸协商为 0 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在使用 CIFS/SMB 挂载时，若协商结果导致读尺寸（rsize）或写尺寸（wsize）为零，会引发内核崩溃；或者先前因该问题触发了 `-EINVAL` 错误导致挂载失败，日志显示 "Negotiated rsize is 0"。
+
+#主要错误日志
+- cifs_dbg(VFS, "Negotiated rsize is 0, get connect failed\n"); (源自被回退的临时补丁)
+- cifs_dbg(VFS, "SMB: Zero %ssize calculated, using minimum value %u\n", type, CIFS_MIN_DEFAULT_IOSIZE); (修复补丁中的防护日志)
+
+#问题根因
+SMB 客户端在协商 IO 尺寸（rsize/wsize）时，受限于服务端能力参数（如 max_read/max_write）或用户配置值，计算结果可能为零。内核代码未对零值进行有效防护，导致后续内存分配或数据处理逻辑出现非法操作引发崩溃。
+
+#解决方案
+1. 引入 `prevent_zero_iosize` 函数，在 IO 尺寸协商结果为零时强制设置为最小推荐值 65536 (CIFS_MIN_DEFAULT_IOSIZE)，防止零尺寸 IO。
+2. 增加原始用户配置参数（vol_rsize/vol_wsize）的存储与使用，确保重协商时依据原始配置而非中间计算值。
+3. 建立 tcon（树连接）与 superblock（超级块）的反向映射链表，支持在重连（reconnection）场景下动态更新各超级块的 IO 尺寸。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/26f886b5e12462301545ba34ce4ee8a66d31af8b

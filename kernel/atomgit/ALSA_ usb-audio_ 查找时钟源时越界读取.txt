@@ -1,0 +1,20 @@
+#标题
+ALSA: usb-audio: 查找时钟源时越界读取
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在处理 USB 音频设备时钟源查找时，若设备提供的 USB 描述符（clock source/selector/multiplier）的 bLength 字段小于预期结构体大小，内核将发生越界读取。该缺陷可能导致内核内存信息泄露或触发内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在 `sound/usb/clock.c` 的 `validate_clock_source`、`validate_clock_selector` 和 `validate_clock_multiplier` 函数中，直接访问 USB 描述符联合体的成员字段，未预先检查描述符的 `bLength` 是否满足 UAC_VERSION_2 或 UAC_VERSION_3 协议规定的最小结构体长度。对于 clock selector，也未检查长度是否足够容纳 `bNrInPins` 指定数量的数组元素及后续字段。
+
+#解决方案
+在 `validate_clock_source`、`validate_clock_selector` 和 `validate_clock_multiplier` 函数入口处增加长度校验逻辑。新增 `DESC_LENGTH_CHECK` 宏用于检查描述符长度是否不小于对应协议版本的结构体大小。对于 clock selector，额外校验长度是否足够包含其引脚数组及控制字段，防止越界读取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bd49829efa226e182e97e38e33230038d4d3a4bc

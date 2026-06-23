@@ -1,0 +1,27 @@
+#标题
+net: usb: rtl8150: 修复 rtl8150_start_xmit 中的 use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 rtl8150 网卡驱动发送数据包时，触发 KASAN 检测到的 slab-use-after-free 错误。具体表现为在 `rtl8150_start_xmit` 函数中访问 `skb->len` 用于发送统计时，该 skb 已被 URB 完成回调函数释放。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in rtl8150_start_xmit+0x71f/0x760
+drivers/net/usb/rtl8150.c:712
+Read of size 4 at addr ffff88810eb7a930 by task kworker/0:4/5226
+
+#问题根因
+由于 USB URB 提交与完成处理之间存在竞态条件，导致 Use-After-Free。
+CPU A（发送线程）在调用 `usb_submit_urb()` 提交 URB 后，试图读取 `skb->len` 更新统计信息。此时，CPU B（USB 完成软中断）可能已经执行了 `write_bulk_callback()`，调用了 `dev_kfree_skb_irq()` 将 skb 加入释放队列，并最终由 `net_tx_action()` 释放了该 skb。
+时序如下：
+1. CPU A: `dev->tx_skb = skb;` 并提交 URB。
+2. CPU B: URB 快速完成，回调函数 `write_bulk_callback()` 执行 `dev_kfree_skb_irq(dev->tx_skb)`，skb 被释放。
+3. CPU A: 继续执行 `netdev->stats.tx_bytes += skb->len;`，此时访问的是已释放的内存，触发 UAF。
+
+#解决方案
+在提交 URB 之前，先将 `skb->len` 的值缓存到一个局部变量 `skb_len` 中。在 URB 提交返回后，使用该缓存变量 `skb_len` 来更新发送字节数统计，而不是访问可能已被释放的 `skb->len`。这样既修复了 UAF 问题，又保持了原有的统计语义（统计原始帧长度）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e38c3e8e5cde19244ae5f7c3e7626930684eb1b

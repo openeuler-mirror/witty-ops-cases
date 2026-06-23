@@ -1,0 +1,20 @@
+#标题
+Bluetooth: MGMT Add Device 命令响应状态码错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 Add Device 操作（特别是 LE 类型）时，由于需要更新 resolving/accept 列表涉及多个硬件命令，流程可能存在失败情况。原实现在命令同步队列调用返回前就发送了命令完成事件，导致上层调用者收到成功的响应，但实际底层硬件命令可能尚未执行完毕或执行失败，掩盖了真实的错误状态。
+
+#主要错误日志
+未知
+
+#问题根因
+Add Device with LE type 要求更新 resolving/accept 列表，这需要相当多的命令才能完成，且每个命令都可能失败。原有代码逻辑未正确处理 `hci_update_passive_scan_sync` 的返回值，而是假定操作总是成功，并在命令真正执行完成前就向用户空间返回了成功响应，导致响应状态与实际执行结果不一致。
+
+#解决方案
+修改 `add_device` 函数逻辑，引入 `add_device_complete` 回调函数。通过 `mgmt_pending_new` 创建 pending 命令上下文，将其传递给 `hci_cmd_sync_queue`。在 `add_device_complete` 回调中根据传入的 `err` 参数判断执行结果：仅在成功时发送 `device_added` 和 `device_flags_changed` 事件；最终通过 `mgmt_cmd_complete` 返回真实的命令执行状态（成功或失败），确保用户空间收到的响应与底层实际执行结果一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca52c95495a4c136ccfc02e654ae8ce543b86c03

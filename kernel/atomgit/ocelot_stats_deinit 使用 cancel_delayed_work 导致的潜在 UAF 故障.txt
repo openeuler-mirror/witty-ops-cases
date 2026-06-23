@@ -1,0 +1,20 @@
+#标题
+ocelot_stats_deinit 使用 cancel_delayed_work 导致的潜在 UAF 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 Ocelot 网络驱动或执行设备去初始化流程时，内核可能发生 Use-After-Free（UAF）或内核崩溃。这是由于在销毁工作队列前，未能正确同步等待进行中的统计工作队列执行完毕，导致工作队列在执行时访问已释放资源。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ocelot_stats_deinit` 函数中，原代码使用 `cancel_delayed_work` 仅仅是将延迟工作从队列中移除，但不会等待正在执行的工作完成。紧接着调用 `destroy_workqueue` 销毁了工作队列，如果此时统计工作正在执行中，会导致访问已释放的资源，引发内核崩溃。
+
+#解决方案
+将 `cancel_delayed_work` 替换为 `disable_delayed_work_sync`。后者不仅会取消延迟工作，还会同步等待正在执行的工作完成，确保在调用 `destroy_workqueue` 销毁队列前，没有任何正在运行的统计任务，从而避免 UAF 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cfd49ea88c87c4bb93e63f57638c48363b882fa2

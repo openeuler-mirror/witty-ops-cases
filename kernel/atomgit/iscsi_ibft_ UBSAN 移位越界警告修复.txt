@@ -1,0 +1,20 @@
+#标题
+iscsi_ibft: UBSAN 移位越界警告修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在访问 iBFT (iSCSI Boot Firmware Table) 接口读取网卡配置信息时，若 `subnet_mask_prefix` 值异常，内核触发 UBSAN (Undefined Behavior Sanitizer) "shift-out-of-bounds" 警告。该问题可能影响系统启动过程中的 iSCSI 参数解析或相关的用户空间工具读取信息。
+
+#主要错误日志
+UBSAN: shift-out-of-bounds in drivers/firmware/iscsi_ibft.c
+
+#问题根因
+在 `ibft_attr_show_nic` 函数处理子网掩码逻辑中，计算表达式 `1 << (32-nic->subnet_mask_prefix)` 未对 `nic->subnet_mask_prefix` 的值进行边界检查。当该值大于 32 时，移位操作 `(32-nic->subnet_mask_prefix)` 产生负值或过大值，导致移位越界，触发 UBSAN 警告。
+
+#解决方案
+在执行移位操作前增加边界判断：若 `nic->subnet_mask_prefix` 大于 32，直接将子网掩码值 `val` 设为全 1（即 `~0`）；否则执行原有的移位计算逻辑。此修复防止了非法移位操作的发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0f4b96d770b3a2dd632192854543859e537e41e0

@@ -1,0 +1,20 @@
+#标题
+btrfs: __btrfs_balance 中 BUG() 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 Btrfs 文件系统平衡操作时，若内核搜索 offset 为 (u64)-1 的项并意外匹配到 CHUNK_ITEM，系统触发 BUG() 导致内核崩溃。
+
+#主要错误日志
+btrfs: unexpected exact match of CHUNK_ITEM in chunk tree, offset 0x%llx
+
+#问题根因
+在函数 __btrfs_balance 中，代码搜索 offset 为 (u64)-1 的项，预期逻辑是该值不应存在精确匹配。如果返回值 ret 为 0 表示找到了精确匹配，这意味着上一次 relocate 操作失败或状态异常。原代码直接调用 BUG() 处理此异常情况，导致系统非预期崩溃。
+
+#解决方案
+将 BUG() 调用替换为正常的错误处理逻辑。当检测到意外的精确匹配时，通过 btrfs_err 打印错误日志，释放锁（reclaim_bgs_lock），返回错误码 -EUCLEAN，并跳转至错误处理流程，从而避免系统崩溃并允许上层处理该错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e722a29823d33bf79862944ac014941474e665b8

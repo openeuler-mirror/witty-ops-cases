@@ -1,0 +1,22 @@
+#标题
+udf: 挂载特定UDF镜像导致堆越界写
+
+#内核版本
+OLK-6.6
+
+#问题现象
+挂载构造的、包含重复分区描述符的 UDF 镜像文件时，内核可能触发堆越界写，存在导致内核崩溃或内存破坏的风险。
+
+#主要错误日志
+未知
+
+#问题根因
+handle_partition_descriptor() 函数虽然通过分区号对重复项进行了去重检查，但新追加的 slot 未记录 partnum。这导致后续重复的分区描述符被不断追加，num_part_descs 持续增长。
+当表空间满时，扩容逻辑错误地依据 partnum 计算新容量。如果 partnum 已按 PART_DESC_ALLOC_STEP 对齐，ALIGN(partnum, PART_DESC_ALLOC_STEP) 计算出的新大小可能与旧容量相同，导致容量未实际增加，从而在后续追加操作时写入到数组边界之外。
+
+#解决方案
+1. 在追加新条目时，显式存储 partnum 到对应的 slot 中，确保去重逻辑生效。
+2. 修正扩容计算逻辑，将容量计算基数从 partnum 改为 data->num_part_descs，确保扩容大小准确反映当前追加计数，避免容量计算错误导致的越界写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b0e83e1dfb6ab57a357866d3bc2be319ae237bcc

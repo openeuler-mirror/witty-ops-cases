@@ -1,0 +1,20 @@
+#标题
+net: atlantic: fix fragment overflow handling in RX path
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 aquantia/atlantic 网卡驱动进行数据包接收时，若接收到非 EOP（End of Packet）且数据长度大于 `AQ_CFG_RX_HDR_SIZE` 的报文，内核在处理接收环缓冲区时会因片段计数（frag_cnt）计算错误而引发内存越界或数据损坏，可能导致系统崩溃或网络功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__aq_ring_rx_clean` 函数处理非 EOP 报文时，代码逻辑遗漏了对“额外片段”的计数。当报文头（buff->len）大于 `AQ_CFG_RX_HDR_SIZE` 时，会存在一个额外的 fragment，但初始的 `frag_cnt` 未将其计入，导致后续循环处理片段时计数偏小，进而引发溢出处理错误。
+
+#解决方案
+在 `__aq_ring_rx_clean` 函数中，处理非 EOP 报文的逻辑起始处增加判断：如果 `buff->len > AQ_CFG_RX_HDR_SIZE`，则将 `frag_cnt` 自增 1，以提前计入额外片段，从而修正片段计数逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4178017bcf146dfb89e9220297054e6964128d50

@@ -1,0 +1,23 @@
+#标题
+ACPI: processor: 修复 acpi_processor_errata_piix4 中的空指针解引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定硬件环境下（PIIX4 芯片组），如果内核在查找 IDE 设备成功但随后查找 ISA 设备失败，会导致局部变量 `dev` 被覆写为 NULL。后续代码在调用 `dev_dbg()` 打印调试信息时，会解引用该空指针，引发内核空指针解引用错误，可能导致内核崩溃或异常终止。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference
+
+#问题根因
+在函数 `acpi_processor_errata_piix4()` 中，代码逻辑复用同一个指针变量 `dev` 来先后查找 IDE 设备和 ISA 设备：
+1. 首先调用 `pci_get_subsys()` 查找 IDE 设备，若成功 `dev` 为有效指针。
+2. 随后调用 `pci_get_subsys()` 查找 ISA 设备，若此时查找失败，`dev` 会被赋值为 NULL，覆盖了之前的有效指针。
+3. 函数末尾在条件满足时执行 `dev_dbg(&dev->dev, ...)`，由于此时 `dev` 已为 NULL，导致发生空指针解引用。
+
+#解决方案
+引入两个独立的临时指针变量 `ide_dev` 和 `isa_dev` 分别用于获取 IDE 设备和 ISA 设备，避免因复用同一变量导致有效指针被 NULL 值覆盖。修复后，`dev_dbg()` 打印逻辑分别依据 `ide_dev` 和 `isa_dev` 是否为空来执行，确保不会访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3f628a9eb3d4167604831bbb830347165b6f5d60

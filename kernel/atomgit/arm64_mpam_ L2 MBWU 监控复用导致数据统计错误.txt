@@ -1,0 +1,20 @@
+#标题
+arm64/mpam: L2 MBWU 监控复用导致数据统计错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 MPAM（Memory System Resource Partitioning and Monitoring）架构下，对 L2 缓存的 MBWU（Memory Bandwidth Usage）监控数据进行读取时，若发生监控器复用或配置重置，会导致带宽统计数据计算错误，无法正确反映实际的内存带宽使用情况。
+
+#主要错误日志
+未知
+
+#问题根因
+在 MBWU 监控复用场景下，当检测到配置不匹配或需要重置时，代码逻辑虽然重新配置了监控寄存器，但未能同步清零软件侧维护的 `mbwu_state` 状态结构体。具体而言，`mbwu_state->prev_val`（上一次读取值）和 `mbwu_state->correction`（校正因子）保留了旧监控实例的数据，导致后续带宽计算基于错误的基准值进行累加，从而引发统计结果异常。
+
+#解决方案
+在 `__ris_msmon_read` 函数中，当发生配置不匹配或重置时，在重新写入监控控制与过滤寄存器后，增加对 `mbwu_state` 指针的有效性检查，并将状态结构体中的 `prev_val` 和 `correction` 成员清零，同时重置 `mbwu_overflow` 标志位，确保监控数据的基准与当前配置一致，保证统计数据的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3ea5f22e524ec73c59d3e6f53a51ad29fce2f7d7

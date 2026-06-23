@@ -1,0 +1,25 @@
+#标题
+sound: ua101: 驱动探测时因除零错误导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当连接特定的 USB 音频设备（如 Edirol UA-101 兼容设备）且设备提供的通道数描述符字段 `bNrChannels` 为 0 时，驱动在探测阶段触发除零错误，导致内核崩溃。
+
+#主要错误日志
+- 推断日志（探测失败时打印）：
+  `invalid channel count: capture 0, playback 0`
+- 推断日志（触发崩溃时）：
+  `kernel: Divide error: 0000 [#1]`
+  `kernel: CPU: X PID: X Comm: kworker/... Not tainted`
+  `kernel: RIP: playback_urb_complete` 或 `capture_urb_complete`
+
+#问题根因
+USB 核心层不会校验类特定描述符字段（如 `bNrChannels`）。驱动程序 `ua101` 在 `detect_usb_format()` 函数中未对从设备读取的 `bNrChannels` 进行有效性检查，直接将其用于计算 `frame_bytes`。若设备返回 `bNrChannels` 为 0，则计算出的 `frame_bytes` 也为 0。随后在 `playback_urb_complete()` 和 `capture_urb_complete()` 中，代码将 `frame_bytes` 用作除数进行运算，从而触发除零错误导致内核 Panic。
+
+#解决方案
+在 `detect_usb_format()` 函数中增加对 `bNrChannels` 的合法性检查。如果 `capture.channels` 或 `playback.channels` 为 0，则判定描述符无效，打印错误日志并返回 `-EINVAL` 错误码，终止探测流程以避免后续的除零崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b3a2b274e59d7caf8ea647322778297ab8600822

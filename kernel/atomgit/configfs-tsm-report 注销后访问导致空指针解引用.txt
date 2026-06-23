@@ -1,0 +1,24 @@
+#标题
+configfs-tsm-report 注销后访问导致空指针解引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TSM（Trusted Security Module）后端驱动注销（unbind/remove）后，若用户空间未清理 configfs 中的相关配置项，此时通过 configfs 接口访问 `privlevel`、`privlevel_floor` 或 `provider` 属性，将触发内核空指针解引用（NULL dereference），导致内核崩溃或异常行为。
+
+#主要错误日志
+- `configfs/tsm/report not empty`（推断：注册时若存在残留项）
+- `"\"%s\" unregistered with items present in configfs/tsm/report\n"`（推断：注销时若存在残留项）
+
+#问题根因
+configfs 对象的生命周期由用户空间控制，内核无法自动删除已创建的 config-item。代码预期 `tsm_unregister()` 可以随时发生并使后续访问失败，但部分接口函数（`tsm_report_privlevel_store()`、`tsm_report_privlevel_floor_show()`、`tsm_report_provider_show()`）在访问 `provider.ops` 前缺少对 ops 注册状态的检查。当驱动注销后 `provider.ops` 被置空，这些接口未做判断直接访问，导致 NULL dereference。
+
+#解决方案
+在相关 show/store 回调函数中增加 `provider.ops` 非空检查，若已注销则返回 `-ENXIO` 错误，防止访问空指针。具体修改包括：
+1. `tsm_report_privlevel_store()` 中将锁检查移至 ops 访问之前，增加 `!provider.ops` 判断。
+2. `tsm_report_privlevel_floor_show()` 和 `tsm_report_provider_show()` 中增加 `!provider.ops` 判断。
+3. 引入原子计数器 `provider.count` 跟踪 config-item 数量，确保注销流程的安全性，并在注册/注销时检查计数状态以提示用户清理残留配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b66201d52cf03e6ac1ec7d43f70a1c6f8752451d

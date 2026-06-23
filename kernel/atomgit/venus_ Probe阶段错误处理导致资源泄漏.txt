@@ -1,0 +1,23 @@
+#标题
+venus: Probe阶段错误处理导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Venus 驱动 probe 过程中，若在视频设备注册之后的步骤发生错误（例如固件缺失导致 probe 中止），驱动无法正确释放已分配的资源，导致出现悬空的视频设备对象或内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+视频设备注册操作被提前到了 probe 函数的较早阶段，但相应的错误处理代码（goto 跳转标签）未跟随更新。原有的错误处理流程未覆盖新注册的视频设备，导致在后续步骤出错时，已注册的 video device 无法被 unregister，同时部分资源释放顺序混乱。
+
+#解决方案
+调整 `venus_probe` 函数中错误处理路径的 goto 跳转逻辑，确保资源释放顺序与申请顺序严格相反。具体修复包括：
+1. 在 `v4l2_device_register` 失败时，跳转至 `err_hfi_destroy` 以销毁 hfi 实例。
+2. 在 `venus_enumerate_codecs` 或 `pm_runtime_put_sync` 失败时，跳转至 `err_core_deinit` 以执行核心反初始化。
+3. 在最后的清理代码段中，确保先调用 `v4l2_device_unregister` 注销设备，再调用 `hfi_destroy` 销毁 hfi 实例，修复资源未释放的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/208e97a79b1031e7672d741e4e4bcfeb07bd2a80

@@ -1,0 +1,20 @@
+#标题
+regulator: fixed 修复注册失败时 enable GPIO 双重释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在固定电压调节器注册失败的场景下，驱动程序试图手动释放 enable GPIO 描述符。由于调节器核心层在注册过程中已经接管了该 GPIO 的所有权并负责释放，这导致该 GPIO 被重复释放，引发内核资源管理错误或异常行为。
+
+#主要错误日志
+Failed to register regulator: %ld
+
+#问题根因
+`regulator_register()` 函数为了简化 GPIO 的所有权规则，总是接管驱动提供的 enable GPIOs 的所有权，即使注册最终失败，核心层也会负责释放该 GPIO。原代码逻辑错误地认为注册失败时核心层未接管 GPIO，从而在错误处理路径中调用了 `gpiod_put(cfg.ena_gpiod)`，导致 GPIO 被核心层和驱动层双重释放。
+
+#解决方案
+移除 `reg_fixed_voltage_probe` 函数中注册失败时的 `gpiod_put(cfg.ena_gpiod)` 调用，完全依赖调节器核心层来处理 enable GPIO 的生命周期管理。同时移除不再需要的临时变量 `ret`，直接返回 `dev_err_probe` 的结果。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b61500e49a62279288f5b661013232ee7f4751f

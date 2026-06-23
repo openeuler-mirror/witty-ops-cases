@@ -1,0 +1,20 @@
+#标题
+ksmbd: 使用 list_first_entry_or_null 修复空链表访问导致的潜在内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 KSMBD 模块处理 SMB oplock 请求时，若 `ci->m_op_list` 链表为空，内核会尝试解引用一个无效指针，可能导致内核 panic 或内存崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中使用 `list_first_entry()` 宏来获取链表首元素，但该宏在设计上永远不会返回 NULL。如果链表为空，它会返回一个无效的指针（非 NULL）。原代码虽然在加锁前通过 `list_empty()` 进行了检查，但在并发场景下，加锁前后的链表状态可能发生变化，或者在逻辑路径中对返回值的 NULL 检查不足，导致对无效指针进行访问。
+
+#解决方案
+将 `list_first_entry()` 替换为 `list_first_entry_or_null()`。该宏在链表为空时会安全地返回 NULL，从而允许代码正确处理链表为空的情况，避免访问无效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7114b8bbb1b8f2f486db2c89db3b59c2993d36a8

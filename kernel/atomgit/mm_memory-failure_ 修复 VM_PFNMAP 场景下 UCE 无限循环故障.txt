@@ -1,0 +1,21 @@
+#标题
+mm/memory-failure: 修复 VM_PFNMAP 场景下 UCE 无限循环故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统对已存在硬件中毒的页帧号调用 memory_failure() 时，如果访问该内存的进程地址空间包含 VM_PFNMAP 类型的 VMA，内核无法正确处理该故障。具体表现为：用户态任务在触发不可纠正错误（UCE）后未被终止，而是陷入无限循环，反复触发 UCE，导致系统负载异常或服务不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+在调用 memory_failure() 处理已中毒的 pfn 时，会调用 kill_accessing_process() 尝试终止当前任务。然而，如果访问异常内存地址的 VMA 类型为 VM_PFNMAP，内核函数 walk_page_range() 会在 walk_page_test() 中默认跳过该 VMA 并返回 0。
+此前提交 aaf99ac2ceb7 ("mm/hwpoison: do not send SIGBUS to processes with recovered clean pages") 修改了返回值逻辑，使得 kill_accessing_process() 在此场景下返回 0（表示已处理），但实际上并未真正处理 VM_PFNMAP 中的异常页面。这导致内核误认为故障已解决而未发送信号终止进程，进而导致用户任务持续触发 UCE。
+
+#解决方案
+在 hwpoison_walk_ops 结构体中添加 .test_walk 回调函数 hwpoison_test_walk。该函数强制返回 0，使得 walk_page_range() 不再跳过 VM_PFNMAP 类型的 VMA，而是继续扫描以识别和处理硬件中毒页面，从而确保进程能被正确终止，打破 UCE 无限循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9f34d6227c7cba1e4f6920d30d3dff0391f622b2

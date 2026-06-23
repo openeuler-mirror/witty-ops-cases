@@ -1,0 +1,23 @@
+#标题
+drm/ssd130x: 修复禁用平面 atomic_check 错误返回 EINVAL 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 DRM 平面处于禁用状态时，驱动程序的 `atomic_check` 回调函数错误地返回 `-EINVAL`，导致原子检查阶段失败，这可能导致显示配置更新被错误拒绝，影响正常的显示关闭或平面禁用流程。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ssd130x_primary_plane_helper_atomic_check` 函数中，代码逻辑直接检查 `plane_state->crtc` 是否存在。如果 CRTC 未设置（即平面被禁用的情况），函数直接返回 `-EINVAL`。然而，根据 DRM 子系统的规范，对于禁用的平面，`atomic_check` 应当返回 0 表示成功。此外，原代码逻辑在平面禁用时也遗漏了对 `drm_atomic_helper_check_plane_state()` 的必须调用。
+
+#解决方案
+重构 `atomic_check` 的入口逻辑，采用标准的样板代码模式：
+1. 不再直接针对 `!crtc` 返回 `-EINVAL`，而是先根据 CRTC 是否存在获取对应的 `crtc_state`。
+2. 调用 `drm_atomic_helper_check_plane_state()` 函数进行通用状态检查。
+3. 检查 `plane_state->visible` 标志位，如果平面不可见（即处于禁用状态），则直接返回 0，从而正确处理禁用平面的情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f562742762e119d6eafb27110729ae70541da2f4

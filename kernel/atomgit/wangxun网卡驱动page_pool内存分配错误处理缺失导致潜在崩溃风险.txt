@@ -1,0 +1,20 @@
+#标题
+wangxun网卡驱动page_pool内存分配错误处理缺失导致潜在崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统内存紧张或资源耗尽场景下，wangxun网卡驱动进行报文接收内存分配时，可能触发内核WARN_ON告警；若继续执行后续流程，可能导致内核空指针引用引发panic或数据路径异常。
+
+#主要错误日志
+内核日志中可能出现包含 `WARNING: CPU: ...` 的调用栈信息，且调用栈指向 `wx_alloc_mapped_page` 函数。
+
+#问题根因
+在 `wx_alloc_mapped_page` 函数中，调用 `page_pool_dev_alloc_pages` 分配内存页时，返回值可能为 NULL（表示内存分配失败）。原代码仅使用 `WARN_ON(!page)` 进行告警，并未终止后续流程。如果 `page` 为 NULL，后续 `page_pool_get_dma_addr(page)` 操作将引发空指针解引用（NULL pointer dereference），导致内核崩溃。
+
+#解决方案
+修改 `drivers/net/ethernet/wangxun/libwx/wx_lib.c` 文件，移除 `WARN_ON(!page)` 断言，改为使用 `unlikely` 修饰符判断 `page` 是否为空。若分配失败直接返回 `false`，由上层调用逻辑处理内存分配失败的情况，从而避免空指针引用导致的内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2d9390ee0d159e2006323d8aa5400008a7677bed

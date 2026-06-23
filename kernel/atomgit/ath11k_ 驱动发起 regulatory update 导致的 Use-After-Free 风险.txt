@@ -1,0 +1,24 @@
+#标题
+ath11k: 驱动发起 regulatory update 导致的 Use-After-Free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在处理 WiFi 驱动发起的 regulatory domain（regd）更新时，可能触发内核崩溃或内存非法访问。该问题关联 CVE-2025-23133 安全漏洞。
+
+#主要错误日志
+- ath11k_warn(ar->ab, "failed to update channel list: %d\n", ret);
+- ath11k_warn(ab, "failed to perform regd update : %d\n", ret);
+
+#问题根因
+在原有代码逻辑中，当驱动发起 regulatory update 时，通道列表的更新操作被推迟到 `ath11k_regd_update` 函数中通过工作队列执行。此时硬件可能已经处于非正常工作状态或资源已被释放，导致在更新通道列表时访问无效内存，引发 Use-After-Free 风险。
+
+#解决方案
+将通道列表的更新操作提前到 reg notifier 回调函数中直接执行，而不是推迟到工作队列中。
+1. 在 `ath11k_reg_notifier` 中增加判断：如果 `request->initiator` 为 `NL80211_REGDOM_SET_BY_DRIVER`，且设备状态为 `ATH11K_STATE_ON`，则立即调用 `ath11k_reg_update_chan_list` 更新通道列表。
+2. 从 `ath11k_regd_update` 函数中移除原有的通道列表更新逻辑，避免在异步上下文中执行该操作。
+3. 在 `ath11k_reg_init` 中设置 `WIPHY_FLAG_NOTIFY_REGDOM_BY_DRIVER` 标志位，表明驱动将自行处理 regulatory domain 的更新通知。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/325ede91d26bb5b4fb9db4deeaf0ebd87560eef5

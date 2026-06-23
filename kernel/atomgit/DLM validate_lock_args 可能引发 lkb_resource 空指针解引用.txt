@@ -1,0 +1,21 @@
+#标题
+DLM validate_lock_args 可能引发 lkb_resource 空指针解引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DLM（Distributed Lock Manager）处理锁请求时，若 `validate_lock_args()` 函数在特定路径（如 `request_lock` 调用链）下执行，可能触发空指针解引用，导致内核 panic 或 oops。此外，尝试打印资源名称时，可能因资源名为非 ASCII 字节序列导致日志打印异常。
+
+#主要错误日志
+推断日志格式（基于代码变更）：
+`validate_lock_args %d %x %x %x %d %d %s`
+
+#问题根因
+在 `validate_lock_args()` 函数中，代码尝试访问 `lkb->lkb_resource->res_name` 进行日志打印。然而，当该函数被 `request_lock()` 调用时，`lkb->lkb_resource` 尚未赋值（需在 `validate_lock_args()` 之后通过 `attach_lkb()` 调用才会分配），此时直接访问该成员会导致空指针解引用。同时，资源名称本应是二进制字节数组，代码错误地将其作为 ASCII 字符串打印也存在格式问题。
+
+#解决方案
+修改 `fs/dlm/lock.c` 中的 `validate_lock_args()` 函数，移除日志打印中对 `lkb->lkb_resource->res_name` 的引用。仅保留 `lkb_id` 等关键信息，通过 `lkb_id` 即可关联到对应的资源名称，从而避免空指针访问并修正日志格式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/07c1d675586b6c6dd5dc348cbdd1fe0e3cbcf07c

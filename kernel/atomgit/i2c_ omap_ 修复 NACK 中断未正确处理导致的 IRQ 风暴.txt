@@ -1,0 +1,29 @@
+#标题
+i2c: omap: 修复 NACK 中断未正确处理导致的 IRQ 风暴
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 GTA04A5 设备上向陀螺仪发送复位命令（如 `i2cset 1 0x69 0x14 0xb6`）时，系统发生 IRQ 中断风暴，导致系统挂起或无响应。内核日志中会出现大量重复的 IRQ 日志，直至系统资源耗尽。
+
+#主要错误日志
+[ 363.353515] i2c i2c-1: ioctl, cmd=0x720, arg=0xbe801b00
+[ 363.359039] omap_i2c 48072000.i2c: addr: 0x0069, len: 2, flags: 0x0, stop: 1
+[ 363.366180] omap_i2c 48072000.i2c: IRQ LL (ISR = 0x1110)
+[ 363.371673] omap_i2c 48072000.i2c: IRQ (ISR = 0x0010)
+[ 363.376892] omap_i2c 48072000.i2c: IRQ LL (ISR = 0x0102)
+[ 363.382263] omap_i2c 48072000.i2c: IRQ LL (ISR = 0x0102)
+[ 363.387664] omap_i2c 48072000.i2c: IRQ LL (ISR = 0x0102)
+repeating till infinity
+
+#问题根因
+NACK 中断被启用但未被正确确认。在 `omap_i2c_isr` 中断处理程序中，mask 计算逻辑显式排除了 `OMAP_I2C_STAT_NACK`（`mask = omap_i2c_read_reg(omap, OMAP_I2C_IE_REG) & ~OMAP_I2C_STAT_NACK`），导致 NACK 中断状态位未被处理和清除。当向设备发送复位命令触发 NACK 时，中断被反复触发但无法被 Ack，从而引发中断风暴。
+
+#解决方案
+1. 移除 `omap_i2c_isr` 硬中断处理函数，直接使用线程化中断处理，消除了在硬中断上下文中屏蔽 NACK 的问题。
+2. 在 `omap_i2c_xfer_data` 函数中，正确处理 NACK 状态位：设置 `cmd_err`，显式调用 `omap_i2c_ack_stat` 清除中断标志，并增加判断逻辑，若仅有 NACK 状态则返回 `-EAGAIN` 以避免误报或挂起。
+此修复避免了系统挂起，将其转换为返回 `-ETIMEDOUT` 错误，同时保留了针对标准模式误报 ACK 的修复逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e9b2c7e1b75ee100f0f9006d113c74e6d53e1324

@@ -1,0 +1,22 @@
+#标题
+perf: VHE模式下BRBE寄存器配置错误导致分支记录功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了VHE（Virtualization Host Extensions）特性的ARM架构宿主机上，使用perf工具进行分支记录采样时功能异常。具体表现为：宿主机侧的分支记录功能未按预期工作，可能导致采样的分支数据不正确或缺失，无法准确进行性能分析。
+
+#主要错误日志
+未知
+
+#问题根因
+在VHE模式下，当MDCR_EL2.HPMN设置为PMCR_EL0.N时，计数器由BRBCR_EL1控制，而不是BRBCR_EL2（此时对BRBCR_EL2的写入会被重定向到BRBCR_EL1）。原有代码逻辑仅配置了SYS_BRBCR_EL1，导致在VHE模式下，BRBE（Branch Record Buffer Extension）控制寄存器的配置状态不正确，进而影响分支记录功能。
+
+#解决方案
+在分支记录的使能和去使能流程中增加对VHE模式的判断处理：
+1. 在`armv8pmu_branch_enable`函数中，若检测到内核运行在Hyp模式（`is_kernel_in_hyp_mode()`），需同步配置SYS_BRBCR_EL12寄存器，值与BRBCR_EL1保持一致，但需清除`BRBCR_ELx_ExBRE`和`BRBCR_ELx_E0BRE`位以禁止在客户机（EL1和EL0）中记录。
+2. 在`armv8pmu_branch_disable`函数中，同样需在VHE模式下同步配置SYS_BRBCR_EL12寄存器以确保状态一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e3430dbd61304f87e970017c7e21bc91d03667d4

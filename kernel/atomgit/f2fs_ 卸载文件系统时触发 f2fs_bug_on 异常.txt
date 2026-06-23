@@ -1,0 +1,20 @@
+#标题
+f2fs: 卸载文件系统时触发 f2fs_bug_on 异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载文件系统（uninstalling filesystem）过程中，调用 f2fs_evict_inode 时触发了 f2fs_bug_on 异常，导致内核报错或系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+在调用 f2fs_write_inode 函数时，如果检测到检查点未准备好（`!f2fs_is_checkpoint_ready`），函数会直接返回 `-ENOSPC` 错误码。此时，如果 inode 是脏的（dirty），直接返回错误会导致系统在后续的 f2fs_evict_inode 流程中进入不一致状态，从而触发 f2fs_bug_on。这是因为在返回错误前未正确处理脏 inode 的状态。
+
+#解决方案
+在 `fs/f2fs/inode.c` 的 `f2fs_write_inode` 函数中，当检查点未准备好返回 `-ENOSPC` 之前，先调用 `f2fs_mark_inode_dirty_sync(inode, true)` 将 inode 标记为脏。这确保了 inode 的状态被正确保留，避免了后续卸载流程中的异常触发。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/28ca65c7470da5d4e9f313d5ce92693fdfada7f9

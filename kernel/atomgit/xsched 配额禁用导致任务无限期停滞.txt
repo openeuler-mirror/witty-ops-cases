@@ -1,0 +1,20 @@
+#标题
+xsched 配额禁用导致任务无限期停滞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 xsched 的 quota 配额被设置为 -1 或 0（即禁用状态）时，由于之前执行过配额限制操作，调度组可能一直处于 throttled（节流）状态。此时系统中无定时器触发，也未执行解节流操作，导致任务（包括 AI 工作负载）无限期停滞，无法继续运行。
+
+#主要错误日志
+未知
+
+#问题根因
+当 quota 被设置为禁用值（-1 或 0）时，内核未显式对 xsched group 执行 unthrottle（解节流）操作。如果该 group 之前因配额限制而处于 throttled 状态，它将一直保持该状态，因为没有定时器被激活来触发解节流流程，从而导致任务永久挂起。
+
+#解决方案
+重构代码逻辑，新增 `xsched_group_unthrottle` 函数用于显式解除调度组的节流状态。在 `xsched_quota_timeout_update` 函数中增加判断：当 `quota <= 0` 或 `period <= 0`（即配额禁用）时，直接调用 `xsched_group_unthrottle` 解除节流，确保任务能正常恢复运行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8952ea1a5fb98e6aebf01b3f09ba1621bf8894ff

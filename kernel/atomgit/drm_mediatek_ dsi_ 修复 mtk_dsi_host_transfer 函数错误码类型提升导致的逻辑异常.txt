@@ -1,0 +1,21 @@
+#标题
+drm/mediatek: dsi: 修复 mtk_dsi_host_transfer 函数错误码类型提升导致的逻辑异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mtk_dsi_host_transfer 函数执行过程中，当底层操作返回负数错误码（如 -EREMOTEIO 等）时，上层调用者无法正确识别错误。由于类型提升问题，原本应小于 0 的错误返回值被转换为正值，导致调用者误判操作成功，进而可能引发后续逻辑异常或隐藏硬件通信故障。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `mtk_dsi_host_transfer` 中存在类型转换 Bug。返回语句 `return ret < 0 ? ret : recv_cnt;` 涉及的类型不一致：`ret` 为 `int` 类型，`recv_cnt` 为 `u32` 类型，而函数返回值为 `ssize_t`（signed long）。根据 C 语言的类型提升规则，该三元运算符的结果会先提升为 `u32`（即负数错误码被转换为大的正整数），再隐式转换为 `ssize_t`。这导致错误码最终表现为正值，调用者将其视为成功而非错误。
+
+#解决方案
+1. 将变量 `recv_cnt` 的类型从 `u32` 修改为 `ssize_t`，确保返回语句中的类型一致性，避免错误码被错误地提升为无符号数。
+2. 调整 `DRM_INFO` 打印格式化字符串，将 `%d` 修改为 `%zd` 以匹配 `ssize_t` 类型的变量输出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/843289b672a611e8fa99cc287d7e48a550514455

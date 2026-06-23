@@ -1,0 +1,20 @@
+#标题
+RDMA/hns: kzalloc 与 kvfree 内存释放函数不匹配导致潜在内存破坏风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+HNS RoCE 驱动在处理 RoCE bonding 功能时，内存分配使用了 kmalloc 体系的 `kzalloc`，但在释放时错误地使用了 vfree 体系的 `kvfree`。这种不匹配可能导致内存释放逻辑异常，引发内核内存状态不一致，严重时可能导致内核 panic 或内存泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dealloc_die_info` 函数中，`die_info` 指针是通过 `kzalloc()` 分配的，但释放时错误地调用了 `kvfree()`。根据内核内存管理规则，`kzalloc()` 分配的内存必须使用 `kfree()` 释放，`kvfree()` 虽然在某些情况下兼容 `kfree`，但在特定配置或上下文中这种混用属于未定义行为，违反了内存分配与释放的配对原则。
+
+#解决方案
+修改 `drivers/infiniband/hw/hns/hns_roce_bond.c` 文件中 `dealloc_die_info` 函数的实现，将 `kvfree(die_info)` 替换为 `kfree(die_info)`，确保内存释放函数与分配函数 `kzalloc` 严格匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cfa4eb7bfca1c50e26d0fdc4d0d89da03967bba5

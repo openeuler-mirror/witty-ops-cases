@@ -1,0 +1,34 @@
+#标题
+f2fs: fix false alarm of lockdep on cp_global_sem lock
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核 lockdep 机制报告潜在的死锁风险。该死锁警告涉及 TCMU 设备移除、f2fs 写回、vfs_write 以及 f2fs 挂载四个上下文，形成了一个关于 `q->q_usage_counter`、`work_completion`、`gc_lock` 和 `cp_global_sem` 锁的循环依赖圈。该报警是一个误报，因为挂载上下文成功返回前， vfs_write 上下文无法访问该文件系统，实际不会发生死锁。
+
+#主要错误日志
+lockdep reported a potential deadlock:
+
+a) TCMU device removal context:
+ - call del_gendisk() to get q->q_usage_counter
+ - call start_flush_work() to get work_completion of wb->dwork
+b) f2fs writeback context:
+ - in wb_workfn(), which holds work_completion of wb->dwork
+ - call f2fs_balance_fs() to get sbi->gc_lock
+c) f2fs vfs_write context:
+ - call f2fs_gc() to get sbi->gc_lock
+ - call f2fs_write_checkpoint() to get sbi->cp_global_sem
+d) f2fs mount context:
+ - call recover_fsync_data() to get sbi->cp_global_sem
+ - call f2fs_check_and_fix_write_pointer() to call blkdev_report_zones()
+   that goes down to blk_mq_alloc_request and get q->q_usage_counter
+
+#问题根因
+lockdep 无法区分不同超级块实例中的 `cp_global_sem` 锁。在 `f2fs_fill_super` 中调用 `recover_fsync_data` 获取 `cp_global_sem` 时，lockdep 误认为该锁与其他上下文（如 vfs_write）中获取的 `cp_global_sem` 存在冲突，从而触发了误报。实际上，由于挂载过程未完成返回，vfs_write 不可能并发执行，逻辑上不存在死锁可能。
+
+#解决方案
+引入 per-superblock（per-sb）的 `cp_global_sem_key`。在 `f2fs_fill_super` 初始化过程中注册该 key，并将其设置给 `cp_global_sem` 的 `internal_rwsem`；在 `f2fs_put_super` 释放资源时注销该 key。通过这种方式，lockdep 能够正确识别不同超级块实例中的 `cp_global_sem`，从而消除误报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/88f120f69fa0d24895983fcb2c670b1478f5b6e2

@@ -1,0 +1,23 @@
+#标题
+ksmbd 流文件写入位置校验错误导致写入失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SMB 服务端处理流文件写入请求时，若文件中尚无流数据（v_len 为 0），且写入位置（*pos）为 0 时，流写入操作会错误地返回失败，导致正常的流数据写入无法进行。
+
+#主要错误日志
+pr_err("stream write position %lld is out of bounds (stream length: %zd)\n", *pos, v_len);
+
+#问题根因
+内核在进行流写入位置校验时，逻辑判断不完善。原代码使用 `if (v_len <= *pos)` 来校验写入位置是否越界，但当文件中无流数据（v_len 为 0）且写入位置为 0 时，该判断条件成立（0 <= 0），导致内核错误地认为写入位置越界并返回 -EINVAL，从而阻止了合法的初始写入操作。
+
+#解决方案
+重构流写入位置的校验逻辑：
+1. 移除了基于 v_len 的 `v_len <= *pos` 判断，修复了对空流文件写入的误拦截。
+2. 新增了对写入位置 `*pos` 本身的独立边界检查，若 `*pos >= XATTR_SIZE_MAX` 则判定越界。
+3. 修正了写入数据大小 count 的计算逻辑，从 `(*pos + count) - XATTR_SIZE_MAX` 更正为 `XATTR_SIZE_MAX - *pos`，确保数据被正确截断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/03148cad7f3f0850612bb8a8d00aef88a2be0322

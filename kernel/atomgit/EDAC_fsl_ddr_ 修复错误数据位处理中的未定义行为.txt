@@ -1,0 +1,23 @@
+#标题
+EDAC/fsl_ddr: 修复错误数据位处理中的未定义行为
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 DDR ECC 单比特错误（SBE）时，如果错误数据位（bad_data_bit）的值小于 32，内核在执行左移操作时会触发未定义行为。这可能导致错误的 ECC 错误定位信息输出，或在特定处理器架构下导致内核异常运行。
+
+#主要错误日志
+- Faulty Data bit: [数值]
+- Faulty ECC bit: [数值]
+- Expected Data / ECC: [数据] / [数据]
+（注：日志输出本身正常，但底层数据处理逻辑存在缺陷）
+
+#问题根因
+在表达式 `cap_high ^ (1 << (bad_data_bit - 32))` 中，变量 `bad_data_bit` 的范围是 0 到 63。当 `bad_data_bit` 小于 32 时，`(bad_data_bit - 32)` 的结果为负数。根据 C 语言标准，对负数值进行左移操作属于未定义行为。
+
+#解决方案
+将 `cap_high` 和 `cap_low` 组合成一个 64 位变量 `cap`，并使用 `1ULL` 进行左移操作，确保移位操作数在合法范围内。同时优化了判断逻辑，仅在 `bad_data_bit` 和 `bad_ecc_bit` 为非负值时执行异或操作和打印，修正了错误的数据/ ECC 期望值计算。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7ef46bbb82670bbc2c934d4a5705bccc7b52ea32

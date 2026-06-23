@@ -1,0 +1,20 @@
+#标题
+powerpc/powernv: opal_event_init 函数异常路径内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统启动阶段，若 `opal_event_init()` 函数在初始化过程中调用 `request_irq()` 注册中断失败，会导致内核内存泄漏。由于该代码仅在启动时运行且用户无法直接触发，通常无明显的用户态可感知异常或安全影响，需通过内存检测工具（如 kmemleak）方可发现。
+
+#主要错误日志
+pr_warn("Error %d requesting OPAL irq %d\n", rc, (int)r->start);
+
+#问题根因
+在 `opal_event_init()` 函数中，当 `request_irq()` 调用失败时，代码逻辑直接跳转或继续执行，未释放先前已分配的 `name` 变量内存，导致内存泄漏。
+
+#解决方案
+在 `request_irq()` 失败的错误处理分支中，增加 `kfree(name)` 调用，确保在申请中断失败时释放已分配的内存资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7d8b9bff4a76c4519adb3ee6c3a0a3a73954a561

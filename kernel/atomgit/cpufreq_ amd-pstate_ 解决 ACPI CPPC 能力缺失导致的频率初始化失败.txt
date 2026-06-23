@@ -1,0 +1,33 @@
+#标题
+cpufreq: amd-pstate: 解决 ACPI CPPC 能力缺失导致的频率初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定的 AMD EPYC 7K62 处理器平台上，BIOS 版本较旧（如 5.14, 12/12/2019）时，由于 ACPI 表中缺少 CPPC 能力定义，导致 `amd-pstate` 驱动加载异常或频率读取错误。
+具体表现为读取 CPU0 的 CPPC 频率接口值返回为 0：
+```bash
+$ cat /sys/devices/system/cpu/cpu0/acpi_cppc/lowest_freq
+0
+$ cat /sys/devices/system/cpu/cpu0/acpi_cppc/nominal_freq
+0
+```
+
+#主要错误日志
+```text
+Overriding nominal and lowest frequencies for AMD EPYC 7K62
+```
+（注：此为补丁生效后的提示日志，表明检测到问题并正在修复；原故障状态下通常无显式错误日志，仅表现为频率值读取为 0）
+
+#问题根因
+特定平台（AMD EPYC 7K62）的 BIOS 存在缺陷，未在 ACPI 表中正确定义 `nominal_freq` 和 `lowest_freq` 这两个 CPPC 能力字段。固件返回的这两个频率值为 0，导致驱动无法获取正确的频率范围，进而影响 P-State 驱动的正常加载与运行。
+
+#解决方案
+引入 quirk（变通修复）机制：
+1. 新增 `quirk_entry` 结构体用于存储修正后的频率值（nominal_freq = 2600, lowest_freq = 550）。
+2. 建立 DMI 匹配表 `amd_pstate_quirks_table`，针对受影响的特定 BIOS 版本和机型进行匹配。
+3. 在驱动初始化 `amd_pstate_init_freq` 阶段，检测到匹配的缺陷平台时，忽略固件返回的错误值，直接使用 quirk 表中预定义的正确频率数值进行覆盖，确保驱动能正常工作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d94253b621b1c81772118109c22f634c234702f0

@@ -1,0 +1,25 @@
+#标题
+md: fix mddev uaf while iterating all_mddevs list
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统重启或 MD 模块卸载阶段，内核在遍历 `all_mddevs` 列表时，若并发执行 mddev 删除操作，会导致 Use-After-Free（UAF）故障。该问题可能引发内核崩溃、Oops 或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `md_notify_reboot()` 和 `md_exit()` 函数使用 `list_for_each_entry_safe` 遍历 `all_mddevs` 列表。
+其根因是遍历过程中存在竞态条件：当前线程在持有锁的情况下获取了当前 mddev（如 mddev1），但在释放锁处理期间，另一个线程可能删除并释放了链表中的下一个 mddev（如 mddev2）。
+当当前线程再次获取锁并尝试访问 `mddev2->all_mddevs` 以继续遍历时，mddev2 已被释放，从而导致 UAF。
+原本的 `for_each_mddev()` 辅助函数会在持有锁时获取下一个条目的引用计数以防止其被释放，但新代码移除了该机制且未正确处理并发删除场景。
+
+#解决方案
+1. 将 `md_notify_reboot()` 和 `md_exit()` 中的遍历逻辑从 `list_for_each_entry_safe` 改为 `list_for_each_entry`。
+2. 新增辅助函数 `mddev_put_locked()`，该函数在持有 `all_mddevs_lock` 锁的情况下判断引用计数并释放 mddev。
+3. 在遍历循环中，调整 `mddev_put()` 的调用位置，确保在重新获取自旋锁之后再调用 `mddev_put_locked()`。这避免了在锁外释放当前 mddev 时，下一个 mddev 已被并发删除并释放导致的 UAF 风险，同时也符合 `list_for_each_entry` 在锁内安全访问链表元素的要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/70ad77f81925942218e95c986572a1fac4c262e6

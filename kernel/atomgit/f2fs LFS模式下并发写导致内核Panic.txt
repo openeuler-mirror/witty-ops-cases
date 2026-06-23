@@ -1,0 +1,35 @@
+#标题
+f2fs LFS模式下并发写导致内核Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在f2fs文件系统使用 "mode=lfs" 挂载选项时，运行 generic/299 测试用例（涉及多线程AIO/DIO并发写入），触发内核 BUG，系统崩溃并打印调用栈。具体崩溃位置在 `new_curseg` 函数，调用链显示崩溃发生在 `f2fs_map_blocks` 调用 `f2fs_allocate_data_block` 的过程中。
+
+#主要错误日志
+------------[ cut here ]------------
+kernel BUG at fs/f2fs/segment.c:2835!
+Call Trace:
+ <TASK>
+ f2fs_allocate_data_block+0x6f4/0xc50
+ f2fs_map_blocks+0x970/0x1550
+ f2fs_iomap_begin+0xb2/0x1e0
+ iomap_iter+0x1d6/0x430
+ __iomap_dio_rw+0x208/0x9a0
+ f2fs_file_write_iter+0x6b3/0xfa0
+ aio_write+0x15d/0x2e0
+ io_submit_one+0x55e/0xab0
+ __x64_sys_io_submit+0xa5/0x230
+ do_syscall_64+0x84/0x2f0
+ entry_SYSCALL_64_after_hwframe+0x76/0x7e
+RIP: 0010:new_curseg+0x70f/0x720
+
+#问题根因
+在 LFS 模式下，系统始终使用 OPU（Out-of-place Update）策略，导致 `f2fs_map_blocks()` 会激进地进行块分配。原逻辑仅在分配物理块后才尝试触发前台 GC（Foreground GC），但在多线程并发写入（aio/dio/bufio）场景下，块分配速度过快，导致 GC 触发时机滞后，系统瞬间耗尽空闲空间，进而触发 `new_curseg` 中的 BUG 导致 Panic。
+
+#解决方案
+在 `f2fs_map_blocks()` 函数中进行块分配前，增加对 LFS 模式的判断。如果是 LFS 模式，优先调用 `f2fs_balance_fs(sbi, true)` 触发前台 GC 以回收空间，确保在空间耗尽前有机会执行 GC，从而避免因空间耗尽触发的内核 Panic。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5f9fb989ba565555a629b4878587e29afc6d4b41

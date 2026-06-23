@@ -1,0 +1,21 @@
+#标题
+soc: qcom: pmic_glink: 修复 OF node 引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Qualcomm PMIC GLINK 驱动时，设备节点的引用计数发生泄漏。具体表现为注册辅助设备（auxiliary device）时获取的 OF node 引用在设备释放或初始化失败时未被正确释放，导致内核资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在注册辅助设备时，通过 `device_set_of_node_from_dev` 函数增加了设备节点的引用计数，但在设备释放回调函数 `pmic_glink_aux_release` 中未调用 `of_node_put` 来减少引用计数；同时，在设备初始化失败（`auxiliary_device_init` 返回错误）的错误处理路径中也遗漏了释放引用计数的操作。
+
+#解决方案
+1. 在 `pmic_glink_aux_release` 回调函数中增加 `of_node_put(dev->of_node)` 调用，确保设备释放时正确释放 OF node 引用。
+2. 在 `pmic_glink_add_aux_device` 函数中，当 `auxiliary_device_init` 初始化失败时，增加 `of_node_put(aux->dev.of_node)` 处理，修复错误路径下的引用泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba9a7bfb280d9e40d0c1f4fb3fa022a12827e67b

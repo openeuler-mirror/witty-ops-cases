@@ -1,0 +1,21 @@
+#标题
+imx93-blk-ctrl 驱动卸载路径死循环导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 imx93-blk-ctrl 驱动模块或执行相关卸载操作时，触发 kernel panic，导致系统崩溃。同时，内核日志中可能出现电源管理计数不平衡的警告信息。
+
+#主要错误日志
+- imx93-blk-ctrl 4ac10000.system-controller: Unbalanced pm_runtime_enable!
+
+#问题根因
+驱动卸载函数 `imx93_blk_ctrl_remove` 中的 for 循环判断条件书写错误。原代码写为 `for (i = 0; bc->onecell_data.num_domains; i++)`，该条件只要 `num_domains` 不为 0 即恒为真，导致循环无法终止，形成死循环最终引发内核 panic。此外，卸载流程未调用 `pm_runtime_disable`，导致电源管理引用计数不平衡。
+
+#解决方案
+1. 修正 for 循环条件，将 `bc->onecell_data.num_domains` 修改为 `i < bc->onecell_data.num_domains`，确保循环能正常遍历并结束。
+2. 在移除 genpd provider 后、遍历移除域之前，增加 `pm_runtime_disable(&pdev->dev)` 调用，以平衡电源管理计数，消除 "Unbalanced pm_runtime_enable" 警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/77dc7f98b0cd3409f30b29c115a9ad0cb8c23fb1

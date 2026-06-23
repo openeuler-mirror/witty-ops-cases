@@ -1,0 +1,26 @@
+#标题
+urma ioctl 接口错误处理逻辑缺陷导致连接导入失败误判为成功
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 uburma jfr 或 jetty 的连接导入操作时，若底层 import 函数返回 NULL（表示失败），上层 ioctl 处理函数错误地返回 0，导致用户态误认为操作成功，实际上连接并未建立成功。
+
+#主要错误日志
+- "Failed to import jfr.\n"
+- "Failed to import jfr in ex.\n"
+- "Failed to import jetty.\n"
+- "ubcore_import_jetty failed.\n"
+
+#问题根因
+在 `uburma_cmd_import_jfr`、`uburma_cmd_import_jfr_ex`、`uburma_cmd_import_jetty` 和 `uburma_cmd_import_jetty_ex` 函数中，错误处理逻辑存在缺陷。当 `ubcore_import_jfr` 等函数返回 NULL 时，代码逻辑进入 `IS_ERR_OR_NULL` 分支，但随后直接调用 `PTR_ERR(NULL)`。由于 `PTR_ERR(NULL)` 的结果为 0，导致函数返回值被错误地置为 0（即成功），掩盖了实际的失败状态。
+
+#解决方案
+修改相关函数的错误处理路径，在检测到返回值为 NULL 时，不再直接返回 `PTR_ERR`，而是显式判断是否为 ERR_PTR：
+1. 若 `IS_ERR(ptr)` 为真，返回 `PTR_ERR(ptr)`；
+2. 若为 NULL（即非 ERR_PTR 的空指针），返回 -1 表示失败。
+同时，在错误路径中增加日志打印，输出错误信息以便于定位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4def54a06eee460e4c47ca245ecab8de41b1a9ec

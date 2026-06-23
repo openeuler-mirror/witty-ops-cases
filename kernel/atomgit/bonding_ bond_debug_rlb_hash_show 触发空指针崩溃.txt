@@ -1,0 +1,24 @@
+#标题
+bonding: bond_debug_rlb_hash_show 触发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 bonding 驱动的 RLB（Receive Load Balancing）模式下，当通过 debugfs 读取 RLB 哈希表信息时，内核发生 NULL 指针解引用导致崩溃。具体触发场景为：`rlb_clear_slave` 函数在无可用替换 slave 时，故意将哈希表条目中的 slave 指针置为 NULL 并保留在链表中，若此时用户试图读取 `bond_debug_rlb_hash_show` 接口，将触发 kernel panic。
+
+#主要错误日志
+[    1.289791] BUG: kernel NULL pointer dereference, address: 0000000000000000
+[    1.292058] RIP: 0010:bond_debug_rlb_hash_show (drivers/net/bonding/bond_debugfs.c:41)
+[    1.296134]  seq_read_iter (fs/seq_file.c:231)
+[    1.296341]  seq_read (fs/seq_file.c:164)
+[    1.296493]  full_proxy_read (fs/debugfs/file.c:378 (discriminator 1))
+
+#问题根因
+`rlb_clear_slave` 函数在没有可用替换 slave 时，会故意保持 RLB 哈希表条目在 `rx_hashtbl_used_head` 链表中，但将其 `slave` 指针设置为 NULL。然而，`bond_debug_rlb_hash_show` 函数在遍历并打印哈希表信息时，未对 `client_info->slave` 指针进行非空检查，直接访问了 `client_info->slave->dev->name`，导致空指针解引用。
+
+#解决方案
+在 `bond_debug_rlb_hash_show` 函数中增加对 `client_info->slave` 的非空检查。如果指针非空，正常打印 slave 设备名称；如果指针为空，则打印 `(none)` 作为占位符，防止空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0cf48758fb807105dcd40b57526fae4daa22b3fd

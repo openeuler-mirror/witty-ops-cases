@@ -1,0 +1,26 @@
+#标题
+i2c: rcar: 目标模式下 NACK 处理缺陷导致通信协议违规
+
+#内核版本
+OLK-6.6
+
+#问题现象
+R-Car I2C 控制器在作为目标设备运行时，NACK（非应答）信号处理存在缺陷：
+1. 在初始 WRITE_REQUESTED 阶段，若后端驱动请求发送 NACK，驱动程序未正确响应，导致无法拒绝写入请求。
+2. 在 WRITE_RECEIVED 阶段，由于硬件限制，NACK 信号总是在总线上延迟一个字节到达。驱动程序原先依赖后端处理该延迟，导致无法可靠地为多余字节发送 NACK，直至收到 STOP 条件。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 驱动程序在处理 `I2C_SLAVE_WRITE_REQUESTED` 事件时，忽略了后端 `i2c_slave_event` 的返回值，导致无法根据后端请求触发 NACK。
+2. 硬件存在已知问题：NACK 信号在总线上总是延迟一个字节生效。原先的逻辑没有维护持久化的 NACK 状态，导致在收到 STOP 条件前无法持续发送 NACK 来覆盖延迟产生的多余字节。
+
+#解决方案
+1. 在驱动私有数据结构中新增 `slave_flags` 成员，并定义 `ID_SLAVE_NACK` 标志位。
+2. 在 `WRITE_REQUESTED` 和 `WRITE_RECEIVED` 处理路径中，检查后端返回值，若返回错误则设置 `ID_SLAVE_NACK` 标志。
+3. 修改 ICSCR 寄存器写入逻辑，依据 `ID_SLAVE_NACK` 标志决定是否发送 NACK，确保在 STOP 条件到来前持续保持 NACK 状态。
+4. 在检测到 STOP 条件时，清除 `ID_SLAVE_NACK` 标志以恢复初始状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/888d1d26411724da592f719a38a6789f2d7d4172

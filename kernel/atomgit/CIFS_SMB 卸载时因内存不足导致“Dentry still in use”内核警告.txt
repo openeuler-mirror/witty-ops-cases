@@ -1,0 +1,26 @@
+#标题
+CIFS/SMB 卸载时因内存不足导致“Dentry still in use”内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内存不足的条件下卸载 CIFS/SMB 文件系统时，系统触发内核 WARNING，提示“Dentry still in use”错误。具体表现为卸载操作未能正确释放目录缓存，导致 dentry 计数异常，触发 `umount_check` 相关的调用栈警告。
+
+#主要错误日志
+[  495.281119] CIFS: VFS: \\otters.example.com\share Out of memory while dropping dentries
+[  495.281595] ------------[ cut here ]------------
+[  495.281887] BUG: Dentry ffff888115531138{i=78,n=/}  still in use (2) [unmount of cifs cifs]
+[  495.282391] WARNING: CPU: 1 PID: 2329 at fs/dcache.c:1536 umount_check+0xc8/0xf0
+
+#问题根因
+在 `close_all_cached_dirs()` 函数中，当系统处于低内存状态时，用于暂存待释放 dentry 的临时链表节点申请失败。原代码在 `kmalloc` 失败时仅执行 `break` 跳出循环，既未释放已持有的锁，也未记录错误日志，导致后续卸载流程无法感知内存分配失败，最终因 dentry 未被正确清理而触发“Dentry still in use”错误。
+
+#解决方案
+修改 `close_all_cached_dirs()` 函数的错误处理路径：
+1. 当 `kmalloc` 分配失败时，通过 `cifs_tcon_dbg` 显式打印 "Out of memory while dropping dentries" 错误日志，提供明确的故障线索。
+2. 在内存分配失败时，立即释放已持有的自旋锁（`cfid_list_lock` 和 `tlink_tree_lock`）。
+3. 使用 `goto done` 跳转至 dentry 释放逻辑，避免继续遍历后续 tcons，因为在内存紧张情况下后续分配大概率也会失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9cede4f5875c8bf86f0a468e6f91e4cee833aa77

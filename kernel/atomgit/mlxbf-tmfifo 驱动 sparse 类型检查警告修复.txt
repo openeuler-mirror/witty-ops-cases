@@ -1,0 +1,22 @@
+#标题
+mlxbf-tmfifo 驱动 sparse 类型检查警告修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 sparse 工具对内核代码进行静态分析时，`drivers/platform/mellanox/mlxbf-tmfifo.c` 文件第 284 行报告类型不匹配警告。该问题为代码层面的类型定义缺陷，不影响运行时功能，但会导致代码不符合类型安全规范。
+
+#主要错误日志
+drivers/platform/mellanox/mlxbf-tmfifo.c:284:38: warning: incorrect type in assignment (different base types)
+drivers/platform/mellanox/mlxbf-tmfifo.c:284:38:    expected restricted __virtio32 [usertype] len
+drivers/platform/mellanox/mlxbf-tmfifo.c:284:38:    got unsigned long
+
+#问题根因
+在 `mlxbf_tmfifo_alloc_vrings` 函数中，对 `vring->drop_desc.len` 进行赋值时，右侧直接使用了 `unsigned long` 类型的常量 `VRING_DROP_DESC_MAX_LEN`。而 `drop_desc.len` 字段被定义为 `__virtio32` 类型（受限类型），直接赋值会导致不同基类型之间的非法赋值，触发 sparse 静态检查工具的警告。
+
+#解决方案
+修改赋值逻辑，使用 `cpu_to_virtio32()` 转换函数将 `VRING_DROP_DESC_MAX_LEN` 的值显式转换为 `__virtio32` 类型后再赋值给 `vring->drop_desc.len`。这确保了类型匹配，消除了 sparse 警告，同时正确处理了跨端序的兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/93886e1ac2f8811dc2e69d5f6a3f1b28c3f2055c

@@ -1,0 +1,20 @@
+#标题
+radio-keene 驱动 probe 阶段错误路径内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Keene FM Transmitter 设备驱动（radio-keene）加载过程中，若 `v4l2_device_register()` 或 `video_register_device()` 注册失败，会导致内核内存泄漏。该问题由 syzbot 发现，具体表现为内核对象 `v4l2_ctrl_handler` 的内存未被正确释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `usb_keene_probe()` 函数中，驱动先初始化了 `v4l2_ctrl_handler` 并添加了控制项，但在此之后的 `v4l2_device_register()` 或 `video_register_device()` 调用失败时，错误处理路径 `err_v4l2` 中遗漏了对 `v4l2_ctrl_handler` 的释放操作，导致内存泄漏。
+
+#解决方案
+在 `usb_keene_probe()` 函数的错误处理标签 `err_v4l2` 处增加 `v4l2_ctrl_handler_free(&radio->hdl)` 调用。同时移除了之前代码中在 `hdl->error` 判断分支内提前释放 handler 的冗余代码，统一通过 `err_v4l2` 标签进行资源释放，确保所有初始化成功后的错误路径都能正确释放控制处理器内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cbd75813e304121cc0261f8da9c2dee031c51c66

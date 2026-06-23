@@ -1,0 +1,20 @@
+#标题
+openvswitch: 读取 upcall 统计信息时存在数据竞争
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 openvswitch 模块获取 upcall 统计信息时，由于读取 per-CPU 统计数据的逻辑未正确处理 `u64_stats_fetch_retry()` 事件，导致统计数据的累加过程中可能出现数据竞争。这会导致上报给用户空间的 `tx_success` 和 `tx_fail` 计数可能包含不一致的中间值，造成统计数据不准确。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ovs_vport_get_upcall_stats()` 中，统计数据 `tx_success` 和 `tx_fail` 在 `do...while` 循环内部直接进行累加。当发生 `u64_stats_fetch_retry()` 重试时，之前的累加结果未被撤销，而是继续在新的读取值基础上累加，导致最终统计结果包含了重试过程中的脏数据。这违反了使用 `u64_stats_sync` 保护 64 位统计数据的正确读取模式。
+
+#解决方案
+修改 `ovs_vport_get_upcall_stats()` 函数，引入临时变量 `n_success` 和 `n_fail`。在 `u64_stats_fetch_begin()` 和 `u64_stats_fetch_retry()` 构成的保护区内，仅将读取的值存入临时变量。待确认读取成功（即无需重试）退出循环后，再将临时变量的值累加到总和变量 `tx_success` 和 `tx_fail` 中，从而确保每次读取数据的原子性和一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/201b82f0a51d3b912b0389ea87b7327219cd7702

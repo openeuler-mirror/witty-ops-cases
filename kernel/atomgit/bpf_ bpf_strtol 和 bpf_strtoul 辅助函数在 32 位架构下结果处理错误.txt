@@ -1,0 +1,21 @@
+#标题
+bpf: bpf_strtol 和 bpf_strtoul 辅助函数在 32 位架构下结果处理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 32 位架构上使用 bpf_strtol() 和 bpf_strtoul() 辅助函数时，BPF 程序读取的转换结果中高位比特显示为未初始化状态（数据异常），导致 BPF 程序获取到的数值不正确。
+
+#主要错误日志
+未知
+
+#问题根因
+BPF 辅助函数的参数类型 ARG_PTR_TO_LONG 在 BPF 侧被定义为固定的 64 位 "long"，而在内核侧实现 bpf_strtol 和 bpf_strtoul 时，BPF_CALL 定义中的结果指针参数使用了内核侧的 "long *" 类型。
+在 32 位架构上，内核侧的 "long" 仅为 32 位。虽然内部调用 __bpf_strtoll 正确处理了 64 位结果，但在将结果赋值给 "*(long *)" 时，仅写入了低 32 位。从 BPF 程序的角度看，这导致结果缓冲区的高 32 位未被写入，保持了未初始化状态，破坏了数据一致性。
+
+#解决方案
+修改内核中 bpf_strtol 和 bpf_strtoul 的 BPF_CALL 定义签名，将结果指针参数类型从 `{unsigned,} long *` 修改为明确的 64 位类型 `{s,u}64 *`。这确保了在 32 位架构上也能正确写入完整的 64 位结果，解决了高位未初始化的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/feeeb57c29aa1cc3d7108ab0c3009e79a0a9287d

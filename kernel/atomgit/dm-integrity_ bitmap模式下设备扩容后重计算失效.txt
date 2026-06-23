@@ -1,0 +1,27 @@
+#标题
+dm-integrity: bitmap模式下设备扩容后重计算失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在dm-integrity使用bitmap模式时，若用户对设备进行扩容操作，随后的重计算功能失效。这是由于在重新加载dm-integrity表时，内核错误地将journal数据解释为bitmap，导致逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+dm-integrity在处理挂起/恢复流程时存在逻辑缺陷：
+1. `dm_integrity_ctr`读取到超级块带有`SB_FLAG_DIRTY_BITMAP`标志。
+2. `dm_integrity_postsuspend`初始化journal并清除了`SB_FLAG_DIRTY_BITMAP`标志。
+3. `dm_integrity_resume`此时看到的超级块仍带有`SB_FLAG_DIRTY_BITMAP`标志（因为未重新读取），导致它错误地将journal当作bitmap来解析。
+此外，设备扩容时设置bitmap位的代码分支缺乏对`SB_FLAG_DIRTY_BITMAP`标志的检查，导致在非bitmap模式下也可能被错误执行。
+
+#解决方案
+在`dm_integrity_resume`函数中增加逻辑：
+1. 在恢复开始时同步读取最新的超级块，确保内存中的状态与磁盘一致。
+2. 如果发现标志位不一致，更新内存标志位并同步写回磁盘。
+3. 在处理设备扩容的逻辑分支中，增加对`SB_FLAG_DIRTY_BITMAP`标志的判断，确保仅在bitmap模式下执行相关操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ffe3e2d79f597c299c71ad02851866d639230b52

@@ -1,0 +1,23 @@
+#标题
+jitterentropy：修复中间值处理逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+jitterentropy 熵池在收集时间噪声的过程中，中间值被错误地更新到了哈希状态中。此外，当检测到时间戳卡顿时，处理逻辑不符合预期，导致熵池搅拌效果受损或数据注入逻辑不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `jent_hash_time` 函数中存在两个逻辑错误：
+1. 变量 `intermediary`（中间值）被错误地传递给了 `desc` 指向的哈希状态，而非正确的 `hash_state_desc`，导致数据被更新到了错误的哈希状态。
+2. 当 `stuck`（卡顿）状态为真时，代码逻辑直接跳过了时间戳数据的注入，这与用户空间的处理逻辑不一致，且不满足某些条件化操作对输入数据量的要求。
+
+#解决方案
+1. 修正哈希更新调用的描述符参数，将 `crypto_shash_update(desc, intermediary, ...)` 改为 `crypto_shash_update(hash_state_desc, intermediary, ...)`，确保中间值被正确注入当前哈希状态。
+2. 调整卡顿状态的处理逻辑，当 `stuck` 为真时，将时间戳 `time` 置为 0，但仍然调用 `crypto_shash_update` 将其注入哈希状态。这保证了每次循环中 conditioning operation（调节操作）接收的数据量一致，并维持熵池的持续搅拌。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/456a76148f280bd3b3591372b01c987bf3c2e727

@@ -1,0 +1,20 @@
+#标题
+net: xilinx: axienet: 修复 axienet_start_xmit 中的潜在内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Xilinx AXI 以太网驱动发送数据包时，若 DMA 映射失败，驱动程序会丢弃数据包并返回 NETDEV_TX_OK，但未能释放对应的 skb 结构体内存，导致内存泄漏。在网络负载较重或 DMA 资源紧张时，此问题可能引发系统可用内存逐渐减少。
+
+#主要错误日志
+- "TX DMA mapping error"（由 netdev_err 打印，受 net_ratelimit 限制）
+
+#问题根因
+在 `axienet_start_xmit` 函数中，`dma_map_single()` 或后续 DMA 映射操作失败的处理路径上，代码逻辑增加了 `ndev->stats.tx_dropped` 计数并返回 `NETDEV_TX_OK`，但遗漏了调用 `dev_kfree_skb_any(skb)` 来释放 socket buffer，导致内存泄漏。Commit 信息明确指出：“The axienet_start_xmit() returns NETDEV_TX_OK without freeing skb in case of dma_map_single() fails”。
+
+#解决方案
+在 `axienet_start_xmit` 函数中，针对两处 DMA 映射失败导致的错误处理分支，在返回 `NETDEV_TX_OK` 之前显式调用 `dev_kfree_skb_any(skb)` 释放 skb 内存，防止资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d4ac88027b9bd3a8c62ee7520bb9695dbcfa10c0

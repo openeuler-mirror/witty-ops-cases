@@ -1,0 +1,24 @@
+#标题
+Clang 编译内核触发 -Wdefault-const-init-unsafe 警告导致构建失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 Clang 编译内核时，由于编译器新增的 `-Wdefault-const-init-unsafe` 默认警告选项，内核构建过程（特别是 `allmodconfig` 配置下）会因大量警告被 `-Werror` 提升为错误而失败。受影响的代码包括 `drivers/gpu/drm/i915`、`crypto/scatterwalk.c`、`fs/hugetlbfs/inode.c` 以及核心头文件如 `include/linux/typecheck.h` 和 `include/linux/list.h`。
+
+#主要错误日志
+drivers/gpu/drm/i915/gt/intel_ring.h:62:2: error: default initialization of an object of type 'typeof (ring->size)' (aka 'const unsigned int') leaves the object uninitialized [-Werror,-Wdefault-const-init-var-unsafe]
+include/net/ip.h:478:14: error: default initialization of an object of type 'typeof (rt->dst.expires)' (aka 'const unsigned long') leaves the object uninitialized [-Werror,-Wdefault-const-init-var-unsafe]
+include/linux/list.h:409:27: warning: default initialization of an object of type 'union (unnamed union at include/linux/list.h:409:27)' with const member leaves the object uninitialized [-Wdefault-const-init-field-unsafe]
+crypto/scatterwalk.c:66:22: error: default initialization of an object of type 'struct scatter_walk' with const member leaves the object uninitialized [-Werror,-Wdefault-const-init-field-unsafe]
+fs/hugetlbfs/inode.c:733:24: error: default initialization of an object of type 'struct vm_area_struct' with const member leaves the object uninitialized [-Werror,-Wdefault-const-init-field-unsafe]
+
+#问题根因
+Clang 编译器（版本 21+）引入了新的默认警告选项 `-Wdefault-const-init-unsafe`，用于标记未初始化的 const 变量或聚合类型中的 const 成员。内核代码中存在此类情况（如 `typecheck` 宏中的哑变量、结构体中未显式初始化的 const 成员），虽然部分情况是内核故意为之（如通过 memset/memcpy 后续初始化、联合体共享内存、或变量未被使用），但编译器仍报错，导致信噪比低且难以在旧编译器上通过代码修改兼容，从而阻断编译流程。
+
+#解决方案
+在构建系统脚本 `scripts/Makefile.extrawarn` 中，针对 Clang 编译器增加禁用该警告的选项 `KBUILD_CFLAGS += $(call cc-disable-warning, default-const-init-unsafe)`。此修改屏蔽了该警告，且不会显著降低代码质量，因为 `-Wuninitialized` 仍然可以捕获实际使用未初始化 const 变量的情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4e35f78b448223e1a8f5eab00f085144a81f5383

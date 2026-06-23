@@ -1,0 +1,25 @@
+#标题
+nvme-mpath 路径下 I/O 计数错误导致 inflight 计数变为负数
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NVMe 多路径配置下，当控制器处于非就绪状态触发 `nvme_fail_nonready_command` 时，由于请求复用导致 inflight I/O 计数器被错误地递减，进而导致 inflight 计数器数值变为负数，造成 I/O 统计数据错误。
+
+#主要错误日志
+未知
+
+#问题根因
+正常的 nvme-mpath IO 统计流程如下：
+1) 初始化 nvme_request 并清除标志位；
+2) 在 IO 开始时设置 `NVME_MPATH_IO_STATS` 并增加 inflight 计数器；
+3) 在 IO 结束时检查 `NVME_MPATH_IO_STATS` 并减少 inflight 计数器。
+
+然而，在 `nvme_fail_nonready_command()` 这一分支中，步骤 1) 和 2) 被跳过了。如果该请求是复用的旧请求，且旧的 nvme_request 已经设置了 `NVME_MPATH_IO_STATS` 标志位，那么步骤 3) 依然会在 IO 完成时执行，导致 inflight 计数器在未增加的情况下被递减，从而产生负值。
+
+#解决方案
+在 `nvme_fail_nonready_command()` 函数中，当请求未设置 `RQF_DONTPREP` 标志时，调用 `nvme_clear_nvme_request(rq)` 清除请求中的旧状态，防止复用的请求携带旧的统计标志位导致计数错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a1911a09458f4d6f80b6525b95abe446f86c524c

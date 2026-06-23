@@ -1,0 +1,21 @@
+#标题
+转发 fraglist GRO 数据包时分段逻辑错误导致吞吐量下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当站点通过热点（Hotspot）访问 IPv4 服务器，且上游接口仅支持 IPv6（需要通过 XLAT 进行协议转换）时，网络吞吐量显著降低。原因是内核在处理转发 GRO 数据包时，对 frag_list 的分段处理逻辑不正确，导致协议不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在进行 IPv4/IPv6 协议转换（XLAT）时，XLAT 仅翻译了 head skb 的头部，而 frag_list 中的 skb 未被翻译。然而，内核在 GSO 分段时，`__udp_gso_segment` 函数未检查 `SKB_GSO_DODGY` 标志，错误地对这类头部与 frag_list 协议状态不一致的数据包使用了 `skb_segment_list` 进行处理，导致处理失败或性能下降。
+
+#解决方案
+1. 在 XLAT 的协议转换辅助函数（`bpf_skb_proto_4_to_6` 和 `bpf_skb_proto_6_to_4`）中，显式设置 `SKB_GSO_DODGY` 标志，标记该 GSO 数据包在协议转换后状态可能不一致。
+2. 修改 `__udp_gso_segment` 逻辑，增加对 `SKB_GSO_DODGY` 标志的检查。如果数据包带有 `SKB_GSO_DODGY` 标志，则强制回退到 `skb_segment` 进行分段处理，避免使用 `skb_segment_list` 处理不一致的 frag_list，从而确保分段的正确性和吞吐量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5015f63dd7c8e261aef2eb1adf69155ee70f5439

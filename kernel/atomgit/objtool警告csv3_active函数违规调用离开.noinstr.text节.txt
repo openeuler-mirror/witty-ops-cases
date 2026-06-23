@@ -1,0 +1,20 @@
+#标题
+objtool警告csv3_active函数违规调用离开.noinstr.text节
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译内核过程中，objtool 校验工具报出警告，指出 `csv3_active` 函数在处于 `.noinstr.text` 节（不可插拔指令区域）时，调用了 `native_cpuid` 函数，导致离开了该受保护节区。
+
+#主要错误日志
+vmlinux.o: warning: objtool: csv3_active+0x39: call to native_cpuid.constprop.0() leaves .noinstr.text section
+
+#问题根因
+函数 `csv3_active` 被标记为 `noinstr`，这意味着它应属于 `.noinstr.text` 节，该节区的代码在执行过程中不允许调用其他不属于该节区的函数（通常用于关键路径避免被 instrumentation 干扰）。然而，该函数内部调用了 `native_cpuid`，该函数不具备 `noinstr` 属性，导致违反了 objtool 的校验规则，触发了“leaves .noinstr.text section”的警告。
+
+#解决方案
+移除 `csv3_active` 函数定义中的 `noinstr` 修饰符。修改后，该函数不再被强制约束在 `.noinstr.text` 节中，从而允许其正常调用 `native_cpuid`，消除了 objtool 的警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2fe6d66a585d35fb81773b8b071bc6b6aae80850

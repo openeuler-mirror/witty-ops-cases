@@ -1,0 +1,22 @@
+#标题
+usb: ehci-brcm 修复原子上下文中的睡眠问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Broadcom STB SoC 的 EHCI 驱动中，当调用 `ehci_brcm_hub_control()` 时会触发内核警告。由于该函数在禁用中断（atomic 上下文）后调用 `echi_brcm_wait_for_sof()`，而该函数内部使用了可能睡眠的轮询函数，导致系统检测到在原子上下文中试图睡眠的非法操作（sleep during atomic）。
+
+#主要错误日志
+[推断] BUG: sleeping function called from invalid context at ...
+[推断] 或者内核 Call Trace 指向 readl_relaxed_poll_timeout 相关调用链
+ehci_err(ehci, "Error waiting for SOF\n");
+
+#问题根因
+函数 `echi_brcm_wait_for_sof()` 被 `ehci_brcm_hub_control()` 调用，而调用发生前中断已被禁用，处于原子上下文中。原代码使用了 `readl_relaxed_poll_timeout` 函数，该函数在等待过程中可能会调用 `usleep_range` 或类似睡眠函数，从而导致在原子上下文中睡眠，引发内核报错。
+
+#解决方案
+将 `echi_brcm_wait_for_sof()` 函数中的 `readl_relaxed_poll_timeout` 替换为 `readl_relaxed_poll_timeout_atomic`。原子版本的轮询函数使用 `udelay` 进行忙等待而非睡眠，因此可以在中断禁用等原子上下文中安全调用，从而修复该问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2ea5caaf8e9819a65d3e098552ad38e9e5719ef6

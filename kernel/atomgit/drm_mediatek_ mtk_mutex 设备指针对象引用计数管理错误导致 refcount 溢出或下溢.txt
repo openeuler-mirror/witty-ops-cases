@@ -1,0 +1,26 @@
+#标题
+drm/mediatek: mtk_mutex 设备指针对象引用计数管理错误导致 refcount 溢出或下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统启动过程中，当 mediatek-drm 驱动经历多次 probe deferral（探测延迟）时，内核发出 refcount_t 下溢警告；或者在驱动绑定（bind）失败时，内核发出 refcount_t 溢出警告。手动进行驱动的绑定与解绑操作时也会触发相应异常。
+
+#主要错误日志
+refcount_t underflow warning
+refcount_t overflow warning
+
+#问题根因
+驱动对 mtk_mutex 设备的 kobject 引用计数管理不当：
+1. 在 mtk_drm_kms_init 函数中，驱动仅获取了一次 mutex_dev 的引用，但在 put_mutex_dev 标签处的错误处理路径中，却通过循环对每个 mmsys 设备执行 put_device 操作，导致引用计数被多次递减，引发 refcount_t 下溢。
+2. 在 mtk_drm_bind 函数的错误处理路径中，缺少对 mutex_dev 引用计数的释放操作，导致分配成功但绑定失败时引用计数未被归还，引发 refcount_t 溢出。
+
+#解决方案
+调整 put_device 的调用位置以修正引用计数逻辑：
+1. 移除 mtk_drm_kms_init 函数中错误的循环 put_device 逻辑及相关标签，改为直接返回错误。
+2. 在 mtk_drm_unbind 函数中添加 put_device(private->mutex_dev) 调用，确保在驱动解绑时正确释放唯一的引用计数，解决下溢问题。
+3. 在 mtk_drm_bind 函数的错误处理路径中添加 put_device(private->mutex_dev) 调用，确保绑定失败时释放引用计数，解决溢出问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9928ae7dab7959b799914a6f3be7ad4426245fea

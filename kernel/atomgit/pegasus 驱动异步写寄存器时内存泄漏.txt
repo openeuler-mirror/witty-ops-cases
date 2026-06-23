@@ -1,0 +1,20 @@
+#标题
+pegasus 驱动异步写寄存器时内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 pegasus USB 网络适配器驱动时，若向设备寄存器进行异步写入操作过程中 `usb_submit_urb()` 提交失败，会导致内核内存泄漏。该问题可能导致系统长时间运行后可用内存减少，在网络设备频繁操作或 USB 通信不稳定场景下更容易触发。
+
+#主要错误日志
+pegasus %s returned %d\n
+
+#问题根因
+在函数 `update_eth_regs_async()` 中，当异步写入设备寄存器时，如果 `usb_submit_urb()` 调用失败，代码逻辑直接返回错误，但未释放在此之前已经分配的 `async_urb` 结构和 `req` 内存缓冲区，导致内存泄漏。
+
+#解决方案
+在 `usb_submit_urb()` 失败的错误处理分支中，增加对已分配资源的释放操作。具体为调用 `usb_free_urb(async_urb)` 释放 URB 结构，以及调用 `kfree(req)` 释放请求内存，确保错误发生时不会遗留未释放的内核资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/172f500d086c07bc1ac8d2d19098dfa79dc06fce

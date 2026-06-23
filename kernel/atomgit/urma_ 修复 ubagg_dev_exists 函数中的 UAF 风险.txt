@@ -1,0 +1,20 @@
+#标题
+urma: 修复 ubagg_dev_exists 函数中的 UAF 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下访问 `ubagg_dev_exists` 函数时，存在 Use-After-Free (UAF) 风险。由于该函数在遍历全局链表 `g_ubagg_dev_list` 时未持有锁保护，若此时其他线程并发删除或修改链表节点，可能导致内核崩溃或内存数据被非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+`ubagg_dev_exists` 函数在遍历全局链表 `g_ubagg_dev_list` 查找设备时，缺乏对应的锁保护机制。这导致在遍历过程中，链表节点可能被并发线程释放，从而引发 Use-After-Free 风险。
+
+#解决方案
+在 `ubagg_dev_exists` 函数中增加链表遍历的锁保护。具体修改为：在遍历前调用 `spin_lock_irqsave` 获取自旋锁并关闭中断，遍历结束后调用 `spin_unlock_irqrestore` 释放锁并恢复中断状态，确保链表遍历过程的并发安全性。同时将函数参数 `dev_name` 的类型修正为 `const char *` 以确保安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/53ec945f222fce181089dd3fda2ec7d08dde85f1

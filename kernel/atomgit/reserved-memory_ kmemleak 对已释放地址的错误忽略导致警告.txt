@@ -1,0 +1,23 @@
+#标题
+reserved-memory: kmemleak 对已释放地址的错误忽略导致警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动过程中，reserved-memory 模块在分配保留内存时，若 `memblock_mark_nomap()` 执行失败，代码逻辑会释放相应的内存地址，但随后仍尝试调用 `kmemleak_ignore_phys()` 将该已释放的地址标记为忽略。该行为不仅没有必要，还会触发 kmemleak 的内部警告信息，导致内核日志中出现不必要的错误打印。
+
+#主要错误日志
+kmemleak_ignore_phys()
+ -> make_black_object()
+    -> paint_ptr()
+       -> kmemleak_warn() // warning message here.
+
+#问题根因
+函数 `early_init_dt_alloc_reserved_memory_arch()` 在处理 `memblock_mark_nomap()` 错误时，虽然调用了 `memblock_phys_free(base, size)` 释放了内存，但并未退出流程，而是继续向下执行调用了 `kmemleak_ignore_phys(base)`。这导致 kmemleak 试图对一个已经释放的物理地址进行标记操作，进而触发 `kmemleak_warn()` 产生警告。
+
+#解决方案
+在调用 `kmemleak_ignore_phys(base)` 之前增加对错误返回值 `err` 的判断。仅当 `memblock_mark_nomap()` 执行成功（即 `!err`）时，才执行 kmemleak 的忽略操作，从而避免对已释放地址的无意义处理及由此引发的警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c0c04edf0d569140e97ce6a0e134884464eab103

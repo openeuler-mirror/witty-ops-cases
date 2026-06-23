@@ -1,0 +1,29 @@
+#标题
+bonding: IPv6禁用模式下接收NS报文导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统以 `ipv6.disable=1` 参数启动时，若 Bonding 开启了 ARP/NS 验证功能，接收到 IPv6 NS/NA 报文时会触发内核空指针引用崩溃（Kernel NULL pointer dereference），导致系统 Oops。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 00000000000005d8
+Oops: Oops: 0000 [#1] SMP NOPTI
+RIP: 0010:__ipv6_chk_addr_and_flags+0x69/0x170
+Call Trace:
+ <IRQ>
+ ipv6_chk_addr+0x1f/0x30
+ bond_validate_na+0x12e/0x1d0 [bonding]
+ bond_rcv_validate+0x1a0/0x450 [bonding]
+ bond_handle_frame+0x5e/0x290 [bonding]
+ __netif_receive_skb_core.constprop.0+0x3e8/0xe50
+
+#问题根因
+当内核启动参数包含 `ipv6.disable=1` 时，`inet6_init()` 会在调用 `ndisc_init()` 初始化 `nd_tbl` 之前提前退出，导致 `nd_tbl` 保持为 NULL。然而，Bonding 驱动的接收逻辑 `bond_rcv_validate()` 在识别到 IPv6 报文（`is_ipv6` 为真）时，未检查 IPv6 模块是否真正可用，直接调用 `bond_na_rcv()` 并最终进入 `ipv6_chk_addr()`，在 `__ipv6_chk_addr_and_flags()` 中访问了未初始化的 `nd_tbl` 指针，引发空指针崩溃。
+
+#解决方案
+在 Bonding 驱动的接收处理函数 `bond_rcv_validate()` 中，增加对 IPv6 模块启用状态的检查。在处理 IPv6 报文分支时，添加 `ipv6_mod_enabled()` 判断条件；若 IPv6 被禁用，则直接跳过 `bond_na_rcv()` 处理流程，避免进入后续依赖 IPv6 基础设施的代码路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d00530b7be8a5169a4c9bb14e41ad486fe2a6fea

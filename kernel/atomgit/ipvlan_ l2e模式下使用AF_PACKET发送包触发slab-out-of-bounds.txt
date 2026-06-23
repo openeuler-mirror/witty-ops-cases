@@ -1,0 +1,41 @@
+#标题
+ipvlan: l2e模式下使用AF_PACKET发送包触发slab-out-of-bounds
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用AF_PACKET套接字通过ipvlan l2e模式发送数据包，且通过setsockopt设置PACKET_QDISC_BYPASS选项绕过QDISC时，触发KASAN检测到slab越界访问。此时skb->mac_header保持初始值65535，导致内核在ipvlan_xmit_mode_l2e函数中计算MAC头地址时发生越界读取。
+
+#主要错误日志
+BUG: KASAN: slab-out-of-bounds in ipvlan_xmit_mode_l2e+0xda/0x6a0 [ipvlan]
+Read of size 4 at addr ffff888011720cff by task a.out/1909
+CPU: 5 PID: 1909 Comm: a.out Tainted: G          I E      6.6.0+ #289
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x33/0x50
+ print_address_description.constprop.0+0x6b/0x3d0
+ print_report+0xb5/0x270
+ kasan_report+0xa6/0xe0
+ ipvlan_xmit_mode_l2e+0xda/0x6a0 [ipvlan]
+ ipvlan_start_xmit+0x29/0x80 [ipvlan]
+ __dev_direct_xmit+0x267/0x370
+ packet_xmit+0xf2/0x1a0
+ packet_snd+0xc61/0x14a0
+ __sock_sendmsg+0x116/0x120
+ __sys_sendto+0x183/0x220
+ __x64_sys_sendto+0x72/0x90
+ do_syscall_64+0x57/0x100
+ entry_SYSCALL_64_after_hwframe+0x78/0xe2
+
+#问题根因
+根本原因是skb->mac_header未正确重置，导致在ipvlan_xmit_mode_l2e函数中通过eth_hdr()计算MAC头地址时发生越界：
+1. packet_snd()函数仅在sock->type为SOCK_RAW且未指定skb->protocol时才重置mac_header（packet_parse_headers()逻辑）。
+2. 当使用PACKET_QDISC_BYPASS选项时，发送路径调用dev_direct_xmit()而非dev_queue_xmit()，前者未重置skb->mac_header。
+因此，当ipvlan_xmit_mode_l2e()被调用时，skb->mac_header仍为初始值65535，eth_hdr()使用"skb->head + skb->mac_header"计算地址导致越界访问。
+
+#解决方案
+在ipvlan_xmit_mode_l2e函数中增加防御性检查。在调用eth_hdr()获取以太网头之前，判断skb->mac_header是否已设置；若未设置，则调用skb_reset_mac_header()进行重置，从而避免越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58b05e7bb9e4f644a118ff924ac7edc603f50659

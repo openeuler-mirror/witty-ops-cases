@@ -1,0 +1,25 @@
+#标题
+can: usb: etas_es58x: URB 提交时序错误导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ETAS ES58X CAN USB 接口设备时，若系统调用 `usb_kill_anchored_urbs()`（通常发生在设备断开连接或驱动卸载时），可能导致正在提交过程中的 URB（USB Request Block）无法被正确终止和回收，从而造成内核内存泄漏。在驱动程序的读批量回调（read bulk callback）处理流程中存在并发安全隐患。
+
+#主要错误日志
+未知
+
+#问题根因
+在使用 URB anchor 机制时，必须遵守“先锚定，后提交”的时序原则。驱动程序 `es58x_core.c` 中的 `es58x_read_bulk_callback` 函数在重新提交 URB 时，未先调用 `usb_anchor_urb` 将其挂载到锚点，而是直接调用了 `usb_submit_urb`。这导致如果在提交过程中外部调用 `usb_kill_anchored_urbs()`，该 URB 因未在锚点列表中而被遗漏，无法被终止，最终导致内存泄漏。该驱动其他位置的逻辑均正确处理了此顺序，唯独此处遗漏。
+
+#解决方案
+修改 `es58x_read_bulk_callback` 函数中的 URB 重提交逻辑，严格按照正确顺序执行：
+1. 在调用 `usb_submit_urb` 之前，先调用 `usb_anchor_urb` 将 URB 锚定到 `es58x_dev->rx_urbs` 列表中。
+2. 增加对 `usb_submit_urb` 返回值的判断：
+   - 若提交成功（返回 0），则直接返回，URB 保持锚定状态。
+   - 若提交失败，立即调用 `usb_unanchor_urb` 取消锚定，释放引用，防止资源泄漏。
+3. 移除原有的错误处理逻辑中对 `ret` 是否为 0 的部分冗余判断，优化错误处理路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4395c0939f54382fa36f11ab35e4878dd34ac50c

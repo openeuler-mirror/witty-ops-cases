@@ -1,0 +1,36 @@
+#标题
+tbf qdisc 在处理 GSO 分包时 backlog 统计信息计算错误导致下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 GSO 的发送端机器上配置 tbf qdisc（令牌桶过滤器），当 GSO 包长度大于配置的突发大小时触发分段。此时 tbf 的 backlog 字节统计信息出现错误：
+1. 流量传输过程中，backlog 显示为异常高值（由于 u32 整数下溢导致）。
+2. 流量停止传输后，backlog 值不为 0，违反了 qdisc 统计的正常预期。
+
+复现方法：
+1. 确保发送端开启了 GSO。
+2. 配置 tbf，设置较小的 burst size（如 1 MTU）：
+   `tc qdisc add dev <oif> root handle 1: tbf rate 50Mbit burst 1514 latency 50ms`
+3. 发送大量 TCP 流量（如使用 iPerf3）。
+4. 查看统计信息：`tc -s qdisc show dev <oif>`
+
+#主要错误日志
+未知
+
+#问题根因
+当 GSO 数据包长度超过 tbf 配置的突发大小时，`tbf_segment` 函数会对数据包进行分段并入队。
+原有代码逻辑中，`len` 变量在分段成功入队前就累加了所有分段的长度，且 `qdisc_tree_reduce_backlog` 函数在计算时使用了 `prev_len - len`。
+如果部分分段入队失败（被丢弃），`len` 的统计值仍然包含了被丢弃分段的长度，导致 `qstats.backlog` 增加的值与实际入队的数据量不符。
+当这些数据包最终出队时，内核会减去实际出队的字节数，导致 backlog 统计值减去的幅度大于之前增加的幅度，从而引发无符号整数的下溢。
+
+#解决方案
+修改 `tbf_segment` 函数的统计逻辑：
+1. 增加 `seg_len` 变量记录当前分段长度。
+2. 将 `len` 的累加逻辑移动到 `qdisc_enqueue` 成功的分支中，确保只统计成功入队的分段长度。
+3. 修正 `qdisc_tree_reduce_backlog` 的调用逻辑，确保仅在分段成功入队（`nb > 0`）时执行，并正确更新 `sch->qstats.backlog`。
+4. 修正返回值逻辑：若 `nb > 0` 返回 `NET_XMIT_SUCCESS` 并消费原 skb；否则返回 `NET_XMIT_DROP` 并释放原 skb。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/229c68f35f6173969da0298c2d8cdadb0cb3668e

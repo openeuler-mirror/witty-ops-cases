@@ -1,0 +1,27 @@
+#标题
+tracing/probes 参数数量超限导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建 trace_probe（如 kprobe、uprobe、eprobe 或 fprobe）时，若指定的 fetchargs 参数数量超过 128 个（MAX_TRACE_ARGS），内核将发生空指针解引用，导致 Oops 甚至系统崩溃。这是因为在设置参数数量时未先进行限制检查，导致后续初始化流程访问了未初始化的内存区域。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000020
+#PF: supervisor read access in kernel mode
+#PF: error_code(0x0000) - not-present page
+PGD 0 P4D 0
+Oops: Oops: 0000 [#1] PREEMPT SMP PTI
+CPU: 0 UID: 0 PID: 1769 Comm: cat Not tainted 6.11.0-rc7+ #8
+Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.16.3-1.fc39 04/01/2014
+RIP: 0010:__set_print_fmt+0x134/0x330
+
+#问题根因
+创建 trace_probe 时，代码逻辑先设置了 nr_args（记录参数个数），然后再将参数截断到 MAX_TRACE_ARGS 限制内。然而，参数结构体的初始化循环仅针对截断后的数量进行。当用户传入超过 128 个参数时，nr_args 记录了真实的较大数值，导致后续处理流程（如 __set_print_fmt）依据 nr_args 访问了未被初始化的参数内存，引发非法内存访问。
+
+#解决方案
+在 trace_probe 初始化分配资源之前，提前检查参数数量是否超过 MAX_TRACE_ARGS（128个）。如果超过限制，直接返回 -E2BIG 错误，而不是继续执行并在后续阶段进行静默截断。该修复涉及 trace_kprobe、trace_uprobe、trace_eprobe 和 trace_fprobe 四个模块。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bc0e01cb3294ec8566b2f387ca347eb621797920

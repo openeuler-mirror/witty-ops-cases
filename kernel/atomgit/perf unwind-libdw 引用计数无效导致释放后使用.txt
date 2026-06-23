@@ -1,0 +1,21 @@
+#标题
+perf unwind-libdw 引用计数无效导致释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `perf` 工具进行调用链回溯（unwind）操作时，由于 `maps` 和 `map` 结构体的引用计数处理不当，导致释放后使用，可能引发内核崩溃或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在引入 `addr_location__exit()` 函数后，`unwind-libdw.c` 中的代码逻辑存在缺陷：在处理 unwind 信息时，直接将 `al.maps` 和 `al.map` 赋值给 `e->ms`，而未增加相应的引用计数。随后当 `addr_location__exit()` 被调用时，会减少引用计数并可能释放这些结构体，导致 `e->ms` 中保存的指针指向已被释放的内存，造成释放后使用。
+
+#解决方案
+1. 在赋值时增加引用计数：将直接赋值修改为使用 `maps__get(al.maps)` 和 `map__get(al.map)`，确保在 `addr_location__exit()` 执行后，相关对象不会被过早释放。
+2. 添加资源清理逻辑：在 `unwind__get_entries` 函数返回前，遍历 entries 数组并对每一项调用 `map_symbol__exit()`，正确释放之前获取的引用计数，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/88f481e1ce7e80e793d30d75f944051d4884da81

@@ -1,0 +1,21 @@
+#标题
+rseq/mm_cid: 修复 mm_cid 宏默认开启导致的 KABI 不一致问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+开启了 CONFIG_SCHED_MM_CID 配置项后，内核核心结构体 `task_struct` 和 `mm_struct` 中新增了 `mm_cid`、`last_mm_cid`、`pcpu_cid` 等字段。这导致结构体大小发生变化，破坏了内核 ABI（KABI）的一致性，可能引发依赖于特定结构体偏移或大小的内核模块（如驱动程序）功能异常或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在引入提交 af7f588d8f73 ("sched: Introduce per-memory-map concurrency ID") 时，Kconfig 中将 `CONFIG_SCHED_MM_CID` 的默认值设置为 `y`（`def_bool y`）。该配置默认开启导致相关字段无条件编译进核心数据结构，改变了结构体布局，从而破坏了 KABI 兼容性。
+
+#解决方案
+1. 将 `init/Kconfig` 中 `CONFIG_SCHED_MM_CID` 的默认值修改为 `n`（`def_bool n`），并在 arm64 和 x86 的 defconfig 中显式关闭该选项（`# CONFIG_SCHED_MM_CID is not set`）。
+2. 利用 `KABI_REPLACE` 宏机制，在 `CONFIG_SCHED_MM_CID` 未开启时（`#else` 分支）保留相应的结构体字段（如 `mm_cid`、`pcpu_cid`、`cid_work` 等）作为占位符。这样无论该功能是否开启，结构体大小和字段偏移保持一致，确保了 KABI 兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7a35fa06727d6e440618ea0474377aeddf0c1fd0

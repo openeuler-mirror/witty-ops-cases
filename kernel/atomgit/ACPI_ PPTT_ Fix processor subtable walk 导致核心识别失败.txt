@@ -1,0 +1,26 @@
+#标题
+ACPI: PPTT: Fix processor subtable walk 导致核心识别失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在解析 PPTT（Processor Properties Topology Table）表时，忽略最后一个不包含私有资源的处理器节点。这导致系统无法正确识别特定的 CPU 核心，进而引发功能错误。具体表现为：
+1. 内核日志显示无法定位核心，报错 "PPTT table found, but unable to locate core XX (XX)"。
+2. 系统统计 SPE（Statistical Profiling Extensions）功能失败，报错 "ACPI: SPE must be homogeneous"。
+
+#主要错误日志
+- ACPI PPTT: PPTT table found, but unable to locate core XX (XX)
+- ACPI: SPE must be homogeneous
+- [推断] pr_warn("Invalid zero length subtable\n")
+
+#问题根因
+此前针对 PPTT 子表长度校验的修复引入了回归问题。代码在循环遍历时，使用 `entry + proc_sz < table_end` 作为终止条件，导致当最后一个处理器节点紧邻表末尾时，如果该节点不包含私有资源，其长度等于 `proc_sz`，导致校验条件判定失败并提前退出循环，跳过了该有效节点的处理。此外，原逻辑未能正确处理节点长度不等于 `acpi_pptt_processor` 结构体大小的情况。
+
+#解决方案
+修改 `acpi_pptt_leaf_node` 和 `acpi_find_processor_node` 函数中的循环终止条件与校验逻辑：
+1. 将循环边界检查从 `< table_end` 修改为 `<= table_end`，确保包含紧邻表末尾的有效节点。
+2. 在 `acpi_find_processor_node` 中增加对处理器节点完整性的校验，检查 `entry->length` 是否覆盖整个节点结构（包含私有资源），确保节点完全包含在 PPTT 表中。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b83166adf64e90f7551e74a5b36059de1290f839

@@ -1,0 +1,20 @@
+#标题
+tracing/eprobe: 动态事件添加失败时未释放 eprobe 导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建 eprobe 事件时，若 `dyn_event_add` 函数执行失败，系统未能正确注销事件调用并释放已分配的 eprobe 资源，导致内存泄漏及相关内核对象残留。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__trace_eprobe_create` 函数中，调用 `dyn_event_add` 添加动态事件失败时，代码逻辑直接解锁互斥量并返回错误，遗漏了对 `trace_probe_unregister_event_call` 的调用以注销事件，且未跳转至错误处理流程释放 eprobe 内存资源。
+
+#解决方案
+在 `dyn_event_add` 调用处增加返回值检查。若返回值小于 0（即添加失败），先调用 `trace_probe_unregister_event_call` 注销事件，随后解锁互斥量并跳转至 `error` 标签执行资源释放逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f5ddd1e0e10da8802eaf0f42254e04f7ca7a019b

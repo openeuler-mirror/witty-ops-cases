@@ -1,0 +1,21 @@
+#标题
+NFSv4.1 创建会话失败导致连接建立异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 NFS 客户端的页面大小大于服务器的页面大小，且服务器拒绝向上协商时，NFSv4.1 会话创建过程失败。具体表现为 `nfs4_proc_create_session()` 函数执行失败，导致无法正常建立 NFSv4.1 连接。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在 `nfs4_verify_back_channel_attrs` 函数中对 backchannel 的 `max_resp_sz` 属性校验逻辑错误。原代码使用 `if (rcvd->max_resp_sz < sent->max_resp_sz)` 进行检查，当服务器返回的 `max_resp_sz` 小于客户端提议的值时，校验直接返回 `-EINVAL` 失败。
+根据 NFS 协议，服务器有权降低提议值的大小，但不允许增加。原逻辑错误地拒绝了服务器返回的合法较小值，导致在客户端页面大小大于服务器等场景下会话创建失败。
+
+#解决方案
+修改 `fs/nfs/nfs4proc.c` 文件中 `nfs4_verify_back_channel_attrs` 函数的校验逻辑，将判断条件从 `rcvd->max_resp_sz < sent->max_resp_sz` 修改为 `rcvd->max_resp_sz > sent->max_resp_sz`。此举允许服务器返回小于客户端提议的 `max_resp_sz` 值，仅当返回值大于提议值时才视为非法并返回错误，从而修复因服务器缩减响应大小导致的会话创建失败问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/68b930dc570612cf7f942fa1a5b4086cc1ea1841

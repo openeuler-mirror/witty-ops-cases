@@ -1,0 +1,20 @@
+#标题
+mm/madvise: 处理 race unwinding 时 madvise_lock() 失败导致的异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `process_madvise()` 系统调用处理过程中，当发生竞争需要回滚（unwinding race）并返回 `-ERESTARTNOINTR` 时，如果重新获取 `madvise_lock` 失败，代码未正确处理该错误，而是继续执行后续操作。这可能导致在未持有正确锁的情况下访问临界区，引发锁校验失败或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在处理 `-ERESTARTNOINTR` 竞争回滚逻辑时，代码先释放了锁，随后重新获取锁。但 `madvise_lock(mm, behavior)` 的返回值未被检查。如果获取锁失败（返回非零值），代码未中止操作，而是错误地继续执行了 `madvise_init_tlb` 及后续流程。
+
+#解决方案
+在竞争回滚路径中增加对 `madvise_lock()` 返回值的检查。若获取锁失败，直接跳转至 `out` 标签退出函数，避免在锁获取失败的情况下继续执行临界区操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9ff82f272757ee77ee29075d5c681a74d336634e

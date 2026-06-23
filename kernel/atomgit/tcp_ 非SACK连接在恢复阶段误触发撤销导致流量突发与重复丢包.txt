@@ -1,0 +1,21 @@
+#标题
+tcp: 非SACK连接在恢复阶段误触发撤销导致流量突发与重复丢包
+
+#内核版本
+OLK-6.6
+
+#问题现象
+TCP连接在不支持SACK的情况下，在快速恢复或RTO恢复阶段结束时，可能错误地触发cwnd（拥塞窗口）撤销操作。该现象会导致cwnd被错误地恢复到恢复前的数值，进而引发流量突发、队列堆积，并极大概率触发新一轮的丢包恢复周期，导致连接反复经历丢包恢复且重传率居高不下。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于提交 e37ab7373696 与非SACK连接行为的交互缺陷。对于非SACK连接，在丢包恢复阶段结束时，若 `snd_una == high_seq`，函数 `tcp_is_non_sack_preventing_reopen()` 会保持连接状态为 `CA_Recovery` 或 `CA_Loss`，但同时将 `tp->retrans_stamp` 清零。
+此后，`tcp_packet_delayed()` 函数检测到 `retrans_stamp` 为 0，结合此前提交的逻辑，错误地判定没有数据被重传，从而错误地执行了撤销操作，恢复了 cwnd。
+
+#解决方案
+修改 `tcp_packet_delayed()` 函数的逻辑，增加对非SACK连接的特殊判断。当 `tp->retrans_stamp` 为 0 时，对于非SACK连接，如果 `snd_una` 大于等于 `high_seq`，则忽略零值的 `retrans_stamp`，不再误判为数据包延迟，从而避免错误的撤销操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b2471eb6c82a1e6f4497dcaf78830d4090180b18

@@ -1,0 +1,26 @@
+#标题
+USB gadget 自供电状态判断逻辑错误导致电源属性配置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+USB gadget 设备在配置、挂起和恢复过程中，自供电状态配置错误。
+1. 对于功耗低于 100mA 但实际为总线供电的设备，错误地标记为自供电。
+2. 在挂起和恢复流程中，未检查配置描述符的 bmAttributes 字段，导致设备供电属性被错误地设置或清除，造成 USB 设备供电状态与实际物理连接状态不符，可能引发设备枚举异常或供电管理混乱。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在判断 USB gadget 是否为自供电时逻辑存在缺陷：
+1. 原代码仅依据 bMaxPower 是否大于 100mA (USB_SELF_POWER_VBUS_MAX_DRAW) 来决定是否清除自供电状态，忽略了配置描述符中 bmAttributes 的 Self-powered 属性位。这导致某些合法的低功耗总线供电设备被误判为自供电。
+2. 在 composite_suspend 和 composite_resume 函数中，未结合 bmAttributes 进行判断，直接强制设置或清除自供电状态，导致设备供电属性在电源管理过程中被错误覆盖。
+
+#解决方案
+修改 drivers/usb/gadget/composite.c 文件，修正供电属性的判断逻辑：
+1. 在 set_config 和 composite_resume 函数中，将判断条件修改为：若功耗大于 100mA 或者 bmAttributes 未设置 USB_CONFIG_ATT_SELFPOWER 标志，则调用 usb_gadget_clear_selfpowered 清除自供电状态；否则调用 usb_gadget_set_selfpowered 设置自供电状态。
+2. 在 composite_suspend 函数中，增加对 bmAttributes 的检查，仅当设备配置为自供电时才设置自供电状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c149e94cbec74ab34d30ecc907097aa6172c5bf

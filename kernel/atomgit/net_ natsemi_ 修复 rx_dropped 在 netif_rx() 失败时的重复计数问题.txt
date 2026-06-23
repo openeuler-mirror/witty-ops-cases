@@ -1,0 +1,21 @@
+#标题
+net: natsemi: 修复 rx_dropped 在 netif_rx() 失败时的重复计数问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 `ip -s -s` 命令查看网卡统计信息时，接收丢包计数显示为实际丢包数量的两倍，导致统计数据不准确，无法反映真实的丢包情况。
+
+#主要错误日志
+未知
+
+#问题根因
+`netif_rx()` 函数在处理失败时，内核核心代码已经自动增加了 `rx_dropped` 计数。然而，驱动程序在 `netif_rx()` 返回失败（`NET_RX_DROP`）的错误处理路径中，又额外增加了 `ndev->stats.rx_dropped`。由于这两个计数最终会合并展示给用户，导致同一个丢包事件被重复统计，表现为用户可见的统计数据翻倍。
+
+#解决方案
+移除驱动程序在 `netif_rx()` 返回 `NET_RX_DROP` 时的 `ndev->stats.rx_dropped` 自增操作，避免与内核核心层的计数逻辑冲突。
+同时，保留在 `skb` 分配失败（`unlikely(!skb)`）场景下的 `ndev->stats.rx_dropped` 计数，因为该路径不经过 `netif_rx()`，需要驱动自行统计。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d6b6142b6eb47612a54196e0c0c974e57eaeaca8

@@ -1,0 +1,35 @@
+#标题
+RDMA/core: ib_register_device 注册时触发 KASAN slab-use-after-free 读错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ib_register_device` 注册 RDMA 设备时，内核触发 KASAN (Kernel Address Sanitizer) 检测到的 "slab-use-after-free Read" 错误。该问题发生在读取设备名称计算路径长度时，导致内核调用栈打印并可能引发系统不稳定。问题触发路径涉及 `kobject_uevent_env` -> `kobject_get_path` -> `strlen`。
+
+#主要错误日志
+```
+KASAN: slab-use-after-free Read in ib_register_device
+Call Trace:
+ __dump_stack lib/dump_stack.c:94 [inline]
+ dump_stack_lvl+0x116/0x1f0 lib/dump_stack.c:120
+ print_address_description mm/kasan/report.c:408 [inline]
+ print_report+0xc3/0x670 mm/kasan/report.c:521
+ kasan_report+0xe0/0x110 mm/kasan/report.c:634
+ strlen+0x93/0xa0 lib/string.c:420
+ __fortify_strlen include/linux/fortify-string.h:268 [inline]
+ get_kobj_path_length lib/kobject.c:118 [inline]
+ kobject_get_path+0x3f/0x2a0 lib/kobject.c:158
+ kobject_uevent_env+0x289/0x1870 lib/kobject_uevent.c:545
+ ib_register_device drivers/infiniband/core/device.c:1472 [inline]
+ ib_register_device+0x8cf/0xe00 drivers/infiniband/core/device.c:1393
+```
+
+#问题根因
+这是一个并发竞态问题。函数 `ib_device_rename()` 在持有锁的情况下重命名设备名称，但在 `ib_register_device()` 函数内部调用 `kobject_uevent()` 时，会在无锁保护的情况下访问该设备名称。由于 `kobject_uevent()` 访问名称时未持有锁，导致其可能读取到正在被修改或释放的内存地址，从而触发 use-after-free 错误。该问题与 commit 1d6a9e7449e2 修复的问题类似。
+
+#解决方案
+在 `ib_register_device` 函数中调用 `kobject_uevent()` 发送 KOBJ_ADD 事件前后，增加 `devices_rwsem` 读写信号量的保护。具体修改为：在调用 `kobject_uevent` 前执行 `down_read(&devices_rwsem)`，调用后执行 `up_read(&devices_rwsem)`，确保在访问设备名称时持有读锁，防止并发重命名操作导致的 UAF。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b70f11772457c9ac31d4c593b386a1825f3f1a1

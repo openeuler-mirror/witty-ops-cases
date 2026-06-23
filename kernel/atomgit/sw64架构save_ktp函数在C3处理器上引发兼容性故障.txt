@@ -1,0 +1,23 @@
+#标题
+sw64架构save_ktp函数在C3处理器上引发兼容性故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构的 C3 处理器（CONFIG_SUBARCH_C3B）上启动内核时，因 Commit 388c8e2bbf53 引入的新入口框架将 save_ktp() 移至 head.S 中统一调用，导致与旧固件不兼容。由于旧固件未实现 hmcall_wrktp 接口，系统在早期初始化阶段调用该接口时会出现异常，导致无法正常启动或功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit 388c8e2bbf53 ("sw64: introduce new entry framework for C4") 将 save_ktp() 调用移至 head.S 汇编入口处执行，该逻辑依赖于固件实现的 hmcall_wrktp。然而，旧版本的固件（针对 C3 架构）并未实现 hmcall_wrktp 功能，导致在此处调用时发生错误，破坏了向后兼容性。
+
+#解决方案
+修复补丁通过调整代码逻辑恢复了兼容性：
+1. 在 `arch/sw_64/kernel/head.S` 中移除统一调用的 `SAVE_KTP` 汇编指令。
+2. 在 `arch/sw_64/kernel/early_init.c` 的 `sw64_start_kernel` 函数中，将 `save_ktp()` 的调用位置调整至 `fixup_hmcall()` 之后、`start_kernel()` 之前。
+3. 在 `arch/sw_64/include/asm/hmcall.h` 中针对不同子架构进行区分定义：对于 C4 架构使用内联汇编 `csrw $8, 0xef`；对于 C3B 架构则重新定义为 `wrktp()` 宏调用。此举确保了 C3 架构在 fixup 完成后再执行相关操作，避免了固件接口缺失导致的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/21f68a97ec85312b1dcfc628ae5981c49780729e

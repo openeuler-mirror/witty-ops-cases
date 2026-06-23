@@ -1,0 +1,23 @@
+#标题
+KVM 模块编译失败导致构建中断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能 `CONFIG_KVM=m` 选项编译内核模块时，编译过程报错中断，提示 `smp_rcb` 和 `run_mode_guest_key` 符号未定义。
+
+#主要错误日志
+ERROR: modpost: "smp_rcb" [arch/sw_64/kvm/kvm.ko] undefined!
+ERROR: modpost: "run_mode_guest_key" [arch/sw_64/kvm/kvm.ko] undefined!
+（注：根据 Commit 描述 "smp_rcb and run_mode_guest_key are undefined" 还原的典型编译错误信息）
+
+#问题根因
+在优化 Guest 中断处理的代码提交中，引入了对 `smp_rcb` 和 `run_mode_guest_key` 的调用。但 `smp_rcb` 变量定义在内核核心代码中且未导出符号表，而 `run_mode_guest_key` 函数调用在 KVM 模块编译上下文中不可用，导致模块链接时找不到符号定义。
+
+#解决方案
+1. 在 `arch/sw_64/kernel/smp.c` 中添加 `EXPORT_SYMBOL(smp_rcb)`，将 `smp_rcb` 变量导出至内核符号表，供 KVM 模块使用。
+2. 在 `arch/sw_64/kvm/kvm_core4.c` 的 `feat_vcpu_interrupt_line` 函数中移除对 `run_mode_guest_key` 的依赖，改用 `cpu_to_rcid` 获取 RCID，并直接调用 `sendii` 发送中断，避免未定义符号问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc51a38a2645a91c1bfd4e673c72b68b484ba3bf

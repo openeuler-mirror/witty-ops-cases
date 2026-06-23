@@ -1,0 +1,21 @@
+#标题
+sw64架构下PCM驱动memset操作导致页面错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SW64（申威）架构下，调用 ALSA PCM 子系统的 `snd_pcm_format_set_silence` 函数对 IO 内存区域进行数据填充时，触发页面错误。系统运行不稳定或音频功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+SW64 架构不支持使用 SIMD 指令访问 IO 内存区域。
+内核中标准的 `memset` 函数默认会使用 SIMD 指令进行优化操作，当该函数作用于 IO 内存映射区时，由于硬件不支持此类访问方式，导致发生页面错误。而 `memset_io` 函数未使用 SIMD 优化，可以安全地访问 IO 内存。
+
+#解决方案
+针对 SW64 架构进行特定修改，在 `sound/core/pcm_misc.c` 文件的 `snd_pcm_format_set_silence` 函数中，通过条件编译 `#ifdef CONFIG_SW64` 判断，将原本的 `memset` 调用替换为 `memset_io`，从而避免在 IO 内存区域使用不支持的 SIMD 指令。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e1241df56b5095a0a1111e80b0f030a5b6bf0094

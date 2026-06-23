@@ -1,0 +1,21 @@
+#标题
+pinctrl: single 修复 PIN_CONFIG_BIAS_DISABLE 配置失效问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 pinctrl-single 驱动中，当尝试通过内核接口设置 `PIN_CONFIG_BIAS_DISABLE` 参数以禁用引脚偏置（bias）功能时，该配置请求无法生效。具体表现为：系统无法正确禁用引脚的上拉或下拉电阻，导致引脚电气属性维持在原先的上拉或下拉状态，而非预期的浮空状态。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在处理 `pin_config_set` 时，本应针对 `PIN_CONFIG_BIAS_DISABLE` 执行专门的禁用逻辑（调用 `pcs_pinconf_clear_bias`）。然而，该段逻辑被错误地放置在了配置表查找循环内部。
+由于 `PIN_CONFIG_BIAS_DISABLE` 并没有对应的设备树表项，循环内的查找逻辑永远无法匹配到该项，导致原本用于禁用偏置的代码永远不会被执行。该缺陷自代码首次合并时就已存在。
+
+#解决方案
+将处理 `PIN_CONFIG_BIAS_DISABLE` 的逻辑从配置表查找循环内部移出，放置在循环开始之前。当检测到请求参数为 `PIN_CONFIG_BIAS_DISABLE` 时，直接调用 `pcs_pinconf_clear_bias` 函数清除偏置设置并跳过后续的表查找循环，从而确保该配置能被正确处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2ab1e22ca737c0862856cbbb82d79a247e49f32e

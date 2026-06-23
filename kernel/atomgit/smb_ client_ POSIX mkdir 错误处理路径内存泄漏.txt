@@ -1,0 +1,20 @@
+#标题
+smb: client: POSIX mkdir 错误处理路径内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 SMB3.1.1 POSIX mkdir 操作过程中，若触发错误处理路径（进入 `err_free_rsp_buf` 分支），会导致内核响应缓冲区内存泄漏。该泄漏不会立即显现，而是在后续卸载 `cifs.ko` 模块（执行 `rmmod`）时，由内核内存管理子系统检测并报告。
+
+#主要错误日志
+__kmem_cache_shutdown() 报告的内存泄漏日志（推断，通常包含 "Remaining memory" 或 slab 对象未释放信息）。
+
+#问题根因
+在函数 `smb311_posix_mkdir()` 中，错误处理标签 `err_free_rsp_buf` 调用 `free_rsp_buf(resp_buftype, rsp)` 时，指针变量 `*rsp` 尚未被赋值（仍为初始化的 NULL）。这导致 `free_rsp_buf()` 实际上未执行释放操作，从而造成 `rsp_iov.iov_base` 指向的响应缓冲区内存泄漏。
+
+#解决方案
+修改 `err_free_rsp_buf` 标签处的代码，将 `free_rsp_buf()` 的第二个参数由未赋值的 `rsp` 指针更改为实际存储响应缓冲区地址的 `rsp_iov.iov_base`，确保在错误路径下正确释放已分配的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d6d01b1adff6b87d83ad7a6debe649b72ec93bd

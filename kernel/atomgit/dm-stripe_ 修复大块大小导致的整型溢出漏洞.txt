@@ -1,0 +1,20 @@
+#标题
+dm-stripe: 修复大块大小导致的整型溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 dm-stripe 目标设备配置了过大的 chunk size 时，`stripe_io_hints` 函数在计算 IO 提示参数过程中发生整型溢出。这会导致内核计算出错误的 `io_min` 和 `io_opt` 值并设置给底层块设备，可能引发后续 IO 请求异常或文件系统行为错乱。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `stripe_io_hints` 函数中，计算 `chunk_size`（将扇区数左移 SECTOR_SHIFT 转换为字节）以及计算 `io_opt`（`chunk_size * sc->stripes`）时，未进行溢出检查。当用户设置的 chunk size 过大时，左移和乘法运算超出 unsigned int 类型的表示范围，导致整型溢出，产生错误的计算结果。
+
+#解决方案
+引入内核安全运算辅助函数 `check_shl_overflow` 和 `check_mul_overflow`，在计算前对左移和乘法操作进行溢出检测。只有当运算未发生溢出时，才调用 `blk_limits_io_min` 和 `blk_limits_io_opt` 设置限制值；若检测到溢出，则跳过设置，避免写入错误的参数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c0c2408686dd19859737297d24c2a02095ad979f

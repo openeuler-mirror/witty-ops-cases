@@ -1,0 +1,26 @@
+#标题
+btrfs: 修复 relocation 状态标志位被错误清除导致并发异常的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BTRFS 文件系统中，当一个任务正在进行 chunk relocation（数据块重定位）时，如果另一个任务尝试启动 relocation，新任务会检测到 `BTRFS_FS_RELOC_RUNNING` 标志已设置并返回 `-EINPROGRESS` 错误。然而，此时调用者仍会调用 `reloc_chunk_end()` 函数，错误地清除了正在运行的 relocation 任务所持有的 `BTRFS_FS_RELOC_RUNNING` 标志位。这会导致正在运行的 relocation 任务状态异常，破坏了并发控制逻辑，可能引发后续 relocation 操作的混乱或不可预知的行为。
+
+#主要错误日志
+btrfs: chunk relocation canceled on start
+
+#问题根因
+根因在于 `reloc_chunk_start()` 与 `reloc_chunk_end()` 的调用逻辑不匹配：
+1. 当 `reloc_chunk_start()` 检测到 `BTRFS_FS_RELOC_RUNNING` 标志已被设置（即已有其他任务在运行 relocation）时，它会返回 `-EINPROGRESS` 错误给调用者。
+2. 调用者（如 `btrfs_relocate_block_group`）在收到错误返回值后，仍然执行了 `reloc_chunk_end()` 清理流程。
+3. `reloc_chunk_end()` 的执行清除了 `BTRFS_FS_RELOC_RUNNING` 标志，但该标志是由另一个正在运行的任务设置的，导致那个正在运行的任务的“运行中”状态被意外清除。
+
+#解决方案
+遵循“只有启动成功才需结束”的设计原则，对调用逻辑和异常处理进行修正：
+1. **调整调用位置**：将 `reloc_chunk_end()` 的调用位置移至函数正常返回路径或成功启动后的清理路径，确保仅在 `reloc_chunk_start()` 成功返回（返回值为 0）时才被调用。在 `btrfs_relocate_block_group` 中，将其移至 `iput(rc->data_inode)` 之后；在 `btrfs_recover_relocation` 中，调整跳转标签逻辑。
+2. **内部错误处理完善**：修改 `reloc_chunk_start()` 函数，如果在启动时发现有取消请求（`reloc_cancel_req`），在返回 `-ECANCELED` 之前，主动清除 `BTRFS_FS_RELOC_RUNNING` 标志，因为此时该标志是当前任务刚设置的，避免后续因未调用 `reloc_chunk_end()` 而导致标志位残留。
+3. **增加断言保护**：在 `reloc_chunk_end()` 中增加 `ASSERT(test_bit(BTRFS_FS_RELOC_RUNNING, ...))` 断言，确保调用时状态正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b60af025639f1c7c00ddb921e26168f1bd54694

@@ -1,0 +1,27 @@
+#标题
+KVM x86影子页表因GFN不匹配导致释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在KVM虚拟机使用影子页表且客户机页表在VM entries之间被修改的场景下，操作memslot删除或进行脏页记录时，内核会发生释放后使用。具体表现为：当memslot被删除时，对应的kvm_mmu_page被回收，但由于反向映射条目未能正确移除，后续的rmap遍历操作（如脏页记录、MMU notifier失效请求）会访问已释放的kvm_mmu_page内存，导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+KVM影子MMU在计算直接影子页的GFN时，假设`sp->gfn`加上SPTE索引是正确的。该假设在客户机页表在VM entries之间被修改时失效。
+具体流程如下：
+1. KVM安装一个2MB映射的PDE，并创建一个标记为直接映射的`kvm_mmu_page`（覆盖范围`[sp->gfn, sp->gfn + 511]`）。
+2. 客户机修改了该PDE映射。
+3. 客户机访问同一2MB区域内的另一个页面。KVM安装新的叶子SPTE和rmap条目。此时SPTE使用基于新映射的“正确”GFN，但该GFN超出了步骤1建立的范围，导致后续无法通过rmap找到并移除该条目。
+4. 删除覆盖该区域的memslot，KVM回收`kvm_mmu_page`。`rmap_remove()`仅在原定范围内查找，未能删除步骤3中错误位置记录的rmap条目。
+5. 后续对该页面的rmap遍历操作访问了过时的rmap，解引用了已释放的`kvm_mmu_page`，触发UAF。
+
+#解决方案
+在`__link_shadow_page`函数中，增加对目标GFN是否匹配的检查。
+如果在安装非叶子SPTE时发现现有SPTE存在，不再假设其GFN正确，而是通过调用`mmu_page_zap_pte`解除现有SPTE和rmap条目。这确保了旧的影子页和rmap条目被清除，新安装的rmap位于正确的位置，从而避免后续的释放后使用风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5a369b3e7997d265d58d5daf1b9841f8cd154f22

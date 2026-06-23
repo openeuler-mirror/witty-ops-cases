@@ -1,0 +1,20 @@
+#标题
+ocfs2: 卸载后出现忙碌 inode 导致潜在内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统卸载 OCFS2 文件系统后，内核报告存在忙碌的 inode（busy inodes after unmount）。这表明有 inode 在卸载过程中未被正确释放，导致内存泄漏及文件系统状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 commit 9c89fe0af826 ("ocfs2: Handle error from dquot_initialize()") 的修改中，引入了一个错误处理逻辑缺陷。当 `new_inode()` 成功分配了 inode，但后续的 `dquot_initialize()` 执行失败时，代码直接返回了错误指针，却忘记调用 `iput()` 来释放已分配的 inode 结构。这导致该 inode 引用计数未被减少，无法被释放，从而在卸载文件系统时表现为忙碌 inode。
+
+#解决方案
+在 `fs/ocfs2/namei.c` 的 `ocfs2_get_init_inode()` 函数中，针对 `dquot_initialize()` 失败的分支，在返回错误指针前增加 `iput(inode)` 调用，确保 inode 被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5258610a21240dbb38531e57c9038251caa15bca

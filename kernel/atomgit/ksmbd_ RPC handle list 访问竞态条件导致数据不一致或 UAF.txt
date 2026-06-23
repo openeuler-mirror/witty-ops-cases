@@ -1,0 +1,23 @@
+#标题
+ksmbd: RPC handle list 访问竞态条件导致数据不一致或 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 会话处理 RPC 句柄列表时存在竞态条件。若并发调用 `ksmbd_session_rpc_open` 修改 XArray，可能导致数据损坏；若并发调用 `ksmbd_session_rpc_method` 读取正在被移除的条目，可能导致读取不一致数据或引发 use-after-free 风险。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于对 `sess->rpc_handle_list` XArray 的锁使用不当：
+1. 在 `ksmbd_session_rpc_open()` 函数中，代码错误地在调用修改 XArray 结构的 `xa_store()` 和 `xa_erase()` 操作前获取了读锁，而非写锁，无法防止并发修改导致的数据损坏。
+2. 在 `ksmbd_session_rpc_method()` 函数中，使用 `xa_load()` 读取列表时未持有任何锁，若此时条目被并发移除并释放，可能导致读取数据不一致或释放后使用。
+
+#解决方案
+1. 在 `ksmbd_session_rpc_open()` 中，将 `down_read()` 替换为 `down_write()`，确保在执行 `xa_store()` 和 `xa_erase()` 时拥有独占访问权，并修正错误处理路径中锁的释放逻辑。
+2. 在 `ksmbd_session_rpc_method()` 中增加 `down_read()` 和 `up_read()` 保护，确保查找操作的安全性和数据一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c03a5e4f232ce8b9bd69a08d26d939dab0814af9

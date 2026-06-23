@@ -1,0 +1,35 @@
+#标题
+mlx5e 网卡 TX 错误 CQE 恢复导致 DMA FIFO 指针不同步引发内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 mlx5e 网卡发送队列（SQ）遇到 TX 错误 CQE 并触发恢复流程时，系统触发 WARNING 并打印调用栈。该故障会导致 DMA 地址解析错误，具体表现为在 `iommu_dma_unmap_page` 函数中触发警告，并可能尝试取消映射恢复前的过时（stale）DMA 地址。
+
+#主要错误日志
+```
+WARNING: CPU: 0 PID: 0 at drivers/iommu/dma-iommu.c:1240 iommu_dma_unmap_page+0x79/0x90
+RIP: 0010:iommu_dma_unmap_page+0x79/0x90
+Call Trace:
+ <IRQ>
+ ? iommu_dma_unmap_page+0x79/0x90
+ dma_unmap_page_attrs+0x10d/0x1b0
+ mlx5e_tx_wi_dma_unmap+0xbe/0x120 [mlx5_core]
+ mlx5e_poll_tx_cq+0x16d/0x690 [mlx5_core]
+ mlx5e_napi_poll+0x8b/0xac0 [mlx5_core]
+ __napi_poll+0x24/0x190
+ net_rx_action+0x32a/0x3b0
+ ...
+```
+
+#问题根因
+在 TX 错误 CQE 触发的 SQ 恢复流程中，函数 `mlx5e_reset_txqsq_cc_pc()` 错误地将 `dma_fifo_cc` 重置为 0，但没有重置 `dma_fifo_pc`，导致 DMA FIFO 的生产者和消费者指针发生不同步。
+恢复完成后，生产者使用旧的 `dma_fifo_pc` 推送新的 DMA 条目，而消费者从位置 0 开始读取。这种错位导致驱动尝试取消映射恢复流程之前的过时 DMA 地址，从而触发 IOMMU 相关的 WARNING。
+
+#解决方案
+删除 `mlx5e_reset_txqsq_cc_pc()` 函数中 `sq->dma_fifo_cc = 0;` 的赋值操作。
+DMA FIFO 是纯软件结构，在重置点所有 WQE 已经被刷新，`dma_fifo_cc` 已经等于 `dma_fifo_pc`，无需重置这两个计数器。此修改使 DMA FIFO 指针处理逻辑与 `skb_fifo` 保持一致，避免了指针不同步问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/479fac9cf3ae8af611df8239bec6ab6804eaf480

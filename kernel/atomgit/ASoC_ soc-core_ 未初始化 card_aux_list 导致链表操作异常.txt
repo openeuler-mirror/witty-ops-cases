@@ -1,0 +1,20 @@
+#标题
+ASoC: soc-core: 未初始化 card_aux_list 导致链表操作异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核 ASoC 子系统中，component 结构体的 `card_aux_list` 成员在使用前未进行初始化。当执行音频设备 bind/unbind 操作时，代码尝试对该链表执行 `list_add` 或 `list_del` 操作，同时也可能触发 `for_each_card_auxs` 遍历。由于链表指针未初始化（处于随机状态），可能导致内核链表破坏、Oops 或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `snd_soc_component_initialize` 函数中，虽然初始化了 `dobj_list`、`card_list` 和 `list`，但遗漏了对 `component->card_aux_list` 的初始化。该链表后续在 `soc_bind_aux_dev` 中被用于 `list_add`，在 `soc_unbind_aux_dev` 中被用于 `list_del`，且在 `for_each_card_auxs` 宏中被遍历。未调用 `INIT_LIST_HEAD()` 导致链表指针不可用，引发内存访问或链表损坏。
+
+#解决方案
+在 `sound/soc/soc-core.c` 文件的 `snd_soc_component_initialize` 函数中，补充调用 `INIT_LIST_HEAD(&component->card_aux_list)`，确保链表在使用前被正确初始化为空状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b61cb1b54bff54d9ffaaf36243da1d11f180295f

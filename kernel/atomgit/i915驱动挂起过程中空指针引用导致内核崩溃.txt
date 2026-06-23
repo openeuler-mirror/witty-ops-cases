@@ -1,0 +1,30 @@
+#标题
+i915驱动挂起过程中空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统执行挂起操作时，若 i915 驱动的固件二进制文件缺失，内核会发生空指针引用错误，导致 Oops 并打印调用栈，影响系统正常休眠流程。
+
+#主要错误日志
+[   23.445187] BUG: kernel NULL pointer dereference, address: 0000000000000000
+[   23.452194] #PF: supervisor instruction fetch in kernel mode
+[   23.457896] #PF: error_code(0x0010) - not-present page
+[   23.465640] Oops: Oops: 0010 [#1] SMP NOPTI
+[   23.501087] RIP: 0010:0x0
+[   23.579905]  <TASK>
+[   23.579905]  intel_engines_reset_default_submission+0x42/0x60
+[   23.585695]  __intel_gt_unset_wedged+0x191/0x200
+[   23.590360]  intel_gt_unset_wedged+0x20/0x40
+[   23.594675]  gt_sanitize+0x15e/0x170
+[   23.598290]  i915_gem_suspend_late+0x6b/0x180
+
+#问题根因
+当 i915 驱动的固件二进制文件不存在时，函数指针 `set_default_submission` 未被初始化赋值（为 NULL）。但在系统挂起流程中，代码直接对该指针进行了解引用调用，未进行非空检查，从而触发了空指针引用错误。
+
+#解决方案
+在 `drivers/gpu/drm/i915/gt/intel_engine_cs.c` 文件的 `intel_engines_reset_default_submission` 函数中，调用 `engine->set_default_submission(engine)` 前增加指针非空判断，确保只有在该函数指针有效时才执行调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bbcd43765aa5dec60d58e40590fef2e5c02cbd89

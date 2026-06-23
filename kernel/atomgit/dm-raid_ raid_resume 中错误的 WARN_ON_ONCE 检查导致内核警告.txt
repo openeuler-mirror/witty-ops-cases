@@ -1,0 +1,20 @@
+#标题
+dm-raid: raid_resume 中错误的 WARN_ON_ONCE 检查导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+dm-raid 设备在表加载后进行恢复操作时，偶发触发内核警告。此时设备状态显示 DM_RECOVERY_RUNNING 已置位，导致 `raid_resume` 函数中的断言检查失败。
+
+#主要错误日志
+WARNING: CPU: 7 PID: 5660 at drivers/md/dm-raid.c:4105 raid_resume+0xee/0x100 [dm_raid]
+
+#问题根因
+`raid_resume` 函数中使用 `WARN_ON_ONCE(test_bit(MD_RECOVERY_RUNNING, &mddev->recovery))` 来检查 sync_thread 是否已注册。然而，`md_check_recovery` 函数可以在 sync_thread 未注册的情况下设置 `MD_RECOVERY_RUNNING` 标志。这导致了误报：检查发现恢复标志位存在，但实际上 sync_thread 并未运行，从而触发了错误的警告。
+
+#解决方案
+修改检查逻辑，不再依赖 `MD_RECOVERY_RUNNING` 标志位，而是直接检查 `mddev->sync_thread` 指针是否为非空（Non-NULL）。同时，将检查代码移至 `mddev_lock_nointr` 锁保护区域内，并使用 `rcu_dereference_protected` 进行安全访问，以确保判断 sync_thread 是否存在的准确性，从而消除误报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/accbccafd24f1221398457b2ccbf3f876b91d255

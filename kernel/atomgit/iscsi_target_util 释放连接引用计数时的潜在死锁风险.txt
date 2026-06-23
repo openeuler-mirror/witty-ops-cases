@@ -1,0 +1,20 @@
+#标题
+iscsi_target_util 释放连接引用计数时的潜在死锁风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 iSCSI 目标端释放连接引用计数（`iscsit_dec_conn_usage_count`）时，若满足特定条件（计数归零且处于等待状态），内核可能发生死锁，导致相关连接无法正常关闭或释放，进而引发进程挂起或阻塞。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `iscsit_dec_conn_usage_count` 中，代码在持有自旋锁 `conn_usage_lock` 的情况下调用 `complete()` 函数。`complete()` 函数内部会获取自旋锁，若此时其他执行上下文试图获取同一锁资源，会导致自旋锁递归持有或竞争，从而引发死锁。
+
+#解决方案
+修改 `iscsit_dec_conn_usage_count` 函数的逻辑，在调用 `complete()` 之前先释放自旋锁 `conn_usage_lock`，并在完成唤醒操作后直接返回，避免在持锁状态下执行可能引起死锁的唤醒操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3ebe2e0a6c5daaba181e9317fe07552dfeb09b5d

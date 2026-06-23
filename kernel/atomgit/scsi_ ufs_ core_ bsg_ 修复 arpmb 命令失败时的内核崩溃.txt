@@ -1,0 +1,24 @@
+#标题
+scsi: ufs: core: bsg: 修复 arpmb 命令失败时的内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 UFS 设备的 arpmb 命令执行失败时，内核发生崩溃。这是因为在错误处理路径中，代码逻辑错误地进入了 job 完成流程或使用了无效的数据结构长度，导致系统异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ufs_bsg_request` 函数中，原代码逻辑存在两个缺陷：
+1. 在函数返回前，无论 `rpmb` 是否为空，都会设置 `job->reply_len`，且判断条件存在逻辑错误（使用了 `!rpmb`）。
+2. 当 `ret` 不为 0（即命令失败）时，代码未正确处理，依然可能尝试调用 `bsg_job_done` 或访问已释放的资源，导致在 arpmb 命令失败场景下触发崩溃。
+
+#解决方案
+修改 `ufs_bsg_request` 函数中的错误处理逻辑：
+1. 将 `job->reply_len` 的赋值移动到 `if (ret == 0)` 条件判断内部，仅在命令成功时设置回复长度，并根据 `rpmb` 是否存在正确选择 `ufs_rpmb_reply` 或 `ufs_bsg_reply` 结构体大小。
+2. 确保当 `ret` 非 0（命令失败）时，直接返回错误码，不再调用 `bsg_job_done`，从而避免在错误路径上引发崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/04fc57a7b5a068aa265e879d577ec14e60e04d9d

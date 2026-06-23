@@ -1,0 +1,21 @@
+#标题
+zswap 加载大 folio 导致静默数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统尝试通过 zswap 加载大 folio（large folio）时，zswap 仅能有效加载 folio 中的第一个页面。若第一个页面不在 zswap 中，folio 将直接从磁盘读取，即便其他页面可能仍存储在 zswap 中。此行为会导致静默数据损坏。在应用补丁修复后，此类错误尝试将触发警告，并导致进程接收到 SIGBUS 信号（VM_FAULT_SIGBUS）。
+
+#主要错误日志
+推断日志：
+[ ] WARNING: CPU: X PID: Y at mm/zswap.c:zswap_load+0xXX/0xXX
+
+#问题根因
+Zswap 当前不支持存储或加载大 folio。如果换入错误观察到连续的 PTE 指向连续的 swap 条目并尝试将它们作为大 folio 换入，`swap_read_folio()` 会将大 folio 传递给 `zswap_load()`，但 `zswap_load()` 仅处理第一个页面。无论首字节是否命中 zswap，该逻辑都会导致数据不一致或错误的读取行为，进而引发静默数据损坏。
+
+#解决方案
+在 `zswap_load()` 函数中增加对大 folio 的检查逻辑。如果检测到尝试加载大 folio 且 zswap 曾经被启用过，则通过 `WARN_ON_ONCE` 打印警告，并返回 `true` 且**不**将 folio 标记为 uptodate。这将导致内核发出 IO 错误（例如 `do_swap_fault()` 返回 `VM_FAULT_SIGBUS`），从而避免静默数据损坏，防止系统在不安全的状态下继续运行。同时，将 `folio_mark_uptodate()` 的调用从 `swap_read_folio()` 移至 `zswap_load()` 内部，以便在加载成功时精确控制 folio 状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fe1aee6780662c879f0a33747d6d5919abc8e7c0

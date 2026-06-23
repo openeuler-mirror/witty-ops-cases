@@ -1,0 +1,20 @@
+#标题
+mm: GUP 长期固定在 CoW VMA 中映射大页导致无限循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在用户进程对映射了 PMD 对齐大 folio 的文件执行 MAP_PRIVATE 映射，并通过内核驱动调用 `pin_user_pages_fast` 且设置 `FOLL_LONGTERM` 标志时，内核陷入无限循环，导致该进程无法结束且占用 CPU 资源。
+
+#主要错误日志
+未知
+
+#问题根因
+在处理 CoW（写时复制）故障时，`do_read_fault()` 错误地再次安装了 PMD 映射。当 `follow_pmd_mask()` 检测到大页 PMD 存在并调用 `follow_huge_pmd()` 时，因为期望获取匿名页但实际并非如此，导致返回 `-EMLINK`。随后内核重试故障处理流程，再次进入 `do_read_fault()` 安装 PMD，如此循环往复形成死循环。
+
+#解决方案
+在 `do_set_pmd()` 函数中增加判断逻辑：如果 VMA 标志显示为 CoW 映射（`is_cow_mapping`），且故障标志包含写操作（`FAULT_FLAG_WRITE`）或取消共享（`FAULT_FLAG_UNSHARE`），则直接返回，不再安装 PMD 映射，从而避免死循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4dd12003e2727204253bf67981b442d72b4eb5b4

@@ -1,0 +1,24 @@
+#标题
+arm-smmu-v3 修复额外的 ATC TLB 刷新及错误的平台检测逻辑
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在特定条件下，SMMU 驱动执行了多余的 ATC TLB 刷新操作，导致性能损耗。
+2. SMMU 驱动中存在错误的平台检测逻辑，导致 `ARM_SMMU_OPT_SYNC_MAP` 选项被错误地重复设置或在不该生效的平台上生效，影响设备初始化流程。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **额外的 ATC TLB 刷新：** 在 `arm_smmu_tlb_inv_walk` 函数中，条件判断 `if (!size && smmu_domain->smmu->options & ARM_SMMU_OPT_SYNC_BATCH)` 过于严格，导致在某些非 SYNC_BATCH 场景下未能正确处理 TLB 刷新，或者逻辑反向导致不必要的刷新。同时，`io-pgtable-arm.c` 中触发 Hisilicon erratum 刷新逻辑时，未检查 `IO_PGTABLE_QUIRK_HISI_ERRATA` 标志位，导致在未配置该 quirk 的设备上也执行了刷新操作。
+2. **错误的平台检测逻辑：** 在 `arm_smmu_device_iidr_probe` 函数中，针对 Hisilicon erratum 的检测代码依据 IIDR 寄存器的 Variant 和 Revision 字段（分别为 0x3 和 0x2）设置 `ARM_SMMU_OPT_SYNC_MAP` 选项。该逻辑判定有误，导致错误的平台适配。
+
+#解决方案
+1. **优化 TLB 刷新逻辑：** 修改 `arm_smmu_tlb_inv_walk`，将判断条件简化为 `if (!size)`，移除对 `ARM_SMMU_OPT_SYNC_BATCH` 的依赖。在 `io-pgtable-arm.c` 的 map 路径中，增加对 `IO_PGTABLE_QUIRK_HISI_ERRATA` 标志位的检查，确保仅在 quirk 生效时执行 TLB 刷新。
+2. **修正 Quirk 传递机制：** 删除 `arm_smmu_device_iidr_probe` 中错误的 `ARM_SMMU_OPT_SYNC_MAP` 检测与设置代码。改为在 `arm_smmu_domain_finalise` 阶段，通过检查 `ARM_SMMU_OPT_SYNC_BATCH` 选项来设置 `IO_PGTABLE_QUIRK_HISI_ERRATA` 标志位，将其传递给 io-pgtable 层。
+3. **扩展 Quirk 定义：** 在 `io-pgtable.h` 中新增 `IO_PGTABLE_QUIRK_HISI_ERRATA` 定义（BIT(11)），并在 S1 和 S2 页表分配函数中允许该 quirk 标志位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fbb696ebc7c8629b6654a4bfb82f241cf3823981

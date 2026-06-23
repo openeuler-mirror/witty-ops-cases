@@ -1,0 +1,24 @@
+#标题
+lan743x 驱动 GSO 开启时 skb 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当开启 GSO（Generic Segmentation Offload）功能且发送数据的分片数（nr_frags）为 0 时，驱动程序将 `skb` 映射到了错误的描述符（EXT 描述符而非 LS 描述符）。这导致 `skb` 无法被正确释放，引发内核内存泄漏（memleak）。随着时间推移，系统可用内存持续减少。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `lan743x_tx_frame_add_lso` 函数中，当 `nr_frags <= 0` 时，代码逻辑错误地让 `skb` 关联到了 EXT 描述符。根据代码流程，`skb` 应当映射到标记有 LS（Last Segment）标志的描述符上以便传输完成后释放，但原有逻辑未更新 `tx->frame_last`，导致 `skb` 被映射到错误的描述符且未被标记为最后一段，从而无法释放，造成内存泄漏。
+
+#解决方案
+修改 `lan743x_main.c` 文件中的发送逻辑：
+1. 在 `lan743x_tx_buffer_info` 结构体中增加 `frame_last` 成员用于追踪最后一个描述符。
+2. 在 `lan743x_tx_frame_add_lso` 函数中，当 `nr_frags <= 0` 时，设置 `tx->frame_last = tx->frame_first`，确保 skb 映射到正确的 LS 描述符。
+3. 在 `lan743x_tx_frame_end` 函数中，修正 `skb` 的挂载逻辑，始终将 `skb` 挂载到 `tx->frame_last` 指向的描述符上，而不是 `tx->frame_tail`。
+4. 在相关错误处理路径中重置 `frame_last` 字段，防止状态残留。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4399a6031767f7e7e3bf039c4701c5b01fa40921

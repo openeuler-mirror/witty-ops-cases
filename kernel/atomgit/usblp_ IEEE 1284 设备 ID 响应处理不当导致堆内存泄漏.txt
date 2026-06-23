@@ -1,0 +1,20 @@
+#标题
+usblp: IEEE 1284 设备 ID 响应处理不当导致堆内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统连接恶意或故障的 USB 打印机设备时，内核驱动 `usblp` 在处理 IEEE 1284 设备 ID 时存在缺陷。如果设备发送的响应数据过短（仅包含长度前缀），驱动程序会将内核堆中的未初始化数据当作设备 ID 字符串处理，导致敏感内核堆数据通过 `sysfs` 接口或 `ioctl` 接口泄露给用户空间。
+
+#主要错误日志
+未知
+
+#问题根因
+`usblp_ctrl_msg()` 函数将 `usb_control_msg()` 的返回值简化为 0 或负错误码，导致驱动无法获知实际传输的字节数。`usblp_cache_device_id_string()` 函数在读取响应时，直接信任响应头中的 2 字节大端序长度字段。若设备发送极短响应（例如仅发送 2 字节 `0x03 0xFF` 声称有 1023 字节 ID），缓冲区 `device_id_string` 中剩余部分将保留 `kmalloc` 分配时的陈旧堆数据。由于缺乏对实际接收长度的校验与缓冲区清理，这些未初始化数据通过 `ieee1284_id` sysfs 属性或 `IOCNR_GET_DEVICE_ID` ioctl 泄露给用户空间。
+
+#解决方案
+在 `usblp_cache_device_id_string()` 函数中，于向设备发送请求之前，使用 `memset` 将缓冲区 `usblp->device_id_string` 清零，确保即使设备返回的数据短于声明的长度，剩余空间也不会包含陈旧的堆内存数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/97026b8d2ab04c107dec0944d25cf99ca3be9fd9

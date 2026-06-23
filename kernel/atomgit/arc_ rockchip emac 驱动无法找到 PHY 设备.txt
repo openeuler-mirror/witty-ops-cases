@@ -1,0 +1,20 @@
+#标题
+arc: rockchip emac 驱动无法找到 PHY 设备
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设备树（Device Tree）引入 MDIO 子节点后，Rockchip EMAC 驱动初始化失败，无法正确找到 PHY 设备。驱动报错提示 MDIO 具有无效的 PHY 地址（mdio has invalid PHY address），导致网络功能不可用。
+
+#主要错误日志
+mdio has invalid PHY address
+
+#问题根因
+设备树绑定文件 `emac_rockchip.txt` 转换为 YAML 格式时，新增了 MDIO 子节点定义。然而，驱动代码 `emac_mdio.c` 在注册 MDIO 总线时，直接使用父设备节点（`priv->dev->of_node`）进行注册，未能适配新的设备树结构去查找 "mdio" 子节点。这导致驱动在错误的节点下查找 PHY，从而无法找到有效的 PHY 地址。
+
+#解决方案
+修改 `emac_mdio.c` 中的 `arc_mdio_probe` 函数，增加对设备树结构的兼容性处理。在注册 MDIO 总线前，优先通过 `of_get_child_by_name` 查找名为 "mdio" 的子节点；若不存在该子节点（旧设备树风格），则回退使用当前设备节点。同时增加 `of_node_put` 处理以防止节点引用泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/285874a2f7683519692118afd39eb4b9cb995aed

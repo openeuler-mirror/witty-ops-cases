@@ -1,0 +1,20 @@
+#标题
+Atmel AES 驱动算法注册失败处理中触发内核 WARN
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Atmel AES 驱动初始化过程中，若 XTS 或 authenc 算法注册失败，错误处理路径会触发 `crypto_unregister_alg()` 中的 WARN 警告。
+
+#主要错误日志
+触发内核 WARN_ON，通常位于 crypto_unregister_alg 相关代码路径（Commit message 明确指出 "trigger a WARN in crypto_unregister_alg()"）。
+
+#问题根因
+在 `atmel_aes_register_algs` 函数中，当 XTS 或 authenc 注册失败进入错误处理流程时，代码无条件地调用 `crypto_unregister_skcipher(&aes_xts_alg)` 和 `crypto_unregister_aead(&aes_gcm_alg)` 进行注销。如果硬件本身不支持 XTS 或 GCM 功能（即 `dd->caps.has_xts` 或 `dd->caps.has_gcm` 为假），这些算法原本就没有被注册或分配资源，此时对其执行注销操作会触发内核警告。
+
+#解决方案
+在错误处理路径中增加硬件能力检查（Guard）。在调用 `crypto_unregister_skcipher(&aes_xts_alg)` 前检查 `dd->caps.has_xts`，在调用 `crypto_unregister_aead(&aes_gcm_alg)` 前检查 `dd->caps.has_gcm`，确保仅注销已注册且硬件支持的算法。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bc2aa847a84efe80dbb8e8b8553af672d1f1ac02

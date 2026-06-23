@@ -1,0 +1,28 @@
+#标题
+pstore: kmsg_bytes 类型不一致导致潜在数据风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+pstore 模块中 `kmsg_bytes` 变量在定义、函数参数传递及文件系统选项解析等环节存在类型不一致问题（分别使用了 unsigned long、int 和 u32），可能导致数据截断、符号扩展错误或逻辑判断异常。同时，在执行 pstore dump 操作过程中，若外部修改 `kmsg_bytes`，可能导致 dump 行为不可预期。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中 `kmsg_bytes` 相关的类型定义混乱：
+1. 全局变量定义为 `unsigned long`；
+2. 函数 `pstore_set_kmsg_bytes()` 参数定义为 `int`；
+3. 文件系统选项解析使用 `u32`。
+这种类型不匹配可能导致数据在赋值或比较时发生意外修改。此外，`pstore_dump()` 函数直接读取全局变量 `kmsg_bytes`，未进行并发保护，无法避免该值在 dump 过程中被修改。
+
+#解决方案
+统一 `kmsg_bytes` 变量及相关接口的类型为 `unsigned int` (u32)，并增加并发访问保护：
+1. 将全局变量 `kmsg_bytes` 及模块参数类型从 `unsigned long` 修改为 `unsigned int`。
+2. 将 `pstore_set_kmsg_bytes()` 函数的参数类型从 `int` 修改为 `unsigned int`，并在赋值时使用 `WRITE_ONCE` 宏以防止编译器优化并确保原子写入。
+3. 在 `pstore_dump()` 函数中，使用 `READ_ONCE` 读取 `kmsg_bytes` 到局部变量 `remaining`，避免在 dump 循环过程中全局变量被修改导致的不一致。
+4. 修正 `pstore_show_options` 中的格式化字符串，使其与 `unsigned int` 类型匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e1c88fd694b6c7185837ad8e8370b83db87ae59c

@@ -1,0 +1,24 @@
+#标题
+rxrpc: 修复读取 /proc/net/rxrpc/calls 可能导致的无限循环问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+读取 `/proc/net/rxrpc/calls` 文件时，系统可能陷入无限循环，导致读取操作无法结束。
+
+#主要错误日志
+未知
+
+#问题根因
+在移除 rxrpc call 对象时，代码使用了 `list_del_init()` 而非 RCU 安全的删除函数 `list_del_rcu()`。这导致在读取 `/proc/net/rxrpc/calls` 时，由于列表指针被修改但未遵循 RCU 读侧临界区保护机制，读取者可能获取到错误的指针从而陷入无限循环。
+
+#解决方案
+1. 将 `rxrpc_put_call()` 中的 `list_del_init()` 替换为 `list_del_rcu()`，确保从 `rxnet->calls` 列表中移除 call 对象的操作是 RCU 安全的。
+2. 由于改用 `list_del_rcu()` 后 `list_empty()` 无法用于检测已删除的 RCU 节点，修复方案调整了 `rxrpc_destroy_all_calls()` 的逻辑：
+   - 移除循环删除列表项的操作，改为使用 `list_for_each_entry` 遍历列表。
+   - 仅打印前 10 个意外仍存活的 call 对象的错误信息，避免无限循环打印，并移除了 `cond_resched()` 调用。
+   - 将 trace 点 `rxrpc_call_see_zap` 更名为 `rxrpc_call_see_still_live` 以准确反映语义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb296233c45ef5d3dbe6e6ee2b697fc4f38e7458

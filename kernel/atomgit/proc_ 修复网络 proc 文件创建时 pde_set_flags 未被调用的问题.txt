@@ -1,0 +1,20 @@
+#标题
+proc: 修复网络 proc 文件创建时 pde_set_flags 未被调用的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+通过网络相关的 proc 接口创建 proc 文件时，由于标志位设置函数 `pde_set_flags` 未被调用，导致 `proc_dir_entry` 的 `flags` 成员未能正确初始化。这可能导致内核在后续处理这些 proc 文件时，无法识别特定的操作标志（如 `PROC_ENTRY_proc_read_iter`、`PROC_ENTRY_proc_compat_ioctl` 等），进而引发文件操作功能异常或不符合预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在内核代码重构过程中，`pde_set_flags` 函数从多个特定的 proc 文件创建接口（如 `proc_create_data`、`proc_create_seq_private`、`proc_create_single_data`）中被移除，且这些调用点没有在 `proc_register` 前后补充相应的标志位设置逻辑。然而，该函数并未被统一添加到 `proc_register` 的通用路径中，导致通过特定接口（如网络 proc 文件使用的接口）创建的文件缺失了必要的标志位设置步骤。
+
+#解决方案
+将 `pde_set_flags` 函数的调用逻辑统一移动到 `proc_register` 函数内部。在 `proc_register` 分配 inode 号成功后，针对非目录类型的 proc 文件（`!S_ISDIR(dp->mode)`），统一调用 `pde_set_flags` 设置标志位。同时，从 `proc_create_data`、`proc_create_seq_private` 和 `proc_create_single_data` 等具体创建函数中移除冗余的 `pde_set_flags` 调用，确保所有类型的 proc 文件在注册时都能正确初始化 flags 字段。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f4a5427507816c2c34e6ba8605132c5b021fa1a2

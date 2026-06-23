@@ -1,0 +1,30 @@
+#标题
+LoongArch 任务缺少 vDSO 时调用 stack_top() 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构下，当没有映射 vDSO 的任务（如内核线程 kthreads）调用 `stack_top()` 函数时，会引发内核崩溃。例如在使用 kunit 进行测试时触发该问题，导致系统运行异常。
+
+#主要错误日志
+- 崩溃调用栈：
+  [<9000000000203874>] stack_top+0x58/0xa8
+  [<90000000002956cc>] arch_pick_mmap_layout+0x164/0x220
+  [<90000000003c284c>] kunit_vm_mmap_init+0x108/0x12c
+  [<90000000003c1fbc>] __kunit_add_resource+0x38/0x8c
+  [<90000000003c2704>] kunit_vm_mmap+0x88/0xc8
+  [<9000000000410b14>] usercopy_test_init+0xbc/0x25c
+  [<90000000003c1db4>] kunit_try_run_case+0x5c/0x184
+  [<90000000003c3d54>] kunit_generic_run_threadfn_adapter+0x24/0x48
+  [<900000000022e4bc>] kthread+0xc8/0xd4
+  [<9000000000200ce8>] ret_from_kernel_thread+0xc/0xa4
+
+#问题根因
+并非所有任务都映射了 vDSO，例如内核线程就不会拥有 vDSO。`stack_top()` 函数在没有检查 `current->thread.vdso` 指针是否为空的情况下直接解引用该指针，导致空指针解引用并引发内核崩溃。
+
+#解决方案
+在 `stack_top()` 函数中增加对 `current->thread.vdso` 指针的非空判断。只有当 vDSO 存在时，才执行与 vDSO 相关的栈顶地址调整计算（包括 vDSO 空间、VVAR 空间及随机化偏移），从而避免对 NULL 指针的非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d39cdfa4c53d1d75e4197bd92ad43cdcf8641b9

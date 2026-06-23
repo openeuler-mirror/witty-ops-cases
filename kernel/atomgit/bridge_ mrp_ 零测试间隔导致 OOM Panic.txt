@@ -1,0 +1,20 @@
+#标题
+bridge: mrp: 零测试间隔导致 OOM Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户通过 netlink 接口将 MRP（Media Redundancy Protocol）测试间隔（interval）设置为 0 时，内核会立即陷入死循环。系统持续以最高速率分配并发送 MRP 测试帧，导致内存资源迅速耗尽，最终触发 OOM（Out Of Memory）死锁并引发 Kernel Panic。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `br_mrp_start_test()` 和 `br_mrp_start_in_test()` 在处理用户传入的 interval 值时未进行合法性校验。当 interval 为 0 时，`usecs_to_jiffies(0)` 返回 0，导致延迟工作队列（`br_mrp_test_work_expired` / `br_mrp_in_test_work_expired`）以零延迟重新调度自身。这在 `system_percpu_wq` 上形成了紧密循环，不断分配并发送测试帧，最终耗尽系统内存。
+
+#解决方案
+在 netlink 策略表中增加最小值限制，将 `IFLA_BRIDGE_MRP_START_TEST_INTERVAL` 和 `IFLA_BRIDGE_MRP_START_IN_TEST_INTERVAL` 的策略定义为 `NLA_POLICY_MIN(NLA_U32, 1)`。该修改确保 0 值在 netlink 属性解析阶段即被拒绝，防止非法值进入工作队列调度逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6cad2aba07c21d50700bb6dd0bfe7f7b1e74224c

@@ -1,0 +1,20 @@
+#标题
+drm/gem: 修复 plane 维度计算不一致导致的内存越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定像素格式（如 NV12）和尺寸组合（如 1 像素高度帧缓冲）下，GEM 对象大小校验逻辑计算错误，导致分配了一个尺寸过小的 GEM 对象。当 GPU 访问该帧缓冲的色度平面时，会发生内存越界读写，可能触发系统崩溃或造成内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `drm_gem_fb_init_with_funcs()` 在计算子采样平面尺寸时使用了普通的整数除法，而 ioctl 层的 `framebuffer_check()` 使用的是 `DIV_ROUND_UP()`（向上取整）。这种计算逻辑的不一致导致在特定条件下（如 NV12 格式且高度为 1 时），高度计算结果为 0。随后的 `(height - 1)` 运算导致无符号整数下溢至 `UINT_MAX`，进而引起 `min_size` 溢出并回绕为一个较小的值，绕过了 GEM 对象的大小检查。
+
+#解决方案
+将 `drm_gem_fb_init_with_funcs()` 函数中手动计算的整数除法替换为标准辅助函数 `drm_format_info_plane_width()` 和 `drm_format_info_plane_height()`。这两个函数内部使用 `DIV_ROUND_UP()` 进行计算，确保了与 `framebuffer_check()` 校验逻辑的一致性，从而正确计算所需的最小内存大小。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/10cd4f3565c97086945aba9d5cb5b697f5afb4d9

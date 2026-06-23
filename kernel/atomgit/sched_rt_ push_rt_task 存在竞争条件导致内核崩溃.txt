@@ -1,0 +1,25 @@
+#标题
+sched/rt: push_rt_task 存在竞争条件导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在运行过程中触发多种形式的 panic 和崩溃，包括 assert 失败、页面错误、空指针解引用以及队列损坏错误。故障主要发生在调度器相关代码路径中（如 `pick_next_task_rt`、`dequeue_top_rt_rq`、`plist_check_list` 等），表现为系统不可用。
+
+#主要错误日志
+- kernel BUG at kernel/sched/rt.c:1616! BUG_ON(idx >= MAX_RT_PRIO)
+- BUG: kernel NULL pointer dereference, address: 00000000000000c0
+- BUG: unable to handle page fault for address: ffff9464daea5900
+  kernel BUG at kernel/sched/rt.c:1861! BUG_ON(rq->cpu != task_cpu(p))
+- kernel BUG at kernel/sched/rt.c:1055! BUG_ON(!rq->nr_running)
+- BUG: unable to handle page fault for address: ffff8cf3608bc2c0
+
+#问题根因
+在 `push_rt_task` 流程中，当 CPU 调用 `find_lock_lowest_rq` 获取双重锁（double lock）时，若其中一个锁不可用导致临时释放当前运行队列锁，存在一个时间窗口。在此窗口内，任务可能已被迁移到其他 CPU 并重新入队（`on_rq` 为 1）。原有检查逻辑仅依赖 `task_rq(task) != rq` 等条件，无法有效识别任务已迁移并重新入队的情况，导致错误的迁移操作，进而破坏运行队列数据结构引发崩溃。
+
+#解决方案
+在获取锁后增加校验，确认任务仍位于 pushable tasks 列表的头部（通过 `pick_next_pushable_task(rq)` 获取并比较）。如果任务不在列表头部，说明任务状态已发生变化（如已被迁移或重新调度），此时应放弃推送操作。修改了 `find_lock_lowest_rq` 函数中的判断逻辑，将原有的分散检查替换为对 pushable tasks 列表头部的检查，确保任务在加锁期间未被并发修改。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9706025813d2a50224c7e59b84804fc9504b3a29

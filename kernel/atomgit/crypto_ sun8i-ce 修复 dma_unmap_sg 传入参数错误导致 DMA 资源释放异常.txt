@@ -1,0 +1,21 @@
+#标题
+crypto: sun8i-ce 修复 dma_unmap_sg 传入参数错误导致 DMA 资源释放异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Allwinner sun8i-ce 加密引擎进行加解密操作时，由于 DMA 缓冲区解映射参数传递错误，可能导致 DMA 映射资源释放不完整或内存管理状态不一致，进而引发内存泄漏、系统不稳定或后续加密操作异常。在特定内存压力或 IOMMU 配置下，可能会触发内核警告或 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `sun8i_ce_cipher_unprepare()` 函数中，调用 `dma_unmap_sg()` 时错误地传入了 `dma_map_sg()` 的返回值（即映射后的条目数）。根据 DMA API 规范，`dma_unmap_sg()` 必须使用最初传递给 `dma_map_sg()` 的原始条目数（nents）。
+代码中 `nr_sgs` 和 `nr_sgd` 存储的是映射后的条目数，而 `ns` 和 `nd` 存储的是原始条目数。修复前，`rctx->nr_sgs` 和 `rctx->nr_sgd` 错误地记录了映射后的数值，导致后续解映射时参数错误。
+
+#解决方案
+修改 `sun8i_ce_cipher_prepare()` 函数中的赋值逻辑，将请求上下文 `rctx` 中的 `nr_sgs` 和 `nr_sgd` 字段更新为原始的 scatterlist 条目数（变量 `ns` 和 `nd`），而非映射后的返回值（变量 `nr_sgs` 和 `nr_sgd`）。这确保了后续在 `sun8i_ce_cipher_unprepare()` 中调用 `dma_unmap_sg()` 时能获取到正确的原始参数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db38d31359f2e24f2d541bae86a9ecbd2556145f

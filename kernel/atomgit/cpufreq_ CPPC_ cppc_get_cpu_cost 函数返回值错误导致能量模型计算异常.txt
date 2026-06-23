@@ -1,0 +1,20 @@
+#标题
+cpufreq: CPPC: cppc_get_cpu_cost 函数返回值错误导致能量模型计算异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用 `cppc_get_cpu_cost()` 函数时，若 `cpufreq_cpu_get_raw()` 返回 NULL（即 policy 为空），函数错误地返回了 0。这导致内核能量模型（EM）核心在 `em_compute_costs()` 中进行后续处理时，误认为获取到了有效的 cost 值，从而跳过了对未初始化变量 cost 的有效性检查，可能导致内核行为异常或不正确的能量模型计算结果。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `cppc_get_cpu_cost()` 在 `policy` 指针为 NULL 时错误地返回了 0。由于内核能量模型核心会先检查 `get_cost()` 回调函数的返回值，返回 0 会被误判为成功获取成本。这导致在 `em_compute_costs()` 中，后续针对 cost 变量的零值检查失效（此时 cost 变量可能处于未初始化状态），引发了逻辑错误。
+
+#解决方案
+修改 `drivers/cpufreq/cppc_cpufreq.c` 文件中的 `cppc_get_cpu_cost` 函数，当 `policy` 为 NULL 时，将返回值从 0 修改为 `-EINVAL`，以此正确向能量模型核心告知回调失败，避免后续处理逻辑错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1bad72d6ab8a2470376e668f8468742b0cf5df48

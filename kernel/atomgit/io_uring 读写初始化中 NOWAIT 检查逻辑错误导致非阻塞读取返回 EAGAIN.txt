@@ -1,0 +1,20 @@
+#标题
+io_uring 读写初始化中 NOWAIT 检查逻辑错误导致非阻塞读取返回 EAGAIN
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对设置了 O_NONBLOCK 标志的文件进行读取操作时，内核错误地返回 -EAGAIN 错误码，导致原本应成功的非阻塞读取操作意外失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `io_rw_init_file()` 中，对 `REQ_F_SUPPORT_NOWAIT` 标志的检查逻辑存在笔误。代码在判断条件中错误地使用了正向检查 `req->flags & REQ_F_SUPPORT_NOWAIT`，而根据逻辑应使用否定检查 `!(req->flags & REQ_F_SUPPORT_NOWAIT)`。这导致对于支持 NOWAIT 的请求错误地设置了 REQ_F_NOWAIT 标志，进而触发了错误的 -EAGAIN 返回路径。
+
+#解决方案
+修正 `io_rw_init_file()` 函数中的条件判断逻辑，在 `file->f_flags & O_NONBLOCK` 的判断分支中，将 `req->flags & REQ_F_SUPPORT_NOWAIT` 修改为 `!(req->flags & REQ_F_SUPPORT_NOWAIT)`，确保仅在不支持 NOWAIT 的情况下才设置 REQ_F_NOWAIT 标志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7597084ec87b6a24dfafd9285361f6e416487350

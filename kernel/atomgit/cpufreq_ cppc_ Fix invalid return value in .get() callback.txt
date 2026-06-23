@@ -1,0 +1,20 @@
+#标题
+cpufreq: cppc: Fix invalid return value in .get() callback
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 cppc_cpufreq 驱动的 `.get()` 回调函数中，当 `policy` 指针为空时，函数向调用者返回了一个负的错误码（-ENODEV）。由于该函数的返回值类型定义为 `unsigned int`（无符号整型），负数错误码被隐式转换为极大的无符号整数值。这可能导致上层调用者（如 cpufreq 核心子系统）读取到错误的频率数值，进而引发系统频率统计异常、调度误判或用户空间监控工具显示错误的 CPU 频率。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `cppc_cpufreq_get_rate` 的返回值类型为 `unsigned int`，但在空指针检查分支中错误地返回了负数错误码 `-ENODEV`。在 C 语言语义下，将负数赋值给无符号类型变量会发生隐式类型转换，导致返回值变成一个巨大的无符号整数而非预期的错误指示，这是由静态分析工具修复空指针解引用问题（Commit cf7de25878a1）时引入的副作用。
+
+#解决方案
+修改 `drivers/cpufreq/cppc_cpufreq.c` 文件中的 `cppc_cpufreq_get_rate` 函数，将空指针检查分支的返回值从 `-ENODEV` 修改为 `0`。这符合内核接口对无符号返回值函数的常规处理方式，避免返回无效的大值频率。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bb5a9f9a88a5a768244db28f2a3e9a47466208ac

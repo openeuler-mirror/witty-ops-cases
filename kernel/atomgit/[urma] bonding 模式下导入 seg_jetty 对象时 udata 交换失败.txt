@@ -1,0 +1,28 @@
+#标题
+[urma] bonding 模式下导入 seg/jetty 对象时 udata 交换失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 URMA (User Space Remote Memory Access) 的 bonding 场景下，当用户态进程尝试导入（import）seg（内存段）或 jetty（通信端点）对象时，内核态向用户态拷贝元数据失败。这可能导致上层应用无法正确获取底层拓扑连接状态，进而导致业务连接建立失败、通信异常或内存注册失败。
+
+#主要错误日志
+- `ubagg_log_err("Invalid udrv_data out_len: %u.\n", udata->udrv_data->out_len);`
+- `ubcore_log_err("Invalid udata out len:%u\n", udata->udrv_data->out_len);`
+- `ubagg_log_err("Failed to copy to user, ret:%d", ret);`
+- `ubagg_log_err("Failed find linked port\n");`
+
+#问题根因
+1. **数据结构与缓冲区长度不匹配**：内核态结构体 `ubagg_import_jetty_udata` 和 `ubagg_import_seg_udata` 的定义发生了变更（例如调整了成员 `connected` 数组的定义，以及 `ubagg_jetty_exchange_info` 结构体变大），导致其总体大小超出了用户态预期的缓冲区长度（旧定义的 `BONDING_UDATA_BUF_LEN` 为 1800 字节，新结构需要 1928 字节），内核在对用户态缓冲区长度校验时失败。
+2. **拓扑信息传递逻辑错误**：原先代码使用 `uint32_t ports` 数组来传递端口映射信息，逻辑不够准确。代码意图是传递设备间的连接矩阵（`connected` 关系），但原实现在数据结构定义和填充逻辑上无法满足需求，且缺乏对用户态缓冲区长度的严格校验，导致潜在的内存越界风险或数据截断。
+
+#解决方案
+1. **调整缓冲区定义**：将 `ubcore_connect_bonding.c` 中的 `BONDING_UDATA_BUF_LEN` 宏从 1800 增大到 1928，以适配变更后的 `ubagg_import_jetty_udata` 和 `ubagg_import_seg_udata` 结构体大小。
+2. **重构数据结构与交互逻辑**：
+   - 修改 `ubagg_import_jetty_udata` 和 `ubagg_import_seg_udata` 结构体，使用 `bool connected[UBAGG_DEV_MAX_NUM][UBAGG_DEV_MAX_NUM]` 替代原有的 `ports` 数组，更准确地描述设备间的拓扑连接关系。
+   - 更新 `find_linked_port` 函数及其调用者，将拓扑信息填充逻辑从记录端口号改为记录连接矩阵布尔值。
+3. **增加输入校验**：在 `fill_udata` 及相关入口函数中，增加对 `udata->udrv_data->out_len` 的校验，确保用户态提供的缓冲区足够大，防止内存拷贝越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22e570e25cc8e37728c3ee685d29b8efe63f6ffb

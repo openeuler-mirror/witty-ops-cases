@@ -1,0 +1,22 @@
+#标题
+ubcore 容器回环场景路由查询异常修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在容器 loopback（回环）场景下进行路由查询时，系统判定源端与目的端之间不存在物理链路，导致路由查询失败，返回 `-EINVAL` 错误，进而影响容器内的通信业务建立。
+
+#主要错误日志
+ubcore_log_err("No links to dst eid.\n");
+
+#问题根因
+代码逻辑中强制检查源端 topo 节点与目的端 topo 节点之间是否存在物理链路连接（`has_link` 检查）。在容器 loopback 场景下，源端和目的端可能指向同一实例或不需要传统物理链路连接，该检查逻辑不适用，导致错误返回 `-EINVAL` 阻断了正常的路由查询流程。
+
+#解决方案
+1. 删除 `ubcore_get_route_primary_eid` 函数中对物理链路存在性的强制检查逻辑（移除 `has_link` 相关代码块），以支持容器回环场景。
+2. 修改 `ubcore_get_route_port_eid` 函数中的错误处理逻辑：当路由数量 `num` 超过最大值时，不再返回错误 `-EINVAL`，而是将 `route_num` 限制为最大值并返回成功（return 0），同时优化了日志打印信息。
+3. 调整函数返回值逻辑，确保在获取路由信息后能正常返回。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1c64f92151f9d3d24307aea702d07513c8a499fb

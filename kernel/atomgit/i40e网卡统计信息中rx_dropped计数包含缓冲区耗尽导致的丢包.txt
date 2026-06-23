@@ -1,0 +1,24 @@
+#标题
+i40e网卡统计信息中rx_dropped计数包含缓冲区耗尽导致的丢包
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 i40e 驱动的网卡设备上，通过 `ip -s link` 或 `/proc/net/dev` 查看网络统计信息时，发现 `rx_dropped` 计数异常增加。根据内核接口定义，`rx_dropped` 应仅统计因软件缓冲区不足导致的丢包，不应包含硬件缓冲区耗尽导致的丢包。当前驱动将硬件缓冲区耗尽导致的丢包错误地累加到了 `rx_dropped` 中，导致用户误判为系统软件资源不足，而忽略了硬件层面的丢包风险。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 `struct rtnl_link_stats64` 的注释定义，`rx_dropped` 不应包含因设备缓冲区耗尽导致的丢包，后者应统计在 `rx_missed_errors` 中。
+根因在于 i40e 驱动在 `i40e_update_vsi_stats` 函数中，错误地将硬件寄存器统计的 `rx_discards`（对应硬件缓冲区耗尽）直接赋值给了软件接口的 `ns->rx_dropped`。同时，在 `i40e_stats_update_rx_discards` 函数中，逻辑错误地将 `rx_discards` 和 `rx_discards_other` 混合计算。这导致硬件缓冲区丢包被错误归类为软件丢包，且未正确填充 `rx_missed_errors` 字段。
+
+#解决方案
+修正驱动统计变量的映射关系，具体修改如下：
+1. 增加 `rx_missed_errors` 字段的统计支持，将其映射到硬件统计的 `rx_discards`。
+2. 将 `rx_dropped` 的数据来源从 `rx_discards` 修改为 `rx_discards_other`，确保其仅统计非硬件缓冲区耗尽导致的丢包。
+3. 移除 `i40e_update_eth_stats` 中对 `rx_discards` 的冗余更新，并调整 `i40e_stats_update_rx_discards` 函数逻辑，分别独立更新 `rx_discards` 和 `rx_discards_other`，避免错误的数值累加。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/de60730ab045a0c92beae8175557e7adaa58e0c1

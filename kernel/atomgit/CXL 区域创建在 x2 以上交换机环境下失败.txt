@@ -1,0 +1,29 @@
+#标题
+CXL 区域创建在 x2 以上交换机环境下失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了 4-way 及以上交换机（switches）的 CXL 拓扑环境中，执行 `cxl create-region` 命令创建区域时失败。系统无法识别有效的目标列表顺序，导致区域创建过程中断，设备被移除。
+
+#主要错误日志
+- 用户态日志：
+  ```
+  cxl region: create_region: region0: failed to set target7 to mem0
+  cxl region: cmd_create_region: created 0 regions
+  ```
+- 内核日志：
+  ```
+  check_last_peer:1213: cxl region0: pci0000:0c:port1: cannot host mem6:decoder7.0 at 2
+  bus_remove_device:574: bus: 'cxl': remove device region0
+  ```
+
+#问题根因
+`cxl_port_setup_targets()` 函数中计算目标间距离（distance）的算法存在缺陷。原算法无法正确处理层级较深或多通道交换机的拓扑结构，导致在 4-way 及以上交换机场景下，无法正确识别端点位置与交换机下游端口的映射关系。具体来说，原逻辑简单地将距离计算为 `p->nr_targets / cxl_rr->nr_targets`，未通过迭代方式逐层累加交换机宽度的影响，导致目标排序校验失败。
+
+#解决方案
+修改 `cxl_port_setup_targets()` 函数中 `distance` 变量的计算逻辑。不再使用简单的除法，而是通过迭代从当前端口向根端口遍历，逐层乘以各层交换机的目标数量（`nr_targets`），最后再乘以解码器的交错路数（`interleave_ways`）。该方法能正确反映多级交换机拓扑下的位置步长，修复了区域创建失败的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cffd24615b25be7c4edc7f6baa05f2414084dab8

@@ -1,0 +1,20 @@
+#标题
+net/smc: CLC proposal 消息头与载荷不匹配导致连接被重置
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IPv6 仅链路本地地址环境或本地 IP 与出接口网段不一致的场景下，SMC 建连过程中对端收到畸形的 CLC proposal 消息（消息头声明的类型与实际载荷内容不一致），导致连接立即被对端重置（reset）。
+
+#主要错误日志
+未知
+
+#问题根因
+当前 CLC proposal 消息的构建逻辑中，在调用 `smc_clc_prfx_set()` 设置前缀失败时（例如 IPv6 仅链路本地地址场景），仅将 `pclc_base->hdr.typev1` 置为 `SMC_TYPE_N`，却未同步更新 `ini->smc_type_v1`。这导致后续代码依据陈旧的 `ini->smc_type_v1` 值仍将 IPv6 前缀扩展包含在消息载荷中，最终造成消息头标识“不支持 v1”与载荷中“包含 v1 扩展”的不一致。
+
+#解决方案
+在 `smc_clc_prfx_set()` 失败的分支中，同步将 `ini->smc_type_v1` 设置为 `SMC_TYPE_N`，确保 CLC 头部标志位与实际发送的载荷内容保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a02ff0de264c242ccf1bc45e8ec3dea3c08b9156

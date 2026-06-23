@@ -1,0 +1,20 @@
+#标题
+wifi: mac80211 多链路站点接收数据包处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ieee80211_rx_handle_packet() 处理接收数据包时，若调用者未提供 pubsta 信息且链路信息（link_valid/link_id）不可用，系统会尝试通过地址 2（源地址）查找站点。如果此时匹配到 MLO（Multi-Link Operation）站点，由于状态字段中缺少 link ID，数据包会被错误地丢弃，导致本应正常接收的数据包无法被处理。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ieee80211_rx_handle_packet` 函数中，当 `status->link_valid` 未设置且站点为 MLO 站点时，代码逻辑直接执行 `continue` 或 `goto out` 跳过了当前数据包的处理。这是因为缺少明确的 link_id 导致无法确定链路上下文，进而错误地丢弃了数据包，而不是尝试根据源地址进一步查找有效的 link station 条目。
+
+#解决方案
+修改 `net/mac80211/rx.c` 中的处理逻辑：当 `link_valid` 未设置且站点为 MLO 站点时，不再直接丢弃数据包，而是调用 `link_sta_info_get_bss` 尝试使用源地址查找对应的 link station。如果找到了有效的 link station，则提取其 `link_id` 并继续进行数据包处理；如果未找到，则按原流程丢弃数据包。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/18d7a66093d49a158e616b6ac85c9d39e0adb9a5

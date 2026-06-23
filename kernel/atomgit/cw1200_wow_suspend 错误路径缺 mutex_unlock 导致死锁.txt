@@ -1,0 +1,23 @@
+#标题
+cw1200_wow_suspend 错误路径缺 mutex_unlock 导致死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 cw1200 无线网卡驱动执行 WoW (Wake-on-Wireless) 挂起流程时，若遇到特定的错误路径（如 PM 请求失败或设备有挂起的接收事件），函数返回非零错误码但未释放 `priv->conf_mutex` 锁。这会导致该互斥锁被永久持有（不一致状态），后续任何试图获取该锁的操作将陷入死锁或阻塞状态，进而引发系统挂起或相关调用进程不可中断。该问题由 Clang 线程安全分析器检测发现。
+
+#主要错误日志
+wiphy_err(priv->hw->wiphy, "PM request failed: %d. WoW is disabled.\n", ret);
+
+#问题根因
+根据驱动设计契约，`cw1200_wow_suspend()` 函数仅在返回值为 0（成功）时保持 `priv->conf_mutex` 锁定状态。然而，代码中的错误处理路径在调用 `cw1200_wow_resume(hw)` 后直接返回了 `-EBUSY` 或 `-EAGAIN`，遗漏了 `mutex_unlock(&priv->conf_mutex)` 操作。这违反了锁的持有规则，导致锁泄露。
+
+#解决方案
+在 `cw1200_wow_suspend` 函数的两个错误返回路径中补充 `mutex_unlock(&priv->conf_mutex)` 调用。
+具体修改为：
+1. 在 "PM request failed" 错误分支的 `return -EBUSY;` 前插入 `mutex_unlock(&priv->conf_mutex);`。
+2. 在检测到 `atomic_read(&priv->bh_rx)` 为真时的 `return -EAGAIN;` 前插入 `mutex_unlock(&priv->conf_mutex);`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/20b807655dc160073719297191ce89c34c712830

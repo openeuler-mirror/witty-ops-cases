@@ -1,0 +1,20 @@
+#标题
+raid10: 修复 raid10_make_request 中的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 RAID10 读写请求处理时，若 `regular_request_wait` 函数返回失败（非零），请求处理逻辑会直接返回，导致已分配的 `r10_bio` 结构体未被释放，造成内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `raid10_read_request` 和 `raid10_write_request` 函数中，当 `regular_request_wait` 返回 false（表示等待失败）时，代码逻辑直接执行了 `return` 操作返回上层调用者。此时，此前已经分配的 `r10_bio` 内存对象没有被清理或释放，从而导致内存泄漏。
+
+#解决方案
+在 `raid10_read_request` 和 `raid10_write_request` 函数中，当 `regular_request_wait` 返回 false 时，在 return 之前增加调用 `raid_end_bio_io(r10_bio)` 函数。该调用会负责清理并释放 `r10_bio` 结构体，从而修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e57f4bfa2c2e9e7431c6effd66b1edbab22eadd

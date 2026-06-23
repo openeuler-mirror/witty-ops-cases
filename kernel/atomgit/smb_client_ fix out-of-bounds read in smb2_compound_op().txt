@@ -1,0 +1,23 @@
+#标题
+smb/client: fix out-of-bounds read in smb2_compound_op()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当服务器发送一个截断的响应（truncated response）但包含较大的 OutputBufferLength，并提前终止 EA（Extended Attributes）列表时，`check_wsl_eas()` 函数校验逻辑存在缺陷。这导致后续在 `smb2_compound_op()` 函数执行 `memcpy` 操作时，若 `iov_len` 小于 `OutputBufferLength`，会读取超出 `rsp_iov` 分配范围的内存，造成内核堆内存越界读取（Out-of-Bounds Read），可能泄露相邻内核内存数据。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 `check_wsl_eas()` 函数在处理服务器响应时，未严格校验响应数据长度。具体为：
+1. 服务器可能发送截断的响应数据，但声明了较大的 `OutputBufferLength`。
+2. 原代码直接信任 `OutputBufferLength`，未验证其是否超出实际接收缓冲区的大小（`iov_len`）。
+3. 随后 `smb2_compound_op()` 使用不可信的 `size[0]`（即 `OutputBufferLength`）进行内存拷贝，导致读取越界。
+
+#解决方案
+在 `check_wsl_eas()` 函数中增加严格的边界检查。在遍历 EA 列表之前，先计算预期的 EA 结束位置 `ea_end` 和 IO 向量的结束位置 `iov_end`，如果 `ea_end` 超出 `iov_end`，则判定响应无效并返回 `-EINVAL`，从而防止后续操作发生越界读取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a29aea0a97a2ef1d0ed6f12a777caf645857a810

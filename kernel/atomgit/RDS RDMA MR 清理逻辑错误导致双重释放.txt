@@ -1,0 +1,20 @@
+#标题
+RDS RDMA MR 清理逻辑错误导致双重释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDS (Reliable Datagram Sockets) 协议中，当调用 `__rds_rdma_map()` 获取内存区域（MR）时，如果成功获取 MR 后，将生成的 cookie 复制回用户空间失败，内核会触发内存双重释放，可能导致系统崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `__rds_rdma_map()` 中，`get_mr()` 成功后，sg/pages 的所有权已移交给传输层。若随后 `put_user()` 操作失败，错误处理路径错误地执行了 `unpin_user_pages` 和 `kfree(sg)`。由于 MR 的最终清理流程（teardown）也会释放这些资源，导致了双重释放。
+
+#解决方案
+删除 `put_user()` 失败分支中的冗余清理代码（`unpin_user_pages` 和 `kfree`），确保 MR 资源的释放仅由最终的清理路径处理，避免重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad436cd746ec899d55cded8d66e3e67cacc89fc3

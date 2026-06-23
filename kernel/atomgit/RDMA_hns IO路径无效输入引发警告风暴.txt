@@ -1,0 +1,20 @@
+#标题
+RDMA/hns IO路径无效输入引发警告风暴
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hns RoCE 驱动的 IO 路径中，当用户态传入无效输入（如错误的 opcode）触发 `WARN_ON` 检查时，由于 IO 路径调用频率极高，导致内核打印大量的警告日志，形成“警告风暴”，严重影响系统性能和日志可读性。
+
+#主要错误日志
+WARNING: CPU: ... PID: ... at drivers/infiniband/hw/hns/hns_roce_hw_v2.c:...
+
+#问题根因
+驱动代码在 `set_ud_wqe` 和 `set_rc_wqe` 等高频 IO 处理函数中使用了 `WARN_ON(ret)` 宏。当用户态传入无效参数导致 `set_ud_opcode` 或 `set_rc_opcode` 返回错误时，内核会触发 WARN 并打印调用栈。由于 IO 路径被执行的频率非常高，一旦触发该条件，内核会反复打印警告信息，形成日志风暴。
+
+#解决方案
+将 IO 路径中的 `WARN_ON(ret)` 替换为 `WARN_ON_ONCE(ret)`。修改后，对于相同的错误条件，内核仅会在第一次触发时打印警告，避免因高频调用导致的日志泛滥，同时保留了错误检测能力。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d3729802660bf76bd739ce7fb6109ff9734fa92e

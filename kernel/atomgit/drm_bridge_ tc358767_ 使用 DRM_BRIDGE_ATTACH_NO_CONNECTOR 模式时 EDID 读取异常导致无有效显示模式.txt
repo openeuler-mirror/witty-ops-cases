@@ -1,0 +1,20 @@
+#标题
+drm/bridge: tc358767: 使用 DRM_BRIDGE_ATTACH_NO_CONNECTOR 模式时 EDID 读取异常导致无有效显示模式
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当显示控制器驱动使用 DRM_BRIDGE_ATTACH_NO_CONNECTOR 标志时，tc358767 驱动无法在调用 get_edid() 前获取 DP 链路属性（link properties）。此时驱动中的 num_lanes 为 0，link_rate 为 0，导致驱动无法提供有效的显示模式，显示屏无法正常工作或显示模式异常。
+
+#主要错误日志
+[    ] tc358767 failed to read display props: %d
+
+#问题根因
+当使用 DRM_BRIDGE_ATTACH_NO_CONNECTOR 标志时，tc358767 驱动会跳过创建内部 connector。关键函数 tc_get_display_props() 仅在 .atomic_enable() 和 tc_connector_get_modes() 中被调用，而后者仅在驱动创建自己的 connector 时执行。因此，在 get_edid() 被调用时，驱动尚未获取链路属性，导致 num_lanes 和 link_rate 均为 0，无法生成有效模式。
+
+#解决方案
+在 tc_get_edid() 函数开头增加对 tc_get_display_props() 的调用，确保在读取 EDID 之前已经获取到最新的链路属性信息。如果获取属性失败，打印错误日志并返回 0。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb93377c8535d034076865f62b7a030512b0a98d

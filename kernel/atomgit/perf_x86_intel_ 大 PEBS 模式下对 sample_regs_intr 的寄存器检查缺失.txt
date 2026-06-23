@@ -1,0 +1,20 @@
+#标题
+perf/x86/intel: 大 PEBS 模式下对 sample_regs_intr 的寄存器检查缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Intel adaptive PEBS（大 PEBS）功能进行性能采样时，如果配置了 `sample_regs_intr` 请求采样 PEBS 硬件不支持的寄存器（如后续将支持的 SSP 寄存器），内核未正确降级处理，可能导致采样行为不符合预期或硬件功能调用错误。当前已支持的通用寄存器（GPRs）未触发此问题，但在扩展支持新寄存器（如 SSP）时将暴露缺陷。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `intel_pmu_large_pebs_flags()` 函数中，原有逻辑仅检查了 `sample_regs_user` 是否包含 PEBS 硬件不支持的寄存器，并据此清除 `PERF_SAMPLE_REGS_USER` 和 `PERF_SAMPLE_REGS_INTR` 标志位。但该逻辑遗漏了对 `sample_regs_intr` 属性的独立检查。这导致当用户仅请求 `sample_regs_intr` 采样不支持的寄存器时，系统未能正确禁用大 PEBS 模式的相关特性。
+
+#解决方案
+修改 `arch/x86/events/intel/core.c` 中的 `intel_pmu_large_pebs_flags()` 函数，增加对 `event->attr.sample_regs_intr` 的判断逻辑。如果 `sample_regs_intr` 包含 `PEBS_GP_REGS` 以外的寄存器位，则显式清除 `PERF_SAMPLE_REGS_INTR` 标志，从而确保在请求不支持寄存器时正确退出大 PEBS 模式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/015ac9726cc3e407eaa7e21b6d718752d3679e84

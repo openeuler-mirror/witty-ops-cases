@@ -1,0 +1,20 @@
+#标题
+TIPC 加密模块 RCU 解引用竞争条件修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TIPC（透明进程间通信）模块使用加密与认证功能时，`tipc_aead_users_dec` 函数存在 RCU 解引用竞争问题。由于该函数对同一个 RCU 保护指针进行了两次解引用操作，可能导致在两次读取之间指针发生变化（例如变为 NULL），进而引发内核崩溃或数据结构访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`tipc_aead_users_dec()` 函数中存在不正确的 RCU 指针使用模式。代码首先调用 `rcu_dereference(aead)` 并存储在局部变量 `tmp` 中用于 NULL 检查，随后在 `atomic_add_unless()` 调用中又再次显式执行了 `rcu_dereference(aead)`。这种重复解引用打破了 RCU 读取侧临界区的一致性保证，导致第二次读取时可能获取到无效或不同的指针，从而引发竞争条件。
+
+#解决方案
+修改 `net/tipc/crypto.c` 中的 `tipc_aead_users_dec` 函数，移除重复的 `rcu_dereference(aead)` 调用，直接使用第一次解引用后存储在 `tmp` 变量中的指针。该修复确保在 RCU 临界区内使用一致的指针值，与 `tipc_aead_users_inc()` 和 `tipc_aead_users_set()` 函数的正确模式保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/99c39c75b5da4e4918a4938cd2159dc79020642a

@@ -1,0 +1,20 @@
+#标题
+USB: dummy-hcd 驱动中断同步错误导致 gadget 驱动解绑时可能出现回调竞态
+
+#内核版本
+OLK-6.6
+
+#问题现象
+dummy-hcd 驱动中模拟的 `synchronize_irq()` 执行时机错误，发生在模拟中断禁用之前。这导致在 `synchronize_irq()` 模拟运行后、中断禁用前，仍可能有新的模拟中断发生，使得在 gadget 驱动解绑（unbind）过程中，回调处理函数可能仍在运行，从而引发竞态条件或内核故障。
+
+#主要错误日志
+未知
+
+#问题根因
+该故障源于同步机制时序错误。在之前的修复中，模拟的 `synchronize_irq()` 代码被放置在 `dummy_pullup()` 函数中，但这发生在模拟中断禁用之前。根据同步语义，`synchronize_irq()` 必须在中断禁用之后执行，以确保不再有新的中断处理程序启动。当前的顺序颠倒导致在同步检查完成后、中断禁用前的时间窗口内，仍可能有新的回调发生，破坏了驱动解绑时的安全性。
+
+#解决方案
+将模拟 `synchronize_irq()` 的等待逻辑从 `dummy_pullup()` 函数移动到 `dummy_udc_async_callbacks()` 函数中。具体修改为：在 `dummy_udc_async_callbacks()` 函数中，当参数 `enable` 为 `false`（即禁用模拟中断）时，立即执行等待循环，确保同步发生在中断禁用之后，从而正确防止在 gadget 驱动解绑期间有回调处理程序运行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/afe1d45e0e79644bb40e314f67ee7aa72287d0d8

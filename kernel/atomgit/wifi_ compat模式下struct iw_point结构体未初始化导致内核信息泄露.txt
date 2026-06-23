@@ -1,0 +1,20 @@
+#标题
+wifi: compat模式下struct iw_point结构体未初始化导致内核信息泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在64位系统架构上调用无线扩展兼容模式接口时，由于 `struct iw_point` 结构体中存在32位的填充空洞且未被初始化，导致内核栈上的敏感数据通过该空洞拷贝至用户空间，引发内核信息泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+在64位架构上，`struct iw_point` 结构体存在一个32位的填充空洞。在 `compat_standard_call` 和 `compat_private_call` 函数中，代码直接将 `compat_iw_point` 数据拷贝到 `struct iw_point` 变量中，但未对该结构体进行初始化。这导致结构体中的填充空洞保留了栈上的随机数据（原值），随后这些数据被拷贝到用户空间，造成信息泄露。
+
+#解决方案
+在 `net/wireless/wext-core.c` 和 `net/wireless/wext-priv.c` 的相关函数中，对 `struct iw_point` 变量执行 `memset(..., 0, ...)` 操作进行清零初始化，确保填充空洞不包含脏数据，从而修复信息泄露风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6aa6e247b9be19bd3d137eca122ffc0447611354

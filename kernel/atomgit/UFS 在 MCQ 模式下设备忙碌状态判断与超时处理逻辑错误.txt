@@ -1,0 +1,25 @@
+#标题
+UFS 在 MCQ 模式下设备忙碌状态判断与超时处理逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用多循环队列（MCQ）模式的 UFS 设备上，系统无法正确判断设备是否处于忙碌状态。这导致以下潜在异常：
+1. ufshcd_eh_timed_out() 函数在进行超时处理时，可能错误地判断是否需要重置计时器，导致 SCSI 错误处理机制行为异常。
+2. ufshcd_print_host_state() 输出的主机状态信息中，outstanding_reqs（待处理请求）数值不准确，无法反映真实的 IO 堆积情况，干扰故障排查。
+
+#主要错误日志
+- dev_err(hba->dev, "%d outstanding reqs, tasks=0x%lx\n", ...) （修复后的日志格式，原日志输出 hba->outstanding_reqs 在 MCQ 模式下数值不具参考意义）
+
+#问题根因
+在引入 MCQ（Multi-Circular Queue）模式后，hba->outstanding_reqs 变量仅能表示 Legacy 模式下的 outstanding requests。ufshcd_is_ufs_dev_busy()、ufshcd_print_host_state() 和 ufshcd_eh_timed_out() 这三个函数同时应用于 Legacy 和 MCQ 两种模式，但代码中仍错误地使用 hba->outstanding_reqs 来判断设备忙碌状态，导致在 MCQ 模式下获取的状态信息错误。
+
+#解决方案
+修改相关函数，将 hba->outstanding_reqs 替换为 scsi_host_busy(hba->host)，因为后者能够正确统计 Legacy 和 MCQ 两种模式下的所有待处理请求。具体修改如下：
+1. 在 ufshcd_is_ufs_dev_busy() 中，使用 scsi_host_busy(hba->host) 替代 hba->outstanding_reqs 进行逻辑判断。
+2. 在 ufshcd_print_host_state() 中，使用 scsi_host_busy(hba->host) 获取并打印准确的待处理请求数量。
+3. 在 ufshcd_eh_timed_out() 中，使用 scsi_host_busy(hba->host) 判断是否重置计时器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/251e1595911ea5979d0388bef4876f6d754a2e22

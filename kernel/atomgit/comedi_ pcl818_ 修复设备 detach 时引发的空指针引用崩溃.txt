@@ -1,0 +1,26 @@
+#标题
+comedi: pcl818: 修复设备 detach 时引发的空指针引用崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设备早期分离过程中，若通过 pcl818_detach() 进行清理操作，内核会发生通用保护错误导致崩溃。该故障由 Syzbot 发现，表现为空指针引用。
+
+#主要错误日志
+Oops: general protection fault, probably for non-canonical address 0xdffffc0000000005: 0000 [#1] SMP KASAN PTI
+KASAN: null-ptr-deref in range [0x0000000000000028-0x000000000000002f]
+RIP: 0010:pcl818_ai_cancel+0x69/0x3f0 drivers/comedi/drivers/pcl818.c:762
+Call Trace:
+ <TASK>
+ pcl818_detach+0x66/0xd0 drivers/comedi/drivers/pcl818.c:1115
+ comedi_device_detach_locked+0x178/0x750 drivers/comedi/drivers.c:207
+
+#问题根因
+在 pcl818_detach() 函数中直接调用 pcl818_ai_cancel() 时，子设备的 dev->read_subdev 可能尚未初始化其指向 struct comedi_async 的指针。此时对该指针（如 s->async->cmd）进行解引用会导致空指针引用，进而引发通用保护错误和内核崩溃。
+
+#解决方案
+从 pcl818_detach() 函数中移除对 pcl818_ai_cancel() 的显式调用。异步命令相关的清理工作将统一由 comedi 核心层的 comedi_device_detach_locked() 函数在调用子设备自身的 ->cancel() 函数时处理，从而避免在设备未完全初始化时进行非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b7c26b4129650f368778f969c20c5333920cf6fe

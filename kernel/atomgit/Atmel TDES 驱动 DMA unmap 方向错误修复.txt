@@ -1,0 +1,20 @@
+#标题
+Atmel TDES 驱动 DMA unmap 方向错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Atmel TDES 加密驱动在处理数据传输时，若发生错误且使用 FAST 标志（scatter-gather 模式），`dma_unmap_sg` 函数使用了错误的 DMA 传输方向（使用了 DMA_TO_DEVICE 而非 DMA_FROM_DEVICE）对输出缓冲区进行取消映射。这会导致 DMA 缓冲区管理不一致，可能引起数据损坏、内存一致性问题或设备异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `atmel_tdes_crypt_start` 函数的错误处理路径中，代码逻辑存在不一致。驱动中 `dd->in_sg` 始终使用 `DMA_TO_DEVICE` 进行映射，`dd->out_sg` 始终使用 `DMA_FROM_DEVICE` 映射。但在错误回滚取消映射时，`dd->out_sg` 错误地使用了 `DMA_TO_DEVICE` 参数，违反了 DMA 映射/取消映射方向必须匹配的原则。
+
+#解决方案
+修改 `drivers/crypto/atmel-tdes.c` 文件中 `atmel_tdes_crypt_start` 函数的错误处理代码，将 `dma_unmap_sg(dd->dev, dd->out_sg, 1, DMA_TO_DEVICE)` 修正为 `dma_unmap_sg(dd->dev, dd->out_sg, 1, DMA_FROM_DEVICE)`，确保取消映射的方向与映射时的方向一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7796e52876e5ad3967a16c3cdb0a54864b124cf2

@@ -1,0 +1,20 @@
+#标题
+iommu/ummu: 权限表扩容时的空指针访问问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行权限表扩容过程中，当块索引值异常时，系统可能访问未初始化的指针导致空指针引用；或在索引超出最大限制时引发越界访问。
+
+#主要错误日志
+`pr_err("unexpected mapt block index(%u)\n", blk_para->index);`
+
+#问题根因
+权限表扩容函数 `ummu_alloc_mapt_mem_for_table` 缺少对入参 `blk_para->index` 的有效性校验。当 `blk_para->index` 大于 0 但 `tct_desc->mapt_blk_tbl_phys` 为空（未分配物理地址）时，后续逻辑会触发空指针引用；同时，未检查索引是否超过 `UMMU_BLKTBL_MAX_ENTRIES` 限制，可能导致越界访问。
+
+#解决方案
+在函数 `ummu_alloc_mapt_mem_for_table` 中增加防御性校验：检查当 `index > 0` 时 `mapt_blk_tbl_phys` 指针是否为空，并检查 `index` 是否超过最大条目数 `UMMU_BLKTBL_MAX_ENTRIES`。若校验失败，打印错误日志并返回 `-EINVAL`，从而避免空指针引用或越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/63a20d517792edd9847969ad94767569331b02b3

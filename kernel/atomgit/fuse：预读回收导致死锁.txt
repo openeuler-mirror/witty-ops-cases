@@ -1,0 +1,38 @@
+#标题
+fuse：预读回收导致死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 FUSE 服务器未实现 open 操作时，如果在进行文件预读的过程中服务器触发了内存回收，系统会发生死锁。具体表现为进程处于不可中断睡眠状态（D 状态），导致系统挂起或相关进程无响应。
+
+#主要错误日志
+关键堆栈信息如下：
+folio_wait_bit_common (mm/filemap.c:1308:4)
+folio_lock (./include/linux/pagemap.h:1052:3)
+truncate_inode_pages_range (mm/truncate.c:336:10)
+fuse_evict_inode (fs/fuse/inode.c:161:2)
+evict (fs/inode.c:704:3)
+dentry_unlink_inode (fs/dcache.c:412:3)
+__dentry_kill (fs/dcache.c:615:3)
+shrink_kill (fs/dcache.c:1060:12)
+shrink_dentry_list (fs/dcache.c:1087:3)
+prune_dcache_sb (fs/dcache.c:1168:2)
+super_cache_scan (fs/super.c:221:10)
+do_shrink_slab (mm/shrinker.c:435:9)
+shrink_slab (mm/shrinker.c:626:10)
+shrink_node (mm/vmscan.c:5951:2)
+shrink_zones (mm/vmscan.c:6195:3)
+do_try_to_free_pages (mm/vmscan.c:6257:3)
+do_swap_page (mm/memory.c:4136:11)
+...
+
+#问题根因
+Commit e26ee4efbc79 ("fuse: allocate ff->release_args only if release is needed") 引入的优化逻辑存在缺陷。当服务器不实现 open 时，代码跳过了 ff->release_args 的分配。这导致 fuse_prepare_release() 不再持有 inode 的引用计数。因此，在进行预读操作时，inode 可能被从 dcache 中驱逐。如果预读请求处理期间服务器触发了回收，且回收尝试驱逐正在预读的文件的 inode，则会发生死锁。原因是预读持有 folio 锁，而回收路径在 fuse_evict_inode() -> truncate_inode_pages_range() 中试图获取该锁，导致互相等待。
+
+#解决方案
+修复死锁的方法是：即使服务器不实现 open，也需要分配 ff->release_args 并在准备释放文件时持有 inode 的引用。这确保了在预读等文件操作进行期间，inode 不会被回收驱逐，从而打破死锁条件。具体代码修改包括调整 fuse_file_alloc 的参数传递逻辑，并在 fuse_file_put 中针对无 open 实现的情况正确调用 fuse_release_end 释放资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cf7bcc12144d886a6cabe26d506cc7362e4f9b8a

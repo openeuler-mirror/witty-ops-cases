@@ -1,0 +1,20 @@
+#标题
+KVM: arm64: HDBSS 特性开启过程中内存分配失败导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在为虚拟机 vCPU 分配 HDBSS（Hardware Dirty Bit Stream Supervisor）页面时，若分配过程中途失败（例如为第 N 个 vCPU 分配成功，但第 N+1 个分配失败），会导致此前已成功分配的内存页面未被释放，造成内核内存泄漏。
+
+#主要错误日志
+- Alloc HDBSS buffer failed!
+
+#问题根因
+在 `kvm_cap_arm_enable_hdbss` 函数中，循环为每个 vCPU 分配 hdbss 页面。如果分配过程中途失败，代码路径直接返回 `-EINVAL`，未对本次循环之前已经成功分配给其他 vCPU 的页面执行释放操作，从而导致内存泄漏。
+
+#解决方案
+将 HDBSS 清理逻辑封装为独立函数 `kvm_clear_hdbss`。在内存分配失败的错误处理路径中，调用 `kvm_clear_hdbss(kvm)` 来清理并释放此前已分配的所有资源，确保资源正确回收，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/00c93102b328bfe49e863eac41a86cf5cec4ba4e

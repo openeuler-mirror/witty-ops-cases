@@ -1,0 +1,23 @@
+#标题
+net: dsa: microchip: 端口初始化失败时未释放已初始化资源导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Microchip KSZ 系列 DSA 交换机驱动初始化过程中，若某个端口的 PHY 中断或 PTP 中断注册失败，驱动未能正确释放此前已成功初始化端口所占用的 IRQ 资源。具体表现为中断注册流程中发生错误时，系统未回滚已分配的资源，导致内存泄漏或中断号泄露。
+
+#主要错误日志
+dev_err(dev->dev, "Failed to register PTP clock: %d\n", ret);
+
+#问题根因
+函数 `ksz_setup` 中的错误处理跳转标签设计不完善。当 `ksz_pirq_setup` 或 `ksz_ptp_irq_setup` 在循环中失败时，`goto` 跳转未涵盖对之前迭代中已初始化端点的资源释放：
+1. 已初始化的 PTP IRQs 未被释放。
+2. 若失败发生在 `ksz_pirq_setup()` 中，已初始化的端口 IRQs 未被释放。
+原代码使用了多个独立的标签（`out_girq`, `out_ptpirq` 等）进行处理，无法正确处理循环内的部分回滚。
+
+#解决方案
+合并 `out_girq` 和 `out_ptpirq` 标签为统一的 `port_release` 标签。在错误处理路径中，使用反向循环遍历所有已初始化的端口，确保逐一释放 IRQ 资源。对于 `ksz_ptp_irq_setup` 失败的情况，跳转至 `pirq_release` 标签（位于循环体内部），确保仅释放当前迭代端口的中断资源，避免重复释放或遗漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01c8df160d2fe859000837feba3df8cc0cd887aa

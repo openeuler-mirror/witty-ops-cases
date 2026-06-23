@@ -1,0 +1,20 @@
+#标题
+sched/topology: 调度域拓扑配置存在竞态条件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 sysctl 接口修改 `sysctl_sched_cluster` 参数时，若与 `partition_sched_domains_locked` 函数并发执行，可能触发内核竞态条件，导致调度域拓扑状态不一致，进而影响 CPU 调度行为的正确性，严重时可能引发内核不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+`sched_cluster_handler` 函数在检测到配置变更并调用 `set_sched_cluster()` 重建调度集群配置时，未持有 `sched_domains_mutex` 互斥锁。这导致该过程可能与正在执行的 `partition_sched_domains_locked` 函数发生竞态，破坏了调度域数据结构的完整性。
+
+#解决方案
+在 `sched_cluster_handler` 函数中，当检测到 `sysctl_sched_cluster` 值发生变化需要调用 `set_sched_cluster()` 时，增加 `sched_domains_mutex` 的加锁与解锁操作。通过持锁保护临界区，确保调度域拓扑的变更操作互斥，从而消除竞态隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c42625dc39f79b38dca0bf12e242ca00a98620e

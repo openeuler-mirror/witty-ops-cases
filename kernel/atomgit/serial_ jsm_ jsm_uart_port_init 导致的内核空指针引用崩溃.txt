@@ -1,0 +1,36 @@
+#标题
+serial: jsm: jsm_uart_port_init 导致的内核空指针引用崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 jsm 驱动并探测 Digi Neo PCIe 8 端口卡时，内核触发空指针引用崩溃（NPE），导致 Oops 异常。具体表现为 `serial_base_ctrl_add` 函数在访问设备指针时崩溃。
+
+#主要错误日志
+```
+BUG: kernel NULL pointer dereference, address: 0000000000000050
+Oops: Oops: 0000 [#1] PREEMPT SMP NOPTI
+CPU: 16 UID: 0 PID: 368 Comm: (udev-worker) Not tainted 6.12.25-amd64 #1  Debian 6.12.25-1
+RIP: 0010:serial_base_ctrl_add+0x96/0x120
+Call Trace:
+ <TASK>
+ serial_core_register_port+0x1a0/0x580
+ ? __setup_irq+0x39c/0x660
+ ? __kmalloc_cache_noprof+0x111/0x310
+ jsm_uart_port_init+0xe8/0x180 [jsm]
+ jsm_probe_one+0x1f4/0x410 [jsm]
+ local_pci_probe+0x42/0x90
+ pci_device_probe+0x22f/0x270
+ ...
+```
+
+#问题根因
+在 `jsm_uart_port_init` 函数中，初始化 `uart_port` 结构体时遗漏了设置 `dev` 成员变量（即 `brd->channels[i]->uart_port.dev`）。
+由于该指针未初始化（默认为 NULL），当后续调用链执行到 `serial_base_ctrl_add` 时，试图通过该空指针访问设备资源（偏移量 0x50 处），从而触发内核空指针引用崩溃。
+
+#解决方案
+在 `jsm_uart_port_init` 函数中，为每个通道的 `uart_port` 结构体显式设置 `dev` 指针，将其指向对应的 PCI 设备结构体（`&brd->pci_dev->dev`），确保串口核心层能正确获取设备引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cee4e3f47f5e83e9ce791767856afee06f878d44

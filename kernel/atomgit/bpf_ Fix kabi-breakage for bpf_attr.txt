@@ -1,0 +1,20 @@
+#标题
+bpf: Fix kabi-breakage for bpf_attr
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核 ABI（KABI）完整性检查失败。由于 `bpf_attr` 联合体中新增了 `value_type_btf_obj_fd` 成员，导致该 UAPI 结构体布局发生变化，破坏了内核 ABI 兼容性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 commit 526d613854fe ("bpf: pass attached BTF to the bpf_struct_ops subsystem") 中，向 `bpf_attr` 联合体添加了 `__s32 value_type_btf_obj_fd` 成员。由于 `include/uapi/linux/bpf.h` 属于 UAPI 头文件，无法直接包含 `kabi.h` 使用标准的占位符扩展方式。且根据 pahole 工具分析，该联合体中存在其他比修改后的结构体更大的成员，导致结构体大小未变但内部布局改变，从而引发 KABI 破坏问题。
+
+#解决方案
+在 `include/uapi/linux/bpf.h` 中，使用 `#if !defined(__GENKSYMS__)` 宏将 `value_type_btf_obj_fd` 成员包裹起来。这样在生成内核符号版本（genksyms）时该成员会被忽略，从而避免 KABI 检查报错，解决了 ABI 兼容性问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/134d7341bd36c0bd0e05f352f81405e93a2e5060

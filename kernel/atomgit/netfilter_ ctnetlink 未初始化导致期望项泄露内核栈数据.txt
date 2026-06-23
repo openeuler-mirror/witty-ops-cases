@@ -1,0 +1,20 @@
+#标题
+netfilter: ctnetlink 未初始化导致期望项泄露内核栈数据
+
+#内核版本
+OLK-6.6
+
+#问题现象
+创建 conntrack 期望项时若未携带 CTA_EXPECT_NAT 属性，通过 ctnetlink 导出期望项信息时，会向用户空间泄露内核栈中的敏感数据（Stale data）。具体表现为用户空间接收到了非预期的 CTA_EXPECT_NAT 属性，且该属性内容为之前占用该 slab 内存块的旧数据。
+
+#主要错误日志
+未知
+
+#问题根因
+ctnetlink_alloc_expect() 函数通过 nf_ct_expect_alloc() 从非清零的 slab 缓存中分配期望项结构体。当 netlink 消息中不存在 CTA_EXPECT_NAT 属性时，代码逻辑未对 exp 结构体中的 saved_addr、saved_proto 和 dir 字段进行初始化。这导致这些字段保留了 slab 缓存中前一个占用者的残留数据，随后 ctnetlink_exp_dump_expect() 误判这些字段有效并将其导出至用户空间。
+
+#解决方案
+在处理 CTA_EXPECT_NAT 缺失的 else 分支中，显式调用 memset 将 saved_addr 和 saved_proto 字段清零，并将 dir 字段置为 0。该修复逻辑通过 IS_ENABLED(CONFIG_NF_NAT) 宏保护，确保仅在 NAT 功能启用时编译执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7a9cb977d7f3302a2f4d5cb0711e205a4c821c0e

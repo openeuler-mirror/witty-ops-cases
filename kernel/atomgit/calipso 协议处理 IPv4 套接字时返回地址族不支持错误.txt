@@ -1,0 +1,20 @@
+#标题
+calipso 协议处理 IPv4 套接字时返回地址族不支持错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 IPv6 和 CALIPSO 配置的环境中，当内核尝试对 AF_INET（IPv4）类型的套接字调用 `netlbl_conn_setattr` 函数处理 AF_INET6 分支逻辑时，会触发地址族不支持的错误，导致相关连接属性设置失败，返回 `-EAFNOSUPPORT` 错误码。此问题关联 CVE-2025-38147。
+
+#主要错误日志
+未知
+
+#问题根因
+`netlbl_conn_setattr` 函数在处理 `AF_INET6` case 分支时，未校验传入的 sock 结构体 `sk` 的实际协议族 `sk_family`。如果传入的是 IPv4 (AF_INET) 套接字，代码错误地进入了 IPv6 处理路径，导致逻辑异常。
+
+#解决方案
+在 `net/label/netlabel_kapi.c` 文件的 `netlbl_conn_setattr` 函数 `AF_INET6` 分支开头增加协议族校验：若 `sk->sk_family` 不等于 `AF_INET6`，直接返回 `-EAFNOSUPPORT` 错误码并跳转至返回处理流程，避免非 IPv6 套接字进入 IPv6 处理逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/acca76376efb75007b0ed66ba7ad25a189e54f16

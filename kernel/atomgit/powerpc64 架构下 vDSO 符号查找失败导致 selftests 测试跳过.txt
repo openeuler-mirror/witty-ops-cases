@@ -1,0 +1,26 @@
+#标题
+powerpc64 架构下 vDSO 符号查找失败导致 selftests 测试跳过
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 powerpc64 平台上运行 vDSO 相关的自我测试（selftests）时，测试程序无法定位到 `__kernel_gettimeofday`、`__kernel_clock_gettime`、`__kernel_getrandom`、`__kernel_getcpu` 等 vDSO 函数符号，导致所有测试用例状态显示为 SKIP（跳过），功能验证失败。
+
+#主要错误日志
+- `# Couldn't find __kernel_gettimeofday`
+- `# Couldn't find __kernel_clock_gettime`
+- `# Couldn't find __kernel_clock_getres`
+- `ok 1 # SKIP __kernel_gettimeofday`
+- `__kernel_getrandom is missing!`
+- `Could not find __kernel_gettimeofday`
+- `Could not find __kernel_getcpu`
+
+#问题根因
+在 powerpc64 架构上，vDSO 函数符号的类型（symbol type）为 `NOTYPE`，而非通常的 `STT_FUNC`。测试工具 `parse_vdso.c` 中的 `vdso_sym` 函数在进行符号查找时，仅过滤了 `STT_FUNC` 类型的符号，导致类型为 `NOTYPE` 的 vDSO 函数被过滤掉，从而无法被找到。
+
+#解决方案
+修改 `tools/testing/selftests/vDSO/parse_vdso.c` 中的符号类型校验逻辑，在判断条件中增加对 `STT_NOTYPE` 类型的支持。即允许符号类型为 `STT_FUNC` 或 `STT_NOTYPE`，从而使 powerpc64 平台下的 vDSO 符号能被正确识别和查找。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/94a3289195cd3fe7d6ab8f20b87711856cb20c36

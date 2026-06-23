@@ -1,0 +1,20 @@
+#标题
+sunrpc: 特制RPC报文触发内核空指针崩溃或内存破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当客户端向内核 RPC 服务器发送特制的数据包时，可远程触发内核崩溃。若该 RPC 处理线程是首次处理请求，将导致 kernel panic；在其他情况下，可能导致内存被非法改写。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `svc_process_common` 函数处理 RPC 认证过程中，如果解码 RPC 回复失败并返回 `SVC_GARBAGE` 状态，且未设置 `rq_accept_statp` 指针，代码仍会尝试向该指针指向的地址写入数据。若该指针为 NULL（线程首次处理 RPC 时）则触发空指针解引用导致崩溃；若非 NULL 则导致内存被意外改写。此外，原代码未遵循 RFC 5531 规范，错误地将认证阶段的 `SVC_GARBAGE` 返回值处理为 `GARBAGE_ARGS` 回复，而规范要求认证失败应返回 `AUTH_ERR`。
+
+#解决方案
+修改 `svc_process_common` 函数逻辑，当 `svc_authenticate` 或 `pg_authenticate` 返回 `SVC_GARBAGE` 时，不再跳转至 `err_garbage_args` 分支（该分支会操作 `rq_accept_statp` 指针），而是设置认证状态为 `rpc_autherr_badcred` 并跳转至 `err_bad_auth` 分支。此修复遵循 RFC 5531 规范返回 `AUTH_ERR`，同时避免了在未初始化指针上进行写操作，从而消除了崩溃风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/019a3dc19eea0d10ba09f910cc7f6ab323d9bd9a

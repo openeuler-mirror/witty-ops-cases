@@ -1,0 +1,20 @@
+#标题
+OMAP3 GTA04 设备树修复 SPI 模块导致的电源管理挂起失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在挂起过程中，尽管 CM_IDLEST1_CORE 和 CM_FCLKEN1_CORE 表现正常，但禁用 SPI 后会导致电源域无法进入目标状态。具体表现为 /sys/kernel/debug/pm_debug/count 显示 off 状态计数未增加，系统无法正常进入深度睡眠。
+
+#主要错误日志
+Powerdomain (core_pwrdm) didn't enter target state 0
+
+#问题根因
+SPI 控制器默认处于从模式，而 Linux 驱动程序会将其切换为主模式。在从模式下，如果感知到有效的片选输入信号，电源域会被保持活跃状态，导致无法进入目标低功耗状态。这是由于之前的提交在修复 DMA 通道占用问题时意外引入的回归问题。
+
+#解决方案
+修改设备树文件，显式禁用（hog）SPI3 的引脚。通过将 SPI3 相关引脚配置为 PIN_OUTPUT_PULLDOWN 和 MUX_MODE4，确保这些引脚处于安全的 GPIO 下拉状态，防止因悬空或外部信号导致的 SPI 从模式激活，从而解决电源域无法掉电的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e552503918d08138a374b04437e044c9e229f5b1

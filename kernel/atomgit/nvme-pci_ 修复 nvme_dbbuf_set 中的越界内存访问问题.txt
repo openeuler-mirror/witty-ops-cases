@@ -1,0 +1,29 @@
+#标题
+nvme-pci: 修复 nvme_dbbuf_set 中的越界内存访问问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NVMe 重置工作队列执行过程中，触发 KASAN 检测到的 slab 越界访问。具体表现为在 `nvme_dbbuf_set` 函数调用 `nvme_dbbuf_free` 时，发生了非法内存读取，导致内核报告 "slab-out-of-bounds" 错误。
+
+#主要错误日志
+```
+BUG: KASAN: slab-out-of-bounds in nvme_dbbuf_free drivers/nvme/host/pci.c:377 [inline]
+BUG: KASAN: slab-out-of-bounds in nvme_dbbuf_set+0x39c/0x400 drivers/nvme/host/pci.c:404
+Read of size 2 at addr ffff88800592a574 by task kworker/u8:5/74
+Call Trace:
+ nvme_dbbuf_free drivers/nvme/host/pci.c:377 [inline]
+ nvme_dbbuf_set+0x39c/0x400 drivers/nvme/host/pci.c:404
+ nvme_reset_work+0x36b/0x8c0 drivers/nvme/host/pci.c:3252
+```
+
+#问题根因
+`dev->online_queues` 是一个计数器，在 `nvme_init_queue` 中递增加入，因此有效的队列索引范围是 0 到 `dev->online_queues - 1`。
+原代码中的循环条件为 `for (i = 1; i <= dev->online_queues; i++)`，当 `i` 等于 `dev->online_queues` 时，循环仍然执行，导致访问了越界的队列索引（`dev->queues[dev->online_queues]`），从而引发越界内存访问。
+
+#解决方案
+修改 `nvme_dbbuf_set` 函数中的循环条件，将判断条件从 `i <= dev->online_queues` 修改为 `i < dev->online_queues`，确保索引 `i` 始终在有效队列范围内，避免越界访问。索引 0 被排除因为它是管理队列。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aaea520151e9b662b09fc58948fddce053bac73e

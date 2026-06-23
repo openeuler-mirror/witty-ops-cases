@@ -1,0 +1,22 @@
+#标题
+TLS 异步解密 skb 分配失败引发 UAF 及内存破坏风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 TLS 接收路径进行异步解密时，若 `tls_strp_msg_hold` 创建 skb 克隆失败，系统继续执行异步解密逻辑，可能导致以下严重故障：
+1. 发生 Use-After-Free（UAF），即释放后使用 skb 内存。
+2. 错误地写入用户空间内存，可能发生在 `recv()` 系统调用返回之后。
+
+#主要错误日志
+未知
+
+#问题根因
+在 TLS 异步解密流程中，`tls_strp_msg_hold` 负责创建输入 skb 的克隆以保留内存引用。当该函数失败（例如内存分配失败）时，代码未正确处理错误路径，而是继续尝试将原始 skb 加入队列并进行异步解密。由于缺少有效的克隆保护，后续异步处理可能访问已释放的内存（UAF）或非法修改用户空间内存。
+
+#解决方案
+在 `tls_decrypt_sg` 函数中，检测到 `tls_strp_msg_hold` 失败时，不再继续入队操作，而是立即调用 `tls_decrypt_async_wait(ctx)` 等待所有待处理的解密请求完成，并将 `darg->async` 标志置为 false，确保在资源不足时安全回退，避免内存破坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/37ddd6862db24d6c890992223dd52e3205cc9e38

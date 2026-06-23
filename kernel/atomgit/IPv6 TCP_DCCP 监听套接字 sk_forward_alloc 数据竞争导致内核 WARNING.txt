@@ -1,0 +1,37 @@
+#标题
+IPv6 TCP/DCCP 监听套接字 sk_forward_alloc 数据竞争导致内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Syzkaller 触发内核 WARNING，进程 ksoftirqd 在执行 `inet_sock_destruct` 时触发 WARNING，表明套接字销毁时 `sk_forward_alloc` 不为 0（出现负值），即套接字内存记账出现不平衡。该问题源于并发访问导致的内存分配变量数据竞争。
+
+#主要错误日志
+------------[ cut here ]------------
+WARNING: CPU: 0 PID: 16 at net/ipv4/af_inet.c:156 inet_sock_destruct+0x1c5/0x1e0
+Modules linked in:
+CPU: 0 UID: 0 PID: 16 Comm: ksoftirqd/0 Not tainted 6.12.0-rc5 #26
+...
+RIP: 0010:inet_sock_destruct+0x1c5/0x1e0
+...
+Call Trace:
+ <TASK>
+ ? __warn+0x88/0x130
+ ? inet_sock_destruct+0x1c5/0x1e0
+ ...
+ __sk_destruct+0x2a/0x200
+ rcu_do_batch+0x1aa/0x530
+ ...
+ ---[ end trace 0000000000000000 ]---
+
+#问题根因
+当套接字处于 `TCP_LISTEN`（或 `DCCP_LISTEN`）状态且未持有锁（`sk->sk_lock unlocked`）时，两个线程可能并发调用 `tcp_v6_do_rcv()`（或 `dccp_v6_do_rcv()`）。
+在此状态下，代码路径 `skb_clone_and_charge_r()` -> `sk_rmem_schedule()` -> `__sk_mem_schedule()` -> `sk_forward_alloc_add()` 会被执行。由于缺乏锁保护，多个线程并发修改 `sk->sk_forward_alloc` 导致数据竞争。
+具体表现为：两个线程同时增加分配额度并扣除 skb 大小，但在内存回收（`__sk_mem_reclaim`）阶段，由于竞争导致其中一个线程看到错误的 `reclaimable` 值，使得最终 `sk_forward_alloc` 变为负值（如 -4096），破坏了内存记账逻辑。
+
+#解决方案
+在 `tcp_v6_do_rcv()` 和 `dccp_v6_do_rcv()` 中增加状态检查，当套接字处于 `TCP_LISTEN`（或 `DCCP_LISTEN`）状态时，跳过 `skb_clone_and_charge_r()` 的调用。因为对于监听状态的套接字，该内存操作本应在后续的 `tcp_v6_syn_recv_sock()` 等阶段处理，不应在此处提前执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/05c29684432578b9183bb01b3d61580d9e9dac19

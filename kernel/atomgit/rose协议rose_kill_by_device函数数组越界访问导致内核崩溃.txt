@@ -1,0 +1,21 @@
+#标题
+rose协议rose_kill_by_device函数数组越界访问导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ROSE协议模式下，当设备被关闭时触发`rose_kill_by_device`函数，由于循环中使用了错误的数组索引，导致读取未初始化的条目或发生越界读取。这会引发无效的socket指针解引用，导致内核panic或oops，同时造成`sock_hold()`获取的引用计数泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数`rose_kill_by_device`中，代码将sockets收集到本地数组`array`中，随后遍历该数组以断开与正在关闭设备绑定的sockets。循环代码错误地使用了`array[cnt]`进行索引，而循环变量是`i`。
+当`cnt < ARRAY_SIZE(array)`时，读取到未初始化的条目；当`cnt == ARRAY_SIZE(array)`时，发生越界读取。这两种情况都会导致后续对无效socket指针进行操作。
+
+#解决方案
+修正循环体内的数组索引，将错误的`sk = array[cnt]`修改为`sk = array[i]`，确保正确遍历数组中的有效socket条目。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9f355c1adb320df00e8e977f77fa8bc80345154

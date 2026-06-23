@@ -1,0 +1,20 @@
+#标题
+mISDN: dsp_hwec_enable 函数内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 mISDN 子系统的 `dsp_hwec_enable` 函数时，若传入参数 `arg` 包含分隔符（如逗号），会导致内核内存泄漏。该问题不会立即引发 panic 或 oops，但会随着函数调用次数增加持续消耗系统内存资源。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `dsp_hwec_enable` 使用 `kstrdup(arg, GFP_ATOMIC)` 分配内存并将结果存储在 `dup` 指针中。随后代码调用 `strsep(&dup, ",")` 对字符串进行解析，该操作会修改 `dup` 指针的值，使其不再指向原始分配的内存起始地址。最终执行 `kfree(dup)` 时，传入的是被修改后的指针，导致释放操作无效或释放了错误的内存地址，从而造成原始分配的内存块泄漏。该问题模式与此前修复的 commit c6a502c22999 相同。
+
+#解决方案
+引入一个新的指针变量 `next` 用于 `strsep` 的迭代操作，保持 `dup` 指针始终指向 `kstrdup` 分配的原始内存起始地址。修改代码为 `dup = next = kstrdup(...)`，并在随后的循环中使用 `strsep(&next, ",")` 替代 `strsep(&dup, ",")`，确保最后 `kfree(dup)` 时能正确释放原始分配的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1200937457aa4ad60d1c93f68234125d5ebc05c3

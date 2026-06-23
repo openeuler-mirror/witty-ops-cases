@@ -1,0 +1,22 @@
+#标题
+ext4 iomap模式下截断操作导致潜在内存数据泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ext4 使用 iomap 模式时，执行 truncate（截断）操作可能导致陈旧数据残留在文件的最后一个 block 中。当后续执行 expand truncate（扩展截断）操作时，这些残留的陈旧数据会被暴露出来，造成内存数据泄露或数据不一致问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 iomap 模式下，数据写入不保证顺序。如果在更新 i_disksize 的事务提交之前，没有将最后一个不完整 block 中的剩余部分写零并落盘，该位置可能保留之前的陈旧数据。由于缺少显式的写零和同步等待操作，导致后续文件扩展时读取到未清零的脏数据。
+
+#解决方案
+1. 调整 `ext4_block_truncate_page` 的调用时机，将其移至事务句柄启动之前，并传入 NULL handle，以避免在运行中的 handle 下等待 I/O 完成从而导致死锁。
+2. 在 `ext4_block_truncate_page` 中增加对 iomap 模式的判断，对于 iomap 状态的 inode，在执行完 block 清零操作后，立即调用 `filemap_write_and_wait_range` 强制将清零后的数据写回磁盘，确保在 i_disksize 更新事务提交前数据已落盘。
+3. 修改 `__ext4_block_zero_page_range` 逻辑，允许在 handle 为 NULL 且为 data=journal 模式时临时创建 handle，其他模式则无需 handle 即可完成清零，从而支持在事务外进行清零和同步操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3468c7428e3604cf86af0bdf997ea2edbc31898

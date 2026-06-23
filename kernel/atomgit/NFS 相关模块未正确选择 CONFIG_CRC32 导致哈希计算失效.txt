@@ -1,0 +1,22 @@
+#标题
+NFS 相关模块未正确选择 CONFIG_CRC32 导致哈希计算失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在未启用 CONFIG_CRC32 的内核配置下，NFS 客户端、服务端及 lockd 模块中的哈希计算函数（如 `nfs_fhandle_hash`、`knfsd_fh_hash` 等）返回值固定为 0，而非正确的 CRC32 校验值。这会导致 NFS 文件句柄或会话 ID 的哈希特征丢失，影响内核内部依赖这些哈希值进行查找、对比或校验的逻辑。随着 CONFIG_CRC32 计划取消默认启用，此问题在自定义精简内核配置场景下更容易被触发。
+
+#主要错误日志
+未知
+
+#问题根因
+`nfs.ko`、`nfsd.ko` 和 `lockd.ko` 模块均调用了 `crc32_le()` 函数，但仅在 `CONFIG_NFS_DEBUG` 选项中选择了 `CONFIG_CRC32`。
+1. `CONFIG_NFS_DEBUG` 仅限客户端且非必选，未能覆盖服务端或 lockd 的需求。
+2. 原代码通过 `#ifdef CONFIG_CRC32` 提供了 fallback 机制，当 CRC32 未启用时直接返回 0。虽然避免了编译错误，但导致了功能缺陷。
+
+#解决方案
+修改 Kconfig 文件，在 `CONFIG_NFS_FS`、`CONFIG_NFSD` 和 `CONFIG_LOCKD` 定义中显式添加 `select CRC32`，确保这些模块加载时 CRC32 功能可用。同时，移除代码中针对 `CONFIG_CRC32` 未启用时的 fallback 分支（即返回 0 的逻辑）以及 `CONFIG_NFS_DEBUG` 中多余的 CRC32 选择。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a73932beda3a2071242146f2f27eb7279effbf1e

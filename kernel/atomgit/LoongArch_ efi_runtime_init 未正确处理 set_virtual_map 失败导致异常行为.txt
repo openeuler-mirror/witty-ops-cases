@@ -1,0 +1,20 @@
+#标题
+LoongArch: efi_runtime_init 未正确处理 set_virtual_map 失败导致异常行为
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构下，当 EFI 的 `set_virtual_map` 函数调用失败时，系统未能正确检测到错误并进行处理，导致后续行为不符合预期（EFI 运行时服务可能处于未正确初始化状态但仍被使用）。
+
+#主要错误日志
+Set virtual address map failed, EFI runtime services will not be available.
+
+#问题根因
+在 `efi_runtime_init` 函数中，用于接收 `set_virtual_map` 返回值的变量 `status` 被声明为 `efi_status_t` 类型，而 `efi_status_t` 是无符号类型（unsigned）。代码中使用 `if (status < 0)` 来判断调用是否失败，由于无符号变量永远不可能小于 0，该条件判断恒为假。因此，当 `set_virtual_map` 真正返回错误码时，错误被忽略，导致错误处理路径失效。
+
+#解决方案
+将接收 `set_virtual_map` 返回值的变量类型从 `efi_status_t` 修改为 `int`，确保可以正确存储负值错误码。同时，在检测到返回值小于 0 时，增加打印提示信息并直接 return，确保在设置虚拟地址映射失败时，不再继续初始化 EFI 运行时服务。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/38a3d8b0889618395d981bc74400eaf1f1d63cc4

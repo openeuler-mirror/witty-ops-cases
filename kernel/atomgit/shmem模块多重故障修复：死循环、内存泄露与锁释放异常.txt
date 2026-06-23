@@ -1,0 +1,27 @@
+#标题
+shmem模块多重故障修复：死循环、内存泄露与锁释放异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 系统在执行 swapoff 相关操作时，可能陷入内核态死循环，导致特定进程或线程无响应（D状态）。
+2. 在 `shmem_file_setup` 流程中，若检测到 idmapped mount 并返回错误，此前已完成的内存记账（acct_size）未回退，导致内存资源泄露。
+3. 在 `shmem_swapin_folio` 处理大条目分裂失败时，函数逻辑跳转到 `failed` 标签执行解锁操作，但此时 `folio` 指针仍指向未成功加载的页面，导致非配对的 `folio_unlock()` 或操作异常指针。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **死循环**：`shmem_unuse()` 遍历链表时，若因链表节点被删除导致当前节点不在链表中，`list_next_entry` 获取的下一个节点可能失效或导致循环逻辑错误；若链表变空，后续链表操作会引发遍历异常。
+2. **内存泄露**：`__shmem_file_setup()` 中 `shmem_acct_size()` 调用位置过早，位于 `is_idmapped_mnt()` 校验之前。当 `is_idmapped_mnt()` 判断失败返回 `-EINVAL` 时，前面的内存记账未执行 `shmem_unacct_size()` 回退。
+3. **锁释放异常**：`shmem_swapin_folio()` 中调用 `shmem_split_large_entry()` 失败后直接跳转至 `failed` 标签，未释放已获取的 `folio` 引用，且未置空指针，导致后续错误处理路径中对无效或未锁定的 folio 进行解锁操作。
+
+#解决方案
+1. **修复死循环**：在 `shmem_unuse()` 中引入 `start_over` 标签，当检测到当前 info 节点已从链表中删除（`list_empty`）时，使用 `goto start_over` 重新开始遍历，确保遍历起点有效；同时调整了 `stop_eviction` 和链表删除操作的顺序以保证逻辑正确。
+2. **修复内存泄露**：调整 `__shmem_file_setup()` 中的代码顺序，将 `shmem_acct_size()` 移至 `is_idmapped_mnt()` 校验之后，确保只有在基础参数校验通过后才进行资源记账。
+3. **修复锁释放异常**：在 `shmem_swapin_folio()` 的 `shmem_split_large_entry()` 失败分支中，增加 `folio_put(folio)` 释放引用计数，并将 `folio` 指针置为 `NULL`，防止后续 `failed` 标签中的错误处理逻辑对指针进行不当操作。
+4. **代码清理**：移除 `shmem_unuse_swap_entries()` 中多余的 `xa_is_value()` 检查，因为此处预期不会传入非 value 类型的条目。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce584da82e0f2353a6527aef14d04258caf1625b

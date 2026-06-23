@@ -1,0 +1,24 @@
+#标题
+urma: 配置不一致导致 post send 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 urma (User Space Remote Memory Access) 模块中，当进行聚合设备的 segment 信息交换与导入操作时，若对端配置了不同的 MSN (Multi-Service Network) 配置，会导致 `post send` 操作失败。具体表现为内核态与用户态之间的 segment 信息交互结构体定义不一致，导致数据拷贝与解析错误，进而引发内存访问或配置错误。
+
+#主要错误日志
+- "Failed to copy seg info to user, ret:%d" (推断：copy_to_user 失败时打印)
+- "failed to exchange udata when import seg\n"
+- "Failed to fill udata, ret:%d\n"
+
+#问题根因
+内核结构体 `struct ubagg_seg_exchange_info` 中包含了 `base` 成员和 `dev_num` 成员，但用户态结构体 `urma_bond_seg_info_out_t` 仅包含 `slaves` 数组。这种结构体布局的不一致导致内核在调用 `copy_to_user` 将 segment 信息拷贝到用户空间时，数据偏移和大小计算错误，破坏了用户态获取的数据内容。同时，`struct ubagg_jetty_exchange_info` 中错误地使用了 `is_multipath` 字段，而实际逻辑应关注 `is_msn_enabled` 字段，导致控制平面判断逻辑与实际配置不符。
+
+#解决方案
+1. 修改 `drivers/ub/urma/ubagg/ubagg_types.h` 中的 `ubagg_seg_exchange_info` 结构体定义，移除多余的 `base` 成员和 `dev_num` 成员，使其与用户态定义 `urma_bond_seg_info_out_t` 保持严格一致。
+2. 修改 `struct ubagg_jetty_exchange_info` 结构体，将 `is_multipath` 字段更正为 `is_msn_enabled` 以正确反映 MSN 配置状态。
+3. 相应调整 `ubagg_connect.c` 和 `ubagg_seg.c` 中的数据处理逻辑，将原本针对数组的 `memcpy` 操作改为直接的结构体赋值，修正 `copy_to_user` 时的源地址和数据长度，确保内核态与用户态数据交换的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cf77c5f04a7e978137d8a77ff1dbade19d8c62ab

@@ -1,0 +1,29 @@
+#标题
+drm/amdgpu: 修复 AMDGPU_INFO_READ_MMR_REG 中的死锁与锁序错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 AMDGPU_INFO_READ_MMR_REG 接口读取寄存器时，可能触发内核死锁或严重的锁顺序错误。具体表现为：
+1. 系统在持有 `reset_domain->sem` 信号量期间进行内存分配或调用 `copy_to_user`，可能导致系统挂起或死锁。
+2. 在 GPU 复位过程中，若尝试获取信号量失败，接口直接返回 `-ENOENT`，而非等待复位完成，导致用户态调用在复位期间意外失败。
+
+#主要错误日志
+未知
+
+#问题根因
+代码实现中存在多处严重的并发与资源管理缺陷：
+1. **锁顺序错误**：原代码在持有 `mm_lock`（隐含在 `amdgpu_asic_read_register` 调用链或上下文中）或 `reset_domain->sem` 的情况下调用 `copy_to_user`，这违反了内核编程中不应在持有锁时访问用户空间内存的原则。
+2. **死锁风险**：在持有 `reset_domain->sem` 信号量期间调用 `kmalloc_array` 进行内存分配。内存分配可能因内存不足而休眠或触发内存回收，在特定上下文中这与持有信号量的行为冲突，极易导致死锁。
+3. **错误的锁获取方式**：原代码使用 `down_read_trylock()` 尝试获取信号量，若复位正在进行则立即返回错误。这不符合该接口应当等待复位完成后继续执行的预期行为。
+
+#解决方案
+重构 `AMDGPU_INFO_READ_MMR_REG` 的处理流程，调整锁的获取时机与内存分配顺序：
+1. **调整内存分配时机**：将 `kmalloc_array` 内存分配操作移到获取 `reset_domain->sem` 信号量之前，避免在持锁期间分配内存。
+2. **修正信号量获取方式**：将 `down_read_trylock` 替换为 `down_read`，确保当 GPU 复位进行时，进程会等待复位结束而不是立即失败。
+3. **修正 `copy_to_user` 时机**：将 `copy_to_user` 操作移到释放 `reset_domain->sem` 信号量之后执行，确保持有信号量期间不进行可能休眠的用户空间数据拷贝。
+4. **简化错误处理流程**：移除不必要的 `goto out` 跳转，采用更直接的错误返回路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b433717c6ad28479312585566a5a84497c9b622e

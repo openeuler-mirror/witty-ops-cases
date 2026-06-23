@@ -1,0 +1,20 @@
+#标题
+padata: reorder_work 引用的 refcount 泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 padata 并行处理机制中，当尝试将 `reorder_work` 加入工作队列时，若工作项已经在队列中，`queue_work` 会返回失败。此时此前为防止 UAF（Use-After-Free）而增加的 `pd` 引用计数未能被正确释放，导致引用计数泄漏，进而可能阻碍 `parallel_data` 结构体的正常释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `padata_reorder` 函数中，为了防止 UAF 问题，代码在调用 `queue_work` 前调用了 `padata_get_pd(pd)` 增加引用计数，期望在 `reorder_work` 执行完毕后释放。然而，`queue_work` 函数在工作项已经处于队列中时会返回 `false`，此时代码逻辑未对这种失败情况进行处理，导致增加的引用计数无法配对释放，造成 refcount 泄漏。
+
+#解决方案
+在调用 `queue_work` 后增加判断逻辑：如果 `queue_work` 返回失败（即返回 `false`），立即调用 `padata_put_pd(pd)` 释放此前增加的引用计数，确保引用计数的平衡。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d08798ce07e9d82019e9744b33192abc3eb79558

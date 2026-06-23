@@ -1,0 +1,30 @@
+#标题
+scsi: qla2xxx: BSG超时处理导致命令泄漏及引用计数异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 FC BSG（Berkeley Packet Filter）请求发生超时时，驱动尝试中止命令。由于原有的中止逻辑存在缺陷，会导致以下现象：
+1. 内存泄漏：`bsg_job_done()` 未被调用，导致 BSG 资源无法释放。
+2. 异常处理流程不完整：在 EEH（Enhanced Error Handling）恢复期间或中止失败时，驱动过早清除了 `outstanding_cmds[]` 数组中的指针，且未正确处理 IOCB/SRB 的回收。
+
+#主要错误日志
+kernel: qla2xxx [0000:21:00.1]-70bb:7: qla24xx_bsg_timeout CMD timeout. bsg ptr ffff9971a42f0838 msgcode 80000004 vendor cmd fa010000
+kernel: qla2xxx [0000:21:00.1]-507c:7: Abort command issued - hdl=4b, type=5
+kernel: qla2xxx [0000:21:00.1]-5040:7: ELS-CT pass-through-ct pass-through error hdl=4b comp_status-status=0x5 error subcode 1=0x0 error subcode 2=0xaf882e80.
+kernel: qla2xxx [0000:21:00.1]-802c:7: Aborting bsg ffff9971a42f43b8 sp=ffff99762c304440 handle=5e rval=5
+kernel: qla2xxx [0000:21:00.1]-704f:7: bsg abort fail.  bsg=ffff9971a42f43b8 sp=ffff99762c304440 rval=5.
+kernel: qla2xxx [0000:21:00.1]-7051:7: qla_bsg_found bsg_job_done : bsg ffff9971a42f43b8 result 0xfffffffa sp ffff99762c304440.
+
+#问题根因
+当 BSG 请求超时并触发中止流程时，驱动程序过早地清除了 `outstanding_cmds[]` 数组中的条目（置为 NULL）。这导致固件无法正常返回对应的 IOCB/SRB，进而导致 `bsg_job_done()` 回调函数未被调用，上层无法获知任务结束，造成 BSG 资源泄漏。同时，如果中止操作失败，驱动未能强制执行清理流程。
+
+#解决方案
+修改 `qla_bsg_found` 函数中的中止处理逻辑：
+1. 不再提前清除 `outstanding_cmds[]` 条目，而是先发起中止命令并等待完成。
+2. 引入完成量机制，等待固件返回 IOCB 或中止超时。
+3. 如果中止成功，由完成的 IOCB 唤醒超时线程；如果中止失败或等待超时，驱动程序强制调用 `bsg_job_done()` 并手动释放 SRB 资源，确保资源不泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3bb0ec5146f6e789932c461d68acca7af0492755

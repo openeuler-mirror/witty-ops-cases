@@ -1,0 +1,20 @@
+#标题
+netfilter: SCTP连接跟踪因处理过期或重传INIT导致状态校验异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在SCTP协议连接跟踪场景下，系统收到过期的INIT（stale INIT）或重传的INIT（retransmitted INIT）报文时，conntrack模块错误地更新了内部状态。这导致连接跟踪的状态机逻辑被破坏，进而影响INIT/INIT-ACK的校验逻辑，可能导致合法的SCTP连接建立失败或连接跟踪条目异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `nf_conntrack_sctp_packet` 函数处理INIT报文逻辑不严谨。当收到的INIT报文的 `init_tag` 与已记录的对端 `vtag` 相同时，说明这是一个未提供新状态信息的过期或重传报文。原代码未对此情况进行过滤，错误地更新了 `ct->proto.sctp.init[]` 状态，从而损坏了后续的握手跟踪与校验逻辑。
+
+#解决方案
+在处理INIT报文时增加判断条件：仅在连接跟踪条目为新创建状态（`SCTP_CONNTRACK_NONE`）或INIT报文的 `init_tag` 与存储的对端 `vtag` 不同时，才执行状态更新操作。通过跳过对过期或重传INIT的处理，避免破坏现有的连接跟踪状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d09af229455e30b430a20e5ae20c1815743bcf5

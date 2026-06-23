@@ -1,0 +1,20 @@
+#标题
+ethtool 设置通道数时未正确处理 RSS 间接表获取失败导致配置校验失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户通过 ethtool 设置网卡通道数时，若内核无法获取 RSS 间接表的配置信息（如驱动不支持相关接口或内存分配失败），系统未能正确阻断操作。这导致内核跳过了对通道数与间接表最大索引的一致性校验，可能允许用户设置过小的通道数，进而引发数据包流向无效队列或网络流量异常。
+
+#主要错误日志
+- "requested channel counts are too low for existing indirection table (%d)"
+
+#问题根因
+函数 `ethtool_get_max_rxfh_channel` 在遇到错误（如 `-EOPNOTSUPP` 或 `-ENOMEM`）时返回负值或错误码，而调用方 `ethnl_set_channels` 和 `ethtool_set_channels` 仅简单判断返回值非零即认为“无限制”或置零处理。这种逻辑掩盖了底层获取信息失败的事实，导致校验步骤被意外跳过，系统无法正确识别间接表实际占用的最大通道索引。
+
+#解决方案
+修改 `ethtool_get_max_rxfh_channel` 函数，将返回值类型从整型错误码改为 `u32`。明确约定错误处理逻辑：若设备不支持 RSS 配置获取，返回 0；若内存分配失败或获取 RSS 配置调用失败，返回 `U32_MAX`。同时更新调用方逻辑，直接使用返回值进行判断，确保在获取失败时执行“Fail Closed”（安全失败）策略，强制校验失败以拒绝不安全的配置变更。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/306a08f923e0be6199698b7071aa486486a70f16

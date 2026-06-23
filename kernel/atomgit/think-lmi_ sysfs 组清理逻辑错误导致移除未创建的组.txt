@@ -1,0 +1,25 @@
+#标题
+think-lmi: sysfs 组清理逻辑错误导致移除未创建的组
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `tlmi_sysfs_init()` 初始化过程中，若某步骤失败触发错误处理流程，系统会尝试移除尚未成功创建的 sysfs 组。这会导致内核内部状态不一致或引发潜在的内核警告/Oops，具体表现为 sysfs 接口初始化失败时的异常清理行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tlmi_sysfs_init()` 函数中，存在多个错误处理路径。当初始化失败跳转到 `fail_create_attr` 标签进行清理时，清理代码会无条件地调用 `sysfs_remove_group` 来移除特定的 sysfs 组。然而，如果错误发生在这些组被创建之前（例如在 `kobject_init_and_add` 阶段就失败了），清理逻辑仍会尝试移除这些从未被成功创建的组，导致逻辑错误。
+
+#解决方案
+修改 sysfs 组的生命周期管理方式，将其交由 kobject 核心代码自动管理。
+1.  在代码中定义 `auth_attr_groups` 和 `tlmi_attr_groups`。
+2.  将这些组关联到 `kobj_type` 结构体的 `default_groups` 成员中（分别为 `tlmi_pwd_setting_ktype` 和 `tlmi_attr_setting_ktype`）。
+3.  移除 `tlmi_sysfs_init()` 中所有显式调用 `sysfs_create_group` 的代码。
+4.  移除 `tlmi_release_attr()` 中所有显式调用 `sysfs_remove_group` 的代码。
+通过利用 kobject 机制，当 kobject 初始化成功时自动创建组，当 kobject 引用计数归零释放时自动移除组，从而避免了手动管理带来的时序错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/500b70727d33ef4619cd6afc9e05e33a00918bbf

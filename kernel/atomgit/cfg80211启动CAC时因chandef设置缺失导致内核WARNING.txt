@@ -1,0 +1,45 @@
+#标题
+cfg80211启动CAC时因chandef设置缺失导致内核WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非AP模式（如IBSS、Mesh等）下启动CAC（Channel Availability Check）时，内核触发警告信息。流程结束后访问 `chandef.chan` 时指针为 NULL，导致系统打印 Call Trace 并报 `cfg80211_chandef_dfs_usable` 相关错误。
+
+#主要错误日志
+WARNING: CPU: 0 PID: 63 at cfg80211_chandef_dfs_usable+0x20/0xaf [cfg80211]
+Call Trace:
+ ? show_regs.part.0+0x14/0x16
+ ? __warn+0x67/0xc0
+ ? cfg80211_chandef_dfs_usable+0x20/0xaf [cfg80211]
+ ? report_bug+0xa7/0x130
+ ? exc_overflow+0x30/0x30
+ ? handle_bug+0x27/0x50
+ ? exc_invalid_op+0x18/0x60
+ ? handle_exception+0xf6/0xf6
+ ? exc_overflow+0x30/0x30
+ ? cfg80211_chandef_dfs_usable+0x20/0xaf [cfg80211]
+ ? exc_overflow+0x30/0x30
+ ? cfg80211_chandef_dfs_usable+0x20/0xaf [cfg80211]
+ ? regulatory_propagate_dfs_state.cold+0x1b/0x4c [cfg80211]
+ ? cfg80211_propagate_cac_done_wk+0x1a/0x30 [cfg80211]
+ ? process_one_work+0x165/0x280
+ ? worker_thread+0x120/0x3f0
+ ? kthread+0xc2/0xf0
+ ? process_one_work+0x280/0x280
+ ? kthread_complete_and_exit+0x20/0x20
+ ? ret_from_fork+0x19/0x24
+
+#问题根因
+在启动雷达检测（CAC）时，代码仅针对 AP 模式设置 `wdev->links[0].ap.chandef`，未针对其他模式（如 IBSS、Mesh Point）设置相应的 `chandef` 结构体。这导致 CAC 结束时，对应模式的 `chandef.chan` 指针保持为 NULL，进而触发内核 WARNING。
+
+#解决方案
+在 `nl80211_start_radar_detection` 函数中，根据不同的接口类型（`wdev->iftype`）分别设置对应的 `chandef`：
+1. 对于 AP 或 P2P GO 模式，设置 `wdev->links[0].ap.chandef`。
+2. 对于 ADHOC 模式，设置 `wdev->u.ibss.chandef`。
+3. 对于 Mesh Point 模式，设置 `wdev->u.mesh.chandef`。
+以此确保所有支持 CAC 的模式在启动检测时均能正确初始化信道定义，避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ea37b555fe8051b9194e607dd9d80c1312ef05b0

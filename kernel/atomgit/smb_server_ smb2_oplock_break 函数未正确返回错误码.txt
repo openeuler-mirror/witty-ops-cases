@@ -1,0 +1,20 @@
+#标题
+smb/server: smb2_oplock_break 函数未正确返回错误码
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SMB2 oplock/lease break 请求中 `StructureSize` 校验失败时，函数 `smb2_oplock_break()` 未向上层返回错误状态，导致上层调用者 `__process_request()` 无法感知错误并打印相应的错误日志，可能导致错误处理流程缺失或问题难以定位。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb2_oplock_break()` 函数处理分支中，当检测到 `StructureSize` 无效时，代码设置了响应状态 `STATUS_INVALID_PARAMETER` 并构造了错误响应包，但在函数返回时遗漏了返回错误码（如 `-EINVAL`），导致函数最终默认返回 0（成功），掩盖了错误事实。
+
+#解决方案
+修改 `fs/smb/server/smb2pdu.c` 文件中的 `smb2_oplock_break()` 函数，在 `StructureSize` 校验失败的错误处理分支中，显式增加 `return -EINVAL;` 语句，确保错误发生时正确返回错误码。同时更新了该函数的注释，明确返回值定义为“0 on success, otherwise error”。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/60e92d582a298de97f5bd6207f13b27721eefeb4

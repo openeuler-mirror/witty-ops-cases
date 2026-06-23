@@ -1,0 +1,20 @@
+#标题
+amdgpu: 提交 IB 时 fence 引用在等待前释放导致的使用后释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 驱动通过 `amdgpu_amdkfd_submit_ib` 提交间接缓冲区（IB）时，因 `fence` 引用计数被过早释放，导致 `dma_fence_wait` 等待操作访问已释放的内存，引发内核崩溃（panic）或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+代码逻辑错误，`dma_fence_put(f)` 被错误地放置在 `dma_fence_wait(f, false)` 之前调用。这导致在等待 fence 完成之前，其引用计数就已经被减少（释放），使得后续的等待操作变成了“使用后释放”。
+
+#解决方案
+调整代码执行顺序，将 `dma_fence_put(f)` 移至 `dma_fence_wait(f, false)` 之后执行。确保在 fence 等待完成之后再释放其引用计数，遵循 fence 的生命周期管理规则。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/caf05bc63648a925e6324b9587460b57a9316fb7

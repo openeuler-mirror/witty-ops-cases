@@ -1,0 +1,27 @@
+#标题
+XDP 重定向导致未启用 Bonding 主设备引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 Bonding 主设备处于 down 状态（从未启动）时，如果系统中有其他 Bond 设备启用了 native XDP，此时若通过 XDP_TX 路径触发 `xdp_master_redirect()`，会导致内核崩溃。
+
+具体表现为 syzkaller 报告的 kernel panic，调用路径为 `bond_rr_gen_slave_id()` 访问空指针。崩溃调用栈显示：`xdp_master_redirect() -> bond_xdp_get_xmit_slave() -> bond_xdp_xmit_roundrobin_slave_get() -> bond_rr_gen_slave_id()`。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `xdp_master_redirect()` 未检查主设备是否处于运行状态（IFF_UP）。
+具体逻辑链条如下：
+1. Bonding 驱动仅在 `bond_open()` 中分配 `rr_tx_counter`（用于 round-robin 模式），若设备从未启动，该指针为 NULL。
+2. `bpf_master_redirect_enabled_key` 是全局静态键，只要系统中任意 Bond 设备加载了 native XDP，该键就会对所有 slave 生效。
+3. 当 XDP 重定向路径在未启动的 Bond 主设备上执行时，`bond_rr_gen_slave_id()` 尝试解引用 NULL 指针 `bond->rr_tx_counter`，导致空指针解引用。
+
+#解决方案
+在 `net/core/filter.c` 的 `xdp_master_redirect()` 函数中增加对主设备状态标志 `IFF_UP` 的检查。
+若主设备未设置 `IFF_UP` 标志（即未执行过 `ndo_open`），函数直接返回 `XDP_ABORTED` 丢弃报文，避免进入后续 `ndo_xdp_get_xmit_slave()` 调用链。这确保了只有 XDP 状态完全初始化（已 up）的主设备才会被处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9234a76a53f3ecd20ae97b12c84c1845ca068093

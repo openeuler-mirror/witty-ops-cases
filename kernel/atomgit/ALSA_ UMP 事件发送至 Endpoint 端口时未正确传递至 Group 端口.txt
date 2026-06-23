@@ -1,0 +1,23 @@
+#标题
+ALSA: UMP 事件发送至 Endpoint 端口时未正确传递至 Group 端口
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当含有 UMP 消息的事件发送给 UMP 客户端时，如果事件发送目标为 Endpoint (EP) 端口且指定了 UMP Group，该事件未能按预期分发到对应的 UMP Group 端口的订阅者，导致特定 Group 的订阅者无法接收到应得的事件消息，破坏了 MIDI 2.0 UMP 事件投递的完整性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 ALSA 序列器代码中，`deliver_to_subscribers` 函数的逻辑存在缺陷。此前逻辑中，虽然处理了向 EP 端口发送事件时 EP 端口作为“捕获所有”端口接收消息的情况，但忽略了一个关键场景：当事件发送到 EP 端口且该事件包含特定的 UMP Group 时，应当同时将该事件分发给该 Group 对应的 UMP Group 端口的订阅者。由于代码中缺少对这一场景的处理逻辑，导致事件分发路径不完整。
+
+#解决方案
+修改 `deliver_to_subscribers` 函数的事件分发逻辑，增加 UMP Endpoint 端口与 Group 端口之间的双向分发支持：
+1. 如果事件源是 UMP Endpoint 端口，且事件包含有效的 UMP Group 信息，则除了正常的分发外，还需将事件分发给该 Group 对应的端口订阅者。
+2. 如果事件源是非 Endpoint 端口，则需额外将事件分发给 UMP Endpoint 端口的订阅者。
+3. 新增 `snd_seq_ump_group_port` 辅助函数用于从 UMP 事件中提取 Group 端口号，并对 `__deliver_to_subscribers` 函数进行了重构以支持通过端口号查找端口进行分发。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ff58e6ddac95ba0ddcbaf1810d3cf740008b205

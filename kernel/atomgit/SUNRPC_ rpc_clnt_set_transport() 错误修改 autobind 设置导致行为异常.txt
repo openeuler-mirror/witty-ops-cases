@@ -1,0 +1,20 @@
+#标题
+SUNRPC: rpc_clnt_set_transport() 错误修改 autobind 设置导致行为异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 NFS/SUNRPC 时，如果传输端点在设置时未绑定，`cl_autobind` 标志位可能被错误地置为 1。这违反了自提交 c2866763b402 以来的设计预期，即 autobind 设置应当仅由 `rpc_create()` 函数决定。该缺陷可能导致 RPC 客户端在非预期的情况下触发自动绑定行为，影响连接建立的一致性。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `rpc_clnt_set_transport()` 中，代码逻辑错误地检查了传输是否已绑定：若 `xprt_bound(xprt)` 返回 false，则强制设置 `clnt->cl_autobind = 1`。根据上游设计，`autobind` 设置应当由 `rpc_create()` 初始化决定，后续设置传输层时不应对此标志位进行修改。该逻辑违反了提交 c2866763b402 ("SUNRPC: use sockaddr + size when creating remote transport endpoints") 中确立的规则。
+
+#解决方案
+删除 `rpc_clnt_set_transport()` 函数中关于检查 `xprt_bound()` 并修改 `clnt->cl_autobind` 的代码片段，确保 `autobind` 状态不被该函数意外篡改，维持其仅在创建时初始化的语义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba8874bf9f6ed34e789121d62655125ab0713623

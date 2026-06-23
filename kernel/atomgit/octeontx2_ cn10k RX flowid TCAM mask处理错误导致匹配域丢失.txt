@@ -1,0 +1,23 @@
+#标题
+octeontx2: cn10k RX flowid TCAM mask处理错误导致匹配域丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 RX flowid 时，TCAM 掩码（mask）初始化错误。程序本意将 TCAM mask 初始化为全 1，但在清除 MAC DA mask 位时直接进行了覆盖操作，导致之前初始化的全 1 状态丢失。这会导致 TCAM 匹配规则异常，影响除 MAC DA 之外的其他匹配字段的正确性，进而可能导致网络数据包匹配逻辑错误或流量分类异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cn10k_mcs_write_rx_flowid` 函数中，代码逻辑存在错误：
+1. 首先将 `req->mask[0]` 初始化为 `~0ULL`（全 1）。
+2. 随后代码试图清除 MAC DA 对应的 mask 位，但使用了赋值操作符 `req->mask[0] = ~MCS_TCAM0_MAC_DA_MASK`。
+3. 该赋值操作直接将 `mask[0]` 覆盖为 `~MCS_TCAM0_MAC_DA_MASK`，导致第 1 步中的初始化值 `~0ULL` 丢失，同时也错误地清除了其他本应保持为 1 的位。
+
+#解决方案
+修改 `drivers/net/ethernet/marvell/octeontx2/nic/cn10k_macsec.c` 文件中的掩码处理逻辑，将赋值操作 `=` 修改为按位与赋值操作 `&=`。即把 `req->mask[0] = ~MCS_TCAM0_MAC_DA_MASK` 改为 `req->mask[0] &= ~MCS_TCAM0_MAC_DA_MASK`。这样在清除 MAC DA mask 位的同时，保留其他位的初始化状态，使其与 `mask[1]` 的处理逻辑保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f6868e45d5b24d2052325654894fc7848e5a1930

@@ -1,0 +1,20 @@
+#标题
+ksmbd: session logoff时的use-after-free故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 会话注销过程中，若另一个连接正在发送会话设置请求以绑定到当前正在释放的会话，会导致 `sess->user` 对象发生 Use-After-Free。此时另一个线程的处理程序可能正在 `smb2_sess_setup` 函数中访问该已被释放的 `sess->user` 对象，造成内核内存破坏或崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb2_session_logoff` 函数中，代码直接释放了 `sess->user` 并将其置空，但未检查该会话对象是否正被其他线程使用。具体场景为：当执行注销操作时，另一个线程可能正在执行 `smb2_sess_setup` 尝试绑定该会话，这导致后者访问了已经被释放的 `sess->user` 指针，从而触发 Use-After-Free 漏洞。
+
+#解决方案
+移除 `smb2_session_logoff` 函数中显式调用 `ksmbd_free_user(sess->user)` 并将 `sess->user` 置空的代码逻辑。将会话状态设置为 `SMB2_SESSION_EXPIRED` 后，依赖会话销毁流程来统一处理资源释放，从而避免在会话仍可能被引用时提前释放关键资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3db5a00e48af3a5d0533b3c5f9736a96da3842d6

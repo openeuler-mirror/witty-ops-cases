@@ -1,0 +1,33 @@
+#标题
+[leapraid] RAID卷隐藏/显示事件处理缺失及中断初始化顺序错误导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 驱动无法正确响应RAID卷的隐藏与显示事件，导致卷状态与实际不匹配。
+2. 初始化过程中可能因中断向量配置不当导致适配器无法正常工作。
+3. 驱动关机时未停止固件日志，可能导致资源未正确释放。
+
+#主要错误日志
+- `dev_warn(&adapter->pdev->dev, "%s:%d: volume handle 0x%x not found\n", __func__, __LINE__, hdl);`
+- `dev_warn(&adapter->pdev->dev, "%s:rc(0x%x):request matches, skipping.\n", __func__, rc);`
+- `dev_warn(&adapter->pdev->dev, "%s:%d: volume handle 0x%x has no sdev\n", __func__, __LINE__, hdl);`
+- `dev_info(&adapter->pdev->dev, "msix unsupported!\n");`
+- `dev_info(&adapter->pdev->dev, "msi unsupported!\n");`
+- `sdev_printk(KERN_INFO, sdev, "hide vol\n");`
+- `sdev_printk(KERN_INFO, sdev, "unhide vol\n");`
+
+#问题根因
+1. 驱动缺少对 `LEAPRAID_EVT_IR_RC_VOLUME_HIDE` 和 `LEAPRAID_EVT_IR_RC_VOLUME_UNHIDE` 事件的处理逻辑，导致RAID卷状态变更事件被忽略。
+2. 初始化流程顺序错误，`leapraid_set_notification`（开启中断）在 `leapraid_get_adapter_features`（获取特性）之前执行，且 MSI-X 中断数量未根据固件报告的 `max_msix_vectors` 进行限制，可能导致中断配置越界或失败。
+3. 关机流程中遗漏了 `leapraid_fw_log_stop` 调用。
+
+#解决方案
+1. 新增 `leapraid_sas_vol_visibility` 函数处理卷隐藏/显示事件，并在事件处理分支中增加对 `VOLUME_HIDE/UNHIDE` 事件码的判断。
+2. 调整初始化顺序，将 `leapraid_make_adapter_ready` 和 `leapraid_get_adapter_features` 移至 `leapraid_set_notification` 之前执行，确保在开启中断前获取适配器特性。
+3. 在设置 MSI/MSI-X 中断数量时，增加 `max_msix_vectors` 的上限检查，使用 `min_t` 函数选取系统支持值与固件限制值中的较小值。
+4. 在驱动关机函数 `leapraid_shutdown` 中补充调用 `leapraid_fw_log_stop` 以停止固件日志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/612ca8eb4c0af197eba11581941547bff26876e6

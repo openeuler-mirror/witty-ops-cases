@@ -1,0 +1,24 @@
+#标题
+sched_ext: SCX_KICK_WAIT 同步等待机制失效导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 `SCX_KICK_WAIT` 标志位调用 `scx_bpf_kick_cpu()` 时，原本应同步等待目标 CPU 完成重新调度，但实际未能可靠等待，导致同步机制失效。该问题影响依赖此机制的内核功能（如 Core Scheduling 实现），可能导致任务切换时序错误，无法保证目标 CPU 已进入调度路径。
+
+#主要错误日志
+未知
+
+#问题根因
+在 commit b999e365c298 ("sched_ext: Replace scx_next_task_picked() with switch_class()") 中，代码重构将 `scx_next_task_picked()` 替换为 `switch_class()` 回调函数。原有的 `pnt_seq` 计数器递增逻辑位于 `scx_next_task_picked()` 中，该函数在 CPU 选取下一个任务时总会被调用。替换后，`pnt_seq` 仅在调度类切换时（即前一个任务是 SCX 且下一个任务不是）才会递增。这导致在 SCX 调度类内部进行任务切换时 `pnt_seq` 不再更新，破坏了 `SCX_KICK_WAIT` 的等待逻辑，使其无法正确感知目标 CPU 的调度事件。
+
+#解决方案
+利用 commit 4c95380701f5 代码重构后的上下文，将 `pnt_seq` 的递增逻辑移动到 `put_prev_task_scx()` 和 `pick_task_scx()` 函数中：
+1. 在 `put_prev_task_scx()` 中递增 `pnt_seq`，以覆盖任务被切换出的场景，包括被更高优先级调度类抢占的情况。
+2. 在 `pick_task_scx()` 中递增 `pnt_seq`，以处理同一个任务被重新选中（如 BPF 调度器决策或时间片补充）的场景。
+3. 更新 `kick_cpus_irq_workfn()` 中的等待逻辑，使用 `smp_cond_load_acquire()` 忙等待 `pnt_seq` 变化，并增加对目标 CPU 当前任务是否属于 SCX 调度类的检查。若目标 CPU 当前任务非 SCX，则无需等待。
+此修复确保只要目标 CPU 上的 SCX 任务发生切换或调度路径被执行，等待即可被唤醒，从而恢复了 `SCX_KICK_WAIT` 的可靠性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5593c79d50997f6c1305240a125a27fb5ea6360a

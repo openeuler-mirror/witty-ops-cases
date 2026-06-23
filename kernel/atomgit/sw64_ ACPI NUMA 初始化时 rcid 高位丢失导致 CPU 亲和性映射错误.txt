@@ -1,0 +1,21 @@
+#标题
+sw64: ACPI NUMA 初始化时 rcid 高位丢失导致 CPU 亲和性映射错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在申威（Sunway）junzhang 平台上进行 NUMA 初始化时，系统只能获取到 CPU 的低 8 位 rcid（物理核 ID）。由于该平台 rcid 实际宽度超过 8 位，导致高位数据丢失，系统无法正确解析 CPU 亲和性信息，可能出现 CPU 与节点映射错误、部分 CPU 无法正确初始化或 NUMA 策略失效的现象。
+
+#主要错误日志
+- SRAT: Can not find the logical id for physical Core 0x%04x（推断，修复后支持更宽位宽打印）
+- SRAT: PXM %u -> CPU 0x%04x -> Node %u（推断，调试日志显示的 CPU ID 异常）
+
+#问题根因
+在初始化 CPU 亲和性（`acpi_numa_processor_affinity_init`）时，代码使用了 `struct acpi_srat_cpu_affinity` 结构体，其中 `apic_id` 成员仅为 8 位，适用于旧款 xuelang 平台。但 junzhang 平台的 rcid 需要更多位宽，导致只记录了 rcid 的低 8 位，高位被截断丢弃，从而引起映射错误。
+
+#解决方案
+将处理 CPU 亲和性的函数替换为 `acpi_numa_x2apic_affinity_init`，使用支持 32 位 ID 的 `struct acpi_srat_x2apic_cpu_affinity` 结构体。同时更新相关的解析逻辑以适配新结构体，确保能够完整获取并处理 junzhang 平台宽位的 rcid 信息，避免高位丢失。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e09f54231385b6921b9e01bff780ec9ec9e5bfa

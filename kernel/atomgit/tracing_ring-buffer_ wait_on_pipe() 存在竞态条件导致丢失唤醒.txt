@@ -1,0 +1,32 @@
+#标题
+tracing/ring-buffer: wait_on_pipe() 存在竞态条件导致丢失唤醒
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读取 trace_pipe_raw 文件时，若发生文件关闭操作，存在竞态窗口，导致等待的读取进程丢失唤醒信号，从而永久阻塞在 wait_on_pipe() 调用中无法返回。
+
+#主要错误日志
+未知
+
+#问题根因
+当 trace_pipe_raw 文件关闭时，唤醒逻辑与等待逻辑之间存在竞态条件。具体流程如下：
+    CPU 0                              CPU 1
+    -----                              -----
+                                   wait_index++;
+  index = wait_index;
+                                   ring_buffer_wake_waiters();
+  wait_on_pipe()
+    ring_buffer_wait();
+CPU 0 侧在读取 wait_index 后、真正进入 ring_buffer_wait() 睡眠前，CPU 1 已经完成了 wait_index 更新和唤醒操作。由于 ring_buffer_wait() 内部缺少对 condition（即 wait_index 更新）的检查，导致 CPU 0 错过了唤醒事件，进入无限等待状态。原本需要的逻辑是“prepare_to_wait(); if (!condition) schedule();”，但旧代码缺失了 condition 检查环节。
+
+#解决方案
+1. 为 ring_buffer_wait() 函数增加条件回调函数（conditional callback）参数，允许调用方传入判断逻辑。
+2. 在 wait_on_pipe() 中实现条件检查函数 wait_pipe_cond()，通过比对当前 wait_index 与进入等待前保存的值，检测是否发生过唤醒，若发生则跳出等待循环。
+3. 在 trace_iterator 结构体中新增 "closed" 字段，在文件 flush 时将其置为 true，并在条件检查中判断该字段，防止在文件已关闭的情况下产生新的等待者。
+4. 将 wait_index 字段类型改为 atomic_t，使用 atomic_read_acquire() 和 atomic_fetch_inc_release() 替代原有读写操作，确保内存屏障的正确性。
+5. 在 tracing_buffers_splice_read() 中增加 "woken" 标志位，若进程曾被唤醒，则允许其再尝试获取一次数据后退出循环，避免陷入无效等待。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/802ecfa34eacde8400ec973d050b17709f082fb4

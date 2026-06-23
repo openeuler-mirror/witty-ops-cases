@@ -1,0 +1,26 @@
+#标题
+ftrace: syscall stacktrace 触发命令导致抢占计数显示错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ftrace 的 stacktrace 触发命令跟踪系统调用时，跟踪记录显示的抢占计数始终为 1，而实际系统调用事件的抢占计数应为 0（显示为 "."）。这导致跟踪输出中的抢占状态信息不准确，干扰了对系统调用上下文的正确分析。
+
+#主要错误日志
+```text
+sshd-416     [002] ...1.   232.864913: <stack trace>
+ => ftrace_syscall_enter
+ => syscall_trace_enter
+ => do_syscall_64
+ => entry_SYSCALL_64_after_hwframe
+```
+
+#问题根因
+根本原因是跟踪框架在调用触发回调函数之前，会在 `__DO_TRACE` 中禁用抢占，这导致抢占计数增加。而在 `stacktrace_trigger` 函数中，使用 `tracing_gen_ctx()` 获取跟踪上下文时，没有考虑到此时抢占计数已经被增加的情况，因此记录下了被“人为”增加后的抢占计数值 1，而不是真实的原始计数值 0。
+
+#解决方案
+修改 `kernel/trace/trace_events_trigger.c` 文件中的 `stacktrace_trigger` 函数，将获取跟踪上下文的函数由 `tracing_gen_ctx()` 替换为 `tracing_gen_ctx_dec()`。`tracing_gen_ctx_dec()` 函数会对 `__DO_TRACE` 中增加的抢占计数进行修正（递减），从而在跟踪记录中输出准确的抢占计数值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d5fb857820a894af5b31cd0746b34c912a1b09b5

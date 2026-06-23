@@ -1,0 +1,23 @@
+#标题
+RDMA/hns: DIP表项泄漏及查询错误的SCC上下文问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 hip09 之后的 RDMA 设备上，驱动卸载或退出时存在 DIP（Destination IP）表项内存泄漏。
+2. 当配置 DIP 拥塞算法时，查询 QP 的 SCC 上下文会获取到错误的数据，导致资源配置或状态查询异常。
+
+#主要错误日志
+- failed to query SCCC, ret = %d. (推断：来自 `ibdev_warn_ratelimited` 调用，虽然补丁旨在修复该错误逻辑，但这是补丁修改路径中相关的日志输出点)
+
+#问题根因
+1. **DIP 表项泄漏**：`hns_roce_v2_exit` 函数中释放 DIP 表项的条件判断有误。原代码仅使用 `==` 判断版本号是否为 HIP09，导致版本号大于 HIP09 的设备无法执行 `free_dip_entry`，从而造成内存泄漏。
+2. **SCC 上下文查询错误**：在 `hns_roce_fill_res_qp_entry_raw` 中查询 SCC 上下文时，直接使用 QPN（队列对号）作为参数。对于 DIP 算法场景，SCC 上下文是通过 DIP 索引关联的，而非 QPN。直接使用 QPN 会导致查询到错误的 SCC 上下文内容。
+
+#解决方案
+1. 修复版本判断逻辑：将 `hns_roce_v2_exit` 中的判断条件由 `== PCI_REVISION_ID_HIP09` 修改为 `>= PCI_REVISION_ID_HIP09`，确保新版本设备也能正确释放 DIP 表项。
+2. 修正查询参数逻辑：在查询 SCC 上下文前增加判断，若 QP 配置为 DIP 拥塞类型，则使用 `hr_qp->dip->dip_idx` 作为查询索引，而非 QPN；若非 DIP 类型则继续使用 QPN。同时增加了对 `hr_qp->dip` 指针的有效性检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/90a9b2479c853030093e35f6a4219e2604f3f13d

@@ -1,0 +1,33 @@
+#标题
+hugetlb：set_max_huge_pages() 因 surplus 页面计算错误导致内存释放失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定场景下调整 HugeTLB 页面数量（写入 nr_hugepages）时，无法正确释放内存页面，导致页面被错误地统计为 surplus（剩余）页面。具体复现步骤如下：
+1. 在 Node0 创建 5 个 hugetlb folios。
+2. 运行程序耗尽 Node0 的 hugetlb folios。
+3. 对 Node0 执行 `echo 0 > nr_hugepages` 试图释放 folios，结果 5 个 folios 被计入 surplus。
+4. 在 Node1 创建 5 个 hugetlb folios。
+5. 对 Node1 执行 `echo 0 > nr_hugepages` 试图释放 folios。
+
+故障结果：
+Node1 仍有 5 个 Total 页面和 5 个 Surp 页面，未能成功释放（预期结果应为 Total 0, Surp 0）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `set_max_huge_pages()` 函数中计算 `min_count` 时，原逻辑使用 `resv_huge_pages + persistent_huge_pages() - free_huge_pages` 公式。该公式未正确处理 surplus 页面与 free 页面的重叠关系。
+当存在 HVO（HugeTLB Vmemmap Optimization）页面因恢复 vmemmap 失败而产生的“空闲 surplus 页面”时，直接相减会导致同一页面被重复计算（既作为 surplus 减去，又在 free 中计入），从而导致 `min_count` 计算值偏高，阻碍了页面的正常释放流程，最终导致页面被错误地标记为 surplus 而非被释放。
+
+#解决方案
+修正 `min_count` 的计算逻辑，先计算持久化空闲页面的数量（`persistent_free_count`），再据此推导 `min_count`。
+具体修复代码逻辑如下：
+1. 初始化 `persistent_free_count` 为 `h->free_huge_pages`。
+2. 如果空闲页面数大于持久化页面数，说明存在空闲 surplus 页面。此时需从 `persistent_free_count` 中减去 surplus 页面计数（若 surplus 计数大于空闲计数则减为 0），避免重复计算。
+3. 使用修正后的 `persistent_free_count` 计算 `min_count`：`min_count = h->resv_huge_pages + persistent_huge_pages(h) - persistent_free_count`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a993a9176f22d2e3d88f8c996c424b0babcb8cd5

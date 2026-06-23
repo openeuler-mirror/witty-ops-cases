@@ -1,0 +1,20 @@
+#标题
+af_unix: 修复携带 OOB 数据及 SCM_RIGHTS 的 embryo socket 垃圾回收泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Unix 域 socket 监听套接字（listener）的文件描述符通过 SCM_RIGHTS 辅助数据发送给其派生的 embryo socket（带 MSG_OOB 标志），在关闭所有用户态句柄后，内核未正确释放该 socket。表现为 `/proc/net/unix` 中仍残留该 socket 的引用记录，且应用层无法彻底销毁该 socket，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在进行 Unix 域 socket 垃圾回收（GC）时，内核尝试在清除 hitlist 之前显式释放 OOB skb 的引用。然而，对于 embryo socket（未完成连接建立的子套接字），内核代码路径 `kfree_skb(u->oob_skb)` 从未被调用。这导致原本位于 embryo 接收队列中的 skb 仍然保留为 `unix_sk(sk)->oob_skb`，并持有 listener 的引用计数，阻碍了 listener 的正常释放。
+
+#解决方案
+修改垃圾回收逻辑，确保在处理 embryo socket 时也能正确释放 OOB skb。将 OOB skb 的清理逻辑封装到 `unix_collect_queue` 函数中，并在处理 embryo 接收队列时统一调用该函数，通过 `skb_unref` 释放 OOB skb 引用并置空，从而修复引用计数泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b670cf8ae4b9c72b8a9da76eee7830348592ea65

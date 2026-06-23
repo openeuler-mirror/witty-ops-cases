@@ -1,0 +1,20 @@
+#标题
+PM: runtime: Fix a race condition related to device removal
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除设备时，若设备电源管理运行时工作队列中仍有待处理的工作，可能因释放后使用导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在设备移除流程中，`pm_runtime_remove` 函数调用 `__pm_runtime_disable` 禁用运行时电源管理后，直接调用 `pm_runtime_reinit` 进行清理。此过程未等待设备电源管理工作中可能存在的挂起任务完成，导致在设备结构体被释放或重新初始化后，挂起的工作项仍然尝试访问设备数据，从而引发竞争条件。
+
+#解决方案
+在 `pm_runtime_remove` 函数中，于调用 `pm_runtime_reinit` 之前增加 `flush_work(&dev->power.work)` 调用。这确保了在清理和移除设备前，所有挂起的电源管理运行时工作都已执行完毕，消除了释放后使用的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3735811d1e549fc9c4b4049ada86ae850b0e8f1d

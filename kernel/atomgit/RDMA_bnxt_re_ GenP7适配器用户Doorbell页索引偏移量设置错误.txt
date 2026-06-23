@@ -1,0 +1,20 @@
+#标题
+RDMA/bnxt_re: GenP7适配器用户Doorbell页索引偏移量设置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Broadcom GenP7 适配器上运行 RDMA 用户态应用程序时，由于 Doorbell 页索引偏移量计算错误，可能导致应用程序无法正常下发 Doorbell 指令，进而引发功能异常或性能问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 Commit a62d68581441 ("RDMA/bnxt_re: Update the BAR offsets") 引入的代码逻辑中，针对 GenP7 适配器的处理路径存在错误。代码错误地将 `wcreg.offset`（Write Combined 寄存器偏移）设置为了 `ucreg.offset`（Uncached 寄存器偏移），或者错误地复用了非 GenP7 路径的偏移计算逻辑。实际上，GenP7 适配器的用户 Doorbell 页索引起始于特定的偏移量，`wcreg.offset` 应被设置为 `en_dev->l2_db_size`，而不是直接复用 `ucreg.offset`。
+
+#解决方案
+修改 `bnxt_re_set_db_offset` 函数中的控制流逻辑。将 GenP7 适配器的处理逻辑独立出来，正确设置 `res->dpi_tbl.ucreg.offset` 为 `offset`，同时将 `res->dpi_tbl.wcreg.offset` 修正为 `en_dev->l2_db_size`。对于非 GenP7 适配器，保持原有逻辑，即 `wcreg.offset` 等于 `ucreg.offset`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6e454e884776d570b7f28cf1a1932a71ceb00577

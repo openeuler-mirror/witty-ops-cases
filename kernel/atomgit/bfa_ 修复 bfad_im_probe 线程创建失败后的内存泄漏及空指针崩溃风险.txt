@@ -1,0 +1,20 @@
+#标题
+bfa: 修复 bfad_im_probe 线程创建失败后的内存泄漏及空指针崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 bfa 驱动 probe 阶段，若 `bfad_thread_workq` 线程创建失败，驱动仅释放了 `im` 结构体内存但未将 `bfad->im` 指针置空。后续代码路径若访问 `bfad->im` 会触发 Use-After-Free 或空指针解引用，导致内核崩溃或不可预测的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `bfad_im_probe` 中，当 `bfad_thread_workq` 执行失败时，代码执行了 `kfree(im)` 释放内存，但 `bfad->im` 仍指向已被释放的内存地址（悬挂指针）。这导致了内存泄漏隐患或后续访问时的野指针崩溃风险。
+
+#解决方案
+在错误处理路径中，执行 `kfree(im)` 后立即将 `bfad->im` 指针置为 NULL，防止悬挂指针的产生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7313cefb8d6a92699ecb8d0f336377acda0fe015

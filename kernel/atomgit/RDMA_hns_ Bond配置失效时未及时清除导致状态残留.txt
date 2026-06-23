@@ -1,0 +1,20 @@
+#标题
+RDMA/hns: Bond配置失效时未及时清除导致状态残留
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当RoCE bond配置变为无效时（例如向bond中添加非hns设备），bond状态未被正确清除。此问题具有概率性：若设备link-up事件发生在驱动bond通知之后，会触发bond work清除无效配置；否则无效配置将持续残留，直到下一个事件触发。可通过强制设备link down并阻止后续link-up事件来必现。
+
+#主要错误日志
+未知
+
+#问题根因
+在`upper_event_filter()`函数中，当发生使bond配置失效的`CHANGEUPPER`事件时，处理逻辑存在缺陷。代码原先在处理非linking事件（即`!info->linking`）时，若bond状态非`HNS_ROCE_BOND_NOT_ATTACHED`且upper设备不匹配，会直接返回false退出，导致该事件未被处理，进而无法触发bond work来清除无效的bond配置。
+
+#解决方案
+修改`upper_event_filter()`的过滤逻辑，扩展处理范围。当bond状态不是`HNS_ROCE_BOND_NOT_ATTACHED`（即bond已 attached）时，允许处理`CHANGEUPPER`事件，确保即使是非linking事件也能通过过滤，从而触发后续的bond work流程清除无效配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9788edfba4738d00c17a3744f8ea5a764b7ccd79

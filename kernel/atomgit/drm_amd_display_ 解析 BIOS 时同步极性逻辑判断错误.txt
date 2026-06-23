@@ -1,0 +1,23 @@
+#标题
+drm/amd/display: 解析 BIOS 时同步极性逻辑判断错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD 显示驱动解析嵌入式面板信息（VBIOS）时，水平同步极性（H_SYNC_POLARITY）和垂直同步极性（V_SYNC_POLARITY）的判断逻辑错误。无论 VBIOS 中的原始配置如何，驱动程序始终将这两个极性标志置为 true（1），导致显示时序配置错误，可能引发显示异常（如画面抖动、模糊、无法点亮等）。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `get_embedded_panel_info_v2_1` 中，对同步极性的判断使用了按位取反运算符（`~`）而非逻辑取反运算符（`!`）。
+`.H_SYNC_POLARITY` 和 `.V_SYNC_POLARITY` 是 u32 类型中的 1 bit 位域。宏定义 `ATOM_HSYNC_POLARITY` 为 0x2，`ATOM_VSYNC_POLARITY` 为 0x4。
+原代码逻辑为 `~(uint32_t)(... & ATOM_HSYNC_POLARITY)`。当对 0、2 或 4 进行按位取反时，结果的最低位（bit 0）始终为 1。由于目标变量是 1 bit 位域，截断后始终赋值为 1。
+该逻辑原本意图是检查相应标志位是否置位并取反结果（即逻辑非），但错误地使用了位运算，导致极性始终被错误地设置为 true。
+
+#解决方案
+将代码中的按位取反运算符（`~`）修改为逻辑取反运算符（`!`）。修改后，表达式将先检查 `ATOM_HSYNC_POLARITY` 或 `ATOM_VSYNC_POLARITY` 标志位是否设置，然后对布尔结果进行逻辑取反，从而正确计算同步极性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8e5fbd2b952a221748d872d3d190be7476daeea2

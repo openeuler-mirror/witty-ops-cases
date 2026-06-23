@@ -1,0 +1,20 @@
+#标题
+drm/mediatek 组件子驱动 kobject 引用计数溢出导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MediaTek DRM 驱动初始化过程中，若组件绑定操作多次失败，会导致内核发生 refcount_t 溢出。该问题通常伴随内核 panic 或 Oops，并打印 "refcount_t overflow" 相关的内核警告信息，系统可能因此崩溃或变得不稳定。
+
+#主要错误日志
+refcount_t overflow
+
+#问题根因
+在函数 `mtk_drm_get_all_drm_priv()` 中，驱动通过调用 `device_find_child()` 获取所有子设备的引用时增加了引用计数。但在后续的 `mtk_drm_bind()` 错误处理路径以及 `mtk_drm_unbind()` 回调函数中，代码遗漏了对这些子设备（mmsys devices）执行 `put_device()` 操作来减少引用计数。当组件绑定过程多次重试并失败时，引用计数持续累积增加而从未被释放，最终导致 refcount_t 溢出。
+
+#解决方案
+在 `mtk_drm_bind()` 函数的错误处理分支 `err_put_dev` 标签处，以及 `mtk_drm_unbind()` 回调函数中，增加循环逻辑遍历所有 mmsys 设备，并调用 `put_device()` 释放引用。这确保了无论绑定成功与否，之前通过 `device_find_child()` 获取的设备引用都能被正确释放，防止引用计数泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c34ff68704c049f5f9b36bce70e05ebe5ef26366

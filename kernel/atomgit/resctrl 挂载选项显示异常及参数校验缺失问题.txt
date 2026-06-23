@@ -1,0 +1,23 @@
+#标题
+resctrl 挂载选项显示异常及参数校验缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在挂载 resctrl 文件系统时，部分本应显示的挂载选项（如 l2）未出现在挂载列表中。
+2. 系统允许使用硬件不支持或无效的参数（如 cdp, cdpl2, l2）挂载 resctrl，未能正确返回错误，导致挂载行为不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **选项显示不全**：`rdtgroup_show_options` 函数在显示选项时逻辑不完善，对于 L2 相关选项的显示条件判断有误，且缺失了对 `l2` 选项的显示输出逻辑。
+2. **参数校验缺失**：`rdt_parse_param` 函数在解析挂载参数（如 `Opt_cdp`, `Opt_cdpl2`, `Opt_l2`）时，未检查对应硬件资源（L3、L2）是否具备分配能力（`alloc_capable`），导致即使硬件不支持，系统也接受了这些无效参数。
+
+#解决方案
+1. 在 `rdtgroup_show_options` 函数中增加对 L2 资源可见性的判断，修正 `cdpl2` 的显示条件，并新增在 ARM64 MPAM 配置下显示 `l2` 选项的逻辑。
+2. 在 `rdt_parse_param` 函数中增加对 `Opt_cdp`、`Opt_cdpl2` 和 `Opt_l2` 参数的硬件能力校验，若检测到对应资源不存在或不具备分配能力（`!r->alloc_capable`），则直接返回 `-EINVAL` 拒绝挂载。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/47de41ca2eac293add82e4e85aeea8288c5d8a81

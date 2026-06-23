@@ -1,0 +1,22 @@
+#标题
+mm/debug_vm_pgtable未清理页表项导致后续进程内存管理状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 `CONFIG_DEBUG_VM_PGTABLE=y` 的调试内核上运行 `debug_vm_pgtable` 测试后，后续进程（如 modprobe）在退出时触发内核 WARNING 并报错。具体表现为 `pgtables_bytes` 计数出现负值，以及 `Bad rss-counter state`。该问题具有一定概率性，在重启循环测试中偶发。
+
+#主要错误日志
+- `WARNING: CPU: 5 PID: 116 at include/linux/mm.h:2841 free_pud_range+0x8bc/0x8d0`
+- `BUG: Bad rss-counter state mm:000000002267cc9e type:MM_ANONPAGES val:1`
+- `BUG: non-zero pgtables_bytes on freeing mm: -6144`
+
+#问题根因
+`debug_vm_pgtable` 测试模块在初始化时手动分配了页表项和 `mm_struct`，但在退出函数 `destroy_args()` 中仅释放了内存，未调用 `*_clear` 函数清除页表项中的陈旧条目。这导致页表项残留。当后续进程分配 `mm_struct` 时复用了该地址处的 pgd，进程退出时内核遍历到这些残留条目并尝试释放，从而导致释放已释放的条目，引发 `pgtables_bytes` 计数错误和 WARNING。
+
+#解决方案
+在 `destroy_args()` 函数中释放页表内存前，依次调用 `pmd_clear`、`pud_clear`、`p4d_clear` 和 `pgd_clear` 清除对应的页表项，确保无残留条目。同时，将 `mmdrop(args->mm)` 修改为 `mmput(args->mm)` 以正确释放 `mm_struct` 资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/873f4a5cd73367c812d2b8280fc9d46cc1f4c3cb

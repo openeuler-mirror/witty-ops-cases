@@ -1,0 +1,24 @@
+#标题
+spi: cadence: 驱动卸载时访问未时钟使能的寄存器
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 Cadence SPI 控制器驱动（unbind/rmmod）过程中，系统可能发生异步总线错误或内核崩溃。原因是驱动在执行 `remove` 流程时，未确保设备处于运行恢复状态，导致对未时钟使能的硬件寄存器进行了非法读写访问。同时，该问题还会导致引用计数不平衡。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `cdns_spi_remove` 函数中直接禁用控制器（写入 CDNS_SPI_ER 寄存器）并调用运行时 PM 禁用接口，未检查设备是否已处于挂起状态。如果设备在卸载前已因运行时电源管理挂起，此时直接访问寄存器属于未时钟使能的访问；且直接调用 `pm_runtime_disable` 和 `pm_runtime_set_suspended` 会跳过 `runtime_put` 操作，导致时钟 disable 计数不平衡。
+
+#解决方案
+在驱动卸载流程中，对非 Target（Host）模式的控制器增加处理逻辑：
+1. 在注销控制器之前，调用 `pm_runtime_get_sync` 确保设备处于运行恢复状态，此时时钟已使能。
+2. 仅在 `pm_runtime_get_sync` 成功（返回值 >= 0）后，才执行寄存器写入操作禁用控制器。
+3. 在调用 `pm_runtime_disable` 前，先调用 `pm_runtime_put_noidle` 恢复引用计数平衡。
+4. 调用 `pm_runtime_dont_use_autosuspend` 恢复自动挂起配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2482c20c102b7a7cdf2c15bbde1d46ddf3b83423

@@ -1,0 +1,20 @@
+#标题
+PCI/IOV: SR-IOV 启用/禁用与热插拔竞态导致的死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SR-IOV 处于启用状态下移除物理功能（PF）设备时，系统发生死锁，导致移除操作无法完成，进程挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+之前的修复补丁试图在 `sriov_del_vfs()` 和 `sriov_add_vfs()` 中获取 PCI rescan/remove 锁以解决 SR-IOV 启用/禁用与热插拔之间的竞态问题。然而，PF 设备在移除过程中会触发 SR-IOV 禁用操作，且该移除过程本身已经持有 PCI rescan/remove 锁，导致在持有锁的情况下再次尝试获取该锁，从而引发死锁。
+
+#解决方案
+将 PCI rescan/remove 锁的获取位置从底层的 `sriov_del_vfs()` 和 `sriov_add_vfs()` 函数上移至调用链更上层的 `sriov_numvfs_store()` 函数中。在调用驱动的 `sriov_configure()` 回调函数之前获取锁，调用结束后释放锁，以此在保护 VF 添加/删除过程的同时避免死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ceba6610e372510b21854de28033b591bec09e4

@@ -1,0 +1,22 @@
+#标题
+s390/bpf: bpf_arch_text_poke() 处理 NULL 地址错误导致内核间歇性崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 s390 架构下，当 BPF 程序（如 perf 的 on_switch() 程序）运行时，触发间歇性内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复提交 7ded842b356d ("s390/bpf: Fix bpf_plt pointer arithmetic") 时，意外移除了此前提交 c730fce7c70c 中的关键修复逻辑。
+具体原因为：当 `bpf_arch_text_poke()` 的 `new_addr` 参数为 NULL 时，`bpf_jit_plt()` 函数将 PLT 表项的 `target` 设置为 NULL。实际上，`target == NULL` 意味着跳转到该 PLT 表项的分支指令已被修补为 no-op（空操作）。然而，在修补完成之前，可能已有 CPU 跳转到了该 PLT 表项并正在执行。此时若 `target` 为 NULL，会导致 CPU 执行异常，从而引发内核 panic。
+
+#解决方案
+修改 `arch/s390/net/bpf_jit_comp.c` 中的 `bpf_jit_plt` 函数，恢复对 `target` 为 NULL 情况的处理。
+具体修改为：将 `plt->target = target;` 更改为 `plt->target = target ?: ret;`。当 `target` 为 NULL 时，让 PLT 表项的跳转目标指向返回标签（ret），从而将其变为一个有效的空操作，避免 CPU 跳转到 NULL 地址引发崩溃。同时添加了注释说明该逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4a81ec09867c871782f4c618851b2cddcf70f33c

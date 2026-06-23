@@ -1,0 +1,20 @@
+#标题
+arcnet驱动com20020pci_probe未检查kasprintf返回值导致的空指针异常风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 com20020pci_probe 函数执行过程中，若 devm_kasprintf 分配内存失败返回 NULL，后续代码直接引用该 NULL 指针（如赋值给 led 结构体的 name 或 default_trigger 成员，或作为字符串使用），将触发内核空指针解引用错误，导致驱动加载失败或内核 panic。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `com20020pci_probe` 中调用 `devm_kasprintf` 为 LED 设备的 `name` 和 `default_trigger` 字段分配字符串内存时，未对返回值进行 NULL 检查。在系统内存不足等极端情况下，`devm_kasprintf` 返回 NULL，导致后续代码使用无效指针。
+
+#解决方案
+在每次调用 `devm_kasprintf` 后立即添加返回值检查。如果返回值为 NULL，则将错误码设置为 -ENOMEM，并跳转到错误处理标签 `err_free_arcdev` 进行资源清理与函数返回，从而避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf3a443b34d8d3177e807a91d6f64a36823a3faf

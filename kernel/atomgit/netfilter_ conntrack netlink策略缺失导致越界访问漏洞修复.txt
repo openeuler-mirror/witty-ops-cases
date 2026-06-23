@@ -1,0 +1,27 @@
+#标题
+netfilter: conntrack netlink策略缺失导致越界访问漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 netlink 属性时存在越界访问，具体表现为：
+1. SCTP 状态处理：用户提供的 CTA_PROTOINFO_SCTP_STATE 值未经校验直接赋值给内核对象，可能导致状态异常。
+2. 期望连接方向处理：当用户传入非法方向值（如 exp->dir = 100）时，访问 ct->master->tuplehash[100] 会导致读取超出 nf_conn 对象边界（在 320 字节对象上越界读取 5600 字节）。
+3. UBSAN 检测到的 Slab-out-of-bounds read 错误。
+
+#主要错误日志
+UBSAN: slab-out-of-bounds-read
+
+#问题根因
+netfilter 的 conntrack netlink 接口在处理用户下发的属性时，缺少相应的策略校验：
+1. CTA_PROTOINFO_SCTP_STATE 属性仅定义了类型为 NLA_U8，未限制数值范围，导致非法状态值被内核直接使用。
+2. CTA_EXPECT_NAT_DIR 属性仅定义了类型为 NLA_U32，未限制数值上限，导致传入过大数值引发数组越界访问。
+
+#解决方案
+扩展并修正 netlink 策略校验规则：
+1. 在 `nf_conntrack_proto_sctp.c` 中，将 CTA_PROTOINFO_SCTP_STATE 的策略修改为 `NLA_POLICY_MAX(NLA_U8, SCTP_CONNTRACK_HEARTBEAT_SENT)`，限制状态值不得超过 SCTP 连接跟踪的最大有效状态。
+2. 在 `nf_conntrack_netlink.c` 中，将 CTA_EXPECT_NAT_DIR 的策略修改为 `NLA_POLICY_MAX(NLA_BE32, IP_CT_DIR_REPLY)`，限制方向值不得超过 IP_CT_DIR_REPLY，防止数组越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3a9c06e40e26e678adff2f0902c4e28df3837ecf

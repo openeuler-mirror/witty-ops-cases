@@ -1,0 +1,23 @@
+#标题
+perf stat: bperf 模式下事件计数为 0 时错误显示为 <not supported>
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `perf stat` 工具并采用 bperf（基于 BPF 的性能计数器共享机制）进行性能统计时，当某个硬件事件计数为 0 时，工具错误地显示为 `<not supported>`（不支持），而非正确的 `<not counted>`（未计数）。这导致用户无法区分事件是不被硬件支持还是该次运行中未发生计数。
+
+#主要错误日志
+未知
+
+#问题根因
+在 bperf 实现中，`evsel->supported` 标志位未被正确赋值。内核代码在 `__run_perf_stat()` 函数的 `evlist__for_each_cpu` 循环中过早地执行了 `break` 或 `continue` 操作，导致跳过了 `counter->supported` 的赋值逻辑。由于 `evsel->supported` 默认状态不正确，perf 工具在判断事件计数为 0 的原因时发生错误。具体流程缺陷在于：bperf 仅在加载 leader 时打开事件，导致 follower 无法感知事件是否被硬件支持，且 leader 打开事件后状态未同步传递。
+
+#解决方案
+修改 bperf 的实现逻辑以正确同步事件支持状态：
+1.  在 `bpf_perf.h` 中的 `perf_event_attr_map_entry` 结构体中新增 `supported` 字段，用于在 perf 会话间同步支持状态。
+2.  在 `bperf_reload_leader_program` 函数中，调整代码执行顺序，在调用 `evsel__open_per_cpu` 打开事件后，根据返回值判断是否支持，并将结果更新到 `entry.supported` 中。
+3.  在 `bperf__load` 函数中，follower 加载时从 map 中读取 `entry.supported` 并赋值给 `evsel->supported`，从而确保 perf stat 能正确区分 "不支持" 和 "未计数"。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3dc232032403499f2597034a8bdbc5a58b3d9f97

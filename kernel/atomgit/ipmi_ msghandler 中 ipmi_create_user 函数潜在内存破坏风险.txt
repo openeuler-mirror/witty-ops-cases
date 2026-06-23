@@ -1,0 +1,20 @@
+#标题
+ipmi: msghandler 中 ipmi_create_user 函数潜在内存破坏风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ipmi_create_user` 函数时，若传入的 `if_num` 未匹配到有效的 IPMI 接口，函数返回路径错误。该错误路径在未持有 SRCU 读锁的情况下调用了 `srcu_read_unlock`，可能导致内核内存破坏或引用计数异常，进而引发系统不稳定或 panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ipmi_create_user` 函数中，当未找到匹配的接口（Not found 分支）时，代码逻辑错误地跳转至 `out_kfree` 标签。`out_kfree` 标签处的代码除了释放内存外，还包含 `atomic_dec` 操作，这会导致未创建成功的用户计数被错误递减。随后执行流会继续执行 `out_unlock` 标签下的 `srcu_read_unlock`。由于此错误路径并未执行对应的 `srcu_read_lock`（锁是在查找循环前获取的，但错误跳转绕过了正常的平衡逻辑或上下文不匹配），导致在未加锁或锁上下文不匹配的情况下执行了解锁操作，从而引发内存破坏。
+
+#解决方案
+修改 `ipmi_create_user` 函数中“未找到接口”分支的跳转目标。将 `goto out_kfree;` 修改为 `goto out_unlock;`，确保在接口查找失败时，直接跳转至解锁标签，避免执行错误的 `atomic_dec` 操作，并正确处理 SRCU 锁的释放流程。同时调整代码标签顺序，将 `out_unlock` 标签独立出来，确保只有在需要时才执行 `out_kfree` 的减计数逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01f09086199a851ede06571567e59726189c4ca5

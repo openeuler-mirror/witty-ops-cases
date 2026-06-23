@@ -1,0 +1,24 @@
+#标题
+wifi: mac80211: MLD连接下启动Tx BA会话时触发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在建立MLD（Multi-Link Operation）连接场景下，当触发Tx BA（Block Ack）会话启动流程时，内核发生空指针解引用（NULL pointer dereference），导致主机崩溃并触发Oops。
+
+#主要错误日志
+[ 9890.526087] BUG: kernel NULL pointer dereference, address: 0000000000000000
+[ 9890.526102] #PF: supervisor read access in kernel mode
+[ 9890.526105] #PF: error_code(0x0000) - not-present page
+[ 9890.526119] CPU: 2 PID: 6367 Comm: kworker/u16:2 Kdump: loaded Tainted: G           OE      6.9.0 #1
+[ 9890.526203] RIP: 0010:ieee80211_start_tx_ba_session (net/mac80211/agg-tx.c:618 (discriminator 1)) mac80211
+
+#问题根因
+在MLD连接中，link_data/link_conf是动态分配的，并不直接指向vif->bss_conf。因此，vif->bss_conf中没有分配chanreq，导致chan字段为NULL。代码在`ieee80211_start_tx_ba_session`函数中检查频段（band）时，直接访问了`sta->sdata->vif.bss_conf.chandef.chan->band`，引发了空指针解引用。
+
+#解决方案
+修改频段检查逻辑，不再依赖可能为空的`bss_conf.chandef.chan`。改为检查`pubsta->deflink`下的能力标志位（ht_supported、vht_supported、has_he、has_eht）来判断是否支持相应协议，从而避免访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1093f5dcb6dd24527de13695105df367ee8ad25

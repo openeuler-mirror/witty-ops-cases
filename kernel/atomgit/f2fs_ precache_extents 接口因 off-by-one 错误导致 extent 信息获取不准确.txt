@@ -1,0 +1,25 @@
+#标题
+f2fs: precache_extents 接口因 off-by-one 错误导致 extent 信息获取不准确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 f2fs 文件系统上，使用 `mode=lfs,noextent_cache` 挂载选项时，对文件执行写入、fsync 后进行 remount，随后调用 `f2fs_io precache_extents` 命令，tracepoint 输出显示 extent 更新逻辑存在异常，具体表现为 extent 范围计算存在偏差。
+
+#主要错误日志
+Tracepoint 输出显示 extent 更新异常：
+```
+f2fs_update_read_extent_tree_range: dev = (253,16), ino = 4, pgofs = 0, len = 512, blkaddr = 1055744, c_len = 0
+f2fs_update_read_extent_tree_range: dev = (253,16), ino = 4, pgofs = 513, len = 351, blkaddr = 17921, c_len = 0
+f2fs_update_read_extent_tree_range: dev = (253,16), ino = 4, pgofs = 864, len = 160, blkaddr = 18272, c_len = 0
+```
+
+#问题根因
+在 `f2fs_map_blocks` 函数中更新 `map->m_next_extent` 时存在 off-by-one 错误。当最后一个块地址有效且与前一个 extent 不连续时，代码错误地将 `map->m_next_extent` 更新为 `pgofs + 1`，正确的逻辑应该是更新为 `pgofs`。
+
+#解决方案
+修改 `fs/f2fs/data.c` 文件中的 `f2fs_map_blocks` 函数，将 `map->m_next_extent` 的赋值逻辑从 `pgofs + 1` 修正为 `is_hole ? pgofs + 1 : pgofs`，确保在非 hole 场景下正确更新下一个 extent 的位置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4661bdb161f3ff4dff85c20dbe9c1093ea03d796

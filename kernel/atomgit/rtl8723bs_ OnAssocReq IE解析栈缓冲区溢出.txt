@@ -1,0 +1,20 @@
+#标题
+rtl8723bs: OnAssocReq IE解析栈缓冲区溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理关联请求帧时，若恶意站点发送的 Supported Rates IE（支持速率信息元素）长度超过 16 字节，将导致内核栈缓冲区溢出，进而引发内核栈破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序 `OnAssocReq` 函数在解析 Association Request 帧时，直接将传入的 Supported Rates IE 长度（ie_len）作为 `memcpy` 的长度，拷贝到固定大小为 16 字节的栈缓冲区（supportRate）中。恶意站点可声明大于 16 字节的 IE 长度，从而触发栈溢出。此外，在合并 Extended Supported Rates 时，边界检查逻辑存在错误，仅检查了已有数量是否小于缓冲区大小，未考虑新增长度，存在二次溢出风险。
+
+#解决方案
+在拷贝 Supported Rates IE 前增加长度限制检查，将 `ie_len` 钳位至缓冲区大小（`sizeof(supportRate)`）；修正合并扩展支持速率时的边界检查条件，改为 `supportRateNum + ie_len <= sizeof(supportRate)`，防止合并操作导致的二次溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e8611ea2d9184e0029f2f911b7e5ce77c066f297

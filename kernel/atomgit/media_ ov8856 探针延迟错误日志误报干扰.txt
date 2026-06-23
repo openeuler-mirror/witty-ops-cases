@@ -1,0 +1,22 @@
+#标题
+media: ov8856 探针延迟错误日志误报干扰
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 ov8856 摄像头传感器驱动时，若设备树中配置的时钟或电源等资源尚未就绪，驱动 probe 会返回 -EPROBE_DEFER（-517）进行延迟探测。此时内核日志中会错误地打印出 error 级别的日志信息，将正常的延迟探测行为记录为失败错误，干扰故障定位与日志分析。例如日志中出现："ov8856 24-0010: failed to get HW configuration: -517"。
+
+#主要错误日志
+ov8856 24-0010: failed to get HW configuration: -517
+ov8856 24-0010: could not get xvclk clock (ERR_PTR(-517))
+
+#问题根因
+驱动代码在 `ov8856_get_hwcfg` 获取硬件资源（如 xvclk 时钟）失败时，直接调用 `dev_err` 打印错误日志，随后返回错误码。当返回码为 `-EPROBE_DEFER` 时，这属于内核正常的探测延迟机制，不应被视为错误。原代码未对探针延迟（probe deferral）场景进行特殊处理，导致内核日志被大量无害的“failed to get HW configuration”类错误刷屏。
+
+#解决方案
+1. 将时钟获取部分的 `dev_err` 调用替换为 `dev_err_probe`。`dev_err_probe` 能够自动识别 `-EPROBE_DEFER` 返回值，并在该情况下抑制错误日志的打印（或降低日志级别），仅记录调试信息。
+2. 移除 `ov8856_probe` 函数中针对 `ov8856_get_hwcfg` 返回值的冗余 `dev_err` 打印，避免在探针延迟时打印误导性的 "failed to get HW configuration" 错误信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a4acd8479d0ac40832e87f365f6938cdea8060ca

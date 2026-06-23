@@ -1,0 +1,24 @@
+#标题
+BFQ调度器在bfq_limit_depth函数中引发UAF（Use-After-Free）崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在调用 `bfq_limit_depth` 函数时，可能触发 Use-After-Free（UAF）漏洞，导致内核崩溃、panic 或内存数据损坏。该问题出现在 BFQ I/O 调度器处理请求深度限制的逻辑中，涉及对已释放的 `bfqq` 结构体的访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bfq_limit_depth` 函数中，代码直接调用 `bic_to_bfqq` 获取 `bfqq` 指针并传入 `bfqq_request_over_limit` 函数。在获取指针与后续使用之间，或者在使用过程中，`bfqq` 可能已经被释放，导致后续对 `bfqq` 成员（如 `entity`、`ioprio_class`）的访问构成了 UAF（释放后使用）漏洞。
+
+#解决方案
+重构 `bfqq_request_over_limit` 函数的调用与实现方式：
+1. 修改 `bfqq_request_over_limit` 函数签名，不再直接传入 `bfqq` 指针，而是传入 `bfq_data`、`bic`、`opf` 和 `act_idx` 等原始参数。
+2. 将 `bfqq` 的获取逻辑（`bic_to_bfqq`）移至 `bfqq_request_over_limit` 函数内部，并在获取后立即检查其是否为空。
+3. 在 `bfq_limit_depth` 调用侧增加快速路径检查，若 `bic_to_bfqq` 返回空则直接跳过，避免向内部函数传入无效指针。
+通过将 `bfqq` 的生命周期管理收敛在单一函数内部，并增加有效性检查，防止访问已释放的队列指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1cace380e3aaabd99315e2b6aa78c89d3f1ab1c8

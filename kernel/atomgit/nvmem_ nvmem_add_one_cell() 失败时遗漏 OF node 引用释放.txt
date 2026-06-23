@@ -1,0 +1,20 @@
+#标题
+nvmem: nvmem_add_one_cell() 失败时遗漏 OF node 引用释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设备树解析添加 nvmem 单元过程中，若 `nvmem_add_one_cell()` 函数调用失败，内核未正确释放已获取的设备节点（OF node）引用计数，导致设备节点引用计数泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nvmem_add_cells_from_dt` 函数中，代码通过 `of_node_get()` 获取了 `info.np`（即 "child" 节点）的引用。当后续调用 `nvmem_add_one_cell()` 失败时，原有的错误处理路径仅释放了循环中遍历的 `child` 节点引用（`of_node_put(child)`），却遗漏了释放已经赋值给 `info.np` 的节点引用。根据代码逻辑，`info.np` 拥有的引用所有权未被传递下去，因此函数退出前必须进行清理，否则造成引用计数泄漏。
+
+#解决方案
+在 `nvmem_add_cells_from_dt` 函数的错误处理路径中，增加对 `info.np` 的引用计数释放操作（调用 `of_node_put(info.np)`），确保在 `nvmem_add_one_cell()` 失败时，已获取的设备节点引用能被正确释放，避免内存资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2a10980d9f4eee000b38ceb65259019ea8597eb8

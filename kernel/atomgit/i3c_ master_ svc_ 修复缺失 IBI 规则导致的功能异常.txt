@@ -1,0 +1,21 @@
+#标题
+i3c: master: svc: 修复缺失 IBI 规则导致的功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 I3C 子系统中，代码未正确为具备控制器能力但工作在目标模式的设备添加 IBI（In-Band Interrupt）规则。具体表现为：当二级控制器具备控制器能力且在探测时工作在目标模式时，系统未能正确处理其 IBI 请求，导致该类设备的中断功能失效或通信异常。
+
+#主要错误日志
+未知
+
+#问题根因
+代码逻辑判断条件错误。在 `svc_i3c_update_ibirules` 函数中，原逻辑通过 `I3C_BCR_DEVICE_ROLE(dev->info.bcr) == I3C_BCR_I3C_MASTER` 判断是否跳过设备，这导致所有被识别为主机角色的设备都被跳过了 IBI 规则添加。
+然而，二级控制器虽然具备控制器能力（BCR 寄存器标识为主机角色），但在探测阶段工作在目标模式，它同样需要 IBI 规则。原逻辑错误地排除了这类设备，导致 IBI 规则缺失。
+
+#解决方案
+修改 `drivers/i3c/master/svc-i3c-master.c` 文件中的判断逻辑。将判断条件从检查设备角色是否为主机 `I3C_BCR_DEVICE_ROLE(dev->info.bcr) == I3C_BCR_I3C_MASTER` 修改为检查设备是否具备 IBI 请求能力 `!(dev->info.bcr & I3C_BCR_IBI_REQ_CAP)`。只有当设备不具备 IBI 请求能力时才跳过规则添加，从而确保包括具备控制器能力的从设备在内的所有支持 IBI 的设备都能正确添加 IBI 规则。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/338a9bacfc5e03fb58e298038ab83bb9f7b6fae8

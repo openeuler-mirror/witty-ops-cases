@@ -1,0 +1,20 @@
+#标题
+hibmcge 驱动在关闭 SMMU 时发生接收报文损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SMMU（系统内存管理单元）被禁用时，hibmcge 网卡驱动可能收到内容损坏的数据包。由于硬件将数据包内容和描述符写入同一页面，若开启了 Relaxed Ordering（宽松排序），可能导致驱动程序在数据包内容完全写入内存之前，先观测到了有效的描述符，从而读取到未完整更新的数据。
+
+#主要错误日志
+未知
+
+#问题根因
+在 SMMU 禁用的场景下，硬件设计将数据包数据和描述符写入同一页面。驱动程序开启了 PCI Relaxed Ordering 特性，导致 PCI 写事务不再是严格有序的。这使得描述符的写入可能先于数据包数据的写入完成，驱动程序因此在数据未完全写入时看到了有效描述符并处理数据，导致接收报文损坏。
+
+#解决方案
+在驱动初始化阶段，通过调用 `pcie_capability_clear_word` 函数清除 PCI 设备控制寄存器（`PCI_EXP_DEVCTL`）中的 `PCI_EXP_DEVCTL_RELAX_EN` 位，禁用 Relaxed Ordering 功能，强制数据包数据与描述符之间的写入顺序严格有序，随后调用 `pci_save_state` 保存配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb804d52874aaf98f68c535dd47900dab0109159

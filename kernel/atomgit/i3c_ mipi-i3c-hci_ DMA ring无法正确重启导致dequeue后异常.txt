@@ -1,0 +1,23 @@
+#标题
+i3c: mipi-i3c-hci: DMA ring无法正确重启导致dequeue后异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在I3C HCI驱动执行DMA传输取消操作时，DMA ring在中止后无法正确重启。具体表现为：中止传输流程执行后，控制器未能恢复正常工作状态，导致后续的DMA传输操作无法正常进行，可能引发I3C总线通信阻塞或功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+DMA dequeue路径在中止正在进行的传输后尝试重启ring，但当前的实现序列不完整。根据硬件规范，控制器必须从aborted状态中恢复，且ring控制寄存器的编程顺序必须正确：首先清除ABORT状态，然后重新使能ring，最后置位RUN_STOP以恢复操作。原代码缺少了控制器恢复步骤，且ring控制寄存器的写入顺序和标志位设置不正确，导致ring无法正常重启。
+
+#解决方案
+在DMA dequeue流程中增加了缺失的控制器恢复步骤，并修正了ring控制寄存器的写入逻辑：
+1. 调用 `mipi_i3c_hci_resume(hci)` 将控制器带出中止状态。
+2. 先写入 `RING_CTRL_ENABLE` 启用ring。
+3. 随后写入 `RING_CTRL_ENABLE | RING_CTRL_RUN_STOP` 正确触发运行状态，确保ring按照正确的序列重启。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/500c9f455c39d59c83a75102fff08b3ba417443e

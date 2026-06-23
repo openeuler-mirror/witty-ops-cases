@@ -1,0 +1,20 @@
+#标题
+Input: synaptics 设备开启 pass-through 端口时导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 Synaptics 触控板的 pass-through（通透）端口时，若在 psmouse 驱动绑定到该端口之前发生中断，会导致内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+当启用 pass-through 端口时，中断可能在 psmouse 驱动实例绑定到该端口之前到达。synaptics 子驱动试图访问与该端口关联的 psmouse 实例，以判断是需要转发 1 字节响应还是整个协议数据包。如果此时 psmouse 实例尚未附加到端口，访问会导致空指针或非法访问从而引发崩溃。根本原因是 `psmouse_from_serio` 获取实例时机不当，缺乏对端口状态的校验。
+
+#解决方案
+为 pass-through 端口引入 `open()` 和 `close()` 方法，并在 `synaptics_data` 结构体中新增 `pt_port_open` 布尔标志。在数据包转发逻辑 `synaptics_pass_pt_packet` 中，增加对 `pt_port_open` 状态的检查。只有当端口处于打开状态（即 psmouse 实例已通过 `serio_open` 附加）时，才去获取并访问 psmouse 实例进行数据转发；否则仅转发第一个字节。这确保了在驱动未绑定时不会非法访问 psmouse 实例，从而修复了潜在的崩溃问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c9dfd802c4e59b1b3f164525f50ccbe1aa6682e8

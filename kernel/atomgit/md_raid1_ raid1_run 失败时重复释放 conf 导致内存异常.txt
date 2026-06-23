@@ -1,0 +1,20 @@
+#标题
+md/raid1: raid1_run 失败时重复释放 conf 导致内存异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 raid1 阵列启动（raid1_run）过程中，若遇到活跃磁盘数小于 1 或注册完整性校验失败等错误情形，函数返回前会显式调用 raid1_free 释放 conf 结构体。然而，上层 md 核心代码在捕获到 run 方法的失败返回值后，会再次调用 ->free 方法释放同一资源，导致 conf 结构体被重复释放，引发 use-after-free 或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `raid1_run` 函数的错误处理路径逻辑错误。在 `conf->raid_disks - mddev->degraded < 1` 或 `md_integrity_register` 失败时，代码显式调用了 `raid1_free(mddev, conf)` 来释放配置内存。但 md 子系统的核心逻辑规定，当 ->run 方法返回失败时，核心代码会自动调用 ->free 方法进行清理。这导致了 `raid1_free` 被调用两次，引发双重释放。
+
+#解决方案
+移除 `raid1_run` 函数中显式调用 `raid1_free` 的代码逻辑。修改错误处理分支，在注销线程后直接返回错误码，将资源清理工作交由 md 核心层统一处理，避免重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa14e328f8c00e509e6b35c5128d959a8fc0dcff

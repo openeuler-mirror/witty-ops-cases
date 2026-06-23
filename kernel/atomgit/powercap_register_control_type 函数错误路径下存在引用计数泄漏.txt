@@ -1,0 +1,20 @@
+#标题
+powercap_register_control_type 函数错误路径下存在引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 powercap_register_control_type() 函数执行过程中，若 device_register() 注册失败，函数将直接返回错误指针。此时内核对象 struct device 的引用计数未能正确释放，导致引用计数泄漏。该问题由静态分析工具发现，长期运行可能导致内存资源无法回收。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 powercap_register_control_type() 调用 device_register() 初始化设备，当 device_register() 失败时，原代码逻辑仅根据 allocated 标志执行了 kfree(control_type) 操作，遗漏了对 device 结构体的 put_device() 调用。由于 device_register() 内部会增加设备引用计数，失败时必须通过 put_device() 来平衡引用计数，否则会造成设备对象引用计数泄漏。
+
+#解决方案
+修改错误处理路径：在 device_register() 失败后，显式调用 put_device(&control_type->dev) 来释放引用计数。由于 put_device() 最终会触发 release 回调（powercap_release）来释放 control_type 内存，因此删除了原代码中冗余的 kfree(control_type) 判断逻辑，既修复了泄漏又避免了双重释放的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e923cec599a5efe7322dec90ef91aad3b63aa8e2

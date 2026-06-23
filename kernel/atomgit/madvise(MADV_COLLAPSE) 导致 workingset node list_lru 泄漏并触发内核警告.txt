@@ -1,0 +1,20 @@
+#标题
+madvise(MADV_COLLAPSE) 导致 workingset node list_lru 泄漏并触发内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在内存压力下进行文件页回收时，内核触发 WARNING 日志。具体表现为：当调用 `madvise(..., MADV_COLLAPSE)` 且涉及非 rootcg 的 memcg 时，分配的 xa_node 被错误地添加到了 rootcg 的 list_lru 中，导致相应 memcg 的 list_lru 计数器（nr_items）统计不准确，且 xa_node 无法被有效回收。
+
+#主要错误日志
+WARNING: CPU: ... PID: ... at mm/list_lru.c:... list_lru_add/...
+
+#问题根因
+自从引入 commit 5abc1e37afa0 和 9bbdc0f32409 后，list_lru 用户需使用新基础设施分配内存以确保 memcg list_lru 在使用前已分配。`madvise(..., MADV_COLLAPSE)` 路径在分配 xa_node 时，未调用 `xas_set_lru()` 设置正确的 list_lru 信息。这导致在后续内存回收调用 `workingset_update_node` 时，因对应 memcg 的 list_lru 尚未分配（为 NULL），节点被错误地添加到 rootcg 的 list_lru 中。近期 commit 28e98022b31ef 增加了健全性检查（仅允许 dying memcg 的 list_lru 为 NULL），从而暴露了此问题并触发 WARNING。
+
+#解决方案
+修复 `madvise(..., MADV_COLLAPSE)` 路径，在分配 xa_node 之前调用 `xas_set_lru()` 传递正确的 list_lru 信息。同时，将 `mapping_set_update` 函数从 `mm/filemap.c` 移至 `mm/internal.h` 并转为宏定义，以便在 `mm/khugepaged.c` 中复用，避免不必要的头文件依赖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f6aa763e5499b2c52bcb5fbbbe7751479e488546

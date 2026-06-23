@@ -1,0 +1,21 @@
+#标题
+phy: tegra: xusb: UTMI PHY 模式切换时调节器非平衡禁用导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Tegra186 平台上，当 USB 角色从 USB_ROLE_DEVICE 切换到 USB_ROLE_NONE 时，如果调节器被标记为 always-on，系统会触发内核警告。此时 `regulator_is_enabled()` 返回 true，导致代码错误地尝试禁用一个并未实际启用的调节器，引发“unbalanced disables”错误。
+
+#主要错误日志
+[  250.155624] WARNING: CPU: 1 PID: 7326 at drivers/regulator/core.c:3004 _regulator_disable+0xe4/0x1a0
+[  250.155652] unbalanced disables for VIN_SYS_5V0
+
+#问题根因
+在处理 USB 角色从 USB_ROLE_DEVICE 转换为 USB_ROLE_NONE 的过程中，代码逻辑错误地假设需要禁用调节器。当调节器被标记为 always-on 时，`regulator_is_enabled()` 函数持续返回 true，这误导了逻辑去执行禁用操作。实际上该调节器可能并未被启用（或不应由此时序禁用），从而导致非平衡的禁用操作。
+
+#解决方案
+将调节器控制逻辑移至 `tegra186_xusb_padctl_id_override()` 函数中，使其与 ID override 状态直接关联。修改后，调节器仅在角色从 USB_ROLE_HOST 转换为 USB_ROLE_NONE 时（即检测到 ID_OVERRIDE 状态从 GROUNDED 变为 FLOATING 时）才执行禁用操作。这确保了调节器的 enable/disable 操作是平衡的，并且仅在涉及 Host 模式的实际转换时发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/059821c8eae5e1a5d7876c96e0c981d66b326b5b

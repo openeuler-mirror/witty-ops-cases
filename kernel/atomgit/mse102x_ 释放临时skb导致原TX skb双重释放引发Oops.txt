@@ -1,0 +1,35 @@
+#标题
+mse102x: 释放临时skb导致原TX skb双重释放引发Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行网络数据包发送时，若需要对 TX skb 的空间进行扩展，驱动程序会错误地释放原 skb 指针。这导致后续 `mse102x_tx_work` 函数再次尝试释放该 skb 时触发内核崩溃，具体表现为调用 `skb_release_data` 时发生 Oops。
+
+#主要错误日志
+Internal error: Oops: 0000000096000004 [#2] PREEMPT SMP
+CPU: 0 PID: 712 Comm: kworker/0:1 Tainted: G      D            6.6.23
+Hardware name: chargebyte Charge SOM DC-ONE (DT)
+Workqueue: events mse102x_tx_work [mse102x]
+pc : skb_release_data+0xb8/0x1d8
+lr : skb_release_data+0x1ac/0x1d8
+Call trace:
+ skb_release_data+0xb8/0x1d8
+ kfree_skb_reason+0x48/0xb0
+ mse102x_tx_work+0x164/0x35c [mse102x]
+ process_one_work+0x138/0x260
+ worker_thread+0x32c/0x438
+ kthread+0x118/0x11c
+ ret_from_fork+0x10/0x20
+
+#问题根因
+TX skb 的作用域比 `mse102x_tx_frame_spi` 函数更宽。在函数内部，当需要扩展 skb 空间时，代码逻辑错误地调用了 `dev_kfree_skb(txp)` 释放了原始的 TX skb。实际上，此时应该保留原始 skb 指针，仅在函数结束时释放临时分配的 `tskb`。由于原始 skb 被提前释放，后续在 `mse102x_tx_work` 中会再次释放该指针，导致 double free 从而引发系统崩溃。
+
+#解决方案
+1. 移除 `mse102x_tx_frame_spi` 函数中关于原始 skb（`txp`）的释放操作 `dev_kfree_skb(txp)`。
+2. 初始化时将临时 skb（`tskb`）指针置为 `NULL`。
+3. 在函数返回前，统一通过 `dev_kfree_skb(tskb)` 释放临时分配的 skb 资源，确保原始 skb 指针不被误释放，从而避免双重释放问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ef19ed8c35b81e13d2e1a5a5100c99c16031398e

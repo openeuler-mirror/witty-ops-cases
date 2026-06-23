@@ -1,0 +1,26 @@
+#标题
+drm/msm: 修复 msm_disp_state_print_regs 中的空指针解引用风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `msm_disp_state_print_regs` 函数打印 MSM 显示寄存器状态时，若传入的寄存器数据指针为 NULL，内核将发生 NULL 指针解引用（NULL dereference），导致内核崩溃或 Oops 异常。该问题通常发生在显示状态转储过程中，例如进行 GPU/Display 故障调试或异常捕获时。
+
+#主要错误日志
+推断：内核日志中可能出现 "Unable to handle kernel NULL pointer dereference" 或 "Oops" 错误，发生在函数 `msm_disp_state_print_regs` 内部。此外，根据补丁逻辑，故障发生时可能伴随打印信息：`Registers not stored`。
+
+#问题根因
+函数 `msm_disp_state_print_regs` 的参数传递与处理逻辑存在缺陷：
+1. 原代码中，函数参数 `reg` 类型为二级指针 `u32 **reg`，调用者传入 `&block->state`。
+2. 在函数内部，逻辑 `if (*reg) dump_addr = *reg;` 仅在 `*reg` 非空时赋值，但后续循环直接使用了局部变量 `dump_addr`。由于 `dump_addr` 初始化为 NULL 且可能未被赋值，当 `*reg` 为 NULL 时，`dump_addr` 保持 NULL 状态。
+3. 后续代码直接操作 `dump_addr`（在 diff 上下文中隐含的数组访问或打印操作），导致对 NULL 指针进行解引用访问。
+
+#解决方案
+修改 `msm_disp_state_print_regs` 函数的接口与逻辑：
+1. **参数类型调整**：将函数参数从 `u32 **reg` 修改为 `const u32 *dump_addr`，直接接收一级指针，简化调用链路。
+2. **增加空指针检查**：在函数入口处立即检查 `dump_addr` 是否为空。如果为空，通过 `drm_printf` 打印 "Registers not stored" 提示并直接返回，避免后续解引用操作。
+3. **调用点适配**：修改调用处 `msm_disp_state_print_regs` 的传参方式，从传入 `&block->state` 改为直接传入 `block->state`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0ba9236d77144cd710089049024dd2c750dab24e

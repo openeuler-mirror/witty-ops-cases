@@ -1,0 +1,32 @@
+#标题
+bareudp_fill_metadata_dst 函数空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 bareudp 设备处于 down 状态时，若触发 `bareudp_fill_metadata_dst` 函数调用（例如通过 Open vSwitch 执行动作），内核会发生空指针引用崩溃。具体表现为触发 kernel BUG，系统可能重启或相关进程卡死。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000018
+RIP: 0010:udp_tunnel6_dst_lookup (net/ipv6/ip6_udp_tunnel.c:160)
+Call Trace:
+ <TASK>
+ bareudp_fill_metadata_dst (drivers/net/bareudp.c:532)
+ do_execute_actions (net/openvswitch/actions.c:901)
+ ovs_execute_actions (net/openvswitch/actions.c:1589)
+ ovs_packet_cmd_execute (net/openvswitch/datapath.c:700)
+ genl_family_rcv_msg_doit (net/netlink/genetlink.c:1114)
+ genl_rcv_msg (net/netlink/genetlink.c:1209)
+ netlink_rcv_skb (net/netlink/af_netlink.c:2550)
+ </TASK>
+
+#问题根因
+在 IPv6 处理路径中，`bareudp_fill_metadata_dst()` 函数直接将 `bareudp->sock` 传递给 `udp_tunnel6_dst_lookup()` 而未进行空指针检查。
+由于套接字仅在 `bareudp_open()` 中创建并在 `bareudp_stop()` 中置空，当设备处于关闭状态时调用该函数，会导致通过 `sock->sk` 访问空指针，从而触发内核崩溃。
+
+#解决方案
+在 `bareudp_fill_metadata_dst()` 函数的 IPv6 处理分支中增加对 `sock` 指针的 NULL 检查。如果指针为空，直接返回 `-ESHUTDOWN` 错误码，从而避免空指针引用。该处理逻辑与同一驱动中的发送路径保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d379a896af70f47a41fcc13cb01de71d62abede

@@ -1,0 +1,27 @@
+#标题
+act_ife 行动替换导致元数据越界写入漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当对 ife action 进行替换操作并更改 metalist 时，系统未正确替换旧数据而是追加新元数据。这种无限制追加行为会导致 metalist 增长，进而在执行编码操作（encode op）时触发 KASAN 检测到的 slab 越界写入错误。
+
+#主要错误日志
+```
+[  138.424317][    C1] BUG: KASAN: slab-out-of-bounds in ife_tlv_meta_encode (net/ife/ife.c:168)
+[  138.424906][    C1] Write of size 4 at addr ffff8880077f4ffe by task ife_out_out_bou/255
+[  138.425778][    C1] CPU: 1 UID: 0 PID: 255 Comm: ife_out_out_bou Not tainted 7.0.0-rc1-00169-gfbdfa8da05b6 #624 PREEMPT(full)
+[  138.425893][    C1]  ? ife_tlv_meta_encode (net/ife/ife.c:171)
+[  138.425903][    C1]  ife_encode_meta_u16 (net/sched/act_ife.c:57)
+[  138.425931][    C1]  tcf_ife_act (net/sched/act_ife.c:847 net/sched/act_ife.c:879)
+```
+
+#问题根因
+在进行 ife action replace 操作时，代码逻辑仅将新元数据追加到现有的 metalist 末尾，而未删除或替换旧的元数据条目。这导致元数据列表无限制增长，最终在 `ife_tlv_meta_encode` 函数中进行编码写入操作时，写入位置超出分配的 slab 内存边界。
+
+#解决方案
+将 metalist 从 `tcf_ife_info` 结构体移动到 `tcf_ife_params` 结构体中，使其成为 RCU 保护数据的一部分。这样在执行替换操作时，新的 params 会包含新的 metalist，旧的 params（连同旧的 metalist）会通过 RU 机制正确释放，从而保证了替换操作的原子性和正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/19bbf7aa2b2f5dac6d9d54216245289e4a1b65c0

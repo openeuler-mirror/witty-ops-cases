@@ -1,0 +1,35 @@
+#标题
+netfilter: nf_conntrack 因释放后重用（use-after-free）导致的崩溃修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在处理 conntrack 连接跟踪条目时发生内核崩溃。
+具体表现为：
+1. 在从哈希桶列表中解链 conntrack 条目时触发 panic/oops，异常 RIP 位于 `__nf_ct_delete_from_lists` 函数。
+2. 调用栈显示崩溃路径为：`__nf_conntrack_find_get` -> `nf_ct_gc_expired` -> `nf_ct_delete`。
+3. 内存分析发现崩溃的 `nf_conn` 结构体处于“部分初始化”状态：`hlist` 指针指向无效地址（存储的是哈希值而非指针），`status` 标志位异常包含 `IPS_CONFIRMED`，`timeout` 值为相对时间（如 30000）而非预期的绝对时间。
+
+#主要错误日志
+[exception RIP: __nf_ct_delete_from_lists+172]
+ #7 [ff539b5a2b043aa0] nf_ct_delete at ffffffffc124d421 [nf_conntrack]
+ #8 [ff539b5a2b043ad0] nf_ct_gc_expired at ffffffffc124999 [nf_conntrack]
+ #9 [ff539b5a2b043ae0] __nf_conntrack_find_get at ffffffffc124efbc [nf_conntrack]
+
+#问题根因
+该故障由多核 CPU 竞争条件引发，涉及 SLAB_TYPESAFE_BY_RCU 机制下的对象重用。根本原因是 `IPS_CONFIRMED` 状态位的设置时机不当。
+具体过程如下：
+1. **对象重用竞争**：CPU x 找到已过期的条目 E 并准备删除；CPU y 同时找到条目 E，在检查过期状态前被抢占；CPU z 开始初始化一个新的 conntrack 条目，恰好重用了刚被 CPU x 释放的内存对象 E。
+2. **状态不一致**：CPU z 初始化 E 时，将 `hlist` 指针临时存储 tuple hash 值，并将 `timeout` 设为 UDP 默认超时（相对时间）。随后在 `nf_conntrack_confirm` 中提前设置了 `IPS_CONFIRMED` 位，而此时条目尚未插入哈希表（可能因冲突解决失败而中止插入）。
+3. **错误删除**：CPU y 恢复运行后，观察到条目 E 已过期且带有 `IPS_CONFIRMED` 标志。由于 `IPS_CONFIRMED` 位已设置，CPU y 误认为该条目已在哈希表中，尝试调用 `nf_ct_delete` 将其删除。
+4. **崩溃触发**：删除操作调用 `hlist_nulls_del_rcu` 时，试图解引用 `pprev` 指针，但该指针实际存储的是 hash 值而非链表节点地址，导致解引用错误引发崩溃。
+
+#解决方案
+修改内核代码，调整 `IPS_CONFIRMED` 标志位的设置顺序及垃圾回收（GC）检查逻辑：
+1. **调整标志位设置顺序**：将 `IPS_CONFIRMED` 位的设置操作移动到哈希表插入操作（`__nf_conntrack_hash_insert` 或 `hlist_nulls_add_head_rcu`）之后、锁释放之前。这确保了一旦标志位被设置，条目一定已经存在于哈希表中。
+2. **增加内存屏障**：在设置 `IPS_CONFIRMED` 位之前添加 `smp_mb__before_atomic()` 屏障，防止编译器或 CPU 将写操作重排序到哈希插入之前。
+3. **优化 GC 检查逻辑**：修改 `nf_ct_should_gc` 函数，优先检查 `IPS_CONFIRMED` 位。如果条目未被确认，直接跳过 GC，避免将正在初始化中的条目误判为过期条目进行删除。同时配合 `smp_acquire__after_ctrl_dep()` 确保读取顺序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/63560d8092d129704d67d3361a0f57a2e011b136

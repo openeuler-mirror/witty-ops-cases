@@ -1,0 +1,22 @@
+#标题
+s390/cio: CHPID "configure" 属性缓存导致读取结果不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在某些不支持 SCLP 固件接口查询 CHPID configured state 的环境（如 KVM 虚拟机）中，连续快速读取 `/sys/devices/css0/chp0.00/configure` 文件时会出现结果不一致的情况：
+1. 第一次读取报错：`cat: /sys/devices/css0/chp0.00/configure: Operation not supported`
+2. 紧接着第二次读取却返回数值：`3`
+
+#主要错误日志
+cat: /sys/devices/css0/chp0.00/configure: Operation not supported
+
+#问题根因
+CIO（Common I/O Layer）在生成 "configure" 属性值时使用了缓存机制。当 SCLP（Service Call Logical Processor）返回无数据（即查询失败或不支持）时，代码未能正确处理该情况，依然更新了缓存过期时间戳。这导致后续读取时使用了错误的缓存状态，从而产生不一致的结果。
+
+#解决方案
+修改 `drivers/s390/cio/chp.c` 中的 `info_update` 函数逻辑：仅在 SCLP 成功返回数据（`rc == 0`）时才更新缓存过期时间戳 `chp_info_expires`。若 SCLP 未返回数据，则不更新过期时间，确保系统响应一致，持续返回 "Operation not supported"。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6d98c052723022ddfdefae01c24a5caf06440b0e

@@ -1,0 +1,21 @@
+#标题
+hwmon: (peci/cputemp) tempN_crit_hyst 返回值错误返回为温差值而非绝对温度
+
+#内核版本
+OLK-6.6
+
+#问题现象
+读取 PECI CPU 温度传感器的 `tempN_crit_hyst` sysfs 节点时，返回的是临界温度滞后范围的差值（Delta），而不是消除临界状态时的绝对温度值。这导致用户态监控工具误判临界温度清除点，可能导致温控策略异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 hwmon sysfs ABI 规范，`tempN_crit_hyst` 应报告临界状态清除时的温度值（绝对温度），而不是相对于临界限制的滞后差值。
+PECI cputemp 驱动在处理 `crit_hyst_type` 时，错误地计算并返回了 `tjmax - tcontrol`（即滞后差值），而非符合规范的 `tcontrol`（绝对温度）。
+
+#解决方案
+修改驱动程序 `drivers/hwmon/peci/cputemp.c` 中的 `get_temp_target` 函数。针对 `crit_hyst_type` 类型，将返回值从计算差值 `tjmax - tcontrol` 修改为直接返回 `tcontrol`。同时更新文档 `Documentation/hwmon/peci-cputemp.rst` 以正确描述该节点返回值为 Tcontrol 温度。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/77684f657bafe21dc1fbf6e1b69ad63aa117bc83

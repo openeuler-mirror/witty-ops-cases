@@ -1,0 +1,23 @@
+#标题
+iBMA驱动spinlock死锁及空指针访问导致Oops故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+iBMA驱动在运行过程中触发内核Oops，导致系统崩溃或异常重启；同时存在自旋锁死锁问题，导致相关进程挂起（D状态）或系统响应异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **并发访问冲突**：`edma_host_recv_msg` 函数内部未加锁，但在其调用者 `bma_cdev_recv_msg` 和 `bma_priv_clean_up` 中并发访问 `recv_msgs` 链表时缺乏保护，导致竞态条件引发死锁或数据破坏。
+2. **空指针解引用**：`bma_intf_is_link_ok` 函数在访问 `g_bma_dev` 成员前未检查指针有效性，当 `g_bma_dev` 为 NULL 时触发 Oops。
+
+#解决方案
+1. **修复并发问题**：将锁操作从 `edma_host_recv_msg` 函数内部移至调用者层面。在 `bma_cdev_recv_msg` 和 `bma_priv_clean_up` 函数中使用 `spin_lock_irqsave` 和 `spin_unlock_irqrestore` 包裹对 `recv_msgs` 链表的操作，确保并发安全，消除死锁隐患。
+2. **修复空指针访问**：在 `bma_intf_is_link_ok` 函数中增加对全局变量 `g_bma_dev` 的非空校验，防止空指针解引用引发的 Oops。
+3. **版本升级**：将驱动版本号从 0.3.8 升级至 0.3.10。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/388fd34dc506abfdd7033db74c15cc4a9dd842a0

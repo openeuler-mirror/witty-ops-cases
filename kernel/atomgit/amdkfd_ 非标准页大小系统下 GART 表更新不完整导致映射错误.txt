@@ -1,0 +1,20 @@
+#标题
+amdkfd: 非标准页大小系统下 GART 表更新不完整导致映射错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非 4K 页大小的系统上，进行显存迁移并调用 `svm_migrate_gart_map()` 更新 GART 映射时，DMA 传输只更新了 GART 表的部分内容（Partial update），导致 GART 页表项（PTE）设置不正确，进而引发 GPU 显存访问异常或功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `svm_migrate_gart_map()` 函数中，计算 GART 表需要拷贝的字节数（`num_bytes`）时，仅使用了 `npages * 8` 进行计算。该计算逻辑默认按 CPU 页大小处理，但在非 4K 页大小的系统中，一个 CPU 页可能包含多个 GPU 页，而 GART 要求每个 GPU 页对应一个 8 字节的 PTE。因此，原逻辑未将 GPU 页数量纳入计算，导致传给 DMA 的字节数小于实际所需大小，仅完成了部分 GART 表的更新。
+
+#解决方案
+修改 `drivers/gpu/drm/amd/amdkfd/kfd_migrate.c` 文件中 `svm_migrate_gart_map` 函数的 `num_bytes` 计算方式。在原有计算基础上乘以 `AMDGPU_GPU_PAGES_IN_CPU_PAGE` 因子，以正确计算一个 CPU 页内包含的 GPU 页数量，确保 DMA 操作能覆盖所有需要更新的 GART PTE 条目。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e29e45c73dcc9a84c32226a4e3cd498dcd982b2f

@@ -1,0 +1,24 @@
+#标题
+sdei_watchdog 在 LPI 模式下状态管理错误导致 PM 事件处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LPI（Low Power Idle）模式下，SDEI watchdog 在 CPU PM（Power Management）状态切换时行为异常。当 watchdog 未被用户使能时，系统在进入 CPU_PM_ENTER 或退出 CPU_PM_EXIT 阶段仍尝试执行 SDEI 事件的 disable 或 enable 操作，可能导致不必要的 SDEI API 调用失败或状态混乱。
+
+#主要错误日志
+- "Enable NMI Watchdog failed on cpu%d\n"
+- "Disable NMI Watchdog failed on cpu%d\n"
+
+#问题根因
+`sdei_watchdog_pm_notifier` 回调函数在处理 `CPU_PM_ENTER` 和 `CPU_PM_EXIT` 事件时，没有检查当前 CPU 的 watchdog 是否已由用户使能（user enabled）。代码直接对 `sdei_watchdog_event_num` 执行 disable/enable 操作，忽略了 watchdog 可能处于未使能状态的情况，导致在 LPI 模式下错误地改变了 SDEI 事件状态。
+
+#解决方案
+引入 per-cpu 变量 `sdei_usr_en` 用于记录当前 CPU 的 SDEI watchdog 使能状态。
+1. 在 `sdei_watchdog_hardlockup_enable` 中成功使能后，将 `sdei_usr_en` 置为 1。
+2. 在 `sdei_watchdog_hardlockup_disable` 中成功禁用后，将 `sdei_usr_en` 置为 0。
+3. 修改 `sdei_watchdog_pm_notifier` 逻辑，在执行 `CPU_PM_ENTER`（disable 事件）和 `CPU_PM_EXIT`（enable 事件）操作前，先检查 `sdei_usr_en` 标志位，仅当标志位为真时才执行相应的 SDEI API 调用，从而确保 PM 事件处理与实际的 watchdog 状态一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0ee8b2a47575cd8786900505a657c833b2dd4c2f

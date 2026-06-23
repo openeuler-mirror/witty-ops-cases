@@ -1,0 +1,23 @@
+#标题
+tracing：修复 pause-on-trace 模式下文件释放时错误恢复 tracing 的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当启用 `pause-on-trace` 选项时，读取 trace 文件（如 `trace` 或 `per_cpu/cpuX/trace`）会暂停 tracing 缓冲区。但在关闭文件（release）时，tracing 被错误地恢复启用，导致数据写入缓冲区，破坏了读取期间的数据一致性。此问题影响 trace 数据的准确性，尤其是在连续监控或抓包场景下。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__tracing_open` 函数中，当检测到 `TRACE_ITER_PAUSE_ON_TRACE` 标志时会调用 `tracing_stop_tr` 暂停 tracing，但未在 `iter->iter_flags` 中记录“因 pause-on-trace 而暂停”的状态。
+随后在 `tracing_release` 函数中，代码仅检查 `tr->stop_count` 是否非零来决定是否恢复 tracing。由于 `tr->stop_count` 可能因其他并发操作（如其他进程打开 trace 文件）而不为 0，导致 release 时错误地调用了 `tracing_start_tr`，从而在不应恢复 tracing 的情况下恢复了 tracing。
+
+#解决方案
+1. 在 `include/linux/trace_events.h` 中新增枚举值 `TRACE_FILE_PAUSE` (值为 8) 用于标记迭代器的暂停状态。
+2. 在 `kernel/trace/trace.c` 的 `__tracing_open` 函数中，执行 `tracing_stop_tr` 暂停 tracing 的同时，设置 `iter->iter_flags |= TRACE_FILE_PAUSE` 记录状态。
+3. 修改 `tracing_release` 函数的逻辑，将判断条件从检查全局的 `tr->stop_count` 改为检查当前迭代器的 `iter->iter_flags & TRACE_FILE_PAUSE`。只有当迭代器自身标记了暂停时，才执行 `tracing_start_tr` 恢复操作，从而避免了错误恢复 tracing。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/308bd12dbbbe2a62e7ea0a2b700083f935a020d2

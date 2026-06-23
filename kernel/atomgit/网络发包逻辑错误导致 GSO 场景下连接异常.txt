@@ -1,0 +1,24 @@
+#标题
+网络发包逻辑错误导致 GSO 场景下连接异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 GSO（Generic Segmentation Offload）功能时，如果驱动程序返回非 `NETDEV_TX_OK` 的状态（如 `NETDEV_TX_BUSY`），内核网络栈会错误地将发送状态判定为失败。由于 GSO 会将单个 SKB 分割为多个帧列表，此时部分数据可能已经发送出去，但上层协议（如 TCP）根据错误的返回值认为数据未发送，导致协议栈状态不一致，可能引发连接异常或数据传输错误。同时，内核日志可能伴随打印 "Virtual device %s asks to queue packet!" 警告信息。
+
+#主要错误日志
+- `net_crit_ratelimited("Virtual device %s asks to queue packet!\n", dev->name);`
+- `net_crit_ratelimited("Dead loop on virtual device %s, fix it urgently!\n", dev->name);`
+
+#问题根因
+在 `__dev_queue_xmit` 函数中，当 `dev_hard_start_xmit` 处理 GSO 数据包时，会将单个 SKB 分割成一个帧列表发送。原代码逻辑在发送未完全成功时，统一返回错误，未区分是否为 GSO 列表发送场景。对于 GSO 列表，只要发送流程启动，即便驱动返回 busy 或其他非 OK 状态，部分数据帧可能已发出，此时若向上层报告发送失败，会导致 TCP 等协议误判数据发送状态。
+
+#解决方案
+修复 `__dev_queue_xmit` 中的返回值处理逻辑：
+1. 在发送前检查并记录 SKB 是否为链表结构（`is_list`）。
+2. 对于 GSO 场景（`is_list` 为真），忽略驱动返回的详细状态，强制将返回值设为 `NETDEV_TX_OK`，防止上层协议误认为发送完全失败。
+3. 调整错误返回值的赋值位置，仅在非列表发送且出现错误（如队列停止或 busy）时，才将返回值置为 `-ENETDOWN`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1a56f13d302ad42de2080ababc7a04476809ebbe

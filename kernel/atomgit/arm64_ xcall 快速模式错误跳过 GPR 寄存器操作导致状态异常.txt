@@ -1,0 +1,20 @@
+#标题
+arm64: xcall 快速模式错误跳过 GPR 寄存器操作导致状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 xcall（加速 SVC 异常处理）功能时，内核快速模式错误地跳过了通用寄存器（GPR）的相关操作步骤。这可能导致寄存器状态不一致，进而引发内核行为异常或潜在的系统不稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+Kernel_{entry, exit} 快速模式的设计初衷本应仅跳过部分特定的替代步骤，而不应跳过任何寄存器的操作。原代码逻辑错误地将加载任务标志位、SCTLR_USER 等寄存器操作包含在 `.if \fast_mode == std` 条件判断中，导致快速模式下缺失了必要的寄存器 touch 操作。
+
+#解决方案
+调整 `arch/arm64/kernel/entry.S` 中的条件编译逻辑，将所有涉及寄存器操作的指令（如 `ldr x19, [tsk, #TSK_TI_FLAGS]` 和 `ldr x0, [tsk, THREAD_SCTLR_USER]`）移动到快速模式条件判断 `.if \fast_mode == std` 之外，确保无论是在标准模式还是快速模式下，这些寄存器操作都会被执行，从而修复状态不一致的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db839a675e0e48f7983212c8d2413ccefa184ef0

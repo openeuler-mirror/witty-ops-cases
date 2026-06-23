@@ -1,0 +1,24 @@
+#标题
+gpio: aspeed-sgpio 驱动不支持延迟探测导致初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Aspeed SGPIO 驱动在系统启动过程中初始化失败。由于驱动使用了不支持延迟探测（deferred probe）的接口，当所需的时钟（clock）资源因探测顺序原因尚未就绪时，驱动无法等待资源可用，直接导致驱动加载失败，SGPIO 功能不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动使用了 `module_platform_driver_probe()` 宏进行注册，该宏内部调用 `__platform_driver_probe()`，其实现机制决定了它与延迟探测不兼容。当 SGPIO 驱动需要获取时钟资源，而此时时钟驱动尚未加载或资源不可用时，驱动无法进入延迟探测队列等待重试，而是直接返回错误导致probe失败。
+
+#解决方案
+将驱动注册方式从 `module_platform_driver_probe()` 修改为 `module_platform_driver()`。
+具体变更：
+1. 移除 `aspeed_sgpio_probe` 函数定义中的 `__init` 宏修饰，使其在初始化阶段后依然可用。
+2. 在 `aspeed_sgpio_driver` 结构体中显式添加 `.probe = aspeed_sgpio_probe` 成员。
+3. 使用 `module_platform_driver()` 替换原有的 `module_platform_driver_probe()`。此改动利用 `platform_driver_register()` 机制，允许驱动在资源未就绪时返回 `-EPROBE_DEFER` 并自动进入延迟探测队列，待资源就绪后再次尝试加载。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8aab8258515a203ac2ab218866b81ce0c3e07593

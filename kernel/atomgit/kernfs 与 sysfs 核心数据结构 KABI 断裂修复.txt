@@ -1,0 +1,22 @@
+#标题
+kernfs 与 sysfs 核心数据结构 KABI 断裂修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核核心结构体 `kernfs_node`、`kernfs_ops` 以及 `bin_attribute` 发生了 KABI（内核应用程序二进制接口）断裂。这通常会导致依赖旧版结构体布局的内核模块（驱动程序）加载失败、运行时崩溃（Oops/Panic）或出现不可预测的行为，破坏了内核版本升级后的模块兼容性。
+
+#主要错误日志
+未知
+
+#问题根因
+在内核开发或特性合入过程中，对 `kernfs_node`、`kernfs_ops` 和 `bin_attribute` 结构体进行了修改：新增了 `llseek` 回调指针成员，并修改了 `kernfs_node` 中 `__parent` 成员的声明属性。这些变更改变了结构体的内存布局，导致结构体大小或成员偏移量发生变化，从而破坏了 KABI 稳定性。
+
+#解决方案
+利用内核提供的 KABI 宏机制对结构体变更进行兼容性处理：
+1. 对于 `kernfs_node` 中的 `__parent` 成员，使用 `KABI_REPLACE` 宏来处理 RCU 属性变更，保持 KABI 兼容。
+2. 对于 `kernfs_ops` 和 `bin_attribute` 中新增的 `llseek` 函数指针，不直接新增成员，而是使用 `KABI_USE` 宏占位原先预留的 `KABI_RESERVE` 空间来存放新成员。这样既实现了功能扩展，又维持了结构体的大小和原有成员的偏移量不变，修复了 KABI 断裂问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b3a9a488f7613b532acf72a81d86ebd5f2fc4f50

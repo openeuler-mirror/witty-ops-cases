@@ -1,0 +1,24 @@
+#标题
+XFS 日志在 i386 与其他架构间迁移后因 CRC 校验失败导致挂载异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非 i386 架构上挂载一个曾在 i386 架构下因非正常关机等原因导致日志脏数据的文件系统时，日志恢复阶段会报错，提示检测到“Torn write (CRC failure)”，导致无法正常挂载。反之亦然。
+
+#主要错误日志
+[   11.068052] XFS (vdb): Torn write (CRC failure) detected at log block 0x2. Truncating head block from 0xc.
+[推断] XFS (vdb): Fixing up incorrect CRC due to padding.
+
+#问题根因
+`struct xlog_rec_header` 结构体在 i386 架构与其他架构（如 x86_64）下的内存对齐规则不同，导致 `sizeof(struct xlog_rec_header)` 的返回值不一致（i386 为 324 字节，其他架构为 328 字节）。
+由于 `xlog_cksum` 函数此前直接基于 `sizeof(struct xlog_rec_header)` 计算 CRC 校验和，导致同一块日志数据在 i386 与其他架构上计算出的 CRC 值永久不匹配。当文件系统在 i386 写入脏日志后迁移到其他架构（或反之）进行恢复时，因 CRC 校验失败而报错。
+
+#解决方案
+1. **显式填充结构体**：在 `struct xlog_rec_header` 中增加 `__u32 h_pad0` 成员，强制统一所有架构下该结构体的大小为 328 字节。
+2. **兼容性修复逻辑**：引入 `XLOG_REC_SIZE` 和 `XLOG_REC_SIZE_OTHER` 宏定义，分别代表当前架构的结构体大小和另一种对齐方式的大小。
+3. **双重校验机制**：修改 `xlog_recover_process` 函数，在日志恢复进行 CRC 校验时，如果使用当前架构大小计算的 CRC 不匹配，则尝试使用另一种对齐大小重新计算 CRC。如果匹配成功，说明该日志是在不同对齐规则的架构下写入的，此时接受该校验值并打印修复日志，从而实现跨架构的日志兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/825b8f12e48be249315281a5b579cb5775ab6404

@@ -1,0 +1,20 @@
+#标题
+btrfs: degraded模式下种子设备路径导致fs_devices内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在BTRFS文件系统处于DEGRADED（降级）模式下挂载或处理种子设备时，若后续在 `read_one_dev()` 或 `btrfs_read_chunk_tree()` 等阶段发生错误，将导致内核内存泄漏。泄漏的对象包括新分配的 `fs_devices` 结构体以及通过 `add_missing_dev()` 添加到该结构体下的设备对象。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `open_seed_devices()` 中，当 `find_fsid()` 查找失败且系统处于 DEGRADED 模式时，代码会通过 `alloc_fs_devices()` 分配一个新的 `fs_devices`。与正常路径不同的是，该降级路径在返回前未将新分配的 `fs_devices` 添加到 `seed_list` 链表中。当后续流程（如 `read_one_dev` 或 `btrfs_read_chunk_tree`）出错触发清理逻辑时，清理代码仅遍历 `seed_list` 释放种子设备，导致这个“孤立”的 `fs_devices` 无法被找到并释放，从而造成内存泄漏。
+
+#解决方案
+在 `open_seed_devices()` 函数的降级路径返回前，显式调用 `list_add()` 将新分配的 `fs_devices` 添加到 `seed_list` 中，使其与正常路径保持一致，确保后续错误处理流程能够正确遍历并释放该内存结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bd48b1094d81b2a927d068aed9027651db681eb4

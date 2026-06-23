@@ -1,0 +1,20 @@
+#标题
+Input: adp5589-keys 驱动 Probe 阶段 NULL 指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 adp5589-keys 驱动模块时，若 probe 函数在早期阶段执行失败（如 gpiochip 或 input 设备注册失败），系统触发 NULL 指针引用，导致内核崩溃。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference
+
+#问题根因
+驱动在 probe 流程中通过 devm_add_action_or_reset 注册了清理回调函数 adp5589_clear_config，该回调试图通过 i2c_get_clientdata(client) 获取设备对象指针。然而，i2c_set_clientdata(client, kpad) 设置操作原计划在 probe 函数末尾执行，一旦 probe 在设置数据之前失败退出，清理回调被触发时将获取到 NULL 指针，从而引发空指针引用错误。
+
+#解决方案
+修改 adp5589_clear_config 回调函数及其注册方式，直接将 kpad 对象指针作为 data 参数传递给 devm_add_action_or_reset，而不是传递 client 指针再去间接获取。同时删除末尾冗余的 i2c_set_clientdata 调用，确保在 probe 失败时清理回调能直接使用有效的 kpad 指针复位设备。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/65d6fa34b07ae05afaf3160d211e34fab950692b

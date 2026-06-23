@@ -1,0 +1,20 @@
+#标题
+drm/msm: submit 错误处理路径中 sync_file 内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MSM GPU 驱动的提交操作（submit）过程中，若在已分配文件描述符并安装文件（fd_install）之后、操作完成之前发生错误（如后续步骤返回错误码），会导致 `sync_file` 对象及相关文件结构未被释放，造成内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在错误处理路径中，代码仅调用了 `put_unused_fd()` 来释放文件描述符。然而，如果在错误发生前已经调用了 `fd_install()` 将 `sync_file` 对应的 file 结构安装到进程的文件描述符表中，`put_unused_fd()` 并不会释放该 file 结构。这导致 `sync_file` 及其关联的资源被泄漏。
+
+#解决方案
+在错误处理分支中，增加对 `sync_file` 指针有效性的检查。如果存在有效的 `sync_file` 指针，调用 `fput(sync_file->file)` 主动释放文件引用，从而正确释放 `sync_file` 资源。同时，将 `sync_file` 变量的声明移至函数作用域上层，以便在错误处理代码段中可以访问该变量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/94d845bab9950422aa9b59a160eb0820dc55fd9d

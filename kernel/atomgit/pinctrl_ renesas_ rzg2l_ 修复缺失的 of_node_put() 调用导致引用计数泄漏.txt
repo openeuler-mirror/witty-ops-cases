@@ -1,0 +1,20 @@
+#标题
+pinctrl: renesas: rzg2l: 修复缺失的 of_node_put() 调用导致引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在调用 `of_parse_phandle_with_fixed_args()` 函数解析设备树节点后，未调用 `of_node_put()` 释放节点引用计数，导致设备树节点的引用计数泄漏（kobject refcount leak）。在特定场景下（如反复进行设备探测或卸载重载），可能导致内存无法正确回收，甚至引发设备树节点相关资源访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根据内核 API 规范，`of_parse_phandle_with_fixed_args()` 函数要求调用者在处理完返回的节点指针后，必须调用 `of_node_put()` 来递减引用计数。当前 `rzg2l_gpio_register` 函数在调用该接口后缺失了 `of_node_put()` 调用，导致节点引用计数无法释放。
+
+#解决方案
+在 `rzg2l_gpio_register` 函数中，于 `of_parse_phandle_with_fixed_args()` 调用成功且校验参数之前，显式添加 `of_node_put(of_args.np)` 调用，以确保设备树节点的引用计数被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/30c186898e797c299a4b82a3bf70a34bd001982c

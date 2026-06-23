@@ -1,0 +1,20 @@
+#标题
+rxrpc: 响应中止包时错误发送中止包导致循环风暴
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在服务端套接字关闭等特定场景下，系统会针对传入的数据包生成 ABORT 包进行响应。若传入的数据包本身就是 ABORT 包，系统仍会尝试生成新的 ABORT 包进行回复，可能导致 abort 循环（尤其是在客户端使用多播地址的情况下），引发网络风暴或资源消耗异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`rxrpc_reject_packet()` 函数在处理传入包时，未判断包类型是否为 `RXRPC_PACKET_TYPE_ABORT`。这导致系统在收到 ABORT 包时，仍会生成新的 ABORT 包进行回复，违反了协议逻辑（不应中止一个中止包），从而可能引发循环风暴。
+
+#解决方案
+在 `net/rxrpc/output.c` 文件的 `rxrpc_reject_packet` 函数入口处增加判断逻辑：如果检测到传入数据包的类型 `sp->hdr.type` 为 `RXRPC_PACKET_TYPE_ABORT`，则直接返回，拒绝生成并发送响应的 ABORT 包，以此打破潜在的循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58b5d9f2f0aae7ce1c749023658497e77fe8851b

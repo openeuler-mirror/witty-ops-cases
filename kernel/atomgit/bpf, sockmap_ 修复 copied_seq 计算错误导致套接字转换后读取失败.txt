@@ -1,0 +1,23 @@
+#标题
+bpf, sockmap: 修复 copied_seq 计算错误导致套接字转换后读取失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 sockmap 的套接字拥有独立的接收队列 ingress_msg，该队列可能包含来自自身协议栈或其他套接字重定向的数据。当从 ingress_msg 读取数据时，如果数据来自其他套接字（非自身协议栈），内核仍会默认更新 `tp->copied_seq`。由于此时 `tcp->rcv_nxt` 未增加，导致 `copied_seq` 可能远大于 `rcv_nxt`。当该套接字后续被转换回原生套接字进行读取时，会因序列号校验不匹配等原因导致读取失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tcp_bpf_recvmsg_parser` 函数中，从 `ingress_msg` 读取数据后，代码无条件地将读取的字节数累加到序列号 `seq`（即 `copied_seq`）上。然而，`ingress_msg` 队列中的数据可能来自其他套接字的重定向，这种情况下 `rcv_nxt` 不会随之增加。这破坏了 `copied_seq` 与 `rcv_nxt` 之间的同步关系，导致后续原生读取操作判断错误。
+
+#解决方案
+修改 `sk_msg` 结构体处理逻辑，增加对数据来源的判断：
+1. 在 `sk_psock_skb_ingress_self` 函数中，标记来自自身协议栈的 `sk_msg` 对象（设置 `msg->sk = sk`）。
+2. 新增 `__sk_msg_recvmsg` 接口，增加 `copied_from_self` 参数。在读取逻辑中检查 `msg_rx->sk`，仅当数据源自自身套接字时才累加 `copied_from_self`。
+3. 在 `tcp_bpf_recvmsg_parser` 中调用新接口，仅使用 `copied_from_self` 来更新 `copied_seq`，确保序列号仅反映来自自身协议栈的数据消费情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/15e42c8e17e86cd8a6e57f2870d4ca7c6227e8d2

@@ -1,0 +1,20 @@
+#标题
+Bluetooth: hci_sync: fix race in hci_cmd_sync_dequeue_once
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `hci_cmd_sync_dequeue_once` 函数取消特定的同步命令队列条目时，由于缺乏锁保护，存在竞争条件。这可能导致在查找并准备取消条目的过程中，该条目被其他线程并发修改或释放，从而引发内核崩溃或数据结构损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`hci_cmd_sync_dequeue_once` 函数内部在调用 `hci_cmd_sync_lookup_entry` 查找条目和 `hci_cmd_sync_cancel_entry` 取消条目时，未持有 `hdev->cmd_sync_work_lock` 互斥锁。这导致查找与取消操作不是原子执行，在此期间若其他线程操作了该队列条目，将引发竞争风险。
+
+#解决方案
+在 `hci_cmd_sync_dequeue_once` 函数中增加 `mutex_lock(&hdev->cmd_sync_work_lock)` 保护，将查找函数替换为受锁保护的内部版本 `_hci_cmd_sync_lookup_entry`，并使用 `_hci_cmd_sync_cancel_entry` 进行取消操作，确保整个查找-取消流程在锁的保护下原子完成，从而消除竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b90d9c103f1f7110f95b7d5c973158ac214d2437

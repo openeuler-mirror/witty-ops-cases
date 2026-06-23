@@ -1,0 +1,24 @@
+#标题
+arm64/mpam: CDP 模式使能时 num_rmids 计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 MPAM 架构下使能 CDP（Code and Data Prioritization）模式后，系统提供的 `num_rmids`（Resource Monitoring IDs）数量未根据 CDP 模式进行减半调整。这导致用户态或内核子系统误认为可用 RMID 数量与未开启 CDP 时一致，可能引发 RMID 资源分配越界或监控功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `resctrl_arch_set_cdp_enabled` 中，使能 CDP 模式时未重新计算并更新资源结构体 `rdt_resource` 中的 `num_rmid` 字段。根据 MPAM 与 resctrl 架构规范，使能 CDP 后，可用的 RMID 数量应为原数量的一半，但原代码逻辑缺失了 `r->num_rmid >>= 1` 的调整步骤。
+
+#解决方案
+修改 `resctrl_arch_set_cdp_enabled` 函数逻辑：
+1. 将函数参数由 `ignored` 修改为 `rid`，以便获取具体的资源层级。
+2. 在函数内部通过 `resctrl_arch_get_resource(rid)` 获取对应的 `rdt_resource` 结构体指针。
+3. 调用 `resctrl_arch_system_num_rmid_idx()` 重新获取系统 RMID 数量。
+4. 若 `enable` 为真（开启 CDP），将 `r->num_rmid` 右移一位（除以 2），修正可用 RMID 数量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/79889009eb342a5b0ea9448c7b77e8ed8550a74b

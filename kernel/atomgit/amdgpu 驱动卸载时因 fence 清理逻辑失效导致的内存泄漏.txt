@@ -1,0 +1,20 @@
+#标题
+amdgpu 驱动卸载时因 fence 清理逻辑失效导致的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 amdgpu 驱动模块时，发生内存泄漏。由于 `amdgpu_ring_fini` 中过早地将 `ring` 指针置为 NULL，导致后续 `amdgpu_fence_driver_sw_fini()` 无法访问到对应的 `ring` 资源，从而无法正确释放 sched entities（调度实体），造成内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复 commit b61badd20b44 ("drm/amdgpu: fix usage slab after free") 时，引入了逻辑顺序错误。该补丁调整了 `amdgpu_fence_driver_sw_fini()` 的调用时机，但在 `amdgpu_ring_fini()` 函数中保留了 `ring->adev->rings[ring->idx] = NULL` 的操作。这导致在调用 `amdgpu_fence_driver_sw_fini()` 进行清理时，对应的 ring 指针已经被置为 NULL，使得清理函数实际上变成了空操作，导致调度实体未被释放，进而引发内存泄漏。
+
+#解决方案
+移除 `amdgpu_ring_fini()` 函数中 `ring->adev->rings[ring->idx] = NULL` 的赋值操作，确保后续的 fence 清理流程能够正确访问到 ring 指针，从而正确释放相关资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/698c1d5398997a5050ccc089fc081951e9def86f

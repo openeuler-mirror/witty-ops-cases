@@ -1,0 +1,20 @@
+#标题
+hisi_spi debugfs 初始化中因 container_of 误用导致内核指针计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hisi_spi 驱动的 debugfs 初始化过程中，通过 `container_of` 宏计算 `spi_controller` 指针时发生错误。由于偏移量计算基于错误的成员指针（`hs->dev` 指向 `pdev->dev`，而 `host->dev` 指向 `pdev->dev.parent`），导致获取到的 `host` 指针无效。这可能引发内核崩溃或 debugfs 节点名称解析错误，进而导致 debugfs 目录创建失败或访问非法内存地址。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hisi_spi_debugfs_init` 函数中，使用 `container_of` 宏从 `hs->dev` 推算 `spi_controller` 指针（`host`）存在逻辑错误。`hs->dev` 指向的是 `platform_device` 中的 `dev` 成员（`pdev->dev`），而 `spi_controller` 结构体中的 `dev` 成员实际上指向 `pdev->dev.parent`。两者在结构体中的偏移位置不同，直接使用 `hs->dev` 进行 `container_of` 计算无法得到正确的 `spi_controller` 指针地址。
+
+#解决方案
+放弃使用 `container_of` 宏进行指针推算，直接使用 `hs->dev->driver_data` 获取 `spi_controller` 指针。因为在驱动 probe 阶段，`spi_controller` 指针已经正确存储在设备的 `driver_data` 中，直接读取该值即可获得正确的指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9c04e8a224613f439d43cda9afe487e6a0702040

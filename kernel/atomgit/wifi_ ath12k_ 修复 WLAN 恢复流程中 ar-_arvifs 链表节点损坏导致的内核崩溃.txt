@@ -1,0 +1,28 @@
+#标题
+wifi: ath12k: 修复 WLAN 恢复流程中 ar->arvifs 链表节点损坏导致的内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 WLAN 恢复过程中，若正在执行 vif 移除操作，系统会触发内核崩溃。具体场景为：WLAN 恢复发生在 `ath12k_mac_vdev_delete()` 函数获取自旋锁之前，导致 `list_del()` 检测到链表节点无效从而引发 panic。
+
+#主要错误日志
+Call trace:
+__list_del_entry_valid_or_report+0xd4/0x100 (P)
+ath12k_mac_remove_link_interface.isra.0+0xf8/0x2e4 [ath12k]
+ath12k_scan_vdev_clean_work+0x40/0x164 [ath12k]
+cfg80211_wiphy_work+0xfc/0x100
+process_one_work+0x164/0x2d0
+worker_thread+0x254/0x380
+kthread+0xfc/0x100
+ret_from_fork+0x10/0x20
+
+#问题根因
+在当前的 WLAN 恢复代码流程中，`ath12k_core_halt()` 函数仅重新初始化了 "arvifs" 链表头。这导致链表头紧随其后的链表节点变为无效节点。因为该节点的 prev 指针仍指向链表头 "arvifs"，但链表头 "arvifs" 的 next 指针已不再指向该节点。当 WLAN 恢复与 vif 移除操作并发执行时，`ath12k_mac_vdev_delete()` 中的 `list_del()` 会检测到这种不一致状态，从而触发内核 panic。
+
+#解决方案
+在 WLAN 停止阶段（`ath12k_core_halt` 函数中），修改链表处理逻辑。不再仅重新初始化链表头，而是遍历 "arvifs" 链表，将所有 vif 链表节点从链表中移除并重新初始化（`list_del_init`）。此操作需持有 `ar->data_lock` 自旋锁以保证并发安全。重新初始化链表节点确保了后续 `ath12k_mac_vdev_delete()` 中的 `list_del()` 操作能够正常执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0434b5209d04466899a3eedfde2edaa26567c2fa

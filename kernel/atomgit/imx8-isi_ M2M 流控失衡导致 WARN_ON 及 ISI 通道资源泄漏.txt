@@ -1,0 +1,29 @@
+#标题
+imx8-isi: M2M 流控失衡导致 WARN_ON 及 ISI 通道资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当应用程序在流传输过程中异常退出（如使用 Ctrl+C 终止），导致 streamon/streamoff 调用失衡时，m2m usage_count 引用计数无法归零，ISI 通道无法释放。此外，若此时输入行宽度超过 2K，内核会触发 WARN_ON() 警告并打印调用栈。
+
+#主要错误日志
+[ 59.222120] ------------[ cut here ]------------
+[ 59.226758] WARNING: drivers/media/platform/nxp/imx8-isi/imx8-isi-hw.c:631 at mxc_isi_channel_chain+0xa4/0x120, CPU#4: v4l2-ctl/654
+[ 59.238569] Modules linked in: ap1302
+[ 59.242231] CPU: 4 UID: 0 PID: 654 Comm: v4l2-ctl Not tainted 6.16.0-rc4-next-20250704-06511-gff0e002d480a-dirty #258 PREEMPT
+[ 59.258720] Hardware name: NXP i.MX95 15X15 board (DT)
+...
+[ 59.352025]  mxc_isi_channel_chain+0xa4/0x120 (P)
+[ 59.356722]  mxc_isi_m2m_streamon+0x160/0x20c
+...
+[ 59.405801] ---[ end trace 0000000000000000 ]---
+
+#问题根因
+原有的驱动实现中，流的准备和清理工作直接绑定在 vidioc_streamon/streamoff 回调中。当应用程序异常退出时（如 Ctrl+C），streamon/streamoff 调用可能出现失衡，导致 `m2m usage_count` 无法正确减少归零，进而引发 ISI 通道资源无法释放。同时，在资源状态异常的情况下，若输入行宽度超过 2K 触发链接操作，会导致内部状态不一致从而触发 `WARN_ON()`。
+
+#解决方案
+将流的准备和清理逻辑从自定义的 `vidioc_streamon/streamoff` 回调移动到 VB2（videobuf2）框架的 `.prepare_streaming()` 和 `.unprepare_streaming()` 操作中。通过利用 VB2 框架提供的 `v4l2_m2m_ioctl_streamon()` 和 `v4l2_m2m_ioctl_streamoff()` 标准辅助函数，确保在应用异常退出时资源能被正确清理与释放，同时移除了不再需要的自定义流控函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1f879c291a1a292bac4d90c138249efabebb8748

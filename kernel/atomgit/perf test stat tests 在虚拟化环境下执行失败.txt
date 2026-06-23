@@ -1,0 +1,37 @@
+#标题
+perf test stat tests 在虚拟化环境下执行失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 s390 z/VM 虚拟化系统上执行 `perf test 102`（perf stat tests）时，测试结果返回 FAILED。失败发生在 `test_hybrid` 子测试中，原因是脚本中使用的 `grep -c` 命令未匹配到任何内容（返回非零退出码），导致脚本因 `set -e` 设置而提前终止。
+
+#主要错误日志
+测试执行失败输出：
+```
+# perf test 102
+102: perf stat tests                      : FAILED!
+```
+
+z/VM 系统上 `perf stat` 的输出样例（无 cpu-cycles 行）：
+```
+# perf stat -a -- sleep 0.1 2>&1
+Performance counter stats for 'system wide':
+
+      56      context-switches  #     46.3 cs/sec  cs_per_second
+1,210.41 msec cpu-clock         #     11.9 CPUs  CPUs_utilized
+      12      cpu-migrations    #      9.9 migrations/sec ...
+      81      page-faults       #     66.9 faults/sec ...
+
+      0.100891009 seconds time elapsed
+```
+
+#问题根因
+问题根因是测试脚本 `tools/perf/tests/shell/stat.sh` 中的 `test_hybrid` 函数使用了 `grep -c` 来统计 `cpu-cycles` 事件的数量。在 s390 z/VM 等虚拟化环境中，`perf stat` 输出中可能不包含 `cpu-cycles` 行。当 `grep` 没有匹配到任何行时，`grep -c` 返回退出码 1。由于脚本开启了 `set -e`（遇到非零退出码即退出），这导致整个测试脚本异常终止并报错。
+
+#解决方案
+修改 `tools/perf/tests/shell/stat.sh` 脚本，将统计匹配行数的逻辑从 `grep ... -c` 修改为管道连接 `wc -l`（即 `grep ... | wc -l`）。`wc -l` 无论是否匹配到内容都会返回退出码 0，从而避免了因无匹配项导致的脚本非预期退出，修复了在虚拟化环境下的测试失败问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/751fc71483455cfa5a4fadc287c9336acabe74e2

@@ -1,0 +1,33 @@
+#标题
+scmtcp: file_htable_del_flist未初始化指针导致内核panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 scmtcp_sk_recvmsg() 结束并立即关闭 socket 释放所有 file_list 时，由于 file_htable_del_flist() 返回了未初始化的指针，导致系统崩溃。具体表现为调用 recvmsg 系统调用时触发内核缺页错误，无法处理虚拟地址寻址请求。
+
+#主要错误日志
+Unable to handle kernel paging request at virtual address 0000000100000000
+...
+x2 : 0000000000000000 x1 : 0000000000000001 x0 : 0000000100000000
+Call trace:
+ scm_fp_dup+0x1c/0x148
+ scmtcp_sk_recvmsg+0x1d8/0x240 [scmtcp]
+ inet_recvmsg+0x54/0x100
+ sock_recvmsg+0x5c/0xb8
+ ____sys_recvmsg+0x90/0x230
+ ___sys_recvmsg+0x88/0xf8
+ __sys_recvmsg+0x70/0xd8
+ __arm64_sys_recvmsg+0x2c/0x40
+ invoke_syscall+0x50/0x128
+
+#问题根因
+在函数 file_htable_del_flist() 中，局部变量 `flist` 声明后未进行初始化（默认值随机）。当函数在哈希表中未找到对应的条目时，直接返回了该未初始化的指针。上层调用者 scm_fp_dup() 对该返回值进行解引用操作时，访问了非法内存地址，导致内核 panic。
+
+#解决方案
+1. 在 file_htable_del_flist() 函数定义局部变量 `flist` 时，显式初始化为 `NULL`，确保未找到条目时返回有效的 NULL 指针而非野指针。
+2. 在 __scmtcp_sk_init() 函数中，补充对 `scmtcp_sk(sk)->flist_seq` 的初始化，将其赋值为 0，防止因序列号未初始化导致的逻辑错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1c6c6b54b879b5734cf74ea7a72dd86a785a6cbd

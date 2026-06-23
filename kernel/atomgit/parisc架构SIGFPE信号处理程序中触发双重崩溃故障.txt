@@ -1,0 +1,30 @@
+#标题
+parisc架构SIGFPE信号处理程序中触发双重崩溃故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PA-RISC 架构上，当应用程序触发 SIGFPE 异常时，会在信号处理函数中立即触发第二次 SIGFPE，导致应用程序崩溃退出。
+通过 strace 观测可以看到进程连续收到两次 SIGFPE 信号：
+--- SIGFPE {si_signo=SIGFPE, si_code=FPE_FLTOVF, si_addr=0x1078f} ---
+--- SIGFPE {si_signo=SIGFPE, si_code=FPE_FLTOVF, si_addr=0xf8f21237} ---
++++ killed by SIGFPE +++
+
+#主要错误日志
+Floating point exception
+
+#问题根因
+根因在于内核在处理浮点异常返回用户空间时，未清除浮点状态寄存器中的 Trap (T) 位。
+具体流程如下：
+1. 应用程序触发浮点异常，内核发送 SIGFPE 信号。
+2. glibc 的信号处理函数为了原子更新函数描述符，会使用双字浮点存储指令。
+3. 由于延迟绑定机制，信号处理函数一开始就会执行浮点存储指令。
+4. 此时 FP 状态寄存器的 Trap (T) 位仍处于置位状态。
+5. 在 T 位置位的情况下，协处理器遇到任何浮点指令（除了特定的 %fr0 存储）都会触发辅助异常陷阱，导致在信号处理函数内部再次触发 SIGFPE。
+
+#解决方案
+在内核的浮点仿真处理逻辑 `handle_fpe` 函数中，当判定需要发送 SIGFPE 信号时，在返回用户空间前显式清除浮点状态寄存器中的 Trap (T) 位（即 `fr[0]` 的第 38 位），防止信号处理函数执行浮点指令时再次触发异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b5f3c0f1fc0cdeaa2eb85bcebe7a6a7ba44db48f

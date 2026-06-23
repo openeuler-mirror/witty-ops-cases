@@ -1,0 +1,22 @@
+#标题
+sw64: 修复 CONFIG_SUNWAY_GED=m 编译时的符号未定义错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构下启用配置项 CONFIG_SUNWAY_GED=m 进行内核模块编译时，构建过程失败并报错，提示模块 post 阶段找不到部分内核符号定义。
+
+#主要错误日志
+ERROR: modpost: "unlock_device_hotplug" [drivers/misc/sunway-ged.ko] undefined!
+ERROR: modpost: "__add_memory" [drivers/misc/sunway-ged.ko] undefined!
+ERROR: modpost: "lock_device_hotplug" [drivers/misc/sunway-ged.ko] undefined!
+
+#问题根因
+驱动代码 `drivers/misc/sunway-ged.c` 中直接调用了 `lock_device_hotplug()`、`unlock_device_hotplug()` 和 `__add_memory()` 函数。这些函数未被导出（EXPORT_SYMBOL），导致在编译为内核模块（.ko）时无法链接到这些符号，从而引发 modpost 错误。
+
+#解决方案
+将代码中对 `lock_device_hotplug()` 和 `unlock_device_hotplug()` 的显式调用移除，并将内部函数 `__add_memory()` 替换为封装好的标准接口 `add_memory()`。`add_memory()` 函数内部已经处理了必要的 `device_hotplug_lock` 锁逻辑，且该接口对模块可见，从而解决了符号未定义的编译错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/06b4a01c4fe9454f8641e065c6d778fed833f135

@@ -1,0 +1,28 @@
+#标题
+ksmbd: smb_grant_oplock 函数存在释放后使用与空指针解陷风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 处理 SMB oplock 授予过程中，存在并发竞争导致的两个严重问题：
+1. **释放后使用**：当 `add_lease_global_list` 因内存分配失败返回错误时，错误处理路径会释放 `opinfo` 结构体，但此时该结构体仍链接在 `ci->m_op_list` 链表中。并发访问该链表的线程（如 `opinfo_get_list` 或 `smb_break_all_levII_oplock`）会遍历到已释放的节点，导致内核崩溃。
+2. **空指针解引用**：`opinfo` 被发布到全局租约链表后，并发函数 `find_same_lease_key()` 可能立即遍历该链表并访问 `opinfo->o_fp` 成员，而此时 `o_fp` 尚未被赋值（仍为 NULL），导致空指针解引用异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`smb_grant_oplock()` 函数中的发布序列存在逻辑缺陷：
+1. **发布后失败**：先将 `opinfo` 加入链表，后续操作（如加入全局租约链表）失败时，直接释放了仍在链表中的节点，且使用了非 RCU 延迟释放的 `__free_opinfo`，导致 UAF。
+2. **初始化与发布乱序**：先将 `opinfo` 加入全局可见链表，之后才对 `opinfo->o_fp` 进行赋值，导致窗口期内并发读取到空指针。
+
+#解决方案
+重构 `smb_grant_oplock` 的发布序列，消除发布后的失败路径：
+1. **提前赋值**：在将 `opinfo` 加入任何链表之前，先设置 `opinfo->o_fp`，防止并发读取空指针。
+2. **内存预分配**：将 `lease_table` 的内存分配（`alloc_lease_table`）提前到加入链表之前进行。如果分配失败则直接报错返回，不进行任何发布操作。
+3. **变更链表添加逻辑**：修改 `add_lease_global_list` 接口，接收预分配的 `lease_table`，使其成为无失败函数。
+4. **修正错误处理**：错误路径使用 `opinfo_put()` 替代 `__free_opinfo()`，确保通过 RCU 延迟释放路径处理资源，避免 UAF。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c42e5ad089874c3a3ea1ba367875d7db4568843d

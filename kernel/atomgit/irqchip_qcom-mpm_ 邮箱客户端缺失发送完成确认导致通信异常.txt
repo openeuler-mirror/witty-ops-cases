@@ -1,0 +1,21 @@
+#标题
+irqchip/qcom-mpm: 邮箱客户端缺失发送完成确认导致通信异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Qualcomm MPM控制器驱动在发送NULL doorbell消息后，未通知邮箱控制器发送已完成。这会导致邮箱通道状态异常，可能阻塞后续的消息发送或导致电源管理域下电流程中的通信无法正常终止。
+
+#主要错误日志
+未知
+
+#问题根因
+MPM驱动的 `mbox_client` 在调用 `mbox_send_message()` 发送消息后，缺少必要的 TX done（发送完成）确认机制。具体表现为未设置 `knows_txdone` 标志位，且发送成功后未调用 `mbox_client_txdone()` 回调，这不符合 Qualcomm 邮箱客户端（如 smp2p, smsm 等）的标准使用模式。
+
+#解决方案
+1. 在 `qcom_mpm_init` 初始化函数中，设置 `priv->mbox_client.knows_txdone` 为 `true`，指示客户端将自行处理发送完成确认。
+2. 在 `mpm_pd_power_off` 函数中，消息发送成功后立即调用 `mbox_client_txdone(priv->mbox_chan, 0)` 通知邮箱控制器发送已完成。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/605ef7f2ee1e2f918892a4538eca3754f809bdc1

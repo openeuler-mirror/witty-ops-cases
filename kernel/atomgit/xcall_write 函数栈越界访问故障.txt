@@ -1,0 +1,41 @@
+#标题
+xcall_write 函数栈越界访问故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行命令 `echo 1234 > /proc/1/xcall` 或 `echo !123 > /proc/1/xcall` 时，触发 KASAN 检测到的 stack-out-of-bounds 错误，导致内核报告内存非法访问。
+
+#主要错误日志
+BUG: KASAN: stack-out-of-bounds in _kstrtoull+0x120/0x150
+Read of size 1 at addr ffff800085d67b85 by task sh/1209
+Call trace:
+ dump_backtrace+0x94/0xf0
+ show_stack+0x1c/0x30
+ dump_stack_lvl+0x44/0x58
+ print_report+0x164/0x5b8
+ kasan_report+0x80/0xc0
+ __asan_load1+0x58/0x60
+ _kstrtoull+0x120/0x150
+ kstrtoull+0x38/0x48
+ kstrtouint+0x70/0xe0
+ xcall_write+0x274/0x3e0
+ vfs_write+0x228/0x548
+ ksys_write+0xc8/0x170
+ __arm64_sys_write+0x48/0x60
+ invoke_syscall+0x64/0x148
+ el0_svc_common.constprop.0+0x7c/0x110
+ do_el0_svc+0x68/0xb8
+ el0_slow_syscall+0x3c/0x128
+
+#问题根因
+在 commit fd83d0fe16f1 ("xcall: Rework the early exception vector of XCALL and SYNC") 中删除了 `copy_from_user()` 的拷贝计数限制。当用户输入的数据量达到缓冲区大小时，`copy_from_user()` 会额外拷贝一个字符（覆盖掉 `buf` 原有的终止符 `\0`），导致缓冲区溢出，后续 `kstrtouint()` 在解析字符串时访问了越界内存。
+
+#解决方案
+修改 `fs/proc/proc_xcall.c` 文件中的 `xcall_write` 函数：
+1. 重新定义缓冲区大小宏 `MAX_BUF_SIZE`，确保其包含符号位、数字位和结束符。
+2. 限制 `copy_from_user()` 的拷贝长度最大为 `MAX_BUF_SIZE - 1`，强制保留一个字节用于存放字符串结束符 `\0`，防止栈溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e75925a0cb187b86978a894f39039192a19608ad

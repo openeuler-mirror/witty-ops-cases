@@ -1,0 +1,20 @@
+#标题
+KVM: arm64 vCPU 创建失败时 vGIC 资源泄漏与潜在 UAF 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建 KVM 虚拟机 vCPU 时，若与 hypervisor 共享 vCPU 页面失败（如内存分配失败等异常路径），会导致 vGIC vCPU 数据结构关联的内存发生泄漏。此外，若后续 redistributor 设备处理逻辑尝试访问该 vCPU，可能触发 use-after-free 导致内核崩溃或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `kvm_arch_vcpu_create()` 函数中，调用 `kvm_share_hyp()` 失败时，代码逻辑直接返回错误，但未执行 vGIC 相关资源的清理工作（即未调用 `kvm_vgic_vcpu_destroy()`）。这导致之前已初始化的 vGIC vCPU 数据结构残留，既造成内存泄漏，又留下了被其他模块误访问导致 use-after-free 的隐患。
+
+#解决方案
+在 `kvm_arch_vcpu_create()` 函数中增加错误处理逻辑：当 `kvm_share_hyp(vcpu, vcpu + 1)` 返回错误时，立即调用 `kvm_vgic_vcpu_destroy(vcpu)` 清理已初始化的 vGIC 资源，然后再返回错误码，确保资源正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d10489d9dc3a6fa12697f87c86998256e827ae3f

@@ -1,0 +1,23 @@
+#标题
+RDMA/uverbs: 查询用户对象失败时错误码被错误覆盖为 EINVAL
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 RDMA uverbs API 时，若底层函数 `rdma_lookup_get_uobject()` 获取用户对象失败（例如返回 EBUSY），`uobj_get_uobj_read()` 会错误地返回 NULL，导致上层接口将错误码统一覆盖为 `-EINVAL`。
+这导致应用程序看到的是无效的错误码（EINVAL），掩盖了真实的错误原因。例如，应用程序调用 `ibv_modify_qp` 时，若因 QP uobject 获取失败（应为 EBUSY），最终却收到 EINVAL 错误返回，导致调试困难或业务逻辑判断异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `include/rdma/uverbs_std_types.h` 中的 `_uobj_get_obj_read` 函数实现逻辑有误。
+当 `rdma_lookup_get_uobject()` 返回错误指针（ERR_PTR）时，该函数直接返回了 `NULL` 而不是传递原始的错误指针。这导致调用者（如 `ib_uverbs_reg_mr`, `ib_uverbs_resize_cq` 等函数）在判断返回值为 NULL 时，无法获取真实的 errno，只能统一返回 `-EINVAL`，从而覆盖了真实的错误码。
+
+#解决方案
+修改 `_uobj_get_obj_read` 函数，当检测到 uobj 为错误指针（IS_ERR）时，使用 `ERR_CAST(uobj)` 返回错误指针，而不是返回 NULL。
+同时，修改 `drivers/infiniband/core/uverbs_cmd.c` 中所有调用 `uobj_get_obj_read` 的位置，将判空逻辑 `if (!obj)` 修改为 `if (IS_ERR(obj))`，并将返回值从 `-EINVAL` 修改为 `PTR_ERR(obj)`，以确保将底层真实的错误码（如 EBUSY）正确传递给用户态应用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1753f21a8d356e4d2d836151d82fb16d5787585d

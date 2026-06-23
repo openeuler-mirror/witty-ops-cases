@@ -1,0 +1,20 @@
+#标题
+net/key: 修复 pfkey 消息中 sockaddr 结构体未初始化导致的内核信息泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 PF_KEY 协议的 `pfkey_send_acquire`、`pfkey_send_new_mapping` 以及 `set_sadb_address` 等消息发送流程时，`sockaddr` 结构体填充不完整。由于结构体中存在未初始化的填充字节（padding），导致这些未清理的内核栈数据随消息发送至用户空间，造成内核内存信息泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+`pfkey_sockaddr_fill` 函数在填充 `sockaddr` 结构体时，仅写入了协议所需的实际长度数据（`sockaddr_len`），而分配的结构体大小（`sockaddr_size`）可能大于实际写入长度（例如在 IPv6 地址转换 IPv4 等场景下存在差异）。代码未将结构体剩余的尾部字节清零，导致栈上的敏感数据通过未初始化的填充字段泄露出去。
+
+#解决方案
+引入新函数 `pfkey_sockaddr_fill_zero_tail`，在原有 `pfkey_sockaddr_fill` 填充逻辑的基础上，检查结构体分配大小与实际写入长度的差值。如果存在差异，使用 `memset` 将结构体尾部的未使用字节显式清零，防止内存泄露。同时，将所有相关调用点（如 `pfkey_send_acquire`、`pfkey_send_new_mapping` 和 `set_sadb_address`）中的 `pfkey_sockaddr_fill` 替换为 `pfkey_sockaddr_fill_zero_tail`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/09d267054e4ef2753d4fbe563c26f9824bd30973

@@ -1,0 +1,20 @@
+#标题
+SUNRPC: fix gss_auth kref leak in gss_alloc_msg error path
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `gss_alloc_msg` 函数中，当 `service_name` 非空且 `kstrdup_const()` 调用失败时，触发了错误处理路径。在该错误路径下，`gss_auth` 结构体的引用计数（kref）发生泄漏，导致该结构体永远不会被释放，造成内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+提交 5940d1cf9f42 ("SUNRPC: Rebalance a kref in auth_gss.c") 为了平衡 `gss_release_msg()` 中调用的 `gss_put_auth()`，增加了一个 `kref_get(&gss_auth->kref)` 调用。但是，在 `kstrdup_const()` 失败的错误处理分支（跳转到 `err_put_pipe_version`）中，代码仅调用了 `put_pipe_version()` 和 `kfree(gss_msg)`，却遗漏了对应的 `kref_put()` 调用来释放之前获取的引用。这导致了 `gss_auth` 的引用计数泄漏。
+
+#解决方案
+在 `auth_gss.c` 文件中添加 `gss_free_callback` 的前向声明，并在 `err_put_pipe_version` 错误处理标签下增加 `kref_put(&gss_auth->kref, gss_free_callback)` 调用，以确保在出错时正确释放之前获取的 `gss_auth` 引用，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/18de55ab867339051e73a09452dd5cd59a8efa2c

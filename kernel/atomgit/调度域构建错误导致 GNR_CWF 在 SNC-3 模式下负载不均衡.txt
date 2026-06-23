@@ -1,0 +1,28 @@
+#标题
+调度域构建错误导致 GNR/CWF 在 SNC-3 模式下负载不均衡
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Granite Rapids (GNR) 和 Clearwater Forest (CWF) 处理器上启用 SNC-3（每 Package 3 个 Die）模式时，由于 NUMA 距离的不对称性，导致内核构建调度域出现错误：
+1. **调度域视角不对称**：不同 NUMA 节点上的 CPU 看到的调度域层级和分组不一致。例如，节点 0 的视角与节点 4 的视角所构建的 NUMA 层级结构完全不同。
+2. **跨 Package 负载迁移异常**：在进行负载均衡时，调度器可能错误地将本地 Package 内的节点与部分远端 Package 的节点混合编组。这导致负载均衡时，远端节点被选中进行迁移的概率与本地节点相同，引发过多的跨 Package 迁移，造成系统负载在 Package 间严重失衡。
+
+#主要错误日志
+[推断] 当系统检测到超过 2 个 Package 时，将打印警告：
+`sched: Expect only up to 2 packages for GNR or CWF, but saw %d packages when building sched domains.`
+
+#问题根因
+GNR 和 CWF 处理器支持单 Package 多 Die（如 SNC-3 模式），不同 Die 之间的 NUMA 距离存在细微差异（如 21, 23, 26 等）。这种复杂的距离矩阵导致了两个问题：
+1. 不同节点视角的路由不对称，当前调度器代码无法正确处理这种不对称的距离关系，导致调度域构建失败或错误。
+2. 过多的远端距离层级导致调度域层级过深，错误地将本地节点与部分远端节点聚合在同一调度组中，破坏了调度域的对称性和合理性。
+
+#解决方案
+针对 GNR (INTEL_GRANITERAPIDS_X) 和 CWF (INTEL_ATOM_DARKMONT_X) 平台，在构建调度域时简化 NUMA 距离计算逻辑：
+1. 新增 `avg_remote_numa_distance()` 函数，计算所有远端节点的平均距离。
+2. 实现 `arch_sched_node_distance()` 钩子函数，对于上述特定 CPU 型号，当目标节点为远端节点时，忽略其原始的精细距离值，统一返回计算出的平均远端距离。
+3. 此举消除了远端节点间的距离差异，使得调度器能构建出对称且合理的 NUMA 层级结构，确保负载均衡在 Package 间正确进行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fdd2451a622b96cc8026936e4d81deb57b7f51ee

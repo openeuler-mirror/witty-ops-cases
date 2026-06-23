@@ -1,0 +1,35 @@
+#标题
+arm64/mpam: resctrl_arch_mon_ctx_alloc_no_wait 函数内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定代码路径下（QOS_L3_MBM_LOCAL_EVENT_ID 和 QOS_L3_MBM_TOTAL_EVENT_ID），函数 resctrl_arch_mon_ctx_alloc_no_wait 发生内存泄漏。静态分析工具 smatch 报告了可能的内存泄漏警告：
+drivers/platform/mpam/mpam_resctrl.c:323 resctrl_arch_mon_ctx_alloc_no_wait()
+warn: possible memory leak of 'ret'
+drivers/platform/mpam/mpam_resctrl.c:326 resctrl_arch_mon_ctx_alloc_no_wait()
+warn: possible memory leak of 'ret'
+
+#主要错误日志
+drivers/platform/mpam/mpam_resctrl.c:323 resctrl_arch_mon_ctx_alloc_no_wait()
+warn: possible memory leak of 'ret'
+
+drivers/platform/mpam/mpam_resctrl.c:326 resctrl_arch_mon_ctx_alloc_no_wait()
+warn: possible memory leak of 'ret'
+
+#问题根因
+在 resctrl_arch_mon_ctx_alloc_no_wait 函数中，内存对象 'ret' 在函数入口处被分配。原代码逻辑中：
+1. 仅 QOS_L3_OCCUP_EVENT_ID 路径正确返回了分配的对象指针。
+2. 在 QOS_L3_MBM_LOCAL_EVENT_ID 和 QOS_L3_MBM_TOTAL_EVENT_ID 路径下，代码返回了一个静态全局变量指针 mon_is_rmid_idx，导致先前分配的 'ret' 内存未被释放且无法访问，造成内存泄漏。
+3. 默认分支未释放内存直接返回错误指针。
+
+#解决方案
+修改 resctrl_arch_mon_ctx_alloc_no_wait 函数的返回逻辑：
+1. 移除静态全局变量 mon_is_rmid_idx 的定义与使用。
+2. 在 QOS_L3_MBM_LOCAL_EVENT_ID 和 QOS_L3_MBM_TOTAL_EVENT_ID 分支中，将特定值 __mon_is_rmid_idx 赋值给已分配的 'ret' 对象，并返回该对象指针，确保内存资源被正确使用和追踪。
+3. 在 default 分支增加 kfree(ret)，防止不支持的 event_id 导致内存泄漏。
+4. 同步调整 resctrl_arch_mon_ctx_free 函数，移除冗余的判断逻辑，确保资源正常释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c3766a79be204b85ae169690b255341da46cc32f

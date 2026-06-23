@@ -1,0 +1,23 @@
+#标题
+genksyms 重复添加相同符号导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核编译过程中，当源文件中存在重复的符号定义（如完全相同的前向声明、带有不同属性的前向声明、或覆盖符号保留模式下的重定义）时，genksyms 工具会发生内存泄漏。此外，在处理包含多个初始化声明符（如 `extern int foo, bar;`）的代码时，可能会因共享 `decl_spec` 导致 double-free 错误。
+
+#主要错误日志
+error_with_pos("redefinition of %s", name);
+（推断：由代码片段 `error_with_pos("redefinition of %s", name);` 触发的编译阶段错误提示）
+
+#问题根因
+1. **内存泄漏**：在 `__add_symbol()` 函数中，当检测到符号已被注册并决定直接返回时，未释放传入的符号定义（`defn`），导致该内存块变得不可达且无法释放。这种情况在重复符号声明（Test Case 1/2）和特定覆盖保留模式（Test Case 3）下均会发生。
+2. **潜在 Double-Free**：在解析语法时，如果多个初始化声明符（如 `int foo, bar;`）共享同一个 `decl_spec`，该数据结构可能在处理过程中被多次释放。
+
+#解决方案
+1. **修复内存泄漏**：在 `__add_symbol()` 函数中，针对符号已存在且无需更新定义的三种返回路径（完全相同定义、覆盖保留模式、重定义错误），在返回前增加 `free_list(defn, NULL)` 调用，确保释放传入的定义内存。
+2. **修复 Double-Free 风险**：在 `parse.y` 中处理 `init_declarator_list` 时，调用 `copy_list_range(decl_spec, NULL)` 复制 `decl_spec`，确保每个初始化声明符拥有独立的声明规范副本，避免共享数据被错误释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a6999e37c692b11aa11f03666b18b61347a16a3f

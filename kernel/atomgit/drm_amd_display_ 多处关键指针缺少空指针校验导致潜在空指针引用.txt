@@ -1,0 +1,31 @@
+#标题
+drm/amd/display: 多处关键指针缺少空指针校验导致潜在空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 显示驱动模块的多种场景下（如快速序列构建、P-State 状态切换、等待消隐完成、Phantom Plane 创建、DP 测试模式设置及 DIO 流编码器重置等），若相关结构体指针（如 `plane_state`、`bw_vbios`、`hwseq`、`opp`、`phantom_plane`、`stream_enc` 等）意外为空，内核将触发空指针引用错误，可能导致显示异常、驱动崩溃或内核 Panic。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码在多个关键路径上未对指针有效性进行充分检查。具体包括：
+1. `dc_hw_sequencer.c` 中解引用 `current_mpc_pipe->plane_state` 前未判空。
+2. `dce112_resource.c` 中访问 `dc->bw_vbios` 成员前未判空。
+3. `dcn20_hwseq.c` 中 `hwseq` 及 `opp` 指针使用前未判空。
+4. `dcn32_resource.c` 中 `dc_create_plane_state` 返回值未判空。
+5. `link_dp_cts.c` 及 `link_hwss_dio.c` 中 `stream` 及 `stream_enc` 指针解引用前未判空。
+这些缺失的检查在特定硬件状态或异常流程下会导致 NULL Pointer Dereference。
+
+#解决方案
+在涉及的代码路径中增加防御性编程检查，确保指针非空后再进行解引用或成员访问。主要修复点包括：
+1. 增加 `if (current_mpc_pipe->plane_state)` 包裹相关逻辑。
+2. 在 `bw_calcs_data_update_from_pplib` 函数入口增加 `if (!dc->bw_vbios) return;`。
+3. 在 `dcn20_post_unlock_program_front_end` 和 `dcn20_wait_for_blank_complete` 中分别增加 `hwseq` 和 `opp` 的空指针校验。
+4. 校验 `dc_create_plane_state` 返回值，若为空则 `continue`。
+5. 在 DP 设置及 DIO 重置函数中增加 `stream` 和 `stream_enc` 的判空逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c0247840807e81a95686edf1d995c8461ddeef79

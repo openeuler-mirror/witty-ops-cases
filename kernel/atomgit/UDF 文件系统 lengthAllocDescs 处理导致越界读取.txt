@@ -1,0 +1,28 @@
+#标题
+UDF 文件系统 lengthAllocDescs 处理导致越界读取
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在解析特制或损坏的 UDF 磁盘镜像时，由于 `lengthAllocDescs` 字段值未经充分校验，导致计算出的分配描述符总长度超出缓冲区范围。在调用 `udf_update_tag()` 触发 CRC 计算时，访问了越界内存，触发 KASAN 检测到的 use-after-free 读错误，可能导致内核崩溃或信息泄露。
+
+#主要错误日志
+BUG: KASAN: use-after-free in crc_itu_t+0x1d5/0x2b0 lib/crc-itu-t.c:60
+Read of size 1 at addr ffff888041e7d000 by task syz-executor317/5309
+CPU: 0 UID: 0 PID: 5309 Comm: syz-executor317 Not tainted 6.12.0-rc4-syzkaller-00261-g850925a8133c #0
+Call Trace:
+ crc_itu_t+0x1d5/0x2b0 lib/crc-itu-t.c:60
+ udf_update_tag+0x70/0x6a0 fs/udf/misc.c:261
+ udf_write_aext+0x4d8/0x7b0 fs/udf/inode.c:2179
+ extent_trunc+0x2f7/0x4a0 fs/udf/truncate.c:46
+ udf_truncate_tail_extent+0x527/0x7e0 fs/udf/truncate.c:106
+
+#问题根因
+解析分配扩展描述符时，`lengthAllocDescs` 直接来源于磁盘数据且仅进行了加法溢出检查，未将其总长度（`sizeof(allocExtDesc) + lengthAllocDescs`）与缓冲区块大小（`epos->bh->b_size`）进行边界比对。当磁盘数据被恶意构造或损坏时，计算出的长度超出缓冲区实际大小，导致后续操作发生越界读取。
+
+#解决方案
+在 `fs/udf/inode.c` 的 `udf_current_aext` 函数中增加边界校验逻辑。在计算完 `alen`（包含 `struct allocExtDesc` 大小和 `lengthAllocDescs`）后，判断 `alen` 是否大于 `epos->bh->b_size`。如果超过缓冲区大小，则直接返回 -1，阻止后续越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a76a7c7f629851e564d2401883b037648b96f932

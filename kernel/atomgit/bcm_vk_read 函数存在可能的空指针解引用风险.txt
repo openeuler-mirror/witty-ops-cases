@@ -1,0 +1,20 @@
+#标题
+bcm_vk_read 函数存在可能的空指针解引用风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `bcm_vk_read` 函数时，如果缓冲区大小不足（`rc` 被设置为 `-EMSGSIZE`），且 `entry` 指针为 NULL，内核在执行后续代码访问 `entry` 成员时可能发生空指针解引用，导致内核崩溃或不可预知的系统行为。
+
+#主要错误日志
+Error return 1st block in -EMSGSIZE
+
+#问题根因
+在 `bcm_vk_read` 函数中，代码逻辑检查了 `entry` 指针是否存在 NULL 的可能性。当缓冲区不够大时，`rc` 被设置为 `-EMSGSIZE`，随后代码直接解引用 `entry` 指针（如 `entry->to_h_msg[0]`、`entry->usr_msg_id` 等）以准备返回给应用层的数据。如果此时 `entry` 为 NULL，则会触发空指针解引用错误。
+
+#解决方案
+在判断缓冲区不足的分支中，先将 `iter` 指针指向的关键数据（`to_h_msg[0]`、`usr_msg_id` 和 `to_h_blks`）拷贝到临时局部变量中。在后续处理 `-EMSGSIZE` 错误返回时，直接使用这些临时变量而非解引用 `entry` 指针，从而避免了潜在的空指针解引用风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9364b5a457bfc237347e07c54f746823811c619

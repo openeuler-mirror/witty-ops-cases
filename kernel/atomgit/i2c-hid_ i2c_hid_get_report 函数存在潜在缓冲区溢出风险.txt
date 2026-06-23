@@ -1,0 +1,20 @@
+#标题
+i2c-hid: i2c_hid_get_report 函数存在潜在缓冲区溢出风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HID over I2C 设备驱动中，当用户空间通过 hidraw 接口发起报告请求时，若传入的读取长度（recv_len）超过设备运行时缓冲区（ihid->rawbuf）的实际分配大小，将导致内核发生缓冲区溢出。由于访问 hidraw 设备通常需要 root 权限，该问题的利用门槛较高，但存在潜在的系统崩溃或内存破坏风险。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `i2c_hid_get_report` 在调用 `i2c_hid_xfer` 读取数据时，读取的目标大小为 `recv_len + sizeof(__le16)`。其中 `recv_len` 来源于用户空间输入，默认仅受 `HID_MAX_BUFFER_SIZE`(16384) 限制，而接收缓冲区 `ihid->rawbuf` 的实际大小是在运行时根据设备报告类型确定的（`ihid->bufsize`），该值可能远小于用户请求的读取长度。代码未对 `recv_len` 进行基于实际缓冲区大小的边界检查，导致写入数据超出缓冲区范围。
+
+#解决方案
+在调用 `i2c_hid_xfer` 进行数据传输前，使用 `min` 函数将 `recv_len` 截断至 `ihid->bufsize - sizeof(__le16)`，确保读取的数据长度（包含 2 字节长度前缀）不超过实际分配的缓冲区大小，从而防止溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/429d0a560b803e3418b3ccf2c13c24ad963b8b8f

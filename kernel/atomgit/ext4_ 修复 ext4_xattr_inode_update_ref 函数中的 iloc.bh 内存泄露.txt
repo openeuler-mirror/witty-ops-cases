@@ -1,0 +1,20 @@
+#标题
+ext4: 修复 ext4_xattr_inode_update_ref 函数中的 iloc.bh 内存泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统运行在 ext4 文件系统下，且扩展属性 inode（EA inode）的引用计数发生回绕（wraparound）时，内核检测到文件系统损坏错误。在此错误处理路径中，由于未释放缓冲头，导致发生内存泄露。如果系统长时间运行或频繁触发此类异常，可能导致内存资源耗尽。
+
+#主要错误日志
+ext4_error_inode: EA inode %lu ref wraparound: ref_count=%lld ref_change=%d
+
+#问题根因
+在函数 `ext4_xattr_inode_update_ref` 中，当检测到 EA inode 引用计数回绕并调用 `ext4_error_inode` 打印错误日志后，代码直接跳转至 `out` 标签退出。在此错误处理分支中，遗漏了对 `iloc.bh`（inode location buffer head）的释放操作，导致了缓冲头内存泄露。
+
+#解决方案
+在检测到引用计数回绕的错误处理分支中，于跳转之前显式调用 `brelse(iloc.bh)` 释放缓冲头，修复内存泄露问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d14682df9daf554dd642702a2549c912e3c2e938

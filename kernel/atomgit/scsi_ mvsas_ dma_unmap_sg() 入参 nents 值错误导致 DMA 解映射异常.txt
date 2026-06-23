@@ -1,0 +1,21 @@
+#标题
+scsi: mvsas: dma_unmap_sg() 入参 nents 值错误导致 DMA 解映射异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+mvsas 驱动在处理 SCSI 任务准备失败或任务释放时，调用 `dma_unmap_sg()` 进行 DMA 流式映射解除。由于传入的 nents 参数不正确（使用了 `dma_map_sg()` 的返回值而非原始 scatterlist 条目数），导致 DMA 映射解除操作异常。在启用 DMA-API 调试或特定平台 IOMMU 实现下，可能触发内核警告、导致内存泄漏或系统不稳定。
+
+#主要错误日志
+dev_printk(KERN_ERR, mvi->dev, "mvsas prep failed[%d]!\n", rc);
+
+#问题根因
+根据内核 DMA-API 规范，`dma_unmap_sg()` 函数的 nents 参数必须传入与 `dma_map_sg()` 调用时相同的 scatterlist 条目数（即原始 nents，代码中为 `task->num_scatter`），而非 `dma_map_sg()` 执行后返回的映射条目数。
+在故障代码中，驱动错误地将 `dma_map_sg()` 的返回值（存储在 `n_elem` 或 `slot->n_elem` 中）传递给了 `dma_unmap_sg()`，这违反了 DMA-API 的调用契约。
+
+#解决方案
+修正 `dma_unmap_sg()` 的调用参数，将 nents 参数从映射后的返回值（`n_elem` / `slot->n_elem`）修改为原始传入的 scatterlist 条目数（`task->num_scatter`），确保 DMA 映射与解映射的参数一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/958c918cc7f807bb22e4090fa3db90e913813354

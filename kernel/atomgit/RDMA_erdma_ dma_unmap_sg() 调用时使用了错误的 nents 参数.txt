@@ -1,0 +1,21 @@
+#标题
+RDMA/erdma: dma_unmap_sg() 调用时使用了错误的 nents 参数
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载或销毁 RDMA erdma 设备的 MTT（Memory Translation Table）缓冲区时，由于 `dma_unmap_sg()` 函数传入的散列表入口数（nents）参数错误，可能导致 DMA 映射释放不完整或内存管理子系统状态异常。该问题违背了 DMA API 的使用规范，可能引发难以复现的内存损坏或设备行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，`dma_unmap_sg()` 函数应当使用与 `dma_map_sg()` 相同的 nents 参数值进行调用，而不是使用 map 函数返回的值。
+在 `erdma_destroy_mtt_buf_sg` 函数中，代码错误地使用了 `mtt->nsg`（即 `dma_map_sg` 的返回值）作为 unmap 的参数。正确的 nents 应当是原始传递给 map 函数的值，即通过 `DIV_ROUND_UP(mtt->size, PAGE_SIZE)` 计算得出的散列表入口数量。
+
+#解决方案
+修改 `drivers/infiniband/hw/erdma/erdma_verbs.c` 文件中的 `erdma_destroy_mtt_buf_sg` 函数。将 `dma_unmap_sg()` 的第三个参数从 `mtt->nsg` 修正为 `DIV_ROUND_UP(mtt->size, PAGE_SIZE)`，以确保 unmap 操作使用的 nents 与 map 操作时传入的原始数量一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/825976d567dac19a5a74ac71e6d25f9a9c4c11e3

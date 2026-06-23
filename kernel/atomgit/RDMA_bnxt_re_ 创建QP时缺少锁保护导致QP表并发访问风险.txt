@@ -1,0 +1,20 @@
+#标题
+RDMA/bnxt_re: 创建QP时缺少锁保护导致QP表并发访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发创建和销毁QP（Queue Pair）或处理硬件异步事件时，由于创建QP流程中未持有锁保护，可能导致QP表访问出现竞争条件，进而引发内核数据结构不一致或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+QP表的处理在销毁QP（destroy_qp）和硬件异步事件处理流程中已经通过 `tbl_lock` 进行了同步保护，但在创建QP（create_qp）流程中写入 `qp_tbl` 数组时未持有该锁。这导致了QP表访问在并发场景下存在竞争风险。
+
+#解决方案
+在 `bnxt_qplib_create_qp` 函数中，对 QP 表进行索引计算和赋值操作前增加 `spin_lock_bh` 锁获取，操作完成后释放锁，以此将创建QP流程与销毁及异步事件处理流程进行同步，确保 QP 表操作的原子性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/767b3ca662080dfe6c00c41faa9d3ea20a14c9e6

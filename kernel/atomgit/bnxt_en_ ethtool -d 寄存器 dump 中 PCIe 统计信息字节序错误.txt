@@ -1,0 +1,20 @@
+#标题
+bnxt_en: ethtool -d 寄存器 dump 中 PCIe 统计信息字节序错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `ethtool -d` 命令获取网卡寄存器 dump 时，对于包含 PCIe 统计信息的 version 1 寄存器转储，其中的 32 位数值（如 `pcie_ltssm_histogram`）显示的字节序不正确。现有代码错误地将所有 PCIe 统计信息视为 64 位值进行处理，导致 32 位字段的数据解析错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bnxt_get_regs()` 函数中，处理 PCIe 统计信息时，代码错误地假设所有数据均为 64 位（`__le64`），并统一使用 `le64_to_cpu` 进行字节序转换。然而，硬件结构体 `pcie_ctx_hw_stats` 中包含 32 位的统计成员（如 `pcie_ltssm_histogram` 数组），将其作为 64 位处理导致了字节序解析错误。
+
+#解决方案
+修改 `bnxt_get_regs()` 函数逻辑，引入一个数组 `bnxt_pcie_32b_entries` 来明确定义 32 位字段的起始和结束偏移量。在数据拷贝循环中，检查当前偏移量是否落在 32 位字段范围内：若是，则使用 `le32_to_cpu` 进行转换并递增 4 字节；否则继续使用 `le64_to_cpu` 处理 64 位字段并递增 8 字节，从而确保不同位宽的字段都能正确进行字节序交换。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5daafc4c3091c51438a9f6d0eb5933105cc43290

@@ -1,0 +1,25 @@
+#标题
+bpf: Fix compare error in function retval_range_within
+
+#内核版本
+OLK-6.6
+
+#问题现象
+BPF LSM 程序加载失败，运行测试用例 `test_progs -t test_lsm` 报错。验证器（verifier）在检查程序退出时的返回值寄存器 R0 时发生误判，错误地拒绝了合法的返回值（如 -1），导致程序无法加载。
+
+#主要错误日志
+libbpf: prog 'test_int_hook': BPF program load failed: Invalid argument
+libbpf: prog 'test_int_hook': -- BEGIN PROG LOAD LOG --
+...
+At program exit the register R0 has smin=4294967295 smax=4294967295 should have been in [-4095, 0]
+
+#问题根因
+在内核 BPF 验证器中，函数 `retval_range_within` 对返回值范围进行比较时，默认使用 64 位有符号值（smin_value/smax_value）进行比较。
+当 BPF LSM 程序返回 -1（32 位）时，指令 "w0 = -1" 会将 -1 零扩展为 64 位，导致寄存器 R0 的值变为 4294967295（即 0xffffffff）。验证器使用 64 位范围进行比较时，判断 4294967295 不在预期范围 [-4095, 0] 内，从而触发错误的拒绝。实际上 BPF LSM 仅返回 32 位值，应使用 32 位有符号范围（s32_min_value/s32_max_value）进行比较。
+
+#解决方案
+修改 `retval_range_within` 函数，增加一个 `return_32bit` 参数用于区分返回值类型。
+针对 BPF LSM 程序，将该参数置为 true，强制使用寄存器的 32 位有符号范围（s32_min_value/s32_max_value）进行比对；而对于返回 64 位值的回调函数，仍保持原有的 64 位比对逻辑。这修复了因零扩展导致的返回值范围校验错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/628d938dbbb845829e093f292503b4ddb263b309

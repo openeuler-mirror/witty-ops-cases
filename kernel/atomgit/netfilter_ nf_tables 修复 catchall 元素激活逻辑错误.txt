@@ -1,0 +1,25 @@
+#标题
+netfilter: nf_tables 修复 catchall 元素激活逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 netfilter 的 nftables set catchall 元素时，由于条件判断逻辑相反，导致处于活跃状态的元素被错误跳过，未能正确执行激活操作，可能引发 nftables 规则集状态不一致或相关网络功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `nft_map_catchall_activate` 中，遍历 `set->catchall_list` 时，代码原本逻辑为：
+```c
+if (!nft_set_elem_active(ext, genmask))
+    continue;
+```
+该逻辑导致仅当元素**不活跃**时才跳过，而继续执行后续激活代码的是**活跃**元素。这与预期的“跳过不活跃元素，仅激活活跃元素”逻辑完全相反，属于典型的布尔逻辑取反错误。
+
+#解决方案
+修正条件判断逻辑，将 `if (!nft_set_elem_active(ext, genmask))` 修改为 `if (nft_set_elem_active(ext, genmask))`。修改后，处于活跃状态的元素将直接跳过（continue），仅对符合条件的元素执行 `nft_clear` 操作，从而正确处理 catchall 元素的激活流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/45c2738d5a44e415f2e11228e9fd12e404ae563f

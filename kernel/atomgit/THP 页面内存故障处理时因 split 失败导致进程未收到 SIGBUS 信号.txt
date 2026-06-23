@@ -1,0 +1,25 @@
+#标题
+THP 页面内存故障处理时因 split 失败导致进程未收到 SIGBUS 信号
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统处理透明大页（THP）的硬件中毒故障时，若该页面被 RDMA 钉住导致 `try_to_split_thp_page` 分裂失败，内核原有逻辑仅标记忽略（MF_IGNORED），未向用户态进程发送 SIGBUS 信号。这导致用户进程无法感知内存错误，错失进行应用级故障恢复的机会，且内核未正确释放页面引用计数。
+
+#主要错误日志
+soft offline: %#lx: thp split failed（推断，基于 diff 中 soft_offline_in_use_page 的日志）
+
+#问题根因
+在处理 THP 页面的 hwpoison 故障时，如果 `try_to_split_thp_page()` 失败（例如页面被 RDMA pinned），内核直接跳过了后续处理流程，没有调用 `kill_procs` 相关逻辑向用户进程发送 SIGBUS 信号，同时也未正确处理页面的引用计数，导致故障处理流程不完整。
+
+#解决方案
+修改 `try_to_split_thp_page` 函数接口，增加 `release` 参数控制失败时是否释放页面引用。
+在 `memory_failure` 处理流程中，当 THP 分裂失败时：
+1. 不再直接忽略，而是返回 `-EHWPOISON` 错误码。
+2. 新增并调用 `kill_procs_now` 函数，收集关联进程并发送携带有效负载的 SIGBUS 信号，赋予用户态应用恢复机会。
+3. 显式调用 `put_page` 释放页面引用。
+4. 将结果状态更新为 `MF_FAILED` 而非 `MF_IGNORED`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1d730e198a5a84624e28819ec7eff455a6fdd7e

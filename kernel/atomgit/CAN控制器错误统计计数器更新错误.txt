@@ -1,0 +1,29 @@
+#标题
+CAN控制器错误统计计数器更新错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Bosch M_CAN 控制器时，当 CAN 总线发生发送过程中的错误（如位错误 bit error 或应答错误 acknowledgment error）时，系统错误地将该错误统计到接收错误计数器（rx_errors）中，导致网络设备的接收/发送错误统计数据不准确，无法正确反映链路的实际通信状况。
+
+#主要错误日志
+[硬件调试日志，由 netdev_dbg 输出]
+"stuff error\n"
+"form error\n"
+"ack error\n"
+"bit1 error\n"
+"bit0 error\n"
+"CRC error\n"
+
+#问题根因
+函数 `m_can_handle_lec_err()` 在处理 CAN 总线的最后错误代码（LEC）时逻辑存在缺陷。原代码无论错误类型如何，均固定执行 `stats->rx_errors++` 操作。这导致在发生发送端的错误（如 LEC_ACK_ERROR 和 LEC_BIT1/0_ERROR）时，错误地增加了接收错误计数，而未增加发送错误计数（tx_errors）。
+
+#解决方案
+根据 LEC 错误类型修正错误计数器的更新逻辑：
+1. 对于接收相关的错误（如填充错误、格式错误、CRC 错误），增加 `stats->rx_errors`。
+2. 对于发送相关的错误（如应答错误、位错误），增加 `stats->tx_errors`。
+同时调整了 `alloc_can_err_skb` 的错误处理逻辑，确保在 skb 分配失败时仍能正确更新统计计数器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/71de8202868ae7b16c52aa8782f5b0e29d163102

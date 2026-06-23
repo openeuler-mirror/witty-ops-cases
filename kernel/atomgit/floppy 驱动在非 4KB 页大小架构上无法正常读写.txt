@@ -1,0 +1,23 @@
+#标题
+floppy 驱动在非 4KB 页大小架构上无法正常读写
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PAGE_SIZE 不等于 4KB 的架构（如 sparc64）上访问软盘设备失败。
+执行磁盘检测命令（如 `disktype /dev/fd0`）时返回 "No such device or address" 错误，内核日志报告尝试访问设备末尾之外的区域。
+
+#主要错误日志
+[  525.341906] disktype: attempt to access beyond end of device
+fd0: rw=0, sector=0, nr_sectors = 16 limit=8
+[  525.341991] floppy: error 10 while reading block 0
+
+#问题根因
+floppy 驱动代码中 `MAX_DISK_SIZE` 宏被硬编码为 4（即 4KB）。在 `__floppy_read_block_0` 函数执行首次测试读取以确定磁盘大小时，会尝试读取一整页数据。当系统 PAGE_SIZE 大于 4KB（如 sparc64 上为 8KB）时，该硬编码值导致请求的扇区数超过了驱动设定的限制，从而触发 "access beyond end of device" 错误，导致设备无法正常识别和读写。
+
+#解决方案
+将 `MAX_DISK_SIZE` 的定义从硬编码的 4 修改为 `(PAGE_SIZE / 1024)`，使其能根据内核实际的页大小动态计算最小磁盘大小，确保读写请求不超出限制范围。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6512f81fb34923c0ac3bb787c06cc12c5a43f6da

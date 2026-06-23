@@ -1,0 +1,23 @@
+#标题
+btrfs: 日志回放期间 inode 查找错误处理缺陷导致文件系统不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Btrfs 文件系统进行日志回放时，若获取 inode 失败（如发生内存不足等非 IO 错误），系统可能错误地将错误码统一转换为 -EIO，导致报错信息不准确。更严重的是，在 `replay_dir_deletes` 场景下，如果因为非 -ENOENT 错误（如 -ENOMEM）导致查找 inode 失败，系统会错误地假定该 inode 不存在并继续执行，这可能导致日志回放后续阶段失败，或者在回放“成功”后留下文件系统不一致的状态。
+
+#主要错误日志
+未知
+
+#问题根因
+`read_one_inode()` 函数作为 `btrfs_iget_logging()` 的封装，在底层函数返回错误指针（如 ERR_PTR(-ENOMEM)、ERR_PTR(-ENOENT) 等）时，统一返回了 NULL，导致具体的错误信息丢失。
+调用者因此产生两个问题：
+1. 许多调用者将 NULL 简单转换为 -EIO，掩盖了真实的错误原因（如内存不足）。
+2. `replay_dir_deletes()` 函数错误地将 NULL 返回值一律视为“inode 不存在”，忽略了其他可能的错误情况，导致逻辑错误和潜在的不一致性。
+
+#解决方案
+移除 `read_one_inode()` 包装函数，直接调用 `btrfs_iget_logging()` 并使用 `IS_ERR()` 和 `PTR_ERR()` 进行正确的错误处理，确保原始错误码能准确向上传递。同时，在 `btrfs_iget_logging()` 中增加断言，确保该函数仅用于子卷根而不是日志根。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e6320c6f998d74617a7d71eb630557b2265675c4

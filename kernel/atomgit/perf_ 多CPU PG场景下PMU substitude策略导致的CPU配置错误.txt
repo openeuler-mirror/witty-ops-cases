@@ -1,0 +1,23 @@
+#标题
+perf: 多CPU PG场景下PMU substitude策略导致的CPU配置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多CPU PG（Power Gating）场景下，当进行PMU事件采集时，若作为替代的CPU不存在，原有的 LAST_UP 替代策略处理不当，导致内核尝试访问不存在的CPU或配置错误的CPU ID，可能引发 PMU 功能异常或数据统计错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在多CPU PG场景下，原有的 `hisi_l3c_do_last_up` 替代策略未考虑到作为替代目标的 CPU 可能处于缺失状态。代码逻辑中，当指定的替代 CPU 不存在时，没有跳过该 CPU 寻找下一个可用的替代者，而是错误地继续使用该缺失的 CPU ID，导致配置逻辑越界或失效。
+
+#解决方案
+修改了 `hisi_l3c_pmu` 驱动的 CPU 替代策略逻辑：
+1. 新增 `ROLL_OVER` 策略，在 CPU 缺失时跳过并传递给下一个在位的 CPU。
+2. 优化 `hisi_l3c_do_last_up` 函数，增加对缺失 CPU 的检查循环。当替代 CPU 不存在时（`!(cpu_mask & BIT(...))`），递减索引跳过该 CPU，确保仅将事件映射到在位的 CPU 上。
+3. 修正了 SMT 计算逻辑，引入 `cpu_smt_possible()` 动态判断 SMT 线程数，并区分 `SMT_PER_CORE` 与 `PORT_PER_CORE`，修复了 `hisi_l3c_pmu_cluster_cpu_substitute` 中的 CPU 编号计算错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5cbe4cfb2878e3f9d8fbc5b3ac4d081526366f77

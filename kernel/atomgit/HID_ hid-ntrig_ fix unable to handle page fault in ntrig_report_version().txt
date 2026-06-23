@@ -1,0 +1,20 @@
+#标题
+HID: hid-ntrig: fix unable to handle page fault in ntrig_report_version()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在调用 `ntrig_report_version()` 函数时触发缺页异常。具体表现为当通过 `/dev/uhid` 发送描述符导致 `hdev->dev.parent->parent` 为空时，`hid_to_usb_dev(hdev)` 返回一个无效地址（0xffffffffffffff58），随后 `usb_rcvctrlpipe()` 使用该无效指针时触发页面错误。
+
+#主要错误日志
+BUG: unable to handle page fault for address 0xffffffffffffff58
+
+#问题根因
+在 `ntrig_report_version()` 函数中，未对传入的 `hid_device` 结构体进行底层总线类型检查。当设备并非 USB 设备（如通过 `/dev/uhid` 创建的虚拟设备）时，其父指针层级可能为空，导致 `hid_to_usb_dev(hdev)` 宏解析出了无效的内存地址，进而引发空指针解引用或访问非法地址。
+
+#解决方案
+在调用 `hid_to_usb_dev()` 之前增加 `hid_is_usb(hdev)` 判断。如果设备不是 USB 设备，则直接返回，避免对非 USB 设备进行非法的 USB 设备指针转换和访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce07ed36f10497cae432c4d3be0079ec799dc51a

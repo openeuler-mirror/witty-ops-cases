@@ -1,0 +1,20 @@
+#标题
+mmc: sdhci-msm 修复 crypto key eviction 功能失效问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm 平台上使用 eMMC 内联加密（ICE）功能时，密钥驱逐（key eviction）逻辑未被执行。当尝试清除或禁用加密配置时，底层的 `qcom_ice_evict_key` 函数从未被调用，导致硬件密钥槽位可能无法正确释放或更新。
+
+#主要错误日志
+未知
+
+#问题根因
+在提交 c7eed31e235c ("mmc: sdhci-msm: Switch to the new ICE API") 中，`sdhci_msm_program_key` 函数内的逻辑判断有误。代码在检查算法 ID（`cap.algorithm_id`）之后才处理 key eviction，而 eviction 流程不需要算法 ID 检查。由于算法 ID 检查逻辑位于 key eviction 判断之前，导致 `qcom_ice_evict_key()` 永远无法被调用。
+
+#解决方案
+调整 `sdhci_msm_program_key` 函数的逻辑顺序。在函数入口处优先检查 `cfg->config_enable` 标志位：若未设置 `CQHCI_CRYPTO_CONFIGURATION_ENABLE`，直接调用 `qcom_ice_evict_key` 执行密钥驱逐并返回；若已设置，则继续进行后续的算法 ID 校验和密钥编程操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/009e34fbca3bb3411bb08d8c3ce34b8737656104

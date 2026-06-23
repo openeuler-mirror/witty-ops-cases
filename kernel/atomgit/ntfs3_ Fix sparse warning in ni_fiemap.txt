@@ -1,0 +1,20 @@
+#标题
+ntfs3: Fix sparse warning in ni_fiemap
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核编译时，在 `fs/ntfs3/frecord.c` 文件的 `ni_fiemap` 函数相关代码处触发 Sparse 静态分析工具的警告信息。该警告主要是由于代码中不恰当的地址空间转换操作引起的。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fiemap_fill_next_extent_k` 函数的实现中，原有代码直接将 `fieinfo->fi_extents_start`（这是一个标记为 `__user` 的指针）赋值给本地变量 `dest`，并进行 `memcpy` 操作。这种在内核地址空间直接解引用或操作 `__user` 指针的行为不符合内核地址空间安全规范，导致 Sparse 工具产生警告。
+
+#解决方案
+修改 `fiemap_fill_next_extent_k` 函数接口，新增一个 `struct fiemap_extent *fe_k` 参数用于传递内核缓冲区指针，移除函数内部对 `fieinfo->fi_extents_start` 的直接使用。同时，在调用侧 `ni_fiemap` 中，不再临时修改 `fieinfo->fi_extents_start` 指针，而是直接传递已分配的内核缓冲区 `fe_k`，确保类型和使用场景正确，从而消除 Sparse 警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac2c937498cb455b89c73f7ce7509952d4486594

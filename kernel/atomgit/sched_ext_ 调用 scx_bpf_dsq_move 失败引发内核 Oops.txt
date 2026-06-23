@@ -1,0 +1,20 @@
+#标题
+sched_ext: 调用 scx_bpf_dsq_move 失败引发内核 Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 BPF 程序在 `bpf_iter_scx_dsq_new()` 初始化失败后，仍然继续调用 `scx_bpf_dsq_move[_vtime]()` 函数时，内核会触发 Oops（空指针引用导致崩溃）。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `bpf_iter_scx_dsq_new()` 在失败时会将 `kit->dsq` 清空（置为 NULL）。虽然 `bpf_iter_scx_dsq_{next,destroy}()` 针对此情况做了防护检查，但 `scx_dsq_move()` 函数未做检查而是直接解引用 `kit->dsq`。由于 BPF 验证器认为迭代器在任何 `KF_ITER_NEW` 返回时都已初始化，允许程序执行流到达此处，从而导致对 NULL 指针的非法访问。
+
+#解决方案
+在 `scx_dsq_move()` 函数入口处增加对 `src_dsq`（即 `kit->dsq`）的空指针检查。如果指针为 NULL，函数直接返回 false，避免非法解引用，从而防止内核 Oops。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/230a9bbd4c86d0769c97108de4555abe02d1c74b

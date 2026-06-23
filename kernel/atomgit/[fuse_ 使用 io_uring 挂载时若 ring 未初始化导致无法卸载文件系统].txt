@@ -1,0 +1,20 @@
+#标题
+[fuse: 使用 io_uring 挂载时若 ring 未初始化导致无法卸载文件系统]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[当使用 io_uring 方式挂载用户态文件系统时，若服务端未能完成 ring 初始化（例如设置队列深度为 0），且已有请求在排队等待，此时尝试强制卸载（force unmount）文件系统会失败，系统无法正常完成卸载操作，表现为卸载流程卡死或无法终止等待中的请求。]
+
+#主要错误日志
+[未知]
+
+#问题根因
+[在 fuse_abort_conn() 函数试图唤醒所有在 fc->blocked_waitq 等待的任务时，fuse_block_alloc() 会检查 io_uring 是否就绪。由于 ring 未初始化，fuse_uring_ready() 始终返回 false。原代码逻辑在 fc->connected 仍为真的情况下直接返回阻塞状态，导致唤醒条件永远无法满足，从而引发死锁，使得文件系统无法卸载。]
+
+#解决方案
+[修改 fs/fuse/dev.c 中的 fuse_block_alloc() 函数逻辑，在检查 fuse_uring_ready() 之前增加对 fc->connected 状态的判断。如果连接已断开，则不再要求 io_uring 处于就绪状态，从而打破死锁，允许卸载流程继续执行。]
+
+#来源
+[https://atomgit.com/openeuler/kernel/commit/9a7cd4fa9b880e0886a9848e565228586ea607dc]

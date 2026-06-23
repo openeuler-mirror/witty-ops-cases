@@ -1,0 +1,20 @@
+#标题
+wifi: ath12k: 解绑时 kfree 内存释放后指针未置空导致潜在 UAF 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载或解绑 ath12k 无线驱动过程中，内核可能检测到 slab 对象非法访问或产生内存泄露相关的警告。该问题源于内存释放后指针未清零，若后续流程错误引用该指针，将导致系统崩溃或不可预测的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ath12k_dp_free` 函数中，循环调用 `kfree(dp->tx_ring[i].tx_status)` 释放内存后，未将对应的指针 `dp->tx_ring[i].tx_status` 置为 NULL。这导致该指针变为悬垂指针，在后续的错误处理路径或重入流程中，若再次访问或操作该指针，将引发 Use-After-Free 风险。
+
+#解决方案
+在 `kfree(dp->tx_ring[i].tx_status)` 操作后立即将指针置为 NULL，防止悬垂指针的产生。具体修改为在循环体内增加 `dp->tx_ring[i].tx_status = NULL;` 赋值语句。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/686e5e535a0f0f1c6b4de83399506315aa34a042

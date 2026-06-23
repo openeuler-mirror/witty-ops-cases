@@ -1,0 +1,20 @@
+#标题
+cifs: SMB1 Session Setup NTLMSSP 请求在非 UNICODE 模式下编码错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 `-o nounicode` 挂载选项配合 `-o sec=ntlmssp` 选项（默认 sec 设置）挂载 SMB1 服务器时，无法成功建立 SMB1 会话，导致挂载失败。同时，内核日志中可能会打印 NTLMSSP 需要 Unicode 支持的错误提示。
+
+#主要错误日志
+- cifs_dbg(VFS, "NTLMSSP requires Unicode support\n");
+
+#问题根因
+在 `sess.c` 文件的 `_sess_auth_rawntlmssp_assemble_req` 函数中，代码逻辑错误地判断 NTLMSSP 认证必须要求 Unicode 支持。当用户指定非 UNICODE 模式（nounicode）时，代码直接返回 `-ENOSYS` 错误并终止流程，未正确处理 ASCII 字符串编码路径。实际上，SMB1 Session Setup NTLMSSP 请求在非 UNICODE 模式下应使用 ASCII 编码而非 UTF-16 编码，两者逻辑相似但编码方式不同。
+
+#解决方案
+移除 NTLMSSP 必须要求 Unicode 的错误检查逻辑。修改代码逻辑，根据 `SMBFLG2_UNICODE` 标志位判断字符串编码方式：若为 UNICODE 模式，则进行字对齐并调用 `unicode_oslm_strings`；若为非 UNICODE 模式，则直接调用 `ascii_oslm_strings` 进行 ASCII 编码。此修复允许在非 UNICODE 模式下正常使用 NTLMSSP 认证与 Windows SMB 服务器建立连接。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4516ebcc5355b4f6f8868af58e84c60b36bfc664

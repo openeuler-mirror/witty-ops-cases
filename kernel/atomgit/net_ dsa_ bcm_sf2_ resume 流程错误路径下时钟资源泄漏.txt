@@ -1,0 +1,24 @@
+#标题
+net: dsa: bcm_sf2: resume 流程错误路径下时钟资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统恢复（resume）流程中，若 `bcm_sf2_sw_rst` 或 `bcm_sf2_cfp_resume` 函数执行失败，驱动未能正确释放此前已通过 `clk_prepare_enable` 使能的时钟资源，导致时钟资源泄漏（reference leak）。
+
+#主要错误日志
+- `pr_err("%s: failed to software reset switch\n", __func__);`
+
+#问题根因
+静态代码分析工具 Smatch 报警显示：在 `bcm_sf2_sw_resume` 函数中，代码在第 983 行和第 990 行的错误返回路径上，未调用 `clk_disable_unprepare` 来释放第 976 行 `clk_prepare_enable` 获取的时钟资源。具体场景为：
+1. 当 `bcm_sf2_sw_rst` 失败时，直接返回错误，未释放时钟。
+2. 当 `bcm_sf2_cfp_resume` 失败时，直接返回错误，未释放时钟。
+
+#解决方案
+在 `bcm_sf2_sw_rst` 和 `bcm_sf2_cfp_resume` 的失败处理分支中（error paths），增加对 `priv->clk` 的检查与释放操作。具体修改为：
+1. 在 `bcm_sf2_sw_rst` 失败的 if 块中，判断若非 Wake-on-LAN 状态（`!priv->wol_ports_mask`），则调用 `clk_disable_unprepare(priv->clk)` 后再返回。
+2. 在 `bcm_sf2_cfp_resume` 失败的 if 块中，同样增加上述时钟释放逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5dc14c433e26535598f683831bed871df5a40be8

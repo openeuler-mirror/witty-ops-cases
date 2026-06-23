@@ -1,0 +1,25 @@
+#标题
+kallsyms 读取 procfs 时错误解析“大”内核符号类型
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核符号名称长度超过 0x7f（127）个字符时，通过 /proc/kallsyms 查看到的符号类型错误。例如，一个在 vmlinux 中类型为 't'（静态文本段符号）的符号，在 /proc/kallsyms 中显示为 'g'。
+
+复现步骤如下：
+1. 定义一个符号名称长度为 130 字符的函数。
+2. 使用 nm 工具查看 vmlinux，确认符号类型为 't'。
+3. 启动内核后，查看 /proc/kallsyms，发现该符号类型显示为 'g'。
+
+#主要错误日志
+未知
+
+#问题根因
+在提交 73bbb94466fd ("kallsyms: support "big" kernel symbols") 之后，ULEB128 被用于编码符号名称长度。对于名称长度超过 0x7f 字符的“大”内核符号，其长度信息被编码为 2 字节。函数 `kallsyms_get_symbol_type()` 在读取符号类型时，未处理这种 2 字节长度编码的情况，导致读取位置偏移错误，将长度信息的第二个字节误判为符号类型。
+
+#解决方案
+修改 `kernel/kallsyms.c` 中的 `kallsyms_get_symbol_type` 函数，在读取符号类型前检查长度的最高位（MSB）。如果长度字节的 MSB 为 1，表示这是一个“大”符号，长度字段占用两个字节，因此需要将读取位置的偏移量加 1，以确保正确跳过长度编码，读取到真正的符号类型字符。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d7001f38b50f664e46a6cd14af7f814dc408eae8

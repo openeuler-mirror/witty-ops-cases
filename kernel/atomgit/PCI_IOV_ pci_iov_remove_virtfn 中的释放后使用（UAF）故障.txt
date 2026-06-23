@@ -1,0 +1,21 @@
+#标题
+PCI/IOV: pci_iov_remove_virtfn 中的释放后使用（UAF）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 SR-IOV 虚拟功能设备时，触发内核崩溃或内存访问错误。具体表现为在 `pci_iov_remove_virtfn` 函数中，调用 `pci_dev_put(virtfn)` 释放设备结构体后，代码逻辑仍试图访问该已释放的内存区域以获取设备 ID，导致 Use-After-Free（UAF）现象。
+
+#主要错误日志
+未知
+
+#问题根因
+commit c5161d7e11a7 ("virtCCA supports SR-IOV in CoDA scenarios") 引入的代码逻辑错误。在 `pci_iov_remove_virtfn` 函数中，先调用了 `pci_dev_put(virtfn)`，该函数可能在引用计数归零时通过 `kfree(pci_dev)` 释放 `virtfn` 指针指向的内存。随后代码调用 `pci_dev_id(virtfn)` 访问 `virtfn->bus->number` 和 `virtfn->devfn`，此时访问的是已释放的内存，从而触发释放后使用漏洞。
+
+#解决方案
+在释放 `virtfn` 设备对象之前，预先保存其设备 ID。
+具体修改为：在调用 `pci_dev_put(virtfn)` 之前，通过 `virtfn_devid = pci_dev_id(virtfn)` 保存设备 ID 到局部变量，后续判断和销毁逻辑直接使用该保存的 ID 值 `virtfn_devid`，避免在释放后访问 `virtfn` 结构体。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b06f0e9522eb1e10f033200bf0232b53e52f2726

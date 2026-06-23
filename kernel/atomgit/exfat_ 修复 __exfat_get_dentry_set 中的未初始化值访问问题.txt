@@ -1,0 +1,20 @@
+#标题
+exfat: 修复 __exfat_get_dentry_set 中的未初始化值访问问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 exfat 文件系统的流大小为 4096 且 start_clu 为 EOF cluster（无效值）时，内核会访问未初始化的值。这通常会导致内核寻址错误或不可预测的行为，可能触发 KASAN 或 syzbot 报告的未初始化内存使用警告。
+
+#主要错误日志
+未知
+
+#问题根因
+代码未对无效的流大小和 start_clu 进行充分检查。当 start_clu 为 EOF cluster 且流大小为 4096 时，ei->hint_femp.eidx 可能被设为 128（假设簇大小为 4K）。错误的 hint 值导致分配了下一个簇，而该簇恰好与 exfat_extend_valid_size() 分配的簇相同，进而引发未初始化值访问。
+
+#解决方案
+在 `fs/exfat/namei.c` 的 `exfat_find_empty_entry` 函数中，当检测到 `ei->start_clu == EXFAT_EOF_CLUSTER` 时，显式将 `hint_femp.eidx` 初始化为 0，以确保 hint 值有效，避免使用未初始化的索引值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2941b8b22203753a5e8be508e11737a39dad2ced

@@ -1,0 +1,23 @@
+#标题
+can: mcp251xfd: TEF FIFO 满状态判断错误导致驱动停止工作
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 MCP251xFD CAN 控制器的发送事件 FIFO（TEF）处于满状态时，驱动程序对 TEF 长度的计算逻辑存在错误判断，直接导致驱动程序停止工作，无法继续处理发送任务。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `mcp251xfd_get_tef_len()` 中，对 TEF 是否已满的检查逻辑不正确。
+原代码通过检查 `!(fifo_sta & MCP251XFD_REG_FIFOSTA_TFNRFNIF)`（即 TX FIFO 非满/非空标志的取反）来判断 TEF 满，这不符合芯片实际状态定义。TEF 本身没有头指针，驱动借用 TX FIFO 的尾指针，当 TX FIFO 为空且无空闲 TX 缓冲区时，意味着所有帧已发送完毕，TEF 应为满状态，但原有逻辑未能正确识别这一状态。
+
+#解决方案
+修改 `mcp251xfd_get_tef_len()` 中的判断逻辑：
+1. 将辅助函数 `mcp251xfd_tx_fifo_sta_full()` 重命名并修正为 `mcp251xfd_tx_fifo_sta_empty()`，使用正确的寄存器位 `MCP251XFD_REG_FIFOSTA_TFERFFIF` 来判断 TX FIFO 是否为空。
+2. 修正 TEF 满状态的判断条件：当且仅当 TX FIFO 状态显示为空（`mcp251xfd_tx_fifo_sta_empty(fifo_sta)` 为真）且驱动视角下无空闲 TX 缓冲区（`mcp251xfd_get_tx_free(tx_ring) == 0`）时，才判定所有消息已发送、TEF 处于满状态，并将长度设置为 `tx_ring->obj_num`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2b7dd920521a74e0a54dde612ca7ef6adedabd7d

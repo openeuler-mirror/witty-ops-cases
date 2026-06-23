@@ -1,0 +1,37 @@
+#标题
+f2fs挂载卸载流程中因IO计数错误导致内核挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用f2fs文件系统且开启加密与压缩特性时，执行umount操作会导致内核挂起。具体表现为：
+1. 进程处于不可中断睡眠状态，调用栈显示卡在 `f2fs_wait_on_all_pages` 函数。
+2. 检查 `/sys/kernel/debug/f2fs/status` 发现 CP IOs 引用计数变为负数（-256）。
+3. 触发条件包括：文件系统配置了 encrypt、quota、checkpoint_merge、atgc 等特性，并执行 LTP 测试（如 f2fs/007）或卸载操作。
+
+#主要错误日志
+cat /proc/<umount_proc_id>/stack
+f2fs_wait_on_all_pages+0xa3/0x130
+do_checkpoint+0x40c/0x5d0
+f2fs_write_checkpoint+0x258/0x550
+kill_f2fs_super+0x14f/0x190
+deactivate_locked_super+0x30/0xb0
+cleanup_mnt+0xba/0x150
+...
+
+cat /sys/kernel/debug/f2fs/status
+- IO_W (CP: -256, Data:  256, Flush: (   0    0    1), Discard: (   0    0)) cmd:    0 undiscard:   0
+
+#问题根因
+在inode同时支持加密和压缩特性的场景下，数据页IO引用计数管理出现不一致：
+1. **提交端计数增加错误**：在 `f2fs_write_multi_page` 调用链中，对于加密且压缩的页面，`f2fs_submit_page_write` 调用 `WB_DATA_TYPE` 时，因 `bio_page` 是加密页且 `fio->compressed_page` 为NULL，错误地返回 `F2FS_WB_DATA` 类型，导致增加了 `F2FS_WB_DATA` 的引用计数。
+2. **完成端计数减少错误**：在 `f2fs_write_end_io` 调用链中，`f2fs_compress_write_end_io` 通过 `fscrypt_pagecache_folio` 获取原始页（raw page），由于该页带有 `gcing` 标志，`WB_DATA_TYPE` 返回 `F2FS_WB_CP_DATA`，导致减少了 `F2FS_WB_CP_DATA` 的引用计数。
+3. **计数不匹配**：提交时增加 `DATA` 计数，完成时减少 `CP_DATA` 计数，导致 `CP_DATA` 计数出现负数，进而导致 `f2fs_wait_on_all_pages` 无法等到计数归零而永久挂起。
+
+#解决方案
+修改 `f2fs_is_cp_guaranteed` 函数，正确识别 bounce page（加密跳转页）背后的原始页状态。
+在检测到页面是 fscrypt bounce page 时，不再直接返回 false，而是获取其关联的 pagecache 页并检查是否带有 `gcing` 标志。若带有该标志，则说明该页面需要进行 CP 数据保护，从而修正 `WB_DATA_TYPE` 的判断逻辑，保证 IO 计数类型在提交路径和完成路径上的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c496046489f111998529ce1921dfdfa28d44e5ac

@@ -1,0 +1,26 @@
+#标题
+wifi: cw1200: 修复 cw1200_bh_rx_helper 中的潜在内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CW1200 WLAN 驱动处理接收数据流程中，若 `wsm_release_tx_buffer` 返回错误（rc < 0），内核会触发 WARN_ON 警告并提前退出函数。此时，先前为接收数据分配的 `skb_rx` 内存未被释放，导致内存泄漏。
+
+#主要错误日志
+[内核日志推断] WARNING: CPU: X PID: X at drivers/net/wireless/st/cw1200/bh.c:xxx cw1200_bh_rx_helper+0xxxx/0xxxx
+
+#问题根因
+在 `cw1200_bh_rx_helper` 函数中，当 `wsm_release_tx_buffer` 返回值小于 0 时，代码逻辑直接返回错误码，但遗漏了对已分配的 `skb_rx` 进行释放操作，导致了内存泄漏。
+
+#解决方案
+在错误处理路径中增加 `dev_kfree_skb(skb_rx)` 调用，确保在返回错误码前释放 `skb_rx` 内存，修复代码逻辑如下：
+```c
+if (WARN_ON(rc < 0)) {
+    dev_kfree_skb(skb_rx);
+    return rc;
+}
+```
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/99e7ff808fe5564972cc5a8d0fca6a28fd369f40

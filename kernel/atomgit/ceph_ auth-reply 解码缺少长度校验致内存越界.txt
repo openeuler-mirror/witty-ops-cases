@@ -1,0 +1,20 @@
+#标题
+ceph: auth-reply 解码缺少长度校验致内存越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 Ceph 认证回复（auth reply）的过程中，若收到经过特殊构造的恶意数据包，由于解码逻辑缺少对 `payload_len` 和 `result_msg_len` 的边界检查，可能导致内核读取到数据缓冲区之外的内存，引发内核崩溃或造成信息泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `net/ceph/auth.c` 的 `ceph_handle_auth_reply` 函数中，解码 `payload_len` 和 `result_msg_len` 后，直接将其作为偏移量移动指针 `p`，未调用 `ceph_decode_need` 检查剩余缓冲区空间是否足够。若数据包中这两个长度字段被恶意构造为超过实际数据包长度的数值，将导致指针越界访问。
+
+#解决方案
+在移动解码指针之前，增加对 `payload_len` 和 `result_msg_len` 的边界检查。具体修复为：在解码出 `payload_len` 后增加 `ceph_decode_need(&p, end, payload_len, bad);`；在解码出 `result_msg_len` 后增加 `ceph_decode_need(&p, end, result_msg_len, bad);`，确保数据长度不超过缓冲区剩余空间，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/880e288c10a02494aefe04b84eeda694c9a9682f

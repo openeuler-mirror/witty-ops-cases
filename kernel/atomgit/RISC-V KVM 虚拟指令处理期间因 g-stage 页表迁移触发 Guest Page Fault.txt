@@ -1,0 +1,20 @@
+#标题
+RISC-V KVM 虚拟指令处理期间因 g-stage 页表迁移触发 Guest Page Fault
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V KVM 虚拟化环境中，当 HS 模式执行 HLV* 指令处理虚拟指令异常时，若在此期间发生 g-stage 页表迁移，可能触发非预期的 Guest Page Fault。该故障属于并发场景下的边界条件问题，可能导致虚拟机运行异常或陷入错误的异常处理路径。
+
+#主要错误日志
+未知
+
+#问题根因
+在触发虚拟指令异常到执行 HLV* 指令的时间窗口内，系统可能发生 g-stage 页表迁移。当执行 HLV* 指令时，由于页表状态已变更，导致发生 Guest Page Fault。原有的处理逻辑未正确识别并处理此类由 HLV* 指令触发的特定缺页异常，导致异常处理流程不正确。
+
+#解决方案
+在虚拟指令处理函数 `kvm_riscv_vcpu_virtual_insn`、`kvm_riscv_vcpu_mmio_load` 和 `kvm_riscv_vcpu_mmio_store` 中增加对 `EXC_LOAD_GUEST_PAGE_FAULT` 的判断。如果检测到 HLV* 指令执行期间发生了该类缺页异常，直接返回 1 让 CPU 重新执行原 PC 处的指令。重新执行将自然触发常规的 g-stage 页表填充流程，从而正确处理该缺页异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/82f4ee70f900e714ac87252800cff37fcf9fd181

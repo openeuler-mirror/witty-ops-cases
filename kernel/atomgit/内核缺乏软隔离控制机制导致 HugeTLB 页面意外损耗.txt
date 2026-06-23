@@ -1,0 +1,23 @@
+#标题
+内核缺乏软隔离控制机制导致 HugeTLB 页面意外损耗
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配备大容量内存的服务器上，当发生可校正内存错误时，内核自动执行软隔离策略。对于 1G 大页，软隔离会将其拆分为 4K 页面，导致 HugeTLB 池容量减少。若用户态未感知此行为，后续调用 mmap 申请大页时会因大页不足而失败；对于透明大页，也会被拆分导致性能下降。此外，仅因可校正错误就丢弃整个 1G 大页代价过高。
+
+#主要错误日志
+- `pr_info_once("disabled by /proc/sys/vm/enable_soft_offline\n")`（推断：当禁用软隔离时的内核日志）
+- 用户态表现：`mmap` 申请大页失败，`MADV_SOFT_OFFLINE` 操作返回 `EOPNOTSUPP` 错误。
+
+#问题根因
+内核在处理可校正内存错误时（如 GHES 驱动检测到阈值超限、RAS 可校正错误收集器计数达到阈值），会自动执行软隔离操作，且用户态无法干预该策略。这种"默默"执行的行为导致用户态对大页资源的意外损耗和性能下降缺乏控制权。
+
+#解决方案
+新增 sysctl 接口 `/proc/sys/vm/enable_soft_offline` 用于控制软隔离行为。
+1. 新增内核参数 `enable_soft_offline`，默认值为 1，保持内核原有自动软隔离行为。
+2. 当该参数设置为 0 时，内核将拒绝执行软隔离操作（如 `MADV_SOFT_OFFLINE`），并返回 `-EOPNOTSUPP`，从而将软隔离决策权交还给用户态程序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e41123cb4bc2afe6dd74c01cff5470ac49ebd352

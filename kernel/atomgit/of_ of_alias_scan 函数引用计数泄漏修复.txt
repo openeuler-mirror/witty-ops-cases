@@ -1,0 +1,20 @@
+#标题
+of: of_alias_scan 函数引用计数泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核执行设备树别名扫描（of_alias_scan）时，若遇到别名 ID 解析失败（kstrtoint 错误）或内存分配失败（dt_alloc 错误）的情况，内核将继续处理下一个别名节点，但未能释放当前节点对象的引用计数。这会导致设备节点（device_node）的引用计数泄漏，可能阻碍相关设备节点的正常释放与内存回收。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `of_find_node_by_path()` 返回的设备节点 `np` 其引用计数已增加。在 `of_alias_scan` 函数的错误处理路径中，当 `kstrtoint()` 执行失败或 `dt_alloc()` 分配失败时，代码直接执行 `continue` 进入下一次循环，遗漏了调用 `of_node_put(np)` 来减少引用计数的步骤，从而导致了引用计数的泄漏。
+
+#解决方案
+在 `of_alias_scan` 函数中，针对 `kstrtoint()` 失败和 `dt_alloc()` 失败的两个错误处理分支，在执行 `continue` 操作前显式调用 `of_node_put(np)`，确保正确释放设备节点的引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ada400b2e821cb04b0adb9a3c41886501665abf9

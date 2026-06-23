@@ -1,0 +1,32 @@
+#标题
+sched_ext: scx_bpf_cpuperf_set() 缺少 rq 锁导致内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `scx_bpf_cpuperf_set()` 函数设置 CPU 性能目标级别时，由于未正确持有运行队列锁，触发了 `lockdep_assert_rq_held()` 检查失败，导致内核抛出 WARNING 告警并打印调用栈。该问题可能在 BPF scheduler 初始化过程中触发。
+
+#主要错误日志
+[   51.713737] WARNING: CPU: 3 PID: 3899 at kernel/sched/sched.h:1512 scx_bpf_cpuperf_set+0x1a0/0x1e0
+...
+[   51.713836] Call trace:
+[   51.713837]  scx_bpf_cpuperf_set+0x1a0/0x1e0 (P)
+[   51.713839]  bpf_prog_62d35beb9301601f_bpfland_init+0x168/0x440
+[   51.713841]  bpf__sched_ext_ops_init+0x54/0x8c
+[   51.713843]  scx_ops_enable.constprop.0+0x2c0/0x10f0
+[   51.713845]  bpf_scx_reg+0x18/0x30
+[   51.713847]  bpf_struct_ops_link_create+0x154/0x1b0
+[   51.713849]  __sys_bpf+0x1934/0x22a0
+
+#问题根因
+`scx_bpf_cpuperf_set()` 函数在对指定 CPU 设置性能目标时，未正确获取对应的 `rq`（运行队列）锁。这违反了内核调度器内部的锁断言要求，导致 `lockdep_assert_rq_held()` 检查失败。
+
+#解决方案
+修复 `scx_bpf_cpuperf_set()` 的锁处理逻辑：
+1. 增加对当前已锁定 `rq` 的检查。
+2. 如果当前已持有某个 `rq` 锁，但目标 CPU 对应的 `rq` 与之不同，为避免 ABBA 死锁，直接报错返回。
+3. 如果当前未持有任何 `rq` 锁，则在操作前显式获取目标 CPU 的 `rq` 锁（`rq_lock_irqsave`），并在操作完成后释放锁。同时将原来的 `rcu_read_lock` 保护逻辑调整为在持有 `rq` 锁的情况下直接调用 `cpufreq_update_util`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3f02e07af9054047da9d12556bd37c8929ef3562

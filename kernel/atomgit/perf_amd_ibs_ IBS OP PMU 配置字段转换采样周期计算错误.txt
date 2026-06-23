@@ -1,0 +1,25 @@
+#标题
+perf/amd/ibs: IBS OP PMU 配置字段转换采样周期计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当通过 `perf_event_attr->config` 的 MaxCnt 位域格式直接设置 IBS（Instruction Based Sampling）事件采样周期时，内核对 IBS OP PMU 的 `sample_period` 计算错误。具体表现为，代码错误地将 MaxCnt 的高位部分（high bits）也进行了移位操作，导致计算出的采样周期值不符合硬件规范预期，进而导致采样功能行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+IBS OP MaxCnt 位域由低位（IbsOpCtl[15:0]）和高位（IbsOpCtl[26:20]）两部分组成，转换为 sample_period 的正确逻辑应为：`sample_period = (high bits) | ((low_bits) << 4)`。
+原有代码逻辑直接对掩码后的 MaxCnt 所有位进行左移 4 位操作（`max_cnt << 4`），这错误地将本应保持不变的高位部分（high bits）也进行了移位，导致计算出的采样周期数值错误。
+
+#解决方案
+修改 `arch/x86/events/amd/ibs.c` 中的 `perf_ibs_init` 函数，区分 IBS OP 和 IBS Fetch 两种场景。
+对于 IBS OP，分别处理低位和高位：
+1. 将低位部分（`config & IBS_OP_MAX_CNT`）左移 4 位。
+2. 将高位部分（`config & IBS_OP_MAX_CNT_EXT_MASK`）直接通过或运算合并，不进行移位。
+最后将计算出的正确 period 值赋给 `event->attr.sample_period` 和 `hwc->sample_period`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e301500eb25c3d80e2fafe04f525146b86b1c6a8

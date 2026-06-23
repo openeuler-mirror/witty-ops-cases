@@ -1,0 +1,24 @@
+#标题
+iommu/ummu: 修复潜在的有符号扩展问题并优化代码质量
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IOMMU UMMU 驱动处理命令队列构建时，移位操作可能因整型字面量的符号扩展问题引发未定义行为或计算错误；此外，在 PLB（Page Level Buffer）失效化流程中存在冗余的错误检查与警告打印。
+
+#主要错误日志
+pr_warn("failed to plbi by va!\n");
+
+#问题根因
+1. 在 `ummu_mcmdq_build_cmd` 函数中，`memset` 操作使用 `1 << MCMDQ_ENT_SZ_SHIFT` 进行移位，若 `MCMDQ_ENT_SZ_SHIFT` 较大或因符号扩展规则，可能导致整型溢出或未定义行为。
+2. 代码中存在魔法数字 `2`，缺乏语义解释，降低了代码可读性与可维护性。
+3. `ummu_invalidate_plb` 中对 `ummu_device_flush_plb` 的返回值进行了冗余检查，若失败会打印警告，但根据逻辑该错误无需在此处处理，增加了不必要的代码路径。
+
+#解决方案
+1. 将移位操作中的字面量 `1` 修改为无符号类型 `1U`（`1U << MCMDQ_ENT_SZ_SHIFT`），避免潜在的符号扩展问题。
+2. 定义宏常量 `CMD_TLBI_DOUBLE_NUM` 替换魔法数字 `2`，提升代码可读性。
+3. 移除 `ummu_invalidate_plb` 函数中对 `ummu_device_flush_plb` 返回值的冗余检查及相关的 `pr_warn` 打印，简化错误处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/43cb897ac2523e9df6a3cd68f9848a1a5f6a9254

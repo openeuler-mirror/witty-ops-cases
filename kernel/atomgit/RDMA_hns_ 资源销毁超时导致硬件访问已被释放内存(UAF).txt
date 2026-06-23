@@ -1,0 +1,24 @@
+#标题
+RDMA/hns: 资源销毁超时导致硬件访问已被释放内存(UAF)
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在销毁 RDMA 资源（如 CQ、QP、MR、SRQ）过程中，若 mbox 通信超时，硬件可能继续访问已释放的资源内存，引发 Use-After-Free (UAF) 故障，可能导致内核 panic 或数据损坏。
+
+#主要错误日志
+- DESTROY_CQ failed (%d) for CQN %06lx
+- failed to modify QP to RST, ret = %d.
+- failed to destroy QP, QPN = 0x%06lx, ret = %d.
+- failed to destroy mpt, ret = %d.
+- DESTROY_SRQ failed (%d) for SRQN %06lx
+
+#问题根因
+在销毁资源时，如果 mbox 请求超时（例如返回 -EBUSY 或其他错误），驱动程序此前仅在特定错误码（-EBUSY）下保留资源。对于其他失败情况，驱动仍会继续释放软件层面的资源结构。这导致硬件实际上仍持有该资源的引用并进行访问，但软件已将内存释放，从而引发 UAF。
+
+#解决方案
+修改资源销毁逻辑，只要销毁流程失败（不仅仅是 -EBUSY），立即设置 `delayed_destroy_flag` 标志位。这将使资源在驱动初始化结束前一直保留，防止硬件访问已释放的内存，从而修复 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/271aee7434270553ef65c41cfaf6ee3edbd85abf

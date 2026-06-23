@@ -1,0 +1,26 @@
+#标题
+net: txgbe: PCIe恢复与关闭/挂载流程中的竞态条件导致双重释放与空指针访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统进行 PCIe 恢复操作的同时执行 close 或 xdp_setup 时，触发竞态条件，导致 `txgbe_close()` 被重复调用。这会引发双重释放警告和 BUG。
+此外，在恢复过程中，若 `tx_ring->desc` 已被释放，`txgbe_tx_queue_clear_error_task` 访问该指针将导致 calltrace 异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **竞态导致重复释放**：在 PCIe 错误检测流程 (`txgbe_io_error_detected`) 中，`netif_device_detach` 与后续操作未受 `rtnl_lock` 充分保护，且未检查设备状态。当并发执行 recover 和 close/suspend 时，`txgbe_close()` 可能被错误地再次调用，导致中断资源被重复释放。
+2. **空指针访问**：在恢复流程中，`tx_ring->desc` 可能已被释放，但 `txgbe_tx_queue_clear_error_task` 服务任务未检查指针有效性直接访问，导致异常。
+
+#解决方案
+1. **扩展锁保护范围**：在 `__txgbe_shutdown` 和 `txgbe_io_error_detected` 中，扩展 `rtnl_lock()` 的锁定范围，确保 `netif_device_detach()` 与相关清理操作原子执行，避免竞态。
+2. **增加状态检查**：在 `txgbe_close()` 中增加 `netif_device_present()` 检查，若设备已分离则跳过中断清理流程，防止重复释放。
+3. **防御性编程**：在 `txgbe_tx_queue_clear_error_task` 中增加判断逻辑：
+   - 检查 `__TXGBE_DOWN` 状态，若已 Down 则直接返回；
+   - 访问 `tx_desc` 前检查其是否为 NULL，防止空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bbd117bb8505674cab4ed3e61eed53408b9c5201

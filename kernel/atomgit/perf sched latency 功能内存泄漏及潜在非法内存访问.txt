@@ -1,0 +1,22 @@
+#标题
+perf sched latency 功能内存泄漏及潜在非法内存访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `perf sched latency` 命令时，会发生内存泄漏（Memory Leaks），导致系统资源占用持续增加。此外，在合并任务原子数据（work atoms）时，代码逻辑上存在释放后使用（Use-After-Free）的风险，可能引发程序崩溃或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`work_atoms` 结构体及其内部链表节点在使用完毕后未被正确释放，导致内存泄漏。同时，在 `__merge_work_atoms` 函数中，使用 `list_splice` 合并链表后直接释放了 `data` 指针，但并未将链表所有权转移，导致后续可能访问到无效指针。
+
+#解决方案
+1. 新增 `free_work_atoms()` 函数，用于安全释放 `work_atoms` 结构体及其内部的 `work_list` 链表节点和线程引用。
+2. 修改 `__merge_work_atoms()` 函数，将 `list_splice()` 替换为 `list_splice_init()`，确保链表合并后源链表被正确初始化为空，防止后续访问无效指针。
+3. 在 `perf_sched__lat()` 函数执行结束或出错退出时，遍历红黑树 `sorted_atom_root` 并调用 `free_work_atoms()` 释放所有剩余资源，确保无内存残留。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4502536b2625ffb60de466ecaf2aff6f4d4925a3

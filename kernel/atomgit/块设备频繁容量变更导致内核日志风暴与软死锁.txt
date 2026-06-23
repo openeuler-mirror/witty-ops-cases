@@ -1,0 +1,20 @@
+#标题
+块设备频繁容量变更导致内核日志风暴与软死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行高压力 stress-ng loop stressor 测试时，loop 设备会在短时间内触发大量容量变更事件。每个事件均会打印内核信息，导致控制台日志被刷屏。在慢速控制台环境下，这种大量的打印操作会占用过多的 CPU 时间，进而引发软死锁。
+
+#主要错误日志
+%s: detected capacity change from %lld to %lld
+
+#问题根因
+函数 `set_capacity_and_notify()` 使用普通的 `pr_info()` 打印容量变更信息。在高压力场景下，该函数被频繁调用，导致内核日志疯狂输出。在慢速控制台串口输出场景下，控制台锁竞争及字符输出耗时过长，导致 CPU 长时间处于上下文切换或等待状态，最终触发 soft lockup。
+
+#解决方案
+将 `block/genhd.c` 中 `set_capacity_and_notify()` 函数内的 `pr_info()` 替换为 `pr_info_ratelimited()`。通过速率限制机制，防止频繁的容量变更事件淹没内核日志，同时避免了慢速控制台下的软死锁风险，且仍能保留偶尔的变更通知。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/088ea5f53259cd24ea4e7cbdb57def1f2075a134

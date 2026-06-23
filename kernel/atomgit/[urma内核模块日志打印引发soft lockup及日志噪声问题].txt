@@ -1,0 +1,27 @@
+#标题
+[urma内核模块日志打印引发soft lockup及日志噪声问题]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+在高负载场景下，内核日志缓冲区被大量冗余日志刷写，产生严重的日志噪声。部分高频调用的路径（如 EID 查找、拓扑信息获取）因大量执行 `printk` 操作，可能导致 CPU 资源耗尽，进而引发 soft lockup（软死锁），影响系统稳定性。同时，在 `uburma` 事件处理过程中，正常的 `-EAGAIN` 重试等待行为被错误地当作错误打印，产生了无意义的虚假错误日志。
+
+#主要错误日志
+- ubcore eid lookup path: `ubcore_log_err("Invalid eid "EID_FMT".\n", EID_ARGS(eid_info->eid));` (推断：修复前高频打印)
+- ubcore topo info path: `ubcore_log_warn("ubcore topo map doesn't exist.\n");` (推断：修复前高频打印)
+- ubcore topo info path: `ubcore_log_err("Failed to get primary eid array, ret: %d.\n", ret);` (推断：修复前高频打印)
+- uburma event path: `uburma_log_err("Failed to wait jfce event, ret: %d.\n", ret);` (当 ret 为 -EAGAIN 时打印)
+
+#问题根因
+1. **日志级别设置不当**：ubagg、ubcore 和 uburma 模块的默认日志级别设置为 `WARNING`，导致大量常规操作日志（INFO级别）无法输出或被错误地归类为警告，影响日志的可读性与过滤。
+2. **高频路径缺少限速**：在 EID 查找、拓扑信息设置、设备注册等高频或关键路径上，直接使用了普通的日志打印接口（如 `ubcore_log_err`、`ubcore_log_info`）。在高并发负载下，这些打印操作过于频繁，消耗大量 CPU 时间，可能导致 soft lockup。
+3. **误报错**：`uburma_jfce_wait` 函数中，`wait_event` 返回 `-EAGAIN` 是一种常见的重试机制，不属于真正的错误，但代码中未对此返回值进行过滤，导致日志中出现大量虚假错误记录。
+
+#解决方案
+1. **调整默认日志级别**：将 ubagg、ubcore、uburma 三个模块的默认日志级别从 `WARNING` 调整为 `NOTICE`，优化日志输出层级。
+2. **引入并应用限速日志**：新增 `ubcore_log_notice_rl` 等限速日志宏，将高频路径（如 EID 查找失败、拓扑信息不存在、设备注册成功等）的日志打印替换为限速版本，防止因大量 `printk` 导致 soft lockup。
+3. **过滤无效错误日志**：在 `uburma_event.c` 的 `uburma_jfce_wait` 中增加判断逻辑，当返回值为 `-EAGAIN` 时不打印错误日志，消除干扰信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aaf589677134e7e30ab671d342c1f1bdaf70ec94

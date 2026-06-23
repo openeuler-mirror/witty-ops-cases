@@ -1,0 +1,38 @@
+#标题
+ceph: 异步 unlink 导致 i_nlink 下溢触发内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启异步 unlink（async unlink）功能的情况下，当其他客户端删除同一文件或 unlink 操作在后台快速完成时，会导致 `i_nlink` 计数器发生下溢。此情况触发内核 WARNING 并打印调用栈，系统调用 `unlinkat` 执行路径中出现异常告警。
+
+#主要错误日志
+WARNING: CPU: 85 PID: 25093 at fs/inode.c:407 drop_nlink+0x50/0x68
+Modules linked in:
+CPU: 85 UID: 3221252029 PID: 25093 Comm: php-cgi8.1 Not tainted 6.14.11-cm4all1-ampere #655
+Hardware name: Supermicro ARS-110M-NR/R12SPD-A, BIOS 1.1b 10/17/2023
+pstate: 60400009 (nZCv daif +PAN -UAO -TCO -DIT -SSBS BTYPE=--)
+pc : drop_nlink+0x50/0x68
+lr : ceph_unlink+0x6c4/0x720
+...
+Call trace:
+ drop_nlink+0x50/0x68 (P)
+ vfs_unlink+0xb0/0x2e8
+ do_unlinkat+0x204/0x288
+ __arm64_sys_unlinkat+0x3c/0x80
+ invoke_syscall.constprop.0+0x54/0xe8
+ do_el0_svc+0xa4/0xc8
+ el0_svc+0x18/0x58
+ el0t_64_sync_handler+0x104/0x130
+ el0t_64_sync+0x154/0x158
+
+#问题根因
+在 Ceph 异步 unlink 流程中，`ceph_unlink()` 函数在向 MDS 提交 `CEPH_MDS_OP_UNLINK` 请求后，未等待完成就提前调用 `drop_nlink()` 减少链接计数，这是基于“假定 unlink 会成功”的设计。
+然而，该操作与后台工作线程处理 MDS 回复（`CEPH_MSG_CLIENT_REPLY`）或 Cap 授权（`CEPH_CAP_OP_IMPORT`/`GRANT`）存在竞争条件。如果在 `drop_nlink()` 执行前，工作线程已调用 `set_nlink()` 将 `i_nlink` 更新为 0（表示文件已被实际删除），随后主线程继续执行无保护的 `drop_nlink()` 将导致 `i_nlink` 变为负数，从而触发 `drop_nlink` 中的 WARNING 并导致下溢错误。
+
+#解决方案
+在 `ceph_unlink()` 中执行 `i_nlink` 减量操作时，引入 `i_ceph_lock` 自旋锁进行保护，防止与 `ceph_fill_inode()` 等处理流程发生竞争。同时，在减量前增加判断逻辑：仅当 `inode->i_nlink > 0` 时才执行 `drop_nlink()`，从而避免对已经为 0 的计数器进行减操作，防止下溢发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4058ad0e157af0eb0a55d5ddd1b5ba72ab14e6c7

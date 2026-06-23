@@ -1,0 +1,20 @@
+#标题
+sctp: listen 哈希失败导致 socket 状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `listen()` 系统调用时，若内核处理过程中 endpoint 哈希插入失败，socket 的状态将错误地保持为 LISTENING，但实际上该 socket 并未成功加入哈希表。这导致 socket 看起来处于监听状态，却无法接收连接请求，且后续操作可能引发状态不一致问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `sctp_listen_start()` 函数中，代码先调用 `inet_sk_set_state(sk, SCTP_SS_LISTENING)` 将 socket 状态设置为 LISTENING，随后调用 `sctp_hash_endpoint(ep)` 进行哈希插入。当 `sctp_hash_endpoint()` 执行失败时，函数直接返回错误码，但遗漏了将 socket 状态回滚至 CLOSED 的步骤。导致 socket 状态与实际哈希表中的存在情况不符。
+
+#解决方案
+修改 `sctp_listen_start()` 函数的错误处理路径。引入统一错误处理标签 `err`，当 `sctp_autobind`、`sctp_get_port` 或 `sctp_hash_endpoint` 任一步骤失败时，均跳转至该标签。在 `err` 标签处统一调用 `inet_sk_set_state(sk, SCTP_SS_CLOSED)` 将 socket 状态重置为 CLOSED，确保 socket 状态与实际注册情况一致后再返回错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6b362dd3d81be70d067602fee898521e54bd802b

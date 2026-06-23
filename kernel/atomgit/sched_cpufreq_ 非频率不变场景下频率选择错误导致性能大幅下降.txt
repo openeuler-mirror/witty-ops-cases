@@ -1,0 +1,21 @@
+#标题
+sched/cpufreq: 非频率不变场景下频率选择错误导致性能大幅下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在未启用频率不变性的系统（如 AMD Ryzen）上运行单线程工作负载时，出现约 50% 的性能回退。系统无法选择比当前频率更高的 OPP（Operating Performance Point），导致 CPU 在当前频率完全繁忙时仍然“卡”在较低频率，无法升频。
+
+#主要错误日志
+未知
+
+#问题根因
+在非频率不变场景下，`get_capacity_ref_freq()` 函数原先仅返回当前频率 `policy->cur`。
+由于 Commit 9c0b4bb7f630 的修改，性能边际被提前应用以考虑利用率钳制，导致无法获得高于最大计算能力的利用率。此时，如果参考频率仅返回当前频率，结合之前的逻辑限制，会导致无法选择比当前频率更高的 OPP，CPU 因此停滞在低频状态。
+
+#解决方案
+修改 `kernel/sched/cpufreq_schedutil.c` 中的 `get_capacity_ref_freq` 函数。在非频率不变场景下，对当前频率 `policy->cur` 应用 25% 的边际增量（即返回 `policy->cur + (policy->cur >> 2)`），确保在 CPU 达到当前频率满载之前，有机会选择更高的频率（OPP）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d2bc1b9b1e04acbeda846e591a93a7fe06f625f

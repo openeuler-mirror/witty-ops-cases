@@ -1,0 +1,20 @@
+#标题
+KVM nSVM 缺失 CS.L 与 CS.D 冲突的一致性检查
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 KVM 嵌套虚拟化（nSVM）场景下，当 L1 向 L2 传递的虚拟机状态不满足 AMD APM 规范的一致性要求时（具体为 EFER.LME、CR0.PG、CR4.PAE 均置位，但 CS.L 和 CS.D 同时置位的情况），KVM 未能在软件层面拦截该非法状态并抛出 VMEXIT_INVALID 错误。尽管硬件最终会拦截该无效 VMRUN 并向 L1 发送 SVM_EXIT_ERR，但 KVM 内核模块缺失了对 CS.L 和 CS.D 互斥属性的预检查。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 AMD APM Volume #2 第 15.5 节关于规范化和一致性检查的规定：当 EFER.LME、CR0.PG、CR4.PAE、CS.L 和 CS.D 均为非零时，硬件会触发 #VMEXIT (VMEXIT_INVALID)。内核代码在处理 EFER.LME 和 CR0.PG 置位情况下的检查逻辑中，遗漏了对 CS.L（长模式）和 CS.D（默认操作数大小）不能同时置位的校验，导致 KVM 软件模拟层面的一致性检查不完整。
+
+#解决方案
+在 `arch/x86/kvm/svm/nested.c` 文件的 `__nested_vmcb_check_save` 函数中，针对 EFER.LME 和 CR0.PG 置位的分支，新增对 CS 段属性的检查：确保 `SVM_SELECTOR_L_MASK`（CS.L）与 `SVM_SELECTOR_DB_MASK`（CS.D）未被同时置位。同时，在 `vmcb_save_area_cached` 结构体中增加对 `cs` 字段的缓存，以确保检查逻辑能够正确访问该字段，避免 TOC/TOU 竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/022893e51b021d361fb17ae533d550b4d3756f87

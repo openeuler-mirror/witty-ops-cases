@@ -1,0 +1,20 @@
+#标题
+cifs: 挂载时因 rsize 协商为 0 导致的空指针解引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载 CIFS/SMB 文件系统时，若协商出的读取大小（rsize）为 0，内核将发生空指针解引用，导致系统崩溃或异常。
+
+#主要错误日志
+Negotiated rsize is 0, get connect failed
+
+#问题根因
+在 `cifs_mount_get_tcon` 函数中，虽然存在对 `cifs_sb->ctx->rsize` 的初始赋值逻辑，但若 `server->ops->negotiate_rsize` 返回值为 0，则 `cifs_sb->ctx->rsize` 会保持为 0。后续代码直接使用该值为 0 的 rsize 进行操作，引发了空指针解引用。
+
+#解决方案
+在协商 rsize 后增加判断逻辑，检查 `cifs_sb->ctx->rsize` 是否为 0。如果为 0，则打印错误日志 "Negotiated rsize is 0, get connect failed" 并返回 `-EINVAL` 错误码，阻止挂载流程继续进行，从而避免后续的空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f2e8c7cc8e786d016925987aef3dd0d425b82ce

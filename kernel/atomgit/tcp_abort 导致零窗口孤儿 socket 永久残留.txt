@@ -1,0 +1,23 @@
+#标题
+tcp_abort 导致零窗口孤儿 socket 永久残留
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 tcp_abort 强制关闭处于 FIN-WAIT-1 状态且接收窗口为零的孤儿 socket（orphan socket）时，socket 未被正确关闭，变成了“永久孤儿 socket”。由于相关定时器不再被重新调度，socket 无法被内核回收，导致资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在旧实现中，tcp_abort 函数仅对非 SOCK_DEAD（即非孤儿）socket 执行发送 RST 和 tcp_done 关闭操作。对于孤儿 socket，它仅清理写队列（purging the write queue），同时清零了 tp->packets_out 和 sk->sk_write_queue。
+然而，tcp_retransmit_timer 依赖于 tp->packets_out 进行判断，tcp_probe_timer 依赖于 sk->sk_write_queue 进行判断。这两个条件被清零后，定时器处理函数会提前返回，导致 ICSK_TIME_RETRANS 和 ICSK_TIME_PROBE0 定时器无法被重新调度。这使得 socket 失去了最后的清理机会，转化为永久存在的孤儿 socket。
+
+#解决方案
+修改 tcp_abort 函数的逻辑，移除对 SOCK_DEAD 标志位的检查，确保无论是孤儿还是非孤儿 socket，都会发送 RST 报文并调用 tcp_done_with_error 进行关闭。
+为防止对同一 socket 重复关闭，在持有锁的情况下增加 sk->sk_state == TCP_CLOSE 的判断，若已关闭则直接返回 -ENOENT。
+同时，由于 tcp_done_with_error 内部已经调用了 tcp_write_queue_purge，移除了函数末尾冗余的 tcp_write_queue_purge(sk) 调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6d9b3b14884065609a1f7127b7d62852671b4479

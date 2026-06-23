@@ -1,0 +1,20 @@
+#标题
+misc: microchip: pci1xxxx: IRQ ack 操作导致中断状态处理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Microchip pci1xxxx GPIO 控制器驱动处理中断响应（irq_ack）时，由于对中断状态寄存器的读写操作逻辑不当，可能破坏寄存器中其他位的状态，导致中断处理异常或丢失后续中断事件。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `pci1xxxx_gpio_irq_ack` 函数中，原实现调用 `pci1xxx_assign_bit` 读取当前中断状态寄存器，修改特定位后再将整个值写回。根据硬件特性，中断状态位在写回操作时会被清除。这种“读-改-写”的方式会将读取到的旧状态值（可能包含其他已置位但尚未处理的中断）一并写回，从而错误地清除了不应清除的中断状态位。正确的做法是根据硬件“写 1 清除”（Write 1 to Clear）的特性，直接写入需要清除的位掩码，以避免破坏寄存器中的其他状态。
+
+#解决方案
+修改 `pci1xxxx_gpio_irq_ack` 函数的实现，移除 `pci1xxx_assign_bit` 函数调用，改为直接调用 `writel` 函数向中断状态寄存器（INTR_STAT_OFFSET）写入对应 GPIO 引脚的位掩码（BIT(gpio % 32)）。这种直接写入掩码的方式遵循硬件寄存器“写 1 清除”的语义，仅清除目标中断位，保留了寄存器中其他位的原始状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9de8939eb45c1f3b8ed3f8074e6ffa691fb4186

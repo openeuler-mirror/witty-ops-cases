@@ -1,0 +1,38 @@
+#标题
+AMD IOMMU 驱动存在可能的 irq lock inversion dependency 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核 LOCKDEP 检测器报告检测到可能的 irq lock inversion dependency（中断锁反转依赖）警告。系统在运行过程中（如 kworker 进程执行 IOMMU 相关操作时），检测到锁 `&domain->lock` 与 `pd_bitmap_lock` 之间存在不安全的锁顺序，可能导致死锁风险。
+
+#主要错误日志
+```log
+[   23.796949] ========================================================
+[   23.796950] WARNING: possible irq lock inversion dependency detected
+[   23.796952] 6.8.0fix+ #811 Not tainted
+[   23.796954] --------------------------------------------------------
+[   23.796954] kworker/0:1/8 just changed the state of lock:
+[   23.796956] ff365325e084a9b8 (&domain->lock){..-.}-{3:3}, at: amd_iommu_flush_iotlb_all+0x1f/0x50
+[   23.796969] but this lock took another, SOFTIRQ-unsafe lock in the past:
+[   23.796970]  (pd_bitmap_lock){+.+.}-{3:3}
+[   23.796980]  Possible interrupt unsafe locking scenario:
+[   23.796981]        CPU0                    CPU1
+[   23.796982]        ----                    ----
+[   23.796983]   lock(pd_bitmap_lock);
+[   23.796985]                                local_irq_disable();
+[   23.796985]                                lock(&domain->lock);
+[   23.796988]                                lock(&dev_data->lock);
+[   23.796990]   <Interrupt>
+[   23.796991]     lock(&domain->lock);
+```
+
+#问题根因
+在 AMD IOMMU 驱动中，`pd_bitmap_lock` 锁在获取时未禁止中断，而后续流程中会获取 `&domain->lock`。与此同时，中断处理程序也会尝试获取 `&domain->lock`。这导致了以下锁依赖链的形成：`&domain->lock` -> `&dev_data->lock` -> `pd_bitmap_lock`。当 `pd_bitmap_lock` 在普通上下文被持有时，如果发生中断且中断处理程序请求 `&domain->lock`，就会与已经持有 `&domain->lock` 的上下文产生锁顺序冲突，从而触发了 LOCKDEP 的 "irq lock inversion dependency" 警告。
+
+#解决方案
+修改 `domain_id_alloc` 和 `domain_id_free` 函数，将获取 `pd_bitmap_lock` 锁的方式从普通的 `spin_lock` / `spin_unlock` 修改为 `spin_lock_irqsave` / `spin_unlock_irqrestore`。通过在持有该自旋锁期间禁用本地中断，消除了中断上下文与进程上下文之间可能出现的锁反转依赖问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/05d1815bd61ea152d422fdda2c1124d9987cb0d1

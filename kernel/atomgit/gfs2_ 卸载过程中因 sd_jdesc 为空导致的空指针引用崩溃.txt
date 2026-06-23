@@ -1,0 +1,20 @@
+#标题
+gfs2: 卸载过程中因 sd_jdesc 为空导致的空指针引用崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 GFS2 文件系统时，内核在刷新 outstanding glock 工作期间触发空指针引用（NULL pointer dereference），导致内核崩溃或异常。具体触发场景是 `gfs2_log_release` 函数访问已释放的 `sdp->sd_jdesc` 指针。
+
+#主要错误日志
+未知
+
+#问题根因
+在 GFS2 卸载过程中，`sdp->sd_jdesc` 可能已被释放并置为 NULL。此时若调用 `gfs2_log_flush()`，其内部调用的 `gfs2_log_release()` 函数在执行断言检查 `gfs2_assert_withdraw` 时，直接解引用了 `sdp->sd_jdesc->jd_blocks`，未对指针有效性进行检查，从而导致空指针引用。虽然之前的补丁修复了 `gfs2_log_flush()` 主函数中的类似问题，但遗漏了 `gfs2_log_release()` 中的这一处解引用。
+
+#解决方案
+在 `fs/gfs2/log.c` 文件的 `gfs2_log_release()` 函数中，修改断言检查逻辑。在访问 `sdp->sd_jdesc->jd_blocks` 之前，增加对 `sdp->sd_jdesc` 是否为 NULL 的判断。修改后的断言逻辑允许在 `sdp->sd_jdesc` 为 NULL 时跳过对 `jd_blocks` 的访问，从而避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5ace3787ac1b51846831de38a2ed74f10148b154

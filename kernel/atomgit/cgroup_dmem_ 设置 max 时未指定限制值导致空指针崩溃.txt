@@ -1,0 +1,27 @@
+#标题
+cgroup/dmem: 设置 max 时未指定限制值导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行写入操作设置 dmem 组的最大值但未指定具体限制参数时（例如执行命令 `echo test/region0 > dmem.max`），内核触发空指针解引用错误，导致系统崩溃并打印 Oops 信息，调用栈指向 `strcmp` 函数。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000000
+#PF: supervisor read access in kernel mode
+#PF: error_code(0x0000) - not-present page
+Oops: Oops: 0000 [#1] SMP NOPTI
+RIP: 0010:strcmp+0x10/0x30
+Call Trace:
+ <TASK>
+ dmemcg_limit_write.constprop.0+0x16d/0x390
+
+#问题根因
+解析写入命令时，如果输入格式为 "test/region0"（仅包含区域名称而无后续限制选项），解析后的 `options` 指针为空。代码后续逻辑在未检查 `options` 有效性的情况下，将其作为参数传递给字符串比较函数（如 `strcmp`），导致触发空指针解引用。
+
+#解决方案
+在 `dmemcg_limit_write` 函数中，解析完 `region_name` 后增加有效性检查：判断 `options` 指针是否为空或指向空字符。若无效，则直接返回 `-EINVAL`，避免后续流程访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6432e94e489258decb0dffbf2fdb044d83ba0e8d

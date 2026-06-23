@@ -1,0 +1,37 @@
+#标题
+rcu/kvfree: 修复 __mod_timer 与 kvfree_call_rcu 中的数据竞争问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+KCSAN（内核并发消毒剂）检测到内核发生数据竞争。具体表现为在执行 BPF map 更新操作（如 `trie_update_elem`）调用 `kvfree_call_rcu` 时，与 `kfree_rcu_monitor` 内核工作线程执行 `__mod_timer` 时，对同一内存地址（`krcp->monitor_work.timer.expires`）进行并发读写访问。系统报告 "BUG: KCSAN: data-race" 警告。
+
+#主要错误日志
+BUG: KCSAN: data-race in __mod_timer / kvfree_call_rcu
+
+read to 0xffff888237d1cce8 of 8 bytes by task 10149 on cpu 1:
+ schedule_delayed_monitor_work kernel/rcu/tree.c:3520 [inline]
+ kvfree_call_rcu+0x3b8/0x510 kernel/rcu/tree.c:3839
+ trie_update_elem+0x47c/0x620 kernel/bpf/lpm_trie.c:441
+ ...
+
+write to 0xffff888237d1cce8 of 8 bytes by task 56 on cpu 0:
+ __mod_timer+0x578/0x7f0 kernel/time/timer.c:1173
+ add_timer_global+0x51/0x70 kernel/time/timer.c:1330
+ ...
+ schedule_delayed_monitor_work kernel/rcu/tree.c:3525 [inline]
+ kfree_rcu_monitor+0x5e8/0x660 kernel/rcu/tree.c:3643
+ ...
+
+#问题根因
+`kfree_rcu_monitor()` 函数在重新调度 monitor work 时未持有 `krcp->lock` 锁，而 `kvfree_call_rcu()` 函数在访问相应数据时持有该锁。这导致两个执行路径可以并发访问 `krcp->monitor_work.timer.expires` 变量，从而引发数据竞争。
+
+#解决方案
+通过引入锁保护来修复数据竞争。将原有的 `schedule_delayed_monitor_work()` 函数拆分为两部分：
+1. 新增 `__schedule_delayed_monitor_work()` 函数，包含原有的核心逻辑，供已持有锁的 `kvfree_call_rcu()` 内部调用。
+2. 修改 `schedule_delayed_monitor_work()` 函数，使其在调用上述内部函数前获取 `krcp->lock` 锁，并在调用后释放锁。
+这确保了无论是在 `kfree_rcu_monitor` 上下文还是其他上下文中访问该数据结构时，都处于锁的保护之下，消除了竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/376c1d49d3744033cb67a37c7892fb060d609cbc

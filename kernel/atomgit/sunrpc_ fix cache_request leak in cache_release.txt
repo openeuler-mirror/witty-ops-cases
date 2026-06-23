@@ -1,0 +1,21 @@
+#标题
+sunrpc: fix cache_request leak in cache_release
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当进程正在读取 cache_request（即 rp->offset != 0）时关闭文件描述符，会导致 cache_request 对象发生内存泄漏。该请求结构体及其关联的缓冲区和 cache_head 引用无法被释放，随着时间推移可能消耗大量内核内存。
+
+#主要错误日志
+未知
+
+#问题根因
+在 cache_release() 函数中，当关闭文件描述符时，代码仅递减了 cache_request 的 readers 计数，但未检查是否需要在 readers 降为 0 且 CACHE_PENDING 标志已清除的情况下清理该请求。
+相比之下，cache_read() 函数在 readers 降为 0 且 CACHE_PENDING 清除时会执行清理逻辑。cache_dequeue() 仅在 CACHE_PENDING 状态转换时运行，若转换已发生且 readers 不为 0，则后续不会再有清理动作，导致该请求永远无法被释放。
+
+#解决方案
+在 cache_release() 中增加与 cache_read() 一致的清理逻辑：在递减 readers 计数后，检查其是否降为 0 且 CACHE_PENDING 位是否清除。若满足条件，则将该 cache_request 从队列中移除，释放其关联的 cache_head 引用、缓冲区内存以及请求结构体自身。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/606f4c73153c4ea83e975eebca8a2fea86061b5d

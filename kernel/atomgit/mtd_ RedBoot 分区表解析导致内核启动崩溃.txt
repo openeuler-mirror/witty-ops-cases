@@ -1,0 +1,25 @@
+#标题
+mtd: RedBoot 分区表解析导致内核启动崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动过程中，在使能 CONFIG_FORTIFY_SOURCE 的情况下，解析 RedBoot 分区表时触发内核 WARNING 并导致 Oops/Crash。具体表现为在搜索 RedBoot 分区表偏移量时检测到缓冲区溢出。
+
+#主要错误日志
+Searching for RedBoot partition table in 50000000.flash at offset 0x7e0000
+------------[ cut here ]------------
+WARNING: lib/string_helpers.c:1035 at 0xc029e04c, CPU#0: swapper/0/1
+memcmp: detected buffer overflow: 15 byte read of buffer size 14
+Modules linked in:
+CPU: 0 UID: 0 PID: 1 Comm: swapper/0 Not tainted 6.19.0 #1 NONE
+
+#问题根因
+在 `drivers/mtd/parsers/redboot.c` 中，代码使用 `memcmp()` 进行字符串比较。由于动态分配的缓冲区大小是通过 `strlen()` 计算的，`names` 指针指向分配区的末尾字节。使用 `memcmp(names, "RedBoot config", 15)` 进行比较时，会读取超出分配缓冲区末尾的字节（即读取 15 字节但缓冲区仅 14 字节），从而触发 FORTIFY_SOURCE 的缓冲区溢出检测机制导致崩溃。
+
+#解决方案
+将比较函数从 `memcmp()` 替换为 `strcmp()`。因为缓冲区大小是基于字符串长度计算的，使用 `strcmp()` 可以确保比较操作严格限制在缓冲区边界内，避免越界读取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e2ba9eaba2f886d6173d3c680c8eb6bc4ffcb5bc

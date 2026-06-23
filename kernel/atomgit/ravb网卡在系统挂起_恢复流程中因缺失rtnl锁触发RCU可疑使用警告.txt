@@ -1,0 +1,33 @@
+#标题
+ravb网卡在系统挂起/恢复流程中因缺失rtnl锁触发RCU可疑使用警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统执行挂起操作时，内核触发 "suspicious RCU usage" 警告，并打印调用栈。该问题源于网络驱动 ravb 在 suspend/resume 路径下调用 `ravb_open`、`ravb_close` 或 wol 相关操作时未持有 rtnl 锁，导致与正在进行的 ndo 操作发生冲突，触发了锁检查机制的警告。
+
+#主要错误日志
+[   39.032969] =============================
+[   39.032983] WARNING: suspicious RCU usage
+[   39.033019] -----------------------------
+[   39.033033] drivers/net/phy/phy_device.c:2004 suspicious rcu_dereference_protected() usage!
+...
+[   39.033597] stack backtrace:
+[   39.033613] CPU: 0 UID: 0 PID: 174 Comm: python3 Not tainted 6.13.0-rc7-next-20250116-arm64-renesas-00002-g35245dfdc62c #7
+...
+[   39.033682]  phy_detach+0x160/0x190
+[   39.033694]  phy_disconnect+0x40/0x54
+[   39.033703]  ravb_close+0x6c/0x1cc
+[   39.033714]  ravb_suspend+0x48/0x120
+...
+[   39.041274] ravb 11c30000.ethernet eth0: Link is Down
+
+#问题根因
+在 ravb 驱动的 suspend 和 resume 流程中，调用 `ravb_open`、`ravb_close` 以及 wol（Wake-on-LAN）操作函数时，未获取 rtnl 锁。这违反了驱动内部的锁要求，导致这些操作可能与正在进行的 ndo（Network Device Operations）操作发生冲突，从而触发了 RCU 锁检查的警告。
+
+#解决方案
+在 ravb 驱动的 suspend 和 resume 代码路径中，分别在调用可能涉及 ndo 操作的函数（如 `ravb_wol_setup`、`ravb_close`、`ravb_wol_restore`、`ravb_open`）前后添加 `rtnl_lock()` 和 `rtnl_unlock()` 调用，确保这些操作在持有 rtnl 锁的保护下执行，避免并发冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a11773582fc62f023744b09a6ae10187228b01e0

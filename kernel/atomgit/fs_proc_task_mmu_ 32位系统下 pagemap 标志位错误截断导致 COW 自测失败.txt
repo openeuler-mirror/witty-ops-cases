@@ -1,0 +1,27 @@
+#标题
+fs/proc/task_mmu: 32位系统下 pagemap 标志位错误截断导致 COW 自测失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 32 位系统上运行 cow（Copy-on-Write）自我测试时失败，测试报告读取结果与 ioctl 返回结果不匹配，具体输出如下：
+```
+# ./cow
+...
+Bail Out! read and ioctl return unmatched results for populated: 0 1
+```
+
+#主要错误日志
+```
+Bail Out! read and ioctl return unmatched results for populated: 0 1
+```
+
+#问题根因
+在 `fs/proc/task_mmu.c` 的 `pagemap_pmd_range` 函数中，用于存储 pagemap 标志位的变量 `cur_flags` 被错误地定义为 `unsigned long` 类型。在 32 位系统上，`unsigned long` 类型为 32 位，而 pagemap entries（包括标志位）定义为 `u64`（64 位）。这导致在处理 PMD THP（Transparent Huge Pages）条目时，高位标志位被意外截断，从而导致标志位状态错误。
+
+#解决方案
+将 `fs/proc/task_mmu.c` 文件中 `pagemap_pmd_range` 函数内的 `cur_flags` 变量类型从 `unsigned long` 修改为 `u64`，确保在 32 位系统上也能完整保存 64 位的标志位信息，防止标志位截断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e6b08fdd0d5f6dd60ced69119fc956ad81279512

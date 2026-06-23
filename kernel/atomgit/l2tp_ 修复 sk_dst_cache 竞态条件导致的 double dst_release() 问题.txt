@@ -1,0 +1,20 @@
+#标题
+l2tp: 修复 sk_dst_cache 竞态条件导致的 double dst_release() 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 IPv6 的 L2TP 隧道场景下，发送数据包时可能触发内核内存管理的引用计数错误（double dst_release），导致内核崩溃（kernel panic）或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在原有代码中，IPv6 模式下的 L2TP 发送路径直接调用 `inet6_csk_xmit`。该函数内部逻辑会触发路由缓存（`sk_dst_cache`）的检查与更新。与此同时，外部调用逻辑或并发路径可能持有并操作同一目的缓存条目，从而引发对 `sk_dst_cache` 的竞态访问。这导致目的缓存条目（dst_entry）的引用计数被错误地多次减少（double dst_release），进而引发内存释放异常。
+
+#解决方案
+重构 IPv6 发送路径，不再直接调用通用的 `inet6_csk_xmit` 接口，而是实现 L2TP 专用的 `l2tp_xmit_ipv6` 函数。在该函数中显式调用 `sk_dst_check` 进行路由缓存检查，并使用 `dst_clone` 和 `ip6_dst_store` 安全地管理路由缓存的生命周期。通过自主控制 dst_entry 的获取与存储流程，避免了通用接口内部隐式的缓存操作带来的竞态风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8a2085e0774823d1e4c7af9c1e7a3196d20cc629

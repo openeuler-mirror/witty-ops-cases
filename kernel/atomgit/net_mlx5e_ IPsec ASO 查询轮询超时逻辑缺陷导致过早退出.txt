@@ -1,0 +1,20 @@
+#标题
+net/mlx5e: IPsec ASO 查询轮询超时逻辑缺陷导致过早退出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 IPsec ASO（Advanced Steering Operation）查询时，驱动程序在等待设备完成队列（CQE）响应时发生超时。该问题在低 HZ 配置（如 HZ=100）下尤为严重，轮询循环可能在仅执行一次迭代后便错误退出，导致设备尚未返回结果，进而引发 IPsec 功能异常或请求处理失败。
+
+#主要错误日志
+未知
+
+#问题根因
+原有的 `do-while` 轮询循环使用 `jiffies` 来计算超时时间（`expires = jiffies + msecs_to_jiffies(10)`）。由于 `jiffies` 的采样点在当前时钟节拍内是任意的，导致第一个时钟节拍对超时时间的贡献不稳定。对于较短的 10ms 超时时间，这种误差十分显著，实际有效的轮询窗口可能远小于预期的 10ms。在最坏情况下（如 HZ=100），循环可能在第一个节拍结束时就判定超时，导致循环在设备返回 CQE 前就过早退出。此外，旧逻辑在 `udelay` 期间超时到期后不会进行最后一次轮询检查，进一步降低了捕获 CQE 的机会。
+
+#解决方案
+移除基于 `jiffies` 的 `do-while` 循环逻辑，替换为 `read_poll_timeout_atomic()` 宏。该宏通过 `udelay()` 进行时间累积计算，而非依赖 `jiffies`，从而保证了无论系统 HZ 配置如何，都能提供完整的 10ms 轮询窗口。同时，`read_poll_timeout_atomic()` 机制确保在超时到期后会额外执行一次轮询操作，给予设备最后一次返回 CQE 的机会，修复了 ASO 查询过早超时的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5d12479eabe48523ce5b8b1922c6130cbc367896

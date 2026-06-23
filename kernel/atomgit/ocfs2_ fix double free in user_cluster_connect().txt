@@ -1,0 +1,20 @@
+#标题
+ocfs2: fix double free in user_cluster_connect()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `user_cluster_connect()` 函数中，当无法确定锁定版本（locking version）时，错误处理路径会触发双重释放。具体表现为：调用 `user_cluster_disconnect(conn)` 时已经释放了 `conn->cc_private`（即指针 `lc`），随后代码跳转至 `out` 标签继续执行时，又对 `lc` 指针指向的内存进行了释放，导致内核内存管理子系统出现双重释放故障。
+
+#主要错误日志
+ocfs2: Could not determine locking version
+
+#问题根因
+在 `user_cluster_connect()` 函数的错误处理分支中，`user_cluster_disconnect(conn)` 函数内部会释放 `conn->cc_private` 指向的内存，而该指针对应局部变量 `lc`。函数返回后，调用者或后续的错误清理代码（`out` 标签处）会再次尝试释放 `lc`。由于 `lc` 指针未被置空，指向的内存已被释放，导致了 Double Free 问题。
+
+#解决方案
+在 `fs/ocfs2/stack_user.c` 文件中，于 `user_cluster_disconnect(conn)` 调用之后立即将指针 `lc` 置为 `NULL`。这样可以确保后续的清理代码跳过对该指针的释放操作，从而避免双重释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/71d81e08fb191e31a4c8918ff3c1949bc295e7ee

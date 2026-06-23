@@ -1,0 +1,20 @@
+#标题
+rj54n1cb0c传感器驱动探测阶段内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动 `rj54n1cb0c` 的探测函数 `rj54n1_probe` 执行过程中，若控制处理器初始化失败（`hdl.error` 不为 0），函数直接返回错误码，未释放此前已分配的 V4L2 控制处理器资源，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+`rj54n1_probe` 函数在错误处理路径上存在缺陷。当 `v4l2_ctrl_new_std` 等函数调用后 `rj54n1->hdl.error` 被置位时，原代码逻辑直接 `return rj54n1->hdl.error`，跳过了 `v4l2_ctrl_handler_free()` 的调用，导致 `v4l2_ctrl_handler` 分配的内存未被释放。
+
+#解决方案
+修改 `rj54n1_probe` 函数的错误处理逻辑：当检测到 `rj54n1->hdl.error` 时，不再直接返回，而是将错误码保存至 `ret` 变量，并跳转至 `err_free_ctrl` 标签（新增的跳转点），在此处调用 `v4l2_ctrl_handler_free(&rj54n1->hdl)` 释放资源后再返回错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e55630ee18f44e20146248f1be4235c659fbc910

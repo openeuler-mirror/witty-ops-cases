@@ -1,0 +1,22 @@
+#标题
+i40e 驱动 debugfs 接口移除读取功能及内存分配优化
+
+#内核版本
+OLK-6.6
+
+#问题现象
+i40e 驱动的 debugfs 接口（`command` 和 `netdev_ops`）支持 read 操作，但在并发或特定调用场景下存在稳定性风险。同时，`netdev_ops_write` 函数使用静态全局缓冲区 `i40e_dbg_netdev_ops_buf` 存储用户输入，在并发写入时可能导致数据错乱或竞争问题。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **代码冗余与风险**：`i40e_dbg_command_read` 和 `i40e_dbg_netdev_ops_read` 接口实现的功能价值有限，且增加了代码维护负担和潜在的内核地址泄露风险（通过读取 debugfs 获取内核缓冲区内容）。
+2. **并发安全隐患**：`i40e_dbg_netdev_ops_write` 使用长度为 256 的静态全局变量 `i40e_dbg_netdev_ops_buf` 作为缓冲区，缺乏锁保护，无法支持并发写入操作，可能导致数据覆盖或逻辑错误。
+
+#解决方案
+1. **移除 read 接口**：删除 `i40e_dbg_command_read` 和 `i40e_dbg_netdev_ops_read` 函数及其在 `file_operations` 结构体中的注册，移除对应的静态全局缓冲区 `i40e_dbg_command_buf` 和 `i40e_dbg_netdev_ops_buf`。
+2. **修复并发问题**：将 `i40e_dbg_netdev_ops_write` 函数修改为使用动态分配的内存（`kzalloc`）替代静态全局缓冲区，并在函数结束时释放内存（`kfree`），从而消除静态变量带来的并发竞争隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/74e712e2e08c9db06ab7f470cf9eaf23141f6846

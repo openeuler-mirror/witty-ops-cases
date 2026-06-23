@@ -1,0 +1,33 @@
+#标题
+obmm子系统多重缺陷修复（内存溢出检查失效、lowmem通知处理错误、资源清理遗漏及线程逻辑优化）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **内存溢出检查失效**：在计算导出区域大小时，溢出检查条件恒为假（`*total_size > *total_size + cmd_export->size[i]` 恒不成立），导致无法检测到整数溢出，可能引发内存分配错误或系统异常行为。
+2. **内存回收通知处理异常**：内核低内存通知链处理函数返回了错误的返回值（`-ENOMEM` 而非 `NOTIFY_DONE` 或 `NOTIFY_OK`），且未对空指针进行检查，可能导致内存回收机制无法正确触发或内核崩溃。
+3. **IO映射失败处理不当**：在清理内存块时，若 `ioremap_cache` 失败，函数未设置错误返回值，导致上层调用者误以为操作成功，内存数据未被正确清零。
+4. **内存段清理线程无效空转**：当 `conti_clear_memseg` 失败时，清理线程立即重试，在资源紧张或硬件异常情况下可能导致 CPU 空转，且无缓解机制。
+
+#主要错误日志
+- Memory size overflowed!
+- [推断] failed to run ioremap.
+- [推断] got lowmem message. pid=%d sync=%d reason=%u
+
+#问题根因
+1. **溢出检查逻辑错误**：`calculate_export_region_size` 函数中的溢出判断表达式写错，正确的逻辑应当是判断累加后是否超过 `ULONG_MAX`，原代码写法导致编译器优化后条件永远无法满足。
+2. **通知链返回值语义错误**：`obmm_lowmem_notify_handler` 作为 `notifier_block` 回调，应使用 `notifier_return_t` 枚举值（如 `NOTIFY_OK`、`NOTIFY_DONE`），原代码返回 `-ENOMEM` 会导致通知链调用方解析错误。
+3. **错误处理路径遗漏**：`clear_block` 函数在 `ioremap_cache` 失败的分支中遗漏了 `ret = -ENOMEM` 的赋值，导致错误状态未向上传递。
+4. **Sysfs 配置数组冗余**：`obmm_import_attrs_groups_list` 数组包含了未定义或无效的 `import_attrs_groups[2]` 和 `[3]` 条目，可能导致 sysfs 接口异常。
+5. **线程重试缺乏退避机制**：`conti_clear_thread` 在遇到错误时没有延迟等待，直接进入下一次循环尝试。
+
+#解决方案
+1. **修复溢出检查**：将溢出判断条件修正为 `if (*total_size > ULONG_MAX - cmd_export->size[i])`，确保累加前进行正确性校验。
+2. **修正通知处理逻辑**：在 `obmm_lowmem_notify_handler` 中增加 `data` 空指针检查；在非目标回收原因场景下返回 `NOTIFY_DONE`；处理完成后返回 `NOTIFY_OK`。
+3. **完善错误返回值**：在 `clear_block` 的 `ioremap_cache` 失败分支中显式设置 `ret = -ENOMEM`。
+4. **引入重试延迟机制**：在 `conti_clear_thread` 中，当 `conti_clear_memseg` 返回错误时，调用 `msleep_interruptible(CLEAR_THREAD_DELAY_MS)`（延时 10000ms），避免高频无效重试占用 CPU。
+5. **清理冗余配置**：移除 `obmm_import_attrs_groups_list` 中无效的数组项。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c43cc9411b54f2d259e7d73edf409f489fec470e

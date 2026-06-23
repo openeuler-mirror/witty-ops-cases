@@ -1,0 +1,20 @@
+#标题
+perf: 修复 cpuctx 中出现的 cgroup 指针悬空问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+由于 cpuctx->cgrp 指针未正确清空，导致内核中出现悬空指针，进而引发系统混乱。Commit 信息中描述为 "causing havoc"，通常表现为内核崩溃、内存非法访问或数据结构损坏等不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit a3c3c6667 ("perf/core: Fix child_total_time_enabled accounting bug at task exit") 将 event->state 的更新操作移到了 list_del_event() 之前。这导致 list_del_event() 中的 `event->state` 判断条件永远为假，从而未调用 perf_cgroup_event_disable()。结果是 cpuctx->cgrp 没有被正确清除，留下了悬空指针。
+
+#解决方案
+将 `perf_cgroup_event_disable()` 的调用逻辑从 `list_del_event()` 函数中移除，转而放置在 `__perf_remove_from_context()` 函数中执行。在新的逻辑中，先进行 `event_sched_out` 操作，随后判断若 `event->state` 大于 `PERF_EVENT_STATE_OFF`，则显式调用 `perf_cgroup_event_disable(event, ctx)`，确保 cgroup 指针被正确清理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/36fae4188fde1071e4463d3048df8ef8febf0555

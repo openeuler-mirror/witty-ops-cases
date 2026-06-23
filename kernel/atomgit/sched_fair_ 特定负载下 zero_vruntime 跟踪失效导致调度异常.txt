@@ -1,0 +1,25 @@
+#标题
+sched/fair: 特定负载下 zero_vruntime 跟踪失效导致调度异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+运行 stress-ng-yield 测试时，机器出现性能问题或运行异常。在涉及多个 cgroup 的场景下，如果某些 cgroup 长时间未获得 tick 调度机会，或者两个不断执行 yield 操作的任务在 tick 周期内达到 vruntime 溢出速度，会导致系统调度行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+此前提交 b3d99f43c72b 修复 zero_vruntime 跟踪问题时，仅在 entity_tick 中更新 zero_vruntime。
+1. 当存在两个 runnable 任务不断执行 yield 时，任务会在一次 slice 时间内相互跳越。
+2. 由于 runnable 任务不涉及完整的 dequeue/enqueue 操作，仅有的 `__{en,de}queue_entity` 调用不再移动 zero_vruntime。
+3. 如果任务跳越速度足够快，在 tick 到来前 vruntime 就可能溢出。
+4. 在多 cgroup 场景下，tick 可能无法及时触达所有 cgroup，导致 zero_vruntime 更新严重滞后，超出了 entity_key() 的 2 倍滞后边界。
+
+#解决方案
+将 zero_vruntime 的更新点从 `entity_tick()` 移动到 `update_deadline()` 中。
+在 `yield_task_fair()` 中调用 `update_deadline()` 替代直接计算 deadline，确保在每个 slice 结束时强制更新 avg_vruntime（进而更新 zero_vruntime）。这保证了更新延迟最多为一个 slice，使得 zero_vruntime 始终处于 entity_key() 的 2 倍滞后边界内。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d4f50d5ccd289c0a82eb944004347195b43b25c7

@@ -1,0 +1,27 @@
+#标题
+iwlwifi: 固件恢复命令响应处理存在内存泄漏与越界风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 iwlwifi 驱动执行固件恢复流程（调用 `iwl_mvm_send_recovery_cmd`）时，若固件返回响应包，系统可能出现以下异常：
+1. 内核内存泄漏，响应缓冲区（`resp_pkt`）未被释放。
+2. 若响应包数据长度小于预期，访问 `host_cmd.resp_pkt->data` 时可能触发内核越界访问或 panic。
+3. 当恢复命令执行失败（状态非 0）时，日志打印可能读取无效内存。
+
+#主要错误日志
+推断：
+iwlwifi 0000:xx:xx.x: Failed to send recovery cmd blob was invalid %d
+
+#问题根因
+驱动在处理固件错误恢复命令（`FW_ERROR_RECOVERY_CMD`）的响应时存在两个缺陷：
+1. **缺少输入验证**：直接对响应包指针 `host_cmd.resp_pkt->data` 进行解引用，未校验响应包的实际数据长度，存在越界访问风险。
+2. **内存泄漏**：使用带有 `CMD_WANT_SKB` 标志的 `iwl_mvm_send_cmd` 发送命令后，驱动在处理完响应数据后未调用释放接口，导致 `resp_pkt` 对应的内核内存对象泄漏。
+
+#解决方案
+修改 `iwl_mvm_send_recovery_cmd` 函数实现，将底层调用接口由 `iwl_mvm_send_cmd` 替换为 `iwl_mvm_send_cmd_status`。
+该接口封装了响应包的大小验证逻辑，并自动管理响应缓冲区的生命周期（自动释放），从而在获取状态值的同时避免了内存泄漏和越界访问风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/743df91cc908af90312a9e82b4acdce446879664

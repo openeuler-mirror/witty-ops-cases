@@ -1,0 +1,22 @@
+#标题
+jfs: add_missing_indices 数组越界读导致内存非法访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读取 JFS 文件系统目录时，如果目录页存在损坏，函数 `add_missing_indices` 在处理槽表时会访问非法索引，导致 "array-index-out-of-bounds read"（数组越界读取）。这可能引发内核崩溃或内存破坏，对应 CVE-2025-38204。
+
+#主要错误日志
+jfs: add_missing_indices: Invalid stbl[%d] = %d for inode %ld, block = %lld
+
+#问题根因
+在 `add_missing_indices` 函数中，遍历槽表指针数组 `stbl` 时，未对索引值 `stbl[i]` 进行有效性校验。当文件系统元数据损坏导致 `stbl[i]` 为负数时，代码继续执行 `p->slot[stbl[i]]` 操作，导致数组越界读取（Array Index Out of Bounds）。
+
+#解决方案
+1. 在 `add_missing_indices` 函数循环中增加对 `stbl[i]` 的校验，若值小于 0，判定为非法索引。
+2. 检测到非法索引时，通过 `jfs_err` 打印错误日志，调用 `DT_PUTPAGE` 释放页面，调用 `txAbort` 终止事务，并返回 `-EIO` 错误码。
+3. 将函数返回值类型从 `void` 修改为 `int`，以便向上层 `jfs_readdir` 传递错误状态，阻止后续非法操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/28375b6f8f7b771bf8bc22dece070c5dbf4c1d8a

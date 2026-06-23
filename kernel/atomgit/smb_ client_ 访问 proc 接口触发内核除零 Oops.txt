@@ -1,0 +1,25 @@
+#标题
+smb: client: 访问 proc 接口触发内核除零 Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CIFS/SMB 客户端中，当服务器未设置 `NETWORK_INTERFACE_INFO::LinkSpeed` 时，读取 `/proc` 相关文件（如通过 `cat` 命令）会触发内核 "divide error" Oops，导致进程崩溃。
+
+#主要错误日志
+Oops: divide error: 0000 [#1] PREEMPT SMP KASAN NOPTI
+CPU: 0 UID: 0 PID: 1323 Comm: cat Not tainted 6.13.0-rc7 #2
+RIP: 0010:cifs_debug_data_proc_show+0xa45/0x1460 [cifs]
+Call Trace:
+ ? exc_divide_error+0x39/0x50
+ ? asm_exc_divide_error+0x1a/0x20
+
+#问题根因
+服务器端不保证一定会设置 `NETWORK_INTERFACE_INFO::LinkSpeed` 字段。当该字段未被设置（值为 0）时，内核代码在 `cifs_debug_data_proc_show` 函数中直接使用该值进行除法运算，导致触发除零异常。
+
+#解决方案
+在解析服务器接口信息时，对 `LinkSpeed` 进行合法性检查。如果该值为 0（未设置），则将其默认设置为 1Gbps（1000000000），从而避免后续计算中出现除零错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4399ee800553f44bbb230635f23c9663e37f4b00

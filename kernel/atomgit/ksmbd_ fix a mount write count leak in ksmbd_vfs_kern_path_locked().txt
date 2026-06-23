@@ -1,0 +1,20 @@
+#标题
+ksmbd: fix a mount write count leak in ksmbd_vfs_kern_path_locked()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 文件服务运行过程中，当 `ksmbd_vfs_lock_parent()` 函数调用失败时，内核虽然释放了路径引用，但未正确释放父路径挂载点的写权限计数，导致挂载点的写计数发生泄漏。这可能导致后续对该挂载点的操作出现异常状态或无法正常卸载。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ksmbd_vfs_kern_path_locked()` 中，当 `ksmbd_vfs_lock_parent()` 调用失败时，代码逻辑仅执行了 `path_put(path)` 和 `path_put(parent_path)` 来释放路径引用，但遗漏了调用 `mnt_drop_write(parent_path->mnt)` 来释放之前获取的写权限。根据调用者约定，该函数应在返回错误码时不应持有挂载点的写访问权限，从而导致写计数泄漏。
+
+#解决方案
+在 `ksmbd_vfs_lock_parent()` 失败的错误处理路径中，增加调用 `mnt_drop_write(parent_path->mnt)`，确保在释放路径引用和返回错误前，正确释放挂载点的写访问权限，修复计数泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4dce1ed5e1b1a2b799bff924d3414e0281f8e6fc

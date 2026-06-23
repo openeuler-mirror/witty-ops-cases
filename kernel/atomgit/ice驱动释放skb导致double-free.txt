@@ -1,0 +1,20 @@
+#标题
+ice驱动释放skb导致double-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当发送路径中的 `ice_tso()` 或 `ice_tx_csum()` 失败，或 `__skb_linearize()` 失败时，内核会在错误处理路径中释放 skb。随后若没有新的数据包发送且接口被关闭（brought down），在清理发送队列时（`ice_clean_tx_ring` -> `ice_unmap_and_free_tx_buf`）会再次尝试释放同一个 skb，导致双重释放故障。该问题可通过 KASAN 检测到。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ice_xmit_frame_ring()` 函数中，当 TSO、Checksum 或线性化处理失败进入错误处理路径（`out_drop` 标签）时，代码调用 `dev_kfree_skb_any(skb)` 释放了 skb 内存。然而，此时 `first` 指针指向的 `tx_buf` 结构体仍然指向该 skb，并且其类型被标记为有效（`ICE_TX_BUF_SKB`）。如果后续没有新的发送请求覆盖该 `tx_buf`，直接关闭网卡接口触发 ring 清理时，`ice_unmap_and_free_tx_buf()` 会根据 `tx_buf` 的记录再次释放该 skb，从而引发 double-free。
+
+#解决方案
+在 `ice_xmit_frame_ring()` 的错误处理路径 `out_drop` 中，释放 skb 后，立即将 `first->type` 重置为 `ICE_TX_BUF_EMPTY`，防止后续 ring 清理时再次释放。同时，将 `first` 指针的初始化位置提前，确保在进入线性化错误路径前 `first` 已经指向有效的 `tx_buf`，从而保证错误处理中能正确操作该 buffer。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5dfdd3d08f1d55ce17397ac03c758b36cecbb7ce

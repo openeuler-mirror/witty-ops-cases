@@ -1,0 +1,24 @@
+#标题
+isofs: 读取损坏文件系统时触发未初始化内存访问导致 KMSAN 告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载并读取损坏的 ISO9660 文件系统镜像时，内核在解析目录项过程中访问了超出缓冲区边界的内存。由于访问了未初始化或越界的内存区域，触发了 KMSAN（Kernel Memory Sanitizer）或 KASAN 的未初始化值使用告警。
+
+#主要错误日志
+iso9660: Corrupted directory entry in block %lu of inode %lu
+
+#问题根因
+在 `do_isofs_readdir()` 函数中，解析 ISO9660 目录记录时缺乏充分的长度校验。
+1. 代码从缓冲区末尾附近读取目录记录，并获取记录长度 `de_len`（例如读取值为 31 字节）。
+2. 目录记录结构 `struct iso_directory_record` 的固定部分大小为 33 字节。
+3. 原有代码直接访问结构体成员 `de->name_len`（位于偏移 32 字节处）进行校验，但没有先检查 `de_len` 是否足以容纳整个结构体固定部分。
+4. 当 `de_len`（31 字节）小于结构体固定大小（33 字节）时，对 `de->name_len` 的访问发生了越界，读取了未初始化或无效的内存，从而触发 KMSAN 告警。
+
+#解决方案
+在访问目录记录结构体成员之前，增加对目录记录长度 `de_len` 的最小值校验。在原有的 sanity check 之前，先判断 `de_len` 是否小于 `sizeof(struct iso_directory_record)`，确保目录记录长度足以包含结构体的固定部分，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ea8136095419ed9a0d072e229b1d86bd38886519

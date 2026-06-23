@@ -1,0 +1,25 @@
+#标题
+tracing/osnoise: 进程迁移监控 tracepoint 重置逻辑缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 osnoise/timerlat 追踪器运行过程中，若多次执行 start/stop 操作或进行重置，内核会尝试重复注册 `sched_migrate_task` 的 tracepoint 回调函数。该操作会导致内核触发 WARN_ON_ONCE 警告信息，提示监控状态异常，且可能导致 tracepoint 注册计数错误，影响系统追踪功能的正常卸载与稳定性。
+
+#主要错误日志
+- [   **] WARNING: CPU: ** PID: ** at kernel/trace/trace_osnoise.c:register_migration_monitor (推断基于 WARN_ON_ONCE 宏)
+
+#问题根因
+`register_migration_monitor` 和 `unregister_migration_monitor` 函数缺乏对监控启用状态的有效追踪与管理。
+1. 注册函数没有检查当前监控是否已启用，允许在已注册的情况下再次调用 `register_trace_sched_migrate_task`。
+2. 注销函数仅检查 timerlat 是否启用，未检查回调是否实际已注册，且无条件执行注销操作，导致状态管理混乱。
+这导致在多次启停过程中，tracepoint 被重复注册或在不该注销时被注销。
+
+#解决方案
+引入静态全局布尔变量 `monitor_enabled` 用于维护监控器的当前启用状态。
+1. 在 `register_migration_monitor` 函数中，添加 `WARN_ON_ONCE(monitor_enabled)` 检查，若监控已开启则直接返回；注册成功后将 `monitor_enabled` 置为 true。
+2. 在 `unregister_migration_monitor` 函数中，首先检查 `monitor_enabled` 状态，若未开启则直接返回；执行注销操作后，将 `monitor_enabled` 重置为 false。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9d22d5b77cca4df43e85e93e7748def7e4d35cae

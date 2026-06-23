@@ -1,0 +1,24 @@
+#标题
+[LoongArch] CPU离线时vCPU线程高CPU使用率问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+LoongArch 架构下进行 CPU 离线操作时，对应的 vCPU 线程出现高 CPU 使用率现象，导致宿主机资源异常消耗。
+
+#主要错误日志
+- （推断）Failed to setup timer hotplug state: %d
+- Constant clock event device register
+
+#问题根因
+LoongArch 架构在进行 CPU 热插拔（离线）操作时，缺少对时钟事件设备的正确回调处理。具体表现为未注册 `cpuhp` 状态回调来管理时钟中断的开启与关闭。当 CPU 离线时，时钟中断未被正确关闭或清除，导致中断持续触发或陷入异常处理循环，进而引发 vCPU 线程 CPU 使用率飙高。
+
+#解决方案
+在 `constant_clockevent_init` 函数中增加 CPU 热插拔状态机的注册逻辑。
+1. 引入 `cpuhotplug.h` 头文件，定义 `loongarch_timer_hp_state` 状态变量。
+2. 注册 `CPUHP_AP_ONLINE_DYN` 状态，绑定 `arch_timer_starting`（CPU上线）和 `arch_timer_dying`（CPU下线）回调函数。
+3. 在 `arch_timer_dying` 回调中，关闭时钟事件设备（`constant_set_state_shutdown`）并清除定时器中断标志（`write_csr_tintclear`），防止 CPU 离线后中断风暴。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/44540fbb4d5ff89e3a323aa97527d5e293ffbfce

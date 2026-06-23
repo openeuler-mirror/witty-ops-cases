@@ -1,0 +1,23 @@
+#标题
+cifs: SMB1 协议获取与设置 SACLs 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 SMB1 协议挂载的 CIFS 共享中，获取或设置 `system.cifs_ntsd_full` 和 `system.smb3_ntsd_full` 扩展属性时，系统静默忽略了 SACL（System Access Control List）部分，导致无法正确读取或写入完整的 ACL 安全描述符。
+
+#主要错误日志
+未知
+
+#问题根因
+SMB1 代码路径中的回调函数 `get_cifs_acl_by_fid()` 忽略了其传入的 `info` 参数，导致 `SACL_SECINFO` 请求未能正确传递给 `CIFSSMBGetCIFSACL()` 函数。此外，访问 SACL 需要在打开对象时指定 `SYSTEM_SECURITY` 访问权限，但原代码逻辑未在请求 SACL 时添加该权限标志。
+
+#解决方案
+1. 修改 `get_cifs_acl_by_fid()` 和 `get_cifs_acl_by_path()` 函数，正确传递 `info` 参数至 `CIFSSMBGetCIFSACL()`。
+2. 在获取 ACL 的路径中，若请求包含 `SACL_SECINFO`，则在打开文件参数 `desired_access` 中添加 `SYSTEM_SECURITY` 权限。
+3. 在设置 ACL 的路径中，若 `aclflag` 包含 `CIFS_ACL_SACL`，同样添加 `SYSTEM_SECURITY` 权限，并修正权限标志位的判断逻辑。
+4. 确保 `CIFSSMBGetCIFSACL()` 将传入的 `info` 标志合并到 `AclFlags` 中发送给服务端。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a36e1fb774ee65bc0c64fddfc9c1408723430d59

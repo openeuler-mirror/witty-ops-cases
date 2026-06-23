@@ -1,0 +1,21 @@
+#标题
+wifi: mwifiex: Fix memcpy() field-spanning write warning in mwifiex_cmd_802_11_scan_ext()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核运行过程中触发 memcpy() field-spanning write 警告。该警告源于编译器或静态分析工具检测到 `memcpy` 操作试图写入的数据量超过了目标结构体成员 `tlv_buffer[1]` 定义的边界范围，尽管在实际逻辑中该成员是作为变长数据的缓冲区使用。
+
+#主要错误日志
+memcpy() field-spanning write warning in mwifiex_cmd_802_11_scan_ext
+
+#问题根因
+结构体 `host_cmd_ds_802_11_scan_ext` 中的成员 `tlv_buffer` 定义为 `u8 tlv_buffer[1]`，这是一种传统的变长数组实现方式。在代码的其他部分（如 `mwifiex_cmd_802_11_scan_ext` 函数）对该成员进行写入操作时，现代编译器（启用了缓冲区溢出检测功能）会认为写入的数据长度超过了声明的数组边界（1字节），从而错误地触发越界写入警告。
+
+#解决方案
+1. 将结构体 `host_cmd_ds_802_11_scan_ext` 中的 `u8 tlv_buffer[1]` 修改为柔性数组成员 `u8 tlv_buffer[]`，以明确告知编译器该成员为变长数据，消除边界警告。
+2. 同步调整 `mwifiex_ret_802_11_scan_ext` 函数中计算剩余缓冲区大小的逻辑，删除原有的 ` - 1` 偏移修正。由于柔性数组成员不占用结构体大小（sizeof 返回 0），计算剩余空间时不再需要减去旧定义中那 1 个字节的大小。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8975c967aa6d2709995c951e2b66acde158023dc

@@ -1,0 +1,26 @@
+#标题
+rcu: Fix racy re-initialization of irq_work causing hangs
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在架构不支持 self-IPIs 且 irq work 均为 lazy 的场景下，RCU 读写解锁流程中发生竞争条件，导致内核挂起。具体表现为：irq work 被错误地重新初始化并排队到自身，导致其在触发时陷入循环，进而引发系统 hang 死。
+
+#主要错误日志
+未知
+
+#问题根因
+RCU 在每次尝试排队 deferred QS irq work 之前都会对其进行重新初始化。如果该 irq work 已经在队列中但尚未处理，此时对其进行重新初始化会破坏即将处理的 irq work 队列状态。
+具体竞争步骤如下：
+1. IRQs 禁用期间调用 rcu_read_unlock()，此时有涉及阻塞任务的宽限期，irq work 被初始化并排队。
+2. 相关任务解除阻塞，CPU 静止状态被报告，rdp->defer_qs_iw_pending 重置为 DEFER_QS_IDLE（此时之前的 irq work 尚未触发）。
+3. 新的宽限期开始且节点有阻塞任务。
+4. IRQs 再次禁用时调用 rcu_read_unlock()，irq work 被重新初始化（此时它仍在队列中，其节点被清除）并重新排队，导致其排队到自身。
+5. irq work 最终通过 tick 触发，但因被排队到自身而陷入循环，导致挂起。
+
+#解决方案
+将 irq work 的初始化操作从每次排队前移动到 CPU 启动准备阶段，确保其仅在 CPU 初始化时执行一次，避免对已排队的 irq work 进行破坏性重新初始化。具体修改为：在 `rcutree_prepare_cpu` 函数中调用 `rcu_preempt_deferred_qs_init`，移除 `rcu_read_unlock_special` 中的重复初始化代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d6fefbe9c57e5786ba0b715b4afe853c889fbf4b

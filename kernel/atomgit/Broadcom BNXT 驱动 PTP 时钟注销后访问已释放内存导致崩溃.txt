@@ -1,0 +1,20 @@
+#标题
+Broadcom BNXT 驱动 PTP 时钟注销后访问已释放内存导致崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 Broadcom 网卡驱动或注销 PTP 时钟设备时，内核可能发生崩溃或内存访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bnxt_ptp_free` 函数中，`ptp->ptp_info.pin_config` 的释放操作位于 `ptp_clock_unregister` 调用之前的 `if (ptp->ptp_clock)` 判断块内。当 `ptp_clock` 为 NULL（即时钟未注册成功或已注销）但 `pin_config` 已分配内存时，`pin_config` 不会被释放从而导致内存泄漏；反之在某些异常流程下，若访问逻辑涉及已注销的 ptp_clock 关联的 pin_config，可能引发 Use-After-Free 风险。修复方案将内存释放逻辑移至 if 判断块之外，确保无论 ptp_clock 状态如何，pin_config 内存都能被正确释放。
+
+#解决方案
+修改 `drivers/net/ethernet/broadcom/bnxt/bnxt_ptp.c` 文件中的 `bnxt_ptp_free` 函数，将 `kfree(ptp->ptp_info.pin_config)` 和置 NULL 操作移出 `if (ptp->ptp_clock)` 条件判断块，确保内存释放操作始终执行，避免内存泄漏或潜在的非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c0f89639291980657147055f5dc36ea32dbcd94

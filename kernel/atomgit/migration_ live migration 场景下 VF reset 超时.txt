@@ -1,0 +1,23 @@
+#标题
+migration: live migration 场景下 VF reset 超时
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在虚拟机热迁移过程中，若设备发生错误，Qemu 会触发 VF 复位。此时 VF 复位与设备复位并发执行，导致 VF 复位操作超时，无法正常完成复位流程。
+
+#主要错误日志
+- 推断日志：reset prepare failed
+
+#问题根因
+在热迁移期间发生设备错误时，VF 复位与设备复位同时进行，两者之间存在竞争或冲突，导致 VF 复位流程无法在预期时间内完成。
+
+#解决方案
+引入 QM_RESETTING 标志位来实现 VF 复位与设备复位的串行化控制。
+1. 新增 `.reset_prepare` 回调函数 `hisi_acc_vf_pci_reset_prepare`，在复位准备阶段通过 `test_and_set_bit` 等待并设置 QM_RESETTING 标志，确保复位请求排队处理。
+2. 在 `.reset_done` 回调函数中，根据新增的 `set_reset_flag` 标志清理 QM_RESETTING 位，释放复位锁。
+3. 新增 `set_reset_flag` 成员变量用于标识本次复位流程是否由 `reset_prepare` 发起，从而正确处理并发复位场景。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/26fb2ec495b571f01f0c0ca5fa8c0da1a0b650c4

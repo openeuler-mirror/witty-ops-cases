@@ -1,0 +1,24 @@
+#标题
+scsi: sg: 修复偶发的执行时间超过超时时间的虚假统计问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 `/proc/scsi/sg/debug` 监控 SCSI 通用（sg）设备（如 IBM LTO-9 SAS 磁带机）时，偶尔会观察到非常大的 elapsed time（已执行时间）数值，该数值甚至超过了设定的超时时间（timeout），导致统计信息严重失真。
+
+#主要错误日志
+未知
+
+#问题根因
+该问题由两个竞态条件引起：
+1. **`sg_proc_debug_helper()` 与 `sg_rq_end_io()` 之间的竞态**：`hp->duration` 在请求未完成时存储的是开始时间（类型 #1），在请求完成后存储的是执行总时间（类型 #2）。若 `sg_proc_debug_helper()` 在 `hp->duration` 从类型 #1 变为类型 #2 之后、但在 `srp->done` 被设置为 1 之前读取数据，代码会错误地使用当前时间戳减去执行总时间，导致计算出无效的超大耗时。
+2. **`sg_proc_debug_helper()` 与 `sg_new_write()` 之间的竞态**：`hp->duration` 在 `sg_add_request()` 中被设置为当前时间戳，但随后被 `get_sg_io_hdr()`（调用 `copy_from_user`）覆盖为用户空间传入的值（通常为 0）。若 `sg_proc_debug_helper()` 在此窗口期执行，会使用该任意值计算耗时，导致结果错误。
+
+#解决方案
+1. **消除竞态一**：在 `sg_rq_end_io()` 中，将 `srp->header.duration` 的计算和赋值操作移到持有 `sfp->rq_list_lock` 写锁的保护范围内，确保 `sg_proc_debug_helper()` 读取锁时，`duration` 和 `done` 标志位的变更原子进行。
+2. **消除竞态二**：将 `hp->duration` 的初始化赋值操作从 `sg_common_write()` 移至 `sg_new_write()` 函数中 `get_sg_io_hdr()` 调用成功之后，确保在用户空间数据拷贝覆盖后重新设置为正确的开始时间戳。
+3. **代码修正**：在 `sg_proc_debug_helper()` 中使用 `READ_ONCE()` 读取 `hp->duration` 以防止读取撕裂，并将打印格式符从 `%d` 修正为 `%u` 以匹配无符号整型。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c03e1fe8181008338078cf1d7b6f7069e6a3e50e

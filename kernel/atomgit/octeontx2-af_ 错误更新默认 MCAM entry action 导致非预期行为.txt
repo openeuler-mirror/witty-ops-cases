@@ -1,0 +1,20 @@
+#标题
+octeontx2-af: 错误更新默认 MCAM entry action 导致非预期行为
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 octeontx2 平台上，当用户请求更新特定 MCAM 索引的动作时，驱动程序错误地修改了默认 MCAM 条目的动作。这导致 PF 的 promiscuous（混杂）和 allmulti（多播）入口的动作被非预期地更改，可能引发网络数据包接收逻辑异常或 RSS（接收端扩展）配置错误。
+
+#主要错误日志
+未知
+
+#问题根因
+根据设计，AF（Admin Function）应该仅在 `mcam_index` 为 -1 时更新默认 MCAM 动作。然而，先前提交引入的代码逻辑存在缺陷，移除了对 `mcam_index < 0` 的判断保护，导致即便请求不是针对默认条目时，也会强制更新默认条目以及 promiscuous/allmulti 相关的动作。
+
+#解决方案
+在函数 `rvu_npc_update_flowkey_alg_idx` 中恢复对 `mcam_index < 0` 的条件判断。将 `npc_update_vf_flow_entry` 调用以及针对 `NIXLF_PROMISC_ENTRY` 和 `NIXLF_ALLMULTI_ENTRY` 的 `npc_update_rx_action_with_alg_idx` 调用逻辑包裹在 `if (mcam_index < 0)` 条件块中，确保仅在操作默认条目时才执行相关更新。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/371b1e60bf4682726cbe243b640ff5e116b511ad

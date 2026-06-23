@@ -1,0 +1,29 @@
+#标题
+arm64/fpsimd: SVE 信号上下文恢复导致内存越界读取及进程异常终止
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SME（Scalable Matrix Extension）支持的系统中，进程通过信号处理机制恢复 SVE（Scalable Vector Extension）上下文时可能出现以下故障现象：
+1. 内核读取越界内存，可能触发致命错误或非法访问。
+2. 进程被内核强制发送 SIGKILL 信号终止。
+3. 进程意外进入流模式，导致寄存器状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `restore_sve_fpsimd_context` 函数在处理 SVE 信号上下文恢复时逻辑不完整：
+1. **状态不一致导致越界读取**：当恢复带有 `SVE_SIG_FLAG_SM` 标记的上下文时，代码设置了 `SVCR.SM` 但未同步设置 `TIF_SME` 标志。这导致 `task_fpsimd_load()` 使用错误的 `SMCR_ELx.LEN` 配置调用 `sve_load_state()`，硬件向量长度可能大于任务分配的长度，从而读取任务 `sve_state` 之外的内存。
+2. **状态清理失败**：当恢复不带 `SVE_SIG_FLAG_SM` 标记的上下文时，代码未清除 `SVCR.SM`，导致任务遗留在此前的流模式中，造成寄存器状态混合不一致。
+3. **资源未分配**：在设置流模式相关状态前，未确保 `sme_state` 内存已分配。
+
+#解决方案
+修改 `arch/arm64/kernel/signal.c` 中的恢复逻辑，确保状态标志与硬件上下文同步：
+1. 在恢复寄存器数据前，若检测到 `SVE_SIG_FLAG_SM`，先调用 `sme_alloc` 分配 `sme_state` 空间。
+2. 根据 `SVE_SIG_FLAG_SM` 标记正确设置 `TIF_SME` 或 `TIF_SVE` 标志，并相应更新 `SVCR.SM` 位（设置或清除）。
+3. 将状态标志的设置逻辑移至内存分配之后、寄存器数据拷贝之前，确保即使后续拷贝失败，内核状态机依然保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e478fa96b70e905430067c5a4a11250b5b8fec41

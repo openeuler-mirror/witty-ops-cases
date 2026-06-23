@@ -1,0 +1,21 @@
+#标题
+rpmsg: qcom_smd 解析边缘节点时对 mbox 请求的错误码判断不当
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm SMD（Shared Memory Driver）驱动解析边缘节点时，由于对 `mbox_request_channel` 返回值的错误码判断逻辑有误，导致无法正确回退到解析 `qcom,ipc` 属性的逻辑。这可能导致在某些未配置 `mboxes` 属性但配置了 `qcom,ipc` 属性的设备上，SMD 通道初始化失败，进而影响相关通信功能的正常使用。
+
+#主要错误日志
+未知
+
+#问题根因
+上游提交 24fdd5074b20 ("mailbox: use error ret code of of_parse_phandle_with_args()") 修改了 `mbox_request_channel()` 在缺少 `mboxes` 属性时的返回值行为。该函数现在内部调用 `of_parse_phandle_with_args()`，当属性不存在时返回 `-ENOENT` 而非之前的 `-ENODEV`。
+驱动代码 `qcom_smd.c` 中的判断逻辑 `if (PTR_ERR(edge->mbox_chan) != -ENODEV)` 仍期望旧的错误码 `-ENODEV` 来触发回退机制。由于返回值变更为 `-ENOENT`，该条件判断失败，驱动错误地中止了解析流程，而不是按预期回退去解析 `qcom,ipc` 属性。
+
+#解决方案
+修改 `drivers/rpmsg/qcom_smd.c` 文件中的错误码判断逻辑，将 `PTR_ERR(edge->mbox_chan)` 的比较值从 `-ENODEV` 修改为 `-ENOENT`。这样可以正确识别“属性不存在”的情况，允许驱动在该场景下继续尝试解析旧的 `qcom,ipc` 属性，保证向前兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/604c1fd3cfe70a4aef449ec3331dfe514979c604

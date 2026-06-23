@@ -1,0 +1,38 @@
+#标题
+Bluetooth子系统hci_conn_del_sysfs释放后使用(UAF)故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在卸载蓝牙设备或断开连接过程中，触发KASAN（Kernel Address Sanitizer）检测到的slab-use-after-free错误。具体表现为在执行`device_for_each_child`时访问了已释放的内存地址，导致内核崩溃或Oops。该问题由syzbot发现，涉及`kbnepd`内核线程处理网络设备注销时的异常。
+
+#主要错误日志
+```text
+BUG: KASAN: slab-use-after-free in device_for_each_child+0x18f/0x1a0
+Read of size 8 at addr ffff88801f605308 by task kbnepd bnep0/4980
+CPU: 0 UID: 0 PID: 4980 Comm: kbnepd bnep0 Not tainted 6.12.0-rc4-00161-gae90f6a6170d #1
+...
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x100/0x190
+ ? device_for_each_child+0x18f/0x1a0
+ print_report+0x13a/0x4cb
+ ...
+ device_for_each_child+0x18f/0x1a0
+ pm_runtime_set_memalloc_noio+0xf2/0x180
+ netdev_unregister_kobject+0x1ed/0x270
+ unregister_netdevice_many_notify+0x123c/0x1d80
+ ...
+```
+
+#问题根因
+在`hci_conn_del_sysfs()`函数中，当调用`device_unregister()`注销设备时，如果底层kobject引用计数大于1，设备的实际释放（release）动作会被延迟。在此延迟期间，如果父控制器设备（hciX）被删除，会导致子设备中保存的父设备指针变为悬空指针。
+旧代码仅针对名称以"rfcomm"开头的设备进行重新父级处理，忽略了其他可能存在的子设备。当`pm_runtime_set_memalloc_noio`后续遍历子设备时，访问了已释放的父设备内存，触发Use-After-Free。
+
+#解决方案
+修改`hci_conn_del_sysfs()`函数逻辑，在注销连接设备前，将所有以该连接为父设备的子设备（不仅仅是rfcomm设备）统一移动到NULL父节点。
+具体代码变更：移除仅匹配"rfcomm"设备的`__match_tty`函数及其逻辑，改为使用`device_find_any_child`查找任意子设备，并调用`device_move(dev, NULL, DPM_ORDER_DEV_LAST)`将其父设备重置为NULL，从而避免父设备释放后子设备持有悬空指针的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56c499da5b3b870921c69469c7dabe28e6537148

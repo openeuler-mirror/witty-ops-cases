@@ -1,0 +1,21 @@
+#标题
+usb: dwc3: imx8mp: 修复驱动卸载或探测失败时的设备引用泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 imx8mp 平台上，当 dwc3 驱动程序执行卸载操作时，或者在驱动探测过程中请求中断失败时，内核无法正确释放对 dwc3 设备结构的引用计数。这会导致设备对象无法被正确释放，造成内存资源泄漏。
+
+#主要错误日志
+dev_err(dev, "failed to request IRQ #%d --> %d\n", irq, err);
+
+#问题根因
+驱动在探测阶段使用 `of_find_device_by_node()` 获取 dwc3 设备时增加了设备的引用计数，但在探测失败（如请求中断失败）的异常处理路径中，以及驱动卸载的 `remove` 函数中，遗漏了调用 `put_device()` 来减少引用计数，导致设备引用计数无法归零，设备对象泄漏。
+
+#解决方案
+1. 在探测失败的错误处理流程中，增加 `put_device(&dwc3_imx->dwc3->dev)` 调用，确保异常退出时释放设备引用。
+2. 在驱动的 `remove` 函数中，显式增加 `put_device(&dwc3_imx->dwc3->dev)` 调用，确保驱动卸载时释放设备引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2229a84dc17588a2630d4d8702c18f937546b4a4

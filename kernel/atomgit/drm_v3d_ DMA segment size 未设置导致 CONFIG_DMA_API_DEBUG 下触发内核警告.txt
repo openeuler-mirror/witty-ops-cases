@@ -1,0 +1,32 @@
+#标题
+drm/v3d: DMA segment size 未设置导致 CONFIG_DMA_API_DEBUG 下触发内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 CONFIG_DMA_API_DEBUG 的内核配置下，使用 V3D 进行渲染（如运行 Xorg）时，内核检测到 DMA 段长度映射异常，触发 WARNING 并打印调用栈。系统日志显示设备支持的 max segment size 默认为 64K，但实际映射长度超过了该限制。
+
+#主要错误日志
+DMA-API: v3d 1002000000.v3d: mapping sg segment longer than device claims to support [len=8290304] [max=65536]
+WARNING: CPU: 0 PID: 493 at kernel/dma/debug.c:1179 debug_dma_map_sg+0x330/0x388
+CPU: 0 UID: 0 PID: 493 Comm: Xorg Not tainted 6.12.53-yocto-standard #1
+Hardware name: Raspberry Pi 5 Model B Rev 1.0 (DT)
+Call trace:
+ debug_dma_map_sg+0x330/0x388
+ __dma_map_sg_attrs+0xc0/0x278
+ dma_map_sgtable+0x30/0x58
+ drm_gem_shmem_get_pages_sgt+0xb4/0x140
+ v3d_bo_create_finish+0x28/0x130 [v3d]
+ v3d_create_bo_ioctl+0x54/0x180 [v3d]
+ drm_ioctl_kernel+0xc8/0x140
+ drm_ioctl+0x2d4/0x4d8
+
+#问题根因
+V3D 驱动在初始化时未设置 `max_seg_size`，导致内核默认使用 64K 作为设备支持的 DMA 段大小上限。当 V3D 进行渲染操作需要映射大于 64K 的内存段时，`debug_dma_map_sg()` 函数检测到映射长度超过了设备声称支持的最大值，从而触发警告。
+
+#解决方案
+在 V3D 驱动的 `probe` 函数中，通过调用 `dma_set_max_seg_size(&pdev->dev, UINT_MAX)` 将设备的 DMA 最大段大小设置为最大值，以允许 V3D 映射所需的任意长度的段，从而消除 `debug_dma_map_sg()` 的误报警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/92b42183b971a296b4c1458c475fddde26eb3f04

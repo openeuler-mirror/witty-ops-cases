@@ -1,0 +1,27 @@
+#标题
+urma: ubagg驱动引用计数管理错误导致模块引用异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ubagg驱动在资源引用计数管理上存在错误：
+1. `uburma_open` 函数中未正确调用 `module_get`，导致驱动模块引用计数未增加；
+2. `uburma_release_file` 函数中存在错误的 `module_put` 调用条件，可能导致模块引用计数错误释放；
+这些错误会导致驱动模块引用计数与实际使用状态不一致，可能引发模块被错误卸载或设备无法正常打开（返回 -ENODEV）。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中判断逻辑存在严重错误：
+1. 在 `uburma_open` 中，原代码 `if (!ubc_dev->ops->owner)` 的条件判断写反了，导致当 owner 存在时反而跳过了 `try_module_get` 的调用，未增加引用计数；
+2. 在 `uburma_release_file` 中，原代码 `ubc_dev->ops->owner != NULL` 虽然逻辑正确，但配合 open 的错误逻辑导致了不对称。
+
+#解决方案
+修正条件判断逻辑，确保模块引用计数操作的正确性：
+1. 在 `uburma_open` 中，将条件 `!ubc_dev->ops->owner` 修改为 `ubc_dev->ops->owner`，确保当 owner 存在时正确调用 `try_module_get` 增加引用计数；
+2. 在 `uburma_release_file` 中，移除冗余的 `!= NULL` 显式比较（改为 `ubc_dev->ops->owner`），保持代码逻辑简洁并与 open 函数的逻辑风格一致，确保在 owner 存在时才执行 `module_put`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c25f37d4e464aa730f453f85c5389ff158b76ab9

@@ -1,0 +1,20 @@
+#标题
+HID核心层未正确预留Report ID导致数据传输错位
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用HID设备进行通信时，如果设备的Report ID为0，通过`hid_hw_request()`发送的数据会被错误地剥离第一个字节。这导致底层传输驱动接收到的数据比预期少一个字节，引发数据解析错误或设备功能异常。该问题由syzbot发现并报告。
+
+#主要错误日志
+未知
+
+#问题根因
+底层传输驱动期望缓冲区的第一个字节是Report ID，即使Report ID未实际使用（此时驱动仅移位缓冲区）。然而，`__hid_request()`函数在处理Report ID为0的情况时，未像`hid_hw_raw_request()`那样将缓冲区偏移一个字节。这导致传递给`raw_request()`回调的缓冲区没有预留首字节空间，使得发出的数据被意外截断（缺少首字节）。
+
+#解决方案
+在`__hid_request()`函数中增加对Report ID为0情况的判断处理。当Report ID为0时，将数据缓冲区指针向后偏移一个字节（`data_buf++`），以预留首字节空间供底层驱动写入Report ID，同时将报告长度加1，确保数据传输结构符合底层驱动预期。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/598f7d16da43e57d3d1aba86ab616cc64efc204b

@@ -1,0 +1,21 @@
+#标题
+KVM: nVMX: 嵌套虚拟化 VM-Entry 未校验 guest_ia32_debugctl 导致 L2 获取非法硬件权限
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 KVM 嵌套虚拟化场景下，当 L1 虚拟机通过 VM-Entry 加载 L2 虚拟机时，如果 vmcs12 中配置了 `VM_ENTRY_LOAD_DEBUG_CONTROLS`，KVM 未对 `guest_ia32_debugctl` 字段进行有效性校验。这导致 L2 虚拟机能够加载硬件支持但 KVM 不支持的 DEBUGCTL 值，使得 L2 获取了本不应具备的硬件功能权限，破坏了虚拟化的隔离性与一致性。
+
+#主要错误日志
+未知
+
+#问题根因
+KVM 在处理嵌套 VM-Entry 时，仅简单将 vmcs12 中的 `guest_ia32_debugctl` 写入 vmcs02，未检查该值是否包含 KVM 不支持的保留位或功能位。由于 KVM 仅支持硬件功能的一个子集，如果缺乏软件层面的合法性检查，L2 guest 可以加载任意硬件支持的值，从而绕过 KVM 的功能限制。修复前，`nested_vmx_check_guest_state` 函数仅校验了 DR7 寄存器，遗漏了对 DEBUGCTL 的校验。
+
+#解决方案
+在嵌套 VM-Entry 的入口检查函数 `nested_vmx_check_guest_state` 中增加对 `vmcs12->guest_ia32_debugctl` 的合法性校验，调用 `vmx_is_valid_debugctl` 确保值有效。
+同时，在 `prepare_vmcs02` 阶段写入 vmcs02 时，使用 `vmx_get_supported_debugctl` 对值进行掩码过滤，确保仅加载 KVM 支持的位。该修复在保持 L1 对 vmcs12 写入预期（不破坏 vmcs12 内容）的同时，防止 L2 使用非法的 DEBUGCTL 配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c3a09d8009c3a2195db6298656680e06c22c7005

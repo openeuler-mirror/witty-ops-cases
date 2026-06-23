@@ -1,0 +1,21 @@
+#标题
+md/raid1: process_checks 未检查源盘缺失导致潜在越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RAID1 执行恢复或检查操作时，若所有磁盘读取均失败导致无法找到有效的源磁盘，`process_checks` 函数中的 `primary` 索引会越界（达到 `conf->raid_disks * 2`），系统可能继续处理无效的内存区域，导致数据损坏或内核崩溃。同时，在 `sync_request_write` 阶段若修复失败，恢复进程未能正确中断。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `process_checks` 函数中，代码遍历所有可用磁盘以查找成功读取数据的 'primary' 源盘。如果在检查所有可能性后仍未找到合适的源磁盘，循环结束后 `primary` 索引将越界。原代码缺少对该条件的显式检查，导致后续代码在没有有效主源盘的情况下继续执行。此外，`fix_sync_read_error` 的调用逻辑未正确处理检查/修复模式下的中断流程。
+
+#解决方案
+1. 在 `process_checks` 循环结束后增加显式检查，若 `primary` 索引越界（即未找到源盘），打印错误信息并提前返回，阻止进一步处理。
+2. 调整 `sync_request_write` 中的错误处理逻辑，确保当数据非最新且无法修复读错误时（特别是处于 `MD_RECOVERY_REQUESTED` 状态），正确设置 `MD_RECOVERY_INTR` 标志、调用 `md_done_sync` 并释放资源，从而中断恢复操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e93864650ff036dae689eef2a36aebc62c79ff9e

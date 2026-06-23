@@ -1,0 +1,23 @@
+#标题
+drm/i915: capture_engine 函数 NULL 指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel i915 GPU 驱动进行错误捕获（error capture）流程时，若 `intel_context` 结构体为 NULL，访问其成员 `ce->guc_id.id` 会触发 NULL 指针解引用错误，导致内核 panic 或 oops。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference
+
+#问题根因
+在函数 `capture_engine` 中，调用 `intel_engine_get_hung_entity` 获取上下文 `ce` 和请求 `rq` 后，代码在打印调试信息时直接访问了 `ce->guc_id.id`。
+由于 `intel_engine_get_hung_entity` 可能返回有效的 `rq` 但 `ce` 为 NULL 的场景，此时代码未对 `ce` 进行非空检查即进行解引用操作，从而触发了空指针异常。
+
+#解决方案
+在访问 `intel_context` 结构体指针 `ce` 的成员前增加非空判断：
+1. 若 `ce` 不为空，打印包含 `guc_id` 的详细日志。
+2. 若 `ce` 为空，打印不包含 `guc_id` 的日志，避免解引用空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56e2b4e98c698ed41b03e31e0b8a8fff0cfa192b

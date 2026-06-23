@@ -1,0 +1,23 @@
+#标题
+UBUS VDM注册时MUE的total_ues计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在UBUS VDM（Vendor Defined Message）注册流程中，对于MUE（Multi-UE）场景，`total_ues` 计算存在错误。这会导致驱动内部记录的UE资源数量与实际硬件或协议定义不符，可能引发后续资源管理混乱、配置越界或设备功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ub_get_ue_map` 函数处理无UE计数（`!pld->ue_cnt`）的情况时，代码错误地从 `uent->entity_idx`（本地UB实体索引）获取起始和结束索引，而根据逻辑应从 VDM payload 中的 `pue_entity_idx` 获取。这导致返回的 map 索引错误，进而导致 `ub_idevice_enable_handle` 中 `total_ues` 的计算值不正确。
+
+#解决方案
+修正 `ub_get_ue_map` 函数中的索引来源：
+1. 将 `map->start_entity_idx` 的赋值来源从 `uent->entity_idx` 修改为 `pld->pue_entity_idx`。
+2. 将 `map->end_entity_idx` 的赋值来源从 `uent->entity_idx` 修改为 `pld->pue_entity_idx`。
+同时，在 `ub_idevice_enable_handle` 函数中增加了保护逻辑，当 map 的起始索引与设备自身索引一致时，将 `total_ues` 置为 0，确保计算的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b876c7e9ceee095c724741e75a401f64efcdb343

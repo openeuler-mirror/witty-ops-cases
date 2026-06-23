@@ -1,0 +1,28 @@
+#标题
+bcmgenet 驱动未初始化 u64 统计 seq counter 导致 lockdep 报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 32 位机器上加载 bcmgenet 网卡驱动（如 BCM2711 平台）时，内核启动过程中触发 lockdep 校验失败。系统打印 "INFO: trying to register non-static key" 警告，并关闭锁定正确性验证器，随后调用栈指向 bcmgenet_get_stats64 函数。
+
+#主要错误日志
+```
+[    1.830953][    T1] INFO: trying to register non-static key.
+[    1.830993][    T1] The code is fine but needs lockdep annotation, or maybe
+[    1.831027][    T1] you didn't initialize this object before use?
+[    1.831057][    T1] turning off the locking correctness validator.
+[    1.831090][    T1] CPU: 1 UID: 0 PID: 1 Comm: swapper/0 Tainted: G        W           6.16.0-rc2-v7l+ #1 PREEMPT
+...
+[    1.831166][    T1]  lock_acquire from bcmgenet_get_stats64+0x4a4/0x4c8
+```
+
+#问题根因
+在 32 位机器上，u64 统计数据使用 seq counter 进行保护。驱动程序在 probe 阶段分配并使用统计结构，但未调用 u64_stats_init() 初始化 seq counter。当后续 bcmgenet_get_stats64 调用 u64_stats_update_begin() 时，lockdep 检测到未初始化的 seq counter 锁操作，从而报错。
+
+#解决方案
+在驱动 probe 流程中，遍历所有接收队列（rx_rings）和发送队列（tx_rings），分别调用 u64_stats_init() 函数对其 stats64.syncp 成员进行初始化，确保在 32 位系统下 seq counter 可用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6da1e96bcb10110cab5ffc23eec55706ab0b42b0

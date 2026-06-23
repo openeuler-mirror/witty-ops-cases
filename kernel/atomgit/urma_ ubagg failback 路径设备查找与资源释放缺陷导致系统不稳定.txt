@@ -1,0 +1,29 @@
+#标题
+urma: ubagg failback 路径设备查找与资源释放缺陷导致系统不稳定
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在聚合设备（ubagg）删除或故障回退场景下，系统表现不稳定。具体表现为故障回退消息处理和会话清理变得脆弱，资源交换处理程序无法从 bonding EID 一致地解析出 ubagg 私有状态，可能导致内核空指针访问或资源泄漏。
+
+#主要错误日志
+- "Failed to get bonding device for failback start.\n"
+- "Failed to find jetty for failback, vjetty_id:%u.\n"
+- "Failed to alloc session for exchange seg info"
+- "Failed to send seg info resp message.\n"
+- "Failed to send jetty info resp message.\n"
+
+#问题根因
+故障回退通知路径虽然增加了 ubagg 特定状态，但设备列表管理和引用计数处理在 ioctl、netlink、connect 和 failback 路径上分散且不一致。
+部分代码路径直接使用 ubcore 设备查找接口，而不是从 bonding EID 解析对应的 ubagg 私有设备，导致 failback 路由和资源交换无法与聚合设备生命周期对齐，且设备引用计数处理不当。
+
+#解决方案
+重构 ubagg 设备管理逻辑，将设备列表管理和 kref 辅助函数移入 `ubagg_device` 模块。
+1. 在 ioctl、netlink、connect 和 failback 路径中统一使用公共的 `ubagg_device` 查找接口（如 `ubagg_get_device_by_eid`）。
+2. 在设备拆卸期间刷新未完成的 ubagg 会话。
+3. 对物理 ubcore 设备统一使用 `ubcore_put_device()` 辅助函数进行引用释放。
+4. 更新 failback 请求处理逻辑，从拓扑结构派生对端路由信息，并在 failback 开始时保持 jetty 交换信息同步。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ada53dfa3e0ba8695719fdb971110fcb42cdcc2e

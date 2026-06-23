@@ -1,0 +1,20 @@
+#标题
+ad_sigma_delta: 修复 status_pos 变量未初始化导致潜在内核错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IIO ADC 子系统的 ad_sigma_delta 驱动处理中断时，若 `reg_size` 的值为非预期的异常值，变量 `status_pos` 将处于未初始化状态并被后续代码使用。这可能导致内核运行时行为不可预测，引发逻辑错误或潜在的系统崩溃，同时可能触发静态代码分析工具（如 Smatch）的告警。
+
+#主要错误日志
+Unsupported reg_size: %u\n
+
+#问题根因
+在函数 `ad_sd_trigger_handler()` 中，变量 `status_pos` 的初始化仅在 switch 语句的特定 case 分支（1, 2, 3, 4）中进行。当 `reg_size` 的值不在预期范围内时，switch 语句缺少 default 分支处理，导致程序跳过初始化逻辑直接使用未初始化的 `status_pos` 变量。
+
+#解决方案
+在 switch 代码块中增加 default 分支，用于捕获非预期的 `reg_size` 值。在 default 分支中，通过 `dev_err_ratelimited` 打印错误日志以记录异常的寄存器大小值，并使用 `goto irq_handled` 跳转至中断处理结束逻辑，避免使用未初始化的变量并正确结束中断处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/269e89220b5347e39e6b03c999b968c96c1ea739

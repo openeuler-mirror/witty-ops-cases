@@ -1,0 +1,45 @@
+#标题
+page_alloc: 多 block 合并伙伴页 highatomic 类型标记不一致导致内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 xfstests 测试用例（如 generic/176）时，触发内核 WARN_ON 告警。系统在处理可移动内存分配时，检测到伙伴页块中存在类型不一致的问题：首个页块类型为 MIGRATE_MOVABLE，而尾随页块类型仍为 MIGRATE_HIGHATOMIC。这导致内存分配路径 `expand` 函数中触发类型检查失败。
+
+#主要错误日志
+------------[ cut here ]------------
+page type is 3, passed migratetype is 1 (nr=512)
+WARNING: CPU: 0 PID: 509870 at mm/page_alloc.c:645 expand+0x1c5/0x1f0
+...
+RIP: 0010:expand+0x1c5/0x1f0
+...
+Call Trace:
+ <TASK>
+ ? __warn+0x7b/0x120
+ ? expand+0x1c5/0x1f0
+ ? report_bug+0x191/0x1c0
+ ? handle_bug+0x3c/0x80
+ ? exc_invalid_op+0x17/0x70
+ ? asm_exc_invalid_op+0x1a/0x20
+ ? expand+0x1c5/0x1f0
+ __rmqueue_pcplist+0x3a9/0x730
+ get_page_from_freelist+0x7a0/0xf00
+ __alloc_pages_noprof+0x153/0x2e0
+ ...
+
+#问题根因
+当 `MAX_ORDER` 大于 `pageblock_order` 时，高原子保留机制处理不当导致类型不一致。
+具体过程：
+1. 系统进行若干相邻的 order-3 内存请求（不带 `__GFP_DIRECT_RECLAIM`），导致周围页块被标记为 `MIGRATE_HIGHATOMIC`。
+2. 释放内存时，这些页块合并为一个 order-10 的伙伴页块。
+3. 后续高原子池被排空时，该 order-10 伙伴页被移回 movable 链表，但代码逻辑仅将第一个页块标记为 movable，未处理剩余尾随页块的类型。
+4. 结果导致该伙伴页的首部与尾部类型不一致，后续 `expand` 时触发类型校验告警。
+
+#解决方案
+修改 `reserve_highatomic_pageblock` 和 `unreserve_highatomic_pageblock` 函数，使其感知分配/伙伴页可能跨越多个页块的情况：
+1. 在保留高原子页块时，若 `order >= pageblock_order`，调用 `change_pageblock_range` 将整个分配范围标记为 `MIGRATE_HIGHATOMIC`，而不是仅处理单个页块。
+2. 在取消保留时，同样检查 `order`，若大于等于 `pageblock_order`，则使用 `change_pageblock_range` 将整个范围恢复为目标迁移类型，并调整计数逻辑以确保统计准确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/89f9d0329c4d24101c0a156cfc262f353b20b07b

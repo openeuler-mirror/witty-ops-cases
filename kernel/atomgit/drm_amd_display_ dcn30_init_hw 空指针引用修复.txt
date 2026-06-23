@@ -1,0 +1,25 @@
+#标题
+drm/amd/display: dcn30_init_hw 空指针引用修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 显示驱动初始化过程中（`dcn30_init_hw` 函数执行阶段），若 `dc->clk_mgr` 或其 `funcs` 成员为空，内核将触发空指针引用错误，可能导致内核崩溃或显示硬件初始化异常。
+
+#主要错误日志
+smatch 静态分析工具报错信息：
+drivers/gpu/drm/amd/amdgpu/../display/dc/hwss/dcn30/dcn30_hwseq.c:789 dcn30_init_hw() error: we previously assumed 'dc->clk_mgr' could be null (see line 628)
+
+#问题根因
+在 `dcn30_init_hw` 函数中，代码逻辑此前已假定 `dc->clk_mgr` 可能为空（进行了部分检查），但在后续调用 `notify_wm_ranges` 和 `set_hard_max_memclk` 等函数指针时，仅检查了函数指针是否存在，未检查 `dc->clk_mgr` 指针本身及其 `funcs` 成员是否为空。当 `dc->clk_mgr` 或 `dc->clk_mgr->funcs` 为 NULL 时，直接访问将导致空指针引用。
+
+#解决方案
+在 `dcn30_init_hw` 函数中访问 `clk_mgr` 相关回调函数前，增加对 `dc->clk_mgr` 指针及其 `funcs` 成员的非空判断。
+具体修改如下：
+1. 在调用 `init_clocks` 前，增加对 `dc->clk_mgr->funcs` 的判断。
+2. 在调用 `notify_wm_ranges` 前，补全 `dc->clk_mgr` 和 `dc->clk_mgr->funcs` 的非空检查。
+3. 在调用 `set_hard_max_memclk` 前，补全 `dc->clk_mgr` 和 `dc->clk_mgr->funcs` 的非空检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4997592f40d33ef23900b1582ae9311083570e31

@@ -1,0 +1,25 @@
+#标题
+mm: shmem: 修复 shrinkable 计算中的差一错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 shmem（共享内存）模块中，当处理大页并且文件大小超出时，内核在判断该大页是否包含可被内存压力释放的页面时存在逻辑错误。该缺陷导致 `shmem_get_folio_gfp()` 在计算大页是否超出 `i_size` 足够远（即是否留有一页或更多空间供后续释放）时判断不准确，可能导致本应被标记为可收缩的页面未被正确识别。虽然此问题长期存在且影响较小，但随着对小尺寸大页支持的引入，其影响比例会变得显著。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `shmem_get_folio_gfp()` 中，判断大页是否超出 `i_size` 的计算存在一个长期的差一错误。
+原代码逻辑为：
+`DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE) < folio_next_index(folio) - 1`
+该判断条件导致在临界情况下，未能正确识别出大页是否包含足够的可释放空间。
+
+#解决方案
+修正计算逻辑，去除多余的 `-1` 偏移，将判断条件修改为：
+`DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE) < folio_next_index(folio)`
+此修复确保了在大页超出文件大小时的收缩判断逻辑正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf5cb2bf8e4158df17fef87c4f6215f237a0bb21

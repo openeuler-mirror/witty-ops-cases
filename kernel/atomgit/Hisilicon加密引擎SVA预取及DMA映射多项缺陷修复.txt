@@ -1,0 +1,32 @@
+#标题
+Hisilicon加密引擎SVA预取及DMA映射多项缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. Hisilicon HPRE/SEC/ZIP引擎在开启SVA prefetch功能时，由于未正确等待硬件状态就绪，可能导致功能不稳定或报错。
+2. SEC引擎在处理backlog请求发送失败时，错误累加`send_busy_cnt`计数，且未正确处理发送失败后的请求回退（软件加密）流程，可能导致资源泄漏或流程异常。
+3. SEC引擎在进行加密运算时，DMA映射方向设置错误，对于非原位加密操作，输入缓冲区被错误地映射为`DMA_BIDIRECTIONAL`，可能导致硬件行为异常。
+4. ZIP引擎流式压缩模式下，literal length功能未使能，影响压缩处理。
+5. 驱动初始化过程中，`kcalloc`内存分配接口使用不当（使用了`kzalloc`且参数计算方式不规范）。
+
+#主要错误日志
+- "failed to wait sva prefetch ready" (推断，基于HPRE/SEC/ZIP模块新增的等待逻辑)
+- "failed to open sva prefetch" (drivers/crypto/hisilicon/hpre/hpre_main.c, drivers/crypto/hisilicon/sec2/sec_main.c, drivers/crypto/hisilicon/zip/zip_main.c)
+- "failed to close sva prefetch" (drivers/crypto/hisilicon/hpre/hpre_main.c, drivers/crypto/hisilicon/sec2/sec_main.c, drivers/crypto/hisilicon/zip/zip_main.c)
+
+#问题根因
+1. **SVA Prefetch时序问题**：驱动在开启或关闭SVA prefetch后，未增加寄存器状态轮询等待机制，无法确保硬件模块真正进入 Ready 状态，导致后续操作不可靠。
+2. **SEC Backlog处理逻辑错误**：在`qp_send_message`发送失败时，直接返回且未区分错误类型，上层函数`sec_alg_send_backlog`逻辑不严谨，未对失败请求执行软件加密回退处理，导致请求挂起或资源未释放。
+3. **DMA映射方向错误**：`hisi_acc_sg_buf_unmap`和`hisi_acc_sg_buf_map_to_hw_sgl`函数在处理非原位加密时，对输入源地址强制使用了`DMA_BIDIRECTIONAL`，正确应为`DMA_TO_DEVICE`。
+4. **功能配置缺失**：ZIP引擎未在初始化时配置 literal length 使能位。
+
+#解决方案
+1. **增加SVA状态等待**：在HPRE、SEC、ZIP驱动中新增`wait_sva_ready`轮询函数，在开启/关闭SVA prefetch后，检查特定寄存器位，确保连续3次读取到就绪状态后才返回，否则返回`-ETIMEDOUT`。
+2. **修正SEC Backlog处理**：移除错误的`send_busy_cnt`累加逻辑；重构`sec_alg_send_backlog`函数，针对`qp_send_message`的不同返回值（`-EINPROGRESS`、`-EBUSY`、其他错误）分别处理，确保错误请求能正确执行软件加密回退（`sec_alg_send_backlog_soft`）并清理资源。
+3. **修正DMA映射方向**：修改`hisi_acc_sg_buf_map_to_hw_sgl`和`hisi_acc_sg_buf_unmap`接口，增加`dir`参数，SEC和ZIP驱动调用时根据实际数据流向传入`DMA_TO_DEVICE`或`DMA_FROM_DEVICE`，原位加密时才使用`DMA_BIDIRECTIONAL`。
+4. **完善初始化配置**：在ZIP引擎初始化流程中增加`hisi_zip_literal_set`调用以使能 literal length；将内存分配接口统一修正为`devm_kcalloc`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/238707cf93e296930e8cb507aba49d4f17f80fbd

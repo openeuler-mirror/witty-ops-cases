@@ -1,0 +1,25 @@
+#标题
+urma: 查询设备属性时 SL 资源及能力集信息缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+调用 `uburma_cmd_query_device_attr` 接口查询设备属性时，用户空间无法获取到正确的 SL（Service Level）资源信息以及部分设备能力集（如 rm_order_cap、rc_order_cap、tp_cap 等）。由于数据未从底层同步，上层应用可能读取到全 0 或未初始化的默认值，导致基于这些属性的后续业务逻辑（如资源分配、功能协商）判断错误或功能异常。
+
+#主要错误日志
+- "Invalid parameter with error dev_name.\n"
+- "Failed to query device attr, dev_name: %s.\n"
+
+#问题根因
+在 `uburma_cmd_query_device_attr` 函数中，存在两处逻辑缺失导致数据不一致：
+1. 数据填充缺失：`uburma_fill_device_attr` 函数未将底层 `ubcore_device` 中的 SL 资源信息和部分能力集字段拷贝到用户态属性结构体中。
+2. 数据同步缺失：在查询并填充属性前，未调用 `ubcore_query_device_attr` 从硬件或底层驱动同步最新的设备属性数据，导致填充的是旧数据或未初始化数据。
+
+#解决方案
+1. 在 `uburma_cmd_device_cap` 结构体中新增缺失的字段定义（rm_order_cap、rc_order_cap、tp_feature、priority_info 等），确保内核态与用户态结构体对齐。
+2. 在 `uburma_fill_device_attr` 函数中增加 `memcpy` 及赋值操作，将底层驱动中的 SL 信息和能力集字段正确拷贝到输出属性中。
+3. 在 `uburma_cmd_query_device_attr` 流程中，于填充属性前增加调用 `ubcore_query_device_attr`，确保获取最新的设备属性数据；若查询失败则打印错误日志并返回 `-EINVAL`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4e87a860eeb5013210856366eac3e1c6a358b352

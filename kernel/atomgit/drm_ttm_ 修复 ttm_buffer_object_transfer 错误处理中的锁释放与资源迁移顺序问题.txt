@@ -1,0 +1,26 @@
+#标题
+drm/ttm: 修复 ttm_buffer_object_transfer 错误处理中的锁释放与资源迁移顺序问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TTM（Translation Table Manager）缓冲对象转移过程中，如果 `dma_resv_reserve_fences` 预留操作失败，会导致内核资源泄露或状态不一致。具体表现为：
+1. 错误处理路径中未释放先前锁定的 `resv` 锁，导致该锁永久持有，可能引发后续相关操作的死锁或挂起。
+2. 资源在预留 fence 插槽之前就已经被移动，若后续预留失败，资源状态将不一致，且未回滚迁移操作。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ttm_buffer_object_transfer` 中，错误处理逻辑存在两个缺陷：
+1. **锁泄露**：代码在调用 `dma_resv_reserve_fences` 失败后直接返回，未调用 `dma_resv_unlock` 释放之前通过 `dma_resv_trylock` 获取的锁。
+2. **逻辑顺序错误**：代码先将资源从原对象迁移到新对象，之后才预留 fence 插槽。如果预留失败，资源已经被错误地转移且未被恢复。
+
+#解决方案
+调整代码执行顺序并补全错误处理路径：
+1. 将 `dma_resv_reserve_fences` 调用提前，在锁定 `resv` 后立即执行，确保在资源迁移前完成预留。
+2. 在 `dma_resv_reserve_fences` 失败的错误处理分支中，增加 `dma_resv_unlock` 调用，确保释放锁资源后再释放内存并返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2a653fd5bd253590024ec71535aa6edfce3fa75b

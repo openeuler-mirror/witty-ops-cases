@@ -1,0 +1,36 @@
+#标题
+蓝牙HCI UART初始化期间竞态条件导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在蓝牙 HCI UART 设备初始化过程中，若 `hci_uart_register_dev()` 尚未执行完成但 `HCI_UART_PROTO_READY` 标志位已被置位，此时若用户空间进程关闭 TTY 设备（调用 `hci_tty_uart_close()`），将触发竞态条件。该竞态会导致内核访问未初始化的数据结构，进而引发 Kernel Panic（内核崩溃）。
+
+#主要错误日志
+RIP: 0010:skb_queue_empty_lockless include/linux/skbuff.h:1887 [inline]
+RIP: 0010:skb_queue_purge_reason+0x6d/0x140 net/core/skbuff.c:3936
+
+Call Trace:
+ <TASK>
+ skb_queue_purge include/linux/skbuff.h:3364 [inline]
+ mrvl_close+0x2f/0x90 drivers/bluetooth/hci_mrvl.c:100
+ hci_uart_tty_close+0xb6/0x120 drivers/bluetooth/hci_ldisc.c:557
+ tty_ldisc_close drivers/tty/tty_ldisc.c:455 [inline]
+ tty_ldisc_kill+0x66/0xc0 drivers/tty/tty_ldisc.c:613
+ tty_ldisc_release+0xc9/0x120 drivers/tty/tty_ldisc.c:781
+ tty_release_struct+0x10/0x80 drivers/tty/tty_io.c:1690
+ tty_release+0x4ef/0x640 drivers/tty/tty_io.c:1861
+ __fput+0x86/0x2a0 fs/file_table.c:450
+
+#问题根因
+问题根因是 `HCI_UART_PROTO_READY` 标志位的设置时机过早。在 `hci_uart_set_proto()` 函数中，原代码在调用 `hci_uart_register_dev()` 之前就设置了该标志位。这导致了一个时间窗口：如果此时外部调用 `hci_uart_tty_close()`，代码会认为协议已就绪并尝试访问相关数据结构（如调用 `mrvl_close`），但此时 `hci_uart_register_dev()` 尚未完成初始化，导致访问未初始化的字段引发崩溃。
+
+#解决方案
+引入一个新的标志位 `HCI_UART_PROTO_INIT` 来表示协议正处于初始化阶段。修改逻辑如下：
+1. 在调用 `hci_uart_register_dev()` 之前，设置 `HCI_UART_PROTO_INIT` 标志位，而不是 `HCI_UART_PROTO_READY`。
+2. 在 `hci_uart_register_dev()` 执行成功后，再设置 `HCI_UART_PROTO_READY` 标志位，并清除 `HCI_UART_PROTO_INIT` 标志位。
+3. 在数据路径（如发送、接收、唤醒等操作）的条件检查中，增加对 `HCI_UART_PROTO_INIT` 的判断，允许在初始化阶段进行必要的电源管理操作，同时防止在设备未就绪时进行非法访问。这既修复了此处的竞态崩溃，又保留了之前补丁（commit c411c62cc133）针对电源管理的修复意图。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c9b869ccb5a3117bb145af27a46a6aa5adc4945

@@ -1,0 +1,21 @@
+#标题
+sunrpc: 处理 SVC_GARBAGE 认证错误导致服务异常响应
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 sunrpc 在认证处理阶段返回 SVC_GARBARGE 状态时，系统未能将其作为认证错误处理，而是将其作为参数解析错误处理，导致客户端收到不正确的响应状态（rpc_garbage_args），而非预期的认证错误响应，进而影响 RPC 通信流程与状态统计。
+
+#主要错误日志
+svc_printk(rqstp, "failed to decode RPC header\n")
+（注：原代码在 err_garbage_args 分支会打印此日志，修复后此路径被移除，改为返回认证错误。）
+
+#问题根因
+在函数 `svc_process_common` 中，当认证处理结果为 `SVC_GARBAGE` 时，代码逻辑错误地跳转到了 `err_garbage_args` 标签进行处理。这导致系统将其视为 RPC 参数格式错误而非认证错误，从而返回 `rpc_garbage_args` 状态码并增加 `rpcbadfmt` 统计计数，而不是返回合适的认证错误状态（如 `rpc_autherr_badcred`）。
+
+#解决方案
+修改 `svc_process_common` 函数中的 `SVC_GARBAGE` 处理逻辑，将 `rq_auth_stat` 设置为 `rpc_autherr_badcred`，并直接跳转到 `err_bad_auth` 标签，使其作为认证错误进行标准处理。同时删除了不再使用的 `err_garbage_args` 代码块。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b85f288f8b310c09fb6b44bfd762dafbbc44dc55

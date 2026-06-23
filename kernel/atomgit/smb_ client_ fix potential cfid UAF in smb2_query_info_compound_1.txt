@@ -1,0 +1,32 @@
+#标题
+smb: client: fix potential cfid UAF in smb2_query_info_compound
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 smb2_query_info_compound() 函数进行重试时，访问了已被释放的 cfid 指针，导致内核检测到引用计数下溢并触发 use-after-free 警告。系统调用栈显示该问题发生在执行 statfs 相关操作期间。
+
+#主要错误日志
+refcount_t: underflow; use-after-free.
+WARNING: CPU: 1 PID: 11224 at ../lib/refcount.c:28 refcount_warn_saturate+0x9c/0x110
+RIP: 0010:refcount_warn_saturate+0x9c/0x110
+Call Trace:
+ smb2_query_info_compound+0x29c/0x5c0 [cifs]
+ smb2_queryfs+0x6a/0xf0 [cifs]
+ smb311_queryfs+0x12d/0x140 [cifs]
+ cifs_statfs+0x9f/0x2b0 [cifs]
+ statfs_by_dentry+0x67/0x90
+ vfs_statfs+0x16/0xd0
+ user_statfs+0x54/0xa0
+ __do_sys_statfs+0x20/0x50
+ do_syscall_64+0x58/0x80
+
+#问题根因
+当 smb2_query_info_compound() 执行重试时，第一次尝试中分配的 cfid 可能已经被释放。由于在重试路径下 cfid 没有被重置为 NULL，后续的清理代码操作了一个悬垂指针，从而导致了潜在的 use-after-free 问题。
+
+#解决方案
+在 replay_again 标签处重新初始化 cfid 指针为 NULL。这确保了在重试路径中，cfid 不会保留上一次失败尝试中已释放的无效地址，从而避免后续清理逻辑误操作悬垂指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b65a6e0eeede592c5e1a3789ce1397cf76e9334

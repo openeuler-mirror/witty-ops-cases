@@ -1,0 +1,20 @@
+#标题
+crypto: nx 修复 bounce buffer 内存泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 NX 842 硬件加密压缩功能时，存在内存泄漏现象。当模块初始化失败或模块退出时，无法完全释放此前分配的 bounce buffer 内存。具体表现为系统运行过程中可用内存逐渐减少，或在驱动卸载后内存未正确回收。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `nx842_crypto_init` 和 `nx842_crypto_exit` 中，使用 `__get_free_pages()` 函数配合 `BOUNCE_BUFFER_ORDER`（order 2，即 4 个页面）分配了 bounce buffer 内存。但在错误处理路径和退出函数中，错误地使用了 `free_page()` 函数来释放内存。由于 `free_page()` 仅释放单个页面，导致剩余的 3 个页面发生泄漏。
+
+#解决方案
+将内存释放调用从 `free_page()` 修改为 `free_pages()`，并传入正确的参数 `BOUNCE_BUFFER_ORDER`，确保释放的内存范围与分配时的 order（2）相匹配，从而修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3a2ffdd32256062b500af22670b02087a5054723

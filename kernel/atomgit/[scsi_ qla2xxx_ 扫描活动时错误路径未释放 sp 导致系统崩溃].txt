@@ -1,0 +1,20 @@
+#标题
+[scsi: qla2xxx: 扫描活动时错误路径未释放 sp 导致系统崩溃]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[当系统进行 Fab 异步扫描且扫描标志位处于 SF_SCANNING 状态时，若尝试再次进入扫描流程，函数会直接返回。此时由于未正确释放 srbs（sp 指针），导致内存泄漏或引用计数错误，最终引发系统 crash（如 slab poisoning 或 kernel panic）。]
+
+#主要错误日志
+[qla2xxx: %s: scan active for sp:%p]
+
+#问题根因
+[在 qla_fab_async_scan 函数中，当检测到 scan_flags 包含 SF_SCANNING 标志时，代码路径仅执行了解锁并返回 rval 的操作，遗漏了对传入的 sp（srb_t 结构体指针）进行释放（free）的处理。这导致了内存资源泄漏，进而引发系统不稳定或崩溃。]
+
+#解决方案
+[修改 drivers/scsi/qla2xxx/qla_gs.c 文件中的错误处理路径。当检测到扫描活动正在进行时，不再直接 return，而是跳转至 done_free_sp 标签处执行释放 sp 的操作，确保资源被正确回收，从而修复系统崩溃问题。]
+
+#来源
+[https://atomgit.com/openeuler/kernel/commit/d5c898e81132a2efc4522ae2c8d355c249decfd5]

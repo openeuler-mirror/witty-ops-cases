@@ -1,0 +1,21 @@
+#标题
+hns3 网卡驱动 tx spare buffer 重复释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `hns3_set_ringparam` 调整环形缓冲区参数时，若 `hns3_init_tx_spare_buffer` 初始化失败（如分配大小为 0 或超过最大阶数），驱动会将 `tx_spare_buf_size` 设置为 0。随后在错误处理流程或后续操作中，可能导致 `ring->tx_spare` 指向的内存被重复释放，引发内核内存管理错误或崩溃。
+
+#主要错误日志
+"failed to allocate tx spare buffer, exceed to max order"
+
+#问题根因
+在函数 `hns3_init_tx_spare_buffer` 中，当分配失败（`alloc_size` 为 0 或 `order` 超过 `MAX_ORDER`）时，代码直接 `return` 返回，但未将 `ring->tx_spare` 指针置为 NULL。
+在特定场景下（如通过 `hns3_set_ringparam` 调用），调用者期望回滚或重置状态，由于 `ring->tx_spare` 保留了旧的（或已释放的）指针值，导致该指针后续被再次释放，造成 double free。
+
+#解决方案
+在 `hns3_init_tx_spare_buffer` 函数的错误处理路径中，无论是入口检查（`alloc_size` 为 0）还是阶数检查失败，均统一跳转到 `not_init` 标签处。在 `not_init` 标签处显式将 `ring->tx_spare` 设置为 NULL，防止后续流程使用悬空指针进行重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/26721e9cd6d5fca180cc4695b2842a56e998fb37

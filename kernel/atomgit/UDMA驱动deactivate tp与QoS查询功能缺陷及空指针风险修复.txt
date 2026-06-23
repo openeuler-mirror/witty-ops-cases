@@ -1,0 +1,43 @@
+#标题
+UDMA驱动deactivate tp与QoS查询功能缺陷及空指针风险修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在UDMA驱动处理TP（Target Point）去激活流程中，系统可能发生空指针引用导致内核崩溃。
+2. 在查询QoS信息时，由于条件判断逻辑错误，可能导致内核线程误使用用户态进程上下文信息，引发功能异常。
+3. UDMA驱动在处理异步事件（如TP Flush Done）时，可能因处理流程阻塞或耗时导致响应不及时或潜在死锁。
+4. 驱动释放资源时存在日志打印缺失或掩盖关键错误信息的情况。
+
+#主要错误日志
+- "notify ue %u tp flush done failed, ret %d.\n"（推断：相关流程失败时打印）
+- "udma open ue rx failed in tp ae work.\n"
+- "tp ae work ctrlq tp %u failed, ret %d.\n"
+- "failed to create ae workqueue.\n"
+- "udma free tid failed, ctx is null.\n"
+- "invalidate cfg_table failed, ret=%d.\n"
+- "udma save tp info failed, ret = %d.\n"
+- "udma get tp list failed, ret = %d.\n"
+- "timeout after %u ms, not all jetty get flush done.\n"
+- "timeout after %u ms, not all jetty get ack.\n"
+
+#问题根因
+1. **空指针引用**：`udma_free_hugepage` 函数未对传入的 `hugepage` 指针进行非空校验，直接访问其成员导致空指针引用。
+2. **上下文判断错误**：`udma_k_ctrlq_save_tpn` 和 `udma_ctrlq_deactive_tp` 等函数错误地使用 `if (!udata)` 来判断是否为内核线程，但在某些调用路径下 `udata` 可能为空但当前进程并非内核线程，导致 PID 标记错误；正确做法应检查 `current->flags & PF_KTHREAD`。
+3. **QoS 参数初始化缺陷**：`udma_construct_qos_param` 中遍历赋值 SL（Service Level）时，循环范围或条件设置不当，导致优先级信息未正确初始化，覆盖了错误的 TP 类型。
+4. **异步事件处理阻塞**：原有的 TP 异步事件处理逻辑直接在中断或关键路径中调用可能阻塞或耗时的函数，改为工作队列（workqueue）机制以避免阻塞。
+5. **资源释放逻辑不完整**：`ummu_core_invalidate_cfg` 调用时缺少必要的 `mm_struct` 参数传递，且部分错误处理分支缺少日志记录。
+
+#解决方案
+1. **增加空指针校验**：在 `udma_free_hugepage` 函数开头增加 `if (hugepage == NULL) return;` 判断。
+2. **修正上下文判断逻辑**：将 `if (!udata)` 修改为 `if (current->flags & PF_KTHREAD)`，准确识别内核线程并设置正确的 PID 标识。
+3. **修复 QoS 参数构造逻辑**：重写 `udma_construct_qos_param` 函数逻辑，检查 `tp_sl_num` 非零后再进行默认赋值，并确保在遍历过程中正确设置 TP 类型位。
+4. **引入异步工作队列**：新增 `ae_workq` 工作队列，定义 `udma_ae_work` 结构体，将 TP Flush Done 等事件处理逻辑移入工作队列执行，避免在关键路径中阻塞。
+5. **完善错误处理与资源回收**：
+   - 在释放 ucontext 和 tid 时，传递正确的 `mm_struct` 指针给 `ummu_core_invalidate_cfg`。
+   - 删除冗余的头文件 `udma_ctl.h`，整理代码结构。
+   - 优化日志打印，增加必要的错误日志和速率限制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c47e8b6b09a9b61203ea34f94e1a29d08b96260a

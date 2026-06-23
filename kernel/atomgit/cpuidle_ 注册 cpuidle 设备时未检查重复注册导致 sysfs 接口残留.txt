@@ -1,0 +1,20 @@
+#标题
+cpuidle: 注册 cpuidle 设备时未检查重复注册导致 sysfs 接口残留
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CPU 已存在 cpuidle 设备的情况下，若未注销旧设备直接注册新设备，会导致原有的 cpuidle 设备被移除，但其对应的 sysfs 接口未被清理，造成状态不一致。
+
+#主要错误日志
+CPU%d: cpuidle device already registered
+
+#问题根因
+`__cpuidle_register_device` 函数在注册新的 cpuidle 设备时，未检查当前 CPU 是否已经注册过设备。这导致重复注册时，代码直接覆盖了 `per_cpu(cpuidle_devices, cpu)` 指针，原设备被替换但未执行注销流程（如移除 sysfs 接口），从而造成资源泄漏和接口残留。
+
+#解决方案
+在 `__cpuidle_register_device` 函数中增加对 `per_cpu(cpuidle_devices, cpu)` 的检查。如果检测到当前 CPU 已经注册了 cpuidle 设备，则打印提示日志并返回 `-EEXIST` 错误，拒绝注册请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d9f067fff520827ebefd39252b852a9fd169e2ba

@@ -1,0 +1,20 @@
+#标题
+btrfs: 开启抢占与跟踪点时COW树块触发use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启内核抢占（CONFIG_PREEMPT=y）且启用 trace_btrfs_cow_block 跟踪点的情况下，执行 Btrfs 树块写时复制（COW）操作时，触发 use-after-free 错误。这通常发生在 btrfs_search_slot() 等持有 extent buffer 最后引用的路径中，导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 btrfs_cow_block() 函数中，调用 __btrfs_cow_block() 进行 COW 操作后，会调用 free_extent_buffer_stale(buf) 释放旧的 extent buffer。如果内核开启了抢占，在执行 trace_btrfs_cow_block() 跟踪点代码之前，当前任务可能被抢占。由于此时旧 extent buffer 的最后一个引用已被释放并计划通过 RCU 释放，抢占发生期间该内存可能已被回收，导致随后调用 trace_btrfs_cow_block() 时访问已释放的内存。
+
+#解决方案
+将 trace_btrfs_cow_block() 调用从 btrfs_cow_block() 函数移动到 __btrfs_cow_block() 函数内部。确保在调用 free_extent_buffer_stale(buf) 释放 extent buffer 之前执行跟踪点，从而避免访问已释放的内存结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1b2c579643a84da0bac59e77bcf8917befcad80

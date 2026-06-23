@@ -1,0 +1,20 @@
+#标题
+io_uring 溢出刷新重调度导致 CQE 重排序故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 io_uring 处理完成队列事件（CQE）溢出刷新的过程中，若触发重调度（reschedule），会导致后续生成的 CQE 与正在刷新的 CQE 之间出现乱序。
+
+#主要错误日志
+未知
+
+#问题根因
+在溢出刷新循环中，代码通过 `io_cq_unlock_post` 释放锁并离开 CQ 临界区以进行重调度。此时，缓存的 CQ 指针（cache cq pointers）被重置，导致在该间隙期间新发出的 CQE 不会被强制进入 `io_cqe_cache_refill()` 处理逻辑，从而破坏了 CQE 的预期顺序，引发重排序问题。
+
+#解决方案
+在溢出刷新流程中检查到需要重调度（`need_resched()`）时，在释放锁之前，先将当前的 `ctx->cqe_cached` 指针保存到 `ctx->cqe_sentinel` 中。这确保了在离开临界区期间，新的 CQE 生成者能够正确感知并维护队列顺序，防止重排序发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f96f3782253b60a59cf7babe27292a143b43736e

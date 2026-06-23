@@ -1,0 +1,20 @@
+#标题
+arm64 AES MAC更新函数参数寄存器访问错误导致计算异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ARM64 架构的 NEON 或 Crypto Extensions 加密驱动进行 CBCMAC/CMAC/XCBC 计算时，因 `aes_mac_update()` 函数的 `enc_after` 参数被错误地作为 64 位处理，可能导致加密计算逻辑判断错误，进而引发 MAC（消息认证码）计算结果不正确或数据校验失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在汇编代码 `aes-modes.S` 中，`aes_mac_update()` 的 `enc_after` 参数类型为 `int`（32位），但在执行条件选择指令 `csinv` 时，错误地使用了 64 位寄存器 `x5` 和 `x6` 进行操作（`csinv x5, x6, xzr, eq`）。由于对应的 64 位寄存器的高半部分可能包含垃圾数据，导致该参数的值判断错误，影响了后续的加密控制流。
+
+#解决方案
+修改汇编指令，将 `csinv` 指令中的寄存器操作数从 64 位（x5, x6）修正为 32 位（w5, w6），确保仅读取有效的 32 位参数值，避免高位垃圾数据的干扰。具体变更包括将 `csinv x5, x6, xzr, eq` 修改为 `csinv w5, w6, wzr, eq`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4db23d9b8e3b420bb02edfc61e8426509895d002

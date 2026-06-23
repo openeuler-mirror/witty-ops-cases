@@ -1,0 +1,21 @@
+#标题
+wifi: ath11k: peer HE MCS赋值反置导致固件崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当连接到一个行为异常（misbehaved）的 AP 时，若该 AP 在 160 MHz 传输 MCS map 中广播 0xffff（表示不支持），固件会发生崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ath11k_wmi_send_peer_assoc_cmd()` 中，对等端的传输 MCS（Transmit MCS）被错误地作为接收 MCS 发送给固件，而接收 MCS 被作为传输 MCS 发送，这与固件的定义相反。具体表现为 `he_mcs->rx_mcs_set` 被错误赋值为 `param->peer_he_tx_mcs_set`，导致固件收到非法值（如 0xffff）时触发崩溃。此外，HE rate control mask 的限制逻辑也被应用到了错误的变量上。
+
+#解决方案
+1. 在 `ath11k/wmi.c` 中交换 `he_mcs->rx_mcs_set` 和 `he_mcs->tx_mcs_set` 的赋值来源，使其符合固件定义（即 `rx_mcs_set` 对应 peer 的 RX capability）。
+2. 在 `ath11k/mac.c` 中调整 `ath11k_peer_assoc_h_he_limit` 函数的调用位置，将其应用于接收 MCS 变量（对应固件的 rx_mcs_set），确保 HE rate control mask 生效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4d4f9e46a692ae343c941d381627d2065aead616

@@ -1,0 +1,22 @@
+#标题
+libceph: mon_handle_auth_done 未返回认证处理错误导致内核 WARN 及空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Ceph msgr2.1 协议（secure 模式）下，当 Monitor 认为认证成功但本地 `ceph_auth_handle_reply_done()` 处理出错时，上层能感知到异常并做出反应，但 msgr2 层仍错误地尝试在后台继续建立会话。这会触发 `setup_crypto()` 中的 WARN 警告，并随后在 `prepare_auth_signature()` 函数中引发 NULL 指针引用（NULL pointer dereference），导致内核崩溃或异常重启。
+
+#主要错误日志
+- `[推断] WARNING: at setup_crypto() ...` (Commit 信息明确提到 trigger a WARN in setup_crypto())
+- `[推断] BUG: kernel NULL pointer dereference at ... (prepare_auth_signature)` (Commit 信息明确提到 lead to a NULL pointer dereference inside of prepare_auth_signature())
+
+#问题根因
+函数 `mon_handle_auth_done()` 在处理认证完成消息时，虽然内部通过 `finish_auth()` 传播了 `ceph_auth_handle_reply_done()` 返回的错误码，但在函数返回时固定返回 0，未将该错误码返回给调用者。
+这导致上层（higher layers）感知到认证阶段出错并按失败逻辑处理，而底层 msgr2 层认为认证成功并继续尝试建立会话。这种状态不一致在 secure 模式下触发了加密设置逻辑的警告及后续空指针引用。
+
+#解决方案
+修改 `net/ceph/mon_client.c` 中的 `mon_handle_auth_done()` 函数，将最后的 `return 0;` 修改为 `return ret;`，确保将底层认证处理的实际错误码正确返回给调用者，从而阻止 msgr2 层在认证异常时继续建立会话。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6e9f3df142534fcd9c461d7d51d47d25ca04f767

@@ -1,0 +1,23 @@
+#标题
+sched_cgroup_fork 缺失 QoS 组设置导致调度异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 QOS_SCHED 配置的情况下，新进程通过 fork 创建时，未能正确继承或设置 QoS 调度组属性。这可能导致新进程未被纳入正确的 QoS 调度策略管理，进而影响系统的服务质量保障机制或导致调度行为不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `sched_cgroup_fork` 函数中，虽然代码逻辑获取了任务组 `tg` 并赋值给 `p->sched_task_group`，但在开启 CONFIG_QOS_SCHED 的场景下，缺少对 `sched_change_qos_group` 的调用。这导致新进程在创建初期未能完成 QoS 组的关联设置，遗漏了必要的调度状态更新步骤。
+
+#解决方案
+在 `kernel/sched/core.c` 的 `sched_cgroup_fork` 函数中补充 QoS 调度逻辑：
+1. 声明 `CONFIG_QOS_SCHED` 宏保护下的变量 `tg_qos`。
+2. 在设置 `p->sched_task_group` 时，同步记录 `tg_qos`。
+3. 在设置任务 CPU 亲和性（`__set_task_cpu`）之后、调用 `task_fork` 之前，调用 `sched_change_qos_group(p, tg_qos)` 完成新进程的 QoS 组设置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/93fa110539390048edbe51877efad2b69bc4a255

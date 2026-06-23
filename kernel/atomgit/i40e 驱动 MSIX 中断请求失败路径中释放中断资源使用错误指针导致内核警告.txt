@@ -1,0 +1,33 @@
+#标题
+i40e 驱动 MSIX 中断请求失败路径中释放中断资源使用错误指针导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 i40e 驱动并尝试配置网络设备时，若硬件中断资源请求过程在中途失败（非第一次迭代），错误处理代码无法正确释放已请求的中断，导致内核触发警告堆栈 dump。具体表现为调用 `free_irq` 时报错 "Trying to free already-free IRQ"，系统可能伴随内核 WARNING 信息。
+
+#主要错误日志
+Trying to free already-free IRQ 173
+WARNING: CPU: 25 PID: 1091 at kernel/irq/manage.c:1829 __free_irq+0x192/0x2c0
+Modules linked in: i40e(+) [...]
+CPU: 25 UID: 0 PID: 1091 Comm: NetworkManager Not tainted 6.17.0-rc1+ #1 PREEMPT(lazy)
+RIP: 0010:__free_irq+0x192/0x2c0
+Call Trace:
+ <TASK>
+ free_irq+0x32/0x70
+ i40e_vsi_request_irq_msix.cold+0x63/0x8b [i40e]
+ i40e_vsi_request_irq+0x79/0x80 [i40e]
+ i40e_vsi_open+0x21f/0x2f0 [i40e]
+ i40e_open+0x63/0x130 [i40e]
+ __dev_open+0xfc/0x210
+ ...
+
+#问题根因
+在 `i40e_vsi_request_irq_msix` 函数中，当 `request_irq()` 在后续迭代中失败时，错误处理路径会尝试释放之前已成功申请的中断。释放中断使用的 `dev_id` 参数传入错误，代码传入了 `&vsi->q_vectors[vector]`（数组元素的地址），而对应的 `request_irq()` 申请时使用的是 `vsi->q_vectors[vector]`（指针本身）。由于 `dev_id` 不匹配，`free_irq` 未能找到正确的中断句柄进行释放，导致内核检测到尝试释放已空闲的中断并触发警告。
+
+#解决方案
+修正错误处理路径中 `free_irq` 的参数，确保其 `dev_id` 参数与 `request_irq` 申请时一致。将 `free_irq(irq_num, &vsi->q_vectors[vector])` 修改为 `free_irq(irq_num, vsi->q_vectors[vector])`，去掉取地址符号，使其正确匹配中断注册时的指针值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b4a648c27febd88eaf4c191e0d40b564155db097

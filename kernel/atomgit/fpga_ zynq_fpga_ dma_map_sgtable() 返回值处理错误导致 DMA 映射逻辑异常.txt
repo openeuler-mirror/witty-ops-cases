@@ -1,0 +1,20 @@
+#标题
+fpga: zynq_fpga: dma_map_sgtable() 返回值处理错误导致 DMA 映射逻辑异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Zynq FPGA 驱动进行 DMA 映射操作时，由于代码错误地将 `dma_map_sgtable()` 的返回值当作映射后的段数量（nents）使用，导致驱动误判映射结果。若映射成功（返回 0），驱动会将段数量误记录为 0，可能引发后续 DMA 数据传输失败或系统异常行为；同时原有的错误检查逻辑无法正确捕获映射失败的情况。
+
+#主要错误日志
+dev_err(&mgr->dev, "Unable to DMA map (TO_DEVICE)\n");
+
+#问题根因
+`dma_map_sgtable()` 函数仅返回 0（成功）或错误码，并不返回映射后的段数量。原代码错误地将其返回值赋给 `priv->dma_nelms`，导致在映射成功时将该值设为 0，且判断条件 `if (priv->dma_nelms == 0)` 逻辑与函数实际返回值含义不符。
+
+#解决方案
+修正 `dma_map_sgtable()` 的调用逻辑：使用单独变量 `err` 接收其返回值用于错误判断，映射成功后从 `sgt->nents` 中读取实际的段数量并赋值给 `priv->dma_nelms`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e5624bea3feecd789d2131cc132b6f26fbd66df6

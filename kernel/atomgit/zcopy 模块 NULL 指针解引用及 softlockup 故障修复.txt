@@ -1,0 +1,23 @@
+#标题
+zcopy 模块 NULL 指针解引用及 softlockup 故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 zcopy 模块处理 PUD-SIZE 大页 attach 操作时，系统发生 softlockup（软锁死），导致进程无法调度。
+2. 在 attach 操作与 free 操作发生冲突时，内核触发 NULL pointer dereference（空指针解引用），可能导致内核 panic 或 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **Softlockup 问题**：在 `attach_pages` 函数中调用 `attach_page_range` 访问源内存空间（`src_mm`）时，未持有 `src_mm` 的 mmap_read_lock 读锁，导致并发访问冲突引发 softlockup。
+2. **NULL 指针解引用问题**：`zcopy_get_pud` 函数在检查页表项时，仅判断了 `pud_none`，未判断 `pud_table` 属性。当 PUD 项指向一个大页而非页表时，代码继续将其作为页表指针处理，导致后续访问空指针。
+
+#解决方案
+1. 在 `attach_page_range` 函数调用前后，增加对 `src_mm` 的 `mmap_read_lock` 和 `mmap_read_unlock` 操作，确保内存映射访问的锁保护，修复 softlockup 问题。
+2. 在 `zcopy_get_pud` 函数中增加 `!pud_table(*pud)` 的判断逻辑，若 PUD 项非页表则直接返回 NULL，防止非法地址解引用，修复 NULL pointer dereference 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/425f7d22eed16c95017dcc7239ecdaecce6d70df

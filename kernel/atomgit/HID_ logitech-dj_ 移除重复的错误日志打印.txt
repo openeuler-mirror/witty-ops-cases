@@ -1,0 +1,23 @@
+#标题
+HID: logitech-dj: 移除重复的错误日志打印
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Logitech DJ 接收器驱动中，当 `logi_dj_recv_query_paired_devices` 或 `logi_dj_recv_switch_to_dj_mode` 函数调用失败时，函数内部与其调用者均会打印错误日志。这导致在同一错误路径下产生重复的内核日志信息，影响日志可读性并可能造成日志冗余。
+
+#主要错误日志
+- hid_err: "%s: logi_dj_recv_query_paired_devices error: %d\n" (调用者打印)
+- hid_err: "%s: logi_dj_recv_switch_to_dj_mode returned error:%d\n" (调用者打印)
+- hid_err: "%s error:%d\n" (推断为函数内部修复后统一打印格式)
+
+#问题根因
+`logi_dj_recv_query_paired_devices()` 和 `logi_dj_recv_switch_to_dj_mode()` 这两个函数的多个调用点在函数调用失败时均进行了错误日志打印，而实际上函数内部或调用者只需在一处打印即可，导致了错误日志的重复记录。此外，`logi_dj_recv_switch_to_dj_mode` 中 `logi_dj_recv_send_report` 调用的错误处理位置不当，导致即使发送报告失败，仍会执行不必要的 `msleep(50)`。
+
+#解决方案
+1. 将错误日志打印逻辑从调用者（如 `delayedwork_callback`、`logi_dj_probe`、`logi_dj_reset_resume`）移至 `logi_dj_recv_query_paired_devices` 和 `logi_dj_recv_switch_to_dj_mode` 函数内部，避免重复打印。
+2. 调整 `logi_dj_recv_switch_to_dj_mode` 中 `logi_dj_recv_send_report` 的错误处理流程，在发送失败后立即跳转到清理逻辑（`goto out`），跳过不必要的 `msleep(50)` 延迟。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f4a0d2da53421a18c81715d78b5b1cb107ea608a

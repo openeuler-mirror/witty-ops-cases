@@ -1,0 +1,25 @@
+#标题
+LoongArch KVM extioi 模拟模块数组访问越界及空指针访问故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构 KVM 虚拟化场景下，对 extioi（扩展 I/O 中断控制器）寄存器进行写操作时，可能触发内核空指针访问错误或内存越界访问。具体表现为：
+1. 当访问中断路由表中不存在的 vcpu 时，触发空指针引用导致内核崩溃。
+2. 在处理中断使能寄存器写操作时，计算出错误的中断索引号，导致 `extioi_enable_irq` 函数访问数组越界，可能破坏内核内存或引发 Oops。
+
+#主要错误日志
+kvm_info: "extioi_update_irq irq %d vcpu %d don't exist\n"
+
+#问题根因
+故障根因为 extioi 模拟代码中索引计算逻辑错误及防御性检查缺失：
+1. `extioi_update_irq` 函数中，根据中断号获取 vcpu 时未进行有效性校验，当 `kvm_get_vcpu` 返回 NULL 时，后续代码直接解引用空指针导致崩溃。
+2. `loongarch_extioi_writew` 和 `loongarch_extioi_writel` 函数中，在计算字节偏移时逻辑错误。原代码先对 index 进行了左移操作（`index = index << 2` 或 `index << 3`），但在随后的循环中，错误地将左移后的 index 与循环变量 i 直接相加传给 `extioi_enable_irq`。正确逻辑应为在每个迭代中基于原始 index 进行动态计算（`index * 4 + i` 或 `index * 8 + i`），错误的计算导致传递的索引值过大，引发数组越界访问。
+
+#解决方案
+1. 在 `extioi_update_irq` 函数中增加 vcpu 指针的非零校验，若 vcpu 不存在则打印警告日志并直接返回，避免空指针崩溃。
+2. 修正 `loongarch_extioi_writew` 和 `loongarch_extioi_writel` 中的索引计算逻辑，删除循环前的 index 左移赋值语句，改为在调用 `extioi_enable_irq` 时使用表达式 `index * 4 + i`（针对 32 位操作）或 `index * 8 + i`（针对 64 位操作），确保传递的中断索引参数正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b7d1f2492038a263854eb9886d3b460500f0783c

@@ -1,0 +1,27 @@
+#标题
+perf trace 修复 set_filter_loop_pids 函数中的 struct thread 对象泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `perf trace -a` 命令进行系统范围跟踪时，发生内存泄漏，泄漏对象为 `struct thread`。用户可通过内存检测工具（如 Valgrind 或 kmemleak）观测到内存占用持续增长或泄漏报告。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `trace__set_filter_loop_pids` 的循环逻辑中，获取 `parent` 线程对象后，未正确调用 `thread__put()` 减少引用计数。具体表现为：
+1. 当匹配到 "sshd" 或 "gnome-terminal" 进程并 break 跳出循环时，获取的 `parent` 对象未被释放。
+2. 在循环迭代过程中，旧的 `thread` 对象在赋值给 `thread` 变量前未被释放。
+3. 循环正常结束后，最后的 `thread` 对象未被释放。
+这些遗漏导致 `struct thread` 对象引用计数无法归零，从而引发内存泄漏。
+
+#解决方案
+在 `tools/perf/builtin-trace.c` 的 `trace__set_filter_loop_pids` 函数中增加引用计数释放操作：
+1. 在匹配到目标进程（sshd/gnome-terminal）并 break 退出前，增加 `thread__put(parent)` 调用。
+2. 在循环体内，更新 `thread` 变量前，增加 `thread__put(thread)` 调用以释放当前对象。
+3. 在循环结束后，增加 `thread__put(thread)` 调用以释放最后的线程对象。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/537f028e96b644e9c25da98effd46e052a635ef4

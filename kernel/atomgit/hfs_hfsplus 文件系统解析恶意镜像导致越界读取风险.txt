@@ -1,0 +1,21 @@
+#标题
+hfs/hfsplus 文件系统解析恶意镜像导致越界读取风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+挂载并解析恶意的 HFS 或 HFS+ 文件系统镜像时，内核在读取 B-tree 节点键的过程中，可能因计算得到的 `key_len` 值异常（过大或过小），导致发生越界读取，进而引发内核崩溃或破坏内核内存。
+
+#主要错误日志
+- `hfs: Invalid key length: %d`
+- `hfsplus: Invalid key length: %d`
+
+#问题根因
+在 `hfs_bnode_read_key` 和 `hfsplus_bnode_read_key` 函数中，`key_len` 的值来源于文件系统镜像数据或 `tree->max_key_len` 的计算结果。由于缺乏对 `key_len` 有效性的充分校验，当镜像文件被恶意构造或损坏时，`key_len` 可能超过结构体 `hfs_btree_key` / `hfsplus_btree_key` 的实际大小，或者小于 1。后续调用 `hfs_bnode_read` 时，该异常长度直接被用于内存拷贝操作，从而导致越界读取。
+
+#解决方案
+在调用 `hfs_bnode_read` 读取数据前，增加对 `key_len` 的边界检查。若 `key_len` 大于对应结构体的大小或小于 1，则判定为无效值。此时将目标 key 内存清零，打印错误日志并直接返回，避免使用异常长度进行内存读取操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/de3749cca837b274fd05a034e0b60a6bd8ff4459

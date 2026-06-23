@@ -1,0 +1,24 @@
+#标题
+ksmbd: smb_acl 的 num_aces 字段校验逻辑错误导致解析异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SMB 协议的 DACL（自主访问控制列表）解析时，由于对 `num_aces` 字段的校验条件设置不正确，可能导致内核访问越界或解析逻辑异常。具体表现为：原有的校验条件 `num_aces > ULONG_MAX / sizeof(struct smb_ace *)` 无法正确约束 `num_aces` 的合法范围，可能绕过检查导致后续内存操作风险。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 `fs/smb/server/smbacl.c` 的 `parse_dacl` 函数中对 `num_aces` 的校验逻辑存在缺陷：
+1. 原有的校验条件 `num_aces > ULONG_MAX / sizeof(struct smb_ace *)` 与实际的数据包结构大小不匹配，无法有效防止溢出或越界访问。
+2. 在遍历 ACE 条目时，未校验 `ppace[i]->sid.num_subauth` 是否为 0，而后续逻辑（如 `sizeof(__le32) * ppace[i]->sid.num_subauth`）可能依赖该值进行计算，若其为 0 可能导致逻辑错误或越界。
+
+#解决方案
+修改 `parse_dacl` 函数中的校验逻辑：
+1. 将 `num_aces` 的上限检查修改为基于实际 SMB ACL 数据包大小的计算：`num_aces > (le16_to_cpu(pdacl->size) - sizeof(struct smb_acl)) / (offsetof(struct smb_ace, sid) + offsetof(struct smb_sid, sub_auth) + sizeof(__le16))`，确保 `num_aces` 的数值在数据包物理尺寸允许的范围内。
+2. 在遍历 ACE 的条件判断中增加对 `ppace[i]->sid.num_subauth == 0` 的检查，防止处理非法的 SID 结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/290fa550736414fc67025e05f5ebb1d98ef9bcc8

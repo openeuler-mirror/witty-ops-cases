@@ -1,0 +1,20 @@
+#标题
+bpf: 修复 BPF map 迭代中可能出现的死循环问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 BPF 哈希表（hashtab）进行迭代操作（如通过 `bpf_for_each_hash_elem`）时，如果回调函数（callback）修改了当前正在处理的哈希桶（bucket）或链表，系统可能陷入 endless loop（死循环），导致内核在该处理流程中卡死，无法继续执行后续指令。
+
+#主要错误日志
+未知
+
+#问题根因
+代码在遍历哈希桶链表时使用了 `hlist_nulls_for_each_entry_rcu` 宏。该宏不具备在遍历过程中安全处理当前节点被删除或修改的能力。如果回调函数执行了删除元素等操作，会导致遍历器的指针状态异常，从而引发死循环。
+
+#解决方案
+将遍历宏从 `hlist_nulls_for_each_entry_rcu` 修改为 `hlist_nulls_for_each_entry_safe`。`_safe` 变体在运行回调函数之前会预先获取下一个元素的信息，从而避免了因当前元素被修改或删除导致的死循环条件，确保迭代过程的安全性与正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/929b4dd6fd16c919d0d11055ff6ded175f19354e

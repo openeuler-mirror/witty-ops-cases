@@ -1,0 +1,20 @@
+#标题
+内存故障处理中 unmap 失败时未发送 SIGBUS 导致进程丢失恢复信息
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统发生硬件内存中毒且内核无法成功取消映射该损坏页面时，进程直接收到 SIGKILL 信号被终止，而非 SIGBUS。这导致用户进程丢失了故障虚拟地址等重要信息，无法进行自定义恢复处理。同时，现有的内核机制已经能够防止进程再次访问已中毒页面，原本的防护逻辑已冗余。
+
+#主要错误日志
+pr_err("%#lx: forcibly killing %s:%d because of failure to unmap corrupted page\n", pfn, tk->tsk->comm, tk->tsk->pid);
+
+#问题根因
+在旧的内存故障处理逻辑中，如果 `unmap_mapping_range()` 失败，内核为了防止进程再次访问损坏页面，会强制发送 SIGKILL 而非 SIGBUS。这导致进程无法捕获 SIGBUS 并从 `siginfo_t` 中获取故障地址。实际上，内核现已具备对已中毒页面访问的即时拦截机制（通过 `kill_accessing_process()`），不再需要通过强制 SIGKILL 来预防重访问。
+
+#解决方案
+修改 `kill_procs()` 函数逻辑，移除 `fail` 参数及其对应的 `!unmap_success` 判断条件。无论 unmap 是否成功，均尝试发送 SIGBUS 信号，仅在无法获取故障地址（`tk->addr == -EFAULT`）时才降级为发送 SIGKILL。此举确保了在 unmap 失败场景下，进程仍能接收到包含故障地址信息的 SIGBUS 信号，从而支持用户态进行故障恢复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ef24c1d771c5d24365de2d15db8855bf3860ae79

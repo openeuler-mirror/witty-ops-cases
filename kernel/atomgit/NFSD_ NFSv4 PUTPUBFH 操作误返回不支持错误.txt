@@ -1,0 +1,20 @@
+#标题
+NFSD: NFSv4 PUTPUBFH 操作误返回不支持错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFSv4 协议通信中，当客户端发起 PUTPUBFH 操作且协议次版本号（minorversion）不为 0 时，服务端错误地返回 `nfserr_notsupp`（操作不支持），导致该操作失败。依据 RFC 8881 协议标准，所有 NFSv4 次版本均应支持 PUTPUBFH 操作，该行为违反了协议规范。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nfsd4_decode_putpubfh` 函数中，存在错误的版本检查逻辑：`if (argp->minorversion == 0) return nfs_ok;`。这导致仅当次版本号为 0 时才返回成功，而次版本号非 0 的情况直接返回 `nfserr_notsupp`。实际上，根据 RFC 8881，PUTPUBFH 应像 PUTROOTFH 一样在所有 NFSv4 次版本中均受支持，且该操作无参数需解码，不应进行版本限制。
+
+#解决方案
+移除 `nfsd4_decode_putpubfh` 函数，将 `OP_PUTPUBFH` 的解码操作直接映射为 `nfsd4_decode_noop`（无操作）。此举移除了错误的次版本检查逻辑，且因 PUTPUBFH 无需解码参数，使其行为与 PUTROOTFH 保持一致，符合协议规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c8120e382d33f81c329b5b7b54be125d6ffb25e7

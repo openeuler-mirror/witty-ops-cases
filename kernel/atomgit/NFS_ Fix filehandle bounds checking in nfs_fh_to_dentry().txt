@@ -1,0 +1,20 @@
+#标题
+NFS: Fix filehandle bounds checking in nfs_fh_to_dentry()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFS 文件系统处理文件句柄转换为目录项的过程中，存在边界检查缺陷。由于计算顺序和校验逻辑不当，可能导致对传入的文件句柄长度验证不严谨，进而引发内存越界访问，造成内核崩溃或未定义行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nfs_fh_to_dentry` 函数中，原代码在计算 `fh_size` 时过早地将 `server_fh->size` 加入，而在后续校验 `fh_len` 时，未能正确处理 `server_fh->size` 可能超出范围的情况。如果 `server_fh->size` 是一个恶意或错误的值，可能导致计算出的 `len` 不正确，从而绕过边界检查，引发越界访问。
+
+#解决方案
+调整 `fh_size` 的计算顺序与边界检查逻辑。先基于 `struct nfs_fh` 结构体的偏移量进行初步的边界检查，确保 `fh_len` 在合法范围内；然后再将 `server_fh->size` 加到 `fh_size` 中进行后续计算。增加了显式的边界检查条件：`if (fh_len < len + XDR_QUADLEN(fh_size) || fh_len > XDR_QUADLEN(NFS_MAXFHSIZE))`，防止传入数据越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/de3f3b8fc34a4c23d8c065785402749a10e9a94e

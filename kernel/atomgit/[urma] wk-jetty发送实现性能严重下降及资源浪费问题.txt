@@ -1,0 +1,23 @@
+#标题
+[urma] wk-jetty发送实现性能严重下降及资源浪费问题
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+在进行 URMA (User-space Remote Memory Access) 通信时，每次发送操作均触发高昂的 jetty 创建流程，导致发送路径性能严重下降。具体表现为系统 CPU 开销显著增加，通信延迟增大，无法满足高性能通信需求。同时，工作队列缺乏内存回收（MEM_RECLAIM）和高优先级标志，在内存紧张或高负载场景下可能导致工作调度异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ubmad_post_send()` 的实现中，代码逻辑未对目标 EID 对应的 tjetty 进行查找复用，而是每次发送操作都进入创建 jetty 的慢速路径，导致不必要的内存分配和工作队列调度开销。此外，多处 workqueue 创建时未使用 `WQ_UNBOUND`、`WQ_HIGHPRI` 和 `WQ_MEM_RECLAIM` 标志，影响了工作队列的调度灵活性和内存紧张时的可靠性。
+
+#解决方案
+1. **优化发送路径**：修改 `ubmad_post_send()` 函数，在分配新的 jetty_work 前，先根据目的 EID 的哈希值查找已存在的 tjetty。若找到则直接调用 `ubmad_do_post_send()` 进行发送，避免重复创建 jetty，显著降低延迟和 CPU 开销。
+2. **接口暴露**：将 `ubmad_get_tjetty_lockless()` 函数接口暴露，供发送路径查找使用，并使用 spinlock 保护查找过程以确保线程安全。
+3. **工作队列属性调整**：为 `ubcore-session`、`ubcm`、`ubmad rt_wq`、`ubmad conn_wq` 等多个工作队列添加 `WQ_UNBOUND`、`WQ_HIGHPRI` 和 `WQ_MEM_RECLAIM` 标志，提升工作队列的调度优先级并支持内存回收机制。
+4. **参数调优**：调整 UBMAD_JFS_DEPTH 和 UBMAD_JFR_DEPTH 等参数以优化资源分配，并将 `ubcore_conn_timeout` 默认值调整为 30s。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1e74869779f62dbcb25d4d0463b11c1e70cb5dcf

@@ -1,0 +1,23 @@
+#标题
+filemap_get_folios_contig 返回重复 folios 及 mincore tmpfs 测试失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 内存管理函数 `filemap_get_folios_contig` 在特定场景下逻辑异常，可能返回包含相同 folios 的批次，导致后续处理逻辑出错。
+2. 内核自测套件 `mincore_selftest` 中的 `check_tmpfs_mmap` 用例测试失败，表现为在 tmpfs 文件映射中触发了非预期的预读页面存在，Assertion `ASSERT_EQ(ra_pages, 0)` 失败。
+
+#主要错误日志
+TH_LOG("Read-ahead pages found in memory");
+
+#问题根因
+1. `filemap_get_folios_contig` 函数在遍历 xarray 过程中，当遇到非预期 folio 时虽然更新了 `*start` 索引，但在执行 `continue` 前未正确推进 xarray 迭代器（`xas`）的位置，导致下一次循环可能重复处理相同的索引范围，从而返回重复的 folios。
+2. `mincore` 自测代码对 tmpfs 文件的预读行为预期不正确，旧代码假设 tmpfs 不应存在预读页面，但实际上可能触发预读，导致测试断言失败。
+
+#解决方案
+1. 在 `mm/filemap.c` 的 `filemap_get_folios_contig` 函数中，于 `continue` 语句前添加 `xas_advance(&xas, folio_next_index(folio) - 1)`，确保在继续循环前将迭代器正确推进到下一个待处理位置，避免死循环或重复返回。
+2. 修改 `tools/testing/selftests/mincore/mincore_selftest.c`，删除 `check_tmpfs_mmap` 测试用例中关于验证“不存在预读页面”的无效代码逻辑，修正测试预期。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a23dc038c99c036d1b2d8484a974631445f1ad45

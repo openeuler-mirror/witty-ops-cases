@@ -1,0 +1,24 @@
+#标题
+net: stmmac: Tegra234 MGBE PTP 时钟初始化失败导致 PTP 功能不可用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Tegra234 平台上使用 MGBE 网络驱动时，由于 PTP 参考时钟名称不匹配导致时钟获取失败（ptp_rate 为 0），进而触发 PTP 初始化错误，内核日志显示 "Invalid PTP clock rate"，随后 PTP 初始化失败。这会导致网卡 PTP 硬件时间戳功能无法正常工作。
+
+#主要错误日志
+ERR KERN tegra-mgbe 6800000.ethernet eth0: Invalid PTP clock rate
+WARNING KERN tegra-mgbe 6800000.ethernet eth0: PTP init failed
+
+#问题根因
+Tegra234 设备树中定义的 PTP 参考时钟名称为 'ptp-ref'，而驱动代码中使用的名称为 'ptp_ref'，导致驱动无法正确获取时钟。此前内核未严格检查 ptp_rate 是否为 0，该问题被掩盖；引入检查机制后，因时钟获取失败导致 ptp_rate 为 0，从而暴露了此驱动与设备树时钟名称不一致的缺陷。
+
+#解决方案
+修改 Tegra MGBE 驱动程序以兼容新旧设备树：
+1. 默认使用标准名称 'ptp_ref'。
+2. 增加兼容性检测逻辑：如果设备树中存在旧名称 'ptp-ref'，则回退使用旧名称，并打印警告提示需要更新设备树。
+此修复确保了在设备树未更新的情况下，PTP 时钟仍能被正确获取和配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/62410edbc562a845642680801a190b52943253e1

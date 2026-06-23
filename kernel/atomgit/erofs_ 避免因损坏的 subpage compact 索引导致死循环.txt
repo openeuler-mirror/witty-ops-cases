@@ -1,0 +1,20 @@
+#标题
+erofs: 避免因损坏的 subpage compact 索引导致死循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当挂载或访问包含损坏数据的 erofs 文件系统镜像时，若压缩索引中的 `clusterofs` 字段损坏且数值过大，内核可能陷入无限循环，导致系统挂起或对应进程无法终止（D 状态）。该问题主要影响 compact 布局的压缩数据处理逻辑。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的代码逻辑中，对 `clusterofs` 合法性的校验仅存在于 `z_erofs_load_full_lcluster` 函数中，而 `z_erofs_load_compact_lcluster` 函数缺少对应的校验。当文件系统镜像损坏，出现 `type` 非 `NONHEAD` 且 `clusterofs` 大于等于逻辑簇大小的情况时，由于校验缺失，后续处理逻辑（如回溯查找 extent）可能陷入无限循环。
+
+#解决方案
+将 `clusterofs` 的校验逻辑从 `z_erofs_load_full_lcluster` 中移除，统一下沉至公共调用入口函数 `z_erofs_load_lcluster_from_disk` 中执行。在调用具体的加载函数后，统一检查 `m->clusterofs` 是否小于逻辑簇大小（`1 << vi->z_logical_clusterbits`），若校验失败则返回 `-EFSCORRUPTED`，从而防止因数据损坏导致的死循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e89f1af681c3c7ee411ea8fbcddff9e0b91c4793

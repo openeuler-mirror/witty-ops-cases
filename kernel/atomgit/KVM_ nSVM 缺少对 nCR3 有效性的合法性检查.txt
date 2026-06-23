@@ -1,0 +1,20 @@
+#标题
+KVM: nSVM 缺少对 nCR3 有效性的合法性检查
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 KVM nSVM（Nested SVM）场景下，当启用嵌套分页（NP_ENABLE=1）时，如果客户机设置了非法的 nCR3 值（例如设置了保留位/MBZ 位），内核未进行拦截检查。这违反了 AMD APM 规范中关于 VMRUN 状态一致性的要求，可能导致硬件行为未定义或虚拟机状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 AMD APM Volume #2 (Rev 3.42) 文档 15.25.4 章节，当 VMRUN 执行且嵌套分页启用时，nCR3 的任何 MBZ（Must Be Zero）位被设置均属于非法状态组合。内核代码在 `__nested_vmcb_check_controls` 函数中遗漏了对 `nCR3` 是否为合法 GPA（Guest Physical Address）的检查，导致无法检测并拒绝这种非法状态。
+
+#解决方案
+在 `arch/x86/kvm/svm/nested.c` 文件的 `__nested_vmcb_check_controls` 函数中增加一致性检查逻辑。当嵌套分页启用（`SVM_NESTED_CTL_NP_ENABLE`）时，调用 `kvm_vcpu_is_legal_gpa` 验证 `control->nested_cr3` 的合法性，若检查失败则直接返回 false 以中止 VMRUN 操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/44554951bf95226fbd5c13a5f8c1f20b5c375ebf

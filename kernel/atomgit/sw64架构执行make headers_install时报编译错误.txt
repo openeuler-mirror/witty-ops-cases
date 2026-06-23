@@ -1,0 +1,21 @@
+#标题
+sw64架构执行make headers_install时报编译错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译内核并执行 `make headers_install` 步骤时，编译过程报错中断。具体表现为 uapi 头文件 `arch/sw_64/include/uapi/asm/fpu.h` 中引用了内核内部配置宏 `CONFIG_SUBARCH_C3B`，导致该宏泄露到用户空间，引发编译报错。
+
+#主要错误日志
+- error: arch/sw_64/include/uapi/asm/fpu.h: leak CONFIG_SUBARCH_C3B to user-space
+
+#问题根因
+头文件 `arch/sw_64/include/uapi/asm/fpu.h` 中使用了 `#ifdef CONFIG_SUBARCH_C3B` 条件编译逻辑。由于该宏是内核内部配置项，不应暴露给用户空间，导致 `make headers_install` 检测到内核配置宏泄露到 UAPI 头文件而报错。
+
+#解决方案
+1. 移除 uapi 头文件中的条件编译逻辑，统一使用通用的宏定义，不再依赖 `CONFIG_SUBARCH_C3B`。
+2. 将架构相关的差异化处理逻辑从 UAPI 头文件移至内核源码 `arch/sw_64/kernel/process.c` 中，在该源文件内部根据 `CONFIG_SUBARCH_C3B` 配置项分别处理 FPCR 寄存器的初始化赋值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3e14e4675e53f1e7720c10d6e3516c7cfa4537a8

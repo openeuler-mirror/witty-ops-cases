@@ -1,0 +1,35 @@
+#标题
+ubus: 修复 ubus 链路消息处理、实例校验及设备注册错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在处理 Type2 中断时，Mask/Unmask 操作寄存器写入错误，导致中断屏蔽或解除屏蔽功能异常。
+2. 实例注册流程中，对 `user_eid` 和 `guid` 的校验缺失，可能导致非法或已不存在的实例被错误注册，引发后续功能异常。
+3. 设备断开连接或复位后，相关标志位未正确更新，导致后续配置访问未能及时返回超时错误，引发潜在的系统不稳定或无效操作。
+4. 驱动初始化过程中部分错误处理路径缺失，如 `default_bus_instance` 初始化失败未检测、GUID 校验不一致未报错等。
+5. 日志打印中存在格式字符串错误（如 `%x` 用于 `int` 类型、拼写错误 `opvode`）。
+
+#主要错误日志
+- `dev_err(&ubc->dev, "entity reg u_eid=%#x not exist\n", pld->base.ueid[0]);`
+- `dev_err(&ubc->dev, "entity reg guid type %u is invalid\n", guid->bits.type);`
+- `ub_err(uent, "pool pld guid is not equal entity guid %s\n", buf);`
+- `ub_err(uent, "default bi init failed, ret=%d\n", ret);`
+- `dev_err(&ubc->dev, "pue add msg user eid[%#x] not exist\n", pld->user_eid[0]);`
+- `dev_err(&ubc->dev, "ue add msg user eid[%#x] not exist\n", pld->user_eid[0]);`
+
+#问题根因
+1. **中断处理缺陷**：`ub_int_type2_mask` 和 `ub_int_type2_unmask_irq` 函数在操作寄存器时，直接使用 `readl` 读取值进行修改或写入 0，覆盖了必要的寄存器位（如 `addr_index`），导致中断控制逻辑错误。
+2. **校验逻辑缺失**：`ub_entity_reg_check` 等函数在处理实体注册消息时，未校验 `ueid` 是否存在以及 `guid` 类型是否合法，导致脏数据或无效请求可能进入系统。
+3. **状态管理缺失**：设备断连或复位时，未设置 `UB_ENTITY_DISCONNECTED` 标志；配置访问函数 `ub_sync_cfg` 未检查该标志，导致对已断开设备的访问未能拦截。
+4. **代码逻辑与健壮性不足**：`ub_get_guid` 未校验 payload GUID 与实体 GUID 的一致性；`ub_start_ent` 忽略了 `ub_default_bus_instance_init` 的返回值；部分函数导出了不必要的符号。
+
+#解决方案
+1. **修复中断寄存器操作**：重构 Type2 中断的 Mask/Unmask 逻辑，正确构造寄存器值（保留 `addr_index` 并设置 `mask` 位），并在清除消息时仅清除中断索引，保持 Mask 状态。
+2. **增加实例与 GUID 校验**：在 `ub_entity_reg_check` 中增加对 `ueid` 存在性（调用新增的 `ub_bus_instance_exist`）及 GUID 类型的校验；在 `ub_get_guid` 中增加 GUID 一致性检查。
+3. **完善状态标志管理**：在 `check_entity_disconnected`、`ublc_link_down_handle` 和 `ub_device_reset` 中设置 `UB_ENTITY_DISCONNECTED` 标志；在 `ub_sync_cfg` 入口处检查该标志，若已断连则直接返回 `-ETIMEDOUT`。
+4. **增强错误处理与代码清理**：修复 `ub_start_ent` 中的返回值检查；修正日志打印格式与拼写错误；移除未使用的函数与多余的符号导出；调整内存分配顺序以优化错误处理路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/62eac01a3445b0c52e84f371f7cd1b8bd68358ef

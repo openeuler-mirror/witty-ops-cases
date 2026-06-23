@@ -1,0 +1,23 @@
+#标题
+scmtcp_sk_recvmsg() 因 RLIMIT_NOFILE 限制返回错误的文件描述符数量
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 IPPROTO_SCMTCP 进行 SCM_RIGHTS 消息传递时，若接收端受到 RLIMIT_NOFILE 限制导致 receive_fd_user() 失败，scmtcp_sk_recvmsg() 函数返回值不正确。具体表现为：当实际接收的文件描述符数量小于发送端发送的数量时，recvmsg 系统调用的返回值仍为发送端的文件描述符计数，而非实际成功接收的数量，导致应用程序误判接收结果。
+
+#主要错误日志
+未知
+
+#问题根因
+在 scmtcp_sk_recvmsg() 函数中，原代码直接将 `scm.fp->count`（即发送端传递的 fd 数量）作为返回值，而没有考虑 `scm_detach_fds()` 执行过程中可能因 RLIMIT_NOFILE 限制导致部分 fd 接收失败的情况。因此，当实际安装到进程的 fd 数量减少时，函数仍返回原始计数，导致返回值与实际状态不符。
+
+#解决方案
+修改 `scmtcp_sk_recvmsg()` 的返回逻辑：
+1. 不再依赖中间变量 `scm.fp->count` 作为返回值。
+2. 调用 `scm_detach_fds()` 后，通过新增的辅助函数 `scm_count_fds()` 重新解析用户空间消息头（msg_control_user），获取实际有效的 fd 数量并返回。
+3. 同时修正了发送端 `file_htable_add_flist()` 的容量检查逻辑，从 `fctl->fd_count < SCM_MAX_FD` 改为 `fctl->fd_count + flist->fp->count <= SCM_MAX_FD`，并返回准确的错误码 `-ETOOMANYREFS` 而非 `-ENOBUFS`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/313feacedb49374858527723764fc7cd749956bb

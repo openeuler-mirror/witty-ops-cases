@@ -1,0 +1,21 @@
+#标题
+usb: gadget: f_fs: epfile 空指针访问导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB gadget f_fs 功能中，当 `ffs_func_eps_enable()` 与 `ffs_data_reset()` 并发执行时，触发空指针解引用（NULL pointer dereference），导致内核 panic 或 oops。具体表现为在 `usb_ep_enable()` 成功启用端点后，访问 `epfile->ep` 时系统崩溃。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference
+
+#问题根因
+存在并发竞争条件：`ffs_func_eps_enable()` 与 `ffs_data_reset()` 同时运行时，`ffs_data_reset()` 调用的 `ffs_data_clear()` 会将 `ffs->epfiles` 设置为 NULL，随后才将 `ffs->eps_count` 重置为 0。
+由于 `ffs_func_eps_enable()` 仅检查了 `count` 而未检查 `epfiles` 指针本身的有效性，导致在 `epfiles` 已被置空但 `eps_count` 尚未清零的窗口期内，代码继续执行并访问了 NULL 指针。
+
+#解决方案
+在 `ffs_func_eps_enable()` 函数中增加对 `ffs->epfiles` 的空指针检查。若检测到 `epfile` 为 NULL，直接返回 `-ENOMEM` 错误并跳转到释放锁的代码路径，避免后续解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d22a45753b516ef899a63c4ca5caae922beb4755

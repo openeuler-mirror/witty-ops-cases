@@ -1,0 +1,20 @@
+#标题
+smb: client: fix use-after-free in cifs_oplock_break
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB 客户端处理 oplock break（机会锁中断）工作队列时，若 `cifsFileInfo` 正在被释放，可能导致对应的 superblock 和 inode 被提前释放。此时工作队列函数继续访问 `cinode` (cifsInodeInfo) 会触发 use-after-free 故障，造成内核崩溃或不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cifs_oplock_break` 函数执行期间，如果没有持有 superblock 的活跃引用，`_cifsFileInfo_put()` 可能会在其他地方释放 superblock 的最后一个引用，进而触发 inode 回收。此时工作队列中仍在访问 `cinode`，导致出现 use-after-free 问题。
+
+#解决方案
+在 `cifs_oplock_break` 函数入口处，通过 `cifs_sb_active(sb)` 增加对 superblock 的活跃引用计数，防止 superblock 及其 inode 在处理过程中被释放；在函数返回前（包括错误处理路径 `out` 标签处），调用 `cifs_sb_deactive(sb)` 释放引用，确保资源正确释放与生命周期安全。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/47a10a88edb3190495a5e45845673dbb095c41d4

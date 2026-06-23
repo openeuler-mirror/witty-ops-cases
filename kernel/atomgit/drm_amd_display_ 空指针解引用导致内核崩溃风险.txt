@@ -1,0 +1,20 @@
+#标题
+drm/amd/display: 空指针解引用导致内核崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD 显示驱动处理图形管道编程的过程中，当 `pipe_ctx->plane_state` 为空指针时，代码逻辑未能正确校验即访问其成员变量（如 `update_flags`），导致内核发生空指针解引用，进而引发内核 panic 或 oops，系统崩溃或显示功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `dcn20_program_pipe` 中，逻辑判断条件不严谨。原代码在 `if` 语句中，当 `pipe_ctx->update_flags.bits.enable` 为真时，会跳过对 `pipe_ctx->plane_state` 是否为空的检查，直接访问 `pipe_ctx->plane_state->update_flags` 成员。若此时 `pipe_ctx->plane_state` 为 NULL，即触发空指针解引用错误。此外，对 `set_input_transfer_func` 的调用也存在类似的逻辑短路风险。
+
+#解决方案
+修改 `dcn20_program_pipe` 函数中的条件判断逻辑，调整逻辑运算符的优先级与组合。将 `pipe_ctx->plane_state` 的非空检查放在条件表达式的首位（逻辑与 `&&` 的左侧），确保在访问其成员变量前先验证指针有效性。具体修复涉及 `set_hdr_multiplier` 和 `set_input_transfer_func` 相关的逻辑代码块，防止在 `plane_state` 为空时进行解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c2f1662c3fb301fe7ba127fe06c14538112982d4

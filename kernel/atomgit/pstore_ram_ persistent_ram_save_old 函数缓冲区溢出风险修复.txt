@@ -1,0 +1,20 @@
+#标题
+pstore/ram: persistent_ram_save_old 函数缓冲区溢出风险修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统启动早期调用 `persistent_ram_save_old` 后，若后续再次调用该函数处理大小不一致的崩溃转储数据（例如定时触发的可存活崩溃场景），会导致缓冲区溢出。由于 kmsg 缓冲区通常超过 prz 缓冲区大小，这种尺寸不匹配的情况可能引发内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`persistent_ram_save_old` 函数在处理数据时，未检查已分配的 `prz->old_log` 缓冲区大小与新数据大小 `size` 是否一致。当 `prz->old_log` 已存在但大小与新数据不符时，代码逻辑继续使用旧缓冲区，导致缓冲区溢出。这种情况可能发生在启动早期调用和后续定时触发崩溃转储时，前后两次数据大小不匹配的场景。
+
+#解决方案
+在 `persistent_ram_save_old` 函数中增加判断逻辑：如果 `prz->old_log` 已存在且其大小 `prz->old_log_size` 与新数据大小 `size` 不相等，先调用 `persistent_ram_free_old(prz)` 释放旧缓冲区，随后重新分配正确大小的新缓冲区，从而防止溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56a455693770363dfaec64bf0491eeaec75e269f

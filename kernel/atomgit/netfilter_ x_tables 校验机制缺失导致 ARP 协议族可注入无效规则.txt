@@ -1,0 +1,25 @@
+#标题
+netfilter: x_tables 校验机制缺失导致 ARP 协议族可注入无效规则
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户尝试在 ARP 表（如 `arptables`）中添加非 ARP 协议族专用的 match（匹配器）或 target（目标）扩展规则时，内核未正确拦截该非法操作。这可能导致不兼容的扩展被错误地挂载到 ARP 钩子上，进而引发内核状态不一致或未定义行为。修复后，此类非法规则注入将被拒绝并记录日志。
+
+#主要错误日志
+- `arp_tables: [match/target name] match: not valid for this family` （速率限制打印）
+- `arp_tables: [match/target name] target: not valid for this family` （速率限制打印）
+
+#问题根因
+在 `xt_check_match` 和 `xt_check_target` 函数中，缺乏对协议族（family）一致性的严格校验。具体而言，当 `par->family` 为 `NFPROTO_ARP` 时，代码未检查被添加的 match 或 target 是否显式支持 `NFPROTO_ARP`（即 `par->match->family` 或 `par->target->family` 是否等于 `NFPROTO_ARP`）。
+由于 `NFPROTO_UNSPEC`（值为 0）隐含的是 NF_INET_* 相关的钩子，其位掩码与 ARP 钩子（`NF_ARP_IN`、`NF_ARP_OUT`、`NF_ARP_FORWARD`）不存在重叠，导致原本不支持 ARP 协议的通用扩展（标记为 UNSPEC）能够绕过钩子掩码检查，错误地应用到 ARP 协议栈中。
+
+#解决方案
+在 `net/netfilter/x_tables.c` 的 `xt_check_match` 和 `xt_check_target` 函数中增加协议族校验逻辑：
+1. 检查传入的协议族 `par->family` 是否为 `NFPROTO_ARP`。
+2. 若是，进一步检查对应的 match 或 target 结构体中的 `family` 字段是否为 `NFPROTO_ARP`。
+3. 如果不匹配，调用 `pr_info_ratelimited` 打印错误日志，并返回 `-EINVAL` 拒绝该规则的添加，从而确保只有显式支持 ARP 的扩展才能被加载到 ARP 表中。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/944e7f23cbcfc251db47f7f5cd21d33deaf0681d

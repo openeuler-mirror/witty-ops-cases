@@ -1,0 +1,22 @@
+#标题
+vfio: no-iommu 模式下设备关闭时引发 unbalanced vfio_df_close 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IOMMUFD VFIO compat 模式下启用 no-iommu 的设备，在进行设备组（group）关闭操作时，由于打开路径中错误地跳过了 `vfio_df_open()` 调用，导致 `open_count` 计数保持为 0。此时调用 `vfio_df_close()` 会触发 `vfio_assert_device_open(device)` 断言失败，产生内核警告日志。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit 6086efe73498 在处理 no-iommu 设备的打开路径时逻辑过于宽泛，直接跳过了 `vfio_df_open()` 函数调用。正确的逻辑应当是在设备打开路径中仅跳过 IOMMUFD 的 bind 操作，而不应跳过设备文件本身的打开操作（`vfio_df_open`）。这导致设备打开计数未增加，关闭时出现计数不平衡。
+
+#解决方案
+修复设备打开与绑定逻辑：
+1. 恢复 `vfio_df_group_open()` 中对 `vfio_df_open()` 的调用，确保 no-iommu 设备正常执行打开流程，维持 `open_count` 计数正确。
+2. 将 no-iommu 模式的检查与跳过逻辑移至 `vfio_df_iommufd_bind()` 函数内部。若检测到是 no-iommu 设备，直接返回 0，从而仅跳过 IOMMUFD 的 bind 操作，避免影响设备打开计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/25cdbf69754aa9f682b6e50ac08cc8ca81943c87

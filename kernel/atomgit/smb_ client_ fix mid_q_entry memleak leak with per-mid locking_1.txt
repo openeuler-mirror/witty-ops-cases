@@ -1,0 +1,29 @@
+#标题
+smb: client: fix mid_q_entry memleak leak with per-mid locking
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB 客户端执行并发操作时（如 cifs_readdir -> open_cached_dir），若用户前台进程被信号中断（Signal interruption），会导致内核内存泄漏。具体表现为 `mid_q_entry` 结构体对象泄漏，同时可能伴随服务器缓冲区（server buffer/bigbuf）泄漏。该问题由回调函数执行与信号中断处理之间的竞态条件引发，属于典型的 ToC/ToU 问题。
+
+#主要错误日志
+未知
+（注：Commit 信息中未包含具体的 dmesg 或 printk 日志输出，仅描述了内部逻辑流程。）
+
+#问题根因
+问题根因在于回调函数赋值与执行之间存在竞态条件。
+在 `compound_send_recv()` 函数中，当 `wait_for_response()` 被信号中断时，代码尝试将挂起请求的回调函数更改为 `cifs_cancelled_callback`。与此同时，网络响应处理线程（`cifs_demultiplex_thread`）可能正在处理响应并准备执行原始回调函数。
+由于缺乏原子性保护，可能出现以下情况：
+1. 响应线程读取并准备执行原始回调，但尚未完成状态更新。
+2. 取消线程修改了回调指针，导致 `mid_q_entry` 的引用计数（refcount）处理逻辑混乱，最终导致 `mid_q_entry` 对象无法被正确释放，引发内存泄漏。此外，已分配的服务器 bigbuf 也可能随之泄漏。
+
+#解决方案
+引入 per-mid locking（每个 mid 独立的锁机制）来确保回调执行的原子性：
+1. 在 `struct mid_q_entry` 结构体中新增自旋锁 `spinlock_t mid_lock`。
+2. 新增辅助函数 `mid_execute_callback()`，该函数在持有 `mid_lock` 的前提下读取回调指针并将其置空（标记为已执行），确保回调函数仅执行一次。
+3. 修改所有调用 `mid->callback(mid)` 的位置，统一替换为调用 `mid_execute_callback(mid)`。
+4. 在取消请求的路径中（如 `compound_send_recv`、`SendReceive` 等），使用 `mid_lock` 替代原有的 `server->mid_lock` 来保护回调函数的修改操作，防止与响应处理线程发生冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8ee4add3a72a5579bbbf2ee2e601fa813cf6f97c

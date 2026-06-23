@@ -1,0 +1,20 @@
+#标题
+IPC 共享内存销毁路径缺少 RCU 保护导致潜在访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `shm_destroy_orphaned` 销毁孤儿共享内存段时，若 IPC 命名空间中存在正在使用的 ID，遍历 `ipcs_idr` 查找 IPC 对象的过程中可能因缺少 RCU 读侧临界区保护，导致在并发场景下访问到已被释放的内存，引发内核崩溃或数据破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `shm_destroy_orphaned` 在持有信号量（`rwsem`）的情况下调用 `idr_for_each` 进行遍历，但在遍历过程中访问 IPC 对象时未使用 `rcu_read_lock` 进行保护。在 RCU 机制下，仅仅持有 IPC 子系统的读写信号量不足以阻止对象内存被回收，必须显式进入 RCU 读端临界区才能保证对象在查找期间不被释放。
+
+#解决方案
+在 `shm_destroy_orphaned` 函数中，于调用 `idr_for_each` 前后分别添加 `rcu_read_lock()` 和 `rcu_read_unlock()`，确保在遍历和查找 IPC 对象期间处于 RCU 读侧临界区内，防止对象内存被过早回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3160da23afe10e66040ac00ed17174cb467c79b3

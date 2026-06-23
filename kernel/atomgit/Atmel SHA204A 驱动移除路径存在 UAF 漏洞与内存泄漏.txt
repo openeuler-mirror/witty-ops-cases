@@ -1,0 +1,24 @@
+#标题
+Atmel SHA204A 驱动移除路径存在 UAF 漏洞与内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 Atmel SHA204A 设备（驱动卸载或热插拔移除）时，若 I2C 工作队列中有待处理的回调任务，该回调可能在设备数据结构被释放后继续运行，导致内核发生 Use-After-Free (UAF) 故障；同时，由于移除流程中存在早期返回逻辑，导致 sysfs 条目未被移除且内存未释放，造成内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `atmel_sha204a_remove` 函数中，未在释放资源前注销 hwrng 设备和刷新 I2C 工作队列，导致新的读取请求可能在卸载过程中继续调用 `->read()`，或者已排队的回调在设备移除后运行，从而触发 UAF。此外，代码中存在 `return` 的早期退出路径，导致 `kfree` 和 sysfs 清理代码被跳过，引起内存泄漏。
+
+#解决方案
+修改移除函数 `atmel_sha204a_remove` 的逻辑：
+1. 移除基于 `tfm_count` 的早期返回判断，确保资源清理流程必须执行。
+2. 在执行资源释放前，先调用 `devm_hwrng_unregister` 注销 hwrng 设备，防止新的读取调用。
+3. 调用 `atmel_i2c_flush_queue` 刷新 I2C 工作队列，确保所有待处理回调执行完毕，避免 UAF。
+4. 随后正常释放 `->hwrng.priv` 内存及相关 sysfs 条目。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/872addca05ebf87349514904b2a7d9c7b9c9bd96

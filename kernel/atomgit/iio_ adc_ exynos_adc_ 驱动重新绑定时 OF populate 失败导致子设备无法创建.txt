@@ -1,0 +1,20 @@
+#标题
+iio: adc: exynos_adc: 驱动重新绑定时 OF populate 失败导致子设备无法创建
+
+#内核版本
+OLK-6.6
+
+#问题现象
+exynos_adc 驱动在解绑后重新绑定时，无法正常创建子设备。这是由于在移除阶段未正确清除 OF 节点的 OF_POPULATED 标志，导致再次调用 of_platform_populate() 时认为设备已存在，从而跳过创建过程。
+
+#主要错误日志
+未知
+
+#问题根因
+自从引入 commit c6e126de43e7 ("of: Keep track of populated platform devices") 后，内核会跟踪已填充的 platform 设备。驱动在 remove 过程中使用了自行实现的 `exynos_adc_remove_devices` 函数，通过 `device_for_each_child` 遍历并单独注销子设备，该方式未能清除对应 OF 节点中的 OF_POPULATED 标志。因此，当驱动重新绑定时，`of_platform_populate()` 检测到该标志仍置位，误判设备已存在，不再创建新的子设备。
+
+#解决方案
+删除自行实现的 `exynos_adc_remove_devices` 函数及相关遍历注销逻辑，改用标准的 `of_platform_depopulate()` 函数。该函数能正确清除 OF_POPULATED 标志，确保驱动在重新绑定时子设备能被正确创建。变更涉及 `exynos_adc_probe` 的错误处理路径和 `exynos_adc_remove` 函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e410d0e4b7903bfb8ddeb41f9821501c3eae161e

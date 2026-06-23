@@ -1,0 +1,29 @@
+#标题
+AIO ring buffer 在 fork 后触发内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在父子进程并发执行场景下，父进程执行 `io_setup` 后 `fork` 子进程，随后父进程销毁 AIO 上下文（`io_destroy`），子进程访问继承的 AIO 映射地址时触发内核空指针解引用，导致系统崩溃。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000000
+...
+[   51.111664]  filemap_read_folio+0x25/0xe0
+[   51.112410]  filemap_fault+0xad7/0x1250
+[   51.113112]  __do_fault+0x4b/0x460
+[   51.113699]  do_pte_missing+0x5bc/0x1db0
+[   51.114250]  ? __pte_offset_map+0x23/0x170
+[   51.114822]  __handle_mm_fault+0x9f8/0x1680
+[   51.115408]  handle_mm_fault+0x24c/0x570
+[   51.115958]  do_user_addr_fault+0x226/0xa50
+
+#问题根因
+父进程 `io_setup` 创建 AIO ring buffer 后调用 `fork`，子进程复制了 VMA 但没有相应的 PTE 和 `kioctx` 引用。当父进程调用 `io_destroy` 截断文件大小时，子进程访问该地址触发缺页异常。在 `filemap_fault` 处理过程中，由于文件已被截断，获取 folio 失败，内核尝试调用 `read_folio` 回调，但 AIO 文件系统未实现该接口，导致空指针解引用。
+
+#解决方案
+在 AIO ring buffer 的 mmap 处理函数 `aio_ring_mmap` 中，为 VMA 设置 `VM_DONTCOPY` 标志位。这使得 `fork` 时 `dup_mmap` 会跳过该 VMA，子进程不再继承该映射区域，从而避免非法访问导致的内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2933748268f6149fef7fa94598f0531b6fc1fc46

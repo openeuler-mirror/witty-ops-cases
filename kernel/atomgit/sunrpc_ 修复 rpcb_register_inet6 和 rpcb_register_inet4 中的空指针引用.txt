@@ -1,0 +1,20 @@
+#标题
+sunrpc: 修复 rpcb_register_inet6 和 rpcb_register_inet4 中的空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RPC 注册过程中，如果 `rpc_sockaddr2uaddr` 函数返回 NULL（例如内存分配失败 GFP_KERNEL 不足），后续代码直接使用 `map->r_addr` 进行字符串操作（如 strlen）会导致内核发生空指针引用，进而引发 kernel panic 或 oops。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `rpcb_register_inet4` 和 `rpcb_register_inet6` 在调用 `rpc_sockaddr2uaddr(sap, GFP_KERNEL)` 赋值给 `map->r_addr` 后，未检查返回值是否为 NULL 就直接使用。当内存分配失败导致 `map->r_addr` 为 NULL 时，后续对 `r_addr` 的访问引发空指针解引用。
+
+#解决方案
+在 `rpcb_register_inet4` 和 `rpcb_register_inet6` 函数中，调用 `rpc_sockaddr2uaddr` 后增加返回值检查。如果 `map->r_addr` 为 NULL，函数立即返回 `-ENOMEM`，防止后续代码访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/48c445ab76c3397f0a35287d472fdb6c47411eca

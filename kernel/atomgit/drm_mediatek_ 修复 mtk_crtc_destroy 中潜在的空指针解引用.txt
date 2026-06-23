@@ -1,0 +1,20 @@
+#标题
+drm/mediatek: 修复 mtk_crtc_destroy 中潜在的空指针解引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mtk_crtc_create() 函数中，若 mbox_request_channel() 调用失败，mtk_crtc->cmdq_client.chan 指针会被置为 NULL，且不会调用 cmdq_pkt_create()。随后在 mtk_crtc_destroy() 的清理流程中，代码未检查 chan 指针是否为空就直接调用 mtk_drm_cmdq_pkt_destroy()，导致内核发生 NULL 指针解引用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 mtk_crtc_destroy() 函数中，代码逻辑顺序错误。mtk_drm_cmdq_pkt_destroy() 被无条件调用，而该函数依赖的内存对象仅在 cmdq_client.chan 存在时才被初始化。若 mbox_request_channel() 失败，chan 为 NULL，此时调用 mtk_drm_cmdq_pkt_destroy() 会导致空指针解引用。
+
+#解决方案
+调整 mtk_drm_crtc_destroy() 函数中的清理逻辑，将 mtk_drm_cmdq_pkt_destroy() 的调用移动到检查 mtk_crtc->cmdq_client.chan 是否为 NULL 的判断条件内部，确保只有在 chan 存在（即 cmdq_pkt_create() 成功执行）时才执行销毁操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1547b9833ba1437f3e652828d33d517b37e930d4

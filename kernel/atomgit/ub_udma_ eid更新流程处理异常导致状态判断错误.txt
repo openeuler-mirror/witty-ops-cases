@@ -1,0 +1,23 @@
+#标题
+ub/udma: eid更新流程处理异常导致状态判断错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当UDMA设备状态非正常（非UDMA_NORMAL）时，在处理EID更新和EID GUID通知的过程中，系统错误地返回了成功状态（返回值为0）。这导致上层调用者误认为操作成功，但实际上并未正确执行，可能引发后续业务流程异常或状态不一致。
+
+#主要错误日志
+udma dev does not exist!
+
+#问题根因
+1. **错误返回值处理**：在 `udma_ctrlq_eid_update` 和 `udma_ctrlq_notify_mue_eid_guid` 函数中，当检查到 `udma_dev->status != UDMA_NORMAL` 时，直接返回响应码 0（成功），掩盖了设备不可用的错误事实。
+2. **状态初始化时机不当**：在 `udma_init_dev` 函数中，`udma_dev->status` 被设置为 `UDMA_NORMAL` 的时机在 `udma_init_eid_table` 之前。如果 `udma_init_eid_table` 初始化失败，设备状态仍保持为 `UDMA_NORMAL`，导致后续错误处理或重试逻辑中误判设备状态为正常。
+
+#解决方案
+1. **修正响应返回值**：在 `udma_ctrlq_eid_update` 和 `udma_ctrlq_notify_mue_eid_guid` 函数中，当设备状态非正常时，将响应返回值从 0 修改为 `-EDRVNO`（定义为错误码 255），并在 `udma_ctrlq_eid_update` 中增加错误日志打印。
+2. **调整状态设置顺序**：将 `udma_dev->status = UDMA_NORMAL` 的赋值操作移动到 `udma_init_eid_table` 成功执行之后，确保只有初始化完全成功的设备才被标记为正常状态。
+3. **完善失败路径状态**：在 `udma_init_eid_table` 失败的跳转分支 `err_init_eid` 中，将设备状态显式设置为 `UDMA_INITIALIZING`，防止设备状态残留为 `UDMA_NORMAL`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/df3e5bc11b031554d3732c88dd3bd81852b7d353

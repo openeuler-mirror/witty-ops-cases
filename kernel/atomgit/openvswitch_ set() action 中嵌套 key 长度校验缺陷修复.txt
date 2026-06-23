@@ -1,0 +1,20 @@
+#标题
+openvswitch: set() action 中嵌套 key 长度校验缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Open vswitch 内核模块在处理 set() 动作时，对嵌套 netlink 属性的长度校验不严谨。在特定异常输入或数据包构造场景下，可能导致内核读取到无效数据，引发潜在的系统崩溃或内存越界访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `validate_set` 函数中，原代码仅检查 `nla_total_size(nla_len(ovs_key)) != nla_len(a)`，未先校验 `ovs_key` 这一 netlink 属性本身是否有效（即是否包含完整的 netlink 头部和合理的 payload 长度）。若 `ovs_key` 已损坏或长度不足，直接调用 `nla_len` 进行计算会导致校验逻辑失效或访问越界。
+
+#解决方案
+在 `net/openvswitch/flow_netlink.c` 的 `validate_set` 函数中，增加对 `ovs_key` 属性有效性的校验。在比较长度前，先调用 `nla_ok(ovs_key, nla_len(a))` 确保嵌套属性格式正确，若校验失败直接返回 `-EINVAL`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/37f0223a8fb22d1cdee7c3e884fb08f3c9b19b60

@@ -1,0 +1,22 @@
+#标题
+BPF程序测试接口在64K页大小环境下因frame_sz设置错误导致测试失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在页大小为64KB的ARM64架构上运行BPF自测试用例 `xdp_adjust_tail/xdp_adjust_frags_tail_grow` 时测试失败，报错信息为：
+`xdp_adjust_tail/xdp_adjust_frags_tail_grow:FAIL`
+
+#主要错误日志
+xdp_adjust_tail/xdp_adjust_frags_tail_grow:FAIL
+
+#问题根因
+在 `bpf_prog_test_run_xdp()` 函数中，`xdp->frame_sz` 被硬编码设置为 4K（4096字节）。当系统页大小为64K时，构造 frags（分片）数据时的 `frag data_len` 可能超过 4K。这会导致在 `bpf_xdp_frags_increase_tail()` 函数内部处理时引发问题，从而导致测试失败。
+
+#解决方案
+1. 内核侧修改：将 `net/bpf/test_run.c` 中 `max_data_sz` 的计算逻辑从使用固定值 4096 修改为使用宏 `PAGE_SIZE`，使内核能正确适配不同的页大小。
+2. 测试侧适配：修改 `xdp_adjust_tail` 测试用例，根据系统页大小（如4K或64K）实现不同的测试函数与数据输入输出大小，以适配新的内核行为。例如，针对64K页大小增加了 `test_xdp_adjust_frags_tail_grow_64k` 函数，处理大于68K的数据包测试场景。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6c040184fc7ad142a6f6cd978fabdcae61583090

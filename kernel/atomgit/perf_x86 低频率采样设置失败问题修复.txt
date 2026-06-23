@@ -1,0 +1,25 @@
+#标题
+perf/x86 低频率采样设置失败问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 perf 工具进行低频率（如 120Hz）性能采样时，命令执行失败并返回错误。用户无法在频率模式下进行低频采样操作。
+
+#主要错误日志
+```text
+Error:
+The sys_perf_event_open() syscall returned with 22 (Invalid argument)
+for event (cpu_core/instructions/ppp).
+```
+
+#问题根因
+内核在 `x86_pmu_hw_config()` 函数中对采样周期的限制检查逻辑有误。
+`limit_period()` 检查旨在避免采样周期过短，并不意图限制频率模式下的设置。原代码使用 `event->attr.sample_period` 是否存在来判断是否执行限制检查，但在频率模式下，`attr.sample_period` 与 `attr.sample_freq` 是联合体，此时 `sample_period` 的值不应作为判断依据，导致错误地触发了周期限制检查，拒绝了合法的低频率设置。
+
+#解决方案
+修改 `arch/x86/events/core.c` 中的条件判断逻辑，将判断条件从检查 `event->attr.sample_period` 是否存在改为检查 `!event->attr.freq`。这确保了 `limit_period()` 的检查仅限于非频率模式（即固定周期模式），从而允许频率模式下设置低采样频率。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4fa4f2aef6549f05e766b8bf46978ed659875b5f

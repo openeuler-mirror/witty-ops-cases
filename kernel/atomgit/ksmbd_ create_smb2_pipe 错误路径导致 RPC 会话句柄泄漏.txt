@@ -1,0 +1,20 @@
+#标题
+ksmbd: create_smb2_pipe 错误路径导致 RPC 会话句柄泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB2 管道创建流程（create_smb2_pipe）中，若 `ksmbd_session_rpc_open` 成功分配了句柄 ID 后，后续步骤（如 `ndr` 解析）发生错误，函数将直接跳转到错误处理出口。此时先前分配的 RPC 句柄未被关闭，导致对应的 RPC 会话资源发生泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `create_smb2_pipe` 函数中，局部变量 `id` 未初始化。当 `ksmbd_session_rpc_open` 成功执行并返回有效的非负 ID 后，如果后续代码路径（如 switch-case 中的 ndr 解析部分）出错跳转至出口，函数未检查 `id` 的有效性也未调用 `ksmbd_session_rpc_close` 进行清理。这是因为原有的错误处理逻辑缺失了对已分配 ID 的回滚操作。
+
+#解决方案
+将变量 `id` 初始化为 -1，并在函数返回前的错误处理路径中增加判断：若 `id` 大于等于 0，则调用 `ksmbd_session_rpc_close(work->sess, id)` 释放句柄，从而修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0a381a913951c77cb6fa52ebda5ed832d56c1d06

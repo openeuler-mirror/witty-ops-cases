@@ -1,0 +1,20 @@
+#标题
+LoongArch KVM EIOINTC 中断路由更新强制赋值导致异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构 KVM 虚拟机中使用 EIOINTC（扩展 I/O 中断控制器）时，对中断路由进行更新操作可能引发内核异常。具体表现为在调用 `eiointc_update_sw_coremap` 函数时，对传入的指针进行 `u64` 类型强制转换赋值（`val = *(u64 *)pvalue`），若该指针实际指向的数据类型长度小于 u64（如 u8、u16 或 u32），会导致内存越界读取或读取到无效数据，进而导致中断路由配置错误或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `eiointc_update_sw_coremap` 的参数 `pvalue` 被定义为 `void *` 类型，但在函数内部直接将其强制转换为 `u64 *` 并进行解引用赋值（`val = *(u64 *)pvalue`）。由于调用该函数的上下文（如 `writeb`、`writew`、`writel`）传入的实参可能是 `u8`、`u16` 或 `u32` 类型的数据地址，这种强制转换和读取操作违反了类型安全，导致读取了预期范围之外的内存数据。
+
+#解决方案
+修改 `eiointc_update_sw_coremap` 函数的接口与实现，将参数从指针类型 `void *pvalue` 改为数值类型 `u64 val`。调用该函数时，直接传递数据的值而非数据的地址，从而消除不安全的指针强制类型转换和内存越界读取风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d11496f3a622a15760d66fec061be0d06420c52

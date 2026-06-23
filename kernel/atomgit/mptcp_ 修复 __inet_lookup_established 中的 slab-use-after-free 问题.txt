@@ -1,0 +1,23 @@
+#标题
+mptcp: 修复 __inet_lookup_established 中的 slab-use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MPTCP IPv6 子流处理场景下，并发进行 ehash 表查找时触发 slab-use-after-free 故障，具体表现为内核报告 "slab-use-after-free in __inet_lookup_established"。
+
+#主要错误日志
+slab-use-after-free in __inet_lookup_established
+
+#问题根因
+ehash 表的查找是无锁的，依赖 SLAB_TYPESAFE_BY_RCU 标志来保证 RCU 读侧临界区期间的 socket 内存稳定性。
+问题根因在于 MPTCP 的初始化顺序错误：`mptcp_subflow_init()` 在 `inet_init()` (fs_initcall, level 5) 阶段执行，此时将 `tcpv6_prot` 拷贝至 `tcpv6_prot_override`；而 `inet6_init()` (module_init/device_initcall, level 6) 调用 `proto_register(&tcpv6_prot)` 发生在更晚的阶段。
+在 `mptcp_subflow_init()` 执行时，`tcpv6_prot.slab` 仍为 NULL，导致 `tcpv6_prot_override.slab` 永久保持为 NULL。这使得 MPTCP v6 子流 socket 通过 kmalloc (落入 kmalloc-4k) 分配，而非具备 SLAB_TYPESAFE_BY_RCU 标志的 TCPv6 slab 缓存。
+由于 kmalloc-4k 缓存缺乏 SLAB_TYPESAFE_BY_RCU 保护，且子流 socket 在释放时没有设置 SOCK_RCU_FREE 标志，内存可能被立即重用。此时并发 ehash 查找在 `rcu_read_lock` 保护下访问已释放的内存，从而触发 use-after-free。
+
+#解决方案
+将 IPv6 特定的初始化逻辑从 `mptcp_subflow_init()` 中剥离，移至新函数 `mptcp_subflow_v6_init()`。修改调用顺序，确保 `mptcp_subflow_v6_init()` 在 `mptcp_proto_v6_init()` 中、协议注册之前被调用。这样可以保证 `tcpv6_prot_override.slab` 正确继承设置了 SLAB_TYPESAFE_BY_RCU 的 slab 缓存，从而避免 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d718aa96cc0ad54b8552cd46130a40aec161bc29

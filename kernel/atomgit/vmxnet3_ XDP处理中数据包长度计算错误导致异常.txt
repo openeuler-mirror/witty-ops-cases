@@ -1,0 +1,20 @@
+#标题
+vmxnet3: XDP处理中数据包长度计算错误导致异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 vmxnet3 网卡驱动处理 XDP（eXpress Data Path）数据包时，由于传给 `xdp_prepare_buff` 的数据包长度参数不正确，导致 XDP 程序处理的数据帧尺寸出现畸变。这可能引发 XDP 程序解析错误、数据截断或非预期的包处理行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `vmxnet3_process_xdp` 函数中，调用 `xdp_prepare_buff` 初始化 XDP buffer 时，错误地使用了 `rbi->len`（Rx Buffer Info 中的缓冲区长度）作为数据包长度。根据代码逻辑，此处应使用 `rcd->len`（Rx Completion Descriptor 中的长度），即硬件实际接收到的数据包长度。使用错误的长度变量导致 XDP 框架获取到的数据包大小与实际接收到的数据不符。
+
+#解决方案
+修改 `drivers/net/vmxnet3/vmxnet3_xdp.c` 文件中的 `vmxnet3_process_xdp` 函数，将 `xdp_prepare_buff` 的第三个参数从 `rbi->len` 修正为 `rcd->len`，确保传递给 XDP 程序的数据包长度与硬件实际接收到的数据长度一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/442ac780432f43fa8a38f46ec20260ff35d95ad5

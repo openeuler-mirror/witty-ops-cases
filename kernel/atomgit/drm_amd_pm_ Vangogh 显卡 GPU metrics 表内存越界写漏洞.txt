@@ -1,0 +1,23 @@
+#标题
+drm/amd/pm: Vangogh 显卡 GPU metrics 表内存越界写漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Vangogh 平台上，当用户态程序（如 mangoapp）通过 sysfs 读取 GPU 指标信息时，触发 KASAN（Kernel Address Sanitizer）检测到内核内存越界写入。系统日志记录到 "slab-out-of-bounds" 错误，导致内核内存被非法覆写，可能引发系统不稳定或崩溃。
+
+#主要错误日志
+[   33.861314] BUG: KASAN: slab-out-of-bounds in smu_cmn_init_soft_gpu_metrics+0x73/0x200 [amdgpu]
+[   33.861799] Write of size 168 at addr ffff888129f59500 by task mangoapp/1067
+[   33.862803]  smu_cmn_init_soft_gpu_metrics+0x73/0x200 [amdgpu]
+[   33.863306]  vangogh_get_gpu_metrics_v2_4+0x123/0xad0 [amdgpu]
+
+#问题根因
+在 `vangogh_tables_init()` 函数中分配 GPU metrics 表内存时，代码仅根据旧的 smu_version 判断分配 `gpu_metrics_v2_2` 或 `gpu_metrics_v2_3` 结构体大小的内存（最大 152 字节）。然而，后续代码逻辑支持 `gpu_metrics_v2_4` 版本，且 `smu_cmn_init_soft_gpu_metrics()` 会对该内存区域进行 168 字节的写入操作。由于分配的内存空间小于写入的数据大小（152 < 168），导致内核内存越界写入。
+
+#解决方案
+修改 `drivers/gpu/drm/amd/pm/swsmu/smu11/vangogh_ppt.c` 中的内存分配逻辑，不再仅依据 smu_version 决定大小，而是强制取 `gpu_metrics_v2_2`、`gpu_metrics_v2_3` 和 `gpu_metrics_v2_4` 三种结构体大小的最大值作为分配尺寸，确保分配的内存空间足以容纳所有可能的数据格式，防止越界写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a163c319eb277a8ad068a02b349a1ba7a620bce5

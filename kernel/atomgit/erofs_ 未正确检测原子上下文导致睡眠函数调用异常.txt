@@ -1,0 +1,32 @@
+#标题
+erofs: 未正确检测原子上下文导致睡眠函数调用异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在关闭 CONFIG_DEBUG_LOCK_ALLOC 配置项的内核中，EROFS 文件系统在处理解压缩时未能正确检测到 RCU 临界区原子上下文。这导致系统在非法上下文中调用了睡眠函数（如 mutex_lock），从而触发内核警告 "BUG: sleeping function called from invalid context"，并可能引发系统不稳定。
+
+#主要错误日志
+[ 61.266692] BUG: sleeping function called from invalid context at kernel/locking/rtmutex_api.c:510
+[ 61.266702] in_atomic(): 0, irqs_disabled(): 0, non_block: 0, pid: 107, name: irq/54-ufshcd
+[ 61.266704] preempt_count: 0, expected: 0
+[ 61.266705] RCU nest depth: 2, expected: 0
+[ 61.266710] CPU: 0 UID: 0 PID: 107 Comm: irq/54-ufshcd Tainted: G W O 6.12.17 #1
+[ 61.266745] mutex_lock+0x2c/0xc0
+[ 61.266748] z_erofs_decompress_queue+0xe8/0x978
+[ 61.266753] z_erofs_decompress_kickoff+0xa8/0x190
+[ 61.266758] bio_endio+0x160/0x218
+
+#问题根因
+在未开启 CONFIG_DEBUG_LOCK_ALLOC 的情况下，原有的检测逻辑 `rcu_read_lock_any_held()` 仅编译为 `!preemptible()`，该函数只检查 `preempt_count` 而忽略了 RCU 临界区状态。这导致系统误判当前处于非原子上下文，进而直接执行了可能睡眠的解压缩操作，而非交给 kworker 处理。
+
+#解决方案
+引入新的辅助函数 `z_erofs_in_atomic()` 以增强原子上下文检测能力：
+1. 当启用 CONFIG_PREEMPTION 时，增加对 `rcu_preempt_depth()` 的检查以识别 RCU 临界区。
+2. 当关闭 CONFIG_PREEMPT_COUNT 时，直接返回 true（原子上下文），因为此时无法可靠判断抢占状态。
+3. 其余情况回退使用标准的 `preemptible()` 检查。
+该修复确保在所有配置下都能正确识别原子上下文，强制使用 kthread/work 进行异步处理，避免非法睡眠。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/df3be4a95107305bc54c218ad27f50bdc7c7ae4e

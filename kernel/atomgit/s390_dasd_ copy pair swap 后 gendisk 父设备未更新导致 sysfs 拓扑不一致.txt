@@ -1,0 +1,20 @@
+#标题
+s390/dasd: copy pair swap 后 gendisk 父设备未更新导致 sysfs 拓扑不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 s390 DASD 设备执行 copy pair swap（复制对交换）操作后，块设备的 "device" 符号链接指向了次级 CCW 设备，但 gendisk 的父设备仍然指向主级设备。这导致 `/sys/block/<dasdx>` 目录仍挂在错误的父设备下，sysfs 设备拓扑出现不一致。
+
+#主要错误日志
+copy_pair_swap: moving blockdevice parent %s->%s failed (%d)
+
+#问题根因
+copy pair swap 逻辑中，虽然更新了块设备到次级 CCW 设备的链接，但遗漏了将 gendisk 对应的设备对象（device）移动到次级设备的目录下。这导致内核数据结构与 sysfs 展示的层级关系不匹配。
+
+#解决方案
+在 swap 流程更新完 block device link 后，调用 `device_move()` 函数将 gendisk 设备移动到次级 CCW 设备（secondary->cdev->dev）下。若移动失败，通过 `dev_err` 打印错误日志以记录问题，确保 sysfs 拓扑结构在交换后保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a20a52b487cc70553ab918c4121cac083bac266e

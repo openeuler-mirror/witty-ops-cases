@@ -1,0 +1,36 @@
+#标题
+UFS BSG 处理 ARPMB 命令失败时导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当设备不支持 ARPMB（Advanced RPMB）功能时，发送 ARPMB 命令会导致内核崩溃。具体表现为在 `ufs_bsg_exec_advanced_rpmb_req` 函数返回错误后，内核触发 `usercopy_abort`，导致系统 panic 或 Oops。复现条件为向不支持 ARPMB 的 UFS 设备发送相关命令。
+
+#主要错误日志
+ufshcd 0000:00:12.5: ARPMB OP failed: error code -22
+Call Trace:
+ <TASK>
+ ? show_regs+0x6d/0x80
+ ? die+0x37/0xa0
+ ? do_trap+0xd4/0xf0
+ ? do_error_trap+0x71/0xb0
+ ? usercopy_abort+0x6c/0x80
+ ? exc_invalid_op+0x52/0x80
+ ? usercopy_abort+0x6c/0x80
+ ? asm_exc_invalid_op+0x1b/0x20
+ ? usercopy_abort+0x6c/0x80
+ __check_heap_object+0xe3/0x120
+ check_heap_object+0x185/0x1d0
+ __check_object_size.part.0+0x72/0x150
+ __check_object_size+0x23/0x30
+ bsg_transport_sg_io_fn+0x314/0x3b0
+
+#问题根因
+在 `ufs_bsg_request` 函数中，当 `ufs_bsg_exec_advanced_rpmb_req` 执行失败（返回错误码）时，代码依然错误地设置了 `job->reply_len`。这导致后续在 `bsg_transport_sg_io_fn` 中尝试将数据拷贝到用户空间时，触发了堆内存检查失败，从而引发 `usercopy_abort` 导致内核崩溃。
+
+#解决方案
+修改 `ufs_bsg_request` 函数逻辑，仅在命令执行成功（`ret == 0`）时才设置 `job->reply_len`，并调用 `bsg_job_done` 完成任务；若执行失败则直接返回错误，避免设置无效的回复长度，防止非法内存拷贝。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d8191b7fbc3e52b9b08885c6317eccb7ced2c575

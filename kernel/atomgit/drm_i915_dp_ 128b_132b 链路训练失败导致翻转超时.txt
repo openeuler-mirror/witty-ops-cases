@@ -1,0 +1,21 @@
+#标题
+drm/i915/dp: 128b/132b 链路训练失败导致翻转超时
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel 显卡 DP 接口进行 128b/132b 链路训练过程中，若训练失败，会导致后续 modeset 序列中出现 page-flip timeouts（翻转超时）。原因是硬件状态机卡死，导致_modeset 操作无法正常完成。
+
+#主要错误日志
+128b/132b intra-hop not clear
+
+#问题根因
+根据硬件规范（Bspec: 54128, 65448, 68849），128b/132b 链路训练序列结束后，硬件期望 transcoder 的训练模式必须先设置为 TPS2，然后再切换到正常模式（禁用训练模式）。如果直接从 TPS1 模式切换到正常模式，会导致 transcoder 处于卡死状态。
+在故障场景下，链路训练如果在 TPS1 阶段失败，代码直接返回，此时 transcoder 仍处于 TPS1 模式。随后 `intel_dp_stop_link_train()` 直接将其从 TPS1 切换到正常模式，违反了硬件状态转换要求，最终导致 modeset 失败和翻转超时。
+
+#解决方案
+修改 `intel_dp_128b132b_link_train` 函数的错误处理路径。在链路训练失败的清理流程中，强制将 DP 训练模式设置为 TPS2（`DP_TRAINING_PATTERN_2`），确保后续 transcoder 状态转换符合硬件预期，避免状态机卡死。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/73f70d29db4b6ea2c5c1b90bfa4d23a70352d7df

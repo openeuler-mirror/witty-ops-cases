@@ -1,0 +1,22 @@
+#标题
+drm/i915/guc: 访问未 pinned 上下文的 LRC 状态导致内存访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i915 GuC 子系统的 debugfs 打印接口中，当尝试输出 Context 信息时，如果该 Context 已经被 unpinned（取消驻留），其对应的 backing memory 可能已被释放或取消映射。此时若强行访问 `lrc_reg_state` 指针以打印 LRC Head/Tail 信息，会导致访问非法内存地址，可能引发内核 panic 或内存访问错误（Oops）。
+
+#主要错误日志
+未知
+
+#问题根因
+在调用 debugfs 打印函数 `guc_log_context` 时，代码直接访问了 `ce->lrc_reg_state` 指针。由于 Context 在被 unpinned 后，其 backing memory 有可能已经被 unpin（取消驻留/映射），导致 `lrc_reg_state` 指向的内存区域不可访问。代码未检查 Context 是否处于 pinned 状态就直接读取其内存内容，导致了非法内存访问。
+
+#解决方案
+在访问 `lrc_reg_state` 指针前，使用 `intel_context_pin_if_active(ce)` 尝试 pin 住上下文。
+- 如果 pin 成功，说明内存有效，安全读取 `lrc_reg_state` 中的 Head/Tail 数据并打印，随后调用 `intel_context_unpin(ce)` 释放引用。
+- 如果 pin 失败（Context 不活跃），说明内存可能不可用，此时不再访问 `lrc_reg_state`，改为打印 "Memory not pinned" 提示信息，仅显示 Internal Head/Tail 值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a186abf29e0ac46ab707cb53a9f9e1568cb62229

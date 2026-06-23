@@ -1,0 +1,35 @@
+#标题
+URMA ubmad协议通信异常及重复报文处理缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ubmad (User Basis MAD) 进行通信时，目标端无法识别并丢弃重复的请求报文，导致重复处理同一事务。同时，由于协议类型匹配逻辑与新的消息类型定义不一致，导致数据发送流程可能选择错误的传输模式（如错误地使用 wk1 模式而非 wk2 模式），引发通信功能异常或数据传输错误。
+
+#主要错误日志
+- `ubcore_log_err("Connect service, Unrecognized msg type %u\n", msg->type);`
+- `ubcore_log_err("Failed to alloc recv msn_node, msg_type %u msn %llu.\n", msg_type, msn);`
+- `ubcore_log_info("Failed to release ini rtbuffer: already releasd.\n");`（注：日志保留原文拼写 releasd）
+
+#问题根因
+1. **缺乏接收端重复报文检测机制**：目标端缺少对已接收消息序列号（MSN）的记录与管理，无法识别并过滤重传的重复报文，导致同一请求被多次处理。
+2. **哈希查找键值不完整**：原有的重传缓冲区和 MSN 管理机制仅使用 `msn` 作为哈希键，未包含 `msg_type`。当不同类型的消息拥有相同的 MSN 时，会导致查找冲突或管理混乱。
+3. **新协议消息类型处理缺失**：代码中新增了 `UBCORE_CM_GEN_DATA` 等消息类型，但 `ubcore_ubcm_send_to` 函数未针对 `protocol_id == 1` 的情况实现对应的发送逻辑，导致数据无法正确封装发送。
+
+#解决方案
+1. **实现接收端 MSN 管理与去重**：
+   - 在 `ubmad_tjetty` 结构体中新增 `recv_msn_mgr` 字段用于追踪已接收的消息。
+   - 实现 `ubmad_check_recv_msn_duplicate` 函数，利用哈希表和 LRU 链表管理已接收的 MSN，自动检测并丢弃重复报文，同时支持老旧条目的驱逐（Eviction）。
+   - 在 jetty 初始化与销毁流程中同步初始化与释放 `recv_msn_mgr` 资源。
+
+2. **修复哈希键值与数据结构**：
+   - 修改 `ubmad_reliable_hash` 函数，将哈希键从单一的 `msn` 修改为 `msn` 与 `msg_type` 的组合，解决键值冲突问题。
+   - 在 `ubmad_msn_node`、`ubmad_ini_rtbuffer`、`ubmad_tgt_rtbuffer` 等相关数据结构中增加 `msg_type` 字段，确保存储与查找的一致性。
+
+3. **完善协议发送逻辑**：
+   - 新增 `ubcore_ubcm_service_gen_send_to` 函数，专门处理 `protocol_id == 1` 的场景，根据消息类型正确设置 `send_buf->msg_type`（如 `UBCORE_CM_GEN_DATA` 或 `UBCORE_CM_GEN_RESP`）。
+   - 在 `ubcore_ubcm_send_to` 主函数中增加对 `protocol_id == 1` 的分支判断，确保数据通过正确的路径发送。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8a8468b146faa8d2365e453e6cc87cb99ad67512

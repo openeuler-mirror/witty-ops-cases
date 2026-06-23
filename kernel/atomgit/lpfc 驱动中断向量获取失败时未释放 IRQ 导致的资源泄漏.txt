@@ -1,0 +1,21 @@
+#标题
+lpfc 驱动中断向量获取失败时未释放 IRQ 导致的资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 lpfc 驱动初始化过程中，若 `pci_irq_vector` 获取中断向量失败，系统会打印警告日志，但随后可能存在资源泄漏，导致驱动状态异常或后续重新加载失败。
+
+#主要错误日志
+- "0496 MSI pci_irq_vec failed (%d)\n"
+- "0502 INTR pci_irq_vec failed (%d)\n"
+
+#问题根因
+在 `lpfc_sli4_enable_msi` 和 `lpfc_sli4_enable_intr` 函数的错误处理路径中，当 `pci_irq_vector` 返回失败（rc < 0 或 retval < 0）时，代码直接调用了 `pci_free_irq_vectors` 来释放向量，但遗漏了在此之前调用 `free_irq` 来释放已经映射或请求的 IRQ 资源。这导致了中断资源的泄漏。
+
+#解决方案
+在 `pci_irq_vector` 失败的错误处理分支中，在调用 `pci_free_irq_vectors` 之前，增加 `free_irq(phba->pcidev->irq, phba)` 调用，确保正确释放已分配的中断资源，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6b3cd07cd4dde8427825456bcb6b50a35cfcfe45

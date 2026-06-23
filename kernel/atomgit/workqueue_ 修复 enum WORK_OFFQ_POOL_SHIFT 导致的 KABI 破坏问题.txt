@@ -1,0 +1,24 @@
+#标题
+workqueue: 修复 enum WORK_OFFQ_POOL_SHIFT 导致的 KABI 破坏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核内部接口 KABI（内核应用程序二进制接口）一致性检查失败，导致内核在启用 KABI 兼容性检查的特性下报错或无法正常加载，影响内核模块的兼容性稳定性。该问题由提交 ff86423eddff 引入，改变了 `workqueue` 模块中关键枚举值的布局。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的提交 ff86423eddff ("workqueue: Implement disable/enable for (delayed) work items") 中，`workqueue` 模块为了实现 work items 的禁用/使能功能，调整了 `work_struct` 数据成员的位域布局。具体修改是将 `[ pool ID ]` 区域从原有的位置移动到了 `[ disable depth ]` 之后，导致 `WORK_OFFQ_POOL_SHIFT` 枚举值的数值发生了改变。
+由于该枚举值属于内核 ABI 的一部分（涉及数据结构的位偏移定义），其数值的改变直接破坏了 KABI 的稳定性，导致依赖原有偏移量定义的兼容性检查失败。
+
+#解决方案
+调整 `include/linux/workqueue.h` 中的枚举定义顺序，交换 `pool ID` 和 `disable depth` 在位域中的位置，恢复原有的 KABI 布局。
+1. 将 `WORK_OFFQ_POOL_SHIFT` 的定义恢复到 `WORK_OFFQ_FLAG_BITS` 之后，确保其偏移值与 KABI 定义一致。
+2. 将 `WORK_OFFQ_DISABLE_SHIFT` 移动到 `WORK_OFFQ_POOL_SHIFT` 之后。
+3. 在 `kernel/workqueue.c` 的 `get_work_pool` 函数中，调整读取 `pool_id` 的逻辑。由于 `pool ID` 现在位于 `disable depth` 之下（不再是简单的右移操作，需要跳过上层的 `disable depth` 位），引入辅助函数 `shift_and_mask`（或调整调用方式），通过 `(data >> WORK_OFFQ_POOL_SHIFT) & ((1U << WORK_OFFQ_POOL_BITS) - 1)` 操作正确提取位于中间位的 `pool_id`，在修复 KABI 的同时保证功能逻辑正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4deaf63afcc7c520b0dc4203f507dfbd6e253494

@@ -1,0 +1,24 @@
+#标题
+f2fs 压缩读写路径在异常状态下处理不当导致潜在问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 F2FS 文件系统开启压缩功能且发生 I/O 错误或文件系统处于异常状态时，内核可能出现以下现象：
+1. 在 `prepare_compress_overwrite` 流程中，若页面读取未更新，未正确处理 I/O 错误，可能导致后续读写操作行为异常或数据不一致。
+2. 在 `f2fs_read_multi_pages` 流程中，若文件系统处于 CP error 状态，未及时阻断读取操作，可能引发空指针引用、内核 Oops 或无效内存访问。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **压缩覆写路径缺陷**：在 `prepare_compress_overwrite` 函数中，当页面状态为 `!PageUptodate` 时，代码直接跳转到 `release_and_retry` 标签进行重试或释放，但未调用 `f2fs_handle_page_eio` 处理底层的 I/O 错误。这导致错误状态未被正确记录和处理。
+2. **压缩读取路径缺陷**：在 `f2fs_read_multi_pages` 函数中，对 `f2fs_cp_error` 的检查位置过晚。原代码在执行 `f2fs_cache_compressed_page` 等操作后才检查错误状态，若此时文件系统已处于异常状态，可能导致后续代码访问无效数据结构，引发系统崩溃。
+
+#解决方案
+1. **增加错误处理调用**：在 `fs/f2fs/compress.c` 的 `prepare_compress_overwrite` 函数中，当检测到 `!PageUptodate(page)` 时，在重试逻辑前增加 `f2fs_handle_page_eio(sbi, page->index, DATA)` 调用，确保正确处理数据页的 I/O 错误。
+2. **前置异常状态检查**：在 `fs/f2fs/data.c` 的 `f2fs_read_multi_pages` 函数入口处，将 `f2fs_cp_error(sbi)` 的检查逻辑提前，一旦检测到文件系统异常立即返回 `-EIO`，避免在异常状态下继续执行后续的读取和解压逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/350a854f7311567901da170025946a493d8e6a05

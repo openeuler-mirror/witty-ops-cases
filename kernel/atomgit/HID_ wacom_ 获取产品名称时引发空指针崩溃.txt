@@ -1,0 +1,24 @@
+#标题
+HID: wacom: 获取产品名称时引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在连接特定 USB 设备（如 EXCELSIOR DL37-D05）时，由于设备报告的 `dev->product` 为空，导致内核在 `wacom_update_name` 函数中触发空指针引用，系统打印 Oops 信息并可能崩溃。
+
+#主要错误日志
+[   56.678839] hid-generic 0003:056A:0374.0004: hiddev0,hidraw3: USB HID v1.10 Device [HID 056a:0374] on usb-0000:00:05.0-3/input0
+[   56.697719] CPU 2 Unable to handle kernel paging request at virtual address 0000000000000000, era == 90000000066e35c8, ra == ffff800004f98a80
+[   56.697732] Oops[#1]:
+[   56.697753]    ra: ffff800004f98a80 wacom_update_name+0xe0/0x300 [wacom]
+[   56.697806]  ERA: 90000000066e35c8 strstr+0x28/0x120
+
+#问题根因
+特定 USB 设备（如 EXCELSIOR DL37-D05）错误地报告了空的 `dev->product` 字符串。驱动程序在 `wacom_update_name` 函数中直接将 `dev->product` 赋值给 `product_name`，未进行空指针检查，后续对该指针进行操作（如 `strstr`）时触发了空指针引用。
+
+#解决方案
+在 `wacom_sys.c` 的 `wacom_update_name` 函数中增加判断逻辑：仅当 `dev->product` 不为 NULL 时，才将其赋值给 `product_name`，避免使用空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4a2d6ed4dddd5beb7db3fa3fbe662f7f4a6885cd

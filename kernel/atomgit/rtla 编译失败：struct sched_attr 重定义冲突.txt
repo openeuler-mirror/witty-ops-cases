@@ -1,0 +1,31 @@
+#标题
+rtla 编译失败：struct sched_attr 重定义冲突
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译 rtla (Real-Time Linux Analysis) 工具时，由于 glibc 新增了 `sched_setattr` 和 `sched_getattr` 函数及相关结构体定义，导致 rtla 自身定义的结构体与 glibc 引入的定义发生冲突，编译过程报错 "redefinition of 'struct sched_attr'" 并中断。
+
+#主要错误日志
+In file included from src/trace.c:11:
+src/utils.h:49:8: error: redefinition of ‘struct sched_attr’
+   49 | struct sched_attr {
+      |        ^~~~~~~~~~
+In file included from /usr/include/bits/sched.h:60,
+                 from /usr/include/sched.h:43,
+                 from /usr/include/tracefs/tracefs.h:10,
+                 from src/trace.c:4:
+/usr/include/linux/sched/types.h:98:8: note: originally defined here
+   98 | struct sched_attr {
+      |        ^~~~~~~~~~
+
+#问题根因
+glibc 提交 21571ca0d703 ("Linux: Add the sched_setattr and sched_getattr functions") 在头文件中提供了 `struct sched_attr` 和 `sched_setattr()` 的定义。rtla 工具源码中的 `utils.h` 也定义了同名结构体 `struct sched_attr`，且 `utils.c` 中定义的静态函数 `sched_setattr` 与 glibc 提供的函数名冲突，导致编译时出现重定义错误。
+
+#解决方案
+1. 修改 `utils.h`，将 `struct sched_attr` 的定义用 `#ifndef SCHED_ATTR_SIZE_VER0` 宏包裹，避免在 glibc 已定义该结构体时重复定义。
+2. 修改 `utils.c`，将 rtla 内部使用的 `sched_setattr` 函数重命名为 `syscall_sched_setattr`，以避免与 glibc 的函数符号冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1d40c94132cc25d12ce38f9b07a9b3dcad54b183

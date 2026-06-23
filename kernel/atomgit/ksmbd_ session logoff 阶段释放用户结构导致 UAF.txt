@@ -1,0 +1,20 @@
+#标题
+ksmbd: session logoff 阶段释放用户结构导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 处理 SMB2 会话注销（session logoff）请求时，内核发生引用计数错误或访问已释放内存，进而导致系统崩溃或触发 Kernel Panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb2_session_logoff` 函数中，将用户结构体（`sess->user`）释放的操作被错误地放置在了设置连接状态为 `KSMBD_SESS_NEED_NEGOTIATE` 之前。这导致在后续的处理流程中，相关逻辑可能继续尝试访问已被释放的 `sess->user` 指针，从而引发 Use-After-Free 漏洞（CVE-2025-37899）。
+
+#解决方案
+删除 `smb2_session_logoff` 函数中显式释放用户内存的代码段（`ksmbd_free_user` 调用），将用户资源的生命周期管理交由上层或连接状态机在设置 `KSMBD_SESS_NEED_NEGOTIATE` 后统一处理，避免在会话状态完全切换前释放关键数据结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ed80fee799e00be4de461eecfde0e67eaa75aea0

@@ -1,0 +1,29 @@
+#标题
+ocfs2: 修复直接IO读取路径中因未初始化值导致的内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ocfs2 文件系统并触发直接IO（Direct IO）读取操作时，内核内存检测工具（KMSAN）检测到访问了未初始化的变量，导致内核报错并打印调用栈。该问题可能引发系统 panic 或数据损坏风险。
+
+#主要错误日志
+BUG: KMSAN: uninit-value in ocfs2_file_read_iter+0x9a4/0xf80
+ ocfs2_file_read_iter+0x9a4/0xf80
+ __io_read+0x8d4/0x20f0
+ io_read+0x3e/0xf0
+ io_issue_sqe+0x42b/0x22c0
+ io_wq_submit_work+0xaf9/0xdc0
+ io_worker_handle_work+0xd13/0x2110
+ io_wq_worker+0x447/0x1410
+ ret_from_fork+0x6f/0x90
+ ret_from_fork_asm+0x1a/0x30
+
+#问题根因
+在 `ocfs2_file_read_iter()` 和 `ocfs2_file_write_iter()` 函数中，`struct kiocb` 结构体实例可能直接从块层传递过来。在该场景下，`kiocb` 结构体中的 `private` 字段处于未初始化状态。后续代码逻辑（如 `ocfs2_dio_end_io()`）依赖 `private` 字段中的特定标志位（如 `OCFS2_IOCB_RW_LOCK`）来判断锁状态，访问未初始化的内存导致了“uninit-value”错误。
+
+#解决方案
+在 `fs/ocfs2/aops.h` 中新增宏定义 `ocfs2_iocb_init_rw_locked(iocb)`，用于显式初始化 `kiocb->private` 字段为 NULL。在 `ocfs2_file_write_iter()` 和 `ocfs2_file_read_iter()` 函数的入口处调用该宏，确保在进行后续锁操作检查前，`private` 字段处于已知的初始化状态，从而避免访问未初始化内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e501e893ad3a3260539acddbe86dd396d7c64c34

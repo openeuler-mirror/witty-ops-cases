@@ -1,0 +1,23 @@
+#标题
+btrfs: create_space_info() 错误路径双重释放(Double Free)漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 btrfs 文件系统挂载或初始化过程中，若 `kobject_init_and_add()` 因系统资源不足等原因失败，内核会发生内存双重释放(Double Free)。这将导致内核内存管理子系统状态不一致，极大概率触发内核崩溃(Kernel Panic)或引发后续随机的内存损坏与宕机。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `create_space_info()` 函数中，错误处理逻辑存在缺陷：
+1. 当调用 `btrfs_sysfs_add_space_info_type()` 失败时（内部 `kobject_init_and_add()` 返回错误），该函数内部已经通过 `kobject_put()` 触发了释放回调 `space_info_release()`，进而执行了 `kfree(space_info)`。
+2. 然而，`create_space_info()` 在收到错误返回值后，仍跳转至 `out_free` 标签再次执行 `kfree(space_info)`。
+这导致同一块内存被释放两次，引发双重释放问题。
+
+#解决方案
+修改 `create_space_info()` 中的错误处理逻辑。当 `btrfs_sysfs_add_space_info_type()` 返回错误时，不再执行 `goto out_free`，而是直接 `return ret`。此举将内存释放权完全移交给 kobject 的释放回调机制，避免了代码手动释放与自动回调释放之间的冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e60d26923115f3d2930e2b61219a71bf4ef3d67f

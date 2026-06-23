@@ -1,0 +1,21 @@
+#标题
+usb: dwc3: 挂起过程中 soft disconnect 失败导致寄存器访问错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 dwc3_gadget_soft_disconnect() 执行失败时，系统并未终止挂起流程，而是继续执行挂起操作。这导致 USB 电源域被关闭，但 gadget 驱动仍保持连接状态。在此异常状态下，若触发 vbus_event_work()，该工作队列试图在电源域已关闭的情况下访问 DWC3 寄存器以禁用端点，从而引发错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dwc3_suspend_common()` 函数中，调用 `dwc3_gadget_suspend()` 时未检查其返回值。当 `dwc3_gadget_soft_disconnect()` 失败时，挂起流程未中止，导致在电源域关闭且 gadget 驱动仍连接的异常时间窗口内，`vbus_event_work()` 尝试访问寄存器引发错误。
+
+#解决方案
+1. 修改 `dwc3_gadget_suspend()` 逻辑，当 `dwc3_gadget_soft_disconnect()` 失败且 `softconnect` 为真时，尝试重新连接并返回 `-EAGAIN`。
+2. 在 `dwc3_suspend_common()` 的 Device 模式和 OTG 模式分支中，捕获 `dwc3_gadget_suspend()` 的返回值。若返回错误（如 `-EAGAIN`），则立即终止挂起流程并返回错误码，避免在控制器未正常停止的情况下关闭电源域。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4051ec54d7acc793225eca5c4839879d3cf13767

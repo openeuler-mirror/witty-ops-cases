@@ -1,0 +1,20 @@
+#标题
+scsi: ufs: exynos: Fix hibern8 notify callbacks
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Exynos UFS 主机的 hibernate（休眠/唤醒）回调功能一直处于失效状态，导致 UFS 设备无法正确执行 Hibern8 Enter/Exit 流程，可能引发设备休眠唤醒异常或功能错误。
+
+#主要错误日志
+未知
+
+#问题根因
+引入 `ufshcd_vops_hibern8_notify()` 回调的补丁 v1 版本使用的是 `bool` 类型参数，而在 v2 版本中根据审查反馈更新为了 `enum uic_cmd_dme` 类型。`ufs-exynos` 驱动未同步此变更，一直沿用 v1 的 `bool` 实现逻辑，导致参数传递与判断逻辑错误，破坏了 Hibern8 流程的正确处理。
+
+#解决方案
+修改 `exynos_ufs_pre_hibern8` 和 `exynos_ufs_post_hibern8` 函数的参数类型，将 `u8 enter` 替换为 `enum uic_cmd_dme cmd`。同时修正条件判断逻辑，将 `if (!enter)` 改为 `if (cmd == UIC_CMD_DME_HIBER_EXIT)`，将 `else` 分支改为显式判断 `else if (cmd == UIC_CMD_DME_HIBER_ENTER)`，确保 Hibern8 进入与退出的回调处理与内核 UFS 核心层定义的枚举值正确匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a8256833a2861c46c5f706e327405f5c7bcd47bc

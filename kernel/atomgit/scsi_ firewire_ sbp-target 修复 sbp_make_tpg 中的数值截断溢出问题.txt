@@ -1,0 +1,20 @@
+#标题
+scsi: firewire: sbp-target 修复 sbp_make_tpg 中的数值截断溢出问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+用户通过 configfs 创建 TPG（Target Portal Group）时，若指定的 tpgt 数值超过 u16 范围（如 70000），内核不会报错，但实际存储的值会被静默截断（例如 70000 被截断为 4464）。这导致用户通过 mkdir 指定的值与内核实际存储的值不一致，可能引发配置混乱或非预期行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `sbp_make_tpg()` 函数中，变量 `tpgt` 被定义为 `unsigned long`，且输入校验逻辑仅检查其是否大于 `UINT_MAX`。然而，结构体成员 `tpg->tport_tpgt` 的数据类型为 `u16`。当输入值（如 70000）在 `UINT_MAX` 范围内校验通过后，赋值给 `u16` 成员时发生了隐式类型截断，导致数据不一致。
+
+#解决方案
+将局部变量 `tpgt` 的类型从 `unsigned long` 修改为 `u16`，并将字符串转换函数从 `kstrtoul` 替换为 `kstrtou16`。利用 `kstrtou16` 自带的范围校验机制，直接拒绝超出 u16 范围（0-65535）的输入值，从而避免截断问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/69f5e3b3d1b74d81aa1aa4fcb7ccd3783d7d039d

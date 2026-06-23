@@ -1,0 +1,24 @@
+#标题
+batman-adv: 发送未初始化的 TT 变更数据导致网络异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 batman-adv 网络中，节点发送的 TT（Translation Table）数据包中包含未初始化的数据。接收节点将这些未初始化数据解析为 TT 变更，导致全局 TT 表中出现异常条目。
+具体的异常现象表现为网络中出现无效或怪异的 MAC 地址条目，例如：
+* 00:00:00:00:00:00   -1 [....] (  0) 88:12:4e:ad:7e:ba (179) (0x45845380)
+* 00:00:00:00:78:79 4092 [.W..] (  0) 88:12:4e:ad:7e:3c (145) (0x8ebadb8b)
+
+#主要错误日志
+未知
+
+#问题根因
+在 `batadv_tt_tvlv_container_update()` 函数中，TT 变更的实际数量可能少于初始预期（例如，在读取 `tt_diff_entries_num` 和在锁下遍历变更列表之间，发生了 ADD+DEL 序列导致变更被 `batadv_tt_local_event()` 移除）。
+因此，分配的 `tt_diff_len` 缓冲区大小可能大于实际需要发送的变更数据大小。由于发送函数（如 `batadv_send_my_tt_response`）会发送整个数据包，导致缓冲区中未初始化的尾部数据被当作有效的 TT 变更发送出去。该问题同时影响 OGM tvlv 容器缓冲区的 `tvlv_len`。
+
+#解决方案
+在 `batadv_tt_tvlv_container_update()` 函数中，计算实际变更条目数与初始预期条目数的差值，得出额外分配的空间大小（`tt_extra_len`）。在发送数据前，从总长度（`tt_diff_len` 和 `tvlv_len`）中减去这部分额外空间，从而避免发送未初始化的数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/054ceb1a43959fd631000de86feab4378757e03f

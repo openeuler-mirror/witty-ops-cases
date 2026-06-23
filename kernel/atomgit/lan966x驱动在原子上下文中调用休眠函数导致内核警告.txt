@@ -1,0 +1,36 @@
+#标题
+lan966x驱动在原子上下文中调用休眠函数导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当尝试通过 SSH 连接到设备时，内核触发 BUG 报警，提示在无效上下文中调用了休眠函数（sleeping function called from invalid context）。系统打印调用栈并标记 Tainted 状态，导致相关进程（如 dropbear）运行异常。
+
+#主要错误日志
+BUG: sleeping function called from invalid context at kernel/locking/mutex.c:575
+in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 104, name: dropbear
+preempt_count: 1, expected: 0
+INFO: lockdep is turned off.
+CPU: 0 UID: 0 PID: 104 Comm: dropbear Tainted: G        W           6.18.0-rc2-00399-g6f1ab1b109b9-dirty #530 NONE
+Call trace:
+ unwind_backtrace from show_stack+0x10/0x14
+ show_stack from dump_stack_lvl+0x7c/0xac
+ dump_stack_lvl from __might_resched+0x16c/0x2b0
+ __might_resched from __mutex_lock+0x64/0xd34
+ __mutex_lock from mutex_lock_nested+0x1c/0x24
+ mutex_lock_nested from lan966x_stats_get+0x5c/0x558
+
+#问题根因
+在 `lan966x_stats_get` 函数及其相关的统计信息读取路径中，代码试图获取互斥锁（mutex）。然而，该函数是通过 `dev_get_stats` 在读取 `/proc` 文件系统（如读取网络设备统计信息）时被调用的，此时 CPU 处于原子上下文（in_atomic() 为 1）。互斥锁在持有时可能会引起睡眠，因此在原子上下文中使用互斥锁是非法的，从而触发了内核的 BUG 报警。
+
+#解决方案
+将驱动中用于保护统计数据的锁机制从互斥锁（`struct mutex stats_lock`）替换为自旋锁（`spinlock_t stats_lock`）。
+具体修改包括：
+1. 修改结构体定义，将 `stats_lock` 的类型从 `struct mutex` 改为 `spinlock_t`。
+2. 将初始化函数中的 `mutex_init` 替换为 `spin_lock_init`。
+3. 将所有加锁和解锁操作从 `mutex_lock/mutex_unlock` 替换为 `spin_lock/spin_unlock`。
+4. 移除驱动卸载路径中不再需要的 `mutex_destroy` 调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9da95ff6528956ae05479bc9a15a759338213a4f

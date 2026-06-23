@@ -1,0 +1,28 @@
+#标题
+netfilter: nfnetlink_osf 修复 OSF_WSS_MODULO 分支除零导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+具有 CAP_NET_ADMIN 权限的用户通过 nfnetlink 添加特定的指纹（fingerprint）后，在处理后续匹配的 TCP SYN 报文时，内核触发除零错误导致 Panic（Oops: divide error），系统崩溃不可用。
+
+#主要错误日志
+Oops: divide error: 0000 [#1] SMP KASAN NOPTI
+RIP: 0010:nf_osf_match_one (net/netfilter/nfnetlink_osf.c:98)
+Call Trace:
+ <IRQ>
+  nf_osf_match (net/netfilter/nfnetlink_osf.c:220)
+  xt_osf_match_packet (net/netfilter/xt_osf.c:32)
+  ipt_do_table (net/ipv4/netfilter/ip_tables.c:348)
+  nf_hook_slow (net/netfilter/core.c:622)
+  ip_local_deliver (net/ipv4/ip_input.c:265)
+
+#问题根因
+在函数 `nf_osf_match_one()` 的 `OSF_WSS_MODULO` 分支中，代码执行 `ctx->window % f->wss.val` 取模运算，但未对除数 `f->wss.val` 进行零值校验。由于 `nfnl_osf_add_callback()` 缺少对用户传入指纹参数的有效性检查，允许 `f->wss.val` 为 0 的指纹被添加到系统中。当后续 TCP SYN 报文匹配到该指纹时，触发整数除零异常，导致内核崩溃。
+
+#解决方案
+在 `nfnl_osf_add_callback()` 函数中增加参数合法性校验：拒绝 `wss.wc >= OSF_WSS_MAX` 的指纹，同时拒绝 `wss.wc == OSF_WSS_MODULO` 且 `wss.val == 0` 的指纹，从而在源头上阻止非法指纹添加，避免后续处理流程中的除零错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58aecfd98bea8b2f15fc0116c8343ae1c9b1c9ed

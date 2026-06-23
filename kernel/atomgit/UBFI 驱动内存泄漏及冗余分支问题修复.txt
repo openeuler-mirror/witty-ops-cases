@@ -1,0 +1,29 @@
+#标题
+UBFI 驱动内存泄漏及冗余分支问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 内存泄漏：在 UBFI 驱动初始化过程中，如果 `handle_ubrt` 函数执行失败，此前通过 `ubfi_get_ubrt` 获取的内存资源（如 ACPI 表或 DTS 表）未被释放，导致内存泄漏。
+2. 异常处理缺陷：代码中存在冗余的分支判断逻辑，且对 UBIOS 表的尺寸校验不够严格，可能导致潜在的安全风险或解析异常。
+
+#主要错误日志
+- pr_warn("can't get ub information from firmware, ret=%d\n", ret);
+- pr_err("failed to handle ubrt, ret=%d\n", ret);
+- pr_err("ubios table size is invalid, total_size=0x%x\n", total_size);
+- pr_err("Create %s failed, ret=%d\n", name, ret);
+
+#问题根因
+1. **内存泄漏根因**：在 `ubfi_init` 函数中，当 `ubfi_get_ubrt` 成功获取资源后，若后续调用的 `handle_ubrt` 返回失败，函数直接返回错误码，未调用 `ubfi_put_ubrt` 进行资源释放。
+2. **代码逻辑缺陷**：部分函数（如 `ubfi_get_ubrt`、`handle_ubrt` 等）中存在不必要的 `else if` 和默认返回值判断，逻辑冗余；同时 UBIOS 表最大尺寸宏定义 `UBIOS_TABLE_TOTLE_SIZE_MAX` 计算值偏小，与实际需求不符。
+
+#解决方案
+1. **修复内存泄漏**：在 `ubfi_init` 函数中增加对 `handle_ubrt` 返回值的判断，若失败则调用 `ubfi_put_ubrt()` 释放已获取的资源。
+2. **代码重构与加固**：
+   - 将 `bios_mode` 重命名为 `firmware_mode`，简化相关条件判断逻辑，移除冗余分支。
+   - 修正 `UBIOS_TABLE_TOTAL_SIZE_MAX` 宏定义，确保能覆盖最大表结构大小。
+   - 增加 `parse_ubc_table` 中对 `ubc_cna_start` 和 `ubc_eid_start` 为 0 的边界检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b41f79594e18b9628b1d8d4e50ac1687c9679ecf

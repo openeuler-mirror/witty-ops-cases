@@ -1,0 +1,24 @@
+#标题
+btrfs: zoned: 修复元数据块组写入时激活失败问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ZNS（Zoned Namespace）设备上使用 Btrfs 文件系统时，若 Zone 容量较小，可能在首次写入前就分配完整个区域。此时，元数据块组在写入时刻激活过程中，会错误地触发“块组已满”检查，导致激活失败，进而引发内核警告或 IO 错误。
+
+#主要错误日志
+推断：内核日志中出现 WARN_ON_ONCE 相关的栈回溯信息。
+1. 针对数据块组：`WARN_ON_ONCE(btrfs_zoned_bg_is_full(block_group))`
+2. 针对元数据块组：`WARN_ON_ONCE(block_group->meta_write_pointer != block_group->start)`
+
+#问题根因
+自引入 commit 13bb483d32ab ("btrfs: zoned: activate metadata block group on write time") 以来，元数据块组改为在写入时激活。原代码逻辑未区分数据块组和元数据块组，统一在 `btrfs_zone_activate()` 中进行“空间已满”检查。对于数据块组，应在分配时检查；对于元数据块组，由于是在写入时激活，此时检查“已满”条件是不正确的（因为可能刚刚分配完毕还未写入），且如果已写入过则应该已经是激活状态。
+
+#解决方案
+区分数据块组和元数据块组的处理逻辑：
+1. 对于数据块组，移除无条件进行的“已满”检查，改为使用 `WARN_ON_ONCE` 断言检查，提示调用者应负责检查块组是否已满。
+2. 对于元数据块组，移除错误的“已满”检查逻辑，改为使用 `WARN_ON_ONCE` 检查 `meta_write_pointer` 是否等于块组起始地址，以捕获不应出现的无效激活行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a13f8601dd8849d2ba9114c2b7300b50fa40fae7

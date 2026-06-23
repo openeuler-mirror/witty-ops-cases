@@ -1,0 +1,20 @@
+#标题
+x86/copy_user_avx2 修复路径缺少 sfence 导致数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 AVX2 指令进行非对齐大块内存拷贝（NT stores 模式）时，若指令执行过程中发生缺页异常，系统会进入异常修复路径。此时，之前写入的数据仍然驻留在 Write-Combining (WC) 缓冲区中，对其他 CPU 不可见，导致后续读取操作获取到过期或错误的数据，引发数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+NT stores（vmovntdq 指令）将数据写入 Write-Combining 缓冲区，直到执行 sfence 指令后数据才对其他 CPU 可见。代码中正常的退出路径已正确包含 sfence 指令，但在发生缺页异常时的修复路径（标签 88）中，跳过了 sfence 直接执行了 vzeroupper，导致 WC 缓冲区中的数据未刷新，造成了数据不可见与损坏。
+
+#解决方案
+在异常修复路径（标签 88）中，于 vzeroupper 指令之前添加 sfence 指令。这确保了在处理异常尾部的逻辑前，WC 缓冲区中的 NT stores 数据已全部刷新并全局可见。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9848bd159d4c3fe52f438510ac50e3a9ec1cebfd

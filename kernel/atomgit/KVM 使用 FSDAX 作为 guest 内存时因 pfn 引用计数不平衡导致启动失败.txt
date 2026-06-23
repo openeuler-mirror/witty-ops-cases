@@ -1,0 +1,25 @@
+#标题
+KVM 使用 FSDAX 作为 guest 内存时因 pfn 引用计数不平衡导致启动失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 KVM 虚拟化环境中使用 FSDAX 模式的 PMEM 内存作为 Guest 内存 backend 时，QEMU 启动虚拟机失败并报错：`kvm run failed Bad address`。
+同时宿主机 dmesg 中会出现内核警告栈，表明内存引用计数管理出现异常。
+
+#主要错误日志
+- `kvm run failed Bad address`
+- `WARN_ON_ONCE(!page_count(page)) in kvm_is_zone_device_page()`
+- `WARN_ON_ONCE(folio_ref_count(folio) <= 0) in try_grab_folio()`
+
+#问题根因
+在内核版本 5.16 至 6.13 之间，KVM x86 MMU 代码中的 `kvm_page_fault` 结构体将 `pfn` 作为可变状态的一部分。代码逻辑中，`kvm_faultin_pfn()` 获取的原始 pfn 会经过 `thp_adjust()` 等函数调整变为 hugepage-adjusted pfn。
+在 FSDAX 场景下，原始 pfn 与调整后的 pfn 可能指向不同的 folio。然而，后续的 `kvm_release_pfn_clean()` 函数接收的是调整后的 `fault->pfn`，而非 `kvm_faultin_pfn()` 时获取的原始 pfn。这导致了 `get_page` 与 `put_page` 操作的对象不一致（imbalance），进而引发 refcount 下溢或相关的 WARN 警告，最终导致虚拟机无法运行。
+
+#解决方案
+在相关处理函数（`direct_page_fault`、`kvm_tdp_mmu_page_fault` 以及 `FNAME(page_fault)`）中引入局部变量 `orig_pfn`。
+在调用可能修改 `fault->pfn` 的函数之前，保存原始的 `fault->pfn` 值，并在函数退出调用 `kvm_release_pfn_clean()` 时传入该原始值，而非经过调整的 `fault->pfn`，以确保引用计数的获取与释放严格配对。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/40f0a48abc5f895a9e5ae0ca5ffcd5bc83c341e0

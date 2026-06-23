@@ -1,0 +1,31 @@
+#标题
+Ceph fs在使用msgr2安全模式访问fscrypt加密目录时内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在Cephfs使用ms_mode=secure挂载并访问fscrypt加密目录时，触发内核崩溃。具体表现为：首先在 `get_bvec_at()` 函数中触发WARNING，随后在 `ceph_msg_data_advance()` 函数中发生空指针解引用导致的Oops。复现步骤如下：
+1. 使用ms_mode=secure挂载Cephfs：`sudo mount -t ceph :/ /mnt/cephfs/ -o name=admin,fs=cephfs,ms_mode=secure`
+2. 创建目录：`mkdir /mnt/cephfs/fscrypt-test-3`
+3. 拷贝文件至目录：`cp area_decrypted.tar /mnt/cephfs/fscrypt-test-3`
+4. 设置加密：`fscrypt encrypt --source=raw_key --key=./my.key /mnt/cephfs/fscrypt-test-3`
+5. 锁定目录：`fscrypt lock /mnt/cephfs/fscrypt-test-3`
+6. 解锁目录：`fscrypt unlock --key=my.key /mnt/cephfs/fscrypt-test-3`
+7. 读取文件触发故障：`cat /mnt/cephfs/fscrypt-test-3/area_decrypted.tar`
+
+#主要错误日志
+[  408.072251] WARNING: CPU: 1 PID: 392 at net/ceph/messenger_v2.c:865 ceph_con_v2_try_read+0x4b39/0x72f0
+[  408.072984] KASAN: null-ptr-deref in range [0x0000000000000000-0x0000000000000007]
+[  408.073350] CPU: 1 UID: 0 PID: 392 Comm: kworker/1:3 Tainted: G        W 6.17.0-rc7+ #1 PREEMPT(voluntary)
+[  408.074694] RIP: 0010:ceph_msg_data_advance+0x79/0x1a80
+[  408.072407] Oops: general protection fault, probably for non-canonical address 0xdffffc0000000000: 0000 [#1] SMP KASAN NOPTI
+
+#问题根因
+在 `process_v2_sparse_read()` 函数中，直接使用了连接结构体中未初始化的 `con->v2.in_cursor`，而该cursor在使用前未调用 `ceph_msg_data_cursor_init()` 进行初始化。这导致 `cursor->total_resid` 值为0，且 `cursor->data` 为NULL。当后续代码调用 `get_bvec_at()` 和 `ceph_msg_data_advance()` 时，访问了未初始化的数据结构，从而引发警告和空指针崩溃。
+
+#解决方案
+在 `process_v2_sparse_read()` 函数入口处，使用栈上变量 `cursor` 替代 `con->v2.in_cursor`，并显式调用 `ceph_msg_data_cursor_init()` 对其进行初始化，确保传入 `sparse_read` 回调和后续处理的cursor结构体处于正确的初始化状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa09d047181bb39ebf3b1161ef84a9438ba5c663

@@ -1,0 +1,20 @@
+#标题
+vsock: BPF verdict程序导致poll()无法唤醒读事件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 BPF verdict 程序处理 vsock 流量时，如果程序仅传递数据包而未进行重定向，数据包会被放入 `sk_psock::ingress_msg` 队列中。此时用户态调用 `poll()` 监听 socket 读事件时，无法检测到该队列中已有数据，导致 `poll()` 不返回可读状态，进而导致数据读取阻塞或延迟。
+
+#主要错误日志
+未知
+
+#问题根因
+vsock 的 `vsock_poll()` 函数在检查 socket 可读性时，遗漏了对 `sk_psock` 中 `ingress_msg` 队列状态的判断。当 BPF verdict 程序将数据包入队到 `ingress_msg` 后，内核未调用 `sk_is_readable()` 检查该队列是否有数据，导致 `poll()` 接口缺失了 `EPOLLIN` 事件的判断逻辑。
+
+#解决方案
+在 `net/vmw_vsock/af_vsock.c` 文件的 `vsock_poll()` 函数中增加对 `sk_is_readable(sk)` 的检查。如果该函数返回真，则在返回的事件掩码（mask）中置位 `EPOLLIN` 和 `EPOLLRDNORM`，从而正确通知用户态 socket 当前可读。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf8b23ce2ef2c3e10ee92f8d22650d986b491bad

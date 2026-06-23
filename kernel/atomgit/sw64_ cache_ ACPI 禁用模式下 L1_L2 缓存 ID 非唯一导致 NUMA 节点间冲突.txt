@@ -1,0 +1,23 @@
+#标题
+sw64: cache: ACPI 禁用模式下 L1/L2 缓存 ID 非唯一导致 NUMA 节点间冲突
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在禁用 ACPI 的 sw64 架构系统中，位于不同 NUMA 节点上的 L1 和 L2 缓存的 cache ID 不唯一，发生 ID 冲突，导致系统缓存拓扑信息识别错误。
+
+#主要错误日志
+未知
+
+#问题根因
+当 ACPI 禁用时，系统使用架构特定的实现来填充缓存信息。原实现逻辑中，L3 缓存 ID 取值为 `node`（domain ID），而 L1/L2 缓存 ID 仅取值为 `core` ID。由于不同 NUMA 节点上的 core ID 可能相同，导致不同节点上的 L1/L2 缓存 ID 重复，违反了缓存 ID 的唯一性要求。
+
+#解决方案
+修改 `arch/sw_64/kernel/cacheinfo.c` 中的 `populate_cache_leaves` 函数，重构 cache ID 的生成逻辑：
+1. 提前获取当前 CPU 的 `node` 和 `core` ID。
+2. 对于 L3 缓存，ID 仍保持为 `node`。
+3. 对于 L1/L2 缓存，将 ID 修改为 `(node << 16) | core` 的组合值，通过将 node ID 移位并与 core ID 组合，确保不同 NUMA 节点间的缓存 ID 全局唯一。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/87e65dbe6dc94ea20c21dfa2bc459aa532751365

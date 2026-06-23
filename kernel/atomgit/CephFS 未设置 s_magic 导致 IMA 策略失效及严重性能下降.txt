@@ -1,0 +1,29 @@
+#标题
+CephFS 未设置 s_magic 导致 IMA 策略失效及严重性能下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载 CephFS 文件系统时，若系统配置了基于 fsmagic 匹配的 IMA（Integrity Measurement Architecture）策略，该策略无法正确匹配 CephFS 文件系统。这导致本应被忽略（dont_measure）的 CephFS 文件被错误地触发度量操作。
+
+具体表现为系统性能出现严重退化：
+1. 文件操作性能大幅下降：FS-Mark 测试中，小文件处理速度从约 200 Files/s 降至约 16 Files/s。
+2. 元数据操作极其缓慢：IO500 测试中，mdtest-easy-write 等元数据写入性能下降超过 6000%（从 1.1 kIOPS 降至 0.018 kIOPS）。
+3. 实际业务影响：使用 rsync 同步一个包含约 12k 小文件的 55 MiB 目录，耗时从正常的 26 秒激增至 10 分钟以上。
+
+#主要错误日志
+- IMA 度量日志记录异常（文件本不应被度量，却被记录）：
+  `10 69990c87e8af323d47e2d6ae4... ima-ng sha512:<hash> /data/cephfs/test-file`
+
+#问题根因
+CephFS 内核驱动在初始化超级块时，遗漏了设置 `super_block` 结构体中的 `s_magic` 字段。该字段默认值为 0，而 IMA 策略中针对 CephFS 的规则配置为匹配 `fsmagic=0xc36400`（即 CEPH_SUPER_MAGIC）。
+
+由于 `s_magic` 为 0，IMA 在执行策略匹配时，比较的是 `0xc36400 == 0x0`，匹配失败。导致原本配置的 `dont_measure` 规则失效，所有以只读或读写模式打开的文件都会触发 IMA 度量。对于 SHA512 等高开销的度量算法，该额外处理导致了严重的性能开销。
+
+#解决方案
+在 `fs/ceph/super.c` 文件的 `ceph_set_super` 函数中，显式设置超级块的 magic 值。
+具体代码变更为：增加 `s->s_magic = CEPH_SUPER_MAGIC;`。这使得超级块的 magic 值正确映射为 CephFS 的幻数（0xc36400），从而确保 IMA 策略能基于 fsmagic 正确匹配，避免了不必要的文件度量计算，恢复了正常的 I/O 性能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a2a72a8d43c263b6a96250828f56d39347870ee4

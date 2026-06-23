@@ -1,0 +1,20 @@
+#标题
+pmbus_core 设置 SMBALERT_MASK 后遗留故障导致寄存器检查失败及属性丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+PMBUS 芯片在设置 smbalert mask 后，遗留未清除的故障标志位。该故障标志位被后续的 `register_check()` 捕获，导致寄存器检查失败。结果是本应由芯片提供的 hwmon 属性或 debugfs 条目缺失，即使芯片本身支持这些寄存器功能。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `pmbus_write_smbalert_mask()` 在写入 `PMBUS_SMBALERT_MASK` 时，如果芯片不支持标准方式设置该掩码，虽然会忽略错误，但可能会留下未清除的故障。由于 `PMBUS_SMBALERT_MASK` 可能是只读的，无法通过回读来验证。遗留的故障会被后续的 `register_check()` 捕获，导致检查逻辑误判寄存器不支持，从而导致属性丢失。
+
+#解决方案
+在 `pmbus_write_smbalert_mask()` 函数中，写入 `PMBUS_SMBALERT_MASK` 后，无条件调用 `pmbus_clear_fault_page()` 清除页面故障标志位，以防止遗留故障干扰后续的寄存器检查流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2332cfedb13e58db36eea29863cfb9c6a183ee52

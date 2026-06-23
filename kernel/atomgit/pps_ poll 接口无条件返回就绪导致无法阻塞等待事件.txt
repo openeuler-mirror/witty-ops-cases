@@ -1,0 +1,22 @@
+#标题
+pps: poll 接口无条件返回就绪导致无法阻塞等待事件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+用户空间程序调用 `select` 或 `poll` 监听 `/dev/pps0` 设备时，函数立即返回 `POLLIN` 事件，而不是按预期阻塞等待直到下一个 PPS 事件到来。这导致用户态程序轮询循环无法正常等待，被迫以最大速度不断执行数据获取操作（忙等），增加了系统负载且违背了事件驱动的编程预期。
+
+#主要错误日志
+未知
+
+#问题根因
+内核 PPS 子系统的 `pps_cdev_poll()` 函数实现存在缺陷，该函数无条件返回 `EPOLLIN | EPOLLRDNORM`。根据.poll 机制的语义，返回 `EPOLLIN` 表示设备有数据可读。实际上，驱动并未判断当前是否真的有新事件供读取，导致无论是否有数据，`poll` 调用总是立即返回“数据就绪”状态。
+
+#解决方案
+在 PPS 设备结构体 `struct pps_device` 中新增 `last_fetched_ev` 字段，用于记录用户空间上次通过 ioctl 获取（fetch）的事件 ID。
+修改 `pps_cdev_poll()` 函数逻辑：在调用 `poll_wait` 后，比较当前最新事件 ID (`pps->last_ev`) 与上次获取的事件 ID (`pps->last_fetched_ev`)。如果两者相等，说明没有新事件，返回 0；否则返回 `EPOLLIN | EPOLLRDNORM`。
+同时，在 `pps_cdev_ioctl` (及 compat ioctl) 处理 `PPS_FETCH` 命令时，在获取数据后更新 `pps->last_fetched_ev`，确保状态同步。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/baa290f9d3551a1bd56283294ea83793fe2c1be4

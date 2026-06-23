@@ -1,0 +1,41 @@
+#标题
+tracing: 写入超长字符串触发 set_ftrace_filter KASAN 越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户向 `set_ftrace_filter` 文件写入长度超过 `FTRACE_BUFF_MAX` 的字符串时，内核触发 KASAN 滑动越界报警，导致内核 panic 或打印严重的 slab-out-of-bounds 调用栈。
+
+#主要错误日志
+BUG: KASAN: slab-out-of-bounds in strsep+0x18c/0x1b0
+Read of size 1 at addr ffff0000d00bd5ba by task ash/165
+
+CPU: 1 UID: 0 PID: 165 Comm: ash Not tainted 6.16.0-g6bcdbd62bd56-dirty
+Hardware name: linux,dummy-virt (DT)
+Call trace:
+ show_stack+0x34/0x50 (C)
+ dump_stack_lvl+0xa0/0x158
+ print_address_description.constprop.0+0x88/0x398
+ print_report+0xb0/0x280
+ kasan_report+0xa4/0xf0
+ __asan_report_load1_noabort+0x20/0x30
+ strsep+0x18c/0x1b0
+ ftrace_process_regex.isra.0+0x100/0x2d8
+ ftrace_regex_release+0x484/0x618
+ __fput+0x364/0xa58
+ ____fput+0x28/0x40
+ task_work_run+0x154/0x278
+ do_notify_resume+0x1f0/0x220
+ el0_svc+0xec/0xf0
+ el0t_64_sync_handler+0xa0/0xe8
+ el0t_64_sync+0x1ac/0x1b0
+
+#问题根因
+在 `trace_get_user` 函数处理用户输入时，如果输入字符串长度超过 `FTRACE_BUFF_MAX`，函数会返回错误码（如 `-EINVAL`）并退出，但未将 `parser->buffer` 的末尾设置为 0，也未标记解析器状态为失败。随后在文件关闭流程（`ftrace_regex_release`）中，代码仍尝试处理缓冲区内容，调用链 `ftrace_regex_release -> ftrace_process_regex -> strsep -> strpbrk` 访问了未正确终结的缓冲区，从而触发了越界内存访问。
+
+#解决方案
+在 `trace_get_user` 函数的所有错误返回路径上，调用 `trace_parser_fail` 标记解析器状态为失败。同时在 `trace_parser_loaded` 函数中增加对 `parser->fail` 标志的检查，确保在解析失败时不再处理缓冲区内容，从而避免越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/561ebf80f127c49070b6d8549609b01df87fab82

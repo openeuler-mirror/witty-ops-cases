@@ -1,0 +1,20 @@
+#标题
+erofs ondemand 模式下用户空间无法及时执行 culling 操作
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 erofs ondemand 加载模式下，当内核发送 close 请求给用户空间时，由于内核内部调用 `unmark inuse` 接口的时机较晚（在发送 close 请求之后），导致用户空间在接收到 close 请求后无法立即对该文件进行可靠的 culling（清理）操作，影响了缓存空间的及时回收。
+
+#主要错误日志
+未知
+
+#问题根因
+在当前的 erofs ondemand 加载模式实现中，close 请求被发送到用户空间的时机早于内核调用 `cachefiles_unmark_inode_in_use()` 接口的时机。这意味着当用户空间收到关闭通知时，inode 仍被标记为“in use”状态，导致用户空间无法立即安全地执行 culling 操作。
+
+#解决方案
+引入一个新的 cookie 标志 `FSCACHE_CACHE_EARLY_UNMARK_INUSE`，调整 `cachefiles_unmark_inode_in_use()` 的调用顺序。通过在 erofs 注册卷时设置该标志，使得内核在发送 close 请求之前先调用 `cachefiles_unmark_inode_in_use()`，从而确保用户空间收到通知时文件已不再处于 in use 状态，可以安全地进行后续的 culling 操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f60c9e007489dd3968fdf229b4f4ae92f7419161

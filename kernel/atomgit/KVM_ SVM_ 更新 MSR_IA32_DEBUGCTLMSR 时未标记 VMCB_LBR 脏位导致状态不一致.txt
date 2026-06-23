@@ -1,0 +1,20 @@
+#标题
+KVM: SVM: 更新 MSR_IA32_DEBUGCTLMSR 时未标记 VMCB_LBR 脏位导致状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用嵌套虚拟化（Nested Virtualization）的场景下，当 L2 虚拟机运行时，宿主机更新 MSR_IA32_DEBUGCTLMSR 寄存器后，VMCB（Virtual Machine Control Block）中的 LBR（Last Branch Record）相关状态未能正确同步或刷新。这会导致虚拟机看到的调试控制寄存器状态与实际 VMCB 中的状态不一致，可能导致 LBR 功能异常或虚拟机行为错误。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 APM（AMD64 Architecture Programmer's Manual）规范，DbgCtlMsr 字段由 VMCB_LBR clean bit（洁净位）跟踪。在修复前，当 MSR_IA32_DEBUGCTLMSR 更新时，代码逻辑（在 commit 1d5a1b5860ed 引入后）依赖 `svm_update_lbrv()` 函数来清除 VMCB_LBR 位。然而，在嵌套虚拟化开启且 L2 正在运行时，`svm_update_lbrv()` 并不总是会在 MSR_IA32_DEBUGCTLMSR 发生变化时清除该位，导致硬件加载了旧的缓存状态，从而引发状态不一致。
+
+#解决方案
+在 `svm_set_msr()` 函数处理 `MSR_IA32_DEBUGCTLMSR` 的分支中，直接调用 `vmcb_mark_dirty(svm->vmcb, VMCB_LBR)` 显式标记 VMCB_LBR 位为脏。这确保了无论是否启用嵌套虚拟化，只要 DEBUGCTLMSR 被修改，对应的 VMCB 状态就会被标记为需要刷新，从而保证状态一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/37aed89b9172e6e13b6e39e1777dacb6b3c21811

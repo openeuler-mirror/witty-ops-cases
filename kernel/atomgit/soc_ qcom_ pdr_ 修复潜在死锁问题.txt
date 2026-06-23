@@ -1,0 +1,20 @@
+#标题
+soc: qcom: pdr: 修复潜在死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm PDR（Protection Domain Restart）服务定位器新服务上线（new_server）过程中，系统可能发生死锁，导致相关进程或内核线程处于不可中断状态（D状态），进而引发系统挂起或响应超时。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `pdr_locator_new_server` 函数中，代码逻辑先持有互斥锁 `pdr->lock`，释放该锁后紧接着尝试获取另一个互斥锁 `pdr->list_lock`。虽然这两个锁不在同一个函数中嵌套持有，但在某些并发场景下，该函数与其他持有这两个锁的代码路径（如 `pdr_locator_work` 工作队列处理函数）存在锁获取顺序不一致的问题（例如一个路径先 lock 后 list_lock，另一个路径先 list_lock 后 lock），从而构成了 ABBA 死锁条件。
+
+#解决方案
+移除 `pdr_locator_new_server` 函数中对 `pdr->list_lock` 互斥锁的获取与释放操作，以及循环遍历 `pdr->lookups` 链表检查 `need_locator_lookup` 标志的逻辑，直接无条件调用 `schedule_work(&pdr->locator_work)`。此修改消除了引发死锁的锁竞争点，通过将处理逻辑延后到工作队列执行来避免锁嵌套冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8dd0a4af058b66e7aec8c81c037d105babb13f60

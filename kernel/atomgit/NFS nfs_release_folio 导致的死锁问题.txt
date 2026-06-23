@@ -1,0 +1,20 @@
+#标题
+NFS nfs_release_folio 导致的死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统发生死锁，具体表现为 NFSv4.1 状态恢复进程在等待 kthreadd，而 kthreadd 正在尝试通过调用 nfs_release_folio() 回收内存。此时 nfs_release_folio() 因为需要状态恢复而无法继续推进，导致循环等待，系统挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+在内存回收路径中，nfs_release_folio() 调用 nfs_wb_folio() 尝试回写脏页时，会等待回写完成。如果此时 NFSv4.1 状态恢复正在进行中，nfs_wb_folio() 无法获取所需资源（需要状态恢复完成），导致阻塞。而 NFSv4.1 状态恢复进程又在等待 kthredd 执行，kthreadd 此时正阻塞在内存回收路径中，从而形成 ABBA 死锁。
+
+#解决方案
+修改 nfs_release_folio() 的实现，不再使用同步等待回写完成的 nfs_wb_folio() 函数，而是引入新的异步回写函数 nfs_wb_folio_reclaim()。该函数仅启动回写而不等待完成，或者触发异步提交，从而避免在内存回收路径中发生死锁。同时增加了对 folio_test_private 的检查，如果页面仍有私有数据则返回 false 避免强制释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/52aefe2fde581c68ee6e15bc5445a0de8de381e2

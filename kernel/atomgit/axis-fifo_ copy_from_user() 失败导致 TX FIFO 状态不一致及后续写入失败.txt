@@ -1,0 +1,24 @@
+#标题
+axis-fifo: copy_from_user() 失败导致 TX FIFO 状态不一致及后续写入失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 axis-fifo 设备执行 write 操作时，若 `copy_from_user()` 调用失败，驱动虽然返回了 -EFAULT 错误码，但已部分写入硬件 FIFO 的数据无法被清除。这导致 TX FIFO 处于不一致状态，后续所有的 write() 调用都会失败，并报出 "transmit length mismatch" 错误。
+
+#主要错误日志
+- 推断：transmit length mismatch
+
+#问题根因
+先前的修复补丁（commit c6e8d85fafa7）移除了针对用户态错误的硬件复位操作以避免 RX 数据丢失，但引入了新的问题：原代码在 `copy_from_user` 失败前，可能已经通过循环将部分数据写入了硬件 FIFO 寄存器。一旦数据写入硬件 FIFO，在不执行复位的情况下无法撤销，导致硬件状态与驱动预期不一致，从而引发后续传输长度校验失败。
+
+#解决方案
+修改 `axis_fifo_write` 函数的数据写入逻辑，引入一次性缓冲区：
+1. 移除原先分段拷贝并立即写入硬件 FIFO 的循环逻辑。
+2. 使用 `vmemdup_user` 先将用户空间数据完整拷贝到内核临时缓冲区中。
+3. 仅当数据拷贝完全成功后，才将数据写入硬件 FIFO。
+此举确保了如果用户空间拷贝失败，不会由任何脏数据污染硬件 FIFO 状态，避免了硬件状态不一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/769f88b635553c24261ac3bfa94b20e7bb2619a1

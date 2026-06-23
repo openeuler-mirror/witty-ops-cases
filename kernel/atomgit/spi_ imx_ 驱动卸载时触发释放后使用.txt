@@ -1,0 +1,20 @@
+#标题
+spi: imx: 驱动卸载时触发释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 spi-imx 驱动（unbind）时，内核发生引用计数错误，导致释放后使用。具体表现为驱动数据结构在仍在被访问时已被 SPI 子系统释放，可能引发内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+SPI 子系统在注销控制器时会自动释放控制器及其分配的驱动数据。在 `spi_imx_remove` 函数中，调用 `spi_unregister_controller` 后，驱动数据 `spi_imx_data` 可能已被释放，但后续代码仍继续访问该数据结构（如调用 `pm_runtime_disable` 和 `spi_imx_sdma_exit`），从而导致 Use-After-Free 问题。
+
+#解决方案
+在注销控制器之前，调用 `spi_controller_get()` 增加引用计数，防止 SPI 子系统过早释放控制器和驱动数据；在驱动完成所有清理工作（包括 `pm_runtime_disable` 和 `spi_imx_sdma_exit`）之后，再调用 `spi_controller_put()` 减少引用计数，确保资源安全释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0b0a8830b289263ba4ea52fd52bafb928acefe31

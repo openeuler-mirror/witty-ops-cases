@@ -1,0 +1,24 @@
+#标题
+riscv: Fix hugetlb retrieval of number of ptes in case of !present pte
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V 架构下使用 HugeTLB 功能时，如果页表项（PTE）当前不存在（!present），内核在检索 PTE 数量或处理 NAPOT 映射时可能出现异常行为。该缺陷类似于 arm64 架构曾存在的问题，可能导致内存管理子系统对非当前 PTE 的处理逻辑出错，进而引发内核 panic 或数据不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `huge_ptep_get_and_clear()` 和 `huge_pte_clear()` 等函数中，内核错误地使用 PTE 的值（`pte value`）来确定映射的大小（通过 `napot_cont_order` 计算连续 PTE 数量）。
+当 PTE 不存在（!present）时，其值不可靠，无法从中正确推导出映射大小。这导致代码获取了错误的 PTE 数量，进而引发后续处理错误。此外，代码在 PTE 不存在时不应尝试收集 Access/Dirty（A/D）位信息。
+
+#解决方案
+修改 HugeTLB 相关函数逻辑，不再依赖 PTE 值来计算映射大小或 PTE 数量：
+1. 在 `huge_ptep_get_and_clear()` 和 `huge_pte_clear()` 函数中，改为使用传入的 `size` 参数（`sz`）来确定 PTE 的数量。
+2. 引入并使用辅助函数 `num_contig_ptes_from_size()` 根据 `size` 计算连续 PTE 的数量和页大小。
+3. 在 `get_clear_contig()` 函数中增加 `pte_present()` 检查，确保仅在 PTE 存在时才收集 Dirty 和 Young（A/D）位信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/57c4eefe3c933efa24c19e47cf80b826b60aa16a

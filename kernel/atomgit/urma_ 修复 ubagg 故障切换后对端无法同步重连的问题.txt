@@ -1,0 +1,32 @@
+#标题
+urma: 修复 ubagg 故障切换后对端无法同步重连的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+用户态聚合设备在发生故障并切换后，本端能够重建状态，但无法通知对端协同进行连接恢复。导致对端无法及时同步故障切换事件，断裂的连接无法通过现有的 bonding 流程恢复正常，业务通信中断。
+
+#主要错误日志
+- "Invalid bonding user msg callback param"
+- "Failed to alloc skb for ubagg user payload"
+- "Failed to build ubagg user payload netlink msg"
+- "Failed to append ubagg user payload attr"
+- "Failed to multicast ubagg user payload, ret:%d"
+- "Invalid ubagg user msg"
+- "Failed to get ubcore device by local eid:" EID_FMT
+- "Failed to send ubagg payload by ubcore, ret:%d, local_eid:" EID_FMT ", peer_eid:" EID_FMT
+- "No bonding user msg handler registered, " MSG_FMT
+
+#问题根因
+ubagg 发生故障切换时，内核态缺乏向对端发送通知的通信通道。原实现在故障切换后，本端重建了状态，但没有机制将对端重连通知传递给对端，导致对端无法感知故障切换事件，连接无法恢复。
+
+#解决方案
+在内核态引入 ubagg 与 ubcore 之间的通信通道：
+1. 在 ubagg 模块新增 generic netlink family，用于用户态消息下发。
+2. 扩展 ubcore bonding 消息类型，新增 `UBCORE_NET_BONDING_USER_MSG` 用户负载类型，支持变长消息。
+3. 注册 bonding 用户消息回调处理函数，用于接收并转发来自对端的通知。
+4. 实现双向通信机制：本端 ubagg 通过 netlink 接收用户态通知请求，经 ubcore 发送至对端；对端 ubcore 收到消息后回调 ubagg 处理函数，再通过 netlink 组播上报给用户态，从而实现两端协同重连。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac313c6ec84ee600b5507b6fd399ee91aec40993

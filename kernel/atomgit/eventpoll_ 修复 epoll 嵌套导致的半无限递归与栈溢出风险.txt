@@ -1,0 +1,25 @@
+#标题
+eventpoll: 修复 epoll 嵌套导致的半无限递归与栈溢出风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在构建复杂的 epoll 实例嵌套结构（如将一个 epoll 文件描述符嵌套插入到另一个 epoll 中，且被插入的 epoll 已存在于其他深层链路中）时，内核可能触发半无限递归调用。这会导致内核栈深度剧增，极端情况下引发 kernel stack overflow（内核栈溢出），造成进程崩溃或系统异常。
+
+#主要错误日志
+未知
+
+#问题根因
+原有的循环检测机制 `ep_loop_check_proc` 仅计算从被插入节点（子树）向下的嵌套深度，未考虑该节点可能已经处于其他 epoll 实例的深层嵌套链路中（即向上的深度）。
+当被插入的 epoll 实例自身已经具有较深的向上引用深度时，插入操作虽然通过了单向深度检查，但组合后的实际路径深度超过了 `EP_MAX_NESTS` 限制，导致递归调用过深，引发栈溢出风险。
+
+#解决方案
+修改 epoll 循环检测逻辑，引入双向深度检查机制：
+1. 在 `struct eventpoll` 结构体中新增 `loop_check_depth` 字段，用于缓存子树深度计算结果。
+2. 重构 `ep_loop_check_proc` 函数，改为计算从当前节点向下的子树深度，并利用 generation 机制避免重复计算。
+3. 新增 `ep_get_upwards_depth_proc` 函数，用于计算从当前节点向上的最大嵌套深度。
+4. 在 `ep_loop_check` 中综合判断：仅当“向下深度 + 1 + 向上深度”未超过 `EP_MAX_NESTS` 时才允许插入，从而有效遏制半无限递归路径的形成。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c120ae6075c1dd0cd4bf514a14dc9d4205191fb2

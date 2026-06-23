@@ -1,0 +1,20 @@
+#标题
+powerpc/eeh: VFIO透传场景下EEH恢复流程缺失PE桥配置导致恢复失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在PowerNV和pseries平台上，针对QEMU/KVM客户机使用的VFIO PCI透传设备进行EEH（Enhanced Error Handling）恢复时失败。虽然VFIO通过`VFIO_EEH_PE_ENABLE` ioctl触发了恢复流程，但由于缺少主机侧的PE桥重新配置步骤，导致PE的配置空间未能完全恢复。这会导致客户机内部后续访问配置空间失败，或者触发EEH freeze-on-access错误，使得客户机无法正常从PCI错误中恢复。
+
+#主要错误日志
+未知
+
+#问题根因
+在当前的实现中，`eeh_pe_configure()`函数仅针对原生主机设备执行基于RTAS或OPAL的桥重新配置，而对于通过VFIO管理（用于客户机透传场景）的PE则完全跳过了该步骤。这导致在VFIO管理的PE场景下，平台特定的桥配置回调函数（如`pseries_eeh_phb_configure_bridge`）未被调用，配置空间无法正确还原。
+
+#解决方案
+修改`arch/powerpc/kernel/eeh.c`文件中的`eeh_pe_configure`函数，移除对VFIO管理PE的跳过逻辑，确保无论PE是否由VFIO管理，都强制调用`eeh_ops->configure_bridge(pe)`回调函数。这保证了主机侧能正确发出RTAS或OPAL调用以重新配置PE桥，从而在EEH事件后正确恢复PE的配置空间。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5da1f3abb06c4d225924a122c4c6a55d67502b5c

@@ -1,0 +1,20 @@
+#标题
+riscv: KASAN 开启时内核栈大小不足导致栈溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V 架构下，若内核编译时未初始开启 KASAN（例如后续通过 menuconfig 追加配置），内核栈大小将保持默认值而不会自动翻倍。此时运行 KASAN 会因栈空间不足导致内核栈溢出，系统可能出现崩溃、异常重启或由 syzbot 报告的内核错误。
+
+#主要错误日志
+未知
+
+#问题根因
+Kconfig 中 `CONFIG_THREAD_SIZE_ORDER` 的默认值逻辑依赖于 `KASAN` 配置项（仅在 64BIT && KASAN 时设为 3），该机制仅在初始配置时生效。若用户在已编译的内核上追加启用 KASAN（如通过 menuconfig），Kconfig 不会重新评估并更新 `CONFIG_THREAD_SIZE_ORDER`，导致内核栈大小维持在普通默认值（如 order 2），不足以支撑 KASAN 运行所需的栈空间，从而引发栈溢出。
+
+#解决方案
+将内核栈大小的计算逻辑从 Kconfig 移至头文件 `arch/riscv/include/asm/thread_info.h` 中。在头文件中定义 `KASAN_STACK_ORDER`，当启用 `CONFIG_KASAN` 时为 1，否则为 0。最终 `THREAD_SIZE_ORDER` 定义为 `CONFIG_THREAD_SIZE_ORDER + KASAN_STACK_ORDER`，确保无论何时启用 KASAN，线程栈大小都能在编译时动态扩展为原来的两倍，修复栈空间不足的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0bc82b11717a8f23249bb0172ff972dc8a606405

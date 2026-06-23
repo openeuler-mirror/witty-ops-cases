@@ -1,0 +1,26 @@
+#标题
+dib7090p 驱动 rw_on_apb 接口访问越界导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 dib7090p 驱动的 `dib7090p_rw_on_apb` 函数进行 I2C 通信时，若传入的消息结构体 `msg` 的长度（`len` 字段）小于预期值，代码仍会强行访问 `msg` 数组中的后续字节（如 `buf[1]`、`buf[2]`）。由于缓冲区长度不足，这种越界访问会引发 Null Pointer Dereference（空指针解引用）或内存访问越界，导致内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `dib7090p_rw_on_apb` 在处理 I2C 消息时，未对消息缓冲区的长度 `msg[].len` 进行有效性校验。
+1. 在写操作（`num == 1`）分支中，代码直接访问 `msg[0].buf[1]` 和 `msg[0].buf[2]`，但没有检查 `msg[0].len` 是否至少为 3。
+2. 在读操作分支中，代码直接写入 `msg[1].buf[0]` 和 `msg[1].buf[1]`，但没有检查 `msg[1].len` 是否至少为 2。
+当传入的消息长度小于上述访问需求时，导致越界访问引发内核崩溃。
+
+#解决方案
+在 `drivers/media/dvb-frontends/dib7000p.c` 文件的 `dib7090p_rw_on_apb` 函数中增加长度检查：
+1. 在写操作分支，增加判断 `if (msg[0].len < 3)`，若条件成立则返回 `-EOPNOTSUPP`。
+2. 在读操作分支，增加判断 `if (msg[1].len < 2)`，若条件成立则返回 `-EOPNOTSUPP`。
+以此拒绝长度不合规的 I2C 请求，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1f1c00e79b5b7cd4202a28c0fcd645c3c92c0df5

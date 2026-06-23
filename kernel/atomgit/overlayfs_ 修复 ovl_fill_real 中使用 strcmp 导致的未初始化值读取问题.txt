@@ -1,0 +1,20 @@
+#标题
+overlayfs: 修复 ovl_fill_real 中使用 strcmp 导致的未初始化值读取问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+KMSAN（内核内存消毒器）报告在 `ovl_fill_real` 函数中检测到“uninit-value”（读取未初始化值）问题。该问题在调用链 `ext4_readdir -> fscrypt_fname_disk_to_usr -> ovl_fill_real` 中触发，表现为内核内存安全警告，可能影响系统可靠性。
+
+#主要错误日志
+KMSAN: uninit-value in ovl_fill_real
+
+#问题根因
+当处理加密目录时，`fscrypt_fname_disk_to_usr()` 函数将解密后的目录项名称写入缓冲区，但未在字符串末尾添加空终止符（'\0'）。随后，`ovl_fill_real()` 函数使用 `strcmp()` 将该名称与 ".." 进行比较。由于 `strcmp()` 依赖空终止符来判断字符串结束，若缓冲区尾部包含未初始化数据，读取操作将越过预期的字符串边界，从而触发 KMSAN 的未初始化值读取警告。
+
+#解决方案
+修改 `ovl_fill_real()` 中的比较逻辑，将 `strcmp(name, "..")` 替换为基于长度的比较 `namelen == 2 && !strncmp(name, "..", 2)`。此方法显式指定了比较长度为 2，不再依赖字符串的空终止符，从而避免了读取缓冲区尾部未初始化内存的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3197368ffa9f735ea765a053a9f1554349600f60

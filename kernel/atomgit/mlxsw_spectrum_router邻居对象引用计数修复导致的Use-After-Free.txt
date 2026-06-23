@@ -1,0 +1,23 @@
+#标题
+mlxsw_spectrum_router邻居对象引用计数修复导致的Use-After-Free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定场景下（如解绑VRF从设备时），内核触发KASAN检测到的slab-use-after-free错误，导致内核崩溃或内存破坏。该问题在执行IP链路操作时复现概率较高。
+
+#主要错误日志
+```
+BUG: KASAN: slab-use-after-free in mlxsw_sp_neigh_entry_update+0x2d4/0x310
+Read of size 8 at addr ffff88817f8e3420 by task ip/3929
+```
+
+#问题根因
+驱动程序在存储邻居（neighbour）指针时未持有引用计数，仅在邻居被下一跳（nexthop）使用时才增加引用。这导致在邻居对象被释放后，驱动程序仍持有指向该对象的悬空指针，后续解引用时触发Use-After-Free。
+
+#解决方案
+简化并修正引用计数方案：在分配邻居条目存储邻居指针时立即持有引用，在释放邻居条目时释放引用；移除nexthop关联流程中多余或不一致的引用获取/释放操作，确保对象生命周期管理正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb2c08b3a4b75e7faa98b3b585ec745f55b0ee8c

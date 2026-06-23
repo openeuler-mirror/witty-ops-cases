@@ -1,0 +1,29 @@
+#标题
+macb_pci 驱动卸载时因时钟资源释放顺序错误导致的使用后释放（UAF）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 macb_pci 驱动模块（执行 rmmod 或移除 PCI 设备）时，内核触发 KASAN 检测到的“使用后释放”错误，导致内核调用栈打印并可能引发系统不稳定。具体表现为在 `platform_device_unregister` 执行过程中，Runtime Resume 回调试图访问已被释放的时钟资源。
+
+#主要错误日志
+BUG: KASAN: use-after-free in clk_prepare+0x5a/0x60
+Read of size 8 at addr ffff888104f85e00 by task modprobe/597
+Call Trace:
+ clk_prepare+0x5a/0x60
+ macb_runtime_resume+0x13d/0x410 [macb]
+ pm_generic_runtime_resume+0x97/0xd0
+ ...
+ platform_device_unregister+0x11/0x50
+ pci_device_remove+0xae/0x210
+ ...
+
+#问题根因
+在 `macb_remove` 函数中，驱动程序先调用了 `clk_unregister` 注销时钟资源，随后才调用 `platform_device_unregister` 注销平台设备。然而，`platform_device_unregister` 在设备移除过程中可能会触发 Runtime Resume 回调（如 `macb_runtime_resume`），该回调函数需要访问已注销的时钟资源（pclk/hclk），从而导致 Use-After-Free 问题。此外，之前的修复补丁虽尝试解决 rmmod 问题，但仅是移动了代码位置，未解决时钟注销与设备注销之间的依赖顺序问题。
+
+#解决方案
+调整 `macb_remove` 函数中的资源释放顺序，确保先注销平台设备，再注销时钟资源。具体做法是在调用 `platform_device_unregister` 之前，先将时钟指针保存到局部变量中，待设备注销完成后，再使用这些局部变量调用 `clk_unregister`，从而避免设备注销回调访问已释放的时钟。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/79abfe0fa13a8693b6bbc5add64d17c1b5c7443c

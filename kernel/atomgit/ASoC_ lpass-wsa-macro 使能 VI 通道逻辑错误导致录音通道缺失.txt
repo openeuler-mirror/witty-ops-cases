@@ -1,0 +1,24 @@
+#标题
+ASoC: lpass-wsa-macro 使能 VI 通道逻辑错误导致录音通道缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 VI（Voltage and Current）反馈路径时，虽然请求启用两个通道（TX0 和 TX1），但实际内核代码逻辑仅配置了其中一个路径。最终导致系统只录到 1 个通道的数据，而不是预期的 2 个通道，影响音频录制功能。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `wsa_macro_enable_vi_feedback` 函数中，原代码使用 `if ... else if ...` 结构来检查 `active_ch_mask` 并设定寄存器地址。这导致当 TX0 和 TX1 同时被激活时，代码只会进入第一个分支（TX0），忽略了对 TX1 相关路径的配置。因此，只有一组 VI sense 路径被正确配置，另一组未被启用。
+
+#解决方案
+修改通道使能逻辑，去除互斥的 `else if` 判断，改为分别独立检查 TX0 和 TX1 的状态位。
+具体变更如下：
+1. 新增 `wsa_macro_enable_disable_vi_sense` 辅助函数，用于具体操作 VI sense 相关寄存器的复位、时钟和采样率配置。
+2. 新增 `wsa_macro_enable_disable_vi_feedback` 函数，该函数分别检查 `WSA_MACRO_TX0` 和 `WSA_MACRO_TX1` 在 `active_ch_mask` 中的状态，如果对应位被置位，则调用辅助函数对相应的寄存器（TX0/TX1 或 TX2/TX3）进行配置。
+3. 原有 `wsa_macro_enable_vi_feedback` 函数简化为直接调用上述新函数，确保在两个通道同时激活时，两个路径都能被正确配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e8a3db2293e896db19916d43a20b8b0e1c67ded4

@@ -1,0 +1,22 @@
+#标题
+perf expr: 解析器语法错误返回值处理不当导致 perf stat 段错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Arm64 平台上执行 `perf stat -C 5` 命令时，由于 metric 表达式中包含无法解析的字面量（如 `#slots`），触发了语法错误。因错误返回值处理不当，程序未能正确退出或报错，而是继续执行导致 Segmentation fault（段错误）。
+
+#主要错误日志
+Failure to read '#slots' literal: #slots = nan
+syntax error
+Failure to read '#slots'Failure to read '#slots'Failure to read '#slots'Failure to read '#slots'Segmentation fault
+
+#问题根因
+函数 `expr__find_ids()` 直接将解析器的返回值传递给调用者。当发生语法错误时，解析器返回一个正数值，但调用者将正数值视为成功（Success），导致程序在错误的上下文中继续执行，进而引发段错误。
+
+#解决方案
+在 `expr__find_ids()` 函数中增加对返回值的判断逻辑：若解析器返回值为正数（表示语法错误），则将其转换为 `-EINVAL`。此举确保调用者能正确识别错误并中止后续处理，避免崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/64b14478d386378eea227bf59fe45d22ca3a68e6

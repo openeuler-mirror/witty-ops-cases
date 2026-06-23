@@ -1,0 +1,20 @@
+#标题
+xfs: bmap intent 排序比较函数中的整型溢出缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在大型 XFS 文件系统中，当进行 bmap intent 排序操作时，如果参与比较的两个 inode 编号（inode number）差值超过 INT_MAX (2^31 - 1)，会导致排序比较逻辑错误。这可能引发内核状态不一致，进而导致文件系统操作异常或潜在的系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `xfs_bmap_update_diff_items()` 中，代码尝试通过直接相减 `ba->bi_owner->i_ino - bb->bi_owner->i_ino` 来比较两个 `xfs_ino_t`（uint64_t）类型的 inode 编号。相减的结果被隐式截断为 `int` 类型返回。当两个 inode 编号的差值大于 `INT_MAX` 时，会发生整型溢出，导致比较结果错误（正数变负数或反之），破坏了排序算法的稳定性。
+
+#解决方案
+修改 `xfs_bmap_update_diff_items()` 函数的比较逻辑，不再使用减法。改为使用标准的三向比较表达式：`return (a > b) - (a < b)`。该逻辑通过两次独立的比较运算产生 1、0 或 -1 的结果，避免了算术运算导致的整型溢出问题，确保在任意 uint64_t 数值比较时都能返回正确的符号。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/59fe5d50e3f90fc9a4566fa582e24501a5f81b42

@@ -1,0 +1,20 @@
+#标题
+drm/sched: 修复 drm_sched_job_add_resv_dependencies 中的潜在双重释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `drm_sched_job_add_resv_dependencies` 函数处理 GPU 调度依赖时，若 `drm_sched_job_add_dependency` 执行失败，代码逻辑错误地释放了 dma_fence 的引用计数。这会导致该 fence 对象被错误地释放，后续如果还有其他地方持有并使用该指针，将引发 Use-After-Free 或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `drm_sched_job_add_dependency` 设计上总是获取（消耗）传入的 fence 引用，无论其内部执行成功与否。原代码逻辑在调用前显式获取了一个引用，但在 `drm_sched_job_add_dependency` 失败时，又手动调用了 `dma_fence_put(fence)` 进行释放。这导致在错误处理路径上，fence 的引用计数被多释放了一次（双重释放）。
+
+#解决方案
+修正引用计数管理逻辑。直接在 `drm_sched_job_add_dependency` 调用参数中使用 `dma_fence_get(fence)` 获取引用并传递。由于 `drm_sched_job_add_dependency` 会消耗该引用，调用者无需再手动处理引用计数的释放或错误回滚，从而避免了双重释放的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bafda1f66f1b26378e6f9ab80cdb97f55107b8a5

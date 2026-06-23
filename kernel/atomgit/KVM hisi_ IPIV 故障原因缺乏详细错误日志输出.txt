@@ -1,0 +1,28 @@
+#标题
+KVM hisi: IPIV 故障原因缺乏详细错误日志输出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 IPIV（Inter-Processor Interrupt Virtualization）特性的华为 KVM 环境中，当 Guest 触发特定违规操作（如发送 IRM=1 的 SGI、组播或 VCPU 索引越界）导致硬件报错时，内核侧的中断处理函数仅打印通用的 "IPIV irq handler!" 提示信息，无法显示具体的错误原因，导致运维人员无法定位是 Guest 配置错误还是硬件索引问题。
+
+#主要错误日志
+IPIV irq handler!
+（修复后新增的关键日志如下）
+IPIV error: IRM=1 Guest broadcast error
+IPIV error: Guest group broadcast error
+IPIV error: The VCPU index is out of range
+
+#问题根因
+原有的 IPIV 中断处理函数 `vgic_ipiv_irq_handler` 未读取硬件寄存器 `GICR_IPIV_ST` 中的状态位。当硬件检测到 Guest 发送的 SGI 存在 IRM 错误、组播错误或 VCPU 索引越界时，处理函数未能解析具体的错误状态位并输出详细报错，仅打印了无诊断价值的通用日志。
+
+#解决方案
+修改 `arch/arm64/kvm/vgic/vgic-init.c` 中的 `vgic_ipiv_irq_handler` 函数：
+1. 新增对 GICV3 寄存器 `GICR_IPIV_ST` 的读取操作。
+2. 解析寄存器中的错误状态位（`GICR_IPIV_ST_IRM_ERR`、`GICR_IPIV_ST_BRPBRD_ERR`、`GICR_IPIV_ST_VCPUIDX_ERR`）。
+3. 根据状态位分别打印具体的错误原因日志（如 IRM 错误、组播错误、索引越界），便于故障定位。
+4. 在 `drivers/irqchip/irq-gic-v3-its.c` 中导出 `gic_data_rdist_get_vlpi_base` 接口以支持读取 redistributor 基地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8207b85ea72073cc2f75884bfad29b41d805ef24

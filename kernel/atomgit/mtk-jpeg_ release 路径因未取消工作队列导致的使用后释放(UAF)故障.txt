@@ -1,0 +1,22 @@
+#标题
+mtk-jpeg: release 路径因未取消工作队列导致的使用后释放(UAF)故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 JPEG 编解码操作期间，如果应用程序关闭设备文件（调用 release），此时恰好有工作队列（ctx->jpeg_work）正在运行或待处理，会导致内核发生 Use-After-Free（使用后释放）故障。该故障可能导致内核崩溃、内存数据损坏或不一致的系统行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mtk_jpeg_release()` 函数中，代码直接释放了上下文结构体 `ctx` 的内存，但没有先取消正在运行或待处理的 `ctx->jpeg_work` 工作队列。
+这制造了一个竞态窗口：当 CPU 0 执行 release 操作释放内存后，CPU 1 上的 `mtk_jpegenc_worker()` 回调函数可能仍在尝试访问已经释放的 `ctx` 指针，从而触发 UAF。
+
+#解决方案
+在 `mtk_jpeg_release()` 函数中，于获取互斥锁（`mutex_lock`）之前调用 `cancel_work_sync(&ctx->jpeg_work)`。
+此举确保在释放上下文资源前，所有待处理的工作队列已完成执行且不再访问 `ctx` 结构体。特别强调了调用顺序必须在 `mutex_lock` 之前，否则若工作队列处理函数也试图获取同一互斥锁，将引发死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e27523b419e0d1255c7b28c6afeb5188bac19cc0

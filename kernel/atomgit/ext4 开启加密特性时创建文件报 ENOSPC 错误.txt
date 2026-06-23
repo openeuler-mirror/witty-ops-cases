@@ -1,0 +1,20 @@
+#标题
+ext4 开启加密特性时创建文件报 ENOSPC 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 ext4 文件系统同时开启 `has_journal`（日志）、`ea_inode`（扩展属性 inode）和 `encrypt`（加密）特性时，创建加密文件失败，系统返回 `-ENOSPC`（No space left on device）错误，尽管磁盘实际仍有可用空间。
+
+#主要错误日志
+未知
+
+#问题根因
+在创建新 inode 并设置 fscrypt context（加密上下文）时，`ext4_set_context` 函数调用 `ext4_xattr_set_handle` 未传递 `XATTR_CREATE` 标志。这导致 `set_handle` 流程中的日志信用额度检查逻辑未能正确识别这是新建操作，从而错误地要求了比创建 inode 时预留的更多的日志信用额度，最终因信用额度不足触发 ENOSPC 错误。
+
+#解决方案
+在 `fs/ext4/crypto.c` 的 `ext4_set_context` 函数中，当 `handle` 存在（即处于创建新 inode 流程）时，调用 `ext4_xattr_set_handle` 必须传入 `XATTR_CREATE` 标志。此举确保了日志信用额度的检查逻辑与创建新 inode 时分配的额度相匹配，从而修复了错误的 ENOSPC 报错。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eb1d090ee90fe7a7cc0a7d326e12935137c815b9

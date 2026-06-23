@@ -1,0 +1,38 @@
+#标题
+f2fs: get_new_segment 中 free_segmap 与 free_secmap 状态不一致导致内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中触发内核 WARNING，调用栈显示位于 `get_new_segment` 函数中。具体表现为在 F2FS 文件系统执行检查点操作时，由于段位图状态不一致，触发了 `f2fs_bug_on` 相关的告警信息，可能导致系统异常或服务中断。
+
+#主要错误日志
+------------[ cut here ]------------
+WARNING: CPU: 3 PID: 579 at fs/f2fs/segment.c:2832 new_curseg+0x5e8/0x6dc
+pc : new_curseg+0x5e8/0x6dc
+Call trace:
+ new_curseg+0x5e8/0x6dc
+ f2fs_allocate_data_block+0xa54/0xe28
+ do_write_page+0x6c/0x194
+ f2fs_do_write_node_page+0x38/0x78
+ __write_node_page+0x248/0x6d4
+ f2fs_sync_node_pages+0x524/0x72c
+ f2fs_write_checkpoint+0x4bc/0x9b0
+ __checkpoint_and_complete_reqs+0x80/0x244
+ issue_checkpoint_thread+0x8c/0xec
+ kthread+0x114/0x1bc
+ ret_from_fork+0x10/0x20
+
+#问题根因
+`get_new_segment()` 函数检测到 `free_segmap` 和 `free_secmap` 之间存在不一致的状态（inconsistent status）。具体而言，在 `got_it` 标签处，代码预期目标段号 `segno` 在 `free_segmap` 中未被置位（即处于空闲状态），但实际检测发现该位已被设置，表明段位图元数据已损坏。原代码在此情况下直接调用 `f2fs_bug_on` 触发告警并继续执行，可能导致文件系统进一步损坏。
+
+#解决方案
+修改 `get_new_segment()` 函数的错误处理逻辑。当检测到 `free_segmap` 状态不一致时，不再触发 `f2fs_bug_on`，而是执行以下修复措施：
+1. 设置返回值为 `-EFSCORRUPTED` 标记文件系统错误。
+2. 调用 `f2fs_stop_checkpoint()` 停止检查点操作，防止错误扩散。
+3. 通过 `goto out_unlock` 直接跳转到解锁路径并退出函数，而不是继续使用该段。
+同时，在头文件中新增停止原因枚举值 `STOP_CP_REASON_CORRUPTED_FREE_BITMAP` 用于标记此类错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/da6388e2f2aabf46736a6f1152948d18a7a64c70

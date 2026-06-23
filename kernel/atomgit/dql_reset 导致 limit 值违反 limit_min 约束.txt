@@ -1,0 +1,20 @@
+#标题
+dql_reset 导致 limit 值违反 limit_min 约束
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设置网卡发送队列的字节队列限制最小值（limit_min）为非零值后，执行网卡 down/up 操作（如 `ifconfig eth* down/up`），会导致 `dql->limit` 被重置为 0，从而小于 `dql->limit_min`。这违反了 limit 应始终大于等于 limit_min 的约束，导致队列限制处于不合理状态。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dql_reset` 函数中，重置逻辑直接将 `dql->limit` 赋值为 0，未考虑到此时 `dql->min_limit`（即 limit_min）可能已被用户设置为非零值。这导致重置后 `dql->limit < dql->min_limit`，破坏了动态队列限制的不变量约束。
+
+#解决方案
+修改 `lib/dynamic_queue_limits.c` 中的 `dql_reset` 函数，将 `dql->limit` 的重置值从硬编码的 0 修改为 `dql->min_limit`，确保重置后 limit 值不小于 limit_min。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/95bb8e51048e2ccefe003c7f7cf634033459a9d6

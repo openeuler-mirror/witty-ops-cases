@@ -1,0 +1,23 @@
+#标题
+clk: renesas: cpg-mssr reset toggle 缺少必要的 1ms 延时
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 R-Car V4H 和 V4M 平台上执行复位操作时，由于未在复位断言后遵守手册规定的 1ms 等待时间，可能导致复位流程不符合硬件规格，进而引发后续硬件状态异常或设备初始化不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 R-Car V4H 参考手册（R19UH0186EJ0130 Rev.1.30）第 583 页图 9.3.1(a) 软件复位流程，在向 SRCR 寄存器写入复位位进行复位断言后，必须等待 1ms。当前代码在复位操作中仅使用了固定的 35us 延时（基于旧款 SoC 的 RCLK 周期计算），未针对 R-Car Gen4 系列 SoC（如 V4H、V4M）添加规定的 1ms 延时，导致违反硬件操作时序要求。
+
+#解决方案
+在 `cpg_mssr_reset` 函数中增加针对 SoC 代际的判断逻辑：
+1. 检测当前 SoC 是否为 R-Car Gen4（通过 `priv->reg_layout == CLK_REG_LAYOUT_RCAR_GEN4` 判断）。
+2. 若是 R-Car Gen4，在复位断言后调用 `usleep_range(1000, 2000)` 暂停 1ms 到 2ms。
+3. 若是旧款 SoC，保持原有的延时逻辑，但将延时实现从 `udelay(35)` 调整为 `usleep_range(35, 1000)` 以优化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01cd468e1d9f3fc2244dac2d4646d7ebb177d665

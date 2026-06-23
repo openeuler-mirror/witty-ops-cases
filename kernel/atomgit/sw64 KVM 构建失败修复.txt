@@ -1,0 +1,27 @@
+#标题
+sw64 KVM 构建失败修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构下编译 KVM 模块时出现链接阶段失败，具体表现为：
+1. 编译过程中出现未定义引用错误，导致构建中断；
+2. 链接器报错找不到 `kvm_cma_declare_contiguous` 和 `kvm_stats_read` 等函数符号。
+
+#主要错误日志
+- `arch/sw_64/mm/init.o: In function 'sw64_kvm_reserve':`
+- `(.init.text+0x424): undefined reference to 'kvm_cma_declare_contiguous'`
+- `virt/kvm/kvm_main.o: In function 'kvm_vcpu_stats_read':`
+- `(.text+0x3da4): undefined reference to 'kvm_stats_read'`
+
+#问题根因
+1. `kvm_cma.o` 未被包含在编译列表中，导致 `kvm_cma_declare_contiguous` 函数缺失；
+2. Makefile 中手动列举了 `kvm_main.o` 等通用文件，未正确使用通用的 `Makefile.kvm` 进行编译，导致 `kvm_stats_read` 等通用接口未正确编译或链接。
+
+#解决方案
+1. 将 `kvm_cma.o` 添加到 `C3B` 子架构的编译目标中；
+2. 移除手动定义的通用 KVM 文件列表（如 `kvm_main.o`），改为通过 `include $(srctree)/virt/kvm/Makefile.kvm` 引入通用编译规则，确保通用符号正确生成。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/866792be6d70002bb51235d0efe4b0cc1b393b6e

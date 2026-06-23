@@ -1,0 +1,24 @@
+#标题
+KVM x86 调试寄存器 DR6 加载时机错误导致状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 KVM 虚拟化环境中，当客户机处于 KVM_DEBUGREG_WONT_EXIT 模式时，调试寄存器 DR6 的加载时机不正确。具体表现为：DR6 并非在进入虚拟机运行循环前的最后时刻加载，这可能导致宿主机与客户机之间的 DR6 状态不一致，进而引发调试异常（#DB）处理错误或调试功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 DR6 寄存器的加载时机过早。
+在修复前的代码逻辑中，对于 VMX 和 SVM 架构，DR6 是在 `vmx_vcpu_run` 或 `svm_vcpu_run` 函数内部、进入 Guest 模式之前加载的。然而，如果在加载 DR6 之后、真正进入 Guest 之前还有其他代码执行路径，可能会导致 DR6 值被修改或状态不一致。正确做法是将 DR6 的加载推迟到 `vcpu_enter_guest` 函数中，确保其与 DR0-DR3 一起，在进入 Guest 运行循环前的最后时刻完成加载，从而保证状态的准确性。
+
+#解决方案
+修改 KVM 调试寄存器的加载逻辑，将 DR6 的加载操作从 VMX/SVM 的 `vcpu_run` 内部移至通用入口函数 `vcpu_enter_guest` 中：
+1. 在 `kvm_x86_ops` 结构体中新增 `set_dr6` 回调函数指针，并在 VMX 和 SVM 模块中实现该回调。
+2. 删除 VMX 和 SVM 模块中原有的、在 `vcpu_run` 内部加载 DR6 的代码。
+3. 在 `x86.c` 的 `vcpu_enter_guest` 函数中，当检测到 `KVM_DEBUGREG_WONT_EXIT` 标志位时，通过 `static_call(kvm_x86_set_dr6)` 调用新增的回调函数，在加载 DR0-DR3 的同时加载 DR6，确保 DR6 仅在进入 Guest 前的最后时刻被设置为 Guest 的值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ebb2cc93ae7fe8942cbe1ea08aa7394380767a25

@@ -1,0 +1,35 @@
+#标题
+overlayfs: ovl_link_up 函数 dput 位置不当引发 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行 overlayfs 文件重命名或 copy-up 操作时，触发 KASAN 检测到的 slab-use-after-free 错误，导致内核崩溃或异常。具体表现为在 `ovl_dentry_update_reval` 函数执行过程中访问了已被释放的 dentry 内存。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in ovl_dentry_remote fs/overlayfs/util.c:162 [inline]
+BUG: KASAN: slab-use-after-free in ovl_dentry_update_reval+0xd2/0xf0 fs/overlayfs/util.c:167
+
+Call Trace:
+ <TASK>
+ __dump_stack lib/dump_stack.c:88 [inline]
+ dump_stack_lvl+0x116/0x1f0 lib/dump_stack.c:114
+ print_address_description mm/kasan/report.c:377 [inline]
+ print_report+0xc3/0x620 mm/kasan/report.c:488
+ kasan_report+0xd9/0x110 mm/kasan/report.c:601
+ ovl_dentry_remote fs/overlayfs/util.c:162 [inline]
+ ovl_dentry_update_reval+0xd2/0xf0 fs/overlayfs/util.c:167
+ ovl_link_up fs/overlayfs/copy_up.c:610 [inline]
+ ovl_copy_up_one+0x2105/0x3490 fs/overlayfs/copy_up.c:1170
+ ...
+ </TASK>
+
+#问题根因
+在函数 `ovl_link_up` 中，代码逻辑错误地在调用 `ovl_dentry_update_reval()` 之前就执行了 `dput(upper)`。这导致 `upper` dentry 对象的引用计数过早释放并被回收，随后在 `ovl_dentry_update_reval()` 内部调用 `ovl_dentry_remote()` 访问 `upper->d_flags` 时，实际访问了已被释放的内存，从而引发 Use-After-Free（UAF）漏洞。
+
+#解决方案
+将 `dput(upper)` 调用位置从 `ovl_do_link` 执行后立即释放移动到 `ovl_dentry_update_reval` 执行之后。确保在 `upper` 指针最后一次被使用（访问其成员）之后，再减少其引用计数，从而避免 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3525be83eb539e8b80c3d1e5ae4d1d23be47ce2d

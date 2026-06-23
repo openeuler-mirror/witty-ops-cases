@@ -1,0 +1,25 @@
+#标题
+jump_label: static_key_slow_dec() 并发竞态导致引用计数错误及WARN触发
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下，`static_key_slow_dec()` 与 `static_key_slow_inc()` 存在竞态条件。当一个线程执行 `slow_dec` 检测到引用计数为 1 并持有 mutex 时，另一个线程插入执行 `slow_inc` 将计数增加到 2，随后又执行 `slow_dec` 将计数减回 1。此时原线程恢复执行，使用 `cmpxchg` 尝试将计数从 1 减为 0 失败（因为当前值已是 1 以外的值或已被其他路径处理），导致逻辑分支判断错误，触发内核警告（WARN）。这可能导致静态键状态不一致，引发不可预期的内核行为。
+
+#主要错误日志
+- `WARN_ON_ONCE(!static_key_slow_try_dec(key));` (旧代码逻辑触发)
+- `WARN` (Commit Message 中明确指出触发了警告)
+
+#问题根因
+该问题是由修复提交 `83ab38ef0a0b` ("jump_label: Fix concurrency issues in static_key_slow_dec()") 引入的回归缺陷。
+根本原因是在 `__static_key_slow_dec_cpuslocked()` 函数中，持有 `jump_label_mutex` 后使用了 `atomic_cmpxchg(&key->enabled, 1, 0)` 操作。在并发环境中，引用计数 `enabled` 的值可能在获取锁之后、执行 cmpxchg 之前被其他线程修改（例如从 1 增加到 2 或被减回 1），导致 cmpxchg 比较失败（返回 false），进而错误地进入 `else` 分支并再次尝试 dec 操作，最终触发 WARN_ON_ONCE 警告，造成逻辑混乱。
+
+#解决方案
+修改 `__static_key_slow_dec_cpuslocked()` 的实现逻辑：
+1. 将临界区的 `atomic_cmpxchg(1, 0)` 替换为 `atomic_dec_and_test()`。这确保了对引用计数的减操作和判断是一个不可分割的原子步骤，避免了检查与修改之间的时间窗口引发的竞态。
+2. 在临界区内增加对 `enabled` 值为 -1 和 0 的异常检查（WARN_ON_ONCE），以提前发现潜在的计数下溢或逻辑错误。
+3. 重命名 `static_key_slow_try_dec()` 为 `static_key_dec_not_one()` 以更准确反映其功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b4c3ff7f26d86e1a997563682cafbcc4b8e59ead

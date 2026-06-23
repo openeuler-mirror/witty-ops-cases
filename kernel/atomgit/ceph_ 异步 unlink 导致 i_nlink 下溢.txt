@@ -1,0 +1,20 @@
+#标题
+ceph: 异步 unlink 导致 i_nlink 下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 CephFS 异步删除功能进行文件 unlink 操作时，由于并发竞争，可能导致 inode 的引用计数 `i_nlink` 出现下溢，使得链接计数变为无效的负值或错误的数值，进而影响文件系统的一致性。
+
+#主要错误日志
+未知
+
+#问题根因
+在异步 unlink 路径中，代码直接调用 `drop_nlink(inode)` 减少链接计数，未持有 `i_ceph_lock` 锁。这导致该操作与在 worker 线程中处理请求完成并回填 inode 信息（`ceph_fill_inode`）的逻辑发生竞争。如果 `ceph_fill_inode` 已经将 `i_nlink` 更新为 0，此时 `drop_nlink` 再次执行减一操作，就会导致 `i_nlink` 下溢。
+
+#解决方案
+在对 inode 的 `i_nlink` 进行减一操作前，使用 `spin_lock(&ci->i_ceph_lock)` 加锁保护。在锁内增加判断逻辑，仅当 `inode->i_nlink > 0` 时才执行 `drop_nlink(inode)`，从而避免并发场景下的下溢问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca5d1a7c265a87c79f8e4d487713bc9d2e0771f3

@@ -1,0 +1,23 @@
+#标题
+hibmcge 驱动重置失败后 ndo_open 异常及统计信息更新错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 当网卡重置失败时，内核可能调用错误的 ndo.open 函数，导致设备状态异常。
+2. 在网卡重置过程中，从寄存器读取的统计信息可能不正确，导致用户看到的统计数据有误。
+
+#主要错误日志
+reset done
+
+#问题根因
+1. **重置流程处理不当**：在 `hbg_err_reset` 流程中，未正确处理 `hbg_reset` 函数的返回值。如果重置失败，代码未及时退出，而是继续尝试 `dev_open`，此时由于 `netif_device_present` 状态判断逻辑缺陷，导致错误的 `ndo.open` 调用。此外，`netif_device_detach/attach` 的调用位置与时机不一致，导致设备状态管理混乱。
+2. **统计信息并发问题**：在网卡处于 resetting 状态时，硬件寄存器可能不稳定或不可访问，但驱动未检查 `HBG_NIC_STATE_RESETTING` 标志位，仍然尝试读取并更新统计信息，导致数据错误。
+
+#解决方案
+1. **修正重置与设备状态管理**：将 `netif_device_detach` 移至 `hbg_reset_prepare` 阶段执行，将 `netif_device_attach` 移至 `hbg_reset_done` 成功后执行。同时，在 `hbg_err_reset` 中增加对 `hbg_reset` 返回值的检查，若失败则直接跳转到解锁步骤，不再尝试打开设备。
+2. **增加统计更新判断**：在 `hbg_update_stats_by_info` 函数入口处增加对 `HBG_NIC_STATE_RESETTING` 状态的检查，如果网卡正在重置，则直接返回，不更新统计信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ee222743c055dbb7242e535878763bfb24cba5e6

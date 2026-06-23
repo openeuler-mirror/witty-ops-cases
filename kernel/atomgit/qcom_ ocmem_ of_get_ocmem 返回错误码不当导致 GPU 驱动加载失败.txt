@@ -1,0 +1,20 @@
+#标题
+qcom: ocmem: of_get_ocmem 返回错误码不当导致 GPU 驱动加载失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设备树（DT）中声明了 OCMEM 且硬件确实存在的情况下，系统启动或 GPU 驱动加载阶段，GPU 驱动无法成功获取 OCMEM 资源。由于 OCMEM 驱动返回了 -ENODEV，GPU 驱动误认为 OCMEM 未在设备树中定义而忽略该错误，导致后续功能依赖 OCMEM 的场景下出现功能异常或初始化失败。
+
+#主要错误日志
+[   xx.xxxxx] gpu_dev: Cannot get ocmem
+
+#问题根因
+在 `of_get_ocmem` 函数中，当通过 `platform_get_drvdata` 获取 OCMEM 数据失败（即 OCMEM 设备尚未探测完成）时，代码错误地返回了 `-ENODEV`。根据内核约定，GPU 驱动通常会忽略 `-ENODEV`（视为设备未定义），而此处实际上是因为 OCMEM 驱动尚未就绪，应当返回 `-EPROBE_DEFER` 以通知调用者稍后重试，从而导致探测流程被错误终止。
+
+#解决方案
+修改 `drivers/soc/qcom/ocmem.c` 中的 `of_get_ocmem` 函数。当获取 OCMEM 失败时，使用 `dev_err_ptr_probe` 辅助函数返回 `-EPROBE_DEFER` 错误码（而非 `-ENODEV`），以此通知 GPU 驱动等调用方 OCMEM 设备尚未就绪，需要延迟探测并自动重试。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0337c8ac407373505cf173812eb31b850a5f8fc6

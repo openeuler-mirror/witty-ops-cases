@@ -1,0 +1,20 @@
+#标题
+cifs: SMB negotiate retry functionality broken during socket reconnect
+
+#内核版本
+OLK-6.6
+
+#问题现象
+CIFS/SMB 协商重试功能在 socket 重连接过程中失效。当 `CIFSSMBNegotiate` 因连接问题失败时，系统无法正确执行重试逻辑，导致协商流程无法正常完成，连接状态机处理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`cifs_negotiate()` 中的协商重试逻辑存在缺陷：当 `CIFSSMBNegotiate()` 因连接问题失败时，`tcpStatus` 状态被修改，导致调用者 `cifs_negotiate_protocol()` 要求的“成功执行协商后状态应处于 `CifsInNegotiate`”这一条件无法满足。因此，重复调用 `CIFSSMBNegotiate()` 无法解决问题，且 SMB2 的相关回调函数对 `-EAGAIN` 错误的处理也不完善，导致重试机制彻底失效。
+
+#解决方案
+将重试逻辑从具体的协商回调函数（`cifs_negotiate` 和 `smb2_negotiate`）移动至统一的上层调用者 `cifs_negotiate_protocol()` 中处理。修改后的 `cifs_negotiate_protocol()` 增加了重试标签与状态控制，允许在返回 `-EAGAIN` 错误时进行一次重试；若重试失败则返回 `-EHOSTDOWN`。此方案正确处理了 `tcpStatus` 的状态转换，修复了包括 NetBIOS 会话重连后 RFC1002_NEGATIVE_SESSION_RESPONSE 处理在内的重试功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/45960770aec72a1ed2ad668535baa75fbd1b76ac

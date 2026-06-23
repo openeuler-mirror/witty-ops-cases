@@ -1,0 +1,23 @@
+#标题
+mtd: docg3: fix use-after-free in docg3_release()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载或释放 docg3 设备驱动时，内核发生 Use-After-Free 错误。具体表现为在 `docg3_release()` 函数中，通过已释放的 `docg3` 指针访问 `cascade->bch` 成员，可能导致内核崩溃、内存损坏或不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `docg3_release()` 函数中，代码逻辑存在先后顺序错误：
+1. 首先，局部变量 `docg3` 指针在循环前被初始化指向 `cascade->floors[0]->priv`。
+2. 随后，循环调用 `doc_release_device()` 释放每个 floor 设备，该函数内部会 `kfree(docg3)` 结构体。
+3. 最后，循环结束后代码试图执行 `docg3->cascade->bch` 操作，此时 `docg3` 指针指向的内存已被释放，导致访问悬空指针。
+
+#解决方案
+修改 `docg3_release()` 函数中的访问方式，不再使用已释放的 `docg3` 指针，而是直接使用函数局部变量 `cascade` 访问 `bch` 成员。这避免了 UAF 风险，同时也移除了不再使用的 `docg3` 局部变量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/928d6fb082411d0fe9da113fc267e7836e604429

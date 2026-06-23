@@ -1,0 +1,20 @@
+#标题
+drm/printer 在 devcoredump 预计算大小时因空指针导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `drm_coredump_printer` 接口生成设备核心转储的流程中，若采用“两阶段写入”策略（第一阶段传入 NULL 数据指针仅计算大小，第二阶段传入有效指针实际写入数据），内核会在第一阶段触发空指针访问错误，导致系统 panic 或 oops。
+
+#主要错误日志
+未知
+
+#问题根因
+`devcoredump printer` 的实现代码中，`__drm_puts_coredump` 和 `__drm_printfn_coredump` 函数未对 `iterator->data` 指针进行有效性检查，直接将其作为目标地址调用 `memcpy` 或 `snprintf`。这导致在仅用于计算大小的第一阶段（data 指针为 NULL）时，内核试图向非法地址写入数据从而触发崩溃。
+
+#解决方案
+在 `drivers/gpu/drm/drm_print.c` 的相关写入函数中增加对 `iterator->data` 的非空检查。仅当 `iterator->data` 不为 NULL 时才执行数据拷贝操作，从而支持传入 NULL 指针以仅计算偏移量和大小的使用场景。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/421129a17e4ef212447e92dc4f8cf22120ca9aaf

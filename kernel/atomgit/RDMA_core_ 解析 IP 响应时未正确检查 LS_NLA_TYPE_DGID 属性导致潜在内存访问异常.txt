@@ -1,0 +1,23 @@
+#标题
+RDMA/core: 解析 IP 响应时未正确检查 LS_NLA_TYPE_DGID 属性导致潜在内存访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 RDMA Netlink IP 响应报文时，若报文中不包含 `LS_NLA_TYPE_DGID` 属性，内核代码仍会尝试解析并拷贝数据。这可能导致内核读取到未初始化的 `gid` 变量或访问无效内存，进而引发内核恐慌或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+原代码逻辑将响应报文的校验与处理分离。校验函数 `ib_nl_is_good_ip_resp` 仅检查报文标志和 NLA 解析是否成功，未强制要求 `LS_NLA_TYPE_DGID` 属性必须存在。随后的处理函数 `ib_nl_process_good_ip_rsep` 使用 `nla_for_each_attr` 手动遍历属性，若未找到 `LS_NLA_TYPE_DGID`，`gid` 变量未被赋值，但代码仍继续执行后续逻辑，导致处理了无效的数据。
+
+#解决方案
+合并校验与处理逻辑，并在解析阶段强制检查 `LS_NLA_TYPE_DGID` 属性是否存在。
+1. 删除独立的校验函数 `ib_nl_is_good_ip_resp` 和原处理函数 `ib_nl_process_good_ip_rsep`，合并为新函数 `ib_nl_process_ip_rsep`。
+2. 使用 `nla_parse_deprecated` 解析属性后，增加判断：`if (!tb[LS_NLA_TYPE_DGID]) return;`。
+3. 只有确认该属性存在后，才从 `tb[LS_NLA_TYPE_DGID]` 中拷贝 GID 数据，确保数据访问的有效性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7bde65b71b9805183f46e7f26cfdcb065ce29a21

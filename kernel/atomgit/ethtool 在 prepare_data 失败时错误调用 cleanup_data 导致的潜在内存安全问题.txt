@@ -1,0 +1,23 @@
+#标题
+ethtool 在 prepare_data 失败时错误调用 cleanup_data 导致的潜在内存安全问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ethtool 进行网络设备信息查询（如 EEPROM 数据 dump）时，若内核底层操作 `.prepare_data()` 执行失败，内核可能会错误地调用 `.cleanup_data()` 回调函数。这违背了该回调的设计初衷（即清理已成功准备的数据），可能导致内核对未初始化或未成功准备的数据结构进行清理操作，进而引发不可预期的行为或内存状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+内核代码中的错误处理路径逻辑存在缺陷。在 `ethnl_default_doit`、`ethnl_default_dump_one` 和 `ethnl_default_notify` 等函数中，当 `ops->prepare_data()` 返回失败（返回值小于 0）时，代码逻辑错误地跳转到了调用 `ops->cleanup_data()` 的分支。根据文档说明，`.cleanup_data()` 仅应在 `.prepare_data()` 成功执行后用于清理资源，失败时不应该调用清理回调。
+
+#解决方案
+修改 `net/ethtool/netlink.c` 中的错误处理跳转逻辑。在 `prepare_data` 失败时，直接跳过 `cleanup_data` 的调用。具体修改包括：
+1. 在 `ethnl_default_doit` 函数中，将 `prepare_data` 失败后的跳转目标从 `err_cleanup` 改为 `err_dev`。
+2. 在 `ethnl_default_dump_one` 函数中，调整跳转标签位置，引入 `out_cancel` 标签，确保失败时先执行 `genlmsg_cancel` 而不执行 `cleanup_data`。
+3. 在 `ethnl_default_notify` 函数中，将 `prepare_data` 失败后的跳转目标从 `err_cleanup` 改为 `err_rep`，确保不执行清理操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae63729014dda01e515badb77ead0f17e582fbd8

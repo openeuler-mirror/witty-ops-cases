@@ -1,0 +1,24 @@
+#标题
+蓝牙LE广播源复用已有实例时数据丢失或广播异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用蓝牙LE Audio广播功能时，若尝试复用已存在的广播实例作为广播源，会导致原有的广播数据被覆盖丢失。具体表现为：当用户先设置公共服务数据（如 Public Broadcast Announcement, 0x1856）并开启广播，随后尝试获取 Broadcast Source 传输时，新的广播数据未能正确追加原有数据，导致原有服务信息丢失，广播音频公告数据不完整。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `hci_adv_bcast_annoucement` 和 `hci_start_per_adv_sync` 函数处理已有广播实例的逻辑存在缺陷：
+1. 在设置广播数据时，`hci_adv_bcast_annoucement` 直接调用 `hci_set_adv_instance_data` 并只传递了新生成的 Broadcast ID 数据，未保留实例中原有的 `adv_data`，导致原数据被覆盖。
+2. 在 `hci_start_per_adv_sync` 中，查找已有实例后未将其标记为周期性广播，也未更新相应的周期广播参数，导致实例状态不正确。
+
+#解决方案
+修改 `net/bluetooth/hci_sync.c` 文件中的逻辑：
+1. 在 `hci_adv_bcast_annoucement` 函数中，分配足够大的缓冲区（`HCI_MAX_EXT_AD_LENGTH`），先追加新的 Broadcast ID 数据，再使用 `memcpy` 将原实例的 `adv_data` 追加到其后，确保数据完整性。
+2. 在 `hci_start_per_adv_sync` 函数中，增加对找到已有实例的处理分支，显式设置 `adv->periodic` 为 true，并正确拷贝 `per_adv_data` 和更新 `flags`，从而正确复用现有实例。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4bfed60b7d2f4ffe455eef79a838cfec5d9c7768

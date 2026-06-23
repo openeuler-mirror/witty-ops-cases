@@ -1,0 +1,22 @@
+#标题
+tracing: 修复 tracer 切换期间 print_graph_function_flags 的 UAF 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 ftrace 压力测试或执行特定 tracer 切换操作时触发内核 UAF（Use-After-Free）。具体复现路径为：在 `s_start()` 中 `mutex_unlock(&trace_types_lock)` 后加入延时，随后将 `current_tracer` 从 `function_graph` 切换为 `timerlat`，同时并发执行 `cat trace` 操作。此时系统可能发生崩溃或内存非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+根本原因在于 tracer 切换过程中对 `iter->private` 的处理不当：
+1. **访问已释放内存**：在 `s_show()` 过程中，`print_trace_line` 会两次调用 `print_graph_function_flags`（一次通过 `iter->trace->print_line()`，另一次通过 `event->funcs->trace()`）。Tracer 切换仅更新了前者，后者仍使用旧 tracer 的 print_line 函数。
+2. **指针未置空**：当从 `function_graph` 切换到 `timerlat` 时，`s_start` 调用 `graph_trace_close` 释放了 `iter->private`，但未将其设置为 NULL。这导致后续 `event->funcs->trace()` 有机会使用该无效的 `iter->private` 指针，从而触发 UAF。
+
+#解决方案
+修改 `graph_trace_close` 函数，在释放 `iter->private` 内存后立即将其指针设置为 NULL，防止其他逻辑使用悬空指针。同时，清理了 `trace_irqsoff.c` 和 `trace_sched_wakeup.c` 中不必要的 `iter->private = NULL` 赋值操作，因为该逻辑已统一由 `graph_trace_close` 处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/731882b8c22c938e0059fabfbebce9dbe4ecd564

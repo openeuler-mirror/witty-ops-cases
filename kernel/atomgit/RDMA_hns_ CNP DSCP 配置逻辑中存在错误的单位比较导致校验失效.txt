@@ -1,0 +1,24 @@
+#标题
+RDMA/hns: CNP DSCP 配置逻辑中存在错误的单位比较导致校验失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 sysfs 接口配置或查询 HNS RoCE 设备的 CNP DSCP 时，内核代码中存在错误的逻辑判断。虽然该错误逻辑理论上不应触发（因为最大位宽 6 bit 小于 4 bytes），但该段代码比较了位与字节单位，属于代码逻辑缺陷。修复前代码中包含 `WARN_ON` 检查，若被误触发可能导致内核打印警告栈信息。
+
+#主要错误日志
+未知
+（注：原代码包含 `WARN_ON(cnp_pri_attr->bit_size > sizeof(u32))`，根据修复说明该条件实际上不会满足，因此不会产生实际日志输出，但代码逻辑错误已被移除。）
+
+#问题根因
+代码中的条件判断 `cnp_pri_attr->bit_size > sizeof(u32)` 存在单位不一致错误。左侧 `bit_size` 单位为位，右侧 `sizeof(u32)` 单位为字节。原意图可能是校验位宽是否超过 32 位，但实际比较对象错误。由于 `bit_size` 最大值为 6 bit，始终小于 4 bytes（32 bit），该判断逻辑无实际意义且属于代码错误。
+
+#解决方案
+移除错误的 `bit_size` 校验逻辑。具体包括：
+1. 删除 `hns_port_cnp_pri_attr` 结构体中的 `bit_size` 成员变量。
+2. 删除 `cnp_pri_attr_show` 和 `cnp_pri_attr_store` 函数中针对 `bit_size` 的 `WARN_ON` 校验代码。
+3. 删除宏定义 `HNS_ROCE_CNP_PRI_DSCP_BIT_SZ` 以及相关宏定义中对该参数的传递。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7548520dfd01fe86aeeaf47fcacdaae3cc77761d

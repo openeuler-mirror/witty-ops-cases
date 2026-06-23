@@ -1,0 +1,24 @@
+#标题
+HID: usbhid: usbhid_parse函数存在越界访问漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在解析USB HID设备描述符时，`usbhid_parse`函数可能触发越界访问故障。该问题由syzkaller模糊测试工具发现，可能导致内核崩溃或内存破坏。
+
+#主要错误日志
+- dbg_hid("hid descriptor invalid, bLen=%hhu bNum=%hhu\n", hdesc->bLength, hdesc->bNumDescriptors);
+- hid_warn(intf, "%u unsupported optional hid class descriptors\n", (int)(hdesc->bNumDescriptors - 1));
+
+#问题根因
+根据USB HID 1.11规范，HID描述符包含强制部分和可选部分。内核原有代码在处理描述符时，使用循环遍历`desc`数组来查找报告描述符，且对`bLength`和`bNumDescriptors`的校验不足。当设备提供的描述符数据不符合预期或被篡改时，循环访问可能导致数组越界读取。此外，原有结构体定义未能清晰区分强制报告描述符与可选描述符，增加了越界访问的风险。
+
+#解决方案
+1. **重构数据结构**：修改`struct hid_descriptor`定义，显式声明强制性的报告描述符成员`rpt_desc`，并将可选描述符定义为柔性数组`opt_descs[]`。
+2. **优化解析逻辑**：移除遍历描述符数组的`for`循环，直接访问强制成员`hdesc->rpt_desc`获取报告描述符长度，彻底消除越界访问的可能性。
+3. **增强校验**：增加对`bLength`和`bNumDescriptors`有效性的严格检查，确保描述符长度符合规范（`bLength == sizeof(*hdesc) + (bNumDescriptors - 1) * sizeof(*hcdesc)`），若校验失败则返回`-EINVAL`。
+4. **增加告警**：如果HID描述符包含不支持的可选描述符（`bNumDescriptors > 1`），打印警告信息以便于调试。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cfd7f170c98a0505a24fcf774baaba06d91da0e5

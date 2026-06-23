@@ -1,0 +1,20 @@
+#标题
+SDEI 状态机在重启流程中因错误状态转移导致异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统重启或低功耗场景切换过程中，SDEI（Software Delegated Exception Interface）事件状态机发生错误转移。具体表现为对已注销（unregistered）的 SDEI 事件错误地执行了 disable 或 enable 操作，导致 SDEI 状态机状态混乱，可能引发内核警告或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在引入低功耗场景 watchdog 修复（Commit c8f96adca7fa）后，`sdei_watchdog_pm_notifier` 函数在处理 CPU 电源管理事件（如 CPU_PM_ENTER/EXIT）时，未检查 SDEI 事件的当前状态。这导致在某些流程下（如事件已注销），代码仍尝试对事件进行 disable 或 enable 操作，触发了 SDEI 状态机的非法状态转移。
+
+#解决方案
+在 `sdei_watchdog_pm_notifier` 回调函数处理逻辑前，增加 `sdei_api_event_status` 调用以检查 SDEI 事件状态。如果事件已注销（result 为 0），则跳过后续的 disable/enable 操作，直接返回成功，从而避免错误的状态转移。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f1e47d2241d253a802be3e0f5288626a590bec5

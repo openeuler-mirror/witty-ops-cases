@@ -1,0 +1,47 @@
+#标题
+gmem模块多重缺陷导致内核Crash、DMA操作异常及Sysfs权限问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **内核崩溃**：在处理 GMEM（异构内存）主机缺页中断路径时，若页表项非空（如并发场景下的竞态条件），内核触发 `BUG_ON` 导致系统 Panic。
+2. **数据损坏风险**：`hmemcpy` 进行 Host 与 Device 之间数据拷贝时，对物理地址直接调用 `phys_to_dma` 而未使用 DMA mapping 接口，可能导致 DMA 地址转换错误或 Cache 一致性问题，引发数据损坏。
+3. **Sysfs 接口异常**：
+    - 部分 Sysfs 节点（如 `nr_activepages`、`nr_freepages`）权限设置过于宽松（0444），存在安全风险。
+    - 存在冗余的 Sysfs 接口（如 `nr_freelist`、`nr_activelist`）。
+    - 写入 `max_memsize` 时可能发生整数溢出或接受非法值。
+4. **VMA 标志位误操作**：`gmem_reserve_vma` 函数中错误地使用了 `vm_flags_set` 来清除 `VM_PEER_SHARED` 标志，导致标志位处理逻辑错误。
+
+#主要错误日志
+- gmem_err("hmemcpy: src address is not mapping to CPU or device");
+- gmem_err("hmemcpy: host to host is unimplemented\n");
+- gmem_err("hmemcpy dma map failed");
+- gmem_err("hmemcpy: device to device is unimplemented\n");
+- gmem_err("write to max_memsize overflow, value not changed");
+- gmem_err("write to max_memsize with invalid value, value not changed");
+- gmem_err("new max_memsize should be larger than used mem, value not changed\n");
+
+#问题根因
+1. **Fault 路径健壮性不足**：`do_peer_shared_anonymous_page` 中使用 `BUG_ON(!pmd_none(*vmf->pmd))`，一旦遇到非空 PMD 项直接 Panic，未进行错误处理。
+2. **DMA 映射机制错误**：`hmemcpy` 中对物理地址的处理未遵循 DMA API 规范，直接使用了 `phys_to_dma` 而非 `dma_map_page`，无法保证 DMA 地址的有效性及 Cache 一致性。
+3. **Sysfs 实现缺陷**：
+    - 接口权限未遵循最小权限原则。
+    - `max_memsize_store` 使用 `memparse` 缺乏溢出检查与边界校验。
+4. **API 误用**：`gmem_reserve_vma` 中清除标志位时调用了 `vm_flags_set(vma, ~VM_PEER_SHARED)`，逻辑上应使用 `vm_flags_clear`。
+
+#解决方案
+1. **移除 Fault 路径中的 BUG_ON**：在 `do_peer_shared_anonymous_page` 中将 `BUG_ON(!pmd_none(*vmf->pmd))` 替换为条件判断 `if (!pmd_none(*vmf->pmd)) goto unlock_release;`，增加健壮性。
+2. **修正 DMA 映射逻辑**：
+    - 移除 `phys_to_dma` 调用。
+    - 在 DMA 传输前调用 `dma_map_page` 进行映射，并在传输完成后调用 `dma_unmap_page` 进行解映射。
+    - 增加 `dma_mapping_error` 检查以确保映射成功。
+3. **修复 Sysfs 接口**：
+    - 将 `nr_activepages` 等接口权限收紧为 0440。
+    - 移除冗余的 `nr_freelist` 和 `nr_activelist` 接口。
+    - 引入 `safe_memparse` 函数替代 `memparse`，增加溢出检查、非法字符校验及已使用内存边界检查。
+4. **修正 VMA 标志位操作**：将 `vm_flags_set(vma, ~VM_PEER_SHARED)` 修改为 `vm_flags_clear(vma, VM_PEER_SHARED)`。
+5. **其他优化**：修正 `MAP_PEER_SHARED` 宏定义位值以避免冲突，增加并发锁保护及 `CPUSETS` 宏条件编译。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/36141432a37f7dedddde8825e724b07ce3a440fb

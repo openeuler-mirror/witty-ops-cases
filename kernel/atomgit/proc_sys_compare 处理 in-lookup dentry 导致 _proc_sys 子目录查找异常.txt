@@ -1,0 +1,27 @@
+#标题
+proc_sys_compare 处理 in-lookup dentry 导致 /proc/sys 子目录查找异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 /proc/sys 目录下进行并发查找时，由于 `proc_sys_compare` 函数对处于 in-lookup 状态（正在查找中）的 dentry 处理不当，可能导致名称匹配判断错误。因为 /proc/sys 子目录对不同进程可见性不同，该缺陷会错误地拒绝匹配处于中间状态的 dentry，进而影响正确的查找行为，可能导致查找失败或性能下降。
+
+#主要错误日志
+未知
+
+#问题根因
+`proc_sys_compare()` 函数逻辑存在缺陷：
+1. 该函数未考虑 `->d_compare()` 可能被调用于处于 in-lookup 状态的 dentry。对于这些尚未完成 `proc_sys_lookup()` 且未调用 `d_splice_alias()` 的 dentry，用于判断可见性的关键信息（存储在 inode 中）尚未就绪。
+2. 原代码直接获取 inode 并检查 sysctl 头，若状态未就绪会错误地拒绝匹配。实际上，对于 in-lookup 的 dentry，应暂时视为匹配成功，等待后续 recheck 时再做最终判断。
+3. 代码中数据访问的并发保护不严谨，使用了 `RCU_INIT_POINTER` 和 `rcu_dereference`，而非更合适的 `WRITE_ONCE` 和 `READ_ONCE`。
+
+#解决方案
+修改 `fs/proc/proc_sysctl.c` 中的 `proc_sys_compare` 函数逻辑：
+1. 在检查名称匹配后，优先判断 dentry 是否处于 in-lookup 状态。若是，直接返回 0（匹配成功），避免对未就绪的 inode 进行检查。
+2. 将 inode 获取逻辑后移，并增加对 inode 为 NULL 的判断（防御性编程，处理可能处于销毁中间状态的 dentry）。
+3. 将 `PROC_I(inode)->sysctl` 的读取改为 `READ_ONCE`，以匹配并发写入语义。
+同时修改 `fs/proc/inode.c`，将 `proc_evict_inode` 中对 `ei->sysctl` 的置空操作从 `RCU_INIT_POINTER` 改为 `WRITE_ONCE`，确保并发读取的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7d47098cfa0aa480e1b21fa39605d4203507fbdc

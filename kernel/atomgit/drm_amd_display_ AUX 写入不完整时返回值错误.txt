@@ -1,0 +1,22 @@
+#标题
+drm/amd/display: AUX 写入不完整时返回值错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 DisplayPort AUX 写入操作时，如果 Sink 端回复表示只写入了部分字节（Partial Write），驱动程序错误地强制返回 0。这导致上层调用者无法获知实际已传输的字节数，可能导致传输逻辑异常或重试机制失效。
+
+#主要错误日志
+amdgpu: AUX partially written
+
+#问题根因
+在 `dm_dp_aux_transfer` 函数中，处理 AUX 写入不完整的场景时，代码逻辑强制将返回值 `result` 设为 0，此举不符合 AUX 传输规范。应该返回 Sink 端回复中指示的实际已写入字节数。此外，直接修改 `msg->buffer` 违反了 `aux->transfer` 接口不应改变原始消息 buffer 的约定。
+
+#解决方案
+1. 引入临时缓冲区 `copy`，在执行写入操作前将 `msg->buffer` 内容拷贝至其中，避免直接修改原始消息结构。
+2. 当接收到部分写入的回复时，不再强制返回 0，而是从返回的数据中提取实际写入的字节数（`payload.data[0]`）并返回。
+3. 同步修正 `amdgpu_dm_process_dmub_aux_transfer_sync` 中的逻辑，允许写入请求也能接收并处理 Sink 返回的数据长度。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c83b2adfef23d9b4d34f1d383c5f963bfafa17a9

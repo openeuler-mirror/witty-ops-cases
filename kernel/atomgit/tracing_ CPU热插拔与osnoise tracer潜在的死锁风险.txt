@@ -1,0 +1,28 @@
+#标题
+tracing: CPU热插拔与osnoise tracer潜在的死锁风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定执行序列下，CPU热插拔操作与osnoise tracer功能交互时可能触发内核死锁。具体场景为：当task1持有interface_lock并尝试获取cpu锁，同时task2执行CPU下线操作持有cpu写锁并等待task3结束，而task3试图获取interface_lock时，将形成典型的AB-BA死锁。
+
+#主要错误日志
+未知
+
+#问题根因
+锁的获取顺序不一致导致了死锁环路。
+1. `osnoise_hotplug_workfn` 和 `osnoise_cpus_write` 等函数先获取 `interface_lock` 互斥锁，再获取 `cpus_read_lock`（读信号量）。
+2. 在CPU热插拔下线流程中，`osnoise_cpu_die` 被调用时已持有 `cpus_write_lock`（写信号量），内部调用 `kthread_stop` 等待线程结束。
+3. 被停止的线程（如调用 `osnoise_sleep`）若试图获取 `interface_lock`，将导致以下死锁环路：
+   - task1 持有 `interface_lock`，等待 `cpus_read_lock`。
+   - task2 持有 `cpus_write_lock`（阻塞了 task1），等待 task3 结束。
+   - task3 等待 `interface_lock`（被 task1 持有）。
+
+#解决方案
+修复锁的获取顺序，确保 `cpus_read_lock` 总是在 `interface_lock` 之前获取，从而避免死锁。具体修改如下：
+1. 在 `osnoise_hotplug_workfn` 函数中，调整为先调用 `guard(cpus_read_lock)()`，再调用 `guard(mutex)(&interface_lock)`。
+2. 在 `osnoise_options_write` 和 `osnoise_cpus_write` 函数中，调整为先调用 `cpus_read_lock()`，再调用 `mutex_lock(&interface_lock)`，并在释放时先释放 `mutex_unlock(&interface_lock)`，再释放 `cpus_read_unlock()`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3de7bde624244b4b748fb6eb2701e5efd77e69fa

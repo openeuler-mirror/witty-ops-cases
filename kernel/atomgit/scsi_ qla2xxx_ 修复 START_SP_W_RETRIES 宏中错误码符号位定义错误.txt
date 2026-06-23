@@ -1,0 +1,25 @@
+#标题
+scsi: qla2xxx: 修复 START_SP_W_RETRIES 宏中错误码符号位定义错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 qla2xxx 驱动执行某些操作（如任务管理命令）时，由于 `START_SP_W_RETRIES` 宏返回了正数的错误码（如 `EINVAL`、`EAGAIN`），导致调用者对返回值的逻辑判断出错，可能引发功能异常或违反 Linux 内核错误码处理惯例。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `START_SP_W_RETRIES` 宏的定义中，错误码的赋值与判断逻辑使用了错误的符号：
+1. 变量 `_rval` 被赋值为 `EINVAL`（正数），而 Linux 内核惯例中错误码应为负值（如 `-EINVAL`）。
+2. 判断条件 `if (_rval == EAGAIN)` 试图与 `EAGAIN`（正数）比较，但 `qla2x00_start_sp()` 函数返回的是负的错误码（如 `-EAGAIN`）或 `QLA_SUCCESS`。
+这导致返回值不符合内核惯例，且重试逻辑（检测 `EAGAIN`）无法正确匹配，从而跳过重试或返回错误的错误码。
+
+#解决方案
+修改 `drivers/scsi/qla2xxx/qla_init.c` 文件中的 `START_SP_W_RETRIES` 宏定义：
+1. 将错误码赋值从 `EINVAL` 修改为 `-EINVAL`，确保存储的是负的错误码。
+2. 将重试判断条件从 `_rval == EAGAIN` 修改为 `_rval == -EAGAIN`，确保能正确识别 `qla2x00_start_sp` 返回的“需要重试”状态码，从而触发重试逻辑或正确返回错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7540b41dbfa1a17b1e13ae8542733f2048fb9a0e

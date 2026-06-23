@@ -1,0 +1,21 @@
+#标题
+KVM无法显示问题修复（GRUB VGA开启场景下）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当开启 GRUB VGA 功能且 DP 处于断开状态时，KVM 无法正常显示画面。该问题发生在热插拔（HPD）事件处理期间，导致 VGA 连接器状态判断错误。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动原有的 `detect_ctx` 实现使用了通用的 `drm_connector_helper_detect_from_ddc` 函数，该函数无法正确处理特定场景下的连接状态。在 DP 断开连接的情况下，VGA 连接器的状态判定未能正确返回“已连接”，导致 KVM 显示失败。此外，缺少 `force` 函数导致在 HPD 事件发生时无法消除 GRUB VGA 对 DP 状态的干扰。
+
+#解决方案
+1. 新增 `hibmc_vdac_detect` 函数替换原有的 `drm_connector_helper_detect_from_ddc`。该函数根据 DP 的 HPD 状态决定 VGA 连接器状态：若 DP 已连接（`dp->hpd_status` 为真），则返回 `connector_status_disconnected`；否则返回 `connector_status_connected`，确保 DP 断开时 VGA 始终处于连接状态。
+2. 新增 `hibmc_vdac_force` 函数并注册到 `drm_connector_funcs` 中。该函数在 DP 处于 HPD 状态时强制将连接器状态设为 `disconnected`，否则设为 `connected`，以此消除 GRUB VGA 对 DP 状态判断的影响。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d6c0faed6fc0c1bbab2f4145c03990238997a0e1

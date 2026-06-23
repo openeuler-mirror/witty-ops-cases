@@ -1,0 +1,21 @@
+#标题
+resctrl: tasks 接口解析 iommu_group 后错误进入 PID 处理流程
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 resctrl groups 的 tasks 接口写入 iommu_group 配置时，内核在完成 iommu_group 的解析与处理后，未能正确返回继续解析下一个 token，而是错误地继续进入 PID 解析流程。这导致将 iommu_group 的 ID 字符串当作 PID 进行解析，产生非预期的解析错误或错误日志。
+
+#主要错误日志
+Task list parsing error pid [iommu_group_id_string]
+（推断：若未修复，当内核尝试将 iommu_group ID 字符串作为 PID 解析失败时，可能触发此日志）
+
+#问题根因
+在 `rdtgroup_tasks_write` 函数中，处理 `iommu_group` 配置的逻辑分支（`if (is_iommu)`）缺少必要的流程控制。当成功识别并处理完 iommu_group 配置后，代码没有跳出当前循环或跳过后续逻辑，而是继续向下执行到了 PID 解析的代码段，导致逻辑错误。
+
+#解决方案
+修改 `fs/resctrl/rdtgroup.c` 中的 `rdtgroup_tasks_write` 函数。在处理 iommu_group 的条件分支中增加逻辑判断：若处理成功则执行 `continue` 跳过后续的 PID 解析逻辑；若处理失败（ret 非零）则 `break` 跳出循环。确保 iommu_group 处理与 PID 处理互斥，修复流程控制缺陷。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/77ffe8001238df63c0beadb2fda06d121fc87b2e

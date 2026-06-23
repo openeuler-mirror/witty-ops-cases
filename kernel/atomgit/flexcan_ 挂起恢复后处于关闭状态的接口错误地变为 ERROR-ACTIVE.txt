@@ -1,0 +1,28 @@
+#标题
+flexcan: 挂起恢复后处于关闭状态的接口错误地变为 ERROR-ACTIVE
+
+#内核版本
+OLK-6.6
+
+#问题现象
+FlexCAN 接口在处于 link down（关闭）状态时执行挂起和恢复操作后，其 CAN 状态错误地从 STOPPED 变为 ERROR-ACTIVE。
+具体表现为：
+1. 挂起前接口状态为 DOWN，CAN 状态为 STOPPED。
+2. 执行 `systemctl suspend` 恢复后，接口状态仍为 DOWN，但 CAN 状态异常变为 ERROR-ACTIVE。
+3. 恢复过程若遇到问题，状态未保持为 SLEEPING，不符合预期逻辑。
+
+#主要错误日志
+未知
+
+#问题根因
+在电源管理回调函数中，CAN 状态的设置未正确区分接口是否已启动：
+1. 在 `flexcan_resume` 函数中，代码无条件地将 `priv->can.state` 设置为 `CAN_STATE_ERROR_ACTIVE`，这导致未启动（down）的接口在恢复后状态被错误修改。
+2. 在 `flexcan_suspend` 函数中，`priv->can.state = CAN_STATE_SLEEPING` 的赋值位于 `if (netif_running(dev))` 判断块之外，导致无论接口是否启动都被设置为休眠状态，逻辑不够严谨。
+
+#解决方案
+修改 `flexcan_suspend` 和 `flexcan_resume` 函数，将 CAN 状态的变更严格限制在接口已启动（`netif_running(dev)` 为真）的条件下：
+1. 在 `flexcan_suspend` 中，将 `priv->can.state = CAN_STATE_SLEEPING` 移入 `if (netif_running(dev))` 判断块内部。
+2. 在 `flexcan_resume` 中，删除函数入口处的无条件 `priv->can.state = CAN_STATE_ERROR_ACTIVE` 赋值，将其移至 `if (netif_running(dev))` 判断块内部，确保只有在恢复流程无误且接口处于运行状态时，才将状态设置为 `CAN_STATE_ERROR_ACTIVE`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/821e7298a60777f35bc66f2aaab974a0f3f314a8

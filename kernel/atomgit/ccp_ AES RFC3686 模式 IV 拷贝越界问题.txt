@@ -1,0 +1,20 @@
+#标题
+ccp: AES RFC3686 模式 IV 拷贝越界问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 AF_ALG 接口进行 rfc3686-ctr-aes-ccp 加密请求时，驱动程序在请求完成回调中发生内存越界写入。由于 RFC3686 skcipher 暴露的 IV 大小为 8 字节，而驱动在回写 IV 时固定拷贝 AES_BLOCK_SIZE（16字节），导致覆盖了调用者提供的 8 字节 IV 缓冲区之外的内存，可能引发内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`ccp_aes_complete()` 函数在恢复 IV 时，未考虑不同算法 IV 大小的差异，固定使用 `AES_BLOCK_SIZE`（16字节）作为长度调用 `memcpy` 将数据拷贝回调用者的 IV 缓冲区。然而，RFC3686 skcipher 接口实际暴露的 IV 长度仅为 8 字节，导致 16 字节的拷贝操作越过了缓冲区边界，造成内存越界写入。
+
+#解决方案
+在 `ccp_aes_complete()` 函数中，使用 `crypto_skcipher_ivsize()` 动态获取当前算法的 IV 长度，并将 `memcpy` 的拷贝长度参数从固定的 `AES_BLOCK_SIZE` 修改为实际的 `ivsize`，确保仅拷贝缓冲区允许范围内的数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ed3ae9baa6401e4c54df0a2488f1bce2a6b41dbd

@@ -1,0 +1,28 @@
+#标题
+Bluetooth: L2CAP协议l2cap_sock_cleanup_listen函数存在释放后使用(UAF)漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在运行蓝牙L2CAP相关操作时触发KASAN检测到的slab-use-after-free错误。具体表现为在调用链 `l2cap_sock_release` -> `l2cap_sock_cleanup_listen` -> `bt_accept_dequeue` 过程中，对已释放的socket对象进行读写操作。导致这一现象的直接原因是并发环境下，两个线程在 `bt_accept_dequeue` 迭代列表时看到了同一个socket，导致该socket引用计数错误归零被释放，随后另一线程继续访问该socket触发崩溃。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in debug_spin_lock_before kernel/locking/spinlock_debug.c:86 [inline]
+BUG: KASAN: slab-use-after-free in do_raw_spin_lock+0x26f/0x2b0 kernel/locking/spinlock_debug.c:115
+Read of size 4 at addr ffff88803b7eb1c4 by task syz.5.3276/16995
+Call Trace:
+ release_sock+0x21/0x220 net/core/sock.c:3746
+ bt_accept_dequeue+0x505/0x600 net/bluetooth/af_bluetooth.c:312
+ l2cap_sock_cleanup_listen+0x5c/0x2a0 net/bluetooth/l2cap_sock.c:1451
+ l2cap_sock_release+0x5c/0x210 net/bluetooth/l2cap_sock.c:1425
+
+#问题根因
+根本原因是 `l2cap_sock_cleanup_listen()` 函数调用时缺乏锁保护，导致竞态条件。
+具体流程为：`bt_accept_dequeue()` 通常在 `lock_sock()` 保护下执行，但在 `l2cap_sock_release()` 调用 `l2cap_sock_cleanup_listen()` 时未持有锁。这使得两个线程可以同时看到并操作同一个socket（CPU1在迭代列表，CPU2执行close）。在这个过程中，socket引用计数因多次 `sock_put` 而错误归零，导致socket被提前释放，随后继续访问该socket时触发Use-After-Free。
+
+#解决方案
+在 `l2cap_sock_release()` 函数中调用 `l2cap_sock_cleanup_listen()` 前后添加锁保护。具体修改为：在调用 `l2cap_sock_cleanup_listen(sk)` 之前调用 `lock_sock_nested(sk, L2CAP_NESTING_PARENT)` 获取锁，执行完毕后调用 `release_sock(sk)` 释放锁。这确保了 `bt_accept_dequeue()` 的调用处于 `lock_sock()` 保护之下，避免了并发竞态导致的释放后使用问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c52c37d82e5bfe2e2d7b99fe9754722ac76f9846

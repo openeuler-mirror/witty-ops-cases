@@ -1,0 +1,24 @@
+#标题
+btrfs子页模式重定位路径因页私有数据释放导致的使用后释放（UAF）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启Btrfs子页（subpage）特性的系统中，执行数据重定位操作时，若后台同时进行内存回收，内核可能发生使用后释放，导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+这是一个并发竞态问题，涉及内存回收路径与Btrfs重定位路径：
+1. **内存回收路径**：`shrink_page_list` 调用 `try_to_release_page` 触发 `btrfs_releasepage`，该函数调用 `btrfs_free_subpage` 释放了页面的私有数据并清除关联。
+2. **保留页面**：随后在 `__remove_mapping` 中，因 `page_ref_freeze` 失败或其他原因，页面最终未被移除缓存，而是被保留并解锁。
+3. **重定位路径**：此时 `prealloc_file_extent_cluster` 中的 `find_lock_page` 成功获取到该页面，但在未检查私有数据有效性的情况下，直接调用 `btrfs_subpage_clear_uptodate` 访问 `page->private`。
+由于私有数据已被释放，此时访问到了已释放的内存地址。
+
+#解决方案
+在 `prealloc_file_extent_cluster` 函数中，当通过 `find_lock_page` 获取到页面后，立即调用 `set_page_extent_mapped(page)`。该函数会检查并恢复页面的私有数据状态，确保对于子页模式，私有数据结构体存在且有效，从而避免后续操作访问已释放的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/98adeba6b015cf896d924f09d3dc2ea72ee408c6

@@ -1,0 +1,29 @@
+#标题
+hns3网卡中断残留、debugfs缓冲区溢出及初始化时序缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 网络设备关闭或复位过程中出现中断残留问题，导致不必要的IRQ处理或内核警告。
+2. 访问 hns3 debugfs 的 `tm_qset` 节点时，因缓冲区长度不足导致读取不完整或内存越界。
+3. 调用 `ptp_clock_register` 时可能出现竞态条件，导致 PTP 功能异常或内核崩溃（由初始化顺序错误引起）。
+4. VF 设备在复位后 VLAN tag offload 状态丢失，导致 VLAN 过滤或剥离功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **中断残留**：在 `hns3_nic_net_down` 等流程中，原有代码是“使能中断”与“使能队列”交叉进行，且在禁用时仅屏蔽中断未同步禁用IRQ。修复方案调整为严格遵循“先禁用队列，再屏蔽中断向量，最后禁用IRQ”的时序，解决了中断残留问题。
+2. **Debugfs 缓冲区溢出**：`tm_qset` 命令的缓冲区定义仅为 `HNS3_DBG_READ_LEN`，无法承载实际输出的数据量。
+3. **PTP 初始化时序错误**：`ptp_clock_register` 在 `hdev->ptp` 指针赋值及部分资源初始化之前被调用，可能导致注册过程中的回调函数访问空指针或未初始化资源。
+4. **VF VLAN 状态丢失**：VF 驱动未维护 `rxvtag_strip_en` 状态变量，在设备复位恢复流程中默认强制开启 VLAN 剥离，忽略了用户之前的配置状态。
+
+#解决方案
+1. **修复中断残留**：重构 `hns3_enable_irqs_and_tqps` 与 `hns3_disable_irqs_and_tqps` 函数，确保严格的使能/关闭时序。禁用时依次执行：禁用 TQP -> 屏蔽向量中断 -> 禁用 IRQ。
+2. **修复缓冲区大小**：将 `hns3_dbg_cmd` 中 `tm_qset` 的 `buf_len` 从 `HNS3_DBG_READ_LEN` 修改为 `HNS3_DBG_READ_LEN_1MB`。
+3. **调整 PTP 初始化顺序**：将 `ptp_clock_register` 调用移动至 `spin_lock_init`、`io_base` 映射及 `hdev->ptp` 赋值等初始化步骤之后，确保资源就绪后再注册时钟。
+4. **修复 VF VLAN 状态同步**：在 `hclgevf_dev` 结构体中新增 `rxvtag_strip_en` 成员，在设置硬件剥离状态时同步更新该变量，并在复位恢复时使用该变量恢复 VLAN 配置，而非强制开启。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d32a7467097362b2a3c777cf0701cc6ca116887

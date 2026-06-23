@@ -1,0 +1,21 @@
+#标题
+software node: reference args 参数索引越界校验错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `software_node_get_reference_args` 函数获取引用参数时，若传入的 `index` 参数值导致计算出的偏移量正好等于 `prop->length`（即访问 prop->pointer 数组的第 `prop->length / sizeof(*ref)` 个元素），内核错误地返回 `-ENOENT`，导致合法的参数获取失败，进而引发相关功能异常。
+
+#主要错误日志
+-ENOENT (推断：函数返回值错误，通常伴随调用方功能无法初始化或查找失败)
+
+#问题根因
+函数 `software_node_get_reference_args` 中的边界检查逻辑存在缺陷。原代码使用 `index * sizeof(*ref) >= prop->length` 进行判断，当 `index` 指向数组边界内的最后一个有效元素且偏移量等于总长度时，条件成立导致错误返回 `-ENOENT`。
+正确的逻辑应当是检查目标元素是否完全位于数据长度范围内，即 `(index + 1) * sizeof(*ref) > prop->length`。原判断条件过于严格，漏判了边界处的有效元素。
+
+#解决方案
+修改 `drivers/base/swnode.c` 文件中的边界检查条件，将 `index * sizeof(*ref) >= prop->length` 修改为 `(index + 1) * sizeof(*ref) > prop->length`，修正数组越界校验逻辑，确保索引位于数组有效范围内时能正确获取参数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/03fb0055dc902195eda26e2e3a8ccf9588f91ba6

@@ -1,0 +1,22 @@
+#标题
+iommu/ummu: 修复 logic_ummu_viommu 资源未初始化导致的引用异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 logic UMMU 框架进行嵌套域分配并随后释放时，由于资源指针未正确初始化与维护，可能导致内核访问非法内存地址或引用已释放的资源，进而引发内核崩溃或内存异常。
+
+#主要错误日志
+pr_debug("invalid viommu.\n");
+
+#问题根因
+在函数 `logic_ummu_viommu_alloc_domain_nested` 中分配嵌套域时，未将 `logic_domain->logic_viommu` 指针指向当前的 `logic_vummu` 对象，导致该指针处于未初始化状态。随后在 `logic_ummu_free` 函数中释放 `IOMMU_DOMAIN_NESTED` 类型的域时，代码尝试访问并修改 `logic_domain->logic_viommu->nested` 指针，由于 `logic_viommu` 指针无效，引发了内存访问错误。
+
+#解决方案
+1. 调整 `logic_ummu_domain` 结构体定义，新增 `logic_viommu` 成员变量以建立关联。
+2. 在 `logic_ummu_viommu_alloc_domain_nested` 函数中增加赋值语句 `logic_domain->logic_viommu = logic_vummu`，确保域结构体正确持有 viommu 对象的引用。
+3. 在 `logic_ummu_free` 函数中释放嵌套域时，增加对 `logic_domain->logic_viommu->nested` 的置空操作 `logic_domain->logic_viommu->nested = NULL`，防止悬垂指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/30d93a98226eee1c07a8b40a78f45c75d8bd6c8e

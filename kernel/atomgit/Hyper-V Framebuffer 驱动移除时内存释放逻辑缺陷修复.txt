@@ -1,0 +1,25 @@
+#标题
+Hyper-V Framebuffer 驱动移除时内存释放逻辑缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Hyper-V 虚拟机环境下，卸载 hyperv_fb 驱动模块或进行设备热移除时，可能导致内核崩溃或内存泄漏。驱动未能优雅地处理 Framebuffer 资源的释放流程，`hvfb_remove` 函数中释放内存与注销设备的顺序存在逻辑错误。
+
+#主要错误日志
+pr_err("Unable to register framebuffer\n")
+
+#问题根因
+驱动原有的 `hvfb_remove` 函数中，直接调用了 `unregister_framebuffer`、`hvfb_putmem` 和 `framebuffer_release`，这违背了 Framebuffer 核心层的资源管理契约：
+1. `unregister_framebuffer` 可能不是设备引用的最终持有者，若此时直接释放内存（`hvfb_putmem`），当用户空间进程仍持有设备句柄时，后续操作将引发 Use-After-Free 或内核 Panic。
+2. 缺少 `fb_ops->fb_destroy` 回调的实现，导致 Framebuffer 核心层在引用计数归零时无法正确回调驱动执行资源清理。
+
+#解决方案
+1. 引入 `devm_register_framebuffer` 资源托管接口，自动处理设备注销流程，确保资源释放顺序正确。
+2. 在 `hyperv_fb` 驱动中实现 `fb_ops->fb_destroy` 回调函数 `hvfb_destroy`，将内存释放逻辑（`hvfb_putmem`）和 `framebuffer_release` 移入其中，由 Framebuffer 核心层在设备引用计数归零时安全调用。
+3. 重构 `hvfb_putmem` 接口，移除冗余的 `struct hv_device` 参数，简化调用链。
+4. 移除 `hvfb_remove` 中显式的 `unregister_framebuffer`、`hvfb_putmem` 和 `framebuffer_release` 调用，改由托管机制和 `fb_destroy` 回调处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e666d1a0663e945fc62f83362dc3d5a97468402a

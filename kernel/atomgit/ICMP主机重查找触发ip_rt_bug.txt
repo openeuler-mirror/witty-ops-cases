@@ -1,0 +1,20 @@
+#标题
+ICMP主机重查找触发ip_rt_bug
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定网络配置场景下（如涉及relookup），ICMP响应发送逻辑错误地进入异常处理路径，触发内核`ip_rt_bug`，导致ICMP包发送失败或内核报错。
+
+#主要错误日志
+ip_rt_bug
+
+#问题根因
+在进行ICMP路由重查找（relookup）时，代码逻辑未正确处理目的地址为本地地址（RTN_LOCAL）的情况。当重查找返回的路由与原路由一致（`rt == rt2`）时，未进一步判断目的地址类型，导致本应正常发送的本地流量错误地触发了路由层的BUG检查逻辑。
+
+#解决方案
+在`net/ipv4/icmp.c`的`icmp_route_lookup`函数中增加判断逻辑：当重查找返回的路由与原路由相同时，调用`inet_addr_type_dev_table`检查目的地址是否为本地地址（RTN_LOCAL）。如果是本地地址，则直接返回当前路由结果，避免后续进入错误处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1167f85d877bb463f858fdd1ab4d0b3b3056ecb9

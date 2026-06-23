@@ -1,0 +1,21 @@
+#标题
+x86/sev: 修复内存加密状态切换中的潜在符号扩展问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD SEV（Secure Encrypted Virtualization）环境下，进行大容量内存的加密状态变更操作时，`enc_dec_hypercall` 函数接收到的内存长度参数可能因隐式符号扩展而变成错误的数值。这可能导致内存加密/解密操作范围错误，进而引发内存访问异常、数据损坏或虚拟机不稳定运行。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `amd_enc_status_change_finish` 中，调用 `enc_dec_hypercall` 时，参数 `npages` 为 `int` 类型。计算内存长度时使用了表达式 `npages << PAGE_SHIFT`。
+当 `npages` 为正值但较大时，若没有显式转换为无符号类型，在左移操作过程中可能触发隐式符号扩展（Integral Promotion），导致计算出的内存长度参数值变为负数或非预期的巨大值，从而传递给 Hypercall 错误的 size 参数。
+
+#解决方案
+在计算内存大小时，显式将 `npages` 强制转换为 `unsigned long` 类型。修改代码为 `(unsigned long)npages << PAGE_SHIFT`，确保移位操作在无符号长整型上进行，避免潜在的符号扩展错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0fd6eb28c05223d64217a82feec9e63e9866b9b0

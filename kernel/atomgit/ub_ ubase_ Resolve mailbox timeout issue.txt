@@ -1,0 +1,22 @@
+#标题
+ub: ubase: Resolve mailbox timeout issue
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CPU 负载较高的场景下，ubase 模块处理 mailbox（邮箱）任务时出现超时。这是因为在任务处理后，硬件上报 EQ 事件，驱动程序原本调度延迟任务进行处理，但在高负载下调度延迟增大，导致处理流程无法及时完成从而触发超时。
+
+#主要错误日志
+未知
+
+#问题根因
+在当前的 mailbox 处理流程中，硬件上报 EQ 事件后，驱动程序通过调度延迟任务（scheduled delayed tasks）进行处理。当 CPU 负载较高时，任务调度会产生延迟，导致无法及时响应硬件事件，最终导致 mailbox 处理超时。此外，代码中 `UBASE_CMDQ_MBX_TX_TIMEOUT` 定义为 500，补丁将其修正为 50（结合上下文推断为修正超时阈值定义）。
+
+#解决方案
+1. 修改 EQ 事件的处理方式，将硬件 EQ 事件的处理移至中断的上半部（top half）直接执行，而不是通过调度延迟任务处理，以此消除高负载下的调度延迟影响。
+2. 移除原有的 `ubase_cmd_mbx_event_cb` 回调函数及相关 notifier 注册逻辑，直接在 `ubase_async_event_handler` 中调用 `ubase_mbx_complete` 完成事件处理。
+3. 调整 `UBASE_CMDQ_MBX_TX_TIMEOUT` 宏定义的值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f01fda47ac46945499ef4c7794b11275ab7e79ac

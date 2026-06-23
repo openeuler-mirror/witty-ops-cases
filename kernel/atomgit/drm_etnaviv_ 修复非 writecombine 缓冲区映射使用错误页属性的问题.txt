@@ -1,0 +1,24 @@
+#标题
+drm/etnaviv: 修复非 writecombine 缓冲区映射使用错误页属性的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 etnaviv GPU 驱动中调用 `etnaviv_gem_vmap_impl` 函数对缓冲区进行映射时，对于 Cached（缓存）和 Uncached（非缓存）类型的缓冲区，错误地统一使用了 writecombine (WC) 的页属性进行映射。这导致 CPU 对内存的访问行为与缓冲区定义的属性不一致，可能引发数据不一致、显存数据损坏或显示异常等问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `etnaviv_gem_vmap_impl` 函数中，代码逻辑直接调用 `pgprot_writecombine(PAGE_KERNEL)` 对所有类型的缓冲区进行 vmap 映射，忽略了缓冲区对象自身的 `flags` 标志位。根据定义，Cached 缓冲区应使用 cached 页属性，Uncached 缓冲区应使用 noncached 页属性，只有 WC 缓冲区才应使用 writecombine 页属性。原有代码强行对所有缓冲区使用 WC 属性，破坏了非 WC 缓冲区的内存属性约定。
+
+#解决方案
+修改 `etnaviv_gem_vmap_impl` 函数，在调用 `vmap` 前根据对象标志位 `obj->flags` 与 `ETNA_BO_CACHE_MASK` 的掩码值进行判断，分别设置正确的页属性（pgprot_t）：
+1. 若为 `ETNA_BO_CACHED`，使用 `PAGE_KERNEL` 属性；
+2. 若为 `ETNA_BO_UNCACHED`，使用 `pgprot_noncached(PAGE_KERNEL)` 属性；
+3. 若为 `ETNA_BO_WC` 或其他默认情况，使用 `pgprot_writecombine(PAGE_KERNEL)` 属性。
+以此确保内存映射属性与缓冲区类型相匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a77a4f77a81c80f6bdff2618fdb0d0fc3bf6d0a3

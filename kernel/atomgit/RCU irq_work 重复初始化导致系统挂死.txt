@@ -1,0 +1,29 @@
+#标题
+RCU irq_work 重复初始化导致系统挂死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在不支持 self-IPIs 的架构上（irq work 处于 lazy 模式），当 RCU 读临界区解锁（rcu_read_unlock）在 IRQs 禁用状态下发生且涉及被阻塞任务时，可能导致系统挂起。具体表现为 RCU 相关的 irq_work 在触发时陷入循环，导致内核 hang 住。
+
+#主要错误日志
+未知
+
+#问题根因
+RCU 在尝试排队 deferred QS irq work 之前，每次都会重新初始化该 irq work。但在某些场景下，irq work 可能已经被排队但尚未执行，此时对其重新初始化（特别是清除其 node 节点）会破坏即将处理的 irq work 队列。
+具体触发流程如下：
+1. IRQs 禁用状态下调用 rcu_read_unlock()，初始化并排队 irq work。
+2. 相关任务解除阻塞，CPU quiescent state 被上报，rdp->defer_qs_iw_pending 重置为 DEFER_QS_IDLE（允许未来重新排队），但之前的 irq work 尚未触发。
+3. 新的宽限期开始且有阻塞任务。
+4. IRQs 再次禁用状态下调用 rcu_read_unlock()，对已排队的 irq work 进行重新初始化并再次排队。此时因为之前的 work 已在队列中，重新初始化导致其被排队到自身（requeued to itself）。
+5. irq work 最终由 tick 触发，但因被重新排队到自身而导致循环挂起。
+
+#解决方案
+将 deferred QS irq work 的初始化逻辑从每次排队前移动到 CPU 启动前的准备阶段，确保其仅初始化一次，避免在已排队状态下错误修改 irq work 状态。具体修改包括：
+1. 新增函数 `rcu_preempt_deferred_qs_init` 用于初始化 `rdp->defer_qs_iw`。
+2. 在 `rcutree_prepare_cpu` 中调用该初始化函数。
+3. 移除 `rcu_read_unlock_special` 函数中对 `rdp->defer_qs_iw` 的重复初始化代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/37589bcfc1eede29536378999a2a33328d6ae1b5

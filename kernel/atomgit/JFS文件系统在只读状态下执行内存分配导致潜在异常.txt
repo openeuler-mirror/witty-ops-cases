@@ -1,0 +1,20 @@
+#标题
+JFS文件系统在只读状态下执行内存分配导致潜在异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当JFS文件系统处于只读模式时，若调用extAlloc或extRecord函数进行内存分配或记录操作，系统未能正确拦截该请求，可能导致进一步的数据操作异常或内核状态不一致。修复补丁增加了只读检查，若发现违规操作将触发文件系统错误处理流程。
+
+#主要错误日志
+jfs_error(ip->i_sb, "read-only filesystem\n");
+
+#问题根因
+JFS文件系统的extAlloc和extRecord函数在进行事务处理前，未对文件系统是否为只读状态进行检查。这导致在文件系统已标记为只读的情况下，仍然尝试进行空间分配或记录修改操作，违反了只读文件系统的数据完整性约束。
+
+#解决方案
+在fs/jfs/jfs_extent.c文件的extAlloc和extRecord函数入口处，增加对isReadOnly(ip)的条件检查。如果检测到文件系统为只读状态，立即调用jfs_error报告错误并返回-EIO，从而阻止后续的事务处理操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/97c57c6aefd0c6b29ecf2f1cdaaf678881336cfd

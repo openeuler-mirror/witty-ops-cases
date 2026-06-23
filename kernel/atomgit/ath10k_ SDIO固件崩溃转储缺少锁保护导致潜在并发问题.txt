@@ -1,0 +1,22 @@
+#标题
+ath10k: SDIO固件崩溃转储缺少锁保护导致潜在并发问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ath10k SDIO 驱动处理固件崩溃转储（fw_crashed_dump）时，由于缺少必要的锁保护机制，可能导致内核出现锁断言失败。具体表现为 `ath10k_coredump_new()` 函数内部的 `lockdep_assert_held()` 检查失败。同时，在并发环境下对 `fw_crash_counter` 进行无锁修改可能导致计数器数据竞争。
+
+#主要错误日志
+未知
+
+#问题根因
+`ath10k_sdio_fw_crashed_dump()` 函数在调用 `ath10k_coredump_new()` 前未持有 `ar->dump_mutex` 互斥锁，而该函数内部通过 `lockdep_assert_held()` 明确要求必须持有此锁。此外，代码中对 `ar->stats.fw_crash_counter` 的修改违反了 core.h 中的文档约定，该变量本应由 `ar->data_lock` 自旋锁保护，但 SDIO 实现中并未持有该锁。相比之下，PCI 和 SNOC 的实现均正确使用了相应的锁机制。
+
+#解决方案
+参照 `ath10k_pci_fw_dump_work()` 和 `ath10k_snoc_fw_crashed_dump()` 的实现模式，补充缺失的锁保护：
+1. 在调用 coredump 相关操作前增加 `mutex_lock(&ar->dump_mutex)`，操作结束后调用 `mutex_unlock(&ar->dump_mutex)`。
+2. 在修改 `ar->stats.fw_crash_counter` 前后，分别增加 `spin_lock_bh(&ar->data_lock)` 和 `spin_unlock_bh(&ar->data_lock)` 保护。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d376c794db830f56715c30f7278d3e74a7744f0c

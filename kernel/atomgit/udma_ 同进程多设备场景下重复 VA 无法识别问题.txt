@@ -1,0 +1,29 @@
+#标题
+udma: 同进程多设备场景下重复 VA 无法识别问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在同一进程中，当不同的设备使用相同的虚拟地址（VA）注册内存段时，系统无法正确识别该 VA 已被注册，导致地址映射管理混乱。此外，在进行设备移除（removal）操作时，由于管理结构作用域错误，可能导致资源释放异常或内存泄漏。
+
+#主要错误日志
+- "failed to alloc separate pages USVA device.\n"
+- "failed to init segment_range.\n"
+- "failed to store segment_range, ret=%d.\n"
+- "the mv_start and/or mv_end of VMA was modified.\n"
+- "IOMMU segment failed, ret = %d.\n"
+
+#问题根因
+问题根本原因在于 `seg_tree_table` 和 `seg_tree_mutex` 的作用域定义错误。
+原代码将这两个管理结构定义在 `udma_dev` 设备结构体中，导致每个设备独立维护一份段树表。当同一进程中的不同设备使用相同的 VA 注册时，无法跨设备查重；且在设备级移除模块时，无法感知进程级别的全局 VA 注册情况。
+同时，`udma_jfc.c` 中的锁操作使用了 `xa_lock` 而非 `xa_lock_irqsave`，在特定上下文可能导致并发安全问题。
+
+#解决方案
+1. **全局化段树管理**：将 `seg_tree_table` 和 `seg_tree_mutex` 从设备级结构体 `udma_dev` 移至全局变量，确保同一进程内所有设备共享同一份段树表，从而支持跨设备的 VA 重复识别。
+2. **修正锁机制**：在 `udma_jfc.c` 的相关函数中，将 `xa_lock` 替换为 `xa_lock_irqsave`，将 `xa_unlock` 替换为 `xa_unlock_irqrestore`，以避免在中断上下文或并发场景下发生死锁或竞态条件。
+3. **修复资源销毁逻辑**：调整 `udma_destroy_seg_tree_table` 接口，移除设备参数，统一处理全局段树表的销毁；修正 `udma_alloc_ucontext` 失败路径，补充调用 `udma_unset_dtu_va_info` 确保资源清理完整。
+4. **日志级别调整**：将 VMA 修改的提示日志从 `dev_err` 调整为 `dev_info_ratelimited`，避免误报错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/12ca6f702eadce46b09b33720e8b069181ae4b18

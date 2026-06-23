@@ -1,0 +1,20 @@
+#标题
+uacce 注册失败清理路径导致系统挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `uacce_register` 函数中的 `cdev_device_add` 调用失败时，后续的清理流程（如 `uacce_remove`）会尝试删除一个已经被内核内部释放的 cdev，导致系统出现挂起错误。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，`cdev_device_add` 函数在执行失败时会内部释放 cdev 内存。然而，现有的代码逻辑未检查其返回值，导致在后续清理路径（如调用 `uacce_remove` 时）仍会执行 `cdev_device_del`。这相当于对一个已被释放的 cdev 指针进行操作，从而引发挂起错误。
+
+#解决方案
+在 `uacce_register` 函数中检查 `cdev_device_add` 的返回值。如果调用失败，将 `uacce->cdev` 设置为 NULL，以此防止在后续卸载流程中调用 `cdev_device_del`，避免对已释放内存进行操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8aa5ac60c5594cd7bf85dea3033c778df938efed

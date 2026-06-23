@@ -1,0 +1,37 @@
+#标题
+IIO st_sensors 驱动使用未初始化设备结构体导致内核崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载或运行 ST Sensors 系列 IIO 驱动（如加速度计）时，由于代码引用了尚未初始化的 `indio_dev->dev` 结构体成员，可能导致内核崩溃、空指针引用或驱动初始化失败。具体表现为：
+1. 驱动探测过程中触发内核 Oops 或 Panic。
+2. 驱动绑定失败，设备无法正常工作。
+3. 涉及 ACPI 配置、电源管理、中断触发配置或设备 ID 校验的场景下更容易触发。
+
+#主要错误日志
+由于是结构性代码缺陷，若触发崩溃可能会看到 Unable to handle kernel NULL pointer dereference 等通用错误。部分报错打印上下文如下：
+- dev_err: "failed to set new fullscale.\n"
+- dev_err_probe: "unable to enable supplies\n"
+- dev_err: "DRDY on INT1 not available.\n"
+- dev_err: "DRDY on INT2 not available.\n"
+- dev_err: "DRDY on pdata not valid.\n"
+- dev_err: "failed to read Who-Am-I register.\n"
+- dev_err: "%s: WhoAmI mismatch (0x%x).\n"
+- dev_err: "failed to allocate iio trigger.\n"
+- dev_err: "failed to request trigger IRQ.\n"
+- dev_err: "failed to register iio trigger.\n"
+- dev_warn: "failed to execute _ONT: %d\n"
+
+#问题根因
+在 IIO 子系统驱动代码中，`struct iio_dev` 类型的 `indio_dev` 指针虽然已分配，但其内嵌的 `dev` 结构体（`indio_dev->dev`）在驱动探测的特定阶段尚未初始化。代码中多处直接引用 `&indio_dev->dev` 作为参数传递给 `dev_err`、`dev_info` 等函数，导致访问了未初始化的设备结构体。正确的做法是使用其父设备指针 `indio_dev->dev.parent`（通常对应物理设备如 `i2c_client` 或 `spi_device`），该指针在此时已经有效。
+
+#解决方案
+将所有涉及 `&indio_dev->dev` 的调用修改为使用 `indio_dev->dev.parent`。具体修改包括：
+1. 在相关函数入口处定义局部变量 `struct device *parent = indio_dev->dev.parent;`。
+2. 将 `dev_err(&indio_dev->dev, ...)`、`dev_info(&indio_dev->dev, ...)` 等调用统一替换为 `dev_err(parent, ...)` 或 `dev_info(parent, ...)`。
+3. 涉及文件包括 `drivers/iio/accel/st_accel_core.c`、`drivers/iio/common/st_sensors/st_sensors_core.c` 和 `drivers/iio/common/st_sensors/st_sensors_trigger.c`，确保在 `apply_acpi_orientation`、`st_sensors_power_enable`、`st_sensors_init_sensor`、`st_sensors_verify_id` 及 `st_sensors_allocate_trigger` 等函数中使用正确的父设备指针进行日志打印和资源管理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1b4ebaea0b7961a6688774d80a2825de4ebdf891

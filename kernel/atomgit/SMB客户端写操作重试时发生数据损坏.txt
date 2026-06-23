@@ -1,0 +1,20 @@
+#标题
+SMB客户端写操作重试时发生数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 SMB 协议进行写入操作时，若连接不稳定导致重试，数据会发生损坏。该问题主要影响 SFU mknod、MF symlinks 等功能；在 6.10 之前的内核版本中，同步写入路径也会受此影响，导致写入服务器的数据被错误加密覆盖。
+
+#主要错误日志
+未知
+
+#问题根因
+SMB2_write() 将写入负载放在 iov[1..n] 中作为 rq_iov 的一部分。smb3_init_transform_rq() 对 rq_iov 进行指针共享，导致 crypt_message() 对 iov[1] 进行原位加密，将原始明文替换为密文。当发生可重试错误时，重试逻辑发送相同的 iov[1]，但此时其内容已是密文而非原始数据，从而导致数据损坏。
+
+#解决方案
+将写入负载从 rq_iov 移动到 rq_iter 中。通过调用 iov_iter_kvec() 初始化 rq_iter，使 smb3_init_transform_rq() 在加密前对数据进行深拷贝，从而避免原位加密覆盖原始数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e756b89b65940c1ea62e1bdd637ffd8795ade93b

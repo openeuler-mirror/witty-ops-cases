@@ -1,0 +1,20 @@
+#标题
+obmm 模块 unexport 与 addr_query_by_pa 竞争条件导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `obmm_query_by_pa` 函数遍历内存区域时，若该区域正在被取消导出（unexport），可能会访问到处于不一致状态的区域，导致已释放的 `sgt` 结构体被访问，引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`obmm_query_by_pa` 在遍历区域链表时，未增加对应区域的引用计数。若此时该区域正在被取消导出（unexport），该区域可能处于不一致状态，导致代码访问了已被释放的 `sgt` 结构体，造成 Use-After-Free 风险。
+
+#解决方案
+在 `obmm_query_by_pa` 函数遍历链表过程中，增加引用计数保护。具体修改为：在访问区域前调用 `try_get_obmm_region(region)` 尝试获取引用，若获取失败则跳过该区域；访问结束后调用 `put_obmm_region(region)` 释放引用。这确保了在处理该区域期间，其内存不会被提前释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b4c1dac0f739d5cfc9e145cb9640a18e12e3e531

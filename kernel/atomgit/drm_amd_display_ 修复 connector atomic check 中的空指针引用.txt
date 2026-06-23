@@ -1,0 +1,20 @@
+#标题
+drm/amd/display: 修复 connector atomic check 中的空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD 显示驱动进行 connector 状态原子检查（atomic check）时，若 `drm_atomic_get_old_connector_state` 或 `drm_atomic_get_new_connector_state` 返回 NULL，内核将发生空指针引用，导致系统崩溃或异常。
+
+#主要错误日志
+[ WARN_ON: unlikely(!old_con_state || !new_con_state) ]
+
+#问题根因
+函数 `amdgpu_dm_connector_atomic_check` 在使用 `old_con_state` 和 `new_con_state` 指针前未进行有效性检查。虽然概率较低，但 `drm_atomic_get_old_connector_state()` 或 `drm_atomic_get_new_connector_state()` 在某些异常路径下可能返回 NULL，直接解引用这些指针导致了 NULL pointer dereference。
+
+#解决方案
+在 `amdgpu_dm_connector_atomic_check` 函数中增加防御性检查。在使用状态指针前，通过 `WARN_ON` 检测 `old_con_state` 和 `new_con_state` 是否为 NULL，若为 NULL 则直接返回 `-EINVAL` 错误码，避免后续解引用操作导致崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a1e544bcad69bda36abea0981a28baed1a3177a4

@@ -1,0 +1,23 @@
+#标题
+net: txgbe: 25G链路状态异常及多速率SFP端口速率设置失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在进行双速率切换时，切换到 RS FEC（Reed-Solomon 前向纠错）模式过程中未等待链路稳定，导致无法重新 link 回 25G 速率，出现链路中断或无法建链的问题。
+2. 在多速率 SFP 模块场景下，执行 `ethtool -s ethx speed maxspeed duplex full autoneg off` 设置并 down/up 端口后，再次执行设置命令无法改变端口速率。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **25G 链路问题**：在进行双速率切换并切换到 RS FEC 模式时，代码逻辑中存在提前退出的判断（`if (j == 3) break;`），导致未等待链路重建完成即退出了轮询流程，从而引发链路无法恢复。
+2. **端口速率设置问题**：在端口 up 时，`phy.autoneg_advertised` 被重新初始化为默认的全速率，但 `adapter->autoneg` 未同步更新。由于 `autoneg` 变量未被正确赋值，导致后续无法正确设置端口速率。
+
+#解决方案
+1. **修复链路切换**：删除 `txgbe_e56_fec_mode_polling` 函数中 `if (j == 3) break;` 的逻辑，确保在切换到 RS FEC 模式时能够继续等待，直到链路状态确定。
+2. **修复速率设置**：在 `txgbe_sfp_link_config_subtask` 函数中添加 `adapter->autoneg = autoneg;` 赋值语句，确保在端口配置过程中 `autoneg` 状态被正确记录和更新，从而允许后续正确修改端口速率。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ab9b3e196e587b72f690e25fbf3a91d91cd9a7b

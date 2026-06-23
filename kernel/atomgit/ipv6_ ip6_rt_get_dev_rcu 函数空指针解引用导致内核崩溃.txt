@@ -1,0 +1,26 @@
+#标题
+ipv6: ip6_rt_get_dev_rcu 函数空指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当设备从 VRF（Virtual Routing and Forwarding）中移除（un-slaved）时，内核在处理 IPv6 路由查找过程中触发空指针解引用，导致 KASAN 报告并引发内核崩溃。
+
+#主要错误日志
+KASAN: null-ptr-deref in range [0x0000000000000108-0x000000000000010f]
+RIP: 0010:ip6_rt_pcpu_alloc (net/ipv6/route.c:1418)
+Call Trace:
+ ip6_pol_route (net/ipv6/route.c:2318)
+ fib6_rule_lookup (net/ipv6/fib6_rules.c:115)
+ ip6_route_output_flags (net/ipv6/route.c:2607)
+ vrf_process_v6_outbound (drivers/net/vrf.c:437)
+
+#问题根因
+在函数 `ip6_rt_get_dev_rcu` 中，调用 `l3mdev_master_dev_rcu(dev)` 获取主设备时，若设备正从 VRF 移除，该函数可能返回 NULL。之前的代码逻辑未处理该返回值为 NULL 的情况，导致后续直接对该指针进行解引用操作引发崩溃。
+
+#解决方案
+在 `ip6_rt_get_dev_rcu` 函数中增加对 `l3mdev_master_dev_rcu` 返回值的判断，若返回 NULL，则回退使用 `loopback_dev`，以此避免空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ea0fc81a30ffa7b5d8cce7b6c1c45503037b2f0c

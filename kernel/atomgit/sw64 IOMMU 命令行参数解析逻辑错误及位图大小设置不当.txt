@@ -1,0 +1,23 @@
+#标题
+sw64 IOMMU 命令行参数解析逻辑错误及位图大小设置不当
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 申威架构（sw64）内核启动时，若通过命令行参数传入非 "on"/"off" 的自定义 IOMMU 配置值（如十六进制掩码），内核无法正确解析该参数，导致参数失效。
+2. 在 iommu_v1 版本实现中，IOMMU 位图大小被错误地设置为 64 位，可能导致内存访问越界或配置状态异常。
+
+#主要错误日志
+iommu_enable= deprecated; use sunway_iommu=on/off instead.
+
+#问题根因
+1. **参数解析逻辑反转**：在 `sunway_iommu_setup` 和 `iommu_enable_setup` 函数中，对 `kstrtoul` 返回值的判断逻辑存在错误。代码写为 `if (!ret) return -EINVAL;`，导致当 `kstrtoul` 成功解析（返回 0）时，函数反而返回无效错误码并终止处理；只有在解析失败时才继续执行后续逻辑。
+2. **数据结构尺寸错误**：在 `drivers/iommu/sw64/iommu.c`（v1 版本）中，`bitmap_zero` 和 `bitmap_fill` 操作的位图大小被硬编码为 64，而根据修复补丁，v1 版本正确的大小应为 32。
+
+#解决方案
+1. 修正 `kstrtoul` 返回值判断逻辑，改为 `if (ret) return ret;`，确保仅在字符串转换失败时返回错误，转换成功时继续执行后续赋值操作。
+2. 将 `drivers/iommu/sw64/iommu.c` 中所有涉及 `iommu_bitmap` 操作的位图大小参数从 64 修正为 32，以匹配 v1 版本的实际定义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e14d7051e5392e2071226f611c7fb89e45692699

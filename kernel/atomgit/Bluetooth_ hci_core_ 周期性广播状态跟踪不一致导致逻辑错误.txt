@@ -1,0 +1,20 @@
+#标题
+Bluetooth: hci_core: 周期性广播状态跟踪不一致导致逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当广播集被禁用时，其 `enabled` 标志被设为 false，由于该标志被错误地复用于跟踪周期性广播，导致周期性广播的状态记录与实际硬件状态不一致。这会导致后续试图禁用或启用周期性广播时，内核误判其当前状态，可能导致周期性广播无法正常开启或关闭，影响蓝牙 BIS（Broadcast Isochronous Stream）连接功能。
+
+#主要错误日志
+未知
+
+#问题根因
+内核使用 `adv->enabled` 标志同时跟踪扩展广播和周期性广播的使能状态。由于广播和周期性广播可以被独立地开启或关闭，当禁用广播集时，`adv->enabled` 被置为 false，这错误地覆盖了周期性广播的开启状态（如果它当时是开启的），导致状态跟踪不一致。
+
+#解决方案
+在 `struct adv_info` 结构体中引入独立的 `periodic_enabled` 布尔字段，专门用于跟踪周期性广播的使能状态。修改 `hci_cc_le_set_ext_adv_enable` 和 `hci_cc_le_set_per_adv_enable` 等相关事件处理函数及同步逻辑，使其分别操作 `enabled` 和 `periodic_enabled` 标志，从而解耦两种广播模式的状态管理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/209d4f8d592da5d5c200dc894fc964037ec499ae

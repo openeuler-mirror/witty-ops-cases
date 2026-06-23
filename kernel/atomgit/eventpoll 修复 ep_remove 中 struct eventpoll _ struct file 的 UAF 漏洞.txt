@@ -1,0 +1,25 @@
+#标题
+eventpoll 修复 ep_remove 中 struct eventpoll / struct file 的 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 epoll 监视 epoll 的场景下（epoll-watches-epoll），并发执行 `ep_remove` 和 `__fput` 时，可能触发内核内存破坏。具体表现为：
+1. 释放后使用（UAF）：`hlist_del_rcu()` 写入已被释放的 `kmalloc-192` 内存区域。
+2. 内存释放不当：由于 `struct file` 是 `SLAB_TYPESAFE_BY_RCU`，可能导致在错误的 slab cache 上执行 `kmem_cache_free`，引发内核崩溃或潜在的安全利用风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ep_remove()` 函数（通过 `ep_remove_file()`）中，代码在持有 `file->f_lock` 的情况下清除了 `file->f_ep`，但随后仍在临界区内继续使用 `@file` 指针（调用 `is_file_epoll()`, `hlist_del_rcu()` 等）。
+此时，并发的 `__fput()` 若通过 `eventpoll_release()` 快速路径观察到瞬态的 `NULL` 值，会跳过 `eventpoll_release_file()` 并继续执行 `f_op->release` 和 `file_free()`。
+对于 epoll 监视 epoll 的场景，这会导致被监视的 `struct eventpoll` 被释放，而随后的 `hlist_del_rcu()` 操作会向已释放的内存写入数据。此外，由于 `struct file` 的 RCU 特性，`@file` 对应的内存 slab 可能被回收并重新初始化，导致锁操作混乱和错误的内存释放。
+
+#解决方案
+在 `ep_remove_safe()` 函数入口处通过 `epi_fget()` 对 `@file` 进行引用计数固定，只有成功获取引用才进入临界区。
+通过持有 `@file` 的引用，阻止 `__fput()` 将引用计数降为零，从而延迟 `file_free()` 的发生，确保在 `hlist_del_rcu()` 和 `f_lock` 使用期间，被监视的 `struct eventpoll` 保持存活，从而关闭了 UAF 漏洞。若引用获取失败，说明 `__fput()` 已在进行中，此时直接退出，由 `eventpoll_release_file()` 慢速路径处理清理工作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d2eabd0a3c8c0699d6277bc28b8f3dd4950eba76

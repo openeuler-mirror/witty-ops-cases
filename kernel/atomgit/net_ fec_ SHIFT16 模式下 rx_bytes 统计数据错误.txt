@@ -1,0 +1,20 @@
+#标题
+net: fec: SHIFT16 模式下 rx_bytes 统计数据错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 FEC 网络控制器启用 SHIFT16 功能时，驱动程序统计的接收字节总数（rx_bytes）比实际接收到的数据帧字节数多。这导致网络接口的流量统计信息不准确，影响监控与计费等依赖流量统计的功能。
+
+#主要错误日志
+未知
+
+#问题根因
+当硬件配置了 SHIFT16 标志位时，接收 FIFO 中的每一帧数据前面会额外包含 2 个字节。在驱动代码 `fec_enet_rx_queue` 函数中，直接使用 `cbd_datlen` 赋值给 `pkt_len` 并累加到 `ndev->stats.rx_bytes`，未去除这 2 个额外的字节，导致接收字节统计值偏大。
+
+#解决方案
+在统计接收字节的代码逻辑中增加判断：如果设备特性标志位包含 `FEC_QUIRK_HAS_RACC`（表示支持 RACC 寄存器及 SHIFT16 功能），则从统计值 `ndev->stats.rx_bytes` 中减去 2 个字节，以修正统计结果。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/620679c79d3b3c2bbb5ef224bd620581b34a5c88

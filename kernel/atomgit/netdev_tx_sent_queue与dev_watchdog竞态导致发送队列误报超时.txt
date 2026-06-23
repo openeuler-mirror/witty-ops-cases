@@ -1,0 +1,27 @@
+#标题
+netdev_tx_sent_queue与dev_watchdog竞态导致发送队列误报超时
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定工作负载下，即使驱动程序运行正常，内核日志中也可能出现 "NETDEV WATCHDOG: eth0 (xxxx): transmit queue XX timed out" 错误信息。该问题尤其容易发生在启用了 BQL（Byte Queue Limits）的驱动程序中，当 TX 队列空闲时间超过 watchdog_timeo（通常为 5 秒）后发送大包时触发。
+
+#主要错误日志
+"NETDEV WATCHDOG: eth0 (xxxx): transmit queue XX timed out"
+
+#问题根因
+问题源于 `netdev_tx_sent_queue()` 与 `dev_watchdog()` 之间存在竞态条件。具体流程如下：
+1. `netdev_tx_sent_queue()` 调用 `set_bit()` 设置 `QUEUE_STATE_STACK_XOFF` 状态位。
+2. 此时 `dev_watchdog()` 在另一个 CPU 上运行，先读取了旧的 `txq->trans_start` 时间戳。
+3. 随后 `dev_watchdog()` 看到 `QUEUE_STATE_STACK_XOFF` 已被置位。
+4. 由于此时 `netdev_start_xmit()` 尚未更新 `txq->trans_start`（或更新动作被乱序执行），`dev_watchdog()` 判断时间差超时，从而错误地触发 watchdog 超时机制。
+根本原因是缺少内存屏障，导致状态位的设置与时间戳的更新顺序在多核环境下不可控。
+
+#解决方案
+通过在相关函数中添加内存屏障来强制执行正确的读写顺序：
+1. 在 `netif_tx_stop_queue()` 和 `netdev_tx_sent_queue()` 中，在设置 XOFF 状态位之前，先使用 `WRITE_ONCE` 写入 `trans_start` 时间戳，并调用 `smp_mb__before_atomic()` 确保写入操作在状态位设置前完成。
+2. 在 `dev_watchdog()` 中，先检查队列状态，随后调用 `smp_mb()`，再使用 `READ_ONCE` 读取 `trans_start` 时间戳，确保读取到的是状态位设置后的最新时间戳。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5c3f3ba5f59d55aadfc8e754bad60c9c6260bc6c

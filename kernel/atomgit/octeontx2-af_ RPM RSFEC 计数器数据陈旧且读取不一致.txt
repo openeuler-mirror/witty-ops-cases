@@ -1,0 +1,23 @@
+#标题
+octeontx2-af: RPM RSFEC 计数器数据陈旧且读取不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Marvell octeontx2 网卡驱动中，读取 RSFEC（Reed-Solomon Forward Error Correction）统计计数器时，返回的数据为陈旧数据，未能反映当前真实的 FEC 统计信息。此外，由于寄存器操作缺乏锁保护，在并发读取场景下可能导致数据读取不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+该故障由两个原因共同导致：
+1. **寄存器地址错误**：代码在配置 RSFEC 统计控制及读取数据时，错误地使用了通用的 RPMX_MTI_STAT_STATN_CONTROL 和 RPMX_MTI_STAT_DATA_HI_CDC 寄存器，而未使用 RSFEC 专用的寄存器（如 RPMX_MTI_RSFEC_STAT_STATN_CONTROL 和 RPMX_MTI_RSFEC_STAT_FAST_DATA_HI_CDC），导致硬件统计功能未正确生效，返回陈旧计数。
+2. **并发访问缺陷**：RSFEC 的高位数据寄存器是所有计数器共用的锁存寄存器，读取过程需要多次寄存器访问。原代码未获取互斥锁（mutex），在并发读取时可能导致读取到不一致的高低位数据。
+
+#解决方案
+1. **修正寄存器定义与引用**：在 `rpm.h` 中添加正确的 RSFEC 统计寄存器宏定义，并在 `rpm.c` 的 `rpm_get_fec_stats` 函数中将错误的寄存器读写操作替换为正确的 RSFEC 专用寄存器地址。
+2. **增加并发锁保护**：在读取 FEC 统计信息前获取 mutex 锁（`rpm->lock`），确保读取高位锁存数据的过程是原子的，防止并发访问导致的数据错乱。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6157f9bb8580f1cb572db7a65e2589fce80d04a8

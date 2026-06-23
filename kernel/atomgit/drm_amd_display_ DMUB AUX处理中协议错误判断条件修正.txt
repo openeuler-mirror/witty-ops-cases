@@ -1,0 +1,20 @@
+#标题
+drm/amd/display: DMUB AUX处理中协议错误判断条件修正
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD 显示驱动处理 DMUB（Display Microcontroller Unit）AUX（AUXiliary）传输同步过程中，当底层返回 `AUX_RET_ERROR_PROTOCOL_ERROR` 错误码时，驱动程序未能按预期忽略该错误，反而错误地触发了警告日志。这可能导致在 DP（DisplayPort）隧道功能启用前的瞬态过程中产生不必要的错误日志打印或非预期的错误处理流程。
+
+#主要错误日志
+DRM_WARN("DPIA AUX failed on 0x%x(%d), error %d\n", ...)
+
+#问题根因
+代码在检测 `AUX_RET_ERROR_PROTOCOL_ERROR` 返回结果时，判断条件逻辑书写错误。原代码使用了“不等于”（`!=`）进行判断，而根据设计意图，在隧道功能启用前的瞬态过程中该错误是可以忽略的，正确的逻辑应该是当结果“等于”（`==`）该错误码时不进行告警。这导致了除该错误码以外的其他情况（包括正常情况或其他错误）反而触发了告警，而该忽略的特定错误却没有被正确忽略。
+
+#解决方案
+修正 `amdgpu_dm_process_dmub_aux_transfer_sync` 函数中的条件判断逻辑，将判断条件从 `p_notify->result != AUX_RET_ERROR_PROTOCOL_ERROR` 修改为 `p_notify->result == AUX_RET_ERROR_PROTOCOL_ERROR`。这确保了仅在确实发生协议错误时符合忽略逻辑（或避免错误日志打印），恢复了原本设计的控制流。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2725ba33711d830af92ce8937597e92f3fc4ebee

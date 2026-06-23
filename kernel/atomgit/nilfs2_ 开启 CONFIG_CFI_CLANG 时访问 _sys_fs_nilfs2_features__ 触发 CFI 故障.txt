@@ -1,0 +1,29 @@
+#标题
+nilfs2: 开启 CONFIG_CFI_CLANG 时访问 /sys/fs/nilfs2/features/* 触发 CFI 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核开启 CONFIG_CFI_CLANG 选项时，访问 `/sys/fs/nilfs2/features/` 目录下的文件（如 revision 或 README）会触发 CFI（Control Flow Integrity）校验失败，导致内核报错并打印调用栈。
+
+#主要错误日志
+CFI failure at kobj_attr_show+0x59/0x80 (target: nilfs_feature_revision_show+0x0/0x30; expected type: 0xfc392c4d)
+...
+Call Trace:
+ <TASK>
+ sysfs_kf_seq_show+0x2a6/0x390
+ ? __cfi_kobj_attr_show+0x10/0x10
+ kernfs_seq_show+0x104/0x15b
+ seq_read_iter+0x580/0xe2b
+...
+
+#问题根因
+在 nilfs2 文件系统初始化 sysfs 接口时，`/sys/fs/nilfs2` 对应的 kobject 使用了 `kset_ktype`，其 `sysfs_ops` 定义为 `kobj_sysfs_ops`。当通过 `sysfs_create_group()` 创建 features 属性组时，内核会将属性回调函数强制转换为 `struct kobj_attribute` 类型并调用。
+然而，`nilfs_feature_revision_show()` 和 `nilfs_feature_README_show()` 函数的第二个参数定义为 `struct attribute *`，这与 `kobj_sysfs_ops` 期望的 `struct kobj_attribute *` 类型不匹配。在开启 CFI 检查时，这种类型不匹配导致了控制流完整性校验失败。
+
+#解决方案
+修改 `nilfs_feature_revision_show()` 和 `nilfs_feature_README_show()` 函数的签名，将第二个参数类型由 `struct attribute *` 更正为 `struct kobj_attribute *`，以符合 `kobj_sysfs_ops` 的调用约定。同时，更新宏定义 `NILFS_COMMON_ATTR_STRUCT` 为 `NILFS_KOBJ_ATTR_STRUCT` 以适配正确的函数指针类型。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e0b7c1c92d040d425385d86a537f56068eb19cd1

@@ -1,0 +1,30 @@
+#标题
+clk: qcom: dispcc-sm6350 调用 clk_set_rate 触发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SM6350 平台上操作显示时钟时，如果 `clk_rcg2` 类型的时钟定义了 `parent_data` 但未定义 `parent_map`，当用户空间或驱动调用 `clk_set_rate` 设置频率时，内核会发生 NULL Pointer Dereference（空指针引用）崩溃，导致系统启动或运行过程中出现 Panic。
+
+#主要错误日志
+[    3.388105] Call trace:
+[    3.390664]  qcom_find_src_index+0x3c/0x70 (P)
+[    3.395301]  qcom_find_src_index+0x1c/0x70 (L)
+[    3.399934]  _freq_tbl_determine_rate+0x48/0x100
+[    3.404753]  clk_rcg2_determine_rate+0x1c/0x28
+[    3.409387]  clk_core_determine_round_nolock+0x58/0xe4
+[    3.421414]  clk_core_round_rate_nolock+0x48/0xfc
+[    3.432974]  clk_core_round_rate_nolock+0xd0/0xfc
+[    3.444483]  clk_core_set_rate_nolock+0x8c/0x300
+[    3.455886]  clk_set_rate+0x38/0x14c
+
+#问题根因
+驱动程序中 `disp_cc_mdss_dp_aux_clk_src` 时钟结构体定义不完整。
+根据 `clk_rcg2` 的实现逻辑，如果时钟拥有父时钟（parent），则必须同时定义 `parent_map` 属性。该故障中，代码仅定义了 `parent_data` 而遗漏了 `parent_map`。当调用 `clk_set_rate` 时，时钟框架内部的 `qcom_find_src_index` 函数会尝试访问 `parent_map` 指针以查找源索引，由于该指针为 NULL，导致解引用失败引发崩溃。
+
+#解决方案
+修改 `drivers/clk/qcom/dispcc-sm6350.c` 文件，为 `disp_cc_mdss_dp_aux_clk_src` 结构体补充缺失的 `parent_map` 属性（指向 `disp_cc_parent_map_6`）。同时，为了保持代码一致性，将原本内联定义的 `parent_data` 替换为预定义的 `disp_cc_parent_data_6` 数组，并修正 `num_parents` 的赋值方式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/42296edb72ff4b6a0434922001cd0d96aa0070d7

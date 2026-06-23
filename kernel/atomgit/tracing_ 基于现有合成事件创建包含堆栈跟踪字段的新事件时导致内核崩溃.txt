@@ -1,0 +1,32 @@
+#标题
+tracing: 基于现有合成事件创建包含堆栈跟踪字段的新事件时导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户基于一个已存在的、包含堆栈跟踪字段的合成事件创建新的合成事件，并在新事件中使用该堆栈跟踪字段时，触发内核崩溃。
+复现步骤如下：
+1. 创建一个包含 `stack[]` 字段的合成事件 `stack`，并在 `sched_switch` 触发器中记录堆栈。
+2. 创建第二个合成事件 `syscall_stack`，其字段包含 `stack[]`，并在 `sys_exit` 触发器中引用第一个事件的堆栈字段。
+3. 启用新创建的合成事件 `syscall_stack`。
+结果：系统立即产生内核崩溃，显示 Oops 信息。
+
+#主要错误日志
+BUG: unable to handle page fault for address: 0000000000400010
+#PF: supervisor read access in kernel mode
+#PF: error_code(0x0000) - not-present page
+PGD 0 P4D 0
+Oops: Oops: 0000 [#1] SMP PTI
+RIP: 0010:trace_event_raw_event_synth+0x90/0x380
+
+#问题根因
+堆栈跟踪字段未被正确标记，导致在处理合成事件时被错误地当作普通字段处理。
+在函数 `trace_event_raw_event_synth()` 中，虽然该字段在定义时被视为动态数组，但在数据检索时被误判为普通字段，仅获取了元数据指针而非动态数组数据。随后的处理尝试将该元数据指针当作数据地址进行访问（`len = *((unsigned long *)str_val) + 1;`），导致访问非法地址引发内核缺页错误。
+
+#解决方案
+1. 在 `synth_event_define_fields()` 函数中，定义合成事件字段时，检测字段是否为堆栈类型（`is_stack`）。如果是，将其 `filter_type` 设置为 `FILTER_STACKTRACE`，否则设置为 `FILTER_OTHER`，确保堆栈字段带有正确的类型标记。
+2. 在 `create_hist_field()` 函数中，增加对 `filter_type == FILTER_STACKTRACE` 的判断分支。如果检测到该标记，设置 `HIST_FIELD_FL_STACKTRACE` 标志，并正确初始化字段大小与类型，使其在后续处理中被正确识别为堆栈跟踪字段而非普通字段。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d9d3557bf4898acc12b83edf1566c2892a732240

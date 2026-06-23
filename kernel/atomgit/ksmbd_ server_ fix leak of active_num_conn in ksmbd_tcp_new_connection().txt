@@ -1,0 +1,20 @@
+#标题
+ksmbd: server: fix leak of active_num_conn in ksmbd_tcp_new_connection()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd TCP 新建连接过程中，如果内核线程创建（kthread_run）失败，会导致系统中的 active_num_conn 计数器发生泄漏。该泄漏会导致连接计数不准确，可能影响服务器最大连接限制的管理逻辑。
+
+#主要错误日志
+pr_err("cannot start conn thread\n")
+
+#问题根因
+在函数 ksmbd_tcp_new_connection() 中，当 kthread_run() 执行失败时，代码流程调用 free_transport(t) 来释放传输对象。然而，free_transport() 函数并未对 active_num_conn 计数器进行减量操作，导致该计数器被错误地累加且未在故障路径中回退，从而引发计数泄漏。
+
+#解决方案
+在 kthread_run() 失败的错误处理路径中，将 free_transport(t) 替换为 ksmbd_tcp_disconnect(KSMBD_TRANS(t))。ksmbd_tcp_disconnect() 函数内部包含了正确的计数器递减逻辑，能够确保在连接建立失败时正确维护 active_num_conn 的数值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4fa2b4ebc7996ec8d8f41d7635334e8ee2f2fd24

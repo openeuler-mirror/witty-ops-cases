@@ -1,0 +1,28 @@
+#标题
+XFS写回过程中因预留块计算错误触发BUG_ON导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行XFS文件系统写回操作时，触发内核BUG，导致系统崩溃。现场检测到内存数据损坏，并触发了断言失败。堆栈信息显示崩溃发生在`xfs_trans_unreserve_and_mod_sb`函数调用链中。
+
+#主要错误日志
+xfs_bmap_extents_to_btree: ip=0xffff888148ecad00  wasdel=0
+sde: writeback error on inode 68, offset 61440, sector 1400
+XFS (sde): Corruption of in-memory data (0x8) detected at xfs_trans_mod_sb+0xaa6/0xc60 (fs/xfs/xfs_trans.c:351).  Shutting.
+XFS (sde): Please unmount the filesystem and rectify the problem(s)
+XFS: Assertion failed: tp->t_blk_res || tp->t_fdblocks_delta >= 0, file: fs/xfs/xfs_trans.c, line: 610
+kernel BUG at fs/xfs/xfs_message.c:102!
+Oops: invalid opcode: 0000 [#1] SMP KASAN PTI
+
+#问题根因
+在碎片化严重的文件系统中，延迟分配转换过程可能需要在Extents和Btree格式之间反复转换或进行Btree分裂。
+原代码在`xfs_bmap_add_extent_delay_real`函数中计算剩余延迟块的`indlen`（间接块长度）时，使用了`XFS_FILBLKS_MIN`来限制预留值，这导致预留的空间仅基于当前剩余的`startblockval`减去已分配块。
+由于转换过程无法保证原子性，当预留块被提前耗尽时，后续的块分配操作会错误地从全局空闲块中扣减，导致`tp->t_blk_res_used`超过`tp->t_blk_res`，进而触发内存数据损坏检测、断言失败及内核BUG。
+
+#解决方案
+修改`fs/xfs/libxfs/xfs_bmap.c`中的`xfs_bmap_add_extent_delay_real`函数。在计算剩余延迟块的`indlen`时，移除`XFS_FILBLKS_MIN`的限制，直接使用`xfs_bmap_worst_indlen`计算出的最坏情况下的预留值。这确保了即使发生多次Btree分裂或格式转换，剩余的延迟_extent_也始终持有足够的空间预留，避免了透支全局块预留导致的崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e21459d8553298073af95d46b829872a0346e33

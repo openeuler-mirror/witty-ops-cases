@@ -1,0 +1,28 @@
+#标题
+hisi_qm FLR前错误报告禁用失效导致潜在故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行设备功能级重置（FLR）过程中，若设备存在错误并正在进行恢复，错误报告位可能会在禁用后被重新使能，导致禁用操作无效。此外，若设备缓存中残留数据未回写，可能导致数据不一致或重置异常。
+
+#主要错误日志
+- pci_err(pdev, "FLR not ready!\n");
+- pci_err(pdev, "the hardware error was not recovered!\n");
+- pci_err(pdev, "Failed to stop QM, ret = %d.\n", ret);
+- pci_err(pdev, "failed to stop by vfs in FLR!\n");
+- pci_info(pdev, "FLR resetting...\n");
+- pci_info(pdev, "FLR resetting prepare failed!\n");
+
+#问题根因
+FLR流程逻辑存在缺陷：驱动在重置前先禁用错误报告，随后等待重置完成。但在等待过程中，如果错误被恢复，错误位会被重新使能，导致之前的禁用操作失效。同时，原流程未在FLR前触发设备Cache回写内存，可能导致设备内部残留数据。
+
+#解决方案
+调整 `hisi_qm_reset_prepare` 函数的处理逻辑：
+1. 循环检测设备是否存在错误，仅在确认无错误（`qm_check_dev_error` 返回 false）的情况下才跳出循环并认为具备了禁用错误报告的条件，随后调用 `hisi_qm_dev_err_uninit` 禁用错误报告。
+2. 若检测到错误，清除复位位并睡眠等待恢复，超时则报错退出。
+3. 在执行 FLR 前（包括正常流程和异常退出流程）调用 `hisi_qm_cache_wb` 强制将设备 Cache 回写内存，防止数据丢失。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c9781f87fe6b71dcaa33401ad287d29726f80f00

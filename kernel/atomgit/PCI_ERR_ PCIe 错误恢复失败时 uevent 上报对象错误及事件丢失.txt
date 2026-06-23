@@ -1,0 +1,22 @@
+#标题
+PCI/ERR: PCIe 错误恢复失败时 uevent 上报对象错误及事件丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 PCIe 错误（AER、DPC 或 EDR 方式）恢复失败时，内核向用户空间发送的 uevent 存在两个问题：
+1. 上报对象错误：系统错误地向“桥设备本身”发送了断开连接（disconnect）的 uevent，而实际上桥设备并未断开，应当是向其“下级设备”发送 uevent。
+2. 事件丢失：如果下级设备中混合存在实现了 `pci_error_handlers` 和未实现的设备，系统仅向实现了处理程序的设备发送 `BEGIN_RECOVERY` 事件，但在恢复失败后，未向这些设备发送对应的 `FAILED_RECOVERY` 事件。
+
+#主要错误日志
+pci_info(bridge, "device recovery failed\n");
+
+#问题根因
+在 `pcie_do_recovery` 函数的错误处理流程（failed 标签）中，代码直接针对 `bridge` 调用 `pci_uevent_ers` 发送断开通知。这忽略了桥设备本身并未断开的事实，且未能遍历桥下的下级设备逐个发送通知。此外，该逻辑导致在混合设备场景下，恢复失败时缺少必要的事件通知闭环。
+
+#解决方案
+修改 `pcie_do_recovery` 中的错误处理逻辑，不再对桥设备直接调用 `pci_uevent_ers`，而是调用 `pci_walk_bridge` 遍历桥下的所有下级设备。对每个下级设备调用新引入的 `report_perm_failure_detected` 回调函数，该函数负责向具体的设备发送 `PCI_ERS_RESULT_DISCONNECT` 状态的 uevent，从而确保通知发送给正确的设备对象。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c3fc0e6b74c99305dff29522b524d56fa88f8a1

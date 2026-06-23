@@ -1,0 +1,34 @@
+#标题
+KASAN开启环境下 object_is_on_stack() 误报导致内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_KASAN_SW_TAGS 和 CONFIG_KASAN_STACK 配置时，内核启动过程中调用 `debug_object_init_on_stack` 会触发 ODEBUG 警告。系统抛出 WARNING 并打印调用栈，提示对象被标注为在栈上，但检测函数判定其不在栈上。
+
+#主要错误日志
+ODEBUG: object 3eff800082ea7bb0 is NOT on stack ffff800082ea0000, but annotated.
+------------[ cut here ]------------
+WARNING: CPU: 0 PID: 1 at lib/debugobjects.c:557 __debug_object_init+0x330/0x364
+...
+Call trace:
+ __debug_object_init+0x330/0x364
+ debug_object_init_on_stack+0x30/0x3c
+ schedule_hrtimeout_range_clock+0xac/0x26c
+ schedule_hrtimeout+0x1c/0x30
+ wait_task_inactive+0x1d4/0x25c
+ kthread_bind_mask+0x28/0x98
+ init_rescuer+0x1e8/0x280
+ workqueue_init+0x1a0/0x3cc
+ kernel_init_freeable+0x118/0x200
+...
+
+#问题根因
+当启用 CONFIG_KASAN_SW_TAGS 时，指针会被打上标签。函数 `object_is_on_stack()` 在比较时，传入的 `obj` 指针带有标签，而获取到的 `stack` 指针不包含标签。这种指针值的差异导致地址范围比较失败，函数错误地返回对象不在栈上，进而触发 DEBUG_OBJECTS 机制的警告。
+
+#解决方案
+在 `include/linux/sched/task_stack.h` 文件的 `object_is_on_stack()` 函数中，引入 `linux/kasan.h` 头文件，并在地址比较前使用 `kasan_reset_tag(obj)` 去除 `obj` 指针的 KASAN 标签，确保与 `stack` 指针比较时地址格式一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba786c34744ebc0e1a06d2b0f02d3d5e259af40b

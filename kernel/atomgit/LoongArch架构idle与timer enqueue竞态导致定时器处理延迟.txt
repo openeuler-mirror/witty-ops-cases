@@ -1,0 +1,20 @@
+#标题
+LoongArch架构idle与timer enqueue竞态导致定时器处理延迟
+
+#内核版本
+OLK-6.6
+
+#问题现象
+LoongArch架构在执行空闲循环（idle loop）时，中断处理程序将返回地址回滚至 `__arch_cpu_idle` 函数起始处，导致该函数仅重新检查 `TIF_NEED_RESCHED` 标志。若中断触发了定时器入队操作，由于不检查 pending timers，系统将直接再次执行空闲指令进入睡眠，导致新入队的定时器无法被及时处理或重新编程，造成定时器事件响应延迟或丢失。
+
+#主要错误日志
+未知
+
+#问题根因
+LoongArch 的 `__arch_cpu_idle` 实现中，中断处理逻辑存在缺陷。中断打断 `__arch_cpu_idle` 时，`handle_vint` 会将返回地址（ERA）回滚到 `__arch_cpu_idle` 的起始位置，意图重新检查 `TIF_NEED_RESCHED`。然而，空闲状态下触发的中断也可能入队定时器，这需要通过新一轮的通用空闲循环迭代来处理。由于回滚逻辑导致代码仅重复执行 `__arch_cpu_idle` 而不返回到通用空闲循环，系统无法感知并处理 pending timers。
+
+#解决方案
+修改中断返回地址的处理逻辑，不再回滚到 `__arch_cpu_idle` 起始处，而是向前跳转（fast-forwarding）至该函数结束位置。这样可以让函数返回到通用空闲循环，由其统一处理 `TIF_NEED_RESCHED` 标志检查和 pending timers 的处理。同时调整汇编代码，将开启中断与 idle 指令的间距限制在一条指令范围内，消除了原本过大的 rollback region。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1505c36c79fbaf6cfe04021bd4b2e84c0e3127e7

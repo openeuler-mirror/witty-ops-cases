@@ -1,0 +1,27 @@
+#标题
+urma: cm payload校验缺陷及异步绑定回调内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 当接收到的 `recv_cr` payload 指针为 0 时，内核未进行校验直接进行 memcpy 操作，可能导致内核空指针访问或非法内存访问。
+2. 接收到的消息长度 `msg.len` 超出实际 payload 剩余长度时，缺乏校验，可能导致越界读取。
+3. 在执行 `uburma_cmd_bind_jetty_async` 失败的异常处理路径中，存在对象引用计数未释放的问题，导致内核内存泄漏。
+
+#主要错误日志
+- ubcore_log_err("Invalid recv_cr payload");
+- ubcore_log_err("Invalid recv_cr payload len");
+
+#问题根因
+1. **逻辑判断错误**：在 `ubcore_cm_recv` 函数中，原代码使用 `&&` 逻辑判断 payload 有效性，导致当 `payload` 为 0（空指针）时，判断条件为假，跳过了校验，后续直接对空指针执行 memcpy 操作引发故障。
+2. **边界检查缺失**：代码未对消息体 `msg.len` 与剩余 payload 长度进行边界比对，存在越界风险。
+3. **异常处理路径资源泄漏**：在 `uburma_cmd_bind_jetty_async` 的错误处理分支中，`uburma_delete_bind_callback` 的调用被移除或位置不当，而在回调函数 `uburma_cmd_bind_jetty_async_callback` 中缺少 `uobj_put` 调用来释放对象引用，导致引用计数泄露。
+
+#解决方案
+1. **修正校验逻辑**：将 payload 指针检查与长度检查改为逻辑或 (`||`) 关系，确保 payload 为 0 或长度不足时均返回错误，拦截非法访问。
+2. **增加长度边界校验**：在 memcpy 之后、使用数据之前，增加 `msg.len` 与 `recv_cr->payload_len - MSG_HDR_SIZE` 的比较，防止数据越界读取。
+3. **修复引用计数泄漏**：在异步回调函数 `uburma_cmd_bind_jetty_async_callback` 中补充 `uobj_put` 调用，确保回调执行完毕后正确释放对象引用计数。同时调整错误处理路径中的删除逻辑，避免重复释放或遗漏释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7d53c1d742b0347b334e78ab827aac9c912e35cc

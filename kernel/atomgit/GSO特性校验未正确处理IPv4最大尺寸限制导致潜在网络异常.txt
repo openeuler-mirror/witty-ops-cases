@@ -1,0 +1,20 @@
+#标题
+GSO特性校验未正确处理IPv4最大尺寸限制导致潜在网络异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在网络设备配置了不同的IPv4与IPv6 GSO最大尺寸（例如启用了BIG TCP for IPv4但未启用IPv6）的场景下，内核未能正确校验IPv4的GSO最大尺寸限制。这可能导致驱动程序接收到超过其处理能力的大尺寸TSO数据包，进而引发驱动程序行为异常或网络传输错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `gso_features_check` 函数中，之前仅校验了 `dev->gso_max_size`（主要用于IPv6），而忽略了 `dev->gso_ipv4_max_size` 的限制。这导致在IPv4流量场景下，系统错误地认为无需回退到GSO引擎处理，进而绕过了设备对IPv4数据包尺寸的限制检查。
+
+#解决方案
+新增辅助函数 `netif_get_gso_max_size`，该函数根据skb协议类型（IPv6或IPv4）分别返回对应的 `dev->gso_max_size` 或 `dev->gso_ipv4_max_size`。修改 `gso_features_check` 逻辑，调用该辅助函数以同时适配并尊重IPv4和IPv6的GSO最大尺寸限制，确保在数据包超过限制时正确回退到GSO引擎。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ff58d73bfd1abca2550246698a3959ebace123cb

@@ -1,0 +1,25 @@
+#标题
+AMD IOMMU v2 页表模式下存在 TLB 别名问题导致翻译缓存污染
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 v2 页表的 AMD IOMMU 环境中，当多个设备共享同一个 domain ID 时，由于 GCR3 表是按设备设置的，且 PASID 在不同设备间不保证唯一，导致 IOMMU 翻译缓存（TLB）出现别名问题。这会导致 IOMMU 缓存被错误数据污染，可能引发 DMA 操作异常、内存数据损坏或 I/O 设备功能故障。
+
+#主要错误日志
+未知
+
+#问题根因
+在 v1 页表模式下，硬件仅使用 domain ID 标记内部翻译缓存，共享页表的设备可安全共享 domain ID。但在 v2 页表模式下，硬件使用 domain ID 和 PASID 作为参数来标记和发起 INVALIDATE_IOMMU_PAGES 命令。由于 GCR3 表是按设备设置的，不同设备的相同 PASID 可能对应不同的 v2 页表。如果此时多个设备共享同一个 domain ID，硬件无法区分不同设备的翻译缓存，导致 IOMMU 翻译缓存因 TLB 别名而受到污染。
+
+#解决方案
+为每个设备分配唯一的 domain ID，即使多个设备共享同一个 v1 页表也是如此，从而避免 v2 页表场景下的 TLB 别名问题。具体修改包括：
+1. 在 `gcr3_tbl_info` 结构体中引入 `domid` 字段，用于存储 per-device 的 domain ID。
+2. 在设置 GCR3 表时（`setup_gcr3_table`），调用 `domain_id_alloc()` 为该设备分配独立的 domain ID。
+3. 在释放 GCR3 表时（`free_gcr3_table`），调用 `domain_id_free()` 释放该 domain ID。
+4. 修改 `set_dte_entry` 函数，优先使用设备自身的 `gcr3_info.domid`，若无则回退使用共享的 `domain->id`。
+5. 调整 TLB 刷新逻辑，在 v2 模式下针对每个设备的 domain ID 单独发送 INVALIDATE_IOMMU_PAGES 命令。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f1faf4787c182afa15c89ca2142e37aa841e248

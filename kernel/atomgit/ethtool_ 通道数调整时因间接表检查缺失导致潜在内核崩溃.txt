@@ -1,0 +1,22 @@
+#标题
+ethtool: 通道数调整时因间接表检查缺失导致潜在内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户尝试减少网卡的通道（channel）数量时，若内核无法获取 RSS 间接表信息（如内存分配失败或驱动不支持相关操作），校验逻辑被错误跳过。这允许间接表中包含越界的通道 ID，后续操作可能导致内核崩溃。修复后，此类异常情况将直接拒绝通道数的修改请求。
+
+#主要错误日志
+- 推断（修复后拒绝请求的日志）：
+  "requested channel counts are too low for existing indirection table (%d)"
+  （注：修复补丁在检测到异常时，通过 GENL_SET_ERR_MSG_FMT 输出此错误信息并返回 EINVAL）
+
+#问题根因
+在调整网卡通道数时，函数 `ethtool_get_max_rxfh_channel` 用于获取间接表使用的最大通道 ID 以进行边界检查。之前的实现中，如果该函数返回错误码（如 -ENOMEM 内存不足，或 -EOPNOTSUPP 不支持），调用方会将 `max_rxfh_in_use` 设为 0，导致跳过了对间接表通道 ID 是否越界的检查。这使得在通道数减少后，间接表中可能保留了无效的、越界的通道 ID，进而引发类似 Commit 0d1b7d6c9274 中描述的 bnxt 驱动崩溃问题。
+
+#解决方案
+修改 `ethtool_get_max_rxfh_channel` 的返回值机制，将其从返回错误码改为返回实际最大值。当遇到无法获取间接表信息（如内存分配失败、获取失败或不支持）的异常情况时，返回 `U32_MAX`。这一改动确保了后续的边界检查 `channels.combined_count + channels.rx_count <= max_rxfh_in_use` 必然失败，从而阻止可能导致崩溃的非法通道数配置，实现“Fail Closed”（失败时拒绝访问）的安全策略。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2b15e44929a0ef2f71ba700eb5bdb192ae8e9bd7

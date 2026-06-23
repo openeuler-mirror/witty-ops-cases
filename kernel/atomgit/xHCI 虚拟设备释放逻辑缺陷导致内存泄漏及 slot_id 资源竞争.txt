@@ -1,0 +1,24 @@
+#标题
+xHCI 虚拟设备释放逻辑缺陷导致内存泄漏及 slot_id 资源竞争
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在使用 xHCI 控制器过程中，释放 USB 设备时存在内存泄漏（Memory Leak），特别是在递归释放子设备时问题明显。
+2. 存在 `slot_id` 资源竞争冲突的风险，可能导致设备释放流程异常或数据结构不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **内存泄漏**：在 `xhci_free_virt_devices_depth_first` 递归释放子设备时，原有的 `xhci_free_virt_device` 实现仅根据 `slot_id` 索引 `xhci->devs` 数组，未正确处理设备上下文指针的清理逻辑，导致某些虚拟设备结构体内存未被正确释放。
+2. **资源竞争**：`xhci_disable_slot` 与 `xhci_free_virt_device` 分开调用，且 `xhci_free_virt_device` 中直接清零 `dcbaa->dev_context_ptrs` 的操作与硬件命令完成处理函数 `xhci_handle_cmd_disable_slot` 存在竞争，可能导致 `slot_id` 状态管理混乱。
+
+#解决方案
+1. **重构释放接口**：新增 `xhci_disable_and_free_slot` 封装函数，将禁用槽位与释放虚拟设备内存的操作合并，确保流程原子性与顺序正确。
+2. **修正清理逻辑**：修改 `xhci_free_virt_device` 函数签名，增加 `struct xhci_virt_device *dev` 参数。在清理 `dcbaa->dev_context_ptrs` 前增加指针校验，只有当设备上下文数组仍指向当前设备（`dev->out_ctx`）时才进行清零操作，防止递归释放或并发场景下的错误清理。
+3. **统一调用路径**：将 `xhci_discover_or_reset_device`、`xhci_alloc_dev`、`xhci_setup_device` 及 `xhci_enter_test_mode` 等多处分散的 disable/free 调用统一替换为 `xhci_disable_and_free_slot`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b8c26e80d12e8684dcd9358e9eda1cf7a228a15d

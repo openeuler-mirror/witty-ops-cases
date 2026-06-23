@@ -1,0 +1,25 @@
+#标题
+urma: 使用 nlattr 查询 TP 信息存在接口不兼容问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+查询 TP（Transport Point）信息时，由于内核数据结构（如 `ubcore_tpid_list`、`ubcore_tpid_state`）进行了重构更新（移除了 `aware_list`、`unaware_list`、`tp_id_owner_type` 等旧字段，更新了 `tpid_list`、`tpid_deuse` 和 `tpid_state` 逻辑），导致原有的查询命令接口无法正确适配新的数据结构，造成功能异常或查询失败，影响系统的兼容性和可扩展性。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit Message 指出是为了优化 TP 信息查询以适配最新的数据结构。
+代码 Diff 显示，`ubcore_tpid_list` 结构体移除了 `aware_list`、`unaware_list`、`acnt`、`ucnt`、`capacity` 字段，`ubcore_tpid_state` 移除了 `tp_id_owner_type` 字段。
+原有的查询实现基于旧的数据结构字段（如区分 aware/unaware 节点），无法正确处理新数据结构下的 `tpid_list`、`tpid_state` 等信息，导致接口不匹配。
+
+#解决方案
+重构 TP 信息查询接口，采用 nlattr（Netlink Attribute）方式进行数据封装与传输：
+1. 移除旧代码中对 `aware_list`、`unaware_list` 等已废弃字段的处理逻辑。
+2. 新增并使用 `UBCORE_TPID_SHOW_REC_TP_LIST` 等枚举类型，替代原有的 `UBCORE_TPID_SHOW_REC_AWARE_NODE` 和 `UBCORE_TPID_SHOW_REC_UNAWARE_NODE`。
+3. 更新 `ubcore_tpid_emit_list_hdr`、`ubcore_tpid_emit_node`、`ubcore_tpid_emit_state` 和 `ubcore_tpid_emit_reuse` 等函数，通过 `nla_put` 接口填充 `UBCORE_TPID_SHOW_ATTR_LOCAL_EID`、`UBCORE_TPID_SHOW_ATTR_TP_HANDLE` 等新定义的属性字段，替代原有的固定结构体拷贝方式，从而提高接口的兼容性与可扩展性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/89f644fcaef5a9078766d9df1251fdd89e9d74b1

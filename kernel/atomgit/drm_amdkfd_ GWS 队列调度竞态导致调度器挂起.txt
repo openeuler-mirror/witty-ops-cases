@@ -1,0 +1,20 @@
+#标题
+drm/amdkfd: GWS 队列调度竞态导致调度器挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 设备上，当进行 GWS（Global Wave Sync）队列调度时，若在 `pqm_set_gws` 与 `update_queue` 操作之间触发了运行列表的创建，会导致调度器发生挂起，进而引发内核调度功能失效或卡死。
+
+#主要错误日志
+未知
+
+#问题根因
+在队列映射过程中，代码读取 `q->gws` 字段来判断队列是否使用 GWS，但该字段的更新未与 `qpd->mapped_gws_queue` 保持原子性同步。这导致在 `pqm_set_gws` 和 `update_queue` 操作的间隙，运行列表中可能出现状态不一致的情况：队列实际上使用了 GWS，但进程被认为未分配 GWS，从而导致调度器挂起。
+
+#解决方案
+将判断队列是否使用 GWS 的依据从非原子更新的 `q->gws` 修改为 `q->properties.is_gws`。因为 `q->properties.is_gws` 是在持有 DQM（Device Queue Manager）锁的情况下进行更改的，能够保证状态的一致性，从而修复了该竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bb9ef4e4909a05b0549df2e0bfdd45db1cfdda98

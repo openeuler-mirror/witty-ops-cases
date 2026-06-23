@@ -1,0 +1,36 @@
+#标题
+iavf: 并发执行 ethtool -L 与 -S 导致内核越界写入
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统并发执行 `ethtool -L`（修改通道数）和 `ethtool -S`（查看统计信息）时，可能触发内核 KASAN 检测到的 vmalloc 越界写入错误。具体表现为在调整通道数（例如从 1 改为 8）的过程中，若 `ethtool -S` 在配置更新完成前被调度执行，会导致内核崩溃或内存破坏。
+
+#主要错误日志
+BUG: KASAN: vmalloc-out-of-bounds in iavf_add_one_ethtool_stat+0x200/0x270
+Write of size 8 at addr ffffc900031c9080 by task ethtool/5800
+CPU: 1 UID: 0 PID: 5800 Comm: ethtool Not tainted 6.19.0-enjuk-08403-g8137e3db7f1c #241 PREEMPT(full)
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x6f/0xb0
+ print_report+0x170/0x4f3
+ kasan_report+0xe1/0x180
+ iavf_add_one_ethtool_stat+0x200/0x270
+ iavf_get_ethtool_stats+0x14c/0x2e0
+ __dev_ethtool+0x3d0c/0x5830
+ ...
+</TASK>
+
+#问题根因
+iavf 驱动在处理 ethtool 统计信息时，相关函数使用的队列计数变量不一致：
+1. `iavf_get_sset_count()` 和 `iavf_get_stat_strings()` 使用 `real_num_tx_queues`，该值在运行时可能发生变化。
+2. `iavf_get_ethtool_stats()` 使用 `num_active_queues`。
+这种不一致导致了竞态条件。当执行 `ethtool -L` 修改通道数时，`num_active_queues` 会立即更新，但 `real_num_tx_queues` 尚未更新。此时若并发执行 `ethtool -S`，`iavf_get_sset_count()` 返回的缓冲区大小基于较小的旧队列数，而 `iavf_get_ethtool_stats()` 却基于较大的新队列数进行写入，从而导致越界写入。
+
+#解决方案
+将 `iavf_get_sset_count()`、`iavf_get_stat_strings()` 和 `iavf_get_ethtool_stats()` 函数中用于计算统计信息缓冲区大小的变量统一替换为不可变的 `num_tx_queues`。
+该变量在设备创建时确定且不会改变，从而避免了并发操作时因队列数动态变化导致的缓冲区大小计算不一致问题。对于未激活的队列，统计信息将报告为零。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/61a8107905feac060f3d6a6ae67c6ad1a8e58519

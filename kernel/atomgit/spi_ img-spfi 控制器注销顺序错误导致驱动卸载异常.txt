@@ -1,0 +1,20 @@
+#标题
+spi: img-spfi 控制器注销顺序错误导致驱动卸载异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动解绑（unbind）操作过程中，由于控制器注销与资源释放顺序颠倒，导致驱动底层资源（如时钟、DMA）在控制器仍处于注册状态时被释放。这会引发内核崩溃或内存访问错误，破坏驱动卸载流程的稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动使用了 `devm_spi_register_controller` 进行自动注册管理，导致在 `img_spfi_remove` 函数中，SPI 控制器的注销动作被推迟到设备资源释放之后执行。这意味着在底层硬件资源（时钟、DMA 通道）已经被禁用或释放后，SPI 核心层才尝试注销控制器，导致访问已释放资源引发故障。
+
+#解决方案
+将 SPI 控制器的注册方式从托管式 `devm_spi_register_controller` 改为手动管理的 `spi_register_controller`。在 `img_spfi_remove` 函数中，显式调用 `spi_unregister_controller` 来注销控制器，并确保该操作在禁用时钟、释放 DMA 通道等资源释放步骤之前执行。同时，在注销过程中增加引用计数控制（`spi_controller_get/put`），防止对象过早释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aacc6422a13c6c3b20709e34b16c1cd22c6c0ccd

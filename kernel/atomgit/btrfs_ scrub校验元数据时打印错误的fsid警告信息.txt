@@ -1,0 +1,20 @@
+#标题
+btrfs: scrub校验元数据时打印错误的fsid警告信息
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 Btrfs scrub 操作校验元数据时，如果检测到 metadata_uuid 不匹配（即 metadata_uuid 与 fsid 不同），内核会打印一条警告信息。该警告信息中的“want”字段错误地显示了 `fsid`，而不是实际用于校验的 `metadata_uuid`。这导致日志信息与实际校验逻辑不一致，可能误导运维人员排查问题。
+
+#主要错误日志
+"tree block %llu mirror %u has bad fsid, has %pU want %pU"
+
+#问题根因
+此前提交 b471965fdb2d 修复了 `scrub_verify_one_metadata()` 函数中的比较逻辑，将校验依据从 `fsid` 改为了 `metadata_uuid` 以修复 replace/scrub 失败问题，但遗漏了修改对应的警告打印语句。导致代码比较的是 `metadata_uuid`，但警告日志打印的期望值（want）依然是 `fsid`，造成日志内容与代码行为不符。
+
+#解决方案
+修改 `fs/btrfs/scrub.c` 文件中 `scrub_verify_one_metadata` 函数内的 `btrfs_warn_rl` 打印参数，将警告信息中的期望值输出从 `fs_info->fs_devices->fsid` 更正为 `fs_info->fs_devices->metadata_uuid`，使其与实际的校验逻辑保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cd46cd7bb352045fb25114aa356ec3e098fdc921

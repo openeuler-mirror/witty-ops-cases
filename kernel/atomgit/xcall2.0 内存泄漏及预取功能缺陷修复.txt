@@ -1,0 +1,26 @@
+#标题
+xcall2.0 内存泄漏及预取功能缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在使用 xcall 功能时，`proc_xcall_command` 函数路径下存在内存泄漏，导致系统内存资源持续占用无法释放。
+2. xcall 预取模块在进程退出或 mmu notifier 释放时，因数据结构管理不当可能导致内存释放不完全或访问异常。
+3. 预取模块定义的 `MAX_FD` 值（100）可能无法满足部分场景需求，且存在变量名拼写错误。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **内存泄漏**：在 `proc_xcall_command` 函数处理 '+' 操作时，原代码逻辑在 `xcall_attach` 成功后，将 `info` 结构体中的 `list` 成员加入全局链表 `comm_list`，但 `xcall_comm` 结构体中的 `list` 成员并未正确初始化或管理，且后续在删除操作 '-' 中查找和删除逻辑存在缺陷，导致该结构体无法被正确追踪和释放。
+2. **数据结构缺陷**：预取功能使用单一的全局静态 `mmu_notifier`，无法支持多个 `mm_struct` 的独立管理；`prefetch_item` 数组直接存储在 `sys_call_data` 中，扩展性差且缺少对 `prefetch_mm_data` 封装结构的生命周期管理（如 `release` 和 `free_notifier` 回调）。
+3. **代码瑕疵**：预取模块中变量名存在拼写错误（如 `prefech_task_num`），且宏定义 `MAX_FD` 值设置较小。
+
+#解决方案
+1. **修复内存泄漏**：重构 `xcall_comm` 的管理逻辑，移除 `proc.c` 中冗余的 `comm_list` 链表管理。改为在 `insert_xcall_locked` 函数中将 `xcall_comm` 指针直接挂载到 `xcall` 结构体中，并在 `put_xcall` 时调用 `free_xcall_comm` 进行释放，确保内存正确回收。
+2. **重构预取数据结构**：引入 `struct prefetch_mm_data` 结构体，封装 `prefetch_item` 数组、`epoll_event` 数组及 `mmu_notifier`，实现对 `mm` 私有数据的完整生命周期管理。注册 `release` 和 `free_notifier` 回调以确保进程退出时资源被正确清理。
+3. **代码修正与增强**：修正变量名拼写错误，将 `MAX_FD` 上限调整为 1024，并新增 `xcall_subdir_create` 辅助函数以优化 proc 目录创建流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae3faae9efa6dabe1e7613b5e5d3758ffaefb86a

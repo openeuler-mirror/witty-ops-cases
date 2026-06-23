@@ -1,0 +1,20 @@
+#标题
+Bluetooth: rfcomm_sock_getsockopt函数因类型转换导致LLVM编译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用特定版本 LLVM 编译器构建内核时，编译器无法消除 `__bad_copy_from()` 调用，导致构建失败。该问题出现在 KCSAN 插桩开启的情况下，影响 `rfcomm_sock_getsockopt` 和 `rfcomm_sock_getsockopt_old` 函数的编译通过率。
+
+#主要错误日志
+未知
+
+#问题根因
+变量 `len` 原定义为 `int` 类型，在 `min_t()` 宏中与 `sizeof()` 运算结果（`size_t`/`unsigned long`）进行比较时，被强制转换为 `unsigned int`。这导致 `len` 发生符号改变且 `sizeof()` 结果被截断。随后的 `copy_to_user()` 函数第三个参数为 `unsigned long`，`len` 再次被扩展并改变符号。这种过度的类型转换与 KCSAN 插桩结合，导致 LLVM 编译器后端无法正确优化，错误地保留了本应被消除的 `__bad_copy_from()` 调用，从而引发构建错误。
+
+#解决方案
+将 `rfcomm_sock_getsockopt` 和 `rfcomm_sock_getsockopt_old` 函数中的 `len` 变量类型从 `int` 修改为 `size_t`。同时，将原本使用 `min_t(unsigned int, ...)` 的计算逻辑替换为标准的 `min()` 宏，避免不必要的类型强制转换和符号改变，从而修复 LLVM 编译构建失败的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/859fe8f37c5fc8f8e08d48af70aa70b60160c47f

@@ -1,0 +1,23 @@
+#标题
+btrfs: create_space_info() 函数错误路径内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Btrfs 文件系统初始化过程中，若 `create_space_info()` 函数内部的子函数调用失败（如在 zoned 模式下 `create_space_info_sub_group()` 失败，或 `btrfs_sysfs_add_space_info_type()` 失败），此前分配的 `space_info` 对象内存未被释放，导致内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `create_space_info()` 函数中，`space_info` 对象在函数开头被分配，但在两个错误处理路径中：
+1. `create_space_info_sub_group()` 调用失败时；
+2. `btrfs_sysfs_add_space_info_type()` 调用失败时；
+函数直接返回了错误码，而此时 `space_info` 尚未添加到 `fs_info->space_info` 链表中，导致该内存对象无法被后续逻辑释放或管理，从而造成内存泄漏。
+
+#解决方案
+修改 `create_space_info()` 函数的错误处理逻辑，不再直接返回错误码，而是跳转到一个新增的 `out_free` 标签处。在该标签处执行 `kfree(space_info)` 释放内存后再返回错误码，确保错误路径下已分配的内存被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/693935b367b964c45917e557c4ded702fc4f6b0a

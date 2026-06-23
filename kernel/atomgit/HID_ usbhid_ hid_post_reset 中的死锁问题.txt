@@ -1,0 +1,20 @@
+#标题
+HID: usbhid: hid_post_reset 中的死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在构建包含 HID 组件和存储（或 UAS）组件的复合 USB 设备场景下，当设备发生复位操作并进入块 I/O 错误处理流程时，系统发生死锁，导致复位操作无法完成。
+
+#主要错误日志
+未知
+
+#问题根因
+复合 USB 设备的组件只能一起复位，导致 hid_pre_reset() 和 hid_post_reset() 运行在块 I/O 错误处理上下文中。原代码在 hid_post_reset() 内使用 GFP_KERNEL 标志进行内存分配，该分配方式可能会触发块 I/O 操作。由于复位过程中持有互斥锁，触发的块 I/O 会等待该锁释放，从而形成 ABBA 死锁。
+
+#解决方案
+将 hid_post_reset() 函数中的内存分配标志由 GFP_KERNEL 修改为 GFP_NOIO，禁止在内存分配过程中发起任何块 I/O 操作，从而打破死锁链条。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b220e1cab2971a3cd1da97bf4d32d36ec56e5ad1

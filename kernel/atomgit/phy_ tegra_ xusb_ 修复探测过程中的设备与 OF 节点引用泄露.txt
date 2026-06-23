@@ -1,0 +1,30 @@
+#标题
+phy: tegra: xusb: 修复探测过程中的设备与 OF 节点引用泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Tegra210 XUSB PHY 驱动探测过程中，存在内核资源引用计数泄露问题。具体表现为：
+1. 对 PMC（Power Management Controller）设备的引用计数未被释放，导致设备结构体无法被正确回收。
+2. 对设备树节点（OF node）的引用计数未被释放，导致内存泄露。
+若 PMC 驱动被解绑或其他场景下，由于引用计数未归零，可能导致相关资源无法释放或驱动无法正常卸载与重新探测。
+
+#主要错误日志
+dev_warn(dev, "PMC device is not available\n");
+dev_info(dev, "failed to find PMC regmap\n");
+
+#问题根因
+驱动在 `tegra210_xusb_padctl_probe` 函数中，通过 `of_parse_phandle()` 获取了设备树节点引用，通过 `of_find_device_by_node()` 获取了设备结构体引用，但在后续的代码路径中：
+1. 未调用 `of_node_put()` 来释放节点引用。
+2. 无论探测成功还是失败路径，均未调用 `put_device()` 来释放设备引用。
+持有设备引用并不能阻止 PMC regmap 失效（例如 PMC 驱动解绑时），因此没有必要长期持有该引用，导致引用泄露。
+
+#解决方案
+在驱动探测函数中及时释放不再需要的引用：
+1. 在通过 `of_find_device_by_node()` 获取到设备指针后，立即调用 `of_node_put(np)` 释放设备树节点引用。
+2. 在探测失败返回 `-EPROBE_DEFER` 的错误路径中，增加 `put_device(&pdev->dev)` 调用以释放设备引用。
+3. 在探测成功的正常退出路径中，增加 `put_device(&pdev->dev)` 调用，确保在获取完 regmap 后释放设备引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7cf25f931110448fa8fa7414a491c030e902786c

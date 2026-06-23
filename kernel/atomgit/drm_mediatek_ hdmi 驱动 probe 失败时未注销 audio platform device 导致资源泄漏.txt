@@ -1,0 +1,20 @@
+#标题
+drm/mediatek: hdmi 驱动 probe 失败时未注销 audio platform device 导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+mtk_hdmi 驱动在 probe 过程中注册了 audio platform device，若后续初始化步骤失败，该 device 未被注销。在 probe deferral（探测延迟）场景下，驱动会多次重试 probe，每次失败都会注册一个新的 audio platform device 且未释放，导致系统中累积大量无效的设备实例，造成资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动 `probe` 函数流程设计缺陷：`mtk_hdmi_register_audio_driver` 函数成功注册 audio platform device 后，如果 `probe` 函数后续步骤出错返回（例如返回 `-EPROBE_DEFER`），代码逻辑缺乏对应的错误处理路径来注销该设备。由于缺乏清理机制，导致已注册的设备在内存中残留。
+
+#解决方案
+在 `mtk_hdmi` 结构体中增加 `audio_pdev` 指针用于保存注册的设备句柄，并引入 `mtk_hdmi_unregister_audio_driver` 清理函数。通过 `devm_add_action_or_reset` 机制将注销动作注册到设备资源管理中，确保在驱动 probe 失败或驱动移除时，自动调用 `platform_device_unregister` 释放资源，避免泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e003c2f81bddc347b8f285ca2d89d46e0a58b122

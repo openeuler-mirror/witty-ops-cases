@@ -1,0 +1,24 @@
+#标题
+ice驱动Flow Director无法将流量重映射至0号队列或切换为丢包动作
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ethtool 配置 Intel ice 网卡 Flow Director 规则时，无法将规则的动作在“重定向到 0 号队列”与“丢包（action -1）”之间互相切换。
+例如，先配置规则 `action 0`，再修改为 `action -1` 时，或者反向操作时，命令执行失败并返回错误。
+
+#主要错误日志
+rmgr: Cannot insert RX class rule: Invalid argument
+
+#问题根因
+驱动代码中 `q_index` 变量被定义为 `u16` 类型且初始化为 0。当 Flow Director 动作配置为“丢包”（ethtool 中对应 action -1）时，代码无法将 -1 存入 `u16` 类型的变量中，导致该变量值仍保持为 0。
+后续若尝试将规则修改为重定向到真实的 0 号队列时，驱动内部逻辑发现 `q_index` 值与初始化值（0）相同，误判为重复配置而报错；反之，从 0 号队列切换到丢包动作时，也因为无法正确区分 -1 和 0 而导致逻辑异常。
+
+#解决方案
+1. 在头文件中定义宏 `#define ICE_FDIR_NO_QUEUE_IDX -1`，用于明确表示“无指定队列/丢包”状态。
+2. 将 `struct ice_fdir_fltr` 结构体中的 `q_index` 字段类型从 `u16` 修改为 `s16`，使其能够存储负值（-1）。
+3. 在函数 `ice_set_fdir_input_set()` 中，将 `q_index` 变量类型修改为 `s16`，并将其初始化值从 0 改为 `ICE_FDIR_NO_QUEUE_IDX`，从而在逻辑上区分“未配置/丢包”与“重定向到 0 号队列”两种状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4946357f9b7850a17dc61ed4ade86827a2f97b8e

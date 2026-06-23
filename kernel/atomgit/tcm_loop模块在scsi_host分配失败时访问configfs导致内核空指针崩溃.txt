@@ -1,0 +1,32 @@
+#标题
+tcm_loop模块在scsi_host分配失败时访问configfs导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 tcm_loop_driver_probe() 过程中，若 struct scsi_host 分配失败，后续用户空间进程（如 tokio-runtime-w）读取 configfs 中对应的 tpg 地址属性文件时，触发内核空指针解引用，导致 Oops 并引发进程崩溃。
+
+#主要错误日志
+Unable to allocate struct scsi_host
+BUG: kernel NULL pointer dereference, address: 0000000000000194
+#PF: supervisor read access in kernel mode
+#PF: error_code(0x0000) - not-present page
+PGD 0 P4D 0
+Oops: 0000 [#1] PREEMPT SMP NOPTI
+CPU: 1 PID: 8356 Comm: tokio-runtime-w Not tainted 6.6.104.2-4.azl3 #1
+RIP: 0010:tcm_loop_tpg_address_show+0x2e/0x50 [tcm_loop]
+Call Trace:
+ <TASK>
+ configfs_read_iter+0x12d/0x1d0 [configfs]
+ vfs_read+0x1b5/0x300
+ ksys_read+0x6f/0xf0
+
+#问题根因
+在 tcm_loop_driver_probe() 函数中，如果 tl_hba->sh（struct scsi_host）内存分配失败，该指针将为 NULL。然而，tcm_loop_tpg_address_show() 函数在读取 configfs 属性时，直接对 tl_hba->sh 进行解引用以获取 host_no，未进行有效性检查，导致访问 NULL 指针偏移地址（0x194），引发段错误。
+
+#解决方案
+在 tcm_loop_tpg_address_show() 函数中增加对 tl_hba->sh 指针的非空检查。如果指针为 NULL，函数直接返回 -ENODEV，避免非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a5848b4bb6e5f09c84ad0e53e015d1b920fd2bd5

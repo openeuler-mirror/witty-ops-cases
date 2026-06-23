@@ -1,0 +1,28 @@
+#标题
+dm-verity: 重复参数指定导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 dm-verity 目标设备时，若命令行中多次指定特定参数（如 "check_at_most_once"、"ignore_zero_blocks"、"use_fec_from_device"、"root_hash_sig_key_desc"），会导致内核内存泄漏。此外，在解析签名参数出错时，错误处理路径不完整。
+
+#主要错误日志
+- "FEC device already specified"
+- "root_hash_sig_key_desc already specified"
+- "Invalid key specified"
+- "Could not allocate memory for signature key"
+
+#问题根因
+相关参数的解析函数（如 `verity_fec_parse_opt_args`、`verity_verify_sig_parse_opt_args` 以及 `verity_ctr` 中的初始化逻辑）在处理重复参数时，未检查相应的指针或资源是否已经分配，直接覆盖旧指针或重复分配资源，导致原有的内存块无法被释放，从而引发内存泄漏。同时，`verity_verify_sig_parse_opt_args` 函数在获取签名失败时未正确返回错误值。
+
+#解决方案
+在解析参数前增加检查机制，判断相关资源是否已分配：
+1. 对于 `use_fec_from_device` 参数，检查 `v->fec->dev` 是否非空，若已存在则返回 `-EINVAL`。
+2. 对于 `check_at_most_once` 参数，检查 `v->validated_blocks` 是否已初始化。
+3. 对于 `ignore_zero_blocks` 参数，检查 `v->zero_digest` 是否已分配。
+4. 对于 `root_hash_sig_key_desc` 参数，检查 `v->signature_key_desc` 是否已存在。
+如果检测到参数重复指定，设置 `ti->error` 错误信息并返回错误码，防止重复分配内存。同时修正 `verity_verify_sig_parse_opt_args` 中的错误处理逻辑，确保获取签名失败时正确返回错误值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1e44f5216eedc476c0b2f99c6a7d6d06bd67c925

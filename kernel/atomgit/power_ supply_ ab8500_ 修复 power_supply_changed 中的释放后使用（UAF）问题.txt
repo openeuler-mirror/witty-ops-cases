@@ -1,0 +1,20 @@
+#标题
+power: supply: ab8500: 修复 power_supply_changed 中的释放后使用（UAF）问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动移除（remove）过程中，存在竞争条件：中断可能在 `power_supply` 句柄被释放后、但在 IRQ 处理程序注销前触发。此时中断处理程序调用 `power_supply_changed()` 会访问已释放的内存，导致系统崩溃或内存静默损坏。此外，在 `probe()` 阶段也可能因中断在 `power_supply` 句柄注册前触发，导致使用未初始化的句柄。
+
+#主要错误日志
+未知
+
+#问题根因
+使用 `devm_` 托管机制时，资源的释放顺序与申请顺序相反。代码原先先申请 IRQ，后分配/注册 `power_supply` 句柄。这导致移除时，`power_supply` 句柄先被释放，而 IRQ 处理程序尚未注销。若此时中断触发，处理程序将操作已释放的句柄，引发释放后使用。该问题由提交 1c1f13a006ed 重构引入。
+
+#解决方案
+调整代码执行顺序，确保 IRQ 的申请发生在 `power_supply` 句柄注册之后。这样在移除时，IRQ 会先注销，再释放 `power_supply` 句柄，从而避免中断处理程序访问已释放的内存。同时这也避免了 probe 阶段中断过早触发导致的使用未初始化句柄问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/da59f5d86295fef231f59c4ffb2b7b389aa7ce1a

@@ -1,0 +1,26 @@
+#标题
+f2fs挂载ro,norecovery选项导致内核 Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `f2fs_io` 工具触发文件系统 shutdown 后，尝试以只读模式（`ro,norecovery` 或 `ro,disable_roll_forward`）挂载文件系统时触发内核 Panic（kernel BUG at fs/super.c）。
+
+#主要错误日志
+- F2FS-fs (vdd): f2fs_recover_fsync_data: recovery fsync data, check_only: 1
+- Filesystem f2fs get_tree() didn't set fc->root, returned 1
+- ------------[ cut here ]------------
+- kernel BUG at fs/super.c:1761!
+- Oops: invalid opcode: 0000 [#1] SMP PTI
+
+#问题根因
+在挂载带有 `ro,norecovery` 或 `ro,disable_roll_forward` 选项的 f2fs 镜像时，`f2fs_recover_fsync_data()` 返回了一个正数值（表示需要恢复的数据量）。原代码逻辑未正确处理该返回值，导致将正数错误码直接返回给 VFS 层的 `vfs_get_tree()` 函数。VFS 层期望返回值为 0 或负的错误码，正数返回值触发了 `BUG()` 导致内核 Panic。
+
+#解决方案
+修改 `fs/f2fs/super.c` 中的逻辑，在 `f2fs_recover_fsync_data()` 返回值大于 0 时，判断文件系统是否为只读模式：
+1. 若非只读模式，保持原逻辑报错 `-EINVAL`。
+2. 若为只读模式，打印提示信息 "drop all fsynced data" 并将错误码置为 0，允许挂载继续进行，避免向 VFS 层返回正数导致 Panic。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c59ad5e8ccf7bb9203e02428ce1f19c5e49b06a8

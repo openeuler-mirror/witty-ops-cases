@@ -1,0 +1,20 @@
+#标题
+perf_event_detach_bpf_prog 访问空指针 prog_array 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载挂载在 perf 事件上的 BPF 程序时，若对应的事件结构体 `tp_event` 中的 `prog_array` 为空，内核在调用 `bpf_prog_array_copy` 时会触发空指针解引用，导致系统崩溃或异常重启。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `perf_event_detach_bpf_prog` 函数中，通过 `bpf_event_rcu_dereference` 获取 `event->tp_event->prog_array` 后，代码未对该指针进行非空校验直接将其作为参数传递给 `bpf_prog_array_copy`。当 `prog_array` 指针为 NULL 时，后续的访问操作引发空指针崩溃。
+
+#解决方案
+在 `kernel/trace/bpf_trace.c` 文件的 `perf_event_detach_bpf_prog` 函数中增加判断逻辑：获取 `old_array` 后，检查其是否为 NULL。如果为 NULL，则跳转到 `put` 标签处直接进行后续清理流程，避免进入 `bpf_prog_array_copy` 处理逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db89beeeeaabc08029e4204853546c74788bc29f

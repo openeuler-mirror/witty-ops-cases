@@ -1,0 +1,22 @@
+#标题
+cifs: parse_dacl 中 num_aces 字段验证逻辑缺陷导致潜在内存分配风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SMB 协议的 DACL（自由访问控制列表）解析时，由于对 `num_aces` 字段的校验逻辑不正确，无法有效拦截恶意或畸形的 ACL 数据包。这可能导致内核试图分配超出预期的内存大小，进而引发内存分配失败或系统资源耗尽，造成拒绝服务。
+
+#主要错误日志
+cifs_dbg(VFS, "ACL too small to parse DACL\n");
+
+#问题根因
+`parse_dacl()` 函数中对 `num_aces` 的校验条件 `if (num_aces > ULONG_MAX / sizeof(struct smb_ace *))` 存在逻辑缺陷。该检查仅防止了数组索引溢出 ULONG_MAX 的情况，但未结合响应缓冲区的实际大小（`pdacl->size`）进行校验。攻击者可构造一个较小的 `pdacl->size` 但极大的 `num_aces` 的数据包，绕过检查导致后续分配大量内存。
+
+#解决方案
+修改 `parse_dacl()` 函数，利用 ACL 结构中的 `size` 字段来校验 `num_aces` 的合法性。
+1. 增加对 `pdacl` 指针及其大小的基本边界检查，确保 ACL 头部不越界。
+2. 将 `num_aces` 的上界检查修改为基于 `pdacl->size` 的计算，确保 `(num_aces * 单个ace最小大小)` 不超过 ACL 实际剩余空间，从而避免为非法的 num_aces 值分配内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4c23ba7f4919228788dbfb2052423a8b177081b5

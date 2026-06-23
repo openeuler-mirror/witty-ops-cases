@@ -1,0 +1,24 @@
+#标题
+CAN-FD 控制器 mcp251xfd 低数据速率下配置 TDC 导致 bus-off
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CAN-FD 模式下，当数据比特率较低（DBRP > 2）时，驱动程序错误地强制启用了 TDC（发送器延迟补偿）。这违反了 ISO 11898-1 标准，导致控制器进入 bus-off 状态，网络通信中断。此外，在高速数据速率（如 4 Mbit/s）下，由于 TDCO 值计算逻辑错误（使用了相对值配置而非硬件实际需要的绝对值），也会导致 bus-off 错误。
+
+#主要错误日志
+未知
+
+#问题根因
+根本原因在于驱动程序对 TDC（Transmitter Delay Compensation）的处理逻辑存在缺陷：
+1. **违规启用 TDC**：驱动原实现将 TDC 硬编码为启用状态。根据 ISO 11898-1 第 11.3.3 节规定，TDC 仅适用于 DBRP（数据比特率预分频器）为 1 或 2 的场景。当 DBRP > 2 时强制启用 TDC 会导致总线错误。
+2. **TDCO 计算错误**：原代码尝试根据数据手册范围 [-64, 63] 使用相对 TDCO 配置，但实际测试表明该硬件应使用绝对 TDCO 配置。错误的使用方式导致在高速率（如 4 Mbit/s）下 TDCO 值计算错误（如计算为 1 而实际应为 8），从而引发 bus-off。
+
+#解决方案
+1. 移除 TDC 硬编码启用逻辑，改为使用 CAN 驱动框架提供的 TDC 计算方法，确保遵循 ISO 11898-1 标准仅在合规条件下启用 TDC。
+2. 新增 `mcp251xfd_tdc_const` 结构体，将 TDCO 的范围定义为 [0, 63]（即使用绝对值范围），修正硬件配置参数。
+3. 在驱动中支持 `CAN_CTRLMODE_TDC_AUTO` 和 `CAN_CTRLMODE_TDC_MANUAL` 模式，允许用户空间控制 TDC 行为，并根据模式正确写入 TDCV 和 TDCO 寄存器值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/23f0436665a7673cb5bc74a7c1653371665e1b1e

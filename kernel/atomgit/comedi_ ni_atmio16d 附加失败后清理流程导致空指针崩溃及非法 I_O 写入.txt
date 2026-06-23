@@ -1,0 +1,22 @@
+#标题
+comedi: ni_atmio16d 附加失败后清理流程导致空指针崩溃及非法 I/O 写入
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动在执行 COMEDI "attach" 操作失败时，COMEDI 核心会调用 "detach" 函数进行清理。在此过程中，`atmio16d_detach()` 无条件调用 `reset_atmio16d()`，若 attach 过程在早期失败，会导致以下异常：
+1. 空指针引用：由于私有数据结构 `dev->private` 尚未分配（为 NULL），访问其成员导致内核崩溃。
+2. 非法 I/O 端口写入：由于 I/O 端口基地址 `dev->iobase` 尚未初始化（值为 0），导致向低地址 I/O 端口执行非预期的写入操作。
+
+#主要错误日志
+未知
+
+#问题根因
+`atmio16d_detach()` 函数在清理时未检查设备初始化状态，直接调用 `reset_atmio16d(dev)`。若 `atmio16d_attach()` 在设置 `dev->iobase` 或分配 `dev->private` 之前失败，`reset_atmio16d()` 会使用无效的指针（NULL）和无效的 I/O 地址（0）进行操作，从而引发空指针崩溃或低地址 I/O 端口错误写入。
+
+#解决方案
+在 `atmio16d_detach()` 函数中增加对 `dev->private` 指针的有效性检查。仅当 `dev->private` 非 NULL 时才调用 `reset_atmio16d(dev)` 进行复位操作；否则跳过复位直接执行 `comedi_legacy_detach(dev)`。因为 `dev->private` 是在 `dev->iobase` 设置之后分配的，故该检查足以保证两者均处于可用状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/42c96cee1905f96fc44eb133669cace13aabfad1

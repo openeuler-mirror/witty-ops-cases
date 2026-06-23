@@ -1,0 +1,25 @@
+#标题
+sw64架构cacheinfo中shared_cpu_map初始化错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在申威（Sunway）JunZhang系列处理器上，L1和L2缓存被错误地标识为逻辑核心独占，未正确反映其由同一物理核心下的两个硬件线程（逻辑核心）共享的真实拓扑结构。这可能导致用户态工具（如 lscpu 或 sysfs 中 cache 信息）显示的缓存共享关系不正确，进而影响依赖缓存拓扑信息的调度决策或性能分析。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 硬件拓扑与软件抽象不符：JunZhang系列处理器的L1和L2缓存实际上是由物理核心内的两个逻辑核心共享的，但原有代码仅将当前逻辑核心设置到shared_cpu_map中，未包含同一物理核心下的兄弟线程。
+2. 初始化时序依赖错误：原有的L3缓存初始化逻辑依赖于 `topology_llc_cpumask()` 接口，但在通用函数 `update_siblings_masks()` 中，cache信息的初始化发生在CPU siblings关系建立之前，导致此时调用 `topology_llc_cpumask()` 无法获取正确的兄弟掩码。
+
+#解决方案
+1. 移除对 `topology_llc_cpumask()` 的依赖，删除相关头文件引用。
+2. 新增 `setup_shared_cpu_map()` 函数，显式遍历所有可能的CPU来构建共享映射：
+   - 对于L1和L2缓存，通过比较 `rcid_to_core_id` 将同一物理核心下的所有逻辑核心加入 shared_cpu_map。
+   - 对于L3缓存，通过比较 `rcid_to_domain_id` 将同一域下的所有核心加入 shared_cpu_map。
+3. 调整 `populate_cache_leaves()` 逻辑，仅负责填充缓存属性和ID，将共享映射的构建工作分离并推迟到上述新函数中执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/09de53387d255eb5890ef23ddc9c7895ba1dd90f

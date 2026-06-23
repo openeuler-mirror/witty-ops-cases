@@ -1,0 +1,23 @@
+#标题
+mm/vmscan: 大页folio在内存回收与硬件错误处理竞争导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统发生内存回收且处理大页folio时，若此时与内存故障处理发生竞争，会触发内核空指针解引用导致内核崩溃。具体表现为：
+1. 在 `shrink_folio_list` 处理 hwpoisoned 标记的大页 folio 时，调用链触发了空指针解引用。
+2. 即便尝试传入 `TTU_SPLIT_HUGE_PMD` 参数，也会因页面不在 swapcache 中而触发 `WARN_ON_ONCE` 警告。
+3. 该故障由 syzbot 报告，属于内存回收路径上的严重稳定性问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `shrink_folio_list()` 函数中，代码未正确处理带有硬件错误的大页folio。`unmap_poisoned_folio()` 函数不具备处理大页的能力，且路径中调用 `try_to_unmap_one()` 时未传递 `TTU_SPLIT_HUGE_PMD` 标志，导致无法正确分割大页 PMD（Page Middle Directory），进而引发 `pvmw.pte` 空指针解引用。该问题发生在内存回收与大页内存故障处理竞争的极端场景下。
+
+#解决方案
+在 `shrink_folio_list()` 中增加对大页 folio 的判断逻辑。若检测到 folio 为大页且带有硬件错误标记，直接跳过处理（`goto keep_locked`），保留该页面并解锁。由于硬件错误（UCE）在实际环境中非常罕见，且与内存回收的竞争更为罕见，跳过处理是安全的，后续若再次触发 UCE，将由 `memory_failure()` 机制进行处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/437d498bfac9467b0acc2e11d7df87519fce52a6

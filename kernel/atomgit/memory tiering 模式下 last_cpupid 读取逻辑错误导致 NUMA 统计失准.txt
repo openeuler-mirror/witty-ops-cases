@@ -1,0 +1,21 @@
+#标题
+memory tiering 模式下 last_cpupid 读取逻辑错误导致 NUMA 统计失准
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行时关闭 memory tiering 模式或 folio 位于 toptier 节点时，内核未能正确读取 `last_cpupid` 的实际值，而是使用了默认值。这导致 `task_numa_fault()` 无法获取正确的 NUMA 故障统计信息，影响 NUMA 自动平衡的判断逻辑，虽然不会引发系统崩溃，但会导致性能下降或波动。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `do_huge_pmd_numa_page()` 函数中，判断是否读取 `last_cpupid` 的条件逻辑不完整。
+原有逻辑仅检查了 `node_is_toptier(nid)`，忽略了 memory tiering 模式已关闭的情况。根据设计，`last_cpupid` 仅在 memory tiering 模式关闭或 folio 处于 toptier 节点时才可用。代码未覆盖“memory tiering 模式关闭”这一分支，导致在模式关闭时错误地使用了默认值而非实际值。
+
+#解决方案
+修改 `mm/huge_memory.c` 中的条件判断逻辑，增加对 memory tiering 模式状态的检查。当 `sysctl_numa_balancing_mode` 未设置 `NUMA_BALANCING_MEMORY_TIERING` 标志位，或者节点为 toptier 时，才正确读取 `last_cpupid`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b7fb00d3d756d178463f621953540ce7fff3aa7b

@@ -1,0 +1,24 @@
+#标题
+sfc/ef100: 修复驱动探测阶段因空指针解引导致的内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 sfc 驱动加载 ef100 网卡设备时，驱动探测过程可能触发内核崩溃或空指针解引异常，导致网卡无法正常初始化。该问题发生在 `ef100_probe_netdev` 函数中调用 `netif_set_tso_max_size` 等函数时。
+
+#主要错误日志
+（推断）BUG: kernel NULL pointer dereference
+（推断）RIP: ef100_probe_netdev
+
+#问题根因
+问题根因是 TSO 参数配置的时序错误。在原有代码逻辑中，`netif_set_tso_max_size` 和 `netif_set_tso_max_segs` 在 `ef100_process_design_param` 函数中被调用，但此时 `efx->net_dev` 可能尚未完成初始化（例如 `net_dev` 结构体虽已分配但 `name` 未设置），导致 `netif_err` 等宏或后续函数内部访问空指针。此外，在 `ef100_probe_netdev` 主流程中，设置 TSO 参数时使用了硬编码默认值，且在获取 `nic_data` 之前就调用了相关设置函数，导致逻辑混乱和潜在崩溃风险。
+
+#解决方案
+调整 TSO 参数设置的时机和位置：
+1. 移除 `ef100_process_design_param` 函数中对 `netif_set_tso_max_size` 和 `netif_set_tso_max_segs` 的直接调用，改为仅将硬件支持的 TSO 最大值保存在 `nic_data` 结构体中。
+2. 将 `netif_set_tso_max_size` 和 `netif_set_tso_max_segs` 的调用统一移至 `ef100_probe_netdev` 函数中，并确保在调用前先获取 `nic_data`，使用先前保存的硬件实际能力值进行配置。
+3. 将相关的日志打印函数从 `netif_err`/`netif_dbg` 替换为 `pci_err`/`pci_dbg`，避免在 `net_dev` 未完全注册初始化时访问其内部成员引发空指针问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/855c2a6945da5d74f3e50d601537000d0989d5a3

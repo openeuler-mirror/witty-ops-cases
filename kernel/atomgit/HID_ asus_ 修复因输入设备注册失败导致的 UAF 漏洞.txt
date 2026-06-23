@@ -1,0 +1,20 @@
+#标题
+HID: asus: 修复因输入设备注册失败导致的 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ASUS HID 设备驱动加载过程中，若输入设备注册时未映射任何 usages，会导致输入设备被释放，但驱动内部数据结构仍持有指向已释放内存的悬空指针，进而引发 Use-After-Free (UAF) 故障；同时系统日志打印 "Asus input not registered" 错误。
+
+#主要错误日志
+Asus input not registered
+
+#问题根因
+在 `asus_probe` 函数中，仅检查 `drvdata->input` 指针是否存在缺陷。当输入设备注册过程中因为没有映射任何 usages 导致所有输入设备被释放时，`drvdata->input` 仍指向已被释放的内存。若后续代码继续使用该指针，将触发 UAF（Use-After-Free）漏洞。
+
+#解决方案
+在探测函数中增加对 `hdev->claimed & HID_CLAIMED_INPUT` 的检查。通过验证 `HID_CLAIMED_INPUT` 标志位是否置位，确保输入设备不仅分配了内存且成功完成了注册与映射，从而避免持有指向已释放内存的悬空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba07ce1eed7c7c38b14e65539c14357959ff9bba

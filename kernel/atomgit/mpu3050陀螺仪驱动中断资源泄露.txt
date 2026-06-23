@@ -1,0 +1,21 @@
+#标题
+mpu3050陀螺仪驱动中断资源泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 mpu3050 陀螺仪驱动时，若 `iio_trigger_register()` 注册失败，驱动程序将直接返回错误，导致之前通过 `request_threaded_irq()` 申请的中断处理程序未被释放，造成中断资源泄露。该问题由静态代码分析工具 Smatch 检测发现。
+
+#主要错误日志
+Detected by Smatch:
+drivers/iio/gyro/mpu3050-core.c:1128 mpu3050_trigger_probe() warn: 'irq' from request_threaded_irq() not released on lines: 1124.
+
+#问题根因
+在 `mpu3050_trigger_probe` 函数中，代码调用 `request_threaded_irq()` 成功申请了中断资源，但在随后的 `iio_trigger_register()` 调用失败时，函数直接返回了错误码，遗漏了 `free_irq()` 的清理步骤，导致中断资源未被正确释放。
+
+#解决方案
+修改 `mpu3050_trigger_probe` 函数的错误处理路径。当 `iio_trigger_register()` 失败时，不再直接返回，而是跳转至新增的错误处理标签 `err_iio_trigger`，在此处调用 `free_irq(mpu3050->irq, mpu3050->trig)` 释放已申请的中断资源，最后再返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d5b603588c060583a9bc47d789e3e28483b02cdb

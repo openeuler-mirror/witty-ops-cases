@@ -1,0 +1,32 @@
+#标题
+RDMA/irdma: irdma_free_pble 函数数据竞争导致计数器不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发执行 irdma_dereg_mr 操作时，内核 KCSAN 检测工具报告 irdma_free_pble 函数内部发生数据竞争。多个 CPU 上的任务同时对 pble_rsrc 计数器进行读写操作，可能导致统计数据不一致。
+
+#主要错误日志
+BUG: KCSAN: data-race in irdma_free_pble [irdma] / irdma_free_pble [irdma]
+
+write to 0xffff91430baa0078 of 8 bytes by task 16956 on cpu 5:
+ irdma_free_pble+0x3b/0xb0 [irdma]
+ irdma_dereg_mr+0x108/0x110 [irdma]
+ ...
+
+read to 0xffff91430baa0078 of 8 bytes by task 16953 on cpu 2:
+ irdma_free_pble+0x23/0xb0 [irdma]
+ irdma_dereg_mr+0x108/0x110 [irdma]
+ ...
+
+value changed: 0x0000000000005a62 -> 0x0000000000005a68
+
+#问题根因
+irdma_free_pble 函数中，对 pble_rsrc->freedpbles 和 pble_rsrc->stats_alloc_freed 计数器的更新操作未加锁保护。在多线程并发注销内存区域（MR）的场景下，多个线程同时读写这些计数器变量，导致数据竞争。
+
+#解决方案
+在 irdma_free_pble 函数中，将 pble_rsrc->freedpbles 的累加操作和 pble_rsrc->stats_alloc_freed 的递增操作移至 pble_mutex_lock 互斥锁的保护范围内执行，确保对共享资源的并发访问同步进行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f8035481f1ba03ca205ca317fd441236b40eed38

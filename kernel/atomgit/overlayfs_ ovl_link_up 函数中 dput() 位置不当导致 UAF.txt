@@ -1,0 +1,20 @@
+#标题
+overlayfs: ovl_link_up 函数中 dput() 位置不当导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 overlayfs 文件系统的 copy_up 流程中，当调用 ovl_link_up 函数时，若在 ovl_do_link 成功后、ovl_dentry_update_reval 调用前过早执行 dput(upper)，会导致 ovl_dentry_update_reval 函数内部发生 Use-After-Free (UAF) 故障。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 ovl_link_up 中，指针 upper 通过查找获得 dentry 引用。原代码逻辑在 ovl_do_link 执行后立即调用 dput(upper) 释放引用，随后才调用 ovl_dentry_update_reval(c->dentry, upper)。这导致 ovl_dentry_update_reval 函数使用了一个已经被释放的 dentry 指针，从而触发 UAF。
+
+#解决方案
+将 dput(upper) 调用移动至 ovl_dentry_update_reval 执行之后，确保在不再需要 upper 指针之前不会提前释放其引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a5961b648b7d9718af3c0df9b1f53c88465a3320

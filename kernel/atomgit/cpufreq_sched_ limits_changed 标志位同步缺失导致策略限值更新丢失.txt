@@ -1,0 +1,26 @@
+#标题
+cpufreq/sched: limits_changed 标志位同步缺失导致策略限值更新丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下，schedutil 调度器可能丢失 cpufreq 策略限值的更新。表现为系统在执行频率限制操作后，调度器未能正确感知到策略变化，导致频率更新未及时生效，持续使用旧的频率限制值运行。
+
+#主要错误日志
+未知
+
+#问题根因
+`limits_changed` 标志位在多核并发读写时缺乏显式的内存屏障保护。
+1. 在 `sugov_limits()` 函数中设置 `limits_changed` 为 true 时，与后续 `cpufreq_set_policy()` 更新策略限值的操作顺序未被强制锁定。
+2. 在 `sugov_should_update_freq()` 函数中读取 `limits_changed` 并清零时，与 `cpufreq_driver_resolve_freq()` 读取策略限值的操作顺序未被强制锁定。
+这导致由于 CPU 指令重排或缓存一致性问题，`limits_changed` 的更新可能在策略限值实际更新之前或之后被对端 CPU 观测到，从而导致调度器读取到旧的策略限值，错过了一次频率限制的更新机会。
+
+#解决方案
+引入显式的内存屏障机制以强制内存访问顺序：
+1. 在 `sugov_limits()` 设置 `limits_changed` 前，增加 `smp_wmb()` 写屏障，确保策略限值的更新在该标志位设置之前已对其他 CPU 可见。
+2. 在 `sugov_should_update_freq()` 清除 `limits_changed` 后，增加 `smp_mb()` 全屏障，确保后续读取策略限值操作在该标志位清零之后执行。
+3. 将所有对 `limits_changed` 的普通读写操作修改为 `WRITE_ONCE` 和 `READ_ONCE`，防止编译器优化导致的访问乱序，确保内存屏障的语义正确配对。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/505eaf1c16631d47a74db9a1a602578682ac7dc9

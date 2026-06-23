@@ -1,0 +1,43 @@
+#标题
+md-raid1: 修复 fix_read_error 中的可疑 RCU 使用警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 LVM2 测试用例（shell/integrity-caching.sh）时，内核触发 `suspicious RCU usage` 警告。系统日志记录到 `raid1.c` 中存在不安全的 `rcu_dereference_check()` 调用，提示 RCU 使用违规，此时 `rcu_scheduler_active` 状态为 2，但当前进程未持有任何锁。
+
+#主要错误日志
+=============================
+WARNING: suspicious RCU usage
+6.7.0 #2 Not tainted
+-----------------------------
+drivers/md/raid1.c:2265 suspicious rcu_dereference_check() usage!
+
+other info that might help us debug this:
+rcu_scheduler_active = 2, debug_locks = 1
+no locks held by mdX_raid1/1859.
+
+stack backtrace:
+CPU: 2 PID: 1859 Comm: mdX_raid1 Not tainted 6.7.0 #2
+...
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x60/0x70
+ lockdep_rcu_suspicious+0x153/0x1b0
+ raid1d+0x1732/0x1750 [raid1]
+ ...
+ md_thread+0xa0/0x130 [md_mod]
+ ...
+ kthread+0xdc/0x110
+ ...
+ </TASK>
+
+#问题根因
+在 commit 2d32777d60de ("raid1: remove rcu protection to access rdev from conf") 中已经移除了对 `conf->mirrors[read_disk].rdev` 访问的 RCU 保护机制。然而，`fix_read_error` 函数中的代码未能同步更新，仍在未持有 `rcu_read_lock` 的情况下使用了 `rcu_dereference`，导致 RCU 锁检查机制报错。
+
+#解决方案
+移除 `fix_read_error` 函数中多余的 `rcu_dereference` 调用。根据之前的重构，该处的 RCU 保护已被移除，应直接访问 `conf->mirrors[read_disk].rdev`。修改后代码逻辑与现有锁机制保持一致，消除了警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5c55f30636eca0b43d7ae48235b4ae98767525af

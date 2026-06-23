@@ -1,0 +1,22 @@
+#标题
+bpf: 修复 enum bpf_type_flag 和 bpf_arg_type 引发的 KABI 破坏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核编译或运行期间，BPF 子系统中的 `enum bpf_type_flag` 和 `enum bpf_arg_type` 枚举定义发生了变化（新增成员或修改值），导致内核二进制接口（KABI）一致性检查失败或不兼容，影响内核模块的兼容性。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复 CVE-2024-50164 或相关功能提交（如 `bbb41dee347a` "bpf: Add MEM_WRITE attribute"）时，直接在 `enum bpf_type_flag` 中新增了 `MEM_WRITE` 成员，并修改了 `enum bpf_arg_type` 中 `ARG_PTR_TO_UNINIT_MEM` 的定义。由于这些 enum 结构在内核内部使用，直接修改破坏了原有的 KABI 稳定性。
+
+#解决方案
+使用 `KABI_BROKEN_INSERT_ENUM` 和 `KABI_BROKEN_REMOVE_ENUM` 宏对受影响的枚举成员进行封装处理：
+1. 对 `enum bpf_type_flag` 中的 `MEM_WRITE` 成员使用 `KABI_BROKEN_INSERT_ENUM` 宏进行插入，以标记 KABI 变更。
+2. 对 `enum bpf_arg_type` 中的 `ARG_PTR_TO_UNINIT_MEM`，先使用 `KABI_BROKEN_REMOVE_ENUM` 移除旧定义，随即使用 `KABI_BROKEN_INSERT_ENUM` 插入包含新属性（`MEM_WRITE`）的定义。此举在修复功能问题的同时显式标记并处理了 KABI 破坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db044923f2ea07a7b070ad992464777907241b15

@@ -1,0 +1,38 @@
+#标题
+PCI: endpoint: Fix configfs group list head handling
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载（rmmod）一个包含 configfs 属性组的 PCI endpoint function 驱动时，触发 KASAN slab-use-after-free 警告。系统检测到非法内存写入，导致模块卸载流程异常。
+
+#主要错误日志
+```
+BUG: KASAN: slab-use-after-free in pci_epf_remove_cfs+0x17c/0x198
+Write of size 8 at addr ffff00010f4a0d80 by task rmmod/319
+
+CPU: 3 UID: 0 PID: 319 Comm: rmmod Not tainted 6.16.0-rc2 #1 NONE
+Hardware name: Radxa ROCK 5B (DT)
+Call trace:
+ show_stack+0x2c/0x84 (C)
+ dump_stack_lvl+0x70/0x98
+ print_report+0x17c/0x538
+ kasan_report+0xb8/0x190
+ __asan_report_store8_noabort+0x20/0x2c
+ pci_epf_remove_cfs+0x17c/0x198
+ pci_epf_unregister_driver+0x18/0x30
+ nvmet_pci_epf_cleanup_module+0x24/0x30 [nvmet_pci_epf]
+ __arm64_sys_delete_module+0x264/0x424
+ invoke_syscall+0x70/0x260
+ ...
+```
+
+#问题根因
+在 `pci_epf_remove_cfs()` 函数中，代码逻辑错误地对 `struct pci_epf_driver` 结构体中的 `epf_group` 字段执行了 `list_del()` 操作。实际上 `epf_group` 是链表头，而不是链表节点。在链表遍历并删除完所有节点后，再对链表头执行 `list_del()` 会导致该链表头结构被错误地修改（如指向 LIST_POISON），从而引发 KASAN 检测到 slab-use-after-free 错误。
+
+#解决方案
+删除 `pci_epf_remove_cfs()` 函数中错误的 `list_del(&driver->epf_group);` 调用。链表头无需从自身移除，仅需遍历移除其链接的所有节点即可。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/acfde3c4a2cd4486f7403558525e381e8c76375c

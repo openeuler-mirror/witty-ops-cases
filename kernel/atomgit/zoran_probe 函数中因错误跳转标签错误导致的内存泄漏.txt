@@ -1,0 +1,20 @@
+#标题
+zoran_probe 函数中因错误跳转标签错误导致的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 zoran_probe 探测过程中，若检测到 codec 类型不匹配，代码跳转至错误的错误处理标签，导致先前为 codec 分配的内存未被释放，从而产生内存泄漏。
+
+#主要错误日志
+pci_err(pdev, "%s - wrong codec\n", __func__);
+
+#问题根因
+在 `zoran_probe` 函数中，当 `zr->codec->type != zr->card.video_codec` 条件成立时，错误处理路径跳转到了 `zr_unreg_videocodec` 标签，而不是应该执行的 `zr_detach_codec` 标签。这导致 `videocodec_attach()` 函数中分配的 codec 内存未在错误路径中被释放。
+
+#解决方案
+修改 `drivers/media/pci/zoran/zoran_card.c` 文件，将错误处理路径中的 `goto zr_unreg_videocodec;` 修改为 `goto zr_detach_codec;`，确保在 codec 类型不匹配的错误路径上正确释放已分配的 codec 内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/342e06503fa69e8733ce44d65433b109b0d777a6

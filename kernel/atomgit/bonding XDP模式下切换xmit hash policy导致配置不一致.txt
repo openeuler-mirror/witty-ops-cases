@@ -1,0 +1,21 @@
+#标题
+bonding XDP模式下切换xmit hash policy导致配置不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在已加载XDP程序的bonding接口上修改xmit_hash_policy（传输哈希策略）时，系统允许将其设置为与当前XDP模式不兼容的值（如将802.3ad或active-backup模式的策略设为VLAN_SRCMAC）。这导致内核状态不一致，可能出现XDP程序无法正确处理报文、流量转发异常或丢包等不可预期行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在bond_options.c的bond_option_xmit_hash_policy_set函数中，修改xmit_hash_policy时仅更新了参数值，未检查当前是否已加载XDP程序（xdp_prog）以及新策略是否满足XDP运行的约束条件。同时，原有bond_xdp_check接口依赖bonding对象实例，无法直接用于对新设定值进行预校验，导致不合规的配置变更被错误接受。
+
+#解决方案
+1. 重构校验逻辑：将原有的bond_xdp_check拆分为__bond_xdp_check与bond_xdp_check，新增__bond_xdp_check函数接受mode和xmit_policy作为参数，用于独立校验策略组合的合规性。
+2. 增加配置拦截：在bond_option_xmit_hash_policy_set函数中增加判断，若当前bond接口存在xdp_prog，则调用__bond_xdp_check对即将设置的newval->value进行预检查。若检查不通过，直接返回-EOPNOTSUPP，拒绝此次配置修改，从而确保XDP模式下的策略一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb9b57433e463de3245f020ab3a0755affefdf5a

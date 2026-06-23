@@ -1,0 +1,20 @@
+#标题
+drm/dp_mst: 处理 CSN 消息时因锁竞争导致下行业务请求超时
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DisplayPort MST（多流传输）拓扑探测尚未完成时，如果收到 Connection Status Notify (CSN) 消息，系统可能发生死锁或下行业务请求超时。具体表现为探测工作持有的 `probe_lock` 阻塞了上行请求处理函数，导致无法处理下行业务回复，最终引发下行业务请求报错超时。
+
+#主要错误日志
+[drm:drm_dp_mst_process_up_req] *ERROR* Got CSN before finish topology probing. Skip it.
+
+#问题根因
+问题根因在于 `drm_dp_mst_handle_up_req()` 函数中获取 `probe_lock` 的时机不当。该函数所在的 task/work 同时也负责处理 MST 下行业务请求的回复。当拓扑探测工作 `drm_dp_mst_link_probe_work()` 已经持有 `probe_lock` 并等待下行业务回复时，`drm_dp_mst_handle_up_req()` 可能因为等待获取 `probe_lock` 而阻塞。这种阻塞导致系统无法及时处理下行业务回复，从而导致探测工作的下行业务请求超时。类似场景也发生在 `drm_dp_mst_handle_conn_stat()` 持锁发送请求时，后续的 CSN 消息处理被阻塞的情况。
+
+#解决方案
+将“跳过 CSN 处理”的逻辑从 `drm_dp_mst_handle_up_req()` 移动到 `drm_dp_mst_process_up_req()` 函数中。`drm_dp_mst_process_up_req()` 运行在独立的工作队列中且已经持有 `probe_lock`，这样可以避免在消息处理流程中额外申请 `probe_lock` 导致的阻塞，从而确保下行业务回复能够被及时处理，解决超时问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/373d5f0896a0c9f6836bd0bf83df21ceae7b5401

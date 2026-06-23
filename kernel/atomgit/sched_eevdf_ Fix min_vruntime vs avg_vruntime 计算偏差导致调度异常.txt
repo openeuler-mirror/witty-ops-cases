@@ -1,0 +1,20 @@
+#标题
+sched/eevdf: Fix min_vruntime vs avg_vruntime 计算偏差导致调度异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 EEVDF 调度策略下，由于 `cfs_rq->min_vruntime` 单调递增的特性与 `avg_vruntime` 的计算逻辑不匹配，导致两者漂移过大。当非合格任务离开运行队列时，平均虚拟时间本应减小，但 `min_vruntime` 无法向后移动，这种偏差可能破坏调度器的游戏规则，导致任务调度出现异常行为或不正确的执行顺序。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 lag 总和为零的约束，0-lag 点应当是各 vruntime 的加权平均值。为了解决 u64 溢出问题，代码使用一个基准点 v0 进行相对计算。此前代码使用 CFS 时代的 `min_vruntime` 作为基准点 v0，但该值只能单向向前移动。而实际上加权平均虚拟时间在非合格任务离开时可能会向后移动，这种基准点只能向前、平均值可能向后的不一致性，导致两者漂移过大，破坏了调度正确性。
+
+#解决方案
+将 `cfs_rq->min_vruntime` 替换为 `cfs_rq->zero_vruntime`，并修改更新逻辑。`zero_vruntime` 会紧随 `avg_vruntime` 的变化而更新（可向前或向后移动），从而保证基准点与平均虚拟时间的紧密跟随关系，避免数值漂移带来的调度错误。同时，在 `__enqueue_entity` 和 `__dequeue_entity` 流程中增加了 `update_zero_vruntime` 的调用，以确保其及时更新。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bb8d316b0862ebccc3c40541a6bb9209f9dec65f

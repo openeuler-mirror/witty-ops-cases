@@ -1,0 +1,28 @@
+#标题
+idxd: idxd_setup_wqs 函数错误处理路径内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `idxd_setup_wqs` 函数执行过程中，若在分配 `wq_enable_map` 位图、设置设备名称 (`dev_set_name`)、分配 `wqcfg` 或 `opcap_bmap` 等步骤失败，驱动初始化代码未能正确释放先前已分配的内存资源（如 `wq` 结构体、`wqcfg`、`opcap_bmap` 等），导致内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `idxd_setup_wqs` 的错误处理逻辑不完善。当函数在执行过程中遇到错误退出时，没有按照内存分配的逆序释放资源。具体表现为：
+1. `idxd->wq_enable_map` 分配失败时，未跳转到统一的错误处理标签，而是直接返回，导致此前分配的 `idxd->wqs` 内存泄漏（尽管原代码有释放，但重构后统一跳转更安全）。
+2. 在循环内部分配 `wq->opcap_bmap` 失败时，直接跳转到了并未处理当前 `wq` 资源释放的 `err` 标签，导致当前迭代中已分配的 `wq` 结构体、`wqcfg` 以及 `opcap_bmap` 自身分配失败前的资源泄漏。
+3. 错误处理代码路径中缺少对已分配资源的逐一释放操作。
+
+#解决方案
+重构 `idxd_setup_wqs` 函数的错误处理路径，采用 `goto` 标签实现资源的层级回滚释放：
+1. 新增 `err_opcap_bmap` 和 `err_bitmap` 标签，分别处理不同阶段的错误。
+2. 在 `wq->opcap_bmap` 分配失败时，跳转到 `err_opcap_bmap` 标签，确保释放当前迭代的 `wq->wqcfg`。
+3. 在 `err` 标签处理中，增加对当前迭代 `wq` 结构体及其资源的释放逻辑。
+4. 在循环回滚部分，增加对 `opcap_bmap`、`wqcfg` 以及 `wq` 结构体本身的释放调用。
+5. 在 `err_bitmap` 标签处释放 `idxd->wqs`，确保所有分配的内存在出错时都能被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/39166bd7606de27b79c2a13ad72e0df6c8cf3646

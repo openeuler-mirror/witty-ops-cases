@@ -1,0 +1,20 @@
+#标题
+objtool因exc_double_fault()返回属性不一致导致静态调用失效与缓解措施禁用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非 CONFIG_X86_ESPFIX64 配置下，objtool 误判 `exc_double_fault()` 为隐式 `noreturn` 函数，导致工具链对调用路径的分析出现偏差。此问题会导致 ORC（ORC unwinder）覆盖出现缺口，更严重的情况下会导致静态调用失效以及 CPU 安全缓解措施被静默禁用。
+
+#主要错误日志
+未知
+
+#问题根因
+`exc_double_fault()` 函数的行为在不同编译配置下不一致：开启 `CONFIG_X86_ESPFIX64` 时函数可能返回，而在未开启时函数从不返回。Objtool 无法感知内核配置差异，仅根据 `!CONFIG_X86_ESPFIX64` 版本的代码结构将其标记为隐式 `noreturn`。这种跨配置的不一致性导致 objtool 分析逻辑出现偏差，原有的修复方案（抑制不可达警告）掩盖了控制流分析错误，进而引发后续代码被误判为不可达或死代码。
+
+#解决方案
+通过在 `exc_double_fault()` 的结尾处增加一个条件始终为真的 `if (always_true())` 判断来调用 `panic()`，强制打破编译器和 objtool 对该函数隐式 `noreturn` 属性的推断。同时删除了 `tools/objtool/check.c` 中针对 `exc_double_fault()` 的临时补丁代码（`ignore_noreturn_call` 函数），恢复了正常的调用可达性检查。这确保了该函数在不同配置下行为的一致性，避免了 ORC 数据缺失或安全特性被错误禁用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d1cc585dc034deec329e5fc42fedd394d92f1843

@@ -1,0 +1,21 @@
+#标题
+powerpc/8xx: 8M hugetlb folios 与 split page table locks 配置冲突
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PowerPC 8xx 架构下启用 `CONFIG_SPLIT_PTE_PTLOCKS` 或 `CONFIG_SPLIT_PMD_PTLOCKS` 配置项时，触发编译时报错（`#error`），导致内核无法编译通过。该限制源于 8xx 架构对 8M hugetlb folios 的特殊处理方式。
+
+#主要错误日志
+错误信息（编译阶段）：
+`#error "8M hugetlb folios are incompatible with split page table locks"`
+
+#问题根因
+PowerPC 8xx 不支持 SMP，因此当前未使用 split PT locks。然而，在处理 8M hugetlb folios 时，需要相同的锁（same lock）来保护 PMD 表和两个 PTE 表。如果启用了 split page table locks，这种跨多个页表的锁定机制将无法正确工作，导致数据一致性问题。
+
+#解决方案
+在 `arch/powerpc/mm/pgtable.c` 中增加编译时检查代码。如果检测到定义了 `CONFIG_SPLIT_PTE_PTLOCKS` 或 `CONFIG_SPLIT_PMD_PTLOCKS`，则通过 `#error` 预处理指令强制报错并终止编译，以此明确禁止在不兼容的配置下构建内核，同时通过注释文档化了该限制的存在原因。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c540cd1478d45aff183c2f57cfa296ec3c0165cb

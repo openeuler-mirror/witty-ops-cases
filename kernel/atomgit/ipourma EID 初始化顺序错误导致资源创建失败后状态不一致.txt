@@ -1,0 +1,26 @@
+#标题
+ipourma EID 初始化顺序错误导致资源创建失败后状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ipourma 模块处理 EID 发布或变更事件时，若 `ipourma_create_new_eid` 内部资源初始化失败，系统未能正确处理错误，导致 EID 计数器（`eid_count`）增加但实际资源未就绪。同时，后续的 IP 设置或路由工作队列可能使用了错误的 EID 值，导致功能异常。错误发生时会有内核日志打印创建失败的记录。
+
+#主要错误日志
+- `netdev_err(priv->dev, "create eid resources failed, index:%u, ret:%d\n", eid_idx, ret);`
+
+#问题根因
+根本原因在于 EID 设置的顺序逻辑错误：
+1. 原代码中，`ipourma_create_new_eid` 函数没有返回值，调用者无法感知资源初始化是否成功，导致即使在初始化失败的情况下，调用者仍然增加 `eid_count` 计数。
+2. 在恢复 EID 和处理事件时，`priv->eid_info` 中的 EID 值更新发生在资源创建函数调用之后。这导致资源创建过程以及延迟的 IP/路由工作队列消费的是旧的或错误的 EID 值。
+3. 资源创建失败时，EID 条目未被正确清理，导致状态不一致。
+
+#解决方案
+1. 修改 `ipourma_create_new_eid` 函数签名，增加 `int` 返回值以反馈初始化结果。
+2. 调整 EID 初始化顺序：在调用资源创建函数之前，先保存并更新 `priv->eid_info` 中的 EID 值和索引，确保后续工作队列使用正确的 EID。
+3. 只有在 `ipourma_create_new_eid` 返回成功时，才更新 `eid_count`。
+4. 若资源创建失败，清零对应的 `eid_info` 条目，并在调用处打印错误日志，阻止后续流程继续执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0f87bdb52af70057cbabdc4b1eff34eb2e02666b

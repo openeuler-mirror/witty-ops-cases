@@ -1,0 +1,27 @@
+#标题
+drm/amd/pm/smu7: 启用 DC 后因显示控制器电压依赖缺失导致黑屏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 DC（Display Core，Linux 6.19 后默认启用）的情况下，使用 SMU7 硬件（如 Radeon R9 M380）启动时出现黑屏现象，系统无法正常显示图形界面。
+
+#主要错误日志
+未知
+
+#问题根因
+DCE（显示控制器引擎）需要根据当前的时钟电平运行在特定的最小电压下才能正常工作。
+1. 旧代码中该功能的实现依赖 `dal_power_level` 字段，但该字段从未被赋值，导致原有逻辑失效。
+2. 对于 CI ASIC 芯片，此前完全没有实现显示时钟的电压依赖逻辑。
+由于缺失正确的电压请求，DCE 无法在相应时钟频率下稳定工作，导致黑屏。
+
+#解决方案
+1. 新增 `vddc_dependency_on_display_clock` 表，存储显示时钟频率电平与所需电压的对应关系（数值参考 DC 及旧版 radeon 驱动）。
+2. 对于 CI ASIC，在初始化新表后调用 `smu7_patch_vddc()` 处理漏电压问题。
+3. 新增 `smu7_lookup_vddc_from_dispclk()` 函数，根据当前的显示时钟配置查找对应的电压值。
+4. 新增 `smu7_apply_minimum_dce_voltage_request()` 函数，通过 `PPSMC_MSG_VddC_Request` 消息将计算出的电压发送给 SMU。
+5. 移除无效的 `phm_apply_dal_min_voltage_request` 调用，替换为新的电压请求实现。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/10a7982563953ae260a1f48c163c7e94feb0daf9

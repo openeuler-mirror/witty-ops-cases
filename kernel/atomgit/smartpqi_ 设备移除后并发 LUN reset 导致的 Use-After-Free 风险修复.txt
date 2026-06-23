@@ -1,0 +1,24 @@
+#标题
+smartpqi: 设备移除后并发 LUN reset 导致的 Use-After-Free 风险修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SCSI 设备热移除过程中，如果并发执行 LUN reset 操作，可能会导致内核访问已被释放的设备内存，引发内核崩溃或数据结构破坏。具体表现为设备移除后，reset 处理逻辑仍尝试对不存在的设备进行操作。
+
+#主要错误日志
+- `skipping reset of scsi %d:%d:%d:%u, device has been removed` （新增打印，用于拦截非法 reset）
+- `resetting scsi %d:%d:%d:%u SCSI cmd at %p due to cmd opcode 0x%02x` （原有日志，修复后不再对已移除设备触发）
+
+#问题根因
+`pqi_slave_destroy` 函数在移除设备时会释放 `device` 结构体内存，但未等待或排除并发的 LUN reset 操作（`pqi_device_reset_handler`）。这导致一种竞态条件：reset 线程获取锁后正在使用 `device` 指针，而另一线程执行 `pqi_slave_destroy` 释放了该内存，从而造成 Use-After-Free 漏洞。
+
+#解决方案
+1. 在 `pqi_device_reset_handler` 中增加检查逻辑：在持有 `scsi_device_list_lock` 锁的情况下，调用 `pqi_find_scsi_dev` 确认设备是否仍在列表中。若设备已被移除（查找返回 NULL），则打印告警日志并直接返回，避免操作已释放的内存。
+2. 在 `pqi_slave_destroy` 中增加同步与互斥保护：
+   - 调用 `cancel_work_sync` 取消所有待处理的 TMF（Task Management Function）工作队列，防止后台任务引用即将释放的设备。
+   - 在释放设备内存（`pqi_free_device`）前后获取 `lun_reset_mutex` 锁，确保 reset 处理流程执行完毕或被拦截后，再进行内存释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0a9132b47cffc05156ed04422b981bc577506415

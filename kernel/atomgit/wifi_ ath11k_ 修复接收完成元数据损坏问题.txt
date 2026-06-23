@@ -1,0 +1,21 @@
+#标题
+wifi: ath11k: 修复接收完成元数据损坏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在弱内存序架构（如 aarch64）上，驱动读取 REO 目的环描述符时可能读取到过时数据，导致接收元数据损坏。具体表现为 SKB 数据损坏，或用户报告出现如下错误信息：
+ath11k_pci 0006:01:00.0: msdu_done bit in attention is not set
+
+#主要错误日志
+ath11k_pci 0006:01:00.0: msdu_done bit in attention is not set
+
+#问题根因
+在读取 REO destination ring 描述符之前，缺少必要的内存屏障。在弱内存序架构（如 aarch64）上，CPU 可能会在读取头指针之前读取描述符数据，从而导致读取到陈旧的数据，引发 ring-buffer 损坏或元数据读取错误。
+
+#解决方案
+在访问 REO 目的环描述符之前添加 `dma_rmb()` 内存屏障，确保描述符的读取发生在头指针读取之后。同时，使用 `READ_ONCE` 宏来读取描述符中的关键字段（如 info0、cookie 等），防止编译器优化导致的不一致读取，从而避免使用陈旧数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4333666e4aca6a01d2453e55f3f521fb7d4e89a8

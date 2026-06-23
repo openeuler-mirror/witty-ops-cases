@@ -1,0 +1,21 @@
+#标题
+storvsc: MAINTENANCE_IN 命令导致多路径 ALUA 路径状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HyperV 环境下，FC 穿透设备不支持 MAINTENANCE_IN 命令。当多路径 ALUA 模块发送 RTPG（Report Target Port Groups）命令时，触发 SRB_STATUS_DATA_OVERRUN 错误。由于该错误被内核视为严重错误，导致多路径 ALUA 路径被标记为 faulty（故障）状态，进而导致存储链路不可用。
+
+#主要错误日志
+[    3.215560] hv_storvsc 1d69d403-9692-4460-89f9-a8cbcc0f94f3: tag#230 cmd 0xa3 status: scsi 0x0 srb 0x12 hv 0xc0000001
+[    3.215572] scsi 1:0:0:32: alua: rtpg failed, result 458752
+
+#问题根因
+之前的内核提交 812fe6420a6e 将 SRB_STATUS_DATA_OVERRUN 标记为错误处理。HyperV 不支持 MAINTENANCE_IN 命令，在处理相关请求时返回 SRB_STATUS_DATA_OVERRUN。多路径 ALUA 在提交 RTPG 命令（属于 MAINTENANCE_IN 操作）时收到该状态，被错误地判定为严重故障，从而触发路径切换为 faulty 状态。
+
+#解决方案
+修改 `storvsc_drv.c` 文件中的 `storvsc_on_io_completion` 函数逻辑。针对 MAINTENANCE_IN 命令（且设备为 FC 设备），即使返回 SRB_STATUS_DATA_OVERRUN，也将其强制修正为 SRB_STATUS_SUCCESS 和 scsi_status 为 0，使其像 INQUIRY 和 MODE_SENSE 命令一样返回成功，从而避免进入错误处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b4967dbab679eacebe2225a67139dce2a73b248e

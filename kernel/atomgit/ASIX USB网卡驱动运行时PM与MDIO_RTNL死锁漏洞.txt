@@ -1,0 +1,23 @@
+#标题
+ASIX USB网卡驱动运行时PM与MDIO/RTNL死锁漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 AX88772 系列USB网卡时，若启用USB runtime PM（自动挂起），系统可能发生死锁。具体表现为在执行 `ndo_open` 操作时，系统挂起无响应，或出现与电源管理、MDIO通信相关的阻塞问题。该问题还可能触发 CVE-2025-40120 安全漏洞。
+
+#主要错误日志
+未知
+
+#问题根因
+USB runtime PM 机制与驱动内部锁机制存在冲突。`usbnet` 默认启用自动挂起。在 `ndo_open()` 过程中（持有 RTNL 锁），若触发 USB 自动恢复，会调用 `asix_resume()`。该恢复路径持有 USB PM 锁，并进一步调用 phylink/phylib 接口和 MDIO 操作，而这些操作又需要获取 RTNL 锁。由此形成“持有 RTNL 等待 USB PM 锁”与“持有 USB PM 锁等待 RTNL 锁”的死锁循环。
+
+#解决方案
+在驱动绑定阶段持有 PM 使用引用计数，以此禁用该设备的 runtime PM（自动挂起）功能。具体修改如下：
+1. 在 `ax88772_bind()` 函数中调用 `pm_runtime_get_noresume(&intf->dev)`，增加 PM 使用计数，阻止设备进入运行时挂起状态。
+2. 在 `ax88772_unbind()` 函数中调用 `pm_runtime_put(&intf->dev)`，释放引用计数。
+此方法强制设备保持活跃状态，避开了恢复路径中复杂的锁依赖关系，且不影响系统级的休眠/唤醒功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6eec7bc84cd814e9ef06b4c11f681d15bab99a8e

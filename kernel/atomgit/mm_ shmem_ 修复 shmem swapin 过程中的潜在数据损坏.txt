@@ -1,0 +1,20 @@
+#标题
+mm: shmem: 修复 shmem swapin 过程中的潜在数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 shmem 机制进行 swapin（换入）操作时，如果 Swap readahead 异步地将 order 0 的 folios 换入到 swapcache，而 shmem mapping 中仍存储着大 swap entries，会导致潜在的数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+Swap readahead 可能会异步地将 order 0 的 folios 换入到 swapcache 中，与此同时，shmem mapping 中仍然存储着大 swap entries。这种 folio order 与 swap entry order 的不一致性会导致数据损坏风险。
+
+#解决方案
+在 shmem_swapin_folio 函数中增加对 order 一致性的检查。当检测到 mapping 中的 order 与 folio order 不一致时，调用 shmem_split_large_entry 将大 swap entry 进行分裂。同时，如果大 swap entry 已经被分裂，需要根据旧的 order 对齐重新计算新的 swap entry，并在最后的确认检查中增加 order 匹配验证，以防止竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14b872296c1c417c31f1df128c646661ac95c381

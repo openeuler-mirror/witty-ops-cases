@@ -1,0 +1,20 @@
+#标题
+vmxnet3 驱动未正确报告 UDP 隧道 GSO 类型导致丢包
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核引入针对 UDP 隧道的 GRO 包检查机制后（Commit 3d010c8031e3），vmxnet3 驱动接收的 GRO 包在进入隧道时被内核丢弃。表现为 vmxnet3 网卡在处理 VXLAN 或 Geneve 等隧道流量时，网络连接异常或丢包。若在出口接口关闭 tnl-segmentation 卸载功能，且驱动不支持使用 skb 内部字段时，该问题更为明显。
+
+#主要错误日志
+未知
+
+#问题根因
+Linux 内核提交 3d010c8031e3 ("udp: do not accept non-tunnel GSO skbs landing in a tunnel") 增加了检查逻辑，拒绝非隧道 GRO 包进入隧道。vmxnet3 驱动在处理隧道 LRO/GRO 包时，仅设置了 SKB_GSO_TCPV4 或 SKB_GSO_TCPV6 标志，未根据实际情况设置 SKB_GSO_UDP_TUNNEL 或 SKB_GSO_UDP_TUNNEL_CSUM 标志，导致内核将合法的隧道 GRO 包误判为非隧道包而丢弃。
+
+#解决方案
+在 vmxnet3 驱动的接收完成路径中增加 `vmxnet3_lro_tunnel` 函数。当识别到封装的 LRO 包（encap_lro）时，解析外层 IP 头判断是否为 UDP 协议，并进一步检查 UDP 校验和。根据检查结果，正确设置 skb 的 gso_type 为 SKB_GSO_UDP_TUNNEL_CSUM 或 SKB_GSO_UDP_TUNNEL，从而通过内核协议栈的合规性检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/67bda86f0701865594842c4bdd0078f548bfbac2

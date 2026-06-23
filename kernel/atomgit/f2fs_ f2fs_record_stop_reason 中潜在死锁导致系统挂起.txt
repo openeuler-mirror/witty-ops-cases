@@ -1,0 +1,46 @@
+#标题
+f2fs: f2fs_record_stop_reason 中潜在死锁导致系统挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核检测到可能的循环锁定依赖，触发 lockdep 警告。具体表现为 kswapd 进程在尝试获取 `&sbi->sb_lock` 锁时被阻塞，而此时该进程已持有 `sb_internal` 锁，导致了 `&sbi->sb_lock` -> `fs_reclaim` -> `sb_internal` 的锁依赖环路，最终可能引发系统死锁或无响应。
+
+#主要错误日志
+```text
+======================================================
+WARNING: possible circular locking dependency detected
+6.12.0-rc3-syzkaller-00087-gc964ced77262 #0 Not tainted
+------------------------------------------------------
+kswapd0/79 is trying to acquire lock:
+ffff888011824088 (&sbi->sb_lock){++++}-{3:3}, at: f2fs_down_write fs/f2fs/f2fs.h:2199 [inline]
+ffff888011824088 (&sbi->sb_lock){++++}-{3:3}, at: f2fs_record_stop_reason+0x52/0x1d0 fs/f2fs/super.c:4068
+
+but task is already holding lock:
+ffff88804bd92610 (sb_internal#2){.+.+}-{0:0}, at: f2fs_evict_inode+0x662/0x15c0 fs/f2fs/inode.c:842
+...
+Chain exists of:
+  &sbi->sb_lock --> fs_reclaim --> sb_internal#2
+
+ Possible unsafe locking scenario:
+
+       CPU0                    CPU1
+       ----                    ----
+  rlock(sb_internal#2);
+                               lock(fs_reclaim);
+                               lock(sb_internal#2);
+  lock(&sbi->sb_lock);
+```
+
+#问题根因
+在 `f2fs_handle_critical_error` 函数中，同步调用 `f2fs_record_stop_reason` 可能触发死锁。死锁场景如下：
+1. **Thread A**：持有 `sb_internal` 的读锁，调用 `f2fs_do_sync_file` -> `f2fs_handle_critical_error` -> `f2fs_record_stop_reason`，在 `f2fs_commit_super` 中尝试进行内存回收，需要获取 `fs_reclaim` 锁。
+2. **Kswapd**：持有 `fs_reclaim` 锁，在回收 inode 时调用 `f2fs_evict_inode` -> `sb_start_intwrite`，尝试获取 `sb_internal` 的读锁。
+此时，如果 Thread A 继续尝试获取 `sb_internal` 的写锁或相关锁（如 `&sbi->sb_lock`），就会形成 `sb_internal` -> `fs_reclaim` -> `sb_internal` 的锁依赖环路，从而导致死锁。
+
+#解决方案
+修改 `f2fs_handle_critical_error` 函数，移除同步调用 `f2fs_record_stop_reason` 的逻辑。无论上下文是否在中断中，始终通过 `schedule_work(&sbi->s_error_work)` 创建异步任务来记录停止原因。这样可以避免在持有其他锁的情况下进行可能导致死锁的同步操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab1784b97265049641a6cce6247c1ac7137bbbe2

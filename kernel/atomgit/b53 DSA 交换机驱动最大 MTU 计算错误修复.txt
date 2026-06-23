@@ -1,0 +1,20 @@
+#标题
+b53 DSA 交换机驱动最大 MTU 计算错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Broadcom B53 系列 1g 交换机时，驱动程序向上层报告的最大 MTU 值设置错误。由于代码直接使用了以太网帧长度（JMS_MAX_SIZE）作为 MTU 值，导致实际可用的 MTU 上限被错误地放大，忽略了以太网首部、VLAN 标签及帧校验序列（FCS）的开销，可能导致在配置接近理论最大值的 MTU 时出现异常或硬件处理错误。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因是 `b53_get_max_mtu` 函数直接返回了 `JMS_MAX_SIZE`。`JMS_MAX_SIZE` 代表的是最大以太网帧长度，而 MTU（最大传输单元）仅指载荷部分，不包含以太网首部。根据数据手册，大多数千兆交换机支持的最大帧长度为 9720 字节，正确的 MTU 应该是从中减去以太网头（ETH_HLEN）、VLAN 头（VLAN_HLEN）和帧校验序列（ETH_FCS_LEN）。
+
+#解决方案
+修改 `drivers/net/dsa/b53/b53_common.c`，新增宏定义 `B53_MAX_MTU`，将其值计算公式设为 `(9720 - ETH_HLEN - VLAN_HLEN - ETH_FCS_LEN)`，并在 `b53_get_mtu` 函数中返回该宏定义，从而正确报告交换机支持的最大 MTU 值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/47394e8e02ea5f6312f603f4432590086f39f951

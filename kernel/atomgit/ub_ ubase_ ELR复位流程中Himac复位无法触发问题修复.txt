@@ -1,0 +1,26 @@
+#标题
+ub: ubase: ELR复位流程中Himac复位无法触发问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 ELR（Error Link Recovery？）复位过程中，Himac 复位操作无法被触发。导致该现象的原因是 IMU 无法写入软件握手寄存器，导致原设计的通过 USI 中断触发复位的机制失效，进而影响设备的错误恢复流程。
+
+#主要错误日志
+- "failed to send himac reset cmd, ret = %d.\n"（推断：命令发送失败时的打印）
+- "not support err handle processing.\n"（推断：不支持错误处理时的打印）
+- "ubase start to reset himac.\n"（推断：开始复位时的打印）
+
+#问题根因
+问题根因在于 ELR 复位期间，IMU（Internal Management Unit？）无法写入软件握手寄存器。原有的代码逻辑依赖 IMU 写入软件握手寄存器并通过 USI 中断来触发 Himac 复位，由于寄存器写入失败，导致 Himac 复位流程无法被正常唤醒和执行。
+
+#解决方案
+修改 Himac 复位的触发机制，不再依赖 IMU 写入软件握手寄存器和 USI 中断。
+具体改动如下：
+1. 移除了 `ubase_err_handle.c` 和 `ubase_err_handle.h` 文件，删除了通过中断处理任务的旧复位逻辑。
+2. 在 `ubase_reset.c` 中实现了新的复位接口 `ubase_himac_reset`，该接口导出符号供外部模块调用。
+3. 新机制下，由 aubdfx 直接调用 `ubase_himac_reset` 接口来触发 Himac 复位，该接口内部通过发送命令 `UBASE_OPC_HIMAC_RESET` 并增加了重试机制（`HIMAC_RESET_RETRY_CNT`）来确保复位命令发送成功，从而绕过了 IMU 写寄存器失败的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/635eddf16357f792dd2e585ab123bf9c68c360b8

@@ -1,0 +1,24 @@
+#标题
+RDMA/hns：QP 环回时 WQE 数据错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HNS RDMA 驱动中，当队列对（QP）的发送队列（SQ）发生回绕（wrap around）时，构造的工作队列元素（WQE）数据出现错误。具体表现为 WQE 中记录的 SGE（Scatter Gather Entry）索引计算错误，以及 Fast Memory Region（FRMR）相关字段可能包含残留的脏数据，导致 RDMA 通信数据传输异常或任务失败。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **SGE 索引计算错误**：原代码在 `set_rwqe_data_seg` 函数中计算 `RC_SEND_WQE_MSG_START_SGE_IDX` 时使用了输入参数 `*sge_ind`。当 QP 发生回绕时，该索引值未正确反映当前 WQE 的实际位置，导致索引值错误。
+2. **脏数据残留**：在 `set_frmr_seg` 函数中，未显式清除 `FRMR_BLOCK_SIZE` 和 `FRMR_ZBVA` 字段；同时在 `hns_roce_v2_post_send` 中分配 WQE 内存后未初始化关键字节（如 `byte_4`）。这导致复用的 WQE 内存中可能残留上一次操作的旧数据，干扰当前 WQE 的执行。
+
+#解决方案
+1. **修正 SGE 索引计算逻辑**：将 `RC_SEND_WQE_MSG_START_SGE_IDX` 的设置从 `set_rwqe_data_seg` 移至 `set_rc_wqe` 函数中，并改用代表当前 WQE 位置的 `curr_idx` 变量进行计算，确保索引值在 QP 回绕时依然准确。
+2. **清除残留脏数据**：
+   - 在 `set_frmr_seg` 中增加 `hr_reg_clear` 操作，显式清除 `FRMR_BLOCK_SIZE` 和 `FRMR_ZBVA` 字段。
+   - 在 `hns_roce_v2_post_send` 环节，在填写 WQE 之前先将 `byte_4` 字段清零，避免硬件误读残留数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6a6ea42f099249f7efb5fe8d09c382285e05bda7

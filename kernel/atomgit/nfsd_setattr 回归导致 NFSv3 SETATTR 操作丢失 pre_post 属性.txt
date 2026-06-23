@@ -1,0 +1,23 @@
+#标题
+nfsd_setattr 回归导致 NFSv3 SETATTR 操作丢失 pre/post 属性
+
+#内核版本
+OLK-6.6
+
+#问题现象
+NFSv3 客户端执行 SETATTR RPC 调用时，服务端响应中缺失 pre-operation 与 post-operation 属性（wcc 属性），导致客户端无法正确校验文件属性变更前后的状态，违反 NFS 协议实现规范。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit bb4d53d66e4b ("NFSD: use (un)lock_inode instead of fh_(un)lock for file operations") 在重构锁机制时，错误地移除了 `nfsd_setattr()` 函数中对 `fh_fill_pre_attrs()` 和 `fh_fill_post_attrs()` 的调用，导致 SETATTR 过程不再记录和返回属性变更前后的信息，破坏了 NFSv3 的 pre/post op 属性行为。
+
+#解决方案
+1. 在 `nfsd_setattr()` 函数中恢复对 `fh_fill_pre_attrs()` 的调用，在获取 inode 锁后立即填充 pre-op 属性；若填充失败则直接跳转至解锁流程。
+2. 在 `nfsd_setattr()` 函数中恢复对 `fh_fill_post_attrs()` 的调用，在释放 inode 锁前填充 post-op 属性。
+3. 修改返回值逻辑，优先返回属性填充错误，否则返回原有的 `nfserrno(host_err)`。
+4. 在 `nfsd4_setattr()` 调用链中，通过临时设置 `cstate->current_fh.fh_no_wcc = true` 避免重复填充属性，防止与 `nfsd_setattr` 内新增的填充逻辑冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/49d252faaf0f88176d26f2cb839d74c80420a724

@@ -1,0 +1,26 @@
+#标题
+bpftool 构建 Clang >= 21 时未初始化常量指针告警致编译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Clang 版本 21 或更高版本编译内核 bpftool 工具时，若开启 `-Werror` 和 `-Wall` 编译选项，编译过程会因触发现未初始化常量指针告警而中断，导致构建失败。
+
+#主要错误日志
+btf_dumper.c:71:31: error: variable 'finfo' is uninitialized when passed as a const pointer argument here [-Werror,-Wuninitialized-const-pointer]
+   71 |         info.func_info = ptr_to_u64(&finfo);
+      |                                      ^~~~~
+
+prog.c:2294:31: error: variable 'func_info' is uninitialized when passed as a const pointer argument here [-Werror,-Wuninitialized-const-pointer]
+ 2294 |         info.func_info = ptr_to_u64(&func_info);
+      |                               ^~~~~~~~~
+
+#问题根因
+Clang 21 引入了新的诊断逻辑 `-Wuninitialized-const-pointer`，bpftool 代码中存在结构体变量（`finfo` 和 `func_info`）声明后未初始化的情况，直接将其地址作为参数传递给 `ptr_to_u64` 时触发了该告警。由于编译选项开启了 `-Werror`，该告警被升级为错误导致编译终止。
+
+#解决方案
+对涉及到的结构体变量进行初始化。具体修改为将 `struct bpf_func_info finfo;` 修改为 `struct bpf_func_info finfo = {};`，将 `struct bpf_func_info func_info;` 修改为 `struct bpf_func_info func_info = {};`，通过显式初始化消除编译器告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/890354c20e14ef96fc5a09cc19e8b79edce108d3

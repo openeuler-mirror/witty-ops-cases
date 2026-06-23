@@ -1,0 +1,22 @@
+#标题
+objtool 错误处理逻辑不一致导致资源释放异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译内核或使用 objtool 工具检查内核目标文件时，若遇到特定内部错误（如 retpoline 验证、unrets 验证或前缀符号添加失败），objtool 进程可能未正确清理资源直接退出，或返回不明确的错误状态，导致构建流程状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+objtool 的 `check()` 函数中存在错误处理路径不一致的问题。在部分错误检测分支（如 `validate_retpoline`、`validate_unrets` 和 `add_prefix_symbols` 失败时），代码直接执行 `return ret` 返回，未统一跳转至 `out` 标签处执行退出清理逻辑；此外，`cfi_hash_alloc` 分配失败时虽跳转至 `out`，但未设置 `ret` 为负值。这导致致命错误未统一通过 `out` 标签处理，可能导致资源泄漏或错误状态传递不准确。
+
+#解决方案
+修改 `tools/objtool/check.c` 文件中的 `check()` 函数，统一错误处理路径：
+1. 将 `validate_retpoline`、`validate_unrets`、`add_prefix_symbols` 等函数调用失败后的 `return ret` 语句修改为 `goto out`，确保跳转至统一的清理退出逻辑。
+2. 在 `cfi_hash_alloc` 分配失败分支中，显式设置 `ret = -1`，确保通过 `out` 标签返回时携带正确的错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/847b8974b76230ac4621856d6d248eda5d70e881

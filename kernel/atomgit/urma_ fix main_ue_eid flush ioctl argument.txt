@@ -1,0 +1,24 @@
+#标题
+urma: fix main_ue_eid flush ioctl argument
+
+#内核版本
+OLK-6.6
+
+#问题现象
+调用 `UBCORE_CMD_FLUSH_MAIN_UE_EID` ioctl 接口时，驱动未正确填充输出参数。这导致用户态程序无法获取刷新操作的执行状态，可能导致用户态逻辑异常或阻塞。
+
+#主要错误日志
+- `ubcore_log_err("Invalid flush main ue eid args_len: %u.\n", hdr->args_len);`（注：此为修复前旧代码逻辑中的错误打印，修复后该检查逻辑被移除）
+
+#问题根因
+在处理 `UBCORE_CMD_FLUSH_MAIN_UE_EID` 命令时，内核代码存在两个缺陷：
+1. `ubcore_cmd_tlv.c` 中的 TLV 处理表中，该命令对应的 `spec_out` 回调函数和参数数量被置为 NULL 和 0，导致内核未定义如何将执行结果拷贝回用户空间。
+2. `ubcore_uvs_cmd.c` 中的处理函数此前错误地校验了 `args_len` 并直接返回 0，未构造并返回包含 status 的结构体。
+
+#解决方案
+1. 在 `ubcore_cmd_tlv.c` 中实现 `ubcore_flush_main_ue_eid_fill_spec_out` 函数，定义 `FLUSH_MAIN_UE_EID_OUT_STATUS` 输出字段，并将其注册到 `UBCORE_CMD_FLUSH_MAIN_UE_EID` 的 TLV 处理表中。
+2. 在 `ubcore_uvs_cmd.c` 中移除错误的 `args_len` 校验逻辑，改为定义 `ubcore_cmd_main_ue_eid_flush` 结构体，初始化 status 并通过 `ubcore_global_tlv_append` 正确返回给用户态。
+3. 同步更新头文件定义 `ubcore_cmd_main_ue_eid_flush` 结构体及相关枚举值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/734d4e6b37bcf3cf78586479b11f7e6abfb32856

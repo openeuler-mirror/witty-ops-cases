@@ -1,0 +1,24 @@
+#标题
+并行构建 tools 时显示冗余的 "mkdir -p ..." 日志
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_OBJTOOL=y 或 CONFIG_DEBUG_INFO_BTF=y 的情况下，使用多线程（如 make -j16）并行编译内核时，构建过程中会突兀地显示 "mkdir -p ..." 的详细执行日志，影响构建输出的整洁性。
+
+#主要错误日志
+```text
+mkdir -p /home/masahiro/ref/linux/tools/objtool && make O=/home/masahiro/ref/linux subdir=tools/objtool --no-print-directory -C objtool
+mkdir -p /home/masahiro/ref/linux/tools/bpf/resolve_btfids && make O=/home/masahiro/ref/linux subdir=tools/bpf/resolve_btfids --no-print-directory -C bpf/resolve_btfids
+```
+
+#问题根因
+tools/ 和 tools/% 目标在命令行中设置了 `MAKEFLAGS=<value>`。根据 GNU Make 的特性，在命令行定义 MAKEFLAGS 会清除结果 MAKEFLAGS 定义中的命令行开关，尽管这些开关实际上是活动的。
+这导致 `tools/scripts/Makefile.include` 中的代码 `short-opts := $(firstword -$(MAKEFLAGS))` 无法正确解析到静默选项（silent mode），进而导致本应被静默执行的 `mkdir -p` 命令打印出了执行日志。
+
+#解决方案
+移除 Makefile 中 tools/ 和 tools/% 目标构建命令里对 MAKEFLAGS 变量的手动赋值操作。原有的手动赋值不仅引发了 MAKEFLAGS 解析错误，且对于排除 --no-print-directory 选项并非必要，移除后可恢复正常构建输出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f0b057292e102c6c3bb074ef2d1da74f94577092

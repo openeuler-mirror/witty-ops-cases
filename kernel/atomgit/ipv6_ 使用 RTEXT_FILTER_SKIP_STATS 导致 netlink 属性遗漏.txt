@@ -1,0 +1,20 @@
+#标题
+ipv6: 使用 RTEXT_FILTER_SKIP_STATS 导致 netlink 属性遗漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户空间工具（如 iproute2）使用 RTEXT_FILTER_SKIP_STATS 标志进行 IPv6 链路信息 dump 时，内核错误地跳过了非统计类型的 netlink 属性。这导致用户空间工具无法接收到完整的属性信息，例如地址生成模式无法正常显示。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `inet6_fill_ifla6_attrs` 函数中，对 `RTEXT_FILTER_SKIP_STATS` 标志的判断逻辑存在缺陷。原逻辑在检测到该标志时直接 `return 0` 提前返回，导致后续必要的非统计属性（如 IFLA_INET6_TOKEN 等）填充代码被跳过，从而遗漏了关键的 netlink 属性。
+
+#解决方案
+修改 `inet6_fill_ifla6_attrs` 函数逻辑，移除根据 `RTEXT_FILTER_SKIP_STATS` 标志直接返回的做法。将 IFLA_INET6_STATS 和 IFLA_INET6_ICMP6STATS 统计属性的填充逻辑提取到独立的辅助函数 `inet6_fill_ifla6_stats_attrs` 中，仅对该辅助函数的调用进行条件判断。这样确保了在使用 `RTEXT_FILTER_SKIP_STATS` 时仅跳过统计属性，其余属性仍能正常填充。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eecad55ad1f4b4789f189c4633baa9482df14252

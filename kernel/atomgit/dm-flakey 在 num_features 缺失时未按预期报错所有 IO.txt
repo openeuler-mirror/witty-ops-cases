@@ -1,0 +1,24 @@
+#标题
+dm-flakey 在 num_features 缺失时未按预期报错所有 IO
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 dm-flakey 目标的参数中完全缺失 num_features 字段（即 absent）时，驱动未能正确进入“错误所有 IO”的默认故障注入模式，导致 IO 行为不符合预期。相比之下，当 num_features 显式设置为 0 时，驱动会正确报错所有 IO。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `parse_features` 函数中，原代码逻辑仅判断 `as->argc` 是否为 0 来决定是否跳过特性参数解析。如果用户未传递 num_features 参数，`argc` 变量未初始化或未正确赋值，导致后续检查逻辑未生效。修复前，代码在 `as->argc` 为非 0 时才读取参数组，否则直接返回 0，跳过了检查是否没有任何特性被设置的逻辑。因此，当 num_features 缺失时，函数直接返回，未执行 `error_all_io` 相关的标志位设置，导致 IO 不会被错误注入。
+
+#解决方案
+修改 `parse_features` 函数逻辑：
+1. 初始化变量 `r` 为 0，`argc` 为 0。
+2. 移除对 `as->argc` 的提前判断返回，改为仅在 `as->argc` 存在时调用 `dm_read_arg_group` 读取参数到 `argc`。
+3. 调整判断顺序，如果最终 `argc` 为 0（无论是显式传递 0 还是由于参数缺失导致），则跳转到 `error_all_io` 标签。
+4. 在 `error_all_io` 标签处设置 `ERROR_WRITES` 和 `ERROR_READS` 标志位，确保在缺少特性参数配置时，默认将所有 IO 标记为错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9b520201af97155ba009f0b9c34221b343f3dd2

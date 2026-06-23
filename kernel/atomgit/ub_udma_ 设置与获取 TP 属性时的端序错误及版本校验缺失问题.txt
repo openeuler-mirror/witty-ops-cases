@@ -1,0 +1,25 @@
+#标题
+ub/udma: 设置与获取 TP 属性时的端序错误及版本校验缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在调用 `udma_dev_res_ratio_ctrlq_handler` 处理控制队列时，若服务版本不为 `UBASE_CTRLQ_SER_VER_01`，内核无校验逻辑，可能导致后续处理流程异常或未定义行为。
+2. 在调用 `udma_set_tp_attr` 设置 TP 属性时，IP 地址与 MAC 地址未进行端序转换，导致硬件接收到的地址数据错误，可能引发通信建立失败或丢包。
+3. 在调用 `udma_get_tp_attr` 获取 TP 属性时，未将硬件返回的地址数据转换回主机端序，导致上层应用获取到错误的 IP 与 MAC 地址信息。
+
+#主要错误日志
+dev_err(udev->dev, "Unsupported server version (%u).\n", service_ver);
+
+#问题根因
+1. `udma_dev_res_ratio_ctrlq_handler` 函数缺少对 `service_ver` 的有效性校验，未拦截不支持的版本。
+2. `udma_set_tp_attr` 和 `udma_get_tp_attr` 函数在处理 TP 属性时，遗漏了对 IP 地址（sip, dip）和 MAC 地址（sma, dma）的端序转换操作，导致主机序与网络序（或硬件序）不匹配。
+
+#解决方案
+1. 在 `udma_dev_res_ratio_ctrlq_handler` 函数入口处增加版本判断，若版本号非 `UBASE_CTRLQ_SER_VER_01`，则打印错误日志并返回 `-EOPNOTSUPP`。
+2. 在 `udma_set_tp_attr` 中，在发送请求前调用 `udma_swap_endian` 对 sip、dip、sma、dma 字段进行端序转换。
+3. 在 `udma_get_tp_attr` 中，在获取响应数据后调用 `udma_swap_endian` 将 sip、dip、sma、dma 字段转换回主机端序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7b406a1a737767a4aec23c778f6f631453e77b6d

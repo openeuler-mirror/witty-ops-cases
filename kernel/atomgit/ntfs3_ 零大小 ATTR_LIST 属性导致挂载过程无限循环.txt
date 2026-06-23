@@ -1,0 +1,20 @@
+#标题
+ntfs3: 零大小 ATTR_LIST 属性导致挂载过程无限循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+挂载一个特殊构造（畸形）的 NTFS 镜像文件时，内核线程陷入无限循环，导致挂载操作无法完成，引发拒绝服务。具体表现为内核线程挂起，系统负载升高。
+
+#主要错误日志
+未知
+
+#问题根因
+当 NTFS 镜像中存在一个 data_size 为零的 ATTR_LIST 属性时，ntfs_load_attr_list() 函数仍会因 al_aligned(0) 分配内存。这导致 ni->attr_list.size 为零但 ni->attr_list.le 非空的不一致状态。该状态诱导 ni_enum_attr_ex 错误地认为不存在属性列表，仅枚举主 MFT 记录，发现 ATTR_LIST 后重新加载并重启枚举，周而复始形成死循环。
+
+#解决方案
+在 ntfs_load_attr_list() 函数中增加对 data_size 的合法性检查。针对驻留和非驻留两种情况，若检测到 lsize 为 0，则直接返回 -EINVAL 错误，避免后续的内存分配和死循环逻辑，从而防止 DoS 攻击。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad12d170ef8f7c9b969e9d38ad6b8330c0682d9c

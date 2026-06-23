@@ -1,0 +1,21 @@
+#标题
+xfs: 修复空闲数据块计数修改时的数据溢出问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 XFS 文件系统进行 AG（Allocation Group）收缩或重新挂载为只读操作时，可能导致空闲数据块计数发生溢出。该问题可能引发内核逻辑错误，严重情况下导致文件系统状态不一致或触发内核关闭。
+
+#主要错误日志
+- 推断：xfs_warn(mp, "Error %d freeing per-AG metadata reserve pool.", error);
+- 推断：trace_xfs_ag_resv_free_error(pag->pag_mount, pag->pag_agno, error, _RET_IP_);
+
+#问题根因
+原有代码中，`xfs_add_fdblocks` 和 `xfs_dec_fdblocks` 接口独立处理计数增加和减少，其参数类型为 `uint64_t`。在特定计算路径下（如 `oldlen - newlen` 结果为负数，或 `da_old - da_new` 为负数时），负值会被错误的类型转换处理，导致数据溢出，进而引发计数错误。
+
+#解决方案
+合并 `xfs_add_fdblocks` 和 `xfs_dec_fdblocks` 函数为统一的 `xfs_mod_fdblocks` 接口，将参数类型改为有符号的 `int64_t`，从而正确处理负值 delta 情况，避免溢出。同时，更新所有调用点以适配新接口，并对 `xfs_ag_resv_free` 等相关函数增加了错误返回值检查与处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b8bd7598f6f33085a1bda5786c053c12ff4b0bd1

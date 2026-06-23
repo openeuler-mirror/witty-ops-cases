@@ -1,0 +1,20 @@
+#标题
+LoongArch PMU 混合类型事件组分配失败导致 perf 事件打开异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构下，当 perf 事件组包含混合类型事件（如 PERF_TYPE_SOFTWARE 和 PERF_TYPE_HARDWARE）时，创建事件组失败。用户程序调用 `syscall(SYS_perf_event_open, ...)` 尝试将硬件性能事件添加到以软件事件为 Leader 的组中时，系统调用返回错误，导致断言失败或程序异常退出，无法正常进行性能分析。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `validate_group()` 函数中，代码无条件地为事件组中的 Leader、兄弟事件和新事件分配硬件 PMU 计数器。对于混合类型事件组，如果事件类型为 `PERF_TYPE_SOFTWARE`，当前逻辑仍然错误地尝试为其分配硬件 PMU 计数器。这导致不必要地消耗硬件 PMU 资源，引发虚假的分配失败，从而导致事件组验证无法通过。
+
+#解决方案
+在 `arch/loongarch/kernel/perf_event.c` 中新增辅助函数 `loongarch_pmu_event_requires_counter()`，用于判断事件是否需要硬件计数器。该函数仅对 `PERF_TYPE_HARDWARE`、`PERF_TYPE_HW_CACHE` 和 `PERF_TYPE_RAW` 类型返回 true。修改 `validate_group()` 函数，在调用 `loongarch_pmu_alloc_counter()` 前增加类型检查，跳过软件事件的硬件计数器分配过程，从而修复混合类型事件组的分配失败问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/39e70c461ce22d2199f14b0821bc9c21f58668b0

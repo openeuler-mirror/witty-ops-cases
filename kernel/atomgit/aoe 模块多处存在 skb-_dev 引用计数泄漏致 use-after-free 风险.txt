@@ -1,0 +1,24 @@
+#标题
+aoe 模块多处存在 skb->dev 引用计数泄漏致 use-after-free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AOE (ATA over Ethernet) 驱动运行过程中，当系统调用 `revalidate()`、`aoecmd_ata_rw()`、`resend()`、`probe()` 或 `aoecmd_cfg_rsp()` 等函数通过 `aoenet_xmit()` 发送数据包时，可能触发内核内存引用计数错误。具体表现为：
+1. 网络设备引用计数（refcnt）减至负值。
+2. 引发潜在的 use-after-free（释放后使用）内核安全漏洞（CVE-2023-6270 相关）。
+
+#主要错误日志
+未知
+
+#问题根因
+先前为修复 CVE-2023-6270 引入的提交 `f98364e92662` 将 `dev_put()` 操作移至 `tx()` 函数中执行，以解决 `aoecmd_cfg_pkts` 中的 use-after-free 问题。然而，该修改遗漏了 AOE 驱动中的其他数据发送路径（如 `revalidate`、`aoecmd_ata_rw`、`resend`、`probe` 等函数）。这些函数在将 skb 推送到发送队列前未调用 `dev_hold()` 增加设备引用计数，但 `tx()` 函数会统一执行 `dev_put()`。这导致引用计数不平衡，从而引发引用计数泄漏甚至变为负值，进而导致 use-after-free 问题。
+
+#解决方案
+在所有调用 `aoenet_xmit()` 进行数据包发送的代码路径中，成对增加 `dev_hold()` 与 `dev_put()` 调用：
+1. 在 `ata_rw_frameinit()`、`resend()`、`aoecmd_ata_id()` 等函数设置 `skb->dev` 之前，调用 `dev_hold()` 增加引用计数。
+2. 在数据包发送失败的错误处理路径（如 `skb_clone` 失败或构造失败时）或不需要发送的分支中，补充调用 `dev_put()` 以平衡引用计数，确保设备引用计数管理的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/87b1bb52ef24e215b75fcde9bbfe1eec9666c53d

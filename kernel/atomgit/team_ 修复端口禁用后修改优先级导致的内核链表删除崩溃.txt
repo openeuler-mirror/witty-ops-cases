@@ -1,0 +1,31 @@
+#标题
+team: 修复端口禁用后修改优先级导致的内核链表删除崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 team 网卡端口被禁用后，若通过 netlink 修改该端口的 priority 选项，内核会触发链表删除校验失败，导致内核崩溃（Kernel BUG）或 Oops。具体表现为 `list_del corruption` 错误，系统可能死机或重启。该问题由 syzkaller 发现。
+
+#主要错误日志
+list_del corruption, ffff888058bea080->prev is LIST_POISON2 (dead000000000122)
+------------[ cut here ]------------
+kernel BUG at lib/list_debug.c:59!
+Oops: invalid opcode: 0000 [#1] SMP KASAN NOPTI
+RIP: 0010:__list_del_entry_valid_or_report+0x13e/0x200 lib/list_debug.c:59
+Call Trace:
+ __team_queue_override_port_del drivers/net/team/team_core.c:826 [inline]
+ team_queue_override_port_prio_changed drivers/net/team/team_core.c:883 [inline]
+ team_priority_option_set+0x171/0x2f0 drivers/net/team/team_core.c:1534
+
+#问题根因
+在函数 `team_queue_override_port_prio_changed` 中，检查端口是否需要进行队列覆盖重置的逻辑存在错误。
+原有逻辑检查条件为 `!port->queue_id || team_port_enabled(port)`。如果端口已禁用（disabled）且 `queue_id != 0`，该条件判断为假，代码继续执行 `__team_queue_override_port_del`。
+然而，在端口禁用的流程（`team_port_disable` -> `team_queue_override_port_del`）中，该端口已经从链表中删除。此时再次尝试删除同一个端口实体，导致 `list_del` 操作检测到链表节点已被破坏（prev 指向 LIST_POISON2），从而触发内核 BUG。
+
+#解决方案
+修改 `team_queue_override_port_prio_changed` 函数中的判断条件，将 `team_port_enabled(port)` 改为 `!team_port_enabled(port)`。
+修正后的逻辑为：如果端口的 `queue_id` 为 0，或者端口未启用，则直接返回，不再尝试进行链表删除操作。这确保了已禁用的端口不会触发无效的链表删除流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d3d8027e8333a6a49c22b02427eb24937bf70cce

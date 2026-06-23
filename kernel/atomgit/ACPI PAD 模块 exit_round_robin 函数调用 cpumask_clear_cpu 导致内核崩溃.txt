@@ -1,0 +1,26 @@
+#标题
+ACPI PAD 模块 exit_round_robin 函数调用 cpumask_clear_cpu 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行 `acpi_pad` 模块的 `exit_round_robin()` 函数时偶尔发生崩溃。具体表现为无法处理内核分页请求，导致系统 Oops。通过 crash 工具分析发现，`tsk_in_cpu` 数组中存在值为 `0xffffffff` 的无效索引，该值传入 `cpumask_clear_cpu` 后导致内存地址计算错误与访问越界。
+
+#主要错误日志
+BUG: unable to handle kernel paging request at ffffffffe0740618
+RIP: 0010:power_saving_thread+0x313/0x411 [acpi_pad]
+RAX: 00000000ffffffff
+Call Trace:
+ acpi_pad_add+0x120/0x120 [acpi_pad]
+ kthread+0x10b/0x130
+ ret_from_fork+0x1f/0x40
+
+#问题根因
+在 `exit_round_robin()` 函数中，未对 `tsk_in_cpu[tsk_index]` 的值进行有效性检查即调用了 `cpumask_clear_cpu()`。当 `tsk_in_cpu[tsk_index]` 的值为 `0xffffffff` (-1) 时，`clear_bit` 操作中的地址计算会导致内存对齐错误，访问了无效的内存地址，从而触发内核崩溃。
+
+#解决方案
+在 `exit_round_robin()` 函数中调用 `cpumask_clear_cpu()` 之前，增加对 `tsk_in_cpu[tsk_index]` 是否等于 `-1` 的判断。只有当值不为 `-1` 时才执行清除 CPU 掩码位和重置变量的操作，防止使用无效索引进行位操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c53d3aacb1625c552481581ab79c51e83213b712

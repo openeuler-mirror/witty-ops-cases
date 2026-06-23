@@ -1,0 +1,25 @@
+#标题
+ub/ubdevshm: 多线程场景下寄存器段注册失败问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多线程场景下，用户在一个线程申请内存，在另一个线程注册段（register segment）时，注册操作失败，导致功能异常。
+
+#主要错误日志
+- `register segment can not find task: is_exist: %d, current tgid: %d,\n start_time: %llx, role.tgid: %d, role.aux: %llx\n`
+- `find cntr failed: current tgid:%d, start_time: %llx\n`
+- `find ctx_inner failed: role.tgid: %d, role.aux: %llx\n`
+
+#问题根因
+在多线程环境中，线程组ID（tgid）是共享的，但线程的 `start_time` 不一致。原代码使用 `task->start_time` 作为角色鉴权的辅助标识，当用户在一个线程申请内存并在另一个线程注册段时，由于 `start_time` 不匹配导致鉴权失败，进而无法找到对应的 task 或 container，导致注册段失败。
+
+#解决方案
+将角色信息的获取与比对逻辑从基于单个线程的 `task->start_time` 修改为基于线程组主的 `task->group_leader->start_time`。
+1. 在 `fill_role_info` 和 `set_role` 函数中，将 `role.aux` 的赋值改为 `task->group_leader->start_time`，确保同一进程内的所有线程获取到相同的时间戳标识。
+2. 在 `is_same_role_task` 和 `lite_role_get_task_exist` 函数中，同步更新比对逻辑，使用 `tsk->group_leader->start_time` 进行匹配，并兼容 32 位截断场景（`role->lite`）。
+3. 完善了相关错误路径的日志打印，输出 tgid、start_time 和 role 信息以便于调试。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/199581b43cba57c441f506f0ab2a344d993d9137

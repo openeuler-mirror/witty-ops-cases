@@ -1,0 +1,30 @@
+#标题
+cfg80211分配rfkill失败导致访问未初始化wiphy_work锁崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 cfg80211 模块分配 rfkill 失败时，系统触发 lockdep 警告并关闭锁定正确性验证器。调用链显示在 `wiphy_new_nm` 流程中，因错误处理路径调用 `cfg80211_dev_free`，进而访问了未初始化的 `wiphy_work_lock`。
+
+#主要错误日志
+INFO: trying to register non-static key.
+The code is fine but needs lockdep annotation, or maybe
+you didn't initialize this object before use?
+turning off the locking correctness validator.
+CPU: 0 UID: 0 PID: 5935 Comm: syz-executor550 Not tainted 6.14.0-rc6-syzkaller-00103-g4003c9e78778 #0
+...
+Call Trace:
+ ...
+ _raw_spin_lock_irqsave+0x3a/0x60 kernel/locking/spinlock.c:162
+ cfg80211_dev_free+0x30/0x3d0 net/wireless/core.c:1196
+ ...
+
+#问题根因
+在 `wiphy_new_nm` 函数中，`wiphy_work` 相关数据结构（包括 `wiphy_work_lock`）的初始化位置在 `rfkill` 分配之后。当 `rfkill` 分配失败时，代码进入错误处理流程释放 wiphy 资源，该流程会调用 `cfg80211_dev_free`，该函数尝试获取 `wiphy_work_lock`，但此时该锁尚未初始化，导致访问未初始化数据的问题。
+
+#解决方案
+将 `wiphy_work`、`wiphy_work_list` 和 `wiphy_work_lock` 的初始化代码移动到 `rfkill` 分配之前。这样确保即使在 `rfkill` 分配失败需要回滚资源时，相关的锁和数据结构已经完成初始化，避免访问未初始化的锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f428dddff0dcf7f77ee6148f5f67574d60f8e9be

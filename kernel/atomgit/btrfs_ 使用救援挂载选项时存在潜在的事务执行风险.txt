@@ -1,0 +1,20 @@
+#标题
+btrfs: 使用救援挂载选项时存在潜在的事务执行风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当文件系统使用 `nologreplay`、`ignorebadroots` 或 `ignoredatasums` 等救援相关的挂载选项时，系统仍可能允许新的事务执行。这违反了救援模式的设计初衷，可能导致文件系统元数据与数据不一致，进而引发数据损坏或文件系统状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `open_ctree` 函数在处理救援挂载选项时，未正确将文件系统状态标记为只读错误状态。代码逻辑中缺少对这些特殊挂载选项的检查机制，导致在这些高风险模式下未能通过设置 `fs_error` 为 `-EROFS` 来阻止后续事务的启动。
+
+#解决方案
+在 `fs.h` 中定义 `BTRFS_MOUNT_FULL_RO_MASK` 宏，囊括所有需要完全只读模式的救援挂载选项（`BTRFS_MOUNT_NOLOGREPLAY`、`BTRFS_MOUNT_IGNOREBADROOTS`、`BTRFS_MOUNT_IGNOREDATACSUMS`）。在 `disk-io.c` 中新增 `fs_is_full_ro` 函数用于检测当前是否处于上述救援模式。在 `open_ctree` 函数初始化过程中增加检查逻辑：若检测到使用了救援选项，立即调用 `WRITE_ONCE` 将 `fs_info->fs_error` 设置为 `-EROFS`，从而禁止任何新事务的执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/026493fe77c35b5703e5c04e33c2b1dd23321bc2

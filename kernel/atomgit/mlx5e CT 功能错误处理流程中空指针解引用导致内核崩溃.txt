@@ -1,0 +1,38 @@
+#标题
+mlx5e CT 功能错误处理流程中空指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mlx5_core 驱动的 CT（Connection Tracking）功能中，当 `mlx5_tc_ct_entry_add_rule()` 函数执行出错流程时（具体为 `ct_rule_add()` 回调返回错误），系统触发内核空指针解引用，导致机器崩溃或内核 Oops。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000110
+RIP: 0010:mlx5_tc_ct_entry_add_rule+0x2b1/0x2f0 [mlx5_core]
+Call Trace:
+ <TASK>
+ ? __die+0x20/0x70
+ ? page_fault_oops+0x150/0x3e0
+ ? exc_page_fault+0x74/0x140
+ ? asm_exc_page_fault+0x22/0x30
+ ? mlx5_tc_ct_entry_add_rule+0x2b1/0x2f0 [mlx5_core]
+ ? mlx5_tc_ct_entry_add_rule+0x1d5/0x2f0 [mlx5_core]
+ mlx5_tc_ct_block_flow_offload+0xc6a/0xf90 [mlx5_core]
+ nf_flow_offload_tuple+0xd8/0x190 [nf_flow_table]
+ flow_offload_work_handler+0x142/0x320 [nf_flow_table]
+ process_one_work+0x16c/0x320
+ worker_thread+0x28c/0x3a0
+ kthread+0xb8/0xf0
+ ret_from_fork+0x2d/0x50
+ ret_from_fork_asm+0x1a/0x30
+ </TASK>
+
+#问题根因
+在 `mlx5_tc_ct_entry_add_rule()` 函数的错误处理路径 `err_rule` 标签处，代码错误地使用了 `zone_rule->attr` 指针。此时 `zone_rule->attr` 尚未初始化（为 NULL），而正确的指针存储在局部变量 `attr` 中。试图访问未初始化的指针导致空指针解引用。
+
+#解决方案
+修改 `drivers/net/ethernet/mellanox/mlx5/core/en/tc_ct.c` 文件中 `err_rule` 标签下的代码，将 `mlx5_tc_ct_entry_destroy_mod_hdr()` 函数的第二个参数从 `zone_rule->attr` 更正为 `attr`，确保使用已初始化的有效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9014ac42d8924ae3a38a41933ee437c3fd161b4

@@ -1,0 +1,20 @@
+#标题
+netfilter: nf_conntrack_h323 修复 decode_choice 越界读漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当防火墙开启 nf_conntrack_h323 模块时，攻击者通过向端口 1720 发送特制的 Q.931 SETUP 消息（User-User Information Element 包含特定的 2 字节 PER 编码数据），可触发内核堆内存越界读取。经 AddressSanitizer 确认，存在 1-2 字节的堆缓冲区溢出读现象。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `decode_choice()` 函数中，调用 `get_len()` 前进行边界检查时使用了局部变量 `len`，但此时 `len` 尚未被赋值，仍为初始化时的值 0。当 bitstream 恰好被消耗完（bs->cur == bs->end）时，函数 `nf_h323_error_boundary(bs, 0, 0)` 判断结果为假（未越界），导致后续 `get_len()` 调用读取了缓冲区外的 1-2 字节数据。
+
+#解决方案
+修改 `decode_choice()` 函数中的边界检查逻辑，将 `nf_h323_error_boundary(bs, len, 0)` 中的参数 `len` 替换为常量 `2`。这符合 `get_len()` 函数最多可能读取 2 字节的实际情况，并与该文件中其他调用 `get_len()` 处的边界检查模式保持一致，从而防止越界读取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db9a5a52ac9ffc4a1878f7b4a6c924f69097aa5d

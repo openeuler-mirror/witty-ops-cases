@@ -1,0 +1,20 @@
+#标题
+RDMA/erdma: erdma_accept_newconn 函数存在释放后使用（UAF）风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA erdma 驱动处理新连接请求（`erdma_accept_newconn`）时，若连接建立过程中发生错误（如 MPA 拒绝或超时），驱动会释放 `new_cep` 结构体。由于代码逻辑错误，在释放该结构体后，内核仍试图访问其成员变量 `new_cep->sock`，导致发生释放后使用问题，可能引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `erdma_accept_newconn` 的错误处理路径中，代码首先调用了 `erdma_cep_put(new_cep)`。该函数调用导致 `new_cep` 结构体的引用计数减为零从而被释放。随后，代码紧接着执行了 `new_cep->sock = NULL;`，此时访问 `new_cep` 指针指向的内存已非法。这是典型的释放后使用问题，由指针操作顺序不当引起。
+
+#解决方案
+删除 `erdma_cep_put(new_cep)` 调用之后的 `new_cep->sock = NULL;` 赋值语句。该赋值操作在资源释放后不仅多余而且非法，删除该行代码即可消除 UAF 隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/975c3ae68975324c51e2fd794e67c6dbc05f7c55

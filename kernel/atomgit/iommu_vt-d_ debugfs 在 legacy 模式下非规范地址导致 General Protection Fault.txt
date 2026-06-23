@@ -1,0 +1,32 @@
+#标题
+iommu/vt-d: debugfs 在 legacy 模式下非规范地址导致 General Protection Fault
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 legacy 模式下，当 IOMMU 的 Translation Type (TT) 不是 00b 或 01b 时，SSPTPTR 可能处于未初始化或为零的状态。此时若通过 debugfs 触发页表遍历（如执行 `cat` 操作读取相关节点），内核会访问非法地址，触发 General Protection Fault（一般性保护错误），导致 Oops 并打印调用栈。
+
+#主要错误日志
+Oops: general protection fault, probably for non-canonical address 0xf00087d3f000f000: 0000 [#1] SMP NOPTI
+CPU: 2 UID: 0 PID: 786 Comm: cat Not tainted 6.16.0 #191 PREEMPT(voluntary)
+Hardware name: QEMU Standard PC (Q35 + ICH9), 2009), BIOS 1.17.0-5.fc42 04/01/2014
+RIP: 0010:pgtable_walk_level+0x98/0x150
+RSP: 0018:ffffc90000f279c0 EFLAGS: 00010206
+RAX: 0000000040000000 RBX: ffffc90000f27ab0 RCX: 000000000000001e
+RDX: 0000000000000003 RSI: f00087d3f000f000 RDI: f00087d3f0010000
+Call Trace:
+ <TASK>
+ pgtable_walk_level+0x88/0x150
+ domain_translation_struct_show.isra.0+0x2d9/0x300
+ dev_domain_translation_struct_show+0x20/0x40
+ seq_read_iter+0x12d/0x490
+
+#问题根因
+在 legacy 模式下，代码无条件地从 context 表项中提取页表指针进行遍历。根据硬件规范，如果 Translation Type (TT) 字段不是 00b 或 01b，SSPTPTR（Second Stage Page Table Pointer）将被忽略，此时该指针可能是未初始化或无效的。原代码未对 TT 类型进行判断，直接使用了无效的地址，导致访问非规范地址（non-canonical address）引发 General Protection Fault。
+
+#解决方案
+在 legacy 模式处理逻辑中增加对 Translation Type (TT) 字段的检查。仅当 TT 类型为 CONTEXT_TT_MULTI_LEVEL 或 CONTEXT_TT_DEV_IOTLB 时，才提取 pgd 并进行页表遍历；对于其他 TT 类型，直接跳过遍历逻辑以避免访问无效地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d4e0d45f9f28d927b0b30fc3c5a25b8617a907ce

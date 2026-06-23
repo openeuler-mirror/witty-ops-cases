@@ -1,0 +1,20 @@
+#标题
+rxrpc 服务 socket 未预分配调用导致内核 Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当打开并绑定一个 AF_RXRPC 服务 socket，但未进行调用预分配时，收到传入连接请求会触发内核 Oops。系统在 `rxrpc_alloc_incoming_call()` 函数中因访问空指针导致崩溃，进而导致服务异常或不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 AF_RXRPC 服务 socket 的处理逻辑中，`rxrpc_backlog` 结构体直到第一次预分配操作时才会被分配内存。如果服务 socket 仅进行了打开和绑定操作，而未执行预分配调用，则 `rxrpc_backlog` 结构体不存在（为 NULL）。此时若收到传入调用请求，`rxrpc_alloc_incoming_call()` 函数尝试访问该不存在的结构体成员，从而触发空指针解引用导致的 Oops。
+
+#解决方案
+在 `rxrpc_alloc_incoming_call()` 函数中增加对 `rxrpc_backlog` 结构体是否存在的检查。如果检测到该结构体不存在（指针为 NULL），函数直接返回 NULL，上层逻辑据此终止传入调用的处理并丢弃该调用，从而避免空指针访问导致的系统崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/676c09651f8506d3e9fb6eba02dec7e7e6a7ab84

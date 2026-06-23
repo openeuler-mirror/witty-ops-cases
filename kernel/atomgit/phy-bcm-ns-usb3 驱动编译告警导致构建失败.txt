@@ -1,0 +1,20 @@
+#标题
+phy-bcm-ns-usb3 驱动编译告警导致构建失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 clang 编译器开启 W=1 选项进行 64 位编译测试时，驱动 `phy-bcm-ns-usb3.c` 触发编译错误（视为fatal warning），导致内核构建过程中断。
+
+#主要错误日志
+phy-bcm-ns-usb3.c:206:17: error: cast to smaller integer type 'enum bcm_ns_family' from 'const void *' [-Werror,-Wvoid-pointer-to-enum-cast]
+
+#问题根因
+在 commit 21bf6fc47a1e ("phy: Use device_get_match_data()") 中，代码将 `device_get_match_data()` 返回的 `const void *` 指针直接强制转换为枚举类型 `enum bcm_ns_family`。由于在 64 位系统上指针大小（8字节）大于枚举大小（通常为 4 字节），clang 编译器检测到类型降级转换并报错。
+
+#解决方案
+将 `device_get_match_data()` 的返回值先强制转换为 `unsigned long` 类型，再赋值给枚举变量。根据内核社区的讨论共识，使用 `unsigned long` 进行指针到整数的转换比 `uintptr_t` 更为合适。代码变更为：`usb3->family = (unsigned long)device_get_match_data(dev);`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cb5423729491d27e7b694d9e9a0eea7b56dd03cf

@@ -1,0 +1,36 @@
+#标题
+KVM: arm64: HiSilicon IPIV 功能配置冲突及状态校验缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 Host 侧配置内核启动参数 `kvm-arm.vgic_v4_enable=0 kvm-arm.ipiv_enabled=1` 时，IPIV 功能错误地显示为 enabled，实际因依赖 GICv4.1 未满足应处于禁用状态。
+2. 虚拟机迁移或复位后，IPIV 的使能状态 (`enable_ipiv_from_guest`) 可能不一致，导致功能异常。
+3. IPIV 开启时，若 vcpu_id 与 vcpu_idx 不一致，可能导致故障且无明显报错。
+4. IPIV 开启时，Guest 修改 MPIDR 寄存器可能导致硬件状态与软件视图不一致，引发异常。
+
+#主要错误日志
+- IPIV ERROR: vcpu_id %d != vcpu_idx %d\n
+- IPIV ERROR: MPIDR changed\n
+- IPIV error: IRM=1 Guest broadcast error\n
+- IPIV error: Guest group broadcast error\n
+- IPIV error: The VCPU index is out of range\n
+- Hisi ipiv needs to enable GICv4p1!\n
+
+#问题根因
+1. **依赖检查逻辑缺陷**：原代码中 IPIV 的支持判断未正确引用全局 GIC 状态（`kvm_vgic_global_state.has_gicv4_1`），导致在 GICv4.1 未使能（`vgic_v4_enable=0`）时仍错误地认为 IPIV 可用。
+2. **生命周期管理缺失**：IPIV 的使能状态未与虚拟机生命周期（如复位、迁移）正确绑定，缺少复位时清除 `enable_ipiv_from_guest` 标志的逻辑。
+3. **配置校验不足**：未对 IPIV 开启条件下的 vCPU ID 一致性（`vcpu_id == vcpu_idx`）和 MPIDR 寄存器只读属性进行强制检查，违反了硬件对 MPIDR 不可变的要求。
+
+#解决方案
+1. **修正依赖检查**：使用 `kvm_vgic_global_state.has_gicv4_1` 替代原有检查函数，确保 IPIV 依赖 GICv4.1 正确生效。
+2. **完善生命周期管理**：在虚拟机复位逻辑 (`vgic_its_reset`) 中显式将 `enable_ipiv_from_guest` 设置为 false，确保状态一致性。
+3. **增加配置校验与拦截**：
+   - 在 vCPU 初始化检查中增加 `vcpu_id != vcpu_idx` 的判断，不满足时返回 `-EINVAL` 并打印错误日志。
+   - 增加 `set_mpidr` 回调函数，拦截 IPIV 开启时的 MPIDR 写操作，若值发生变化则返回 `-EINVAL` 并报错。
+4. **增强错误报告**：在 IPIV 中断处理函数中增加对 IRM 错误、组广播错误及 VCPU 索引越界的详细日志打印。
+5. **重构控制流**：将 IPIV 相关代码通过 `CONFIG_ARM64_HISI_IPIV` 宏进行包裹，清理全局变量，改为通过 `ioctl` 和 SMCCC 接口按虚拟机粒度控制使能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/13aa55dbebba1a59e097f2c54dee2edfcbb300c4

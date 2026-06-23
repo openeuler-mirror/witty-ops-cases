@@ -1,0 +1,21 @@
+#标题
+x86/bugs: UNTRAIN_RET 与 IBPB 入口缓解措施冲突导致冗余开销
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统启动且同时受到 Retbleed 和 SRSO 漏洞影响的情况下，若 Retbleed 选择了 IBPB 缓解措施，而 SRSO 选择了软件序列（如 UNRET），系统会错误地加载并执行不必要的软件返回指令非训练序列（UNTRAIN_RET）。虽然未直接导致系统崩溃，但这造成了不必要的性能开销，且违背了 IBPB 已清除所有有害预测后无需软件缓解的逻辑。
+
+#主要错误日志
+未知
+
+#问题根因
+当 X86_FEATURE_ENTRY_IBPB 特性被设置时，IBPB（Indirect Branch Predictor Barrier）在入口处已使所有有害的分支预测失效，此时不再需要基于软件的返回指令非训练（software-based untraining of returns）。
+然而，内核在选择缓解措施时逻辑存在缺失：如果一种缓解措施（如 Retbleed）配置了 IBPB，而另一种缓解措施（如 SRSO）仍尝试使用软件序列，后者设置的 X86_FEATURE_UNRET 和 X86_FEATURE_RETHUNK 标志位未被清除，导致系统仍然执行了冗余的软件缓解代码。
+
+#解决方案
+在 `retbleed_select_mitigation` 和 `srso_select_mitigation` 函数中，当配置 `X86_FEATURE_ENTRY_IBPB` 时，强制清除 `X86_FEATURE_UNRET` 和 `X86_FEATURE_RETHUNK` 特性位。这确保了一旦 IBPB 入口缓解生效，相关的软件非训练逻辑会被显式跳过，从而消除冗余操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7e0eda870982972e8ec4fb9154fc1f134f0504b1

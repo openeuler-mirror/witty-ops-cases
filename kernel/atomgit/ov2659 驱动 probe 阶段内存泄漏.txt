@@ -1,0 +1,21 @@
+#标题
+ov2659 驱动 probe 阶段内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 ov2659 摄像头驱动模块或系统启动初始化该设备时，若控制处理器初始化过程中发生错误（如 `v4l2_ctrl_handler_init` 或控件添加失败），驱动探测函数 `ov2659_probe` 将直接返回错误码，导致已分配的控制处理器资源未被释放，进而引发内存泄漏。
+
+#主要错误日志
+[推断] dmesg 日志可能包含如下错误信息：
+ov2659: ov2659_probe: control initialization error %d
+
+#问题根因
+在 `ov2659_probe` 函数中，当 `ov2659->ctrls.error` 判断为真（即控制初始化出错）时，代码路径直接 `return` 返回了错误码，但遗漏了调用 `v4l2_ctrl_handler_free()` 来释放此前已经分配的 `ctrls` 资源，导致内存泄漏。此外，`ctrl_handler` 的赋值时机在错误检查之前也不符合最佳实践。
+
+#解决方案
+在 `ov2659_probe` 函数的错误处理路径中增加 `v4l2_ctrl_handler_free(&ov2659->ctrls)` 调用，确保在初始化失败时正确释放内存；同时调整 `ov2659->sd.ctrl_handler` 的赋值位置至错误检查通过之后，优化代码逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/63128e0fcd1d2547aa6cd0d37d85dfc12a2b3634

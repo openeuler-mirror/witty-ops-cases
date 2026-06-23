@@ -1,0 +1,22 @@
+#标题
+USB dummy-hcd 驱动因竞态条件导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Syzbot 测试中，触发了一个寻址异常和内核崩溃。崩溃发生在 `drivers/usb/gadgets/udc/core.c` 文件的 `usb_gadget_udc_reset()` 函数中，原因是该函数被调用时传入的第二个参数 "driver" 为 NULL。这是由于 USB 重置操作与驱动解绑操作之间存在竞态条件导致的。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `set_link_state()` 函数中的锁同步逻辑错误。在处理模拟 USB 重置时，代码先执行 `stop_activity(dum)`，再增加 `dum->callback_usage` 计数。
+由于 `stop_activity()` 例程内部会临时释放并重新获取 `dum->lock` 自旋锁，这给了另一个正在执行驱动解绑的线程可乘之机。该解绑线程获取锁后，检查发现 `dum->callback_usage` 尚未增加（为 0），因此无需等待即可直接清除 `dum->ints_enabled` 和 `dum->driver` 指针。
+随后，原线程继续执行调用 `usb_gadget_udc_reset(&dum->gadget, dum->driver)` 时，`dum->driver` 已被清空，导致传入 NULL 参数引发崩溃。
+
+#解决方案
+调整 `set_link_state()` 函数中的执行顺序，将 `dum->callback_usage` 的自增操作移至 `stop_activity()` 调用之前。这样可以确保在 `stop_activity()` 释放锁期间，解绑线程必须等待 `dum->callback_usage` 归零后才能清除 `dum->driver`，从而保证 `usb_gadget_udc_reset()` 调用时驱动指针有效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3773e8ff652a0e832980878c082b14535712e012

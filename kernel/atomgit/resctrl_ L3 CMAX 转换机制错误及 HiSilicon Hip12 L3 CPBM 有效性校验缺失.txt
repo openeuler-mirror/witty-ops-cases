@@ -1,0 +1,26 @@
+#标题
+resctrl: L3 CMAX 转换机制错误及 HiSilicon Hip12 L3 CPBM 有效性校验缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 MPAM 架构下（特别是 HiSilicon 平台），通过 resctrl 文件系统配置 L3 Cache 最大占用（CMAX）时，存在转换计算偏差：
+1. 写入特定百分比值时，内核转换后的硬件寄存器值存在误差，未能精确反映用户预期配置。
+2. 在 HiSilicon Hip12 平台上，若配置了特定的 L3 CPBM（Cache Portion Bit Mask）值，系统无法正确识别其有效性，可能导致资源配置失败或返回无效错误。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **CMAX 转换机制缺陷**：在 `percent_to_ca_max` 和 `ca_max_to_percent` 函数中，百分比与硬件值转换时的除法运算采用了简单的“四舍五入”（`+50` 或 `+valid_max/2`）逻辑。在 MPAM 架构下，这导致用户配置值与实际生效的硬件值之间出现映射偏差，且向上取整逻辑（`DIV_ROUND_UP`）被错误地实现为四舍五入，不符合资源分配的精确性要求。
+2. **带宽粒度校验问题**：在 `bw_validate` 函数中，代码强制对所有架构的带宽值进行 `bw_gran`（带宽粒度）向上取整，这不符合 ARM64 MPAM 的规范，导致 MPAM 平台下用户配置的带宽值被意外修改。
+3. **特定平台硬件 Quirk 缺失**：HiSilicon Hip12 处理器对 L3 Cache 的 CPBM 有效性有特殊的硬件约束（仅支持 bit 17 和 18），但内核未包含针对该平台的 Quirk 检查逻辑，导致某些合法的配置被当作非法值处理，或未拦截非法值。
+
+#解决方案
+1. **修正 CMAX 转换算法**：将 `percent_to_ca_max` 中的除法逻辑修改为 `DIV_ROUND_UP`，确保百分比转换后的硬件值向上取整，保证资源分配覆盖用户需求；同时修改 `ca_max_to_percent` 去除四舍五入逻辑，确保回读转换的准确性。
+2. **调整带宽校验逻辑**：在 `bw_validate` 中增加 `CONFIG_ARM64_MPAM` 判断，若是 MPAM 架构则跳过 `bw_gran` 粒度的强制向上取整，直接使用用户写入值。
+3. **增加 Hip12 平台 Quirk**：新增 `mpam_cpbm_hisi_check_invalid` 函数，针对 HiSilicon Hip12 CPU 进行特判，在 L3 Cache 配置更新时（`resctrl_arch_update_one`），检查 CPBM 值是否仅包含 bit 17 或 bit 18，对不符合硬件约束的值返回 `-EINVAL` 以规避硬件问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7be22f95c4277b4a085e62265570cc7efac07100

@@ -1,0 +1,24 @@
+#标题
+efi/libstub: 5级到4级页表切换过程中页表访问错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统从 5 级分页（5-level paging）切换到 4 级分页（4-level paging）的过程中，内核访问页表项的方式不正确。由于错误地处理了 CR3 寄存器值和 PGD（页全局目录）项的掩码，可能导致内存访问异常、页表解析错误，进而影响 EFI stub 阶段的正常运行。
+
+#主要错误日志
+未知
+
+#问题根因
+现有代码在处理页表切换时存在两个缺陷：
+1. 直接解引用 `__native_read_cr3()` 的返回值，该函数返回的是包含物理地址和标志位的原始 CR3 寄存器值（可能包含 SME 或 LAM 等元数据位），而不仅仅是物理地址。
+2. 对 PGD 值使用 `PAGE_MASK` 进行掩码处理，未考虑到高位标志（如 `_PAGE_BIT_NOPTISHADOW`），正确的做法应使用 `PTE_PFN_MASK`。
+
+#解决方案
+修改 `drivers/firmware/efi/libstub/x86-5lvl.c` 文件，使用正确的访问器函数和掩码：
+1. 将 `__native_read_cr3()` 替换为 `native_read_cr3_pa()`，该函数使用 `CR3_ADDR_MASK` 过滤掉 CR3 中的元数据位，确保获取的是纯净的物理地址。
+2. 将对 `cr3[0]` 的掩码操作从 `PAGE_MASK` 替换为 `native_pgd_val(cr3[0]) & PTE_PFN_MASK`，以正确处理高于 51 位的标志位（特别是 `_PAGE_BIT_NOPTISHADOW`）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/afe0fcb1df892b8e4c63799b72aeda8771466a03

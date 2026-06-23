@@ -1,0 +1,38 @@
+#标题
+urma: set_share_topo 流程缺失 host EID 编程路径及拓扑追加功能
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 set_share_topo 时，内核缺少相应的 host EID 映射编程路径，导致用户空间无法将根据拓扑计算出的 port EID 到 host EID 的映射下发到内核。同时，在更新 ubagg 和 ubcore 拓扑时，新接收的拓扑节点无法追加到现有拓扑表中，导致拓扑信息更新不完整。此外，部分命令执行失败时缺乏详细的错误日志输出。
+
+#主要错误日志
+- ubagg_log_err("update link info fail.");
+- ubagg_log_err("update dev info fail.");
+- ubagg_log_err("topo map is full\n");
+- ubagg_log_err("get topo info, args_len is invalid, args_len:%u\n", ...);
+- ubagg_log_err("Invalid get_topo_info param\n");
+- ubagg_log_err("ubagg topo info does not exist\n");
+- ubcore_log_err("update link info failed\n");
+- ubcore_log_err("update dev info failed\n");
+- ubcore_log_err("topo map is full\n");
+- ubcore_log_err("invalid host eid batch.\n");
+- ubcore_log_err("insert host eid batch failed, idx: %u, ret: %d\n", ...);
+- ubcore_log_err("insert main ue eid batch failed, idx: %u, ret: %d\n", ...);
+- ubcore_log_err("delete main ue eid failed, ret: %d\n", ret);
+- ubcore_log_err("lookup main ue eid failed, ret: %d\n", ret);
+
+#问题根因
+1. 功能缺失：内核未实现 `UBCORE_CMD_INSERT_HOST_EID_BATCH` 命令处理逻辑及相关 TLV 描述符，导致用户空间无法通过 UVS 全局命令批量写入 host EID 映射。
+2. 逻辑缺陷：`ubagg_update_topo_info` 和 `ubcore_update_topo_map` 函数在遍历新拓扑节点时，仅处理已存在的节点更新，缺少对新节点（`!found` 场景）的追加逻辑，且更新已存在节点后未执行 `break` 操作，可能导致重复处理或逻辑混乱。
+3. 日志缺失：`ubcore_insert_main_ue_eid_batch`、`ubcore_cmd_delete_main_ue_eid` 等函数在调用底层接口失败时，未打印错误信息，增加了定位难度。
+
+#解决方案
+1. 新增 host EID 批量插入功能：添加 `UBCORE_CMD_INSERT_HOST_EID_BATCH` 命令枚举及其对应的 TLV 描述符和处理函数 `ubcore_cmd_insert_host_eid_batch`，支持通过 `host_info` trie 写入 host EID 映射。
+2. 新增拓扑查询命令：添加 `UBAGG_CMD_GET_TOPO_INFO` 命令及处理函数 `ubagg_cmd_get_topo_info`，支持用户空间读取累积的拓扑信息。
+3. 修复拓扑更新逻辑：在 `ubagg_update_topo_info` 和 `ubcore_update_topo_map` 中增加对新节点的判断逻辑，若节点不存在则追加到拓扑表中（同时检查 `MAX_NODE_NUM` 防止溢出），并在更新已存在节点后增加 `break` 语句跳出内层循环。
+4. 完善错误日志：在批量插入、删除、查找主 UE EID 等关键路径的错误分支中添加 `ubcore_log_err` 日志打印。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7e7bb1ac03cfa1ab2eb779596b5c701c08475039

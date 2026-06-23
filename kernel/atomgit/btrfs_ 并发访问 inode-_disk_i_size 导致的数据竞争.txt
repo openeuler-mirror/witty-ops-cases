@@ -1,0 +1,46 @@
+#标题
+btrfs: 并发访问 inode->disk_i_size 导致的数据竞争
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BTRFS 文件系统中，当 `insert_ordered_extent_file_extent()` 与 `btrfs_inode_safe_disk_i_size_write()` 并发执行时，触发内核数据竞争检测告警。虽然该竞争不影响功能正确性，但会导致内核日志打印 DATA_RACE 相关的调用栈信息，并可能增加不必要的锁竞争。
+
+#主要错误日志
+```
+============DATA_RACE============
+ btrfs_drop_extents+0x89a/0xa060 [btrfs]
+ insert_reserved_file_extent+0xb54/0x2960 [btrfs]
+ insert_ordered_extent_file_extent+0xff5/0x1760 [btrfs]
+ btrfs_finish_one_ordered+0x1b85/0x36a0 [btrfs]
+ btrfs_finish_ordered_io+0x37/0x60 [btrfs]
+ finish_ordered_fn+0x3e/0x50 [btrfs]
+ btrfs_work_helper+0x9c9/0x27a0 [btrfs]
+ process_scheduled_works+0x716/0xf10
+ worker_thread+0xb6a/0x1190
+ kthread+0x292/0x330
+ ret_from_fork+0x4d/0x80
+ ret_from_fork_asm+0x1a/0x30
+============OTHER_INFO============
+ btrfs_inode_safe_disk_i_size_write+0x4ec/0x600 [btrfs]
+ btrfs_finish_one_ordered+0x24c7/0x36a0 [btrfs]
+ btrfs_finish_ordered_io+0x37/0x60 [btrfs]
+ finish_ordered_fn+0x3e/0x50 [btrfs]
+ btrfs_work_helper+0x9c9/0x27a0 [btrfs]
+ process_scheduled_works+0x716/0xf10
+ worker_thread+0xb6a/0x1190
+ kthread+0x292/0x330
+ ret_from_fork+0x4d/0x80
+ ret_from_fork_asm+0x1a/0x30
+=================================
+```
+
+#问题根因
+函数 `btrfs_drop_extents()` 在读取 `inode->disk_i_size` 时未持有锁，而此时另一并发线程可能通过 `btrfs_inode_safe_disk_i_size_write()` 正在写入该字段。具体代码路径为 `btrfs_drop_extents()` 中判断 `args->start >= inode->disk_i_size` 时，直接读取了可能正被修改的 `disk_i_size`，从而触发数据竞争。
+
+#解决方案
+使用内核提供的 `data_race()` 包装器来读取 `inode->disk_i_size`。该修复承认此处存在数据竞争，但由于该竞争不影响功能正确性（即使竞争导致判断错误，后续逻辑也会通过重试机制保证正确性），因此通过标记为 `data_race()` 来消除内核的数据竞争告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/121b017c2bd0aeb40b45962e22627d21b585abb7

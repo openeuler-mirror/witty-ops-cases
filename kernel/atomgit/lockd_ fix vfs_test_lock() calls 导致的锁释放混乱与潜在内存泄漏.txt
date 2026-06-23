@@ -1,0 +1,29 @@
+#标题
+lockd: fix vfs_test_lock() calls 导致的锁释放混乱与潜在内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 lockd 服务（如 NFS 锁相关操作）时，调用 `vfs_test_lock()` 逻辑可能导致内核状态混乱。具体表现为：
+1. 在处理 NLM（Network Lock Manager）测试锁请求时，`nlmsvc_testlock()` 函数错误地将包含 manager ops 和 owner 信息的 `file_lock` 结构传递给 `vfs_test_lock()`。
+2. `vfs_test_lock()` 可能会修改传入的 `file_lock` 结构中的 owner 和 ops 字段，导致后续在释放锁（freeing the lock）时发生混淆。
+3. 代码逻辑中为了规避上述问题，在 `__nlm4svc_proc_test()` 和 `__nlmsvc_proc_test()` 中不得不进行复杂的 owner 指针保存与恢复操作，这增加了代码复杂度并容易引入错误。
+
+#主要错误日志
+未知
+
+#问题根因
+`vfs_test_lock()` 函数的调用约定被误用。
+1. **接口误解**：根据文档与设计意图，`vfs_test_lock()` 的入参 `fl` 应仅用于描述待测试的字节范围并存储检测结果，不应包含已有的 `fl_lmops` 或 `fl_ops`。
+2. **错误传递**：`nlmsvc_testlock()` 将从 XDR 解码得到的、已初始化的 `file_lock`（包含 manager ops 和 owner）直接传递给 `vfs_test_lock()`。
+3. **副作用**：`vfs_test_lock()` 可能会替换传入结构体中的 owner 和 ops 指针，导致调用者原有的锁所有权信息丢失或错乱，进而导致锁释放逻辑混淆。
+
+#解决方案
+1. **修正调用参数**：修改 `nlmsvc_testlock()`，不再将原始 `lock->fl` 传递给 `vfs_test_lock()`。改为初始化并传递 `conflock->fl`，仅填充必要的查询字段（`fl_file`, `fl_start`, `fl_end`, `fl_owner`）。
+2. **简化上层逻辑**：由于不再破坏原始锁结构，`__nlm4svc_proc_test()` 和 `__nlmsvc_proc_test()` 中用于保存和恢复 `test_owner` 的冗余代码被移除，直接调用 `nlmsvc_release_lockowner` 即可正确释放资源。
+3. **增加防御性检查**：在 `vfs_test_lock()` 函数入口处添加 `WARN_ON_ONCE(fl->fl_ops || fl->fl_lmops)` 检查，防止未来再次误用该接口。
+4. **完善文档**：更新 `vfs_test_lock()` 的 kernel-doc 注释，明确说明入参要求及调用者对返回锁的释放责任。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4d2df0c4482d9a3947371e30b0712d2db46ce17f

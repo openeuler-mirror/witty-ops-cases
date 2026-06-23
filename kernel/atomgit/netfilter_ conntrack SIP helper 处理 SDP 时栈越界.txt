@@ -1,0 +1,31 @@
+#标题
+netfilter: conntrack SIP helper 处理 SDP 时栈越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 SIP 协议的 SDP（Session Description Protocol）内容时，触发 KASAN（Kernel Address Sanitizer）检测到的栈内存越界写错误。该故障发生在 `mangle_content_len` 函数中，导致内核 panic 或系统不稳定。
+
+#主要错误日志
+BUG: KASAN: stack-out-of-bounds in vsnprintf+0xea5/0x1270
+Write of size 1 at addr [..]
+ vsnprintf+0xea5/0x1270
+ sprintf+0xb1/0xe0
+ mangle_content_len+0x1ac/0x280
+ nf_nat_sdp_session+0x1cc/0x240
+ process_sdp+0x8f8/0xb80
+ process_invite_request+0x108/0x2b0
+ process_sip_msg+0x5da/0xf50
+ sip_help_tcp+0x45e/0x780
+ nf_confirm+0x34d/0x990
+
+#问题根因
+在 `mangle_content_len` 函数中，用于存储内容长度字符串的 buffer 大小定义不足。原代码定义为 `char buffer[sizeof("65536")]`（即 6 个字节），但在处理 SDP 内容长度时，`c_len` 的类型为 `unsigned int`，其最大值可达 4294967295。将该值转换为字符串需要 10 个字节（含结束符 `\0`），而原 buffer 仅 6 字节，导致 `sprintf` 写入时发生栈溢出。此外，代码中多处使用不安全的 `sprintf` 函数，缺乏缓冲区边界检查。
+
+#解决方案
+1. 修复 buffer 大小：将 `mangle_content_len` 中的 buffer 大小从 `sizeof("65536")` 修改为 `sizeof("4294967295")`，确保能容纳 `unsigned int` 最大值的字符串表示。
+2. 替换不安全函数：将 `nf_nat_amanda.c` 和 `nf_nat_sip.c` 中所有的 `sprintf` 替换为 `scnprintf` 或 `snprintf`，显式传入缓冲区大小，防止缓冲区溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/21e90449b47d4571ac9be0406adc156f32c18c53

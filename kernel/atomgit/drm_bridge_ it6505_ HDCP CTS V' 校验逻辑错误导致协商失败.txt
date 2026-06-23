@@ -1,0 +1,27 @@
+#标题
+drm/bridge: it6505: HDCP CTS V' 校验逻辑错误导致协商失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统与 HDCP Repeater 设备进行 HDCP 协商时，SHA-1 V' 值校验失败。根据 HDCP CTS 规范，V' 匹配检查应当重试 3 次，但原代码逻辑在读取失败或校验不匹配时直接返回失败，导致 HDCP 协商流程意外重启或无法正常完成，影响受保护内容的显示。
+
+#主要错误日志
+- `dev_err(dev, "Read V' value Fail %d", retry);`
+- `DRM_DEV_DEBUG_DRIVER(dev, "V' NOT match!! %d", retry);`
+
+#问题根因
+在 `it6505_hdcp_part2_ksvlist_check` 函数中，HDCP Part2 KSV list 检查逻辑不符合 HDCP CTS 规范要求。
+1. 原 DPCD 读取操作缺少重试机制，一旦读取失败直接返回 false，未给予链路稳定性恢复机会。
+2. SHA V' 值比对逻辑有误：原代码在比对循环中，只要某次比对不匹配就立即返回 false，未遵循规范要求的“必须重试 3 次后才能判定失败并重启 HDCP”的流程。这导致在信号抖动或瞬时异常情况下，HDCP 协商非必要地中断。
+
+#解决方案
+修改 `it6505_hdcp_part2_ksvlist_check` 函数，增加重试循环逻辑：
+1. 新增 `retry` 循环变量，将 DPCD 读取和 V' 值比对逻辑包含在 `for (retry = 0; retry < 3; retry++)` 循环中。
+2. 在循环内，若 DPCD 读取失败（`err < 0`），打印错误日志并执行 `continue` 进行重试，而不是直接返回。
+3. 在循环内进行 V' 值比对，如果比对成功（匹配），则立即返回 true。
+4. 仅当 3 次重试全部结束后仍未匹配，才打印不匹配日志并返回 false，从而确保符合 HDCP CTS 规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a4d14aa1e7d24337f8d5eb000859491bbbbe7a67

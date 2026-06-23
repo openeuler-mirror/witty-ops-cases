@@ -1,0 +1,20 @@
+#标题
+scsi: target: t_task_cdb 内存分配失败后致空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SCSI target 模块处理命令时，如果命令 CDB 大小超过默认缓冲区大小且动态分配内存（`kmalloc`）失败，内核在处理该错误路径时会解引用空指针（NULL pointer dereference），导致内核崩溃或异常行为。
+
+#主要错误日志
+[  +0.000000] Unable to allocate cmd->t_task_cdb [CDB_SIZE] > sizeof(cmd->__t_task_cdb): [SIZE] ops
+
+#问题根因
+在函数 `target_cmd_init_cdb` 中，当 SCSI 命令大小超过预设缓冲区大小时，代码尝试通过 `kzalloc` 动态分配内存给 `cmd->t_task_cdb`。若分配失败，`cmd->t_task_cdb` 保持为 NULL。随后的错误处理路径中，代码未对该指针进行重置或检查，直接对其进行了解引用，从而触发了 NULL 指针引用错误。此前提交 9e95fb805dc0 试图修复空指针问题，但遗漏了分配失败这一错误分支的处理。
+
+#解决方案
+在 `target_cmd_init_cdb` 函数中，当 `kzalloc` 分配 `cmd->t_task_cdb` 失败时，显式将 `cmd->t_task_cdb` 指针重置为指向默认的固定大小缓冲区 `cmd->__t_task_cdb`。这确保了在内存分配失败的错误路径下，该指针仍然指向有效的内存区域，避免了后续解引用空指针导致的内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/627e88d1b8caec43b714711ac5d6c79f82d08dc2

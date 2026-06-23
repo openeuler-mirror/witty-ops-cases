@@ -1,0 +1,26 @@
+#标题
+CME UF系列键盘MIDI消息解析不全导致部分控制信号丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+CME UF系列主控键盘连接 Linux 系统时，部分 MIDI 消息无法被正确识别或接收。具体表现为：Song Position Pointer（歌曲位置指针）、MIDI Timing Clock（MIDI时钟）、Start/Stop（开始/停止）消息以及 Active Sensing（活动传感）信号丢失或解析错误，导致依赖这些信号的音乐软件或平台（如 Zynthian）无法正确响应键盘的操作。
+
+#主要错误日志
+未知
+
+#问题根因
+原有的 CME quirk 处理函数 `snd_usbmidi_cme_input` 逻辑过于简单，仅处理了 SysEx 消息，未考虑到 CME UF 系列设备的特殊协议实现：
+1. CME 设备将 SysEx、系统实时消息和 Active Sensing 均通过 CIN 0x0f 发送，而标准协议中 0x0f 仅用于单字节未解析数据，导致这些消息被错误识别。
+2. CME 设备会在同一个 USB 数据包中串联发送多个 MIDI 消息（例如 SysEx 后紧跟 Song Position Pointer，或者 MIDI Clock 与 Active Sensing 混合发送），原代码缺乏循环解析机制，导致后续消息被丢弃。
+3. CME 设备会持续发送长度为 0 的数据包，原代码未对此进行过滤处理。
+
+#解决方案
+重写 `snd_usbmidi_cme_input` 函数以正确解析 CME 协议：
+1. 增加循环处理逻辑，支持在同一个 USB 数据包中解析多个连续的 MIDI 消息。
+2. 增加 CIN 0x0f 下的具体消息类型判断：识别 SysEx（0xf0）、Song Position Pointer（0xf2）以及其他系统实时/通用消息，并根据类型确定正确的数据长度。
+3. 增加数据包有效性检查，仅处理长度大于等于 4 字节的数据包，自动跳过长度为 0 的无效填充包。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e5d5063206fc7015b0c4953ed420acadb3b28be1

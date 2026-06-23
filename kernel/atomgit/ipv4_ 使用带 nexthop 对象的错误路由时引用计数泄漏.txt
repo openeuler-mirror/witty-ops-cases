@@ -1,0 +1,20 @@
+#标题
+ipv4: 使用带 nexthop 对象的错误路由时引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当删除 nexthop 对象时，关联该 nexthop 的错误路由（如 blackhole）未被刷新清理，导致其持续持有对 nexthop 对象及 nexthop 设备的引用。当尝试删除该网络设备时，系统报告设备无法释放，持续等待引用计数归零。
+
+#主要错误日志
+[   70.516258] unregister_netdevice: waiting for dummy1 to become free. Usage count = 2
+
+#问题根因
+在 `fib_table_flush()` 函数中，原逻辑仅在拆除网络命名空间（`flush_all=true`）时才刷新错误路由。当作为普通删除操作（`flush_all=false`）调用时，代码直接跳过了错误路由的处理，未检查该路由关联的 nexthop 是否已被标记为 dead。因此，这些错误路由保留了对其已失效 nexthop 的引用，导致引用计数泄漏。
+
+#解决方案
+修改 `net/ipv4/fib_trie.c` 中的 `fib_table_flush()` 函数逻辑。在非全量刷新（`!flush_all`）场景下，跳过错误路由处理前，增加对 `RTNH_F_DEAD` 标志的检查。若路由信息（`fi`）已标记为 `RTNH_F_DEAD`（表示 nexthop 已失效），则不再跳过，允许刷新该错误路由，从而释放引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7095101f5f1d6467f03315c0a20b76c96757bad8

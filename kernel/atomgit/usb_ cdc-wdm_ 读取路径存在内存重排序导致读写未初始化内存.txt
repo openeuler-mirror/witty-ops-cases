@@ -1,0 +1,23 @@
+#标题
+usb: cdc-wdm: 读取路径存在内存重排序导致读写未初始化内存
+
+#内核版本
+OLK-6.6
+
+#问题现象
+由于编译器优化或 CPU 乱序执行，`wdm_in_callback` 函数中的 `desc->length` 更新可能被重排到 `memmove` 操作之前。当此情况发生时，`wdm_read` 函数可能读取到新的长度值，并针对尚未初始化（数据尚未移动到位）的内存区域调用 `copy_to_user`，导致用户空间读取到未初始化的数据（内核信息泄露或数据损坏），同时违反 LKMM（Linux 内核内存模型）的数据竞争规则。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因是并发场景下的内存访问重排序。在 `wdm_in_callback` 中，`desc->length += length` 的更新操作在编译器或 CPU 层面可能被重排到 `memmove(desc->ubuf + desc->length, desc->inbuf, length)` 之前执行。这导致 `wdm_read` 并发执行时，可能先看到 `length` 已更新，但缓冲区 `ubuf` 中的数据尚未通过 `memmove` 拷贝到位，从而引发对未初始化内存的读取访问，构成数据竞争。
+
+#解决方案
+通过引入内存屏障和 WRITE_ONCE/READ_ONCE 宏来强制内存访问顺序，修复步骤如下：
+1. 在 `wdm_in_callback` 函数的 `memmove` 操作之后、更新 `desc->length` 之前，插入 `smp_wmb()` 写内存屏障，确保数据拷贝先于长度更新可见。
+2. 将 `desc->length` 的更新修改为 `WRITE_ONCE(desc->length, desc->length + length)`，防止编译器优化导致的写入拆分或重排。
+3. 在 `wdm_read` 函数读取 `desc->length` 时，使用 `READ_ONCE(desc->length)` 并紧接 `smp_rmb()` 读内存屏障，确保读取到的长度值对应的缓冲区数据已加载完毕，从而与写端屏障配对保证数据一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4107f35fc732329bc0baef82ad84b5fec1ffe824

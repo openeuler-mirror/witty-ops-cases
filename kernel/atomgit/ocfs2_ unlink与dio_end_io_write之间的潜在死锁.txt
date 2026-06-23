@@ -1,0 +1,23 @@
+#标题
+ocfs2: unlink与dio_end_io_write之间的潜在死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在并发执行文件删除操作和直接IO（Direct IO）写操作时，可能触发内核死锁，导致相关进程处于不可中断睡眠状态（D状态），系统负载升高或挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+OCFS2内核模块中存在锁顺序冲突：
+1. **Lock Chain #0**：在 `ocfs2_unlink` 流程中，代码先获取 `orphan_dir_inode` 的 `inode_lock`（锁A），随后在 `ocfs2_expand_inline_dir` 中获取 `ip_alloc_sem`（锁B）。
+2. **Lock Chain #1**：在 `ocfs2_dio_end_io_write` 流程中，代码先获取 `ip_alloc_sem`（锁B），随后在 `ocfs2_del_inode_from_orphan` 中获取 `orphan_dir_inode` 的 `inode_lock`（锁A）。
+上述两种锁获取顺序相反，构成了典型的 ABBA 死锁条件。
+
+#解决方案
+调整 `ocfs2_dio_end_io_write` 函数中的锁获取范围。由于 `ip_alloc_sem` 仅用于保护分配变更，与 `ocfs2_del_inode_from_orphan` 操作无关，因此将 `ocfs2_del_inode_from_orphan` 调用移出 `ip_alloc_sem` 的临界区。具体代码变更为：将 `down_write(&oi->ip_alloc_sem)` 下移至 `ocfs2_del_inode_from_orphan` 调用之后，从而打破锁循环依赖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/81ea29c5cd4134347a071c54090add6797b1a371

@@ -1,0 +1,22 @@
+#标题
+lib/scatterlist: extract_kvec_to_sg 函数长度计算错误导致跨越页边界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+从 kvec 提取数据到 scatterlist 时，scatterlist 条目的长度计算错误，导致单个条目的长度可能超过页面内的字节数，非法跨越页边界。此外，当 sglist 条目耗尽但数据未提取完时，函数返回值未正确调整，导致上层调用者获取到的提取长度与实际不符。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `extract_kvec_to_sg` 函数中，设置 scatterlist 条目时使用了错误的长度变量。代码原本意图使用计算好的 `seg` 变量（限制在页面边界内），但实际调用 `sg_set_page` 时错误地传入了 `len` 变量，导致 scatterlist 条目可能引用了超出页边界的数据长度。同时，循环退出时未从返回值 `ret` 中减去剩余未处理的 `len`，导致返回的已提取大小不准确。另外，入口函数 `extract_iter_to_sg` 未检查 `sg_max` 为 0 的情况，可能导致异常处理流程。
+
+#解决方案
+1. 修正 `sg_set_page` 调用参数，将错误的 `len` 替换为正确的 `seg`，确保 scatterlist 条目长度不跨越页边界。
+2. 在循环结束后增加 `ret -= len` 运算，确保在 sglist 条目耗尽时返回正确的已提取字节数。
+3. 在 `extract_iter_to_sg` 入口处增加检查，若 `sg_max` 为 0 则直接返回 0，避免无效操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc307cf0292681715a7716a49ec154ec7b04c647

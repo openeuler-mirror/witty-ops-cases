@@ -1,0 +1,21 @@
+#标题
+kdump 内核中误上电真实 BSP 导致系统重置
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 kdump 场景下，若崩溃 CPU 并非真实引导处理器（BSP），kdump 内核启动后尝试 onlining 真实 BSP 时，会触发 INIT 序列导致机器被重置。此前需要用户手动指定内核启动参数 `disable_cpu_apicid` 来规避此问题，且该参数在嵌套 kdump 场景下存在局限性。
+
+#主要错误日志
+Boot CPU APIC ID not the first enumerated APIC ID: %x > %x
+Crash kernel detected. Disabling real BSP to prevent machine INIT
+
+#问题根因
+固件枚举的第一个 APIC ID 即为真实 BSP。在 kdump 内核启动时，如果引导 CPU（boot CPU，即当前运行的 CPU）的 APIC ID 与固件枚举的第一个 APIC ID 不一致，说明当前 CPU 不是真实 BSP。如果此时内核尝试将真实 BSP 上线，向其发送 INIT 信号会导致整个系统重置。此前代码依赖用户手动传递参数屏蔽 BSP，缺乏自动检测机制。
+
+#解决方案
+移除对 `disable_cpu_apicid` 内核启动参数的依赖，在内核拓扑初始化阶段增加自动检测逻辑：通过对比引导 CPU APIC ID 与固件枚举的第一个 APIC ID，判断当前是否运行在 kdump 内核中且引导 CPU 非 BSP。若检测到真实 BSP 存在且非当前引导 CPU，则自动跳过对该 CPU 的注册，从而阻止系统重置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a4bc8d59f7ffae3159fb865e4cf82c162dd9275f

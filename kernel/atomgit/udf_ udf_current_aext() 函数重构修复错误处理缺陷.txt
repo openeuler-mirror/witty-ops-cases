@@ -1,0 +1,24 @@
+#标题
+udf: udf_current_aext() 函数重构修复错误处理缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+UDF 文件系统在处理extent时，`udf_current_aext()` 函数无法正确区分“遇到EOF（文件结束）”和“发生错误”这两种情况。当底层辅助函数（如 `udf_get_fileshortad`）返回 NULL 时，原实现统一返回 -1，导致调用者（如 `udf_truncate_extents`、`udf_setup_indirect_aext`）无法感知实际的错误（如 -EINVAL），可能引发处理流程异常或资源处理不当。
+
+#主要错误日志
+udf_debug("alloc_type = %u unsupported\n", iinfo->i_alloc_type);
+
+#问题根因
+`udf_current_aext()` 函数的返回值设计存在缺陷。原实现通过返回 int8_t 类型的 etype 来传递状态，但在遇到解析失败（如 `udf_get_fileshortad` 返回 NULL）或不支持的分配类型时，直接返回 -1，这混淆了“已到达Extent末尾”与“发生错误”的语义。这种模糊的处理导致调用链路丢失了具体的错误码（如 -EINVAL），使得上层函数无法进行正确的错误处理。
+
+#解决方案
+重构 `udf_current_aext()` 函数的返回值语义与接口：
+1. 修改返回值类型为 `int`，明确返回值含义：返回 1 表示成功获取 etype，返回 0 表示到达 EOF，返回负的错误码（如 -EINVAL）表示发生错误。
+2. 新增 `int8_t *etype` 指针参数，用于在成功时回传 extent 类型。
+3. 在函数内部，针对 `udf_get_fileshortad`/`udf_get_filelongad` 返回 NULL 的情况，返回 0（EOF）；针对不支持的分配类型，返回 `-EINVAL`。
+4. 同步修改所有调用点（`udf_next_aext`、`udf_truncate_extents`、`udf_setup_indirect_aext`），增加对返回值 `<= 0` 的判断与错误处理逻辑，确保错误能正确向上传递。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9a24deb19e671dddbc6c4ae8843152d763b76c13

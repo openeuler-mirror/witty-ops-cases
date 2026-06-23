@@ -1,0 +1,21 @@
+#标题
+blk-ioinf 非根 cgroup 默认权重被错误重置为 0
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 legacy blkio cgroup 模式下，当用户为非根 cgroup（例如 `/sys/fs/cgroup/blkio/1`）设置了默认权重时，该权重值在 pd 结构体初始化过程中被错误地覆盖并重置为 0。这导致非根 cgroup 的 IO QoS 权重配置失效，无法按预期生效。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ioinf_pd_init()` 函数中，代码逻辑错误地将真正的根 cgroup（`/sys/fs/cgroup/blkio`）和第一个用户创建的 cgroup（`/sys/fs/cgroup/blkio/1`，其 parent->blkcg->css.cgroup->level 为 0）都视为根进行处理。
+原逻辑在检测到 level 为 0 时直接返回，导致后续的 `IOINFG_WEIGHT_UNINIT` 检查被跳过。而在该检查之外，代码可能存在默认值处理不当的问题，或者因为初始化流程未正确执行 `dfl_user_weight` 的继承逻辑，导致非根 cgroup 的 `dfl_user_weight` 被错误地重置为 0，覆盖了用户显式设置的值。
+
+#解决方案
+调整 `ioinf_pd_init()` 函数中的逻辑判断顺序，提高 `IOINFG_WEIGHT_UNINIT` 检查的优先级。确保只有在权重未被初始化（`IOINFG_WEIGHT_UNINIT`）时，才执行继承父 cgroup 权重或重置为 0 的操作。这样可以保证用户显式设置的默认权重在 pd 初始化过程中被保留，不被错误覆盖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e8b8bfc85048b5d240c0955568d49b818f32a03c

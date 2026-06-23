@@ -1,0 +1,25 @@
+#标题
+ext4 开关 mb_optimize_scan 导致 largest free orders 链表损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 remount 操作反复启用和禁用 `mb_optimize_scan` 选项时，ext4 文件系统的块分配逻辑会触发链表损坏。这种损坏源于在移除链表节点时使用了错误的锁，可能导致内核崩溃、内存数据结构不一致或其他不可预测的系统异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mb_optimize_scan` 被禁用的状态下，`grp->bb_largest_free_order` 仍然会被更新，但并未将其从对应的链表 `s_mb_largest_free_orders` 中移除。这导致该字段的值与实际所在的链表索引不一致。
+当后续再次启用 `mb_optimize_scan` 并发生块分配更新 order 时，代码会使用新计算的 order 索引（例如 order=1）去获取锁（`s_mb_largest_free_orders_locks[1]`），但节点实际上还停留在旧的链表中（例如 order=3）。这种锁与链表的不匹配导致了链表损坏。
+
+#解决方案
+修改 `mb_set_largest_free_order` 函数的逻辑，确保 `grp->bb_largest_free_order` 变更时的操作原子性与一致性：
+1. 无论 `mb_optimize_scan` 是否启用，只要 order 发生变化，必须先将该 group 从旧的 order 链表中移除，并使用旧 order 对应的锁进行保护。
+2. 更新 `grp->bb_largest_free_order` 为新值。
+3. 只有当 `mb_optimize_scan` 处于启用状态时，才将该 group 插入到新 order 对应的链表中。
+此修复防止了锁与链表索引不匹配的问题，确保了数据结构的可靠性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8a0a67d25a1c23e537b4120dba0364380d8133a0

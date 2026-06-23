@@ -1,0 +1,20 @@
+#标题
+btrfs: tree-checker 因指针大小判断错误导致未能拦截异常 inode extref
+
+#内核版本
+OLK-6.6
+
+#问题现象
+由于 `check_inode_ref()` 函数中的尺寸检查逻辑错误，使用了指针变量的大小（`sizeof(void *)`）而非结构体的大小（`sizeof(struct btrfs_inode_extref)`）进行边界检查。这导致某些损坏或异常的 inode extref 数据项能够绕过 tree-checker 的校验潜入系统，无法被及时发现并拒绝，可能导致后续文件系统操作异常或潜在的数据损坏风险。
+
+#主要错误日志
+inode ref overflow, ptr %lu end %lu inode_ref_size %zu
+
+#问题根因
+在 `check_inode_ref()` 函数中，代码错误地使用了 `sizeof(iref)`，其中 `iref` 是一个指针变量，因此其值为指针的大小（在64位系统上为8字节），这远小于预期的 `struct btrfs_inode_extref` 结构体的大小。该拼写错误导致边界检查条件失效，无法正确验证数据项是否包含完整的结构体头部。
+
+#解决方案
+修正代码中的拼写错误，将 `sizeof(iref)` 修改为 `sizeof(*iref)`。这样即可正确获取 `struct btrfs_inode_extref` 结构体的大小，从而正确执行边界检查，拒绝不合法的 inode extref 项。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/93b5713af58e0492e6d47cd85a9700356dda713c

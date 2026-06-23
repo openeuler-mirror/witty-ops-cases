@@ -1,0 +1,23 @@
+#标题
+net: rose: rose_clear_routes函数笔误导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在调用 rose_clear_routes() 函数时触发空指针解引用，导致内核崩溃。该问题由 syzbot 触发，现象表现为 KASAN 检测到的 null-ptr-deref，系统可能重启或产生 oops 信息。
+
+#主要错误日志
+KASAN: null-ptr-deref in range [0x0000000000000010-0x0000000000000017]
+CPU: 0 UID: 0 PID: 10591 Comm: syz.3.1856 Not tainted syzkaller #0 PREEMPT(full)
+RIP: 0010:rose_clear_routes net/rose/rose_route.c:565 [inline]
+RIP: 0010:rose_rt_ioctl+0x162/0x1250 net/rose/rose_route.c:760
+
+#问题根因
+在函数 rose_clear_routes() 中存在一处代码笔误。在遍历邻居节点引用计数时，代码错误地使用了 `rose_node->count` 作为循环边界，而此时正确的指针变量应为 `t`（即当前的 rose_node）。由于 `rose_node` 在循环条件 `rose_node = rose_node->next` 执行后可能已经指向了链表中的下一个节点或为空，访问 `rose_node->count` 导致了空指针解引用。
+
+#解决方案
+修正代码笔误，将循环边界从错误的 `rose_node->count` 更正为 `t->count`，确保在循环体内访问的变量与逻辑上下文一致，避免访问无效内存地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c86a68d8edb3b424ded7e0c9b65473403f9eccac

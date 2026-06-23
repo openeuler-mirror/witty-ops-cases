@@ -1,0 +1,20 @@
+#标题
+i2c: ali15x3驱动probe阶段资源泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ali15x3 驱动加载过程中，若 `i2c_add_adapter()` 注册适配器失败，驱动程序未正确释放此前在 `ali15x3_setup()` 中申请的 I/O 端口区域（I/O region），导致资源泄漏。
+
+#主要错误日志
+- "ALI15X3 not detected, module not inserted.\n"
+
+#问题根因
+在 `ali15x3_probe` 函数中，代码流程先通过 `ali15x3_setup()` 成功申请了 I/O 区域，随后调用 `i2c_add_adapter()`。当 `i2c_add_adapter()` 执行失败时，函数直接返回了错误码，遗漏了调用 `release_region()` 来释放已申请的资源，导致了资源泄漏。这与移除（remove）函数中的正确释放逻辑不一致。
+
+#解决方案
+在 `ali15x3_probe` 函数中增加对 `i2c_add_adapter()` 返回值的检查。如果注册失败，跳转至错误处理标签 `release_region`，显式调用 `release_region(ali15x3_smba, ALI15X3_SMB_IOSIZE)` 释放此前申请的 I/O 资源，确保资源被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/260e2fb1b139fd784b5f1620302dd3edce055cbb

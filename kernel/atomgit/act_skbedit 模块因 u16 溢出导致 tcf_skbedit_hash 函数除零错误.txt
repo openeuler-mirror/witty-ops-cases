@@ -1,0 +1,23 @@
+#标题
+act_skbedit 模块因 u16 溢出导致 tcf_skbedit_hash 函数除零错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 tc action skbedit 时，若指定的队列映射范围覆盖了所有可能的 u16 队列 ID（即 queue_mapping=0 且 queue_mapping_max=U16_MAX），会导致内核在执行 `tcf_skbedit_hash()` 时触发除零错误，进而引发内核 panic 或 oops。
+
+#主要错误日志
+未知
+
+#问题根因
+在计算队列映射范围的模数 `mapping_mod` 时，公式为 `mapping_mod = queue_mapping_max - queue_mapping + 1`。
+当请求的范围覆盖所有可能的 u16 队列 ID 时，计算结果为 65536。由于 `mapping_mod` 变量被定义为 u16 类型，该值发生溢出变为 0。
+随后在 `tcf_skbedit_hash()` 函数中执行取模运算 `skb_get_hash(skb) % params->mapping_mod` 时，作为除数的 `params->mapping_mod` 为 0，从而触发 divide-by-zero 错误。
+
+#解决方案
+1. 将变量 `mapping_mod` 的类型从 u16 扩展为 u32，以防止大数计算时的溢出。
+2. 在初始化函数 `tcf_skbedit_init` 中增加合法性检查：若计算出的 `mapping_mod` 大于 `U16_MAX`，则拒绝该配置并返回 `-EINVAL` 错误，同时在用户空间输出 Netlink 错误消息 "The range of queue_mapping is invalid."，从而阻止 `params->mapping_mod` 被设置为 0。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9778e2949b62e557f3940d35cdb019ba48186822

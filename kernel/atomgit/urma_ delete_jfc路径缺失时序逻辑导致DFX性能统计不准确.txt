@@ -1,0 +1,24 @@
+#标题
+urma: delete_jfc路径缺失时序逻辑导致DFX性能统计不准确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+DFX（可诊断性）功能在 `delete_jfc` 路径下缺少时序统计逻辑，导致系统无法测量该删除流程的延迟情况，影响了性能分析与故障定位能力。同时，`import_jfr` 的 compat 分支时序统计逻辑不正确，导致统计结果不准确。
+
+#主要错误日志
+未知
+
+#问题根因
+1. `ubcore_delete_jfc` 函数及其上层调用入口 `uburma_cmd_delete_jfc` 中完全缺失 `UBCORE_PERF_TRACE_BEGIN` 和 `UBCORE_PERF_TRACE_END` 宏调用，导致 DFX 模块无法覆盖该路径的性能时序统计。
+2. `ubcore_import_jfr` 函数在处理 compat 分支时，`UBCORE_PERF_TRACE_END` 调用过早返回，导致时序统计范围不完整，测量结果不准确。
+3. `ubcore_perf.c` 中的统计算法存在逻辑缺陷，计算出的 P90、P99、P9999 延迟值可能超过实际最大值（max_ns），导致统计数据异常。
+
+#解决方案
+1. 在 `ubcore_delete_jfc` 和 `uburma_cmd_delete_jfc` 函数的所有返回路径上补充完整的性能埋点（`UBCORE_PERF_TRACE_BEGIN/END`），确保能正确统计各级别的删除时延。
+2. 修正 `ubcore_import_jfr` 及相关函数中 compat 分支的时序统计逻辑，确保埋点覆盖完整的函数执行流程。
+3. 修复 `ubcore_compute_stat_for_type` 中的统计算法，增加逻辑判断，确保计算出的 P90/P99/P9999 值不超过 `stat->max_ns`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b4b94e103c4254a7b6f46f13f5450c3c10c6f5c0

@@ -1,0 +1,22 @@
+#标题
+thunder_bgx 驱动 PHY 初始化中 device_node 引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Thunderx BGX 驱动初始化过程中，解析 Device Tree 中的 PHY 节点时，存在引用计数泄漏问题。该问题会导致内核对象无法正确释放，造成内存资源泄漏。虽然通常不会立即引发 panic 或业务中断，但在设备频繁插拔或驱动反复重载的场景下，可能逐渐消耗系统内存资源。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bgx_init_of_phy` 函数中，通过 `of_parse_phandle` 获取到的 `phy_np` 节点指针，在处理 Cortina PHY 兼容性检查及其他处理路径中，缺少对应的 `of_node_put` 调用来释放引用计数。这违背了 Linux 设备树资源管理的引用计数规则，导致该 device node 无法被释放。
+
+#解决方案
+在 `bgx_init_of_phy` 函数中补充缺失的 `of_node_put` 调用：
+1. 在处理 Cortina PHY 的条件分支逻辑调整中，于 `defer` 跳转前增加 `of_node_put(phy_np)` 释放引用。
+2. 在正常处理流程结束前（无论是否为 Cortina PHY），统一增加 `of_node_put(phy_np)` 以确保资源最终被释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f0861ee4353b658cef8d7a47f800911e66ee4095

@@ -1,0 +1,20 @@
+#标题
+ipv6: ip6_sock_set_v6only 函数存在竞态条件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ip6_sock_set_v6only` 函数设置套接字选项时，由于 `inet_sk(sk)->inet_num` 的检查与设置 `sk_ipv6only` 未在同一个锁保护区域内进行，存在竞态条件风险。这可能导致在多线程并发环境下，函数错误地允许对已经绑定端口的套接字设置 IPV6_V6ONLY 选项，或者引发内核状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ip6_sock_set_v6only` 原先在获取套接字锁 `lock_sock(sk)` 之前就检查了 `inet_sk(sk)->inet_num`。如果该检查通过（即 `inet_num` 为 0），但在加锁前另一线程修改了 `inet_num`（例如完成了端口绑定），则当前线程会继续执行并在锁内错误地将 `sk_ipv6only` 设置为 true，违反了“端口绑定后不应更改此选项”的约束。根本原因是检查逻辑与设置逻辑未在同一个临界区内完成。
+
+#解决方案
+将 `inet_sk(sk)->inet_num` 的检查操作移动到 `lock_sock(sk)` 和 `release_sock(sk)` 保护的关键区域内。通过在持有锁的情况下进行判断和赋值，消除了并发操作带来的竞态窗口，确保了检查与设置的一致性和安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/96db222eb56d2e1208211d1845678456c494475a

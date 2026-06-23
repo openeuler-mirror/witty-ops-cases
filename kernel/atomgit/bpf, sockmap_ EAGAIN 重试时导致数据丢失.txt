@@ -1,0 +1,20 @@
+#标题
+bpf, sockmap: EAGAIN 重试时导致数据丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 sockmap 性能测试（如 `./bench sockmap -c 2 -p 1 -a --rx-verdict-ingress`）时，若发送速率较高导致接收处理路径频繁触及 `sk_rcvbuf` 限制，接收端速度会降为 0 MB/s，出现严重的数据丢失现象，流量无法正常接收。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `sk_psock_handle_skb` 返回 `-EAGAIN`（由于 `sk_rcvbuf` 限制）需要重试时，之前调用的 `skb_bpf_redirect_clear()` 已经清除了 `_sk_redir` 信息，但系统未能在重试路径中恢复该重定向信息。这导致后续处理流程中 `_sk_redir` 信息缺失，致使数据流错误地进入非预期路径（mistakenly enter the "!ingress" path），从而导致发送/接收失败和数据丢失。
+
+#解决方案
+在 `sk_psock_backlog` 函数处理 `-EAGAIN` 错误分支时，增加调用 `skb_bpf_set_redir(skb, psock->sk, ingress)`，以此恢复之前被清除的重定向（redir）信息，确保重试时上下文完整，修复数据丢失问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8ad246e95b7fc22f6e2e563c6d78255ee59b6d70

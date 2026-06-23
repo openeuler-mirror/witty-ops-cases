@@ -1,0 +1,20 @@
+#标题
+ocfs2_setattr 中因使用未初始化值导致的潜在内核错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ocfs2_setattr()` 函数时，如果传入的 `attr` 结构体中未设置 `ATTR_MODE`、`ATTR_UID` 或 `ATTR_GID` 标志，对应的成员变量（`ia_mode`、`ia_uid`、`ia_gid`）可能处于未初始化状态。此时代码将这些未初始化的值传递给 tracepoint（`trace_ocfs2_setattr`）及 `from_kuid`/`from_kgid` 函数，可能导致内核读取并使用随机栈数据，引发不可预测的行为或被模糊测试工具（如 syzbot）检测到错误。
+
+#主要错误日志
+未知
+
+#问题根因
+`ocfs2_setattr()` 函数无条件地读取 `attr->ia_mode`、`attr->ia_uid` 和 `attr->ia_gid` 并传递给 tracepoint。根据逻辑，仅当 `attr->ia_valid` 中设置了对应的标志位（`ATTR_MODE`、`ATTR_UID`、`ATTR_GID`）时，这些字段才包含有效数据。若标志位未设置，直接读取这些字段会访问未初始化的内存。
+
+#解决方案
+在调用 tracepoint 之前，增加对 `attr->ia_valid` 标志位的检查。仅当对应标志位被设置时，才读取相应的字段并转换为内核 ID；若标志位未设置，则默认传递 0。这避免了向 `from_kuid`、`from_kgid` 以及 tracepoint 传递未初始化的变量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/02a6353bc5ebe4caf77c48e3fef5a15a55d258f3

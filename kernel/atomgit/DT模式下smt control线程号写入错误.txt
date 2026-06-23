@@ -1,0 +1,24 @@
+#标题
+DT模式下smt control线程号写入错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设备树（DT）模式下解析CPU拓扑时，smt control相关的线程号写入不正确，导致CPU拓扑结构（如thread_id）解析异常。
+
+#主要错误日志
+- `%pOF: Can't get CPU for thread`
+- `Topology for clusters of clusters not yet supported`
+- `%pOF: cpu-map children should be clusters`
+- `%pOF: Non-leaf cluster with core %s`
+- `%pOF: empty cluster`
+
+#问题根因
+在解析拓扑结构的循环中（如`parse_core`函数），使用`do-while(t)`结构时，循环变量`t`（device_node）的跳出条件检查位于循环体外部作用域。这导致无法在循环作用域内直接利用`__free(device_node)`等自动清理特性声明变量，进而引发引用计数管理问题，导致线程号写入错误。
+
+#解决方案
+重构`parse_core`、`parse_cluster`和`parse_socket`函数中的`do-while`循环逻辑，将`if (!t) break;`判断提前至循环体开头。这使得循环的退出条件位于循环作用域内部，修正了控制流逻辑，为后续利用自动清理特性修复线程号写入问题奠定了基础。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/16a0cbac6609f8ba10a91a9d52b15bf28243c3ee

@@ -1,0 +1,26 @@
+#标题
+sched/rt: Fix race in push_rt_task
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在实时（RT）调度器进行负载均衡推送任务（push_rt_task）的过程中，`find_lock_lowest_rq` 函数在释放_rq锁并锁定lowest_rq锁的间隙，因存在竞争窗口导致对任务状态的检查不充分。这可能导致系统出现内核崩溃（kernel panic）或数据结构不一致，具体表现为触发 BUG_ON 或调度器行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `find_lock_lowest_rq` 中锁重获取期间存在 Race condition。
+在解锁运行队列以锁定目标 lowest_rq 的过程中，任务状态可能发生改变。原有的检查逻辑顺序不当且不完整：
+1. 原代码先检查了 `task_rq(task) != rq`，若成立则直接跳过后续检查。这导致任务即使已经迁移或状态变更，也可能因为该条件满足而未执行后续的有效性校验（如 `task_on_rq_queued`），从而在后续操作中触发崩溃。
+2. 原代码的检查项较为分散，未确保任务依然位于 pushable_tasks 链表的头部，且检查项覆盖不全（如未检查 `task_current`），导致可能操作了不在队列中或不适合推送的任务。
+
+#解决方案
+重构 `find_lock_lowest_rq` 中的有效性检查逻辑：
+1. 引入并使用 `pick_next_pushable_task` 辅助函数来获取链表头任务。该函数内部已包含完整的健全性检查（BUG_ON checks），确保任务处于正确的 CPU、非当前运行任务、允许迁移且在队列中。
+2. 调整检查逻辑顺序，优先检查 `is_migration_disabled` 和 CPU 亲和性，最后检查任务是否仍为 pushable_tasks 的链表头（`task != pick_next_pushable_task(rq)`）。
+通过这些修改，确保在锁竞争的间隙内，只有状态完全有效且仍在推送队列正确的位置的任务才会被处理，从而修复竞争问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1b3530c9209c3109cf8feff8e43a8b596b1cd131

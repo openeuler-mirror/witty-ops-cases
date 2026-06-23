@@ -1,0 +1,22 @@
+#标题
+gtp: 新建链接时引用错误 network namespace 导致内存释放后使用及列表损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+创建 GTP 设备后，在删除 network namespace 时触发内核警告或 Oops。具体表现为：
+1. 在 namespace 卸载过程中，GTP 设备链表出现损坏。
+2. 触发 "list corruption splat" 或潜在的 Use-After-Free（释放后使用）错误。
+
+#主要错误日志
+list corruption splat in gtp_net_exit_batch_rtnl()
+
+#问题根因
+在 `gtp_newlink` 函数中，获取 network namespace 数据结构的逻辑使用了 `dev_net(dev)`。此时 `dev` 设备尚未完全注册，其网络命名空间指针可能未正确初始化或指向错误的命名空间。该逻辑应该使用传入的参数 `src_net`（源网络命名空间），以确保 GTP 设备被正确添加到创建者所属命名空间的设备列表中。错误的列表挂载导致 namespace 销毁时链表操作异常。
+
+#解决方案
+修改 `drivers/net/gtp.c` 中的 `gtp_newlink` 函数，将 `net_generic(dev_net(dev), gtp_net_id)` 替换为 `net_generic(src_net, gtp_net_id)`，确保 GTP 设备被正确添加到源网络命名空间的设备列表中，从而避免命名空间销毁时的链表损坏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c391307feabeaa256d480dbd8cb0477f3f08d547

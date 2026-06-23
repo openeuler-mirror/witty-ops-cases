@@ -1,0 +1,30 @@
+#标题
+ROH驱动变量类型不一致导致潜在逻辑错误与打印异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ROH（Rdma over HNS3）驱动模块在处理数据时，由于变量类型定义不一致（如符号类型混用），可能导致循环遍历、命令队列清理计数或内存拷贝返回值判断出现逻辑错误。在命令队列操作异常时，内核日志可能出现格式化显示错误（如显示负数或乱码），影响驱动正常功能与调试信息可读性。
+
+#主要错误日志
+- dev_warn(hroh_dev->dev, "cleaned %u, need to clean %u\n", handle, num);
+- dev_err(hroh_dev->dev, "failed to query link status, ret = %d\n", ret);
+- dev_err(hroh_dev->dev, "failed to set eid, ret = %d\n", ret);
+
+#问题根因
+驱动代码中多处变量类型定义不一致或使用不当：
+1. 环形缓冲区指针与计数变量（如 `next_to_use`、`next_to_clean`）被定义为 `int` 类型，而其关联的描述符数量为 `u16/u32`，导致在进行环形缓冲区计算（如取模运算）或差值计算时可能出现符号位干扰或溢出风险。
+2. 函数返回值类型不匹配，例如 `hns3_roh_cmdq_space` 返回 `int` 但实际应返回队列空闲空间大小（无符号）。
+3. 用户空间数据拷贝返回值 `uncopied_bytes` 使用 `int` 类型存储，而标准接口 `copy_from_user`/`copy_to_user` 返回值为 `unsigned long`，可能导致错误判断。
+4. 日志打印中 `%d` 格式化符与 `u32` 类型变量不匹配，导致日志显示错误。
+
+#解决方案
+统一修正变量类型，确保计算逻辑与接口定义的一致性：
+1. 将环形缓冲区相关变量（`next_to_use`、`next_to_clean`、`desc_num` 等）及函数返回值统一修改为 `u32` 类型。
+2. 将命令队列发送接口 `hns3_roh_cmdq_send` 的 `num` 参数类型由 `int` 修改为 `u32`，并修正相关调用处的常量后缀（如 `1U`）。
+3. 将 `uncopy_bytes` 等变量类型修改为 `unsigned long`，以匹配内核 API 返回值类型。
+4. 修正日志打印格式符，将 `cleaned %d` 修改为 `cleaned %u`，确保日志输出正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ebc0aec43c5faabfb0a39636df627d798287417f

@@ -1,0 +1,22 @@
+#标题
+cpufreq/sched: 策略限制变更后未触发驱动回调导致限频失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 cpufreq 策略限制发生变更时，对于未设置 CPUFREQ_NEED_UPDATE_LIMITS 标志的驱动，如果计算出的目标频率与之前选定的频率相同，内核未能正确调用驱动回调函数。这导致新的策略限制未能生效，系统无法正确应用设定的频率范围，可能导致功耗异常或性能受限。
+
+#主要错误日志
+未知
+
+#问题根因
+commit 8e461a1cb43d 错误地修改了 `sugov_should_update_freq()` 函数，将 `need_freq_update` 标志位的设置条件限制为仅当驱动设置了 `CPUFREQ_NEED_UPDATE_LIMITS` 标志时才置为 true。这导致未设置该标志的普通驱动在策略限制改变时，`need_freq_update` 保持为 false。随后在 `sugov_update_next_freq()` 中，如果新计算出的频率与当前频率相同，代码逻辑会直接返回 false 跳过驱动回调调用。然而，即使频率值未变，策略限制的变更也需要通过驱动回调才能生效，从而造成了限制更新丢失。
+
+#解决方案
+修改 `kernel/sched/cpufreq_schedutil.c` 中的逻辑：
+1. 在 `sugov_should_update_freq()` 中检测到 `limits_changed` 时，无条件将 `need_freq_update` 设为 true，确保限制变更信号能传递下去。
+2. 在 `sugov_update_next_freq()` 中增加精细判断：当 `need_freq_update` 为 true 且频率值未变时，进一步检查驱动是否具有 `CPUFREQ_NEED_UPDATE_LIMITS` 标志。若无该标志，则说明无需仅为“限制更新”而调用回调，可直接返回 false 跳过；若有该标志或频率发生了变化，则继续执行回调调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b03fc73e928bb0332743322280f3ac7ea4b924c

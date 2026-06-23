@@ -1,0 +1,20 @@
+#标题
+iavf: fix out-of-bounds writes in iavf_get_ethtool_stats()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `iavf_get_ethtool_stats` 获取网卡统计信息时，由于预分配的缓冲区大小与实际写入的数据量不匹配，导致内核发生越界写入。该问题通常在执行 `ethtool -S` 命令查看统计信息时触发，可能引发内核 panic 或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 `iavf_get_sset_count` 与 `iavf_get_stat_strings` 使用了 `netdev->real_num_tx_queues` 来计算统计信息的数组长度，而 `iavf_get_ethtool_stats` 在实际填充数据时却使用了 `adapter->num_active_queues` 进行循环遍历。由于 `real_num_tx_queues` 的值通常大于或等于 `num_active_queues`，当 `iavf_get_sset_count` 申请的缓冲区小于 `iavf_get_ethtool_stats` 实际需要写入的数据长度时，导致数据写入越界。
+
+#解决方案
+修改 `iavf_get_sset_count`、`iavf_get_stat_strings` 和 `iavf_get_ethtool_stats` 中的队列统计遍历逻辑，统一使用 `netdev->num_tx_queues` 替代 `netdev->real_num_tx_queues` 或 `adapter->num_active_queues`。确保统计信息申请的缓冲区大小与实际填充的数据量一致，对于未激活的队列，在 `iavf_get_ethtool_stats` 中填充零值统计信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1971580039007e6e851c4eff08ff34ff7e9dabca

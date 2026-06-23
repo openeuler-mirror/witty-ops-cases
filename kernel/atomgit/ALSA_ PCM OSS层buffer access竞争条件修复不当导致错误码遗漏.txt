@@ -1,0 +1,20 @@
+#标题
+ALSA: PCM OSS层buffer access竞争条件修复不当导致错误码遗漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在PCM OSS层处理音频流参数变更时，`snd_pcm_runtime_buffer_set_silence` 函数内部调用 `snd_pcm_buffer_access_lock` 可能失败，但原代码未捕获并处理该错误，导致潜在的并发访问异常或状态不一致，可能引发音频功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复 "ALSA: pcm: Fix race of buffer access at PCM OSS layer" (Commit 93a81ca06577) 的过程中，`snd_pcm_runtime_buffer_set_silence` 函数虽然增加了锁保护，但其内部调用的 `snd_pcm_buffer_access_lock` 返回的错误码被忽略，函数直接返回 void，导致上层调用者 `snd_pcm_oss_change_params_locked` 无法感知锁获取失败的情况，未能及时终止参数变更流程。
+
+#解决方案
+修改 `snd_pcm_runtime_buffer_set_silence` 函数的返回值类型由 `void` 变更为 `int`，并在内部检查 `snd_pcm_buffer_access_lock` 的返回值，若获取锁失败则立即向上返回错误码。同时，修改上层调用点 `snd_pcm_oss_change_params_locked`，对 `snd_pcm_runtime_buffer_set_silence` 的返回值进行判断，若返回错误则跳转至 `failure` 标签进行错误处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f8804a7df30c4e06e96d0c38173e559e613743a

@@ -1,0 +1,22 @@
+#标题
+fbdev: defio 修复 struct fb_deferred_io 和 struct fb_info 中的 KABI 破坏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在编译或运行时触发 KABI 一致性检查失败，具体表现为结构体 `struct fb_deferred_io` 和 `struct fb_info` 的大小或成员布局发生变化，破坏了内核应用程序二进制接口（KABI）的稳定性。此问题由引入 `fbdefio_state` 成员的提交 e5d43517c4c1 引起。
+
+#主要错误日志
+未知
+
+#问题根因
+提交 e5d43517c4c1 ("fbdev: defio: Disconnect deferred I/O from the lifetime of struct fb_info") 在 `struct fb_deferred_io` 中新增了 `lock` 成员，并在 `struct fb_info` 中新增了 `fbdefio_state` 指针成员。这些变更直接修改了内核核心数据结构的定义，导致结构体大小和成员偏移量改变，从而破坏了 KABI 兼容性。
+
+#解决方案
+通过使用 KABI 宏技术来保持结构体布局兼容：
+1. 在 `struct fb_deferred_io` 中，使用 `KABI_BROKEN_REMOVE` 宏包裹新增的 `lock` 成员，允许在保持结构体整体 KABI 稳定性的前提下修改结构体（通常配合隐藏字段或预留空间使用）。
+2. 在 `struct fb_info` 中，移除直接新增的 `fbdefio_state` 成员，转而使用条件编译宏 `KABI_USE` 占用原本预留的 `KABI_RESERVE(1)` 字段来存储该指针。这样既满足了功能需求，又确保了 `struct fb_info` 的大小和既有成员偏移量不变。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1b832eb50aef52bc363e18b2d84bd479567a92ef

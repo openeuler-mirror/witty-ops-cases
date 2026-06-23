@@ -1,0 +1,24 @@
+#标题
+ACPICA: dsutils.c 中的 ACPI 操作数缓存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `acpi_ds_create_operands` 函数执行过程中，如果参数创建失败，会导致 ACPI 操作数缓存（operand cache）泄漏。具体表现为内核对象引用计数泄漏或内存泄漏，可能影响系统长期运行的稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `acpi_ds_create_operands` 的错误处理路径中，原有代码逻辑存在缺陷。当循环创建操作数失败时，代码跳转到错误清理分支。此时，`walk_state->num_operands` 的值已经被循环逻辑修改，导致 `acpi_ds_obj_stack_pop_and_delete` 函数调用时的 `arg_count` 参数计算错误，未能正确弹出和删除已分配的操作数对象，从而造成缓存泄漏。
+
+#解决方案
+修改 `acpi_ds_create_operands` 函数的错误处理逻辑：
+1. 在函数入口处保存当前的操作数数量 `prev_num_operands`。
+2. 计算新的操作数总数量 `new_num_operands`。
+3. 在错误处理路径中，先将 `walk_state->num_operands` 设置为当前已成功创建的个数 `i`，然后使用 `new_num_operands` 作为参数调用 `acpi_ds_obj_stack_pop_and_delete` 来正确释放所有新创建的操作数。
+4. 最后恢复原始的操作数数量 `prev_num_operands`，确保 `walk_state` 状态的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0845067537908998c1019fcb8b43951aaaab27ba

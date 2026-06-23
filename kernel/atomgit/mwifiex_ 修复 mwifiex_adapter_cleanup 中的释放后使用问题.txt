@@ -1,0 +1,20 @@
+#标题
+mwifiex: 修复 mwifiex_adapter_cleanup 中的释放后使用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 mwifiex 驱动或移除设备过程中，若 `wakeup_timer` 的回调函数正在执行，此时调用 `mwifiex_adapter_cleanup` 清理资源，可能导致内核发生释放后使用。具体表现为内核可能触发 panic 或 Oops，或在访问已释放的 `adapter` 结构体成员（如 `hw_status`、`if_ops.card_reset`）时产生内存访问错误。
+
+#主要错误日志
+未知
+
+#问题根因
+`mwifiex_adapter_cleanup()` 函数在释放 adapter 结构体之前，使用 `timer_delete()`（代码中为 `del_timer`）来删除 `wakeup_timer`。由于 `timer_delete()` 是非同步操作，不会等待正在运行的定时器回调函数完成，如果回调函数 `wakeup_timer_fn` 正在执行，它将继续访问 adapter 结构体中的字段。而 `mwifiex_adapter_cleanup` 返回后，`mwifiex_free_adapter()` 可能会立即释放该 adapter 结构体，从而导致回调函数访问已释放内存。
+
+#解决方案
+将 `mwifiex_adapter_cleanup()` 函数中删除 `wakeup_timer` 的接口由 `del_timer()` 修改为 `del_timer_sync()`。`del_timer_sync()` 会等待正在运行的定时器回调函数执行完毕后再返回，从而确保在释放 adapter 结构体之前，定时器回调不会再访问该结构体，避免了释放后使用问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4190047812d7e68a8a9f76ad33bd816bf0036fe3

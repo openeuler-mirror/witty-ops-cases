@@ -1,0 +1,23 @@
+#标题
+RDMA/uverbs: 用户态输入导致的整型溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 RDMA uverbs 命令时，由于对用户态传入的参数（如 `wqe_size`、`wr_count`、`sge_count`）校验不严，乘法运算过程中可能发生整型溢出。该漏洞可导致内核栈溢出或堆溢出，进而引发系统崩溃或提权，具体表现为内核 panic 或内存破坏相关的 oops。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `uverbs_request_next_ptr()` 函数及其调用点缺乏对整型溢出的检查：
+1. **乘法溢出**：表达式 `cmd.wqe_size * cmd.wr_count` 和 `cmd.sge_count * sizeof(struct ib_uverbs_sge)` 中的变量均为 u32 类型且来自用户态，乘法结果可能回绕，导致分配的空间小于预期。
+2. **加法溢出**：原 `uverbs_request_next_ptr()` 函数中的判断条件 `iter->cur + len > iter->end` 存在潜在溢出风险，当 `len` 接近 `SIZE_MAX` 时，加法结果回绕导致边界检查失效。
+
+#解决方案
+1. **修改边界检查逻辑**：调整 `uverbs_request_next_ptr()` 中的判断条件，将 `iter->cur + len > iter->end` 修改为 `len > iter->end - iter->cur`，将变量 `len` 独立置于比较的一侧，避免加法溢出导致的校验失效。
+2. **引入安全乘法宏**：在所有涉及用户态参数乘法运算的调用点（如 `ib_uverbs_post_send` 和 `ib_uverbs_unmarshall_recv`），将普通乘法替换为 `size_mul()` 宏，确保运算结果不会发生整型溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b3f0ae83eea1de48cfb74f5bfec6be5eb8cef6f4

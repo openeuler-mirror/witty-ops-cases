@@ -1,0 +1,20 @@
+#标题
+MCTP分片重组处理共享SKB导致内存损坏或UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在MCTP协议进行分片重组过程中，当收到首个分片包（reasm_head为空）时，若传入的sk_buff（skb）是共享的（shared），内核直接操作其frag_list指针。这可能导致内存损坏、内核崩溃，或引发释放后使用漏洞，该缺陷被认定为CVE-2025-21972。
+
+#主要错误日志
+未知
+
+#问题根因
+在`mctp_frag_queue`函数中，处理首个分片时未检查`skb`是否为共享状态。代码直接将传入的`skb`赋值给`key->reasm_head`并修改其`frag_list`指针。若`skb`被多处引用（共享），对`frag_list`的修改会破坏其他引用者的数据结构，导致内存管理错误。
+
+#解决方案
+在设置`reasm_head`前，调用`skb_unshare(skb, GFP_ATOMIC)`函数处理传入的`skb`。如果`skb`是共享的，该函数会创建一个私有副本，确保后续对`frag_list`的修改不会影响其他SKB用户；如果`skb`非共享，则直接使用原`skb`。同时增加了对`skb_unshare`返回值的内存分配失败检查（-ENOMEM），防止空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ada3eeb6d91586c3824ffb77ce93e8ccdf0fca4

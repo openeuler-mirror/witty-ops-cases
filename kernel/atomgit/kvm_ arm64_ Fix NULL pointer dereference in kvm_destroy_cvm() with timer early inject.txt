@@ -1,0 +1,20 @@
+#标题
+kvm: arm64: Fix NULL pointer dereference in kvm_destroy_cvm() with timer early inject
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使能了 timer early inject（提前注入）功能，且虚拟机非 realm/CVM 类型时，在销毁虚拟机过程中触发 NULL 指针引用，导致内核崩溃或异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在结构体 `kvm_arch` 中，`timer_early` 与 `virtcca_cvm` 指针共享一个 union（联合体）。当启用了 timer early inject 但 VM 不是 realm/CVM 时，`timer_early.base` 的数据被误读为 `virtcca_cvm` 指针的非 NULL 值（垃圾数据），导致原本应生效的 NULL 检查被绕过，进而引发 NULL 指针引用。
+
+#解决方案
+在 `kvm_destroy_cvm()` 函数入口处增加 `kvm_is_realm(kvm)` 判断条件。修改后的逻辑确保只有当 VM 确实是 realm/CVM 类型时，才继续执行 CVM 销毁流程，避免因 union 数据混淆导致的非法指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/39834e1ee2f584ccc52bab0b6053c28375ca5498

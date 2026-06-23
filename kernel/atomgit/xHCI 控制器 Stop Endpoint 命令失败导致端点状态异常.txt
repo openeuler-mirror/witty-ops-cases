@@ -1,0 +1,20 @@
+#标题
+xHCI 控制器 Stop Endpoint 命令失败导致端点状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NEC uPD720200 xHCI 控制器上，当接收数据流并关闭（关闭设备驱动程序已预先排队的 URBs）时，系统出现随机故障。具体表现为：Stop Endpoint 命令失败并返回 Context Error，此时输出上下文指示端点处于 Stopped 状态，但端点实际上仍在继续运行。该问题常伴随 Set TR Dequeue Pointer 命令随后也失败（同样返回 Context Error），并导致因取消工作意外完成而引发的其他问题。该故障在高速运行的 isoc 端点（如 uvcvideo）上最为常见，也能在全速 bulk 端点（如 pl2303）上复现，风险与端点负载成正比。
+
+#主要错误日志
+Stop ep completion ctx error, ep is running
+
+#问题根因
+NEC uPD720200 xHCI 控制器存在硬件缺陷。在处理 Stop Endpoint 命令时，该控制器偶尔会出现错误行为：命令失败返回 Context Error，输出上下文显示端点状态为 EP_STATE_STOPPED，但实际上硬件仍继续处理 TRBs（端点并未真正停止）。驱动程序若仅信任上下文状态而不进行特殊处理，会导致后续操作（如 Set TR Dequeue Pointer）失败及数据传输异常。
+
+#解决方案
+修改 xHCI 驱动程序 `xhci_handle_cmd_stop_ep` 函数的处理逻辑。针对具有 `XHCI_NEC_HOST` quirk 标志的控制器，在收到 Stop Endpoint 命令的 Context Error 且端点状态为 `EP_STATE_STOPPED` 时，不再直接退出，而是让其穿透逻辑并重试命令，处理方式与 `EP_STATE_RUNNING` 状态一致。对于非 NEC 控制器，保持原有逻辑，信任 EP_CTX_STATE 状态以保持保守策略。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b41e7567116a1a9fe68ef0497a4fae1a092d1c85

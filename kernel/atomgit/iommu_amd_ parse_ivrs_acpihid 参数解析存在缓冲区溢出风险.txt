@@ -1,0 +1,21 @@
+#标题
+iommu/amd: parse_ivrs_acpihid 参数解析存在缓冲区溢出风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在解析内核启动参数 `ivrs_acpihid` 时，若提供的 HID（硬件 ID）或 UID（唯一 ID）字符串长度符合特定组合（例如 HID 长度为 4 且 UID 长度为 260，或 HID 长度为 13 且 UID 长度为 250），会导致内核缓冲区溢出。
+
+#主要错误日志
+- `pr_err("Invalid command line: hid is too long\n");`
+- `pr_err("Invalid command line: uid is too long\n");`
+
+#问题根因
+字符串解析逻辑存在校验缺陷。原代码仅将 HID 和 UID 字符串的总长度与 `ACPIID_LEN` 进行比较，未分别检查单个字段的长度是否超过对应缓冲区的大小（`ACPIHID_HID_LEN` 和 `ACPIHID_UID_LEN`）。这导致在某些特定输入组合下，虽然总长度校验通过，但 UID 或 HID 字符串实际长度超过了各自缓冲区的限制（如 UID 缓冲区大小为 256，但输入了 260 字节的字符串），从而引发缓冲区溢出。
+
+#解决方案
+在 `drivers/iommu/amd/init.c` 的 `parse_ivrs_acpihid` 函数中，增加对 HID 和 UID 字符串长度的独立校验。分别检查 `strlen(hid)` 是否大于等于 `ACPIHID_HID_LEN`，以及 `strlen(uid)` 是否大于等于 `ACPIHID_UID_LEN`。如果任一条件满足，则打印错误日志并返回，拒绝该参数输入，从而防止缓冲区溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b0d77994e17c40ae6c1dc5c12492fe6d2feb8e22

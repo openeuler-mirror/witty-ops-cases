@@ -1,0 +1,20 @@
+#标题
+NFSD 追踪开启时 nfsd4_read_release 函数崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当开启内核追踪功能时，执行 pynfs 测试套件中的 read.testNoFh 测试用例，内核在 `nfsd4_read_release` 函数的 `trace_nfsd_read_done` 追踪点处发生崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nfsd4_read_release` 函数中，`trace_nfsd_read_done` 追踪点位于 `nfsd_file_put` 调用之后。当 `u->read.rd_nf` 非空时，代码先执行 `nfsd_file_put` 释放资源，随后无条件执行 `trace_nfsd_read_done`。此时若 `rd_nf` 有效，`rd_fhp` 等指针可能已随资源释放而失效，导致追踪点访问无效内存引发崩溃。该问题是由提交 15a8b55dbb1b ("nfsd: call op_release, even when op_func returns an error") 引入的。
+
+#解决方案
+修改 `fs/nfsd/nfs4proc.c` 中的 `nfsd4_read_release` 函数，将 `trace_nfsd_read_done` 追踪点的调用移至 `if (u->read.rd_nf)` 条件判断内部，并置于 `nfsd_file_put` 调用之前。确保只有在资源有效时才进行追踪，且在释放资源前完成追踪操作，避免访问已释放的数据结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/94420988d8ce8df46cd9683b7d28c1b8e8ec47b5

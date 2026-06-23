@@ -1,0 +1,20 @@
+#标题
+ksmbd: get_file_all_info 函数内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 服务处理 SMB2 查询文件信息请求时，若 `get_file_all_info` 函数内部的 `vfs_getattr` 调用失败，会导致内核内存泄漏。该问题表现为系统或进程占用的内存随请求失败次数增加而持续增长，且无法被自动回收。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `get_file_all_info()` 函数中，代码流程先分配了 `filename` 内存，随后调用 `vfs_getattr()`。当 `vfs_getattr()` 执行失败时，函数直接 `return ret` 返回，未执行 `kfree(filename)` 操作，导致已分配的内存未被释放，从而引发内存泄漏。
+
+#解决方案
+修改 `fs/smb/server/smb2pdu.c` 文件中的错误处理路径。在 `vfs_getattr()` 失败的分支中，增加 `kfree(filename)` 调用，确保在函数返回前释放已分配的内存资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/764460bedb9fdeee08c70cbdcf7de39377db860d

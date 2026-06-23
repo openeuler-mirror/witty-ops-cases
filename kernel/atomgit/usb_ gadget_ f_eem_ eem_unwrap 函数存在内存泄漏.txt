@@ -1,0 +1,43 @@
+#标题
+usb: gadget: f_eem: eem_unwrap 函数存在内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB Gadget EEM 功能处理命令路径时，若 `usb_ep_queue` 执行失败，系统未释放已分配的资源，导致内存泄漏。通过 kmemleak 工具可观测到多个未引用的对象。
+
+#主要错误日志
+kmemleak results:
+  unreferenced object 0xffffff895a512300 (size 240):
+    backtrace:
+      slab_post_alloc_hook+0xbc/0x3a4
+      kmem_cache_alloc+0x1b4/0x358
+      skb_clone+0x90/0xd8
+      eem_unwrap+0x1cc/0x36c
+  unreferenced object 0xffffff8a157f4000 (size 256):
+    backtrace:
+      ...
+      eem_unwrap+0x204/0x36c
+  unreferenced object 0xffffff8aadbaac00 (size 128):
+    backtrace:
+      ...
+      eem_unwrap+0x218/0x36c
+  unreferenced object 0xffffff89ccef3500 (size 64):
+    backtrace:
+      ...
+      eem_unwrap+0x238/0x36c
+DBG(cdev, "echo response queue fail\n")
+
+#问题根因
+在 `eem_unwrap` 函数处理过程中，当 `usb_ep_queue` 调用失败时，现有代码仅打印了调试日志 "echo response queue fail"，但未对之前已分配的内存资源（包括 `ctx`、`req->buf`、`req` 请求结构以及 `skb2`）进行释放，导致内存泄漏。
+
+#解决方案
+在 `usb_ep_queue` 失败的分支中增加错误处理逻辑，依次释放已分配的资源：
+1. 释放 `ctx` 结构体内存 (`kfree(ctx)`)。
+2. 释放请求缓冲区 (`kfree(req->buf)`)。
+3. 释放 USB 请求对象 (`usb_ep_free_request(ep, req)`)。
+4. 释放 skb 数据包 (`dev_kfree_skb_any(skb2)`)。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1be46a6381aafcc2f84cf06a9875ad5864a5475e

@@ -1,0 +1,20 @@
+#标题
+kobject: kobject_action_type函数触发全局越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `kobject_action_type` 函数解析动作类型时，若输入缓冲区 `buf` 的长度（`count_first`）小于标准动作字符串的实际长度，程序会继续访问 `kobject_actions` 数组中字符串的 `count_first` 下标位置进行越界检查。当 `count_first` 值恰好大于或等于该字符串的存储长度时，会导致读取字符串结束符 `\0` 之外的内容，引发全局越界访问错误。
+
+#主要错误日志
+KASAN: global-out-of-bounds in kobject_action_type
+
+#问题根因
+代码在匹配 `kobject_actions` 数组中的字符串时，逻辑存在缺陷。原代码使用 `kobject_actions[action][count_first] != '\0'` 来判断是否完全匹配。如果待匹配字符串 `kobject_actions[action]` 的实际长度小于 `count_first`，该访问操作会越界读取字符串数组之外的内存。这是一个典型的缓冲区越界读问题，未对访问下标进行边界校验。
+
+#解决方案
+修改判断逻辑，使用 `strlen(kobject_actions[action]) > count_first` 替代原有的下标直接访问方式。通过先获取标准动作字符串的长度再与输入长度比较，避免了直接使用过长的下标访问短字符串导致的越界内存读取，从而修复了全局越界访问漏洞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/54c950341a886715dd0c627f939322217ff0f99d

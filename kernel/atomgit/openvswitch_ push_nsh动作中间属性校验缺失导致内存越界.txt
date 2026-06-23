@@ -1,0 +1,42 @@
+#标题
+openvswitch: push_nsh动作中间属性校验缺失导致内存越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 openvswitch 的 push_nsh 动作时，若用户传入的 netlink 属性结构大小异常，内核校验阶段未发现错误，导致在后续执行阶段发生内存越界访问。具体表现为触发 KASAN 检测报告 "slab-out-of-bounds"，可能导致内核崩溃或数据损坏。
+
+#主要错误日志
+BUG: KASAN: slab-out-of-bounds in nsh_hdr_from_nlattr+0x1dd/0x6a0 [openvswitch]
+Read of size 184 at addr ffff88816459a634 by task a.out/22624
+CPU: 8 UID: 0 PID: 22624 6.18.0-rc7+ #115 PREEMPT(voluntary)
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x51/0x70
+ print_address_description.constprop.0+0x2c/0x390
+ kasan_report+0xdd/0x110
+ kasan_check_range+0x35/0x1b0
+ __asan_memcpy+0x20/0x60
+ nsh_hdr_from_nlattr+0x1dd/0x6a0 [openvswitch]
+ push_nsh+0x82/0x120 [openvswitch]
+ do_execute_actions+0x1405/0x2840 [openvswitch]
+ ovs_execute_actions+0xd5/0x3b0 [openvswitch]
+ ovs_packet_cmd_execute+0x949/0xdb0 [openvswitch]
+ ...
+
+#问题根因
+push_nsh() 动作的 netlink 属性结构为嵌套形式：`OVS_ACTION_ATTR_PUSH_NSH(OVS_KEY_ATTR_NSH(OVS_NSH_KEY_ATTR_BASE,...))`。
+外层属性由 `__ovs_nla_copy_actions()` 校验，内层属性由 `nsh_key_put_from_nlattr()` 校验，但中间层的 `OVS_KEY_ATTR_NSH` 属性缺乏有效校验。
+代码在 `validate_push_nsh()` 中直接连续调用两次 `nla_data()` 进行解包（double unwrap），并未检查中间属性的大小是否正确或类型是否为 `OVS_KEY_ATTR_NSH`。
+由于校验阶段使用的 netlink 缓冲区可能较大，错误的属性大小未触发异常；但在动作执行阶段，缓冲区精确分配，导致 `nsh_hdr_from_nlattr()` 函数在读取数据时发生越界访问。
+
+#解决方案
+在 `validate_push_nsh()` 函数中增加对中间层属性的严格校验。
+1. 检查属性指针是否在有效范围内（`nla_ok`）。
+2. 检查属性的总长度是否匹配（防止越界）。
+3. 检查属性类型是否为 `OVS_KEY_ATTR_NSH`。
+同时修正了调用逻辑，将 `validate_push_nsh(nla_data(a), log)` 改为 `validate_push_nsh(a, log)`，确保函数内部能够正确访问并验证外层属性包含的数据，从而拒绝格式错误的属性输入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/449f5cad05218c112c26dd4cfa9a1938e51dd399

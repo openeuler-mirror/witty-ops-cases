@@ -1,0 +1,20 @@
+#标题
+proc_oom_rate_limit_write 整数溢出导致内核内存越界写漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在向 `oom_rate_limit` proc 接口写入超长数据（如接近 SIZE_MAX 的长度）时，触发内核内存越界写入。具体表现为：内核内存被破坏，可能导致系统崩溃或非预期行为。
+
+#主要错误日志
+- `invalid input length for oom_rate_limit, max %d`（推断：当输入长度超过限制时打印）
+
+#问题根因
+`proc_oom_rate_limit_write` 函数在进行内存分配前未校验用户输入的数据长度 `cnt`。当 `cnt` 过大（例如 `SIZE_MAX`）时，`kzalloc(cnt + 1)` 中的加法运算发生整型溢出，导致分配的缓冲区大小远小于实际写入需求（如回绕为 0 或极小值）。随后 `copy_from_user` 将完整的 `cnt` 字节数据写入该过小的缓冲区，引发内核内存越界写入。
+
+#解决方案
+在执行内存分配前增加输入长度校验，限制输入长度不得为 0 且不得超过 `OOM_RATE_LIMIT_RAW_STR_MAX_LEN`（256 字节）；若校验失败则返回 `-EINVAL` 并打印错误日志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/51c66e79f28e07693a5cfb11371719b5424af831

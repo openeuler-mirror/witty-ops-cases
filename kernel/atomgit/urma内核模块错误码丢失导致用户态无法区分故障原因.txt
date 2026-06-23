@@ -1,0 +1,31 @@
+#标题
+urma内核模块错误码丢失导致用户态无法区分故障原因
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 bind、unbind、query、create 等操作时，用户态程序收到通用的错误码（如 `-UBCORE_DRV_ERRNO`），无法获取底层驱动返回的具体错误原因（如超时、资源不足、状态错误等），导致故障定位困难。内核日志中可能仅显示 "Failed to deactivate tp" 或 "bind jetty failed" 等笼统信息，缺乏具体的错误返回值上下文。
+
+#主要错误日志
+- `[DRV_ERROR]Failed to deactivate tp, ret: %d.`
+- `failed to send_msg, ret: %d.`
+- `Failed to deactivate tp, ret: %d`
+- `Failed to get tp list, ret: %d, tp_cnt: %u.`
+- `bind jetty failed, ret: %d.`
+
+#问题根因
+ubcore 在通用封装路径中，将底层驱动返回的具体负值错误码（errno）无条件统一转换为 `-UBCORE_DRV_ERRNO`。
+具体表现为：
+1. 多个 `ret != 0` 的判断分支直接返回 `-UBCORE_DRV_ERRNO`，覆盖了原始的 `ret` 值。
+2. 部分 `get_tp` / `import_jetty` 相关路径在处理错误时，混淆了 `NULL` 和 `ERR_PTR` 的返回方式，导致错误码语义转换模糊。
+这种不一致且过度泛化的错误传播机制，导致用户态丢失了可操作的错误上下文信息。
+
+#解决方案
+修改 ubcore 与 uburma 的兼容性/适配代码，确保端到端传播原始驱动错误码：
+1. 移除无条件返回 `-UBCORE_DRV_ERRNO` 的逻辑，改为直接返回底层驱动返回的 `ret` 值。
+2. 规范化指针返回路径的错误处理，统一使用 `ERR_PTR` 进行封装；针对 `tp_cnt` 无效但回调返回 0 的特定情况，显式返回 `ERR_PTR(-UBCORE_DRV_ERRNO)` 作为回退处理。
+3. 在日志打印中增加 `ret` 字段输出，便于问题定位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eca29db0f88a5d1d8552dd2d7371cf56bf83ba8e

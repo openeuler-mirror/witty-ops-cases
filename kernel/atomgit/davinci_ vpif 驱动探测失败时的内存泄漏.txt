@@ -1,0 +1,23 @@
+#标题
+davinci: vpif 驱动探测失败时的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 davinci vpif 驱动加载过程中，若 `pdev_display` 初始化阶段（如内存分配 kzalloc）失败，此前已分配的 `pdev_capture` 平台设备对象未能被释放，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `vpif_probe` 函数的错误处理路径中，当 `pdev_display` 分配失败（`kzalloc` 返回 NULL）时，代码直接跳转至 `err_put_pdev_capture` 标签。该标签仅调用了 `platform_device_put(pdev_capture)`，而在分配 `pdev_capture` 时已经调用过 `platform_device_add`。根据内核 API 规范，已添加的设备需要先调用 `platform_device_del` 再调用 `platform_device_put`，否则会导致设备引用计数处理不当引发内存泄漏。这是由错误处理跳转标签指向错误位置引起的逻辑缺陷。
+
+#解决方案
+修改 `vpif_probe` 函数中的错误跳转逻辑：
+1. 新增 `err_del_pdev_capture` 标签，用于执行 `platform_device_del(pdev_capture)` 操作。
+2. 将 `pdev_display` 分配失败时的跳转目标从 `err_put_pdev_capture` 修改为 `err_del_pdev_capture`。
+3. 调整代码执行顺序，确保在释放设备引用（`put`）前先从设备模型中移除设备（`del`），修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ba75370be24e1e2d711fe7b2b949af78bbe7994

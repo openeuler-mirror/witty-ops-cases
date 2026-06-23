@@ -1,0 +1,21 @@
+#标题
+hwmon: (corsair-psu) 探测失败时未关闭 HID 设备导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Corsair PSU HID 控制器驱动加载过程中，若设备初始化或固件信息查询失败，驱动探测流程会出错退出。由于错误处理路径未正确调用 `hid_hw_close`，导致 HID 设备处于打开状态，引发引用计数不平衡及资源泄漏。
+
+#主要错误日志
+- dev_err(&hdev->dev, "unable to initialize device (%d)\n", ret);
+- dev_err(&hdev->dev, "unable to query firmware (%d)\n", ret);
+
+#问题根因
+函数 `corsairpsu_probe()` 在发送设备初始化和固件信息查询命令前已打开 HID 设备。当 `corsairpsu_init()` 或 `corsairpsu_fwinfo()` 执行失败时，错误处理跳转标签错误地指向了 `fail_and_stop`，该标签仅执行停止操作而跳过了 `hid_hw_close()` 调用，导致设备打开计数与底层关闭回调不平衡。
+
+#解决方案
+修改错误处理路径，将 `corsairpsu_init()` 和 `corsairpsu_fwinfo()` 失败时的跳转目标从 `fail_and_stop` 更改为 `fail_and_close`。确保在探测失败时先调用 `hid_hw_close()` 关闭设备，再执行 `hid_hw_stop()` 停止设备，从而正确释放资源并平衡计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/94d8e68d06e517bfc327dd646abf8e7258718e58

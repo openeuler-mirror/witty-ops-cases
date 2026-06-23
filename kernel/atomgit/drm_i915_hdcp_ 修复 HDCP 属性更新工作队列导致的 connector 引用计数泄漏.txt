@@ -1,0 +1,20 @@
+#标题
+drm/i915/hdcp: 修复 HDCP 属性更新工作队列导致的 connector 引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i915 显示驱动中使用 HDCP（High-bandwidth Digital Content Protection）功能时，若 HDCP 属性更新工作（prop_work）被重复请求调度，会导致 `intel_connector` 对象的引用计数发生泄漏。由于引用计数无法归零，相关的 connector 对象无法被释放，造成内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在调度 HDCP 属性更新工作队列（`prop_work`）前，代码调用 `drm_connector_get()` 增加了 connector 的引用计数，并预期在工作队列的回调函数中释放该引用。然而，内核函数 `queue_work()` 在目标工作已经被排入队列但尚未执行时会返回 `false`，且不会重复排入队列。原代码忽略了 `queue_work()` 的返回值，导致在工作已被排入队列的情况下，预先获取的引用计数没有被释放，从而引起引用计数泄漏。
+
+#解决方案
+在调用 `queue_work()` 后检查其返回值。如果 `queue_work()` 返回 `false`（表示工作已被排队，本次未能成功加入），则立即调用 `drm_connector_put()` 释放刚刚获取的引用计数，防止泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/722a257ac067b4aba03d2f99c231e3065caafa26

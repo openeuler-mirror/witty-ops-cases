@@ -1,0 +1,20 @@
+#标题
+CALIPSO模块在IPv4套接字上操作引发空指针异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在IPv4套接字上执行CALIPSO（Commercial IP Security Option）相关的标签操作时，内核触发空指针解引用，导致系统崩溃或异常重启。
+
+#主要错误日志
+未知
+
+#问题根因
+CALIPSO是针对IPv6的标签协议，但相关操作函数（`calipso_sock_getattr`、`calipso_sock_setattr`、`calipso_sock_delattr`）未对套接字类型进行校验。当这些函数被应用于IPv4套接字时，调用`inet6_sk(sk)`获取IPv6专用结构体`ipv6_pinfo`会返回NULL。代码随后直接对该返回值进行解引用（如传递给`txopt_get`或访问其成员），从而触发空指针异常。
+
+#解决方案
+在CALIPSO的套接字操作函数入口处增加对`ipv6_pinfo`结构体指针的有效性检查。如果`inet6_sk(sk)`返回NULL，说明该套接字非IPv6类型，函数应直接返回错误码`-EAFNOSUPPORT`（对于get/set操作）或直接退出（对于del操作），以此拒绝在IPv4套接字上执行CALIPSO操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c1443b8dd3d909cd053f1a115227fd6e2c6fda9b

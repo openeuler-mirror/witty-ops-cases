@@ -1,0 +1,59 @@
+#标题
+开启 nohz full CPU 时内核触发 context tracking 与调度警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能 nohz full CPU 功能后，系统启动或运行过程中触发多个内核 WARNING，导致调用栈打印。具体表现为：
+1. 进程调度时检查到 context state 异常（ct_state() == CONTEXT_USER），触发 __schedule 处的警告。
+2. CPU 进入 idle 状态时，context tracking 状态检查失败，触发 ct_kernel_exit 处的警告。
+3. 用户态异常处理（el0_da, el0_ia）过程中触发 entry-common.c 处的警告。
+
+#主要错误日志
+```
+ct_state() == CONTEXT_USER
+WARNING: CPU: 66 PID: 10214 at kernel/sched/core.c:6012 __schedule+0x738/0xcf8
+...
+Call trace:
+ __schedule+0x738/0xcf8
+ schedule+0x58/0xf0
+ do_notify_resume+0x50/0x350
+ el0_xint.constprop.0+0xa0/0xe0
+ el0t_64_xint_handler+0x18/0x28
+ el0t_64_irq+0x170/0x3a0
+---[ end trace 0000000000000000 ]---
+
+WARNING: CPU: 66 PID: 0 at kernel/context_tracking.c:128 ct_kernel_exit.constprop.0+0xa0/0xa8
+...
+Call trace:
+ ct_kernel_exit.constprop.0+0xa0/0xa8
+ ct_idle_enter+0x14/0x20
+ default_idle_call+0x38/0x120
+ cpuidle_idle_call+0x164/0x1a8
+ do_idle+0xac/0x118
+---[ end trace 0000000000000000 ]---
+
+WARNING: CPU: 0 PID: 10214 at arch/arm64/kernel/entry-common.c:105 el0_da+0x98/0x1a8
+...
+Call trace:
+ el0_da+0x98/0x1a8
+ el0t_64_sync_handler+0xb8/0x130
+ el0t_64_sync+0x3b8/0x3c0
+---[ end trace 0000000000000000 ]---
+
+WARNING: CPU: 0 PID: 15840 at arch/arm64/kernel/entry-common.c:105 el0_ia+0xc0/0x200
+```
+
+#问题根因
+在开启 FAST_IRQ 或 FAST_SYSCALL 功能时，内核采用了一套优化的快速路径处理逻辑。该优化路径为了提升性能，在部分场景下跳过了标准的 context tracking（上下文跟踪）以及 irq tick idle 的通知流程。
+当系统同时配置了 nohz full CPU 时，内核依赖准确的 context tracking 和 tick 通知来维护状态。由于快速路径跳过了这些关键步骤，导致 context tracking 状态机混乱（例如在内核态调度时 ct_state 仍显示为 CONTEXT_USER），进而触发调度器和 context tracking 子系统的警告。
+
+#解决方案
+1. 移除 el1_xint 相关的优化代码路径，因为该路径带来的汇编和 C 代码节省较少且存在问题。
+2. 在 FAST_IRQ 和 FAST_SYSCALL 的处理流程中恢复标准的 context tracking 处理，不再跳过 context tracking 和 irq tick idle inform。
+3. 新增 fast_enter_from_user_mode 和 fast_exit_to_user_mode 等辅助函数，确保在快速路径下依然正确调用 user_exit_irqoff、tick_irq_enter、tick_irq_exit 等关键接口。
+4. 移除 kernel/softirq.c 中对 tick_irq_exit 的条件编译限制，确保 tick 在中断退出时能正确处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/091c0edb1a5de38566ba2d0ca7c02b449ceaa2cb

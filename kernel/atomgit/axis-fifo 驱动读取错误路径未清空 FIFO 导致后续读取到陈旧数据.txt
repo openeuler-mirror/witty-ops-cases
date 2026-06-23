@@ -1,0 +1,25 @@
+#标题
+axis-fifo 驱动读取错误路径未清空 FIFO 导致后续读取到陈旧数据
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 axis-fifo 设备在读取过程中发生错误（如用户缓冲区过小、接收包长度为 0 或非字对齐、copy_to_user 失败）时，硬件 RX FIFO 中当前数据包的剩余数据未被清空。这导致当新数据包到达时，用户态程序读取到的数据混合了上一个出错包的陈旧数据，造成数据内容错误或混乱。
+
+#主要错误日志
+- dev_err(fifo->dt_device, "received a packet of length 0\n");
+- dev_err(fifo->dt_device, "user read buffer too small (available bytes=%zu user buffer bytes=%zu)\n", ...);
+- dev_err(fifo->dt_device, "received a packet that isn't word-aligned\n");
+
+#问题根因
+Commit c6e8d85fafa7 ("staging: axis-fifo: Remove hardware resets for user errors") 为了避免潜在的 TX 数据丢失问题，移除了读错误路径上的完整 FIFO 复位操作。然而，这一修改引入了新的缺陷：在发生读错误时，驱动程序直接返回错误码并退出，未将 RX FIFO 中当前包剩余的数据读取并丢弃。因此，这些陈旧数据残留在 FIFO 中，干扰了后续数据包的读取。
+
+#解决方案
+修改 `axis_fifo_read` 函数，在读取操作出错退出前，增加 FIFO 清空逻辑。具体改动如下：
+1. 将 `words_available` 的计算提前到错误检查之前。
+2. 对于用户缓冲区过小、非字对齐、`copy_to_user` 失败等错误路径，不再直接跳转至解锁退出，而是跳转至新增的 `err_flush_rx` 标签。
+3. 在 `err_flush_rx` 处理中，通过循环调用 `ioread32` 将 RX FIFO 中剩余的 `words_available` 个字读出并丢弃，确保硬件 FIFO 被清空，避免陈旧数据污染后续读取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9fd904cd92b5687a35b7c2278db34cc88f369490

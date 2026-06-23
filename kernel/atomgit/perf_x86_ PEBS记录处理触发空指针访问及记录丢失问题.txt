@@ -1,0 +1,21 @@
+#标题
+perf/x86: PEBS记录处理触发空指针访问及记录丢失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在Intel处理器上使用PEBS（Precise Event-Based Sampling）功能时，若系统触发中断节流，内核在处理PEBS记录过程中会触发NULL指针访问异常，可能导致内核崩溃或PEBS数据丢失。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `intel_pmu_drain_pebs_icl()` 函数排空 PEBS 记录时，会调用 `perf_event_overflow()`。当该函数触发中断节流时，会通过调用链调用 `x86_pmu_stop()` 停止事件组中的所有事件，并将 `cpuc->events[]` 数组中对应的指针清空为 NULL。
+假设一个组中有两个 PEBS 事件（event a 和 event b）。当处理 event a 的最后一个记录触发节流时，event a 和 event b 在 `cpuc->events[]` 中的指针均被清空。随后函数尝试处理 event b 的最后一个记录时，访问 `cpuc->events[]` 即遇到 NULL 指针访问。
+
+#解决方案
+将 `cpuc->events[]` 指针清空操作从 `x86_pmu_stop()` 函数移动至 `x86_pmu_del()` 函数中执行。该修复是安全的，因为在访问 `cpuc->events[]` 中的指针前，总是会先检查 `cpuc->active_mask` 或 `cpuc->pebs_enabled` 状态，从而避免了在 stop 过程中过早清空指针导致的后续访问异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/08b97d4389cb4399af94d4224288403f7c37b7d7

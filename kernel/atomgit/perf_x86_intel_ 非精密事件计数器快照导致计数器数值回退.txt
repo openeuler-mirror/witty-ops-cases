@@ -1,0 +1,20 @@
+#标题
+perf/x86/intel: 非精密事件计数器快照导致计数器数值回退
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 freq 模式下对部分非精密事件进行计数器快照时，PMI handler 中观察到计数器数值回退。
+
+#主要错误日志
+未知
+
+#问题根因
+对于非精密事件，计数器快照可能为溢出的 PEBS 事件记录一个正值。由于在 freq 模式下 `pebs_event_reset` 被清除，导致未设置 `PERF_X86_EVENT_AUTO_RELOAD` 标志，硬件自动重载机制会立即将计数器重置为 0。在 PMI handler 中读取到的值为 0，而不是快照记录中的正值，从而导致数值回退。
+
+#解决方案
+针对计数器快照场景进行特殊处理：在处理完 counters-snapshotting 记录后，事件值已经更新，对于非精密事件，只需通过 `x86_pmu_set_period()` 为计数器设置新的周期，而不需要像常规流程那样调用 `intel_pmu_save_and_restart`。代码逻辑修改为判断是否为 PEBS counter event group，若是则直接设置周期，否则执行保存并重启。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c8e484276aa657635b90ce41dfd384a1e8118baa

@@ -1,0 +1,34 @@
+#标题
+mm/pagewalk: pmd_leaf/pud_leaf 缺少 present 检查导致内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ppc64 架构（配置了 CONFIG_PGTABLE_HAS_HUGE_LEAVES）上运行内存页面迁移相关测试（如 move_pages 系统调用）时，内核触发 VM_WARN_ON_ONCE 警告。具体表现为在 `folio_walk_start` 函数中检测到 PMD entry 可能是 migration entry（迁移条目），但 `pmd_leaf()` 判断失误，进而触发调用栈回溯和 WARNING 信息。该问题源于对页表项 leaf 属性判断逻辑不完整，导致在页表项不存在的情况下错误地进行了 leaf 检查。
+
+#主要错误日志
+[   54.333753] ------------[ cut here ]------------
+[   54.334901] WARNING: CPU: 20 PID: 1704 at mm/pagewalk.c:815 folio_walk_start+0x48f/0x6e0
+[   54.346529] Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.3-2.fc40 04/01/2014
+[   54.348191] RIP: 0010:folio_walk_start+0x48f/0x6e0
+...
+[   54.371415]  ? folio_walk_start+0x9e/0x6e0
+[   54.372227]  do_pages_move+0x1c5/0x680
+[   54.373804]  kernel_move_pages+0x1a1/0x2b0
+[   54.373804]  __x64_sys_move_pages+0x25/0x30
+
+#问题根因
+在 `folio_walk_start()` 函数中，代码直接使用 `pmd_leaf()` 和 `pud_leaf()` 检查页表项，却未先确认页表项是否 present（存在）。
+在某些架构（如 ppc64）上，`pmd_leaf()` 和 `pud_leaf()` 并不隐含 `pmd_present()` 或 `pud_present()` 的检查。当页表项为 migration entry（迁移条目）时，页表项标记为非 present，此时直接调用 `pmd_leaf()` 可能导致不可预期的行为或误判。
+这种缺失的 present 检查导致代码在处理迁移中的页表项时，触发了 `VM_WARN_ON_ONCE(pmd_leaf(pmdp_get_lockless(pmdp)))` 警告，因为逻辑未能正确识别出该条目不应被视为一个有效的 leaf 页表项进行处理。
+
+#解决方案
+在调用 `pmd_leaf()` 和 `pud_leaf()` 之前，显式增加 `pmd_present()` 和 `pud_present()` 的检查。
+具体修复包括：
+1. 在 PUD 和 PMD 处理路径中，将条件修改为 `(!pud_present(pud) || pud_leaf(pud))` 和 `(!pmd_present(pmd) || pmd_leaf(pmd))`，确保仅在页表项 present 或明确为 leaf 时才进入相关逻辑分支。
+2. 修正 `VM_WARN_ON_ONCE` 断言逻辑，确保断言条件正确反映预期状态（即：非 present 或者为 leaf），避免对 lockless 获取的页表项进行错误的属性断言。
+3. 在后续处理 `pmd_none` 和 `pmd_leaf` 的条件分支中，增加 `pmd_present` 的显式判断，防止将 migration entry 误判为 leaf entry。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ec3b8029bf8898fc6e09870e4036aeb61f4fef52

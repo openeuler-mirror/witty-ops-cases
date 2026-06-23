@@ -1,0 +1,20 @@
+#标题
+xfs_mod_fdblocks 数据溢出导致空闲空间统计错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当通过 ioctl 接口设置较大的预留块数值时，文件系统空闲块计数被更新为一个异常大的数值。这导致 XFS 在前台写入时错误地认为始终有可用空间，而后台回写操作因实际空间不足而失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `xfs_mod_fdblocks()` 函数中，变量 `res_used` 被定义为 `long long` 类型，而 `mp->m_resblks` 和 `mp->m_resblks_avail` 均为 `unsigned long long` 类型。当两者的差值极大且最高有效位（MSB）为 1 时，将该无符号差值强制转换为有符号的 `long long` 类型会导致其变成一个很大的负数。该错误数值进一步导致 `mp->m_fdblocks` 被更新为一个极大的错误值。
+
+#解决方案
+将 `xfs_mod_freecounter()` 函数中的 `res_used` 变量类型从 `long long` 修改为 `uint64_t`，移除不当的强制类型转换，并在比较逻辑中将 `delta` 显式转换为 `uint64_t`，以避免有符号/无符号转换导致的数据溢出和逻辑错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/82b452b09f8762f10c7b4b372366b35eef85270b

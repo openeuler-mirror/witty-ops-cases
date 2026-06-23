@@ -1,0 +1,23 @@
+#标题
+[enfs] CONFIG_ENFS=y 时挂载失败导致重复符号导出错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核配置启用 CONFIG_ENFS 的情况下，使用 enfs 选项挂载 NFS 文件系统失败。
+
+#主要错误日志
+- sunrpc: exports duplicate symbol rpc_xprt_switch_remove_xprt (owned by kernel)
+- mount.nfs: an incorrect mount option was specified
+
+#问题根因
+1. 构建配置缺陷：Makefile 中强制将 enfs 定义为外部模块（obj-m），未遵循 CONFIG_ENFS 配置项，导致在 CONFIG_ENFS=y 时构建系统处理不当。
+2. 符号冲突与链接错误：由于构建配置错误及全局变量未正确限制作用域，导致符号 rpc_xprt_switch_remove_xprt 被重复导出，触发内核链接器报错，进而导致挂载过程因无法加载模块而失败。
+
+#解决方案
+1. 修正构建逻辑：修改 `fs/nfs/enfs/Makefile`，将 `obj-m += enfs.o` 改为 `obj-$(CONFIG_ENFS) += enfs.o`，允许 enfs 模块根据配置编译进内核。
+2. 修复符号作用域：分别在 `fs/nfs/enfs/enfs_init.c` 和 `fs/nfs/enfs_adapter.c` 中，将全局变量 `enfs_adapter` 的定义修改为 `static` 类型，避免符号全局可见导致的命名冲突与重复导出问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f4f81ee1ead7362e5bb0b6b2fdebb3049cbaa76e

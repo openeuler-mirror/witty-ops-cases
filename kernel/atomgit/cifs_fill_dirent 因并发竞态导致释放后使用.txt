@@ -1,0 +1,27 @@
+#标题
+cifs_fill_dirent 因并发竞态导致释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 readdir 并发操作时，触发了 KASAN 检测到的 slab-use-after-free 错误。系统打印出内存错误追踪信息，导致内核内存访问异常。
+
+#主要错误日志
+```text
+BUG: KASAN: slab-use-after-free in cifs_fill_dirent+0xb03/0xb60 [cifs]
+Read of size 4 at addr ffff8880099b819c by task a.out/342975
+...
+The buggy address belongs to the object at ffff8880099b8000
+which belongs to the cache cifs_request of size 16588
+```
+
+#问题根因
+在 `cifs_readdir` 的并发执行过程中存在竞态条件。
+Process 1 执行 `initiate_cifs_search` 分配缓冲区，随后 Process 2（或同一进程的另一路径）在 `find_cifs_entry` 循环中调用 `smb2_query_dir_next`。如果 `smb2_query_dir_next` 返回失败（如信号中断导致 -ERESTARTSYS），代码逻辑未能立即退出，而是继续执行 `cifs_save_resume_key`。此时，之前的错误路径可能已经触发了 `cifs_small_buf_release` 释放了 `srch_inf` 相关的 rsp 缓冲区，导致 `cifs_fill_dirent` 访问了已释放的内存。
+
+#解决方案
+在 `find_cifs_entry` 函数中，调整了错误码检查的位置。在调用 `query_dir_next` 后，立即检查返回值 `rc`。如果 `rc` 不为 0，直接返回 `-ENOENT`，确保在缓冲区可能无效或已释放的情况下，不再访问 `cfile->srch_inf.last_entry` 及调用 `cifs_save_resume_key`，从而避免 UAF。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2570d3f0b900445b3d681ad3fb8e4995f7eb8e80

@@ -1,0 +1,23 @@
+#标题
+dlink驱动未正确处理小数据包内存分配失败导致潜在故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当接收到的小数据包（长度小于等于 `copy_thresh`）尝试进行内存分配失败时，驱动程序未正确处理该错误情况。原代码逻辑中，若内存分配失败，程序未跳过当前描述符的处理，而是错误地继续执行后续代码路径。这导致驱动试图操作无效的内存指针，进而引发内核崩溃或网络功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `drivers/net/ethernet/dlink/dl2k.c` 的 `receive_packet` 函数中，原逻辑使用 `else if` 判断小包分配情况：`else if ((skb = netdev_alloc_skb_ip_align(dev, pkt_len)))`。当 `pkt_len <= copy_thresh` 但内存分配失败（返回 NULL）时，该条件分支不成立，代码直接跳过该块，导致 `skb` 指针状态未定义（或指向旧数据），随后程序继续执行并试图处理该无效的 `skb`，引发崩溃。
+
+#解决方案
+修改条件判断逻辑，将小包内存分配与分配失败的错误处理解耦。
+1. 当 `pkt_len <= copy_thresh` 时，先尝试调用 `netdev_alloc_skb_ip_align` 分配内存。
+2. 增加独立的 `if (!skb)` 判断，统一处理内存分配失败的情况。
+3. 若分配失败，代码将进入错误处理分支（执行 `dma_unmap_single` 和 `skb_put` 等回收逻辑），而不是错误地继续执行正常流程，从而避免了空指针崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cfa34866a6ba067c00c4268a893bdf64a5a9cfc4

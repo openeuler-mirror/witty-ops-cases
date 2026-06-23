@@ -1,0 +1,22 @@
+#标题
+IPVS 隧道模式下 GSO 包 MTU 检查缺失导致封装异常与 IP ID 分配错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IPVS 隧道模式下转发 GSO（Generic Segmentation Offload）数据包时，由于跳过了 MTU 检查，导致以下两个问题：
+1. 封装后的数据包大小超过出接口 MTU，引发意外的 IP 层分片。
+2. 当 `net.ipv4.vs.pmtu_disc=1` 时，GSO 数据包被拆分后的多个分段使用了顺序递增的 IP ID（如 0, 1, 2...），这与预期行为不符，可能导致分片重组或数据包追踪异常。
+
+#主要错误日志
+未知
+
+#问题根因
+当前代码在执行 MTU 检查时，通过 `!skb_is_gso(skb)` 条件直接跳过了所有 GSO 数据包的检查。这导致 GSO 包在添加 IPIP 隧道头后，可能超过 MTU 限制且未触发 ICMP Fragmentation Needed 消息，进而导致封装后数据包违规或分片时 IP ID 分配逻辑异常。
+
+#解决方案
+修改 MTU 检查逻辑，不再简单跳过 GSO 包，而是引入 `ip_vs_exceeds_mtu` 辅助函数。该函数调用 `skb_gso_validate_network_len()` 对 GSO 数据包进行正确性验证，确保分段后的数据包符合 MTU 要求。如果验证失败，发送 ICMP_DEST_UNREACH (ICMP_FRAG_NEEDED) 消息以支持正确的 PMTU 发现机制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/612619e4c283f94e24ea243d3fac254b61fefa8e

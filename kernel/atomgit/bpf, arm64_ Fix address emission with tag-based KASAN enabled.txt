@@ -1,0 +1,20 @@
+#标题
+bpf, arm64: Fix address emission with tag-based KASAN enabled
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 Tag-based KASAN 的 ARM64 架构上，BPF trampoline 机制在 JIT 编译阶段处理地址发送（address emission）时存在逻辑缺陷。由于第一遍扫描（first pass）计算指令索引时未考虑最坏情况下的指令扩展，导致最终生成的镜像大小预估不足，引发 JIT 编译后续阶段内存访问越界或状态不一致，可能导致内核 panic 或 BPF 程序加载失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在开启 Tag-based KASAN 时，地址通常包含特定的 Tag 标签，这可能导致指令发射（emit）阶段的指令数量增加。在 `prepare_trampoline` 函数的第一遍扫描中（`ctx->image` 为 NULL 时），代码直接调用了 `emit_a64_mov_i64`，但该函数在第一遍扫描时仅根据传入的立即数值计算需要的指令数。如果 Tag 导致指令数变化（例如需要更多的指令来移动带有 Tag 的地址），而第一遍扫描未按“最坏情况”（worst case）预留足够的指令索引空间（ctx->idx），就会导致估算的空间小于实际需要的空间，从而引发错误。
+
+#解决方案
+在 `prepare_trampoline` 函数中，针对 `BPF_TRAMP_F_CALL_ORIG` 标志下的地址发送逻辑进行修复。在第一遍扫描时（`!ctx->image`），不再调用 `emit_a64_mov_i64` 进行动态计算，而是直接手动增加 4 条指令的索引空间（`ctx->idx += 4`），强制假设最坏情况以预留足够空间；在后续的实际代码生成阶段（`ctx->image` 存在时），再调用 `emit_a64_mov_i64` 写入实际指令。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3813640a1336726a6c72428c2f66c8824486e915

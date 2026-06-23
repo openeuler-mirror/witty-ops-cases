@@ -1,0 +1,29 @@
+#标题
+xsched 空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `xsched_cfs_rq_of` 获取 CFS 调度队列时，若 `xsched_entity` 已从调度组中分离但未正确重置父组指针，会触发 NULL 指针引用导致内核 panic；同时，在 HBM 内存分配流程中，如果传入参数 `vm_args.size` 为 0，可能导致非法内存分配行为。
+
+#主要错误日志
+XSCHED_ERR("the cfs_rq of this xse [%d] can't be NULL @ %s\n", xse->tgid, __func__);
+XSCHED_ERR("Failed to find a context for HBM alloc");
+
+#问题根因
+1. **空指针引用**：`xsched_cfs_rq_of` 宏在处理已分离（detached）的 `xsched_entity` 时，假设 `xse_parent_grp_xcu` 有效，但实际上 `xsched_entity` 从组中分离时未将 `parent_grp` 成员置为 NULL，导致宏访问了非法内存地址。
+2. **参数校验缺失**：`vstream_hbm_alloc` 函数未对 `arg->vm_args.size` 进行有效性检查，允许 size 为 0 的分配请求通过。
+3. **错误码掩盖与逻辑缺陷**：`alloc_ctx_from_vstream` 初始化失败时错误返回了 `-EINVAL` 而非真实的错误码；`sqqq_alloc` 绑定 XCU 失败时错误码被覆盖；`vstream_hbm_alloc` 在找不到 context 时逻辑不清晰。
+
+#解决方案
+1. **防御性编程修复**：将 `xsched_cfs_rq_of` 从宏改为 inline 函数，增加对 `xse->parent_grp` 的 NULL 检查。如果实体已从组分离（`parent_grp` 为 NULL），直接返回实体自身的 `cfs_rq`，避免解引用空指针。
+2. **状态重置**：在 `xsched_group_xse_detach` 函数中，将 `xse->parent_grp` 显式设置为 NULL，确保实体状态的一致性。
+3. **输入校验**：在 `vstream_hbm_alloc` 入口处增加 `arg->vm_args.size == 0` 的检查，直接返回 `-EINVAL`。
+4. **错误码与逻辑修正**：
+   - 修正 `alloc_ctx_from_vstream` 直接返回内部初始化函数的返回值 `ret`。
+   - 移除 `sqqq_alloc` 中对 `vstream_bind_to_xcu` 返回值的错误覆盖逻辑。
+   - 优化 `vstream_hbm_alloc` 流程，若未找到 context 直接返回 `-ENOENT`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7c89eda47a6e371bf88a360b7b99a4b0b7a4278c

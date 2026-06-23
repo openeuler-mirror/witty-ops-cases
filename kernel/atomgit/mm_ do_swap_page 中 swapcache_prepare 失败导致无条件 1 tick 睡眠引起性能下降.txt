@@ -1,0 +1,23 @@
+#标题
+mm: do_swap_page 中 swapcache_prepare 失败导致无条件 1 tick 睡眠引起性能下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内存交换过程中，当 `swapcache_prepare` 失败时，内核会无条件的执行 1 tick 的睡眠以缓解频繁的缺页中断。这导致在某些场景下，线程无需等待即可重试，却被迫睡眠，造成不必要的延迟和系统性能下降。关联 issue：https://gitee.com/openeuler/kernel/issues/IB7294
+
+#主要错误日志
+未知
+
+#问题根因
+在 `do_swap_page` 函数处理逻辑中，当 `swapcache_prepare` 获取失败时，代码直接调用 `schedule_timeout_uninterruptible(1)` 进行无条件睡眠。这导致即便持有锁的线程即将释放资源（清除 swap cache pin），当前线程也无法被及时唤醒，必须等待固定的 1 tick 时间，导致延迟增加。
+
+#解决方案
+引入一个全局等待队列 `swapcache_wq`。
+1. 当 `swapcache_prepare` 失败时，将当前进程加入等待队列后再进入睡眠。
+2. 在 `swapcache_clear` 清除 swap cache pin 后，检查等待队列是否活跃，若活跃则调用 `wake_up` 唤醒等待的进程。
+这避免了无条件睡眠，允许进程在资源可用时立即唤醒重试，消除了不必要的延迟。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b6753fb2dc636195b639779963ae1e9fdbde0088

@@ -1,0 +1,25 @@
+#标题
+NFS release_folio 引发的死锁问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在执行内存回收或规整（compaction）过程中，如果触发了 NFS 文件的 `release_folio` 回调，可能会引发内核死锁，导致相关进程处于不可中断睡眠状态（D状态），系统负载升高但无响应。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的实现中，`nfs_release_folio` 函数检测到 `folio_test_private(folio)` 为真时，直接返回 `false`，拒绝释放页面。然而，在内存 reclaim 路径中，如果直接拒绝释放且不尝试回写脏数据，会导致内存回收流程受阻；若在此处尝试同步回写，则可能因为内存分配上下文（如 `GFP_KERNEL`）与持有锁的情况发生冲突，进而引发死锁。根本原因在于未对 reclaim 上下文进行正确处理，且缺乏在特定条件下安全回写以释放页面的机制。
+
+#解决方案
+修改 `fs/nfs/file.c` 中的 `nfs_release_folio` 函数逻辑：
+1. 新增 `#include <linux/compaction.h>` 头文件引用。
+2. 在检测到 `folio_test_private(folio)` 为真时，增加上下文判断：
+   - 如果当前 GFP 上下文不允许阻塞（非 `GFP_KERNEL`），或者当前进程是 `kswapd` 或 `kcompactd`，则直接返回 `false` 以避免死锁风险。
+   - 否则，调用新增的 `nfs_wb_folio_reclaim` 函数尝试回写页面数据。
+3. 新增 `nfs_wb_folio_reclaim` 函数（位于 `fs/nfs/write.c`），用于在 reclaim 上下文中安全地回写指定的 folio，确保脏页能被正确清理并释放，从而打破死锁条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa46c0d8af9bdaf1387580ff24ae9b3708a40b5b

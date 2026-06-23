@@ -1,0 +1,25 @@
+#标题
+ipmi: __scan_channels() 与 deliver_response() 并发竞争导致通道参数被错误置零
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IPMI 驱动进行通道扫描期间，若发生进程调度或中断抢占，`__scan_channels()` 与 `deliver_response()` 之间会出现竞争窗口。该竞争导致部分 IPMI 通道的参数被错误地设置为 0，使得这些通道处于不可用状态。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 `__scan_channels()` 和 `deliver_response()` 之间存在竞争条件：
+1. `__scan_channels()` 在 CPUA 上发起 IPMI 请求并调用 `wait_event()` 等待扫描完成，`wait_event()` 内部的 `might_sleep()` 可能导致 CPU 让出。
+2. 在 CPUA 让出 CPU 期间，CPUB 收到 IPMI 响应并执行 `deliver_response()`。
+3. `deliver_response()` 中的 `channel_handler()` 在尚未完成所有通道扫描的情况下，提前将 `intf->channel_list` 指向 `intf->wchannels` 并将 `intf->channels_ready` 置为 true。
+4. CPUA 恢复运行后，因发现 `intf->channels_ready` 已为 true，`wait_event()` 立即退出循环。
+5. `__scan_channels()` 随后将 `intf->null_user_handler` 置为 NULL，导致后续剩余通道的 IPMI 响应被 `deliver_response()` 忽略，这些通道的参数因此保持为零初始化状态且未被更新。
+
+#解决方案
+修复竞争条件的方法是：推迟 `intf->channel_list` 的赋值操作和 `intf->channels_ready` 标志的设置时机。确保仅在所有通道都成功扫描完毕、或者 IPMI 请求失败时，才进行上述赋值和标志设置。补丁通过删除 `channel_handler()` 中间处理流程里的相关赋值语句来实现这一逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/62cb84a6d81c0d3c6afb5209c88d4fd0478ef918

@@ -1,0 +1,22 @@
+#标题
+md: 修复遍历 all_mddevs 列表时的 mddev UAF 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统重启（reboot）或 MD 模块卸载（rmmod/md_exit）过程中，内核在遍历 `all_mddevs` 链表时可能触发 Use-After-Free（UAF）漏洞，导致内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `md_notify_reboot` 和 `md_exit` 等函数中，代码在持有自旋锁 `all_mddevs_lock` 的情况下遍历 `all_mddevs` 链表。在循环体内，调用 `mddev_put()` 来释放对 mddev 对象的引用。如果 `mddev_put()` 导致引用计数归零，它会调用 `__mddev_put()`，进而通过 `queue_work` 调度释放 mddev 结构体。由于 mddev 结构体仍位于 `all_mddevs` 链表中，且遍历过程可能还在访问该节点，此时若结构体被异步释放，后续的遍历迭代或链表操作将访问已释放的内存，从而引发 UAF 问题。
+
+#解决方案
+1. 新增 `mddev_put_locked()` 函数，在持有 `all_mddevs_lock` 锁的上下文中调用，当引用计数归零时直接执行 `__mddev_put()` 处理释放逻辑，避免异步调度带来的竞态风险。
+2. 将 `md_notify_reboot` 和 `md_exit` 中的遍历宏从 `list_for_each_entry_safe` 修改为 `list_for_each_entry`，防止在遍历过程中因节点删除导致的潜在风险（配合锁内的安全释放逻辑）。
+3. 将原调用 `mddev_put()` 的位置修改为调用 `mddev_put_locked()`，确保在持有锁的状态下安全地减少引用计数并处理对象释放，避免对象在被遍历时被其他路径异步释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b252849e2320fe952d448bcb2d23699e357b3d54

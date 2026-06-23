@@ -1,0 +1,20 @@
+#标题
+ALSA: usb-audio: UAC3 cluster 描述符长度校验缺陷导致潜在越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB 音频设备（UAC3 协议）枚举过程中，对 cluster 描述符的长度校验失效。由于校验逻辑使用了指针大小而非结构体大小，在特定架构（如 64 位系统）下可能错误地通过了长度检查，导致后续访问 `uac3_cluster_header_descriptor` 结构体成员时发生越界读取，可能引发内核崩溃或音频功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `snd_usb_get_audioformat_uac3()` 函数中，代码试图校验缓冲区大小是否足以容纳 `struct uac3_cluster_header_descriptor`。但代码错误地使用了 `sizeof(cluster)`（`cluster` 是一个指针变量），这导致校验的实际大小是指针的大小（例如在 64 位系统上为 8 字节），而不是预期的结构体大小。这使得校验逻辑依赖于架构的指针大小，无法正确拦截过小的缓冲区，违背了引入该校验的初衷。
+
+#解决方案
+修改 `sound/usb/stream.c` 文件中的长度校验判断条件，将 `sizeof(cluster)` 修正为 `sizeof(*cluster)`，确保校验的是结构体 `uac3_cluster_header_descriptor` 的实际大小而非指针大小，从而正确防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/82f9dc186da6403eac08435a66f08d57ac666d7d

@@ -1,0 +1,27 @@
+#标题
+USB hub重置恢复时因xHC资源未释放导致枚举失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在特定休眠唤醒场景下，USB低速/全速（LS/FS）设备枚举失败。具体复现路径为：
+1. 将高速（HS）Hub连接到根端口。
+2. 将低速/全速（LS/FS）设备连接到Hub端口。
+3. 等待枚举完成。
+4. 强制主机进入休眠（suspend）。
+5. 重新连接连接在根端口上的Hub。
+6. 唤醒主机。
+在此场景下，唤醒过程中对USB LS/FS设备进行枚举时，Cadence xHC控制器报告xHC命令完成错误。
+
+#主要错误日志
+未知（Commit信息中仅提及“reports completion error code for xHC commands”，未提供具体日志字符串）
+
+#问题根因
+在系统休眠期间，如果USB设备发生了重新连接，xHC（扩展主机控制器）为USB设备分配的资源未按正确的顺序释放。根据XHCI规范和断开连接的处理逻辑，设备资源应从USB树中的最后一个设备开始向根Hub方向依次清除。然而，原有逻辑在处理复位恢复（reset_resume）时，未按此层级顺序释放资源，导致xHC资源冲突或状态不一致，进而引发xHC命令完成错误。这不是Cadence xHC控制器的Bug，而是驱动层资源管理顺序的问题。
+
+#解决方案
+在 `usb_reset_and_verify_device` 函数中增加对 `reset_resume` 标志的判断。如果设备处于复位恢复状态，调用新增的 `hub_hc_release_resources` 函数。该函数通过递归遍历，先释放所有子设备（children）的资源，然后再释放当前设备的资源，确保xHC资源按照从叶子节点到根节点的正确顺序被清除，从而修复枚举失败问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd35c60c3dd7100dd0113faf118024e15f1de346

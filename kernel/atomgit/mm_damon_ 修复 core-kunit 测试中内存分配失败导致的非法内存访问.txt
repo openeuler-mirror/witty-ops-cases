@@ -1,0 +1,22 @@
+#标题
+mm/damon: 修复 core-kunit 测试中内存分配失败导致的非法内存访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 DAMON 核心模块的 KUnit 测试（`damon_test_target`）时，如果遇到内存压力较大导致动态内存分配失败的场景，内核可能会发生非法内存访问。由于测试用例未对分配结果进行检查，失败的分配导致了空指针解引用或后续逻辑错误。
+
+#主要错误日志
+未知
+
+#问题根因
+`damon_test_target()` 函数假设其内部所有的动态内存分配（`damon_new_ctx()` 和 `damon_new_target()`）都会成功。虽然在实际运行中这些分配请求很小，失败概率极低，但在理论上存在失败的可能。一旦分配失败，代码未进行错误处理，直接继续执行导致访问了无效内存区域。
+
+#解决方案
+在 `damon_test_target()` 函数中增加对内存分配结果的检查：
+1. 检查 `damon_new_ctx()` 的返回值，若失败则调用 `kunit_skip` 跳过测试。
+2. 检查 `damon_new_target()` 的返回值，若失败则先释放已分配的 ctx 内存（`damon_destroy_ctx`），然后跳过测试。这确保了在内存不足时的安全退出和资源清理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/af2102411fa415e0f10f56c49dae6fb87a3488f9

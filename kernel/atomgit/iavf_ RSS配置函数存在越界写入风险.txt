@@ -1,0 +1,22 @@
+#标题
+iavf: RSS配置函数存在越界写入风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置iavf网卡的RSS（接收端扩展）功能时，内核可能因越界访问内存导致系统崩溃或内存数据破坏。由于涉及写入硬件寄存器，可能伴随PCI设备异常或网络子系统不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `iavf_config_rss_reg` 在写入RSS哈希密钥（HKEY）和查找表（HLUT）硬件寄存器时，循环条件存在差一错误。代码使用 `i <= adapter->rss_key_size / 4` 和 `i <= adapter->rss_lut_size / 4` 进行循环判断，导致循环次数多出一次。这使得驱动尝试访问数组 `dw` 范围之外的内存地址，并向硬件寄存器写入非法数据，从而引发越界读写问题。
+
+#解决方案
+修正循环边界条件，将 `<=` 修改为 `<`，确保循环变量 `i` 的取值范围不超过数组实际分配的大小，从而消除越界访问隐患。具体修改如下：
+1. `for (i = 0; i <= adapter->rss_key_size / 4; i++)` 改为 `for (i = 0; i < adapter->rss_key_size / 4; i++)`。
+2. `for (i = 0; i <= adapter->rss_lut_size / 4; i++)` 改为 `for (i = 0; i < adapter->rss_lut_size / 4; i++)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e47f991747e9256dfb4bcd1e88f34cbdd905e2f0

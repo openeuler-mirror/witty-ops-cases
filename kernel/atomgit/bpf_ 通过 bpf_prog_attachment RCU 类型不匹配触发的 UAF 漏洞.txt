@@ -1,0 +1,20 @@
+#标题
+bpf: 通过 bpf_prog/attachment RCU 类型不匹配触发的 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BPF 程序 attachment 过程中，由于 RCU 同步机制类型不匹配，导致在 `perf_event_detach_bpf_prog` 执行时发生 Use-After-Free (UAF)。具体表现为非睡眠类（non-sleepable）BPF 程序在被睡眠类上下文调用时，程序内存可能过早释放后被访问，可能引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `perf_event_detach_bpf_prog` 函数中，存在 BPF 程序类型（sleepable 或 non-sleepable）与 RCU 回调机制不匹配的问题。如果 BPF 程序是非睡眠类的（将通过普通 RCU 释放），但它被一个支持睡眠类程序的上下文调用（使用了 tasks-trace-RCU），此时仅调用 `synchronize_rcu` 或直接释放可能导致 UAF。因为在 tasks-trace-RCU 读侧临界区仍然持有引用时，程序可能已被普通 RCU 机制回收。
+
+#解决方案
+在 `kernel/trace/bpf_trace.c` 的 `perf_event_detach_bpf_prog` 函数中，添加 `synchronize_rcu_tasks_trace()` 调用。这确保了在释放 BPF 程序（`bpf_prog_put`）之前，所有可能的 tasks-trace-RCU 读侧临界区都已完成，从而避免因 RCU 类型不匹配导致的 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/66f03ea8b7ffe037511f03b1a0c5240457d9b458

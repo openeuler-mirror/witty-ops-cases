@@ -1,0 +1,24 @@
+#标题
+st_lsm6dsx IMU 驱动时间戳校准计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+IIO 子系统下 st_lsm6dsx 系列传感器的硬件时间戳计算不准确。由于在计算校准时间戳增益时使用了不适用于所有芯片型号的固定参数值，导致时间戳校准逻辑与特定型号传感器的数据手册规范不符，进而影响传感器数据的时间标签精度。
+
+#主要错误日志
+未知
+
+#问题根因
+校准时间戳的计算公式为 `ts_gain[ns] ≈ ts_sensitivity - (ts_trim_coeff * val) / 1000`。
+原代码中硬编码了 `ST_LSM6DSX_TS_SENSITIVITY` (25000) 和系数 (37500)，这两个参数值仅适用于部分特定型号（如 LSM6DSO）。然而，不同型号的 IMU 设备具有不同的 `ts_sensitivity` 和 `ts_trim_coeff` 值，导致在非适配型号上计算出的时间戳增益存在偏差。
+
+#解决方案
+1. 在 `st_lsm6dsx_hw_ts_settings` 结构体中新增 `ts_sensitivity` 和 `ts_trim_coeff` 两个成员变量。
+2. 移除原代码中硬编码的宏定义 `ST_LSM6DSX_TS_SENSITIVITY` 和固定系数值。
+3. 在传感器配置数组 `st_lsm6dsx_sensor_settings` 中，根据不同芯片型号初始化对应的 `ts_sensitivity` 和 `ts_trim_coeff` 值（例如 LSM6DSO 分别为 25000 和 37500，而另一型号分别为 21701 和 28212）。
+4. 修改 `st_lsm6dsx_init_hw_timer` 函数，从设备配置设置中读取这两个参数进行时间戳增益计算，替代原有的硬编码逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/010a8639c0c0f83c704bd304de047a30e6c993c6

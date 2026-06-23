@@ -1,0 +1,20 @@
+#标题
+dynamic_pool 分配 hugepages 时 free_huge_pages 下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用带有 MAP_NORESERVE 标志的 mmap 进行内存映射时，允许映射超过当前可用数量的 huge pages。在后续实际进行内存分配时，若 `free_huge_pages` 计数已为零，但 `pool->freelist` 链表非空（包含可拆分的 huge pages），会导致 `free_huge_pages` 变量发生下溢。
+
+#主要错误日志
+未知
+
+#问题根因
+在 mmap 阶段使用 MAP_NORESERVE 标志时，系统未检查 `resv_huge_pages`，导致用户映射的 huge pages 数量可能超过实际可用量。在动态内存池（dpool）进行实际分配时，代码逻辑未检查 `free_huge_pages` 是否为零，仅依据 `pool->freelist` 非空即尝试分配，从而导致 `free_huge_pages` 计数器下溢。
+
+#解决方案
+在 `dynamic_pool_alloc_hugepage` 函数中增加前置检查，在遍历 `pool->freelist` 之前先判断 `pool->free_huge_pages` 是否为零，若为零则直接跳过分配，避免下溢发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/74bfc072aa01a3f706b740ccf933be8f7f544127

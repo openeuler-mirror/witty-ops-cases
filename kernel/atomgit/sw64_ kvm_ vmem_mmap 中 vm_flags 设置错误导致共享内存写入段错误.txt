@@ -1,0 +1,20 @@
+#标题
+sw64: kvm: vmem_mmap 中 vm_flags 设置错误导致共享内存写入段错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在为 CORE3B 添加 KVM 支持时，共享可写内存映射的 vm_flags 被错误覆盖，导致写权限被清除。当进程向该共享可写内存写入数据时触发写错误，由于 vm_flags 不正确导致错误无法正确处理，最终抛出段错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `vmem_mmap` 中，代码错误地调用了 `vm_flags_init(vma, ...)` 函数。该函数直接初始化（覆盖）了 vma 的 flags，导致相关共享内存映射原有的 vm_flags 被破坏，写权限位被清除。正确的做法应是执行 OR 操作添加特定的标志位，而不是覆盖。
+
+#解决方案
+将 `vm_flags_init(vma, VM_DONTEXPAND | VM_DONTDUMP | VM_MIXEDMAP)` 修改为 `vm_flags_set(vma, VM_DONTEXPAND | VM_DONTDUMP | VM_MIXEDMAP)`。`vm_flags_set()` 函数执行的是 OR 操作，能够在保留原有标志位（如写权限相关标志）的基础上添加新标志，从而避免破坏共享内存的写入权限。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9d26edf4ce88ecff0f56acdd41c53abadbccb0fe

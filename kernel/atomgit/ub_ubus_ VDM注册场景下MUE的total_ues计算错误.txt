@@ -1,0 +1,24 @@
+#标题
+ub:ubus: VDM注册场景下MUE的total_ues计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在UB（UniBus）子系统VDM（Vendor Device Manager）注册过程中，处理多单元设备（MUE）时，`total_ues`（总单元实体数）的计算逻辑存在错误。具体表现为：
+1. 当`ue_cnt`为0时，实体映射的`start_entity_idx`和`end_entity_idx`被错误地赋值为本地实体索引，导致计算出的范围无法正确反映请求的实体信息。
+2. 在特定条件下（`map->start_entity_idx == dev->entity_idx`），设备未正确重置`total_ues`，导致设备作为独立实体时仍保留了错误的实体总数统计，可能引发后续配置或通信异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **变量取值错误**：在`ub_get_ue_map`函数中，当`pld->ue_cnt`为0时，代码错误地使用了`uent->entity_idx`（本地实体的索引）来初始化映射范围，而根据逻辑应当使用请求载荷中的`pld->pue_entity_idx`。
+2. **状态处理遗漏**：在`ub_idevice_enable_handle`函数中，虽然计算了`total_ues`，但遗漏了对特定场景的判断。当设备自身即为起始实体（`map->start_entity_idx == dev->entity_idx`）时，意味着该设备不需要包含在MUE的总数统计中，此时应将`total_ues`重置为0，原代码未处理此逻辑导致数值错误。
+
+#解决方案
+1. 修正`ub_get_ue_map`函数中的赋值逻辑，将`map->start_entity_idx`和`map->end_entity_idx`的赋值来源从`uent->entity_idx`修正为`pld->pue_entity_idx`，确保使用正确的请求目标实体索引。
+2. 在`ub_idevice_enable_handle`函数中增加判断逻辑：若`map->start_entity_idx`等于当前设备的`entity_idx`，则将`dev->total_ues`强制置为0，以修正该特定场景下的计算错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b2805fb88dfa62536ee3767ffcf802a09033ba78

@@ -1,0 +1,20 @@
+#标题
+security/keys: 修复 key_task_permission 中的越界内存访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `key_task_permission` 函数时，系统触发 slab-out-of-bounds 内存越界访问错误，可能导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `search_nested_keyrings` 函数遍历关联数组节点时，原有的逻辑仅通过 `node->back_pointer` 来判断是否需要跳过元数据指针的处理。如果遇到没有 `back_pointer` 的 shortcut 类型的元数据指针，代码未能正确识别并跳过，导致后续的 `keyring_ptr_is_keyring` 检查对 shortcut 指针进行了错误的类型转换和访问，从而引发越界读写。
+
+#解决方案
+修改 `security/keys/keyring.c` 中 `search_nested_keyrings` 函数的判断逻辑。在检查指针是否为元数据（`assoc_array_ptr_is_meta`）时，增加显式判断 `assoc_array_ptr_is_shortcut(ptr)` 的条件。仅当 `node->back_pointer` 存在或指针为 shortcut 类型时，才执行 `goto descend_to_node`，确保正确处理 shortcut 指针，避免非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31ea5bb471e2fa3d63853ff7e03c5a6a36798cb3

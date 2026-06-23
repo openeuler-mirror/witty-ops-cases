@@ -1,0 +1,24 @@
+#标题
+sched/numa: fix memory leak due to the overwritten vma->numab_state
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NUMA 平衡扫描过程中，内核线程进行 `vma->numab_state` 初始化时发生内存泄漏。由于多线程并发竞争，当多个线程同时发现 `vma->numab_state` 为空并分别调用 `kzalloc` 分配内存时，后分配的线程会覆盖先前的指针，导致先分配的内存块无法被释放，随着时间推移可能耗尽系统内存。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `task_numa_work` 函数中，初始化 `vma->numab_state` 的逻辑存在并发竞争漏洞。原代码在分配内存前仅检查 `!vma->numab_state`，缺乏锁保护。当多个线程同时通过该检查时，会各自分配内存并先后赋值给 `vma->numab_state`。在这个过程中，先赋值的指针会被后赋值的指针覆盖，导致先分配的内存地址丢失，且无法释放，从而造成内存泄漏。
+
+#解决方案
+使用原子比较交换操作 `cmpxchg` 替代普通的指针赋值，以修复并发竞争问题。具体措施为：
+1. 先在局部变量 `ptr` 中分配内存。
+2. 使用 `cmpxchg(&vma->numab_state, NULL, ptr)` 尝试将指针赋值给 `vma->numab_state`。
+3. 若 `cmpxchg` 返回非 NULL 值（说明其他线程已抢先赋值），则释放当前线程分配的 `ptr` 内存并跳过当前 VMA。
+4. 若返回 NULL，则成功赋值，继续进行后续初始化操作。这确保了只有一个分配的内存块被成功关联到 VMA 结构体中。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aa2f63be658e18b9bd21a307375315d8d1922fba

@@ -1,0 +1,20 @@
+#标题
+cpufreq: cppc: hisi_cppc_cpufreq_get_rate 函数返回值类型错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HiSilicon CPPC cpufreq 驱动中，当 `hisi_cppc_cpufreq_get_rate` 函数获取策略（policy）失败或获取期望性能（desired_perf）失败时，函数会返回负的错误码（如 `-ENODEV` 或 `-EIO`）。由于该函数的返回类型定义为 `unsigned int`（无符号整型），负的错误码被错误地转换为一个极大的正整数。这可能导致上层调用者误解 CPU 频率，进而引发频率统计异常或系统行为错乱。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `hisi_cppc_cpufreq_get_rate` 的返回类型为 `unsigned int`，但在异常处理路径中直接返回了负的错误码（`-ENODEV` 和 `-EIO`）。在 C 语言中，将负数赋值给无符号类型变量会导致数值溢出，从而返回一个无效的大正数值。这是一个明显的编程逻辑错误，先前的修复补丁（cf7de25878a1）引入了 null pointer 检查，但未正确处理返回值类型匹配问题。
+
+#解决方案
+修改 `drivers/cpufreq/cppc_cpufreq.c` 文件中的 `hisi_cppc_cpufreq_get_rate` 函数，将异常情况下的返回值从负的错误码（`-ENODEV` 和 `-EIO`）统一修改为 `0`。这确保了返回值在 `unsigned int` 类型的有效范围内，且调用者能正确识别获取频率失败的情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d7c560f56e528fbb009f5f2b70cc813aad66661d

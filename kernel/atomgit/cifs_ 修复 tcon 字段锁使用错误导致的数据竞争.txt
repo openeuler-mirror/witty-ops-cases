@@ -1,0 +1,22 @@
+#标题
+cifs: 修复 tcon 字段锁使用错误导致的数据竞争
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB/CIFS 模块处理 tcon（Tree Connect）引用计数时存在锁使用不当问题。具体表现为在 `cached_dir.c`、`smb2misc.c`、`smb2ops.c` 和 `smb2pdu.c` 等多个路径中，对 `tcon->tc_count` 的原子性修改使用了全局锁 `cifs_tcp_ses_lock`，而其他代码路径可能使用 `tcon->tc_lock`。这种锁粒度的不一致可能导致数据竞争，进而引发引用计数管理混乱。在极端情况下，可能出现 `tcon->tc_count` 变为负数的风险，触发内核警告或导致后续的内存访问异常。
+
+#主要错误日志
+WARN_ONCE(tcon->tc_count < 0, "tcon refcount is negative");
+
+#问题根因
+根本原因在于 `tcon->tc_count` 字段的保护锁使用不一致。代码中部分路径使用全局自旋锁 `cifs_tcp_ses_lock` 来保护 `tcon->tc_count` 的递增或递减操作，而该字段本应由 `tcon->tc_lock` 保护。使用错误的锁（且粒度过大）无法有效保护该特定字段，导致并发访问时可能出现数据竞争，破坏引用计数的完整性。
+
+#解决方案
+统一 `tcon->tc_count` 字段的保护锁，将所有错误使用 `cifs_tcp_ses_lock` 保护该字段的地方修改为使用 `tcon->tc_lock`。具体修改包括：
+1. 在 `cfids_laundromat_worker`、`smb2_handle_cancelled_close` 函数中，将对 `tc_count` 操作的临界区锁从 `cifs_tcp_ses_lock` 替换为 `tcon->tc_lock`。
+2. 在 `smb2_get_dfs_refer` 和 `smb2_reconnect_server` 函数中，补充对 `tc_count` 修改前的 `tcon->tc_lock` 加锁及修改后的解锁操作，确保所有修改都在同一把锁的保护下进行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac2f7b5c02f7b298d8c8eb3b6dd72cba5cace58f

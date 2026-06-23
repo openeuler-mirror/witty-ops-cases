@@ -1,0 +1,21 @@
+#标题
+Bluetooth: 修复 hci_conn_del_sysfs 中的 use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Bluetooth 子系统中，当连接断开并销毁设备时，若存在 rfcomm tty 设备仍以此连接设备为父节点，会发生引用计数溢出，导致内核检测到 use-after-free 错误或触发 kernel panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hci_conn_del_sysfs` 函数中，代码尝试使用 `device_find_child` 配合 `__match_tty` 回调函数来查找 rfcomm 设备，并将其移出。然而，`device_find_child` 函数在匹配设备时会增加该设备的引用计数，而在 `device_move` 移动设备后会减少引用计数。
+当 `__match_tty` 匹配到一个非目标设备（非 rfcomm 设备）时，`device_find_child` 依然会增加该设备的引用计数，但该设备随即被丢弃处理，导致其引用计数被错误地减少（put），从而引发引用计数下溢。后续当该设备真正被注销时，由于引用计数异常，可能导致该设备关联的内存被提前释放，而此时若继续访问该设备指针则触发 use-after-free。
+
+#解决方案
+删除不可靠的 `__match_tty` 匹配函数，改用 `device_find_any_child` 函数直接查找连接设备下的任意子设备。修复补丁在注销连接设备之前，将找到的子设备的父节点重置为 NULL，从而避免了引用计数操作不当的问题，确保子设备能被正确移出和清理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb8c82bfebc8e4e5558739131a772435b08375c8

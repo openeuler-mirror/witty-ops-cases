@@ -1,0 +1,24 @@
+#标题
+perf/core: perf_pmu_register与perf_init_event竞争条件导致内核崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核注册新的 PMU（Performance Monitoring Unit）设备期间，如果此时并发进行 perf 事件初始化，系统可能会访问到一个未完全初始化的 PMU 指针。这将导致内核崩溃、空指针引用或不可预测的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `perf_pmu_register()` 函数中，通过 `idr_alloc()` 将 PMU 指针注册到 `pmu_idr` 中时，该 PMU 结构体尚未完成完整的初始化流程（如 `exclusive_cnt` 计数器初始化等）。与此同时，`perf_init_event()` 函数可以通过 `idr_find()` 并发查找到这个未初始化的 PMU 指针并尝试使用它。这种发布（注册）与初始化之间的竞争条件导致了上述故障。
+
+#解决方案
+修改 PMU 注册逻辑，实现“先占位、后替换”的机制：
+1. 在 `idr_alloc()` 阶段，先注册一个 NULL 指针作为占位符，而非直接注册 PMU 指针。
+2. 将 PMU 结构体的成员初始化操作（如设置 `exclusive_cnt`）移动到注册占位符之后、发布指针之前进行。
+3. 新增 `idr_cmpxchg()` 函数，在 PMU 完全初始化完成后，使用该函数将占位的 NULL 指针原子地替换为真实的 PMU 指针。
+4. 确保在将 PMU 指针发布到 `pmu_idr` 和 `pmus` 链表之前，所有必要的初始化步骤均已完成。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d42800181c2a8e2e643247787e9b7f41bf78999b

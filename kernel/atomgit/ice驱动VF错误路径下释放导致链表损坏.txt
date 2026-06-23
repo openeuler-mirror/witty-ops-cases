@@ -1,0 +1,37 @@
+#标题
+ice驱动VF错误路径下释放导致链表损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置SR-IOV时，如果`ice_ena_vfs()`在调用`ice_create_vf_entries()`之后失败，会导致内核崩溃。具体表现为执行SR-IOV配置脚本时触发kernel BUG或KASAN报错。
+
+复现步骤：
+1. devlink dev eswitch set $PF1_PCI mode switchdev
+2. ip l s $PF1 up
+3. ip l s $PF1 promisc on
+4. sleep 1
+5. echo 1 > /sys/class/net/$PF1/device/sriov_numvfs
+6. sleep 1
+7. echo 1 > /sys/class/net/$PF1/device/sriov_numvfs
+
+#主要错误日志
+list_add corruption. next->prev should be prev (ffff8882e241c6f0), but was 0000000000000000. (next=ffff888455da1330).
+kernel BUG at lib/list_debug.c:29!
+RIP: 0010:__list_add_valid_or_report+0xa6/0x100
+ice_mbx_init_vf_info+0xa7/0x180 [ice]
+ice_initialize_vf_entry+0x1fa/0x250 [ice]
+ice_sriov_configure+0x8d7/0x1520 [ice]
+
+或者：
+BUG: KASAN: use-after-free in __list_add_valid_or_report+0xf1/0x100
+
+#问题根因
+VF在`ice_mbx_init_vf_info()`中被添加到了PF-VF邮箱快照链表中，但在错误处理路径中，`ice_ena_vfs()`失败后调用`ice_free_vfs()`释放VF资源时，仅释放了VF内存，未将其从该链表中移除。这导致链表指针指向了已释放的内存（use-after-free），后续操作触发链表损坏校验失败或KASAN报告。
+
+#解决方案
+将VF从PF-VF邮箱链表移除的操作移至`ice_free_vf_entries()`函数中执行。新增`ice_deinitialize_vf_entry()`函数用于处理VF条目的反初始化（包括从链表移除），确保无论是在正常释放还是错误路径释放，VF被移出哈希表时都能正确清理链表引用，避免野指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/335bc5c5e4e7dfacf919681aeac7f5f522742cf5

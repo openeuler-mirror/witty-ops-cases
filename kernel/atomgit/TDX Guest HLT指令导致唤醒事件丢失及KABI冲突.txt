@@ -1,0 +1,26 @@
+#标题
+TDX Guest HLT指令导致唤醒事件丢失及KABI冲突
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TDX Guest 环境下，若执行 `sti; hlt` 指令序列（即开启中断后立即停机），HLT 指令会触发 #VE（Virtualization Exception）。如果该指令在 STI-shadow（中断影子）中执行，#VE 处理逻辑会在调用 TDCALL 之前使能中断，导致 Guest 在进入 HLT 状态前错过可能发生的唤醒事件，进而导致 CPU 无法正常被唤醒，系统表现为挂起或响应异常。
+
+#主要错误日志
+- `WARN_ONCE(1, "HLT instruction emulation failed\n")`（推断：若 TDCALL 调用失败时可能打印）
+- `Booting paravirtualized kernel on KVM`（验证 KABI 修复成功时的日志）
+
+#问题根因
+1. **逻辑缺陷**：TDX Guest 原有的 `tdx_safe_halt` 实现未正确处理 `sti; hlt` 的语义边界。在 STI 指令执行后存在一个指令窗口（STI-shadow），此时 HLT 触发 #VE，而在 #VE 处理流程中提前开启了中断，打破了 HLT “原子关中断并等待唤醒” 的语义，导致唤醒事件丢失。
+2. **KABI 冲突**：修复该问题需要扩展 `pv_irq_ops` 结构体增加 `halt` 和 `safe_halt` 函数指针。原有实现直接修改结构体导致了 KABI（Kernel Application Binary Interface）违规。
+
+#解决方案
+1. **修复 HLT 逻辑**：重构 TDX 停机逻辑，将 `tdx_safe_halt` 拆分为独立的 `tdx_halt` 和 `tdx_safe_halt` 实现。通过注册 `pv_ops.irq.halt` 和 `pv_ops.irq.safe_halt` 回调，确保在 TDX 环境下直接执行 TDCALL 并在调用后正确处理中断状态，避免因 #VE 导致的时序问题。
+2. **解决 KABI 违规**：
+   - 利用 `KABI_EXTEND` 宏将 `halt` 和 `safe_halt` 字段添加到 `pv_irq_ops` 结构体末尾。
+   - 将 `pv_irq_ops` 从 `paravirt_patch_template` 结构体中间移至末尾。
+   - 通过调整结构体布局，确保在默认未开启 `CONFIG_PARAVIRT_XXL` 时，扩展字段不影响现有数据结构的偏移量，从而保持 KABI 兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7cde1435824815728458917e182e6798067294ee

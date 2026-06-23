@@ -1,0 +1,23 @@
+#标题
+tcp_enter_recovery 未清理 retrans_stamp 导致连接误判或过早超时
+
+#内核版本
+OLK-6.6
+
+#问题现象
+TCP 连接在特定场景下出现异常中断或错误恢复行为：
+1. 连接在连续多次丢包恢复过程中，由于时间戳计算错误，导致 TimeStamp 机制错误地撤销正常的快速重传恢复。
+2. 在浅缓冲或流量整形的瓶颈链路中，连续的快速恢复之后可能紧接多次 RTO，导致连接过早触发 ETIMEDOUT 从而非正常断开。
+
+#主要错误日志
+未知
+
+#问题根因
+在进入快速恢复时，如果网络中没有未确认的重传包（即此时清理 retrans_stamp 是安全的），`tcp_enter_recovery()` 函数未将 `retrans_stamp` 清零。
+这导致 `retrans_stamp` 可能保留了上一个恢复阶段的时间戳，使得后续的基于时间戳的撤销逻辑和超时检查逻辑使用了错误的时间基准。
+
+#解决方案
+在 `tcp_enter_recovery()` 函数入口处增加调用 `tcp_retrans_stamp_cleanup(sk)`。该辅助函数会检查当前是否有未完成的重传，若无则将 `retrans_stamp` 置 0。这确保了在安全的情况下，以当前快速重传的时间作为新的计时起点，修正了撤销和超时判断的时间基准。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/114a47beb7942f61b1504ba2a45204946b8f3bff

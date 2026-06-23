@@ -1,0 +1,20 @@
+#标题
+btrfs: 修复 read_alloc_one_name() 错误路径下的未初始化指针释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BTRFS 文件系统执行日志重放操作时，若 `read_alloc_one_name()` 函数执行失败（例如内存分配失败），系统可能会尝试释放一个未初始化的指针，导致内核崩溃或内存污染。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `replay_one_name()` 和 `check_item_in_log()` 中，局部变量 `struct fscrypt_str name` 声明时未进行初始化。当后续调用 `read_alloc_one_name()` 失败并返回错误时，代码逻辑直接跳转到 `out` 标签进行清理。此时 `name` 成员（如 `name.name`）包含随机垃圾值，而非 NULL，导致清理代码错误地尝试释放该无效指针。
+
+#解决方案
+将 `struct fscrypt_str name` 的声明修改为初始化状态 `{ 0 }`，确保结构体成员（特别是指针成员）被初始化为零/NULL。这样在 `read_alloc_one_name()` 失败时，后续逻辑不会尝试释放空指针，从而避免崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/125b391edd68e837425b7d9b9c9bae82103bdc46

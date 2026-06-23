@@ -1,0 +1,21 @@
+#标题
+can: bcm: 修复 RX_RTR_FRAME 场景下 bcm_op 锁未初始化导致的内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户空间通过 CAN BCM（Broadcast Manager）套接字进行 RX_SETUP 操作，且设置了 `RX_RTR_FRAME` 标志时，内核会触发 BUG 或 panic（通常表现为 spinlock 相关的错误）。这是因为在接收到特定 RTR 帧并发送预定义 CAN 帧的过程中，代码路径使用了 `bcm_tx_lock` 自旋锁，但该锁在分配 `bcm_op` 结构体时未被初始化，导致访问未初始化的锁数据。
+
+#主要错误日志
+未知
+（注：Commit 信息未提供具体的 dmesg 日志原文，但根据 syzbot 报告链接及补丁分析，故障现场通常包含 spinlock bad magic 或 Unable to handle kernel NULL pointer dereference 等与未初始化锁操作相关的日志。）
+
+#问题根因
+在之前的提交 c2aba69d0c36 中引入了 `bcm_tx_lock` 以保护 `bcm_op` 运行时更新，但该锁的初始化函数 `spin_lock_init()` 仅在 `bcm_tx_setup()`（发送路径）中被调用。对于接收路径 `bcm_rx_setup()`，虽然主要用于处理和过滤接收流量，但在设置了 `RX_RTR_FRAME` 标志的特殊情况下，接收到 RTR 帧时会调用 `bcm_can_tx()` 发送预定义帧，该函数会使用 `bcm_tx_lock`。由于 `bcm_rx_setup()` 中分配 `bcm_op` 时遗漏了对 `bcm_tx_lock` 的初始化，导致后续锁操作触发内核故障。
+
+#解决方案
+在 `bcm_rx_setup()` 函数中分配 `bcm_op` 结构体后，立即调用 `spin_lock_init(&op->bcm_tx_lock)` 初始化自旋锁，确保在 RTR 回复场景下锁已正确初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c4ebbec57801bd5714bc82887b6f5db138c57483

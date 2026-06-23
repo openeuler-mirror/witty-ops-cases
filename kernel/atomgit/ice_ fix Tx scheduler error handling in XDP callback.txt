@@ -1,0 +1,24 @@
+#标题
+ice: fix Tx scheduler error handling in XDP callback
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 XDP（eXpress Data Path）程序时，若 Tx scheduler 配置失败（如 LAN queue config 失败或资源不足），驱动程序未正确恢复接口状态。这会导致接口处于不一致的状态（例如接口保持 down 状态），且后续操作可能因内存指针未清理（vsi->xdp_rings 悬空指针）而引发异常。
+
+#主要错误日志
+dev_err(dev, "Failed VSI LAN queue config for XDP, error: %d\n", status);
+NL_SET_ERR_MSG_MOD(extack, "Not enough Tx resources for XDP");
+NL_SET_ERR_MSG_MOD(extack, "Setting up XDP Tx resources failed");
+
+#问题根因
+在 `ice_prepare_xdp_rings` 函数中，当 Tx scheduler 配置失败时，错误处理路径直接跳转至 `clear_xdp_rings` 标签，遗漏了调用 `ice_unmap_xdp_rings` 来解除 XDP 环与中断向量的映射，导致资源未完全释放。同时，`ice_xdp_setup_prog` 函数在 XDP 资源准备失败时，未执行 `ice_up(vsi)` 恢复接口运行状态。此外，内存释放路径中未将 `vsi->xdp_rings` 置空，可能导致悬空指针问题。
+
+#解决方案
+1. 重构错误处理流程：将解除 XDP 环映射的逻辑抽取为独立函数 `ice_unmap_xdp_rings`，并在 `ice_prepare_xdp_rings` 的失败路径中增加对该函数的调用（新增 `unmap_xdp_rings` 标签），确保 Tx scheduler 失败时能正确解映射。
+2. 完善接口状态恢复：在 `ice_xdp_setup_prog` 中，当 XDP 资源分配或配置失败时，跳转至新增的 `resume_if` 标签，确保调用 `ice_up(vsi)` 将接口恢复至运行状态。
+3. 修复内存管理：在 XDP rings 内存释放后，显式将 `vsi->xdp_rings` 设置为 NULL，防止产生悬空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c24f6d37c6654e2a5068ba192248cf6890daa987

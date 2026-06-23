@@ -1,0 +1,20 @@
+#标题
+KVM: hisi_virt: HIP12 平台 TLBI 广播 CPU aff3 转换逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HIP12 平台上，KVM 虚拟化环境进行 TLBI（TLB Invalidate）广播时，由于 CPU aff3 字段在 MPIDR 与 SYS_LSUDVMBM_EL2 寄存器之间的转换逻辑错误，导致 TLBI 广播的 CPU bitmap 配置不正确。这会导致 TLB 失效指令广播到错误的目标 CPU 或 Die，进而引发虚拟机内存一致性异常，可能导致虚拟机进程崩溃、内存数据错误或死锁。
+
+#主要错误日志
+未知
+
+#问题根因
+在 HIP12 平台上，MPIDR_EL1 与 SYS_LSUDVMBM_EL2 寄存器中关于 Die ID 和 Socket ID 在 Aff3 字段的定义不同。在错误的逻辑中，代码直接将 MPIDR 的 Aff3 值用于构建 SYS_LSUDVMBM_EL2 的广播位图，未进行位域的重新映射。实际上，SYS_LSUDVMBM_EL2 使用 4 bits 表示一个 die，由 Socket ID 位和 Die ID 位组合而成，这与 MPIDR 中的原始排布不一致，导致转换计算错误。
+
+#解决方案
+修改 `kvm_update_vm_lsudvmbm_hip12` 函数，新增 `convert_aff3_to_die_hip12` 转换辅助函数。在设置 SYS_LSUDVMBM_EL2 寄存器的 Die bitmap 时，不再直接移位原始的 aff3 值，而是使用 `FIELD_GET` 宏分别从 MPIDR_AFF3 中提取 Socket ID（bits[4:3]）和 Die ID（bits[2:0]），并按照 HIP12 硬件手册要求正确组合（Socket ID 左移 2 位与 Die ID 拼接），确保写入寄存器的 Die1/Die2 值正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b7334ad8c897eaa438dfab360e1213b7817d62a4

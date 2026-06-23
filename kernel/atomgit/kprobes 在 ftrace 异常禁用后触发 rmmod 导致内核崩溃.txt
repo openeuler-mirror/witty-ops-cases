@@ -1,0 +1,29 @@
+#标题
+kprobes 在 ftrace 异常禁用后触发 rmmod 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统遭遇错误导致 ftrace 被 kill（永久禁用）后，若对包含 kprobe 探测点的内核模块执行 rmmod 或 insmod 操作，会引发内核空指针崩溃，导致系统不可用。
+
+#主要错误日志
+BUG: unable to handle page fault for address: fffffbfff805000d
+PGD 817fcc067 P4D 817fcc067 PUD 817fc8067 PMD 101555067 PTE 0
+Oops: Oops: 0000 [#1] SMP KASAN PTI
+CPU: 4 UID: 0 PID: 2012 Comm: rmmod Tainted: G        W  OE
+RIP: 0010:kprobes_module_callback+0x89/0x790
+Call Trace:
+ <TASK>
+ notifier_call_chain+0xc6/0x280
+ blocking_notifier_call_chain+0x60/0x90
+ __do_sys_delete_module.constprop.0+0x32a/0x4e0
+
+#问题根因
+当 ftrace 因错误被 kill 时，内核会设置 `kprobe_ftrace_disabled` 标志位。但在移除模块时，`__disarm_kprobe_ftrace()` 函数未检查该标志位，仍尝试执行 ftrace 相关的反注册操作。由于 ftrace 上下文已不可用，导致访问无效地址引发崩溃。
+
+#解决方案
+在 `__disarm_kprobe_ftrace()` 函数中增加对 `kprobe_ftrace_disabled` 标志位的检查。如果检测到 ftrace 已被禁用，直接返回 0 跳过后续 ftrace 操作，从而避免非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/387c4b65b12b60f7fda25e707ee6e67b058d2fe9

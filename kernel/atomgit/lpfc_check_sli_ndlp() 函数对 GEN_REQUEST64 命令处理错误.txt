@@ -1,0 +1,20 @@
+#标题
+lpfc_check_sli_ndlp() 函数对 GEN_REQUEST64 命令处理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SCSI lpfc 驱动的 GEN_REQUEST64 命令时，函数 `lpfc_check_sli_ndlp()` 的逻辑判断可能出错。当 `iocb->ndlp != ndlp` 时，函数可能错误地返回值，导致驱动对命令与节点结构体（ndlp）关联关系的判断失效，可能引发后续处理流程异常或资源管理错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `lpfc_check_sli_ndlp()` 函数中，针对 `CMD_GEN_REQUEST64_CR` 分支，代码使用了 `fallthrough` 语句直接跳转到了 `CMD_ELS_REQUEST64_CR` 的处理逻辑中。然而，`get_job_els_rsp64_did` 获取 `remote_id` 的赋值操作仅对 `ELS_REQUEST64` 命令有意义，对 `GEN_REQUEST64` 命令无效。这导致在 `iocb->ndlp != ndlp` 的情况下，代码基于无效或错误的 `remote_id` 进行了检查，从而错误地返回了结果。
+
+#解决方案
+修改 `lpfc_hbadisc.c` 文件中的 `lpfc_check_sli_ndlp()` 函数，将 `CMD_GEN_REQUEST64_CR` case 分支末尾的 `fallthrough` 语句替换为 `break`。此举阻止了代码错误地进入 `CMD_ELS_REQUEST64_CR` 的处理逻辑，避免了针对 GEN_REQUEST64 命令进行无效的 remote_id 检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c2db87351bdb8aa68eba21126031228bd5798d07

@@ -1,0 +1,27 @@
+#标题
+[netfilter] x_tables 中 LED target 校验函数存在越界读风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户空间传入一个不包含 '\0' 终止符的非法字节序列作为 LED ID 时，内核在处理过程中触发 KASAN 检测到的 slab 越界访问 BUG。具体表现为在调用 `strlen` 时发生越界读，导致内核崩溃或打印 KASAN 错误报告。
+
+#主要错误日志
+```
+BUG: KASAN: slab-out-of-bounds in strlen+0x58/0x70
+Read of size 1 at addr ffff8881022da0c8 by task repro/5879
+...
+Call Trace:
+ kstrdup+0x20/0x80
+ led_tg_check+0x18b/0x3c0
+```
+
+#问题根因
+在 `led_tg_check` 函数中，原有的校验逻辑仅检查了 `ledinfo->id[0]` 是否为空字符串起始（即首个字符是否为 '\0'），但未验证传入的整个 `ledinfo->id` 数组中是否包含字符串结束符 '\0'。如果用户空间传入一个无 '\0' 结尾的字节序列，该数据会被传递给 `kstrdup`（内部调用 `strlen`），导致 `strlen` 在计算字符串长度时越过数组边界进行读取，引发越界读漏洞。
+
+#解决方案
+在 `led_tg_check` 函数中增加对 `ledinfo->id` 数组的完整性校验。除了检查首字符非空外，新增使用 `memchr(ledinfo->id, '\0', sizeof(ledinfo->id))` 检查数组范围内是否存在 '\0' 终止符。如果数组中不存在 '\0'，则直接返回 `-EINVAL` 拒绝该输入，防止无效数据进入后续流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a46266dc121f7571ba03db3cae02eb355103cc3f

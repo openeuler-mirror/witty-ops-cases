@@ -1,0 +1,23 @@
+#标题
+BPF 扩展程序未校验 changes_pkt_data 属性导致潜在内核状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+BPF 验证器在处理扩展程序时，未检查其 `changes_pkt_data` 属性是否与被替换的全局子程序兼容。若扩展程序修改了数据包指针，而被替换的原始程序未修改，会导致验证器错误地保留过时的数据包指针信息，可能引发内核内存访问异常或内存破坏。该问题被分配了 CVE 编号 CVE-2024-58100。
+
+#主要错误日志
+- "Extension program changes packet data, while original does not\n"
+
+#问题根因
+BPF 验证器依据全局子程序的 `changes_pkt_data` 属性来决定是否使当前状态中的数据包指针失效。如果扩展程序替换了全局子程序，它必须与原子程序的 `changes_pkt_data` 属性兼容。由于原代码在 `check_cfg()` 之前执行 `check_attach_btf_id()`，导致扩展程序在被检查时其 `changes_pkt_data` 标志尚未设置，从而绕过了兼容性检查，导致验证器状态不一致。
+
+#解决方案
+1. 在 `struct bpf_prog_aux` 结构体中新增 `changes_pkt_data` 标志位。
+2. 在 `check_cfg()` 函数中为主子程序设置该标志，在 `jit_subprogs()` 中为其他子程序设置该标志。
+3. 调整 `bpf_check()` 流程顺序，将 `check_attach_btf_id()` 调用移至 `check_cfg()` 之后执行，确保在进行兼容性检查时 `changes_pkt_data` 标志已正确设置。
+4. 在 `bpf_check_attach_target()` 中增加校验逻辑：如果扩展程序的 `changes_pkt_data` 为真，而被替换程序的对应属性为假，则拒绝加载并报错。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c38536e2938cef4f56fc581b6f76384c91a3177

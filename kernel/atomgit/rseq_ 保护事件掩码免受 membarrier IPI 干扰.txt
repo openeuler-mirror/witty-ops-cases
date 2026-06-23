@@ -1,0 +1,20 @@
+#标题
+rseq: 保护事件掩码免受 membarrier IPI 干扰
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 `CONFIG_MEMBARRIER` 的内核配置下，当进程使用 `rseq`（可重启序列）系统调用并同时触发 `membarrier` 操作时，可能导致 `rseq_event_mask` 状态不一致。该问题可能引发用户态应用程序在执行 RSEQ 关键段时行为异常，或导致内核侧 `rseq_need_restart` 返回错误的判断结果，破坏 RSEQ 机制的正确性。
+
+#主要错误日志
+未知
+
+#问题根因
+原有的代码实现仅使用 `preempt_disable` 来保护 `rseq_event_mask` 的原子操作，防止调度器抢占导致的并发问题。然而，这不足以防止来自 `membarrier` 机制发送的 IPI（处理器间中断）导致的干扰。当 `membarrier` IPI 发生时，可能会打断当前的 RSEQ 事件掩码设置或读取清除流程，导致竞态条件，从而破坏事件掩码的完整性。
+
+#解决方案
+修改 `rseq_signal_deliver` 和 `rseq_need_restart` 函数中对 `rseq_event_mask` 的保护机制。引入条件编译宏 `RSEQ_EVENT_GUARD`：当配置了 `CONFIG_MEMBARRIER` 时，使用 `irq` 保护（即禁用本地中断），以同时屏蔽调度器抢占和 IPI 中断；否则仍使用 `preempt` 保护。通过 `scoped_guard` 机制确保对 `rseq_event_mask` 的读写操作在正确的上下文保护下原子完成，修复了因 membarrier IPI 引发的竞态问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f55fd5582935940cc9effaa95eab344680b050ea

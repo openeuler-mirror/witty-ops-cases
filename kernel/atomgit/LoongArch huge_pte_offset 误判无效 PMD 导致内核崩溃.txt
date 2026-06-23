@@ -1,0 +1,20 @@
+#标题
+LoongArch huge_pte_offset 误判无效 PMD 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构下，当调用 `smaps_hugetlb_range()` 等函数处理大页内存时，若 PMD 项指向 `invalid_pte_table`（即无映射状态），内核会错误地将其识别为交换条目，进而导致内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+LoongArch 的 `huge_pte_offset()` 函数在 PMD 项指向 `invalid_pte_table`（表示无映射）时，仍然返回指向该 PMD 槽位的指针。调用者（如 `smaps_hugetlb_range()`）获取该无效条目的值（即 `invalid_pte_table` 的地址）后，通用的 `is_swap_pte()` 检查函数错误地将其判定为交换条目，因为它满足 `!pte_present() && !pte_none()` 条件。该地址的比特位巧合地匹配了 `is_migration_entry()` 的检查，导致 `pfn_swap_entry_to_page()` 函数被调用并引发内核崩溃。
+
+#解决方案
+在架构层面的 `huge_pte_offset()` 函数中增加 PMD 项的有效性检查。在返回 PMD 指针前，使用 `pmd_none()` 检查 PMD 内容。如果该条目无效（即指向 `invalid_pte_table`），则直接返回 NULL，而不是返回指向该槽位的指针，从而避免上层调用者误判。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2f104061f9cd1469a872f0965f24a8894e213597

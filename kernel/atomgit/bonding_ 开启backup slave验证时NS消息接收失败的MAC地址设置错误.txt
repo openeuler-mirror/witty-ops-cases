@@ -1,0 +1,21 @@
+#标题
+bonding: 开启backup slave验证时NS消息接收失败的MAC地址设置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 bonding 开启了 backup slave 的验证（arp_validate）功能时，系统无法在 backup slave 上正确接收到 IPv6 邻居发现（NS，Neighbor Solicitation）消息。这是因为 backup slave 上未设置正确的目标 MAC 地址，导致底层驱动或网卡过滤器丢弃了相应的组播报文。
+
+#主要错误日志
+未知
+
+#问题根因
+在处理 bonding 的 IPv6 NS 目标地址时，代码直接使用了 NS 消息中的目标单播地址来推导 MAC 地址。
+根据 IPv6 协议规范，NS 消息的目标地址应当是目标地址对应的“被请求节点组播地址”，而不是直接使用单播地址。由于直接使用了单播地址进行 `ndisc_mc_map` 转换，导致生成的 MAC 地址不正确，无法匹配接收到的 NS 组播报文，从而导致消息接收失败。
+
+#解决方案
+修改 `slave_set_ns_maddr` 和 `slave_set_ns_maddrs` 函数，在调用 `ndisc_mc_map` 生成 MAC 地址之前，先调用 `addrconf_addr_solict_mult` 函数将 IPv6 单播目标地址转换为对应的被请求节点组播地址。使用该组播地址来推导并设置正确的链路层 MAC 地址，确保 backup slave 能正确接收 NS 消息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/238a8433c6341401c9f0ec00d481368eaf9653fc

@@ -1,0 +1,43 @@
+#标题
+arm64 ioremap_prot 误用用户态权限导致内核访问缺页异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户态程序通过 /dev/mem 映射 I/O 地址并使用 MAP_FIXED 标志覆盖栈区 VMA 后，内核在读取 /proc/$pid/environ 时触发缺页异常。具体表现为调用链 `environ_read` -> `generic_access_phys` -> `__memcpy_fromio` 过程中，内核无法读取重映射的地址，触发 "Unable to handle kernel read from unreadable memory" 错误，导致内核 Oops（Internal error: Oops: 000000009600000f）。
+
+#主要错误日志
+```
+[0000000020ffc000] pgd=080000010598d403, p4d=080000010598d403, pud=0800000125ddb403,
+                   pmd=080000007833c403, pte=01608000007fcfcf
+Unable to handle kernel read from unreadable memory at virtual address ffff80008ea89000
+KASAN: probably user-memory-access in range [0x0000000475448000-0x0000000475448007]
+Mem abort info:
+  ESR = 0x000000009600000f
+  EC = 0x25: DABT (current EL), IL = 32 bits
+  SET = 0, FnV = 0
+  EA = 0, S1PTW = 0
+  FSC = 0x0f: level 3 permission fault
+...
+Internal error: Oops: 000000009600000f [#1] SMP
+...
+pc : __memcpy_fromio+0x80/0xf8
+lr : generic_access_phys+0x20c/0x2b8
+...
+Call trace:
+ __memcpy_fromio+0x80/0xf8
+ generic_access_phys+0x20c/0x2b8
+ __access_remote_vm+0x46c/0x5b8
+ access_remote_vm+0x18/0x30
+ environ_read+0x238/0x3e8
+```
+
+#问题根因
+函数 `generic_access_phys()` 在调用 `ioremap_prot()` 时，直接传入了从页表项获取的用户态权限属性。该权限属性包含 PTE_USER 和 PTE_NG 等用户态标志位。这导致内核在后续访问重映射后的地址时，因为权限检查失败触发 PAN（Privileged Access Never）异常，引发内核缺页故障。
+
+#解决方案
+在 arm64 架构下定义 `arch_mk_kernel_prot()` 函数，并在 `generic_access_phys()` 调用 `ioremap_prot()` 前使用该函数将用户态权限属性转换为内核态权限属性。修复逻辑保留原有的内存类型属性，同时将权限位修正为内核可访问属性（_PAGE_KERNEL），从而避免内核访问权限故障。此方案规避了主线内核修复该问题引入的 KABI 变更风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d266e3897b770e4cae41a646bf4b01af5889cb3c

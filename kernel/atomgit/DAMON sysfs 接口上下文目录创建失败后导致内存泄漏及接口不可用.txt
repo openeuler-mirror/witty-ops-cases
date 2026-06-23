@@ -1,0 +1,20 @@
+#标题
+DAMON sysfs 接口上下文目录创建失败后导致内存泄漏及接口不可用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DAMON sysfs 接口中，当上下文目录设置失败（且 attrs 目录已成功创建）时，attrs 目录下的子目录未被清理。这导致内存泄漏，且 DAMON sysfs 接口近乎损坏，无法正常使用，直至系统重启。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `damon_sysfs_context_add_dirs` 函数中，如果 `damon_sysfs_context_set_targets` 或后续步骤失败，错误处理路径仅执行了 `kobject_put` 释放 attrs 目录本身，但遗漏了调用 `damon_sysfs_attrs_rm_dirs` 来递归删除 attrs 目录下的子目录。这导致已分配的子目录对象内存泄漏，且 sysfs 接口状态不一致。
+
+#解决方案
+修改 `damon_sysfs_context_add_dirs` 函数的错误处理路径。在 `damon_sysfs_context_set_targets` 失败时，跳转至新增的 `rmdir_put_attrs_out` 标签，在此标签处先调用 `damon_sysfs_attrs_rm_dirs(context->attrs)` 清理 attrs 目录下的子目录，然后再执行 `kobject_put` 释放 attrs 目录本身，从而修复内存泄漏并保持接口状态一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/25768c0627c76ea9eef1a53f6903bbf6f6e0ed4a

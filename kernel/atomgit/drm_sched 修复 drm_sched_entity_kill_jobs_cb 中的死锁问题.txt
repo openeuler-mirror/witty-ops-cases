@@ -1,0 +1,20 @@
+#标题
+drm/sched 修复 drm_sched_entity_kill_jobs_cb 中的死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 GPU 调度器实体被销毁时，如果待清理的作业存在依赖项，系统可能发生死锁，导致相关进程挂起无法退出，或导致内核线程阻塞。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `drm_sched_entity_kill_jobs_cb` 回调函数中，代码直接遍历 job 的依赖列表并调用 `dma_fence_wait` 等待依赖完成。由于该回调函数是在 fence 的信号量上下文中运行的，在此上下文中进行阻塞式等待会导致死锁。
+
+#解决方案
+将依赖项的等待逻辑以及后续的 job 清理操作从回调函数上下文移动到 workqueue 工作队列中执行。具体修改为：在 `drm_sched_entity_kill_jobs_cb` 中仅释放 fence 引用并调度 `drm_sched_entity_kill_jobs_work`，在 work 进程中安全地执行等待依赖和释放资源的操作，从而避免在原子上下文中阻塞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a039b3a0d3c79e0002bca298f847771730f91765

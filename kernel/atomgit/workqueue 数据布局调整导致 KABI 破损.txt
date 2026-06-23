@@ -1,0 +1,20 @@
+#标题
+workqueue 数据布局调整导致 KABI 破损
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核升级过程中修改了 `work_struct` 内部数据位的布局定义（`WORK_OFFQ_POOL_SHIFT` 等枚举值），导致与旧版本二进制模块不兼容，触发了 KABI（内核应用程序二进制接口）一致性检查失败或破坏了 KABI 稳定性保证。
+
+#主要错误日志
+未知
+
+#问题根因
+为了修复其他问题，代码变更调整了 `work_struct` 数据位中 `pool ID` 与 `disable depth` 的存储顺序。原本 `pool ID` 位于最高位区域，修改后被移动到了中间位置。这种数据布局的重排改变了关键枚举常量（如 `WORK_OFFQ_POOL_SHIFT`、`WORK_OFFQ_DISABLE_SHIFT`）的实际数值，属于核心数据结构的二进制接口变更，从而导致了 KABI 破损。
+
+#解决方案
+通过重新排列枚举定义的顺序，恢复 `pool ID` 在高位区域的布局，保持 `WORK_OFFQ_POOL_SHIFT` 的原始偏移量不变，从而修复 KABI 兼容性问题。同时，为了保证布局调整后数据解析的正确性，在 `get_work_pool` 函数中引入并应用 `shift_and_mask` 辅助函数，确保读取 `pool_id` 时使用正确的位掩码，防止读取到错误的 ID 值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f974d7dec2997dfe2d417f1c9cc0e2a6adb2d25c

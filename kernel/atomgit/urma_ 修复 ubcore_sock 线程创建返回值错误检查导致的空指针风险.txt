@@ -1,0 +1,20 @@
+#标题
+urma: 修复 ubcore_sock 线程创建返回值错误检查导致的空指针风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 urma 模块初始化过程中，若内核线程 `sk_event_loop` 创建失败，系统未能正确捕获错误，导致后续代码访问无效指针，引发潜在的 kernel panic 或内存访问错误。
+
+#主要错误日志
+ubcore_log_err("sock thread launch failed");
+
+#问题根因
+在 `ubcore_sock_init` 函数中，使用 `kthread_run` 创建内核线程时，代码错误地使用了 `!ss.daemon` 来判断线程是否创建失败。实际上，`kthread_run` 失败时返回的是 `ERR_PTR` 类型的错误指针（非 NULL），导致 `if (!ss.daemon)` 判断条件不成立，程序继续执行并在后续操作中访问了无效的 `ss.daemon` 指针。
+
+#解决方案
+修正 `kthread_run` 返回值的检查逻辑，将 `if (!ss.daemon)` 修改为 `if (IS_ERR(ss.daemon))`，以正确识别线程创建失败的情况并返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1fe3a08e65530de6e3e26bf2f10ec0d6ec40bb5

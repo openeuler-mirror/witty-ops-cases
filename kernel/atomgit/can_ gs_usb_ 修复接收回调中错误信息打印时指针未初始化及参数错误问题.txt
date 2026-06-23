@@ -1,0 +1,25 @@
+#标题
+can: gs_usb: 修复接收回调中错误信息打印时指针未初始化及参数错误问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 gs_usb 设备驱动进行 URB（USB Request Block）接收处理时，若发生“短读取”且伴随 `usb_submit_urb()` 重提交失败的情况，内核会打印错误日志。此时可能出现以下异常：
+1. 打印日志时发生空指针解引用或引用未初始化的 `netdev` 指针，导致内核崩溃或地址访问错误。
+2. 错误日志中显示的 URB 状态码不准确，未能真实反映重提交失败的错误原因。
+
+#主要错误日志
+- `netdev_info(netdev, "failed to re-submit IN URB: %pe\n", ERR_PTR(urb->status));`（推断：这是修复前有缺陷的日志打印行，参数存在错误）
+
+#问题根因
+自 commit 79a6d1bfe114 引入的变更存在两个缺陷：
+1. **变量未初始化**：在 `gs_usb_receive_bulk_callback` 函数中，局部变量 `netdev` 声明时未初始化。当触发“短读取”分支且 `netdev` 尚未指向有效的 `net_device` 结构体时，代码跳转至错误处理分支尝试打印日志，导致引用了未定义的 `netdev` 指针值。
+2. **打印参数错误**：在 URB 重提交失败的错误处理分支中，日志打印使用的是 `urb->status`（原始 URB 的状态），而实际上应该打印的是 `usb_submit_urb()` 的返回值 `rc`，这导致无法正确显示重提交失败的真实错误码。
+
+#解决方案
+1. 将 `struct net_device *netdev` 的声明初始化为 `NULL`，避免在异常路径中解引用未初始化的野指针。
+2. 修正 `netdev_info` 调用中的参数，将 `ERR_PTR(urb->status)` 更改为 `ERR_PTR(rc)`，确保打印出重提交 URB 时的真实错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3629dbc78ee3c13b2a0bf3dfecdbdee2a7148e8d

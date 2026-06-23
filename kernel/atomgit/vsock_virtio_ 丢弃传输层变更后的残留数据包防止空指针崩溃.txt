@@ -1,0 +1,20 @@
+#标题
+vsock/virtio: 丢弃传输层变更后的残留数据包防止空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 vsock 通信场景下，当 socket 连接过程被信号中断后再次尝试连接并失败，或者 socket 被重新分配给其他传输层时，内核可能接收到非预期的数据包。此时若继续处理这些数据包，会访问 `vsk->transport` 指针，由于该指针可能为 NULL，从而导致内核发生空指针解引用（NULL pointer dereference）并崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+当 socket 被解除分配或分配给另一个传输层时，内核未丢弃仍在接收队列中的数据包。在处理这些残留数据包时，代码逻辑未检查传输层是否匹配，直接访问了 `vsk->transport`，而在特定故障场景下该指针为 NULL，导致空指针解引用。
+
+#解决方案
+在 `virtio_transport_recv_pkt` 函数中增加对传输层状态的检查逻辑。在持有 socket 锁之后，除了检查 `SOCK_DONE` 标志外，还需判断 socket 是否处于监听状态以及 `vsk->transport` 是否与当前传输层匹配。如果 socket 已关闭或已分配给其他传输层，则调用 `virtio_transport_reset_no_sock` 丢弃数据包并释放资源，防止后续代码访问无效的 `vsk->transport` 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5d2f53607cde3d6506711659114e7c20b1502fd2

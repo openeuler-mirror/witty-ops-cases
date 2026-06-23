@@ -1,0 +1,36 @@
+#标题
+THP迁移期间deferred split scan导致无效PMD解引用引发内核缺页
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在迁移透明大页（THP）期间，如果此时并发进行 deferred split scan 操作，内核会访问无效的 PMD migration entry，导致发生 kernel panic。具体表现为无法处理页面错误，系统崩溃。
+
+#主要错误日志
+BUG: unable to handle page fault for address: ffffea60001db008
+CPU: 0 UID: 0 PID: 2199114 Comm: tee Not tainted 6.14.0+ #4 NONE
+Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.3-debian-1.16.3-2 04/01/2014
+RIP: 0010:split_huge_pmd_locked+0x3b5/0x2b60
+Call Trace:
+<TASK>
+try_to_migrate_one+0x28c/0x3730
+rmap_walk_anon+0x4f6/0x770
+unmap_folio+0x196/0x1f0
+split_huge_page_to_list_to_order+0x9f6/0x1560
+deferred_split_scan+0xac5/0x12a0
+shrinker_debugfs_scan_write+0x376/0x470
+full_proxy_write+0x15c/0x220
+vfs_write+0x2fc/0xcb0
+ksys_write+0x146/0x250
+do_syscall_64+0x6a/0x120
+entry_SYSCALL_64_after_hwframe+0x76/0x7e
+
+#问题根因
+在 `split_huge_pmd_locked` 函数中，代码原本对 `pmd_trans_huge`、`pmd_devmap` 或 `is_pmd_migration_entry` 三种情况统一处理。当 PMD 指向一个 migration entry 时，代码错误地调用了 `pmd_folio(*pmd)` 进行比较。由于 migration entry 不是一个正常的 folio 指针，对该地址进行解引用会导致无效地址访问，从而触发 panic。此外，PMD migration entry 已经被锁定，不可能作为目标 folio 进行替换，因此无需进行 folio 比较。
+
+#解决方案
+在 `split_huge_pmd_locked` 函数中增加对 PMD migration entry 的特定检查。如果检测到是 PMD migration entry，则直接跳过 folio 一致性检查（`pmd_folio` 调用）并提前返回，避免对无效地址进行解引用。修改后的逻辑确保不会对 migration entry 调用 `pmd_folio`，从而修复了并发访问导致的 crash 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca5ef0bfebf8431bf93585a4add1f4e68bf34a06

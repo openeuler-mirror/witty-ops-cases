@@ -1,0 +1,29 @@
+#标题
+dm cache 重试失败的设备恢复操作导致内核 BUG_ON 触发
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 cache 设备因映射错误导致恢复（resume）失败后，若再次尝试执行恢复操作，会触发内核 BUG_ON，导致系统崩溃或 Oops。具体表现为执行 `dmsetup resume cache` 命令时内核崩溃。
+
+#主要错误日志
+```text
+kernel BUG at drivers/md/dm-cache-policy-smq.c:752!
+Oops: invalid opcode: 0000 [#1] PREEMPT SMP KASAN NOPTI
+RIP: 0010:smq_load_mapping+0x3e5/0x570
+```
+推断日志（基于修复代码中的 DMERR）：
+```text
+[设备名]: unable to resume a failed-loaded cache, please check metadata.
+[设备名]: unable to resume cache due to missing proper cache table reload
+```
+
+#问题根因
+当 cache 设备第一次恢复失败时（例如因元数据损坏），会遗留一个处于部分初始化状态的策略对象。如果再次尝试恢复操作，内核会尝试向这个不完整的策略对象中重新加载 cache 映射，从而触发 BUG_ON 检查失败导致内核崩溃。
+
+#解决方案
+在 cache 设备恢复流程的 `cache_preresume` 阶段增加检查函数 `can_resume`。该函数检测设备是否处于“已确定大小但未加载映射”的状态，这标志着前一次恢复失败。如果检测到此状态，函数将阻止后续的恢复尝试并返回错误，防止内核触发 BUG_ON。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2b3b08da839739be7dd19013e4d878b5bd67a473

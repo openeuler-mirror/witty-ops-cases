@@ -1,0 +1,20 @@
+#标题
+MPTCP fastclose 路径下除零错误导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 MPTCP fastclose 操作时，若未正确初始化 `rcv_mss`，内核在调用 `__tcp_select_window()` 函数时可能触发除零错误，导致系统 panic 或内核 oops。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mptcp_do_fastclose` 函数中关闭子流时，`inet_csk(ssk)->icsk_ack.rcv_mss` 未被初始化。该值为 0 时，后续调用链（如 `__tcp_select_window`）中执行除法运算会导致除零错误。此问题与 `tcp_disconnect` 中处理的逻辑类似，均需预防除零风险。
+
+#解决方案
+在 `mptcp_do_fastclose` 函数遍历并关闭子流前，显式将 `inet_csk(ssk)->icsk_ack.rcv_mss` 初始化为 `TCP_MIN_MSS`，从而避免在后续窗口计算中出现除零错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/157e755fd2dac3402f6b4e83b7e6f1a39b2b3ab0

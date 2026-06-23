@@ -1,0 +1,20 @@
+#标题
+ sched/isolation: 启动时 Boot CPU 处于 nohz_full 导致内核 Crash
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核启动参数中配置的 "nohz_full=" 掩码包含了启动 CPU（Boot CPU）时，系统在启动过程中发生崩溃。这是因为 housekeeping_any_cpu() 函数在 smp_init() 执行之前调用，此时首个 housekeeping CPU 尚未上线，导致该函数返回了一个无效的 CPU 编号，进而引发内核 panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在引入提交 aae17ebb53cd ("workqueue: Avoid using isolated cpus' timers on queue_delayed_work") 后，如果 Boot CPU 被加入到 nohz_full 掩码中，housekeeping_any_cpu() 可能在 smp_init() 之前被调用。此时由于首个 housekeeping CPU 尚未启动上线，cpumask_any_and() 查询结果为无效 CPU 号（通常为 NR_CPUS），导致后续逻辑错误并触发崩溃。
+
+#解决方案
+修改 housekeeping_any_cpu() 函数逻辑，增加对 cpumask_any_and() 返回值的检查。如果检测结果为无效 CPU，则直接返回 smp_processor_id()（即当前 CPU）。这是一个针对启动阶段的规避措施，确保在尚未有 housekeeping CPU 上线时，能够安全地返回当前引导 CPU，避免崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9dc024000d3ecf1e016a91c6bb9655673b8b6684

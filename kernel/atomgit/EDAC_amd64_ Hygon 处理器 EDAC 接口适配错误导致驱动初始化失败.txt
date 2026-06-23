@@ -1,0 +1,24 @@
+#标题
+EDAC/amd64: Hygon 处理器 EDAC 接口适配错误导致驱动初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hygon 处理器平台上，EDAC（错误检测与纠正）模块无法正常加载或初始化失败，导致无法进行内存错误的检测与报告。驱动加载时可能因找不到有效的 Northbridge 信息或 SMN 读接口不匹配而返回错误，导致系统缺少内存 RAS 功能支持。
+
+#主要错误日志
+未知
+
+#问题根因
+Hygon 处理器的内部接口（SMN、NB）与 AMD 处理器存在差异，但原代码直接复用了 AMD 的相关接口函数。
+1. 在驱动初始化阶段，代码使用 `amd_nb_num()` 判断节点数，使用 `node_to_amd_nb()` 获取 PCI 设备，这导致 Hygon 平台无法正确获取 NB 设备信息（`struct pci_dev *F3`）。
+2. 在读取 UMC（Unified Memory Controller）寄存器时，代码使用了 AMD 的 `get_umc_base()` 和 `smn_read` 相关路径，而 Hygon 需要使用独立的 `hygon_get_umc_base` 和 `hygon_smn_read` 接口来正确访问硬件寄存器。
+
+#解决方案
+1. 将 Hygon EDAC 功能从 AMD EDAC 函数中分离，不再共用接口。
+2. 初始化阶段增加厂商判断：若是 Hygon 处理器，调用 `hygon_node_num()` 和 `node_to_hygon_nb()` 获取设备信息；若是 AMD 处理器，保持原有 `amd_nb_num()` 和 `node_to_amd_nb()` 调用。
+3. 新增并使用专用的 `hygon_umc_read_base_mask()` 和 `hygon_umc_read_mc_regs()` 函数，替换原有通用函数，确保通过 Hygon 特有的 SMN 接口正确读取内存控制器的基地址、掩码及配置寄存器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b92a2c5c175498cacadf6ad80f1bc49aa80b6ec8

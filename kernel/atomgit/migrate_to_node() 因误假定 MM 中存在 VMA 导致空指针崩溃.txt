@@ -1,0 +1,23 @@
+#标题
+migrate_to_node() 因误假定 MM 中存在 VMA 导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当进程的内存描述符（mm_struct）中不包含任何 VMA（虚拟内存区域）时，调用 `migrate_to_node` 函数会触发空指针解引用。具体表现为内核发生 Oops（一般保护故障），并在日志中报出 KASAN 检测到的空指针解引用错误，导致系统崩溃或进程异常终止。
+
+#主要错误日志
+Oops: general protection fault, probably for non-canonical address 0xdffffc0000000000: 0000 [#1] PREEMPT SMP KASAN PTI
+KASAN: null-ptr-deref in range [0x0000000000000000-0x0000000000000007]
+RIP: 0010:migrate_to_node mm/mempolicy.c:1090 [inline]
+RIP: 0010:do_migrate_pages+0x403/0x6f0 mm/mempolicy.c:1194
+
+#问题根因
+代码逻辑错误地假定了每个内存描述符（mm_struct）中至少包含一个 VMA。实际上，进程可能不存在任何 VMA。在此场景下，`find_vma(mm, 0)` 返回 NULL，代码未对该返回值进行检查便直接访问 `vma->vm_start`，从而触发了空指针解引用（NULL pointer dereference）。
+
+#解决方案
+在 `migrate_to_node()` 函数中调用 `find_vma()` 后，增加对返回值的判断。若返回值为 NULL（即不存在 VMA），则直接返回 0，避免后续对空指针的解引用操作。补丁中还使用了 `unlikely()` 宏对该检查进行了优化标记。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d472799f0123037047953c93ae7d446e6114f251

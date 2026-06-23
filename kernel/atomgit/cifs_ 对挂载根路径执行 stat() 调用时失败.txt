@@ -1,0 +1,20 @@
+#标题
+cifs: 对挂载根路径执行 stat() 调用时失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CIFS 挂载点对根路径（root path）执行 stat() 系统调用时功能异常。由于内核在处理不带通配符（msearch=false）的根路径查询时，错误地发送了空字符串模式，导致无法正确获取根路径信息。
+
+#主要错误日志
+未知
+
+#问题根因
+在调用 CIFSFindFirst() 查询根路径（不带 msearch 通配符）时，代码未将空字符串转换为服务器可识别的路径模式。根据协议要求，查询根路径需要发送模式 '\'（反斜杠），而不是 ''（空字符串）。原有逻辑在 searchName 为空时直接发送了空串，导致服务器无法正确解析请求，进而导致 stat() 调用失败。
+
+#解决方案
+修改 fs/smb/client/cifssmb.c 中的 CIFSFindFirst 函数，增加对 searchName 为空字符串情况的判断。当检测到查询根路径（searchName 为空）时，手动将发送的文件名模式设置为 CIFS_DIR_SEP（即 '\'），并正确设置 name_len 长度，确保发送给服务器的模式正确，从而修复对挂载根路径的 stat() 功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/17cba5469a91ae3b893f8e05a95ad1dd91892c40

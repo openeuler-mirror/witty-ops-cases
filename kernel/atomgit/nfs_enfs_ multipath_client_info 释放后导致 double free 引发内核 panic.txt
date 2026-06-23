@@ -1,0 +1,27 @@
+#标题
+nfs/enfs: multipath_client_info 释放后导致 double free 引发内核 panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在执行 NFS 挂载操作时触发内核 panic，内核日志报错 "list_add corruption"，提示链表节点损坏。调用栈显示崩溃发生在 `nfs_multipath_client_info_free` 函数调用 `queue_work_on` 向工作队列添加任务时，最终在 `__list_add_valid_or_report` 中触发 WARNING 并引发 panic。
+
+#主要错误日志
+```
+list_add corruption. prev->next should be next (ffff88813bbf2ca8), \
+    but was ffff888102e348b0. (prev=ffff888102e348b0).
+WARNING: CPU: 7 PID: 419 at lib/list_debug.c:32 \
+    __list_add_valid_or_report+0x95/0xc0
+RIP: 0010:__list_add_valid_or_report+0x95/0xc0
+```
+
+#问题根因
+在 `nfs_multipath_client_info_init` 函数中，当 `nfs_multipath_client_mount_info_init` 初始化失败时，代码调用 `nfs_multipath_client_info_free` 释放了 `*enfs_info` 指向的内存，但未将 `*enfs_info` 指针置为 NULL。
+这导致后续错误处理流程中，该指针仍指向已被释放的内存地址。当后续代码再次尝试释放或操作该指针指向的无效内存（如向已释放结构中的工作队列添加任务）时，触发了 double free 相关的内存损坏，表现为链表添加校验失败和内核 panic。
+
+#解决方案
+在 `nfs_multipath_client_info_init` 函数的错误处理路径中，调用 `nfs_multipath_client_info_free(*enfs_info)` 释放内存后，立即将指针 `*enfs_info` 置为 NULL，防止后续流程再次访问或释放该无效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d6f01631a69cbca08be0157a09f30a93283c50d4

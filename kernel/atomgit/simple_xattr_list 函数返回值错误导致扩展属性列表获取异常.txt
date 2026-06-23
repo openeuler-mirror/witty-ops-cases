@@ -1,0 +1,20 @@
+#标题
+simple_xattr_list 函数返回值错误导致扩展属性列表获取异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 inode 同时设置了 POSIX ACL 和 security.* 扩展属性时，调用 `simple_xattr_list` 函数获取扩展属性列表会失败。该函数错误地返回了一个正数值（即 security xattr 名称的长度），而不是预期的 0（成功）或正确的字节数，导致调用方无法正确获取完整的扩展属性列表。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复补丁 `8b0ba61df5a1` 中，代码调用了 `security_inode_listsecurity()` 以确保总是包含 security.* 相关的 xattrs。然而，该调用后未将变量 `err` 重置为 0。由于 `security_inode_listsecurity()` 返回的是写入缓冲区的 xattr 名称长度（一个正整数），导致后续代码逻辑中 `simple_xattr_list()` 错误地将该长度作为函数返回值返回，而不是继续处理后续的属性或返回正确的总长度。
+
+#解决方案
+在 `fs/xattr.c` 的 `simple_xattr_list` 函数中，于处理完 `security_inode_listsecurity()` 的逻辑并更新缓冲区指针与剩余大小后、进入下一次循环或返回前，显式将 `err` 变量重置为 0，防止错误的返回值传递。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/166a1111824d66a96200ad957d21cf27ed0ec2bb

@@ -1,0 +1,22 @@
+#标题
+selftests: vDSO: 修复 powerpc 架构下 vDSO 名称匹配失败导致测试跳过
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 powerpc 架构上运行 vDSO 自测试工具 `vdso_test_correctness` 时，程序无法找到 vDSO 对象，导致相关测试项被跳过。具体表现为程序输出告警信息 "[WARN] failed to find vDSO"，随即跳过 clock_gettime() 和 clock_gettime64() 的测试。
+
+#主要错误日志
+[WARN]	failed to find vDSO
+[SKIP]	No vDSO, so skipping clock_gettime() tests
+[SKIP]	No vDSO, so skipping clock_gettime64() tests
+
+#问题根因
+测试代码 `vdso_test_correctness.c` 中硬编码搜索的 vDSO 名称仅为 "linux-vdso.so.1" 和 "linux-gate.so.1"，这与 powerpc 架构实际的 vDSO 名称不符。在 powerpc 上，vDSO 的命名根据位数不同分别为 "linux-vdso32.so.1" 或 "linux-vdso64.so.1"。由于缺少对这两种名称的搜索逻辑，导致 `dlopen` 加载失败，程序误判为找不到 vDSO。
+
+#解决方案
+在 `fill_function_pointers()` 函数中扩展 vDSO 名称的搜索范围。在尝试加载 "linux-gate.so.1" 失败后，继续尝试加载 powerpc 架构特有的 "linux-vdso32.so.1" 和 "linux-vdso64.so.1"，从而确保测试程序能正确识别并加载 powerpc 上的 vDSO 共享库。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0cf830a36cd6ec716ecaa4e454306b1d0e938e80

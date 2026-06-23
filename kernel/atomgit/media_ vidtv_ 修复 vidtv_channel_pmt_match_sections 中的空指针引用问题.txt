@@ -1,0 +1,29 @@
+#标题
+media: vidtv: 修复 vidtv_channel_pmt_match_sections 中的空指针引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核发生通用保护错误，导致 Oops。具体表现为在调用 `vidtv_psi_desc_assign` 函数时触发了空指针引用。该问题由 syzbot 在测试中发现，涉及 KASAN 的空指针解引用检测。
+
+#主要错误日志
+Oops: general protection fault, probably for non-canonical address 0xdffffc0000000000: 0000 [#1] SMP KASAN PTI
+KASAN: null-ptr-deref in range [0x0000000000000000-0x0000000000000007]
+RIP: 0010:vidtv_psi_desc_assign+0x24/0x90 drivers/media/test-drivers/vidtv/vidtv_psi.c:629
+Call Trace:
+ <TASK>
+ vidtv_channel_pmt_match_sections drivers/media/test-drivers/vidtv/vidtv_channel.c:349 [inline]
+ vidtv_channel_si_init+0x1445/0x1a50 drivers/media/test-drivers/vidtv/vidtv_channel.c:479
+ vidtv_mux_init+0x526/0xbe0 drivers/media/test-drivers/vidtv/vidtv_mux.c:519
+ vidtv_start_streaming drivers/media/test-drivers/vidtv/vidtv_bridge.c:194 [inline]
+ vidtv_start_feed+0x33e/0x4d0 drivers/media/test-drivers/vidtv/vidtv_bridge.c:239
+
+#问题根因
+函数 `vidtv_psi_pmt_stream_init()` 在内存分配失败时会返回 NULL，但调用者 `vidtv_channel_pmt_match_sections()` 未对返回值进行检查。当 `tail` 指针为 NULL 时，后续代码调用 `vidtv_psi_desc_assign(&tail->descriptor, desc)` 时对 NULL 指针进行了偏移解引用，从而触发通用保护错误。
+
+#解决方案
+在 `vidtv_channel_pmt_match_sections()` 函数中调用 `vidtv_psi_pmt_stream_init()` 后增加 NULL 检查。如果返回值为 NULL（即内存分配失败），则调用 `vidtv_psi_pmt_stream_destroy(head)` 清理已分配的流链表，并直接返回以避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9c28fe92458c07a458c07e8c6d10592baa1038f0

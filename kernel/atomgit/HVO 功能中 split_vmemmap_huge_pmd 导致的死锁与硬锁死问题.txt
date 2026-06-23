@@ -1,0 +1,25 @@
+#标题
+HVO 功能中 split_vmemmap_huge_pmd 导致的死锁与硬锁死问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 HVO（HugeTLB Vmemmap Optimization）功能时，系统可能发生死锁或硬锁死。
+具体表现为：
+1. 在 x86 架构下，调用 `split_vmemmap_huge_pmd` 函数时可能触发硬锁死。
+2. 在 arm64 架构下，执行 vmemmap PMD 分裂操作时可能发生死锁，导致系统挂起或调度异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **锁使用不当导致死锁/锁死**：原代码在 `split_vmemmap_huge_pmd` 函数中统一使用 `spin_lock_irq` 和 `spin_unlock_irq` 进行锁保护。这种加锁方式在特定架构（如 arm64）的中断上下文或特定调用链中会引发死锁；而在 x86 架构下，可能因中断处理逻辑引发硬锁死。
+2. **资源释放逻辑缺陷**：在持有自旋锁期间调用 `pte_free_kernel` 进行内存释放，这增加了锁竞争的复杂性和死锁风险，且部分代码路径下未正确处理页表释放逻辑。
+
+#解决方案
+1. **架构特定的锁定义**：引入可重定义的宏 `vmemmap_split_lock` 和 `vmemmap_split_unlock`。默认情况下使用普通的 `spin_lock`/`spin_unlock`；针对 arm64 架构，在头文件中将其重定义为 `spin_lock_irq`/`spin_unlock_irq`，从而根据架构特性选择正确的加锁原语以避免死锁。
+2. **优化临界区与资源释放**：将 `pte_free_kernel` 的调用移出临界区（自旋锁保护范围），在释放锁之后再进行页表内存的释放操作。这减少了持锁时间，避免了在锁内进行复杂的内存回收操作，从而修复了潜在的死锁和硬锁死问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f1ef99116cc23a2e602bbec877641832d03fd6d

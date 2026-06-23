@@ -1,0 +1,20 @@
+#标题
+pstore: ram_core: vmap() 失败时错误地返回成功
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `vmap()` 调用失败（返回 NULL）时，`persistent_ram_vmap()` 函数未正确处理该错误情况，而是继续对 NULL 指针进行偏移运算并返回。这导致上层调用者误以为内存映射成功，进而可能引发 NULL 指针解引用或访问非法内存地址，造成内核崩溃或 pstore 功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `persistent_ram_vmap()` 函数中，代码调用 `vmap()` 后未检查其返回值是否为 NULL（失败标志）。无论 `vmap()` 是否成功，代码都继续执行了地址偏移操作（`vaddr + offset`）。若 `vmap()` 失败返回 NULL，加上偏移量后会产生一个非 NULL 的非法指针值，导致函数错误地返回了一个看似有效的地址，掩盖了映射失败的事实。
+
+#解决方案
+在 `vmap()` 调用之后、进行地址偏移操作之前，增加对 `vaddr` 是否为 NULL 的判断。如果 `vmap()` 失败返回 NULL，函数应立即返回 NULL，以正确向上层传递映射失败的错误信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/493c0d3839b241e19e2a5c4bcdb5243454da1cb6

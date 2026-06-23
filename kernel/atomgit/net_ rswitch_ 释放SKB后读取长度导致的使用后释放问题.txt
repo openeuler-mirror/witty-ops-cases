@@ -1,0 +1,20 @@
+#标题
+net: rswitch: 释放SKB后读取长度导致的使用后释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核触发 use-after-free 错误。在使用 KFENCE 进行检测时，每发送数个数据包（如简单的 ARP 请求或 ICMP echo 请求）就会触发一次内核警告或错误信息，导致系统稳定性下降。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `rswitch_tx_free()` 函数（内联在 `rswitch_poll()` 中）中，`skb` 指针与 `gq->skbs[gq->dirty]` 指向同一地址。代码逻辑先调用了 `dev_kfree_skb_any()` 释放了 SKB 内存，随后又尝试访问 `skb->len` 来更新接口统计信息。这种在内存释放后继续访问的行为导致了 use-after-free 漏洞。
+
+#解决方案
+调整代码执行顺序，将接口统计信息的更新操作（读取 `skb->len`）移动到 `dev_kfree_skb_any()` 调用之前执行，确保在 SKB 被释放前完成对其成员的访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f51fdca9669aa7aded67bfb921c66f53859f0bfb

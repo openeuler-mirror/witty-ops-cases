@@ -1,0 +1,37 @@
+#标题
+cgroupv2 blk-throttle IO挂起及iocost QoS控制失效问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在使用cgroup v2进行IO限流时，若磁盘设备被删除或移除，已限流的IO请求可能无法从队列中分发出去，导致IO请求挂起。
+2. 在iocost控制器中，当系统存在延迟的IO请求但在此周期内没有任何IO完成时，内核无法判断磁盘是否饱和，导致vrate（虚拟速率）调整逻辑异常，进而影响IO QoS控制效果。
+3. 在blk-throttle限流逻辑中，特定情况下可能导致IO请求的分发延迟计算不准确，影响限流精度。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **blk-throttle挂起问题**：在`del_gendisk`流程中，虽然调用了`blk_throtl_cancel_bios`，但如果设备引用计数未归零，`pd_offline`回调可能未执行或未及时执行，导致限流的IO未被正确分发或取消。
+2. **iocost vrate调整异常**：在`ioc_timer_fn`中，当`nr_done`为0且存在`nr_lagging`时，原有逻辑错误地将`busy_level`重置，导致vrate既不能扩容也不能缩容，无法正确响应负载变化。内核此时无法确定IO延迟是否满足QoS目标。
+3. **限流精度问题**：
+   - `throtl_trim_slice`计算时间窗口时，未能保留足够的缓冲时间处理定时器唤醒延迟和字节余数，导致窗口被过快裁剪，实际IO速率低于配置值。
+   - `tg_within_iops_limit`计算等待时间时，未确保等待时间至少满足派发一个IO请求，可能导致高频IO限流失效。
+
+#解决方案
+1. **blk-throttle修复**：
+   - 将刷新限流BIO的逻辑抽取为独立函数`tg_flush_bios`。
+   - 在`throtl_pd_offline`回调中显式调用`tg_flush_bios`，确保在cgroup离线阶段即使设备未完全释放，也能强制分发队列中的BIO，避免IO挂起。
+   - 优化`blk_throtl_cancel_bios`流程，直接调用`tg_flush_bios`以简化逻辑。
+
+2. **iocost修复**：
+   - 在`ioc_lat_stat`函数中新增统计`nr_done`（已完成IO数量）。
+   - 在`ioc_timer_fn`中增加判断逻辑：当`!nr_done && nr_lagging`时，保持`busy_level`不变，避免错误重置，维持vrate调整的稳定性。
+
+3. **精度与逻辑优化**：
+   - 修改`throtl_trim_slice`逻辑，要求至少经过两个slice时间片才开始裁剪，并额外保留一个slice的时间用于补偿定时器延迟和计算偏差。
+   - 在`tg_within_iops_limit`中，强制最小等待时间`jiffy_wait`为`HZ / iops_limit + 1`，确保限流有效性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/39c8042aa5d4ff2d573606c4751e448943ea4497

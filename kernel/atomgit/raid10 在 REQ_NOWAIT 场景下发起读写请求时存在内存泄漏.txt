@@ -1,0 +1,41 @@
+#标题
+raid10 在 REQ_NOWAIT 场景下发起读写请求时存在内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用设置了 REQ_NOWAIT 标志的 I/O 请求（如通过 io_uring 发起）访问 RAID10 设备时，若请求需要等待，系统会发生内存泄漏。通过 kmemleak 可观测到大量未释放的对象。
+
+#主要错误日志
+unreferenced object 0xffff8884802c3200 (size 192):
+   comm "fio", pid 9197, jiffies 4298078271
+   hex dump (first 32 bytes):
+     00 00 00 00 00 00 00 00 88 41 02 00 00 00 00 00  .........A......
+     08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+   backtrace (crc c1a049a2):
+     __kmalloc+0x2bb/0x450
+     mempool_alloc+0x11b/0x320
+     raid10_make_request+0x19e/0x650 [raid10]
+     md_handle_request+0x3b3/0x9e0
+     __submit_bio+0x394/0x560
+     __submit_bio_noacct+0x145/0x530
+     submit_bio_noacct_nocheck+0x682/0x830
+     __blkdev_direct_IO_async+0x4dc/0x6b0
+     blkdev_read_iter+0x1e5/0x3b0
+     __io_read+0x230/0x1110
+     io_read+0x13/0x30
+     io_issue_sqe+0x134/0x1180
+     io_submit_sqes+0x48c/0xe90
+     __do_sys_io_uring_enter+0x574/0x8b0
+     do_syscall_64+0x5c/0xe0
+     entry_SYSCALL_64_after_hwframe+0x76/0x7e
+
+#问题根因
+在 `raid10_read_request` 和 `raid10_write_request` 函数中，当 `regular_request_wait` 返回失败（通常因为 REQ_NOWAIT 标志导致无法等待）时，代码逻辑直接返回，但未调用 `raid_end_bio_io` 释放之前通过 mempool 分配的 `r10_bio` 结构体内存，导致内存泄漏。
+
+#解决方案
+在 `raid10_read_request` 和 `raid10_write_request` 函数中，当 `regular_request_wait` 返回 false 时，在 return 之前增加调用 `raid_end_bio_io(r10_bio)`，确保释放已分配的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c634cb3f414a9c11f0ce3cd82db8daed9c8369b8

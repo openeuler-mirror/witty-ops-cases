@@ -1,0 +1,27 @@
+#标题
+sched/fair: EEVDF 实体放置错误导致调度延迟异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 EEVDF 调度器下，当进程进行权重切换（如由 1048576 变为 2 再变回 1048576）时，通过 trace 观察到 `reweight_entity` 中的 lag（延迟）计算出现严重偏差。
+预期 lag 应在权重转换过程中保持守恒（例如：-1123 -> -588775424 -> -1123），但实际测量值严重偏离预期，且在后续循环中偏差值不断增大。这表明调度器内部的虚拟运行时间（vruntime）计算逻辑受损，可能导致进程调度行为异常、延迟累积或调度不公平。
+
+#主要错误日志
+未知
+（注：此故障主要通过内核 trace 事件观察数值异常，Commit 中未包含具体的 panic 或 dmesg 报错日志。）
+
+#问题根因
+在 `reweight_entity` 函数处理 `->on_rq` 场景（特别是结合 `DELAY_DEQUEUE` 特性）时，计算逻辑存在缺陷。虽然新 lag 的计算本身正确，但在利用新 lag 计算新的 vruntime 时，未遵循 `place_entity()` 中定义的逻辑。
+具体体现在：旧的实现通过 `reweight_eevdf` 直接修改 vruntime 和 deadline，忽略了调度实体放置时的上下文约束，导致权重变化时 vruntime 调整不当，进而破坏了 lag 的正确传递与守恒。
+
+#解决方案
+重构 `reweight_entity` 函数，移除独立的 `reweight_eevdf` 计算分支，改用统一的逻辑处理权重变更：
+1. 移除 `reweight_eevdf` 函数及其复杂的数学推导代码。
+2. 在 `reweight_entity` 中，当实体位于运行队列（`se->on_rq`）时，调用 `update_entity_lag` 更新 lag，并设置 `se->rel_deadline` 标记。
+3. 统一使用 `place_entity` 函数来计算并设置调整后的 vruntime，确保权重变更后的实体放置逻辑与新建实体保持一致，从而修复 lag 计算偏差。
+4. 同时简化了 `update_entity_lag` 的实现逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/886b4fde5bf8dea06f8214c15f0046abfb8719cb

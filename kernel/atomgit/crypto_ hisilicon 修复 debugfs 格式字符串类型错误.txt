@@ -1,0 +1,25 @@
+#标题
+crypto: hisilicon 修复 debugfs 格式字符串类型错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核日志打印或 debugfs 文件读取时，由于格式字符串与实际数据类型不匹配，可能导致数据显示不正确（如无符号整数显示为有符号形式）或在特定编译环境下触发编译器/静态分析工具的类型警告。
+
+#主要错误日志
+- "Please input sqe num (0-%d)" (修正前为 %u)
+- "Please input eqe or aeqe num (0-%d)" (修正前为 %u)
+- debugfs 文件读取时的格式字符串 "%llu\n" (修正前为 %lld)
+
+#问题根因
+1. 在 `sec_main.c` 中，`sec_debugfs_atomic64_get` 返回值为 `u64` 类型，但 `DEFINE_DEBUGFS_ATTRIBUTE` 定义的格式字符串使用了 `%lld`（有符号长整型），导致类型不匹配。
+2. 在 `debugfs.c` 中，变量 `q_depth` 和 `xeq_depth` 虽为 `u16` 类型，但进行减 1 运算时，根据 C 语言整数提升规则，结果自动提升为 `int` 类型。代码原使用 `%u`（无符号整型）格式打印，与运算后的 `int` 类型不匹配。
+
+#解决方案
+修正格式字符串以匹配实际的数据类型：
+1. 将 `sec_main.c` 中 `DEFINE_DEBUGFS_ATTRIBUTE` 的格式字符串从 `%lld` 修改为 `%llu`，以匹配 `u64` 类型。
+2. 将 `debugfs.c` 中 `dev_err` 调用的格式字符串从 `%u` 修改为 `%d`，以匹配 `q_depth - 1` 和 `xeq_depth - 1` 运算结果提升后的 `int` 类型。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/125cadc44d5fea9fb2171c111d255c929c13a60b

@@ -1,0 +1,20 @@
+#标题
+ASoC: cs35l56 驱动无法正确处理未识别的设备 ID 导致 probe 非预期成功
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 cs35l56 驱动读取到的设备 ID（DEVID）不被当前驱动支持时，虽然驱动内部打印了未知设备的错误信息，但驱动 probe 过程并未因此失败返回错误码，而是错误地返回了成功（0）。这导致系统加载了一个实际上并未正确初始化或支持的设备驱动，可能引发后续的功能异常或不可预知的行为。
+
+#主要错误日志
+dev_err(cs35l56_base->dev, "Unknown device %x\n", devid);
+
+#问题根因
+在函数 `cs35l56_hw_init()` 中，针对 DEVID 校验的 `default` 分支逻辑存在缺陷。当检测到无效的 DEVID 时，代码执行了 `return ret;`。此时变量 `ret` 的值在之前的操作中被设置为 0（代表之前的操作成功），因此函数返回了 0（成功），导致调用者误认为硬件初始化成功，未能终止 probe 流程。
+
+#解决方案
+修改 `sound/soc/codecs/cs35l56-shared.c` 文件中 `cs35l56_hw_init()` 函数的返回逻辑。当 DEVID 校验失败进入 `default` 分支时，将返回值从 `ret` 修改为 `-ENODEV`，确保函数返回明确的错误码，从而使驱动 probe 流程正确失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f313f093777e32ea1acb775c5a56c0b03809ce0

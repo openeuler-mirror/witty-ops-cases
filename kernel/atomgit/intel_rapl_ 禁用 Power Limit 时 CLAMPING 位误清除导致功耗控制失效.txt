@@ -1,0 +1,20 @@
+#标题
+intel_rapl: 禁用 Power Limit 时 CLAMPING 位误清除导致功耗控制失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定硬件平台上，PL1（Power Limit 1）无法被禁用。当用户尝试通过 powercap sysfs 接口禁用 Power Limit 时，内核虽然尝试清除 ENABLE 位，但实际上硬件保持 ENABLE 位为置位状态，同时错误地清除了 CLAMPING 位。根据 Intel SDM 手册定义，CLAMPING 位用于允许处理器降低到 OS 请求的 P-states 之下以维持功耗限制，该位被清除意味着系统可能在超过预期功耗水平下运行，导致功耗控制失效。
+
+#主要错误日志
+[无显式错误日志打印，补丁中增加了 pr_debug 调试信息："%s cannot be %s\n"]
+
+#问题根因
+在 `set_domain_enable` 函数中，当用户请求禁用 Power Limit（mode=false）时，代码逻辑是先写入 ENABLE 位，然后（如果写入成功）调用 `set_floor_freq` 回调函数处理 CLAMPING 位。在某些平台上，ENABLE 位是只读的或无法被软件清除，写入操作虽然返回成功，但硬件寄存器中的 ENABLE 位实际仍保持置位。由于原代码未对写入后的值进行回读校验，直接继续执行了后续逻辑（如设置 floor frequency），这导致 CLAMPING 位被错误地清除，而 ENABLE 位依然有效。这种 ENABLE 位有效但 CLAMPING 位无效的状态违反了预期，导致系统失去功耗限制能力。
+
+#解决方案
+在写入 ENABLE 位后增加回读校验逻辑：调用 `rapl_read_pl_data` 重新读取 ENABLE 位的当前值，并与期望值（mode）进行比较。如果两者不一致（即硬件拒绝了修改 ENABLE 位的请求），则直接结束处理流程，不再继续执行修改 CLAMPING 位或设置 floor frequency 的操作，从而避免产生不合法的寄存器状态组合。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fdf02e251dfdf4ac37267bca1ad60ea667b9b4e1

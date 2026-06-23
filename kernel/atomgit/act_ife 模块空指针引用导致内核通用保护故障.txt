@@ -1,0 +1,26 @@
+#标题
+act_ife 模块空指针引用导致内核通用保护故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理网络流量控制中的 IFE（Ingress Flow Enforcement）编码操作时，触发通用保护故障，KASAN 检测到空指针解引用。故障发生在 `ife_tlv_meta_encode` 函数中，导致进程崩溃。
+
+#主要错误日志
+Oops: general protection fault, probably for non-canonical address 0xdffffc0000000000: 0000 [#1] SMP KASAN NOPTI
+KASAN: null-ptr-deref in range [0x0000000000000000-0x0000000000000007]
+RIP: 0010:ife_tlv_meta_encode+0x41/0xa0 net/ife/ife.c:166
+Call Trace:
+ ife_encode_meta_u32+0x153/0x180 net/sched/act_ife.c:101
+ tcf_ife_encode net/sched/act_ife.c:841 [inline]
+ tcf_ife_act+0x1022/0x1de0 net/sched/act_ife.c:877
+
+#问题根因
+在 `tcf_ife_encode` 函数中调用 `ife_encode` 时，未检查返回值是否为 NULL。在某些异常情况下（如策略配置问题或 MTU 配置问题），`ife_encode` 可能返回 NULL 指针，后续代码直接使用该指针进行操作导致空指针解引用。
+
+#解决方案
+在 `tcf_ife_encode` 函数中增加对 `ife_encode` 返回值的校验。如果返回 NULL，则跳转到 `drop` 标签进行处理，增加丢包统计并返回 `TC_ACT_SHOT`，从而避免后续代码访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/36e571f40e4a0753fd483fbc2d4f69faeeb352e3

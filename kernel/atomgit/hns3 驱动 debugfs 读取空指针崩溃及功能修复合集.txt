@@ -1,0 +1,42 @@
+#标题
+hns3 驱动 debugfs 读取空指针崩溃及功能修复合集
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1.  **空指针崩溃**：在设备复位或未完成初始化的状态下访问 hns3 驱动的 debugfs 节点（如查看队列信息、BD 信息、中断合并信息等），内核触发空指针引用导致 Oops 或系统崩溃。
+2.  **RX 缓冲区数据损坏**：使用 page_pool 进行 RX 缓冲区替换时，因位拷贝导致 `page_offset` 字段被错误覆盖或未正确更新，可能引发网络数据包异常。
+3.  **VF 通道数配置错误**：VF 获取最大通道数（max channels）时计算逻辑错误，返回值不符合预期。
+4.  **光口自协商状态异常**：光口场景下自协商状态未正确处理，导致链路配置不符合预期。
+5.  **复位后配置丢失**：硬件复位后，未恢复用户配置的自协商、速率和双工模式设置。
+
+#主要错误日志
+推断：
+Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
+Internal error: Oops: 96000004 [#1] PREEMPT SMP
+Call trace:
+ hns3_dbg_coal_info+0xXX/0xXXX [hns3]
+ hns3_dbg_rx_queue_info+0xXX/0xXXX [hns3]
+ hns3_dbg_tx_queue_info+0xXX/0xXXX [hns3]
+ hns3_dbg_rx_bd_info+0xXX/0xXXX [hns3]
+ hns3_dbg_tx_bd_info+0xXX/0xXXX [hns3]
+
+#问题根因
+1.  **空指针崩溃**：debugfs 各接口函数在访问设备私有数据（如 `priv->ring`、`priv->tqp_vector`）前，未严格检查设备是否处于 `INITED` 或 `RESETTING` 状态。若在复位期间调用 debugfs 接口，相关资源可能已被释放或未初始化，导致访问空指针。
+2.  **RX 缓冲区异常**：`hns3_alloc_buffer` 函数中，在 page_pool 分支调用 `page_pool_dev_alloc_frag` 时，传入的 `page_offset` 临时变量地址与后续的结构体赋值逻辑不一致；`hns3_replace_buffer` 函数在非 page_pool 场景下进行了不恰当的结构体拷贝，破坏了 `desc_cb` 的状态。
+3.  **VF 通道数计算错误**：`hclgevf_get_max_channels` 计算最大通道数时使用了错误的除法逻辑（除以 TC 数），未直接使用硬件支持的队列数。
+4.  **光口自协商初始化错误**：`hclge_configure` 函数中对 `req_autoneg` 的初始化未区分介质类型，光口错误地初始化为 `AUTONEG_ENABLE`。
+5.  **复位后配置未恢复**：硬件复位处理流程中缺少对自协商、速率、双工模式的重新配置步骤。
+
+#解决方案
+1.  **debugfs 空指针修复**：引入公共函数 `hns3_dbg_is_device_busy`，在所有 debugfs 读取回调函数入口处增加状态检查。若检测到设备未初始化或正在复位，直接返回 `-EBUSY`，避免非法内存访问。
+2.  **RX 缓冲区逻辑修复**：
+    *   修正 `hns3_alloc_buffer` 中 page_pool 分支逻辑，确保 `page_offset` 正确赋值给 `cb->page_offset`。
+    *   修正 `hns3_replace_buffer`，仅在非 page_pool 场景下执行 `desc_cb` 的直接拷贝赋值，防止 page pool 模式下的状态混乱。
+3.  **VF 通道数修复**：修正 `hclgevf_get_max_channels`，直接返回 `min(rss_size_max, num_tqps)`，移除错误的 TC 除法计算。
+4.  **光口自协商修复**：在 `hclge_configure` 中根据介质类型（COPPER/OTHER）分别初始化 `req_autoneg`，光口默认设置为 `AUTONEG_DISABLE`。
+5.  **复位配置恢复**：增加 `hclge_set_autoneg_speed_dup` 函数，并在设备初始化（`hclge_init_ae_dev`）和复位（`hclge_reset_ae_dev`）流程中调用，确保用户配置在复位后生效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4463a923d1691dff5480aa4cd311f98ef3885557

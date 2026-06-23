@@ -1,0 +1,40 @@
+#标题
+mtk-star-emac 驱动在 rx/tx poll 中触发 spinlock recursion 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中触发内核 BUG，提示 spinlock recursion，导致 CPU 0 上的 swapper/0 进程崩溃。调用栈显示故障发生在网络设备驱动的 NAPI 轮询处理流程中，具体是在中断上下文中重新使能 DMA 中断时尝试获取自旋锁。
+
+#主要错误日志
+```
+BUG: spinlock recursion on CPU#0, swapper/0/0
+ lock: 0xffff00000db9cf20, .magic: dead4ead, .owner: swapper/0/0,
+    .owner_cpu: 0
+CPU: 0 UID: 0 PID: 0 Comm: swapper/0 Not tainted
+    6.15.0-rc2-next-20250417-00001-gf6a27738686c-dirty #28 PREEMPT
+Hardware name: MediaTek MT8365 Open Platform EVK (DT)
+Call trace:
+ show_stack+0x18/0x24 (C)
+ dump_stack_lvl+0x60/0x80
+ dump_stack+0x18/0x24
+ spin_dump+0x78/0x88
+ do_raw_spin_lock+0x11c/0x120
+ _raw_spin_lock+0x20/0x2c
+ mtk_star_handle_irq+0xc0/0x22c [mtk_star_emac]
+ ...
+ mtk_star_rx_poll+0x2f4/0x39c [mtk_star_emac]
+ __napi_poll+0x38/0x188
+ net_rx_action+0x164/0x2c0
+ ...
+```
+
+#问题根因
+在 `mtk_star_tx_poll` 和 `mtk_star_rx_poll` 函数中，代码在持有自旋锁的情况下调用 `mtk_star_enable_dma_irq` 重新使能 DMA 中断。当 DMA 中断被使能后，立即触发了硬件中断，中断处理程序 `mtk_star_handle_irq` 尝试再次获取同一个自旋锁。由于当前 CPU 已经持有该锁且未释放，且原锁未使用关中断保护，导致在中断上下文中发生自旋锁递归死锁。
+
+#解决方案
+将 `mtk_star_tx_poll` 和 `mtk_star_rx_poll` 函数中的 `spin_lock` 和 `spin_unlock` 替换为 `spin_lock_irqsave` 和 `spin_unlock_irqrestore`。此举确保在持有自旋锁期间本地 CPU 中断被屏蔽，防止在锁持有期间中断处理程序抢占并尝试获取同一把锁，从而避免自旋锁递归问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9910c5d77eaacf6ba7cbac6defcc698a7b5caac9

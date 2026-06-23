@@ -1,0 +1,20 @@
+#标题
+rethook 任务状态检查逻辑过于保守导致栈回溯失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对处于调度让出 CPU 状态的任务进行栈回溯时，rethook 机制错误地拒绝访问该任务栈。这导致 `rethook_find_ret_addr` 函数无法正常获取返回地址，可能引发跟踪功能失效或数据丢失，阻碍了对调度出 CPU 任务的正常追踪分析。
+
+#主要错误日志
+未知
+
+#问题根因
+原代码使用 `task_is_running(tsk)` 来判断目标任务是否可以安全访问栈空间。当任务调用 `schedule()` 让出 CPU 时，其状态仍保持为 `TASK_RUNNING`，但实际上其栈已被冻结，处于可安全遍历的状态。旧逻辑仅依据 `TASK_RUNNING` 状态判定任务正在执行，从而错误地拒绝了栈访问，导致判断逻辑过于保守。
+
+#解决方案
+将 `rethook_find_ret_addr` 函数中的判断条件从 `task_is_running(tsk)` 修改为 `tsk->on_cpu`。`tsk->on_cpu` 能更准确地反映任务是否正在 CPU 上执行，允许对已让出 CPU 但栈数据有效的任务进行正常访问，从而修正了保守的拒绝策略。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e864901035a5d6e1183fa5a4ea35e528146504a6

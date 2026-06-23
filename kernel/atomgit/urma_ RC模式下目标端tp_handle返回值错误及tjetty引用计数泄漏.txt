@@ -1,0 +1,24 @@
+#标题
+urma: RC模式下目标端tp_handle返回值错误及tjetty引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在URMA RC（Reliable Connection）传输模式下，创建连接时目标端返回给发起端的`tp_handle`可能为未初始化的值或错误值，导致后续通信异常。
+2. 在`ubcore_bind_jetty_compat`函数处理流程中，存在引用计数泄漏，导致对象无法正常释放，可能引发资源耗尽或相关功能卡死。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **返回值错误**：在`ubcore_fadd_target_tpid_ctx`函数中，若在哈希表中查找到已存在的上下文（`ctx->is_init`为真），函数直接释放锁并返回，未将正确的`tp_handle`赋值给响应结构体`resp`。调用处`resp.tp_handle`在函数调用前已被赋值，但该赋值操作在函数内部查找命中时被跳过，导致响应中携带了错误的句柄值。
+2. **引用计数泄漏**：在`ubcore_bind_jetty_compat`函数中，解锁返回前未对`tjetty->use_cnt`执行递减操作，导致引用计数泄漏。
+
+#解决方案
+1. **修复句柄返回错误**：修改`ubcore_fadd_target_tpid_ctx`函数接口，增加`resp`参数。在函数内部查找到已有上下文时，将正确的`ctx->tp_handle`赋值给`resp->tp_handle`，确保返回正确的句柄。
+2. **修复引用计数泄漏**：在`ubcore_bind_jetty_compat`函数的解锁返回路径上，增加`atomic_dec(&tjetty->use_cnt)`调用，确保引用计数正确释放。
+3. **调整调用顺序**：将`ubcore_fadd_target_tpid_ctx`的调用时机调整至`resp.tp_handle = tp_handle`赋值操作之后，以便在函数内部查找失败时能使用默认的`tp_handle`，查找成功时能覆盖为复用的`tp_handle`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1b88a9fbcb874e0cc3a27a6eb6aed180fc7c4d0b

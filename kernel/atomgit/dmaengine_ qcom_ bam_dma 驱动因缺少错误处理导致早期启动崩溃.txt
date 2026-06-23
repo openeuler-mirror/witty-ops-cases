@@ -1,0 +1,21 @@
+#标题
+dmaengine: qcom: bam_dma 驱动因缺少错误处理导致早期启动崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm SoC 上，当设备树（DT）中未指定时钟且同时缺少 `num-channels` 或 `num-ees` 属性时，驱动程序本应中止探测，但由于错误处理缺失，驱动继续执行并尝试读取寄存器。这种不安全的操作依赖引导固件和幸运的时序，导致在多种场景下引发早期启动崩溃。
+
+#主要错误日志
+- num-channels unspecified in dt
+- num-ees unspecified in dt
+
+#问题根因
+在 `bam_dma_probe` 函数中，当设备未指定时钟时，驱动尝试从设备树读取 `num-channels` 和 `qcom,num-ees` 属性。虽然代码中调用了 `dev_err` 打印错误日志，但紧接着缺少 `return ret` 语句。这导致即使在设备树中缺少这些必要属性的情况下，函数并未返回错误而是继续向下执行，进而尝试访问寄存器，引发不可预测的崩溃。
+
+#解决方案
+在 `bam_dma.c` 的探测逻辑中，针对 `of_property_read_u32` 读取 `num-channels` 和 `qcom,num-ees` 失败的错误处理分支，显式添加 `return ret` 语句。确保当设备树缺少必要属性时，驱动能够正确终止探测流程，避免随后的不安全硬件访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7ceed1d81c834cc8bf285a61681970c9408ade7d

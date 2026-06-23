@@ -1,0 +1,27 @@
+#标题
+kasan: 修复原子上下文中睡眠导致的内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 s390 架构下，如果 `arch_enter_lazy_mmu_mode()` 和 `arch_leave_lazy_mmu_mode()` 分别对应 `preempt_enable()` 和 `preempt_disable()`，内核在启动或运行过程中会触发调度错误，导致系统崩溃。具体表现为在 `kthreadd` 进程创建内核线程时，调用链深入到 `kasan_populate_vmalloc_pte` 并尝试分配内存，此时检测到在原子上下文中调用了睡眠函数。
+
+#主要错误日志
+[    0.663336] BUG: sleeping function called from invalid context at ./include/linux/sched/mm.h:321
+[    0.663348] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 2, name: kthreadd
+[    0.663358] preempt_count: 1, expected: 0
+[    0.663375] no locks held by kthreadd/2.
+[    0.663383] Preemption disabled at:
+[    0.663386] [<0002f3284cbb4eda>] apply_to_pte_range+0xfa/0x4a0
+[    0.663429]  [<0002f3284cceba70>] kasan_populate_vmalloc_pte+0x50/0x120
+[    0.663433]  [<0002f3284cbb4ef8>] apply_to_pte_range+0x118/0x4a0
+
+#问题根因
+`apply_to_pte_range()` 函数进入 lazy MMU 模式后，会在每次页表遍历迭代中调用 `kasan_populate_vmalloc_pte()` 回调函数。该回调函数内部通过 `__get_free_page(GFP_KERNEL)` 尝试分配单个页面，而 `GFP_KERNEL` 标志允许睡眠。然而，在某些架构（如 s390）的 lazy MMU 模式下，抢占被禁用（preemption disabled），此时上下文处于原子状态。在原子上下文中进行睡眠操作（如页面分配）触发了调度器错误，导致内核崩溃。
+
+#解决方案
+修改 KASAN vmalloc 影子内存的分配策略，不再在 `apply_to_pte_range` 的回调函数内部逐个分配单页。改为在调用 `apply_to_page_range` 之前，使用 `alloc_pages_bulk` 接口批量预分配所需的影子内存页面。在回调函数 `kasan_populate_vmalloc_pte` 中，直接从预分配的页面数组中获取内存并进行映射，从而避免了在可能禁止抢占的 lazy MMU 原子上下文中执行睡眠操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab08d6f8b7e06c83618b978c40d9c3a827ffa47d

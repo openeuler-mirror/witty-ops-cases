@@ -1,0 +1,35 @@
+#标题
+wifi: ath10k: 管理帧发送路径内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在发送管理帧过程中，系统发生内存泄漏。通过 Kmemleak 工具可检测到大量未引用的对象，这些对象是在管理帧 TX 过程中分配的 MSDU 上下文内存，未被正确释放。
+
+#主要错误日志
+unreferenced object 0xffffff80b64ed250 (size 16):
+  comm "kworker/u16:7", pid 148, jiffies 4294687130 (age 714.199s)
+  hex dump (first 16 bytes):
+    00 2b d8 d8 80 ff ff ff c4 74 e9 fd 07 00 00 00  .+.......p......
+  backtrace:
+    [<ffffffe6e7b245dc>] __kmem_cache_alloc_node+0x1e4/0x2d8
+    [<ffffffe6e7adde88>] kmalloc_trace+0x48/0x110
+    [<ffffffe6bbd765fc>] ath10k_wmi_tlv_op_gen_mgmt_tx_send+0xd4/0x1d8 [ath10k_core]
+    [<ffffffe6bbd3eed4>] ath10k_wmi_mgmt_over_wmi_tx_work+0x134/0x298 [ath10k_core]
+    [<ffffffe6e78d5974>] process_scheduled_works+0x1ac/0x400
+    [<ffffffe6e78d60b8>] worker_thread+0x208/0x328
+    [<ffffffe6e78dc890>] kthread+0x100/0x1c0
+    [<ffffffe6e78166c0>] ret_from_fork+0x10/0x20
+
+#问题根因
+在管理帧发送逻辑中，为了存储 MSDU 上下文分配了内存（struct ath10k_mgmt_tx_pkt_addr），但在管理帧发送完成和清理逻辑中，仅从 IDR 中移除了条目并取消 DMA 映射，遗漏了释放该内存的操作，导致内存泄漏。
+
+#解决方案
+1. 在管理帧发送完成处理函数 `wmi_process_mgmt_tx_comp` 中添加 `kfree(pkt_addr)`，确保发送完成后释放内存。
+2. 在管理帧发送清理函数 `ath10k_wmi_tlv_op_cleanup_mgmt_tx_send` 中添加 `kfree(pkt_addr)`，修复清理路径的泄漏。
+3. 在待定发送清理函数 `ath10k_wmi_mgmt_tx_clean_up_pending` 中添加 `kfree(pkt_addr)`。
+4. 针对 `ath10k_wmi_tlv_op_cleanup_mgmt_tx_send` 函数，使用 `ar->data_lock` 自旋锁保护 `idr_remove` 操作，以保证并发安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/244ed6e20a4c5658c9e220df5212dd7de9c2046e

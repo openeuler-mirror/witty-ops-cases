@@ -1,0 +1,20 @@
+#标题
+ALSA: PCM OSS层缓冲区访问竞争条件导致潜在数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ALSA PCM OSS层进行参数变更（如通过snd_pcm_oss_change_params_locked）时，若同时发生缓冲区访问，会出现竞争条件。该竞争可能导致进程访问到未被正确初始化或正在被填充静音数据的缓冲区，可能引发内核崩溃或音频播放异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数`snd_pcm_oss_change_params_locked`中，设置缓冲区静音（`snd_pcm_format_set_silence`）的操作未持有缓冲区访问锁。原有的代码逻辑仅检查了`runtime->dma_area`是否存在，随即直接对DMA区域进行写操作，而未通过`buffer_access_lock`机制与正在进行的缓冲区读取/写入操作进行互斥，导致了竞争条件。
+
+#解决方案
+在`sound/core/pcm_native.c`中新增函数`snd_pcm_runtime_buffer_set_silence`，该函数在执行静音填充操作前调用`snd_pcm_buffer_access_lock`加锁，操作完成后调用`snd_pcm_buffer_access_unlock`解锁。同时在`sound/core/oss/pcm_oss.c`中将原有的直接静音填充调用替换为新函数，确保在对缓冲区进行设置静音操作时持有正确的锁，从而消除竞争风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e8b9b97423dfc5e3b1abff0cb309fadeb94c584a

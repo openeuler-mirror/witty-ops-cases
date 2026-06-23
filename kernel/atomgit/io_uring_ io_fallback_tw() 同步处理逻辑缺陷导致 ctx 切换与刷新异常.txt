@@ -1,0 +1,25 @@
+#标题
+io_uring: io_fallback_tw() 同步处理逻辑缺陷导致 ctx 切换与刷新异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 io_uring 退出或执行相关清理流程时，调用 io_fallback_tw() 处理 task_work 可能无法正确等待 fallback 线程处理完成。由于 ctx 交换和刷新逻辑错误，在 `sync` 参数为真时，可能导致资源引用计数管理混乱或工作队列未按预期同步执行，进而引发潜在的内存释放后使用（UAF）或上下文状态不一致问题。
+
+#主要错误日志
+未知
+
+#问题根因
+之前的提交为 io_fallback_tw() 增加了 'sync' 参数，用于指示调用者是否希望等待 fallback 线程处理完成。但原有实现中 `last_ctx` 的交换逻辑与 `sync` 判断条件结合不当，导致 ctx 无法正确切换和刷新：
+1. 原代码仅在 `sync && last_ctx != req->ctx` 时才尝试刷新并切换 ctx，这导致在非 sync 模式下 ctx 切换逻辑被短路，或 sync 模式下逻辑不完整。
+2. 使用 `req->ctx` 而非 `last_ctx` 进行 llist 添加和调度，可能导致工作项添加到错误的上下文列表中。
+
+#解决方案
+修正 io_fallback_tw() 函数中的 ctx 交换与刷新逻辑：
+1. 调整条件判断：无论是否 sync，只要 `last_ctx != req->ctx` 就应进行 ctx 的切换处理。
+2. 条件化刷新操作：仅在 `sync` 为真时，才调用 `flush_delayed_work()` 等待工作完成；否则仅执行调度。
+3. 修正目标上下文：将任务项添加到 `last_ctx` 的列表中，确保使用正确的上下文引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/774b9bd4619ed343695233010313f5904a31d03b

@@ -1,0 +1,20 @@
+#标题
+cs42l51_probe 函数错误处理路径中资源释放不完整
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 cs42l51 驱动加载过程中，若 `devm_gpiod_get_optional()` 获取 reset GPIO 失败，驱动探测会直接返回错误码，但未正确释放此前已使能的稳压器资源，导致资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cs42l51_probe` 函数中，当 `devm_gpiod_get_optional()` 调用失败时，代码逻辑直接返回了 PTR_ERR 错误码，跳过了后续的错误处理标签 `error`，导致 `regulator_bulk_disable` 未被执行，稳压器未被关闭。此外，错误处理路径中也缺失了 `gpiod_set_value_cansleep(, 1)` 调用以撤销潜在的复位操作。
+
+#解决方案
+修改 `cs42l51_probe` 函数的错误处理逻辑：当 `devm_gpiod_get_optional()` 失败时，不再直接返回，而是跳转至 `error` 标签。在 `error` 标签的处理流程中，增加 `gpiod_set_value_cansleep(cs42l51->reset_gpio, 1)` 调用以确保复位 GPIO 状态正确复位，随后执行 `regulator_bulk_disable` 关闭稳压器，确保资源正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/042e49a9b8f74f777d54e6586f48f331e29ec250

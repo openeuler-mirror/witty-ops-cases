@@ -1,0 +1,20 @@
+#标题
+ext4：修正拒绝默认哈希时的错误提示信息
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 ext4 文件系统的默认哈希版本设置为 DX_HASH_SIPHASH 时，挂载检查逻辑会拒绝挂载，但输出的错误提示信息不准确，错误地将其与 casefold（大小写折叠）功能的设置状态关联，导致诊断信息具有误导性。
+
+#主要错误日志
+- ext4_msg(sb, KERN_ERR, "Filesystem without casefold feature cannot be mounted with siphash");
+
+#问题根因
+Commit 985b67cd8639 引入的检查逻辑存在缺陷。虽然正确拒绝了 s_def_hash_version 设置为 DX_HASH_SIPHASH 的卷，但错误信息和检查条件与 casefold 功能强关联。实际上，文件系统本身不应将 DX_HASH_SIPHASH 作为默认哈希，这与是否开启 casefold 功能无关。原有的条件判断逻辑误导了故障原因的表述。
+
+#解决方案
+删除 `ext4_feature_set_ok` 函数中位置不当且逻辑误导的检查代码。该补丁移除了针对 `s_def_hash_version == DX_HASH_SIPHASH` 的错误检查，因为该检查应当（或已经）被移动到 `ext4_hash_info_init` 中进行，且不应依赖 casefold 特性作为判断条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5f070e98519ba59bcb82402cf5462556e1047d4f

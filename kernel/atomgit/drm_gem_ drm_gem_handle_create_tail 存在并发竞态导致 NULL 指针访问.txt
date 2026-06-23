@@ -1,0 +1,23 @@
+#标题
+drm/gem: drm_gem_handle_create_tail 存在并发竞态导致 NULL 指针访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下（例如一个线程调用 GEM_CLOSE 销毁对象，同时另一个线程对新创建的对象调用 GEM_CLOSE），由于 `drm_gem_handle_create_tail` 函数在对象完全初始化前就将其暴露给其他线程，导致并发删除操作可能访问到未完成初始化的句柄，引发 NULL 指针解引用或内核崩溃（panic/oops）。
+
+#主要错误日志
+未知
+
+#问题根因
+`drm_gem_handle_create_tail` 函数的实现违反了对象发布原则。它通过 `idr_alloc` 将对象注册到 `drm_file.object_idr` 中，随后才调用 `drm_vma_node_allow` 或 `obj->funcs->open` 进行文件私有状态的设置。这使得在对象完全初始化前，并发的 `drm_gem_handle_delete` 调用就能通过 idr 查找到该对象并进行删除操作，从而引发竞态条件。此外，修复引入的两阶段初始化机制导致 `object_idr` 中可能暂时存在 NULL 条目，若相关查询函数未做 NULL 检查也会导致问题。
+
+#解决方案
+采用“预留句柄 ID -> 初始化 -> 注册对象”的两阶段初始化模式修复竞态：
+1. 修改 `drm_gem_handle_create_tail`，先将 `idr_alloc` 的存入对象指针参数改为 `NULL`，仅预留句柄 ID。
+2. 在完成 `drm_vma_node_allow` 和 `obj->funcs->open` 等文件私有设置后，再使用 `idr_replace` 将预留 ID 对应的 NULL 替换为实际的对象指针。
+3. 在 `drm_gem_object_release_handle` 中增加 NULL 指针检查（`drm_WARN_ON`），防止在释放过程中访问到无效的 NULL 条目。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/845e92bf87584d8daee672dde7d45b408952eac7

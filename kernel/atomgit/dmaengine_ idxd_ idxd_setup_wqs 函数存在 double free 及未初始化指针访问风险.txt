@@ -1,0 +1,25 @@
+#标题
+dmaengine: idxd: idxd_setup_wqs 函数存在 double free 及未初始化指针访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 idxd 驱动初始化过程中，若 `idxd_setup_wqs` 函数遇到内存分配失败（如 `kzalloc_node` 失败）或 `max_wqs` 小于等于 0 的情况，内核将发生 double free（双重释放）或访问未初始化指针，导致内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+该函数的错误处理路径设计存在缺陷：
+1. **Double Free**：当循环内某次迭代中 `kzalloc_node` 分配失败时，`conf_dev` 指针可能尚未初始化，或者仍指向上一次迭代中已初始化的设备对象。此时直接调用 `put_device(conf_dev)` 会导致对前一个对象的重复释放（double free）。
+2. **未初始化访问**：如果 `idxd->max_wqs` 小于等于 0，代码会直接跳转到错误处理标签调用 `put_device(conf_dev)`，但此时 `conf_dev` 从未被赋值，导致访问未初始化指针。
+
+#解决方案
+重构 `idxd_setup_wqs` 函数的错误处理逻辑：
+1. **循环内释放**：在循环内部的错误处理分支中，立即释放当前迭代已分配的资源（调用 `put_device(conf_dev)` 和 `kfree(wq)`），避免将未完成初始化的指针传递给外部的 unwind 循环。
+2. **简化回滚逻辑**：修改后的外部 unwind 循环仅负责释放之前已完全完成初始化的迭代资源，消除了中间状态导致的 double free 风险。
+3. **标签重命名**：将错误处理标签重命名为更具描述性的名称（如 `err_unwind`, `err_free_wqs`），明确其执行的操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e9aac4a57597c0cf78c0bd96e28ad226d68a23e7

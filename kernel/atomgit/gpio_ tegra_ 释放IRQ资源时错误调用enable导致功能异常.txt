@@ -1,0 +1,23 @@
+#标题
+gpio: tegra: 释放IRQ资源时错误调用enable导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 Tegra GPIO 的 IRQ 资源被释放时，驱动错误地调用了 enable 函数而非 disable 函数。这导致 GPIO 引脚在释放后仍保持配置状态，可能造成以下影响：
+1. 产生不必要的功耗。
+2. 若该引脚后续被 pinctrl 复用为其他交替功能，可能引发不可预期的行为或功能冲突。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `tegra_gpio_irq_release_resources` 中存在逻辑错误，在调用 `gpiochip_relres_irq` 释放资源后，错误地调用了 `tegra_gpio_enable`，而正确的逻辑应该是调用 `tegra_gpio_disable`。
+根据代码逻辑，IRQ 资源释放时应清除 GPIO 配置位（CNF）以取消引脚的 GPIO 配置，但原代码保持甚至启用了配置，导致引脚状态未正确清理。
+
+#解决方案
+修改 `drivers/gpio/gpio-tegra.c` 文件中的 `tegra_gpio_irq_release_resources` 函数，将错误的 `tegra_gpio_enable` 调用修正为 `tegra_gpio_disable`，确保在 IRQ 资源释放时正确取消 GPIO 引脚配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0f1182ad5e7fb244832395384e917183a6eb3b07

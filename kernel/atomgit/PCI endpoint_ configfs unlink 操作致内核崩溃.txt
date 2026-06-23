@@ -1,0 +1,35 @@
+#标题
+PCI endpoint: configfs unlink 操作致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 configfs 中执行 unlink 命令解除 PCI endpoint 设备关联时，触发内核分页错误，导致内核崩溃。
+
+#主要错误日志
+Unable to handle kernel paging request at virtual address 0000000300000857
+Mem abort info:
+...
+pc : string+0x54/0x14c
+lr : vsnprintf+0x280/0x6e8
+...
+string+0x54/0x14c
+vsnprintf+0x280/0x6e8
+vprintk_default+0x38/0x4c
+vprintk+0xc4/0xe0
+pci_epf_unbind+0xdc/0x108
+configfs_unlink+0xe0/0x208+0x44/0x74
+vfs_unlink+0x120/0x29c
+__arm64_sys_unlinkat+0x3c/0x90
+invoke_syscall+0x48/0x134
+do_el0_svc+0x1c/0x30prop.0+0xd0/0xf0
+
+#问题根因
+`struct configfs_item_operations` 的 `drop_link` 回调函数定义参数顺序为，而 `pci_primary_epc_epf_unlink()` 和 `pci_secondary_epc_epf_unlink()` 函数实现时参数顺序定义错误，导致在 unlink 操作时传入的 `epc_item` 与 `epf_item` 互换。后续代码 `to_pci_epf_group(epf_item->ci_parent)` 因使用了错误的 item 指针，访问了非法内存地址，引发内核崩溃。
+
+#解决方案
+修正 `pci_primary_epc_epf_unlink()` 和 `pci_secondary_epc_epf_unlink()` 函数的参数顺序，确保 `epf_item` 在前、`epc_item` 在后，符合 `configfs_item_operations` 中 `drop_link` 接口的定义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3ddd97b50656b06e2540e4f97c910f37f4eb70a0

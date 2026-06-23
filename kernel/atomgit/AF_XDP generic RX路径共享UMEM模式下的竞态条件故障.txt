@@ -1,0 +1,20 @@
+#标题
+AF_XDP generic RX路径共享UMEM模式下的竞态条件故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AF_XDP 使用共享 UMEM 模式时，当多个 socket 共享同一个 xsk_buff_pool 时，若两个 CPU 核心分别访问不同 socket 的 RX 路径，会触发竞态条件，可能导致数据损坏或内核数据结构不一致，进而引发系统崩溃或网络功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在共享 UMEM 模式下，RX queue 是每个 xsk_socket 独占的，但 FILL queue 可以在多个 socket 间共享。原有代码将 `rx_lock` 锁定义在 `xsk_socket` 结构体中，导致多个 socket 各自持有独立的锁。当多个 CPU 核心通过不同 socket 进入 RX 路径操作共享的 FILL queue 时，锁无法起到互斥保护作用，从而引发竞态条件。
+
+#解决方案
+将 `rx_lock` 从 `xsk_socket` 结构体移动到 `xsk_buff_pool` 结构体中，确保在共享 UMEM 场景下，所有共享同一个 pool 的 socket 使用同一个自旋锁来保护 RX 路径。同时调整加锁范围，将 `spin_lock_bh` 移至 `xsk_rcv_check` 校验成功之后，以修正同步逻辑并确保绑定状态与内存屏障的正确同步。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6a4640a57b49e918e5f42f554a55ff0bb84444ca

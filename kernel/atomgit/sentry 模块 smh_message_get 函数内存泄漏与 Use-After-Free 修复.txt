@@ -1,0 +1,25 @@
+#标题
+sentry 模块 smh_message_get 函数内存泄漏与 Use-After-Free 修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `smh_message_get` 接口时存在两个严重问题：
+1. **内存泄漏**：当 `handle->ack` 为真且 `found` 变量为真时，`handle` 结构体未被释放直接返回，导致内存泄漏。
+2. **Use-After-Free（释放后使用）**：函数末尾直接返回 `sizeof(handle->msg)`，但在部分执行路径中 `handle` 已经被 `kfree` 释放，导致读取已释放内存中的数据。
+
+#主要错误日志
+未知
+
+#问题根因
+代码逻辑对 `handle` 生命周期管理不当：
+1. 在 `handle->ack` 为真的分支中，如果 `found` 为真，代码仅执行了 `spin_unlock`，遗漏了 `kfree(handle)` 的操作，导致内存泄漏。
+2. 函数返回值使用 `sizeof(handle->msg)`，这在 `handle` 被释放后执行，触发了 UAF（Use-After-Free）漏洞；且语义上应返回实际消息大小而非结构体中 msg 成员的大小。
+
+#解决方案
+1. **修复内存泄漏**：在 `found` 为真的条件分支中增加 `kfree(handle)`，确保所有分支路径下内存均被正确释放。
+2. **修复 UAF**：在函数入口处或释放操作前，将需要返回的消息大小保存至局部变量 `msg_size`，函数末尾直接返回该变量，避免访问已释放的 `handle` 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3dbd4c73f81613ced375ba3427fc2ece75911ce7

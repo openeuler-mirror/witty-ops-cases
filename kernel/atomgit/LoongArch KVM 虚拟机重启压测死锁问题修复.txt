@@ -1,0 +1,26 @@
+#标题
+LoongArch KVM 虚拟机重启压测死锁问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 LoongArch 架构的 KVM 虚拟机进行重启压力测试时，虚拟机出现挂起死锁现象，无法正常完成重启流程。
+
+#主要错误日志
+未知
+
+#问题根因
+虚拟机重启时，extintc（扩展中断控制器）未正确清除 estat 寄存器，导致 qemu 侧与 kvm 侧的状态不一致。具体原因为：
+1. 重启时 extintc 相关逻辑未正确清零。
+2. qemu 侧未在重启时清除 estat 寄存器。
+3. 当 qemu 侧发送 estat 寄存器数据到 kvm 时，采用了合并操作而非覆盖操作，导致旧的状态残留，引发虚拟机挂死。
+
+#解决方案
+修改内核 KVM 模块的中断控制器与 CPU 状态重置逻辑，确保重启时状态被正确清除与覆盖：
+1. 在 `kvm_set_one_reg` 函数的重置路径中，显式调用 `kvm_write_sw_gcsr` 将 ESTAT 和 GINTC 寄存器清零。
+2. 修正 `extioi`、`ipi`、`pch_pic` 三个模块重置函数中的变量类型，将 `offset` 和 `size` 从 `u8` 类型修改为 `unsigned long` 类型，以防止在计算或赋值时发生数据截断或溢出，确保寄存器区域被正确清除。
+3. 配合 qemu 侧修改，确保 estat 数据在传输时为覆盖而非合并。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c614e78048ab283a5b6af2bee84ddb5530f784df

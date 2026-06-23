@@ -1,0 +1,21 @@
+#标题
+c_can: 修复错误处理路径中 Runtime PM disable 不平衡的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 c_can Platform 驱动 probe 过程中，若 register_c_can_dev 函数执行失败（例如注册设备失败），驱动会错误地跳转至释放设备的标签。由于 Runtime PM 是在 probe 较晚阶段才使能，此时直接跳转导致 Runtime PM 未被正确 disable，造成 runtime PM disable depth 计数不平衡，可能导致设备电源管理状态异常或后续电源管理操作失效。
+
+#主要错误日志
+[   ...] c_can_platform: registering c_can_platform failed (err=-X)
+[   ...] c_can_platform: probe failed
+
+#问题根因
+在 `c_can_plat_probe` 函数中，`pm_runtime_enable` 是在 probe 流程较晚的阶段才被调用的。当 `register_c_can_dev` 注册失败时，代码错误地跳转到了 `exit_free_device` 标签直接释放设备资源，跳过了 `pm_runtime_disable` 的调用。这导致 Runtime PM 的使能状态未被清理，产生了 unbalanced runtime PM disable depth。
+
+#解决方案
+修改 `c_can_plat_probe` 函数的错误处理跳转逻辑。将 `register_c_can_dev` 失败时的跳转目标从 `exit_free_device` 改为 `exit_pm_runtime`，确保先调用 `pm_runtime_disable` 禁用 Runtime PM，然后再跳转到新增的 `exit_free_device` 标签释放设备资源，从而保证错误路径下的资源释放顺序正确且完整。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4135ce0b36f685c01a8eb8fb6fcec833b4613ef6

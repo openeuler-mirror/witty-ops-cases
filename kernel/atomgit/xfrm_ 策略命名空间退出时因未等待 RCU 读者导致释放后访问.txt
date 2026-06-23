@@ -1,0 +1,20 @@
+#标题
+xfrm: 策略命名空间退出时因未等待 RCU 读者导致释放后访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在销毁网络命名空间时，如果此时存在并发的 RCU 读者正在读取 `policy_bydst` 哈希表，可能会导致 Use-After-Free（释放后访问）问题，引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`xfrm_policy_fini()` 在刷新策略工作项并删除所有策略后，直接释放了 `policy_bydst` 哈希表，但未等待并发的 RCU 读者离开其读侧临界区。由于该哈希表通过 `rcu_assign_pointer()` 发布并通过 `rcu_dereference_check()` 查找，命名空间销毁流程必须在释放内存前等待 RCU 宽限期结束。
+
+#解决方案
+在 `xfrm_policy_fini()` 函数中，于刷新策略之后、释放哈希表之前添加 `synchronize_rcu()` 调用，确保所有潜在的 RCU 读者已完成访问，防止内存被提前释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/adee5cb0e96e06382ac0a895832ceff4f8edf2b8

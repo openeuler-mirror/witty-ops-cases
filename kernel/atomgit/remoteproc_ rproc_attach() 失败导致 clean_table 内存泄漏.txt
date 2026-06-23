@@ -1,0 +1,31 @@
+#标题
+remoteproc: rproc_attach() 失败导致 clean_table 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当处于 `RPROC_DETACHED` 状态的远程处理器通过 `rproc_attach()` 进行附加时，若 `rproc_handle_resources()` 执行失败，系统将发生内存泄漏。通过 kmemleak 可观测到未引用的内存对象，且系统运行一段时间后会有相应的内存泄漏告警信息。
+
+#主要错误日志
+unreferenced object 0xffff000086a99800 (size 1024):
+comm "kworker/u12:3", pid 59, jiffies 4294893670 (age 121.140s)
+hex dump (first 32 bytes):
+00 00 00 00 00 80 00 00 00 00 00 00 00 00 10 00 ............
+00 00 00 00 00 00 08 00 00 00 00 00 00 00 00 00 ............
+backtrace:
+ [<000000008bbe4ca8>] slab_post_alloc_hook+0x98/0x3fc
+ [<000000003b8a272b>] __kmem_cache_alloc_node+0x13c/0x230
+ [<000000007a507c51>] __kmalloc_node_track_caller+0x5c/0x260
+ [<0000000037818dae>] kmemdup+0x34/0x60
+ [<00000000610f7f57>] rproc_boot+0x35c/0x56c
+...
+
+#问题根因
+在 `rproc_attach()` 函数中，当 `rproc_handle_resources()` 处理资源失败时，代码流程会跳转到错误处理分支进行资源清理（如 `rproc_resource_cleanup` 和 `rproc_unprepare_device`）。然而，该错误处理路径中遗漏了对 `rproc->clean_table` 的释放操作。`clean_table` 是在 `rproc_boot` 流程中通过 `kmemdup` 分配的内存，若在附加失败路径中不释放，则会导致该内存块无法被回收，从而引发内存泄漏。
+
+#解决方案
+在 `rproc_attach()` 函数的错误处理路径中，增加对 `rproc->clean_table` 的释放操作。具体修改是在 `rproc_unprepare_device(rproc)` 调用之后、`disable_iommu` 标签之前，添加 `kfree(rproc->clean_table)` 语句，确保在附加失败时正确释放已分配的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01e3f7e55cf3c4a25329d434a7c37fe3c56512e1

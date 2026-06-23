@@ -1,0 +1,20 @@
+#标题
+net: ethernet: cortina: 大尺寸TCP帧硬件校验和失效问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当发送大于 1514 字节（ETH_FRAME_LEN）的 TCP 数据帧时，硬件校验和卸载功能失效。这会导致大尺寸 TCP 包的校验和计算错误或被截断，进而引发网络通信异常，如数据传输失败或连接重置。
+
+#主要错误日志
+未知
+
+#问题根因
+Cortina Gemini 以太网控制器的硬件校验和缓冲区大小有限（推测仅 1518 字节）。原有代码逻辑中，硬件校验和卸载仅对 TSO（TCP Segmentation Offload）场景或小于 1514 字节的非 TCP 帧生效。当发送非 TSO 的大尺寸 TCP 帧（例如包含自定义 DSA EtherType 的大帧）时，代码未启用 TOE（TCP Offload Engine）引擎进行处理，导致硬件无法正确处理校验和。
+
+#解决方案
+修改驱动程序 `gmac_map_tx_bufs` 函数逻辑，扩展 TOE/TSO 引擎的适用范围。对于非 TSO 场景下的 TCP 数据帧，强制启用 TSS_MTU_ENABLE_BIT 并计算相应的 MSS 值（取 MTU 加 TCP 头部长度与 skb->len 中的较小值），利用 TOE 引擎对大帧进行分块处理和校验和计算，确保大尺寸 TCP 帧能正确通过硬件卸载。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7fb5c993b2b055db83a6c5eb3cf23051f0d62b43

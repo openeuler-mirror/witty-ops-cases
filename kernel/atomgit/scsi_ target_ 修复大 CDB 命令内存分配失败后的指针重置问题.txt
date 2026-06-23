@@ -1,0 +1,20 @@
+#标题
+scsi: target: 修复大 CDB 命令内存分配失败后的指针重置问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SCSI 目标端接收到大于预定义长度的 CDB（命令描述块）命令时，内核尝试动态分配内存存储该 CDB。若动态内存分配失败（如内存不足），`cmd->t_task_cdb` 指针将保持为 NULL 或无效状态，可能导致后续代码访问该指针时引发空指针崩溃或内存访问错误。
+
+#主要错误日志
+[   42.123456] Unable to allocate cmd->t_task_cdb 256 > sizeof(cmd->__t_task_cdb): 16 ops
+
+#问题根因
+在 `target_cmd_init_cdb` 函数中，当 CDB 大小超过内部静态数组 `__t_task_cdb` 的容量时，代码尝试通过 `kzalloc` 动态分配内存。如果分配失败，代码仅打印错误日志但未将 `cmd->t_task_cdb` 指针恢复到安全状态（即指向内部静态数组 `__t_task_cdb`）。这导致该指针处于无效状态，后续代码若解引用此指针将引发系统崩溃。
+
+#解决方案
+在 `kzalloc` 分配失败的错误处理分支中，增加一行代码将 `cmd->t_task_cdb` 指针重新指向内部静态数组 `&cmd->__t_task_cdb[0]`。这确保了即使在动态内存分配失败的情况下，指针依然指向有效的内存区域，避免空指针异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/00f70a4d5fd40cbbc18aeafe075ac9f1b54054d9

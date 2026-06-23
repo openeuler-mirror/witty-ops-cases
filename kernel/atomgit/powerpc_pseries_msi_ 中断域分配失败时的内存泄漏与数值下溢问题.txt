@@ -1,0 +1,22 @@
+#标题
+powerpc/pseries/msi: 中断域分配失败时的内存泄漏与数值下溢问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 pSeries 平台进行 MSI 中断分配过程中，若父中断域分配失败，错误处理路径将执行异常：
+1. 导致已成功分配的中断资源发生泄漏（少释放 1 个中断）。
+2. 若在分配首个中断（索引 i=0）时即失败，变量 `i-1` 将发生下溢，导致释放逻辑处理错误数量的中断，可能引发不可预期的内核行为或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `pseries_irq_domain_alloc()` 在父中断域分配失败时进入 `out` 标签执行清理。变量 `i` 记录了当前已成功分配的中断数量。原代码逻辑错误地使用 `i - 1` 作为参数调用 `irq_domain_free_irqs_parent()` 进行释放。这导致了两个问题：一是当 `i > 0` 时，总是少释放一个中断；二是当 `i == 0` 时，`i - 1` 发生无符号整型下溢。
+
+#解决方案
+修正错误处理路径中的参数计算逻辑，将 `irq_domain_free_irqs_parent(domain, virq, i - 1)` 修改为 `irq_domain_free_irqs_parent(domain, virq, i)`，确保释放数量与已成功分配的数量 `i` 精确匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b05ea89faf001cf94ce4c3edb8c54ecc40eec610

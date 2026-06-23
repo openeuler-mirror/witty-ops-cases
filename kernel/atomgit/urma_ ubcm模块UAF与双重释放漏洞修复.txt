@@ -1,0 +1,25 @@
+#标题
+urma: ubcm模块UAF与双重释放漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 ubcm 设备添加与移除的过程中，存在内存管理缺陷：
+1. 当 `ubcm_add_device` 函数中 `ubcm_get_ubc_dev` 执行失败时，代码跳转到 `free_dev` 标签直接释放 `cm_dev` 内存，但此前并未减少引用计数，导致后续可能引发 Use-After-Free (UAF) 漏洞。
+2. 在 `ubcm_remove_device` 函数中，若传入的 `client_ctx`（即 `cm_dev`）为 NULL，函数未进行校验直接解引用成员 `cm_dev->device`，导致内核空指针崩溃。
+
+#主要错误日志
+ubcore_log_err("Invalid parameter.\n");
+
+#问题根因
+1. **UAF/双重释放**：在 `ubcm_add_device` 错误处理路径中，`goto free_dev` 直接调用了 `kfree(cm_dev)`。然而，`ubcm_put_device` 接口通常包含释放逻辑，直接调用 `kfree` 导致绕过了引用计数管理，造成双重释放或 UAF。
+2. **空指针解引用**：`ubcm_remove_device` 接口在 `client_ctx` 为 NULL 的异常场景下缺乏防御性检查，直接访问了 `cm_dev->device` 导致 panic。
+
+#解决方案
+1. **修复错误处理路径**：在 `ubcm_add_device` 中，将 `ubcm_get_ubc_dev` 失败后的跳转目标从 `free_dev` 改为 `put_dev`，并移除显式的 `kfree(cm_dev)` 调用，确保内存释放由引用计数机制统一管理。
+2. **调整上下文数据设置时机**：将 `ubcore_set_client_ctx_data` 的调用移至设备添加成功之后，防止在设备未完全初始化时被外部访问。
+3. **增加空指针校验**：在 `ubcm_remove_device` 入口处增加 `if (cm_dev == NULL)` 判断，避免对空指针进行解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75ac16ded921297b76436eeea97cc8fa7108ca4a

@@ -1,0 +1,34 @@
+#标题
+urma: 适配Clos组网拓扑导致的数据结构不匹配及路由获取失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在采用光模块Clos组网拓扑的新场景下，内核模块urma无法正确解析拓扑信息，导致节点匹配失败，无法建立正确的路由连接。系统日志中可能出现拓扑节点ID匹配错误的记录，或者路由查询接口返回失败。
+
+#主要错误日志
+- ubagg_log_err("update link info fail.")
+- ubagg_log_err("Invalid local indice: %u\n", local_indice)
+- ubagg_log_err("Invalid peer port: %u\n", link->peer_port)
+- ubagg_log_err("Invalid remote indice: %u\n", remote_indice)
+- ubagg_log_err("Unknown topology type: %u\n", src_node->type)
+- ubagg_log_err("Failed to copy topo info.ret is %d.\n", ret)
+- ubcore_log_err("update link info failed\n")
+- ubcore_log_err("No valid port_eid found, num = %d.\n", num)
+- ubcore_log_err("Failed to parse ubcore cmd tlv.\n")
+- ubcore_log_err("Failed to get_path_set, ret: %d.\n", ret)
+
+#问题根因
+1. **数据结构成员不匹配**：内核代码中拓扑节点结构体 `ubagg_topo_node` 与 `ubcore_topo_node` 中的节点标识字段名称定义不一致，代码中使用了旧的 `id` 字段，而实际结构体定义或新场景下应使用 `node_id` 字段，导致节点比较逻辑（如 `new_node->id == old_node->id`）始终判断失败，无法更新或匹配拓扑信息。
+2. **拓扑类型处理逻辑缺失**：原有代码仅针对 1D-FullMesh 拓扑类型实现了路由查找逻辑（`find_linked_port`），未包含对 Clos 拓扑类型的处理分支。在新场景下遇到 Clos 拓扑时，代码未做任何处理或直接报错返回（`Unknown topology type`），导致无法获取正确的路径集。
+
+#解决方案
+1. **修正字段名称**：将代码中所有引用节点标识 `id` 的地方统一修改为 `node_id`，确保新旧拓扑节点信息的正确匹配与更新。
+2. **扩展拓扑类型支持**：
+   - 新增 `UBAGG_TOPO_TYPE_CLOS` 和 `UBCORE_TOPO_TYPE_CLOS` 枚举定义。
+   - 在 `find_linked_port` 函数中增加对 Clos 拓扑类型的判断分支，实现 Clos 组网下端口到端口的连接映射逻辑。
+3. **新增路径查询接口**：引入 `ubcore_get_path_set` 接口及相关数据结构（如 `ubcore_path_set`、`ubcore_path`），该接口根据拓扑类型（FullMesh 或 Clos）执行不同的处理流程，支持获取新增的参数（如 chip_id, die_id, port_id 等），以适配新的网络拓扑分布。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ee516f5571306957844ebe039c2458f0f0b3012b

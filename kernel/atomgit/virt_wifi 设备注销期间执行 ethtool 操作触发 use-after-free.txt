@@ -1,0 +1,30 @@
+#标题
+virt_wifi 设备注销期间执行 ethtool 操作触发 use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 virt_wifi 设备的过程中，若同时对其实施 ethtool 操作（如设置特性），内核会触发 KASAN（Kernel Address Sanitizer）检测到的 slab-use-after-free 错误，导致内核崩溃或内存破坏。
+
+#主要错误日志
+```
+==================================================================
+BUG: KASAN: slab-use-after-free in __pm_runtime_resume+0xe2/0xf0
+Read of size 2 at addr ffff88810cfc46f8 by task pm/606
+...
+Call Trace:
+ __pm_runtime_resume+0xe2/0xf0
+ ethnl_ops_begin+0x49/0x270
+ ethnl_set_features+0x23c/0xab0
+ ...
+```
+
+#问题根因
+virt_wifi 驱动在创建网络设备时调用了 `SET_NETDEV_DEV(dev, &priv->lowerdev->dev)`，将网络设备的 parent 指针设置为下层设备。当 virt_wifi 设备注销时，其在 `netdev_run_todo()` 中的处理可能与 `SET_NETDEV_DEV` 引用的设备结构体内存释放发生竞争。若此时执行 ethtool 操作，`ethnl_ops_begin()` 会调用 `pm_runtime_get_sync(dev->dev.parent)` 访问 parent 指针，该指针可能已指向被释放的内存，从而引发 use-after-free。
+
+#解决方案
+移除 virt_wifi 驱动中 `SET_NETDEV_DEV(dev, &priv->lowerdev->dev)` 的调用。该操作切断了 virt_wifi 设备与底层物理设备的父子引用关系，避免了在设备注销期间因 parent 指针失效而导致的内存非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bc7dabcdd0f8b012e44adb8e30278856fb847e48

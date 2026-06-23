@@ -1,0 +1,30 @@
+#标题
+sw64架构MSI中断迁移与CPU热拔出处理缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在Guest虚拟机中进行MSI中断迁移时，若目标CPU在线且存在正在进行的迁移操作，中断迁移可能失败或导致状态不一致。
+2. CPU离线（热拔出）过程中，若剩余向量资源不足以容纳所有待迁移的中断，系统未能正确阻止离线操作，可能导致后续中断处理异常或内核崩溃。
+3. 中断迁移过程中，若旧CPU已离线，旧CPU的vector_irq表中未能及时清理对应的中断向量，导致资源泄漏或错误引用。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **并发迁移冲突**：在`vt_set_affinity`中，未检查`cdata->move_in_progress`标志位。当目标CPU在线且正处于迁移过程中时，代码继续执行迁移逻辑，导致竞态条件。
+2. **锁缺失**：修改`vector_irq`表时未持有`vector_lock`自旋锁，导致SMP环境下的并发访问风险。
+3. **离线CPU向量清理遗漏**：当原目标CPU（`cdata->dst_cpu`）已离线时，代码未将其从`per_cpu(vector_irq, ...)`表中移除，保留了指向已离线CPU的无效向量引用。
+4. **CPU热拔出检查不完整**：`smp.c`中的`__cpu_disable`函数仅在Host端（`is_in_host()`）调用`can_unplug_cpu()`检查资源，导致Guest端执行CPU离线时跳过了向量资源充足性检查，可能在资源不足时强制离线。
+5. **Affinity设置逻辑错误**：在`chip_setup_vt_msi_irqs`中遗漏了对`effective_affinity`的初始化更新。
+
+#解决方案
+1. **增加迁移状态检查**：在`vt_set_affinity`中增加判断，若`cdata->move_in_progress`为真且目标CPU在线，直接返回`-EBUSY`，避免并发迁移。
+2. **完善锁保护**：在修改`vector_irq`及执行迁移逻辑前后，增加`raw_spin_lock_irqsave(&vector_lock, flags)`锁保护。
+3. **修复离线CPU向量处理**：在迁移路径中判断原目标CPU是否在线，若已离线，则立即将其从`vector_irq`表中清除（置0）；若在线，则正常设置`move_in_progress`标志等待清理。
+4. **统一CPU热拔出检查**：移除`__cpu_disable`中`is_in_host()`的判断限制，确保Host与Guest端在CPU离线前均执行`can_unplug_cpu()`检查，保证向量资源充足。
+5. **修正Affinity更新**：在迁移成功后调用`irq_data_update_effective_affinity`更新有效亲和性为当前目标CPU，并在初始化流程中补充该调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/924c57a9fbea6075db25c5e16172dc050465c953

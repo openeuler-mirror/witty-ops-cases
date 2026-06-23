@@ -1,0 +1,22 @@
+#标题
+scsi: qla1280: 调试级别大于2时访问越界导致内核 oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核配置的 qla1280 驱动调试级别（debug level）大于 2 时，系统在执行 SCSI 命令处理流程中触发 kernel oops（段错误/空指针访问），导致系统崩溃或相关进程异常终止。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `qla1280_64bit_start_scsi` 函数的 Scatter/Gather 列表处理循环中，调试打印代码错误地调用了 `sg_next(s)` 来获取下一个 scatterlist 条目的地址并试图获取其长度（`sg_dma_len`）。
+在 Scatter/Gather 列表遍历到末尾时，当前条目 `s` 是最后一个有效条目，此时 `sg_next(s)` 返回 NULL。代码直接对 NULL 指针解引用以获取 dma 长度，从而触发内核 oops。
+
+#解决方案
+修正 `qla1280_64bit_start_scsi` 函数中调试打印语句的参数。
+将 `cpu_to_le32(sg_dma_len(sg_next(s)))` 修改为 `cpu_to_le32(sg_dma_len(s))`，确保打印的是当前正在处理的 scatterlist 条目的长度，而不是错误地预取并解引用下一个条目，从而避免越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9af1041f05d76435457d805d2d60c2aea1dc71f2

@@ -1,0 +1,31 @@
+#标题
+ocfs2写内联数据时发生越界写导致内存破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载于 loop 设备的受损 ocfs2 文件系统上执行 copy_file_range 操作（splice fallback 路径）时，触发 KASAN 报告“use-after-free write”。实际故障为越界写，写入操作溢出至相邻的已释放页面。系统调用栈追踪显示故障发生在 `ocfs2_write_end_inline` 函数的 `memcpy_from_folio` 调用处。
+
+#主要错误日志
+KASAN: use-after-free write of 4086 bytes in ocfs2_write_end_inline
+Call trace:
+ vfs_copy_file_range
+ do_splice_direct
+ splice_direct_to_actor
+ iter_file_splice_write
+ ocfs2_file_write_iter
+ generic_perform_write
+ ocfs2_write_end
+ ocfs2_write_end_nolock
+ ocfs2_write_end_inline
+ memcpy_from_folio     <-- KASAN: write OOB
+
+#问题根因
+根因在于 `ocfs2_try_to_write_inline_data` 函数在判断写入是否适合内联数据时，直接信任了磁盘上的 `id_count` 字段。当文件系统元数据损坏，`id_count` 字段值超过物理最大内联数据容量时，导致后续写入操作越界溢出 inode 块缓冲区。
+
+#解决方案
+在 `ocfs2_validate_inode_block` 函数中增加对 `id_count` 字段的合法性校验，检查其是否超过 `ocfs2_max_inline_data_with_xattr` 计算出的最大值。如果超过则判定 inode 无效并报错，防止后续写入操作发生越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/57f8ab9e486ea2568f347c65f453622e296b5b95

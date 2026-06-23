@@ -1,0 +1,22 @@
+#标题
+bpf: update_effective_progs 失败导致软中断中访问无效内存
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在注入故障导致 update_effective_progs 失败后，系统触发无效内存访问错误。具体表现为在软中断上下文执行 BPF 程序过滤时，访问 prog->stats 成员引发非法内存访问。
+
+#主要错误日志
+未知
+
+#问题根因
+故障注入导致 update_effective_progs 失败，进而调用 purge_effective_progs 将原始 prog 替换为 dummy_bpf_prog.prog。随后软中断发生，在 __cgroup_bpf_run_filter_skb 调用链中访问 dummy_bpf_prog.prog 的 stats 成员时，触发无效内存访问。dummy_bpf_prog 的 stats 成员为空，而代码未做判空保护直接进行 this_cpu_ptr 操作。
+
+#解决方案
+在访问 prog->stats 进行统计信息更新前增加判空检查。
+1. 在 __bpf_prog_run 函数中，使用 likely 修饰符判断 prog->stats 是否为空，若非空才执行 stats 相关的统计更新操作。
+2. 在 bpf_prog_inc_misses_counter 函数中，使用 unlikely 修饰符判断 prog->stats 是否为空，若为空直接返回，避免访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f5c68d70983f63dfd52f4976d25f86513841a3bb

@@ -1,0 +1,22 @@
+#标题
+vivid: 修复 compose 尺寸越界导致的 KASAN vmalloc 越界写漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 vivid 测试驱动时，触发 KASAN 检测到的 vmalloc 越界写入错误。具体表现为内核报告 "BUG: KASAN: vmalloc-out-of-bounds"，导致进程（如 vivid-000-vid-c）崩溃或系统不稳定。
+
+#主要错误日志
+BUG: KASAN: vmalloc-out-of-bounds in tpg_fill_plane_pattern drivers/media/common/v4l2-tpg/v4l2-tpg-core.c:2608 [inline]
+BUG: KASAN: vmalloc-out-of-bounds in tpg_fill_plane_buffer+0x1a9c/0x5af0 drivers/media/common/v4l2-tpg/v4l2-tpg-core.c:2705
+Write of size 1440 at addr ffffc9000d0ffda0 by task vivid-000-vid-c/5304
+
+#问题根因
+在 `vivid_vid_cap_s_selection` 函数中，合成尺寸不能大于 `fmt_cap_rect` 的尺寸。先前的代码逻辑中，`v4l2_rect_map_inside(compose, &fmt)` 被条件限制在 `if (dev->has_compose_cap)` 分支内执行。当 `has_compose_cap` 为 0 时，该边界检查函数未被调用，导致 compose 尺寸可能超出 fmt 边界，进而在后续缓冲区填充操作中引发越界写入。
+
+#解决方案
+将 `v4l2_rect_map_inside(compose, &fmt)` 函数调用移出 `if (dev->has_compose_cap)` 条件判断块，确保无论 `has_compose_cap` 状态如何，都会执行边界检查，从而保证 composition size 不会超过 fmt_cap_rect 的限制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/675085b6033af82de81b718ec352d09680ba3d1d

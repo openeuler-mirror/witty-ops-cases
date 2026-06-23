@@ -1,0 +1,20 @@
+#标题
+crypto: null算法在软中断上下文使用互斥锁导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 AF_ALG 相关操作时，由于 null 算法可能在 softirq（软中断）上下文中被释放，而代码中使用 mutex 进行保护，导致内核崩溃。此问题由 syzbot 测试发现。
+
+#主要错误日志
+未知
+
+#问题根因
+null 算法的默认 skcipher 实现使用了 mutex（互斥锁）进行并发保护。然而，该算法可能通过 af_alg 接口在 softirq（软中断）上下文中被释放。在 Linux 内核中，mutex 不能在原子上下文（包括软中断）中睡眠，因此导致了睡眠函数在原子上下文中被调用的错误，进而引发内核 panic 或 BUG。
+
+#解决方案
+将 `crypto_default_null_skcipher_lock` 从 mutex（互斥锁）替换为 spinlock（自旋锁），并使用 `spin_lock_bh` 和 `spin_unlock_bh` 变体来禁用底半部处理，确保在软中断上下文中的安全性。同时调整了 `crypto_get_default_null_skcipher` 函数的逻辑，将可能睡眠的内存分配操作（`crypto_alloc_sync_skcipher`）移至锁区域之外执行，避免在持有自旋锁时发生睡眠。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/40a9102a678091598e61e5aa15ef8dc62cb2c6ad

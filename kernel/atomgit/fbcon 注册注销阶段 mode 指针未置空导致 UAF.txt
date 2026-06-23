@@ -1,0 +1,45 @@
+#标题
+fbcon 注册注销阶段 mode 指针未置空导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在帧缓冲设备注销后，通过另一个 fb 设备执行删除模式操作时，触发 KASAN 检测到的 slab-use-after-free 错误，导致内核崩溃。
+
+复现步骤如下：
+1. 系统中已有 /dev/fb0，加载内核模块注册新设备 /dev/fb1；
+2. 通过 FBIOPUT_CON2FBMAP 将 fb1 的 mode 设置到全局 fb_display[] 数组；
+3. 将控制台从 fb 切换到 VGA（以便正常 rmmod）；
+4. 卸载内核模块，此时 fb1 的 modelist 被释放，fb_display[] 中留下悬空指针；
+5. 通过 fb0 发起系统调用尝试删除 mode，触发 UAF。
+
+#主要错误日志
+```
+BUG: KASAN: slab-use-after-free in fb_mode_is_equal+0x285/0x2f0
+Read of size 4 at addr ff11000001b3c69c by task syz.xxx
+...
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0xab/0xe0
+ print_address_description.constprop.0+0x2c/0x390
+ print_report+0xb9/0x280
+ kasan_report+0xb8/0xf0
+ fb_mode_is_equal+0x285/0x2f0
+ fbcon_mode_deleted+0x129/0x180
+ fb_set_var+0xe7f/0x11d0
+ do_fb_ioctl+0x6a0/0x750
+ fb_ioctl+0xe0/0x140
+ __x64_sys_ioctl+0x193/0x210
+ do_syscall_64+0x5f/0x9c0
+ entry_SYSCALL_64_after_hwframe+0x76/0x7e
+```
+
+#问题根因
+在帧缓冲设备注销流程中，仅释放了 fb_info->modelist 的内存，但未将 fb_display[] 数组中指向该已释放 mode 的指针置为 NULL。这导致后续通过 fbcon_mode_deleted 等接口访问 fb_display[] 时，读取到了已释放的内存地址，引发 Use-After-Free 问题。
+
+#解决方案
+在 do_unregister_framebuffer() 函数中销毁 modelist 之前，增加对 fbcon_delete_modelist() 的调用。该函数遍历 fb_display[] 数组，检查其中引用的 mode 是否位于即将释放的 modelist 中，如果存在则将对应的指针置为 NULL，从而避免悬空指针的产生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7bea8e26663ac9f3bc87c1229fab83eef173528a

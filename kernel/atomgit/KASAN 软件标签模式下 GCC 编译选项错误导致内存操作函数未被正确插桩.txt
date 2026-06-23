@@ -1,0 +1,23 @@
+#标题
+KASAN 软件标签模式下 GCC 编译选项错误导致内存操作函数未被正确插桩
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 CONFIG_KASAN_SW_TAGS 的情况下使用 GCC 13 及以上版本编译内核，由于编译器参数传递错误，`memcpy()`、`memmove()`、`memset()` 等内存操作函数未被编译器添加 `__asan_` 前缀。这导致内核实际运行时未调用到 KASAN 的插桩版本，使得 KASAN 机制对这些内存操作失效，无法检测相关的内存越界或错误访问。若同时启用了 CONFIG_FORTIFY_SOURCES，该问题可能被掩盖。
+
+#主要错误日志
+未知
+
+#问题根因
+GCC 仅支持 `-fasan-kernel-mem-intrinsic-prefix` 参数，而不支持 LLVM 中的 `-fhwasan-kernel-mem-intrinsic-prefix` 参数。在 KASAN Makefile 中，原本的代码逻辑未区分编译器类型，错误地向 GCC 传递了 `hwasan-kernel-mem-intrinsic-prefix` 参数。虽然 CONFIG_CC_HAS_KASAN_MEMINTRINSIC_PREFIX 配置项正确识别了编译器支持 mem-intrinsic prefix 能力，但构建脚本未能根据编译器类型选择正确的参数名称，导致 GCC 编译时未生效，编译器没有为内存操作函数生成预期的 `__asan_` 前缀调用。
+
+#解决方案
+修改 `scripts/Makefile.kasan`，在 `CONFIG_CC_HAS_KASAN_MEMINTRINSIC_PREFIX` 已定义的前提下，增加编译器类型判断逻辑：
+1. 若编译器为 GCC，使用 `-fasan-kernel-mem-intrinsic-prefix=1` 参数。
+2. 若编译器为 LLVM/Clang，使用 `-fhwasan-kernel-mem-intrinsic-prefix=1` 参数。
+以此确保在不同编译器下均能正确生成带有前缀的内存操作函数调用，恢复 KASAN 的检测能力。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ddada142ec27b0a18450e9d5353d36e46508875

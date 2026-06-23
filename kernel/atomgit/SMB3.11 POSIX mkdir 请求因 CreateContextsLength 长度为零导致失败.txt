@@ -1,0 +1,20 @@
+#标题
+SMB3.11 POSIX mkdir 请求因 CreateContextsLength 长度为零导致失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在客户端执行 mkdir 操作失败，返回 "invalid argument" 错误；卸载内核模块（rmmod）时在 cifs_destroy_request_bufs() 函数中发生崩溃。抓包分析显示 SMB2_POSIX_CREATE_CONTEXT 数据虽存在但长度字段被标记为零。
+
+#主要错误日志
+ksmbd server: "cli req too short"
+
+#问题根因
+函数 smb311_posix_mkdir() 在构建 SMB 创建请求时，虽然追加了 POSIX create context 数据，但未设置请求结构体中的 `req->CreateContextsLength` 字段，导致该字段值默认为零。ksmbd 服务器据此判断请求长度无效并拒绝请求。
+
+#解决方案
+在 smb311_posix_mkdir() 函数中，追加 POSIX creation context 后，调用 `le32_add_cpu` 函数将对应 iov 的长度累加到 `req->CreateContextsLength` 字段中，确保请求头中的长度字段与实际数据长度一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/adfc887a3cd50be3cacfaf26bd07b883e3c60e99

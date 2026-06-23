@@ -1,0 +1,21 @@
+#标题
+x86/CPU: AMD SC1100 SoC 系统热启动卡死问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 AMD SC1100 SoC（如 Soekris net4826 设备）的系统上执行热启动时，内核在打印 "Working around Cyrix MediaGX virtual DMA bugs." 日志后立即卡死，无法继续引导。若切断电源后重新冷启动，则能正常启动并打印后续的 CPU 配置日志。
+
+#主要错误日志
+[    0.081615] Working around Cyrix MediaGX virtual DMA bugs.
+（注：系统在此处卡死，后续预期的日志 "Enable Memory-Write-back mode on Cyrix/NSC processor." 未出现。）
+
+#问题根因
+引入问题的提交（18fb053f9b82）错误地修改了 Cyrix CPU 的 CCR2 寄存器配置。原代码在 `geode_configure` 函数中设置 CCR2 寄存器时使用了 `0x88` 掩码，错误地置位了 "Enable #SUSP pin"（Bit 7, 0x80）。在热启动场景下，该引脚状态未被正确清除（与冷启动不同），导致处理器在执行后续操作时进入异常挂起状态，从而引发系统死锁。
+
+#解决方案
+修改 `arch/x86/kernel/cpu/cyrix.c` 中的 `geode_configure` 函数，将 CCR2 寄存器的配置掩码从 `0x88` 修改为 `0x08`。这保留了 "Suspend on halt power saving" 功能（Bit 3），但去除了错误的 "Enable #SUSP pin" 设置（Bit 7），从而避免了热启动时的硬件挂起问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2bb0bdc596103ece07cc703bc64f08c46bb1242f

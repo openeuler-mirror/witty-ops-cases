@@ -1,0 +1,31 @@
+#标题
+TIPC 加密模块 slab-use-after-free 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除网络命名空间的并发场景下，TIPC 加密模块触发 KASAN 检测到的 slab-use-after-free 错误，导致内核报告 BUG 并打印调用栈。具体表现为在 `tipc_aead_encrypt_done` 函数中访问了已被释放的内存地址。
+
+#主要错误日志
+```
+BUG: KASAN: slab-use-after-free in tipc_aead_encrypt_done+0x4bd/0x510 net/tipc/crypto.c:840
+Read of size 8 at addr ffff88807a733000 by task kworker/1:0/25
+
+Call Trace:
+ kasan_report+0xd9/0x110 mm/kasan/report.c:601
+ tipc_aead_encrypt_done+0x4bd/0x510 net/tipc/crypto.c:840
+ crypto_request_complete include/crypto/algapi.h:266
+ aead_request_complete include/crypto/internal/aead.h:85
+ cryptd_aead_crypt+0x3b8/0x750 crypto/cryptd.c:772
+ ...
+```
+
+#问题根因
+当删除网络命名空间时，`tipc_crypto_stop` 会释放 `tipc_crypto` 对象。然而，如果在删除过程中，加密操作（`simd_aead_encrypt`）被中断导致无法在软中断上下文直接完成，工作被延迟到 `cryptd_queue_worker` 工作队列中处理。当工作队列随后执行 `tipc_aead_encrypt_done` 回调时，它试图访问已经被释放的 `tipc_crypto` 对象（特别是 `aead->crypto`），从而引发 use-after-free。
+
+#解决方案
+在 `tipc_aead_encrypt` 函数发起加密请求前，通过调用 `get_net(aead->crypto->net)` 增加网络命名空间的引用计数，确保在加密完成（包括异步回调 `tipc_aead_encrypt_done`）之前，关联的 `tipc_crypto` 对象所在的命名空间不会被释放。相应的，在加密完成后的清理路径或回调函数 `tipc_aead_encrypt_done` 中，调用 `put_net(net)` 释放引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/642714e72689b4194c82a4843545cc5106bfdf06

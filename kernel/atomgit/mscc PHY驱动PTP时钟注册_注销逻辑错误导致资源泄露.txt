@@ -1,0 +1,20 @@
+#标题
+mscc PHY驱动PTP时钟注册/注销逻辑错误导致资源泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+每次将网络接口设置 为down再up时，驱动会创建一个新的PTP时钟，且旧的PTP时钟未被注销。这导致PTP时钟资源泄露，随着接口状态切换次数增加，系统内部相关资源持续累积，可能影响后续PTP功能的正常使用或导致内存泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序的 PTP 时钟初始化逻辑位置不当。原实现在 `__vsc8584_init_ptp` 函数中调用 `ptp_clock_register` 并初始化 `mii_ts` 结构体，该函数在接口启动流程中被调用。这导致每次接口重启时都会重复注册新的 PTP 时钟，且未在接口关闭或驱动移除时调用 `ptp_clock_unregister` 进行清理。
+
+#解决方案
+将 PTP 时钟的注册与 `mii_ts` 结构体的初始化逻辑从接口初始化函数 (`__vsc8584_init_ptp`) 移动到驱动的 probe 阶段 (`vsc8584_ptp_probe`)，确保在驱动生命周期内仅注册一次。同时，新增 `vsc8584_ptp_deinit` 函数，在驱动移除 (`vsc85xx_remove`) 时调用 `ptp_clock_unregister` 注销 PTP 时钟并清理相关资源（如 `rx_skbs_list`），修复资源泄露问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/791afbc7a237950ef21459f6319f8a6bd95a325b

@@ -1,0 +1,26 @@
+#标题
+KVM 在 HIP12 平台 TLBI 广播时 MPIDR 到 SYS_LSUDVMBM_EL2 的 Aff3 转换错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HIP12 平台上运行 KVM 虚拟机时，TLBI（Translation Lookaside Buffer Invalidate）广播的 CPU bitmap 设置错误。由于 Die ID 和 Socket ID 在 MPIDR 与 SYS_LSUDVMBM_EL2 寄存器中的字段定义不同，错误的转换逻辑导致系统无法正确识别目标 CPU Die，进而可能导致 TLB 刷新广播发送到错误的 CPU 或未发送到必要的 CPU，影响虚拟机的内存一致性和系统稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 HIP12 平台上，MPIDR_EL1 的 Aff3 字段与 SYS_LSUDVMBM_EL2 寄存器中对应的 Die ID / Socket ID 字段布局不一致：
+1. MPIDR_EL1 中，Socket ID 位于 Aff3[4:3]，Die ID 位于 Aff3[2:0]。
+2. SYS_LSUDVMBM_EL2 中，Die1/Die2 的编码方式不同（例如 die1 由 bits[60:59] 的 socket ID 和 bits[58:57] 的 die ID 组成）。
+代码原有的转换逻辑错误地认为两者字段定义相同，直接进行了移位赋值，未进行字段重排和提取，导致写入 SYS_LSUDVMBM_EL2 的 CPU bitmap 信息错误。
+
+#解决方案
+修正 MPIDR Aff3 到 SYS_LSUDVMBM_EL2 Die 信息的转换逻辑：
+1. 新增 `convert_aff3_to_die_hip12` 函数，使用 `FIELD_GET` 宏分别从 Aff3 中提取 MPIDR_AFF3_SOCKET_ID_MASK 和 MPIDR_AFF3_DIE_ID_MASK。
+2. 将提取出的 Socket ID 左移 2 位与 Die ID 进行组合（`socket_id << 2 | die_id`），以符合 SYS_LSUDVMBM_EL2 的编码要求。
+3. 更新 `kvm_update_vm_lsudvmbm_hip12` 函数，在设置 Die1 和 Die2 时调用该转换函数，确保写入寄存器的值正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2526d62c9962ca80bead8778ec9b5a5ab00ddbc3

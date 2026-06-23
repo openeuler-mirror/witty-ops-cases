@@ -1,0 +1,26 @@
+#标题
+unic 网卡驱动 ethtool 统计信息与基础能力查询接口缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 ethtool 工具查询 ub 网口时存在问题：
+1. 无法查询到网卡的统计信息。
+2. 无法查询 FEC（前向纠错）和 Speed（速率）相关的配置信息。
+3. 在设备处于复位状态或通道未初始化时尝试获取统计信息，可能导致空指针访问或读取异常。
+
+#主要错误日志
+- 推断日志（基于 diff 中新增的错误检查分支）：
+  "unic %s: dev resetting or channel is null, could not get stats.\n"
+
+#问题根因
+驱动未实现 ethtool_ops 中的统计信息查询相关回调接口，导致无法获取统计信息。同时，基础能力查询接口未正确设置端口类型、速率、双工模式及 FEC 相关参数，且未对链路状态进行判断，导致查询结果缺失或不准确。
+
+#解决方案
+1. 实现 ethtool 统计信息查询接口：新增 `unic_get_stats`、`unic_get_stats_strings` 和 `unic_get_sset_count` 接口，并注册到 `unic_ethtool_ops` 结构体中，支持遍历并读取 TX/RX 队列的统计数据。
+2. 完善基础能力查询接口：新增 `unic_get_port_type` 和 `unic_get_ksettings` 函数，根据硬件介质类型填充端口类型、速率、双工、自协商及 FEC 等信息；当链路状态为 Down 时，将速率和双工设置为 UNKNOWN。
+3. 增加防御性检查：在获取统计信息时增加对设备复位状态和通道指针有效性的检查，避免异常流程下的非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/15bde327170a99bf1cc5e4869d70872c53b69ba6

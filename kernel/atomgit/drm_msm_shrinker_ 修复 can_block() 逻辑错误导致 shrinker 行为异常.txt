@@ -1,0 +1,26 @@
+#标题
+drm/msm/shrinker: 修复 can_block() 逻辑错误导致 shrinker 行为异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DRM MSM 显存收缩逻辑中，`can_block()` 函数的实现与预期意图不符，导致在应当允许阻塞的场景下错误地返回 false，或者在不应阻塞的场景下判断失误。这可能导致在直接回收或 kswapd 回收过程中，shrinker 无法按预期执行阻塞操作，进而影响内存回收效率或导致不正确的内存管理行为。
+
+#主要错误日志
+未知
+
+#问题根因
+`can_block()` 函数的逻辑实现错误。
+原代码逻辑为：`if (!(sc->gfp_mask & __GFP_DIRECT_RECLAIM)) return false;`，即仅当 GFP 掩码不支持直接回收时才返回 false，否则检查是否为 kswapd 或包含 RECLAIM 标志。
+修复前的逻辑无法正确实现“仅在 DIRECT_RECLAIM 场景或（kswapd 且 KSWAPD_RECLAIM 场景）下允许阻塞”的意图，导致判断条件混乱。
+
+#解决方案
+修正 `can_block()` 函数的返回逻辑。
+将判断条件修改为：`(sc->gfp_mask & __GFP_DIRECT_RECLAIM) || (current_is_kswapd() && (sc->gfp_mask & __GFP_KSWAPD_RECLAIM))`。
+该逻辑明确规定了允许阻塞的两种合法情况：
+1. 当前上下文允许直接回收（DIRECT_RECLAIM）。
+2. 当前进程是 kswapd 且允许 kswapd 回收（KSWAPD_RECLAIM）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/079d65da5ede0de81a7e095ea6bdbb499e23a8c3

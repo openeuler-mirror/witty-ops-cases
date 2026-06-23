@@ -1,0 +1,20 @@
+#标题
+spufs: spufs_new_file() 失败导致的 dentry 泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 spufs 文件系统填充目录（spufs_fill_dir）过程中，若 spufs_new_file() 函数调用失败，会导致内存泄漏。具体表现为内核对象（dentry）未被正确释放，随着失败次数增加可能消耗系统内存资源。该问题关联 CVE-2025-22073。
+
+#主要错误日志
+未知
+
+#问题根因
+在 spufs_fill_dir() 函数中，当调用 spufs_new_file() 失败时，虽然上层调用者（spufs_create_context 或 spufs_mkdir 等）会在失败路径下调用 spufs_rmdir() 清理已创建的文件，但此时失败的 dentry 仍然是 negative（负状态，未关联 inode）。spufs_rmdir() 仅能移除已成功创建的项，无法处理这种未被关联的 dentry，导致该 dentry 未被释放从而引发泄漏。
+
+#解决方案
+在 spufs_fill_dir() 函数中，当 spufs_new_file() 调用失败时，在返回错误码之前显式调用 dput(dentry) 来释放该 dentry 的引用计数，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/281a15a2099b1fa0f86b1474ea290b018b0b9665

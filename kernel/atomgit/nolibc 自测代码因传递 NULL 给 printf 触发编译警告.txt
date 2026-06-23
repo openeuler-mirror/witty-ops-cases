@@ -1,0 +1,20 @@
+#标题
+nolibc 自测代码因传递 NULL 给 printf 触发编译警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Clang 编译器并开启较高优化级别（如 -O2 或更高）编译内核自测工具 `tools/testing/selftests/nolibc/nolibc-test.c` 时，编译器检测到向 `printf("%s")` 传递 NULL 参数的行为并产生警告。虽然 nolibc 的 printf 实现可以容错处理 NULL 指针，但该行为违反 POSIX 标准（属于未定义行为），导致构建过程中出现编译器报警，可能影响构建的严谨性或触发构建失败（视编译选项而定）。
+
+#主要错误日志
+未知
+
+#问题根因
+测试用例中的 `expect_strzr` 和 `expect_strnz` 函数在打印表达式结果时，直接将 `expr` 指针传递给 `printf("%s")`。当测试预期失败或表达式结果为 NULL 时，`expr` 指针为 NULL。根据 POSIX 标准，向 `printf` 的 `%s` 格式符传递 NULL 属于未定义行为，Clang 编译器在优化级别较高时会针对此潜在风险发出警告。
+
+#解决方案
+修改 `tools/testing/selftests/nolibc/nolibc-test.c` 文件中的 `printf` 调用，使用三元运算符对可能为 NULL 的指针进行处理。将原来的 `printf(" = <%s> ", expr)` 修改为 `printf(" = <%s> ", expr ? expr : "(null")`。这样当 `expr` 为 NULL 时，会传递字符串常量 "(null)" 给 printf，从而消除未定义行为和编译器警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e3a8ebd07a583f2c232b27a5ba04fbabd02d03eb

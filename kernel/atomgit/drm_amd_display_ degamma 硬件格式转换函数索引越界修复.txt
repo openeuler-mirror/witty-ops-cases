@@ -1,0 +1,22 @@
+#标题
+drm/amd/display: degamma 硬件格式转换函数索引越界修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD 显示驱动 `cm_helper_translate_curve_to_degamma_hw_format` 函数执行过程中，存在数组索引越界风险。当索引变量 'i' 超过传输函数点数（TRANSFER_FUNC_POINTS）时，可能触发缓冲区溢出，导致内核内存破坏或程序异常行为。该问题由静态分析工具 smatch 检测发现。
+
+#主要错误日志
+drivers/gpu/drm/amd/amdgpu/../display/dc/dcn10/dcn10_cm_common.c:594 cm_helper_translate_curve_to_degamma_hw_format() error: buffer overflow 'output_tf->tf_pts.red' 1025 <= s32max
+drivers/gpu/drm/amd/amdgpu/../display/dc/dcn10/dcn10_cm_common.c:595 cm_helper_translate_curve_to_degamma_hw_format() error: buffer overflow 'output_tf->tf_pts.green' 1025 <= s32max
+drivers/gpu/drm/amd/amdgpu/../display/dc/dcn10/dcn10_cm_common.c:596 cm_helper_translate_curve_to_degamma_hw_format() error: buffer overflow 'output_tf->tf_pts.blue' 1025 <= s32max
+
+#问题根因
+在函数 `cm_helper_translate_curve_to_degamma_hw_format` 中，循环遍历传输函数点时，索引变量 'i' 的值未进行有效边界检查。当 'i' 增长超过数组定义的最大长度 `TRANSFER_FUNC_POINTS`（1025）时，代码仍尝试访问 `output_tf->tf_pts` 结构体中的 red、green、blue 数组，从而导致缓冲区溢出越界。
+
+#解决方案
+在访问数组元素前增加边界检查条件。具体修改为：在循环内判断索引 'i' 是否大于或等于 `TRANSFER_FUNC_POINTS`，若条件成立则直接返回 `false` 以终止转换过程并报错，防止越界访问发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7386ada53db9d09db09ff5324ba062b4d6aba0fb

@@ -1,0 +1,20 @@
+#标题
+rkvdec 驱动帧大小枚举接口返回类型错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+调用 VIDIOC_ENUM_FRAMESIZES ioctl 查询设备支持的帧尺寸时，对于编码格式，驱动错误地返回了 STEPWISE（阶跃）类型的帧大小。这导致应用程序错误地感知硬件对齐要求，将其作为严格的格式限制，而不是获得指示硬件解码器最大支持帧大小的连续范围信息。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 rkvdec_enum_framesizes 函数中，直接将帧大小类型设置为 V4L2_FRMSIZE_TYPE_STEPWISE 并拷贝了包含硬件对齐限制的 frmsize 参数。对于编码格式，这种做法不合理，因为它将 CAPTURE 缓冲区的硬件对齐要求暴露给了用户，而用户实际需要知道的是硬件解码器支持的最大帧大小范围。
+
+#解决方案
+修改 rkvdec_enum_framesizes 函数逻辑，将返回类型更改为 V4L2_FRMSIZE_TYPE_CONTINUOUS。同时调整返回参数：将最小宽/高设为 1，最大宽/高保持为 fmt->frmsize 的最大值，步长设为 1。以此向应用层正确指示硬件支持的最大帧大小范围，而非暴露内部对齐细节。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d938ab2ee1d222e5450f62df0a2b2a98f8954945

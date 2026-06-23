@@ -1,0 +1,20 @@
+#标题
+memory: mtk-smi: 设备引用计数泄漏导致潜在内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动探测失败（如探测延迟 deferral）或驱动解绑时，mtk-smi 子系统的设备对象引用计数未被正确释放。这会导致内核对象无法被回收，造成内存泄漏；若反复触发探测失败，可能最终耗尽系统内存资源。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `mtk_smi_device_link_common` 流程中通过 `driver_find_device` 或类似机制查找 SMI 设备时增加了设备的引用计数，但在探测失败的错误处理路径（如 `err_pm_disable` 标签处）以及驱动的移除/解绑回调函数（`mtk_smi_common_remove`）中，仅调用了 `device_link_remove` 移除了设备链接，却遗漏了调用 `put_device()` 来释放之前获取的设备引用，导致设备对象引用计数泄漏。
+
+#解决方案
+在驱动探测失败的处理路径 `mtk_smi_larb_probe` 函数的 `err_pm_disable` 标签处，以及在驱动移除函数 `mtk_smi_common_remove` 中，补充调用 `put_device(larb->smi_common_dev)` 或 `put_device(common->smi_common_dev)`，确保设备引用计数被正确归还，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9b10051ce211c53688203fd2fe6079e035add6b6

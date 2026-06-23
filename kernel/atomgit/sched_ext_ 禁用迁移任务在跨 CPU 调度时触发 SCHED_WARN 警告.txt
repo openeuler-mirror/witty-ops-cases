@@ -1,0 +1,42 @@
+#标题
+sched_ext: 禁用迁移任务在跨 CPU 调度时触发 SCHED_WARN 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 sched_ext 调度类的任务分发时，若尝试将一个处于“禁用迁移”状态的任务分发到远程 RQ（Run Queue），会触发内核 WARNING 警告。此时内核检测到任务处于 `is_migration_disabled` 状态，但逻辑上本应在此之前被拦截，导致调用栈回溯并打印调度器警告信息。
+
+#主要错误日志
+WARNING: CPU: 8 PID: 1837 at kernel/sched/ext.c:2466 task_can_run_on_remote_rq+0x12e/0x140
+Sched_ext: layered (enabled+all), task: runnable_at=-10ms
+RIP: 0010:task_can_run_on_remote_rq+0x12e/0x140
+...
+ <TASK>
+ consume_dispatch_q+0xab/0x220
+ scx_bpf_dsq_move_to_local+0x58/0xd0
+ bpf_prog_84dd17b0654b6cf0_layered_dispatch+0x290/0x1cfa
+ bpf__sched_ext_ops_dispatch+0x4b/0xab
+ balance_one+0x1fe/0x3b0
+ balance_scx+0x61/0x1d0
+ prev_balance+0x46/0xc0
+ __pick_next_task+0x73/0x1c0
+ __schedule+0x206/0x1730
+ schedule+0x3a/0x160
+ __do_sys_sched_yield+0xe/0x20
+ do_syscall_64+0xbb/0x1e0
+ entry_SYSCALL_64_after_hwframe+0x77/0x7f
+
+#问题根因
+在修复禁用迁移任务处理的先前提交中，代码错误地假设：如果一个任务被禁用迁移，其 `->cpus_ptr` 指针只会包含被锁定的 CPU。
+实际上，`->cpus_ptr` 的更新是由 `migrate_disable_switch()` 在 `__scheduler()` 中进行上下文切换之前调用的。然而，任务会通过 `put_prev_task_scx()` 在 `pick_next_task()` 期间更早地被重新入队。这导致存在一个竞态窗口：另一个 CPU 可以在该窗口期间看到该任务位于 DSQ（调度队列）上。
+如果 CPU 在此窗口期间尝试分发该禁用迁移的任务，`task_allowed_on_cpu()` 检查会成功通过（因为 `cpus_ptr` 尚未更新为仅含锁定 CPU），随后 `task_can_run_on_remote_rq()` 会触发 `SCHED_WARN(is_migration_disabled())` 警告。
+
+#解决方案
+将 `SCHED_WARN()` 断言恢复为常规的失败路径处理。具体修改如下：
+1. 在 `task_can_run_on_remote_rq()` 函数中，先于 `task_allowed_on_cpu()` 执行 `is_migration_disabled()` 测试。这样可以在竞态窗口内正确拦截禁用迁移的任务，避免触发警告。
+2. 如果 BPF 调度器试图在此状态下移动任务，将触发 `scx_ops_error` 错误记录而非内核警告，便于发现 BPF 调度器处理逻辑的缺失。
+3. 调整了 `!task_allowed_on_cpu()` 情况下的 `scx_ops_error` 日志格式，使其更加简洁一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/84fed22d33990cfd08db972cdb46f02a4ed3e843

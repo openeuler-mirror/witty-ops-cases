@@ -1,0 +1,20 @@
+#标题
+soc: qcom: smem: fix hwspinlock resource leak in probe error paths
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 qcom_smem 驱动探测（probe）过程中，若因错误提前退出，此前已通过 hwspin_lock_request_specific() 获取的硬件自旋锁未被释放，导致硬件自旋锁资源泄露。该问题会导致资源无法被其他模块复用，潜在影响系统后续的并发控制与硬件访问。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 probe 阶段调用 hwspin_lock_request_specific() 获取锁资源，但在多个错误处理路径中未调用 hwspin_lock_free() 进行释放。这属于资源管理缺陷，导致 probe 失败时资源无法自动回收。此外，remove 函数中保留了手动释放逻辑，未能与 probe 中的资源获取方式形成托管闭环。
+
+#解决方案
+将 hwspin_lock_request_specific() 替换为资源托管版本 devm_hwspin_lock_request_specific()。利用设备资源管理机制，在 probe 失败或设备移除时自动释放 hwspinlock，从而修复资源泄露问题。同时移除 qcom_smem_remove() 中冗余的 hwspin_lock_free() 调用，避免重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/98500be1a58d71d9c943667b967b70d0d9bcd24f

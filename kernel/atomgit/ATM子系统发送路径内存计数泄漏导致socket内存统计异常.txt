@@ -1,0 +1,20 @@
+#标题
+ATM子系统发送路径内存计数泄漏导致socket内存统计异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ATM设备驱动发送流程中，若`copy_from_iter_full`拷贝数据失败，会导致socket发送缓冲区内存计数（`sk_wmem_alloc`）无法正确回退，造成内存统计泄漏。这可能触发虚假的内存压力告警，导致后续发送操作被错误限流或阻塞，严重时影响ATM通信功能的正常运行。
+
+#主要错误日志
+未知
+
+#问题根因
+在`vcc_sendmsg`函数处理流程中，数据拷贝前调用了`atm_account_tx`对socket发送缓冲区进行了记账。当后续`copy_from_iter_full`执行失败时，代码直接释放了skb结构，但遗漏了调用`atm_return_tx`（或相应的回退操作）来扣减之前增加的内存计数，导致`sk_wmem_alloc`计数泄漏。同时，修复补丁统一了`atm_pop_raw`中的处理逻辑，移除了直接调用`WARN_ON(refcount_sub_and_test(...))`的方式，改用标准的`atm_return_tx`接口进行内存回退。
+
+#解决方案
+在`vcc_sendmsg`函数的错误处理路径中，即在`copy_from_iter_full`失败后、`kfree_skb`之前，增加调用`atm_return_tx(vcc, skb)`，确保在释放skb前正确回退之前增加的内存计数。同时，新增`atm_return_tx`内联函数封装内存回退逻辑，并将`atm_pop_raw`中的原有逻辑替换为调用该接口，以统一代码逻辑并消除直接操作引用计数的潜在风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/270282e8a30544fb3e3066bcb8e2464efdb3d8c5

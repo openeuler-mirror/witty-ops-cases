@@ -1,0 +1,25 @@
+#标题
+nvme: nvme_init_effects 未处理 xa_store 失败导致潜在内存泄漏或状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NVMe 驱动初始化过程中（`nvme_init_effects`），若系统内存不足，`xa_store` 操作可能失败。由于原代码缺少对 `xa_store` 返回值的错误检查，可能导致以下隐患：
+1. 内存分配失败时未进行错误处理，可能导致内核状态不一致。
+2. 分配的内存对象（`ctrl->effects`）在 `xa_store` 失败后未被正确释放，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `nvme_init_effects` 中调用 `xa_store()` 将 `NVME_CSI_NVM` 索引存入 `xarray` 时，未检查其返回值。`xa_store()` 可能因内存分配失败而返回错误（通过 `xa_is_err` 判断），原代码直接忽略了这一可能的失败路径。此外，辅助函数 `nvme_init_effects_log` 中的 `kzalloc` 返回值判断逻辑存在笔误（`if (effects)` 应为 `if (!effects)`），导致内存分配成功时反而返回了 `-ENOMEM`，这进一步阻碍了正确的错误处理流程。
+
+#解决方案
+1. 新增辅助函数 `nvme_init_effects_log`，统一处理 `kzalloc` 内存分配和 `xa_store` 存储操作。
+2. 在新函数中增加对 `xa_store` 返回值的检查：若 `xa_is_err(old)` 为真，则释放已分配的内存并返回错误码。
+3. 修正 `kzalloc` 的错误检查逻辑，确保仅在分配失败时返回错误。
+4. 在 `nvme_init_effects` 中调用该封装函数，并正确处理其返回的错误码，确保初始化失败时能够正确向上传递错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2b8d20533782844530ecbb278941ae453afc578a

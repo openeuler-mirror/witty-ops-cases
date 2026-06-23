@@ -1,0 +1,20 @@
+#标题
+bpf: btf_parse_module 错误处理缺陷导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 BPF 程序或模块过程中，若 `btf_parse_base()` 函数返回错误指针（error pointer），内核在后续处理流程中调用 `btf_free(base_btf)` 时会触发崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `btf_parse_module` 函数的错误处理路径（errout）中，代码直接检查 `base_btf != vmlinux_btf` 便调用 `btf_free(base_btf)`。由于 `btf_parse_base()` 可能返回一个错误指针（ERR_PTR），而非 NULL 或有效指针，直接对错误指针调用 `btf_free()` 导致了内核崩溃。根本原因是在使用 `base_btf` 前缺少 `IS_ERR()` 校验。
+
+#解决方案
+在调用 `btf_free(base_btf)` 前，增加 `!IS_ERR(base_btf)` 判断条件。确保只有当 `base_btf` 不是错误指针且不等于 `vmlinux_btf` 时，才执行释放操作，从而避免对错误指针进行解引用或非法内存操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa3ec7179fa0134f5b57816799f8c4814705a3d4

@@ -1,0 +1,20 @@
+#标题
+RDMA/rtrs: server模块get_or_create_srv函数错误处理路径资源释放不当
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在RDMA rtrs服务端模块的 `get_or_create_srv` 函数中，当设备初始化后发生错误（如内存分配失败）并进入错误处理路径时，存在资源释放方式不规范的问题。该问题通过代码审查发现，虽然直接使用 `kfree` 释放内存可能不会立即导致系统崩溃，但违反了内核设备管理规则，可能引发潜在的引用计数泄漏或设备状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `get_or_create_srv` 函数中，代码流程已经调用了 `device_initialize()` 对设备结构体进行了初始化。根据Linux内核设备管理规则，一旦设备被初始化，必须通过 `put_device()` 来释放该设备（该函数会处理引用计数并在必要时调用 release 回调）。原代码在错误处理分支 `err_free_srv` 中直接调用了 `kfree(srv)`，绕过了设备引用计数管理机制，属于不正确的资源释放方式。
+
+#解决方案
+修改 `drivers/infiniband/ulp/rtrs/rtrs-srv.c` 文件中 `get_or_create_srv` 函数的错误处理路径。将 `err_free_srv` 标签下的 `kfree(srv)` 替换为 `put_device(&srv->dev)`，确保设备资源通过标准的设备模型接口释放，符合内核编程规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/341d39d19fbc65afdfdf43b367ba18745217a4ed

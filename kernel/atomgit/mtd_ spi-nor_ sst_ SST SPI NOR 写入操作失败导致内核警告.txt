@@ -1,0 +1,30 @@
+#标题
+mtd: spi-nor: sst: SST SPI NOR 写入操作失败导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在向 SST 品牌的 SPI NOR Flash 设备执行写入操作时，触发内核 WARNING 并打印调用栈。系统检测到写入的字节数与请求的字节数不匹配（例如请求写入 2 字节但实际仅写入 1 字节），导致写入操作失败。
+
+#主要错误日志
+[   57.404842] While writing 2 byte written 1 bytes
+[   57.409493] WARNING: CPU: 0 PID: 737 at drivers/mtd/spi-nor/sst.c:187 sst_nor_write_data+0x6c/0x74
+[   57.418464] Modules linked in:
+[   57.421517] CPU: 0 UID: 0 PID: 737 Comm: mtd_debug Not tainted 6.12.0-g5ad04afd91f9 #30
+[   57.530354] Call trace:
+[   57.534361]  sst_nor_write_data+0x6c/0x74
+[   57.538019]  sst_nor_write+0xb4/0x18c
+[   57.541941]  mtd_write_oob_std+0x7c/0x88
+[   57.545511]  mtd_write_oob+0x70/0xbc
+[   57.548733]  mtd_write+0x68/0xa8
+[   57.552477]  mtdchar_write+0x10c/0x290
+
+#问题根因
+提交 18bcb4aa54ea ("mtd: spi-nor: sst: Factor out common write operation to `sst_nor_write_data()`") 引入了缺陷。在 `sst_nor_write_data` 函数中，调用 `spi_nor_write_data` 时，长度参数被错误地硬编码为 `1`，而不是使用传入的参数 `len`。这导致无论上层请求写入多少字节，驱动实际只写入 1 个字节，从而触发 `WARN(ret != len, ...)` 检查逻辑并导致写操作失败。
+
+#解决方案
+修改 `drivers/mtd/spi-nor/sst.c` 文件中 `sst_nor_write_data` 函数的调用参数。将 `spi_nor_write_data(nor, to, 1, buf)` 中的长度参数从 `1` 修正为 `len`，确保写入的字节数与函数传入的参数一致，从而修复写入失败问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b65e0e69a9044e9aad008f3bb96470b9dcfbfb5e

@@ -1,0 +1,20 @@
+#标题
+net: dsa: microchip: Fix incorrect error check on irq_find_mapping() return value
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Microchip KSZ 系列 DSA 交换机驱动在初始化中断（如 PHY 中断或端口中断）时，对 `irq_find_mapping()` 返回值的判断逻辑存在错误。若无法找到 IRQ 映射（函数返回 0），驱动未能正确进入错误处理流程，可能导致后续中断注册或处理逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`irq_find_mapping()` 函数返回正数 IRQ 号或 0（表示未找到映射），且从不返回负值。驱动代码中错误地使用了 `if (irq < 0)` 和 `if (pirq->irq_num < 0)` 来检查返回值，导致当返回 0 时错误处理路径未被触发，无法正确处理 IRQ 映射失败的情况。
+
+#解决方案
+修改 `drivers/net/dsa/microchip/ksz_common.c` 中的判断逻辑，将 `irq_find_mapping()` 返回值的检查条件从“小于 0”修改为“等于 0”（即 `if (!irq)` 和 `if (!pirq->irq_num)`）。当返回 0 时，显式返回 `-EINVAL` 错误码，确保能正确捕获映射失败的情况并进入错误处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e3cea72cfecbb8abdcc36769c250975a50468e4

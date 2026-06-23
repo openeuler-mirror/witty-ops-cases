@@ -1,0 +1,30 @@
+#标题
+perf/x86/intel: icl_update_topdown_event 错误调用导致通用保护故障崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RaptorLake 机器上运行 perf_fuzzer 时触发内核硬锁死崩溃，导致通用保护故障。该问题特定发生于不支持 perf metrics 特性的 E-core CPU（如 CPU 16-23）上，表现为内核 Oops。
+
+#主要错误日志
+Oops: general protection fault, maybe for address 0xffff89aeceab400: 0000
+CPU: 23 UID: 0 PID: 0 Comm: swapper/23
+Tainted: [W]=WARN
+Hardware name: Dell Inc. Precision 9660/0VJ762
+RIP: 0010:native_read_pmc+0x7/0x40
+Call Trace:
+  <TASK>
+  icl_update_topdown_event+0x165/0x190
+  ? ktime_get+0x38/0xd0
+  intel_pmu_read_event+0xf9/0x210
+  __perf_event_read+0xf9/0x210
+
+#问题根因
+这是由提交 f9bdf1f95339 引入的回归缺陷。在 `intel_pmu_read_event` 函数中，错误地使用了 `is_topdown_event()` 函数来替换原有的 `is_topdown_count()` 调用，用于检查是否应调用 topdown 相关功能。由于判断条件错误，导致在不支持 perf metrics 特性的 E-core CPU 上错误触发了 `icl_update_topdown_event()` 函数调用，进而引发崩溃。
+
+#解决方案
+修正判断逻辑，将 `intel_pmu_read_event` 函数中的条件判断从 `is_topdown_event(event)` 恢复为 `is_topdown_count(event)`，确保仅在符合计数条件时才调用 topdown 事件更新函数，避免在不支持的 CPU 上错误执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/972500f1bdc5fb60b474b74bbbc701cebce76eb7

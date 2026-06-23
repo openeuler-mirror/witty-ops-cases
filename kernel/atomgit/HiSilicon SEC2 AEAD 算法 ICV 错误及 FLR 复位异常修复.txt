@@ -1,0 +1,46 @@
+#标题
+HiSilicon SEC2 AEAD 算法 ICV 错误及 FLR 复位异常修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 使用 HiSilicon SEC2 引擎进行 AEAD（如 GCM/CCM 模式）加密解密操作时，可能出现 ICV（Integrity Check Value）校验错误，导致解密失败或数据完整性校验不通过。
+2. 在 SEC2 设备执行 FLR（Function Level Reset）复位过程中，如果发生 ECC 多比特错误，复位流程可能无法正确恢复硬件状态，导致设备不可用或复位挂起。
+3. TRNG（真随机数生成器）模块在高并发场景下，因硬件设备不足导致初始化或获取随机数失败，返回 -EBUSY 错误。
+
+#主要错误日志
+- pci_err(pdev, "FLR not ready!\n");
+- pci_err(pdev, "the hardware error was not recovered!\n");
+- pci_err(pdev, "Failed to stop QM, ret = %d.\n", ret);
+- pci_info(pdev, "FLR resetting prepare failed!\n");
+- dev_err(dev, "AUTH key length error!\n");
+- dev_err(dev, "set sec fallback key err!\n");
+- pr_err("Can not alloc rng!\n");
+
+#问题根因
+1. **AEAD 算法 ICV 错误**：驱动在处理 AEAD 请求时，从上下文 `ctx->a_ctx.mac_len` 获取认证长度（authsize）的值可能过时或不正确，未实时从 TFM 中获取当前配置的 authsize，导致硬件配置与实际请求不匹配。
+2. **AEAD authsize 设置无效**：`sec_aead_setauthsize` 函数在存在 fallback 处理时直接返回，未正确将 authsize 配置给硬件或 fallback tfm，导致后续计算使用错误的认证长度。
+3. **FLR 复位逻辑缺陷**：`hisi_qm_reset_prepare` 中，错误报告（error report）的卸载时机和 ECC 错误检查的逻辑顺序不合理。在检测到 ECC 错误时，未正确清除复位位并等待恢复，直接返回导致复位流程异常终止。
+4. **TRNG 并发限制**：TRNG 驱动仅支持单一硬件上下文，当多个上下文并发初始化时，无法获取空闲硬件设备直接报错退出，缺乏软件算法 fallback 机制。
+
+#解决方案
+1. **SEC2 AEAD 修复**：
+   - 移除 `ctx->a_ctx.mac_len` 的缓存机制，改为在填充硬件 SQE 时实时调用 `crypto_aead_authsize(tfm)` 获取正确的认证长度。
+   - 修正 `sec_aead_setauthsize` 接口实现，确保 authsize 正确设置。
+   - 调整 `sec_aead_setkey` 逻辑，移除冗余的 mac_len 参数传递，统一从 tfm 获取关键参数。
+   - 将 `fallback` 标志位移至 `sec_aead_req` 结构体中管理，优化 AEAD 请求处理流程。
+
+2. **QM 模块 FLR 流程修复**：
+   - 重构 `hisi_qm_reset_prepare` 函数逻辑，在循环中优先检查复位准备状态。
+   - 调整 `hisi_qm_dev_err_uninit` 的调用位置，确保在合适的时机关闭错误报告。
+   - 增加对 ECC 多比特错误的恢复处理：若检测到错误，清除复位位并休眠等待，超时后报错退出。
+   - 增加 `hisi_qm_cache_wb` 操作以确保复位前缓存回写。
+
+3. **TRNG 模块增强**：
+   - 在 Kconfig 中增加 `CRYPTO_DRBG_CTR` 依赖。
+   - 引入软件随机数算法（drbg）作为 fallback：当硬件 TRNG 设备全部被占用（is_used 为 true）时，自动分配并使用软件算法生成随机数，解决高并发下的 -EBUSY 问题。
+   - 优化设备引用计数逻辑，使用 `ctx_num` 替代简单的 `is_used` 布尔值，支持多上下文管理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aed150e25d79a1ec90704ebe1eed8718880dc226

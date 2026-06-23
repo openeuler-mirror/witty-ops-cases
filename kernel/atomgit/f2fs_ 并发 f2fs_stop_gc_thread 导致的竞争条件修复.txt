@@ -1,0 +1,20 @@
+#标题
+f2fs: 并发 f2fs_stop_gc_thread 导致的竞争条件修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发执行文件系统关闭操作（f2fs_do_shutdown）时，由于锁保护机制不足，存在与其他关闭路径或 remount 操作发生竞争的风险，可能导致内核状态不一致或未定义的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `f2fs_do_shutdown` 函数中，处理关闭流程时原本使用的是 `down_read(&sbi->sb->s_umount)` 读锁。由于 GC 线程停止操作会修改文件系统的关键状态，读锁无法阻止其他 shutdown 路径或 remount 操作同时进入临界区，从而引发竞争条件。
+
+#解决方案
+将 `f2fs_do_shutdown` 中对 `sbi->sb->s_umount` 锁的获取方式从读锁（`down_read`）修改为写锁（`down_write`），并在对应位置使用 `up_write` 释放锁。这确保了在停止 GC 线程和 discard 线程等关键操作期间，与其他 shutdown 路径及 remount 操作互斥，消除了竞争风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d0726f034a65c945bc2713ab789f95f86da4f0b8

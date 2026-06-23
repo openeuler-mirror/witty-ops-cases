@@ -1,0 +1,20 @@
+#标题
+qcom camss 驱动 probe 失败路径下媒体设备资源未释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm CAMSS 驱动加载过程中（probe 阶段），若 v4l2_device_register 注册失败，驱动将错误地跳过媒体设备资源的清理步骤，导致已分配的资源发生泄漏。
+
+#主要错误日志
+dev_err(dev, "Failed to register V4L2 device: %d\n", ret);
+
+#问题根因
+驱动在 probe 过程中调用了 media_device_init() 初始化媒体设备，但在 v4l2_device_register() 失败的错误处理路径中，直接跳转到了 err_genpd_cleanup 标签，遗漏了 media_device_cleanup() 的调用。这违反了资源分配与释放的配对原则，导致资源泄漏。虽然在驱动的 .remove() 接口中正确处理了清理，但 .probe() 的错误路径自引入之初便存在此缺陷。
+
+#解决方案
+修改 camss_probe 函数中的错误处理跳转逻辑。在 v4l2_device_register 失败时，将跳转目标从 err_genpd_cleanup 改为新增的 err_media_device_cleanup 标签，并在该标签处增加 media_device_cleanup() 调用，确保在注册失败时能正确释放 media_device_init() 分配的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c6f5a9b7485eae9e57e26d7ee0a07ebaff9d75fa

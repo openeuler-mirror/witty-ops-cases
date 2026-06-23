@@ -1,0 +1,20 @@
+#标题
+RDMA/ocrdma: ocrdma_copy_pd_uresp 函数错误处理流程导致空指针解址
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 ocrdma_copy_pd_uresp 函数时，若执行流程进入错误处理分支（如 ib_copy_to_udata 失败），内核将发生空指针解址，导致系统崩溃或 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 ocrdma_copy_pd_uresp 中，pd->uctx 指针直到函数执行后期才被赋值初始化。然而，函数内部的错误处理代码段（ucopy_err 和 dpp_map_err 标签处）错误地引用了 pd->uctx。当错误发生在 pd->uctx 初始化之前触发错误处理流程时，pd->uctx 的值为 NULL，传递给 ocrdma_del_mmap 函数导致 NULL 指针解址。
+
+#解决方案
+修改 drivers/infiniband/hw/ocrdma/ocrdma_verbs.c 文件中 ocrdma_copy_pd_uresp 函数的错误处理代码。将 ocrdma_del_mmap 调用中的参数从未初始化的 pd->uctx 替换为函数参数 uctx（该参数由调用者传入且非空），从而确保在错误路径中正确清理资源而不会发生空指针崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7933df73fc38a0c9a7212ea5227948dbf471dc51

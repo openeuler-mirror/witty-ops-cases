@@ -1,0 +1,23 @@
+#标题
+f2fs inline inode 未写入时 fiemap 返回错误的文件地址映射
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 inline inode 数据尚未持久化（unwritten）且执行 fiemap 操作未设置 `FIEMAP_FLAG_SYNC` 标志时，fiemap 返回错误的物理地址。
+例如创建 3k 大小的文件后查询 fiemap，返回的物理地址为一个无效的错误值（如 `00000ffffffff16c`），而非正确的地址或 0。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `f2fs_inline_data_fiemap` 函数中，计算 extent 物理地址时未检查 `ni.blk_addr` 是否有效。当 inline inode 处于未写入状态时，`ni.blk_addr` 为 `NEW_ADDR`（无效地址），直接对其进行移位计算导致生成错误的物理地址值。
+
+#解决方案
+在计算物理地址前增加 `__is_valid_data_blkaddr` 检查。
+若地址有效，正常计算物理地址；
+若地址无效（为 `NEW_ADDR`），将物理地址 `byteaddr` 设为 0，并在 extent 标志中增加 `FIEMAP_EXTENT_DELALLOC` 和 `FIEMAP_EXTENT_UNKNOWN`，同时增加 `f2fs_bug_on` 检查确保此时地址只能是 `NEW_ADDR`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3136f1f3381e838709352fbb5f56eebf610e5b1d

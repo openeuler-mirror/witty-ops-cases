@@ -1,0 +1,20 @@
+#标题
+procfs: do_task_stat 中读取 real_parent 缺少 RCU 保护导致潜在 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读取 `/proc/[pid]/stat` 文件获取进程状态信息时，若并发发生进程退出或父进程变更，可能因访问无效的 `real_parent` 指针导致内核崩溃或数据异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `do_task_stat` 函数中，代码直接解引用 `task->real_parent` 并将其传递给 `task_tgid_nr_ns`。由于读取操作未处于 RCU 读侧临界区（rcu_read_lock/unlock）保护之下，如果此时 `real_parent` 指向的任务结构被并发释放，将引发 Use-After-Free 风险。
+
+#解决方案
+将直接访问 `task->real_parent` 的调用修改为使用封装好的辅助函数 `task_ppid_nr_ns(task, ns)`。该函数内部已正确实现了 RCU 保护逻辑，可以安全地获取父进程 ID，避免了裸指针解引用带来的并发安全问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a51a18e456b699973d8a99f9affbd5ca5a9fc3ec

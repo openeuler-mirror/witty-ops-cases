@@ -1,0 +1,23 @@
+#标题
+开启QOS调度特性后新进程QOS组设置失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 QOS 调度特性的场景下，新创建的进程无法正确设置 QOS 组。由于上游提交 39c4261191bf 移除了 `cpu_cgrp_subsys->fork()` 回调，导致 `sched_change_qos_group()` 函数调用丢失，新任务的 QOS 调度策略未能生效，可能影响系统的服务质量控制能力。
+
+#主要错误日志
+未知
+
+#问题根因
+由于上游提交 39c4261191bf ("sched/fair: Remove redundant cpu_cgrp_subsys->fork()") 移除了 `cpu_cgrp_subsys->fork()` 接口，导致原本在该回调路径中执行的 `sched_change_qos_group()` 函数调用链断裂，从而丢失了新任务创建时的 QOS 组设置逻辑。
+
+#解决方案
+在 `sched_cgroup_fork()` 函数中恢复 QOS 组设置逻辑。具体修改为：
+1. 新增 `tg_qos` 变量用于保存任务组指针。
+2. 在获取任务组 `tg` 时，将 `tg` 赋值给 `tg_qos`。
+3. 在函数末尾调用 `sched_change_qos_group(p, tg_qos)` 显式设置新任务的 QOS 组。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f874f12945b52d97b2e773996ab16534b79a2262

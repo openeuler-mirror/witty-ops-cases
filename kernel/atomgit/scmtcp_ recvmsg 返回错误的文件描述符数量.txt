@@ -1,0 +1,28 @@
+#标题
+scmtcp: recvmsg 返回错误的文件描述符数量
+
+#内核版本
+OLK-6.6
+
+#问题现象
+scmtcp 模块在调用 `scmtcp_sk_recvmsg` 接收消息时，返回值不正确。该返回值本应表示接收到的文件描述符数量，但代码逻辑错误地返回了内核内部结构 `scm.fp->count` 的值。受 `RLIMIT_NOFILE`（进程最大打开文件数限制）影响，`scm_detach_fds` 实际安装到用户空间的文件描述符数量可能小于 `scm.fp->count`，导致用户态获取到的文件描述符数量与接口返回值不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `scmtcp_sk_recvmsg` 函数中，返回值直接取自内核内部 scm cookie 结构的计数 `scm.fp->count`，而该计数未经过 `RLIMIT_NOFILE` 的检查与约束。`scm_detach_fds` 函数在将文件描述符安装到用户空间时，会根据 `RLIMIT_NOFILE` 过滤掉超出限制的 fd，导致实际安装的 fd 数量小于 `scm.fp->count`。因此，函数返回了一个大于实际可用 fd 数量的错误值。
+
+此外，发送路径 `scmtcp_sk_sendmsg` 中也存在判断逻辑缺陷，检查条件 `fctl->fd_count < SCM_MAX_FD` 未考虑当前待发送的 fd 数量，可能导致哈希表中的 fd 总数超过 `SCM_MAX_FD` 限制。
+
+#解决方案
+1. **修正返回值逻辑**：修改 `scmtcp_sk_recvmsg` 函数，不再依赖 `scm.fp->count` 作为返回值。改为在调用 `scm_detach_fds` 之前保存用户空间消息控制头的指针，调用结束后通过新增的辅助函数 `scm_count_fds` 解析用户空间控制消息头（cmsg）的长度，准确计算并返回实际接收的文件描述符数量。
+
+2. **修正发送端计数检查**：修改 `file_htable_add_flist` 中的判断条件，从 `fctl->fd_count < SCM_MAX_FD` 改为 `fctl->fd_count + flist->fp->count <= SCM_MAX_FD`，确保累加后的文件描述符总数不超过系统限制。
+
+3. **完善输入参数校验**：在 `scmtcp_sk_sendmsg` 和 `scmtcp_sk_recvmsg` 中，增加对 `msg_controllen` 的合法性检查，确保其大小至少为 `CMSG_LEN(sizeof(int))`。
+
+4. **修正错误码返回**：调整 `file_htable_add_flist` 的默认返回值从 `-1` 改为 `-ETOOMANYREFS`，并在发送失败时传递该错误码而非固定的 `-ENOBUFS`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6228d339dd1f568895363a0760ed506191275303

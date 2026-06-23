@@ -1,0 +1,31 @@
+#标题
+Hygon family 18h model 4h~10h 处理器 EDAC 地址转换错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hygon family 18h model 4h 至 10h 的处理器平台上，EDAC（错误检测与校正）模块在进行内存错误处理时，无法正确将标准化地址转换为系统物理地址。这导致在发生内存错误时，内核日志中记录的物理地址信息不准确，或者地址转换流程直接报错失败（显示 "Invalid interleave bits" 或 "Invalid number of interleaved channels"），影响故障定位与内存热插拔等功能的正常运作。
+
+#主要错误日志
+- `pr_err("%s: Invalid number of interleaved channels %d.\n", ...)`（打印无效的交错通道数）
+- `pr_err("%s: Invalid interleave bits %d.\n", ...)`（打印无效的交错位）
+
+#问题根因
+内核中的地址转换函数 `umc_normaddr_to_sysaddr` 未针对 Hygon family 18h model 4h~10h 处理器的特定硬件寄存器定义进行适配。具体根因包括：
+1.  **寄存器偏移错误**：读取 DRAM Offset、Interleave 相关信息时，部分寄存器偏移量（如 0x60）读取逻辑缺失或错误。
+2.  **位宽与掩码错误**：`cs_fabric_id`、`die_id_mask`、`socket_id_mask` 等关键字段的位宽提取使用了旧的 8 位掩码（如 & 0xFF），而新硬件要求 11 位掩码（& 0x7FF）。
+3.  **算法逻辑缺陷**：`intlv_num_sockets` 的计算逻辑被错误地条件编译或跳过；`cs_id` 计算 Die ID 时缺少必要的偏移调整（需减 4），导致计算出的系统地址错误。
+
+#解决方案
+针对 Hygon family 18h model 4h~10h 处理器修正地址转换逻辑：
+1.  **新增专用转换函数**：将原有的 `umc_normaddr_to_sysaddr` 重构为 `hygon_umc_normaddr_to_sysaddr`，并在错误处理路径中调用该专用函数。
+2.  **修正位宽定义**：将 `die_id_mask`、`socket_id_mask`、`cs_fabric_id` 等变量的数据类型和掩码操作从 8 位（0xFF）修正为 16 位或 11 位（0x7FF），以适配新硬件寄存器布局。
+3.  **修正地址计算算法**：
+    - 移除针对 `hygon_f18h_m4h` 的特定分支判断，统一执行正确的寄存器读取逻辑。
+    - 修正 Die ID 的计算公式，在计算 `cs_id` 时增加 `-4` 的偏移量调整。
+    - 修正 `intlv_num_dies` 的获取方式，针对 model 6h 及以上版本从特定寄存器（offset 0x60）读取。
+    - 修正 `intlv_num_sockets` 的取值逻辑，从寄存器正确位段读取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/35c5792a71f249ce79eba3cbb546d1ece7c4f3ee

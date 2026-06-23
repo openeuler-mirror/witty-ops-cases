@@ -1,0 +1,24 @@
+#标题
+AppArmor rawdata 访问释放竞争条件导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AppArmor 模块中，攻击者可以通过竞争条件触发释放后使用。具体表现为：当攻击者通过 open() 打开 rawdata 文件的同时，移除对应的 profile（即移除 rawdata 的最后一个引用），会导致 `seq_rawdata_open()` 或 `rawdata_open()` 函数访问到已被释放的 `struct aa_loaddata` 结构体（`i_private` 成为悬空指针），进而引发内核崩溃或内存被非法篡改。
+
+#主要错误日志
+未知
+
+#问题根因
+AppArmor 的 rawdata inodes 未进行引用计数，旨在避免循环引用，原本期望通过 profile rawdata 的引用来维持生命周期。然而，在删除 profile 时，VFS 文件打开操作与 profile 销毁流程之间存在竞争窗口：当 open() 系统调用正在执行时，profile 移除操作可能已经释放了 rawdata 对应的 `aa_loaddata` 结构体，导致 `inode->i_private` 指针指向已释放的内存，从而发生 Use-After-Free。
+
+#解决方案
+引入双重引用计数机制来修复此问题：
+1. 在 `struct aa_loaddata` 中新增 `pcount` 字段，专门用于 profile 对 rawdata 的引用计数；原有的 `count` 字段用于 inode/filesystem 级别的引用计数。
+2. 更新引用计数管理函数：使用 `aa_get_i_loaddata()`/`aa_put_i_loaddata()` 处理 inode 引用，使用 `aa_get_profile_loaddata()`/`aa_put_profile_loaddata()` 处理 profile 引用。
+3. 在 rawdata 文件创建（`__aa_fs_create_rawdata`）时增加 inode 引用计数；在打开文件（`seq_rawdata_open`/`rawdata_open`）时通过 `aa_get_i_loaddata()` 获取引用以确保内存有效，并在释放时对应减少引用。
+4. 当 `pcount` 降至 0 时（即 profile 不再引用），触发工作队列移除 fs 条目并减少 `count` 计数，从而打破循环依赖并确保仅在所有引用释放后才释放内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c7540aedb63f9fd3138b64e3ec1bb6872dffc6f1

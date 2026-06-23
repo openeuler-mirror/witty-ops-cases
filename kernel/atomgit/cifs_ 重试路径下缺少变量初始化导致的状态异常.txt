@@ -1,0 +1,24 @@
+#标题
+cifs: 重试路径下缺少变量初始化导致的状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CIFS/SMB3 文件系统操作（如设置扩展属性 `set-ea`、`ioctl` 查询信息或 POSIX 模式创建目录）过程中，若发生网络延迟或服务器重定向导致请求重试，相关局部变量未被重新初始化。这可能导致重试请求使用了上一次失败请求的脏数据，引发内核状态异常或不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb2_set_ea`、`smb2_ioctl_query_info` 和 `smb311_posix_mkdir` 函数中，代码包含 `replay_again` 标签用于处理请求重试逻辑。当流程跳转回 `replay_again` 进行重试时，部分关键变量（如 `used_len`、`buffer`、`pc_buf`）未被重置。这些变量保留了上一轮失败请求中的值，导致后续逻辑判断错误或数据处理异常。
+
+#解决方案
+在涉及的三个函数的 `replay_again` 标签下方，显式初始化相关变量：
+1. 在 `smb2_set_ea` 中添加 `used_len = 0;`。
+2. 在 `smb2_ioctl_query_info` 中添加 `buffer = NULL;`。
+3. 在 `smb311_posix_mkdir` 中添加 `pc_buf = NULL;`。
+确保每次重试前变量均处于已知的初始状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e2854546a99e4f107280a954b66c8dc7fd46233e

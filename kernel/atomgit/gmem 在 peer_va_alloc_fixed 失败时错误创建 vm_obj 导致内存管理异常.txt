@@ -1,0 +1,22 @@
+#标题
+gmem 在 peer_va_alloc_fixed 失败时错误创建 vm_obj 导致内存管理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `alloc_va_in_peer_devices` 进行异构内存地址分配时，如果底层 `peer_va_alloc_fixed` 函数执行失败（返回非零值），上层逻辑仍会错误地为 vma 创建 `vm_obj` 对象。这导致在分配失败的情况下，vma 结构体中遗留了不应存在的内存管理对象，可能引发后续内存映射状态不一致或内存泄漏问题。
+
+#主要错误日志
+gmem_err("vma for addr %lx is NULL, should not happen\n", addr);
+
+#问题根因
+在函数 `alloc_va_in_peer_devices` 中，创建 `vma->vm_obj` 对象的逻辑仅检查了指针是否存在（`!vma->vm_obj`），未检查前序操作 `peer_va_alloc_fixed` 的返回值 `ret`。代码逻辑未将 `vm_obj` 的创建与分配操作的成功状态绑定，导致即便 `peer_va_alloc_fixed` 返回失败，系统依然会尝试调用 `vm_object_create` 创建对象。此外，代码中针对 VMA 边界的检查条件 `vma->vm_start >= addr + len` 之前被遗漏，虽然主要根因是状态检查缺失，但该边界条件的修复也修正了 VMA 查找的逻辑漏洞。
+
+#解决方案
+修改 `mm/gmem_util.c` 文件中的逻辑：
+1. 在创建 `vm_obj` 前增加判断条件，仅在 `ret == 0`（即 `peer_va_alloc_fixed` 成功）且 `vma->vm_obj` 不存在时才执行创建操作，确保对象生命周期与分配结果一致。
+2. 修正 VMA 查找的边界检查，将条件从 `if (!vma)` 改为 `if (!vma || vma->vm_start >= addr + len)`，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/11f986b145548c254a212e15592789f5ab56223f

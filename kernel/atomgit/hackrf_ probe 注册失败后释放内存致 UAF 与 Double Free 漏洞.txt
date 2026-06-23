@@ -1,0 +1,20 @@
+#标题
+hackrf: probe 注册失败后释放内存致 UAF 与 Double Free 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hackrf 驱动加载过程中，若 `hackrf_probe` 在注册设备后发生错误，并发场景下用户空间已打开设备句柄，将触发 Use-After-Free（UAF）和 Double Free 漏洞。具体表现为内核内存被提前释放后仍被访问，可能导致内核崩溃或提权利用。
+
+#主要错误日志
+Failed to register as video device (%d)\n
+
+#问题根因
+`hackrf_probe` 函数在设备注册（`v4l2_device_register` 或 `video_register_device`）成功后的错误处理路径中，直接调用了 `v4l2_device_unregister` 和 `kfree` 释放内存。由于设备注册后用户空间可立即打开设备句柄，错误路径触发时已打开的句柄并未立即失效。驱动释放内存后，这些句柄随后的 `ioctl` 或 `close` 操作仍会访问已释放的设备结构体，导致 Use-After-Free；同时驱动的 `release` 回调会再次释放同一内存，导致 Double Free。
+
+#解决方案
+修改 `hackrf_probe` 的错误处理路径。在设备注册成功后的错误分支中，不再直接调用 `v4l2_device_unregister` 和 `kfree`，而是改为调用 `v4l2_device_put`。这确保了设备内存的释放权移交给 `release` 回调函数处理，等待所有文件句柄关闭后再释放，从而避免了并发场景下的竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4471be5ac5f22b7133dcd872d7eb2ef90bdc7e06

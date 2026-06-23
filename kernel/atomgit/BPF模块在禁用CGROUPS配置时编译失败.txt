@@ -1,0 +1,33 @@
+#标题
+BPF模块在禁用CGROUPS配置时编译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核编译过程中，若关闭 CONFIG_CGROUPS 选项，编译器报错终止构建。具体表现为 `kernel/bpf/task_iter.c` 中出现 'CSS_TASK_ITER_PROCS' 等标识符未声明、'struct css_task_iter' 类型不完整以及 'css_task_iter_start' 等函数隐式声明错误。
+
+#主要错误日志
+```
+kernel/bpf/task_iter.c: In function 'bpf_iter_css_task_new':
+kernel/bpf/task_iter.c:919:14: error: 'CSS_TASK_ITER_PROCS' undeclared (first use in this function)
+kernel/bpf/task_iter.c:919:36: error: 'CSS_TASK_ITER_THREADED' undeclared (first use in this function)
+kernel/bpf/task_iter.c:927:60: error: invalid application of 'sizeof' to incomplete type 'struct css_task_iter'
+kernel/bpf/task_iter.c:930:9: error: implicit declaration of function 'css_task_iter_start'
+kernel/bpf/task_iter.c: In function 'bpf_iter_css_task_next':
+kernel/bpf/task_iter.c:940:16: error: implicit declaration of function 'css_task_iter_next'
+kernel/bpf/task_iter.c: In function 'bpf_iter_css_task_destroy':
+kernel/bpf/task_iter.c:949:9: error: implicit declaration of function 'css_task_iter_end'
+```
+
+#问题根因
+新引入的 BPF css_task open-coded iterator kfuncs 功能依赖于 CGROUPS 子系统，但相关代码（包括 `kernel/bpf/task_iter.c` 中的函数实现、`kernel/bpf/helpers.c` 中的 BTF_ID 注册以及 `kernel/bpf/verifier.c` 中的类型定义）未添加 CONFIG_CGROUPS 的编译判断宏。导致在禁用 CGROUPS 时，编译器无法找到相关定义而报错。
+
+#解决方案
+在相关代码处添加 `#ifdef CONFIG_CGROUPS` 宏保护：
+1. 在 `kernel/bpf/task_iter.c` 中，将 css_task 迭代器相关的结构体定义和 kfunc 实现用 `#ifdef CONFIG_CGROUPS` 包裹。
+2. 在 `kernel/bpf/helpers.c` 中，将 `bpf_iter_css_task_*` 相关的 BTF_ID_FLAGS 注册代码用 `#ifdef CONFIG_CGROUPS` 包裹。
+3. 在 `kernel/bpf/verifier.c` 中，将 BTF ID 列表中的 cgroup 结构体和 `bpf_iter_css_task_new` 函数注册用 `#ifdef CONFIG_CGROUPS` 包裹，并在非 CGROUPS 配置下填充 BTF_ID_UNUSED 以保持列表结构一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/841d9fdabbe03081e2a20908892316c70c813664

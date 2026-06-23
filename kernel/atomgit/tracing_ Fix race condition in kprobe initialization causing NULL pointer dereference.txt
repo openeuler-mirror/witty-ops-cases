@@ -1,0 +1,23 @@
+#标题
+tracing: Fix race condition in kprobe initialization causing NULL pointer dereference
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 kprobe/fprobe/uprobe 初始化过程中存在竞态条件，当探测点触发时，若并发地修改探测事件的标志位，可能导致读取到错误的标志状态，进而引发空指针解引用或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在处理 kprobe、fprobe 和 uprobe 的分发函数（dispatcher）时，代码直接使用普通的位测试操作（如 `trace_probe_test_flag`）来检查 `tp->event->flags`。由于初始化过程可能并发进行，对标志位的修改（`trace_probe_set_flag`）和读取缺乏必要的内存屏障保护。这导致在探测点刚注册但尚未完全初始化完成时，其他 CPU 可能观察到不一致的标志位状态，从而错误地进入处理流程并访问未初始化完成的数据结构，最终导致 NULL pointer dereference。
+
+#解决方案
+引入内存屏障原语以保障标志位读写的原子性与可见性：
+1. 新增 `trace_probe_load_flag` 函数，使用 `smp_load_acquire` 原子读取 `tp->event->flags`。
+2. 修改 `trace_probe_set_flag` 函数，使用 `smp_store_release` 原子设置标志位，确保标志位的修改对其他 CPU 可见。
+3. 在各个 dispatcher 函数（kprobe_dispatcher, fentry_dispatcher, uprobe_dispatcher 等）中，替换直接读取或测试标志位的操作，改为调用带有 `smp_load_acquire` 语义的加载函数获取标志，防止竞态条件下的错误访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/39d344bdf1da74284209d54d7199c6c6daca9905

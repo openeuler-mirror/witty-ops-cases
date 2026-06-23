@@ -1,0 +1,31 @@
+#标题
+ASoC: qdsp6: q6asm-dai 压缩播放设置参数错误路径导致 DSP 状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在音频路由未正确配置的情况下尝试进行压缩播放，后续即使修正了路由配置，压缩播放操作仍会持续失败。系统无法恢复正常播放功能，必须重启或重置 DSP 状态。
+
+#主要错误日志
+- 初次尝试播放失败日志：
+  q6routing routing: Routing not setup for MultiMedia-1 Session
+  q6asm-dai dais: Stream reg failed ret:-22
+  q6asm-dai dais: ASoC error (-22): at snd_soc_component_compr_set_params() on 17300000.remoteproc:glink-edge:apr:service@7:dais
+- 修正路由后再次尝试播放失败日志：
+  q6asm-dai dais: cmd = 0x10db3 returned error = 0x9
+  q6asm-dai dais: DSP returned error[9]
+  q6asm-dai dais: q6asm_open_write failed
+  q6asm-dai dais: ASoC error (-22): at snd_soc_component_compr_set_params() on 17300000.remoteproc:glink-edge:apr:service@7:dais
+
+#问题根因
+在 `q6asm_dai_compr_set_params()` 函数中，如果 `q6asm_open_write()` 成功执行，但后续步骤（如路由设置 `q6routing_stream_setup`、编解码参数设置或内存映射）失败，代码直接返回错误，未执行清理操作。由于 `CMD_OPEN` 命令已发送给 DSP，但失败路径未发送 `CMD_CLOSE`，导致 DSP 认为会话仍然处于打开状态（DSP 返回错误码 0x9 表示 "Operation is already processed"），留下 DSP 处于不一致状态，阻止了后续的播放尝试。
+
+#解决方案
+重构 `q6asm_dai_compr_set_params()` 函数的错误处理路径：
+1. 新增 `q6_err` 标签，用于处理 `q6asm_open_write()` 成功后的后续步骤失败情况。在此标签下，调用 `q6asm_cmd(prtd->audio_client, prtd->stream_id, CMD_CLOSE)` 向 DSP 发送关闭命令以重置状态。
+2. 新增 `open_err` 标签，用于处理 `q6asm_open_write()` 失败或上述清理完成后的情况。在此标签下，调用 `q6asm_audio_client_free()` 释放音频客户端资源并置空指针。
+3. 修改原有的直接 `return ret` 逻辑，使其跳转至相应的错误处理标签，确保资源正确释放和 DSP 状态正确复位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/51e55799e5c45782bf6d104e3093f2f404f499c7

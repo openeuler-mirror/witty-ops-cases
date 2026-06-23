@@ -1,0 +1,43 @@
+#标题
+mac80211: 32位系统MBSS变更标志位损坏导致内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在32位系统上运行mac80211 mesh网络时，触发内核警告（kernel WARNING），导致调用栈打印。该问题源于数据类型宽度不匹配导致的标志位处理错误。
+
+#主要错误日志
+Call Trace:
+ ? show_regs+0x54/0x58
+ ? __warn+0x6b/0xd4
+ ? ieee80211_link_info_change_notify+0xcc/0xd4 [mac80211]
+ ? report_bug+0x113/0x150
+ ? exc_overflow+0x30/0x30
+ ? handle_bug+0x27/0x44
+ ? exc_invalid_op+0x18/0x50
+ ? handle_exception+0xf6/0xf6
+ ? exc_overflow+0x30/0x30
+ ? ieee80211_link_info_change_notify+0xcc/0xd4 [mac80211]
+ ? exc_overflow+0x30/0x30
+ ? ieee80211_link_info_change_notify+0xcc/0xd4 [mac80211]
+ ? ieee80211_mesh_work+0xff/0x260 [mac80211]
+ ? cfg80211_wiphy_work+0x72/0x98 [cfg80211]
+ ? process_one_work+0xf1/0x1fc
+ ? worker_thread+0x2c0/0x3b4
+ ? kthread+0xc7/0xf0
+ ? mod_delayed_work_on+0x4c/0x4c
+ ? kthread_complete_and_exit+0x14/0x14
+ ? ret_from_fork+0x24/0x38
+ ? kthread_complete_and_exit+0x14/0x14
+ ? ret_from_fork_asm+0xf/0x14
+ ? entry_INT80_32+0xf0/0xf0
+
+#问题根因
+在32位系统上，`unsigned long` 类型的大小为4字节，而 `u64` 类型为8字节。在函数 `ieee80211_mbss_info_change_notify` 中，将 `u64` 类型的 `changed` 变量赋值给 `unsigned long` 类型的 `bits` 变量时，发生了隐式截断，导致高32位数据丢失。随后使用 `for_each_set_bit` 宏遍历 `bits` 时，实际搜索范围与预期不符，导致错误的标志位处理，进而触发系统异常。
+
+#解决方案
+修正 `bits` 变量的定义方式，使用 `BITMAP_FROM_U64(changed)` 宏将 `u64` 类型正确转换为位图数组，确保在32位系统上也能完整保留64位标志位信息。同时调整 `for_each_set_bit` 的参数以适配新的位图结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4b51f3e8c047616c6d36baa4f338443d8f037d80

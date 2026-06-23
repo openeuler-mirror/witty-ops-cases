@@ -1,0 +1,20 @@
+#标题
+TLS 解密流程中 tls_strp_msg_hold 失败导致数据处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TLS（kernel TLS）异步解密路径中，当 `tls_strp_msg_hold` 函数调用失败时，系统未能正确等待正在进行的异步解密操作完成，直接将数据包加入队列并返回错误。这可能导致异步解密上下文状态不一致，引发后续数据处理异常或资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `tls_decrypt_sg` 中，当处理异步解密（`darg->async` 为真）时，代码调用 `tls_strp_msg_hold` 暂存报文。若该函数调用失败（例如内存分配失败等），原代码逻辑仅将报文放入 `async_hold` 队列并返回错误，却没有同步等待可能已经派发的异步解密任务完成。这导致流程提前返回，破坏了异步处理的状态机完整性。
+
+#解决方案
+修改 `net/tls/tls_sw.c` 中的 `tls_decrypt_sg` 函数逻辑：在 `tls_strp_msg_hold` 调用失败时，显式调用 `tls_decrypt_async_wait(ctx)` 等待所有 pending 的异步解密请求完成，并将 `darg->async` 标志置为 false，确保在返回错误前清理异步状态，避免资源泄漏或状态不一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/06434aaf24907241c4f3e36ae02eef59d70cab3d

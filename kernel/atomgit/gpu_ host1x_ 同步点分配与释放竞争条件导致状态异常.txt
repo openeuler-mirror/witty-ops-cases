@@ -1,0 +1,20 @@
+#标题
+gpu: host1x: 同步点分配与释放竞争条件导致状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下调用 host1x_syncpt_alloc() 和 host1x_syncpt_put() 时，存在竞争条件。当引用计数降为零但尚未完全释放资源时，其他线程可能成功分配到正在清理中的同步点，导致同步点状态异常或内存被非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 host1x_syncpt_put() 函数中，原代码使用 kref_put() 释放引用计数，随后在 syncpt_release() 回调函数中手动获取 syncpt_mutex 锁进行资源清理。这两个操作不是原子的，存在时间窗口：一个线程可能发现引用计数为零进入释放流程，但在其获取 mutex 之前，另一个线程获取了 mutex 并开始分配新的同步点。这导致同步点可能在清理未完成时被重新分配，引发竞争。
+
+#解决方案
+将 host1x_syncpt_put() 中的 kref_put() 替换为 kref_put_mutex()。该函数确保了“引用计数降为零”与“获取 mutex 锁”这两个动作的原子性。如果引用计数降为零，它将自动持有 mutex 锁再调用 syncpt_release()，从而消除了释放与分配之间的竞争窗口。同时，移除 syncpt_release() 内部的显式 mutex_lock() 调用，因为锁已由 kref_put_mutex() 提前持有。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eccdcc87008f5fc1be8129b70e8454c5b678f799

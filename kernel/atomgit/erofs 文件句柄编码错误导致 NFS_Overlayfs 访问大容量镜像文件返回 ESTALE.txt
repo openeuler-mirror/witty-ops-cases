@@ -1,0 +1,26 @@
+#标题
+erofs 文件句柄编码错误导致 NFS/Overlayfs 访问大容量镜像文件返回 ESTALE
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 EROFS 镜像大小超过 128GiB 时，文件系统的 NID（节点 ID）可能超过 32 位。在此类镜像上通过 NFS 导出或作为 Overlayfs 底层文件系统使用时，访问 NID 超过 U32_MAX 的文件会失败。
+具体表现为：
+1. NFS 挂载场景：客户端执行 `md5sum` 或读取特定文件时，系统返回 `-ESTALE` 错误。
+2. Overlayfs 场景：调用 `exportfs_decode_fh` 时返回 `-ESTALE` 错误。
+
+#主要错误日志
+未知
+
+#问题根因
+EROFS 使用 NID 来指示磁盘上的 inode 偏移量，该值可以超过 32 位。然而，EROFS 之前使用的默认 `encode_fh` 函数（通过 `generic_encode_ino32_fh` 实现）仅支持 32 位的 ino 编码。当镜像大于 128GiB 导致 NID 超过 32 位时，文件句柄编码发生截断或错误，导致后续通过文件句柄查找 inode 时失败，从而引发 ESTALE 错误。
+
+#解决方案
+在 EROFS 的 `export_operations` 结构体中实现自定义的 `erofs_encode_fh` 函数，替换原有的通用 32 位编码逻辑。
+修改要点：
+1. 新增 `erofs_encode_fh` 函数，支持 64 位 NID 编码。将 64 位 NID 拆分为高 32 位和低 32 位存储于文件句柄中，并根据是否存在父目录选择返回 `FILEID_INO64_GEN` 或 `FILEID_INO64_GEN_PARENT` 类型。
+2. 修改 `erofs_fh_to_dentry` 和 `erofs_fh_to_parent` 函数，适配新的 64 位文件句柄格式，正确解析并重组 64 位的 NID 以查找对应的 inode。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f12f454c2f35a25691427f9009a68b14c168fd5b

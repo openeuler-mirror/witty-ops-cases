@@ -1,0 +1,24 @@
+#标题
+spi: sun6i: fix controller deregistration
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载（unbind）sun6i SPI 控制器驱动时，由于注销顺序错误，可能导致内核崩溃或系统异常。具体表现为驱动在注销 SPI 控制器前就关闭了底层资源（如时钟），此时若有异步操作或引用存在，将触发空指针访问或 Use-After-Free。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `sun6i_spi_probe` 函数使用了托管版本 `devm_spi_register_controller` 进行注册。这导致在驱动移除（`sun6i_spi_remove`）时，内核自动注销控制器的时机滞后于 `pm_runtime_force_suspend` 的执行。结果是底层时钟等资源先被关闭，而 SPI 控制器尚未注销，此时控制器处于不可用状态，进而引发崩溃。
+
+#解决方案
+1. 将 `sun6i_spi_probe` 中的 `devm_spi_register_controller` 替换为非托管版本 `spi_register_controller`，以便在移除流程中手动控制注销时机。
+2. 在 `sun6i_spi_remove` 函数中，调整资源释放顺序：
+   - 先调用 `spi_unregister_controller` 注销控制器。
+   - 在注销前后分别增加 `spi_controller_get` 和 `spi_controller_put` 引用计数保护。
+   - 确保在控制器注销完成后再执行 `pm_runtime_force_suspend` 关闭时钟以及释放 DMA 通道。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/46642f8a799faacaa4493bfe92a86e647e046422

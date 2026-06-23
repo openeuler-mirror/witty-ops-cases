@@ -1,0 +1,32 @@
+#标题
+ext4 inline data 写入导致内核 BUG_ON 溢出崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 inline_data 特性的 ext4 文件系统上执行特定文件操作（open O_TRUNC -> ftruncate -> pwrite 大偏移写入）时，触发 kernel BUG，导致系统崩溃（Kernel panic）。
+
+#主要错误日志
+[   44.545164] ------------[ cut here ]------------
+[   44.545530] kernel BUG at fs/ext4/inline.c:240!
+[   44.545834] Oops: invalid opcode: 0000 [#1] SMP NOPTI
+[   44.546523] RIP: 0010:ext4_write_inline_data+0xfe/0x100
+...
+[   44.546523]  ext4_write_inline_data_end+0x126/0x2d0
+[   44.546523]  generic_perform_write+0x17e/0x270
+[   44.546523]  ext4_buffered_write_iter+0xc8/0x170
+[   44.546523]  vfs_write+0x2be/0x3e0
+[   44.546523]  __x64_sys_pwrite64+0x6d/0xc0
+...
+[   44.576338] Kernel panic - not syncing: Fatal exception
+
+#问题根因
+函数 ext4_prepare_inline_data 的 len 参数定义为 unsigned int 类型。当通过 pwrite 系统调用传入极大的偏移量（如 1UL << 40）时，pos + len 计算结果发生溢出，导致传入该函数的 len 参数被截断（例如 0x10000000006 被截断为 6）。
+这导致 write_begin 阶段通过检查，但在 write_end 阶段，ext4_write_inline_data 函数中的检查 `BUG_ON(pos + len > EXT4_I(inode)->i_inline_size)` 发现实际的 pos + len 超出了 inline size 限制，从而触发 BUG_ON 崩溃。
+
+#解决方案
+将 ext4_prepare_inline_data 函数的 len 参数类型从 unsigned int 修改为 loff_t，防止在大偏移写入场景下发生整型溢出，确保参数传递与校验的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/017b6e681a84acea33430d3b99c40d820b5e2b4a

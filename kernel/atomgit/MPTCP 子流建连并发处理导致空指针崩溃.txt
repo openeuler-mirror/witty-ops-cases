@@ -1,0 +1,28 @@
+#标题
+MPTCP 子流建连并发处理导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 MPTCP 协议进行 Valkey 基准测试时，内核发生 panic。崩溃发生在 `mptcp_can_accept_new_subflow` 函数中，原因是访问了空指针 `subflow_req->msk`。该问题发生在服务端处理客户端连接请求时，特别是在同一个请求在极短时间内收到两个 SYN-ACK 包（客户端重传）的场景下。
+
+#主要错误日志
+Call trace:
+  mptcp_can_accept_new_subflow (./net/mptcp/subflow.c:63 (discriminator 4))
+  subflow_syn_recv_sock (./net/mptcp/subflow.c:854)
+  tcp_check_req (./net/ipv4/tcp_minisocks.c:863)
+  tcp_v4_rcv (./net/ipv4/tcp_ipv4.c:2268)
+  ip_protocol_deliver_rcu (./net/ipv4/ip_input.c:207)
+  ip_local_deliver_finish (./net/ipv4/ip_input.c:234)
+  ip_local_deliver (./net/ipv4/ip_input.c:254)
+  ip_rcv_finish (./net/ipv4/ip_input.c:449)
+
+#问题根因
+当客户端因为网络原因重传 SYN-ACK 包，或者服务端在不同 CPU 上并发处理同一个请求的两个 SYN-ACK 包时，存在竞争条件。`subflow_req->msk` 的所有权在第一次处理时已经被转移给子流，导致该指针被置为 NULL。在第二次处理（或并发处理）时，代码在 `own_req` 条件判断之前就调用了 `mptcp_can_accept_new_subflow(subflow_req->msk)`，从而触发了空指针解引用。
+
+#解决方案
+调整代码逻辑，将 `subflow_req->msk` 的访问与检查操作移动到 `own_req == true` 的条件分支内部执行。确保只有在成功拥有请求所有权的情况下才去访问 `msk` 指针。同时，移除了 `subflow_hmac_valid` 函数中对 `msk` 的冗余非空检查，因为该检查已包含在移动后的代码逻辑路径中。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7c984d6e35af4e81c6ad9536471b6fb2a598f3dd

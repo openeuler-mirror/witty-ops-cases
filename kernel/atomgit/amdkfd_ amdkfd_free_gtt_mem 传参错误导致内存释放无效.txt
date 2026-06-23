@@ -1,0 +1,25 @@
+#标题
+amdkfd: amdkfd_free_gtt_mem 传参错误导致内存释放无效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMDGPU/AMDKFD 驱动生命周期中（如设备初始化失败、进程退出、队列销毁等场景），调用 `amdgpu_amdkfd_free_gtt_mem` 释放 GTT 内存时，由于参数传递错误，导致内存对象未被正确释放，可能引发内存泄漏或后续的内存访问异常（如 Use-after-free 或系统崩溃）。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `amdgpu_amdkfd_free_gtt_mem` 的参数 `mem_obj` 定义为值传递（`void *mem_obj`），导致内部对 `bo` 指针的操作无法回传给调用者。具体根因如下：
+1. `amdgpu_bo_unref(&(bo))` 操作的是本地变量 `bo` 的地址，而非调用者持有的原始指针变量，导致调用者持有的指针未被置空，可能形成悬空指针。
+2. 调用者传入的是指针变量的值而非地址，函数内部无法修改调用者的指针指向。
+
+#解决方案
+修改 `amdgpu_amdkfd_free_gtt_mem` 函数接口，将参数类型由 `void *mem_obj` 改为二级指针 `void **mem_obj`。
+1. 在函数实现内部，通过解引用 `*bo` 访问实际的 `amdgpu_bo` 对象进行 reserve、unpin、kunmap 等操作。
+2. 调用 `amdgpu_bo_unref(bo)` 时，直接传递二级指针，确保引用计数归零时能正确修改调用者持有的指针。
+3. 同步修改所有调用点，传入指针的地址（如 `&kfd->gtt_mem`、`(void **)&wptr_bo`），确保指针状态的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8a512be8da229a21f36ac0a0253414f2fb9ac174

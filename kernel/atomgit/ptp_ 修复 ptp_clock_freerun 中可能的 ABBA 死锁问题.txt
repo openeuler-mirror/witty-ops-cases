@@ -1,0 +1,21 @@
+#标题
+ptp: 修复 ptp_clock_freerun 中可能的 ABBA 死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核出现 ABBA 死锁，导致相关进程挂起无法响应。该问题由 syzbot 报告，涉及 `ptp_clock_freerun` 函数调用链。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `n_vclocks_store()` 执行过程中，持有物理时钟的 `ptp->n_vclocks_mux` 锁并调用 `ptp_clock_unregister()`，后者尝试获取虚拟时钟的 `clk->rwsem` 锁；与此同时，另一个 CPU 在 `pc_clock_adjtime()` 中持有物理时钟的 `clk->rwsem` 锁，并调用 `ptp_clock_freerun()` 尝试获取 `ptp->n_vclocks_mux` 锁。
+虽然 CPU0 和 CPU1 使用的 `clk->rwsem` 实际上是不同的锁（分别属于虚拟时钟和物理时钟），但因为它们属于同一个 lock-class，lockdep 机制判定存在死锁风险并报出 ABBA 死锁警告/误报。
+
+#解决方案
+在 PTP 虚拟时钟注册时，通过 `lockdep_set_subclass()` 函数将其 `posix_clock` 的 `rwsem` 锁设置为 `PTP_LOCK_VIRTUAL` 子类。这告诉 lockdep 机制虚拟时钟的锁与物理时钟的锁属于不同的锁定子类，从而区分两者，消除因 lock-class 相同导致的误报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/590b2fc2c1420f9722ed723eb9aa90cecbe75329

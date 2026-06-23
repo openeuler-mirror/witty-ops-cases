@@ -1,0 +1,25 @@
+#标题
+f2fs: fiemap 边界处理错误导致连续物理地址被错误分割
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `f2fs_io fiemap` 命令查询文件块映射时，明明物理地址连续的文件区域（如 0~2MB 和 2M~4MB）被错误地汇报为两个独立的不连续 extent，而非合并为一个完整的 extent。该问题在读 extent cache 不完整时触发，具体复现步骤如下：
+1. 创建 f2fs 文件系统并挂载。
+2. 创建多个文件并同步。
+3. 执行 `drop_caches` 清除缓存。
+4. 再次写入数据触发部分缓存更新。
+5. 执行 `f2fs_io fiemap` 检查映射，发现本应连续的物理块被分割汇报。
+
+#主要错误日志
+未知
+
+#问题根因
+`f2fs_fiemap()` 调用 `f2fs_map_blocks()` 获取块映射并尝试合并连续映射。当映射在读 extent cache 中命中时，`f2fs_map_blocks_cached()` 返回。由于读 extent cache 并不保证文件所有块的映射都在内存中，当 cache 中只包含部分映射（例如 0~2MB）而后续映射（例如 2M~4MB）缺失时，函数直接返回，未继续查询剩余块的映射。这导致 fiemap 在合并 extent 时发现后续映射缺失，无法进行合并，从而将物理连续的区域错误地分割为多个 extent 汇报。
+
+#解决方案
+在 `f2fs_map_blocks()` 函数中增加边界检查逻辑：当通过 `f2fs_map_blocks_cached()` 获取到的映射长度（`map->m_len`）小于请求的总块数（`maxblocks`）时，不直接退出，而是跳转至 `map_more` 标签继续通过 `f2fs_get_dnode_of_data()` 查询剩余部分的映射。此举确保了在 cache 不完整时能正确获取完整映射信息，从而保证 fiemap 的 extent 合并逻辑能正确处理边界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e695b38aa40c3b463aeeaef11420530f56f78194

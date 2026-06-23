@@ -1,0 +1,20 @@
+#标题
+urma: 修复 tpid_list 引用计数错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在查询或选择 tpid_list 过程中，当在链表中找到匹配项并提前退出循环时，未正确释放该 tpid_list 的引用计数，导致引用计数泄漏，可能导致相关资源无法被正常释放或回收。
+
+#主要错误日志
+ubcore_log_info_rl("tpid not in tpid list, query ops.\n")
+
+#问题根因
+在函数 `ubcore_query_select_tpid_list` 中，遍历 tpid_list 链表时，如果成功找到目标 tpid（`return 0` 分支），代码直接返回，但遗漏了调用 `ubcore_tpid_list_kref_put(tpid_list)` 来释放引用计数。仅在未找到目标继续遍历下一个节点时（`mutex_unlock` 后继续循环）才会在循环末尾隐式处理或此处逻辑缺失，具体表现为找到匹配项时引用计数未减一。
+
+#解决方案
+在 `ubcore_query_select_tpid_list` 函数中，当找到匹配项并准备返回前，增加调用 `ubcore_tpid_list_kref_put(tpid_list)`，确保引用计数被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c8b365f785e351a3b3c602ffe6056768004af7d3

@@ -1,0 +1,20 @@
+#标题
+hns3 网卡驱动 tx spare buffer 重复释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `hns3_set_ringparam()` 修改环形缓冲区参数时，若后续 `hns3_init_all_ring()` 过程中发生内存分配失败，错误处理路径会错误地释放备份的 tx spare buffer，导致内存被重复释放（double-free）。
+
+#主要错误日志
+"failed to allocate tx spare buffer, exceed to max order"（推断：当内存分配因 order 过大失败时可能打印此警告）
+
+#问题根因
+在 `hns3_set_ringparam()` 函数中，创建环形结构临时副本（tmp_rings）用于回滚时，原始 ring 结构中的 `tx_spare` 指针未清零，仍然指向旧的备份内存。随后若 `hns3_init_all_ring()` 内存分配失败，错误处理路径遍历释放新分配的 rings 时，检测到 `tx_spare` 非空（实际上指向旧的备份内存），误将其当作新分配的缓冲区进行释放，从而导致备份内存被重复释放。
+
+#解决方案
+在 `hns3_init_tx_spare_buffer()` 函数中增加处理逻辑，当分配大小为 0、order 超过限制或内存分配失败时，统一跳转到 `not_init` 标签处，显式将 `ring->tx_spare` 指针置为 NULL。此举确保了在错误恢复路径中，旧的缓冲区指针不会被误判为新分配的资源而引发重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc3ff0343e8579a77ac60e83a9730252c650a6ec

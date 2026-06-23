@@ -1,0 +1,22 @@
+#标题
+net: unic 修改队列与复位并发场景下触发 ummu 0xa 事件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发修改队列参数和 elr 复位的场景下，触发 ummu 0xa 事件。具体表现为：队列修改流程首先通过了 resetting 字段校验，随后继续执行销毁 CQ、RQ、SQ 操作；此时系统发生复位并设置了 resetting 标志，导致队列修改流程跳过芯片销毁操作而仅销毁软件资源，最终引发芯片访问内存失败。
+
+#主要错误日志
+ummu 0xa event
+
+#问题根因
+并发场景下队列销毁逻辑对复位状态的判断不精确。原先代码使用 `__unic_resetting` 或检查 `UNIC_STATE_RESETTING` 位来判断是否跳过硬件操作，但在队列修改先通过校验、随后发生复位的窗口期内，逻辑错误地跳过了芯片销毁操作，导致芯片失去有效的软件资源支撑而访问内存失败。
+
+#解决方案
+修改销毁队列（RQ、SQ、CQ）时的复位状态判断逻辑，不再使用原有的 resetting 标志位判断，而是改为获取并检查 `reset_stage`。具体修改如下：
+1. 在 `unic_destroy_rq` 和 `unic_destroy_sq` 函数中，将条件判断改为 `reset_stage != UBASE_RESET_STAGE_UNINIT`，确保在非 UNINIT 阶段才执行销毁上下文操作。
+2. 在 `unic_destroy_cq` 函数中，将条件判断改为 `reset_stage == UBASE_RESET_STAGE_UNINIT`，仅在 UNINIT 阶段直接销毁资源，修正了原逻辑在复位阶段跳过硬件清理的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c73d4918273175b825ae4f5c57b6db28fe73694c

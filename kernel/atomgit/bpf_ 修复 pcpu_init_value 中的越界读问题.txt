@@ -1,0 +1,23 @@
+#标题
+bpf: 修复 pcpu_init_value 中的越界读问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当从 BPF_MAP_TYPE_CGROUP_STORAGE 类型的 map 复制元素到另一个具有相同 value_size（未对齐到 8 字节，例如 4 字节）的 pcpu map 时，内核发生越界读。触发条件如下：
+1. 创建一个 value_size 未对齐到 8 字节（如 4 字节）的 CGROUP_STORAGE map。
+2. 创建一个相同 value_size（如 4 字节）的 pcpu map。
+3. 使用 map 1 中的数据更新 map 2 中的元素。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `pcpu_init_value` 错误地假设所有数据源的大小都是向上对齐到 8 字节的，因此调用了 `copy_map_value_long` 进行数据拷贝。然而，在某些场景下（如 CGROUP_STORAGE 或 skb->data），数据源大小并未对齐（例如仅有 4 字节）。此时 BPF 验证器验证的是源数据声明的大小，而非内核对齐后的大小。当源数据只有 4 字节，而拷贝操作试图读取对齐后的 8 字节时，即发生越界读。
+
+#解决方案
+将 `pcpu_init_value` 函数中处理当前 CPU 数据拷贝的接口从 `copy_map_value_long` 替换为 `copy_map_value`，确保仅拷贝实际的 map value 大小，避免读取未对齐源数据后的额外字节，从而消除越界读风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7da1efe036abdf34a9302e94d7086514e7e031d8

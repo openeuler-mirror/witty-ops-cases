@@ -1,0 +1,25 @@
+#标题
+sched_ext: 新增 sysrq-S 键用于禁用 BPF 调度器
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统管理员缺乏一种简便的应急机制来终止当前运行的 BPF 调度器并回退至 CFS 调度器。在 BPF 调度器出现异常或需要进行调度切换时，无法通过标准的 SysRq 接口快速干预。
+
+#主要错误日志
+- "sched_ext: BPF scheduler not yet used"（当未使用 BPF 调度器时触发 SysRq-S 打印）
+- "Disable sched_ext and revert all tasks to CFS"（触发 SysRq-S 时的动作日志）
+
+#问题根因
+sched_ext 调度类虽然提供了 BPF 扩展能力，但缺乏与 Linux 标准 SysRq 机制的集成。当需要手动干预禁用 BPF 调度器时，没有定义好的热键操作接口，导致无法快速将所有任务回退到 CFS 调度器，这在故障排查或紧急运维场景下是一个功能缺失。
+
+#解决方案
+在内核调度器子系统（kernel/sched/ext.c）中新增 SysRq 'S' 键的处理逻辑：
+1. 定义 `sysrq_handle_sched_ext_reset` 函数，用于检测当前 BPF 调度器状态并调用 `scx_ops_disable(SCX_EXIT_SYSRQ)` 进行禁用操作。
+2. 定义 `sysrq_sched_ext_reset_op` 结构体，注册 'S' 键，帮助信息为 "reset-sched-ext(S)"。
+3. 在 `init_sched_ext_class` 初始化函数中调用 `register_sysrq_key` 注册该操作。
+4. 新增 `SCX_EXIT_SYSRQ` 退出状态码，用于标识禁用操作是由 SysRq 触发的。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/12c73b8d64ecd09355cda0cbe6dd250198ba1380

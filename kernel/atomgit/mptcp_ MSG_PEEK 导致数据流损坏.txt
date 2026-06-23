@@ -1,0 +1,23 @@
+#标题
+mptcp: MSG_PEEK 导致数据流损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 `MSG_PEEK` 标志结合 `MSG_WAITALL` 进行阻塞式读取时，如果接收队列中的数据被消耗完，recvmsg 会等待新数据到达。在新数据包到达后，MPTCP 协议会错误地从接收队列中最旧的数据开始拷贝，而不是从上次 peek 的位置继续，导致数据流发生错乱和损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+MPTCP 协议在处理 `MSG_PEEK` 读取时，没有正确跟踪已 peek 的序列号。当 recvmsg 因为缓冲区数据不足而阻塞等待，并在新数据到达后重新开始拷贝时，缺少对“已 peek 过的数据”的跳过逻辑，导致从头开始重复读取旧数据，破坏了数据流的连续性。
+
+#解决方案
+在函数 `__mptcp_recvmsg_mskq` 中新增对 `MSG_PEEK` 场景的处理逻辑：
+1.  引入 `copied_total` 参数用于跟踪已 peek 的字节数。
+2.  在遍历接收队列时，如果发现 skb 数据已被 peek 过（`total_data_len + data_len <= copied_total`），则直接跳过该 skb。
+3.  若 skb 中仅部分数据被 peek，则计算偏移量（`delta = copied_total - total_data_len`），调整读取位置（`offset += delta`），确保从最后一个被 peek 的字节之后开始读取，从而避免数据流损坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8edbf4eb2f62ae8f0f071159efbe08c45d04db09

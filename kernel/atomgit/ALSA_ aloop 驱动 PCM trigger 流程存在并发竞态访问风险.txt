@@ -1,0 +1,20 @@
+#标题
+ALSA: aloop 驱动 PCM trigger 流程存在并发竞态访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ALSA loopback（aloop）驱动时，若播放流和捕获流同时处于活动状态，触发 PCM 参数变更检查（loopback_check_format），可能因并发操作导致内核空指针崩溃或内存访问错误。具体表现为在 `loopback_check_format` 函数执行过程中，访问 `cable->streams` 数组指向的结构体成员时发生不可预测的错误。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `loopback_check_format` 在访问 `cable->streams[SNDRV_PCM_STREAM_PLAYBACK]` 和 `cable->streams[SNDRV_PCM_STREAM_CAPTURE]` 指针及其指向的 `substream->runtime` 成员时，未持有自旋锁 `cable->lock`。这导致该函数与 PCM trigger 回调函数（该回调会在持有锁的情况下修改 `cable->streams` 指针）之间存在竞态条件，可能导致读取到无效的指针或已释放的内存地址，从而引发内核崩溃。
+
+#解决方案
+引入 `scoped_guard(spinlock_irqsave, &cable->lock)` 临界区保护机制，将对 `cable->streams` 指针及其成员访问的代码段包裹在自旋锁保护范围内，确保在检查和访问流数据期间不会被其他执行流修改。同时，将 `snd_pcm_stop` 调用移至锁外执行以避免潜在的死锁风险，并增加了对指针有效性的检查以增强鲁棒性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/724ceeccf875feac7634cad6cccd4bce2af4f549

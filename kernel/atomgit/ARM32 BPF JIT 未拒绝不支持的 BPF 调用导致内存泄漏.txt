@@ -1,0 +1,30 @@
+#标题
+ARM32 BPF JIT 未拒绝不支持的 BPF 调用导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM32 架构上加载包含子程序的 BPF 程序（例如 libxdp 的 XDP dispatcher 或使用 bpf_loop 等回调的程序）时，内核无法正确处理，导致 JIT 二进制内存泄漏。每次程序加载/卸载循环都会泄漏一个 JIT binary 分配，kmemleak 工具可观测到未释放的对象。
+
+#主要错误日志
+unreferenced object 0xbf0a1000 (size 4096):
+  backtrace:
+    bpf_jit_binary_alloc+0x64/0xfc
+    bpf_int_jit_compile+0x14c/0x348
+    bpf_jit_subprogs+0x4fc/0xa60
+
+#问题根因
+ARM32 BPF JIT 不支持 BPF-to-BPF 函数调用（BPF_PSEUDO_CALL）和回调（BPF_PSEUDO_FUNC），但在代码处理逻辑中未明确拒绝它们。
+1. 对于 BPF_PSEUDO_CALL，JIT 使用错误的地址计算方式生成了无效的函数指针。
+2. 对于 BPF_PSEUDO_FUNC，JIT 将其作为普通 64 位值加载而未报错。
+在这两种情况下，JIT 会分配内存并报告成功，但 ARM32 缺乏多遍编译所需的 jit_data/extra_pass 机制。在 bpf_jit_subprogs() 进行第二轮编译时，会重新分配新的 JIT binary 并覆盖 prog->bpf_func，导致第一次分配的内存未被释放，最终引发内存泄漏。
+
+#解决方案
+在 ARM32 JIT 编译器的 build_insn 函数中增加检查逻辑，显式拒绝不支持的功能：
+1. 在 BPF_LD_IMM64 处理逻辑中，检查 src_reg 是否为 BPF_PSEUDO_FUNC，若是则跳转至 notyet 标签退出。
+2. 在 BPF_CALL 处理逻辑中，检查 src_reg 是否为 BPF_PSEUDO_CALL，若是则跳转至 notyet 标签退出。
+该修复确保在分配 JIT binary 之前就终止编译流程，使 bpf_jit_subprogs() 检测到程序未 JIT 化，从而回退到解释器模式，避免内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c6b8bf30c821e6607ea073b3ecc3f0d250f79d45

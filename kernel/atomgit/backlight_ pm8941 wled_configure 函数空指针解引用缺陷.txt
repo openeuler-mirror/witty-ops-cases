@@ -1,0 +1,20 @@
+#标题
+backlight: pm8941 wled_configure 函数空指针解引用缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 pm8941 背光驱动时，若设备树中未配置 "label" 属性，驱动初始化过程中调用 `devm_kasprintf` 分配内存。当系统内存不足导致该函数返回 NULL 时，由于缺乏校验，后续代码直接引用该指针，引发 NULL pointer dereference（空指针解引用），导致内核崩溃或模块加载失败。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference
+
+#问题根因
+`wled_configure()` 函数中，当 `of_property_read_string` 读取 "label" 失败时，使用 `devm_kasprintf()` 动态生成名称。原代码未对 `devm_kasprintf()` 的返回值进行 NULL 检查。在内存分配失败时该函数返回 NULL，随后直接使用 `wled->name` 导致了空指针解引用。
+
+#解决方案
+在 `wled_configure()` 函数中，调用 `devm_kasprintf()` 后立即检查返回值是否为 NULL。如果为 NULL，则函数直接返回 `-ENOMEM` 错误码，防止后续操作访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/897e0ab3359c4d747113a2064a1bebe64ebdf3a0

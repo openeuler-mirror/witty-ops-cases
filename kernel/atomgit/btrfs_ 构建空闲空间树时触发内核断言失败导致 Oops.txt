@@ -1,0 +1,29 @@
+#标题
+btrfs: 构建空闲空间树时触发内核断言失败导致 Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 block group tree 特性的情况下，重建 btrfs 空闲空间树时触发内核断言失败。系统抛出 "kernel BUG at fs/btrfs/free-space-tree.c:1102!" 导致内核 Oops，引发系统不稳定或崩溃。
+
+#主要错误日志
+BTRFS info (device loop0 state M): rebuilding free space tree
+assertion failed: ret == 0, in fs/btrfs/free-space-tree.c:1102
+------------[ cut here ]------------
+kernel BUG at fs/btrfs/free-space-tree.c:1102!
+Internal error: Oops - BUG: 00000000f2000800 [#1]  SMP
+Call trace:
+populate_free_space_tree+0x514/0x518 fs/btrfs/free-space-tree.c:1102 (P)
+btrfs_rebuild_free_space_tree+0x14c/0x54c fs/btrfs/free-space-tree.c:1337
+
+#问题根因
+当启用 block group tree 特性时，block group item 存储在专用的 block group tree 中而非 extent tree 中。在处理一个空的 block group（即没有从中分配任何 extents）时，由于该 block group 起始偏移量最高，extent root 中不存在更高的 key，导致 `btrfs_search_slot_for_read()` 返回 1（未找到 key）。原代码逻辑无条件断言 `ret == 0`，这在上述场景下无法满足，从而触发断言失败。
+
+#解决方案
+修改 `populate_free_space_tree` 函数中的断言逻辑与循环条件：
+1. 仅当未启用 `BLOCK_GROUP_TREE` 特性时才断言 `ret == 0`，因为此时 block group item 应存在于 extent root 中。
+2. 将循环条件从 `while(1)` 修改为 `while(ret == 0)`。这样当 `ret` 为 1 时（表示找不到更高 key，当前为空 block group），循环直接退出，随后代码自然进入处理剩余空间的逻辑，正确为整个 block group 添加空闲空间记录。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a6de4801c8991ca0afe41df9699e8aa3a445c554

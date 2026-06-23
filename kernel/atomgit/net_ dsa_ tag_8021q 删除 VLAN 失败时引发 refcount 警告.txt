@@ -1,0 +1,20 @@
+#标题
+net: dsa: tag_8021q 删除 VLAN 失败时引发 refcount 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 DSA（Distributed Switch Architecture）子系统的 `ds->ops->tag_8021q_vlan_del()` 操作失败时，内核会触发 refcount 相关的警告信息。该问题与之前 `->port_{fdb,mdb}_del` 返回错误时的现象类似，属于内核状态管理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dsa_port_do_tag_8021q_vlan_del` 函数中，当底层驱动回调 `tag_8021q_vlan_del` 执行失败时，代码逻辑错误地调用了 `refcount_inc(&v->refcount)` 试图恢复引用计数。由于在函数入口处已经对该引用计数进行了减少操作（decrement），此时引用计数值可能已经变为 0。在 refcount 为 0 的基础上执行 `refcount_inc` 增加操作会触发内核的 refcount warning 机制，导致状态异常警告。
+
+#解决方案
+修改 `net/dsa/tag_8021q.c` 文件中的错误处理逻辑。当 `tag_8021q_vlan_del` 失败时，不再使用 `refcount_inc` 进行恢复，而是使用 `refcount_set(&v->refcount, 1)` 直接将引用计数重置为 1。这样可以避免对已归零的 refcount 执行增加操作，从而消除内核警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/998c9f90b04bc12e1bfa732019e1983c2e0e0550

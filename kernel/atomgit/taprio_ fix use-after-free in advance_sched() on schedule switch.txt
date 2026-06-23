@@ -1,0 +1,20 @@
+#标题
+taprio: fix use-after-free in advance_sched() on schedule switch
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 taprio 调度器进行调度切换时，内核发生 Use-After-Free 错误。具体表现为在 `advance_sched()` 函数中，当 `should_change_schedules()` 返回 true 时，旧的 oper schedule 被释放，但代码仍试图访问该旧 schedule 中的 entry 成员，导致内存访问违规。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `advance_sched()` 函数中，当调用 `switch_schedules()` 切换调度表时，旧的 oper schedule 会被放入 RCU 回调释放队列。然而，指针 `next` 仍然指向该旧 oper schedule 中的 entry。在 `switch_schedules()` 执行后，代码继续执行 `next->end_time = end_time` 和 `rcu_assign_pointer(q->current_entry, next)`，此时访问的 `next` 指针指向的内存已被释放，导致 Use-After-Free。此外，错误的 `end_time = sched_base_time(admin)` 赋值也会覆盖预先计算的正确 end_time。
+
+#解决方案
+在 `switch_schedules()` 执行完成后，立即从新的 oper schedule 中重新获取 `next` 指针（即新调度表的第一个 entry），并使用该 entry 预先计算好的 `end_time`。这避免了访问已释放的旧调度表内存，并修正了 end_time 的取值逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e3df1bee89c00de8f3c1e7265b914b1582d79fd9

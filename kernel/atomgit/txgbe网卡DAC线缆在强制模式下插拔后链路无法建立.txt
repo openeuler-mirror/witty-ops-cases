@@ -1,0 +1,30 @@
+#标题
+txgbe网卡DAC线缆在强制模式下插拔后链路无法建立
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用DAC（直连铜缆）线缆连接时，若在强制模式下进行插拔操作，网络链路可能无法正常建立，出现链路down的问题。此外，在FEC（前向纠错）模式轮询过程中，存在逻辑错误导致未能正确遍历所有模式，影响链路协商成功率。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **PHY参数配置缺陷**：在强制模式下插拔DAC线缆时，TX FFE（前馈均衡）参数和bypass_ctle配置未根据线缆类型进行正确更新，导致物理层无法建立连接。
+2. **链路状态管理缺失**：链路配置过程中发生超时（TIMEOUT）时，未清除`link_valid`标记，导致驱动认为链路配置仍然有效，不再重试配置，从而使链路持续处于down状态。
+3. **FEC模式轮询逻辑错误**：在`txgbe_e56_fec_mode_polling`函数中，循环索引`j`未正确取模运算（直接使用了`BIT(j)`而非`BIT(j % 3)`），导致FEC模式遍历错误；且循环终止条件与FEC模式数量（3种）不匹配，导致协商流程异常。
+
+#解决方案
+1. **修正PHY参数与标记**：
+   - 在`txgbe_identify_sfp_module`中初始化`bypass_ctle`为true，`dac_sfp`为false，并在后续流程中根据实际线缆类型动态调整。
+   - 在`txgbe_setup_mac_link_aml`中，当链路配置超时时，将`adapter->link_valid`置为false，确保后续能重新触发配置流程；成功时将其置为true。
+2. **优化链路建立序列**：
+   - 新增`txgbe_e56_ovrd_symdata`和`txgbe_e56_clear_symdata`函数，在链路配置关键阶段设置和清除符号数据覆盖位，确保配置生效。
+   - 移除`txgbe_e56_rxs_calib_adapt_seq`中原有不合理的超时后禁用RX逻辑，改为直接返回超时错误，由上层逻辑处理。
+3. **修复FEC轮询逻辑**：
+   - 修正`txgbe_e56_fec_mode_polling`中的位操作为`BIT(j % 3)`，确保正确遍历FEC模式。
+   - 调整循环次数与判断条件，确保覆盖所有FEC协商尝试，提高协商成功率。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/555989a7d913b1d542566b183f628c5f76fdef18

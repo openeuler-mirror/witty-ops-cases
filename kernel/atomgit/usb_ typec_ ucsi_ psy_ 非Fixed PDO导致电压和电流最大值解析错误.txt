@@ -1,0 +1,20 @@
+#标题
+usb: typec: ucsi: psy: 非Fixed PDO导致电压和电流最大值解析错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当连接支持 PPS（可编程电源）的高级充电器（如 Google Pixel Flex Dual Port 67W USB-C Fast Charger）时，UCSI power supply 驱动上报的 `VOLTAGE_MAX` 和 `CURRENT_MAX` 属性值错误。例如，电压最大值错误地显示为 13.4V（实际应为 20V），电流最大值错误地显示为 5.79A（实际应为 4A），这是由于驱动程序错误地解码了位于 src_pdos 数组末尾的非 Fixed PDO（如 Battery PDO 或 Augmented PDO）所致。
+
+#主要错误日志
+未知
+
+#问题根因
+`ucsi_psy_get_voltage_max` 和 `ucsi_psy_get_current_max` 函数在处理 PD 模式时，盲目假定 `src_pdos` 数组中的最后一个 PDO 为 Fixed PDO，并直接使用 `pdo_fixed_voltage` 和 `pdo_max_current` 辅助函数对其进行解析。然而，非 Fixed PDO（如 Battery PDOs、Augmented PDOs）通常位于数组末尾，对这类 PDO 强行使用 Fixed PDO 的解析接口会导致位域解析错乱，返回被破坏的电压和电流值。
+
+#解决方案
+修改 `ucsi_psy_get_voltage_max` 和 `ucsi_psy_get_current_max` 函数逻辑，不再直接取数组最后一个元素进行解析。改为遍历整个 `src_pdos` 数组，通过 `pdo_type` 过滤出 Fixed PDO 类型，并在其中查找并记录最高的电压值和电流值，从而正确反映电源能力。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f19c6431d9302ef0f1154578b2b88ee759a871c0

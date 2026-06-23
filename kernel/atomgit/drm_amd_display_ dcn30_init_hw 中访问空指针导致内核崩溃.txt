@@ -1,0 +1,20 @@
+#标题
+drm/amd/display: dcn30_init_hw 中访问空指针导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 显示驱动初始化阶段（dcn30_init_hw 函数执行时），若 `dc->clk_mgr` 或 `dc->clk_mgr->funcs` 为空指针，内核在尝试访问其函数指针成员时会触发 NULL Pointer Dereference（空指针引用），导致系统 panic 或 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码在调用 `dc->clk_mgr->funcs` 下的接口函数（如 `notify_wm_ranges`、`set_hard_max_memclk`）前，未对 `dc->clk_mgr` 指针及其 `funcs` 成员进行有效性检查。当底层硬件初始化异常或特定场景下导致这些指针未挂载（NULL）时，直接访问成员引发崩溃。
+
+#解决方案
+在 `dcn30_init_hw` 函数中涉及 `clk_mgr` 访问的关键路径增加防御性检查。具体修改为：在调用 `init_clocks`、`notify_wm_ranges` 和 `set_hard_max_memclk` 等函数前，增加 `dc->clk_mgr` 与 `dc->clk_mgr->funcs` 的非空判断，确保指针有效后才进行解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e4a5cbfaaee831789d8ba8ee4784910fa137e408

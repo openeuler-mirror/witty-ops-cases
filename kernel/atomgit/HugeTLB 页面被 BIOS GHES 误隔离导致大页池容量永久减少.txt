@@ -1,0 +1,27 @@
+#标题
+HugeTLB 页面被 BIOS GHES 误隔离导致大页池容量永久减少
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统长时间运行后，BIOS 累积修正内存错误达到阈值并通过 GHES 上报 CPER，内核将对应页面进行 soft offline。若该页面为 HugeTLB 页面，该页面会被 dissolve（分解），导致 HugeTLB 页面池容量永久减少。对于依赖固定数量大页的业务（如使用 1G 大页的场景），此行为可能导致内存分配失败或业务受损。
+
+#主要错误日志
+- "disabled by /proc/sys/vm/enable_soft_offline\n"（推断：全局禁用时触发）
+- "disabled for HugeTLB pages by /proc/sys/vm/enable_soft_offline\n"（推断：仅针对 HugeTLB 禁用时触发）
+
+#问题根因
+部分 BIOS 会抑制修正内存错误直到达到阈值，随后通过 GHES 上报 "error threshold exceeded"。内核接收到错误后执行 soft offline 流程，但原有逻辑无法区分页面类型，导致 HugeTLB 页面被错误地隔离。由于 HugeTLB 页面被分解后无法自动恢复，影响了依赖固定大页数量的工作负载。
+
+#解决方案
+将 `/proc/sys/vm/enable_soft_offline` 参数从布尔值修改为位图以支持更精细的控制：
+1. 修改内核参数定义，增加 `SOFT_OFFLINE_SKIP_HUGETLB` 标志位。
+2. 在 `soft_offline_page` 函数中增加判断逻辑，如果设置了跳过 HugeTLB 标志且当前页面是 HugeTLB 页面，则直接返回 `EOPNOTSUPP`，避免对其进行隔离。
+3. 支持的新参数值：
+   - 0：禁用 soft offline。
+   - 1：启用 soft offline（默认行为）。
+   - 3：启用 soft offline，但针对 HugeTLB 页面禁用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/59fa393b43f918833705d987e6dbf62e88b4a5b5

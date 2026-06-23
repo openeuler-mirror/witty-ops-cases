@@ -1,0 +1,26 @@
+#标题
+xsched: cgroup文件读写并发导致的hung_task与死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发执行 xcu.sched_class 切换与写入 xcu.quota_ms/period_ms/shares 操作时，系统出现 hung_task。多个任务阻塞在 cgroup 核心路径中，如 `cgroup_kn_lock_live()` 和 `kernfs_drain()`，导致进程状态不可中断（D状态）。
+
+#主要错误日志
+未知
+
+#问题根因
+该故障由锁顺序反转导致的 ABBA 死锁引起：
+1. **路径一（sched_class 写入）**：持有 `xcu` 对应的 kernfs 节点激活引用 -> 获取 `xcg_mutex` 锁 -> 调用 `cgroup_file_show` -> 内部调用 `kernfs_drain` 等待 quota/period/shares 文件的活跃写入者结束。
+2. **路径二（quota/period/shares 写入）**：持有对应文件的 kernfs 节点激活引用 -> 尝试获取 `xcg_mutex` 锁。
+当 sched_class 切换线程持有 `xcg_mutex` 并等待 quota 等文件的写入者退出，而 quota 等文件的写入者持有文件引用并等待 `xcg_mutex` 时，形成死锁循环，导致系统挂起。
+
+#解决方案
+1. **移除死锁路径中的交叉锁**：将 `xcu_cg_set_file_show` 调用移出 `xcg_mutex` 临界区。在 `xcu_sched_class_write` 中，先释放 `xcg_mutex`，再调用 `xcu_cg_set_file_show` 更新文件可见性，打破锁的依赖关系。
+2. **增加文件操作保护锁**：引入新的互斥锁 `xcu_file_show_mutex`，专门用于保护 `xcu_cg_set_file_show` 中的文件状态更新操作，避免并发修改导致的竞争条件。
+3. **移除不必要的 cgroup_lock**：在 `xcu_write_s64` 路径中移除了 `cgroup_lock`（即 `cgroup_mutex`）的持有，进一步降低锁竞争与死锁风险。
+4. **完善生命周期管理**：在 `xcu_sched_class_write` 和 `xcu_write_s64` 中增加 `css_get/css_put` 引用计数管理，确保操作过程中 cgroup 子系统状态的有效性；在 `xcu_css_offline` 中增加 `cancel_work_sync` 以取消待处理的文件显示工作项。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3fbf24e7b2b096128b18f742475f5c2e43fcfe90

@@ -1,0 +1,27 @@
+#标题
+LoongArch 架构 CPU 热插拔导致 NUMA 节点信息错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 系统上进行 CPU 热添加操作时，由于新 CPU 在初始阶段未在 ACPI MADT 表中启用，导致 `cpu_logical_map()` 无法映射物理 ID，进而导致 `early_cpu_to_node()` 获取 NUMA 节点失败。系统通用函数 `early_numa_node_init()` 会使用错误的 NUMA 节点信息覆盖原有配置，造成 CPU 热插拔后 NUMA 归属异常。此外，还存在引导 CPU 非 MADT 表第一项时被错误覆盖、以及 SRAT 解析时未能有效校验物理 CPU 是否在 MADT 表中存在的问题。
+
+#主要错误日志
+pr_warn("Adding duplicated physical cpuid 0x%x\n", physid);
+pr_info(PREFIX "Unable to map lapic to logical cpu number\n");
+
+#问题根因
+LoongArch 架构中设置 CPU NUMA 节点的位置有两处：架构相关函数 `smp_prepare_boot_cpu()` 和通用函数 `early_numa_node_init()`。
+1. 对于热添加的 CPU，由于其在 ACPI MADT 表中初始未启用，`cpu_logical_map()` 映射失败。
+2. 随之 `early_cpu_to_node()` 获取 NUMA 节点失败，但 `early_numa_node_init()` 仍会执行，用错误的值覆盖了 CPU 的 NUMA 节点信息。
+3. 原有逻辑在处理 MADT 表时，对逻辑 CPU 的分配机制不完善，无法正确处理 Boot CPU 不在首项、物理 CPU 不在表中以及热插拔 CPU 的逻辑映射问题。
+
+#解决方案
+引入 `topo_get_cpu()` 和 `topo_add_cpu()` 接口，重构 CPU 拓扑发现逻辑：
+1. **提前分配逻辑 CPU**：在解析 MADT 表时即分配逻辑 CPU，确保热添加 CPU 在后续流程（如 SRAT 解析或热插拔）中能通过 `topo_get_cpu()` 找到对应的逻辑 CPU。
+2. **修复 Boot CPU 处理**：在 `topo_init()` 中优先初始化 Boot CPU 的映射，防止 MADT 表解析顺序导致的覆盖问题。
+3. **增加有效性校验**：在 SRAT 表解析和 CPU 热插拔映射时，通过 `topo_get_cpu()` 校验物理 ID 是否存在于 MADT 表分配的逻辑 CPU 中，无效则直接返回，避免添加无效 CPU 或错误覆盖 NUMA 信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/083374f2b20d03f184ce6430fea68d64de4a05a5

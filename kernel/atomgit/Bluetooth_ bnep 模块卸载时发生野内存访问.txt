@@ -1,0 +1,27 @@
+#标题
+Bluetooth: bnep 模块卸载时发生野内存访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `rmmod` 命令卸载 bnep 模块时，触发 KASAN 检测到的野内存访问错误，导致内核 tainted 标志置位，调用栈显示问题出现在 `proto_unregister` 函数中。
+
+#主要错误日志
+KASAN: maybe wild-memory-access in range [0xdead...108-0xdead...10f]
+CPU: 3 UID: 0 PID: 2805 Comm: rmmod Tainted: G        W
+RIP: 0010:proto_unregister+0xee/0x400
+Call Trace:
+ <TASK>
+ __do_sys_delete_module+0x318/0x580
+ do_syscall_64+0xc1/0x1d0
+ entry_SYSCALL_64_after_hwframe+0x77/0x7f
+
+#问题根因
+在 `bnep_init()` 初始化函数中，调用 `bnep_sock_init()` 时忽略了其返回值。若 `bnep_sock_init()` 初始化失败，它会自行清理已分配的资源，但 `bnep_init()` 依然返回 0（成功），导致模块加载流程状态异常。随后在执行 `rmmod` 卸载模块时，`bnep_exit()` 调用 `bnep_sock_cleanup()` 尝试清理资源，触发了对已释放内存区域的野内存访问。
+
+#解决方案
+修改 `bnep_init()` 函数逻辑，正确处理并返回 `bnep_sock_init()` 的执行结果。若初始化失败，错误码将向上传递，避免模块处于不一致状态，从而防止卸载时的野内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c3306587340b8eb7d78a3a10bced0d2ac9e3f305

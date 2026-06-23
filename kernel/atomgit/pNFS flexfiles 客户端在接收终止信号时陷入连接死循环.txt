@@ -1,0 +1,29 @@
+#标题
+pNFS flexfiles 客户端在接收终止信号时陷入连接死循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当应用程序在 pNFS 客户端尝试连接数据服务器（DS）期间被终止（如接收到 SIGTERM 或 SIGINT 信号）时，客户端会陷入无限循环的连接-断开状态。
+通过以下脚本可复现该问题（需目录下包含约 1000 个文件，且客户端尚未与 DS 建立连接）：
+```
+echo 3 > /proc/sys/vm/drop_caches
+for i in *
+do
+   head -1 $i
+done
+```
+在脚本运行过程中按下 Ctrl+C 中断，即可触发此故障。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `nfs4_ff_layout_prepare_ds` 中，调用 `nfs4_pnfs_ds_connect` 时如果返回状态为 `ERESTARTSYS`（由 `rpc_signal_task` 设置，表示因信号中断），该错误被错误地视为暂时性错误并进行重试。这导致 `flexfilelayoutdev` 模块无法正确识别致命错误，从而在应用被杀死时引发无限重试循环。
+
+#解决方案
+修改 `nfs4_ff_layout_prepare_ds` 函数的错误处理逻辑，使其返回具体的错误指针（`ERR_PTR(status)`）而非 NULL。同时，在调用端（如 `ff_layout_read_pagelist`、`ff_layout_write_pagelist` 等）使用 `IS_ERR(ds)` 检查返回值，并结合 `nfs_error_is_fatal` 函数判断错误是否为致命错误。如果是致命错误（如 `ERESTARTSYS`），则停止重试并正确退出，避免死循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fba34884f63fe86922d77b3cc4cf70e8cd187596

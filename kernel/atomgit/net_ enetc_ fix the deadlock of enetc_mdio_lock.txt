@@ -1,0 +1,26 @@
+#标题
+net: enetc: fix the deadlock of enetc_mdio_lock
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LS1028A 平台应用 err050089 的规避补丁后，RT（实时）内核出现 RCU stall 现象。系统发生线程挂起，导致网络相关任务无法继续执行。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `enetc_poll` 路径下发生了 `enetc_mdio_lock` 读锁的递归获取，从而导致死锁。具体流程如下：
+1. `enetc_poll` 首先获取读锁。
+2. 在持有读锁的情况下调用 `enetc_clean_rx_ring` 或 `napi_complete_done`。
+3. 这些函数内部调用 `napi_gro_receive`。
+4. `napi_gro_receive` 触发 `enetc_start_xmit`，该函数尝试再次获取 `enetc_mdio_lock`。
+5. 此时，一个更高优先级的写者尝试获取锁，导致抢占。写者检测到读锁已被持有而被调度出去。
+6. 此时 `enetc_poll` 下的读者因为已有写者在等待，无法再次获取读锁，导致线程挂起。
+
+#解决方案
+调整 `enetc_lock_mdio` 的锁定范围以避免递归获取锁。具体修改为：在调用可能触发发送路径的函数（如 `napi_gro_receive`、`xdp_do_redirect`、`xdp_do_flush`）之前暂时释放 MDIO 锁，调用完成后再重新获取，从而打破递归持有的死锁条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fff7c773581be06f6678519e8d7ce24204617ce7

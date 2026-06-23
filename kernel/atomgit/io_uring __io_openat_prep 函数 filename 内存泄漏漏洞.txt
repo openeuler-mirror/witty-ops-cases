@@ -1,0 +1,20 @@
+#标题
+io_uring __io_openat_prep 函数 filename 内存泄漏漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 io_uring 进行 openat 操作时，若目标文件被安装到固定文件表且设置了 O_CLOEXEC 标志，内核会发生内存泄漏。该漏洞由 syzbot 自动化测试工具发现。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__io_openat_prep()` 函数中，代码通过 `getname()` 分配了一个 `struct filename` 结构体。然而，当请求满足“文件安装到固定文件表”且“设置了 O_CLOEXEC 标志”的条件时，函数会提前返回 `-EINVAL`。此时，请求的 `REQ_F_NEED_CLEANUP` 标志位尚未被设置，导致在请求销毁时无法触发清理逻辑，新分配的 `filename` 结构体内存未被释放，从而造成内存泄漏。
+
+#解决方案
+将 `req->flags |= REQ_F_NEED_CLEANUP` 标志的设置操作提前，紧随 `getname()` 调用成功之后。这确保了无论后续逻辑是否提前返回，请求在销毁时都能正确执行清理函数，释放 `filename` 相关的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14fe3cc2798d428e8cff5c194936556f026b8ab5

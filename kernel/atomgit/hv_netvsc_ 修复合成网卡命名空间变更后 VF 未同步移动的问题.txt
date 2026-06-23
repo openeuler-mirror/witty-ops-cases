@@ -1,0 +1,21 @@
+#标题
+hv_netvsc: 修复合成网卡命名空间变更后 VF 未同步移动的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 Hyper-V 合成网卡被移动到新的网络命名空间时，其关联的 VF（Virtual Function）接口未跟随移动到同一命名空间，导致合成网卡与 VF 处于不同的命名空间中，网络配置状态不一致。
+
+#主要错误日志
+- `Cannot move to same namespace as %s: %d`（推断：移动命名空间失败时打印）
+- `Moved VF to namespace with: %s`（推断：移动命名空间成功时打印）
+
+#问题根因
+现有代码仅在 `netvsc_register_vf()` 阶段将 VF 移动到与合成网卡相同的命名空间。如果合成网卡在 VF 注册完成后被移动到新的命名空间，系统缺乏相应的处理逻辑来同步 VF 的命名空间，导致二者分离。
+
+#解决方案
+在 `netvsc_netdev_event` 事件处理函数中新增对合成网卡 `NETDEV_REGISTER` 事件的处理逻辑。当检测到合成网卡触发 `NETDEV_REGISTER` 事件（该事件在设备移动命名空间时生成）时，调用 `netvsc_event_set_vf_ns` 函数检查并更新其关联 VF 的命名空间，确保 VF 始终与合成网卡保持在同一命名空间。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0265180824fc8b9e96919a0df9c0826e3959ed32

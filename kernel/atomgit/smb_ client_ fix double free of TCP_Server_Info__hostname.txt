@@ -1,0 +1,25 @@
+#标题
+smb: client: fix double free of TCP_Server_Info::hostname
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在关闭 CIFS 服务器连接（shutdown）过程中，若 cifsd 线程正在重连 DFS 目标，可能会发生 double free（双重释放）导致内核崩溃。具体表现为触发 `__slab_free` 中的 invalid opcode 错误（BUG），系统产生 Oops 并打印调用栈。
+
+#主要错误日志
+RIP: 0010:__slab_free+0x223/0x3c0
+Call Trace:
+ __reconnect_target_unlocked+0x3e/0x160 [cifs]
+ reconnect_dfs_server+0x145/0x430 [cifs]
+ cifs_handle_standard+0x1ad/0x1d0 [cifs]
+ cifs_demultiplex_thread+0x592/0x730 [cifs]
+
+#问题根因
+在 `cifs_put_tcp_session()` 函数中，代码释放了 `server->hostname` 并置空。然而，cifsd 线程在退出循环前可能仍在尝试重连 DFS 目标，该过程会访问 `server->hostname`。由于 `server->hostname` 已被释放，后续在 `clean_demultiplex_info()` 中再次释放 `server->hostname` 时触发了双重释放错误。
+
+#解决方案
+将 `server->hostname` 的释放逻辑从 `cifs_put_tcp_session()` 中移除，统一移至 `clean_demultiplex_info()` 函数中进行释放。这确保了 `server->hostname` 在 cifsd 线程结束前一直有效，且仅被释放一次。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c48854511f353eb2b65d5a3830bbdfbf6d22d88e

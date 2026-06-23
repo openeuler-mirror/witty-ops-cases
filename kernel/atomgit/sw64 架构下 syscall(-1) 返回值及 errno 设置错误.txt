@@ -1,0 +1,23 @@
+#标题
+sw64 架构下 syscall(-1) 返回值及 errno 设置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户空间程序请求 syscall(-1) 时，预期行为是返回值为 -1 且 errno 设置为 ENOSYS。但在 SW64 架构下，实际返回值为 -ENOSYS（负的错误码），且 errno 为 0，导致程序行为不符合预期或测试用例失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 SW64 架构的 `do_entSys` 函数处理逻辑中，当处理被 ptrace 跟踪的系统调用（`_TIF_SYSCALL_WORK` 置位）时，`syscall_trace_enter()` 的调用时机位于判断 `nr == NO_SYSCALL` 之前。这导致检查 `nr` 变量时其值尚未被 trace hook 可能更新为 -1，或者检查逻辑未能正确覆盖非跟踪状态下的 -1 系统调用路径。对于非跟踪的常规系统调用路径，代码直接进入系统调用执行逻辑，未针对 `syscall(-1)` 这种无效调用号进行返回值的正确预设，导致返回值寄存器携带了错误的内部错误码格式返回给用户态。
+
+#解决方案
+调整 `do_entSys` 函数中的控制流与判断逻辑：
+1. 将 `syscall_trace_enter()` 调用提前，确保在检查系统调用号是否为 -1 之前完成必要的处理。
+2. 将判断条件从局部变量 `nr` 改为检查 `regs->orig_r0`，以正确识别用户空间原始请求的系统调用号是否为 -1。
+3. 对于非 `_TIF_SYSCALL_WORK` 的分支，补充了对 `syscall(-1)` 的处理，显式调用 `syscall_set_return_value` 设置返回值为 -ENOSYS 并跳转到返回路径，确保所有路径下对无效系统调用的返回值符合规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eff60c93df5c9861808bc63ecd84ac4b59030bdc

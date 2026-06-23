@@ -1,0 +1,20 @@
+#标题
+watchdog/softlockup: 采样环形缓冲区索引计算错误导致越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `need_counting_irqs()` 函数处理环形缓冲区索引回绕时，使用了错误的宏定义 `NUM_HARDIRQ_REPORT` 进行取模运算。虽然当前代码中该值恰好等于 `NUM_SAMPLE_PERIODS`，掩盖了 bug，但逻辑上存在错误。一旦 `NUM_HARDIRQ_REPORT` 或 `NUM_SAMPLE_PERIODS` 的定义发生变化且数值不相等，将导致数组 `cpustat_util` 的索引越界，访问非法内存，可能引发内核 panic 或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`cpustat_tail` 变量用于索引大小为 `NUM_SAMPLE_PERIODS` 的环形缓冲区 `cpustat_util[]`。但在 `need_counting_irqs()` 函数计算环形缓冲区的前一个索引位置时，错误地使用了 `NUM_HARDIRQ_REPORT` 进行取模回绕操作，而非正确的数组大小 `NUM_SAMPLE_PERIODS`。这是一个明显的逻辑错误，导致环形缓冲区的数学计算不正确。
+
+#解决方案
+修改 `kernel/watchdog.c` 文件中 `need_counting_irqs()` 函数的实现，将索引回绕计算中的取模数由 `NUM_HARDIRQ_REPORT` 修正为 `NUM_SAMPLE_PERIODS`，确保索引值始终位于数组有效范围内。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6a464c38d10b34236319ec7fb2bd344a548bb09d

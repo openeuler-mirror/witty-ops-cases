@@ -1,0 +1,36 @@
+#标题
+btrfs: block_group_tree dirty_list corruption
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启了 EXTENT_TREE_V2 不兼容标志的 BTRFS 文件系统中，当执行涉及分配且弄脏 block group 的事务时，触发内核链表破坏。开启 CONFIG_DEBUG_LIST 时，系统在执行 `sync` 等触发事务提交的操作时打印 "list_del corruption" 警告并打印调用栈。若未开启调试选项，链表破坏将导致后续操作中 switch_commits 与 dirty_cowonly_roots 链表混乱，尝试在 tree root 中查找不存在的 root key，最终导致事务中止（Transaction aborted），文件系统变为只读状态。
+
+#主要错误日志
+阶段一（链表破坏检测）：
+```
+[32.1572] list_del corruption. next->prev should beffff958890202538, but was ffff9588992bd538. (next=ffff958890201538)
+[32.1575] WARNING: lib/list_debug.c:65 at 0x0, CPU#3: sync/607
+...
+[32.1611]  switch_commit_roots+0x82/0x1d0 [btrfs]
+[32.1615]  btrfs_commit_transaction+0x968/0x1550 [btrfs]
+```
+阶段二（事务中止）：
+```
+[87.8269] BTRFS critical (device nvme1n1): unable to find root key (1 0 0) in tree 1
+[87.8274] BTRFS: Transaction aborted (error -117)
+[87.8275] WARNING: fs/btrfs/root-tree.c:153 at 0x0, CPU#4: sync/703
+...
+[87.8358] BTRFS: error (device nvme1n1 state A) in btrfs_update_root:153: errno=-117 Filesystem corrupted
+[87.8360] BTRFS info (device nvme1n1 state EA): forced readonly
+```
+
+#问题根因
+当设置 EXTENT_TREE_V2 标志时，代码无条件地将 block_group_root 添加到 switch_commits 链表中。然而，block_group_tree 已经从 extent tree 中分离出来并使用标准的 root dirty tracking 机制。在事务中进行分配并弄脏 block group 时，block_group_root 已经通过 dirty_list 字段链接到其他链表。此时再次调用 list_add_tail() 将其加入 switch_commits 链表属于非法操作，破坏了 dirty_list 的 prev/next 指针，导致链表混乱。
+
+#解决方案
+删除 `fs/btrfs/transaction.c` 中 `btrfs_commit_transaction` 函数里针对 EXTENT_TREE_V2 的特殊处理代码块。该代码块原本强制将 block_group_root 加入 switch_commits 链表，但这与 block_group_root 现有的标准 dirty tracking 机制冲突。移除该段代码后，block_group_root 将正确地通过现有的 dirty tracking 机制处理，不再发生链表双重插入和破坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/168762d76a594ac395f6ce2cc5a15a3c6355a0c5

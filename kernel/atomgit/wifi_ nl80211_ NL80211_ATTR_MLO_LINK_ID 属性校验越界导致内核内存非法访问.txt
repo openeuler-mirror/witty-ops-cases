@@ -1,0 +1,33 @@
+#标题
+wifi: nl80211: NL80211_ATTR_MLO_LINK_ID 属性校验越界导致内核内存非法访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+由于 Netlink 属性范围校验存在差一错误，当用户空间通过 nl80211 接口传入特定的 MLO Link ID 时，校验逻辑会错误地允许超出数组界限的值通过。这会导致后续代码在访问对应链路数据时引发内核内存越界访问，触发 KASAN 报错 "wild-memory-access"，造成内核崩溃。
+
+#主要错误日志
+BUG: KASAN: wild-memory-access in ieee80211_tx_control_port+0x3b6/0xca0 net/mac80211/tx.c:5939
+Read of size 6 at addr 001102080000000c by task fuzzer.386/9508
+CPU: 1 PID: 9508 Comm: syz.1.386 Not tainted 6.1.70 #2
+Call Trace:
+ <TASK>
+ __dump_stack lib/dump_stack.c:88 [inline]
+ dump_stack_lvl+0x177/0x231 lib/dump_stack.c:106
+ print_report+0xe0/0x750 mm/kasan/report.c:398
+ kasan_report+0x139/0x170 mm/kasan/report.c:495
+ kasan_check_range+0x287/0x290 mm/kasan/generic.c:189
+ memcpy+0x25/0x60 mm/kasan/shadow.c:65
+ ieee80211_tx_control_port+0x3b6/0xca0 net/mac80211/tx.c:5939
+ rdev_tx_control_port net/wireless/rdev-ops.h:761 [inline]
+ nl80211_tx_control_port+0x7b3/0xc40 net/wireless/nl80211.c:15453
+
+#问题根因
+Netlink 属性范围校验提供的是包含边界检查，而 `NL80211_ATTR_MLO_LINK_ID` 属性的最大值被错误地定义为 `IEEE80211_MLD_MAX_NUM_LINKS`。由于链路 ID 应当是 0 到 `IEEE80211_MLD_MAX_NUM_LINKS - 1` 之间的索引，该定义导致校验逻辑允许了一个无效的索引值，从而造成了差一错误和随后的内存越界访问。
+
+#解决方案
+修改 `nl80211_policy` 中 `NL80211_ATTR_MLO_LINK_ID` 的定义，将其最大值从 `IEEE80211_MLD_MAX_NUM_LINKS` 修正为 `IEEE80211_MLD_MAX_NUM_LINKS - 1`，确保范围校验的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1594cf814d1149129a16b8cc77e45dc9a337b8ca

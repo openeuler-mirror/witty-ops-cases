@@ -1,0 +1,20 @@
+#标题
+nfsd: idmap查找超时导致客户端操作错误返回NFSERR_BADOWNER
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当NFS服务端进行idmap查找时，如果缓存正在等待用户空间upcall回复导致查找超时，服务端会向客户端返回 NFSERR_BADOWNER 错误。这导致客户端操作异常终止并向用户空间返回失败，而不是进行重试。
+
+#主要错误日志
+未知
+
+#问题根因
+idmap查找在缓存等待用户空间upcall回复时可能发生超时，此时 `cache_check()` 向调用者返回 `-ETIMEDOUT`。然而，`nfsd_map_name_to_[ug]id` 函数在接收到该临时失败状态后，未立即返回错误，而是继续尝试将ID映射为kuid/kgid。由于此时ID映射并未成功建立，代码逻辑错误地返回了 NFSERR_BADOWNER，导致客户端认为所有者信息无效而放弃操作，而非因临时超时进行重试。
+
+#解决方案
+在 `nfsd_map_name_to_uid` 和 `nfsd_map_name_to_gid` 函数中，调用 `do_name_to_id` 后增加对返回值 `status` 的检查。如果 `status` 不为0（即查找失败或超时），直接返回该状态，不再继续执行后续的 `make_kuid`/`make_kgid` 映射逻辑。此修改使得在idmap查找超时时返回 NFSERR_JUKEBOX 错误，提示客户端进行重试，从而避免操作被错误中止。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/026099fc938800028545ce5456ed78d126074a2c

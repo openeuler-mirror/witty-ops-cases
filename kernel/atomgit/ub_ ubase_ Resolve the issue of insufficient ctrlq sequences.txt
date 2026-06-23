@@ -1,0 +1,26 @@
+#标题
+ub: ubase: Resolve the issue of insufficient ctrlq sequences
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统中存在大量 TPs（Transaction Points 或类似对象）时，若进程被终止，会瞬间产生大量 AE 事件用于刷新 TPs。进程并发发送 CtrlQ 消息到管理平面销毁 TPs，导致 CtrlQ CSQ 队列瞬间被填满。由于管理平面处理消息较慢，所有序列号都在等待响应，新的 CtrlQ 消息无法获取序列号，触发错误 "no enough seq in ctrlq"，可能导致 CtrlQ 消息丢失或处理失败。
+
+#主要错误日志
+- "no enough seq in ctrlq.\n"
+- "ctrlq msg queue wait timeout.\n"
+
+#问题根因
+CtrlQ 消息发送机制缺乏流控保护。在并发量巨大的场景下（如进程退出销毁大量 TPs），CtrlQ 的序列号资源被耗尽（所有序列号都在等待慢速的管理平面响应），导致新消息无法分配到序列号，从而报错 "no enough seq in ctrlq" 并可能导致消息处理失败。
+
+#解决方案
+在 CtrlQ 模块中引入信号量 `msg_queue_sem` 进行流控。
+1. 初始化时，信号量值设置为消息队列的深度。
+2. 发送消息前，尝试获取信号量（带超时机制，如 10 秒）；若获取失败则返回 `-EBUSY` 并打印超时日志。
+3. 消息处理完成或超时清理时，释放信号量。
+4. 调整了清理服务任务的逻辑，支持分段清理并正确释放超时异步消息的信号量资源。
+此举确保了当队列资源紧张时，发送进程会被阻塞等待，而不是直接报错或丢失消息，在一定程度上防止了 CtrlQ 消息丢失。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/146d8867028575834a33aca884849f5aae9db93f

@@ -1,0 +1,25 @@
+#标题
+net: libwx: Rx buffer DMA地址使用错误导致潜在未定义行为
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动在处理网络接收缓冲区时，使用了未初始化的 DMA 地址字段（`bi->dma`）进行数据读写和描述符填充，可能导致 DMA 错误或释放后使用等未定义行为。虽然该错误尚未在实际运行中触发明显故障，但存在严重的潜在风险。
+
+#主要错误日志
+未知
+
+#问题根因
+结构体 `wx_rx_buffer` 中定义了两个 DMA 地址字段 `dma` 和 `page_dma`。在代码实现中，仅初始化了 `page_dma` 字段，但在部分执行路径中却使用了未初始化的 `dma` 字段。具体表现为：
+1. `wx_alloc_mapped_page` 函数中将获取的 DMA 地址赋值给了 `bi->page_dma`，导致 `bi->dma` 处于未初始化状态。
+2. `wx_alloc_rx_buffers` 函数中填充 Rx 描述符时，读取的是 `bi->page_dma`，但其他路径可能读取了未初始化的 `bi->dma`，造成状态不一致和潜在的安全隐患。
+
+#解决方案
+1. 移除结构体 `wx_rx_buffer` 中冗余的 `page_dma` 字段。
+2. 修正 `wx_alloc_mapped_page` 函数，将 DMA 地址赋值给 `bi->dma` 而非 `bi->page_dma`。
+3. 修正 `wx_alloc_rx_buffers` 函数，使用 `bi->dma` 来填充 Rx 描述符的 `pkt_addr`。
+通过统一使用 `bi->dma` 字段，确保 DMA 地址在使用前已被正确初始化，消除未定义行为风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce32ca309276c5ce78b5636df105bd96963d6355

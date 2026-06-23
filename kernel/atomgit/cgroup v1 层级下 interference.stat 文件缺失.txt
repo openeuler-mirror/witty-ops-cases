@@ -1,0 +1,20 @@
+#标题
+cgroup v1 层级下 interference.stat 文件缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动且开启 cgroup v1 时，cgroup v1 层级目录下缺少 `interference.stat` 文件，导致相关功能无法使用。
+
+#主要错误日志
+未知
+
+#问题根因
+`cgroup_ifs_enable` 和 `cgroup_v1_ifs_init` 均使用 `late_initcall_sync` 进行注册，导致调用顺序不确定。由于 `cgroup_v1_ifs_init` 依赖 `cgrp_ifs_enabled` 标志位（由 `cgroup_ifs_enable` 设置），在某些启动流程中 `cgroup_v1_ifs_init` 先于 `cgroup_ifs_enable` 执行，此时标志位未置位，导致 v1 接口初始化失败。
+
+#解决方案
+将 `cgroup_ifs_enable` 的注册宏从 `late_initcall_sync` 修改为 `device_initcall`。利用内核 initcall 优先级机制（device_initcall 为 Level 6，late_initcall_sync 为 Level 7），确保 `cgroup_ifs_enable` 严格早于 `cgroup_v1_ifs_init` 执行，从而保证依赖标志位在 v1 接口初始化前已正确设置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a3ee3f7ed6f8d38a415b2d04b61b256918734cd3

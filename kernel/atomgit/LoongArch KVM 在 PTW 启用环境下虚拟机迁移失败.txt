@@ -1,0 +1,26 @@
+#标题
+LoongArch KVM 在 PTW 启用环境下虚拟机迁移失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 PTW（Page Table Walk）功能的 LoongArch 系统上，KVM 虚拟机迁移操作失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 PTW 启用的系统上，硬件会自动同步 `_PAGE_WRITE` 位到 `_PAGE_DIRTY` 位，使得 `_PAGE_WRITE` 也具有了硬件位的属性。旧代码错误地将 `_PAGE_WRITE` 当作软件位来记录二级 MMU 快速缺页处理中的页面写权限属性。
+当设置该位时，硬件行为导致不再触发 TLB modify 异常，破坏了 KVM 快速缺页处理逻辑中对写权限的判断与追踪机制，进而导致迁移流程无法正常处理脏页或权限状态，造成迁移失败。
+
+#解决方案
+重新定义 KVM 页表项的软件写权限标记位，将 `KVM_PAGE_WRITEABLE` 宏定义为纯软件位 `_PAGE_MODIFIED`，使其在 PTW 启用和禁用的机器上均能正常工作。
+1. 新增 `KVM_PAGE_WRITEABLE` 定义指向 `_PAGE_MODIFIED`。
+2. 区分硬件写位与软件写位检查逻辑：
+   - `kvm_pte_dirty()` 用于检查硬件写状态（包含 `_PAGE_DIRTY` 和 `_PAGE_WRITE`）。
+   - `kvm_pte_writeable()` 用于检查软件记录的写权限属性。
+3. 修改 `kvm_set_spte_gfn`、`kvm_map_page_fast` 和 `kvm_map_page` 等函数中的相关逻辑，使用 `kvm_pte_mkwriteable()` 设置软件写标记，确保硬件位与软件位的处理互不干扰。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a6315f4ff2f5ff219f7b72d6fc51b454af8d11b4

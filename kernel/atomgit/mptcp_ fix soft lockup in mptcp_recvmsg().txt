@@ -1,0 +1,25 @@
+#标题
+mptcp: fix soft lockup in mptcp_recvmsg()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在调用 MPTCP 协议的 `recvmsg` 系统调用并使用 `MSG_PEEK` 标志时，触发内核软死锁。进程陷入无限循环状态，无法正常退出读取操作，导致 CPU 占用过高或系统挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mptcp_recvmsg` 函数处理 `MSG_PEEK` 标志的逻辑中存在缺陷：
+1. 当使用 `MSG_PEEK` 标志读取数据时，`__mptcp_recvmsg_mskq` 函数没有正确处理已“窥探”的数据偏移。函数未能跳过之前已经 peek 过的数据，导致每次调用都重复处理相同的数据包。
+2. 由于数据未被正确跳过，`bytes_read` 返回值可能一直为 0，且接收队列状态未实质性改变，导致外层 `while` 循环的退出条件无法满足，引发无限循环和软死锁。
+
+#解决方案
+修改 `__mptcp_recvmsg_mskq` 函数，增加对 `MSG_PEEK` 场景的处理逻辑：
+1. 新增 `copied_total` 参数传入，用于记录当前已拷贝的总数据量。
+2. 在遍历接收队列时，通过比较 `total_data_len` 与 `copied_total`，跳过那些已经被 peek 过的 SKB 节点或当前 SKB 中已 peek 的数据部分，正确更新 `offset` 和 `data_len`。
+3. 在 `mptcp_recvmsg` 主循环中增加判断：当 `bytes_read` 为 0 且使用了 `MSG_PEEK` 时，主动调用 `__mptcp_move_skbs` 尝试移动数据，并检查队列尾是否变化以决定是否继续循环，防止陷入死循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7c635962d6a585460fb878885a15fc526fc43814

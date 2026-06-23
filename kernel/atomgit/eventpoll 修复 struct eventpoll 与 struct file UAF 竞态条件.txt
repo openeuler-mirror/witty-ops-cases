@@ -1,0 +1,20 @@
+#标题
+eventpoll 修复 struct eventpoll 与 struct file UAF 竞态条件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 epoll 文件描述符移除与 `eventpoll_release_file` 并发执行时，可能发生 Use-After-Free（UAF）故障。该故障可能导致内核崩溃、内存数据损坏或其他不可预期的异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 信息，该补丁是修复 "eventpoll: fix ep_remove struct eventpoll / struct file UAF" 的前置重构补丁。原代码中 `__ep_remove` 函数包含布尔条件判断逻辑，混淆了常规移除路径与安全移除路径（`ep_remove_safe`）的处理逻辑。特别是与 `eventpoll_release_file` 竞态检查的逻辑被错误地放置在了通用路径中，这种结构上的混乱导致了 UAF 漏洞（CVE-2026-46242）。
+
+#解决方案
+移除 `__ep_remove` 函数，重构代码逻辑。将竞态条件检查（检查 `epi->dying` 标志）专门隔离在 `ep_remove_safe` 路径中，确保该检查仅在需要防止与 `eventpoll_release_file` 竞争的场景下执行。同时，在 `eventpoll_release_file` 中使用 `WRITE_ONCE` 设置 `dying` 标志以确保并发安全，从而从根本上修复了 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb32981aabb51574a62c762705e972dfd970405f

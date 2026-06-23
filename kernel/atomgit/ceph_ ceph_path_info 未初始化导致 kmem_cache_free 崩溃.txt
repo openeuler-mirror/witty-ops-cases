@@ -1,0 +1,32 @@
+#标题
+ceph: ceph_path_info 未初始化导致 kmem_cache_free 崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在执行 Ceph 文件操作（如打开文件）时发生内核崩溃。具体表现为调用 `ceph_mdsc_build_path()` 失败后，后续的 `ceph_mdsc_free_path_info()` 试图释放一个未被正确初始化的 `ceph_path_info` 结构体，导致 SLUB 分配器检测到对象不一致从而触发警告和 Oops。该故障可能导致随机崩溃，甚至存在权限提升风险。
+
+#主要错误日志
+virt_to_cache: Object is not a Slab page!
+WARNING: CPU: 184 PID: 2871736 at mm/slub.c:6732 kmem_cache_free+0x316/0x400
+Call Trace:
+ ceph_open+0x13d/0x3e0
+ do_dentry_open+0x134/0x480
+ vfs_open+0x2a/0xe0
+ path_openat+0x9a3/0x1160
+cache_from_obj: Wrong slab cache. names_cache but object is from ceph_inode_info
+WARNING: CPU: 184 PID: 2871736 at mm/slub.c:6746 kmem_cache_free+0x2dd/0x400
+kernel BUG at mm/slub.c:634!
+Oops: invalid opcode: 0000 [#1] SMP NOPTI
+RIP: 0010:__slab_free+0x1a4/0x350
+
+#问题根因
+`ceph_mdsc_build_path()` 函数要求传入的 `ceph_path_info` 参数必须经过零初始化。如果该结构体未初始化，且 `ceph_mdsc_build_path()` 调用失败，后续调用的 `ceph_mdsc_free_path_info()` 会尝试释放结构体中包含的随机垃圾值指针，导致释放无效内存或触发 SLUB 分配器的 sanity check 失败。
+部分调用点（如 `fs/ceph/debugfs.c` 中的 `mdsc_show` 函数）在定义 `struct ceph_path_info path_info` 时未进行初始化（即缺少 `= {0}`），从而引发了此问题。
+
+#解决方案
+在所有调用 `ceph_mdsc_build_path()` 的位置，将 `ceph_path_info` 结构体变量的定义修改为零初始化（即添加 `= {0}`），确保即使在构建路径失败的情况下，`ceph_mdsc_free_path_info()` 也不会操作垃圾数据。本次补丁修复了 `fs/ceph/debugfs.c` 中遗漏的初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/10fc3c0dc65242f6a68ab139ad99d87ffddcae42

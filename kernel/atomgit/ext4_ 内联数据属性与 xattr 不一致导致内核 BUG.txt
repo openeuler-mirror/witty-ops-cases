@@ -1,0 +1,22 @@
+#标题
+ext4: 内联数据属性与 xattr 不一致导致内核 BUG
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 ext4 文件系统出现损坏，导致 inode 具备 INLINE_DATA_FL 标志但缺少相应的 system.data 扩展属性时，内核触发 BUG() 导致系统崩溃或停止响应。
+
+#主要错误日志
+EXT4-fs error (device [device]): ext4_create_inline_data: unexpected inline data xattr
+EXT4-fs error (device [device]): ext4_update_inline_data: missing inline data xattr
+EXT4-fs error (device [device]): ext4_inline_data_truncate: missing inline data xattr
+
+#问题根因
+在 ext4 文件系统的 `ext4_create_inline_data`、`ext4_update_inline_data` 和 `ext4_inline_data_truncate` 函数中，代码逻辑假定当 inode 具备内联数据标志时，其对应的 system.data 扩展属性必然存在。代码使用 `BUG_ON` 宏强制检查该条件。一旦文件系统元数据发生不一致（例如存在 INLINE_DATA_FL 标志但找不到 system.data xattr），内核将直接触发 panic，而非以错误形式返回，导致系统可靠性降低。
+
+#解决方案
+移除相关路径下的 `BUG_ON` 宏调用，改为使用条件判断检测异常情况。当发现 xattr 属性状态与预期不符时，调用 `EXT4_ERROR_INODE` 报告文件系统错误，并返回 `-EFSCORRUPTED` 错误码，随后跳转至错误处理流程退出，避免内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/470e534a28c778424c56896a23b7159756881fd1

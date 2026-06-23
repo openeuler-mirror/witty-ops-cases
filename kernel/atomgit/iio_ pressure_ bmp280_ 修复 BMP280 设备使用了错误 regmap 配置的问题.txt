@@ -1,0 +1,23 @@
+#标题
+iio: pressure: bmp280: 修复 BMP280 设备使用了错误 regmap 配置的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+BMP280 设备驱动加载或运行时，使用了 BME280 设备专用的 regmap 配置。由于 BME280 包含 BMP280 所不具备的寄存器（如湿度寄存器），这可能导致驱动错误地访问了 BMP280 设备上不存在的寄存器，引发设备配置异常、数据读取错误或 I/O 读写失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在代码重构过程中，BMP280 设备错误地复用了 BME280 的 regmap 配置结构体。BME280 是 BMP280 的超集，拥有 BMP280 不存在的湿度相关寄存器。这种配置不匹配导致 BMP280 设备的 regmap 描述了实际上不存在的寄存器地址范围和权限。
+
+#解决方案
+分离 BMP280 和 BME280 的 regmap 配置逻辑：
+1. 为 BME280 新增独立的 `bme280_regmap_config` 结构体，包含湿度寄存器定义及对应的读写回调函数（`bme280_is_writeable_reg`、`bme280_is_volatile_reg`）。
+2. 修正 BMP280 的 `bmp280_regmap_config`，将其 `max_register` 从 `BME280_REG_HUMIDITY_LSB` 修改为 `BMP280_REG_TEMP_XLSB`，并使用仅适用于 BMP280 寄存器范围的回调函数。
+3. 将 `bme280_chip_info` 中的 `regmap_config` 指针指向新创建的 `bme280_regmap_config`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5b46b48a463a3d81701a199af0e41e0a6efa19f8

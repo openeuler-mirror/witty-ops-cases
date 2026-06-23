@@ -1,0 +1,23 @@
+#标题
+mm: LRU flag设置与检查缺陷导致内存管理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内存管理子系统在处理页面回收（reclaim）、激活、去激活及lazyfree等操作时，因LRU标志位检查与清除逻辑存在竞争窗口，可能导致页面在状态切换过程中出现不一致，进而引发内存管理行为异常或潜在的系统稳定性问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `folio_rotate_reclaimable`、`folio_activate`、`deactivate_file_folio`、`folio_deactivate` 及 `folio_mark_lazyfree` 等函数中，原逻辑先检查 `folio_test_lru(folio)`，随后在获取 folio 引用后未再次进行原子性的 `folio_test_clear_lru` 检查。这导致在检查与操作之间存在时间窗口，folio 可能已被其他线程从 LRU 链表中移除，造成状态不一致。同时，`folio_batch_move_lru` 中对非 `lru_add_fn` 的操作提前进行了 LRU 清除检查，这与后续各具体移动函数中补充的统一检查逻辑冲突。此外，`sort_folio` 函数中未检查 `folio_test_lru` 状态就进行 generation 更新操作，进一步加剧了 LRU 管理的混乱。
+
+#解决方案
+修复 LRU 标志位的设置与检查逻辑，确保操作的原子性与一致性：
+1. 在 `folio_rotate_reclaimable`、`folio_activate`、`deactivate_file_folio`、`folio_deactivate` 和 `folio_mark_lazyfree` 函数中，移除初始判断中的 `folio_test_lru` 前置检查，改为在 `folio_get` 后执行 `folio_test_clear_lru`。若清除失败（即页面已不在 LRU），立即 `folio_put` 并返回，防止对非 LRU 页面进行操作。
+2. 删除 `folio_batch_move_lru` 中冗余的 `folio_test_clear_lru` 提前检查逻辑，统一由各具体的 move_fn 或调用者处理，避免逻辑冲突。
+3. 在 `sort_folio` 的 ineligible 判断分支中增加 `!folio_test_lru(folio)` 检查，确保仅对位于 LRU 链表中的页面执行 generation 更新与移动操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a91ec6de0fdbfee768b2458a99d660224ed72f7d

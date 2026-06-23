@@ -1,0 +1,20 @@
+#标题
+ASoC: soc-core: 声卡解绑时因延迟工作队列未刷新导致的 UAF 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 PCM 流处于打开状态时卸载声卡（sound card unbind），内核发生 Use-After-Free。具体表现为 `snd_soc_dapm_stream_event()` 函数访问了已释放的 DAPM widgets 内存，可能导致内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在声卡解绑过程中，`snd_soc_unbind_card()` 先刷新了延迟工作队列，随后调用 `soc_cleanup_card_resources()`。在清理资源时，`snd_card_disconnect_sync()` 释放了所有 PCM 文件描述符，此操作触发的 PCM 关闭路径调用了 `snd_soc_dapm_stream_stop()`，该函数重新调度了带有 `pmdown_time` 延迟的延迟工作队列。由于此时之前的刷新操作已经完成，新调度的延迟工作未被捕获。随后 `soc_remove_link_components()` 释放了 DAPM widgets，当延迟工作真正执行时，访问了已释放的内存结构体，导致 Use-After-Free。
+
+#解决方案
+在 `soc_cleanup_card_resources()` 函数中，于 `snd_card_disconnect_sync()` 调用之后、`soc_remove_link_dais()` 和 `soc_remove_link_components()` 调用之前，增加调用 `snd_soc_flush_all_delayed_work(card)`。这确保在释放 DAI 和组件资源前，所有待处理的延迟工作都已执行完毕，防止 UAF 发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/41f4cc1294eefb8f8691956514eee6873d90ed5b

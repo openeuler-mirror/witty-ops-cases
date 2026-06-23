@@ -1,0 +1,23 @@
+#标题
+Bluetooth: btnxpuart: 双路 A2DP 流媒体播放时出现间歇性卡顿
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用支持 NXP 芯片的蓝牙设备进行双路 A2DP 音频流传输时，出现间歇性的音频卡顿。该问题是由于之前为修复“ACL 数据截断”问题而引入的代码变更导致的回归故障。
+
+#主要错误日志
+未知
+
+#问题根因
+上一次提交（commit 8023dd220425）为了修复发送截断数据的问题，在 `btnxpuart_tx_work` 函数中调用了 `serdev_device_wait_until_sent` 并在数据未发完时直接 `break` 退出循环。这导致了在处理双路 A2DP 流时的间歇性卡顿。具体而言，`serdev_device_write_buf` 调用结合等待发送完成的逻辑改变了发送行为，引发了性能或调度问题。
+
+#解决方案
+回滚引发问题的修改：
+1. 移除 `serdev_device_wait_until_sent(serdev, 0);` 调用。
+2. 将数据未发完时的处理逻辑从 `break`（退出循环）改为 `continue`（继续循环），确保 TX work 会持续写入直到队列为空。
+此修复同时解决了双路 A2DP 卡顿问题和 ACL 数据截断问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c69e3f6e543187103d064304c33aa9f8e4752f5c

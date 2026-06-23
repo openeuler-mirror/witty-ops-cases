@@ -1,0 +1,23 @@
+#标题
+erofs ondemand 模式下 cachefiles 对象卸载流程时序错误问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 erofs 使用 ondemand 模式挂载并配合 cachefiles 时，当涉及 cookie withdraw（撤回）操作时，内核可能出现对象清理流程异常。由于 `unmark inuse`（取消标记正在使用）操作与 `close request`（关闭请求）的发送时序不正确，导致状态机流转异常或资源释放冲突。
+
+#主要错误日志
+未知
+
+#问题根因
+在原有的代码逻辑中，`cachefiles_withdraw_cookie` 函数执行清理时，先发送关闭请求（clean_object），后才取消标记 inuse 状态。这种顺序在 erofs ondemand 场景下存在时序问题。正确的逻辑应调整为先取消标记 inuse，再发送关闭请求，以确保状态一致性。
+
+#解决方案
+1. 在 `fscache-cache.h` 中新增标志位 `FSCACHE_CACHE_EARLY_UNMARK_INUSE` 及相关辅助接口 `fscache_set_inode_unmark_early` 和 `fscache_test_inode_unmark_early`，用于标识是否需要提前执行 unmark 操作。
+2. 在 `erofs/fscache.c` 注册卷时，调用 `fscache_set_inode_unmark_early` 设置该标志位，表明该场景需要提前 unmark。
+3. 修改 `cachefiles/interface.c` 中的 `cachefiles_withdraw_cookie` 逻辑：检测到该标志位后，将 `cachefiles_clean_up_object`（包含 unmark 逻辑）调用提前到 `cachefiles_ondemand_clean_object`（发送 close 请求）之前执行。
+4. 同时调整 `cachefiles_clean_up_object` 函数内部的安全上下文管理，确保在执行清理时正确获取和释放安全凭证。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8ccaf9fbb9274990d276a0cb908aa93c10633666

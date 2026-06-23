@@ -1,0 +1,20 @@
+#标题
+RDMA/rxe: SRQ 初始化失败导致的双重释放故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `rxe_create_srq` 创建共享接收队列（SRQ）时，若内核向用户空间复制数据（`copy_to_user`）失败，内核会触发双重释放。该故障可能导致内核内存损坏、系统崩溃或不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `rxe_srq_from_init()` 函数中，队列指针 `q` 被提前赋值给 `srq->rq.queue`。随后若 `copy_to_user()` 执行失败，函数内部会调用 `rxe_queue_cleanup()` 释放队列内存，但并未清除 `srq->rq.queue` 中遗留的无效指针。上级调用者 `rxe_create_srq` 捕获错误后，在清理流程中调用 `rxe_srq_cleanup()`，再次对同一内存地址执行释放操作，从而引发双重释放。
+
+#解决方案
+调整代码执行顺序，将 `srq->rq.queue = q` 的赋值操作移动到 `copy_to_user()` 成功执行之后。这样确保了只有在数据成功复制到用户空间后，对象才持有队列指针，避免了错误路径下对象持有无效指针并触发重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0f9a4382ec2a3e99339f73100d0ce4ffd05d5b15

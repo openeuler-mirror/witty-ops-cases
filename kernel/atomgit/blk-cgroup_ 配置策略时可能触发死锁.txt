@@ -1,0 +1,41 @@
+#标题
+blk-cgroup: 配置策略时可能触发死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置块组策略时，内核可能检测到并报告可能的循环锁定依赖，进而触发死锁告警。该问题可通过 lockdep 轻松复现。
+
+#主要错误日志
+WARNING: possible circular locking dependency detected
+6.17.0-rc3-00124-ga12c2658ced0 #1665 Not tainted
+------------------------------------------------------
+check/1334 is trying to acquire lock:
+ff1100011d9d0678 (&q->sysfs_lock){+.+.}-{4:4}, at: blk_unregister_queue+0x53/0x180
+
+but task is already holding lock:
+ff1100011d9d00e0 (&q->q_usage_counter(queue)#3){++++}-{0:0}, at: del_gendisk+0xba/0x110
+
+which lock already depends on the new lock.
+
+Chain exists of:
+  &q->sysfs_lock --> &q->rq_qos_mutex --> &q->q_usage_counter(queue)#3
+
+ Possible unsafe locking scenario:
+
+       CPU0                    CPU1
+       ----                    ----
+  lock(&q->q_usage_counter(queue)#3);
+                               lock(&q->rq_qos_mutex);
+                               lock(&q->q_usage_counter(queue)#3);
+  lock(&q->sysfs_lock);
+
+#问题根因
+根本原因在于 `blkg_conf_prep()` 函数中，在持有 `rq_qos_mutex` 锁的情况下获取了 `queue_usage_counter` 锁；而在其他上下文中，队列应该在获取 `rq_qos_mutex` 之前被冻结，这导致了锁依赖顺序冲突，产生死锁风险。
+
+#解决方案
+将 `blkg_conf_prep()` 中原本用于防止策略停用竞争的 `blk_queue_enter()` 调用替换为 `blkcg_mutex` 互斥锁，因为 `blkcg_mutex` 已经保护了防止策略停用的功能。同时，考虑到在策略停用期间 `blkcg_mutex` 是在队列冻结之后持有的，将 `blkg_alloc()` 的内存分配标志从 `GFP_KERNEL` 改为 `GFP_NOIO` 以避免潜在的死锁风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ee5dbb536b7773fb29de4697bd177a32e8066fcb

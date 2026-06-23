@@ -1,0 +1,27 @@
+#标题
+atm: clip: vcc_sendmsg 调用空指针导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在调用 `vcc_sendmsg` 函数时触发空指针解引用，导致内核 Oops 并崩溃。该问题发生在 ATM（异步传输模式）协议栈的 `atmarpd` 设备操作处理流程中，当用户空间尝试通过 socket 发送消息时，由于缺少对应的 send 方法实现，系统尝试调用地址为 0 的函数指针。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000000
+PGD 0 P4D 0
+Oops: Oops: 0010 [#1] SMP KASAN NOPTI
+RIP: 0010:0x0
+Code: Unable to access opcode bytes at 0xffffffffffffffd6.
+Call Trace:
+ <TASK>
+ vcc_sendmsg+0xa10/0xc50 net/atm/common.c:644
+
+#问题根因
+`atmarpd_dev_ops` 结构体未实现 `send` 方法（函数指针为 NULL）。在 `vcc_sendmsg` 函数处理逻辑中，未对 `ops->send` 指针进行非空检查即直接调用，导致执行到地址 0 引发空指针解引用故障。
+
+#解决方案
+在 `atmarpd_dev_ops` 结构体中补充实现 `send` 方法。新增 `atmarpd_send` 函数，逻辑为调用 `atm_return_tx` 归还发送资源并使用 `dev_kfree_skb_any` 释放 skb，最后将该函数绑定到 `atmarpd_dev_ops` 的 `.send` 成员上，修复因指针为空导致的崩溃问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ef102a41ccd75c2384b680e5b5c19a8974273d9a

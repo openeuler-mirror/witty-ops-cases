@@ -1,0 +1,30 @@
+#标题
+trace/fgraph: 重复注册 notifier 导致内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 function_profile_enabled 接口进行写入操作测试时，若前一次写入操作中 start_graph_tracing 执行失败，再次写入该接口会触发内核 WARNING 日志。系统调用栈显示阻塞通知链注册过程中检测到回调函数已被注册。
+
+#主要错误日志
+notifier callback ftrace_suspend_notifier_call already registered
+WARNING: CPU: 2 PID: 86 at kernel/notifier.c:23 notifier_chain_register+0x44/0xb0
+...
+Call Trace:
+ <TASK>
+ blocking_notifier_chain_register+0x34/0x60
+ register_ftrace_graph+0x330/0x410
+ ftrace_profile_write+0x1e9/0x340
+ vfs_write+0xf8/0x420
+
+#问题根因
+在写入 function_profile_enabled 接口时，函数 `register_ftrace_graph` 会调用 `register_pm_notifier` 注册电源管理通知器。如果后续 `start_graph_tracing` 执行失败，代码直接跳转到 out 标签退出，但未执行 `unregister_pm_notifier` 操作。这导致通知器未被正确注销，下次再写入该接口时，系统尝试再次注册同一个通知器，从而触发“already registered”的 WARNING 警告。
+
+#解决方案
+在 `register_ftrace_graph` 函数中增加异常处理逻辑：
+1. 在 `start_graph_tracing` 失败的分支中，增加 `unregister_pm_notifier(&ftrace_suspend_notifier)` 调用，确保失败时注销已注册的通知器。
+2. 在 `ftrace_startup` 失败的分支中，同样增加 `unregister_pm_notifier(&ftrace_suspend_notifier)` 调用，防止资源泄漏和重复注册问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f5ae3d68866397727a96795e4768569d8fc0f6d5

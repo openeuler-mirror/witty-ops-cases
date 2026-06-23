@@ -1,0 +1,20 @@
+#标题
+octeontx2-pf: VF根节点父队列索引未配置导致SMQ Flush错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 octeontx2-pf 网卡驱动中，当配置 Virtual Function (VF) 的根节点（位于 TL2 级别）时，由于代码逻辑错误，未正确配置其父队列索引。这导致在运行过程中触发 'SMQ Flush' 错误，影响 VF 接口的 QoS 流量调度功能。
+
+#主要错误日志
+SMQ Flush errors
+
+#问题根因
+当前代码配置 PF 根节点在 TL1，VF 根节点在 TL2。但在处理 `NIX_TXSCH_LVL_TL2` 级别的调度队列配置时，代码遗漏了对 TL2 父队列寄存器（`NIX_AF_TL2X_PARENT`）的配置。这导致 VF 接口的 TL2 节点缺少父级连接信息，进而引发硬件调度错误 'SMQ Flush'。
+
+#解决方案
+在 `drivers/net/ethernet/marvell/octeontx2/nic/qos.c` 文件的 `__otx2_qos_txschq_cfg` 函数中，针对 `NIX_TXSCH_LVL_TL2` 分支补充父队列配置逻辑。具体修改为：在配置链路信息前，显式写入 `NIX_AF_TL2X_PARENT` 寄存器，将父队列索引设置为 `hw->tx_link`（左移16位），确保 VF 根节点正确挂载到 PF 根节点之下。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3f59fd1a514545b456449f94beb1cb687023366e

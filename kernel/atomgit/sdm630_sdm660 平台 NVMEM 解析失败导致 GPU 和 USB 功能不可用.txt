@@ -1,0 +1,24 @@
+#标题
+sdm630/sdm660 平台 NVMEM 解析失败导致 GPU 和 USB 功能不可用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核版本更新后，Qualcomm sdm630/sdm660 平台上 GPU 和 USB 设备无法正常使用。系统启动或驱动加载过程中，NVMEM 核心层解析 QFPROM 数据失败，导致依赖于 `gpu_speed_bin` 数据的硬件模块初始化失败。
+
+#主要错误日志
+未知（Commit 信息中未提供具体的内核报错日志原文，仅描述了 NVMEM core 拒绝解析的行为）
+
+#问题根因
+历史版本的 sdm630.dtsi 设备树中，`gpu_speed_bin` 节点定义的长度为 1 字节（reg = <0x41a2 0x1>），但其实际跨越了两个字节（偏移量为 5，位宽为 7 bits）。旧版本内核缺少对此类跨字节情况的长度检查，因此可以正常工作。
+引入提交 `7a06ef751077 ("nvmem: core: fix bit offsets of more than one byte")` 后，NVMEM 核心层增加了严格的长度校验逻辑，识别到该定义存在跨字节问题从而拒绝了解析请求，导致 GPU 和 USB 功能失效。此外，正确的位宽应为 8 bits 而非 7 bits。
+
+#解决方案
+修改设备树文件 `arch/arm64/boot/dts/qcom/sdm630.dtsi` 中 `gpu_speed_bin` 节点的属性定义：
+1. 将寄存器长度从 1 字节修改为 2 字节（`reg = <0x41a2 0x2>`），以匹配其实际跨越两个字节的物理特性。
+2. 将位宽从 7 bits 修正为 8 bits（`bits = <5 8>`），修正数据定义准确性。
+此修改通过了 NVMEM 核心层的合法性检查，恢复了 GPU 和 USB 设备的正常功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/35daff91090d72f5a9793b8c7755b3be154ed991

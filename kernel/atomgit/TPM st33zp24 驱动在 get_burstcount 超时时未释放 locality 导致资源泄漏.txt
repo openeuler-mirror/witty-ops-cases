@@ -1,0 +1,20 @@
+#标题
+TPM st33zp24 驱动在 get_burstcount 超时时未释放 locality 导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在访问 TPM 设备时，若 `get_burstcount()` 函数因超时返回 `-EBUSY` 错误，驱动程序直接返回错误码，未释放之前已获取的 locality（区域访问权），导致 locality 资源被持续占用无法释放，可能引发后续 TPM 操作阻塞或设备无法正常响应。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `st33zp24_send()` 在执行过程中调用了 `get_burstcount()`。当该函数返回错误（如 `-EBUSY`）时，代码逻辑直接 `return burstcnt` 退出，跳过了函数末尾的清理流程，导致之前通过 `request_locality` 获取的资源未被释放。
+
+#解决方案
+修改 `st33zp24_send()` 函数的错误处理路径。当 `get_burstcount()` 返回值小于 0 时，不再直接返回，而是将错误码赋值给 `ret` 变量，并通过 `goto out_err` 跳转至统一的错误处理标签，确保执行释放 locality 的清理代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ddca10bc37c2a930e09cbfaf3174c5dce0a57752

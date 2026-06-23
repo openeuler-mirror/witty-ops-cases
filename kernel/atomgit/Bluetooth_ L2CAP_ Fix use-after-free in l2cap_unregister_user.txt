@@ -1,0 +1,20 @@
+#标题
+Bluetooth: L2CAP: Fix use-after-free in l2cap_unregister_user
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在蓝牙 L2CAP 连接注销用户（`l2cap_unregister_user`）或注册用户（`l2cap_register_user`）的过程中，可能触发内核竞态条件，导致 use-after-free（释放后使用）故障，进而引发内核 panic 或内存崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+锁对象使用不当导致竞态条件。原代码中使用 `hci_dev_lock(hdev)` 来保护 `l2cap_conn` 对象的注销流程，但 `l2cap_conn_del()` 函数在注销 `l2cap_conn` 对象时实际上是在 `conn->lock` 下进行的。因此，`l2cap_register_user` 和 `l2cap_unregister_user` 必须使用相同的 `conn->lock` 来保护对 `conn->users` 和 `conn->hchan` 的访问，否则会因锁不一致导致并发访问已释放内存的风险。
+
+#解决方案
+将 `l2cap_register_user` 和 `l2cap_unregister_user` 函数中的锁操作由 `hci_dev_lock(hdev)` 替换为 `mutex_lock(&conn->lock)`，确保与 `l2cap_conn_del()` 使用同一把锁，从而消除竞态条件，防止 use-after-free。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cdcd51b815518fab411f367264aed76126c9f94c

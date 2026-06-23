@@ -1,0 +1,25 @@
+#标题
+UMMU 共享 identity 页表导致设备释放后其他 bypass 设备功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当多个设备通过 UMMU 的 identity 页表（bypass 模式）共享同一个 TID（Translation ID）时，若其中一个设备被释放，驱动会清除该共享 TID 对应的 TCT（Translation Context Table）配置项。这导致其他仍在使用该 TID 的 bypass 设备无法正常进行地址翻译，进而引发这些设备的功能异常（如 DMA 操作失败、通信中断等）。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的实现中，所有 bypass 设备共享同一个全局的 identity domain 和 TID。当任意一个 bypass 设备释放（detach）时，代码逻辑会清除该 TID 对应的 TCT 配置入口。由于其他仍在工作的 bypass 设备依赖该 TCT 配置，此清除操作破坏了它们的地址翻译上下文，导致功能异常。根因在于 identity domain 的资源管理模式未实现独立隔离，错误地复用了全局共享资源。
+
+#解决方案
+修改 UMMU 驱动的 identity domain 管理策略，不再使用全局共享的 identity domain，而是为每个 bypass 设备独立分配 TID 和配置。
+具体修改包括：
+1. 移除全局共享的 `ummu_identity_domain` 及相关的全局管理逻辑。
+2. 在 `ummu_domain_context_prepare` 函数中，针对 `IOMMU_DOMAIN_IDENTITY` 类型调用新增的 `ummu_domain_collect_pgtable_passthrough` 函数，为每个 domain 独立配置 bypass 属性（如设置 `matt_bypass` 标志）。
+3. 确保 identity domain 拥有独立的 `pgtbl_ops` 生命周期管理，防止在释放时错误影响其他设备。
+4. 调整 TCT 描述符写入逻辑，通过 `tct_desc->matt_bypass` 字段直接配置 bypass 属性，移除对 domain type 的硬编码判断，确保配置独立性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e25d223a4b4e1a6a6788b9a65d61386c451225e3

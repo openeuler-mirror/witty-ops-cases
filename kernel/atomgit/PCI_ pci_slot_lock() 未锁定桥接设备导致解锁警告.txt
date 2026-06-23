@@ -1,0 +1,20 @@
+#标题
+PCI: pci_slot_lock() 未锁定桥接设备导致解锁警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 PCIe 端口的热插拔或插槽复位操作时，内核打印出“unlocked secondary bus reset”警告信息，提示设备锁状态不平衡。具体表现为 `pciehp_reset_slot` 函数执行过程中触发了设备解锁警告。
+
+#主要错误日志
+pcieport 0000:e2:05.0: unlocked secondary bus reset via: pciehp_reset_slot+0x55/0xa0
+
+#问题根因
+`pci_slot_lock()` 函数设计意图是锁定该 slot 下的所有相关设备以防止并发冲突，但其实现未像 `pci_bus_lock()` 那样锁定提供该 slot 的桥接设备。这导致在执行复位等操作时，桥接设备未被锁定，却尝试解锁或操作，从而引发“unlocked secondary bus reset”警告，破坏了锁的平衡性。
+
+#解决方案
+修改 `drivers/pci/pci.c` 中的 `pci_slot_lock()`、`pci_slot_unlock()` 和 `pci_slot_trylock()` 函数。在遍历和锁定 slot 上的设备之前，先获取提供该 slot 的桥接设备的锁；在解锁时，先解锁 slot 上的设备，最后释放桥接设备的锁。以此确保锁操作的层级正确性和完整性，消除警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3a507d64372c2d98643c05e34aedc9ac7ae6b54d

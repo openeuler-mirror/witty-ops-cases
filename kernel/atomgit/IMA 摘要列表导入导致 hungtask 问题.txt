@@ -1,0 +1,21 @@
+#标题
+IMA 摘要列表导入导致 hungtask 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在导入 digest list（摘要列表）时，若该列表未被执行 measure（测量）或 appraise（评估）操作，内核将触发 hungtask（任务挂起）问题，导致相关进程无法继续执行。
+
+#主要错误日志
+[   ] %s not measured
+[   ] %s not appraised
+
+#问题根因
+在函数 `ima_check_measured_appraised` 中，当检测到 digest list 未被 measured 或 appraised 时，函数直接返回 `false`，但遗漏了解锁操作 `mutex_unlock(&iint->mutex)`。由于持有的锁 `iint->mutex` 未被释放，导致后续试图获取该锁的进程进入睡眠等待状态，从而引发 hungtask。
+
+#解决方案
+在 `ima_check_measured_appraised` 函数的两个错误返回路径中，补充调用 `mutex_unlock(&iint->mutex)`，确保在函数返回前正确释放互斥锁，避免死锁发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/453cf6679f24a183b5cf526ae8937e6d00880ea4

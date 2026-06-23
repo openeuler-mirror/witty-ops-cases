@@ -1,0 +1,26 @@
+#标题
+iommu/arm-smmu-v3: 重复 Stream ID 导致 SMMU 驱动探测失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在搭载 ASPEED VGA 显卡（如 AST1150 PCI-to-PCI Bridge + ASPEED Graphics Family）的系统上，由于 PCI 桥接设备与 VGA 控制器存在 DMA 别名，导致 IORT 逻辑向 `fwspec->ids` 数组填充了重复的 Stream ID。
+在旧版本内核中仅表现为内核警告日志，但在 v6.15-rc1 及之后的版本（包含相关补丁的稳定版）中，SMMU 驱动在 `iommu_device_probe` 阶段因遇到重复的 Stream ID 插入失败而返回错误，导致整个 SMMU 设备探测失败，进而影响相关设备的 IOMMU 功能正常使用。
+
+#主要错误日志
+- `ast 0008:07:00.0: stream 67328 already in tree`
+- `arm-smmu-v3 arm-smmu-v3.9.auto: Failed to register iommu`
+- `arm-smmu-v3 arm-smmu-v3.9.auto: probe with driver arm-smmu-v3 failed with error -22`
+
+#问题根因
+IORT 逻辑通过 `pci_for_each_dma_alias()` 为 PCI 设备分配 Stream ID 时，会将相同的 ID 重复填入 `fwspec->ids` 数组。
+SMMU 驱动在 `arm_smmu_insert_master()` 例程中将 Stream ID 插入红黑树时，原有的逻辑一旦检测到重复 ID（通过 `rb_find_add` 返回非空节点），无论该 ID 是否属于同一个 master 设备，均直接返回 `-EINVAL` 错误。
+该逻辑被提交 cdf315f907d4 引入，导致在处理具有 DMA 别名的桥接 PCI 设备时，SMMU 驱动注册失败。
+
+#解决方案
+修改 `arm_smmu_insert_master()` 函数中的重复 ID 处理逻辑。当检测到重复的 Stream ID 时，增加判断：检查已存在的 Stream ID 是否属于同一个 master 设备。
+如果是同一个 master 设备（即 DMA 别名导致的合法重复），则跳过该 ID 继续处理，不返回错误；仅当重复 ID 属于不同设备时才报错并中止探测。同时优化了警告日志，打印出冲突设备的名称以便调试。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ef0019bbe224cc8cb532dc1f89730f57a499aad

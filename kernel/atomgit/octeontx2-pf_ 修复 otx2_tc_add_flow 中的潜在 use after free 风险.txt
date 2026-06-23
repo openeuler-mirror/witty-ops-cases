@@ -1,0 +1,20 @@
+#标题
+octeontx2-pf: 修复 otx2_tc_add_flow 中的潜在 use after free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 otx2_tc_add_flow 函数的错误处理路径中，存在潜在的 Use-After-Free 风险。当代码执行到释放逻辑时，先调用了 kfree_rcu(new_node, rcu) 释放内存，随后立即访问 new_node->is_act_police 成员。由于并未进入 RCU 临界区保护，这可能导致内核访问已释放的内存区域，引发内核崩溃或内存数据破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+代码逻辑顺序错误。在错误处理标签 `free_leaf` 下，代码首先调用 `kfree_rcu(new_node, rcu)` 将 `new_node` 加入释放队列，紧接着在下一行解引用 `new_node->is_act_police` 进行判断，并在后续代码中继续访问该结构体成员及持有互斥锁操作。这违反了内存管理规则，导致释放后访问。
+
+#解决方案
+调整代码执行顺序，将 `kfree_rcu(new_node, rcu)` 的调用移动到所有对 `new_node` 成员访问操作（包括检查 `is_act_police` 及相关的互斥锁操作）完成之后，确保在释放内存前完成所有必要的解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/adbfad37909b03327dccadc32dca3dfba6c870d9

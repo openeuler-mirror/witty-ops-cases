@@ -1,0 +1,21 @@
+#标题
+rt2x00usb: USB anchor 生命周期管理错误导致驱动解绑时内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 rt2x00 USB WiFi 驱动程序被解绑（unbind）而设备未物理断开连接时（例如在探测延迟或配置变更期间），会发生内存泄漏。系统内存资源无法正确释放。
+
+#主要错误日志
+未知
+
+#问题根因
+USB 驱动程序绑定到 USB 接口，因此任何设备管理资源（devres）的生命周期应绑定到接口设备，而不是父 USB 设备。
+原代码中 `rt2x00dev->anchor` 通过 `devm_kmalloc` 分配时，使用了父设备 `usb_dev->dev` 作为设备资源管理的父节点。这导致当驱动与接口解绑时，该资源不会自动释放，从而引发内存泄漏。
+
+#解决方案
+修改 `rt2x00usb_probe` 函数中的 `devm_kmalloc` 调用，将设备资源管理的父节点从 `&usb_dev->dev`（父 USB 设备）修改为 `&usb_intf->dev`（USB 接口设备），确保 USB anchor 的生命周期与驱动绑定关系一致，从而在驱动解绑时正确释放资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9ac19559816fc99383d17e0dc26dbc131c03ef3c

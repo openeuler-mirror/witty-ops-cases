@@ -1,0 +1,27 @@
+#标题
+[urma] 开启 shared-ctp 特性时 TP 复用与导入失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核中开启 `ubcore_enable_shared_ctp` 开关后，进行 TP（Transport Path）复用或导入 jetty 操作时失败，导致连接建立或数据传输异常。系统日志中会记录查找 host EID 失败的错误信息，相关接口返回错误码 `-ENOENT`。
+
+#主要错误日志
+- `Failed to lookup local host eid, ret=%d, local_port_eid=...`
+- `Failed to lookup peer host eid, ret=%d, peer_port_eid=...`
+- `Failed to lookup host info in create req.`
+- `Failed to fill tpid cfg, ret=%d`
+- `Failed to lookup host info in destroy req, ret=%d`
+- `Failed to lookup host info in isref_req, ret=%d`
+
+#问题根因
+在 `e49fea6046b8` ("urma: implement kernel-space get tp list with hash table.") 提交中实现了 TP 复用的哈希表逻辑，但未支持 shared-CTP 特性。当开启 shared-CTP 时，TP 的键值和配置应使用 host EID 而非 port EID 进行映射，原代码直接使用了 port EID，导致查找失败。
+
+#解决方案
+1. 新增全局开关变量 `ubcore_enable_shared_ctp`（默认关闭），用于控制是否启用 shared-CTP 功能。
+2. 在 `ubcore_fill_tpid_reuse_key`、`ubcore_fill_bind_tpid_reuse_key`、`ubcore_fill_tpid_cfg` 以及创建、销毁、isref 请求处理流程中，增加对 `ubcore_enable_shared_ctp` 开关的判断。
+3. 若开关开启，调用 `ubcore_lookup_host_info_local_and_peer` 函数将 local/peer port EID 转换为 host EID，用于后续的哈希查找与配置填充；若查找失败则返回 `-ENOENT` 错误，确保逻辑正确回退。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e5a516d8dab3eabcf3f6423b163cd8234bc00053

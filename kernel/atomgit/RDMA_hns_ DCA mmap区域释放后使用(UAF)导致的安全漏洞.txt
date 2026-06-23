@@ -1,0 +1,23 @@
+#标题
+RDMA/hns: DCA mmap区域释放后使用(UAF)导致的安全漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在HNS RDMA驱动执行复位或热拔除操作后，DCA mmap区域对应的内存已被释放，但用户态进程持有的vma映射仍然有效且未被取消映射（unmapped/zapped）。这导致内核态内存被释放后，用户态仍可访问该内存区域，存在释放后使用风险。
+
+#主要错误日志
+未知
+
+#问题根因
+DCA mmap区域在驱动复位或热拔除后会被释放。原有的实现使用了自定义的 `mmap_dca` 函数通过 `vm_insert_pages` 建立映射，该机制不会在驱动移除时自动销毁对应的vma映射。因此，当底层内存被释放后，vma依然有效，导致了PUAF问题。
+
+#解决方案
+修改DCA区域的mmap实现方式，废弃自定义的 `mmap_dca` 函数，改为调用标准的 `rdma_user_mmap_io()` 接口。
+1. 在初始化DCA状态时，将传入 `hns_roce_user_mmap_entry_insert` 的参数从内核虚拟地址 `(u64)kaddr` 改为物理地址 `(u64)virt_to_phys(kaddr)`，以适配 `rdma_user_mmap_io` 的要求。
+2. 在 `hns_roce_mmap` 流程中，针对 `HNS_ROCE_MMAP_TYPE_DCA` 类型，移除对旧 `mmap_dca` 函数的调用，改为设置 `VM_DONTEXPAND` 标志并使用通用的mmap处理逻辑。
+这确保了在驱动移除时，核心代码会通过回调机制自动zap对应的vma，消除UAF隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/13d73fd9fbe129b47e1eb0b6294c4e488f61009a

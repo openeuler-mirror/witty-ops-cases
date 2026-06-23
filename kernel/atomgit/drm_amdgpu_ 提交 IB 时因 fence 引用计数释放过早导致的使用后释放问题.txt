@@ -1,0 +1,20 @@
+#标题
+drm/amdgpu: 提交 IB 时因 fence 引用计数释放过早导致的使用后释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 驱动中调用 `amdgpu_amdkfd_submit_ib` 提交间接缓冲区时，若内核配置了内存调试功能（如 KASAN），可能会检测到内存非法访问或释放后使用错误。具体表现为内核日志中出现关于释放内存被传递的警告信息，严重时可能导致内核 panic 或系统不稳定。
+
+#主要错误日志
+drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd.c:697 amdgpu_amdkfd_submit_ib() warn: passing freed memory 'f' (line 696)
+
+#问题根因
+在函数 `amdgpu_amdkfd_submit_ib` 中，代码逻辑错误地在调用 `dma_fence_wait()` 等待 fence 完成之前，就调用了 `dma_fence_put()` 释放 fence 的引用计数。如果 `dma_fence_put()` 释放的是最后一个引用，fence 对象可能会在 `dma_fence_wait()` 调用之前被释放，从而导致在 `dma_fence_wait()` 中访问已释放内存，引发 use-after-free 漏洞（CVE-2026-31566）。
+
+#解决方案
+调整代码执行顺序，确保先调用 `dma_fence_wait()` 等待 fence 完成，等待操作结束后再调用 `dma_fence_put()` 释放 fence 的引用计数，从而避免对已释放对象的访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/10c66cf51ccdc51d2b14267ad14b481ee2b708ef

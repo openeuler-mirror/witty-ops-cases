@@ -1,0 +1,20 @@
+#标题
+urma: ipourma 设备 down 状态下发包触发 use-after-free 导致内核 panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 ipourma 网络设备执行 `ifconfig down`（关闭设备）操作后，如果此时仍有数据包在处理流程中，会触发 use-after-free 错误，导致内核 panic（内核崩溃）。
+
+#主要错误日志
+未知
+
+#问题根因
+当 ipourma 设备关闭（shut down）时，虽然代码中调用了 flush_workqueue 清空了发送队列，但可能存在部分数据包已经进入了网络接口队列，但尚未到达队列工作处理流程（queue work processing flow）。在 flush_workqueue 执行完毕后，这些数据包仍会触发新的任务调度。由于此时设备资源已经被释放，回调任务访问这些资源时便触发了 dangling pointer（悬垂指针）引发的 use-after-free 错误。
+
+#解决方案
+在回调任务函数 `ipourma_post_send` 的开始处增加设备状态检查。通过检查 `IPOURMA_DEV_ADMIN_UP` 标志位，如果设备未处于 ADMIN_UP 状态，则直接返回，不再继续处理数据包。这确保了在设备关闭且资源释放后，后续的回调任务能够安全退出，避免访问已释放的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8696bfa6902ebbef0d14a1ec1bbeb3b725d858cf

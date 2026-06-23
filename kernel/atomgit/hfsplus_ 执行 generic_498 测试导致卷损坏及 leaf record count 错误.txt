@@ -1,0 +1,24 @@
+#标题
+hfsplus: 执行 generic/498 测试导致卷损坏及 leaf record count 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 xfstests 的 generic/498 测试用例后，HFS+ 文件系统卷处于损坏状态。具体表现为 `fsck.hfsplus` 检查时报错 "Invalid leaf record count (It should be 16 instead of 2)"。测试场景涉及创建目录、硬链接以及模拟掉电重挂载，最终文件系统状态不一致。
+
+#主要错误日志
+** Checking catalog file.
+Invalid leaf record count
+(It should be 16 instead of 2)
+b-tree write err: %d, ino %lu
+(注：最后一行为补丁新增的错误打印，用于捕获 b-tree 写回失败的情况)
+
+#问题根因
+HFS+ b-tree 头部的 `leaf_count` 字段在内存中被 `hfs_brec_insert()` 修改（硬链接创建过程中触发），但 `hfsplus_cat_write_inode()` 函数未调用 `hfs_btree_write()` 将其写回磁盘。这导致 Catalog File 的 b-tree 状态未完全同步，从而在文件系统检查时出现不一致。
+
+#解决方案
+在 `hfsplus_cat_write_inode()` 函数中增加对 `hfs_btree_write()` 的调用，确保在 inode 写回时将 b-tree 头部信息（如 leaf_count）同步存储到磁盘，保证文件系统一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1e9c7afdd3d7aec3446b3a131d5dd7a42526b2af

@@ -1,0 +1,23 @@
+#标题
+TCP GSO 分段时最后一段 skb 时间戳标志丢失导致无法生成时间戳
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 TCP GSO（Generic Segmentation Offload）且关闭 TSO 的场景下，发送端对数据包请求硬件时间戳、BPF 时间戳或调度时间戳时，GSO 分段后的最后一个 skb 无法生成相应的时间戳记录，导致时间戳功能缺失或不完整。
+
+#主要错误日志
+未知
+
+#问题根因
+在进行 TCP GSO 分段处理时，`tcp_gso_tstamp` 函数仅硬编码设置了 `SKBTX_SW_TSTAMP` 标志，而未从原始 GSO skb 中继承 `SKBTX_HW_TSTAMP`、`SKBTX_BPF` 和 `SKBTX_SCHED_TSTAMP` 等标志位。这导致分段生成的最后一个 skb 的 `tx_flags` 为空（或缺失关键标志位），内核因此无法在该最后一个分段上生成请求的时间戳。
+
+#解决方案
+修改 `net/ipv4/tcp_offload.c` 中的 `tcp_gso_tstamp` 函数逻辑：
+1. 从原始 GSO skb 中提取所有时间戳相关标志（`skb_shinfo(gso_skb)->tx_flags & SKBTX_ANY_TSTAMP`）。
+2. 将提取的标志位赋值给分段后的 skb，替代原先仅设置 `SKBTX_SW_TSTAMP` 的做法。
+此修复确保最后一个 skb 能够继承原始请求的时间戳标志，从而正确触发各层时间戳的生成逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4eebcb01dbf6ed3cab9e072a953617b10fec514c

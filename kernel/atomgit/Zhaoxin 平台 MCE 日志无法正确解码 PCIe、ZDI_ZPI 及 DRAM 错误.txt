@@ -1,0 +1,39 @@
+#标题
+Zhaoxin 平台 MCE 日志无法正确解码 PCIe、ZDI/ZPI 及 DRAM 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Zhaoxin（兆芯）或 Centaur 平台上发生 PCIe、ZDI/ZPI 或 DRAM 硬件错误时，系统产生的 MCE（Machine Check Exception）日志未能被正确解析和记录。
+具体表现为：
+1. `mcelog` 工具无法识别并解码上述特定类型的硬件错误信息。
+2. 在 NMI 上下文处理严重错误（Panic 级别）时，相关错误信息未被及时记录到 MCE 日志缓冲区，导致故障现场缺失或记录不全。
+3. 部分未定义的错误类型在日志中仅打印提示信息，缺乏详细的硬件上下文。
+
+#主要错误日志
+- `pr_info("Undefined Parity error\n");`
+- `pr_info("Undefined dvad error\n");`
+- `pr_info("Undefine pcie error\n");`
+- `pr_info("Undefined ZDI Error\n");`
+
+#问题根因
+内核原有的 APEI（ACPI Platform Error Interface）处理逻辑中，`arch_apei_report_mem_error`、`arch_apei_report_pcie_error` 和 `arch_apei_report_zdi_error` 等函数缺少针对 Zhaoxin/Centaur 架构的特定实现。
+导致在处理该架构下的 CPER（Common Platform Error Record）错误记录时，无法将固件上报的 PCIe、ZDI/ZPI 和 DRAM 错误正确转换为标准的 MCE（Machine Check）格式并记录到内核日志中，同时也未在 NMI 处理流程中针对 Panic 级别的错误进行有效的日志上报。
+
+#解决方案
+1. **新增 Zhaoxin 专用错误上报接口**：
+   在 `arch/x86/kernel/cpu/mce/apei.c` 中新增 `zx_apei_mce_report_mem_error`、`zx_apei_mce_report_pcie_error` 和 `zx_apei_mce_report_zdi_error` 函数，针对 Zhaoxin 特定型号（Family 7 Model 91）实现硬件错误到 MCE 寄存器格式的转换与记录逻辑。
+
+2. **Hook 架构相关函数**：
+   修改 `arch/x86/kernel/acpi/apei.c`，在 `arch_apei_report_mem_error`、`arch_apei_report_pcie_error` 和 `arch_apei_report_zdi_error` 中增加对 `X86_VENDOR_ZHAOXIN` 和 `X86_VENDOR_CENTAUR` 的判断分支，调用上述新增的专用处理函数。
+
+3. **完善 GHES 处理流程**：
+   - 在 `drivers/acpi/apei/ghes.c` 的 `ghes_do_proc` 流程中，增加对 PCIe 和 ZDI 错误的 `arch_apei_report_*` 调用。
+   - 在 `ghes_in_nmi_queue_one_entry` 中，针对 Panic 级别的严重错误，在系统崩溃前遍历错误节，调用对应的 `arch_apei_report_*` 函数确保错误信息被记录。
+
+4. **导出符号与声明**：
+   添加相关函数的导出符号（`EXPORT_SYMBOL_GPL`）及头文件声明，确保模块间调用正常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9b4fa77d0c477fbaebfdebd1259e387b88824da

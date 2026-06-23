@@ -1,0 +1,25 @@
+#标题
+XEN PV 环境下 folio_pte_batch() 错误批量处理导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 XEN PV 虚拟化环境中，`folio_pte_batch()` 函数在处理页表项（PTE）批量操作时，可能因 `pte_advance_pfn()` 在特定条件下返回 `pte_none()`，导致错误地将不属于当前 folio 的内存页纳入批量处理范围。例如，对于一个 4 页的 folio，错误地批量处理了 5 个页表项。此行为会触发 `VM_WARN_ON_FOLIO` 内核警告，通常与 `libc.so.6` 等内存映射操作相关，可能导致内存管理子系统状态不一致。
+
+#主要错误日志
+- `page dumped because: VM_WARN_ON_FOLIO((_Generic((page + nr_pages - 1), const struct page *: (const struct folio *)_compound_head(page + nr_pages - 1), struct page *: (struct folio *)_compound_head(page + nr_pages - 1))) != folio)`
+- `[ T2552] folio_pte_batch: printing PTE values at addr=0x7f1ac9dc5000`
+- `[ T2552] PTE[456] = 000000010085f125`
+- `[ T2552] PTE[457] = 0000000000000000 <-- not present`
+- `[ T2552] PTE[458] = 0000000101da7125`
+
+#问题根因
+在 XEN PV 环境下，`pte_advance_pfn()` 调用链中的 `pte_pfn_to_mfn()` 函数存在特殊处理逻辑：当遇到 `INVALID_P2M_ENTRY`（无效的 MFN）时，会返回一个空的 non-present PTE（即 `pte_none()`）。
+原代码逻辑中，如果 `pte_advance_pfn()` 返回了 `pte_none()`，且内存中实际的下一个 PTE 也恰好是 `pte_none()`（例如 folio 结尾后的未映射区域），`pte_same()` 比较将会通过，导致循环无法正确终止，继续批量处理 folio 范围之外的 PTE。这导致 `folio_pte_batch()` 返回的批量计数超过了 folio 实际包含的页面数。
+
+#解决方案
+修改 `folio_pte_batch()` 函数，在进入批量处理循环前，根据当前 PTE 的 PFN 与 folio 的结束 PFN 提前计算并限制最大可批量处理数量 `max_nr`。通过 `min_t` 运算确保批量处理范围严格限制在当前 folio 的有效 PFN 边界内，从而避免因 XEN PV 特殊的 PFN 到 MFN 转换机制导致的越界批量处理问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/043a4960d4435f477cfb13a2b00ec82df977ae9f

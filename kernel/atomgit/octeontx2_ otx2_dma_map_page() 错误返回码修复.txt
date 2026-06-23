@@ -1,0 +1,20 @@
+#标题
+octeontx2: otx2_dma_map_page() 错误返回码修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `otx2_dma_map_page()` 调用 `dma_map_page_attrs()` 映射失败时，调用者通过 `dma_mapping_error()` 无法检测到错误。这是因为该函数将映射失败错误码错误地转换为了 0（即 NULL），而 0 是一个合法的 DMA 地址，导致错误被掩盖，进而可能引发后续的数据传输异常或内存访问错误。
+
+#主要错误日志
+未知
+
+#问题根因
+根据内核定义，0 是一个合法的 DMA 地址，而 `dma_map_XXX()` 函数的错误返回值应为 `DMA_MAPPING_ERROR`（通常定义为 ~0）。在原有代码逻辑中，`otx2_dma_map_page()` 检测到 `dma_map_page_attrs()` 返回错误后，错误地返回了 `(dma_addr_t)NULL`（即 0）。调用者使用 `dma_mapping_error()` 检查返回值时，会认为 0 是合法地址，从而未能捕获到 DMA 映射失败的错误。
+
+#解决方案
+修改 `otx2_dma_map_page()` 函数，移除中间变量和错误的错误值转换逻辑，直接返回 `dma_map_page_attrs()` 的原始返回值。这样当映射失败时，返回值为 `DMA_MAPPING_ERROR`，调用者可以正确通过 `dma_mapping_error()` 识别错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9cf608d0c71eb358a21d0aa0bf962084c9d8d9c5

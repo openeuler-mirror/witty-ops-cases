@@ -1,0 +1,23 @@
+#标题
+Intel UFS 控制器 S3 睡眠唤醒失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Intel Alder Lake 平台在使用 UFS 设备时，进入 S3（Suspend-to-RAM）睡眠状态后无法正常唤醒，系统无法从深度睡眠状态恢复。
+
+#主要错误日志
+未知
+
+#问题根因
+Intel 平台的 UFS 控制器对电源状态有特定要求：S0ix（Suspend-to-Idle）状态下链路应保持 HIBERNATE 状态，而 S3（Suspend-to-RAM）状态下由于上下文丢失，链路状态必须为 OFF。
+驱动原有的电源管理策略由 `spm_lvl` 参数控制，默认配置为 3（链路 HIBERNATE，设备 SLEEP），这适用于 S0ix。但在进入 S3 时，如果链路不是 OFF 状态，系统将无法正确恢复，导致唤醒失败。
+
+#解决方案
+在驱动层实现针对 Intel 控制器的动态电源策略切换：
+1. 在挂起流程的 `->prepare()` 阶段，检查系统挂起目标状态。若目标状态非 S0ix（即为 S3 等深度睡眠），强制将 `spm_lvl` 切换为 5（链路 OFF，设备 POWEROFF），并将原设置保存至 `saved_spm_lvl`。
+2. 在恢复流程的 `->complete()` 阶段，检查并恢复 `saved_spm_lvl` 中保存的原有 `spm_lvl` 设置，以确保 S0ix 场景下的策略正常工作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/152f8f6f334eac6f8b82ec7c71504d8ca3f921dc

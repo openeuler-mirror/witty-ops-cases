@@ -1,0 +1,21 @@
+#标题
+f2fs 多设备挂载路径解析越界访问故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 F2FS 文件系统配置多设备挂载时，若设备路径字符串长度恰好等于 `MAX_PATH_LEN`，会导致路径数组溢出，紧随其后的结构体字段被错误解析为路径的一部分。表现为挂载失败，内核日志中打印出包含乱码（如 `\xff\x01`）的错误设备路径，并提示 "Failed to find devices"。
+
+#主要错误日志
+[16937.192225] F2FS-fs (loop0): Mount Device [ 0]: /mnt/f2fs/012345678901234567890123456789012345678901234567890123\xff\x01,      511,        0 -    3ffff
+[16937.192268] F2FS-fs (loop0): Failed to find devices
+
+#问题根因
+`struct f2fs_dev_info` 结构体中的 `path` 字段定义为 `char path[MAX_PATH_LEN]`。当存储的设备路径字符串长度达到 `MAX_PATH_LEN` 时，由于字符串结束符 `\0` 无空间存放，导致该字符数组未正常终止。内核后续解析路径时发生越界访问，将紧跟在 `path` 数组之后的结构体字段误认为是路径的一部分，从而导致解析出错误的设备路径。
+
+#解决方案
+修改 `fs/f2fs/f2fs.h` 中 `struct f2fs_dev_info` 结构体的定义，将 `path` 数组的大小从 `MAX_PATH_LEN` 扩展为 `MAX_PATH_LEN + 1`，确保在任何情况下（包括路径填满时）都有足够的空间存储字符串结束符 `\0`，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b69e533641f13756e15ac5839fa676f5a192ef9e

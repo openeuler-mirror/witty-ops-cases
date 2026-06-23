@@ -1,0 +1,24 @@
+#标题
+hwmon: (occ) 修复非对齐内存访问导致的未定义行为
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译内核或使用特定架构（对内存对齐要求严格）运行时，编译器报出警告，提示对 packed 结构体成员（如 `power_sensor_2` 中的 `accumulator` 和 `update_tag`）取地址可能导致非对齐指针访问。这属于未定义行为，在某些硬件架构上可能引发内核崩溃（Oops/panic）或数据读取错误。
+
+#主要错误日志
+drivers/hwmon/occ/common.c:492:27: warning: taking address of packed member 'accumulator' of class or structure 'power_sensor_2' may result in an unaligned pointer value [-Waddress-of-packed-member]
+drivers/hwmon/occ/common.c:493:13: warning: taking address of packed member 'update_tag' of class or structure 'power_sensor_2' may result in an unaligned pointer value [-Waddress-of-packed-member]
+
+#问题根因
+代码在 `occ_get_powr_avg` 函数调用中，直接传递了 packed 结构体成员（`accumulator` 和 `update_tag`）的地址作为参数。由于 packed 结构体成员可能在内存中非对齐，将其指针传递给期望对齐访问的函数属于未定义行为，存在潜在风险。
+
+#解决方案
+修改 `occ_get_powr_avg` 函数的接口与调用方式：
+1. 将函数参数从指针类型改为值传递（`u64 accum`, `u32 samples`）。
+2. 在调用该函数前，先使用 `get_unaligned_be64` 和 `get_unaligned_be32` 安全地读取非对齐成员的值。
+3. 将读取后的值直接传递给函数，避免传递非对齐指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a952226583be5b647c65cbada3b6e7c1e3596c54

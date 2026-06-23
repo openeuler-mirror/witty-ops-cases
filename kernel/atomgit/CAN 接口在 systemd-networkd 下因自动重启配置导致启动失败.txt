@@ -1,0 +1,23 @@
+#标题
+CAN 接口在 systemd-networkd 下因自动重启配置导致启动失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统中同时使用新版本 systemd-networkd 和未实现 `do_set_mode` 回调函数的 CAN 设备驱动时，接口无法被正确启用（up）。具体表现为：systemd-networkd 尝试将 CAN 接口的自动重启延迟设置为 0（即禁用自动重启）时，内核返回操作不支持错误，导致接口配置流程中断。
+
+#主要错误日志
+- "Device doesn't support restart from Bus Off" (推断：由内核 Netlink 接口返回给用户空间的错误提示)
+
+#问题根因
+先前的内核修复补丁（commit c1f3f9797c1f）为了修复空指针引用问题，强制要求：只要设置了 `IFLA_CAN_RESTART_MS` 参数，设备必须实现 `do_set_mode` 回调，否则返回 `-EOPNOTSUPP`。
+然而，systemd-networkd 的后续更新（commit 13ce5d4632e3）在处理 `RestartSec=0`（禁用重启）时，会向内核发送 `restart_ms` 为 0 的配置请求。
+对于不支持硬件自动重启的设备（无 `do_set_mode`），设置 `restart_ms=0` 是一个合法的“禁用”操作，不应被拒绝。原有的校验逻辑未区分“启用重启（值>0）”和“禁用重启（值=0）”的场景，导致禁用操作也被拦截，从而引发接口无法启动的故障。
+
+#解决方案
+修改 `can_changelink` 函数中的校验逻辑：在检查设备是否支持重启（`do_set_mode` 是否为空）之前，先判断传入的 `restart_ms` 值是否为 0。
+如果 `restart_ms` 为 0，表示用户意图是禁用自动重启，此时允许操作继续执行，不再强制校验 `do_set_mode` 指针；仅当 `restart_ms` 大于 0 时，才要求设备必须支持重启功能。此修改允许不支持自动重启的设备正常接收“禁用重启”的配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fafcc48c95835aa6829ba699235bc81bad522cf3

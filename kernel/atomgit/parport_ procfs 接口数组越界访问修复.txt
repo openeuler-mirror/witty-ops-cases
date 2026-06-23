@@ -1,0 +1,20 @@
+#标题
+parport: procfs 接口数组越界访问修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当访问 `/proc/sys/dev/parport/` 下的相应参数（如 active_device、autoprobe 等）时，若设备名称或描述信息较长，内核可能发生数组越界访问，导致内存破坏或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `drivers/parport/procfs.c` 中，代码使用 `snprintf` 向栈上的 `buffer` 数组写入数据。`snprintf` 函数返回的是“原本想要写入的字符数”，而非实际写入的字符数。当待打印的字符串长度超过 buffer 剩余大小时，`snprintf` 的返回值会大于实际可写入的长度。后续代码直接累加该返回值作为下一次写入的起始偏移 `len`，导致 `buffer + len` 指针超出 `buffer` 的边界，引发越界访问。
+
+#解决方案
+将代码中所有的 `snprintf` 调用替换为 `scnprintf`。`scnprintf` 返回的是实际写入 buffer 的字符数，能够正确反映 buffer 的剩余空间，从而防止指针偏移超出 buffer 范围，修复数组越界问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/327d477f78976f6ccd01f8206d6731b67386151f

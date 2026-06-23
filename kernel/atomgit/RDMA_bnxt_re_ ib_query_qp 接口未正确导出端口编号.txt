@@ -1,0 +1,22 @@
+#标题
+RDMA/bnxt_re: ib_query_qp 接口未正确导出端口编号
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 bnxt_re 驱动调用 `ib_query_qp` 查询队列对（QP）属性时，返回的结构体 `qp_attr` 中 `port_num` 字段未正确赋值（可能为 0 或随机值）。这导致依赖该字段的用户态应用或上层协议栈无法获取准确的端口连接信息，可能导致后续链路状态判断错误或配置异常。
+
+#主要错误日志
+未知
+
+#问题根因
+当前驱动实现中，`bnxt_re_query_qp` 函数在处理查询结果时，遗漏了对 `qp_attr->port_num` 字段的赋值。同时，底层固件返回的数据结构中已包含 `port_id`，但驱动未将其从固件响应中提取并转换为 IB 标准定义的端口号。
+
+#解决方案
+1. 在驱动内部 QP 结构体 `bnxt_qplib_qp` 中新增 `port_id` 成员变量。
+2. 在底层 `bnxt_qplib_query_qp` 函数中，从固件响应数据中解析并保存 `port_id`。
+3. 在上层 `bnxt_re_query_qp` 接口函数中，调用新增的辅助函数 `__to_ib_port_num` 将内部 `port_id` 转换为 IB 标准端口号（port_id + 1），并正确赋值给 `qp_attr->port_num`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/55bdec612cc7c13c99a634d9e6caa2493560ee3b

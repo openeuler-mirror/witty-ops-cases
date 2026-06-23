@@ -1,0 +1,23 @@
+#标题
+obmm 页表遍历跳过 PFN 映射区导致权限更新失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+OBMM 模块在进行所有权转移后，调用 `update_vma_page_range()` 更新页表权限时，函数静默执行完成但实际未做任何修改。导致 PFN 映射区域的页表权限未按预期更新，可能引发内存访问权限错误或安全风险。此外，原有逻辑在处理 PFN 映射的大页时可能错误地触发 `split_huge_pmd()`，导致内核异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根本原因在于 `walk_page_range()` 内部机制与 OBMM 驱动特性不匹配：
+1. **默认跳过机制**：`walk_page_range()` 默认会跳过设置了 `VM_PFNMAP` 标志的 VMA，而 OBMM 的所有 PFN 映射区域均带有此标志。因此 `update_vma_page_range()` 调用时直接跳过了目标区域，导致权限更新操作未执行。
+2. **大页处理逻辑错误**：原有的 `update_pmd_entry` 函数在处理大页时返回 1，这一返回值会触发内核调用 `split_huge_pmd()`。对于没有 backing struct page 的 PFN 映射大页，该操作是不合法的。
+
+#解决方案
+1. **注册自定义 test_walk 回调**：在 `mm_walk_ops` 中添加 `obmm_walk_test` 回调函数，该函数强制返回 0，从而绕过 `walk_page_range()` 中对 `VM_PFNMAP` 的默认跳过检查，确保 OBMM PFN 映射区域能正常进行页表遍历。
+2. **修正 PMD 入口处理逻辑**：将 `update_pmd_entry` 中处理大页的返回值逻辑由 `return 1` 修改为设置 `walk->action = ACTION_CONTINUE` 并 `return 0`。此举旨在跳过 PTE 级别的遍历，同时阻止内核对 PFN 映射大页调用 `split_huge_pmd()`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/81fff65157eb295d77d94f1bfa90427e68561157

@@ -1,0 +1,21 @@
+#标题
+tracing: 分支统计 tracer 注册错误检查逻辑反转导致初始化异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动或模块初始化阶段，在尝试注册 annotated branch stats 或 all branch stats 追踪器时，即使注册成功也可能打印警告信息；反之，注册失败时可能无法正确报错。该缺陷导致内核对分支统计追踪器的初始化状态判断错误，影响跟踪功能的正常使用。
+
+#主要错误日志
+printk(KERN_WARNING "Warning: could not register annotated branches stats\n");
+printk(KERN_WARNING "Warning: could not register all branches stats\n");
+
+#问题根因
+代码中对 `register_stat_tracer` 函数返回值的检查逻辑存在反转错误。原代码使用 `if (!ret)` 作为出错处理分支，但实际上 `register_stat_tracer` 成功时返回 0，失败时返回非 0 错误码。这导致注册成功时反而进入错误处理流程打印警告并返回错误状态，而注册失败时却正常返回。
+
+#解决方案
+修正条件判断逻辑，将 `if (!ret)` 修改为 `if (ret)`，确保仅在函数返回非 0 值（即注册失败）时打印警告信息并返回错误码。同时将错误处理分支的返回值从硬编码的 `1` 修改为 `ret`，以传递真实的错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/98bd45dd603d73d1cf2c431cf24370ff1cb8dc94

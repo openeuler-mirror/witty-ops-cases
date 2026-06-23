@@ -1,0 +1,38 @@
+#标题
+ipc: create_ipc_ns 内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `create_ipc_ns` 创建 IPC 命名空间时，若 `msg_init_ns` 因为 percpu 内存分配失败等原因调用失败，系统未能正确释放已分配的 ipc sysctls 和 mq sysctls 资源，导致内核内存泄漏。通过 kmemleak 工具可观测到未引用的对象。
+
+#主要错误日志
+```
+unreferenced object 0xffff88819de2a600 (size 512):
+  comm "shmem_2nstest", pid 120711, jiffies 4300542254
+  hex dump (first 32 bytes):
+    60 aa 9d 84 ff ff ff ff fc 18 48 b2 84 88 ff ff  `.........H.....
+    04 00 00 00 a4 01 00 00 20 e4 56 81 ff ff ff ff  ........ .V.....
+  backtrace (crc be7cba35):
+    [<ffffffff81b43f83>] __kmalloc_node_track_caller_noprof+0x333/0x420
+    [<ffffffff81a52e56>] kmemdup_noprof+0x26/0x50
+    [<ffffffff821b2f37>] setup_mq_sysctls+0x57/0x1d0
+    [<ffffffff821b29cc>] copy_ipcs+0x29c/0x3b0
+    [<ffffffff815d6a10>] create_new_namespaces+0x1d0/0x920
+    [<ffffffff815d7449>] copy_namespaces+0x2e9/0x3e0
+    [<ffffffff815458f3>] copy_process+0x29f3/0x7ff0
+    [<ffffffff8154b080>] kernel_clone+0xc0/0x650
+    [<ffffffff8154b6b1>] __do_sys_clone+0xa1/0xe0
+    [<ffffffff843df8ff>] do_syscall_64+0xbf/0x1c0
+    [<ffffffff846000b0>] entry_SYSCALL_64_after_hwframe+0x4b/0x53
+```
+
+#问题根因
+`create_ipc_ns` 函数在初始化过程中，先分配了 ipc sysctls 和 mq sysctls 资源，随后调用 `msg_init_ns`。当 `msg_init_ns` 执行失败（例如 percpu 内存分配失败）时，原有代码逻辑直接跳转至 `fail_put` 或 `fail_mq` 标签，遗漏了释放 ipc sysctls 的步骤，导致资源泄漏。
+
+#解决方案
+修改 `create_ipc_ns` 中的错误处理路径。当 `msg_init_ns` 失败时，增加跳转标签 `fail_ipc`，并在该标签下显式调用 `retire_ipc_sysctls(ns)` 释放 ipc sysctls 资源，随后继续执行 `fail_mq` 流程释放 mq sysctls，确保所有已分配资源均被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc2175e50d4429cb102eca8e11e933d1f441d395

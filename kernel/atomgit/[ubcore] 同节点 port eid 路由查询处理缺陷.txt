@@ -1,0 +1,21 @@
+#标题
+[ubcore] 同节点 port eid 路由查询处理缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当源端 bondingEID 和目的端 bondingEID 位于同一节点（share the same node）时，路由查询功能无法正确处理该场景，可能导致路由建立失败或返回错误，进而影响该场景下的通信能力。日志中可能出现“Invalid route num”或“No valid port_eid found”的警告/错误信息。
+
+#主要错误日志
+- ubcore_log_warn("Invalid route num, num = %d.\n", num);
+- ubcore_log_err("No valid port_eid found, num = %d.\n", num);
+
+#问题根因
+在 `ubcore_get_route_port_eid` 函数中，原有逻辑未对源端拓扑节点 ID（src_topo_info->id）与目的端拓扑节点 ID（dst_topo_info->id）相同的情况进行判断和处理。当源和目的位于同一节点时，代码继续执行后续针对不同节点的处理流程，导致路由查询逻辑错误，无法生成正确的路由条目。
+
+#解决方案
+在 `ubcore_get_route_port_eid` 函数中增加判断逻辑：如果检测到 `src_topo_info->id` 等于 `dst_topo_info->id`，则直接调用新增的专用处理函数 `get_route_port_eid_same_node` 来处理同节点场景下的路由查询。该专用函数会遍历有效的 port_eid 并调用 `append_route_list` 填充路由信息，从而正确支持同节点路由查询。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dcfb6d63bfdd1ea4015e322591652e52497f0ab7

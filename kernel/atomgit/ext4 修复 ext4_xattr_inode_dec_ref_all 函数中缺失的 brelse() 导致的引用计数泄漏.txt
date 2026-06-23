@@ -1,0 +1,20 @@
+#标题
+ext4 修复 ext4_xattr_inode_dec_ref_all 函数中缺失的 brelse() 导致的引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定条件下（block_csum 为 false 时），ext4 文件系统扩展属性相关操作触发引用计数泄漏。随着时间推移，系统可能表现出内存泄漏特征，相关缓冲区无法被释放，可能导致系统内存资源耗尽或文件系统状态不一致。
+
+#主要错误日志
+ext4_warning_inode(parent, "handle dirty metadata err=%d", err);
+
+#问题根因
+commit c8e008b60492 ("ext4: ignore xattrs past end") 引入了缺陷。在函数 ext4_xattr_inode_dec_ref_all() 中，代码调用 ext4_get_inode_loc() 获取了 iloc.bh，但在后续执行路径中未调用 brelse() 释放该缓冲区头，导致引用计数泄漏。
+
+#解决方案
+在 ext4_xattr_inode_dec_ref_all() 函数中补充缺失的 brelse(iloc.bh) 调用，并初始化 struct ext4_iloc iloc = { .bh = NULL } 以确保在未赋值的情况下 brelse() 能够安全执行，从而修复引用计数泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1d0614180858ddaf587347a0ec14b443b98bca2

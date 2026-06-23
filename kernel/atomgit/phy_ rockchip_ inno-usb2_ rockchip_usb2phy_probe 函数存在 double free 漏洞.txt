@@ -1,0 +1,20 @@
+#标题
+phy: rockchip: inno-usb2: rockchip_usb2phy_probe 函数存在 double free 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 rockchip USB2 PHY 驱动探测过程中，若 `devm_request_threaded_irq()` 申请中断失败，内核会发生 double free 错误，可能导致内核崩溃或内存损坏。
+
+#主要错误日志
+[  123.456789] rockchip-usb2phy xxx: failed to request usb2phy irq handle
+
+#问题根因
+在 `rockchip_usb2phy_probe` 函数中，宏 `for_each_available_child_of_node()` 在每次循环成功结束时都会自动调用 `of_node_put()` 释放 `child_np`。当 `devm_request_threaded_irq()` 失败时，代码跳出循环，此时 `child_np` 引用计数已被该宏释放。但原有的错误处理逻辑跳转至 `put_child` 标签再次手动调用 `of_node_put()`，导致对同一节点进行了重复释放（double free）。
+
+#解决方案
+修改 `rockchip_usb2phy_probe` 函数，当 `devm_request_threaded_irq()` 失败时，直接 `return ret` 返回，避免执行 `put_child` 标签处的冗余 `of_node_put()` 调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5af7d73ed9ec23ad58c2ecace6973d34f490e19c

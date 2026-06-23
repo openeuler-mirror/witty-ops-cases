@@ -1,0 +1,23 @@
+#标题
+audit子系统read类规则遗漏导致特定扩展属性读取系统调用绕过审计
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对文件执行扩展属性读取操作时，使用 `getxattrat()` 或 `listxattrat()` 系统调用可以绕过审计（audit）规则。例如，配置了针对 `/tmp/test` 目录的读写执行属性监控规则（`-w /tmp/test -p rwa -k test_rwa`），在读取该目录下文件的扩展属性时，审计日志中未生成相应的读取事件记录，导致审计缺失。
+
+#主要错误日志
+未知
+
+#问题根因
+内核审计子系统的 read class 定义中遗漏了 `listxattrat()` 和 `getxattrat()` 两个系统调用。审计规则匹配逻辑依赖于系统调用所属的类别，由于这两个 "at" 变体系统调用未被注册到 read class，导致在执行这些调用时无法触发相应的审计规则。
+
+#解决方案
+在审计子系统的 read class 定义文件（`include/asm-generic/audit_read.h`）中补充缺失的系统调用号。具体修改为：
+1. 在 `__NR_listxattr` 相关配置区域增加 `__NR_listxattrat` 的定义（包含 `#ifdef` 保护）。
+2. 在 `__NR_getxattr` 相关配置区域增加 `__NR_getxattrat` 的定义（包含 `#ifdef` 保护）。
+以此确保此类系统调用被正确归类，从而触发相应的审计规则。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c6b08f3c68965280f1cc4337edfa94f0268368b

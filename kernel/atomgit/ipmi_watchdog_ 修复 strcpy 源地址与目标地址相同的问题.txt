@@ -1,0 +1,23 @@
+#标题
+ipmi_watchdog: 修复 strcpy 源地址与目标地址相同的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 IPMI watchdog 接口进行参数配置时，内核检测到 `strcpy` 操作的源地址与目标地址相同。这属于未定义行为，可能导致编译器优化错误或内存数据损坏，在某些编译器或架构下可能引发不可预期的内核行为或构建测试失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ipmi_watchdog.c` 的 `action_op`、`preaction_op` 和 `preop_op` 函数中，当传入参数 `inval` 与输出缓冲区指针指向同一内存区域（即用户试图将值设置为当前值）时，代码逻辑会执行 `strcpy(outval, action)`（或 preaction/preop）。因为 `outval` 和源变量指向同一地址，导致 `strcpy` 的源和目的指针重叠，触发了未定义行为。
+
+#解决方案
+对相关操作函数进行重构，将“设置值”的逻辑从“获取值/拷贝值”的逻辑中剥离。具体措施如下：
+1. 新增 `action_op_set_val`、`preaction_op_set_val` 和 `preop_op_set_val` 辅助函数，专门用于处理输入参数的解析与赋值，且不再包含 `strcpy` 操作。
+2. 在原有接口函数中，仅在输入参数有效且解析成功后，才执行字符串拷贝操作，避免了源和目的地址相同时的冗余且不安全的拷贝。
+3. 初始化代码路径改为直接调用新的 `_set_val` 函数，避免传入 NULL 参数触发不必要的逻辑分支。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0456c5f1321488aca69eeda3d100dbf2b0f81ab2

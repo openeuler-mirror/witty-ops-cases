@@ -1,0 +1,24 @@
+#标题
+libertas驱动使用USB anchors跟踪飞行中URBs以修复生命周期管理问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+libertas驱动在处理USB请求块（URB）时，采用手动管理生命周期的方式。这使得判断特定的URB是否处于pending（挂起/处理中）状态变得非常困难，导致在设备断开、挂起或固件加载失败等需要取消URB的场景下，无法准确、彻底地清理正在传输中的请求，可能导致资源释放不完全或驱动状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序缺乏对TX/RX URBs的有效跟踪机制。代码原实现中仅维护了 `tx_urb` 和 `rx_urb` 指针，未使用 USB anchor 机制将提交的 URBs 组织起来。这导致在执行清理操作（如 `if_usb_free`、`if_usb_suspend` 或固件加载失败流程）时，只能针对单个 URB 指针进行操作，无法准确追踪并取消所有已提交但尚未完成的 URBs。
+
+#解决方案
+引入 USB anchor 机制来跟踪正在传输中的 URBs：
+1. 在 `if_usb_card` 结构体中新增 `rx_submitted` 和 `tx_submitted` 两个 `struct usb_anchor` 成员。
+2. 在探针函数 `if_usb_probe` 中初始化这两个 anchors。
+3. 在提交 TX 和 RX URBs 前，调用 `usb_anchor_urb` 将 URB 锚定到对应的 anchor 上；若提交失败，调用 `usb_unanchor_urb` 解除锚定。
+4. 将所有调用 `usb_kill_urb(cardp->tx_urb/rx_urb)` 的地方修改为 `usb_kill_anchored_urbs(&cardp->tx_submitted/rx_submitted)`，确保能取消所有关联的飞行中 URBs，而非仅取消单一指针指向的 URB。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/321509389eb1a9e2064367751feb440584163c1a

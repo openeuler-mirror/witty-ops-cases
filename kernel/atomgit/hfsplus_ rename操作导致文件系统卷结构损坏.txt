@@ -1,0 +1,24 @@
+#标题
+hfsplus: rename操作导致文件系统卷结构损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 xfstests 测试用例 generic/075 后，HFS+ 文件系统卷处于损坏状态。使用 `fsck.hfsplus` 检查时报错 "Invalid directory item count"，提示目录项计数错误（应为 1 而实际为 0）。具体复现场景为：将文件从一个目录移动到另一个目录，随后对源目录和文件执行 fsync，但未对目标目录执行 fsync，导致卸载或同步后文件系统元数据不一致。
+
+#主要错误日志
+generic/073 _check_generic_filesystem: filesystem on /dev/loop51 is inconsistent
+** Checking catalog hierarchy.
+Invalid directory item count
+(It should be 1 instead of 0)
+
+#问题根因
+在 `hfsplus_rename` 函数中，文件从 `old_dir` 移动到 `new_dir` 时，内核会更新内存中的 inode 信息（减少源目录项计数、增加目标目录项计数），但未立即将这些修改写入磁盘上的 Catalog File。
+如果用户后续仅对 `old_dir` 和文件本身调用 `fsync`，而未对 `new_dir` 调用 `fsync`，则 `new_dir` 的元数据更改（项计数增加）在 inode 被回写时丢失。这导致磁盘上的目录项计数与实际不符，从而触发文件系统一致性检查错误。
+
+#解决方案
+在 `hfsplus_rename` 函数中，当目录重命名操作（`hfsplus_rename_cat`）成功执行后，立即调用 `hfsplus_cat_write_inode` 分别将 `old_dir` 和 `new_dir` 的 inode 元数据写入 Catalog File。这确保了目录项计数的修改被持久化到磁盘，避免了因后续 fsync 范围不全导致的元数据丢失，从而修复了文件系统损坏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d7d2d662dffa9754528e1d402ab2674e62f4cca2

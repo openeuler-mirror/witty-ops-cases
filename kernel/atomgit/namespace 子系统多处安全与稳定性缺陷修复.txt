@@ -1,0 +1,29 @@
+#标题
+namespace 子系统多处安全与稳定性缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 权限提升风险：非特权用户或非相关命名空间用户可能通过 `clone_private_mount` 接口创建私有挂载实例，导致未授权的挂载操作。
+2. 内核状态异常：在已卸载或非当前命名空间的挂载点上执行 `mount --make-shared` 等类型变更操作，可能导致内核状态不一致或产生不可预期的行为。
+3. 传播图断裂：使用 `MOVE_MOUNT_SET_GROUP` 标志调用 `move_mount(2)` 时，会导致挂载传播图（propagation graph）数据结构损坏，影响后续挂载传播逻辑。
+4. 挂载检测误判：在并发环境下，`path_overmounted` 检查函数可能出现假阴性（false negative），误判路径未被覆盖挂载，导致后续逻辑在已覆盖的路径上错误操作。
+
+#主要错误日志
+未知
+
+#问题根因
+1. `clone_private_mount` 函数缺失 capability 权能检查：代码逻辑中未校验调用者是否在目标挂载点命名空间中拥有 `CAP_SYS_ADMIN` 权限。
+2. `do_change_type` 函数入口检查缺失：函数执行前未通过 `check_mnt` 校验挂载点是否存活且属于当前命名空间。
+3. `do_set_group` 函数链表操作错误：设置挂载组关系时，错误地将新挂载点添加到了 `mnt_master->mnt_slave_list` 而非 `from->mnt_slave` 链表中，破坏了主从关系结构。
+4. `path_overmounted` 函数锁机制与并发问题：仅持有 `namespace_sem` 或 RCU 读锁进行 `__lookup_mnt` 查询，未正确处理 `mount_lock` 序列锁的重试逻辑，导致在读取过程中因并发修改而获取到错误的状态。
+
+#解决方案
+1. 增加 capability 检查：在 `clone_private_mount` 中增加 `ns_capable(old_mnt->mnt_ns->user_ns, CAP_SYS_ADMIN)` 校验，失败则返回 `-EPERM`。
+2. 增加挂载点有效性检查：在 `do_change_type` 获取 `namespace_lock` 后，立即检查 `check_mnt(mnt)`，若无效则直接返回 `-EINVAL`。
+3. 修正链表挂载点：将 `do_set_group` 中的 `list_add(&to->mnt_slave, &m->mnt_slave_list)` 修改为 `list_add(&to->mnt_slave, &from->mnt_slave)`，确保挂载传播图结构正确。
+4. 完善并发检测逻辑：重构 `path_overmounted`，引入 `read_seqbegin` 和 `need_seqretry` 机制检测 `mount_lock` 冲突，必要时升级为排他锁 `read_seqlock_excl` 再次检查，确保检测结果准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4b5c4cc647d95f486a1233fcb897dae0969c5d65

@@ -1,0 +1,32 @@
+#标题
+ATM 协议 MPOA 模块空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 MPOA_cache_impos_rcvd() 函数接收到消息时，如果 entry 指针和 holding_time 变量同时为 NULL，代码逻辑会跳过安全检查，将 NULL 指针传递给 eg_cache_put() 函数。在该函数内部引用 entry->use 成员时触发空指针解引用，导致内核发生 General Protection Fault（一般保护性错误）或 Oops 崩溃。
+
+#主要错误日志
+[    3.316691] Oops: general protection fault, probably for non-canonical address 0xdffffc0000000006:I
+[    3.317568] KASAN: null-ptr-deref in range [0x0000000000000030-0x0000000000000037]
+[    3.318188] CPU: 3 UID: 0 PID: 79 Comm: ex Not tainted 6.14.0-rc2 #102
+[    3.319298] RIP: 0010:eg_cache_remove_entry+0xa5/0x470
+[    3.326430] Call Trace:
+[    3.326725]  <TASK>
+[    3.333614]  msg_from_mpoad+0x1185/0x2750
+[    3.335975]  vcc_sendmsg+0x684/0xba0
+[    3.337348]  __sys_sendto+0x4a2/0x510
+[    3.340166]  __x64_sys_sendto+0xe0/0x1c0
+[    3.341170]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[    3.346679] Modules linked in:
+[    3.346956] ---[ end trace 0000000000000000 ]---
+
+#问题根因
+函数 MPOA_cache_impos_rcvd() 在处理消息时，现有的校验逻辑仅覆盖了 "entry 为 NULL 且 holding_time 存在" 的场景，遗漏了 "entry 和 holding_time 同时为 NULL" 的情况。当两者同时为 NULL 时，代码未作返回处理直接继续执行，导致 NULL entry 被传递给后续函数，在访问 entry->use 时引发空指针解引用。
+
+#解决方案
+在 MPOA_cache_impos_rcvd() 函数中增加判断条件：如果检测到 entry 为 NULL 且 holding_time 为 0（false），则直接返回，避免将无效指针传递给后续处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/883436c9b9f58b3bab664a82c68fdf429be19593

@@ -1,0 +1,20 @@
+#标题
+Intel QAT 驱动卸载时因工作队列未刷新导致潜在_use-after-free_风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载或关闭 Intel QAT 加速设备驱动时，由于驱动程序未等待工作队列中的任务执行完毕便释放了相关资源，可能导致内核崩溃或内存非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在驱动关闭流程函数 `adf_dev_shutdown` 中，调用 `adf_cleanup_etr_data` 清理数据后，缺少对 `adf_misc_wq` 工作队列的刷新操作。这导致工作队列中可能挂起的任务在驱动资源被释放后继续执行，从而引发 use-after-free 或其他并发故障。
+
+#解决方案
+在 `adf_init.c` 的 `adf_dev_shutdown` 函数中，于 `adf_cleanup_etr_data` 调用之后立即增加对 `adf_misc_wq_flush()` 的调用。同时，在头文件 `adf_common_drv.h` 中声明 `adf_misc_wq_flush` 函数，并在 `adf_isr.c` 中实现该函数，其内部通过 `flush_workqueue(adf_misc_wq)` 确保所有待处理工作项执行完毕，防止资源释放后使用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e3fe687c999b1b044345ff3b53a13cc34573442e

@@ -1,0 +1,20 @@
+#标题
+usb: chipidea: ci_hdrc_imx 设备引用计数泄漏导致对象无法释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+i.MX USB Chipidea 主机控制器驱动在 probe 探测失败或 remove 移除时，未正确释放 `usbmisc_get_init_data()` 获取的设备对象引用计数。这会导致内核设备对象引用计数泄漏，相关设备结构体无法被回收，造成内存泄漏；在设备热插拔或驱动重载场景下，可能导致驱动无法再次正常初始化或资源耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `ci_hdrc_imx_probe()` 函数中调用 `usbmisc_get_init_data()` 获取设备对象时增加了引用计数，但在后续 probe 失败的多个错误返回路径（error path）以及 `ci_hdrc_imx_remove()` 函数中，遗漏了调用 `put_device()` 来减少引用计数。
+
+#解决方案
+在 `ci_hdrc_imx_probe()` 函数中统一错误处理路径，增加 `err_put` 标签，在退出前调用 `put_device(data->usbmisc_data->dev)` 释放引用；同时在 `ci_hdrc_imx_remove()` 函数末尾补充调用 `put_device()`，确保设备引用计数正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4e44ecb2e1995377f5af62e584dd474c885d29e5

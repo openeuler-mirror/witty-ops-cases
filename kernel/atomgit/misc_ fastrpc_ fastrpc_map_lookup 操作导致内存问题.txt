@@ -1,0 +1,20 @@
+#标题
+misc: fastrpc: fastrpc_map_lookup 操作导致内存问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Fastrpc 驱动在处理用户分配的 fd 缓冲区时，若用户先传递带有偏移且较小的缓冲区创建 map，随后传递更大尺寸的缓冲区，由于查找逻辑仅比较 fd，会导致匹配到错误的已有 map，进而引发内存问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fastrpc_map_lookup` 函数中，查找已存在的 map 时仅检查了文件描述符是否一致。当用户对同一 fd 传递不同大小或偏移的缓冲区时，仅凭 fd 无法区分底层 `dma_buf` 对象是否发生变化，导致查找结果错误，从而引发后续的内存问题。
+
+#解决方案
+在 `fastrpc_map_lookup` 函数中增加对 `dma_buf` 对象的校验。在查找 map 前，先通过 `dma_buf_get` 获取 fd 对应的 `dma_buf`，在遍历比对时同时检查 `map->fd` 和 `map->buf`，确保两者均匹配才视为找到目标 map，从而避免因 fd 复用但底层对象变更导致的错误匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/197d289d4f87b1459bf8669fe2fe4d103a752d7c

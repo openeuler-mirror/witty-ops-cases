@@ -1,0 +1,20 @@
+#标题
+can: j1939: j1939_session_new() 修复 skb 引用计数下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 SAE J1939 协议会话时，由于 skb（socket buffer）引用计数管理不一致，导致引用计数发生下溢。该问题由 syzbot 自动化测试发现。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `j1939_session_new()` 函数中，初始化会话时将 skb 直接加入队列，未增加引用计数。而后续调用的 `j1939_session_skb_queue()` 函数在处理新 skb 时会额外调用 `skb_get()` 增加引用计数。这种处理逻辑的不一致导致初始 skb 的引用计数在后续释放流程中出现下溢。
+
+#解决方案
+在 `j1939_session_new()` 函数中，将初始 skb 加入会话队列时，调用 `skb_get()` 增加其引用计数，以保持与 `j1939_session_skb_queue()` 逻辑的一致性。代码修改为 `skb_queue_tail(&session->skb_queue, skb_get(skb));`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c5c6b20deb991f7c31bc5b89db750ae6f3244d48

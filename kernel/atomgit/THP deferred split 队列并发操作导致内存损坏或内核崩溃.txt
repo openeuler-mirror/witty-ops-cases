@@ -1,0 +1,27 @@
+#标题
+THP deferred split 队列并发操作导致内存损坏或内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在高负载场景下（特别是涉及 mTHP swapout、swapin 或 THP 分裂操作时），内核可能出现 `list_del corruption`、`Bad page state` 错误，甚至触发 BUG 导致内核崩溃。该问题是由 THP 延迟分裂队列的并发竞争引起的。
+
+#主要错误日志
+list_del corruption
+Bad page state
+
+#问题根因
+问题的核心在于 THP（透明大页）的 deferred split 队列锁依赖于 memcg（memory cgroup）。在以下场景中，代码在修改 folio 的 memcg 关联之前，未正确将其从 deferred split 队列中移除，导致后续操作使用错误的锁（如 pgdat lock 而非 memcg lock）来操作队列，从而引发链表损坏：
+1. **Swapout 路径**：`mem_cgroup_swapout()` 在重置 `folio->memcg_data` 之前，未检查并移除位于 deferred split 队列中的 THP。
+2. **Memcg v1 charge move 路径**：`mem_cgroup_move_account()` 在更改 `folio->memcg_data` 时，同样未检查并移除 deferred split 队列中的 THP。
+此外，原有的函数名 `folio_undo_large_rmappable()` 具有误导性，实际上它执行的是 `unqueue` 操作，且缺乏必要的安全检查。
+
+#解决方案
+1. **重命名与重构**：将函数 `folio_undo_large_rmappable()` 重命名为 `folio_unqueue_deferred_split()`，以准确反映其功能。修改其返回值为 bool，并在 `__folio_unqueue_deferred_split()` 中增加 `WARN_ON_ONCE` 检查，确保 refcount 为 0 且 memcg 状态正确。
+2. **修复 Swapout 路径**：在 `mem_cgroup_swapout()` 中，在重置 `folio->memcg_data` 之前调用 `folio_unqueue_deferred_split()`。
+3. **修复 Memcg v1 Move 路径**：在 `mem_cgroup_move_charge_pte_range()` 中，尝试移动电荷前先尝试分裂 THP。如果分裂失败则跳过该 folio，避免在非零 refcount 下不安全地操作队列。
+4. **清理冗余调用**：从 `free_unref_folios()` 中移除该函数调用，因为其调用者（如 `__folio_put`）现已负责在更早的时机（refcount 为 0 时）调用该函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4e122886bf8b3173d148a3ae4c2236ae335ba26a

@@ -1,0 +1,20 @@
+#标题
+mlx5 网卡驱动同一故障综合征触发重复健康状态上报
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当网卡设备的健康计数器在多个轮询周期内未增加时，miss 计数器达到阈值并触发健康报告。如果此时健康轮询中检测到特定的故障综合征，系统会再次触发健康报告，导致针对同一个 syndrome 产生两次健康错误报告。
+
+#主要错误日志
+mlx5_core_err(dev, "device's health compromised - reached miss count\n");
+
+#问题根因
+在 `poll_health` 函数中，当 `miss_counter` 达到 `MAX_MISSES` 时触发第一次健康报告，但此时未立即读取并标记当前的 `syndrome` 值。这导致在随后的轮询或处理流程中，若检测到该 `syndrome`，由于缺少“已知”标记，驱动会针对同一个故障再次触发报告，造成重复上报。
+
+#解决方案
+在 `miss_counter` 达到阈值触发设备健康错误打印及上报工作时，立即读取并记录 `health->synd` 值。通过提前更新 `synd` 状态，将其标记为已知，从而避免后续流程中因同一 syndrome 再次触发报告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/69dddd372bdf761a11fe46e2bef480fcb834c938

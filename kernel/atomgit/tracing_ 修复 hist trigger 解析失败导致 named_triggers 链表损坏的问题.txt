@@ -1,0 +1,20 @@
+#标题
+tracing: 修复 hist trigger 解析失败导致 named_triggers 链表损坏的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 hist trigger 时，若命令语法错误或参数无效导致解析失败，系统未能正确回滚清理。这将导致该 trigger 被残留在 `named_triggers` 全局链表中。残留的无效 trigger 数据会 corrupt（损坏）链表，进而导致后续的 hist 命令操作异常，可能引发内核 Panic 或 Oops，或导致 tracing 功能不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `event_hist_trigger_parse` 中，代码原本先将 trigger 注册到系统中（加入 named_triggers 链表），随后再执行 `create_actions`、`save_hist_vars` 及 `tracing_map_init` 等初始化操作。如果这些初始化操作失败，代码跳转到 `out_unreg` 进行注销。然而，如果 `event_trigger_register` 成功但随后的初始化步骤失败，虽然注销逻辑会执行，但在并发或特定的错误路径下，异常处理流程不够严谨，导致在某些解析错误场景下，数据结构未能完全从全局链表中移除，从而造成链表损坏。
+
+#解决方案
+调整代码执行顺序，将 `create_actions`、`save_hist_vars` 和 `tracing_map_init` 等可能失败的初始化操作移至 `event_trigger_register` 之前执行。同时增加判断条件 `if (!get_named_trigger_data(trigger_data))`，确保仅对新创建的 trigger 执行初始化。如果初始化失败，直接跳转到 `out_free` 释放内存并返回错误，不再执行 register 操作。此举确保了只有在所有初始化步骤都成功完成后，才会将 trigger 正式注册到系统中，从而避免了因初始化失败导致的链表残留和损坏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cd22f66b651ca8afc6eb66130dedddebaa4d54e7

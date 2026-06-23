@@ -1,0 +1,23 @@
+#标题
+netpoll_setup 失败时结构体状态残留导致配置不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `netpoll_setup()` 或 `__netpoll_setup()` 初始化过程发生失败（如设备不支持 polling、内存分配失败或网络配置错误）时，`netpoll` 结构体未被正确清理。这导致结构体中残留了部分初始化的字段（如 `np->dev` 指针或 `np->local_ip`），使得系统误认为 netpoll 已配置或处于有效状态，可能导致后续重试逻辑异常或内存访问错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在初始化过程中，代码过早地将 `ndev` 赋值给 `np->dev` 以及配置 `np->local_ip`。当后续初始化步骤失败并退出时，这些已赋值的字段未被清除或回滚。根因是代码逻辑未保证“全有或全无”的原子性，导致失败路径下留下了部分配置成功的“脏”状态。
+
+#解决方案
+修改 `netpoll_setup()` 和 `__netpoll_setup()` 函数，确保失败时结构体处于干净状态：
+1. 延迟赋值：将 `np->dev` 的赋值操作移动到初始化成功后进行，确保失败时 `np->dev` 始终为 NULL。
+2. 状态回滚：引入标志位跟踪 `local_ip` 是否被覆盖，若初始化失败，显式调用 `memset` 将 `np->local_ip` 清零。
+3. 增加调试检查：添加 `DEBUG_NET_WARN_ON_ONCE(np->dev)` 检查点，确保失败路径下 `np->dev` 为空，防止残留状态引发后续问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a6c961c2d78f92df23125b08f4953a9acdf46d2b

@@ -1,0 +1,21 @@
+#标题
+netfilter: ip6t_rt 模块参数校验缺失导致 IPv6 路由扩展头匹配规则注入异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 ip6t_rt (IPv6 路由扩展头) 匹配规则时，若用户指定的地址数量超过内核定义的最大限制，规则校验未拦截，可能导致内核内存越界访问或数据损坏；通过 pr_debug 可观测到 "too many addresses specified" 的调试信息。
+
+#主要错误日志
+pr_debug("unknown flags %X\n", rtinfo->invflags);
+pr_debug("too many addresses specified\n");
+
+#问题根因
+net/ipv6/netfilter/ip6t_rt.c 中的 `rt_mt6_check` 函数缺少对 `rtinfo->addrnr` 字段的边界校验。未检查用户传入的地址数量是否大于 `IP6T_RT_HOPS`，导致非法参数绕过校验进入后续处理流程。
+
+#解决方案
+在 `rt_mt6_check` 函数中增加边界检查逻辑：判断 `rtinfo->addrnr` 是否大于 `IP6T_RT_HOPS`，若超过限制则打印调试日志并返回 `-EINVAL` 阻止规则添加。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/52e83c1a10db10ec724409d03d50bfe0d1d83db1

@@ -1,0 +1,37 @@
+#标题
+KVM: x86: VM长时间挂起恢复后因周期性HV定时器导致宿主机硬死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当运行Windows VM（使用APIC定时器周期模式）并在宿主机上执行长时间挂起操作后恢复，或VM长时间处于非活动状态后恢复运行时，宿主机发生硬死锁。具体表现为：
+1. 宿主机CPU触发 NMI watchdog 硬锁死检测。
+2. 锁死发生在 `advance_periodic_target_expiration` 函数中，调用栈显示在时钟中断处理程序内陷入循环。
+3. 在极端情况下，VM暂停时间不够长虽未触发死锁，但KVM会错误地从HV定时器切换到软件定时器并持续使用，导致性能下降。
+
+#主要错误日志
+NMI watchdog: Watchdog detected hard LOCKUP on cpu 45
+...
+RIP: 0010:advance_periodic_target_expiration+0x4d/0x80 [kvm]
+...
+Call Trace:
+ <IRQ>
+ apic_timer_fn+0x31/0x50 [kvm]
+ __hrtimer_run_queues+0x100/0x280
+ hrtimer_interrupt+0x100/0x210
+ smp_apic_timer_interrupt+0x6a/0x130
+ apic_timer_interrupt+0xf/0x20
+ </IRQ>
+
+#问题根因
+在处理Guest APIC定时器的周期模式时，如果目标过期时间已过去很久（例如vCPU长时间未运行或VM被挂起），代码仍盲目地将周期值加到上一个目标过期时间上。这导致：
+1. 新计算的目标过期时间仍在过去。
+2. 计算出的时间差delta可能为负值，转换为无符号的TSC deadline后数值极大，超出VMX Preemption Timer的编程位宽，迫使KVM切换到软件定时器。
+3. 切换到软件定时器后，由于请求的过期时间仍在过去，hrtimer会立即重新调用KVM回调，导致在禁用IRQ的上下文中连续执行大量定时器过期回调，最终引发宿主机硬死锁。
+
+#解决方案
+在 `advance_periodic_target_expiration` 函数中增加时间校验逻辑。如果更新后的目标过期时间早于当前时间，强制将其设置为当前时间，避免出现过期时间在过去的情况。这防止了delta出现负值，避免了定时器溢出切换和连续的回调风暴，从而消除了硬死锁风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f3a99d9b46e915b1c9c5a9d165de7b14a787e4a

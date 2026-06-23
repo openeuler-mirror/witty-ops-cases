@@ -1,0 +1,20 @@
+#标题
+rtlwifi: usb: fix workqueue leak when probe fails
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Realtek USB WiFi 设备驱动（rtlwifi）在 probe（探测）阶段初始化失败时，未正确释放已创建的工作队列（workqueue），导致内核内存泄漏。具体表现为驱动加载失败后，系统资源未能回收。
+
+#主要错误日志
+未知
+
+#问题根因
+`rtl_init_core` 函数在初始化过程中创建了一个工作队列并赋值给 `rtl_wq`。在驱动 probe 失败的错误处理路径中，仅调用了 `rtl_deinit_core` 和 `_rtl_usb_io_handler_release`，但 `rtl_deinit_core` 并不负责销毁该工作队列。工作队列的销毁逻辑位于 `rtl_usb_deinit` 中，而 probe 失败路径遗漏了对 `rtl_usb_deinit` 的调用，从而导致工作队列泄漏。
+
+#解决方案
+在 `rtl_usb_probe` 函数的 `error_out` 错误处理标签处，增加对 `rtl_usb_deinit(hw)` 的调用。确保在 probe 失败时，在调用 `rtl_deinit_core` 之前先正确销毁已创建的工作队列，防止资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5361cba433eff48f66d812cc369d6936f60e1789

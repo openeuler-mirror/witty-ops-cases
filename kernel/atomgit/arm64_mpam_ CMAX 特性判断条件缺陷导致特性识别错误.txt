@@ -1,0 +1,20 @@
+#标题
+arm64/mpam: CMAX 特性判断条件缺陷导致特性识别错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在检查硬件是否支持 CMAX（Cache Maximum Partition）特性时，系统仅依据 `MPAMF_CCAP_IDR` 寄存器中的 `CMAX_WD` 字段进行判断，遗漏了对 `NO_CMAX` 字段的检查。这导致在某些硬件配置下（`CMAX_WD` 非零但 `NO_CMAX` 置位），系统错误地认为硬件支持 CMAX 特性并进行了相应配置，可能引发后续功能异常或硬件行为不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `mpam_ris_hw_probe` 函数中的判断逻辑不完整。原代码仅通过 `props->cmax_wd` 是否为真来判定硬件支持 CMAX 特性。根据硬件规格，必须同时满足 `CMAX_WD` 字段有效且 `NO_CMAX` 字段未置位（即硬件未声明不支持 CMAX）时，才能确认该特性可用。缺少对 `NO_CMAX` 位的检查导致了误判。
+
+#解决方案
+修改 `drivers/platform/mpam/mpam_devices.c` 中的特性探测逻辑，在设置 `mpam_feat_ccap_part` 特性前，增加对 `MPAMF_CCAP_IDR_NO_CMAX` 位的校验。只有当 `CMAX_WD` 非零且 `NO_CMAX` 位为 0 时，才判定硬件支持 CMAX 特性。同时，在头文件中补充定义了相关的寄存器位掩码宏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac3a4afb3259f2b77b2df597adf747f53453af6b

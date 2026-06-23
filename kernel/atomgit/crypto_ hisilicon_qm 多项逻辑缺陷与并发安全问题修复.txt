@@ -1,0 +1,39 @@
+#标题
+crypto: hisilicon/qm 多项逻辑缺陷与并发安全问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 硬件加速器队列处理逻辑中存在判断错误，可能导致 EQ（Event Queue）处理流程异常，引发任务无法正常完成或设备响应中断。
+2. 并发场景下，错误阈值隔离机制存在数据竞争，可能导致内存访问冲突或隔离状态判断不一致。
+3. QoS 配置失败时未回滚现场，导致配置状态残留不一致。
+4. 设备引用计数未正确释放，导致内存泄漏。
+
+#主要错误日志
+dev_err(dev, "type: %d, failed to set shaper vft!\n", i);
+dev_err(dev, "failed to restore shaper vft during rollback!\n");
+pci_err(qm->pdev, "the pdev input does not match the pf!\n");
+
+#问题根因
+1. **EQE 处理逻辑错误**：`qm_get_complete_eqe_num` 函数中，循环读取 EQE（Event Queue Entry）时，`QM_EQE_PHASE` 宏定义与循环内更新逻辑不匹配，导致循环退出条件判断错误；同时循环内缺少对 `dw0` 的更新，导致死循环或读取过时数据。
+2. **Switch 缺少默认分支**：`qm_vft_data_cfg` 函数 switch 语句未包含 default 分支，存在未定义行为风险。
+3. **并发保护缺失**：`err_threshold` 变量及其关联的硬件错误隔离链表在读写时缺乏互斥锁保护，存在竞态条件；`qm_hw_err_destroy` 在部分路径下未持有锁即进行链表操作。
+4. **错误处理不完善**：`qm_func_shaper_enable` 设置失败时直接返回，未回滚已修改的 QoS 参数；`qm_get_qos_value` 在错误返回路径上未调用 `put_device` 释放设备引用。
+
+#解决方案
+1. **修复 EQE 处理逻辑**：
+   - 修改 `QM_EQE_PHASE` 宏入参，使用已转换的 `dw0` 值进行位操作。
+   - 在 `while` 循环内部正确更新 `dw0` 变量，确保每次循环读取最新的 EQE 数据。
+   - 将循环结构调整为 `do-while`，修正退出条件判断。
+2. **补充 Switch 默认分支**：为 `qm_vft_data_cfg` 添加 default break 分支，防止未定义行为。
+3. **增加并发保护**：
+   - 调整 `isolate_lock` 锁的锁定范围，覆盖 `err_threshold` 的写入及链表销毁操作。
+   - 修复 `qm_hw_err_isolate` 中锁的释放时机，确保 `is_isolate` 标志位的修改在锁保护下进行。
+4. **完善错误回滚与资源释放**：
+   - 在 `qm_func_shaper_enable` 中，保存修改前的参数值，失败时回滚并恢复 VFT 配置。
+   - 在 `qm_get_qos_value` 的错误路径增加 `put_device(dev)` 调用，防止设备引用计数泄漏。
+5. **移除冗余检查**：移除 `hisi_acc_sg_buf_map_to_hw_sgl` 中不必要的 `curr_hw_sgl` 错误检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/34a23840964728c63e8416cefbb2d7ed7810406f

@@ -1,0 +1,20 @@
+#标题
+SMB客户端解析NFS模式SID时存在越界读取漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SMB客户端在处理恶意服务器返回的特定访问控制条目（ACE）时，会发生越界读取（out-of-bounds read）。具体而言，当恶意服务器返回一个 `num_subauth = 2` 且 `sub_auth[] = {88, 3}` 的 ACE 时，客户端会误判其为合法的 NFS 模式 SID，并尝试读取 `sub_auth[2]`，导致读取越界内存。
+
+#主要错误日志
+未知
+
+#问题根因
+`parse_dacl()` 函数在处理 ACE SID 时，将其视为 NFS 模式 SID 并直接读取 `sid.sub_auth[2]` 以恢复模式位。该逻辑假设 ACE 包含三个子权限，但 `compare_sids()` 函数仅比较 `min(a, b)` 个子权限。恶意服务器可利用此差异，返回一个子权限数量不足（如 `num_subauth = 2`）但仍能匹配 `sid_unix_NFS_mode` 的 ACE，从而触发越界读取。
+
+#解决方案
+在 `parse_dacl()` 函数中，在将 ACE 视为 NFS 模式 SID 并读取 `sub_auth[2]` 之前，增加对 `ppace[i]->sid.num_subauth >= 3` 的检查。确保只有包含足够子权限的 ACE 才会进入模式位解析路径，从而避免越界读取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1232332a91ed4dedf142218f45c54cb7e96ecdc9

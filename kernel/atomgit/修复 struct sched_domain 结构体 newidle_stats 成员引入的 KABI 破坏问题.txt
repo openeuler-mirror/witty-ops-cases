@@ -1,0 +1,23 @@
+#标题
+修复 struct sched_domain 结构体 newidle_stats 成员引入的 KABI 破坏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核数据结构 `struct sched_domain` 中新增 `newidle_call`、`newidle_success` 和 `newidle_ratio` 成员后，导致内核 ABI（KABI）一致性检查失败，破坏了内核对外二进制接口的稳定性。这可能导致依赖原有结构体布局的内核模块或工具无法正常加载或运行，影响系统的兼容性与稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+在引入提交 "sched/fair: Proportional newidle balance" 时，直接在 `struct sched_domain` 结构体中新增了 `unsigned int newidle_call`、`newidle_success` 和 `newidle_ratio` 三个成员变量。这种直接修改核心结构体成员的方式改变了结构体的大小和布局，从而导致了 KABI（Kernel Application Binary Interface）破坏。
+
+#解决方案
+利用 `KABI_FILL_HOLE` 机制修复 KABI 破坏问题：
+1. 将 `struct sched_domain` 中新增的三个 `unsigned int` 成员从结构体原有定义中移除。
+2. 使用 `KABI_FILL_HOLE` 宏在结构体末尾或预留的“空洞”区域重新定义这三个成员。由于这三个变量主要统计使用，对齐要求通过位域（10位、11位、11位）进行填充，既满足了存储需求，又避免了改变结构体对外的二进制布局。
+3. 在 `kernel/sched/fair.c` 的 `update_newidle_stats` 函数中，将原来对结构体成员的直接读写操作，改为先读取到局部变量进行计算，最后再回写到通过 `KABI_FILL_HOLE` 定义的成员中，确保功能逻辑不变。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/faa16c6e8fc11f751f7f3c48a9415d6ee2d5cf0f

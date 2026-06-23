@@ -1,0 +1,22 @@
+#标题
+cdrom: 移除 cdrom_ioctl_media_changed 中低效的 barrier_nospec 调用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 Spectre v1 缓解措施的架构上，cdrom_ioctl_media_changed 函数调用了 barrier_nospec() 屏障指令，导致性能显著下降（painfully slow）。同时，对于大多数未实现该屏障的架构，系统仍然暴露于 Spectre v1 漏洞风险之中，已有的防护措施存在缺陷。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复 Spectre v1 漏洞（Commit 8270cb10c068）时，使用了 barrier_nospec() 来阻止越界推测执行。然而，这种做法存在两个问题：
+1. 对于实现了 barrier_nospec() 的架构，该指令开销过大，严重影响性能。
+2. 大多数架构并未实现 barrier_nospec()，导致这些架构下边界检查仍可能被错误预测绕过，无法有效防御 Spectre v1。
+
+#解决方案
+移除开销巨大的 barrier_nospec() 调用，改用 array_index_nospec() 宏。该宏在边界检查之后将用户传入的参数钳位在有效的数组索引范围内，确保即使在 CPU 发生错误预测的情况下，参数也不会越界，从而在修复安全漏洞的同时避免了过高的性能损耗。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/89ffbbf737f6263704e8e15933025977b3c896a5

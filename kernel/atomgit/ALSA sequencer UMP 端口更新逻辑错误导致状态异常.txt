@@ -1,0 +1,24 @@
+#标题
+ALSA sequencer UMP 端口更新逻辑错误导致状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当收到 UMP FB（Function Block）信息更新通知时，对应的 ALSA sequencer 端口属性未能正确更新。系统可能表现出端口状态不一致，或在某些端口缺失的情况下，后续端口的更新流程被意外截断。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `update_port_infos()` 在处理 UMP FB 信息更新通知时存在两个逻辑缺陷：
+1. 端口号计算错误：在获取 sequencer 信息进行更新时，直接使用了索引 `i` 作为端口号，而未使用 `ump_group_to_seq_port(i)` 进行正确的偏移修正，导致操作了错误的端口。
+2. 循环处理逻辑错误：当调用 `snd_seq_kernel_client_ctl` 获取端口信息失败（例如端口不存在）时，代码直接 `return` 退出整个循环。这导致如果中间有某个端口不存在，后续所有端口的更新都会被跳过，造成更新流程被意外截断。
+
+#解决方案
+修改 `sound/core/seq/seq_ump_client.c` 中的 `update_port_infos` 函数：
+1. 修正端口号赋值：将 `old->addr.port = i;` 改为 `old->addr.port = ump_group_to_seq_port(i);`，确保引用正确的 sequencer 端口。
+2. 修正循环退出逻辑：将获取端口信息失败时的 `return;` 改为 `continue;`，使得即便中间某个端口不存在或获取失败，循环仍能继续处理剩余端口的更新，避免更新流程中断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/21590692caed65364ce16b3df5c7272daf08ea02

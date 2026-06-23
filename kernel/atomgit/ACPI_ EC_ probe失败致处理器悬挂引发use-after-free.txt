@@ -1,0 +1,40 @@
+#标题
+ACPI: EC: probe失败致处理器悬挂引发use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在精简硬件（reduced-hardware）EC平台上，当GPIO IRQ提供者延迟探测时，内核在AML评估访问EC OpRegion时触发KASAN slab-use-after-free错误。具体表现为非特权sysfs读取操作（如访问电池、热控、背光相关的AML）导致内核崩溃或内存污染。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in mutex_lock (kernel/locking/mutex.c:289)
+Write of size 8 at addr ffff88800721de38 by task init/1
+Call Trace:
+ <TASK>
+ mutex_lock (kernel/locking/mutex.c:289)
+ acpi_ec_space_handler (drivers/acpi/ec.c:1362)
+ acpi_ev_address_space_dispatch (drivers/acpi/acpica/evregion.c:293)
+ acpi_ex_access_region (drivers/acpi/acpica/exfldio.c:246)
+ acpi_ex_field_datum_io (drivers/acpi/acpica/exfldio.c:509)
+ acpi_ex_extract_from_field (drivers/acpi/acpica/exfldio.c:700)
+ acpi_ex_read_data_from_field (drivers/acpi/acpica/exfield.c:327)
+ acpi_ex_resolve_node_to_value (drivers/acpi/acpica/exresolv.c:392)
+ </TASK>
+
+Allocated by task 1:
+ acpi_ec_alloc (drivers/acpi/ec.c:1424)
+ acpi_ec_add (drivers/acpi/ec.c:1692)
+
+Freed by task 1:
+ kfree (mm/slub.c:6876)
+ acpi_ec_add (drivers/acpi/ec.c:1751)
+
+#问题根因
+当 `ec_install_handlers()` 在 `acpi_ec_setup()` 中返回 `-EPROBE_DEFER` 错误时，它已经启动了 EC 并安装了地址空间处理程序，且使用了 `struct acpi_ec` 指针作为处理程序的上下文。然而，`acpi_ec_setup()` 在传播错误时未进行任何清理工作。调用者 `acpi_ec_add()` 随后释放了非引导实例的 `struct acpi_ec` 内存，导致 ACPICA 中保留了一个悬挂的处理程序上下文指针。后续任何访问 EC OpRegion 的 AML 评估都会调用 `acpi_ec_space_handler()`，使用该已释放的指针，从而引发 use-after-free。
+
+#解决方案
+在 `acpi_ec_setup()` 的错误处理路径中，调用 `ec_remove_handlers()` 函数进行清理。`ec_remove_handlers()` 会在执行前检查 `EC_FLAGS_*` 位，因此无论 `ec_install_handlers()` 执行到了哪一步，调用它都是安全的，能够正确移除已安装的处理程序并停止 EC。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/11e49a2b3fec94e7f015db59c3cca7983ba1a277

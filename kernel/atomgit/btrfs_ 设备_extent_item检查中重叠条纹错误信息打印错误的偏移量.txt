@@ -1,0 +1,20 @@
+#标题
+btrfs: 设备_extent_item检查中重叠条纹错误信息打印错误的偏移量
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BTRFS 文件系统进行树检查（tree-checker）时，若检测到设备_extent_item存在重叠条纹，内核输出的错误日志中包含了错误的“prev offset”值。日志本应打印前一个_extent的物理地址偏移量，但实际上错误地打印了磁盘编号。
+
+#主要错误日志
+"dev extent overlap, prev offset %llu len %llu current offset %llu"
+
+#问题根因
+在 `check_dev_extent_item` 函数中，当检测到设备_extent重叠时，错误日志使用了 `prev_key->objectid` 作为前一个_extent的偏移量进行打印。根据 BTRFS 定义，对于 dev extents，`objectid` 代表磁盘编号，而 `offset` 才代表物理地址。因此，正确的打印变量应为 `prev_key->offset`。
+
+#解决方案
+修改 `fs/btrfs/tree-checker.c` 文件中 `check_dev_extent_item` 函数内的 `generic_err` 调用，将错误日志中的格式化参数从 `prev_key->objectid` 修正为 `prev_key->offset`，确保错误信息准确反映前一个_extent的物理偏移地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c118fd42b62869c94ab3d68341fc1c7afe7550ac

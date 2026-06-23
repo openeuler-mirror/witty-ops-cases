@@ -1,0 +1,20 @@
+#标题
+mctp: sock_queue_rcv_skb 失败导致 skb 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MCTP（Management Component Transport Protocol）协议处理流程中，当 `sock_queue_rcv_skb` 函数调用失败时（例如接收缓冲区满），内核未正确释放对应的 skb（socket buffer）资源。此缺陷会导致内核内存泄漏，随着时间推移可能耗尽系统内存，影响系统稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `mctp_route_input` 中，代码逻辑未正确处理 `sock_queue_rcv_skb` 的返回值。当消息未能成功入队到 socket 接收缓冲区时，内核没有释放该 skb 的所有权，导致该内存块无法被回收。此外，在分片重组路径中，`mctp_frag_queue` 成功后的处理逻辑也存在类似问题。
+
+#解决方案
+检查 `sock_queue_rcv_skb` 和 `mctp_frag_queue` 的返回值。若调用成功，将 skb 指针置为 NULL，表示所有权已转移或资源已处理；若失败则保留指针。在函数出口处，通过检查 skb 指针是否非 NULL 来决定是否执行 `kfree_skb` 释放内存，从而确保所有失败路径上的 skb 都能被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/54c4fae507fe0fda7accedbaed5fa5c16f7a7c6c

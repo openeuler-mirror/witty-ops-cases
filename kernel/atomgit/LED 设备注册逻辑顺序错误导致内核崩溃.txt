@@ -1,0 +1,20 @@
+#标题
+LED 设备注册逻辑顺序错误导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在注册 LED 类设备过程中，若 `device_create_with_groups` 或 `led_init_core` 初始化失败，系统将触发内核崩溃。这是因为在初始化完成前，LED 设备节点已被加入全局 `leds_list` 链表，导致系统遍历链表时访问到未完全初始化的设备对象，进而引发空指针崩溃或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 LED 设备注册函数 `led_classdev_register_ext` 的逻辑顺序不当。原代码在执行 `device_create_with_groups` 和 `led_init_core` 等关键初始化步骤之前，就将 `led_cdev->node` 加入了全局 `leds_list` 链表。如果在初始化过程中发生错误或设备状态未就绪，系统其他模块遍历该链表时将访问到无效或未初始化的数据结构，导致崩溃。
+
+#解决方案
+调整代码执行顺序，将 `list_add_tail` 操作移至 `led_init_core` 成功执行之后。确保只有在 LED 设备核心结构初始化完成后，才将其添加到全局链表中，从而避免对未初始化对象的访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac8d1c1689a713260cf454d8234192bc02f19817

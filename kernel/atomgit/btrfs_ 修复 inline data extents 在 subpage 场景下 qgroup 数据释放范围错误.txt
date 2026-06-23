@@ -1,0 +1,20 @@
+#标题
+btrfs: 修复 inline data extents 在 subpage 场景下 qgroup 数据释放范围错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BTRFS 文件系统中，当处理 inline data extents（内联数据区）时，代码错误地使用页面大小（PAGE_SIZE）而非扇区大小（sectorsize）来释放 qgroup 预留空间。虽然当前版本因存在保护机制未直接触发可见故障，但在 sector size < page size（subpage）的场景下，该逻辑与预期不一致，可能导致空间核算逻辑错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `__cow_file_range_inline()` 中，释放 qgroup 预留空间的逻辑基于过时的假设（page size == sector size），使用了 `PAGE_SIZE` 作为释放范围。在 subpage 场景下，inline 数据实际占用的是 sector 大小，而非整个 page 大小，导致释放范围计算不准确。
+
+#解决方案
+修改 `fs/btrfs/inode.c` 文件中的 `cow_file_range_inline` 函数，将 `btrfs_qgroup_free_data` 调用中的长度参数从 `PAGE_SIZE` 修正为 `fs_info->sectorsize`，确保释放的空间大小与实际 inline data extents 占用的扇区大小一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7596c65951af31e5f7c339e7d4bf54d9ca6ab549

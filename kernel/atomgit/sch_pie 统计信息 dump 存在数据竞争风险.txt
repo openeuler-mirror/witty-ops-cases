@@ -1,0 +1,23 @@
+#标题
+sch_pie 统计信息 dump 存在数据竞争风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发环境下读取 PIE 队列 disciplines 的统计信息时，`pie_dump_stats` 函数可能读取到不一致的数据。该问题源于 `edb09eb17ed8` 提交移除了 stats dump 操作中的 qdisc 自旋锁保护，导致快路径中对统计字段的更新操作与通过 RTNL 锁保护的 dump 操作之间存在数据竞争。虽然此问题未表现为明显的内核崩溃，但可能导致用户态通过 `tc` 命令获取的统计数据不准确或不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+内核提交 `edb09eb17ed8` ("net: sched: do not acquire qdisc spinlock in qdisc/class stats dump") 移除了 qdisc/class 统计信息 dump 时的自旋锁保护。这导致 `pie_dump_stats()` 仅持有 RTNL 锁运行，而此时 qdisc 快路径中的数据包处理函数（如 enqueue/dequeue）可能会并发修改统计结构体（`struct pie_vars` 和 `struct pie_stats`）中的字段（如 `prob`、`qdelay`、`packets_in`、`avg_dq_rate` 等），从而引发数据竞争。
+
+#解决方案
+通过添加 `READ_ONCE()` 和 `WRITE_ONCE()` 注解来标记并解决数据竞争。具体修改包括：
+1. 在 `pie_dump_stats()` 函数中，使用 `READ_ONCE()` 读取统计结构体中的所有字段（如 `qdelay`、`packets_in`、`overlimit`、`maxq`、`dropped`、`ecn_mark`、`avg_dq_rate`），确保读取操作的原子性和可见性。
+2. 在数据包处理快路径（enqueue、dequeue、probability 计算等函数）中，使用 `WRITE_ONCE()` 对上述统计字段进行写入操作，防止编译器优化导致写入撕裂，确保与读取侧同步。
+此方案旨在使 qdisc dump 操作尽可能无锁化，避免了重新获取自旋锁带来的性能开销。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/47138b890c5c7d56c0ea0071b53f9671e858dbcb

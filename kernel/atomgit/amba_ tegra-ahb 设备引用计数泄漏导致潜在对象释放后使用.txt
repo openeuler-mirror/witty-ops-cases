@@ -1,0 +1,20 @@
+#标题
+amba: tegra-ahb 设备引用计数泄漏导致潜在对象释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Tegra 平台上使能 SMMU 功能时，内核模块 `tegra-ahb` 在查找 AHB 平台设备驱动数据的过程中获取了设备引用，但在使用完毕后未释放引用计数。这会导致设备对象的引用计数泄漏，进而阻碍设备对象的正常释放与注销；同时，由于持有引用并不足以保证驱动数据（driver data）不被释放，在特定时机下可能触发内核内存访问错误或 UAF（Use-After-Free）风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `tegra_ahb_enable_smmu` 中，代码通过 `bus_find_device_by_of_node` 查找设备时获取了该设备的引用计数（reference count），但在后续获取完驱动数据 `dev_get_drvdata(dev)` 后，没有调用 `put_device(dev)` 来释放该引用。这直接导致了设备对象的引用计数泄漏。
+
+#解决方案
+在 `tegra_ahb_enable_smmu` 函数中，于获取驱动数据 `dev_get_drvdata(dev)` 之后、操作寄存器之前，增加调用 `put_device(dev)`，确保及时释放设备引用计数，避免内存泄漏及潜在的并发问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7058df4178e84f76bcff36fed7146af7bf40b983

@@ -1,0 +1,33 @@
+#标题
+smb: client: fix netns refcount leak after net_passive changes
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建网络命名空间、挂载并卸载 CIFS、随后删除该命名空间后，出现内存泄漏。经过一段时间后，系统报告存在未释放的对象，导致网络命名空间无法正常销毁，相关资源残留。
+
+#主要错误日志
+unreferenced object 0xffff9951419f6b00 (size 256):
+  comm "ip", pid 447, jiffies 4294692389 (age 14.730s)
+  hex dump (first 32 bytes):
+    1b 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+    00 00 00 00 00 00 00 00 80 77 c2 44 51 99 ff ff  .........w.DQ...
+  backtrace:
+    __kmem_cache_alloc_node+0x30e/0x3d0
+    kmalloc_trace+0x2a/0x90
+    ref_tracker_alloc+0x8e/0x1d0
+    sk_alloc+0x18c/0x1c0
+    inet_create+0xf1/0x370
+    __sock_create+0xd7/0x1e0
+    generic_ip_connect+0x1d4/0x5a0 [cifs]
+    ...
+
+#问题根因
+内核提交 5c70eb5c593d 引入了 net_passive 机制用于跟踪内核套接字生命周期。CIFS 代码在提交 95d2b9f693ff 恢复了手动的套接字引用计数操作，将内核套接字转换为用户套接字时，手动设置了 sk_net_refcnt=1，但未调用对应的 net_passive_dec()。这导致 net_passive 计数器不平衡，阻止了网络命名空间在最后一个用户引用释放后被销毁，从而导致内存泄漏。
+
+#解决方案
+移除手动设置 `sk_net_refcnt`、`__netns_tracker_free`、`get_net_track` 和 `sock_inuse_add` 的代码，改用 `sk_net_refcnt_upgrade(sk)` 函数。该函数能正确处理 net_passive 计数器，安全地将内核套接字转换为用户套接字，修复引用计数泄漏问题。同时，将套接字创建接口从 `__sock_create` 替换为 `sock_create_kern` 以适配该流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6e8fb2f26592bcb669030d4340b83ff78952fa77

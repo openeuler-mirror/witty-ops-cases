@@ -1,0 +1,20 @@
+#标题
+crypto: ccree - cc_mac_digest 函数内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 ccree 驱动的 MAC digest 功能时，若 `cc_map_hash_request_final` 函数执行失败，会导致内核内存泄漏。由于该错误处理路径返回 -ENOMEM，上层应用或调用者可能会感知到内存分配失败的错误返回值。
+
+#主要错误日志
+map_ahash_request_final() failed
+
+#问题根因
+在 `cc_mac_digest` 函数中，当 `cc_map_hash_request_final` 调用失败时，原有的错误处理逻辑仅调用了 `cc_unmap_req` 进行清理，遗漏了调用 `cc_unmap_result` 来释放此前已经映射的资源（如 `req->result` 对应的内存），从而导致内存泄漏。
+
+#解决方案
+在 `cc_map_hash_request_final` 失败的错误处理分支中，增加调用 `cc_unmap_result(dev, state, digestsize, req->result)`，确保在返回错误前释放已映射的结果内存，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d1b887d329ee5fc4049e835b67545fb09197bf42

@@ -1,0 +1,21 @@
+#标题
+perf/amd/ibs: IBS Op 计数器掩码设置不全导致 CurCnt 扩展位未正确处理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 IBS Op Counter Extension（OpCntExt，CPUID Fn8000_001B_EAX[6]）的 AMD 处理器上，IBS（Instruction Based Sampling）驱动未正确设置 CurCnt 的高 7 位掩码。虽然当前代码路径下未暴露用户可见的严重故障（因为重新启用事件时会将 CurCnt 设为 0 而非读取原值），但导致驱动内部状态管理不一致，可能在特定场景下影响对 CurCnt 寄存器的正确操作。
+
+#主要错误日志
+未知
+
+#问题根因
+IBS Op 使用 MaxCnt 和 CurCnt 两个计数器，其位宽原为 20 位，后扩展至 27 位（高 7 位由 CPUID OpCntExt 指示）。驱动中的 `perf_ibs->cnt_mask` 变量用于存储这些计数器的位掩码。
+根因在于：即使 CPUID 标识支持 OpCntExt，驱动程序初始化时仅将代表扩展位的 `IBS_OP_MAX_CNT_EXT_MASK` 加入了 `cnt_mask`，遗漏了 `CurCnt` 对应的扩展位掩码 `IBS_OP_CUR_CNT_EXT_MASK`。这导致在禁用事件等需要操作 CurCnt 的场景下，无法正确覆盖 CurCnt 的高 7 位。
+
+#解决方案
+修改 `arch/x86/events/amd/ibs.c` 中的 `perf_ibs_op_init` 函数，在检测到 `IBS_CAPS_OPCNTEXT` 标志时，将 `IBS_OP_CUR_CNT_EXT_MASK` 也一并加入到 `perf_ibs_op.cnt_mask` 中，确保 CurCnt 的扩展位被正确掩码覆盖。同时，在头文件 `arch/x86/include/asm/perf_event.h` 中补充定义 `IBS_OP_CUR_CNT_EXT_MASK` 宏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/77dc0f58d414ed1c8f3780729fa44376823f13b1

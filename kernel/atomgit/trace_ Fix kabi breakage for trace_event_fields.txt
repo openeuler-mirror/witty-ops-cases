@@ -1,0 +1,23 @@
+#标题
+trace: Fix kabi breakage for trace_event_fields
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核数据结构 `trace_event_fields` 发生布局变更（结构体大小或成员偏移量改变），破坏了内核 ABI（KABI）稳定性。这通常导致依赖于原结构体布局的内核模块（如驱动程序、第三方模块）加载失败或在运行时发生内存访问异常，导致模块无法正常工作。
+
+#主要错误日志
+未知
+
+#问题根因
+在提交 910a139efccb ("tracing: Check "%s" dereference via the field and not the TP_printk format") 中，为了修复 tracing 功能的一个问题，引入了两个位域成员 `is_signed` 和 `needs_test`。这两个位域成员的加入改变了 `struct trace_event_fields` 的内存布局，破坏了 KABI 兼容性。
+
+#解决方案
+利用结构体中存在的填充空间来修复 KABI 破坏问题。
+1. 将原修改中的位域成员 `is_signed` 和 `needs_test` 恢复为普通的整型成员（`const int is_signed` 和 `const int filter_type` 等），恢复原有的结构体布局主体。
+2. 利用结构体中存在的 "hole"（编译器因内存对齐产生的空隙），通过 `KABI_FILL_HOLE` 宏将 `needs_test` 位域成员放置在该空隙中。
+这样既保留了新引入的 `needs_test` 功能字段，又保证了结构体的整体大小和对齐方式与修改前一致，从而修复了 KABI breakage 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2da72dd595928cb7eb1ec3499cf0b0822b52b836

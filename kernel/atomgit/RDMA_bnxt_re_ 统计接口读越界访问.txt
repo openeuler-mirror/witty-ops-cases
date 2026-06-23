@@ -1,0 +1,21 @@
+#标题
+RDMA/bnxt_re: 统计接口读越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能 KASAN 的环境中加载 bnxt_re 驱动模块时触发 slab-out-of-bounds 错误，导致内核打印 KASAN 报错跟踪信息。
+
+#主要错误日志
+BUG: KASAN: slab-out-of-bounds in bnxt_re_get_hw_stats+0x2b6a/0x2e00 [bnxt_re]
+Write of size 8 at addr ffff8885942a6340 by task modprobe/4809
+
+#问题根因
+驱动仅在 GenP5 和 P7 适配器上导出 DBR pacing 统计信息，但在解析统计信息时，代码仅检查了 `rdev->pacing.dbr_pacing` 标志位，未增加芯片型号判断。这导致非 GenP5/P7 的设备在执行统计查询时错误进入处理流程，引发越界访问。
+
+#解决方案
+在 `bnxt_re_ib_get_hw_stats` 函数中，对 pacing 统计的处理逻辑增加芯片型号校验。修改条件判断为 `rdev->pacing.dbr_pacing && bnxt_qplib_is_chip_gen_p5_p7(rdev->chip_ctx)`，确保仅在支持的芯片型号上执行 `bnxt_re_copy_db_pacing_stats` 操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/002338604459a869d9f843a98a1696f348537c33

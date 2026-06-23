@@ -1,0 +1,20 @@
+#标题
+cachefiles: ondemand 写入返回值错误导致数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 cachefiles ondemand 写入操作时，若用户态传入的数据长度未按块大小对齐（例如预读场景、仅需要 512 对齐的 DIO 写入或故障注入场景），`cachefiles_ondemand_fd_write_iter` 函数返回的写入长度比实际写入的数据长度大（返回了对齐后的长度）。这导致上层调用者认为写入的数据量与实际写入的数据量不匹配，引发数据不一致或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `cachefiles_ondemand_fd_write_iter` 在调用 `__cachefiles_prepare_write` 前，为了检查缓存空间是否充足，对 `pos` 和 `len` 进行了块对齐处理。然而，该函数错误地将经过对齐处理的 `len`（通过指针参数被修改）作为函数返回值返回，而实际传递给底层 `__cachefiles_write` 的写入长度参数并未使用该对齐后的值（diff 显示之前传递的是 `iter->count` 或未对齐的 `len`）。由于 `__cachefiles_prepare_write` 会修改 `len` 的值，导致返回给调用者的长度与实际请求的写入长度不符。
+
+#解决方案
+引入一个新的局部变量 `aligned_len` 用于空间检查。在调用 `__cachefiles_prepare_write` 时，传递 `aligned_len` 的地址供其修改以计算空闲块，而保留原始的 `len` 不变。最终函数返回原始的 `len`，确保返回值与实际请求写入的数据长度一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ec0faf02316130994e103478eee8b2da3321f432

@@ -1,0 +1,34 @@
+#标题
+arm64内核SEI异步异常处理机制缺失导致系统恐慌或进程无法恢复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在Firmware-First RAS模型下，ARM64系统发生SEI（SError Interrupt，同步外部中断）时，系统行为不符合预期：
+1. 对于用户态触发的UER（Uncorrected Recoverable）类型错误，系统未能执行恢复操作（如杀死受害进程），而是直接触发panic导致系统崩溃。
+2. 在异常边界（exception entry/exit）缺少ESB（Error Synchronization Barrier）指令同步，导致SEI异步异常处理时机不可控。
+3. Trust Firmware（TF）在委托SEI回内核前破坏了SP_EL0寄存器，导致后续内核态运行异常。
+
+#主要错误日志
+- pr_info_ratelimited("userspace aet: %ld comm: %.20s tgid: %d pid: %d cpu: %d\n", ...)
+- pr_info_ratelimited("kernelspace aet: %ld comm: %.20s tgid: %d pid: %d cpu: %d\n", ...)
+- pr_err("Sending SIGKILL to comm: %s, pid: %d, tgid: %d due to sei not recovered\n", ...)
+- pr_warn_ratelimited("alloc task work failed\n")
+- pr_warn_ratelimited("err pa is not valid\n")
+- pr_warn_ratelimited("task work add failed\n")
+- pr_warn("%s init failed\n", __func__); // ghes_hisi_sei_init
+
+#问题根因
+1. SEI同步机制缺失：内核在异常入口和出口路径未插入ESB指令，无法在已知点同步处理pending的SEI，导致错误处理延迟或上下文混乱。
+2. UER错误处理逻辑缺失：原有代码对UER类型错误直接判定为致命错误并调用panic，未实现针对UER的恢复机制（如终止受害进程而非崩溃系统）。
+3. SP_EL0寄存器污染：TF固件在处理SEI并返回内核前破坏了SP_EL0，而内核未在el1h_64_error处理路径中恢复该寄存器，破坏了进程上下文。
+
+#解决方案
+1. 引入CONFIG_ARM64_SYNC_SEI配置选项及内核参数`arm64_sync_sei`，在异常边界动态开启ESB指令同步。
+2. 修改异常处理入口（entry.S），在EL0向量入口和返回前插入可动态patch的ESB指令；在EL1 SEI handler中增加SP_EL0恢复逻辑，从per-cpu变量`__entry_task`重新加载SP_EL0。
+3. 扩展RAS错误处理流程，增加`apei_claim_sei`钩子函数。对于UER类型错误，调用厂商特定的SEI handler（如HiSilicon平台的`ghes_hisi_handle_sei`）。
+4. 实现HiSilicon特定SEI恢复逻辑：通过读取厂商特定寄存器获取错误物理地址，使用task_work机制向用户态受害进程发送SIGKILL信号，实现进程级错误恢复而非系统崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/52f7262067fc7e40ad0480db741a2f1f150b1718

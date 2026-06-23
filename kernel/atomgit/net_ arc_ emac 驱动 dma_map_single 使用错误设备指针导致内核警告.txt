@@ -1,0 +1,21 @@
+#标题
+net: arc: emac 驱动 dma_map_single 使用错误设备指针导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 arc emac 网卡驱动进行 DMA 操作时，内核触发 WARNING 警告并打印调用栈。该问题由 `dma_map_single` 函数传入了错误的设备指针导致，虽然主要表现为内核警告日志，但在特定配置下可能导致 DMA 映射失败或潜在的内存访问异常。
+
+#主要错误日志
+[   39.933526] ------------[ cut here ]------------
+[   39.938414] WARNING: CPU: 1 PID: 501 at kernel/dma/mapping.c:149 dma_map_page_attrs+0x90/0x1f8
+
+#问题根因
+驱动代码中错误地使用了 `&ndev->dev`（net_device 结构体中的内嵌 device）作为参数传递给 `dma_map_single` 和 `dma_unmap_single` 等 DMA 操作函数。`ndev->dev` 与 `pdev->dev` 不是同一个设备，且 `ndev->dev` 通常没有设置 `dma_mask`。正确的做法是使用 `ndev->dev.parent`（即 `pdev->dev`），该设备结构体才包含有效的 DMA 配置信息。
+
+#解决方案
+修改 `drivers/net/ethernet/arc/emac_main.c` 文件，在相关函数（如 `arc_emac_tx_clean`, `arc_emac_rx`, `arc_emac_open`, `arc_emac_tx` 等）中引入局部变量 `struct device *dev = ndev->dev.parent`，将所有 `dma_map_single`, `dma_unmap_single` 以及 `dma_mapping_error` 函数调用中的设备参数从 `&ndev->dev` 替换为 `dev`，确保 DMA 映射操作使用正确的父设备指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/858d7a26e2e9b79e93f833f8ba3fefa40905971f

@@ -1,0 +1,25 @@
+#标题
+ub: ubase: 管理平面重启期间 ctrlq e2e 消息发送失败导致流程中断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在管理平面重启场景下，若 UE（User Element）先进入 reinit 和 elr 流程，此时对端 MUE cmdq 尚未就绪，导致 UE 发送 ctrlq e2e 消息失败并接收到错误码 EINVAL，阻碍了后续 elr 或 probe 流程的正常执行。
+
+#主要错误日志
+- `ubase_warn_rl(udev, cmdq_space_insuffice, "the requested space(%d) exceeds the remaining space(%d), csq ci: %u.\n", ...)`
+- `ubase_warn(udev, "cleaned %dBD, need to clean %dBD.\n", cleaned, num)`
+- `ubase_warn(udev, "peer cmdq is not ready.\n")`
+
+#问题根因
+管理平面重启期间，UE 进入 reinit 和 elr 流程时，对端 MUE cmdq 可能尚未可用。固件此时会将错误码 EINVAL 返回给 UE。由于错误码为 EINVAL，UE 不会触发重试机制，导致 ctrlq e2e 消息发送失败，流程中断。
+
+#解决方案
+修改错误处理逻辑：
+1. 固件侧将 MUE cmdq 未就绪时的返回错误码由 EINVAL 修改为 ENXIO。
+2. 驱动侧在 `ubase_get_cmd_result` 函数中增加判断，当检测到固件返回 ENXIO 且当前为 ctrlq e2e 消息时，将错误码转换为 ETIMEDOUT。
+3. 错误码转换为 ETIMEDOUT 后，可触发 UE 在 ELR 或 probe 过程中的重试机制，保证流程在管理平面重启完成后能继续执行。同时增加打印 "peer cmdq is not ready." 用于诊断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c7cc9d7bfcb550466f82cd1088666e515344b41

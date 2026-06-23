@@ -1,0 +1,30 @@
+#标题
+f2fs: precache_extents 生成零长度 extent 导致潜在异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定数据布局下执行 `f2fs_io precache_extents` 操作时，内核会生成零长度的 extent（zero-sized extent）。
+复现步骤如下：
+1. f2fs_io write 1 0 1881 rand dsync testfile
+2. f2fs_io fallocate 0 7708672 4096 testfile
+3. f2fs_io write 1 1881 1 rand buffered testfile
+4. fsync testfile
+5. umount
+6. mount
+7. f2fs_io precache_extents testfile
+
+#主要错误日志
+未知
+
+#问题根因
+在 `f2fs_map_blocks` 函数处理 `precache_extents` 流程时，逻辑存在缺陷。
+当遍历 dnode 时，如果前一个 dnode 的最后一个块是有效的，且下一个 dnode 的第一个块是空洞，函数会跳转到 `sync_out` 标签。此时，计算 extent 长度的逻辑 `map->m_len - ofs` 可能结果为 0（例如 `map->m_len` 为 1，`ofs` 计算结果也为 1），从而错误地创建了一个零长度的 extent。
+
+#解决方案
+在更新读 extent 缓存之前增加长度检查。
+具体修改：在调用 `f2fs_update_read_extent_cache_range` 前，判断 `map->m_len` 是否大于偏移量 `ofs`，仅当条件成立时才执行更新操作，从而避免生成零长度的 extent。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9a533bb5dfa34bc6e01a64af28aef7ce9602bb2

@@ -1,0 +1,22 @@
+#标题
+mlx5 E-switch 开启 RoCE 失败时未处理错误导致流程异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mlx5 E-switch offloads 启用流程中，若底层启用 RoCE（RDMA over Converged Ethernet）失败，驱动程序未捕获错误并继续执行后续初始化步骤。这可能导致处于半初始化状态的资源被访问，进而引发内核异常、内存泄漏或功能不可用等问题。
+
+#主要错误日志
+mlx5_core_err(dev, "Failed to enable RoCE: %d\n", err);
+
+#问题根因
+Commit 80f09dfc237f ("net/mlx5: Eswitch, enable RoCE loopback traffic") 引入了在 E-switch offloads 启用流程中调用 `mlx5_rdma_enable_roce` 的逻辑，但该提交错误地假设启用 RoCE 总是成功，将 `mlx5_rdma_enable_roce` 函数定义为 void 类型，且在调用处未检查返回值。实际上，启用 RoCE 可能会失败，缺少错误处理逻辑导致了问题。
+
+#解决方案
+1. 修改 `mlx5_rdma_enable_roce` 函数的返回值类型，从 `void` 改为 `int`，使其能够向调用者传递错误状态。
+2. 在函数内部添加错误返回逻辑，确保在 RoCE 不支持或启用失败时返回相应的错误码（如返回 0 表示成功，返回负值表示失败）。
+3. 在 `esw_offloads_enable` 调用 `mlx5_rdma_enable_roce` 处增加错误判断，若返回非零错误码，则跳转到错误处理标签 `err_roce`，销毁已初始化的 mutex 并返回错误，防止错误继续传播。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7645f963ce4b1931ff9dd0f6ac8a4813d50debad

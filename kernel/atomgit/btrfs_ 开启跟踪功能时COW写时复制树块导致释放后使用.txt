@@ -1,0 +1,20 @@
+#标题
+btrfs: 开启跟踪功能时COW写时复制树块导致释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用内核跟踪功能的情况下，Btrfs 文件系统执行树块COW操作时，触发了 use-after-free 错误。系统可能出现内核崩溃、Oops 或内存相关的异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `btrfs_cow_block` 函数中，调用 `__btrfs_cow_block` 进行COW操作后，原缓冲区 `buf` 会被释放。然而，`trace_btrfs_cow_block(root, buf, *cow_ret)` 跟踪点的调用位置错误地放在了 `__btrfs_cow_block` 返回之后。此时 `buf` 指针可能已指向无效内存，导致在跟踪点内部访问该指针时发生释放后使用。
+
+#解决方案
+将 `trace_btrfs_cow_block` 的调用点从 `btrfs_cow_block` 函数移动到 `__btrfs_cow_block` 函数内部，确保该跟踪点在 `buf` 被释放前调用。具体修改是在 `__btrfs_cow_block` 中释放缓冲区之前插入 `trace_btrfs_cow_block(root, buf, cow)` 调用，并移除 `btrfs_cow_block` 中的原调用逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b54f81e417e8f7616d7def1b5c2d21fc5760c999

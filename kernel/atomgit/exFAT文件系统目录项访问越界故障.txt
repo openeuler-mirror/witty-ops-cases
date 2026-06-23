@@ -1,0 +1,20 @@
+#标题
+exFAT文件系统目录项访问越界故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在访问exFAT文件系统目录时，若目录项中记录的起始簇号无效但文件大小非零，内核可能会发生越界访问，导致系统崩溃或内存破坏。
+
+#主要错误日志
+exFAT-fs (sb): start_clu is invalid cluster(0x%x)
+
+#问题根因
+在函数 `exfat_find` 中，代码先读取并使用了 `info->start_clu`，随后才对其进行有效性校验。若磁盘上的元数据损坏，导致 `start_clu` 指向无效簇，且 `info->size` 不为 0，内核将在未校验的情况下使用该无效簇号进行后续操作，从而导致越界访问。
+
+#解决方案
+调整代码逻辑，在读取 `start_clu` 后立即调用 `is_valid_cluster` 进行有效性检查。如果发现 `start_clu` 无效且文件大小不为 0，则打印警告日志并将文件大小重置为 0，从而防止后续流程使用无效的簇地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/44f5ce9444bbe763cbccc1eebea5a6755e92ab18

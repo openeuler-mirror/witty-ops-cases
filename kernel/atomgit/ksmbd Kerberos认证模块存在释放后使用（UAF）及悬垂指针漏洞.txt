@@ -1,0 +1,26 @@
+#标题
+ksmbd Kerberos认证模块存在释放后使用（UAF）及悬垂指针漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 进行 Kerberos 认证过程中，若客户端尝试复用现有会话进行重新认证，可能导致内核发生释放后使用或访问悬垂指针，进而引发内核崩溃或内存损坏。
+
+#主要错误日志
+ksmbd: different user tried to reuse session
+
+#问题根因
+在处理 SMB2 会话重新认证时，代码逻辑存在缺陷：
+1. 在 `smb2pdu.c` 的 `krb5_authenticate` 函数中，当会话状态为 `SMB2_SESSION_VALID` 时，代码会先调用 `ksmbd_free_user(sess->user)` 释放掉当前会话关联的用户结构体。
+2. 随后调用 `ksmbd_krb5_authenticate` 尝试进行重新认证，此时若认证失败或出现异常，原先被释放的 `sess->user` 指针变成了悬垂指针，后续对该指针的访问将触发 UAF 漏洞。
+3. 在 `auth.c` 的 `ksmbd_krb5_authenticate` 函数中，原代码无条件地将新认证的用户指针赋值给 `sess->user`，忽略了会话已存在用户的情况，导致在重新认证场景下内存管理混乱。
+
+#解决方案
+1. 移除 `smb2pdu.c` 中不安全的提前释放逻辑，不再在重新认证开始时直接释放 `sess->user`。
+2. 在 `auth.c` 的 `ksmbd_krb5_authenticate` 函数中增加会话用户状态判断：
+   - 如果 `sess->user` 为空，视为首次认证，直接赋值。
+   - 如果 `sess->user` 不为空（即重新认证场景），对比新旧用户结构是否一致。若一致则释放新申请的结构体并保留原结构体；若不一致则拒绝复用会话，释放新结构体并返回 `-EPERM` 错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4eddc7e6b3a11653b493da4617c18cdc2e6e6777

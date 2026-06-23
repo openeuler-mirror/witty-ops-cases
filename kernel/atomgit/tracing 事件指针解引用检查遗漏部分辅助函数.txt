@@ -1,0 +1,26 @@
+#标题
+tracing 事件指针解引用检查遗漏部分辅助函数
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 trace 事件的 print fmt 检查逻辑中，针对指针解引用的安全性检查不完整。当事件打印格式中使用了 `__get_rel_dynamic_array()`、`__get_dynamic_array_len()`、`__get_rel_dynamic_array_len()` 或 `__get_rel_sockaddr()` 等辅助宏时，内核未能正确识别这些是安全的数据访问操作，可能导致对合法 trace 事件格式的错误判定或处理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`process_pointer()` 函数负责检查 trace 事件 print fmt 中的指针解引用是否安全。该函数原本仅识别了 `__get_dynamic_array()` 和 `__get_sockaddr()` 这两个辅助宏，漏掉了 `__get_rel_dynamic_array()`、`__get_dynamic_array_len()`、`__get_rel_dynamic_array_len()` 和 `__get_rel_sockaddr()`。这导致使用这些被遗漏宏的合法事件格式无法通过安全检查。
+
+#解决方案
+在 `kernel/trace/trace_events.c` 的 `process_pointer()` 函数中，新增对四个遗漏辅助宏的识别逻辑：
+1. 新增 `find_print_string()` 辅助函数用于简化字符串查找与边界检查。
+2. 使用新函数显式检查 `__get_rel_dynamic_array(`。
+3. 显式检查 `__get_dynamic_array_len(`。
+4. 显式检查 `__get_rel_dynamic_array_len(`。
+5. 显式检查 `__get_rel_sockaddr(`。
+通过补全这些检查项，确保所有标准 trace 事件辅助宏都能被正确识别为安全的指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1886df3835a422d586f488fd039a4d554ada28d0

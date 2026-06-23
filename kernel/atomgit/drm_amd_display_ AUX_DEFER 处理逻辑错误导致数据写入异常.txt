@@ -1,0 +1,25 @@
+#标题
+drm/amd/display: AUX_DEFER 处理逻辑错误导致数据写入异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 DP AUX 写操作时，若接收端（sink）返回 DEFER（未就绪）状态，驱动程序错误地认为所有数据已成功写入，导致数据传输不一致或丢失。此外，传输失败时缺乏调试日志，问题难以定位。
+
+#主要错误日志
+- `amdgpu: AUX partially written`
+- `amdgpu: DP AUX transfer fail:%d`
+- `amdgpu: AUX reply command not ACK: 0x%02x.`
+
+#问题根因
+在 `dm_dp_aux_transfer` 函数中，原有逻辑在处理写入操作时，只要返回结果非负（`result >= 0`）就将结果强制置为请求的大小（`msg->size`）。这导致当接收到 AUX_DEFER 或 I2C_DEFER（此时 `result` 为 0）时，驱动错误地向上层返回“写入成功且字节数完整”，实际上接收端并未处理该请求。正确逻辑应当是仅在接收到 ACK 信号时才确认写入完成，遇到 DEFER 应返回 0 以触发重试。
+
+#解决方案
+修正写入操作的返回值逻辑：
+1. 仅当 `payload.reply` 指示为 `I2C_ACK` 或 `AUX_ACK` 时，才返回 `msg->size` 表示写入成功。
+2. 若 `result` 为 0（包含 DEFER 情况），强制返回 0 以促使上层进行重试。
+3. 增加调试日志，打印“部分写入”、“传输失败”及“非 ACK 应答”的具体信息，辅助故障排查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ceecb221f31a2c10149746106dfd4ba6fc4a6910

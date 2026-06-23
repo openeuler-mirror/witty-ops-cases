@@ -1,0 +1,20 @@
+#标题
+arm64/mm: 修复 TLB 批量刷新与 mprotect 竞争导致陈旧 TLB 条目残留的理论性漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 架构下，当页面回收使用 tlbbatch 机制进行批量 TLB 刷新时，若与 mprotect 等操作发生竞争，可能导致陈旧的 TLB 条目依然有效。这可能引发内存访问权限控制失效，例如用户态进程在页面权限被修改为只读后，仍能利用缓存的读写（RW）PTE 条目成功执行写操作，破坏内存一致性保护。
+
+#主要错误日志
+未知
+
+#问题根因
+ARM64 的 `arch_flush_tlb_batched_pending()` 函数仅执行 `dsb(ish)` 指令来同步 TLB 维护操作。然而，根据 Arm ARM 架构规范，TLB 维护指令的完成仅由执行该指令的观察者发出的 DSB 来保证。如果 `arch_flush_tlb_batched_pending()` 在与发出 TLBI 指令不同的 CPU（远程 CPU）上运行，`dsb(ish)` 无法提供架构上的同步保证。因此，在页面回收批量刷新 TLB 期间，若发生 mprotect 等操作，该竞争窗口可能导致 TLB 未正确刷新，残留陈旧条目。
+
+#解决方案
+修改 `arch_flush_tlb_batched_pending()` 函数的实现，将原有的 `dsb(ish)` 指令替换为 `flush_tlb_mm(mm)`。这确保了即使当前代码运行在远程 CPU 上，也能正确等待此前发出的针对该 mm 的所有 TLBI 指令完成，从而消除竞争风险。此修改与其他实现 tlbbatch 特性的架构保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56decb713908d016845ec46812c75e2ed96b4d15

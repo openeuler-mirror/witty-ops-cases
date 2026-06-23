@@ -1,0 +1,23 @@
+#标题
+SMC协议Proposal消息处理缺少边界校验导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SMC服务端在接收并处理来自远程客户端的Proposal消息时，若消息中的`iparea_offset`字段超过最大值或`ipv6_prefixes_cnt`字段异常，将导致内核访问错误地址，进而引发系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+服务端在接收Proposal消息时，未对来自远程客户端的字段`iparea_offset`和`ipv6_prefixes_cnt`进行有效性校验。特别是`iparea_offset`字段，一旦超过最大值，计算出的内存地址将越界，导致访问错误地址引发崩溃。
+
+#解决方案
+在处理Proposal消息前增加字段校验：
+1. 在`smc_clc_proposal_get_prefix`函数中检查`iparea_offset`是否超过`sizeof(struct smc_clc_msg_smcd)`，若超过则返回NULL。
+2. 在`smc_clc_msg_prop_valid`函数中检查`ipv6_prefixes_cnt`是否大于`SMC_CLC_MAX_V6_PREFIX`。
+3. 在调用链路上（如`smc_listen_prfx_check`）增加对返回指针的NULL检查，若校验失败则返回`-EPROTO`错误，避免处理非法数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f0577db853acecaafc0c7e99b61feaec4bed2612

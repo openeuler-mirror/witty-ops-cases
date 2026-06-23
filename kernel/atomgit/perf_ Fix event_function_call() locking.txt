@@ -1,0 +1,20 @@
+#标题
+perf: Fix event_function_call() locking
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `event_function_call()` 函数处理非活跃上下文（`!ctx->is_active`）的代码路径时，加锁方式与其他路径不一致。这种锁处理的不一致性破坏了预期的锁上下文保护机制，可能导致并发场景下的竞态条件，进而引发内核数据损坏或不可预期的执行流异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，`event_function_call()` 及其关联的 `@func` 调用上下文在大多数情况下都使用了 `perf_ctx_lock()` 进行保护，唯独在 `!ctx->is_active` 的处理分支中，代码直接使用了 `raw_spin_lock_irq(&ctx->lock)`。这种加锁方式的不统一（不一致性）破坏了锁机制的完整性，导致了潜在的并发安全隐患。
+
+#解决方案
+修改 `event_function_call()` 函数中的加锁逻辑，将 `raw_spin_lock_irq(&ctx->lock)` 替换为 `perf_ctx_lock(cpuctx, ctx)`，并在对应的解锁处将 `raw_spin_unlock_irq(&ctx->lock)` 替换为 `perf_ctx_unlock(cpuctx, ctx)`。通过统一使用 `perf_ctx_lock`，确保了所有代码路径下的锁上下文一致性，修复了潜在的安全漏洞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14c2c65783fbdbf4a41faa8efba5e6eebabeda1d

@@ -1,0 +1,22 @@
+#标题
+scsi: hisi_sas: 批量插盘导致硬件端口ID变更引发I/O错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在批量插入磁盘的场景下，PHY（物理层）的硬件端口ID（hw port ID）可能发生变更。该变更导致 `hisi_sas_port` 与 `itct` 中记录的端口ID与硬件实际状态不一致，进而引发 I/O 错误。
+
+#主要错误日志
+dev_info(dev, "phy%d's hw port id changed from %d to %llu\n", phy_no, port->id, phy->port_id);
+
+#问题根因
+PHY 的硬件端口 ID 在批量插盘过程中可能发生改变，导致软件层维护的 `hisi_sas_port` 和 ITCT 表中的端口 ID 与硬件不一致，从而引发 I/O 错误。
+
+#解决方案
+在 `hisi_sas_phyup_work_common` 函数中增加端口 ID 一致性检查。如果检测到端口 ID 发生变更且非 Expander 设备：
+1. 将设备状态设置为 `SAS_DEV_GONE`，拦截发往该设备的 I/O 请求。
+2. 触发 `LINK_RESET` 事件，丢弃当前状态并重新发现磁盘以更新信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a745bbcc29ce11597b01db5dc1e404e989f096b7

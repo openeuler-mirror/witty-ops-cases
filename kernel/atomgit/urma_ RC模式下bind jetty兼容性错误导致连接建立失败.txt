@@ -1,0 +1,31 @@
+#标题
+urma: RC模式下bind jetty兼容性错误导致连接建立失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在RC（Reliable Connection）传输模式下执行 bind jetty 操作时，由于内核态文件复用逻辑（rc resue rtp implementation）存在缺陷，导致连接建立流程异常。具体表现为连接建立失败，涉及控制面连接创建、TP（Transport Path）激活或状态管理错误。
+
+#主要错误日志
+- `ubcore_log_err("Failed to exchange tp info, ret: %d.\n", ret);`
+- `ubcore_log_err("failed to alloc vtpn.\n");`
+- `ubcore_log_err("failed to active tp, vtpn:%u", vtpn->vtpn);`
+- `ubcore_log_err("Failed to bind jetty ex, ret: %d.\n", ret);`
+- `ubcore_log_err("Failed to deactivate tp, ret: %d", ret);`
+
+#问题根因
+先前的提交（af0870954dd8）引入了 RC 传输模式的内核态文件复用实现，该实现依赖 `tpid_ctx` 哈希表查找与引用计数管理来复用连接。然而，这套逻辑在处理 RC 连接建立和断开时存在兼容性错误：
+1. 在 `handle_create_req`、`ubcore_bind_jetty_compat` 等路径中，`tpid_ctx` 的查找与复用逻辑导致连接流程不符合 RC 模式的预期。
+2. 在 `ubcore_adapter_layer_disconnect` 中，错误的引用计数判断逻辑导致断开连接流程异常。
+3. 原有的 `ubcore_exchange_tpid_info` 接口及 `peer_tp_handle` 的更新机制不适用于当前的 RC 控制面逻辑。
+
+#解决方案
+该补丁通过回滚 RC 模式下的 `tpid_ctx` 复用逻辑来修复问题：
+1. **移除复用逻辑**：从 `handle_create_req`、`ubcore_adapter_layer_disconnect`、`handle_destroy_req` 和 `ubcore_bind_jetty_compat` 函数中移除 `tpid_ctx` 的查找、引用计数管理及哈希表操作，不再使用 `tpid_ctx` 进行 RC 连接复用。
+2. **简化连接交换**：在 `ubcore_bind_jetty_compat` 中，将 `ubcore_exchange_tpid_info` 替换为 `ubcore_exchange_tp_info`，移除对 `tpid_ctx` 中 `peer_tp_handle` 的依赖。
+3. **引入专用连接函数**：新增 `ubcore_connect_rc_vtp_ctrlplane` 函数，专门处理 RC 模式下的 vtpn 连接。该函数整合了 vtpn 复用查找、创建、哈希表添加、TP 激活及失败回滚逻辑，确保 RC 控制面行为的一致性。
+4. **更新调用接口**：将 `ubcore_inner_bind_ub_jetty_ctrlplane` 中的调用接口从通用的 `ubcore_connect_vtp_ctrlplane` 切换为专用的 `ubcore_connect_rc_vtp_ctrlplane`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e985d54a6ccb2edc51b1023b187005c00c5dfc58

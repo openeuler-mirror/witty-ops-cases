@@ -1,0 +1,22 @@
+#标题
+panasonic-laptop: sysfs show 回调错误码处理不当导致输出无意义信息
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Panasonic 笔记本驱动中，当 sysfs 的 show 回调函数（如 `eco_mode_show` 或 `cdpower_show`）内部发生错误时，用户空间读取到的内容是代表错误码的整数值（如负数），而非预期的设备状态值。这导致用户空间无法感知发生了错误，且读到了无意义的数据。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `eco_mode_show` 函数中，当遇到未知的 eco 模式时，代码将 `result` 设为 `-EIO` 但并未立即返回，而是继续向下执行 `sysfs_emit`，将负的错误码格式化为字符串输出。同理，`cdpower_show` 函数直接将 `get_optd_power_state()` 的返回值传递给 `sysfs_emit`，若该函数返回负的错误码，也会被错误地当作有效值输出。这导致内核未能向用户空间传递正确的错误状态。
+
+#解决方案
+修正 sysfs show 回调函数的错误处理逻辑：
+1. 在 `eco_mode_show` 函数的 default 分支中，直接 `return -EIO`，而不是将错误码赋值给 result 变量继续执行。
+2. 在 `cdpower_show` 函数中，先使用变量接收 `get_optd_power_state()` 的返回值，判断若为负值则直接返回该错误码，否则才将值传递给 `sysfs_emit` 进行输出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e93de147e65eaf8a9ef0f3d6284d48a72dcf55f9

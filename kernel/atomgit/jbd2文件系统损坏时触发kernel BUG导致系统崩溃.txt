@@ -1,0 +1,38 @@
+#标题
+jbd2文件系统损坏时触发kernel BUG导致系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当文件系统损坏（如存储故障导致数据不一致）时，在执行 mkdir 等操作触发 `jbd2_journal_get_create_access` 函数时，内核触发 `BUG_ON` 导致系统崩溃（Kernel Panic/Oops），无法继续运行。
+
+#主要错误日志
+```
+------------[ cut here ]------------
+kernel BUG at fs/jbd2/transaction.c:1289!
+Oops: invalid opcode: 0000 [#1] SMP KASAN PTI
+CPU: 5 UID: 0 PID: 2031 Comm: mkdir Not tainted 6.18.0-rc1-next
+RIP: 0010:jbd2_journal_get_create_access+0x3b6/0x4d0
+...
+Call Trace:
+ <TASK>
+ __ext4_journal_get_create_access+0x42/0x170
+ ext4_getblk+0x319/0x6f0
+ ext4_bread+0x11/0x100
+ ext4_append+0x1e6/0x4a0
+ ext4_init_new_dir+0x145/0x1d0
+ ext4_mkdir+0x326/0x920
+ vfs_mkdir+0x45c/0x740
+ do_mkdirat+0x234/0x2f0
+ __x64_sys_mkdir+0xd6/0x120
+```
+
+#问题根因
+当文件系统数据不一致（例如引用块的块位图未设置）时，可能导致正在提交的块被再次分配使用。这种异常情况导致 `jbd2_journal_get_create_access` 函数中的 `J_ASSERT` 断言条件（检查 `jh->b_transaction` 状态）不满足。原代码在断言失败时直接调用 `BUG_ON`，导致内核 panic，这在文件系统已损坏的异常场景下是不期望发生的系统级行为。
+
+#解决方案
+将 `J_ASSERT` 断言检查修改为条件判断。当检测到缓冲头状态异常（`jh->b_transaction` 不在预期状态或 `jh->b_next_transaction` 不为空）时，不再触发 `BUG_ON`，而是将文件系统标记为只读（返回 `-EROFS`）并调用 `jbd2_journal_abort` 中止日志事务，从而避免系统崩溃，使系统能够继续处理错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6dc6ff7553de7226f8f779b46e364ac53080a76c

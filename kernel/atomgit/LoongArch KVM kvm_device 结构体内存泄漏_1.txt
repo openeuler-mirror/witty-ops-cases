@@ -1,0 +1,20 @@
+#标题
+LoongArch KVM kvm_device 结构体内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构的 KVM 模块中，销毁 IPI 设备时存在内存泄漏。具体表现为调用 `kvm_ioctl_create_device()` 创建设备后，若销毁设备（调用 `kvm_ipi_destroy()`），对应的 `kvm_device` 结构体内存未被释放，导致系统内存资源持续占用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `kvm_ioctl_create_device()` 函数中，`kvm_device` 结构体已经分配了内存。根据设计预期，`kvm_device->destroy()` 回调函数应当负责释放该 `kvm_device` 结构体。然而，LoongArch 架构下的 `kvm_ipi_destroy()` 函数仅释放了其内部使用的 `ipi` 结构体，未释放 `dev` 指针指向的 `kvm_device` 结构体，从而导致内存泄漏。
+
+#解决方案
+在 `kvm_ipi_destroy()` 函数中，添加 `kfree(dev)` 语句，确保在注销设备并释放内部资源后，释放 `kvm_device` 结构体自身的内存，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a64348f58a324bee4c3a581425916a8f5d9a2e3a

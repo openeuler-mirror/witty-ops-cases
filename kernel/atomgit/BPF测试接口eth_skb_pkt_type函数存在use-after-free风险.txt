@@ -1,0 +1,32 @@
+#标题
+BPF测试接口eth_skb_pkt_type函数存在use-after-free风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+KMSAN工具检测到在执行BPF程序测试运行接口（bpf_prog_test_run_xdp）时触发use-after-free错误。当用户传入的 `user_data` 参数小于以太网头长度（ETH_HLEN）时，内核在 `eth_skb_pkt_type` 函数中访问了不包含有效以太网头的skb数据区域。
+
+#主要错误日志
+```
+BUG: KMSAN: use-after-free in eth_skb_pkt_type include/linux/etherdevice.h:627 [inline]
+BUG: KMSAN: use-after-free in eth_type_trans+0x4ee/0x980 net/ethernet/eth.c:165
+ eth_skb_pkt_type include/linux/etherdevice.h:627 [inline]
+ eth_type_trans+0x4ee/0x980 net/ethernet/eth.c:165
+ __xdp_build_skb_from_frame+0x5a8/0xa50 net/core/xdp.c:635
+ xdp_recv_frames net/bpf/test_run.c:272 [inline]
+ xdp_test_run_batch net/bpf/test_run.c:361 [inline]
+ bpf_test_run_xdp_live+0x2954/0x3330 net/bpf/test_run.c:390
+ bpf_prog_test_run_xdp+0x148e/0x1b10 net/bpf/test_run.c:1318
+```
+
+#问题根因
+在 `bpf_test_init` 函数中，检查逻辑使用 `size` 变量判断数据长度是否满足以太网头要求，但 `size` 变量此时的值尚未根据 `user_size` 正确更新，或者检查对象错误。当 `bpf_prog_test_run_xdp` 传入的 `user_data`（对应 `user_size`）小于 `ETH_HLEN` 时，原有的校验未能拦截该无效输入，导致后续 `eth_skb_pkt_type` 访问了无效或已释放的内存区域。
+
+#解决方案
+修改 `net/bpf/test_run.c` 中的 `bpf_test_init` 函数校验逻辑：
+1. 将检查条件从 `size < ETH_HLEN` 修改为 `user_size < ETH_HLEN`，确保在分配内存前直接校验用户传入的数据长度是否满足以太网头最低要求。
+2. 移除了冗余的 `if (user_size > size)` 检查，简化了逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad1a8ee321f61fed1b35c41a74fd6f204b71ec0e

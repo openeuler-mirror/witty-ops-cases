@@ -1,0 +1,32 @@
+#标题
+loop: 分区扫描竞态导致 systemd 依赖单元异常失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用 `LOOP_CONFIGURE` 并设置 `LO_FLAGS_PARTSCAN` 标志时，udev 接收到 uevent 打开设备与内核执行 `loop_reread_partitions()` 之间存在竞态条件。
+该竞态导致分区扫描被执行两次：第一次由 udev 开启设备时触发，第二次由内核显式触发。第二次扫描会先移除第一次扫描建立的分区设备，然后再重新添加。这导致分区块设备短暂消失。
+受此影响，依赖该分区设备的 systemd 单元（配置了 `BindsTo=`）会观测到设备失效（dead），从而导致相关依赖单元失败，且在设备重新出现后不会重试。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `disk_force_media_change()` 函数中，代码设置了 `GD_NEED_PART_SCAN` 标志位。
+当 `LOOP_CONFIGURE` 流程执行时，步骤如下：
+1. `disk_force_media_change()` 设置了 `GD_NEED_PART_SCAN`。
+2. 发送 KOBJ_CHANGE uevent。
+3. 释放锁。
+4. `loop_reread_partitions()` 调用 `bdev_disk_changed()` 进行扫描。
+竞态发生在步骤 2 和 4 之间：udev 接收到 uevent 后打开设备，`blkdev_get_whole()` 检测到 `GD_NEED_PART_SCAN` 被设置，随即触发第一次扫描。随后步骤 4 触发第二次扫描。虽然 `open_mutex` 串行化了这两个扫描，但无法阻止它们先后执行。第二次扫描中的 `blk_drop_partitions()` 会删除第一次扫描建立的分区，造成设备短暂消失。
+
+#解决方案
+移除 `disk_force_media_change()` 函数中设置 `GD_NEED_PART_SCAN` 标志位的代码。
+修复逻辑在于，当前所有调用者（floppy, loop, nbd）均不需要由该标志触发的“延迟开启时分区扫描”功能：
+- Loop 设备在需要时会显式调用 `loop_reread_partitions()` 进行扫描。
+- 其他调用者也有各自明确的扫描控制逻辑。
+移除该标志后，udev 打开设备时不再触发冗余的分区扫描，从而避免了分区设备消失的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f151121d6cd62e6cbe2dcc829496ba5482fc1ef1

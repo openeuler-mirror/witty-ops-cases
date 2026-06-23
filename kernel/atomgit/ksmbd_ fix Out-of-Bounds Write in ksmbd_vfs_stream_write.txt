@@ -1,0 +1,20 @@
+#标题
+ksmbd: fix Out-of-Bounds Write in ksmbd_vfs_stream_write
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 处理 SMB2 写请求时，若客户端发送的 Offset 字段为非法负值，内核未对其进行校验直接使用，导致发生越界写入。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb2_write` 函数中，代码直接从请求结构体中读取 Offset 并转换：`offset = le64_to_cpu(req->Offset);`。后续代码未对该 offset 值进行合法性检查，允许了负值偏移传递给文件系统写入路径，从而引发越界写漏洞。
+
+#解决方案
+在 `fs/smb/server/smb2pdu.c` 的 `smb2_write` 函数中增加偏移量校验逻辑。在获取 offset 值后，立即检查其是否小于 0，若为负数则直接返回 `-EINVAL` 错误，阻止非法参数继续传递。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9eabf66a56c6e632b407d1def99c4cdeb83f86a9

@@ -1,0 +1,21 @@
+#标题
+drm/vc4: hdmi: 音频启动失败导致内核日志刷屏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 HDMI 接口未连接显示器时，PulseAudio 尝试打开关联的 ALSA 设备会触发内核错误。由于应用程序会多次尝试打开设备，导致内核日志中反复打印错误信息，产生大量日志刷屏。
+
+#主要错误日志
+[   18.184066] hdmi-audio-codec hdmi-audio-codec.3.auto: ASoC: error at snd_soc_dai_startup on i2s-hifi: -19
+[   18.184098]  MAI: soc_pcm_open() failed (-19)
+
+#问题根因
+在 HDMI 断开连接时，驱动 `vc4_hdmi_audio_startup` 函数检测到不支持音频流，此时返回错误码 `-ENODEV`（-19）。ASoC 核心层 `_soc_pcm_ret` 函数针对 `-ENODEV` 错误码会打印错误日志，而针对 `-ENOTSUPP` 错误码则会静默处理。驱动返回码与核心层处理逻辑不匹配，导致了不必要的日志噪音。
+
+#解决方案
+修改驱动代码 `drivers/gpu/drm/vc4/vc4_hdmi.c`，在 `vc4_hdmi_audio_startup` 函数中，当 `vc4_hdmi_audio_can_stream` 检查失败时，将返回错误码从 `-ENODEV` 修改为 `-ENOTSUPP`。此举利用 ASoC 核心层对 `-ENOTSUPP` 的静默处理机制，避免了无效的日志打印。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d8b4c47e215983897cd5d07ecaaadd882513386a

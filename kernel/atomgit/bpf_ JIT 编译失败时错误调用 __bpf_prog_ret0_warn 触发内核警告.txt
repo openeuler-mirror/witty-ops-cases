@@ -1,0 +1,30 @@
+#标题
+bpf: JIT 编译失败时错误调用 __bpf_prog_ret0_warn 触发内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核触发 WARNING 并打印调用栈。当 BPF JIT 编译请求开启但实际编译失败（例如通过故障注入模拟）时，内核错误地将该程序视为有效并运行，导致调用 `__bpf_prog_ret0_warn` 函数触发 WARN_ON_ONCE(1) 警告。
+
+#主要错误日志
+WARNING: CPU: 3 PID: 217 at kernel/bpf/core.c:2357 __bpf_prog_ret0_warn+0xa/0x20 kernel/bpf/core.c:2357
+Modules linked in:
+CPU: 3 UID: 0 PID: 217 Comm: kworker/u32:6 Not tainted 6.15.0-rc4-syzkaller-00040-g8bac8898fe39
+RIP: 0010:__bpf_prog_ret0_warn+0xa/0x20 kernel/bpf/core.c:2357
+Call Trace:
+ <TASK>
+ bpf_dispatcher_nop_func include/linux/bpf.h:1316 [inline]
+ __bpf_prog_run include/linux/filter.h:718 [inline]
+ bpf_prog_run include/linux/filter.h:725 [inline]
+ cls_bpf_classify+0x74a/0x1110 net/sched/cls_bpf.c:105
+
+#问题根因
+在 `bpf_prog_select_runtime` 函数中，局部变量 `jit_needed` 被初始化为 `false`。当系统配置了 `CONFIG_BPF_JIT_ALWAYS_ON` 未开启且 `bpf_jit_enable` 设置为 1 时，内核尝试对 BPF 程序进行 JIT 编译（即 `fp->jit_requested` 为真）。
+如果 JIT 编译因故障注入等原因失败，由于初始逻辑未正确传递 `jit_requested` 状态，导致内核未能正确处理 JIT 失败的情况，错误地将该程序视为有效并尝试运行，最终触发了 `__bpf_prog_ret0_warn` 中的警告。
+
+#解决方案
+修改 `kernel/bpf/core.c` 文件中的 `bpf_prog_select_runtime` 函数，将变量 `jit_needed` 的初始化值从 `false` 修改为 `fp->jit_requested`。这确保了在进入后续逻辑前，JIT 请求状态已被正确记录，从而正确处理 JIT 编译失败的场景，避免错误地运行程序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d02f06711261263e98bff1ab74127a71e977aef5

@@ -1,0 +1,29 @@
+#标题
+can: netlink: can_changelink() 修复 can_priv::do_set_mode 空指针解引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 CAN 设备从 Bus Off 状态重启，且驱动未实现 `struct can_priv::do_set_mode` 回调函数时，内核发生 NULL pointer dereference（空指针解引用），导致系统崩溃或异常。
+
+#主要错误日志
+- 推断日志（基于代码逻辑）：
+  `Device doesn't support restart from Bus Off`
+- 代码中相关错误提示：
+  `netdev_err(dev, "Attempt to restart for bus-off recovery, but carrier is OK?\n");`
+  `netdev_err(dev, "Restart failed, error %pe\n", ERR_PTR(err));`
+
+#问题根因
+在 `can_changelink()` 函数中，存在两条代码路径会调用 `struct can_priv::do_set_mode` 回调：
+1. 用户空间发起的手动重启。
+2. Bus Off 后的延迟自动重启（默认关闭）。
+根本原因是代码在调用 `do_set_mode` 前未检查该回调指针是否为空。若驱动程序未实现该回调，直接调用将导致空指针解引用。
+
+#解决方案
+在相关代码路径中增加对 `priv->do_set_mode` 的非空检查：
+1. 在 `can_changelink()` 中，处理手动重启（`IFLA_CAN_RESTART`）和自动重启延迟配置（`IFLA_CAN_RESTART_MS`）时，检查 `do_set_mode` 是否存在，若不存在则通过 `extack` 向用户空间报错并返回 `-EOPNOTSUPP`。
+2. 在 `can_restart()` 函数入口处增加防御性检查，若 `do_set_mode` 为空直接返回 `-EOPNOTSUPP`，避免潜在的解引用风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/63e3beec2a1c271b04b5596b4e530ee9861f2a89

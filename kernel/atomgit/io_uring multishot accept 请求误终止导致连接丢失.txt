@@ -1,0 +1,20 @@
+#标题
+io_uring multishot accept 请求误终止导致连接丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 io_uring 进行 multishot accept 操作时，如果请求在非 multishot 上下文（如 inline 执行）中运行，请求会被错误地终止。这导致已经成功 accept 并安装的 socket 连接被取消（返回 -ECANCELED），造成连接丢失或服务端无法正常接收新连接。
+
+#主要错误日志
+未知
+
+#问题根因
+标志位 `REQ_F_APOLL_MULTISHOT` 并不保证请求一定在 multishot 上下文中执行。当 multishot accept 请求在 inline 模式下执行时，`io_req_post_cqe()` 可能会失败。此时，代码逻辑未区分当前是否处于 multishot 上下文，直接返回 `IOU_STOP_MULTISHOT`，导致核心代码错误地以 `-ECANCELED` 终止了请求，即使此时 socket 已经成功 accept 并安装。
+
+#解决方案
+在 `io_accept` 函数中，设置请求结果后增加对 `issue_flags` 的判断。如果请求未在 multishot 上下文中执行（即 `issue_flags` 不包含 `IO_URING_F_MULTISHOT`），则返回 `IOU_OK` 正常完成请求；仅在确认为 multishot 上下文时才返回 `IOU_STOP_MULTISHOT`，从而避免误杀已成功的连接。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d8dae8b85ab98b4e6b5e538de8c8c35cb9287ed6

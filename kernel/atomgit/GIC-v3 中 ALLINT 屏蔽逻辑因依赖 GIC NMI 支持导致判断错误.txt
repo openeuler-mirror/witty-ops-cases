@@ -1,0 +1,20 @@
+#标题
+GIC-v3 中 ALLINT 屏蔽逻辑因依赖 GIC NMI 支持导致判断错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在未支持 NMI（Non-Maskable Interrupt）的系统中，或者系统逻辑上不应使用 NMI 时，内核在处理中断时错误地执行了 ALLINT 相关的清除/屏蔽操作。这可能导致中断处理流程异常，影响系统的中断响应可靠性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `gic_handle_irq_noack` 函数中，判断是否执行 ALLINT 操作的逻辑依赖于 `has_v3_3_nmi()`（仅检查硬件 GIC 是否支持 NMI），而实际上该逻辑应当依赖于 `system_uses_nmi()`（检查系统整体是否启用并使用 NMI）。这种硬件特性检测与系统实际配置的耦合导致了不必要或错误的 ALLINT 操作。
+
+#解决方案
+修改 `drivers/irqchip/irq-gic-v3.c` 中的条件判断逻辑，将 ALLINT 操作的触发条件从 `has_v3_3_nmi()` 修改为 `system_uses_nmi()`，确保只有在系统真正使用 NMI 时才执行相应的屏蔽逻辑。同时增加了一条日志打印，明确显示 GICD_TYPER 是否支持 NMI，便于调试确认。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f576f7127ee683fe69994c73a0bd3d56c17d2ae7

@@ -1,0 +1,20 @@
+#标题
+scsi: target: core: UNMAP 指令边界检查整数溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 64 位系统上处理 SCSI UNMAP 指令时，若提供的 LBA（逻辑块地址）和 range（范围）参数过大，会导致加法运算发生整数溢出（回绕）。边界检查逻辑被绕过，系统未能正确拦截超出设备容量的非法请求，返回 TCM_ADDRESS_OUT_OF_RANGE 失败，可能导致后续处理逻辑异常或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`sbc_execute_unmap()` 函数在检查 LBA 和 range 是否超过设备容量时，仅使用了 `lba + range > dev->transport->get_blocks(dev) + 1` 的判断条件。当 `lba` 和 `range` 的数值非常大时，二者相加会发生 64 位整数溢出（回绕），导致结果变小，从而绕过了边界检查。该问题与同文件中 WRITE_SAME 指令已修复的问题模式一致。
+
+#解决方案
+在边界检查中增加溢出判断条件。修改判断逻辑为：`lba + range < lba || lba + range > dev->transport->get_blocks(dev) + 1`。通过检查 `lba + range < lba` 来显式捕获加法溢出情况，防止整数回绕绕过容量检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/98aa0781afd0cf493bf77d7e43f17e106a84d880

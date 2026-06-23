@@ -1,0 +1,23 @@
+#标题
+UCSI 驱动接收到非法连接器编号导致内存越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 USB Type-C 接口控制器驱动（UCSI）接收到包含非法连接器编号的中断事件时，内核在处理该事件时会访问无效的内存地址。具体表现为：当 CCI（Command Status and Connector Change Indication）寄存器中报告的连接器编号 `num` 大于设备实际支持的连接器数量 `ucsi->cap.num_connectors` 时，驱动程序仍试图通过数组索引访问对应的 `ucsi->connector` 结构体，导致内存越界访问，可能引发内核崩溃或内存破坏。
+
+#主要错误日志
+- 推断日志：`bogus connector number in CCI: [num]`
+
+#问题根因
+在函数 `ucsi_connector_change` 中，代码直接使用传入参数 `num` 作为数组索引访问 `ucsi->connector[num - 1]`，在此之前未校验 `num` 的合法性。若硬件报告的 `num` 值大于 `ucsi->cap.num_connectors`（设备实际支持的连接器总数），将导致数组越界访问。
+
+#解决方案
+在访问 `ucsi->connector` 数组前增加边界检查。具体措施为：
+1. 检查 `ucsi->cap.num_connectors` 是否非零。
+2. 校验 `num` 是否大于 `ucsi->cap.num_connectors`。
+3. 若校验失败，通过 `dev_err` 打印错误日志并直接返回，避免后续的越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa6400f58332d13ef1bcd6d0085048a063cea841

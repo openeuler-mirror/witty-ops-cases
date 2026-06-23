@@ -1,0 +1,20 @@
+#标题
+aio 子系统 mmap 缺失 VM_DONTCOPY 标志导致 NULL-pointer-dereference 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 AIO ring buffer 的 mmap 操作后，如果进程发生 fork，子进程会继承该 VMA。由于缺少 VM_DONTCOPY 标志，在后续处理过程中会触发空指针解引用错误，导致内核 panic 或进程崩溃。
+
+#主要错误日志
+NULL-pointer-dereference
+
+#问题根因
+在 `aio_ring_mmap` 函数中，仅设置了 `VM_DONTEXPAND` 标志，未设置 `VM_DONTCOPY` 标志。这导致进程 fork 时，子进程错误地复制了 AIO ring buffer 的 VMA 映射。由于 AIO ring buffer 的底层资源不应被共享或复制，这种错误的复制导致了后续访问时的空指针解引用问题。
+
+#解决方案
+在 `fs/aio.c` 的 `aio_ring_mmap` 函数中，修改 `vm_flags_set` 调用，追加 `VM_DONTCOPY` 标志。这确保了在进程 fork 时，AIO ring buffer 对应的 VMA 不会被复制到子进程，从而避免了空指针解引用错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3af18e279788521795fa618d4b9c083f344c11ea

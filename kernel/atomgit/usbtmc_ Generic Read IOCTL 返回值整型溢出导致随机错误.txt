@@ -1,0 +1,20 @@
+#标题
+usbtmc: Generic Read IOCTL 返回值整型溢出导致随机错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 USBTMC (USB Test and Measurement Class) 驱动进行 vendor specific read 操作时，若等待时间较长（剩余 jiffies 大于 INT_MAX），ioctl 系统调用会错误地返回随机错误码，导致用户态读取功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+内核函数 `wait_event_interruptible_timeout` 返回值为 `long` 类型，但在代码中错误地将其赋值给 `int` 类型的变量 `retval`。当剩余的 jiffies 数值超过 `INT_MAX` 时，发生了整型溢出，导致返回值变成负数或错误数值，进而被错误地判定为错误状态返回给用户态。
+
+#解决方案
+修改 `usbtmc_generic_read` 函数实现，引入 `long` 类型变量 `wait_rv` 专门用于接收 `wait_event_interruptible_timeout` 的返回值。在判断逻辑中，先检查 `wait_rv` 是否小于 0（信号中断），再检查是否等于 0（超时），最后再将其转换为 `int` 类型的 ioctl 返回值，从而避免整型溢出导致的错误返回。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2f46d60819cbb0deb7d2727fb85f9828026a2f8d

@@ -1,0 +1,20 @@
+#标题
+power: supply: goldfish: 修复 power_supply_changed 中的释放后使用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动移除或探测过程中，存在竞争条件，导致中断处理函数 `goldfish_battery_interrupt` 调用 `power_supply_changed()` 时使用了已被释放或未初始化的 `power_supply` 句柄。这通常会导致系统崩溃或内存静默损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`devm_request_irq` 与 `power_supply_register` 的调用顺序错误。使用 `devm_` 机制时，资源释放顺序与分配顺序相反。代码原先是先申请 IRQ，后注册 `power_supply`。这导致在移除时，`power_supply` 句柄先被释放注销，而 IRQ 处理函数后被注销。在此期间若有中断触发，IRQ 处理函数将操作已释放的句柄，引发释放后使用。同理，在 `probe` 阶段若中断在注册句柄前触发，也会导致使用未初始化句柄。
+
+#解决方案
+调整代码执行顺序，确保在注册 `power_supply` 句柄并设置好驱动数据后，再请求 IRQ。通过将 `devm_request_irq` 移至 `power_supply_register` 之后，保证资源分配与释放的正确逻辑，避免竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0a5654e1201ae46d8c781d3ff0910a963ba64d19

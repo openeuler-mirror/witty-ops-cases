@@ -1,0 +1,24 @@
+#标题
+hwmon: (sht3x) 温湿度读取错误处理缺陷导致返回错误状态值
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读取 sht3x 驱动的温度、湿度或报警状态数据时，若底层操作（如 I2C 通信）失败，sysfs 接口或 hwmon 子系统不会正确返回错误码，而是将负数的错误码（如 -ERANGE, -EIO 等）转换为数值返回给用户空间。这导致用户层监控工具读取到异常的温度或湿度数值（例如巨大的负值或特定正数），掩盖了真实的硬件通信故障。
+
+#主要错误日志
+未知
+
+#问题根因
+在驱动代码中，`temp1_input_read`、`humidity1_input_read` 以及 alarm 读取函数在遇到错误时，直接将错误指针（PTR_ERR）或负数错误码作为函数返回值返回。而在上层的 `sht3x_read` 回调函数中，调用者错误地将这些返回值直接赋值给 `*val` 指针（例如 `*val = temp1_input_read(dev);`），而不是检查返回值是否代表错误。这导致错误码被误认为是有效的温度或湿度数据返回给上层应用，破坏了错误处理流程。
+
+#解决方案
+修改错误处理逻辑，严格区分返回值与读取的数据：
+1. 重构 `temp1_input_read` 和 `humidity1_input_read` 函数，增加 `long *temp/humidity` 参数，函数返回值改为标准的整型错误码（0 表示成功，负数表示错误）。
+2. 在函数内部，若 `sht3x_update_client` 返回错误指针，则通过 `PTR_ERR` 转换并直接返回该错误码；成功时将数据写入传入的指针参数。
+3. 修改 `sht3x_read` 函数中的调用逻辑，对于 input 类型的读取，改为 `return temp1_input_read(dev, val)` 形式。
+4. 对于 alarm 类型的读取（如 `temp1_alarm_read`），增加对返回值的判断：若 `ret < 0`，则直接返回该错误码；否则将 `ret` 赋值给 `*val`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d946c69cf1d2253eb16409e929cecb27e992d67b

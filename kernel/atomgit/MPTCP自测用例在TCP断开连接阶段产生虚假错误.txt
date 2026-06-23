@@ -1,0 +1,27 @@
+#标题
+MPTCP自测用例在TCP断开连接阶段产生虚假错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行MPTCP自测用例的disconnect测试场景时，如果使用'plain' TCP套接字（TCP -> MPTCP场景），测试程序会偶发报错并退出，显示"Connection reset by peer"以及测试失败标记[FAIL]。具体表现为客户端和服务端均以退出码3结束，测试判定为失败。
+
+#主要错误日志
+```
+07 ns1 TCP   -> ns1 (dead:beef:1::1:10006) MPTCP
+read: Connection reset by peer
+read: Connection reset by peer
+(duration   155ms) [FAIL] client exit code 3, server 3
+```
+
+#问题根因
+根因在于用户态测试程序逻辑缺陷。在进行TCP -> MPTCP回退测试时，涉及到的套接字实际上是普通的TCP套接字。测试程序在所有待处理数据发送完毕后立即尝试断开连接，这会生成RST报文。如果RST报文在连接达到closed状态之前到达对端，根据协议规范，TCP套接字会向用户空间报告错误，从而导致测试用例报错失败。
+
+#解决方案
+修改测试程序 `mptcp_connect.c` 中的 `xdisconnect` 函数：
+1. 在监控套接字状态时，增加 `-n` 参数（执行 `ss -Mnt`），避免解析服务名称，提高匹配效率。
+2. 修改监控逻辑，不仅等待MPTCP套接字，也要等待普通TCP套接字或TCP子流达到closed状态后，再执行断开连接操作，从而避免在连接未完全关闭时触发RST导致的虚假错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ae579bd5305b35ba15c2275d87ad04f5635792a

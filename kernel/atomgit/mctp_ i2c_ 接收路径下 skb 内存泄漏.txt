@@ -1,0 +1,20 @@
+#标题
+mctp: i2c: 接收路径下 skb 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MCTP I2C 驱动的接收路径中，当 `midev->allow_rx` 为 false 时，新分配的 skb 结构体未被 `netif_rx()` 函数消费，也没有被释放，导致 skb 内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `mctp_i2c_recv` 中，当判断 `midev->allow_rx` 为 false 时，代码逻辑进入了丢弃分支（else 分支）。此时将状态设置为 `NET_RX_DROP` 并解锁，但遗漏了对已分配的 `skb` 指针调用 `kfree_skb` 进行释放，导致内存泄漏。
+
+#解决方案
+在 `mctp_i2c_recv` 函数的 else 分支中，即在解锁操作之后，添加 `kfree_skb(skb)` 调用，确保在丢弃数据包路径下正确释放 skb 内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8f1229dc1cb40c56edd73b7abd6ddb3bab176d33

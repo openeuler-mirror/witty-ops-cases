@@ -1,0 +1,26 @@
+#标题
+ibmveth: veth_pool_store 并发访问导致内核挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当多个线程并发向 `/sys/devices/vio/30000002/pool*/*` 文件写入数据触发 `veth_pool_store` 函数时，内核线程会进入不可中断睡眠状态（D状态），导致进程被阻塞超过 122 秒，触发 `hung_task` 检测机制，造成系统挂起。
+
+#主要错误日志
+```
+[  243.683786][  T123] INFO: task stress.sh:4365 blocked for more than 122 seconds.
+[  243.683838][  T123] task:stress.sh       state:D stack:28096 pid:4365  tgid:4365  ppid:4364   task_flags:0x400040 flags:0x00042000
+[  243.683913][  T123] [c00000000c38fb10] [c000000001154d40] napi_enable+0x30/0x60
+[  243.683921][  T123] [c00000000c38fb40] [c000000000f4ae94] ibmveth_open+0x68/0x5dc
+[  243.683928][  T123] [c00000000c38fbe0] [c000000000f4aa20] veth_pool_store+0x220/0x270
+```
+
+#问题根因
+`veth_pool_store` 函数在执行过程中未持有 `rtnl_mutex` 锁，导致该函数无法与 `ibmveth_close` 及 `ibmveth_open` 进行同步。当多个线程并发调用 `veth_pool_store` 时，可能出现竞争条件，导致 `napi_disable` 被多次连续调用。根据内核 NAPI 机制定义，连续多次调用 `napi_disable()` 会导致死锁。
+
+#解决方案
+在 `veth_pool_store` 函数入口处添加 `rtnl_lock()` 获取锁，并在函数退出（包括正常返回和错误处理返回）前调用 `rtnl_unlock()` 释放锁。通过持有 `rtnl_mutex`，确保 `veth_pool_store` 与其他网路设备控制路径（如 open/close）互斥执行，防止并发的 `napi_disable` 调用引发死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fc6216452cbacdb73193af22c5acda16df30d29a

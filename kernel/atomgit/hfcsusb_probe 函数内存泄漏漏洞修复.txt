@@ -1,0 +1,22 @@
+#标题
+hfcsusb_probe 函数内存泄漏漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hfcsusb_probe() 函数执行过程中，若 setup_instance() 函数调用失败，此前分配的 `ctrl_urb` 内存结构体未被释放，导致内存泄漏。该问题通过静态分析工具发现。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hfcsusb_probe` 函数中，当 `setup_instance()` 调用失败返回错误时，代码直接返回 `-EIO`，遗漏了释放此前已成功分配的 `hw->ctrl_urb` 的步骤，从而导致内存泄漏。
+
+#解决方案
+修改 `hfcsusb_probe` 函数的错误处理路径，采用 goto ladder 风格统一管理资源释放：
+1. 当 `setup_instance()` 失败时，跳转至 `err_free_urb` 标签，调用 `usb_free_urb(hw->ctrl_urb)` 释放 urb 内存。
+2. 随后进入 `err_free_hw` 标签，调用 `kfree(hw)` 释放硬件结构体内存，最后返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bbfe22daac9ecc9715ff811047f98e9787c90108

@@ -1,0 +1,24 @@
+#标题
+xhci: VIA VL805 控制器 TRB 越界预取导致 IOMMU 故障及传输停滞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在使用 VIA VL805 芯片的系统上（如树莓派或 x86 平台），出现 IOMMU 页错误。
+2. USB 传输过程中，控制器可能在传输环段末尾预取属于下一个页面的 TRB，如果这些预取的 TRB 属于另一个已被响铃的环，且其 Cycle 位已过期（stale），会导致端点处于空闲状态，造成传输停滞或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+VIA VL805 芯片存在硬件缺陷，当传输环段结束时，控制器会预取超出段边界的多达 4 个 TRB，即便段以 Link TRB 结尾且位于页边界。这种越界预取行为违反了预期，导致：
+1. 访问未分配的内存区域，触发 IOMMU 故障。
+2. 预取到的其他环的 TRB 数据未从内存刷新，使用了过期的 Cycle 位，导致控制器逻辑判断错误，端点停止响应。
+
+#解决方案
+1. 启用现有的 `XHCI_TRB_OVERFETCH` quirk（原名为 `XHCI_ZHAOXIN_TRB_FETCH`），在初始化时为每个传输环段分配额外的 dummy 空间，防止越界预取访问无效内存。
+2. 在 xHCI PCI 驱动中识别 VIA VL805 设备（Vendor ID: 0x1106, Device ID: 0x3483），并为该设备添加 `XHCI_TRB_OVERFETCH` 属性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b0e590bf7b775f15d13c0b45075eebcb026a8035

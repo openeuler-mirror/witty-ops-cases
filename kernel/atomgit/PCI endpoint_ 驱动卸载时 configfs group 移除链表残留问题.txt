@@ -1,0 +1,23 @@
+#标题
+PCI endpoint: 驱动卸载时 configfs group 移除链表残留问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 PCI endpoint 驱动时，驱动关联的 configfs attributes group 未从 `epf_group` 链表中正确删除，导致链表残留。这种内存管理缺陷可能导致内核内存泄漏，且在驱动反复加载/卸载场景下可能触发不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `pci_ep_cfs_remove_epf_group()` 函数中，虽然调用 `configfs_unregister_default_group()` 注销了 configfs group，但遗漏了将 `group->group_entry` 从 `pci_epf_driver` 的 `epf_group` 链表中删除的操作（缺少 `list_del()` 调用）。
+
+这导致在驱动卸载流程执行 `pci_epf_remove_cfs()` 遍历并移除所有 group 后，`driver->epf_group` 链表仍不为空，产生内存状态不一致。
+
+#解决方案
+1. 在 `pci_ep_cfs_remove_epf_group()` 函数中增加 `list_del(&group->group_entry)` 调用，确保在注销 group 的同时将其从驱动链表中移除。
+2. 在 `pci_epf_remove_cfs()` 函数中增加 `WARN_ON(!list_empty(&driver->epf_group))` 检查，用于验证移除操作完成后链表确实已清空，便于及时发现类似问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a670b1980d8bc927084e92a94c86ae695498512d

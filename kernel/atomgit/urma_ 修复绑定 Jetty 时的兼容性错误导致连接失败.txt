@@ -1,0 +1,28 @@
+#标题
+urma: 修复绑定 Jetty 时的兼容性错误导致连接失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 Jetty 绑定操作（bind jetty）时，可能出现连接建立失败或功能异常。该问题涉及 URMA（用户态远程内存访问）模块在 RC（可靠连接）传输模式下的兼容性处理逻辑，导致无法正确复用或创建底层的 vtpn（虚拟传输路径节点）资源，进而影响上层业务的正常运行。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 信息与代码变更分析，根本原因在于 `ubcore_bind_jetty_compat` 及相关连接处理流程中，针对 RC 传输模式的 TP（传输路径）和 vtpn 资源管理逻辑存在缺陷。
+1. 原代码在 `ubcore_bind_jetty_compat` 中尝试自行管理 `tpid_ctx` 和哈希表查找逻辑，但在处理 `ubcore_exchange_tp_info` 时的流程与新的架构不兼容。
+2. 在断开连接（disconnect）流程中，原有的引用计数检查和释放逻辑较为复杂，可能存在处理不一致的情况。
+3. 修复方案移除了 `ubcore_bind_jetty_compat` 中冗余的本地 `tpid` 查找与复用代码，改为调用新增的专用接口 `ubcore_connect_rc_vtp_ctrlplane` 来统一处理 RC 模式下的 vtpn 连接创建与复用，确保了资源管理的正确性。
+
+#解决方案
+1. **新增专用连接接口**：在 `ubcore_vtp.c` 中新增 `ubcore_connect_rc_vtp_ctrlplane` 函数。该函数封装了 RC 模式下 vtpn 的查找、创建、哈希表添加及 TP 激活流程，实现了标准化的资源复用逻辑。
+2. **重构绑定流程**：修改 `ubcore_bind_jetty_compat` 函数，移除本地冗余的 `ubcore_tpid_ctx` 查找、创建及 `ubcore_exchange_tpid_info` 调用逻辑，改为直接调用 `ubcore_connect_rc_vtp_ctrlplane` 进行资源处理，并简化了返回路径。
+3. **调整连接与销毁逻辑**：
+   - 在 `ubcore_jetty.c` 中，将 `ubcore_inner_bind_ub_jetty_ctrlplane` 函数调用的接口从 `ubcore_connect_vtp_ctrlplane` 替换为 `ubcore_connect_rc_vtp_ctrlplane`。
+   - 在 `ubcore_connect_adapter.c` 中，移除了 `handle_create_req`、`ubcore_adapter_layer_disconnect` 和 `handle_destroy_req` 中关于 `tpid_ctx` 的部分冗余查找与引用计数处理代码，简化了状态管理。
+4. **函数可见性调整**：将 `ubcore_reuse_target_rtp_tpid`、`ubcore_fadd_target_tpid_ctx` 和 `ubcore_fadd_init_tpid_ctx` 等函数由 `static` 改为对外可见，以支持模块间的协同调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ec5e6ddfa5bdf548ffb5fa6ff71bcc367bbc0dfa

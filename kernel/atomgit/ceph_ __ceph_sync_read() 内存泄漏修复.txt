@@ -1,0 +1,20 @@
+#标题
+ceph: __ceph_sync_read() 内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Ceph 文件系统执行同步读取（`__ceph_sync_read`）过程中，若遇到特定分支逻辑触发 `break` 语句提前退出循环，会导致由 `ceph_alloc_page_vector()` 分配的页面内存未被释放，造成内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `__ceph_sync_read` 中，存在两处 `break` 语句用于跳出读取循环。在此之前，`pages` 指针指向的内存由 `ceph_alloc_page_vector()` 分配，但在跳出循环的代码路径中，遗漏了调用 `ceph_release_page_vector()` 进行释放。此外，原有的页面所有权管理逻辑不够清晰，导致资源释放路径缺失。
+
+#解决方案
+修改页面所有权管理策略，将 `pages` 的所有权转移给 `ceph_osd_request` 对象。具体修改为：在调用 `osd_req_op_extent_osd_data_pages()` 时，将 `own_pages` 参数由 `false` 改为 `true`。同时，调整 `ceph_osdc_put_request()` 的调用位置，将其从访问 `pages` 数据块的之前移至之后，确保请求释放时能自动处理页面内存，从而修复所有退出路径下的内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ace9269a23a39c397f5a0b8f71600c595993f45

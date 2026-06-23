@@ -1,0 +1,24 @@
+#标题
+usb: gadget: udc: usb_gadget_state_work 中的释放后使用故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB gadget 设备销毁过程中，由于竞态条件导致 `usb_gadget_state_work` 发生释放后使用。KASAN 检测器报告了无效内存访问错误，具体表现为在 `sysfs_notify` 函数中访问了已释放的内存，此时工作队列仍在处理 `usb_gadget_state_work`。
+
+#主要错误日志
+BUG: KASAN: invalid-access in sysfs_notify+0x2c/0xd0
+Workqueue: events usb_gadget_state_work
+
+#问题根因
+在 gadget 设备销毁期间存在竞态条件。在 `usb_del_gadget()` 的清理过程中，并发事件（如中断）可能随时调用 `usb_gadget_set_state()` 并调度 `gadget->work`。
+尽管之前的修复尝试（Commit 399a45e5237c）将 `flush_work()` 移至 `device_del()` 之后，但并未完全解决问题。新的工作项仍可能在 `flush_work()` 完成之后、但在 gadget 内存被释放之前被调度，从而导致释放后使用。
+
+#解决方案
+在 `usb_gadget` 结构体中引入 `teardown` 标志和 `state_lock` 自旋锁，以修复该竞态条件。
+1. 在 `usb_del_gadget()` 清理过程中，在调用 `flush_work()` 之前设置 `teardown` 标志为真，防止调度新的工作项。
+2. 在调度站点 `usb_gadget_set_state()` 中，在持有锁的情况下检查该标志，仅当 `teardown` 为假时才调度工作，从而安全地关闭竞态窗口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/13da4a3eb928a984925b2110ea0ce8db3a7705e5

@@ -1,0 +1,20 @@
+#标题
+MDIO 总线接口参数校验缺失导致越界读写风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 'mdio-tools' 等工具通过 ioctl 对网络接口 PHY 进行读写操作时，若传入的 mdio 地址参数超过内核支持的 32 个地址范围（PHY_MAX_ADDR），系统不会返回错误，而是执行越界操作。这可能导致内核内存数据的越界读取或写入，破坏内存完整性或导致系统崩溃，同时触发了 CVE-2025-38111 安全漏洞。
+
+#主要错误日志
+未知
+
+#问题根因
+内核 MDIO 总线实现中，`__mdiobus_read` 和 `__mdiobus_write` 函数在处理 ioctl 调用时，未对传入的 `addr` 参数进行合法性校验。虽然硬件层面的读写操作可能会失败，但在操作前内核会更新 `mdiobus` 的统计信息数组（stats array），该数组大小基于 `PHY_MAX_ADDR` 定义。当 `addr` 值大于等于 `PHY_MAX_ADDR` 时，访问 stats 数组会产生越界读写。
+
+#解决方案
+在 `drivers/net/phy/mdio_bus.c` 文件的 `__mdiobus_read` 和 `__mdiobus_write` 函数入口处增加参数校验逻辑。如果检测到 `addr` 参数大于或等于 `PHY_MAX_ADDR`，则直接返回 `-ENXIO` 错误，从而阻止后续的越界操作，提升操作安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f5ed1be0acfcbe43c9ff78024cec87c327d491da

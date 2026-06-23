@@ -1,0 +1,20 @@
+#标题
+exynos7_drm_decon 驱动函数调用时使用未初始化的 crtc 引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 exynos7_drm_decon 驱动加载或初始化过程中，`decon_ctx_initialize` 函数调用 `decon_clear_channels` 时，内部可能访问未初始化的 `ctx->crtc` 指针。由于相关函数直接从传入的 `crtc` 结构体获取 `ctx`，而在初始化阶段 `crtc` 可能尚未与 `ctx` 正确关联，导致内核出现 NULL 指针解引用或 Oops，进而引发驱动初始化失败或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+`decon_wait_for_vblank` 和 `decon_clear_channels` 两个函数的参数定义为 `struct exynos_drm_crtc *crtc`，函数内部通过 `crtc->ctx` 获取 `decon_context`。但在 `decon_ctx_initialize` 调用链中，直接传递了尚未完全初始化的 `ctx->crtc` 指针。此时 `crtc` 指针本身可能为空或未初始化，导致函数内部引用 `crtc->ctx` 时访问了非法内存地址。
+
+#解决方案
+修改 `decon_wait_for_vblank` 和 `decon_clear_channels` 函数的参数，直接接收 `struct decon_context *ctx` 指针，移除函数内部通过 `crtc->ctx` 获取上下文的冗余逻辑。同时更新调用处，直接传递 `ctx` 指针，避免引用未初始化的 `crtc` 成员。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b0f4bec870b21c3c291600e1c5d5283e26b0ec7d

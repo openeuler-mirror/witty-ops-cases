@@ -1,0 +1,20 @@
+#标题
+dpaa2-eth: 发送路径指针对齐错误导致有效数据帧被丢弃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+dpaa2-eth 网卡驱动在发送路径上，即使 skb 的 headroom 空间满足 128 字节的对齐要求，驱动仍会错误地判断空间不足，导致正常的数据帧在发送时被丢弃，引发网络发送丢包问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的提交中增加了 `dpaa2_eth_needed_headroom()` 函数的返回值以容纳对齐空间，这意味着 `buffer_start` 变量已经指向了正确的 skb 内存起始位置。然而，代码在调用 `PTR_ALIGN()` 时，仍然错误地对 `buffer_start` 进行了手动偏移调整（减去 `DPAA2_ETH_TX_BUF_ALIGN`）。这导致计算出的对齐后地址错误地落在了有效 headroom 之外，触发了“地址小于 skb->head”的异常检查逻辑，从而导致数据帧被错误丢弃。
+
+#解决方案
+删除 `PTR_ALIGN()` 调用中对 `buffer_start` 指针的手动偏移调整。直接将 `buffer_start` 传递给 `PTR_ALIGN()` 宏进行对齐计算，确保在 headroom 已经预留了足够空间的情况下，能够正确计算出有效的对齐地址，避免合法数据帧被丢弃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1241e9a850a6835640c6f8b951d87c0d0b15e81

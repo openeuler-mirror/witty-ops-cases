@@ -1,0 +1,20 @@
+#标题
+psp_mutex_lock_timeout 函数长时间自旋触发 soft lockup 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `psp_mutex_lock_timeout` 函数进行长时间锁等待时，内核触发 soft lockup 警告。系统日志中可能出现 "blocked for more than XX seconds" 的告警信息，表明当前 CPU长时间未发生调度。
+
+#主要错误日志
+未知
+
+#问题根因
+`psp_mutex_lock_timeout` 函数内部使用 `do-while` 循环忙等待（busy-wait）尝试获取锁。在等待期间，代码仅执行 `psp_mutex_trylock` 检查，未主动让出 CPU。如果等待时间过长（超过内核 soft lockup 阈值），会触发 soft lockup 检测机制报警。
+
+#解决方案
+在 `psp_mutex_lock_timeout` 的等待循环中增加主动调度逻辑。引入时间检测，若距离上次调度超过 100 毫秒（`msecs_to_jiffies(100)`），则主动调用 `schedule()` 让出 CPU，避免长时间占用 CPU 触发 soft lockup 警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a543a533da354d5d9703c051159ea98f773907d2

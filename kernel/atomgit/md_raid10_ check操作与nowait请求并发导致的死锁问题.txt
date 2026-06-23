@@ -1,0 +1,46 @@
+#标题
+md/raid10: check操作与nowait请求并发导致的死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RAID10 阵列执行检查操作期间，若应用程序同时发起 nowait IO 请求，系统将进入死锁状态。
+具体表现为 `mdX_resync` 线程卡在 `raise_barrier` 等待 `nr_pending` 归零，而其他 I/O 请求线程卡在 `wait_barrier` 无法继续，导致阵列 I/O 阻塞。
+通过 crash 工具查看 `r10conf` 结构体可见 `nr_pending` 计数器出现负数下溢（如 -41）。
+
+#主要错误日志
+md1_resync
+[<0>] raise_barrier+0xce/0x1c0
+[<0>] raid10_sync_request+0x1ca/0x1ed0
+[<0>] md_do_sync+0x779/0x1110
+[<0>] md_thread+0x90/0x160
+[<0>] kthread+0xbe/0xf0
+[<0>] ret_from_fork+0x34/0x50
+[<0>] ret_from_fork_asm+0x1a/0x30
+
+kworker/u1040:2+flush-253:4
+[<0>] wait_barrier+0x1de/0x220
+[<0>] regular_request_wait+0x30/0x180
+[<0>] raid10_make_request+0x261/0x1000
+...
+
+crash> struct r10conf
+	barrier = 1,
+        nr_pending = {
+          counter = -41
+        },
+        nr_waiting = 15,
+        nr_queued = 0,
+
+#问题根因
+当阵列正在进行 check 操作时，barrier 值被升高。正常请求会在 `wait_barrier()` 中阻塞并增加 `nr_pending` 计数。然而，NOWAIT 请求不会阻塞，直接返回错误，且在 `wait_barrier()` 中未增加 `nr_pending`。
+上游提交 43806c3d5b9b 为修复内存泄漏，在 NOWAIT 请求退出路径中引入了 `raid_end_bio_io()` 调用。该函数最终调用 `allow_barrier()`，无条件执行了 `atomic_dec_and_test(&conf->nr_pending)`。
+由于 NOWAIT 请求进入时未增加 `nr_pending`，退出时却执行了递减操作，导致 `nr_pending` 计数器下溢（变为负数）。resync 线程因此无法等到 `nr_pending` 归零，一直卡在 `raise_barrier`，进而导致死锁。
+
+#解决方案
+修改 `raid10_read_request` 和 `raid10_write_request` 函数，当 `regular_request_wait` 返回失败（即 NOWAIT 请求遇到 barrier 阻塞需要立即返回时），不再调用 `raid_end_bio_io(r10_bio)`，而是直接调用 `free_r10bio(r10_bio)` 释放结构体并返回。
+此举避免了在没有增加 `nr_pending` 引用计数的情况下错误地调用 `allow_barrier()` 进行递减操作，从而防止计数器下溢和死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db51256917ca3b99fc003a0d38027831c35411e4

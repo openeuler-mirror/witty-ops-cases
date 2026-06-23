@@ -1,0 +1,29 @@
+#标题
+usbnet 驱动处理 LINK_CHANGE 事件引发 RCU stall
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Gemalto Cinterion PLS83-W modem (cdc_ether) 时，当系统负载较高且 WWAN 接口激活，驱动程序会连续接收到“连接-断开-连接”的事件。由于断开连接时的 URB 取消操作未能及时完成，随后的连接事件又开始提交新的 SKB，导致 URB 队列积压，最终引发 RCU stall 死锁，系统反应迟钝或卡死。
+
+#主要错误日志
+- rcu: INFO: rcu_sched detected expedited stalls on CPUs/tasks: { 0-.... } 33108 jiffies s: 201 root: 0x1/.
+- NMI backtrace for cpu 0
+- Call trace:
+    arch_local_irq_enable+0x4/0x8
+    local_bh_enable+0x18/0x20
+    __netdev_alloc_skb+0x18c/0x1cc
+    rx_submit+0x68/0x1f8 [usbnet]
+    ...
+    unlink_urbs.constprop.0.isra.0+0x64/0xa8 [usbnet]
+    __handle_link_change+0x34/0x70 [usbnet]
+
+#问题根因
+Modem 激活时会发出令人困惑的链路状态事件（连接->断开->连接）。在 `usbnet_link_change` 函数中，如果收到连接事件，代码会立即调用 `netif_carrier_on`。当系统负载高时，前一个断开事件触发的 `unlink_urbs` 工作可能尚未完成，此时立即开启载波会允许 `rx_submit` 提交新的 SKBs，导致 URB 队列填充速度超过 draining 速度，最终阻塞 softirq 上下文引发 RCU stall。
+
+#解决方案
+修改 `usbnet_link_change` 逻辑，不再直接调用 `netif_carrier_on`，而是设置一个新的标志位 `EVENT_LINK_CARRIER_ON`。将实际的 `netif_carrier_on` 调用延迟到 `__handle_link_change` 函数中执行，确保在载波开启前，之前的断开处理流程（如 URB 取消）有足够时间完成。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/02475bb990ddd6864080d2afb921dd56ba0c5f75

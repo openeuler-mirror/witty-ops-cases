@@ -1,0 +1,22 @@
+#标题
+NVMe 多路径模块 RCU 列表遍历引发误报警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 `CONFIG_PROVE_RCU` 配置选项的内核中，NVMe 多路径功能在遍历命名空间列表时触发 RCU 锁检查的虚假警告。系统日志中出现多处 "RCU-list traversed in non-reader section!!" 的告警信息，虽然此时列表实际上已受 SRCU 锁保护，但因使用了错误的遍历原语导致锁检查逻辑误判。
+
+#主要错误日志
+drivers/nvme/host/multipath.c:168 RCU-list traversed in non-reader section!!
+drivers/nvme/host/multipath.c:227 RCU-list traversed in non-reader section!!
+drivers/nvme/host/multipath.c:260 RCU-list traversed in non-reader section!!
+
+#问题根因
+代码在持有 SRCU（Sleepable Read-Copy-Update）锁的情况下遍历链表，但错误地使用了 `list_for_each_entry_rcu()` 原语。该原语主要适用于普通 RCU 读侧临界区，在 `CONFIG_PROVE_RCU` 开启时，内核 RCU 锁检查器无法识别当前的 SRCU 锁上下文，从而误报“在非读者区遍历 RCU 列表”的警告。实际上列表遍历是安全的，只是使用的遍历接口不匹配当前的锁类型。
+
+#解决方案
+将 `drivers/nvme/host/multipath.c` 文件中所有涉及 SRCU 保护下的链表遍历调用，从 `list_for_each_entry_rcu()` 替换为 `list_for_each_entry_srcu()`。修复后的接口增加了一个参数 `srcu_read_lock_held(&ctrl->srcu)`（或 `&head->srcu`），显式告知 RCU 锁检查器当前正处于 SRCU 读锁临界区，从而消除虚假警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a0321db23dcf898bcb524c8567c3f9f97426717f

@@ -1,0 +1,26 @@
+#标题
+GHES 内存错误处理中信号发送机制优化导致 SIGBUS 无法传递地址信息
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统发生硬件内存错误（Memory Failure）且无法恢复时，内核通过 GHES（General Hardware Error Source）机制处理故障。在处理过程中，如果 `memory_failure` 返回错误（非 -EHWPOISON 或 -EOPNOTSUPP），系统会向当前进程发送 SIGBUS 信号。但由于使用了 `force_sig(SIGBUS)`，导致无法将发生错误的精确内存地址传递给用户空间，影响用户态应用对内存错误的精准处理与定位。
+
+#主要错误日志
+- 推断日志（基于修改前代码）：`pr_err("Sending SIGBUS to current task due to memory error not recovered");`
+- 修改后新增日志（用于强制发送信号场景）：
+  ```text
+  %#lx: Sending force SIGBUS to %s:%d due to hardware memory corruption
+  ```
+
+#问题根因
+在 GHES 的 `memory_failure_cb` 回调函数中，当内存错误恢复失败时，原有代码直接调用 `force_sig(SIGBUS)` 向当前进程发送信号。`force_sig` 接口不支持传递详细的故障地址信息（siginfo_t 中的 addr 字段），导致用户空间程序无法获知具体的错误内存地址。与此同时，`kill_accessing_process` 函数具备查找并传递精确地址的能力，但在某些特定路径下（如 `kill_proc` 返回错误时）缺乏强制发送 SIGBUS 的保底逻辑，可能导致错误处理流程不完整。
+
+#解决方案
+1. **接口扩展**：修改 `kill_accessing_process` 函数原型，新增 `force_kill` 布尔参数。当该参数为真且精确查杀失败（`kill_proc` 返回错误）时，强制调用 `force_sig(SIGBUS)` 并打印错误日志，确保进程必定收到信号终止。
+2. **逻辑替换**：在 GHES 处理路径 `drivers/acpi/apei/ghes.c` 的 `memory_failure_cb` 函数中，移除原有的 `force_sig(SIGBUS)` 调用及其相关的 `pr_err` 日志，改为调用 `kill_accessing_process(twcb->pfn, twcb->flags, true)`。这样既利用了 `kill_accessing_process` 尝试传递精确地址的能力，又通过 `force_kill=true` 参数确保在无法定位地址时仍能强制发送信号进行兜底。
+3. **调用点更新**：同步更新 `mm/memory-failure.c` 中其他调用 `kill_accessing_process` 的位置（如 `try_memory_failure_hugetlb` 和 `memory_failure` 函数），将 `force_kill` 参数设置为 `false`，保持原有处理逻辑不变。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a81f1aa5c8ea118127614142b13a67095d947a89

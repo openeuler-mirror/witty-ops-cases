@@ -1,0 +1,26 @@
+#标题
+hwmon: (nct6775) 写入温度限值属性时发生溢出故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在向 nct6775 驱动的 `target_temp`、`temp_tolerance` 或 `weight_temp` 等 Sysfs 节点写入较大的温度限值时，由于内核内部的数值计算逻辑错误，导致写入值溢出。这可能表现为写入的目标温度、容忍度或权重温度值与实际期望值不符，或者因溢出导致写入的值变为非法的负值或极小值，进而影响温控策略的生效。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在处理用户写入的温度值时，逻辑顺序错误：先执行了除法操作（`DIV_ROUND_CLOSEST(val, 1000)`），然后再执行 `clamp_val` 限幅。
+当用户输入的值 `val` 较大时，除法后的中间结果可能超出 `clamp_val` 指定的限幅范围（如 `target_temp_mask` 或 `tolerance_mask`），导致数值回绕或溢出（例如超过了 `u8` 或掩码能表示的最大值），最终存储了错误的数值。
+
+#解决方案
+修正数值处理逻辑顺序，先对原始输入值进行限幅，再进行除法换算。
+具体修改如下：
+1.  对于 `store_target_temp` 函数，将 `val = clamp_val(DIV_ROUND_CLOSEST(val, 1000), 0, data->target_temp_mask)` 修改为 `val = DIV_ROUND_CLOSEST(clamp_val(val, 0, data->target_temp_mask * 1000), 1000)`。
+2.  对于 `store_temp_tolerance` 函数，将 `val = clamp_val(DIV_ROUND_CLOSEST(val, 1000), 0, data->tolerance_mask)` 修改为 `val = DIV_ROUND_CLOSEST(clamp_val(val, 0, data->tolerance_mask * 1000), 1000)`。
+3.  对于 `store_weight_temp` 函数，将 `val = clamp_val(DIV_ROUND_CLOSEST(val, 1000), 0, 255)` 修改为 `val = DIV_ROUND_CLOSEST(clamp_val(val, 0, 255000), 1000)`。
+通过先限幅再除法，确保中间计算过程不会因数值超出范围而溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/512534f2c874e7a6c630a688cb3c1973331b58ac

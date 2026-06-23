@@ -1,0 +1,21 @@
+#标题
+net: rfkill: gpio: 修复未初始化指针解引用导致的潜在崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 x86 系统上，当 rfkill-gpio 驱动绑定到 "BCM4752" 或 "LNV4752" ACPI 设备时，由于设备缺少 "type" 属性，导致 `device_property_read_string()` 调用失败。此时驱动中的 `type_name` 变量处于未初始化状态，后续代码将其传递给 `rfkill_find_type()` 函数，可能导致内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+自 commit 7d5e9737efda ("net: rfkill: gpio: get the name and type from device property") 引入的问题。在 `rfkill_gpio_probe` 函数中，局部变量 `const char *type_name` 定义后未初始化。
+在特定场景下（如 x86 平台的 BCM4752/LNV4752 设备），`device_property_read_string()` 读取 "type" 属性失败，函数直接返回错误，`type_name` 变量未被赋值，继续保持未初始化状态（随机值）。该未初始化指针随后被传递给 `rfkill_find_type()` 进行处理，从而引发崩溃。
+
+#解决方案
+在 `net/rfkill/rfkill-gpio.c` 的 `rfkill_gpio_probe` 函数中，将局部变量 `type_name` 的定义修改为显式初始化为 `NULL`（即 `const char *type_name = NULL;`）。由于 `rfkill_find_type()` 函数具备处理 NULL 指针的能力，初始化为 NULL 可以避免解引用野指针导致的崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ff39fef2a0ebb4c4190c64220b4a94c5d8645149

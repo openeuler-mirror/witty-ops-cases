@@ -1,0 +1,20 @@
+#标题
+pinmux: 修复并发竞争导致 mux_owner 为 NULL 但 mux_usecount 仍大于 0 的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Pinmux 子系统进行并发操作时，出现竞争条件。具体表现为 `mux_usecount` 大于 0（表示引脚正在使用中），但 `mux_owner` 指针却为 NULL，导致引脚状态管理混乱，可能引发内核空指针崩溃或引脚复用功能异常释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `pin_free` 函数中，清除 `mux_owner` / `gpio_owner` 指针的操作被放置在锁保护区域（`scoped_guard(mutex, &desc->mux_lock)`）之外、且是在调用底层 `ops->free` 操作之后执行。这导致了潜在的时间窗口：在并发场景下，其他线程可能在 `mux_usecount` 检查通过后、但在 owner 指针清空前获取到旧的 owner 信息，或者相反，导致状态不一致。
+
+#解决方案
+将清除 owner 指针（`mux_owner` / `gpio_owner`）和 `mux_setting` 的代码块上移，放置在 `mux_usecount` 检查的同一个临界区（锁保护区域）内执行，确保状态变更的原子性与一致性，避免竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/18ca24a6500a925830b6e87fc4279a7456b57a4b

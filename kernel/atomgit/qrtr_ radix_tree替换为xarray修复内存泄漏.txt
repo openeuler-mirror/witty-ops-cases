@@ -1,0 +1,24 @@
+#标题
+qrtr: radix_tree替换为xarray修复内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 QRTR（Qualcomm IPC Router）模块处理发送流量控制时，由于底层 radix_tree 机制问题导致内核内存泄漏。该问题由 syzbot 发现，泄漏发生在 `qrtr_tx_flow` 结构体处理过程中，具体表现为内核内存资源无法被正确释放。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `__radix_tree_create()` 的内部实现机制。该函数逐个分配并将中间节点链接到树中，如果后续分配失败，已链接的节点会保留在树中但没有对应的叶子条目。这些孤立的内部节点永远不会被回收，因为 `radix_tree_for_each_slot()` 仅遍历包含叶子值的槽位，导致内存泄漏。
+
+#解决方案
+将 `qrtr_tx_flow` 的底层数据结构从已弃用的 `radix_tree` 迁移至 `xarray`。
+1. 将 `struct radix_tree_root qrtr_tx_flow` 替换为 `struct xarray qrtr_tx_flow`。
+2. 使用 `xa_load` 替换 `radix_tree_lookup`，使用 `xa_store` 替换 `radix_tree_insert`。
+3. 使用 `xa_for_each` 替换 `radix_tree_for_each_slot` 进行遍历。
+4. 在节点释放路径中调用 `xa_destroy()`。xarray 能够正确处理内部节点的清理，当 `qrtr_node` 释放时，`xa_destroy()` 会释放所有内部节点，从而修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eafa9e3b6dbba7e2b458776689548064e11851c9

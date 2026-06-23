@@ -1,0 +1,23 @@
+#标题
+sw64 PCI 二级总线复位导致 PIU 和 RC 状态丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构平台上执行 PCI 二级总线复位操作时，意外复位了 PIU（PCI Interface Unit）和 RC（Root Complex），导致硬件寄存器状态丢失，复位后设备无法正常工作。对于不支持该复位操作的特定芯片（如配置了 CONFIG_UNCORE_XUELANG），内核会打印警告信息。
+
+#主要错误日志
+- `alloc piu saved data failed!`（当内存分配失败时）
+- `The chip does not support secondary bus reset! No further action is required.`（针对特定不支持场景的推断日志）
+
+#问题根因
+Secondary bus reset 操作的复位范围超出了预期，不仅复位了下游设备，还意外复位了 PIU 和 RC。原代码在执行复位前未保存 PIU 和 RC 的寄存器状态，导致复位后无法恢复现场，引发功能异常。同时，PIU 和 RC 的保存恢复接口分散且未统一，缺乏针对二级总线复位的专门处理逻辑。
+
+#解决方案
+1. 在执行二级总线复位前，保存 PIU 和 RC 的寄存器状态；复位完成后，恢复这些寄存器状态。
+2. 重构并统一 PIU 和 RC 的保存与恢复接口，引入 `save_rc_piu` 和 `restore_rc_piu` 等通用函数，并在 `pcibios_reset_secondary_bus` 流程中调用。
+3. 针对不支持该复位操作的特定芯片（UNCORE_XUELANG），增加判断逻辑并打印警告信息，直接返回避免误操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8df6eb3ff024c3299f07ab44cc88a50bfc7c7277

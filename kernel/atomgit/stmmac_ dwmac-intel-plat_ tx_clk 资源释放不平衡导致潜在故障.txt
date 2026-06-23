@@ -1,0 +1,27 @@
+#标题
+stmmac: dwmac-intel-plat: tx_clk 资源释放不平衡导致潜在故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel 平台 GBE 驱动（dwmac-intel-plat）加载过程中，若探测失败或模块被移除，存在时钟资源释放不平衡的问题。若 `tx_clk` 在探测阶段未成功使能，错误处理路径中仍会尝试关闭该时钟，可能导致内核状态异常；反之，若 `tx_clk` 已使能，部分错误分支未能正确关闭时钟，导致资源泄露。
+
+#主要错误日志
+- "Failed to enable tx_clk\n"
+- "Failed to set tx_clk\n"
+- "Failed to set clk_ptp_ref\n"
+
+#问题根因
+驱动代码中 `tx_clk` 的使能与去使能逻辑不对称：
+1. 在 `intel_eth_plat_probe` 中，`tx_clk` 的使能与否取决于 `tx_clk_en` 属性，但移除函数 `intel_eth_plat_remove` 和错误处理路径中无条件调用 `clk_disable_unprepare`，忽略了 `tx_clk` 可能并未使能的情况。
+2. 在探测函数中间的错误处理分支（如设置时钟频率失败、设置 PTP 参考时钟失败），直接返回导致已使能的 `tx_clk` 未被关闭，造成资源泄露。
+
+#解决方案
+修正时钟资源的管理逻辑，确保获取与释放的对称性：
+1. 在 `intel_eth_plat_probe` 中增加对 `clk_prepare_enable` 返回值的检查，若失败则直接返回。
+2. 重构错误处理路径，统一使用 `goto err_tx_clk_disable` 标签进行跳转。
+3. 在错误处理标签 `err_tx_clk_disable` 和 `intel_eth_plat_remove` 函数中，增加 `if (dwmac->data->tx_clk_en)` 判断，仅当时钟实际被使能时才执行 `clk_disable_unprepare` 操作，防止资源泄露或非法操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/406548277a023bb3d949cbf4eafbae2a23ac6390

@@ -1,0 +1,20 @@
+#标题
+ub: ubase cmdq crq队列溢出导致消息写入失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当控制平面在短时间内向UE发送大量CtrlQ消息，且UE消费消息速度较慢时，固件向UE的cmdq crq队列写入消息失败，导致cmdq crq队列空间不足（溢出）。
+
+#主要错误日志
+推断："drop invalid crq message, opcode = 0x%x, bd_num = %u, flag = 0x%x."
+
+#问题根因
+ubase驱动在处理cmdq crq队列消息时，采用批量处理模式，即一次性消费完队列中所有消息后才更新CI指针。这种处理方式导致队列空间释放不及时，在高并发场景下（控制平面短时间内发送大量消息），若UE消费速度滞后，固件无法及时写入新消息，从而导致队列溢出。
+
+#解决方案
+修改ubase驱动的消息处理逻辑，将原本的批量更新CI指针改为实时更新。具体措施是在消费完每一条cmdq crq消息（包括正常消息处理和异常消息丢弃）后，立即调用`ubase_write_dev`更新CRQ_HEAD_REG寄存器，加快队列刷新速度，及时释放队列空间，避免溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fdc01791b186b0e83ed8d868a63bd79b3b7b6317

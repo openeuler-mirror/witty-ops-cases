@@ -1,0 +1,23 @@
+#标题
+serial: 8250 修复使用 DMA 时的发送死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 DMA 进行串口发送时，若调用 `dmaengine_terminate_async` 取消事务且回调函数 `__dma_tx_complete` 未被执行，`dma->tx_running` 状态将无法被清除。这将导致串口驱动后续无法调度新的 TX DMA 事务，造成发送通路死锁，数据无法继续发送。
+
+#主要错误日志
+未知
+
+#问题根因
+`dmaengine_terminate_async` API 不保证 `__dma_tx_complete` 回调函数一定会执行，而该回调是清除 `dma->tx_running` 标志的唯一位置。如果 DMA 事务被取消且回调未运行，`dma->tx_running` 将永远保持非零状态，导致驱动程序误认为 DMA 发送仍在进行，从而拒绝调度新的发送任务。
+
+#解决方案
+在 `serial8250_tx_dma_flush` 函数中调用 `dmaengine_terminate_async` 后，手动清除 `dma->tx_running` 标志。
+修改逻辑说明：
+1. 由于 `serial8250_tx_dma_flush` 持有 UART 端口锁，且回调函数也会尝试获取该锁，因此对 `dma->tx_running` 的访问是串行化的，操作是安全的。
+2. 若回调未运行，手动清除标志解决了死锁问题；若回调运行（僵尸回调），它会再次清除标志并因 `tx_size` 已清零而执行空操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d9a27b3c3b58602da479f941fcc97a22fae31823

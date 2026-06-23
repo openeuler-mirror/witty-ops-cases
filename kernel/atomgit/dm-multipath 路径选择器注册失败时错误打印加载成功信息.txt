@@ -1,0 +1,24 @@
+#标题
+dm-multipath 路径选择器注册失败时错误打印加载成功信息
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 dm-register-path-selector（设备映射器多路径选择器）注册失败时，内核日志中会先打印 "register failed" 的错误信息，但随后仍错误地打印 "version X loaded" 的加载成功信息。这导致系统日志中出现自相矛盾的内容，可能误导运维人员认为模块已成功加载，而实际上模块并未正常工作。
+
+#主要错误日志
+- DMERR("register failed %d", r);
+- DMINFO("version " HST_VERSION " loaded");
+- DMINFO("version " QL_VERSION " loaded");
+- DMINFO("version " RR_VERSION " loaded");
+- DMINFO("version " ST_VERSION " loaded");
+
+#问题根因
+在 dm-ps-historical-service-time、dm-ps-queue-length、dm-ps-round-robin 和 dm-ps-service-time 等路径选择器模块的初始化函数中，代码逻辑存在缺陷。虽然检测到 `dm_register_path_selector` 返回值小于 0（表示注册失败）并打印了错误日志，但代码并未立即返回错误码，而是继续向下执行，导致后续的 "loaded" 成功信息被错误打印。
+
+#解决方案
+修改各路径选择器模块的初始化函数（如 `dm_hst_init`、`dm_ql_init` 等），在 `dm_register_path_selector` 失败分支中增加 `return r;` 语句。确保在注册失败时，打印错误信息后直接退出函数，不再执行后续的 "loaded" 信息打印逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1756e1e13695ec04605a85b309b62952623cff2b

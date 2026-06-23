@@ -1,0 +1,21 @@
+#标题
+wifi: rtlwifi: pci: 修复 irq_prepare_bcn_tasklet 未终止导致的释放后使用（UAF）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 rtlwifi 网卡设备探测失败或设备被热插拔移除时，若硬件触发了 RTL_IMR_BCNINT 中断，可能会导致内核发生释放后使用。具体表现为驱动在释放 ieee80211_hw 结构体内存后，仍有可能被未停止的 irq_prepare_bcn_tasklet 调用 _rtl_pci_prepare_bcn_tasklet() 函数访问该已释放内存，进而引发系统崩溃或内存数据破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 rtlwifi 驱动的 PCI 初始化流程中，`irq_prepare_bcn_tasklet` 在 `rtl_pci_init()` 中被初始化，并在硬件触发 `RTL_IMR_BCNINT` 中断时被调度执行。但在驱动反初始化函数 `rtl_pci_deinit()` 中，并未调用 `tasklet_kill()` 来终止该 tasklet。
+这导致在网卡 probe 失败或设备 detach 时，`ieee80211_hw` 被释放，而此时 `irq_prepare_bcn_tasklet` 可能仍处于运行或待处理状态，后续访问已释放的 `ieee80211_hw` 时触发了 use-after-free 漏洞。
+
+#解决方案
+在 `rtl_pci_deinit()` 函数中，参照 `irq_tasklet` 的处理方式，显式调用 `tasklet_kill(&rtlpriv->works.irq_prepare_bcn_tasklet)`。确保在释放 `ieee80211_hw` 资源前，该 tasklet 已被正确终止，不再运行或被调度。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/516ebb956cee2d6264fa90ae5c25e8c809b08c2d

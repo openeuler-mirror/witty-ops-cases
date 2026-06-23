@@ -1,0 +1,28 @@
+#标题
+xfrm: policy: 修复 decode_session4/6 中 ICMP 与 GRE 协议解析错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 IPsec XFRM 策略进行流量匹配时，若流量包含 ICMP 或 GRE 协议，内核对流量进行解码时会提取错误的 L4 层信息。具体表现为：
+1. ICMP 类型和代码字段解析错误，原本应分别解析的 type 和 code 字段，被错误地两次赋值为 type，导致 code 字段丢失。
+2. GRE key 字段与 ICMP 字段因共享同一 union 内存地址，在非 GRE/ICMP 协议流量的情况下被错误覆写，导致策略匹配异常或流量行为不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+该故障由上游提交 7a0207094f1b 引入，包含两个严重缺陷：
+1. **代码笔误**：在赋值 ICMP 代码时，错误地将 `flkeys->icmp.code` 赋给了 `fl4->fl4_icmp_type`（以及 IPv6 对应字段），导致 ICMP type 字段被 code 覆盖，且 code 字段未被正确存储。
+2. **内存布局忽略**：`fl4_icmp_type`、`fl4_gre_key` 和 `fl4_dport` 在结构体定义中位于同一 union，共享同一内存地址。原代码无条件对所有流量执行 ICMP 和 GRE 字段的赋值操作，导致不同协议间的数据相互覆盖（例如非 GRE 流量可能错误地覆盖了 GRE key 的位置）。
+
+#解决方案
+修改 `decode_session4` 和 `decode_session6` 函数，增加协议类型判断逻辑：
+1. 增加 `switch (flkeys->basic.ip_proto)` 判断分支。
+2. 仅当协议为 `IPPROTO_ICMP` (或 IPv6 的 `IPPROTO_ICMPV6`) 时，才解析并赋值 ICMP type 和 code 字段；同时修正了将 code 赋给 type 变量的笔误。
+3. 仅当协议为 `IPPROTO_GRE` 时，才解析并赋值 GRE key 字段。
+通过按协议类型隔离赋值逻辑，避免了 union 成员的错误覆写。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6156bc7616cf86ae6dfe7336a622ec3ba2a8a5c9

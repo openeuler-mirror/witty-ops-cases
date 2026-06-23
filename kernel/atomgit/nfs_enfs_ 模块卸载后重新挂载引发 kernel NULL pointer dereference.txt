@@ -1,0 +1,42 @@
+#标题
+nfs/enfs: 模块卸载后重新挂载引发 kernel NULL pointer dereference
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 enfs 模块并取消挂载后，再次进行 NFS 挂载并等待约 60 秒，触发内核空指针引用 Panic。具体复现步骤如下：
+1. 使用 `mount -t nfs -o vers=3 localaddrs=xxx,remoteaddrs=xxx ${server_ip}:/svr/export /mnt/` 挂载。
+2. 执行 `modprobe -r enfs` 卸载模块。
+3. 执行 `umount /mnt/` 取消挂载。
+4. 再次执行步骤 1 中的挂载命令。
+5. 等待 60 秒。
+6. 系统发生 kernel panic。
+
+#主要错误日志
+```text
+BUG: kernel NULL pointer dereference, address: 0000000000000104
+...
+RIP: 0010:xprt_switch_get+0x1a/0x60
+...
+Call Trace:
+ <TASK>
+ shard_update_work.constprop.0+0x71/0x220 [enfs]
+ shard_update_loop+0x219/0x290 [enfs]
+ kthread+0xfb/0x130
+ ret_from_fork+0x40/0x60
+ ret_from_fork_asm+0x1b/0x30
+...
+---[ end Kernel panic - not syncing: Fatal exception ]---
+```
+
+#问题根因
+在移除 enfs 模块时，未清理全局变量 `shard_view_ctrl` 中的 `clnt_info_list` 和 `view_list` 链表。导致后续重新加载模块或进行相关操作时，内核线程 `shard_update_loop` 遍历到残留的无效链表节点，进而访问了已释放的内存地址，触发空指针引用。
+
+#解决方案
+在 `enfs_shard_exit` 函数中增加对 `shard_view_ctrl` 的清理操作。具体措施包括：
+1. 封装 `enfs_free_view_table` 函数，用于释放 view_table 资源。
+2. 新增 `enfs_clear_shard_ctrl` 函数，在模块退出时遍历并释放 `shard_ctrl->clnt_info_list` 和 `shard_ctrl->view_list` 中的所有节点，防止残留无效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b29f941d7c6454ae39e85a23d8a004f47b274505

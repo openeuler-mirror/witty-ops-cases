@@ -1,0 +1,25 @@
+#标题
+accel/qaic: 大于2G的缓冲区对象(BO)存在数据损坏风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当处理大于 2G 的缓冲区对象（BO）切片时，由于迭代计算过程中变量溢出，导致切片构建错误。该问题会在工作负载执行过程中引发数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在切片 BO 时，需要遍历 BO 的 sgt（scatterlist table）来构建切片。代码中用于此过程的数据类型选择不正确（使用了 `int` 和未明确指明无符号的类型），无法正确表示大于 2G 的尺寸，导致溢出。
+具体原因包括：
+1. 设备只能处理 32 位大小的传输，scatterlist 结构也只支持 32 位缓冲区大小，因此单个传输上限应为 `unsigned int`。原代码使用 `int` 类型，占用了符号位，导致表示范围错误。
+2. 整个 BO 的总长度可能超过 32 位限制，需要能够表示系统最大分配尺寸的类型（即 `size_t`），原代码使用了 `int` 导致溢出。
+
+#解决方案
+修改 `drivers/accel/qaic/qaic_data.c` 中 `clone_range_of_sgt_for_slice` 函数的变量类型：
+1. 将 scatterlist 条目的长度（`len`）、条目数量（`nents`）以及 scatterlist 条目内的偏移量（`offf`、`offl`）的类型从 `int` 升级为 `unsigned int`，以提供正确的 32 位无符号表示。
+2. 将用于统计 BO 总长度的变量 `total_len` 的类型从 `int` 修改为 `size_t`，以支持超过 2G 的大尺寸内存分配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0005e8ecd97c643ded4357665484e23b3c2d6370

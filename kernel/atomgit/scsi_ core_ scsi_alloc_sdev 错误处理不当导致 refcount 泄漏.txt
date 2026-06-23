@@ -1,0 +1,20 @@
+#标题
+scsi: core: scsi_alloc_sdev 错误处理不当导致 refcount 泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SCSI 设备分配过程中，若 `scsi_realloc_sdev_budget_map` 分配失败，错误处理路径未正确调用 `__scsi_remove_device`，导致相关引用计数（refcount）发生泄漏，可能导致设备资源无法正常释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `scsi_alloc_sdev` 函数中，`scsi_sysfs_device_initialize()` 被调用后，设备引用计数及关联资源已初始化。当后续的 `scsi_realloc_sdev_budget_map` 失败时，原有的错误处理代码仅手动释放了部分资源（如 kfree、put_device），但未遵循 SCSI 核心层的要求调用 `__scsi_remove_device()`，从而导致了 refcount 泄漏。
+
+#解决方案
+修复 `scsi_alloc_sdev` 中的错误处理逻辑。当 `scsi_realloc_sdev_budget_map` 失败时，跳转至 `out_device_destroy` 标签（该标签包含正确的设备销毁逻辑，会调用 `__scsi_remove_device`），而不是手动执行不完整的资源释放步骤，确保引用计数被正确处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7377ce959c9c44bb6a7e8ab05734d4a8d74a76d9

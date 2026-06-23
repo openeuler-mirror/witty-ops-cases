@@ -1,0 +1,20 @@
+#标题
+mdiobus_register_device 函数存在复位资源泄露风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MDIO 设备注册过程中，若设备同时配置了 reset-gpio 和 reset-controller，且 reset-controller 注册失败，系统将发生资源泄露。具体表现为 reset-gpio 资源未被正确释放，导致设备状态异常或资源无法回收。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mdiobus_register_device` 函数中，代码逻辑先获取了 `reset-gpio`，随后尝试注册 `reset-controller`。当 `mdiobus_register_reset` 调用失败返回错误码时，函数直接返回，未对之前已成功获取的 `reset-gpio` 进行清理（put 操作）。这导致在复位控制器注册失败的路径上，GPIO 资源发生泄露，设备未能恢复到注册尝试前的状态。
+
+#解决方案
+在 `mdiobus_register_reset` 失败的错误处理分支中，增加对 `mdiodev->reset_gpio` 的释放逻辑。具体修改为：调用 `gpiod_put(mdiodev->reset_gpio)` 释放 GPIO 资源，并将 `mdiodev->reset_gpio` 置为 NULL，确保资源正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3ede80c3d7b08c5cf22747c71a3de7f806aee969

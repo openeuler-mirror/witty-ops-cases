@@ -1,0 +1,20 @@
+#标题
+UML 架构下 min_low_pfn 未随 uml_reserved 更新导致物理页帧号记录不准确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UML（User-Mode Linux）架构下，当内核初始化过程中 `uml_reserved` 被更新后，全局变量 `min_low_pfn` 未能同步更新。这导致 `min_low_pfn` 无法准确反映系统中最低可用物理页帧号（PFN），可能导致后续内存管理逻辑对可用内存范围的判断出现偏差。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mem_init()` 函数中，代码执行 `uml_reserved = brk_end;` 更新了保留内存的边界，但未同步更新 `min_low_pfn`。根据 Commit 描述，当 `uml_reserved` 更新时，`min_low_pfn` 必须相应更新，否则它将无法准确标记最低可用 PFN。
+
+#解决方案
+在 `arch/um/kernel/mem.c` 的 `mem_init` 函数中，在更新 `uml_reserved` 之后，立即根据新的 `uml_reserved` 值重新计算并更新 `min_low_pfn`。具体代码变更为添加语句：`min_low_pfn = PFN_UP(__pa(uml_reserved));`，确保两者保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b2b5f467ee63f88fbbf640e585bb27fb4b3b64b5

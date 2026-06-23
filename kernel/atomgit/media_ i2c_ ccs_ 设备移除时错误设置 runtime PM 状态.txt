@@ -1,0 +1,20 @@
+#标题
+media: i2c: ccs: 设备移除时错误设置 runtime PM 状态
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 CCS（Camera Sensor）I2C 设备驱动时，如果设备已经处于挂起状态，驱动程序仍会强制将设备的 runtime PM 状态设置为挂起。这可能导致电源管理状态机不一致，进而影响设备卸载流程或后续电源资源的释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ccs_remove` 函数中，代码逻辑存在缺陷：无论设备当前是否已经处于挂起状态，都会在调用 `ccs_power_off` 后执行 `pm_runtime_set_suspended`。如果设备已经处于挂起状态，重复设置状态是不必要的，且不符合正确的电源管理状态流转规则。
+
+#解决方案
+修改 `ccs_remove` 函数，将 `pm_runtime_set_suspended` 的调用移动到 `if (!pm_runtime_status_suspended(&client->dev))` 条件判断内部。确保仅在设备之前未处于挂起状态（即刚刚执行了 `ccs_power_off` 关闭电源）时，才将其 runtime PM 状态设置为挂起，从而保证状态设置的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2bdb6ec50af25a8f239100db3b2d1e3202c380ae

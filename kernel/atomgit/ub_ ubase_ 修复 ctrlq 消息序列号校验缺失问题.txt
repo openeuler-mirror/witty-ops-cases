@@ -1,0 +1,24 @@
+#标题
+ub: ubase: 修复 ctrlq 消息序列号校验缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+UE 发送给 UE 的数据通过 seq（序列号）进行访问，但该 seq 值可能不可信。若直接使用未校验的 seq 数据，会导致系统异常。此外，ctrlq 输入消息中若同时标记为响应（is_resp）且需要响应（need_resp），属于无效状态，可能导致处理异常。
+
+#主要错误日志
+- ubase_err(udev, "ctrlq input resp type is invalid.\n");
+- ubase_err(udev, "invalid ue2ue ctrlq seq(%u).\n", cmd->seq);
+
+#问题根因
+在处理 UE 到 UE 的 ctrlq 事件时，代码直接使用了数据中的 seq 值，而没有对其进行有效性校验。由于 seq 值可能来自不可信源，直接访问会导致系统异常。同时，对响应消息的类型检查逻辑不完善，未拦截无效的组合标志（is_resp && need_resp）。
+
+#解决方案
+1. 在 `ubase_handle_ue2ue_ctrlq_event` 函数中增加对 `cmd->seq` 的校验，若校验失败则返回 `-EINVAL` 并打印错误日志。
+2. 在 `ubase_ctrlq_msg_check` 函数中增加对响应消息的合法性检查，若消息同时标记为 `is_resp` 和 `need_resp`，则判定为无效输入并返回错误。
+3. 修改 `ubase_ctrlq_check_seq` 函数的可见性，并在相关头文件中声明，以便在事件处理流程中调用。
+4. 优化部分调试日志的打印格式，增加 opcode 和 ret 值的十六进制显示以便调试。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e87c0f1d745bd8cea6ec52d5b79c163ba12d4a1d

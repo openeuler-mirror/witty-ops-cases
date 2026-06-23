@@ -1,0 +1,33 @@
+#标题
+powermac 启动时因 escc 节点缺失 #size-cells 属性触发内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+部分 PowerMac 机型（如 PowerMac3,1）在启动过程中，内核检测到 `escc` 设备节点缺失 `#size-cells` 属性。由于该属性缺失已被标记为 deprecated（废弃），内核会打印警告信息并打印调用栈，导致启动日志中出现非预期的 WARN_ON 信息。
+
+#主要错误日志
+Missing '#size-cells' in /pci@f2000000/mac-io@c/escc@13000
+WARNING: CPU: 0 PID: 0 at drivers/of/base.c:133 of_bus_n_size_cells+0x98/0x108
+Hardware name: PowerMac3,1 7400 0xc0209 PowerMac
+...
+Call Trace:
+  of_bus_n_size_cells+0x98/0x108 (unreliable)
+  of_bus_default_count_cells+0x40/0x60
+  __of_get_address+0xc8/0x21c
+  __of_address_to_resource+0x5c/0x228
+  pmz_init_port+0x5c/0x2ec
+  pmz_probe.isra.0+0x144/0x1e4
+  pmz_console_init+0x10/0x48
+  console_init+0xcc/0x138
+  start_kernel+0x5c4/0x694
+
+#问题根因
+某些 powermac 设备树中的 `escc` 节点缺失 `#size-cells` 属性。自引入 commit 045b14ca5c36 ("of: WARN on deprecated #address-cells/#size-cells handling") 后，内核对这种废弃的缺失行为会主动发出警告。
+
+#解决方案
+在内核启动阶段的 `prom_init` 流程中，通过 `fixup_device_tree_pmac` 函数遍历设备树，检查 `device_type` 为 "escc" 的节点。若发现该节点缺失 `#size-cells` 属性，则自动为其补设该属性值为 1，从而在内核解析设备树前修复数据，避免触发警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d18074d260f56df76af56006000aab4885e0cb96

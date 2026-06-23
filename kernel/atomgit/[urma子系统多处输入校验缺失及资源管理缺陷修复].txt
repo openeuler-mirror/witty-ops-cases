@@ -1,0 +1,39 @@
+#标题
+[urma子系统多处输入校验缺失及资源管理缺陷修复]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[urma子系统的ubagg、ubcore、uburma模块在处理用户态输入时，存在多处校验逻辑缺失或错误，可能导致以下现象：
+1. 内核堆溢出：在 `ubagg_get_seg_info`、`ubagg_create_jfr`、`ubagg_create_jetty`、`ubagg_register_seg` 等接口中，若用户传入长度参数不当，可能导致内核拷贝越界。
+2. 内存越界读取：在 `ubcore_cm_recv` 中，若 payload 长度无效，可能导致读取越界。
+3. 内核崩溃或内存泄漏：在 `uburma_cmd_delete_jfs_batch` 中，若查找对象失败，未正确释放已分配资源，导致内存泄漏或空指针引用；在 `uburma_write_event_with_free_fn` 中，未初始化链表节点导致链表破坏。
+4. 数据破坏：在 `uburma_cmd_get_net_addr_list` 中，直接将内核指针暴露给用户态，且未正确拷贝数据，导致用户态获取地址列表失败或数据错误。]
+
+#主要错误日志
+- ubagg_log_err("Invalid user out");
+- ubagg_log_err("invalid udrv_data in_len.\n");
+- ubcore_log_err("Invalid recv_cr payload");
+- uburma_log_err("failed to find jfs, index is %d.\n", i);
+- uburma_log_err("Invalid parameter.\n");
+- uburma_log_err("Failed to copy data to user space, ret:%d.\n", ret);
+
+#问题根因
+[该提交修复了 urma 子系统多个模块的缺陷，根本原因包括：
+1. **输入校验缺失/不足**：多个 IOCTL 接口（如 `ubagg_create_jfr`、`ubagg_create_jetty` 等）在调用 `copy_from_user` 前未校验用户传入的 `in_len` 是否超过内核结构体大小，导致潜在的缓冲区溢出风险。同理，`ubagg_get_seg_info` 和 `ubcore_cm_recv` 也缺乏对输出缓冲区长度和 payload 长度的校验。
+2. **错误处理路径资源泄漏**：`uburma_cmd_delete_jfs_batch` 在批量删除对象时，如果中间某个对象查找失败，代码直接跳转清理但未释放当前循环中已成功获取的资源（uobj）。
+3. **链表初始化缺失**：`uburma_write_event_with_free_fn` 分配事件对象后未初始化 `list_head` 节点，可能导致链表操作异常。
+4. **指针泄露与逻辑错误**：`uburma_cmd_get_net_addr_list` 错误地将内核指针地址赋值给输出参数，而非将指针指向的数据拷贝给用户，导致数据传递失败且存在安全隐患。
+5. **代码重构遗漏**：删除了 `ubcore_sock` 模块中不再使用的监听与接收相关函数以及 `lockdep_assert_held` 断言，属于代码清理与重构修正。]
+
+#解决方案
+[主要通过增加输入参数校验、修正错误处理流程及初始化关键数据结构来修复：
+1. **增加边界校验**：在 `copy_from_user` 和 `memcpy` 操作前，严格检查用户态传入的长度（`in_len`、`out.len`）与内核结构体大小（如 `sizeof(struct UBagg_Jetty_exchange_info)`）的关系，防止越界读写。
+2. **修复错误处理流程**：在 `uburma_cmd_delete_jfs_batch` 中，当查找失败时，增加 `uobj_put_batch` 和 `uobj_put_del_batch` 调用以释放之前循环中已处理的资源，再跳转至错误处理标签。
+3. **初始化链表节点**：在 `uburma_write_event_with_free_fn` 中添加 `INIT_LIST_HEAD` 初始化事件的链表节点。
+4. **修正数据拷贝逻辑**：修改 `uburma_cmd_get_net_addr_list`，移除直接赋值内核地址的操作，改为调用 `copy_to_user` 将数据安全地拷贝到用户空间。
+5. **清理冗余代码**：删除 `ubcore_sock` 中未使用的监听、接受、接收相关函数以及 `uburma_unmap_vma_pages` 中不必要的锁断言。]
+
+#来源
+[https://atomgit.com/openeuler/kernel/commit/47de7032b51252fbbbbe546f2d925ce092aa5d4b]

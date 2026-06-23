@@ -1,0 +1,17 @@
+#标题
+[NFS] unblock_revalidate() 唤醒 __nfs_lookup_revalidate() 时存在内存屏障缺失问题
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[NFS 客户端在进行目录项重验证（revalidate）时，可能出现阻塞进程无法被正确唤醒的情况，导致相关文件系统操作挂起或响应超时]
+
+#主要错误日志
+[未知]
+
+#问题根因
+[在 unblock_revalidate() 函数中，原代码先调用 smp_store_release() 更新 dentry->d_fsdata，再调用 wake_up_var() 唤醒等待队列。这种写法无法保证在 wake_up_var() 之前存在正确的内存屏障，导致等待在 wait_var_event() 上的进程可能无法观察到 dentry->d_fsdata 的更新，从而无法被唤醒]
+
+#解决方案
+[将 smp_store_release() 和 wake_up_var() 两个独立调用替换为封装好的 store_release_wake_up() 函数。该函数内部会在设置变量值后、执行唤醒操作前插入适当的内存屏障，确保等待进程能正确感知状态变化并唤醒]

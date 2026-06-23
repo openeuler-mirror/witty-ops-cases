@@ -1,0 +1,22 @@
+#标题
+perf/x86/intel: 大 PEBS 模式下对 sample_regs_intr 的标志位检查修正
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当前代码在检查 large PEBS（Precise Event-Based Sampling）标志时，仅检查了 `sample_regs_user` 是否包含硬件不支持的 GPR（通用寄存器），却遗漏了对 `sample_regs_intr` 的检查。虽然目前硬件支持所有 perf 定义的 GPR，该缺陷暂未引发实际问题，但在后续支持 SSP（Shadow Stack Pointer）寄存器采样时，由于自适应 PEBS 硬件不支持 SSP 采样，该缺陷将导致硬件采样行为异常或配置错误。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `intel_pmu_large_pebs_flags` 函数逻辑不完整。原代码逻辑中，如果 `sample_regs_user` 包含 PEBS 不支持的寄存器（`~PEBS_GP_REGS`），会同时清除 `PERF_SAMPLE_REGS_USER` 和 `PERF_SAMPLE_REGS_INTR` 两个标志位。这种处理方式掩盖了 `sample_regs_intr` 本身可能包含不支持寄存器的问题，导致对 `sample_regs_intr` 的校验缺失。在引入 SSP 等硬件不支持的新寄存器采样后，会导致错误地保留 large PEBS 模式，从而引发功能异常。
+
+#解决方案
+修改 `arch/x86/events/intel/core.c` 中的 `intel_pmu_large_pebs_flags` 函数，将 `sample_regs_user` 和 `sample_regs_intr` 的检查逻辑解耦：
+1. 移除原代码中因 `sample_regs_user` 不合法而连带清除 `PERF_SAMPLE_REGS_INTR` 的逻辑。
+2. 新增独立的判断分支：如果 `sample_regs_intr` 包含 PEBS 不支持的寄存器位（`event->attr.sample_regs_intr & ~PEBS_GP_REGS`），则单独清除 `PERF_SAMPLE_REGS_INTR` 标志位，确保 large PEBS 标志位的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/60b6908c7ed99bcb9456b69ff2880bb01c29df87

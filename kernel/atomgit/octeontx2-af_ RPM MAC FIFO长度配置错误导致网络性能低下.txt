@@ -1,0 +1,25 @@
+#标题
+octeontx2-af: RPM MAC FIFO长度配置错误导致网络性能低下
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Marvell OcteonTX2 RPM（Resource Pool Manager）硬件块上观察到网络性能低下，特别是在硬件规格支持更大 FIFO 长度的场景下性能未达预期。
+
+#主要错误日志
+未知
+
+#问题根因
+在 cn10kb 硅片上，不同 RPM 块的 FIFO 大小不同（例如 RPM0/RPM1 为 256KB，RPM2 为 128KB）。
+原代码设计中，FIFO 长度存储在所有 RPM 共享的公共结构体 `mac_ops` 中。这导致在初始化或配置过程中，最后一个 RPM 的 FIFO 长度覆盖了前面的配置，使得所有 RPM 均使用了最后一个 RPM 的 FIFO 长度值。由于 FIFO 长度配置偏小，导致网络吞吐性能下降。
+
+#解决方案
+将 `fifo_len` 字段从公共结构体 `mac_ops` 移动到每个 MAC 独有的结构体 `cgx` 中，从而确保每个 RPM 实例独立存储并使用各自正确的 FIFO 长度。
+主要修改点：
+1. 在结构体 `cgx` 中新增 `u32 fifo_len` 成员，并删除 `mac_ops` 中的对应成员。
+2. 更新相关赋值逻辑，从硬件寄存器读取 FIFO 大小后直接存入 `cgx->fifo_len`。
+3. 修改获取 FIFO 长度的函数接口，改为从 `cgx` 实例中直接读取，避免全局覆盖问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1c6f49d70648380388c324d42f2cfcefbd9c7c78

@@ -1,0 +1,20 @@
+#标题
+mlx5_vdpa_get_config() 在大端序机器上返回数据字节序错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 big-endian（大端序）架构机器上，如果在 `mlx5_vdpa_set_driver_features()` 调用之前调用 `mlx5_vdpa_get_config()`，该函数会错误地以大端序格式返回数据。而 QEMU 默认将这些数据解释为小端序，导致配置数据解析错误，引发 vDPA 设备配置异常或功能故障。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `mlx5_vdpa_dev_add()` 未初始化 `mvdev->actual_features`，该成员变量默认值为 0。`mlx5_vdpa_get_config()` 依赖 `actual_features` 中的 `VIRTIO_F_VERSION_1` 标志位来决定是否对数据进行字节序转换。由于该标志位未初始化，导致在大端序机器上，函数跳过了必要的字节序转换处理，直接返回了大端序数据，与 QEMU 期望的小端序格式不匹配。
+
+#解决方案
+在 `mlx5_vdpa_dev_add()` 函数中提前初始化 `mvdev->actual_features`，将 `device_features` 中的 `VIRTIO_F_VERSION_1` 标志位赋值给它。这确保了在后续任何流程中调用 `mlx5_vdpa_get_config()` 时，该标志位均已正确设置，从而保证字节序处理逻辑正确执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0ff3d7598f8f27f59bdc0287658256dcdf87f2b2

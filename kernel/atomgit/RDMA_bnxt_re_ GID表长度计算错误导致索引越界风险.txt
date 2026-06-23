@@ -1,0 +1,24 @@
+#标题
+RDMA/bnxt_re: GID表长度计算错误导致索引越界风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动向内核协议栈上报的 GID 表长度被固定为一个常量值，忽略了硬件实际支持的能力值，且未正确处理硬件 GID 表与内核 GID 表 1:2 的映射关系。这会导致在进行 modify_qp 或 create_ah 操作时，传入的 sgid_index 可能超出驱动实际分配或硬件支持的 GID 索引范围（最大应为 256），从而引发功能异常或越界访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `bnxt_qplib_get_dev_attr` 中，`attr->max_sgid` 直接被赋值为宏 `BNXT_QPLIB_NUM_GIDS_SUPPORTED`，覆盖了硬件寄存器 `sb->max_gid` 报告的实际值。
+根据硬件设计，每个硬件 GID 条目对应内核 GID 表中的 2 个条目。原代码未实现此 2 倍映射逻辑，且未将最大 GID 数量限制在结构体 `ib_global_route` 中 `sgid_index` 字段（u8 类型，最大 256）所允许的范围内。
+
+#解决方案
+修改 GID 表长度的赋值逻辑：
+1. 首先读取硬件报告的 `max_gid` 值。
+2. 根据硬件 GID 与内核 GID 的 1:2 映射关系，将读取到的值乘以 2。
+3. 使用 `min_t` 函数，取“硬件支持值的 2 倍”与“宏 BNXT_QPLIB_NUM_GIDS_SUPPORTED（256）”中的较小值，确保最终上报给协议栈的 `max_sgid` 既符合硬件实际能力，又不超出 256 的索引上限。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b9694c22b475b5adb0fac239ad8bc1cad07a8bbd

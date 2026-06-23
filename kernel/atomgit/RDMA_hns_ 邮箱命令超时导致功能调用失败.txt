@@ -1,0 +1,23 @@
+#标题
+RDMA/hns: 邮箱命令超时导致功能调用失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 RDMA 操作过程中，固件处理邮箱命令可能偶发超时。当发送 `HNS_ROCE_OPC_POST_MB` 类型命令时，若硬件未及时响应，驱动层会返回 `-ETIME` 错误，导致相关的配置命令执行失败，可能引发上层业务异常。
+
+#主要错误日志
+Cmdq IO error, opcode = 0x%x, return = %d.
+
+#问题根因
+固件处理特定邮箱命令（如 `HNS_ROCE_OPC_POST_MB`）时存在偶发性超时问题，原代码逻辑缺乏针对该类超时的重试机制，导致偶发的硬件响应延迟直接转化为命令执行失败。
+
+#解决方案
+在 `__hns_roce_cmq_send` 函数中针对 `HNS_ROCE_OPC_POST_MB` 命令增加重试机制：
+1. 新增宏定义 `HNS_ROCE_OPC_POST_MB_TRY_CNT`（重试次数 8 次）和 `HNS_ROCE_OPC_POST_MB_RETRY_GAP_MSEC`（重试间隔 5ms）。
+2. 将原发送逻辑抽象为 `__hns_roce_cmq_send_one`，外层循环检测到该命令返回 `-ETIME` 时进行重试，直至成功或达到最大重试次数。
+3. 将错误日志打印位置移至重试逻辑外层，确保仅在最终失败时打印错误信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4956d8646464c12abd70c24c14bba14e93b10393

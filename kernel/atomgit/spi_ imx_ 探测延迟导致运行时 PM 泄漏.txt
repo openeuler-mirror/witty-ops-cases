@@ -1,0 +1,20 @@
+#标题
+spi: imx: 探测延迟导致运行时 PM 泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 spi-imx 驱动探测（probe）失败时（例如发生探测延迟 deferral），驱动的运行时 PM（Runtime PM）使用计数未正确平衡。这导致 SPI 控制器无法正确进入挂起状态，后续当驱动再次尝试绑定时，电源管理状态可能异常，造成电源资源泄漏或设备状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `spi_imx_probe` 函数的错误处理路径中（`out_runtime_pm_put` 标签处），代码调用了 `pm_runtime_disable` 和 `pm_runtime_set_suspended`，但缺少对运行时 PM 使用计数的减少操作（如 `pm_runtime_put_noidle`）。这导致在探测失败退出时，先前增加的使用计数无法被消耗，造成引用计数泄漏，使得设备无法进入正确的挂起状态。
+
+#解决方案
+在 `spi_imx_probe` 的错误处理路径中，于 `pm_runtime_disable` 之后、`pm_runtime_set_suspended` 之前添加 `pm_runtime_put_noidle(spi_imx->dev)` 调用。该操作确保在探测失败退出时平衡运行时 PM 使用计数，允许控制器正确挂起，修复了资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d75e7690791947d44432f5d6b69152bca76f2bff

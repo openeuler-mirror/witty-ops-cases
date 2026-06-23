@@ -1,0 +1,28 @@
+#标题
+ub: udma 驱动导致系统重启时间过长
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统执行重启操作时，由于 UDMA 驱动在移除过程中等待刷新完成或关闭 UE RX 失败处理不当，导致重启流程卡顿或耗时显著增加。
+
+#主要错误日志
+- "exit flush in shutdown process.\n"
+- "enter shutdown process.\n"
+- "udma close ue rx failed in remove process.\n"
+- "wait flush done timeout.\n"（推断，原有逻辑可能触发）
+
+#问题根因
+在系统重启流程中，`check_and_wait_flush_done` 和 `udma_remove` 函数未正确识别系统当前处于关机/重启状态：
+1. `check_and_wait_flush_done` 函数在等待刷新完成时，若条件未满足且未达到最大等待次数，会持续循环等待，导致在关机过程中无谓地消耗时间。
+2. `udma_remove` 函数在调用 `udma_close_ue_rx` 失败时，原有逻辑直接打印错误并继续执行，缺乏重试机制或在关机状态下的快速退出路径，可能导致资源释放不及时或阻塞重启流程。
+
+#解决方案
+1. 在 `check_and_wait_flush_done` 循环中增加对系统关机状态的判断，若检测到系统正在关闭，则立即打印日志并跳出循环，避免无效等待。
+2. 在 `udma_remove` 中针对 `udma_close_ue_rx` 失败的情况增加重试逻辑：
+   - 引入渐进式睡眠等待机制（从 100ms 倍增至最大 800ms）。
+   - 在重试循环中增加对系统关机状态的判断，若检测到系统正在关闭，则打印日志并跳出循环，确保重启流程不被长时间阻塞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1bc3d4c91bdef217a04b073c5b45b0099ae131f2

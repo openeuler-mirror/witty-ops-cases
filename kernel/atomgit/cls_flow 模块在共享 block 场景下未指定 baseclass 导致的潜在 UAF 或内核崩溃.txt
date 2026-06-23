@@ -1,0 +1,20 @@
+#标题
+cls_flow 模块在共享 block 场景下未指定 baseclass 导致的潜在 UAF 或内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 flow 分类器并将其挂载到共享 block（shared block）时，若未指定 baseclass 参数，内核可能触发空指针解引用或 Use-After-Free，导致系统崩溃或网络流量控制功能异常。
+
+#主要错误日志
+- "Must specify baseclass when attaching flow filter to block"
+
+#问题根因
+在 `flow_change` 函数中，当用户未指定 `baseclass` 时，代码试图通过 `tcf_block_q(tp->chain->block)` 获取关联的 Qdisc 句柄来构造 baseclass。然而，当 flow filter 被挂载到共享 block 时，该 block 可能并不关联特定的 Qdisc（或关联关系无效/未初始化）。此时强制获取 Qdisc 并访问其 `handle` 成员，会导致内核访问无效内存。
+
+#解决方案
+在构造 baseclass 之前增加对 block 属性的校验：调用 `tcf_block_shared(block)` 检查当前 block 是否为共享 block。如果是共享 block 且用户未指定 baseclass，则通过 `NL_SET_ERR_MSG` 直接返回错误提示用户必须指定 baseclass，从而避免后续非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4bc2fb3b42bc40dc4e346a6edfb947192a84a1ed

@@ -1,0 +1,20 @@
+#标题
+gpiolib: acpi 处理函数中移位操作导致的潜在越界与未定义行为
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 32 位平台上处理超过 32 位的 GPIO OperationRegion 时，内核可能触发未定义行为。具体表现为在进行 GPIO 读写操作时，左移位数超过变量位宽限制，可能导致内核数据损坏或逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+GPIO Address Space handler 处理函数中，原代码直接使用 `<< i` 进行左移操作。在 32 位平台上，左移位数被限制在 31 以内；当 `i` 大于 31 时，移位行为属于未定义行为（UB）。此外，原代码仅处理了首个 64 位的值，对于 Connection() 大于 63 位的情况（即 ACPI 表中较大的 Connection 定义），访问越界同样会导致 UB。
+
+#解决方案
+修改 `acpi_gpio_adr_space_handler` 函数，引入 `word` 和 `shift` 变量计算位图索引。将 `i` 分解为 `word = i / 64` 和 `shift = i % 64`，从而支持大于 64 位的 OperationRegion 操作。在写入时使用 `value[word]` 配合 `BIT_ULL(shift)`，在读取时正确设置或清除对应 `value[word]` 中的位，避免了越界访问和移位未定义行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a02d60c7f89f5a13c60d21ee5edb4705aa891cae

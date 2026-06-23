@@ -1,0 +1,23 @@
+#标题
+LoongArch 架构内核内存访问失败缺少调试信息
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构下，当执行 `copy_from_kernel_nofault()` 或 `copy_to_kernel_nofault()` 等内核内存访问操作失败时，调用者无法获知具体发生了什么错误，导致缺乏足够的现场信息进行故障定位。
+
+#主要错误日志
+- `pr_info("%s: memory access failed, ecode 0x%x\n", __func__, read_csr_excode());`
+- `pr_info("%s: the caller is %pS\n", __func__, __builtin_return_address(0));`
+
+#问题根因
+原有的 `__get_kernel_nofault` 和 `__put_kernel_nofault` 实现在检测到内存访问错误（`__gu_err` 或 `__pu_err`）时，直接跳转到错误处理标签，未打印异常代码和调用者信息。这导致在内存访问故障发生时，系统缺少关键的调试上下文，无法判断异常原因及故障入口。
+
+#解决方案
+在 `arch/loongarch/include/asm/uaccess.h` 中修改 `__get_kernel_nofault` 和 `__put_kernel_nofault` 宏定义。在检测到访问错误跳转前，增加 `pr_info` 打印：
+1. 调用 `read_csr_excode()` 读取并打印当前的异常代码，以明确故障类型。
+2. 调用 `__builtin_return_address(0)` 打印调用者地址，以追踪故障入口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f361b9f137641d4ca139b4910763e9d979566cb3

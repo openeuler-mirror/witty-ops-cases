@@ -1,0 +1,20 @@
+#标题
+gfs2: fiemap 在持有 glock 时触发递归锁死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 GFS2 文件系统上调用 fiemap 接口（如执行 `ioctl` fiemap 操作）时，如果 fiemap 的输出缓冲区被内存映射到同一个 inode 且访问该缓冲区触发了缺页异常，会导致内核陷入递归获取 glock 的状态，进而引发死锁或进程挂起。该问题可被 xfstest generic/742 用例复现。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `gfs2_fiemap()` 函数中，代码在持有 inode glock 锁的情况下调用 `iomap_fiemap()`。如果 fiemap 缓冲区被内存映射到同一个 inode，当内核试图向该缓冲区写入数据并触发缺页异常时，缺页处理程序会尝试再次获取同一个 glock，导致递归加锁从而引发死锁。
+
+#解决方案
+在调用 `iomap_fiemap()` 期间禁用缺页异常，并在调用返回后检查是否发生缺页错误。若返回值为 `-EFAULT`，则手动调用 `fault_in_fiemap()` 触发缺页处理，将用户态缓冲区锁定在内存中，随后重试整个 fiemap 操作，从而避免在持有锁时处理缺页异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/30b34723dc99732cf1f75bd56f846e8fb436705a

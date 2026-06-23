@@ -1,0 +1,24 @@
+#标题
+selftests/user_events: 修复 perf_test 中 packed 成员地址访问导致的编译警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译 `tools/testing/selftests/user_events/perf_test.c` 测试程序时，编译器报出 `-Waddress-of-packed-member` 警告。警告指出对结构体 `user_reg` 中的 packed 成员 `write_index` 取地址可能导致非对齐的指针访问。
+
+#主要错误日志
+```text
+perf_test.c:239:38: warning: taking address of packed member 'write_index' of class or structure 'user_reg' may result in an unaligned pointer value [-Waddress-of-packed-member]
+  239 |         ASSERT_NE(-1, write(self->data_fd, &reg.write_index,
+      |                                             ^~~~~~~~~~~~~~~
+```
+
+#问题根因
+代码在调用 `write()` 系统调用时，直接对结构体 `user_reg` 中的 packed 成员 `write_index` 进行了取地址操作（`&reg.write_index`）。由于该成员属于 packed 结构体，编译器认为其可能未对齐，因此触发关于非对齐指针访问的警告。
+
+#解决方案
+由于 `write()` 系统调用对内存对齐没有强制要求，通过显式将 `&reg.write_index` 强制转换为 `(void *)` 来抑制该编译器警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1e7f0d579208eb7dcca42c75f2d9188ca61eb8c

@@ -1,0 +1,25 @@
+#标题
+mlx5e：模块 EEPROM 读取错误时返回值处理错误导致用户态工具误判成功
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 ethtool 读取模块 EEPROM 信息失败时，命令未报错退出，而是返回成功状态并打印全零的垃圾数据或错误提示后的内存残留数据。
+例如执行 `ethtool -m eth2` 时，虽然内核日志显示 "Query module eeprom by page failed"，但用户态依然输出了 Hex dump 数据，且数据内容包含了错误信息字符串（如 "failed, read 0 bytes, err -5"）。
+
+#主要错误日志
+netlink warning: mlx5_core: Query module eeprom by page failed, read 0 bytes, err -5
+
+#问题根因
+函数 `mlx5e_get_module_eeprom_by_page()` 的错误处理逻辑存在缺陷：
+1. 在发生错误（如 `size_read < 0`）时，错误地返回了已读取的字节数 `i` 而不是错误码。
+2. 如果错误发生在读取任何字节之前（即 `i` 为 0），函数返回 0，这被上层解释为“成功”且“读取了 0 字节”，导致用户态工具（ethtool）误认为操作成功并尝试解析缓冲区，从而打印出无效数据。
+
+#解决方案
+修改 `drivers/net/ethernet/mellanox/mlx5/core/en_ethtool.c` 中的错误处理逻辑：
+1. 删除针对 `-EINVAL` 的特殊判断处理。
+2. 当 `size_read < 0` 时，直接返回错误码 `size_read`，而不是返回已读取字节数。这确保了错误能够正确向上传递，避免用户态误判。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f4cf744c31e02acc3ecdcb4c8da3a4bf91457e59

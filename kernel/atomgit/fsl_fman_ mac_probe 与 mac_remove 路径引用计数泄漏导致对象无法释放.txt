@@ -1,0 +1,29 @@
+#标题
+fsl/fman: mac_probe 与 mac_remove 路径引用计数泄漏导致对象无法释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 FMan MAC 驱动加载过程中，若 `mac_probe` 函数执行失败触发错误处理流程，或者驱动卸载执行 `mac_remove` 时，部分设备的引用计数未被正确释放（put_device）。这导致引用计数泄漏，相关设备对象无法被正常销毁，可能造成内存资源长期占用无法回收。
+
+#主要错误日志
+- dev_err(dev, "failed to read cell-index for %pOF\n", dev_node);
+- dev_err(dev, "fman_bind(%pOF) failed\n", dev_node);
+- dev_err(dev, "could not get registers\n");
+- dev_err_probe(dev, err, "could not request resource\n");
+- dev_err(dev, "devm_ioremap() failed\n");
+- dev_err(dev, "of_parse_phandle(%pOF, fsl,fman-ports) failed\n", mac_node);
+- dev_err(dev, "of_find_device_by_node(%pOF) failed\n", dev_node);
+- dev_err(dev, "dev_get_drvdata(%pOF) failed\n", dev_node);
+
+#问题根因
+在 `mac_probe()` 函数中，调用 `of_find_device_by_node()`、`fman_bind()` 和 `fman_port_bind()` 会增加设备的引用计数。但在 `mac_probe()` 的错误处理路径以及 `mac_remove()` 移除函数中，并未成对调用 `put_device()` 来释放这些引用。这导致获取的设备引用在驱动生命周期结束时未被归还，造成引用计数泄漏。
+
+#解决方案
+1. 在 `mac_probe()` 函数中，针对 `fman` 设备和 `fman_port` 设备，在绑定成功后立即调用 `put_device()` 释放一次引用。这是因为 `of_find_device_by_node` 和 `bind` 操作各获取了一次引用，其中一次需立即释放，另一次留待 `mac_remove` 释放。
+2. 完善 `mac_probe()` 的错误处理跳转逻辑，在各级错误处理标签（如 `_return_dev_put`、`_return_dev_arr_put`）中增加对应的 `put_device()` 调用，确保出错时已获取的引用能被回滚释放。
+3. 在 `mac_remove()` 函数中，增加遍历释放 `fman_port_devs` 数组以及释放 `fman_dev` 的操作，确保驱动卸载时释放所有持有的设备引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e4dfc1341ccca9e73abd5e703388701cee02960c

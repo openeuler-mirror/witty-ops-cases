@@ -1,0 +1,20 @@
+#标题
+AppArmor 修复 POSIX CPU 定时器 rlimit 设置失效问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 AppArmor 且内核开启 CONFIG_POSIX_TIMERS 的情况下，当通过 AppArmor 策略切换修改进程的 RLIMIT_CPU 资源限制时，虽然 rlimit 值被设置，但 POSIX CPU 定时器未同步更新，导致 CPU 时间限制无法对进程实际生效。
+
+#主要错误日志
+未知
+
+#问题根因
+Posix cpu timers 机制要求在设置 rlimit（特别是 RLIMIT_CPU）后，必须执行一个额外的步骤（调用 update_rlimit_cpu）来触发定时器的更新。在原有代码逻辑中，__aa_transition_rlimits 函数仅修改了 rlimit 的值，缺失了对 POSIX CPU 定时器的条件性更新步骤。
+
+#解决方案
+在 security/apparmor/resource.c 的 __aa_transition_rlimits 函数中，增加对 RLIMIT_CPU 的判断逻辑。当设置的资源类型为 RLIMIT_CPU、限制值不为无穷大（RLIM_INFINITY）且内核启用了 CONFIG_POSIX_TIMERS 配置项时，显式调用 update_rlimit_cpu 函数更新当前进程的 POSIX CPU 定时器，确保资源限制生效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/05b1069c136ef1e82fd0755f939d70dc853f9ba9

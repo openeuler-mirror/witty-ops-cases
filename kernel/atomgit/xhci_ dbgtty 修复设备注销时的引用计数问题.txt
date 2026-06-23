@@ -1,0 +1,20 @@
+#标题
+xhci: dbgtty 修复设备注销时的引用计数问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 xhci dbgtty 设备注销过程中，直接调用 `tty_vhangup()` 同步挂起 TTY 设备时，未增加引用计数。这可能导致在挂起操作期间，TTY 端口结构体因引用计数管理不当而被提前释放或引发 Use-After-Free 风险，造成内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `xhci_dbc_tty_unregister_device` 函数中使用了 `tty_vhangup(port->port.tty)` 进行同步挂起，该函数不具备引用计数保护机制。而正确的做法应当使用 `tty_port_tty_vhangup()`，该函数在挂起操作期间会通过 `scoped_guard(tty_port_tty)` 自动增加引用计数，确保操作过程中 port 对象的有效性。
+
+#解决方案
+将 `drivers/usb/host/xhci-dbgtty.c` 文件中 `xhci_dbc_tty_unregister_device` 函数内的 `tty_vhangup(port->port.tty)` 调用替换为 `tty_port_tty_vhangup(&port->port)`，以确保在挂起操作期间持有正确的引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/306a038bf2dc3e91dec47d97341f71308217dac7

@@ -1,0 +1,20 @@
+#标题
+RDMA/bnxt_re: SRQ limit 设置因冗余工作负载检查失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Broadcom RDMA 适配器的 SRQ（共享接收队列）配置路径中，当尝试设置 SRQ limit 时，该限制值可能无法正确生效。由于代码中存在基于当前工作负载（available count）的判断逻辑，导致硬件上下文中的 `srq_limit` 值未被正确设置，进而导致 SRQ 限流机制无法按预期触发。
+
+#主要错误日志
+- 推断：Modify HW SRQ failed! （若旧逻辑中的 `bnxt_qplib_modify_srq` 调用失败，原代码会打印此错误）
+
+#问题根因
+在处理 `IB_SRQ_LIMIT` 修改请求时，代码逻辑错误地引入了对当前 SRQ 可用工作负载的检查。只有当可用计数大于阈值时才通过 Doorbell 设置 SRQ limit，否则仅设置延迟武装标志。这种检查对于设置 SRQ limit 值到硬件上下文是不必要的，且会导致配置不生效或延迟，属于逻辑错误。
+
+#解决方案
+移除设置 SRQ limit 时对所有工作负载条件的检查逻辑。删除 `bnxt_qplib_modify_srq` 函数及其相关调用，改为在 `bnxt_re_modify_srq` 接口中直接调用 `bnxt_qplib_srq_arm_db` 来设置阈值，确保 SRQ limit 能够立即写入硬件上下文。同时移除 `bnxt_qplib_post_srq_recv` 中多余的延迟武装处理逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d5a0310d55d23a395c62f3f52c0e586cd98ad0b4

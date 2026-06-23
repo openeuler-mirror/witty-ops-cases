@@ -1,0 +1,24 @@
+#标题
+NFSv4: _nfs4_proc_lookupp 函数调用参数错误导致语义不符
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `_nfs4_proc_lookupp` 函数中，`RPC_TASK_TIMEOUT` 标志位被错误地传递给了 `nfs4_init_sequence()` 函数，而非传递给 RPC 调用层。这导致当设置 `NFS_MOUNT_SOFTREVAL` 挂载选项时，超时标志无法正确作用于 RPC 请求，影响了 LOOKUPP 操作的重试与超时行为逻辑。此问题由 Smatch 静态代码检查工具发现。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `_nfs4_proc_lookupp` 函数实现中，代码逻辑将 `task_flags`（可能包含 `RPC_TASK_TIMEOUT`）错误地传递给了 `nfs4_init_sequence()` 函数。
+根据 Commit 描述，LOOKUPP 是一个幂等操作，`nfs4_init_sequence()` 不应要求服务器缓存结果，且 `RPC_TASK_TIMEOUT` 标志应当传递给 RPC 层以正确处理超时逻辑。原代码不仅参数传递对象错误，还导致 `nfs4_init_sequence()` 的参数设置不正确（原本传入的标志位被误用为该函数的参数）。
+
+#解决方案
+修正函数调用逻辑与参数传递：
+1. 调整 `nfs4_init_sequence()` 的调用位置与参数，将其独立调用并显式传入参数 `0, 0`，不再混入 `task_flags`。
+2. 将 `nfs4_call_sync` 替换为 `nfs4_do_call_sync`，并将 `task_flags` 正确传递给该 RPC 调用函数，确保 `RPC_TASK_TIMEOUT` 和 `RPC_TASK_MOVEABLE` 等标志能正确作用于 RPC 层。
+3. 补充了对 `NFS_CAP_MOVEABLE` 功能的检查，若支持则添加 `RPC_TASK_MOVEABLE` 标志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1591cffd39465489b1662f518b23f474251a621e

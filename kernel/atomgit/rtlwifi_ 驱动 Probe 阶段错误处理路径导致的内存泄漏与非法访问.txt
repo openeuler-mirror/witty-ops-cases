@@ -1,0 +1,28 @@
+#标题
+rtlwifi: 驱动 Probe 阶段错误处理路径导致的内存泄漏与非法访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Realtek rtlwifi 无线网卡驱动初始化（probe）过程中，若 `init_sw_vars` 或 `rtl_pci_init` 等步骤失败，内核将出现内存泄漏；同时，由于错误处理路径逻辑错误，可能会访问已释放的资源（如 `rtl_wq` 工作队列），导致内核崩溃或内存损坏。
+
+#主要错误日志
+- pr_err("Can't init_sw_vars\n");
+- pr_err("Failed to init PCI\n");
+- pr_err("Can't register mac80211 hw.\n");
+
+#问题根因
+驱动在 `rtl_pci_probe` 函数的错误处理路径中，未按照初始化的逆序进行资源释放：
+1. 当 `init_sw_vars` 失败时，代码错误地跳转到了 `fail3` 标签，导致未调用 `rtl_deinit_core`，且当前 `rtl_deinit_core` 会销毁 `rtl_wq` 工作队列，后续若再调用相关清理函数将引发非法访问。
+2. 当 `rtl_pci_init` 或 `ieee80211_register_hw` 失败时，未调用 `rtl_pci_deinit` 和 `deinit_sw_vars`，导致内存泄漏。
+3. 错误路径中保留了不必要的 `pci_set_drvdata(pdev, NULL)` 调用，这在核心驱动代码已处理的情况下可能导致额外的内存泄漏风险。
+
+#解决方案
+修改 `rtl_pci_probe` 中的错误处理跳转逻辑，确保资源按初始化的逆序释放：
+1. 调整 `init_sw_vars`、`rtl_pci_init` 和 `ieee80211_register_hw` 失败时的跳转标签（goto fail2/fail4/fail5），使其正确跳转到对应的清理流程。
+2. 新增 `fail5` 标签调用 `rtl_pci_deinit(hw)`，新增 `fail3` 标签调用 `deinit_sw_vars(hw)`。
+3. 移除冗余的 `pci_set_drvdata(pdev, NULL)` 调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/26b3c317265cdf7a09ea2caa11ecd5124d6dff95

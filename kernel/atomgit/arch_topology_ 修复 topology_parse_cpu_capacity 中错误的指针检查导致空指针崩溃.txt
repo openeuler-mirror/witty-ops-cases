@@ -1,0 +1,21 @@
+#标题
+arch_topology: 修复 topology_parse_cpu_capacity 中错误的指针检查导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统初始化阶段解析 CPU 拓扑信息时，若底层 `of_clk_get()` 返回 NULL 指针，内核会错误地继续执行后续逻辑，导致在调用 `clk_get_rate()` 时引发 NULL 指针引用错误，可能造成内核 panic 或Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中错误地使用了 `!PTR_ERR_OR_ZERO(cpu_clk)` 来检查时钟指针。根据 `include/linux/err.h` 文档，`PTR_ERR_OR_ZERO(ptr)` 仅当指针为错误指针时返回错误码，否则返回 0。
+这意味着当 `cpu_clk` 为有效指针或 NULL 指针时，`PTR_ERR_OR_ZERO()` 均返回 0。经过逻辑非运算 `!` 后，这两种情况均判定为真，导致代码跳过了对 NULL 指针的拦截，进而将 NULL 传入 `clk_get_rate()` 触发空指针崩溃。
+
+#解决方案
+将错误的检查逻辑 `!PTR_ERR_OR_ZERO(cpu_clk)` 替换为 `!IS_ERR_OR_NULL(cpu_clk)`。修正后的逻辑仅在指针非错误且非 NULL 时才继续执行，有效防止了向 `clk_get_rate()` 传递 NULL 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8782d4cdb5f9b2799148b2ce5230c87b0be6953a

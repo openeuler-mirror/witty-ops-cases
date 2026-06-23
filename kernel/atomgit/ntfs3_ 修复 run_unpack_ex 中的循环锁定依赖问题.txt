@@ -1,0 +1,25 @@
+#标题
+ntfs3: 修复 run_unpack_ex 中的循环锁定依赖问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在运行 ntfs3 文件系统相关操作时，触发循环锁定依赖（circular locking dependency）警告，表明存在潜在的死锁风险。这通常发生在 `run_unpack_ex` 函数执行过程中，涉及 `mft.ni->file.run_lock` 锁的获取顺序与锁依赖图的冲突。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `run_unpack_ex` 函数中，代码尝试在持有特定锁的情况下调用 `ntfs_refresh_zone(sbi)`。原有的实现强制使用 `down_read(lock)` 获取读锁，这导致了锁的获取顺序与其他代码路径冲突，从而引发了循环锁定依赖问题。根本原因在于锁的强制获取破坏了内核锁的层级验证规则。
+
+#解决方案
+修改 `fs/ntfs3/run.c` 中的 `run_unpack_ex` 函数，将强制获取读锁 `down_read(lock)` 改为尝试获取 `down_read_trylock(lock)`。
+具体逻辑变更为：
+1. 若锁存在且 `down_read_trylock` 成功获取锁，则执行 `ntfs_refresh_zone(sbi)` 并随后释放锁。
+2. 若锁存在但 `down_read_trylock` 获取失败，则跳过执行 `ntfs_refresh_zone(sbi)`，避免阻塞导致死锁。
+3. 若锁不存在，则直接执行 `ntfs_refresh_zone(sbi)`。
+此修改避免了强制等待锁，从而打破了循环依赖链。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d8d307ccb77fb725fad298336c1cb7437d3a69f6

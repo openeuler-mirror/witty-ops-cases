@@ -1,0 +1,22 @@
+#标题
+timers: Fix NULL function pointer race in timer_shutdown_sync()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下，当 `timer_shutdown_sync()` 与定时器到期处理程序发生竞争时，会触发内核警告 `WARN_ON_ONCE(!fn)`。具体表现为系统日志中出现内核栈转储，指示在 `expire_timers()` 中检测到空的定时器函数指针。
+
+#主要错误日志
+[内核日志中出现的警告信息]
+WARN_ON_ONCE(!fn)
+
+#问题根因
+这是一个竞争条件问题。`timer_shutdown_sync()` 在执行时，如果发现定时器正在另一个 CPU 上运行（`base->running_timer == timer`），它不会分离定时器，但会错误地将定时器函数指针 `timer->function` 设置为 `NULL`。
+当该定时器在另一个 CPU 上运行完毕后，如果被再次挂起，它将带有一个 `NULL` 的函数指针进入下一次调度。随后当定时器再次触发时，`expire_timers()` 调用该空指针函数，从而触发 `WARN_ON_ONCE(!fn)` 警告。
+
+#解决方案
+修改 `__try_to_del_timer_sync` 函数中的逻辑，将 `timer->function = NULL` 操作移入 `if (base->running_timer != timer)` 判断分支内部。确保只有在成功分离定时器（`detach_if_pending`）的情况下才将函数指针置空。如果定时器正在运行，则保留函数指针不变，防止出现带 `NULL` 函数的 pending 定时器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/53acf258492ce6aae9446d09ecffb2b9d4b8d49e

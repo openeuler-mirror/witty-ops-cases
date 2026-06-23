@@ -1,0 +1,20 @@
+#标题
+blk-mq 结构体 KABI 破损修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能 CONFIG_BLK_CGROUP_IOINFLIGHT 配置项的情况下，内核编译或 ABI 检查阶段报错，提示 struct request 结构体发生了 KABI（内核应用程序二进制接口）变更，破坏了预留空间的兼容性布局。
+
+#主要错误日志
+未知
+
+#问题根因
+在 struct request 结构体中，直接添加了 `struct blkcg_gq *blkg` 字段。由于该结构体是核心数据结构，直接增加字段改变了其大小和成员偏移，破坏了内核 KABI 的稳定性保证。同时，该改动未复用已有的 KABI_RESERVE 预留空间，导致了 KABI broken 问题。
+
+#解决方案
+利用 KABI_USE 机制修复 KABI 破损问题。删除了直接新增的 `blkg` 字段定义，改为复用结构体末尾预留的 `KABI_RESERVE(6)` 空间。在 CONFIG_BLK_CGROUP_IOINFLIGHT 配置开启时，通过 `KABI_USE(6, struct blkcg_gq *blkg)` 宏将预留空间转换为 `blkg` 字段；否则保持原有的 `KABI_RESERVE(6)` 定义，从而在增加功能的同时维持了 struct request 的 KABI 兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/57abb42302b8f9b15133cc981a47fa4e20543567

@@ -1,0 +1,40 @@
+#标题
+powerpc/mm/fault: kfence 在读取 /proc/kcore 时误报无效读或释放后使用错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PowerPC 架构下开启 KFENCE 功能后，执行 `dd if=/proc/kcore of=/dev/null bs=1M` 读取 /proc/kcore 时，KFENCE 会产生误报，打印 "invalid read" 或 "use-after-free read" 错误信息，导致内核日志中出现虚假的故障告警。
+
+#主要错误日志
+```
+BUG: KFENCE: invalid read in copy_from_kernel_nofault+0x9c/0x1a0
+Invalid read at 0xc0000000fdff0000:
+ copy_from_kernel_nofault+0x9c/0x1a0
+ read_kcore_iter+0x57c/0xa04
+ proc_reg_read_iter+0xe4/0x16c
+ vfs_read+0x320/0x3ec
+ ksys_read+0x90/0x154
+ system_call_exception+0x120/0x310
+ system_call_vectored_common+0x15c/0x2ec
+
+BUG: KFENCE: use-after-free read in copy_from_kernel_nofault+0x9c/0x1a0
+Use-after-free read at 0xc0000000fe050000 (in kfence-#2):
+ copy_from_kernel_nofault+0x9c/0x1a0
+ read_kcore_iter+0x57c/0xa04
+ proc_reg_read_iter+0xe4/0x16c
+ vfs_read+0x320/0x3ec
+ ksys_read+0x90/0x154
+ system_call_exception+0x120/0x310
+ system_call_vectored_common+0x15c/0x2ec
+```
+
+#问题根因
+`copy_from_kernel_nofault()` 函数在读取 /proc/kcore 时可能会访问未映射的 kfence 对象从而触发缺页异常。该函数本身定义了自己的 fixup 表来处理此类非预期故障。然而，内核缺页处理路径 `___do_page_fault()` 在检测到内核态非法访问时，直接调用 `kfence_handle_page_fault()` 进行处理，未先检查触发异常的指令地址（NIP）是否位于异常处理表中。这导致本应由 fixup 表处理的正常容错流程被 KFENCE 捕获并误报为非法访问或释放后使用错误。
+
+#解决方案
+在 `___do_page_fault()` 函数处理内核态非法访问逻辑中，增加对异常表的检查。在调用 `kfence_handle_page_fault()` 之前，先通过 `search_exception_tables(instruction_pointer(regs))` 判断触发异常的指令是否存在于 fixup 表中。如果存在，说明该故障已有对应的修复处理（如 `copy_from_kernel_nofault` 的容错机制），此时应跳过 KFENCE 的处理，避免误报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d58264ec6f63cd52e9eb748a9bd7efa282658d96

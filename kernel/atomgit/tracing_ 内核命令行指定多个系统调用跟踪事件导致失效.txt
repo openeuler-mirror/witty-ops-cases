@@ -1,0 +1,25 @@
+#标题
+tracing: 内核命令行指定多个系统调用跟踪事件导致失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核命令行中指定多个系统调用跟踪事件（例如：`trace_event=syscalls:sys_enter_openat,syscalls:sys_enter_close`）时，系统启动后这些事件虽然显示在 `tracing/set_event` 文件中为启用状态，但实际上无法捕获到任何跟踪数据。
+
+#主要错误日志
+Failed to enable trace event: %s\n
+
+#问题根因
+系统调用跟踪点的激活依赖于全局引用计数（`sys_tracepoint_refcount`）从 0 变为 1，以此触发任务（包括 init 进程 pid 1）的 syscall work 注册。
+当前的 `early_enable_events()` 实现逻辑中，如果指定了多个事件，处理流程是交错进行的：“禁用 A -> 启用 A -> 禁用 B -> 启用 B”。这种交错处理导致全局引用计数始终无法归零，从而无法触发 0->1 的转换，导致系统调用跟踪功能未能真正注册激活。
+
+#解决方案
+将 `early_enable_events()` 的处理逻辑拆分为两个独立的阶段：
+1. 先统一禁用所有指定的事件。
+2. 再统一启用所有指定的事件。
+
+通过这种两阶段处理，确保引用计数在重新启用前能降至零，从而正确触发系统调用事件的激活机制。同时重构代码提取公共辅助函数 `__early_set_events()` 以避免逻辑重复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa0b249fa489887213bf0e5836ab2ec6c7a6586f

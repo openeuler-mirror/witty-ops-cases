@@ -1,0 +1,23 @@
+#标题
+sparc架构M7 memcpy异常处理中copy_from/to_user返回值计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在SPARC M7处理器上，当 `copy_from_user` 或 `copy_to_user` 函数访问用户空间内存发生异常（如缺页）时，函数返回值（未拷贝的字节数）计算错误，导致调用者误判拷贝结果，可能引发用户空间数据损坏或内核状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 Commit 34060b8fffa7 引入的 M7 `memcpy` 实现中，汇编代码里的异常处理（exception handler）计算剩余待拷贝字节数时存在逻辑错误。具体体现在 `memcpy_retl_o2_plus_o5_plus_*` 等宏的偏移量参数不正确，以及部分代码路径使用了错误的恢复宏（如使用了 `memcpy_retl_o2_plus_g1` 而非正确的 `memcpy_retl_o2_plus_o3`）。这导致在异常发生时，无法根据当前寄存器状态准确计算出剩余字节数。
+
+#解决方案
+修正 `arch/sparc/lib/M7memcpy.S` 中的异常处理逻辑，调整异常返回时的偏移量参数，确保计算剩余字节数的算法正确：
+1. 修正主循环和尾部的 `EX_ST_FP` 和 `EX_LD_FP` 宏调用中的偏移量参数，使其匹配实际未完成的数据量。
+2. 修正逐字节拷贝路径，将错误的 `memcpy_retl_o2_plus_g1` 替换为 `memcpy_retl_o2_plus_o3`。
+3. 在 `arch/sparc/lib/Memcpy_utils.S` 中新增 `memcpy_retl_o2_plus_o3` 和 `memcpy_retl_o2_plus_o3_plus_1` 函数入口，以支持修正后的计算逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f5ef12a24fb56fce4da08b81330bffbe222268d

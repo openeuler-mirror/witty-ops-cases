@@ -1,0 +1,20 @@
+#标题
+bpf: 修复 struct bpf_map 结构体 KABI 被破坏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在引入补丁 "bpf: Prevent tail call between progs attached to different hooks" 后，修改了 `struct bpf_map` 结构体定义，导致结构体布局发生变化，破坏了内核应用程序二进制接口（KABI）的稳定性。这可能导致依赖于原结构体布局的内核模块或驱动在加载或运行时出现兼容性问题，甚至触发 panic 或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复 BPF 尾调用的安全问题（Commit e0b1224b89c4）时，开发者在 `struct bpf_map` 的联合体中直接新增了 `attach_func_proto` 字段。由于该字段是 `btf_type` 指针类型，改变了结构体成员的偏移和布局，直接破坏了 KABI 兼容性。
+
+#解决方案
+利用内核提供的 KABI 保留机制进行修复。将 `attach_func_proto` 字段从联合体内部移出，改为使用原本保留的 `KABI_RESERVE(2)` 字段空间进行存储，即通过 `KABI_USE(2, const struct btf_type *attach_func_proto)` 方式定义该成员。同时，将代码中对 `map->owner.attach_func_proto` 的访问逻辑修改为直接访问 `map->attach_func_proto`，从而在不改变结构体原有布局的前提下实现功能扩展，保持 KABI 兼容。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7e40445fa19328e52c252168bc75646319dfd342

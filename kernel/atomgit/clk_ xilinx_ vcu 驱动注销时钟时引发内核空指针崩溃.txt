@@ -1,0 +1,25 @@
+#标题
+clk: xilinx: vcu 驱动注销时钟时引发内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Xilinx VCU 驱动加载过程中，若 `pll_post` 时钟注册失败，驱动在清理资源并调用注销函数时，会对无效的 `pll_post` 指针进行注销操作，导致内核发生空指针引用崩溃，触发 kernel panic/oops。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address 008
+Call trace:
+ clk_hw_unregister+0xc/0x20
+ clk_hw_unregister_fixed_factor+0x18/0x30
+ xvcu_unregister_clock_provider+0xcc/0xf4 [xlnx_vcu]
+ xvcu_probe+0x2bc/0x53c [xlnx_vcu]
+
+#问题根因
+在 `xvcu_unregister_clock_provider` 函数中，代码逻辑未检查 `pll_post` 指针的有效性。当 `pll_post` 注册失败时，该指针被置为 NULL 或 ERR（错误指针），但注销流程依然直接调用 `clk_hw_unregister_fixed_factor(xvcu->pll_post)`，导致在 `clk_hw_unregister` 内部访问无效地址引发崩溃。
+
+#解决方案
+在调用 `clk_hw_unregister_fixed_factor` 注销 `pll_post` 之前，增加 `IS_ERR_OR_NULL` 判断条件。只有当 `pll_post` 指针既不是 NULL 也不是错误指针时，才执行注销操作，从而避免对未成功注册的时钟进行非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e9cc893655bf9eabcb09b6e45a8cf9d40c52d688

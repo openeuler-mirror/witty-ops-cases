@@ -1,0 +1,23 @@
+#标题
+uacce 并发场景下 poweroff 导致空指针访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在虚拟化环境中执行强制关机（poweroff -f）时，若存在未完成的加速器服务，uacce_fops_release 与 uacce_remove 可能并发执行。该并发场景会导致 uacce_fops_release 中调用 uacce_put_queue 时访问到空的 ops 指针，引发内核空指针访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+当 "poweroff -f" 被调用时，uacce_fops_release 和 uacce_remove 存在并发执行的可能性。在此竞态条件下，uacce_put_queue 操作可能会访问到一个已经为空的 ops 指针。根本原因在于状态检查逻辑不完善，导致在不合法的状态下尝试执行停止或释放操作，进而触发了空指针解引用。
+
+#解决方案
+修复 uacce 驱动的队列停止与释放逻辑，增加严格的状态检查：
+1. 在 uacce_stop_queue 函数中，前置检查队列状态，若状态不为 UACCE_Q_STARTED 则直接返回，避免无效操作；同时调整状态流转，将状态设为 UACCE_Q_INIT 而非 UACCE_Q_ZOMBIE。
+2. 在 uacce_put_queue 函数中，调用 uacce_stop_queue 后增加状态判断，仅当状态为 UACCE_Q_INIT 时才执行 ops->put_queue 操作；最后将队列状态更新为 UACCE_Q_ZOMBIE。
+通过上述状态机的修正，防止在并发移除设备过程中访问无效的 ops 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/166b2a3797ed26232a50049dce1fb0a27eaf47cb

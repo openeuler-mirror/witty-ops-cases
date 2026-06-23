@@ -1,0 +1,26 @@
+#标题
+blktrace在抢占上下文中错误使用__this_cpu_read/write导致内核BUG
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 blktrace ftrace 的情况下运行 blktests blktrace/002 测试用例时，内核检测到在可抢占上下文中使用了禁止抢占的 per-CPU 变量操作接口，触发 BUG 并打印调用栈。具体表现为执行 `dd` 等IO操作时，系统抛出 "BUG: using __this_cpu_read() in preemptible [00000000] code" 警告，导致测试用例失败。
+
+#主要错误日志
+[   81.357294] BUG: using __this_cpu_read() in preemptible [00000000] code: dd/2516
+[   81.362842] caller is tracing_record_cmdline+0x10/0x40
+[   81.362872] CPU: 16 UID: 0 PID: 2516 Comm: dd Tainted: G                 N  7.0.0-rc1lblk+ #84 PREEMPT(full)
+[   81.362895]  check_preemption_disabled+0xce/0xe0
+[   81.362902]  tracing_record_cmdline+0x10/0x40
+[   81.362923]  __blk_add_trace+0x307/0x5d0
+
+#问题根因
+函数 `tracing_record_cmdline()` 内部使用了 `__this_cpu_read()` 和 `__this_cpu_write()` 操作 per-CPU 变量 `trace_cmdline_save`，且依赖 `trace_save_cmdline()` 中的 `lockdep_assert_preemption_disabled()` 断言。这些操作设计上要求在抢占被禁用的上下文中执行（如调度器上下文）。
+然而，`__blk_add_trace()` 函数在 ring buffer 预留之前（此时进程上下文抢占是开启的）过早调用了 `tracing_record_cmdline(current)`。由于 `ring_buffer_lock_reserve()` 才会禁用抢占，因此在预留前调用该函数导致了在可抢占上下文中执行禁止抢占的 per-CPU 操作，从而触发内核 BUG。
+
+#解决方案
+将 `tracing_record_cmdline(current)` 的调用位置从 ring buffer 预留之前移动到预留之后。具体修改是在 `__blk_add_trace()` 函数中，先调用 `trace_buffer_lock_reserve()` 成功预留事件后再执行 `tracing_record_cmdline(current)`。此时抢占已被禁用，满足该函数的执行上下文要求，从而避免 BUG。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a62eb4c089b3b2153c048bc2b5a3ae9e8c3664b1

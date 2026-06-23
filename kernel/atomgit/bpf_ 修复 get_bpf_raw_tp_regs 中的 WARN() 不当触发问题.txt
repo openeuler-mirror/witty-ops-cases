@@ -1,0 +1,23 @@
+#标题
+bpf: 修复 get_bpf_raw_tp_regs 中的 WARN() 不当触发问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BPF 原始跟踪点处理路径中，当嵌套层级超过预设数组大小时，内核会触发 WARN_ON_ONCE 告警并打印调用栈。这导致在正常的拒绝服务返回 -EBUSY 之前，产生了不必要的内核告警信息，可能干扰运维判断或触发无关的监控告警。
+
+#主要错误日志
+WARNING: CPU: X PID: Y at kernel/trace/bpf_trace.c:1834 get_bpf_raw_tp_regs()
+Call Trace:
+<...>
+(日志上下文推断：由 WARN_ON_ONCE 触发，表明检测到 nest_level 越界)
+
+#问题根因
+在 `get_bpf_raw_tp_regs` 函数中，代码使用 `WARN_ON_ONCE` 来检查嵌套层级 `nest_level` 是否越界。该场景下，越界访问虽然代表逻辑异常，但代码逻辑已经能够正确处理该错误情况（通过返回 ERR_PTR(-EBUSY) 拒绝请求）。在此处使用 WARN_ON_ONCE 属于过度告警，将非致命的、可预期的资源繁忙情况当作内核严重错误打印，导致日志噪音。
+
+#解决方案
+移除 `get_bpf_raw_tp_regs` 函数中的 `WARN_ON_ONCE` 宏调用，仅保留嵌套层级的数值判断逻辑。修改后，当嵌套层级越界时，函数静默递减计数并返回 -EBUSY 错误，不再触发内核告警打印，从而消除误报干扰。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/758adfc3b024adde68777b1ea9f97e3af7b895d1

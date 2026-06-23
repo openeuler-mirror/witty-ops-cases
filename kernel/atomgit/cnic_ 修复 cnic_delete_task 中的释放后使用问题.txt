@@ -1,0 +1,20 @@
+#标题
+cnic: 修复 cnic_delete_task 中的释放后使用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载或停止 Broadcom cnic 设备硬件（如 bnx2x）过程中，若只使用非同步接口取消延迟任务 `delete_task`，该任务可能在相关工作队列销毁或资源释放后仍在其他 CPU 上运行，导致访问已释放内存，引发内核崩溃或数据结构破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `cnic_cm_stop_bnx2x_hw` 中，原代码使用 `cancel_delayed_work` 取消 `delete_task`，该函数仅尝试取消挂起的任务但不等待正在运行的任务完成。随后调用 `flush_workqueue` 试图刷新队列，但这种组合无法保证 `delete_task` 不会在 `flush_workqueue` 返回后继续访问已被回收的资源（存在 UAF 漏洞），导致释放后使用问题。
+
+#解决方案
+将 `cancel_delayed_work` 替换为 `cancel_delayed_work_sync`。该函数不仅能取消挂起的延迟任务，还会同步等待正在运行的任务执行完毕，确保在函数返回时任务已完全停止，不会在资源释放后再次访问，从而修复 UAF 漏洞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e5d4fd32699d239067b6477102ee4fa1437f87e5

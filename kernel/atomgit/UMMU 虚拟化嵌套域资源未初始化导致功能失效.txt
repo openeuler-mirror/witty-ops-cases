@@ -1,0 +1,21 @@
+#标题
+UMMU 虚拟化嵌套域资源未初始化导致功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建和使用虚拟化场景下的 logic_ummu_viommu 嵌套域时，由于资源未正确初始化，导致相关功能失效，可能引发内核崩溃或 IOMMU 操作异常。
+
+#主要错误日志
+（推断）pr_debug("invalid viommu.\n")
+
+#问题根因
+在 `logic_ummu_viommu_alloc_domain_nested` 函数中分配嵌套域时，未将 `logic_domain->logic_viommu` 指针指向已分配的 `logic_vummu` 实例。这导致后续在 `logic_ummu_viommu_cache_invalidate` 等函数中访问该指针时，访问了未初始化的内存地址，进而引发错误。同时，在释放域时，未清理 `logic_viommu->nested` 指针，导致残留的无效引用。
+
+#解决方案
+1. 在 `logic_ummu_viommu_alloc_domain_nested` 函数中分配完 `logic_domain` 后，增加 `logic_domain->logic_viommu = logic_vummu;` 赋值语句，确保资源指针正确初始化。
+2. 在域释放路径 `logic_ummu_free` 的嵌套域处理分支中，增加 `logic_domain->logic_viommu->nested = NULL;` 语句，防止产生悬空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c473e683f78016a728982c72281e1ad48b3fb19e

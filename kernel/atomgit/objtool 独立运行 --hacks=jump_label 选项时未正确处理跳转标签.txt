@@ -1,0 +1,20 @@
+#标题
+objtool 独立运行 --hacks=jump_label 选项时未正确处理跳转标签
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当单独执行 `objtool --hacks=jump_label foo.o` 命令时，objtool 未能按预期将 jump labels 重写为 NOPs。这主要影响特定的调试场景，在某些仅使用 `--hacks=jump_label` 而未使用 `--orc`、`--stackval`、`--uaccess` 或 `--hacks=noinstr` 选项的内核构建过程中，可能会导致构建失败或处理结果不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `decode_sections` 函数中，调用 `add_special_section_alts()` 的条件判断逻辑遗漏了 `opts.hack_jump_label` 选项。该代码路径仅在 `stackval`、`orc`、`uaccess` 或 `noinstr` 选项被选中时才会运行。因此，当命令行仅提供 `--hacks=jump_label` 选项时，代码未能进入该逻辑分支执行 jump label 的重写操作。
+
+#解决方案
+修改 `tools/objtool/check.c` 文件中的 `decode_sections` 函数，在判断是否执行 `add_special_section_alts()` 的条件语句中增加对 `opts.hack_jump_label` 的检查。这使得当用户指定 `--hacks=jump_label` 选项时，程序能正确进入特殊段处理流程，从而修复 jump labels 到 NOPs 的转换逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/267c13369c256ac0967ff87291fea64ef4458b15

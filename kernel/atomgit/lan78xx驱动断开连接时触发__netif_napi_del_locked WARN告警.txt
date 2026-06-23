@@ -1,0 +1,29 @@
+#标题
+lan78xx驱动断开连接时触发__netif_napi_del_locked WARN告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 USB 网络设备（lan78xx）时，内核触发 WARN_ON 告警并打印调用栈。具体场景为 USB 设备断开连接（disconnect）路径上，内核检测到 NAPI 状态异常。伴随设备断开，日志中会出现大量的寄存器读取失败错误。
+
+#主要错误日志
+- lan78xx 1-1:1.0 enu1: Failed to read register index 0x000000c4. ret = -ENODEV
+- lan78xx 1-1:1.0 enu1: Failed to set MAC down with error -ENODEV
+- lan78xx 1-1:1.0 enu1: Link is Down
+- lan78xx 1-1:1.0 enu1: Failed to read register index 0x00000120. ret = -ENODEV
+- WARNING: CPU: 0 PID: 11 at net/core/dev.c:7417 __netif_napi_del_locked+0x2b4/0x350
+- Call trace:
+  __netif_napi_del_locked+0x2b4/0x350
+  lan78xx_disconnect+0xf4/0x360
+  usb_unbind_interface+0x158/0x718
+  ...
+
+#问题根因
+在 lan78xx_disconnect 函数中，显式调用了 netif_napi_del(&dev->napi)。此时 NAPI 仍处于使能状态，导致在 __netif_napi_del_locked 函数中触发警告。实际上，unregister_netdev() 会自动且安全地处理 NAPI 的清理工作，因此该处的显式调用不仅多余，而且引发了状态不一致的告警。
+
+#解决方案
+删除驱动 lan78xx_disconnect 函数中冗余的 netif_napi_del(&dev->napi) 调用，依赖 unregister_netdev() 自动完成 NAPI 的卸载。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a36e2e40eb9c59b0331d3293b36702d3f097082a

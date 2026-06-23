@@ -1,0 +1,23 @@
+#标题
+sw64 KVM 页面故障处理冗余查询内存插槽优化
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构 KVM 处理用户态页面错误时，代码逻辑存在冗余操作。虽然此问题不直接导致系统崩溃或 Panic，但会引起不必要的内存插槽查找开销，可能轻微影响虚拟机退出处理的性能。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `user_mem_abort()` 函数处理流程中，调用者已经获取并传递了对应的内存插槽指针，但原代码逻辑未直接使用该指针，而是再次调用 `gfn_to_pfn_prot` 和 `mark_page_dirty` 进行全局查找，导致冗余的内存插槽检索操作。
+
+#解决方案
+修改 `arch/sw_64/kvm/mmu.c` 文件中的 `user_mem_abort` 函数：
+1. 将 `gfn_to_pfn_prot(kvm, gfn, ...)` 替换为 `__gfn_to_pfn_memslot(memslot, gfn, ...)`，直接利用已传入的 `memslot` 指针进行物理页帧号查找。
+2. 将 `mark_page_dirty(kvm, gfn)` 替换为 `mark_page_dirty_in_slot(kvm, memslot, gfn)`，直接利用已传入的 `memslot` 指针标记页面为脏页。
+通过直接传递和使用 `memslot` 指针，避免了不必要的重复查找。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/55ce5feee5c5ee66862fd8fe520cecb5e31a78f7

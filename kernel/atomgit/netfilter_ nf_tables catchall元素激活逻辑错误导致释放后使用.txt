@@ -1,0 +1,25 @@
+#标题
+netfilter: nf_tables catchall元素激活逻辑错误导致释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 netfilter 事务中止操作时，由于 `nft_map_catchall_activate` 函数逻辑错误，导致 catchall 元素未能正确重新激活。具体表现为：
+1. 当执行 `DELSET` 操作中止时，`chain->use` 引用计数持续递减且无法恢复。
+2. 当 `chain->use` 降为零时，`DELCHAIN` 操作会成功释放 chain。
+3. 此时仍持有该 chain 引用的 catchall verdict 元素将访问已释放内存，触发释放后使用，可导致系统崩溃或本地权限提升。
+4. 本地无特权用户可通过 user namespaces 结合 nftables 触发此漏洞。
+
+#主要错误日志
+未知
+
+#问题根因
+`nft_map_catchall_activate()` 函数中的元素活性检查逻辑反转。
+正确的逻辑（参考 `nft_mapelem_activate`）应该是跳过已激活元素，处理非激活元素；但当前代码使用了错误的否定逻辑 `if (!nft_set_elem_active(...))`，导致跳过了非激活元素而处理已激活元素。这使得在中止路径下，`nft_setelem_data_activate()` 未被调用，`nft_data_hold()` 未执行以恢复 `chain->use` 引用计数，最终导致释放后使用。
+
+#解决方案
+修正 `nft_map_catchall_activate()` 中的条件判断逻辑，移除否定操作符，使其正确跳过已激活元素并处理非激活元素。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/61ab2aaaf9f988ef59cb94e56760c9aa6b28c1f7

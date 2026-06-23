@@ -1,0 +1,25 @@
+#标题
+nvme-tcp: 修复 I/O 超时导致的队列过早移除与数据损坏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NVMe 原生多路径环境下，当发生 I/O 超时并触发路径切换时，可能出现数据损坏。
+具体表现为：内核 socket 关闭后，Inflight I/O 被立即取消并上报为路径错误，触发成功的故障切换；但此时原 I/O 可能仍驻留在主机网络传输路径（如网卡发送队列 TX queue）中。由于用户态应用认为该 I/O 已在另一路径完成并重用了相关缓冲区，导致原路径发送了被覆盖的“损坏数据”，最终引发数据腐败。
+
+#主要错误日志
+- `dev_warn(nctrl->device, "qid %d: timeout draining sock wmem allocation expired\n", qid);`
+
+#问题根因
+在 nvme-tcp 驱动中，当 I/O 超时发生时，内核 socket 被关闭，导致所有 Inflight I/O 几乎立即被取消。由于传输路径默认启用了零拷贝，数据直接从用户缓冲区发送。当 I/O 因超时被取消并在新路径重试成功后，主机侧网络层（如 NIC TX queue）可能尚未完成原 I/O 的实际发送。此时，用户空间应用重用了该缓冲区，导致网络层发送了错误的数据，造成数据损坏。
+
+#解决方案
+在停止队列时，确保所有传输中的数据从主机角度完全发送完毕，防止缓冲区被过早重用。具体修改：
+1. 新增 `nvme_tcp_wait_queue` 函数，在停止队列后循环等待 socket 写缓冲区分配量归零或队列失效，最长等待 100ms。
+2. 将原有的 `nvme_tcp_stop_queue` 重命名为 `nvme_tcp_stop_queue_nowait`。
+3. 重构 `nvme_tcp_stop_queue` 接口，使其依次调用 `nvme_tcp_stop_queue_nowait` 和 `nvme_tcp_wait_queue`。
+4. 在 `nvme_tcp_stop_io_queues` 中优化停止逻辑，先批量发送停止所有队列的指令，再统一等待所有队列传输完成，以提升并发处理效率，同时解决并发超时导致的竞态问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9885b4d3d5cf76e8667a8eb4fc948a7e93cb8a8d

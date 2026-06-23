@@ -1,0 +1,21 @@
+#标题
+net_sched: drr 修复以 netem 作为子队列时导致的双向链表重复添加故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 DRR（Deficit Round Robin）队列调度算法，且配置 netem 作为子队列时，触发内核双向链表重复添加错误。具体表现为内核抛出 "list_add double add" 相关的 BUG 或调用栈警告，可能导致内核 panic 或网络协议栈异常挂起。
+
+#主要错误日志
+list_add double add: new=xxxx, prev=xxxx, next=xxxx.
+（注：典型 list_add corruption 日志，具体堆栈依现场而定）
+
+#问题根因
+在 `drr_enqueue` 函数中，判断是否将 DRR 类加入活跃链表的逻辑存在缺陷。原代码通过判断 `!cl->qdisc->q.qlen`（子队列长度是否为 0）来决定是否为“首次”入队。当子队列为 netem 时，netem 内部可能存在重传机制或数据包调度延迟，导致虽然 netem 向外报告队列长度为 0，但实际上内部仍有数据包在处理或即将重入队。此时若有新包入队，netem 内部逻辑可能导致数据包直接入队而不改变 qlen（或同步问题），使得 `first` 变量误判为真，导致同一个 class 被重复添加到 `q->active` 链表中，引发链表破坏。
+
+#解决方案
+修改 `drr_enqueue` 中的判断逻辑，不再依赖子队列的 qlen 计数来判断类是否活跃，而是直接检查类的 `alist` 成员是否为空。引入辅助函数 `cl_is_active(cl)`，通过 `list_empty(&cl->alist)` 准确判断该类是否已在活跃链表中，从而避免重复添加。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/721d4adb146e26530cc7c563979cc4d5a35af60d

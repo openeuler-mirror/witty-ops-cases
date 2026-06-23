@@ -1,0 +1,22 @@
+#标题
+Amlogic Canvas 模块设备引用计数泄漏导致设备对象无法释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Amlogic SoC 平台上调用 `meson_canvas_get()` 获取 Canvas 实例时，内核对 Canvas 平台设备（`canvas_pdev`）的引用计数持续增加。成功获取驱动数据后未释放引用，导致设备对象在生命周期结束时无法被正确释放，造成内存泄漏及设备资源管理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `meson_canvas_get()` 函数中，通过 `driver_find_device()` 查找设备时会对目标设备 `canvas_pdev` 获取一个引用。此前的代码逻辑仅在查找失败（`!canvas`）的错误路径中调用 `put_device()` 释放引用，而在成功查找到驱动数据后的正常返回路径中遗漏了 `put_device()` 调用。
+虽然持有设备引用无法阻止驱动数据（`drvdata`）被清除，但持续持有的引用会阻止设备对象本身的释放，从而导致设备引用计数泄漏。
+
+#解决方案
+修正 `meson_canvas_get()` 函数的引用计数管理逻辑。在成功获取驱动数据后，必须立即调用 `put_device()` 释放查找过程中获取的设备引用。
+具体代码修改为：将 `put_device()` 调用移至获取 `canvas` 指针之后、判断其有效性之前，确保无论是成功还是失败的分支，引用计数都能被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/859c1a75f8e1cdbf66775afb3379cf7a87d22657

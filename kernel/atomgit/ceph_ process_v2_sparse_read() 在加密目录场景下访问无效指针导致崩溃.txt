@@ -1,0 +1,20 @@
+#标题
+ceph: process_v2_sparse_read() 在加密目录场景下访问无效指针导致崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理加密目录的 v2 稀疏读操作时，内核在 `process_v2_sparse_read()` 函数中发生崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `process_v2_sparse_read()` 函数中，代码直接使用了连接结构体中嵌入的 cursor 指针（`&con->v2.in_cursor`），而该指针此前并未针对当前消息进行正确的初始化。对于加密目录，操作依赖于一个有效的 cursor 状态，由于使用了未初始化或状态无效的 cursor，导致访问了无效的内存地址，从而引发内核崩溃。
+
+#解决方案
+将 cursor 从直接使用连接结构体内部的指针修改为使用函数栈上的局部变量。在执行稀疏读循环前，显式调用 `ceph_msg_data_cursor_init()` 对该局部 cursor 进行初始化，确保其关联正确的消息结构（`con->in_msg`）和稀疏读总长度（`sparse_read_total`），从而保证后续数据游标操作（如 `get_bvec_at` 和 `ceph_msg_data_advance`）的内存访问安全。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/02e639829d8c5640e0c65232b67df34982db106a

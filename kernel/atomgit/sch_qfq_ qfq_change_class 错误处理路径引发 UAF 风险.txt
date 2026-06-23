@@ -1,0 +1,20 @@
+#标题
+sch_qfq: qfq_change_class 错误处理路径引发 UAF 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 qfq_change_class 函数处理变更现有类配置的过程中，若发生错误退出，内核会错误地释放当前正在操作的 existing class 及其关联的 qdisc。这会导致后续对该 class 的访问出现 Use-After-Free (UAF)，可能引发内核崩溃、内存破坏或被利用提权。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `qfq_change_class` 函数的 `destroy_class` 错误处理标签处，代码无条件地执行 `qdisc_put(cl->qdisc)` 和 `kfree(cl)`。根因在于未区分“新增类”和“修改已存在类”的场景：当操作对象为已存在的类（`existing` 为真）时，错误路径不应释放该类及其 qdisc，否则将导致 UAF。
+
+#解决方案
+在错误处理路径 `destroy_class` 中增加 `!existing` 判断条件。仅当处理的是新分配的类对象时，才执行释放 qdisc 和 free 内存的操作；若为已存在的类，则跳过释放逻辑，直接返回错误码，避免误释放活跃对象。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/82a0dcc0a4c4b784aeabf27c2d18fca70c2f7278

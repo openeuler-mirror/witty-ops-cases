@@ -1,0 +1,32 @@
+#标题
+LoongArch ACPI/cpufreq 子系统处理器映射与频率控制异常修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 系统在处理 MADT 表时，可能错误地分配逻辑 CPU 号，导致 disabled 状态的处理器占用了本应分配给 enabled 处理器的 CPU 编号，引发 CPU 拓扑混乱。
+2. 多核处理器环境下，cpufreq 频率设置可能针对错误的物理核心执行，导致频率调节失效或核心运行状态异常。
+3. 启动过程中可能因 `early_cpu_to_node` 缺失回调导致 NUMA 节点映射不准确。
+4. SMP 初始化过程中，非启动核心（secondary cpu）的 `global_id` 可能未正确设置。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **ACPI 处理器解析逻辑缺陷**：原 `set_processor_mask` 函数未分阶段处理 enabled 和 disabled 状态的处理器。在遍历 MADT 表时，disabled 处理器可能先于 enabled 处理器消耗了 `cpu_present_mask` 中的可用位，导致有效的处理器无法获得正确的逻辑 CPU ID。
+2. **cpufreq 寄存器写入参数缺失**：`do_set_freq_level` 函数在构造 IOCSR 写入消息时，遗漏了 `CPU_ID_FIELD` 的高位部分（`(cpu >> 4) & CPU_ID_FIELD`），导致频率控制命令发送到了错误的目标 CPU。
+3. **NUMA 节点映射容错不足**：`acpi_map_cpu2node` 中未处理 `acpi_get_node` 返回无效节点的情况，缺乏回退机制。
+4. **SMP 初始化时序错误**：`cpu_data` 的 `global_id` 仅在循环中针对启动 CPU 设置，未在 `loongson_init_secondary` 中对从 CPU 进行初始化。
+
+#解决方案
+1. **重构处理器掩码设置逻辑**：将 ACPI MADT 表的解析过程分为两个阶段：
+   - Pass 1：仅处理 `ACPI_MADT_ENABLED` 的处理器，分配 `cpu_present_mask` 位。
+   - Pass 2：处理 disabled 处理器，分配 `cpu_possible_mask` 位。
+   以此确保可用 CPU 优先获得正确的逻辑编号。
+2. **修正 cpufreq 参数构造**：在 `do_set_freq_level` 中补全 CPU ID 高位字段的移位与掩码操作，确保频率控制指令发送至正确的物理核心。
+3. **完善 NUMA 映射回退机制**：若 ACPI 获取节点失败，调用 `early_cpu_to_node` 作为回退方案获取节点 ID。
+4. **修正 global_id 赋值位置**：将 `global_id` 的赋值逻辑从初始化循环移至 `loongson_init_secondary` 中，确保每个上线的从 CPU 都能正确设置其全局 ID。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7abf123382275e08e92096e3fc7ca089997312ea

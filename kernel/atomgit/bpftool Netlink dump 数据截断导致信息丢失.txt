@@ -1,0 +1,23 @@
+#标题
+bpftool Netlink dump 数据截断导致信息丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统页面较大的环境中使用 bpftool 执行 Netlink dump 操作时，接收缓冲区大小不足导致消息被截断，造成部分内核信息丢失或显示不全。
+
+#主要错误日志
+- "Invalid message or trailing data in Netlink response: %d bytes left" (推断：补丁新增的警告日志，用于提示数据截断或残留)
+- "pr_warn("Invalid message or trailing data in Netlink response: %d bytes left\n", len);" (代码新增的警告打印)
+
+#问题根因
+Netlink 协议要求接收缓冲区大小至少为 min(PAGE_SIZE, 8k)，否则消息会被截断。bpftool 及 libbpf 之前使用的缓冲区大小固定为 4096 字节，在 PAGE_SIZE 大于 4096 的系统上无法容纳完整的 Netlink 消息，从而导致数据截断。
+
+#解决方案
+1. 将 `tools/bpf/bpftool/net.c` 中的 `buf` 数组大小从 4096 修改为 8192 字节。
+2. 将 `tools/lib/bpf/netlink.c` 中 `alloc_iov` 的分配大小从 4096 修改为 8192 字节。
+3. 在接收循环中增加校验逻辑，若处理完消息后仍有剩余数据（`len` 不为 0），则打印警告信息以提示异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8c1a9d807f4e8d8480b59f124431ad5f240615fd

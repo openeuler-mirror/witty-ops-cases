@@ -1,0 +1,27 @@
+#标题
+UB驱动decoder页表创建逻辑错误导致非UBFM管辖场景配置失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定硬件配置下（Feature bit `UB_DECODER_JURIS` 置位），UB驱动错误地尝试配置 decoder 的 MMIO 基地址寄存器和页表寄存器，并尝试使能 decoder，导致硬件配置冲突或寄存器访问错误。
+
+#主要错误日志
+ub_err(ent, "Failed to access decoder MMIO BA\n");
+ub_err(ent, "decoder MMIO address does not match HW reg\n");
+ub_err(ent, "Failed to access decoder MATT BA\n");
+ub_err(ent, "decoder MATT address does not match HW reg\n");
+ub_err(decoder->uent, "set decoder enable failed\n");
+ub_err(uent, "read ub cfg1 support feature failed, ret=%d\n", ret);
+
+#问题根因
+原有代码逻辑未区分 decoder 的管辖权归属。根据硬件规格，当配置寄存器 `UB_CFG1_SUPPORT_FEATURE_L` 中的 `UB_DECODER_JURIS` 标志位置位时，表示 decoder 由 UBFM（固件/管理层）管辖而非 UB 驱动管辖。旧代码无条件执行 MMIO 和页表配置流程，导致驱动越权配置由 UBFM 管理的资源，引发配置失败或硬件状态不一致。
+
+#解决方案
+1. 在 `ub_decoder` 结构体中新增 `create_matt` 布尔成员变量，用于标识是否需要由驱动创建页表和配置寄存器。
+2. 在 `ub_get_decoder_cap` 函数中读取 `UB_CFG1_SUPPORT_FEATURE_L` 寄存器，根据 `UB_DECODER_JURIS` 位初始化 `create_matt` 变量：若该位为 1（UBFM 管辖），则 `create_matt` 置 false。
+3. 在 `set_mmio_base_reg`、`set_page_table_reg`、`set_decoder_enable` 以及页表的创建/释放/映射等接口中增加对 `create_matt` 的判断。若为 false，直接跳过相关硬件配置操作，避免干扰 UBFM 的管辖范围。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3952279afe8f7eb73bd69b97bb8e4e55a18ba01

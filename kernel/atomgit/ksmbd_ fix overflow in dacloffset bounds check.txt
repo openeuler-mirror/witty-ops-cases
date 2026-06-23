@@ -1,0 +1,20 @@
+#标题
+ksmbd: fix overflow in dacloffset bounds check
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ksmbd 模块在处理 SMB 协议的 DACL（自主访问控制列表）继承或权限检查时，若接收到的特定数据包中 `dacloffset` 字段构造为接近整型最大值的数值，可导致内核发生整数溢出。该漏洞可能被利用造成内核内存越界访问，引发 kernel panic 或导致权限提升（CVE-2025-22039）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fs/smb/server/smbacl.c` 文件的 `smb_inherit_dacl` 和 `smb_check_perm_dacl` 函数中，对 `dacloffset` 的边界检查存在逻辑缺陷。原代码使用 `int` 类型存储 `dacloffset`，且直接执行加法运算 `dacloffset + sizeof(struct smb_acl)` 与 `pntsd_size` 进行比较。当 `dacloffset` 值很大时，加法运算会发生整型溢出，导致运算结果回绕为一个较小的数值，从而绕过边界检查，进而引发后续的越界内存访问。
+
+#解决方案
+修改 `dacloffset` 的变量类型为 `unsigned int`，并引入 `size_t` 类型的临时变量 `dacl_struct_end`。使用内核提供的 `check_add_overflow` 函数对加法运算进行安全的溢出检测。如果检测到溢出（返回真）或者计算出的结束位置 `dacl_struct_end` 超出 `pntsd_size` 范围，则判定为非法输入，直接返回错误（`-EINVAL` 或跳转到错误处理流程），从而防止整数溢出漏洞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b36d214af5ebb323d6bb682549a66cb98518c2d

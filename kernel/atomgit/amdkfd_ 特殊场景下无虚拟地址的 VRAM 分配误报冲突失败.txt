@@ -1,0 +1,20 @@
+#标题
+amdkfd: 特殊场景下无虚拟地址的 VRAM 分配误报冲突失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 amdkfd 接口进行显存（VRAM）分配时，若传入的虚拟地址（VA）为 0 且仅分配 VRAM（不带虚拟地址映射），同时该地址范围恰好与已存在的 SVM（共享虚拟内存）范围重叠，内核会错误地判定为地址冲突，导致 VRAM 分配失败。
+
+#主要错误日志
+pr_err("Address: 0x%llx already allocated by SVM\n", args->va_addr);
+
+#问题根因
+在 `kfd_ioctl_alloc_memory_of_gpu` 函数中，代码逻辑在进行 SVM 范围冲突检查时，未过滤“VA 为 0 且仅分配 VRAM”的特殊场景。当用户态程序仅申请 VRAM 而不提供虚拟地址（VA=0）时，内核错误地将地址 0 作为有效地址去区间树（interval tree）中查找是否存在 SVM 重叠区域，导致误判为地址已被 SVM 占用从而返回失败。实际上，该场景应跳过 SVM 使用情况检查。
+
+#解决方案
+在 `kfd_ioctl_alloc_memory_of_gpu` 函数中增加条件判断逻辑：当检测到 `va_addr` 为 0 且分配标志位包含 `KFD_IOC_ALLOC_MEM_FLAGS_VRAM` 时，跳过 SVM 范围冲突检查（即不执行 `interval_tree_iter_first` 查找），从而避免对这种特殊 VRAM 分配模式的错误拦截。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31cc8fa20c94b99ccab81cb8fe20a73e15738b48

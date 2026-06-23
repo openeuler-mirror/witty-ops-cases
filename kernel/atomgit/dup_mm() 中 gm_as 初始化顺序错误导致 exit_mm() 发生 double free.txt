@@ -1,0 +1,24 @@
+#标题
+dup_mm() 中 gm_as 初始化顺序错误导致 exit_mm() 发生 double free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进程 fork 过程中，若 `mm_init()` 或 `dup_mmap()` 执行失败，子进程的 `mm_struct` 会进入错误处理路径并被释放。此时 `exit_mm()` 中可能触发 double free（重复释放内存），导致内核内存管理状态异常或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dup_mm()` 函数中，`mm->gm_as` 的初始化（置 NULL）被放置在 `mm_init()` 和 `dup_mmap()` 之后。
+当 `memcpy(mm, oldmm, sizeof(*mm))` 执行后，子进程的 `mm` 结构体拷贝了父进程的数据，包括 `gm_as` 指针。
+如果后续的 `mm_init()` 或 `dup_mmap()` 失败并跳转到错误处理分支，此时 `mm->gm_as` 仍保留着父进程的指针值（非 NULL）。
+在清理流程 `exit_mm()` 中，内核会尝试释放这个本应属于父进程的 `gm_as` 指针，从而导致 double free。
+
+#解决方案
+将 `mm->gm_as` 的初始化操作（置 NULL）移动到 `memcpy` 之后、`mm_init()` 之前。
+这确保了无论后续初始化步骤是否成功，子进程的 `gm_as` 指针均为空，防止在错误处理路径中错误释放父进程的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/146c3ea2a70cf6db77cb9bb8b8331cb26319a144

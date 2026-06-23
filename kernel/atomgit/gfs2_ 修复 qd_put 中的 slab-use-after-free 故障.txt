@@ -1,0 +1,20 @@
+#标题
+gfs2: 修复 qd_put 中的 slab-use-after-free 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+GFS2 文件系统在执行 shutdown 操作时，如果此时 shrinker（gfs2_qd_shrink_scan）正在尝试回收配额数据对象，会触发 slab-use-after-free 故障。这是因为配额数据对象在释放后仍保留在 LRU 链表中，导致 shrinker 访问了已释放的内存。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit a475c5dd16e5 ("gfs2: Free quota data objects synchronously") 引入了在文件系统关闭时同步释放配额数据对象的逻辑。然而，该提交在调用 gfs2_qd_dispose 释放对象前，未能将其从 LRU 链表中移除。这导致 LRU 链表损坏，当 shrinker 随后遍历 LRU 链表时，访问了已经被释放的对象，从而引发 use-after-free。
+
+#解决方案
+在 qd_put 函数中，于调用 gfs2_qd_dispose 释放配额数据对象之前，增加 list_lru_del 操作，显式将该对象从 LRU 链表中移除，防止 shrinker 访问已释放的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/86d0c5b9319d5ae808d86bca5c0789b940efecca

@@ -1,0 +1,30 @@
+#标题
+uprobes: uprobe_free_utask 与 BPF 分析器竞态导致内核 Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核触发 General Protection Fault 并引发 Panic，发生在执行 BPF 性能分析（profiling）或用户态调用链追踪时。通过在终端运行 bpftrace uprobe 监控与高频率 profile 采样可复现该问题。
+
+#主要错误日志
+general protection fault, probably for non-canonical address 0x9e759c37ee555c76: 0000 [#1] SMP PTI
+RIP: 0010:is_uprobe_at_func_entry+0x28/0x80
+...
+perf_callchain_user+0x20a/0x360
+get_perf_callchain+0x147/0x1d0
+bpf_get_stackid+0x60/0x90
+bpf_prog_9aac297fb833e2f5_do_perf_event+0x434/0x53b
+...
+RIP: 0010:__kmem_cache_free+0x1cb/0x350
+...
+? uprobe_free_utask+0x62/0x80
+
+#问题根因
+在 `uprobe_free_utask` 函数中存在竞态条件：`current->utask` 内存对象被释放后，指针才被置为 NULL。在此期间，如果 BPF profiler 代码正在执行 perf 用户栈展开（perf user stack unwind），它会尝试访问已经释放的 `current->utask` 指针，从而导致非法内存访问和内核 Panic。
+
+#解决方案
+修改 `uprobe_free_utask` 函数逻辑，将 `t->utask = NULL` 操作移至对象释放之前执行，确保在内存对象被释放前指针已置空，防止其他线程（如 BPF 分析器）访问到已释放的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/97e7561e148757c6dac0b6f3ec2e7cffb36e989e

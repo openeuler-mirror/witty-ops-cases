@@ -1,0 +1,26 @@
+#标题
+perf bench epoll-wait qsort 比较函数未定义行为导致潜在内存损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+perf bench 命令在执行 epoll-wait 基准测试时，由于内部排序函数 `cmpworker()` 违反 C 标准关于 qsort 比较函数的对称性与传递性要求，触发未定义行为。这可能导致 glibc 内部出现内存损坏，进而引发程序崩溃或数据异常。
+
+#主要错误日志
+未知
+
+#问题根因
+比较函数 `cmpworker()` 的实现违反了 C 标准对 `qsort()` 比较函数的要求（对称性和传递性）。
+原代码逻辑为 `return w1->tid > w2->tid`，当 `w1->tid < w2->tid` 时错误地返回了 0（即认为两者相等）。
+根据 C 标准：若 x < y，则 y > x。但原实现中，当 tid1 < tid2 时返回 0，而 tid2 > tid1 时返回 1，破坏了对称性；同时该错误逻辑也破坏了传递性。这种违规导致了未定义行为。
+
+#解决方案
+修复 `cmpworker()` 函数逻辑，使其严格遵循 qsort 比较函数的三态返回值规范：
+1. 当 `w1->tid > w2->tid` 时返回 1。
+2. 当 `w1->tid < w2->tid` 时返回 -1。
+3. 当两者相等时返回 0。
+通过显式的三路比较修正了原先仅在大于时返回 1、其他情况均返回 0 的错误逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4effaa8e9c5b8675e2af2ffedeae36d3f15a8fc8

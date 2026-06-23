@@ -1,0 +1,23 @@
+#标题
+mmc: mtk-sd: 错误设置 MMC_CAP2_CRYPTO 标志导致不支持内联加密的主机异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+eMMC 主机控制器默认设置了 MMC_CAP2_CRYPTO 标志，但对于硬件上不支持内联加密或未配置 "crypto" 时钟的主机，错误地启用了该功能。这可能导致主机在初始化或后续的数据加密解密操作中出现功能异常或不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+根据提交信息，问题根因在于代码逻辑判断不严谨：
+1. 当前代码默认为所有 eMMC 主机设置 `MMC_CAP2_CRYPTO` 标志。
+2. 该标志不应在不支持内联加密的主机上设置。
+3. "crypto" 时钟用于数据的加密和解密，只有配置了该时钟的主机才应具备此能力，原代码在获取时钟失败或时钟不存在时未正确处理标志位的设置。
+
+#解决方案
+修改 `drivers/mmc/host/mtk-sd.c` 中的逻辑，仅在成功获取到可选的 "crypto" 时钟（即 `host->crypto_clk` 存在）时，才设置 `MMC_CAP2_CRYPTO` 标志。将原本无条件的标志设置改为 `else if (host->crypto_clk)` 条件判断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/050fea655f49e356567da2f0bbdb0cfee1330e5e

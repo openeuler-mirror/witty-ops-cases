@@ -1,0 +1,21 @@
+#标题
+drm/etnaviv: flush sequence logic causes translation errors
+
+#内核版本
+OLK-6.6
+
+#问题现象
+由于 flush sequence 逻辑错误，在 GPU 切换 MMU 上下文后，存储的 flush sequence 与当前激活的地址空间不匹配，导致 missed flushes（刷新缺失），进而引发 translation errors（内存转译错误）。
+
+#主要错误日志
+未知
+
+#问题根因
+当前逻辑从 `gpu->mmu_context` 获取 flush sequence，而不是从传入的 `mmu_context` 参数获取。
+虽然对当前提交的刷新需求判定没有影响，但该序列值也被存储为 GPU 的当前 flush sequence。如果发生上下文切换，存储的 flush sequence 将不再属于当前激活的地址空间，这种不一致性会导致后续出现 missed flushes，从而引发转译错误。
+
+#解决方案
+修改 `etnaviv_buffer.c` 中的 `etnaviv_buffer_queue` 函数，将从 `gpu->mmu_context->flush_seq` 读取序列号改为从传入的参数 `mmu_context->flush_seq` 读取，确保存储的 flush sequence 始终与传入的（即将激活的）地址空间保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6172357b28062cf330e73a64fa96c3245e41eb50

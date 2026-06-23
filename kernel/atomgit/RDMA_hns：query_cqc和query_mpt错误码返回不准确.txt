@@ -1,0 +1,20 @@
+#标题
+RDMA/hns：query_cqc和query_mpt错误码返回不准确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 hns ROCE 驱动的 CQ（完成队列）和 MR（内存区域）资源跟踪接口（restrack raw ops）时，若底层硬件查询函数 `query_cqc()` 或 `query_mpt()` 执行失败，上层总是返回固定的 `-EINVAL` 错误码，掩盖了底层驱动可能返回的多种真实错误原因，导致用户无法通过错误码准确定位具体的故障类型。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `hns_roce_fill_res_cq_entry_raw` 和 `hns_roce_fill_res_mr_entry_raw` 在处理 `query_cqc()` 和 `query_mpt()` 的返回值时逻辑简单粗暴：无论底层函数返回何种错误码（如 -ETIMEDOUT、-ENODEV 等），上层函数均直接返回固定的 `-EINVAL`，导致错误信息丢失。
+
+#解决方案
+修改 `hns_roce_fill_res_cq_entry_raw` 和 `hns_roce_fill_res_mr_entry_raw` 函数的错误处理逻辑，当 `query_cqc()` 或 `query_mpt()` 返回非零值时，直接返回底层函数产生的实际错误码（`return ret;`），而非固定的 `-EINVAL`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/251290f901eb3ed36f61c013a867c3857219928b

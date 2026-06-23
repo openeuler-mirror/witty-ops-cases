@@ -1,0 +1,31 @@
+#标题
+Hyper-V MSR寄存器前缀命名不一致导致代码混淆
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Hyper-V 相关驱动代码中，`HV_REGISTER_*` 宏定义在使用上存在命名空间冲突与语义混淆。
+在 x86 架构下，`HV_REGISTER_*` 被用于表示通过 `rdmsrl/wrmsrl` 访问的 MSR 寄存器；而在 ARM64 架构下，根据 TLFS 文档规范，`HV_REGISTER_*` 应代表通过 Hypercall 访问的 VP 寄存器。
+这种命名不一致导致代码可读性下降，且违背了 Hyper-V TLFS 文档中对 `HV_REGISTER_*` 的定义，可能引发开发者对寄存器访问机制的误解，增加跨架构维护的难度与出错风险。
+
+#主要错误日志
+未知
+
+#问题根因
+根本原因在于 Hyper-V 代码中寄存器命名规范的不统一：
+1. **语义冲突**：在 x86 架构的 `hv_set/get_register()` 接口中，参数使用了 `HV_REGISTER_*` 前缀，实际上这些是通过 `rdmsrl/wrmsrl` 指令访问的 MSR。
+2. **违背文档**：Hyper-V TLFS 文档明确指出 `HV_REGISTER_*` 仅用于通过 `get/set register` hypercalls 访问的 VP 寄存器（典型场景为 ARM64），而 x86 的 MSR 不应使用此前缀。
+3. **跨架构混淆**：x86 中的 `HV_REGISTER_*` 定义实际上是指向 `HV_X64_MSR_*` 的别名，这导致不同架构下相同前缀代表了完全不同的访问机制（指令访问 vs Hypercall 访问），造成了严重的语义混淆。
+
+#解决方案
+实施统一的命名重构，将 MSR 与 VP 寄存器访问接口明确区分：
+1. **重命名接口函数**：将通用的 `hv_set_register()` 和 `hv_get_register()` 函数重命名为 `hv_set_msr()` 和 `hv_get_msr()`，明确表明其操作对象是 MSR。
+2. **重命名宏定义**：引入 `HV_MSR_*` 前缀作为架构通用别名。
+   - 在 x86 架构下，将 `HV_MSR_*` 定义指向具体的 `HV_X64_MSR_*` 寄存器地址。
+   - 在 ARM64 架构下，将 `HV_MSR_*` 定义指向具体的 `HV_REGISTER_*` 寄存器地址。
+3. **修正调用点**：将内核中所有调用 `hv_set/get_register` 的地方批量替换为 `hv_set/get_msr`，并将参数从 `HV_REGISTER_*` 替换为对应的 `HV_MSR_*`。
+4. **统一文件布局**：将原本分散在 x86 和 arm64 头文件中的通用 `HV_REGISTER_*` 定义移动到 `asm-generic/hyperv-tlfs.h`，确保 ARM64 的 VP 寄存器定义符合 TLFS 规范且独立于 MSR 逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0245e96bde5f9231e16b4820f50e94c4c402da1a

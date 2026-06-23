@@ -1,0 +1,20 @@
+#标题
+ntb: intel: 使用了被重映射为链路状态的 Doorbell 寄存器位
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel NTB（Non-Transparent Bridge）硬件驱动中，使用了本应保留用于链路状态（link status）的 Doorbell（DB）寄存器位。这会导致驱动程序误用被重映射的硬件资源，可能引发链路状态判断错误或数据通信异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `gen3_init_ntb` 初始化过程中，`ndev->db_valid_mask` 直接根据 `db_count` 计算生成，未排除已被硬件重映射用于链路状态的 DB 位。当硬件存在 `NTB_HWERR_MSIX_VECTOR32_BAD` 缺陷标志时，部分 DB 位被挪用，但驱动未将这些位从有效掩码中剔除，导致后续操作使用了无效或冲突的 DB 位。
+
+#解决方案
+在计算 `ndev->db_valid_mask` 之后，增加对 `NTB_HWERR_MSIX_VECTOR32_BAD` 硬件错误标志的检查。如果该标志存在，则通过位运算将 `ndev->db_link_mask` 对应的位从 `db_valid_mask` 中清除，确保驱动不会使用这些被重映射的 DB 位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4a1f243b1dbc3bcf57828941564c9ce837167b1c

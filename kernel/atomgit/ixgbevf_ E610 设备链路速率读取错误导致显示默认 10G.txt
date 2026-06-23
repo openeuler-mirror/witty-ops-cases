@@ -1,0 +1,22 @@
+#标题
+ixgbevf: E610 设备链路速率读取错误导致显示默认 10G
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Intel E610 网卡设备的虚拟功能（VF）时，VF 驱动无法正确获取实际的链路状态和速率。系统错误地将链路速率显示为默认值 10G，即使实际物理链路仅为 1G 或 PF 设置了非 10G 的速率，VF 端依然显示 10G，导致链路状态信息与物理实际不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+E610 适配器不再使用 VFLINKS 寄存器来读取 PF 的链路速率和链路开启状态。由于 VF 驱动在 `ixgbevf_check_mac_link_vf` 函数中依然尝试通过读取 VFLINKS 寄存器获取链路信息，导致无法获取实际链路状态，进而回退到默认选项错误地报告为 10G。
+
+#解决方案
+1. 新增邮箱操作 `IXGBE_VF_GET_PF_LINK_STATE` (0x11)，允许 VF 驱动向 PF 驱动请求实际的链路数据。
+2. 将邮箱 API 版本更新至 v1.6，并在驱动协商链路中加入对 `ixgbe_mbox_api_16` 的支持。
+3. 修改 `ixgbevf_check_mac_link_vf` 函数逻辑：针对 E610 设备（`ixgbe_mac_e610_vf`），调用新增的 `ixgbevf_get_pf_link_state` 函数通过邮箱获取链路信息；对于其他设备，保留原有的 `ixgbe_read_vflinks` 寄存器读取方式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/418484547453ae8851a230aeaa4fd5fad0a8ccb9

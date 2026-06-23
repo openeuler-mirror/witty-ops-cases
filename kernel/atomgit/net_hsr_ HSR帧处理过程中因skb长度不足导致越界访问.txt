@@ -1,0 +1,20 @@
+#标题
+net/hsr: HSR帧处理过程中因skb长度不足导致越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统接收HSR（High-availability Seamless Redundancy）协议帧时，若skb缓冲区长度不足以容纳以太网头部长度（ETH_HLEN）加上HSR标签长度（HSR_HLEN），代码未进行有效性检查直接调用 `skb_set_network_header` 设置偏移。这将导致内核读取超出skb数据区的内存，引发内存越界访问或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hsr_handle_frame` 函数中，处理 HSR 或 PRP 协议帧时，代码逻辑直接设置网络层头部偏移（`skb_set_network_header(skb, ETH_HLEN + HSR_HLEN)`），但未在此之前检查 skb 是否包含足够的数据。若传入的 skb 数据长度小于 `ETH_HLEN + HSR_HLEN`，会导致访问非法内存区域。
+
+#解决方案
+在设置网络层头部偏移前，增加 `pskb_may_pull` 检查，确保 skb 线性数据区至少包含 `ETH_HLEN + HSR_HLEN` 个字节。若检查失败，则释放该 skb 并直接返回 `finish_consume` 以避免后续处理，从而防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75b05adeee322c2d6eb7acd93b57fa57271d20be

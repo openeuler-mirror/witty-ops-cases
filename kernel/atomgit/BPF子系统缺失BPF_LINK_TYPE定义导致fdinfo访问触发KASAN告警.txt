@@ -1,0 +1,20 @@
+#标题
+BPF子系统缺失BPF_LINK_TYPE定义导致fdinfo访问触发KASAN告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+通过 Syzkaller 测试工具触发 `bpf_link_show_fdinfo` 函数调用时，内核触发 KASAN（Kernel Address Sanitizer）错误报告。该问题源于部分 BPF link 类型（如 uprobe multi link、tcx、netfilter、netkit 等）在内核内部未正确注册 Link 类型定义，导致在读取文件描述符信息时访问了未初始化或异常的内存区域。
+
+#主要错误日志
+KASAN issue found in bpf_link_show_fdinfo
+
+#问题根因
+内核在新增多种 BPF link 类型（如 uprobe multi、tcx、netfilter、netkit）时，遗漏了 `BPF_LINK_TYPE` 宏的调用。在 `bpf_link_show_fdinfo` 等函数处理这些类型的 BPF link 时，由于缺少对应的类型定义，导致内核无法正确处理相关数据结构，进而触发 KASAN 内存检测错误。
+
+#解决方案
+在头文件 `include/linux/bpf_types.h` 中补充缺失的 `BPF_LINK_TYPE` 宏调用。根据补丁内容，已添加 `BPF_LINK_TYPE(BPF_LINK_TYPE_NETKIT, netkit)` 定义（其他相关修复已在合入过程中处理），确保所有 BPF link 类型均有对应的类型定义，从而修复内存访问异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/963630ad6ad972f37b6817ddbef5ac8e93993ca3

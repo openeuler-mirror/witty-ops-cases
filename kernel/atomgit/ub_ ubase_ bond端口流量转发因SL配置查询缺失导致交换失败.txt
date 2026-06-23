@@ -1,0 +1,24 @@
+#标题
+ub: ubase: bond端口流量转发因SL配置查询缺失导致交换失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 A5 产品场景下，当通过 bond 端口发送流量时，交换操作失败。该问题发生在 urma 设备仅支持 unic 设备而不支持 udma 的场景下，此时系统未能查询 tp/ctp 相关的 SL 配置，导致流量转发异常。
+
+#主要错误日志
+- ubase_err(udev, "unic and udma does not have any sl.\n");
+- ubase_err(udev, "unic does not have sl.\n");
+
+#问题根因
+在当前代码逻辑中，`ubase_parse_urma_sl_vl` 和 `ubase_parse_sl_vl` 函数在进行 SL/VL 配置解析前，会先检查设备是否支持 `udma` (`ubase_dev_udma_supported`)。如果设备仅支持 unic 设备而不支持 udma，代码将跳过 udma VL 配置的解析和 DSCP VL 的初始化。这导致在需要通过 bond 端口转发流量时，tp/ctp 缺失必要的 SL 配置信息，进而引发交换失败。
+
+#解决方案
+移除查询 SL 配置流程中对 udma 支持状态的检查逻辑，确保在所有场景下都能正确查询和解析 SL/VL 配置。具体修改如下：
+1. 在 `ubase_parse_urma_sl_vl` 函数中，移除 `ubase_dev_udma_supported` 判断，无条件执行 `ubase_parse_udma_vl` 以解析 udma VL 配置。
+2. 在 `ubase_parse_sl_vl` 函数中，移除条件判断，直接调用 `ubase_init_udma_dscp_vl` 初始化 udma DSCP VL。
+3. 重构校验逻辑，用 `ubase_check_sl_valid` 替换原有的 `ubase_check_udma_sl_valid`，新函数综合校验 unic 和 udma 的 SL 数量，确保配置的完整性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5fda2672131ec82191fcfff15e3d8e36fbb0025d

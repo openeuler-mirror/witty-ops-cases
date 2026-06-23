@@ -1,0 +1,23 @@
+#标题
+ASoC: simple-card-utils 错误使用自动清理机制导致设备节点被提前释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核音频驱动在使用 simple-card-utils 解析 DAI（Digital Audio Interface）时，设备节点指针 `dlc->of_node` 在函数作用域结束时被自动释放，导致驱动后续在使用该 DAI 时访问已释放的内存，引发内核崩溃或音频功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在补丁 `419d1918105e` 中，代码使用了 `__free(device_node)` 修饰符来自动释放 `device_node` 类型的局部变量 `node`。该机制基于编译器的自动清理属性，会在变量超出作用域时自动调用 `of_node_put`。然而，该变量随后被赋值给了 `dlc->of_node` 并在驱动生命周期内被长期引用。由于自动清理机制在函数返回时提前释放了该节点，导致 `dlc->of_node` 指向了已被释放的内存（Use-After-Free）。
+
+#解决方案
+移除局部变量 `node` 上的 `__free(device_node)` 自动清理修饰符，改为手动管理引用计数。
+1. 恢复 `node` 变量为常规的 `struct device_node *` 类型声明。
+2. 在函数正常执行路径中保留对 `dlc->of_node` 的赋值，不再自动释放。
+3. 在错误处理路径（如 `snd_soc_get_dlc` 返回错误时），显式调用 `of_node_put(node)` 释放节点引用，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/99cedd289694c7869ad4d21d4effe92f9ab5a5c1

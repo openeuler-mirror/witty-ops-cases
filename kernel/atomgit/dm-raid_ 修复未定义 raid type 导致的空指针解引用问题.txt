@@ -1,0 +1,20 @@
+#标题
+dm-raid: 修复未定义 raid type 导致的空指针解引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 dm-raid 模块处理超级块验证过程中，若 `get_raid_type_by_ll()` 函数返回 NULL（即遇到未定义或无法识别的 raid 类型），内核后续在判断条件 `if (!(rs_is_raid10(rs) && rt_is_raid0(rs->raid_type)))` 时，会直接对 NULL 指针进行解引用，从而导致内核崩溃或发生空指针引用错误。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `rs->raid_type` 的值来源于 `get_raid_type_by_ll()` 的返回值，该函数可能返回 NULL。代码未对返回值进行有效性检查就直接在后续逻辑中使用了 `rs->raid_type`，导致了 NULL 指针解引用风险。
+
+#解决方案
+在 `super_init_validation` 函数中，调用 `get_raid_type_by_ll()` 赋值后立即增加 fail-fast 检查。如果 `rs->raid_type` 为 NULL，则立即返回 `-EINVAL` 错误，避免后续代码访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2fc1a83d98a688688ae990d110c007fdd65c1954

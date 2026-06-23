@@ -1,0 +1,21 @@
+#标题
+ibmveth: veth_pool_store 接口写操作导致进程挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 ibmveth 驱动的 veth_pool_store 接口（如 active、num、size 等属性）进行写操作时，如果网卡处于运行状态（netif_running），操作进程会出现挂起无法返回的现象。
+
+#主要错误日志
+netdev_err(netdev, "unable to alloc pool\n");
+netdev_err(netdev, "no active pool >= MTU\n");
+
+#问题根因
+veth_pool_store 函数在执行过程中会调用 ibmveth_close 和 ibmveth_open 来重启网卡以应用新的配置参数。这两个函数需要在持有 RTNL 锁的情况下才能正确执行。然而，原代码在调用 ibmveth_close/open 之前未获取 RTNL 锁，导致在函数内部尝试获取锁时发生死锁或睡眠等待，从而使写操作的进程挂起。
+
+#解决方案
+在 veth_pool_store 函数入口处调用 rtnl_lock() 获取 RTNL 锁，并在函数正常退出时调用 rtnl_unlock() 释放锁。同时，在错误处理分支（如内存分配失败、参数校验失败等）增加 unlock_err 标签，确保在返回错误码前正确释放 RTNL 锁，避免死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f09abde76bdcb43f8b3939cba28e092a539da7f

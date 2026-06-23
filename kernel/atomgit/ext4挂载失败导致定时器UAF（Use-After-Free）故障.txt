@@ -1,0 +1,20 @@
+#标题
+ext4挂载失败导致定时器UAF（Use-After-Free）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ext4文件系统挂载失败的情况下，触发内核ODEBUG bug，具体表现为释放内存后的定时器访问错误。Syzbot检测到该问题，发生在挂载流程错误处理路径中。
+
+#主要错误日志
+ODEBUG bug in ext4_fill_super
+
+#问题根因
+当文件系统挂载失败时，流程跳转至 `failed_mount3` 标签。原代码逻辑先调用 `del_timer_sync` 取消 `s_err_report` 定时器，再调用 `ext4_stop_mmpd`。如果在调用 `ext4_stop_mmpd` 过程中发生错误（如读I/O失败），会触发 `ext4_handle_error` 函数，该函数会重新激活 `s_err_report` 定时器。随后代码继续执行 `kfree(sbi)` 释放内存，导致定时器仍在运行但其所在的内存已被释放，引发Use-After-Free问题。
+
+#解决方案
+调整 `failed_mount3` 标签下的错误处理顺序。先调用 `ext4_stop_mmpd`，再调用 `del_timer_sync` 取消 `s_err_report` 定时器。这样确保在清理资源前，即使 `ext4_stop_mmpd` 触发了错误处理流程重新激活定时器，也能在释放 `sbi` 内存前成功将其取消，避免UAF。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fc55e93cc3683b51ede9583496a91e6cdeda5b7d

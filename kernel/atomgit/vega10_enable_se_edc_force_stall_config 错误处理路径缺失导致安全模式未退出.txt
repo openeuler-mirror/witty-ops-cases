@@ -1,0 +1,20 @@
+#标题
+vega10_enable_se_edc_force_stall_config 错误处理路径缺失导致安全模式未退出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD Vega10 显卡电源管理功能中，当 `vega10_enable_se_edc_force_stall_config` 函数执行过程中发生错误（如 DIDT 配置寄存器编程失败）时，系统无法正确退出 RLC 安全模式。这可能导致 GPU 状态不一致，影响后续电源管理或硬件控制操作，潜在的后果包括功能执行异常或硬件状态锁死。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `vega10_enable_se_edc_force_stall_config` 中，代码逻辑调用了 `amdgpu_gfx_rlc_enter_safe_mode()` 进入安全模式，但在后续步骤（如 `vega10_program_didt_config_registers`）返回错误时，函数直接 `return result` 返回，跳过了函数末尾的 `amdgpu_gfx_rlc_exit_safe_mode()` 调用。这导致了进入和退出安全模式的操作不对称，引发了资源或状态未释放的问题。
+
+#解决方案
+修改错误处理路径，在配置寄存器编程失败时，不再直接返回，而是通过 `goto` 语句跳转至函数末尾的退出标签（`exit_safe_mode`），确保 `amdgpu_gfx_rlc_exit_safe_mode(adev, 0)` 被执行，从而正确退出安全模式后再返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9ceb18b202d054eef8f6042847743f938e9530e4

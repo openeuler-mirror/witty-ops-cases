@@ -1,0 +1,23 @@
+#标题
+VFS: Don't leak disconnected dentries on umount
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载文件系统时触发 "Busy inodes after unmount" 错误，导致卸载失败。该问题与 `open_by_handle_at()` 系统调用相关，当针对未缓存的 inode 执行该操作时，若文件系统损坏或存在 rename 竞争，可能导致 dentry 泄漏。
+
+#主要错误日志
+Busy inodes after unmount
+
+#问题根因
+当用户对未缓存的 inode 调用 `open_by_handle_at()` 时，会创建一个 disconnected dentry。如果该 dentry 是目录，`exportfs_decode_fh_raw()` 会尝试通过 `reconnect_path()` 将其连接到 dentry 树。
+在某些情况下（如文件系统损坏或 rename 竞争），`lookup_one_unlocked()` 无法找到需要重连的 dentry，而是在父目录下创建一个新的 dentry。此时，新创建的 dentry 不会标记为 `DCACHE_DISCONNECTED`，尽管其父目录可能仍然是 disconnected 状态。
+自提交 f1ee616214cb ("VFS: don't keep disconnected dentries on d_anon") 之后，disconnected dentries 不再添加到 `sb->s_anon` 列表，其清理隐式依赖于 `dput()` 立即回收这些 dentries。
+然而，由于上述场景中创建的叶子 dentry 未标记为 disconnected，`dput()` 不会立即回收它们，导致 dentries "泄漏"。这些 dentries 在内存中残留，直到卸载时触发 "Busy inodes after unmount" bug。
+
+#解决方案
+在 `d_alloc()` 函数中增加标志位继承逻辑：检查父目录的 `d_flags` 是否包含 `DCACHE_DISCONNECTED` 标志。如果包含，则将新分配的 dentry 也标记为 `DCACHE_DISCONNECTED`。这确保了所有在 disconnected 父目录下创建的 dentry 都能被正确标记，从而保证 `dput()` 能够正确回收这些 dentry，避免内存泄漏和卸载时的 "Busy inodes" 错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/46de7ae5a50a849eadad5717819624f1b2eb7782

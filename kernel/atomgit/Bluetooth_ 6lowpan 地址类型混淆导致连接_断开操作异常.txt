@@ -1,0 +1,20 @@
+#标题
+Bluetooth: 6lowpan 地址类型混淆导致连接/断开操作异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Bluetooth 6lowpan 的 debugfs 接口进行设备连接或断开操作时，由于内核内部混用了 `BDADDR_LE` 和 `ADDR_LE_DEV` 两种不同的地址类型定义，导致 `disconnect` 命令无法正确查找并断开已建立的 LE 连接，相关操作失效。
+
+#主要错误日志
+未知
+
+#问题根因
+内核代码 `net/bluetooth/6lowpan.c` 中存在地址类型混淆，`l2cap_chan_connect` 和 `hci_conn_hash_lookup_le` 函数需要不同的 `dst_type` 值，但代码中错误地对两者使用了相同的值。具体表现为：debugfs 的 "connect" 命令使用的是 `BDADDR_LE` 类型，而 "disconnect" 和对已连接设备的操作需要的是 `ADDR_LE_DEV` 类型，导致传递给 `hci_conn_hash_lookup_le()` 的地址类型参数错误，无法在连接哈希表中找到对应的连接。
+
+#解决方案
+修复 `get_l2cap_conn()` 函数，增加逻辑将用户输入的 `BDADDR_LE` 类型正确映射转换为 `hci_conn_hash_lookup_le()` 所需的 `ADDR_LE_DEV` 类型（如 `BDADDR_LE_PUBLIC` 转换为 `ADDR_LE_DEV_PUBLIC`）。同时，针对 "disconnect" 命令长期存在的 API 差异（历史原因），在转换前对地址类型值进行修正，确保查找连接时使用正确的地址类型参数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/529e44b1595971b2a36e6acca2aeec83b320b79e

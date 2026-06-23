@@ -1,0 +1,34 @@
+#标题
+zcopy 模块重复映射大页导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `pin_user_pages_remote` 接口对同一地址重复映射（attach）透明大页时，内核触发 NULL 指针引用，导致主机崩溃并打印 Oops 栈信息。该问题源于代码在处理大页映射时清除了 `PageAnonExclusive` 标志，触发了大页分裂，进而引发后续映射逻辑中的空指针访问。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
+CPU: 59 PID: 215951 Comm: ioctl_zcopy_too Kdump: loaded Not tainted 6.6
+Hardware name: Huawei Taishan 2280 V2/BC82AMDD, BIOS 6.57 05/17/2023
+pstate: 20400009 (nzCv daif +PAN -UAO -TCO -DIT -SSBS BTYPE=--)
+pc : attach_pte_range+0x3b0/0x978 [zcopy]
+lr : attach_pte_range+0xd4/0x978 [zcopy]
+...
+Call trace:
+ attach_pte_range+0x3b0/0x978 [zcopy]
+ attach_page_range+0x1f4/0x600 [zcopy]
+ attach_pages+0x2b8/0x8b8 [zcopy]
+ zcopy_ioctl+0xe8/0x168 [zcopy]
+ ...
+[推断] pr_warn_once("va mapped to hugepage, please free it and realloc va\n")
+
+#问题根因
+在 zcopy 模块执行大页映射过程中，代码逻辑错误地清除了 `PageAnonExclusive` 标志。当对同一虚拟地址进行第二次映射操作时，该行为导致透明大页发生分裂。分裂后的页表状态与映射逻辑不匹配，导致在 `attach_pte_range` 函数中访问了空指针，从而引发内核 panic。
+
+#解决方案
+1. 移除对 `PageAnonExclusive` 标志的清除操作，防止在此场景下触发大页分裂。
+2. 在 `zcopy_alloc_pmd` 函数中增加对 PMD 透明大页状态的判断。如果目标地址已经映射到大页，则拒绝本次映射操作，返回 `-EAGAIN` 错误码，并打印警告日志提示用户释放内存后重新分配，从而避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9cadad5cd1006a489ebadad61e9c92eeea544301

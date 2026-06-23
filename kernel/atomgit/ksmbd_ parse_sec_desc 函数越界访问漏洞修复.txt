@@ -1,0 +1,24 @@
+#标题
+ksmbd: parse_sec_desc 函数越界访问漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SMB 协议的安全描述符解析时，若接收到的特定字段（如 osidoffset、gsidoffset、dacloffset）或 SID 结构中的 num_subauth 值异常，内核可能发生越界访问。这会导致内核崩溃或潜在的内存破坏，影响 ksmbd 服务的可用性与稳定性。
+
+#主要错误日志
+ksmbd: Error %d parsing Owner SID
+ksmbd: Error %d mapping Owner SID to gid
+
+#问题根因
+parse_sec_desc 函数在解析安全描述符时，缺乏对偏移量和 SID 结构字段的严格校验：
+1. 未检查 `osidoffset`、`gsidoffset`、`dacloffset` 是否小于 `smb_ntsd` 结构体的大小，导致后续指针计算可能指向结构体内部甚至非法内存区域。
+2. parse_sid 函数中未处理 `psid->num_subauth` 为 0 的情况，也未检查其是否超过 `SID_MAX_SUB_AUTHORITIES`，导致边界检查条件 `end_of_acl < (char *)psid + 8 + sizeof(__le32) * psid->num_subauth` 可能因数值异常导致越界访问。
+
+#解决方案
+1. 在 parse_sid 函数中增加对 `psid->num_subauth` 的判断，若为 0 直接返回，同时增加对其上限（SID_MAX_SUB_AUTHORITIES）及越界访问可能性的校验。
+2. 在 parse_sec_desc 函数中，分别在使用 `osidoffset`、`gsidoffset` 和 `dacloffset` 前，校验其值是否小于 `sizeof(struct smb_ntsd)`，若小于则视为无效参数直接返回 -EINVAL，防止后续解析越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/575bcc0bd38043f67717512a679d1eb9748c4851

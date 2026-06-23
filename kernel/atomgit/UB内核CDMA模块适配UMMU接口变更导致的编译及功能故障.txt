@@ -1,0 +1,31 @@
+#标题
+UB内核CDMA模块适配UMMU接口变更导致的编译及功能故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在编译阶段出现隐式声明错误或链接失败，无法正常构建；或者在运行时 CDMA 模块无法正常绑定设备、操作 SVA 接口，导致 DMA 功能异常。
+
+#主要错误日志
+- 推断编译日志：`error: implicit declaration of function 'ummu_ksva_bind_device'`
+- 推断运行时日志：`CDMA: ksva bind device failed.`
+- 推断运行时日志：`CDMA: grant seg failed, ret = -22.`
+- 推断运行时日志：`CDMA: sva grant range for cdma device failed, ret = -22.`
+
+#问题根因
+内核 CDMA 模块未及时跟进 UMMU 子系统的接口变更：
+1. 函数接口重命名：原 `ummu_ksva_bind_device` 等函数已变更为 `iommu_ksva_bind_device` 等标准 IOMMU 接口，导致调用接口不匹配。
+2. 返回值检查机制变更：原接口返回 NULL 表示失败，新接口返回 PTR_ERR 错误指针，代码中仍使用 `!ctx->sva` 判断导致逻辑错误。
+3. 特性标志位变更：IOPF 特性获取方式从 `ummu_features & 1` 变更为 `ummu_features & HW_CAP_IOPF`。
+4. 并发安全问题：部分接口（如 `dma_get_device_list`）在读取设备属性时缺乏锁保护，存在并发风险。
+
+#解决方案
+1. 适配新接口名称：将代码中所有的 `ummu_ksva_*`、`ummu_sva_*` 系列调用替换为对应的 `iommu_ksva_*`、`iommu_sva_*` 接口。
+2. 修正返回值判断：将 `if (!ctx->sva)` 修改为 `if (IS_ERR(ctx->sva))` 以正确处理指针错误返回值。
+3. 修正特性位检测：使用 `HW_CAP_IOPF` 宏进行 IOPF 特性检测，替代原有的掩码操作。
+4. 增加并发保护：在 `dma_get_device_list`、`dma_get_device_by_eid` 等接口中增加 `mutex_lock(&cdev->eu_mutex)` 保护设备属性读取逻辑。
+5. 更新注释与代码风格：修正注释中的拼写错误，并更新 Context 说明强调不可并发调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/be21a31fb3f28d3750315b8bca691d773cb45dbb

@@ -1,0 +1,26 @@
+#标题
+powerpc 架构下使用 Clang 编译时栈保护器配置检查错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Clang 编译 powerpc 架构内核时，Kconfig 阶段的 `HAVE_STACKPROTECTOR` 配置检查失败。虽然编译器实际支持栈保护器功能，但由于 Kconfig 测试命令参数不完整，导致内核构建系统误判编译器不支持该特性，从而无法启用栈保护功能。
+
+#主要错误日志
+- **错误1（缺少 offset 参数）**：
+  `clang: error: '-mstack-protector-guard=tls' is used without '-mstack-protector-guard-offset', and there is no default`
+- **错误2（32位检查寄存器无效）**：
+  `clang: error: invalid value 'r2' in 'mstack-protector-guard-reg=', expected one of: r13`
+
+#问题根因
+1. **参数缺失**：Clang 在进行栈保护器支持测试时，必须显式指定 `-mstack-protector-guard-offset` 参数，而原 Kconfig 仅传递了 `-mstack-protector-guard=tls` 和 `-mstack-protector-guard-reg`，导致 Clang 报错退出，内核误以为编译器不支持该选项。
+2. **目标架构不匹配**：在进行 32 位（PPC32）支持检查时，未传递 `-m32` 标志。Clang 默认使用 powerpc64le 目标进行编译，此时有效的寄存器仅为 r13，导致传入的 r2 寄存器被判定为无效值，从而检查失败。
+
+#解决方案
+修改 `arch/powerpc/Kconfig` 文件中的 `HAVE_STACKPROTECTOR` 选择条件，补全测试参数：
+1. 在 PPC32 和 PPC64 的检查选项中均追加 `-mstack-protector-guard-offset=0` 参数，以满足 Clang 的编译检查要求。
+2. 在 PPC32 检查中添加 `$(m32-flag)`，在 PPC64 检查中添加 `$(m64-flag)`，确保编译器目标模式与当前架构配置匹配，避免因寄存器定义差异导致的检查失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/46396912560281b4b85d87948f5ab0ab0c528660

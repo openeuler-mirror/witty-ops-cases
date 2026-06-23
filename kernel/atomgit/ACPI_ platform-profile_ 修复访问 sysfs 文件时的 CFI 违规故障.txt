@@ -1,0 +1,21 @@
+#标题
+ACPI: platform-profile: 修复访问 sysfs 文件时的 CFI 违规故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在访问 `/sys/firmware/acpi` 目录下的 `platform_profile` 或 `platform_profile_choices` sysfs 文件时，触发内核 CFI（Control Flow Integrity，控制流完整性）校验失败，导致相关操作无法正常执行。
+
+#主要错误日志
+CFI failure at kobj_attr_show+0x19/0x30 (target: platform_profile_choices_show+0x0/0x140; expected type: 0x7a69590c)
+
+#问题根因
+在创建 sysfs 属性组时使用了 `sysfs_create_group()`，该函数将 `->sysfs_ops()` 回调设置为 `kobj_sysfs_ops`。这导致 `->show()` 和 `->store()` 回调在调用时，内核会使用 `container_of()` 从传递的 attribute 中获取对应的回调函数，这要求回调函数的类型必须与 `struct kobj_attribute` 中的定义一致。
+然而，驱动代码中使用 `DEVICE_ATTR_RO()` 和 `DEVICE_ATTR_RW()` 宏定义了属性，导致 `->show()` 和 `->store()` 回调函数的类型实际上是按照 `struct device_attribute` 定义的。由于 `struct kobj_attribute` 和 `struct device_attribute` 的回调函数签名不同（尽管结构体布局内存对齐相同），造成了函数类型不匹配，从而触发了 CFI 违规。
+
+#解决方案
+将 `platform_profile_choices_show()` 和 `platform_profile_{show,store}()` 函数的参数类型修改为与 `struct kobj_attribute` 匹配（即参数从 `struct device *dev` 和 `struct device_attribute *attr` 改为 `struct kobject *kobj` 和 `struct kobj_attribute *attr`）。同时，将属性变量的定义从 `DEVICE_ATTR_*` 宏改为显式定义的 `struct kobj_attribute` 类型，以消除类型不匹配，修复 CFI 违规问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/13a0579c8cae7fb61110daa3b0dfcb9d4db21256

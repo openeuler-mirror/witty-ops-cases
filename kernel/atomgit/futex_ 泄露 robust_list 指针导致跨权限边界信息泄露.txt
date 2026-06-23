@@ -1,0 +1,22 @@
+#标题
+futex: 泄露 robust_list 指针导致跨权限边界信息泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在目标进程执行 `exec()` 系统调用期间，如果进程从非特权二进制文件转换为特权二进制文件（如 setuid-root 程序），攻击者可利用 `sys_get_robust_list` 或 `compat_get_robust_list` 接口的竞争条件，在权限提升前通过 ptrace 权限检查，并在权限提升后读取该进程的 `robust_list` 指针。这导致本应受保护的特权进程内存地址泄露给非特权用户，违反了安全访问控制策略。
+
+#主要错误日志
+未知
+
+#问题根因
+`sys_get_robust_list()` 和 `compat_get_robust_list()` 在检查权限时仅使用了 `ptrace_may_access()`，但该检查与目标进程的 `exec()` 操作之间存在竞争条件。
+具体原因为：目标进程在执行 `exec()` 时可能会改变其凭证和内存映射（例如变为特权进程）。若 `get_robust_list()` 在目标进程完成权限转换前通过了 `ptrace_may_access()` 检查，但在转换完成后才访问 `robust_list`，则可能读取到已变为特权进程的用户空间指针，从而绕过了预期的访问限制，导致敏感信息泄露。
+
+#解决方案
+在 `sys_get_robust_list()` 和 `compat_get_robust_list()` 中引入 `signal->exec_update_lock` 读写锁同步机制。
+在调用 `ptrace_may_access()` 之前获取读锁 (`down_read_killable`)，并在访问完 `robust_list` 后释放锁。这确保了在检查权限和读取列表指针期间，目标进程的 exec 状态保持稳定，从而防止了与并发 `exec()` 的竞争，保证了凭证验证的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8241da20212f54bd91f1aa4b942f53fd589f705d

@@ -1,0 +1,20 @@
+#标题
+ntfs3: run_unpack() 卷边界检查整型溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NTFS3 文件系统 `run_unpack()` 函数处理特定的磁盘数据时，由于对 `lcn` 和 `len` 的加法运算存在整型溢出漏洞，导致卷边界检查被绕过。该问题通过模糊测试发现，可能引发内存越界访问或文件系统逻辑错误，潜在风险为系统崩溃或安全威胁。
+
+#主要错误日志
+未知
+
+#问题根因
+`run_unpack()` 函数中的卷边界检查条件 `lcn + len > sbi->used.bitmap.nbits` 使用了原始加法运算。当 `lcn` 和 `len` 的值非常大时，两者的和会发生整型溢出（wrap around），导致计算结果变小，从而绕过了 `EINVAL` 错误返回检查，使得无效的 LCN（Logical Cluster Number）范围被误判为有效。
+
+#解决方案
+使用 `check_add_overflow()` 函数替换原始的加法运算，在进行边界比较前先检测加法是否会发生溢出。如果检测到溢出，直接返回 `-EINVAL`；否则，使用安全的计算结果进行后续的卷边界比较。此修复方式与先前针对 `prev_lcn + dlcn` 和 `vcn64 + len` 的修复保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab23404a3c8208a778f2952a4e1c4d664843c663

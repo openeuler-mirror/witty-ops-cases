@@ -1,0 +1,20 @@
+#标题
+usb: gadget: f_tcm: 处理nexus时的空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB Target 模块中，若 USB 主机在 nexus 完全建立前或刚被释放后立即发送 BOT（Bulk-Only Transport）命令，会触发 `tpg->tpg_nexus` 指针的空指针引用。该漏洞可导致内核 panic，造成本地拒绝服务。
+
+#主要错误日志
+[  xxx] Missing nexus, ignoring command
+
+#问题根因
+`tpg->tpg_nexus` 指针由 ConfigFS 动态管理，在 nexus 未完全建立或已释放时可能为 NULL。代码中的 `bot_submit_command()` 和 `usbg_cmd_work()` 等处理路径在获取 `tv_nexus` 后，未进行有效性检查便直接解引用 `tv_nexus->tvn_se_sess`。相比模块内其他函数（如 `usbg_submit_command()`），此处缺乏防御性编程，导致在特定竞态条件下触发空指针引用。
+
+#解决方案
+在 `usbg_cmd_work()` 和 `bot_cmd_work()` 函数中增加对 `tv_nexus` 指针的 NULL 检查。若指针为空，通过 `dev_err` 打印错误日志 "Missing nexus, ignoring command" 并直接返回，避免继续处理命令导致的内核崩溃，从而优雅地中止异常命令。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd38bddc53f98ff66fa6b7037e936bf65394cb62

@@ -1,0 +1,40 @@
+#标题
+ipmr: 访问 mfc_cache_list 时因缺少 RCU 锁导致 RCU-list 遍历告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 RCU_PROVE 的情况下，系统运行时触发 RCU-list 遍历检查告警。内核日志显示在 `net/ipv4/ipmr_base.c:313` 处，代码在未持有 RCU 读锁的情况下遍历了 RCU 保护的链表 `mfc_cache_list`。该问题可能同时影响 IPv4 和 IPv6 代码路径。
+
+#主要错误日志
+```
+net/ipv4/ipmr_base.c:313 RCU-list traversed in non-reader section!!
+
+rcu_scheduler_active = 2, debug_locks = 1
+	   2 locks held by RetransmitAggre/3519:
+	    #0: ffff88816188c6c0 (nlk_cb_mutex-ROUTE){+.+.}-{3:3}, at: __netlink_dump_start+0x8a/0x290
+	    #1: ffffffff83fcf7a8 (rtnl_mutex){+.+.}-{3:3}, at: rtnl_dumpit+0x6b/0x90
+
+stack backtrace:
+	    lockdep_rcu_suspicious
+	    mr_table_dump
+	    ipmr_rtm_dumproute
+	    rtnl_dump_all
+	    rtnl_dumpit
+	    netlink_dump
+	    __netlink_dump_start
+	    rtnetlink_rcv_msg
+	    netlink_rcv_skb
+	    netlink_unicast
+	    netlink_sendmsg
+```
+
+#问题根因
+代码在 `mr_table_dump` 函数中遍历 `mr_table->mfc_cache_list` 链表时，使用了 `list_for_each_entry_rcu` 接口，但未持有 RCU 读锁。虽然此时持有 RTNL 锁保证了操作的安全性，但由于缺少 RCU 锁的持有标记，导致 RCU 机制误报“在非读者区域遍历 RCU-list”的错误。
+
+#解决方案
+修改 `mr_table_dump` 函数中的链表遍历逻辑，在 `list_for_each_entry_rcu` 调用中增加 `lockdep_rtnl_is_held()` 参数。该操作向 RCU 机制表明遍历时已持有 RTNL 锁，从而消除误报，仅在真正缺少 RTNL 锁或 RCU 读锁时才报错。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf8ffe5e4790eebf29d2584fd26f2fcdf72624c2

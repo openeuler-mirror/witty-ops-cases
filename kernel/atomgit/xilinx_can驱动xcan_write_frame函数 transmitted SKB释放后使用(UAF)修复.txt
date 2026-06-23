@@ -1,0 +1,20 @@
+#标题
+xilinx_can驱动xcan_write_frame函数 transmitted SKB释放后使用(UAF)修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在Xilinx CAN控制器驱动发送数据时，内核可能发生Use-After-Free（释放后使用）错误。具体表现为在调用`can_put_echo_skb()`后，代码继续访问已释放的SKB（socket buffer）数据，可能导致内核崩溃、内存损坏或数据不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数`xcan_write_frame()`中，代码调用了`can_put_echo_skb()`，该函数会获取SKB的所有权，并可能在调用期间或之后将其释放。然而，原代码在调用`can_put_echo_skb()`之后，仍继续通过指针访问SKB中的数据（如写入寄存器操作）。这导致程序访问了已经被释放的内存，引发Use-After-Free漏洞。之前的修复提交并未将`can_put_echo_skb()`的调用移动到足够靠后的位置。
+
+#解决方案
+调整`xcan_write_frame()`函数中的代码执行顺序。将`can_put_echo_skb()`调用以及相关的`priv->tx_head++`操作移动到函数末尾，确保在所有对SKB数据的访问和寄存器写入操作完成之后，再执行SKB所有权的转移和可能的释放操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9d908eab0894848d74c57e03b1fbab410a949396

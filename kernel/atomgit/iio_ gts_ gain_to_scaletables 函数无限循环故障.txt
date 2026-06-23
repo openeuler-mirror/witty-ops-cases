@@ -1,0 +1,24 @@
+#标题
+iio: gts: gain_to_scaletables 函数无限循环故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 IIO（Industrial I/O）子系统的增益时间缩放辅助模块（gts）中 `gts->num_itime` 为 0 时，调用 `gain_to_scaletables()` 函数会触发无限循环。由于循环变量 `time_idx` 在此时被初始化为 -1，循环条件 `while (time_idx--)` 恒为真，导致内核在该函数中死循环，系统响应停滞。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `iio_gts_build_avail_time_table()` 中虽然检查了 `gts->num_itime` 不为零，但在 `gain_to_scaletables()` 函数中未进行相应检查。
+变量 `time_idx` 初始化为 `gts->num_itime - 1`。如果 `gts->num_itime` 为 0，则 `time_idx` 初始值为 -1。
+代码中使用 `while (time_idx--)` 进行循环判断。对于无符号或有符号整数，当值为 -1 时，自减操作产生的数值导致条件判断持续为真，从而引发无限循环。
+
+#解决方案
+修改 `drivers/iio/industrialio-gts-helper.c` 文件中的循环判断条件。
+将 `while (time_idx--)` 修改为 `while (time_idx-- > 0)`。
+该修改确保了只有当 `time_idx` 大于 0 时循环才会继续执行，从而避免了 `time_idx` 为 -1 时导致的死循环问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8ed1c683334bbf28e34321a7d10c56614a386be5

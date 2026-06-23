@@ -1,0 +1,24 @@
+#标题
+selftests: mount_setattr 测试用例 idmap_mount_tree_invalid 因 tmpfs 支持 idmap 导致断言失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在较新的内核版本中运行 selftests 中的 mount_setattr 测试套件时，测试用例 `idmap_mount_tree_invalid` 运行失败并终止。具体表现为测试断言错误，期望系统调用 `sys_mount_setattr` 返回非零值（即失败），但实际返回了 0（即成功），导致测试逻辑与预期不符。
+
+#主要错误日志
+```
+#  RUN           mount_setattr_idmapped.idmap_mount_tree_invalid ...
+# mount_setattr_test.c:1428:idmap_mount_tree_invalid:Expected sys_mount_setattr(open_tree_fd, "", AT_EMPTY_PATH, &attr,  sizeof(attr)) (0) ! = 0 (0)
+# idmap_mount_tree_invalid: Test terminated by assertion
+```
+
+#问题根因
+测试用例设计初衷是验证在无效挂载场景下 `sys_mount_setattr` 应返回失败（-EINVAL）。原测试代码在 `/mnt/A` 路径下挂载了 tmpfs 文件系统。由于内核引入了 commit 7a80e5b8c6fa ("shmem: support idmapped mounts for tmpfs")，tmpfs 开始支持 idmapped mounts（带有 `FS_ALLOW_IDMAP` 标志）。因此，在该挂载点上调用 `sys_mount_setattr` 不再返回错误，而是成功执行，导致测试用例的断言逻辑失效。
+
+#解决方案
+修改测试用例 `idmap_mount_tree_invalid` 的挂载设置，将原本使用的 tmpfs 替换为 ramfs。Ramfs 文件系统不支持 idmap 挂载，符合测试用例验证“无效挂载”的预期条件。修改后，`sys_mount_setattr` 将按预期返回错误，测试用例得以通过。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/60e0a05db87c10c8868a365d62f6ade7a8660865

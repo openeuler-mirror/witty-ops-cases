@@ -1,0 +1,20 @@
+#标题
+ipv4: icmp: 处理 IPv6 未加载时的空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核配置启用 IPv6 模块（CONFIG_IPV6=m）但未加载该模块时，系统处理 ICMP PROBE 消息（RFC 8335）会触发内核崩溃。具体表现为在 `icmp_build_probe` 函数中发生空指针引用，导致系统 panic 或 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `icmp_build_probe` 函数处理包含 IPv6 地址的 ICMP PROBE 请求时，调用了 `ipv6_stub->ipv6_dev_find()`。当 IPv6 协议栈未激活（如 CONFIG_IPV6=m 且模块未加载）时，该函数返回 `ERR_PTR(-EAFNOSUPPORT)` 而非有效的指针或 NULL。代码未对返回值进行错误指针检查，直接将该错误指针传递给 `dev_hold()`，导致解引用空指针引发内核崩溃。
+
+#解决方案
+在调用 `ipv6_dev_find` 后增加返回值检查。若返回值为错误指针（`IS_ERR(dev)`），则直接返回 false 静默丢弃该请求，避免继续执行 `dev_hold()` 导致崩溃。根据 RFC 8335，当 IPv6 接口标识符在运行时无法查找时，静默丢弃请求比错误报告“无此接口”更安全。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/971d5c0fe29354efeebea3dc784444d97bf1bab3

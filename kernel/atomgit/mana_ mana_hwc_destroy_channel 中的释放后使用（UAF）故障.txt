@@ -1,0 +1,22 @@
+#标题
+mana: mana_hwc_destroy_channel 中的释放后使用（UAF）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在销毁 HWC（Hardware Channel）通道时，若系统存在正在处理的 CQ（完成队列）中断，可能会触发释放后使用或空指针引用，导致内核崩溃或内存破坏。具体表现为在 `mana_hwc_destroy_channel` 执行期间，中断处理函数 `mana_hwc_rx_event_handler` 访问了已释放的 `caller_ctx` 内存。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mana_hwc_destroy_channel()` 函数中，销毁顺序存在逻辑错误：`hwc->caller_ctx` 被提前释放（kfree），而此时 HWC 的 CQ（完成队列）和 EQ（事件队列）尚未销毁。
+`mana_smc_teardown_hwc()` 仅通知硬件停止，并未同步其他 CPU 上正在执行的 IRQ 处理程序。真正的 IRQ 同步仅发生在后续调用的 `mana_hwc_destroy_cq()` -> `mana_gd_destroy_eq()` -> `mana_gd_deregister_irq()` 流程中。由于 IRQ 同步发生在 `caller_ctx` 释放之后，并发的中断处理函数 `mana_hwc_rx_event_handler()` 可能在调用 `mana_hwc_handle_resp()` 时解引用已释放的 `caller_ctx`（以及 `rxq->msg_buf`），从而引发 UAF 或空指针崩溃。
+
+#解决方案
+调整 `mana_hwc_destroy_channel()` 中的资源销毁顺序，使其与创建顺序相反。
+将 `hwc->caller_ctx` 的释放操作移动到 TX/RX 工作队列（work queues）和 CQ/EQ 销毁操作之后。这确保了所有正在执行的中断处理程序在访问相关内存之前已完成同步，避免了释放后访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9924a1118662a8b659513aa6df8abc480ac5dca0

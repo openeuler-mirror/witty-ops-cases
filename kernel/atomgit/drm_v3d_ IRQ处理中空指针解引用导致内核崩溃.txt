@@ -1,0 +1,25 @@
+#标题
+drm/v3d: IRQ处理中空指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 V3D GPU 驱动执行任务调度过程中，当上一个任务完成并在 IRQ 中断处理线程中发送 fence 信号时，若同时调度运行新任务，会触发竞争条件。该竞争导致 IRQ 处理线程错误地将新任务的 job 指针置为 NULL。当新任务完成并触发 GPU 中断调用 `v3d_irq()` 时，访问该已被置空的 job 指针引发 NULL 指针解引用，导致内核 Oops 甚至 Kernel Panic，系统崩溃。
+
+#主要错误日志
+[  466.310099] Unable to handle kernel NULL pointer dereference at virtual address 00000000000000c0
+[  466.375875] Internal error: Oops: 0000000096000005 [#1] PREEMPT SMP
+[  466.483143] pc : v3d_irq+0x118/0x2e0 [v3d]
+[  466.629483] Kernel panic - not syncing: Oops: Fatal exception in interrupt
+
+#问题根因
+该问题由之前的修复提交 e4b5ccd392b9 ("drm/v3d: Ensure job pointer is set to NULL after job completion") 引入。原逻辑在 IRQ 执行线程中发送 fence 信号（`dma_fence_signal`）之后才将 job 指针置为 NULL。
+根因在于：一旦 `dma_fence_signal` 被调用，DRM 调度器工作队列可能立即被唤醒并开始执行下一个新任务（调用 `run_job()`），从而给 job 指针赋予新值。与此同时，IRQ 线程继续执行，将 job 指针置为 NULL。这就构成了竞争：IRQ 线程在 `run_job` 赋值新任务后，错误地将该指针清零。随后新任务完成触发中断时，`v3d_irq` 访问该 NULL 指针导致崩溃。
+
+#解决方案
+调整代码执行顺序，在发送 fence 信号之前先将 job 指针赋值为 NULL。
+具体修改为：在 `v3d_irq.c` 中的 `v3d_irq` 和 `v3d_hub_irq` 函数处理 `bin_job`、`render_job`、`csd_job` 和 `tfu_job` 时，将 `v3d->xxx_job = NULL;` 移到 `dma_fence_signal(&fence->base);` 之前执行。这确保了指针在通知调度器开始下一任务前已被清理，避免了新任务的指针被错误清零的竞争风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/44a809dd06bf9b7f14138d1160ca2ecccc2e4a9d

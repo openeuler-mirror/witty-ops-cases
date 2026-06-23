@@ -1,0 +1,27 @@
+#标题
+ath10k_sdio: 卸载模块时因释放顺序错误导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_INIT_ON_FREE_DEFAULT_ON 配置的情况下，执行 `rmmod ath10k` 卸载驱动模块时，内核发生 panic。调用栈显示崩溃发生在 `destroy_workqueue` 函数中，由 `ath10k_sdio_remove` 触发。
+
+#主要错误日志
+Call trace:
+ destroy_workqueue+0x1c/0x258
+ ath10k_sdio_remove+0x84/0x94
+ sdio_bus_remove+0x50/0x16c
+ device_release_driver_internal+0x188/0x25c
+ device_driver_detach+0x20/0x2c
+
+#问题根因
+`ath10k_sdio_remove()` 函数中的资源释放顺序错误。原代码先调用 `ath10k_core_destroy()`，再调用 `destroy_workqueue()`。
+在 `ath10k_core_destroy()` 执行过程中，`wiphy_dev_release()` 会释放 `cfg80211_registered_device` 结构体及其成员（包括 sdio workqueue 的指针）。当开启了 CONFIG_INIT_ON_FREE_DEFAULT_ON 时，该指针被释放后会被置为 NULL。
+随后执行 `destroy_workqueue()` 时，传入的是已释放且被置为 NULL 的指针，导致内核空指针引用并触发 panic。
+
+#解决方案
+调整 `ath10k_sdio_remove()` 函数中的调用顺序，先执行 `destroy_workqueue(ar_sdio->workqueue)` 销毁工作队列，再执行 `ath10k_core_destroy(ar)` 释放结构体指针。此顺序与 `ath10k_sdio_probe()` 中的错误处理路径顺序保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6d0c9eb9f958768f55ad0668a9c2c125fd03a862

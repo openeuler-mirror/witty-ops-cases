@@ -1,0 +1,28 @@
+#标题
+arm64: RME: Realm 虚拟机运行时内存缺页映射与处理功能
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 ARM64 RME (Realm Management Extension) 特性的虚拟机中，当 Guest 访问尚未建立映射的内存区域时，KVM 无法正确处理该缺页异常，导致 Guest 无法正常运行或内存访问失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 RME 架构下，Realm 虚拟机的内存分为受保护区域和共享区域。此前的代码逻辑中，KVM 缺少对这两种内存区域运行时缺页异常的处理机制：
+1. 对于受保护内存区域，KVM 未实现向 RMM (Realm Management Monitor) 提供新页面并初始化（清零）的流程。
+2. 对于共享内存区域，KVM 未实现将宿主机 memslot 映射到 Realm VM 非安全地址空间的流程。
+此外，之前的代码在处理 Realm VM 的内存管理时，未正确处理 unmap、flush 和 age 等操作，导致与 RMM 的管理逻辑冲突或功能缺失。
+
+#解决方案
+该补丁通过扩展 KVM MMU 和 RME 模块，实现了 Realm 虚拟机的运行时内存故障处理：
+1. 在 `kvm_handle_guest_abort` 和 `user_mem_abort` 流程中增加 Realm 判断分支，调用新增的 `realm_map_ipa` 函数处理缺页。
+2. 新增 `realm_map_protected` 函数，处理受保护内存映射：委托物理页面、创建 RTT (Realm Translation Table) 表，并将页面清零后映射给 Guest。
+3. 新增 `realm_map_non_secure` 函数，处理共享内存映射：将宿主机内存以非安全属性映射到 Realm VM 的 IPA 空间。
+4. 修改 `__unmap_stage2_range`、`stage2_flush_memslot` 和 `kvm_age_gfn` 等函数，针对 Realm VM 进行特殊处理，绕过或替换标准的 Stage-2 页表操作，转而调用 RMM 接口（如 `kvm_realm_unmap_range`），确保内存管理操作与 RMM 状态一致。
+5. 修复了缺页异常中 IPA（中间物理地址）到 GPA（客户机物理地址）的转换逻辑，确保在 Realm 模式下获取正确的物理页帧号。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d7ef31b61920a348fe2b3bb6a07fe16efc46c89a

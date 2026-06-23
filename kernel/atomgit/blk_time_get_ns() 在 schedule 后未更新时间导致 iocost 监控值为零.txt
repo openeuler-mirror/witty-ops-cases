@@ -1,0 +1,29 @@
+#标题
+blk_time_get_ns() 在 schedule 后未更新时间导致 iocost 监控值为零
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在监控 iocost 的 IO 节流时间时，发现通过 `blk_time_get_ns()` 获取的时间在 `io_schedule()` 返回后始终为零或保持不变。通过调试补丁观测，`blk_time_get_ns()` 在 schedule 前后返回的时间戳完全相同，未体现时间流逝。
+
+#主要错误日志
+```
+[ 1068.096579] fio-1268: ioc_rqos_throttle enter 1067901962288
+[ 1068.272587] fio-1268: ioc_rqos_throttle exit  1067901962288
+[ 1068.274389] fio-1268: ioc_rqos_throttle enter 1067901962288
+[ 1068.472690] fio-1268: ioc_rqos_throttle exit  1067901962288
+[ 1068.474485] fio-1268: ioc_rqos_throttle enter 1067901962288
+[ 1068.672656] fio-1268: ioc_rqos_throttle exit  1067901962288
+[ 1068.674451] fio-1268: ioc_rqos_throttle enter 1067901962288
+[ 1068.872655] fio-1268: ioc_rqos_throttle exit  1067901962288
+```
+
+#问题根因
+在调用 `io_schedule()` 流程中，`blk_flush_plug()` 会清除 `current->flags` 中的 `PF_BLOCK_TS` 标志位，但未清除缓存的时间戳 `plug->cur_ktime`。导致后续在 `sched_update_worker()` 中检查 `PF_BLOCK_TS` 标志位为未设置状态，因而不会调用 `blk_plug_invalidate_ts()` 清除时间戳缓存。最终 `blk_time_get_ns()` 再次被调用时，读取到的是 schedule 之前缓存的旧时间，而不是当前最新时间。
+
+#解决方案
+在 `__blk_flush_plug()` 函数中，清除 `PF_BLOCK_TS` 标志位的同时，显式将 `plug->cur_ktime` 设置为 0，确保缓存的旧时间戳被正确清除，从而触发后续时间戳的重新获取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d37631e96e88db340020e71c4eddc8b44921997d

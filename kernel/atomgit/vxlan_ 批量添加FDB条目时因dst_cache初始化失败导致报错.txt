@@ -1,0 +1,20 @@
+#标题
+vxlan: 批量添加FDB条目时因dst_cache初始化失败导致报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 MAC 学习的情况下，批量添加大量 vxlan FDB 条目（例如 256k 条）时，内核打印 percpu 内存分配失败的错误日志。虽然该错误发生概率较低（小于 0.02%），但在高并发插入场景下可能出现。
+
+#主要错误日志
+percpu: allocation failed, size=40 align=8 atomic=1, atomic alloc failed, no space left
+
+#问题根因
+FDB 条目可以从数据路径添加，因此分配发生在原子上下文中。在将 FDB 哈希表转换为 rhashtable 后，插入速率大幅提升（平均延迟降低 97%），导致 dst_cache_init() 调用 per-CPU 分配器的频率显著增加。在高频分配压力下，per-CPU 分配器来不及异步创建新的内存块，导致小概率的分配失败。原先的代码逻辑将此分配失败视为致命错误并返回 -ENOMEM。
+
+#解决方案
+修改 `vxlan_fdb_append` 函数，不再将 `dst_cache_init()` 的初始化失败视为致命错误。移除错误回退逻辑（即不再释放内存并返回错误），并在调用时增加 `__GFP_NOWARN` 标志以抑制内存分配失败的警告打印。该修复基于以下理由：驱动可以在没有 dst cache 的情况下正常工作（dst_cache_* API 会检查初始化状态），且 dst cache 并非在所有场景下都会被使用（如 'tos inherit' 场景）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac6192ead495769d75866528096af81a9eb82fa1

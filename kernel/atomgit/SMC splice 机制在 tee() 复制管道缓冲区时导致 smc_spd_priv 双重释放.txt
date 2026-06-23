@@ -1,0 +1,48 @@
+#标题
+SMC splice 机制在 tee() 复制管道缓冲区时导致 smc_spd_priv 双重释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户态调用 `tee()` 系统调用复制 SMC socket 的 splice 管道缓冲区时，会导致内核发生 Use-After-Free (UAF) 和空指针解引用，最终引发内核 Panic。
+具体表现为：
+1. KASAN 检测到 `smc_rx_pipe_buf_release` 函数中发生 slab-use-after-free。
+2. 随后在 `smc_rx_update_consumer` 函数中触发内核空指针解引用。
+3. 系统崩溃并打印 "Fatal exception"。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in smc_rx_pipe_buf_release+0x78/0x2a0
+Read of size 8 at addr ffff888004a45740 by task smc_splice_tee_/74
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x53/0x70
+ print_report+0xce/0x650
+ kasan_report+0xc6/0x100
+ smc_rx_pipe_buf_release+0x78/0x2a0
+ free_pipe_info+0xd4/0x130
+ ...
+ </TASK>
+
+BUG: kernel NULL pointer dereference, address: 0000000000000020
+RIP: 0010:smc_rx_update_consumer+0x8d/0x350
+Call Trace:
+ <TASK>
+ smc_rx_pipe_buf_release+0x121/0x2a0
+ ...
+ </TASK>
+Kernel panic - not syncing: Fatal exception
+
+#问题根因
+`smc_rx_splice()` 为每个管道缓冲区分配了一个 `smc_spd_priv` 结构体，并将其指针存储在 `pipe_buffer.private` 中。原来的代码使用了 `generic_pipe_buf_get` 作为 `.get` 回调，该函数在 `tee(2)` 复制管道缓冲区时仅增加页面引用计数，未处理 `smc_spd_priv` 指针的所有权。
+这导致 `tee()` 后，原始缓冲区和克隆的缓冲区共享同一个 `smc_spd_priv *` 指针。当两个管道相继关闭释放时，`smc_rx_pipe_buf_release()` 会被调用两次：
+1. 第一次调用正常释放内存 (`kfree(priv)`)。
+2. 第二次调用发生 Use-After-Free，导致内核恐慌。
+此外，即使不发生崩溃，重复调用也会导致接收窗口计数错误。
+
+#解决方案
+在 `net/smc/smc_rx.c` 中新增 `smc_rx_pipe_buf_get()` 函数，并将其注册为 `smc_pipe_ops` 的 `.get` 回调。该函数直接返回 `false`，禁止 SMC splice 缓冲区被克隆或共享。
+当 `tee()` 或 `splice_pipe_to_pipe()` 尝试操作 SMC 管道缓冲区时，将返回 `-EFAULT` 错误，从而从源头避免双重释放问题。如需复制数据，用户需使用基于拷贝的读取路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db3656d0bb80b673aa85f4913a4fc532d4abbcf7

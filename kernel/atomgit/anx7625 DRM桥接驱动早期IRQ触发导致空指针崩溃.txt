@@ -1,0 +1,20 @@
+#标题
+anx7625 DRM桥接驱动早期IRQ触发导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 anx7625 驱动过程中，如果中断请求注册成功后立即触发中断（早期 IRQ），内核会发生 NULL 指针引用错误，导致驱动加载失败或系统崩溃。
+
+#主要错误日志
+DRM_DEV_ERROR(dev, "fail to request irq\n")
+
+#问题根因
+驱动在 `anx7625_i2c_probe` 函数中调用 `devm_request_threaded_irq` 注册中断时，未设置 `IRQF_NO_AUTOEN` 标志。这导致中断在注册后立即被自动使能。此时，驱动尚未完成 `platform` 数据结构的完整初始化，若此时发生中断，中断处理程序 `anx7625_intr_hpd_isr` 会访问未初始化的资源，从而引发空指针崩溃。
+
+#解决方案
+在注册中断时添加 `IRQF_NO_AUTOEN` 标志，阻止中断被自动使能。随后，在驱动初始化流程的末尾、相关数据结构准备就绪后，显式调用 `enable_irq` 使能中断，确保中断处理程序运行时设备状态已就绪。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2398e79b56fd0e5c2d69659102ba9895cb0b047f

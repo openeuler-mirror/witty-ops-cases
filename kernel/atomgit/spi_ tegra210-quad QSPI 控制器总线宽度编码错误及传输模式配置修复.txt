@@ -1,0 +1,23 @@
+#标题
+spi: tegra210-quad QSPI 控制器总线宽度编码错误及传输模式配置修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Tegra210 QSPI 驱动在执行 combined sequence 模式的数据传输时，命令和地址阶段的总线宽度配置错误。驱动强制将 bus_width 设为 0（即 X1 模式），导致无法支持 X2 或 X4 宽度的命令与地址传输，限制了 QSPI 接口的传输性能与功能灵活性。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 宏定义编码错误：`QSPI_COMMAND_X1_X2_X4` 和 `QSPI_ADDRESS_X1_X2_X4` 宏的位移计算逻辑有误，原实现 `(((x) & 0x3) << 13)` 无法正确将总线宽度映射到寄存器字段，正确逻辑应为 `((((x) >> 1) & 0x3) << 13)`。
+2. 逻辑强制覆盖：在 `tegra_qspi_combined_seq_xfer` 函数中，调用 `tegra_qspi_cmd_config` 和 `tegra_qspi_addr_config` 时硬编码传入总线宽度参数为 0，且函数内部也曾强制将 `bus_width` 赋值为 0，导致无论上层请求何种宽度，硬件始终被配置为 X1 模式。
+
+#解决方案
+1. 修正宏定义：修改 `QSPI_COMMAND_X1_X2_X4` 和 `QSPI_ADDRESS_X1_X2_X4` 宏定义，通过右移 1 位（`>> 1`）正确计算编码值。
+2. 移除强制赋值：删除 `tegra_qspi_addr_config` 函数内强制设置 `bus_width = 0` 的代码。
+3. 传递真实参数：修改 `tegra_qspi_combined_seq_xfer` 函数调用点，将 `xfer->tx_nbits`（真实的总线宽度位宽）传递给配置函数，替代原先硬编码的 0，以支持 X1/X2/X4 多种传输模式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/abd378ee8a0ed46acc73f27db26d128c70d8ba8b

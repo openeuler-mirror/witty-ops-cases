@@ -1,0 +1,25 @@
+#标题
+sch_qfq: 修复并发访问 qfq_aggregate 导致的空指针引用与 UAF 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 QFQ 调度器中，当某线程执行 `qfq_enqueue` 调用 `qfq_change_agg` 修改 `agg` 对象时，若其他线程并发访问该对象（例如通过 `qfq_dump_class` 或 `qfq_delete_class`），会触发竞态条件。具体表现为：
+1. `qfq_dump_class` 执行时可能触发 NULL 指针引用。
+2. `qfq_delete_class` 执行时可能导致 Use-After-Free（释放后使用）错误。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于对 `qfq_aggregate` 结构体成员的并发访问缺乏锁保护。在 `qfq_change_agg` 修改聚合对象期间，`qfq_dump_class` 和 `qfq_dump_class_stats` 在读取 `agg->lmax` 和 `agg->class_weight` 时未持有锁，导致读取到不一致的状态或空指针。此外，`qfq_delete_class` 在释放 `cl` 对象之前已解锁，导致其他线程可能在解锁后、释放前访问到即将被销毁的对象。
+
+#解决方案
+通过扩展临界区范围和增加锁保护来修复竞态条件：
+1. **调整释放时机**：将 `qfq_delete_class` 中的 `qfq_destroy_class` 调用移动到 `sch_tree_unlock` 之前，确保对象在持有锁的情况下被销毁，防止 UAF。
+2. **增加读锁保护**：在 `qfq_dump_class` 和 `qfq_dump_class_stats` 中访问 `cl->agg` 成员前获取 `sch_tree_lock`，读取完成后释放锁，防止并发修改导致的数据不一致或空指针访问。
+3. **优化检查逻辑**：在 `qfq_change_class` 中检查现有配置时，先获取锁读取 `agg` 成员到局部变量，释放锁后再进行比较，避免在锁外直接访问可能被修改的 `agg` 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/09031bab7dff769b8cbff8ba0da1e9cbda54cc6c

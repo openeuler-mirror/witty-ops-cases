@@ -1,0 +1,20 @@
+#标题
+iio: adc: rockchip_saradc: 修复触发缓冲区中的信息泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Rockchip SARADC 驱动在处理触发缓冲区数据时，未对临时数据缓冲区结构体 `data` 进行初始化。当读取的 ADC 通道数少于缓冲区可容纳的最大通道数时，缓冲区中未使用的字节保持未初始化状态（包含内核栈上的随机数据）。这些未初始化的数据会被拷贝到用户空间，导致内核内存信息泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `rockchip_saradc_trigger_handler` 中，结构体变量 `data` 未被初始化（清零）。驱动仅写入了部分数据（实际扫描的通道数据），剩余空间残留了栈上的旧数据，随后整个结构体被上传至用户空间，造成信息泄露。
+
+#解决方案
+在 `rockchip_saradc_trigger_handler` 函数中，于获取互斥锁之前，显式调用 `memset(&data, 0, sizeof(data))` 对数据缓冲区进行全零初始化，确保未使用的字节不会泄露内核敏感信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/05b1d1a4f6737f7911ffd3d429b08e3e3b2bff97

@@ -1,0 +1,20 @@
+#标题
+smb: client: fix off-by-8 bounds check in check_wsl_eas()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SMB 客户端的 WSL (Windows Subsystem for Linux) 扩展属性响应时，边界检查逻辑存在错误。该缺陷导致内核对数据有效性的判断不准确，可能误判有效数据为越界返回 -EINVAL，或者在某些计算情况下未能正确拦截真正的越界访问，造成内存访问安全隐患或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `check_wsl_eas` 在进行边界检查时存在计算偏差。原代码 `(u8 *)ea + nlen + 1 + vlen > end` 未能正确反映数据结构的实际存储位置。由于 `ea_data` 字段位于结构体 `ea` 偏移 8 字节处，原代码的起始计算位置少算了 8 个字节（即 `off-by-8`），导致边界检查逻辑失效。
+
+#解决方案
+修正边界检查的起始指针计算方式。将比较表达式的左侧从 `(u8 *)ea` 修改为 `(u8 *)ea->ea_data`。这样可以确保计算 `nlen + 1 + vlen` 时，基地准确保留在数据段的起始位置，从而正确验证数据是否超出缓冲区末尾 `end`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/744cb571964e528233ef3b348c4f472d7f7951a6

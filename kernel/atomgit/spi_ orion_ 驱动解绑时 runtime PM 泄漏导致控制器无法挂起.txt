@@ -1,0 +1,23 @@
+#标题
+spi: orion: 驱动解绑时 runtime PM 泄漏导致控制器无法挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 orion spi 驱动从设备解绑（unbind）后，由于运行时电源管理（runtime PM）引用计数未平衡且自动挂起设置未恢复，导致控制器无法进入挂起状态。此问题会在驱动重新绑定（rebind）时产生影响，阻碍正常的电源管理状态流转。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `orion_spi_remove` 移除函数中，虽然调用了 `pm_runtime_disable`，但未对之前 `probe` 阶段或运行时获取的 PM 引用计数进行释放（put），导致引用计数泄漏。同时，未恢复自动挂起（autosuspend）的设置，使得控制器在驱动解绑后无法正确切换到挂起状态。
+
+#解决方案
+在驱动移除函数 `orion_spi_remove` 中补充 runtime PM 的清理操作：
+1. 调用 `pm_runtime_put_noidle` 释放运行时 PM 引用计数，确保计数平衡。
+2. 调用 `pm_runtime_set_suspended` 将设备状态显式设置为挂起态。
+3. 调用 `pm_runtime_dont_use_autosuspend` 恢复自动挂起设置的初始状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7a9558722a8ecff11af88319f85972412e7f5c7c

@@ -1,0 +1,20 @@
+#标题
+ntfs ->d_compare() 因阻塞导致内核崩溃或死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NTFS 文件系统进行目录项比较（如查找或访问文件）时，由于 `->d_compare()` 回调函数调用了可能阻塞的内存分配函数，导致内核违反 RCU 路径查找的原子性约束。这可能引发内核崩溃、系统挂起或调度相关的 WARNING/Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+NTFS 驱动中的 `ntfs_d_compare()` 和 `ntfs_d_hash()` 函数滥用了 `__getname()` 和 `names_cachep` 进行内存分配。`__getname()` 底层依赖的内存分配可能阻塞（GFP_KERNEL），而在 RCU 模式下执行的 `->d_compare()` 回调函数严禁阻塞。这违反了 RCU 读取侧临界区的规则，导致内核调度器状态异常或死锁。
+
+#解决方案
+将 NTFS 驱动中涉及的相关内存分配方式从专用的 names 缓存（`__getname` / `kmem_cache_alloc`）改为通用的 `kmalloc`，并强制使用 `GFP_NOWAIT` 标志（针对 `d_compare` 和 `d_hash` 场景）以确保分配过程不会阻塞。同时清理了其他无关路径下对 names_cachep 的滥用，统一使用 `kmalloc(PATH_MAX, GFP_KERNEL)`，移除对 `__getname` / `__putname` 的依赖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4fae30e4ca6fcf6213b1ad669f117379c920fa17

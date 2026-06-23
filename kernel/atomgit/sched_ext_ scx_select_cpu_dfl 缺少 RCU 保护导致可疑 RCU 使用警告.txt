@@ -1,0 +1,27 @@
+#标题
+sched_ext: scx_select_cpu_dfl 缺少 RCU 保护导致可疑 RCU 使用警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 scx_select_cpu_dfl() 函数中获取 LLC CPU 掩码时，由于未持有 rcu_read_lock() 就对 sched_domain 指针进行解引用，导致内核触发 "suspicious RCU usage" 警告。最坏情况下可能导致非法内存访问。
+
+#主要错误日志
+[   20.996135] =============================
+[   20.996345] WARNING: suspicious RCU usage
+[   20.996563] 6.11.0-virtme #17 Tainted: G        W
+[   20.996576] -----------------------------
+[   20.996576] kernel/sched/ext.c:3323 suspicious rcu_dereference_check() usage!
+[   20.996576] rcu_scheduler_active = 2, debug_locks = 1
+...
+[   20.996576]  scx_select_cpu_dfl+0x234/0x260
+
+#问题根因
+在默认 CPU 选择策略函数 scx_select_cpu_dfl() 中，解引用 sched_domain 指针以获取 LLC CPU 掩码时，未持有 rcu_read_lock() 锁。这种未受保护的解引用操作违反了 RCU 临界区规则，触发了 RCU 使用警告。
+
+#解决方案
+在 scx_select_cpu_dfl() 函数入口处添加 rcu_read_lock()，并在所有返回路径（包括常规返回和找到 CPU 后的返回）前添加相应的 rcu_read_unlock()，以确保 sched_domain 指针在解引用期间受到 RCU 保护。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f941cdb67f906f47c841cd4b23e8e26e4049cc55

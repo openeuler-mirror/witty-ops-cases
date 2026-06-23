@@ -1,0 +1,20 @@
+#标题
+Loongson RTC 闹钟事件无法上报且中断重复触发
+
+#内核版本
+OLK-6.6
+
+#问题现象
+应用程序在 Loongson RTC 设备上设置并使能闹钟后，无法将闹钟通知传播到用户空间。通过 `select()` 或 `poll()` 等待 RTC 设备文件的进程无法收到闹钟事件通知。同时，ACPI 中断会被多次重复触发。
+
+#主要错误日志
+未知
+
+#问题根因
+Loongson RTC 的 ACPI 事件处理函数 `loongson_rtc_handler` 中遗漏了调用 `rtc_update_irq()`，导致闹钟事件无法上报给用户空间。此外，处理程序未将 `TOY_MATCH0_REG` 清零，导致中断无法正确清除，从而引发中断重复触发。
+
+#解决方案
+在 `loongson_rtc_handler` 函数中补充调用 `rtc_update_irq(priv->rtcdev, 1, RTC_AF | RTC_IRQF)` 以正确发送闹钟中断事件；同时增加对 `TOY_MATCH0_REG` 寄存器的写 0 操作，以确保中断状态被清除，防止中断重复触发。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/551e7eea193ffd59f23976403c2eafdb50c71822

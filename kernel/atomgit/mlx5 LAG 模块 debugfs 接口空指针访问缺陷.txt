@@ -1,0 +1,20 @@
+#标题
+mlx5 LAG 模块 debugfs 接口空指针访问缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LAG（链路聚合）设备添加流程中，若 `__mlx5_lag_dev_add_mdev()` 返回成功但未创建有效的 LAG 上下文（ldev 为 NULL），系统仍会继续创建 debugfs 接口。此时若用户试图访问 `lag/members` 等 debugfs 文件，将触发 NULL 指针解引用，导致内核崩溃或异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `__mlx5_lag_dev_add_mdev()` 在处理某些错误场景时会优雅地返回 0（成功），导致初始化流程误判并继续调用 `mlx5_ldev_add_debugfs()`。`mlx5_ldev_add_debugfs()` 未校验 `mlx5_lag_dev(dev)` 返回值的有效性即盲目创建 debugfs 目录和属性文件，这些文件接口依赖有效的 ldev 指针，访问时引发空指针崩溃。
+
+#解决方案
+在 `mlx5_ldev_add_debugfs()` 函数入口处增加防御性检查，确认 `mlx5_lag_dev(dev)` 返回的 ldev 指针非空。若 ldev 为 NULL，函数直接返回，避免在无效上下文下创建 debugfs 接口，从而杜绝后续访问引发的空指针解引用风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/18ff8b14d9b38188f432cefcc53c5ae5f6c309b8

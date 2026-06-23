@@ -1,0 +1,29 @@
+#标题
+CXL HDM 解码器启用状态下错误回退到 DVSEC 模拟导致区域创建失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在销毁 CXL 区域并重启 memdev 后，系统错误地回退到 DVSEC 范围模拟模式，导致区域重新创建失败。
+具体表现为：
+1. 触发条件：依次执行 `cxl disable-region region0`、`cxl destroy-region region0`、`cxl disable-memdev mem0`、`cxl enable-memdev mem0`。
+2. 错误行为：memdev 重新探测时发现解码器未提交，错误地进入了 DVSEC 模拟路径。
+3. 失败结果：创建区域时报错 `-6` (ENXIO)，HPA 分配错误 `-34` (ERANGE)，解码器交织粒度配置不匹配。
+
+#主要错误日志
+- should_emulate_decoders: cxl_port endpoint6: decoder6.0: committed: 0 base: 0x0_00000000 size: 0x0_00000000
+- devm_cxl_setup_hdm: cxl_port endpoint6: Fallback map 1 range register
+- cxl_port endpoint6: failed to attach decoder6.0 to region0: -6
+- alloc_hpa: cxl region4: HPA allocation error (-34)
+- cxl region0: pci0000:e0:port1 cxl_port_setup_targets expected iw: 1 ig: 4096 ..
+- cxl region0: pci0000:e0:port1 cxl_port_setup_targets got iw: 1 ig: 256 state: disabled ..
+
+#问题根因
+`should_emulate_decoders()` 函数逻辑判断错误。该函数通过遍历每个解码器的 COMMITTED 位来决定是否回退到 DVSEC 模拟。当区域销毁时，HDM 解码器寄存器（包括 committed bits）被清零。随后的 memdev 重新探测发现解码器未提交，便错误地触发了 DVSEC 模拟回退，即使此时 HDM 解码器能力在全局上仍然是启用状态。这导致系统将解码器视为 AUTO 模式并锁定了错误的交错设置。
+
+#解决方案
+修改 `should_emulate_decoders()` 函数的判断逻辑，不再循环检查单个解码器的 COMMITTED 位，而是直接检查全局 `CXL_HDM_DECODER_ENABLE` 位。如果 HDM 解码器全局已启用，则忽略单个解码器的提交状态，禁止回退到 DVSEC 范围模拟，从而避免错误配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/997748e816de503ad489d845a4b8b59652febf7d

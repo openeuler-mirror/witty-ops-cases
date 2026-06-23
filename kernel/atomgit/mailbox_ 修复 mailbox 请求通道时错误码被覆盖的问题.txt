@@ -1,0 +1,21 @@
+#标题
+mailbox: 修复 mailbox 请求通道时错误码被覆盖的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当驱动调用 `mbox_request_channel` 解析设备树 "mboxes" 属性失败时（例如索引为负数或指向空 phandle），用户只能观测到返回 `-ENODEV` 错误码，而无法获取底层的精确错误原因（如 `-EINVAL` 或 `-ENOENT`）。这导致在排查 mailbox 通道请求失败问题时，无法根据错误码快速定位是参数非法还是设备树配置缺失。
+
+#主要错误日志
+[推断] dmesg 中可能包含如下调试打印：
+mailbox: can't parse "mboxes" property
+
+#问题根因
+`mbox_request_channel` 函数在调用 `of_parse_phandle_with_args()` 解析设备树参数时，无视了该函数返回的具体错误码（`-EINVAL` 或 `-ENOENT`），直接硬编码返回了 `-ENODEV`，导致错误信息丢失，掩盖了真实的失败原因。
+
+#解决方案
+修改 `drivers/mailbox/mailbox.c` 中的 `mbox_request_channel` 函数逻辑，保存 `of_parse_phandle_with_args()` 的返回值，并在解析失败时直接返回该原始错误码（`ret`），而非覆盖为 `-ENODEV`，从而向上层传递准确的错误原因。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b53f0f4bc87c58ea89dee8c48356c587cf138abd

@@ -1,0 +1,25 @@
+#标题
+ubfi: ummu节点解析流程中设备引用计数泄露修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 ACPI 或 DTS 模式成功获取设备后，若后续的 ummu 节点解析配置流程（如 `ummu_config_update` 或 `ubrt_fwnode_set`）失败，之前获取的设备未被正确释放，导致设备引用计数泄露。
+
+#主要错误日志
+- "update config failed, ret[%d]\n"
+- "update fwnode failed, ret[%d]\n"
+- "can not get ubrt fwnode for index=%u, type=%d\n"
+
+#问题根因
+在 `acpi_processor_ummu` 函数中，调用 `ummu_config_update` 或 `ubrt_fwnode_set` 失败时，直接返回错误码或设置 status，但遗漏了调用 `put_device(dev)` 来释放之前获取的设备结构体，导致资源维护错误。
+
+#解决方案
+在 `acpi_processor_ummu` 函数的错误处理路径中，补充调用 `put_device(dev)`。具体修改如下：
+1. 当 `ummu_config_update` 失败时，在返回前增加 `put_device(dev)`。
+2. 当 `ubrt_fwnode_set` 失败时，在返回前增加 `put_device(dev)`。
+确保在解析流程失败时，已获取的设备资源能够被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/391b9ef4b8d76508d699dd70e3cf00acb8ff1c82

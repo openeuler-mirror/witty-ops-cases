@@ -1,0 +1,20 @@
+#标题
+phy: qcom-qmp-usb: 修复 NULL 指针绕过 IS_ERR() 检查导致的空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 qmp-usb 驱动初始化或探测过程中，若 `devm_ioremap()` 返回 NULL（例如内存不足场景），调用者仅使用 `IS_ERR()` 进行校验未能捕获该错误，导致 NULL 指针被当作有效地址进行解引用，进而引发内核空指针异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`qmp_usb_iomap()` 辅助函数在处理非独占映射时，直接返回了 `devm_ioremap()` 的结果。`devm_ioremap()` 失败时返回 NULL，而调用者仅使用 `IS_ERR()` 检查错误指针。由于 NULL 不是有效的 ERR 错误码，它绕过了该检查并被传递下去，最终导致对无效地址的解引用。
+
+#解决方案
+在 `qmp_usb_iomap()` 函数中增加对 `devm_ioremap()` 返回值的显示 NULL 检查。如果返回 NULL，则通过 `IOMEM_ERR_PTR(-ENOMEM)` 返回一个标准的错误指针，确保错误能被上层的 `IS_ERR()` 检查正确捕获并处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/136740de479ca7651f4002bde1ab065b44a7fc09

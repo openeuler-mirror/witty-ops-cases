@@ -1,0 +1,20 @@
+#标题
+sentry远端客户端ACK等待轮询休眠时间计算不当导致延迟过长
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在sentry远端客户端处理逻辑中，当系统处于非panic状态等待reboot ACK消息时，若代码执行时间`code_run_times_ms`小于`MILLISECONDS_OF_EACH_MDELAY`，休眠时间会被计算为一个较大的差值。这导致在等待ACK响应期间，任务长时间处于休眠状态无法及时唤醒检查消息，造成ACK响应处理延迟过大，影响系统重启流程的及时性。
+
+#主要错误日志
+未知
+
+#问题根因
+在`remote_event_handler`函数中，休眠时间原逻辑为动态计算差值：`MILLISECONDS_OF_EACH_MDELAY - code_run_times_ms`。当`code_run_times_ms`较小时，计算出的休眠时间较长。该逻辑未考虑到ACK检查循环需要较高的响应频率，导致单次休眠时间过长，阻塞了ACK消息的及时轮询处理。
+
+#解决方案
+修改ACK等待循环中的休眠逻辑，不再使用动态计算的时间差值，而是使用固定的短间隔`MSLEEP_TIME_EACH_ROUND_OF_ACK_CHECK`（定义为10ms）进行休眠。对于panic状态使用`mdelay`，非panic状态使用`msleep`，确保每次轮询检查的间隔足够短且可控，从而保证ACK消息能被及时响应处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d471944419c3c05b980c2b7d0f49f9797e4e20ba

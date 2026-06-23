@@ -1,0 +1,20 @@
+#标题
+crypto: atmel-sha204a 内存分配失败导致 tfm_count 计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 atmel-sha204a 硬件随机数生成器驱动中，当进行非阻塞读取时，若内存分配失败，会导致 `tfm_count` 计数未能正确递减。该泄漏会导致计数持续累积，最终阻塞后续的读取操作，致使设备无法继续正常提供随机数。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `atmel_sha204a_rng_read_nonblocking` 中，调用 `kmalloc` 分配内存失败时，函数直接返回 `-ENOMEM`，但未执行 `atomic_dec(&i2c_priv->tfm_count)` 操作来释放之前增加的计数引用。这导致了引用计数的泄漏。
+
+#解决方案
+在 `kmalloc` 分配内存失败的错误处理分支中，增加 `atomic_dec(&i2c_priv->tfm_count)` 调用，确保在内存分配失败时正确回滚计数，避免引用计数泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7c352143039455083e38326e318020a2e92d2d62

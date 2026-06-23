@@ -1,0 +1,20 @@
+#标题
+amd_hsmp: 访问 metrics 表时引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD HSMP（Host System Management Port）驱动中，当 metric table 地址未分配时，如果用户态尝试访问 metrics_bin 文件读取指标数据，将导致内核发生 NULL 指针解引用，进而引发内核崩溃。
+
+#主要错误日志
+dev_err(sock->dev, "Metrics table address not available\n");
+
+#问题根因
+驱动代码在 `hsmp_metric_tbl_read` 函数中直接访问 `sock->metric_tbl_addr` 指针，未预先检查该指针是否为空。当硬件或固件层面未能成功分配 metric table 地址时，该指针保持为 NULL，后续对其访问导致空指针解引用错误。
+
+#解决方案
+在 `hsmp_metric_tbl_read` 函数入口处增加对 `sock->metric_tbl_addr` 的非空校验。如果指针为空，打印错误日志 "Metrics table address not available" 并返回 `-ENOMEM` 错误码，从而阻止非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/89f523acdfb4c8ff937cb4d2af57381fb587bbf9

@@ -1,0 +1,22 @@
+#标题
+scsi: qla2xxx: 驱动卸载时释放后使用（Use-After-Free）故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 qla2xxx 驱动过程中，内核线程 `qla2x00_do_dpc` 可能会发生释放后使用，导致内核崩溃或数据结构损坏。具体表现为驱动卸载流程中触发了对已释放资源的非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在原有代码逻辑中，`qla2x00_do_dpc` 线程在检测到 `UNLOADING` 标志位后会直接退出循环。线程退出后，驱动卸载流程继续执行，导致某些必要的清理工作（如 `qla2x00_abort_all_cmds`）未在线程上下文中完成，或者线程未正确同步就访问了已被释放的数据结构，从而引发 Use After Free 问题。
+
+#解决方案
+修改 `qla2x00_do_dpc` 线程的主循环逻辑：
+1. 调整 `kthread_should_stop()` 的检查位置，使其在主循环内部被唤醒后第一时间检查，若满足条件则跳出循环。
+2. 将 `UNLOADING` 标志位的检查移至 `ha->dpc_active` 置 1 之前。当检测到 `UNLOADING` 时，线程不再执行任何工作任务，直接跳转至 `end_loop` 等待被 `kthread_stop` 终止，从而确保卸载流程的同步正确性，避免对已释放资源的访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/da8b132dfe3a9812fb8b900206efd89bc0de2e4a

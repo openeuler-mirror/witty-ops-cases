@@ -1,0 +1,26 @@
+#标题
+scsi: qla2xxx: bsg_done() 导致双释放引发内核 panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在进行 qla2xxx 驱动相关的 BSG 操作时（如固件更新 `qlafwupdate`），触发内核缺页异常导致 Kernel Panic。系统无法处理页错误，RIP 指针位于 `memcpy_erms` 函数，调用栈显示涉及 `qla2x00_process_vendor_specific` 和 `sg_copy_buffer`。
+
+#主要错误日志
+[5353358.825191] BUG: unable to handle page fault for address: ff5f5e897b024000
+[5353358.825194] #PF: supervisor write access in kernel mode
+[5353358.825195] #PF: error_code(0x0002) - not-present page
+[5353358.825198] Oops: 0002 [#1] PREEMPT SMP NOPTI
+[5353358.825204] RIP: 0010:memcpy_erms+0x6/0x10
+[5353358.825259]  qla2x00_process_vendor_specific+0x652/0x1320 [qla2xxx]
+[5353358.825317]  qla24xx_bsg_request+0x1b2/0x2d0 [qla2xxx]
+
+#问题根因
+在 `qla_bsg.c` 文件的多个函数中（如 `qla2x00_update_optrom`、`qla2x00_manage_host_stats` 等），无论是成功还是失败的路径，代码都调用了 `bsg_job_done()`（即 `bsg_done`）。然而，失败路径通常由上层调用者处理 BSG 作业的完成。这导致同一个 BSG 作业被完成两次（double free），进而引发内核 panic。
+
+#解决方案
+在调用 `bsg_job_done()` 之前增加返回值检查，仅在操作成功（返回值为 0）时调用该函数。修改涉及的函数包括 `qla2x00_update_optrom`、`qla2x00_manage_host_stats`、`qla2x00_get_host_stats`、`qla2x00_get_tgt_stats`、`qla2x00_manage_host_port` 和 `qla2x00_mailbox_passthru`，以此防止双释放问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/96c06b292e290d26944b80e0b4fdda3227d017a1

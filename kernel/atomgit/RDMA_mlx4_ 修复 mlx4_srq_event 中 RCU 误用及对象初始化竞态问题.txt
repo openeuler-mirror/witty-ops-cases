@@ -1,0 +1,26 @@
+#标题
+RDMA/mlx4: 修复 mlx4_srq_event 中 RCU 误用及对象初始化竞态问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 RDMA mlx4 设备的 SRQ（共享接收队列）事件时，由于 RCU 误用和初始化竞态问题，可能导致内核崩溃。具体表现为：
+1. 当 SRQ 事件在 SRQ 对象完全初始化之前交付时，访问未完全初始化的对象导致崩溃。
+2. RCU 临界区外访问对象且对象未通过 RCU 释放，导致潜在的内存安全问题。
+
+#主要错误日志
+mlx4_warn(dev, "Async event for bogus SRQ %08x\n", srqn);
+
+#问题根因
+主要根因是对 RCU 机制的误用以及对象生命周期管理不当：
+1. **RCU 误用**：代码中使用了 `rcu_read_lock()` 保护 `radix_tree_lookup`，但 `mlx4_srq` 结构体并非通过 RCU 机制进行释放，且对结构体的访问发生在 RCU 临界区之外。
+2. **初始化竞态**：在 `mlx4_srq_alloc` 函数中，引用计数 `refcount_set` 被设置在对象完全初始化之前。如果此时 `mlx4_srq_event` 并发执行并查找到该 SRQ，会因为对象未初始化完成而触发崩溃。
+
+#解决方案
+1. **移除 RCU 保护，改用自旋锁**：将 `mlx4_srq_event` 中的 `rcu_read_lock/unlock` 替换为 `spin_lock_irqsave/spin_unlock_irqrestore`，以确保对 radix tree 和 SRQ 对象访问的安全同步。
+2. **防止访问部分初始化对象**：在查找 SRQ 后，使用 `refcount_inc_not_zero()` 替代 `refcount_inc()`。这确保了如果对象的引用计数尚未激活（即仍在初始化中），事件处理程序不会错误地获取并使用该对象。
+3. **调整初始化顺序**：在 `mlx4_srq_alloc` 中，将 `refcount_set` 移动到 SRQ 完全初始化之后执行（使用 `refcount_set_release`），确保对象在可见时已完全可用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f6f750fc0778205954ad4fa328e602520790f7f8

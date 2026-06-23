@@ -1,0 +1,41 @@
+#标题
+net/sched: taprio 释放子 qdisc 后触发空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 `CONFIG_NET_SCH_TAPRIO` 的内核上，本地用户（需具备命名空间范围内的 CAP_NET_ADMIN 权限，或在开启非特权用户命名空间的系统上由非特权用户触发）执行以下操作会导致内核崩溃：
+1. 在新建的网络命名空间中创建 taprio qdisc。
+2. 挂载一个显式的子 qdisc。
+3. 通过 RTM_DELQDISC 删除该子 qdisc。
+4. 请求 class dump（RTM_GETTCLASS）。
+
+触发该问题时，内核发生 Oops（General protection fault），并在 `taprio_dump_class` 函数中引发 KASAN 检测到的空指针引用。
+
+#主要错误日志
+Oops: general protection fault, probably for non-canonical address 0xdffffc0000000007: 0000 [#1] SMP KASAN NOPTI
+KASAN: null-ptr-deref in range [0x0000000000000038-0x000000000000003f]
+RIP: 0010:taprio_dump_class (net/sched/sch_taprio.c:2478)
+Call Trace:
+ <TASK>
+ tc_fill_tclass (net/sched/sch_api.c:1966)
+ qdisc_class_dump (net/sched/sch_api.c:2326)
+ taprio_walk (net/sched/sch_taprio.c:2514)
+ tc_dump_tclass_qdisc (net/sched/sch_api.c:2352)
+ tc_dump_tclass_root (net/sched/sch_api.c:2370)
+ tc_dump_tclass (net/sched/sch_api.c:2431)
+ rtnl_dumpit (net/core/rtnetlink.c:6864)
+ netlink_dump (net/netlink/af_netlink.c:2325)
+ rtnetlink_rcv_msg (net/core/rtnetlink.c:6959)
+ netlink_rcv_skb (net/netlink/af_netlink.c:2550)
+</TASK>
+
+#问题根因
+当 TAPRIO 子 qdisc 通过 RTM_DELQDISC 被删除时，`taprio_graft()` 函数被调用，此时传入参数 `new == NULL`，该 NULL 值被直接存入 `q->qdiscs[cl - 1]`。随后进行 RTM_GETTCLASS dump 操作时，`taprio_walk()` 遍历所有 class 并调用 `taprio_dump_class()`。`taprio_dump_class()` 调用 `taprio_leaf()` 返回了该 NULL 指针，紧接着代码尝试解引用该指针以读取 `child->handle`，从而导致内核空指针引用错误。
+
+#解决方案
+在 `taprio_graft()` 函数中修复，当传入的 `new` 指针为 NULL 时，将其替换为 `&noop_qdisc`，确保 `q->qdiscs[]` 数组槽位永不为 NULL。这是一种常见的 qdisc 处理模式，可使控制面 dump 路径无需单独的 NULL 检查即可安全运行。同时，修改数据面路径（`taprio_enqueue` 和 `taprio_dequeue_from_txq`）中的检查逻辑，将 `!child` 改为 `child == &noop_qdisc`，防止数据包进入 `taprio_enqueue_one()` 导致根 qdisc 统计计数器永久虚高。此外，修正了引用计数处理逻辑，避免对 `noop_qdisc` 调用 `qdisc_put`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/82630f987a72b1a80c27dae0b8d7265ba44edec8

@@ -1,0 +1,22 @@
+#标题
+Bluetooth: L2CAP: LE连接请求在BT_SECURITY_MEDIUM下响应码错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在蓝牙安全设置为 BT_SECURITY_MEDIUM（安全模式 2）时，接收到 L2CAP LE 连接请求（L2CAP_LE_CONN_REQ），若当前链路安全级别不足，内核错误地返回 L2CAP_CR_LE_AUTHENTICATION 响应码。这导致无法通过蓝牙核心规范资格认证测试用例 L2CAP/LE/CFC/BV-25-C，可能导致蓝牙设备互连失败或合规性问题。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，根本原因在于 `l2cap_le_connect_req` 函数处理安全级别不足时的逻辑错误：
+当安全策略为 BT_SECURITY_MEDIUM 时，对应蓝牙安全模式 2，该模式仅要求加密而不要求认证。原代码在 `smp_sufficient_security` 检查失败时，统一返回 `L2CAP_CR_LE_AUTHENTICATION`，未区分 BT_SECURITY_MEDIUM 与更高安全级别的差异，导致响应码不符合规范要求。
+
+#解决方案
+修改 `net/bluetooth/l2cap_core.c` 文件中的 `l2cap_le_connect_req` 函数：
+在判断安全级别不足时，增加对 `pchan->sec_level` 的条件判断。如果安全级别为 `BT_SECURITY_MEDIUM`，响应码设置为 `L2CAP_CR_LE_ENCRYPTION`；否则才返回 `L2CAP_CR_LE_AUTHENTICATION`。此举确保了响应码与安全模式要求一致，修复了资格测试失败的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/118c437200c5162d983713792e1a92d9b11163e8

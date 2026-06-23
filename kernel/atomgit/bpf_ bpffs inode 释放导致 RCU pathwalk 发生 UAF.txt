@@ -1,0 +1,23 @@
+#标题
+bpf: bpffs inode 释放导致 RCU pathwalk 发生 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 bpffs 文件系统中，当并发执行 unlinkat() 释放最后一个 inode 引用时，若另一任务正在以 RCU 模式进行路径行走（pathwalk），会触发 Use-After-Free（UAF）。KASAN 检测到在 `is_mgtime()` 函数中读取了已释放内存。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in is_mgtime include/linux/fs.h:2313
+Read of size 2 at addr ffff8880407e4282 (offset +2 = i_opflags)
+
+#问题根因
+提交 4f375ade6aa9 为避免 RCU 上下文警告，将 inode 清理逻辑从 `->free_inode()` 移至 `->destroy_inode()`。但这移除了 inode 和 `i_link` 释放前的 RCU 延迟保护。`->destroy_inode()` 在释放最后一个引用时立即调用，若此时 RCU pathwalk 正在访问该 inode 或 `i_link`，就会导致 UAF。
+
+#解决方案
+将阻塞式清理与 RCU 安全释放分离：
+1. 在 `bpf_destroy_inode()` 中保留可能阻塞的 `bpf_any_put()` 调用，确保其立即执行。
+2. 新增 `bpf_free_inode()` 回调，在 RCU 宽限期结束后调用，负责释放 `i_link` 和 inode 自身（通过 `free_inode_nonrcu`），从而避免 RCU pathwalk 访问时的 UAF。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e90a166473764451a86254adfa663807be57e297

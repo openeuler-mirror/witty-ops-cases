@@ -1,0 +1,38 @@
+#标题
+RDMA/mlx5: LAG 模式固件复位卸载时 UMR 挂起故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LAG 模式下进行固件复位时，驱动在设备卸载过程中出现竞态条件，导致无限期挂起。系统在等待 UMR（User Mode Memory Region）完成时陷入死锁，进程处于不可中断的睡眠状态。
+
+#主要错误日志
+Call Trace:
+ __schedule+0x2bd/0x760
+ schedule+0x37/0xa0
+ schedule_preempt_disabled+0xa/0x10
+ __mutex_lock.isra.6+0x2b5/0x4a0
+ __mlx5_ib_dereg_mr+0x606/0x870 [mlx5_ib]
+ ? wait_for_completion+0x31/0x100
+ ib_dereg_mr_user+0x48/0xc0 [ib_core]
+ destroy_hw_idr_uobject+0x20/0x50 [ib_uverbs]
+ uverbs_destroy_uobject+0x37/0x150 [ib_uverbs]
+ __uverbs_cleanup_ufile+0xda/0x140 [ib_uverbs]
+ ib_uverbs_remove_one+0xc3/0x140 [ib_uverbs]
+ __ib_unregister_device+0x10d/0x180 [ib_core]
+ __mlx5_ib_remove+0x1e4/0x1f0 [mlx5_ib]
+ mlx5_disable_lag+0x253/0x260 [mlx5_core]
+ mlx5_sync_reset_reload_work+0x83/0x100 [mlx5_core]
+ process_one_work+0x1a7/0x360
+ worker_thread+0x30/0x390
+ kthread+0x116/0x130
+
+#问题根因
+在 LAG 模式下，绑定设备仅在主设备上注册，因此它无法接收来自从设备的 sys_error 事件。固件复位期间，从设备已经失效，但主设备尚未进入错误状态。此时 UMR 提交操作虽然成功，但由于设备已失效，完成消息永远不会到达，导致驱动在卸载过程中挂起。
+
+#解决方案
+在驱动中添加了一个独立的 sys_error 事件通知器。该通知器在 `MLX5_IB_STAGE_IB_REG` 之前注册，并保持存活直到 `ib_unregister_device()` 完成之后。这确保了在设备拆卸过程中，错误事件能够正确传递到绑定设备，从而避免 UMR 等待挂起的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8964c0d95a9072be9c916d0c42ee1f7468b74c61

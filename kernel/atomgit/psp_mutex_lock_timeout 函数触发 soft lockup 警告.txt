@@ -1,0 +1,23 @@
+#标题
+psp_mutex_lock_timeout 函数触发 soft lockup 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 hwrng 相关操作时，内核日志报告 soft lockup 警告。表现为 CPU#30 被卡住长达 26 秒，进程 `hwrng` 处于不可中断状态。调用栈显示代码卡在 `psp_do_cmd` 函数的互斥锁获取循环中，且此时处于中断上下文（IRQ）被检测到的状态。
+
+#主要错误日志
+[  544.294573] watchdog: BUG: soft lockup - CPU#30 stuck for 26s! [hwrng:1063]
+[  544.301367] RIP: 0010:psp_do_cmd+0x57/0x100 [ccp]
+[  544.316036]  ? psp_do_cmd+0x57/0x100 [ccp]
+[  544.316699]  tpm_c_send+0x46/0x90 [tpm_hygon]
+
+#问题根因
+`psp_mutex_lock_timeout` 函数在尝试获取互斥锁时，使用紧循环（tight loop）进行轮询等待。在等待期间，CPU 持续执行指令而未主动让出 CPU（如调用 `schedule`），导致该 CPU 长时间处于忙碌状态。当等待时间超过内核 watchdog 的阈值（默认通常为 20 秒左右）时，内核判定发生了 soft lockup 并打印警告信息。
+
+#解决方案
+在 `psp_mutex_lock_timeout` 的等待循环中增加主动调度逻辑。引入一个时间检查点，如果当前时间距离上次检查已超过 100 毫秒（msecs_to_jiffies(100)），则主动调用 `schedule()` 让出 CPU，从而避免长时间占用 CPU 触发 soft lockup 检测机制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf158cad20a46e863f6c4d0a43d0b8a5dd07db15

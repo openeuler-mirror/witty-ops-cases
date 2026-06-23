@@ -1,0 +1,27 @@
+#标题
+objtool 在 Clang 编译环境下因 C jump table 段名不匹配导致栈帧校验警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Clang 编译内核时，objtool 校验阶段会对 BPF 解释器等使用 C jump table 的代码发出警告，提示存在来自可调用指令的兄弟调用且栈帧已修改。此前为了修复 LoongArch 架构上的段属性警告，社区补丁修改了段属性注解，但这导致 Clang 的集成汇编器将段名解析错误，进而引发 objtool 无法识别该段。
+
+#主要错误日志
+- `kernel/bpf/core.o: warning: objtool: ___bpf_prog_run+0x20: sibling call from callable instruction with modified stack frame`
+
+#问题根因
+C jump table（如 BPF 解释器使用的跳转表）通常被显式放置在 `.rodata..c_jump_table` 段中。
+此前为了解决 PIE 代码生成环境下该段属性不正确的问题，补丁 `c5b1184decc8` 在段属性中追加了 `#` 注解以强制指定只读属性。
+然而，Clang 的集成汇编器会将追加的段类型和权限说明符（如 `,"a",@progbits #`）解析为段名的一部分，导致实际生成的段名不再是 objtool 期望的硬编码字符串 `.rodata..c_jump_table`。
+段名不匹配使得 objtool 无法将该段识别为只读数据（rodata），导致其对跳转表的分析失败，误报栈帧修改警告。
+
+#解决方案
+修改 C jump table 的存放段，将其从 `.rodata..c_jump_table` 移至 `.data.rel.ro.c_jump_table`。
+1. 修改 `include/linux/compiler.h` 中的 `__annotate_jump_table` 宏定义，使用 `__section(".data.rel.ro.c_jump_table")`。
+2. 同步更新 `tools/objtool/check.c` 中的 `mark_rodata` 函数逻辑，将 `.data.rel.ro` 前缀的段也标记为 rodata。
+3. 更新 `tools/objtool/include/objtool/special.h` 中的 `C_JUMP_TABLE_SECTION` 宏定义为新的段名。
+该方案规避了 Clang 对复杂段属性字符串的解析差异，同时链接脚本会将 `.data.rel.ro` 视为只读数据，保证了功能正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1c25dd915812f21b1d0ad5b90c0d0a6cb3adac60

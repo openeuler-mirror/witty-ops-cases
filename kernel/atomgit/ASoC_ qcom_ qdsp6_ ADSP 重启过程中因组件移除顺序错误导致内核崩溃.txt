@@ -1,0 +1,42 @@
+#标题
+ASoC: qcom: qdsp6: ADSP 重启过程中因组件移除顺序错误导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 ADSP（音频数字信号处理器）停止并重新启动的操作过程中，内核发生崩溃。具体表现为在 ADSP 重绑定（rebind）期间，调用链路中出现空指针访问，导致 `Unable to handle kernel NULL pointer dereference` 并触发 Oops。
+
+#主要错误日志
+[   48.105720] Unable to handle kernel NULL pointer dereference at virtual address 00000000000000d0
+[   48.114763] Mem abort info:
+[   48.117650]   ESR = 0x0000000096000004
+[   48.121526]   EC = 0x25: DABT (current EL), IL = 32 bits
+[   48.138446] Data abort info:
+[   48.141422]   ISV = 0, ISS = 0x00000004, ISS2 = 0x00000000
+[   48.171530] Internal error: Oops: 0000000096000004 [#1]  SMP
+[   48.310081] Hardware name: Qualcomm Technologies, Inc. Lemans EVK (DT)
+[   48.323672] pstate: 20400005 (nzCv daif +PAN -UAO -TCO -DIT -SSBS BTYPE=--)
+[   48.330825] pc : mutex_lock+0xc/0x54
+[   48.334514] lr : soc_dapm_shutdown_dapm+0x44/0x174 [snd_soc_core]
+[   48.366198] x20: ffff00009ba6c338 x19: ffff00009ba6c338 x18: 00000000ffffffff
+[   48.420025]  mutex_lock+0xc/0x54 (P)
+[   48.423712]  snd_soc_dapm_shutdown+0x44/0xbc [snd_soc_core]
+[   48.429447]  soc_cleanup_card_resources+0x30/0x2c0 [snd_soc_core]
+[   48.441278]  snd_soc_bind_card+0x4dc/0xcc0 [snd_soc_core]
+[   48.447192]  snd_soc_add_component+0x27c/0x2c8 [snd_soc_core]
+[   48.453371]  snd_soc_register_component+0x9c/0xf4 [snd_soc_core]
+[   48.459994]  devm_snd_soc_register_component+0x64/0xc4 [snd_soc_core]
+[   48.464479]  apm_probe+0xb4/0x110 [snd_q6apm]
+
+#问题根因
+ADSP 停止和启动过程中，ASoC 组件的移除顺序存在缺陷。在 ADSP 停止阶段，`q6apm-audio` 的 `.remove` 回调函数在 ASoC teardown 过程中卸载了拓扑并移除了 PCM runtimes。这导致包含 q6apm DAI 组件的 RTDs（Runtime Digital Audio）在 DAI 组件自身的移除流程运行之前就被删除，使得这些组件仍然链接到声卡上。当后续进行 rebind 操作时，系统尝试访问这些已被破坏或未正确清理的资源，引发空指针崩溃。
+
+#解决方案
+通过修改组件驱动定义，显式指定组件的移除顺序（`remove_order`），确保依赖组件（子组件）先被移除，而 `q6apm` 主组件最后移除。具体修改如下：
+1. 在 `sound/soc/qcom/qdsp6/q6apm-dai.c` 中添加 `.remove_order = SND_SOC_COMP_ORDER_EARLY`。
+2. 在 `sound/soc/qcom/qdsp6/q6apm-lpass-dais.c` 中添加 `.remove_order = SND_SOC_COMP_ORDER_FIRST`。
+3. 在 `sound/soc/qcom/qdsp6/q6apm.c` 中添加 `.remove_order = SND_SOC_COMP_ORDER_LAST`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/53414920a6865e12fb9d3eac2c3cbc939f8dcf85

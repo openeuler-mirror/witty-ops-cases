@@ -1,0 +1,33 @@
+#标题
+clk: qcom: gcc-sm6350 调用 clk_set_rate 触发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm SM6350 平台上，当系统对 `gcc_ufs_phy_phy_aux_clk_src` 或 `gcc_usb30_prim_mock_utmi_clk_src` 这两个时钟调用 `clk_set_rate` 函数时，触发内核 NULL pointer dereference（空指针引用），导致系统崩溃或重启。
+
+#主要错误日志
+[    3.388105] Call trace:
+[    3.390664]  qcom_find_src_index+0x3c/0x70 (P)
+[    3.395301]  qcom_find_src_index+0x1c/0x70 (L)
+[    3.399934]  _freq_tbl_determine_rate+0x48/0x100
+[    3.404753]  clk_rcg2_determine_rate+0x1c/0x28
+[    3.409387]  clk_core_determine_round_nolock+0x58/0xe4
+[    3.421414]  clk_core_round_rate_nolock+0x48/0xfc
+[    3.432974]  clk_core_round_rate_nolock+0xd0/0xfc
+[    3.444483]  clk_core_set_rate_nolock+0x8c/0x300
+[    3.455886]  clk_set_rate+0x38/0x14c
+
+#问题根因
+`clk_rcg2` 类型的时钟结构体定义存在缺陷。`gcc_ufs_phy_phy_aux_clk_src` 和 `gcc_usb30_prim_mock_utmi_clk_src` 虽然配置了 `parent_data`，但缺失了 `parent_map` 字段的定义。根据内核逻辑，如果 `clk_rcg2` 拥有父时钟，必须同时定义 `parent_map`，否则在 `clk_set_rate` 调用链中，`qcom_find_src_index` 函数会访问空指针导致崩溃。
+
+#解决方案
+在驱动源文件 `drivers/clk/qcom/gcc-sm6350.c` 中，为这两个时钟补全缺失的 `parent_map` 属性：
+1. 新增 `gcc_parent_map_3` 数组定义，映射 `P_BI_TCXO` 到索引 0。
+2. 新增 `gcc_parent_data_3` 数组定义，关联固件名称 "bi_tcxo"。
+3. 分别在 `gcc_ufs_phy_phy_aux_clk_src` 和 `gcc_usb30_prim_mock_utmi_clk_src` 结构体中添加 `.parent_map = gcc_parent_map_3` 成员。
+4. 将这两个时钟的 `.parent_data` 指向新增的 `gcc_parent_data_3` 数组，并相应更新 `.num_parents`，确保父时钟配置的完整性与一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c90c9b89f1ada7c4bc7ab2545bc4d858418f2c7

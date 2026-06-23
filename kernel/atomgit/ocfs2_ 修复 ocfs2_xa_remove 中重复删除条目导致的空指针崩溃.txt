@@ -1,0 +1,28 @@
+#标题
+ocfs2: 修复 ocfs2_xa_remove 中重复删除条目导致的空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过故障注入（faultinject）模拟 ocfs2_xa_remove() -> ocfs2_xa_value_truncate() 返回 -ENOMEM 失败场景时，触发内核空指针解引用（kernel NULL pointer dereference），导致内核崩溃。调用栈显示崩溃发生在 `ocfs2_xa_block_wipe_namevalue` 函数中。
+
+#主要错误日志
+```
+[   57.319872] (a.out,1161,7):ocfs2_xa_remove:2028 ERROR: status = -12
+[   57.320420] (a.out,1161,7):ocfs2_xa_cleanup_value_truncate:1999 ERROR: Partial truncate while removing xattr overlay.upper.  Leaking 1 clusters and removing the entry
+[   57.321727] BUG: kernel NULL pointer dereference, address: 0000000000000004
+[   57.325727] RIP: 0010:ocfs2_xa_block_wipe_namevalue+0x2a/0xc0
+```
+
+#问题根因
+在 `ocfs2_xa_remove()` 函数中，当 `ocfs2_xa_value_truncate()` 返回错误时，代码逻辑错误地导致了 `ocfs2_xa_remove_entry()` 被执行两次：
+1. 第一次执行：在 `ocfs2_xa_cleanup_value_truncate()` 函数内部调用；
+2. 第二次执行：返回到 `ocfs2_xa_remove()` 后，由于错误码 `rc` 的检查逻辑错误，未正确跳转至 `out` 标签，而是继续执行了后续的删除逻辑。
+重复删除同一个条目导致了空指针解引用。
+
+#解决方案
+修改 `fs/ocfs2/xattr.c` 中的 `ocfs2_xa_remove` 函数逻辑。当 `ocfs2_xa_value_truncate()` 失败并进入清理流程 `ocfs2_xa_cleanup_value_truncate()` 后，无论返回值如何，都应直接跳转至 `out` 退出，避免第二次调用 `ocfs2_xa_remove_entry()`。修改方式为移除 `if (rc)` 判断，无条件执行 `goto out`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8578e0a626a8ed90f7349c7ff035d50a8529ac0e

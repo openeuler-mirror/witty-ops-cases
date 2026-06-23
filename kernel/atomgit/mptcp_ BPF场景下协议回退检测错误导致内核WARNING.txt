@@ -1,0 +1,31 @@
+#标题
+mptcp: BPF场景下协议回退检测错误导致内核WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在服务端启用 MPTCP 且结合 BPF sockmap 功能使用的场景下，若客户端发起普通 TCP 连接（不带 MPTCP 选项），服务端在处理 accept 系统调用时触发内核 WARNING。具体条件为：BPF sockmap 更新了 socket 的 `sk_prot` 操作接口，导致 MPTCP 在进行 TCP 协议回退（fallback）判断时逻辑出错，错误地设置了 `sk_socket->ops`，进而触发告警。
+
+#主要错误日志
+------------[ cut here ]------------
+WARNING: CPU: 0 PID: 337 at net/mptcp/protocol.c:68 mptcp_stream_accept \
+(net/mptcp/protocol.c:4005)
+Modules linked in:
+...
+Call Trace:
+<TASK>
+do_accept (net/socket.c:1989)
+__sys_accept4 (net/socket.c:2028 net/socket.c:2057)
+__x64_sys_accept (net/socket.c:2067)
+---[ end trace 0000000000000000 ]---
+
+#问题根因
+在 MPTCP 子流程处理中，`subflow_syn_recv_sock()` 将 `sk_prot` 替换为原生 TCP 协议（fallback）。随后 sockmap 再次替换 `sk_prot` 为自定义接口。问题发生在 `mptcp_fallback_tcp_ops()` 函数中，该函数使用 `sk->sk_prot == &tcp_prot` 来判断是否进行回退操作。
+由于此时 `sk_prot` 已被 sockmap 替换，导致比较结果失败（不相等），进而错误地触发了 `WARN_ON_ONCE` 并可能引发后续 ops 设置错误。
+
+#解决方案
+修改 `mptcp_fallback_tcp_ops()` 函数中的判断逻辑，不再依赖易变的 `sk_prot` 指针进行比较，而是直接读取 socket 的 `sk_family` 属性（AF_INET 或 AF_INET6）来判断协议族，从而避免因 BPF sockmap 修改 `sk_prot` 导致的判断失效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2181e1d2c487129ac1b2f871160db38621c08a83

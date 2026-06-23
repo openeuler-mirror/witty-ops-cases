@@ -1,0 +1,22 @@
+#标题
+fs/resctrl: 修复 L3 CMAX 转换机制导致的精度丢失与阈值失效问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MPAM 架构下配置 resctrl L3 CMAX（Cache Maximum Allocation）时，因内核转换机制处理不当，导致精度丢失，可能将小于最小阈值的值作为参数传递，进而导致资源配置功能异常或配置无法生效。
+
+#主要错误日志
+未知
+
+#问题根因
+RDT 架构在 `bw_validate()` 函数中通过 `roundup` 对带宽精度进行格式化校验，但 MPAM 架构不依赖该转换逻辑，其 CMAX 接口通过 `percent_to_ca_max()` 和 `ca_max_to_percent()` 独立处理百分比转换。混用 RDT 的转换逻辑导致了精度丢失。此外，原有的百分比转换算法在处理用户配置时未进行向上取整，导致转换后的值可能小于硬件要求的最小阈值。
+
+#解决方案
+1. 在 `fs/resctrl/ctrlmondata.c` 的 `bw_validate()` 函数中增加 `CONFIG_ARM64_MPAM` 判断，若是 MPAM 架构则跳过 `roundup` 转换，直接保留原始带宽值，避免精度丢失。
+2. 修改 `drivers/platform/mpam/mpam_resctrl.c` 中的 `percent_to_ca_max()` 函数，使用 `DIV_ROUND_UP` 替代原有的除法运算，确保向上取整。
+3. 修改 `ca_max_to_percent()` 函数，移除原有的加法修正逻辑，确保转换结果符合预期精度要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8dfbb8460f25f9026e690c767bd70ba22ec899b0

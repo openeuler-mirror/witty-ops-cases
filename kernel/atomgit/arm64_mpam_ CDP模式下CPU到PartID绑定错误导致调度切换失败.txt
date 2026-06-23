@@ -1,0 +1,21 @@
+#标题
+arm64/mpam: CDP模式下CPU到PartID绑定错误导致调度切换失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在MPAM的CDP（Code and Data Prioritization）模式下，调度器无法正确切换到CPU对应的PartID。由于代码逻辑错误地对比了任务默认组ID，导致在CDP模式下无法正确应用CPU默认的MPAM配置，进而影响内存访问请求的追踪与资源分配。
+
+#主要错误日志
+未知
+
+#问题根因
+在CDP模式下，MPAM使用不同的PartID来跟踪CPU指令端口和数据端口的内存访问请求。为了防止任务频繁切换PartID，根目录组的默认`mpam_partid_pmg`在CDP模式下保持为0，而不是1。
+原代码在`mpam_thread_switch()`函数中，将任务的`regval`与`mpam_resctrl_default_group`进行比较。在CDP模式下，该比较逻辑失效，导致无法进入切换到CPU默认PartID的分支，从而引发调度切换失败。
+
+#解决方案
+修改`mpam_thread_switch()`函数中的判断逻辑，将任务的`regval`直接与0进行比较（`if (!regval)`），而不是与`mpam_resctrl_default_group`比较。这确保了在CDP模式下，当任务使用默认PartID（值为0）时，能够正确切换到CPU对应的默认MPAM配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ec5074d9367a3dd2bad1acd7c9f02efe0bbdb4ef

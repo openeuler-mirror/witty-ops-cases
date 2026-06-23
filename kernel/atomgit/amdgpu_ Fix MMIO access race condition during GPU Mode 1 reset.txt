@@ -1,0 +1,25 @@
+#标题
+amdgpu: Fix MMIO access race condition during GPU Mode 1 reset
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 执行 Mode 1 重置过程中，可能存在 MMIO 访问的竞态条件。如果在重置期间 MMIO 访问未被正确禁用，或者重置完成后未及时重新启用访问，可能导致硬件访问异常或重置流程失败，进而影响系统稳定性或导致设备不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 GPU Mode 1 重置流程中对 `no_hw_access` 标志位的设置时序与内存屏障处理不当：
+1. 在发起重置时，`no_hw_access` 未被设置为 `true`，导致在重置等待期间可能错误地允许 MMIO 访问。
+2. 在重置完成后，`no_hw_access` 未被重置为 `false`，导致后续正常的硬件访问被阻止。
+3. 缺少内存屏障（`smp_mb`）指令，无法确保 `no_hw_access` 变量修改在多核 CPU 间的可见性，导致可能的并发访问冲突。
+
+#解决方案
+在驱动代码中严格约束 `no_hw_access` 的生命周期并添加内存屏障：
+1. 在 `smu_v13_0_0_mode1_reset` 函数中，于 Mode 1 重置执行成功后、进入等待前，将 `no_hw_access` 设置为 `true`，并立即调用 `smp_mb()` 确保该状态对其他 CPU 可见，从而禁止重置期间的 MMIO 访问。
+2. 在 `amdgpu_device_mode1_reset` 函数中，于重置完成且 PCI 状态加载后，将 `no_hw_access` 设置为 `false`，并调用 `smp_mb()` 确保状态更新，从而恢复正常的硬件访问权限。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/579f0706951e1cd79e0442816345dfdbd905b7b9

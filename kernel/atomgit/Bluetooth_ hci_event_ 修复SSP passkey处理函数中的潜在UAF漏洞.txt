@@ -1,0 +1,24 @@
+#标题
+Bluetooth: hci_event: 修复SSP passkey处理函数中的潜在UAF漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理蓝牙SSP（Secure Simple Pairing）passkey通知事件（`hci_user_passkey_notify_evt` 和 `hci_keypress_notify_evt`）时，若并发条件下连接对象被释放，将触发 Use-After-Free（UAF）漏洞，可能导致内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hci_user_passkey_notify_evt()` 和 `hci_keypress_notify_evt()` 函数中，`hci_conn` 的查找和字段访问操作未处于 `hdev` 锁的保护范围内（缺少 `hci_dev_lock` 保护）。这导致在查找连接对象并访问其字段期间，连接对象可能被其他并发路径释放，从而引发 Use-After-Free。
+
+#解决方案
+扩展 `hci_dev_lock` 临界区范围，使其覆盖上述两个函数中所有连接对象的使用过程。
+具体修改如下：
+1. 在查找连接对象前调用 `hci_dev_lock(hdev)` 获取锁。
+2. 将原有的直接 `return` 退出逻辑修改为 `goto unlock` 跳转，确保在异常退出路径（如未找到连接对象 `conn` 或特定按键类型处理完成）时能正确释放锁。
+3. 在函数末尾添加 `unlock` 标签并调用 `hci_dev_unlock(hdev)`，保证锁成对出现。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b3e85964223978d4d5c04ece534bf133167f88eb

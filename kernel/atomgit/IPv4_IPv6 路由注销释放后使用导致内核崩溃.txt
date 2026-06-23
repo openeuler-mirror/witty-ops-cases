@@ -1,0 +1,25 @@
+#标题
+IPv4/IPv6 路由注销释放后使用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理网络命名空间清理或网卡注销时，触发 KASAN 检测到的 slab-use-after-free 错误，导致内核崩溃。具体崩溃点位于 `rt6_uncached_list_flush_dev` 调用 `list_del_init` 时，访问了已被释放的内存地址。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in INIT_LIST_HEAD include/linux/list.h:46 [inline]
+BUG: KASAN: slab-use-after-free in list_del_init include/linux/list.h:296 [inline]
+BUG: KASAN: slab-use-after-free in rt6_uncached_list_flush_dev net/ipv6/route.c:191 [inline]
+BUG: KASAN: slab-use-after-free in rt6_disable_ip+0x633/0x730 net/ipv6/route.c:5020
+Write of size 8 at addr ffff8880294cfa78 by task kworker/u8:14/3450
+The buggy address belongs to the cache ip6_dst_cache of size 232
+
+#问题根因
+`rt6_uncached_list_del()` 与 `rt_del_uncached_list()` 函数存在竞争条件。原代码使用 `list_empty(&rt->dst.rt_uncached)` 来判断是否需要从链表中删除，但在并发场景下，另一个 CPU 可能正在执行 `INIT_LIST_HEAD`（先将 `next` 指向自身，此时 `list_empty` 返回 true，但 `prev` 尚未更新或已被释放），导致当前 CPU 误判链表为空从而跳过锁保护。随后该路由对象被释放，当其他上下文再次操作该对象时引发 Use-After-Free。
+
+#解决方案
+修改 `rt6_uncached_list_del()` 和 `rt_del_uncached_list()` 的逻辑，不再依赖 `list_empty()` 进行判断，而是直接检查 `rt_uncached_list` 指针是否为空。同时，在 `dst_init` 中显式初始化 `rt_uncached_list` 为 NULL。这样确保只要路由对象曾被加入 uncached 链表，删除操作就必须持有锁进行移除，从而避免竞争条件导致的内存非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d8f6f44c322ced66fd41a839d32eb157118d2370

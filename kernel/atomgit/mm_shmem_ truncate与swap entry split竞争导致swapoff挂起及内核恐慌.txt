@@ -1,0 +1,20 @@
+#标题
+mm/shmem: truncate与swap entry split竞争导致swapoff挂起及内核恐慌
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 ZSWAP 与 shmem 的压力测试时，观察到随机的 swapoff 挂起和内核恐慌。
+
+#主要错误日志
+未知
+
+#问题根因
+shmem 释放 swap 的辅助函数 `shmem_free_swap` 对 swap entry 的顺序处理存在并发竞争问题。该函数使用 `xa_cmpxchg_irq` 来清除 swap entry，但在此之前使用 `xa_get_order` 获取 entry 的 order 时未持有锁保护。如果 entry 在 `xa_get_order` 和 `xa_cmpxchg_irq` 之间被拆分或更改，会获取到过期的 order 值。此外，如果 order 变大且超出预期边界，可能导致截断操作错误地清除超出文件末尾的数据。
+
+#解决方案
+重写 `shmem_free_swap` 函数，直接展开 Xarray 的 cmpxchg 操作，将 order 的获取和值的检查放入同一个临界区（持有 `xas_lock_irq` 锁）内，确保操作的原子性。同时增加边界检查，确保 order 不会超出截断操作的结束边界；如果检测到跨越边界的 large swap entry 则跳过处理（因为此时内容已被清除或处理），防止数据损坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b2a35e86f80fcbd80135f64c3b4b67dcccf7095d

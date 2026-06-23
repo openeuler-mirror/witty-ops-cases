@@ -1,0 +1,25 @@
+#标题
+sw64架构Guest OS在CPU热插拔场景下MSI中断处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在sw64架构下，Guest OS进行CPU热插拔操作时，MSI中断无法正确处理。中断迁移过程中，系统可能查找到已使用但未清理的vector，导致中断设置到错误的CPU上，且迁移完成后旧CPU上的中断信息未能及时清除，引发中断处理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. Guest OS缺少独立的msi_domain及相关初始化操作（vt_pci_msi_domain_ops和pci_vt_msi_domain_info），导致MSI中断初始化流程不符合标准。
+2. 查找空闲CPU vector的方法不当，在执行中断迁移时，可能找到之前已使用但未清理的vector，导致MSI IRQ号被设置到错误的CPU上。
+3. 缺少针对Guest OS的`vt_irq_move_complete()`处理逻辑，中断迁移完成后，未能清除前一个CPU上的残留信息，导致后续中断处理错误。
+
+#解决方案
+1. 为Guest OS添加独立的msi_domain，引入`vt_pci_msi_domain_ops`和`pci_vt_msi_domain_info`结构，支持以标准方式进行MSI中断初始化。
+2. 修改查找空闲CPU vector的实现逻辑，确保MSI IRQ号能正确设置到目标CPU上，避免复用未清理的vector。
+3. 新增`vt_irq_move_complete()`函数，在中断迁移完成后清除前一个CPU上的vector_irq信息，确保迁移流程的完整性。
+4. 将Guest相关的代码逻辑独立迁移至`irq-sunway-msi-vt.c`文件中，并调整中断入口处理逻辑以适配上述修复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/827862ceccbd57801a1e73da2e1e424203c31b72

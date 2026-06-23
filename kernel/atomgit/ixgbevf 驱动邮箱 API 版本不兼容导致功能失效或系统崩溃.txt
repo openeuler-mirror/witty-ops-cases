@@ -1,0 +1,31 @@
+#标题
+ixgbevf 驱动邮箱 API 版本不兼容导致功能失效或系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ixgbevf 驱动加载或运行过程中，由于邮箱 API 版本协商机制缺陷，导致以下问题：
+1. **IPsec 回归**：在 API 版本升级到 1.6 后，VF 驱动停止支持 IPsec 卸载功能，导致相关功能不可用。
+2. **ESX MBX 支持丢失**：ixgbevf 驱动无法正常支持 ESX 特定的邮箱通信机制。
+3. **潜在系统崩溃**：在特定配置下，API 1.6 引入的代码路径在 Linux ixgbe 驱动上无法支持，可能导致内核崩溃。
+
+#主要错误日志
+- "PF feature negotiation failed." (推断：由代码中 `netdev_dbg` 输出)
+
+#问题根因
+该故障源于邮箱 API 版本升级（至 1.4 和 1.5）过程中破坏了向后兼容性：
+1. **功能缺失未协商**：Commit 0062e7cc955e 引入 IPsec 支持（API 1.4），但未实现功能协商机制，导致不支持该功能的驱动无法正确处理。
+2. **版本定义不一致**：Commit 339f28964147 升级到 API 1.5 时，仅针对 ESX PF 驱动修改了 API 版本，未同步 Linux ixgbe PF 驱动，导致 API 版本判断逻辑出现偏差。
+3. **错误代码路径触发**：API 1.6 引入的代码在 Linux ixgbe 驱动上不支持，却因缺乏协商机制而被错误激活，引发崩溃或功能失效。
+根本原因是驱动仅依据 API 版本号判断功能支持情况，而未通过专门的操作码查询 PF 驱动实际支持的功能特性。
+
+#解决方案
+引入新的邮箱 API 版本 1.7 及特性协商机制：
+1. **新增特性协商接口**：定义 `IXGBE_VF_FEATURES_NEGOTIATE` 操作码和 `ixgbe_mbox_api_17` 版本，VF 驱动在初始化时主动向 PF 查询支持的功能特性（如 IPsec、ESX MBX）。
+2. **功能位掩码管理**：在 `ixgbevf_adapter` 结构体中新增 `pf_features` 字段，根据 PF 返回的结果设置 `IXGBEVF_PF_SUP_IPSEC` 和 `IXGBEVF_PF_SUP_ESX_MBX` 标志位。
+3. **执行逻辑修正**：在 IPsec 卸载（`ixgbevf_ipsec_add_sa`）和链路检查（`ixgbevf_check_mac_link_vf`）等关键路径中，将原有的 API 版本号判断逻辑替换为对 `pf_features` 标志位的检查。
+4. **兼容性处理**：针对旧版本 API（1.4 和 1.5），保留默认特性支持逻辑，确保平滑过渡。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6fcc8da1cd19e76a92cbc79bb74fefd8578cdc8d

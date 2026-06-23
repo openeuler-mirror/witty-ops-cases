@@ -1,0 +1,51 @@
+#标题
+ubus: 控制软件重启流程状态管理缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行控制软件重启或设备重新初始化操作时，系统可能出现状态管理混乱，导致实体状态机异常。具体表现为：
+1. 在实体注册过程中，若注册任务添加失败，实体状态未正确回退至 IDLE 状态，导致状态卡死。
+2. 设备探测返回 -EAGAIN 需要重试时，重试任务类型未区分（Attach 或 Reinit），可能导致错误的重试流程被触发。
+3. 重试机制存在并发风险，可能导致同一类型的重试任务被重复添加。
+4. 在重试工作队列执行时，未检查实体是否正处于注销状态，可能导致对已注销实体进行非法操作。
+5. `ub_pool_attach` 函数错误地返回了未初始化的 `ret` 变量值，可能导致调用者误判附加结果。
+6. `ub_entity_reg_handle` 中未增加 `ubc` 的引用计数，存在潜在的 UAF（Use-After-Free）风险。
+
+#主要错误日志
+- `ub_err(uent, "active add start task failed\n");`
+- `ub_warn(uent, "device attach failed, ret=%d\n", ret);`
+- `ub_warn(uent, "disable ue, get mue lock busy\n");`
+- `ub_err(uent, "alloc retry[%d] task failed\n", task_type);`
+- `ub_err(uent, "retry[%d] task queue is null\n", task_type);`
+- `ub_err(uent, "reinit ret[%d]\n", ret);`
+- `ub_warn(uent, "retry[%d] add delay work failed\n", task_type);`
+
+#问题根因
+该故障由多个状态管理与资源处理缺陷共同导致：
+1. **状态回退缺失**：在 `ub_enum_entities_active` 流程中，添加启动任务失败后，未将 `ent_mgmt_state` 恢复为 `MGMT_STATE_IDLE`；在 `ub_start_ent` 流程中，无论何种路径退出，状态机处理逻辑均不够完善，导致状态不一致。
+2. **重试机制设计缺陷**：原有的重试机制仅使用单一的 `TASK_SRC_RETRY` 标志和 `TASK_TYPE`，无法区分是 Attach 重试还是 Reinit 重试，导致重试逻辑混淆。
+3. **并发与生命周期检查缺失**：重试任务添加缺乏防重入检查；重试工作队列执行时未检查实体是否处于 `MGMT_STATE_UNREGISTERING` 状态；`ub_entity_reg_handle` 中获取 `ubc` 时未增加引用计数。
+4. **代码逻辑错误**：`ub_pool_attach` 函数直接返回了未初始化的局部变量 `ret`，而非预期的返回值。
+
+#解决方案
+1. **完善状态机管理**：
+   - 在 `ub_enum_entities_active` 中，若 `ub_add_delay_task` 失败，显式设置状态为 `MGMT_STATE_IDLE`。
+   - 在 `ub_pool_attach` 中设置状态为 `MGMT_STATE_REGISTERING` 并修正返回值为 0。
+   - 优化 `ub_start_ent`、`ub_delay_task_work` 等函数中的状态流转逻辑，确保状态在任务处理完成后正确复位。
+
+2. **重构重试机制**：
+   - 新增 `TASK_TYPE_ATTACH_RETRY` 和 `TASK_TYPE_REINIT_RETRY` 类型，以及对应的 `TASK_SRC_RETRY_ATTACH` 和 `TASK_SRC_RETRY_REINIT` 标志，实现重试任务的精确分类。
+   - 在 `ub_add_retry_task` 中增加检查逻辑，防止同类重试任务重复添加。
+   - 修改 `ub_retry_task_work`，在执行前检查实体是否处于 `UNREGISTERING` 状态，若是则直接退出。
+
+3. **修复资源引用与逻辑错误**：
+   - 在 `ub_entity_reg_handle` 中调用 `ub_ubc_get(ubc)` 增加引用计数，防止 UAF。
+   - 修正 `ub_pool_attach` 的返回值逻辑。
+
+4. **增加观测性**：
+   - 在 sysfs 中新增 `mgmt_state` 和 `task_src` 属性，便于用户态监控实体状态和任务来源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e6619bba6a5b048632baf9d47d93e2d6cef9acab

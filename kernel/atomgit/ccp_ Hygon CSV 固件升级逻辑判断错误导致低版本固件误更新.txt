@@ -1,0 +1,20 @@
+#标题
+ccp: Hygon CSV 固件升级逻辑判断错误导致低版本固件误更新
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hygon CPU 平台上，当 CSV（China Secure Virtualization）固件版本低于 1667 时，系统本应阻止固件更新，但由于逻辑判断错误，程序错误地允许了更新操作，可能导致不兼容或非预期的固件升级行为。
+
+#主要错误日志
+DOWNLOAD_FIRMWARE not supported
+
+#问题根因
+在 `sev_update_firmware` 函数中，判断是否支持固件更新的逻辑运算符使用错误。原代码使用逻辑与（`&&`）连接条件，导致在 Hygon 平台且 CSV 版本大于等于 1667 时，整个条件判断为真（即返回不支持），这不符合预期；反之，当 CSV 版本低于 1667 时，条件判断为假，错误地跳过了版本检查，允许了更新。正确的逻辑应为：当 SEV 版本低于 0.15，或者（在 Hygon 平台上）CSV 版本低于 1667 时，应拒绝更新。
+
+#解决方案
+修正 `drivers/crypto/ccp/sev-dev.c` 中 `sev_update_firmware` 函数的条件判断逻辑。将逻辑与运算符（`&&`）修改为逻辑或运算符（`||`），并对 Hygon 平台的 CSV 版本检查条件取反（`!csv_version_greater_or_equal(1667)`）。修复后的逻辑确保：只要 SEV 版本低于 0.15，或者是在 Hygon 平台上且 CSV 版本低于 1667，系统都会正确地拒绝固件更新请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5422ce387b7e258849aaea520c447d254ed77f78

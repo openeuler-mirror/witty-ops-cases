@@ -1,0 +1,20 @@
+#标题
+smb: client: krb5 挂载复用错误会话导致鉴权失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `sec=krb5` 且指定不同 `username` 选项挂载同一服务器的不同 SMB 共享时，客户端错误地复用了第一次挂载建立的 SMB 会话。这导致后续挂载使用了错误的凭据（即第一次挂载的用户凭据），而非指定的新用户凭据。在目标用户凭据不存在时，本应返回 `-ENOKEY` 失败，但实际却以错误用户挂载成功。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `match_session()` 函数中，当安全类型为 Kerberos 时，仅比较了 `cred_uid`，未对 `username` 选项进行匹配检查。这导致即便用户指定了不同的 `username`，内核仍认为现有会话可复用，从而使用了错误的用户凭据进行后续挂载。
+
+#解决方案
+在 `fs/smb/client/connect.c` 的 `match_session()` 函数中增加对 Kerberos 场景下的 `username` 匹配检查。具体修复逻辑为：在 `case Kerberos` 分支下，增加对 `ses->user_name` 与 `ctx->username` 的字符串比较。若两者不一致，则返回 0 表示会话不匹配，防止复用错误的 SMB 会话。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d4e61861c644b5bdfea82fc2110ed0d0d53bf2c

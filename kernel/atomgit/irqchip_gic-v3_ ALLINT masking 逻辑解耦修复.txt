@@ -1,0 +1,25 @@
+#标题
+irqchip/gic-v3: ALLINT masking 逻辑解耦修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在未开启 CONFIG_ARM64_NMI 配置但 CPU 硬件支持 NMI（has_v3_3_nmi() 为真）的场景下，内核在处理中断时会错误地调用 `_allint_clear()` 函数。由于该函数在补丁修复前依赖 CONFIG_ARM64_NMI 宏编译，可能导致调用未实现的空函数或引发内核崩溃/挂起，破坏了 ALLINT（All Interrupts）掩码的正确管理。
+
+#主要错误日志
+未知
+
+#问题根因
+原代码逻辑将 ALLINT 的清除操作与 GIC NMI 支持状态强行耦合。具体表现为：
+1. 判断条件使用了 `else if (has_v3_3_nmi())`，仅检查硬件是否支持 NMI，未检查内核配置选项 CONFIG_ARM64_NMI 是否开启。
+2. 当 CONFIG_ARM64_NMI 未定义时，`_allint_clear()` 函数体不存在或定义不符合预期，导致在硬件支持 NMI 但内核未配置的情况下错误执行清除操作。
+3. ALLINT 的管理应依赖于系统当前是否实际使用 NMI 机制（`system_uses_nmi()`），而非单纯的硬件特性检查。
+
+#解决方案
+1. 解耦逻辑：将 ALLINT 清除逻辑从 GIC 中断处理流的 `else if` 分支中独立出来，不再与 `gic_prio_masking_enabled()` 互斥绑定。
+2. 修正判断条件：将判断条件从 `has_v3_3_nmi()`（硬件支持）修改为 `system_uses_nmi()`（系统实际使用），确保只有内核配置了 NMI 且系统正在使用 NMI 时才执行清除操作。
+3. 完善宏定义保护：在头文件 `arch/arm64/include/asm/nmi.h` 中，针对 `CONFIG_ARM64_NMI` 未定义的情况，提供 `_allint_clear` 和 `_allint_set` 的空函数实现，防止编译错误并提供安全的默认行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f96d11cb13803295c676c593e239e6097ae17d18

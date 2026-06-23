@@ -1,0 +1,22 @@
+#标题
+cpufreq: conservative 模式下频率更新被错误跳过
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 cpufreq conservative 调度策略时，系统频率更新可能被意外跳过。特别是在涉及延迟调整的场景下，陈旧的目标频率比较逻辑会导致频率调整请求未被执行，CPU 频率可能长时间卡在某个频率点无法升频或降频。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cs_dbs_update()` 函数中，代码在更新目标频率前显式检查了 `requested_freq` 是否等于 `policy->min` 或 `policy->max`，并在相等时直接跳过更新（`goto out`）。这导致了两个问题：
+1. 这些边界检查是冗余的，因为 `__cpufreq_driver_target()` 内部已经将请求频率限制在有效范围内。
+2. 由提交 00bfe05889e9 ("cpufreq: conservative: Decrease frequency faster for deferred updates") 引入的问题：在延迟更新后，这种陈旧的目标比较会导致频率更新被完全跳过，致使频率调整失效。
+
+#解决方案
+移除 `cs_dbs_update()` 中针对 `policy->min` 和 `policy->max` 的冗余边界检查代码，简化频率更新逻辑，直接依赖底层接口进行频率钳位，从而修复因陈旧比较导致的频率更新跳过问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f90239a27570b54ea2a2162a93bb41e607867491

@@ -1,0 +1,21 @@
+#标题
+jfs: fix slab-out-of-bounds read in ea_get()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 JFS 文件系统的扩展属性列表大小超过 INT_MAX 时，在 ea_get() 函数的错误处理路径中，变量 size 会发生整型溢出变为负数。该负值作为 size_t 参数传递给 print_hex_dump() 后被解释为一个极大的无符号整数，导致循环遍历越界，最终引发 slab-out-of-bounds read（内核越界读取）。
+
+#主要错误日志
+- ea_get: extended attribute size too large: [size] > INT_MAX (新增的边界检查日志)
+- ea_get: invalid extended attribute (原有日志)
+
+#问题根因
+在 ea_get() 函数的 "size_check" 标签处，代码使用 clamp_t(int, ea_size, 0, EALIST_SIZE(ea_buf->xattr)) 来计算 size。当 EALIST_SIZE 返回值（如 4110417968）超过 INT_MAX 时，clamp_t 的上限参数发生整型溢出，导致 size 计算结果为一个巨大的无符号值（或负值转正），print_hex_dump() 接收到该值后进行长时间循环迭代，最终访问了 ptr 边界之外的内存。
+
+#解决方案
+在调用 clamp_t 计算 size 之前，增加对 EALIST_SIZE(ea_buf->xattr) 的有效性校验。如果大小超过 INT_MAX，直接打印错误日志并跳过 print_hex_dump() 调用，从而避免整型溢出及随后的越界内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/00f361fbac673f0d8a7ca0eb599fb75e2aa6d3d3

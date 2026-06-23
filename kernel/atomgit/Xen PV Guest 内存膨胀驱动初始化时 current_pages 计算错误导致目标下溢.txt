@@ -1,0 +1,32 @@
+#标题
+Xen PV Guest 内存膨胀驱动初始化时 current_pages 计算错误导致目标下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Xen PV（半虚拟化）客户机启动过程中，内核初始化 balloon driver（内存膨胀驱动）时，因内存目标计算逻辑错误导致初始化失败。
+具体表现为：
+1. 内核启动时触发 WARN_ON 警告，提示 "Released pages underflow current target"。
+2. balloon driver 初始化返回 -ERANGE 错误，导致驱动加载失败，无法进行内存动态调整。
+
+#主要错误日志
+[    0.000000] Released pages underflow current target
+
+#问题根因
+前一个提交（87af633689ce）试图统一 HVM 和 PV 客户机的内存目标初始化逻辑，统一使用 `get_num_physpages()` 获取当前物理页数并减去 `xen_released_pages`。
+但对于 PV 客户机，该逻辑存在两个缺陷：
+1. `get_num_physpages()` 返回的值与 PV 客户机实际初始内存目标不一致。PV 客户机的初始内存目标由 `start_info->nr_pages` 决定（由 toolstack 设置）。
+2. 对于 PV 客户机，`get_num_physpages()` 需要额外考虑 ISA hole 和 PFN 0 等特殊区域，直接使用会导致计算偏差。
+这导致在计算 `balloon_stats.current_pages` 时，计算结果小于 `xen_released_pages`，触发下溢检查警告，进而导致驱动初始化失败。
+
+#解决方案
+部分还原前序提交，针对 PV 和 HVM 客户机采用不同的内存目标计算策略：
+1. **区分虚拟化类型处理**：PV 客户机恢复使用 `xen_start_info->nr_pages` 作为基准，HVM 客户机继续使用 `get_num_physpages()`。
+2. **引入新变量修正计数**：引入全局变量 `xen_unpopulated_pages`，用于精确统计从未被填充的页面数，避免与已释放页面混淆。
+3. **修正计算逻辑**：
+   - PV 客户机：`current_pages = min(xen_start_info->nr_pages - xen_released_pages, max_pfn)`。
+   - HVM 客户机：`current_pages = get_num_physpages() - xen_unpopulated_pages`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4e92021a7825f4e7d4b178be8732b054fa8ebfcb

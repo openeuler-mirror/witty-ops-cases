@@ -1,0 +1,20 @@
+#标题
+iwlwifi: 密钥迭代使用错误的同步机制导致潜在并发问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非 RCU 临界区上下文中使用 RCU 保护的方式进行密钥迭代，导致密钥更新或移除操作存在并发访问风险。在 STA 密钥更新场景下，错误地使用了异步命令（CMD_ASYNC），可能导致命令发送时机或上下文不符合预期，进而引发密钥状态不一致或底层固件处理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `iwl_mvm_mld_update_sta_keys` 和 `iwl_mvm_sec_key_remove_ap` 函数中，密钥迭代操作并不处于 RCU 临界区，而是持有 wiphy 锁作为保护。代码错误地使用了 `ieee80211_iter_keys_rcu()` 进行迭代，这不符合当前的锁上下文要求。此外，在链路切换相关的密钥更新回调中，错误地使用了 `CMD_ASYNC` 标志发送命令，而在持有锁的同步上下文中应使用同步命令。
+
+#解决方案
+将密钥迭代函数调用从 `ieee80211_iter_keys_rcu()` 修改为 `ieee80211_iter_keys()`，以匹配 wiphy 锁的保护机制。同时，在 `iwl_mvm_mld_update_sta_key` 回调函数中，将发送命令的标志从 `CMD_ASYNC` 修改为 0（同步发送），确保在链路切换等场景下命令执行的同步性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/531b7cb5eeca99df4c58c54d62ed69f381d57f8b

@@ -1,0 +1,22 @@
+#标题
+usb: chaoskey: 修复 O_NONBLOCK 模式下的锁处理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当应用程序以 O_NONBLOCK 标志打开 ChaosKey 设备并进行读取操作时，如果设备互斥锁已被占用，内核未正确返回 -EAGAIN 错误码，导致非阻塞调用行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `chaoskey_read` 函数中，原代码对 `dev->lock` 互斥锁的获取统一使用了 `mutex_lock_interruptible`，未针对 `file->f_flags` 中的 `O_NONBLOCK` 标志进行区分处理。这导致在非阻塞模式下，若无法立即获取锁，进程错误地进入睡眠等待状态，而不是直接返回资源暂时不可用的错误，违反了非阻塞 I/O 的语义。
+
+#解决方案
+修改 `chaoskey_read` 函数，增加对 `O_NONBLOCK` 标志的判断逻辑：
+1. 若设置了 `O_NONBLOCK`，使用 `mutex_trylock` 尝试获取锁。若获取失败（返回 0），则直接返回 `-EAGAIN`；若成功则继续后续操作。
+2. 若未设置 `O_NONBLOCK`，保持原有的 `mutex_lock_interruptible` 阻塞等待逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad92a972010e86ca7446b35bae6a15c60b05f6dd

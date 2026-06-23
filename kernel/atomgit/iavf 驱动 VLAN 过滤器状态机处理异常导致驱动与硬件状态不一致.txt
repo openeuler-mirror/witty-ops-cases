@@ -1,0 +1,22 @@
+#标题
+iavf 驱动 VLAN 过滤器状态机处理异常导致驱动与硬件状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 iavf 驱动（V1 接口）添加 VLAN 时，VLAN 过滤器永久处于 ADDING 状态，无法正确切换为 ACTIVE 状态。此外，当 PF（物理功能）拒绝添加 VLAN 请求时，驱动程序错误地将过滤器状态标记为 ACTIVE，导致驱动程序认为过滤器已安装，但实际上硬件并未生效，造成驱动与硬件状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `iavf_virtchnl_completion` 函数中，`VIRTCHNL_OP_ADD_VLAN` 缺少成功处理分支，导致 V1 接口的过滤器在收到 PF 确认后无法从 ADDING 状态转移。更为关键的是，该函数的错误处理逻辑 `switch` 块并未在处理错误后返回（return），而是继续向下执行（fall through）进入成功处理逻辑。由于缺少对返回值 `v_retval` 的检查保护，一旦 PF 拒绝了 ADD 请求，代码仍会错误地执行成功处理流程，将本应失败的过滤器标记为 ACTIVE。
+
+#解决方案
+在 `iavf_virtchnl_completion` 函数中为 `VIRTCHNL_OP_ADD_VLAN` 添加处理分支：
+1. 新增 `case VIRTCHNL_OP_ADD_VLAN` 标签，使其进入原有的 VLAN 添加处理逻辑。
+2. 在处理逻辑开始处增加 `if (v_retval) break;` 保护判断。若返回值表示错误，直接跳出 switch，防止错误请求被误判为成功；若返回值表示成功，则正常执行状态转换（ADDING -> ACTIVE）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bc3afae801ee8cd6c5a3a629bc4888cb8d586306

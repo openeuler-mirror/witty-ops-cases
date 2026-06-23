@@ -1,0 +1,20 @@
+#标题
+KVM: arm64: ipiv 接口参数语义修正导致的功能检查逻辑优化
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在核查 IPIV（Inter-Processor Interrupt Virtualization）特性支持状态时，函数接口设计存在语义偏差。原接口 `hisi_ipiv_supported_per_vm` 和 `hisi_ipiv_enable_per_vm` 接收 `struct kvm_vcpu` 指针作为入参，但由于 IPIV 属于 per-VM（虚拟机级别）特性，传入 vcpu 指针后需通过 `vcpu->kvm` 获取 kvm 结构体，导致接口语义不清晰且访问路径冗余。
+
+#主要错误日志
+未知
+
+#问题根因
+IPIV 是 per-VM 级别的特性，而在检查该特性是否支持或使能该特性时，相关函数 `hisi_ipiv_supported_per_vm` 和 `hisi_ipiv_enable_per_vm` 错误地使用了 `struct kvm_vcpu` 作为输入参数。这导致在函数内部必须通过 `vcpu->kvm` 进行二次转换才能访问虚拟机级别的数据结构，接口定义与实际功能范畴不匹配。
+
+#解决方案
+将 `hisi_ipiv_supported_per_vm` 和 `hisi_ipiv_enable_per_vm` 函数的输入参数从 `struct kvm_vcpu *vcpu` 修改为 `struct kvm *kvm`。同时在调用侧（如 `kvm_smccc_call_handler` 中）直接传入 `vcpu->kvm`，从而修正接口语义，使其直接对应虚拟机级别的操作对象。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cbd165f529bd32b586342c0a2d11c3ca50b9fdd3

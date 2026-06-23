@@ -1,0 +1,43 @@
+#标题
+xcall2.0 多线程注册注销致内存泄露及状态不一致故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多线程场景下通过 `/proc/xcall/comm` 并发执行 xcall 注册与注销操作时，触发内核内存泄露。kmemleak 工具检测到未释放的内核对象。同时伴随状态不一致现象：部分 xcall 实例已被注销，但仍可在 `/proc/xcall/comm` 中查看到。
+
+#主要错误日志
+unreferenced object 0xffff00104bd86d00 (size 64):
+  comm "bash", pid 4246, jiffies 4295025941 (age 1701.080s)
+  hex dump (first 32 bytes):
+    60 fd ff 4b 10 00 ff ff 80 6f d8 4b 10 00 ff ff  `..K.....o.K....
+    a0 df 28 04 90 00 ff ff 18 41 aa 04 88 00 ff ff  ..(......A......
+  backtrace:
+    kmemleak_alloc+0xb4/0xd0
+    __kmem_cache_alloc_node+0x330/0x420
+    kmalloc_trace+0x48/0xf8
+    proc_xcall_command+0x44/0x378
+    xcall_comm_write+0xc8/0x160
+    proc_reg_write+0x110/0x180
+    vfs_write+0x150/0x3a8
+    ksys_write+0xd0/0x180
+    __arm64_sys_write+0x4c/0x68
+    invoke_syscall+0x68/0x1a0
+    el0_svc_common.constprop.0+0x11c/0x150
+    do_el0_svc+0x68/0xb0
+    el0_slow_syscall+0x44/0x1e8
+    .slow_syscall+0x18c/0x190
+
+#问题根因
+xcall 子系统在处理并发注册与注销时，`xcall_comm` 结构体与 `xcall` 结构体由两个独立的链表和锁分别管理，导致竞态条件。具体的竞态时序如下：
+1. 线程 A 执行 `xcall_attach`，调用 `insert_xcall_locked` 将 xcall 插入列表。
+2. 此时线程 B 执行 `xcall_detach`，调用 `delete_xcall_comm_locked` 删除了对应的 xcall_comm 记录。
+3. 随后线程 A 继续执行 `insert_xcall_comm_locked`，将 xcall_comm 插入列表。
+此过程导致 `xcall` 已被注销，但 `xcall_comm` 仍留在系统中无法释放，造成内存泄露；同时导致 `/proc/xcall/comm` 显示内容与实际状态不一致。
+
+#解决方案
+重构数据结构管理逻辑，将 `xcall_comm` 结构体合并到 `xcall` 结构体中（作为其成员 `info`），确保两者使用同一个锁（`xcall_list_lock`）进行同步保护，从而保证数据的一致性。同时移除了原有的独立 `comm_list` 及相关冗余的查找、插入、删除函数，统一在 `xcall` 的生命周期管理中处理 `xcall_comm` 的分配与释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eb3b5a4a17d959c2c5e88a6362ecb691a8ad5035

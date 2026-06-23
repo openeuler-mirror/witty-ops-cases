@@ -1,0 +1,22 @@
+#标题
+xfrm: state lookup并发resize导致越界读
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 IPsec (xfrm) 状态查找时，如果同时发生 Hash 表 resize 操作，可能导致内核发生越界读取（out-of-bounds read）。该缺陷可能触发内核崩溃（kernel panic）或导致内存数据被非法读取，影响系统稳定性与安全性。
+
+#主要错误日志
+未知
+
+#问题根因
+lookup（查找）与 resize（重哈希）操作可以并行执行。虽然 `xfrm_state_hash_generation` seqlock 机制会触发重试，但在特定竞态窗口下，Hash 函数可能观测到一个过大的 `hmask` 值，该值对应的是旧的、尚未更新的 `hlist` 数组。
+具体而言，rehash 操作先更新指针 `state_bydst`，再更新掩码 `state_hmask`；而 lookup 操作先计算 Hash 值，再通过指针访问数组。如果在 update 指针后、update 掩码前执行 lookup，lookup 可能使用新的掩码去索引旧的数组，从而导致数组越界访问。
+
+#解决方案
+修改 `xfrm_state` 查找逻辑，引入 `xfrm_hash_state_ptrs` 结构体，在 RCU 读取侧通过 `xfrm_hash_ptrs_get` 函数在 seqlock 保护下同时获取 Hash 表指针和 `hmask`，确保两者的一致性。
+同时，为 `xfrm_dst_hash`、`xfrm_src_hash` 等辅助函数添加 `lockdep_assert_held` 断言，明确标记这些函数在插入侧持有锁的情况下是安全的，防止误用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/87bdef3bab1d8fc3c14556bcb3ef4cb73ec37931

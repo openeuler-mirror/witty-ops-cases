@@ -1,0 +1,21 @@
+#标题
+arm64/mpam: get_cpumask_from_cache_id 函数存在不可能的条件判断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+静态代码分析工具（smatch）报告在 `get_cpumask_from_cache_id` 函数中存在“impossible condition”（不可能条件）警告。代码逻辑判定 `(cache_id == ~0)` 永远为假，导致相关的错误处理或跳过逻辑无法生效，可能影响 MPAM 设备初始化流程中对无效 cache ID 的过滤处理。
+
+#主要错误日志
+drivers/platform/mpam/mpam_devices.c:391 get_cpumask_from_cache_id()
+warn: impossible condition '(cache_id == ~0) => (0-u32max == u64max)'
+
+#问题根因
+变量 `cache_id` 被定义为 32 位无符号整型（u32），而在条件判断语句中，`~0UL` 被显式指定为无符号长整型（unsigned long），在 64 位系统中其为 64 位数值。这导致在进行相等比较时，32 位的 `cache_id` 与 64 位的 `~0UL` 数据类型不匹配，触发整型提升，使得该条件判断在逻辑上永远无法成立（即 32 位值不可能等于 64 位的全 1 值）。
+
+#解决方案
+修正数据类型一致性。将条件判断中的 `~0UL` 修改为 `(~0)`，使其适应 `cache_id` 的 u32 类型，从而确保在比较时数据类型一致，逻辑判断能够正确执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/68f59b217cd5577c85d5cf6f28def6825cdd7e83

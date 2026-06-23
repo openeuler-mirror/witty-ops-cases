@@ -1,0 +1,20 @@
+#标题
+xfs_flush_unmap_range() 在 RT 设备上因范围对齐错误导致数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 XFS 实时（RT）设备上进行写入操作时，由于 `xfs_flush_unmap_range()` 函数计算刷新范围不正确，未能覆盖完整的 RT extent 范围。这可能导致正在修改的 extent 边界区域未处于 clean 和 idle 状态，进而引发数据不一致或文件系统元数据错误。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `xfs_flush_unmap_range()` 在计算刷新和取消映射的范围时，使用 `mp->m_sb.sb_blocksize`（通常为 4KB）进行对齐。对于 RT 设备，extent 大小可能远大于块大小。由于对齐粒度计算过小，导致 `round_down` 和 `round_up` 后的 `start` 和 `end` 范围未能包含完整的 RT extent 边界。这使得在执行修改操作前，该 extent 范围无法保证是干净且空闲的，违反了 XFS 对 RT extent 处理的一致性要求。
+
+#解决方案
+修改 `xfs_flush_unmap_range()` 函数中的对齐粒度计算逻辑。将 `rounding` 变量的计算从使用 `mp->m_sb.sb_blocksize` 改为使用 `xfs_inode_alloc_unitsize(ip)`，该函数能正确返回 RT inode 的 extent 大小（对于非 RT inode 则返回块大小）。同时，使用 `rounddown_64` 和 `roundup_64` 替换原有的对齐宏，确保范围扩展至包含整个 extent，从而保证重叠的 extent 范围在修改前是 clean 和 idle 的。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6e1954ca4828cda97f71ceeaf92f55f56b5660f3

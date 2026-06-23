@@ -1,0 +1,20 @@
+#标题
+scsi: sd: 磁盘移除时未正确下发停止旋转指令
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统运行状态下，执行磁盘移除操作（如 `echo 1 > /sys/block/sdb/device/delete`）时，SCSI 磁盘未接收到 START STOP UNIT 指令，导致磁盘未执行 spin-down（停转）操作，可能引发磁盘掉电保护不足或硬件状态不一致的问题。
+
+#主要错误日志
+未知
+
+#问题根因
+上游提交 aa3998dbeb3a ("ata: libata-scsi: Disable scsi device manage_system_start_stop") 为了让 libata EH 管理系统挂起/恢复的设备电源模式转换，移除了 `ata_scsi_dev_config` 中的 `manage_system_start_stop` 标志设置。然而，`sd_shutdown()` 函数仅依据 `manage_system_start_stop` 标志来决定是否在系统运行时下发停止指令。由于该标志已被移除，导致在磁盘移除过程中，`sd_shutdown()` 判断条件失效，无法下发 spin-down 命令。
+
+#解决方案
+修改 `sd_shutdown()` 函数的判断逻辑，在原有判断条件基础上，增加了对 `SYSTEM_RUNNING`（系统运行）状态及 `manage_runtime_start_stop` 标志的检测。当系统处于运行状态且设备设置了 `manage_runtime_start_stop` 标志时，也会下发 START STOP UNIT 指令使磁盘停转，从而修复了磁盘移除时不执行 spin-down 的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba3b8a05412084acabb123ed2683092de9b0680a

@@ -1,0 +1,21 @@
+#标题
+hisilicon加密驱动SGL映射失败未释放致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用鲲鹏加速器进行DMA数据传输时，若SGL（Scatter-gather List）已映射成功，但后续流程（如SGE数量检查或获取SGL失败）出现错误，驱动程序未取消映射便直接返回。这会导致DMA映射资源泄漏，长期运行可能引发内存不足或设备DMA地址空间耗尽问题。
+
+#主要错误日志
+- "the number of entries in input scatterlist is bigger than SGL pool setting.\n"
+- "Get SGL error!\n"
+
+#问题根因
+函数 `hisi_acc_sg_buf_map_to_hw_sgl` 在执行 `dma_map_sg` 成功映射SGL后，若后续检查发现条目数量超出池限制（`sg_n_mapped > pool->sge_nr`）或调用 `acc_get_sgl` 获取硬件SGL失败，直接返回了错误指针，遗漏了调用 `dma_unmap_sg` 进行资源释放。根据Commit描述，这是一个遗漏的错误处理分支。
+
+#解决方案
+修改错误处理路径，在函数返回前增加统一的 `err_unmap` 标签处理逻辑。当上述两个错误分支触发时，跳转至 `err_unmap` 标签处，先调用 `dma_unmap_sg(dev, sgl, sg_n, DMA_BIDIRECTIONAL)` 取消映射，再返回错误指针，确保DMA映射资源被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d118a8d2e8ac426df32bfb9709f7687d713bd4b6

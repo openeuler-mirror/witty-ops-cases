@@ -1,0 +1,28 @@
+#标题
+sched_ext: Fix ops.cgroup_move() invocation kf_mask and rq tracking
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sched_ext 调度器类中，`ops.cgroup_move()` 函数调用时的锁状态标记（kf_mask）与实际持有的锁不一致，且 rq tracking 未正确更新，导致以下潜在问题：
+1. `scx_bpf_task_cgroup()` 无法在 `ops.cgroup_move()` 中被调用（被错误拒绝）。
+2. `scx_bpf_dsq_move()` 被错误允许在持有无关任务 rq lock 时调用，存在风险。
+3. `scx_bpf_select_cpu_*()` 若在此上下文中调用，可能因重复获取 pi_lock 导致死锁。
+
+#主要错误日志
+未知
+
+#问题根因
+`sched_move_task()` 在持有 `task_rq_lock(tsk)` 的情况下调用 `ops.cgroup_move()`，但 `SCX_CALL_OP_TASK` 宏的调用参数传递错误：
+1. `kf_mask` 被错误地设置为 `SCX_KF_UNLOCKED` (值为0)，声称未持有任何锁，与实际状态不符。
+2. `rq` 参数被传递为 `NULL`，导致 `update_locked_rq()` 未运行，`scx_locked_rq()` 返回 NULL，丢失了 rq tracking 信息。
+
+#解决方案
+修正 `scx_cgroup_move_task()` 中 `SCX_CALL_OP_TASK` 的调用参数：
+1. 将 `kf_mask` 参数从 `SCX_KF_UNLOCKED` 修改为 `SCX_KF_REST`，正确标识当前持有 rq 锁。
+2. 将 `rq` 参数从 `NULL` 修改为 `task_rq(p)`，确保 rq tracking 正确更新。
+此修复使得 `scx_bpf_task_cgroup()` 可被正常调用，正确拒绝 `scx_bpf_dsq_move()`，并修复了 `scx_bpf_select_cpu_*()` 可能引发的潜在死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/357f56ace4c6b4976029fb82d5a16015a0bb3e34

@@ -1,0 +1,20 @@
+#标题
+smb: client: fix wrong index reference in smb2_compound_op()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB 客户端执行复合操作时，内核在处理响应向量数组 `rsp_iov` 时发生数组索引越界访问。由于循环变量 `i` 在迭代过程中使用了错误的索引计算方式 `i + i`（应为 `i + 1`），导致访问了错误的内存地址或越界。此故障可能导致内核崩溃、内存损坏或 SMB 文件操作异常返回错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fs/smb/client/smb2inode.c` 文件的 `smb2_compound_op` 函数中，遍历响应缓冲区的循环逻辑存在笔误。代码在获取 `rsp_iov` 基地址时，错误地使用了 `rsp_iov[i + i]` 进行索引，正确的索引应为 `rsp_iov[i + 1]`。这导致在循环迭代时，索引以 0, 2, 4... 的步长增长，而非预期的 1, 2, 3...，从而引发错误的内存引用。
+
+#解决方案
+修正 `smb2_compound_op` 函数中的数组索引计算逻辑，将 `rsp_iov[i + i]` 修改为 `rsp_iov[i + 1]`，确保正确遍历并处理每一个响应缓冲区。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fe656d8bc10b5c4ced04a8821909e64adc18a7ef

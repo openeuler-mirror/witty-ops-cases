@@ -1,0 +1,31 @@
+#标题
+内核 driver_override 机制重构引入潜在内存管理与并发风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+此次提交为 CVE-2026-31527 的修复补丁，涉及内核设备驱动核心子系统。根据代码变更推断，若未应用此补丁，系统可能存在以下隐患：
+1. **内存泄漏**：设备注销或驱动覆盖时，`driver_override` 字符串未正确释放。
+2. **并发访问冲突**：多线程并发读写设备驱动覆盖信息时，缺乏适当的锁保护，可能导致竞态条件。
+3. **功能异常**：部分驱动（如 sound/soc/samsung/i2s.c）手动设置 `driver_override` 指针的方式可能与核心层内存管理逻辑冲突，导致内核崩溃或驱动绑定失败。
+
+#主要错误日志
+未知
+
+#问题根因
+此次提交对 `driver_override` 机制进行了大规模重构。变更前，`driver_override` 仅作为 `platform_device` 结构体内的一个指针存在，且部分驱动直接对其进行赋值或使用辅助函数管理。变更后的根因分析如下：
+1. **存储位置与生命周期管理缺陷**：原有机制依赖于特定总线（如 platform）的释放函数来释放 `driver_override`，或者某些驱动直接手动分配赋值，容易导致内存分配与释放责任不清，进而引发内存泄漏。
+2. **并发保护缺失**：原有的读写操作缺乏统一的锁保护机制，在多核并发访问场景下存在数据竞争风险。
+3. **架构局限性**：`driver_override` 功能原本仅限于 `platform_device`，无法被其他总线类型的设备复用，导致代码重复且难以统一维护。
+
+#解决方案
+通过将 `driver_override` 机制从特定设备类型移至核心 `struct device` 结构体中，并引入统一的存储与锁机制：
+1. **核心结构扩展**：在 `struct device` 中新增 `driver_override` 成员，包含 `name` 指针与 `spinlock` 锁，确保并发访问安全。
+2. **统一 API 接口**：引入 `device_set_driver_override`、`device_has_driver_override` 和 `device_match_driver_override` 等通用接口，替换原有的分散实现。
+3. **生命周期修正**：在 `device_release` 中增加 `kfree(dev->driver_override.name)`，确保设备释放时清除相关内存，防止泄漏。
+4. **总线层适配**：在 `bus_type` 中增加 `driver_override` 标志位，并在 `bus_add_device` 与 `bus_remove_device` 中动态添加/移除对应的 sysfs 属性组，实现按需创建文件节点。
+5. **旧接口清理**：移除 `platform_device` 中的旧 `driver_override` 指针字段，修正 `imx-scu-clk`、`samsung-i2s` 等驱动，改为调用新的统一 API 进行设置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eea384ff8d5291ed2c60c6aa2906da9af1858b95

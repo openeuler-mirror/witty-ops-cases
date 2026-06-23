@@ -1,0 +1,20 @@
+#标题
+watch_queue: fix pipe accounting mismatch
+
+#内核版本
+OLK-6.6
+
+#问题现象
+由于管道缓冲区计数不匹配，在释放管道时会导致 `user->pipe_bufs` 计数减少值与当初分配的充值值不一致，进而导致该计数器发生下溢。这种下溢会导致后续调用 `too_many_pipe_buffers_soft()` 检查失败，系统调用返回 `-EPERM` 错误，影响管道相关功能的正常使用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `watch_queue_set_size()` 函数中，虽然通过 `account_pipe_buffers()` 修改了用户统计的管道缓冲区计数（`user->pipe_bufs`），但由于 `pipe_resize_ring()` 函数中针对 watch_queue 存在特殊判断（`!pipe_has_watch_queue()`），导致未更新管道自身的 `pipe->nr_accounted` 字段。这造成管道释放时，释放逻辑依据 `nr_accounted` 减少用户计数，该数值与实际之前分配的数值不符，从而导致计数器下溢。
+
+#解决方案
+在 `watch_queue_set_size()` 函数中显式更新管道的 `max_usage` 和 `nr_accounted` 字段，使其数值与通过 `account_pipe_buffers()` 实际分配给用户的缓冲区数量（nr_pages）保持一致，从而确保分配与释放时的记账逻辑匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6fd9630aa05aa854bd747f2a508516b0789cc7a8

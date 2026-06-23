@@ -1,0 +1,22 @@
+#标题
+sched_ext: dsq_local_on 自测用例逻辑错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+`sched_ext` 子系统中的 `dsq_local_on` 自测用例逻辑设计不合理，导致测试结果不可靠。原测试旨在验证调度器在将任务分发到错误 CPU 时的失败处理，但该错误行为在 1 秒的测试窗口内不保证触发。此外，如果 `dsp_local_on` 接口完全损坏导致任何尝试都失败，该测试反而会通过，无法正确验证功能的有效性。
+
+#主要错误日志
+未知
+
+#问题根因
+自测代码 `dsp_local_on.bpf.c` 中选取目标 CPU 的逻辑存在缺陷，未考虑任务的 CPU 亲和性。代码盲目使用随机数选取目标 CPU（`target = bpf_get_prandom_u32() % nr_cpus`），可能导致非预期的测试路径。同时，测试用例 `dsp_local_on.c` 的断言逻辑错误，期望结果为 `SCX_EXIT_ERROR`，这与验证功能正常工作的目的背道而驰。
+
+#解决方案
+1. 修改 BPF 程序逻辑，在选取目标 CPU 时增加判断：若任务允许在所有 CPU 上运行，则随机选取目标 CPU；否则使用任务当前所在的 CPU，确保调度目标合法。
+2. 翻转测试断言，将期望退出状态从 `SCX_EXIT_ERROR` 改为 `SCX_EXIT_UNREG`，确保测试验证的是功能正常运行而非异常退出。
+3. 修正测试描述中的拼写错误，将 "osp.dispatch()" 更正为 "ops.dispatch()"。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b39459605b5e4e7232d903e282bd7cce907be612

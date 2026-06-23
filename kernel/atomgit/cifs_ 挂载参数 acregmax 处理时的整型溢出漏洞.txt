@@ -1,0 +1,20 @@
+#标题
+cifs: 挂载参数 acregmax 处理时的整型溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载 CIFS 文件系统时，若用户指定的 `acregmax` 参数值较大（接近 u32 最大值），在内核处理该参数过程中会触发整型溢出。这导致参数校验逻辑失效，原本应被拒绝的超大值被错误接受，可能导致后续内核行为异常。
+
+#主要错误日志
+cifs_errorf(fc, "acregmax too large\n");
+
+#问题根因
+在处理 `acregmax` 挂载选项时，代码先进行单位转换计算 `ctx->acregmax = HZ * result.uint_32`，然后再判断 `ctx->acregmax` 是否超过上限 `CIFS_MAX_ACTIMEO`。由于 `result.uint_32` 是无符号 32 位整数，当其值较大时，乘以 `HZ` 会发生整型溢出，导致结果回绕变小，从而绕过了上限检查，使得非法的大值得以通过验证。
+
+#解决方案
+调整校验逻辑的顺序与方式，在进行乘法转换前先进行校验。将判断条件修改为 `result.uint_32 > CIFS_MAX_ACTIMEO / HZ`，即直接比较输入的秒数值是否超过允许的最大秒数，校验通过后再进行 `ctx->acregmax = HZ * result.uint_32` 的赋值操作，从而避免整型溢出风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/02c4b4f2a9f9c7f64a2592c631d91c54235e3822

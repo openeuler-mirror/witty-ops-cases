@@ -1,0 +1,20 @@
+#标题
+ACPICA vsnprintf 函数溢出检查缺陷导致 64 位系统大地址缓冲区处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 64 位系统上，当 `vsnprintf` 函数处理的缓冲区地址位于 [0..UINT32_MAX] 范围之外（即高位地址）时，旧版本的逻辑会导致 `sprintf` 功能失效，可能引发缓冲区溢出或内存写入异常。
+
+#主要错误日志
+未知
+
+#问题根因
+旧版本代码在处理缓冲区结束地址（`end`）时逻辑存在缺陷：当 `size` 等于 `ACPI_UINT32_MAX` 时，直接将 `end` 设置为 `ACPI_CAST_PTR(char, ACPI_UINT32_MAX)`。在 64 位系统上，如果传入的缓冲区 `string` 地址大于 `UINT32_MAX`（高位地址），该计算逻辑会错误地设置 `end` 指针，导致缓冲区边界检查失效，从而破坏了 `sprintf` 的正常功能。
+
+#解决方案
+修改 `drivers/acpi/acpica/utprint.c` 中的 `vsnprintf` 函数逻辑，移除对 `ACPI_UINT32_MAX` 的特殊判断。使用 `ACPI_MIN(size, ACPI_PTR_DIFF(ACPI_MAX_PTR, string))` 重新计算有效的缓冲区大小，确保在 64 位系统上能够正确处理任意合法的地址空间范围。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c2c0a3aaf86f9e86d9093289b7457367d653c537

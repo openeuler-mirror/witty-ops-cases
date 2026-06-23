@@ -1,0 +1,23 @@
+#标题
+x86/bugs: Spectre V2 用户态缓解策略默认值未遵循 CONFIG_MITIGATION_SPECTRE_V2 配置
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核编译时禁用了 CONFIG_MITIGATION_SPECTRE_V2 配置选项的情况下，系统启动后 Spectre V2 的用户态缓解措施默认仍被设置为 AUTO 模式并启用，未按预期保持关闭状态。这导致在用户明确不希望启用缓解措施的场景下，系统依然强制开启了相关防护，违背了配置选项的控制逻辑。
+
+#主要错误日志
+- pr_err("Unknown user space protection option (%s). Switching to default\n", arg);
+
+#问题根因
+函数 `spectre_v2_parse_user_cmdline` 在解析用户态 Spectre V2 策略时，默认返回值被硬编码为 `SPECTRE_V2_USER_CMD_AUTO`。代码逻辑未检查 `CONFIG_MITIGATION_SPECTRE_V2` 配置项，导致即使该配置项被禁用（设置为 n），默认行为依然尝试启用缓解措施。
+
+#解决方案
+修改 `arch/x86/kernel/cpu/bugs.c` 中的逻辑，根据 `CONFIG_MITIGATION_SPECTRE_V2` 的状态动态决定默认值：
+1. 定义变量 `mode`，通过 `IS_ENABLED(CONFIG_MITIGATION_SPECTRE_V2)` 判断，若配置启用则赋值为 `SPECTRE_V2_USER_CMD_AUTO`，否则赋值为 `SPECTRE_V2_USER_CMD_NONE`。
+2. 当命令行未指定 `spectre_v2_user` 参数或参数解析失败时，函数返回动态计算的 `mode` 值而非硬编码的 `AUTO`。
+3. 同时更新了相关日志打印信息，将 "Switching to AUTO select" 修改为 "Switching to default"，以准确反映当前行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/24306c40cfc1dbd7488a08747692591aa971081a

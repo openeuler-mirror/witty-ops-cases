@@ -1,0 +1,20 @@
+#标题
+RDMA/bnxt_re: 新适配器错误使用无条件 Fence 导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Broadcom 5760X P7 等新一代适配器上执行 RDMA 内存操作（如 Local Invalidate、Reg MR 等）时，可能出现功能异常或行为不符合预期的问题。由于驱动错误地对这些新硬件应用了旧款适配器所需的“无条件 Fence（Unconditional Fence）”机制，影响了非线缆内存操作的正常执行逻辑。
+
+#主要错误日志
+未知
+
+#问题根因
+旧款适配器在执行非线缆内存操作（如 LOCAL_INV、REG_MR 等）时需要设置无条件 Fence 才能正常工作，因此驱动代码中无条件地为这些操作类型设置了 `BNXT_QPLIB_SWQE_FLAGS_UC_FENCE` 标志位。然而，新一代适配器（如 P7 设备）不需要此机制，且该机制在新硬件上是无效或有害的，导致操作行为异常。
+
+#解决方案
+修改驱动逻辑，不再无条件地为所有适配器设置 Fence 标志。将设置无条件 Fence 的逻辑提取到 `bnxt_re_legacy_set_uc_fence` 函数中，并在发送流程中增加硬件版本判断：仅当检测到当前硬件非 P5/P7 代（即旧款适配器）时，才调用该函数设置 Fence 标志，从而确保新适配器正常运行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1a0204e60c537b6b82fbf734ad75d08de1196bf1

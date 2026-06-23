@@ -1,0 +1,35 @@
+#标题
+hibmcge 驱动并发执行导致 phy_stop 重复调用触发 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动在检测到 np_link_fail 异常后，尝试通过调用 phy_stop() 和 phy_start() 进行修复。此时若 .ndo_stop() 与修复函数 hbg_fix_np_link_fail() 并发执行，会导致 phy_stop() 被调用两次，进而触发内核 WARNING 并打印调用栈。
+
+#主要错误日志
+hibmcge 0000:84:00.2 enp132s0f2: Link is Down
+hibmcge 0000:84:00.2: failed to link between MAC and PHY, try to fix...
+------------[ cut here ]------------
+called from state HALTED
+WARNING: CPU: 71 PID: 23391 at drivers/net/phy/phy.c:1503 phy_stop...
+...
+Call trace:
+ phy_stop+0x138/0x180
+ hbg_fix_np_link_fail+0x4c/0x90 [hibmcge]
+ hbg_service_task+0xfc/0x148 [hibmcge]
+ process_one_work+0x180/0x398
+ worker_thread+0x210/0x328
+ kthread+0xe0/0xf0
+ ret_from_fork+0x10/0x20
+---[ end trace 0000000000000000 ]---
+
+#问题根因
+hbg_fix_np_link_fail() 函数在执行修复逻辑时未加锁，与 .ndo_stop() 操作存在并发风险。并发执行导致 phy_stop() 被重复调用，触发了 PHY 状态机的非法状态检查。
+
+#解决方案
+1. 在 hbg_fix_np_link_fail() 函数中增加 rtnl_lock() 保护，防止与其他操作并发执行。
+2. 增加判断条件，仅当 PHY 处于 link 状态时才执行异常修复逻辑，避免在不合适的状态下操作 PHY。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9c9c6310aea88b1949746740297a158b8bb58390

@@ -1,0 +1,22 @@
+#标题
+drm/amd/display: 修复空指针解引用导致的潜在系统崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD 显示驱动中，变量 `drr_timing` 和 `subvp_pipe` 初始化为 NULL，但在某些执行路径下未被赋予有效值即被解引用。这会导致内核空指针解引用，引发 Oops 或系统崩溃。该问题属于静态分析工具（Coverity）报告的 FORWARD_NULL 缺陷。
+
+#主要错误日志
+未知
+
+#问题根因
+变量 `drr_timing` 和 `subvp_pipe` 在函数 `subvp_drr_schedulable` 和 `subvp_vblank_schedulable` 中被初始化为 NULL，但在后续的逻辑判断中，未能保证在所有路径下都被正确赋值。代码在未检查指针是否为空的情况下直接访问了其成员（如 `drr_timing->min_refresh_in_uhz` 或 `subvp_pipe->stream`），导致存在空指针解引用的风险。
+
+#解决方案
+在解引用指针前增加空指针检查：
+1. 在 `subvp_drr_schedulable` 函数中，增加对 `drr_timing` 的非空判断，确保指针有效后再访问 `min_refresh_in_uhz`。
+2. 在 `subvp_vblank_schedulable` 函数中，将条件判断修改为 `if (found && subvp_pipe)`，确保 `subvp_pipe` 不为空后再进行后续操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dd6bd0a3e1e746401b4cafebb9670a830d035130

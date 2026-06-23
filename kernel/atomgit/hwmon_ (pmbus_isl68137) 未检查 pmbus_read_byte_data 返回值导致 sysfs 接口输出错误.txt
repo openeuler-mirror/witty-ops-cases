@@ -1,0 +1,20 @@
+#标题
+hwmon: (pmbus/isl68137) 未检查 pmbus_read_byte_data 返回值导致 sysfs 接口输出错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当读取 ISL68137 PWM 控制器的 avs_enable 属性时，若底层 I2C 事务失败，sysfs 接口未能正确处理错误。应用程序读取到的状态值将是错误的非预期数值，而非报错信息，导致上层逻辑误判设备状态。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `isl68137_avs_enable_show_page` 函数中调用 `pmbus_read_byte_data` 获取数据后，未检查其返回值是否为负数（错误码）。当 I2C 事务失败时，负数的错误码被直接传入位运算 `(val & ISL68137_VOUT_AVS)`，运算结果被错误地作为正常值格式化输出。
+
+#解决方案
+在函数 `isl68137_avs_enable_show_page` 中增加对 `pmbus_read_byte_data` 返回值的判断：若返回值为负数（`val < 0`），则直接向上返回该错误码；否则正常执行位运算并输出。同时，将原有的 `sprintf` 替换为更安全的 `sysfs_emit` 以符合内核编码规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb528170e7434029f4edef002e0d4c54b3ca2615

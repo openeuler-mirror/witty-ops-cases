@@ -1,0 +1,25 @@
+#标题
+rtnetlink: 重构 nlk->cb_mutex 锁机制以支持 dump 操作退出 RTNL 锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 rtnetlink dump 操作时，系统无法针对特定 dump 操作“退出” RTNL（Routing Netlink）锁，导致所有 dump 操作都被强制持有 RTNL 锁，限制了并发性能与锁的灵活性。此外，若后续补丁尝试让部分 dump 操作不持有 RTNL 锁，现有代码无法有效保护 nlk->cb 数据结构，可能导致并发访问冲突或数据不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在历史提交 af65bdfce98d 中，代码使用一个通用的 mutex（即 nlk->cb_mutex）同时保护 nlk->cb 结构体与 dump() 操作。该指针对于 rtnl dump 场景指向 RTNL 锁，对于其他场景指向内部默认锁。这种设计导致了两个问题：
+1. 锁的职责耦合：无法区分保护 nlk->cb 的锁与保护 dump() 回调的锁。
+2. 锁粒度不可控：由于 nlk->cb 持有的锁被隐式用于 dump()，导致所有 rtnl dump 必须持有 RTNL 锁，无法实现针对特定 dump 操作“退出” RTNL 锁的优化。
+
+#解决方案
+重构 netlink sock 结构体中的锁定义，将“保护 cb 结构体的锁”与“保护 dump 回调的锁”分离：
+1. 结构体变更：将 `nlk->cb_def_mutex` 重命名为 `nlk->nl_cb_mutex`，作为每个 socket 独有的 mutex，专门用于保护 `nlk->cb` 结构体及相关状态。
+2. 新增指针：引入 `nlk->dump_cb_mutex` 指针，专门用于指向 dump() 操作期间需要持有的外部锁（对于 rtnl 即为 RTNL 锁，其他情况可为 NULL）。
+3. 逻辑分离：在 `netlink_dump()` 函数中，`nlk->nl_cb_mutex` 用于保护 cb 结构体的访问，而 `dump_cb_mutex`（若非空）才用于包裹 `cb->dump()` 回调调用。这样即可支持部分 dump 操作不持有 RTNL 锁的优化需求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/edc73ff9ab6d81281ac4921386457e4c5694f76e

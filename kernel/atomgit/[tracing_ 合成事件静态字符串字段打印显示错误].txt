@@ -1,0 +1,30 @@
+#标题
+[tracing: 合成事件静态字符串字段打印显示错误]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+在创建包含静态大小字符串字段（如 char[16]）的合成事件时，跟踪输出中该字符串字段的内容显示异常，显示为“(efault)”而非预期的字符串内容，随后的字段内容紧随其后显示，导致输出格式混乱。
+
+例如，定义 wakee 为 char[16] 时，输出如下：
+wake_lat: wakee=(efault)sshd-sessiondelta=155
+
+#主要错误日志
+[无显式错误日志，异常行为体现在 trace 输出中]
+输出示例：
+```
+<idle>-0       [001] d..5.   193.428167: wake_lat: wakee=(efault)sshd-sessiondelta=155
+sshd-session-879     [001] d..5.   193.811080: wake_lat: wakee=(efault)kworker/u34:5delta=58
+<idle>-0       [002] d..5.   193.811198: wake_lat: wakee=(efault)bashdelta=91
+```
+
+#问题根因
+之前的修复补丁（commit 4d38328eb442d 和 e1a453a57bc7）修正了动态字符串字段的打印格式问题，将 "%.*s" 改为 "%s" 并移除了动态字符串的长度参数，但遗漏了对静态字符串字段的处理。
+在 `print_synth_event` 函数中，对于静态字符串字段，代码仍然向 `trace_seq_printf` 传递了 `STR_VAR_LEN_MAX` 作为长度参数。由于打印格式已改为 "%s"（不需要长度参数），导致传递给 `%s` 的参数指针发生了偏移（误将长度值当作指针或错位），从而引发 print_str_to_user 逻辑错误，返回 "(efault)"。
+
+#解决方案
+修改 `kernel/trace/trace_events_synth.c` 文件中的 `print_synth_event` 函数。移除静态字符串字段打印时的 `STR_VAR_LEN_MAX` 参数，使其与动态字符串的处理逻辑保持一致，确保字符串以 '\0' 结尾并正确通过 "%s" 格式打印。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db5f31f98e310cc43fd374e1f88c2263a126df65

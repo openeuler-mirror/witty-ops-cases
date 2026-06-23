@@ -1,0 +1,20 @@
+#标题
+HID: hid-ntrig: ntrig_report_version 函数内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 N-Trig HID 设备驱动加载或运行过程中，若设备不是 USB 类型（即 `hid_is_usb(hdev)` 判断为假），函数 `ntrig_report_version` 会直接返回，导致之前通过 `kmalloc` 分配的内存未被释放，造成内核内存泄漏。长时间运行或频繁触发可能导致系统可用内存减少。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ntrig_report_version` 函数中，代码先通过 `kmalloc` 分配了内存缓冲区，随后检查 `hid_is_usb(hdev)`。当该检查失败（返回 false）时，代码路径直接 `return` 返回，跳过了函数末尾的 `kfree(data)` 清理逻辑，导致已分配的内存无法释放。
+
+#解决方案
+采用内核作用域清理机制（scope-based cleanup helper），在定义 `data` 变量时添加 `__free(kfree)` 属性。当变量超出作用域时（无论是函数正常结束、提前返回还是出错退出），编译器会自动调用 `kfree` 释放内存，从而消除特定路径下的内存泄漏风险，同时也简化了错误处理标签 `err_free` 的逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d7dd570215f091743290290188eb649f191efab8

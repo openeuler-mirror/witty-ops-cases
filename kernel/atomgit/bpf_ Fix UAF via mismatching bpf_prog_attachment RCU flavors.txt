@@ -1,0 +1,20 @@
+#标题
+bpf: Fix UAF via mismatching bpf_prog/attachment RCU flavors
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 uprobe 场景下，若挂载了 non-sleepable 类型的 BPF 程序，会因 RCU 同步机制不匹配导致释放后使用（UAF），引发内核内存破坏或崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+Uprobes 总是在 tasks-trace-RCU 保护下运行（通过 bpf_prog_run_array_uprobe()），但 non-sleepable 的 BPF 程序释放时使用的是普通 RCU（__bpf_prog_put_noref()）。由于普通 RCU 宽限期不保证 tasks-trace-RCU 宽限期的结束，导致程序可能在仍在被 uprobe 执行时就被释放，从而触发 UAF。
+
+#解决方案
+在 perf_event_detach_bpf_prog() 移除 bpf_prog 之前，显式调用 synchronize_rcu_tasks_trace() 等待 tasks-trace-RCU 宽限期结束，确保所有可能正在执行的 uprobe 处理程序完成，然后再释放 bpf_prog。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/293a259703bb9b2b260a431c6fa39d4b96046dd3

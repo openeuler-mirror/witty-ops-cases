@@ -1,0 +1,39 @@
+#标题
+smb: open_cached_dir 错误路径导致的 Use-After-Free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB/CIFS 模块中，当 `open_cached_dir()` 在解析服务器 leases（租约）时遇到错误，其错误处理逻辑可能与正在接收的 lease break（租约中断）产生竞争条件。这种竞争会导致 `open_cached_dir()` 释放 `cfid` 结构体，而此时工作队列中仍有待处理的任务（如 `smb2_cached_lease_break`）试图访问该结构体，从而引发内核崩溃（KASAN 报告 slab-use-after-free）。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in smb2_cached_lease_break+0x27/0xb0
+Read of size 8 at addr ffff88811cc24c10 by task kworker/3:1/65
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x77/0xb0
+ print_report+0xce/0x660
+ kasan_report+0xd3/0x110
+ smb2_cached_lease_break+0x27/0xb0
+ process_one_work+0x50a/0xc50
+ ...
+ </TASK>
+
+Freed by task 2464:
+ ...
+ kfree+0x174/0x520
+ open_cached_dir+0x97f/0x1fb0
+ ...
+
+#问题根因
+在 `open_cached_dir()` 函数中，如果处理 lease 时发生错误，代码会直接释放 `cfid` 结构体。然而，此时可能已经调度了 `smb2_cached_lease_break` 工作队列任务。该任务在执行时会尝试访问已经被释放的 `cfid` 结构体，导致 Use-After-Free。根本原因是引用计数管理不当，在 pending work 尚未取消或执行完毕前就进行了释放操作。
+
+#解决方案
+修改引用计数处理逻辑，将直接释放 `cfid` 的操作改为减少引用计数（`kref_put`），确保资源在不再被使用时才被释放。
+具体修改包括：
+1. 在 `open_cached_dir()` 的错误处理路径中，不再直接调用 `free_cached_dir`，而是通过 `kref_put` 减少引用计数。
+2. 在持有锁的情况下立即清除 `has_lease` 标志，并简化了 `invalidate_all_cached_dirs` 和 `cfids_laundromat_worker` 中的引用计数逻辑，确保 lease break 相关的操作能正确处理引用计数，避免竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ff3cd4da75ab75c789a07e05eb52e89aec62607

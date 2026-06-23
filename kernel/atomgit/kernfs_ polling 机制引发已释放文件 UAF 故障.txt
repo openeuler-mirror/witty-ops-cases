@@ -1,0 +1,23 @@
+#标题
+kernfs: polling 机制引发已释放文件 UAF 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当进程对 kernfs 文件进行轮询（poll）操作时，如果文件在轮询过程中被并发关闭，会导致内核访问已释放内存，引发 Use-After-Free (UAF) 故障。该故障可能导致内核崩溃、内存数据损坏或其他不可预期的异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `kernfs_fop_poll` 函数中，代码直接对 `kernfs_node` (`kn`) 获取活跃引用（`kernfs_get_active(kn)`），而未检查对应的 `kernfs_open_file` (`of`) 结构体是否已经被释放。当文件被关闭时，`kernfs_open_file` 会被释放，但 `kernfs_node` 可能仍然存在（引用计数未归零）。此时如果 `poll` 操作继续执行，会访问已释放的 `of` 结构体，从而触发 UAF。
+
+#解决方案
+引入 `kernfs_get_active_of` 和 `kernfs_put_active_of` 辅助函数，在获取 `kernfs_node` 活跃引用前，增加对 `kernfs_open_file` (`of`) 的 `released` 标志位的检查。
+修复逻辑如下：
+1. 新增 `kernfs_get_active_of` 函数，判断 `of->released` 是否为真，若文件已释放则直接返回 NULL，避免后续操作访问无效内存。
+2. 将 `kernfs_fop_poll` 以及其他文件操作接口（read, write, mmap 等）中原有的 `kernfs_get_active(kn)` 调用替换为 `kernfs_get_active_of(of)`，确保在操作节点前文件实例依然有效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3b158881c3a6f60c9ea92ef7c51fbdcc7f87c0be

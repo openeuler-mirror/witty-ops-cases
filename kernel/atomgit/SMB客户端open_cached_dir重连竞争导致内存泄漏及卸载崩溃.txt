@@ -1,0 +1,50 @@
+#标题
+SMB客户端open_cached_dir重连竞争导致内存泄漏及卸载崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在SMB共享目录进行并发操作（如并发执行目录切换、列举文件、模拟网络中断与重连、卸载挂载点）时，出现以下现象：
+1. 内核内存泄漏：kmemleak报告大量未引用的内核对象（大小1024字节及8字节），且调用栈指向 `open_cached_dir` 及相关系统调用路径。
+2. 卸载失败与内核崩溃：在卸载SMB文件系统时，内核报告 "Dentry still in use" 警告，随后触发 BUG splat（invalid opcode），导致系统异常。
+
+#主要错误日志
+- 内存泄漏日志：
+```
+unreferenced object 0xffff8881090c4000 (size 1024):
+  comm "bash", pid 1860, jiffies 4295126592
+  ...
+  backtrace (crc 6f58c20f):
+    [<ffffffff8b895a1e>] __kmalloc_cache_noprof+0x2be/0x350
+    [<ffffffff8bda06e3>] open_cached_dir+0x993/0x1fb0
+    ...
+```
+- 卸载时的警告与BUG日志：
+```
+BUG: Dentry ffff888140590ba0{i=1000000000080,n=/}  still in use (2) [unmount of cifs cifs]
+WARNING: CPU: 3 PID: 3433 at fs/dcache.c:1536 umount_check+0xd0/0x100
+...
+VFS: Busy inodes after unmount of cifs (cifs)
+------------[ cut here ]------------
+kernel BUG at fs/super.c:661!
+Oops: invalid opcode: 0000 [#1] PREEMPT SMP KASAN NOPTI
+...
+RIP: 0010:generic_shutdown_super+0x290/0x2a0
+```
+
+#问题根因
+在 `open_cached_dir` 函数构建缓存目录项的过程中，如果与 tcon 重连过程发生竞争：
+1. 重连过程调用 `invalidate_all_cached_dirs()` 清理 `cfids->entries` 列表，如果 `has_lease` 标志不为真，则不会释放对应的引用计数。
+2. 此时正在构建的 `cfid` 尚未设置 `has_lease` 为 true（原逻辑是在发送请求后才设置），但已经持有引用计数。
+3. 竞争发生时，该 `cfid` 被从列表移除但未被释放，导致引用计数泄漏（变成了孤儿对象）。
+4. 泄漏的 `cfid` 关联的 dentry 导致卸载时检查到 "Dentry still in use"，进而触发 BUG。
+
+#解决方案
+修改 `open_cached_dir` 的实现逻辑，将 `cfid->has_lease` 标志位的设置时机提前：
+1. 在将 `cfid` 加入 `cfids->entries` 列表并获取引用计数的同时，立即设置 `cfid->has_lease = true`。
+2. 这确保了即使在构建过程中发生重连，`invalidate_all_cached_dirs` 也能正确识别并处理该 `cfid`（释放引用），防止泄漏。
+3. 同时，通过检查 `cfid->time` 是否有效来判断 `cfid` 是否可用，防止其他线程使用尚未构造完成的 `cfid`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f0d9d8a0596c6263818b20db071b89d72f8b168f

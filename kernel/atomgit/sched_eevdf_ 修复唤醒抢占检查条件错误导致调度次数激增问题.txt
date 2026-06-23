@@ -1,0 +1,21 @@
+#标题
+sched/eevdf: 修复唤醒抢占检查条件错误导致调度次数激增问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在混合负载场景下（例如同时存在 1 个 CFS 任务和 1 个 RT 任务），内核调度器的抢占率异常升高。具体表现为 hackbench 测试中，非自愿上下文切换次数增加了 2.2%。这导致部分对过度调度敏感的负载性能下降。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit 85e511df3cec ("sched/eevdf: Allow shorter slices to wakeup-preempt") 引入的缺陷。该补丁在 update_deadline() 中判断是否需要重新调度时，错误地使用了 rq->nr_running（运行队列总任务数）代替 cfs_rq->nr_running（CFS 队列任务数）。
+在存在实时（RT）任务的场景下，rq->nr_running 大于 cfs_rq->nr_running，导致原本不应该触发抢占的 CFS 任务（时间片未耗尽或仅有一个 CFS 任务运行时）被错误地标记为需要重新调度，从而引发了不必要的抢占和上下文切换。
+
+#解决方案
+将判断条件从检查 rq->nr_running 恢复为检查 cfs_rq->nr_running，确保调度决策仅基于 CFS 运行队列的状态，避免因非 CFS 任务的存在而误触发 CFS 任务的抢占。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/104141dea4363f60e6e442310072897209a648b2

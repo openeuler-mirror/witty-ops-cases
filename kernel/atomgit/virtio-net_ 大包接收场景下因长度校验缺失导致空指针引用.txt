@@ -1,0 +1,22 @@
+#标题
+virtio-net: 大包接收场景下因长度校验缺失导致空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Guest GSO 关闭的情况下，virtio-net 驱动处理大包接收时，若 Host 端声明的接收长度超过 Guest 分配的缓冲区大小（例如 Host 侧 vhost_net 驱动被恶意修改或发生异常），内核会发生 NULL page pointer dereference（空页指针解引用），导致内核 Panic 或 Oops。
+
+#主要错误日志
+- 推断日志（基于补丁新增的 pr_debug）：
+  `rx error: len %u exceeds allocated size %lu`
+
+#问题根因
+自从引入 commit 4959aebba8c0 ("virtio-net: use mtu size as buffer length for big packets") 后，大包接收缓冲区的分配大小不再固定为 `MAX_SKB_FRAGS * PAGE_SIZE`，而是基于协商的 MTU 计算，实际分配的 frag 数量存储在 `vi->big_packets_num_skbfrags` 中。
+然而，接收路径中的长度校验逻辑未同步更新，仍使用旧的固定最大值进行检查，导致校验失效。当 Host 声明的数据长度大于实际分配的长度时，`page_to_skb` 函数内部的循环处理逻辑会访问未分配的页指针，引发空指针解引用。
+
+#解决方案
+将大包接收路径的长度校验逻辑从 `page_to_skb` 函数移动到 `receive_big` 函数中，并将校验条件从固定的 `MAX_SKB_FRAGS * PAGE_SIZE` 修改为动态计算的 `(vi->big_packets_num_skbfrags + 1) * PAGE_SIZE`，确保接收长度不 exceeds 分配的大小，从而防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c90a735add21b064cd267b0a626ddcc7057d7f82

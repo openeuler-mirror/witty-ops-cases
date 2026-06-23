@@ -1,0 +1,20 @@
+#标题
+riscv: kvm: vector context allocation leak
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V KVM 虚拟化环境中，当分配 vCPU vector 上下文时，若宿主机上下文（host_context.vector.datap）的内存分配失败，会导致之前已成功分配的客户机上下文（guest_context.vector.datap）内存发生泄漏。随着频繁的 vCPU 创建与销毁或内存压力较大时的重试，可能会逐渐耗尽系统内存。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `kvm_riscv_vcpu_alloc_vector_context` 中，代码逻辑连续进行了两次 `kzalloc` 内存分配。当第二次分配（`host_context.vector.datap`）失败时，函数直接返回 `-ENOMEM`，但未释放第一次分配成功的内存（`guest_context.vector.datap`），从而导致内存泄漏。
+
+#解决方案
+在 `kvm_riscv_vcpu_alloc_vector_context` 函数中，增加对第二次 `kzalloc` 失败分支的处理。当 `host_context.vector.datap` 分配失败时，显式调用 `kfree` 释放已分配的 `guest_context.vector.datap` 指针，并将其置为 `NULL`，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7b06c227d4472ba6244428d48c6618996310cacf

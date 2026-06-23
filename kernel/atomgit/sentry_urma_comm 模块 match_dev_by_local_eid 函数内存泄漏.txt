@@ -1,0 +1,23 @@
+#标题
+sentry_urma_comm 模块 match_dev_by_local_eid 函数内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `match_dev_by_local_eid` 函数进行设备匹配时，内部调用 `ubcore_get_eid_list` 获取的内存空间（`eid_list`）未被释放。随着函数被反复调用，系统内存逐渐减少，导致内存泄漏（Memory Leak）。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `match_dev_by_local_eid` 调用 `ubcore_get_eid_list()` 获取 `eid_list`（通过 vmalloc 分配），但在遍历设备列表匹配 EID 的过程中，无论是成功匹配到设备提前返回，还是遍历结束未匹配，都缺少对应的 `ubcore_free_eid_list()` 调用来释放内存，导致内存泄漏。
+
+#解决方案
+在 `match_dev_by_local_eid` 函数中补充内存释放逻辑：
+1. 定义 `eid_list` 指针用于保存初始申请的内存地址。
+2. 在成功匹配设备并返回前，调用 `ubcore_free_eid_list(eid_list)` 释放内存。
+3. 在单次设备遍历循环结束时（未匹配或继续下一次遍历前），调用 `ubcore_free_eid_list(eid_list)` 释放内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5ea1d777db2f45e9d7589199f7aa7ac63d7db7d1

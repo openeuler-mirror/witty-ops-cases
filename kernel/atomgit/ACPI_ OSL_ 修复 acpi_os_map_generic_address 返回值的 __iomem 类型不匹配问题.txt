@@ -1,0 +1,22 @@
+#标题
+ACPI: OSL: 修复 acpi_os_map_generic_address 返回值的 __iomem 类型不匹配问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+代码编译时静态分析工具（如 sparse）报错，提示赋值时地址空间类型不匹配（incorrect type in assignment (different address spaces)）。具体表现为 `acpi_os_map_generic_address()` 返回的 `void __iomem *` 指针被错误地赋值给了 `void *` 类型的局部变量，导致内核地址空间修饰符丢失。
+
+#主要错误日志
+drivers/acpi/osl.c:1686:20: warning: incorrect type in assignment (different address spaces)
+drivers/acpi/osl.c:1686:20:    expected void *rv
+drivers/acpi/osl.c:1686:20:    got void [noderef] __iomem *
+
+#问题根因
+在 `drivers/acpi/osl.c` 文件中，函数 `acpi_os_map_generic_address()` 的返回值类型已被修改为带有 `__iomem` 标记的指针（`void __iomem *`），但接收该返回值的局部变量 `rv` 仍被定义为 `void *`。这导致了类型不匹配，破坏了内核对 I/O 内存访问的静态检查机制。
+
+#解决方案
+将 `drivers/acpi/osl.c` 中接收返回值的局部变量 `rv` 的类型定义从 `void *` 修改为 `void __iomem *`，以匹配 `acpi_os_map_generic_address()` 函数的返回值类型，消除 sparse 静态分析警告并确保类型安全。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/44f9aff0fade111de62695d249eed5a20f05c3d2

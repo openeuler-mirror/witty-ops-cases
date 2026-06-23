@@ -1,0 +1,26 @@
+#标题
+sunrpc 服务端 TLS 告警消息处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 TLS 的 SunRPC 服务端场景下，当接收到 TLS Alert 消息（如客户端关闭连接或握手失败）时，内核处理逻辑存在缺陷。这可能导致服务端无法正确识别和处理 TLS Alert，进而引发连接状态异常、数据处理错误或资源未能及时释放等问题。
+
+#主要错误日志
+未知
+
+#问题根因
+原有的 `svc_tcp_sock_recv_cmsg` 函数在处理接收消息时，未能正确区分普通数据和 TLS 控制消息（Alert）。
+具体原因为：
+1. 在 `sock_recvmsg` 返回数据后，代码直接检查 `msg_controllen` 变化来判断是否有控制消息，但在接收到 TLS Alert 记录时，部分情况下可能触发 `MSG_CTRUNC` 标志，或者原有的检查逻辑无法覆盖 Alert 数据与普通数据并存的情况。
+2. 缺失对 `TLS_RECORD_TYPE_ALERT` 类型的专门处理逻辑，导致 Alert 消息被当作普通 RPC 数据处理，或者未能及时执行 `-EAGAIN` 重试逻辑以处理内核内部的 Alert 通知。
+
+#解决方案
+重构了 sunrpc 的接收消息处理路径，将原来单一的接收函数拆分为 `svc_tcp_sock_recvmsg` 和 `svc_tcp_sock_recv_cmsg` 两层：
+1. 新增逻辑检测 `MSG_CTRUNC` 标志，若存在该标志且返回值为 0 或 -EIO，则调用专门的 `svc_tcp_sock_recv_cmsg` 处理控制消息。
+2. 在 `svc_tcp_sock_recv_cmsg` 中，使用 `tls_get_record_type` 检查消息类型，若为 `TLS_RECORD_TYPE_ALERT`，则回退迭代器并调用 `svc_tcp_sock_process_cmsg` 传入 `-EAGAIN` 进行正确处理。
+这确保了 TLS Alert 消息能被正确识别和处理，避免干扰正常的 RPC 数据流。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0971e2dc581e534dd105eaf7cfab9beee4bc7bf6

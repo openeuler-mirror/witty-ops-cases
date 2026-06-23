@@ -1,0 +1,27 @@
+#标题
+TIPC cleanup_bearer 函数 NULL 指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TIPC 协议的 UDP bearer 清理过程中，触发内核通用保护故障，系统崩溃。具体表现为在 `cleanup_bearer` 工作队列处理中访问 `ub->ubsock->sk` 时发生空指针解引用。
+
+#主要错误日志
+Oops: general protection fault, probably for non-canonical address 0xdffffc0000000006: 0000 [#1] PREEMPT SMP KASAN PTI
+KASAN: null-ptr-deref in range [0x0000000000000030-0x0000000000000037]
+RIP: 0010:cleanup_bearer+0x1f7/0x280 net/tipc/udp_media.c:820
+
+#问题根因
+在 `cleanup_bearer` 函数中，代码先调用 `udp_tunnel_sock_release(ub->ubsock)` 释放了 socket，随后又尝试访问 `ub->ubsock->sk` 以获取网络命名空间：
+`atomic_dec(&tipc_net(sock_net(ub->ubsock->sk))->wq_count);`
+此时 `ub->ubsock->sk` 指针已为 NULL，导致访问非法内存地址引发 Oops。
+
+#解决方案
+修改 `net/tipc/udp_media.c` 中的 `cleanup_bearer` 函数，在释放 socket 之前先缓存 `tipc_net` 指针。具体步骤如下：
+1. 在释放操作前，通过 `tn = tipc_net(sock_net(ub->ubsock->sk))` 获取并保存 `tipc_net` 结构体指针。
+2. 调用 `udp_tunnel_sock_release(ub->ubsock)` 释放 socket。
+3. 在最后的计数操作中，直接使用缓存的指针 `tn->wq_count`，避免再次访问已释放 socket 的成员。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/10eb59591211124bf937fa86d1e92b0331d45943

@@ -1,0 +1,20 @@
+#标题
+urma: 处理错误分支时变量未初始化导致潜在访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 URMA 模块处理 tx/rx cqe 的错误分支流程中，若触发特定的错误检查逻辑（如 `local_id` 范围校验失败），内核可能引用未初始化的变量 `eid_idx` 进行日志打印或后续逻辑判断，导致内核态内存访问异常、日志信息错误或潜在的 panic。
+
+#主要错误日志
+netdev_dbg(dev, "%s:%u\n", ipourma_err_desc(IPOURMA_INCORRECT_WQE_JETTY_IDX), eid_idx);
+
+#问题根因
+在函数 `ipourma_handle_tx_wc` 和 `ipourma_handle_rx_wc` 中，变量 `eid_idx` 的初始化赋值操作（`eid_idx = cr->local_id - IPOURMA_WELL_KNOWN_JETTY_ID`）被置于错误检查分支（`local_id` 范围校验）之后。当校验失败导致函数提前 return 时，`eid_idx` 尚未被赋值，此时在错误日志打印中使用了该未初始化的变量。
+
+#解决方案
+将变量 `eid_idx` 的初始化计算操作前移至错误检查分支之前，确保在进入任何可能引用该变量的错误处理逻辑前，该变量已被正确初始化。同时移除变量声明时的冗余默认初始化（如 `= 0`）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a520523a50f6f131ad0c9fa6e2c3c931be677637

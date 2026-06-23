@@ -1,0 +1,28 @@
+#标题
+net: sock: hardened usercopy panic in sock_recv_errqueue
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_HARDENED_USERCOPY 配置的情况下，当用户态程序通过 recvmsg(MSG_ERRQUEUE) 读取 socket 错误队列时，内核触发 usercopy 检查失败，导致系统 panic（Oops: invalid opcode）。该问题涉及 TCP 连接中使用 alloc_skb_fclone() 分配并被克隆的 skb。
+
+#主要错误日志
+[    5.379589] usercopy: Kernel memory exposure attempt detected from SLUB object 'skbuff_fclone_cache' (offset 296, size 16)!
+[    5.382796] kernel BUG at mm/usercopy.c:102!
+[    5.383923] Oops: invalid opcode: 0000 [#1] SMP KASAN NOPTI
+[    5.384903] RIP: 0010:usercopy_abort+0x6c/0x80
+[    5.384903] Call Trace:
+[    5.384903]  __check_heap_object+0x9a/0xd0
+[    5.384903]  __check_object_size+0x46c/0x690
+[    5.384903]  put_cmsg+0x129/0x5e0
+[    5.384903]  sock_recv_errqueue+0x22f/0x380
+
+#问题根因
+skbuff_fclone_cache 在创建时未定义 usercopy region（白名单区域），这与正确定义了 cb[] 字段白名单的 skbuff_head_cache 不同。当 TCP 使用 alloc_skb_fclone() 分配 skb 并克隆后放入错误队列时，sock_recv_errqueue() 调用 put_cmsg() 直接将 skb->cb 区域（对应 sock_exterr_skb 结构）的数据拷贝到用户态。由于 skbuff_fclone_cache 缺少白名单，__check_heap_object() 检测到非法的跨边界拷贝，触发 usercopy hardening 违例导致 BUG()。
+
+#解决方案
+在 sock_recv_errqueue() 函数中，避免直接将 skb->cb 区域的指针传递给 put_cmsg() 进行拷贝。改为使用一个局部栈变量 struct sock_extended_err ee 作为中转缓冲区，先将数据从 skb->cb 拷贝到栈变量中，再将栈变量的地址传递给 put_cmsg()，从而绕过 hardened usercopy 的合法性检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0eb742cd76a8b0b84192cb90162cf0a3ce3c64fc

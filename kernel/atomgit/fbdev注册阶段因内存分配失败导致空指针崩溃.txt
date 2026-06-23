@@ -1,0 +1,27 @@
+#标题
+fbdev注册阶段因内存分配失败导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `do_register_framebuffer` 注册 framebuffer 设备时，如果 `fb_add_videomode()` 分配内存失败，虽然返回了错误，但 `fb_info` 仍然被注册到系统中。后续在调用 `fb_videomode_to_var()` 获取模式信息时，访问了不存在的 modelist 节点，触发内核空指针引用，导致系统崩溃。
+
+#主要错误日志
+```
+general protection fault, probably for non-canonical address 0xdffffc0000000001: 0000 [#1] PREEMPT SMP KASAN NOPTI
+KASAN: null-ptr-deref in range [0x0000000000000008-0x000000000000000f]
+RIP: 0010:fb_videomode_to_var+0x24/0x610 drivers/video/fbdev/core/modedb.c:901
+Call Trace:
+ display_to_var+0x3a/0x7c0 drivers/video/fbdev/core/fbcon.c:929
+ fbcon_resize+0x3e2/0x8f0 drivers/video/fbdev/core/fbcon.c:2071
+```
+
+#问题根因
+`do_register_framebuffer()` 函数调用 `fb_add_videomode()` 将当前视频模式添加到 `fb_info->modelist` 链表中。如果 `fb_add_videomode()` 因为内存不足分配 `fb_videomode` 结构体失败，该函数会返回错误码，但原本的代码逻辑并没有检查这个返回值，导致 `fb_info` 在缺少对应视频模式节点的情况下被成功注册。后续代码（如 `fbcon_resize` -> `display_to_var` -> `fb_videomode_to_var`）假定链表中存在对应节点并进行遍历访问，从而触发了空指针解引用。
+
+#解决方案
+在 `do_register_framebuffer()` 中增加对 `fb_add_videomode()` 返回值的检查。如果添加模式失败，函数应直接返回错误，中止 `fb_info` 的注册流程。同时，将 `fb_add_videomode()` 调用逻辑提前，确保在修改全局 `registered_fb` 数组等状态之前进行内存分配，避免失败后的回滚清理工作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b95177c6bf9c4d6ff570893e2119cc40f47d2fb4

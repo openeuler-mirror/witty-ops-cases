@@ -1,0 +1,24 @@
+#标题
+TCP模块syn_recv_sock接口kABI破坏导致外置模块兼容性故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核稳定分支上，因先前合入的补丁修改了 `syn_recv_sock` 回调函数原型及导出符号 `tcp_v4_syn_recv_sock` 的接口，导致依赖原有回调布局和符号原型的树外模块出现接口不匹配，破坏了内核应用程序二进制接口的稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+先前合入的提交 858d2a4f67ff ("tcp: fix potential race in tcp_v6_syn_recv_sock()") 为了修复竞态问题，在 `struct inet_connection_sock_af_ops` 的 `syn_recv_sock` 回调原型中增加了一个 `opt_child_init` 函数指针参数，同时修改了导出函数 `tcp_v4_syn_recv_sock()` 的原型。该改动直接改变了稳定分支的 kABI，导致依赖原有接口定义的树外模块无法正常工作。
+
+#解决方案
+恢复原有的外部接口定义以保持 kABI 兼容性。具体措施如下：
+1. 将 `struct inet_connection_sock_af_ops` 中的 `syn_recv_sock` 回调原型恢复原状，移除新增的 `opt_child_init` 参数。
+2. 恢复导出函数 `tcp_v4_syn_recv_sock()` 的原有原型。
+3. 新增一个内部辅助函数 `__tcp_v4_syn_recv_sock()`，保留包含 `opt_child_init` 参数的扩展接口。
+4. 在 IPv6 映射 IPv4 的路径（`tcp_v6_syn_recv_sock`）中直接调用 `__tcp_v4_syn_recv_sock()`，确保在保持 kABI 稳定的同时不丢失原有的竞态修复逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c214346a4d43d3dbcc4f28e0ea92b74f5c6f2ad

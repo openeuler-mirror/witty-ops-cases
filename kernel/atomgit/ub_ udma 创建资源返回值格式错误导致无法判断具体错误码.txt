@@ -1,0 +1,29 @@
+#标题
+ub: udma 创建资源返回值格式错误导致无法判断具体错误码
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 udma 驱动的资源创建接口（如 jetty, jfc, jfr, jfs）失败时，上层调用者无法获取具体的错误原因。由于相关接口在出错时直接返回 NULL，调用者无法区分是由于内存不足（-ENOMEM）、参数无效（-EINVAL）还是无可用空间（-ENOSPC/-ENOSR）导致的失败，从而无法进行针对性的错误处理或问题定位。
+
+#主要错误日志
+- dev_err(udma_dev->dev, "failed to alloc id, ret = %d.\n", id);
+- dev_err(udma_dev->dev, "active jetty detail failed, ret = %d.\n", ret);
+- dev_err(udma_dev->dev, "the jetty of the type %u cannot be imported in exp.\n", cfg->type);
+- dev_err(dev->dev, "failed to alloc id for stars JFC.\n");
+- dev_err(udma_dev->dev, "ida alloc failed %d.\n", ret);
+- dev_err(udma_dev->dev, "alloc jfr id range (%u - %u) failed, ret = %d.\n", min, max, id);
+- dev_err(udma_dev->dev, "verify jfr param failed.\n");
+- dev_err(dev->dev, "jfs not support RC transmode.\n");
+
+#问题根因
+驱动代码中的资源创建函数（如 `udma_create_jetty`、`udma_create_jfc` 等）在遇到错误分支时，仅返回了 `NULL` 指针，丢失了底层的 `ret` 错误码；另外，ID 分配函数（如 `udma_id_alloc_auto_grow`）在 `ida_alloc_range` 返回 `-ENOSPC` 时，未将其转换为标准的 `-ENOSR` 错误码。
+
+#解决方案
+1. 修改资源创建函数的错误返回路径，将 `return NULL;` 改为 `return ERR_PTR(ret);` 或具体的 `ERR_PTR(-EINVAL)` / `ERR_PTR(-ENOMEM)`，确保将具体的错误码通过指针返回给调用者。
+2. 修正 ID 分配逻辑中的错误码转换，当 `ida_alloc_range` 返回 `-ENOSPC` 时，统一返回 `-ENOSR`。
+3. 修正 `udma_create_jfc` 中 `udma_create_stars_jfc` 的调用逻辑，保存并返回其错误码，而非直接返回 `-ENOMEM`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/49404dd9ef1aa68dd2baad7bb13c5fca64c5b6dc

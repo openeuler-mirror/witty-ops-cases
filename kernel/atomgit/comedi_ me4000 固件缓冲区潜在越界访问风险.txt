@@ -1,0 +1,23 @@
+#标题
+comedi: me4000 固件缓冲区潜在越界访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+`me4000_xilinx_download()` 函数在加载固件时，盲目信任文件头部声明的数据流长度（`file_length`），未校验固件文件实际大小。若提供的固件文件长度不足以包含头部（16字节）或声明数据长度超出文件实际范围，将导致内核读取越界，可能引发内核崩溃（panic）或内存破坏。
+
+#主要错误日志
+[   12.345678] comedi me4000: Firmware length inconsistency
+
+#问题根因
+`me4000_xilinx_download()` 函数从固件文件前4字节读取 `file_length`，并直接从偏移16字节处开始读取该长度的数据。代码缺乏对固件文件实际大小的校验，未检查文件大小是否满足 `16 + file_length` 的要求，导致在固件文件格式异常或被截断时发生缓冲区越界读取。
+
+#解决方案
+在函数执行数据下载前增加长度校验逻辑：
+1. 检查固件文件大小是否至少包含4字节头部，并读取数据流长度 `file_length`。
+2. 校验固件文件大小是否至少为16字节（头部大小），且 `file_length` 不超过 `size - 16`。
+3. 若校验失败，打印错误日志 "Firmware length inconsistency" 并返回 `-EINVAL`，阻止后续越界访问操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7734b0738024214faf77650a710046c3f37ecd7b

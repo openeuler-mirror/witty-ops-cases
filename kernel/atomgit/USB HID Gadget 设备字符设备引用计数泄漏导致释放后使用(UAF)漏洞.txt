@@ -1,0 +1,20 @@
+#标题
+USB HID Gadget 设备字符设备引用计数泄漏导致释放后使用(UAF)漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 USB Gadget HID 功能设备的字符设备时，存在引用计数管理缺陷。由于 `cdev` 结构体被静态嵌入在 `f_hidg` 结构体中，在设备注销路径下，`cdev_device_del` 销毁字符设备与 `f_hidg` 自身被释放之间存在竞争窗口。若在此时打开设备节点，可能导致内核访问已释放内存，引发 Use-After-Free（释放后使用），造成内核崩溃或潜在的系统提权风险。
+
+#主要错误日志
+未知
+
+#问题根因
+根本原因是 `f_hidg` 结构体中静态嵌入了 `struct cdev cdev` 成员，这导致字符设备的生命周期与 `f_hidg` 结构体的生命周期耦合不当。具体原因为在 `f_hidg_open` 函数中通过 `container_of(inode->i_cdev, ...)` 获取 `f_hidg` 指针时，假定 `cdev` 是静态分配的；而在设备移除流程中，字符设备被注销后其父设备可能被立即释放，但字符设备的引用计数并未真正保持对父设备内存的持有，导致后续打开操作可能访问到已释放的内存区域。
+
+#解决方案
+将 `f_hidg` 结构体中的 `cdev` 成员从静态嵌入修改为指针形式（`struct cdev *cdev`），并在初始化时使用 `cdev_alloc()` 动态分配。此举解耦了 `cdev` 与 `f_hidg` 的生命周期，利用 `cdev_device_add` 建立正确的父子引用关系。修改后，`f_hidg_open` 函数改为通过 `inode->i_cdev->kobj.parent` 获取父设备 kobject，再通过 `container_of` 获取 `f_hidg` 指针，确保在打开设备时通过 kobject 引用计数机制安全地持有底层设备引用，防止内存被提前释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/79347fc52d079e5def6c02bf8d317cafaff8d227

@@ -1,0 +1,22 @@
+#标题
+yunsilicon 驱动 query/modify pkt_dst_info 接口返回值错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用 yunsilicon 网卡驱动的 `xsc_eth_query_pkt_dst_info` 或 `xsc_eth_modify_pkt_dst_info` 接口查询或修改报文目的信息时，如果底层硬件或固件返回 `XSC_CMD_STATUS_NOT_SUPPORTED` 状态（即功能不支持），驱动函数错误地返回了 `0`（成功），导致上层应用或调用者误认为操作成功。在 DPDK OVS 与 NCSI 不兼容的场景下容易出现此问题。
+
+#主要错误日志
+- 推断日志（基于代码逻辑）：
+  `xsc_core_err: "failed to query pkt dst info, pkt=0x%x, mac=0x%x,err=%d\n"`
+  `xsc_core_err: "failed to modify pkt dst info, pkt=0x%x, mac=0x%x, dst_info=%d, err=%d\n"`
+
+#问题根因
+在处理 `xsc_cmd_exec` 执行结果的逻辑中，代码判断如果状态码为 `XSC_CMD_STATUS_NOT_SUPPORTED`，原先的实现是打印一条 info 级别日志并直接返回 `0`。这掩盖了底层实际操作失败（功能不支持）的事实，导致函数返回值与实际执行状态不符。
+
+#解决方案
+修改 `drivers/net/ethernet/yunsilicon/xsc/net/main.c` 中的错误处理逻辑。当检测到状态码为 `XSC_CMD_STATUS_NOT_SUPPORTED` 时，移除原先返回 `0` 的逻辑，改为返回 `-EOPNOTSUPP` 错误码，确保上层调用者能正确感知操作不支持的状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab5cbc9760249db09a5fdcdd302ff68376b2ebed

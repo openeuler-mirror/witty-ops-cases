@@ -1,0 +1,28 @@
+#标题
+net/tls: alloc_page失败导致的内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在TLS（Kernel TLS）接收路径中，当系统内存紧张导致 `alloc_page` 分配页面失败时，内核触发空指针引用崩溃。具体表现为接收路径处理部分记录时，下一次调用 `tls_strp_read_sock` 时系统崩溃。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference
+at virtual address 0000000000000028
+Call trace:
+ tls_strp_check_rcv+0x128/0x27c
+ tls_strp_data_ready+0x34/0x44
+ tls_data_ready+0x3c/0x1f0
+ tcp_data_ready+0x9c/0xe4
+ tcp_data_queue+0xf6c/0x12d0
+ tcp_rcv_established+0x52c/0x798
+
+#问题根因
+在 `tls_strp_read_copy` 函数中，当 `alloc_page` 失败时，代码逻辑错误地将 `shinfo->frag_list` 设置为 NULL。由于 `tls_strp_flush_anchor_copy()` 函数没有重置 `full_len`，接收路径会在下一次调用时尝试继续处理该部分记录，但此时 `frag_list` 已被置空且从接收队列（rcvq）分离，导致后续访问空指针引发崩溃。
+
+#解决方案
+将 `shinfo->frag_list = NULL;` 的赋值操作从 `alloc_page` 循环之前移动到循环之后。这样可以确保只有在页面分配成功并完成数据拷贝后，才清空 `frag_list`，避免了在分配失败的不稳定状态下破坏队列结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/096efe6d2bb110e73f24dc8a220d26cbff991954

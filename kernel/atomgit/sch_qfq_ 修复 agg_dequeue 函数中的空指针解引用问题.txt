@@ -1,0 +1,20 @@
+#标题
+sch_qfq: 修复 agg_dequeue 函数中的空指针解引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 QFQ (Quick Fair Queueing) 流量控制调度器时，如果活跃组中有类（class）的队列非空但其 peek 操作返回 NULL（例如下层 qdisc 为非工作保守类型），内核在 `agg_dequeue` 函数中直接调用 `cl->qdisc->ops->peek` 时会触发空指针解引用（null-deref），可能导致内核崩溃或 Oops。
+
+#主要错误日志
+推断：内核日志中可能出现 Oops 或 panic 信息，调用栈包含 `agg_dequeue` 函数。
+
+#问题根因
+在 `agg_dequeue` 函数中，代码原直接调用 `cl->qdisc->ops->peek(cl->qdisc)` 并将其结果直接传递给 `qdisc_pkt_len` 宏进行处理。如果下层 qdisc 的 peek 操作返回 NULL 指针（这可能在非工作保守类 qdisc 中发生），`qdisc_pkt_len` 对 NULL 指针的解引用将导致内核崩溃。相关代码逻辑未对 peek 返回值进行空指针检查。
+
+#解决方案
+将 `sch_hfsc.c` 和 `sch_api.c` 中已有的 `qdisc_peek_len` 辅助函数重构并移至公共头文件 `include/net/pkt_sched.h` 中。该函数内部封装了对 `sch->ops->peek` 返回值的检查：若返回 NULL，会打印警告日志并返回 0，从而避免空指针解引用。同时修改 `sch_qfq.c` 中的 `agg_dequeue` 函数，将原本直接的 peek 调用替换为安全的 `qdisc_peek_len` 函数调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/65180380f871f63fa63711e0ffb05e5654befe53

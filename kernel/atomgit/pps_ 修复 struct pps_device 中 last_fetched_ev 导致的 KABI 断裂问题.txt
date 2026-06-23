@@ -1,0 +1,20 @@
+#标题
+pps: 修复 struct pps_device 中 last_fetched_ev 导致的 KABI 断裂问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核结构体 `struct pps_device` 中新增成员 `last_fetched_ev` 导致内核 ABI（KABI）一致性检查失败。该问题涉及 PTP 时钟注册链路（`ptp_clock_register <- struct ptp_clock`），影响内核模块接口的稳定性，可能导致依赖该结构体的驱动或模块无法正常加载或运行，造成内核 ABI 校验告警或兼容性问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在补丁 `baa290f9d355 ("pps: fix poll support")` 中，为了修复 poll 支持问题，在结构体 `pps_device` 内部插入了新成员 `unsigned int last_fetched_ev`。该操作改变了结构体的内存布局，破坏了既定的内核 ABI 稳定性。具体表现为结构体中出现了原本不应存在的空洞（hole），且新增成员移动了后续成员的偏移位置，触发了 KABI 断裂。
+
+#解决方案
+利用结构体中原有的 4 字节空洞（hole），通过 `KABI_FILL_HOLE` 机制将新增的 `last_fetched_ev` 成员填充到该空洞中，而不是作为一个独立的新成员插入。这样做既保留了新增功能的变量，又保持了结构体后续成员的偏移地址不变，从而修复了 KABI 断裂问题，确保内核接口兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/538516da0260809993b2588aa06ac3bf94632694

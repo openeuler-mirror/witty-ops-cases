@@ -1,0 +1,25 @@
+#标题
+EDAC/amd64: Hygon 18h model 4h 处理器地址转换错误导致内存纠错定位失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hygon family 18h model 4h 处理器平台上，当启用 DDR5 内存并发生内存错误（如 ECC 错误）时，EDAC 子系统在进行地址转换过程中可能出现异常。特别是在 3 通道交错（3 channels interleaving）场景下，系统无法正确将内存控制器的标准化地址转换为系统物理地址，导致内存错误定位失败，可能表现为 dmesg 中报告无效的 CS offset 或地址转换错误，进而影响 RAS（可靠性、可用性和可服务性）功能的正常运作。
+
+#主要错误日志
+- `pr_err("%s: Invalid cs offset: 0x%x cs_fabric_id: 0x%x dst_fabric_id: 0x%x.\n", __func__, cs_offset, cs_fabric_id, dst_fabric_id);`
+
+#问题根因
+Hygon family 18h model 4h 处理器的地址转换逻辑与之前的型号存在差异：
+1. DDR5 场景下的子通道处理缺失：标准化地址中不包含子通道位，需要在地址转换过程中预留该位字段，并在后续的通道哈希过程中填入，原代码未处理此逻辑。
+2. 3 通道交错场景计算错误：在 3 通道交错场景下，片选 ID（cs id）的计算方式与其他场景不同，原代码未针对此型号进行区分，导致计算出的地址偏移量错误，产生无效的 CS offset。
+
+#解决方案
+修改 `drivers/edac/amd64_edac.c` 中的 `hygon_umc_normaddr_to_sysaddr` 函数，针对 Hygon family 18h model 4h 处理器进行如下修复：
+1. 引入 `sub_channel` 参数：从错误寄存器中提取子通道信息，并传递给地址转换函数。
+2. 修正 DDR5 地址转换流程：对于 DDR5 内存，在转换过程中预留子通道位，并在最后通过通道哈希算法或直接填充的方式将子通道位填入系统地址。
+3. 修正 3 通道交错计算：在 3 通道交错场景下，采用新的算法计算 cs id，正确处理 `dst_fabric_id` 和 `cs_fabric_id` 的关系，确保地址偏移计算正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/958f301d32e071c334e34630ff74c795b429a42e

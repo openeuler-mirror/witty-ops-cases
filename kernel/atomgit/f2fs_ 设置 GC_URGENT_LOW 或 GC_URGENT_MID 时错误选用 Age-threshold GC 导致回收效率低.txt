@@ -1,0 +1,22 @@
+#标题
+f2fs: 设置 GC_URGENT_LOW 或 GC_URGENT_MID 时错误选用 Age-threshold GC 导致回收效率低
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 f2fs 文件系统开启 ATGC（Age-threshold Garbage Collection）功能，并将 gc_mode 设置为 GC_URGENT_LOW 或 GC_URGENT_MID 时，系统本应使用 Cost Benefit（CB）算法进行垃圾回收，但实际上错误地使用了 Age-threshold（AT）算法。这导致 GC 回收的段数量远低于预期，回收效率低下，无法满足紧急模式下的空间回收需求。
+
+#主要错误日志
+通过 trace event 可观测到 GC 策略选择错误，示例如下：
+f2fs_get_victim: dev = (254,48), type = No TYPE, policy = (Background GC, LFS-mode, Age-threshold), victim = 10, cost = 4294364975, ofs_unit = 1, pre_victim_secno = -1, prefree = 0, free = 44898
+f2fs_gc_end: dev = (254,48), ret = -61, seg_freed = 0, sec_freed = 0
+
+#问题根因
+在函数 `select_gc_type` 的逻辑分支中，未对 `GC_URGENT_LOW` 和 `GC_URGENT_MID` 这两种模式进行显式处理。当这两种模式被设置时，代码逻辑未落入 `GC_CB` 分支，导致在 ATGC 功能开启的前提下，函数返回了 `GC_AT`（Age-threshold）模式而非预期的 `GC_CB`（Cost Benefit）模式。Age-threshold 方式处理的段数量远少于 Cost Benefit 方式，导致 GC 效率不符合预期。
+
+#解决方案
+修改 `fs/f2fs/gc.c` 文件中的 `select_gc_type` 函数，在 switch-case 分支中增加对 `GC_URGENT_LOW` 和 `GC_URGENT_MID` 的处理，使其显式指定 `gc_mode` 为 `GC_CB`。此修复确保了在这两种紧急模式下，无论 ATGC 是否开启，系统都将强制使用 Cost Benefit GC 算法，同时也更新了相关文档说明。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9ca251b3dc348a7c5ecfa6345da9c5a2349b3d6a

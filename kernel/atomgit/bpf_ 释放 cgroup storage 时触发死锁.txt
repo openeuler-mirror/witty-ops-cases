@@ -1,0 +1,20 @@
+#标题
+bpf: 释放 cgroup storage 时触发死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定 BPF 程序场景下（fentry 程序挂载于 cgroup_storage_ptr，配合 cgroup storage 使用），释放 cgroup storage map 时触发内核死锁。复现步骤为运行 BPF 程序 A，随后循环执行“运行程序 B -> 销毁程序 B”的操作，系统将陷入死锁状态，特定线程（如 kworker）处于 D 状态无法调度。
+
+#主要错误日志
+未知
+
+#问题根因
+`bpf_cgrp_storage` 模块在实现时遗漏了对 `bpf_local_storage_map_free()` 函数 `busy` 参数的正确传递。该参数用于防止在 map 释放路径中发生递归锁竞争。代码中错误地传递了 `NULL`，导致死锁预防机制失效。当 BPF 程序 A（挂载于 `cgroup_storage_ptr`）尝试通过 `bpf_cgrp_storage_get` 更新 storage 并获取 `local_storage->lock` 时，正好与正在执行 map 释放流程、持有同一 `local_storage->lock` 的 worker 线程形成死锁闭环。
+
+#解决方案
+修改 `kernel/bpf/bpf_cgrp_storage.c` 文件中的 `cgroup_storage_map_free` 函数，将 `bpf_local_storage_map_free` 的第三个参数由 `NULL` 修改为 `&bpf_cgrp_storage_busy`。这允许在释放过程中正确增加 busy 计数，从而避免在持有锁时再次尝试获取锁导致的死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d830518d2b90eb1983320af5d1be8aede86e5f9d

@@ -1,0 +1,20 @@
+#标题
+nvme-pci: CMB 注册失败时未清理 CMBMSC 寄存器导致解码状态残留
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 NVMe 控制器的 CMB（Controller Memory Buffer）块未能成功注册到 P2P DMA 子系统时，系统会打印警告信息并返回，但此时 CMB 解码功能未被正确禁用。这导致硬件寄存器状态与软件逻辑状态不一致，可能引发后续设备行为异常或资源访问冲突。
+
+#主要错误日志
+"failed to register the CMB\n"
+
+#问题根因
+在 `nvme_map_cmb` 函数中，当 `pci_p2pdma_add_resource` 注册失败时，代码路径仅打印警告信息并返回，遗漏了对 CMBMSC（CMB Memory Space Control）寄存器的清理操作。根据硬件规范，CMB 解码应当在注册失败时被禁用，原代码未将 CMBMSC 寄存器写零，导致 CMB 解码以及 CMBLOC/CMBSZ 寄存器配置残留有效状态。
+
+#解决方案
+在 CMB 注册失败的错误处理路径中，增加对 CMBMSC 寄存器的写零操作。具体修复为：在 `pci_p2pdma_add_resource` 判断分支内，调用 `hi_lo_writeq(0, dev->bar + NVME_REG_CMBMSC)` 以禁用 CMB 解码功能，确保硬件状态与软件处理逻辑一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bc9bb4810302f7113a3d58fc3ac4312b86c35a02

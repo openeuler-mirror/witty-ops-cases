@@ -1,0 +1,33 @@
+#标题
+virtio_ring: event_triggered 访问并发导致的数据竞争问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+KCSAN（内核数据竞争检测工具）报告在 `virtqueue_disable_cb` 与 `virtqueue_enable_cb_delayed` 函数之间存在数据竞争。具体表现为：当一个 CPU 上的任务正在执行 `virtqueue_enable_cb_delayed` 写入 `event_triggered` 变量时，另一个 CPU 上的中断处理程序正在执行 `virtqueue_disable_cb` 读取该变量。竞争发生时，可能导致驱动临时错误地建议设备在使用事件索引时不发送中断通知。
+
+#主要错误日志
+```
+BUG: KCSAN: data-race in virtqueue_disable_cb / virtqueue_enable_cb_delayed
+
+write to 0xffff8881025bc452 of 1 bytes by task 3288 on cpu 0:
+ virtqueue_enable_cb_delayed+0x42/0x3c0 drivers/virtio/virtio_ring.c:2653
+ ...
+
+read to 0xffff8881025bc452 of 1 bytes by interrupt on cpu 1:
+ virtqueue_disable_cb_split drivers/virtio/virtio_ring.c:880 [inline]
+ virtqueue_disable_cb+0x92/0x180 drivers/virtio/virtio_ring.c:2566
+ ...
+
+value changed: 0x01 -> 0x00
+```
+
+#问题根因
+`event_triggered` 变量会在进程上下文（`virtqueue_enable_cb_delayed`）中被写入，同时在中断上下文（`virtqueue_disable_cb_split/packed`）中被读取，且缺乏相应的锁保护或显式的并发标记，导致了数据竞争。由于 `event_triggered` 仅用于优化提示，该竞争虽然不会导致严重的功能性错误，但触发了 KCSAN 的非法数据竞争告警。
+
+#解决方案
+鉴于 `event_triggered` 是一个不可靠的优化提示字段，其数据竞争不会影响内核的正确性，通过显式标记该写入操作为 `data_race` 来消除 KCSAN 的误报。具体修改是在 `virtqueue_enable_cb_delayed` 函数中，将 `vq->event_triggered = false` 语句封装在 `data_race()` 宏中，明确告知编译器和分析工具此处允许并发访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e916816682372f660f42f0d600a1f00931b3f40c

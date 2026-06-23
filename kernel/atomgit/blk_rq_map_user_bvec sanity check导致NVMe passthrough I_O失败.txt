@@ -1,0 +1,28 @@
+#标题
+blk_rq_map_user_bvec sanity check导致NVMe passthrough I/O失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 io_uring 进行 NVMe passthrough I/O 操作时出现不必要的失败。复现步骤如下：
+1. 注册一个 2 页（page）、页对齐的 buffer 到一个 ring；
+2. 使用该 buffer 执行一个 1 页的 io_uring NVMe passthrough 读操作。
+在此场景下，I/O 请求会错误地失败，导致功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `blk_rq_map_user_bvec` 函数的循环中，参数 `nr_iter` 代表请求的总数据大小（字节数），而 `bytes` 为当前已映射的大小。
+在第二次迭代（i = 1）时，状态为：`nr_iter` 等于 1 页大小，`bytes` 等于 1 页大小，`bv->bv_len` 等于 1 页大小。
+此时条件 `bytes + bv->bv_len > nr_iter` 成立（即 1页 + 1页 > 1页），原代码逻辑直接跳转到 `put_bio` 导致 I/O 失败。
+实际上，该条件成立意味着已经检查并覆盖了请求所需的全部 buffer 范围，应当正常结束映射而非报错。此外，原代码中对 `bv->bv_offset + bv->bv_len > PAGE_SIZE` 的检查也是多余的。
+
+#解决方案
+修改 `blk_rq_map_user_bvec` 中的检查逻辑：
+1. 当 `bytes + bv->bv_len > nr_iter` 条件满足时，不再跳转 `put_bio` 返回失败，而是直接 `break` 跳出循环，正常结束映射过程并返回成功。
+2. 移除了 `bv->bv_offset + bv->bv_len > PAGE_SIZE` 的检查，因为下游并不要求 bvec 中的所有段必须是单页。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5aeae0ae1bf7231d4158808b0bea99fc7916c616

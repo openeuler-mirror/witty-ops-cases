@@ -1,0 +1,23 @@
+#标题
+vmxnet3 驱动 XDP 处理中数据包大小计算错误导致内存泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 vmxnet3 网卡上使用 XDP 负载均衡进行 IPIP 封装时出现 MTU 相关的连通性问题。具体表现为：
+1. 部分数据包（如 HTTP GET 请求）在发送时大小异常膨胀，例如本应 152 字节的包实际发送 1482 字节。
+2. 实际抓包发现，多出的部分填充了未初始化的内核数据或先前处理过的数据包残留内容，导致内核内存信息泄露。
+3. 当 XDP 负载均衡节点与后端节点 MTU 均为 1500 时，后端节点因收到的包超过 MTU 限制而丢弃，导致请求失败；降低 XDP LB 节点的 MTU（如 1480）后请求可成功。
+
+#主要错误日志
+未知
+
+#问题根因
+上一个修复补丁 e127ce7699c1 ("vmxnet3: Fix missing reserved tailroom") 过于激进，错误地将 `xdp_prepare_buff()` 的参数从 `rcd->len`（描述符中的实际包长）改为了 `rbi->len`。对于使用 ring0 的数据包（大小 128 - 3k 字节），`rbi->len` 并不代表实际数据包长度，导致 XDP 处理时使用了错误的缓冲区长度，进而将未使用的缓冲区空间作为有效数据发送出去。
+
+#解决方案
+将 `xdp_prepare_buff()` 函数的长度参数恢复为 `rcd->len`，确保传给 XDP 处理逻辑的数据包长度与实际收到的数据包一致，与 `vmxnet3_process_xdp_small()` 的处理逻辑保持对齐。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c788bf5a6e21c8a76efc1d6d1533a0df1f6d2a4e

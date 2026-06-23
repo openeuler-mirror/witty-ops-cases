@@ -1,0 +1,21 @@
+#标题
+MIPS ftrace 在非兼容地址空间下触发的缓冲区溢出与调用失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MIPS 64位架构下，当 MCOUNT_ADDR 地址超出 32 位兼容地址空间范围时，ftrace 初始化阶段可能发生缓冲区溢出；在 ftrace_make_call 阶段对非核心内核代码进行插桩时，可能返回错误码导致功能失效。
+
+#主要错误日志
+ftrace: mcount address beyond 32 bits is not supported (%lX)
+
+#问题根因
+在 MIPS 64位架构（非 compat space）下，MCOUNT_ADDR 地址较宽，生成加载地址（la v1, _mcount）的指令条数会超过预定的最大期望限制 2 条。原代码未对该情况进行判断和保护，导致写入 `insn_la_mcount` 数组时发生缓冲区溢出。此外，在 `ftrace_make_call` 中，当目标代码不属于核心内核代码且 MCOUNT_ADDR 不在兼容空间时，尝试使用未正确初始化的 `insn_la_mcount` 会引发问题。
+
+#解决方案
+1. 在初始化函数 `ftrace_dyn_arch_init_insns` 中增加判断：仅当 `MCOUNT_ADDR` 处于兼容地址空间时才生成指令并写入 `insn_la_mcount`，否则跳过生成并打印警告日志，防止缓冲区溢出。
+2. 在 `ftrace_make_call` 函数中增加防御性检查：当目标 IP 不属于核心内核文本且 `MCOUNT_ADDR` 不在兼容空间时，直接返回 `-EFAULT`，避免使用无效指令。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a3ed25bf5dde5932711520e0c3fad1d6d191edb1

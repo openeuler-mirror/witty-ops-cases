@@ -1,0 +1,20 @@
+#标题
+netfilter: nf_tables: newrule 函数中内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `nf_tables_newrule()` 创建规则时，若 `nft_use_inc()` 检查失败（如引用计数溢出），系统会发生内存泄漏。此前分配的 `flow` 对象未在错误处理路径中被释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nf_tables_newrule()` 函数中，当 `nft_use_inc(&chain->use)` 失败时，代码直接跳转至 `err_release_rule` 标签进行处理。然而，该错误处理路径未包含释放此前已分配的 `flow` 对象的逻辑，导致内存泄漏。
+
+#解决方案
+在代码中增加一个新的错误处理标签 `err_destroy_flow`，并修改 `nft_use_inc()` 失败时的跳转目标。确保在 `nft_use_inc()` 失败的场景下，代码能正确跳转至该标签执行 `nft_flow_rule_destroy(flow)`，从而释放已分配的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b1fc1c9eca6397c8ca86a7514b7e16b4446e983

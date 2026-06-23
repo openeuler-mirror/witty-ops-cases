@@ -1,0 +1,24 @@
+#标题
+can: j1939 零长度消息发送失败无报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+依据 J1939 标准，部分专有消息的数据长度允许为 0。在发送数据长度为 0 的 J1939 消息时，系统调用正常返回且不报错，但实际并未生成对应的 CAN 帧，导致消息发送丢失，零长度报文无法传输。
+
+#主要错误日志
+未知
+
+#问题根因
+内核 J1939 协议栈在处理消息发送时存在两处逻辑缺陷：
+1. `j1939_sk_send_loop()` 函数使用 `while (todo_size)` 循环进行消息分片处理，当 `todo_size`（待发送数据长度）初始值为 0 时，循环体直接被跳过，导致没有创建任何 skb 并加入发送队列。
+2. `j1939_session_skb_get_by_offset()` 函数在选择下一个待发送 skb 时，其判断条件 `offset_start < (do_skcb->offset + do_skb->len)` 对于长度为 0 的 skb 无法成立，导致无法正确处理零长度的报文。
+
+#解决方案
+修改内核代码以支持零长度消息的传输：
+1. 将 `j1939_sk_send_loop()` 中的循环结构从 `while (todo_size)` 修改为 `do { ... } while (todo_size)`，确保即使数据长度为 0，循环体至少执行一次，正确创建并排队 skb。
+2. 在 `j1939_session_skb_get_by_offset()` 函数中增加对零长度 skb 的判断逻辑，当 `offset_start`、`do_skcb->offset` 均为 0 且 `do_skb->len` 为 0 时，正确选中该 skb 进行处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8aa53614c5fcdf1405c2ab161c86b26a75f7e871

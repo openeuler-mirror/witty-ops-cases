@@ -1,0 +1,23 @@
+#标题
+crypto: hisilicon/qm - Fix device reference leak in qm_get_qos_value
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行 `qm_get_qos_value()` 函数时，调用 `bus_find_device_by_name()` 获取设备后，未在后续流程中释放设备引用计数，导致设备引用计数泄漏。若长期重复执行相关操作，可能导致内核资源耗尽或设备无法正常卸载。
+
+#主要错误日志
+pci_err(qm->pdev, "the pdev input does not match the pf!\n");
+
+#问题根因
+`qm_get_qos_value()` 函数内部调用了 `bus_find_device_by_name()`，该函数会增加设备的引用计数。然而，原代码在函数返回前（包括错误处理路径和正常返回路径）遗漏了调用 `put_device()` 来平衡引用计数，从而导致设备引用计数泄漏。
+
+#解决方案
+在 `qm_get_qos_value()` 函数中补充调用 `put_device(dev)`。具体修改如下：
+1. 在输入设备不匹配的错误返回路径（`return -EINVAL` 前）增加 `put_device(dev)` 调用。
+2. 在函数正常返回前（`return 0` 前）增加 `put_device(dev)` 调用。
+以此确保设备引用计数在不同退出路径下均能正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f0c61517d55f8b3fc10e450e9e7a280586378968

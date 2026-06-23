@@ -1,0 +1,22 @@
+#标题
+nfsd: nfsd4_setclientid_confirm 未处理 get_client_locked 失败导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 nfsd4_setclientid_confirm 处理流程中，若 `get_client_locked()` 获取客户端锁失败，代码未做异常处理而是继续访问该客户端指针，导致引发 NULL Pointer Dereference（空指针引用）从而触发内核 Oops/Panic。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `nfsd4_setclientid_confirm` 在处理确认（conf）和未确认（unconf）客户端逻辑时，直接调用 `get_client_locked(conf)` 或在特定分支下调用 `get_client_locked(unconf)`，但均未检查返回值是否为 `nfs_ok`。当获取锁失败时，指针可能无效或状态不一致，后续代码（如 `move_to_confirmed` 或锁释放逻辑）继续使用该指针导致崩溃。
+
+#解决方案
+在调用 `get_client_locked()` 后增加返回值检查逻辑：
+1. 在处理已确认客户端（conf）分支时，判断 `get_client_locked(conf)` 返回值，若非 `nfs_ok` 则将 `conf` 置为 NULL 并跳过后续操作。
+2. 在处理未确认客户端（unconf）分支时，判断 `get_client_locked(unconf)` 返回值，若非 `nfs_ok` 则跳转至 `out` 标签退出函数，防止后续代码使用无效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/84150fd95db832d81c776d5491a1a9c8005e79c6

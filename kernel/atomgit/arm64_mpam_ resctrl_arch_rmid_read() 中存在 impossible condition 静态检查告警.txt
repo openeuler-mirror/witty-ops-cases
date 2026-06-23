@@ -1,0 +1,21 @@
+#标题
+arm64/mpam: resctrl_arch_rmid_read() 中存在 impossible condition 静态检查告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 smatch 静态分析工具检查代码时，在 `drivers/platform/mpam/mpam_resctrl.c` 的 `resctrl_arch_rmid_read()` 函数中触发“impossible condition”（不可能条件）告警，提示 `(cfg.mon == ((~0) + 1))` 条件判断逻辑错误，导致代码逻辑无法按预期执行或存在潜在缺陷。
+
+#主要错误日志
+drivers/platform/mpam/mpam_resctrl.c:414 resctrl_arch_rmid_read()
+warn: impossible condition '(cfg.mon == ((~0) + 1)) => (0-u16max == 65536)'
+
+#问题根因
+结构体 `struct mon_cfg` 中的成员变量 `mon` 定义为 `u16` 类型，而在代码逻辑中与宏 `USE_RMID_IDX` 进行比较。`USE_RMID_IDX` 实际为 32 位数据类型，导致在赋值或比较过程中发生类型不匹配。具体表现为：当 `u16` 类型的 `cfg.mon` 与 `(~0) + 1`（即 65536）比较时，`cfg.mon` 因数据类型限制最大值为 65535，导致该条件判断永远为假，成为不可达代码。
+
+#解决方案
+将 `drivers/platform/mpam/mpam_internal.h` 中 `struct mon_cfg` 结构体成员 `mon` 的数据类型由 `u16` 修改为 `u32`，使其位宽与 `USE_RMID_IDX` 宏保持一致，从而修正类型不匹配导致的逻辑错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa1a3b356ebb9f6fdb98abd732ac5879ec2713d7

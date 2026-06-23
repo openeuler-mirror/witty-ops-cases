@@ -1,0 +1,26 @@
+#标题
+rcu-tasks: RCU-tasks 与 do_exit() 互锁导致内核死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行过程中发生死锁，具体表现为持有 mutex 的任务在调用 synchronize_rcu_tasks() 时，与另一个正处于 do_exit() 退出流程（在 exit_tasks_rcu_start() 与 exit_tasks_rcu_stop() 之间）且尝试获取同一 mutex 的任务互相等待。该问题由设计缺陷引起，且 lockdep 无法检测此类死锁，复现难度较大。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 RCU Tasks 机制与进程退出流程的设计冲突。
+1. 当任务执行到 do_exit() 的特定阶段（调用 exit_tasks_rcu_start() 之后、exit_tasks_rcu_stop() 之前），该任务已从任务列表中移除，导致 RCU Tasks 难以追踪其状态。
+2. 若此时该退出任务尝试获取 mutex 阻塞，而另一任务持有该 mutex 并调用 synchronize_rcu_tasks()，则会形成环路等待，导致死锁。
+3. 根本原因在于 RCU Tasks 无法识别处于退出中间状态且发生自愿上下文切换（如阻塞获取锁）的任务，误判其状态导致无法正确退出等待。
+
+#解决方案
+在内核数据结构中增加必要的字段以支持对退出任务的追踪，从而利用任务的静默状态消除死锁：
+1. 在 `task_struct` 结构体中新增 `rcu_tasks_exit_cpu` 和 `rcu_tasks_exit_list` 字段。
+2. 在 `rcu_tasks_percpu` 结构体中新增 `rtp_exit_list` 链表头。
+这些数据结构将用于记录和跟踪处于 do_exit() 后半段的任务，使其在发生自愿上下文切换时能被 RCU Tasks 正确识别为静默状态，从而避免死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/502789c781f3762ca024c6a0f0beff3c3deb3aae

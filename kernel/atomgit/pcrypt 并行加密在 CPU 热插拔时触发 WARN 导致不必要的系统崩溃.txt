@@ -1,0 +1,20 @@
+#标题
+pcrypt 并行加密在 CPU 热插拔时触发 WARN 导致不必要的系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 CPU 上下线（热插拔）操作时，如果系统加载 pcrypt 模块并触发加密或解密测试（如 alg_test），内核会产生 WARN 警告。若系统配置了 `panic_on_warn=1`，则会引发不必要的内核 panic，导致系统宕机。
+
+#主要错误日志
+WARNING: at alg_test()
+
+#问题根因
+自提交 8f4f68e788c3 ("crypto: pcrypt - Fix hungtask for PADATA_RESET") 起，pcrypt 在 CPU 上下线导致 padata 处于 PADATA_RESET 状态时，`padata_do_parallel()` 会返回 `-EBUSY`。原代码逻辑将其转换为 `-EAGAIN` 返回给调用者。在 `alg_test()` 中，返回 `-EAGAIN` 被视为异常情况从而触发 WARN 警告，在 `panic_on_warn` 开启时导致系统误崩溃。
+
+#解决方案
+修改 `pcrypt_aead_encrypt` 和 `pcrypt_aead_decrypt` 函数的处理逻辑：当 `padata_do_parallel()` 返回 `-EBUSY` 时，不再返回 `-EAGAIN`，而是直接调用 crypto 层的串行处理接口（`crypto_aead_encrypt` 或 `crypto_aead_decrypt`）进行非并行模式的加解密操作，从而绕过并行框架的限制，避免触发告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/011d3e6a9266a26b710dac84fb431ae6913a6e5f

@@ -1,0 +1,20 @@
+#标题
+spidev: 修复 spi_lock 与 buf_lock 之间的锁倒置问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在运行过程中检测到潜在的锁倒置风险，可能触发死锁检测机制（如 lockdep）报警，或在特定并发操作场景下导致系统挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+spidev 驱动中存在两个互斥锁 `spi_lock` 和 `buf_lock`。在部分代码路径中，加锁顺序为 先获取 `buf_lock` 再获取 `spi_lock`，而在其他路径（如 `spidev_sync`）中顺序相反，为先获取 `spi_lock` 再获取 `buf_lock`。这种不一致的加锁顺序导致了锁倒置，极易在并发场景下引发死锁。
+
+#解决方案
+移除 `buf_lock` 互斥锁，统一使用 `spi_lock` 来保护 SPI 设备指针及相关缓冲区操作。修改 `spidev_read`、`spidev_write`、`spidev_ioctl` 等函数，将其中的 `buf_lock` 加锁操作替换为 `spi_lock`，并移除 `spidev_sync` 中间函数以简化锁路径，彻底消除锁倒置隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e78836accdec20370302066c3201153b5049f56

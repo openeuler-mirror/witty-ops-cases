@@ -1,0 +1,24 @@
+#标题
+perf arm_spe: 修复 memset 操作子类解码失败问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 perf 工具对 ARM SPE（Statistical Profiling Extensions）v1.3 数据进行解码时，无法正确识别和解析 memset 类型的操作。由于底层解析逻辑错误，导致 memset 操作的相关负载无法被成功匹配，用户在 perf 报告中看不到 MEMSET 标签，影响了对该类内存操作的性能分析准确性。
+
+#主要错误日志
+未知
+
+#问题根因
+操作子类是从 payload 的 bits [7..1] 中提取的。原代码逻辑中，memset 类型的定义值为 0x25（bit[0] 为 1），但解析宏 `SPE_OP_PKT_LDST_SUBCLASS_GET` 仅提取了 bits [7..1] 进行比较，导致 bit[0] 的信息被丢弃。因此，解析器无法匹配到 memset 类型（0x25），导致 memset payload 从未被成功解析。
+
+#解决方案
+修改解码逻辑，不再统一提取 bit 域，而是针对每个操作子类使用独立的宏定义进行特定位匹配。具体修改如下：
+1. 删除通用的 `SPE_OP_PKT_LDST_SUBCLASS_GET` 宏。
+2. 为每个子类（如 GP_REG, SIMD_FP, MEMSET 等）定义独立的判定宏，分别检查对应位域。
+3. 特别地，对于 memset 操作，判定宏 `SPE_OP_PKT_LDST_SUBCLASS_MEMSET(v)` 修正为检查 bits [7..0] 全部匹配 0x25，确保 bit[0] 参与比较。
+4. 将解码函数中的 switch-case 结构调整为 if-else 结构，以适配新的判定逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6fbf2d3ff178f8226af8e7f9ca62f6b6c796cfcd

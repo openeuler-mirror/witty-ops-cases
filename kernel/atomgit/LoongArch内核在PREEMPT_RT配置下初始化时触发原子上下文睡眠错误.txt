@@ -1,0 +1,31 @@
+#标题
+LoongArch内核在PREEMPT_RT配置下初始化时触发原子上下文睡眠错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 PREEMPT_RT 的 LoongArch 架构内核启动过程中，初始化 TLB handler 时触发 BUG，提示在无效上下文中调用了睡眠函数，导致系统打印调用栈并可能影响启动流程。
+
+#主要错误日志
+[    0.372259] BUG: sleeping function called from invalid context at kernel/locking/spinlock_rt.c:48
+[    0.372266] in_atomic(): 1, irqs_disabled(): 1, non_block: 0, pid: 0, name: swapper/1
+[    0.372270] preempt_count: 1, expected: 0
+[    0.372314] irq event stamp: 0
+[    0.372341] CPU: 1 UID: 0 PID: 0 Comm: swapper/1 Not tainted 6.12.0-rc7+ #1891
+[    0.372540] Call Trace:
+[    0.372542] [<9000000005924778>] show_stack+0x38/0x180
+[    0.372555] [<900000000599b880>] __might_resched+0x1a0/0x260
+[    0.372561] [<90000000071675cc>] rt_spin_lock+0x4c/0x140
+[    0.372565] [<9000000005cbb768>] __rmqueue_pcplist+0x308/0xea0
+[    0.372575] [<9000000005cc0d98>] __alloc_pages_noprof+0x218/0x1820
+[    0.372580] [<900000000593b36c>] tlb_init+0x1ac/0x298
+
+#问题根因
+在 PREEMPT_RT 内核中，普通的自旋锁被替换为 rt spinlocks。`setup_tlb_handler()` 函数在原子上下文中调用 `alloc_pages_node()` 进行内存分配。尽管之前的修复（Commit bab1c299f3945ffe79）将 GFP 标志改为 GFP_ATOMIC，但在 PREEMPT_RT 配置下，内存分配路径中获取 `zone->lock` 时会调用 `rt_spin_lock()`，该函数可能导致睡眠，从而在 irq 禁用和原子上下文中触发 "sleeping in invalid context" 错误。
+
+#解决方案
+修改 `arch/loongarch/mm/tlb.c` 文件中的条件编译宏，将 `#ifdef CONFIG_NUMA` 改为 `#if defined(CONFIG_NUMA) && !defined(CONFIG_PREEMPT_RT)`。该修改在检测到 PREEMPT_RT 配置时，完全禁用 TLB handler 设置中的 NUMA 优化路径（该路径涉及内存分配），从而避免在原子上下文中调用可能导致睡眠的 rt spinlock。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1d10a8e4fadbbceef06114abe4f16cb08f6ec457

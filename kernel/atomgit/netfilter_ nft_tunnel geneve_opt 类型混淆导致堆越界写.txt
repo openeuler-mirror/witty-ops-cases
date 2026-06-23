@@ -1,0 +1,30 @@
+#标题
+netfilter: nft_tunnel geneve_opt 类型混淆导致堆越界写
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理多个 NFTA_TUNNEL_KEY_OPTS_GENEVE 属性时，由于指针运算类型混淆，导致内核发生堆越界写。该漏洞可被本地用户利用触发内核崩溃，存在安全风险（CVE-2025-22056）。
+
+#主要错误日志
+[    6.990293] BUG: KASAN: slab-out-of-bounds in nft_tunnel_obj_init+0x977/0xa70
+[    6.990725] Write of size 124 at addr ffff888005f18974 by task poc/178
+[    6.992423]  <TASK>
+[    6.992586]  dump_stack_lvl+0x44/0x5c
+[    6.994692]  nft_tunnel_obj_init+0x977/0xa70
+[    6.995677]  nft_obj_init+0x10c/0x1b0
+[    6.995891]  nf_tables_newobj+0x585/0x950
+
+#问题根因
+在 `nft_tunnel_obj_geneve_init` 函数中，计算下一个 `geneve_opt` 结构体位置时，代码错误地在指针加法之前进行了类型转换。
+原代码 `(struct geneve_opt *)opts->u.data + opts->len` 会先将 `opts->u.data` 转换为 `struct geneve_opt *` 指针，然后加上 `opts->len`，这实际上是以 `struct geneve_opt` 结构体的大小为单位进行偏移，而不是字节偏移。
+正确的逻辑应该是先进行字节级别的指针加法 `(opts->u.data + opts->len)`，然后再转换为结构体指针。该错误导致指针位置计算错误，引发堆越界写入。
+
+#解决方案
+修正指针运算的优先级与类型转换逻辑。
+在 `nft_tunnel_obj_geneve_init` 和 `nft_tunnel_opts_dump` 函数中，将原本错误的 `(struct geneve_opt *)opts->u.data + offset` 修改为 `(struct geneve_opt *)(opts->u.data + offset)`。
+这确保了加法运算是在 `char *` 级别（字节偏移）进行的，随后再转换为 `struct geneve_opt *`，从而正确计算结构体的位置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/28dcab7fda18b0ecd130b16090470e3572bab3d5

@@ -1,0 +1,20 @@
+#标题
+posix-clock: Fix unbalanced locking in pc_clock_settime
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `pc_clock_settime` 函数时，若传入的时间参数 `ts` 未通过 `timespec64_valid_strict` 校验（例如非法时间值），函数应返回失败。但由于代码逻辑顺序错误，在错误返回前已获取了 `clk->rwsem` 读锁和文件描述符引用，导致锁释放不平衡（锁未释放）和文件描述符引用计数泄漏，可能引发后续相关操作死锁或资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+前次提交 d8794ac20a29 ("posix-clock: Fix missing timespec64 check in pc_clock_settime()") 引入了 `timespec64_valid_strict` 校验，但将该校验放置在 `get_clock_desc()` 成功执行之后。`get_clock_desc()` 成功意味着已经获取了 `clk->rwsem` 读锁并增加了文件描述符的引用计数。若此时 `timespec64_valid_strict` 校验失败，代码直接返回 `-EINVAL`，跳过了后续的 `out` 标签处理逻辑，导致读锁未被释放，文件描述符引用计数未被减少，从而造成锁和引用计数的不平衡。
+
+#解决方案
+将 `timespec64_valid_strict(ts)` 校验逻辑移至 `get_clock_desc()` 调用之前。这样在校验失败时，函数直接返回 `-EINVAL`，此时尚未获取锁或文件引用，从而避免了锁和引用计数的不平衡问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d30cec42bbab45d2161c30760df7ca3ff9ea9c39

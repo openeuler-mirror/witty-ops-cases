@@ -1,0 +1,24 @@
+#标题
+HID: multitouch: 触摸板“粘滞手指”释放逻辑缺陷导致触控异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Dell XPS 9310 和 Dell Inspiron 5406 笔记本上使用的 Synaptics DLL0945 触摸板出现“粘滞手指”现象。具体表现为：当固件在仍有其他手指触摸的情况下遗漏释放某一个手指的事件时，系统未能正确清除该触摸点，导致界面上出现触摸点无法释放、光标漂移或触控操作卡顿等异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+内核 HID 多点触摸驱动中的 `MT_QUIRK_STICKY_FINGERS` 特性实现存在逻辑缺陷。原代码使用单一的 `MT_IO_FLAGS_ACTIVE_SLOTS` 标志位和 `MT_IO_FLAGS_PENDING_SLOTS` 标志位来跟踪触摸槽位状态，仅考虑了上一份报告中未释放槽位的情况。当触摸板固件在有其他手指存在的情况下忘记释放某个特定手指（槽位）时，这种粗粒度的位标志无法准确追踪每个具体槽位的状态，导致故障槽位无法被正确识别和清除。
+
+#解决方案
+将触摸槽位的状态跟踪机制从单一的标志位修改为位图掩码方式。具体修改如下：
+1. 重新定义 `mt_io_flags`，将其低 8 位（`MT_IO_SLOTS_MASK`）保留用于精确跟踪每个 slot 的状态（支持最多 250 个 slot）。
+2. 在 `mt_process_slot` 函数中，针对每个具体的 slot 号设置或清除对应的位，替换原有的通用 `MT_IO_FLAGS_ACTIVE_SLOTS` 标志。
+3. 在 `mt_release_pending_palms`、`mt_release_contacts` 等清理函数中，增加清除对应 slot 位的操作，确保状态同步。
+4. 更新定时器逻辑，直接检查 `mt_io_flags` 中是否存在已置位的 slot 位来判断是否需要延迟释放，从而准确处理固件遗漏释放事件的情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9ffa41ebcb0b3405cea6d71dfd78045dc627e214

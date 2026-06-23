@@ -1,0 +1,23 @@
+#标题
+dpaa2-switch: MAC endpoint handling 引发的设备引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+dpaa2_switch_port_connect_mac() 函数在处理 MAC 端点时，未能正确释放设备的引用计数。在多种异常处理路径下（如设备类型不匹配或内存分配失败），引用计数持续增长，导致设备对象无法被正常释放，可能引发内存泄漏或设备卸载失败。
+
+#主要错误日志
+未知
+
+#问题根因
+fsl_mc_get_endpoint() 函数内部调用了 device_find_child()，该函数在返回找到的设备指针前会隐式调用 get_device() 增加设备的引用计数。根据 device_find_child() 的注释，调用者在使用完设备后必须调用 put_device() 释放引用。然而，dpaa2_switch_port_connect_mac() 函数在 dpmac_dev 设备类型检查不匹配（`dpmac_dev->dev.type != &fsl_mc_bus_dpmac_type`）以及内存分配失败（`kzalloc` 失败）的错误处理路径中，直接返回而未调用 put_device()，导致设备引用计数泄漏。
+
+#解决方案
+在 dpaa2_switch_port_connect_mac() 函数的错误处理路径中增加 put_device() 调用，确保在退出函数前正确释放由 fsl_mc_get_endpoint() 获取的设备引用。具体修改包括：
+1. 将设备类型检查失败的返回逻辑改为跳转到新增的 `out_put_device` 标签。
+2. 将内存分配失败的错误处理逻辑改为跳转到 `out_put_device` 标签。
+3. 在函数末尾新增 `out_put_device` 标签，执行 `put_device(&dpmac_dev->dev)` 操作，确保引用计数正确递减。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/26574d6418476932a0d885be3ea1b190d2985ef4

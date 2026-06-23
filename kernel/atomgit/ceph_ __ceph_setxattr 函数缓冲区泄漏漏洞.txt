@@ -1,0 +1,20 @@
+#标题
+ceph: __ceph_setxattr 函数缓冲区泄漏漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Ceph 文件系统中执行扩展属性设置操作（setxattr）时，若涉及重试逻辑，会导致内核内存缓冲区泄漏。该问题表现为内核内存资源随着操作次数增加而不断消耗，可能最终导致系统内存不足或性能下降。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__ceph_setxattr()` 函数中，局部变量 `old_blob` 在重试过程中可能存储了 `ci->i_xattrs.prealloc_blob` 的值。然而，在代码跳转到 `do_sync` 标签后的执行路径中，代码仅了解锁并直接退出或继续处理，遗漏了对 `old_blob` 对象调用 `ceph_buffer_put()` 的步骤，导致该缓冲区引用计数未减少，从而引发内存泄漏。
+
+#解决方案
+在 `do_sync` 标签处、解锁操作 `spin_unlock(&ci->i_ceph_lock)` 之后，显式调用 `ceph_buffer_put(old_blob)` 来释放 `old_blob` 指向的缓冲区资源，确保引用计数正确处理，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ac1d54bcf9231c8354a578e94e5c7cfbedb7c90

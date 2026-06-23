@@ -1,0 +1,21 @@
+#标题
+UDMA驱动CRQ事件注销顺序错误引发功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在UDMA设备初始化失败回滚、设备移除（remove）或设备复位（reset）过程中，因CRQ（Completion Request Queue）事件注销顺序不当，导致驱动状态异常或资源释放不彻底，可能引发设备状态不一致或后续功能调用异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `udma_init_dev` 失败处理路径、`udma_remove` 及 `udma_reset_uninit` 函数中，原逻辑将 `udma_unregister_crq_event` 与其他事件的注销操作混合在同一个函数 `udma_unregister_event` 中执行。根据代码注释 "Event should unregister before unset ubcore dev" 以及修复逻辑推断，CRQ事件的注销时机与其他事件（如 ctrlq, ce, ae）存在依赖关系，不应统一在 `udma_unset_ubcore_dev` 之前全部注销。原实现未区分 CRQ 事件与其他事件的注销顺序，导致注销流程不符合硬件或协议要求。
+
+#解决方案
+将原 `udma_unregister_event` 函数拆分为 `udma_unregister_none_crq_event` 和 `udma_unregister_crq_event`。
+在初始化失败、设备移除和复位流程中，调整两者的调用顺序：先调用 `udma_unregister_none_crq_event` 注销非 CRQ 事件，随后执行 `udma_unset_ubcore_dev` 等操作，最后再调用 `udma_unregister_crq_event` 注销 CRQ 事件，确保事件注销顺序符合驱动逻辑要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e584b00d3d0f88496dca0256097c9a62f062354e

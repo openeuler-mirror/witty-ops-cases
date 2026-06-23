@@ -1,0 +1,20 @@
+#标题
+libceph: osdmap_apply_incremental 中过度的 BUG_ON 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 OSD map 数据被恶意构造或损坏，导致增量 osdmap 的 epoch 与预期值不一致时，内核直接触发 BUG_ON 终结系统，而非安全地处理错误。系统表现为触发 kernel panic，导致服务不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `osdmap_apply_incremental` 函数中，代码使用 `BUG_ON(epoch != map->epoch+1)` 来检查增量 osdmap 的 epoch 是否符合预期。如果 osdmap 被篡改或损坏导致 epoch 不匹配，内核会直接触发 panic。这种处理方式过于激进，对于此类数据校验失败的场景，不应导致整个系统崩溃。
+
+#解决方案
+移除过激的 `BUG_ON` 宏调用，改为使用标准的错误处理流程。具体修改为：使用条件判断 `if (epoch != map->epoch + 1)` 检测 epoch 不匹配的情况，若不匹配则跳转至 `e_inval` 标签，将该增量 osdmap 声明为无效并丢弃，从而避免系统崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6008a1b668621873d490f1f1ac9a86a804cde673

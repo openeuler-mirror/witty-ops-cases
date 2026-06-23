@@ -1,0 +1,20 @@
+#标题
+ionic: PF MAC地址修改异常覆盖固件持久化信息导致永久地址显示错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Physical Function (PF) 上修改 MAC 地址后，该修改会被固件持久化保存。这导致系统管理工具（如 `ethtool -P`）读取到的 permanent MAC address（永久硬件地址）变成了用户配置的 MAC 地址，而非出厂原始地址。此行为破坏了硬件身份标识的稳定性，且在主机热重启或驱动重载后依然存在。
+
+#主要错误日志
+未知
+
+#问题根因
+在 MAC 地址更新路径中，驱动无条件调用了 `ionic_program_mac` 函数（内部使用 `IONIC_CMD_LIF_SETATTR` 命令）。该命令会导致 ionic 固件更新 LIF 的持久化状态。由于固件状态在主机热重启和驱动重载期间保持不变，导致 PF 的 MAC 修改变成了“粘性”状态，覆盖了固件中的永久身份块。虽然虚拟功能（VF）需要这种硬件级编程来处理客户机环境中的 MAC 分配，但 PF 不应执行此操作。
+
+#解决方案
+修改 `ionic_set_mac_address` 函数逻辑，通过检查 `lif->ionic->pdev->is_virtfn` 标志位来限制 `ionic_program_mac` 的调用范围。仅在当前设备为虚拟功能（VF）时才调用 `ionic_program_mac` 将 MAC 地址写入固件持久化状态；对于物理功能（PF），MAC 地址变更仅保留在 netdev 过滤器层面，保持标准的瞬时行为，不覆盖固件的永久身份信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/18149cfe15afc9c5b76c82b89529e44459ba3a1f

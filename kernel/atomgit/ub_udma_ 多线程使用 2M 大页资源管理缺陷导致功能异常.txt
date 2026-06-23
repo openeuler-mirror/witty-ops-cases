@@ -1,0 +1,36 @@
+#标题
+ub/udma: 多线程使用 2M 大页资源管理缺陷导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多线程并发场景下使用 UDMA 模块的 2M 大页功能时，可能出现以下异常：
+1. 大页资源分配失败，导致相关业务（如 JFC、JFS、JFR）创建队列失败。
+2. 资源统计混乱，导致系统误判资源不足或内存泄漏。
+3. 进程退出或资源销毁时出现内存释放异常或崩溃。
+
+#主要错误日志
+- "insufficient resources for mmap.\n"（推断：原日志打印已删除，但在修复前是主要报错信息）
+- "failed to create cq.\n"
+- "failed to create sq.\n"
+- "failed to create rq.\n"
+- "failed to alloc pages.\n"
+- "failed to remap_pfn_range, ret=%d.\n"
+
+#问题根因
+UDMA 模块在管理 2M 大页时存在并发与设计缺陷：
+1. **并发缺陷**：原实现使用全局变量 `total_hugepage_num` 进行资源计数，多线程并发修改时存在竞态条件，导致计数不准确。
+2. **逻辑缺陷**：原有的 `udma_alloc_u_hugepage` 接口在 mmap 阶段即进行物理页分配和锁定，且依赖预先计算的最大页数限制，导致资源管理僵化且并发不安全。
+
+#解决方案
+1. **移除全局资源限制**：删除 `dev->total_hugepage_num` 变量及其相关的全局资源预计算与校验逻辑，消除多线程竞态风险。
+2. **重构大页管理模型**：引入 `atomic_t hugepage_seq` 序列号机制，替换原有的计数机制，仅用于调试追踪。
+3. **优化内存分配流程**：
+   - 将大页内存分配调整为按需分配模式，通过 `udma_alloc_u_hugepage` 接口在业务创建时动态申请。
+   - 新增 `udma_remap_pfn_range` 辅助函数，在支持 `CONFIG_ARCH_SUPPORTS_PMD_PFNMAP` 的架构上优先使用 `remap_pfn_range_try_pmd` 进行大页映射。
+   - 使用 `GFP_HIGHUSER_MOVABLE` 标志进行页面分配，提高内存分配灵活性。
+4. **修复生命周期管理**：修正 `udma_hugepage_priv` 结构体，新增 `seq` 和 `page_size` 字段，确保大页资源在创建、占用、释放各阶段的正确关联与回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4a07ccc8d288edaee51b7351e70f40909d312621

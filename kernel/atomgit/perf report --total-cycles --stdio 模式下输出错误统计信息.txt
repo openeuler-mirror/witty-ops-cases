@@ -1,0 +1,20 @@
+#标题
+perf report --total-cycles --stdio 模式下输出错误统计信息
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 `perf record` 记录包含事件组（如 `{cycles,instructions}`）和其他独立事件的数据后，执行 `perf report --total-cycles --stdio` 时，不同事件之间的统计输出结果异常雷同。具体表现为：独立事件（如 `cache-misses`）的采样周期（Sampled Cycles）百分比、周期数与事件组内的事件完全一致，未展示该事件自身的真实数据特征。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `evlist__tty_browse_hists` 函数处理 `--total-cycles` 逻辑时，索引变量 `i` 的更新时机有误。当配置了 `symbol_conf.event_group` 时，代码预期仅处理组长事件并跳过组内成员事件。但由于 `i++` 操作仅在处理完块报表后执行（位于 `report__browse_block_hists` 调用内），导致在遇到非组长事件执行 `continue` 跳过时，索引 `i` 未增加。这使得下一次循环处理下一个组长事件时，使用的索引 `i` 依然指向了上一个被处理事件的数组位置，从而导致后续事件错误地复用了前一个事件的块统计信息。
+
+#解决方案
+修改 `tools/perf/builtin-report.c` 文件，将索引变量 `i` 的自增操作（`i++`）移至循环开头，确保在判断是否跳过当前事件（`continue`）之前，索引已经指向下一个位置。同时在访问 `block_reports` 数组时使用 `i - 1` 以确保引用正确的当前事件索引。此修复保证了每个事件（无论是否被跳过）都对应正确的数组索引。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3a67e496e2919de63cc42210a2b3a979a70aac4

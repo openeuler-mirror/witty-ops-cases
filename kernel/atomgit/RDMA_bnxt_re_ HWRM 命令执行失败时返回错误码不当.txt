@@ -1,0 +1,20 @@
+#标题
+RDMA/bnxt_re: HWRM 命令执行失败时返回错误码不当
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 bnxt_re 驱动执行 HWRM 命令失败时，上层应用或调用者接收到 `-EFAULT` (Bad address) 错误码。该错误码表示“坏地址”，与实际发生的硬件命令执行失败情况不符，可能会误导用户或上层软件进行错误的故障定位与处理。
+
+#主要错误日志
+dev_err(&rcfw->pdev->dev, "cmdq[%#x]=%#x status %#x\n", cookie, opcode, evnt->status);
+
+#问题根因
+在函数 `__bnxt_qplib_rcfw_send_message` 中，当检测到 HWRM 命令执行失败（`evnt->status` 指示错误）时，代码逻辑错误地将返回值设置为 `-EFAULT`。这掩盖了真实的 I/O 错误性质，导致返回值语义不正确。
+
+#解决方案
+修改 `drivers/infiniband/hw/bnxt_re/qplib_rcfw.c` 文件中的错误处理逻辑，将 HWRM 命令失败时的返回值从 `-EFAULT` 修改为 `-EIO`，以准确反映发生了 I/O 错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/45cba771f99afb06a8cd9daa8ddfe50ad0a07fbf

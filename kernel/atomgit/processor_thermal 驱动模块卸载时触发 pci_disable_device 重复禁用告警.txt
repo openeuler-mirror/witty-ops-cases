@@ -1,0 +1,30 @@
+#标题
+processor_thermal 驱动模块卸载时触发 pci_disable_device 重复禁用告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 processor_thermal 设备驱动模块时，内核触发 WARNING 并打印调用栈。日志显示尝试禁用一个已经被标记为 disabled 的 PCI 设备，导致内核抛出警告信息 "disabling already-disabled device"。
+
+#主要错误日志
+[  224.010735] proc_thermal_pci 0000:00:04.0: disabling already-disabled device
+[  224.010747] WARNING: CPU: 8 PID: 4442 at drivers/pci/pci.c:2250 pci_disable_device+0xe5/0x100
+...
+[  224.010871]  ? kfree+0x21a/0x2b0
+[  224.010873]  pcim_disable_device+0x20/0x30
+[  224.010875]  devm_action_release+0x16/0x20
+...
+[  224.010892]  pci_unregister_driver+0x44/0x90
+[  224.010894]  proc_thermal_pci_driver_exit+0x14/0x5f0 [processor_thermal_device_pci]
+...
+[  224.010921] ---[ end trace 0000000000000000 ]---
+
+#问题根因
+processor_thermal 驱动在初始化时使用了 pcim_device_enable()（即 managed 方式），该机制确保在驱动解绑时设备会被自动禁用。然而，驱动代码在 `proc_thermal_pci_probe` 的错误处理路径和 `proc_thermal_pci_remove` 函数中又显式调用了 `pci_disable_device()`。随着内核 PCI 资源管理机制的改进（如移除 legacy pcim_release），这种重复禁用操作触发了内核的警告检查逻辑。
+
+#解决方案
+删除 `proc_thermal_pci_probe` 错误退出路径和 `proc_thermal_pci_remove` 函数中冗余的 `pci_disable_device(pdev)` 调用，依赖 pcim 机制自动处理设备的禁用，从而避免重复禁用导致的告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/79c61ad191ddaf00b2a43c8d3ce6f086ddc83927

@@ -1,0 +1,27 @@
+#标题
+f2fs: age extent cache 插入在计数器溢出时被错误跳过
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 f2fs 文件系统的 `allocated_data_blocks` 计数器达到 `ULLONG_MAX` 并溢出归零时，后续的数据写入操作无法正确创建 age extent cache 节点。
+具体表现为：在计数器溢出后进行数据写入（如 `dd` 操作），`/sys/kernel/debug/f2fs/status` 中的 `Inner Struct Count` 计数不再增加，extents 插入逻辑被错误跳过，导致 age extent cache 功能失效，影响冷热数据识别与垃圾回收效率。
+
+#主要错误日志
+未知
+
+#问题根因
+Age extent cache 机制使用 `last_blocks` 字段（派生自 `allocated_data_blocks`）来判断数据年龄。代码中使用 `last_blocks == 0` 作为删除或无效场景的标记，但当 `allocated_data_blocks` 计数器自然增长至 `ULLONG_MAX` 并溢出为 0 时，该合法的 0 值与删除标记冲突。
+导致在 `__update_extent_tree_range()` 函数中，`if (!tei->last_blocks)` 判断为真，合法的 extent 插入请求被错误地跳过，破坏了缓存的一致性。
+
+#解决方案
+通过引入专门的无效标记并限制计数器范围来区分合法值与删除标记：
+1. 定义宏 `F2FS_EXTENT_AGE_INVALID` 为 `ULLONG_MAX`，作为唯一的无效/删除标记。
+2. 修改 `f2fs_allocate_data_block()` 中的计数器更新逻辑，当 `allocated_data_blocks` 达到 `ULLONG_MAX` 时，将其重置为 0，确保计数器最大值限制在 `ULLONG_MAX - 1`。
+3. 修改判断逻辑，将 `if (!tei->last_blocks)` 替换为 `if (tei->last_blocks == F2FS_EXTENT_AGE_INVALID)`。
+4. 调整溢出时的年龄计算公式，基数从 `ULLONG_MAX` 改为 `ULLONG_MAX - 1`。
+5. 在初始化 `extent_info` 时将 `last_blocks` 显式设置为 `F2FS_EXTENT_AGE_INVALID`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/45744b1a3cd497fc086770f1c794a1332adabcb6

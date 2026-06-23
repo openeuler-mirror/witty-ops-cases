@@ -1,0 +1,20 @@
+#标题
+net_sched: hfsc 类处理中的 UAF 漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HFSC (Hierarchical Fair Service Curve) 流量控制分类处理过程中存在 UAF (Use-After-Free) 漏洞。当修改特定的 HFSC 类配置时，可能导致内核内存被非法访问，引发内核崩溃或潜在的系统提权风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hfsc_change_class` 函数中，调用 `qdisc_peek_len(cl->qdisc)` 获取队列长度时，部分 qdisc 实现（如 netem 或 codel）可能会在 peek 操作过程中清空队列。如果队列被清空，后续代码可能基于错误的假设继续操作已释放或状态异常的资源，从而触发 UAF 漏洞。
+
+#解决方案
+修改 `hfsc_change_class` 函数的逻辑，在调用 `qdisc_peek_len` 之前先检查队列长度；同时，在调用 `qdisc_peek_len` 之后再次检查队列长度 (`cl->qdisc->q.qlen != 0`)。通过双重检查机制，确保即使 qdisc 实现在 peek 操作期间清空了队列，也不会继续执行后续可能引发 UAF 的逻辑，从而避免漏洞触发。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b98cb93a43247b3bbd7ff4f5a651f3272b8a86f5

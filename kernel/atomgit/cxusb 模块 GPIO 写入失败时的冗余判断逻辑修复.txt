@@ -1,0 +1,20 @@
+#标题
+cxusb 模块 GPIO 写入失败时的冗余判断逻辑修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 USB DVB 设备进行 GPIO 写入操作失败时，驱动程序可能访问未初始化或无效的返回数据缓冲区，导致判断逻辑异常，虽然当前代码路径仅打印信息，但逻辑判断依赖于失败的 I/O 结果。
+
+#主要错误日志
+gpio_write failed.
+
+#问题根因
+在 `cxusb_gpio_tuner` 函数中，`cxusb_ctrl_msg` 调用被分离于条件判断之外。即使 `cxusb_ctrl_msg` 写入失败（返回非零错误码），代码依然继续执行并使用返回的变量 `i` 进行判断（`if (i != 0x01)`）。这在写入失败的情况下，导致了对无效返回值的冗余检查。
+
+#解决方案
+修改条件判断逻辑，将 `cxusb_ctrl_msg` 的返回值检查与 `i != 0x01` 的判断合并。修改后的逻辑为：仅当 `cxusb_ctrl_msg` 返回成功（即 `!cxusb_ctrl_msg(...)` 为真）且返回值 `i` 不等于 `0x01` 时，才打印 "gpio_write failed" 提示信息。这确保了只有在写入操作成功返回时才校验返回内容。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4b962833f804f8b3cb5e757f72600dca0b7488f2

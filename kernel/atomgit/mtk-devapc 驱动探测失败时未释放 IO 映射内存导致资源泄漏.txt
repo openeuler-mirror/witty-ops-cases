@@ -1,0 +1,20 @@
+#标题
+mtk-devapc 驱动探测失败时未释放 IO 映射内存导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+MediaTek DevAPC 驱动在初始化探测过程中，若遇到 IRQ 解析失败、时钟获取失败或中断请求注册失败等错误场景，函数直接返回错误码，但未释放此前已通过 `of_iomap` 成功映射的内存地址。该问题会导致内核内存资源泄漏，虽然通常不会立即引发系统崩溃，但长期运行或频繁重试可能导致系统可用内存减少，属于代码逻辑缺陷。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动 `mtk_devapc_probe` 函数在成功执行 `of_iomap` 获取 `ctx->infra_base` 后，后续的几个错误处理分支（如 `irq_of_parse_and_map` 失败、`devm_clk_get_enabled` 失败、`devm_request_irq` 失败）直接返回了错误码（如 `-EINVAL` 或 `ret`），遗漏了调用 `iounmap` 进行资源清理的步骤。静态代码分析工具 Smatch 检测到了该路径下的资源未释放风险。
+
+#解决方案
+修改 `mtk_devapc_probe` 函数的错误处理路径。将原本直接 `return` 的错误分支改为设置错误码 `ret` 并跳转至统一的 `err` 标签处。在 `err` 标签下补充调用 `iounmap(ctx->infra_base)` 以确保在函数退出前正确释放已映射的 IO 内存，最后返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d78ee77f16800bd600854d5d3cc1e66fb7caa455

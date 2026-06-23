@@ -1,0 +1,20 @@
+#标题
+Hygon 处理器虚拟机环境下 CPU LLC ID 获取错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hygon 处理器的虚拟机 Guest 环境中，内核获取的 CPU Last Level Cache (LLC) ID 不正确。这会导致内核将属于不同 Core Complex 的 CPU 核心误判为共享 LLC，或者反之，进而影响调度域构建和缓存亲和性调度，可能导致虚拟机性能下降或调度行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cacheinfo_hygon_init_llc_id` 函数中，逻辑判断仅依据 CPU 型号（Model）来决定是否通过 `ApicId[3]` 来计算 Core Complex ID 并设置 LLC ID。该逻辑未考虑运行环境的影响：在虚拟化环境下，Guest 看到的物理拓扑可能与 Host 不同，若不加区分地执行原有的位运算逻辑，会得到错误的 LLC ID。原有的条件判断缺少对 `X86_FEATURE_HYPERVISOR` 特性的检查。
+
+#解决方案
+修改 `arch/x86/kernel/cpu/cacheinfo.c` 文件中的 `cacheinfo_hygon_init_llc_id` 函数。在判断是否执行特殊 LLC ID 计算逻辑的条件中，增加对虚拟化环境的检测（`!boot_cpu_has(X86_FEATURE_HYPERVISOR)`）。仅当 CPU 不是运行在 Hypervisor 环境下时，才执行针对特定型号 Hygon 处理器的 Core Complex ID 提取逻辑，从而避免在虚拟机中获取到错误的 LLC ID。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/11df9507951dea8d90e25cc9c06c909f74426541

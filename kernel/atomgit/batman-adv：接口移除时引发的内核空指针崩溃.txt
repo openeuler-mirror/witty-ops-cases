@@ -1,0 +1,26 @@
+#标题
+batman-adv：接口移除时引发的内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统重启或移除 batman-adv 硬件接口时触发内核 panic。问题根源于 `batadv_v_elp_throughput_metric_update` 工作队列在执行时，对应的硬件接口可能已经与软接口解绑，导致访问空指针。
+
+#主要错误日志
+Call trace:
+ batadv_v_mesh_free+0xd0/0x4dc [batman_adv]
+ batadv_v_elp_throughput_metric_update+0x1c/0xa4
+ process_one_work+0x178/0x398
+ worker_thread+0x2e8/0x4d0
+ kthread+0xd8/0xdc
+ ret_from_fork+0x10/0x20
+
+#问题根因
+虽然使用了引用计数来保证 `batadv_hardif_neigh_node` 和 `batadv_hard_iface` 在工作队列结束前不被释放，但无法保证硬件接口在工作完成前一直关联着软接口。当硬件接口被移除并解绑后，工作队列调用 `batadv_v_elp_get_throughput` 时试图访问 `hard_iface->soft_iface`，此时该指针可能为空，从而导致空指针引用崩溃。
+
+#解决方案
+在函数 `batadv_v_elp_get_throughput` 中增加对 `hard_iface->soft_iface` 的非空校验。如果该指针为空（即接口已不再关联任何 batman-adv 软接口），函数直接返回默认吞吐量值 `BATADV_THROUGHPUT_DEFAULT_VALUE`，避免后续解引用空指针。同时修正了日志打印处直接使用局部变量 `soft_iface` 以保持一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/051f8d86439fadf3b600f2b54d9094b214ce5b32

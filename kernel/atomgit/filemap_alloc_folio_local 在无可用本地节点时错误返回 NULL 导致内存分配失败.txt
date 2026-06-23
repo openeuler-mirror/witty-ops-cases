@@ -1,0 +1,20 @@
+#标题
+filemap_alloc_folio_local 在无可用本地节点时错误返回 NULL 导致内存分配失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统处于特定 NUMA 内存策略下（如策略过滤后无标准节点可用），`filemap_alloc_folio_local` 等函数在分配内存页时，即使调用者传入了 `GFP_NOFAIL` 标志（要求分配不得失败），函数仍可能直接返回 NULL。这违反了 `GFP_NOFAIL` 的语义，导致调用者产生空指针访问或后续业务流程异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `filemap_alloc_folio_local` 和 `policy_nodemask_local` 函数中，当通过 `nodes_empty` 检测到没有可用的本地节点（local_nodes）时，代码逻辑直接返回了 NULL 或 -ENOMEM 错误码，未考虑到调用者可能设置了 `GFP_NOFAIL` 标志。这导致在极端 NUMA 配置场景下，本应回退（fallback）执行的内存分配被错误终止。
+
+#解决方案
+修改了内存分配的降级处理逻辑。当检测到没有可用的本地节点时，不再直接返回失败，而是将当前 NUMA 节点（`numa_node_id()` 或 `*nid`）强制加入到可用节点掩码中作为回退，确保内存分配请求能够继续执行，从而修正了 `GFP_NOFAIL` 场景下的分配行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/02bbe2d8204b862d9d71c18043aac948fc800db2

@@ -1,0 +1,32 @@
+#标题
+smb: client: 构建 SMB2_IOCTL 请求时越界写入导致 KASAN 报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 SMB3 加密（服务器强制或使用 seal 挂载选项）的场景下，当用户传入超过 328 字节的输入缓冲区时，内核会发生越界写入。具体表现为执行创建长符号链接操作时触发 KASAN slab-out-of-bounds 错误，导致内核 panic 或打印严重的调用栈跟踪信息。
+
+#主要错误日志
+```
+BUG: KASAN: slab-out-of-bounds in smb2_set_next_command.cold+0x1d6/0x24c [cifs]
+Write of size 4116 at addr ffff8881148fcab8 by task ln/859
+CPU: 1 UID: 0 PID: 859 Comm: ln Not tainted 6.12.0-rc3 #1
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x5d/0x80
+ ? smb2_set_next_command.cold+0x1d6/0x24c [cifs]
+ kasan_report+0xda/0x110
+ smb2_set_next_command.cold+0x1d6/0x24c [cifs]
+ smb2_compound_op+0x238c/0x3840 [cifs]
+ ...
+```
+
+#问题根因
+在使用加密时，客户端会在 `smb2_set_next_command()` 函数中将所有复合请求缓冲区压缩到单个 iov 中进行加密。`SMB2_ioctl_init()` 分配了一个较小的缓冲区（448 字节）用于存放 SMB2_IOCTL 请求，如果用户传递的输入缓冲区大于 328 字节，`smb2_set_next_command()` 在处理压缩时，会写入超出 `@rqst->iov[0].iov_base` 结尾的位置，导致越界写入。
+
+#解决方案
+在 `SMB2_ioctl_init()` 函数中增加安全检查。如果检测到 SMB3 加密是必需的，且计算出的请求总长度（包含对齐后的输入数据长度）超过了 `MAX_CIFS_SMALL_BUFFER_SIZE`，则通过 `WARN_ON_ONCE` 记录警告，释放请求缓冲区并返回 `-EIO` 错误，从而阻止后续的越界写入操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8ec1c8416370b146ccd494830d2b43c75eb37def

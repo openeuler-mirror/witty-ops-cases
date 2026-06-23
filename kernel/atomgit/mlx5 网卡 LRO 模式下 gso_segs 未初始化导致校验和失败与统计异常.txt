@@ -1,0 +1,25 @@
+#标题
+mlx5 网卡 LRO 模式下 gso_segs 未初始化导致校验和失败与统计异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 LRO（Large Receive Offload）的场景下，网络数据包处理出现异常：
+1. 接收端出现硬件校验和失败，导致数据包被丢弃。
+2. 在 GRO（Generic Receive Offload）处理路径中，当非 LRO 数据包与 LRO 数据包合并时，触发校验逻辑错误。
+3. TCP 层统计信息不准确，`bytes_received` 与 `data_segs_in` 的比值超过 MTU，显示输入数据段计数偏小。
+
+#主要错误日志
+hw csum failure
+
+#问题根因
+驱动程序在处理 LRO 数据包时，未正确初始化 `skb` 的 `gso_segs` 字段，导致其值默认为 0。该错误引发了以下连锁反应：
+1. 在 GRO 路径中，`NAPI_GRO_CB()->count` 被错误地设置为 0，导致 `gro_complete()` 函数提前返回，未调用 `inet_gro_complete()` 完成校验和验证，最终在 `tcp_checksum_complete()` 中报错。
+2. TCP 层的 `tp->segs_in` 和 `data_segs_in` 统计计数因 `gso_segs` 为 0 而未正确累加，导致统计信息偏差。
+
+#解决方案
+在驱动程序 `mlx5e_build_rx_skb` 函数中，针对 LRO 数据包处理逻辑，显式设置 `gso_segs` 字段值为 `lro_num_seg`（即 LRO 分段数），确保内核协议栈能正确处理数据包计数与校验逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d13355921f9f91b53379e71fcfccfaa0c17e7f44

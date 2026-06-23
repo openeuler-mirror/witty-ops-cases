@@ -1,0 +1,23 @@
+#标题
+x86/vmscape: Enumerate VMSCAPE bug
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在受影响的 Intel 和 AMD CPU 上，客户机用户空间可能利用 VMSCAPE 漏洞发起 Branch Target Injection (BTI) 攻击。该攻击针对同一进程内的用户态 Hypervisor（如 QEMU），利用其作为“被混淆的代理人”来访问敏感的客户机内核数据或宿主机数据（如磁盘加密密钥）。现有的内核防御机制无法防范此类针对用户态 Hypervisor 的进程内攻击。
+
+#主要错误日志
+未知
+
+#问题根因
+VMSCAPE (CVE-2025-40300) 漏洞允许客户机对用户态 Hypervisor 发起分支目标注入（BTI）攻击。虽然内核已有针对直接 BTI 攻击和进程间 BTI 攻击的防御措施，但缺乏针对同一进程内（客户机用户态攻击者与用户态 Hypervisor）此类攻击的缓解机制。受影响的 CPU 未正确标记此硬件漏洞特征。
+
+#解决方案
+在内核中引入 X86_BUG_VMSCAPE 漏洞标志位。
+1. 修改 `arch/x86/include/asm/cpufeatures.h`，新增 `X86_BUG_VMSCAPE` 定义。
+2. 修改 `arch/x86/kernel/cpu/common.c`，在 CPU 漏洞黑名单中为受影响的 Intel（如 Skylake, Kaby Lake, Alder Lake, Meteor Lake 等系列）和 AMD（Family 17h, 19h 等）及 Hygon 处理器添加 VMSCAPE 标记。
+3. 在 `cpu_set_bug_bits` 函数中增加逻辑：当 CPU 匹配漏洞黑名单且运行在裸机环境（非虚拟化环境，通过 `!boot_cpu_has(X86_FEATURE_HYPERVISOR)` 判断）时，强制设置 `X86_BUG_VMSCAPE` 标志，以便后续启用相应的缓解措施。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/faf317515fd0e7ddf88eae9bc42b8b98b64804ee

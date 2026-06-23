@@ -1,0 +1,23 @@
+#标题
+fbdev: vt8500lcdfb 驱动 probe 失败时存在内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 vt8500lcd framebuffer 驱动时，若分配调色板缓冲区（palette buffer）失败，驱动 probe 流程进入错误处理路径，但未释放此前已通过 dma_alloc_coherent 成功分配的显存（screen_buffer），导致内核内存泄漏。
+
+#主要错误日志
+[   XX.XXXXXX] vt8500lcd: Failed to allocate palette buffer
+
+#问题根因
+在 `vt8500lcd_probe` 函数中，`fbi->fb.screen_buffer` 指针指向的内存是通过 `dma_alloc_coherent` 申请的。当后续代码在分配调色板缓冲区失败并跳转至 `failed_free_io` 标签进行错误清理时，代码逻辑遗漏了对 `screen_buffer` 的释放操作，直接执行了 `iounmap`，导致该部分 DMA 内存未归还给系统。
+
+#解决方案
+修改驱动源文件 `drivers/video/fbdev/vt8500lcdfb.c`，调整错误处理跳转逻辑：
+1. 在错误处理标签 `failed_free_palette` 之后新增标签 `failed_free_mem_virt`。
+2. 在该标签下添加 `dma_free_coherent` 调用，用于释放 `fbi->fb.screen_buffer` 及其对应的物理地址空间。
+3. 将分配调色板缓冲区失败的跳转目标从 `failed_free_io` 修改为 `failed_free_mem_virt`，确保错误发生时按顺序释放已申请的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d2c54eecb76a70b94083169e1a0bf5e40945e3d4

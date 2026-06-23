@@ -1,0 +1,21 @@
+#标题
+drm/v3d: 空multisync扩展导致内核无限循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+本地用户可通过构造特定的 ioctl 扩展链（self-referential extension），触发内核态无限循环。故障发生时，调用线程会被永久阻塞，并导致一个 CPU 核心占用率持续 100%（被完全占用），系统响应受影响。
+
+#主要错误日志
+DRM_DEBUG("Empty multisync extension\n");
+
+#问题根因
+函数 `v3d_get_extensions()` 在遍历用户空间提供的单链表 ioctl 扩展时，没有限制链表长度。攻击者可构造一个自引用的扩展节点（`ext->next == &ext`），且将 `in_sync_count` 和 `out_sync_count` 均置为 0。
+现有的重复扩展检查逻辑 `if (se->in_sync_count || se->out_sync_count) return -EINVAL;` 在计数为 0 时不生效。同时，`v3d_get_multisync_post_deps()` 在计数为 0 时直接返回，导致每次循环中校验逻辑都被绕过，从而形成无限循环。
+
+#解决方案
+在 `v3d_get_multisync_submit_deps()` 函数中增加对 `multisync` 扩展参数的校验。如果检测到 `in_sync_count` 和 `out_sync_count` 同时为 0，则视为无效的空扩展，直接返回 `-EINVAL` 错误，从而阻断无限循环的执行路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/85c36a55eb635f5a9d025c8f5fa40fabd314046f

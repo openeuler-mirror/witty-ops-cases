@@ -1,0 +1,25 @@
+#标题
+scsi: ufs: core: 修复 W-LUN 恢复失败后的错误处理（EH）失败问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 W-LUN（Well-Known Logical Unit）恢复失败时，其父设备（如 scsi_target）可能处于运行时挂起状态。随后在 `ufshcd_recover_pm_error()` 执行错误恢复时，由于父目标设备未处于活动状态，无法将 W-LUN 设备设置回活动状态，导致错误处理失败。
+
+#主要错误日志
+- google-ufshcd 3c2d0000.ufs: ufshcd_err_handler started; HBA state eh_fatal; ...
+- ufs_device_wlun 0:0:0:49488: START_STOP failed for power mode: 1, result 40000
+- ufs_device_wlun 0:0:0:49488: ufshcd_wl_runtime_resume failed: -5
+- ufs_device_wlun 0:0:0:49488: runtime PM trying to activate child device 0:0:0:49488 but parent (target0:0:0) is not active
+
+#问题根因
+当 W-LUN 恢复失败时，SCSI 层级中的父设备（包括 scsi_target）可能已被运行时挂起。错误处理程序 `ufshcd_recover_pm_error()` 试图将 W-LUN 设备恢复为活动状态，但由于父设备（target）未激活，导致设置失败。此外，若子设备恢复失败可能导致 HBA 本身被挂起，缺少对 HBA 设备的引用计数保护也加剧了状态管理的混乱。
+
+#解决方案
+1. 在 `ufshcd_err_handling_prepare()` 中增加 `pm_runtime_get_sync(hba->dev)` 调用，确保即使在子设备恢复失败的情况下，HBA 设备在错误恢复期间也保持活动状态。
+2. 在 `ufshcd_recover_pm_error()` 中，显式检查 HBA 和 W-LUN 设备的 `power.runtime_error` 状态，在调用 `pm_runtime_set_active()` 清除错误状态前进行处理。
+3. 在尝试将 W-LUN 设备设置为活动状态前，先确保其父设备 `scsi_target` 已恢复运行（通过 `pm_runtime_get_sync`），修复父子设备状态依赖问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75b9b7e453b4ec9aaaf5801bc2339645cc56bee1

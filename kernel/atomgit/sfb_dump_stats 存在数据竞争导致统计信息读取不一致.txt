@@ -1,0 +1,23 @@
+#标题
+sfb_dump_stats 存在数据竞争导致统计信息读取不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 SFB（Stochastic Fair Blue）队列规则时，通过 `tc -s qdisc show` 等用户态工具读取队列统计信息时，可能会读取到不一致的数据。这是由于统计 dump 操作与数据包处理快速路径之间存在并发访问冲突，尽管通常不会导致系统崩溃，但违反了内核并发访问规则，可能引发 KCSAN（Kernel Concurrency Sanitizer）报告的数据竞争告警。
+
+#主要错误日志
+未知
+
+#问题根因
+在内核 commit edb09eb17ed8 ("net: sched: do not acquire qdisc spinlock in qdisc/class stats dump") 移除了 qdisc/class 统计信息 dump 操作中的自旋锁保护后，`sfb_dump_stats()` 函数仅持有 RTNL 锁运行。此时，该函数读取的统计字段（如 `earlydrop`、`penaltydrop` 等）可能会被数据包处理快速路径（`sfb_enqueue` 等函数）并发修改，导致数据竞争。
+
+#解决方案
+在代码层面添加 `READ_ONCE()` 和 `WRITE_ONCE()` 注解来标记数据竞争。具体修改包括：
+1. 在 `sfb_dump_stats()` 函数中，使用 `READ_ONCE()` 读取 `q->stats` 结构体中的各个统计字段。
+2. 在 `sfb_enqueue()` 及相关辅助函数（如 `increment_one_qlen`、`decrement_one_qlen` 等）中，使用 `WRITE_ONCE()` 对这些统计字段进行写入操作。
+此举既避免了数据竞争，又保持了长期目标——即尽量使 qdisc dump 操作无锁化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c73baa1962c044d0b6ccd47c57922cb9e2a7c962

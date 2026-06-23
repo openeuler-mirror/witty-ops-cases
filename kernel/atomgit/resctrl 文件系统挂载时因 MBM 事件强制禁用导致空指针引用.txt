@@ -1,0 +1,27 @@
+#标题
+resctrl 文件系统挂载时因 MBM 事件强制禁用导致空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持可分配计数器的系统上，使用内核参数 "rdt=!mbmtotal,!mbmlocal" 强制禁用 MBM 事件后，挂载 resctrl 文件系统时触发内核空指针引用，导致系统崩溃。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000008
+RIP: 0010:mbm_cntr_get
+Call Trace:
+rdtgroup_assign_cntr_event
+rdtgroup_assign_cntrs
+rdt_get_tree
+
+#问题根因
+内核参数 "rdt=!mbmtotal,!mbmlocal" 禁用了 X86_FEATURE_CQM_MBM_TOTAL 和 X86_FEATURE_CQM_MBM_LOCAL 特性，导致早期初始化阶段未分配与 MBM 事件相关的每域数据结构。
+然而，resctrl 文件系统初始化代码在检测到系统支持可分配计数器时，会隐式启用 MBM total 和 local 事件。此时，resctrl 假定已启用事件的所有状态数据结构均已就绪，尝试访问未分配的结构体，从而引发空指针引用。
+
+#解决方案
+1. 移除 resctrl 文件系统初始化过程中对 MBM 事件的隐式启用逻辑，改为仅在事件已启用时进行配置。
+2. 在硬件特性检测阶段增加依赖约束：要求支持 X86_FEATURE_ABMC（可分配计数器）的系统必须同时支持 X86_FEATURE_CQM_MBM_TOTAL 或 X86_FEATURE_CQM_MBM_LOCAL。这确保了在进入 resctrl 初始化前，必要的 MBM 数据结构已经完成分配，避免了无事件支持的模式切换问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/be78c5282a68862578b455d9d2dad7fe0d0ccd3b

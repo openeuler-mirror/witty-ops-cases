@@ -1,0 +1,21 @@
+#标题
+tracing: hist_field_name() 截断时返回 NULL 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 histogram 触发器时，若使用了过长的变量名称（VAR_REF），导致全限定名生成过程中发生截断，内核会调用 hist_field_name() 获取字段名称。该函数在截断发生时错误地返回了 NULL 指针，调用者（如 trace_events_hist.c 中的 strcat 或 strcmp 函数）直接对该返回值进行解引用，从而引发 NULL 指针解引用错误，可能导致内核 panic 或 oops。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 hist_field_name() 在处理 VAR_REF/EXPR 类型的完全限定名时，使用 snprintf 拼接 system、event_name 和 name。当拼接后的字符串长度超过缓冲区大小（sizeof(full_name)）时，snprintf 返回值指示发生了截断。
+原代码逻辑在检测到截断（len >= sizeof(full_name)）时直接返回 NULL，跳过了函数末尾将 NULL 指针转换为空字符串（""）的保护逻辑。由于调用者（如 strcat 和 strcmp）未对 NULL 返回值进行防护，直接对其进行解引用操作，导致了 NULL 指针解引用问题。虽然 system 和 event_name 有长度限制，但来自 trigger 字符串解析的 field name（kstrdup）没有长度上限，因此过长的变量名可触发此路径。
+
+#解决方案
+修改 hist_field_name() 函数中的截断处理逻辑。不再在检测到截断时直接返回 NULL，而是仅在未发生截断（len < sizeof(full_name)）时将 field_name 指向 full_name。若发生截断，field_name 保持为初始值（即空字符串 ""），确保函数永不返回 NULL，从而避免调用者发生空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc1f43679127388f51b8ecde5a977c4ca99ded0d

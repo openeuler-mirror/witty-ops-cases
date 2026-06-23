@@ -1,0 +1,22 @@
+#标题
+trace子系统结构体trace_iterator引发KABI一致性破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核trace模块在引入补丁修复wait_on_pipe()竞争问题后，因修改了struct trace_iterator结构体成员变量定义，破坏了内核ABI（KABI）一致性。这可能导致依赖该结构体原有布局的内核模块或跟踪工具出现兼容性错误、加载失败或运行时异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复wait_on_pipe()竞争问题的补丁（Fixes: 2aa043a55b9a）中，向struct trace_iterator结构体新增了`closed`和`wait_index`成员变量。这些新增成员直接插入结构体中，改变了结构体的内存布局与大小，破坏了内核ABI的稳定性要求。此外，这些变更还引入了由KABI变更导致的其他关联问题。
+
+#解决方案
+利用内核KABI维护机制提供的宏定义修复结构体布局：
+1. 使用`KABI_FILL_HOLE`宏封装`closed`成员，将其填充到结构体预留的空洞中，避免改变结构体大小。
+2. 使用`KABI_REPLACE`宏替换`wait_index`成员，将原有预留的`long`类型字段替换为`atomic_t`类型，在保证结构体布局不变的前提下实现功能扩展。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/da9280f0c8c9a043c8523d8e2534417b6175fdf7

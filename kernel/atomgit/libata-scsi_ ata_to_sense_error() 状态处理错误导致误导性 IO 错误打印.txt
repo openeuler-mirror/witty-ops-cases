@@ -1,0 +1,28 @@
+#标题
+libata-scsi: ata_to_sense_error() 状态处理错误导致误导性 IO 错误打印
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SCSI 设备命令失败且无法获取 Sense Data（例如 NCQ 命令读日志 10h 失败，或非 NCQ 命令 REQUEST SENSE EXT 失败）时，内核会打印完全误导性的 "Unaligned write command" 错误日志。该问题表现为：即使发起的是读操作（如 Read(10)），系统日志依然报错提示为“非对齐写命令”，导致用户或运维人员无法定位真实的故障原因。
+
+#主要错误日志
+sd 0:0:0:0: [sda] tag#12 FAILED Result: hostbyte=DID_OK driverbyte=DRIVER_OK cmd_age=0s
+sd 0:0:0:0: [sda] tag#12 Sense Key : Illegal Request [current]
+sd 0:0:0:0: [sda] tag#12 Add. Sense: Unaligned write command
+sd 0:0:0:0: [sda] tag#12 CDB: Read(10) 28 00 00 00 10 00 00 00 08 00
+I/O error, dev sda, sector 4096 op 0x0:(READ) flags 0x80700 phys_seg 1 prio class 0
+
+#问题根因
+Commit 8ae720449fca ("libata: whitespace fixes in ata_to_sense_error()") 在进行空白符修复时，无意中将 `0x40` (ATA_DRDY) 条目添加到了 `stat_table` 数组中。该条目将状态为 ATA_DRDY 的失败 qc（queued command）映射为 Sense Key ILLEGAL REQUEST 和 Additional Sense Code UNALIGNED WRITE COMMAND。
+当失败命令缺少 Sense Data 且错误字段在 `sense_table` 中无匹配项时，代码会回退使用 `stat_table` 进行状态解析。由于错误添加了 ATA_DRDY 条目，导致系统在未知错误场景下错误地返回了“非对齐写命令”错误，掩盖了真实的故障信息。
+
+#解决方案
+修改 `drivers/ata/libata-scsi.c` 中的 `stat_table` 数组：
+1. 删除错误添加的 `0x40` (ATA_DRDY) 条目。
+2. 删除 `0x08` (ATA_DRQ) 条目，因为使用“奇偶校验错误”描述也具有误导性。
+3. 修复后，对于此类无法确定具体原因的错误，统一默认返回 ABORTED COMMAND 且不带额外的 Sense Code（即 "No additional sense information"），避免输出误导性信息。同时使用宏定义替代硬编码值以提高可读性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7db69901b56ef41a8a13bd749c44d442fad91ebb

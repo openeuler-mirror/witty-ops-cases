@@ -1,0 +1,20 @@
+#标题
+ksmbd: __close_file_table_ids 函数存在 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行 ksmbd 文件关闭操作时，若多线程并发访问，可能触发 Use-After-Free（UAF）漏洞，导致内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__close_file_table_ids` 函数中，当一个线程通过 `__ksmbd_close_fd` 销毁文件指针的同时，另一个线程仍持有该指针的引用。现有代码对 `fp->refcount` 的检查机制不足以防止并发导致的竞争条件，从而导致 Use-After-Free。
+
+#解决方案
+在遍历并移除文件指针的关键代码段周围增加 `ft->lock` 写锁保护。具体修改为：在获取下一个 idr 条目、判断是否跳过、减少引用计数、从 idr 中移除以及修改 volatile_id 的操作期间持有锁。这防止了两个线程同时通过 `__close_file_table_ids` 或其他已使用该锁的函数获取同一个文件指针，从而避免 UAF。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2a45a5296363f0e3c29e7e42def85155d9a19628

@@ -1,0 +1,20 @@
+#标题
+pmdomain: imx: Fix reference count leak in imx_gpc_probe()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 imx_gpc_probe() 函数执行过程中，调用 of_get_child_by_name() 获取设备节点 "pgc" 时，会增加该节点的引用计数。若后续代码路径中未正确调用 of_node_put() 释放节点（特别是在错误处理路径或正常退出时），会导致设备节点的引用计数泄漏，造成内核资源无法正确释放。
+
+#主要错误日志
+未知
+
+#问题根因
+of_get_child_by_name() 函数返回的设备节点指针 pgc_node 带有增加的引用计数。原代码逻辑中缺乏对 pgc_node 进行 of_node_put() 的处理，无论是正常流程结束还是错误流程退出，均未释放该引用，从而导致引用计数泄漏。
+
+#解决方案
+使用 `__free(device_node)` 属性声明 pgc_node 变量。当变量超出作用域时，编译器会自动插入调用 of_node_put() 的清理代码，从而自动释放引用计数，避免了手动管理遗漏带来的泄漏风险，同时也简化了错误处理路径的代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c11d2f967d94f9ce8a8c00496c8e300f663d4dbe

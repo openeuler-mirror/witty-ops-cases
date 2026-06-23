@@ -1,0 +1,28 @@
+#标题
+cifs: SMB2+ 连接 NetBIOS 会话建立失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 SMB2+ 协议连接服务器时，NetBIOS 会话建立阶段失败，导致无法正常建立连接或随后的协商协议流程异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ip_rfc1001_connect` 中构建 NetBIOS 会话请求包时，代码逻辑错误地使用了 SMB 头结构指针 (`struct smb_hdr *`) 来处理 RFC1002 格式的数据包。
+具体表现为：
+1. 长度计算错误：使用了错误的 `len` 计算方式（包含结构体偏移），导致发送的数据长度不正确。
+2. 数据包格式错误：错误地使用了 `smb_buf_length` 字段来设置 RFC1002 的头信息，破坏了 `type`（类型）、`flags`（标志位）和 `length`（长度）字段的正确布局。
+3. 发送接口不当：调用的 `smb_send` 函数内部可能会修改内存页结构，这对仅存在于栈上的 RFC1002 请求包是不安全的。
+
+#解决方案
+重构 `ip_rfc1001_connect` 函数中的数据包构建与发送逻辑：
+1. 移除对 `struct smb_hdr` 的强制类型转换依赖，直接操作 `struct rfc1002_session_packet` 结构体字段。
+2. 修正长度计算逻辑，严格按照 RFC1002 标准设置 `type`、`flags` 和 `length` 字段。
+3. 改用 `smb_send_kvec` 函数发送数据，通过 `iov_iter_kvec` 构建消息向量，避免 `smb_send` 带来的内存安全问题。
+4. 增加发送结果校验，若发送失败或发送字节数不匹配，返回 `-ECONNABORTED` 等相应错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e76f1e400270af862231294133a195600a23e47f

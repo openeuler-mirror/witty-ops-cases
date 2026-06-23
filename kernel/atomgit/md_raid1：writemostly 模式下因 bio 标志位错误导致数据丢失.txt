@@ -1,0 +1,20 @@
+#标题
+md/raid1：writemostly 模式下因 bio 标志位错误导致数据丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 writemostly 属性的 raid1 设备上执行写操作时，数据丢失。其内在表现为原本应执行的写操作被内核错误地识别为读操作。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `alloc_behind_master_bio()` 函数中，调用 `bio_alloc_bioset()` 分配新的 bio 时，直接将 bi_opf 参数设为 0。这导致后续 `raid1_write_request()` 克隆该 bio 时，克隆出的 bio 的 bi_opf 仍为 0，提交该 bio 最终变成了读操作，从而导致写数据丢失。
+
+#解决方案
+修改 `drivers/md/raid1.c` 中 `alloc_behind_master_bio()` 函数，在调用 `bio_alloc_bioset()` 时，将原始 bio 的 bi_opf 标志位传递进去，确保新分配的 behind_bio 继承正确的操作标志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9f159597c0b889e271a158bddc8613bf6ec7c2ef

@@ -1,0 +1,20 @@
+#标题
+drm/amdgpu/gfx10: KGQ 初始化时 wptr 重置不全导致潜在故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMDGPU GFX10 模块初始化图形队列（KGQ）时，写指针（wptr）重置操作不完整。由于 wptr 本应是 64 位值，但初始化代码仅将其低 32 位清零，高 32 位保留了随机值，导致 ring buffer 的写指针初始状态错误。这可能引发 GPU 图形计算队列功能异常、挂起或硬件调度错误。
+
+#主要错误日志
+未知
+
+#问题根因
+wptr 是一个 64 位的值，在队列初始化重置 ring 时，原代码使用 `*ring->wptr_cpu_addr = 0` 仅更新了 32 位数据，未能将完整的 64 位值清零。这与 KCQ（Kernel Compute Queue）的处理逻辑不一致，导致 wptr 残留脏数据。
+
+#解决方案
+修改 `drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c` 文件中的 `gfx_v10_0_gfx_init_queue` 函数，将原来的直接赋值操作 `*ring->wptr_cpu_addr = 0` 修改为 `atomic64_set((atomic64_t *)ring->wptr_cpu_addr, 0)`，确保能完整更新 64 位的 wptr 值，使其与 KCQ 的处理方式保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e8158a66d017e7914cca0e68776f209291afcc5e

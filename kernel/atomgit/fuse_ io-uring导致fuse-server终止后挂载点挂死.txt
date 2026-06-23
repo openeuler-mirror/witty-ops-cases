@@ -1,0 +1,23 @@
+#标题
+fuse: io-uring导致fuse-server终止后挂载点挂死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 fuse-server 进程终止时，如果 fuse-client 或内核侧仍有排队中的 URING_CMDs，这些命令会持有 fuse 连接使用的 struct file 的引用。这导致 `fuse_dev_release()` 无法被调用，进而导致挂载点处于挂起状态无法卸载。
+
+#主要错误日志
+未知
+
+#问题根因
+当 fuse-server 终止时，排队中的 URING_CMDs 保留了对其使用的 struct file 的引用。由于这些命令不可取消，引用计数无法归零，导致 `fuse_dev_release()` 无法执行，最终造成挂载点挂死。
+
+#解决方案
+修改 URING_CMDs 的处理机制使其变为可取消的。
+1.  在 `fuse_uring_cmd` 中增加对 `IO_URING_F_CANCEL` 标志的处理，调用 `fuse_uring_cancel` 函数来处理取消操作。
+2.  引入 `FRRS_TEARDOWN` 和 `FRRS_RELEASED` 状态，在清理条目时不立即释放内存，而是将其移动到 `ent_released` 链表中，以防止在 `IO_URING_F_CANCEL` 并发访问时发生竞态条件。
+3.  通过 `io_uring_cmd_mark_cancelable` 标记命令为可取消，允许在服务端终止时正确释放资源，从而让 `fuse_dev_release()` 正常执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6708b7506a93182f6aa800d489dc2212635e648d

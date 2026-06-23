@@ -1,0 +1,20 @@
+#标题
+wifi: rsi: fix kthread lifetime race between self-exit and external-stop
+
+#内核版本
+OLK-6.6
+
+#问题现象
+RSI驱动在销毁内核线程时存在竞态条件。若内核线程通过 self-exit (kthread_complete_and_exit) 先退出，随后外部调用 kthread_stop()，则会触发 Use-After-Free (UAF)，导致内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动同时使用了 kthread_complete_and_exit（自我退出）和 kthread_stop（外部停止）两种机制来终止线程。通常 kthread_stop 先执行不会出问题，但在极少数情况下，线程先执行了 kthread_complete_and_exit 退出并释放了 kthread 对象，随后 kthread_stop 试图访问已释放的对象，从而引发 UAF。
+
+#解决方案
+移除 rsi_kill_thread 函数中的 kthread_stop() 调用，改为使用 wait_for_completion() 等待线程自我退出完成。这确保了线程生命周期管理的单一性，避免了自我退出与外部停止之间的竞态风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/800dba93c7183e7b998b4d5f6a89e477d3f41953

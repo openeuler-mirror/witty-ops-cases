@@ -1,0 +1,20 @@
+#标题
+ext4 事务 credits 计算错误导致 jbd2 元数据脏写警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 2k ext4 文件系统上长时间运行（90小时以上）generic/750 测试用例时，触发内核警告。具体表现为系统检测到运行中的事务 credits 不足，导致元数据脏写操作失败并抛出警告信息。
+
+#主要错误日志
+WARNING in jbd2_journal_dirty_metadata() complaining that there are not enough credits in the running transaction started in ext4_do_writepages()
+
+#问题根因
+`ext4_do_writepages()` 中的代码存在竞态条件。在计算 extent tree 修改所需的 credits 数量与实际修改 extent tree 的时间点之间，extent tree 的结构可能发生了变化（例如深度增加）。这导致实际修改所需的 credits 数量超过了初始计算的值，从而引发事务 credits 不足的警告。原代码使用当前树的深度（`ext_depth(inode)`）进行计算，未考虑到计算与执行间树结构可能变深的最坏情况。
+
+#解决方案
+修改 `ext4_ext_index_trans_blocks()` 函数，将 credits 计算逻辑从基于“当前树深度”改为基于“最大树深度”（`EXT4_MAX_EXTENT_DEPTH`）。此举假设最坏情况下的树深度进行 credit 预留，确保即使在竞态条件下树变深，预留的 credits 也足够完成修改。虽然这可能会降低系统中可并行写入者的数量（因为预估的 credits 变大），但保证了系统的安全性与稳定性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/043fe0f10df038f3d05e3753e6d23e3d7d004eac

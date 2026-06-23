@@ -1,0 +1,27 @@
+#标题
+Zhaoxin/Centair 处理器 ZDI/ZPI 错误日志可读性差
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Zhaoxin（兆芯）或 Centair CPU 上发生 ZDI（片间互连）或 ZPI（片间互连）错误时，系统触发了 SCI 或 NMI 中断，但默认的 apei 驱动程序打印的错误信息不易阅读和分析，无法清晰区分 ZDI 错误与 ZPI 错误，也缺乏对具体错误类型的详细解释。
+
+#主要错误日志
+- 推断（基于修复代码）：general processor error(zpi error)
+- 推断（基于修复代码）：general processor error(zdi error)
+- 推断（基于修复代码）：bus number %llx device number %llx function number 0
+- 推断（基于修复代码）：apic id %lld error_type: %s
+
+#问题根因
+UEFI 规范未定义 ZDI/ZPI 错误的专用 Section Type，BIOS 按照 Generic Processor Error Section 格式填充错误信息。然而，内核默认的 apei 驱动程序仅打印通用的 Generic Processor Error 信息，未针对 Zhaoxin/Centair 厂商定义的特定字段（如 requestor_id 用于区分 ZDI/ZPI，responder_id 用于标识错误类型）进行解析，导致输出信息晦涩难懂。
+
+#解决方案
+在 `drivers/firmware/efi/cper.c` 中增加针对 Zhaoxin/Centair 厂商的 ZDI/ZPI 错误解码逻辑：
+1. 新增 `zdi_zpi_err_type_strs` 字符串数组，将错误码映射为具体的可读字符串（如 "Training Error Status", "Data Link Protocol Error Status" 等）。
+2. 新增 `cper_print_proc_generic_zdi_zpi` 函数，检测 CPU 厂商是否为 Zhaoxin 或 Centair。
+3. 根据 `requestor_id` 字段区分错误源：值为 7 对应 ZPI 错误，值为 6 对应 ZDI 错误。
+4. 解析并打印总线号、设备号、APIC ID 以及具体的错误类型字符串，提升日志的可读性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e5aced3deac00b9a88a674a1acfa3e0cf4e1269e

@@ -1,0 +1,23 @@
+#标题
+shmem 大页 swapin 导致数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在针对 shmem 大页（large folios）进行换出或换入操作时，可能发生系统挂起或数据损坏。
+在使用 `huge=within_size` 参数挂载 tmpfs 时更容易复现此问题。
+
+#主要错误日志
+未知
+
+#问题根因
+Swap readahead 机制可能会异步地将 order 0 的 folio 换入到 swap cache 中，而此时 shmem mapping 中仍然存储着大页的 swap entry（large swap entry）。
+当从 swap cache 获取该 order 0 folio 并插入到 shmem mapping 时，未对原存储的大 swap entry 进行拆分，导致原本的大 swap entry 被覆盖，从而引发数据损坏。
+
+#解决方案
+在 `shmem_swapin_folio` 函数中增加了阶数校验逻辑：当从 swap cache 获取到 folio 后，检查其 order 是否与 shmem mapping 中存储的 swap entry order 一致。
+若两者阶数不匹配（如 swap readahead 异步换入了 order 0 folio，但 mapping 中是大 swap entry），则调用 `shmem_split_large_entry` 函数拆分该大 swap entry，并根据对齐偏移重新计算新的 swap entry，从而防止数据覆盖和损坏。同时，在后续的校验中增加了对 order 一致性的检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/08f6a6daf85785f18be83e4d8366963f2029eea3

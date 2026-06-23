@@ -1,0 +1,26 @@
+#标题
+megaraid_sas: 修复潜在的循环锁死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核检测到可能的循环锁定依赖关系，触发 `possible circular locking dependency detected` 警告。这是由于 `instance->reset_mutex` 与 `shost->scan_mutex` 在不同 CPU 上的获取顺序不一致导致的潜在死锁风险。
+
+#主要错误日志
+[  ] possible circular locking dependency detected
+      CPU0                    CPU1
+      ----                    ----
+ lock(&instance->reset_mutex);
+                              lock(&shost->scan_mutex);
+                              lock(&instance->reset_mutex);
+ lock(&shost->scan_mutex);
+
+#问题根因
+在 `megasas_aen_polling` 函数处理流程中，代码持有 `instance->reset_mutex` 锁的情况下调用 `megasas_remove_scsi_device` 函数。该函数内部会进一步获取 `shost->scan_mutex` 锁。而在系统的其他执行路径（如 SCSI 扫描）中，可能先持有 `shost->scan_mutex` 再尝试获取 `instance->reset_mutex`。这种锁获取顺序的不一致导致了循环锁定依赖，可能引发死锁。
+
+#解决方案
+在移除 SCSI 设备之前临时释放 `instance->reset_mutex` 锁，待设备移除操作完成后再重新获取该锁。以此打破锁的嵌套持有顺序，消除循环依赖风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/88318e0fa24cbd4e60ebc7224ea1edd686f2d8be

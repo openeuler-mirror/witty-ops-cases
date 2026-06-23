@@ -1,0 +1,39 @@
+#标题
+ipvs: IPv4 路由错误路径空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IPVS NAT 模式下，当目的地址路由查找失败并进入错误处理路径时，触发内核空指针引用，导致主机崩溃。具体表现为 KASAN 报告 null-ptr-deref，系统调用栈显示在处理 ICMP 目标不可达消息时崩溃。
+
+#主要错误日志
+KASAN: null-ptr-deref in range [0x0000000000000328-0x000000000000032f]
+CPU: 1 PID: 12732 Comm: syz.1.3469 Not tainted 6.6.114 #2
+RIP: 0010:__in_dev_get_rcu include/linux/inetdevice.h:233
+RIP: 0010:fib_compute_spec_dst+0x17a/0x9f0 net/ipv4/fib_frontend.c:285
+Call Trace:
+ <TASK>
+ spec_dst_fill net/ipv4/ip_options.c:232
+ __ip_options_compile+0x13a1/0x17d0 net/ipv4/ip_options.c:330
+ ipv4_send_dest_unreach net/ipv4/route.c:1252
+ ipv4_link_failure+0x702/0xb80 net/ipv4/route.c:1265
+ dst_link_failure include/net/dst.h:437
+ __ip_vs_get_out_rt+0x15fd/0x19e0 net/netfilter/ipvs/ip_vs_xmit.c:412
+
+#问题根因
+在 `__ip_vs_get_out_rt()` 函数中，当路由查找失败时进入 `err_unreach` 标签处理错误路径。此时直接调用 `dst_link_failure(skb)`，但 `skb->dev` 尚未被赋值（为 NULL）。
+后续调用链 `ipv4_link_failure() -> ipv4_send_dest_unreach() -> __ip_options_compile() -> fib_compute_spec_dst()` 中，`fib_compute_spec_dst()` 函数直接解引用了 `skb->dev`，导致空指针引用崩溃。
+该问题是由于早期相关补丁修复不完整引起：虽然 `commit 0113d9c9d1cc` 尝试修复 `ipv4_link_failure` 中的空指针问题，但未覆盖后续调用链中 `fib_compute_spec_dst()` 对 `skb->dev` 的直接访问。
+
+#解决方案
+在 `__ip_vs_get_out_rt()` 函数的 `err_unreach` 错误处理路径中，调用 `dst_link_failure(skb)` 之前，检查并设置 `skb->dev`。
+具体修复代码：
+```c
+if (!skb->dev)
+    skb->dev = skb_dst(skb)->dev;
+```
+该修复参考了 IPv6 类似问题的修复方案（commit 326bf17ea5d4），确保在调用链深处访问 `skb->dev` 之前已正确从路由缓存中获取设备信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e2c7e2ef2c4e036bfe59ed69bfeff11a7cb0e3e1

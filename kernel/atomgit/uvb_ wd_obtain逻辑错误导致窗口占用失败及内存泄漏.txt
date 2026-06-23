@@ -1,0 +1,32 @@
+#标题
+uvb: wd_obtain逻辑错误导致窗口占用失败及内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在并发场景下，UVB窗口占用逻辑判断错误，导致窗口占用失败或内存映射(memremap)未正确释放，引发内存泄漏。
+2. 调用 `register_local_cis_func` 注册函数时，因链表节点未初始化，可能导致链表操作异常或内核崩溃。
+3. `odf_separate_name` 函数在处理特定边界字符串时存在判断缺陷，可能误报溢出错误。
+
+#主要错误日志
+uvb window obtain map failed
+obtain window failed
+sync call obtain window failed
+
+#问题根因
+1. **指针传参错误**：`uvb_occupy_window` 函数参数 `wd_obtain` 定义为指针而非二级指针，导致调用者无法获取映射后的地址，且函数内部直接覆盖了局部指针变量，造成内存映射无法被外部释放（内存泄漏）。
+2. **锁与业务逻辑错误**：原子锁 `atomic_cmpxchg` 的释放逻辑与窗口占用校验逻辑耦合不当，原代码在校验失败时未释放锁，且成功路径下打印信息使用了错误的变量；同时 `lock.counter` 直接赋值违反原子变量操作规范。
+3. **链表初始化缺失**：`register_local_cis_func` 中分配的节点结构体未执行 `INIT_LIST_HEAD` 初始化链表头。
+4. **边界检查缺陷**：`odf_separate_name` 中的长度检查逻辑未考虑字符串结尾的 null 终止符，导致在缓冲区刚好填满时错误地返回溢出。
+
+#解决方案
+1. **修正函数传参逻辑**：将 `uvb_occupy_window` 的 `wd_obtain` 参数改为二级指针 `u64 **wd_obtain`，确保函数内 `memremap` 的结果能正确回传给调用者，并在错误处理路径正确调用 `memunmap`。
+2. **修复原子锁与业务逻辑**：
+   - 使用 `atomic_set` 替代对原子变量 `counter` 的直接赋值。
+   - 调整 `uvb_occupy_window` 中锁的释放流程，确保在获取窗口成功或失败的所有分支中都能正确释放原子锁，并修复成功打印信息的变量引用。
+3. **补全初始化流程**：在 `register_local_cis_func` 分配内存后立即调用 `INIT_LIST_HEAD` 初始化链表节点。
+4. **修正边界检查条件**：修正 `odf_separate_name` 中的溢出判断逻辑，增加对字符串终止符的检查，避免正常输入被误判为溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d5a31668569101f239c9aea71361737a7d66bb0b

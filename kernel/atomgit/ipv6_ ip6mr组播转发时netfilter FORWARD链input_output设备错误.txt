@@ -1,0 +1,20 @@
+#标题
+ipv6: ip6mr组播转发时netfilter FORWARD链input/output设备错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+IPv6组播路由转发场景下，netfilter的FORWARD链钩子函数被调用时，传入的入接口（in）和出接口（out）设备均显示为同一个设备（即出接口设备），导致防火墙规则匹配异常。通过`ip6tables -A FORWARD -j LOG`观测日志，发现`IN=`和`OUT=`字段显示相同的网络设备名（例如 `IN=v5 OUT=v5`），而预期应为不同的入接口和出接口。该行为与IPv4组播路由实现不一致。
+
+#主要错误日志
+[forw]IN=v5 OUT=v5 [...]
+
+#问题根因
+在`ip6mr_forward2`函数中，调用`NF_HOOK`触发`NF_INET_FORWARD`钩子时，skb->dev已经被代码逻辑修改为组播虚拟接口设备（vif_dev）。代码原样传递`skb->dev`作为入接口参数，导致内核netfilter模块误认为入接口也是vif_dev，从而出现`in=out`的错误报告。
+
+#解决方案
+在修改`skb->dev`之前，先将其原始值保存到局部变量`indev`中。随后在调用`NF_HOOK`时，显式传递该缓存的`indev`作为入接口，传递更新后的`skb->dev`作为出接口，确保FORWARD链收到正确的入/出设备信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/96df4c4dd12c892251b662a4bde7cc4032cab6cd

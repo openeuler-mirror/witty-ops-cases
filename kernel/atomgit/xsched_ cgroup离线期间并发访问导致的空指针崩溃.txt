@@ -1,0 +1,28 @@
+#标题
+xsched: cgroup离线期间并发访问导致的空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 xsched cgroup 进入 offline/free 流程时，定时器回调、工作队列和入队路径可能并发访问部分已销毁的组状态，导致内核发生 NULL 指针解引用。
+
+#主要错误日志
+- `XSCHED_ERR("xse is null @ %s\n", __func__);`
+- `XSCHED_ERR("the sub_rq this cgroup-type xse [%d] owned cannot be NULL @ %s\n", xse->tgid, __func__);`
+- `XSCHED_WARN("the rq cannot be NULL @ %s\n", __func__);`
+- `XSCHED_WARN("the parent rq this xse [%d] attached cannot be NULL @ %s\n", xse->tgid, __func__);`
+- `XSCHED_WARN("the sub_rq this cgroup-type xse [%d] owned cannot be NULL @ %s\n", xse->tgid, __func__);`
+
+#问题根因
+css_get() 仅保护 cgroup 不被释放，但无法阻止 xcu_css_offline() 并发执行。在 cgroup 进入 offline/free 序列后，相应的 xsched_group 字段已被部分销毁，此时定时器回调、工作队列和入队路径仍在运行，导致并发访问已销毁的状态引发空指针崩溃。
+
+#解决方案
+1. 在 xsched_group 结构体中引入显式的 `is_offline` 标志位以标记离线状态。
+2. 在 quota 超时和 unthrottle 路径中增加 `is_offline` 检查，防止异步路径操作已离线的组。
+3. 严格分离离线与释放逻辑：将组反初始化和列表移除操作移至 `css_free()` 路径执行。
+4. 使用 `css_get()`/`css_put()` 保护 css 生命周期。
+5. 在入队和完整性检查路径中增加对 cfs_rq 的 NULL 检查，防止访问异常指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/34a49359681b6f1599ef19fe830104d2da64309a

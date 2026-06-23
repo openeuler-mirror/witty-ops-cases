@@ -1,0 +1,30 @@
+#标题
+fuse: 并行 DIO 写入导致 ff->iomode 状态错误变更
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 FUSE 并行 Direct I/O（dio）写入操作时，由于错误地调用了 `fuse_file_uncached_io_start/end` 接口，导致文件结构体 `fuse_file` 中的 `ff->iomode` 状态被意外修改。该问题可能引发内存释放警告（如 `evict_inode` 时 `iocachectr` 不为 0）或导致后续文件 I/O 状态管理混乱。
+
+#主要错误日志
+推断：内核日志中可能出现如下警告信息（基于代码中的 WARN_ON）：
+`WARNING: CPU: ... at fs/fuse/inode.c:... fuse_evict_inode+0x.../0x... [fuse]`
+或
+`WARNING: CPU: ... at fs/fuse/iomode.c:... fuse_file_cached_io_release+0x.../0x... [fuse]`
+
+#问题根因
+`fuse_file_uncached_io_{start,end}` 接口职责混淆。该接口被设计用于两种场景：
+1. Passthrough 模式下的 open/release：需要同时修改 `fi->iocachectr` 引用计数和 `ff->iomode` 状态。
+2. 并行 DIO 写入路径：仅需修改 `fi->iocachectr` 引用计数，不应改变 `ff->iomode` 状态（因为该引用不会持续到文件 release）。
+原有代码在并行 DIO 写入路径中错误调用了该接口，导致 `ff->iomode` 被意外置为 `IOM_UNCACHED` 又被重置，破坏了状态机逻辑。
+
+#解决方案
+重构 I/O 模式管理接口，分离关注点：
+1. 提取并新增 `fuse_inode_uncached_io_{start,end}` 辅助函数，仅负责操作 inode 级别的 `fi->iocachectr` 计数，供并行 DIO 写入路径调用。
+2. 将原有的 `fuse_file_uncached_io_{start,end}` 重命名为 `fuse_file_uncached_io_{open,release}`，明确其专用于 Passthrough 文件打开与释放场景，内部调用上述新增的 inode 辅助函数并处理 `ff->iomode` 状态变更。
+3. 同步重命名 `fuse_file_cached_io_start` 为 `fuse_file_cached_io_open` 以保持命名一致性。
+4. 在 `fuse_evict_inode` 中增加 `WARN_ON(fi->iocachectr != 0)` 检查，以便及时发现计数泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ceb0e24424448fa5bb1e6912c406da01395550ff

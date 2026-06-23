@@ -1,0 +1,20 @@
+#标题
+iommu/ummu: map_pages 错误回退路径 xarray 索引计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `map_pages()` 函数执行过程中，若发生错误触发回退逻辑，会使用错误的索引值删除 xarray 中的条目。当 IOVA 范围的起始偏移量不为 0 时，错误回退路径无法正确清除之前已插入 xarray 的条目，导致 xarray 中残留无效条目，可能引发内存泄漏或后续 IOVA 映射管理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `map_pages()` 的错误回退路径（`err_unmap` 标签处）中，代码直接使用循环计数器 `j` 作为 `xa_erase()` 的索引。这与成功路径中的插入逻辑不一致，成功路径是根据 `iova_bitmap_offset(slot, iova)` 计算出的偏移位置来插入条目的。当 IOVA 起始地址非零偏移时，直接使用 `j` 会导致索引计算错误，无法删除正确的条目。
+
+#解决方案
+修改 `map_pages()` 函数中 `err_unmap` 标签下的 `xa_erase()` 调用，将索引参数从 `j` 修正为 `iova_bitmap_offset(slot, iova) + j`，确保回退删除时的索引计算逻辑与正常插入时的逻辑保持一致，从而正确清理已分配的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/012a6ecb836d15c1f2839577e97e010382723ced

@@ -1,0 +1,31 @@
+#标题
+netem: slot配置参数校验缺失导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+配置 netem qdisc 的 slot 功能时，若传入非法参数（如负数延迟、负数限制值或最小延迟大于最大延迟），内核未进行有效性校验直接应用，导致以下异常行为：
+1. 延迟参数出现下溢，导致 `get_slot_next()` 产生垃圾时间间隔值。
+2. 负数限制值（max_packets/max_bytes）导致每个 slot 的第一个包就触发 `packets_left/bytes_left <= 0` 条件，致使 slot 的速率限制功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+netem 模块在处理 slot 配置时缺少对输入参数的合法性校验。
+1. 对于 `min_delay`、`max_delay`、`dist_delay`、`dist_jitter` 等时间参数，未检查是否为负数或大小关系是否合理。
+2. 对于 `max_packets`、`max_bytes` 等限制参数，未检查是否为负数。
+这些非法参数在后续计算中引发逻辑错误（如整数下溢或判断条件误触发），破坏了流量调度的预期行为。
+
+#解决方案
+在 `netem_change` 函数中增加 `validate_slot` 校验函数调用，对 slot 配置属性进行严格检查。
+具体修复措施包括：
+1. 检查 `min_delay` 和 `max_delay` 是否为负数。
+2. 检查 `min_delay` 是否大于 `max_delay`。
+3. 检查 `dist_delay` 和 `dist_jitter` 是否为负数。
+4. 检查 `max_packets` 和 `max_bytes` 是否为负数。
+若上述任一条件满足，则通过 `NL_SET_ERR_MSG_ATTR` 返回 `-EINVAL` 错误，拒绝配置生效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6428c15e7921a4bc917c1cd59056e2757fe96749

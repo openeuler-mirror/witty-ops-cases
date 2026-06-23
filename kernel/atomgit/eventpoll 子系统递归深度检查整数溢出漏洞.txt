@@ -1,0 +1,20 @@
+#标题
+eventpoll 子系统递归深度检查整数溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 eventpoll 子系统中，当执行递归检查（如涉及嵌套 epoll 文件描述符）时，若触发特定的递归路径导致 `ep_loop_check_proc` 返回 `INT_MAX`，会在调用点 `result = max(result, ep_loop_check_proc(...) + 1)` 处发生整数溢出。此溢出将导致递归深度检查机制失效，可能引发内核栈溢出或破坏内存完整性。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ep_loop_check_proc` 在检测到循环或递归深度过深时，错误地使用了 `INT_MAX` 作为错误返回值。在调用该函数的代码逻辑中，会对返回值执行 `+1` 操作（`result = max(result, ep_loop_check_proc(ep_tovisit, depth + 1) + 1)`）。当返回值为 `INT_MAX` 时，加一操作导致整数溢出，结果变为负数或极小值，使得后续的 `result > EP_MAX_NESTS` 检查条件失效，从而破坏了原本设计的递归深度限制保护机制。
+
+#解决方案
+修改 `ep_loop_check_proc` 函数的错误返回值，将原来的 `INT_MAX` 替换为 `EP_MAX_NESTS+1`。由于合法的深度返回值不会超过 `EP_MAX_NESTS`，使用 `EP_MAX_NESTS+1` 既能作为明显的错误标识，又能保证在调用点执行 `+1` 操作时不会发生整数溢出，从而确保递归深度检查逻辑的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc82a9c14535f377653c272399945b1211baf8bd

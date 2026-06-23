@@ -1,0 +1,33 @@
+#标题
+udma驱动流注销与中断锁相关问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在驱动移除或重置过程中，可能出现与流注销相关的异常，导致潜在的内存访问错误或资源未正确释放。
+2. 在并发场景下，若`jfc`、`jfr`、`jfs`队列操作未在关中断环境下进行锁保护，可能引发锁竞争或死锁问题。
+3. 驱动处理 Completion 事件时，若找不到对应的 jfc，解锁顺序错误可能导致内核崩溃或不可预期的行为。
+
+#主要错误日志
+- "Completion event for bogus jfcn %lu.\n"（推断，源自 `udma_jfc.c` 上下文）
+- "current mm released.\n"（推断，源自 `udma_ctx.c`）
+- "msg len(%u) is invalid.\n"（推断，源自 `udma_eq.c`）
+- "check tp status failed, ret(%d).\n"（推断，源自 `udma_eq.c`）
+
+#问题根因
+1. **锁与中断安全问题**：`udma_poll_jfc`、`udma_post_jfr_wr`、`udma_post_sq_wr` 等函数在非 lock_free 模式下仅使用了 `spin_lock`，未关闭中断。在某些调用上下文（如中断上下文）中，这可能引发死锁或数据竞争。
+2. **流注销资源访问顺序错误**：在 `udma_remove` 和 `udma_reset_uninit` 流程中，`udma_unregister_event` 调用时机过晚（在 `udma_unset_ubcore_dev` 之后）。此时设备上下文可能已失效，若事件处理函数仍在访问设备资源，将导致访问已释放内存的问题。
+3. **解锁顺序错误**：在 `udma_jfc_completion` 中，当查找 jfc 失败时，代码在打印警告日志后才进行解锁操作，而在正常路径下锁已释放。这种不对称的锁处理可能导致状态不一致。
+4. **参数掩码定义错误**：`UDMA_PID_MASK` 定义为 24（十进制），而根据上下文应为一个 24 位的掩码（0xFFFFFF），导致 PID 提取逻辑错误。
+5. **状态检查缺失**：`udma_ctrlq_eid_update` 在处理 EID 更新请求前未检查设备状态，若设备处于非正常状态（如复位中），可能导致后续操作异常。
+
+#解决方案
+1. **修复锁与中断安全**：将相关路径下的 `spin_lock` 和 `spin_unlock` 替换为 `spin_lock_irqsave` 和 `spin_unlock_irqsave`，确保在持有自旋锁时关闭中断，防止死锁。
+2. **调整注销顺序**：将 `udma_unregister_event` 移至 `udma_unset_ubcore_dev` 之前调用，确保在销毁设备上下文前先注销事件回调，避免野指针访问。
+3. **修正解锁逻辑**：在 `udma_jfc_completion` 的错误处理分支中，调整 `xa_unlock` 位置，确保在访问释放前释放锁，或在打印日志前立即解锁（根据 diff 显示，unlock 被移到了 warn 打印之前）。
+4. **修正掩码定义**：将 `UDMA_PID_MASK` 宏定义从 24 修正为 0xFFFFFF。
+5. **增加状态检查**：在 `udma_ctrlq_eid_update` 入口处增加设备状态检查，若状态非 `UDMA_NORMAL` 则直接返回响应，避免在异常状态下处理请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cfc1a43a32ef15ec77372b0695759cb6e17bc96d

@@ -1,0 +1,20 @@
+#标题
+RDMA/hns: 设备DIP表项资源泄露故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hip09 之后的 RDMA 设备（如更新版本的 hns 网卡）上执行驱动退出或设备注销流程时，DIP（Destination IP）表项未被正确释放，导致内核资源泄露。随着设备反复初始化与退出，可能逐渐耗尽系统内存资源。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hns_roce_v2_exit` 函数中，释放 DIP 表项的代码逻辑使用了错误的条件判断 `hr_dev->pci_dev->revision == PCI_REVISION_ID_HIP09`。该判断仅针对 hip09 这一款设备，忽略了 DIP 算法在 hip09 之后的设备上同样支持的事实，导致 hip09 以后版本的设备在退出时跳过了 `free_dip_entry` 调用，从而引发资源泄露。
+
+#解决方案
+修改 `drivers/infiniband/hw/hns/hns_roce_hw_v2.c` 文件中的条件判断逻辑，将 `==` 修改为 `>=`。确保所有版本号大于等于 PCI_REVISION_ID_HIP09 的设备在退出时都能正确调用 `free_dip_entry` 函数释放资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c057764546ed00decd6fe10a7730fef04ea50da5

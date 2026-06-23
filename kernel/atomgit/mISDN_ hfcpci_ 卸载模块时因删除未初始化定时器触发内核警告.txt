@@ -1,0 +1,23 @@
+#标题
+mISDN: hfcpci: 卸载模块时因删除未初始化定时器触发内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 `CONFIG_DEBUG_OBJECTS_TIMERS` 配置项的情况下，执行 `rmmod` 卸载 hfcpci 模块时，内核触发 WARNING 并打印 ODEBUG 调试信息，提示定时器对象处于不可用状态。
+
+#主要错误日志
+[  250.215892] ODEBUG: assert_init not available (active state 0) object: ffffffffc01a3dc0 object type: timer_list hint: 0x0
+[  250.217520] WARNING: CPU: 0 PID: 233 at lib/debugobjects.c:612 debug_print_object+0x1b6/0x2c0
+[  250.219537] CPU: 0 UID: 0 PID: 233 Comm: rmmod Not tainted 6.17.0-rc2-g6f713187ac98 #2 PREEMPT(voluntary)
+[  250.245015]  HFC_cleanup+0x10/0x20 [hfcpci]
+
+#问题根因
+驱动中的全局静态变量 `hfc_tl`（timer_list 类型）在使用前未被正确初始化。在内核配置了 `CONFIG_DEBUG_OBJECTS_TIMERS` 的情况下，模块卸载流程调用 `del_timer_sync`（即 `__try_to_del_timer_sync`）尝试删除该定时器时，由于该定时器对象未被初始化，调试机制检测到状态非法从而触发警告。通常情况下，如果 `poll` 参数等于默认阈值，`HFC_init` 函数会跳过定时器初始化和添加的代码分支，导致定时器处于未初始化状态被删除。
+
+#解决方案
+使用 `DEFINE_TIMER` 宏在编译阶段直接定义并初始化 `hfc_tl` 定时器，替代运行时的初始化代码；同时将手动设置 `expires` 并调用 `add_timer` 的逻辑替换为 `mod_timer`，确保定时器操作的安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5c92c3c7b5ce43e2d8d5e0ced18867d22fdbe089

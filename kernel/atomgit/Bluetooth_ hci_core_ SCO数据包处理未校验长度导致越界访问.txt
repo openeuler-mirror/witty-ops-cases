@@ -1,0 +1,20 @@
+#标题
+Bluetooth: hci_core: SCO数据包处理未校验长度导致越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SCO（Synchronous Connection-Oriented）数据包时，若接收到的 skb 数据长度过小，内核未进行有效性检查直接读取数据。这会导致代码访问未初始化或无效的内存区域（越界读取），可能引发内核崩溃、内存破坏或信息泄露。
+
+#主要错误日志
+bt_dev_err(hdev, "SCO packet too small");
+
+#问题根因
+函数 `hci_scodata_packet` 在处理 SCO 数据包时，原代码直接将 `skb->data` 强转为 `struct hci_sco_hdr` 指针并读取，随后调用 `skb_pull`。由于未校验 `skb` 的数据长度是否足以包含 SCO 头部结构体（`HCI_SCO_HDR_SIZE`），当 skb 长度不足时，代码会访问有效数据之外的内存区域，导致越界访问。
+
+#解决方案
+在处理 SCO 数据包头部前，使用 `skb_pull_data` 函数替代原 `skb_pull` 操作。`skb_pull_data` 会在拉取数据前自动检查 skb 长度是否满足请求的大小（`sizeof(*hdr)`）。若长度不足，该函数返回 NULL，此时代码新增判断逻辑，打印错误日志 "SCO packet too small" 并直接跳转至 `drop` 标签丢弃该数据包，从而避免越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a025348c768ea612652f8740772926928958b85c

@@ -1,0 +1,31 @@
+#标题
+cifs: 使用 cache=none 挂载时执行程序触发内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 CIFS 共享目录以 `cache=none` 方式挂载时，在该目录下执行程序（如 exec 操作）会触发内核 WARNING 并打印调用栈。此时内核读取操作向下传递了 KVEC 类型的迭代器，底层函数在处理非 BVEC 类型迭代器时触发了异常逻辑。
+
+#主要错误日志
+WARNING: CPU: 0 PID: 6290 at fs/smb/client/file.c:3549 cifs_limit_bvec_subset+0xe/0xc0
+...
+Call Trace:
+ <TASK>
+ cifs_send_async_read+0x146/0x2e0
+ __cifs_readv+0x207/0x2d0
+ __kernel_read+0xf6/0x160
+ search_binary_handler+0x49/0x210
+ exec_binprm+0x4a/0x140
+ bprm_execve.part.0+0xe4/0x170
+ do_execveat_common.isra.0+0x196/0x1c0
+ do_execve+0x1f/0x30
+
+#问题根因
+在 `cache=none` 模式下，内部读取操作（如 exec）会向 `cifs_send_async_read()` 传递 KVEC 类型的迭代器。随后该函数调用 `cifs_limit_bvec_subset()` 尝试限制用于 RDMA 的连续元素数量，但 `cifs_limit_bvec_subset()` 函数无法正确处理非 BVEC 类型的迭代器，导致触发 WARNING。
+
+#解决方案
+在 `__cifs_readv()` 函数中增加对 KVEC 类型迭代器的处理逻辑。新增 `extract_kvec_to_bvec()` 函数，将 KVEC 迭代器提取并转换为 BVEC 迭代器，确保后续异步读取流程能够正确处理数据结构，从而避免在 `cifs_limit_bvec_subset()` 中出现不兼容的情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7452f7a31419acef2140b76c3e4b3d6c658b7857

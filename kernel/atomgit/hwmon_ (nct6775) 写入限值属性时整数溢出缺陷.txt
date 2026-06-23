@@ -1,0 +1,23 @@
+#标题
+hwmon: (nct6775) 写入限值属性时整数溢出缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户向 `nct6775` 驱动的 `target_temp`、`temp_tolerance` 或 `weight_temp` 等 limit 属性写入极大数值（例如 18446744073709551615）时，内核内部计算逻辑发生整数溢出。这会导致写入的温度限值与用户预期不符，可能导致硬件监控策略配置错误或传感器行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `store_target_temp`、`store_temp_tolerance` 和 `store_weight_temp` 等函数中，代码逻辑先执行 `DIV_ROUND_CLOSEST()` 对用户输入值进行除法运算，随后才执行 `clamp_val()` 进行范围裁剪。当用户输入超大数值（如 `ULONG_MAX`）时，先进行的除法操作导致中间结果溢出，随后的 `clamp_val()` 无法修正已产生的错误数值。
+
+#解决方案
+调整运算顺序，先对用户输入值执行 `clamp_val()` 操作将其限制在有效范围内，而后再执行 `DIV_ROUND_CLOSEST()` 除法运算。同时，在 clamp 阶段将边界值乘以 1000 以匹配用户输入的单位。具体修改如下：
+- `store_target_temp`: 修改为 `DIV_ROUND_CLOSEST(clamp_val(val, 0, data->target_temp_mask * 1000), 1000)`
+- `store_temp_tolerance`: 修改为 `DIV_ROUND_CLOSEST(clamp_val(val, 0, data->tolerance_mask * 1000), 1000)`
+- `store_weight_temp`: 修改为 `DIV_ROUND_CLOSEST(clamp_val(val, 0, 255000), 1000)`
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/17828f1257f682a42b176bd642a8ed2e2f26a3a0

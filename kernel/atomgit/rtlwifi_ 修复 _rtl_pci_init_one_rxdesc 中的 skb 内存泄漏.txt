@@ -1,0 +1,20 @@
+#标题
+rtlwifi: 修复 _rtl_pci_init_one_rxdesc 中的 skb 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Realtek 无线网卡驱动进行 DMA 映射失败（`dma_mapping_error` 返回真）时，如果此前已经分配了新的 `skb` 结构，该 `skb` 未被释放直接返回，导致内存泄漏。系统长时间运行或在高频 DMA 映射失败场景下，可能会观察到内存占用持续增长。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `_rtl_pci_init_one_rxdesc` 中，当调用 `dma_map_single` 进行 DMA 映射失败时，代码逻辑直接返回 0。此时，如果进入函数时分配了新的 `skb`（或者函数内部分配了 `skb` 但在映射失败路径未处理），该 `skb` 指针未被释放，导致内存泄漏。根据补丁逻辑，需检查 `!new_skb`（此处推断 `new_skb` 为控制是否需要释放的标志位或相关逻辑），确认需要释放已分配的 `skb`。
+
+#解决方案
+在 `dma_mapping_error` 判断成立的错误处理分支中，增加对 `skb` 的释放逻辑。具体修改为：在返回 0 之前，调用 `kfree_skb(skb)` 释放之前分配的套接字缓冲区，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8fb759c7eb905ca98edeed41c5d1f196c678ade0

@@ -1,0 +1,29 @@
+#标题
+macsec offloading 发送报文时出现 Use-After-Free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+KASAN 检测到 slab-use-after-free 错误。在卸载或释放 macsec 设备后，驱动程序（如 mlx5_core）仍在发送数据包时访问了已释放的 metadata_dst 内存。具体表现为在 `mlx5e_xmit` 函数中读取已释放内存地址，触发 KASAN 报错，可能导致内核崩溃或数据损坏。
+
+#主要错误日志
+```
+BUG: KASAN: slab-use-after-free in mlx5e_xmit+0x1e8f/0x4190 [mlx5_core]
+Read of size 2 at addr ffff88813e42e038 by task kworker/7:2/714
+...
+Freed by task 4011:
+ ...
+ kfree+0xe0/0x290
+ macsec_free_netdev+0x3f/0x140
+ ...
+```
+
+#问题根因
+metadata_dst 用于存储 macsec offload 的 SCI 值。在 `macsec_free_netdev()` 函数中，代码直接调用 `metadata_dst_free()` 释放了 `macsec->secy.tx_sc.md_dst`。然而，此时网络设备驱动可能仍持有引用该 metadata_dst 的 skb 正在处理发送流程，导致驱动在发送报文时访问了已被释放的内存（UAF）。
+
+#解决方案
+修改 `macsec_free_netdev()` 函数，将直接释放内存的 `metadata_dst_free()` 替换为 `dst_release()`。通过引用计数机制，只有当引用计数降为零时才真正释放内存，确保在 skb 仍引用该 dst 期间不会被释放，从而避免 use-after-free。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce5ae303cf6941886d9669f9d0da797d23e03ec7

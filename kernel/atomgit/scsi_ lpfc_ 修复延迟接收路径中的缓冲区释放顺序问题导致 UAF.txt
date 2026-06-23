@@ -1,0 +1,20 @@
+#标题
+scsi: lpfc: 修复延迟接收路径中的缓冲区释放顺序问题导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 lpfc 驱动的延迟接收路径中，由于缓冲区释放与上下文指针清除的顺序不当，存在一个释放后使用窗口。当并发路径（如 ABTS 或 repost 路径）同时操作该指针时，可能导致双重释放或 UAF，进而引发内核 panic 或数据结构损坏。
+
+#主要错误日志
+"6425 Defer rcv: no buffer oxid x%x: flg %x ste %x\n"
+
+#问题根因
+在 `lpfc_nvmet_defer_rcv` 函数中，代码逻辑先释放了 RQ 缓冲区，随后才在锁的保护下清除上下文指针。由于并发路径（如 ABTS 和 repost 路径）也会在锁的保护下检查并释放同一个指针，旧的顺序导致了竞争条件，从而引发双重释放或释放后使用。
+
+#解决方案
+调整缓冲区释放顺序，使其与 repost 路径保持一致：先在锁的保护下将 `ctxp->rqb_buffer` 指针置空，并在解锁后再释放缓冲区。同时增加了对 `nvmebuf` 的空指针检查以确保安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/efb615397c7fc4d2da3084e41357043c98e0d8a0

@@ -1,0 +1,23 @@
+#标题
+serial: amba-pl011: 关闭CONFIG_DMA_ENGINE编译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核配置关闭 CONFIG_DMA_ENGINE 选项的情况下编译驱动，amba-pl011 驱动构建失败，编译器报错提示结构体成员不存在。
+
+#主要错误日志
+drivers/tty/serial/amba-pl011.c: In function 'pl011_unthrottle_rx':
+drivers/tty/serial/amba-pl011.c:1822:16: error: 'struct uart_amba_port' has no member named 'using_rx_dma'
+drivers/tty/serial/amba-pl011.c:1823:20: error: 'struct uart_amba_port' has no member named 'dmacr'
+drivers/tty/serial/amba-pl011.c:1824:32: error: 'struct uart_amba_port' has no member named 'dmacr'
+
+#问题根因
+在提交 2bcacc1c87ac ("serial: amba-pl011: Fix RX stall when DMA is used") 中引入了 `pl011_unthrottle_rx` 函数对 DMA 相关字段（`using_rx_dma`、`dmacr`）的访问。当 CONFIG_DMA_ENGINE 未启用时，这些字段在 `struct uart_amba_port` 中未定义，但相关代码路径缺少 `#ifdef CONFIG_DMA_ENGINE` 保护，导致编译时找不到结构体成员错误。
+
+#解决方案
+在 `pl011_unthrottle_rx` 函数中访问 DMA 相关变量的代码块前后添加 `#ifdef CONFIG_DMA_ENGINE` 预处理指令，确保在未启用 DMA 配置时跳过相关代码编译，与驱动其他部分的实现逻辑保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6a1e50dc877921000ef13b265a7cb645d794ab55

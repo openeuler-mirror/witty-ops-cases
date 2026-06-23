@@ -1,0 +1,20 @@
+#标题
+arm64/mpam: resctrl 监控上下文分配函数中的调度状态警告修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `resctrl_arch_mon_ctx_alloc` 函数时，内核触发与调度状态相关的警告（warning）。这是因为在原本的实现中，该函数内部调用了 `might_sleep()` 和 `schedule()`，如果调用者处于原子上下文或持有自旋锁等不适合调度的状态，将引发内核警告或潜在死锁。
+
+#主要错误日志
+未知
+
+#问题根因
+`resctrl_arch_mon_ctx_alloc` 函数原本的实现包含了等待队列和调度逻辑（`prepare_to_wait`、`schedule`），这导致该函数可能会睡眠。然而，该函数被调用的上下文可能不允许睡眠（例如持有 spinlock 时），从而引发 `schedule` 调度相关的 WARNING。
+
+#解决方案
+移除 `resctrl_arch_mon_ctx_alloc` 函数内部的等待队列、循环调度逻辑以及 `might_sleep()` 调用，将其直接修改为非阻塞的内存分配方式（直接调用 `kmalloc`）。如果内存分配失败直接返回 `-ENOMEM`，不再处理 `-ENOSPC` 的重试调度逻辑，从而确保函数不会在非预期的上下文中睡眠，消除了警告来源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce6d0635bd421ca5a90a8b4a758633cbb21982cf

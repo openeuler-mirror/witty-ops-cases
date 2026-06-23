@@ -1,0 +1,20 @@
+#标题
+iommu 内存分配失败后的异常处理流程错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IOMMU 页错误处理流程中，当内存分配失败时，系统未能正确执行异常处理逻辑。代码本应将请求 abort（中止）并返回给驱动程序，但实际上错误地使用了可能未正确初始化或无效的内存指针，导致 IOMMU 故障处理流程异常，可能引发内核崩溃或内存越界访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `iopf_group_alloc` 中，处理 `group_extend` 内存分配失败的逻辑存在代码编排错误。原代码在 `if (group_extend == NULL)` 分支中将 `group` 指向了 `abort_group`，但在该 if 语句块结束后，代码又无条件执行了 `group = &group_extend->iopf_group`。这导致无论内存分配是否成功，`group` 指针最终都会被赋值为 `group_extend` 的成员。当内存分配失败（`group_extend` 为 NULL）时，该行代码将导致空指针解引用，覆盖了原本正确的 abort 处理逻辑。
+
+#解决方案
+修改 `drivers/iommu/io-pgfault.c` 文件中的代码逻辑，将 `group = &group_extend->iopf_group;` 语句移至 `else` 分支中。这确保了仅当内存分配成功时才使用该指针，而在分配失败时保留 `abort_group` 的赋值，从而正确执行异常处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d8cadc87f50de3106f9462439ebb05d4b0499916

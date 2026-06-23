@@ -1,0 +1,21 @@
+#标题
+ASoC: tlv320adcx140: 字长配置错误导致非对称格式播放噪声
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 tlV320adcx140 编解码器时，若音频格式为 S24_LE 等数据宽度与物理槽位宽度不一致的格式（如数据宽度 24 位，物理宽度 32 位），并在非对称格式场景下使用，会产生大量噪声。系统可能无法正确配置硬件参数。
+
+#主要错误日志
+[推断] dmesg 日志可能包含：
+tlv320adcx140: adcx140_hw_params: Unsupported width 24
+
+#问题根因
+驱动在 `adcx140_hw_params` 函数中使用了 `params_width(params)` 来获取字长，该函数返回的是样本的数据宽度。而硬件寄存器配置需要的 "Word length" 实际上是通道槽位的物理宽度。当数据宽度与物理宽度不一致时（例如 S24_LE 格式，数据 24 位，物理 32 位），驱动错误地将字长配置为 24 位，导致硬件配置错误，进而引发噪声问题。
+
+#解决方案
+将 `adcx140_hw_params` 函数中获取字长的逻辑从 `params_width(params)` 修改为 `params_physical_width(params)`，以确保配置的字长与通道槽位的物理宽度一致，从而正确配置硬件寄存器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/10deb674c45e7d05fe223b79746303e1d2746e65

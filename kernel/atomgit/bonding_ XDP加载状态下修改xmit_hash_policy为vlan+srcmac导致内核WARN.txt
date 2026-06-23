@@ -1,0 +1,26 @@
+#标题
+bonding: XDP加载状态下修改xmit_hash_policy为vlan+srcmac导致内核WARN
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在802.3ad（LACP）或balance-xor模式的bonding接口上加载了XDP程序后，若将`xmit_hash_policy`修改为`vlan+srcmac`，虽然修改操作可能成功执行，但在后续销毁该bond设备或卸载XDP程序时，会触发内核警告（WARN_ON）。此时XDP程序无法正常卸载，导致设备状态异常。
+
+#主要错误日志
+[  ] WARNING: CPU: ... PID: ... at drivers/net/bonding/bond_main.c:... dev_xdp_install+0x.../0x...
+[  ] Hardware name: ...
+[  ] Call Trace:
+[  ]  ? dev_xdp_install+0x.../0x...
+[  ]  ? bond_xdp_set+0x.../0x...
+[  ]  dev_xdp_uninstall+0x.../0x...
+
+#问题根因
+bonding驱动中`bond_xdp_check()`函数规定，在802.3ad或balance-xor模式下，如果`xmit_hash_policy`设置为`vlan+srcmac`，则不允许加载XDP程序，因为硬件卸载通常会导致802.1q载荷缺失。
+根因在于`bond_option_xmit_hash_policy_set()`函数缺乏对XDP程序的检查保护。当用户在已加载XDP程序的情况下，将`xmit_hash_policy`修改为`vlan+srcmac`时，该操作未被拒绝。这导致`bond->xdp_prog`指针非空，但`bond_xdp_check()`校验结果变为`false`。后续在销毁bond设备触发`dev_xdp_uninstall()`尝试卸载XDP时，`bond_xdp_set()`中的`bond_xdp_check()`检查失败并返回`-EOPNOTSUPP`，进而触发`WARN_ON(dev_xdp_install(...))`警告。
+
+#解决方案
+在`bond_option_xmit_hash_policy_set()`函数中增加前置检查逻辑。如果当前bond设备已加载XDP程序（`bond->xdp_prog`非空），且新设置的哈希策略为`vlan+srcmac`，则直接返回`-EOPNOTSUPP`拒绝该修改操作，从而保持XDP运行环境的兼容性。同时重构`bond_xdp_check()`接口，提取出`__bond_xdp_check()`函数以便在策略设置时复用检查逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7fc47644a953b4825c058cc06c2a370dcc4a8811

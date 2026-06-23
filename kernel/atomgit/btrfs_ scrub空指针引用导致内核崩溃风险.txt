@@ -1,0 +1,20 @@
+#标题
+btrfs: scrub空指针引用导致内核崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在BTRFS文件系统进行scrub操作时，若不存在有效的校验和树，内核在尝试访问相关指针时会发生空指针引用，导致系统崩溃或触发Oops。
+
+#主要错误日志
+no valid extent or csum root for scrub
+
+#问题根因
+`scrub_find_first_stripe` 函数在执行检查时，仅校验了 `extent_root` 是否为空，遗漏了对 `csum_root` 的校验。当 `csum_root` 为 NULL 且函数继续向下执行时，后续代码解引用该指针导致 NULL pointer dereference。
+
+#解决方案
+在 `fs/btrfs/scrub.c` 的 `scrub_find_fill_first_stripe` 函数中增加对 `csum_root` 指针的有效性检查。修改判断条件为 `if (unlikely(!extent_root || !csum_root))`，若任一指针无效则打印错误日志并返回 `-EUCLEAN` 错误码，从而避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fab13e8e8e5833036a5b9385295cbc27003bb99d

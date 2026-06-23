@@ -1,0 +1,23 @@
+#标题
+RDMA/mlx5: SRQ 初始化失败致释放后使用与双重释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mlx5_ib_dev_res_srq_init() 函数中，当 SRQ s1 创建失败时，错误处理路径未正确退出，导致已释放的 s0 指针和错误指针 s1 被赋值给 devr->s0 和 devr->s1。这引发以下故障现象：
+1. 快速路径检查 `if (devr->s1)` 将 ERR_PTR 误判为已初始化，导致逻辑错误。
+2. 用户在 mlx5_ib_create_qp() 中通过 `to_msrq(devr->s0)->msrq.srqn` 访问已释放的内存（Use-After-Free）或错误指针。
+3. 在驱动卸载流程 mlx5_ib_dev_res_cleanup() 中对 s0 发生双重释放（Double-Free）。
+
+#主要错误日志
+[推断] mlx5_ib_err: "Couldn't create SRQ 1 for res init, err=%d\n"
+
+#问题根因
+在 mlx5_ib_dev_res_srq_init() 函数的错误处理路径中，当 `ib_create_srq(s1)` 失败时，代码虽然调用了 `ib_destroy_srq(s0)` 销毁了 s0，但随后未使用 `goto unlock` 跳出函数，而是继续向下执行。这导致已释放的 s0 和错误指针 s1 分别被错误地赋值给全局资源结构体 devr 的 s0 和 s1 成员，造成后续代码访问非法内存。
+
+#解决方案
+在 s1 创建失败的错误处理分支中，在销毁 s0 之后、赋值操作之前添加 `goto unlock` 语句，确保函数在错误发生后立即跳转到解锁并返回，避免执行后续的非法赋值操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1905c6137e6eb3d22214a8c519402a36611a0bcf

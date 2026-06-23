@@ -1,0 +1,32 @@
+#标题
+[urma: 支持EID namespace共享模式配置]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[在配置 namespace 隔离的场景下，当用户尝试修改 namespace 模式时，系统返回操作失败，错误码为 -EPERM。具体表现为：当存在已创建的 namespace 时，无法关闭共享模式；当设备已暴露到其他 namespace 时，无法切换至共享模式。]
+
+#主要错误日志
+[drivers/ub/urma/ubcore/ubcore_device.c 中新增或修改的关键日志如下：]
+- `ubcore_log_err("Failed to modify ns mode with existing ns");`
+- `ubcore_log_err("Failed to switch to shared mode, device %s has logic devices\n", dev->dev_name);`
+- `ubcore_log_err("Can not set device to ns under shared ns mode.\n");`
+- `ubcore_log_err("Can not expose device under shared ns mode.\n");`
+- `ubcore_log_err("Can not unexpose device under shared ns mode.\n");`
+- `ubcore_log_err("Can not set eid ns under shared ns mode.\n");`
+
+#问题根因
+[原先的实现仅支持单一的 namespace 共享模式（g_shared_ns），未区分设备和工作标识的 namespace 隔离策略。代码逻辑中缺乏对模式切换条件的充分检查，导致在存在活跃 namespace 或逻辑设备的情况下执行模式切换操作时，内核状态不一致或操作非法，从而导致设置失败或返回 -EPERM 错误。]
+
+#解决方案
+[1. 将原有的单一 namespace 共享模式拆分为设备 namespace 共享模式（g_dev_ns_shared）和 EID namespace 共享模式（g_eid_ns_shared），支持四种组合配置。
+2. 新增 `ubcore_set_dev_ns_mode` 和 `ubcore_set_eid_ns_mode` 接口分别管理这两种模式的切换。
+3. 增强模式切换的权限与状态检查：
+   - 在关闭共享模式时，检查 `g_ubcore_net_list` 是否为空，确保没有存在的 namespace。
+   - 在开启共享模式时，检查设备是否已存在逻辑设备，防止状态冲突。
+4. 将保护全局 namespace 列表和模式标志的锁机制从自旋锁替换为读写信号量，以适应进程上下文并允许并发读取。
+5. 在设备注册和 EID 访问逻辑中，根据新的模式标志动态调整设备与 EID 的可见性策略。]
+
+#来源
+[https://atomgit.com/openeuler/kernel/commit/4fa6fc4a2c562c1b61b81879b2543768d991d259]

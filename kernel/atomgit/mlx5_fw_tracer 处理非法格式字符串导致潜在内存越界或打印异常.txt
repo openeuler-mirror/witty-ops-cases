@@ -1,0 +1,24 @@
+#标题
+mlx5_fw_tracer 处理非法格式字符串导致潜在内存越界或打印异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Mellanox mlx5 网卡固件跟踪器在处理包含非标准格式占位符（如 `%s`）的固件追踪字符串时，可能导致内核内存访问越界或打印异常。此外，若格式字符串非法，在打印追踪信息时可能引发内核崩溃或输出乱码。
+
+#主要错误日志
+- `pr_debug("%s Invalid format string parameters\n", __func__);`
+- `pr_debug("%s string parameter of invalid string, dumping\n", __func__);`
+- `snprintf(tmp, sizeof(tmp), "BAD_FORMAT: %s", str_frmt->string);` （推断：异常格式打印）
+
+#问题根因
+内核在解析固件发送的追踪字符串格式时，未对格式占位符进行严格校验。`mlx5_tracer_get_num_of_params` 函数在计算参数数量时，仅匹配特定模式（如 `%llx`），未处理其他类型（如 `%s`）。这导致参数计数与实际处理逻辑不匹配。如果固件发送了包含 `%s` 的字符串，内核侧 `snprintf` 处理时对应的参数并非字符串指针，而是整型数值，可能导致内核访问非法内存地址引发故障。
+
+#解决方案
+1. **增加格式校验函数**：新增 `mlx5_is_valid_spec` 和 `mlx5_tracer_validate_params` 函数，严格检查格式字符串中的占位符是否为安全的整型格式（如 `%x`, `%d`, `%u` 等），拒绝非预期格式（如 `%s`）。
+2. **前置校验逻辑**：在 `mlx5_tracer_get_num_of_params` 计算参数数量前调用校验函数，若发现非法格式则返回 `-EINVAL`。
+3. **异常处理流程**：在 `mlx5_tracer_handle_string_trace` 中检查参数数量返回值，若为负数（非法），则将当前字符串标记为 `invalid_string`，并在最终打印时输出 `BAD_FORMAT` 提示，避免直接进行格式化处理导致内存越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb5253dc5af22ab6e2e34e7b9977ffdd80dad584

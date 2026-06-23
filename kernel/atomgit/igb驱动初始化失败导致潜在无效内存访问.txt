@@ -1,0 +1,20 @@
+#标题
+igb驱动初始化失败导致潜在无效内存访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 CONFIG_IGB_DCA 配置选项的情况下，若 igb 驱动在模块初始化阶段（igb_init_module）调用 pci_register_driver 注册失败，内核未注销之前注册的 DCA notifier。这会导致后续系统中发生 DCA 事件时，内核回调已属于无效状态的 notifier，从而引发潜在的内核崩溃或无效内存访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 igb_init_module 函数中，代码先调用了 dca_register_notify 注册 DCA notifier，随后调用 pci_register_driver 注册 PCI 驱动。当 pci_register_driver 返回失败时，函数直接返回错误码，遗漏了对 dca_notifier 的注销操作。残留的 notifier 链表项导致系统在处理 DCA 事件时访问了无效的上下文内存。
+
+#解决方案
+在 pci_register_driver 注册失败后的错误处理路径中，增加条件编译保护，调用 dca_unregister_notify 函数注销之前注册的 DCA notifier，确保资源正确释放，避免遗留无效回调接口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fdc8c83a12a8fc4b7c55971d552758ffe2f34c14

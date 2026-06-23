@@ -1,0 +1,24 @@
+#标题
+iio: frequency: adf4377: 复位状态检查掩码错误导致软复位校验不完整
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ADF4377 驱动在执行软复位（soft_reset）流程时，对复位完成状态的检测不完整。由于代码仅检查了 SOFT_RESET_R_MSK (bit 7) 是否清零，而遗漏了 SOFT_RESET_MSK (bit 0)，导致驱动可能在复位尚未完全结束时即错误判定复位成功，可能引发设备后续初始化异常或状态错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `adf4377_soft_reset` 函数中，调用 `regmap_read_poll_timeout` 检查复位状态时，代码逻辑使用了两次 `ADF4377_0000_SOFT_RESET_R_MSK` 进行与运算，而遗漏了 `ADF4377_0000_SOFT_RESET_MSK`。
+根因分析如下：
+1. 复位操作通过 `regmap_update_bits` 同时置位了 SOFT_RESET (bit 0) 和 SOFT_RESET_R (bit 7)。
+2. 轮询检查时应同时等待这两个位被硬件清零。
+3. 实际代码误将 `ADF4377_0000_SOFT_RESET_MSK` 写成了 `ADF4377_0000_SOFT_RESET_R_MSK`，导致只检查了 bit 7，忽略了 bit 0 的状态。
+
+#解决方案
+修改 `drivers/iio/frequency/adf4377.c` 中 `regmap_read_poll_timeout` 的判断条件，将重复的 `ADF4377_0000_SOFT_RESET_R_MSK` 修正为 `ADF4377_0000_SOFT_RESET_MSK`，确保同时检查 bit 0 和 bit 7 的状态，使代码逻辑与之前的 `regmap_update_bits` 操作相匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ad47fa1ead8b0c42e1956f1ebb1cf0283cfb44e

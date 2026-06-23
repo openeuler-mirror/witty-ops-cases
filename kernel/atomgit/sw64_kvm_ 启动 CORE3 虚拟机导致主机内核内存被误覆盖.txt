@@ -1,0 +1,20 @@
+#标题
+sw64/kvm: 启动 CORE3 虚拟机导致主机内核内存被误覆盖
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启动 CORE3 架构的虚拟机时，由于 QEMU 中 cpu reset（复位）操作先于内存初始化执行，导致内核函数 `kvm_sw64_vcpu_reset` 获取到的地址 `addr` 为 0。进而引发 `memset` 操作将物理地址 0（即主机内核低端内存/向量表区域）清零，导致主机内核数据被破坏，可能引发主机系统崩溃或异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+QEMU 代码逻辑调整，在 `sw64_cpu_realizefn` 函数中增加了 `cpu_reset` 动作，使得该动作早于内存初始化执行。这导致内核接口 `kvm_sw64_vcpu_reset` 在执行时，传入的 `addr` 参数值为 0。原代码仅判断了 `vcpu->vcpu_id == 0` 即执行 `memset(__va(addr), 0, 0x2000000)`，未对 `addr` 进行有效性校验，导致错误地将主机物理地址 0 处的内存清零。
+
+#解决方案
+在内核 `kvm_sw64_vcpu_reset` 函数中，对 `addr` 参数增加非零校验。修改判断条件为 `if (vcpu->vcpu_id == 0 && addr)`，确保仅在地址有效时才执行 `memset` 操作，防止覆盖主机物理地址 0。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/74c216ed5ac1f0cef5327a676289174108c8a640

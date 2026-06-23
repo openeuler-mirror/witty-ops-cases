@@ -1,0 +1,27 @@
+#标题
+net: macb: fix use-after-free access to PTP clock
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 macb 网卡驱动关闭接口时，PTP 时钟被注销，但此时若通过 ethtool 调用 get_ts_info 接口（如执行 ethtool -T <dev>），会触发 KASAN 检测到的 use-after-free 错误，导致内核崩溃或内存非法访问。
+
+#主要错误日志
+BUG: KASAN: use-after-free in ptp_clock_index+0x47/0x50 drivers/ptp/ptp_clock.c:426
+Read of size 4 at addr ffff8880194345cc by task syz.0.6/948
+...
+Call Trace:
+ ptp_clock_index+0x47/0x50 drivers/ptp/ptp_clock.c:426
+ gem_get_ts_info+0x138/0x1e0 drivers/net/ethernet/cadence/macb_main.c:3349
+ macb_get_ts_info+0x68/0xb0 drivers/net/ethernet/cadence/macb_main.c:3371
+...
+
+#问题根因
+PTP 时钟在网卡接口每次打开时注册，关闭时销毁。然而，get_ts_info ethtool 调用在接口仅存在于内核中（但未打开）时即可访问。在 macb_close 流程中，gem_ptp_remove 调用 ptp_clock_unregister 注销了 PTP 时钟，但未将 bp->ptp_clock 指针置为 NULL。后续通过 ethtool 调用 macb_get_ts_info 时，代码仍尝试访问已释放的 bp->ptp_clock 指针，导致 use-after-free 访问。
+
+#解决方案
+在 gem_ptp_remove 函数中，调用 ptp_clock_unregister 注销 PTP 时钟后，立即将 bp->ptp_clock 指针设置为 NULL，防止后续操作访问已释放的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/16c9c555682dec1afd62a618e6c3994ff9b72f9d

@@ -1,0 +1,23 @@
+#标题
+perf: HiSilicon L3C PMU tt_core 配置与 PG CPU 替换后逻辑 CPU ID 不匹配
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HiSilicon 芯片平台上，当部分物理 CPU 损坏时，同 Cluster 内编号靠后的 CPU 会替换损坏的 CPU 以保持 CPU ID 的连续性。此时，L3C PMU 驱动中的 `tt_core` 配置仍使用原有的逻辑 CPU ID 进行过滤，导致 PMU 事件过滤功能异常，无法准确统计目标 CPU 的事件数据。
+
+#主要错误日志
+未知
+
+#问题根因
+在 HiSilicon 芯片上，当发生 CPU 替换（PG CPU）时，系统的逻辑 CPU ID 会发生变化（向后填补空缺）。然而，L3C PMU 驱动程序在配置 `tt_core`（用于过滤特定 CPU 事件的硬件配置）时，未感知到这种物理替换与逻辑 ID 的映射变化，直接使用了逻辑 CPU ID 进行配置，导致硬件过滤器配置与预期的物理 CPU 不匹配。
+
+#解决方案
+在 L3C PMU 驱动中增加 CPU 替换映射机制：
+1. 新增 `hisi_l3c_get_cluster_cpu_info` 函数，从设备树属性（`hisilicon,cluster-cpu-num`、`hisilicon,cluster-cpu` 等）读取 Cluster 内 CPU 拓扑与替换信息。
+2. 引入 `core_config` 数组存储逻辑 CPU 到物理配置的映射关系。
+3. 修改 `hisi_l3c_pmu_config_core_tracetag` 函数，在写入硬件寄存器前，调用 `hisi_l3c_pmu_cluster_cpu_substitute` 函数，根据映射关系将逻辑 CPU ID 转换为正确的硬件配置值，确保 PMU 统计结果正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/28475f5d01314db4a95f07ade64afaa389457fc8

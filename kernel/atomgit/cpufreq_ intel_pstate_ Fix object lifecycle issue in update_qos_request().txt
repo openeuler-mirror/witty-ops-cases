@@ -1,0 +1,25 @@
+#标题
+cpufreq: intel_pstate: Fix object lifecycle issue in update_qos_request()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `intel_pstate` 驱动执行 `update_qos_request` 函数时，若策略数据（`policy->driver_data`）为空，代码在持有 `policy` 引用的情况下提前退出了循环，导致 `cpufreq_cpu_put(policy)` 未被执行。这会导致内核对象引用计数泄漏（对象生命周期管理错误），可能引发内存泄漏或后续相关的资源访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `update_qos_request` 函数中的错误处理路径逻辑不当。在检查 `req`（`policy->driver_data`）是否为空时，代码逻辑错误地跳过了释放 `policy` 对象引用的操作（`cpufreq_cpu_put`）。具体表现为：
+1. 原代码在 `continue` 前未调用 `cpufreq_cpu_put(policy)`。
+2. 如果 `req` 为 NULL，函数直接 `continue`，导致对应的 `policy` 引用未被释放，造成对象引用计数泄漏。
+
+#解决方案
+修改 `drivers/cpufreq/intel_pstate.c` 文件中的 `update_qos_request` 函数逻辑，调整 `cpufreq_cpu_put(policy)` 的调用位置：
+1. 将 `cpufreq_cpu_put(policy)` 从循环的起始位置移除。
+2. 在检查 `req` 为空的判断分支中，执行 `continue` 前显式调用 `cpufreq_cpu_put(policy)` 以正确释放引用。
+3. 在循环的正常执行路径末尾（更新频率请求后）调用 `cpufreq_cpu_put(policy)`，确保每次迭代获取的引用都能被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/864b9c3a9e44059708ea3b6880be7c22ef7e177c

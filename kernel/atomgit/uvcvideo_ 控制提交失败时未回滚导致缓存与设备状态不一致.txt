@@ -1,0 +1,24 @@
+#标题
+uvcvideo: 控制提交失败时未回滚导致缓存与设备状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在操作 USB 视频类 (UVC) 设备时，若尝试提交多个实体的控制参数，且在提交过程中某实体发生失败，系统未能正确恢复已修改但未提交的控制值。这导致内核中的控制缓存 (control cache) 与实际硬件设备状态不同步，后续操作可能基于错误的状态进行，引发设备行为异常或配置错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `__uvc_ctrl_commit` 中，当遍历提交多个 entity 时，如果中途某个 entity 提交失败，代码直接跳转至结束流程（原代码 `goto done`），而未能继续遍历剩余的 entity 以执行回滚操作。
+根据补丁描述：当提交一个 entity 失败时，必须恢复其他未提交 entity 的 `UVC_CTRL_DATA_BACKUP`。原逻辑缺失了在失败后对剩余 entity 进行回滚处理的步骤，导致控制缓存与设备硬件状态脱节。
+
+#解决方案
+修改 `__uvc_ctrl_commit` 函数的错误处理逻辑：
+1. 移除失败时的 `goto done` 跳转语句，改为设置 `rollback` 标志位为 1，并记录错误返回值。
+2. 确保循环继续遍历后续的所有 entity。由于 `rollback` 标志位已置位，后续 entity 在调用 `uvc_ctrl_commit_entity` 时将执行回滚操作，从而恢复 `UVC_CTRL_DATA_BACKUP`，保持缓存与硬件状态的一致性。
+3. 同时优化了 `uvc_ctrl_commit_entity` 函数内部逻辑，使其在单个 entity 内部某控制设置失败时，也能正确标记 `rollback` 状态以处理该 entity 内后续的控制项。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/97df4df4f2b9e8c9976b6655efde8fdab37d50d0

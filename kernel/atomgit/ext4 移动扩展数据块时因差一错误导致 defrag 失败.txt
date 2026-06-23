@@ -1,0 +1,20 @@
+#标题
+ext4 移动扩展数据块时因差一错误导致 defrag 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 ext4 文件系统上的文件执行碎片整理（e4defrag）操作时失败，工具显示 `[ NG ]` 状态，导致文件碎片整理未成功完成。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `mext_page_mkuptodate()` 中处理缓冲区数据更新时存在差一错误。该函数旨在处理范围 `[from, to)` 内的数据，但在遍历缓冲区时，错误地判断了结束条件。原代码在 `bh_offset(bh) > to` 时停止等待缓冲区，这导致当某个缓冲区的偏移量正好等于 `to` 时，代码仍会继续执行 `wait_on_buffer(bh)`。对于范围边界上的缓冲区，其起始偏移量大于等于 `to`，不应被处理，错误的等待操作最终导致函数返回 `-EIO`，从而使扩展数据块移动流程失败。
+
+#解决方案
+修改 `fs/ext4/move_extent.c` 文件中 `mext_page_mkuptodate` 函数的判断逻辑，将判断条件从 `bh_offset(bh) > to` 修正为 `bh_offset(bh) >= to`。这确保了偏移量等于 `to` 的缓冲区不会被错误地等待，从而符合 `[from, to)` 的半开区间处理逻辑，修复了移动扩展数据块失败的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dec31fe5504f8bac2d0414c1f6a078606d83fdb0

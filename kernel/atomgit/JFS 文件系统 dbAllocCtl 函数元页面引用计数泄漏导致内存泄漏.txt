@@ -1,0 +1,20 @@
+#标题
+JFS 文件系统 dbAllocCtl 函数元页面引用计数泄漏导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 JFS 文件系统执行磁盘块分配操作时，若 Dmap 结构的 `budmin` 值小于 0，内核会发生内存泄漏。随着该错误路径被频繁触发，系统可用内存逐渐减少，可能导致系统性能下降或因内存不足而触发 OOM。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `dbAllocCtl()` 中，代码调用 `read_metapage()` 成功后会增加元页面的引用计数。随后在检查 `dp->tree.budmin` 是否小于 0 时，如果条件成立，函数直接返回 `-EIO`，但并未调用 `release_metapage(mp)` 来释放之前增加的引用计数。这导致该元页面的引用计数无法归零，从而发生了内存泄漏。
+
+#解决方案
+在 `dbAllocCtl()` 函数中，当检测到 `dp->tree.budmin < 0` 并准备返回 `-EIO` 之前，显式调用 `release_metapage(mp)` 来正确释放元页面引用，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/70acf925e7c7f905fab5ed6601526d237a9a593a

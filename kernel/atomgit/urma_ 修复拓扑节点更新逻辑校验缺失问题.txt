@@ -1,0 +1,33 @@
+#标题
+urma: 修复拓扑节点更新逻辑校验缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在更新 URMA（User Mode RDMA）子系统拓扑信息时，若新旧拓扑节点中存在状态不一致的情况（例如：设备已存在但配置变更、链路已连接但对端信息不一致），系统未能有效检测并拦截，导致内核态可能保留了错误的拓扑视图，进而引发后续业务功能异常或状态冲突。
+
+#主要错误日志
+- "dev %d is not the same\n"
+- "update dev info fail."
+- "link is not the same, "
+- "new: peer_node[%u]/peer_iodie[%u]/peer_port[%u], "
+- "old: peer_node[%u]/peer_iodie[%u]/peer_port[%u]"
+- "update link info fail."
+- "update link info failed\n"
+- "update dev info failed\n"
+
+#问题根因
+拓扑更新逻辑未严格遵循校验策略：
+1. **设备更新逻辑缺陷**：`update_dev_info` 函数仅处理了“旧设备无效且新设备有效”的情况，未对“新旧设备均有效”的场景进行一致性校验。若两者均有效但内容不同，内核未报错处理，导致拓扑视图被静默覆盖或保留不一致状态。
+2. **链路更新逻辑缺陷**：`update_link_info` 函数未处理“新链路未连接”的情况（即 `new_remote_port_id == UINT32_MAX`），可能导致无效链路信息被错误处理。
+3. **返回值处理缺失**：上层调用函数 `ubagg_update_topo_info` 和 `ubcore_update_topo_map` 忽略了 `update_dev_info` 和 `update_link_info` 的返回值，导致底层校验失败无法传递至上层，更新流程异常继续。
+
+#解决方案
+1. **完善设备更新校验**：在 `update_dev_info` 中增加对“新旧设备均有效”场景的判断，若两者配置不一致则返回错误，并增加日志打印。
+2. **完善链路更新校验**：在 `update_link_info` 中增加对“新链路未连接”的判断直接跳过，确保只有有效链路参与更新或校验。
+3. **传递错误状态**：修改 `ubagg_update_topo_info` 和 `ubcore_update_topo_map`，检查更新函数返回值，若返回失败则立即终止更新流程并返回 `-EINVAL`。
+4. **修正错误码**：将部分函数的错误返回值从 `-EINVAL` 或局部 `-1` 统一为 `-1` 或适当错误码，并在上层统一处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e952036b1d9975d878a80ea4c72e3999949d3fb3

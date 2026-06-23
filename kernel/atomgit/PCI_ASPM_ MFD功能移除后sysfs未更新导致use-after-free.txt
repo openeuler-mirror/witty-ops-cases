@@ -1,0 +1,25 @@
+#标题
+PCI/ASPM: MFD功能移除后sysfs未更新导致use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多功能设备（MFD）场景下，移除其中一个子功能设备后，其他子功能设备的 ASPM Control sysfs 接口（如 `link/l1_aspm`）仍然可见。此时若对该接口进行读写操作，将触发内核空指针引用错误，导致主机崩溃。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address 0000000000000030
+Call trace:
+aspm_attr_store_common.constprop.0+0x10c/0x154
+l1_aspm_store+0x24/0x30
+dev_attr_store+0x20/0x34
+sysfs_kf_write+0x4c/0x5c
+
+#问题根因
+根据 PCIe 规范 r6.0 sec 7.5.3.7，软件应在移除任意子功能设备时释放 `pcie_link_state` 结构体。先前修复（commit 456d8aa37d0f）实现了释放逻辑，但未同步更新 sysfs 接口的可见性。这导致 `pcie_link_state` 被释放后，关联的 sysfs 文件仍然对外可见，用户对其他子功能设备的 sysfs 操作会访问已释放的内存，从而引发 use-after-free 错误。
+
+#解决方案
+在 `pcie_aspm_exit_link_state` 函数中，于释放 `pcie_link_state` 之后、解锁前，增加调用 `pcie_aspm_update_sysfs_visibility` 函数。该操作会立即更新父设备及所有子设备的 sysfs 可见性状态，确保在内存释放后，相应的 sysfs 接口对用户空间不再可见，从而避免后续的非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/951c5e26f86a2a342cbd533f4ae4a1545d8ff57e

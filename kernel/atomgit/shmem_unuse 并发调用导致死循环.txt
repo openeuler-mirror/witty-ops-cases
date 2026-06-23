@@ -1,0 +1,20 @@
+#标题
+shmem_unuse 并发调用导致死循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当针对不同 swap type 的多个 shmem_unuse() 实例并发调用时，内核可能陷入死循环状态，导致相关进程无法退出，CPU 占用率持续过高。
+
+#主要错误日志
+未知
+
+#问题根因
+并发场景下列表遍历逻辑存在缺陷。当 shmem_unuse(typeA) 在遍历 shmem_swaplist 期间临时释放 mutex 锁时，shmem_unuse(typeB) 可能获取锁并将当前正在处理的 inode 从链表中删除（list_del_init）。待 typeA 重新获取锁后，代码仍尝试获取链表中的下一个节点（list_next_entry），由于此时 inode 已脱离链表，导致遍历指针异常，进而引发死循环。
+
+#解决方案
+在修复补丁中引入 `start_over` 标签重构遍历逻辑。在处理完一个 inode 后，检查其是否已从链表中删除（`list_empty(&info->swaplist)`）。如果已删除，则通过 `goto start_over` 跳转回链表遍历开头重新开始迭代，从而避免在已离队的节点上执行 `list_next_entry` 操作，消除死循环风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/299d2c30b9eecfcaf51f5f49e2c952ea04458185

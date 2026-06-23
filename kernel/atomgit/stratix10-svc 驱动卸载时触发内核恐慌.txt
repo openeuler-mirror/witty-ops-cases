@@ -1,0 +1,23 @@
+#标题
+stratix10-svc 驱动卸载时触发内核恐慌
+
+#内核版本
+OLK-6.6
+
+#问题现象
+对 stratix10-svc 驱动执行 rmmod 卸载操作时失败，并触发内核恐慌（kernel panic）。 Panic 发生在调用 kthread_stop 以及释放 fifo 内存的过程中，导致系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序中错误地混用了 `platform_set_drvdata` 和 `dev_set_drvdata` 来存储同一个数据结构。由于两者会相互覆盖，导致在驱动的 `remove` 流程中，通过 `dev_get_drvdata` 获取到的数据指针无效或错误，进而引发后续 `kthread_stop` 和 fifo 释放操作出现空指针访问或非法访问，最终触发内核恐慌。
+
+#解决方案
+修正数据存储与获取方式：
+1. 在 `stratix10_svc_controller` 结构体中新增 `svc` 指针成员，用于直接管理 svc 数据。
+2. 在驱动初始化（probe）阶段，直接将 `svc` 指针赋值给 `controller->svc`，移除原本不正确的 `dev_set_drvdata(dev, svc)` 调用。
+3. 在驱动卸载（remove）阶段，通过 `platform_get_drvdata` 获取 `controller`，再通过 `controller->svc` 获取 `svc` 指针，替代原先错误的 `dev_get_drvdata` 获取方式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/70bcc1f64e4f40e4a193055c0284c3ab96e42a17

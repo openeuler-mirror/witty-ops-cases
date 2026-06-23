@@ -1,0 +1,21 @@
+#标题
+f2fs: 修复 f2fs_do_replace_block 中 f2fs_bug_on 判断条件错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行 F2FS 文件系统的块替换操作时，触发 `f2fs_bug_on` 校验失败，导致系统进入 Bug 状态（如 Panic 或 Oops），可能引发内核崩溃或文件系统操作异常。该问题由提交 d0b9e42ab615 引入 inmem curseg 机制后，旧的判断逻辑与新代码逻辑不匹配导致。
+
+#主要错误日志
+未知
+
+#问题根因
+该 `f2fs_bug_on` 检查最早是在只有 6 种 curseg 类型时引入的，原代码直接检查传入的 `type` 参数（`!IS_DATASEG(type)`）。在提交 d0b9e42ab615 ("f2fs: introduce inmem curseg") 引入了 inmem curseg 机制后，curseg 的类型信息存储在 `curseg->seg_type` 中，而传入的 `type` 参数可能不再准确反映实际的段类型。因此，原判断条件失效，导致内核误报 Bug。
+
+#解决方案
+修改 `fs/f2fs/segment.c` 中的 `f2fs_do_replace_block` 函数，将 `f2fs_bug_on(sbi, !IS_DATASEG(type))` 修改为 `f2fs_bug_on(sbi, !IS_DATASEG(curseg->seg_type))`。
+该修复将校验逻辑从检查传入的 `type` 参数改为检查当前 curseg 结构体中的 `seg_type` 成员，确保校验的是实际的段类型，从而适配 inmem curseg 机制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2b1b1761d2d315e52979cbc6d6cd3478b7d77575

@@ -1,0 +1,31 @@
+#标题
+nvme-pci: reset与nvme_dev_disable竞态导致内核WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在NVMe设备重置过程中，若与`nvme_dev_disable()`函数发生竞态条件，内核触发WARNING告警。该问题发生在更新硬件队列数时，由于竞态导致传入了无效值，引发调用栈异常。具体表现为CPU处于nvme-reset-wq工作队列中，并在`pci_irq_get_affinity`处触发RIP错误。
+
+#主要错误日志
+WARNING: CPU: 39 PID: 61303 at drivers/pci/msi/api.c:347
+         pci_irq_get_affinity+0x187/0x210
+Workqueue: nvme-reset-wq nvme_reset_work [nvme]
+RIP: 0010:pci_irq_get_affinity+0x187/0x210
+Call Trace:
+ <TASK>
+ ? blk_mq_pci_map_queues+0x87/0x3c0
+ ? pci_irq_get_affinity+0x187/0x210
+ blk_mq_pci_map_queues+0x87/0x3c0
+ nvme_pci_map_queues+0x189/0x460 [nvme]
+ blk_mq_update_nr_hw_queues+0x2a/0x40
+ nvme_reset_work+0x1be/0x2a0 [nvme]
+
+#问题根因
+`nvme_dev_disable()`函数会修改`dev->online_queues`字段，而`nvme_pci_update_nr_queues()`未做保护直接读取该字段。两者之间存在竞态条件，导致`nvme_pci_update_nr_queues()`可能读取到无效的队列数值并传递给`blk_mq_update_nr_hw_queues()`，进而触发WARNING。
+
+#解决方案
+在`nvme_pci_update_nr_queues()`函数中引入`shutdown_lock`互斥锁保护。在读取`dev->online_queues`前尝试获取锁，若获取失败（表明正在与`nvme_dev_disable()`竞态）则直接放弃操作；若`dev->online_queues`已被置0（表明`nvme_dev_disable()`已执行），同样放弃操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/25f67d0acb77c0dcad701cc9f18aaa90c50b9ced

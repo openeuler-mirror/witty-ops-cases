@@ -1,0 +1,20 @@
+#标题
+scsi_debug模块ndelay支持hrtimer时计时逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 scsi_debug 模块模拟 SCSI 命令延迟（ndelay）时，若延迟时间小于 INCLUSIVE_TIMING_MAX_NS 且未使用轮询模式，由于 `ns_from_boot` 变量未被正确赋值，导致 hrtimer 支持失效，命令执行时长模拟不准确，影响依赖精确延迟的测试场景。
+
+#主要错误日志
+未知
+
+#问题根因
+自提交 771f712ba5b0 ("scsi: scsi_debug: Fix cmd duration calculation") 起，`ns_from_boot` 的值仅在请求为轮询模式时才被获取。然而，当 ndelay 值小于 INCLUSIVE_TIMING_MAX_NS 时，代码逻辑依赖 hrtimer 处理，此时同样需要正确的 `ns_from_boot` 值来计算命令持续时间。原有的判断逻辑遗漏了对 ndelay 范围的检查，导致非轮询模式下 `ns_from_boot` 未被赋值，进而导致计时逻辑错误。
+
+#解决方案
+修改 `schedule_resp()` 函数中的条件判断逻辑，扩展 `ns_from_boot` 的获取条件。除了原有的 `polled` 判断外，新增对 ndelay 的检查：当 `ndelay > 0 && ndelay < INCLUSIVE_TIMING_MAX_NS` 时，同样调用 `ktime_get_boottime_ns()` 获取时间，从而修复 hrtimer 支持的计时问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eec094932c758cb942a43c26c55b4027d9641f16

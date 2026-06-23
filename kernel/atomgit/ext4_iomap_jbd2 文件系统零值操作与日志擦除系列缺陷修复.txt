@@ -1,0 +1,42 @@
+#标题
+ext4/iomap/jbd2 文件系统零值操作与日志擦除系列缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **数据暴露/一致性风险**：在 truncate 操作（特别是 truncate up）或文件大小扩展过程中，文件末尾块的部分区域未被正确清零，导致旧数据残留，可能引发数据泄露或数据一致性问题。
+2. **内存暴露风险**：在 iomap 路径下进行 truncate 操作时，存在潜在的内存暴露问题。
+3. **I/O 中断风险**：在执行 IOMAP_ZERO 操作时，若收到致命信号，操作会被中断，可能导致数据零化未完成，从而留下数据空洞或暴露旧数据。
+4. **日志擦除错误**：JBD2 在擦除日志区域时存在 off-by-one 错误，可能导致擦除范围不正确，影响日志区域的清空效果。
+5. **代码路径跳转错误**：`ext4_setattr` 函数在错误处理时跳转到了错误的标签，可能导致锁或资源未正确释放。
+
+#主要错误日志
+JBD2: (error %d) unable to wipe journal at physical blocks [%llu, %llu)
+
+#问题根因
+1. **ext4 truncate 零化逻辑缺陷**：
+   - `ext4_block_truncate_page` 在处理数据排序模式时逻辑有误，导致在 truncate up 场景下数据未被正确处理。
+   - `ext4_setattr` 在扩展文件大小时，未对跨越 EOF 的页进行清零操作。
+2. **iomap 路径缺陷**：
+   - `iomap_write_begin` 对 `IOMAP_ZERO` 操作检查了 `fatal_signal_pending`，导致重要的零化操作可能被信号中断。
+3. **jbd2 日志擦除逻辑错误**：
+   - `__jbd2_journal_erase` 函数中计算连续物理块范围的逻辑存在差一错误，导致 `block_stop` 计算以及后续的 `truncate_inode_pages_range` 和 `blkdev_issue_discard` 范围计算错误。
+4. **页缓存扩展处理不完整**：
+   - `pagecache_isize_extended` 虽然处理了页的脏标记，但在 i_size 扩展时未对页中超出原 EOF 的部分进行清零，若页已脏但未回写，可能导致旧数据暴露。
+5. **控制流错误**：
+   - `ext4_setattr` 中错误处理跳转标签使用不当。
+
+#解决方案
+1. **修复 ext4 truncate 与 setattr 逻辑**：
+   - 重构 `ext4_block_truncate_page` 及其调用链，引入 `did_zero` 标记，正确处理 `ext4_should_order_data` 和 `ext4_should_journal_data` 模式下的清零与日志记录。
+   - 在 `ext4_setattr` 中增加对 truncate up 场景下 EOF 页面的清零处理，并修正错误处理跳转标签。
+2. **修复 iomap 零化中断问题**：
+   - 在 `iomap_write_begin` 中增加判断，若操作类型为 `IOMAP_ZERO`，则忽略致命信号中断，确保零化操作完成，防止数据暴露。
+3. **修复 jbd2 擦除范围计算**：
+   - 修正 `__jbd2_journal_erase` 中的 off-by-one 错误，调整 `block_stop` 的累加逻辑及 `truncate_inode_pages_range` 的参数，确保擦除范围正确。
+4. **增强页缓存扩展安全性**：
+   - 在 `pagecache_isize_extended` 中，当检测到页为脏页时，显式调用 `folio_zero_segment` 将原 EOF 到新 EOF 之间的区域清零，防止内存暴露。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8e04020e957c517ad3fb6bb3caa90e037dc3d5b8

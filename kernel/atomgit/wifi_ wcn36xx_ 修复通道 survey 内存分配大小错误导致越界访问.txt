@@ -1,0 +1,20 @@
+#标题
+wifi: wcn36xx: 修复通道 survey 内存分配大小错误导致越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+KASAN 检测报告 wcn->chan_survey 存在内存分配问题。当通道上没有帧数据时，系统可能会使用未初始化的值，存在潜在的内存越界访问风险。
+
+#主要错误日志
+KASAN reported a memory allocation issue in wcn->chan_survey due to incorrect size calculation.
+
+#问题根因
+在内存分配时使用了 `devm_kmalloc` 且仅传递了 `n_channels` 作为大小参数，导致分配的内存空间不足（仅分配了 n_channels 个字节，而非 n_channels 个结构体大小的空间）。这使得后续访问该数组时发生越界，且内存未经过初始化，导致使用了未初始化的值。
+
+#解决方案
+将 `devm_kmalloc` 替换为 `devm_kcalloc`，传入 `n_channels` 以及 `sizeof(struct wcn36xx_chan_survey)` 作为参数。这不仅修正了分配空间的大小（确保分配足够的内存以容纳所有通道的结构体），而且 `kcalloc` 会自动将分配的内存初始化为零，防止使用未初始化的值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dcf55e320cb3db60a709cf6973e35539109e2812

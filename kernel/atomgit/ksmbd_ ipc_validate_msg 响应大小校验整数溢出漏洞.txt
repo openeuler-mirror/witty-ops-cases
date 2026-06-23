@@ -1,0 +1,27 @@
+#标题
+ksmbd: ipc_validate_msg 响应大小校验整数溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ksmbd 内核模块在处理用户空间守护进程的响应消息时，由于 `ipc_validate_msg()` 函数存在整数溢出漏洞，攻击者可能通过控制响应消息中的 `payload_sz` 或 `ngroups` 字段，绕过消息大小校验。这可能导致后续内存操作（如 `memcpy` 或 `kmemdup`）使用错误的长度，进而引发内核内存越界读写、内存破坏或潜在的系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ipc_validate_msg()` 函数中，计算预期消息大小时使用了无符号整数算术，将攻击者可控的字段（`resp->payload_sz` 和 `resp->ngroups`）与固定结构体大小相加或相乘。具体存在以下三个溢出风险点：
+1. `KSMBD_EVENT_RPC_REQUEST`：`msg_sz = sizeof(struct ksmbd_rpc_command) + resp->payload_sz;`
+2. `KSMBD_EVENT_SHARE_CONFIG_REQUEST`：`msg_sz = sizeof(struct ksmbd_share_config_response) + resp->payload_sz;`
+3. `KSMBD_EVENT_LOGIN_REQUEST_EXT`：`msg_sz = sizeof(struct ksmbd_login_response_ext) + resp->ngroups * sizeof(gid_t);`
+
+由于 `resp->payload_sz` 是 `__u32` 类型，`resp->ngroups` 是 `__s32` 类型，上述运算可能发生回绕。特别是 `ngroups` 为负数时，在乘法运算中会被转换为 `SIZE_MAX`，导致计算出的 `msg_sz` 异常。如果回绕后的 `msg_sz` 恰好等于 `entry->msg_sz`，即可绕过大小检查，导致下游消费者信任未经验证的长度值。
+
+#解决方案
+1. 对于 `KSMBD_EVENT_RPC_REQUEST` 和 `KSMBD_EVENT_SHARE_CONFIG_REQUEST` 路径，使用 `check_add_overflow()` 函数检测加法运算是否发生整数溢出。如果检测到溢出，函数返回 `-EINVAL`，从而在不限制功能性负载大小的前提下防止溢出。
+2. 对于 `KSMBD_EVENT_LOGIN_REQUEST_EXT` 路径，在计算 `msg_sz` 之前，先检查 `resp->ngroups` 是否处于有符号整数范围 `[0, NGROUPS_MAX]` 之内。如果值无效，通过 `pr_err` 打印错误日志并返回 `-EINVAL`。
+3. 移除 `ksmbd_alloc_user()` 函数中冗余的 `ngroups` 检查和 `pr_err` 打印，因为校验逻辑已提前至 IPC 边界处。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/282f87b82ca420289e6c0471f5e5ac718002edd3

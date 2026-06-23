@@ -1,0 +1,22 @@
+#标题
+ppp: pad_compress_skb函数存在内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PPP 协议处理过程中，当 `pad_compress_skb` 函数执行压缩操作时，若发生压缩器丢弃数据包的情况，会导致原始 skb 内存泄漏。
+
+#主要错误日志
+ppp: compressor dropped pkt
+
+#问题根因
+在 `pad_compress_skb` 函数中，当压缩失败（`new_skb` 大小大于原始 `skb`）时，代码逻辑错误地调用了 `kfree_skb(skb)` 释放原始 skb，随后又调用 `consume_skb(new_skb)` 并将 `new_skb` 置空。当该函数返回 NULL 给调用者 `ppp_send_frame` 时，`ppp_send_frame` 会跳转到 `drop` 标签再次对原始 skb 指针调用 `kfree_skb`，导致同一个 skb 被释放两次（double free）或者因指针状态不一致导致内存泄漏风险。实际上该补丁是为了修复内存泄漏问题，核心在于 `pad_compress_skb` 返回 NULL 时，调用者应当如何正确处理 skb 的生命周期。
+
+#解决方案
+修改 `drivers/net/ppp/ppp_generic.c` 文件：
+1. 在 `pad_compress_skb` 函数中，删除压缩失败分支中多余的 `kfree_skb(skb)` 调用，保留 `consume_skb(new_skb)` 及后续置空操作，确保此时原始 skb 仍然有效。
+2. 在调用者 `ppp_send_frame` 函数中，使用新变量 `new_skb` 接收 `pad_compress_skb` 的返回值。如果返回值为 NULL，则跳转到 `drop` 标签处理，此时 `drop` 标签处的 `kfree_skb(skb)` 会正确释放原始 skb；如果返回有效指针，则更新 `skb` 变量为新的 `new_skb` 继续后续处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/be0e05fcd0a3d55d980b9c7704fc7c1ca3481dce

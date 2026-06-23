@@ -1,0 +1,20 @@
+#标题
+drm/panfrost: wait_bo ioctl 错误返回正值导致用户态误报异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+调用 `panfrost_ioctl_wait_bo` 接口时，若底层 `dma_resv_wait_timeout()` 成功执行（返回剩余 jiffies 正值），用户空间会错误地接收到该正值作为 ioctl 返回值，将其误判为失败或错误。
+
+#主要错误日志
+未知
+
+#问题根因
+`dma_resv_wait_timeout()` 函数成功时返回正数（剩余 jiffies），超时返回 0，失败返回负错误码。`panfrost_ioctl_wait_bo()` 使用 `int` 类型变量接收并返回该结果，导致成功时的正值返回值被传递到用户空间，被误认为是错误码。
+
+#解决方案
+在 `panfrost_ioctl_wait_bo()` 函数中增加判断逻辑：当 `dma_resv_wait_timeout()` 返回值大于 0（即成功）时，显式将返回值设为 0，确保用户空间接收到正确的成功状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf7a1d10b353cd2aae20f07b6b5e10e258a4dea0

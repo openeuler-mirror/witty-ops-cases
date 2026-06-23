@@ -1,0 +1,20 @@
+#标题
+PCI/IOV: 移除虚拟功能时引发 use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 PCI SR-IOV 虚拟功能（virtfn）过程中，内核发生 Use-After-Free 错误。具体表现为在释放 virtfn 设备结构体后，代码仍试图访问该结构体以获取设备 ID 并进行后续销毁操作，可能导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `pci_iov_remove_virtfn` 函数中，程序先调用 `pci_dev_put(virtfn)` 释放了 virtfn 设备对象，随后又在 `is_virtcca_cc_dev` 和 `virtcca_dev_destroy` 函数调用中通过 `pci_dev_id(virtfn)` 访问该已释放对象的成员。这是一个典型的释放后使用漏洞，释放操作过早导致后续访问失效内存。
+
+#解决方案
+在调用 `pci_dev_put(virtfn)` 释放设备对象之前，预先将设备 ID 保存到局部变量 `virtfn_devid` 中。后续判断 `is_virtcca_cc_dev` 和调用 `virtcca_dev_destroy` 时直接使用该局部变量，避免访问已释放的内存地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f37b1b7e498a34e30cb93cb01cb18746690c9613

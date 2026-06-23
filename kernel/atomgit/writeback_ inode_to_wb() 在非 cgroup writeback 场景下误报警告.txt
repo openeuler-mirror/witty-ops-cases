@@ -1,0 +1,20 @@
+#标题
+writeback: inode_to_wb() 在非 cgroup writeback 场景下误报警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核运行过程中，`inode_to_wb()` 函数触发错误警告（WARN_ON_ONCE）。该警告为误报，发生在不支持 cgroup writeback 的文件系统上，此时并未持有保护 `inode->i_wb` 访问的锁，但代码逻辑实际上是安全的。
+
+#主要错误日志
+调用栈中触发 WARN_ON_ONCE 检查失败（内核警告栈回溯）。
+
+#问题根因
+`inode_to_wb()` 函数内的 `WARN_ON_ONCE` 锁检查逻辑过于严格。它要求所有调用路径都必须持有特定的锁（如 `inode->i_lock`）来保护 `inode->i_wb` 的解引用。然而，对于那些不支持 cgroup writeback 的文件系统，`inode->i_wb` 在 inode 生命周期内是稳定的（始终指向 `bdi->wb`），不需要加锁保护。原有的检查逻辑未区分这两种情况，导致在无锁且安全的场景下误触发警告。
+
+#解决方案
+修改 `include/linux/backing-dev.h` 中 `inode_to_wb()` 函数的锁检查条件。在 `WARN_ON_ONCE` 判断中增加对 `SB_I_CGROUPWB` 标志位的检查。只有当文件系统设置了 `SB_I_CGROUPWB` 标志（即支持 cgroup writeback）时，才强制要求持有相关锁，从而消除不支持该特性文件系统下的误报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f655cf84e7eb9a25f1400003cf70c8f2812afd6f

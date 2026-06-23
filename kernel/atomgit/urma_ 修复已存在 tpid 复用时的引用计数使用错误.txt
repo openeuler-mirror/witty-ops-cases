@@ -1,0 +1,21 @@
+#标题
+urma: 修复已存在 tpid 复用时的引用计数使用错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统处理创建请求且检测到 tpid_reuse 已存在（即需复用现有 tpid）时，内部逻辑处理不当，导致潜在的内核空指针崩溃或响应发送失败，引发连接建立流程异常。
+
+#主要错误日志
+ubcore_log_info_rl("tpid_reuse exists.\n");
+ubcore_log_err("Failed to send create resp message.\n");
+
+#问题根因
+在 `handle_create_req_with_tpid_reuse` 函数中，当 `ubcore_find_add_tpid_reuse` 返回 `-EEXIST`（即 tpid 已存在）时，原代码逻辑错误地直接使用局部指针变量接收 `ubcore_reuse_tpid` 的返回值，而该返回值可能为 NULL。随后代码未对 NULL 进行有效处理即访问其成员（如 `tp_handle` 和 `tx_psn`），导致空指针访问；此外，原有的跳转逻辑破坏了正常的响应发送流程。
+
+#解决方案
+重构了 tpid 已存在时的处理分支：移除了危险的跳转逻辑，调用 `target_reuse_tpid` 处理复用逻辑，直接从已存在的 `exist_tpid_reuse` 对象获取句柄与 PSN 信息，并正确处理引用计数（调用 `ubcore_tpid_reuse_kref_put`），最后通过标准路径发送响应报文，从而避免了空指针访问并保证了逻辑的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f62b82d8268dcfaec3e53a59cf88c0cfd99eeffa

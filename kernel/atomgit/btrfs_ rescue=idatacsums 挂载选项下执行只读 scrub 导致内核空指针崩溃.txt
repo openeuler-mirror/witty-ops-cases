@@ -1,0 +1,32 @@
+#标题
+btrfs: rescue=idatacsums 挂载选项下执行只读 scrub 导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 btrfs 文件系统使用 `rescue=idatacsums` 挂载选项时，尝试执行只读 scrub 操作会导致内核崩溃。系统触发空指针解引用（NULL pointer dereference），引发 Oops/Panic，造成 scrub 流程中断且系统不稳定。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000208
+#PF: supervisor read access in kernel mode
+#PF: error_code(0x0000) - not-present page
+RIP: 0010:btrfs_lookup_csums_bitmap+0x49/0x480 [btrfs]
+Call Trace:
+ <TASK>
+ scrub_find_fill_first_stripe+0x35b/0x3d0 [btrfs]
+ scrub_simple_mirror+0x175/0x290 [btrfs]
+ scrub_stripe+0x5f7/0x6f0 [btrfs]
+ scrub_chunk+0x9a/0x150 [btrfs]
+ scrub_enumerate_chunks+0x333/0x660 [btrfs]
+ btrfs_scrub_dev+0x23e/0x600 [btrfs]
+ btrfs_ioctl+0x1dcf/0x2f80 [btrfs]
+
+#问题根因
+挂载选项 `rescue=idatacsums` 会使内核完全跳过加载 csum tree，导致 csum root 指针为 NULL。scrub 代码路径在执行搜索前未检查文件系统状态标志 NO_DATA_CSUMS 位，也未校验 csum root 指针的有效性，直接调用 `btrfs_search_slot()` 时传入了 NULL 指针，从而触发空指针解引用崩溃。
+
+#解决方案
+在 scrub 处理流程的入口函数 `scrub_find_fill_first_stripe` 中增加对 `csum_root` 指针的校验。将原有的单一 `extent_root` 判断逻辑修改为同时检查 `extent_root` 和 `csum_root`。若任一指针为空，则打印错误日志 "no valid extent or csum root for scrub" 并返回 `-EUCLEAN` 错误，避免后续流程访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb96f6d2806462ef6072c98edec30ffacb40c2eb

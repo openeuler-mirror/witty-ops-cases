@@ -1,0 +1,20 @@
+#标题
+rtl8150驱动usb_submit_urb失败导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 rtl8150 网卡的 `async_set_registers` 函数时，若 `usb_submit_urb()` 提交失败，会导致内存资源未被释放，造成内核内存泄漏。若设备断开连接（返回 -ENODEV），网络设备还会被分离。
+
+#主要错误日志
+dev_err(&dev->udev->dev, "%s failed with %d\n", __func__, res);
+
+#问题根因
+在 `async_set_registers` 函数中，当 `usb_submit_urb()` 返回失败时，代码逻辑仅进行了错误日志打印和设备分离处理，但未释放此前已经分配的 `req` 内存结构体和 `async_urb` 对象，导致内存泄漏。
+
+#解决方案
+在 `usb_submit_urb()` 失败的错误处理分支中，显式调用 `kfree(req)` 和 `usb_free_urb(async_urb)`，确保在异常路径下正确释放已分配的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2198a6c1ac015b0185adb40a9573c28ab11b8545

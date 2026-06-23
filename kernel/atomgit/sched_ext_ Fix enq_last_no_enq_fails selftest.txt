@@ -1,0 +1,24 @@
+#标题
+sched_ext: Fix enq_last_no_enq_fails selftest
+
+#内核版本
+OLK-6.6
+
+#问题现象
+sched_ext 子系统的 `enq_last_no_enq_fails` 自测试用例执行失败。由于内核加载失败报告机制变更，测试用例原本预期的“attach 失败”行为不再发生，导致测试逻辑判定错误，无法正确验证“指定 SCX_OPS_ENQ_LAST 标志但未定义 ops.enqueue() 时调度器应被 eject（弹出/剔除）”这一功能点。
+
+#主要错误日志
+SCX_ERR("Incorrectly succeeded in to attaching scheduler");
+SCX_ERR("Incorrectly stayed loaded");
+
+#问题根因
+Commit cc9877fb7677 ("sched_ext: Improve error reporting during loading") 改进了加载失败时的错误报告方式，允许传递更多的错误上下文。这导致调度器的 attach 流程不再直接失败，而是在 attach 完成后携带完整错误信息将调度器弹出。原有的测试代码仍检查 attach 是否失败，导致测试逻辑与新的内核行为不匹配。
+
+#解决方案
+更新测试用例 `enq_last_no_enq_fails` 以适配新的错误处理逻辑：
+1. 修改 BPF 程序，增加 `exit_kind` 变量和 `enq_last_no_enq_fails_exit` 回调函数，用于捕获调度器退出的类型。
+2. 修改用户态测试程序逻辑，不再检查 `bpf_map__attach_struct_ops` 是否返回 NULL（即不再期望 attach 直接失败），而是检查 `exit_kind` 是否被设置，以此验证调度器是否被正确弹出。
+3. 修正测试描述，将“Verify we fail to load...”改为“Verify we eject a scheduler...”。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ff80d1cd086813dd3a24417fced602954410f864

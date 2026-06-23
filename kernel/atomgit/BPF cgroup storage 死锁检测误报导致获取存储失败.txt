@@ -1,0 +1,23 @@
+#标题
+BPF cgroup storage 死锁检测误报导致获取存储失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在生产环境中，调用 `bpf_cgrp_storage_get` 获取 cgroup storage 时频繁出现失败。这是一个误报问题，例如当 BPF 程序正在操作 map_a 时，一个 IRQ 打断并触发了另一个针对 map_b 的 `bpf_cgrp_storage_get` 操作，此时会触发虚假的死锁检测，导致函数返回 NULL，即便这两个操作仅仅是查询而不需要创建新的 storage。
+
+#主要错误日志
+未知
+
+#问题根因
+当前 cgroup storage 实现中使用了一个 percpu 计数器 `bpf_cgrp_storage_busy` 来检测潜在的死锁。该检测机制过于严格，导致了误报。实际上，只有在需要创建新的 storage 时才必须持有 spin_lock，单纯的查询操作并不需要持有该锁。原有的实现在进入函数时无条件进行锁检查，一旦计数器忙碌即返回失败，忽略了查询操作无需加锁的事实，从而导致误报。
+
+#解决方案
+参考 `bpf_task_storage_get` 的修复策略，修改 `bpf_cgrp_storage_get` 的逻辑：不再无条件地尝试获取锁，而是先尝试获取锁并记录状态（变量 `nobusy`）。仅在以下两个条件同时满足时才判定为失败（返回 NULL）：
+1. 需要创建新的 storage（设置了 `BPF_LOCAL_STORAGE_GET_F_CREATE` 标志）。
+2. 锁处于忙碌状态（`nobusy` 为假）。
+对于单纯的查询操作，即使锁忙碌也允许继续进行 lookup，从而避免了误报导致的失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14a20e91f0c0543fb81c0d27fbe3da57eacf0f27

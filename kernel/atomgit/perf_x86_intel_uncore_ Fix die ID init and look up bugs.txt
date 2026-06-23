@@ -1,0 +1,25 @@
+#标题
+perf/x86/intel/uncore: Fix die ID init and look up bugs
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SPR (Sapphire Rapids) 平台上，由于 uncore 模块在初始化和查找 die ID 时存在逻辑缺陷，可能导致 uncore PMON 设备探测失败或初始化流程异常（如 UPI 和 M3UPI uncore PMON 受影响）。特别是在 `snbep_pci2phy_map_init` 过程中，若 NUMA 信息不可用，`uncore_device_to_die` 可能返回无效值触发警告并中断初始化。
+
+#主要错误日志
+未知
+（注：补丁删除了 `WARN_ON_ONCE(die_id == -1)` 的检查，暗示原先可能存在内核警告日志，但补丁未提供具体的 dmesg 输出原文。）
+
+#问题根因
+1. `spr_update_device_location` 函数中错误地使用了 `uncore_device_to_die` 来获取 die ID，而该 API 依赖 NUMA 信息，在某些情况下不可用或不如直接查找总线信息准确。
+2. `snbep_pci2phy_map_init` 函数中存在逻辑缺陷，在持有自旋锁 `pci2phy_map_lock` 的情况下调用了可能睡眠的 `uncore_device_to_die` 函数（该函数内部可能涉及内存分配或睡眠操作），且在检测到 die_id 为 -1 时直接报错退出，导致初始化容错性不足。
+3. SPR uncore PCI 初始化缺少必要的 `snbep_pci2phy_map_init` 调用，导致映射表未建立。
+
+#解决方案
+1. 修改 `spr_update_device_location` 函数，将 `uncore_device_to_die(dev)` 替换为 `uncore_pcibus_to_dieid(dev->bus)`，直接通过总线查找 die ID，避免依赖 NUMA 信息的问题。
+2. 在 `snbep_pci2phy_map_init` 中移除 `WARN_ON_ONCE(die_id == -1)` 的错误检查与中断逻辑，增加对 `uncore_device_to_die` API 使用限制的注释说明（仅适用于 NUMA 信息可用时），并调整锁的范围以避免潜在问题。
+3. 在 `spr_uncore_pci_init` 入口函数中补充调用 `snbep_pci2phy_map_init`，确保在 SPR 平台上正确初始化 PCI 到 PHY 的映射表，若初始化失败则直接返回错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7a5d081f480fcc25ec6271cd9275d3398a53266b

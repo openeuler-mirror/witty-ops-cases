@@ -1,0 +1,33 @@
+#标题
+obmm内存分配器默认粒度设置错误及日志打印格式缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 当加载 obmm 模块时若未指定 `mem_allocator_granu` 参数，内存分配器可能使用错误的默认粒度，导致内存分配行为不符合预期（如非 PMD/PUD 页面大小的内存段）。
+2. 内核日志中部分错误信息缺少换行符 `\n`，导致日志显示格式混乱，多条日志可能连在同一行显示。
+3. 部分错误日志描述不准确，例如在多插槽检查失败时，报错信息未能明确指出“内存与UB控制器来自不同插槽”这一具体原因。
+
+#主要错误日志
+- `pr_err("%s:fast alloc failed. nid: %d, request: 0x%lx, available: 0x%lx", ...)`
+- `pr_err("%s: null pointer.", ...)`
+- `pr_err("%#x is not a known scna, lookup ret=%pe", ...)`
+- `pr_err("failed to load export argument")`
+- `pr_err("Cannot use memory from multiple sockets.\n")`
+- `pr_err("invalid vendor_len = 0x%x, should less than 0x%x", ...)`
+- `pr_err("mmap region %d: not allow to be mmaped", ...)`
+
+#问题根因
+1. **默认粒度逻辑缺陷**：在 `init_mem_allocator_granu` 函数中，原代码仅对 `ALLOCATOR_HUGETLB_PUD` 和 `ALLOCATOR_HUGETLB_PMD` 设置了默认的 `__obmm_memseg_size`，若分配器类型为其他类型（如 buddy_highmem），`__obmm_memseg_size` 将保持未初始化或错误的状态。同时，模块参数描述未更新，仍指向已废弃的 `pmd_mapping` 参数。
+2. **日志格式问题**：多处 `pr_err` 调用末尾遗漏换行符 `\n`，不符合 Linux 内核日志打印规范。
+3. **冗余代码与描述错误**：`obmm_shm_dev.c` 中存在定义但未使用的变量；部分报错信息（如跨插槽访问限制）描述不够完整。
+
+#解决方案
+1. **修复默认粒度逻辑**：修改 `init_mem_allocator_granu` 函数，将 `else if (aid == ALLOCATOR_HUGETLB_PMD)` 改为 `else`，确保未指定粒度时，非 PUD 类型的分配器均能正确设置默认粒度（PMD_SIZE）。
+2. **修正模块参数描述**：将 `mempool_allocator` 参数的描述从 "use kernel cmdline pmd_mapping to select" 更新为 "use buddy_highmem allocator"。
+3. **修复日志打印**：统一在所有相关的 `pr_err` 和 `pr_info` 调用末尾添加换行符 `\n`。
+4. **优化日志信息与清理代码**：完善多插槽检查失败的报错信息；移除 `obmm_shm_dev.c` 中未使用的局部变量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fe8734ef54adabd5683c4c349001ea01c7c879ba

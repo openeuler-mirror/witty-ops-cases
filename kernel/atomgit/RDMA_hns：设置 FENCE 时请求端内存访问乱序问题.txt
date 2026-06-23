@@ -1,0 +1,20 @@
+#标题
+RDMA/hns：设置 FENCE 时请求端内存访问乱序问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 HNS RoCE 驱动进行 RDMA 通信时，当用户设置了 FENCE 标志以期望保证顺序时，硬件并未按预期严格保序。具体表现为：前一个 Read/Atomic 操作的响应数据尚未写入内存，后续的 Send/Write 操作便已开始处理。这导致后续操作读取到的是内存中的原始数据，而非期望的响应数据，造成数据不一致或业务逻辑错误。
+
+#主要错误日志
+未知
+
+#问题根因
+HNS 硬件 WQE 中的 FENCE 指示符功能定义较弱，它无法确保前一个 Read/Atomic 操作的响应数据已写入请求端内存后再处理后续的 Send/Write 操作。这导致后续操作可能在数据写入完成前访问内存，引发乱序访问问题。
+
+#解决方案
+将 WQE 中的 FENCE 指示符替换为 SO (Strong Order) 指示符。SO 指示符会阻塞后续操作，直到前一个操作的响应数据已写入内存并返回 bresp，从而保证严格的读写顺序。代码层面将 `hr_reg_write` 的字段从 `RC_SEND_WQE_FENCE` 修改为 `RC_SEND_WQE_SO`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22707e12ed2745c5597f2f9aa6eecf6634979848

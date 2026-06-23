@@ -1,0 +1,24 @@
+#标题
+crypto: null 模块在原子上下文中使用互斥锁导致睡眠问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 crypto null 相关请求时，若运行在原子上下文（如软中断、中断处理程序或持有自旋锁）中调用 `crypto_get_default_null_skcipher` 或 `crypto_put_default_null_skcipher` 函数，会因尝试获取互斥锁而触发调度，导致内核报错或 panic，典型的报错信息为 "scheduling while atomic"。
+
+#主要错误日志
+BUG: scheduling while atomic
+
+#问题根因
+`crypto_get_default_null_skcipher` 和 `crypto_put_default_null_skcipher` 函数内部使用 `mutex_lock` 进行临界区保护。然而，这些函数可能被运行在原子上下文中的代码路径调用。由于 Mutex 在获取失败时会导致进程睡眠，这在原子上下文中是非法操作，从而引发了 "scheduling while atomic" 错误。
+
+#解决方案
+将临界区保护机制从 Mutex（互斥锁）替换为 Spinlock（自旋锁），以适配原子上下文的调用场景。具体修改如下：
+1. 将 `crypto_default_null_skcipher_lock` 的定义从 `DEFINE_MUTEX` 改为 `DEFINE_SPINLOCK`。
+2. 将锁操作从 `mutex_lock/unlock` 替换为 `spin_lock_bh/spin_unlock_bh`（使用 `_bh` 后缀以禁用软中断，保证数据安全）。
+3. 为避免在持有自旋锁期间进行可能睡眠的内存分配操作，重构了 `crypto_alloc_sync_skcipher` 的调用逻辑：先临时释放自旋锁进行分配，分配完成后再重新获取锁检查并更新全局指针，确保了锁的正确使用且避免了竞态条件。
+4. 同样地，将释放 tfm 的操作 `crypto_free_sync_skcipher` 移到锁外执行，防止在锁内进行可能睡眠的释放操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75f1c69a58000385e1712b6aecafee90fd43bb6b

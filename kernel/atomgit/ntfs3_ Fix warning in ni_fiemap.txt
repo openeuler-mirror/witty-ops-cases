@@ -1,0 +1,25 @@
+#标题
+ntfs3: Fix warning in ni_fiemap
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ni_fiemap` 函数（例如通过 `ioctl` 进行文件映射查询）时，内核可能触发警告信息。由于该问题由 syzbot 报告，通常涉及并发访问或锁处理不当导致的内部状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`ni_fiemap` 函数内部使用了 `cached runs_tree`（缓存的运行树），该结构体受 `rw_semaphore` 锁保护。在处理 fiemap 请求时，代码需要在持有锁的情况下将数据拷贝回用户空间，或者涉及锁的嵌套/释放与重新获取逻辑，这容易引发死锁或竞争警告。
+
+#解决方案
+修改 `ni_fiemap` 的实现，不再使用 `cached runs_tree` 及其关联的 `rw_semaphore` 锁，而是改用局部的 `runs_tree` 变量。
+具体变更包括：
+1. 移除了 `run_lock`（`rw_semaphore`）的 `down_read`/`up_read` 和 `down_write` 操作。
+2. 删除了用于在锁保护下拷贝数据的 `fiemap_fill_next_extent_k` 辅助函数，直接调用标准的 `fiemap_fill_next_extent`。
+3. 相关的依赖函数 `attr_is_frame_compressed` 和 `attr_load_runs_vcn` 也相应更新，接收传入的 `runs_tree` 指针而非使用全局缓存。
+此举消除了锁竞争风险，修复了相关警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/70701e82c3fceaf1013505f0a0efb8f3cbb66ed0

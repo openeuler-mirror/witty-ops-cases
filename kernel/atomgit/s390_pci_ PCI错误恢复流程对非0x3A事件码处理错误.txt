@@ -1,0 +1,23 @@
+#标题
+s390/pci: PCI错误恢复流程对非0x3A事件码处理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在s390架构PCI设备发生错误时，内核错误恢复机制未正确处理除0x3A以外的PCI事件码。除永久性错误（0x3B, 0x40）和FMB错误（0x2A, 0x2B, 0x2C）外，固件期望操作系统执行恢复操作，但原实现错误地将这些事件对应的设备标记为“冻结”状态而非尝试恢复，导致设备无法正常恢复功能。
+
+#主要错误日志
+未知
+
+#问题根因
+Linux内核对s390 PCI错误恢复的实现基于错误的理解。开发人员原以为固件恢复是一个两步过程，只有在收到事件码0x3A（成功）时才代表恢复成功，其他情况需特殊处理。实际上，固件仅在特定场景生成0x3A，并期望操作系统对所有除永久性错误（0x3B, 0x40）和FMB错误（0x2A, 0x2B, 0x2C）之外的事件码执行恢复操作。原代码逻辑在default分支中仅将设备标记为`pci_channel_io_frozen`，未尝试执行`zpci_event_attempt_error_recovery`，违背了固件预期。
+
+#解决方案
+修改 `arch/s390/pci/pci_event.c` 中的错误处理逻辑，调整 `switch` 分支结构：
+1. 将错误事件码 0x002a、0x002b、0x002c（FMB相关）单独列出，不做额外处理。
+2. 将错误事件码 0x0040、0x003b（永久性错误）单独列出，将设备标记为 `pci_channel_io_perm_failure`。
+3. 将原 `default` 分支逻辑修改为：对于所有其他事件码，视为PCI功能处于错误状态并尝试恢复，调用 `zpci_event_attempt_error_recovery(pdev)`。若恢复失败，再标记为 `pci_channel_io_perm_failure`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3881fffeb23daee04a90e0bc077346e08168cba6

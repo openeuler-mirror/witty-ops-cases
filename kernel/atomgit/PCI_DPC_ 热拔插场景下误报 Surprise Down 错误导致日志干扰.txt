@@ -1,0 +1,23 @@
+#标题
+PCI/DPC: 热拔插场景下误报 Surprise Down 错误导致日志干扰
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 DPC（Downstream Port Containment）的 PCIe 设备进行异步热拔插操作时，系统会触发 DPC 机制并产生预期的 Surprise Down 错误。该错误实际上是由于设备移除引起的正常副作用，但系统仍会打印错误日志，这不仅会困扰用户，还会导致 pciehp 处理程序在等待 DPC 恢复时产生 1 秒钟的延迟，影响热插拔体验。
+
+#主要错误日志
+pci_info(pdev, "Data Link Layer Link Active not cleared in 1000 msec\n");
+
+#问题根因
+根据 PCIe r6.0 协议规范第 6.7.6 节，异步移除设备配合 DPC 机制工作时，产生 Surprise Down 错误是预期行为。问题根因在于内核 DPC 处理逻辑未区分该错误是源于真实的硬件故障还是正常的异步热拔插操作，导致将预期的副作用当作错误进行处理，打印了不必要的错误信息并触发了冗长的恢复流程。
+
+#解决方案
+在 DPC 处理函数中增加对热拔插场景的判断逻辑：
+1. 检查设备是否为热插拔桥，并读取 AER（Advanced Error Reporting）未修正错误状态寄存器。
+2. 若检测到 Surprise Down 错误状态位置位，判定为异步热拔插操作。
+3. 若确认为热拔插，则跳过常规的错误处理流程，直接清除错误状态寄存器（包括 DPC Status、AER Status 及 PCI Status），并继续执行热插拔卸载流程，从而消除误报日志和额外延迟。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/264cea76b914479c6106ecc65405842b129dc32f

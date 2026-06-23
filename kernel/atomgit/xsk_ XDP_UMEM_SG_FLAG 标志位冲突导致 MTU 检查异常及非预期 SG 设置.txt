@@ -1,0 +1,23 @@
+#标题
+xsk: XDP_UMEM_SG_FLAG 标志位冲突导致 MTU 检查异常及非预期 SG 设置
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在使用 XDP sockets 共享 UMEM 且开启软件 Tx 校验和功能时，可能会意外触发 Scatter-Gather (SG) 设置，导致行为异常。
+2. 在多缓冲区场景下，由于 `XDP_USE_SG` 标志位未正确传递，导致本应跳过的 MTU 检查被错误执行，可能造成配置失败或性能问题。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **标志位值冲突**：`XDP_UMEM_SG_FLAG` 的值被定义为 `(1 << 1)`，与 `XDP_UMEM_TX_SW_CSUM` 的值相同，导致在使用软件 Tx 校验和时错误地触发了 SG 设置。
+2. **标志位传递缺失**：函数 `xp_assign_dev_shared()` 在处理共享 UMEM 时，未将 `XDP_UMEM_SG_FLAG` 正确转换为 `XDP_USE_SG` 标志并加入到 flags 中，导致后续逻辑无法识别当前为多缓冲区场景，错误执行了仅应在单缓冲区场景下进行的 MTU 检查。
+
+#解决方案
+1. **修改标志位定义**：将 `include/net/xdp_sock.h` 中的 `XDP_UMEM_SG_FLAG` 宏定义从 `(1 << 1)` 修改为 `BIT(3)`，避免与 `XDP_UMEM_TX_SW_CSUM` 标志位值冲突。
+2. **完善标志位传递逻辑**：在 `net/xdp/xsk_buff_pool.c` 的 `xp_assign_dev_shared` 函数中增加判断逻辑，如果 UMEM 标志包含 `XDP_UMEM_SG_FLAG`，则将 `XDP_USE_SG` 标志加入到设备 flags 中，确保 MTU 检查逻辑正确执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8fdb6db9e90d0ce137b29d24daaec118b8c86aa2

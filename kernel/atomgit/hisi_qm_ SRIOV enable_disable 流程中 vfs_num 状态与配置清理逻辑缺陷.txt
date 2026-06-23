@@ -1,0 +1,25 @@
+#标题
+hisi_qm: SRIOV enable/disable 流程中 vfs_num 状态与配置清理逻辑缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在启用 SRIOV 失败时，驱动内部变量 `vfs_num` 未正确重置为 0，导致状态残留。
+2. 在禁用 SRIOV 时，若 `vfs_num` 已经为 0，驱动仍会无意义地调用清理函数，且循环不执行；若清理失败，原有的 VF 配置可能残留未被清除。
+
+#主要错误日志
+- "Can't enable VF!\n"
+- "Failed to disable VFs as VFs are assigned!\n"
+- "Failed to clear vft config!\n"（推断：根据 diff 中新增的错误打印逻辑）
+
+#问题根因
+1. **sriov_enable 流程**：在 `pci_enable_sriov` 失败时，原代码先调用 `qm_clear_vft_config` 再设置 `qm->vfs_num`。由于此时 `vfs_num` 可能仍为旧值或非零值，导致清理逻辑执行异常，且失败后 `vfs_num` 未重置为 0，造成状态不一致。
+2. **sriov_disable 流程**：原代码逻辑未正确处理配置清理的返回值，且在特定路径下（如 vfs_num 为 0 时）存在无效调用。
+
+#解决方案
+1. **sriov_enable 修复**：在调用 `pci_enable_sriov` 前先将 `qm->vfs_num` 设置为当前的 `num_vfs`；若 `pci_enable_sriov` 失败，在调用 `qm_clear_vft_config` 清理后，显式将 `qm->vfs_num` 重置为 0。
+2. **sriov_disable 修复**：在 `pci_disable_sriov` 后调用 `qm_clear_vft_config`，检查其返回值，若失败则打印错误日志；最后统一将 `vfs_num` 设置为 0 并返回 0，确保清理动作执行且状态正确更新。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e1aabc0be2512b0f5b4fb829c8f514151f5aa789

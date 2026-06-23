@@ -1,0 +1,22 @@
+#标题
+team: 添加端口设备时因状态检查失败导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当尝试将一个状态为 UP 的设备（如 gre0）添加为 team 设备的端口时，操作虽然会失败，但在此过程中 team 设备的 `header_ops` 被错误地修改。随后若激活 team 设备并进行网络通信（如 ping），会导致内核调用错误的头部构建函数（如 `ipgre_header`），因私有数据结构不匹配而引发系统挂起或 BUG。
+
+#主要错误日志
+Device is up. Set it down before adding it as a team port
+
+#问题根因
+在 `team_port_add` 函数中，`team_dev_type_check_change` 函数调用位置过早。该函数会修改 team 设备的 `header_ops`（例如从 `eth_header` 变为 `ipgre_header`），但该调用位于检查端口设备是否处于 UP 状态的判断之前。
+当端口设备处于 UP 状态时，添加操作会被终止并返回错误，但此前已经修改的 team 设备 `header_ops` 无法被恢复。这导致 team 设备后续使用错误的头部操作函数处理数据包，进而引发崩溃。
+
+#解决方案
+将 `team_dev_type_check_change` 的调用移动到所有前置检查（特别是端口设备 UP 状态检查）通过之后，确保只有在端口添加流程即将成功时才修改设备类型。
+同时，调整 MTU 设置逻辑：在调用 `team_dev_type_check_change` 之前，仅当 team 设备与端口设备类型相同时才同步 MTU，避免 MTU 被错误覆盖，因为不同类型设备的 MTU 同步将由 `team_dev_type_check_change` 处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/09c29bf5f367f245582fdeeeb7950a75dba89e99

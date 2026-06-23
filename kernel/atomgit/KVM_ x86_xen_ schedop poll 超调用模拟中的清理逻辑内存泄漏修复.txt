@@ -1,0 +1,20 @@
+#标题
+KVM: x86/xen: schedop poll 超调用模拟中的清理逻辑内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 KVM 虚拟化环境中，当 Guest VM 执行 Xen schedop poll 超调用并针对多个事件通道端口（nr_ports > 1）进行轮询时，若后续通过 `kvm_read_guest_virt` 读取端口数据失败（例如访问无效的 Guest 虚拟地址），该函数直接返回 `true` 而未执行内存释放逻辑。这导致此前通过 `kmalloc_array` 分配的内存无法被释放，造成宿主机内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `kvm_xen_schedop_poll` 在处理 `nr_ports > 1` 的情况时，先通过 `kmalloc_array` 分配了内存。在后续调用 `kvm_read_guest_virt` 读取 Guest 内存失败的错误处理路径中，代码直接执行了 `return true`，跳过了函数末尾标签 `out` 处的 `kfree` 操作。这是因为在引入提交 92c58965e965 时，错误处理逻辑未遵循该函数既定的资源清理流程所致。
+
+#解决方案
+修改 `kvm_read_guest_virt` 调用失败时的处理逻辑，将 `return true` 修改为 `goto out`。此举确保在读取失败设置错误码 `-EFAULT` 后，能够正确跳转至函数末尾的清理代码段，从而释放先前分配的内存资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2904f282b1ac18bcd3e7e859205b6c1f4a153602

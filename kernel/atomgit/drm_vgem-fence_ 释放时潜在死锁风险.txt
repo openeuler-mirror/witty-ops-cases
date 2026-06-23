@@ -1,0 +1,33 @@
+#标题
+drm/vgem-fence: 释放时潜在死锁风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定场景下（如运行 IGT 子测试 syncobj_timeline@stress-* 或 dma-fence-chain 自检测试），内核检测到锁状态不一致并触发 WARNING。系统判定存在潜在的死锁风险，具体表现为 `inconsistent {HARDIRQ-ON-W} -> {IN-HARDIRQ-W} usage`，并伴随 `Possible unsafe locking scenario` 与 `*** DEADLOCK ***` 警告。
+
+#主要错误日志
+[117.004340] WARNING: inconsistent lock state
+[117.004347] inconsistent {HARDIRQ-ON-W} -> {IN-HARDIRQ-W} usage.
+[117.004352] ffff888138f86aa8 ((&fence->timer)){?.-.}-{0:0}, at: __timer_delete_sync+0x4b/0x190
+[117.004429]  Possible unsafe locking scenario:
+[117.004432]        CPU0
+[117.004433]        ----
+[117.004434]   lock((&fence->timer));
+[117.004436]   <Interrupt>
+[117.004438]     lock((&fence->timer));
+[117.004440]
+[117.004443]  *** DEADLOCK ***
+[117.004692] WARNING: CPU: 0 PID: 0 at kernel/time/timer.c:1610 __timer_delete_sync+0x126/0x190
+
+#问题根因
+vgem fence 的定时器在初始化时未设置 `TIMER_IRQSAFE` 标志。在 `fence->ops.release()` 中调用 `timer_delete_sync()` 尝试同步删除定时器时，该操作可能在 IRQ 上下文中执行。由于定时器回调函数 `vgem_fence_timeout` 也在中断上下文中运行并尝试获取同一锁，导致了锁上下文冲突（Lock inversion），进而触发死锁检测警告。
+
+#解决方案
+在初始化 vgem fence 定时器时添加 `TIMER_IRQSAFE` 标志。
+修改代码位置：`drivers/gpu/drm/vgem/vgem_fence.c`
+修改内容：将 `timer_setup(&fence->timer, vgem_fence_timeout, 0);` 修改为 `timer_setup(&fence->timer, vgem_fence_timeout, TIMER_IRQSAFE);`。这确保了定时器可以在 IRQ 上下文中安全地被同步删除。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bebdc6e39b2d60379f7a878ef1515e230eeeac1e

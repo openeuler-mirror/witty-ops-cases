@@ -1,0 +1,20 @@
+#标题
+kmemleak 持有自旋锁时调用 pr_warn 引发 netpoll 死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 netpoll（如使用 netconsole）的环境下，当 kmemleak 内存池耗尽时，系统触发死锁，导致相关进程或 CPU 无法继续执行。
+
+#主要错误日志
+Memory pool empty, consider increasing CONFIG_DEBUG_KMEMLEAK_MEM_POOL_SIZE
+
+#问题根因
+在 `mem_pool_alloc()` 函数中，代码持有 `kmemleak_lock` 自旋锁并调用 `pr_warn_once()` 打印警告信息。当系统使能了 netpoll（netconsole）时，打印操作会触发 netpoll 发送路径，该路径最终调用 `__alloc_skb()` 分配内存。该分配操作会重新进入 kmemleak 处理流程（`__create_object`），尝试获取 `kmemleak_lock`，从而形成锁反转导致死锁。
+
+#解决方案
+将 `pr_warn_once()` 调用移至 `kmemleak_lock` 锁释放之后执行。具体修改是在锁临界区内仅设置一个布尔标志位 `warn`，在解锁后检查该标志位并执行打印操作，从而避免在持有锁期间进行可能引起调度或锁递归的操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/949fd3aa44705eae26a8b1025c4980f7f5998b98

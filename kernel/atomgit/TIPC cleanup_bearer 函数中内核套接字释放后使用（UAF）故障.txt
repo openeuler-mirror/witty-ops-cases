@@ -1,0 +1,34 @@
+#标题
+TIPC cleanup_bearer 函数中内核套接字释放后使用（UAF）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TIPC（透明进程间通信）模块禁用 UDP bearer 时，内核检测到 Use-After-Free 错误。该问题由 syzkaller 报告，触发 KMSAN 检测告警，表现为在 `cleanup_bearer` 工作队列执行过程中访问了已被释放的内存。
+
+#主要错误日志
+```
+BUG: KMSAN: use-after-free in udp_hashslot include/net/udp.h:85 [inline]
+BUG: KMSAN: use-after-free in udp_lib_unhash+0x3b8/0x930 net/ipv4/udp.c:1979
+ udp_hashslot include/net/udp.h:85 [inline]
+ udp_lib_unhash+0x3b8/0x930 net/ipv4/udp.c:1979
+ sk_common_release+0xaf/0x3f0 net/core/sock.c:3820
+ inet_release+0x1e0/0x260 net/ipv4/af_inet.c:437
+ inet6_release+0x6f/0xd0 net/ipv6/af_inet6.c:489
+ __sock_release net/socket.c:658 [inline]
+ sock_release+0xa0/0x210 net/socket.c:686
+ cleanup_bearer+0x42d/0x4c0 net/tipc/udp_media.c:819
+```
+
+#问题根因
+在 `cleanup_bearer()` 函数中，引用计数 `wq_count` 的递减操作发生时机过早。
+当 `bearer_disable()` 调用 `tipc_udp_disable()` 时，UDP 套接字的清理工作被推迟到一个工作队列中执行（调用 `cleanup_bearer()`）。
+`tipc_net_stop()` 通过检查 `tipc_net(net)->wq_count` 来等待所有相关工作完成。然而，原代码在释放内核套接字（`udp_tunnel_sock_release`）之前就执行了 `atomic_dec` 递减计数。
+这导致 `cleanup_net()` 在套接字实际释放前就被解除阻塞并继续执行，从而引发 Use-After-Free 故障。
+
+#解决方案
+将 `cleanup_bearer()` 函数中的 `atomic_dec(&tipc_net(sock_net(ub->ubsock->sk))->wq_count)` 语句移动到 `udp_tunnel_sock_release(ub->ubsock)` 调用之后执行。这确保了在计数器递减、通知 `tipc_net_stop()` 完成之前，套接字资源已经真正被释放，从而避免了竞争条件引发的 UAF。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/775a1d1e82205e13eae195b4985e526bfddd9849

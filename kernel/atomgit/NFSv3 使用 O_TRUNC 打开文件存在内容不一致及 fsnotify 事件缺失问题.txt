@@ -1,0 +1,25 @@
+#标题
+NFSv3 使用 O_TRUNC 打开文件存在内容不一致及 fsnotify 事件缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 NFSv3 文件系统中使用 O_TRUNC 标志打开（open）一个已存在的文件时，文件内容未被正确清空，导致文件内容不一致。
+2. 当使用 `->atomic_open` 接口打开文件时，fsnotify 未在正确的时机生成 FS_OPEN 事件，导致依赖文件事件通知机制（如监听文件打开行为）的应用无法感知文件打开动作。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **O_TRUNC 处理缺失**：NFSv3 协议的 `create` 过程未处理 `O_TRUNC` 标志。内核在处理 `O_TRUNC` 时，如果文件系统未实现 `->atomic_open`，VFS 层会先创建文件再进行截断操作。但对于 NFSv3，由于未注册 `->atomic_open`，且 `nfs_create` 函数忽略了 `O_TRUNC` 标志，导致文件被打开但内容未被清空。
+2. **fsnotify 事件顺序错误**：在 VFS 层，`fsnotify_open` 的调用位置不合理。原逻辑中，若使用 `->atomic_open`，`fsnotify_open` 可能在文件实际打开流程的关键路径之外被调用，或者在 `do_dentry_open` 中过早/过晚调用，破坏了 FS_CREATE 与 FS_OPEN 事件的预期顺序（应在 FS_CREATE 后生成 FS_OPEN）。
+
+#解决方案
+1. **新增 NFSv3 atomic_open 支持**：为 NFSv2 和 NFSv3 实现 `nfs_atomic_open_v23` 函数并注册到 `inode_operations` 中。该函数正确处理了 `O_CREAT` 和 `O_TRUNC` 标志，在创建文件时若检测到 `O_TRUNC`，会设置 `ATTR_SIZE` 属性将文件大小截断为 0，确保数据一致性。
+2. **调整 fsnotify_open 调用点**：
+   - 将 `fsnotify_open` 的调用从 `do_dentry_open` 内部移动到 `vfs_open` 和 `kernel_file_open` 中，确保只有在文件成功打开（`do_dentry_open` 返回 0）后才发送 FS_OPEN 事件。
+   - 在 `open_last_lookups` 中，针对 `->atomic_open` 场景，在文件创建成功后立即调用 `fsnotify_open`，保证 FS_CREATE 事件与 FS_OPEN 事件的逻辑顺序正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a1566a20adf50b76b090b7999cb7c064ad8a7acd

@@ -1,0 +1,20 @@
+#标题
+sched/fair: 修复注销调度组时的 UAF 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在销毁进程调度组时，若启用了 CONFIG_QOS_SCHED 配置，内核可能发生 Use-After-Free (UAF) 故障。具体表现为在 `free_fair_sched_group` 释放 `cfs_rq` 内存后，系统仍尝试通过已释放的指针访问该结构体进行 `unthrottle` 操作，可能导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 `unthrottle_qos_sched_group` 的调用时机错误。原代码在 `free_fair_sched_group` 函数中先调用 `unthrottle_qos_sched_group` 随即释放 `cfs_rq` 内存。然而，`__update_blocked_fair` 等路径可能在内存释放后、但调度组完全注销前访问该 `cfs_rq`，从而触发 UAF。正确的逻辑应确保在释放内存前，先在 `unregister_fair_sched_group` 阶段完成 `unthrottle` 操作并移除相关实体。
+
+#解决方案
+将 `unthrottle_qos_sched_group` 的调用位置从 `free_fair_sched_group` 函数移动至 `unregister_fair_sched_group` 函数中。此举确保了在释放 `cfs_rq` 内存之前，先正确处理了 QOS 调度的 throttle 状态并移除了负载平均实体，避免了后续对已释放内存的访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b3dd80fc71d804c0f15eb93352cf23452f7f2191

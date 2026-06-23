@@ -1,0 +1,35 @@
+#标题
+nci: nci_close_device 中的循环锁依赖故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 NCI 自测测试时，内核检测到循环锁定依赖，导致系统可能发生死锁或锁验证警告。该问题在调试内核上运行测试时约有 4% 的概率复现。
+
+#主要错误日志
+推断日志如下（基于 Commit 描述的锁依赖链）：
+Chain exists of:
+  &ndev->req_lock --> &rx_wq#2 --> &ndev->req_lock
+
+Possible unsafe locking scenario:
+  CPU0                    CPU1
+  ----                    ----
+  lock(&ndev->req_lock);
+                          lock(&rx_wq#2);
+                          lock(&ndev->req_lock);
+  lock(&rx_wq#2);
+
+Call trace illustrating the dependency:
+  nci_rx_work -> nci_rx_data_packet -> nci_data_exchange_complete
+    -> __sk_destruct -> rawsock_destruct -> nfc_deactivate_target
+    -> nci_deactivate_target -> nci_request -> mutex_lock(&ndev->req_lock)
+
+#问题根因
+`nci_close_device()` 函数在持有 `req_lock` 互斥锁的情况下刷新 `rx_wq` 工作队列。而在 `rx_wq` 上运行的 `nci_rx_work()` 任务在处理接收数据包时（调用链：`nci_rx_work -> ... -> nfc_deactivate_target -> nci_request`），会尝试获取同一个 `req_lock` 锁。这导致了 `req_lock` -> `rx_wq` -> `req_lock` 的循环锁定依赖，从而引发潜在的死锁。
+
+#解决方案
+将 `rx_wq` 工作队列的刷新操作（`flush_workqueue(ndev->rx_wq)`）移动到 `req_lock` 锁释放之后执行。该修改是安全的，因为在刷新 `rx_wq` 之前，`NCI_UP` 标志位已被清除且传输层已关闭，残留的工作项检测到状态后会直接返回 `-ENETDOWN` 错误，不会造成负面影响。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2f352dc65952809003fefa0bbd87c2777c24a9c5

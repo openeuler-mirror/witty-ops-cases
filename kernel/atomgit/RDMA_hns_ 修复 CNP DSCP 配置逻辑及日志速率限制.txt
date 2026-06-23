@@ -1,0 +1,23 @@
+#标题
+RDMA/hns: 修复 CNP DSCP 配置逻辑及日志速率限制
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 配置 CNP（拥塞通知包）DSCP 字段时可能存在逻辑错误，导致配置值不符合预期或校验异常。
+2. 在 MPT（内存保护表）创建频繁失败的场景下，内核日志打印过多，可能导致系统性能下降或日志刷屏。
+
+#主要错误日志
+failed to create mpt, ret = %d.
+
+#问题根因
+1. CNP DSCP 配置相关代码中存在冗余的 `bit_size` 字段定义与校验逻辑（如 `WARN_ON` 检查），且宏定义 `HNS_ROCE_CNP_PRI_DSCP_BIT_SZ` 与实际掩码 `GENMASK(6, 1)` 不匹配，干扰了正确的配置解析。
+2. MPT 创建失败的错误打印使用了普通 `dev_err` 接口，缺乏速率限制机制。
+
+#解决方案
+1. 移除 `HNS_ROCE_CNP_PRI_DSCP_BIT_SZ` 宏定义，并从 `hns_port_cnp_pri_attr` 结构体及相关的 `show`/`store` 接口中删除 `bit_size` 成员及相关校验代码，直接使用 `bit_mask` 和 `bit_offset` 进行处理。
+2. 将 `hns_roce_mr_enable` 函数中的 `dev_err` 修改为 `dev_err_ratelimited`，防止高频错误日志刷屏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/99c48ab9ed173d60a5c27a63a3a03e44c1eba829

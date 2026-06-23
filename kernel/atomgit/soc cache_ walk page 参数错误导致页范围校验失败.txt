@@ -1,0 +1,22 @@
+#标题
+soc cache: walk page 参数错误导致页范围校验失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 SoC cache 维护操作遍历页面时，如果分配的内存区域涉及多个 PMD，页偏移将不会被保留，导致页范围检查错误地判定为失败，进而导致本应成功的 cache 维护操作异常中止。
+
+#主要错误日志
+未知
+
+#问题根因
+`__hisi_soc_cache_maintain` 函数在调用 `walk_page_range` 时，传入的 start 和 end 参数未进行页对齐处理，导致页偏移丢失。同时，`hisi_soc_cache_maint_pte_entry` 回调函数中对 `next > param->addr + param->size` 的检查逻辑是不正确的，二者共同作用导致在跨 PMD 场景下范围校验失败。
+
+#解决方案
+1. 修改 `walk_page_range` 调用参数，使用 `PAGE_ALIGN_DOWN` 和 `PAGE_ALIGN` 宏对起始地址和结束地址进行页对齐处理，确保内存区域对齐到 PAGE_SIZE。
+2. 移除 `hisi_soc_cache_maint_pte_entry` 函数中不正确的范围检查逻辑。
+3. 修正 `hisi_soc_cache_maint_pte_entry` 中 size 和 offset 的计算方式，确保正确处理页内偏移。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/346d400ed19b8fa04fd0ce20b67007cf33c7aaad

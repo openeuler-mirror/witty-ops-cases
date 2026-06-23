@@ -1,0 +1,20 @@
+#标题
+kmemleak 误报 percpu 指针内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+开启 kmemleak 功能后，系统在 `setup_zone_pageset()` 和 `setup_per_cpu_pageset()` 函数执行期间，错误地报告存在内存泄漏。具体表现为 `node_data[0]` 对象中的 `__percpu` 指针被 kmemleak 标记为疑似泄漏对象。
+
+#主要错误日志
+未知
+
+#问题根因
+kmemleak 在扫描阶段对基于物理地址的对象进行边界检查时存在逻辑错误。原有的检查条件为 `PHYS_PFN(phys + object->size) >= max_low_pfn`，该条件是非严格的上边界检查。当 `node_data[0]` 对象恰好结束于 `PFN_PHYS(max_low_pfn)` 边界时，该检查错误地判定对象超出了可扫描范围，导致该对象被标记为 `KMEMLEAK_BLACK`（忽略扫描）。因此，该对象内部包含的 `__percpu` 指针无法被关联追踪，进而被 kmemleak 误报为内存泄漏。
+
+#解决方案
+修改 `mm/kmemleak.c` 中的边界检查逻辑，将上边界检查改为严格比较。将判断条件从 `PHYS_PFN(phys + object->size) >= max_low_pfn` 修改为 `PHYS_PFN(phys + object->size) > max_low_pfn`，确保结束地址等于 `max_low_pfn` 边界的有效对象不会被错误忽略，从而进行正常扫描。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f5ed08672b4f95448ef0087ec27675a9fe0424b8

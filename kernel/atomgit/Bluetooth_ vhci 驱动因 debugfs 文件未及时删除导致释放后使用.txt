@@ -1,0 +1,22 @@
+#标题
+Bluetooth: vhci 驱动因 debugfs 文件未及时删除导致释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在关闭或销毁 VHCI（Virtual Host Controller Interface）蓝牙设备时，存在竞争条件风险。如果在注销设备（`hci_unregister_dev`）过程中或之后，用户空间通过先前存在的 debugfs 文件节点（如 `force_suspend`、`force_devcoredump` 等）发起操作，将触发内核释放后使用，可能导致内核 Panic 或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+VHCI 驱动在 `vhci_release` 函数中销毁设备时，未在注销设备（`hci_unregister_dev`）之前移除 debugfs 文件。这导致在设备结构体即将被释放的临界时间段内，debugfs 文件节点仍然存在且可被用户空间访问。一旦此时有操作通过 debugfs 文件进入驱动回调函数，将引用已被释放或正在释放的数据结构，从而引发 Use-After-Free 漏洞（CVE-2025-39861）。
+
+#解决方案
+1. 将 debugfs 文件的创建逻辑重构并封装到独立的 `vhci_debugfs_init` 函数中，并增加对 `hdev->debugfs` 目录有效性的检查。
+2. 新增 `vhci_debugfs_remove` 函数，利用 `debugfs_lookup_and_remove` 接口显式移除所有已创建的 debugfs 文件。
+3. 在 `vhci_release` 流程中，将 `vhci_debugfs_remove` 的调用时机提前至 `hci_unregister_dev` 之前，确保在注销设备资源前先移除 debugfs 访问入口，杜绝竞争条件导致的 UAF 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56f0778e6f08a8090f69d777660b5efbbe9e84e8

@@ -1,0 +1,20 @@
+#标题
+hisi_ptt: 缺少 pcim_iomap_table 失败处理导致空指针访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核或设备处于极端异常场景下，hisi_ptt 驱动加载过程中若 pcim_iomap_table 获取失败，驱动未对返回值进行检查直接访问空指针，可能导致内核崩溃或驱动初始化异常。
+
+#主要错误日志
+[推断] hisi_ptt 0000:00:00.0: failed to get iomap table
+
+#问题根因
+驱动在调用 pcim_iomap_table 获取设备 I/O 映射表时，未对返回值进行 NULL 检查。虽然 pcim_iomap_regions 与 pcim_iomap_table 是配套接口，正常流程下极少失败，但在内核或设备的极端异常场景下仍有极小概率失败，此时直接访问未检查的指针导致了风险。
+
+#解决方案
+在 hisi_ptt_probe 函数中增加对 pcim_iomap_table 返回值的判断。若返回值为 NULL，则调用 pci_err 打印错误日志 "failed to get iomap table"，并返回 -EFAULT 终止驱动探测流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f8690ab8ba8a3c89d3c937de41925f7c64923c0c

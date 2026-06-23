@@ -1,0 +1,20 @@
+#标题
+VLAN egress QoS 映射设置导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统中反复对 VLAN 设备执行设置与清除 egress 优先级映射的操作时，会发生内核内存泄漏。随着操作次数增加，系统内存占用持续上升，直至设备卸载或系统重启。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `vlan_dev_set_egress_priority` 中，当清除 egress 优先级映射（将 `vlan_prio` 设置为 0）时，代码逻辑仅将映射节点的 `vlan_qos` 字段置零并减少计数，但并未将节点从哈希链表中删除。这种处理方式在链表中保留了“墓碑”节点。如果用户使用不同的 skb 优先级反复执行设置和清除操作，会不断累积此类无效节点，导致内存泄漏。
+
+#解决方案
+修改 `vlan_dev_set_egress_priority` 函数逻辑，当检测到清除映射操作（`vlan_qos` 为 0）时，直接调用 `rcu_assign_pointer` 将目标节点从链表中移除，并使用 `kfree_rcu` 释放其内存，而不是保留在链表中。同时，更新 `vlan_netlink.c` 中的填充逻辑，移除对 `vlan_qos` 为 0 节点的跳过检查，因为此类节点已不再存在于链表中。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6308270fc6d2fc7c9e3d381040d1fe57cfd19321

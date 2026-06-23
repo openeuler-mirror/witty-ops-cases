@@ -1,0 +1,22 @@
+#标题
+macvlan: source模式下存在UAF导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 macvlan 处于 source 模式下，当删除 macvlan 设备或清理源 MAC 地址条目时，若此时正处于数据包转发过程中，内核可能发生 Use-After-Free (UAF) 错误，导致内核崩溃或内存被非法读写。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `macvlan_forward_source()` 函数中访问 `macvlan_source_entry` 结构体的 `vlan` 指针时未受 RCU 保护。当调用 `macvlan_hash_del_source()` 删除条目时，该条目被释放，但 RCU 宽限期尚未结束，导致 `macvlan_forward_source()` 可能会访问到已被释放的 `vlan` 指针，从而引发 UAF。
+
+#解决方案
+将 `struct macvlan_source_entry` 结构体中的 `vlan` 指针成员修改为 `__rcu` 类型，并引入相应的 RCU 保护机制：
+1. 在 `macvlan_forward_source()` 读取条目时，使用 `rcu_dereference()` 获取 `vlan` 指针，若指针为 NULL 则跳过该条目。
+2. 在 `macvlan_hash_del_source()` 删除条目时，先通过 `RCU_INIT_POINTER(entry->vlan, NULL)` 将 `vlan` 指针置空，确保在 RCU 宽限期开始前该条目已无效，从而避免其他线程访问到已释放的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e74b25c1e445f380c8a6792c04e96727c088829f

@@ -1,0 +1,24 @@
+#标题
+tc_action: tcf_gate 参数并发访问导致的使用后释放(UAF)漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 tc gate action 参数更新时，存在竞态条件。若不持有锁直接读取 `gact->param` 成员，可能导致 Use-After-Free（使用后释放）问题，进而引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tcf_gate_init` 函数修改 gate action 参数时，代码逻辑曾尝试在释放锁 (`spin_unlock_bh`) 后调用 `hrtimer_cancel`，随后再重新获取锁。在此期间，`gate_timer_func` 回调函数可能被触发并访问已经变更或释放的参数数据，导致并发访问冲突。根本原因是 `struct tcf_gate_params` 原本内嵌在 `struct tcf_gate` 中，缺乏适当的 RCU 保护机制，且在更新过程中锁的持有逻辑不正确。
+
+#解决方案
+将 `struct tcf_gate_params` 从内嵌结构体改为通过指针动态分配，并引入 RCU（Read-Copy-Update）机制进行保护。
+1. 修改 `struct tcf_gate` 定义，将 `param` 字段改为 `struct tcf_gate_params __rcu *param` 指针类型。
+2. 在头文件 `tc_act/tc_gate.h` 中新增 `tcf_gate_params_locked` 辅助函数，确保在持有 `tcf_lock` 锁的情况下安全访问参数。
+3. 修改 `act_gate.c` 中的初始化与更新逻辑，使用 `kzalloc` 分配新的参数结构，利用 RCU 机制进行旧参数的释放 (`tcf_gate_params_free_rcu`)，确保数据路径在无锁读取时的安全性。
+4. 修正定时器取消逻辑，确保在必要的更新流程中正确处理 `hrtimer`，避免锁释放后的竞态访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/580499ed943d7b826626845b84f8c0fa1f2546b3

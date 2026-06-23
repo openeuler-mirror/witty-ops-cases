@@ -1,0 +1,22 @@
+#标题
+acct(2) 系统调用存在 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在进行进程记账（Process Accounting）时，可能触发 Use-After-Free (UAF) 漏洞，导致内核崩溃或内存被非法访问。此外，在某些文件系统（如 procfs、sysfs 或内核内部文件系统）上执行 acct 操作时可能引发异常。
+
+#主要错误日志
+Process accounting paused
+Process accounting resumed
+
+#问题根因
+原有代码在执行进程记账写入时，上下文处理不当导致了 UAF 风险。同时，代码未对目标文件系统类型进行严格限制，允许在内核内部文件系统或 procfs/sysfs 上开启记账功能，引发了安全隐患或不预期行为。
+
+#解决方案
+1. 将记账数据的最后一次写入操作移至工作队列（workqueue）中执行，以避免在进程退出路径中直接进行可能导致阻塞或竞态条件的文件写入，从而修复 UAF 问题。
+2. 在 acct_on 函数中增加对目标文件系统类型的检查，显式阻止对内核内部文件系统（SB_NOUSER | SB_KERNMOUNT）以及 procfs/sysfs（SB_I_USERNS_VISIBLE）执行 acct 操作，返回 -EINVAL。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3a9f45658ad7f1b38c5325baa33163fcd80d2e24

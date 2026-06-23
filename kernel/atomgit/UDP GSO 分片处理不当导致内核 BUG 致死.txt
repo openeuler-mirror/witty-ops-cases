@@ -1,0 +1,23 @@
+#标题
+UDP GSO 分片处理不当导致内核 BUG 致死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在网络数据包处理流程中，当 UDP GSO（Generic Segmentation Offload）启用 `SKB_GSO_FRAGLIST` 模式时，若经过 NAT 或 BPF 等钩子函数修改了数据包几何结构（例如将部分负载 pull 到 head_skb 中），会导致 `skb_segment` 函数触发内核 BUG，进而引发 Oops 并导致系统崩溃。
+
+#主要错误日志
+[118.376811] [C201134] rxq0_pus: [name:bug&]kernel BUG at net/core/skbuff.c:4278!
+[118.376829] [C201134] rxq0_pus: [name:traps&]Internal error: Oops - BUG: 00000000f2000800 [#1] PREEMPT SMP
+[118.470848] [C201134] rxq0_pus: [name:mrdump&]pc : [0xffffffd79598aefc] skb_segment+0xcd0/0xd14
+[118.470900] [C201134] rxq0_pus: [name:mrdump&]lr : [0xffffffd79598a5e8] skb_segment+0x3bc/0xd14
+
+#问题根因
+合法的 `SKB_GSO_FRAGLIST` 数据包要求 head_skb 包含协议头和第一个 gso_size 的数据，frag_list 中的每个 skb 包含精确的一段数据。然而，可选的数据路径钩子（如 NAT、BPF 的 `bpf_skb_pull_data`）可能会破坏这些不变量，例如将部分负载拉取到 head_skb 中（导致长度分布从 11,11,10 变为 12,10,10）。这种修改后的几何结构不再满足 `SKB_GSO_FRAGLIST` 的前提条件，当数据包被传递给 `skb_segment` 进行拆分时，触发了代码中的 BUG 检查导致崩溃。
+
+#解决方案
+在 `__udp_gso_segment` 函数中，对于检测到 fraglist 几何结构可能已被破坏的情况（即无法直接走 `__udp_gso_segment_list` 快速路径的情况），调用 `__skb_linearize` 函数将数据包线性化处理。这样可以避免在 `skb_segment` 中处理不符合预期的 fraglist 结构，从而防止内核崩溃，以牺牲部分性能换取系统的健壮性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/461ee963019a5043e755f983eb280779b498dfdc

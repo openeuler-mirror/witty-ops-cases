@@ -1,0 +1,29 @@
+#标题
+fb_set_var 未恢复旧值导致 fb_videomode_to_var 空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在帧缓冲设备操作过程中，若 `fb_set_var()` 函数内部的 `fb_add_videomode()` 分配内存失败，系统未正确恢复 `fb_info->var` 的旧值。随后在调用 `fb_videomode_to_var()` 时，尝试在 `modelist` 中查找对应的显示模式失败，导致访问空指针引发 general protection fault（通用保护错误）或 null-ptr-deref（空指针解引用），进而触发内核恐慌。
+
+#主要错误日志
+general protection fault, probably for non-canonical address 0xdffffc0000000001: 0000 [#1] PREEMPT SMP KASAN NOPTI
+KASAN: null-ptr-deref in range [0x0000000000000008-0x000000000000000f]
+RIP: 0010:fb_videomode_to_var+0x24/0x610 drivers/video/fbdev/core/modedb.c:901
+Call Trace:
+ display_to_var+0x3a/0x7c0 drivers/video/fbdev/core/fbcon.c:929
+ fbcon_resize+0x3e2/0x8f0 drivers/video/fbdev/core/fbcon.c:2071
+ vc_do_resize+0x53a/0x1170 drivers/tty/vt/vt.c:1263
+ fbcon_modechanged+0x3ac/0x6e0 drivers/video/fbdev/core/fbcon.c:2720
+ do_fb_ioctl+0x6d2/0x740 drivers/video/fbdev/core/fbmem.c:1128
+
+#问题根因
+在 `fb_set_var()` 函数中，代码逻辑先修改了 `fb_info->var`，随后调用 `fb_add_videomode()` 将模式添加到 `fb_info->modelist`。当 `fb_add_videomode()` 因内存分配失败等原因出错时，`fb_set_var()` 检测到错误并返回，但**未将 `fb_info->var` 恢复为修改前的旧值**。
+这导致 `fb_info->var` 处于已修改但对应模式未加入链表的不一致状态。后续 `fb_videomode_to_var()` 依赖 `modelist` 中存在 `var` 对应的模式，由于该模式不存在，导致空指针解引用。
+
+#解决方案
+在 `fb_set_var()` 函数中，当 `fb_add_videomode()` 返回错误（ret 为真）时，在返回前增加 `info->var = old_var;` 操作，将 `fb_info->var` 恢复为函数修改前的旧值，确保设备状态的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d13eb96fae73fa14041038da16e937ed0d62cef8

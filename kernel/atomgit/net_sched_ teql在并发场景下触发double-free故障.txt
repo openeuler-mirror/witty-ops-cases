@@ -1,0 +1,26 @@
+#标题
+net/sched: teql在并发场景下触发double-free故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 TEQL 设备的根 Qdisc 为无锁类型时，若在数据包发送路径并发执行 Qdisc 删除/重置操作（如通过 RTNETLINK 反复删除和添加根 qdisc），会导致内核发生 KASAN double-free 报错，甚至引发系统崩溃。
+
+#主要错误日志
+[  238.028993][  T318] BUG: KASAN: double-free in skb_release_data (net/core/skbuff.c:1139)
+[  238.029328][  T318] Free of addr ffff88810c67ec00 by task poc_teql_uaf_ke/318
+[  238.030025][  T318]  sk_skb_reason_drop (net/core/skbuff.c:1256)
+[  238.030032][  T318]  pfifo_fast_reset (./include/linux/ptr_ring.h:171 ./include/linux/ptr_ring.h:309 ./include/linux/skb_array.h:98 net/sched/sch_generic.c:827)
+[  238.030054][  T318]  qdisc_reset (net/sched/sch_generic.c:1034)
+[  238.030062][  T318]  teql_destroy (./include/linux/spinlock.h:395 net/sched/sch_teql.c:157)
+[  238.087757][  T318]  teql_master_xmit (net/sched/sch_teql.c:358)
+
+#问题根因
+当 TEQL 设备的根 Qdisc 是无锁 Qdisc（lockless Qdisc）时，`teql_destroy` 函数直接调用 `qdisc_reset` 并仅持有 `root_lock`，未使用 `seq_lock` 保护。这导致 `qdisc_reset` 与数据路径的发送操作发生竞争，引发 double-free。
+
+#解决方案
+将 `dev_reset_queue` 函数从 `sch_generic.c` 移动到 `sch_generic.h` 中作为内联函数，并在 `teql_destroy` 中使用 `dev_reset_queue` 替换原有的 `qdisc_reset` 调用。`dev_reset_queue` 内部实现了对无锁 Qdisc 的 `seq_lock` 加锁逻辑，能够正确处理加锁与无锁场景，从而避免并发竞态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a804efd3672b5325e9a20ef75948ac270d5dade4

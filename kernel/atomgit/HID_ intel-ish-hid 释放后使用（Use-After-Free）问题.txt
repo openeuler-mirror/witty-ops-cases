@@ -1,0 +1,20 @@
+#标题
+HID: intel-ish-hid 释放后使用（Use-After-Free）问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ishtp_hid_remove` 函数移除 ISHTP HID 设备时，触发内核 Use-After-Free 错误。该问题源于在销毁 HID 设备后仍试图访问其私有数据指针，可能导致内核崩溃（panic）或内存数据被破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ishtp_hid_remove` 函数中，代码逻辑顺序错误。原代码先通过 `client_data->hid_sensor_hubs[i]->driver_data` 传入指针调用 `kfree` 释放内存，随后调用 `hid_destroy_device` 销毁设备。这导致 `driver_data` 指向的内存被释放后，`hid_destroy_device` 内部流程可能仍在访问该指针（Use-After-Free），或者该指针作为已释放内存被后续操作引用。
+
+#解决方案
+调整内存释放顺序，先保存 `driver_data` 指针到局部变量 `data`，然后调用 `hid_destroy_device` 销毁设备，最后再调用 `kfree(data)` 释放私有数据内存。通过将 `kfree` 操作移至设备销毁之后，避免了在设备销毁过程中访问已释放内存的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ee9df5051460517fd6db29d52e57b2bced1b0647

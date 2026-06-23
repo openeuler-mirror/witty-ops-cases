@@ -1,0 +1,20 @@
+#标题
+drm/i915/selftests: mock_request 函数错误指针处理修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i915 GPU 自测试代码中，`__igt_breadcrumbs_smoketest()` 函数存在错误指针与 NULL 指针混淆处理的问题。当 `mock_request()` 分配失败时，原本返回 NULL 指针，导致调用者误判并引发后续的 NULL 指针解引用，进而导致内核崩溃或测试异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`mock_request()` 函数在内部调用 `intel_context_create_request()` 失败时，原本直接返回了 NULL，而不是传递该函数返回的错误指针。其调用者 `__mock_request_alloc()` 作为 `smoketest->request_alloc()` 的实现，本应返回错误指针，但因为 `mock_request()` 返回了 NULL，导致错误状态无法正确传递，最终在失败路径上触发了 NULL 指针解引用。
+
+#解决方案
+修改 `mock_request()` 函数，使其在 `intel_context_create_request()` 失败时直接返回错误指针，而非返回 NULL。同时，更新所有调用 `mock_request()` 的代码，将原本的 NULL 指针检查（`if (!request)`）修改为错误指针检查（`if (IS_ERR(request))`），并将返回值从固定的 `-ENOMEM` 改为通过 `PTR_ERR(request)` 获取的真实错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56893b4eb4fb67277e40d2c36ac986758ba92e1f

@@ -1,0 +1,22 @@
+#标题
+RDMA/cm 多播 GID 表引用计数泄漏导致内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 CM ID 在多播创建事件仍在队列中等待处理时被销毁，会导致多播 GID 表引用计数泄漏，并触发内核 WARN 告警。
+
+#主要错误日志
+- GID entry ref leak for dev syz1 index 2 ref=573
+- WARNING: CPU: 1 PID: 655 at drivers/infiniband/core/cache.c:809 release_gid_table drivers/infiniband/core/cache.c:806 [inline]
+- WARNING: CPU: 1 PID: 655 at drivers/infiniband/core/cache.c:809 gid_table_release_one+0x284/0x3cc drivers/infiniband/core/cache.c:886
+
+#问题根因
+当 CM ID 被销毁时，如果多播创建相关的 CM 事件仍在队列中，调用 cancel_work_sync() 会阻止工作队列的执行。这导致与事件关联的 ah_attr（Address Handle属性）未被销毁，从而造成引用计数泄漏。
+
+#解决方案
+在 cancel_work_sync() 取消工作队列后，立即检查并销毁 ah_attr。在销毁函数中显式调用 rdma_destroy_ah_attr() 释放资源，且该操作允许重复调用以确保资源被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/49d1841efc49f1058dbb580dc238b25472e00489

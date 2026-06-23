@@ -1,0 +1,21 @@
+#标题
+netem: 负数延迟或抖动参数导致队列出队失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 netem (Network Emulator) qdisc 配置网络延迟时，如果通过 TCA_NETEM_LATENCY64 或 TCA_NETEM_JITTER64 接口传入负数值，会导致调度器停止出队，造成网络流量阻塞或完全中断，且配置命令可能成功返回但功能异常。
+
+#主要错误日志
+- (配置时返回) NL_SET_ERR_MSG_ATTR_FMT: "negative latency"
+- (配置时返回) NL_SET_ERR_MSG_ATTR_FMT: "negative jitter"
+
+#问题根因
+内核在处理 netem 参数时，原有的 UAPI 使用 u32 类型，但在转换为支持纳秒精度的 64 位时间值（TCA_NETEM_LATENCY64 和 TCA_NETEM_JITTER64）时，缺乏对符号位的校验。当用户传入负数时，该负数值（有符号 s64）被加到当前时间戳（无符号 u64）上，导致结果溢出回绕成一个极大的时间值（time_to_send）。这导致数据包的发送时间被设定在遥远的未来，从而无法被 dequeue 机制处理，表现为队列堵塞。
+
+#解决方案
+在 netem_change 函数中新增 validate_time 校验函数，对 TCA_NETEM_LATENCY64 和 TCA_NETEM_JITTER64 属性进行检测。如果发现属性值为负数（s64 < 0），则通过 NL_SET_ERR_MSG_ATTR_FMT 返回错误信息并直接拒绝该配置请求，防止无效参数导致调度器失效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/368d9af6d7afc684df3f369b7bec304b2cdda420

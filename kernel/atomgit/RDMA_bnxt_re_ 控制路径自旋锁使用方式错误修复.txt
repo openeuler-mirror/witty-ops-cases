@@ -1,0 +1,25 @@
+#标题
+RDMA/bnxt_re: 控制路径自旋锁使用方式错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA bnxt_re 驱动中，控制路径完成处理程序运行在 tasklet 上下文中，但在与发送线程同步时使用了 `spin_lock_irqsave`。由于 tasklet 本身基于软中断实现，运行期间硬件中断是开启的，使用 irq 变体锁是不必要的，且可能导致锁的语义混乱或潜在的上下文问题。
+
+#主要错误日志
+未知
+
+#问题根因
+控制路径完成处理始终在 tasklet 上下文中运行。为了与发送线程进行同步，不需要使用 irq 变体的自旋锁（`spin_lock_irqsave`）。代码中误用了 `spin_lock_irqsave` / `spin_lock_irqrestore`，应改为使用 `spin_lock_bh` 以正确处理软中断上下文的同步。
+
+#解决方案
+将驱动代码中控制路径相关的自旋锁操作从 `spin_lock_irqsave` 和 `spin_unlock_irqrestore` 替换为 `spin_lock_bh` 和 `spin_unlock_bh`。
+具体修改点包括：
+1. `__send_message` 函数中的 `hwq->lock` 锁操作。
+2. `__bnxt_qplib_rcfw_send_message` 函数中的 `cmdq.hwq.lock` 锁操作。
+3. `bnxt_qplib_process_qp_event` 函数中的 `hwq->lock` 锁操作（此处上下文已确保安全，部分替换为普通 `spin_lock`）。
+4. `bnxt_qplib_service_creq` 函数中的 `hwq->lock` 锁操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0df8898937fed3ece9f93d2c5b1d4649f3cd0c8c

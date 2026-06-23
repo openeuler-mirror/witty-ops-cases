@@ -1,0 +1,29 @@
+#标题
+uinput 子系统与 ff-core 存在循环锁依赖导致 lockdep 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 uinput 接口的力反馈游戏手柄时（例如在 Wine 环境下运行《艾尔登法环》并使用 Flydigi Vader 5 控制器），内核触发 lockdep 循环锁依赖警告。具体表现为系统检测到潜在的死锁风险，打印锁依赖循环信息，可能影响输入子系统的稳定性。
+
+#主要错误日志
+lockdep: circular locking dependency detected
+ff->mutex -> udev->mutex -> input_mutex -> dev->mutex -> ff->mutex
+
+#问题根因
+内核中存在四条锁获取路径形成了闭环，导致循环锁依赖：
+1. 力反馈上传路径：input_ff_upload() 持有 ff->mutex，调用 uinput_dev_upload_effect() -> uinput_request_submit() -> uinput_request_send()，尝试获取 udev->mutex。
+2. 设备创建路径：uinput_ioctl_handler() 持有 udev->mutex，调用 uinput_create_device() -> input_register_device()，尝试获取 input_mutex。
+3. 设备注测路径：input_register_device() 持有 input_mutex，调用 kbd_connect() -> input_register_handle()，尝试获取 dev->mutex。
+4. evdev 释放路径：evdev_release() 持有 dev->mutex，调用 input_flush_device() -> input_ff_flush()，尝试获取 ff->mutex。
+这四条路径构成了 ff->mutex -> udev->mutex -> input_mutex -> dev->mutex -> ff->mutex 的循环依赖。
+
+#解决方案
+1. 在 `uinput_device` 结构体中引入新的自旋锁 `state_lock`，用于保护 `udev->state` 状态和 `udev->dev` 的访问。
+2. 修改 `uinput_request_send()` 函数，将原本获取 `udev->mutex` 的操作替换为获取 `udev->state_lock` 自旋锁。因为该函数只需原子地检查设备状态并将输入事件入队（该操作不涉及睡眠），使用自旋锁作为锁序中的叶子节点，打破了 `ff->mutex -> udev->mutex` 的链路，从而消除循环依赖。
+3. 在 `uinput_create_device()` 和 `uinput_destroy_device()` 函数中，使用相同的 `state_lock` 来保护 `udev->state` 的写入，确保状态转换对 `uinput_request_send()` 可见。
+4. 将 `init_completion(&request->done)` 从 `uinput_request_send()` 移至 `uinput_request_submit()` 中，确保在分配请求槽位之前完成初始化，防止在销毁路径中 `uinput_flush_requests()` 过早调用 `complete()` 导致的竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/88e8f5ab396a951fdaa817c5cd15cfb9db4de822

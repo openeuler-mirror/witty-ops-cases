@@ -1,0 +1,28 @@
+#标题
+megaraid_sas 驱动在 NUMA 内存交错模式下触发数组越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 DRAM 交错（DRAM interleave）的系统上加载 megaraid_sas 驱动时，内核检测到数组索引越界访问。触发 USAN 错误报警，并打印调用栈，导致驱动加载流程出现异常。
+
+#主要错误日志
+megaraid_sas 0000:3f:00.0: requested/available msix 128/128 poll_queue 0
+------------[ cut here ]------------
+UBSAN: array-index-out-of-bounds in ./arch/x86/include/asm/topology.h:72:28
+index -1 is out of range for type 'cpumask *[1024]'
+dump_stack_lvl+0x5d/0x80
+...
+megasas_alloc_irq_vectors+0x149/0x190 [megaraid_sas]
+megasas_probe_one.cold+0xa4d/0x189c [megaraid_sas]
+...
+
+#问题根因
+在 NUMA 内存交错模式下，函数 `dev_to_node()` 可能返回 `NUMA_NO_NODE`（即 -1）。代码直接将此返回值作为数组索引传递给 `cpumask_of_node()`，导致在 `topology.h` 中计算掩码时，索引值 -1 越出了 `cpumask *[1024]` 数组的定义范围，从而触发 UBSAN 异常。
+
+#解决方案
+在调用 `cpumask_of_node()` 前，对获取的节点 ID（nid）进行有效性检查。如果节点 ID 为 `NUMA_NO_NODE`，则将其重置为 0，确保数组索引在合法范围内。修改位置为 `drivers/scsi/megaraid/megaraid_sas_base.c` 中的 `megasas_set_high_iops_queue_affinity_and_hint` 函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e9155f2ae6295e307b47b9e9aba3ca1899e7fd33

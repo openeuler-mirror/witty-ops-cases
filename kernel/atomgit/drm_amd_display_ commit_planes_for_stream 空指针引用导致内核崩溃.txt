@@ -1,0 +1,20 @@
+#标题
+drm/amd/display: commit_planes_for_stream 空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD 显示驱动执行显示流提交操作时，若 `top_pipe_to_program` 指针为空，内核在访问其成员 `stream_res` 时触发空指针引用，导致系统崩溃或内核 Oops。
+
+#主要错误日志
+drivers/gpu/drm/amd/amdgpu/../display/dc/core/dc.c:4140 commit_planes_for_stream() error: we previously assumed 'top_pipe_to_program' could be null (see line 3906)
+
+#问题根因
+在函数 `commit_planes_for_stream` 中，代码逻辑先前已假定 `top_pipe_to_program` 可能为空，但在后续代码路径（第 3797 行左右）执行 DSC（Display Stream Compression）更新检查时，直接解引用了 `top_pipe_to_program->stream_res` 而未进行非空校验，导致了空指针解引用。
+
+#解决方案
+在访问 `top_pipe_to_program` 结构体成员之前添加空指针检查。具体修复为：在 `if` 条件判断中增加 `top_pipe_to_program` 的非空验证，确保指针有效后再访问 `stream_res.tg->funcs->lock_doublebuffer_enable`，从而避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/313a5ddfd8aa9dc16aeec7c6b4f59608d61c4f78

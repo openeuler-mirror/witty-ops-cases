@@ -1,0 +1,41 @@
+#标题
+selftests/bpf: test_sockmap 数据完整性测试校验逻辑错误导致测试失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+运行 BPF selftests 中的 test_sockmap 测试程序进行数据完整性校验时，大量测试用例失败，统计结果为 Pass: 24 Fail: 52。
+具体失败的子测试项包括：
+- sockmap::txmsg test passthrough:FAIL
+- sockmap::txmsg test redirect:FAIL
+- sockmap::txmsg test apply:FAIL
+- sockmap::txmsg test push_data:FAIL
+- sockmap::txmsg test pull-data:FAIL
+- sockmap::txmsg test pop-data:FAIL
+- sockmap::txmsg test push/pop data:FAIL
+
+#主要错误日志
+检测到数据校验错误时的输出：
+```text
+detected data corruption @iov[%i]:%i %02x != %02x, %02x ?= %02x\n
+```
+以及测试失败统计：
+```text
+Pass: 24 Fail: 52
+```
+
+#问题根因
+函数 `msg_verify_data` 在进行数据校验时存在逻辑缺陷：
+1. 变量初始化假设错误：函数内部假定校验上下文变量 `bytes_cnt` 和 `k`（数据校验值）始终从 0 开始，而在实际测试场景（如 `txmsg_cork` 或多轮校验）中，需要维持上一次校验的状态。这导致后续数据块的校验基准值错误，从而误报数据不一致。
+2. 循环与索引逻辑错误：函数内部对于 `size` 和索引 `j` 的处理逻辑不完善，导致在特定条件下校验位置偏移或未正确结束。
+3. 错误处理不当：在 `txmsg_cork` 场景下，原本的错误码 `-EIO` 被忽略，导致数据完整性错误未被正确捕获。
+
+#解决方案
+1. 修改 `msg_verify_data` 函数签名，增加传入参数 `k_p` 和 `bytes_cnt_p`，使其能够传入并更新上下文状态，保证跨调用轮次的数据校验基准一致性。
+2. 修正循环逻辑，调整索引 `j` 和剩余 `size` 的处理方式，确保遍历边界正确。
+3. 定义并使用专用错误码 `EDATAINTEGRITY` (2001) 替代通用的 `-EIO`，并在 `sendmsg_test` 主逻辑中增加对 `txmsg_cork` 场景下该错误码的特殊处理，避免忽略关键的数据完整性错误。
+注：针对 push、pull、pop 相关测试用例，代码中留有 TODO 标记，表明后续仍需进一步完善校验逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a1b284572bc835f2ec4caa6729167dab3c8e8eac

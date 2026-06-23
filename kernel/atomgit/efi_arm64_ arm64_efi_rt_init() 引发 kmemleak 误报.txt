@@ -1,0 +1,33 @@
+#标题
+efi/arm64: arm64_efi_rt_init() 引发 kmemleak 误报
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动过程中，kmemleak 内存检测工具报告存在未引用的内存泄漏对象。该泄漏对象是在 `arm64_efi_rt_init` 初始化函数中分配的，size 为 32768 字节。该告警实际上为误报，影响了内核日志的纯净度。
+
+#主要错误日志
+unreferenced object 0xffff8000102e0000 (size 32768):
+  comm "swapper/0", pid 1, jiffies 4294937323 (age 71.240s)
+  hex dump (first 32 bytes):
+    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+  backtrace:
+    [<00000000db9a88a3>] __vmalloc_node_range+0x324/0x450
+    [<00000000ff8903a4>] __vmalloc_node+0x90/0xd0
+    [<000000001a06634f>] arm64_efi_rt_init+0x64/0xdc
+    [<0000000007826a8d>] do_one_initcall+0x178/0xac0
+    [<0000000054a87017>] do_initcalls+0x190/0x1d0
+    [<00000000308092d0>] kernel_init_freeable+0x2c0/0x2f0
+    [<000000003e7b99e0>] kernel_init+0x28/0x14c
+    [<000000002246af5b>] ret_from_fork+0x10/0x20
+
+#问题根因
+内存泄漏检测工具 kmemleak 扫描到 `arm64_efi_rt_init` 函数中通过 `__vmalloc_node` 分配的一块内存（用于 `efi_rt_stack_top`），由于该内存对象的指针未被常规方式追踪（存储在静态全局变量中但 kmemleak 未能识别），kmemleak 将其判定为泄漏对象。实际上该内存正在被 EFI 运行时服务使用，属于误报。
+
+#解决方案
+在内存分配成功后，调用 `kmemleak_not_leak(p)` 函数显式标记该内存对象不是泄漏，从而抑制 kmemleak 的误报告警。代码修改涉及引入 `linux/kmemleak.h` 头文件并在分配逻辑中增加标记调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0c1d0a68c422bb1171ce325e0a45ef7f995e7e97

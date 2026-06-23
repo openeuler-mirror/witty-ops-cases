@@ -1,0 +1,20 @@
+#标题
+RDMA/bnxt_re: 通知队列预算处理错误导致完成队列处理挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 NFS over RDMA 挂载和卸载操作时，系统出现完成队列（CQ）处理挂起的问题。观测到内核打印 cm_destroy_id_wait_timeout 超时错误信息，表明 RDMA 连接资源无法正常释放。
+
+#主要错误日志
+kernel: cm_destroy_id_wait_timeout: cm_id=00000000ff6c6cc6 timed out. state 11 -> 0, refcnt=1
+
+#问题根因
+此前提交的修复补丁（cb97b377a135）引入了一个缺陷：在创建或销毁 CQ（完成队列）和 SRQ（共享接收队列）资源时，驱动程序会错误地修改通知队列（NQ）的 budget 计数。这导致 NQ 的 budget 可能归零，进而引起完成队列处理流程挂起。
+
+#解决方案
+移除驱动中在创建和销毁 CQ、SRQ 资源时对 `nq->budget` 的修改操作。具体修改为：删除 `bnxt_re_destroy_srq`、`bnxt_re_create_srq` 和 `bnxt_re_destroy_cq` 函数中对 `nq->budget` 的增减操作，确保 NQ budget 计数不受资源创建销毁的影响。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/978eee07aea817a830a9146bd90f0506ac2f8482

@@ -1,0 +1,22 @@
+#标题
+spi: atmel: 控制器注销顺序错误导致驱动卸载异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 Atmel SPI 控制器驱动（执行 driver unbind 或 remove 操作）时，由于注销顺序错误，可能导致内核崩溃或资源访问异常。具体表现为在控制器已注销后，底层硬件资源（如时钟）被意外禁用，此时若仍有中断或并发访问尝试访问已释放的资源，将触发空指针引用或 Use-After-Free 错误。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在移除时顺序颠倒：先禁用了底层资源（如 clocks 和 runtime PM），然后才注销 SPI 控制器。这违反了设备资源释放的基本原则，导致在控制器仍然“活着”的时候底层硬件支撑已被撤走。此外，probe 阶段使用了 devm_spi_register_controller，该函数会在移除阶段自动注销控制器，但其执行时机晚于手动的资源禁用操作，进一步加剧了资源销毁顺序混乱的风险。
+
+#解决方案
+1. 将 probe 阶段的 devm_spi_register_controller 替换为 spi_register_controller，移除自动注销机制，以便在 remove 函数中手动控制注销顺序。
+2. 在 remove 函数中，先调用 spi_controller_get 增加引用计数，确保在注销过程中对象不被释放。
+3. 调整 remove 流程顺序：先执行 spi_unregister_controller 注销控制器，然后再执行禁用时钟、释放 DMA 等底层资源操作，最后调用 spi_controller_put 释放引用。这确保了控制器在完全注销前底层硬件资源始终可用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cf8a91e5e86aa7a5335acb6e590380c5619716fa

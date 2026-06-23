@@ -1,0 +1,20 @@
+#标题
+BPF验证器因loop_entry状态异常未正确终止验证
+
+#内核版本
+OLK-6.6
+
+#问题现象
+BPF程序加载或验证过程中，当检测到 `env->cur_state->loop_entry` 不为空的异常状态时，内核虽触发警告但未中止验证流程，可能导致后续验证逻辑在不可恢复的错误状态下继续执行，存在潜在的安全风险或不稳定行为。
+
+#主要错误日志
+- `verifier bug: env->cur_state->loop_entry != NULL`
+
+#问题根因
+在 `do_check` 函数处理过程中，若检测到 `env->cur_state->loop_entry != NULL`，原代码逻辑仅通过 `WARN_ON_ONCE` 打印警告信息并简单地将指针置为 NULL，随后继续执行验证循环。这种处理方式违背了该状态异常应视为不可恢复错误的逻辑，导致验证器在内部状态不一致的情况下继续运行。
+
+#解决方案
+修改 `kernel/bpf/verifier.c` 中的 `do_check` 函数，当检测到 `env->cur_state->loop_entry` 非空时，在打印警告信息的同时立即返回 `-EFAULT` 错误码，强制终止验证过程，确保系统不会在错误状态下继续运行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3457a74242d9febf6f641e0f1d36c82c86e23689

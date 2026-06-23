@@ -1,0 +1,28 @@
+#标题
+LoongArch IOMMU 驱动导致多个 VFIO 设备直通失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构下，宿主机无法将 16 个 VFIO 设备正常直通给虚拟机使用。直通操作失败，虚拟机无法获取预期的设备资源。
+
+#主要错误日志
+- `LA-IOMMU: Alloc domain id over max domain id`
+- `%s iommu is NULL` (推断，来自 pr_err 调用)
+
+#问题根因
+1. **Domain ID 分配逻辑缺陷**：`domain_id_alloc` 函数在分配的 ID 超过最大值时，未将返回值置为无效值（如 -1），导致上层调用者误判分配成功，进而引发后续处理错误。
+2. **设备 detach 状态残留**：在 `la_iommu_detach_dev` 函数中，设备从域中移除后，未清空 `dev_data->domain` 指针。这导致设备在重新挂载到新域时，状态检查或配置更新异常。
+3. **IOMMU 域类型处理错误**：`la_iommu_domain_alloc` 和 `la_iommu_attach_dev` 函数对 `IOMMU_DOMAIN_BLOCKED` 和 `IOMMU_DOMAIN_IDENTITY` 类型的处理逻辑有误，导致域初始化或设备挂载流程分支错误。
+
+#解决方案
+1. **修复 Domain ID 分配**：在 `domain_id_alloc` 中，当分配的 ID 大于等于 MAX_DOMAIN_ID 时，将返回值 id 设为 -1，确保错误能被正确传递。
+2. **清理设备域指针**：在 `la_iommu_detach_dev` 函数中，执行 detach 操作后增加 `dev_data->domain = NULL;`，确保设备状态被正确重置。
+3. **修正域类型处理逻辑**：
+   - 在 `la_iommu_domain_alloc` 中，调整 case 分支，使 `IOMMU_DOMAIN_BLOCKED` 类型也能正确分配 dom_info。
+   - 在 `la_iommu_attach_dev` 中，移除原有的 `IOMMU_DOMAIN_IDENTITY` 特殊处理，并增加对 `IOMMU_DOMAIN_BLOCKED` 类型的判断逻辑，直接返回成功。
+4. **代码移动**：将 `flush_iotlb` 函数定义移至 `flush_iotlb_by_domain_id` 之后，确保调用时函数已定义（修复潜在的编译或执行顺序问题）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f6d5de70627432f8cba29edd8ac51859b1dd3118

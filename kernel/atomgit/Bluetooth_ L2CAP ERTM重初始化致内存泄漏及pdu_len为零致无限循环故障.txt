@@ -1,0 +1,23 @@
+#标题
+Bluetooth: L2CAP ERTM重初始化致内存泄漏及pdu_len为零致无限循环故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **内存泄漏**：在对处于 BT_CONNECTED 状态的 L2CAP 通道进行重配置（如 MTU 变更）时，内核会发生内存泄漏，此前分配的 ERTM 资源（tx_q、srej_q、srej_list、retrans_list 以及 chan->sdu）无法被释放。
+2. **无限循环与内存耗尽**：若远程设备通过 RFC max_pdu_size 选项提供了一个为零的 remote_mps 值，内核在处理 L2CAP SDU 分段时会陷入死循环，导致系统可用内存被耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **ERTM 资源重初始化问题**：`l2cap_config_req()` 函数处理 BT_CONNECTED 状态下的 CONFIG_REQ 请求时，由于 `CONF_INPUT_DONE` 和 `CONF_OUTPUT_DONE` 已置位，代码错误地进入重配置路径并调用 `l2cap_ertm_init()`。该函数重新初始化相关队列并将 `chan->sdu` 设为 NULL，导致原有 ERTM 资源无法释放，造成内存泄漏。
+2. **pdu_len 零值校验缺失**：`l2cap_parse_conf_req()` 未对 RFC max_pdu_size 选项派生出的 remote_mps 最小值进行有效性校验，允许零值传递至 `l2cap_segment_sdu()`。这导致 `pdu_len` 为零，循环条件 `while (len)` 中的 `len` 变量无法递减，引发无限循环。
+
+#解决方案
+1. **防止重复初始化**：在 `l2cap_config_req()` 中增加状态判断，当通道已处于 BT_CONNECTED 状态时，跳过 `l2cap_ertm_init()` 和 `l2cap_chan_ready()` 的调用，仅保留参数更新能力，避免资源覆盖与泄漏。
+2. **增加防护校验**：在 `l2cap_segment_sdu()` 函数中增加对 `pdu_len` 是否为零的检查，若为零则直接返回 -EINVAL，防止死循环发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a6cf54233eefcb1c0621dbe55e7dad606635ab11

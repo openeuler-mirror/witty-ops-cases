@@ -1,0 +1,20 @@
+#标题
+RDMA/hns: 固件请求失败后未恢复 SCC 参数导致后续配置持续失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户配置的拥塞控制算法参数超出正常范围导致固件请求失败后，驱动未将异常参数值恢复为正常值。这导致用户后续尝试配置其他参数时，固件请求会持续失败，除非用户手动将异常参数值恢复到正常范围内。
+
+#主要错误日志
+failed to configure scc param, opcode: 0x%x, ret = %d.
+
+#问题根因
+在 `hns_roce_v2_config_scc_param` 函数中，当固件请求失败时，驱动逻辑判断处理有误，未执行参数回滚操作。具体原因为：固件请求失败后，驱动没有将 `scc_param->param` 恢复为 `scc_param->latest_param`（即上一次成功的正常参数值），导致内核态缓存的参数状态与固件侧不一致，阻塞了后续的配置请求。
+
+#解决方案
+在固件配置失败的错误处理分支中，增加 `memcpy` 操作，将 `scc_param->param` 的值恢复为 `scc_param->latest_param`，确保驱动内部保存的参数状态回滚到修改前的状态，避免异常状态持续影响后续请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/949c2272609e843c3b636642b355c640a5eb70d3

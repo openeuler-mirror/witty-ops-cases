@@ -1,0 +1,22 @@
+#标题
+proc: proc_get_inode 中的 UAF（释放后使用）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在访问 `/proc` 文件系统下的特定文件（通过 `proc_create_seq_private` 或 `proc_create_single_data` 创建）时，内核可能发生 UAF（Use-After-Free）崩溃。该问题主要源于在获取 inode 时，直接解引用了可能已经失效或未正确初始化的 `proc_ops` 结构体指针（如 `de->proc_ops->proc_read_iter`），导致内核 panic 或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `proc_get_inode` 函数处理常规文件时，代码直接访问 `de->proc_ops` 结构体成员（如 `proc_read_iter` 和 `proc_compat_ioctl`）来判断文件操作类型。然而，通过 `proc_create_seq_private` 和 `proc_create_single_data` 创建的 proc 条目，在调用 `proc_register` 之前未调用 `pde_set_flags` 函数来设置 `pde->flags` 中的对应标志位。这导致 `proc_get_inode` 在后续检查中访问了不正确的 `proc_ops` 指针或成员，引发了 UAF 问题。
+
+#解决方案
+1. 修改 `pde_set_flags` 函数，增加对 `proc_read_iter` 和 `proc_compat_ioctl` 的检查，并将结果存储在 `pde->flags` 中（新增 `PROC_ENTRY_proc_read_iter` 和 `PROC_ENTRY_proc_compat_ioctl` 标志位）。
+2. 在 `proc_create_seq_private` 和 `proc_create_single_data` 函数中，在调用 `proc_register` 之前显式调用 `pde_set_flags(p)`，确保 flags 字段在 inode 初始化前已正确设置。
+3. 重构 `proc_get_inode` 的判断逻辑，不再直接解引用 `de->proc_ops` 成员，而是调用辅助函数 `pde_has_proc_read_iter(de)` 和 `pde_has_proc_compat_ioctl(de)` 来检查 `pde->flags`，从而避免 UAF 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f070c1ba57e99eb46c8922c9bb25886da9d97962

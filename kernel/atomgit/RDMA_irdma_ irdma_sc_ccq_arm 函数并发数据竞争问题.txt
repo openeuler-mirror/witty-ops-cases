@@ -1,0 +1,45 @@
+#标题
+RDMA/irdma: irdma_sc_ccq_arm 函数并发数据竞争问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核 KCSAN (Kernel Concurrency Sanitizer) 检测到 `irdma_sc_ccq_arm` 函数中存在数据竞争。具体表现为不同 CPU 上的线程同时对该函数内的 shadow_area 内存区域进行读写操作，且未加锁保护，存在导致硬件队列操作异常或数据不一致的风险。
+
+#主要错误日志
+BUG: KCSAN: data-race in irdma_sc_ccq_arm [irdma] / irdma_sc_ccq_arm [irdma]
+
+read to 0xffff9d51b4034220 of 8 bytes by task 255 on cpu 11:
+ irdma_sc_ccq_arm+0x36/0xd0 [irdma]
+ irdma_cqp_ce_handler+0x300/0x310 [irdma]
+ cqp_compl_worker+0x2a/0x40 [irdma]
+ process_one_work+0x402/0x7e0
+ worker_thread+0xb3/0x6d0
+ kthread+0x178/0x1a0
+ ret_from_fork+0x2c/0x50
+
+write to 0xffff9d51b4034220 of 8 bytes by task 89 on cpu 3:
+ irdma_sc_ccq_arm+0x7e/0xd0 [irdma]
+ irdma_cqp_ce_handler+0x300/0x310 [irdma]
+ irdma_wait_event+0xd4/0x3e0 [irdma]
+ irdma_handle_cqp_op+0xa5/0x220 [irdma]
+ irdma_hw_flush_wqes+0xb1/0x300 [irdma]
+ irdma_flush_wqes+0x22e/0x3a0 [irdma]
+ irdma_cm_disconn_true+0x4c7/0x5d0 [irdma]
+ irdma_disconnect_worker+0x35/0x50 [irdma]
+ process_one_work+0x402/0x7e0
+ worker_thread+0xb3/0x6d0
+ kthread+0x178/0x1a0
+ ret_from_fork+0x2c/0x50
+
+value changed: 0x0000000000024000 -> 0x0000000000034000
+
+#问题根因
+`irdma_sc_ccq_arm` 函数在读取和修改 shadow_area 区域的数据时，缺乏锁保护机制。当多个线程（如 `cqp_compl_worker` 和 `irdma_disconnect_worker`）在不同 CPU 上并发执行该函数时，会出现一个线程在读取而另一个线程在写入同一内存地址的情况，从而引发数据竞争。
+
+#解决方案
+在 `irdma_sc_ccq_arm` 函数体内添加 `spin_lock_irqsave` 和 `spin_unlock_irqrestore` 保护。具体为使用 `ccq->dev->cqp_lock` 自旋锁，确保在对 shadow_area 进行读写操作期间的原子性，防止多线程并发访问导致的数据竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a209884cba443183b193482126e795b4eb230f1b

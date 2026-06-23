@@ -1,0 +1,20 @@
+#标题
+kvaser_usb_leaf 驱动命令解析器潜在无限循环漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 Kvaser USB LEAF 类设备的数据传输时，若接收到的数据缓冲区中包含位于 USB 端点包边界（wMaxPacketSize 边界）上的零长度命令，驱动程序解析逻辑会陷入无限循环。这将导致内核线程卡死，无法继续处理后续的 CAN 总线报文，造成通信阻塞。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序使用 `round_up(pos, wMaxPacketSize)` 来跳过零长度命令（占位符），意图将缓冲区位置 `pos` 对齐到下一个 USB 包边界。然而，当零长度命令恰好位于包边界上时（即 `pos` 已经是 `wMaxPacketSize` 的整数倍，包括 0），`round_up()` 函数计算结果仍为原值 `pos`。由于 `pos` 未增加，导致循环条件始终满足，解析逻辑陷入死循环。
+
+#解决方案
+修改 `kvaser_usb_leaf_wait_cmd()` 和 `kvaser_usb_leaf_read_bulk_callback()` 函数中的对齐计算逻辑，将 `round_up(pos, ...)` 修改为 `round_up(pos + 1, ...)`。这确保了即使 `pos` 当前位于边界上，计算基准也是 `pos + 1`，从而强制 `round_up` 返回下一个对齐边界值，避免 `pos` 停滞不前。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc58a01551df416e7ad8e2dfc19aae5fe7a1dcf8

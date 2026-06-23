@@ -1,0 +1,20 @@
+#标题
+mm/compaction: isolate_freepages_block 中的 UBSAN 移位越界警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+syzkaller 测试工具触发并报告了一个 UBSAN（Undefined Behavior Sanitizer）shift-out-of-bounds 警告。该警告发生在 `isolate_freepages_block()` 函数中执行 `(1UL << order)` 操作时，系统检测到移位操作越界。
+
+#主要错误日志
+UBSAN: shift-out-of-bounds in isolate_freepages_block
+
+#问题根因
+在 `isolate_freepages_block()` 函数中，`order` 变量通过 `compound_order(page)` 获取。由于 `compound_order` 与页面的 flags 处于 union 结构中，如果页面状态异常，`compound_order` 可能返回任意值。当该返回值超过 `MAX_PAGE_ORDER`（或 `BITS_PER_LONG`）时，执行 `1UL << order` 操作会导致移位越界，从而触发 UBSAN 警告。
+
+#解决方案
+在执行移位操作前，增加对 `order` 值的合法性检查。具体修改为：在 `isolate_freepages_block()` 的判断条件中增加 `order <= MAX_PAGE_ORDER` 的校验，确保只有在 order 值有效时才进行后续的移位运算，从而避免 UBSAN 警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/390efa00178eea66b7254673f98e2cd2ab6af4a3

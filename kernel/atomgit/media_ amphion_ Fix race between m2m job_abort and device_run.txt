@@ -1,0 +1,28 @@
+#标题
+media: amphion: Fix race between m2m job_abort and device_run
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核发生 Use-After-Free 导致的 Panic（Oops），具体表现为无法处理内核内存读取请求。该问题由 `v4l2_m2m_ctx_release` 与 `v4l2_m2m_try_run` 之间的竞态条件引发，导致在 `device_run` 调用时访问了已被释放的 `m2m_ctx` 内存。
+
+#主要错误日志
+Unable to handle kernel read from unreadable memory at virtual address 0000000000000538
+v4l2_m2m_try_run+0x78/0x138
+v4l2_m2m_device_run_work+0x14/0x20
+
+#问题根因
+Amphion VPU 驱动与 v4l2 m2m 框架存在竞态条件。驱动的 `v4l2_m2m_ctx_release()` 释放了 `m2m_ctx`，而同时 `v4l2_m2m_try_run()` 正准备使用该上下文调用 `device_run`。
+具体竞态序列如下：
+1. `v4l2_m2m_try_run()`: 获取锁并随后释放。
+2. `v4l2_m2m_ctx_release()`: 调用 `v4l2_m2m_cancel_job()` -> `job_abort()` -> `v4l2_m2m_job_finish()`，随后执行 `kfree(m2m_ctx)` 释放上下文。
+3. `v4l2_m2m_try_run()`: 调用 `device_run()`，此时访问已释放的内存导致崩溃。
+
+#解决方案
+由于 Amphion VPU 驱动并不依赖 m2m 框架的 `device_run` 回调来执行编解码操作，修复方案通过禁止 m2m 框架调度 job 来消除竞态：
+1. 新增 `job_ready` 回调函数并返回 0，告知 m2m 框架没有作业准备好，从而阻止框架调度。
+2. 移除 `job_abort` 回调函数，避免触发上述竞态路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ae8e70a8a186fae15a42373bb7173b00c3ffa8b

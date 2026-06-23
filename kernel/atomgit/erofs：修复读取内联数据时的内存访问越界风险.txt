@@ -1,0 +1,20 @@
+#标题
+erofs：修复读取内联数据时的内存访问越界风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在访问 erofs 文件系统中的内联数据时，若数据布局异常，系统可能触发 DBG_BUGON 内核断言失败，并返回 -EFSCORRUPTED 错误码，导致文件系统操作失败。
+
+#主要错误日志
+erofs_err(sb, "failed to get inline data %d", ret);
+
+#问题根因
+在函数 `z_erofs_pcluster_begin` 中，对 `EROFS_MAP_META` 类型数据的处理逻辑顺序不当。原代码先判断非 META 情况，随后在 else if 分支中检查偏移量越界 `(map->m_pa & ~PAGE_MASK) + map->m_plen > PAGE_SIZE`，但此检查逻辑与后续 `erofs_read_metabuf` 的调用路径分离。当数据为 META 类型且未正确处理或校验时，可能导致后续处理流程中出现状态不一致或潜在的内存访问问题。修复方案调整了分支逻辑，确保在 META 类型分支中优先进行边界检查和数据读取，消除了逻辑漏洞。
+
+#解决方案
+调整 `z_erofs_pcluster_begin` 函数中的条件判断分支结构。将 `EROFS_MAP_META` 情况的处理提到最前（原为 `if (!(map->m_flags & EROFS_MAP_META))`，改为 `if (map->m_flags & EROFS_MAP_META)`），并在该分支内部保留必要的越界检查 `DBG_BUGON(1)` 及 `erofs_read_metabuf` 的调用，确保内联数据的读取过程在严格的边界检查下进行，防止文件系统损坏导致的异常访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/28406b0112b24f0b024f879977cc2c47cf9846fd

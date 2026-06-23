@@ -1,0 +1,28 @@
+#标题
+MHI 总线在大端序平台无法正常启动
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PowerPC 等大端序平台上，MHI 总线无法正常启动。使用 QCN9274 WLAN 设备配合 ath12k 驱动时，加载过程失败，设备探测失败并返回错误码 -110（ETIMEDOUT）。
+
+#主要错误日志
+ath12k_pci 0001:01:00.0: BAR 0: assigned [mem 0xc00000000-0xc001fffff 64bit]
+ath12k_pci 0001:01:00.0: MSI vectors: 1
+ath12k_pci 0001:01:00.0: Hardware name: qcn9274 hw2.0
+ath12k_pci 0001:01:00.0: failed to set mhi state: POWER_ON(2)
+ath12k_pci 0001:01:00.0: failed to start mhi: -110
+ath12k_pci 0001:01:00.0: failed to power up :-110
+ath12k_pci 0001:01:00.0: failed to create soc core: -110
+ath12k_pci 0001:01:00.0: failed to init core: -110
+ath12k_pci: probe of 0001:01:00.0 failed with error -110
+
+#问题根因
+MHI 总线协议规定为小端序，但在大端序平台（如 PowerPC）上，驱动代码在填充 BHI（Boot Host Interface）向量表时，直接使用了 CPU 的本地端序（大端序）来写入 DMA 地址和数据大小，未转换为硬件期望的小端序格式。这导致固件镜像通过 BHI 传输时使用了错误的 DMA 地址/大小，进而导致设备启动超时失败。
+
+#解决方案
+修改 MHI 主机驱动代码，在填充 BHI 向量表条目时，使用 `cpu_to_le64` 函数将 DMA 地址和大小显式转换为小端序格式。同时，将 `bhi_vec_entry` 结构体中的 `dma_addr` 和 `size` 成员类型从 `u64` 修改为 `__le64`，以确保类型安全和端序正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d6052230a99e01ab431e88552c38226c7fbf2b53

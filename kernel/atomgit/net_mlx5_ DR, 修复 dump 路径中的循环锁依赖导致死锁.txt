@@ -1,0 +1,45 @@
+#标题
+net/mlx5: DR, 修复 dump 路径中的循环锁依赖导致死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统检测到可能的循环锁定依赖，存在死锁风险。当执行 dump 操作（如读取调试信息）与创建流表或匹配器并发执行时，可能因锁顺序冲突导致系统挂起或内核报错。
+
+#主要错误日志
+======================================================
+WARNING: possible circular locking dependency detected
+6.19.0-rc6net_next_e817c4e #1 Not tainted
+------------------------------------------------------
+sos/30721 is trying to acquire lock:
+ffff888102df5900 (&dmn->info.rx.mutex){+.+.}-{4:4}, at: dr_dump_start+0x131/0x450 [mlx5_core]
+
+but task is already holding lock:
+ffff888102df5bc0 (&dmn->dump_info.dbg_mutex){+.+.}-{4:4}, at: dr_dump_start+0x10b/0x450 [mlx5_core]
+
+which lock already depends on the new lock.
+
+Possible unsafe locking scenario:
+
+       CPU0                    CPU1
+       ----                    ----
+lock(&dmn->dump_info.dbg_mutex);
+                               lock(&dmn->info.tx.mutex);
+                               lock(&dmn->dump_info.dbg_mutex);
+lock(&dmn->info.rx.mutex);
+
+               *** DEADLOCK ***
+
+#问题根因
+`dr_dump_domain_all()` 函数中的锁获取顺序与 `mlx5dr_table_create()` 和 `mlx5dr_matcher_create()` 中的顺序不一致，形成了循环依赖。
+- dump 路径原获取顺序：`dbg_mutex` -> `rx.mutex` -> `tx.mutex`（通过 domain lock）
+- table/matcher 创建路径获取顺序：`rx.mutex` -> `tx.mutex` -> `dbg_mutex`
+这种相反的锁序导致了死锁隐患。
+
+#解决方案
+调整 `dr_dump_domain_all()` 中的加锁顺序，在获取 `dbg_mutex` 之前先获取 domain lock（包含 rx/tx mutex），使其与创建路径的锁序保持一致。
+修改后的顺序为：domain lock (`rx.mutex`/`tx.mutex`) -> `dbg_mutex`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e5fec91fac6d6e1c3ee5b0271e2bb8bd0db9c2be

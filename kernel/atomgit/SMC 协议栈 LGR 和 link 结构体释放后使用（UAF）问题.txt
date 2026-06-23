@@ -1,0 +1,20 @@
+#标题
+SMC 协议栈 LGR 和 link 结构体释放后使用（UAF）问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMC（Shared Memory Communications）协议处理连接请求的过程中，由于 socket 锁管理不当，存在并发竞争风险，导致 LGR（Link Group）和 link 结构体出现释放后使用，可能引发内核 panic 或数据结构破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smc_listen_work()` 函数处理监听工作期间，与其配对的 `smc_listen_out()` 函数之间存在 socket 锁同步缺失。`smc_listen_out()` 在操作 socket 相关资源时未持有锁，而外部逻辑可能并发修改或释放资源，从而导致 LGR 和 link 结构体的引用计数错误或指针悬空，最终引发 UAF 故障。
+
+#解决方案
+在 `smc_listen_work()` 入口处增加 `lock_sock()` 操作，并在 `smc_listen_out()` 的相应路径中增加 `release_sock()` 操作。通过在整个监听处理流程中持有 socket 锁，确保了 socket 状态及相关资源（如 LGR 和 link）在并发环境下的安全性，修复了锁缺失导致的竞争问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/81806b2b3875662461e3311cbc7e46309ee57267

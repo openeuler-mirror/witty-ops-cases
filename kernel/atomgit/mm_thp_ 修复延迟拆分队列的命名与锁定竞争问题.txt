@@ -1,0 +1,30 @@
+#标题
+mm/thp: 修复延迟拆分队列的命名与锁定竞争问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在进行内存 cgroup 迁移（move charge）时，如果大页正处于延迟拆分队列中，可能触发内核 WARNING 或导致内核崩溃。
+2. 在内存回收或释放路径中，可能出现 VM_BUG_ON_FOLIO 相关的内核警告（代码 diff 中显示该检查已被移除并替换为更安全的 WARN_ON_ONCE）。
+3. 延迟拆分队列的数据结构可能因并发竞争而损坏，导致内存管理状态不一致。
+
+#主要错误日志
+- `WARN_ON_ONCE(folio_ref_count(folio));`
+- `WARN_ON_ONCE(!mem_cgroup_disabled() && !folio_memcg(folio));`
+- `WARN_ON_ONCE(folio_unqueue_deferred_split(folio));` （推断：在 mem_cgroup_move_account、uncharge_folio、mem_cgroup_migrate 等函数中触发）
+
+#问题根因
+1. **命名与语义不清**：原函数 `folio_undo_large_rmappable` 命名不准确，实际上它是用于从延迟拆分队列中取消排队，这导致了代码理解和使用上的混淆。
+2. **锁定竞争风险**：延迟拆分队列锁（split_queue_lock）依赖于内存 cgroup（memcg），而取消排队操作必须在 folio 引用计数为 0 时才安全。如果在修改 folio 的 memcg 之前未将其从延迟拆分队列中移除，会破坏锁的依赖关系，导致竞争条件。例如，`mem_cgroup_move_account` 在更改 memcg 时，如果 folio 仍在队列中，就会引发问题。
+3. **move charge 路径缺陷**：在内存控制组移动电荷过程中，处理透明大页（THP）时未正确处理 `_deferred_list`，既没有检查引用计数安全性，也没有正确处理锁定逻辑。
+
+#解决方案
+1. **重命名函数**：将 `folio_undo_large_rmappable` 重命名为 `folio_unqueue_deferred_split`，明确函数的功能是从延迟拆分队列中移除 folio。
+2. **增加安全检查**：在 `__folio_unqueue_deferred_split` 中增加 `WARN_ON_ONCE` 检查，确保调用时 folio 引用计数为 0 且 memcg 存在（若未禁用），防止在不安全状态下操作。
+3. **修正 move charge 逻辑**：在 `mem_cgroup_move_charge_pte_range` 中，针对处于延迟拆分队列中的大页，先尝试调用 `split_folio` 进行拆分，确保在持有 pmd 锁或引用计数安全的情况下处理，避免直接操作导致竞争。同时在迁移前调用 `folio_unqueue_deferred_split` 确保队列一致性。
+4. **插入卸载点**：在 `mem_cgroup_move_account`、`uncharge_folio`、`mem_cgroup_migrate` 等关键路径中增加 `folio_unqueue_deferred_split` 调用，确保在更改 memcg 或释放页面前安全移除队列条目。
+5. **优化日志注释**：更新 `deferred_split_folio` 中的注释，明确排除 swapcache 主要是为了优化而非仅仅为了防止损坏（因为损坏问题已在 `mem_cgroup_swapout` 中解决）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e835a62834ffeb64ee13ff6b6132023b4aa77810

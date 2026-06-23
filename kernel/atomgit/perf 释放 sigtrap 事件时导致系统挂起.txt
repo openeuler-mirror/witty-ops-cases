@@ -1,0 +1,20 @@
+#标题
+perf 释放 sigtrap 事件时导致系统挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在释放带有 sigtrap 功能的 perf event 时，系统发生挂起，无法正常完成释放流程。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `perf_pending_task_sync()` 函数中的死锁逻辑。当释放 sigtrap 事件时，代码尝试使用 `rcuwait_wait_event()` 等待 `pending_work` 标志清零，但如果该任务已经排队到当前任务的队列中，当前任务无法等待自己完成，从而导致无限等待和系统挂起。此外，原有代码在 `inherit_event` 和 `perf_event_release_kernel` 等路径中对事件引用计数的处理不当，导致在 `pending_task` 执行期间可能过早释放 event 内存，引发 Use-After-Free 风险。
+
+#解决方案
+移除导致挂起的 `rcuwait_wait_event()` 同步等待机制及其相关的 `pending_work_wait` 字段。改为在 `event_sched_out()` 中排队 `pending_task` 时增加事件引用计数，并在 `perf_pending_task()` 回调执行完毕后调用 `put_event()` 释放引用。这保证了在任务回调执行期间内核对象不会被释放，同时消除了死锁风险。同时清理了 `perf_event_release_kernel` 和 `perf_free_event` 等函数中冗余或不正确的引用计数操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/97c2d1a4aa1430a6305c949fa1f72efe454c946d

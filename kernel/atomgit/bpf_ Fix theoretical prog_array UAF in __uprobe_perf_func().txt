@@ -1,0 +1,20 @@
+#标题
+bpf: Fix theoretical prog_array UAF in __uprobe_perf_func()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `__uprobe_perf_func` 函数中，调用 `bpf_prog_run_array_uprobe` 时存在理论上 prog_array 被释放后使用（UAF）的风险。该问题源于 RCU 锁保护范围不正确，导致在读取 BPF 程序数组时可能出现并发安全问题。
+
+#主要错误日志
+未知
+
+#问题根因
+原代码在 `bpf_prog_run_array_uprobe` 内部调用 `rcu_read_lock_trace` 和 `rcu_read_unlock_trace` 进行 RCU 锁保护，但该保护范围不足以覆盖 `__uprobe_perf_func` 中对 `call->prog_array` 的解引用操作。具体来说，原实现中 `rcu_dereference_check` 发生在函数内部，而在调用者 `__uprobe_perf_func` 传入参数时，若没有持有 RCU 锁，指针可能在解引用前被其他线程释放，从而引发 UAF。
+
+#解决方案
+将 RCU 读锁的获取与释放操作从 `bpf_prog_run_array_uprobe` 函数内部移至调用者 `__uprobe_perf_func` 中。修改后，`__uprobe_perf_func` 先持有 `rcu_read_lock_trace` 锁，再通过 `rcu_dereference_check` 获取 prog_array 指针，随后将其传入 `bpf_prog_run_array_uprobe` 执行，最后释放锁。同时在 `bpf_prog_run_array_uprobe` 中增加 `RCU_LOCKDEP_WARN` 检查以确保调用时已持有 RCU 锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b654f43f4c72af7acdc977f6111faebd5b0ef03e

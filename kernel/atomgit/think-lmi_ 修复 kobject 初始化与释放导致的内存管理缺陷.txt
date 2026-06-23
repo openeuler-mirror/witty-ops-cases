@@ -1,0 +1,26 @@
+#标题
+think-lmi: 修复 kobject 初始化与释放导致的内存管理缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 think-lmi 驱动加载或初始化过程中，若 `tlmi_analyze()` 遇到错误退出，可能导致内核内存管理混乱，具体表现为：
+1. 访问已释放的内存导致内核崩溃或 Oops。
+2. kobject 引用计数泄漏，导致对象无法被正确释放。
+3. 潜在的 slab use-after-free 或 general protection fault。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tlmi_analyze()` 函数中，分配包含嵌入 kobject 的结构体后，在错误处理路径中直接释放了该结构体，但此时 kobject 已经被初始化。释放一个已初始化但未正确清理的 kobject 会导致内存管理错误。
+此外，在 `tlmi_sysfs_init()` 中使用了 `kobject_add()` 而非 `kobject_init_and_add()`，配合 `tlmi_release_attr()` 中单独的 `kobject_put()` 调用，导致了清理逻辑的不一致。
+
+#解决方案
+1. 移除 `tlmi_analyze()` 中对 kobject 的提前初始化操作，避免在对象添加到 sysfs 前过早初始化。
+2. 将 `tlmi_sysfs_init()` 中的 `kobject_add()` 调用替换为 `kobject_init_and_add()`，确保 kobject 初始化与添加的原子性，并正确关联 ktype。
+3. 修改 `tlmi_release_attr()` 的清理逻辑，移除分散的 `kobject_put()` 调用，改为遍历 kset 的 kobject 列表统一调用 `kobject_put()` 进行释放，确保所有关联的 kobject 都被正确清理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9b30d89048ec9aeee953c633012b63a09bccc69

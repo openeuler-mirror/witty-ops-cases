@@ -1,0 +1,20 @@
+#标题
+io_uring: io_wq_create 函数错误路径遗漏 put_task_struct 导致任务泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 io_wq_create 函数创建 io_wq 工作队列时，若 cpuhp_state_add_instance_nocalls 调用失败，系统未能正确释放此前获取的 task_struct 引用计数，导致进程任务结构体发生内存泄漏。长期运行或频繁触发该错误路径可能导致系统内存资源耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+在 io_wq_create 函数中，初始化 wq->task 时对任务结构体引用计数进行了增加（隐含在初始化逻辑中），但在后续 cpuhp_state_add_instance_nocalls 调用失败的错误处理分支中，代码直接跳转至 err 标签退出，遗漏了调用 put_task_struct(wq->task) 来释放引用计数，从而导致任务结构体引用计数泄漏。
+
+#解决方案
+在 cpuhp_state_add_instance_nocalls 调用失败的错误处理分支中，显式增加 put_task_struct(wq->task) 调用，确保在退出前正确释放任务结构体的引用计数，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fcbdeb6fd99e871eb594668085954d9b15779b84

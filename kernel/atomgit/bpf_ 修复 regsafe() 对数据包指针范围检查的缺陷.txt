@@ -1,0 +1,22 @@
+#标题
+bpf: 修复 regsafe() 对数据包指针范围检查的缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BPF 程序验证过程中，当涉及 `PTR_TO_PACKET` 类型指针且 `range` 值为负数（如 `BEYOND_PKT_END` 或 `AT_PKT_END` 特殊情况）时，`regsafe()` 函数可能产生错误判断，导致验证器错误地认为两个寄存器状态等价。这可能导致后续非法的数据包访问被错误放行，进而引发内核内存越界访问或破坏内存数据。
+
+#主要错误日志
+未知
+
+#问题根因
+`regsafe()` 函数在比较寄存器状态 `rold` 和 `rcur` 的 `range` 时，原有逻辑仅检查了 `rold->range > rcur->range` 的情况。若 `range` 为负数（表示特殊的数据包结束位置状态），直接进行大小比较会导致逻辑判断错误，无法正确区分不同的指针状态，从而导致验证器状态匹配失效。
+
+#解决方案
+修改 `kernel/bpf/verifier.c` 中的 `regsafe()` 函数逻辑，在进行 `range` 大小比较前，先判断 `rold->range` 或 `rcur->range` 是否为负数：
+1. 若任一 `range` 为负数，则必须两者相等才视为安全（`return false` 如果不等），不再进行大小比较。
+2. 仅当 `range` 均非负时，才执行原有的 `rold->range > rcur->range` 检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8dfaf58c42542f66a3646023c04a7b0eb6619cac

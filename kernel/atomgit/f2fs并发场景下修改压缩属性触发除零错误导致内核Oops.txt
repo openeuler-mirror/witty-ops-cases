@@ -1,0 +1,36 @@
+#标题
+f2fs并发场景下修改压缩属性触发除零错误导致内核Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在f2fs文件系统中，当fsync操作与setattr（修改文件大小）、ioctl（设置压缩属性）并发执行时，触发内核Panic。具体表现为在进行回写（writeback）过程中发生除零错误（divide error），导致内核崩溃，调用栈指向 `f2fs_all_cluster_page_ready` 函数。
+
+#主要错误日志
+Oops: divide error: 0000 [#1] SMP KASAN PTI
+CPU: 0 UID: 0 PID: 11441 Comm: syz.0.46 Not tainted 6.17.0 #1 PREEMPT(full)
+RIP: 0010:f2fs_all_cluster_page_ready+0x106/0x550 fs/f2fs/compress.c:857
+Call Trace:
+ <TASK>
+ f2fs_write_cache_pages fs/f2fs/data.c:3078 [inline]
+ __f2fs_write_data_pages fs/f2fs/data.c:3290 [inline]
+ f2fs_write_data_pages+0x1c19/0x3600 fs/f2fs/data.c:3317
+ ...
+
+#问题根因
+这是一个并发竞态条件导致的故障。根本原因是 `f2fs_setflags_common` 修改压缩上下文（设置 `i_cluster_size`）的操作，未与正在进行的回写路径 `f2fs_write_cache_pages` 进行互斥。
+具体流程如下：
+1. fsync 调用 `f2fs_write_cache_pages`，此时 inode 为非压缩状态，`i_cluster_size` 为 0。
+2. 在回写过程中，ioctl 并发调用 `f2fs_setflags_common` 将文件设置为压缩文件，并将 `i_cluster_size` 修改为非0值（如 4），同时设置 `FI_COMPRESSED_FILE` 标志。
+3. 回写流程继续执行到 `f2fs_all_cluster_page_ready`，判断文件是压缩文件，尝试执行 `pgidx % cc->cluster_size` 运算。
+4. 此时 `cc->cluster_size` 来源于 `F2FS_I(inode)->i_cluster_size`，虽然被修改为 4，但在某些路径下（或因部分上下文未初始化/更新不一致）导致除数为 0，或者计算逻辑因上下文不一致导致错误的除法运算，从而触发 "divide error"。
+
+#解决方案
+在 f2fs_inode_info 结构体中新增原子变量 `writeback` 用于跟踪正在进行回写的线程数，并使用 `i_sem` 锁保护，以确保压缩上下文的更新与回写操作互斥。具体修改包括：
+1. **新增计数器**：在 `f2fs_inode_info` 中增加 `atomic_t writeback` 字段。
+2. **回写路径加锁**：在 `__f2fs_write_data_pages` 函数中，调用 `f2fs_write_cache_pages` 前后分别调用 `account_writeback(inode, true)` 和 `account_writeback(inode, false)` 来增加和减少计数。
+3. **设置属性路径检查**：在 `f2fs_setflags_common` 和 `f2fs_disable_compressed_file` 中，增加对 `writeback` 计数的检查。如果 `atomic_read(&fi->writeback)` 不为 0，说明正在进行回写，此时拒绝修改压缩属性或禁用压缩，返回 `-EINVAL`，从而避免在回写过程中更改压缩上下文引发的除零错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8a33a054039010157c1f808c2c145778c7ee1e50

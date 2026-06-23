@@ -1,0 +1,20 @@
+#标题
+coda: coda_file_write_iter 中锁顺序错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 coda 文件系统执行写入操作时，由于锁的获取顺序与网络文件系统及 cachefiles 的通用逻辑不一致，可能导致潜在的死锁或锁竞争问题，影响系统稳定性。该问题涉及 coda inode 锁与底层宿主文件写保护锁的交互顺序。
+
+#主要错误日志
+未知
+
+#问题根因
+coda 文件的宿主文件位于与 coda inode 不同的文件系统上，作为后备文件存在。原代码在 `coda_file_write_iter` 函数中，先获取宿主文件的写保护锁，再获取 coda inode 的互斥锁。这与 overlayfs 的 `ovl_write_iter()` 以及使用 cachefiles 的网络文件系统的标准锁定顺序不符，正确的顺序应当是先获取 coda inode 锁，再获取宿主文件的写保护锁。
+
+#解决方案
+调整 `coda_file_write_iter` 中的锁获取顺序：将 `inode_lock(coda_inode)` 移至 `file_start_write(host_file)` 之前执行，确保先锁定 coda inode，再开启宿主文件的写保护；相应地，将 `inode_unlock(coda_inode)` 移至 `file_end_write(host_file)` 之后，保持释放顺序的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca68d0d4f8874093e56cf0fe8c702538cdaaca4b

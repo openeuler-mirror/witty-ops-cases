@@ -1,0 +1,33 @@
+#标题
+netfilter: ctnetlink: fix refcount leak on table dump
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 conntrack 表导出操作（dump）时，若触发特定条件导致重试，会引起引用计数泄漏。该泄漏导致 conntrack 对象无法释放，进而阻碍网络命名空间（netns）的清理或 conntrack 模块的卸载。具体表现为运行 `conntrack_resize.sh` 测试脚本约 20 分钟后，出现 kworker 进程在 `nf_conntrack_cleanup_net_list` 函数中死循环（持续占用 CPU），且对应的 netns 无法销毁。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ctnetlink_dump_table` 函数中，当发送消息失败（`res < 0`）需要记录当前位置以便下次续传时，代码逻辑对 `ct` 对象的引用计数进行了额外增加：
+```c
+if (res < 0) {
+    nf_conntrack_get(&ct->ct_general); // 泄漏点
+    cb->args[1] = (unsigned long)ct;
+    ...
+}
+```
+虽然概率较低，但在特定情况下 `ct` 指针可能等于上一次循环保留的 `last` 指针。如果两者相等，意味着该对象的引用计数已经被增加过一次，而此处进行了第二次增加。后续流程无法匹配这一额外的增加操作，导致引用计数永远无法归零，对象无法释放，最终阻塞 `nf_conntrack_cleanup_net_list` 的退出条件。
+
+#解决方案
+移除不必要的引用计数操作，改用“cookie”机制来标记续传位置。
+具体修改如下：
+1.  删除 `ctnetlink_done` 函数中对 `cb->args[1]` 的 `nf_ct_put` 调用，因为不再存储对象指针。
+2.  在 `ctnetlink_dump_table` 中，不再将 `struct nf_conn` 指针存储在 `cb->args[1]` 中，而是存储通过 `ctnetlink_get_id(ct)` 获取的 ID 值（即 `nf_ct_get_id`）。
+3.  移除发送失败时的 `nf_conntrack_get` 调用以及函数退出时的 `nf_ct_put(last)` 调用。
+通过存储唯一标识 ID 而非对象指针，避免了复杂的引用计数管理，从而修复了泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/79fd87cc655bd18fb858c666941ad3e7cdcde132

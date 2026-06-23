@@ -1,0 +1,21 @@
+#标题
+ext4 快速提交与全量日志提交并行导致数据丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 fstest generic/047 测试时，创建多个 32k 字节文件并在每个文件创建后进行 sync，随后关闭文件系统，发现部分数据丢失，具体表现为文件大小被截断为 0。
+
+#主要错误日志
+未知
+
+#问题根因
+当正在进行全量日志提交时，快速提交必须将 inode 排入 FC_Q_STAGING 队列而不是 FC_Q_MAIN 队列。如果 inode 已经在之前的快速提交中入队到 FC_Q_MAIN，且此时全量提交开始，后续的快速提交需要将其转移到 FC_Q_STAGING。但是函数 `ext4_fc_track_template()` 未能正确处理这种情况。此外，在清理回调期间重新入队时，如果未持有日志锁，可能会与正在进行的快速提交发生竞态条件，导致状态不一致。
+
+#解决方案
+1. 在全量提交后的清理回调函数 `ext4_fc_cleanup` 中，检查如果 inode 的 `i_sync_tid` 大于当前提交事务号且为全量提交，则将该 inode 重新入队到 `FC_Q_STAGING` 队列。
+2. 调整 JBD2 层 `__jbd2_fc_end_commit` 函数的锁顺序，确保在调用 `j_fc_cleanup_callback` 之前保持日志锁定的状态，以防止在重新入队过程中发生竞态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8a7b843e738493961e4a572eee4b2de71dbaf2a6

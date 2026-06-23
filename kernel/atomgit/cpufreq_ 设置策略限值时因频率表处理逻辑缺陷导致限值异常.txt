@@ -1,0 +1,20 @@
+#标题
+cpufreq: 设置策略限值时因频率表处理逻辑缺陷导致限值异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 cpufreq 频率表的系统上，当尝试设置 CPU 频率策略限值时，设置结果可能不符合预期。具体表现为：设置后的 policy->min 和 policy->max 可能被错误地解析为不正确的频率档位，导致策略限值设置异常，影响 CPU 频率调节功能的正常运行。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit 7491cdf46b5c ("cpufreq: Avoid using inconsistent policy->min and policy->max") 在处理策略限值时，忽略了 `cpufreq_frequency_table_target()` 及其内部调用的函数会直接访问 `policy->min` 和 `policy->max` 这一事实。这导致在限值更新过程中，由于使用了不一致或正在更新的 policy 边界值进行频率表查找，从而引发策略限值设置错误。
+
+#解决方案
+修改 `__resolve_freq()` 和 `cpufreq_frequency_table_target()` 函数接口，显式传入目标频率的最小值和最大值参数。将频率限值作为参数层层传递到底层的查找函数（如 `cpufreq_table_index_unsorted`、`find_index_l` 等），确保在频率表解析过程中使用正确、一致的限值范围，而不是直接依赖可能处于更新状态的 `policy->min/max`。同时移除了查找函数内部对 `policy->min/max` 的直接访问，改为使用传入的参数进行边界检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3cde9f19671704eda9b9f0f4b17d1f42389dba33

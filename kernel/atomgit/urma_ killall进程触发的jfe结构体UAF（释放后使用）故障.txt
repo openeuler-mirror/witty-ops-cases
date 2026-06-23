@@ -1,0 +1,34 @@
+#标题
+urma: killall进程触发的jfe结构体UAF（释放后使用）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `killall` 命令终止进程时，内核触发 UAF（Use-After-Free）故障。具体表现为进程退出流程中，针对 jfc（Job Flow Context）的事件处理函数 `uburma_jfce_handler` 访问了已释放的 jfce（Job Flow Completion Event）对象内存，可能导致内核崩溃或内存数据损坏。同时，在并发销毁场景下，还存在 ucontext 释放后仍被引用的风险，以及 event_handler 链表未初始化即被访问的异常。
+
+#主要错误日志
+- ubcore_log_err("Linked list is not initialized.\n");
+- uburma_log_err("delete jfc failed, ret:%d.\n", ret);
+- uburma_log_err("jfae has been released.\n");
+- uburma_log_info("Start ubcore free ucontext.\n");
+- uburma_log_info("Finish to delete jfc: %u.\n", jfc_id);
+
+#问题根因
+1. **jfe UAF 问题**：在 `uburma_cmd_delete_jfc` 处理失败路径或并发场景下，`ubcore_delete_jfc` 返回错误，但未能及时清理 `jfc_uobj->jfce` 指针。这导致后续 `uburma_jfce_handler` 在 RCU 保护下仍能访问到该指针，而此时 jfce 对象可能已被释放或处于无效状态，从而引发 UAF。
+2. **ucontext 悬垂指针**：在 `uburma_mmu_release` 和 `uburma_close` 中，`uburma_cleanup_uobjs` 调用可能触发上层回调导致 `file->ucontext` 被提前清理，随后代码又尝试使用该指针调用 `ubcore_free_ucontext`，导致访问已释放内存。
+3. **链表未初始化访问**：`ubcore_register_event_handler` 在持有读写信号量时，未检查 `event_handler_list` 是否已完成初始化，导致特殊流程下向未初始化链表添加节点引发异常。
+
+#解决方案
+1. **修复 jfe UAF**：
+   - 在 `uburma_jfc_uobj` 结构体中新增 `spinlock_t jfc_lock` 保护 `jfce` 指针。
+   - 引入 `uburma_cleanup_jfce_references` 函数，在删除 jfc 流程中（无论成功或失败路径）安全地将 `jfce` 指针置为 NULL。
+   - 在 `uburma_jfce_handler` 中调用 `uburma_jfce_is_null` 加锁检查 `jfce` 指针有效性，防止访问已释放内存。
+2. **修复 ucontext 释放逻辑**：
+   - 在清理 uobjs 前将 `file->ucontext` 保存至局部变量 `ucontext`，并将原指针置 NULL。
+   - 使用局部变量调用 `ubcore_free_ucontext`，避免清理过程中因并发导致访问悬垂指针。
+3. **增加链表初始化检查**：
+   - 在 `ubcore_register_event_handler` 中增加 `list_is_uninitialized` 判断，若链表未初始化则直接报错返回，防止非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/90900fc85f72ba963f93d75596678f2dd61f62c1

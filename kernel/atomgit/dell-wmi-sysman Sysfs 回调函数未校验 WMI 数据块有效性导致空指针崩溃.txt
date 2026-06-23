@@ -1,0 +1,23 @@
+#标题
+dell-wmi-sysman Sysfs 回调函数未校验 WMI 数据块有效性导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Dell 系统上通过 sysfs 接口访问 BIOS 属性（如读取 current_value）时，若 WMI 数据块返回格式异常或内容不完整，内核会发生空指针引用或访问越界，导致内核 panic 或 oops。
+
+#主要错误日志
+未知
+
+#问题根因
+sysfs 回调函数在调用 get_wmiobj_pointer 获取 WMI 数据块后，未检查返回对象是否为有效的 ACPI 包以及包内元素数量是否充足，直接对指针内容进行解引用操作。当硬件或固件返回的数据块不符合预期时，触发了非法内存访问。
+
+#解决方案
+在 sysfs 回调函数中增加对 WMI 返回对象的严格校验：
+1. 检查返回对象类型是否为 ACPI_TYPE_PACKAGE。
+2. 检查 package 中的元素数量是否满足最小定义要求（如 ENUM_MIN_ELEMENTS 等）。
+3. 只有在校验通过后才进行后续的数据读取，否则返回 -EIO 错误，避免非法解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ba6bf3349f63e55c35c2500529c4736943eeb00

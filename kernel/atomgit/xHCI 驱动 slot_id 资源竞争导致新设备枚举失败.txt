@@ -1,0 +1,30 @@
+#标题
+xHCI 驱动 slot_id 资源竞争导致新设备枚举失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB 设备热插拔场景下，当一个设备（设备-A）正在断开连接，而另一个新设备（设备-B）正在枚举时，新设备（设备-B）会枚举失败。具体表现为驱动程序检测到 slot_id 仍被占用，导致无法正常分配虚拟设备，新设备无法被系统识别或使用。
+
+#主要错误日志
+未知
+
+#问题根因
+xHC 控制器在禁用 slot_id 命令发送后，可能立即重用该 slot_id 并将其分配给正在枚举的新设备，而此时 xhci 驱动尚未释放与被禁用设备相关的所有资源。这导致了资源竞争：
+1. 设备-A 发送禁用 slot 命令。
+2. 设备-B 发送启用 slot 命令。
+3. 设备-A 禁用 slot 命令完成。
+4. 设备-B 启用 slot 命令完成，控制器分配了与设备-A 相同的 slot_id（例如 slot_id=1）。
+5. 设备-B 的驱动线程在 `xhci_alloc_virt_device` 中检查发现 `xhci->devs[slot_id]` 仍被设备-A 占用，导致枚举因冲突而失败。
+6. 设备-A 随后才在 `xhci_free_virt_device` 中将 `xhci->devs[slot_id]` 设为 NULL。
+根本原因在于驱动释放 slot_id 资源的时机晚于控制器重用该 slot_id 的时机，存在竞态窗口。
+
+#解决方案
+修改 slot_id 资源释放逻辑，将关键指针的清理操作提前到中断上下文中执行：
+1. 在 `xhci_handle_cmd_disable_slot` 函数中，当禁用 slot 命令成功完成（`COMP_SUCCESS`）时，立即在中断上下文中将 `xhci->dcbaa->dev_context_ptrs[slot_id]` 和 `xhci->devs[slot_id]` 设置为 NULL 或 0。
+2. 调整 `xhci_free_virt_device` 函数接口，增加传入 `dev` 指针参数，并在清理时校验指针一致性，确保资源释放的准确性。
+3. 新增 `xhci_disable_and_free_slot` 封装函数，统一管理禁用与释放流程，替换原有的分离调用模式，修复资源竞争问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9bf2385f1ad92c2a1004ec018154360520a39396

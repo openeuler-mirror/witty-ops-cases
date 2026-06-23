@@ -1,0 +1,21 @@
+#标题
+xen/manage: Xen 挂起流程中 dpm_suspend_start 失败处理缺失导致状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Xen 虚拟化环境下执行挂起操作时，若设备电源管理挂起起始阶段失败，系统未能正确恢复设备状态，导致设备状态不一致或后续操作异常。
+
+#主要错误日志
+pr_err("%s: dpm_suspend_start %d\n", __func__, err);
+
+#问题根因
+设备电源管理 API 存在不对称性：dpm_suspend_start() 失败时不会自动清理现场（需要调用 dpm_resume_end() 进行恢复），而 dpm_suspend_end() 失败时会自动清理。
+Xen 的挂起代码在使用该 API 时，未能在 dpm_suspend_start() 的错误处理路径中补充调用 dpm_resume_end()，导致在挂起失败时设备状态未能恢复，遗留状态不一致问题。
+
+#解决方案
+修改 drivers/xen/manage.c 文件中的错误处理路径。当 dpm_suspend_start() 返回错误时，跳转至 out_resume_end 标签处，确保执行 dpm_resume_end() 函数以恢复设备和系统状态，从而修复错误路径下的状态清理问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a21cc49bb7dc1c57f3083d289037c50d203d8710

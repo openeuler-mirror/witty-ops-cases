@@ -1,0 +1,25 @@
+#标题
+cifs: SMB1查询重解析点响应验证缺陷导致内存访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理SMB1查询重解析点的响应时，若服务端返回的设置数据计数或数据长度不符合协议规范，内核可能访问到错误的内存位置或使用被截断的数据，导致系统进入未定义状态或返回错误的文件系统信息。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 MS-CIFS 协议规范（2.2.7.2 NT_TRANSACT_IOCTL），响应中应包含一个字长的 setup 数据，其后跟随 ByteCount 成员。代码缺陷如下：
+1. 缺少对 `SetupCount` 的验证：若 `SetupCount` 不为 1，计算 ByteCount 成员的偏移量将出错，导致后续内存访问越界。
+2. 缺少对数据截断的验证：未比较实际传输的数据长度（`DataCount`）与服务端执行的 IOCTL 输出长度（`ReturnedDataLen`），可能使用了不完整的缓冲区数据。
+3. 请求参数设置宽松：请求中的 `MaxParameterCount` 设为 2 但协议规定无输出参数，`MaxSetupCount` 设为 4 但协议规定为 1，增加了兼容性风险。
+
+#解决方案
+修改 `fs/smb/client/cifssmb.c` 中的 `cifs_query_reparse_point` 函数，严格遵循协议规范进行修复：
+1. 增加响应校验：添加判断逻辑，确保 `io_rsp->SetupCount` 必须等于 1，否则返回 `-EIO`；检查 `data_count` 是否等于 `io_rsp->ReturnedDataLen`，防止处理截断数据。
+2. 收紧请求参数：将请求结构体中的 `MaxParameterCount` 从 2 修改为 0，将 `MaxSetupCount` 从 4 修改为 1，以精确匹配协议要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/183d98b0541b3b35cc0052463a4877e61bf0ea74

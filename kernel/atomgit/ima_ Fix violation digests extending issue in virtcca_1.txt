@@ -1,0 +1,20 @@
+#标题
+ima: Fix violation digests extending issue in virtcca
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 ima 违规测量（violation measurement）时，如果 virtcca 的算法配置与 ima 相同，会导致 NULL 指针访问，进而引发内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+当 ima 处理违规测量时，会扩展一个预分配的全 0xFF 摘要数组，该数组长度取决于 RoT（Root of Trust）的 slot 数量。在原代码逻辑中，如果 virtcca 的算法配置与 ima 的 `ima_hash_algo` 相同，`rot->allocated_banks` 不会被分配内存，且 `nr_allocated_banks` 为 0。这导致后续访问 `digests_arg[algo_idx]` 时，因算法索引计算错误及内存未分配而引发 NULL 指针访问。
+
+#解决方案
+修改 `ima_virtcca_init` 函数，移除算法差异判断的条件分支，确保无论 virtcca 算法是否与 ima 一致，都始终分配一个 `allocated_banks` 插槽（slot），并设置 `nr_allocated_banks` 为 1。同时，在 `ima_virtcca_extend` 函数中，移除断言性质的算法索引计算逻辑，直接根据 virtcca 仅有一个 slot 的事实，固定使用 `digests_arg[0]` 进行数据拷贝。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/939ff771447a930103ac17bff3652412d82ca4f7

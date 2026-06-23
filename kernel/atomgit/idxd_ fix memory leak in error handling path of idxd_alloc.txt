@@ -1,0 +1,28 @@
+#标题
+idxd: fix memory leak in error handling path of idxd_alloc
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 idxd 驱动初始化过程中，若 `idxd_alloc` 函数内部资源分配失败（如 `ida_alloc` 失败、`bitmap_zalloc_node` 失败或 `dev_set_name` 失败），函数直接返回 NULL，导致此前已分配的内存资源（如 `idxd` 结构体、`opcap_bitmap` 或已分配的 `ida` ID）未被释放，造成内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+`idxd_alloc` 函数的错误处理路径不完整。在多个关键资源分配失败的分支中，代码仅执行了 `return NULL`，遗漏了对已分配资源（`idxd` 结构体指针、`opcap_bmap` 指针或 `ida` ID）的清理回收操作，导致资源泄漏。具体表现为：
+1. `ida_alloc` 失败时，未释放已分配的 `idxd` 结构体。
+2. `bitmap_zalloc_node` 失败时，未释放 `idxd` 结构体（仅释放了 ID）。
+3. `dev_set_name` 失败时，未释放 `opcap_bmap` 和 `ida` ID（仅调用了 `put_device`）。
+
+#解决方案
+重构 `idxd_alloc` 函数的错误处理逻辑，采用 `goto` 标签实现统一的资源回滚机制。具体修改如下：
+1. 新增 `err_name`、`err_opcap`、`err_ida` 三个错误处理标签。
+2. 当 `dev_set_name` 失败时，跳转至 `err_name`，依次执行 `put_device`、`bitmap_free` 和 `ida_free`。
+3. 当 `opcap_bmap` 分配失败时，跳转至 `err_opcap`，执行 `ida_free`。
+4. 当 `ida_alloc` 失败时，跳转至 `err_ida`，执行 `kfree` 释放 `idxd` 结构体。
+5. 确保所有错误路径最终均返回 NULL，且过程中无资源遗留。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/27545e27727a83e977cee76cdf189ffb68f71599

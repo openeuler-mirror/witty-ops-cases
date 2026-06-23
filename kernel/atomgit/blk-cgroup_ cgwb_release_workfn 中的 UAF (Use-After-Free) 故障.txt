@@ -1,0 +1,32 @@
+#标题
+blk-cgroup: cgwb_release_workfn 中的 UAF (Use-After-Free) 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行 writeback 释放工作队列时，偶发 KASAN 检测到的 slab-use-after-free 错误，导致内核崩溃。该问题在 Meta 生产环境中跨多个内核版本偶现。通过在 `css_put()` 与 `blkcg_unpin_online()` 之间注入延时可以稳定复现。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in blkcg_unpin_online (./include/linux/instrumented.h:112 ./include/linux/atomic/atomic-instrumented.h:400 ./include/linux/refcount.h:389 ./include/linux/refcount.h:432 ./include/linux/refcount.h:450 block/blk-cgroup.c:1367)
+Write of size 4 at addr ff11000117aa6160 by task kworker/71:1/531
+Workqueue: cgwb_release cgwb_release_workfn
+Call Trace:
+ <TASK>
+  blkcg_unpin_online
+  cgwb_release_workfn
+  process_scheduled_works
+
+Freed by task 1016:
+ kfree
+ css_free_rwork_fn
+ process_scheduled_works
+
+#问题根因
+在 `cgwb_release_workfn()` 函数中，代码逻辑顺序错误。函数先调用了 `css_put(wb->blkcg_css)` 释放引用，随后又调用 `blkcg_unpin_online(wb->blkcg_css)` 访问该指针。当 `css_put()` 释放了最后一个引用计数时，blkcg 结构体可能会被异步释放（经由 `css_free_rwork_fn -> blkcg_css_free -> kfree`），导致后续 `blkcg_unpin_online()` 访问已释放内存，触发 UAF。
+
+#解决方案
+调整 `cgwb_release_workfn()` 函数中的代码执行顺序，将 `blkcg_unpin_online(wb->blkcg_css)` 调用移至 `css_put(wb->blkcg_css)` 之前。确保在释放 CSS 引用计数之前完成对 blkcg 的访问操作，从而保证在访问期间 blkcg 结构体依然有效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f5beee10ed977623543b309c465e7c8d83ee0cf7

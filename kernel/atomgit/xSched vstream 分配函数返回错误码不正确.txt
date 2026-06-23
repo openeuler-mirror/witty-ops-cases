@@ -1,0 +1,26 @@
+#标题
+xSched vstream 分配函数返回错误码不正确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 xSched 子系统的 vstream 分配流程中，当发生底层错误（如设备未找到或初始化失败）时，上层调用者仅能接收到通用的 `-EINVAL` 错误码，无法区分具体的失败原因（例如无法区分是参数无效还是设备不存在），导致故障定位困难。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中存在多处硬编码错误返回值的问题：
+1. 在 `vstream_hbm_alloc` 函数中，当 `xcu_find` 未找到设备时，错误码被硬编码为 `-EINVAL`，掩盖了设备不存在的实际情况。
+2. 在 `alloc_ctx_from_vstream` 函数中，`xsched_xse_init` 初始化失败时，直接返回了 `-EINVAL`，覆盖了该函数原本返回的具体错误原因。
+3. 在 `sqcq_alloc` 函数中，`vstream_bind_to_xcu` 失败时，错误码被强制重写为 `-EINVAL`，丢失了原始错误信息。
+
+#解决方案
+修改错误返回逻辑，保留并传递真实的错误码：
+1. `vstream_hbm_alloc` 中 `xcu_find` 失败时，将返回值从 `-EINVAL` 修改为 `-ENODEV`。
+2. `alloc_ctx_from_vstream` 中 `xsched_xse_init` 失败时，直接返回变量 `ret` 中保存的实际错误码。
+3. `sqcq_alloc` 中 `vstream_bind_to_xcu` 失败时，移除强制赋值 `ret = -EINVAL` 的逻辑，直接跳出错误处理流程以保留 `ret` 中的原始错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ddc6804d65bfe053f6f1f75651cbc874626fedd

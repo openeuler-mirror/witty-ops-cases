@@ -1,0 +1,24 @@
+#标题
+wifi: ath12k 环形缓冲区内存序错误导致数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Lenovo ThinkPad X13s 等设备上，Wi-Fi 功能偶发不可用，系统日志中持续打印数据长度不一致的错误信息，导致环形缓冲区处于不一致状态。
+
+#主要错误日志
+ath11k_pci 0006:01:00.0: HTC Rx: insufficient length, got 1484, expected 1492
+ath11k_pci 0006:01:00.0: HTC Rx: insufficient length, got 1460, expected 1484
+ath12k_warn: unexpected rx length (nbytes %d, max %d) [推断：修复后的日志格式]
+
+#问题根因
+Host 侧在读取目标环形缓冲区时，由于缺少内存屏障，在弱内存序架构下（如 ARM），CPU 可能在更新描述符之前先读取了更新后的头指针。这导致驱动程序读取到过时的描述符信息，从而引发“长度不足”的错误判断，并进一步导致错误处理逻辑将环形缓冲区置于不一致状态。
+
+#解决方案
+1. 在读取描述符之前添加 `dma_rmb()` 内存屏障，确保头指针的读取先于描述符的读取，解决内存可见性问题。
+2. 使用 `READ_ONCE()` 宏修饰环形缓冲区指针的读取操作，防止编译器优化重排。
+3. 修正错误处理逻辑：移除 `nbytes == 0` 的早期返回判定，将其合并到后续的长度校验逻辑中，避免错误处理导致缓冲区状态不一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d582bdef739afb738633ad0c7cd4350bbf33ecb5

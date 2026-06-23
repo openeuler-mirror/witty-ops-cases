@@ -1,0 +1,20 @@
+#标题
+KVM RME 环境下错误暴露 KVM_CAP_READONLY_MEM 导致 Realm 虚拟机内存功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 RME（Realm Management Extension）环境下创建并运行 Realm 虚拟机时，如果用户态 VMM 尝试使用只读内存功能（如挂载 ROM 或 Flash 设备），会导致内存映射行为与预期不符。由于底层硬件限制，Stage 2 映射要么强制可读写，要么陷入 MMIO 处理，导致无法正确模拟只读内存，进而导致 ROM/Flash 数据模拟失败或业务异常。
+
+#主要错误日志
+未知
+
+#问题根因
+RMM（Realm Management Monitor）目前不支持对受保护内存进行只读访问控制。内核在进行能力检查时，未针对 Realm 虚拟机屏蔽 `KVM_CAP_READONLY_MEM` 功能，导致 KVM 错误地向 VMM 报告支持该功能。当 VMM 尝试使用该功能建立 Stage 2 只读映射时，实际硬件无法支持，破坏了 ROM/Flash 的模拟逻辑。
+
+#解决方案
+在 `kvm_vm_ioctl_check_extension` 函数中调整 `KVM_CAP_READONLY_MEM` 的判断逻辑。将其从通用支持列表中移除，改为根据虚拟机类型动态判断：仅当虚拟机不是 Realm 虚拟机（`!kvm_is_realm(kvm)`）时才返回支持（r = 1），从而对 Realm 虚拟机隐藏该能力，防止 VMM 误用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e3dd1d0e485a8f8c0c2bee12ac582c252966c6c3

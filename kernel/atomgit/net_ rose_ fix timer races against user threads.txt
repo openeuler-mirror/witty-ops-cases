@@ -1,0 +1,27 @@
+#标题
+net: rose: fix timer races against user threads
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 ROSE 协议定时器时触发 KASAN 检测的 slab-use-after-free 错误，导致内核崩溃。该问题由定时器回调函数与用户线程对 socket 的并发访问竞争引起，具体表现为在 `rose_timer_expiry` 函数中非法读取已释放内存。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in rose_timer_expiry+0x31d/0x360 net/rose/rose_timer.c:174
+Read of size 2 at addr ffff88802f09b82a by task swapper/0/0
+CPU: 0 UID: 0 PID: 0 Comm: swapper/0 Not tainted 6.13.0-rc5-syzkaller-00172-gd1bf27c4e176 #0
+Call Trace:
+ <IRQ>
+  rose_timer_expiry+0x31d/0x360 net/rose/rose_timer.c:174
+  call_timer_fn+0x187/0x650 kernel/time/timer.c:1793
+  ...
+
+#问题根因
+Rose 协议的定时器处理函数（如 `rose_heartbeat_expiry`, `rose_timer_expiry`, `rose_idletimer_expiry`）在获取 socket 自旋锁（`bh_lock_sock`）后，未检查该 socket 是否正被用户线程持有（`sock_owned_by_user`）。若用户线程正持有该 socket 进行操作，定时器回调函数会错误地继续执行并访问 socket 数据，导致竞争条件，进而引发 Use-After-Free 等严重内存错误。
+
+#解决方案
+在 ROSE 协议的三个定时器处理函数（`rose_heartbeat_expiry`, `rose_timer_expiry`, `rose_idletimer_expiry`）中增加 `sock_owned_by_user` 检查。若检测到 socket 被用户线程占用，则通过 `sk_reset_timer` 重置定时器（延后 50ms，即 `HZ/20`），等待用户线程释放锁后再处理，从而避免并发竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a4e35b0c5bf6a240006192a0abafa84161c15507

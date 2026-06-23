@@ -1,0 +1,20 @@
+#标题
+蓝牙 SCO 连接增强设置错误码返回失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用透明传输模式（BT_CODEC_TRANSPARENT）建立蓝牙 SCO 同步连接时，若无法找到下一个 eSCO 参数，内核函数本应返回错误码以指示失败，但实际上错误地返回了 0（成功）。这可能导致调用者误判连接设置状态，尽管当前代码路径下该返回值可能未被直接使用，但破坏了函数的错误处理逻辑一致性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 commit e07a06b4eb41 ("Bluetooth: Convert SCO configure_datapath to hci_sync") 转换代码时，遗漏了更新 `hci_enhanced_setup_sync()` 函数中 `BT_CODEC_TRANSPARENT` 分支下的 return 语句。代码原本写为 `return false;`，在 C 语言中 `false` 为 0，导致在查找参数失败时错误地返回了成功（0），而不是预期的负错误码（-EINVAL）。
+
+#解决方案
+修改 `net/bluetooth/hci_conn.c` 文件中 `hci_enhanced_setup_sync()` 函数的实现。将 `BT_CODEC_TRANSPARENT` case 分支中查找参数失败时的返回语句从 `return false;` 修正为 `return -EINVAL;`，确保函数在失败场景下正确返回负的错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ed11d397c5bc9f4545c36f781cc6243a8ec6124

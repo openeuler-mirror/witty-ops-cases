@@ -1,0 +1,24 @@
+#标题
+iommu/arm-smmu-v3: STE 状态转换期间的安全竞态与预留区域阻塞问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在执行 VFIO/IOMMUFD 相关操作触发 BLOCKED 到 UNMANAGED 的转换时，若 disable_bypass=false，STE 会短暂指向 BYPASS 状态，存在安全竞态风险。
+2. 在执行 IDENTITY 到 DMA 的转换时，IOMMU_RESV_DIRECT 类型的预留区域会被暂时阻塞，导致该期间内预留区域的直接访问功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `arm_smmu_attach_dev` 流程中，原代码逻辑强制先将 STE（Stream Table Entry）修改为 ABORT/BYPASS 状态，然后再配置新的 STE。这种做法是为了适应旧的 STE 代码限制（即必须先处于 ABORT/BYPASS 状态才能编程 cdtable 或 S2 STE），但导致了不必要的中间状态转换：
+1. 在 `detach_dev` 时直接强制设置 ABORT/BYPASS，忽略了 `dev->iommu->require_direct` 标志，导致 `IOMMU_RESV_DIRECT` 被错误处理。
+2. 这种强制中间状态转换引入了安全隐患和功能异常，使得在状态切换窗口期内出现 BYPASS 泄露或预留区域阻塞。
+
+#解决方案
+1. 移除 `arm_smmu_detach_dev` 函数中强制将 STE 设置为 ABORT/BYPASS 的代码，利用改进后的 STE 代码能力支持自动处理所有状态转换，避免不必要的中间状态。
+2. 修改 `arm_smmu_release_device` 函数，根据 `disable_bypass` 和 `dev->iommu->require_direct` 的实际值，将 STE 恢复为正确的 ABORT 或 BYPASS 状态，修复了之前忽略 `IOMMU_RESV_DIRECT` 的 Bug。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2b2478009f2df873edbd3f0545661b3d04aba2b9

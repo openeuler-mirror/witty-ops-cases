@@ -1,0 +1,22 @@
+#标题
+cpufreq: CPPC策略初始化时max_freq计算错误导致无法维持Boost频率
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在CPU上线（online）过程中，如果当前策略已经处于Boost状态，频率会错误地降低并停留在基频，导致系统无法维持高性能运行状态。
+
+#主要错误日志
+未知
+
+#问题根因
+在CPPC cpufreq策略初始化函数 `cppc_cpufreq_cpu_init` 中，`policy->max` 和 `policy->cpuinfo.max_freq` 被无条件设置为基于 `caps->nominal_perf`（标称性能）计算出的频率值。这忽略了 `policy->boost_enabled` 的状态，导致即使系统支持且已开启Boost功能，策略的最大频率仍被限制在标称频率，而非最高性能频率。
+
+#解决方案
+修改 `drivers/cpufreq/cppc_cpufreq.c` 中的初始化逻辑：
+1. 在设置 `policy->max` 时，检查 `policy->boost_enabled` 的值。如果为真，使用 `caps->highest_perf`（最高性能），否则使用 `caps->nominal_perf`（标称性能）。
+2. 将 `policy->cpuinfo.max_freq` 直接赋值为修正后的 `policy->max`，确保两者一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75bdef20c5a0fa2932af1e10bd72a8dfa8fd3960

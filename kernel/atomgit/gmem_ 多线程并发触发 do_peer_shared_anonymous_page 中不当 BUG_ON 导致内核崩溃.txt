@@ -1,0 +1,20 @@
+#标题
+gmem: 多线程并发触发 do_peer_shared_anonymous_page 中不当 BUG_ON 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多线程并发调用 `do_peer_shared_anonymous_page` 函数的场景下，内核触发 `BUG_ON` 宏导致系统 panic（内核崩溃），直接影响系统可用性。
+
+#主要错误日志
+内核 PANIC 日志（推断）：`kernel BUG at mm/gmem_util.c:xxx!`
+
+#问题根因
+`do_peer_shared_anonymous_page` 函数内使用了 `BUG_ON(!pmd_none(*vmf->pmd))` 进行检查。在多线程并发调用该函数处理对端共享匿名页时，可能存在竞争条件，导致 PMD（页中间目录）项非空，从而触发该断言。该断言设计过于严格且不恰当，不适用于并发场景，导致误报内核错误并触发崩溃。
+
+#解决方案
+移除过于严格的 `BUG_ON` 检查，改为使用条件判断处理异常情况。如果 PMD 项非空（`!pmd_none(*vmf->pmd)`），直接跳转至 `unlock_release` 标签进行解锁和资源释放处理，避免内核崩溃，保证并发场景下的稳定性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/59e4189f5655269742c539d404663853cd441feb

@@ -1,0 +1,22 @@
+#标题
+CAN: BCM procfs 接口访问缺少 RCU 保护导致潜在内存访问冲突
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读取 `/proc/net/can-bcm` 目录下的文件查看 BCM（Broadcast Manager）协议信息时，若并发执行删除操作（如关闭 socket 或删除 RX/TX 操作），内核可能发生 Use-After-Free 或内存访问越界，导致内核崩溃或数据结构损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`bcm_proc_show` 函数在遍历 `bo->rx_ops` 链表时，未持有 RCU 读锁，也未使用 RCU 安全的遍历接口。与此同时，删除操作（`bcm_delete_rx_op`、`bcm_delete_tx_op` 等）正在修改该链表。这导致进程上下文读取链表成员时，并发删除操作可能已将其移除并释放，引发内存访问冲突。
+
+#解决方案
+1. 在 `bcm_proc_show` 函数中，使用 `rcu_read_lock()` 和 `rcu_read_unlock()` 包裹链表遍历临界区。
+2. 将链表遍历宏从 `list_for_each_entry` 替换为 RCU 安全的 `list_for_each_entry_rcu`。
+3. 将相关删除路径中的 `list_del` 替换为 `list_del_rcu`，确保在 RCU 读侧临界区内对象不会被过早释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2b270901faf4c3699d5172d46077a41e784959f9

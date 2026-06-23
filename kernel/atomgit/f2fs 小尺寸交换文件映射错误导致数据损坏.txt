@@ -1,0 +1,32 @@
+#标题
+f2fs 小尺寸交换文件映射错误导致数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 F2FS 文件系统上使用小于 Section Size（如 2MB）的交换文件且该文件物理布局碎片化时，系统发生数据损坏。具体表现为：
+1. dm-verity 校验失败导致设备重启。
+2. F2FS 节点数据损坏导致启动挂起。
+3. 交换写入操作覆盖了错误的物理位置（其他文件的数据）。
+
+#主要错误日志
+- 推断：内核日志中出现 dm-verity corruption 错误或 F2FS node corruption 错误。
+- Ftrace 跟踪日志显示仅映射了第一个 extent（如仅 4KB），而非完整的交换文件：
+  `stress-ng-swap-8990: f2fs_map_blocks: ino=11002, file offset=0, start blkaddr=0x43143, len=0x1`
+
+#问题根因
+在 `check_swap_activate()` 函数中，当交换文件的第一个 extent 未对齐 Section 边界时，代码逻辑存在缺陷：
+1. 变量 `nr_pblocks` 在执行 `roundup` 后若超过 `sis->max`，会减去 `blks_per_sec` 导致结果为 0。
+2. 此时代码错误地将此情况判定为 "last extent"（最后一个区段），并将 `nr_pblocks` 设置为整个交换文件的大小进行迁移。
+3. 迁移完成后，函数未执行 `goto retry` 重试查找块映射，导致后续的 extent 未被映射。
+4. 结果是交换区仅映射了第一个 extent，后续写入操作因映射错误而覆盖了错误的物理块地址。
+
+#解决方案
+修改 `fs/f2fs/data.c` 中的 `check_swap_activate` 函数逻辑：
+1. 将 `bool last_extent` 变量的声明移至循环开始处，确保其作用域覆盖整个循环。
+2. 调整判断逻辑，仅当 `!last_extent` 时才进入非对齐块的处理分支。
+3. 在块迁移完成后，移除 `if (!last_extent)` 的条件判断，强制执行 `goto retry`，确保在迁移后重新查找块映射信息，从而正确处理后续的 extent。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aaaf48f5a3dcb19ee940d5bb092109fa8fcfc3de

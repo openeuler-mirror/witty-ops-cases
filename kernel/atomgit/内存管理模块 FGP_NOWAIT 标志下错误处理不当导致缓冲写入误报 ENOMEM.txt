@@ -1,0 +1,22 @@
+#标题
+内存管理模块 FGP_NOWAIT 标志下错误处理不当导致缓冲写入误报 ENOMEM
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行带有 FGP_NOWAIT 标志的缓冲写入时，若系统存在内存压力，内核错误地向用户空间返回 ENOMEM 错误，即使系统中仍有大量可从页缓存回收的可用内存。这导致使用 io_uring（默认使用 FGP_NOWAIT 快速路径）的应用程序 I/O 请求失败。
+
+#主要错误日志
+推断日志：
+iomap_write_begin 返回 -ENOMEM
+iomap_get_folio 返回 -ENOMEM
+
+#问题根因
+该问题由提交 66dabbb65d67 ("mm: return an ERR_PTR from __filemap_get_folio") 引入。该提交将错误处理逻辑从 io_map_get_folio() 移至 __filemap_get_folio()，但在处理 FGP_NOWAIT 标志时存在逻辑缺陷。当非阻塞内存分配失败（返回 -ENOMEM）时，代码直接将错误向上传递，而未根据 FGP_NOWAIT 上下文将其转换为 -EAGAIN。这导致调用者（如 io_uring、pwritev2 或 AIO）无法识别这是非阻塞重试场景，从而错误地向应用层传播了 ENOMEM。
+
+#解决方案
+在 __filemap_get_folio() 函数中增加针对 FGP_NOWAIT 的错误码转换逻辑。具体修改为：当内存分配返回错误且进程设置了 FGP_NOWAIT 标志时，如果错误码为 -ENOMEM，则将其修改为 -EAGAIN。此举确保了上层接口能够正确识别非阻塞分配失败的场景并进行重试，而非直接向用户空间报错。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9fa0433dedd129360dea5a175fcb0708021130ca

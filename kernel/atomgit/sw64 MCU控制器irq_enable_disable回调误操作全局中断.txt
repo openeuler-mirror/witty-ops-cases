@@ -1,0 +1,23 @@
+#标题
+sw64 MCU控制器irq_enable/disable回调误操作全局中断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构上，当调用 MCU 控制器的 irq_enable 或 irq_disable 回调函数时，错误地启用了或禁用了所有的 MCU 中断，而不是仅操作指定的目标 IRQ。这导致中断控制粒度异常，可能引发非目标中断被错误屏蔽或非预期的中断开启，同时存在寄存器访问并发竞争风险。
+
+#主要错误日志
+未知
+
+#问题根因
+MCU 控制器的 `irq_enable` 和 `irq_disable` 回调函数实现逻辑错误，直接操作了控制全局中断的 `OFFSET_DEV_INT_CONFIG` 寄存器位，而非操作控制具体中断向量的 `OFFSET_MCU_DVC_INT_EN` 寄存器。此外，对相关寄存器的访问缺乏锁保护，导致存在并发安全隐患。
+
+#解决方案
+1. 修正 `irq_enable` 与 `irq_disable` 回调逻辑，改为操作 `OFFSET_MCU_DVC_INT_EN` 寄存器，仅对目标 IRQ 对应的位进行置位或清零，实现单 IRQ 级别的控制。
+2. 将 `irq_mask` 和 `irq_unmask` 回调重定向为修正后的 disable/enable 实现，确保一致性。
+3. 在 `pintc_chip_data` 结构体中新增 `pintc_lock` 和 `mcu_lock` 自旋锁，在寄存器读写操作前后加锁，保护临界区资源，解决并发访问问题。
+4. 优化中断处理流程，重构 `handle_dev_int` 与亲和性设置相关函数，确保在硬件限制下正确处理全局中断状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f432f2710c5af4fb56e8088273a29557d5a85bec

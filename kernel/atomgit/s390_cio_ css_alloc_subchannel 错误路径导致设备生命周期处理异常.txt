@@ -1,0 +1,21 @@
+#标题
+s390/cio: css_alloc_subchannel 错误路径导致设备生命周期处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 s390 架构的通道子系统初始化过程中，若 `css_alloc_subchannel()` 函数内的 `dma_set_coherent_mask()` 或 `dma_set_mask()` 设置失败，错误处理路径直接释放内存，绕过了设备模型的引用计数机制。这会导致设备生命周期管理混乱，可能引发 use-after-free（释放后使用）或 double-free（双重释放）等内存安全问题。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `css_alloc_subchannel()` 在调用 `device_initialize()` 之后、设置 DMA 掩码之前，若 DMA 设置失败，错误处理代码直接调用了 `kfree(sch)` 来释放 subchannel 结构体。
+根据 Linux 设备驱动模型规则，一旦 `device_initialize()` 被调用，内嵌的 `struct device` 就必须通过 `put_device()` 来释放，以便通过 release 回调正确清理容器结构。直接调用 `kfree()` 导致了引用计数遗漏，破坏了设备生命周期管理。
+
+#解决方案
+修改 `css_alloc_subchannel()` 函数的错误处理路径。在 DMA 设置失败等场景下，不再直接调用 `kfree(sch)`，而是改为调用 `put_device(&sch->dev)`。这确保了设备引用计数被正确减少，允许 release 回调安全地释放 subchannel 结构，从而修复潜在的内存管理问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bcbe333dca2e8e9f0f8283f394fb9b432a03ee6f

@@ -1,0 +1,27 @@
+#标题
+smb: client: 错误路径下等待 send_pending 清零导致死锁或无限等待
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB 直连（SMBDirect）客户端销毁连接或发送数据过程中，若遇到错误路径（如连接断开），内核线程可能在 `wait_event` 处陷入无限等待，无法退出，导致进程挂起（D状态）或连接销毁流程阻塞，无法完成资源回收。
+
+#主要错误日志
+未知
+
+#问题根因
+在错误处理流程中，代码逻辑存在问题：
+1. 在调用 `ib_drain_qp()` 排空队列对（QP）后，`send_done()` 回调函数会被触发并携带 `IB_WC_WR_FLUSH_ERR` 错误状态。
+2. 然而，在该错误路径下，`send_done()` 并没有调用 `atomic_dec_and_test(&sc->send_io.pending.count)` 来减少发送计数。
+3. 因此，`info->send_pending` 的计数值可能永远无法归零。
+4. 代码中使用 `wait_event(..., atomic_read(&info->send_pending) == 0)` 等待计数值归零，导致因条件永远无法满足而陷入无限睡眠。
+
+#解决方案
+修改等待逻辑，不再仅依赖 `send_pending == 0` 作为唤醒条件，而是增加对连接状态的检查：
+1. 在 `smbd_send` 函数中，将 `wait_event` 的等待条件修改为 `atomic_read(&info->send_pending) == 0 || sc->status != SMBDIRECT_SOCKET_CONNECTED`，即在计数归零或连接断开时均唤醒进程。
+2. 唤醒后检查连接状态，若连接已断开且未返回其他错误，则返回 `-EAGAIN` 错误码，避免无限等待。
+3. 移除 `smbd_destroy` 函数中冗余的 `wait_event` 等待逻辑，因为后续流程已经处理了资源清理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/112419a1070aa996c7baacbe4ac767b8387f5a5c

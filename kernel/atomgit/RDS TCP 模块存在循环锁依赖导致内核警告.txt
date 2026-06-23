@@ -1,0 +1,29 @@
+#标题
+RDS TCP 模块存在循环锁依赖导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核检测到可能的循环锁定依赖并触发 WARNING。具体场景为在持有 socket 锁的情况下调用了可能涉及内存分配和 fs_reclaim 的函数，导致锁验证子系统报警。
+
+#主要错误日志
+======================================================
+WARNING: possible circular locking dependency detected
+======================================================
+kworker/u10:8/15040 is trying to acquire lock:
+ffffffff8e9aaf80 (fs_reclaim){+.+.}-{0:0},
+at: __kmalloc_cache_noprof+0x4b/0x6f0
+
+but task is already holding lock:
+ffff88805a3c1ce0 (k-sk_lock-AF_INET6){+.+.}-{0:0},
+at: rds_tcp_tune+0xd7/0x930
+
+#问题根因
+在 `rds_tcp_tune()` 函数中，代码在持有 socket 锁 (`lock_sock`) 的临界区内调用了 `sk_net_refcnt_upgrade()`。该函数内部通过 `get_net_track()` -> `ref_tracker_alloc()` 执行内存分配操作，而内存分配可能触发 `fs_reclaim`，从而在 socket 锁与 fs_reclaim 锁之间建立了循环依赖。
+
+#解决方案
+将 `sk_net_refcnt_upgrade()` 调用移至获取 socket 锁 (`lock_sock`) 之前执行。此举避免了在持有 socket 锁时进行内存分配，从而打破了循环锁依赖。该操作是安全的，因为此时其他并发代码路径尚未访问 `sk_net_refcnt` 和 `ns_tracker` 字段。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f0bd19a7a4ca81276443b3857537c2012d05178f

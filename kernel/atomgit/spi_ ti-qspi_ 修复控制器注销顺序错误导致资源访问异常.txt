@@ -1,0 +1,22 @@
+#标题
+spi: ti-qspi: 修复控制器注销顺序错误导致资源访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动解绑（unbind）流程中，TI QSPI 控制器在注销前其底层资源（如时钟）已被关闭。这会导致 SPI 设备驱动在注销过程中尝试进行 I/O 操作时，访问已失效的硬件资源。在引入某些补丁后，虽然避免了“无时钟访问”问题，但仍导致 SPI 设备驱动在注销阶段无法正常进行 I/O 交互，产生功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `ti_qspi_remove` 函数中使用了 `devm_spi_register_controller` 进行注册，这导致控制器注销动作被推迟到设备资源释放阶段，而此时底层时钟等资源可能已被关闭。正确的流程应确保先注销控制器，再关闭时钟等底层资源。原有代码逻辑未正确处理注销顺序，导致 SPI 设备驱动在控制器注销期间访问了不可用的硬件资源。
+
+#解决方案
+1. 将 `probe` 阶段的 `devm_spi_register_controller` 改为 `spi_register_controller`，使控制器注销不再依赖设备资源管理器的自动释放顺序。
+2. 在 `remove` 阶段，显式调用 `spi_controller_get` 增加引用计数，随即调用 `spi_unregister_controller` 注销控制器。
+3. 在注销完成并执行完 `pm_runtime_disable` 和 `dma_cleanup` 等资源释放操作后，调用 `spi_controller_put` 释放引用。通过调整注册和注销 API，确保控制器在底层资源（时钟、DMA 等）被禁用前已完成注销，避免硬件访问冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/350e96d9a14a6fb601250c91c8a9ffe5a21c84ec

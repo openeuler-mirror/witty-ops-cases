@@ -1,0 +1,28 @@
+#标题
+mhi_wwan_mbim 驱动序列号校验错误导致内核日志刷屏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Qualcomm X55 调制解调器（如 ThinkPad X13s 设备）时，内核日志不断被 "sequence number glitch" 相关的错误信息填充。该现象在网络连接正常的情况下发生，且错误出现的频率取决于调制解调器的使用活跃度。
+
+#主要错误日志
+[ 1903.284538] sequence number glitch prev=16 curr=0
+[ 1913.812205] sequence number glitch prev=50 curr=0
+[ 1923.698219] sequence number glitch prev=142 curr=0
+[ 2029.248276] sequence number glitch prev=1555 curr=0
+[ 2046.333059] sequence number glitch prev=70 curr=0
+[ 2076.520067] sequence number glitch prev=272 curr=0
+[ 2158.704202] sequence number glitch prev=2655 curr=0
+[ 2218.530776] sequence number glitch prev=2349 curr=0
+[ 2225.579092] sequence number glitch prev=6 curr=0
+
+#问题根因
+调制解调器在进入低功耗状态时未能保留序列号，导致唤醒后序列号重新从 0 开始。这触发了 `mhi_wwan_mbim` 驱动程序中的序列号校验逻辑，驱动误将其判定为异常并使用 `net_err_ratelimited` 接口打印错误日志。实际上该现象对功能无影响，属于无害的协议波动，类似于 USB MBIM 调制解调器的已知行为。
+
+#解决方案
+将 `drivers/net/wwan/mhi_wwan_mbim.c` 中序列号校验失败的日志打印级别从错误（`net_err_ratelimited`）调整为调试（`net_dbg_ratelimited`），以消除无害错误日志对内核日志的刷屏干扰，使其与 `cdc_ncm.c` 驱动的处理方式保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/85d20c9ccbebf1c89531a26ca3d42ad48811751c

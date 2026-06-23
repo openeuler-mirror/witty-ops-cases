@@ -1,0 +1,30 @@
+#标题
+UB子系统中RAS处理并发竞态及端口复位流程缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. UB内存RAS处理过程中存在并发竞态风险，可能导致内核崩溃或数据不一致。
+2. UB端口复位失败时，未正确通知上层应用复位失败的状态，导致上层业务状态与底层硬件状态不同步。
+3. 端口事件类型校验逻辑存在错误，部分合法事件类型（如 UB_PORT_EVENT_RESET_FAILED）被非法拒绝，导致事件处理函数直接返回。
+4. 端口初始化过程中内存分配缺少错误处理，若 kzalloc 失败可能导致后续访问空指针引发 Oops。
+
+#主要错误日志
+- pr_err("ub vdm port reset failed, ret:%d\n", ret);
+- pr_err("UB memory ras handler failed, ret=%d\n", ret);
+- dev_err(decoder->dev, "ub mem decoder base reg ioremap failed.\n");
+
+#问题根因
+1. **并发保护缺失**：`ub_mem_ras_handler_register` 和 `ub_mem_ras_handler_unregister` 操作全局变量 `handler` 时未加锁，且 RAS 中断处理函数 `hi_mem_ras_isr` 读取 handler 时也未受保护，存在竞态条件；同时端口复位流程中操作端口状态时缺乏锁保护。
+2. **控制流与状态机缺陷**：在 `ubus_port_recover_cluster` 函数中，端口复位发送失败（`hi_send_port_reset_msg` 返回非0）时，直接返回错误，遗漏了发送 `UB_PORT_EVENT_RESET_FAILED` 事件的步骤，且函数 `ub_notify_share_port` 入口检查 `type > UB_PORT_EVENT_RESET_DONE` 错误地排除了 `UB_PORT_EVENT_RESET_FAILED` 类型。
+3. **内存管理缺陷**：`ub_port_init` 函数中 `kzalloc` 分配 `port_lock` 失败时无错误检查，导致上层无法感知初始化失败。
+
+#解决方案
+1. **引入互斥锁保护**：定义并导出全局互斥锁 `mem_ras_mutex`，在 RAS handler 的注册、注销以及 ISR 处理流程中加锁，确保 handler 指针操作的原子性。
+2. **完善端口复位错误处理**：在端口复位失败分支中增加 `ub_notify_share_port(port, UB_PORT_EVENT_RESET_FAILED)` 调用，通知上层复位失败；修正 `ub_notify_share_port` 入口校验条件，将 `type > UB_PORT_EVENT_RESET_DONE` 改为 `type > UB_PORT_EVENT_RESET_FAILED`，允许处理失败事件。
+3. **增加初始化错误处理**：修改 `ub_port_init` 返回值为 int，增加 kzalloc 失败判断并返回 -ENOMEM；在 `ub_ports_setup` 中检查返回值，失败时执行回滚操作释放已分配资源。
+4. **优化日志与硬件适配**：将 `WARN_ON(ret)` 替换为具体的 `pr_err` 打印，便于定位问题；针对 UB_MEM_VERSION_2 版本硬件，修正 `hi_mem_decoder_create_one` 中寄存器基地址的映射偏移量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bc1c1c028ec71c17ce3ed885c504bfbbc61f0045

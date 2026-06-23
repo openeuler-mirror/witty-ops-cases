@@ -1,0 +1,20 @@
+#标题
+TLS 软件实现取消工作队列时潜在的使用后释放风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TLS（Kernel TLS）软件实现路径中，当调用 `tls_sw_cancel_work_tx` 函数清理或关闭发送队列时，系统可能发生崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+原代码在设置 `BIT_TX_CLOSING` 标志位后调用 `cancel_delayed_work_sync`。如果此时延迟工作队列 `tx_work` 已经开始执行回调函数，`cancel_delayed_work_sync` 只会等待回调执行完毕，但无法阻止回调内部可能触发的重新调度逻辑。在 `CLOSING` 状态下，这种不当的重新调度可能导致访问已释放的资源，从而引发 Use-After-Free 风险。
+
+#解决方案
+将 `tls_sw_cancel_work_tx` 函数中的 `cancel_delayed_work_sync` 替换为 `disable_delayed_work_sync`。`disable_delayed_work_sync` 不仅能等待正在执行的工作完成，还能确保该工作不会被重新激活，从而彻底避免了在关闭流程中工作队列被错误重新调度的问题，消除了 Use-After-Free 隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f6600b1b7e5539ebcaf088e8aac3ab5b45d94465

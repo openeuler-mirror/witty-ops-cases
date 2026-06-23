@@ -1,0 +1,32 @@
+#标题
+mac_hid_toggle_emumouse 并发写入导致 input handler 重复注册引发内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当两个进程并发写入 mac-hid 模拟相关的 sysctl 接口时，触发内核 WARNING。系统检测到链表双重添加，导致内核调用栈打印并发出警告，影响系统稳定性。
+
+#主要错误日志
+```
+------------[ cut here ]------------
+list_add double add: new=ffffffffa57eee28, prev=ffffffffa57eee28, next=ffffffffa5e63100.
+WARNING: CPU: 0 PID: 1491 at lib/list_debug.c:35 __list_add_valid_or_report+0xf7/0x130
+...
+Call Trace:
+ <TASK>
+ input_register_handler+0xb3/0x210
+ mac_hid_start_emulation+0x1c5/0x290
+ mac_hid_toggle_emumouse+0x20a/0x240
+ proc_sys_call_handler+0x4c2/0x6e0
+ ...
+```
+
+#问题根因
+函数 `mac_hid_toggle_emumouse` 中存在竞态条件。变量 `old_val` 的读取操作位于互斥锁（`mac_hid_emumouse_mutex`）临界区之外。当两个进程并发写入时，两者均在加锁前读取到相同的 `old_val=0`，随后依次进入临界区并尝试执行 `input_register_handler`，导致同一个 handler 被重复添加到链表中，触发 `list_add double add` 错误。
+
+#解决方案
+将 `old_val` 的赋值读取操作移动到互斥锁 `mutex_lock_killable` 的临界区内执行，确保在判断是否需要注册 handler 之前，能够正确获取当前的状态值，从而避免并发写入导致的重复注册问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c3623d287947be9c72db61a7cd03107c2712c62b

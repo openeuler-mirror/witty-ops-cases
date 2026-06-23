@@ -1,0 +1,42 @@
+#标题
+NFC子系统rfkill与设备注销竞争导致内核WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下（如syzbot测试），当通过rfkill操作NFC设备的同时进行设备注销（如关闭virtual nfc设备fd）时，触发内核锁校验警告 `DEBUG_LOCKS_WARN_ON(1)`。内核栈回溯显示在 `nci_close_device` -> `__flush_workqueue` 路径下访问已销毁的 `cmd_wq` 工作队列时，触发了锁上下文检查异常。
+
+#主要错误日志
+```
+DEBUG_LOCKS_WARN_ON(1)
+WARNING: kernel/locking/lockdep.c:238 at hlock_class kernel/locking/lockdep.c:238 [inline], CPU#0: syz.0.8675/6349
+WARNING: kernel/locking/lockdep.c:238 at check_wait_context kernel/locking/lockdep.c:4854 [inline], CPU#0: syz.0.8675/6349
+WARNING: kernel/locking/lockdep.c:238 at __lock_acquire+0x39d/0x2cf0 kernel/locking/lockdep.c:5187, CPU#0: syz.0.8675/6349
+...
+Call Trace:
+ <TASK>
+ lock_acquire+0x106/0x330 kernel/locking/lockdep.c:5868
+ touch_wq_lockdep_map+0xcb/0x180 kernel/workqueue.c:3940
+ __flush_workqueue+0x14b/0x14f0 kernel/workqueue.c:3982
+ nci_close_device+0x302/0x630 net/nfc/nci/core.c:567
+ nci_dev_down+0x3b/0x50 net/nfc/nci/core.c:639
+ nfc_dev_down+0x152/0x290 net/nfc/core.c:161
+ nfc_rfkill_set_block+0x2d/0x100 net/nfc/core.c:179
+ rfkill_set_block+0x1d2/0x440 net/rfkill/core.c:346
+```
+
+#问题根因
+`nci_unregister_device()` 函数在销毁 `nci_dev.cmd_wq` 工作队列之后，才调用 `nfc_unregister_device()` 从 rfkill 注销设备。
+这导致在 `cmd_wq` 销毁后，设备仍然在 rfkill 子系统中可见。此时若通过 rfkill 触发设备关闭操作（调用 `nci_close_device`），该函数试图访问并刷新已销毁的 `cmd_wq`，从而引发内核崩溃或 WARNING。
+
+#解决方案
+重构 `nfc_unregister_device()` 函数，将其拆分为 `nfc_unregister_rfkill()` 和 `nfc_remove_device()` 两部分。
+在 `nci_unregister_device()` 中调整执行顺序：
+1. 先调用 `nfc_unregister_rfkill()` 将设备从 rfkill 子系统注销，确保无法再通过 rfkill 路径访问设备。
+2. 随后执行 `nci_close_device()` 等清理工作。
+3. 最后调用 `nfc_remove_device()` 移除设备并释放相关资源。
+此修改确保在销毁 `cmd_wq` 之前，设备已从 rfkill 移除，避免了竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0cd0ad04e01c2bdbd89fe5e5aaf37b151f8e25d6

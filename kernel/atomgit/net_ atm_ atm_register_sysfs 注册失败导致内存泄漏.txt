@@ -1,0 +1,34 @@
+#标题
+net: atm: atm_register_sysfs 注册失败导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ATM 设备注册流程中，若 `device_register()` 或 `device_create_file()` 失败（例如因 `kzalloc` 内存分配失败触发），kmemleak 检测到内存泄漏。泄漏的对象为内核对象名称字符串（如 "adummy0"），导致系统内存资源无法正确释放。
+
+#主要错误日志
+```
+unreferenced object 0xffff88810182fb80 (size 8):
+  comm "insmod", pid 504, jiffies 4294852464
+  hex dump (first 8 bytes):
+    61 64 75 6d 6d 79 30 00                          adummy0.
+  backtrace (crc 14dfadaf):
+    __kmalloc_node_track_caller_noprof+0x335/0x450
+    kvasprintf+0xb3/0x130
+    kobject_set_name_vargs+0x45/0x120
+    dev_set_name+0xa9/0xe0
+    atm_register_sysfs+0xf3/0x220
+    atm_dev_register+0x40b/0x780
+```
+
+#问题根因
+在 `atm_dev_register` 函数的错误处理路径 `out_fail` 中，原代码直接调用 `kfree(dev)` 来释放设备结构体。然而，在调用 `atm_register_sysfs` 时，内部会通过 `dev_set_name` 为设备分配名字字符串（存储在 `kobj->name` 中）。当 `device_register()` 失败时，直接 `kfree` 会导致 `kobj->name` 指向的内存无法释放，从而造成内存泄漏。
+
+#解决方案
+修正 `atm_dev_register` 函数的错误处理逻辑：
+1. 在 `atm_register_sysfs` 失败后的处理中，将 `kfree(dev)` 替换为 `put_device(&dev->class_dev)`。
+2. `put_device()` 会正确调用设备释放回调，清理 `kobj->name` 及其他相关资源，从而修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/02fcc2903f57af64c22ad77c86219cc82e3bf210

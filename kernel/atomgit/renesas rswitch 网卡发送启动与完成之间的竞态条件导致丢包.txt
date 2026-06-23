@@ -1,0 +1,24 @@
+#标题
+renesas rswitch 网卡发送启动与完成之间的竞态条件导致丢包
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Renesas Ethernet Switch 驱动进行数据包发送时，若 `start_xmit` 过程在特定时刻被抢占，硬件可能在软件更新队列指针 `gq->cur` 之前已完成发送并触发中断。此时，发送完成（TX completion）处理逻辑会因依赖 `gq->cur` 判断边界，错误地停止处理，导致最后一个数据包对应的描述符无法被正确回收，造成发送队列条目丢失或堆积。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于发送启动（`start_xmit`）与发送完成（`rswitch_tx_free`）之间存在竞态窗口：
+1. 硬件在观察到描述符 DT 字段更新后，可能立即开始传输，而此时软件尚未写入 GWTRC 寄存器来“踢”动队列，也尚未更新 `gq->cur` 指针。
+2. 如果此时 `start_xmit` 执行流被抢占，传输可能已经完成并触发了中断处理程序。
+3. 原有的 `rswitch_tx_free` 函数依赖于 `rswitch_get_num_cur_queues(gq)`（即基于 `gq->cur`）来判断处理范围。由于中断发生时 `gq->cur` 尚未被更新，完成处理逻辑会提前退出循环，导致最近一个已完成的描述符未被清理。
+
+#解决方案
+1. 修改 `rswitch_tx_free` 中的回收逻辑，不再依赖 `gq->cur` 指针来界定循环范围，而是直接检查描述符的 DT 字段是否为 `DT_FEMPTY` 来判断是否已完成处理，确保即使 `gq->cur` 未更新也能正确回收已传输的描述符。
+2. 在 `rswitch_start_xmit` 函数中，在设置描述符 DT 字段之前添加 `dma_wmb()` 内存屏障，确保之前的写入操作（如 skb 地址、unmap_addrs）对硬件可见，并移除了原来位置不当的 `wmb()`，保证数据与指针更新的时序正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4cef85cb479e9314e267015a33b8c6a89553abd8

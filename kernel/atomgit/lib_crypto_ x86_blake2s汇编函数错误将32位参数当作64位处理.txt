@@ -1,0 +1,23 @@
+#标题
+lib/crypto: x86/blake2s汇编函数错误将32位参数当作64位处理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 x86_64 SIMD 优化加速的 BLAKE2s 哈希算法时，函数 `blake2s_compress_ssse3` 和 `blake2s_compress_avx512` 可能使用了错误的 `inc`（增量）值进行计算。这会导致计算出的 BLAKE2s 哈希值不正确。该问题较为隐蔽，在常规场景下因编译器行为可能不会触发，但在特定调用上下文（涉及数据截断传递）下会导致哈希校验失败。
+
+#主要错误日志
+未知
+
+#问题根因
+C 代码中声明 `blake2s_compress_ssse3()` 和 `blake2s_compress_avx512()` 的 `inc` 参数类型为 `u32`（32位），但汇编实现中错误地使用了 64 位寄存器 `%rcx` 来读取该参数。
+根据 ABI 规定，传递 32 位参数时并不保证高位（32-63位）会被清零，且 GCC/Clang 编译器也不保证这一点。因此，直接读取 64 位寄存器可能导致读取到非预期的垃圾高位数据，从而得到错误的 `inc` 值。
+
+#解决方案
+修改汇编代码，将读取 `inc` 参数的指令从操作 64 位寄存器改为操作对应的 32 位寄存器，确保只获取低 32 位有效数据。具体变更如下：
+1. 在 `blake2s_compress_ssse3` 函数中，将 `movq %rcx,%xmm15` 修改为 `movd %ecx,%xmm15`。
+2. 在 `blake2s_compress_avx512` 函数中，将 `vmovq %rcx,%xmm5` 修改为 `vmovd %ecx,%xmm5`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c94357f20a45328b745d18dad902ec7086ee3207

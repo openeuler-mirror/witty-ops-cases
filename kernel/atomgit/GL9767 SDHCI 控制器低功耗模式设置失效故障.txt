@@ -1,0 +1,25 @@
+#标题
+GL9767 SDHCI 控制器低功耗模式设置失效故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 GL9767 SDHCI 控制器执行时钟设置函数 `sdhci_gl9767_set_clock` 时，若输入时钟参数为 0 或在 SSC PLL 配置流程后，低功耗协商模式无法被正确重新启用。这导致设备在时钟停止或特定频率配置后无法进入低功耗状态，可能导致功耗异常或后续电源管理行为不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `sdhci_gl9767_set_clock()` 函数中，代码逻辑顺序存在缺陷：
+1. 函数早期通过 `gl9767_vhs_write()` 打开了 VHS（Vendor Header Space）写权限，并关闭了低功耗模式（设置 `PCIE_GLI_9767_CFG_LOW_PWR_OFF`）。
+2. 随后调用 `gl9767_disable_ssc_pll()` 或 `gl9767_set_ssc_pll_205mhz()`，这些函数内部会调用 `gl9767_vhs_read()` 将 VHS 锁定为只读状态。
+3. 当流程执行到函数末尾试图重新启用低功耗模式时，或者 `clock == 0` 提前返回时，由于 VHS 已经被锁定为只读，对 `PCIE_GLI_9767_CFG` 寄存器的写入操作失效，导致低功耗协商模式无法被重新开启。
+
+#解决方案
+引入独立的 `gl9767_set_low_power_negotiation()` 函数来专门处理低功耗模式的设置。该函数封装了 VHS 写入、寄存器配置和 VHS 锁定的完整流程。在 `sdhci_gl9767_set_clock` 中，通过调用此新函数来控制低功耗模式：
+1. 在函数入口处调用 `gl9767_set_low_power_negotiation(pdev, false)` 关闭低功耗模式。
+2. 在 `clock == 0` 的返回路径前，以及函数正常退出前，显式调用 `gl9767_set_low_power_negotiation(pdev, true)` 确保低功耗模式被正确重新启用，从而绕过 VHS 只读限制问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ce4d76fbe17739f3768d1b139a2f3b3d74c5de8

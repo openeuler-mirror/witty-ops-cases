@@ -1,0 +1,28 @@
+#标题
+tcp_bpf: tcp_bpf_sendmsg返回值错误致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 BPF kselftest (`sockhash::test_txmsg_cork_hangs` in `test_sockmap.c`) 时触发内核空指针崩溃。具体表现为 `tcp_bpf_sendmsg()` 函数返回值大于实际发送数据大小，导致 `splice_to_socket()` 的 while 循环释放了一个未初始化的 pipe buffer，进而引发内核 NULL 指针解引用。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000008
+ ? __die_body+0x6e/0xb0
+ ? __die+0x8b/0xa0
+ ? page_fault_oops+0x358/0x3c0
+ ? splice_to_socket+0x52e/0x630
+ direct_splice_actor+0x47/0x70
+ splice_direct_to_actor+0x133/0x300
+ do_splice_direct+0x64/0x90
+ do_sendfile+0x214/0x300
+
+#问题根因
+代码逻辑错误。`tcp_bpf_sendmsg()` 函数错误地假设 `sk_msg_memcopy_from_iter()` 成功时会拷贝所有请求的字节数，但实际上该函数可能只拷贝部分数据。原代码直接将请求拷贝的大小 `copy` 累加到 `copied` 变量中，而不是使用实际拷贝的大小，导致函数返回值（`copied`）大于实际拷贝的字节数。
+
+#解决方案
+修改 `tcp_bpf_sendmsg()` 函数中的计数逻辑。引入新变量 `ret` 接收 `sk_msg_memcopy_from_iter()` 的返回值，并将 `copied` 的累加值从预期的 `copy` 大小修改为实际拷贝的 `ret` 大小，确保返回值准确反映已拷贝的字节数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2463e95d06276a742461b393a0ca297f43b09901

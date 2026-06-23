@@ -1,0 +1,20 @@
+#标题
+tpm_tis_probe_irq_single 函数参数传递顺序错误导致 TPM 中断探测异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TPM 芯片中断探测过程中，若 `chip->flags` 未设置 `TPM_CHIP_FLAG_IRQ` 标志，系统尝试恢复原始中断向量号时，会因参数顺序错误导致向错误的寄存器地址写入错误的数据，可能引发 TPM 设备功能异常或中断配置错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `tpm_tis_probe_irq_single` 中调用 `tpm_tis_write8` 时，参数传递顺序错误。代码误写为 `(priv, original_int_vec, TPM_INT_VECTOR(priv->locality))`，而正确的接口定义顺序应为 `(data, addr, value)`，即 `(priv, TPM_INT_VECTOR(priv->locality), original_int_vec)`。该错误是在一次重大代码重构（将 tpm_tis 驱动拆分为核心层和 TCG TIS compliant phy）时引入的。
+
+#解决方案
+修正 `drivers/char/tpm/tpm_tis_core.c` 文件中 `tpm_tis_probe_irq_single` 函数内 `tpm_tis_write8` 的调用参数顺序，确保第二个参数为寄存器地址 `TPM_INT_VECTOR(priv->locality)`，第三个参数为要写入的值 `original_int_vec`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ada04f4ee6de8c3437269f045cad923641eb070e

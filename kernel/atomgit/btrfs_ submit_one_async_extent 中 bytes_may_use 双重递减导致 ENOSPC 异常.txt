@@ -1,0 +1,20 @@
+#标题
+btrfs: submit_one_async_extent 中 bytes_may_use 双重递减导致 ENOSPC 异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 btrfs 文件系统中，当一个初始写入（write）操作在 submit_one_async_extent 阶段遇到错误（如 btrfs_create_io_em 失败）时，会导致空间预留计数 bytes_may_use 被错误地双重递减。该缺陷会导致后续的写入操作出现静默的 ENOSPC（No space left on device）错误，尽管磁盘可能实际仍有可用空间。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 submit_one_async_extent() 调用 btrfs_reserve_extent() 时，该函数内部已经递减了 bytes_may_use。如果后续调用 btrfs_create_io_em() 失败，代码跳转至 out_free_reserve 标签执行清理。在清理过程中，extent_clear_unlock_delalloc() 被调用，因为传入的标志位包含 EXTENT_DO_ACCOUNTING（即 EXTENT_CLEAR_META_RESV | EXTENT_CLEAR_DATA_RESV），这导致 bytes_may_use 被第二次递减，从而造成空间统计错误。
+
+#解决方案
+在错误处理路径中，修改 extent_clear_unlock_delalloc() 的调用参数，将 EXTENT_DO_ACCOUNTING 替换为 EXTENT_CLEAR_META_RESV。此举避免了对 data reservation 的重复清理，仅清理 meta reservation，从而修正了 bytes_may_use 的双重递减问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/defe4c501250a39296c96873cc13acb8b23c7e48

@@ -1,0 +1,30 @@
+#标题
+mptcp: fix race condition in mptcp_schedule_work()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MPTCP 子系统中触发竞态条件，导致内核检测到 refcount 计数异常并报出 "use-after-free" 警告。该问题由 syzbot 发现，触发路径通常涉及定时器回调（如 `mptcp_tout_timer`）调用 `mptcp_schedule_work` 函数。
+
+#主要错误日志
+refcount_t: addition on 0; use-after-free.
+ WARNING: CPU: 1 PID: 29 at lib/refcount.c:25 refcount_warn_saturate+0xfa/0x1d0 lib/refcount.c:25
+Call Trace:
+ __refcount_add include/linux/refcount.h:-1 [inline]
+  __refcount_inc include/linux/refcount.h:366 [inline]
+  refcount_inc include/linux/refcount.h:383 [inline]
+  sock_hold include/net/sock.h:816 [inline]
+  mptcp_schedule_work+0x164/0x1a0 net/mptcp/protocol.c:943
+  mptcp_tout_timer+0x21/0xa0 net/mptcp/protocol.c:2316
+  call_timer_fn+0x17e/0x5f0 kernel/time/timer.c:1747
+
+#问题根因
+`mptcp_schedule_work()` 函数存在竞态条件。原代码逻辑是先调用 `schedule_work()` 尝试调度工作队列，如果调度成功（返回 true），再执行 `sock_hold(sk)` 增加引用计数。
+问题在于，`schedule_work()` 成功后，`mptcp_worker()` 可能立即在另一个 CPU 上运行并在原代码执行 `sock_hold(sk)` 之前完成工作并释放了 socket 的引用计数。这导致 `mptcp_schedule_work()` 后续对已释放或引用计数归零的对象执行 `sock_hold(sk)`，从而触发 "use-after-free" 或 refcount 溢出警告。
+
+#解决方案
+调整引用计数获取与工作调度的顺序以消除竞态。在调用 `schedule_work()` 之前先调用 `sock_hold(sk)` 增加引用计数，确保对象在工作队列运行期间保持有效；如果 `schedule_work()` 调度失败，则立即调用 `sock_put(sk)` 释放刚才获取的引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5509811c78e8b8893b89e52c7fcc96bc588ef695

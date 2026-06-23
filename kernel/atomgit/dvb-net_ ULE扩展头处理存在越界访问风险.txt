@@ -1,0 +1,20 @@
+#标题
+dvb-net: ULE扩展头处理存在越界访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理DVB网络ULE（Unidirectional Lightweight Encapsulation）数据报的扩展头时，若网络侧发送的数据中`ule_sndu_type`低8位（htype）值为255，将导致内核读取越界。该越界读取可能导致内核崩溃（Oops/Panic），或尝试执行非法内存地址处的函数指针，造成系统不稳定或潜在的安全漏洞。
+
+#主要错误日志
+未知
+
+#问题根因
+内核源码中`ule_mandatory_ext_handlers[]`和`ule_optional_ext_handlers[]`数组的大小为255（有效下标范围0-254）。但在`handle_one_ule_extension()`函数中，索引变量`htype`来源于网络可控数据，计算方式为`(ule_sndu_type & 0x00FF)`，其取值范围为0-255。当`htype`等于255时，代码未进行边界检查直接访问上述数组，导致发生越界读（OOB read），并可能调用越界获取的非法函数指针。
+
+#解决方案
+在访问扩展头处理函数数组前，增加对索引变量`htype`的边界检查。通过`ARRAY_SIZE`宏获取数组大小，若`htype`值大于等于数组大小，则判定为非法值，直接返回错误（-1）并丢弃该SNDU数据报，从而避免越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/632b38716f3a4e28e4e515c9bba04fdf2e040f8a

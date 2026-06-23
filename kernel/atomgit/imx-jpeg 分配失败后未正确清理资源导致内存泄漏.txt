@@ -1,0 +1,20 @@
+#标题
+imx-jpeg 分配失败后未正确清理资源导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i.MX JPEG 编码/解码驱动初始化过程中，若 DMA 内存分配失败（如内存不足），驱动会打印错误信息，但未能释放此前步骤已成功分配的 DMA 内存资源。这导致系统内存泄漏，多次触发后将消耗大量内核内存。
+
+#主要错误日志
+dev_err(jpeg->dev, "Could not allocate descriptors for slot %d", jpeg->slot_data.slot);
+
+#问题根因
+函数 `mxc_jpeg_alloc_slot_data` 在执行过程中涉及多次连续的 `dma_alloc_coherent` 内存分配。当某次分配失败时，代码跳转至 `err` 标签进行处理，但原有的错误处理逻辑仅打印了错误信息，并未调用 `mxc_jpeg_free_slot_data` 来释放之前已分配成功的内存，导致资源泄漏。
+
+#解决方案
+将 `mxc_jpeg_free_slot_data` 函数的定义移至 `mxc_jpeg_alloc_slot_data` 函数之前（解决编译依赖），并在 `mxc_jpeg_alloc_slot_data` 的错误处理标签 `err` 处增加对 `mxc_jpeg_free_slot_data(jpeg)` 的调用，确保在分配失败时正确释放所有已分配的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8ac1ae5b343922159c0487fc94e599bdcd6e0b60

@@ -1,0 +1,22 @@
+#标题
+drm/amdgpu: DPX 模式下内存分区校验逻辑错误导致模式配置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 GC 9.4.3 架构的 AMD GPU 设备上，当配置为 DPX 分区模式（AMDGPU_DPX_PARTITION_MODE）时，内核对内存分区数量的校验条件存在逻辑缺陷。原逻辑错误地允许了内存分区数大于 2 的配置，违反了 DPX 模式仅支持小于等于 2 个内存分区的硬件约束。这可能导致在不符合硬件要求的配置下强行启用 DPX 模式，进而引发后续的功能异常、驱动状态不一致或潜在的硬件访问错误。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `drivers/gpu/drm/amd/amdgpu/aqua_vanjaram.c` 文件中的 `__aqua_vanjaram_is_valid_mode` 函数对 DPX 模式的校验逻辑书写错误。
+原代码逻辑为 `adev->gmc.num_mem_partitions != 8`，意指只要内存分区数不为 8 即视为合法。
+然而，DPX 模式的硬件设计约束是支持的内存分区数量必须小于或等于 2。原逻辑未能正确拦截分区数为 3、4 等非法情况，导致非法配置被误判为合法。
+
+#解决方案
+修正 DPX 模式下的内存分区校验条件，将判断逻辑从 `num_mem_partitions != 8` 修改为 `num_mem_partitions <= 2`，确保仅当内存分区数符合 DPX 模式硬件约束时才返回真，拦截不符合要求的配置请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4db9daf7b166571eb2081900421fd3d6f1f23007

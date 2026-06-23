@@ -1,0 +1,34 @@
+#标题
+max96712 模块卸载时引发内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `rmmod max96712` 命令卸载内核模块时，触发内核 Oops，导致系统崩溃。具体表现为无法处理内核分页请求，触发 DABT 异常，并在 `led_put` 函数调用链中崩溃。
+
+#主要错误日志
+Unable to handle kernel paging request at virtual address 00007375746174db
+Mem abort info:
+  ESR = 0x0000000096000004
+  EC = 0x25: DABT (current EL), IL = 32 bits
+  SET = 0, FnV = 0
+  EA = 0, S1PTW = 0
+  FSC = 0x04: level 0 translation fault
+Internal error: Oops: 0000000096000004 [#1] PREEMPT SMP
+Call trace:
+ led_put+0x1c/0x40
+ v4l2_subdev_put_privacy_led+0x48/0x58
+ v4l2_async_unregister_subdev+0x2c/0x1a4
+ max96712_remove+0x1c/0x38 [max96712]
+
+#问题根因
+在驱动初始化函数 `max96712_probe` 中，代码逻辑顺序错误。首先调用 `i2c_set_clientdata(client, priv)` 设置了私有数据指针，随后调用 `v4l2_i2c_subdev_init()`。而 `v4l2_i2c_subdev_init()` 内部会再次调用 `i2c_set_clientdata()` 将 data 覆盖指向 `sd`（v4l2_subdev 结构体），而非 `priv`。导致在 `max96712_remove` 中通过 `i2c_get_clientdata` 获取到的是错误的指针，传给 `v4l2_async_unregister_subdev` 后引发崩溃。
+
+#解决方案
+修改 `max96712_remove` 函数中的数据获取逻辑，以适配 `v4l2_i2c_subdev_init` 设置的数据结构：
+1. 删除 `max96712_probe` 中冗余的 `i2c_set_clientdata(client, priv)` 调用，避免混淆。
+2. 在 `max96712_remove` 中，通过 `i2c_get_clientdata` 获取 `sd` 指针，再利用 `container_of` 宏从 `sd` 中正确推导出 `priv` 指针，确保传递给 `v4l2_async_unregister_subdev` 的地址有效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5312ad1b3f68600fc0fcb802510ccb9c9ba77915

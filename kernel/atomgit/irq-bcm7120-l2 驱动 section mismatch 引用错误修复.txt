@@ -1,0 +1,20 @@
+#标题
+irq-bcm7120-l2 驱动 section mismatch 引用错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动后运行一段时间，或在进行模块加载、设备重新绑定等操作触发 deferred probe 时，内核可能尝试调用已被释放的初始化内存段中的代码。这会导致内核崩溃、Oops 或其他不可预测的系统异常行为。该问题主要影响 Broadcom BCM7120 和 BCM3380 中断控制器驱动。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的代码变更中，该驱动被切换为 IRQCHIP_PLATFORM_DRIVER 模式。平台驱动（Platform drivers）可能在内核初始化阶段完成后被探测，此时 `__init` 修饰的内存段已被释放丢弃。然而，驱动的 probe 回调函数及其依赖的 iomap 函数（如 `bcm7120_l2_intc_probe_7120`、`bcm7120_l2_intc_iomap_7120` 等）仍被标记为 `__init`，导致在后期调用时出现 section mismatch 错误并引用无效内存地址。
+
+#解决方案
+移除相关函数的 `__init` 修饰符。具体涉及移除 `bcm7120_l2_intc_iomap_7120`、`bcm7120_l2_intc_iomap_3380`、`bcm7120_l2_intc_probe`、`bcm7120_l2_intc_probe_7120` 和 `bcm7120_l2_intc_probe_3380` 等函数的 `__init` 标记，确保这些函数在驱动初始化内存段释放后依然可被安全调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4193e9b5f4677859b0494cef3972710ec87f826f

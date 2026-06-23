@@ -1,0 +1,25 @@
+#标题
+dmaengine: idxd: 模块卸载时引用计数下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 idxd 内核模块时，发生引用计数下溢。这是由于之前的代码重构错误地引入了多余的 put_device() 调用，导致设备引用计数在清理过程中被错误地减少。
+
+#主要错误日志
+未知
+
+#问题根因
+近期的一次重构引入了一个位置不当的 put_device() 调用。实际上，idxd groups、engines 和 workqueues 并不需要添加额外的 put_device() 调用，所需的清理工作已经由调用链 `idxd_unregister_devices() -> device_unregister() -> put_device()` 处理。原有的 `idxd_cleanup()` 函数（包含 `idxd_cleanup_internals()`）重复执行了释放逻辑，导致了引用计数下溢。
+
+#解决方案
+移除导致问题的 `idxd_cleanup()` 调用，改为直接展开执行必要的清理步骤，以确保不触发多余的引用计数释放。具体变更包括：
+1. 删除 `idxd_cleanup(idxd)` 调用。
+2. 显式调用 `perfmon_pmu_remove(idxd)`。
+3. 显式调用 `idxd_cleanup_interrupts(idxd)`。
+4. 检查并处理 PASID 禁用：`if (device_pasid_enabled(idxd)) idxd_disable_system_pasid(idxd)`。
+此举移除了重复的释放逻辑，保留了内存管理通过 Linux 设备模型的正确处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7389c1aed58bf66ca1be30df7907070087b63958

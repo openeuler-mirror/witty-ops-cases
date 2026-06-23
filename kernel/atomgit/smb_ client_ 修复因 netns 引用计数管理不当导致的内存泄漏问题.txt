@@ -1,0 +1,25 @@
+#标题
+smb: client: 修复因 netns 引用计数管理不当导致的内存泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB 客户端进行连接、断开或模块卸载（rmmod）操作时，内核网络命名空间的引用计数出现泄漏。这会导致相关的 netns 对象无法被正常释放，造成内存泄漏。在极端情况下，可能引发 use-after-free 或 rmmod 时因 TCP 定时器死锁导致操作无法完成。
+
+#主要错误日志
+[   23.864900] cifs: VFS: Error -22 creating socket
+[   23.870012] cifs: VFS: Error -113 connecting to server
+
+#问题根因
+在之前的代码逻辑中，SMB 客户端在 `generic_ip_connect` 创建 socket 时手动调用 `get_net` 增加了 netns 引用计数，但在 socket 释放路径（如 `clean_demultiplex_info`、`cifs_abort_connection`）以及错误处理路径中，存在多处引用计数释放不平衡的情况。
+具体表现为：socket 创建时获取的引用在 socket 释放时被 `put_net` 释放，但此时 socket 内部的 sk 已经持有了引用（或者在错误路径中未正确处理），导致 netns 引用计数在 socket 生命周期管理中出现混乱，最终造成引用计数泄漏。
+
+#解决方案
+修改 netns 引用计数的持有方式，将手动管理改为利用 socket 生命周期自动管理。
+1. 在 `generic_ip_connect` 函数中，移除 socket 创建后的手动 `get_net` 调用。
+2. 改为调用 `sk_net_refcnt_upgrade(sk)` 接口，将内部 sock 结构的引用计数模式升级，使其持有 netns 的引用。
+3. 清理所有 socket 释放路径中的冗余 `put_net` 调用，确保引用计数随着 socket 的释放自动正确归还，避免了手动管理带来的遗漏和错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5a109d7da9d6da886d799abc5d2ac16ef1c73482

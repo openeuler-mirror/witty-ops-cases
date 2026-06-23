@@ -1,0 +1,20 @@
+#标题
+netfilter: nfnetlink_log 消息大小计算错误导致潜在内存越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 nfnetlink_log 组件处理网络数据包日志记录时，由于对 Netlink 消息大小计算有误，导致分配的内存空间不足以存放完整的消息头。这可能引发内存越界写入，造成内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nfulnl_log_packet` 函数中计算 Netlink 消息大小时，对 `nfgenmsg` 结构体大小的计算使用了 `nla_total_size`。该函数是用于计算属性大小的，包含 NLA_HDRLEN（属性头）和对齐填充，而此处实际需要的是 Netlink 消息头的大小。正确的做法应使用 `nlmsg_total_size`，它包含 NLMSG_HDRLEN（消息头）和对齐填充。使用错误的计算函数导致最终分配的缓冲区大小小于实际写入的数据量。
+
+#解决方案
+将 `nfulnl_log_packet` 函数中计算 `nfgenmsg` 大小的代码从 `nla_total_size(sizeof(struct nfgenmsg))` 修改为 `nlmsg_total_size(sizeof(struct nfgenmsg))`，确保分配的内存空间包含正确的 Netlink 消息头长度。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8c997af5d99f775fcc7c3df510a9f657a7baca6f

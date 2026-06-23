@@ -1,0 +1,21 @@
+#标题
+w1: therm: Fix off-by-one buffer overflow in alarms_store
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在向 w1_therm 设备的 sysfs `alarms` 接口写入数据触发 `alarms_store()` 函数时，发生越界写（buffer overflow）。由于 `strcpy` 在复制字符串时会写入 NUL 终止符，导致写入位置超出 `kmalloc` 分配的缓冲区边界一个字节。
+
+#主要错误日志
+- `%s: error unable to allocate memory %d` (原代码中的内存分配警告，现已被移除)
+- `%s: error parsing args %d` (参数解析错误日志)
+
+#问题根因
+sysfs 缓冲区 `buf` 虽然分配了 `size + 1` 个字节并在末尾添加了 NUL 终止符，但传入函数的 `size` 参数并未包含这个额外的字节。原代码使用 `kmalloc(size, GFP_KERNEL)` 分配内存，随后调用 `strcpy(p_args, buf)`。由于 `strcpy` 会复制直到 NUL 终止符（位于索引 `size` 处），导致写入操作越界至分配缓冲区之外的一个字节。
+
+#解决方案
+移除不必要的中间缓冲区分配与字符串拷贝逻辑，直接使用 `simple_strtoll()` 对传入的 `buf` 参数进行解析。该方案消除了越界写入的风险，同时简化了代码逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf26f071107f60258a2ee22c9e332b77d458d69c

@@ -1,0 +1,22 @@
+#标题
+mfs umount时因inode释放顺序错误导致野内存访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+MFS文件系统卸载（umount）过程中触发野内存访问错误。具体表现为：在MFS事件被销毁时，内核检测到inode仍在使用中并打印警告信息，随后在释放事件和执行iput操作时引发内存访问异常。
+
+#主要错误日志
+- 推断：内核警告日志，提示inode在被强制清理时处于使用中状态（由 "clean the inode forcely and report warning if the inode is in used" 推断）。
+- pr_warn("Pending until close the /dev/mfs%u...\n", sbi->minor);
+
+#问题根因
+MFS event 持有 inode 引用。当 MFS 卸载时，kill_anon_super 先被调用，强制清理了 inode，此时内核报告警告。随后 mfs_destroy_events 释放 event 并调用 iput，导致访问已释放的 inode，引发野内存访问错误。此外，代码中对于 caches->flags 的内存访问顺序缺乏屏障保护，可能导致互斥状态异常。
+
+#解决方案
+1. 调整函数调用顺序：将 mfs_destroy_events 调用移至 kill_anon_super 之前，确保先释放事件和 inode 引用，再强制清理 super block，避免野指针访问。
+2. 增加内存屏障：在操作 caches->flags 前后添加 smp_mb__before_atomic() 和 smp_mb__after_atomic()，确保内存访问顺序正确，避免互斥状态异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3faba18a9d70fb76f2e5fc90c3f1868d162a5024

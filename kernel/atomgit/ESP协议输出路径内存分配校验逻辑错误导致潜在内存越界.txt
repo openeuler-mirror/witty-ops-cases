@@ -1,0 +1,20 @@
+#标题
+ESP协议输出路径内存分配校验逻辑错误导致潜在内存越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在IPsec ESP（Encapsulating Security Payload）协议处理报文发送时，若`skb->data_len`与`tailen`各自的对齐值均未超过`PAGE_SIZE`，但两者之和的对齐值超过`PAGE_SIZE`，内核会错误地跳过内存拷贝（cow）处理流程。这可能导致后续处理中内存分配不足或数据写入越界，造成系统崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在`esp_output_head`（IPv4）和`esp6_output_head`（IPv6）函数中，判断是否需要扩展SKB线性数据区的条件判断逻辑存在错误。原代码分别对`tailen`和`skb->data_len`进行对齐检查，只要其中一个超过`PAGE_SIZE`才跳转至`cow`处理。实际上，应当检查两者长度之和`skb->data_len + tailen`对齐后的总大小是否超过`PAGE_SIZE`。错误的判断逻辑导致总长度可能超出页面限制而未触发相应的内存处理逻辑。
+
+#解决方案
+修正`net/ipv4/esp4.c`和`net/ipv6/esp6.c`中的判断条件，将原来分别判断`ALIGN(tailen, L1_CACHE_BYTES) > PAGE_SIZE`和`ALIGN(skb->data_len, L1_CACHE_BYTES) > PAGE_SIZE`的逻辑，修改为统一判断`ALIGN(skb->data_len + tailen, L1_CACHE_BYTES) > PAGE_SIZE`，确保剩余尾部空间与非线性数据长度的总和符合内存页面限制，否则正确执行`cow`流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0a06a5654b962b0f9f8e630f4349d9e053ea493d

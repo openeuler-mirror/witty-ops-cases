@@ -1,0 +1,21 @@
+#标题
+scsi: ufs: mcq: 修复 abort 处理函数中的空指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UFS MCQ（Multi-Circular Queue）模式下，当 I/O 请求完成路径与 abort 处理程序发生竞争时，会导致内核崩溃。具体场景为：请求刚完成时，`__blk_mq_free_request()` 将 `rq->mq_hctx` 置为 NULL，若此时并发的 abort 处理流程调用 `ufshcd_mcq_req_to_hwq()` 获取硬件队列指针，会返回 NULL，后续对该指针的解引用将触发空指针异常，造成系统 Panic。
+
+#主要错误日志
+- 推断日志（基于补丁新增的报错打印）：
+  `dev_err(hba->dev, "%s: skip abort. cmd at tag %d already completed.\n", __func__, tag);`
+
+#问题根因
+MCQ 完成路径与 abort 处理程序之间存在竞争条件。一旦请求完成，`__blk_mq_free_request()` 会将 `rq->mq_hctx` 设置为 NULL。随之调用的 `ufshcd_mcq_req_to_hwq()` 会因此返回 NULL 指针。原代码未对返回的 `hwq` 指针进行有效性检查，直接对 NULL 指针进行解引用操作导致内核崩溃。
+
+#解决方案
+在 `ufshcd_mcq_abort()` 函数中增加对 `hwq` 指针的 NULL 检查。如果 `hwq` 为 NULL，打印错误日志并返回 FAILED，从而避免空指针解引用。同时，根据社区建议移除了原有的 `ufshcd_cmd_inflight()` 检查，以简化逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/225901abdb8d0a6dca6c772d9b4e641e4b6560d8

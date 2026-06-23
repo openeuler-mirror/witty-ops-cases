@@ -1,0 +1,20 @@
+#标题
+lib/iov_iter: fix import_iovec_ubuf iovec management
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `__import_iovec_ubuf()` 函数内部的 `copy_compat_iovec_from_user()` 或 `copy_iovec_from_user()` 执行失败时，调用者持有的 iovec 指针未被置为 NULL。这违反了 `import_iovec()` 接口关于“无论返回错误码如何，均可安全 kfree 返回的 iovec 指针”的契约，可能导致调用者在错误处理路径中发生 Use-After-Free 或 double free 风险。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，`import_iovec()` 接口约定无论返回何种错误码，调用者都应该能够安全地 kfree 返回在 `@iovp` 中的 iovec 指针。然而，`__import_iovec_ubuf()` 函数仅在后续的 `import_ubuf()` 成功执行后才将 `*iovp` 置为 NULL。如果在前期的 `copy_compat_iovec_from_user()` 或 `copy_iovec_from_user()` 阶段失败，函数直接返回错误码，此时 `*iovp` 仍指向原始的 iovec 结构，未被清零。由于该函数不会重新分配 iovec，这导致调用者可能错误地释放了不应释放或已被释放的内存。
+
+#解决方案
+在 `__import_iovec_ubuf()` 函数中，将 `*iovp = NULL` 的赋值操作提前至函数入口处（在用户空间拷贝操作之前）执行。这确保了无论后续的拷贝操作是否成功，`*iovp` 都已被清零，从而符合 `import_iovec()` 的接口契约，防止调用者在错误路径上进行错误的内存释放操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dbc3ab1bb9e4a1bd4d288b7bd57d2515d63fe849

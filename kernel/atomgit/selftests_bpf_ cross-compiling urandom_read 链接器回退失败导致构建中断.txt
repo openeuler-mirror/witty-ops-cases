@@ -1,0 +1,20 @@
+#标题
+selftests/bpf: cross-compiling urandom_read 链接器回退失败导致构建中断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非 x86 架构下进行 BPF 自测套件（selftests/bpf）交叉编译时，若系统环境不支持 LLVM 的 ld.lld 链接器，构建过程会因回退使用了错误的链接器（主机构造环境的 'ld' 而非目标平台的交叉编译链接器）而失败，导致 urandom_read 及相关依赖目标无法正确生成。
+
+#主要错误日志
+未知
+
+#问题根因
+Makefile 中针对非 x86 架构的链接器回退逻辑存在缺陷。原始逻辑在不支持 lld 时直接将 LLD 变量赋值为硬编码的 'ld'，这忽略了 Makefile 中预定义的 $(LD) 宏（即目标交叉编译链接器），导致构建系统错误地调用了主机构造环境的链接器，破坏了交叉编译环境的一致性。
+
+#解决方案
+修改 tools/testing/selftests/bpf/Makefile，将非 x86 架构下的 LLD 变量赋值逻辑从硬编码 `ld` 修改为 `$(shell command -v $(LD))`。此举确保回退时优先使用 Makefile 中定义的目标链接器绝对路径，通过 `-fuse-ld=` 参数正确传递给编译器，从而保证交叉编译的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf6fcdcab96821d31e09ea81dbe67c79ce3f7341

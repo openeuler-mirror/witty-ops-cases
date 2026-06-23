@@ -1,0 +1,32 @@
+#标题
+bnxt_en: 使用 ethtool 获取固件 coredump 时内存越界拷贝导致内存破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `ethtool -w` 命令获取网卡固件 coredump 时，触发 KFENCE 内存破坏检测，导致内核报告 "memory corruption" 错误。调用栈显示错误发生在 `__bnxt_get_coredump` 函数执行 memcpy 操作期间。
+
+#主要错误日志
+BUG: KFENCE: memory corruption in __bnxt_get_coredump+0x3ef/0x670 [bnxt_en]
+Corrupted memory at 0x000000008f0f30e8 [ ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ] (in kfence-#45):
+__bnxt_get_coredump+0x3ef/0x670 [bnxt_en]
+ethtool_get_dump_data+0xdc/0x1a0
+__dev_ethtool+0xa1e/0x1af0
+dev_ethtool+0xa8/0x170
+dev_ioctl+0x1b5/0x580
+sock_do_ioctl+0xab/0xf0
+sock_ioctl+0x1ce/0x2e0
+__x64_sys_ioctl+0x87/0xc0
+do_syscall_64+0x5c/0xf0
+entry_SYSCALL_64_after_hwframe+0x78/0x80
+
+#问题根因
+在驱动处理 `HWRM_DBG_COREDUMP_LIST` 固件命令时，驱动根据固件返回的段数量分配 `info->dest_buf` 缓冲区。随后固件通过 DMA 传输段列表并返回 DMA 长度，驱动直接使用该 DMA 长度执行 `memcpy` 将数据拷贝至 `info->dest_buf`。
+在某些场景下，固件返回的 DMA 数据长度超过了 `info->dest_buf` 缓冲区的分配大小，导致 `memcpy` 发生越界写入，引发内存破坏。
+
+#解决方案
+在执行 `memcpy` 拷贝 DMA 数据前，增加长度检查。使用 `min_t` 函数将拷贝长度限制为实际可用缓冲区大小（`info->dest_buf_size - off`），防止拷贝长度越界。同时调整了 `HWRM_DBG_COREDUMP_RETRIEVE` 类型请求的缓冲区长度累加逻辑位置，确保长度校验逻辑对不同类型的固件命令均有效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2fa4a52aab659ef7d8e259d259542629c651b8ff

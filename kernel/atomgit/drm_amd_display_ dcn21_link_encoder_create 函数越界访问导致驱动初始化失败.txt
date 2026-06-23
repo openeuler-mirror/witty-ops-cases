@@ -1,0 +1,21 @@
+#标题
+drm/amd/display: dcn21_link_encoder_create 函数越界访问导致驱动初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 amdgpu 驱动模块（如执行 modprobe 或系统启动阶段）时，内核 UBSAN 检测到数组越界访问，触发 "cut here" 异常调用栈打印。这会导致 GPU 显示模块初始化流程中断，可能引发显示功能不可用或驱动加载失败。
+
+#主要错误日志
+[   65.920510] UBSAN: array-index-out-of-bounds in drivers/gpu/drm/amd/amdgpu/../display/dc/resource/dcn21/dcn21_resource.c:1312:29
+[   65.920519] index 7 is out of range for type 'dcn10_link_enc_hpd_registers [5]'
+
+#问题根因
+在 `dcn21_link_encoder_create` 函数中，代码直接使用 `hpd_source` 作为索引去访问 `link_enc_hpd_regs` 数组。该数组大小固定为 5，而传入的 `hpd_source` 索引值（例如 7）未经过边界检查，导致访问越界，引发 UBSAN（Undefined Behavior Sanitizer）报错。
+
+#解决方案
+在 `dcn21_link_encoder_create` 函数中增加边界检查逻辑。在分配内存后，判断 `enc_init_data->hpd_source` 是否大于或等于 `link_enc_hpd_regs` 数组的长度（通过 `ARRAY_SIZE` 宏获取）。如果索引超出有效范围，函数直接返回 NULL，从而防止越界访问并中止后续错误的初始化流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ccf7fa56eb24845c661db94e85cbf500c9f56f6d

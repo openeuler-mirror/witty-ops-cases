@@ -1,0 +1,20 @@
+#标题
+BPF验证器指针算术运算后未清除pkt_end标记导致分支验证绕过
+
+#内核版本
+OLK-6.6
+
+#问题现象
+BPF程序验证过程中，当数据包指针从比较操作中获取了 AT_PKT_END 或 BEYOND_PKT_END 范围标记后，若随后对该指针执行已知常量的算术运算，验证器会错误地保留之前的标记状态。这导致 `is_pkt_ptr_branch_taken()` 函数误判分支走向，选择其中一个分支而跳过另一个分支的验证，进而导致BPF验证器验证逻辑被绕过，可能造成内核安全风险或程序行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `adjust_ptr_min_max_vals()` 函数处理指针算术运算时，直接将源指针寄存器的 `raw` 字段（包含 `AT_PKT_END` 或 `BEYOND_PKT_END` 等负值范围标记）拷贝到目标寄存器，未在执行算术运算后清除这些过时的标记。这导致后续 `is_pkt_ptr_branch_taken()` 依据错误的标记信息做出了错误的分支判定，绕过了部分验证路径。
+
+#解决方案
+在 `adjust_ptr_min_max_vals()` 函数中增加检查逻辑：当检测到目标寄存器是数据包指针且其 `range` 为负值（即包含 `AT_PKT_END` 或 `BEYOND_PKT_END` 标记）时，通过 `memset` 清零 `dst_reg->raw` 字段。这确保了在指针进行算术运算后，之前比较操作产生的标记被正确清除，迫使验证器对后续分支进行完整的双路径验证。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1c89d4ef3aa135a673419579965dacda09c0c25e

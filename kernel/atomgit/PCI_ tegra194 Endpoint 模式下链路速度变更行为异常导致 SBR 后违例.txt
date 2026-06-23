@@ -1,0 +1,20 @@
+#标题
+PCI: tegra194 Endpoint 模式下链路速度变更行为异常导致 SBR 后违例
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Tegra194 PCIe 控制器在 Endpoint 模式下，完成 Secondary Bus Reset (SBR) 且物理层链路在 Gen1 状态建立后，Endpoint 侧错误地主动发起链路速度变更。根据协议规范，SBR 后的链路速度变更应由 Root Port 或 Switch Downstream Port 发起，而非 Endpoint。此行为违反了 PCI Express 规范中对 SBR 后速度变更发起角色的定义，可能导致链路训练失败或通信异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 Pre-silicon 仿真中发现，控制器工作在 Endpoint 模式时，默认会在 Secondary Bus Reset 后自主发起链路速度变更。根因在于硬件逻辑或默认配置未区分 SBR 后的速度变更发起权限，导致 Endpoint 越权执行了应由 Host 侧（Root Port）执行的操作。
+
+#解决方案
+在代码层面清除链路宽度速度控制寄存器（PCIE_LINK_WIDTH_SPEED_CONTROL）中的 `PORT_LOGIC_SPEED_CHANGE` 标志位。该操作在 `pex_ep_event_pex_rst_deassert` 函数中执行，确保在复位解除断后、链路建立前禁止 Endpoint 发起直接速度变更，将速度变更的控制权保留给 Host。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e7f241dbfcccd93f221550bbae852eec52198014

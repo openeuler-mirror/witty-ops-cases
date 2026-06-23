@@ -1,0 +1,20 @@
+#标题
+spi: cadence-quadspi 探测失败路径下时钟重复关闭导致失衡
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Cadence Quad SPI 控制器驱动在加载过程中，若 `cqspi_request_mmap_dma()` 返回 `-EPROBE_DEFER` 导致探测失败，内核在处理错误退出路径时会对已禁用的时钟执行关闭操作，造成时钟状态引用计数失衡。
+
+#主要错误日志
+未知
+
+#问题根因
+在开启 Runtime PM 后，若 `cqspi_request_mmap_dma()` 返回 `-EPROBE_DEFER`，错误处理路径会调用 `clk_disable_unprepare()`。由于此时 Runtime PM 已激活，系统可能已自动调用了 `runtime_suspend()` 回调来禁用时钟，导致错误路径再次禁用时钟，从而引发“双重禁用”和引用计数不平衡问题。
+
+#解决方案
+在错误处理路径调用 `clk_disable_unprepare()` 前，先调用 `pm_runtime_get_sync()` 递增使用计数并恢复设备状态。这能防止 `runtime_suspend()` 被意外调用，确保只有在时钟处于开启状态时才执行关闭操作，从而修复时钟失衡问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/464d76dbb0ddf02d18d048bf1301f2eac7ef4ea8

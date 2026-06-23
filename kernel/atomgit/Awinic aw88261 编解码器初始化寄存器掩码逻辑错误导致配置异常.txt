@@ -1,0 +1,22 @@
+#标题
+Awinic aw88261 编解码器初始化寄存器掩码逻辑错误导致配置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+aw88261_dev_reg_update() 函数在初始化 Awinic aw88261 放大器时，对 SYSCTRL 寄存器的位掩码计算逻辑存在错误。该错误导致在需要保留特定硬件位状态（AMPPD、PWDN、HMUTE）时，写入寄存器的值不符合预期，可能造成芯片配置异常或功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+在 aw88261_dev_reg_update() 函数中，针对需要保留部分位的寄存器（如 SYSCTRL），采用了 `NEW = (OLD & MASK) | (VAL & ~MASK)` 的逻辑。代码中 `~MASK` 的值是手工计算的。
+具体根因是对 `reg_val` 进行掩码操作时，运算符使用错误：原代码使用了按位或操作符（`|`），导致掩码范围扩大，未能正确过滤掉不应保留的位；正确逻辑应使用按位与操作符（`&`）来生成正确的掩码值。即原代码 `reg_val &= (MASK_A | MASK_B | MASK_C)` 是错误的，应为 `reg_val &= (MASK_A & MASK_B & MASK_C)`。
+
+#解决方案
+修改 `sound/soc/codecs/aw88261.c` 文件中 `aw88261_dev_reg_update` 函数内的掩码运算逻辑。
+将 `reg_val` 的掩码计算行从使用按位或（`|`）修改为使用按位与（`&`），确保掩码值的二进制位计算正确，从而正确保留 AMPPD、PWDN 和 HMUTE 三个位的状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac0b126a725238dc8bb12a082630a502d251c5ac

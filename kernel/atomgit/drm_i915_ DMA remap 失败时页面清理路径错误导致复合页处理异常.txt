@@ -1,0 +1,20 @@
+#标题
+drm/i915: DMA remap 失败时页面清理路径错误导致复合页处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i915 驱动处理 DMA 映射时，若首次映射因 max segment size 大于 PAGE_SIZE 而失败，驱动会尝试降级重试。在重试前的资源清理过程中，代码未正确处理复合页，导致内存管理状态异常，可能引发内存泄漏或页面引用计数错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在将代码转换为 folios 机制时，遗漏了 `shmem_get_pages()` 函数中的错误处理清理路径。当 DMA remap 失败且 max segment size 大于 PAGE_SIZE 时，代码尝试释放资源并重试。原清理代码仅遍历 sg_table 调用 `put_page()` 并释放表，未使用正确的 folio API（如 `shmem_sg_free_table`）。这导致复合页未被正确处理，且未能清除 mapping 的 unevictable 标记，造成清理不完整。
+
+#解决方案
+修改 `shmem_get_pages()` 函数中的 DMA remap 失败清理路径。移除手动遍历 `sg_table` 调用 `put_page()` 和 `sg_free_table()` 的代码，改为直接调用 `shmem_sg_free_table(st, mapping, false, false)`。该函数能够正确处理复合页的释放，并确保在重试前正确维护 mapping 的状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/77ffc5407df87e4b5bede45296493dca4c71b62e

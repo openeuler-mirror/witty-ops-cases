@@ -1,0 +1,20 @@
+#标题
+net: unic 修改队列参数期间触发 completion event 中断导致 call trace
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多网口 MUE 流量场景下，修改队列参数（如 channel、rss_size）时，若此时恰好触发 unic completion event 中断，且队列资源（如 rq、sq）已被销毁但尚未重建，内核会触发 call trace 并导致系统挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+在修改队列参数的过程中（例如执行 `unic_modify_channels` 或 `unic_change_rss_size`），代码流程会先销毁现有的队列资源（channel resources），然后再重新初始化。在此期间，如果驱动收到 completion event 中断并尝试获取队列资源（如 rq、sq），由于资源已被销毁或处于无效状态，导致访问异常从而触发 call trace。根本原因在于资源销毁与重建的窗口期内，中断处理程序未能感知当前队列处于无效状态。
+
+#解决方案
+在修改队列参数的临界区（持有 `mutex` 锁期间）开始时，设置 `UNIC_STATE_CHANNEL_INVALID` 状态位，将设备状态标记为无效。在队列资源成功重新初始化后（`ret` 为 0 时），清除该状态位。此举确保了在中断处理程序获取队列资源时，能够通过检查该状态位识别出队列当前不可用，从而避免访问已销毁的资源，修复了 call trace 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/81d95911c812a24d4daa342a11f077b9316eba89

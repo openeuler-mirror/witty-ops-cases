@@ -1,0 +1,20 @@
+#标题
+vmxnet3_xdp_xmit_frame 导致数据包损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 vmxnet3 网卡且运行 Cilium 服务负载均衡（XDP 模式）时，若 BPF 程序添加了封装头（如 IPIP）并通过同一接口发送数据包，会导致发送的数据包内容损坏，随后在传输路径上被丢弃，引发连接问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `vmxnet3_xdp_xmit_frame` 函数中计算 DMA 地址时，使用了固定的偏移量 `VMXNET3_XDP_HEADROOM`。然而，XDP BPF 程序可能已经移动了 `xdp->data` 指针（例如添加封装头时）。虽然传入的 `buf_size` 是正确的，但由于 DMA 地址未考虑数据指针的动态偏移，导致 DMA 映射的起始地址错误，进而导致发送的数据包损坏。
+
+#解决方案
+修改 `vmxnet3_xdp_xmit_frame` 函数中 DMA 地址的计算逻辑，将固定偏移量 `VMXNET3_XDP_HEADROOM` 替换为动态偏移量。该动态偏移量通过 `xdpf->data - (void *)xdpf`（即 `xdp->data - xdp->data_hard_start`）计算得出，确保 DMA 地址正确对应实际的数据起始位置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cd239e1644d70585cc0c8984ed936463b2d859f9

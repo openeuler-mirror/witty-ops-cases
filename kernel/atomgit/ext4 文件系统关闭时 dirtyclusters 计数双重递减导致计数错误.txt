@@ -1,0 +1,27 @@
+#标题
+ext4 文件系统关闭时 dirtyclusters 计数双重递减导致计数错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ext4 文件系统关闭或出错路径下，`s_dirtyclusters_counter` 计数器可能发生双重递减，导致计数器数值异常（如变为负数或与实际不符），进而引发内存管理或配额统计相关的异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ext4_mb_new_blocks` 函数中，`s_dirtyclusters_counter` 的递减操作存在逻辑冗余。
+1. 在正常分配流程中，`ext4_mb_mark_diskspace_used` 函数内部已经根据条件执行了 `s_dirtyclusters_counter` 的递减操作。
+2. 当文件系统关闭或分配失败时，`ext4_mb_new_blocks` 函数的 `out` 标签处也会根据条件执行 `s_dirtyclusters_counter` 的递减操作。
+这导致在特定场景下（如非 delalloc 保留且分配过程出错或关闭时），同一批预留簇（reserved clusters）的计数器被递减了两次，造成计数下溢。
+
+#解决方案
+移除 `ext4_mb_mark_diskspace_used` 函数内部对 `s_dirtyclusters_counter` 的递减操作，将其统一收敛到 `ext4_mb_new_blocks` 函数的出口处处理。
+具体修改包括：
+1. 删除 `ext4_mb_mark_diskspace_used` 函数中的 `reserv_clstrs` 参数。
+2. 删除该函数内部针对非 delalloc 场景的 `percpu_counter_sub(&sbi->s_dirtyclusters_counter, reserv_clstrs)` 代码。
+3. 在 `ext4_mb_new_blocks` 函数的 `out` 出口处，统一通过判断 `reserv_clstrs` 是否大于 0 来执行 `s_dirtyclusters_counter` 的递减操作，确保预留簇计数仅被释放一次。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/93440ae68bf82be4c72cb721bf05ef571f807760

@@ -1,0 +1,20 @@
+#标题
+dl2k驱动未处理dma_map_single失败导致潜在的内存损坏或系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 D-Link DGE-550T 网卡驱动初始化过程中，若底层 DMA 映射失败，驱动程序未检测到该错误并继续进行数据传输。这会导致设备使用无效的 DMA 地址进行读写操作，可能引发内存损坏、系统崩溃或不可预测的网络行为。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `alloc_list` 函数中调用 `dma_map_single()` 后，未调用 `dma_mapping_error()` 检查映射是否成功，直接将返回的 DMA 地址赋值给硬件描述符。当 DMA 映射失败时，无效地址被硬件使用，导致故障。
+
+#解决方案
+在 `dma_map_single()` 调用后增加 `dma_mapping_error()` 校验。若映射失败，立即释放已分配的 `skb` 缓冲区，清理已分配的资源列表，并返回 `-ENOMEM` 错误，从而阻止驱动在 DMA 映射失败的情况下继续初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/851f8b4cc6682c8815f8fe6b90dc6b192d8bbfe0

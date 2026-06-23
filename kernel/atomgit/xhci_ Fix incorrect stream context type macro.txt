@@ -1,0 +1,20 @@
+#标题
+xhci: Fix incorrect stream context type macro
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 XHCI 驱动的 'Set TR Dequeue Pointer' 命令 TRB 设置流上下文类型（SCT）字段时，由于宏定义计算错误，导致写入的值不正确。该缺陷导致比特 3 丢失，影响二级流数组（Secondary Stream Arrays, SSA）的正常功能。当前现象较为隐蔽，因为内核仅支持主流数组的线性流寻址，故暂未广泛触发用户可见故障，但在特定硬件或流场景下可能导致流传输异常。
+
+#主要错误日志
+未知
+
+#问题根因
+宏 `SCT_FOR_TRB(p)` 的实现逻辑错误。根据规范，SCT 字段位于比特 3:1。原代码 `(((p) << 1) & 0x7)` 先左移后掩码，导致输入值的比特 3 被丢弃，无法正确写入目标字段；而正确的逻辑应参考类似的 `SCT_FOR_CTX(p)` 宏，先进行掩码操作再左移。
+
+#解决方案
+修正 `drivers/usb/host/xhci.h` 中的 `SCT_FOR_TRB(p)` 宏定义。将 `(((p) << 1) & 0x7)` 修改为 `(((p) & 0x7) << 1)`，确保先取出低 3 位数值，再左移 1 位写入目标位置，从而修复流上下文类型字段的设置错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e31b65b893538e0fc5b9c831440a7f8af231bd88

@@ -1,0 +1,20 @@
+#标题
+be2net: be_get_new_eqd 中统计数据读取存在数据竞争
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 be_get_new_eqd() 函数中读取并累加收发包统计数据（rx_pkts, tx_reqs）时存在数据竞争。由于代码在 u64_stats_fetch_retry() 循环内部直接将统计数据累加到累加器变量中，忽略了 u64_stats_fetch_retry() 事件可能导致的读取重试，导致最终计算得到的统计数据可能是不一致或错误的值，进而影响中断适度（interrupt moderation）策略的计算。
+
+#主要错误日志
+未知
+
+#问题根因
+在 be_get_new_eqd() 函数中，统计数据的读取逻辑存在缺陷。代码在 do...while 循环内部直接将受 u64_stats_sync 保护的统计数据（rxo->stats.rx_pkts 和 txo->stats.tx_reqs）累加到 rx_pkts 和 tx_pkts 变量中。如果发生 u64_stats_fetch_retry()（即读取过程中发生了数据更新导致需要重试），之前的累加值已经写入 rx_pkts/tx_pkts，但并未因重试而回滚，导致累加值包含了不一致的中间状态数据，造成数据竞争和统计错误。
+
+#解决方案
+修改统计数据的读取方式，引入临时变量 pkts。在 u64_stats_fetch_begin() 和 u64_stats_fetch_retry() 构成的循环中，先将统计数据读取到临时变量 pkts 中，待循环结束确认读取成功（无重试或重试已完成）后，再将临时变量的值累加到 rx_pkts 或 tx_pkts 中。这确保了只有在成功读取到一致的统计数据后，才进行累加操作，修复了数据竞争问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/54c4601231c7437262cd56ca6c3e02a88b0e181f

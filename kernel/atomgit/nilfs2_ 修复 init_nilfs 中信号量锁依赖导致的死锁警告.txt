@@ -1,0 +1,20 @@
+#标题
+nilfs2: 修复 init_nilfs 中信号量锁依赖导致的死锁警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核lockdep检测到潜在的死锁风险并报告循环依赖警告。该问题由syzbot发现，具体表现为在挂载nilfs2文件系统时，`init_nilfs()`函数内部的锁依赖关系触发了内核警告。尽管该警告被证实为误报（因为此时文件系统尚未完全启动），但确实引发了内核的异常日志输出。
+
+#主要错误日志
+未知（Commit信息中未提供具体的内核警告日志原文，仅提及“deadlock warnings”和“circular dependency”）
+
+#问题根因
+上游提交 c0e473a0d226 ("block: fix race between set_blocksize and read paths") 修改了 `set_blocksize()` 的行为，使其在执行时会锁定后备设备文件的 inode 锁。而在 `init_nilfs()` 函数中，代码在持有 `ns_sem` 信号量的情况下调用了 `sb_set_blocksize()`（内部调用 `set_blocksize`），这导致了 `ns_sem` -> `inode lock` 的新锁依赖链，与现有的其他锁依赖形成环路，从而触发死锁警告。实际上，`init_nilfs()` 中持有 `ns_sem` 是早期遗留设计，目前已无必要。
+
+#解决方案
+删除 `init_nilfs()` 函数中对 `ns_sem` 信号量的 `down_write()` 和 `up_write()` 调用。因为在当前实现中，nilfs 对象与超级块已是一对一关系，无需通过该信号量保护初始化过程，移除后即可打破错误的锁依赖链，消除死锁警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac88ed820ab6c8a9ef298d54aa7b460f9ba68a6d

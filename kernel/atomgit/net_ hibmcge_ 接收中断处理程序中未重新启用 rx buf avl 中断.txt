@@ -1,0 +1,21 @@
+#标题
+net: hibmcge: 接收中断处理程序中未重新启用 rx buf avl 中断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理接收缓冲区可用中断（rx buf avl irq）时，中断处理完成后未能再次启用该中断。导致后续该中断无法再次触发，系统无法正确统计接收 FIFO 小于空阈值事件的次数，`priv->stats.rx_fifo_less_empty_thrsld_cnt` 计数器无法正确递增。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动中存在两种中断初始化宏：`HBG_ERR_IRQ_I` 和 `HBG_IRQ_I`。使用 `HBG_ERR_IRQ_I` 初始化的中断会自动重新启用，而使用 `HBG_IRQ_I` 初始化的中断不会自动重新启用。
+故障点在于 `rx buf avl irq` 使用了 `HBG_IRQ_I` 宏进行初始化，但在其中断处理函数 `hbg_irq_handle_rx_buf_val` 中，代码仅增加了统计计数，遗漏了主动重新启用中断的操作。
+
+#解决方案
+在中断处理函数 `hbg_irq_handle_rx_buf_val` 中增加调用 `hbg_hw_irq_enable(priv, irq_info->mask, true)`，确保在处理完中断逻辑后主动重新启用该中断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/66cd527c480ab1742f4b61aa2064d5316c3873aa

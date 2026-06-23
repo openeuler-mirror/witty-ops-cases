@@ -1,0 +1,20 @@
+#标题
+netmem: skb_frag_address_safe 未校验 frag page 导致空指针访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当处理不可读（unreadable）的 skb 时，调用 `skb_frag_address_safe` 函数可能触发空指针引用，导致内核崩溃或异常行为。该函数本应安全地处理 skb 片段地址，但在 `skb_frag_page` 返回 NULL 时未能正确拦截。
+
+#主要错误日志
+未知
+
+#问题根因
+`skb_frag_address_safe()` 函数的实现中，直接调用 `page_address(skb_frag_page(frag))` 而未先检查 `skb_frag_page(frag)` 是否为 NULL。在处理某些特殊的 skb（如 unreadable skbs）时，`skb_frag_page` 可能返回 NULL，导致后续 `page_address` 接收到空指针参数，引发故障。与之类似的 `skb_frag_address()` 函数已经包含了相关检查，但 `_safe` 版本遗漏了该安全检查。
+
+#解决方案
+在 `skb_frag_address_safe()` 函数中增加对 `skb_frag_page(frag)` 返回值的非空校验。如果 page 指针为 NULL，函数直接返回 NULL，从而避免将空指针传递给 `page_address`。此修改与 `skb_frag_address()` 的逻辑保持一致，确保了接口的安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/77fd5b0d636ee537ca737ab3fae7e0bccc98aed9

@@ -1,0 +1,20 @@
+#标题
+USB usblp 驱动设置不支持的协议时未返回错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 USB 打印机设备只有一个 alternate setting（num_altsetting 为 1）时，用户通过 ioctl 设置该设备不支持的协议，系统未正确拦截并返回错误，导致设置无效或设备行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+由提交 d8c6edfa3f4e ("USB: usblp: don't call usb_set_interface if there's a single alt") 引入回归。该补丁为了优化性能，在设备 num_altsetting 为 1 时跳过了 `usb_set_interface` 的调用，但错误地将协议支持性检查（`alts < 0`）放在了该跳过逻辑内部。这导致在单 alternate setting 场景下，即使协议不支持（`alts` 为负值），代码也不会返回 `-EINVAL`，从而让不支持的协议设置得以通过。
+
+#解决方案
+将协议支持性检查逻辑（判断 `alts < 0`）前移至 `usblp_set_protocol` 函数的更早阶段，确保在判断是否跳过 `usb_set_interface` 调用之前，先行验证协议的有效性，对不支持的协议直接返回 `-EINVAL`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a40ec7becf8243707ecdedc0e3919584564004c9

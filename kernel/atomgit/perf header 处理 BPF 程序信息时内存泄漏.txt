@@ -1,0 +1,20 @@
+#标题
+perf header 处理 BPF 程序信息时内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 perf 数据处理流程（如 `perf report` 解析 perf.data 文件）时，若遇到重复的 BPF 程序信息（bpf prog info），`process_bpf_prog_info` 函数会发生内存泄漏。该现象通常无法直接观测到错误日志，表现为进程占用的内存随重复 BPF 条目数量增加而持续增长，无法被释放。
+
+#主要错误日志
+pr_debug("duplicated bpf prog info %u\n", prog_id);
+
+#问题根因
+函数 `__perf_env__insert_bpf_prog_info` 在检测到重复的 BPF 程序信息节点时，直接返回而未将节点插入红黑树。调用者 `process_bpf_prog_info` 未检查插入结果，导致已分配的 `info_linear` 和 `info_node` 内存结构未被释放且无法被引用，从而造成内存泄漏。
+
+#解决方案
+修改 `__perf_env__insert_bpf_prog_info` 函数的返回类型为 bool，在成功插入时返回 true，检测到重复项返回 false。同时在调用者 `process_bpf_prog_info` 中增加返回值检查，若返回 false（即插入失败），则显式调用 `free()` 释放 `info_linear` 和 `info_node` 内存，防止泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ddfd1c785218853f77a3a7117122d7de6c1ed94a

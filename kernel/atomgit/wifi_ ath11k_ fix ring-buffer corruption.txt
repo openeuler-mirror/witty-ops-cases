@@ -1,0 +1,23 @@
+#标题
+wifi: ath11k: fix ring-buffer corruption
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Lenovo ThinkPad X13s 设备出现 Wi-Fi 功能偶发性中断故障，系统日志持续打印数据长度校验错误信息。
+
+#主要错误日志
+- ath11k_pci 0006:01:00.0: HTC Rx: insufficient length, got 1484, expected 1492
+- ath11k_pci 0006:01:00.0: HTC Rx: insufficient length, got 1460, expected 1484
+
+#问题根因
+由于缺少必要的内存屏障，主机在读取描述符之前看到了已更新的目标环形缓冲区头指针。这种乱序读取导致驱动获取到了错误的描述符信息，进而引发环形缓冲区状态不一致。
+
+#解决方案
+1. 在读取描述符前添加 `dma_rmb()` 内存屏障，确保描述符在头指针更新之后被读取，解决乱序问题。
+2. 修复错误处理逻辑，将 `nbytes == 0` 的判断移至主校验逻辑中，避免错误处理遗留导致环形缓冲区状态不一致。
+3. 使用 `READ_ONCE()` 宏封装关键变量的读取操作（如 `desc->flags` 和 `hp_addr`），防止编译器优化导致的数据访问异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/980886b4cb756ddc7d11db446a72340e7fe20ec7

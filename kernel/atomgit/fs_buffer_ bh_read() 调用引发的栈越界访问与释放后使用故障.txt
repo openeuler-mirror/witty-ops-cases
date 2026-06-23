@@ -1,0 +1,34 @@
+#标题
+fs/buffer: bh_read() 调用引发的栈越界访问与释放后使用故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载 ntfs3 文件系统时，触发 KASAN 检测到的“stack-out-of-bounds”错误。内核打印 BUG 信息并打印调用栈，显示在 `end_buffer_read_sync` 函数中发生了非法内存读取。问题表现为中断上下文（IRQ）处理 I/O 完成时访问了已失效或越界的栈变量。
+
+#主要错误日志
+BUG: KASAN: stack-out-of-bounds in end_buffer_read_sync+0xe3/0x110
+Read of size 8 at addr ffffc9000168f7f8 by task swapper/3/0
+CPU: 3 UID: 0 PID: 0 Comm: swapper/3 Not tainted 6.16.0-862.14.0.6.x86_64
+Hardware name: QEMU Standard PC (i440FX + PIIX, 1996)
+Call Trace:
+ <IRQ>
+ dump_stack_lvl+0x55/0x70
+ print_address_description.constprop.0+0x2c/0x390
+ print_report+0xb4/0x270
+ kasan_report+0xb8/0xf0
+ end_buffer_read_sync+0xe3/0x110
+ end_bio_bh_io_sync+0x56/0x80
+ blk_update_request+0x30a/0x720
+ scsi_end_request+0x51/0x2b0
+ scsi_io_completion+0xe3/0x480
+
+#问题根因
+在 `mpage_read_folio()` 函数中，局部栈变量 `map_bh` 被传递给 `ntfs_get_block_vbo()`，最终传递给 `bh_read()` 进行 I/O 提交。当 I/O 完成中断发生时，`end_buffer_read_sync()` 调用 `put_bh()` 减少引用计数。由于此前 `unlock_buffer()` 已解锁，`wait_on_buffer()` 得以返回，导致 `map_bh` 所在的栈帧被释放或回收。随后 `put_bh()` 继续访问该 buffer_head 结构体时，触发了对已失效栈变量的访问，导致“stack-out-of-bounds”问题。
+
+#解决方案
+调整 `end_buffer_read_sync` 函数中 `put_bh()` 和 `__end_buffer_read_notouch()` 的执行顺序。将 `put_bh()` 调用移至 `__end_buffer_read_notouch()` 之前。这样可以确保在解锁 buffer（由 `__end_buffer_read_notouch` 内部逻辑处理）之前减少引用计数，避免了在栈变量失效后仍对其进行访问的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ff28777338696f63857efc566cef1ebbaa2a0e5d

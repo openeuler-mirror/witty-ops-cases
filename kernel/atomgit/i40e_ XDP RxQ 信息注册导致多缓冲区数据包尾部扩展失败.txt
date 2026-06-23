@@ -1,0 +1,23 @@
+#标题
+i40e: XDP RxQ 信息注册导致多缓冲区数据包尾部扩展失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i40e 网卡驱动中使用 XDP 功能时，若发生 xsk_buff_pool 解绑或 MTU 变更操作，多缓冲区数据包的尾部扩展始终失败。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动处理 XDP RxQ info 的逻辑存在缺陷：frag_size 未能在 xsk_buff_pool 解绑或 MTU 变更时及时更新。这是因为 XDP RxQ 信息的注册与缓冲区分配操作未正确耦合，且注销操作未与环形缓冲区清理操作同步，导致信息陈旧。
+
+#解决方案
+重构 XDP RxQ 信息的注册与注销逻辑：
+1. 将 XDP RxQ 信息的注册操作与缓冲区分配过程紧密耦合，确保 frag_size 等参数实时更新。
+2. 将 XDP RxQ 信息的注销操作移动至 `i40e_clean_rx_ring` 函数中，确保在清理环形缓冲区时同步注销信息。
+3. 完善错误处理路径，在配置失败时正确跳转执行 `xdp_rxq_info_unreg` 进行资源清理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3d8ac3ef0afb61ea5c47b8f7774f6f8363aa23a6

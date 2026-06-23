@@ -1,0 +1,20 @@
+#标题
+amdgpu: VM故障信息同步机制存在竞态条件导致数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 驱动中，当并发访问 `vm_fault_info` 数据结构时（中断处理程序写入与 `get_vm_fault_info` 读取），由于缺少必要的内存屏障，可能因 CPU 指令重排导致读取到不一致或过时的 VM 故障信息（inconsistent or stale data）。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动使用原子变量 `vm_fault_info_updated` 来同步 `adev->gmc.vm_fault_info` 的访问。默认的原子操作函数（如 `atomic_set()` 和 `atomic_read()`）不提供内存屏障功能，允许 CPU 进行指令重排。这意味着对 `vm_fault_info` 结构体的内存访问与对 `vm_fault_info_updated` 标志位的访问顺序无法得到保证，从而产生了竞态条件。先前的实现虽然使用了显式的 `mb()` 屏障，但不完整且效率低下，未能覆盖所有潜在的重排场景（例如 `vm_fault_info` 的访问可能被重排到标志位读取之前）。
+
+#解决方案
+将默认的原子操作替换为带有获取/释放语义的原子操作函数。具体修改为：使用 `atomic_set_release()` 替代 `atomic_set()`，使用 `atomic_read_acquire()` 替代 `atomic_read()`。这些函数提供了必要的获取和释放语义，充当内存屏障以确保操作顺序正确，同时也比显式全内存屏障更高效、更符合内核编程惯例。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/431dfb26c8ce3a63bf56ae15fc8d67df541a4cf9

@@ -1,0 +1,24 @@
+#标题
+sw64 架构 C4 芯片 INTx 中断配置错误导致中断路由异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构非 C3B 子架构（如 C4）平台上，PCI INTx 中断无法正确投递到预期的目标 CPU，导致中断路由错误，可能引发设备功能异常或中断响应问题。
+
+#主要错误日志
+未知
+
+#问题根因
+内核代码中 `set_intx` 和 `__assign_piu_intx_config` 函数的汇编逻辑未针对 C4 架构进行区分处理：
+1. INTx 配置寄存器写入时，INTA/INTB/INTC/INTD 的偏移映射关系在 C4 架构下与 C3B 不同，原代码统一按 C3B 逻辑处理，导致中断线配置错位。
+2. 目标 CPU 的 RCID 解析逻辑错误，原代码使用 `cpu_to_rcid` 进行简单的位移操作生成 `intx_conf`，但 C4 架构需要根据 thread、node、core 进行独立解析和拼接，导致中断目标地址计算错误。
+
+#解决方案
+修改 `drivers/irqchip/irq-sunway-pci-intx.c` 文件，根据宏 `CONFIG_SUBARCH_C3B` 区分架构逻辑：
+1. 在 `set_intx` 函数中，针对 C4 架构修正 INTA-D 配置寄存器的写入顺序，确保中断线映射正确。
+2. 在 `__assign_piu_intx_config` 函数中，针对 C4 架构重新实现 `intx_conf` 的计算方式，通过 `rcid_to_thread_id`、`rcid_to_domain_id` 和 `rcid_to_core_id` 正确解析并组合配置值，确保中断投递目标正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ffea751153bdc208238af55573863ccf80480688

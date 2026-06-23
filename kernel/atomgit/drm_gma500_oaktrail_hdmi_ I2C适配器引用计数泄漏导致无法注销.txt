@@ -1,0 +1,20 @@
+#标题
+drm/gma500/oaktrail_hdmi: I2C适配器引用计数泄漏导致无法注销
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Oaktrail HDMI 设备驱动初始化或运行过程中，若调用 `oaktrail_hdmi_get_modes` 函数获取 EDID 信息，会导致 I2C 适配器的引用计数未被正确释放。该泄漏会阻止 I2C 适配器被正常注销（deregistered），可能导致驱动卸载失败或模块引用计数异常，进而影响相关硬件资源的释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `oaktrail_hdmi_get_modes` 中，代码逻辑通过 `i2c_get_adapter` 获取了 I2C 适配器指针并增加了其引用计数。然而，在处理 `raw_edid` 分支（else 代码块）时，函数直接赋值 edid 指针后退出该分支，遗漏了调用 `i2c_put_adapter` 来释放对 I2C 适配器及其模块的引用。这导致 I2C 适配器的引用计数被永久持有，无法被注销。
+
+#解决方案
+在 `drivers/gpu/drm/gma500/oaktrail_hdmi.c` 文件的 `oaktrail_hdmi_get_modes` 函数中，针对 `else` 分支（即获取到 `raw_edid` 的情况），在赋值 `edid` 指针之后、进入后续逻辑之前，显式调用 `i2c_put_adapter(i2c_adap)` 以释放 I2C 适配器的引用，确保资源能被正确释放和注销。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/590bd97078644abe21236b49dd74ee31fac7bf43

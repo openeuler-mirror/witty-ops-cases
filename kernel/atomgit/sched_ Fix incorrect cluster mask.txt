@@ -1,0 +1,23 @@
+#标题
+sched: Fix incorrect cluster mask
+
+#内核版本
+OLK-6.6
+
+#问题现象
+构建软调度域（soft domain）时使用了错误的 cluster 掩码，可能导致调度域划分错误，进而引发 CPU 调度行为异常或系统性能下降。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `build_soft_sub_domain` 函数中，调用 `cpu_clustergroup_mask(i)` 获取 CPU 掩码是错误的，正确的接口应为 `topology_cluster_cpumask(i)`。此外，原逻辑基于 LLC 调度域指针获取 span，修复后改为基于 NUMA node 获取 span，确保了掩码来源的正确性。
+
+#解决方案
+1. 将 `build_soft_sub_domain` 函数的参数从 `struct sched_domain *sd` 修改为 `int nid`，直接传入节点 ID。
+2. 将函数内部获取 span 的方式从 `sched_domain_span(sd)` 改为 `cpumask_of_node(nid)`。
+3. 将循环中调用 `cpu_clustergroup_mask(i)` 的地方修改为 `topology_cluster_cpumask(i)`，修正 cluster 掩码的获取逻辑。
+4. 将 `build_soft_domain` 主函数中的遍历逻辑从“遍历每个 CPU 并查找 LLC sd”改为“遍历每个 node id”，简化了构建流程并修复了掩码错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/17c38cfd27e1b385c491575325ac8340e1bb1dd0

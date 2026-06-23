@@ -1,0 +1,23 @@
+#标题
+riscv/kexec_file: 未知重定位类型导致 kexec_file_load 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 CONFIG_RISCV_ALTERNATIVE 的内核上执行 `kexec -sl vmlinux` 加载内核时失败，系统无法完成 kexec 操作。
+
+#主要错误日志
+kexec_image: Unknown rela relocation: 34
+kexec_image: Error loading purgatory ret=-8
+kexec_image: Unknown rela relocation: 38
+kexec_image: Error loading purgatory ret=-8
+
+#问题根因
+purgatory 代码中使用了 16 位加法（R_RISCV_ADD16）和减法（R_RISCV_SUB16）重定位类型，但内核函数 `arch_kexec_apply_relocations_add()` 未处理这两种重定位类型，导致重定位解析失败（返回 -ENOSYS），进而导致 kexec_file_load 系统调用失败。
+
+#解决方案
+在 `arch/riscv/kernel/elf_kexec.c` 文件的 `arch_kexec_apply_relocations_add()` 函数中增加对 R_RISCV_ADD16 和 R_RISCV_SUB16 两个重定位类型的处理分支，分别实现 16 位整数的加法和减法操作，以支持 purgatory 的正常加载。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1d91d72d6f172ab02f3a20abd02e00267fbbbd5b

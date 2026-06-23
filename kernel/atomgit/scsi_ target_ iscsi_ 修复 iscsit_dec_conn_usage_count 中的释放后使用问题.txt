@@ -1,0 +1,20 @@
+#标题
+scsi: target: iscsi: 修复 iscsit_dec_conn_usage_count 中的释放后使用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 iSCSI 目标器（target）关闭连接的过程中，触发了 KASAN 检测到的 slab-use-after-free 错误。具体表现为在 `iscsit_dec_conn_usage_count` 函数中，尝试释放自旋锁时访问了已被释放的 `iscsit_conn` 结构体内存。
+
+#主要错误日志
+KASAN: slab-use-after-free in iscsit_dec_conn_usage_count (推断)
+
+#问题根因
+在 `iscsit_dec_conn_usage_count()` 函数中，代码在持有 `conn->conn_usage_lock` 自旋锁的情况下调用了 `complete()` 函数。一旦 `complete()` 被调用，等待者（如 `iscsit_close_connection()`）会被唤醒并继续执行，进而释放 `iscsit_conn` 结构体。如果等待者在当前线程执行 `spin_unlock_bh()` 之前完成了内存释放操作，当前线程随后尝试释放锁时就会访问已释放的内存区域，导致 use-after-free。
+
+#解决方案
+在调用 `complete()` 函数之前先释放 `conn->conn_usage_lock` 自旋锁。通过调整锁的释放顺序，确保在唤醒等待者之前当前线程已不再持有锁，从而避免等待者过早释放内存导致的竞争条件。修改后，函数在调用 `complete()` 后直接返回，不再重复执行解锁操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae6a2532d16c30070ab32287662b0b825eb3e3ff

@@ -1,0 +1,20 @@
+#标题
+MPTCP skb扩展分配失败导致连接吞吐量降为零
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内存压力场景下，当MPTCP skb扩展分配失败时，skb继续进入TCP接收路径，导致映射状态不一致并触发流向TCP的回退，最终导致吞吐量崩塌至零。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `mptcp_incoming_options()` 中，当 `skb_ext_add(skb, SKB_EXT_MPTCP)` 分配失败时，代码逻辑错误地返回了 `true`。这导致数据段在没有DSS映射的情况下继续处理，造成映射状态不一致，进而触发错误的TCP回退。
+
+#解决方案
+修改 `mptcp_incoming_options()` 函数逻辑，当 `skb_ext_add` 分配失败时返回 `false`。这将促使TCP输入路径丢弃该skb（参考 `tcp_data_queue()` 处理逻辑），从而在内存压力下保持MPTCP的正确性并向发送端提供反压，避免触发错误的回退。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a5810de8c98c1fe95f49232e755fde0fcf749be9

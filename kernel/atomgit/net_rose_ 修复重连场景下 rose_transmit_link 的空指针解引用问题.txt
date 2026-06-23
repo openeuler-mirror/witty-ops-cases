@@ -1,0 +1,21 @@
+#标题
+net/rose: 修复重连场景下 rose_transmit_link 的空指针解引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ROSE 协议 socket 连接尝试正在进行（处于 TCP_SYN_SENT 状态）时，若再次调用 `connect()`（重连），会导致内核发生空指针解引用，进而引发 panic 或 Oops。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference (推断)
+
+#问题根因
+`rose_connect()` 函数在处理第二次连接请求时，缺少对 `sk->sk_state` 状态为 `TCP_SYN_SENT` 的检查。
+当第一次连接正在进行（状态为 TCP_SYN_SENT）时再次调用 `rose_connect()`，代码会继续执行并调用 `rose_get_neigh()`。如果该函数返回 NULL，socket 状态会被置为 `ROSE_STATE_1` 但 `rose->neighbour` 指针为 NULL。随后在 socket 关闭流程中，`rose_release()` 调用 `rose_write_internal()` 进而调用 `rose_transmit_link(skb, NULL)`，触发了空指针解引用。
+
+#解决方案
+在 `rose_connect()` 函数中增加对 `sk->sk_state` 状态的判断：如果当前状态为 `TCP_SYN_SENT`（表示连接正在进行中），则直接返回 `-EALREADY` 错误码，拒绝本次连接请求，防止状态错乱和空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e0deb097bd49557d763733aa445dbaf033daf49e

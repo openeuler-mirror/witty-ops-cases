@@ -1,0 +1,24 @@
+#标题
+AMD DCE 6 显示控制器 DP 音频功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DCE 6 显示控制器上，DisplayPort (DP) 音频无法正常工作。但如果同时连接 HDMI 显示器，DP 音频却能正常发声。
+
+#主要错误日志
+未知
+
+#问题根因
+DCE 6 版本的 `dce60_get_dp_ref_freq_khz` 函数实现错误。代码尝试读取 `DENTIST_DISPCLK_CNTL` 寄存器来获取 DP 参考时钟分频器，但在 DCE 6 硬件上该寄存器值似乎总是为 0，导致计算出的时钟源频率不可用。
+此外，Tahiti GPU 虽然同为 DCE 6，但其音频设备行为不同，需要使用 VBIOS 报告的默认显示时钟，而非当前显示时钟。
+
+#解决方案
+重写 `dce60_get_dp_ref_freq_khz` 函数的逻辑，移除对无效寄存器 `DENTIST_DISPCLK_CNTL` 的读取。
+针对不同 GPU 型号采取不同策略：
+1. 对于 Tahiti GPU，直接使用 VBIOS 提供的默认显示引擎 PLL 频率 (`default_display_engine_pll_frequency`)。
+2. 对于其他 DCE 6 GPU（如 Pitcairn, Oland, Cape Verde），使用当前的显示时钟频率 (`dispclk_khz`)。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2970717078afe9bb5a45d00ee61e1945d7a84113

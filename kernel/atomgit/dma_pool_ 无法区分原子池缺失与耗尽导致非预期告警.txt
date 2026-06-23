@@ -1,0 +1,27 @@
+#标题
+dma/pool: 无法区分原子池缺失与耗尽导致非预期告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 DMA 内存分配时，若分配失败，系统无条件打印告警信息并Dump堆栈，无法区分是由于系统配置错误（无可用原子池）还是运行时资源暂时耗尽（池已满）。这导致驱动程序在内存压力较大（如等待描述符同步回收）时产生大量无意义的告警日志，干扰问题定位。
+
+#主要错误日志
+- 原始日志（修复前无论何种情况均打印）：
+  `Failed to get suitable pool for %s`
+- 修复后新增日志（资源耗尽时）：
+  `DMA pool exhausted for %s`
+- 修复后保留日志（配置缺失时）：
+  `Failed to get suitable pool for %s`
+
+#问题根因
+函数 `dma_alloc_from_pool()` 在分配失败时，将“缺少适配的 DMA pool（配置错误）”和“Pool 已满（资源耗尽）”这两种截然不同的故障模式混淆处理。代码未检查是否找到了对应的 pool，也未根据 `__GFP_NOWARN` 标志位抑制资源耗尽时的告警，导致在可恢复的运行时压力峰值下依然触发 `WARN(1)` 并打印堆栈信息。
+
+#解决方案
+修改 `kernel/dma/pool.c` 中的 `dma_alloc_from_pool` 函数，引入 `pool_found` 变量区分两种失败场景：
+1. 若遍历后未找到合适的 pool（`pool_found` 为假），视为配置错误，保持原有的 `WARN(1)` 无条件告警。
+2. 若找到了 pool 但分配失败（`pool_found` 为真），视为资源耗尽，此时检查 `gfp` 标志位，若包含 `__GFP_NOWARN` 则不告警，否则打印明确的 "DMA pool exhausted" 信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/df19f3a469553c1c7b6e8a290f8f1b9d99269a4a

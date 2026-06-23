@@ -1,0 +1,24 @@
+#标题
+dm-ioctl 处理中 retrieve_status 函数缓冲区溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 Device Mapper ioctl 请求时，若输出缓冲区大小未对齐到 8 字节边界，内核在 `retrieve_status` 函数中进行指针对齐操作时可能越界。这会导致后续计算剩余缓冲区空间时发生整型溢出，进而导致内核向缓冲区边界外写入数据，引发内存越界写入。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `retrieve_status` 函数中，代码逻辑存在如下缺陷：
+1. 代码将输出字符串写入缓冲区后，通过 `outptr = align_ptr(outptr)` 将指针调整到下一个 8 字节边界。
+2. 该对齐操作没有进行溢出检查，导致 `outptr` 可能指向缓冲区末尾之后。
+3. 后续循环中计算剩余空间时执行 `remaining = len - (outptr - outbuf)`，若 `outptr` 已越界，该减法运算会发生整型溢出，导致 `remaining` 变为一个极大的数值。
+4. 内核依据错误的 `remaining` 值继续写入数据，导致缓冲区溢出。
+
+#解决方案
+在 `drivers/md/dm-ioctl.c` 的 `retrieve_status` 函数中，对指针对齐操作增加边界检查。在执行 `outptr = align_ptr(outptr)` 后，立即判断 `outptr` 是否为空或是否已超出缓冲区范围（`outptr > outbuf + len`）。若越界，则设置 `DM_BUFFER_FULL_FLAG` 标志并跳出循环，阻止后续越界写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b10d1578859fe5d51907f480790f0e1eeec4c843

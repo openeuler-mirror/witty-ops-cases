@@ -1,0 +1,26 @@
+#标题
+ARM XIP内核SMP启动失败修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了 XIP（eXecute In Place）内核的 ARM 平台上，SMP（对称多处理）功能无法正常工作。具体表现为二级 CPU（secondary CPU）启动失败，无法正常引导进入内核，导致系统仅能以单核模式运行，无法利用多核性能。
+
+#主要错误日志
+未知
+
+#问题根因
+在 XIP 内核场景下，内核代码段（.text）直接在 Flash/ROM 中执行，其虚拟地址与物理地址的映射关系与常规运行在 RAM 中的内核不同。原有代码在处理 SMP 启动相关的关键地址计算时，未针对 XIP 内核的特殊地址映射进行修正，导致以下三个关键环节的物理地址计算错误：
+1. 二级 CPU 启动时获取 `secondary_data` 结构体的地址错误。
+2. 通过 PSCI 接口传递给二级 CPU 的启动入口地址 `secondary_startup` 错误。
+3. 为二级 CPU 建立 MMU 标识映射的代码段区域地址错误。
+
+#解决方案
+针对 XIP 内核特殊的地址映射机制，修改相关代码以正确计算物理地址：
+1. 在 `arch/arm/kernel/head.S` 中，针对 `CONFIG_XIP_KERNEL` 配置，修正 `secondary_data` 的加载地址计算，使用 `PLAT_PHYS_OFFSET` 和 `PAGE_OFFSET` 进行地址变换。
+2. 在 `arch/arm/kernel/psci_smp.c` 中，修正 `psci_boot_secondary` 函数传递给 `psci_ops.cpu_on` 的启动地址，通过 `XIP_VIRT_ADDR` 宏将虚拟地址转换为正确的物理地址。
+3. 在 `arch/arm/mm/idmap.c` 中，修正 `identity_mapping_add` 函数中建立标识映射的地址范围计算，确保 XIP 代码段区域被正确映射。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5afc6a68bc758f607d410dafeac664aa4b4d302d

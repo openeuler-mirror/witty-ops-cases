@@ -1,0 +1,28 @@
+#标题
+icmp: icmp_ndo_send 函数在 NAT 回复方向报文处理时地址转换错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NAT 环境下，网络设备驱动调用 `icmp_ndo_send` 发送 ICMP 回复报文时存在异常：
+1. 对于 SNAT 场景，回复方向的报文被错误地进行了地址转换，导致报文源地址异常。
+2. 对于 DNAT 场景，回复方向的报文未被正确处理，导致源地址未进行必要的转换，影响 ICMP 限流机制的正常运行。
+
+#主要错误日志
+未知
+
+#问题根因
+`icmp_ndo_send` 函数原本设计用于处理 NAT 后的源地址转换以确保正确的 ICMP 限流，但其实现仅考虑了 `IP_CT_DIR_ORIGINAL` 方向（即固定使用 tuplehash[0]），在获取源地址时忽略了连接跟踪的方向信息：
+1. 在 SNAT 场景下，回复方向的报文不需要源地址转换，但代码错误地使用了原始方向的源地址进行覆盖。
+2. 在 DNAT 场景下，回复方向报文需要使用回复方向的源地址，但代码依然使用了原始方向的源地址，导致逻辑缺失。
+此外，对 `ct->status` 的访问未使用 `READ_ONCE`，存在 KCSAN 报告并发更新的潜在风险。
+
+#解决方案
+1. 通过 `CTINFO2DIR(ctinfo)` 获取正确的连接跟踪方向（`dir`）。
+2. 根据获取的方向 `dir` 从 `tuplehash` 数组中提取对应的源地址（`ct->tuplehash[dir].tuple.src.u3`），替换原有固定取 `tuplehash[0]` 的逻辑，从而正确处理 SNAT 和 DNAT 场景下的回复报文。
+3. 将预检查条件从 `IPS_SRC_NAT` 修改为 `IPS_NAT_MASK`，以覆盖 DNAT 场景。
+4. 使用 `READ_ONCE()` 包装对 `ct->status` 的访问，避免并发访问警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/225fe6402848b97361549e681771ba3391339340

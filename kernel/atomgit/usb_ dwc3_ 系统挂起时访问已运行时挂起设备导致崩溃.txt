@@ -1,0 +1,20 @@
+#标题
+usb: dwc3: 系统挂起时访问已运行时挂起设备导致崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 USB DWC3 设备已经处于运行时挂起状态时，系统执行挂起操作会触发崩溃；在某些平台上，执行 `dwc3_core_exit()` 后访问寄存器也会导致异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在系统挂起流程中，代码未检查设备是否已经处于运行时挂起状态，直接读取设备寄存器以获取 `susphy_state`。如果设备此时已被运行时挂起，访问寄存器将导致系统崩溃。此外，原代码逻辑在 `dwc3_core_exit()` 之后调用 `dwc3_enable_susphy()`，这在某些平台（如 TI AM62）上是不允许的，因为此时访问寄存器已不安全。
+
+#解决方案
+在 `dwc3_suspend_common` 函数中增加判断逻辑：仅当设备未处于运行时挂起状态（`!pm_runtime_suspended`）且非自动挂起（`!PMSG_IS_AUTO`）时，才读取寄存器状态并保存 `susphy_state`。同时，将 `dwc3_enable_susphy()` 的调用移至函数开头、寄存器访问有效的区域内，确保在执行 `dwc3_core_exit()` 等操作前完成必要的 PHY 配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b40f8cc8b4468fb49f8aa24203dbdaa23216554e

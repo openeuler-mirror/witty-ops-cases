@@ -1,0 +1,20 @@
+#标题
+uacce: DMA缓冲区分配未适配MAX_ORDER语义变更导致内存分配异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核 Buddy Allocator 子系统修改了 MAX_ORDER 的语义定义后（有效范围调整为 0..MAX_ORDER），uacce 驱动未能同步更新。导致驱动在计算 DMA 缓冲区最大分配尺寸时，实际设定的上限比预期小了一半（少算了一个 Order），可能导致大块内存分配请求失败或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+内核上游补丁修改了 MAX_ORDER 的语义，伙伴分配器支持的 Order 范围从原来的 0 到 MAX_ORDER-1 变更为 0 到 MAX_ORDER。uacce 驱动中计算最大分配尺寸的代码 `PAGE_SIZE << (MAX_ORDER - 1)` 未同步更新，仍然使用了旧的语义逻辑，导致计算出的 max_size 比实际可分配的最大值小了一个数量级。
+
+#解决方案
+修改 `drivers/misc/uacce/uacce.c` 中 `uacce_alloc_dma_buffers` 函数里的 `max_size` 计算逻辑，将 `PAGE_SIZE << (MAX_ORDER - 1)` 更新为 `PAGE_SIZE << MAX_ORDER`，以匹配内核伙伴分配器对 MAX_ORDER 语义的最新定义，确保 DMA 缓冲区大小上限设置正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3d8271e727e70d0d5fb8b66e7d1d4927f0d5d9a4

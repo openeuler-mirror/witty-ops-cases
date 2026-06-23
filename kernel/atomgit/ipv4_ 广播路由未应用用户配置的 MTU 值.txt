@@ -1,0 +1,26 @@
+#标题
+ipv4: 广播路由未应用用户配置的 MTU 值
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置广播路由时，用户手动设置的 MTU 值（如 1500）无法生效，系统实际使用的 MTU 仍为接口默认值（如 9000）。导致在混合 MTU 的局域网环境中，大尺寸广播包（如 8000 字节）可能因超过网络中部分设备的 MTU 限制而发送失败或被丢弃。
+
+复现步骤：
+1. 设置接口 MTU 为 9000：`ip link set dev eth1 mtu 9000`
+2. 删除原有广播路由并添加 MTU 为 1500 的新广播路由：`ip route add broadcast 192.168.0.255 dev eth1 proto kernel scope link src 192.168.0.2 mtu 1500`
+3. 发送 8000 字节的广播 ping：`ping -b 192.168.0.255 -s 8000`
+4. 现象：Ping 包成功发出（期望行为应为因 MTU 限制而失败或分片），表明路由 MTU 限制未生效。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `__mkroute_output` 处理广播路由（`RTN_BROADCAST`）的逻辑中，代码强制将 `fib_info` 指针（`fi`）置为 `NULL`（`fi = NULL;`）。`fib_info` 结构中存储了路由的属性信息（包括 MTU），将其置空导致后续路由创建流程丢失了用户配置的 MTU 信息，从而错误地使用了接口默认 MTU。
+
+#解决方案
+删除 `net/ipv4/route.c` 文件中 `__mkroute_output` 函数内针对广播路由的 `fi = NULL;` 赋值语句，保留 `fib_info` 结构，使得广播路由能够正确读取并应用用户配置的 MTU 值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ee60631054b9cca11fd6cb08ebd13841951c0a39

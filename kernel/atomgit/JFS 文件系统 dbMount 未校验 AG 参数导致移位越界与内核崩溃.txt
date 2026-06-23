@@ -1,0 +1,36 @@
+#标题
+JFS 文件系统 dbMount 未校验 AG 参数导致移位越界与内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当挂载（mount）包含恶意构造或损坏元数据的 JFS 文件系统镜像时，内核会触发 UBSAN（Undefined Behavior Sanitizer）告警，报告移位操作越界（shift-out-of-bounds）。这可能导致内核崩溃或未定义的行为。漏洞可通过特定 IOCTL 调用（如 FITRIM）触发。
+
+#主要错误日志
+UBSAN: shift-out-of-bounds in fs/jfs/jfs_dmap.c:1400:9
+shift exponent -335544310 is negative
+CPU: 0 UID: 0 PID: 5822 Comm: syz-executor130 Not tainted 6.14.0-rc5-syzkaller #0
+Hardware name: Google Compute Engine/Google Compute Engine, BIOS Google 02/12/2025
+Call Trace:
+ <TASK>
+ __dump_stack lib/dump_stack.c:94 [inline]
+ dump_stack_lvl+0x241/0x360 lib/dump_stack.c:120
+ ubsan_epilogue lib/ubsan.c:231 [inline]
+ __ubsan_handle_shift_out_of_bounds+0x3c8/0x420 lib/ubsan.c:468
+ dballocAG+0x1087/0x10b0 fs/jfs/jfs_dmap.c:1400
+ dbDiscardAG+0x352/0xa20 fs/jfs/jfs_dmap.c:1613
+ jfs_ioc_trim+0x45a/0x6b0 fs/jfs/jfs_discard.c:105
+ jfs_ioctl+0x2cd/0x3e0 fs/jfs/ioctl.c:131
+
+#问题根因
+在 JFS 文件系统的 `dbMount` 函数中，缺少对 AG（Allocation Group）相关参数（`db_agheight`、`db_agwidth`、`db_agstart`）的有效性校验。当文件系统元数据被恶意篡改或损坏时，这些参数可能包含非法值。特别是在 `dbAllocAG` 函数中，计算 `L2LPERCTL - 2*agheight` 时可能产生负数，导致后续移位操作出现负指数或越界，进而触发 UBSAN 告警或内核崩溃。
+
+#解决方案
+在 `dbMount` 函数中增加对 AG 参数的严格边界校验，确保在挂载阶段及早发现损坏的元数据，防止后续操作引发未定义行为：
+1.  校验 `db_agheight` 范围在 0 到 `L2LPERCTL/2` 之间，确保移位指数非负。
+2.  校验 `db_agwidth` 范围在 1 到 `LPERCTL/MAXAG` 之间，且不超过当前高度下的计算上限，防止除零错误。
+3.  校验 `db_agstart` 范围在 0 到 `CTLTREESIZE-1 - agwidth*(MAXAG-1)` 之间，确保数组访问不越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b3b926e904bc4ead995659aa9c0e34d2edf873f4

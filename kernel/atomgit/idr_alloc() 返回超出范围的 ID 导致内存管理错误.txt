@@ -1,0 +1,20 @@
+#标题
+idr_alloc() 返回超出范围的 ID 导致内存管理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用非零基数的 IDR，且指定分配范围完全位于基数下方时，idr_alloc() 函数未返回错误码，而是返回了一个位于请求范围之外的 ID。这可能导致内核将 ID 错误地分配给不期望的位置，进而引发后续的内存越界访问或数据结构损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，如果 IDR 的基数非零，且指定的分配范围完全低于该基数（即 `max < base`），计算过程中的 `max - base` 会产生一个非常大的数值（下溢）。这导致 `idr_get_free()` 未能正确检测到范围无效，从而返回了一个不在请求范围内的 ID。该缺陷自引入提交 6ce711f27500 ("idr: Make 1-based IDRs more efficient") 后存在。
+
+#解决方案
+在 lib/idr.c 的 `idr_alloc_u32` 函数入口处增加边界检查逻辑：判断 `max` 是否小于 `base`。如果条件成立，直接返回 `-ENOSPC` 错误码，阻止后续不合法的分配操作。同时增加了对应的单元测试用例 `idr_alloc2_test` 以验证该边界条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4d21d95a2c5acb88cdfbfbb8d229d06c702ff16c

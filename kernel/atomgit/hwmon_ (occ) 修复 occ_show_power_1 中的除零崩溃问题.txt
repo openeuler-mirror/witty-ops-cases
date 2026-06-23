@@ -1,0 +1,21 @@
+#标题
+hwmon: (occ) 修复 occ_show_power_1 中的除零崩溃问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在早期启动阶段或传感器块尚未更新时（无采样数据），访问 `occ_show_power_1()` 相关的 sysfs 接口会触发内核除零错误，导致内核崩溃。
+
+#主要错误日志
+Kernel panic - not syncing: divide error: 0000 [#1]
+(注：日志原文未给出，依据 "kernel divide-by-zero crash" 描述推断的标准除零异常日志)
+
+#问题根因
+在 `occ_show_power_1()` 函数的 case 1 分支中，代码直接将 `accumulator` 除以 `update_tag` 而未做零值检查。当系统处于早期启动阶段或传感器未被更新时，`update_tag` 值为 0，导致触发除零异常。此前针对该类问题的修复（commit 211186cae14d）仅覆盖了 `occ_show_power_2()` 和 `occ_show_power_a0()` 使用的 `occ_get_powr_avg()` 接口，遗漏了 `occ_show_power_1()` 中的独立代码路径。
+
+#解决方案
+将 `occ_show_power_1()` 中的除法逻辑替换为现有的 `occ_get_powr_avg()` 辅助函数。该辅助函数已包含对零样本值的检查（`samples == 0`），并使用 `mul_u64_u32_div()` 进行先乘后除运算以提高精度。同时，在代码中将 `occ_get_powr_avg()` 函数定义上移，确保在 `occ_show_power_1()` 调用前可见。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c0b6b3b5fb8944fd8ca8894035365a1fb1757739

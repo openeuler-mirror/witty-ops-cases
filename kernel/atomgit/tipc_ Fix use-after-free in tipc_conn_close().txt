@@ -1,0 +1,29 @@
+#标题
+tipc: Fix use-after-free in tipc_conn_close()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TIPC（Transparent Inter-Process Communication）子系统停止服务（tipc_topsrv_stop）过程中，释放 `srv->idr_lock` 自旋锁后调用 `tipc_conn_close()` 时，可能触发“释放后使用”故障，导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tipc_topsrv_stop` 函数中，遍历连接 IDRadix 树并关闭连接时，代码逻辑存在缺陷：
+1. 在持有 `srv->idr_lock` 锁的情况下查找并获取 `con` 指针。
+2. 随后释放了 `srv->idr_lock` 锁。
+3. 释放锁后，其他线程可能并发操作该连接结构（如通过 `tipc_conn_close` 或其他路径将其释放）。
+4. 此时再调用 `tipc_conn_close(con)` 访问该结构时，`con` 指针可能已指向被释放的内存，从而引发 Use-After-Free 问题。原代码缺少在释放锁前增加引用计数的保护机制。
+
+#解决方案
+在 `tipc_topsrv_stop` 函数中，修复连接关闭流程的引用计数管理：
+1. 在通过 `idr_find` 找到连接对象 `con` 后，立即调用 `conn_get(con)` 增加其引用计数，防止对象被提前释放。
+2. 随后释放自旋锁 `srv->idr_lock`。
+3. 执行 `tipc_conn_close(con)` 关闭连接。
+4. 操作完成后，调用 `conn_put(con)` 减少引用计数。
+通过持有引用计数，确保在调用 `tipc_conn_close` 期间，连接对象 `con` 不会被其他线程释放，从而修复 UAF 漏洞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1df0b7d8d836a4c4fbc38e1269146631a684da32

@@ -1,0 +1,26 @@
+#标题
+psi_grained 功能编译错误导致内核构建失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定内核配置组合下进行内核编译时，构建过程失败。具体表现为：
+1. 当关闭配置项 `CONFIG_PSI_FINE_GRAINED` 时，编译报错。
+2. 当关闭配置项 `CONFIG_QOS_SCHED` 时，编译报错。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中宏定义的条件编译逻辑存在错误，导致某些代码片段在配置关闭时未被正确排除或包裹：
+1. 在 `kernel/cgroup/cgroup.c` 中，`pressure.stat` 相关的代码结构未受 `CONFIG_PSI_FINE_GRAINED` 宏保护，导致该配置关闭时出现编译错误。
+2. 在 `kernel/sched/psi.c` 中，条件编译宏 `#ifdef CONFIG_QOS_SCHED` 错误地包裹了闭合大括号 `}`，导致在 `CONFIG_QOS_SCHED=n` 时代码块逻辑提前关闭或结构错乱。
+
+#解决方案
+修正 Makefile/C 文件中的宏定义条件编译范围：
+1. 在 `cgroup.c` 中，使用 `#ifdef CONFIG_PSI_FINE_GRAINED` 宏将 `pressure.stat` 的 cftype 结构体定义正确包裹。
+2. 在 `psi.c` 的 `record_stat_times` 函数中，调整 `#endif` 的位置，确保代码块的闭合大括号 `}` 处于正确的宏保护范围内，避免宏依赖导致的语法错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/72182ef109c9de197b8b3fa1c93bae014327b848

@@ -1,0 +1,20 @@
+#标题
+nilfs2: fiemap 接口存在整型溢出风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NILFS2 文件系统上调用 `fiemap` 接口查询非常大文件的extent信息时（涉及大量连续块），内核在计算 extent 大小时可能发生整型溢出。虽然该问题极难触发，但一旦发生，将导致 `fiemap` 返回错误的文件映射长度，可能导致用户态程序获取错误的文件布局信息。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nilfs_fiemap()` 函数中，变量 `n`（表示连续块数量）可能与 `blkbits`（块偏移位数）进行左移运算。由于 `nilfs_bmap_lookup_contig()` 最多可能返回 `INT_MAX` 个块，计算表达式 `n << blkbits` 的结果可能超出有符号整型（int）的范围，从而发生整型溢出。
+
+#解决方案
+通过将左移运算的操作数强制转换为更宽的类型 `u64`（即 `size = (u64)n << blkbits`），确保运算过程在 64 位空间进行，从而避免整型溢出，正确计算 extent 的大小。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e3fa2ef7ee92f862676e745f8b51a3d8244cd3ba

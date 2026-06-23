@@ -1,0 +1,20 @@
+#标题
+t7xx: DPMAIF RX路径存在skb->frags数组越界溢出风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在DPMAIF接收数据路径中，当Modem固件发送包含过量分片的报文时，内核未对分片数量进行校验，导致`skb->frags`数组发生越界写入。这可能破坏相邻内存区域，进而引发内核崩溃或未定义行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在`t7xx_dpmaif_set_frag_to_skb()`函数处理接收数据时，调用`skb_add_rx_frag()`向skb添加页分片前，未检查分片数量`nr_frags`是否已达到上限`MAX_SKB_FRAGS`。若恶意、有缺陷或被入侵的固件发送超过预期的分片数量，将导致`skb_shinfo(skb)->frags[]`数组发生缓冲区溢出。
+
+#解决方案
+在调用`skb_add_rx_frag()`添加分片之前增加边界检查，确保`shinfo->nr_frags`不大于或等于`MAX_SKB_FRAGS`，若越界则返回错误。同时，该检查逻辑被放置在DMA取消映射之前，以避免在检测到越界返回错误时发生页面泄漏或设备卸载时的双重DMA取消映射。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c677dc1b705b969680b8e05e16f81b7327f88ff4

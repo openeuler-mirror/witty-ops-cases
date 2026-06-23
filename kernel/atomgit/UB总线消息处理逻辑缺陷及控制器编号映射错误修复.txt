@@ -1,0 +1,26 @@
+#标题
+UB总线消息处理逻辑缺陷及控制器编号映射错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在特定场景下（如 `UB_MSG_CODE_POOL` 处理），系统可能未能正确校验消息工作队列是否注册，导致后续处理流程出现异常。
+2. 在 Ascend950 平台上进行 RAS（可靠性、可用性、可维护性）错误处理时，无法正确根据错误数据找到对应的总线控制器，可能导致 RAS 错误上报或处理失败。
+3. 内核日志中可能出现关于工作队列未注册的错误打印。
+
+#主要错误日志
+- `dev_err(&ubc->dev, "no workqueue registered for msg %u\n", msg);`
+
+#问题根因
+1. **消息校验逻辑不严谨**：原代码在 `msg_rx_code_valid` 函数中，对于部分消息类型（如 `UB_MSG_CODE_POOL`）的校验逻辑直接返回，遗漏了对 `rx_msg_wq[msg]` 是否存在的检查；同时对于合法的消息类型范围判断不够明确。
+2. **硬件 ID 映射错误**：在 `local-ras.c` 中针对 Ascend950 平台的代码分支，错误地使用了 `socket_id` 来查找总线控制器编号，而实际上该平台应使用 `nimbus_id` 进行映射。
+3. **结构体成员初始化顺序不当**：`struct message_ops` 结构体中 `send` 成员的声明位置与初始化列表中的位置不一致，虽然可能不影响功能，但降低了代码可维护性。
+
+#解决方案
+1. **重构消息校验逻辑**：将 `msg_rx_code_valid` 函数中的 `if` 判断改为 `switch-case` 结构，明确处理 `UB_MSG_CODE_RAS`、`CFG`、`EXCH`、`SEC`、`MAX` 等特定消息类型的校验；对于 `UB_MSG_CODE_POOL`，增加对 `ubc->cluster` 的判断；并在函数末尾统一增加对 `rx_msg_wq[msg]` 是否为空的检查，若工作队列未注册则打印错误日志并返回 false。
+2. **修正控制器编号映射**：将 Ascend950 平台的 `ctl_no` 获取逻辑由读取 `edata->socket_id` 修改为读取 `edata->nimbus_id`。
+3. **调整结构体定义与初始化顺序**：在 `msg.h` 和 `hisilicon/msg.c` 中调整 `send` 成员的位置，使其与 `response` 和 `sync_enum` 成员保持一致的逻辑顺序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/24e730c8f1b932e10b7c9e4c733d9d39417869c5

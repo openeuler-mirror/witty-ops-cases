@@ -1,0 +1,31 @@
+#标题
+tracing: 注入故障导致 tracepoint 重复注册引发内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Syzkaller 进行故障注入测试时，触发内核 WARNING。具体场景为：通过写入 `set_event_notrace_pid` 和 `set_event_pid` 进行操作，并在 chunk 分配时注入故障，导致系统触发 tracepoint 重复注册的警告。调用栈显示在 `tracepoint_add_func` 中触发了 `WARN_ON`。
+
+#主要错误日志
+WARNING: CPU: 1 PID: 12326 at tracepoint_add_func+0xbfc/0xeb0
+Modules linked in:
+CPU: 1 UID: 0 PID: 12326 Comm: syz.6.10325 Tainted: G U 6.14.0-rc5-syzkaller #0
+Hardware name: Google Compute Engine/Google Compute Engine
+RIP: 0010:tracepoint_add_func+0xbfc/0xeb0 kernel/tracepoint.c:294
+Call Trace:
+ <TASK>
+ tracepoint_probe_register_prio+0xc0/0x110 kernel/tracepoint.c:464
+ register_trace_prio_sched_switch include/trace/events/sched.h:222 [inline]
+ register_pid_events kernel/trace/trace_events.c:2354 [inline]
+ event_pid_write.isra.0+0x439/0x7a0 kernel/trace/trace_events.c:2425
+ vfs_write+0x24c/0x1150 fs/read_write.c:677
+
+#问题根因
+Syzkaller 向 `trace_pid_list_alloc` 中的 chunk 分配注入故障，导致 `trace_pid_list_set` 设置失败。由于缺少对 `trace_pid_list_set` 返回值的错误处理，程序继续执行，导致后续逻辑中误判状态，尝试重复注册同一个 `sched_switch` tracepoint，从而触发内核 WARNING。虽然该问题仅在系统即将崩溃或故障注入时出现，但属于逻辑缺陷。
+
+#解决方案
+在 `trace_pid_write` 函数中增加对 `trace_pid_list_set` 返回值的检查。如果设置失败（返回值小于 0），立即跳转到清理逻辑（`goto out`），避免后续代码在无效数据结构上继续执行，从而防止重复注册 tracepoint 导致的警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/45b3f7292abc251b3368f94468f0f7494b307865

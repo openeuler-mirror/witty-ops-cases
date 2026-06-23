@@ -1,0 +1,23 @@
+#标题
+MIPS rb532: MMIO UART 资源注册失败导致串口无法工作
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MIPS rb532 平台上，8250 MMIO UART 端口注册失败，导致串口设备无法正常初始化或工作，系统启动过程中串口控制台可能无法使用。
+
+#主要错误日志
+未知
+
+#问题根因
+自从引入 commit 6e690d54cfa8 ("serial: 8250: fix return error code in serial8250_request_std_resource()") 后，8250 驱动核心在注册 MMIO 端口时，资源范围（resource range）必须从 `mapbase` 和 `mapsize` 字段派生。rb532 的代码原先仅设置了 `membase`（一个 KSEG1 指针）而未设置 `mapbase`，导致驱动无法正确计算并申请资源，从而引发注册失败。
+
+#解决方案
+修改 `rb532_uart_res` 结构体定义：
+1. 移除直接设置的 `membase` 字段。
+2. 新增并正确设置 `mapbase` 和 `mapsize` 字段，以便 8250 核心驱动能正确派生资源范围。
+3. 在 `flags` 中添加 `UPF_IOREMAP` 标志，移除硬编码的 KSEG1 地址映射，改为让 8250 核心代码统一执行 `ioremap` 操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/edccdd86e0b12fd481926d584cc5c9e32c58e2cb

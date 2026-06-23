@@ -1,0 +1,22 @@
+#标题
+i40e驱动macvlan哈希表并发访问导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在i40e网卡驱动上创建SR-IOV虚拟功能（VF）并配置端口VLAN后，执行并发macvlan操作（如同时添加/删除端口VLAN或MAC过滤器）时，出现内存泄漏。系统可能表现出内存资源持续占用无法释放，且mac_filter_hash状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+i40e驱动中 `vsi->mac_filter_hash` 哈希表存在并发访问缺陷。在 `i40e_vc_get_vf_resources_msg` 函数处理路径中，调用 `i40e_del_mac_filter()` 和清空 `vf->default_lan_addr.addr` 时未持有自旋锁，导致多线程同时修改哈希表时产生竞争，进而导致状态不一致和内存泄漏。
+
+#解决方案
+通过加锁同步对 `mac_filter_hash` 的访问：
+1. 在 `i40e_vc_get_vf_resources_msg` 函数中，使用 `spin_lock_bh` 和 `spin_unlock_bh` 包裹 `i40e_del_mac_filter()` 及地址清零操作，确保操作的原子性。
+2. 在 `i40e_add_mac_filter` 函数中增加 `lockdep_assert_held` 断言，以便在调试时检测类似的锁缺失问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7989adb9abb14557da3b0387545dcd61b8f60f22

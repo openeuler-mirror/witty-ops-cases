@@ -1,0 +1,24 @@
+#标题
+x86/mce: 修复机器检查异常上下文判断错误导致系统崩溃的风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核执行 copy-from-user 操作触发 Machine Check Exception (MCE) 时，由于错误上下文判断逻辑存在缺陷，可能无法正确识别为可恢复的用户数据拷贝上下文。这会导致 MCE 被错误地判定为内核致命错误，进而引发系统不必要的崩溃或重启，影响系统可用性。
+
+#主要错误日志
+推断日志：
+General protection fault in user access. Non-canonical address?
+（注：该日志来源于被移除的 `ex_handler_copy` 函数中的 `WARN_ONCE`，虽然补丁意在移除该处理路径，但这通常关联于旧逻辑处理时的异常场景。）
+
+#问题根因
+修复补丁移除了 `EX_TYPE_COPY` 类型的处理分支，并优化了 MCE 错误上下文的判断逻辑。此前的逻辑中，判断是否为用户拷贝上下文依赖于 `fixup_type` 的匹配（如 `EX_TYPE_UACCESS` 或 `EX_TYPE_COPY`）。新的逻辑改为直接调用 `is_copy_from_user()` 进行判断。若代码变更遗漏了对特定场景的处理或旧逻辑判断不周全，可能导致无法正确设置 `MCE_IN_KERNEL_RECOV` 标志，从而无法触发 MCE 的恢复机制，导致系统误崩溃。该修复是为了确保正确使用 `is_copy_from_user()` 来界定 copy-from-user 上下文，并移除了冗余且可能引入风险的 `EX_TYPE_COPY` 处理路径。
+
+#解决方案
+1. 移除 `EX_TYPE_COPY` 异常表类型定义及其在 `extable.c` 中的处理函数 `ex_handler_copy`，清理冗余代码。
+2. 在 `arch/x86/kernel/cpu/mce/severity.c` 的 `error_context` 函数中，调整判断逻辑：优先使用 `is_copy_from_user()` 判断当前是否处于用户数据拷贝上下文。
+3. 若判定为用户拷贝上下文，直接设置 `MCE_IN_KERNEL_COPYIN` 和 `MCE_IN_KERNEL_RECOV` 标志，并返回 `IN_KERNEL_RECOV`，确保 MCE 异常能够正确恢复，避免系统崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/06a0fe7296bae26405829465de3da901fc7211d5

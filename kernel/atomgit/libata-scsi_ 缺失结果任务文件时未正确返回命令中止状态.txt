@@ -1,0 +1,25 @@
+#标题
+libata-scsi: 缺失结果任务文件时未正确返回命令中止状态
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 ATA 设备命令执行失败且缺失结果任务文件时，`ata_gen_ata_sense` 函数提前返回，未生成任何 sense key。这导致上层 SCSI 子系统无法感知命令失败的具体原因，可能表现为 I/O 请求处理异常、错误状态上报缺失或不明确的硬件错误反馈。此外，对于无法解码的错误状态，日志信息进行了优化以包含更详细的错误掩码信息。
+
+#主要错误日志
+- "missing result TF: can't generate ATA PT sense data\n"（推断：调试级别日志）
+- "Missing result TF: reporting aborted command\n"（推断：调试级别日志）
+- "Could not decode error 0x%x, status 0x%x (err_mask=0x%x)\n"（推断：警告级别日志）
+- 原有日志："could not decode error status 0x%x err_mask 0x%x\n"
+
+#问题根因
+函数 `ata_gen_ata_sense()` 在处理失败的 qc（queued command）时，如果发现 `ATA_QCFLAG_RTF_FILLED` 标志位未设置（即缺失结果任务文件），会直接返回，导致没有设置任何 sense key。这使得 SCSI 层无法获取有效的错误感知信息来处理该失败命令。同样的问题也存在于 `ata_gen_passthru_sense()` 中，且该函数之前未检查命令是否真的失败（`qc->err_mask`）就进行处理。
+
+#解决方案
+1. **ata_gen_ata_sense 修复**：移除缺失 TF 时的直接 `return` 逻辑，改为跳转到 `aborted` 标签，统一设置 sense key 为 `ABORTED_COMMAND`（无额外 sense code），确保即使缺失结果 TF 也能向上层报告命令中止状态。
+2. **ata_gen_passthru_sense 修复**：在缺失结果 TF 的处理路径中增加 `qc->err_mask` 检查，仅当命令确实失败时才设置 sense key 为 `ABORTED_COMMAND`。
+3. **日志与逻辑优化**：调整了错误解码失败时的日志打印格式，使其包含 error、status 和 err_mask 信息，并优化了 `scsi_set_sense_information` 的设置逻辑，仅在 block 有效时设置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fbafe45aed5b2917f2f2447ccb034bd991bacd5e

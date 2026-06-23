@@ -1,0 +1,23 @@
+#标题
+进程退出时触发 uburma 驱动私有内存 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+进程退出过程中，uburma 驱动管理私有内存资源时，可能出现 Use-After-Free (UAF) 问题，导致内核崩溃或内存数据被非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `uburma_unmap_vma_pages` 函数中，原有的资源清理逻辑在处理 VMA（虚拟内存区域）卸载时，未正确处理并发场景或资源引用计数。当进程退出时，私有内存结构体 `uburma_umap_priv` 可能被提前释放或访问，导致 UAF 漏洞。同时，`uburma_umap_close` 和 `uburma_umap_fault` 中对私有数据的检查与处理也存在竞态风险。
+
+#解决方案
+重构 `uburma_mmap.c` 中的资源管理与卸载逻辑：
+1. 修改 `uburma_unmap_vma_pages` 函数，优化 VMA 遍历与卸载流程。在持有 `mmap_read_lock` 的同时持有 `umap_mutex`，确保在执行 `zap_vma_ptes` 和从链表删除节点时状态一致，防止并发修改导致的 UAF。
+2. 简化 `uburma_umap_close` 函数，直接从 VMA 的 `vm_private_data` 获取私有结构体，避免遍历链表查找带来的潜在竞态，并直接从链表中删除。
+3. 修正 `uburma_umap_fault` 函数的错误处理路径，确保在分配页面失败时正确返回 `VM_FAULT_SIGBUS`，并保证加锁顺序的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9b424fbe748154d8ceb161ce126d5d7331c82797

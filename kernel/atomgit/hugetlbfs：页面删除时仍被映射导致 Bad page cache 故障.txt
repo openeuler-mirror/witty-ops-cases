@@ -1,0 +1,36 @@
+#标题
+hugetlbfs：页面删除时仍被映射导致 Bad page cache 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在进行 hugetlbfs 文件打洞操作与内存迁移并发时，触发了内核 BUG，导致进程崩溃。具体表现为 `filemap_unaccount_folio` 中检测到页面在删除时仍然被映射，打印 "Bad page cache" 错误信息并打印内存转储信息。
+
+#主要错误日志
+BUG: Bad page cache in process hugetlb  pfn:156c00
+page: refcount:515 mapcount:0 mapping:0000000099fef6e1 index:0x0 pfn:0x156c00
+head: order:9 mapcount:1 entire_mapcount:1 nr_pages_mapped:0 pincount:0
+aops:hugetlbfs_aops ino:dcc dentry name(?):"my_hugepage_file"
+flags: 0x17ffffc00000c1(locked|waiters|head|node=0|zone=2|lastcpupid=0x1fffff)
+page_type: f4(hugetlb)
+page dumped because: still mapped when deleted
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x4f/0x70
+ filemap_unaccount_folio+0xc4/0x1c0
+ __filemap_remove_folio+0x38/0x1c0
+ filemap_remove_folio+0x41/0xd0
+ remove_inode_hugepages+0x142/0x250
+ hugetlbfs_fallocate+0x471/0x5a0
+ vfs_fallocate+0x149/0x380
+
+#问题根因
+迁移操作可能与 fallocate 打洞操作并发执行。`remove_inode_single_folio` 函数本应在删除页面前取消映射，但该函数调用时未持有 folio 锁。
+当页面正在迁移且映射的 PTE 已转换为迁移条目时，`folio_mapped()` 返回 false，导致代码跳过取消映射的操作。由于 `remove_inode_single_folio` 持有额外的引用计数，迁移操作失败并尝试将迁移条目恢复为正常的 PTE，导致页面再次处于映射状态。最终，内核在 `filemap_unaccount_folio` 中检测到页面在删除时仍被映射，从而触发 BUG。
+
+#解决方案
+在 `remove_inode_single_folio` 函数中，将 `folio_lock` 的获取操作提前到检查 `folio_mapped` 之前。通过持有 folio 锁，确保在检查页面映射状态和执行取消映射操作时，不会与并发迁移操作发生竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1d2565aa2945e261157313bee7ebdfd2b8c9d164

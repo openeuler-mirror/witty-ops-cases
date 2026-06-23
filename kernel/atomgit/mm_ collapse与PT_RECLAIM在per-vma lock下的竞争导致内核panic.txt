@@ -1,0 +1,29 @@
+#标题
+mm: collapse与PT_RECLAIM在per-vma lock下的竞争导致内核panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了KASAN的内核环境中，当进程执行`exit_mmap`进行内存释放时，触发通用保护故障。这是由于内存大页合并操作与`MADV_DONTNEED`引发的页表回收操作之间存在竞争条件，导致访问了非法内存地址，进而引发内核空指针引用。
+
+#主要错误日志
+[   38.151897] Oops: general protection fault, probably for non-canonical address 0xdffffc0000000003: 0000 [#1] SMP KASI
+ [   38.153519] KASAN: null-ptr-deref in range [0x0000000000000018-0x000000000000001f]
+ [   38.154605] CPU: 0 UID: 0 PID: 721 Comm: repro Not tainted 6.16.0-next-20250801-next-2025080 #1 PREEMPT(voluntary)
+ ...
+ [   38.170581]  lock_acquire+0xea/0x310
+ ...
+ [   38.174987]  __pte_offset_map_lock+0x1a2/0x3c0
+ [   38.177183]  unmap_page_range+0xb60/0x43e0
+ [   38.179830]  unmap_vmas+0x1fa/0x460
+ [   38.181877]  exit_mmap+0x1a2/0xb40
+
+#问题根因
+在per-VMA锁机制引入后，`madvise_dontneed`可以在仅持有per-VMA读锁的情况下执行页表回收（PT_RECLAIM）。然而，`collapse_huge_page`函数中的`check_pmd_still_valid()`检查之前仅由mmap写锁保护，未获取VMA写锁。这导致collapse操作与并发的PT_RECLAIM操作之间出现竞争窗口：collapse检查PMD有效性后，PT_RECLAIM可能并发修改页表，导致collapse后续操作访问已释放或无效的内存结构，引发panic。
+
+#解决方案
+在`collapse_huge_page`函数中，将`vma_start_write(vma)`调用提前至`check_pmd_still_valid()`之前。这确保了对PMD有效性的检查受到per-VMA锁的适当保护，阻止了并发PT_RECLAIM操作在检查期间修改VMA，从而消除了竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e1289efe4021f3ae4dccfc8673d25263271a9536

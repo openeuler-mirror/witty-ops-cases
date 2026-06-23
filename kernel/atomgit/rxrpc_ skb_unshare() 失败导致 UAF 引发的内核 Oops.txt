@@ -1,0 +1,24 @@
+#标题
+rxrpc: skb_unshare() 失败导致 UAF 引发的内核 Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 rxrpc_input_packet() 函数中，若 skb_unshare() 因内存分配失败（ENOMEM）而返回 NULL，会导致父函数 rxrpc_io_thread() 中的 skb 指针被置空。随后调用 trace_rxrpc_rx_done() 时访问该空指针，引发内核 Oops（空指针引用或段错误）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 rxrpc_input_packet() 处理数据包时，如果数据包需要解密（securityIndex != 0），代码会调用 skb_unshare() 进行去共享操作。当 skb_unshare() 因内存不足失败时，它返回 NULL 并释放原始 skb。原代码逻辑错误地将此 NULL 值写回父函数的 skb 指针（*_skb = NULL），导致父函数在后续执行 trace_rxrpc_rx_done(skb->mark, skb->priority) 时访问已释放或为 NULL 的 skb 地址，从而触发 UAF（Use-After-Free）或空指针崩溃。
+
+#解决方案
+将 skb_unshare()（重构为 skb_copy()）的操作位置从 rxrpc_input_packet() 移动到 rxrpc_input_call_event() 中调用 rxrpc_input_call_packet() 之前。
+1. 移除了 rxrpc_input_packet() 中的 unshare 逻辑，避免在数据包处理早期因内存分配失败导致 skb 指针被置空。
+2. 在 rxrpc_input_call_event() 中，仅在确实需要处理数据包且 skb_cloned(skb) 为真时进行 skb_copy()。
+3. 如果复制失败，直接丢弃该数据包（see unshare_nomem），而不是导致上层调用崩溃。
+4. 相应更新了函数签名，rxrpc_input_packet() 不再需要双重指针，并清理了相关的 tracepoint 和辅助函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc579fa685a9ad59dc20b13d749879f028a7e013

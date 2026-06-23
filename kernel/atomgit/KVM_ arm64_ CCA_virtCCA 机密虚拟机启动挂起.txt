@@ -1,0 +1,20 @@
+#标题
+KVM: arm64: CCA/virtCCA 机密虚拟机启动挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CCA 或 virtCCA 场景下，机密虚拟机（Confidential VM）在启动过程中发生挂起（hang），无法正常进入系统。虚拟机无法接收定时器中断，导致启动流程无法继续。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `cvm_timer_irq_can_fire()` 中，代码检查了 `ARCH_TIMER_CTRL_IT_MASK` 状态位。当定时器设置了 IMASK 标志位时，该检查会阻止定时器中断注入虚拟机。然而，在 CCA/virtCCA 场景下，定时器中断应该允许注入，因为中断屏蔽是由 RMM/TMM 负责处理的，原有的 IMASK 检查逻辑导致虚拟机无法收到中断从而挂起。
+
+#解决方案
+修改 `arch/arm64/kvm/arch_timer.c` 文件中的 `cvm_timer_irq_can_fire` 函数，移除对 `ARCH_TIMER_CTRL_IT_MASK` 位的检查。修改后的逻辑仅检查 `ARCH_TIMER_CTRL_ENABLE` 位，允许在 IMASK 置位的情况下继续注入定时器中断，从而修复虚拟机启动挂起问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e2cdf369f8f2ace37bcdb47c48822dfc05be6afa

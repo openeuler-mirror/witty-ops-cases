@@ -1,0 +1,35 @@
+#标题
+HID: appleir: 修复 raw event 处理中的潜在空指针解引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 Syzkaller 模拟发送畸形 USB 报告时，内核触发 NULL 指针解引用错误（KASAN 报告），导致内核崩溃。具体表现为 `appleir_raw_event` 函数在没有关联 input 设备的情况下被调用，进而访问空指针。
+
+#主要错误日志
+BUG: KASAN: null-ptr-deref in instrument_atomic_read include/linux/instrumented.h:68 [inline]
+BUG: KASAN: null-ptr-deref in _test_bit include/asm-generic/bitops/instrumented-non-atomic.h:141 [inline]
+BUG: KASAN: null-ptr-deref in is_event_supported drivers/input/input.c:67 [inline]
+BUG: KASAN: null-ptr-deref in input_event+0x42/0xa0 drivers/input/input.c:395
+Read of size 8 at addr 0000000000000028 by task syz-executor199/2949
+Call Trace:
+ <IRQ>
+ input_event+0x42/0xa0 drivers/input/input.c:395
+ input_report_key include/linux/input.h:439 [inline]
+ key_down drivers/hid/hid-appleir.c:159 [inline]
+ appleir_raw_event+0x3e5/0x5e0 drivers/hid/hid-appleir.c:232
+ __hid_input_report.constprop.0+0x312/0x440 drivers/hid/hid-core.c:2111
+ ...
+
+#问题根因
+由于模拟设备发送了畸形的报告项，导致报告列表中添加了没有字段的报告。
+1. 这种情况下 `appleir_input_configured()` 未被调用，`hidinput_connect()` 执行失败，导致 `HID_CLAIMED_INPUT` 标志位未被设置。
+2. 然而，`appleir_probe()` 并未因此失败，驱动程序依然加载。
+3. 当事件回调函数 `appleir_raw_event()` 被调用时，由于没有关联的 `input_dev`，访问 `input_report_key` 时触发了空指针解引用。
+
+#解决方案
+在 `appleir_raw_event` 函数中增加对 `HID_CLAIMED_INPUT` 标志位的检查。如果驱动未成功声明任何 `input_dev`，则直接退出事件处理流程，避免后续操作引发空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2bd4103ae1772ed3e3711d8edf1dcb103a1402b6

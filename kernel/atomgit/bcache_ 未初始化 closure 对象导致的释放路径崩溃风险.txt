@@ -1,0 +1,20 @@
+#标题
+bcache: 未初始化 closure 对象导致的释放路径崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设备停止流程中，若在调用 bch_write_bdev_super() 之前触发停止操作，此时 sb_write 对象尚未初始化。在此极端场景下执行设备释放流程时，调用 closure_sync(&dc->sb_write) 会操作未初始化的 closure 对象，可能导致内核崩溃或未定义行为。
+
+#主要错误日志
+未知
+
+#问题根因
+前一个补丁为了修复 use-after-free 问题引入了 closure_sync(&dc->sb_write) 来确保 I/O 完成。然而，在极端情况下（设备在调用 bch_write_bdev_super() 之前停止），struct closure sb_write 尚未执行初始化，此时直接调用 closure_sync 操作该未初始化对象引发了问题。
+
+#解决方案
+将原本的 closure_sync(&dc->sb_write) 替换为 down(&dc->sb_write_mutex) 和 up(&dc->sb_write_mutex) 操作。由于 sb_write_mutex 互斥锁可以确保 sb_bio 操作已完成，且互斥锁本身是静态初始化或随结构体初始化的，因此可以安全地用于同步，避免了访问未初始化 closure 对象的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c33ef5bf184cc50898af5a2df64153b9c987a9af

@@ -1,0 +1,20 @@
+#标题
+vfio/mlx5: 修复迁移页面添加失败时的内存泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mlx5vf_add_migration_pages 函数执行过程中，若批量分配页面后的某个步骤失败（如 sg_append_page 调用失败），函数直接跳转到错误处理出口并返回。此时，刚刚分配成功的页面未被释放，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mlx5vf_add_migration_pages` 函数的错误处理路径中，当 `sg_append_page` 失败时，代码直接跳转至 `err` 标签释放 `page_list` 指针本身，但遗漏了释放该批次中已经成功分配的 `page_list` 数组中存储的页面，从而导致内存泄漏。
+
+#解决方案
+在错误处理路径中增加 `err_append` 标签，当 `sg_append_page` 失败时，先遍历已分配的页面列表（`page_list`），逐一调用 `__free_page` 释放内存，随后再跳转至 `err` 标签释放 `page_list` 指针并返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/174bf31d6278bd5bee3e938f2cc236599bef85c9

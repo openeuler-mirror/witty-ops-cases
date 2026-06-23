@@ -1,0 +1,24 @@
+#标题
+ipourma设备执行ifconfig up/down时触发内核panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对ipourma网络设备执行`ifconfig up`或`ifconfig down`操作时，内核发生panic崩溃。此外，在设备未处于ADMIN_UP状态时，数据发送路径可能存在异常访问风险。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **代码逻辑缺陷与编译兼容性**：在`ipourma_restart_rings_by_eid`函数中，for循环使用了C99标准的变量声明方式（`for (int j = 0; ...)`），这在部分内核编译环境下可能导致问题。同时，错误处理标签`register_tx_seg_err`的跳转逻辑不正确，当`ubcore_register_seg`注册失败时，错误跳转未正确指向资源释放逻辑，且循环变量作用域处理不当导致回滚清理逻辑无法正确执行，引发kernel panic。
+2. **状态检查缺失**：在发送路径函数`ipourma_post_send`中，未检查设备是否处于`IPOURMA_DEV_ADMIN_UP`状态，导致设备关闭后仍可能触发发送流程，引发异常。
+
+#解决方案
+1. **修正变量作用域**：将循环变量`j`的定义移至函数开头，确保其在错误处理跳转时仍有效，修正了C99风格声明可能带来的问题。
+2. **修复错误处理逻辑**：将注册失败时的跳转标签从`register_tx_seg_err`修正为`register_rx_seg_err`，并实现了完整的错误回滚逻辑：在`register_rx_seg_err`标签下，通过`while`循环逆序调用`ubcore_unregister_seg`释放已注册的内存段，并将指针置空，防止资源泄漏或访问野指针。
+3. **增加状态保护**：在`ipourma_post_send`函数入口处增加`IPOURMA_DEV_ADMIN_UP`状态检查，若设备未启动则直接返回，避免在设备down状态下进行非法操作。
+4. **代码逻辑优化**：优化`ipourma_fix_features`函数的返回值逻辑，直接返回处理后的features，简化代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d3a8205250298eb2c2590234858afe6642fe3508

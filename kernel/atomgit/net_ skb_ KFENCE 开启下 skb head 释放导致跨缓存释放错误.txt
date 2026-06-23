@@ -1,0 +1,21 @@
+#标题
+net: skb: KFENCE 开启下 skb head 释放导致跨缓存释放错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 KFENCE 的内核环境中，若通过 kzalloc 分配的 skb head 数据大小恰好等于 SKB_SMALL_HEAD_CACHE_SIZE（如 x86_64 下为 704 字节），在释放 skb 时会触发内核 SLUB 分配器的跨缓存释放错误。系统可能会打印 "Wrong slab cache" 警告信息，指示内存释放路径错误，可能导致内核内存破坏或崩溃。
+
+#主要错误日志
+kmem_cache_free(skbuff_small_head): Wrong slab cache. Expected skbuff_small_head but got kmalloc-1k
+
+#问题根因
+SKB_SMALL_HEAD_CACHE_SIZE 被有意设置为非 2 的幂次值（如 704）以避免与通用 kmalloc 缓存大小冲突。内核原逻辑在 skb_kfree_head() 中通过比较 skb_end_offset 与 SKB_SMALL_HEAD_HEADROOM 来决定是使用 kmem_cache_free 还是 kfree。
+然而，当开启 KFENCE 时，kfence_ksize() 返回的是请求分配的精确大小而非 slab 桶大小。如果请求大小恰好等于 SKB_SMALL_HEAD_CACHE_SIZE，计算出的 skb_end_offset 会匹配 SKB_SMALL_HEAD_HEADROOM，导致内核错误地判定该内存来自 skb_small_head_cache，从而将原本属于通用 kmalloc 缓存的对象错误地释放回 skb_small_head_cache，引发跨缓存释放。
+
+#解决方案
+修改 skb_kfree_head() 函数，移除区分缓存类型的判断逻辑，统一使用 kfree(head) 进行释放。这使得释放路径保持通用，避免了因 KFENCE 等特定分配器行为导致的缓存类型误判。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cefc6542529da2b92fe9d05491ed55bb8c3ffcc4

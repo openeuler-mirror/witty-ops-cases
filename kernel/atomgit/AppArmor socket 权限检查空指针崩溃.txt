@@ -1,0 +1,20 @@
+#标题
+AppArmor socket 权限检查空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 socket 创建或销毁过程中，调用 `aa_sock_file_perm` 进行权限检查时，可能触发空指针解引用，导致内核 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+在 socket 建立连接或拆除阶段，传入 `aa_sock_file_perm` 函数的 `sock` 指针或 `sock->sk` 指针可能为 NULL。原代码使用 `AA_BUG` 宏直接断言这两个指针非空，未对空指针情况进行防护，导致在特定生命周期状态下触发空指针解引用错误。虽然 AF_UNIX socket 相关的新版 mediation 已修复部分问题，但该函数作为旧版 AF_UNIX mediation 及其他 socket 的回退路径，仍需处理指针为空的情况。
+
+#解决方案
+移除 `aa_sock_file_perm` 函数中对 `sock` 和 `sock->sk` 的 `AA_BUG` 断言检查。增加显式判断：如果 `sock` 指针为空或 `sock->sk` 指针为空，函数直接返回 0（允许操作），从而避免空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/be94e2d0723e24044d92b65db2cc1a65e85f9da0

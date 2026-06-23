@@ -1,0 +1,21 @@
+#标题
+idxd_cdev_open 函数中 sva 指针未初始化使用导致潜在风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 PASID 支持的情况下，若 `iommu_sva_bind_device()` 调用失败，错误处理路径会跳转到 cleanup 标签执行。此时代码尝试调用 `iommu_sva_unbind_device(sva)`，但该指针从未被成功赋值，处于未初始化状态。这会触发 Smatch 静态分析工具报错，警告使用了未初始化的符号，并可能导致内核访问无效指针或不可预期的行为。
+
+#主要错误日志
+drivers/dma/idxd/cdev.c:321 idxd_cdev_open() error: uninitialized symbol 'sva'.
+
+#问题根因
+变量 `sva` 在声明时未进行初始化。当 PASID 支持启用且 `iommu_sva_bind_device()` 返回错误时，代码跳转到 `failed_get_pasid` 标签进行清理。此时检查 `device_user_pasid_enabled(idxd)` 为真，代码直接调用 `iommu_sva_unbind_device(sva)`，但此时 `sva` 仍是未初始化的无效指针，并非合法的句柄或 NULL。
+
+#解决方案
+1. 在变量声明处将 `sva` 初始化为 `NULL`。
+2. 在调用 `iommu_sva_unbind_device(sva)` 前，增加 `IS_ERR_OR_NULL(sva)` 检查，确保只有在 `sva` 是有效指针时才执行解绑操作，从而避免使用无效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e7295c9c72a903e9668f6f99380add3fb5a79713

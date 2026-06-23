@@ -1,0 +1,32 @@
+#标题
+urma: bonding导入seg/jetty对象时udata交换数据不一致导致路径选择错误或拷贝失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在更新后的bonding拓扑结构下，导入（import）seg或jetty对象时，由于交换缓冲区大小不足及数据结构定义过时，导致bonding链路信息描述不完整。这可能引起导入流程选择错误的物理路径，或者在将udata拷贝回用户空间时发生失败。
+
+#主要错误日志
+- ubagg_log_err("Failed to find linked port\n")
+- ubagg_log_err("Invalid udrv_data out_len: %u.\n", udata->udrv_data->out_len)
+- ubagg_log_err("Failed to copy to user, ret:%d", ret)
+- ubagg_log_err("Invalid local indice: %u\n", local_indice)
+- ubagg_log_err("Invalid peer port: %u\n", link->peer_port)
+- ubagg_log_err("Invalid remote indice: %u\n", remote_indice)
+- ubcore_log_err("Invalid udata out len:%u\n", udata->udrv_data->out_len)
+
+#问题根因
+之前的实现仅返回简单的端口映射，且使用了固定的1800字节交换缓冲区，这对于更新后的bonding拓扑和交换负载已经不足。具体原因为：
+1. 数据结构 `ubagg_import_jetty_udata` 和 `ubagg_import_seg_udata` 使用旧的 `ports` 数组记录链接信息，无法正确描述完整的连通性矩阵。
+2. 交换缓冲区宏定义 `BONDING_UDATA_BUF_LEN` 设置为1800字节，小于新结构所需的1928字节，导致数据被截断。
+3. 缺少对用户空间输出长度的校验，可能导致非法内存访问或拷贝失败。
+
+#解决方案
+1. 修改链路发现逻辑，将简单的端口映射改为导出bonding设备和端口之间的完整连通性矩阵（`connected` 位图），替换原有的 `ports` 数组。
+2. 扩展 `ubagg_jetty_exchange_info` 结构体以描述启用的从设备索引（`enabled_indices`）。
+3. 将 bonding 交换缓冲区大小从 1800 字节扩大到 1928 字节。
+4. 在 `fill_udata` 及相关导入流程中增加校验逻辑，确保用户提供的输出缓冲区长度（`out_len`）足够容纳新定义的结构体大小，防止越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bd48e0c301528d5aa59c24dda68717c1d398390a

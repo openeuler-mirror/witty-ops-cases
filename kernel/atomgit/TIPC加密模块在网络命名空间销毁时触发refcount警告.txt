@@ -1,0 +1,20 @@
+#标题
+TIPC加密模块在网络命名空间销毁时触发refcount警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+syzbot报告了一个refcount警告，该问题发生在TIPC discovery定时器在网络命名空间清理期间触发时。具体表现为：当网络命名空间正在被销毁（refcount=0）时，代码尝试调用get_net()获取该命名空间的引用计数，导致内核打印refcount下溢或使用-after-free相关的警告信息。
+
+#主要错误日志
+refcount warning: fixed: 0x1, count: 0
+
+#问题根因
+在之前的修复提交（commit e27902461713）中，为了解决slab-use-after-free问题，在tipc_aead_encrypt函数中添加了get_net()调用以持有网络命名空间的引用。然而，如果网络命名空间正处于销毁过程中，其引用计数refcount可能已经为0。此时直接调用get_net()尝试增加引用计数是不合法的，从而导致内核抛出refcount警告。
+
+#解决方案
+将get_net()调用替换为maybe_get_net()。maybe_get_net()函数会安全地检查引用计数是否非零，仅在非零时才增加引用。如果检测到命名空间正在销毁（引用计数为0），函数返回false，此时代码提前释放bearer引用并返回-ENODEV错误，避免在不安全的引用计数上操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/86c0d5a32443f21d1a2e9b1110c3aae5bf330432

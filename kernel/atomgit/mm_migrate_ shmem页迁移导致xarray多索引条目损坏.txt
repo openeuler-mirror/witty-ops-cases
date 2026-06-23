@@ -1,0 +1,25 @@
+#标题
+mm/migrate: shmem页迁移导致xarray多索引条目损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 shmem 页面迁移（migration）时，如果该 shmem folio 处于 swap cache 中，会导致 xarray 多索引条目损坏。具体表现为在 `xas_store()` 操作期间，错误的 xarray 条目更新逻辑将兄弟条目转换为普通条目，破坏了 xarray 的一致性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__folio_migrate_mapping()` 函数中，确定需要更新的 xarray 条目数量时，代码使用了 `folio_test_swapbacked()` 进行判断。
+由于 shmem folio 无论是在 page cache 还是在 swap cache 中，`folio_test_swapbacked()` 均返回真，这导致逻辑混淆：
+1. 当 shmem folio 处于 page cache 时，xarray 应只更新 1 个条目。
+2. 当 shmem folio 处于 swap cache 时，xarray 应更新 `nr` 个条目。
+原代码未区分这两种情况，错误地将所有 `folio_test_swapbacked()` 为真的场景都视为需要更新多个条目（或反之逻辑处理不当），导致 xarray 结构损坏。
+
+#解决方案
+修改 `mm/migrate.c` 中的 `__folio_migrate_mapping()` 函数逻辑。将判断 xarray 更新条目数的条件从 `folio_test_swapbacked()` 改为 `folio_test_swapcache()`。
+修复后的逻辑确保仅在 folio 确实处于 swap cache 时才更新 `nr` 个条目，否则只更新 1 个条目，从而正确处理 shmem 在不同缓存状态下的迁移行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58f0cc853f6d7556919973d98d81701a7aabdfc4

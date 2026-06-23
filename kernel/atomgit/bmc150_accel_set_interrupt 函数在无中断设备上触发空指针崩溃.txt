@@ -1,0 +1,27 @@
+#标题
+bmc150_accel_set_interrupt 函数在无中断设备上触发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设备没有配置中断（IRQ）的情况下，驱动程序在 IIO 缓冲区设置操作（如运行时 PM resume 路径或用户态写入 enable 属性）中无条件调用 `bmc150_accel_set_interrupt`，导致内核尝试访问非法地址引发 Oops/Panic，具体表现为无法处理内核 NULL 指针解引用。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address 00000001 when read
+PC is at bmc150_accel_set_interrupt+0x98/0x194
+LR is at __pm_runtime_resume+0x5c/0x64
+Call trace:
+bmc150_accel_set_interrupt from bmc150_accel_buffer_postenable+0x40/0x108
+bmc150_accel_buffer_postenable from __iio_update_buffers+0xbe0/0xcbc
+__iio_update_buffers from enable_store+0x84/0xc8
+enable_store from kernfs_fop_write_iter+0x154/0x1b4
+
+#问题根因
+驱动代码 `bmc150-accel-core.c` 中的 `bmc150_accel_set_interrupt` 函数在执行过程中未检查设备是否具备中断能力。该函数被 `bmc150_accel_buffer_postenable` 等回调函数无条件调用，当设备没有中断（IRQ）时，相关中断信息结构体指针为空或无效，导致访问非法内存地址引发崩溃。
+
+#解决方案
+在 `bmc150_accel_data` 结构体中新增 `irq` 成员变量用于保存中断号，并在探测阶段（probe）成功获取中断时将其赋值。在 `bmc150_accel_set_interrupt` 函数入口处增加判断逻辑：若 `data->irq <= 0`（即设备无有效中断），则直接返回 0，避免后续对中断资源的非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/daaebfcdbb6c8be1abee473f6b72d08c28578355

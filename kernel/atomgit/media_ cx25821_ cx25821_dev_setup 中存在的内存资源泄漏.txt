@@ -1,0 +1,21 @@
+#标题
+media: cx25821: cx25821_dev_setup 中存在的内存资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 cx25821 设备初始化流程（`cx25821_dev_setup`）中，若 `ioremap()` 映射失败，系统虽然会返回错误码并退出，但未能释放此前通过 `cx25821_get_resources()` 申请的内存区域（memory region），导致内存资源泄漏。系统长时间运行或频繁触发该错误路径可能导致可用 I/O 内存资源耗尽。
+
+#主要错误日志
+推断日志格式：
+cx25821: ioremap failed, maybe increasing __VMALLOC_RESERVE in page.h
+
+#问题根因
+在 `cx25821_dev_setup` 函数的错误处理路径中，当 `ioremap()` 失败时（即 `dev->lmmio` 为 NULL），代码直接返回了 `-ENOMEM`，遗漏了调用 `release_mem_region()` 来释放此前已成功申请的内存资源区域，违背了资源获取即初始化（RAII）的释放原则。
+
+#解决方案
+在 `ioremap()` 失败的分支中，在返回错误码之前增加对 `release_mem_region()` 的调用，确保释放 `dev->base_io_addr` 对应的内存资源，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d0abae3f15686c455a53de369cec2807d11d6fdf

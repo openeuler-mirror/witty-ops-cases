@@ -1,0 +1,27 @@
+#标题
+octeontx2-af: NIX SQM/PSE 硬件 Stall 与死锁问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NIX（Network Interface Exchange）硬件处理中，当多个发送队列（SQ）映射到同一个 SMQ 并同时发送数据包时，会出现 SQ 管理器停滞。同时，在 Sticky 模式与非 Sticky 模式传输切换时，PSE（Packet Streaming Engine）可能发生死锁。此外，在特定条件下时钟门控开启时，可能出现 Credit（信用）丢失，导致网络传输无法正常进行。
+
+#主要错误日志
+未知
+
+#问题根因
+该问题源于 Marvell OcteonTx2 硬件设计 Errata：
+1. SQ 管理器的 Sticky 模式（Sticky mode）在多 SQ 共享 SMQ 并发传输时已知会导致停滞。
+2. PSE 硬件在 Sticky 传输向非 Sticky 传输转换的路径上存在死锁缺陷。
+3. 当条件时钟被门控关闭时，硬件逻辑存在 Credit 丢失问题。
+
+#解决方案
+通过修改寄存器 `NIX_AF_SQM_DBG_CTL_STATUS` 配置来规避上述硬件缺陷：
+1. 禁用 SQM Sticky 操作：清除 TM6（bit 15）和 TM11（bit 14），解决多 SQ 并发传输时的 Stall 问题。
+2. 禁用导致 PSE 死锁的路径：清除 TM5（bit 23），防止 Sticky 到非 Sticky 传输转换时的死锁。
+3. 防止 Credit 丢失：设置 TM9（bit 21）保持控制流时钟开启。
+此方案通过放弃 Sticky 优化来确保系统在负载下无 Credit 损失且维持向前推进。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c2802e720b22b3616b75ee781657d3519c8a16fa

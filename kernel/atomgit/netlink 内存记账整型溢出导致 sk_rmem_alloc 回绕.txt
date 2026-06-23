@@ -1,0 +1,32 @@
+#标题
+netlink 内存记账整型溢出导致 sk_rmem_alloc 回绕
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户通过 SO_RCVBUFFORCE 将接收缓冲区设置为 INT_MAX 时，netlink 套接字的 `sk->sk_rmem_alloc` 计数器会发生多次整型溢出（回绕）。
+这导致系统无法正确执行内存限制检查，单个套接字可以无限制地消耗内存（skb），直到触发系统 OOM（Out Of Memory）。
+通过 `ss -f netlink` 命令观察，Recv-Q 列显示为负数（如 -1668710080），表明发生了无符号整型下溢。
+
+#主要错误日志
+- `ss -f netlink` 命令输出显示 Recv-Q 为负值：
+  ```
+  Recv-Q      Send-Q Local Address:Port                Peer Address:Port
+  -1668710080 0               rtnl:nl_wraparound/293               *
+  ```
+
+#问题根因
+Netlink 在处理接收缓冲区判断时，使用了 `atomic_read(&sk->sk_rmem_alloc) > sk->sk_rcvbuf` 的比较逻辑。
+当 `sk->sk_rcvbuf` 被设置为 `INT_MAX` 时，由于右操作数被视为有符号整型，该条件判断恒为假（因为 `atomic_read` 返回值通常不会超过 INT_MAX）。
+这导致内存检查机制失效，`sk->sk_rmem_alloc` 在持续增加时发生整型溢出（wraparound），进而导致系统无法限制该套接字的内存使用，引发内存耗尽。该问题与此前 UDP 协议的修复（commit 5a465a0da13e）属于同一类模式。
+
+#解决方案
+修复 Netlink 协议族中的内存记账逻辑：
+1. 移除 `netlink_skb_set_owner_r` 函数中提前执行的 `atomic_add` 操作，改为先检查后提交。
+2. 使用 `atomic_add_return()` 原子操作增加内存占用，并获取增加后的值。
+3. 在比较逻辑中，将 `sk->sk_rmem_alloc` 与 `sk->sk_rcvbuf` 强制作为 `unsigned int` 类型进行比较，避免有符号整型导致的逻辑错误。
+4. 在 `netlink_attachskb`、`netlink_broadcast_deliver` 和 `netlink_dump` 等关键路径中调整判断顺序，确保在确认未超限后才真正提交内存占用，否则回滚计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e02b5b599b2b7e50a7735d830959f58efb5a2bf2

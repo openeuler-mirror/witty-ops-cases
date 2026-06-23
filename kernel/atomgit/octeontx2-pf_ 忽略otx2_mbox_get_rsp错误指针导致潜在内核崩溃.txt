@@ -1,0 +1,20 @@
+#标题
+octeontx2-pf: 忽略otx2_mbox_get_rsp错误指针导致潜在内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 octeontx2 网卡驱动进行 DMAC（目的 MAC 地址）过滤器的添加或更新操作时，若底层 mbox 通信失败，函数 `otx2_mbox_get_rsp` 将返回错误指针（ERR_PTR）。由于驱动代码未检查该返回值是否为错误指针即直接解引用，会导致内核发生 Oops 或崩溃（invalid memory access）。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在调用 `otx2_mbox_get_rsp` 获取响应消息时，缺乏对返回指针的有效性检查。当 mbox 机制返回错误指针时，代码直接将其作为有效结构体指针进行解引用（如访问 `rsp->index`），从而触发内核异常。
+
+#解决方案
+在 `otx2_dmac_flt.c` 文件的 `otx2_dmacflt_do_add` 和 `otx2_dmacflt_update` 函数中增加返回值检查逻辑。使用 `IS_ERR(rsp)` 宏判断返回指针是否为错误指针，若是则进行相应的错误处理（如解锁互斥锁、返回错误码），避免非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/410d1bf8879b76d407ea20d8c120f119093c5e62

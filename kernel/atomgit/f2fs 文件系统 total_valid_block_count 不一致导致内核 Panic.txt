@@ -1,0 +1,29 @@
+#标题
+f2fs 文件系统 total_valid_block_count 不一致导致内核 Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用模糊测试（fuzzing）制造的异常镜像进行测试时，触发内核 BUG（Kernel Panic）。具体场景为：镜像中的 `sbi->total_valid_block_count` 计数值与 inode 索引的映射块数量不一致，在执行截断操作（truncate）时触发 `f2fs_bug_on` 检查失败，导致系统崩溃。
+
+#主要错误日志
+------------[ cut here ]------------
+kernel BUG at fs/f2fs/f2fs.h:2521!
+RIP: 0010:dec_valid_block_count+0x3b2/0x3c0 fs/f2fs/f2fs.h:2521
+Call Trace:
+ f2fs_truncate_data_blocks_range+0xc8c/0x11a0 fs/f2fs/file.c:695
+ truncate_dnode+0x417/0x740 fs/f2fs/node.c:973
+ truncate_nodes+0x3ec/0xf50 fs/f2fs/node.c:1014
+ f2fs_truncate_inode_blocks+0x8e3/0x1370 fs/f2fs/node.c:1197
+ f2fs_do_truncate_blocks+0x840/0x12b0 fs/f2fs/file.c:810
+ ...
+
+#问题根因
+在模糊测试生成的损坏镜像中，`sbi->total_valid_block_count` 与 inode 索引的映射块数量不一致。当系统调用 `dec_valid_block_count` 减少有效块计数时，因 `sbi->total_valid_block_count` 小于待减去的 `count` 值，触发 `f2fs_bug_on` 导致内核 Panic。这是对文件系统元数据不一致的过度反应，不应直接触发系统崩溃。
+
+#解决方案
+移除 `dec_valid_block_count` 函数中的 `f2fs_bug_on` 硬性检查。改为在检测到 `total_valid_block_count` 小于 `count` 时，打印警告日志并将 `total_valid_block_count` 置零，同时设置 `SBI_NEED_FSCK` 标志位提示需要进行文件系统检查，从而避免系统 Panic，增强系统的健壮性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9ca18d8421fb02ff79fe2b25eaf0a3e392f2e67e

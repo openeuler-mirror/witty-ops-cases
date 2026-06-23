@@ -1,0 +1,26 @@
+#标题
+dmaengine: xilinx: xdma: 修复 regmap 初始化错误检查逻辑
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Xilinx XDMA 驱动加载过程中，若 `devm_regmap_init_mmio` 初始化失败，驱动无法正确捕获并处理该错误。现象表现为：
+1. 驱动 probe 函数未能按预期在 regmap 初始化失败时退出，可能导致后续代码访问无效指针引发异常。
+2. 错误日志打印异常，输出了未初始化或无关的变量值 `ret`，而非实际的错误原因，干扰故障定位。
+
+#主要错误日志
+xdma_err(xdev, "config regmap failed: %pe", xdev->rmap);
+（注：修复前日志格式错误，打印内容为 "config regmap failed: %d" 配合无效变量 ret，无法反映真实错误；修复后使用 %pe 格式化参数正确打印错误指针信息。）
+
+#问题根因
+`devm_regmap_init_mmio` 函数在执行失败时返回的是 `ERR_PTR()` 指针（错误指针），而不是 `NULL`。
+驱动代码中的错误检查逻辑 `if (!xdev->rmap)` 仅检查了指针是否为空，无法捕获 `ERR_PTR()` 类型的错误，导致错误被遗漏。同时，错误日志中使用了未经正确赋值的局部变量 `ret` 来打印错误码，导致日志信息无意义。
+
+#解决方案
+修改 `drivers/dma/xilinx/xdma.c` 文件中的错误检查逻辑与日志打印：
+1. 将 `if (!xdev->rmap)` 修改为 `if (IS_ERR(xdev->rmap))`，以正确匹配 `devm_regmap_init_mmio` 的错误返回类型。
+2. 更新错误日志打印格式，将 `ret` 变量替换为 `xdev->rmap`，并将格式化占位符从 `%d` 改为 `%pe`，从而在日志中直接打印出具体的错误指针信息，便于定位问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/df8e1f1e86a487aab0f1b4d899454db4d3a6bcec

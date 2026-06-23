@@ -1,0 +1,31 @@
+#标题
+spufs: gang目录生命周期管理错误导致内存泄漏与引用计数失衡
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 内存泄漏：创建 gang 目录后，若在 gang 目录关闭前创建了属于该 gang 的 context，且 context 生命周期超过了 gang 目录的关闭时间，gang 目录无法被正确移除，导致内存泄漏。
+2. 引用计数失衡：gang 创建失败时，错误地调用 `simple_rmdir()` 进行清理，导致 `dput()` 调用不平衡。
+3. 链接计数泄漏：gang 创建时增加了根目录的链接计数，但在 gang 销毁时未相应减少，导致根目录链接计数泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+该问题由 commit 877907d37da9 ("[POWERPC] spufs: Fix gang destroy leaks") 错误修复引入。原修复旨在解决 gang 目录的泄漏问题，但实现方式存在缺陷：
+1. 不再固定 gang 目录的 dentry，且移除了关闭时的 rmdir 逻辑。
+2. 在 gang 创建失败的清理路径上，错误地调用了 `simple_rmdir()`，这导致了 `dput()` 计数不平衡。
+3. 在 gang 成功创建后销毁时，未回滚创建时对根目录链接计数的增加，导致根目录链接计数泄漏。
+
+#解决方案
+1. 引入引用计数机制：在 `spu_gang` 结构体中增加 `alive` 计数器，由 gang 目录的 inode 锁 (`->i_rwsem`) 保护。
+2. 生命周期管理：
+   - gang 创建时将 `alive` 初始化为 1。
+   - gang 目录关闭 (`spufs_gang_close`) 和 context 目录关闭 (`spufs_dir_close`) 时减少 `alive` 计数。
+   - 创建 context 时增加 `alive` 计数（前提是 `alive` 不为 0）。
+3. 自动回收：当 `alive` 计数减至 0 时，调用 `simple_recursive_removal()` 移除 gang 目录。
+4. 修复清理路径：gang 创建失败时，不再调用 `simple_rmdir()`，而是调用新增的 `unuse_gang()` 处理计数与清理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6dde9e97e90a10f510a551ee80924d6bce6e9877

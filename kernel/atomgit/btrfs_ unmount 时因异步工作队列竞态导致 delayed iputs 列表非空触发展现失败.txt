@@ -1,0 +1,21 @@
+#标题
+btrfs: unmount 时因异步工作队列竞态导致 delayed iputs 列表非空触发展现失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 unmount 操作时，内核触发断言失败，导致系统崩溃或告警。该问题在特定 IO 错误路径下容易被触发，例如运行 generic/648 测试用例时。具体表现是在 `close_ctree` 函数中检查 `delayed_iputs` 列表为空时失败。
+
+#主要错误日志
+[断言失败日志推断]
+ASSERT(list_empty(&fs_info->delayed_iputs));
+
+#问题根因
+这是一个竞态条件问题。在文件系统卸载过程中（`close_ctree`），代码在清理 `delayed_iputs` 列表之前未刷新 `fs_info->workers` 工作队列。如果该工作队列中存在正在处理的异步写入任务（由 `btrfs_wq_submit_bio` 提交），且该任务遇到 IO 错误，其回调函数 `run_one_async_done` 会调用 `btrfs_bio_end_io` 并最终通过 `btrfs_put_ordered_extent` 向 `delayed_iputs` 列表中添加新的 iput 条目。这导致在主线程认为已清理完毕并执行断言检查时，列表实际上非空，从而触发断言失败。
+
+#解决方案
+在 `close_ctree` 函数中，在运行 `delayed_iputs` 之前，显式刷新 `fs_info->workers` 工作队列。这确保了所有挂起的异步工作项（特别是可能产生 iput 的 IO 错误处理路径）都已完成，从而避免在卸载后期出现非空的 delayed iputs 列表。补丁通过调用 `btrfs_flush_workqueue(fs_info->workers)` 实现了该修复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/470cdaa481298bc487e3d733ead37bbc3e08c6ba

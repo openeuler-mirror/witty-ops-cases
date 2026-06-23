@@ -1,0 +1,25 @@
+#标题
+amd-xgbe: 禁用自协商模式下 RX adaptation 过程中导致 CRC 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 10GBASE-KR 模式下，当禁用自协商（Auto-Negotiation disabled）并启用 RX adaptation 功能时，如果在 RX adaptation 过程中驱动程序继续进行数据包的收发，会导致 CRC 错误。这是因为在链路训练或适配期间，硬件状态不稳定，此时传输或接收的数据帧会被损坏。
+
+#主要错误日志
+- `netif_dbg(pdata, link, pdata->netdev, "stopping data path for RX adaptation\n");`
+- `netif_dbg(pdata, link, pdata->netdev, "restarting data path after RX adaptation\n");`
+
+#问题根因
+在 10GBASE-KR 模式且关闭自协商的情况下，当链路断开并需要重新触发 RX adaptation 时，驱动程序未能及时停止数据通路（TX/RX）。导致在 RX adaptation 进行的过程中，数据包仍在传输和接收，此时硬件正处于适配调整阶段，导致接收到的帧出现 CRC 错误。
+
+#解决方案
+在 RX adaptation 期间通过停止数据通路来防止数据包损坏。具体措施如下：
+1. 引入 `data_path_stopped` 标志位用于追踪数据通路状态。
+2. 当链路断开且需要重新触发 RX adaptation 时，立即调用 `xgbe_phy_stop_data_path` 停止 TX/RX，防止在此期间发送或接收损坏的帧。
+3. 仅在 RX adaptation 完成且链路确认建立后，才调用 `xgbe_phy_start_data_path` 重新启用 TX/RX。
+4. 在 `xgbe_start` 函数中同步 `data_path_stopped` 标志位为 `false`，确保设备重启后状态机正确，避免状态陈旧。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/12e3f46b543c9d0aa623ad440d55aa6aa84e9a9e

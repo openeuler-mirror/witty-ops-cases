@@ -1,0 +1,32 @@
+#标题
+fs/proc/kcore.c 中迭代器变量嵌套复用导致的潜在引用错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+静态分析工具（Coccinelle）检测到 `fs/proc/kcore.c` 中存在多处 ERROR 级别的代码缺陷。该问题表现为在嵌套循环结构中，内层循环错误地复用了外层循环已定义的迭代器指针变量 `iter`，导致对索引变量的无效引用，可能引发逻辑错误或不可预期的行为。
+
+#主要错误日志
+Coccinelle 静态检查报错：
+./fs/proc/kcore.c:515:26-30: ERROR: invalid reference to the index variable of the iterator on line 499
+./fs/proc/kcore.c:534:23-27: ERROR: invalid reference to the index variable of the iterator on line 499
+./fs/proc/kcore.c:550:40-44: ERROR: invalid reference to the index variable of the iterator on line 499
+./fs/proc/kcore.c:568:27-31: ERROR: invalid reference to the index variable of the iterator on line 499
+./fs/proc/kcore.c:581:28-32: ERROR: invalid reference to the index variable of the iterator on line 499
+./fs/proc/kcore.c:599:27-31: ERROR: invalid reference to the index variable of the iterator on line 499
+./fs/proc/kcore.c:607:38-42: ERROR: invalid reference to the index variable of the iterator on line 499
+./fs/proc/kcore.c:614:26-30: ERROR: invalid reference to the index variable of the iterator on line 499
+
+#问题根因
+在 `read_kcore_iter` 函数中，代码在 499 行定义了名为 `iter` 的迭代器指针变量用于外层循环。而在后续的逻辑分支中（如 515 行等处），内层代码块再次声明并使用了同名变量 `iter`（原代码意图可能是为了省事直接复用），造成了变量作用域混淆或变量定义被遮蔽。这种嵌套复用导致 Coccinelle 认为对迭代器索引变量的引用无效，属于不规范的编码方式，可能隐藏逻辑风险。
+
+#解决方案
+修改 `fs/proc/kcore.c` 文件中的变量命名，将内层循环中复用的迭代器变量名 `iter` 重命名为 `pos`。
+具体变更包括：
+1. 将内层 `list_for_each_entry` 循环中的迭代器变量声明从 `struct kcore_list *iter` 改为 `struct kcore_list *pos`。
+2. 将循环体内对 `iter->addr` 和 `iter->size` 的访问相应修改为 `pos->addr` 和 `pos->size`。
+此举消除了变量遮蔽问题，修复了静态分析工具报告的错误，且不改变原有代码逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3e2809f122bf8ff353fe3c2c2d8e34023450885

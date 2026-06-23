@@ -1,0 +1,20 @@
+#标题
+b53 DSA交换驱动bridge leave时VLAN ID处理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当网络设备从网桥退出时，驱动程序错误地修改了VLAN 0的表项，而不是修改默认PVID对应的VLAN表项。这导致默认PVID对应的VLAN配置未被正确清理或更新，影响后续该VLAN ID的网络通信功能。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `b53_br_leave` 函数中，代码原本固定获取 `dev->vlans[0]` 进行操作。然而，未标记的默认VLAN实际上是添加到默认PVID（Port VLAN ID）对应的VLAN表中，该PVID可能不是0（例如可能为1）。因此在网桥退出流程中，应该操作的是默认PVID对应的VLAN表项，而不是固定的VLAN 0表项。
+
+#解决方案
+修改 `drivers/net/dsa/b53/b53_common.c` 中的 `b53_br_leave` 函数。将 VLAN 指针 `vl` 的获取逻辑从固定指向 `dev->vlans[0]` 修改为动态获取。先调用 `b53_default_pvid(dev)` 获取正确的默认PVID值，然后使用该值作为索引获取对应的 VLAN 表项 `dev->vlans[pvid]`，确保操作正确的 VLAN ID。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ccc08e958a618b46800c43026edc180e08425ffc

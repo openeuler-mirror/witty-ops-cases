@@ -1,0 +1,29 @@
+#标题
+serial: imx: 控制台模式下 RXTL 设置导致字符丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i.MX6UL EVK 开发板上，当 UART 用作控制台时出现数据丢失问题。具体复现步骤如下：
+1. 在开发板上打开 vi 编辑器。
+2. 粘贴一个文本文件（约 150 个字符）。
+3. 保存文件并重复此过程。
+4. 对比保存文件的 sha256sum 校验和。
+结果发现校验和不匹配，文件中存在字符缺失或整行丢失的现象。
+
+#主要错误日志
+未知
+
+#问题根因
+ Commit 7a637784d517 ("serial: imx: reduce RX interrupt frequency") 引入了回归问题。该补丁将接收触发水平（RXTL）统一设置为 8 个字符，以减少 RX 中断频率。然而，当 UART 用作控制台时，较高的 RXTL 值会导致接收数据无法及时触发中断进行处理，从而导致数据丢失或字符缺漏。
+
+#解决方案
+修改驱动程序逻辑，根据 UART 是否作为控制台来区分设置 RXTL 值：
+1. 在 `imx_port` 结构体中新增 `rxtl` 成员用于保存当前的接收触发水平。
+2. 定义 `RXTL_CONSOLE_DEFAULT` 为 1，确保控制台模式下的及时响应；普通模式维持 `RXTL_DEFAULT` 为 8。
+3. 在 `imx_uart_startup` 函数中，通过 `uart_console` 判断当前端口属性：若是控制台则将 `sport->rxtl` 设为 1，否则设为 8。
+4. 将代码中硬编码使用 `RXTL_DEFAULT` 的地方（如 `imx_uart_disable_dma`、`imx_uart_poll_init`、`imx_uart_rs485_config` 及 `imx_uart_console_setup` 等）统一替换为使用 `sport->rxtl`，以确保不同模式下配置的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9f6b0dde9937ddca989d37b178a41f91bb4059b1

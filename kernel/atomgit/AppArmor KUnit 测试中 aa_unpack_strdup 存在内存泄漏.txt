@@ -1,0 +1,33 @@
+#标题
+AppArmor KUnit 测试中 aa_unpack_strdup 存在内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 AppArmor 的 KUnit 测试（特别是 `policy_unpack_test_unpack_strdup_with_null_name` 和 `policy_unpack_test_unpack_strdup_with_name` 用例）时，触发内存泄漏检测机制（kmemleak）。系统报告存在未引用的内存对象，导致内存资源泄漏。
+
+#主要错误日志
+unreferenced object 0xffffff80c6af8a50 (size 8):
+  comm "kunit_try_catch", pid 225, jiffies 4294894407
+  hex dump (first 8 bytes):
+    74 65 73 74 69 6e 67 00                          testing.
+  backtrace (crc 5eab668b):
+    [<0000000001e3714d>] kmemleak_alloc+0x34/0x40
+    [<000000006e6c7776>] __kmalloc_node_track_caller_noprof+0x300/0x3e0
+    [<000000006870467c>] kmemdup_noprof+0x34/0x60
+    [<000000001176bb03>] aa_unpack_strdup+0xd0/0x18c
+    [<000000008ecde918>] policy_unpack_test_unpack_strdup_with_null_name+0xf8/0x3ec
+    [<0000000032ef8f77>] kunit_try_run_case+0x13c/0x3ac
+    [<00000000f3edea23>] kunit_generic_run_threadfn_adapter+0x80/0xec
+    [<00000000adf936cf>] kthread+0x2e8/0x374
+    [<0000000041bb1628>] ret_from_fork+0x10/0x20
+
+#问题根因
+在 `aa_unpack_strdup()` 函数中通过 `kmemdup()` 分配的字符串内存，在相关的 KUnit 测试用例执行完毕后未被释放。测试函数缺少对应的 `kfree()` 调用，导致内存泄漏。
+
+#解决方案
+在受影响的测试函数（`policy_unpack_test_unpack_strdup_with_null_name`、`policy_unpack_test_unpack_strdup_with_name` 以及 `policy_unpack_test_unpack_strdup_out_of_bounds`）结束前添加 `kfree(string)`，释放由 `aa_unpack_strdup()` 分配的内存资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f41d2ead067cf35bade0f807f500febc5a5366b2

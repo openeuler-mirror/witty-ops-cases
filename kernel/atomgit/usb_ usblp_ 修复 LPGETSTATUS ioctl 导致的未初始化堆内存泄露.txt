@@ -1,0 +1,20 @@
+#标题
+usb: usblp: 修复 LPGETSTATUS ioctl 导致的未初始化堆内存泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+通过 LPGETSTATUS ioctl 获取打印机状态时，如果恶意打印机响应数据长度为零，驱动程序会将未初始化的堆内存泄露给用户空间。攻击者可利用此漏洞读取内核堆中的敏感信息。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 probe 阶段使用 kmalloc 分配了 statusbuf，但未进行初始化。在处理 LPGETSTATUS ioctl 时，函数 usblp_ctrl_msg() 会掩盖 usb_control_msg() 返回的实际传输字节数，如果打印机恶意响应零字节，驱动将把 statusbuf 中未初始化的陈旧堆数据（1字节）符号扩展后通过 copy_to_user 泄露给调用者。
+
+#解决方案
+将 drivers/usb/class/usblp.c 中分配 statusbuf 的内存函数从 kmalloc 替换为 kzalloc。这样在分配时即将内存清零，确保后续即使发生短读取，泄露给用户空间的也是无害的零值数据，而非敏感的堆内存残留。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ede960e11670c9923ad1181ef98eac587baad87e

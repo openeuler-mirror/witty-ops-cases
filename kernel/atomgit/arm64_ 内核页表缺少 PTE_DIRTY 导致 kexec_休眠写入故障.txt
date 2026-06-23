@@ -1,0 +1,22 @@
+#标题
+arm64: 内核页表缺少 PTE_DIRTY 导致 kexec/休眠写入故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 架构下执行 kexec 加载或系统休眠操作时，内核在重定位或拷贝过程中触发写入错误，导致操作失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的修复中，`pte_mkwrite_novma()` 被修改为仅在 PTE_DIRTY 已设置时才清除 PTE_RDONLY，以支持可写干净的 PTE。然而，kexec 和休眠代码路径通过 `trans_pgd_create_copy()` -> `_copy_pte()` 调用 `pte_mkwrite_novma()` 来创建临时线性映射。
+由于 `_PAGE_KERNEL*` 相关的页表保护定义中未包含 PTE_DIRTY 标志，导致临时映射中的只读内核页在调用 `pte_mkwrite_novma()` 后仍然保持只读状态。当后续 kexec 重定位代码尝试向这些内存区域写入数据时，触发了写入错误。
+
+#解决方案
+修改 `arch/arm64/include/asm/pgtable-prot.h` 文件，在所有 `_PAGE_KERNEL*` 保护定义（包括 `_PAGE_KERNEL`、`_PAGE_KERNEL_RO`、`_PAGE_KERNEL_ROX`、`_PAGE_KERNEL_EXEC`、`_PAGE_KERNEL_EXEC_CONT`）中显式添加 `PTE_DIRTY` 标志。
+这确保了内核线性映射的 PTE 总是包含 PTE_DIRTY，使得 `pte_mkwrite_novma()` 能够正确清除 PTE_RDONLY 标志，从而保证 kexec 和休眠过程中的临时映射可写。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/271c3e5e427aa23c252a32afd5ab60a028c54cf8

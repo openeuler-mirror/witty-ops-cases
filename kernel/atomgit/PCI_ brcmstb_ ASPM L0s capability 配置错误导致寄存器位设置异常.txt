@@ -1,0 +1,24 @@
+#标题
+PCI: brcmstb: ASPM L0s capability 配置错误导致寄存器位设置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Broadcom STB PCIe 控制器在配置 ASPM（Active State Power Management）能力时，由于使用了错误的宏定义进行位操作，导致 `PCI_EXP_LNKCAP` 寄存器中的 ASPM 支持位被错误地设置。具体表现为：当设备树中存在 `aspm-no-l0s` 属性时，驱动试图禁用 L0s 但实际上修改了错误的比特位，导致 PCIe 链路能力寄存器配置与硬件实际能力不符，可能引发 PCIe 链路电源管理状态机异常或链路不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在设置 `PCIE_RC_CFG_PRIV1_LINK_CAPABILITY` 寄存器时，错误地使用了 Linux 内部定义的宏 `PCIE_LINK_STATE_L1` 和 `PCIE_LINK_STATE_L0S`。这些宏的值在提交 b478e162f227 ("PCI/ASPM: Consolidate link state defines") 发生变更后，不再与 PCIe 规范中定义的 `PCI_EXP_LNKCAP_ASPM` 比特位值匹配。导致写入硬件寄存器的值发生错位，将错误的比特位置位。
+
+#解决方案
+修改 `pcie-brcmstb.c` 驱动代码，直接使用符合 PCIe 规范的宏 `PCI_EXP_LNKCAP_ASPM_L0S` 来操作硬件寄存器。
+具体变更：
+1. 移除错误的掩码宏 `PCIE_RC_CFG_PRIV1_LINK_CAPABILITY_ASPM_SUPPORT_MASK`。
+2. 移除中间变量 `aspm_support`，不再使用 `PCIE_LINK_STATE_*` 系列宏。
+3. 直接读取硬件寄存器，当检测到 `aspm-no-l0s` 属性时，使用 `tmp &= ~PCI_EXP_LNKCAP_ASPM_L0S` 清除 L0s 支持位；否则保留硬件默认值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bdd78de6b0c7402cbd345e3231e6d4ae06057982

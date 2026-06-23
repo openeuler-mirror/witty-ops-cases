@@ -1,0 +1,33 @@
+#标题
+icmp_tag_validation 函数空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核配置 `ip_no_pmtu_disc` 为 3（hardened PMTU mode）时，若接收到包含未注册协议号的 ICMP Fragmentation Needed 错误报文，内核会在 softirq 上下文中触发空指针引用，导致 Kernel Panic（general protection fault）。
+
+#主要错误日志
+Oops: general protection fault, probably for non-canonical address 0xdffffc0000000002: 0000 [#1] SMP KASAN NOPTI
+KASAN: null-ptr-deref in range [0x0000000000000010-0x0000000000000017]
+RIP: 0010:icmp_unreach (net/ipv4/icmp.c:1085 net/ipv4/icmp.c:1143)
+Call Trace:
+ <IRQ>
+ icmp_rcv (net/ipv4/icmp.c:1527)
+ ip_protocol_deliver_rcu (net/ipv4/ip_input.c:207)
+ ip_local_deliver_finish (net/ipv4/ip_input.c:242)
+ ip_local_deliver (net/ipv4/ip_input.c:262)
+ ip_rcv (net/ipv4/ip_input.c:573)
+ __netif_receive_skb_one_core (net/core/dev.c:6164)
+ process_backlog (net/core/dev.c:6628)
+ handle_softirqs (kernel/softirq.c:561)
+</IRQ>
+
+#问题根因
+函数 `icmp_tag_validation()` 在调用 `rcu_dereference(inet_protos[proto])` 获取协议结构体指针后，未进行 NULL 检查直接访问其成员 `icmp_strict_tag_validation`。由于 `inet_protos[]` 数组是稀疏的（256个槽位中仅约15个注册了处理程序），当收到引用了未注册协议号的 ICMP 报文时，解引用空指针导致崩溃。
+
+#解决方案
+在访问 `icmp_strict_tag_validation` 成员前增加指针有效性检查。如果协议指针 `ipprot` 为 NULL，则直接返回 false，表示无法进行严格标签验证。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0612ca010772a0809e91eace61b011f24bca64ed

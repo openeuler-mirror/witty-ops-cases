@@ -1,0 +1,34 @@
+#标题
+Bluetooth: hci_sync: fix double free in 'hci_discovery_filter_clear()'
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在蓝牙服务发现过程中，若发生进程抢占，可能导致 `hci_discovery_filter_clear()` 函数对同一内存地址执行双重释放。系统触发 `kernel BUG`，导致内核崩溃并打印 `Oops` 信息。
+
+#主要错误日志
+[ ] ------------[ cut here ]------------
+[ ] kernel BUG at mm/slub.c:547!
+[ ] Internal error: Oops - BUG: 00000000f2000800 [#1] PREEMPT SMP
+[ ] CPU: 3 UID: 0 PID: 246 Comm: bluetoothd Tainted: G O 6.12.19-kernel #1
+[ ] pc : __slab_free+0xf8/0x348
+[ ] lr : __slab_free+0x48/0x348
+[ ] Call trace:
+[ ]  __slab_free+0xf8/0x348
+[ ]  kfree+0x164/0x27c
+[ ]  start_service_discovery+0x1d0/0x2c0
+[ ]  hci_sock_sendmsg+0x518/0x924
+
+#问题根因
+函数 `hci_discovery_filter_clear()` 在释放 `uuids` 指针与将其置空之间存在竞争窗口。具体流程为：
+1. 执行 `kfree(uuids)` 释放内存。
+2. 此时发生抢占，另一执行路径（如 `start_service_discovery`）进入该函数再次执行 `kfree(uuids)`，由于指针尚未置空，导致双重释放。
+3. 原路径恢复执行 `uuids = NULL`。
+根本原因是锁保护范围不足，释放操作与置空操作未处于同一个临界区，导致并发访问时的内存破坏。
+
+#解决方案
+修正 `hci_discovery_filter_clear()` 函数中的加锁范围，将 `kfree(hdev->discovery.uuids)` 释放操作与随后的 `hdev->discovery.uuids = NULL` 置空操作包含在同一个 `spin_lock` 临界区内，确保操作的原子性，消除竞争窗口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ec03e0b8aa8171483b621a63db9637197eaa70a6

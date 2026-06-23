@@ -1,0 +1,21 @@
+#标题
+mv88e6xxx DSA 驱动删除 VLAN 时因 SID 未初始化返回 -ENOENT 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在不支持 MST（多生成树）功能的 mv88e6xxx 交换芯片（如 ZII dev rev B）上，从用户端口删除网桥 VLAN 时操作失败，系统调用返回 -ENOENT 错误码。
+
+#主要错误日志
+未知
+
+#问题根因
+在删除 VLAN 流程中，`mv88e6xxx_vtu_get()` 函数调用 `chip->info->ops->vtu_getnext()` 获取 VLAN 条目时，部分芯片的实现（如 `mv88e6185_g1_vtu_getnext()`）未填充 `vlan.sid` 字段。由于 `vlan` 结构体变量未进行初始化（零初始化），导致 `vlan.sid` 残留了栈上的随机垃圾值。后续在 `mv88e6xxx_port_vlan_leave()` -> `mv88e6xxx_mst_put()` 调用链中，该垃圾值导致代码未能正确执行 `if (!sid)` 的早期退出逻辑，而是尝试在不支持 MST 的芯片上查找对应的 MST 条目，最终因查找失败返回 -ENOENT。
+
+#解决方案
+1. 在 `mv88e6xxx_vtu_get()` 函数中，对 `vlan` 结构体指针 `entry` 执行 `memset` 零初始化操作，确保未显式赋值的字段（如 `sid`）默认为 0。
+2. 在 `mv88e6xxx_mst_put()` 函数中，增加对设备是否支持 STU 功能的显式检查（`mv88e6xxx_has_stu(chip)`）。若不支持，直接返回 0，避免依赖“垃圾值恰好为 0”的巧合逻辑，同时防止解引用未初始化的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ef28c8411815d05453fd0c26db045b2c87963790

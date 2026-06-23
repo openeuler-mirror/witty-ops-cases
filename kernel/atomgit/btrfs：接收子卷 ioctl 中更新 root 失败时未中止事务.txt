@@ -1,0 +1,20 @@
+#标题
+btrfs：接收子卷 ioctl 中更新 root 失败时未中止事务
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 btrfs 接收子卷相关的 ioctl 操作（`BTRFS_IOC_SET_RECEIVED_SUBVOL`）时，如果更新 root 项失败，内核未正确中止（abort）事务。这导致事务状态不一致，因为此前该事务已用于从 UUID 树中移除项，但最终事务却正常提交，可能导致文件系统元数据损坏或后续操作异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `_btrfs_ioctl_set_received_subvol` 中，当调用 `btrfs_update_root` 更新 root 失败时，原有代码逻辑仅结束了事务（`btrfs_end_transaction`），而没有调用 `btrfs_abort_transaction` 中止事务。由于该事务上下文此前已经被用于从 UUID 树中删除条目，不中止事务会导致已做的修改被错误地提交，破坏了文件系统的事务原子性。
+
+#解决方案
+在 `btrfs_update_root` 调用失败的错误处理路径中，增加调用 `btrfs_abort_transaction` 函数。这确保了一旦 root 更新失败，事务会被正确标记为中止状态，从而避免不一致的元数据被提交到磁盘。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0e954358d6aa98c4cc8c31d8682aa45efbb3f4a2

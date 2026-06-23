@@ -1,0 +1,25 @@
+#标题
+sdei_watchdog 初始化时序错误导致检测器初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SDEI watchdog 初始化阶段出现异常，导致 lockup detector（死锁检测器）初始化失败，系统回退并永久禁用 Hard watchdog（硬狗）功能，影响系统高可靠性特性生效。
+
+#主要错误日志
+Delayed init of the lockup detector failed: %d
+Hard watchdog permanently disabled
+
+#问题根因
+sdei_watchdog 依赖于 `sdei_init` 提供的环境，但原代码逻辑中，当未禁用 SDEI NMI watchdog 时，`lockup_detector_init` 的调用时机过早，早于 `sdei_init` 的执行，导致探测或初始化失败。代码流程存在时序冲突，未正确处理 SDEI watchdog 后置初始化的依赖关系。
+
+#解决方案
+调整 SDEI watchdog 的初始化流程，引入 `device_initcall` 机制确保初始化顺序：
+1. 新增 `sdei_watchdog_hardlockup_init` 函数并通过 `device_initcall` 调用，确保其在 `sdei_init` 之后执行。
+2. 在新函数中调用 `lockup_detector_retry_init` 来触发重试初始化流程。
+3. 修改 `lockup_detector_delay_init` 逻辑，增加对 SDEI watchdog 的探测支持，确保在重试流程中正确处理 SDEI 探测。
+4. 清理 `init/main.c` 和 `arm_pmuv3.c` 中的旧有初始化逻辑，移除冗余的条件判断，保证调用顺序的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/075175b7bed19c91f5d4b19c67cf8341a0bb583a

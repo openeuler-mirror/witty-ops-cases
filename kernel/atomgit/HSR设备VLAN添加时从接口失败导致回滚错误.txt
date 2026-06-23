@@ -1,0 +1,21 @@
+#标题
+HSR设备VLAN添加时从接口失败导致回滚错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在HSR（高可用无缝冗余）网络设备上配置VLAN过滤时，若向从设备（Slave B）添加VLAN ID失败，系统未能正确清理之前已在对应从设备（Slave A）上成功添加的VLAN配置。这导致HSR端口对之间的VLAN状态不一致，可能引发后续网络通信异常或配置残留。
+
+#主要错误日志
+- "add vid failed for Slave-A\n"
+- "add vid failed for Slave-B\n"
+
+#问题根因
+函数 `hsr_ndo_vlan_rx_add_vid` 的错误处理逻辑存在缺陷。当 `vlan_vid_add()` 在次要从接口（如 Slave B）上执行失败时，原代码逻辑错误地调用了 `vlan_vid_del()` 来清理当前失败的端口，而不是清理之前已经成功配置的另一个从接口（如 Slave A）。这导致已成功的配置未被回滚，从而产生不对称的 VLAN 状态。
+
+#解决方案
+重构错误处理路径，引入集中式的 unwind 标签。在添加过程中记录已成功配置的从设备指针（`slave_a_dev` 和 `slave_b_dev`），一旦任一环节失败，跳转到 unwind 处统一执行清理操作，确保从所有已配置的从设备上删除 VID，保证 VLAN 状态的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5c2241f5e9dbcb1ebfff6f8509d15b526b4e903c

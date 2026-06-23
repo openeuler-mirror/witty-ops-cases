@@ -1,0 +1,22 @@
+#标题
+powerpc/pseries: 修复 DLPAR 热插拔错误日志数据类型处理导致的 Sparse 静态检查警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 sparse 工具对内核代码进行静态分析检查时，报告了多处 "incorrect type"（类型不正确）的警告信息。具体表现为在 `pseries` 平台的 DLPAR（动态逻辑分区）热插拔处理流程中，存在 `__be32`（大端 32 位）类型与 `unsigned int` 类型之间的错误转换或赋值，触发了编译器的类型检查警告。
+
+#主要错误日志
+arch/powerpc/platforms/pseries/dlpar.c:398:53: sparse: sparse: incorrect type in argument 1 (different base types) @@ expected unsigned int [usertype] drc_index @@ got restricted __be32 [usertype] drc_index @@
+arch/powerpc/platforms/pseries/dlpar.c:418:43: sparse: sparse: incorrect type in assignment (different base types) @@ expected restricted __be32 [usertype] drc_count @@ got unsigned int [usertype] @@
+
+#问题根因
+在 `pseries_hp_errorlog` 结构体中，部分元素（如 `drc_index`、`drc_count`）被定义为 `__be32` 类型（大端序），但在代码处理逻辑中，之前的实现是在 `handle_dlpar_errorlog` 函数中统一调用 `be32_to_cpu()` 进行转换并回写到原结构体，导致结构体中的 `__be32` 类型变量被赋予了 CPU 端序（如小端）的值。
+随后，在 `dlpar_cpu`、`dlpar_memory` 等具体处理函数中，代码直接将这些结构体成员赋值给 `u32` 类型的局部变量。由于结构体成员定义类型与实际存储的数据端序不一致，且直接将 `__be32` 类型传递给期望 `u32` 类型的参数，导致了 sparse 静态检查工具报告类型不匹配警告。本质上是数据类型定义与数据流转过程中的端序转换逻辑不正确。
+
+#解决方案
+修改 DLPAR 处理逻辑，移除 `handle_dlpar_errorlog` 函数中对结构体成员的提前转换与回写操作。改为在 `dlpar_cpu`、`dlpar_memory`、`dlpar_hp_pmem` 等具体消费数据的函数中，直接对从结构体中取出的 `__be32` 类型成员调用 `be32_to_cpu()` 进行转换，确保转换发生在数据使用点而非存储点，从而保证类型的一致性和正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8869f978b03c6c8e013a94a4ebd3e7401814b6fd

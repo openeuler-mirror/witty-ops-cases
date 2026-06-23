@@ -1,0 +1,20 @@
+#标题
+packet: tpacket_snd 函数存在 vnet_hdr TOCTOU 竞态条件漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 PACKET_VNET_HDR 的情况下，用户态程序通过 mmap'd TX ring buffer 发送数据包时，若存在并发线程恶意修改 vnet_hdr，可导致内核绕过安全校验逻辑。该漏洞可能被利用进行权限提升或引发内核崩溃，具体表现为校验通过后的数据处理阶段使用了被篡改的 header 数据。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tpacket_snd()` 函数中，当启用 `PACKET_VNET_HDR` 时，`vnet_hdr` 指针直接指向了与用户态共享的 mmap'd TX ring buffer。内核虽然通过 `__packet_snd_vnet_parse()` 对 header 进行了校验，但在后续调用 `virtio_net_hdr_to_skb()` 时重新读取了字段。由于校验与使用之间存在时间窗口，用户态并发线程可以在此期间修改 `vnet_hdr` 字段，导致内核使用未校验的数据，从而绕过安全检查。对比非 TPACKET 路径的 `packet_snd()` 函数，其正确地将 `vnet_hdr` 拷贝到了栈变量中使用，而 TPACKET 路径是唯一直接读取用户可控共享内存的调用者。
+
+#解决方案
+参照 `packet_snd()` 及其他内核模块（tun.c, tap.c）的安全做法，在 `tpacket_snd()` 中将 `vnet_hdr` 从 mmap'd ring buffer 拷贝到栈局部变量中。修改代码先执行 `memcpy` 拷贝操作，随后对该栈变量进行校验（`__packet_snd_vnet_parse`）及后续使用（`virtio_net_hdr_to_skb`），从而消除 TOCTOU 竞态风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1622447a51a1ab59603ea58afedd9850dd4cb60f

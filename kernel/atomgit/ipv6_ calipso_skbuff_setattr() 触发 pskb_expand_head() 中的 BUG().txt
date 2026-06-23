@@ -1,0 +1,20 @@
+#标题
+ipv6: calipso_skbuff_setattr() 触发 pskb_expand_head() 中的 BUG()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 netlabelctl 配置 CALIPSO 并发送特制的 IPv6 数据包时，内核触发 BUG_ON(nhead < 0)，导致系统崩溃或内核 oops。
+
+#主要错误日志
+BUG_ON(nhead < 0) at net/core/skbuff.c:2232 in pskb_expand_head()
+
+#问题根因
+在 calipso_skbuff_setattr() 函数中，计算出的 len_delta 值可能为负数。当该负值传递给 skb_cow() 时，由于 __skb_cow() 中存在隐式整型转换，导致 headroom 计算结果大于 INT_MAX。虽然 headroom 未超过 skb_headroom(skb)，但计算出的 delta 值为负，最终导致 pskb_expand_head() 接收到负的 nhead 参数并触发 BUG()。
+
+#解决方案
+在调用 skb_cow() 前，对 len_delta 进行判断，只有当 len_delta 大于 0 时才将其加到 skb_headroom 上，否则加 0。这确保了 skb_cow() 仅用于扩大 headroom，避免传入负值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca8f34b149486cca9d3b606b3283b31ad8cbb674

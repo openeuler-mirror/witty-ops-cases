@@ -1,0 +1,24 @@
+#标题
+RCU-tasks与do_exit()因mutex竞争导致死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在执行进程退出操作（do_exit）时发生死锁，导致相关进程无法正常退出，系统挂起或响应迟滞。该问题由在 synchronize_rcu_tasks() 调用期间持有 mutex，而在 do_exit() 流程中（处于 exit_tasks_rcu_start() 与 exit_tasks_rcu_stop() 之间）尝试获取同一把 mutex 引发。此类死锁难以复现且 lockdep 无法检测。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 RCU-tasks 的设计，处于 do_exit() 特定阶段（已调用 exit_tasks_rcu_start 但未调用 exit_tasks_rcu_stop）的任务已从任务链表中移除，导致 RCU Tasks 难以发现并等待它们。若此时任务因尝试获取 mutex 而阻塞，则处于 RCU Tasks 的静默状态（quiescent state），但原机制未利用此特性，导致持有 mutex 的任务与处于退出流程的任务互相等待，形成死锁。
+
+#解决方案
+通过初始化 `rcu_tasks_exit_list` 相关的数据结构，为利用进程退出期间的自愿上下文切换（voluntary context switch）机制做准备。具体修改包括：
+1. 在 init_task.c 中为 init_task 初始化 `rcu_tasks_exit_list`。
+2. 在 fork.c 的进程创建流程中初始化新进程的 `rcu_tasks_exit_list`。
+3. 在 rcu/tasks.h 中确保 per-cpu 变量的 `rtp_exit_list` 正确初始化。
+这为后续识别和处理退出过程中的任务状态提供了基础，从而消除此类死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/611dcd14064f3b77489d2895caec14a36740b97a

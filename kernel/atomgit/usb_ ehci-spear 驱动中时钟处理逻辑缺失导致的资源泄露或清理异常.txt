@@ -1,0 +1,28 @@
+#标题
+usb: ehci-spear 驱动中时钟处理逻辑缺失导致的资源泄露或清理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SPEAr EHCI 主机控制器驱动加载过程中，若时钟使能（`clk_prepare_enable`）失败或后续初始化步骤出错，驱动程序未正确释放已使能的时钟或错误地释放了未使能的时钟。具体表现为：
+1. 若 `clk_prepare_enable` 失败，驱动未跳转到错误处理流程，可能导致后续代码访问未初始化的硬件资源。
+2. 若 `usb_add_hcd` 失败，驱动未禁用并反准备（unprepare）已使能的 `sehci->clk`，导致时钟资源泄露。
+3. 在移除设备（`remove`）时，代码中冗余的 NULL 检查可能导致清理逻辑不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序 `spear_ehci_hcd_drv_probe` 中对时钟（`sehci->clk`）的管理逻辑存在缺陷，违反了调用平衡原则：
+1. **错误路径遗漏**：`clk_prepare_enable` 的返回值未被检查，若该函数调用成功但后续 `usb_add_hcd` 失败，代码直接跳过时钟的释放逻辑，导致时钟一直处于使能状态。
+2. **清理逻辑不匹配**：如果在探测过程中时钟未能成功使能，不应在错误处理路径中执行禁用操作；反之，如果已成功使能，则必须在所有失败路径中执行禁用操作。
+3. **冗余检查**：`spear_ehci_hcd_drv_remove` 中对 `sehci->clk` 的 NULL 检查是多余的，因为在设备模型中时钟应始终存在或探测早已失败，这种不一致掩盖了正确的生命周期管理。
+
+#解决方案
+1. **检查返回值**：修改 `clk_prepare_enable` 的调用，检查其返回值。若返回非零（失败），直接跳转至 `err_put_hcd` 标签进行清理，避免继续执行。
+2. **完善错误处理**：在 `usb_add_hcd` 失败的错误处理标签 `err_stop_ehci` 中，增加 `clk_disable_unprepare(sehci->clk)` 调用，确保时钟资源被正确释放。
+3. **移除冗余判断**：在 `spear_ehci_hcd_drv_remove` 函数中，移除 `if (sehci->clk)` 的判断，直接调用 `clk_disable_unprepare(sehci->clk)`，保持代码逻辑简洁与一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9b1d62b7986695d9f83c2645b8c115dae9761018

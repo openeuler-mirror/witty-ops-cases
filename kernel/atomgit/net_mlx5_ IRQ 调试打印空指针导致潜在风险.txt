@@ -1,0 +1,20 @@
+#标题
+net/mlx5: IRQ 调试打印空指针导致潜在风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mlx5 驱动分配 IRQ 池（MSI-X vectors pool）的过程中，当传入的 name 参数为空（NULL）时，`mlx5_core_dbg` 调试打印函数尝试读取空指针字符串，可能导致内核打印异常或引发空指针解址风险（Oops）。
+
+#主要错误日志
+mlx5_core_dbg: pool->name = (null), pool->size = %d, pool->start = %d
+
+#问题根因
+`irq_pool_alloc()` 函数中存在调试打印逻辑缺陷，直接将传入的 `name` 指针作为 `%s` 格式化参数传递给 `mlx5_core_dbg`。当调用者未提供 name（即 name 为 NULL）时，打印逻辑未做空值防护，导致打印空字符串。
+
+#解决方案
+修改 `drivers/net/ethernet/mellanox/mlx5/core/pci_irq.c` 文件中的 `irq_pool_alloc` 函数，在调试打印语句中增加三元运算符判断：若 `name` 指针为空，则使用默认字符串 "mlx5_pcif_pool" 替代，修复代码为：`name ? name : "mlx5_pcif_pool"`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/882f5ac6cb61ed29b752cb8ae0ae273c7d421509

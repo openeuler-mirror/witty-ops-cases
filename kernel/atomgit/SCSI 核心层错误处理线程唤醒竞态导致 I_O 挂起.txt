@@ -1,0 +1,23 @@
+#标题
+SCSI 核心层错误处理线程唤醒竞态导致 I/O 挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SCSI 层在处理错误时，因竞态条件导致未能唤醒错误处理线程，使得经过该 SCSI 主机的 I/O 陷入卡死状态，错误状态无法推进。
+
+#主要错误日志
+未知
+
+#问题根因
+该故障由两个竞态条件引起：
+1. `scsi_dec_host_busy()` 中存在内存乱序问题：清除 `SCMD_STATE_INFLIGHT` 状态位的写操作可能被重排到读取 `scsi_host_busy()` 计数之后。虽然本地 CPU 能看到自己的写操作，但重排会导致其他 CPU（如 `scsi_eh_inc_host_failed()` 所在 CPU）看到更高的 busy 计数，从而导致没有 CPU 观测到 `host_busy` 等于 `host_failed` 计数，进而无法唤醒错误处理线程。
+2. `scsi_eh_inc_host_failed()` 存在一般性顺序问题：该函数在增加 `host_failed` 计数之前就统计 busy 命令，这会与 `scsi_dec_host_busy()` 中的最后一个命令产生竞态。导致 `scsi_dec_host_busy()` 未看到 `host_failed` 增加，而 `scsi_eh_inc_host_failed()` 在 `SCMD_STATE_INFLIGHT` 被清除前就统计了 busy 命令，最终结果是谁都没有唤醒错误处理任务。
+
+#解决方案
+1. 在 `scsi_dec_host_busy()` 的错误恢复路径中，于统计 busy 请求之前添加内存屏障（`smp_mb()`），强制清除 `SCMD_STATE_INFLIGHT` 的写操作对其他 CPU 可见，防止内存乱序。
+2. 在 `scsi_eh_inc_host_failed()` 中，将 `scsi_host_busy()` 的调用移动到 `host_failed` 计数增加之后，确保在统计 busy 请求时能看到已增加的 `host_failed`，从而关闭竞态窗口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/df3d19cc15031b019e159d24860caf89a48954ce

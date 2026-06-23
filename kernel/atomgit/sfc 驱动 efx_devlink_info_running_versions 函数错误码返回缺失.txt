@@ -1,0 +1,20 @@
+#标题
+sfc 驱动 efx_devlink_info_running_versions 函数错误码返回缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 sfc 驱动的 devlink info 接口获取运行版本信息时，若 `efx_mcdi_rpc()` 执行返回的数据长度不足（`outlength < MC_CMD_OUT_LEN`），内核虽然打印了失败日志，但函数错误地返回了 0（成功），导致上层调用者无法感知底层的通信或数据异常，可能导致用户态获取到不完整或错误的状态信息。
+
+#主要错误日志
+mcdi MC_CMD_GET_VERSION failed
+
+#问题根因
+在 `efx_devlink_info_running_versions` 函数中，当 `efx_mcdi_rpc()` 调用失败或返回数据长度不足时，代码进入了错误处理分支并打印日志。然而，原有的返回逻辑写为 `return rc;`。在数据长度不足但 `rc` 为 0 的情况下，函数将直接返回 0，掩盖了 `outlength` 校验失败的错误事实，导致错误码丢失。
+
+#解决方案
+修改错误处理分支的返回值逻辑，使用 `return rc ?: -EIO;`。当 `rc` 为 0（表示 RPC 调用本身无错误，但数据长度不足）时，强制返回 `-EIO` 错误码，确保错误状态正确向上传递。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f0aa7e494b306bee063f290dab57e8e16c55a73

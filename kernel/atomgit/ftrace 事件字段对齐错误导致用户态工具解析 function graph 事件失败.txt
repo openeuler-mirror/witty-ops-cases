@@ -1,0 +1,33 @@
+#标题
+ftrace 事件字段对齐错误导致用户态工具解析 function graph 事件失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 32 位架构上，查看 `funcgraph_exit` 事件的格式信息时，`calltime` 和 `rettime` 字段的偏移量显示错误。例如，`overrun` 字段位于 offset 16（size 4），后续的 `calltime` 字段实际应位于 offset 20，但格式文件却显示位于 offset 24，导致依赖该格式文件解析二进制数据的用户态工具（如 trace-cmd、perf script 等）无法正确解析 trace 数据，读取到错误的时间戳信息。
+
+#主要错误日志
+无运行时错误日志。问题通过读取 tracefs 文件系统中的格式文件发现：
+```
+cat /sys/kernel/tracing/events/ftrace/funcgraph_exit/format
+...
+	field:unsigned int overrun;     offset:16;      size:4; signed:0;
+	field:unsigned long long calltime;      offset:24;      size:8; signed:0;
+	field:unsigned long long rettime;       offset:32;      size:8; signed:0;
+```
+（注：上述 offset 24 和 32 为错误的显示值，实际结构体中的偏移量应为 20 和 28）。
+
+#问题根因
+部分 ftrace 事件结构体（如 `funcgraph_exit`）使用了 `__packed` 属性，导致其内部字段（如 64 位的 `calltime` 和 `rettime`）在 32 位架构上按 4 字节对齐而非 8 字节对齐。
+内核在生成事件字段描述信息时，宏定义 `__field_packed` 被错误地用于描述嵌入式结构体成员，且没有正确处理“字段本身在结构体中非紧凑排列”的情况。原有的宏逻辑在计算偏移量时，强制使用了类型的自然对齐（8 字节），忽略了结构体打包后的实际对齐方式（4 字节），从而向用户态暴露了错误的字段偏移量。
+
+#解决方案
+重构 ftrace 事件字段的宏定义，区分“描述嵌入式结构体字段”和“定义打包字段”两种场景：
+1. 将原有的 `__field_packed` 重命名为 `__field_desc_packed`，专门用于描述嵌入式结构体中的字段。
+2. 新增 `__field_packed` 宏定义，用于定义真正需要按打包方式处理（即不按自然对齐）的字段。
+3. 修改 `trace_entries.h` 中的 `funcgraph_exit` 定义，将 `calltime` 和 `rettime` 字段从旧的宏改用新的 `__field_packed` 宏定义。
+这确保了内核向用户态提供的字段偏移量与结构体实际内存布局一致，修复了对齐计算错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01bfdc82e7ebdf56e9dc6215656fece4a4789430

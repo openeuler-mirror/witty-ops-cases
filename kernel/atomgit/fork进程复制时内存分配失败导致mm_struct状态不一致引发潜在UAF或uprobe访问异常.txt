@@ -1,0 +1,22 @@
+#标题
+fork进程复制时内存分配失败导致mm_struct状态不一致引发潜在UAF或uprobe访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在fork系统调用执行`dup_mmap()`过程中，若发生内存分配失败，会导致新进程的`mm_struct`处于未完全初始化的不安全状态。此时若其他子系统（如OOM killer通过rmap遍历、或uprobe注册机制）访问该`mm_struct`，可能引发内核崩溃或数据不一致。Syzbot已证实该问题可被触发。
+
+#主要错误日志
+未知
+
+#问题根因
+在`dup_mmap()`过程中如果内存分配失败，maple tree可能处于不安全状态。虽然错误处理路径会释放锁并调用`exit_mmap()`，但在锁释放前，未完全初始化的`mm_struct`可以通过rmap找到关联的vmas被其他路径访问。之前的修复（commit 8ac662f5da19f）未完全消除此竞态条件，导致内核在使用未完全初始化的`mm_struct`时存在安全隐患。
+
+#解决方案
+1. 在`dup_mmap()`失败路径中，如果存在失败的vma节点，通过`mas_store`将其标记为零entry，并设置`MMF_OOM_SKIP`标志位，防止OOM killer遍历损坏的maple tree。
+2. 无论是否存在具体的失败vma节点，均设置`MMF_UNSTABLE`标志位，将`mm_struct`标记为不稳定（未完全初始化），防止其他使用者访问。
+3. 在`register_for_each_vma`（uprobe注册路径）中增加检查，调用`check_stable_address_space(mm)`，如果检测到`mm`处于不稳定状态（`MMF_UNSTABLE`），则直接跳过该vma的处理，避免对未初始化的`mm_struct`进行修改。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e811c4e34b587902813c813d665f8538dfd8e8ab

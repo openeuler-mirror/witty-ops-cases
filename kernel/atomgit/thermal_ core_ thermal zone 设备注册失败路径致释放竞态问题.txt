@@ -1,0 +1,20 @@
+#标题
+thermal: core: thermal zone 设备注册失败路径致释放竞态问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 thermal_zone_device_register_with_trips() 注册热区设备过程中，若注册失败进入错误处理路径，此时若用户空间已获取该设备 kobject 的引用，内核可能触发释放竞态。现象表现为热区设备结构体被提前释放，导致内核崩溃或内存访问错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在热区设备注册失败的处理路径中，代码调用 put_device() 后未等待 tz->removal 完成量。若用户空间已持有设备的 kobject 引用，thermal_release() 不会被立即调用，导致错误路径直接返回，tz 指针随后被释放。而在引用计数最终归零时，thermal_release() 可能访问已释放的 tz 内存，引发 UAF（Use-After-Free）或空指针崩溃。该问题是前一个 NULL 指针修复补丁引入的遗漏。
+
+#解决方案
+在 thermal_zone_device_register_with_trips() 函数的错误处理路径中，put_device() 调用之后，增加 wait_for_completion(&tz->removal) 调用。这确保了在函数返回前，必须等待 thermal_release() 完成执行，从而避免 tz 结构体被提前释放，保证释放过程的同步性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3124b78beb5f6ebb946971dabcf28f6a75616a0f

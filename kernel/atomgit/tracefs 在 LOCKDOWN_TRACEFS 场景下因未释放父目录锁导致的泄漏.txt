@@ -1,0 +1,20 @@
+#标题
+tracefs 在 LOCKDOWN_TRACEFS 场景下因未释放父目录锁导致的泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核处于 LOCKDOWN_TRACEFS 安全锁定状态下，调用 `eventfs_create_events_dir` 函数创建目录时，函数会因锁定检查失败而直接退出，但此前已锁定的父目录 inode 锁未被释放。此问题会导致父目录锁泄漏，进而可能阻碍后续对该目录的操作。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `eventfs_create_events_dir` 的逻辑顺序存在缺陷：先调用 `tracefs_start_creating(name, parent)` 锁定了父目录，随后才调用 `security_locked_down(LOCKDOWN_TRACEFS)` 进行安全检查。当安全检查失败触发 `return NULL` 退出时，此前获取的父目录锁未被释放（即函数在持有锁的情况下退出了），导致锁资源泄漏。
+
+#解决方案
+调整代码执行顺序，将 `security_locked_down(LOCKDOWN_TRACEFS)` 的安全检查逻辑移至 `tracefs_start_creating(name, parent)` 调用之前。确保在尝试锁定父目录之前就完成安全检查，若检查不通过则直接返回，避免在锁定状态下退出函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/88ce296c14e0a439ba99d1f1f283e403ee49cb0d

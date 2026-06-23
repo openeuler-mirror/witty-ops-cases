@@ -1,0 +1,21 @@
+#标题
+amd/amdkfd: 修复 kfd_process 引用计数泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 驱动处理 RAS (Reliability, Availability and Serviceability) 毒化消费事件（poison consumed event）的过程中，若 `kfd_process_get_user_gpu_id` 返回 `-EINVAL` 错误，内核会打印警告信息并直接返回。此时由于未释放之前获取的 `kfd_process` 结构体引用，导致该进程对象的引用计数发生泄漏。
+
+#主要错误日志
+[   0.000000] WARNING: CPU: 0 PID: 0 at drivers/gpu/drm/amd/amdkfd/kfd_events.c:1288 kfd_signal_poison_consumed_event+0x.../0x...
+[   0.000000] Could not get user_gpu_id from dev->id:xxxx
+
+#问题根因
+在函数 `kfd_signal_poison_consumed_event` 中，代码开头调用 `kfd_lookup_process_by_pasid` 获取了 `kfd_process` 指针 `p`（增加了引用计数）。后续在异常处理路径中，当 `user_gpu_id` 为 `-EINVAL` 时，代码仅打印了警告日志并执行 `return`，遗漏了调用 `kfd_unref_process(p)` 来释放引用计数，导致引用计数泄漏。
+
+#解决方案
+在异常返回路径中增加 `kfd_unref_process(p)` 调用，确保在函数退出前正确释放 `kfd_process` 的引用计数，避免内存资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/453e1e6599bea4651d38586cc500091084724314

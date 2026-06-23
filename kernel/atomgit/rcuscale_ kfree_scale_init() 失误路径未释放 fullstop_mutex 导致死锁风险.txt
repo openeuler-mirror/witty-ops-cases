@@ -1,0 +1,22 @@
+#标题
+rcuscale: kfree_scale_init() 失误路径未释放 fullstop_mutex 导致死锁风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 rcuscale 测试时，若 `kfree_scale_init()` 函数内部的懒惰回调（lazy callbacks）时间检测逻辑触发错误（例如回调未按预期执行或执行过慢），内核静态分析工具 Smatch 会报告“inconsistent returns 'global &fullstop_mutex'”警告。这意味着在错误返回路径上，代码直接返回而未释放已持有的 `fullstop_mutex` 锁，可能导致后续对该锁的获取操作死锁或状态不一致。
+
+#主要错误日志
+- kernel/rcu/rcuscale.c:1215 rcu_scale_init() warn: inconsistent returns 'global &fullstop_mutex'.
+- pr_alert("ERROR: call_rcu() CBs are not being lazy as expected!\n");
+- pr_alert("ERROR: call_rcu() CBs are being too lazy!\n");
+
+#问题根因
+在 `kfree_scale_init()` 函数中，当检测到 `call_rcu()` 回调的执行时间不符合预期（小于 2*HZ 或大于 3*HZ）时，代码逻辑直接 `return -1` 退出。此时函数已经持有了 `fullstop_mutex` 全局互斥锁，直接返回导致该锁未被释放（unlock），属于资源释放遗漏的错误处理路径缺陷。
+
+#解决方案
+修改错误处理路径，将原有的直接 `return -1` 语句替换为设置错误码 `firsterr = -1` 并通过 `goto unwind` 跳转至统一的清理标签。这确保了在函数退出前能够正确执行解锁操作，避免互斥锁泄露。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2fb79d911de7fcc4db57e035e9a58aa0a105974c

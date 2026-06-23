@@ -1,0 +1,20 @@
+#标题
+bcache: 注册失败致 c->root 为 NULL 引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 bcache 设备注册过程中，若早期注册流程失败（如分配 c->root 之前出错），此时 `c->root` 仍为初始值 NULL。当执行 `cache_set_flush()` 进行清理时，代码使用 `IS_ERR()` 判断 `c->root` 有效性，因 NULL 不属于 IS_ERR 范畴导致判断失误，随后在引用 `c->root->list` 时引发 NULL Pointer Dereference（空指针引用）崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+前序提交 028ddcac477b ("bcache: Remove unnecessary NULL point check in node allocations") 错误地移除了对 NULL 的检查。虽然 `__bch_btree_node_alloc()` 函数本身不返回 NULL，但在注册失败的场景下，`c->root` 可能尚未被分配（保持初始化时的 NULL 状态）。修复前代码仅使用 `IS_ERR(c->root)` 进行检查，无法覆盖 NULL 的情况，导致将 NULL 指针误判为有效指针并访问其成员，从而触发空指针崩溃。
+
+#解决方案
+恢复对 NULL 指针的检查逻辑，将 `cache_set_flush()` 函数中的判断条件从 `IS_ERR(c->root)` 修改回 `IS_ERR_OR_NULL(c->root)`，确保在 `c->root` 为 NULL 时跳过相关操作，避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a1e449401f7197e2fa0b2e85d12e3bab54421d56

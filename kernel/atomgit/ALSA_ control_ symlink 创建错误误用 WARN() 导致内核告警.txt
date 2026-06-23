@@ -1,0 +1,27 @@
+#标题
+ALSA: control: symlink 创建错误误用 WARN() 导致内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建 ALSA control 的 sysfs 符号链接失败时（例如被 fuzzer 触发或某些异常路径），内核调用了 `WARN()` 宏。这会导致内核打印严重的告警堆栈信息，不仅干扰调试，还容易被模糊测试工具（如 syzbot）误判为严重的内核崩溃问题。该问题由 syzbot 报告触发。
+
+#主要错误日志
+- **原日志格式（触发 WARN）：**
+  `WARNING: CPU: ... PID: ... at sound/core/control_led.c:...`
+  `can't create symlink to controlC%i device`
+  `can't create symlink to card%i`
+
+- **推断修复后的日志格式（dev_err）：**
+  `snd_ctl_led_sysfs_add: can't create symlink to controlC%i device`
+  `snd_ctl_led_sysfs_add: can't create symlink to card%i`
+
+#问题根因
+在 `sound/core/control_led.c` 的 `snd_ctl_led_sysfs_add` 函数中，代码使用 `WARN()` 宏来处理 `sysfs_create_link` 的返回错误。`WARN()` 设计用于指示严重的内核违规或不可恢复的错误，而符号链接创建失败通常只是普通的环境或资源问题，不应触发严重的内核告警堆栈打印。这种做法比实际需求更为激进，且会给测试工具带来噪音。
+
+#解决方案
+将错误处理逻辑从 `WARN()` 降级为 `dev_err()`。修改代码逻辑，使用标准的条件判断检查 `sysfs_create_link` 返回值，若失败则调用 `dev_err()` 打印错误信息。同时在日志消息中添加了 `__func__` 以明确指出错误发生的函数位置，既保留了错误信息的可追溯性，又消除了不必要的内核告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa8ca084b55be5b0b20ce8a0413ca3a3ea01b820

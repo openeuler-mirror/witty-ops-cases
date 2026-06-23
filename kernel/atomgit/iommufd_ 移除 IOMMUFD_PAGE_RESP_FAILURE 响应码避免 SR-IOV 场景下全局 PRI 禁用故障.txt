@@ -1,0 +1,20 @@
+#标题
+iommufd: 移除 IOMMUFD_PAGE_RESP_FAILURE 响应码避免 SR-IOV 场景下全局 PRI 禁用故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 SR-IOV 等 I/O 虚拟化技术的场景下，当用户空间（如 VMM）处理 IOMMU 页请求故障并返回 `IOMMUFD_PAGE_RESP_FAILURE` 响应码时，会导致硬件禁用整个物理功能的 PRI（Page Request Interface）能力。由于 PRI 资源在 SR-IOV 的可分配设备单元间是共享的，单个单元的失败响应会导致其他正常的设备单元发生 I/O 故障，引发业务中断或异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 PCI 规范（Section 10.4.2.1），`IOMMUFD_PAGE_RESP_FAILURE` 响应码等同于 "Response Failure"，表示关联请求组中的一个或多个页面遇到了不可恢复的错误，硬件据此会禁用 PRI 功能。根因在于该响应码的定义未考虑到现代 I/O 虚拟化（如 SR-IOV）中 PRI 共享的特性，导致单个设备的错误处理不当影响了其他共享 PRI 资源的设备。
+
+#解决方案
+从内核 UAPI 定义中移除 `IOMMUFD_PAGE_RESP_FAILURE` 枚举值，限制用户空间仅能响应 `SUCCESS` 或 `INVALID`。对于需要模拟失败响应的场景，建议 VMM 仿真为 PRI reset 或 PRI disable 并切换至非 PRI 域，避免直接触发硬件禁用全局 PRI。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/903edd0656685ea11d0720fb327fc7ceef10e8ea

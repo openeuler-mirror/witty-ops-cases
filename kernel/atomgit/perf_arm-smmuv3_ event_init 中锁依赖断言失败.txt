@@ -1,0 +1,20 @@
+#标题
+perf/arm-smmuv3: event_init 中锁依赖断言失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `smmu_pmu_event_init` 初始化性能事件时，如果事件本身是组领导，内核会触发 lockdep_assert() 断言失败，导致内核警告或 panic（取决于配置）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smmu_pmu_event_init` 函数中，代码在设置 `event->cpu` 之前遍历了 `event->group_leader` 的兄弟事件（调用 `for_each_sibling_event`）。当传入的事件本身即为组领导时，它尚未分配到 cpu context（即 `ctx` 为空），而 `for_each_sibling_event` 内部会尝试访问该 context 以进行锁依赖检查，从而触发断言失败。此外，该逻辑顺序也与“确保所有事件在同一 CPU 上以避免竞争”的注释意图相悖，因为在检查兄弟事件前未先设定当前事件的 CPU。
+
+#解决方案
+调整 `smmu_pmu_event_init` 函数中的代码执行顺序。首先提前设置 `event->cpu` 和 `hwc->idx`，然后立即判断如果事件是组领导则直接返回 0，从而跳过对兄弟事件的遍历。这样既避免了组领导事件因缺少 context 触发断言，也确保了在后续检查兄弟事件前，当前事件的 CPU 属性已正确设置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2d69dc897710520e6c56dac4d521c3e057535388

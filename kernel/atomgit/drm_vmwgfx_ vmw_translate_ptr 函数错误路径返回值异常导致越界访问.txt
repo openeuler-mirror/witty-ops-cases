@@ -1,0 +1,21 @@
+#标题
+drm/vmwgfx: vmw_translate_ptr 函数错误路径返回值异常导致越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 vmwgfx 驱动的 `vmw_translate_mob_ptr` 和 `vmw_translate_guest_ptr` 函数中，当资源查找失败时，函数错误地返回了成功（返回值为 0），导致后续代码继续执行。这会引发对未初始化指针的访问，进而导致越界（OOB）内存访问或使用未初始化的内存。
+
+#主要错误日志
+drm_dbg(&dev_priv->drm, "Could not find or use MOB buffer.\n");
+drm_dbg(&dev_priv->drm, "Could not find or use GMR region.\n");
+
+#问题根因
+在之前的代码重构中（Commit a309c7194e8a），资源查找函数从返回指针变更为返回错误码，指针改为输出参数。然而，错误处理路径未同步更新，代码继续对未初始化的指针变量 `vmw_bo` 调用 `PTR_ERR()`。由于 `vmw_bo` 在查找失败时未初始化，`PTR_ERR(vmw_bo)` 可能计算出 0 值（即成功状态码），导致函数在查找失败时错误地返回成功，掩盖了错误事实。
+
+#解决方案
+修正错误处理路径的返回值逻辑。当 `vmw_user_bo_lookup` 返回非零错误码 `ret` 时，直接返回 `ret`，而非对未初始化的指针调用 `PTR_ERR`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bbf2c83508eca7310773cf2e365394593d332ec8

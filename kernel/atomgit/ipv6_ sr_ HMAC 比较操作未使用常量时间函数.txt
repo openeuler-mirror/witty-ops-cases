@@ -1,0 +1,20 @@
+#标题
+ipv6: sr: HMAC 比较操作未使用常量时间函数
+
+#内核版本
+OLK-6.6
+
+#问题现象
+IPv6 Segment Routing (SR) 的 HMAC 验证逻辑中，比较 MAC 值时使用了非恒定时间的 `memcmp` 函数。这导致验证过程可能受计时攻击影响，攻击者可能通过分析验证时间差异来逐字节推测出正确的 HMAC 值，从而破坏安全机制。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `seg6_hmac_validate_skb` 函数中，代码直接使用 `memcmp` 比较 `hmac_output` 和 `tlv->hmac`。`memcmp` 在发现字节不匹配时会提前退出，这导致比较执行的时间依赖于不匹配的位置，产生了可被观测的时间侧信道信息。依据 Commit 描述，MACs 需要在常量时间内进行比较以防止计时攻击，原代码未遵循此安全原则。
+
+#解决方案
+引入 `<crypto/utils.h>` 头文件，将 HMAC 比较函数从 `memcmp` 替换为 `crypto_memneq`。`crypto_memneq` 函数设计为在常量时间内完成比较，无论数据内容如何，其执行时间固定，从而消除了计时攻击的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/913b9fc5a15257c6aa616e9ccfa8828e9c17d9c7

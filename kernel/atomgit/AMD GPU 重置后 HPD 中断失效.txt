@@ -1,0 +1,21 @@
+#标题
+AMD GPU 重置后 HPD 中断失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+AMD GPU 发生重置后，由于 HPD（Hot Plug Detect）中断被错误禁用，导致显示设备无法检测到热插拔事件，显示器连接状态检测功能失效。
+
+#主要错误日志
+- `DM_IRQ: Failed get HPD for source=%d)!\n`（推断：初始化时更新引用计数失败打印）
+- `DM_IRQ: Failed put HPD for source=%d!\n`（推断：反初始化时更新引用计数失败打印）
+
+#问题根因
+DC（Display Core）驱动未使用 `amdgpu_irq_get/put` 接口管理 HPD 中断的引用计数。当系统调用 `amdgpu_irq_gpu_reset_resume_helper()` 重置并重新编程所有 IRQ 时，由于引用计数未同步（仍为 0），导致 HPD 中断被禁用。
+
+#解决方案
+在 DM（Display Manager）层的 `amdgpu_dm_hpd_init` 和 `amdgpu_dm_hpd_fini` 函数中，增加对 `amdgpu_irq_get()` 和 `amdgpu_irq_put()` 的调用。通过正确管理 HPD 中断的引用计数，确保在 GPU 重置恢复流程中中断状态能被正确恢复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/36a7d3ca0e499c6327cb1cb637dc188115da6496

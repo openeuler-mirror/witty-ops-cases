@@ -1,0 +1,29 @@
+#标题
+irq-qcom-mpm 处理非唤醒 GPIO 时缺层级检查导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm 芯片平台上，对不具备唤醒能力的 GPIO（non-wake GPIOs）设置中断时触发内核崩溃。具体表现为调用 `gpiomon` 监控特定非唤醒 GPIO 时，系统尝试访问非法虚拟地址，导致 Unable to handle kernel paging request，并伴随中断层级修剪的日志提示。
+
+#主要错误日志
+- `irq: IRQ159: trimming hierarchy from :soc@0:interrupt-controller@f200000-1`
+- `Unable to handle kernel paging request at virtual address ffff8000a1dc3820`
+- `Hardware name: Qualcomm Technologies, Inc. Robotics RB1 (DT)`
+- `pc : mpm_set_type+0x80/0xcc`
+- `lr : mpm_set_type+0x5c/0xcc`
+- `Call trace:`
+  - `mpm_set_type+0x80/0xcc (P)`
+  - `qcom_mpm_set_type+0x64/0x158`
+  - `irq_chip_set_type_parent+0x20/0x38`
+  - `msm_gpio_irq_set_type+0x50/0x530`
+
+#问题根因
+Qualcomm 芯片并非所有 GPIO 都具备唤醒能力，非唤醒 GPIO 没有对应的 MPM pin。`irq-qcom-mpm` 驱动在应用中断域层级时，未检查 `GPIO_NO_WAKE_IRQ` 标记，导致驱动错误地尝试处理这些非唤醒 GPIO。在设置中断类型时（`mpm_set_type`），访问了无效的内存地址，进而引发内核崩溃。相比之下，`qcom-pdc` 驱动包含此检查，而 `irq-qcom-mpm` 缺失。
+
+#解决方案
+参照 `qcom-pdc.c` 的实现，在 `qcom_mpm_alloc` 函数中增加对 `GPIO_NO_WAKE_IRQ` 的判断。当检测到 pin 为 `GPIO_NO_WAKE_IRQ` 时，调用 `irq_domain_disconnect_hierarchy` 将 MPM 从中断层级中移除，避免对非唤醒 GPIO 的错误处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cc2e40010fec3cb147a42d10c5881f4660a67526

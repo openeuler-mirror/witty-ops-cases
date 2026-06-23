@@ -1,0 +1,24 @@
+#标题
+fbcon 字体分配越界访问故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设置帧缓冲控制台字体时，触发内核越界访问。该问题由修复整数溢出的补丁引入，导致数据存储大小与内存分配大小使用同一变量计算，进而引发内存访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复 fbcon_do_set_font 函数整数溢出问题的过程中，补丁错误地将数据大小与分配大小存储在同一个变量中。具体而言，`check_add_overflow` 计算的结果覆盖了原本用于表示数据大小的 `size` 变量，导致后续内存分配与数据操作的尺寸计算错误，从而引发越界访问。
+
+#解决方案
+恢复原有的数据大小计算逻辑，并引入新变量 `alloc_size` 专门用于内存分配大小的计算。
+具体修改：
+1. 在函数 `fbcon_set_font` 中新增变量 `alloc_size`。
+2. 将溢出检查 `check_add_overflow(FONT_EXTRA_WORDS * sizeof(int), size, &size)` 修改为 `check_add_overflow(FONT_EXTRA_WORDS * sizeof(int), size, &alloc_size)`，确保原 `size` 变量值不被覆盖。
+3. 将内存分配调用 `kmalloc(size, GFP_USER)` 修改为 `kmalloc(alloc_size, GFP_USER)`，使用正确的分配大小。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1a24c8a3b465aa0236e08bc712a1f9da81a80ebf

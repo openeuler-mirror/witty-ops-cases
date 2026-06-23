@@ -1,0 +1,34 @@
+#标题
+poll_wait 存在理论与实际竞态条件导致唤醒丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 poll 操作时，由于内存屏障缺失，load 操作可能泄漏到 add_wait_queue 临界区之前执行。这会导致竞态问题：poll 线程可能已开始读取数据，但对端唤醒线程检查 waitqueue_active() 时返回 false（因为队列添加操作尚未对其他 CPU 可见），从而导致唤醒信号丢失，相关进程可能陷入不可中断睡眠或 IO 挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 `waitqueue_active()` 的注释要求，唤醒者与等待者必须拥有配对的内存屏障。然而 `__pollwait()` 及其类似函数在此处存在缺陷。
+以 `pipe_poll()` 为例，其执行流程如下：
+```c
+poll_wait(...); // -> __pollwait() -> add_wait_queue()
+LOAD(pipe->head);
+LOAD(pipe->head);
+```
+理论上，这些 LOAD 指令可能重排到 `add_wait_queue()` 的临界区内部，甚至发生在 `list_add(entry, wq_head)` 之前。此时若与 `wakeup_pipe_readers/writers` 并发执行，唤醒方执行序列为：
+```c
+smp_mb();
+if (waitqueue_active(wq_head))
+    wake_up_interruptible(wq_head);
+```
+由于等待队列添加操作被重排延后，唤醒方观察不到等待队列中有活跃项，导致不执行唤醒操作，进而引发唤醒丢失。
+
+#解决方案
+在 `poll_wait()` 函数中调用 `_qproc` 之后添加 `smp_mb()` 内存屏障。
+该屏障与 `wq_has_sleeper()` 中的屏障配对，确保当前线程中后续的测试操作（如 LOAD）不会被重排到 `__add_wait_queue()` 操作之前，从而保证 waitqueue 状态对唤醒方的可见性，修复竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c1c5c3b4c6943c732e8824a4134f59a12bc9c920

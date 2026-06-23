@@ -1,0 +1,24 @@
+#标题
+drm/amd/display: dcn32_init_hw 中访问未初始化的 clk_mgr 导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD DCN32 显示驱动初始化过程中（`dcn32_init_hw`），若 `dc->clk_mgr` 或其 `funcs` 成员未正确初始化或为 NULL，内核在调用相关函数指针时触发空指针解引用，导致系统 Panic 或 Oops 崩溃。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address ...
+RIP: dcn32_init_hw+0x.../0x...
+
+#问题根因
+驱动初始化函数 `dcn32_init_hw` 在调用 `clk_mgr` 的方法（如 `init_clocks`、`notify_wm_ranges`、`set_hard_max_memclk`）前，代码逻辑未对 `dc->clk_mgr` 指针及其 `funcs` 成员进行充分的非空校验。在特定硬件状态或初始化流程异常情况下，直接访问了空指针成员导致崩溃。
+
+#解决方案
+在 `drivers/gpu/drm/amd/display/dc/dcn32/dcn32_hwseq.c` 文件中补充防御性编程检查：
+1. 调用 `init_clocks` 前，增加 `dc->clk_mgr` 和 `dc->clk_mgr->funcs` 的非空判断。
+2. 调用 `notify_wm_ranges` 前，增加 `dc->clk_mgr` 和 `dc->clk_mgr->funcs` 的非空判断。
+3. 调用 `set_hard_max_memclk` 前，增加 `dc->clk_mgr` 和 `dc->clk_mgr->funcs` 的非空判断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e5f9cb08ccf02777d4bcc83a9bcdbba6434a7ab2

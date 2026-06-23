@@ -1,0 +1,32 @@
+#标题
+ubi: fastmap attach 时因 slab cache 名称重复触发内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 `CONFIG_DEBUG_VM=y` 的环境下，加载 UBI 设备并执行 fastmap attach 流程时，内核检测到重复的 slab cache 名称从而触发 WARNING。系统栈踪显示警告来自 `__kmem_cache_create_args`，调用链经 `ubi_attach` 指向 `alloc_ai` 函数。
+
+#主要错误日志
+kmem_cache of name 'ubi_aeb_slab_cache' already exists
+WARNING: CPU: 0 PID: 7519 at mm/slab_common.c:107 __kmem_cache_create_args+0x100/0x5f0
+Modules linked in: ubi(+) nandsim [last unloaded: nandsim]
+CPU: 0 UID: 0 PID: 7519 Comm: modprobe Tainted: G 6.12.0-rc2
+RIP: 0010:__kmem_cache_create_args+0x100/0x5f0
+Call Trace:
+  __kmem_cache_create_args+0x100/0x5f0
+  alloc_ai+0x295/0x3f0 [ubi]
+  ubi_attach+0x3c3/0xcc0 [ubi]
+  ubi_attach_mtd_dev+0x17cf/0x3fa0 [ubi]
+  ubi_init+0x3fb/0x800 [ubi]
+  do_init_module+0x265/0x7d0
+  __x64_sys_finit_module+0x7a/0xc0
+
+#问题根因
+内核提交 4c39529663b9 ("slab: Warn on duplicate cache names when DEBUG_VM=y") 引入了对重复 slab cache 名称的检测机制。在 UBI fast attaching 过程中，`alloc_ai()` 函数可能被调用两次，但两次调用均使用了硬编码的固定名称 `'ubi_aeb_slab_cache'` 来创建 kmem_cache，导致第二次创建时因名称冲突而触发内核 WARNING。
+
+#解决方案
+修改 `alloc_ai()` 函数接口，增加 `slab_name` 参数，使其支持调用者传入自定义的 slab cache 名称。在 `scan_fast`、`ubi_attach` 及 fastmap 校验等不同调用场景中，分别传入 "ubi_aeb_slab_cache_fastmap"、"ubi_aeb_slab_cache"、"ubi_aeb_slab_cache_dbg_chk_fastmap" 等不同名称，从而避免重复名称导致的冲突与告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/549b31db65d842abed180428642a4aa6f31976ff

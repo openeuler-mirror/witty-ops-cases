@@ -1,0 +1,24 @@
+#标题
+drm/vkms: 初始化失败时的内存释放与访问缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 vkms 模块初始化过程中，如果 `vkms_create` 函数执行失败，会导致内存使用后释放和重复释放问题。具体表现为：
+1. 初始化错误路径中，`default_config` 全局指针已指向待释放的内存区域，导致释放后该指针仍保留无效地址，后续访问引发 Use After Free。
+2. 模块卸载时（`vkms_exit`），若 `default_config` 指针非空但并未成功关联设备（`dev` 为空），`vkms_destroy` 不会被调用，直接执行 `kfree`，随后再次调用 `vkms_destroy` 或发生重复释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `vkms_init` 函数中，`default_config = config` 赋值操作在 `vkms_create` 调用之前执行。当 `vkms_create` 失败时，代码进入错误处理分支执行 `kfree(config)`，但此时全局变量 `default_config` 仍指向这块已释放的内存。
+此外，在 `vkms_exit` 函数中，原有的判断逻辑 `if (default_config->dev)` 过于依赖 `dev` 指针的有效性，且未对 `default_config` 指针本身做防御性检查，导致在特定错误状态下引发双重释放或访问非法内存。
+
+#解决方案
+1. 调整 `vkms_init` 中的赋值顺序：将 `default_config = config` 移至 `vkms_create` 成功执行之后。若 `vkms_create` 失败，直接释放 config 并返回错误码，确保全局指针不指向已释放内存。
+2. 优化 `vkms_exit` 的卸载逻辑：移除对 `default_config->dev` 的依赖检查，直接判断 `default_config` 是否为空。若非空则调用 `vkms_destroy` 并释放内存，确保资源清理路径的唯一性与安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f8b240195dd3bbe511dcb5ab1536b35a2d1bdaa1

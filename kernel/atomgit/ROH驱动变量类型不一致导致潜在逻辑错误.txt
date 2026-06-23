@@ -1,0 +1,32 @@
+#标题
+ROH驱动变量类型不一致导致潜在逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ROH（Rdma over Hns3）驱动模块在使用过程中，由于变量类型定义不一致（int 与 u32/u64 混用），可能导致以下现象：
+1. 命令队列（CMDQ）处理逻辑中，环形缓冲区指针计算或比较结果异常，导致命令发送或清理流程出错。
+2. 调试日志打印格式与变量类型不匹配，导致日志信息显示错误。
+3. Sysfs 接口统计计数器遍历时，因符号类型问题可能导致数组越界访问。
+
+#主要错误日志
+- `dev_warn(hroh_dev->dev, "cleaned %u, need to clean %u\n", handle, num);`（推断：命令队列清理不完全时的警告，修复前格式符为 %d）
+
+#问题根因
+驱动代码中存在多处变量类型不一致问题，核心原因包括：
+1. 环形缓冲区索引变量（next_to_use, next_to_clean）定义为有符号 int，但实际作为无符号索引使用，计算 space 时存在符号风险。
+2. 函数返回值与参数类型不匹配，如 `hns3_roh_cmdq_space` 返回 int 但应返回 u32，`hns3_roh_cmdq_send` 参数 num 定义为 int 但应为 u32。
+3. 日志打印中使用 %d 格式化无符号变量。
+4. 用户空间拷贝返回值变量定义为 int，应使用 unsigned long 以匹配返回值类型。
+
+#解决方案
+通过代码重构修正变量类型，确保类型一致性：
+1. 将环形缓冲区索引变量 `next_to_use` 和 `next_to_clean` 的类型从 int 修改为 u32。
+2. 将相关函数 `hns3_roh_cmdq_space`、`hns3_roh_cmdq_csq_clean` 的返回值类型以及 `hns3_roh_cmdq_send` 的参数 num 类型修改为 u32。
+3. 修正日志打印格式符，将 `dev_warn` 中的 %d 改为 %u。
+4. 修正 `copy_to_user`/`copy_from_user` 相关变量类型为 unsigned long。
+5. 统一循环变量与计数器的类型定义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/09d0a2e6b14e15a741ad6b479c7dced36608a9ff

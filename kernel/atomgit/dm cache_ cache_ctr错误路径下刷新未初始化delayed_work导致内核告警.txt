@@ -1,0 +1,27 @@
+#标题
+dm cache: cache_ctr错误路径下刷新未初始化delayed_work导致内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建 dm-cache 设备失败时（例如元数据块校验和错误），内核触发意外的 WARN_ON 告警。具体表现为调用 `dmsetup create` 创建 cache 设备过程中，如果构造函数 `cache_ctr` 或 `cache_create` 遇到错误并进入错误处理流程，系统日志中会出现 `__flush_work` 相关的警告栈信息。
+
+#主要错误日志
+WARNING: CPU: 0 PID: 84 at kernel/workqueue.c:4178 __flush_work+0x5d4/0x890
+
+#问题根因
+该问题是由 commit 6a459d8edbdb ("dm cache: Fix UAF in destroy()") 引入的回归缺陷。
+在 `cache_create()` 或 `cache_ctr()` 的错误处理路径中，代码调用了 `destroy(cache)` 函数进行资源清理。该 `destroy` 函数内部会执行 `cancel_delayed_work_sync(&cache->waker)`。
+然而，在构造函数失败的场景下，`cache->waker`（delayed_work 结构体）尚未初始化（通常由 `INIT_DELAYED_WORK` 初始化，发生在构造成功路径中）。对未初始化的 delayed_work 调用 `cancel_delayed_work_sync()` 会进一步触发 `flush_work()`，从而导致内核检测到工作状态异常并抛出 WARN_ON 告警。
+
+#解决方案
+将 `cancel_delayed_work_sync(&cache->waker)` 的调用从通用的资源销毁逻辑中剥离，专门放置在仅由正常析构函数 `cache_dtr` 调用的 `destroy` 函数中。
+具体修改如下：
+1. 新增 `__destroy(struct cache *cache)` 函数，包含除 `cancel_delayed_work_sync` 之外的所有资源释放逻辑（如内存池销毁、工作队列销毁、kfree 等）。
+2. 修改 `destroy(struct cache *cache)` 函数，先执行 `cancel_delayed_work_sync(&cache->waker)`，然后调用 `__destroy(cache)`。
+3. 将构造错误路径（`cache_create` 和 `cache_ctr` 的 error path）中的 `destroy(cache)` 调用替换为 `__destroy(cache)`。
+此举确保了只有在 delayed_work 被正确初始化后（即设备创建成功后销毁时）才会去取消并刷新该工作项，避免了在错误路径下操作未初始化的结构体。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3740eaa02ff941078dc1cf4221eefe67798cbf66

@@ -1,0 +1,21 @@
+#标题
+sw64: clocksource: CPU频率变更时未正确通知所有clockevents设备
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在SW64架构下，当CPU频率发生变化时，系统未能正确更新共享时钟域内所有CPU的clockevents设备。这导致时钟事件设备仍使用旧的频率参数进行计算，可能引发定时器精度错误、系统时钟漂移或与时间相关的功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在CPU频率变更的通知回调函数 `sw64_cpufreq_notifier` 中，处理逻辑仅针对策略中的主CPU（policy->cpu）进行更新，且对非本地CPU的处理只是简单计算参数而未触发标准的 `clockevents_update_freq` 通知流程。这导致同一时钟域内的其他CPU无法接收到频率变更通知，其内部的时钟事件设备参数未得到正确更新。
+
+#解决方案
+修改 `sw64_update_clockevents` 函数，使用 `this_cpu_ptr` 获取当前CPU的时钟事件设备，并统一调用 `clockevents_update_freq` 更新频率。
+同时，利用 `on_each_cpu_mask` 接口将更新操作广播到频率策略影响的所有CPU（freqs->policy->cpus），确保该时钟域内的所有CPU都能正确接收到频率变更通知并更新相应的设备参数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75cf73ff3017f01002e62b2c496835f1d6c1273f

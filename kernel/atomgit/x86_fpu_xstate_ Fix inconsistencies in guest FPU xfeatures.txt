@@ -1,0 +1,20 @@
+#标题
+x86/fpu/xstate: Fix inconsistencies in guest FPU xfeatures
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在管理 guest FPU 状态时，`fpu_alloc_guest_fpstate()` 函数中存在内核缓冲区大小与 xfeatures 属性配置不一致的问题。由于 `gfpu->xfeatures` 和 `gfpu->perm` 错误地引用了 `fpu_user_cfg`，而其他相关逻辑（如 `fpstate_realloc` 和权限检查）引用的是 `fpu_kernel_cfg`，这种不一致可能导致对 XFD（eXtended Feature Disable）特性的检查逻辑产生混淆，影响虚拟化场景下动态 FPU 特性的正常使能与状态管理。
+
+#主要错误日志
+未知
+
+#问题根因
+自 guest FPU 基础设施引入以来，`fpu_alloc_guest_fpstate()` 函数一直使用 `fpu_user_cfg` 来初始化 `gfpu->xfeatures` 和 `gfpu->perm`。然而，`__fpstate_reset()` 和 `fpu->guest_perm` 相关逻辑却引用 `fpu_kernel_cfg`。这种在同一函数及跨函数间配置引用的不一致，导致了内核缓冲区属性管理的混乱。
+
+#解决方案
+修改 `arch/x86/kernel/fpu/core.c` 中的 `fpu_alloc_guest_fpstate()` 函数，将 `gfpu->xfeatures` 和 `gfpu->perm` 的赋值来源从 `fpu_user_cfg.default_features` 统一修改为 `fpu_kernel_cfg.default_features`。此修复确保了 guest FPU 配置在全流程中的一致性，且不影响现有功能：`perm` 会在后续 `fpu_init_guest_permissions()` 中被覆盖，而 `xfeatures` 包含监管者特性不会影响 XFD 使能检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/700ac56c5edd758a3c21e1cf71bf41ec19ce67db

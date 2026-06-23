@@ -1,0 +1,20 @@
+#标题
+userfaultfd: UFFDIO_COPY 模式检查因运算符优先级错误导致合法请求被拒绝
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_USERSWAP 的情况下，携带 UFFDIO_COPY_MODE_WP 标志的 UFFDIO_COPY 请求被错误地判定为无效，导致系统调用返回 -EINVAL。该问题导致内核自测测试用例 sigbus-wp 和 events-wp 执行失败。
+
+#主要错误日志
+未知
+
+#问题根因
+C 语言中位或运算符（`|`）的优先级高于三元条件运算符（`?:`）。原代码表达式 `DONTWAKE | WP | IS_ENABLED(CONFIG_USERSWAP) ? DIRECT_MAP : 0` 被解析为 `(DONTWAKE | WP | IS_ENABLED(CONFIG_USERSWAP)) ? DIRECT_MAP : 0`。当 CONFIG_USERSWAP 开启时，IS_ENABLED() 为 1，导致前半部分非零，三元表达式恒返回 DIRECT_MAP。随后对 DIRECT_MAP 取反（`~`）生成的掩码中未清除 WP 位，导致任何带有 WP 位的请求都因掩码检查不通过而返回 -EINVAL。
+
+#解决方案
+在三元条件运算符表达式两侧添加括号，修正运算优先级。将 `IS_ENABLED(CONFIG_USERSWAP) ? UFFDIO_COPY_MODE_DIRECT_MAP : 0` 用括号包裹，确保逻辑为：仅在 CONFIG_USERSWAP 启用时将 DIRECT_MAP 加入掩码计算，而非改变整个条件表达式的逻辑结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ceb74f63f330adce336d4f140caa6eae9dc7040d

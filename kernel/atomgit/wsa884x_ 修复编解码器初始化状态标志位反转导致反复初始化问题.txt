@@ -1,0 +1,24 @@
+#标题
+wsa884x: 修复编解码器初始化状态标志位反转导致反复初始化问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+wsa884x 编解码器在 SoundWire 总线状态更新时，可能被反复执行不必要的初始化操作；或者在设备首次附着（ATTACHED）时无法正确完成初始化及退出 regmap 缓存模式，导致音频功能异常或硬件状态混乱。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码中 `hw_init` 标志位的逻辑存在两处反转错误：
+1. 在 `wsa884x_init` 函数执行完初始化后，错误地将 `hw_init` 设置为 `false`，导致标志位未能正确标记“已初始化”状态，失去了防重复初始化的保护作用。
+2. 在 `wsa884x_probe` 阶段，错误地将初始状态设置为 `true`，导致逻辑判断出错：只有当状态转换为 UNATTACHED 时才执行初始化，而不是预期的从 UNATTACHED 转换到 ATTACHED 时执行初始化。
+
+#解决方案
+修正 `hw_init` 标志位的赋值逻辑：
+1. 在 `wsa884x_init` 函数末尾，将 `wsa884x->hw_init = false;` 修改为 `wsa884x->hw_init = true;`，确保初始化完成后状态正确。
+2. 移除 `wsa884x_probe` 函数中的 `wsa884x->hw_init = true;` 赋值语句，保持结构体初始化时默认的 `false` 状态，确保仅在设备从未附着状态转为附着状态时触发初始化流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a1a996133caac851c8194d5e5f2427f5bb41b920

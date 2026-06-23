@@ -1,0 +1,20 @@
+#标题
+vp_vdpa: id_table 数组未以空终止符结尾导致潜在内存访问越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 vp_vdpa 驱动并注册 vdpa 管理设备时，由于 `id_table` 数组未以 NULL 结尾，当内核调用 `vdpa_mgmtdev_get_classes()` 等函数遍历该数组时，可能发生内存访问越界（Out-of-Bounds Access），导致内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `vp_vdpa_probe` 中分配 `mdev_id` 内存时，仅分配了 `sizeof(struct virtio_device_id)` 大小的空间，刚好容纳一个设备 ID 结构体。随后将该地址赋值给 `mgtdev->id_table`。根据内核接口约定，`id_table` 必须是一个以全零（NULL 终止符）结尾的数组。当前实现导致数组末尾缺失终止符，内核在遍历 `id_table` 时无法判断数组边界，从而引发越界访问。
+
+#解决方案
+修改内存分配方式，将 `kzalloc(sizeof(struct virtio_device_id), ...)` 替换为 `kcalloc(2, sizeof(struct virtio_device_id), ...)`。这确保了分配足够容纳两个结构体的空间：第一个用于存储实际的设备 ID，第二个自动初始化为全零（得益于 kcalloc 的特性），从而作为数组的有效终止符。同时将原有的赋值操作从 `mdev_id->device/vendor` 修正为 `mdev_id[0].device/vendor` 以适配数组写法。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2077a70e06abc678d1628980d41a4f2f74646485

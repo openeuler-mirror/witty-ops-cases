@@ -1,0 +1,20 @@
+#标题
+将页表锁配置从宏定义重构为 Kconfig 选项导致编译依赖失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 CONFIG_HUGETLB 与 PMD 页表共享特性的架构上，若相关 Kconfig 配置项未正确生效，可能导致内核编译失败（如隐式函数声明错误）或运行时因锁机制不匹配引发内存管理子系统的异常行为。该提交主要为代码重构与清理，旨在解决原有宏定义 `USE_SPLIT_PTE_PTLOCKS` / `USE_SPLIT_PMD_PTLOCKS` 无法被 Kconfig 依赖的问题。
+
+#主要错误日志
+未知
+
+#问题根因
+原有的 `USE_SPLIT_PTE_PTLOCKS` 和 `USE_SPLIT_PMD_PTLOCKS` 被定义为预处理宏（`#define`），其值取决于 `NR_CPUS` 等配置。这种机制导致其他 Kconfig 选项无法直接依赖这些特性（例如无法在 `config` 中使用 `depends on USE_SPLIT_PTE_PTLOCKS`），限制了内核配置系统的灵活性，且难以正确表达 hugetlb 与 core-mm PT locking 的依赖关系。
+
+#解决方案
+将 `USE_SPLIT_PTE_PTLOCKS` 和 `USE_SPLIT_PMD_PTLOCKS` 从简单的宏定义转换为标准的 Kconfig 布尔选项（`config SPLIT_PTE_PTLOCKS` 和 `config SPLIT_PMD_PTLOCKS`），并在 `mm/Kconfig` 中明确其依赖关系（如依赖 MMU、NR_CPUS >= 4 等）。同时，将代码中所有 `#if USE_SPLIT_PTE_PTLOCKS` 的判断逻辑修改为 `#if defined(CONFIG_SPLIT_PTE_PTLOCKS)`，以便内核配置系统可以正确识别并管理这些依赖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/68559265a6ac44c61ed19461c1b9f15aeb7c77ea

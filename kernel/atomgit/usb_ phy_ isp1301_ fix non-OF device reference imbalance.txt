@@ -1,0 +1,20 @@
+#标题
+usb: phy: isp1301: fix non-OF device reference imbalance
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非设备树（non-OF）环境下，当 UDC 驱动（如 lpc32xx_udc）调用 `isp1301_get_client()` 获取 I2C 设备并在后续释放设备引用时，会导致设备引用计数失衡，进而引发潜在的释放后使用问题。
+
+#主要错误日志
+未知
+
+#问题根因
+commit c84117912bdd ("USB: lpc32xx_udc: Fix error handling in probe") 修复了一个 UDC 驱动中的设备引用泄漏问题，但引入了新的缺陷：`isp1301_get_client()` 辅助函数仅在 OF（设备树）情况下增加了返回的 I2C 设备的引用计数，而在非 OF 情况下未增加引用计数。由于调用者（UDC 驱动）会无条件地减少引用计数，导致非 OF 场景下出现引用计数失衡，进而导致 use-after-free。
+
+#解决方案
+修改 `isp1301_get_client()` 函数，在非 OF 分支中也调用 `get_device()` 增加设备的引用计数，确保无论是否为 OF 场景，返回的 I2C 设备引用计数均已增加，允许调用者无条件地减少引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31bac0d4091803b28ca3e2b492dc69eb512fccd3

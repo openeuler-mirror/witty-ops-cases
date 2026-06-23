@@ -1,0 +1,27 @@
+#标题
+__udp_gso_segment 中 skb 所有权处理不当导致内核 BUG
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 OpenVSwitch 且 OVS_ACTION_ATTR_USERSPACE 动作先于 OVS_ACTION_ATTR_OUTPUT 动作执行的场景下，内核在处理 skb_orphan 时会触发 BUG，导致系统崩溃或异常行为。
+
+#主要错误日志
+kernel BUG at ./include/linux/skbuff.h:3312!  (skb_orphan)
+RIP: 0010:ip_rcv_core+0x8b2/0xca0
+Call Trace:
+ ip_rcv+0xab/0x6e0
+ __netif_receive_skb_one_core+0x168/0x1b0
+ process_backlog+0x384/0x1100
+ __napi_poll.constprop.0+0xa1/0x370
+ net_rx_action+0x925/0xe50
+
+#问题根因
+在 `__udp_gso_segment` 函数中，代码在分段 skb 前清除了析构函数但保留了对 socket 的引用。如果原始 skb 随后被孤立，由于析构函数已被清除但 socket 引用仍存在，破坏了 skb_orphan 的内部一致性约束，从而触发 kernel BUG。
+
+#解决方案
+在 `__udp_gso_segment` 函数中，当清除 skb 析构函数时，同步将 `gso_skb->sk` 设置为 NULL，以正确解除对 socket 的引用；在分段失败回滚路径中，恢复析构函数的同时也恢复 `gso_skb->sk` 的引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fbf2d66521cdcc78ca6a9e42a5d2759ef8eb1957

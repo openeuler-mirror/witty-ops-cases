@@ -1,0 +1,20 @@
+#标题
+hwmon: (acpi_power_meter) 驱动在具有 _PMD 方法的平台上加载失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在打了先前修复补丁（fabb1f813ec0）的内核上，acpi_power_meter 驱动模块在具有 _PMD 方法的平台（如 Nvidia Grace 机器）上无法正常加载，导致电源计量功能不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 commit fabb1f813ec0 中，为了处理平台无 _PMD 方法的情况，代码逻辑调整为：当 `read_domain_devices()` 返回值 `res != -ENODEV` 时直接返回错误。然而，`read_domain_devices()` 执行成功时返回 0。根据原有逻辑判断条件 `res != -ENODEV`，当函数成功返回 0 时，条件判断为真（0 不等于 -ENODEV），导致驱动错误地返回了 0 值以外的流程（实际上是提前 return 了 res 即 0，虽然没报错但跳过了后续逻辑，或者如果 res 是其他错误码则直接返回错误）。实际上，更准确的根因是：原逻辑未能正确区分“成功”与“非 ENODEV 的错误”。正确逻辑应当是：只有在返回值不为 0（有错误）且不为 -ENODEV（忽略该特定错误）时，才中止加载；若返回 0（成功）或 -ENODEV（忽略），均应继续执行。
+
+#解决方案
+修改 `drivers/hwmon/acpi_power_meter.c` 中 `setup_attrs` 函数的判断逻辑。将条件从 `if (res != -ENODEV)` 修改为 `if (res && res != -ENODEV)`。这确保了当 `read_domain_devices()` 返回 0（成功）时，条件为假，程序继续往下执行后续的属性设置；仅当返回错误且错误码不是 -ENODEV 时，才中止加载。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1528c91e42eeb1fe786fbeeb4069a10c788aaa40

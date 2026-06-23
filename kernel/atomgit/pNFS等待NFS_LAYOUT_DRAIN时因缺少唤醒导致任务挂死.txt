@@ -1,0 +1,28 @@
+#标题
+pNFS等待NFS_LAYOUT_DRAIN时因缺少唤醒导致任务挂死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在pNFS高并发场景下（例如多个写IO遇到ESTALE错误触发布局销毁），执行写操作的进程可能进入不可中断睡眠状态（D状态）永久挂起。具体表现为进程在 `wait_on_bit()` 上睡眠无法醒来，系统负载升高但相关进程无响应。
+
+#主要错误日志
+未知
+
+#问题根因
+这是一个典型的竞态条件问题，导致 `NFS_LAYOUT_DRAIN` 位上的等待者丢失唤醒信号。
+具体场景如下：
+1. CPU A（等待者）：检查到 `NFS_LAYOUT_DRAIN` 已置位且 `plh_outstanding` 大于0，准备等待。
+2. CPU B（完成者）：执行 `atomic_dec_and_test()`，清除 `NFS_LAYOUT_DRAIN` 位并发出唤醒。
+3. CPU C（再次置位者）：另一个ESTALE写操作调用 `pnfs_destroy_layout()` 再次设置 `NFS_LAYOUT_DRAIN` 位。
+4. CPU A：调用 `wait_on_bit()` 进入睡眠，但此时它错过了步骤2的唤醒，且因为步骤3重新置位，后续无人再次唤醒它，导致进程永久睡眠。
+
+根本原因是 `pnfs_mark_layout_stateid_invalid()` 函数未对 `NFS_LAYOUT_INVALID_STID` 位进行原子性的检查与设置。当多个调用者进入该函数时，都会重复设置 `NFS_LAYOUT_DRAIN` 位，从而触发了上述竞态窗口。
+
+#解决方案
+修改 `pnfs_mark_layout_stateid_invalid()` 函数，将原本的 `set_bit(NFS_LAYOUT_INVALID_STID, ...)` 改为 `test_and_set_bit(NFS_LAYOUT_INVALID_STID, ...)`。
+如果发现该位已经被置位（即返回true），则直接返回当前布局段列表是否为空的状态，不再重复执行后续的清理和 `NFS_LAYOUT_DRAIN` 置位操作。这确保了 `NFS_LAYOUT_DRAIN` 不会被多次不必要地设置，消除了竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/934262e67a54dece6faf63df71f167fea654b3e2

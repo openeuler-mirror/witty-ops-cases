@@ -1,0 +1,23 @@
+#标题
+i40e 驱动 VF 状态校验逻辑错误导致资源获取流程异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+i40e 网卡驱动在处理虚拟功能（VF）获取资源的请求时，状态校验逻辑存在缺陷。原先的校验仅依赖 `I40E_VF_STATE_ACTIVE` 状态位，但该状态位并不是判断 VF 是否允许获取资源的唯一有效标志。这导致在某些特定状态流转过程中，VF 无法正确获取资源，或导致复位后的状态判断不一致，影响虚拟化网络功能的正常使用。
+
+#主要错误日志
+未知
+
+#问题根因
+VF 状态位 `I40E_VF_STATE_ACTIVE` 并不是唯一代表 VF 实际处于活跃状态标志，因此不应单独用于判断 VF 是否被允许获取资源。正确的逻辑应当使用 `I40E_VF_STATE_RESOURCES_LOADED` 状态位进行判断，该状态位仅在 `i40e_vc_get_vf_resources_msg()` 函数中设置，并在复位过程中清除。原代码使用错误的状态位进行验证，导致权限判断逻辑不严谨。
+
+#解决方案
+1. 在 `i40e_virtchnl_pf.h` 中新增 `I40E_VF_STATE_RESOURCES_LOADED` 状态枚举定义。
+2. 在 `i40e_vc_get_vf_resources_msg()` 函数中修改校验逻辑：不再仅检查 `I40E_VF_STATE_INIT`，而是增加对 `I40E_VF_STATE_RESOURCES_LOADED` 的检查；如果该位已置位，则拒绝再次获取资源。
+3. 在成功获取资源后，设置 `I40E_VF_STATE_RESOURCES_LOADED` 状态位。
+4. 在 `i40e_trigger_vf_reset()` 复位触发流程中，清除 `I40E_VF_STATE_RESOURCES_LOADED` 状态位，确保复位后状态重新初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8e99eee3280c0f72e1c83d9e5cddcb3ec45d14ed

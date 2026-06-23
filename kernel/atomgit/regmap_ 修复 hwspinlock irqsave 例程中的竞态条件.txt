@@ -1,0 +1,22 @@
+#标题
+regmap: 修复 hwspinlock irqsave 例程中的竞态条件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 hwspinlock 且使用 irqsave 锁定机制的 regmap 场景下，多核并发访问时可能出现竞态条件，导致中断状态保存/恢复异常，可能引发内核状态不一致或潜在的死锁/崩溃风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `regmap_lock_hwlock_irqsave` 函数中，`hwspin_lock_timeout_irqsave` 直接将中断状态标志写入 `&map->spinlock_flags`。
+若多个执行上下文（如不同 CPU 核）并发调用此函数，它们会共享并覆写同一个 `map->spinlock_flags` 变量，导致先前保存的中断状态丢失，从而产生竞态条件。
+
+#解决方案
+将中断状态标志的存储位置从共享的结构体成员 `map->spinlock_flags` 修改为函数内的局部变量 `flags`。
+先将 `hwspin_lock_timeout_irqsave` 返回的状态保存在局部变量中，确保了各执行上下文的独立性和原子性，随后再将该值赋给 `map->spinlock_flags`，从而避免了竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aa296bc05dbae4fa4cfc1b4eaf7282d5e66b4511

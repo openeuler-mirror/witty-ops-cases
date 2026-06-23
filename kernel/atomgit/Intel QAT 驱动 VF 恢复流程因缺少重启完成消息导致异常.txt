@@ -1,0 +1,20 @@
+#标题
+Intel QAT 驱动 VF 恢复流程因缺少重启完成消息导致异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Intel QAT（QuickAssist Technology）驱动在支持 PFVF 协议版本 5（ADF_PFVF_COMPAT_FALLBACK）的环境中，虚拟功能（VF）在进行恢复操作时，因未能向物理功能（PF）发送重启完成消息，导致 PF 无法感知 VF 关闭流程的结束，进而导致 VF 恢复流程异常或失败。
+
+#主要错误日志
+Failed to send Restarting complete event to PF
+
+#问题根因
+在提交 ec26f8e6c784 更新 PFVF 协议以支持恢复功能时，将 VF 的兼容性版本更新到了 ADF_PFVF_COMPAT_FALLBACK，但代码中遗漏了对 ADF_VF2PF_MSGTYPE_RESTARTING_COMPLETE 消息的支持。根据协议要求，VF 需要发送此消息通知 PF 其关闭流程已完成，缺失该消息导致 PF 端状态机或恢复逻辑无法正常推进。
+
+#解决方案
+在 VF 驱动中新增 `adf_vf2pf_notify_restart_complete` 函数，实现发送 `ADF_VF2PF_MSGTYPE_RESTARTING_COMPLETE` 消息的逻辑。在 VF 重启过程中（具体在 `adf_dev_stop_async` 工作队列执行完毕并重新使能中断后），调用该函数通知 PF 恢复流程已完成。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae92c0d0126f02543e424020c53e7df918847658

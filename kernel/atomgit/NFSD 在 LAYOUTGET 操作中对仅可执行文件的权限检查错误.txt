@@ -1,0 +1,20 @@
+#标题
+NFSD 在 LAYOUTGET 操作中对仅可执行文件的权限检查错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 pNFS SCSI 环境下，对仅可执行权限的文件执行 LAYOUTGET 操作失败，导致 xfstests 测试用例 generic/126 无法通过。具体表现为当文件权限为 111（--x--x--x）时，客户端无法正常获取布局进行读取。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit abc02e5602f7 ("NFSD: Support write delegations in LAYOUTGET") 在 nfsd4_layoutget() 调用 fh_verify() 时引入了 NFSD_MAY_OWNER_OVERRIDE 标志。这导致传入 nfsd_permission() 的 access flags 不再单纯是 NFSD_MAY_READ，而是包含了 NFSD_MAY_OWNER_OVERRIDE。原有的权限检查逻辑仅匹配特定的标志组合，无法识别包含额外提示标志的读请求，从而导致权限检查返回 -EACCES，阻止了对仅可执行文件的读取访问。
+
+#解决方案
+修改 fs/nfsd/vfs.c 中的权限检查逻辑。将原先对 access flags 的精确匹配修改为位运算检查：只要权限部分（低 6 位，通过 NFSD_MAY_MASK 掩码获取）准确为 NFSD_MAY_READ，且提示部分（高 26 位）包含 NFSD_MAY_OWNER_OVERRIDE 或 NFSD_MAY_READ_IF_EXEC，即允许通过权限检查并执行 MAY_EXEC 权限验证。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2ff525a9c7c51a9173e77edfd1b2e2da6efa0d9f

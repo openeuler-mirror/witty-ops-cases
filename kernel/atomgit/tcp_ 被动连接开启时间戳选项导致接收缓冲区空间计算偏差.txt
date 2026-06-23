@@ -1,0 +1,20 @@
+#标题
+tcp: 被动连接开启时间戳选项导致接收缓冲区空间计算偏差
+
+#内核版本
+OLK-6.6
+
+#问题现象
+对于启用了 TCP Timestamps 选项的被动连接流，其初始接收缓冲区空间（`tp->rcvq_space.space`）计算值比实际值大 120 字节，导致 TCP 接收缓冲区空间的初始化设置不准确。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tcp_rcv_state_process()` 函数中，处理被动连接时，对 `tp->advmss` 的调整（减去 `TCPOLEN_TSTAMP_ALIGNED`）发生在 `tcp_init_transfer()` / `tcp_init_buffer_space()` 调用之后。由于接收缓冲区空间的初始化依赖于 `tp->advmss` 的值，该调整顺序错误导致 `tp->rcvq_space.space` 的初始值偏差了 120 字节（计算公式为：`TCP_INIT_CWND * TCPOLEN_TSTAMP_ALIGNED`）。
+
+#解决方案
+调整代码执行顺序，将 `tp->advmss` 的时间戳选项长度调整逻辑移至 `tcp_init_transfer()` 调用之前。确保在初始化缓冲区空间时，`tp->advmss` 已经是修正后的正确值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c9ca69a6ad815fa3939374c8c93a54d9e4605e8b

@@ -1,0 +1,21 @@
+#标题
+drm/amd: 模块卸载时因误判设备断开状态导致系统挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行正常的 amdgpu 驱动模块卸载操作（如 `rmmod amdgpu`）时，系统发生挂起，无法正常完成卸载流程。
+
+#主要错误日志
+未知
+
+#问题根因
+ commit 6a23e7b4332c ("drm/amd: Clean up kfd node on surprise disconnect") 引入了基于 `drm_dev_is_unplugged()` 的早期 KFD 清理逻辑，意图处理设备意外断开的情况。但在正常模块卸载流程中，`amdgpu_pci_remove()` 会调用 `drm_dev_unplug()`，导致 `drm_dev_is_unplugged()` 返回 true。这误导驱动在正常卸载时错误地触发了针对“意外断开”设计的早期 KFD 清理路径，进而引发死锁或挂起。
+
+#解决方案
+修改 `amdgpu_device_fini_hw` 函数中的判断逻辑，将 `drm_dev_is_unplugged(adev_to_drm(adev))` 替换为 `pci_dev_is_disconnected(adev->pdev)`。
+通过 `pci_dev_is_disconnected()` 可以准确区分硬件层面的意外断开与正常的模块卸载操作，确保早期清理逻辑仅在真实的硬件断开事件中执行，从而避免正常卸载时的系统挂起。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/035901adc235c4be2eb38bd4e08a64421aa17ee8

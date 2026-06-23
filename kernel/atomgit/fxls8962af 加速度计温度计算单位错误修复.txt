@@ -1,0 +1,26 @@
+#标题
+fxls8962af 加速度计温度计算单位错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+FXLS8962AF/FXLS8964AF 加速度计驱动读取的温度数据单位不符合规范。根据规格书要求，IIO 子系统应返回毫摄氏度，但驱动实际返回的是摄氏度，导致用户空间获取的温度数值比实际值小 1000 倍（例如实际 25 摄氏度显示为 0.025），造成温度监测数据严重失真。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，根本原因是驱动在处理 `IIO_CHAN_INFO_SCALE` 时，未针对 `IIO_TEMP` 类型通道设置正确的缩放因子。
+驱动原本的 `read_raw` 函数中，`IIO_CHAN_INFO_SCALE` case 仅处理了加速度计（ACCEL）的缩放，导致温度通道缺少将摄氏度转换为毫摄氏度的 `in_temp_scale` 属性支持，违反了 IIO 接口规范中“温度应以毫摄氏度为单位返回”的要求。
+
+#解决方案
+修改 `drivers/iio/accel/fxls8962af-core.c` 文件：
+1. 引入 `<linux/units.h>` 头文件以使用标准单位定义。
+2. 在 `fxls8962af_read_raw` 函数的 `IIO_CHAN_INFO_SCALE` 分支中增加 `switch` 判断：
+   - 若通道类型为 `IIO_TEMP`，将 `*val` 设置为 `MILLIDEGREE_PER_DEGREE`（1000），返回 `IIO_VAL_INT`，从而将单位正确转换为毫摄氏度。
+   - 若通道类型为 `IIO_ACCEL`，保持原有加速度计缩放逻辑。
+3. 在温度通道定义的 `info_mask_separate` 中添加 `BIT(IIO_CHAN_INFO_SCALE)` 标志，暴露 scale 属性给用户空间。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7dafcbfbe73345c4b636f9cd21c00a758a051a85

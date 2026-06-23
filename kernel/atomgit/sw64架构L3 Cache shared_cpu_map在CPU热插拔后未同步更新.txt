@@ -1,0 +1,22 @@
+#标题
+sw64架构L3 Cache shared_cpu_map在CPU热插拔后未同步更新
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当CPU从离线状态恢复上线时，系统中其他CPU通过 `/sys/devices/system/cpu/cpuX/cache/index3/shared_cpu_map` 读取到的L3缓存共享CPU映射未更新，无法看到新上线的CPU，导致缓存拓扑信息不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在CPU上线过程中，`setup_shared_cpu_map` 函数仅更新了当前上线CPU的 `shared_cpu_map`，遗漏了对其他已在线CPU的 `shared_cpu_map` 的更新。具体代码逻辑中，虽然识别到了L3 Cache的共享关系，但只执行了 `cpumask_set_cpu(i, &this_leaf->shared_cpu_map)`（将其他CPU加入当前CPU的掩码），未执行对应的反向更新操作（将当前CPU加入其他CPU的掩码）。
+
+#解决方案
+修改 `arch/sw_64/kernel/cacheinfo.c` 中的 `setup_shared_cpu_map` 函数：
+1. 遍历其他CPU时，将循环宏从 `for_each_possible_cpu` 改为 `for_each_online_cpu`，确保只处理在线CPU。
+2. 在检测到L3 Cache共享关系时，增加对兄弟CPU（sib_leaf）的 `shared_cpu_map` 更新操作，即调用 `cpumask_set_cpu(cpu, &sib_leaf->shared_cpu_map)`，将当前CPU加入到其他CPU的共享掩码中，从而保证所有CPU的缓存拓扑视图一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/86085469be32ee371ae9aedfbc8d804f9f76cf78

@@ -1,0 +1,25 @@
+#标题
+x86/resctrl: Hygon CPU 内存带宽计数器宽度错误导致监测不准确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hygon CPU 平台上使用 resctrl 子系统的内存带宽监测（MBM）功能时，由于硬件计数器宽度识别错误，导致内存带宽计算结果不准确。具体表现为：内核未正确识别 Hygon CPU 支持的 32 位计数器宽度，而是错误地使用了默认的 24 位宽度，增加了计数器在两次采样之间发生两次翻转（roll over twice）的风险，从而导致带宽统计值偏离真实值。
+
+#主要错误日志
+未知
+
+#问题根因
+内存带宽计算依赖于读取硬件计数器并测量采样之间的差值。为了保证测量准确，软件读取计数器的频率必须足够高，以防止计数器在两次读取之间发生两次翻转。
+默认的基础计数器宽度为 24 位。当前代码中，Hygon CPU 不支持通过 CPUID 0xF.[ECX=1]:EAX 来调整计数器宽度，但 Hygon CPU 实际支持更宽的带宽计数器（默认宽度为 32 位）。
+代码逻辑缺陷在于：原先的处理逻辑将 Hygon 与 AMD CPU 归为一类，错误地将 AMD 的偏移量（20，对应总宽度 44 位）应用到了 Hygon CPU 上，而 Hygon CPU 实际对应的偏移量应为 8（对应总宽度 32 位）。
+
+#解决方案
+修改 `arch/x86/kernel/cpu/resctrl/core.c` 中的 `resctrl_cpu_detect` 函数，将 Hygon CPU 的处理逻辑从 AMD 逻辑中分离出来。
+具体修改如下：
+1. 在 `internal.h` 中新增宏定义 `MBM_CNTR_WIDTH_OFFSET_HYGON`，值为 8，表示 Hygon MBM 计数器宽度相对于基础宽度的偏移量。
+2. 在检测逻辑中，针对 `X86_VENDOR_HYGON` 厂商，将 `x86_cache_mbm_width_offset` 设置为 `MBM_CNTR_WIDTH_OFFSET_HYGON` (8)，从而将计数器宽度正确修正为 32 位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2a9a91f84b7b3d27d750b9f9531e8ed399f2f2c6

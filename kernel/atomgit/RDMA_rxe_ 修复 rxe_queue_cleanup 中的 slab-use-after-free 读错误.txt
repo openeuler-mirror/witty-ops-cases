@@ -1,0 +1,20 @@
+#标题
+RDMA/rxe: 修复 rxe_queue_cleanup 中的 slab-use-after-free 读错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA RXE 驱动中，当 `rxe_cq_from_init` 函数执行失败（特别是 `do_mmap_info` 返回错误）时，触发 "slab-use-after-free Read" 错误。系统可能伴随产生 kernel oops 或 slab 毒性错误报告，导致内核稳定性受影响。
+
+#主要错误日志
+slab-use-after-free Read in rxe_queue_cleanup
+
+#问题根因
+在 `rxe_cq_from_init` 函数中，当 `do_mmap_info` 调用失败时，原有代码逻辑错误地释放了 `cq->queue->buf` 和 `cq->queue` 内存。然而，该队列对象已被添加到相关链表中（或后续清理流程会遍历到它），导致在 `rxe_queue_cleanup` 清理阶段访问了已被释放的内存，从而引发 Use-After-Free (UAF) 漏洞。
+
+#解决方案
+移除 `rxe_cq_from_init` 中错误路径下的内存释放代码（`vfree(cq->queue->buf)` 和 `kfree(cq->queue)`）。这将所有权移交给调用者或标准的清理流程，确保内存不会在对象仍被引用或需要后续清理时被提前释放，从而避免 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa8c697869c5fd189592ffe520e89c54df7ee5fe

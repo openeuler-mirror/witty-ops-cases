@@ -1,0 +1,38 @@
+#标题
+smb: client: 重连通道时访问未初始化工作队列导致内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB 客户端进行通道重连操作时，内核触发 WARNING 并打印调用栈。具体场景为 `smb2_reconnect_server` 函数处理重连时，传递了一个临时的 dummy tcon 结构体，该结构体中的 `query_interfaces` 成员未初始化，导致在 `queue_delayed_work` 时触发非法访问。
+
+#主要错误日志
+WARNING: CPU: 4 PID: 1126 at kernel/workqueue.c:2498 __queue_delayed_work+0x1d2/0x200
+Modules linked in: cifs cifs_arc4 nls_ucs2_utils cifs_md4 [last unloaded: cifs]
+CPU: 4 UID: 0 PID: 1126 Comm: kworker/4:0 Not tainted 6.16.0-rc3 #5 PREEMPT(voluntary)
+Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.3-4.fc42 04/01/2014
+Workqueue: cifsiod smb2_reconnect_server [cifs]
+RIP: 0010:__queue_delayed_work+0x1d2/0x200
+...
+Call Trace:
+ <TASK>
+ queue_delayed_work_on+0xb4/0xc0
+ smb2_reconnect+0xb22/0xf50 [cifs]
+ smb2_reconnect_server+0x413/0xd40 [cifs]
+ process_one_work+0x4c5/0xa10
+ worker_thread+0x2f1/0x5a0
+ kthread+0x1fe/0x380
+ ret_from_fork+0x15b/0x1f0
+ </TASK>
+
+#问题根因
+在 `smb2_reconnect_server()` 函数中重连通道时，代码向 `smb2_reconnect()` 传递了一个“dummy tcon”（临时构造的 tcon 结构体）。该 dummy tcon 的 `->query_interface` 字段并未初始化，而 `smb2_reconnect()` 函数中无条件调用了 `queue_delayed_work()` 试图将该字段加入工作队列，从而触发了 `kernel/workqueue.c` 中的检查告警。
+
+#解决方案
+1. 在 `cifs_tcon` 结构体中新增 `bool dummy:1;` 标志位，用于标识该 tcon 是否为重连用的临时结构体。
+2. 在 `smb2_reconnect_server()` 中初始化 tcon 时，将其 `dummy` 标志置为 true。
+3. 修改 `smb2_reconnect()` 函数逻辑，在调用 `queue_delayed_work()` 前增加判断条件 `if (!tcon->ipc && !tcon->dummy)`，确保对于 dummy tcon 或 ipc tcon 不执行接口轮询工作队列的调度，从而避免访问未初始化的成员。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/13d8529a18d5cd03e03aabff67ae33f1355be695

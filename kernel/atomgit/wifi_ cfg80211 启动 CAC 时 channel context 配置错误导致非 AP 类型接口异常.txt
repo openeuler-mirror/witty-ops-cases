@@ -1,0 +1,20 @@
+#标题
+wifi: cfg80211 启动 CAC 时 channel context 配置错误导致非 AP 类型接口异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非 AP 类型的无线接口（如 Ad-Hoc 或 Mesh Point）上启动雷达检测（CAC）时，内核会将 chandef（通道定义）错误地写入 AP 专用的存储结构 `wdev->links[0].ap.chandef`。这可能导致内存数据混乱、接口状态异常，或后续雷达检测完成后无法正确恢复接口配置。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nl80211_start_radar_detection` 函数中，启动雷达检测成功后，代码无条件地将当前 chandef 赋值给 `wdev->links[0].ap.chandef`。该逻辑仅适用于 AP 或 P2P GO 类型接口，对于 NL80211_IFTYPE_ADHOC 或 NL80211_IFTYPE_MESH_POINT 等接口类型，其 chandef 存储位置不同（分别为 `wdev->u.ibss.chandef` 和 `wdev->u.mesh.chandef`），导致写入了错误的内存位置。
+
+#解决方案
+根据无线接口类型 `wdev->iftype` 进行区分处理。在启动雷达检测成功后，通过 switch 语句判断接口类型：若是 AP 或 P2P GO，则更新 `wdev->links[0].ap.chandef`；若是 Ad-Hoc，则更新 `wdev->u.ibss.chandef`；若是 Mesh Point，则更新 `wdev->u.mesh.chandef`，从而确保 chandef 写入正确的数据结构字段。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6293e47f3036d42212a693a5ebdb979ed565e0df

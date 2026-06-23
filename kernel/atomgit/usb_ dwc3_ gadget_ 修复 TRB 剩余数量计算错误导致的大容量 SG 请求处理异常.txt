@@ -1,0 +1,21 @@
+#标题
+usb: dwc3: gadget: 修复 TRB 剩余数量计算错误导致的大容量 SG 请求处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 USB 请求（usb request）包含一个较大的 SG 列表，且所需的 TRB（Transfer Request Block）数量超过 TRB 环的总容量时，系统无法正确判断 TRB 环的空闲状态。此时 TRB 环实际上已清空，但计算函数返回 0，导致驱动程序误认为没有可用的 TRB 资源，进而导致数据传输受阻或请求无法正常继续下发。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `dwc3_calc_trbs_left()` 中判断 TRB 环是否已满或为空的逻辑不充分。
+原逻辑仅依据 `started_list` 中是否存在请求来判断是否有活动的 TRB。然而，对于包含大容量 SG 列表的请求，该请求可能需要超过环总量的 TRB；当环中所有 TRB 都完成传输时，请求仅部分完成且仍保留在 `started_list` 中。此时 TRB 环实际上已清空，但原逻辑仍错误地认为没有 TRB 可用（返回 0），忽略了请求中实际已分配使用的 TRB 计数。
+
+#解决方案
+修改 `dwc3_calc_trbs_left()` 函数的逻辑，在判断是否有可用 TRB 时，除了检查 `started_list` 是否为空外，额外检查请求结构体中的 `num_trbs` 字段。只有当 `started_list` 中存在请求且该请求的 `num_trbs` 大于 0 时，才判定为没有 TRB 可用；否则返回正确的剩余 TRB 数量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/84eb89515d65ef46ba0eb281d8f5af11b3f3f1da

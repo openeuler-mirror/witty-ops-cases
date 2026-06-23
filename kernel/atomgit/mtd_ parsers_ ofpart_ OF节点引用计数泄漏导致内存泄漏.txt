@@ -1,0 +1,24 @@
+#标题
+mtd: parsers: ofpart: OF节点引用计数泄漏导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在解析 MTD 固定分区的过程中，当设备树中存在 "partitions" 子节点（即 `dedicated` 为 true）时，函数 `parse_fixed_partitions()` 调用 `of_get_child_by_name()` 获取节点后，在所有退出路径上均未调用 `of_node_put()` 释放节点引用计数。这导致该 OF 节点的引用计数发生泄漏，造成内核内存资源无法正确释放，长期运行可能累积内存泄漏问题。
+
+#主要错误日志
+未知
+
+#问题根因
+`of_get_child_by_name()` 返回的节点指针引用计数已增加，使用完毕后必须通过 `of_node_put()` 释放。但在 `parse_fixed_partitions()` 函数中，当 `dedicated` 变量为真时，代码在多个退出分支（包括正常返回和错误处理返回）均遗漏了调用 `of_node_put(ofpart_node)`，从而导致引用计数泄漏。该问题由静态分析工具检测发现。
+
+#解决方案
+修改 `drivers/mtd/parsers/ofpart_core.c` 文件中的 `parse_fixed_partitions()` 函数，在所有涉及的退出路径上补充调用 `of_node_put(ofpart_node)`：
+1. 在匹配节点失败（`!of_id`）的异常分支增加 `of_node_put(ofpart_node)`。
+2. 在分区数量为 0 的分支，判断若 `dedicated` 为真则释放节点。
+3. 在内存分配失败（`kcalloc` 返回 NULL）的分支，判断若 `dedicated` 为真则释放节点。
+4. 在函数正常执行结束的路径以及 `ofpart_none` 标签的错误处理路径中，补充对 `dedicated` 状态的判断并释放节点引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/05b7f57843461e87c091f7d28ac6eef1cbd2c9ca

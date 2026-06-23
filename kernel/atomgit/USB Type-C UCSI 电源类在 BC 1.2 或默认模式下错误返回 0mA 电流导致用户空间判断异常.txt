@@ -1,0 +1,20 @@
+#标题
+USB Type-C UCSI 电源类在 BC 1.2 或默认模式下错误返回 0mA 电流导致用户空间判断异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 UCSI 检测到 BC 1.2 充电器或默认 USB 电源时，`ucsi_psy_get_current_max` 接口向用户空间返回最大电流为 0mA。这导致部分用户空间电源管理服务（如 ChromeOS power manager）误判该电源未提供任何电力，可能引发错误的电源策略行为或状态显示异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ucsi_psy_get_current_max` 函数中，针对 `UCSI_CONSTAT_PWR_OPMODE_BC` 和 `UCSI_CONSTAT_PWR_OPMODE_DEFAULT` 等情况，代码原本直接将电流值赋值为 0。虽然 UCSI 协议无法区分 DCP/CDP 或不同类型的 SDP 充电器，但根据 USB 规范，所有这些类型的电源至少都能保证提供 USB 1.1/2.0 的 1 单位电流（即 100mA）。原代码将电流设为 0 不符合硬件实际能力，导致用户空间收到错误的电源属性信息。
+
+#解决方案
+修改 `drivers/usb/typec/ucsi/psy.c` 中的逻辑，将 BC 1.2 和 Default 模式下的默认电流值从 0 修改为 100mA（`UCSI_TYPEC_DEFAULT_CURRENT * 1000`，单位为 mA）。同时在头文件 `drivers/usb/typec/ucsi/ucsi.h` 中新增宏定义 `UCSI_TYPEC_DEFAULT_CURRENT` 为 100，确保返回值符合 USB 规范中关于最小电流保证的定义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f4b2ed8e8a1969939d200971d7b6f80b6da66e83

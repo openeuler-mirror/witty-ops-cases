@@ -1,0 +1,32 @@
+#标题
+ub/cdma: 基于流的注销期间时序问题及 KASAN UAF 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在进行基于流的注销操作时，存在时序问题，导致内核崩溃或功能异常。
+2. 存在 KASAN 检测到的 Use-After-Free (UAF) 问题，具体涉及 `cdma jfae` 结构体。
+3. 在设备处于非正常状态（如正在复位或无效）时，若未正确判断状态，可能导致对已释放资源的非法访问。
+
+#主要错误日志
+- `pr_warn("cdma device is not prepared, eid = 0x%x.\n", ...)`
+- `dev_warn(cdev->dev, "cdev is resetting.\n")`
+- `pr_info("ioctl cdev is invalid.\n")`
+- `pr_info("mmap cdev is invalid.\n")`
+- `pr_err("jfae ioctl wrong nr = %u.\n", nr)`
+- `dev_info(cdev->dev, "resetting Ignore jfc ctx, jfcn = %u\n", jfcn)`
+
+#问题根因
+1. **状态判断逻辑不全**：原有代码仅判断设备状态是否为 `CDMA_SUSPEND`，未涵盖 `CDMA_INVALID` 状态。当设备处于无效状态时，逻辑未拦截后续操作，导致在基于流的注销过程中访问了无效设备资源。
+2. **生命周期管理缺陷（UAF）**：在删除用户上下文时，未断开 `jfae` 与上下文 (`ctx`) 的关联指针。这导致 `jfae` 结构体释放后，其内部指针仍指向已释放的上下文内存，引发 KASAN 检测到的 Use-After-Free 错误。
+3. **并发与时序问题**：在销毁 JFC（Job Flow Context）等资源时，未充分考虑设备复位与上下文失效的并发场景，导致在设备无效或上下文失效时仍尝试进行硬件交互或资源刷新，引发时序错误。
+
+#解决方案
+1. **扩展状态检查范围**：新增 `CDMA_INVALID` 状态枚举，并将所有关键路径（如 ioctl、mmap、dma_alloc_queue 等）中的状态判断从 `status == CDMA_SUSPEND` 修改为 `status >= CDMA_SUSPEND`，确保在设备挂起或无效时正确拦截请求。
+2. **修复 UAF 指针悬空**：在删除用户上下文 (`cdma_delete_ucontext`) 时，增加对 `jfae` 的空指针检查，并显式将 `jfae->ctx` 置为 NULL；同时在销毁 `jfae` 时增加对 `ctx` 的有效性检查，断开双向引用，防止释放后访问。
+3. **优化销毁流程**：在销毁 JFC 等资源时，增加对 `CDMA_INVALID` 和 `ctx->invalid` 状态的前置检查，若设备正在复位或上下文已失效，则跳过硬件交互步骤，避免时序冲突。
+4. **修正日志与返回值**：修正部分错误日志的打印内容与级别，优化 ioctl 返回值处理逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6cae77d6cff7971c872cc687f00f9f40b35c2a62

@@ -1,0 +1,26 @@
+#标题
+netfilter: ipset: list:set 类型触发内核递归锁误报警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_PROVE_LOCKING 内核配置的情况下，创建一个 bitmap:ip 类型的 ipset，将其添加到一个 list:set 类型的 ipset 中，并通过 iptables 的 SET 目标进行填充操作时，内核触发 "possible recursive locking" 警告。系统出现虚假的锁依赖错误报告，干扰系统可靠性监控。
+
+#主要错误日志
+WARNING: possible recursive locking detected
+--------------------------------------------
+ping/4018 is trying to acquire lock:
+(ffff8881094a6848 &set->lock){+.-.}-{2:2}, at: ip_set_add+0x28c/0x360 [ip_set]
+
+but task is already holding lock:
+(ffff88811034c048 &set->lock){+.-.}-{2:2}, at: ip_set_add+0x28c/0x360 [ip_set]
+
+#问题根因
+这是 lockdep 机制产生的误报。当 list:set 类型的集合调用 `list_set_kadd()` 循环添加成员时，lockdep 检测到代码试图获取一个与当前已持有锁（`&set->lock`）相同的锁类。实际上，ipset 代码禁止嵌套 list:set 类型，循环中遇到的 set 与外层 set 不同，不会发生真正的递归死锁，但由于两者使用相同的 `struct ip_set` 锁类，导致 lockdep 发出虚假警告。
+
+#解决方案
+在 `list_set_create` 函数中，通过 `lockdep_set_class` 接口为 list:set 类型的 ipset 设置独立的 `lock_class_key`（`list_set_lockdep_key`）。这将 list:set 的锁与其它类型 ipset 的锁在 lockdep 机制中区分开来，从而消除误报的递归锁定警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4a73570a5635fb5a7dcbb69930b151a7741e9419

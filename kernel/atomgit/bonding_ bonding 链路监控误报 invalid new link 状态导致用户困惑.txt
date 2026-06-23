@@ -1,0 +1,25 @@
+#标题
+bonding: bonding 链路监控误报 invalid new link 状态导致用户困惑
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 bonding 配置了 updelay/downdelay 参数的场景下，发生主备切换后，系统日志中会打印 "invalid new link" 错误信息。该错误信息会使用户误以为链路状态处理出现异常或故障，但实际上链路最终能正常切换，错误日志纯属误报。
+
+#主要错误日志
+[  106.440254] bond0: (slave veth2): link status down for interface, disabling it in 200 ms
+[  106.440265] bond0: (slave veth2): invalid new link 1 on slave
+[  106.648276] bond0: (slave veth2): link status definitely down, disabling slave
+[  107.480271] bond0: (slave veth2): link status up, enabling it in 200 ms
+[  107.480288] bond0: (slave veth2): invalid new link 3 on slave
+[  107.688302] bond0: (slave veth2): link status definitely up, 10000 Mbps full duplex
+
+#问题根因
+在修复提交之前，代码仅检查 slave->new_link，其值仅包含 BOND_LINK_{NOCHANGE, UP, DOWN}。引入 slave->link_new_state 后，该变量还可能包含 BOND_LINK_{FAIL, BACK} 状态（例如在设置 updelay/downdelay 并发生故障切换时，bond_miimon_inspect() 会将状态置为 FAIL 或 BACK）。但在 bond_miimon_commit() 函数中，switch 语句未包含对 BOND_LINK_FAIL 和 BOND_LINK_BACK 的处理分支，导致程序进入 default 分支并打印错误日志 "invalid new link"。
+
+#解决方案
+在 bond_miimon_commit() 函数的 switch 语句中，新增对 BOND_LINK_FAIL 和 BOND_LINK_BACK 状态的处理分支。这两个状态属于正常的中间过渡状态，处理逻辑应为打印调试信息并继续执行，从而消除误报的错误日志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa5a0c9deea22650ab4eb2c007717fb0b0d1c710

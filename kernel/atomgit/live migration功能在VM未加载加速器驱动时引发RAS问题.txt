@@ -1,0 +1,20 @@
+#标题
+live migration功能在VM未加载加速器驱动时引发RAS问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行直连迁移时，如果虚拟机内部未加载加速器驱动，当前的热迁移功能会导致RAS（可靠性、可用性、可服务性）问题。由于源端跳过了迁移且没有迁移任何数据，但迁移端仍错误地执行了热迁移恢复操作，导致状态不一致引发故障。
+
+#主要错误日志
+dev_err(dev, "failed to read QM_VF_STATE!\n");
+
+#问题根因
+在 pre_copy 阶段未读取虚拟机内的驱动加载状态，而是在 stop_copy 阶段才读取。这导致迁移端无法及时获取该状态值，在源端跳过迁移（无数据迁移）的情况下，依然错误地执行了热迁移恢复操作。
+
+#解决方案
+在 pre_copy 阶段的 `vf_qm_get_match_data` 函数中增加读取 QM_VF_STATE 寄存器的逻辑，以获取 VF 驱动的 insmod 状态；同时在 `hisi_acc_vf_load_state` 函数中增加判断，若 `vf_qm_state` 不为 `QM_READY` 则直接返回，不执行后续恢复操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba6ddf1d59112426f94b0ea596e440ea4137a2f9

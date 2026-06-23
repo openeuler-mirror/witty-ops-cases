@@ -1,0 +1,33 @@
+#标题
+xhci: tegra: USB虚拟化下因USB2端口校验错误导致内核缺页异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在Tegra XUSB控制器启用USB虚拟化时，系统挂起或睡眠过程中触发内核缺页异常，导致内核崩溃。
+
+#主要错误日志
+[  116.923438] Unable to handle kernel paging request at virtual address 006c622f7665642f
+...
+[  117.213640] Call trace:
+[  117.216783]  tegra_xusb_enter_elpg+0x23c/0x658
+[  117.222021]  tegra_xusb_runtime_suspend+0x40/0x68
+[  117.227260]  pm_generic_runtime_suspend+0x30/0x50
+[  117.232847]  __rpm_callback+0x84/0x3c0
+[  117.237038]  rpm_suspend+0x2dc/0x740
+[  117.241229] pm_runtime_work+0xa0/0xb8
+[  117.245769]  process_scheduled_works+0x24c/0x478
+[  117.251007]  worker_thread+0x23c/0x328
+[  117.255547]  kthread+0x104/0x1b0
+[  117.259389]  ret_from_fork+0x10/0x20
+[  117.263582] Code: 54000222 f9461ae8 f8747908 b4ffff48 (f9400100)
+
+#问题根因
+启用USB虚拟化后，USB2端口在所有虚拟功能间共享。特定虚拟功能中的USB2根集线器拥有的端口数量可能少于Tegra XUSB控制器支持的USB2 phy总数。代码中使用`tegra->num_usb_phys`（物理端口总数）作为循环边界来遍历`xhci->usb2_rhub.ports`数组，导致越界访问无效内存地址。
+
+#解决方案
+修改`tegra_xusb_enter_elpg`函数中的循环判断条件，将循环边界从控制器支持的物理端口总数`tegra->num_usb_phys`修改为当前USB2根集线器实际拥有的端口数量`xhci->usb2_rhub.num_ports`，确保访问数组时不越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7944aea3d5790ad16bf1e5b1b44c6ef348d0ccdc

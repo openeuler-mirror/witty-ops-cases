@@ -1,0 +1,22 @@
+#标题
+调度器 soft_quota 与 sched_ext 在 idle 选择路径引发内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 SOFT_QUOTA 特性且系统涉及 sched_ext (scx) 调度时，若 `pick_next_task_fair` 返回 NULL，调度器核心代码未对该返回值进行有效性检查，导致访问空指针引发内核 panic/oops。
+
+#主要错误日志
+未知
+
+#问题根因
+`pick_task_idle` 函数在处理 soft_quota 逻辑时，直接将 `pick_next_task_fair` 的返回值返回给上层调用者。当 `pick_next_task_fair` 返回 NULL（例如在恢复运行队列后未找到合适的任务）时，`soft_quota_pick_next_done` 函数接收到了 NULL 指针作为 `next` 参数，随后在判断 `next == rq->idle` 时触发了空指针解引用（NULL pointer dereference）。此外，`pick_task_idle` 中 `scx_update_idle` 的调用顺序不合理也可能导致状态不一致。
+
+#解决方案
+1. 在 `pick_task_idle` 中增加对 `pick_next_task_fair` 返回值的非零判断（`likely(p)`），若返回 NULL 则继续执行后续的 idle 选择逻辑，而不是直接返回 NULL。
+2. 在 `soft_quota_pick_next_done` 函数入口处增加对 `next` 指针的 NULL 检查（`!next`），防止空指针解引用。
+3. 调整 `scx_update_idle` 的调用位置，将其移至 soft_quota 处理逻辑之后，确保调度状态更新的正确顺序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a7cfe9196d81e9d1e0286a42285271e06e5bc66a

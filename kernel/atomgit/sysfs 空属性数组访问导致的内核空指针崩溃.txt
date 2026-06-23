@@ -1,0 +1,27 @@
+#标题
+sysfs 空属性数组访问导致的内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动过程中（如 perf 初始化阶段），当内核代码尝试注册一个包含空属性数组（empty attributes）的 sysfs group 时，触发内核 NULL 指针解引用错误，导致系统崩溃或调用栈回溯。具体场景见于 `intel_pmu_init` 初始化流程，该流程使用了指向 `empty_attrs` 的属性组。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000000
+#PF: error_code(0x0000) - not-present ] PREEMPT SMP NOPTI
+CPU: 1 PID: 1 Comm: swapper/0
+RIP: 0010:exra_is_visible+0x14/0x20
+ ? exc_page_fault+0x68/0x190
+ internal_create_groups+0x42/0xa0
+ pmu_dev_alloc+0xc0/0xe0
+ perf_event_sysfs_init+...
+
+#问题根因
+内核函数 `__first_visible()` 存在逻辑缺陷，错误地假设只要 `grp->attrs` 指针非空，则 `grp->attrs[0]` 必然存在。在特定场景下（如 Intel PMU 初始化代码使用了静态定义的空属性数组 `empty_attrs`），`grp->attrs` 指向有效地址但 `grp->attrs[0]` 为 NULL。代码在未检查数组首个元素是否为空的情况下，直接将其作为参数传递给 `is_visible()` 回调函数，导致解引用 NULL 指针引发崩溃。
+
+#解决方案
+在 `fs/sysfs/group.c` 文件的 `__first_visible()` 函数中增加对属性数组首个元素的检查。修改逻辑为：在调用 `is_visible()` 或 `is_bin_visible()` 回调前，必须同时满足属性组指针非空（`grp->attrs` 或 `grp->bin_attrs`）且数组首个元素非空（`grp->attrs[0]` 或 `grp->bin_attrs[0]`），从而避免传入空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c2f28a94608560c4c881e6ff88f4ca8901702a44

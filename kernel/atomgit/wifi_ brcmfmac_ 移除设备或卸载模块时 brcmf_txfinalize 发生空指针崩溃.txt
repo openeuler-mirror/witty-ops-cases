@@ -1,0 +1,25 @@
+#标题
+wifi: brcmfmac: 移除设备或卸载模块时 brcmf_txfinalize 发生空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 Broadcom WiFi 设备或卸载 brcmfmac 内核模块时，内核发生 NULL 指针引用崩溃。该问题发生的条件是驱动卸载流程中仍有待处理的 skb（socket buffer）存在于 flowring 中。
+
+#主要错误日志
+未知
+
+#问题根因
+在设备移除或模块卸载过程中，函数调用序列如下：
+1. `brcmf_detach()` 调用 `brcmf_remove_interface()`，进而调用 `brcmf_del_if()` 将 `drvr->if2bss[ifidx]` 更新为 `BRCMF_BSSIDX_INVALID` (-1)。
+2. 随后 `brcmf_detach()` 调用 `brcmf_proto_detach()`，经过一系列调用链 (`brcmf_proto_msgbuf_detach` -> `brcmf_flowring_detach` -> `brcmf_msgbuf_delete_flowring` -> `brcmf_flowring_delete`) 最终调用 `brcmf_get_ifp()`。
+3. 由于接口已被标记为无效，`brcmf_get_ifp()` 返回 NULL。
+4. 调用者继续将 NULL 的 `ifp` 指针传递给 `brcmf_txfinalize()`。
+5. `brcmf_txfinalize()` 函数内部未对 `ifp` 进行有效性检查，直接访问 `ifp->ndev->stats.tx_errors` 触发空指针引用。
+
+#解决方案
+在 `brcmf_txfinalize()` 函数入口处增加 `ifp` 指针的非空检查。如果 `ifp` 为 NULL，直接释放 skb 内存并提前返回，避免后续访问空指针导致的内核崩溃。同时，补丁建议对该函数内其他使用 `ifp` 的位置也进行防护（尽管崩溃主要发生在统计信息更新处）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b64dd3c533e8cd4924853a75604d2f163781590e

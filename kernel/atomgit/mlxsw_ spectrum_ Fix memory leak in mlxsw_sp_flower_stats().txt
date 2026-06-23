@@ -1,0 +1,20 @@
+#标题
+mlxsw: spectrum: Fix memory leak in mlxsw_sp_flower_stats()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Mellanox Spectrum 交换机驱动中，当调用 `mlxsw_sp_flower_stats()` 获取 TC flower 规则统计信息时，若 `mlxsw_sp_acl_rule_lookup()` 查找规则失败（例如规则不存在），函数直接返回错误码，未释放先前获取的 ruleset 引用，导致内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `mlxsw_sp_flower_stats()` 调用 `mlxsw_sp_acl_ruleset_get()` 获取了 ruleset 引用，但在后续调用 `mlxsw_sp_acl_rule_lookup()` 查找规则失败时，直接返回了 `-EINVAL`，跳过了正常的引用释放逻辑（`mlxsw_sp_acl_ruleset_put()`），从而导致 ruleset 引用计数泄漏。
+
+#解决方案
+修改 `mlxsw_sp_flower_stats()` 函数的错误处理路径。当 `mlxsw_sp_acl_rule_lookup()` 返回失败时，不再直接 return，而是将错误码赋值给 err 变量，并通过 goto 语句跳转到现有的错误处理标签 `err_rule_get_stats`。该标签已包含正确的 `mlxsw_sp_acl_ruleset_put()` 调用，从而确保在查找失败时能正确释放 ruleset 引用，修复内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7d874efaf29013c4a5fbd7211ffee16265495f17

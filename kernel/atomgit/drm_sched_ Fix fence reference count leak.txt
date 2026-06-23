@@ -1,0 +1,20 @@
+#标题
+drm/sched: Fix fence reference count leak
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DRM 调度器实体被销毁的过程中，如果 `dma_fence_add_callback()` 添加回调失败，会导致 `last_scheduled` 栅栏对象的引用计数泄漏，造成内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `drm_sched_entity_kill` 函数中，当尝试向 `prev` 栅栏添加清理回调失败时，代码逻辑直接调用了 `drm_sched_entity_kill_jobs_cb`，但未对 `prev` 栅栏对象的引用计数进行减一操作（`dma_fence_put`）。这破坏了引用计数的平衡，导致该栅栏对象无法被正确释放。根本原因在于缺乏对 `dma_fence_add_callback` 失败路径下的引用计数回退处理。
+
+#解决方案
+在 `dma_fence_add_callback()` 调用失败的分支中，显式调用 `dma_fence_put(prev)` 来减少引用计数。由于 `dma_fence_put` 内部会检查指针是否为 NULL，且只有在回调添加失败时才会进入该分支（此时 `prev` 指针有效或需要释放），此举确保了引用计数的正确平衡。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/974c954a8ac2a272f3a75e0b2e53c3e03fd9a9b0

@@ -1,0 +1,32 @@
+#标题
+ACPI TAD 模块卸载后再次加载失败导致 probe 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `rmmod acpi_tad` 卸载模块后，再次执行 `modprobe acpi_tad` 加载模块失败，内核日志显示 sysfs 创建重复文件名错误，驱动探测失败。
+
+#主要错误日志
+sysfs: cannot create duplicate filename '/devices/platform/ACPI000E:00/time'
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x6c/0x90
+ dump_stack+0x10/0x20
+ sysfs_warn_dup+0x8b/0xa0
+ sysfs_add_file_mode_ns+0x122/0x130
+ internal_create_group+0x1dd/0x4c0
+ sysfs_create_group+0x13/0x20
+ acpi_tad_probe+0x147/0x1f0 [acpi_tad]
+ platform_probe+0x42/0xb0
+ </TASK>
+acpi-tad ACPI000E:00: probe with driver acpi-tad failed with error -17
+
+#问题根因
+在 `acpi_tad_remove` 函数中，缺少针对 `ACPI_TAD_RT` (Real Time) 能力的 `sysfs_remove_group` 调用。当模块卸载时，该 sysfs 组未被正确移除；导致再次加载模块时，probe 函数尝试创建同名的 sysfs 组，触发 "cannot create duplicate filename" 错误，进而导致模块加载失败。
+
+#解决方案
+在 `acpi_tad_remove` 函数中补充缺失的清理逻辑，判断若设备支持 `ACPI_TAD_RT` 能力，则调用 `sysfs_remove_group` 移除 `acpi_tad_time_attr_group`，确保模块卸载时资源被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e1a02c3d1687f6bb1d12c0e56542f834869cf90c

@@ -1,0 +1,26 @@
+#标题
+PCI: cpqphp: Fix PCIBIOS_* return value confusion
+
+#内核版本
+OLK-6.6
+
+#问题现象
+cpqphp 热插拔驱动在扫描 PCI 总线查找非桥设备或桥设备时，由于函数 `PCI_RefinedAccessConfig` 返回值处理逻辑混乱，可能导致配置空间读取失败的判断错误。具体表现为：代码混淆了内核标准 `PCIBIOS_*` 返回码与用户态风格的 `-1` 错误码，导致在配置空间访问异常时，调用者可能无法正确跳过无效设备，继续尝试访问不存在的配置空间，进而引发不可预期的行为或错误处理流程。
+
+#主要错误日志
+未知
+
+#问题根因
+代码在 `PCI_RefinedAccessConfig` 函数及其调用者之间存在三类返回值混淆：
+1. `PCI_RefinedAccessConfig` 错误地将 `pci_bus_read_config_dword()` 的返回值与 `-1` 进行比较，而该函数实际返回的是 `PCIBIOS_*` 状态码。
+2. `PCI_RefinedAccessConfig` 函数自身返回值不一致，混合返回 `-1` 和 `PCIBIOS_*` 状态码。
+3. `PCI_RefinedAccessConfig` 的调用者仅检查返回值是否为 `-1`，无法正确识别 `PCIBIOS_*` 类型的错误返回。
+
+#解决方案
+统一 `PCI_RefinedAccessConfig` 函数的返回值类型为 `PCIBIOS_*` 标准码，并修正调用者的判断逻辑：
+1. 修改 `PCI_RefinedAccessConfig` 内部判断，将 `pci_bus_read_config_dword` 的返回值检查从 `== -1` 修改为 `!= PCIBIOS_SUCCESSFUL`。
+2. 修改 `PCI_RefinedAccessConfig` 的错误返回值，将 `return -1` 统一修改为 `return PCIBIOS_DEVICE_NOT_FOUND`。
+3. 修改调用者 `PCI_ScanBusForNonBridge` 中的逻辑，直接判断 `PCI_RefinedAccessConfig` 的返回值（if (ret)），而非与 `-1` 比较，以正确处理所有非成功返回值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2ec07d332c0c02bef9c46d1769281815ee69b77b

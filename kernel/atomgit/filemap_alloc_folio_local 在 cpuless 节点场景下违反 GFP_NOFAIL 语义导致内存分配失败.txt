@@ -1,0 +1,20 @@
+#标题
+filemap_alloc_folio_local 在 cpuless 节点场景下违反 GFP_NOFAIL 语义导致内存分配失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当开启 'filemap_alloc_local' 功能且系统中 `mems_allowed` 包含的所有节点均为 cpuless 节点（无 CPU 的 NUMA 节点）时，带有 `GFP_NOFAIL` 标志的内存分配请求错误地返回了 NULL。这违背了 `GFP_NOFAIL` 分配器不允许失败的语义约定，导致后续代码路径出现非预期的内核行为或内核恐慌。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `filemap_alloc_folio_local` 和 `policy_nodemask_local` 函数的处理逻辑中，过滤 cpuless 节点后，若结果 nodemask 为空，代码直接返回了 NULL 或错误码 -ENOMEM，而未考虑当前请求带有 `GFP_NOFAIL` 标志。此逻辑缺陷忽略了 `GFP_NOFAIL` 要求分配必须成功的约束，导致在特殊 NUMA 拓扑（所有允许节点均为 cpuless）下错误地返回分配失败。
+
+#解决方案
+修改内存分配逻辑，增加回退机制。当检测到过滤 cpuless 节点后本地节点掩码 `local_nodes` 为空时，不再直接返回失败，而是将当前 NUMA 节点（`numa_node_id()`）加入到掩码中作为回退目标，确保分配器始终有一个有效的本地节点进行内存分配，从而满足 `GFP_NOFAIL` 的语义要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ebe6b35e5bb87089343ce4fbc90632c0948b789

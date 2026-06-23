@@ -1,0 +1,23 @@
+#标题
+sw64架构kprobe探测入口函数导致系统异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对sw64架构内核进行kprobe探测时，某些关键函数（如entry.S中的入口函数、调试相关函数）被错误地注册为可探测对象。当kprobe断点被设置在这些函数上时，可能导致内核崩溃或调试机制失效。
+
+#主要错误日志
+未知
+
+#问题根因
+sw64架构下，内核入口相关代码段未通过`.pushsection ".entry.text"`正确归集到特定的section中，且未将`__entry_text_start`到`__entry_text_end`范围内的符号加入kprobe黑名单。这导致kprobe机制无法识别并屏蔽对这些底层关键入口函数的探测，从而引发系统不稳定。
+
+#解决方案
+1. 在汇编文件（如`entry-ftrace.S`, `entry_c3.S`, `entry_c4.S`）中使用`.pushsection ".entry.text", "ax"`和`.popsection`将入口代码包裹，使其被链接到独立的section中。
+2. 在链接脚本`vmlinux.lds.S`中添加`ENTRY_TEXT`宏，确保入口代码段正确链接并生成`__entry_text_start`和`__entry_text_end`边界符号。
+3. 在`kprobes.c`中新增`arch_populate_kprobe_blacklist`函数，利用上述边界符号将该区域加入kprobe黑名单。
+4. 为防止在关键路径调用非安全函数，为`do_entInt`、`do_page_fault`、`arch_cpu_idle`等关键入口与调试相关函数添加`noinstr`属性修饰。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/319fc047bb434e73be4a8236e9f917c840e80c34

@@ -1,0 +1,30 @@
+#标题
+BPF percpu hashmap 因非对齐存储触发 kmemleak 误报
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统开启 CONFIG_DEBUG_KMEMLEAK 后，在使用 BPF percpu hashmap 时，kmemleak 检测到未引用的对象并报告内存泄漏。具体表现为 dmesg 或 kmemleak 报错显示“unreferenced object”以及相应的调用栈回溯。该问题可以通过 BPF selftest 的 test_hash_map 复现。
+
+#主要错误日志
+unreferenced object 0x606fd7c44ac8 (size 32):
+  backtrace (crc 0):
+    pcpu_alloc_noprof+0x730/0xeb0
+    bpf_map_alloc_percpu+0x69/0xc0
+    prealloc_init+0x9d/0x1b0
+    htab_map_alloc+0x363/0x510
+    map_create+0x215/0x3a0
+    __sys_bpf+0x16b/0x3e0
+    __x64_sys_bpf+0x18/0x20
+    do_syscall_64+0x7b/0x150
+    entry_SYSCALL_64_after_hwframe+0x4b/0x53
+
+#问题根因
+在 `htab_elem_set_ptr()` 函数中，percpu 指针 `pptr` 的存储位置是基于 `key_size` 偏移计算的。当 `key_size` 不是 8 的倍数（例如 4 字节）时，存储位置未 8 字节对齐。而 x86_64 架构下 `mm/kmemleak.c` 的 `scan_block()` 函数按 8 字节步长扫描内存，导致无法检测到该未对齐存储的 percpu 指针，进而误报内存泄漏。
+
+#解决方案
+修改 `htab_elem_set_ptr()` 和 `htab_elem_get_ptr()` 函数，将 percpu 指针的存储偏移量从 `key_size` 修改为 `roundup(key_size, 8)`，确保 percpu 指针存储在 8 字节对齐的地址上，从而使 kmemleak 能正确扫描到该指针引用，消除误报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1a939fdbe230744e0f4627b93b4dd3298aa23090

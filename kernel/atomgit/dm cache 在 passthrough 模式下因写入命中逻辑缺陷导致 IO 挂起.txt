@@ -1,0 +1,23 @@
+#标题
+dm cache 在 passthrough 模式下因写入命中逻辑缺陷导致 IO 挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 dm-cache 处于 passthrough 模式下，当进行缓存失效操作同时发生写入命中时，写入操作会立即被丢弃而未提交，导致该 IO 请求无法完成，表现为写入挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+`invalidate_remove()` 函数在处理缓存失效后的写入命中 bio（`overwrite_bio`）时逻辑不完整。代码虽然为 `overwrite_bio` 设置了重映射，但在元数据提交前立即将该指针置为 NULL 并丢弃，未实际提交该 bio，导致写入操作挂起。此外，`invalidate_complete()` 中的错误处理逻辑不当，无条件调用 `bio_io_error()` 可能覆盖 bio 原有的错误状态。
+
+#解决方案
+1. 新增 `invalidate_committed()` 回调函数，将其作为元数据提交完成后的续作。
+2. 将 `overwrite_bio` 的重映射和提交逻辑从 `invalidate_remove()` 移至 `invalidate_committed()` 中执行，确保在元数据提交完成后正确提交写入请求。
+3. 使用 `overwrite_endio` 钩子确保正确的完成顺序，维持一致性。
+4. 修正 `invalidate_complete()` 的错误处理逻辑，不再无条件调用 `bio_io_error()`，而是根据情况保留 bio 原有的错误状态，并确保总是调用 `bio_endio()` 以完成 bio。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dccc68c19824ba0a1d34aebdecbc5672dc648df8

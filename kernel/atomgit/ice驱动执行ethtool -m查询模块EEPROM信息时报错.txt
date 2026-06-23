@@ -1,0 +1,21 @@
+#标题
+ice驱动执行ethtool -m查询模块EEPROM信息时报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `ethtool -m` 命令读取网卡模块 EEPROM 信息时失败，命令返回 "netlink I/O error"。该问题尤其容易在固件链路管理占用 I2C 总线通信时触发。
+
+#主要错误日志
+netlink I/O error
+
+#问题根因
+根据 Intel E810 数据手册（Rev 2.8）第 3.3.10.4 节规定，当固件返回 EBUSY 状态时，Read/Write SFF EEPROM (AQ命令 0x06EE) 应当进行重试。
+此前代码仅在 `ice_get_module_eeprom` 函数的局部实现了重试逻辑，而未在底层的 AQ 命令发送层面处理 EBUSY 重试。当其他调用路径执行 `ice_aq_sff_eeprom()` 时，一旦固件因 I2C 总线忙返回 EBUSY，驱动会直接返回错误而不会重试，导致用户态工具收到 I/O 错误。
+
+#解决方案
+将 AQ 命令 opcode `ice_aqc_opc_sff_eeprom` (0x06EE) 添加到 `ice_should_retry_sq_send_cmd` 重试列表中。同时，移除 `ice_get_module_eeprom` 函数中冗余的手动重试循环代码，统一由底层 AQ 命令发送机制处理 EBUSY 重试逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/351fb3b2859d9d7b4baafbccfe20cdedbefc2829

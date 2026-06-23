@@ -1,0 +1,22 @@
+#标题
+fbdev: vc_resize 失败后 update_screen 引发的 vmalloc 越界写
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在帧缓冲控制台进行模式设置（如切换分辨率或字体）时，若 vc_resize 因内存分配失败等原因返回错误，后续调用的 update_screen 函数仍会尝试按照新的大小刷新屏幕。此时因为 vc（虚拟控制台）的实际内存区域未成功调整，导致在 fast_imageblit 函数中发生 vmalloc 越界写入，可能造成内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 fbcon_set_disp 函数中，调用 vc_resize 调整控制台尺寸时，代码忽略了 vc_resize 的返回值。当 vc_resize 失败时，vc 结构体中的屏幕缓冲区大小未改变，但代码仍继续调用 update_screen。此时 con_is_visible 判断为真，导致 update_screen 使用了错误的（新的）屏幕参数去操作未变更的（旧的）内存区域，从而触发越界写。
+
+#解决方案
+1. 捕获 vc_resize 的返回值，判断其是否执行成功。
+2. 在调用 update_screen 前增加对 vc_resize 返回值的检查，若 vc_resize 失败（返回非 0），则跳过 update_screen 操作，避免在内存未就绪时刷新屏幕。
+3. 在 con2fb_init_display 函数中增加判断，仅在当前控制台不是目标单元时才调用 update_screen，防止对非活动控制台的误操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ec85ad3d05ea7b474f7bfae7ccd75f8819fed586

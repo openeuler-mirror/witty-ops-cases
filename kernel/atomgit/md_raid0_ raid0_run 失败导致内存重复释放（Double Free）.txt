@@ -1,0 +1,20 @@
+#标题
+md/raid0: raid0_run 失败导致内存重复释放（Double Free）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 RAID0 阵列时，若 `raid0_run` 函数执行失败（例如 `md_integrity_register` 返回错误），系统将触发内存重复释放，可能导致内核崩溃或内存管理状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `raid0_run` 函数的错误处理路径中，代码显式调用了 `free_conf`（或包含 kfree 的清理逻辑）来释放 `conf` 结构体。然而，MD 核心层在 `raid0_run` 返回失败后，会自动调用 `raid0_free` 方法（即 `->free` 钩子），该函数同样会对 `conf` 结构体进行释放。这导致同一块内存被释放了两次（Double Free）。
+
+#解决方案
+移除 `raid0_run` 函数中的显式 `free_conf` 调用。修复补丁删除了独立的 `free_conf` 函数，并简化了 `raid0_run` 的错误返回逻辑，确保在失败时仅由 MD 核心层统一调用 `raid0_free` 来释放资源，从而避免重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9b908a27a857bd1a4c6025e4f9eaf9135f7f5af0

@@ -1,0 +1,22 @@
+#标题
+netfilter: nf_tables: 修复 nf_tables_addchain() 中的释放后使用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 nf_tables_addchain() 函数执行过程中，若钩子注册失败，错误处理路径会立即释放 chain 内存。此时存在两种故障场景：
+1. 控制面：并发执行 nf_tables_dump_chains() 的线程可能仍在遍历 table->chains 链表，导致访问已释放的内存。
+2. 数据面：对于 NFPROTO_INET 协议族，若 IPv4 钩子注册成功但 IPv6 钩子注册失败，此时 IPv4 钩子已短暂生效，进入 nft_do_chain() 处理流程的数据包仍在引用 chain 结构，导致释放后使用。
+
+#主要错误日志
+未知
+
+#问题根因
+nf_tables_addchain() 通过 list_add_tail_rcu()（在 nft_chain_add() 中）先将 chain 发布到 table->chains 链表，随后才注册钩子。当 nf_tables_register_hook() 注册失败时，错误处理路径调用 nft_chain_del()（list_del_rcu()）将 chain 移除，紧接着调用 nf_tables_chain_destroy() 销毁 chain。由于移除与销毁之间没有 RCU 宽限期，导致正在进行的 RCU 读端临界区（链表遍历或数据包处理）仍在引用该 chain，从而引发释放后使用。
+
+#解决方案
+在错误处理路径中，于 nft_chain_del() 与 nf_tables_chain_destroy() 调用之间增加 synchronize_rcu() 调用。确保所有正在进行的 RCU 读者（包括链表遍历线程和正在处理数据包的钩子函数）都已退出临界区，然后再安全地释放 chain 内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5b800e9d7dd2b10de0c5641e5e1daa3dff33089e

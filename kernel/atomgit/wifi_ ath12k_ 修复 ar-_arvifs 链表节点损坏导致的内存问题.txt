@@ -1,0 +1,20 @@
+#标题
+wifi: ath12k: 修复 ar->arvifs 链表节点损坏导致的内存问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ath12k 驱动处理硬件崩溃并重新配置的过程中，调用 `ath12k_core_halt` 函数时，原代码直接使用 `INIT_LIST_HEAD` 对 `ar->arvifs` 链表头进行重置。这导致链表中仍存在的节点未从链表中摘除，造成链表节点损坏，进而可能引发内存污染或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 `ath12k_core_halt` 函数中直接调用了 `INIT_LIST_HEAD(&ar->arvifs)`。该操作仅仅将链表头指针指向自身，而没有清理链表中已有的节点。这些残留的节点仍保留着指向旧链表头的指针，破坏了链表结构的一致性，导致节点损坏。
+
+#解决方案
+修改 `ath12k_core_halt` 函数，在重置链表前先安全地移除所有节点。具体修改为：获取自旋锁 `ar->data_lock`，使用 `list_for_each_safe` 遍历链表，并调用 `list_del_init` 将每个节点从链表中摘除并初始化，从而避免链表节点损坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5394cae209c4a4990d81be436ba17ae56fb09d16

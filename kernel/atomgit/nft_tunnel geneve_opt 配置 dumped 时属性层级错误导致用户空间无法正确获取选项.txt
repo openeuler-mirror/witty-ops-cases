@@ -1,0 +1,20 @@
+#标题
+nft_tunnel geneve_opt 配置 dumped 时属性层级错误导致用户空间无法正确获取选项
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当配置了多个 geneve_opt 的 nft_tunnel 对象进行 dump 操作时，用户空间工具无法正确获取配置的 geneve 选项。这是由于内核 netlink 属性层级构建错误，多个选项被错误地包含在同一个 nest 属性中，而不是每个选项独立嵌套，导致解析失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nft_tunnel_opts_dump` 函数中，`nla_nest_start_noflag` 和 `nla_nest_end` 的调用位置在 `while` 循环外部。这导致所有 geneve 选项被包含在同一个 `NFTA_TUNNEL_KEY_OPTS_GENEVE` 嵌套属性中。正确的逻辑应为在循环内部针对每一个 geneve 选项创建并结束一个独立的 `NFTA_TUNNEL_KEY_OPTS_GENEVE` 嵌套属性，以保证 netlink 层级结构的正确性。
+
+#解决方案
+调整 `nft_tunnel_opts_dump` 函数中 netlink 属性嵌套的逻辑，将 `nla_nest_start_noflag(skb, NFTA_TUNNEL_KEY_OPTS_GENEVE)` 及其对应的 `nla_nest_end(skb, inner)` 移至 `while` 循环内部。确保每次循环遍历 geneve 选项时，都独立创建并关闭一个新的 `NFTA_TUNNEL_KEY_OPTS_GENEVE` 属性节点，从而修正 netlink 属性层级结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a69f13506ebef32cc8aa42bc3d5bc67e9bf82f7f

@@ -1,0 +1,20 @@
+#标题
+SMB客户端解析DACL时因特殊SID子授权数缺失检查导致内存越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SMB 共享的文件访问控制列表（DACL）时，若接收到格式异常的特殊 SID（Security Identifier），内核可能发生内存越界访问。这可能触发内核崩溃或导致内核地址空间泄露，具体表现依赖于内存布局，潜在风险为系统崩溃或信息泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fs/smb/client/cifsacl.c` 的 `parse_dacl` 函数中，处理 `sid_unix_NFS_mode` 这一特殊 SID 时，代码直接访问了该 SID 结构体中的 `subauth` 数组（隐含访问 `sid.subauth[0]` 到 `sid.subauth[2]`）。根据补丁前逻辑，仅判断了 `mode_from_special_sid` 标志位，未校验 `ppace[i]->sid.num_subauth`（子授权数量）是否大于等于 3。当恶意或畸形服务器返回的 SID `num_subauth` 值小于 3 时，内核将访问越界内存。
+
+#解决方案
+在访问 SID 的 `subauth` 数组前增加边界检查条件。在 `parse_dacl` 函数中，判断是否为特殊 SID（`sid_unix_NFS_mode`）的逻辑里，新增 `ppace[i]->sid.num_subauth >= 3` 的检查，确保仅当子授权数量足够时才进行后续的数据读取与比较，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eb7fa6e12edab24f7c725f10eff472c6d2fe4bae

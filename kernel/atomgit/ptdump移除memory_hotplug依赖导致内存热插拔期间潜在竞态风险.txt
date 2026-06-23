@@ -1,0 +1,20 @@
+#标题
+ptdump移除memory_hotplug依赖导致内存热插拔期间潜在竞态风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ARM64和S390架构下，移除 `ptdump_debugfs.c` 中对 `get_online_mems()` 的调用后，通过 debugfs 接口触发 ptdump 操作时，可能与正在进行的内存热插拔操作发生竞态。这可能导致内存访问错误、系统不稳定或潜在的内核崩溃，具体表现为内存热插拔过程中读取页表信息不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+修复前的补丁错误地从各架构的 `ptdump_show` 函数中移除了 `get_online_mems()` 和 `put_online_mems()` 调用。这导致 `ptdump_walk` 系列函数在遍历页表时未持有内存热插拔锁，从而失去了与内存热插拔机制的同步保护，引入了竞态条件风险。
+
+#解决方案
+将 `get_online_mems()` 和 `put_online_mems()` 的调用从各架构特定的 `ptdump_show` 函数下移至通用的 `mm/ptdump.c` 文件中的 `ptdump_walk_pgd` 函数内部。通过在 `ptdump_walk_pgd` 函数执行 `walk_page_range_novma` 前后分别加锁和解锁，确保在所有架构下进行页表遍历时均能正确同步内存热插拔状态，消除竞态风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f5da6456144b79a26f70e07970cd13d136bbb25a

@@ -1,0 +1,21 @@
+#标题
+virtio-net: virtnet_rq_alloc 函数内存越界导致虚拟机崩溃或传输失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在虚拟机内进行网络传输（如使用 scp 传输 100M 大小的文件）时发生传输失败，或者导致虚拟机发生不可恢复的崩溃。该问题在系统参数 `net.core.high_order_alloc_disable` 设置为 1 时更容易复现。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 commit f9dac92ba908 ("virtio_ring: enable premapped mode whatever use_dma_api")。
+由于结构体 `virtnet_rq_dma` 在新分配的 frag（碎片内存）起始位置占用了 16 字节，当分配的 frag 大小仅为一页（PAGE_SIZE）且总需求大小（buffer 长度 + `virtnet_rq_dma` 大小）超过一页时，会导致内存越界。这在 `net.core.high_order_alloc_disable=1` 强制使用单页分配的场景下尤为明显。
+
+#解决方案
+调整内存分配逻辑，将 `skb_page_frag_refill` 的调用提前，并在分配 mergeable buffer 时增加检查：如果检测到 frag 空间不足以容纳数据及 `virtnet_rq_dma` 结构体，则通过减小 buffer 长度来修正内存布局，防止越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b126bbd95549adf6162217236bff9e0b43a466c7

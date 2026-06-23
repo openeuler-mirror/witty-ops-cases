@@ -1,0 +1,25 @@
+#标题
+dm cache 首次恢复时因快速设备扩容导致的越界访问故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在首次恢复（resume）缓存表之前，如果快速设备（fast device）被意外扩容，会导致内核发生越界内存访问。具体表现为在挂起（suspend）缓存时触发 KASAN 野指针或越界读写报告，导致 dmsetup 进程崩溃或系统不稳定。
+
+#主要错误日志
+BUG: KASAN: vmalloc-out-of-bounds in is_dirty_callback+0x2b/0x80
+Read of size 8 at addr ffffc90000085040 by task dmsetup/90
+The buggy address belongs to the virtual mapping at
+ [ffffc90000085000, ffffc90000087000) created by:
+ cache_ctr+0x176a/0x35f0
+DMERR "%s: unable to extend cache due to missing cache table reload"
+
+#问题根因
+如果快速设备在缓存表首次恢复之前被意外扩容，由于 `cache_preresume` 函数内的检查逻辑在首次恢复时不执行大小变更检查，导致内核使用过小的内存数据结构去处理扩容后的设备。在后续挂起操作写出脏数据位图（dirty bitset）时，访问了超出分配范围的内存区域，从而触发越界访问。
+
+#解决方案
+修改 `cache_preresume` 函数逻辑，移除对 `cache->sized` 状态的特殊判断，使得无论是首次恢复还是后续恢复，只要检测到设备大小与当前缓存大小不一致，均强制调用 `can_resize` 进行合法性检查。同时调整 `can_resize` 函数，在扩容场景下直接报错阻止非法操作，并在缩容检查中增加 `loaded_mappings` 判断以确保脏数据检查的有效性，从而防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4439f1ddf50a0b0643ec1f9ec38b1a1d91b33fbc

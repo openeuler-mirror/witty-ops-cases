@@ -1,0 +1,24 @@
+#标题
+ASoC: Intel: bytcr_rt5651 平台 quirk 输入映射配置无效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel bytcr_rt5651 声卡平台上，当用户通过模块参数配置 `quirk` 值时，如果设置了无效的输入映射，驱动程序原有逻辑无法识别该错误配置，导致系统使用错误的硬件映射关系初始化声卡，可能引发音频路由异常或录制功能失效，且无明显错误提示。
+
+#主要错误日志
+- 推断：`quirk sets invalid input map: 0x%x, default to DMIC_MAP`
+
+#问题根因
+驱动中的 `log_quirks` 函数在校验 `quirk` 参数时，仅使用了简单的 `if` 语句判断是否等于特定的有效值（如 DMIC_MAP、IN1_MAP 等），缺乏 `else` 或 `default` 分支来处理非法值。当用户配置的 `quirk` 参数中的输入映射位（bit 0-3）为非定义值时，校验逻辑被跳过，无效配置被传递给硬件初始化流程。
+
+#解决方案
+1. 新增宏定义 `BYT_RT5651_MAP_MASK` 用于明确掩码操作。
+2. 重构 `log_quirks` 函数，将原有的多 `if` 判断改为 `switch-case` 结构。
+3. 增加 `default` 分支，当检测到无效的输入映射值时：
+   - 调用 `dev_warn_once` 打印警告日志，提示配置无效。
+   - 自动将 `quirk` 中的映射值修正为默认的 `BYT_RT5651_DMIC_MAP`，确保硬件初始化参数合法。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/42d7d6e6b825a2648160a291ba4be4398ef4b036

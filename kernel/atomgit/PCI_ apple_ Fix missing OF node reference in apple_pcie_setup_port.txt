@@ -1,0 +1,20 @@
+#标题
+PCI: apple: Fix missing OF node reference in apple_pcie_setup_port
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 apple_pcie_setup_port 函数执行成功的路径中，代码保留了对 OF node 的引用，但未获取该引用计数。由于调用者迭代器会在函数返回时释放借用的引用，这导致后续对该 node 的访问出现引用计数不平衡，可能引发内核对设备树节点引用计数的错误处理或内存安全问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 apple_pcie_setup_port 函数的成功路径中，代码逻辑上需要持有（hold）OF node 的引用，但实现上未调用 of_node_get 来增加引用计数。与此同时，外层的调用者迭代器在函数返回后会自动释放其借用的引用，导致该 node 的引用计数在仍然被使用的情况下被错误地减少，造成引用计数泄漏或节点被提前释放。
+
+#解决方案
+在函数 list_add_tail 之后、注册中断之前，显式调用 of_node_get(np) 增加节点引用计数，以确保在成功路径中正确持有该 OF 节点的引用，防止调用者释放借用引用后节点被错误释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/919e35ee8425c804f651f30b01b6408199a52e6e

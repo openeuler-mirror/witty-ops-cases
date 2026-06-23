@@ -1,0 +1,21 @@
+#标题
+gpiolib: gpiochip_get_ngpios() 错误路径导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 GPIO 驱动通过 bgpio_init() 调用 gpiochip_get_ngpios() 时，若触发参数校验错误（如 ngpio 为 0 或超过 FASTPATH_NGPIO），内核会发生 NULL pointer dereference 导致崩溃。
+
+#主要错误日志
+tried to insert a GPIO chip with zero lines
+line cnt %u is greater than fast path cnt %u
+
+#问题根因
+函数 gpiochip_get_ngpios() 在打印日志时使用了 chip_*() 宏（如 chip_err, chip_warn），这些宏内部依赖于 gpiodev 结构体已经被初始化和设置。然而，在通过 bgpio_init() 调用的场景下，gpiodev 尚未初始化（为 NULL），此时调用 chip_*() 宏会导致空指针解引用。
+
+#解决方案
+将 gpiochip_get_ngpios() 函数中的 chip_err() 和 chip_warn() 宏分别替换为 dev_err() 和 dev_warn() 函数。直接使用传入的 struct device *dev 参数进行日志打印，避免对未初始化的 gpiodev 的依赖，从而修复空指针崩溃问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c4aea1aa70c045f8d0874bc5b14c3d167f3d6ce6

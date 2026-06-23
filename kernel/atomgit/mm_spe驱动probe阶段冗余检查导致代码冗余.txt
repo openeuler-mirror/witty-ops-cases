@@ -1,0 +1,24 @@
+#标题
+mm_spe驱动probe阶段冗余检查导致代码冗余
+
+#内核版本
+OLK-6.6
+
+#问题现象
+mm_spe驱动在probe过程中存在冗余的代码逻辑，包括对pdev和dev指针的NULL检查以及kpti=off条件的判断。虽然暂无明确的用户态报错或系统崩溃日志，但这些冗余检查增加了代码复杂度且无实际防御意义。若arm_spe_pmu注册失败，mm_spe驱动本就无法使能，因此相关条件判断属于无效代码。
+
+#主要错误日志
+- 推断（已被移除的日志）：`buffer inaccessible. Try passing "kpti=off" on the kernel command line`
+- 推断（已被移除的日志）：`pdev is NULL!`
+- 推断（已被移除的日志）：`dev is NULL!`
+
+#问题根因
+mm_spe驱动中存在冗余检查：
+1. `pdev`和`dev`指针在`arm_spe_pmu`中已完成注册与校验，mm_spe驱动中无需再次检查。
+2. `kpti=off`条件判断是多余的，因为如果`arm_spe_pmu`注册失败，mm_spe驱动无法被使能，该场景已被隐式处理。
+
+#解决方案
+删除mm_spe驱动probe函数中对`pdev`和`dev`指针的NULL检查代码，以及`arm64_kernel_unmapped_at_el0()`的相关判断逻辑，依赖底层`arm_spe_pmu`的校验机制来简化代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/96b913a6b4682b5390cb9565bf458fd2e719a44c

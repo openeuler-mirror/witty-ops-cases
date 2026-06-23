@@ -1,0 +1,23 @@
+#标题
+net: unic: bond端口状态变更未通知控制面导致状态不同步
+
+#内核版本
+OLK-6.6
+
+#问题现象
+UNIC驱动在bond端口状态发生变化（加入或移出bond）时，未通知控制面（MAMI），导致控制面无法感知bond端口的状态变更，造成系统状态不一致。
+
+#主要错误日志
+[推断] failed to notify bond status change, port id = %u, bonding_cmd = %s, ret = %d.
+
+#问题根因
+驱动缺少对 NETDEV_CHANGEUPPER 事件的监听机制。当bond端口上线下线时，驱动未将状态变更同步给控制面，导致控制面与实际端口状态脱节。
+
+#解决方案
+1. 新增 UNIC_STATE_SYNC_BOND_PORT 状态标志位用于标记需要通知控制面。
+2. 注册 netdevice 通知链回调函数 unic_netdev_event，监听 NETDEV_CHANGEUPPER 事件，事件发生时设置状态标志位。
+3. 在周期性服务任务中检查该标志位，若置位则调用 unic_send_bond_status_change_notify 向控制面发送通知；若通知失败则重新设置标志位以便重试。
+4. 增加相应的数据结构定义（unic_ctrlq_bond_status_notify_req）和控制消息类型（UBASE_CTRLQ_SER_TYPE_PORT、UBASE_CTRLQ_OPC_BOND_PORT）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/360e833195db022454a26c65d0602ec5fe76e04b

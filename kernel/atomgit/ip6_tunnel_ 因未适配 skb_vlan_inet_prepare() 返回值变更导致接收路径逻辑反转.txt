@@ -1,0 +1,20 @@
+#标题
+ip6_tunnel: 因未适配 skb_vlan_inet_prepare() 返回值变更导致接收路径逻辑反转
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核升级引入 commit f478b8239d65 后，ip6_tunnel 模块在接收报文时，错误地将 VLAN/Internet 协议预处理成功的报文判定为失败并丢弃，导致隧道无法正常处理合法报文，引发业务通信异常。
+
+#主要错误日志
+未知
+
+#问题根因
+上游提交 f478b8239d65 修改了 `skb_vlan_inet_prepare()` 函数的返回值语义，由原本的“成功返回 1、失败返回 0”变更为“成功返回 0、失败返回错误码或非 0 值”。当前代码未同步适配该变更，依旧沿用 `!skb_vlan_inet_prepare(skb, true)` 进行判断，导致原本预处理成功的报文（返回 0）被误判为失败并执行丢弃逻辑。
+
+#解决方案
+修正 `net/ipv6/ip6_tunnel.c` 中的判断逻辑，将条件由 `!skb_vlan_inet_prepare(skb, true)` 修改为 `skb_vlan_inet_prepare(skb, true)`，使其正确适配新的返回值语义：当函数返回非 0 值（表示失败）时才增加错误计数并丢弃报文。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8abc84e6f8b54fdb611b97a66d2ed58ca5cb3053

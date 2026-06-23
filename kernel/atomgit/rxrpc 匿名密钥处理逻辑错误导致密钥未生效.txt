@@ -1,0 +1,20 @@
+#标题
+rxrpc 匿名密钥处理逻辑错误导致密钥未生效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 AF_RXRPC 接口通过 `sendmsg` 发送数据时，若传入匿名密钥（无 payload 的 key），该密钥未能正确应用到连接参数中。此问题仅影响直接使用 AF_RXRPC 的场景，不影响 kAFS 文件系统。由于 AF_RXRPC 在未设置密钥时默认传递 NULL，此缺陷导致匿名密钥机制失效，但可能长期未被察觉。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `rxrpc_new_client_call_for_sendmsg()` 中，代码逻辑原本设计将无 payload 的密钥替换为 NULL 指针并赋值给局部变量 `key`。然而，在后续填充连接参数结构体 `cp` 时，错误地使用了 `rx->key` 而非处理过的局部变量 `key`。这导致先前的密钥检查与替换逻辑失效，连接建立时使用了错误的密钥指针。
+
+#解决方案
+修改 `net/rxrpc/sendmsg.c` 文件中的代码，将连接参数 `cp.key` 的赋值源从 `rx->key` 修正为局部变量 `key`，确保密钥处理逻辑生效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a8e2a3a05cf60cd37b10f0b629e3d31b1b5232f3

@@ -1,0 +1,22 @@
+#标题
+slimbus: core: fix device reference leak on report present
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 Slimbus 总线控制器接收到 "report-present" 消息并处理已注册的设备时，会导致设备引用计数泄漏。该缺陷会随着消息处理次数的积累，导致内核内存泄漏，可能最终引发系统资源耗尽或相关功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `slim_device_report_present` 函数处理上报消息时，通过 `slim_get_device` 查找设备会增加该设备的引用计数。然而，处理完成后代码直接返回，未调用 `put_device` 释放引用，导致引用计数无法平衡。
+此外，对于尚未注册、需要动态分配的新设备，`slim_alloc_device` 返回时未增加引用计数，无法抵消后续释放操作的影响，进一步加剧了引用计数管理的混乱。
+
+#解决方案
+1. 在 `slim_device_report_present` 函数的退出路径上添加 `put_device(&sbdev->dev)` 调用，确保查找设备时获取的引用被正确释放。
+2. 在 `slim_get_device` 函数中，针对需要动态分配新设备的分支，添加 `get_device(&sbdev->dev)` 调用，确保新分配的设备在返回给调用者时持有正确的引用计数，从而保证引用计数管理的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/630d559a14eb973f44b327bd51596dc684bc1300

@@ -1,0 +1,25 @@
+#标题
+x86_energy_perf_policy 工具开启 HWP 时破坏 MSR_PM_ENABLE 保留位
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `x86_energy_perf_policy` 工具启用硬件 P-State (HWP) 功能时，工具会直接将 `MSR_PM_ENABLE` 寄存器写入数值 1。此操作会清除寄存器中原本存在的保留位，导致硬件状态异常。此外，当 HWP 功能已经处于开启状态时，工具仍会重复执行写操作，产生不必要的 MSR 写入。
+
+#主要错误日志
+未知
+
+#问题根因
+`enable_hwp_on_cpu` 函数逻辑缺陷：
+1. 在设置 HWP 使能位（bit 0）时，未遵循“读-改-写”原则，而是直接将寄存器值覆盖为 1，导致 `MSR_PM_ENABLE` 中的保留位被清零。
+2. 缺少对当前 HWP 状态的检查，即使寄存器已显示 HWP 开启（bit 0 为 1），仍会执行写入操作。
+
+#解决方案
+修改 `tools/power/x86/x86_energy_perf_policy/x86_energy_perf_policy.c` 中的 `enable_hwp_on_cpu` 函数：
+1. 增加 `old_msr` 与 `new_msr` 变量，先读取 `MSR_PM_ENABLE` 的当前值。
+2. 检查当前值，如果 bit 0 已置位（HWP 已开启），则直接返回，跳过写入。
+3. 若未开启，使用位或操作（`old_msr | 1`）计算新值，保留原有的保留位，然后再写入 MSR。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f89db0c0adb21c1e0c2b0718a169d97fe94b6d48

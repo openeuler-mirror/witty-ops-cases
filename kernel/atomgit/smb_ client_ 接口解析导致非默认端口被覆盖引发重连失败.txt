@@ -1,0 +1,20 @@
+#标题
+smb: client: 接口解析导致非默认端口被覆盖引发重连失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SMB 客户端挂载使用非默认端口时，在服务器接口更新后，重连尝试会错误地使用默认端口（CIFS_PORT），导致连接无法建立或重连失败。
+
+#主要错误日志
+未知
+
+#问题根因
+`parse_server_interfaces()` 函数在初始化接口套接字地址时，硬编码使用了 `CIFS_PORT`（默认端口）。当挂载配置使用了非默认端口时，该逻辑覆盖了原本配置的目的端口。随后 `cifs_chan_update_iface()` 将此错误的地址复制到 `server->dstaddr`，导致后续的重连操作使用了错误的端口号。
+
+#解决方案
+修改 `parse_server_interfaces()` 函数，在设置接口地址前，先从 `ses->server->dstaddr` 中读取当前实际使用的端口（区分 IPv4 和 IPv6），并将其赋值给接口地址的端口字段，而不是直接使用默认的 `CIFS_PORT`。如果地址族不匹配，则回退使用默认端口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c6d65f22f82edd1d8336529b67a2aca979a12b4f

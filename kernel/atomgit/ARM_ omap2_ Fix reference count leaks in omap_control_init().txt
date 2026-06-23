@@ -1,0 +1,30 @@
+#标题
+ARM: omap2: Fix reference count leaks in omap_control_init()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 OMAP2 平台初始化过程中，`omap_control_init()` 函数存在多处引用计数泄漏问题。具体表现为：
+1. `scm_conf` 节点在正常流程和错误处理路径中均未释放引用计数。
+2. 检查 "clocks" 子节点是否存在时，获取的节点引用未释放。
+3. 在部分错误处理分支中，`np` 节点释放前遗漏了 `scm_conf` 节点的释放。
+这些泄漏会导致内核内存资源无法正确回收，长期运行或重复操作可能造成内存耗尽或设备树节点引用计数异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`of_get_child_by_name()` 函数会增加子节点的引用计数，代码中存在以下处理疏漏：
+1. `scm_conf` 节点通过 `of_get_child_by_name` 获取后，在后续的正常执行路径和错误退出路径中均缺少对应的 `of_node_put()` 调用。
+2. 检查 "clocks" 节点时，原代码直接使用 `if (of_get_child_by_name(scm_conf, "clocks"))` 进行判断，获取了节点引用但未释放。
+3. 错误处理标签 `of_node_put` 仅释放了 `np`，遗漏了在此之前需要释放的 `scm_conf`。
+
+#解决方案
+通过增加正确的 `of_node_put()` 调用并分离错误处理逻辑来修复泄漏：
+1. 新增 `clocks_node` 变量接收 `of_get_child_by_name()` 的返回值，在判断检查后立即调用 `of_node_put(clocks_node)` 释放引用。
+2. 新增 `err_put_scm_conf` 错误处理标签，用于在错误路径下检查并释放 `scm_conf` 节点。
+3. 在 `clocks` 检查逻辑结束后、进入非 `scm_conf` 分支前，显式调用 `of_node_put(scm_conf)` 释放正常流程中的引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/998a66e2db509debc7b133054bb6cfd846f26572

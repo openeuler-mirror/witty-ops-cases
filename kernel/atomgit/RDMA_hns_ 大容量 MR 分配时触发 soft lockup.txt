@@ -1,0 +1,38 @@
+#标题
+RDMA/hns: 大容量 MR 分配时触发 soft lockup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当分配大容量 buffer（例如超过 100GB 的 MR）时，驱动在循环分配并映射 bt pages 的过程中耗时过长，导致 CPU 长时间停滞，触发内核 soft lockup 机制。具体表现为 CPU 被锁定超过 20 秒，调用栈指向 hns_roce 驱动相关的内存注册（reg_mr）和地址表处理函数。
+
+#主要错误日志
+watchdog: BUG: soft lockup - CPU#27 stuck for 22s!
+...
+Call trace:
+ hem_list_alloc_mid_bt+0x124/0x394 [hns_roce_hw_v2]
+ hns_roce_hem_list_request+0xf8/0x160 [hns_roce_hw_v2]
+ hns_roce_mtr_create+0x2e4/0x360 [hns_roce_hw_v2]
+ alloc_mr_pbl+0xd4/0x17c [hns_roce_hw_v2]
+ hns_roce_reg_user_mr+0xf8/0x190 [hns_roce_hw_v2]
+ ib_uverbs_reg_mr+0x118/0x290
+
+watchdog: BUG: soft lockup - CPU#35 stuck for 23s!
+...
+Call trace:
+ hns_roce_hem_list_find_mtt+0x7c/0xb0 [hns_roce_hw_v2]
+ mtr_map_bufs+0xc4/0x204 [hns_roce_hw_v2]
+ hns_roce_mtr_create+0x31c/0x3c4 [hns_roce_hw_v2]
+ alloc_mr_pbl+0xb0/0x160 [hns_roce_hw_v2]
+ hns_roce_reg_user_mr+0x108/0x1c0 [hns_roce_hw_v2]
+ ib_uverbs_reg_mr+0x120/0x2bc
+
+#问题根因
+驱动在分配 bt pages 并将其与 buffer pages 进行映射时使用了 for 循环。当分配超大 buffer（如 100GB 以上的 MR）时，循环次数巨大，导致内核长时间占用 CPU 无法调度，从而触发 soft lockup。
+
+#解决方案
+在相关循环逻辑中增加调度点。为了避免影响普通大小 buffer 的分配性能，设定阈值（100GB MR 对应的循环计数 12800）作为触发条件，仅在循环次数达到阈值时调用 `cond_resched()` 进行调度。修复涉及 `hns_roce_hem_list_request` 和 `hns_roce_hem_list_find_mtt` 两个函数中的循环处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1607e88bbd158771562c6ab36641dd14e549c607

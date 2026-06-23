@@ -1,0 +1,33 @@
+#标题
+btrfs: 初步引用插入跟踪点参数顺序错误导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当开启 Btrfs 初步引用插入事件的跟踪点时，执行写回操作会触发内核空指针解引用，导致系统崩溃。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000018
+ #PF: supervisor read access in kernel mode
+ #PF: error_code(0x0000) - not-present page
+ Oops: Oops: 0000 [#1] SMP NOPTI
+ RIP: 0010:trace_event_raw_event_btrfs__prelim_ref+0x72/0x130
+ Call Trace:
+  prelim_ref_insert+0x1c1/0x270
+  find_parent_nodes+0x12a6/0x1ee0
+  btrfs_is_data_extent_shared+0x167/0x640
+  extent_fiemap+0xa5c/0xbc0
+  btrfs_fiemap+0x7e/0xd0
+  do_vfs_ioctl+0x425/0x9d0
+  __x64_sys_ioctl+0x75/0xc0
+
+#问题根因
+在 `btrfs__prelim_ref` 跟踪事件类的定义中，`TP_PROTO` 函数原型声明的参数顺序为 `(fs_info, oldref, newref, tree_size)`，但 `TP_ARGS` 宏传递参数的顺序错误地写成了 `(fs_info, newref, oldref, tree_size)`。
+这导致在 `prelim_ref_insert` 函数调用该跟踪点时，本应传递 `newref` 的位置传递了 `oldref`，而 `oldref` 可能为 NULL。当跟踪点代码尝试解引用这个被误传的 NULL 指针以打印信息时，触发了空指针解引用错误。
+
+#解决方案
+修正 `include/trace/events/btrfs.h` 文件中 `TP_ARGS` 宏的参数顺序，使其与 `TP_PROTO` 原型定义保持一致，确保 `oldref` 和 `newref` 参数正确传递。具体修改为将 `TP_ARGS(fs_info, newref, oldref, tree_size)` 更正为 `TP_ARGS(fs_info, oldref, newref, tree_size)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4e66c0e870870a8a6b1b3d8f9626f092864bab73

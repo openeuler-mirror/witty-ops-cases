@@ -1,0 +1,23 @@
+#标题
+ceph: fix memory leaks in ceph_mdsc_build_path
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Ceph 文件系统构建路径过程中，若遇到路径构建错误（如内存分配失败、名称解码错误）或路径长度超过系统限制（ENAMETOOLONG），内核未释放先前分配的路径缓冲区，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ceph_mdsc_build_path` 在多个错误处理分支中，直接返回错误指针（ERR_PTR），但遗漏了释放通过 `__getname` 分配的 `path` 内存。具体遗漏场景包括：
+1. 动态名称拷贝或转换失败时（ret < 0）。
+2. 静态名称解码长度异常时（len < 0）。
+3. 路径总长度超过系统限制返回 ENAMETOOLONG 时。
+
+#解决方案
+在 `fs/ceph/mds_client.c` 文件的 `ceph_mdsc_build_path` 函数中，针对所有错误退出路径补全内存释放逻辑。具体修改为：在返回 ERR_PTR 之前，显式调用 `__putname(path)` 释放路径缓冲区，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/660869c55902bcc218bf5e5761ad33a3b5031c4e

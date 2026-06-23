@@ -1,0 +1,26 @@
+#标题
+cpufreq: s3c64xx 驱动在未启用 regulator 时触发的编译警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核配置未启用 CONFIG_REGULATOR 支持的情况下编译 s3c64xx-cpufreq 驱动时，编译器报出“变量已赋值但未使用”的警告，影响编译洁净度。
+
+#主要错误日志
+drivers/cpufreq/s3c64xx-cpufreq.c: In function 's3c64xx_cpufreq_set_target':
+>> drivers/cpufreq/s3c64xx-cpufreq.c:55:22: warning: variable 'old_freq' set but not used [-Wunused-but-set-variable]
+      55 |         unsigned int old_freq, new_freq;
+         |                      ^~~~~~~~
+>> drivers/cpufreq/s3c64xx-cpufreq.c:54:30: warning: variable 'dvfs' set but not used [-Wunused-but-set-variable]
+      54 |         struct s3c64xx_dvfs *dvfs;
+         |                              ^~~~
+
+#问题根因
+驱动代码中定义了 `old_freq` 和 `dvfs` 变量以及相关的赋值操作，但这些变量仅在与 regulator 相关的逻辑中使用。当 CONFIG_REGULATOR 未配置时，相关代码块被预处理移除，导致这些变量处于“已赋值但未使用”的状态，从而触发编译器警告。
+
+#解决方案
+通过调整预处理宏 `#ifdef CONFIG_REGULATOR` 的作用范围，将仅用于 regulator 逻辑的变量定义（`dvfs`、`old_freq`）及其初始化代码包含在条件编译块内部；同时将 `new_freq` 的初始化移至条件编译块外，确保其在非 regulator 场景下仍被正确使用，从而消除编译警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c6ad8494bfa8e5bf65f99700e938bf1560f4649e

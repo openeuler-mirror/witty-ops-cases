@@ -1,0 +1,26 @@
+#标题
+dirty_ratio_handler 中 ratelimit_pages 更新计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 `/proc/sys/vm/dirty_ratio` 接口修改脏页比例时，内核计算的 `ratelimit_pages` 值错误，未按照预期切换到基于 `vm_dirty_ratio` 的计算逻辑，导致任务脏页回写速率限制不符合预期，影响系统脏页平衡。
+
+具体复现步骤如下：
+1. 默认配置下 `vm_dirty_ratio=40`, `vm_dirty_bytes=0`。
+2. 写入 `echo 8192 > dirty_bytes`，此时 `vm_dirty_bytes=8192`, `vm_dirty_ratio=0`，`ratelimit_pages` 基于 `vm_dirty_bytes` 计算。
+3. 写入 `echo 20 > dirty_ratio`，预期 `ratelimit_pages` 应切换为基于 `vm_dirty_ratio` (即 20) 计算。但由于故障存在，`ratelimit_pages` 仍基于之前的 `vm_dirty_bytes` (8192) 进行计算。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dirty_ratio_handler()` 函数中，调用 `writeback_set_ratelimit()` 更新速率限制之前，未先将 `vm_dirty_bytes` 置零。
+由于 `global_dirty_limits()` -> `domain_dirty_limits()` 的调用链中，逻辑始终优先使用 `vm_dirty_bytes` 的值。这导致在用户修改 `dirty_ratio` 时，内核仍使用旧的 `vm_dirty_bytes` 值来计算 `ratelimit_pages`，而不是使用新设置的 `vm_dirty_ratio`，导致计算结果错误。
+
+#解决方案
+调整 `dirty_ratio_handler()` 中的执行顺序，在调用 `writeback_set_ratelimit()` 之前先将 `vm_dirty_bytes` 设置为 0。这确保了后续的计算逻辑能够正确识别到 `bytes` 为 0，从而切换到使用 `ratio` 进行计算。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4638131e2260c238ba396696703a46e1143fe8b1

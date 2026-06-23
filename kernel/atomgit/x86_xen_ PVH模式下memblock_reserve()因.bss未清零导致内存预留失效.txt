@@ -1,0 +1,25 @@
+#标题
+x86/xen: PVH模式下memblock_reserve()因.bss未清零导致内存预留失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Xen PVH（Para-Virtualized Hardware）模式下启动内核时，由于 `memblock_reserve()` 调用时机过早（在 `.bss` 段清零之前），导致内存预留功能失效。这可能引发内存管理异常，具体表现为内核启动过程中内存区域未被正确预留，进而可能导致后续内存分配冲突或数据损坏。该问题是在引入 commit 73db3abdca58c 后触发的回归问题。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `init_pvh_bootparams()` 函数中调用 `xen_reserve_extra_memory()`（内部使用 `memblock_reserve()`）的时机不当。
+具体原因为：
+1. 代码调用时，`.bss` 段尚未被清零。
+2. 早期版本的 `memblock_reserved_init_regions` 隐式位于 `.meminit.data` 段，因此不受 `.bss` 清零影响，功能正常。
+3. 在引入 commit 73db3abdca58c ("init/modpost: conditionally check section mismatch to __meminit*") 后，`memblock_reserved_init_regions` 被放入了 `.bss` 段。
+4. 在 `.bss` 清零前访问该数据结构导致 `memblock_reserve()` 无法正常工作，破坏了内存预留逻辑。
+
+#解决方案
+将 `xen_reserve_extra_memory()` 函数重命名为 `pvh_reserve_extra_memory()` 并移动其调用位置。修改 `xen_pvh_init()`，将其挂载到 `x86_init.oem.arch_setup` 钩子（即 `pvh_arch_setup` 函数）中执行。该钩子在 `.bss` 段完成清零之后、`e820__memory_setup()` 调用之前执行，从而确保 `memblock_reserve()` 在正确的内存状态下运行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/731328eb94c78fec419a4d46c974761cdd161696

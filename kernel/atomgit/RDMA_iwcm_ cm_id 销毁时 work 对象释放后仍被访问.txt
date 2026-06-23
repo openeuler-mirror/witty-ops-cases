@@ -1,0 +1,38 @@
+#标题
+RDMA/iwcm: cm_id 销毁时 work 对象释放后仍被访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA 环境下使用 siw 驱动执行 blktests 测试用例 nvme/061 时，内核触发 KASAN 检测到的 slab-use-after-free 错误。具体表现为在 cm_id 销毁过程中，event handler work 正在执行时，其关联的 work 对象内存已被释放，导致内核崩溃或内存污染。
+
+#主要错误日志
+```
+BUG: KASAN: slab-use-after-free in __pwq_activate_work+0x1ff/0x250
+Read of size 8 at addr ffff88811f9cf800 by task kworker/u16:1/147091
+Workqueue:  0x0 (iw_cm_wq)
+Call Trace:
+ __pwq_activate_work+0x1ff/0x250
+ pwq_dec_nr_in_flight+0x8c5/0xfb0
+ process_one_work+0xc11/0x1460
+ ...
+
+Freed by task 147091:
+ kfree+0x13a/0x4b0
+ dealloc_work_entries+0x125/0x1f0 [iw_cm]
+ iwcm_deref_id+0x6f/0xa0 [iw_cm]
+ cm_work_handler+0x136/0x1ba0 [iw_cm]
+```
+
+#问题根因
+问题源于提交 59c68ac31e15 ("iw_cm: free cm_id resources on the last deref") 引入的资源管理机制。该机制在所有引用移除后才释放 cm_id 资源。如果在 event handler work 执行过程中，cm_id 的最后一个引用计数被减少（例如在 `cm_work_handler` 中调用 `destroy_cm_id`），会导致 `dealloc_work_entries()` 被调用，从而释放当前正在执行的 work 对象自身的内存，造成 work 对象的 use-after-free。
+
+#解决方案
+调整 `iwcm_deref_id()` 的调用时机，确保 cm_id 的最后一次引用计数减少发生在销毁上下文中，而不是在 event handler work 的执行上下文中。
+1. 修改 `destroy_cm_id()` 函数，移除其内部的 `iwcm_deref_id()` 调用。
+2. 在 `iw_destroy_cm_id()` 中，先调用 `destroy_cm_id()`，然后刷新工作队列 `flush_workqueue(iwcm_wq)` 以确保所有 pending works 执行完毕，最后再调用 `iwcm_deref_id()` 释放引用。
+3. 在 `cm_work_handler()` 中，如果调用了 `destroy_cm_id()`，则随之调用 `iwcm_deref_id()`，确保引用计数正确维护。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e4889851ba3f2b46426584aea1607be7307e9921

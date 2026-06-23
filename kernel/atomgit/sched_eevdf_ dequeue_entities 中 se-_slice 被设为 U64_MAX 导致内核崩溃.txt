@@ -1,0 +1,25 @@
+#标题
+sched/eevdf: dequeue_entities 中 se->slice 被设为 U64_MAX 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在运行过程中发生内核崩溃。该故障由调度器代码路径触发：当 `dequeue_entities()` 函数处理一个延迟的组实体，且其父实体的出队操作也被延迟时，实体的 `slice` 会被错误地设置为 `U64_MAX`。这会导致后续计算（如 `update_entity_lag`）发生溢出，产生巨大的负数或正数，最终导致 `pick_eevdf()` 认为没有任何实体符合调度条件并返回 NULL，进而引发 `pick_next_entity()` 解引用空指针导致内核 Panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dequeue_entities()` 函数中，存在一个特定代码路径会将 `se->slice` 设置为 `U64_MAX`。具体流程如下：
+1. `dequeue_entities()` 被调用以出队一个延迟的组实体。
+2. 在初始的 `if (entity_is_task(se)) else` 代码块中，如果是组实体，`slice` 被设置为 `cfs_rq_min_slice(group_cfs_rq(se))`。如果该实体已延迟（无排队任务），该函数返回 `U64_MAX`。
+3. 如果父实体的出队也需要被延迟，代码会从第一个 `for_each_sched_entity()` 循环中跳出，但此时 `slice` 仍保持为 `U64_MAX`。
+4. 第二个 `for_each_sched_entity()` 循环将父实体的 `slice` 设置为该错误的值。
+5. 错误的 `slice` 值导致 `update_entity_lag()` 中的 `limit` 计算为巨大的负数，进而导致 `vlag` 计算溢出、`vruntime` 异常偏移。最终 `pick_eevdf()` 因计算溢出无法找到符合条件的调度实体而返回 NULL，触发空指针崩溃。
+
+#解决方案
+删除 `dequeue_entities()` 函数中针对非任务实体（else 分支）预先设置 `slice` 的代码逻辑。修复后，`slice` 将始终从第一个非空的 cfs_rq 中获取，避免了在实体延迟且无排队任务时获取到 `U64_MAX` 的情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1991ae14d12e06a35d347229217baab3a8f75136

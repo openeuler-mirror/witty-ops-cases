@@ -1,0 +1,20 @@
+#标题
+uacce: isolate sysfs 创建条件错误导致潜在 panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 uacce 驱动仅支持 `isolate_err_threshold_read` 或 `isolate_err_threshold_write` 其中一个操作接口时，系统会创建对应的 sysfs 文件。用户对创建出的 sysfs 文件进行读写操作时，会调用到空指针，导致内核 panic。
+
+#主要错误日志
+未知
+
+#问题根因
+uacce 设备隔离特性的 sysfs 文件创建判断逻辑存在缺陷。原代码使用逻辑与（&&）判断 `read` 和 `write` 接口是否缺失，导致只要存在任意一个接口，条件即为假，sysfs 文件就会被创建。这违背了 sysfs 属性需同时具备读写接口的设计原则，使得在仅注册单一接口的情况下，另一接口指针为空，进而触发空指针引用导致 panic。
+
+#解决方案
+修改 drivers/misc/uacce/uacce.c 中的 `uacce_dev_is_visible` 函数判断条件。将判断逻辑由逻辑与（&&）修改为逻辑或（||），确保只有当 `isolate_err_threshold_read` 和 `isolate_err_threshold_write` 两个操作接口同时存在时，sysfs 文件才会被创建；若任意一个接口不存在，则不创建该文件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5a1b055b7c0abe63f3e7e6ee7f3894f5d3bfc1de

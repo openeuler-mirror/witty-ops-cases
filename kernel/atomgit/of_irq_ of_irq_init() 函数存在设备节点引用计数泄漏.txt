@@ -1,0 +1,24 @@
+#标题
+of/irq: of_irq_init() 函数存在设备节点引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统初始化阶段调用 of_irq_init() 解析中断控制器设备树节点时，若中断控制器的初始化回调函数（irq_init_cb）执行失败，或者函数末尾清理临时链表（intc_desc_list）时，会导致对应的设备节点引用计数（refcount）发生泄漏。长期或反复触发可能导致系统资源耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+在 of_irq_init() 函数中，代码在第一个循环中通过 of_node_get() 获取了 desc->dev 和 desc->interrupt_parent 的引用计数，但在以下两种情况释放 desc 内存前，未调用 of_node_put() 归还引用计数：
+1. 当 desc->irq_init_cb() 执行失败时，遗漏了对 desc->dev 和 desc->interrupt_parent 的引用计数释放。
+2. 函数末尾错误处理或清理 intc_desc_list 链表时，遗漏了对 desc->interrupt_parent 的引用计数释放。
+
+#解决方案
+在 kfree(desc) 释放内存描述符之前，补充调用 of_node_put() 函数以正确释放相关的设备节点引用计数：
+1. 在 irq_init_cb 失败的分支中，增加对 desc->interrupt_parent 和 desc->dev 的引用计数释放。
+2. 在末尾清理 intc_desc_list 链表的循环中，增加对 desc->interrupt_parent 的引用计数释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a42fb1ed73d95d7172f00e852c8799ff0156dce3

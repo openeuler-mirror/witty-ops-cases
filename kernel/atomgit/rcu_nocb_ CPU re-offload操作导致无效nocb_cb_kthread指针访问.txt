@@ -1,0 +1,20 @@
+#标题
+rcu/nocb: CPU re-offload操作导致无效nocb_cb_kthread指针访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在CPU online准备阶段，若RCU nocb kthread创建失败导致CPU rdp去卸载，此时对该CPU进行再次卸载操作时，内核会访问无效的 `rdp->nocb_cb_kthread` 指针，可能引发内核崩溃或异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在CPU online的准备阶段，如果对应的 `rdp->nocb_cb_kthread` 不存在，内核会创建它。存在一种情况：rdp的rcuop kthreads创建失败，随后对该CPU的rdp进行去卸载操作，此时不会分配该CPU的 `rdp->nocb_cb_kthread` 指针，但 `rdp->nocb_gp_rdp` 和 `rdp->rdp_gp->nocb_gp_kthread` 仍然有效。这导致后续对该离线CPU的重新卸载操作通过了条件检查，`kthread_unpark()` 访问了无效的 `rdp->nocb_cb_kthread` 指针。
+
+#解决方案
+在 `rcu_nocb_rdp_offload` 函数中，将安全检查对象由 `rdp_gp->nocb_gp_kthread` 修改为 `rdp->nocb_gp_kthread`，确保在相关线程创建失败后的去卸载场景下，后续的re-offload操作能正确检查到线程状态，避免访问无效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3fba7e034167cb40d6857618b8d627def156c5c0

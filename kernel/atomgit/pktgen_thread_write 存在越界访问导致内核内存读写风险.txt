@@ -1,0 +1,20 @@
+#标题
+pktgen_thread_write 存在越界访问导致内核内存读写风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在向 pktgen 设备节点写入数据时，若用户提供的缓冲区数据长度接近或超过内部缓冲区大小，且写入长度 `count` 与已处理偏移量 `i` 的差值小于内部缓冲区大小时，`strn_len` 函数会读取超出用户给定缓冲区范围的内存地址，可能导致内核崩溃或内存信息泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `pktgen_thread_write` 在解析用户输入的变量名和设备名时，调用 `strn_len` 函数仅使用了内部缓冲区的大小（如 `sizeof(name) - 1`）作为最大长度限制，未考虑用户缓冲区剩余长度（`count - i`）。当 `count - i` 小于内部缓冲区大小时，代码会访问用户缓冲区之外的内存，造成越界访问。
+
+#解决方案
+在调用 `strn_len` 前计算用户缓冲区的剩余有效长度，取“内部缓冲区大小”与“剩余有效长度”两者中的最小值作为读取上限。具体修改为：在读取 variable name 和 add_device 参数前，增加 `max = min(sizeof(name) - 1, count - i)` 和 `max = min(sizeof(f) - 1, count - i)` 的判断，将 `max` 传递给 `strn_len` 函数，确保不会越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6d45f5b61dcc4a7954c46a971c83e2c40c314f2a

@@ -1,0 +1,20 @@
+#标题
+scsi: hisi_sas: debugfs 初始化顺序不当导致驱动卸载后内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动初始化过程中，如果用户在 debugfs 初始化完成前访问 `trigger_dump` 接口触发转储操作，会导致转储文件被错误地创建在 `/sys/kernel/debug` 根目录下。这些文件及其关联的内存信息在驱动卸载后无法被释放，造成内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在当前的 debugfs 初始化流程中，`trigger_dump` 接口的创建先于 dump 目录的创建。这导致了一个时间窗口问题：在 `trigger_dump` 接口已创建但 dump 目录尚未创建的时间段内，用户调用该接口会执行 `debugfs_create_files_v3_hw()`。在该函数中，如果 `.debugfs_dump_dentry` 为 NULL，存储 dump 信息的文件会直接创建在 `/sys/kernel/debug` 目录下，而非预期的驱动专用目录下，导致驱动卸载流程无法清理这些文件资源。
+
+#解决方案
+调整 debugfs 初始化顺序，将 `trigger_dump` 接口的创建操作移至 debugfs 初始化流程的最后执行。确保在用户可以访问 `trigger_dump` 接口之前，dump 目录及其他相关资源已完全初始化完毕，从而避免因目录为 NULL 导致的资源泄露问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8208d1a01ad0efe0b62d500c5f1971d3fe2e7082

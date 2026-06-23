@@ -1,0 +1,20 @@
+#标题
+net: for_each_netdev_dump 迭代行为异常导致潜在逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 netlink dump 操作（如网口信息遍历）时，如果迭代过程未正确终止（例如未处理 NLM_DONE），`for_each_netdev_dump` 宏的行为不符合预期。当迭代“结束”后再次调用该迭代器，它会再次执行循环体处理最后一个有效元素，而不是跳过（即迭代索引未指向末尾）。对于遗留的 legacy dumps 代码，这可能导致重复处理最后一个网络设备或引发其他逻辑故障。
+
+#主要错误日志
+未知
+
+#问题根因
+`for_each_netdev_dump` 宏底层使用的 `xa_for_each_start()` 函数行为稍显反直觉。当迭代结束时，它不会将索引（index）更新为指向最后一个元素之后的位置。这意味着，如果调用者没有严格地通过合并（coalesce）或处理 `NLM_DONE` 来终止 dump，再次调用迭代器会重新处理最后一个有效元素，而非什么都不做。
+
+#解决方案
+修改 `for_each_netdev_dump` 宏的实现逻辑，不再使用 `xa_for_each_start`，而是改用 `xa_find` 配合 `ULONG_MAX` 进行查找。由于 ifindexes 是 31 位宽，而迭代器变量是 ulong 类型，此方法可以安全地将迭代推进到下一个元素。这确保了即使在非正常终止的情况下，迭代器也会正确推进，从而避免重复处理最后一个元素。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3db34565afcd97a560e57d6fdbf3f47f4ee6dd5e

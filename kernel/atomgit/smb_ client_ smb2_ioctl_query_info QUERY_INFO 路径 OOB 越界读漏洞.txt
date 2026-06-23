@@ -1,0 +1,20 @@
+#标题
+smb: client: smb2_ioctl_query_info QUERY_INFO 路径 OOB 越界读漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SMB2/SMB3 客户端在处理 `smb2_ioctl_query_info` 的 QUERY_INFO 响应分支时，对恶意服务器返回的数据缺乏边界校验。恶意服务器可返回大于实际响应数据大小的 `OutputBufferLength`，导致 `copy_to_user()` 读取超出响应缓冲区的内核堆内存数据，造成内核堆数据泄露到用户空间。
+
+#主要错误日志
+未知
+
+#问题根因
+`smb2_ioctl_query_info()` 函数的 QUERY_INFO 分支虽然将 `qi.input_buffer_length` 截断为服务器报告的 `OutputBufferLength`，但从未验证可变数组的实际载荷是否位于 `rsp_iov[1].iov_len` 范围内。恶意服务器返回的 `OutputBufferLength` 可大于实际 QUERY_INFO 响应的大小，导致读取越界。
+
+#解决方案
+在 QUERY_INFO 路径拷贝数据前增加边界检查：验证 `struct_size(qi_rsp, Buffer, qi.input_buffer_length)` 是否超过实际响应向量长度 `rsp_iov[1].iov_len`。若检查失败则返回 `-EFAULT` 并跳转到 `out` 标签退出，防止越界读取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8a5fabdc948738bd8e343b2554a6c29a4044a890

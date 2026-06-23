@@ -1,0 +1,29 @@
+#标题
+media: rc: imon驱动disconnect竞态导致Use-After-Free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当iMON驱动设备正在执行写操作（如vfd_write）时，若发生设备断开连接，内核触发KASAN（Kernel Address Sanitizer）检测到Use-After-Free错误，导致内核崩溃或内存被非法读写。该问题由Syzkaller并发测试工具发现。
+
+#主要错误日志
+BUG: KASAN: use-after-free in __create_pipe include/linux/usb.h:1945 [inline]
+BUG: KASAN: use-after-free in send_packet+0xa2d/0xbc0 drivers/media/rc/imon.c:627
+Read of size 4 at addr ffff8880256fb000 by task syz-executor314/4465
+
+#问题根因
+iMON驱动在 `imon_disconnect` 函数中释放 `usb_device` 引用时未与正在使用设备的操作进行同步。
+具体原因如下：
+1. 在 `disconnect` 过程中，`usb_put_dev` 被无条件调用释放了 `usbdev_intf0` 或 `usbdev_intf1`，但此时并未检查或等待 `ictx->users` 计数器归零。
+2. `vfd_write` 等写操作路径虽然持有互斥锁，但在调用 `send_packet` 时访问 `usbdev_intf0` 指针前，该指针可能已被 `disconnect` 流程释放。
+3. 原有代码仅在 `vfd_write` 和 `lcd_write` 入口处检查 `ictx->disconnected`，但在持有锁之后、实际操作USB设备之前未再次检查，导致TOCTOU（Time-of-check to time-of-use）竞态问题，引发Use-After-Free。
+
+#解决方案
+在驱动中增加对 `ictx->disconnected` 状态的检查与同步机制，确保设备断开连接后不再访问已释放的USB资源：
+1. **增加锁保护与状态检查**：在 `imon_disconnect` 中设置 `ictx->disconnected = true` 时需持有 `ictx->lock`，确保状态变更对其他线程可见。
+2. **关键路径提前返回**：在 `send_packet`、`display_open` 函数入口处增加对 `ictx->disconnected` 的检查，若已断开则直接返回 `-ENODEV`。
+3. **修复TOCTOU竞态**：在 `vfd_write` 和 `lcd_write` 函数中，将检查 `ictx->disconnected` 的逻辑移至获取 `ictx->lock` 互斥锁之后进行。这确保了在判断设备状态时不会被 `disconnect` 流程打断，避免了判断通过后设备立即被释放的竞态窗口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/38845d3b5409d81b88a4f3046d5de0440e157dc3

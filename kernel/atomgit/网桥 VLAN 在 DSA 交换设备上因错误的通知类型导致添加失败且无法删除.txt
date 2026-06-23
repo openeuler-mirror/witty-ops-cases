@@ -1,0 +1,22 @@
+#标题
+网桥 VLAN 在 DSA 交换设备上因错误的通知类型导致添加失败且无法删除
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DSA（Distributed Switch Architecture）交换设备场景下，向网桥添加已存在于其他端口的 VLAN（带有 pvid 或 untagged 标记）时，该 VLAN 无法下发到硬件。这会导致如下两个具体现象：
+1. VLAN 配置顺序不同导致结果不一致：先配置网桥 VLAN 再配置端口 VLAN 可成功，但先配置端口 VLAN 再配置网桥 VLAN 时，网桥 VLAN 无法被硬件正确添加。
+2. VLAN 条目无法删除：由于 VLAN 从未成功添加到 DSA 的 VLAN 列表中，尝试删除网桥上的该 VLAN 条目时会报错，导致删除操作无效，VLAN 依然存在。
+
+#主要错误日志
+未知
+
+#问题根因
+在添加网桥 VLAN 条目时，内核函数 `br_vlan_add_existing` 错误地将“新成为网桥条目”的 VLAN 判断为“状态已改变”。对于 DSA 驱动，它会忽略标记为“changed”的 CPU 或 DSA 端口 VLAN。因此，当一个新的 VLAN 条目加入网桥时，由于被错误标记为 changed，导致 DSA 驱动忽略了该添加请求，进而引发后续无法删除的问题。
+
+#解决方案
+修改 `net/bridge/br_vlan.c` 中的逻辑，将 VLAN 标志位变化的检查 `__vlan_flags_would_change` 移至判断该 VLAN 是否已作为网桥条目存在的分支中。对于首次成为网桥条目的 VLAN，强制传递给 switchdev 的 `changed` 参数为 false，确保其被视为“新增”而非“变更”，从而保证 DSA 驱动能正确处理该 VLAN 的添加操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6864bcff118998270e9abfde58fe9f29b489d1eb

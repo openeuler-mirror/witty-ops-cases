@@ -1,0 +1,32 @@
+#标题
+perf/x86/intel: IA32_PMC_x_CFG_B MSRs 访问错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PTL 平台上运行 perf_fuzzer 时，偶发“unchecked MSR access error”错误。内核尝试向 IA32_PMC_x_CFG_B MSR 写入配置时触发 #GP 异常（General Protection Fault），导致相应的 MSR 写入操作失败并打印调用栈警告。这是由于代码尝试在不支持 auto counter reload 特定的 GP counter（如 counter 0 和 1）上启用该功能。
+
+#主要错误日志
+[   55.611268] unchecked MSR access error: WRMSR to 0x1986 (tried to write 0x0000000200000001) at rIP: 0xffffffffac564b28 (native_write_msr+0x8/0x30)
+[   55.611280] Call Trace:
+[   55.611282]  <TASK>
+[   55.611284]  ? intel_pmu_config_acr+0x87/0x160
+[   55.611289]  intel_pmu_enable_acr+0x6d/0x80
+[   55.611291]  intel_pmu_enable_event+0xce/0x460
+[   55.611293]  x86_pmu_start+0x78/0xb0
+[   55.611297]  x86_pmu_enable+0x218/0x3a0
+
+#问题根因
+在 `intel_pmu_acr_late_setup()` 函数中，对 auto counter reload (ACR) 计数器掩码的校验逻辑存在缺陷：
+1.  **边界检查错误（疑似笔误）**：条件判断 `i + idx > cpuc->n_events` 应为 `i + idx >= cpuc->n_events`。原错误逻辑导致在事件数量较少时（例如 `n_events=1`），数组访问 `cpuc->assign[1]` 越界，将无效位（bit 0）设置到 `hw.config1` 中。
+2.  **缺少功能校验**：未检查 ACR 计数器掩码对应的事件是否为有效的 ACR 事件。如果对应事件不支持 ACR，将其索引加入掩码会导致后续向不支持的硬件计数器写入配置，从而触发 #GP。
+
+#解决方案
+修改 `arch/x86/events/intel/core.c` 中的 `intel_pmu_acr_late_setup` 函数：
+1.  修正边界检查条件，将 `i + idx > cpuc->n_events` 改为 `i + idx >= cpuc->n_events`，防止数组越界访问。
+2.  增加对目标事件的 ACR 属性校验 `is_acr_event_group(cpuc->event_list[i + idx])`，确保只有有效的 ACR 事件才被加入掩码。
+3.  移除 `WARN_ON_ONCE()` 调用，防止因用户空间传入无效配置而轻易触发误导性的内核警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b22b950220573e8db38e0a423c085ca7003d01b

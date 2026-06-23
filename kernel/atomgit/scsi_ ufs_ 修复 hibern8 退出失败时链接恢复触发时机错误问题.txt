@@ -1,0 +1,20 @@
+#标题
+scsi: ufs: 修复 hibern8 退出失败时链接恢复触发时机错误问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UFS 设备执行挂起操作并尝试进入 Hibern8 状态时，若 Hibern8 enter 失败，系统错误地触发了链接恢复逻辑。这导致在不恰当的流程中进行了不必要的链接恢复尝试，可能影响后续的错误处理流程或设备状态。
+
+#主要错误日志
+dev_err(hba->dev, "%s: hibern8 exit failed %d\n", __func__, ret);
+
+#问题根因
+链接恢复的触发逻辑位于 `ufshcd_uic_pwr_ctrl` 函数中，仅依据 `hba->pm_op_in_progress` 标志位判断是否执行。这导致在 suspend 流程中如果 Hibern8 enter 失败，由于此时 `pm_op_in_progress` 亦为真，系统错误地触发了本应仅在 resume 流程中执行的链接恢复逻辑，干扰了正常的错误处理路径。
+
+#解决方案
+将链接恢复逻辑从 `ufshcd_uic_pwr_ctrl` 函数移动至 `__ufshcd_wl_resume` 函数中。修改后，链接恢复仅会在 Hibern8 exit 失败的 resume 流程中被调用，避免了在 Hibern8 enter 的 suspend 流程中误触发，确保了错误处理机制的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3eb5f6c561d8adbf2b19633c812a60c5a2440027

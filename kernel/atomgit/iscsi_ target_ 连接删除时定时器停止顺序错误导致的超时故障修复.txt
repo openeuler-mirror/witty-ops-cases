@@ -1,0 +1,20 @@
+#标题
+iscsi: target: 连接删除时定时器停止顺序错误导致的超时故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除 iSCSI 连接的过程中，系统可能出现超时（timeout）异常。由于停止 NOPIN 响应定时器（nopin_response_timer）与 NOPIN 定时器（nopin_timer）的顺序不当，可能在连接清理阶段引发竞态条件或非法内存访问，导致删除连接的操作无法正常完成。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `iscsit_close_connection` 函数中，停止定时器的顺序错误。原代码先调用 `iscsit_stop_nopin_response_timer(conn)`，后调用 `iscsit_stop_nopin_timer(conn)`。这种顺序可能导致在停止 NOPIN 定时器之前，NOPIN 响应定时器的回调函数已经被激活或仍在运行，从而引用了正在或已经被释放的连接资源，引发超时或其他未定义行为。
+
+#解决方案
+调整 `iscsit_close_connection` 函数中两个定时器停止调用的顺序。将 `iscsit_stop_nopin_timer(conn)` 移到 `iscsit_stop_nopin_response_timer(conn)` 之前执行，确保定时器停止顺序符合依赖关系，避免竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/65d49ea084b0a7e71cadc3438286e1eabfa14feb

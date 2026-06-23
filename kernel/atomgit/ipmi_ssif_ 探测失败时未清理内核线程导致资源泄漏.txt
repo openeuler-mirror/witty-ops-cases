@@ -1,0 +1,21 @@
+#标题
+ipmi:ssif: 探测失败时未清理内核线程导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SSIF（SMBus System Interface）驱动加载过程中，若内核线程（kthread）创建成功，但在后续调用 `ipmi_register_smi` 启动接口之前的步骤中发生错误，驱动将直接返回错误码退出。此时，先前创建的内核线程未被停止且未被释放，导致内核线程资源泄漏。该问题属于驱动初始化路径的资源管理缺陷。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ssif_probe` 函数中，如果 SSIF 内核线程创建成功，但在后续的初始化步骤（如 `ipmi_register_smi` 调用前）发生错误导致流程跳转至 `out` 标签退出时，错误处理代码路径缺失了对 `ssif_info->thread` 的停止与清理操作。
+根据代码逻辑，`ipmi_register_smi` 如果成功启动接口，会注册 `shutdown_ssif` 回调，该回调会在卸载时清理线程；但如果在调用该函数之前就失败退出，`shutdown_ssif` 不会被调用，导致线程未被停止。
+
+#解决方案
+在 `ssif_probe` 函数的错误处理出口（`out` 标签处）增加判断逻辑：如果检测到 `ssif_info->thread` 不为空，则调用 `kthread_stop` 停止该线程并将其置为 NULL，确保在探测失败时正确释放内核线程资源，避免泄漏。同时，在 `shutdown_ssif` 函数中增加将 `ssif_info->thread` 置为 NULL 的操作以保持代码一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/86a5301cd49a9671d186716211933ef06fb2f378

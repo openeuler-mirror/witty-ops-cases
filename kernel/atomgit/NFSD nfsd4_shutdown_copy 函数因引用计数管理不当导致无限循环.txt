@@ -1,0 +1,23 @@
+#标题
+NFSD nfsd4_shutdown_copy 函数因引用计数管理不当导致无限循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在销毁 NFS 客户端时，若调用 `nfsd4_shutdown_copy()` 函数，系统可能陷入无限循环（死循环），导致关机或客户端销毁流程被阻塞，无法正常完成。
+
+#主要错误日志
+未知
+
+#问题根因
+`nfsd4_shutdown_copy()` 函数内部的 while 循环逻辑存在缺陷：
+1. `nfsd4_get_copy()` 获取异步拷贝对象时增加了引用计数，导致 `nfsd4_stop_copy()` 无法释放该对象。
+2. 函数未将对象从 `async_copies` 链表中移除，导致 while 循环条件始终满足，持续遍历链表直到其他线程移除所有条目。
+这导致当前线程在持有锁的情况下陷入死循环，阻塞关机流程。
+
+#解决方案
+将 `nfsd4_get_copy()` 重命名为 `nfsd4_unhash_copy()`，并在获取对象的同时将其从 `async_copies` 链表中移除（`list_del_init`），同时将 `cp_clp` 设置为 NULL。这确保了每次循环都能真正减少链表中的条目，打破无限循环，允许对象被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6278e47e1be29c430ae4351e7c4bc93efd56db47

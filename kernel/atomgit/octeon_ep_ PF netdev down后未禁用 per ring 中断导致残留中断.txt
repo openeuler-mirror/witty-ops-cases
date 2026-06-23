@@ -1,0 +1,20 @@
+#标题
+octeon_ep: PF netdev down后未禁用 per ring 中断导致残留中断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 octeon_ep PF（Physical Function）网络设备执行 down 操作（如 `ifconfig eth0 down`）时，驱动未能彻底清除每个队列的 MSI-X 中断使能位。这导致设备关闭后，硬件仍可能触发中断，但驱动已释放相关资源，可能引发中断处理异常、内核报错或系统资源泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `octep_disable_interrupts_cn93_pf` 和 `octep_disable_interrupts_cnxk_pf` 函数中，原有代码仅通过写入 EPF_IRERR_RINT_ENA_W1C 和 EPF_ORERR_RINT_ENA_W1C 寄存器来禁用错误类中断掩码，遗漏了对每个收发队列的 `SDP_R_IN_INT_LEVELS` 和 `SDP_R_OUT_INT_LEVELS` 寄存器中中断使能位的清除。根据 Commit 描述，这是在引入硬件配置 API 时遗漏的缺陷。
+
+#解决方案
+修改 `octep_disable_interrupts_cn93_pf` 和 `octep_disable_interrupts_cnxk_pf` 函数，在遍历所有 ring 时，增加对 `R_IN_INT_LEVELS` 和 `R_OUT_INT_LEVELS` 寄存器的操作，显式清除中断使能位（BIT(62)），确保在 PF netdev down 时彻底禁用 per ring interrupts。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c9b64c991ccacdcfd4144f5ad75c046417791c09

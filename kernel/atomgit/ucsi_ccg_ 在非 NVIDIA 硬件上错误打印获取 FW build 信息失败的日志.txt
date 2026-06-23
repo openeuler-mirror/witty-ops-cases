@@ -1,0 +1,21 @@
+#标题
+ucsi_ccg: 在非 NVIDIA 硬件上错误打印获取 FW build 信息失败的日志
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非 NVIDIA 硬件平台（或缺少 `firmware-name` 设备属性的设备）上加载 `ucsi_ccg` 驱动时，系统日志中会无端出现 "failed to get FW build information" 的错误信息。该错误属于误报，干扰了日志的可读性，可能导致用户或运维人员误判系统存在固件故障。
+
+#主要错误日志
+- `failed to get FW build information`
+
+#问题根因
+驱动代码中 `dev_err` 打印逻辑的位置不当。错误打印 `failed to get FW build information` 被置于固件名称属性解析循环（`device_property_read_string`）之外。
+这导致当设备树或 ACPI 表中不存在 `firmware-name` 属性（即非 NVIDIA 硬件的正常情况）时，循环正常结束未匹配到任何固件名，随后代码依然执行了错误打印逻辑，从而产生了误导性的错误日志。
+
+#解决方案
+调整 `dev_err` 错误打印的位置，将其移至 `firmware-name` 属性解析的代码块内部（`if (device_property_read_string(...))` 判断逻辑关联的作用域中）。确保仅当设备实际定义了 `firmware-name` 属性但解析或匹配失败时才打印错误信息，从而避免在无此属性的硬件上产生无效报错。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8e885d942b9ef09975464ba048d87d72aa2a585d

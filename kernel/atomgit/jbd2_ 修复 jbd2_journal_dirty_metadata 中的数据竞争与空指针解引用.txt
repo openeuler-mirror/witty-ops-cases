@@ -1,0 +1,22 @@
+#标题
+jbd2: 修复 jbd2_journal_dirty_metadata 中的数据竞争与空指针解引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 jbd2_journal_dirty_metadata 函数时，内核可能发生数据竞争；在特定并发场景下，访问 transaction 指针时可能触发空指针解引用，导致内核崩溃或异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **数据竞争**：代码在读取 `jh->b_modified` 等字段时未加锁保护，存在并发读取导致的数据竞争风险。
+2. **空指针解引用**：原代码在获取 `jh->b_state_lock` 自旋锁之前就提前进行了 `journal = transaction->t_journal` 的赋值操作。若在此期间 `transaction` 指针变为无效或 NULL，后续对 `journal` 的使用将导致空指针解引用。
+
+#解决方案
+1. 使用 `data_race()` 标记读操作以显式声明并处理数据竞争，避免 KCSAN 等检测工具报错。
+2. 调整代码执行顺序，将 `journal = transaction->t_journal` 的赋值操作移动到获取 `spin_lock(&jh->b_state_lock)` 之后执行，确保在访问事务指针时处于锁保护状态，从而避免空指针解引用风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b8486ce915d9c7e1b9ad188492cba4812931de2

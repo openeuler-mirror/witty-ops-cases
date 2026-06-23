@@ -1,0 +1,23 @@
+#标题
+rcu/kvfree: 修复 __mod_timer 与 kvfree_call_rcu 间的数据竞争问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RCU scheduler 处于运行状态时调用 `kvfree_call_rcu` 函数，可能触发内核数据竞争，导致不可预期的内核行为或潜在的数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `kvfree_call_rcu` 函数中，调用者已经持有 `krcp->lock` 自旋锁，随后调用 `schedule_delayed_monitor_work` 函数。而原 `schedule_delayed_monitor_work` 函数内部会尝试获取同一把锁 `krcp->lock`，导致锁的嵌套获取（locking imbalance）。此外，这种锁处理不当引发了与 `__mod_timer` 相关的数据竞争。
+
+#解决方案
+将原有的 `schedule_delayed_monitor_work` 函数拆分为两部分：
+1. 新增内部函数 `__schedule_delayed_monitor_work`，执行实际的延迟工作调度逻辑，不包含锁操作。
+2. 重新定义 `schedule_delayed_monitor_work` 作为一个封装函数，负责获取 `krcp->lock` 锁后调用 `__schedule_delayed_monitor_work`。
+3. 在 `kvfree_call_rcu` 中，由于调用上下文已持有锁，直接调用无锁版本的 `__schedule_delayed_monitor_work`，从而避免了重复加锁和数据竞争问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2df0f54579667c68b5d309776f26d922f7abc5ff

@@ -1,0 +1,29 @@
+#标题
+OPP 查询接口在带宽表未初始化时导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当驱动调用 dev_pm_opp_find_bw_ceil 或 dev_pm_opp_find_bw_floor 接口尝试获取 OPP 带宽时，如果因 OPP 消费者节点缺少 interconnect 属性导致带宽表未创建，内核会发生空指针引用崩溃。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address 0000000000000004
+...
+pc : _read_bw+0x8/0x10
+lr : _opp_table_find_key+0x9c/0x174
+...
+Call trace:
+  _read_bw+0x8/0x10 (P)
+  _opp_table_find_key+0x9c/0x174 (L)
+  _find_key+0x98/0x168
+  dev_pm_opp_find_bw_ceil+0x50/0x88
+
+#问题根因
+在调用 dev_pm_opp_find_bw_* 系列函数时，内核直接尝试读取带宽表数据，但未检查带宽表是否实际存在（即未检查 path_count 是否有效）。当 OPP 节点中缺失 interconnect 属性时，带宽表未被初始化创建，导致 _read_bw 函数访问空指针引发崩溃。
+
+#解决方案
+在 drivers/opp/core.c 中新增 assert_bandwidth_index 函数，用于断言带宽表是否存在且包含足够的索引信息。修改 dev_pm_opp_find_bw_ceil 和 dev_pm_opp_find_bw_floor 函数，在进行查找操作前调用该断言函数检查带宽表状态，确保在访问前验证有效性，从而避免空指针崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/383b8dce64db496ff63600f4bb9f59aa6d3f0074

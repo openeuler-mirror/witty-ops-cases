@@ -1,0 +1,29 @@
+#标题
+sched/numa: 多线程并发导致 vma->numab_state 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+运行 LTP hackbench 测试程序（多线程模式）时，kmemleak 检测到大量内存泄漏。该问题在 192 核以上的高规格服务器上容易复现，使用命令 `/opt/ltp/testcases/bin/hackbench 20 thread 1000` 运行一段时间后，可观测到数百个疑似内存泄漏的 unreferenced object。
+
+#主要错误日志
+```
+unreferenced object 0xffff888cd8ca2c40 (size 64):
+  comm "hackbench", pid 17142, jiffies 4299780315
+  backtrace (crc bff18fd4):
+    [<ffffffff81419a89>] __kmalloc_cache_noprof+0x2f9/0x3f0
+    [<ffffffff8113f715>] task_numa_work+0x725/0xa00
+    ...
+kmemleak: 480 new suspected memory leaks (see /sys/kernel/debug/kmemleak)
+kmemleak: 665 new suspected memory leaks (see /sys/kernel/debug/kmemleak)
+```
+
+#问题根因
+hackbench 创建多个线程时，共享的 VMA 可能被两个或更多核心同时访问。尽管代码通过 `numa_scan_period` 机制限制单次扫描只有一个线程，但在连续的时间窗口内，一个线程刚分配完内存尚未完成赋值前，另一个线程可能进入并观察到 `vma->numab_state` 为 NULL，从而再次分配内存并覆盖 `vma->numab_state` 指针，导致前一次分配的内存地址丢失且无法释放，形成内存泄漏。
+
+#解决方案
+使用 `cmpxchg` 原子操作替代直接赋值。在分配内存后，通过 `cmpxchg(&vma->numab_state, NULL, ptr)` 确保仅当 `vma->numab_state` 当前值为 NULL 时才进行更新。若 `cmpxchg` 发现指针已被其他线程更新（非 NULL），则当前线程释放刚分配的内存并退出，从而避免指针覆盖导致的内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ef78d7a536c5a2a865518f139c06911932a574d5

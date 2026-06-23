@@ -1,0 +1,26 @@
+#标题
+wifi: brcmfmac: 重新调度 brcmf_btcoex_info work 时的释放后使用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在使用 brcmfmac 驱动进行蓝牙共存处理时，由于存在竞态条件，可能导致内核发生释放后使用故障。具体表现为在卸载或 detach 流程中，内核崩溃或内存数据被非法访问。该问题涉及两种典型场景：
+1. brcmf_btcoex_info 结构体在 work 被调度前已释放，导致 schedule_work 访问非法内存。
+2. work 在调度执行过程中，brcmf_btcoex_info 结构体被释放，导致 brcmf_btcoex_handler 执行 container_of 或成员访问时触发 UAF。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根源在于 `brcmf_btcoex_detach()` 函数与定时器处理函数 `brcmf_btcoex_timerfunc()` 之间存在严重的竞态条件：
+1. `brcmf_btcoex_detach()` 仅在 `timer_on` 标志为真时才调用 `timer_shutdown_sync()` 关闭定时器。
+2. 定时器处理函数 `brcmf_btcoex_timerfunc()` 会将 `timer_on` 设置为 false。
+3. 当 `brcmf_btcoex_detach()` 执行时，若此时 `brcmf_btcoex_timerfunc()` 正在运行并将 `timer_on` 置为 false，`brcmf_btcoex_detach()` 会误判定时器已停用从而跳过 `timer_shutdown_sync()` 调用。
+4. 随后 `cancel_work_sync()` 执行完毕，但定时器回调函数可能再次调用 `schedule_work()` 重新调度 work，此时或 work 执行期间 `cfg->btcoex` 可能已被 kfree 释放，从而触发 use-after-free。
+
+#解决方案
+移除 `brcmf_btcoex_detach()` 中对 `timer_on` 标志的条件检查，直接无条件调用 `timer_shutdown_sync()` 来确保定时器被可靠停用。待定时器停止后，再将 `timer_on` 标志置为 false。此举消除了因竞态导致跳过定时器关闭的逻辑漏洞，确保后续的 `cancel_work_sync()` 和内存释放操作安全进行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c8144d7663c16c42376b6bceb45856497a68519a

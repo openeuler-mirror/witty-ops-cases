@@ -1,0 +1,28 @@
+#标题
+netfilter: nf_send_reset6函数因headroom预留不足导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `nf_send_reset6()` 发送 IPv6 TCP RST 数据包时，若网络设备（如 syz_tun）的 `hard_header_len` 为 0，会导致内核触发 `skb_under_panic`，系统崩溃并打印 Oops 信息。
+
+#主要错误日志
+skbuff: skb_under_panic: text:ffffffff89b1d008 len:74 put:14 head:ffff88803123aa00 data:ffff88803123a9f2 tail:0x3c end:0x140 dev:syz_tun
+kernel BUG at net/core/skbuff.c:206 !
+Oops: invalid opcode: 0000 [#1] PREEMPT SMP KASAN PTI
+RIP: 0010:skb_under_panic+0x14b/0x150 net/core/skbuff.c:216
+Call Trace:
+ skb_push+0xe5/0x100 net/core/skbuff.c:2636
+ eth_header+0x38/0x1f0 net/ethernet/eth.c:83
+ dev_hard_header include/linux/netdevice.h:3208 [inline]
+ nf_send_reset6+0xce6/0x1270 net/ipv6/netfilter/nf_reject_ipv6.c:358
+
+#问题根因
+在 `nf_send_reset6()` 函数中，计算 sk_buff 预留空间（headroom）时使用了 `dst->dev->hard_header_len`。当设备（如 syz_tun）的 `hard_header_len` 为 0 时，分配的 headroom 不足。后续在尝试调用 `dev_hard_header` 推送（push）以太网头时，由于空间不足触发了 `skb_under_panic`。
+
+#解决方案
+修改 `nf_send_reset6()` 函数中 `alloc_skb` 的内存分配逻辑，不再依赖 `dst->dev->hard_header_len`，而是改用 `LL_MAX_HEADER` 作为 headroom 的大小。这保证了即使设备的 `hard_header_len` 为 0，也能预留足够的空间用于后续的各种链路层头部处理，与该文件中其他函数的实现保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7b17be08e351a44c76ea3e88fda6575ceecb021e

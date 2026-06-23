@@ -1,0 +1,20 @@
+#标题
+开启特定编译选项后 WARN*_ONCE 状态重置功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核开启 CONFIG_LD_DEAD_CODE_DATA_ELIMINATION 或 CONFIG_LTO_CLANG 编译选项时，内核调试功能 "resetting WARN*_ONCE"（重置一次性警告状态）无法正常工作。这导致通过 sysfs 接口 `echo > /sys/kernel/debug/clear_warn_once` 清除 `__warned` 状态失效，WARN*_ONCE 类宏在触发一次后无法再次触发。
+
+#主要错误日志
+未知
+
+#问题根因
+内核链接脚本（vmlinux.lds.h）中的 DATA_MAIN 宏定义了 `.data.[0-9a-zA-Z_]*` 的匹配模式。原代码使用 `.data.once` 作为段名称，该名称符合上述正则匹配模式。在开启 CONFIG_LD_DEAD_CODE_DATA_ELIMINATION 或 CONFIG_LTO_CLANG 的情况下，`.data.once` 被错误地作为通用数据段处理，而非独立保留的段，导致其内存布局发生变化，使得重置 WARN*_ONCE 的机制失效。
+
+#解决方案
+将所有引用 `.data.once` 段名称的代码统一重命名为 `.data..once`（增加两个点作为分隔符）。由于链接脚本中的通配符模式使用单点匹配，使用双点分隔符可以避免该段名被 DATA_MAIN 宏的错误模式匹配，确保段地址正确引用，从而修复重置功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a22fa4a5a6d2598017751b7e86a560bbc6586583

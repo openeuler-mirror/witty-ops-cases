@@ -1,0 +1,24 @@
+#标题
+ceph: 修复异步请求中 r_parent 竞态条件导致的 MDS 请求失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发重命名等场景下，CephFS 异步请求（如异步创建、异步删除）在构建请求消息时，可能遇到 `req->r_parent` 指针失效或指向错误 inode 的情况。这会导致 MDS 请求中携带的父目录 inode 编号与实际路径不匹配，进而引发元数据服务端（MDS）处理失败，产生内核警告日志，可能导致文件系统操作异常。
+
+#主要错误日志
+- `WARN_ONCE(1, "ceph: r_parent mismatch (had %llx wanted %llx) - updating\n", ceph_ino(old_parent), path_info1.vino.ino);`
+- `pr_warn("async unlink failure path=(%llx)%s result=%d!\n", path_info.vino.ino, IS_ERR(path) ? "<<bad>>" : path, result);`
+- `pr_warn("async create failure path=(%llx)%s result=%d!\n", path_info.vino.ino, IS_ERR(path) ? "<<bad>>" : path, result);`
+
+#问题根因
+问题根因在于 `create_request_message` 函数在构建请求路径时存在竞态条件。如果未持有父目录的 `i_rwsem` 锁（`parent_locked` 为 false），在 dentry 查找到构建请求消息的时间窗口内，并发重命名操作可能导致 `req->r_parent` 变得陈旧，其 inode 编号与通过 dentry 计算出的路径基准 inode（`path_info.vino.ino`）不一致。原代码未对这种不一致进行检查和修正，导致发送给 MDS 的请求包含无效的父目录引用。
+
+#解决方案
+1. **重构路径处理接口**：引入 `struct ceph_path_info` 结构体，将路径指针、长度、基准 inode 和快照信息封装在一起，替代原有分散的参数传递，确保数据一致性。
+2. **增加父目录一致性检查与修正**：在 `create_request_message` 中，当未持有 `i_rwsem` 锁时，比对 `req->r_parent` 的 inode 编号与新构建的 `path_info.vino.ino`。若不一致，调用 `ceph_get_inode` 获取正确的父目录 inode，并转移 `CEPH_CAP_PIN` 引用，更新 `req->r_parent`。
+3. **扩展快照信息传递**：在构建路径时正确填充 vino.snap 字段，确保快照相关逻辑的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e9eba188ded1c0eaa5e4d53f39903e09082edf50

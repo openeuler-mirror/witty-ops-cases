@@ -1,0 +1,22 @@
+#标题
+it87_wdt 驱动未识别固件预启动的看门狗导致系统过早重启
+
+#内核版本
+OLK-6.6
+
+#问题现象
+部分产品（如 Ugreen DXP4800 Plus NAS）的固件默认启用了 it87 看门狗定时器，且 BIOS 选项存在缺陷无法关闭或修改该配置。在此类硬件上安装或启动 Linux 系统时，由于驱动未感知到看门狗已在运行，导致系统在启动过程中触发看门狗超时，发生意外重启，阻碍系统安装或正常引导。
+
+#主要错误日志
+- pr_info("Left running by firmware.\n")
+
+#问题根因
+it87_wdt 驱动初始化时，未检查硬件看门狗是否已被固件预先启动。对于固件已启用看门狗且无法通过 BIOS 关闭的场景，驱动加载后未向 Watchdog Core 报告 `WDOG_HW_RUNNING` 状态，导致看门狗核心层未及时进行喂狗操作，从而引发超时重启。
+
+#解决方案
+在驱动初始化过程中增加对看门狗运行状态的检测逻辑。具体修改为：
+1. 新增 `_wdt_running()` 内部函数，通过读取 WDTVALLSB 和 WDTVALMSB 寄存器判断看门狗是否正在运行。
+2. 在 `it87_wdt_init` 初始化函数中调用该检测函数，若发现看门狗已在运行，则打印日志 "Left running by firmware."，并通过 `set_bit(WDOG_HW_RUNNING, &wdt_dev.status)` 将状态报告给看门狗核心层，确保核心层接管并定期喂狗，防止超时重启。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2fa4c64ab1c0f04aaba496e4e5abf9b185366c66

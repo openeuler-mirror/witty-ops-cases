@@ -1,0 +1,20 @@
+#标题
+hi311x CAN 驱动因缺少 MTU 校验导致缓冲区溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+攻击者可以通过 PF_PACKET 接口绕过 CAN 框架逻辑，利用驱动未校验 MTU 的漏洞，向设备注入恶意 CAN XL 帧。由于驱动将 CAN XL 帧误判为普通 CAN 帧处理，直接使用了帧中的超长长度字段进行内存拷贝，导致内核发生缓冲区溢出。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动 hi311x 的 `net_device_ops` 结构体中未填充 `ndo_change_mtu` 回调函数。这允许用户将接口 MTU 设置为超过驱动处理能力的值（例如 9999）。当攻击者通过 PF_PACKET 发送构造的 CAN XL 帧（如 len=2048）时，`can_dev_dropped_skb()` 检查通过，驱动在 `hi3110_hw_tx()` 中执行 `memcpy` 时，直接使用了恶意帧中的长度字段（如 247 字节），超过了最大预期长度 8 字节，引发缓冲区溢出。
+
+#解决方案
+在驱动的 `net_device_ops` 结构体中增加 `.ndo_change_mtu = can_change_mtu` 成员。该操作调用 CAN 通用校验逻辑，限制接口 MTU 不能超过 CAN 驱动支持的合法范围，从而从源头阻断恶意大帧的注入路径，防止缓冲区溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c0731c7f64485f2949576cf018ccf245c4ce03b3

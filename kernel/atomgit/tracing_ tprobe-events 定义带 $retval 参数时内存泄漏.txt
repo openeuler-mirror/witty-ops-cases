@@ -1,0 +1,20 @@
+#标题
+tracing: tprobe-events 定义带 $retval 参数时内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建 tprobe 事件时，若用户错误地使用了 $retval 参数（该组合在 tracepoint 探测中不被允许），内核在返回错误码前未能释放已分配的符号内存，导致内存泄漏。
+
+#主要错误日志
+RETVAL_ON_PROBE
+
+#问题根因
+函数 `parse_symbol_and_return()` 在检测到 tracepoint 与 $retval 组合使用的非法情况时，通过 `trace_probe_log_err` 记录错误并返回 `-EINVAL`，但遗漏了对已分配的 `*symbol` 内存的释放操作，导致在该错误路径下发生内存泄漏。
+
+#解决方案
+在 `parse_symbol_and_return()` 函数的错误处理路径中（检测到 `is_tracepoint` 为真时），增加调用 `kfree(*symbol)` 释放内存，并将 `*symbol` 置为 `NULL`，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/208b48353257c39d9c11b8352921580fbbc2cd79

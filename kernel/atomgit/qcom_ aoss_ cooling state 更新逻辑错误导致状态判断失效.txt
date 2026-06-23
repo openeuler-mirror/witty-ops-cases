@@ -1,0 +1,22 @@
+#标题
+qcom: aoss: cooling state 更新逻辑错误导致状态判断失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm AOSS QMP 驱动的热冷却设备接口中，当用户请求设置一个非布尔值的冷却状态（即 state 值大于 1）时，驱动的状态更新逻辑无法正确识别当前状态已处于目标状态。这会导致驱动忽略“当前状态与请求状态实质一致”的事实，执行冗余的硬件状态更新操作，增加不必要的开销并可能导致非预期的硬件行为。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `qmp_cdev_set_cur_state()` 会将传入的 `state` 参数归一化为布尔值 (`cdev_state = !!state`)，但随后的早期返回检查条件 `if (qmp_cdev->state == state)` 错误地使用了原始的 `state` 值进行比较。
+当传入的 `state` 为非零非一值（例如 2）且当前设备状态为 1 时，归一化后的目标状态 `cdev_state` 为 1，与当前状态实质相同。但由于比较逻辑使用了原始值 2，导致判断结果为“状态不一致”，从而跳过早期返回逻辑，执行了不必要的硬件更新流程。
+
+#解决方案
+修改 `drivers/soc/qcom/qcom_aoss.c` 文件中的判断逻辑，将比较对象从原始的 `state` 参数改为归一化后的 `cdev_state`。
+即把 `if (qmp_cdev->state == state)` 修改为 `if (qmp_cdev->state == cdev_state)`，确保状态比较逻辑与后续实际应用的归一化状态保持一致，避免冗余更新。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/55d85788b6e01a07aa5a819ad4fd7e641c6bd82b

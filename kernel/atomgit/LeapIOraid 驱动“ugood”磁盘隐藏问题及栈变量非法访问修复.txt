@@ -1,0 +1,26 @@
+#标题
+LeapIOraid 驱动“ugood”磁盘隐藏问题及栈变量非法访问修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. LeapIOraid 控制器下的“ugood”（未配置的好盘）磁盘无法正常显示，导致用户无法看到或使用该类物理磁盘。
+2. 静态代码分析工具或编译器报告存在局部变量非法访问风险：在函数 `leapioraid_base_send_ioc_init` 中，局部变量 `mpi_request` 的地址可能以非零索引被访问。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **磁盘隐藏问题**：函数 `leapioraid_config_get_volume_handle` 在处理配置页请求时，若控制器返回 `LEAPIORAID_IOCSTATUS_CONFIG_INVALID_PAGE` 状态码（通常表示无配置或空配置），驱动逻辑未正确处理该状态，直接返回错误，导致后续流程无法识别和暴露“ugood”磁盘。
+2. **栈变量访问风险**：原代码在调试信息打印流程中，直接对局部结构体变量 `mpi_request` 进行强制类型转换并按索引遍历打印。虽然代码本意是遍历结构体内存，但局部变量的地址直接进行指针算术运算访问可能触发静态分析工具的越界访问警告或编译器检查异常。
+
+#解决方案
+1. **修复磁盘隐藏**：在 `leapioraid_config_get_volume_handle` 函数中增加对 `LEAPIORAID_IOCSTATUS_CONFIG_INVALID_PAGE` 返回状态的专用处理分支。当接收到该状态时，将 `volume_handle` 置为 0 并正常返回（返回值 r=0），允许驱动继续执行后续的磁盘扫描与暴露流程，从而解决 ugood 磁盘被错误隐藏的问题。
+2. **修复代码实现缺陷**：
+   - 移除 `leapioraid_base_send_ioc_init` 中手动遍历打印内存的代码片段，改为调用封装好的调试函数 `leapioraid_debug_dump_mf`，消除局部变量地址非法访问的代码隐患。
+   - 调整宏定义 `LEAPIORAID_NAME_LENGTH` 从 32 增加到 48，以适应更长的设备命名需求。
+   - 调整头文件包含结构，将 `leapioraid_func.h` 从 `leapioraid_app.c` 移至 `leapioraid_func.c` 中包含。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0536e2f4ab598ef1f164f3590770813752ee836e

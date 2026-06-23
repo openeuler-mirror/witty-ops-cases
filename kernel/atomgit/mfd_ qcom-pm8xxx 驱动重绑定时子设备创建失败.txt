@@ -1,0 +1,20 @@
+#标题
+mfd: qcom-pm8xxx 驱动重绑定时子设备创建失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+qcom-pm8xxx 驱动在解除绑定后重新绑定过程中，子设备无法被正确创建。由于设备树节点中的 OF_POPULATED 标志未被正确清除，导致 of_platform_populate() 判断设备已存在而跳过创建，进而导致依赖这些子设备的后续功能无法正常工作。
+
+#主要错误日志
+未知
+
+#问题根因
+自提交 c6e126de43e7 ("of: Keep track of populated platform devices") 起，内核会跟踪已填充的设备树节点。该驱动在 remove 流程中使用 `device_for_each_child` 手动注销了子平台设备，但没有清除对应的设备树节点上的 OF_POPULATED 标志。当驱动重新绑定时，of_platform_populate() 检测到该标志仍然置位，因此拒绝创建新的子设备。
+
+#解决方案
+将 `pm8xxx_remove` 函数中的手动设备注销逻辑（`device_for_each_child` 配合 `platform_device_unregister`）替换为 `of_platform_depopulate()` 调用。该函数会正确处理设备树节点的 OF_POPULATED 标志清除工作，确保驱动在重新绑定时子设备能被正常创建。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6dd4d6cd573fb9dbf5b56a06025f6ac418ef2081

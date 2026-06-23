@@ -1,0 +1,20 @@
+#标题
+KVM: arm64: vgic 修复 IIDR revision 字段从错误变量中提取导致无法修改的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 KVM 虚拟化环境中，用户态（userspace）尝试写入 GICD_IIDR 寄存器以修改实现版本号（revision）时，写入操作无法生效。具体表现为：无论用户态写入何种 revision 值，内核提取到的 revision 始终为当前模拟分发器中已存在的旧值，导致用户态无法更改实现版本，进而影响跨内核版本的迁移兼容性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 GICv2 和 GICv3 的 GICD_IIDR 寄存器 uaccess 写入处理函数（`vgic_mmio_uaccess_write_v2_misc` 和 `vgic_mmio_uaccess_write_v3_misc`）中，使用 `FIELD_GET` 提取 revision 字段时，错误地从 `reg` 变量（当前已存在的 IIDR 值）中读取，而不是从 `val` 变量（用户态正在尝试写入的新值）中读取。
+
+#解决方案
+修正 `FIELD_GET` 宏的输入参数，将其从读取 `reg` 改为读取 `val`，确保提取的是用户态请求写入的新 revision 值，从而允许用户态正确设置实现版本号。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8e74bf6774f1d948ec2fcb9236252bfd1e76b03e

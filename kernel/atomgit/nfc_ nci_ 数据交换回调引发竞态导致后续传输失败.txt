@@ -1,0 +1,23 @@
+#标题
+nfc: nci: 数据交换回调引发竞态导致后续传输失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多核系统上运行 NFC NCI 协议测试（如 nci/nci_dev 中的 t4t_tag_read）时，出现间歇性测试失败。具体表现为数据传输过程中，新的数据交换操作无法启动，返回 -EBUSY 错误，导致测试用例因超时而终止。
+
+#主要错误日志
+# # RUN           NCI.NCI1_0.t4t_tag_read ...
+# # t4t_tag_read: Test terminated by timeout
+# #          FAIL  NCI.NCI1_0.t4t_tag_read
+# not ok 3 NCI.NCI1_0.t4t_tag_read
+
+#问题根因
+在函数 `nci_data_exchange_complete()` 中，清除 `NCI_DATA_EXCHANGE` 标志位的操作位于回调函数（callback）调用之后。在多 CPU 环境下，回调函数（如 `rawsock_data_exchange_complete`）可能立即调度新的工作队列（tx_work）并尝试发起新的数据交换。此时，旧的 `nci_data_exchange_complete()` 尚未执行清除标志位的操作，导致新的 `nci_transceive()` 在调用 `test_and_set_bit(NCI_DATA_EXCHANGE)` 时检测到标志位仍为置位状态，从而返回 -EBUSY，致使新传输失败。
+
+#解决方案
+将 `clear_bit(NCI_DATA_EXCHANGE, &ndev->flags)` 操作移至回调函数调用之前执行，确保在回调函数触发新的数据交换请求前，标志位已被清空，从而避免竞态条件。同时修正了 conn_info 查找失败时的处理逻辑，直接清除标志位并返回，不再跳转至 exit 标签。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9483e7fb9475033e457f161c7a9628d7615b269a

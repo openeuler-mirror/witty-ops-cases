@@ -1,0 +1,24 @@
+#标题
+e1000e网卡在非Meteor Lake平台挂起流程中因强制SMBus配置导致功能回归
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在旧款设备（如 [8086:15B8], [8086:15F9], [8086:15BE]）上，挂起流程中网卡行为异常，这是由于之前的补丁错误地在所有平台上应用了适用于Meteor Lake的SMBus强制配置逻辑，引发了二级回归问题。
+
+#主要错误日志
+- e_dbg("Failed to force SMBUS: %d\n", ret_val);
+- e_dbg("Failed to force SMBUS over MTL system: %d\n", ret_val);
+
+#问题根因
+Commit bfd546a552e1 ("e1000e: move force SMBUS near the end of enable_ulp function") 试图修复Meteor Lake平台上的PHY访问丢失问题，但该修改将强制SMBus的逻辑应用到了所有支持的设备上。这导致在旧款设备上出现了功能回归。
+
+#解决方案
+将强制SMBus的代码逻辑提取为独立函数 `e1000e_force_smbus`，并通过检查网卡MAC类型 (`hw->mac.type`) 来限制其执行范围：
+1. 对于非 `e1000_pch_mtp`（非Meteor Lake）平台，在获取信号量后较早的阶段调用该函数。
+2. 对于 `e1000_pch_mtp`（Meteor Lake）平台，在流程末尾调用该函数。
+此举确保了修复仅针对特定平台生效，避免影响旧款设备。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5b59fa515edb969e33587e4a7cca7792c76f0691

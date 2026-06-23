@@ -1,0 +1,25 @@
+#标题
+serial: 8250 修复因 PSLVERR 导致的内核恐慌
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动或运行过程中触发内核恐慌（Panic），调用栈显示异常发生在 `dw8250_serial_in32` 与 `serial8250_do_startup` 函数中。具体场景为：当 UART 设备的 PSLVERR_RESP_EN 参数设置为 1 时，若另一 CPU 正在访问 UART 导致设备忙，当前 CPU 在初始化过程中会触发 PSLVERR 错误响应条件，从而引发 Oops。
+
+#主要错误日志
+[    0.442336] Oops - unknown exception [#1]
+[    0.442343] epc : dw8250_serial_in32+0x1e/0x4a
+[    0.442351]  ra : serial8250_do_startup+0x2c8/0x88e
+...
+[    0.442416] console_on_rootfs+0x26/0x70
+
+#问题根因
+当 PSLVERR_RESP_EN 参数为 1 时，设备会在 FIFO 启用状态下读取空 RBR（接收缓冲寄存器）时产生错误响应。
+在 `serial8250_do_startup()` 函数中，原代码在未持有锁的情况下调用 `serial_port_out(port, UART_LCR, UART_LCR_WLEN8)`，这会触发 `dw8250_check_lcr()`。当检测失败（如 UART 正被其他 CPU 如 printk 占用）时，代码进入 `dw8250_force_idle()` 并调用 `serial8250_clear_and_reinit_fifos()` 启用 FIFO，随后执行 `serial_port_in(port, UART_RX)`。此序列满足了 PSLVERR 的触发条件（读空 RBR 且 FIFO 已启用），导致系统崩溃。
+
+#解决方案
+将 `serial_port_out(port, UART_LCR, UART_LCR_WLEN8)` 操作移至 `port->lock` 锁的保护范围内执行，确保在 UART 初始化关键路径中不会因并发访问触发错误响应条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/52a40cf0578be25f04364fb0f8410c4e3068a39b

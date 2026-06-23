@@ -1,0 +1,20 @@
+#标题
+cmd-db: 探测阶段内存映射未释放导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm Command DB 驱动探测过程中，若内存映射成功但随后 cmd_db_magic_matches() 校验失败，驱动返回 -EINVAL 退出，但未对已映射的内存区域执行解映射操作，导致内存资源泄漏。
+
+#主要错误日志
+dev_err(&pdev->dev, "Invalid Command DB Magic\n");
+
+#问题根因
+函数 cmd_db_dev_probe() 使用 memremap() 进行内存映射，但在后续的魔数校验失败分支中，直接返回了错误码，未调用对应的 memunmap() 释放资源。原代码逻辑缺少对映射资源的清理步骤，导致在特定错误路径下发生内存泄漏。
+
+#解决方案
+将 memremap() 替换为托管版本 devm_memremap()。通过设备资源管理机制自动管理映射内存的生命周期，确保在驱动探测失败或设备移除时，映射资源能够被自动释放，从而修复内存泄漏问题。同时调整了返回值处理逻辑以适配 devm_memremap() 的错误返回形式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad226d8ff4281bc6b6ff350beaa2f919d8988e62

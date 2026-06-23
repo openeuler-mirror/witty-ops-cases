@@ -1,0 +1,26 @@
+#标题
+brcmnand: PM resume 时触发 nand_reset_op 未初始化警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统从挂起状态恢复时，内核触发 WARNING 警告。调用栈显示警告发生在 `nand_reset_op` 函数中，由 `brcmnand_resume` 调用链触发。
+
+#主要错误日志
+[   14.588529] WARNING: CPU: 0 PID: 1392 at drivers/mtd/nand/raw/internals.h:139 nand_reset_op+0x1e0/0x1f8
+[   14.588604]  dump_backtrace from show_stack+0x18/0x1c
+[   14.588697]  nand_reset_op from brcmnand_resume+0x13c/0x150
+[   14.588717]  brcmnand_resume from platform_pm_resume+0x34/0x54
+[   14.588738]  platform_pm_resume from dpm_run_callback+0x5c/0x14c
+[   14.588779]  device_resume from dpm_resume+0x130/0x160
+
+#问题根因
+在 PM resume 流程中，代码直接调用了 `nand_reset_op(chip)` 函数。由于该函数内部依赖 `struct nand_operation` 结构体，但此时结构体中的 `cs`（chip select）字段未初始化，导致 `WARN_ON(op->cs >= nanddev_ntargets(&chip->base)` 检查条件触发警告。此外，直接调用底层操作函数也忽略了重新配置数据接口（时序）的必要性。
+
+#解决方案
+将 `brcmnand_resume` 函数中的 `nand_reset_op(chip)` 调用替换为更高级别的 `nand_reset(chip, 0)` 函数（其中 chipnr=0）。
+此修复不仅解决了 `op->cs` 未初始化的问题，还确保了在 PM resume 后 NAND 芯片与主机控制器之间的时序重新同步。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/38aae9332567b60deadb2d3134e0c05f6b840b72

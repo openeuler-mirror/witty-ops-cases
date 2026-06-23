@@ -1,0 +1,21 @@
+#标题
+sun4i_can 中断处理逻辑缺陷导致网络队列阻塞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理高频率 CAN 中断时，若中断计数达到 `SUN4I_CAN_MAX_IRQ` 上限，驱动会错误地读取并清除中断寄存器（`SUN4I_REG_INT_ADDR`），但未进行相应的中断处理。这会导致中断状态丢失，进而可能引发网络发送队列永久停滞，表现为 CAN 接口在发送报文后无法唤醒队列（never `netif_wake_queue()` again），导致通信中断。
+
+#主要错误日志
+未知
+
+#问题根因
+在中断处理函数 `sun4i_can_interrupt()` 的 while 循环判断条件中，读取中断寄存器 `SUN4I_REG_INT_ADDR` 的操作位于循环条件的前端，且位于中断计数判断 `(n < SUN4I_CAN_MAX_IRQ)` 之后。
+由于硬件特性，读取 `SUN4I_REG_INT_ADDR` 会自动清除所有中断位。当循环达到最大中断计数限制（`n == SUN4I_CAN_MAX_IRQ`）退出时，如果 `(isrc = readl(...))` 先执行，驱动会读取并清除中断位，但因循环随即退出（未执行循环体），导致该中断未被实际处理。丢失的中断状态（如发送完成中断）使得驱动无法正确唤醒传输队列。
+
+#解决方案
+调整 `sun4i_can_interrupt()` 函数中 while 循环的判断条件顺序。将中断计数检查 `(n < SUN4I_CAN_MAX_IRQ)` 移至条件的前端，确保在达到最大循环次数时，不会执行读取中断寄存器的操作，从而避免清除未处理的中断位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14422e9c3023a81d391f5a8cf16bfabb5d251f65

@@ -1,0 +1,20 @@
+#标题
+mlx5 网卡 SRIOV 启用失败路径缺少 devlink 锁导致潜在并发问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mlx5 网卡驱动执行 SRIOV 使能流程时，若 `pci_enable_sriov` 函数调用失败（例如资源不足或硬件配置错误），驱动进入错误处理路径清理资源。由于清理函数 `mlx5_device_disable_sriov` 缺少必要的 `devlink` 实例锁保护，可能导致内核状态不一致或触发锁校验警告（如 lockdep 报警），进而影响 SRIOV 功能的后续恢复与稳定性。
+
+#主要错误日志
+mlx5_core_warn(dev, "pci_enable_sriov failed : %d\n", err);
+
+#问题根因
+根据提交信息，在之前的补丁修改（Fixes: 84a433a40d0e）中，`mlx5_device_disable_sriov` 函数的调用约定被修改为必须在持有 `devlink` 实例锁的情况下执行。然而，在 `mlx5_sriov_enable` 函数的错误处理分支中，当 `pci_enable_sriov` 失败时，代码直接调用了 `mlx5_device_disable_sriov` 进行清理，遗漏了加锁步骤。这导致在清理过程中违反了锁的上下文要求。
+
+#解决方案
+在 `mlx5_sriov_enable` 函数中，针对 `pci_enable_sriov` 失败后的错误处理路径，在调用 `mlx5_device_disable_sriov` 前后显式添加 `devl_lock(devlink)` 和 `devl_unlock(devlink)` 操作，确保清理函数在正确的锁上下文中执行，修复锁缺失问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5e5bb047ea6299fa691a9e732bbbebd637c2f28b

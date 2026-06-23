@@ -1,0 +1,33 @@
+#标题
+iommu/vt-d: pgtable_walk 函数检测与打印逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel IOMMU 发生 DMA 故障进行页表遍历转储时，`pgtable_walk` 函数存在以下异常行为：
+1. 超级页被错误地当作非当前页打印；
+2. 对非叶子页表项错误地进行了 `dma_pte_superpage` 检查；
+3. 对从未为空的指针进行了无意义的 NULL 检查；
+4. 当页表项不存在时，未打印该页表项的内容，导致调试信息缺失。
+
+#主要错误日志
+- pr_info("PTE not present at level %d\n", level);
++ pr_info("page table not present at level %d\n", level - 1);
+
+#问题根因
+`pgtable_walk` 函数逻辑设计存在缺陷：
+1. 检查顺序错误，导致超级页被误判为不存在；
+2. `dma_pte_superpage` 函数被误用于非叶子页表项检查；
+3. 代码中包含无效的指针 NULL 检查逻辑；
+4. 打印逻辑在检查存在性之前退出，导致无法看到不存在的页表项内容。
+
+#解决方案
+调整 `pgtable_walk` 函数的检查顺序与逻辑：
+1. 移除无效的 `pte` 指针 NULL 检查；
+2. 优先打印页表项的值，随后再检查页表项是否存在，确保即使页表项不存在也能打印其内容；
+3. 将 `dma_pte_superpage` 检查移至 `level == 1` 判断条件中，确保仅在正确层级检查超级页；
+4. 将 "PTE not present" 提示信息修改为更准确的 "page table not present"，并修正打印的层级信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a7733b4a0fd64ad0957f58e1f7d82e32320dca16

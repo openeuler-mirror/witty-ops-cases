@@ -1,0 +1,24 @@
+#标题
+net/sched: taprio_dev_notifier 存在释放后使用(UAF)风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 taprio 调度器模块的通知器回调函数 taprio_dev_notifier 中，访问 q->oper_sched 或 q->admin_sched 指针时可能触发释放后使用，导致内核崩溃或内存数据被非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 taprio_dev_notifier 函数中，代码使用 rtnl_dereference() 来获取 q->oper_sched 和 q->admin_sched 指针。虽然 rtnl_dereference 通常用于受 RTNL 锁保护的场景，但在该上下文中，指针可能在读取后立即被其他路径释放，导致持有过期的引用从而引发 use-after-free。
+
+#解决方案
+将指针获取方式从 rtnl_dereference 修改为 rcu_dereference，并添加 rcu_read_lock/unlock 保护。
+修改内容如下：
+1. 在访问 oper_sched 和 admin_sched 前增加 rcu_read_lock()。
+2. 将 rtnl_dereference 替换为 rcu_dereference，确保在 RCU 读侧临界区内读取指针，防止在此期间对象被释放。
+3. 在操作完成后增加 rcu_read_unlock()。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f7efe10ed633e5b67a947f0e4552d3d63754a6a

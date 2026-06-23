@@ -1,0 +1,20 @@
+#标题
+RDMA/mana_ib: 用户态 Doorbell 页映射因页大小错误导致失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 mana_ib RDMA 驱动通过 mmap() 映射用户态 doorbell 页时，映射操作失败，导致用户态进程无法正常访问 doorbell 页，可能引发 RDMA 连接建立失败或后续 IO 操作异常。
+
+#主要错误日志
+- can't rdma_user_mmap_io ret %d
+
+#问题根因
+驱动在调用 `rdma_user_mmap_io` 映射 doorbell 页时，错误地使用了硬件页大小 `gc->db_page_size`，而该内存区域是由用户态通过 mmap() 分配的，应当使用系统页大小（PAGE_SIZE）。页大小不匹配导致映射校验或操作失败。
+
+#解决方案
+修改 `drivers/infiniband/hw/mana/main.c` 中 `mana_ib_mmap` 函数，将 `rdma_user_mmap_io` 的 size 参数从 `gc->db_page_size` 修正为 `PAGE_SIZE`，同时调整对应的调试日志打印格式以匹配系统页大小类型。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c7d4cbfe2ce756fd64aee27219b0a38329b79904

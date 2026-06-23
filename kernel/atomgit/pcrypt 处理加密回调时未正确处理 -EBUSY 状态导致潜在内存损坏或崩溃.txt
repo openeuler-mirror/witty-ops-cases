@@ -1,0 +1,24 @@
+#标题
+pcrypt 处理加密回调时未正确处理 -EBUSY 状态导致潜在内存损坏或崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 pcrypt 进行异步加密解密操作时，如果底层加密驱动返回 -EBUSY 状态，内核无法正确处理该返回值，导致 pcrypt 模块错误地继续执行后续流程（如调用 padata_do_serial），可能引发内核崩溃、内存损坏或其他不可预知的异常行为。此外，在异步完成回调中未处理 -EINPROGRESS 也会导致类似问题。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 pcrypt 模块对异步加密接口返回值的处理逻辑不完整：
+1. 在 `pcrypt_aead_done` 回调函数中，缺少对 `err == -EINPROGRESS` 的判断，导致异步请求仍在进行中时错误地更新了 padata 状态并尝试串行化处理。
+2. 在 `pcrypt_aead_enc` 和 `pcrypt_aead_dec` 函数中，仅判断了 `ret == -EINPROGRESS`，遗漏了 `ret == -EBUSY` 的情况。当底层加密设备繁忙返回 -EBUSY 时，代码错误地将其视为错误进行处理，未像处理 -EINPROGRESS 那样直接返回等待后续回调，破坏了异步处理的状态机逻辑。
+
+#解决方案
+修改 `crypto/pcrypt.c` 文件，完善返回值处理逻辑：
+1. 在 `pcrypt_aead_done` 函数开头增加检查：`if (err == -EINPROGRESS) return;`，防止对正在进行中的请求进行错误处理。
+2. 在 `pcrypt_aead_enc` 和 `pcrypt_aead_dec` 函数中，将条件判断 `if (ret == -EINPROGRESS)` 修改为 `if (ret == -EINPROGRESS || ret == -EBUSY)`，确保在设备繁忙时正确挂起当前流程，等待重新调度或回调，避免状态混乱。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca4ea57885c04a6119e6b760d69b48b026976cb6

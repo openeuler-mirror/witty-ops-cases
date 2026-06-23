@@ -1,0 +1,27 @@
+#标题
+sentry_urma_comm 全局变量并发访问竞争及作用域错误导致数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多进程或多线程并发写入 `/proc` 接口（如 `proc_client_info_write`）时，由于对全局变量 `kbuf`、`server_buf_part` 等缺乏锁保护，可能导致数据竞争、数据相互覆盖或解析错误。此外，全局变量在写入流程中保留旧数据，可能干扰后续写入操作的正确性。
+
+#主要错误日志
+- pr_err("invalid server eid info, max len %d, actual %lu\n", ...)
+- pr_err("failed parse client info input: copy_from_user failed\n")
+- pr_err("Invalid msg str format and parse client info failed! str [%s]\n", ...)
+- pr_err("Invalid format for client_jetty_id, str %s\n", ...)
+- pr_err("client_jetty_id %u out of range [%d, %d]\n", ...)
+- pr_err("server eid num %d > local eid num %d\n", ...)
+
+#问题根因
+1. **并发竞争风险**：`proc_client_info_write` 函数直接读写全局结构体 `sentry_urma_ctx` 中的缓冲区指针（如 `kbuf`、`server_buf_part`）和配置字段，未加锁保护。并发调用时，不同上下文会相互覆盖全局缓冲区内容，导致解析逻辑错乱或配置错误。
+2. **变量作用域不当**：临时使用的输入缓冲区和解析中间变量被定义为全局变量，不仅在并发场景下不安全，也在单次写入失败或结束时未及时清理，影响后续逻辑独立性。
+
+#解决方案
+1. **变量本地化**：将原本全局的临时缓冲区（`kbuf`、`server_buf_part`、`client_jetty_id_part`）修改为函数内的局部变量，使用 `kzalloc` 动态分配并在函数退出前释放，消除并发场景下的数据干扰。
+2. **增加锁保护**：在更新全局配置信息（如 `is_valid_client_info`、`client_jetty_id` 及 `server_eid` 相关字段）时，引入 `urma_mutex_lock_op` 临界区保护，确保全局状态更新的原子性与一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/af253991966da532aff0cf67646ed335fa9d0576

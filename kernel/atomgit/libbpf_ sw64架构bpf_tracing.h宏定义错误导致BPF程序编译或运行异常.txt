@@ -1,0 +1,25 @@
+#标题
+libbpf: sw64架构bpf_tracing.h宏定义错误导致BPF程序编译或运行异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在SW64架构下使用libbpf开发的BPF程序（如tracing类型程序）时，因寄存器访问宏定义（如PT_REGS_PARM1等）定义错误或与通用框架不匹配，导致BPF程序无法正确读取入参、返回值或栈指针；可能表现为编译错误、读取数据错误或BPF程序加载失败。
+
+#主要错误日志
+未知
+
+#问题根因
+tools/lib/bpf/bpf_tracing.h 中针对 SW64 架构的宏定义不正确。
+1. 原实现直接定义了具体的寄存器访问宏（如 PT_REGS_PARM1），未能复用通用的宏定义框架（如 __PT_PARM1_REG），且部分宏定义可能存在架构适配偏差。
+2. 缺少 PT_REGS_SYSCALL_REGS 相关定义，未正确处理系统调用参数的获取逻辑。
+
+#解决方案
+重构 SW64 架构在 bpf_tracing.h 中的宏定义，使其对齐通用的寄存器访问框架：
+1. 移除旧的直接映射宏（如 PT_REGS_PARM1(x)），改为定义底层寄存器映射宏（如 __PT_PARM1_REG）。
+2. 新增 __PT_REGS_CAST 用于类型转换，统一各参数、返回值、栈指针的底层寄存器索引定义（regs[16] 至 regs[21] 等）。
+3. 新增 PT_REGS_SYSCALL_REGS 及相关参数定义，明确 SW64 架构下系统调用参数的获取方式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8e91ee62306d930512470a5daade0b673ed83e1e

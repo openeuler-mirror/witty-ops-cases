@@ -1,0 +1,25 @@
+#标题
+[irqchip/gic: 修复 union gic_base 中 percpu_base 指针声明类型错误]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[编译阶段使用 sparse 工具进行静态检查时，报告大量 “incorrect type in assignment” 和 “incorrect type in argument” 警告，提示地址空间类型不匹配。虽然未改变最终目标文件，但存在潜在的类型定义不一致风险。]
+
+#主要错误日志
+irq-gic.c:1172:44: warning: incorrect type in assignment (different address spaces)
+irq-gic.c:1172:44:    expected void [noderef] __percpu *[noderef] __iomem *percpu_base
+irq-gic.c:1172:44:    got void [noderef] __iomem *[noderef] __percpu *
+irq-gic.c:1231:43: warning: incorrect type in argument 1 (different address spaces)
+irq-gic.c:1231:43:    expected void [noderef] __percpu *__pdata
+irq-gic.c:1231:43:    got void [noderef] __percpu *[noderef] __iomem *percpu_base
+
+#问题根因
+[union gic_base 结构体中 percpu_base 成员声明错误。原声明 `void __percpu * __iomem *percpu_base` 将 `__percpu` 修饰符放在了第一层指针上，导致其被当作 `__percpu` 地址空间的指针，而实际上它应该是指向 `__percpu` 地址空间的指针的指针。正确的定义应将 `__percpu` 修饰在中间层指针，即 `void __iomem * __percpu *percpu_base`，以符合 percpu 相关函数对参数类型的预期。]
+
+#解决方案
+[修改 `drivers/irqchip/irq-gic.c` 文件中 `union gic_base` 结构体的定义，将 `percpu_base` 的声明从 `void __percpu * __iomem *percpu_base;` 修正为 `void __iomem * __percpu *percpu_base;`，从而修正 `__percpu` 地址空间修饰符的位置，消除 sparse 静态检查警告。]
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1997876ee67cd540821c145b62eef1b4742589d

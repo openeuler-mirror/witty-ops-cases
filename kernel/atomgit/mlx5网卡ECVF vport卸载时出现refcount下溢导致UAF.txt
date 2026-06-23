@@ -1,0 +1,44 @@
+#标题
+mlx5网卡ECVF vport卸载时出现refcount下溢导致UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在BlueField设备的嵌入式芯片（ECVF）上创建虚拟功能（VF）后，执行系统关机流程时触发内核警告。具体表现为引用计数下溢，发生释放后使用，并打印调用栈信息。
+
+#主要错误日志
+[] refcount_t: underflow; use-after-free.
+[] WARNING: CPU: 3 PID: 1 at lib/refcount.c:28
+   refcount_warn_saturate+0x124/0x220
+----------------
+[] Call trace:
+[] refcount_warn_saturate+0x124/0x220
+[] tree_put_node+0x164/0x1e0 [mlx5_core]
+[] mlx5_destroy_flow_table+0x98/0x2c0 [mlx5_core]
+[] esw_acl_ingress_table_destroy+0x28/0x40 [mlx5_core]
+[] esw_acl_ingress_lgcy_cleanup+0x80/0xf4 [mlx5_core]
+[] esw_legacy_vport_acl_cleanup+0x44/0x60 [mlx5_core]
+[] esw_vport_cleanup+0x64/0x90 [mlx5_core]
+[] mlx5_esw_vport_disable+0xc0/0x1d0 [mlx5_core]
+[] mlx5_eswitch_unload_ec_vf_vports+0xcc/0x150 [mlx5_core]
+[] mlx5_eswitch_disable_sriov+0x198/0x2a0 [mlx5_core]
+[] mlx5_device_disable_sriov+0xb8/0x1e0 [mlx5_core]
+[] mlx5_sriov_detach+0x40/0x50 [mlx5_core]
+[] mlx5_unload+0x40/0xc4 [mlx5_core]
+[] mlx5_unload_one_devl_locked+0x6c/0xe4 [mlx5_core]
+[] mlx5_unload_one+0x3c/0x60 [mlx5_core]
+[] shutdown+0x7c/0xa4 [mlx5_core]
+[] pci_device_shutdown+0x3c/0xa0
+[] device_shutdown+0x170/0x340
+[] __do_sys_reboot+0x1f4/0x2a0
+[] --[ end trace 9c4601d68c70030e ]---
+
+#问题根因
+ECVF（Embedded CPU VF）功能与 `ecpf_vport_exists` 能力位无依赖关系。但在代码逻辑中，`mlx5_eswitch_disable_pf_vf_vports()` 函数错误地将 ECVF vports 的卸载逻辑包含在 `mlx5_ecpf_vport_exists(esw->dev)` 的判断条件内。这导致在特定配置下 ECVF vports 的 ACL ingress 表未被正确销毁，进而引发引用计数下溢和释放后使用错误。
+
+#解决方案
+修改 `mlx5_eswitch_enable_pf_vf_vports()` 和 `mlx5_eswitch_disable_pf_vf_vports()` 函数逻辑，将对 ECVF vports 的加载和卸载操作从 `mlx5_ecpf_vport_exists` 的条件判断中移出，确保 ECVF vports 能够被独立且正确地清理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/276ec47e7f162c66baa30904dffa99e7ac28c6bf

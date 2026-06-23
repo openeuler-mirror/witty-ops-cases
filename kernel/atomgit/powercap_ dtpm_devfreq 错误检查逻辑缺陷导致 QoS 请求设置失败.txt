@@ -1,0 +1,20 @@
+#标题
+powercap: dtpm_devfreq 错误检查逻辑缺陷导致 QoS 请求设置失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在注册 dtpm_devfreq 设备时，若 `dev_pm_qos_add_request` 返回值为 1（表示请求已存在），内核错误地将其判定为失败，导致 setup 函数中止，设备无法正常完成初始化。
+
+#主要错误日志
+Failed to add QoS request: %d\n
+
+#问题根因
+`dev_pm_qos_add_request()` 函数在请求已存在时会返回正数 1，而 `__dtpm_devfreq_setup` 函数中的错误检查逻辑仅判断返回值是否非零（`if (ret)`）。这导致当函数返回 1 时，条件成立触发了错误处理流程，但实际上 QoS 请求并未失败。
+
+#解决方案
+修改 `drivers/powercap/dtpm_devfreq.c` 中的错误检查逻辑，将 `if (ret)` 改为 `if (ret < 0)`。此举确保仅在函数返回负数错误码时才视为失败，忽略返回值为 1 的正常或非关键情况，与其他调用者保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/76e648825d6b253751fbf5381bb04de725573290

@@ -1,0 +1,20 @@
+#标题
+[arm64] kselftest: SVE 2.1 硬件能力测试用例选择指令错误导致误判
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 arm64 kselftest 中的 hwcap 测试时，如果 CPU 支持 FEAT_SVE2.1 但不支持 FEAT_SVE_B16B16，测试用例 `sve2p1_sigill()` 会错误地触发 SIGILL 信号（非法指令异常），导致测试失败。
+
+#主要错误日志
+未知
+
+#问题根因
+测试函数 `sve2p1_sigill()` 中用于验证 FEAT_SVE2p1 特性的汇编指令选择错误。原代码使用了 `BFADD Z0.H, Z0.H, Z0.H` 指令，该指令依赖于 FEAT_SVE_B16B16 特性（由 ID_AA64ZFR0_EL1.B16B16 指示），而不是 FEAT_SVE2p1 特性（由 ID_AA64ZFR0_EL1.SVEver 指示）。这导致在仅支持 FEAT_SVE2.1 但不支持 FEAT_SVE_B16B16 的 CPU 上，该指令无法执行从而产生非法指令异常，造成测试误判。
+
+#解决方案
+修改 `sve2p1_sigill()` 函数中的测试指令，将 `BFADD` 替换为 `LD1Q` (Gather load quadwords) 指令。该指令由 FEAT_SVE2p1 隐含支持，且能够正确代表 SVE 2.1 特性，避免了因缺少其他特性（如 B16B16）而导致的测试失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/079bbdea3d54e92cb83ae083f89a731b5ede3d87

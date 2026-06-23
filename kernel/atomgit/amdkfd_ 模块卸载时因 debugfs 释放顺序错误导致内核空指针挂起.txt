@@ -1,0 +1,20 @@
+#标题
+amdkfd: 模块卸载时因 debugfs 释放顺序错误导致内核空指针挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 amdkfd 模块时，内核发生挂起。该问题由内核空指针触发，具体场景为 KFD debugfs 目录被销毁后，工作队列销毁流程仍尝试访问该目录下的进程文件节点。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `kfd_exit` 函数中，销毁顺序存在逻辑错误：先调用了 `kfd_debugfs_fini()` 销毁了 `/sys/kernel/debug/kfd` 目录，随后调用 `kfd_process_destroy_wq()`。而在 `kfd_process_destroy_wq` 的执行流程中会调用 `kfd_debugfs_remove_process`，该函数试图移除 `/sys/kernel/debug/kfd/proc/<pid>` 节点。由于父目录 `/sys/kernel/debug/kfd` 已被销毁，此时对不存在的父目录子节点执行 `debugfs_remove_recursive(entry->proc_dentry)` 操作导致了内核 NULL pointer 问题并引发系统挂起。
+
+#解决方案
+调整 `kfd_exit` 函数中的资源释放顺序，将 `kfd_process_destroy_wq()` 的调用移至 `kfd_debugfs_fini()` 之前。确保在销毁 debugfs 目录之前，先销毁依赖该目录的工作队列及相关进程资源，避免出现目录已销毁但仍尝试访问其子节点的情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/05e1b92ce359484bc6fc26d88825d702e388530b

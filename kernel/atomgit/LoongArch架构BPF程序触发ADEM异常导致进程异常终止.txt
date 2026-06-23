@@ -1,0 +1,20 @@
+#标题
+LoongArch架构BPF程序触发ADEM异常导致进程异常终止
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在LoongArch架构下，BPF程序执行包含`BPF_PROBE_MEM*`指令的内存访问操作时，若访问非法地址，触发ADEM异常后未能正常恢复，导致进程收到SIGBUS信号并异常终止。具体表现为`selftests/bpf`测试集中的`module_attach`与`subprogs_extable`非法地址访问测试用例失败。
+
+#主要错误日志
+Kernel ade access
+
+#问题根因
+BPF内核内置的异常表机制（EX_TYPE_BPF）在JIT编译阶段已生成了相应的异常修复条目，旨在处理`BPF_PROBE_MEM*`指令引发的可恢复内存错误。然而，LoongArch架构特定的陷阱处理函数`do_ade()`未主动调用通用的`fixup_exception()`例程来查询并执行这些修复条目，导致异常恢复流程缺失。
+
+#解决方案
+在`do_ade()`函数中增加异常修复处理逻辑：解析状态寄存器中的异常子码（ESUBCODE），若判断为ADEM异常且`fixup_exception()`返回真（表示存在修复条目），则跳过发送SIGBUS信号的流程，直接退出异常处理，从而确保BPF程序的安全执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b15db88444748c8774aeec1655528a28568f5f3a

@@ -1,0 +1,20 @@
+#标题
+vDPA/ifcvf 驱动 pci_read_config_byte 返回值判断错误导致硬件初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在初始化 vDPA/ifcvf 硬件过程中，如果 `pci_read_config_byte` 读取 PCI 配置空间能力列表失败，驱动程序无法正确捕获该错误，导致初始化流程未能按预期中止或处理，可能引发后续硬件功能异常或设备不可用。
+
+#主要错误日志
+- IFCVF_ERR(pdev, "Failed to read PCI capability list\n");
+
+#问题根因
+函数 `ifcvf_init_hw()` 调用 `pci_read_config_byte()` 读取 PCI 配置空间，该函数返回的是 PCIBIOS_* 状态码（成功为 0，失败为非 0 错误码）。代码中的错误检查逻辑 `if (ret < 0)` 错误地假设该函数返回的是标准的负错误号（errno）。由于 PCIBIOS_* 错误码通常是正数，导致 `ret < 0` 判断失效，无法正确识别读取失败的情况。
+
+#解决方案
+修改 `ifcvf_init_hw()` 函数中对 `pci_read_config_byte()` 返回值的判断逻辑，将 `if (ret < 0)` 修改为 `if (ret)`，以正确处理 PCIBIOS_* 返回码非零即失败的语义，确保在读取失败时正确返回 -EIO。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6c3b1f08a6cc7874487accc5f5bdc5d78e6f718b

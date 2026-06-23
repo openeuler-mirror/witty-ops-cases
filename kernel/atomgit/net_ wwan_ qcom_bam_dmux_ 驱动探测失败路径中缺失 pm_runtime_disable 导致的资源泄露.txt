@@ -1,0 +1,20 @@
+#标题
+net: wwan: qcom_bam_dmux: 驱动探测失败路径中缺失 pm_runtime_disable 导致的资源泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm BAM-DMUX WWAN 网络驱动加载过程中，若 `bam_dmux_probe` 函数在申请中断或获取中断状态时失败（例如 `devm_request_threaded_irq` 返回非零值），驱动将直接返回错误码，但未正确清理之前已初始化的电源管理资源。这会导致电源管理引用计数不平衡或资源泄露，可能影响后续设备的电源状态管理或驱动重新加载。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bam_dmux_probe` 函数的错误处理路径中，代码直接返回了错误值，遗漏了对 `pm_runtime_disable()` 和 `pm_runtime_dont_use_autosuspend()` 的调用。根据 Commit 描述，`pm_runtime_use_autosuspend()` 在驱动初始化时被调用，因此在驱动退出（或探测失败）时，必须通过 `pm_runtime_dont_use_autosuspend()` 进行反向操作，同时需要调用 `pm_runtime_disable()` 以正确关闭电源管理。
+
+#解决方案
+修改 `bam_dmux_probe` 函数的错误处理逻辑。将原先直接 `return ret` 的多处错误路径重定向至新增加的 `err_disable_pm` 标签。在该标签处依次执行 `pm_runtime_disable(dev)` 和 `pm_runtime_dont_use_autosuspend(dev)`，确保在探测失败时正确释放电源管理相关资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa561c6c529cbe44cfd663bca15feaa746f5bec7

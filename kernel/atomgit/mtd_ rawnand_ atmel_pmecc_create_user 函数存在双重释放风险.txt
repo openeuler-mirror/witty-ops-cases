@@ -1,0 +1,20 @@
+#标题
+mtd: rawnand: atmel_pmecc_create_user 函数存在双重释放风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Atmel PMECC 驱动加载或使用过程中，若 `atmel_pmecc_get_gf_tables` 函数调用失败，内核将尝试释放由 `devm_kzalloc` 分配的内存资源，导致内存管理子系统检测到双重释放错误，可能引发内核崩溃或内存污染。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的修复提交 6d734f1bfc33 ("mtd: rawnand: atmel: Fix possible memory leak") 中，指针 `user` 的内存分配方式从 `kzalloc()` 改为了 `devm_kzalloc()`。然而，在错误处理路径中，代码依然保留了 `kfree(user)` 调用。由于 `devm_kzalloc` 是设备资源托管内存，内核会自动释放，显式调用 `kfree` 会导致该内存块被释放两次，从而引发双重释放漏洞。
+
+#解决方案
+移除 `atmel_pmecc_create_user` 函数错误处理路径中的 `kfree(user)` 调用。因为 `user` 指针现在由 `devm_kzalloc` 分配，无需也不应手动释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/28a68785a7599ea874cefec277353f2c4ce07249

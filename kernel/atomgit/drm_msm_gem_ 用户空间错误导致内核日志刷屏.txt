@@ -1,0 +1,31 @@
+#标题
+drm/msm/gem: 用户空间错误导致内核日志刷屏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户空间程序错误使用 DRM/KMS 接口（如传入无效句柄、无效标志、非对齐缓冲区等参数）时，内核日志（dmesg）被大量 "Invalid"、"invalid" 开头的错误信息刷屏，可能导致系统日志文件过大或掩盖其他重要内核信息。
+
+#主要错误日志
+- DRM_ERROR("invalid flags: %x\n", submit_bo.flags);
+- DRM_ERROR("invalid handle %u at index %u\n", submit->bos[i].handle, i);
+- DRM_ERROR("invalid type: %08x\n", submit_cmd.type);
+- DRM_ERROR("non-aligned cmdstream buffer size: %u\n", submit_cmd.size);
+- DRM_DEV_ERROR(obj->dev->dev, "Invalid madv state: %u vs %u\n", msm_obj->madv, madv);
+- DRM_ERROR("handle %u at index %u already on submit list\n", submit->bos[i].handle, i);
+- DRM_ERROR("invalid buffer index: %u (out of %u)\n", idx, submit->nr_bos);
+- DRM_ERROR("non-aligned cmdstream buffer: %u\n", offset);
+- DRM_ERROR("non-aligned reloc offset: %u\n", submit_reloc.submit_offset);
+- DRM_ERROR("invalid offset %u at reloc %u\n", off, i);
+- DRM_ERROR("invalid cmdstream size: %u\n", submit->cmd[i].size * 4);
+- DRM_ERROR("relocs not allowed\n");
+
+#问题根因
+DRM 驱动程序中针对用户空间 API 使用错误（UABI misuse）的校验逻辑使用了 `DRM_ERROR` 或 `DRM_DEV_ERROR` 级别输出日志。这些错误是由用户空间程序引发的，并非内核本身的严重故障，默认使用高级别错误打印会导致日志刷屏。
+
+#解决方案
+将所有由用户空间错误触发的校验失败日志从 `DRM_ERROR` / `DRM_DEV_ERROR` 降级为 `DRM_DEV_DEBUG_DRIVER`（对应 `DRM_UT_DRIVER` 类别）。同时移除 `msm_gem_pin_pages_locked` 中不必要的 `GEM_WARN_ON` 调用。修改后，这些日志默认不再输出，但可通过启用 DRM Driver 调试选项来辅助调试用户空间问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c93ba20119164096e556c378ad547c92eaa0140c

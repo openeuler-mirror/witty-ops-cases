@@ -1,0 +1,20 @@
+#标题
+tracepoint: 注册回调函数失败时未调用 unregfunc 导致状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在向 tracepoint 添加函数（tracepoint_add_func）过程中，若 func_add 执行失败，系统未正确调用 tracepoint 的 unregfunc 回调函数。这可能导致 tracepoint 关联的静态键（static key）状态与实际注册情况不一致，或者遗留未清理的私有资源，进而影响后续 tracepoint 的正常使用或导致内存泄漏。
+
+#主要错误日志
+WARN_ON_ONCE(warn && PTR_ERR(old) != -ENOMEM);
+
+#问题根因
+在 tracepoint_add_func 函数中，当 func_add 失败时（返回错误指针），代码直接返回了错误码，但遗漏了清理逻辑：如果在本次操作前 tracepoint 处于非活跃状态（通过 `!static_key_enabled(&tp->key)` 判断），那么在此之前可能已经调用了 regfunc 进行初始化。当添加函数失败时，应当配对调用 unregfunc 进行回滚清理，否则会导致 tracepoint 状态管理不一致。
+
+#解决方案
+在 tracepoint_add_func 函数的错误处理路径中增加判断与清理逻辑：如果 func_add 失败（IS_ERR(old) 为真），检查 tracepoint 是否定义了 unregfunc 回调且对应的 static key 尚未启用（意味着处于中间状态），若满足条件则调用 tp->unregfunc() 进行回滚，确保状态一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0f3d94548e0d06acf00635104680f08d4f06774d

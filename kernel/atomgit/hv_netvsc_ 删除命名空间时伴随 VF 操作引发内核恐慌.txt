@@ -1,0 +1,20 @@
+#标题
+hv_netvsc: 删除命名空间时伴随 VF 操作引发内核恐慌
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除网络命名空间（namespace deletion）的过程中，如果涉及虚拟功能（VF）设备的处理，系统会发生内核恐慌导致崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `netvsc_netdev_event` 处理 `NETDEV_REGISTER` 事件时，代码直接调用 `netvsc_event_set_vf_ns` 并尝试获取 `rtnl_lock`。当此事件处理与并发的命名空间删除操作发生锁竞争时，由于锁上下文处理不当，触发了内核恐慌。
+
+#解决方案
+引入一个新的延迟工作队列 `vfns_work`，将 `NETDEV_REGISTER` 事件中设置 VF 命名空间的操作改为异步调度执行。同时在 `netvsc_remove` 和 `netvsc_suspend` 流程中增加对该工作队列的同步取消操作（`cancel_delayed_work_sync`），确保在设备移除或挂起前该任务已完成，从而避免并发锁竞争导致的崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/84467895d38477e54b018bfb1089f58589ccfcf8

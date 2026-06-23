@@ -1,0 +1,20 @@
+#标题
+块设备注销队列时的 kobject 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在块设备注销过程中，`disk->queue_kobj` 对象的引用计数未正确释放，导致该 kobject 对象无法被回收，产生内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `blk_register_queue()` 函数中，`kobject_init()` 将 `disk->queue_kobj` 的引用计数初始化为 1。然而在注销路径的 `blk_unregister_queue()` 函数中，虽然调用了 `kobject_del()` 将 kobject 从 sysfs 中移除，但从未调用 `kobject_put()` 来释放初始化时持有的那个初始引用，导致引用计数无法归零，内存无法释放。该问题引入于提交 2bd85221a625 ("block: untangle request_queue refcounting from sysfs")。
+
+#解决方案
+在 `blk_unregister_queue()` 函数末尾添加 `kobject_put(&disk->queue_kobj)` 调用，正确地减少引用计数，确保 kobject 资源被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/79940f78975322105354909b4a44c62f201199c0

@@ -1,0 +1,22 @@
+#标题
+sched_ext: 修复 dequeue_task_scx 函数签名变更导致的编译错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能 sched_ext 的内核编译过程中，编译器报错提示函数指针类型不兼容。由于 `sched_class` 结构体中的 `dequeue_task` 函数指针被定义为返回 `bool` 类型，而 `dequeue_task_scx` 函数实现返回 `void`，导致编译失败。
+
+#主要错误日志
+kernel/sched/ext.c:3630:19: error: initialization of ‘bool (*)(struct rq*, struct task_struct *, int)’ {aka ‘_Bool (*)(struct rq *, struct task_struct *, int)’} from incompatible pointer type ‘void (*)(struct rq*, struct task_struct *, int)’
+  3630 |  .dequeue_task  = dequeue_task_scx,
+       |                   ^~~~~~~~~~~~~~~~
+
+#问题根因
+上游提交 863ccdbb918a ("sched: Allow sched_class::dequeue_task() to fail") 修改了调度类接口，允许 `dequeue_task` 操作失败，因此将 `sched_class::dequeue_task` 的返回值类型从 `void` 修改为了 `bool`。然而，`dequeue_task_scx` 函数未同步更新其返回值类型，依然定义为 `void`，导致在初始化 `sched_class` 结构体时出现类型不匹配的编译错误。
+
+#解决方案
+修改 `dequeue_task_scx` 函数的返回值类型由 `void` 变更为 `bool`，以匹配新的调度类接口定义。同时，调整函数内部逻辑，在正常的出队路径和参数校验路径中均返回 `true`（表示操作成功/已完成），仅在任务未处于 queued 状态时通过返回 `true` 保持行为一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0230fd7d2347903ea3ecfc432c18b28098837e0b

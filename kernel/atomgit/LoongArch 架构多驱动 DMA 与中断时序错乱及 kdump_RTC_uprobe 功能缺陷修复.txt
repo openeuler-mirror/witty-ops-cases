@@ -1,0 +1,33 @@
+#标题
+LoongArch 架构多驱动 DMA 与中断时序错乱及 kdump/RTC/uprobe 功能缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **数据损坏**：在 LoongArch 平台下使用 NVMe 或 Megaraid 驱动时，可能因 DMA 传输与中断处理之间的时序无保障导致数据读取错误。
+2. **vmcore 时间戳错误**：执行 kdump 捕获 vmcore 时，时间戳显示异常。
+3. **uprobe 功能异常**：LoongArch 的 uprobe 机制因冗余的单步执行代码导致行为异常。
+4. **内存初始化限制**：内核启动参数 `mem=` 仅支持带 `@` 的格式，不支持简单的 `mem=<size>` 格式，导致内存限制失败并报错 "Invalid format!"。
+5. **网卡 FIFO 配置错误**：Loongson DWMAC 驱动中 tx/rx_fifo_size 未正确设置。
+
+#主要错误日志
+- `pr_err("Invalid format!\n")` （推断：原代码在处理不带 @ 的 mem 参数时报错）
+
+#问题根因
+1. **DMA 时序问题**：Loongson 平台硬件特性导致 DMA 传输完成与中断到达之间没有严格的时序保证，中断可能在 DMA 数据实际写入内存之前到达，驱动处理时读取到错误数据。
+2. **EFI 内存映射被覆盖**：kdump 内核依赖的 EFI 内存映射表区域未被主内核保留，导致该区域被覆盖，进而导致 kdump 下 EFI RTC 时间戳获取失败。
+3. **RTC 模块依赖缺失**：EFI RTC 驱动编译为模块（`m`），无法在 kdump 内核早期加载，导致时间戳功能不可用。
+4. **uprobe 冗余逻辑**：LoongArch uprobe 代码中冗余调用了 `user_enable_single_step` 等单步调试接口，且 `resume_era` 的处理逻辑不正确。
+5. **mem 参数解析逻辑缺陷**：早期内存解析函数要求必须包含 `@` 符号，否则视为无效格式。
+
+#解决方案
+1. **NVMe/Megaraid 时序修复**：在 LoongArch 架构下的中断处理函数（`nvme_irq` 和 `megasas_isr_fusion`）入口处增加 `udelay(30)` 微秒延迟，确保中断处理前 DMA 操作已完成。
+2. **EFI 内存保留**：在 `efi_init` 中通过 `memblock_reserve` 保留 EFI 内存映射表区域，并设置 `EFI_PRESERVE_BS_REGIONS` 标志。
+3. **RTC 内核内置**：将 `CONFIG_RTC_DRV_EFI` 从模块（`m`）改为内置（`y`），确保 kdump 环境下可用。
+4. **uprobe 代码清理**：移除 `user_enable_single_step`/`user_disable_single_step` 调用及 `resume_era` 成员，简化处理逻辑。
+5. **mem 参数支持增强**：修正 `early_parse_mem` 逻辑，支持 `mem=<size>` 格式，自动执行 `memblock_enforce_memory_limit`。
+6. **网卡 FIFO 修复**：在 `dwmac-loongson` 驱动中显式设置 `tx_fifo_size` 和 `rx_fifo_size` 为 `SZ_16K * queues`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/262b4b6cd07edcad4dd531a31c693355c5e94fb4

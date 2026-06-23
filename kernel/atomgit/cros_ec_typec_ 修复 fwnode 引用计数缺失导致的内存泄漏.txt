@@ -1,0 +1,20 @@
+#标题
+cros_ec_typec: 修复 fwnode 引用计数缺失导致的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Chrome OS EC Type C 驱动初始化端口过程中，若因错误提前退出（如 `cros_typec_parse_port` 失败），会导致内核对象引用计数泄漏。长期运行或反复触发该错误路径可能导致内存资源耗尽，影响系统稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+`device_for_each_child_node()` 宏要求在提前退出循环（如 `return`、`break`、`goto`）时必须显式调用 `fwnode_handle_put()` 来减少 fwnode 的引用计数。在 `cros_typec_init_ports` 函数中，代码跳转至 `unregister_ports` 标签进行错误处理时，遗漏了对 `fwnode_handle_put()` 的调用，导致节点引用未被释放。
+
+#解决方案
+在 `unregister_ports` 错误处理标签处增加 `fwnode_handle_put(fwnode)` 调用，确保在错误退出路径上正确释放 fwnode 的引用计数，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2286d4c66a9669980fd16cb67a9d48fdca839b0c

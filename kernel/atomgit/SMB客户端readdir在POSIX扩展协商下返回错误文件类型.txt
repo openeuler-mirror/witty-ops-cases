@@ -1,0 +1,20 @@
+#标题
+SMB客户端readdir在POSIX扩展协商下返回错误文件类型
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SMB 3.1.1 POSIX 扩展协商生效时，用户态程序通过 readdir() 或 getdents() 系统调用（未对每个文件单独执行 stat()）获取文件列表时，会错误地识别文件类型。具体表现为简单的 "ls" 或 "find" 命令显示异常，例如不进入子目录（因为误判目录类型），或者文件颜色显示异常（如 "ls" 命令显示的颜色不对）。相比之下，"ls -l" 等会触发 stat() 调用的命令则显示正确。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cifs_posix_to_fattr` 转换函数中存在逻辑疏忽。代码尝试直接从 PDU（Protocol Data Unit）数据包中提取文件类型赋值给 `cf_dtype`（`fattr->cf_dtype = S_DT(le32_to_cpu(info->Mode))`），而不是从已经正确转换过的 POSIX 模式字段 `cf_mode` 中提取。虽然数据包中的模式字段结构与 POSIX stat() 类似，但其条目类型的赋值定义不同，导致宏 `S_DT` 处理原始 PDU 模式值时得出了错误的文件类型。
+
+#解决方案
+修改 `fs/smb/client/readdir.c` 文件中的 `cifs_posix_to_fattr` 函数，将 `cf_dtype` 的赋值来源从原始的 PDU 模式字段 (`info->Mode`) 修改为转换后的 POSIX 模式字段 (`fattr->cf_mode`)。即执行 `fattr->cf_dtype = S_DT(fattr->cf_mode)`，这与 `smb311_posix_info_to_fattr` 等函数的处理逻辑保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/764003f3e3be0d8f7227b3d54cf1db65dc97a9fc

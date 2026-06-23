@@ -1,0 +1,29 @@
+#标题
+qla2xxx: qlini_mode=disabled 参数导致中断丢失及命令超时
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当加载 qla2xxx 模块并使用 `qlini_mode=disabled` 参数时，特定 HBA 上会因使用错误的中断处理函数导致中断丢失。
+具体表现为：运行高 IOPS 测试并频繁触发 RSCN 数据库变更事件时，出现 MBX Command timeout（邮箱命令超时），系统日志打印超时信息并调度 ISP abort。涉及的命令包括 0x20, 0x22, 0x54, 0x5a, 0x5d 或 0x6a。
+
+#主要错误日志
+qla2xxx [0000:02:00.0]-d04c:6: MBX Command timeout for cmd 20, iocontrol=8 jiffies=1090c0300 mb[0-3]=[0x4000 0x0 0x40 0xda] mb7 0x500 host_status 0x40000010 hccr 0x3f00
+qla2xxx [0000:02:00.0]-101e:6: Mailbox cmd timeout occurred, cmd=0x20, mb[0]=0x20. Scheduling ISP abort
+
+#问题根因
+变量 `ha->flags.disable_msix_handshake` 在被使用之后才被设置，导致在 `qlini_mode=disabled` 模式下选择了错误的中断处理函数 `qla2xxx_msix_rsp_q_hs()`，而本应使用 `qla2xxx_msix_rsp_q()`。
+`qla2xxx_msix_rsp_q_hs()` 会写入寄存器清除 "RISC" 中断，这导致了 RISC 中断被错误地清除。这偶尔会导致另一个中断向量处理函数 `qla24xx_msix_default()` 看到 `((stat & HSRX_RISC_INT) == 0)` 从而忽略该中断，最终引发中断丢失和后续的命令超时问题。
+经分析，即使 `disable_msix_handshake` 强制设为 0，也不需要 `qla2xxx_msix_rsp_q_hs()` 来清除 RISC 中断。
+
+#解决方案
+彻底移除 `qla2xxx_msix_rsp_q_hs()` 中断处理函数及其相关的选择逻辑，统一使用 `qla2xxx_msix_rsp_q()`。
+代码变更包括：
+1. 删除 `qla2xxx_msix_rsp_q_hs` 函数定义。
+2. 从 `msix_entries` 数组中移除 "qpair_multiq_hs" 条目。
+3. 移除 `QLA_MSIX_QPAIR_MULTIQ_RSP_Q_HS` 宏定义。
+4. 修改 `qla25xx_request_irq` 函数签名，移除 `vector_type` 参数，直接使用 `QLA_MSIX_QPAIR_MULTIQ_RSP_Q` 作为中断入口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c098ec2ba73b8adaa9231c9497003459dd6dd1c

@@ -1,0 +1,39 @@
+#标题
+mptcp: 并发创建隐式端点致原子上下文调度死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MPTCP 并发连接请求场景下（特别是当用户通告的端点外部地址与内部地址不一致时），多个 CPU 同时尝试创建隐式端点，导致内核触发 "scheduling while atomic" 错误，引发内核调用栈打印，严重时可能导致系统异常或服务中断。
+
+#主要错误日志
+BUG: scheduling while atomic: swapper/2/0/0x00000302
+Call Trace:
+ <IRQ>
+ dump_stack_lvl
+ dump_stack
+ __schedule_bug
+ schedule_debug.constprop.0
+ __schedule
+ schedule
+ schedule_timeout
+ wait_for_completion
+ __wait_rcu_gp
+ synchronize_rcu
+ mptcp_pm_nl_append_new_local_addr
+ mptcp_pm_nl_get_local_id
+ mptcp_pm_get_local_id
+ subflow_check_req
+ subflow_v4_route_req
+ tcp_conn_request
+ ...
+
+#问题根因
+当多个连接请求并行尝试创建 MPTCP 隐式端点时，多个调用者可能同时进入 `mptcp_pm_nl_append_new_local_addr` 函数。由于并发检测到地址不存在，后入的调用者会尝试删除前一个调用者刚创建的地址条目。该删除操作调用了 `synchronize_rcu`，但此时 CPU 正处于软中断上下文处理收包流程，持有 RCU 读锁且禁止了抢占，导致在原子上下文中调用可能睡眠的 `synchronize_rcu`，从而触发 "scheduling while atomic" 错误。
+
+#解决方案
+在 `mptcp_pm_nl_append_new_local_addr` 函数中增加 `replace` 布尔参数，用于控制是否替换已存在的条目。在收包路径调用的 `mptcp_pm_nl_get_local_id` 函数中，将该参数置为 `false`，若发现目标地址已存在，直接返回已有的 ID 并跳过替换逻辑（避免调用 `synchronize_rcu`）；而在用户空间下发配置的路径 `mptcp_pm_nl_add_addr_doit` 中则保持原有的替换行为。以此规避在原子上下文中执行 RCU 同步等待。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6507511b52c587bd94b963df40b6a7fa2e30120a

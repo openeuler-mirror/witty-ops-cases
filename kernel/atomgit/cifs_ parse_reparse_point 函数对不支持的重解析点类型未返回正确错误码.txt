@@ -1,0 +1,22 @@
+#标题
+cifs: parse_reparse_point 函数对不支持的重解析点类型未返回正确错误码
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 CIFS 客户端遇到不支持的重解析点类型时，`parse_reparse_point` 函数未能向调用者返回正确的错误状态，导致调用者无法检测和跟踪重解析点是否被正确处理，可能导致后续处理逻辑异常或状态判断错误。
+
+#主要错误日志
+cifs_tcon_dbg: "unhandled reparse tag: 0x%08x\n"
+
+#问题根因
+在 `parse_reparse_point` 函数中，`default` 分支处理不支持的重解析点类型时，虽然打印了警告日志，但并未立即返回错误码，而是错误地执行了 `break` 并最终返回 0（成功）。这导致调用者误认为重解析点已被成功处理。
+
+#解决方案
+修改 `parse_reparse_point` 函数逻辑：
+1. 将 `default` 分支中的 `break` 修改为 `return -EOPNOTSUPP`，明确返回“不支持”错误码。
+2. 同时修正 `case` 分支逻辑，移除末尾通用的 `return 0`，改为在处理成功的分支直接 `return 0`，确保逻辑路径明确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/60543dfd17935cc566d515a9044225ec02e467a6

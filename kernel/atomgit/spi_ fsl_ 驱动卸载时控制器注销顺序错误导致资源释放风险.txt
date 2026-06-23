@@ -1,0 +1,20 @@
+#标题
+spi: fsl: 驱动卸载时控制器注销顺序错误导致资源释放风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载（unbind）fsl-spi 驱动时，由于控制器注销与底层资源（如 DMA）释放的顺序错误，可能导致资源使用后释放引发内核崩溃或内存访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在引入 devm_ 自动资源管理机制时（Commit 4178b6b1b595），使用了 `devm_spi_register_controller` 自动注销控制器。这导致驱动卸载时，控制器的注销操作被推迟到驱动模块卸载后期，而底层的 DMA 等资源（`fsl_spi_cpm_free`）却在 `remove` 函数中被先行释放。这种顺序颠倒导致控制器在注销过程中可能仍在访问已被释放的底层资源。
+
+#解决方案
+放弃使用 `devm_spi_register_controller`，改为手动调用 `spi_register_controller` 进行注册。同时在 `remove` 回调函数中，显式增加引用计数（`spi_controller_get`），先调用 `spi_unregister_controller` 注销控制器，随后再调用 `fsl_spi_cpm_free` 释放 DMA 等底层资源，最后减少引用计数（`spi_controller_put`），确保资源释放顺序正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3b75128f9c92187c16cfe0479a92df8293394738

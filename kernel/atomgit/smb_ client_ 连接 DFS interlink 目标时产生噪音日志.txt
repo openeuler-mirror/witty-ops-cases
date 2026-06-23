@@ -1,0 +1,20 @@
+#标题
+smb: client: 连接 DFS interlink 目标时产生噪音日志
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当客户端尝试从 DFS interlink 目标连接到基于域的 DFS 命名空间时，服务器返回 STATUS_BAD_NETWORK_NAME 错误。由于 DFS 共享可能包含多个 DFS interlink 且这些链接在 10 分钟后会过期，导致在挂载或访问这些共享时，dmesg 中被大量的 "BAD_NETWORK_NAME" 日志刷屏，产生不必要的噪音。
+
+#主要错误日志
+CIFS: VFS:  BAD_NETWORK_NAME: \\dom\dfs
+
+#问题根因
+在处理树连接（tree connect）错误时，如果服务器返回 STATUS_BAD_NETWORK_NAME，内核代码无条件地打印该错误日志。由于 DFS interlink 的过期机制和数量较多，导致该错误日志在特定场景下被频繁触发并刷屏。
+
+#解决方案
+修改 `fs/smb/client/smb2pdu.c` 中的 `SMB2_tcon` 函数，将错误日志打印级别从 `cifs_tcon_dbg(VFS, ...)` 修改为 `cifs_dbg(VFS | ONCE, ...)`，通过引入 `ONCE` 标志限制对每个共享只打印一次 "BAD_NETWORK_NAME" 错误日志，从而避免日志刷屏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9553d3c9420f4bb3fcf6e1b4e4c3b4810b7bc3f2

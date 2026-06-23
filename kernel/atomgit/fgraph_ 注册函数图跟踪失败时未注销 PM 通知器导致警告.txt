@@ -1,0 +1,22 @@
+#标题
+fgraph: 注册函数图跟踪失败时未注销 PM 通知器导致警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `register_ftrace_graph` 注册函数图跟踪器时，如果内部初始化步骤（如 `start_graph_tracing` 或 `ftrace_startup`）失败，系统未能正确注销先前已注册的电源管理（PM）通知器。这会导致内核资源泄露或后续相关的警告信息。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `register_ftrace_graph` 函数中，注册流程早期成功注册了 `ftrace_suspend_notifier`，但在后续步骤（如 `start_graph_tracing` 或 `ftrace_startup`）执行失败并进入错误处理路径时，遗漏了对 `unregister_pm_notifier` 的调用，导致通知器未被清理。
+
+#解决方案
+在 `register_ftrace_graph` 函数的两个错误处理分支中补充 `unregister_pm_notifier(&ftrace_suspend_notifier)` 调用：
+1. 当 `start_graph_tracing()` 失败时，在递减 `ftrace_graph_active` 计数后，增加注销通知器的操作。
+2. 当 `ftrace_startup()` 失败时，增加注销通知器的操作，确保资源正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dccd57a0837f75c2c99523b043c16dae589d806b

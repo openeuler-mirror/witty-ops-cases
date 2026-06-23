@@ -1,0 +1,23 @@
+#标题
+cxusb: 写操作失败导致读取缓冲区未初始化引发 KMSAN 报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核内存消毒剂（KMSAN）检测到未初始化值被使用。当 USB 批量消息写操作失败时，驱动程序未正确处理错误路径，导致后续逻辑读取了未初始化的变量 `i`，从而触发 KMSAN 告警。调用栈显示错误发生在 `cxusb_i2c_xfer` 流程中。
+
+#主要错误日志
+BUG: KMSAN: uninit-value in cxusb_gpio_tuner drivers/media/usb/dvb-usb/cxusb.c:124 [inline]
+BUG: KMSAN: uninit-value in cxusb_i2c_xfer+0x153a/0x1a60 drivers/media/usb/dvb-usb/cxusb.c:196
+ cxusb_gpio_tuner drivers/media/usb/dvb-usb/cxusb.c:124 [inline]
+ cxusb_i2c_xfer+0x153a/0x1a60 drivers/media/usb/dvb-usb/cxusb.c:196
+
+#问题根因
+在 `cxusb_gpio_tuner` 函数中，调用 `cxusb_ctrl_msg`（内部调用 `usb_bulk_msg`）进行写操作时，如果写操作失败且读取长度（rlen）大于 0，驱动程序不会执行读取操作。这导致作为读取缓冲区的变量 `i` 未被初始化。然而，原代码在 `cxusb_ctrl_msg` 调用后未检查返回值，直接判断 `i` 的值，从而使用了未初始化的内存。
+
+#解决方案
+修改 `cxusb_ctrl_msg` 的调用逻辑，在判断变量 `i` 的值之前，先检查函数调用的返回值。确保只有在写操作成功返回（返回值为 0）时，才去校验读取到的数据 `i`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3e0a3e39ce482398636e172ab2a4bbcf2eddeaa8

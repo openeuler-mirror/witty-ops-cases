@@ -1,0 +1,41 @@
+#标题
+unpoison_memory操作触发的VM_BUG_ON_PAGE(PagePoisoned)内核恐慌
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行内存故障测试时，对已下线的内存块执行 unpoison 操作会触发内核恐慌。具体表现为系统抛出 invalid opcode 异常，并在 `unpoison_memory` 函数中触发 `VM_BUG_ON_PAGE(PagePoisoned(page))` 断言失败，导致系统崩溃。
+
+复现步骤如下：
+1. 下线内存块：`echo offline > /sys/devices/system/memory/memory12/state`
+2. 获取下线内存的 pfn：`page-types -b n -rlN`
+3. 将 pfn 写入 unpoison 接口：`echo <pfn> > /sys/kernel/debug/hwpoison/unpoison-pfn`
+
+#主要错误日志
+page dumped because: VM_BUG_ON_PAGE(PagePoisoned(page))
+kernel BUG at include/linux/page-flags.h:616!
+Oops: invalid opcode: 0000 [#1] PREEMPT SMP NOPTI
+RIP: 0010:unpoison_memory+0x2f3/0x590
+Call Trace:
+ <TASK>
+ unpoison_memory+0x2f3/0x590
+ simple_attr_write_xsigned.constprop.0.isra.0+0xb3/0x110
+ debugfs_attr_write+0x42/0x60
+ full_proxy_write+0x5b/0x80
+ vfs_write+0xd5/0x540
+ ksys_write+0x64/0xe0
+ do_syscall_64+0xb9/0x1d0
+ entry_SYSCALL_64_after_hwframe+0x77/0x7f
+ </TASK>
+Modules linked in: hwpoison_inject
+Kernel panic - not syncing: Fatal exception
+
+#问题根因
+`unpoison_memory()` 函数尝试检查一个未初始化页面的 `PG_HWPoison` 标志位。当内存块处于 offline 状态时，其对应的页面可能未初始化（PagePoisoned 为 true），直接访问此类页面会触发 `VM_BUG_ON_PAGE` 检查失败。原代码仅使用 `pfn_valid(pfn)` 检查 pfn 有效性，未能识别出页面是否处于 online 状态。
+
+#解决方案
+修改 `mm/memory-failure.c` 中的 `__unpoison_memory` 函数，将 `pfn_valid(pfn)` 检查替换为 `pfn_to_online_page(pfn)`。如果该函数返回 NULL，说明页面不存在或未 online，直接返回 `-EIO` 错误，从而避免对未初始化页面进行操作。ZONE_DEVICE 页面也不在预期范围内，此改动同样适用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/70a2e9a16b65799c3293cdd304195a474c9c57cb

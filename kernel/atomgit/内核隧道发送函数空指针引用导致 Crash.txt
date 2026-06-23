@@ -1,0 +1,20 @@
+#标题
+内核隧道发送函数空指针引用导致 Crash
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在触发 IP 隧道发送递归限制检查的逻辑路径中，若 `dev` 对象为空（通常由模糊测试或特殊构造的调用路径触发），内核在尝试访问 `dev->name` 进行日志打印时会触发空指针引用，导致系统崩溃或 Oops。
+
+#主要错误日志
+Dead loop on virtual device %s, fix it urgently!
+
+#问题根因
+先前提交 6f1a9140ecda 在 `iptunnel_xmit` 和 `ip6tunnel_xmit` 函数中增加了递归限制检查，但遗漏了一个关键场景：这两个函数在被调用时，参数 `dev` 可能传入 NULL。代码在检查到递归限制触发后，直接解引用 `dev->name` 进行日志打印，未对 `dev` 进行有效性检查，从而导致了空指针引用。
+
+#解决方案
+在递归限制检查的分支中增加 `dev` 指针的非空判断，仅当 `dev` 不为空时才执行打印设备名和增加统计错误的操作。同时添加 `unlikely()` 编译优化提示，标记该异常路径极少发生。受影响的文件包括 `include/net/ip6_tunnel.h` 和 `net/ipv4/ip_tunnel_core.c`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad1fc66e5de79ccb0b740ba1724d52a112490ba9

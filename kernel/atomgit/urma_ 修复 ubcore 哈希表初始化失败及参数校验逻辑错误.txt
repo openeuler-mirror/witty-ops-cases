@@ -1,0 +1,26 @@
+#标题
+urma: 修复 ubcore 哈希表初始化失败及参数校验逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在设备初始化过程中，哈希表分配失败导致内核日志打印 "alloc hash tables failed"。
+2. 在调用 `ubcore_active_tp`、`ubcore_deactive_tp` 或 `ubcore_bind_jetty_ex` 等接口时，可能因参数校验逻辑错误导致功能调用异常或返回无效参数错误。
+3. 系统可能因哈希表大小为 0 时的错误处理导致初始化流程中断。
+
+#主要错误日志
+- ubcore_log_err("Invalid parameter.\n");
+- ubcore_log_err("alloc hash tables failed.\n");
+
+#问题根因
+1. **逻辑判断取反错误**：在 `ubcore_active_tp`、`ubcore_deactive_tp` 和 `ubcore_bind_jetty_ex` 函数中，对设备操作指针（如 `dev->ops->active_tp`）的非空检查逻辑写反了。例如，原代码在指针存在时（`dev->ops->active_tp` 为真）反而返回错误，导致有效操作无法执行；或者原代码在指针不存在时（`dev->ops->active_tp` 为假，即 `|| dev->ops->active_tp` 为假）才继续执行，这违背了函数指针调用的安全前提。
+2. **哈希表初始化缺陷**：在 `ubcore_alloc_hash_tables` 中，未处理哈希表大小为 0 的情况。当 `g_ht_params[i].size` 为 0 时，`ubcore_hash_table_alloc` 分配失败，导致整个设备初始化失败。
+
+#解决方案
+1. **修正参数校验逻辑**：将相关函数中的条件判断修正为正确的逻辑。例如，将 `dev->ops->active_tp` 修改为 `!dev->ops->active_tp`，确保只有在操作指针不存在时才返回错误；将 `jetty->ub_dev` 修改为 `!jetty->ub_dev`，确保设备指针有效。
+2. **增加哈希表大小检查**：在 `ubcore_alloc_hash_tables` 循环中增加判断 `if (g_ht_params[i].size == 0) continue;`，跳过大小为 0 的哈希表配置，避免分配失败。
+3. **移除冗余代码**：删除了 `uninit_ubcore_device` 中不恰当的资源释放调用 `ubcore_free_driver_res(dev)` 及相关辅助函数，优化了设备注销流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e2feab95763c989820f23da2cddc29de63ce33d5

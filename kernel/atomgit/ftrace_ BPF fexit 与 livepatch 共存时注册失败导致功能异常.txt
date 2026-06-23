@@ -1,0 +1,23 @@
+#标题
+ftrace: BPF fexit 与 livepatch 共存时注册失败导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 BPF fexit 程序与 livepatch（或其它使用 IPMODIFY 的 ftrace_ops）共存时，若发生 `register_ftrace_direct` 注册冲突（例如 ftrace_ops 已置位 FIPMODIFY），系统无法正确通过重试机制恢复 trampoline 的注册状态。这会导致 BPF trampoline 更新失败，进而导致相关 BPF 程序无法正常挂载或执行，livepatch 与 BPF 追踪功能的兼容性受损。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `register_ftrace_direct` 函数的错误处理路径不完整。当注册过程中 `register_ftrace_function_nolock` 返回错误（例如因冲突导致注册失败）时，原代码未清理 `ftrace_ops` 中已设置的 `direct_call` 地址以及 `direct_functions` 哈希表中的对应项。此外，在 BPF trampoline 更新逻辑中，错误地过早清空了 `fops->func` 和 `fops->trampoline`，这破坏了重试注册所需的状态上下文，导致后续重试注册失败。
+
+#解决方案
+1. 在 `kernel/trace/ftrace.c` 中新增 `reset_direct` 辅助函数，用于统一清理 `ftrace_ops` 的 `func`、`trampoline` 成员以及 `direct_functions` 哈希表。
+2. 在 `register_ftrace_direct` 函数中，增加对 `register_ftrace_function_nolock` 返回值的错误检查。若注册失败，立即调用 `reset_direct` 清理现场，确保状态回滚。
+3. 调整 `unregister_ftrace_direct` 逻辑，使用 `reset_direct` 替换原有的分散清理代码，确保注销流程与错误回滚流程的一致性。
+4. 移除 `kernel/bpf/trampoline.c` 中不必要的 `fops->func` 和 `fops->trampoline` 提前置空操作，保证重试注册时状态正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/95bc495c0d918dba0e9863e044b7578b27e875db

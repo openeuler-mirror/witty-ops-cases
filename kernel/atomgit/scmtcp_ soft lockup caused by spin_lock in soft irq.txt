@@ -1,0 +1,26 @@
+#标题
+scmtcp: soft lockup caused by spin_lock in soft irq
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统发生 soft lockup，CPU#6 被卡住超过 26 秒。具体场景为 TCP timewait 状态处理时，在软中断上下文中调用 `scmtcp_sk_destroy()` 释放 sock，而用户态进程正持有自旋锁并在 `scmtcp_sk_sendmsg()` 中被软中断抢占，导致死锁。
+
+#主要错误日志
+watchdog: BUG: soft lockup - CPU#6 stuck for 26s!
+...
+Call trace:
+ native_queued_spin_lock_slowpath+0x368/0x428
+ file_htable_del_ctl+0x218/0x240 [scmtcp]
+ scmtcp_sk_destroy+0x20/0x48 [scmtcp]
+ ...
+
+#问题根因
+TCP timewait 会在软中断中调用 `scmtcp_sk_destroy()` 来释放 sock。如果进程已经在 `scmtcp_sk_sendmsg()` 中执行了 `spin_lock()` 获取锁，此时被软中断抢占，软中断处理函数试图获取同一把锁，就会发生死锁。
+
+#解决方案
+将 `scmtcp.c` 文件中所有涉及 `scm_fhtable.lock` 的 `spin_lock()` 和 `spin_unlock()` 调用替换为 `spin_lock_bh()` 和 `spin_unlock_bh()`。`spin_lock_bh()` 在获取自旋锁的同时会禁止软中断，从而避免在进程上下文持有锁时被软中断打断并尝试获取同一把锁，进而防止死锁发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3fd8ab7b8779794fcd8bbab2374a8b9c798ae8a1

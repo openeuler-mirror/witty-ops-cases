@@ -1,0 +1,25 @@
+#标题
+ext4 iomap buffered I/O 模式下导致 generic/363 测试失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ext4 文件系统使用 iomap buffered I/O 模式时，若通过 mmap 写入数据后扩展文件大小，新扩展的区域可能包含旧数据，导致数据不一致。具体表现为 fstest 测试集 `generic/363` 用例执行失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 iomap buffered I/O 模式下，当文件追加写扩展 i_size 时，内核未正确处理 EOF（文件末尾）处的部分块清零。
+具体原因有两点：
+1. 对于追加写操作，iomap 路径未在写操作开始前对跨越旧 EOF 的部分块进行清零，导致该区域可能残留 mmap 写入的旧数据。
+2. `iomap_zero_range` 函数在遇到 unwritten（未写入）或 hole（空洞）类型的映射时，错误地跳过了清零操作。如果此时 pagecache 中存在脏页（例如之前的 mmap 写入），且未进行回写刷新，会导致脏页中的旧数据被暴露出来。
+
+#解决方案
+1. 在 `ext4_iomap_buffered_write` 函数中增加检查：如果写位置超出当前 i_size 且 i_size 位于非块对齐位置，先调用 `ext4_block_zero_eof` 将旧 EOF 到块末尾的数据清零，防止数据泄露。
+2. 重构 `iomap_zero_range` 逻辑：在处理 unwritten 或 hole 映射前，先通过 `filemap_range_needs_writeback` 检查该范围是否存在脏页。若存在脏页，则先进行回写刷新并标记映射为 stale（过期），强制重新获取映射以确保数据一致性，而不是直接跳过清零。
+3. 重构 ext4 相关的 EOF 清零辅助函数（如 `ext4_block_zero_eof`），统一处理不同日志模式和 iomap 模式下的 EOF 块清零逻辑，确保在文件扩展时正确清零部分块。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ed6e7dda9a6ce5cf113051744cb63d774c233f92

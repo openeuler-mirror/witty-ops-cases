@@ -1,0 +1,28 @@
+#标题
+powerpc: struct termio 相关 ioctl 宏定义导致用户空间编译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 powerpc 架构下，用户空间程序包含内核头文件 `asm/ioctls.h` 进行编译时失败。编译器报错提示 `invalid application of 'sizeof' to incomplete type 'struct termio'`，导致构建无法通过。
+
+#主要错误日志
+```text
+In file included from /usr/include/asm/ioctl.h:12,
+                 from /usr/include/asm/ioctls.h:5,
+                 from tst-ioctls.c:3:
+tst-ioctls.c: In function 'get_TCGETA':
+tst-ioctls.c:12:10: error: invalid application of 'sizeof' to incomplete type 'struct termio'
+   12 |   return TCGETA;
+      |          ^~~~~~
+```
+
+#问题根因
+头文件 `include/uapi/asm/ioctls.h` 中的宏定义（如 `TCGETA`、`TCSETA` 等）使用了 `struct termio` 作为参数类型。`_IOR` 和 `_IOW` 宏在展开时会触发 `sizeof` 操作。由于 `struct termio` 接口已过时，该结构体定义未在 `ioctls.h` 中提供，导致编译器无法识别该类型，从而引发编译错误。
+
+#解决方案
+将相关 ioctl 宏定义修改为直接使用硬编码的十六进制数值（即“开码”方式），并在注释中保留原始宏定义形式。此举避免了宏展开时对 `struct termio` 类型信息的依赖，从而修复了用户空间的编译失败问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6c9c4b316044575c1f790a76fbf3e2bdeffe4ca6

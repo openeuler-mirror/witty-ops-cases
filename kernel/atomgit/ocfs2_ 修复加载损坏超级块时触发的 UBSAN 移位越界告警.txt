@@ -1,0 +1,26 @@
+#标题
+ocfs2: 修复加载损坏超级块时触发的 UBSAN 移位越界告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当挂载一个具有损坏超级块的 OCFS2 镜像时，内核触发 UBSAN（Undefined Behavior Sanitizer）告警，导致以下 splat 信息打印。该问题由 Syzbot 报告，表现为移位指数（32768）超过了 32 位 int 类型的最大移位范围。
+
+#主要错误日志
+UBSAN: shift-out-of-bounds in fs/ocfs2/super.c:2336:10
+shift exponent 32768 is too large for 32-bit type 'int'
+CPU: 2 UID: 0 PID: 5255 Comm: repro Not tainted 6.12.0-rc4-syzkaller-00047-gc2ee9f594da8 #0
+Call Trace:
+ dump_stack_lvl+0x241/0x360
+ __ubsan_handle_shift_out_of_bounds+0x3c8/0x420
+ ocfs2_fill_super+0xf9c/0x5750
+
+#问题根因
+在 `ocfs2_verify_volume()` 函数中，代码直接使用 `1 << le32_to_cpu(di->id2.i_super.s_blocksize_bits)` 进行移位操作。对于损坏的超级块，`s_blocksize_bits` 的值可能异常（如 32768），超过了 32 位 int 类型允许的最大移位位数（通常为 31），从而触发了 UBSAN 的移位越界告警。
+
+#解决方案
+在执行移位操作前增加边界检查。代码修改为先校验 `s_blocksize_bits` 的值是否在有效范围内（OCFS2 支持的有效块大小为 512B、1K、2K、4K，对应的 bits 范围为 9 到 12）。如果值不在该范围内，直接判定超级块损坏并打印错误日志，从而避免了非法移位操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a363edec209512e1466ca0b7bf9804255e99f2de

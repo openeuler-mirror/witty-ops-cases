@@ -1,0 +1,22 @@
+#标题
+objtool 弱符号检测失败导致指令不可达警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 `-ffunction-sections` 编译选项的情况下，内核构建过程中 objtool 工具会误报大量“unreachable instruction”（不可达指令）警告，影响编译结果判断。
+
+#主要错误日志
+vmlinux.o: warning: objtool: .text.__x64_sys_io_setup+0x10: unreachable instruction
+
+#问题根因
+函数 `find_symbol_hole_containing()` 在尝试查找符号空洞（即被剥离的弱符号）时存在逻辑缺陷。如果符号空洞所在的 section 中，空洞之前没有其他符号，检测逻辑会失效。原代码中的 `symbol_hole_by_offset` 函数错误地过滤掉了 `STT_SECTION` 类型的符号，而这类符号在给定 section 中总是位于偏移量 0 的位置，导致区间树无法正确定位符号边界，进而破坏了弱符号检测机制。
+
+#解决方案
+修改 `tools/objtool/elf.c` 文件中的逻辑：
+1. 调整 `symbol_hole_by_offset` 函数，允许区间树包含 `STT_SECTION` 类型的符号，确保在 section 起始位置（offset 0）能正确识别符号边界，从而修复弱符号检测。
+2. 修正 `elf_add_symbol` 函数中的符号别名判断逻辑，增加对符号长度（`len`）的检查，确保仅在偏移量、类型和长度均匹配时才判定为别名。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/031ecdbc09726f2d600aafbced0875732bae1659

@@ -1,0 +1,21 @@
+#标题
+KVM arm64 IPIV 特性跨主机热迁移后导致日志风暴
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当一台开启了 IPIV（虚拟 SGI 直通）特性的虚拟机，从支持 IPIV 的源主机热迁移到不支持 IPIV 的目的主机后，目的主机内核会持续打印警告日志，产生日志风暴。
+
+#主要错误日志
+"vSGI trap! IPIV disabled!"
+
+#问题根因
+目的主机在处理热迁移后的 VM 状态恢复时，未检查目的主机硬件是否支持 IPIV 特性，直接根据迁移流数据启用了 VM 的 IPIV 功能。由于目的主机硬件不支持 IPIV，导致触发异常处理流程并持续打印报错日志。此外，检查 IPIV 支持性的函数输入参数此前为 `vcpu`，但 IPIV 是 per-VM（虚拟机级别）特性，参数定义不准确。
+
+#解决方案
+1. 将 `hisi_ipiv_supported_per_vm` 和 `hisi_ipiv_enable_per_vm` 函数的输入参数从 `struct kvm_vcpu *vcpu` 修改为 `struct kvm *kvm`，以正确反映 IPIV 是 per-VM 特性。
+2. 在 `vgic_mmio_uaccess_write_its_iidr` 函数中，设置 VM 的 `enable_ipiv_from_guest` 标志前，增加对 `hisi_ipiv_supported_per_vm(kvm)` 的检查，确保只有在目的主机支持 IPIV 时才允许启用该特性，防止在不支持的环境下错误启用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7fe983da1977aac40da78a43010d0612ff5c0bb1

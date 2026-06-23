@@ -1,0 +1,22 @@
+#标题
+x86/cpu/vfm: 新增 x86_vfm 字段导致 KABI 断裂
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在引入补丁 "x86/cpu/vfm: Add/initialize x86_vfm field to struct cpuinfo_x86" 后，内核二进制接口（KABI）发生改变，破坏了内核模块兼容性，可能导致依赖原有 `cpuinfo_x86` 结构体布局的第三方内核模块加载失败或运行时异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在结构体 `cpuinfo_x86` 中新增了一个 `union` 联合体，该联合体包含了 `x86_model`、`x86`、`x86_vendor` 等字段以及新增的 `x86_vfm` 字段。这种修改改变了结构体原有的内存布局，从而导致了 KABI（内核应用程序二进制接口）断裂。
+
+#解决方案
+1. 移除导致 KABI 断裂的 `union` 定义，恢复 `x86`、`x86_vendor`、`x86_model` 等字段在结构体中的独立定义，保持原有内存布局不变。
+2. 利用结构体中预留的 `KABI_RESERVE(1)` 空间，通过 `KABI_USE(1, __u32 x86_vfm)` 方式将新增的 `x86_vfm` 字段填充到结构体末尾的预留 hole 中。
+3. 新增并调用 `init_cpu_x86_vfm` 函数，在内核启动初始化阶段（如 `early_identify_cpu`、`generic_identify`、`identify_cpu` 以及 Xen 初始化流程中）显式计算并初始化 `x86_vfm` 字段的值，确保其功能正常工作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/11970b230cc7ddba312bc7701180bb60ed1a5d21

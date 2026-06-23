@@ -1,0 +1,21 @@
+#标题
+sparc64架构sun4u处理器HugeTLB页面配置错误导致系统挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在基于sun4u的qemu虚拟机中运行sparc hugetlbfs测试时，客户机发生挂起，系统陷入陷阱循环无法响应。该问题导致无法在sun4u环境下正常使用HugeTLB功能。
+
+#主要错误日志
+[   10.123456] unsupported hugepage shift=0
+（注：主要错误日志来源于代码diff中新增加的 `WARN_ONCE(1, "unsupported hugepage shift=%u\n", shift);`，原Commit描述中未提供实际运行日志。陷阱循环由错误的TTE设置引起，通常无直接错误打印。）
+
+#问题根因
+在 `sun4u_hugepage_shift_to_tte` 函数中，处理HugeTLB页表项时未正确设置页大小位和 `_PAGE_PMD_HUGE` 标志位。这导致安装的TTE（Translation Table Entry）无效，进而触发系统陷入持续的陷阱循环。
+
+#解决方案
+修改 `arch/sparc/mm/hugetlbpage.c` 中的 `sun4u_hugepage_shift_to_tte` 函数，根据传入的页面大小参数正确设置对应的 `_PAGE_SZ*` 页大小位与 `_PAGE_PMD_HUGE` 标志，并清除旧的大小位以防冲突，确保生成有效的TTE。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0c268b7088c4f330a2c900e0379be0657c909cfb

@@ -1,0 +1,31 @@
+#标题
+btrfs：文件创建时因名字哈希冲突导致事务中止
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Btrfs 文件系统中，当尝试创建多个文件名产生相同哈希（Hash Collision）的文件时，若超出叶子节点大小的限制，内核会触发事务中止，导致文件系统强制变为只读模式。这使得普通用户可以通过构造特定的文件名来恶意破坏系统可用性。
+
+复现步骤：
+1. 格式化 Btrfs 文件系统（如使用 4K nodesize）。
+2. 创建一组文件名会导致 CRC32C 哈希冲突的文件。
+3. 尝试创建一个额外的、同样导致哈希冲突的文件。
+4. 系统触发事务中止，文件系统变为只读，后续文件创建失败（报错 "Read-only file system"）。
+
+#主要错误日志
+[758240.510668] BTRFS: Transaction aborted (error -75)
+[758240.511577] WARNING: fs/btrfs/inode.c:6854 at btrfs_create_new_inode+0x805/0xb50 [btrfs], CPU#6: touch/888644
+[758240.571681] BTRFS: error (device sdi state A) in btrfs_create_new_inode:6854: errno=-75 unknown
+[758240.572899] BTRFS info (device sdi state EA): forced readonly
+
+#问题根因
+当创建文件名导致哈希冲突时，Btrfs 需要将这些文件打包到同一个目录项中，这受限于叶子节点的大小。如果达到该限制，内核会触发事务中止并将文件系统置为只读模式。
+根本原因在于 `btrfs_create_new_inode` 函数在进行树更新操作之前，未提前检查是否可以安全添加新的目录项。这允许恶意用户利用哈希冲突耗尽叶子节点空间，从而触发拒绝服务攻击。
+
+#解决方案
+在 `btrfs_create_new_inode` 函数中，在进行任何元数据树更新操作之前，增加对目录项哈希冲突的检查。
+具体修复措施是在函数入口处调用 `btrfs_check_dir_item_collision` 检查是否能在父目录中添加新名字。如果检查发现会导致溢出，则提前返回错误，从而避免触发事务中止，防止文件系统被强制变为只读模式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/234a228ca7293c7deca955973e9f48051a515e3a

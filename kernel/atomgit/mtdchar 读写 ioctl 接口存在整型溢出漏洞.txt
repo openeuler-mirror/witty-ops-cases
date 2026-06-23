@@ -1,0 +1,20 @@
+#标题
+mtdchar 读写 ioctl 接口存在整型溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 MTD 子系统的读写 ioctl 接口时，若传入的 `req.start` 和 `req.len` 参数值较大，二者相加可能发生整型溢出，导致边界检查失效。这使得校验逻辑被绕过，可能引发越界读写，造成内核内存破坏或程序异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mtdchar_write_ioctl` 和 `mtdchar_read_ioctl` 函数中，边界检查使用 `req.start + req.len > mtd->size` 进行判断。由于 `req.start` 和 `req.len` 均被掩码处理为 32 位长度，当传入的大值参数相加时，加法运算会发生整型溢出并回绕，导致计算结果变小，从而绕过 `mtd->size` 的合法性检查。
+
+#解决方案
+修改边界检查逻辑，引入 `u64 end` 变量，使用内核提供的 `check_add_overflow` 函数安全地检测加法溢出。若检测到溢出或计算结果超出设备大小，则直接返回 `-EINVAL`，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/20732fe50a6dd6377f6271bf37ddf92e525e96ab

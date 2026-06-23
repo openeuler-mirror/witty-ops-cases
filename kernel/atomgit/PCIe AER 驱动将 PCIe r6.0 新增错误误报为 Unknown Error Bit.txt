@@ -1,0 +1,22 @@
+#标题
+PCIe AER 驱动将 PCIe r6.0 新增错误误报为 Unknown Error Bit
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核 AER 驱动在处理 PCIe r6.0 规范定义的五个新增不可纠正错误时，无法正确识别具体的错误类型，导致在系统日志中将这些特定的硬件错误统一记录为 "Unknown Error Bit"，影响故障定位与诊断准确性。
+
+#主要错误日志
+Unknown Error Bit
+
+#问题根因
+PCIe r6.0 规范在 Uncorrectable Error Status、Mask 和 Severity 寄存器中定义了 5 个新增的错误位（Bit 27-31）。内核 AER 驱动中的错误描述数组 `aer_uncorrectable_error_string` 仅更新到了 Bit 26，Bit 27-31 的对应位置均初始化为 NULL。当硬件上报这些新定义的错误时，驱动遍历数组遇到 NULL 指针，无法匹配到具体的错误名称字符串，从而回退打印 "Unknown Error Bit"。
+
+#解决方案
+根据 PCIe r6.0（及 r7.0 sec 7.8.4.2ff）规范，扩展 AER 驱动对不可纠正错误的支持范围：
+1. 将宏定义 `AER_MAX_TYPEOF_UNCOR_ERRS` 的值从 27 修改为 32。
+2. 在错误描述数组 `aer_uncorrectable_error_string` 中，为 Bit 27 至 Bit 31 补充对应的错误名称字符串："DMWrReqBlocked"、"IDECheck"、"MisIDETLP"、"PCRC_CHECK"、"TLPXlatBlocked"。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/486bef886c33070c9f09b6739907036e0677cd86

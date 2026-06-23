@@ -1,0 +1,27 @@
+#标题
+nvme-tcp: 处理H2C_DATA PDU时因未校验指针导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NVMe/TCP 目标端，当主机端在 ICREQ/ICRESP 握手后立即发送 H2C_DATA PDU（在发送 CONNECT 命令或 NVMe 写命令之前），或针对 READ 命令发送 H2C_DATA PDU 时，内核会发生空指针引用并导致崩溃。
+
+具体攻击/触发向量包括：
+1. 在 CONNECT 命令前发送 H2C_DATA PDU，导致 `cmd->req.sg` 和 `cmd->iov` 均为 NULL。
+2. 针对 READ 命令发送 H2C_DATA PDU，导致 `cmd->iov` 为 NULL。
+3. 针对未初始化的命令槽发送 H2C_DATA PDU，导致两个指针均为 NULL。
+
+#主要错误日志
+推断日志（基于代码 diff 还原）：
+`queue %d: H2CData PDU received for invalid command state (ttag %u)`
+
+#问题根因
+先前的修复补丁（Commit efa56305908b）虽然增加了 ttag 边界检查和 data_offset 校验，但在处理 H2C_DATA PDUs 时，未验证命令的数据结构（`cmd->req.sg` 和 `cmd->iov`）是否已正确初始化。
+函数 `nvmet_tcp_build_pdu_iovec()` 会直接解引用这些指针，若此时指针为 NULL（如命令未初始化或为 READ 命令状态），则会触发空指针引用。
+
+#解决方案
+在 `nvmet_tcp_handle_h2c_data_pdu` 函数中调用 `nvmet_tcp_build_pdu_iovec` 之前，增加对 `cmd->req.sg` 和 `cmd->iov` 指针的非空校验。如果检测到指针为 NULL，判定为协议错误并报错退出，从而避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c6a19b8a0903151e81d8dcc7a7d28a4a7e50378a

@@ -1,0 +1,27 @@
+#标题
+TIPC 子系统 tipc_mon_reinit_self 函数存在释放后使用（UAF）漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TIPC（Transparent Inter Process Communication）子系统运行过程中，当通过 workqueue 执行网络终结操作时，触发 KASAN 检测到的 slab-use-after-free 错误。具体表现为系统检测到对已释放内存的非法读取，导致内核恐慌或内存损坏风险。该问题由 syzbot 发现，可在特定并发场景下复现。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in __raw_spin_lock_irqsave include/linux/spinlock_api_smp.h:110 [inline]
+BUG: KASAN: slab-use-after-free in _raw_spin_lock_irqsave+0xa7/0xf0 kernel/locking/spinlock.c:162
+Read of size 1 at addr ffff88805eae1030 by task kworker/0:7/5989
+Workqueue: events tipc_net_finalize_work
+Call Trace:
+ tipc_mon_reinit_self+0x79/0x430 net/tipc/monitor.c:718
+ tipc_net_finalize+0x115/0x190 net/tipc/net.c:140
+
+#问题根因
+`tipc_net` 结构体中的 `monitors[]` 数组受 RTNL（Routing Netlink）锁保护，但函数 `tipc_mon_reinit_self()` 在遍历该数组时未持有 RTNL 锁。
+`tipc_mon_reinit_self()` 由 `tipc_net_finalize()` 调用，虽然大多数调用 `tipc_net_finalize()` 的路径都持有 RTNL 锁，但通过 `tipc_net_finalize_work()` 工作队列执行的路径并未持有该锁。这导致了潜在的竞态条件：当工作队列执行时，该数组可能已被其他持有锁的路径（如设备注销流程）释放，从而引发 use-after-free。
+
+#解决方案
+在 `tipc_net_finalize_work()` 函数中调用 `tipc_net_finalize()` 前后，显式添加 `rtnl_lock()` 和 `rtnl_unlock()` 操作，确保工作队列执行路径同样持有 RTNL 锁，从而避免并发访问导致的释放后使用问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9a81094aa55ee771c71e4669f055e394d4fd1d1b

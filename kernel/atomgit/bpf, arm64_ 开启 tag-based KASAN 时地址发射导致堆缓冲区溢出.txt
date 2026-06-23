@@ -1,0 +1,21 @@
+#标题
+bpf, arm64: 开启 tag-based KASAN 时地址发射导致堆缓冲区溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 tag-based KASAN 的情况下，当 BPF 程序使用 BPF_TRAMP_F_CALL_ORIG 功能时，会导致堆缓冲区溢出。此外，即使未开启 tag-based KASAN，如果在 size 计算阶段栈地址的某个 16 位字全为 1，也可能触发相同问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 BPF JIT 编译过程中，`prepare_trampoline` 函数分两阶段进行：第一阶段计算代码大小，第二阶段生成代码。当 `BPF_TRAMP_F_CALL_ORIG` 被启用时，第一阶段传递的是栈上 `bpf_tramp_image` 结构体的地址，而第二阶段传递的是堆上的地址。
+若开启了 tag-based KASAN，堆地址通常带有标签（tag），这会导致 `emit_a64_mov_i64()` 函数在代码生成阶段生成比 size 计算阶段更长的指令序列（超过预期）。由于生成的代码长度超过了先前计算的缓冲区大小，从而导致堆缓冲区溢出。
+
+#解决方案
+在计算代码大小的阶段（即 `ctx->image` 为空时），不再调用 `emit_a64_mov_i64()` 进行实际计算，而是直接假设最坏情况，将指令索引 `ctx->idx` 增加 4（即预留 4 条指令的空间），确保生成的代码始终不会超出预分配的缓冲区范围。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7393a33b9fcffd162aeed46797c770cbd76cc8ba

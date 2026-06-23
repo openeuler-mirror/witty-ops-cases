@@ -1,0 +1,20 @@
+#标题
+编译阶段 .rodata..c_jump_table 段属性设置错误触发汇编告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构下启用 CONFIG_OBJTOOL 编译内核时，编译过程生成 kernel/bpf/core.o 文件阶段出现汇编告警。检查生成的目标文件发现 .rodata..c_jump_table 段被错误地标记为可写（WA），而非预期的只读属性。
+
+#主要错误日志
+Warning: setting incorrect section attributes for .rodata..c_jump_table
+
+#问题根因
+段 ".rodata..c_jump_table" 按其语义应为只读数据段，但在 LoongArch 工具链下，编译器默认生成的段属性包含了 "W"（可写）标志位。这是由于不同架构编译器行为差异导致的属性设置不正确，x86 架构因默认生成 "A"（可分配）属性而无此问题，但 LoongArch 需要显式指定属性才能避免告警并生成正确的只读段。
+
+#解决方案
+在 include/linux/compiler.h 中修改 `__annotate_jump_table` 的定义，显式指定段属性参数。将 `__section(".rodata..c_jump_table")` 修改为 `__section(".rodata..c_jump_table,\"a\",@progbits #")`，强制将该段属性设置为 "a"（allocatable），确保生成的段属性正确且不再触发汇编告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f1ac1efd15be8c7304b75ef2f0e64f6e0267ad27

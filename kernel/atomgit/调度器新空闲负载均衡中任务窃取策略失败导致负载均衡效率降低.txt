@@ -1,0 +1,25 @@
+#标题
+调度器新空闲负载均衡中任务窃取策略失败导致负载均衡效率降低
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 STEAL 特性时，系统在进行新空闲负载均衡（newidle balance）过程中，调度器优先尝试跨 LLC（Last Level Cache）窃取任务或选择范围不当。当 LLC 内部窃取失败或无效时，未能及时回退到更高层级的调度域进行负载均衡，导致 CPU 无法有效地从其他繁忙 CPU 获取任务，降低了 CPU 利用率和系统整体吞吐量。
+
+#主要错误日志
+未知
+
+#问题根因
+原有代码逻辑中，`try_steal` 和 `newidle_balance` 的调用顺序及作用域控制不够灵活。在没有 `STEAL_FAIL_NI` 特性控制时，`newidle_balance` 可能会遍历所有调度域层级，而 `try_steal` 作为补充手段在之后执行。这种策略在某些场景下（如需要在 LLC 内部优先窃取，失败后再扩大范围）不够高效，导致在 LLC 内部窃取失败后，缺乏合理的回退机制来触发上层调度域的 `newidle_balance`，从而错失了获取任务的机会。
+
+#解决方案
+引入新的调度特性 `STEAL_FAIL_NI`，并调整 `newidle_balance` 与 `try_steal` 的执行逻辑：
+1. 新增 `STEAL_FAIL_NI` 特性开关，默认关闭。
+2. 当 `STEAL_FAIL_NI` 开启时：
+   - 调整 `newidle_balance` 中的逻辑，跳过具有 `SD_SHARE_PKG_RESOURCES` 标志（即 LLC 域内）的调度域，直接在更高层级的调度域进行负载均衡。
+   - 在负载均衡入口处，优先执行 `try_steal`（针对 LLC 内部），若窃取失败（返回 0），再执行 `newidle_balance`（针对上层调度域）。
+3. 当 `STEAL_FAIL_NI` 关闭时，维持原有逻辑：先执行 `newidle_balance`，若失败再尝试 `try_steal`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/88b89bddc6160afe4e1851656a64dbeb84e33f27

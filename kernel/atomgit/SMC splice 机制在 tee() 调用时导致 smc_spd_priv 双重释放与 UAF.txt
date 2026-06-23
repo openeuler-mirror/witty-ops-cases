@@ -1,0 +1,45 @@
+#标题
+SMC splice 机制在 tee() 调用时导致 smc_spd_priv 双重释放与 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户对 SMC socket 的 splice pipe buffer 进行 `tee()` 操作时，由于缓冲区复制时共享了同一个 `smc_spd_priv` 指针，导致在管道释放时该结构体被重复释放。系统触发 KASAN 检测到 slab-use-after-free 错误，随后在 `smc_rx_update_consumer()` 中访问已释放内存导致空指针崩溃，最终引发 Kernel Panic。
+
+#主要错误日志
+```
+BUG: KASAN: slab-use-after-free in smc_rx_pipe_buf_release+0x78/0x2a0
+Read of size 8 at addr ffff888004a45740 by task smc_splice_tee_/74
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x53/0x70
+ print_report+0xce/0x650
+ kasan_report+0xc6/0x100
+ smc_rx_pipe_buf_release+0x78/0x2a0
+ free_pipe_info+0xd4/0x130
+ pipe_release+0x142/0x160
+ __fput+0x1c6/0x490
+ __x64_sys_close+0x4f/0x90
+ </TASK>
+
+BUG: kernel NULL pointer dereference, address: 0000000000000020
+RIP: 0010:smc_rx_update_consumer+0x8d/0x350
+Call Trace:
+ <TASK>
+ smc_rx_pipe_buf_release+0x121/0x2a0
+ free_pipe_info+0xd4/0x130
+ pipe_release+0x142/0x160
+ </TASK>
+Kernel panic - not syncing: Fatal exception
+```
+
+#问题根因
+`smc_rx_splice()` 为每个 `pipe_buffer` 分配一个 `smc_spd_priv` 结构体并存储在 `pipe_buffer.private` 中。原代码使用的 `.get` 回调为 `generic_pipe_buf_get`，该函数仅增加页面引用计数。当调用 `tee(2)` 复制 pipe buffer 时，新生成的 pipe_buffer 与原 buffer 共享了同一个 `smc_spd_priv` 指针，但没有进行独立的引用计数管理。
+当两个管道先后关闭时，`smc_rx_pipe_buf_release()` 会对同一个 `smc_spd_priv` 对象调用两次 `kfree(priv)`，导致双重释放和释放后使用。此外，双重释放还会导致接收窗口计数错误。
+
+#解决方案
+修改 `smc_pipe_ops` 的 `.get` 回调实现，替换原有的 `generic_pipe_buf_get`。新增 `smc_rx_pipe_buf_get()` 函数直接返回 `false`，禁止 `tee()` 和 `splice_pipe_to_pipe()` 对 SMC pipe buffer 进行克隆操作，从而从根本上杜绝 `smc_spd_priv` 指针共享导致的 UAF 风险和逻辑错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b09fdddd3f27bac29c3fa3194524cb5b379d23ed

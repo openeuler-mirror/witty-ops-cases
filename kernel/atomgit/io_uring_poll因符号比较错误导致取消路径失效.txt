@@ -1,0 +1,20 @@
+#标题
+io_uring/poll因符号比较错误导致取消路径失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 io_uring 的 poll_refs 设置了取消标志位（IO_POLL_CANCEL_FLAG，即 BIT(31)）时，内核无法正确进入慢速路径处理逻辑。这会导致 io_uring poll 请求的取消操作无法被及时处理，可能导致相关资源无法释放或请求处理流程卡死。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `io_poll_get_ownership` 函数中，使用 `atomic_read` 读取 `poll_refs` 并与阈值 `IO_POLL_REF_BIAS`（128）进行比较。`atomic_read` 返回值为 `int`（有符号类型）。当 `poll_refs` 被设置 `IO_POLL_CANCEL_FLAG`（BIT(31)）时，其在有符号算术中表现为负数。导致 `>= 128` 的比较结果永远为假，从而错误地跳过了慢速路径的处理逻辑。
+
+#解决方案
+将 `atomic_read(&req->poll_refs)` 的返回值强制转换为 `unsigned int` 类型后再进行比较。这样原本被解释为负数的高位标志位会被正确解释为大的正数值，确保满足大于等于阈值的条件，从而正确触发慢速路径处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/918a7b5c3eb9a14ca9fee9938364e7897bdda60e

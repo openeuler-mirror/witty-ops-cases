@@ -1,0 +1,22 @@
+#标题
+icmp_build_probe 函数 IPv6 设备查找异常处理缺失导致潜在误报或崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统收到 ICMP 探测请求且请求中包含 IPv6 地址标识符时，如果底层 IPv6 模块查找接口（ipv6_dev_find）返回错误指针（如内核未编译 IPv6 支持等情况），内核未进行错误处理而是继续执行后续的 `dev_hold(dev)` 操作。这将导致以下现象：
+1. 内核尝试对一个无效指针（IS_ERR 指针）进行引用计数操作，可能引发 Oops 或内核崩溃。
+2. 即便未立即崩溃，逻辑流可能错误地发送带有 "NO_IF"（无接口）错误的响应报文，导致对网络状态的误报。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `net/ipv4/icmp.c` 的 `icmp_build_probe` 函数中，处理 IPv6 地址类型的 ICMP 探测请求时，调用 `ipv6_stub->ipv6_dev_find` 查找网络设备。代码此前未检查该函数返回值是否为无效指针（IS_ERR），错误地假设查找一定成功或返回 NULL。当 `ipv6_dev_find` 返回错误指针时，逻辑未及时终止，导致后续代码错误处理该指针。
+
+#解决方案
+在 `ipv6_stub->ipv6_dev_find` 调用后增加 `IS_ERR(dev)` 判断。如果查找返回错误指针，根据 ICMP 协议规范 silently discard（静默丢弃）该请求并直接返回 false，避免执行后续无效的设备操作及错误报文发送。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/147481089554620629c98691ddf6123ac0e94a0d

@@ -1,0 +1,31 @@
+#标题
+MIPS: Loongson64: ls7a DTS 修复 PCIe 节点定义导致的内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MIPS Loongson64 架构（ls7a 桥片）平台上，内核启动或设备树编译（dtc）阶段出现异常警告。
+1. 编译阶段：dtc 报错节点存在 `#interrupt-cells` 但不是中断提供者。
+2. 运行阶段：内核打印 WARNING，提示 PCI 桥节点缺失 `#address-cells` 属性，导致设备树解析逻辑异常。
+
+#主要错误日志
+1. dtc 编译警告：
+    arch/mips/boot/dts/loongson/ls7a-pch.dtsi:68.16-416.5: Warning (interrupt_provider): /bus@10000000/pci@1a000000: '#interrupt-cells' found, but node is not an interrupt provider
+2. 内核运行时警告：
+    WARNING: CPU: 0 PID: 1 at drivers/of/base.c:106 of_bus_n_addr_cells+0x9c/0xe0
+    Missing '#address-cells' in /bus@10000000/pci@1a000000/pci_bridge@9,0
+
+#问题根因
+ls7a-pch.dtsi 设备树源文件中的 PCIe 端口节点定义不符合设备树规范，具体原因如下：
+1. 父节点 `pci@1a000000` 错误地包含了 `#interrupt-cells` 属性，但并未定义为中断提供者，触发 dtc 校验警告。
+2. 子节点（PCI 桥）命名不符合规范（使用 `pci_bridge` 而非 `pcie`），且缺失关键的 `#address-cells`、`#size-cells`、`device_type` 和 `ranges` 属性。这导致内核在解析设备树地址空间时无法获取地址单元数量，触发 `of_bus_n_addr_cells` 中的 WARNING。
+
+#解决方案
+修改 `arch/mips/boot/dts/loongson/ls7a-pch.dtsi` 文件，修正 PCIe 节点属性：
+1. 移除父节点 `pci@1a000000` 中多余的 `#interrupt-cells` 属性。
+2. 将所有 PCIe 端口子节点名称统一从 `pci_bridge@x,0` 修改为 `pcie@x,0`。
+3. 为所有 PCIe 端口子节点补充必要的属性：`#address-cells = <3>`、`#size-cells = <2>`、`device_type = "pci"` 以及 `ranges` 属性，确保设备树结构符合 PCI 总线规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f56ac4069abed7c3f10dc32e33d63a9a0aa5226d

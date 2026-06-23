@@ -1,0 +1,20 @@
+#标题
+scsi: be2iscsi: 修复 beiscsi_boot_get_sinfo 函数中的内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 be2iscsi 驱动执行 boot discovery 流程中，若 `nonemb_cmd->va` 内存分配失败，此前通过 `alloc_mcc_wrb()` 分配的 WRB（Work Request Block）资源未被释放，导致该资源发生内存泄漏。该问题属于错误处理路径中的资源泄漏缺陷。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `beiscsi_boot_get_sinfo()` 中，代码逻辑先调用 `alloc_mcc_wrb()` 分配了资源，随后尝试分配 `nonemb_cmd->va`。当 `nonemb_cmd->va` 分配失败（返回 NULL）时，现有的错误处理分支直接解锁并返回，遗漏了对先前已分配的 WRB 资源的释放操作，从而导致内存泄漏。
+
+#解决方案
+在 `nonemb_cmd->va` 分配失败的错误处理分支中，增加调用 `free_mcc_wrb(ctrl, tag)` 函数，确保在退出前释放已分配的 WRB 资源，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/33446466e64da059a264069877e6c6cb1c3f7cba

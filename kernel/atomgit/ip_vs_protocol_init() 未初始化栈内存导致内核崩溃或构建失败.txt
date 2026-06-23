@@ -1,0 +1,22 @@
+#标题
+ip_vs_protocol_init() 未初始化栈内存导致内核崩溃或构建失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Clang/LLVM 编译内核时，构建过程中 objtool 报警提示 `ip_vs_protocol_init()` 函数没有结束指令。
+运行时表现取决于 IPVS 的编译方式：若编译为内核模块，加载模块时触发 oops；若编译进内核内置，则导致系统启动时发生 panic。
+
+#主要错误日志
+vmlinux.o: warning: objtool: ip_vs_protocol_init() falls through to next function __initstub__kmod_ip_vs_rr__935_123_ip_vs_rr_init6()
+
+#问题根因
+函数 `ip_vs_protocol_init()` 定义了一个 64 字节的栈上字符数组 `protocols` 但未进行初始化。代码仅手动设置了 `protocols[0]` 和 `protocols[2]` 为 `\0`，导致数组其余部分包含随机数据。
+在开启了 `CONFIG_FORTIFY_SOURCE` 的配置下，`strnlen()` 会读取缓冲区的最后一个字节以进行校验。由于该位置未被初始化，读取操作触发了未定义行为。LLVM 编译器在优化阶段检测到未初始化内存的使用，将其视为 `undef` 并进行了激进的无用代码消除（DCE），导致生成的汇编代码中函数缺少返回指令，直接“穿透”到下一个函数地址。
+
+#解决方案
+将栈上字符数组 `protocols` 定义时初始化为全 0（即 `char protocols[64] = { 0 };`），移除原先不完整的手动置位代码，从而消除未定义行为，确保编译器生成正确的函数结尾指令。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/387694e5b977d30369fd1369b8605e47f9a578d2

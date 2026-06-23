@@ -1,0 +1,20 @@
+#标题
+migration: RAS 错误后状态更新逻辑缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当设备发生 RAS（Reliability, Availability and Serviceability）错误并进行复位处理时，若设备的迁移状态并非 VFIO_MIGRATION_STOP_COPY，复位逻辑会错误地直接返回，导致设备状态未能得到正确更新与恢复。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hisi_acc_vf_pci_aer_reset_done` 函数中，判断是否执行状态更新的条件有误。原代码使用 `migration_flags != VFIO_MIGRATION_STOP_COPY` 作为判断条件，这导致在某些非 STOP_COPY 状态下（如设备不支持迁移或处于其他迁移状态时），复位流程被意外跳过，未执行后续的 `state_mutex` 加锁及状态更新操作。
+
+#解决方案
+修改 `hisi_acc_vf_pci_aer_reset_done` 函数入口处的判断逻辑。将判断条件从检查 `migration_flags` 标志位改为检查 `mig_ops` 是否存在。仅当设备注册了迁移操作接口（`mig_ops`）时才进行特定的状态处理，否则继续执行复位流程，确保设备状态在 RAS 错误后能够被正确更新。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/98afdf0c3d90d25408acc748fef15202f4864b40

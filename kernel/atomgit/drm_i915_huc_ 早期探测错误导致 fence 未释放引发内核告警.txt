@@ -1,0 +1,30 @@
+#标题
+drm/i915/huc: 早期探测错误导致 fence 未释放引发内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i915 驱动加载过程中，如果早期探测阶段发生错误，会导致内核对象调试系统发出警告并污染内核。该问题可通过故障注入测试（igt@i915_module_load@reload-with-fault-injection）复现。具体表现为驱动尝试初始化一个已被销毁的对象，从而触发 WARNING。
+
+#主要错误日志
+<4> [309.731371] ------------[ cut here ]------------
+<3> [309.731373] ODEBUG: init destroyed (active state 0) object: ffff88813d7dd2e0 object type: i915_sw_fence hint: sw_fence_dummy_notify+0x0/0x20 [i915]
+<4> [309.731575] WARNING: CPU: 2 PID: 3161 at lib/debugobjects.c:612 debug_print_object+0x93/0xf0
+...
+<4> [309.731693] CPU: 2 UID: 0 PID: 3161 Comm: i915_module_loa Tainted: G     U             6.14.0-CI_DRM_16362-gf0fd77956987+ #1
+...
+<4> [309.732256]  intel_huc_init_early+0x4b/0x1d0 [i915]
+...
+<4> [309.733075]  i915_pci_probe+0xe6/0x220 [i915]
+...
+<4> [309.733806] ---[ end trace 0000000000000000 ]---
+
+#问题根因
+HuC 延迟加载 fence 在驱动探测早期被注册到对象追踪器中，但仅在驱动移除时才取消注册。当驱动探测过程在早期阶段发生错误退出时，驱动的 remove 操作不会被调用，导致 fence 未被正确清理。由于该 fence 的内存是通过 devres 机制分配的，内存会被自动释放，但对象追踪器中的记录依然存在。当后续驱动再次探测并尝试重新初始化该 fence 时，内核发现其处于已销毁状态，从而触发 ODEBUG 警告。
+
+#解决方案
+将 delayed_huc_load_fini 的清理步骤从 `intel_huc_fini` 函数移动到 `intel_huc_fini_late` 函数中（对应驱动 release 路径），确保即使在早期探测错误退出时，fence 资源也能被正确释放，避免对象状态不一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a4c9ee5aae8cd74e6f92a4e5fffd6dc5054b9f85

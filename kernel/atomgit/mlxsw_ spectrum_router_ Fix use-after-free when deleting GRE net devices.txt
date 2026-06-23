@@ -1,0 +1,38 @@
+#标题
+mlxsw: spectrum_router: Fix use-after-free when deleting GRE net devices
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动重载（devlink reload）并回放配置后，删除 GRE 设备上的 neighbor 表项并移除 GRE 设备时，触发 KASAN 检测到的 slab-use-after-free 错误。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in mlxsw_sp_neigh_entry_update+0x1ea/0x200
+Read of size 8 at addr ffff888155b0e420 by task ip/2282
+[...]
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x6f/0xa0
+ print_address_description.constprop.0+0x6f/0x350
+ print_report+0x108/0x205
+ kasan_report+0xdf/0x110
+ mlxsw_sp_neigh_entry_update+0x1ea/0x200
+ mlxsw_sp_router_rif_gone_sync+0x2a8/0x440
+ mlxsw_sp_rif_destroy+0x1e9/0x750
+ mlxsw_sp_netdevice_ipip_ol_event+0x3c9/0xdc0
+ mlxsw_sp_router_netdevice_event+0x3ac/0x15e0
+ notifier_call_chain+0xca/0x150
+ call_netdevice_notifiers_info+0x7f/0x100
+ unregister_netdevice_many_notify+0xc8c/0x1d90
+ rtnl_dellink+0x34e/0xa50
+
+#问题根因
+驱动程序在初始状态下不会卸载（offload）GRE net devices 上的虚拟 neighbor 表项。但在驱动重载并回放现有配置时，代码路径 `mlxsw_sp_neigh_rif_made_sync` 缺失了对 net device 类型的校验，错误地卸载了 GRE 设备上的 neighbor 表项。
+后续当该 neighbor 被删除时，驱动忽略了通知（因为 GRE net device 不是其 upper 设备），导致驱动继续引用已被释放的内存，从而在删除 net device 时触发 use-after-free。
+
+#解决方案
+在 `mlxsw_sp_neigh_rif_made_sync` 函数中增加检查逻辑，若 RIF 对应的设备不是驱动的 port 设备（即 `!mlxsw_sp_dev_lower_is_port(mlxsw_sp_rif_dev(rif))`），则直接跳过 neighbor 回放过程，避免错误地卸载不支持的 neighbor 表项。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/032d1e46fdda58900d05f31fcd5d72693ed791d8

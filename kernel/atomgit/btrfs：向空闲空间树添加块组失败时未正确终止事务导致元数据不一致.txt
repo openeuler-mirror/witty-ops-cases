@@ -1,0 +1,26 @@
+#标题
+btrfs：向空闲空间树添加块组失败时未正确终止事务导致元数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当向空闲空间树添加块组失败时，部分调用链未执行事务终止操作，导致元数据不一致。具体表现为：
+1. 由于 `BLOCK_GROUP_FLAG_NEEDS_FREE_SPACE` 标志位已被清除，失败后系统不会重试添加块组，导致块组项永久缺失。
+2. 若上层调用链未捕获并处理该错误，文件系统状态将受损。
+3. 在已终止事务的调用链中，缺乏精确的错误定位信息，影响故障分析。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `__add_block_group_free_space()` 在执行失败时，部分调用链（如 `add_block_group_free_space`）虽然调用了 `btrfs_abort_transaction`，但并非所有调用链都进行了此操作。该函数入口处即清除 `BLOCK_GROUP_FLAG_NEEDS_FREE_SPACE` 标志，若后续添加空闲空间信息或更新空闲空间树失败且未终止事务，系统将不会再次调用该函数，从而引发元数据不一致。
+
+#解决方案
+在函数 `__add_block_group_free_space()` 内部直接处理事务终止逻辑：
+1. 当 `add_new_free_space_info()` 调用失败时，立即调用 `btrfs_abort_transaction`。
+2. 当 `__add_to_free_space_tree()` 调用失败时，立即调用 `btrfs_abort_transaction`。
+3. 移除上层调用者 `add_block_group_free_space()` 中的冗余 `btrfs_abort_transaction` 调用，确保所有失败路径都能正确终止事务并提供精确的错误回溯信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/32a534a87251881ddbc1d4ecfb55a3dd7745ee0c

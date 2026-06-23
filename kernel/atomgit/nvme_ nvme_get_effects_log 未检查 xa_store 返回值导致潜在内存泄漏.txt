@@ -1,0 +1,20 @@
+#标题
+nvme: nvme_get_effects_log 未检查 xa_store 返回值导致潜在内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NVMe 驱动获取 Commands Supported and Effects log 时，若系统内存不足，`xa_store` 操作可能失败。由于原代码未检查返回值，导致已分配的内存结构体 `cel` 无法被正确追踪（指针未存入 xarray），造成内存泄漏，且上层调用者无法感知存储失败。
+
+#主要错误日志
+未知
+
+#问题根因
+`nvme_get_effects_log()` 函数在调用 `xa_store()` 将分配的 log 结构体存入 xarray 时，未检查其返回值。由于 `xa_store()` 可能因内存分配失败等原因返回错误（通过 `xa_is_err` 判断），若存储失败但未处理，将导致新分配的内存对象丢失且无法回收。
+
+#解决方案
+在 `nvme_get_effects_log()` 函数中增加对 `xa_store()` 返回值的检查。如果返回值为错误（通过 `xa_is_err` 判断），则释放先前已分配的内存对象 `cel`，并将错误码返回给调用者。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9864ae0b5c830a28334084f2b0b0fd79d6045b70

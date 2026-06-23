@@ -1,0 +1,26 @@
+#标题
+mlx5e 驱动 XDP 处理路径 skb 共享信息计算错误导致数据损坏或内存泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Mellanox mlx5 网卡驱动启用 XDP（eXpress Data Path）程序且处理 Multi-Packet WQE (MPWRQ) 非线性数据包时，若 XDP 程序调整了数据包的片段数（frags），内核可能发生数据损坏或内存泄露。具体表现为网络数据传输异常、系统内存统计不准确，严重时可触发内核 Panic 或内存分配失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `mlx5e_skb_from_cqe_mpwrq_nonlinear` 中，处理 XDP 程序消耗部分数据片段的逻辑存在缺陷。
+1. **指针调整逻辑错误**：原代码在 `mlx5e_xdp_handle` 返回后，通过 `frag_page -= old_nr_frags - sinfo->nr_frags` 调整 `frag_page` 指针，但此时 `sinfo->nr_frags` 已被 XDP 处理逻辑修改，导致指针计算基准不一致。
+2. **Truesize 计算与 frags 释放逻辑解耦不当**：原代码将 `truesize` 的调整与释放 `frag_page` 的循环耦合在一起。当只需要调整 `truesize` 而不需要释放页面时（例如某些 XDP 调整场景），条件判断 `if (unlikely(nr_frags_free))` 会导致 `truesize` 计算被意外跳过或执行错误。
+3. **数据结构引用过时**：在后续调用 `xdp_update_skb_shared_info` 时，原代码使用 `frag_page - head_page` 来计算片段数量，由于 `frag_page` 指针已在前序流程中被错误修改，导致传入的片段计数错误，进而导致 skb 结构描述与实际内存布局不符。
+
+#解决方案
+修改 `drivers/net/ethernet/mellanox/mlx5/core/en_rx.c` 文件，重构片段处理逻辑：
+1. **引入新变量**：增加 `new_nr_frags` 变量，在 XDP 处理完成后立即保存当前有效的片段数 `sinfo->nr_frags`，确保后续计算基于一致的快照值。
+2. **修复指针与 Truesize 计算**：移除错误的 `frag_page` 指针回退操作。调整 `truesize` 的计算逻辑，使其不再依赖于是否需要释放页面的条件分支，即只要有片段被释放（`nr_frags_free` 不为 0），就修正 `truesize`，但不再错误地移动 `frag_page` 指针。
+3. **修正 skb 更新参数**：在调用 `xdp_update_skb_shared_info` 时，直接使用保存的 `new_nr_frags` 而非计算出的指针差值，确保 skb 的共享信息结构与实际片段数量一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/782a7bb215990c9db74678426eb79270fcb15c06

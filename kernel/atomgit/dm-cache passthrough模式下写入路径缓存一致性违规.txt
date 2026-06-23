@@ -1,0 +1,30 @@
+#标题
+dm-cache passthrough模式下写入路径缓存一致性违规
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 dm-cache 处于 passthrough 模式下进行写入操作时，由于未能正确延迟 bio 提交，导致对源设备的写入操作发生在缓存元数据提交之前。这违反了缓存一致性顺序约束，破坏了数据的一致性。
+
+通过 ftrace 监控可见，写入请求（block_bio_queue）在元数据提交操作之前即已完成处理，导致 I/O 顺序未同步。
+
+#主要错误日志
+ftrace 日志显示写入操作与元数据操作顺序异常：
+```text
+       fio-146  [000] .....  420.149395: block_bio_queue: 252,2 WS 0 + 128 [fio]
+ ...
+ kworker/0:0-9  [000] .....  420.160530: block_bio_queue: 252,0 W 408 + 8 [kworker/0:0]
+```
+（日志显示针对 origin 的写入 252,2 发生在针对 metadata 的写入 252,0 之前，违背了预期的先后顺序。）
+
+#问题根因
+在 passthrough 模式下，dm-cache 需要延迟写入 bio 的提交，直到缓存块失效完成，以维护缓存一致性。
+然而，当前 `map_bio()` 函数在处理失效逻辑时（调用 `invalidate_start` 后），默认返回了 `DM_MAPIO_REMAPPED`，而不是必须的 `DM_MAPIO_SUBMITTED`。这导致 dm 核心层认为映射已完成并立即执行 bio，违反了“先失效后写入”的顺序约束。
+
+#解决方案
+修改 `drivers/md/dm-cache-target.c` 文件中的 `map_bio` 函数。
+在 `invalidate_start` 调用后立即增加 `return DM_MAPIO_SUBMITTED;` 语句。这确保了在 passthrough 模式下，bio 的控制权正确保留在缓存目标内部，直到失效操作完成，从而修复了一致性问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/80f5404781879d748daae63a7b9e986bcb9f7067

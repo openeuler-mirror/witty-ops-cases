@@ -1,0 +1,20 @@
+#标题
+hwmon: (acpi_power_meter) 功率阈值设置失败时本地状态未回滚
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 sysfs 接口设置 acpi_power_meter 的功率阈值时，如果 ACPI 方法 `_PTP` 执行失败，用户态写入操作返回错误，但驱动内部维护的本地阈值数组已被修改。这导致系统内部记录的阈值状态与硬件实际状态不一致，后续读取到的阈值数据不能反映硬件真实配置。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `set_trip` 函数中，代码逻辑先更新了本地内存中的 `resource->trip` 数组，随后调用 `set_acpi_trip(resource)` 将配置下发到硬件。当 `set_acpi_trip` 调用失败时，函数直接返回错误码，但未将 `resource->trip` 数组恢复为修改前的旧值。这导致内存中的状态与硬件实际状态发生割裂。
+
+#解决方案
+在修改本地阈值前先备份旧值，若调用 ACPI 方法 `_PTP` 设置失败，则将本地阈值回滚为备份值，确保内存状态与硬件状态的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e13f16abef2a78ea045f47bf470ebedeede1ad2b

@@ -1,0 +1,29 @@
+#标题
+hns3驱动增加PFC风暴预防及FD Rule调试功能
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. hns3驱动缺少PFC风暴预防超时时间的配置与查询接口，无法通过ethtool进行设置。
+2. 缺少对TC flower规则中VXLAN VNI、IP TOS等关键字段的解析与校验，导致相关流规则配置受限。
+3. 缺少针对FD（Flow Director）规则的调试信息查询接口，无法查看当前生效的流规则详情。
+4. 代码逻辑中存在潜在的空指针引用风险（`hclge_query_reg_info`函数在释放内存后未置空指针）。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 驱动未实现`set_pfc_storm_prevention_tout`和`get_pfc_storm_prevention_tout`回调函数，也未注册对应的ethtool tunable操作接口。
+2. `hclge_parse_cls_flower`等解析函数未包含对VXLAN VNI、IP TOS字段的解析逻辑，且对MAC和IP地址的全零掩码（通配）场景处理不完整，导致`unused_tuple`标记错误。
+3. debugfs中未定义`HNAE3_DBG_CMD_FD_RULE`命令及相应的`hclge_dbg_dump_fd_rule`实现。
+4. 在`hclge_query_reg_info`函数中，`kfree(msg->desc)`释放内存后，指针变量未置NULL，若后续逻辑误用该指针将引发Use-After-Free风险。
+
+#解决方案
+1. 实现PFC风暴预防超时时间的设置与查询接口，并在`hclge_main.c`中实现具体逻辑，同时在`hns3_ethtool.c`中注册`ETHTOOL_PFC_PREVENTION_TOUT`的get/set回调。在复位流程中增加`hclge_restore_pfc_storm_prevention_tout`以恢复配置。
+2. 扩展`hclge_parse_cls_flower`解析逻辑，增加`hclge_get_cls_enc_keyid`和`hclge_get_cls_key_ip_tos`函数处理VNI和TOS字段；修正MAC和IP地址掩码判断逻辑，当掩码为0时正确设置`unused_tuple`位。
+3. 新增`HNAE3_DBG_CMD_FD_RULE`调试命令，实现`hclge_dbg_dump_fd_rule`及其辅助函数，用于遍历并打印当前激活的FD规则的元组信息和动作。
+4. 在`hclge_query_reg_info`函数中，执行`kfree(msg->desc)`后添加`msg->desc = NULL`赋值语句，防止悬垂指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f2b93803797e33c785219a7d6861d75e5a7009b7

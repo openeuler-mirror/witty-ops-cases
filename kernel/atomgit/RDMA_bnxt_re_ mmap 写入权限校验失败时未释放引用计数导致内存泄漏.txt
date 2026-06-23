@@ -1,0 +1,20 @@
+#标题
+RDMA/bnxt_re: mmap 写入权限校验失败时未释放引用计数导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 bnxt_re 驱动的 mmap 接口时，若用户空间对 DBR_PAGE 类型映射请求了写入权限（VM_WRITE），内核会校验失败并返回错误。但在返回错误前，驱动未释放之前通过 `rdma_user_mmap_entry_get` 获取的 mmap entry 引用计数，导致该 entry 无法被正常释放，引发内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bnxt_re_mmap` 函数中，代码在处理 `BNXT_RE_MMAP_DBR_PAGE` 分支时，先调用了 `rdma_user_mmap_entry_get` 获取了 mmap entry 的引用。随后检查 `vma->vm_flags` 是否包含 `VM_WRITE`，如果包含则直接 `return -EFAULT` 退出。由于是直接返回，跳过了后续代码逻辑，导致没有调用 `rdma_user_mmap_entry_put` 来释放之前获取的引用计数，造成引用计数泄漏。
+
+#解决方案
+修改 `bnxt_re_mmap` 函数的错误处理路径。将 `BNXT_RE_MMAP_DBR_PAGE` 分支中的写入权限检查逻辑改为先设置错误码 `ret = -EFAULT`，然后通过 `else` 分支继续执行正常的映射操作。这样当权限检查失败时，代码不再直接 return，而是能够继续执行到函数末尾统一的错误处理入口，从而确保 `rdma_user_mmap_entry_put` 被正确调用以释放引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cf2b08ef406ed075d3e0ae0395793f22f504838e

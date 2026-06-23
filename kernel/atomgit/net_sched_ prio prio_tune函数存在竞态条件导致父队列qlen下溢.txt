@@ -1,0 +1,23 @@
+#标题
+net_sched: prio prio_tune函数存在竞态条件导致父队列qlen下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+PRIO 队列纪律在执行配置变更时存在竞态条件。当 SFQ（Stochastic Fairness Queueing）的 perturb 定时器在特定时间点触发，该竞态条件可被利用，导致父队列的 qlen（队列长度）计数发生下溢，破坏内核内存状态的完整性。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因是 `prio_tune` 函数在处理队列变更时锁保护范围不足。具体的竞态流程如下：
+CPU 0（变更线程）在持有锁的情况下调用 `qdisc_tree_flush_backlog()` [步骤2]，随后释放锁 [步骤3]，最后执行 `qdisc_put()` [步骤4]。
+与此同时，CPU 1（perturb 定时器）在 CPU 0 释放锁后获取锁 [步骤5]，执行 rehash [步骤6] 并调用 `qdisc_tree_reduce_backlog()` [步骤7]。
+由于 CPU 0 在步骤4执行 `qdisc_put()` 时未持有锁，此时 CPU 1 可能已经介入并修改了队列状态，这种交错执行导致了父队列 qlen 的下溢。
+
+#解决方案
+将 `prio_tune` 函数中对 `qdisc_tree_flush_backlog()` 的调用替换为 `qdisc_purge_queue()`。修复逻辑是在释放锁之前，直接从 qdisc 中清除所有数据包，确保在队列状态变更期间数据包被立即清除且持有锁保护，从而消除竞态窗口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/614678898ad25e0ae6ba449ef9aa0f1dd265a4af

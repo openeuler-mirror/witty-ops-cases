@@ -1,0 +1,21 @@
+#标题
+riscv: 早期 ftrace nop 修补缺失 icache 刷新导致启动崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V 架构上，内核启动阶段的早期 ftrace 初始化过程中，将 mcount 调用转换为 nop 指令时引发系统崩溃。具体表现为启动核心的指令缓存中存在半修补状态的不完整指令，进而触发非法指令陷阱，导致系统无法正常启动。该问题在多种硬件平台上均有复现。
+
+#主要错误日志
+未知
+
+#问题根因
+在 Commit c97bf629963e ("riscv: Fix text patching when IPI are used") 修改中，`ftrace_make_nop()` 被改为使用 `patch_insn_write()` 函数，该函数不再发出任何 icache 刷新操作，而是完全依赖 `__ftrace_modify_code()` 来执行刷新。
+然而，开发人员忽略了 `ftrace_make_nop()` 在启动早期会被直接调用以将 mcount 调用转换为 nop（在 riscv 上实际是将编译器发出的 2B nops 转换为 4B nops）。由于此时未执行 icache 刷新，启动核心的 icache 中残留了半修补指令，从而触发了非法指令陷阱导致崩溃。
+
+#解决方案
+在 `ftrace_init_nop` 函数中，当处理非模块（即内核核心代码，`!mod`）的早期修补时，显式调用新增的 `local_flush_icache_range()` 函数来刷新指定范围的指令缓存。这确保了在早期启动阶段修补指令后，指令缓存立即得到更新，避免了执行半修补指令导致的非法指令陷阱。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a7ebd5aa1c4080155b312fa8b22e3da63c015551

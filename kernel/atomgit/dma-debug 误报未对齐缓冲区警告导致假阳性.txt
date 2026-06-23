@@ -1,0 +1,20 @@
+#标题
+dma-debug 误报未对齐缓冲区警告导致假阳性
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当开启 `DMA_BOUNCE_UNALIGNED_KMALLOC` 功能且 kmalloc slabs 配置小于 cache line 对齐要求时，内核对小尺寸 kmalloc 缓冲区进行 DMA 映射会触发 SWIOTLB 缓冲区反弹机制。此时，dma-debug 子系统错误地报告缓冲区未对齐的警告信息，造成虚假的错误告警，干扰问题定位。
+
+#主要错误日志
+cacheline tracking EEXIST, overlapping mappings aren't supported
+
+#问题根因
+commit 370645f41e6e 引入的 `DMA_BOUNCE_UNALIGNED_KMALLOC` 特性允许部分架构使用小于 cache line 对齐的 kmalloc slabs。当这些非对齐的小缓冲区用于 DMA 时，SWIOTLB 机制会自动进行 bounce buffer 处理以避免 CPU cache 损坏。然而，`add_dma_entry` 函数在检测到映射重叠（EEXIST）时，未排除这种由 SWIOTLB 自动处理的合法场景，导致内核误认为是驱动程序错误使用 DMA API，从而打印了虚假的警告信息。
+
+#解决方案
+在 `kernel/dma/debug.c` 的 `add_dma_entry` 函数中增加判断条件：检查内核配置是否启用了 `CONFIG_DMA_BOUNCE_UNALIGNED_KMALLOC` 且当前设备是否处于 `is_swiotlb_active` 状态。如果是，则跳过误报的警告打印，从而消除假阳性告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/59894929c0e951178ca087ae68d95623e15297bd

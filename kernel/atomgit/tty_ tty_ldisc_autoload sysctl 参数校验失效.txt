@@ -1,0 +1,20 @@
+#标题
+tty: tty_ldisc_autoload sysctl 参数校验失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+用户空间通过 sysctl 设置 `tty_ldisc_autoload` 参数时，尽管内核代码中定义了 `SYSCTL_ZERO` 和 `SYSCTL_ONE` 作为边界限制，但实际上可以写入除 0 和 1 以外的其他非法整数值（如 2、3 等），导致参数校验机制失效，无法有效限制 tty line discipline 的自动加载行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在提交 7c0cca7c847e ("tty: ldisc: add sysctl to prevent autoloading of ldiscs") 中，`tty_ldisc_autoload` 的 sysctl 表定义错误。虽然设置了 `.extra1` 和 `.extra2` 参数用于限定数值范围（0 和 1），但 `.proc_handler` 函数指针被错误地设置为 `proc_dointvec`。`proc_dointvec` 函数不会检查 `.extra1` 和 `.extra2` 的边界值，导致边界限制未生效。
+
+#解决方案
+将 `drivers/tty/tty_io.c` 中 `tty_table` 数组里 `tty_ldisc_autoload` 条目的 `.proc_handler` 从 `proc_dointvec` 修改为 `proc_dointvec_minmax`。`proc_dointvec_minmax` 会正确处理 `.extra1` 和 `.extra2` 参数，从而强制限制该 sysctl 参数只能被写入 0 或 1。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f08ee399d629ecd7a53ddaf4412f77dbd18bad47

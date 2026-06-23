@@ -1,0 +1,20 @@
+#标题
+btrfs: 释放块设备文件后指针未置空导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+挂载具有相同 fsid 但不同 dev_uuids 的两个 btrfs 镜像时，若按特定顺序执行扫描和挂载操作（如先扫描设备，挂载 loop0 失败后，再挂载 loop1），内核在 `__btrfs_free_extra_devids` 函数中触发 use-after-free（UAF）故障，具体表现为对已释放的 `device->bdev_file` 指针执行 `fput` 操作。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `btrfs_close_one_device()` 函数中，当关闭设备时，虽然释放了 `bdev_file`（或相关句柄），但未将 `device->bdev_handle` 指针置为 NULL。这导致后续在特定错误路径下（如 `btrfs_open_devices` 中获取设备失败时），代码误以为该指针仍指向有效的内存区域，进而在 `__btrfs_free_extra_devids` 中对已释放的内存进行了访问和操作。
+
+#解决方案
+在 `btrfs_close_one_device()` 函数中，将 `device->bdev` 置 NULL 的同时，增加将 `device->bdev_handle` 置 NULL 的操作，防止出现悬垂指针引发的 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9c365ebabfffc2f00983ae7039f9456f02e9384

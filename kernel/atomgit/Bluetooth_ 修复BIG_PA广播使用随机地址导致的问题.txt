@@ -1,0 +1,20 @@
+#标题
+Bluetooth: 修复BIG/PA广播使用随机地址导致的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建广播同步流（BIG）或周期性广播（PA）时，系统错误地使用了不可解析的随机地址（non-resolvable private address）。当设备作为 BASS/Broadcast Assistant 角色时，该地址必须与连接地址一致以支持 PAST（Periodic Advertising Sync Transfer）方法；即使未涉及 PAST/BASS，周期性广播也需要进行同步，其地址要求与可连接广播一致。当前错误的地址类型导致 PAST 功能失效或周期性广播同步失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `hci_setup_ext_adv_instance_sync` 中，设置隐私参数 `require_privacy` 的逻辑有误。原逻辑仅在广播不可连接（`!connectable`）时将 `require_privacy` 设为 true，这导致在非连接态下系统可能使用不可解析的随机地址。然而，对于 BIG 或周期性广播场景，即使是非连接态，也需要使用可解析地址或身份地址，原逻辑未排除周期性广播（`adv->periodic`）的情况。
+
+#解决方案
+修改隐私参数的判断逻辑，在判断是否需要隐私（即是否可以使用不可解析随机地址）时，增加对周期性广播的检查。只有当广播既不可连接且非周期性广播时，才允许使用不可解析随机地址。代码修改为：`require_privacy = !connectable && !(adv && adv->periodic);`，并将此参数传递给 `hci_get_random_address` 函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db11dd6a7ee2668b73c199ee8a39598d6b7559b4

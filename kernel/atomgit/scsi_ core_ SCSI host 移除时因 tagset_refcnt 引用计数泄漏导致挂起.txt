@@ -1,0 +1,31 @@
+#标题
+scsi: core: SCSI host 移除时因 tagset_refcnt 引用计数泄漏导致挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在拆除 SCSI 主机（tearing down the SCSI host）时系统挂起。例如，iscsid 进程在执行移除操作时陷入不可中断睡眠，导致进程 hang 住，无法正常结束会话。
+
+#主要错误日志
+[130120.652718] scsi_alloc_sdev: Allocation failure during SCSI scanning, some SCSI devices might not be configured
+PID: 2528     TASK: ffff9d0408974e00  CPU: 3    COMMAND: "iscsid"
+ #0 [ffffb5b9c134b9e0] __schedule at ffffffff860657d4
+ #1 [ffffb5b9c134ba28] schedule at ffffffff86065c6f
+ #2 [ffffb5b9c134ba40] schedule_timeout at ffffffff86069fb0
+ #3 [ffffb5b9c134bab0] __wait_for_common at ffffffff8606674f
+ #4 [ffffb5b9c134bb10] scsi_remove_host at ffffffff85bfe84b
+ #5 [ffffb5b9c134bb30] iscsi_sw_tcp_session_destroy at ffffffffc03031c4 [iscsi_tcp]
+ #6 [ffffb5b9c134bb48] iscsi_if_recv_msg at ffffffffc0292692 [scsi_transport_iscsi]
+ #7 [ffffb5b9c134bb98] iscsi_if_rx at ffffffffc02929c2 [scsi_transport_iscsi]
+ #8 [ffffb5b9c134bbf0] netlink_unicast at ffffffff85e551d6
+ #9 [ffffb5b9c134bc38] netlink_sendmsg at ffffffff85e554ef
+
+#问题根因
+在 `scsi_alloc_sdev` 函数中，当调用 `scsi_realloc_sdev_budget_map` 失败并进入错误处理路径时，遗漏了对 `sdev->host->tagset_refcnt` 的 `kref_put` 操作。这导致了引用计数泄漏（refcount leak），进而使得在移除 SCSI 主机时，系统等待引用计数归零的操作无法完成，最终引发挂起。
+
+#解决方案
+在 `scsi_scan.c` 的 `scsi_alloc_sdev` 函数中，针对 `scsi_realloc_sdev_budget_map` 失败的错误处理分支，增加一行 `kref_put(&sdev->host->tagset_refcnt, scsi_mq_free_tags);`，确保在分配失败释放资源时正确减少引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e8d82bf7ac98250fdc465eb6780129b11667e75e

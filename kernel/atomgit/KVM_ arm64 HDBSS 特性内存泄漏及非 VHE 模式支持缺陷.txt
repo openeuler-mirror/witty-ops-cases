@@ -1,0 +1,24 @@
+#标题
+KVM: arm64 HDBSS 特性内存泄漏及非 VHE 模式支持缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 ARM64 非虚拟化扩展模式环境下启用 HDBSS 特性时，系统不支持的场景会触发错误日志，功能启用失败。
+2. 在 HDBSS 特性初始化过程中，若部分 vCPU 的内存分配失败，此前已分配成功的其他 vCPU 内存未能释放，导致宿主机内存泄漏。
+
+#主要错误日志
+- `kvm_err("Do not support HDBSS in non-VHE mode!\n");`
+- `kvm_err("Alloc HDBSS buffer failed!\n");`
+
+#问题根因
+1. **功能支持缺陷**：代码未对运行环境进行判断，在非 VHE（Virtualization Host Extensions）模式下（即 nvhe 模式）错误地允许 HDBSS 特性开启，而该特性在此模式下不被支持。
+2. **内存泄漏**：在 `kvm_cap_arm_enable_hdbss` 函数中，当为多个 vCPU 分配 HDBSS 缓冲区时，如果中途某个 vCPU 的 `alloc_pages` 失败，函数直接返回错误，未对之前循环中已成功分配的内存进行清理，导致内存泄漏。
+
+#解决方案
+1. **环境校验**：在 HDBSS 初始化入口处增加 `is_kernel_in_hyp_mode()` 判断，若内核未运行在 EL2（即非 VHE 模式），直接返回 `-EINVAL` 拒绝开启并打印错误日志。
+2. **内存回收**：将清理 HDBSS 缓冲区的逻辑提取为独立函数 `kvm_clear_hdbss`。在内存分配失败的错误处理路径中调用该函数，确保部分初始化失败时能回滚释放所有已分配的资源，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1d8169dd540d0448140c573c535bafd82986f6e

@@ -1,0 +1,21 @@
+#标题
+fs/ntfs3: DeleteIndexEntryRoot 操作引发堆越界读取
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NTFS3 文件系统日志回放处理 `DeleteIndexEntryRoot` 动作时，若日志记录中的条目大小（`esize`）被恶意构造或损坏为超大值，会导致计算出的条目结束指针 `e2` 越出缓冲区边界。这会引发堆越界读取，进而导致 `slab-out-of-bounds read` 错误或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `do_action` 函数处理 `DeleteIndexEntryRoot` 分支时，从日志记录中获取了条目大小 `esize`，但在执行后续内存操作前未进行有效的边界检查。
+代码通过 `e2 = Add2Ptr(e1, esize)` 计算结束位置，随后计算 `memmove` 的长度。若 `esize` 过大，`e2` 将超出已使用的缓冲区范围（`used`），导致 `PtrOffset(e2, Add2Ptr(hdr, used))` 计算出的偏移量变为负数。该偏移量在转换为 `size_t` 后会变成一个巨大的无符号整数，最终导致越界读取。
+
+#解决方案
+在执行 `memmove` 内存移动操作前，增加对条目大小 `esize` 的校验。检查 `esize` 是否严格小于等于当前条目在索引头剩余已用空间中的大小。如果校验失败，则跳转至 `dirty_vol` 标签进行错误处理，从而避免越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8061fc89a3596ba5289b3e7fe2504f3ea9833117

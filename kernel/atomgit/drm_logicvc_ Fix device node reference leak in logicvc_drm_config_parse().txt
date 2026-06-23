@@ -1,0 +1,20 @@
+#标题
+drm/logicvc: Fix device node reference leak in logicvc_drm_config_parse()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `logicvc_drm_config_parse` 函数解析 DRM 配置时，若代码执行路径未正常处理设备节点，会导致 `layers_node` 设备节点引用计数泄漏，造成内核资源泄露。
+
+#主要错误日志
+drm_err(drm_dev, "Missing non-optional layers node\n");
+
+#问题根因
+在 `logicvc_drm_config_parse` 函数中，通过 `of_get_child_by_name` 获取 `layers_node` 节点后，该节点的引用计数被增加。然而，原代码逻辑中并未在相应的退出路径或作用域结束时调用 `of_node_put` 释放该引用，从而导致设备节点引用计数泄漏。
+
+#解决方案
+使用内核提供的自动清理机制 `__free(device_node)` 声明 `layers_node` 变量。该修饰符会自动在变量作用域结束时调用相应的释放函数，确保 `of_get_child_by_name` 获取的设备节点引用被正确释放，从而修复引用泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e0e6ec5a450872eff6bddace66b09087d35cb50

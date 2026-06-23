@@ -1,0 +1,38 @@
+#标题
+cpufreq: CPPC 读取离线 CPU 性能计数器报错及频率不变性初始化问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 CPU 离线（offline）场景下，CPPC 驱动尝试读取性能计数器失败，内核日志中打印不必要的警告信息，干扰日志审查。
+2. 系统初始化阶段，AMU（Activity Monitor Unit）频率不变性支持未正确设置前，`arch_max_freq_scale` 默认值为 0，导致 `amu_scale_freq_tick()` 计算的频率比例不准确，影响调度器负载均衡。
+
+#主要错误日志
+- `pr_warn("%s: failed to read perf counters\n", __func__);`
+- `pr_debug("%s: failed to read perf counters for cpu:%d: %d\n", __func__, cpu, ret);`
+- `WARN_ONCE(1, "CPU%d: invalid maximum or reference frequency.\n", cpu);`
+- `WARN_ONCE(1, "Reference frequency too low.\n");`
+
+#问题根因
+1. **CPPC 离线 CPU 处理不当**：在 `cppc_cpufreq_cpu_fie_init` 和 `cppc_scale_freq_workfn` 中，代码未对 CPU 离线状态进行充分检查。当 CPU 处于离线状态或深度空闲状态导致寄存器不可读时，驱动程序错误地输出了警告日志，而非静默处理或忽略。
+2. **AMU 初始化比例因子错误**：`arch_max_freq_scale` 被定义为初始化为 0，在 AMU FIE（Frequency Invariance Engine）完全初始化之前，`amu_scale_freq_tick()` 使用该值进行计算会导致错误的频率比例。根据代码逻辑，应初始化为 `1UL << (2 * SCHED_CAPACITY_SHIFT)` 以确保在初始化完成前返回默认的全比例值。
+3. **频率参考值获取机制缺失**：调度器与 cpufreq 交互时，缺乏统一的 `arch_scale_freq_ref` 接口，导致在计算 CPU 容量和能量模型时使用了不一致的参考频率（如 `cpuinfo.max_freq` 或当前频率），影响了频率不变性的准确性。
+
+#解决方案
+1. **优化 CPPC 错误处理逻辑**：
+   - 在 `cppc_scale_freq_workfn` 中，区分读取失败的类型。若返回 `-EFAULT`（通常对应 CPU 离线或不可用），直接返回不打印警告；仅在其他严重错误时打印警告并清理 FIE 源。
+   - 在 `cppc_cpufreq_cpu_fie_init` 中，检查 `cpu_online(cpu)` 状态，若 CPU 离线则不打印警告信息，改为 `pr_debug`。
+
+2. **修正 AMU 初始化值**：
+   - 将 `arch_max_freq_scale` 的初始化值从 0 修改为 `1UL << (2 * SCHED_CAPACITY_SHIFT)`，确保在 FIE 初始化完成前，频率比例计算返回正确的默认值。
+
+3. **重构 FIE 初始化时机**：
+   - 将 AMU FIE 的初始化从 `cpufreq` notifier 回调改为 CPU hotplug 机制（`CPUHP_AP_ONLINE_DYN`），确保在 CPU 上线时正确设置频率比例因子。
+
+4. **引入标准参考频率接口**：
+   - 新增 `arch_scale_freq_ref` 和 `topology_get_freq_ref` 接口，统一管理容量计算的参考频率。
+   - 在 `cpufreq` 和 `schedutil` 中使用该固定且一致的参考频率进行容量缩放计算，替代原先直接使用 `max_freq` 或 `cur` 的做法。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58d438670d2cecc9cdebda4e34c7cccd574b6c49

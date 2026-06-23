@@ -1,0 +1,20 @@
+#标题
+ksmbd: 多通道绑定请求失败后连接状态残留导致会话查找异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当带有 SMB2_SESSION_REQ_FLAG_BINDING 标志的多通道 SMB2_SESSION_SETUP 请求失败时，ksmbd 连接残留 binding 状态（conn->binding 保持为 true）。这导致后续所有 ksmbd_session_lookup_all() 调用均错误地回退到全局会话表进行查找，导致会话管理逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 SMB2_SESSION_SETUP 请求的处理流程中，如果绑定请求（binding request）失败，代码路径执行了错误响应设置但未清理连接状态。具体原因为：conn->binding 被设置为 true 后，在错误处理路径（error path）中缺少将其重置为 false 的操作，导致连接长期处于错误的绑定状态。
+
+#解决方案
+在 smb2_sess_setup 函数的错误处理路径中，增加 `conn->binding = false;` 赋值语句，确保在绑定请求失败时正确清除连接的 binding 状态标志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4198f079add0a23e30bd2010422fcda6cf480ce1

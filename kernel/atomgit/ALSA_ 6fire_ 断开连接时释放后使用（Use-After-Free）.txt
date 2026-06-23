@@ -1,0 +1,25 @@
+#标题
+ALSA: 6fire: 断开连接时释放后使用（Use-After-Free）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 6fire USB 音频设备断开连接时，若此时没有打开的文件句柄，内核会触发释放后使用错误，可能导致内核崩溃或内存污染。
+
+#主要错误日志
+Call trace:
+  usb6fire_chip_abort sound/usb/6fire/chip.c:59 [inline]
+  usb6fire_chip_disconnect+0x348/0x358 sound/usb/6fire/chip.c:182
+  usb_unbind_interface+0x1a8/0x88c drivers/usb/core/driver.c:458
+  ...
+  hub_event+0x1a04/0x4518 drivers/usb/core/hub.c:5953
+
+#问题根因
+在 `usb6fire_chip_abort()` 函数中，chip 结构体是作为 card 的私有数据分配的。当调用 `snd_card_free_when_closed()` 且没有打开的文件句柄时，card 及嵌入其中的 chip 会被同步释放。随后代码尝试执行 `chip->card = NULL` 写操作，此时访问的 slab 内存已被释放，从而触发 Use-After-Free。
+
+#解决方案
+将 card 的生命周期管理逻辑从 `usb6fire_chip_abort()` 移至 `usb6fire_chip_disconnect()` 中处理。具体措施为：在销毁前先保存 card 指针到局部变量；优先调用 `snd_card_disconnect()` 阻止新打开操作；在 chip 结构体仍有效时中止 URBs；最后调用 `snd_card_free_when_closed()`，确保 chip 结构体在可能被释放后不再被访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa78050b0ebef9f77b37f32ee0d0a01fa414a7f8

@@ -1,0 +1,29 @@
+#标题
+urma聚合设备在容器环境下expose操作失败及EID回切异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在主机网络容器调用 expose 命令时，聚合设备的 EID 未能成功回切到 init_net，导致 expose 命令执行失败。同时，该场景下存在引用计数处理不当的问题，且对于已经存在于 init_net 中的设备和 EID，重复执行 expose 操作无法正常支持。
+
+#主要错误日志
+- "Device or EID not accessible.\n"
+- "failed to get ns by fd.\n"
+- "failed to find ldev for dev_name:%s, net_fd:%u.\n"
+
+#问题根因
+1. **引用计数泄漏**：在 `ubcore_set_dev_eid_ns` 函数中，当获取 ns_fd 失败或后续查找逻辑设备失败时，直接返回错误，未调用 `put_net` 和 `ubcore_put_device` 释放资源，导致引用计数泄漏。
+2. **EID 回切错误**：在 `ubcore_reset_eid_ns` 函数中，原代码逻辑固定将 EID 的 net 设置为 `init_net`，而实际上应该将其重置为设备当前所属的 net（即 `dev_net`），导致 EID 状态异常。
+3. **访问检查不完整**：`ubcore_dev_accessible` 函数仅检查了设备的默认 net namespace，未遍历检查逻辑设备链表，导致在容器环境下误判设备不可访问。
+4. **重复操作判断缺失**：未对设备和 EID 已处于目标 net 的情况进行检查，导致重复 expose 操作失败。
+
+#解决方案
+1. **修复引用计数**：在 `ubcore_set_dev_eid_ns` 函数的错误处理路径中增加 `put_net` 和 `ubcore_put_device` 调用，确保资源正确释放。
+2. **修正 EID 回切逻辑**：在 `ubcore_reset_eid_ns` 中，将 EID 的 net 指针指向通过 `read_pnet(&dev->ldev.net)` 获取的设备当前网络命名空间，而非直接指向 `init_net`。
+3. **扩展访问检查范围**：修改 `ubcore_dev_accessible` 函数，增加对 `dev->ldev_list` 链表的遍历检查，只要存在匹配的逻辑设备即视为可访问；同时在 `ubcore_alloc_ucontext` 中增加设备和 EID 可访问性检查。
+4. **支持重复 Expose**：在 `ubcore_expose_dev_ns` 和 `ubcore_set_dev_eid_ns` 中增加判断逻辑，若设备已在目标 net 中，直接返回成功或提示信息，避免重复操作导致的失败。
+5. **清理冗余逻辑**：移除 `ubcore_net_exit` 中冗余的 `ubcore_invalidate_eid_ns` 调用，统一修改流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/20c0c68c2ad3509d3b9e97151f4f3e6e181badd7

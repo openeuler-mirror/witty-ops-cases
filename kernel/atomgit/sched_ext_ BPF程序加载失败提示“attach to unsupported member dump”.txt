@@ -1,0 +1,36 @@
+#标题
+sched_ext: BPF程序加载失败提示“attach to unsupported member dump”
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 sched_ext 调度器类（如 scx_layered 程序）时，BPF 程序加载失败。libbpf 报告部分 struct_ops 成员（如 cgroup_init, dump 等）在内核中未找到，最终导致程序无法正常加载并运行。
+
+#主要错误日志
+```
+05:26:48 [INFO] libbpf: struct_ops layered: member cgroup_init not found in kernel, skipping it as it's set to zero
+05:26:48 [INFO] libbpf: struct_ops layered: member cgroup_exit not found in kernel, skipping it as it's set to zero
+05:26:48 [INFO] libbpf: struct_ops layered: member cgroup_prep_move not found in kernel, skipping it as it's set to zero
+05:26:48 [INFO] libbpf: struct_ops layered: member cgroup_move not found in kernel, skipping it as it's set to zero
+05:26:48 [INFO] libbpf: struct_ops layered: member cgroup_cancel_move not found in kernel, skipping it as it's set to zero
+05:26:48 [INFO] libbpf: struct_ops layered: member cgroup_set_weight not found in kernel, skipping it as it's set to zero
+05:26:48 [WARN] libbpf: prog 'layered_dump': BPF program load failed: unknown error (-524)
+05:26:48 [WARN] libbpf: prog 'layered_dump': -- BEGIN PROG LOAD LOG --
+attach to unsupported member dump of struct sched_ext_ops
+processed 0 insns (limit 1000000) max_states_per_insn 0 total_states 0 peak_states 0 mark_read 0
+-- END PROG LOAD LOG --
+05:26:48 [WARN] libbpf: prog 'layered_dump': failed to load: -524
+05:26:48 [WARN] libbpf: failed to load object 'bpf_bpf'
+05:26:48 [WARN] libbpf: failed to load BPF skeleton 'bpf_bpf': -524
+Error: Failed to load BPF program
+```
+
+#问题根因
+`__bpf_ops_sched_ext_ops` 结构体初始化时，缺少了对 `dump`、`dump_cpu` 和 `dump_task` 成员的定义（即缺少相应的 CFI stubs）。结合上游补丁要求 BPF 程序必须初始化所有属性，当内核未提供这些成员的 stub 实现时，libbpf 会认为这些成员在内核中不存在，导致 BPF 程序加载校验失败，报错 "attach to unsupported member"。
+
+#解决方案
+在内核调度器扩展模块（`kernel/sched/ext.c`）中补充定义缺失的 stub 函数（`dump_stub`, `dump_cpu_stub`, `dump_task_stub`），并将这些 stub 函数绑定到 `__bpf_ops_sched_ext_ops` 结构体实例中，确保内核侧具备完整的 struct_ops 成员定义，从而允许 BPF 程序正常加载。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b2bf420b2d961c2c95dccd71a1d4d7199dbb5a9

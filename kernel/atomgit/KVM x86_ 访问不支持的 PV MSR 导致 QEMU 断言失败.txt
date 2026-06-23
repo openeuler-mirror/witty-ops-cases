@@ -1,0 +1,22 @@
+#标题
+KVM x86: 访问不支持的 PV MSR 导致 QEMU 断言失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 QEMU 启动虚拟机并配置禁用 kvmclock 但开启 PV 特性强制检查（如参数 `-cpu host,-kvmclock,kvm-pv-enforce-cpuid`）时，QEMU 在初始化阶段尝试设置 MSR 0x12 时触发断言失败并异常退出，导致虚拟机无法启动。
+
+#主要错误日志
+qemu: error: failed to set MSR 0x12 to 0x0
+qemu: target/i386/kvm/kvm.c:3301: kvm_buf_set_msrs:
+      Assertion `ret == cpu->kvm_msr_buf->nmsrs' failed.
+
+#问题根因
+KVM 在处理 Guest 对 PV MSR（如 MSR_KVM_WALL_CLOCK_NEW 等）的访问时，如果检测到 vCPU 不支持该特性，错误地返回了 `1`（即 KVM_MSR_RET_INVALID，表示无效）。这违反了 KVM 的 ABI 约定：对于通过 `KVM_GET_MSR_INDEX_LIST` 暴露给用户空间的 MSR，即使 vCPU 模型不支持，Host 端的读写（如 QEMU 初始化写入 0）也应被允许。返回 "invalid" 导致 QEMU 认为操作失败从而触发断言。
+
+#解决方案
+修改 `arch/x86/kvm/x86.c` 中的 `kvm_set_msr_common` 和 `kvm_get_msr_common` 函数，将所有 PV MSR 特性检查失败的返回值从 `1` 修改为 `KVM_MSR_RET_UNSUPPORTED`。这使得 KVM 能够正确处理 Host 发起的读写请求，符合 ABI 规范，避免了 QEMU 的非预期崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/51df7c8911bb303d13f5416bb067a35ac85d1820

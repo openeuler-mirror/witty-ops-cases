@@ -1,0 +1,28 @@
+#标题
+net: dsa: b53: 清除端口 PVID 配置失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DSA 子系统使用 b53 驱动的交换机设备上，当用户尝试清除某个 VLAN 的 PVID 标志时，配置无法生效。
+具体表现为：执行命令 `bridge vlan add dev <port> vid 10 untagged` 清除 PVID 标志后，端口的 PVID 仍然保留为 10，并未如预期恢复为默认 PVID，导致后续的网络转发逻辑可能与配置预期不符。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `b53_vlan_add` 函数处理 VLAN 更新逻辑时，代码仅处理了“设置 PVID”和“删除 VLAN”时的 PVID 更新操作，遗漏了“清除 PVID 标志”的场景。
+具体原因为：原代码逻辑仅在 `pvid` 为真时写入新的 PVID 值，而当 `pvid` 为假（即清除 PVID 标志）且当前 VLAN ID 等于端口现有 PVID 时，没有将端口 PVID 重置为默认值，导致硬件寄存器中的 PVID 值未被清除。
+
+#解决方案
+修改 `drivers/net/dsa/b53/b53_common.c` 中的 `b53_vlan_add` 函数：
+1. 在函数开头增加读取端口当前 PVID（`old_pvid`）的逻辑。
+2. 引入变量 `new_pvid` 计算目标 PVID 值：
+   - 若设置 PVID 标志，则 `new_pvid` 为当前 VLAN ID。
+   - 若清除 PVID 标志且当前 VLAN ID 等于端口 PVID，则将 `new_pvid` 重置为默认 PVID。
+   - 其他情况保持不变。
+3. 将 PVID 写入逻辑修改为：当新旧 PVID 不同且非 CPU 端口时，才更新硬件寄存器，从而确保清除 PVID 标志的操作能正确生效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eb55b9fb23092a9442ead2dab261691150461753

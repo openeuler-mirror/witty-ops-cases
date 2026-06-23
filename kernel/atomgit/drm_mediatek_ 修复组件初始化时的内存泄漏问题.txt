@@ -1,0 +1,20 @@
+#标题
+drm/mediatek: 修复组件初始化时的内存泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Mediatek DRM 驱动在初始化过程中，为没有 platform driver 的组件分配了私有数据，但由于内存的生命周期错误地绑定在了组件设备上，导致在驱动探测失败（例如探测延迟 probe deferral）或驱动解绑定时，该部分内存无法被释放，从而造成内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `mtk_ddp_comp_init` 中，使用 `devm_kzalloc` 分配私有数据内存时，传入的第一个参数是 `comp->dev`（组件设备）。由于这些组件没有对应的 platform driver，其生命周期管理不同于常规设备。将内存分配绑定到组件设备导致在驱动卸载或探测失败路径上缺少相应的释放机制，进而引发内存泄漏。
+
+#解决方案
+修改 `mtk_ddp_comp_init` 函数中的内存分配逻辑，将 `devm_kzalloc` 的第一个参数从 `comp->dev` 修改为 `dev`（即 DRM 平台设备）。这样将私有数据内存的生命周期绑定到 DRM 平台设备上，确保在驱动探测失败或解绑时，内存能够被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2ddfb52ff069caa8eb3d0e23de0a979ce2cb924e

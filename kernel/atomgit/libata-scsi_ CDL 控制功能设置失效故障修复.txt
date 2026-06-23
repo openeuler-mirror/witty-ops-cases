@@ -1,0 +1,20 @@
+#标题
+libata-scsi: CDL 控制功能设置失效故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NCQ（Native Command Queuing）命令处于活动状态时，尝试通过 MODE SELECT 命令启用或禁用 CDL（Command Duration Limits）功能失败。具体表现为：当 MODE SELECT 命令因存在未完成的 NCQ 命令而被延迟处理并重新入队后，再次执行时系统误判标志位状态，导致不再发送必要的 SET FEATURES 命令给驱动器，致使 CDL 配置未能实际生效。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ata_mselect_control_ata_feature()` 中存在多余的标志位检查逻辑。该函数在将 MODE SELECT 转换为 SET FEATURES 命令的过程中，会提前设置或清除 `ATA_DFLAG_CDL_ENABLED` 标志位。如果 SET FEATURES 命令因有未完成的 NCQ 命令而被延迟，原始的 MODE SELECT 命令会被重新入队。当重新入队的命令再次经过该函数处理时，由于标志位已被第一次处理修改，代码中的 `if (!(dev->flags & ATA_DFLAG_CDL_ENABLED))` 或 `if (dev->flags & ATA_DFLAG_CDL_ENABLED)` 检查会直接返回，导致 SET FEATURES 命令不再下发，从而丢失了实际的配置变更操作。
+
+#解决方案
+删除 `ata_mselect_control_ata_feature()` 函数中对 `ATA_DFLAG_CDL_ENABLED` 标志位的冗余预检查逻辑。修改后的代码直接根据 MODE SELECT 的控制缓冲区内容（buf[0] & 0x03）决定是启用还是禁用 CDL，并确保 SET FEATURES 命令能够正确下发。该修改是安全的，因为 `scsi_cdl_enable()` 函数中已经包含了避免重复启用 CDL 的逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/761a281596a9c73db75db2e5f8f0c13edb41df1b

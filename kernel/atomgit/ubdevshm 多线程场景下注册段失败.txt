@@ -1,0 +1,24 @@
+#标题
+ubdevshm 多线程场景下注册段失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多线程环境下使用 ubdevshm 功能时，调用 `ubdevshm_register_segment` 接口注册共享内存段失败，函数返回 `-EINVAL`。系统日志中打印 "register segment can not find task" 错误信息，导致共享内存注册流程无法正常完成。
+
+#主要错误日志
+- `pr_err("register segment can not find task: is_exist: %d, current tgid: %d,\n" "start_time: %llx, role.tgid: %d, role.aux: %llx\n", ...)`
+- `pr_err("find cntr failed: current tgid:%d, start_time: %llx\n", ...)`
+- `pr_err("find ctx_inner failed: role.tgid: %d, role.aux: %llx\n", ...)`
+
+#问题根因
+在多线程场景下，内核代码错误地使用了当前线程（`task`）的 `start_time` 作为角色鉴权的辅助标识，而共享内存段的注册与关联是基于线程组领导者（thread group leader）进行的。由于同一线程组内的不同线程拥有不同的 `start_time`，导致在通过 `is_same_role_task` 校验角色身份时，`aux` 字段（即 `start_time`）比对失败。代码逻辑判定当前任务与注册段时的角色不匹配，从而错误地返回查找失败。
+
+#解决方案
+修改角色信息填充与校验逻辑，将 `start_time` 的获取源从当前任务结构体（`task->start_time`）统一修改为线程组领导者的 `start_time`（`task->group_leader->start_time`）。具体修改包括：
+1. 在 `fill_role_info` 宏和 `set_role` 函数中，将 `role.aux` 赋值改为 `task->group_leader->start_time`。
+2. 在 `is_same_role_task` 和 `lite_role_get_task_exist` 函数中，比对逻辑同步修改为使用 `tsk->group_leader->start_time`，确保多线程场景下角色身份校验的一致性与正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac03faa87892d4769326d5ca0025c32c22dbb8fb

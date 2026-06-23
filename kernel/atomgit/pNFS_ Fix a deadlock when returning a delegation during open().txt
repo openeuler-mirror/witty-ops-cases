@@ -1,0 +1,35 @@
+#标题
+pNFS: Fix a deadlock when returning a delegation during open()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在执行 NFSv4 open() 操作过程中发生挂起。具体表现为进程处于不可中断睡眠状态，调用栈显示在 `pnfs_roc` 函数中等待 layout return 完成，且该等待发生在 `open()` 处理委托返回的上下文中。
+
+#主要错误日志
+关键堆栈信息如下：
+```
+0 [ffffd0b50e1774e0] __schedule at ffffffff9ca05415
+1 [ffffd0b50e177548] schedule at ffffffff9ca05717
+2 [ffffd0b50e177558] bit_wait at ffffffff9ca061e1
+3 [ffffd0b50e177568] __wait_on_bit at ffffffff9ca05cfb
+4 [ffffd0b50e1775c8] out_of_line_wait_on_bit at ffffffff9ca05ea5
+5 [ffffd0b50e177618] pnfs_roc at ffffffffc154207b [nfsv4]
+6 [ffffd0b50e1776b8] _nfs4_proc_delegreturn at ffffffffc1506586 [nfsv4]
+...
+9 [ffffd0b50e177838] nfs_inode_set_delegation at ffffffffc1524a75 [nfsv4]
+...
+15 [ffffd0b50e177a80] nfs4_atomic_open at ffffffffc15057fb [nfsv4]
+16 [ffffd0b50e177ad0] nfs4_file_open at ffffffffc15219be [nfsv4]
+17 [ffffd0b50e177b78] do_dentry_open at ffffffff9c09e6ea
+```
+
+#问题根因
+在 open() 过程中处理委托返回时，代码调用了 `pnfs_roc()` 并试图等待 layout return 完成。然而，该 layout return 无法完成，因为系统启动了状态恢复，而状态恢复必须等待 open() 完成委托处理才能结束。这导致了 `open()` 等待 layout return，而 layout return 等待状态恢复，状态恢复又等待 open() 的循环等待死锁。
+
+#解决方案
+修改 `pnfs_roc()` 函数接口，增加 `bool sync` 参数以标识调用是否为同步模式。在 `nfs4_do_close` 和 `_nfs4_proc_delegreturn` 调用 `pnfs_roc()` 时传入正确的同步/非同步标志。在 `pnfs_roc()` 内部逻辑中，若检测到需要等待 `NFS_LAYOUT_RETURN_LOCK` 但调用模式为非阻塞（`sync` 为 false），则不再进行 `wait_on_bit` 睡眠等待，而是直接设置返回信息并返回，从而避免死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/932060b519854149f18855301a4a92dcde56abed

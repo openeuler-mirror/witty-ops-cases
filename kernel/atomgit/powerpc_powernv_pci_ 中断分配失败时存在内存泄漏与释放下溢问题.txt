@@ -1,0 +1,26 @@
+#标题
+powerpc/powernv/pci: 中断分配失败时存在内存泄漏与释放下溢问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PowerNV 平台上，当 PCI 中断域分配中断（`pnv_irq_domain_alloc`）过程中发生失败时，错误处理路径存在逻辑错误：
+1. 导致一个中断未被释放，造成资源泄漏。
+2. 若在分配第一个中断（i=0）时就失败，计算 `i - 1` 会发生下溢，可能导致释放异常数量的中断或引发不可预期的内核行为。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `pnv_irq_domain_alloc` 在分配失败时的错误处理逻辑不正确。变量 `i` 记录了当前已成功分配的中断数量，但在回滚释放时，代码错误地调用 `irq_domain_free_irqs_parent(domain, virq, i - 1)`。
+根据逻辑分析：
+- 正常情况下，`i - 1` 导致少释放了一个已分配的中断。
+- 边界情况下，若 `i` 为 0（尚未成功分配任何中断），`i - 1` 发生整型下溢。
+根因是对已分配资源计数 `i` 的处理错误，误用了 `i - 1` 而非 `i`。
+
+#解决方案
+修正 `pci-ioda.c` 中的错误处理代码，将 `irq_domain_free_irqs_parent(domain, virq, i - 1)` 修改为 `irq_domain_free_irqs_parent(domain, virq, i)`，确保释放正确数量的已分配中断资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3baa200e418d8bfbd0ab42a702c4ca415fa6d57a

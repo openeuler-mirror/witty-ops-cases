@@ -1,0 +1,22 @@
+#标题
+net: tls: offload RX setup failure causes strparser anchor skb leak
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 TLS 设备卸载接收端设置失败（tls_set_device_offload_rx 调用 tls_dev_add 失败）时，内核发生内存泄漏（struct sk_buff 结构体泄露）。具体表现为对象内存占用增加，通过 kmemleak 等工具可检测到由 `alloc_skb(0)` 分配的 anchor skb 未被释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在 TLS 卸载接收设置失败的错误处理路径中，`tls_sw_free_resources_rx()` 被调用以清理资源。该函数调用了 `tls_sw_release_resources_rx()`（停止 strparser）和 `tls_sw_free_ctx_rx()`（释放上下文），但遗漏了释放 `tls_strp_init()` 中分配的 anchor skb 的步骤。
+此问题是由于提交 84c61fe1a75b ("tls: rx: do not use the standard strparser") 引入的变更导致，之前的代码路径不存在此预分配逻辑。
+
+#解决方案
+新增 `__tls_strp_done()` 函数用于专门释放 anchor skb，并修改 `tls_sw_free_resources_rx()` 函数，在释放上下文之前显式调用 `__tls_strp_done()` 以确保 anchor skb 被正确释放。
+同时重构 `tls_strp_done()` 函数，使其调用 `cancel_work_sync()` 后再调用 `__tls_strp_done()`，区分了需要取消工作的正常路径和无需取消工作的错误初始化路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/898e67808d328b8601bdb7e1a8eab286270ef4e8

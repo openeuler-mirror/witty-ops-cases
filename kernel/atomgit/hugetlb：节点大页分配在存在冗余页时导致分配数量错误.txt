@@ -1,0 +1,29 @@
+#标题
+hugetlb：节点大页分配在存在冗余页时导致分配数量错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统存在 surplus（冗余）大页的情况下，通过 `/sys/devices/system/node/node*/hugepages` 接口调整特定节点的大页池大小，会导致内核分配出预期数量两倍的大页，造成内存资源浪费或分配异常。
+
+复现步骤如下：
+1. 起始状态所有节点大页数为 0。
+2. 在 Node 0 创建 100 个大页并全部消耗，随后将 Node 0 的 `nr_hugepages` 设置为 0。此时系统产生 200 个 Surplus 大页（Total=200, Surp=200）。
+3. 向 Node 1 的 `nr_hugepages` 写入 100。
+4. 预期结果：内核应只创建 100 个新大页，Node 1 Total 变为 100。
+5. 实际结果：内核创建了 400 个大页，Node 1 Total 变为 400，系统 Total 变为 600。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `set_max_huge_pages()` 函数中，局部变量 `count` 初始用于记录 `persistent_huge_pages()` 的值。但在处理特定节点（node）的大页分配逻辑时，代码错误地使用了 `h->nr_huge_pages` 进行计算。
+这导致了语义混淆：`nr_huge_pages` 包含了 surplus 页面，而预期的计算逻辑应基于 persistent 页面。当系统中存在 surplus 页面时，计算公式 `count += h->nr_huge_pages - h->nr_huge_pages_node[nid]` 会导致 `count` 值异常偏大，进而触发错误的大页分配数量。
+
+#解决方案
+修正 `set_max_huge_pages()` 中节点大页分配的计算逻辑。将原来的 `h->nr_huge_pages - h->nr_huge_pages_node[nid]` 替换为 `persistent_huge_pages(h) - (h->nr_huge_pages_node[nid] - h->surplus_huge_pages_node[nid])`。
+此修改确保了在计算目标节点所需大页数量时，正确扣除该节点已有的持久化大页数量（即总数减去 surplus 数），避免引入 surplus 计数导致的额外分配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1e25ad3b1cb6826d486e1f6f8d2dda8d12e6d03c

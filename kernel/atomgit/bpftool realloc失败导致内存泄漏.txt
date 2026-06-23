@@ -1,0 +1,20 @@
+#标题
+bpftool realloc失败导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 bpftool 相关网络查询命令（如 `bpftool net`）时，若系统内存不足导致 realloc 分配失败，会发生用户态内存泄漏。泄漏发生时，原内存缓冲区变得不可达且未被释放，可能导致 bpftool 占用的内存持续增长或异常退出。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dump_link_nlmsg` 和 `dump_class_qdisc_nlmsg` 函数中，直接将 `realloc` 的返回值赋给原有的指针变量（如 `netinfo->devices`）。当 `realloc` 分配失败时，其返回值为 NULL，但原指针指向的内存区域仍然有效。由于原指针被 NULL 覆盖，导致原先分配的内存地址丢失，无法进行释放，从而造成内存泄漏。
+
+#解决方案
+引入临时指针变量 `tmp` 接收 `realloc` 的返回值。仅在 `realloc` 成功（即 `tmp` 非 NULL）时，才将临时指针赋值给原结构体指针；若失败则直接返回错误码 `-ENOMEM`，保持原指针不变，避免内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b206a3f221902199081b1f7d928990f46b7fbca1

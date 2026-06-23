@@ -1,0 +1,20 @@
+#标题
+Bluetooth: hci_sync: hci_discovery_filter_clear 双重释放漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在蓝牙设备发现过程中，若并发调用 `hci_discovery_filter_clear()` 函数，可能导致 `hdev->discovery.uuids` 指针发生双重释放，引发内核崩溃或内存污染。
+
+#主要错误日志
+未知
+
+#问题根因
+`hci_discovery_filter_clear()` 函数在清理发现过滤器时，对 `hdev->discovery.uuids` 的释放操作缺乏并发保护。当多个执行流同时进入该函数时，可能同时读取到非空的 `uuids` 指针并先后执行 kfree 操作，从而导致 Double Free 问题。
+
+#解决方案
+在 `discovery_state` 结构体中引入自旋锁 `lock`，并在 `discovery_init()` 中对其进行初始化。在 `hci_discovery_filter_clear()` 函数中对 `uuids` 的检查与释放操作加锁保护，确保 kfree 操作的原子性与互斥性，从而避免并发导致的双重释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/20c3cd79a71c6231619f45f71d3266ca01a065c6

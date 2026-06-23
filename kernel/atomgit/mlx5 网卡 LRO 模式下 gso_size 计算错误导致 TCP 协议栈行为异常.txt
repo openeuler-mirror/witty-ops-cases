@@ -1,0 +1,22 @@
+#标题
+mlx5 网卡 LRO 模式下 gso_size 计算错误导致 TCP 协议栈行为异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 mlx5 网卡且开启 LRO（Large Receive Offload）功能时，网络协议栈中 `gso_size` 的值计算错误，比实际载荷大，例如观测到 gso_size 为 1450 或 1451，而实际有效载荷仅为 1448 字节。该错误导致以下具体影响：
+1. 在 `tcp_measure_rcv_mss()` 函数中，由于计算的长度（如 1450）与接收 MSS（rcv_mss，通常为 1448）不匹配，导致每次收到 LRO 数据包时都会重新计算 scaling_ratio。
+2. 在 `tcp_gro_receive()` 函数中，错误的 gso_size 会干扰刷新决策，可能导致 GRO（Generic Receive Offload）合并效果变差，系统中 GRO 处理的数据包数量减少。
+
+#主要错误日志
+未知
+
+#问题根因
+在 mlx5 驱动的 LRO 处理路径中，设置 `gso_size` 时直接使用了 `cqe_bcnt` 除以 `lro_num_seg`。`cqe_bcnt` 代表整个帧的大小（包含 Ethernet、IP、TCP 头部），而网络协议栈期望 `gso_size` 仅为载荷长度。由于未从 `cqe_bcnt` 中扣除协议头长度，导致计算出的 `gso_size` 包含了头部大小，数值偏大。
+
+#解决方案
+修改 `mlx5e_lro_update_hdr` 函数，使其返回计算出的协议头长度。在设置 `skb_shinfo(skb)->gso_size` 时，先从 `cqe_bcnt` 中减去协议头长度，再除以 `lro_num_seg`，从而得到正确的载荷分段大小。具体代码变更为：`skb_shinfo(skb)->gso_size = DIV_ROUND_UP(cqe_bcnt - hdrlen, lro_num_seg);`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/545853049c81a6702044e3c35d3006ad175c8b99

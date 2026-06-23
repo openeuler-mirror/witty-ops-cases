@@ -1,0 +1,23 @@
+#标题
+ksmbd: __smb2_lease_break_noti 中的 use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 ksmbd 连接断开时，如果 ksmbd 服务线程终止但连接结构体 `conn` 仍被引用，此时 `conn->tcp_transport` 已被释放。若此时异步执行 `__smb2_lease_break_noti` 并调用 `ksmbd_conn_write`，将访问已释放的 `conn->ksmbd_transport` 指针，导致内核发生 use-after-free 错误，可能引发内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根源在于 `conn->tcp_transport` 的生命周期管理不当。在原有逻辑中，`free_transport` 函数先释放了 `tcp_transport`，随后才调用 `ksmbd_conn_free`。如果 `ksmbd_conn_free` 因为连接引用计数未归零而未立即释放连接结构体，此时连接结构体依然存在，但其内部的 `transport` 指针已指向被释放的内存。当后续异步的租约中断通知（`__smb2_lease_break_noti`）尝试通过该连接写入数据时，便会访问这块已释放的内存，触发 use-after-free。
+
+#解决方案
+将 `tcp_transport` 的释放操作移动到 `ksmbd_conn_free` 函数内部执行。具体修改如下：
+1. 在 `ksmbd_conn_free` 中，当连接引用计数减为 0（即连接真正被销毁）时，才调用 `ksmbd_free_transport(conn->transport)` 释放传输层对象。
+2. 新增 `ksmbd_free_transport` 函数接口，封装了 socket 释放、iov 释放以及 transport 结构体内存释放的逻辑。
+3. 移除旧的 `free_transport` 函数中对 transport 内存释放的直接调用，确保 transport 的生命周期覆盖连接的整个生命周期，直至连接结构体最终销毁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/87c0e222c7e3f8d9903cfcd71c8488c741a3169d

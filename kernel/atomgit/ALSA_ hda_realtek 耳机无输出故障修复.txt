@@ -1,0 +1,25 @@
+#标题
+ALSA: hda/realtek 耳机无输出故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用旧版本的 depop（去噪/爆音）默认处理流程时，系统有一定概率出现耳机无声音输出的问题。
+
+#主要错误日志
+未知
+
+#问题根因
+旧版本的 `alc_default_init` 和 `alc_default_shutup` 函数在处理耳机插针的去噪流程时，其操作顺序和延时设置不正确。具体原因为：
+1. 初始化流程中，先发送静音命令（`AMP_OUT_MUTE`），再发送插针控制命令（`PIN_OUT`），这种顺序在某些情况下会导致耳机输出功能失效。
+2. 流程中的延时时间（`msleep`）设置不合理，旧逻辑包含 2ms、85ms、100ms 的分段延时，而修复后的逻辑统一调整为更合理的 75ms 延时。
+
+#解决方案
+修改 `sound/pci/hda/patch_realtek.c` 中的 `alc_default_init` 和 `alc_default_shutup` 函数，更新默认 depop 流程：
+1. **调整初始化顺序**：在 `alc_default_init` 中，将 `PIN_OUT` 命令置于 `AMP_OUT_UNMUTE` 之前执行，确保先开启插针输出再解除静音。
+2. **调整静音顺序**：在 `alc_default_shutup` 中，先发送 `AMP_OUT_MUTE` 进行静音，再发送 `PIN_WIDGET_CONTROL` 关闭插针。
+3. **优化延时逻辑**：将原有的非固定延时和过长的延时（如 85ms、100ms）统一调整为 75ms，并仅在检测到耳机插入（`hp_pin_sense` 为真）时执行延时和 GPIO 操作序列，使逻辑更加紧凑可靠。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e57534c7226b057a54de51eeecd6269fc935fef8

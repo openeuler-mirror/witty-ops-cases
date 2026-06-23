@@ -1,0 +1,20 @@
+#标题
+batman-adv: bla: 删除 claims 时存在 use-after-free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除 batman-adv 的 backbone claims 过程中，由于引用计数释放顺序错误，可能导致内核发生 use-after-free。该故障可能引发内核 panic、Oops 或内存损坏，具体表现取决于内存被释放后的使用情况。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `batadv_bla_del_backbone_claims()` 中，删除哈希列表条目（`hlist_del_rcu`）之前先调用了 `batadv_claim_put(claim)`。这导致 claim 对象的引用计数可能在该函数最后一次访问该对象之前就降为零并触发 `batadv_claim_release()` 将其释放。随后对列表条目的操作实际上是在访问已被释放的内存，从而引发 use-after-free。
+
+#解决方案
+调整代码执行顺序，先执行 `hlist_del_rcu(&claim->hash_entry)` 将条目从哈希列表中移除，然后再调用 `batadv_claim_put(claim)` 释放引用计数。这确保了在释放 claim 对象之前，已正确完成了对列表条目的操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4c8914a4b60ca670a30e3a02eedad7f20b77b961

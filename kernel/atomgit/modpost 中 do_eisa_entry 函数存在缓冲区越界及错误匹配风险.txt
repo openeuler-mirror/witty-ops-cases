@@ -1,0 +1,23 @@
+#标题
+modpost 中 do_eisa_entry 函数存在缓冲区越界及错误匹配风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在构建内核模块过程中，`do_eisa_entry` 函数可能触发缓冲区越界。
+2. 生成了错误的 `MODULE_ALIAS("*")`，导致模块匹配范围异常扩大，可能被任何不相关子系统的 uevent 事件错误加载。
+
+#主要错误日志
+未知
+
+#问题根因
+`scripts/mod/file2alias.c` 文件中的 `do_eisa_entry` 函数在历史提交中引入了两处错误：
+1. **条件判断错误**：代码将 `if (eisa->sig[0])` 错误地修改为 `if (sig[0])`。由于 `sig` 被定义为 `char (*)[8]` 类型指针，`sig[0]` 实际上是一个 `char [8]` 数组而非字符，其地址永远非 NULL，导致条件判断逻辑失效，原本不应执行的 `else` 分支被执行。
+2. **缓冲区操作隐患**：在错误的 `else` 分支中执行 `strcat(alias, "*")`。此时 `alias` 变量可能未初始化或未正确以 NULL 结尾，`strcat` 的调用可能导致缓冲区越界。即使 `alias` 恰好被零填充，该逻辑也会生成匹配任意设备的通配符别名。
+
+#解决方案
+删除 `do_eisa_entry` 函数中错误的条件判断及 `else` 分支代码。直接无条件执行 `sprintf(alias, EISA_DEVICE_MODALIAS_FMT "*", *sig);`，从而修复逻辑错误并消除缓冲区越界风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8ff05a5c16af76aaef734e7526705b03b98ac714

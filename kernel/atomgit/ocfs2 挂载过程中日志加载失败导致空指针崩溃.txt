@@ -1,0 +1,20 @@
+#标题
+ocfs2 挂载过程中日志加载失败导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ocfs2 文件系统挂载过程中，若因日志过短导致 journal_reset() 失败，进而导致 jbd2_journal_load() 加载失败，后续在 ocfs2_journal_shutdown() 清理流程中触发空指针引用，造成内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在挂载过程中，如果 journal_reset() 因为日志过短而失败，会导致 jbd2_journal_load() 失败且 journal->j_sb_buffer 为 NULL。随后 ocfs2_journal_shutdown() 调用链执行：jbd2_journal_flush()->jbd2_cleanup_journal_tail()->__jbd2_update_log_tail()->jbd2_journal_update_sb_log_tail()->lock_buffer(journal->j_sb_buffer)，由于 j_sb_buffer 为 NULL，导致在 lock_buffer 处发生空指针引用错误。
+
+#解决方案
+在 ocfs2_journal_shutdown() 函数中增加对 JBD2_LOADED 标志的检查，确保日志已被正确加载。只有当日志正确加载（设置了 JBD2_LOADED 标志）时，才执行 jbd2_journal_flush 相关操作，从而避免访问空指针。同时，优化代码使用局部变量 journal 替代 osb->journal 以简化逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5d0438b254b5b9a507bf83b38d4f616e75b6b4ab

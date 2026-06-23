@@ -1,0 +1,22 @@
+#标题
+kvaser_usb: URB 内存泄漏导致驱动卸载后内存未释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 Kvaser USB CAN 设备驱动或断开设备连接时，内核内存发生泄漏。由于 URB（USB Request Block）未被正确释放，随着设备的反复插拔或驱动的频繁加载卸载，系统可用内存逐渐减少，可能导致系统性能下降或内存耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `kvaser_usb_read_bulk_callback()` 回调函数中，处理完 URB 后会重新提交以进行下一次传输。根据 USB 核心框架的设计，在调用 complete 回调函数之前，USB 核心会将 URB 从 anchor 链表中移除（unanchor）。
+原代码逻辑仅在 `kvaser_usb_setup_rx_urbs()` 中将 URB 挂载到 `dev->rx_submitted` anchor 上，当 URB 完成回调执行后，它已经脱离了 anchor。虽然 `kvaser_usb_remove_interfaces()` 中调用了 `usb_kill_anchored_urbs()` 来清理，但该函数只能清理仍处于 anchor 链表中的 URB。因此，已完成回调但尚未重新提交或已重新提交的 URB 实际上已经脱离了 anchor 管理，导致 `usb_kill_anchored_urbs()` 无法释放它们，从而造成 URB 内存泄漏。
+
+#解决方案
+在 `kvaser_usb_read_bulk_callback()` 函数中重新提交 URB 之前，先调用 `usb_anchor_urb()` 将其重新挂载到 `dev->rx_submitted` anchor 上。
+同时增加错误处理逻辑：如果 `usb_submit_urb()` 提交失败，立即调用 `usb_unanchor_urb()` 将其从 anchor 移除，确保 URB 状态正确，防止提交失败时的资源泄漏或管理混乱。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a05c3ee2bc6c2e4c9845b36fe0098ec317e1e6df

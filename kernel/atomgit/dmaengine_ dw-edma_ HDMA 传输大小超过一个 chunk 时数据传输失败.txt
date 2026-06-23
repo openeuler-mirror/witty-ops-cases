@@ -1,0 +1,23 @@
+#标题
+dmaengine: dw-edma: HDMA 传输大小超过一个 chunk 时数据传输失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 HDMA 传输数据大小超过一个 chunk 时，数据传输无法正确执行。由于驱动程序在每次处理 chunk 时都重复设置 CYCLE_STATE 和 CYCLE_BIT 位，导致 Consumer 的 Cycle State (CCS) 与 Producer 的 Cycle Bit (CB) 不匹配，进而导致硬件机制判定条件不满足，数据传输中止或异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 "DesignWare Cores PCI Express Controller Databook" 的 "PCS-CCS-CB-TCB" 生产者-消费者同步机制定义：
+1. 寄存器中的 Consumer CYCLE_STATE (CCS) 位只需初始化一次，其值会在下一个 chunk 自动更新为 ~CYCLE_BIT (CB)。
+2. Consumer CYCLE_BIT 位从链表元素中加载并与 CCS 进行比对，仅当 CB = CCS 时才执行数据传输。
+当前代码逻辑在每个 chunk 处理中都设置 consumer (HDMA) 的 CS 和 CB 位为 1，同时在链表中设置 odd chunks 的 producer (software) CB 为 0，even chunks 为 1。这导致 producer CB 与 consumer CS 位不匹配，从而引发故障。相比之下，使用相同机制的 EDMA 仅初始化一次 CS 位，不存在此问题。
+
+#解决方案
+参考 EDMA 的实现逻辑，将 CYCLE_STATE 和 CYCLE_BIT 位的设置操作移动到仅执行一次的初始化分支中（即 `if (first)` 条件块内），确保这两个位仅在通道启动时初始化一次，后续由硬件自动维护状态同步，从而修复不匹配问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7a065a33f6eeaf74f534ff7da51bb8f6df20898a

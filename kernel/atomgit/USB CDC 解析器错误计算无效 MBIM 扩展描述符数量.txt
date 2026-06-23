@@ -1,0 +1,20 @@
+#标题
+USB CDC 解析器错误计算无效 MBIM 扩展描述符数量
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在解析 USB CDC 接口描述符时，如果遇到长度非法的 USB_CDC_MBIM_EXTENDED_TYPE 描述符，解析函数 cdc_parse_cdc_header() 会错误地增加已解析描述符的计数器。这导致最终返回给调用者的描述符计数与实际成功解析并保存的描述符数量不一致，可能导致后续驱动程序逻辑因描述符计数校验失败而出现异常行为或初始化失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cdc_parse_cdc_header()` 函数中处理 `USB_CDC_MBIM_EXTENDED_TYPE` 分支时，代码检测到描述符长度非法（`elength < sizeof(struct usb_cdc_mbim_extended_desc)`）后使用了 `break` 语句。`break` 仅跳出了 `switch` 语句块，并未跳出外层循环逻辑，导致程序继续执行了 `cnt++` 操作。这使得一个本应被丢弃的无效描述符被错误地计入了总数，导致描述符计数不准确。
+
+#解决方案
+修改 `drivers/usb/core/message.c` 文件中的 `cdc_parse_cdc_header()` 函数，将处理无效 MBIM 扩展描述符的 `break` 语句修改为 `goto next_desc;`。该修改强制代码跳过计数器自增操作，直接移动到缓冲区中的下一个描述符，从而确保仅对成功解析的描述符进行计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc42d2fd88e2fcdd2b9967f3f4c6589863944920

@@ -1,0 +1,23 @@
+#标题
+修复 mempool 与 page poisoning 中 kmap_atomic 使用不当导致的潜在内核崩溃问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启内核调试选项（如 CONFIG_DEBUG_SLAB 或 page_poison）的高内存（HIGHMEM）系统环境下，当内存池进行内存毒化或校验操作时，内核可能发生不可预测的异常或崩溃。该问题源于在非原子上下文中使用了不恰当的内存映射接口，破坏了内核对代码执行上下文的约束要求。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mempool.c` 和 `page_poison.c` 中，代码错误地使用了 `kmap_atomic` 接口。虽然 `kmap_atomic` 会禁用抢占，但在某些调试代码路径中，其使用方式不再符合最新的内核 API 规范。对于高内存场景，若不对多页内存池进行逐页映射处理，直接映射整个大块内存区域可能引发问题。此外，较新的内核开发规范推荐在适用场景下使用 `kmap_local_page` 替代 `kmap_atomic`，后者提供了更灵活的映射控制且对上下文要求相对宽松。原代码在高内存配置下直接映射整个 order 级别的内存区域，未考虑跨页映射的边界安全性。
+
+#解决方案
+1. 将 `mm/page_poison.c` 中的 `kmap_atomic` 替换为 `kmap_local_page`，并配套更新 `kunmap_local`，以符合现代内核映射 API 规范。
+2. 修改 `mm/mempool.c` 中的 `check_element` 和 `poison_element` 函数逻辑：
+   - 对于开启了 `CONFIG_HIGHMEM` 的场景，将原有的单次大块映射修改为循环逐页映射（使用 `kmap_local_page`），确保对高内存页的安全访问。
+   - 对于未开启 `CONFIG_HIGHMEM` 的场景，直接使用 `page_address` 获取低端内存地址，避免不必要的映射开销。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca843f8feb4465255c64d7f450aa5c7f0e36a1c4

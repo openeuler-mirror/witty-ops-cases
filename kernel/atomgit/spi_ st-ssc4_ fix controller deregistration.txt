@@ -1,0 +1,23 @@
+#标题
+spi: st-ssc4: fix controller deregistration
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动解绑期间，如果使用 devm_spi_register_controller 注册 SPI 控制器，资源释放顺序存在错误。系统会在移除设备时先禁用时钟，随后才注销 SPI 控制器。这导致控制器在底层硬件资源已不可用的情况下仍处于注册状态，可能引发内核崩溃或不可预测的行为。
+
+#主要错误日志
+[推断] kernel: Failed to register host
+
+#问题根因
+问题源于使用了托管版本的注册函数 devm_spi_register_controller。该机制导致注销操作被推迟到驱动解绑的较晚阶段，使得时钟在控制器注销前就被禁用。正确的流程应确保在关闭底层硬件资源（如时钟）之前，先完成控制器的注销。
+
+#解决方案
+将 SPI 控制器的注册方式从托管注册修改为手动注册，并在移除函数中调整注销顺序。
+1. 将 probe 函数中的 devm_spi_register_controller 替换为 spi_register_controller。
+2. 在 remove 函数中，先调用 spi_unregister_controller 注销控制器，随后再执行 clk_disable_unprepare 禁用时钟。
+3. 在注销过程中增加引用计数操作，确保资源安全释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e0fadf9a4f7dd9bf862cb0f28e5a715efda45558

@@ -1,0 +1,29 @@
+#标题
+stmmac: 零拷贝 XDP_TX 动作导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行零拷贝（zero copy）XDP_TX 动作时触发内核崩溃。系统打印 "Unable to handle kernel paging request" 与 "Internal error: Oops" 并伴随调用栈回溯，最终导致 Kernel Panic。
+
+#主要错误日志
+[  216.122464] Unable to handle kernel paging request at virtual address fffeffff80000000
+[  216.187524] Internal error: Oops: 0000000096000144 [#1]  SMP
+[  216.301694] Call trace:
+[  216.304130]  dcache_clean_poc+0x20/0x38 (P)
+[  216.308308]  __dma_sync_single_for_device+0x1bc/0x1e0
+[  216.313351]  stmmac_xdp_xmit_xdpf+0x354/0x400
+[  216.317701]  __stmmac_xdp_run_prog+0x164/0x368
+[  216.322139]  stmmac_napi_poll_rxtx+0xba8/0xf00
+[  216.326576]  __napi_poll+0x40/0x218
+[  216.408054] Kernel panic - not syncing: Oops: Fatal exception in interrupt
+
+#问题根因
+在进行 XDP_TX 动作时，`stmmac_xdp_xmit_back()` 函数未检查 `xdp_buff` 的内存类型。对于基于 Page Pool 的 `xdp_buff`，转换后的 `xdp_frame` 类型为 `MEM_TYPE_PAGE_POOL`；而对于零拷贝 XSK pool 的 `xdp_buff`，转换后的类型为 `MEM_TYPE_PAGE_ORDER0`。驱动代码原本固定使用 Page Pool 类型的处理方式，导致针对 XSK pool 的内存映射无效，进而引发非法内存访问和崩溃。
+
+#解决方案
+在 `stmmac_xdp_xmit_back()` 函数中增加对 `xdp_buff` 内存类型的判断（检查是否为 `MEM_TYPE_XSK_BUFF_POOL`）。如果是零拷贝 XSK 场景，在调用 `stmmac_xdp_xmit_xdpf()` 时启用 DMA 映射标志，确保正确处理内存映射。同时，新增 `STMMAC_XSK_CONSUMED` 状态处理零拷贝场景下的资源释放逻辑，防止重复释放或错误处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0804537935f68d4bb4fd2238a95ead868511d992

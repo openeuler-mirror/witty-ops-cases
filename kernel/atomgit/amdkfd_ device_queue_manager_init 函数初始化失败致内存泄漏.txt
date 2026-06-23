@@ -1,0 +1,22 @@
+#标题
+amdkfd: device_queue_manager_init 函数初始化失败致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 设备队列管理器初始化过程中，若 `dqm->ops.initialize()` 执行失败，此前由 `allocate_hiq_sdma_mqd()` 分配的 HIQ 和 SDMA MQD 内存未被释放，导致内核内存泄漏。此外，在 `dev->kfd->shared_resources.enable_mes` 不使能的场景下，相关资源也可能未被正确清理。
+
+#主要错误日志
+- WARN: "No hiq sdma mqd trunk to free"（推断：仅在释放时检测到 mqd 指针为空时触发，用于预警）
+
+#问题根因
+在函数 `device_queue_manager_init` 中，错误处理路径不完整。当 `dqm->ops.initialize()` 调用失败时，代码直接跳转到 `out_free` 标签进行清理，但跳过了 `deallocate_hiq_sdma_mqd()` 的调用，导致内存泄漏。同时，原代码中 `deallocate_hiq_sdma_mqd` 函数定义位置靠后，导致在初始化函数的错误处理分支中无法直接调用该函数进行资源释放。
+
+#解决方案
+1. 将 `deallocate_hiq_sdma_mqd` 函数定义上移，确保其在 `device_queue_manager_init` 函数中可见。
+2. 在 `device_queue_manager_init` 函数的错误处理路径中（`dqm->ops.initialize` 失败后），增加对 `deallocate_hiq_sdma_mqd` 的调用，以释放已分配的内存资源。
+3. 增加对 `dev->kfd->shared_resources.enable_mes` 状态的检查，确保在非 MES 模式下正确执行释放逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/332ddb742f4673a22b46acf719c1a1a2b1e51be5

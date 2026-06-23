@@ -1,0 +1,26 @@
+#标题
+SCSI SAS 通配符扫描未遍历多通道导致设备遗漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户对 SAS 设备执行通配符扫描（SCAN_WILD_CARD）操作时，如果主机适配器存在特定的 `user_scan` 回调，系统仅扫描通道 0（Channel 0），忽略了通道 1 到 `max_channel` 的其他通道。这导致连接在非 0 通道上的 SCSI 设备无法被扫描识别到，造成设备遗漏。
+
+#主要错误日志
+未知
+
+#问题根因
+`sas_user_scan()` 函数在处理 `SCAN_WILD_CARD`（通配符扫描）时的逻辑存在缺陷。原代码仅判断 `(channel == SCAN_WILD_CARD || channel == 0)`，这意味着当请求通配符扫描时，代码逻辑实际上只针对通道 0 执行了扫描操作，而没有继续遍历剩余的通道（1 至 `shost->max_channel`），导致多通道环境下的设备扫描不完整。
+
+#解决方案
+重构 `sas_user_scan()` 函数的扫描逻辑：
+1. 新增 `scan_channel_zero()` 辅助函数，专门负责处理通道 0 的扫描逻辑。
+2. 在 `sas_user_scan()` 中增加 `switch` 分支判断：
+   - 若请求通道为 0，直接调用 `scan_channel_zero()`。
+   - 若请求通道为 `SCAN_WILD_CARD`，先调用 `scan_channel_zero()` 扫描通道 0，随后循环调用 `scsi_scan_host_selected()` 扫描通道 1 至 `shost->max_channel`。
+   - 若请求指定其他通道号，直接调用 `scsi_scan_host_selected()` 进行扫描。
+3. 导出 `scsi_scan_host_selected` 符号，以便在 SAS 传输层模块中调用该函数完成多通道扫描。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d19f7f08b5d66a17337d2e67f2d2445b311d6400

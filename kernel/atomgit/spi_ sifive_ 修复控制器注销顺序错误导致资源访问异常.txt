@@ -1,0 +1,25 @@
+#标题
+spi: sifive: 修复控制器注销顺序错误导致资源访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动解绑（unbind）操作过程中，SPI 控制器可能在底层资源（如中断、时钟）被禁用后仍未完全注销。此时若系统中其他部分尝试访问该 SPI 控制器，将引发功能异常或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在移除（remove）流程中，注销顺序存在逻辑错误。原本的实现（或通过 `devm_spi_register_controller` 自动管理）导致在 `spi_unregister_controller` 执行前，就已经禁用了中断等底层资源。这意味着控制器仍在系统中注册，但其依赖的硬件资源已不可用，从而导致潜在的竞态条件或访问违规。此外，原本的 devm 资源释放顺序无法保证在控制器注销前保持资源有效。
+
+#解决方案
+1. 将 SPI 控制器的注册方式从托管版本 `devm_spi_register_controller` 改为手动管理的 `spi_register_controller`，以显式控制注销时机。
+2. 在 `sifive_spi_remove` 函数中，调整资源释放顺序：
+   - 先调用 `spi_controller_get` 增加引用计数。
+   - 立即调用 `spi_unregister_controller` 注销控制器，确保用户空间和子系统不再访问该设备。
+   - 随后再禁用中断（`sifive_spi_write` 写 IE 寄存器）等底层硬件操作。
+   - 最后调用 `spi_controller_put` 释放引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7962f4e5ad4bb2f48da041a324f71ac3791a86ad

@@ -1,0 +1,20 @@
+#标题
+fork过程中PTE批量拷贝导致可靠内存统计计数失衡
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在禁用透明大页（THP）的场景下，进程执行fork操作时，内存可靠性的统计计数器出现计数失衡。具体表现为内核内部的可靠内存计数与实际的RSS统计不一致，可能导致系统对可靠内存使用量的监控失效或误判。
+
+#主要错误日志
+未知
+
+#问题根因
+在Commit 1741ac635805 ("mm/memory: optimize fork() with PTE-mapped THP") 中引入了PTE批量处理优化，该优化处理了映射同一大型folio中连续页面的连续PTEs。然而，该补丁在进行批量rss统计更新时，遗漏了对内存可靠性计数器的同步更新。这导致在进行fork操作且禁用THP时，内存可靠性计数器未能随rss的增加而更新，从而导致计数器失衡。
+
+#解决方案
+在`mm/memory.c`的`copy_present_ptes`函数中，针对批量处理PTEs的代码路径，补充调用`add_reliable_folio_counter`函数以更新可靠内存计数；同时调整单页处理逻辑中的计数器更新位置，确保所有PTE拷贝路径（包括`copy_present_page`）均能正确更新内存可靠性统计。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/03daa8e6c8fb7a42736d0af0fb85704f3e74a68d

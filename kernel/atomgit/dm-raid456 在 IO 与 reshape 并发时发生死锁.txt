@@ -1,0 +1,38 @@
+#标题
+dm-raid456 在 IO 与 reshape 并发时发生死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 dm-raid456 场景下，当正在进行 reshape（重塑）操作时，如果遇到数组为只读、设置了 MD_RECOVERY_WAIT 或 MD_RECOVERY_FROZEN 标志的情况，reshape 将无法继续推进。此时，跨越 reshape 位置的 IO 请求会无限期等待 reshape 进度，导致 IO 挂起（死锁）。
+
+系统表现为相关进程处于不可中断睡眠状态（D状态），典型的复现场景为运行 dm-raid 测试脚本 `shell/lvconvert-raid-reshape.sh` 时发生挂起。
+
+#主要错误日志
+- 进程堆栈打印显示进程阻塞在 `wait_woken`：
+  ```
+  [<0>] wait_woken+0x7d/0x90
+  [<0>] raid5_make_request+0x929/0x1d70 [raid456]
+  [<0>] md_handle_request+0xc2/0x3b0 [md_mod]
+  [<0>] raid_map+0x2c/0x50 [dm_raid]
+  ...
+  ```
+- 内核日志打印（来自 diff）：
+  ```
+  dm-raid456: io across reshape position while reshape can't make progress
+  ```
+
+#问题根因
+对于 raid456，如果 reshape 正在进行中，跨越 reshape 位置的 IO 需要等待 reshape 完成推进。但在 dm-raid 特定场景下（如只读数组、设置了 MD_RECOVERY_WAIT/FROZEN），reshape 永远无法继续推进，导致 IO 死锁。
+
+此前提交 c467e97f079f 修复了 IO 不等待 reshape 的问题，却意外暴露并引发了此死锁问题。核心原因是 dm-raid 的暂停逻辑与 md/raid 的同步线程机制交互不当，dm_suspend 等待 IO 完成，而 IO 等待 reshape 推进，但 reshape 因上述标志位被阻塞无法推进。
+
+#解决方案
+1. 增加 `STRIPE_WAIT_RESHAPE` 返回状态，在 `raid5_make_request` 中检测到 reshape 被中断且 IO 需等待 reshape 时，不再死等，而是返回错误状态并打印错误日志。
+2. 修改 `md_handle_request` 及其调用逻辑，使其能够感知并处理这种“需等待 reshape 但无法推进”的情况，返回 `false` 以触发上层重排队列。
+3. 在 `dm-raid` 层新增 `RT_FLAG_RS_FROZEN` 标志，并在 `raid_presuspend` 中设置该标志，防止在挂起过程中通过 `raid_message` 改变同步线程状态；同时在 `raid_map` 中检查 `md_handle_request` 的返回值，若返回失败则将 IO 重新入队（`DM_MAPIO_REQUEUE`）。
+4. 引入 `prepare_suspend` 回调函数，在挂起前唤醒等待队列，打破死锁条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cd2802e28e5cf6fb62bbc8d57dcb043c22738ea9

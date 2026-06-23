@@ -1,0 +1,20 @@
+#标题
+RISC-V uprobes 缺失指令缓存同步导致执行异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V 架构下使用 uprobes 功能时，由于构建 XOL（eXecuted Out of Line）缓冲区后缺少指令缓存刷新操作，可能导致 CPU 执行到旧的或未同步的指令内容，进而引发 uprobes 处理逻辑异常或不可预知的程序行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `arch_uprobe_copy_ixol` 函数中，将 uprobes 指令写入 XOL 缓冲区后，代码仅调用了 `flush_dcache_page` 进行数据缓存刷新，但遗漏了 RISC-V 架构必需的指令缓存同步操作（fence.i）。这导致指令缓存与数据缓存不一致，CPU 无法取到最新注入的指令，从而触发该 CVE 漏洞。
+
+#解决方案
+移除原有的 `flush_dcache_page(page)` 调用及相关注释，改为调用 `flush_icache_range(start, start + len)`，确保在写入指令后立即刷新指令缓存范围，保证指令流的可见性与正确执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2d9b46a63fd28085ee74382d85e09f105879981e

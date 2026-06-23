@@ -1,0 +1,20 @@
+#标题
+RDMA/hns: list_del_init_careful() 与 list_empty_careful() 未成对使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HNS RDMA 驱动的 DCA（Dynamic Context Attachment）内存老化处理流程中，代码使用了 `list_del_init_careful()` 函数来删除并初始化链表节点，但在检查链表是否为空时使用了非 careful 版本的 `list_empty()`。这种不匹配的使用方式破坏了链表操作的同步语义，可能在并发场景下导致链表状态判断不准确，进而引发数据处理逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`list_del_init_careful()` 被设计为与 `list_empty_careful()` 配对使用，以保障在并发环境下的链表操作安全性。在 `process_aging_dca_mem` 函数中，遍历处理 `aging_proc_list` 时，使用 `list_del_init_careful()` 删除节点意味着可能存在并发修改的风险，需要相应的 careful 检查机制。然而代码中判断循环终止条件时仅使用了 `list_empty()`，未使用 `list_empty_careful()`，导致函数调用未成对出现，破坏了预期的并发保护逻辑。
+
+#解决方案
+修改 `process_aging_dca_mem` 函数中的循环判断条件，将 `list_empty(&ctx->aging_proc_list)` 替换为 `list_empty_careful(&ctx->aging_proc_list)`，确保链表判空操作与删除操作 `list_del_init_careful()` 正确配对，从而修复并发场景下的潜在问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/053bf134f23344c38a511eddeb1ff5c3fb098952

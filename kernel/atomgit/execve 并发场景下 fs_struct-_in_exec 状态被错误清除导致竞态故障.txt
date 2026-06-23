@@ -1,0 +1,27 @@
+#标题
+execve 并发场景下 fs_struct->in_exec 状态被错误清除导致竞态故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多线程并发执行 execve 的场景下，若其中一个线程的 execve 调用失败，可能与另一个正在执行的线程发生竞态，导致 `fs_struct->in_exec` 标志位被错误地清零。这会破坏内核对不安全 exec 操作的检查逻辑，可能导致后续本应被拒绝的 `clone(CLONE_FS)` 操作被错误允许，引发未定义的行为或安全隐患。该问题由 syzbot 发现。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `check_unsafe_exec()` 中设置 `fs->in_exec = 1` 是在 `cred_guard_mutex` 保护的临界区内进行的，但 `execve()` 执行路径中清除 `fs->in_exec` 的操作是无锁的。当 execve 执行失败时，存在如下竞态窗口：
+1. 线程 T1 设置 `fs->in_exec = 1`，随后执行失败，释放 `cred_guard_mutex`。
+2. 线程 T2 获取锁并设置 `fs->in_exec = 1`。
+3. 线程 T1 在无锁状态下继续执行清理逻辑，将 `fs->in_exec` 清零。
+4. 线程 T2 继续执行时，发现 `fs->in_exec` 已经是 0，破坏了状态一致性。
+
+#解决方案
+修改 `fs/exec.c` 中的逻辑，确保 `fs->in_exec` 的清理操作也在 `cred_guard_mutex` 临界区内执行：
+1. 在 `begin_new_exec()` 中，当 `de_thread()` 成功后立即清除 `in_exec` 标志（此时仍持有锁）。
+2. 在 `free_bprm()` 的错误处理路径中，增加清除 `in_exec` 标志的逻辑，防止 exec 失败时状态残留。
+3. 移除 `bprm_execve()` 成功或失败路径中原有的无锁清除 `in_exec` 的代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8c6fb25ba6683395928231a615a2302f3368c8eb

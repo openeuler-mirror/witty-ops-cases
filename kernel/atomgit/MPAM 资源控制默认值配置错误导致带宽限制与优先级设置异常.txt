@@ -1,0 +1,24 @@
+#标题
+MPAM 资源控制默认值配置错误导致带宽限制与优先级设置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 MPAM 架构下，系统初始化或资源控制组（resctrl）配置过程中，MB（Memory Bandwidth）hardlimit 功能未被正确开启，导致带宽限制未生效（默认关闭了限制）。同时，优先级控制使用了错误的默认值，可能导致资源隔离策略与预期不符，影响系统性能隔离效果。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mpam_reprogram_ris_partid` 函数中，代码逻辑存在两处缺陷：
+1. MB hardlimit 默认值处理不当：当配置中未显式指定 `mpam_feat_max_limit` 时，代码逻辑默认将 `limit` 变量置为 `false`，导致 MBW_MAX 寄存器未被正确配置，带宽硬限制功能默认关闭。
+2. 优先级默认值计算错误：原先的逻辑仅简单依据 `mpam_feat_intpri_part_0_low` 特征位生成默认优先级，未针对 Memory 和 Cache（L2/L3）等不同资源类型获取正确的 resctrl 架构默认控制值。
+
+#解决方案
+1. 强制开启 MB hardlimit：修改逻辑，当配置未指定 max_limit 时，强制将 `limit` 默认值设为 `true`，确保 MBW_MAX 寄存器被正确写入，带宽限制功能默认生效。
+2. 引入默认值获取函数：新增 `mpam_intpri_default_val` 函数，根据 MPAM Class 类型（MEMORY 或 CACHE）及层级（L2/L3），从 resctrl 架构中获取对应的 `default_ctrl` 值。
+3. 修正优先级赋值：在配置优先级时，调用新函数获取正确的默认优先级值替代原有的通用计算逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4cfaeea999fc3b5ab9b1520953b19692e15a2699

@@ -1,0 +1,20 @@
+#标题
+scsi: sd: device_add 失败时导致的 gendisk 引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SCSI 磁盘探测过程中，若 `device_add(&sdkp->disk_dev)` 函数调用失败，内核会发生内存泄漏。具体表现为 `gendisk` 结构体的引用计数未被正确释放，导致相关内核对象无法被回收。虽然此故障可能不会立即触发 panic 或 oops，但会造成内核内存资源的持续占用。
+
+#主要错误日志
+未知
+
+#问题根因
+当 `device_add(&sdkp->disk_dev)` 失败时，错误处理路径调用 `put_device(&sdkp->disk_dev)` 会触发 `scsi_disk_release()` 函数执行，该函数会释放 `scsi_disk` 结构体。然而，此时 `gendisk` 结构体（变量 `gd`）仍持有引用计数，现有的错误处理逻辑未调用 `put_disk(gd)` 来释放该引用，从而导致 `gendisk` 引用计数泄漏。这与 `sd_probe()` 中 `device_add_disk()` 的错误处理路径不一致。
+
+#解决方案
+在 `device_add(&sdkp->disk_dev)` 失败的错误处理分支中，在调用 `put_device(&sdkp->disk_dev)` 之后，增加调用 `put_disk(gd)`。这镜像了对齐了 `sd_probe()` 中 `device_add_disk()` 错误路径的清理逻辑，确保 `gendisk` 的引用计数被正确释放，避免内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0b0b34066ef213bc230d3dda04411ea070db0723

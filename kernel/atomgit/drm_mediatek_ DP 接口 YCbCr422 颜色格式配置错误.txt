@@ -1,0 +1,23 @@
+#标题
+drm/mediatek: DP 接口 YCbCr422 颜色格式配置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 DisplayPort 接口时，若将颜色格式设置为 YCbCr422，显示输出异常。这是因为驱动在配置硬件寄存器时写入了错误的像素编码格式值，导致显示端无法正确解析视频流。
+
+#主要错误日志
+drm_warn(mtk_dp->drm_dev, "Unsupported color format: %d\n", color_format);
+
+#问题根因
+在函数 `mtk_dp_set_color_format` 中，设置 MISC0 寄存器的像素编码格式时逻辑错误。原代码直接将 `color_format` 左移后写入，未根据 DP spec 1.2a 表 2-96 定义区分 RGB 与 YCbCr422 格式。对于 YCbCr422 格式，应写入特定值 `0x1 << 1`，而原逻辑未进行此区分，导致寄存器配置值不符合规范。
+
+#解决方案
+修改 `mtk_dp_set_color_format` 函数，使用 switch-case 语句区分不同的颜色格式：
+1. 对于 `DP_PIXELFORMAT_YUV422`，将 MISC0 寄存器值设为 `DP_COLOR_FORMAT_YCbCr422`。
+2. 对于 `DP_PIXELFORMAT_RGB`，将 MISC0 寄存器值设为 `DP_COLOR_FORMAT_RGB`。
+3. 将 MISC0 寄存器的更新操作移至 switch 判断之后执行，确保写入正确的格式值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9565f4ec4c9e9a0d1d611f22e2355e824c68d3fc

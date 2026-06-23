@@ -1,0 +1,33 @@
+#标题
+urma: 修复 tpid 复用启动链路错误及引用计数问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 URMA (User space Remote Memory Access) 模块进行 tpid (Transport ID) 复用建立连接时，出现链路启动错误。同时，由于 `ubcore_tpid_reuse` 结构体的引用计数与锁操作存在不对称（如重复释放、计数管理不当），可能导致内核内存泄漏、引用计数溢出或空指针访问等不可预期的异常行为。
+
+#主要错误日志
+- "Connect service, Unrecognized msg type %u\n"
+- "Failed to send msg"
+- "Failed to send is_ref req, ret = %d.\n"
+- "Failed to active tp, ret: %d.\n" (推断：旧逻辑中可能打印)
+- "Failed to deactivate tp, ret: %d.\n" (推断：旧逻辑中可能打印)
+- "invalid cr.user_ctx. sge addr should not < seg addr\n"
+
+#问题根因
+1. **链路建立逻辑缺失**：在 tpid 复用场景下，当 `use_cnt` 为 0 且 `is_ref` 为 true 时，原有逻辑缺少向对端发送 `ISREF_REQ` 消息的流程，导致链路状态同步失败。
+2. **引用计数与锁不对称**：`ubcore_disconnect_vtp_with_tpid_reuse` 函数中对 `use_cnt` 的判断与释放逻辑存在竞态风险，且未正确处理 `tpid_reuse` 的生命周期。
+3. **状态与类型定义不一致**：Hash Table 类型枚举 `UBCORE_HT_TP_ID_STATE` 与实际使用的 `UBCORE_HT_TPID_STATE` 不匹配，导致查找失败。
+4. **内存管理缺陷**：部分函数（如 `ubcore_query_select_tpid_list`）中申请的 `tp_list` 内存未在错误路径中释放，导致内存泄漏。
+5. **列表操作风险**：`ubmad_check_recv_msn_duplicate` 函数中使用 `list_first_entry` 而未检查链表是否为空，在极端情况下可能导致崩溃。
+
+#解决方案
+1. **重构链路建立逻辑**：新增 `UBCORE_NET_ISREF_REQ` 消息类型。在 `ubcore_reuse_tpid` 中，当检测到 `use_cnt == 0 && is_ref == true` 时，调用新增的 `send_is_ref_req` 函数发送请求，确保链路正确启动。
+2. **修正引用计数与锁机制**：移除不安全的 `ubcore_disconnect_vtp_with_tpid_reuse` 函数，改用 `ubcore_disconnect_tpid_with_tpid_reuse`，并修正 `ubcore_free_tpid_reuse` 的调用时机。在 `ubcore_reuse_tpid` 中增加失败路径下的 `kref_put` 处理。
+3. **修复类型定义错误**：将 `UBCORE_HT_TP_ID_STATE` 统一修正为 `UBCORE_HT_TPID_STATE`，确保哈希表操作正确。
+4. **修复内存泄漏**：在 `ubcore_query_select_tpid_list` 的错误处理路径中增加 `kfree(tp_list)`。
+5. **防御性编程增强**：将 `list_first_entry` 替换为 `list_first_entry_or_null`，防止空链表访问；增加 `msg_create_conn_result` 枚举成员 `ESTABLISHED_TP_CHANNEL` 完善状态机。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/59333a4f1807985a9d4f3fcab57b96e3809d0ec8

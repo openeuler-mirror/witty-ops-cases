@@ -1,0 +1,22 @@
+#标题
+x86/sev: 修复内存加密状态变更中的符号扩展导致地址计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CSV3 或 SEV-SNP 虚拟机环境中，调用 `set_memory_encrypted()` 或 `set_memory_decrypted()` 接口时，若传入参数 `numpages` 大于或等于 0x80000（即 2^19 页），会导致计算出的内存大小发生错误。预期计算结果应为 0x80000000，但实际变成了 0xffffffff80000000，导致内存加密/解密超调用参数异常，进而引发功能失效或内核行为不可预知的问题。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `amd_enc_status_change_finish()` 中，变量 `npages` 为 `int` 类型。在进行左移操作 `npages << PAGE_SHIFT` 计算字节数时，由于 `npages` 是有符号整型，当其值较大时（如 0x80000）：
+1. 左移操作会导致符号位溢出，产生未定义行为。
+2. 结果在隐式提升为 `unsigned long` 类型传递给 `enc_dec_hypercall()` 时发生符号扩展，导致高位被填充为 1，生成错误的地址/大小值。
+
+#解决方案
+在 `enc_dec_hypercall` 调用处，将 `npages` 显式强制转换为 `unsigned long` 类型后再进行左移操作。修改后的代码为：`enc_dec_hypercall(vaddr, (unsigned long)npages << PAGE_SHIFT, enc);`。这确保了移位操作使用无符号运算，避免了符号扩展问题，从而正确计算大页数情况下的内存大小。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/61b5e7fb9c9d3d33aa2f12711ce6f6913c408ada

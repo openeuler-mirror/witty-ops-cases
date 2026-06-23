@@ -1,0 +1,20 @@
+#标题
+sw64: fix nmi_(enter/exit) error in CORE3B
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构的 CORE3B 处理器上，由于硬件差异导致 `regs->cause` 字段不存在或状态异常。如果在某些随机场景下该字段值恰好为 -2，内核会错误地判定当前为 NMI（不可屏蔽中断）上下文，从而错误地调用 `nmi_enter()` 或 `nmi_exit()`，导致中断处理流程异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在提交 dead694a327a ("sw64: add NMI support") 中引入了 NMI 支持逻辑，但未正确区分处理器型号。CORE3B 处理器不具备 `regs->cause` 字段的相关特性，原代码逻辑仅依据 `regs->cause` 是否为 -2 来判断是否进入 NMI 流程。因此，当随机情况下该值为 -2 时，会触发错误的判断逻辑。
+
+#解决方案
+修改 `drivers/irqchip/irq-sunway-cpu.c` 中的中断入口与出口逻辑，增加对 `CONFIG_SUBARCH_C4` 配置选项的检查。将判断条件从单纯的 `regs->cause != -2` 修改为 `regs->cause == -2 && IS_ENABLED(CONFIG_SUBARCH_C4)`。这确保了仅在 C4 子架构下且 `regs->cause` 为 -2 时才进入 NMI 处理流程，其他情况均进入标准 IRQ 处理流程，从而修复了 CORE3B 上的误判问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d008f45ba317cc33dea94d62fef01543adc4f92a

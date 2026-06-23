@@ -1,0 +1,25 @@
+#标题
+调度器 EEVDF 在 NO_RUN_TO_PARITY 场景下丢失时间片保护导致调度异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在禁用 RUN_TO_PARITY 调度特性（NO_RUN_TO_PARITY）的场景下，EEVDF 调度器未能为当前运行的任务分配预期的最小运行时间片。这导致任务在获得 CPU 后，可能因为缺少时间片保护机制而被立即抢占或频繁调度切换，破坏了 EEVDF 调度模型对时间量子的预期，可能引起系统调度行为异常、特定负载下性能下降或调度抖动。
+
+#主要错误日志
+未知
+
+#问题根因
+EEVDF 调度模型期望调度器为选中的实体分配一个时间量子，并在该量子结束后再选择下一个实体。在内核代码实现中，`set_protect_slice` 函数负责设置实体受保护的运行时间边界。
+根因在于 `set_protect_slice` 函数内的逻辑错误：它仅在 `sched_feat(RUN_TO_PARITY)` 启用时才设置保护边界，完全忽略了 `NO_RUN_TO_PARITY` 的情况。
+当 `RUN_TO_PARITY` 被禁用时，代码逻辑跳过了保护边界的设置，导致 `protect_slice` 检查失效，使得调度器无法确保任务获得最小运行时间，违背了 EEVDF 的调度原则。
+
+#解决方案
+修改 `kernel/sched/fair.c` 中的 `set_protect_slice` 函数逻辑，移除对 `RUN_TO_PARITY` 特性的依赖：
+1. 不再仅在 RUN_TO_PARITY 启用时设置保护，而是确保在任何情况下都设置一个受保护的 vruntime 边界。
+2. 当 `RUN_TO_PARITY` 被禁用时，计算一个基于 `normalized_sysctl_sched_base_slice` 的最小时间片，并将其转换为 vruntime 保护边界。
+3. 将保护边界值存储在 `sched_entity` 结构体中新定义的 `vprot` 字段中（原 `vlag` 字段的 union 复用），以此确保无论特性开关状态如何，任务都能获得预期的最小运行时间量子保护。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/deeffbfffb43ea66f1b1187dbbf49cb6e33597d3

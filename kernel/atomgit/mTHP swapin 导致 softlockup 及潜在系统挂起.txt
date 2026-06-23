@@ -1,0 +1,29 @@
+#标题
+mTHP swapin 导致 softlockup 及潜在系统挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 mTHP（multi-size THP）swapin 操作时，系统触发 softlockup。此外，在并发场景下，因 swap entry 处理逻辑冲突可能导致系统挂起，且存在 redundant Xarray lookup 影响性能的问题。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **Softlockup**：在 mTHP swapin 流程中，处理逻辑存在死循环或长时间持锁等待，导致 CPU 无法调度，触发 softlockup。
+2. **潜在挂起**：`shmem_confirm_swap` 函数仅检查了 swap entry 是否存在，未正确处理 entry 被分割的情况，导致在并发场景下对 swap entry 的确认与处理不一致。
+3. **逻辑缺陷**：swapin 路径中存在多余的 Xarray 查找操作；对于 `SWP_SYNCHRONOUS_IO` 类型的设备错误使用了 swap cache 和 readahead 机制；大尺寸 swap entry 的索引计算与分割处理逻辑不完善。
+
+#解决方案
+通过重构 mTHP swapin 路径修复上述问题：
+1. **修复 softlockup**：优化 swapin 流程中的循环与锁逻辑，防止死循环或长时间阻塞。
+2. **改进挂起问题**：修改 `shmem_confirm_swap` 函数，使其不仅确认 entry 存在，还返回 entry 的 order，并正确处理 entry 被分割的中间索引情况。
+3. **优化与重构**：
+   - 移除 swapin 路径中冗余的 Xarray 查找。
+   - 对 `SWP_SYNCHRONOUS_IO` 设备禁用 swap cache 和 readahead，直接进行读取。
+   - 简化 swapin 路径的结果处理，并重新计算大尺寸 swap entry 的索引。
+   - 修正 major fault 的统计计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/edbeb87efa4ffb023548ae0ad3f2d1777b4943f4

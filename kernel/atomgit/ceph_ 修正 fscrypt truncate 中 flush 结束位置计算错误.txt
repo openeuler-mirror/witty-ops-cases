@@ -1,0 +1,20 @@
+#标题
+ceph: 修正 fscrypt truncate 中 flush 结束位置计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Ceph 文件系统使用 fscrypt（文件系统加密）功能进行 truncate（截断）操作时，由于计算需要刷新的内存范围结束位置（lend）时使用了错误的宏定义（块偏移移位值而非块大小），导致刷新范围计算不正确。这可能造成脏页回写范围错误，进而引发数据不一致或文件内容损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `fill_fscrypt_truncate()` 在计算 flush 结束位置 `lend` 时，使用了 `CEPH_FSCRYPT_BLOCK_SHIFT`（块大小的位移数，通常用于计算 2 的幂次方），而不是 `CEPH_FSCRYPT_BLOCK_SIZE`（实际的块大小）。正确的计算逻辑应为起始位置加上块大小减一，以覆盖完整的加密块范围。
+
+#解决方案
+将 `fill_fscrypt_truncate()` 函数中计算 `lend` 的代码从 `orig_pos + CEPH_FSCRYPT_BLOCK_SHIFT - 1` 修改为 `orig_pos + CEPH_FSCRYPT_BLOCK_SIZE - 1`，确保 flush 操作覆盖正确的文件范围。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c13282374ddf5e4e6164b0ba7081caf87993464

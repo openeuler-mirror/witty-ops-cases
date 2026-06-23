@@ -1,0 +1,35 @@
+#标题
+tools: Fix bitfield dependency failure
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译 stable 内核 v6.6.120 时，perf 工具构建失败。编译过程中在处理 `util/arm-spe-decoder/arm-spe-pkt-decoder.c` 文件时，头文件 `tools/include/linux/bitfield.h` 报错，提示 `cpu_to_le16` 函数隐式声明错误。
+
+#主要错误日志
+```
+In file included from util/arm-spe-decoder/arm-spe-pkt-decoder.h:10,
+                 from util/arm-spe-decoder/arm-spe-pkt-decoder.c:14:
+/local/git/linux-stable-rc/tools/include/linux/bitfield.h: In function ‘le16_encode_bits’:
+/local/git/linux-stable-rc/tools/include/linux/bitfield.h:166:31: error: implicit declaration of
+function ‘cpu_to_le16’; did you mean ‘htole16’? [-Werror=implicit-function-declaration]
+  ____MAKE_OP(le##size,u##size,cpu_to_le##size,le##size##_to_cpu) \
+                               ^~~~~~~~~
+/local/git/linux-stable-rc/tools/include/linux/bitfield.h:149:9: note: in definition of macro
+‘____MAKE_OP’
+  return to((v & field_mask(field)) * field_multiplier(field)); \
+         ^~
+/local/git/linux-stable-rc/tools/include/linux/bitfield.h:170:1: note: in expansion of macro
+‘__MAKE_OP’
+ __MAKE_OP(16)
+```
+
+#问题根因
+`tools/include/linux/bitfield.h` 文件缺少必要的头文件依赖。该头文件中的 `le16_encode_bits` 等宏定义使用了 `cpu_to_le16` 等字节序转换函数，但未包含定义这些函数的 `linux/kernel.h` 头文件。虽然主线内核因相关 C 文件已包含 `kernel.h` 而未暴露此问题，但在部分 stable 版本（如 v6.6.120）的编译上下文中触发了构建失败。
+
+#解决方案
+在 `tools/include/linux/bitfield.h` 文件中添加 `#include <linux/kernel.h>`，以提供 `cpu_to_le16` 等函数的定义，确保头文件依赖的完整性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba8c0058fedb55360a92fac98a067122b3340797

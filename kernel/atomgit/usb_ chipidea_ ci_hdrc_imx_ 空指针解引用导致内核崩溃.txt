@@ -1,0 +1,24 @@
+#标题
+usb: chipidea: ci_hdrc_imx: 空指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i.MX 平台 USB Chipidea 驱动加载或卸载过程中，若 `usbmisc_data` 未初始化（为 NULL），驱动程序在错误处理路径或移除路径下解引用空指针，导致内核发生 NULL Pointer Dereference 异常（如 Oops 或 Panic）。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address 00000000
+...
+Call trace:
+ ci_hdrc_imx_probe+0x.../0x...
+ ci_hdrc_imx_remove+0x.../0x...
+
+#问题根因
+在驱动代码的 `ci_hdrc_imx_probe` 函数错误处理标签 `err_put` 下，以及 `ci_hdrc_imx_remove` 函数中，代码逻辑无条件执行 `put_device(data->usbmisc_data->dev)` 操作。由于部分硬件配置或初始化失败场景下 `data->usbmisc_data` 可能为 NULL，此时直接访问其成员 `dev` 会引发空指针解引用错误。
+
+#解决方案
+在调用 `put_device` 前增加 `data->usbmisc_data` 的非空检查。修改后的代码逻辑确保仅当 `usbmisc_data` 指针有效时才执行设备引用计数释放操作，从而避免空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01a1edde1feafd5cb1bee725a64c851f8451c6e8

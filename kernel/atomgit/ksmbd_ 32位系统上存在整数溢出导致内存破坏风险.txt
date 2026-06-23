@@ -1,0 +1,20 @@
+#标题
+ksmbd: 32位系统上存在整数溢出导致内存破坏风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在32位系统上，ksmbd 模块在处理特定的 IPC 消息分配时，加法运算可能发生整数溢出。该溢出会导致分配的内存缓冲区大小小于预期，后续对该内存进行写入操作时将引发内存越界写入，进而造成内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在32位系统上，`ipc_msg_alloc()` 函数内的加法运算（如 `sizeof(struct ksmbd_spnego_authen_request) + blob_len + 1`）可能发生回绕。如果传入的 `blob_len` 或 `payload_sz` 参数过大，加法结果会发生整数溢出，导致分配的内存空间远小于实际需要写入的数据大小，从而引发内存破坏。
+
+#解决方案
+在调用 `ipc_msg_alloc()` 之前，增加对输入参数（`blob_len` 或 `payload_sz`）的边界检查。若参数超过 `KSMBD_IPC_MAX_PAYLOAD` 限制，则直接返回 NULL，避免因数值过大引发的整数溢出和后续内存破坏。受影响的函数包括 `ksmbd_ipc_spnego_authen_request`、`ksmbd_rpc_write` 和 `ksmbd_rpc_ioctl`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/26abeb71f4b6233bf96c844cc4a0cd940c42d0df

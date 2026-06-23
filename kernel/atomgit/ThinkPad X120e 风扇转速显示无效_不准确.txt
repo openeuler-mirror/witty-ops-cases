@@ -1,0 +1,24 @@
+#标题
+ThinkPad X120e 风扇转速显示无效/不准确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ThinkPad X120e 机型上，读取到的风扇转速数值无效或不准确，无法反映真实的风扇每分钟转数（RPM）。系统显示的风扇速度与实际物理状态不符，可能导致用户或监控工具对散热状态的误判。
+
+#主要错误日志
+未知
+
+#问题根因
+ThinkPad X120e 的 EC（Embedded Controller）固件报告的风扇速度单位是“Ticks Per Revolution”（每转脉冲数/ Tick），而非标准的 RPM。内核驱动未针对该机型的特殊硬件行为进行处理，直接将寄存器值当作 RPM 返回，导致数据计算错误。根据硬件规格，该数值需基于 22.5 kHz 时钟频率进行重新计算才能得到正确的 RPM 值。
+
+#解决方案
+在驱动程序 `thinkpad_acpi.c` 中增加对 ThinkPad X120e 的quirk（特性）标记 `TPACPI_FAN_TPR`。
+1. 定义宏 `FAN_CLOCK_TPM` 表示 22.5 kHz 时钟对应的每分钟 Tick 数（22500 * 60）。
+2. 新增全局变量 `fan_speed_in_tpr` 用于标识当前机型是否需要转换单位。
+3. 在 `fan_quirk_table` 中为 ThinkPad X120e（机型代码 '8', 'F'）添加 `TPACPI_FAN_TPR` 标记。
+4. 修改 `fan_get_speed` 和 `fan2_get_speed` 函数逻辑：当检测到 `fan_speed_in_tpr` 标记有效且速度值不为 0 时，使用公式 `RPM = FAN_CLOCK_TPM / speed` 将读取的 Tick 值转换为标准 RPM。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/262fe3481ed4254c2b9eff8b2c0d183112652f69

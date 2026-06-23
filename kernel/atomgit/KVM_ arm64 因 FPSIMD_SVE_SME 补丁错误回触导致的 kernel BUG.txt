@@ -1,0 +1,34 @@
+#标题
+KVM: arm64 因 FPSIMD/SVE/SME 补丁错误回触导致的 kernel BUG
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 KVM 虚拟化且涉及内核模式 NEON 指令（如网络加密解密）的场景下，内核触发 BUG，系统崩溃。调用栈显示在处理软中断时触发了 `kernel_neon_begin` 中的断言检查。
+
+#主要错误日志
+kernel BUG at arch/arm64/kernel/fpsimd.c:1904!
+Internal error: Oops - BUG: 00000000f2000800 [#1] PREEMPT SMP
+
+Call trace:
+ kernel_neon_begin+0xdc/0x12c
+ ...
+ crypto_aead_decrypt+0x5c/0x6c
+ seqiv_aead_decrypt+0x88/0x9c
+ ...
+ net_rx_action+0x13c/0x31c
+ handle_softirqs+0x124/0x3d0
+ ...
+ fpsimd_save+0xe4/0x130
+ kvm_arch_vcpu_load_fp+0x2c/0x58
+
+#问题根因
+上游提交 fbc7e61195e2 ("KVM: arm64: Unconditionally save+flush host FPSIMD/SVE/SME state") 依赖于 `fpsimd_save_and_flush_cpu_state()` 函数在执行期间中断被禁用，以防止软中断在保存主机浮点上下文时接管 CPU 并尝试使用内核模式 NEON。
+然而，部分稳定版内核（如 6.6.y）在缺少提交 9b19700e623f ("arm64: fpsimd: Drop unneeded 'busy' flag") 的情况下，`fpsimd_save_and_flush_cpu_state()` 函数中仍然启用了中断。这导致在保存 FPSIMD 状态时可能触发软中断，软中断处理程序调用 `kernel_neon_begin()` 时因上下文冲突触发 `BUG_ON(!may_use_simd())` 导致内核崩溃。
+
+#解决方案
+修改 `fpsimd_save_and_flush_cpu_state()` 函数，将不具有软中断保护功能的 `__get_cpu_fpsimd_context()` 和 `__put_cpu_fpsimd_context()` 调用替换为具有软中断安全保护功能的 `get_cpu_fpsimd_context()` 和 `put_cpu_fpsimd_context()`，确保在保存和刷新 CPU 状态期间正确处理上下文，避免竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/208d4f745a52055854552734e5eba0c83ebc4b45

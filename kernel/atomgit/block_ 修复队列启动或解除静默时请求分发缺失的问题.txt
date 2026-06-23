@@ -1,0 +1,20 @@
+#标题
+block: 修复队列启动或解除静默时请求分发缺失的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在高并发场景下（特别是使用 virtio_blk 驱动时），当硬件队列状态在 CPU 间发生竞争切换（如一个 CPU 正在停止队列，而另一个 CPU 因中断完成刚好启动了队列）时，会导致 I/O 请求被插入到调度队列中但未被分发执行。这表现为 I/O 请求处理遗漏，可能导致 I/O hang 或存储性能严重下降。
+
+#主要错误日志
+未知
+
+#问题根因
+这是一个并发竞态问题。在 `blk_mq_try_issue_directly` 和 `blk_mq_request_issue_directly` 函数中，当 CPU 检测到硬件队列已停止（stopped）或处于静默状态（quiesced）时，仅调用了 `blk_mq_insert_request` 将请求放入队列，但此时存在一个时间窗口：另一个 CPU 可能已经处理完中断并将队列状态恢复为运行状态。由于原逻辑在插入请求后直接返回，没有再次尝试运行硬件队列，导致该请求被遗漏，未能及时分发执行。
+
+#解决方案
+在 `block/blk-mq.c` 文件中，针对 `blk_mq_try_issue_directly` 和 `blk_mq_request_issue_directly` 两个函数进行修复。当检测到队列停止或静默并将请求插入队列后，显式调用 `blk_mq_run_hw_queue(hctx, false)` 来确保硬件队列被运行，从而保证请求能被正确分发处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/51365109606c4a86ea95dd82de5bc8cf789828be

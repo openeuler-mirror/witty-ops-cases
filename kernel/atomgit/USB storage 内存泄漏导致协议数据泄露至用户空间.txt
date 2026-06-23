@@ -1,0 +1,20 @@
+#标题
+USB storage 内存泄漏导致协议数据泄露至用户空间
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核内存泄漏，通过 LTP（Linux Test Project）的 'ioctl_sg01' 测试用例可复现。当 USB 存储设备错误地跳过数据阶段（data phase）并发送状态数据时，系统未清理 srb 传输缓冲区中的 CSW（Command Status Wrapper）数据。这导致 USB 协议数据（如 US_BULK_CS_SIGN 'USBS' 签名）通过 SCSI generic (/dev/sg*) 接口泄露到用户空间。
+
+#主要错误日志
+未知
+
+#问题根因
+当 USB 存储设备跳过数据阶段时，代码虽然从 sg 缓冲区中提取并验证了 CSW，但随后未将其清零。这使得状态协议数据遗留在 srb 的传输缓冲区中，导致 USB 协议信息泄露给后续发起请求的用户空间进程（例如读取 512 KiB 数据时观察到泄露）。该问题与 CVE-2018-1000204 不同，后者是在分配时未清零，而本次故障是在分配后写入 USB 协议数据时未清理。
+
+#解决方案
+在检测到设备跳过数据阶段并验证 CSW 签名后，立即将 srb 传输缓冲区中的 CSW 数据清零。具体做法是调用 `usb_stor_access_xfer_buf` 函数将全零缓冲区写入原位置，防止协议数据残留。若清除失败，打印调试信息 "Failed to clear CSW data"。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/63d7ab9c33c646200d617ddeaa61f1cecf06c2d0

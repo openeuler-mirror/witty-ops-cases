@@ -1,0 +1,20 @@
+#标题
+UDPv6 GSO 分段在 NAT 场景下因校验和未更新导致异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 UDPv6 GSO（Generic Segmentation Offload）分段时，如果数据包经过了 NAT（网络地址转换）处理，导致地址或端口发生变化，内核未能正确更新分段后数据包的校验和。这会导致接收端校验和验证失败，进而引发丢包或 UDPv6 连接通信异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在引入 "udp: Support UDP fraglist GRO/GSO" 功能后，内核在处理 UDPv6 GSO 分段列表时，逻辑存在缺陷。如果 GSO 列表中的数据包 IP 地址或端口发生了改变（如 NAT 场景），内核仅处理了 IPv4 的情况，而 IPv6 的处理路径缺少相应的校验和重计算逻辑。代码未能在分段过程中检测到地址/端口的变化并调用相应的函数更新 UDP 校验和，导致发出的数据包校验和错误。
+
+#解决方案
+在 `__udp_gso_segment_list` 函数中增加对 IPv6 的判断分支，新增 `__udpv6_gso_segment_list_csum` 函数。该函数会遍历 GSO 分段列表，对比首个数据包与后续数据包的源/目的 IP 地址及端口。如果发现不一致（即发生了 NAT 转换），则调用 `__udpv6_gso_segment_csum` 更新后续数据包的 IPv6 头部地址、UDP 端口以及 UDP 校验和字段，确保修改后的数据包校验和正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e0d7bb5457b1937df484eb6dd46ce89ef72be047

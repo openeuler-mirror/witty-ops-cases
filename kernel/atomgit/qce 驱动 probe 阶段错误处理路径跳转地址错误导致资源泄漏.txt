@@ -1,0 +1,20 @@
+#标题
+qce 驱动 probe 阶段错误处理路径跳转地址错误导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm crypto engine 驱动初始化（probe）过程中，若 `qce_check_version()` 函数校验版本失败，驱动错误处理流程未跳转至正确的 DMA 资源释放标签，而是跳转至时钟资源释放标签。这导致先前通过 `qce_dma_request()` 申请的 DMA 资源无法被释放，造成内存或 DMA 通道资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `qce_crypto_probe` 中，代码逻辑先调用了 `qce_dma_request()` 申请资源，随后调用 `qce_check_version()`。当 `qce_check_version()` 执行失败时，错误处理代码 `goto err_clks` 跳转到了释放时钟资源的代码段，跳过了释放 DMA 资源的代码段 `err_dma`。这是因为在提交 ec8f5d8f6f76 引入相关逻辑时，错误处理跳转目标设置错误。
+
+#解决方案
+修改 `qce_crypto_probe` 函数中的错误处理逻辑，当 `qce_check_version()` 返回错误时，将跳转目标从 `err_clks` 修改为 `err_dma`，确保在退出前正确调用 DMA 资源释放函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/076da57f769598f99653e9e1e19658c909939635

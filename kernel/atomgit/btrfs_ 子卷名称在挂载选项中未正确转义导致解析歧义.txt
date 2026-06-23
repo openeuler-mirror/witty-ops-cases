@@ -1,0 +1,20 @@
+#标题
+btrfs: 子卷名称在挂载选项中未正确转义导致解析歧义
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 btrfs 子卷名称包含逗号（,）等特殊字符时，在 `/proc/self/mounts` 或 `/proc/self/mountinfo` 中显示的挂载选项存在歧义。例如，若子卷名为 "foo,ro"，显示为 `subvol=foo,ro`，解析器可能误认为 "ro" 是一个独立的挂载选项（即只读挂载），而非子卷名称的一部分，导致挂载选项解析错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `btrfs_show_options` 中，显示 `subvol` 挂载选项时使用了 `seq_puts` 和 `seq_escape` 的组合。`seq_escape` 的转义字符列表仅包含空格、制表符、换行符和反斜杠（" \t\n\\"），遗漏了逗号。由于逗号在挂载选项中用作分隔符，未转义的逗号导致解析器无法正确区分子卷名与后续选项。
+
+#解决方案
+修改 `fs/btrfs/super.c` 文件中的 `btrfs_show_options` 函数，移除手动处理转义的 `seq_puts` 与 `seq_escape` 调用，替换为 `seq_show_option(seq, "subvol", subvol_name)`。该函数内部会自动正确处理选项值中的特殊字符（包括逗号）的转义，从而消除解析歧义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/18b584eff7813345ce08443c847c4047699e542f

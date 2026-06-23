@@ -1,0 +1,20 @@
+#标题
+ksmbd: fix slab-out-of-bounds in smb_strndup_from_utf16()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 smb2_create_req 请求中的 NameOffset 值小于 Buffer offset 时，ksmbd 在处理 SMB2_CREATE 请求过程中会触发 slab-out-of-bounds 越界读取漏洞。该漏洞可由恶意构造的 SMB 请求触发，导致内核内存非法访问。
+
+#主要错误日志
+slab-out-of-bounds in smb_strndup_from_utf16()
+
+#问题根因
+在处理 SMB2_CREATE 请求时，代码直接使用了请求结构体 `smb2_create_req` 中的 `NameOffset` 字段。如果该字段的值小于结构体中 Buffer 的偏移量（即数据部分的起始位置），后续计算并读取文件名长度的操作将访问到结构体之外的内存区域，从而触发 slab-out-of-bounds 越界读。
+
+#解决方案
+在 `smb2_get_data_len` 函数处理 SMB2_CREATE 请求的逻辑中，增加对 `NameOffset` 的校验。使用 `max_t` 宏将 `NameOffset` 的最小值限制为结构体 `smb2_create_req` 中 Buffer 的偏移量（`offsetof(struct smb2_create_req, Buffer)`），确保后续读取操作不会越界访问内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4204de73294525df572f106d468722c610373454

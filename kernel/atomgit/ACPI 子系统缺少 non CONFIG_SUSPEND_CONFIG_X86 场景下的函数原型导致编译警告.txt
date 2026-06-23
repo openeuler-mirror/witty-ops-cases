@@ -1,0 +1,23 @@
+#标题
+ACPI 子系统缺少 non CONFIG_SUSPEND/CONFIG_X86 场景下的函数原型导致编译警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用未开启 CONFIG_SUSPEND 或非 X86 架构的内核编译配置时，驱动程序调用 `acpi_register_lps0_dev()` 或 `acpi_unregister_lps0_dev()` 函数时，内核编译过程报出缺少函数原型的警告。
+
+#主要错误日志
+未知
+
+#问题根因
+在内核头文件 `include/linux/acpi.h` 中，`acpi_register_lps0_dev()` 和 `acpi_unregister_lps0_dev()` 函数的声明被放置在 `#if defined(CONFIG_SUSPEND) && defined(CONFIG_X86)` 宏条件内部。当内核配置不满足该条件（即未配置 CONFIG_SUSPEND 或非 X86 架构）时，这些函数原型被隐藏，导致编译时找不到函数声明。
+
+#解决方案
+在 `include/linux/acpi.h` 中调整宏条件逻辑，将 `struct acpi_s2idle_dev_ops` 结构体定义及相关函数原型移出严格的条件编译块，并为 non CONFIG_SUSPEND/CONFIG_X86 场景添加 `static inline` 的空实现桩函数。具体修复包括：
+1. 将 `struct acpi_s2idle_dev_ops` 结构体定义移至 `#if defined(CONFIG_SUSPEND) && defined(CONFIG_X86)` 判断之前。
+2. 为 `acpi_register_lps0_dev()` 添加 `static inline` 实现，返回 `-ENODEV`。
+3. 为 `acpi_unregister_lps0_dev()` 添加 `static inline` 空实现。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/16bce277ee8df0180ec63e640d581194ce468743

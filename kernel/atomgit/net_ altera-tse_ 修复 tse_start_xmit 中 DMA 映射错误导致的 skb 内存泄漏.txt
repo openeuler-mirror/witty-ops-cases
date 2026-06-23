@@ -1,0 +1,20 @@
+#标题
+net: altera-tse: 修复 tse_start_xmit 中 DMA 映射错误导致的 skb 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 Altera TSE 网卡驱动发送数据包时，若底层 DMA 映射失败（dma_map_single 返回错误），驱动函数 tse_start_xmit 会返回 NETDEV_TX_OK。由于该返回值告知网络协议栈数据包已被成功消费，导致协议栈不再处理该 skb，从而造成该 socket buffer 内存无法释放。在 DMA 映射频繁失败的场景下，会持续发生内存泄漏。
+
+#主要错误日志
+[   xx.xxxxxx] altera-tse xxx: tse_start_xmit: DMA mapping error
+
+#问题根因
+在函数 tse_start_xmit 中，当 dma_map_single() 映射失败时，代码逻辑虽然打印了错误日志，但随即返回 NETDEV_TX_OK 却未调用 dev_kfree_skb_any() 释放 skb。由于 NETDEV_TX_OK 表示驱动已接管该数据包，内核网络栈不会对其进行后续处理，导致该内存块永久丢失，引发内存泄漏。
+
+#解决方案
+在 DMA 映射错误处理分支中，返回 NETDEV_TX_OK 之前，显式调用 dev_kfree_skb_any(skb) 释放 socket buffer，确保异常路径下内存资源被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bb4c8bb2ac3fc6388602d40247d66a6f1212703c

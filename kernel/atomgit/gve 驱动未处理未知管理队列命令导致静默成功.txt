@@ -1,0 +1,20 @@
+#标题
+gve 驱动未处理未知管理队列命令导致静默成功
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 gve 驱动接收到未知的管理队列命令操作码时，函数 `gve_adminq_issue_cmd()` 虽然打印了错误日志，但随后错误地返回了 0（表示成功）。这导致上层调用者误认为无效命令已成功执行，可能引发未定义行为或导致后续流程状态不一致。
+
+#主要错误日志
+unknown AQ command opcode %d\n
+
+#问题根因
+在 `gve_adminq_issue_cmd` 函数中，`switch-case` 结构处理各种有效的管理队列命令，但在 `default` 分支（处理未知操作码）中，代码仅调用了 `dev_err` 打印错误信息，随后并没有立即返回错误码，而是继续执行到函数末尾的 `return 0`。这导致对于无效输入，函数依然返回成功状态。
+
+#解决方案
+在 `gve_adminq_issue_cmd` 函数的 `default` 分支中，增加 `return -EINVAL;` 语句。确保当遇到未知管理队列命令操作码时，函数直接返回无效参数错误，从而优雅地失败并防止未定义行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a893561bd78ee5ee74942f614597db83f92d17b4

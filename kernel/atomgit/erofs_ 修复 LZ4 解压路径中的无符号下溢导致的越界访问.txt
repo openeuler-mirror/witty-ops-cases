@@ -1,0 +1,20 @@
+#标题
+erofs: 修复 LZ4 解压路径中的无符号下溢导致的越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+挂载特定的 crafted（ crafted）erofs 镜像并读取数据时，触发内核越界读取。由于 LZ4 inplace 解压路径未能正确处理 `outpages < inpages` 的情况，导致 `outpages - inpages` 发生无符号下溢，计算结果为一个巨大的数值，进而导致后续对 `rq->out[]` 数组的访问越过了 `decompressed_pages` 数组的边界。在正常 LZ4 非原地解压路径下，此类非法镜像会正确报告数据损坏，但在该特定路径下导致了内存访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+某些非法构造的镜像包含违反约束（`!partial_decoding && m_llen < m_plen`）的 extents，错误地触发了 LZ4 原地（inplace）解压路径。代码逻辑中未检查 `outpages < inpages` 的场景，当该条件成立时，`outpages - inpages` 作为无符号数运算发生下溢， wrapping 成一个极大的正数值，导致数组索引越界。
+
+#解决方案
+在 `z_erofs_lz4_handle_overlap` 函数中增加对 `ctx->outpages < ctx->inpages` 的判断检查。如果条件成立，则跳过原地解压逻辑，转而执行 `goto docopy`，从而避免了无符号下溢和随后的越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9bc91e1a599e4e4f026eedf413788868364c69a4

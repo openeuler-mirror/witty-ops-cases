@@ -1,0 +1,28 @@
+#标题
+arm64: dts: qcom: sm8550 ADSP 内存基地址与长度配置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm SM8550 平台上，设备树中 ADSP（Audio DSP）PAS（Peripheral Authentication Service）节点的 `reg` 属性配置错误。基地址被错误地设置为 0x30000000（实际为 CDSP 的主区域），导致 ADSP 节点指向了错误的内存地址空间。根据 Commit 描述，由于 PAS loader 并不使用该地址空间，此错误在 Linux 用户态下未表现出明显的功能异常，但导致设备树硬件描述与实际硬件规格不符。
+
+#主要错误日志
+未知
+
+#问题根因
+设备树源文件中 ADSP remoteproc 节点的 `reg` 属性配置有误。
+1. 错误的基地址 `0x30000000` 实际上是 CDSP（Compute DSP）的主内存区域，而非 ADSP 的 QDSP PUB 地址空间。
+2. ADSP PAS 的正确地址空间应为 `0x06800000`，长度为 `0x10000`。
+3. 下游 DTS 使用了 `0x03000000`，这与错误的 `0x30000000` 相似但不同，且指向了未使用的区域，导致内核设备树描述与硬件实际映射不一致。
+
+#解决方案
+修正设备树 `sm8550.dtsi` 中 ADSP 节点的定义：
+1. 将 `remoteproc@30000000` 节点移至 `remoteproc@6800000`，以匹配正确的硬件地址。
+2. 修改 `reg` 属性值：
+   - 原值：`<0x0 0x30000000 0x0 0x100>`
+   - 新值：`<0x0 0x06800000 0x0 0x10000>`
+3. 调整节点在文件中的位置以保持按 unit address 排序。此修复确保了 ADSP 内存映射的硬件描述正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f17b6c5ba6cfe67d1f606e2bce0334bb882ecb9f

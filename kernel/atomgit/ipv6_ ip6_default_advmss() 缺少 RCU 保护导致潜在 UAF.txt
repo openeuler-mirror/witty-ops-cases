@@ -1,0 +1,23 @@
+#标题
+ipv6: ip6_default_advmss() 缺少 RCU 保护导致潜在 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ip6_default_advmss()` 函数时，由于缺少 RCU 保护，若此时对应的网络命名空间（net structure）正在被释放，可能会导致内核访问已释放内存，引发内核崩溃或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`ip6_default_advmss()` 函数在读取网络命名空间结构体（`struct net`）时，直接使用了 `dev_net(dev)` 而没有持有 RCU 读锁。这违反了 RCU 保护规则，无法保证在读取过程中 `net` 结构体不会被并发释放。
+
+#解决方案
+在 `ip6_default_advmss()` 函数中添加 RCU 保护机制。具体修改为：
+1. 在访问网络命名空间前调用 `rcu_read_lock()`。
+2. 将获取 `net` 指针的方式从 `dev_net(dev)` 改为受 RCU 保护的 `dev_net_rcu(dev)`。
+3. 在完成访问后调用 `rcu_read_unlock()`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/62ba1ac23164c5c570f72cef95bc5b49574f79d9

@@ -1,0 +1,20 @@
+#标题
+sctp：握手完成后未丢弃陈旧 INIT 导致连接处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SCTP 连接在进入 ESTABLISHED 状态后，如果收到对端延迟或重复的 INIT 数据块（且 init_tag 与已知值相同），内核会错误地将其视为新连接尝试进行处理，而非直接丢弃，可能导致连接状态异常或协议处理逻辑混乱。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `sctp_sf_do_unexpected_init` 中，缺少对连接状态的充分检查。当连接状态已处于 ESTABLISHED 或更晚阶段时，如果收到 INIT 数据块的 `init_tag` 与已知的对端 `init_tag` 相同，说明这是握手完成后的陈旧（延迟或重复）报文，而非有效的连接重启。内核未对此类情况进行拦截，导致后续按新连接尝试处理引发问题。
+
+#解决方案
+在 `sctp_sf_do_unexpected_init` 函数中增加状态检查逻辑：如果连接状态 `asoc->state` 大于等于 `SCTP_STATE_ESTABLISHED`，且接收到的 INIT 数据块中的 `init_tag` 等于 `asoc->peer.i.init_tag`，则直接调用 `sctp_sf_pdiscard` 丢弃该数据块，不再进行后续处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c2c52960bec198bf519ccbceb46b7e42449eeb6

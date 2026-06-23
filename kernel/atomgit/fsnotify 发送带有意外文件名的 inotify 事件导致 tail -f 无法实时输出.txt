@@ -1,0 +1,38 @@
+#标题
+fsnotify 发送带有意外文件名的 inotify 事件导致 tail -f 无法实时输出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统中存在 fanotify 文件系统监控（如执行 `fsnotifywait -S -m /boot`）时，会影响 `tail -f` 命令的实时输出功能。具体表现为：
+1. 在一个终端窗口运行 `fsnotifywait -S -m /boot`。
+2. 在另一个终端对目录下文件执行追加写操作（如 `echo data >> /boot/foo`）。
+3. 第三个终端运行 `tail -f /boot/foo`，发现无法实时显示新增的数据内容。
+4. 只有当停止 `fsnotifywait` 后，`tail -f` 才能接收到遗漏的数据。
+
+通过 strace 追踪发现，`tail` 进程在接收到 inotify 事件时，读取到的数据结构中包含了意外的文件名字段，这与不运行 fanotify 时的行为不一致。
+
+#主要错误日志
+strace 追踪日志显示 inotify 读取到了带文件名的事件（预期应为无文件名事件）：
+```
+read(4, "\1\0\0\0\2\0\0\0\0\0\0\0\20\0\0\0foo\0\0\0\0\0\0\0\0\0\0\0\0\0", 50) = 32
+```
+正常情况下（无 fanotify 干扰）的预期日志：
+```
+read(4, "\1\0\0\0\2\0\0\0\0\0\0\0\0\0\0\0", 50) = 16
+```
+
+#问题根因
+不同的 fsnotify 组之间存在干扰。当在 superblock（sb）上设置了 fanotify 标记时，事件处理逻辑需要传递文件名（filename）给 fsnotify()。随后在 `fsnotify_handle_event()` 中，代码试图处理文件名的传递逻辑：对于 inotify 等只在父目录监控时才关心文件名的组，不应传递文件名。
+然而，当没有组监控父目录，但部分组监控 superblock 且部分监控 inode 时，逻辑判断出错。代码错误地将文件名传递给了监控 inode 的 inotify 组，而 `tail -f` 正是监控文件本身而非父目录，导致其收到带有意外文件名的事件，进而引发功能异常。
+
+#解决方案
+修改 `fs/notify/fsnotify.c` 文件中的事件处理逻辑。修正了 `FS_EVENT_ON_CHILD` 标志位的清除位置以及文件名置空的条件判断。
+具体修改为：
+1. 将 `mask &= ~FS_EVENT_ON_CHILD` 操作移出条件判断，确保对于子 inode 的监控者，该标志位始终被清除。
+2. 将文件名（name）和目录置空的条件修改为 `if (!(mask & ALL_FSNOTIFY_DIRENT_EVENTS))`。
+这确保了只有当事件是目录事件时才传递文件名，对于非目录事件（如文件修改），即使存在 superblock 监控，也不会向 inode 监控者传递文件名，从而修复了 inotify 事件格式错误的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/daffdb1bf5683fb534c28c2e95a1decd341fd7b2

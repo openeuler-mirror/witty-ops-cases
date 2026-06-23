@@ -1,0 +1,20 @@
+#标题
+net: ibm: emac: mal 修复错误跳转导致的资源释放缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IBM EMAC MAL（Media Access Layer）驱动初始化过程中，若检测到硬件为 405EZ 且当前内核配置未启用相应支持，驱动探测会失败。由于错误处理路径跳转目标错误，导致之前已映射的 DCR（Device Control Register）资源未被正确释放，造成资源泄漏。
+
+#主要错误日志
+printk(KERN_ERR "%pOF: Support for 405EZ not enabled!\n", ofdev->dev.of_node);
+
+#问题根因
+在 `mal_probe` 函数中，`dcr_map` 在前一个条件分支中已被调用并成功映射了资源。当后续代码在 `#endif` 块内因 405EZ 支持未启用而执行错误退出时，跳转语句错误地指向了 `fail` 标签而非 `fail_unmap` 标签。`fail` 标签不包含 `dcr_unmap` 调用，导致已映射的 DCR 资源无法解映射，从而引发资源泄漏。
+
+#解决方案
+修改 `mal_probe` 函数中的错误处理跳转逻辑，将 `goto fail` 修改为 `goto fail_unmap`，确保在探测失败时能正确执行 `dcr_unmap` 操作，释放已占用的硬件资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fea7216809b897273143aed03dd8c115938039ae

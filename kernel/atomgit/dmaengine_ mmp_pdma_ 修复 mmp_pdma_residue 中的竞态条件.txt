@@ -1,0 +1,20 @@
+#标题
+dmaengine: mmp_pdma: 修复 mmp_pdma_residue 中的竞态条件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MMP PDMA 驱动中调用 `mmp_pdma_residue` 函数获取 DMA 传输剩余字节数时，由于缺乏锁保护，可能会触发内核竞态条件。该问题可能导致计算出的 residue 值不准确，进而引发依赖该数据的上层应用逻辑错误或数据不一致，严重情况下可能导致内核崩溃或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`mmp_pdma_residue` 函数在遍历 `chan->chain_running` 链表以计算剩余数据量时，未持有 `chan->desc_lock` 自旋锁。如果此时其他线程或中断上下文正在修改 `chain_running` 链表（例如添加或删除描述符），将导致链表遍历过程出现竞态条件，读取到不一致的状态。
+
+#解决方案
+在 `mmp_pdma_residue` 函数中访问 `chan->chain_running` 链表前，增加 `spin_lock_irqsave` 加锁操作；在函数返回或遍历结束后，增加 `spin_unlock_irqrestore` 解锁操作。通过加锁保护链表遍历过程，确保在计算 residue 期间链表状态不被并发修改，从而消除竞态隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2a48ff368e4ab52dc2622d75580350dcba7fdb52

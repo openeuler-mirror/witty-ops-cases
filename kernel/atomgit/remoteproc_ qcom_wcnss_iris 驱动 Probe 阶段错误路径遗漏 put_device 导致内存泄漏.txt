@@ -1,0 +1,20 @@
+#标题
+remoteproc: qcom_wcnss_iris 驱动 Probe 阶段错误路径遗漏 put_device 导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 qcom_wcnss_iris 驱动的 `qcom_iris_probe` 函数执行过程中，若初始化流程在调用 `device_add()` 之后失败（触发 `err_device_del` 标签），驱动仅调用了 `device_del()` 而遗漏了 `put_device()`。这导致设备的引用计数无法归零，`qcom_iris_release()` 回调函数无法被触发，从而造成内核内存泄漏。同时，`qcom_iris_remove` 函数中也存在相同的引用计数泄漏问题。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于驱动代码错误路径处理不完整。根据 Commit 描述，`device_del()` 调用与 `device_add()` 匹配，但代码逻辑中缺少对应的 `put_device()` 调用。在 Linux 设备驱动模型中，`device_add()` 会增加设备引用计数，必须在出错和移除时调用 `put_device()` 来减少引用计数，以便在计数归零时释放相关资源。遗漏该调用导致资源无法释放。
+
+#解决方案
+在 `qcom_iris_probe` 函数的 `err_device_del` 错误处理标签中，紧接 `device_del()` 之后添加 `put_device(&iris->dev)` 调用；同时在 `qcom_iris_remove` 函数中，紧接 `device_del()` 之后也添加 `put_device(&iris->dev)` 调用。此修复确保了设备引用计数正确递减，触发释放回调，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8c783b65df5f906d8bb66e189dbad8e78f8b1e44

@@ -1,0 +1,29 @@
+#标题
+ftrace: stacktrace filter 命令抢占计数显示错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 ftrace 的 stacktrace filter 命令跟踪 `ksys_read` 函数时，输出的堆栈跟踪信息中抢占计数（preemption count）显示持续不正确。
+具体表现为日志中的上下文标志位异常（如显示为 `...1.`），未能正确反映当时禁用抢占的状态。
+
+#主要错误日志
+故障现象日志示例：
+```
+   <...>-453     [004] ...1.    38.308956: <stack trace>
+=> ksys_read
+=> do_syscall_64
+=> entry_SYSCALL_64_after_hwframe
+```
+
+#问题根因
+trace 框架在 `function_trace_probe_call` 中调用 filter 命令回调函数之前，已经通过 `preempt_disable_notrace()` 禁用了抢占。
+但在 `trace_stack` 函数中获取跟踪上下文时，使用的是 `tracing_gen_ctx()`。该函数假设抢占计数未改变，因此没有计入之前被禁用的抢占状态，导致最终输出的抢占计数缺少了对 `preempt_disable_notrace` 的核算。
+
+#解决方案
+修改 `kernel/trace/trace_functions.c` 中的 `trace_stack` 函数，将获取跟踪上下文的函数由 `tracing_gen_ctx()` 替换为 `tracing_gen_ctx_dec()`。
+`tracing_gen_ctx_dec()` 会专门对 `preempt_disable_notrace()` 进行核算，从而输出正确的抢占计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/34c94b6923d13de0925253edfe43a99485b96e8a

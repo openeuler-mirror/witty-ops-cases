@@ -1,0 +1,20 @@
+#标题
+tracing: test_event_printk() 解析指针参数不完整导致误报或漏报
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在包含复杂参数（如含有逗号的语句表达式）的 trace event 中，`test_event_printk()` 函数在检查 print fmt 格式时，错误地在参数内部第一个逗号处截断解析。这可能导致对指针解引用安全性的误判，进而引发不必要的内核警告，或者遗漏真实存在的 unsafe dereference 指针风险。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `test_event_printk()` 使用简单的 `strstr(fmt + i, ',')` 来查找参数的结束位置。这种方法无法正确处理参数内部包含逗号的情况（例如包含数组初始化列表的语句表达式 `({ ... "w--", "w-x", ... })`），导致解析逻辑在参数实际结束前就停止，仅处理了参数的前半部分，从而无法对整个参数进行正确的安全性评估。
+
+#解决方案
+修改 `test_event_printk()` 的解析逻辑，确保处理整个 print format 参数内容。引入辅助函数 `process_pointer()`，将参数解析逻辑从发现参数开始位置移动到发现参数结束位置之后执行。通过记录参数起始位置 `start_arg` 和结束位置 `e`，将完整的参数片段传递给 `process_pointer()` 进行检查，从而正确处理包含逗号、括号等复杂结构的参数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c33e2559a1e53f8e83a936eabeaeeec5eea6e65f

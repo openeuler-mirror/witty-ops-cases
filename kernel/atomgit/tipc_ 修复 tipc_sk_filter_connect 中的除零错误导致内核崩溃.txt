@@ -1,0 +1,28 @@
+#标题
+tipc: 修复 tipc_sk_filter_connect 中的除零错误导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户通过 setsockopt(TIPC_CONN_TIMEOUT) 将 TIPC 连接超时时间设置为小于 4 的值，且 SYN 请求因 TIPC_ERR_OVERLOAD 被拒绝并进入重试路径时，内核触发除零异常，导致系统崩溃与空指针引用错误。
+
+#主要错误日志
+Oops: divide error: 0000 [#1] SMP KASAN NOPTI
+CPU: 0 UID: 0 PID: 119 Comm: poc-F144 Not tainted 7.0.0-rc2+
+RIP: 0010:tipc_sk_filter_rcv (net/tipc/socket.c:2236 net/tipc/socket.c:2362)
+Call Trace:
+ tipc_sk_backlog_rcv
+ __release_sock
+ release_sock
+ tipc_connect
+ __sys_connect
+
+#问题根因
+用户可以通过 setsockopt(TIPC_CONN_TIMEOUT) 将 conn_timeout 设置为任意值（包括 0 到 3）。当执行重试逻辑时，代码执行 `delay %= (tsk->conn_timeout / 4)`，若 conn_timeout 小于 4，整数除法结果为 0，导致取模运算触发除零异常。
+
+#解决方案
+在 tipc_sk_filter_connect 函数执行除法运算前，增加边界检查。如果 conn_timeout 小于 4，将其强制设置为 4，从而避免除零错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ef54d8eb614b4f59e339ff22ef26d59c86e6dd6

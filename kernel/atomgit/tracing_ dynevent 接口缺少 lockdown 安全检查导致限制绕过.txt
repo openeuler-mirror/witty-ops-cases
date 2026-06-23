@@ -1,0 +1,20 @@
+#标题
+tracing: dynevent 接口缺少 lockdown 安全检查导致限制绕过
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核启用了 lockdown 安全机制的情况下，动态事件接口未能正确执行权限检查。用户可以通过 tracefs 的 dynamic_events 接口创建或操作动态事件（kprobe/uprobe 等），这违背了 lockdown 模式下的安全策略，导致本应被拒绝的操作被执行，影响系统安全性。
+
+#主要错误日志
+未知
+
+#问题根因
+tracefs 的 dynamic_events 接口在功能上与 kprobe_events 和 uprobe_events 是兼容的，但在实现 `dyn_event_open` 函数时，遗漏了对 `security_locked_down(LOCKDOWN_TRACEFS)` 的状态检查。对比其他 tracefs 文件的 open 调用实现，该接口应当遵循 lockdown 限制，但代码逻辑缺失了这一安全拦截点。
+
+#解决方案
+在 `kernel/trace/trace_dynevent.c` 文件的 `dyn_event_open` 函数入口处增加 lockdown 检查逻辑。具体修改为：在执行其他打开逻辑之前，调用 `security_locked_down(LOCKDOWN_TRACEFS)`，若返回非零值（表示处于锁定状态），则直接返回错误码拒绝操作，从而修复该安全漏洞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0f26eba1d4a398a776f1bac7964bf8eeaffef857

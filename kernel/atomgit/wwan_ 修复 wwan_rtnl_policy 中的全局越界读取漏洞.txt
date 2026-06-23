@@ -1,0 +1,29 @@
+#标题
+wwan: 修复 wwan_rtnl_policy 中的全局越界读取漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在解析 netlink 属性时触发 KASAN 全局越界读取错误。该问题可通过特定 netlink 接口调用路径（如创建 wwan 接口）触发，导致内核 panic 或内存污染报警。
+
+#主要错误日志
+```text
+==================================================================
+BUG: KASAN: global-out-of-bounds in validate_nla lib/nlattr.c:388 [inline]
+BUG: KASAN: global-out-of-bounds in __nla_validate_parse+0x19d7/0x29a0 lib/nlattr.c:603
+Read of size 1 at addr ffffffff8b09cb60 by task syz.1.66276/323862
+...
+The buggy address belongs to the variable:
+ wwan_rtnl_policy+0x20/0x40
+==================================================================
+```
+
+#问题根因
+变量 `wwan_rtnl_link_ops` 的 `.maxtype` 成员被错误赋值为 `__IFLA_WWAN_MAX`（该值通常大于实际定义的属性最大值），而策略数组 `wwan_rtnl_policy` 的大小是基于 `IFLA_WWAN_MAX` 定义的。当内核进行 netlink 属性解析时，由于 maxtype 超出了策略数组的实际定义范围，导致访问了策略数组之外的内存地址，从而触发全局越界读取。
+
+#解决方案
+将 `wwan_rtnl_link_ops` 结构体中的 `.maxtype` 字段值从 `__IFLA_WWAN_MAX` 修正为 `IFLA_WWAN_MAX`，确保其与 `wwan_rtnl_policy` 数组的定义大小一致，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0f615160d1c8969f2d7bb08d34c01ca5dbb5a98f

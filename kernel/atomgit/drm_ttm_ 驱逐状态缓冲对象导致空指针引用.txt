@@ -1,0 +1,20 @@
+#标题
+drm/ttm: 驱逐状态缓冲对象导致空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当尝试通过 `devcoredump` 读取所有缓冲对象（BO）的内容进行转储，或通过 `vm_operations_struct.access` 接口访问内存时，如果目标 BO 处于被驱逐状态且未关联资源，内核将发生 NULL 指针引用错误，导致系统崩溃或相关进程异常终止。
+
+#主要错误日志
+未知
+
+#问题根因
+系统中可能存在当前未关联资源的 BO（例如已被驱逐的 BO）。在 `ttm_bo_vm_access` 函数中，代码直接访问 `bo->resource->mem_type`，但未检查 `bo->resource` 是否为 NULL。当 BO 被驱逐时，其 `resource` 指针可能为空，从而导致空指针解引用。
+
+#解决方案
+在 `ttm_bo_vm_access` 函数中增加对 `bo->resource` 的非空检查。如果指针为 NULL，函数将返回 `-ENODATA` 错误码并跳转到解锁逻辑退出，避免访问空指针，从而修复潜在的内核崩溃问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b00c255bea8e550fa55dc03a02d2d13df0ffc7a7

@@ -1,0 +1,26 @@
+#标题
+macvlan_get_size 未预留 IFLA_MACVLAN_BC_CUTOFF 空间导致 netlink 消息溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+创建 macvlan 接口并设置 bc_cutoff 参数后，执行 `ip -d link show` 显示该接口时失败，内核触发 WARN_ON 告警，导致接口信息无法通过 netlink 正常导出（dump）。
+
+复现步骤如下：
+1. ip link add macvlan0 link eth0 type macvlan mode bridge
+2. ip link set macvlan0 type macvlan bc_cutoff 0
+3. ip -d link show macvlan0   # 此时失败
+
+#主要错误日志
+未知
+
+#问题根因
+macvlan_get_size() 函数在计算 netlink 消息大小时，未包含 IFLA_MACVLAN_BC_CUTOFF 属性所需的空间（nla_total_size(4)）。
+而 macvlan_fill_info() 函数在 port->bc_cutoff != 1 的条件下会写入该属性，导致 netlink skb 空间不足，nla_put_s32() 返回 -EMSGSIZE 错误，进而触发 rtnetlink 中的 WARN_ON。
+
+#解决方案
+在 drivers/net/macvlan.c 文件的 macvlan_get_size() 函数中，补充计算 IFLA_MACVLAN_BC_CUTOFF 属性所需的 4 字节空间，确保 netlink buffer 分配时预留足够大小，避免消息溢出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bbb84c7c51e52f101dfaf820326e3f595035819f

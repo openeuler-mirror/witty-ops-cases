@@ -1,0 +1,20 @@
+#标题
+powerpc/pseries/eeh: VFIO EEH恢复流程无法检测到正常状态导致恢复失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 pseries 系统上使用 VFIO ioctl 进行 EEH 恢复时，用户态驱动无法检测到恢复流程何时完成。具体表现为 `VFIO_EEH_PE_GET_STATE` ioctl 无法返回预期的 `EEH_PE_STATE_NORMAL` 状态，导致驱动错误地认为 MMIO 和 DMA 操作无法恢复，从而阻止了用户态驱动的正常功能运行。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 PAPR 规范，RTAS 调用 `ibm_read_slot_reset_[state|state2]` 返回的 PE Reset State "0" 表示重置已解除，PE 处于允许 MMIO 和 DMA 的状态。然而，当前的 `pseries_eeh_get_state()` 函数实现仅设置了 `EEH_STATE_MMIO_ACTIVE` 和 `EEH_STATE_DMA_ACTIVE`，遗漏了 `EEH_STATE_MMIO_ENABLED` 和 `EEH_STATE_DMA_ENABLED` 标志。这导致返回的状态掩码不符合预期，上层驱动无法正确识别 PE 已恢复正常。
+
+#解决方案
+修改 `arch/powerpc/platforms/pseries/eeh_pseries.c` 中的 `pseries_eeh_get_state()` 函数。在处理 RTAS 返回值 `rets[0]` 为 0 的 case 分支时，在结果掩码中补充 `EEH_STATE_MMIO_ENABLED` 和 `EEH_STATE_DMA_ENABLED` 标志，确保正确上报 PE 状态，修复 VFIO 用户态工作流的 EEH 恢复问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2593808214c96a5bdb9a5ad6a5792f1ef50da5e2

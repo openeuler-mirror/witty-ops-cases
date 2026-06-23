@@ -1,0 +1,33 @@
+#标题
+obmm模块多处逻辑缺陷导致错误返回值、内存越界访问及溢出检测失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 `ioremap_cache` 失败时，函数错误地返回 0（成功），导致上层调用者无法感知内存映射失败。
+2. 在 `obmm_lowmem_notify_handler` 回调中，特定条件下返回 `-ENOMEM` 负值错误码，不符合 `notifier_block` 回调接口规范，可能导致调用链处理异常。
+3. 内存大小累加时溢出检测逻辑失效，导致溢出发生时未被捕获，可能引发内存越界或程序逻辑错误。
+4. 空指针 `parm`（data）被直接解引用，触发内核 NULL Pointer Dereference Oops。
+5. `obmm_import_attrs_groups_list` 数组访问越界，读取未初始化内存，可能导致内核崩溃或不可预期行为。
+
+#主要错误日志
+- `pr_err("Memory size overflowed!\n");`
+- `pr_err_ratelimited("%s: failed to run ioremap.\n", __func__);`
+
+#问题根因
+1. **错误码遗漏**：`ubmempool_allocator.c` 中 `ioremap_cache` 失败分支跳转前未将 `ret` 赋值为 `-ENOMEM`，导致函数返回默认值 0。
+2. **返回值不规范**：`obmm_lowmem.c` 中 `notifier_block` 回调函数在条件不满足或处理完成时，返回了 `-ENOMEM` 或 0，而非标准的 `NOTIFY_DONE` 或 `NOTIFY_OK`。
+3. **溢出检测逻辑错误**：`obmm_export_from_pool.c` 中使用 `*total_size > *total_size + cmd_export->size[i]` 进行溢出检查，由于溢出回绕特性，该条件在溢出时反而为假，导致检测失效。
+4. **空指针校验缺失**：`obmm_lowmem_notify_handler` 未对传入的 `data` 参数进行 NULL 检查直接解引用。
+5. **数组越界访问**：`obmm_sysfs_ub.c` 中 `import_attrs_groups` 数组仅定义了 2 个元素（索引 0 和 1），但 `obmm_import_attrs_groups_list` 尝试访问索引 2 和 3，导致越界访问。
+
+#解决方案
+1. 在 `ioremap_cache` 失败的分支中，跳转前增加 `ret = -ENOMEM;`，确保返回正确的错误码。
+2. 将 `obmm_lowmem_notify_handler` 中的 `-ENOMEM` 返回值修改为 `NOTIFY_DONE`，将最后的 `return 0` 修改为 `return NOTIFY_OK`，符合 notifier 回调规范。
+3. 修正溢出检测条件为 `*total_size > ULONG_MAX - cmd_export->size[i]`，正确判断加法溢出。
+4. 在 `obmm_lowmem_notify_handler` 函数入口增加 `if (!data) return NOTIFY_DONE;` 校验。
+5. 从 `obmm_import_attrs_groups_list` 数组定义中删除访问索引 2 和 3 的行，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/53f22d6b0cc1564bfdc031fdeda448a9e53b4c1b

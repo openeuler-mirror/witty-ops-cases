@@ -1,0 +1,22 @@
+#标题
+ipv6: seg6 lwt输入路径下dst引用循环导致释放失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在IPv6 SEG6 (Segment Routing)轻量级隧道（lwt）的输入处理路径中，存在dst_entry引用计数循环依赖的问题。该问题会导致相关的dst对象无法正确释放，造成内存泄漏（dst结构体引用计数不为0），在系统中表现为路由缓存对象持续累积无法回收。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `seg6_input_core` 中，当调用 `ip6_route_input(skb)` 重新查找路由后，代码无条件地将新查找到的 `dst` 缓存到 `slwt->cache` 中。如果新查找到的 `dst` 的 `lwtstate` 指针与原始 `skb` 携带的 `orig_dst` 的 `lwtstate` 相同，则意味着形成了对象引用循环：dst 通过 lwtstate 指向了自身或其所属的缓存结构。这种循环引用导致引用计数机制失效，对象无法被释放。
+
+#解决方案
+在缓存新查找到的 dst 之前，增加对 `lwtstate` 指针的检查。
+1. 在函数入口处提前保存原始 dst 的 lwtstate 指针，防止后续 `ip6_route_input` 或 `skb_dst_drop` 调用导致原始信息丢失。
+2. 在调用 `ip6_route_input` 获取新 dst 后，仅在 `!dst->error` 且新 dst 的 `lwtstate` 与原始保存的 `lwtst` 不相等时，才执行 `dst_cache_set_ip6` 操作，从而避免缓存指向自身的循环引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aba3b5a40d4e88de28f36d3e14270dae97e78818

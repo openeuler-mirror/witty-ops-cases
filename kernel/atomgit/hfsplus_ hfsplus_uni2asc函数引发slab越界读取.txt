@@ -1,0 +1,25 @@
+#标题
+hfsplus: hfsplus_uni2asc函数引发slab越界读取
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在访问 HFS+ 文件系统目录（调用 hfsplus_readdir）时触发内核崩溃，KASAN 检测器报告在 hfsplus_uni2asc 函数中发生了 slab-out-of-bounds 读错误。
+
+#主要错误日志
+```
+[  667.122651][ T9805] BUG: KASAN: slab-out-of-bounds in hfsplus_uni2asc+0x902/0xa10
+[  667.123627][ T9805] Read of size 2 at addr ffff88802592f40c by task repro/9805
+[  667.125030][ T9805] The buggy address is located 0 bytes to the right of
+[  667.151282][ T9805]  allocated 1036-byte region [ffff88802592f000, ffff88802592f40c)
+```
+
+#问题根因
+hfsplus_uni2asc 函数在处理 `hfsplus_unistr` 结构体时，直接使用其 `length` 字段作为读取长度。根据定义，`unicode` 缓冲区最大长度为 `HFSPLUS_MAX_STRLEN`（255）。如果磁盘数据（如 Catalog File b-tree 节点）发生损坏，导致 `length` 字段值超过 255（例如 65283），函数在读取 unicode 缓冲区时指针会超出已分配内存的边界，导致越界读取。
+
+#解决方案
+在 hfsplus_uni2asc 函数中增加对 `ustr->length` 的合法性检查。如果读取到的长度值超过 `HFSPLUS_MAX_STRLEN`，则将其强制修正为 `HFSPLUS_MAX_STRLEN`，并打印错误日志记录原始无效值，防止越界读取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c4c70c54803fc1155ef509b2055792a45e48648e

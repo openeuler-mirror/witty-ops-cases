@@ -1,0 +1,36 @@
+#标题
+urma: ubcore哈希表初始化失败及TP管理逻辑缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 设备注册或初始化过程中，哈希表分配失败导致内核日志打印 "alloc hash tables failed"。
+2. 设备 active_tp 与 deactive_tp 逻辑判断条件写反，导致拦截逻辑失效。
+3. 用户空间调用 set_tp/get_tp 接口失败。
+4. ubcore_bind_jetty_ex 函数中指针校验逻辑错误。
+
+#主要错误日志
+- ubcore_log_err("Invalid parameter.\n")
+- ubcore_log_err("alloc hash tables failed.\n")
+- uburma_log_err("Failed to set tp attribution values, ret: %d.\n", ret)
+- uburma_log_err("Failed to get tp attribution values, ret: %d.\n", ret)
+
+#问题根因
+1. 哈希表初始化逻辑缺陷：代码未跳过 size 为 0 的哈希表参数，尝试分配大小为 0 的哈希表导致失败。
+2. 逻辑判断取反错误：
+   - 在 `ubcore_active_tp` 中，错误地使用 `dev->ops->active_tp` (指针非空) 作为失败条件，正确逻辑应为 `!dev->ops->active_tp` (指针为空才报错)。
+   - 在 `ubcore_deactive_tp` 中，错误地检查 `dev->ops->active_tp` 而非 `dev->ops->deactive_tp`，且取反逻辑错误。
+   - 在 `ubcore_bind_jetty_ex` 中，错误地使用 `jetty->ub_dev` (指针非空) 作为失败条件，正确逻辑应为 `!jetty->ub_dev`。
+3. 功能缺失：内核未实现 `uburma_cmd_set_tp_attr` 与 `uburma_cmd_get_tp_attr` 的处理函数，导致用户空间调用失败。
+
+#解决方案
+1. 修复哈希表初始化：在 `ubcore_alloc_hash_tables` 循环中增加判断，若 `g_ht_params[i].size == 0` 则直接 `continue`，跳过未使用的哈希表项。
+2. 修正指针校验逻辑：
+   - 修正 `ubcore_active_tp` 中的判断条件为 `!dev->ops->active_tp`。
+   - 修正 `ubcore_deactive_tp` 中的判断条件为 `!dev->ops->deactive_tp`。
+   - 修正 `ubcore_bind_jetty_ex` 中的判断条件为 `!jetty->ub_dev`。
+3. 补充用户空间接口实现：新增 `uburma_cmd_set_tp_attr` 和 `uburma_cmd_get_tp_attr` 函数，并将其注册到命令处理数组中，修复用户空间调用失败问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/46936650256695f9bc706eb7d586761eb6555628

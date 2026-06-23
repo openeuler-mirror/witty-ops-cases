@@ -1,0 +1,26 @@
+#标题
+删除 genetlink family 时存在监听者导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除 genetlink family 时，若该 family 仍有监听者，内核会发生崩溃，触发 Oops 并显示信号 11（SIGSEGV），调用栈指向 `netlink_update_socket_mc` 函数。
+
+#主要错误日志
+Oops: Kernel access of bad area, sig: 11 [#1]
+  ...
+  NIP [c000000000c080bc] netlink_update_socket_mc+0x3c/0xc0
+  LR [c000000000c0f764] __netlink_clear_multicast_users+0x74/0xc0
+  Call Trace:
+__netlink_clear_multicast_users+0x74/0xc0
+genl_unregister_family+0xd4/0x2d0
+
+#问题根因
+在 `__netlink_clear_multicast_users` 函数中，遍历 `mc_list` 链表时使用了非安全的循环方式（`sk_for_each_bound`）。在循环体内，`netlink_update_socket_mc` 函数会执行删除链表节点的操作，导致遍历链表时底层结构发生改变，引发非法内存访问。
+
+#解决方案
+将 `net/netlink/af_netlink.c` 中 `__netlink_clear_multicast_users` 函数内的非安全链表遍历宏 `sk_for_each_bound` 修改为安全遍历宏 `sk_for_each_bound_safe`。该宏能在遍历过程中安全地处理当前节点的删除操作，防止链表遍历失效。同时在 `include/net/sock.h` 中新增了 `sk_for_each_bound_safe` 宏定义以支持该修复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4c3ea8899549cbc2caaf373870a2b5f7b1e74526

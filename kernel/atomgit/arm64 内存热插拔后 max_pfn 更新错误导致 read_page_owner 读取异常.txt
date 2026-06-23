@@ -1,0 +1,20 @@
+#标题
+arm64 内存热插拔后 max_pfn 更新错误导致 read_page_owner 读取异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 arm64 架构上进行内存热插拔操作时，如果热插拔的内存区域小于系统原有的内存范围，会导致 `max_pfn` 被错误地更新为较小的值。此错误会影响 `read_page_owner` 功能，导致其无法正确读取或遍历内存页信息。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `arch_add_memory` 函数中，更新 `max_pfn` 的逻辑存在缺陷。原代码直接将 `max_pfn` 赋值为 `PFN_UP(start + size)`，没有与原有的 `max_pfn` 进行比较。当热插拔的内存地址范围小于当前系统已有的最大地址范围时，`max_pfn` 会被错误地缩小，导致依赖 `max_pfn` 进行遍历的内核功能（如 `read_page_owner`）出现异常。
+
+#解决方案
+修改 `arch/arm64/mm/mmu.c` 中的逻辑，在更新 `max_pfn` 时，使用 `max()` 函数比较当前 `max_pfn` 与新计算出的 `PFN_UP(start + size)`，确保 `max_pfn` 始终取两者中的较大值，从而保证其正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1e8672fa1f1510ad70113d7c5102b54353ff1b6e

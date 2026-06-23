@@ -1,0 +1,25 @@
+#标题
+cpufreq: nforce2 驱动存在引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动在运行过程中存在 PCI 设备引用计数泄漏问题。
+1. 在调用 `nforce2_fsb_read()` 读取配置时，每次调用都会泄漏一个 PCI 设备的引用计数。
+2. 在卸载 `nforce2` 模块时，全局变量 `nforce2_dev` 持有的引用计数未被释放。
+该问题由静态分析工具发现，可能导致设备引用计数无法归零，影响设备生命周期管理。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 在 `nforce2_fsb_read()` 函数中，调用 `pci_get_subsys()` 获取 PCI 设备 `nforce2_sub5` 时会增加引用计数，但在读取配置完成后未调用 `pci_dev_put()` 释放该引用。
+2. 在 `nforce2_detect_chipset()` 中通过 `pci_get_subsys()` 获取并存储在全局变量 `nforce2_dev` 中的设备引用，在模块卸载函数 `nforce2_exit()` 中未被释放。
+
+#解决方案
+1. 在 `nforce2_fsb_read()` 函数中，读取完配置后增加 `pci_dev_put(nforce2_sub5)` 调用，及时释放设备引用。
+2. 在 `nforce2_exit()` 函数中增加 `pci_dev_put(nforce2_dev)` 调用，在模块卸载时释放全局设备引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/786403d76d44e22472e1bb0224b7d7db4f1427b2

@@ -1,0 +1,23 @@
+#标题
+drm/komeda: AFBC framebuffer 大小校验存在整型溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AFBC（Arm Frame Buffer Compression）帧缓冲区大小校验过程中，计算最小所需缓冲区大小时发生整型溢出。
+当用户提供特定的畸形参数导致溢出时，校验逻辑可能错误地判定成功，从而允许用户态提供一个尺寸过小的 drm_gem_object。这会导致后续操作发生越界内存访问。
+
+#主要错误日志
+未知
+
+#问题根因
+AFBC 帧缓冲区大小验证逻辑在计算最小所需缓冲区大小时，通过加法将 AFBC payload 大小与 framebuffer 偏移量相加。该加法运算未进行整型溢出检查。
+如果加法发生溢出，结果值会回绕变小，导致大小检查错误地成功，从而绕过了安全校验。
+
+#解决方案
+引入 `check_add_overflow()` 函数来安全地计算最小所需大小。
+在计算 `min_size = kfb->afbc_size + fb->offsets[0]` 之前，使用 `check_add_overflow` 进行检测。如果检测到溢出，直接跳转到 `check_failed` 标签拒绝该帧缓冲区，从而修复该安全漏洞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a083092e8fc9ea1721f406f8f608c469a129301e

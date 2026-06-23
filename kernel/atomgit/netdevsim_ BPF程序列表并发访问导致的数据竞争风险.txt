@@ -1,0 +1,20 @@
+#标题
+netdevsim: BPF程序列表并发访问导致的数据竞争风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 netdevsim 驱动中，BPF 程序的创建与销毁路径并发执行时，存在对全局链表 `bpf_bound_progs` 的无锁读写操作。此故障可能导致内核列表结构损坏，进而引发内核崩溃、Oops 或内存混乱。
+
+#主要错误日志
+未知
+
+#问题根因
+netdevsim 驱动未对 `bpf_bound_progs` 链表操作进行并发保护。在 `nsim_bpf_create_prog` 函数中执行 `list_add_tail` 以及在 `nsim_bpf_destroy_prog` 函数中执行 `list_del` 时，均未持有互斥锁，导致多线程并发修改链表时存在数据竞争。
+
+#解决方案
+在 `nsim_dev` 结构体中新增互斥锁 `progs_list_lock`，并在驱动初始化与销毁时分别进行 `mutex_init` 与 `mutex_destroy`。同时，在 `nsim_bpf_create_prog` 和 `nsim_bpf_destroy_prog` 函数中对链表操作区域添加 `mutex_lock` 和 `mutex_unlock` 保护，确保链表操作的原子性与并发安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f7c47d7d2241afb9e35958d847d417044d3e446f

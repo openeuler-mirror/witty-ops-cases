@@ -1,0 +1,20 @@
+#标题
+drm/imx/tve: 修复 probe 过程中的 DDC 设备引用泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 imx-tve 驱动 probe 失败（例如发生 probe deferral 探针延迟）或驱动解绑时，之前在 probe 过程中获取的 DDC 设备引用未被释放，导致设备引用计数泄漏，造成设备资源无法被正确回收。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `imx_tve_probe` 函数中通过 `of_find_i2c_adapter_by_node()` 获取了 DDC 适配器设备（`tve->ddc`），该操作会增加设备的引用计数。但在后续 probe 失败或驱动卸载时，代码未执行相应的 `put_device()` 操作来减少引用计数，导致设备引用泄漏。
+
+#解决方案
+在 probe 流程中增加 `devm_add_action_or_reset` 机制，注册一个自动清理回调函数 `imx_tve_put_device`。当 probe 失败或驱动解绑时，该回调会自动被调用以释放 DDC 设备的引用，确保设备资源被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/363288a5ac12b93c8de92b5eeb225a75fbcdcd7d

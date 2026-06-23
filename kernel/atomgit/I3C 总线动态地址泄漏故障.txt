@@ -1,0 +1,31 @@
+#标题
+I3C 总线动态地址泄漏故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当设备树（DTS）中配置了 'assigned-address' 属性时，在 I3C 设备发起热加入（Hotjoin）事件过程中，会发生动态地址泄漏。系统表现为 I3C 总线上的地址资源被耗尽，`i3c_master_get_free_addr()` 函数将持续返回递增的序列号，无法重用之前已释放的地址，最终导致新设备无法正常加入总线。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `i3c_master_reattach_i3c_dev` 函数中，释放旧动态地址（`old_dyn_addr`）的逻辑存在缺陷。原代码逻辑如下：
+```c
+if (dev->info.dyn_addr != old_dyn_addr &&
+    (!dev->boardinfo ||
+     dev->info.dyn_addr != dev->boardinfo->init_dyn_addr)) {
+    // 释放 old_dyn_addr 逻辑
+    i3c_bus_set_addr_slot_status(..., old_dyn_addr, I3C_ADDR_SLOT_FREE);
+}
+```
+当 DTS 中存在 `assigned-address`（例如 0xb）时，设备热加入流程中，新分配的动态地址（例如 0x9）随后被修正为 `init_dyn_addr`（0xb）。此时判断条件 `dev->info.dyn_addr != dev->boardinfo->init_dyn_addr` 为 FALSE（0xb != 0xb），导致整个 if 块被跳过，旧动态地址（0x9）未被设置为 FREE 状态，从而造成地址泄漏。此外，在 `i3c_master_bus_init` 中过早地将 `init_dyn_addr` 标记为 `I3C_ADDR_SLOT_I3C_DEV` 也增加了地址冲突的风险。
+
+#解决方案
+1. 修改 `i3c_master_reattach_i3c_dev` 函数，移除 `dev->info.dyn_addr != dev->boardinfo->init_dyn_addr` 的检查条件。只要 `dev->info.dyn_addr != old_dyn_addr`，就更新地址槽状态，确保旧地址能被正确释放。
+2. 修改 `i3c_master_add_i3c_dev_locked` 函数，在尝试设置预期动态地址（`expected_dyn_addr`）之前，增加检查该地址是否为空闲状态（`I3C_ADDR_SLOT_FREE`），避免地址冲突。
+3. 调整 `i3c_master_bus_init` 中的逻辑，不再直接将 `init_dyn_addr` 标记为 `I3C_ADDR_SLOT_I3C_DEV`，而是标记为 `I3C_ADDR_SLOT_EXT_DESIRED`，仅在总线初始化期间保留该地址，防止在真实设备存在前错误占用地址槽。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/835a2340a69c13cc105ab48d2c589af17449b96f

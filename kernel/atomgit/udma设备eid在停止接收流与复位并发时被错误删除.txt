@@ -1,0 +1,28 @@
+#标题
+udma设备eid在停止接收流与复位并发时被错误删除
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当停止接收流操作与设备复位操作并发执行时，ubase 向控制面发送了两次 FE（Front End）去激活消息。导致在第二次去激活消息处理时，管理面和控制面无法从硬件获取到设备 eid，造成设备状态异常或功能受损。
+
+#主要错误日志
+- failed to activate ue dev, ue id = %u, msn = %u, ret = %d.
+- failed to deactivate ue dev, ue id=%u, msn=%u, ret=%d.
+- failed to activate ubase dev, ret = %d.
+- failed to deactivate ubase dev, ret = %d.
+- waitting for reset done in deactivate process.
+- wait reset done timeout.
+
+#问题根因
+在并发场景下，`ubase_deactivate_ue` 和 `ubase_activate_ue` 函数中，当 `ub_activate_entity` 或 `ub_deactivate_entity` 返回 `-EBUSY` 时，代码会调用 `ubase_activate_handler` 或 `ubase_deactivate_handler` 进行重试处理。这种处理逻辑导致了在复位期间错误的去激活流程被执行，从而向控制面发送了多余的去激活消息，导致设备 eid 被删除且无法恢复。
+
+#解决方案
+1. 移除 `ubase_activate_ue` 和 `ubase_deactivate_ue` 中对 `-EBUSY` 返回值的重试处理逻辑，避免在不合适的状态下发送消息。
+2. 在 `ubase_deactivate_dev` 接口中增加状态检测，若检测到设备处于复位状态（`UBASE_STATE_RST_HANDLING_B`），则调用 `ubase_deactivate_wait_reset_done` 等待复位完成后再继续处理。
+3. 在 `ubase_activate_dev` 接口中增加复位状态检测，若正在复位则直接跳过激活流程。
+4. 新增状态位 `UBASE_STATE_RST_WAIT_DEACTIVE_B`，用于在复位流程中同步去激活操作，确保去激活消息在复位完成后发送，或者在复位期间正确处理去激活请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8f6eb77901de59f314e3db4dfd66a2beeafad1df

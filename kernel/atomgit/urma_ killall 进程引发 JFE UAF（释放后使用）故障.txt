@@ -1,0 +1,24 @@
+#标题
+urma: killall 进程引发 JFE UAF（释放后使用）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 killall 操作终止进程时，触发 JFE（Job File Event）相关的 UAF（Use-After-Free）问题，可能导致内核崩溃或内存非法访问。
+
+#主要错误日志
+- ubcore_log_err("Linked list is not initialized.\n");
+- uburma_log_err("delete jfc failed, ret:%d.\n", ret);
+- uburma_log_err("jfae has been released.\n");
+
+#问题根因
+1. 在删除 JFC（Job File Context）时，未将对应的 JFE 资源指针置空，且缺乏有效性检查，导致后续流程可能访问已释放的 JFE 资源，引发 UAF。
+2. 在注销事件处理函数时，链表可能尚未初始化（next/prev 为 NULL），此时若直接添加事件节点会导致空指针访问错误。
+
+#解决方案
+1. 增加 JFE 资源有效性检查机制：在 `uburma_cmd_create_jfc` 中初始化 `jfc_lock` 自旋锁；在删除 JFC 或处理 JFCE 事件时，通过 `uburma_cleanup_jfce_references` 将 JFE 指针置空，并在访问前通过 `uburma_jfce_is_null` 进行检查。
+2. 增加链表初始化检查：在 `ubcore_register_event_handler` 中新增 `list_is_uninitialized` 判断，若链表未初始化则直接返回并打印错误日志，防止空指针崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8601aa7dda3d710c0351353132de9239cda6b6fc

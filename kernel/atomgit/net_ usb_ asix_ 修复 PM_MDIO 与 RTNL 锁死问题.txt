@@ -1,0 +1,20 @@
+#标题
+net: usb: asix: 修复 PM/MDIO 与 RTNL 锁死问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ASIX USB 网卡驱动（ax88772）的场景下，当触发运行时 PM（Runtime PM）自动挂起和恢复流程时，系统发生死锁。具体表现为在进行 MDIO I/O 操作或调用 phylink 相关接口时进程挂起，无法继续执行。
+
+#主要错误日志
+未知
+
+#问题根因
+asix_suspend()/asix_resume() 回调函数同时用于系统级休眠/唤醒和运行时 PM（Runtime PM）。在运行时 PM 恢复（autoresume）路径中，USB PM 锁被持有，此时驱动程序试图获取 RTNL 锁并执行 MDIO I/O（PHY 状态检查需要 RTNL）；而其他路径可能在持有 RTNL 锁的情况下等待 USB PM 锁，从而构成了锁的依赖循环导致死锁。此外，autosuspend 在此场景下并未带来可测量的节能收益。
+
+#解决方案
+在 ax88772_bind() 函数中通过调用 pm_runtime_get_noresume() 获取 PM usage reference，以此禁用该接口的运行时 PM 自动挂起功能。这避免了在 resume 路径中出现“持有 USB PM 锁 -> 请求 RTNL -> 执行 MDIO”的上下文，从而彻底规避了死锁风险。同时在 ax88772_unbind() 中释放该引用以保持资源平衡。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6eee8b9188fae0b31126a98baa2a545eafb40d6b

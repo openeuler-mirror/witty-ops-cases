@@ -1,0 +1,27 @@
+#标题
+sw64架构kexec crashdump功能异常及内存分配限制问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在Sunway（sw64）架构上进行内核崩溃转储时，内存分配可能因不必要的地址限制而失败。
+2. 在触发crash dump流程时，非panic CPU可能无法正确进入machine_kexec()函数，导致转储流程异常。
+3. crash kernel的基准地址检查逻辑错误，导致合法的地址被误判或非法地址未被检出。
+
+#主要错误日志
+- `pr_warn("Add crash kernel area [mem %#018llx-%#018llx] to memmap region failed.\n", ...)`
+- `pr_warn("Crash base should be greater than or equal to %#lx\n", PCI_LEGACY_IO_SIZE)`
+
+#问题根因
+1. **内存分配限制过严**：`memblock_phys_alloc_range` 调用时设置了 `KTEXT_MAX` 作为最大地址限制，但在当前实现中，内存分配可以在任意内存空间进行，该限制不再必要且阻碍了正常分配。
+2. **错误的重启准备调用**：在 `machine_crash_shutdown` 中调用了 `kernel_restart_prepare(NULL)`，这导致无论是panic CPU还是非panic CPU在处理逻辑上受阻，无法正确进入后续的 `machine_kexec()` 流程。
+3. **Crash Base检查逻辑错误**：原代码判断 `crash_base >= KERNEL_IMAGE_SIZE` 输出警告，实际上正确的约束应该是 crash base 不能小于 `PCI_LEGACY_IO_SIZE`，原判断条件与实际硬件约束不符。
+
+#解决方案
+1. **移除内存分配上限**：将 `memblock_phys_alloc_range` 的结束地址参数从 `KTEXT_MAX` 改为 0（表示无特定上限），允许在任意可用内存区域进行分配。
+2. **删除冗余调用**：移除 `machine_crash_shutdown` 函数中的 `kernel_restart_prepare(NULL)` 调用，确保 crash dump 流程能正常执行。
+3. **修正地址检查条件**：将 crash base 的合法性检查条件从 `crash_base >= KERNEL_IMAGE_SIZE` 修改为 `crash_base < PCI_LEGACY_IO_SIZE`，确保 crash kernel 基地址大于等于 PCI Legacy IO 区域大小。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b919a0c87003becd50e7dbbd26b8dfadececb7e3

@@ -1,0 +1,29 @@
+#标题
+HID子系统与uinput模块多处安全及逻辑缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **uinput 竞态条件**：在并发场景下，uinput 设备销毁期间若仍有请求发送，可能导致内核崩溃或数据结构不一致（use-after-free 或访问未初始化的完成量）。
+2. **ALPS HID 驱动空指针崩溃**：当 HID 设备未声明输入子系统和输入设备时，处理原始事件会导致内核空指针解引用。
+3. **HID 核心整数溢出**：在解析某些特定 HID 报告描述符时，可能触发未定义行为或内核崩溃。
+4. **Apple/Magicmouse 设备异常**：在内存不足场景下，报告描述符修复逻辑可能因 `kmemdup` 失败而错误地将设备标记为无效，导致设备无法正常初始化。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **uinput**：`uinput_request_send` 函数使用 `mutex_lock` 保护状态检查，但在释放互斥锁后、调用 `uinput_dev_event` 前存在竞态窗口；同时 `init_completion` 在预留 slot 之后才执行，导致并发路径可能访问未初始化的完成量。
+2. **hid-alps**：`alps_raw_event` 函数未检查 `hdev->claimed` 标志位及 `hdata->input` 指针是否有效，直接进行访问导致空指针解引用。
+3. **hid-core**：`s32ton` 函数未对参数 `n` 进行上界检查，当 `n > 32` 时会导致移位操作未定义。
+4. **hid-apple/magicmouse**：报告描述符修复逻辑中错误地使用了 `kmemdup` 并在分配失败时返回 `NULL`，这破坏了原有的描述符指针有效性，导致驱动加载失败。
+
+#解决方案
+1. **uinput**：引入 `state_lock` 自旋锁替代互斥锁来保护状态检查与变更；调整代码顺序，确保 `init_completion` 在 `uinput_request_reserve_slot` 之前执行，避免并发访问未初始化结构。
+2. **hid-alps**：在 `alps_raw_event` 入口处增加 `HID_CLAIMED_INPUT` 和 `hdata->input` 的有效性检查，若无效则直接返回。
+3. **hid-core**：在 `s32ton` 函数中增加判断，若 `n > 32` 则强制将其设为 32，防止移位溢出。
+4. **hid-apple/magicmouse**：移除 `kmemdup` 调用，直接通过指针偏移 (`rdesc = rdesc + 1`) 调整报告描述符缓冲区，避免内存分配失败风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b4943d0ded9e1c1f6b989c54b7e643e706fd5c1a

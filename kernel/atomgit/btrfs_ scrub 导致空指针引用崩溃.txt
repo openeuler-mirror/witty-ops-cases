@@ -1,0 +1,25 @@
+#标题
+btrfs: scrub 导致空指针引用崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `rescue=all,ro` 选项挂载具有损坏 extent tree 根节点的 BTRFS 镜像并触发 scrub 操作时，内核发生 NULL 指针引用崩溃。具体表现为执行 scrub 过程中系统崩溃，触发 Oops。
+
+#主要错误日志
+BTRFS info (device loop0): scrub: started on devid 1
+BUG: kernel NULL pointer dereference, address: 0000000000000208
+#PF: supervisor read access in kernel mode
+#PF: error_code(0x0000) - not-present page
+Oops: Oops: 0000 [#1] PREEMPT SMP NOPTI
+RIP: 0010:find_first_extent_item+0x26/0x1f0 [btrfs]
+
+#问题根因
+由于使用了损坏的镜像且开启了 `rescue=all,ro` 挂载选项，导致 extent tree 根节点不可用（corrupted），此时 extent root 为空指针。函数 `scrub_find_fill_first_stripe()` 依赖于非空的 extent root 来获取 fs_info，但未对其进行有效性检查就直接使用，从而触发了空指针引用。
+
+#解决方案
+在 `scrub_find_fill_first_stripe()` 函数开头增加对 `extent_root` 指针的有效性检查。如果检测到 `extent_root` 为空，则打印错误日志 "no valid extent root for scrub" 并返回 `-EUCLEAN` 错误码，从而避免后续的空指针引用崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/467f4fd521439cf23a51173db52d297e0cef716c

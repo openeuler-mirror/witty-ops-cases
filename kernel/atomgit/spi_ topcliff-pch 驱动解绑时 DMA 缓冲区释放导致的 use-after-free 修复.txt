@@ -1,0 +1,20 @@
+#标题
+spi: topcliff-pch 驱动解绑时 DMA 缓冲区释放导致的 use-after-free 修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 spi-topcliff-pch 驱动（driver unbind）过程中，如果启用了 DMA 功能，内核会发生 use-after-free 错误。这是因为在驱动移除流程中过早释放了 DMA 缓冲区，而此时驱动的消息处理队列尚未完全清空，可能导致系统崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `pch_spi_pd_remove` 函数中，代码逻辑错误地在尝试刷新消息队列（flush queue）和释放中断（free_irq）之前就调用了 `pch_free_dma_buf` 释放 DMA 缓冲区。这导致如果队列中仍有待处理的传输任务或中断处理未完成，后续代码访问已释放的 DMA 缓冲区时触发 use-after-free 漏洞。
+
+#解决方案
+调整 `pch_spi_pd_remove` 函数中的代码执行顺序，将释放 DMA 缓冲区的操作（`pch_free_dma_buf`）移动到消息队列刷新循环结束以及中断资源释放（`free_irq`）之后。这确保了在销毁 DMA 缓冲区前，所有的传输任务和中断处理已完成，避免了内存的非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/565c76855590bee5a799a2c7f092b560db219f6d

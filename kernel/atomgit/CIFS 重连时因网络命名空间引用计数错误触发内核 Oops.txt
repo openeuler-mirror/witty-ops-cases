@@ -1,0 +1,46 @@
+#标题
+CIFS 重连时因网络命名空间引用计数错误触发内核 Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非 root 网络命名空间（如 Kubernetes Pod）中挂载 CIFS 共享时，若在销毁命名空间（如 Pod 销毁）过程中触发 CIFS 重连，会导致内核崩溃。
+具体表现为：
+1. 内核日志报错 "Unable to handle kernel paging request" 并触发 Oops。
+2. 进程处于非根网络命名空间，且正在尝试重连 CIFS 服务器。
+3. 启用 CONFIG_NET_NS_REFCNT_TRACKER 时可观测到 ref_tracker 泄露告警。
+
+#主要错误日志
+- CIFS: VFS: \\XXXXXXXXXXX has not responded in 15 seconds. Reconnecting...
+- CIFS: Serverclose failed 4 times, giving up
+- Unable to handle kernel paging request at virtual address 14de99e461f84a07
+- Mem abort info:
+  ESR = 0x0000000096000004
+  EC = 0x25: DABT (current EL), IL = 32 bits
+  FSC = 0x04: level 0 translation fault
+- Internal error: Oops: 0000000096000004 [#1] SMP
+- Call trace:
+ fib_rules_lookup+0x44/0x238
+ __fib_lookup+0x64/0xbc
+ ip_route_output_key_hash_rcu+0x2c4/0x398
+ tcp_v4_connect+0x290/0x488
+ kernel_connect+0x6c/0xac
+ generic_ip_connect+0x10c/0x6c8 [cifs]
+ cifs_demultiplex_thread+0xf8/0x704 [cifs]
+- ref_tracker: net notrefcnt@... has 1/1 users at
+     sk_alloc
+     inet_create
+     __sock_create
+     generic_ip_connect
+
+#问题根因
+CIFS 客户端使用内核套接字，该类套接字在创建时（sk_alloc）不会持有所属网络命名空间的引用计数。
+在 Pod 销毁等场景下，网络命名空间被释放，但 CIFS 的重连线程仍在尝试使用该命名空间进行路由查找（__fib_lookup），导致访问已释放内存引发 Use-After-Free。
+
+#解决方案
+1. 在 socket 创建后（generic_ip_connect 函数内），手动增加网络命名空间的引用计数。具体操作为：初始化 socket 的 `sk_net_refcnt` 为 1，并调用 `get_net_track` 获取命名空间引用。
+2. 将释放网络命名空间引用的操作点（put_net）从 `cifs_put_tcp_session` 移动到 `clean_demultiplex_info` 函数中，确保在 socket 彻底销毁后才释放命名空间引用，防止重连过程中命名空间被提前释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/013bf45f37929298e7c73a33d512939ff057f90a

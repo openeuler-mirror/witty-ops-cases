@@ -1,0 +1,20 @@
+#标题
+regulator: gpio: 修复 drvdata::gpiods 的越界访问问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 gpio-regulator 驱动加载过程中，当配置的 GPIO 数量大于 1 时，由于内存分配空间不足，驱动在初始化 gpiods 数组时会越界写入。这可能导致内核内存破坏，进而引发系统崩溃或内核 panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `gpio_regulator_probe` 函数中，原代码使用 `devm_kzalloc` 分配内存时，大小参数硬编码为 `sizeof(struct gpio_desc *)`，即仅分配了一个指针大小的空间。然而，后续代码通过循环 `config->ngpios` 次来初始化 `drvdata->gpiods` 数组。当 `config->ngpios` 大于 1 时，写入操作会超出分配的内存边界，导致越界访问。
+
+#解决方案
+将内存分配函数从 `devm_kzalloc` 替换为 `devm_kcalloc`，根据 `config->ngpios` 动态分配足够数量的 `struct gpio_desc *` 指针数组空间。同时，将内存分配失败的检查逻辑移至分配操作之后，确保在内存不足时正确返回 `-ENOMEM`，避免空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/078531e03ff587c88e602d1f2854181a49c02930

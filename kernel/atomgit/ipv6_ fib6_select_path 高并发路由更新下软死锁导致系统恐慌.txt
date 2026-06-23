@@ -1,0 +1,31 @@
+#标题
+ipv6: fib6_select_path 高并发路由更新下软死锁导致系统恐慌
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在高动态网络环境中（如使用 BGP 协议频繁更新路由的边缘路由器），当系统处理大量 IPv6 流量同时频繁更新下一跳（nexthop）路由时，内核发生软死锁。具体表现为 CPU 在 `fib6_select_path` 函数中陷入无限循环，触发 watchdog 定时器导致系统 panic。
+
+#主要错误日志
+```
+[exception RIP: fib6_select_path+299]
+RIP: ffffffff8ddafe7b  RSP: ffffbd13003d37b8  RFLAGS: 00000287
+...
+2 [ffffbd13003e8e58] panic at ffffffff8cef65d4
+3 [ffffbd13003e8ed8] watchdog_timer_fn at ffffffff8d05cb03
+...
+9 [ffffbd13003d3808] ip6_pol_route at ffffffff8ddb030c
+```
+
+#问题根因
+在 `fib6_select_path` 函数中遍历多路径（multipath）循环链表 `fib6_siblings` 时，使用了非 RCU 保护的遍历方式（`list_for_each_entry_safe`）。当其他 CPU 核心并发删除链表节点时，被删除节点的 `next` 和 `prev` 指针可能指向自身且引用计数降为零，导致遍历陷入无限循环，从而引发软死锁。
+
+#解决方案
+将涉及 `fib6_siblings` 链表遍历与修改的代码段改为使用 RCU（Read-Copy-Update）原语：
+1. 在 `fib6_select_path`、`rt6_nlmsg_size`、`rt6_fill_node` 等函数中，将链表遍历宏从 `list_for_each_entry_safe` 替换为 `list_for_each_entry_rcu`，并添加 `rcu_read_lock/unlock` 保护。
+2. 在路由添加与删除路径（`fib6_add_rt2node`、`fib6_del_route`）中，将链表操作函数从 `list_add_tail` 和 `list_del_init` 替换为对应的 RCU 版本 `list_add_tail_rcu` 和 `list_del_rcu`。
+3. 修改路由通知相关的内存分配标志，使用 `GFP_ATOMIC` 替代 `gfp_any()` 以适配 RCU 上下文。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d1b8a1f858f8fca08aef304b62fc83eaff58f40a

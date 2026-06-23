@@ -1,0 +1,20 @@
+#标题
+iscsi: target: Fix use-after-free in iscsit_dec_session_usage_count()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 iSCSI target 会话释放路径中，发生 KASAN 检测到的 slab-use-after-free 错误。具体表现为当前线程在调用 `complete()` 唤醒等待者后，试图对已释放的 `iscsit_session` 结构体执行 `spin_unlock_bh()` 操作，导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in iscsit_dec_session_usage_count (推断)
+
+#问题根因
+在 `iscsit_dec_session_usage_count()` 函数中，代码在持有 `sess->session_usage_lock` 自旋锁的情况下调用了 `complete()`。这引发了一个竞争条件：被 `complete()` 唤醒的等待者（例如在会话释放路径中）可能立即唤醒并释放 `iscsit_session` 结构体。此时，当前线程仍持有该锁，并试图在函数末尾对已经被释放的 `sess` 指针执行 `spin_unlock_bh()`，从而触发 use-after-free。
+
+#解决方案
+在调用 `complete()` 之前先释放 `session_usage_lock` 自旋锁。这确保了对 `sess` 指针的所有解引用操作（如解锁）在等待者开始执行释放逻辑之前已经完成，避免了 UAF 风险。具体代码变更为：在条件满足时先执行 `spin_unlock_bh`，再调用 `complete`，随后直接返回，跳过函数末尾的解锁操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4e04690f36f80228d0114488b424d0c1770e2acf

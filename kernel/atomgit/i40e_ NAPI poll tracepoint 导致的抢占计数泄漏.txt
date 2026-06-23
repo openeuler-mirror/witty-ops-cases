@@ -1,0 +1,20 @@
+#标题
+i40e: NAPI poll tracepoint 导致的抢占计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 i40e 网卡驱动的 NAPI poll 跟踪点（tracepoint）时，会导致内核抢占计数泄漏。这可能引发内核调度异常、休眠警告或在随后的代码路径中触发抢占计数不平衡相关的 BUG 或内核 panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `i40e_trace.h` 文件的 `i40e_napi_poll` tracepoint 定义中，使用 `get_cpu()` 函数获取当前 CPU ID。`get_cpu()` 函数内部会禁用内核抢占，但代码逻辑中未配对调用 `put_cpu()` 来恢复抢占状态，导致抢占计数无法还原，从而造成抢占计数泄漏。此外，该场景仅需获取 CPU 编号，无需禁用抢占。
+
+#解决方案
+将 `get_cpu()` 调用替换为 `smp_processor_id()`。`smp_processor_id()` 仅用于获取当前 CPU ID，不涉及抢占计数修改，从而修复了抢占计数泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a8c608dc40a1ecd7b999436044e77f6d5e2056f3

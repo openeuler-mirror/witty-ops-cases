@@ -1,0 +1,26 @@
+#标题
+[sxe] 编译未开启 CONFIG_PM_SLEEP 时触发 unused-function 编译错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用未开启 `CONFIG_PM_SLEEP` 选项的配置（如 `bcm2711_defconfig`）编译 sxe 驱动时，编译过程报错终止，提示函数定义但未使用。
+
+#主要错误日志
+drivers/net/ethernet/linkdata/sxe/sxepf/sxe_main.c:1071:12: error: 'sxe_resume' defined but not used [-Werror=unused-function]
+ 1071 | static int sxe_resume(struct device *dev)
+      |            ^~~~~~~~~~
+drivers/net/ethernet/linkdata/sxe/sxepf/sxe_main.c:1038:12: error: 'sxe_suspend' defined but not used [-Werror=unused-function]
+ 1038 | static int sxe_suspend(struct device *dev)
+      |            ^~~~~~~~~~~
+cc1: all warnings being treated as errors
+
+#问题根因
+代码中用于包裹电源管理回调函数（`sxe_suspend` 和 `sxe_resume`）的宏定义条件不正确。原代码使用 `#ifdef CONFIG_PM` 进行条件编译，但在内核 Kconfig 逻辑中，仅当 `CONFIG_PM_SLEEP` 被选中时，这些 suspend/resume 回调才会被实际引用。若系统仅开启了 `CONFIG_PM` 而未开启 `CONFIG_PM_SLEEP`，编译器会发现这些静态函数被定义却未被调用，从而触发 unused-function 错误。
+
+#解决方案
+修正条件编译宏，将 `drivers/net/ethernet/linkdata/sxe/sxepf/sxe_main.c` 和 `drivers/net/ethernet/linkdata/sxevf/sxevf/sxevf_main.c` 中相关的代码块由 `#ifdef CONFIG_PM` 修改为 `#ifdef CONFIG_PM_SLEEP`，确保函数定义与其使用条件严格匹配，消除编译警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a29c130b6607ab7a2d7e6df8625494cdafc6d736

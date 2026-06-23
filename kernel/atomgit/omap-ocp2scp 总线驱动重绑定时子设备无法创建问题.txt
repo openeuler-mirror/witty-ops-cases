@@ -1,0 +1,20 @@
+#标题
+omap-ocp2scp 总线驱动重绑定时子设备无法创建问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 omap-ocp2scp 驱动进行解绑后重新绑定时，子设备无法被正确创建。这是由于在移除设备时未正确清理设备树节点的 OF_POPULATED 标志位，导致后续调用 of_platform_populate() 时误判节点已被填充而跳过创建过程，引发驱动重绑定后功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+内核提交 c6e126de43e7 ("of: Keep track of populated platform devices") 引入了 OF_POPULATED 标志位跟踪机制。当前驱动在 remove 流程中使用了自行实现的 ocp2scp_remove_devices() 函数来注销子设备，该函数仅调用了 platform_device_unregister()，未调用 of_platform_depopulate() 来清理设备树节点上的 OF_POPULATED 标志。当驱动重新绑定时，of_platform_populate() 检测到节点仍有 OF_POPULATED 标志，因此拒绝创建对应的平台设备。
+
+#解决方案
+删除自行实现的 ocp2scp_remove_devices() 函数及其调用逻辑，统一使用 of_platform_depopulate() 接口来注销子设备。该接口会正确清除 OF_POPULATED 标志，确保驱动在重新绑定时子设备能被正常创建。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6aec524e5192c81a0ed8526c012da8570a7e2b49

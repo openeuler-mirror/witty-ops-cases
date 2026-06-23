@@ -1,0 +1,28 @@
+#标题
+perf tests switch-tracking: Fix timestamp comparison
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Arm64 平台上执行 `perf test -vvv "Track with sched_switch"` 测试命令时，测试用例偶发性失败（通常运行 20~30 次可触发一次），输出错误提示 "Missing sched_switch events"。
+
+#主要错误日志
+```
+# perf test -vvv "Track with sched_switch"
+Missing sched_switch events
+#
+```
+或测试结果直接显示：
+```
+106: Track with sched_switch                                         : FAILED!
+```
+
+#问题根因
+`compar` 函数在进行时间戳比较时处理不当。比较结果 `cmp` 是一个 64 位有符号数，直接将其作为返回值返回。由于函数返回值类型为 int，这种直接返回导致 64 位到 32 位的隐式截断，在某些情况下导致排序结果错误，进而引发测试失败。
+
+#解决方案
+修改 `tools/perf/tests/switch-tracking.c` 中的 `compar` 函数，显式处理比较逻辑：当比较结果小于 0 时返回 -1，大于 0 时返回 1，等于 0 时返回 0，避免直接返回 64 位有符号数导致的类型截断问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/be721c75d5c2730245075696ebdf7b4909304c77

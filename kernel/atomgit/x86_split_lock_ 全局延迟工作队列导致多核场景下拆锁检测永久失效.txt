@@ -1,0 +1,23 @@
+#标题
+x86/split_lock: 全局延迟工作队列导致多核场景下拆锁检测永久失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了 `split_lock_mitigate=0`（警告模式且禁用缓解模式）的多核系统中，当多线程应用程序在短时间内（2个jiffies内）于不同CPU核心上触发拆锁时，部分核心的拆锁检测（SLD）机制会被禁用且无法重新启用。
+随着时间推移，系统中除了一个核心外，其余所有核心的SLD功能都将永久处于关闭状态，导致系统无法再检测到这些核心上的拆锁行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在警告模式（`sysctl_sld_mitigate == 0`）下，所有CPU共享同一个全局的延迟工作结构体 `sl_reenable`。当多个CPU几乎同时发生拆锁时，第一个CPU成功调用 `schedule_delayed_work_on()` 调度工作并将工作状态置为 pending。随后，其他CPU调用 `schedule_delayed_work_on()` 时，由于检测到工作项处于 pending 状态，调用失败且未将工作项放入队列。
+然而，代码中未检查 `schedule_delayed_work_on()` 的返回值，导致错误被掩盖。结果是，首个CPU的回调函数仅重新开启了自己核心的SLD，而其他核心的SLD一直处于关闭状态且没有后续的重新启用流程。
+
+#解决方案
+将全局共享的延迟工作结构体 `sl_reenable` 修改为 per-CPU 变量 `DEFINE_PER_CPU(struct delayed_work, sl_reenable)`。
+这确保了每个CPU拥有独立的延迟工作项，从而可以独立调度各自的重新启用任务，互不干扰。同时，在初始化逻辑中增加了对 per-CPU 工作项函数指针的检查，实现了延迟初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/99576b4891461b76cb101d2ba29b12b4937c7c88

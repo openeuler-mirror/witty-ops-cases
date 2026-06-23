@@ -1,0 +1,20 @@
+#标题
+comedi: mmap 失败时未清理部分映射导致内存安全问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 comedi 设备执行 mmap 操作时，若 remap_pfn_range() 循环调用过程中部分成功后发生失败，内核会遗留部分已映射的缓冲区页到用户空间页表中。此时内核侧已经释放了缓冲区引用，但用户空间页表仍持有映射，导致内存状态不一致，存在潜在的安全风险或内存破坏隐患。
+
+#主要错误日志
+未知
+
+#问题根因
+在 comedi_mmap 函数中，代码尝试循环调用 remap_pfn_range() 映射多个页面。如果在循环中途某次调用失败，之前的调用已经成功建立了部分映射。错误处理路径在释放缓冲区引用（comedi_buf_map_put）后直接返回，没有主动清理（unmap/zap）这部分已建立的映射。这些遗留的映射会在后续被自动清理，但在缓冲区引用已释放的期间内，存在不安全的内存访问窗口。
+
+#解决方案
+在 mmap 失败的错误处理路径中，显式调用 zap_vma_ptes() 函数刷新当前 VMA 中的映射，确保在释放缓冲区引用前清理掉所有部分映射，避免内存状态不一致。该修复参考了提交 79a61cc3fc04 ("mm: avoid leaving partial pfn mappings around in error case")。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c237a7044f97c683c2e2721499fbf1accbab4d96

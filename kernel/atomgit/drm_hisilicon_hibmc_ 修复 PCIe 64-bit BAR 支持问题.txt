@@ -1,0 +1,25 @@
+#标题
+drm/hisilicon/hibmc: 修复 PCIe 64-bit BAR 支持问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了 64-bit PCIe BAR 的环境中，hibmc DRM 驱动无法正确映射 mmio 区域，导致驱动加载失败或显示功能异常。
+
+#主要错误日志
+drm_err(dev, "Cannot map mmio region\n");
+
+#问题根因
+驱动代码中硬编码了使用 BAR 1（`pci_resource_start(pdev, 1)`）来获取 IO 地址和大小，未判断当前设备是否使用 64-bit BAR。在 64-bit BAR 场景下，BAR 0 和 BAR 1 通常被合并为一个 64 位的地址空间，实际的寄存器资源位于 BAR 2，导致资源获取错误。
+
+#解决方案
+修改 `hibmc_hw_map` 函数，增加对 BAR 资源类型的判断逻辑：
+1. 获取 BAR 0 的资源标志位（`flags`）。
+2. 判断若为 `IORESOURCE_MEM_64`，则将目标 BAR 设为 2。
+3. 若为普通 `IORESOURCE_MEM`，则保持目标 BAR 为 1。
+4. 若两者皆不是，返回 `-ENODEV`。
+5. 根据判断得到的 BAR 索引动态获取 `ioaddr` 和 `iosize`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ad7c381068039884875fffd2a37ec6e30ba2375

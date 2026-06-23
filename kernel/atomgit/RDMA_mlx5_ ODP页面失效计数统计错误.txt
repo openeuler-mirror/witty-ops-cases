@@ -1,0 +1,24 @@
+#标题
+RDMA/mlx5: ODP页面失效计数统计错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mlx5 RDMA 驱动中使用 ODP（On-Demand Paging）功能并进行地址范围失效操作时，诊断计数器统计的失效页面总数不正确。由于内核采用了分块处理 UMR 操作的优化机制，导致失效计数器在同一个数据块内被重复更新或在不恰当的时机更新，使得最终统计的失效页面数值无法准确反映实际通过 UMR 失效的页面数量。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mlx5_ib_invalidate_range` 函数中，失效计数器 `invalidations` 的更新逻辑位置不正确。原先的代码在遍历页面时，如果处于同一个处理块内，会针对每个索引重复累加 `idx - blk_start_idx + 1`。正确的逻辑应当是仅在完成一个块的处理并调用 `mlx5r_umr_update_xlt()` 函数后，才更新失效计数器。原有实现导致计数器被提前和重复更新，无法准确代表使用 UMR 失效的页面数量。
+
+#解决方案
+调整 `invalidations` 变量的累加位置，将其移至 `mlx5r_umr_update_xlt()` 调用之后。具体修改包括：
+1. 删除循环内部对 `invalidations` 的累加操作。
+2. 在 UMR 块处理结束调用 `mlx5r_umr_update_xlt()` 后，执行 `invalidations += idx - blk_start_idx + 1`。
+3. 在函数末尾处理剩余的未完成块时，同样在调用 `mlx5r_umr_update_xlt()` 后进行计数累加。
+此修复确保计数器仅在 UMR 操作实际执行后更新，从而准确统计失效的页面数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b5ed4296261203a23f0966c7d689575004bafcfb

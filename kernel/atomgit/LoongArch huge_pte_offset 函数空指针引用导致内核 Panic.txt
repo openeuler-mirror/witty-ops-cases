@@ -1,0 +1,20 @@
+#标题
+LoongArch huge_pte_offset 函数空指针引用导致内核 Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构下调用 `huge_pte_offset()` 函数时，若上级页表项（PUD）不存在，函数返回的 PMD 指针为 NULL。后续代码在未检查 PMD 指针有效性的情况下直接调用 `pmdp_get(pmd)` 进行判空操作，导致内核发生空指针引用 Panic。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference
+
+#问题根因
+`huge_pte_offset()` 函数中存在逻辑缺陷。原代码在函数末尾执行 `pmd_none(pmdp_get(pmd))` 判断时，忽略了 `pmd` 指针可能为 NULL 的情况（例如当 `pud_none(*pud)` 为真时，`pmd_offset` 未被执行，`pmd` 保持初始化的 NULL 值）。这导致对 NULL 指针进行解引用操作，从而触发 Panic。
+
+#解决方案
+在返回值判断前增加对 `pmd` 指针本身的非空校验。将返回逻辑修改为：若 `pmd` 为 NULL 或 `pmd` 指向的条目为空，则返回 NULL，否则返回 `pmd`。这确保了不会对 NULL 指针进行解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/313fefb8d0c545ad282c623dc83130f6219ff467

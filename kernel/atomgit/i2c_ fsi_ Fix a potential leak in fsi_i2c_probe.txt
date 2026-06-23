@@ -1,0 +1,20 @@
+#标题
+i2c: fsi: Fix a potential leak in fsi_i2c_probe
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 FSI I2C 控制器驱动 probe 阶段，若 `i2c_add_adapter` 注册失败，会导致 `device_node` 结构体的引用计数泄漏，造成内核内存资源泄漏。
+
+#主要错误日志
+dev_err(dev, "Failed to register adapter: %d\n", rc);
+
+#问题根因
+在提交 095561f476ab ("i2c: fsi: Create busses for all ports") 中，代码逻辑从 `for_each_available_child_of_node()` 循环改为了显式的 for 循环。原迭代器宏会自动处理节点引用的释放，而改为显式循环后，破坏了每次迭代自动释放引用的假设。当 `i2c_add_adapter` 注册失败时，代码直接 `kfree(port)` 并 `continue`，遗漏了 `of_node_put()` 调用，导致引用计数未被释放。
+
+#解决方案
+在 `fsi_i2c_probe` 函数中，当 `i2c_add_adapter` 返回错误时，在释放 port 内存并跳过当前循环前，显式调用 `of_node_put(np)` 以释放设备节点引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dea619094140de6d5f9a31ada7c08ebf0f3421f6

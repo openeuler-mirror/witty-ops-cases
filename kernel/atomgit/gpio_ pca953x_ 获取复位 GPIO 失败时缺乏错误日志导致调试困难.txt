@@ -1,0 +1,20 @@
+#标题
+gpio: pca953x: 获取复位 GPIO 失败时缺乏错误日志导致调试困难
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 pca953x GPIO 扩展器驱动在 probe 过程中获取复位 GPIO 失败时（例如设备树配置错误、资源不可用等），驱动加载会静默失败，仅在内核日志中留下无意义的错误码返回值，用户无法通过 dmesg 直接判断是“获取 reset GPIO 失败”还是其他原因导致了驱动初始化错误，增加了故障排查难度。
+
+#主要错误日志
+"Failed to get reset gpio\n"
+
+#问题根因
+驱动代码在处理 `devm_gpiod_get_optional` 返回错误指针（PTR_ERR）时，直接返回了错误码，没有调用 `dev_err_probe` 或类似的打印函数记录具体的错误原因。这导致驱动加载失败时缺乏直观的错误日志信息。
+
+#解决方案
+在驱动获取 reset GPIO 失败的分支中，将原本的 `return PTR_ERR(reset_gpio);` 修改为使用 `dev_err_probe()` 函数返回。该函数会在返回错误码的同时，向内核日志打印标准的错误信息（包含 "Failed to get reset gpio" 字样及具体的错误码原因），从而提供可追踪的日志依据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a0428fee60611ff764de0aca6f0c15507d7b6f39

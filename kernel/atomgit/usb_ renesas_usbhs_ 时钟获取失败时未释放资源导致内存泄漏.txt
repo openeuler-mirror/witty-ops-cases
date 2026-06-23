@@ -1,0 +1,20 @@
+#标题
+usb: renesas_usbhs: 时钟获取失败时未释放资源导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Renesas USB HS 驱动初始化过程中，若第二个时钟资源（clk_get 获取 `clks[1]`）获取失败，系统不会释放此前已成功获取的第一个时钟资源（`clks[0]`），导致时钟资源泄漏（Clock Resource Leak）。这可能影响系统电源管理或导致后续相关资源分配异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `usbhsc_clk_get` 中，代码逻辑使用 `of_clk_get()` 获取时钟资源。当成功获取第一个时钟 `priv->clks[0]` 后，继续获取第二个时钟 `priv->clks[1]`。若第二个时钟获取失败（返回错误指针），代码直接返回错误码，但未调用 `clk_put()` 释放已持有的 `priv->clks[0]`。根据内核 API 规范，通过 `of_clk_get()` 获取的时钟必须使用 `clk_put()` 释放。
+
+#解决方案
+在 `usbhsc_clk_get` 函数中，针对 `priv->clks[1]` 获取失败的错误处理分支，增加调用 `clk_put(priv->clks[0])`，确保在返回错误前释放已申请的时钟资源，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a84e31baf0906ce56b700f3af1d323fd344f56cf

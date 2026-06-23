@@ -1,0 +1,20 @@
+#标题
+firewire: nosy 驱动 DMA 缓冲区释放尺寸不匹配
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动程序在卸载或初始化失败时，调用 `dma_free_coherent` 释放接收缓冲区，传入的释放大小为 `PAGE_SIZE`（通常为 4KB），而实际分配的大小为 `RCV_BUFFER_SIZE`（16KB）。这种参数不匹配可能导致内核内存管理子系统校验失败，引发内核警告或内存泄露，影响驱动正常的资源释放流程。
+
+#主要错误日志
+未知
+
+#问题根因
+代码逻辑存在不一致：在 `add_card()` 函数中使用 `RCV_BUFFER_SIZE`（16KB）分配了 DMA 缓冲区，但在 `remove_card()` 函数和错误处理路径中释放该缓冲区时，错误地使用了 `PAGE_SIZE`（4KB）作为大小参数。这是因为在定义 `RCV_BUFFER_SIZE` 宏之前就使用了该常量值，或者编写释放代码时错误估算了缓冲区大小。
+
+#解决方案
+将 `remove_card()` 函数及 `add_card()` 错误处理路径中 `dma_free_coherent` 的 size 参数由 `PAGE_SIZE` 修正为 `RCV_BUFFER_SIZE`，确保释放大小与分配大小一致。同时，将 `RCV_BUFFER_SIZE` 的宏定义移至文件顶部，确保其在代码中使用前已完成定义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e299a9ceb3d04f03fee45a1d2a9026d33f99b515

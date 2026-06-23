@@ -1,0 +1,23 @@
+#标题
+UNIC 驱动并发激活与复位导致网络不可用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UDMA 驱动移除过程中，若并发发生 ELR 复位操作，会导致网络状态异常。具体表现为：UNIC 模块在复位期间收到激活请求时跳过了激活流程，导致 deactivate 标志位未被清除，后续流程中 `netif_carrier_on` 无法完成，最终造成网络不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 UDMA 驱动移除流程中，UDMA 首先调用 UNIC 接口去激活，UNIC 设置了 deactivate 标志。此时若发生 ELR 复位，UDMA 驱动会调用 UNIC 接口进行激活。但 UNIC 在复位进行期间会跳过激活处理流程，导致 deactivate 标志位无法被清除，进而阻塞了后续的载波状态设置，引发网络不可用。
+
+#解决方案
+调整了激活与去激活事件处理函数 `unic_activate_event_process` 和 `unic_deactivate_event_process` 的逻辑，确保在复位过程中如果发生去激活或激活操作，标志位能被正确设置或清除。具体代码修改包括：
+1. 将 `rtnl_lock` 锁的范围扩大，包裹住激活和去激活的处理函数调用，确保原子性。
+2. 在 `unic_activate_event_process` 中提前检查 `UNIC_STATE_DEACTIVATE` 状态，若设备未处于去激活状态则直接返回。
+3. 优化了 `unic_deactivate_event_process` 中的状态检查顺序和错误处理逻辑，确保在设备禁用状态下也能正确设置去激活标志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e8c9f48cc9decebed4a01a7344b114ad0cfdddd2

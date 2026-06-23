@@ -1,0 +1,22 @@
+#标题
+drm/msm/a6xx: GPU挂起后残留rpmh投票导致电源状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sc7180 平台（搭载 A618 GPU）上，系统执行 GPU 挂起操作后，GPU 对 GX rail 和 CNOC BCM 节点的投票未被正确清除。这导致系统在 GPU 应当下电后，依然保留着电源状态请求，可能导致功耗异常或后续电源管理状态不一致。
+
+#主要错误日志
+DRM_DEV_ERROR(gmu->dev, "Unable to slumber GMU: status = 0%x/0%x\n", ...)
+
+#问题根因
+在 GPU 挂起流程中，代码逻辑存在缺陷：
+1. 在某些特定场景下，代码会跳过向 GMU 发送 'prepare-slumber' 请求，导致资源投票未被清理。
+2. 如果在没有预先进行 oob-gpu 握手的情况下直接调用 prepare-slumber，会破坏 GMU 固件的内部状态。
+
+#解决方案
+修改 `a6xx_gmu_shutdown` 函数逻辑，移除导致跳过 slumber 请求的条件判断，确保在挂起流程中始终调用 `prepare-slumber` hfi。同时，在发送该请求前检查是否需要进行 oob-gpu 握手：如果需要硬件初始化（`needs_hw_init` 为真），则先执行一次 dummy 的 oob-gpu 握手与清除操作，以确保 GMU 固件状态正确，避免状态混乱。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6e0d22ef17367fcdd0b070f1dc4bc6044157a64a

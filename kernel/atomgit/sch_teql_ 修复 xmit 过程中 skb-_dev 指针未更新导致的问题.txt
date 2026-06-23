@@ -1,0 +1,20 @@
+#标题
+sch_teql: 修复 xmit 过程中 skb->dev 指针未更新导致的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 teql (Trivial Equalizer) 网络调度器进行负载均衡转发时，如果底层 slave 设备驱动（如 veth、loopback 等）在发送过程中依赖 `skb->dev` 指针来判断出口设备或执行逻辑，可能会因为该指针未及时更新导致内核崩溃、Oops 或网络发包失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在进行 teql master 设备的发送时，代码路径进入 `teql_master_xmit` 函数。在将数据包递交给 slave 设备发送前，未将 `skb->dev` 从 master 设备更新为实际的 slave 设备。这导致 slave 设备驱动在处理该 skb 时，获取到错误的设备上下文，进而引发异常。
+
+#解决方案
+在 `net/sched/sch_teql.c` 的 `teql_master_xmit` 函数中，在获取 slave 发送队列锁之后、调用 `netdev_start_xmit` 进行实际发送之前，插入赋值语句 `skb->dev = slave;`，确保数据包的设备指针指向正确的物理出口设备。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fde633de846e9a2614b4f8972f31b437e517b02b

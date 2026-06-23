@@ -1,0 +1,20 @@
+#标题
+s390/ap: AP指令不可用导致调试特性文件泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在硬件系统不支持 AP（Adjunct Processor）指令的场景下，加载 AP 总线模块时，虽然模块初始化失败并退出，但此前注册的调试特性（debug feature）文件未被正确释放，导致内存泄漏。
+
+#主要错误日志
+pr_warn("The hardware system does not support AP instructions\n");
+
+#问题根因
+在 `ap_module_init` 函数中，代码逻辑原本先调用 `ap_debug_init()` 注册调试特性文件，随后再检查 `ap_instructions_available()`。当硬件不支持 AP 指令时，检查失败函数直接返回 `-ENODEV`，但此前已注册的调试特性文件未被注销，从而导致资源泄漏。
+
+#解决方案
+调整 `ap_debug_init()` 的调用顺序，将其移至 `ap_instructions_available()` 检查之后。确保仅在确认硬件支持 AP 指令后，才进行调试特性文件的初始化注册，从而避免了在硬件不支持时发生的资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f58b9c8783bf962ca43ed62c61b23573c0762484

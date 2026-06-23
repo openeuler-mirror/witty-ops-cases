@@ -1,0 +1,26 @@
+#标题
+SMC 使用 MSG_PEEK 标志接收数据时导致数据错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 SMC 协议进行 socket 通信，且接收端调用 `recvmsg` 时使用了 `MSG_PEEK` 标志（通常伴随 `MSG_WAITALL`），如果期望读取的数据长度大于当前接收缓冲区中已有数据长度（`bytes_to_rcv`），会导致数据读取错误。
+具体表现为：读取到的用户态数据内容出现重复或错位，客户端 peek 到的数据包含错误的、重复的片段，而非实际连续的流数据。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smc_rx_recvmsg` 函数处理 `MSG_PEEK` 标志的逻辑中，内核将数据拷贝到用户缓冲区时，未推进消费游标（consume cursor）也未减少可用数据长度记录。
+当请求读取长度较大触发 `do while` 循环执行多次时，第一次循环拷贝了 `bytes_to_rcv` 字节数据，第二次循环因游标未前移，再次从相同的起始位置拷贝数据，导致后续拷贝覆盖了缓冲区中后续的正确数据，造成用户态读取到的数据错误。
+
+#解决方案
+修改 SMC 接收路径逻辑，引入 `peeked_bytes` 变量记录已 peek 的数据长度。
+1. 在 `smc_rx.h` 中修改 `smc_rx_data_available` 函数，计算可用数据时减去已 peek 的字节数。
+2. 在 `smc_rx_recvmsg` 主循环中，每次成功 peek 数据后累加 `peeked_bytes`。
+3. 在计算下一次拷贝的起始位置（`cons` 游标）时，如果设置了 `MSG_PEEK` 且已有 peeked 数据，将游标向前移动 `peeked_bytes` 偏移量，确保后续循环读取到正确的后续数据。
+4. 同步更新 `smc_rx_wait` 等相关函数接口以传递 `peeked` 参数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2623c01f714eeb7a28f0eda88c27cd5f1d447031

@@ -1,0 +1,24 @@
+#标题
+usb: cdnsp: 从 L1 状态恢复时读取寄存器错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在极少数情况下，USB 控制器从 L1 状态恢复到 L0 状态时，驱动程序读取 PORTSC 等寄存器会获取到错误的值（例如读取到 0xFFFFFFFF）。这是因为驱动在 UTMI 时钟尚未完全使能且未与 APB 时钟域同步时读取了寄存器，导致功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+控制器从 L1 状态转换到 L0 状态时会报告端口状态变化事件，驱动程序在中断运行时函数中读取 PORTSC 寄存器。此时 UTMI 时钟可能仍处于禁用状态。虽然控制器会同步 UTMI 和 APB 域，但默认的 APB 超时时间不足，导致在 UTMI 时钟未就绪时读取寄存器，从而读回错误的值。这是一个平台相关的问题。
+
+#解决方案
+增加 APB 超时值（APB timeout value），为控制器提供更多时间来使能 UTMI 时钟并同步 APB 和 UTMI 时钟域。
+具体修改：
+1. 在 `cdns` 结构体中新增 `override_apb_timeout` 字段用于保存超时值。
+2. 在 PCI 驱动中定义 `CHICKEN_APB_TIMEOUT_VALUE` (0x1C20) 并赋值给该字段，针对 Cadence PCI 平台进行调整。
+3. 新增 `cdnsp_set_apb_timeout_value` 函数，在控制器初始化阶段 (`cdnsp_gen_setup`) 通过写 `REG_CHICKEN_BITS_3_OFFSET` 寄存器来设置该超时值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/443328f15a45d927ee5dd8963e97de575f3dd7ae

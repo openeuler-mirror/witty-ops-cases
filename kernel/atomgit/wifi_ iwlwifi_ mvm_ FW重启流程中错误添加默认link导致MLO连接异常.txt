@@ -1,0 +1,23 @@
+#标题
+wifi: iwlwifi: mvm: FW重启流程中错误添加默认link导致MLO连接异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在MLO（Multi-Link Operation）连接场景下触发固件重启（FW restart）流程时，驱动程序错误地重新创建了默认link并覆盖了`mvmvif->link[0]`。这导致原本有效的MLO link指针丢失，引发连接状态不一致或后续固件操作异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在固件重启流程中，`iwl_mvm_mld_mac_add_interface` 函数无条件地执行了 `mvmvif->link[0] = &mvmvif->deflink` 并添加默认link。然而，在MLO连接且处于重启流程时，`link[0]` 可能已经指向了一个有效的真实link，此时强制覆盖会导致原有link指针丢失，从而破坏了现有的连接状态。
+
+#解决方案
+修改 `iwl_mvm_mld_mac_add_interface` 函数逻辑，增加对重启状态和MLO连接类型的判断：
+1. 仅当不在硬件重启流程中，或者当前接口非MLO连接时，才初始化 `mvmvif->link[0]` 并添加默认link。
+2. 在MLO连接的重启流程中，保留原有link指针，等待后续 `.change_vif_links()` 回调来重建links。
+3. 同步修改 `iwl_mvm_mld_change_vif_links` 函数，确保在重启流程中不会错误地禁用默认link。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/51db501c12f6943e3c80a26c25d04688acd8107d

@@ -1,0 +1,20 @@
+#标题
+bpf: 修复 tcx/netkit 设备在未提供 prog fd 时的卸载权限校验缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 tcx 或 netkit 设备上执行 BPF_PROG_DETACH 操作时，若用户未提供程序文件描述符，系统未进行权限校验，导致非特权用户可以绕过权限检查执行卸载操作，存在安全风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bpf_prog_detach` 函数处理逻辑中，当未提供 `prog_fd`（即 `attr->attach_bpf_fd`）时，代码路径直接跳过了原有的 `bpf_net_capable()` 权限检查步骤。这导致任何用户都可以在该条件下触发 detach 操作，从而绕过了 CAP_NET_ADMIN 或 CAP_SYS_ADMIN 的权限限制。
+
+#解决方案
+在 `kernel/bpf/syscall.c` 的 `bpf_prog_detach` 函数中增加权限校验逻辑。当未提供 prog fd 时，调用新增的 `bpf_mprog_detach_empty` 函数进行检查；对于 `BPF_PROG_TYPE_SCHED_CLS` 类型，该函数会校验当前进程是否具备 `CAP_NET_ADMIN` 或 `CAP_SYS_ADMIN` 权限，若无权限则直接返回 `-EPERM`，从而修复权限绕过问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5aa4f813acf3407a953088f34eb379f4b76bb6f8

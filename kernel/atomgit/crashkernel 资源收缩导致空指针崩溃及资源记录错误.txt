@@ -1,0 +1,44 @@
+#标题
+crashkernel 资源收缩导致空指针崩溃及资源记录错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当配置了 crashkernel=high（如 crashkernel=200M,high）时，若通过 `/sys/kernel/kexec_crash_size` 将 crashkernel 内存收缩至低于低内存预留值（low reservation），会出现以下现象：
+1. **资源信息错误**：`/proc/iomem` 显示的 crash kernel 区域大小未正确更新，仍显示原有的低内存预留大小（如 256MB），而非用户设置的收缩后大小（如 50MB）。
+2. **内核崩溃**：若进行二次收缩操作（例如从 50MB 再次收缩到 40MB），将触发内核 NULL 指针引用错误，导致系统 Oops/panic。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000038
+PGD 0 P4D 0
+Oops: 0000 [#1] PREEMPT SMP NOPTI
+<snip...>
+Call Trace: <TASK>
+? __die_body.cold+0x19/0x27
+? page_fault_oops+0x15a/0x2f0
+? search_module_extables+0x19/0x60
+? search_bpf_extables+0x5f/0x80
+? exc_page_fault+0x7e/0x180
+? asm_exc_page_fault+0x26/0x30
+? __release_resource+0xd/0xb0
+release_resource+0x26/0x40
+__crash_shrink_memory+0xe5/0x110
+crash_shrink_memory+0x12a/0x190
+kexec_crash_size_store+0x41/0x80
+kernfs_fop_write_iter+0x141/0x1f0
+vfs_write+0x294/0x460
+ksys_write+0x6d/0xf0
+<snip...>
+
+#问题根因
+在函数 `__crash_shrink_memory` 中，代码逻辑错误地更新了全局变量 `crashk_res`，而不是传入的参数 `old_res`。
+当执行收缩操作且目标对象应为 `crashk_low_res` 时，代码却强制修改了 `crashk_res.end`。这导致：
+1. 真正需要更新的资源对象（`crashk_low_res`）未被更新，导致 `/proc/iomem` 显示错误。
+2. 全局资源树中的 `crashk_res` 被错误修改，破坏了资源树结构，后续再次操作时触发 NULL 指针引用导致内核崩溃。
+
+#解决方案
+修正 `__crash_shrink_memory` 函数中的赋值逻辑，将 `crashk_res.end = ram_res->start - 1;` 修改为 `old_res->end = ram_res->start - 1;`，确保更新传入的正确资源对象（`old_res`），无论是 `crashk_res` 还是 `crashk_low_res`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/98d1b5283a30aad1872fb2bf69628447d2957b13

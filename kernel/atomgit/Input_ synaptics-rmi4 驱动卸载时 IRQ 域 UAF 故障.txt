@@ -1,0 +1,20 @@
+#标题
+Input: synaptics-rmi4 驱动卸载时 IRQ 域 UAF 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 synaptics-rmi4 驱动时，若内核启用了 PaX MEMORY_SANITIZE 特性，会触发访问错误，导致内核崩溃。具体表现为在释放 IRQ 域后，后续代码仍尝试访问已释放的 domain 指针，导致解引用失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在驱动移除函数 `rmi_driver_remove` 中，代码逻辑顺序错误。`irq_domain_remove()` 被过早调用，导致 IRQ 域被释放。随后 `rmi_free_function_list()` -> `rmi_unregister_function()` -> `irq_dispose_mapping()` -> `irq_get_irq_data()` 的调用链仍试图通过 `domain` 指针访问该 IRQ 域（具体为 `domain->ops->unmap` 操作），从而引发 Use-After-Free（UAF）问题。
+
+#解决方案
+调整 `rmi_driver_remove` 函数中的代码执行顺序，将 `irq_domain_remove()` 和置空 `data->irqdomain` 的操作移动到 `rmi_free_function_list()` 之后执行。确保在销毁 IRQ 域之前，所有相关的 IRQ 映射已被正确注销和释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1c4372b6770842b885fb327550a66e12c32f0434

@@ -1,0 +1,31 @@
+#标题
+ethtool.py 因 Hardware Clock 信息缺失导致 KeyError 崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 YNL（YAML Netlink）实现的 ethtool 工具查询设备时间戳信息时，若设备或驱动未提供 Hardware Clock（硬件时钟）及相关字段（如 phc-index、tx-types、rx-filters），脚本直接崩溃退出。
+具体表现为执行 ethtool 相关操作时，Python 解释器抛出 KeyError 异常，堆栈信息显示无法找到 'phc-index' 键，导致工具无法正常打印时间戳配置信息。
+
+#主要错误日志
+Traceback (most recent call last):
+  File "/net/tools/net/ynl/pyynl/./ethtool.py", line 438, in <module>
+    main()
+    ~~~~^^
+  File "/net/tools/net/ynl/pyynl/./ethtool.py", line 341, in main
+    print(f'PTP Hardware Clock: {tsinfo["phc-index"]}')
+                                   ~~~~~~^^^^^^^^^^^^^
+KeyError: 'phc-index'
+
+#问题根因
+ethtool YNL 实现代码中，直接通过键名（如 `tsinfo["phc-index"]`）访问字典中的硬件时钟信息字段。这些字段属于可选信息，并非所有设备或驱动都会在响应中提供。当代码强制访问不存在的键时，Python 解释器抛出 KeyError 异常导致程序崩溃。
+
+#解决方案
+修改 `tools/net/ynl/ethtool.py` 代码，对可选的字典键进行防御性检查：
+1. 对于 `phc-index` 字段，使用 `tsinfo.get("phc-index", "none")` 方法访问，若键不存在则默认打印 "none"。
+2. 对于 `tx-types` 和 `rx-filters` 字段，增加 `if ... in tsinfo` 判断逻辑，若字段存在则打印详细内容，否则打印 "none"。
+3. 对于 `stats` 字段，增加存在性检查及非空判断，确保仅在数据存在时打印统计信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6bf2ad34805d6d68ed334b3f8f15a4b665141abd

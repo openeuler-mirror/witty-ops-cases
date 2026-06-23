@@ -1,0 +1,32 @@
+#标题
+page_pool_recycle_in_ring 中的 use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核运行过程中触发 KASAN 检测到的 slab-use-after-free 错误。该问题由 syzbot 发现，通常发生在网络数据包处理路径中（如 skb 释放队列清除时），导致内核崩溃或内存破坏。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in lock_release+0x151/0xa30 kernel/locking/lockdep.c:5862
+Read of size 8 at addr ffff8880286045a0 by task syz.0.284/6943
+Call Trace:
+ _raw_spin_unlock_bh+0x1b/0x40 kernel/locking/spinlock.c:210
+ ptr_ring_produce_bh include/linux/ptr_ring.h:164 [inline]
+ page_pool_recycle_in_ring net/core/page_pool.c:707 [inline]
+ page_pool_put_unrefed_netmem+0x748/0xb00 net/core/page_pool.c:826
+
+#问题根因
+在 `page_pool_recycle_in_ring` 函数中，当页面被回收到环形缓冲区（ring buffer）时，持有 `producer_lock` 期间，页面池（page pool）可能被并发释放。
+具体竞争条件如下：
+1. `page_pool_recycle_in_ring` 调用 `ptr_ring_produce` 获取 `producer_lock`。
+2. 在持有锁并写入数据时，`page_pool_release` 被调用。
+3. `page_pool_release` 执行 `page_pool_scrub` 清空 ring，并调用 `page_pool_free` 释放了 pool 内存（包括 pool->ring）。
+4. 随后 `page_pool_recycle_in_ring` 尝试释放 `producer_lock` 时，访问了已被释放的 `pool->ring` 内存，导致 use-after-free。
+
+#解决方案
+在 `page_pool_release` 函数中添加 `producer_lock` 屏障。在释放页面池之前，先获取再释放 `producer_lock`，确保所有生产者（producers）已经退出临界区，防止页面池在被使用时被释放。
+同时，修复了 `CONFIG_PAGE_POOL_STATS` 未启用时宏定义导致的 Wempty-body 编译警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/40ec36f07876b9c3a784741abc308dc6860648c2

@@ -1,0 +1,20 @@
+#标题
+scsi: qla2xxx: edif 修复错误码符号位错误导致的逻辑处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 qla2xxx 驱动的 EDIF（Encrypted Data In Flight）功能处理 ELS（Extended Link Service）请求或 SADB 更新时，若遇到需要重试的情形（如资源暂时不可用），系统未能按预期进入重试逻辑。这可能导致相关操作直接失败，而不是进行预期的重试，进而引发功能异常或 IO 处理失败。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 qla24xx_sadb_update() 和 qla_edif_process_els() 在处理返回值时，switch-case 语句中使用了正数错误码 `case EAGAIN:` 进行判断。然而，被调用函数（如 qla2x00_start_sp()）返回的是负数错误码（如 `-EAGAIN`）。由于正数 `EAGAIN` 与负数 `-EAGAIN` 不匹配，导致条件判断失效，程序无法跳转到重试分支，从而引发逻辑错误。
+
+#解决方案
+修正错误码符号，将 `qla24xx_sadb_update()` 和 `qla_edif_process_els()` 函数中 switch-case 语句内的 `case EAGAIN:` 修改为 `case -EAGAIN:`，确保与底层函数返回的负数错误码匹配，从而正确进入重试处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cf5e240321c16c92d07b9aac48e583a42376ddbe

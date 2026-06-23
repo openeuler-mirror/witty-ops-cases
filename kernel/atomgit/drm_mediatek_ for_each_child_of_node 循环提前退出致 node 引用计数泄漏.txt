@@ -1,0 +1,20 @@
+#标题
+drm/mediatek: for_each_child_of_node 循环提前退出致 node 引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在遍历设备树子节点时，若触发 `cnt == MAX_CRTC` 条件导致循环提前退出，未释放已获取的 device node 引用计数，造成内存泄漏（reference count leak）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mtk_drm_get_all_drm_priv` 函数中，使用 `for_each_child_of_node()` 遍历子节点时，代码在 `cnt == MAX_CRTC` 条件成立时直接执行 `break` 退出循环。根据内核 API 规范，`for_each_child_of_node()` 在非正常遍历结束（如 `break`、`goto`、`return`）时，需要调用者显式调用 `of_node_put()` 来释放当前子节点的引用计数。原代码遗漏了该释放操作，导致引用计数无法归零，引发内存泄漏。
+
+#解决方案
+在循环内的 `break` 语句前增加 `of_node_put(node)` 调用，确保在提前退出循环时正确释放设备树节点的引用计数，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7216c8bb5a58054b31f2e5bd1c8d8de7e0feb2ae

@@ -1,0 +1,24 @@
+#标题
+ASoC: Intel: catpt: 设备初始化时 DMA mask 设置时序错误导致潜在内存访问故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel catpt 音频设备驱动初始化过程中，DMA mask 的设置被延迟执行。这导致在设置 DMA mask 之前就可能进行缓冲区分配。由于 DMA mask 未及时设置为 31 位，分配的缓冲区物理地址可能落在保留地址范围（0xFFFxxxxx）内，违反硬件设计要求，进而导致 D0 -> D3 -> D0 状态切换时上下文保存失败或内存访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根本原因是 DMA mask 设置顺序错误。
+1. 原代码在 `catpt_dmac_probe` 函数中调用 `dma_coerce_mask_and_coherent` 设置 DMA mask，但这发生于设备探针流程的后期。
+2. 在此之前，`catpt_acpi_probe` 函数中已经调用 `dmam_alloc_coherent` 分配了用于存储 DRAM 上下文的缓冲区。
+3. 根据硬件设计，HOST 进行 DMA 访问的内存地址必须在 31 位寻址范围内（即避开保留的 0xFFFxxxxx 范围）。由于分配缓冲区时 DMA mask 尚未生效，内存分配器可能分配出不合规的物理地址，导致硬件功能异常。
+
+#解决方案
+将 `dma_coerce_mask_and_coherent` 函数调用从 `sound/soc/intel/catpt/dsp.c` 中的 `catpt_dmac_probe` 函数移至 `sound/soc/intel/catpt/device.c` 中的 `catpt_acpi_probe` 函数。
+具体修改为：在调用 `dmam_alloc_coherent` 分配 DRAM 上下文缓冲区之前，先强制设置 DMA mask 为 31 位（`DMA_BIT_MASK(31)`），确保后续的内存分配符合硬件寻址约束。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0e236881d2f09ec49d096865e3f23b7f8c4c959a

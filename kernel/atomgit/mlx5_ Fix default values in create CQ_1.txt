@@ -1,0 +1,23 @@
+#标题
+mlx5: Fix default values in create CQ
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定边界条件下，仅用于轮询模式的内核 CQ（Completion Queue）可能被固件触发中断，进而调用仅适用于用户 CQ 的默认完成处理函数 `mlx5_add_cq_to_tasklet`，导致空指针异常。
+
+#主要错误日志
+mlx5_core: CQ default completion callback, CQ #%u
+
+#问题根因
+1. **默认完成函数设置错误**：当前代码中，未指定完成函数的 CQ 默认被分配 `mlx5_add_cq_to_tasklet` 函数，但该函数仅适用于通过 mlx5_ib 驱动创建的用户 CQ。若内核 CQ 意外触发了中断，调用该函数会导致空指针异常。
+2. **arm_db 初始化不当**：默认 CQ 创建流程中，`arm_db` 字段被赋予了有效值。这导致仅轮询模式的 CQ 在未主动 arm 的情况下，固件仍可能在某些边界条件下向其发送中断。
+
+#解决方案
+1. **引入默认哑回调函数**：在 CQ 创建流程中增加默认的哑完成函数 `mlx5_core_cq_dummy_cb`，防止内核 CQ 因意外中断触发空指针异常，并打印错误日志。
+2. **修正 arm_db 初始化逻辑**：默认将内核 CQ 的命令序列号设置为无效值（`MLX5_CQ_INIT_CMD_SN`），阻止固件在 CQ 未被 arm 之前发送中断；同时将 `arm_db` 的初始化移至创建 CQ 之前进行。
+3. **调整各驱动模块适配**：修改 mlx5_ib、mlx5_en、mlx5_fpga、mlx5_vdpa 等相关模块，确保在调用 `mlx5_core_create_cq` 之前正确设置 `comp` 回调函数和 `arm_db` 指针，避免依赖默认值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e8079036d2eccaa9c348ce56606cec619b7f107d

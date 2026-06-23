@@ -1,0 +1,25 @@
+#标题
+ksmbd: vfs: fix race on m_flags in vfs_cache
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多线程并发对同一文件进行打开、关闭和删除操作时，ksmbd 模块中的 `m_flags` 字段存在数据竞争。这可能导致 delete-on-close 和 pending-delete 状态位丢失或处于不一致状态，进而导致文件删除语义异常，表现为：
+1. 设置了 delete-on-close 的文件在关闭后仍保留在磁盘上未被删除；
+2. 文件仍被使用时却意外消失。
+
+#主要错误日志
+未知
+
+#问题根因
+ksmbd 在 `vfs_cache.c` 中维护 delete-on-close 和 pending-delete 状态时，对 `ksmbd_inode->m_flags` 字段的访问缺乏统一的锁保护。部分代码路径（如 `ksmbd_inode_pending_delete`、`ksmbd_set_inode_pending_delete` 等）在没有持有 `ci->m_lock` 锁的情况下直接读写 `m_flags`，而另一部分路径（如 `ksmbd_query_inode_status` 和 `__ksmbd_inode_close`）则在锁内操作。这种不一致的加锁方式导致了数据竞争。
+
+#解决方案
+通过统一对所有访问和修改 `m_flags` 的代码路径添加 `ci->m_lock` 锁保护来修复竞争问题：
+1. 修改 `ksmbd_query_inode_status()`，在释放 `inode_hash_lock` 后，通过 `down_read(&ci->m_lock)` 保护对 `m_flags` 的读取。
+2. 为 `ksmbd_inode_pending_delete()` 添加读锁保护，为 `ksmbd_set_inode_pending_delete()`、`ksmbd_clear_inode_pending_delete()` 和 `ksmbd_fd_set_delete_on_close()` 添加写锁保护。
+3. 调整 `__ksmbd_inode_close()` 中的逻辑，确保在锁内检查并清除标志位，将实际的 `unlink` 和 `xattr` 移除操作移至锁外执行，以避免在持有锁时进行耗时的 I/O 操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bc26aea8eb212139ecbdcf789338a26da35765dc

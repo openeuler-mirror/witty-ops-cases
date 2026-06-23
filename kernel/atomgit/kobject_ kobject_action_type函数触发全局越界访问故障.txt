@@ -1,0 +1,19 @@
+#标题
+kobject: kobject_action_type函数触发全局越界访问故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户向 `/sys/block/ramX/uevent` 写入特定长度（如86字节）且头部匹配已知动作（如 "offline"）的字符串时，内核触发 KASAN 全局变量越界访问错误。
+
+#主要错误日志
+KASAN: global-out-of-bounds in kobject_action_type
+
+#问题根因
+函数 `kobject_action_type()` 在处理用户输入的字符串匹配逻辑时存在缺陷。代码使用 `kobject_actions[action][count_first]` 来检查字符串结束符，其中 `count_first` 来源于用户输入的长度。
+当用户输入的长度（如 85）远大于内核预定义动作字符串的长度（如 "offline" 长度为 7）时，代码会访问 `kobject_actions[action][85]`，这超出了该静态字符串数组的边界，导致全局变量越界访问。
+
+#解决方案
+修改 `lib/kobject_uevent.c` 中的判断逻辑，将边界检查条件从直接引用下标 `kobject_actions[action][count_first] != '\0'` 修改为长度比较 `strlen(kobject_actions[action]) > count_first`。
+此举确保了在比较前先判断内置动作字符串的长度是否大于用户输入的有效长度，若内置字符串较短则直接跳过，从而避免越界读取。

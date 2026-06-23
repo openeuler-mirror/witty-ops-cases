@@ -1,0 +1,20 @@
+#标题
+watchdog 检测到 softlockup 误报
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统运行过程中，动态修改 `watchdog_thresh` 参数时，watchdog 机制可能错误地检测到 softlockup 并上报误报。
+
+#主要错误日志
+未知
+
+#问题根因
+修改 `watchdog_thresh` 的流程存在竞态条件。在重新配置 watchdog 时，`watchdog_timer_fn` 函数可能同时读取到旧的采样间隔（sample period）和新的 `watchdog_thresh` 阈值。这种新旧参数的不一致组合导致检测逻辑判定出错，从而引发 softlockup 误报。
+
+#解决方案
+引入中间变量 `watchdog_thresh_next` 用于接收 sysctl 写入的新阈值，修改 `proc_watchdog_thresh` 和 `__lockup_detector_reconfigure` 的处理逻辑。确保只有在 `softlockup_stop_all()` 执行完成后（即旧的定时器停止），才将 `watchdog_thresh_next` 的值更新到全局 `watchdog_thresh`，从而保证定时器回调函数使用的阈值和采样周期的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1853d0566ce7f108ae2cdccb5932550dc4af51bd

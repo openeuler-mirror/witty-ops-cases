@@ -1,0 +1,45 @@
+#标题
+b2c2: flexcop_pci_remove 中的 use-after-free 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 B2C2 FlexCop PCI 设备驱动模块时，若 `irq_check_work` 延迟工作项正在执行，会发生竞态条件，导致内核出现 Slab Use-After-Free 错误。系统通过 KASAN 检测到非法内存访问，可能引发内核 panic 或 Oops，造成系统不稳定。
+
+#主要错误日志
+```
+==================================================================
+BUG: KASAN: slab-use-after-free in __run_timer_base.part.0+0x7d7/0x8c0
+Write of size 8 at addr ffff8880093aa8c8 by task bash/135
+...
+Call Trace:
+ <IRQ>
+ dump_stack_lvl+0x55/0x70
+ print_report+0xcf/0x610
+ kasan_report+0xb8/0xf0
+ __run_timer_base.part.0+0x7d7/0x8c0
+ run_timer_softirq+0xd1/0x190
+ handle_softirqs+0x16a/0x550
+ irq_exit_rcu+0xaf/0xe0
+ sysvec_apic_timer_interrupt+0x70/0x80
+ </IRQ>
+...
+Freed by task 135:
+ kfree+0x137/0x370
+ flexcop_device_kfree+0x32/0x50
+ pci_device_remove+0xa6/0x1d0
+...
+```
+
+#问题根因
+驱动在 `flexcop_pci_remove` 函数中调用 `cancel_delayed_work()` 来取消 `irq_check_work`。该函数是非同步的，无法保证工作项回调函数 `flexcop_pci_irq_check_work` 已经执行完毕。这导致了如下竞态条件：
+1. CPU 0 执行设备移除操作，调用 `cancel_delayed_work()` 后继续执行 `flexcop_device_kfree(fc_pci->fc_dev)` 释放设备内存。
+2. 此时 CPU 1 上的 `flexcop_pci_irq_check_work()` 仍在运行，尝试访问已释放的 `fc_pci->fc_dev` 指针。
+从而触发了 Use-After-Free 漏洞（CVE-2025-39996）。
+
+#解决方案
+将 `flexcop_pci_remove` 函数中的 `cancel_delayed_work()` 替换为 `cancel_delayed_work_sync()`。后者是同步函数，会等待延迟工作项执行完毕才返回，从而确保在释放设备内存前，工作项不会再次访问设备数据结构，避免了 UAF 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac1508fd748eb8b9accc1d43cb0aa203f5c81004

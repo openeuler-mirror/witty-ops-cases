@@ -1,0 +1,22 @@
+#标题
+obmm: ptrace/GDB 访问 export 区域时返回 ENOMEM
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 obmm 模块中，通过 ptrace 或 GDB 访问 PFN-mapped 的 export 区域时访问失败，系统调用总是返回 -ENOMEM 错误，导致无法正常调试或读取该段内存内容。
+
+#主要错误日志
+未知
+
+#问题根因
+原有的 `obmm_vma_access()` 函数对所有的 PFN-mapped 区域统一使用 `ioremap_prot()` 进行映射。对于 export 区域，其 PFN 指向的是本地 RAM 且拥有有效的 struct page，此时 `pfn_is_map_memory()` 返回 true。`ioremap_prot()` 函数拒绝映射这类具有有效 struct page 的地址，导致映射失败，进而函数直接返回 -ENOMEM。
+
+#解决方案
+修改 `obmm_vma_access()` 函数，针对不同类型的区域采用不同的映射路径：
+1. 对于 export 区域：判断其为本地 RAM，使用 `pfn_valid()` 校验后，通过 `vmap()` 对 struct page 进行映射（由于 sg 条目可能不连续，每次仅映射单页）。
+2. 对于 import 区域：保持原有逻辑，使用 `ioremap_prot()` 映射无 struct page 的 UB 物理地址空间。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4260233f35282f75631090c984aa8ce514ebafa3

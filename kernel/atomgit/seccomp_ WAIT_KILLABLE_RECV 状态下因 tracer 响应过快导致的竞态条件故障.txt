@@ -1,0 +1,25 @@
+#标题
+seccomp: WAIT_KILLABLE_RECV 状态下因 tracer 响应过快导致的竞态条件故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 `SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV` 标志的场景下，如果 tracer（跟踪进程）在 tracee（被跟踪进程）被中断前就已快速回复（reply），tracee 会错误地被中断。这破坏了该标志位旨在保证的语义：即 tracer 在接收到消息后，确保 syscall 不会在 tracee 侧被中断或重启。故障表现为特定条件下的 syscall 执行异常中断，不符合预期的 seccomp user notifier 行为。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `should_sleep_killable` 函数与 `seccomp_do_user_notification` 循环逻辑的配合不当：
+1. 当 tracee 处于等待状态且 tracer 快速回复时，状态会变为 `SECCOMP_NOTIFY_REPLIED`。
+2. 原代码逻辑仅在 `n->state == SECCOMP_NOTIFY_SENT` 时才切换为不可中断等待（killable）。如果 tracer 响应过快，状态已变为 `SECCOMP_NOTIFY_REPLIED`，条件判断失败，导致 tracee 错误地进入中断处理路径，而不是继续处理已回复的结果。
+3. 此外，原循环逻辑在决定切换等待模式时直接 `continue`，导致在状态已为 `REPLIED` 时跳过了后续必要的 addfd 命令处理流程。
+
+#解决方案
+修改内核源码 `kernel/seccomp.c`：
+1. 放宽状态检查条件：将 `should_sleep_killable` 函数中的状态判断从 `n->state == SECCOMP_NOTIFY_SENT` 修改为 `n->state >= SECCOMP_NOTIFY_SENT`，确保当状态已经进入 `SECCOMP_NOTIFY_REPLIED` 时，也能正确识别需要保持等待逻辑，防止错误中断。
+2. 修正循环退出逻辑：调整 `seccomp_do_user_notification` 中的错误处理流程，避免在决定切换等待模式时直接跳出或跳过关键处理步骤，确保即便在快速回复场景下，也能正确执行 addfd 相关的处理代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/257c82c3f9f729ee40d33a8c8b7c95cbc13c73ad

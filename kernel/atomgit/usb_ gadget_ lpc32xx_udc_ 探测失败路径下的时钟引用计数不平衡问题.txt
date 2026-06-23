@@ -1,0 +1,26 @@
+#标题
+usb: gadget: lpc32xx_udc: 探测失败路径下的时钟引用计数不平衡问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+lpc32xx_udc 驱动在 probe 过程中若遇到特定错误（如 dma_set_coherent_mask 失败、获取 IRQ 失败、IO map 失败或获取时钟失败），会错误地执行时钟关闭操作（clk_disable_unprepare），导致时钟引用计数错误地进入负值或失衡状态。虽然此时时钟尚未被使能，但由于时钟框架允许传入 NULL 时钟指针，该操作不会触发空指针崩溃，而是造成资源状态不一致。
+
+#主要错误日志
+推断日志：
+dev_err(udc->dev, "IO map failure\n");
+dev_err(udc->dev, "failed to acquire USB device clock\n");
+dev_err(udc->dev, "failed to start USB device clock\n");
+dev_err(udc->dev, "%s probe failed, %d\n", driver_name, retval);
+
+#问题根因
+近期一个修复设备引用泄漏的变更（commit c84117912bdd）复用了错误处理标签 `i2c_fail`。在时钟使能（clk_prepare_enable）之前的几个错误处理路径（如 dma 设置、获取 IRQ、IO map、获取时钟失败）错误地跳转到了 `i2c_fail` 标签，该标签包含了 `clk_disable_unprepare` 调用。这导致在时钟尚未使能时就执行了反使能操作，从而引入了时钟引用计数不平衡的缺陷。另外，原有的 I2C client NULL 检查是多余的，因为该指针在此前已被验证为非空。
+
+#解决方案
+1. 调整错误处理路径的跳转逻辑：在时钟使能之前的错误分支（dma_set_coherent_mask 失败、获取 IRQ 失败、IO map 失败、获取时钟失败）不再跳转到 `i2c_fail`，而是跳转到新增的 `err_put_client` 标签，该标签仅执行 `put_device` 释放设备引用，不执行时钟关闭操作。
+2. 只有在时钟使能成功之后的错误分支，才跳转到 `i2c_fail` 标签，依次执行 `clk_disable_unprepare` 和 `put_device`。
+3. 移除了冗余的 `if (udc->isp1301_i2c_client)` 判空检查，直接调用 `put_device`，简化了代码逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/24419cfe3f3b270c532cecfceb5de54eef23d0b6

@@ -1,0 +1,32 @@
+#标题
+KVM: arm64 修复 MTE 场景下的移位越界故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 MTE（Memory Tagging Extension）功能的宿主机内核上运行虚拟机时，触发 UBSAN（Undefined Behavior Sanitizer）告警。系统检测到移位操作越界，并打印调用栈信息，涉及 KVM 虚拟机初始化流程。
+
+#主要错误日志
+UBSAN: shift-out-of-bounds in arch/arm64/kvm/sys_regs.c:1988:14
+shift exponent 33 is too large for 32-bit type 'int'
+CPU: 26 UID: 0 PID: 7629 Comm: qemu-kvm Not tainted 6.12.0-rc2 #34
+Call trace:
+ dump_backtrace+0xa0/0x128
+ show_stack+0x20/0x38
+ dump_stack_lvl+0x74/0x90
+ dump_stack+0x18/0x28
+ __ubsan_handle_shift_out_of_bounds+0xf8/0x1e0
+ reset_clidr+0x10c/0x1c8
+ kvm_reset_sys_regs+0x50/0x1c8
+ kvm_reset_vcpu+0xec/0x2b0
+ ...
+
+#问题根因
+在 `reset_clidr` 函数中，当 KVM 启用 MTE 时，代码执行 `clidr |= 2 << CLIDR_TTYPE_SHIFT(loc)` 操作。由于数值 `2` 默认为 32 位 `int` 类型，当移位位数（loc 变量）大于或等于 31（日志中显示为 33）时，导致移位操作超出 32 位整型范围，从而触发 UBSAN 移位越界错误。
+
+#解决方案
+将移位操作左侧的操作数从 `int` 类型修改为 `unsigned long long` 类型（即使用 `2ULL` 代替 `2`），从而避免 32 位整型移位越界问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b9a6e1c59f8334d87ec46a66ea84ef52b9d12e83

@@ -1,0 +1,20 @@
+#标题
+mfs读取事件对象时因tracepoint引用导致UAF问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户从 mfs 设备读取事件时，若启用了 tracepoint 功能，内核会发生 Use-After-Free (UAF) 错误。这是因为在事件对象被释放后，tracepoint 仍然试图访问该对象内部的内存空间。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mfs_dev_read` 函数中，代码逻辑先调用了 `put_mfs_event(event)` 释放了 event 对象及其内部内存空间，随后调用 `trace_mfs_dev_read` 尝试读取属于该 event 对象的 `msg` 信息（如 opcode, id, fd）。由于 event 对象此时已被释放，tracepoint 访问 `msg` 成员时触发了 UAF（释放后使用）漏洞。
+
+#解决方案
+调整代码执行顺序，将 `trace_mfs_dev_read` 的调用移至 `put_mfs_event(event)` 之前。确保在释放 event 对象之前完成 tracepoint 对事件信息的读取，从而避免访问已释放的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/97c2528d4337adbc6545e41599dfb0e5617c71f2

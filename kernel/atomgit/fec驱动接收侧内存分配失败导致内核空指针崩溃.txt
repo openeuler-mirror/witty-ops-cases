@@ -1,0 +1,20 @@
+#标题
+fec驱动接收侧内存分配失败导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统处于内存压力下（如通过smbd向挂载在imx6q平台的SATA HDD写入数据时），触发内核崩溃。代码逻辑中存在`WARN_ON(!new_page)`告警，随后由于未处理空指针导致系统panic。
+
+#主要错误日志
+[内核日志中可能包含 WARN_ON 触发的调用栈信息，具体取决于系统配置]
+
+#问题根因
+`fec_enet_update_cbd` 函数调用 `page_pool_dev_alloc_pages` 分配内存页时，未对返回值进行 NULL 检查。当系统内存不足导致分配失败时，原有代码仅执行了 `WARN_ON(!new_page)` 但继续使用该 NULL 指针，导致后续访问空指针引发内核崩溃。
+
+#解决方案
+在 `fec_enet_update_cbd` 函数中增加对 `page_pool_dev_alloc_pages` 返回值的判断，若返回 NULL（内存分配失败），函数返回 `-ENOMEM` 错误码。上层接收逻辑检测到错误后，增加 `ndev->stats.rx_dropped` 计数并跳过当前数据包的处理，从而避免空指针引用导致的崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/92456964147669d3a23b418dcca7d4bc16566daf

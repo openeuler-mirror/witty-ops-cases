@@ -1,0 +1,29 @@
+#标题
+LoongArch 架构下 16 个 VFIO 设备无法直通给虚拟机
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构环境下，当宿主机配置了较多 VFIO 设备（如 16 个）并尝试直通给虚拟机时，直通操作无法正常工作，虚拟机无法正常使用这些设备。
+
+#主要错误日志
+未知
+
+#问题根因
+该问题由多个内核模块缺陷共同导致，核心原因在于 IOMMU 驱动的默认初始化状态与内存管理机制的缺陷：
+1. **IOMMU 默认状态错误**：`loongarch_iommu_disable` 变量未正确初始化，导致 IOMMU 默认处于非预期状态，影响设备直通初始化流程。
+2. **内存 Dirty 位清理错误**：在 `kvm_pte_mkdirty` 相关的逆操作 `kvm_pte_mkclean` 中，清理 Dirty 位时错误地保留了 Write 权限位，导致页表属性不一致。
+3. **中断控制器逻辑缺失**：扩展 I/O 中断控制器未实现特性协商机制，缺少对中断编码和 CPU 编码特性的判断逻辑。
+4. **CPU 拓扑构建缺陷**：CPU 拓扑管理函数 `topo_add_cpu` 实现逻辑存在缺陷，导致多 CPU 场景下物理 ID 映射错误。
+
+#解决方案
+通过合并补丁修复上述缺陷，主要修改如下：
+1. **修正 IOMMU 初始化**：将 `loongarch_iommu_disable` 的初始化值设为 1，确保默认状态正确。
+2. **修复页表属性处理**：在 MMU 层增加 `KVM_RECORD_PAGE_WRITE_ABLE` 标志位，用于记录页表项的写属性；修改 `kvm_pte_mkclean` 逻辑，正确清除 Write 和 Dirty 属性；在快速路径中利用记录的属性恢复页表写权限。
+3. **完善中断控制器模拟**：扩展 ExtIOI 设备模拟，增加 `features` 和 `status` 字段，实现 `EIOINTC_ENABLE_INT_ENCODE` 和 `EIOINTC_ENABLE_CPU_ENCODE` 等特性状态的判断逻辑。
+4. **重构 CPU 拓扑管理**：移除有缺陷的 `topo_add_cpu` 函数，改用 `cpumask_next_zero` 等标准接口进行逻辑 CPU ID 分配，确保多核场景下拓扑正确。
+5. **其他配套修复**：修正 KVM hypercall 调用号，增加 VCPU reset 时的 IPI 和 PCH 状态重置逻辑，以及修复 VPID 变更时的 LLBCTL 寄存器处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3e23357f2947e00145df64df4ba9cb4c2fd42154

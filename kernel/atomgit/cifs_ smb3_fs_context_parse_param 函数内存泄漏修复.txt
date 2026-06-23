@@ -1,0 +1,21 @@
+#标题
+cifs: smb3_fs_context_parse_param 函数内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载 CIFS/SMB3 文件系统且解析参数过程中，若发生重复解析或特定错误路径处理时，`ctx->source` 和 `fc->source` 指针指向的旧内存空间未被释放即被新分配的地址覆盖，导致内核内存泄漏。
+
+#主要错误日志
+cifs_errorf(fc, "Unknown error parsing devname\n");
+cifs_errorf(fc, "OOM when copying UNC string\n");
+
+#问题根因
+在 `smb3_fs_context_parse_param` 函数中，代码逻辑直接对 `ctx->source` 和 `fc->source` 进行了重新赋值，但未在赋值前检查并释放这些指针可能已指向的旧内存。当多次解析参数或重新赋值时，原有的内存指针丢失，导致内存泄漏。
+
+#解决方案
+在重新分配并赋值 `ctx->source` 和 `fc->source` 之前，分别添加 `kfree(ctx->source)` 和 `kfree(fc->source)` 调用，确保释放旧的内存资源，避免内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c4e6eb8e3c397ef5f559c70810d33b4f2493d3a0

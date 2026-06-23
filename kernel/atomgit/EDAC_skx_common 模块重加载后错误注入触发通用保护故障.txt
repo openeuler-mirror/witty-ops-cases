@@ -1,0 +1,31 @@
+#标题
+EDAC/skx_common 模块重加载后错误注入触发通用保护故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+加载 i10nm_edac 模块（自动加载 skx_edac_common），卸载 i10nm_edac 后再次加载并进行错误注入测试，触发通用保护故障，导致内核 Oops。
+
+#主要错误日志
+mce: [Hardware Error]: Machine check events logged
+Oops: general protection fault ...
+Workqueue: events mce_gen_pool_process
+RIP: 0010:string+0x53/0xe0
+Call Trace:
+...
+? string+0x53/0xe0
+vsnprintf+0x23e/0x4c0
+snprintf+0x4d/0x70
+skx_adxl_decode+0x16a/0x330 [skx_edac_common]
+skx_mce_check_error.part.0+0xf8/0x220 [skx_edac_common]
+skx_mce_check_error+0x17/0x20 [skx_edac_common]
+
+#问题根因
+变量 `adxl_component_count`（用于计数 ADXL 组件）在卸载模块时未重置。重新加载 i10nm_edac 时，该计数值在原有基础上再次累加实际组件数量，导致计数值翻倍。这进而导致对 ADXL 组件数组的越界访问，引发通用保护故障。
+
+#解决方案
+在 `skx_adxl_put()` 函数中（即卸载 {skx,i10nm}_edac 时调用）增加重置逻辑，将 `adxl_component_count` 设置为 0，确保重新加载模块时计数准确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/40e38543a04d6cfae81e03e69425c0f2101e6caa

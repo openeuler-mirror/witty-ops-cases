@@ -1,0 +1,20 @@
+#标题
+spi: cadence 控制器注销竞态导致驱动卸载异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 Cadence SPI 控制器驱动（如执行驱动解绑或模块移除操作）时，存在竞态条件风险。驱动在注销 SPI 控制器前先禁用了时钟等底层硬件资源，可能导致正在进行的 SPI 传输操作访问无效资源，进而引发内核崩溃或数据访问异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cdns_spi_remove` 函数中，代码执行顺序错误：先调用了 `cdns_spi_write` 禁用控制器并关闭了时钟，最后才调用 `spi_unregister_controller` 注销控制器。这种顺序意味着在控制器注销前，底层硬件资源（如时钟）已被关闭，但此时控制器仍处于活动状态，可能引发严重的竞态问题。
+
+#解决方案
+调整 `cdns_spi_remove` 函数中的资源释放顺序。在禁用控制器和关闭时钟之前，先调用 `spi_unregister_controller` 注销 SPI 控制器，断开与设备模型的连接，防止资源被非法访问。同时配合引用计数操作（`spi_controller_get/put`）确保对象生命周期安全。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8593d3e97f2758f6a3b1a19a5fea1d0727098d77

@@ -1,0 +1,20 @@
+#标题
+Bluetooth: MGMT 子系统多处回调函数因未处理取消状态导致死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在蓝牙设备进行 discoverable、connectable、SSP、local name、PHY 配置、discovery 等状态的设置或启停操作过程中，若操作被取消（返回 -ECANCELED），相关回调函数未能正确处理该错误状态，导致内核线程卡死或发生死锁。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mgmt_set_discoverable_complete`、`mgmt_set_connectable_complete`、`set_ssp_complete`、`set_name_complete`、`set_default_phy_complete`、`start_discovery_complete`、`stop_discovery_complete` 以及 `read_local_oob_ext_data_complete` 等多个 MGMT 回调函数中，代码逻辑仅检查命令是否仍在 pending 队列中，未对 `err == -ECANCELED` 的情况进行判断。当操作被取消时，函数未直接返回，而是继续执行后续流程（如尝试获取锁 `hci_dev_lock`），从而引发了死锁。
+
+#解决方案
+在上述所有受影响的回调函数入口处，增加对 `err == -ECANCELED` 的判断逻辑。若操作已被取消，函数立即返回，不再继续执行后续可能引发锁竞争或死锁的代码路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0799fce5980630e46b8f40df8dc3721da33f88c6

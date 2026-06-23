@@ -1,0 +1,20 @@
+#标题
+NFSv4.1 CREATE_SESSION 失败导致挂载进程挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFSv4.1 客户端初始化过程中，若服务端 trunking 发现流程触发状态管理器进行 lease 建立和会话创建（CREATE_SESSION），且会话创建失败（例如反向通道参数协商返回 -EINVAL），挂载进程将一直处于阻塞等待状态，无法完成挂载也无法退出，表现为挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+当状态管理器在恢复阶段执行 lease 建立时，如果 `nfs4_proc_create_session()` 返回错误（如 -EINVAL），`nfs41_init_clientid()` 会直接退出，未能将 `nfs_client` 标记为就绪状态。该错误状态会传播至 `nfs4_state_manager()`，但由于代码中缺少对 -EINVAL 错误码的专门处理逻辑，导致客户端状态未被正确更新，挂载进程因此持续阻塞等待初始化完成信号。
+
+#解决方案
+在 `nfs4_state_manager()` 函数的错误处理 switch 分支中，增加对 `-EINVAL` 错误码的处理逻辑。当捕获到该错误时，调用 `nfs_mark_client_ready(clp, status)` 将客户端状态标记为对应错误状态，从而唤醒阻塞的挂载进程并返回错误，避免无限期挂起。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14069cddd9b8ee20d517fa6f0f8116ddaca70f12

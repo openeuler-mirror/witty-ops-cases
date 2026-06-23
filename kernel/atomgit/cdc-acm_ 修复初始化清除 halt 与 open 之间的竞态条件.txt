@@ -1,0 +1,20 @@
+#标题
+cdc-acm: 修复初始化清除 halt 与 open 之间的竞态条件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+对于需要初始清除端点 halt（clear_halt）状态的 USB CDC ACM 设备（如 ATOL FPrint 财政打印机），在设备注册后、打开前执行清除 halt 操作可能导致设备无法正常打开或功能异常。该问题表现为设备注册与打开操作之间的竞态条件，可能导致设备在未完成端点状态初始化的情况下被用户空间打开。
+
+#主要错误日志
+未知
+
+#问题根因
+在设备探测过程中，`usb_clear_halt` 操作被放置在 `tty_port_register_device`（设备注册）之后执行。这意味着设备在注册后立即可被用户空间打开，而此时端点的 halt 状态尚未清除。对于需要 `CLEAR_HALT_CONDITIONS` quirk 的设备，必须在设备可被打开（即注册之前）完成端点状态的初始化，从而避免了设备打开与初始清除 halt 之间的竞态。
+
+#解决方案
+将 `usb_clear_halt` 的调用逻辑移动到 `tty_port_register_device` 之前执行。这确保了在设备对用户空间可见并可供打开之前，端点的 halt 条件已被清除，从而消除了竞态风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3fba270425182376b1b6239f49e5b17417e3c3ed

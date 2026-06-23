@@ -1,0 +1,20 @@
+#标题
+cxl: 解码器提交失败时 commit_end 计数器错误递增导致状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CXL 解码器执行 commit 操作失败时，`commit_end` 计数器被错误地预先递增，且由于 `CXL_DECODER_F_ENABLE` 标志位未设置，`cxld->reset()` 调用无效，导致 `commit_end` 维持在错误的递增状态。这种状态不一致会进一步导致后续的 commit 或 reset 操作失败。
+
+#主要错误日志
+dev_dbg(&port->dev, "%s: error %d committing decoder\n", dev_name(&cxld->dev), rc);
+
+#问题根因
+在函数 `cxl_decoder_commit()` 中，`commit_end` 在验证 commit 操作是否成功之前就已经递增。如果 commit 失败，虽然代码尝试调用 `cxld->reset()` 进行恢复，但由于 `CXL_DECODER_F_ENABLE` 标志位仅在 commit 成功后设置，reset 操作因检查该标志位而无效。最终导致 `commit_end` 错误地保持在递增后的值，与实际的解码器硬件状态不一致。
+
+#解决方案
+将 `port->commit_end++` 操作移至 `cxl_decoder_commit()` 函数确认 commit 成功之后执行。同时，移除错误处理路径中无效的 `cxld->reset(cxld)` 调用，因为根据 CXL Spec r4.0，`cxld_await_commit()` 在失败时已清除了 decoder commit bit，无需额外的 reset 操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7db534682e12710229ed54eff75ecc46e669999a

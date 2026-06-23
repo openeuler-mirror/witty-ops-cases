@@ -1,0 +1,27 @@
+#标题
+af_packet: vlan_get_protocol_dgram() 处理 MSG_PEEK 时引发内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 af_packet 协议族的 dgram 类型 socket 上，配合 MSG_PEEK 标志接收带有 VLAN 标签的数据包时，内核触发 skb_under_panic，导致系统崩溃（Oops: invalid opcode）。
+
+#主要错误日志
+skbuff: skb_under_panic: text:ffffffff8a8ccd05 len:29 put:14 head:ffff88807fc8e400 data:ffff88807fc8e3f4 tail:0x11 end:0x140 dev:<NULL>
+------------[ cut here ]------------
+kernel BUG at net/core/skbuff.c:206 !
+Oops: invalid opcode: 0000 [#1] PREEMPT SMP KASAN PTI
+RIP: 0010:skb_under_panic+0x14b/0x150 net/core/skbuff.c:216
+Call Trace:
+skb_push+0xe5/0x100 net/core/skbuff.c:2636
+vlan_get_protocol_dgram+0x165/0x290 net/packet/af_packet.c:585
+
+#问题根因
+先前引入的修复补丁（commit 79eecf631c14）在处理无硬件卸载的发出 VLAN 数据包时，新增了 `vlan_get_protocol_dgram()` 函数。该函数内部通过 `skb_push` 修改 skb 指针以解析 VLAN 协议，但在 `MSG_PEEK` 场景下（peek 操作不应修改 skb），多个 CPU 可能同时访问同一个 skb，导致并发修改引发 skb 内存状态不一致，从而触发 `skb_under_panic` 崩溃。
+
+#解决方案
+重构 `vlan_get_protocol_dgram()` 函数，移除 `skb_push` 等对 skb 的修改操作。通过引入 `__vlan_get_protocol_offset()` 接口，直接基于偏移量计算 VLAN 协议头，实现对 skb 的只读访问。同时为 skb 参数添加 `const` 限定符，防止后续代码误修改，从而彻底避免 `MSG_PEEK` 场景下的崩溃问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c126143a1d41a6eab1ab9cc8eb3bffbc2da773e2

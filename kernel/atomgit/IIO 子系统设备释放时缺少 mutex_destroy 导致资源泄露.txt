@@ -1,0 +1,21 @@
+#标题
+IIO 子系统设备释放时缺少 mutex_destroy 导致资源泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IIO（Industrial I/O）子系统设备释放流程中，`iio_dev_release()` 函数未调用 `mutex_destroy()` 进行清理。这导致互斥锁资源未正确释放，违背内核资源管理规范。虽然该问题通过代码审查发现，未明确描述运行时可见的具体错误行为（如内存泄露检测报告），但在长期运行或高频设备插拔场景下可能造成资源泄露。同时，锁的初始化时机未配合 lockdep key 的注册，不符合最佳实践。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `iio_device_alloc()` 函数中分配并初始化了 `mlock` 和 `info_exist_lock` 两个互斥锁，但在对应的释放函数 `iio_dev_release()` 中遗漏了 `mutex_destroy()` 调用。这导致锁资源未得到彻底清理。此外，锁的初始化位置在 `iio_device_alloc` 中位于 lockdep key 注册之前，不符合内核编码规范。
+
+#解决方案
+1. 在 `iio_dev_release()` 函数中，调用 `device_unregister` 和 `iio_device_detach_buffers` 之后、`lockdep_unregister_key` 之前，显式调用 `mutex_destroy()` 来销毁 `info_exist_lock` 和 `mlock` 两个互斥锁，确保资源正确释放。
+2. 调整 `iio_device_alloc()` 中的代码顺序，将 `mutex_init()` 移至 `lockdep_register_key` 和 `lockdep_set_class` 之后执行，确保锁初始化与 lockdep key 的注册顺序符合规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aaa360411b6b963a35d7755de6d5fa9c00eafdaf

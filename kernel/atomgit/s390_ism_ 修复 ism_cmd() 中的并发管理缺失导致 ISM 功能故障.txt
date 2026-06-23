@@ -1,0 +1,21 @@
+#标题
+s390/ism: 修复 ism_cmd() 中的并发管理缺失导致 ISM 功能故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定工作负载下，s390 ISM 功能在运行一段时间后进入错误状态（PEC 2 或 PEC 3A），导致由该功能处理的连接中断，且后续的连接请求不再考虑该 ISM 设备（因其处于不可用状态）。
+
+#主要错误日志
+[ 1211.244319] zpci: 061a:00:00.0: Event 0x2 reports an error for PCI function 0x61a
+[ 1211.244325] zpci: 061a:00:00.0: The ism driver bound to the device does not support error recovery
+
+#问题根因
+s390x ISM 设备数据手册明确规定，任何时候每个 ISM 功能只允许一个请求-响应序列。然而，当前驱动程序在 ism_cmd() 中未实现同步机制，导致多个 CPU 可能同时下发命令。这会导致命令被部分或完全覆盖（损坏），进而引发无效 DMA（PEC 2）等硬件错误，使设备进入故障状态。
+
+#解决方案
+在 ism_cmd() 函数中添加自旋锁保护，并在驱动初始化时初始化该锁，确保命令下发与响应读取过程的串行化，符合硬件规范要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0085e3005582432ab7580c68e1f2040e7a546f9a

@@ -1,0 +1,22 @@
+#标题
+KVM nVHE 模式下启用 DVMBM 导致内核启动 Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 nVHE 模式下，内核启动过程中触发 panic。故障发生于使能 DVMBM（Data Virtual Machine Boundary Management）特性时，由于逻辑判断错误，导致在 EL1 等级下尝试读取 EL2 等级的寄存器，引发非法操作。
+
+#主要错误日志
+Hisi dvmbm not supported by KVM nVHE mode
+
+#问题根因
+内核代码中 DVMBM 的初始化逻辑存在问题。当内核处于 nVHE 模式（非 Hyp 模式）时，代码流程仍可能执行至 `hardware_disable_dvmbm` 函数。该函数内部包含读取 EL2 寄存器的操作，而此时 CPU 处于 EL1 状态，导致因尝试在 EL1 访问 EL2 寄存器而触发内核 panic。原始代码将 `is_kernel_in_hyp_mode()` 检查放在 `on_each_cpu` 调用之前，但未能阻止不支持该模式时的后续硬件操作流程。
+
+#解决方案
+修改 `arch/arm64/kvm/hisilicon/hisi_virt.c` 中的 DVMBM 支持检查逻辑：
+1. 将 `is_kernel_in_hyp_mode()` 的判断前置，并在检测到 nVHE 模式时直接返回 `false`，并打印提示信息 "Hisi dvmbm not supported by KVM nVHE mode"。
+2. 调整代码结构，确保只有在内核处于 Hyp 模式时，才会继续进行后续的硬件能力检查或执行 `hardware_disable_dvmbm` 操作，从而避免在 EL1 访问 EL2 寄存器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b7bcdd9e486ea7c630822750a5bb2f3012755616

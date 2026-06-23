@@ -1,0 +1,37 @@
+#标题
+RDMA/mlx5: UMR QP 恢复流程导致任务挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA mlx5 驱动的 UMR（User Mode Region）QPs 恢复流程中，任务可能无限期阻塞。具体表现为进程处于 D 状态（不可中断睡眠）， blocked for more than 120 seconds，触发 hung_task 检测告警。调用栈显示阻塞发生在 `mlx5r_umr_post_send_wait` 等待完成处，通常发生在注销 MR（dereg_mr）或资源清理过程中。
+
+#主要错误日志
+INFO: task rdma_resource_l:1922 blocked for more than 120 seconds.
+Tainted: G        W          6.12.0-rc7+ #1626
+"echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+task:rdma_resource_l state:D stack:0  pid:1922 tgid:1922  ppid:1369
+     flags:0x00004004
+Call Trace:
+<TASK>
+__schedule+0x420/0xd30
+schedule+0x47/0x130
+schedule_timeout+0x280/0x300
+wait_for_completion+0x75/0x130
+mlx5r_umr_post_send_wait+0x3c2/0x5b0 [mlx5_ib]
+mlx5r_umr_revoke_mr+0x93/0xc0 [mlx5_ib]
+__mlx5_ib_dereg_mr+0x299/0x520 [mlx5_ib]
+ib_dereg_mr_user+0x5f/0x120 [ib_core]
+destroy_hw_idr_uobject+0x1d/0x60 [ib_uverbs]
+...
+</TASK>
+
+#问题根因
+在 UMR QP 的恢复流程中，软件直接将 QP 状态转换为 RESET，未等待所有未完成的工作请求完成。根据 IB 规范，固件在 QP 进入 RESET 状态时可能会丢弃部分待处理的 CQE（完成队列条目），而不是发送带有错误状态的 Flush CQE。这导致了 CQE 丢失，上层应用永远等不到预期的完成信号，从而引发任务永久挂起的竞态条件。
+
+#解决方案
+在将 QP 状态转换为 RESET 之前，插入一个屏障 WR（Barrier Work Request）。修复补丁修改了 `mlx5r_umr_recover` 函数，在修改 QP 状态前重发一个 WR 并等待其完成。由于此时 QP 处于错误状态，该 WR 会返回 `IB_WC_WR_FLUSH_ERR`，但这足以作为一个屏障确保所有之前的 WR 都已处理完毕。收到该屏障 WR 的完成信号后，再安全地将 QP 转换为 RESET 状态并恢复至 RTS，从而避免了 CQE 丢失导致的挂起问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f345c63482a676d79be1e1d449a2f48c8edd8c94

@@ -1,0 +1,20 @@
+#标题
+dm-mirror 释放后访问导致的小概率竞态条件修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 device mapper mirror 设备期间，存在微小的时间窗口可能触发内核崩溃。具体表现为：当 `queue_bio` 或 `write_callback` 将 bio 加入队列后，mirrord 线程立即处理了该 bio，导致设备结构体被释放，随后调用的 `wakeup_mirrord(ms)` 访问了已失效的 `ms` 指针，引发 Use-After-Free 异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`dm-mirror` 模块中的 `queue_bio` 和 `write_callback` 函数存在竞态条件。原代码逻辑在释放自旋锁之后才调用 `wakeup_mirrord(ms)`。这可能导致 mirrord 线程在锁释放后、唤醒前迅速处理完 bio 并导致设备卸载，此时 `ms` 指针已失效，从而造成在 `wakeup_mirrord` 中访问无效指针。
+
+#解决方案
+将 `wakeup_mirrord(ms)` 函数调用移动到自旋锁保护的临界区内执行。这确保了在唤醒 mirrord 线程时，`ms` 指针和 bio 列表的状态仍然受到锁的保护，避免了设备卸载过程中的 Use-After-Free 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e7b76948f5aeba3ed04315c72f3e90d40f76a598

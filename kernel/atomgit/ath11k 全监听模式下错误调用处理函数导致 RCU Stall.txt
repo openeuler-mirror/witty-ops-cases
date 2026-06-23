@@ -1,0 +1,36 @@
+#标题
+ath11k 全监听模式下错误调用处理函数导致 RCU Stall
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 full monitor mode（全监听模式）的硬件上，内核触发 RCU 调度停顿。系统打印 `rcu_sched self-detected stall on CPU` 信息，调用栈显示进程陷入 `ath11k_dp_rx_mon_mpdu_pop` 相关的 spinlock 死锁或无限循环状态，导致 CPU 无法调度。
+
+#主要错误日志
+rcu: INFO: rcu_sched self-detected stall on CPU
+rcu:     0-....: (1 GPs behind) idle=c67/0/0x7 softirq=45768/45769 fqs=1012
+ (t=2100 jiffies g=14817 q=8703)
+Task dump for CPU 0:
+task:swapper/0       state:R  running task     stack: 0 pid:    0 ppid:     0 flags:0x0000000a
+Call trace:
+ dump_backtrace+0x0/0x160
+ show_stack+0x14/0x20
+ ...
+ do_raw_spin_lock+0x60/0x100
+ _raw_spin_lock_bh+0x1c/0x2c
+ ath11k_dp_rx_mon_mpdu_pop.constprop.0+0x174/0x650
+ ath11k_dp_rx_process_mon_status+0x8b4/0xa80
+ ath11k_dp_rx_process_mon_rings+0x244/0x510
+ ath11k_dp_service_srng+0x190/0x300
+ ...
+
+#问题根因
+在 full monitor mode 下，硬件的 monitor destination ring 描述符格式与“经典”模式不同。Full mode 使用 `hal_sw_monitor_ring` 类型并由 `ath11k_dp_full_mon_process_rx` 处理，而经典模式使用 `hal_reo_entrance_ring` 类型并由 `ath11k_dp_rx_mon_dest_process` 处理。
+两者虽然结构大小相同，但关键字段（如 `sw_cookie`、`paddr` 等）的偏移量不同。代码未对模式进行判断，在全监听模式下错误地调用了针对经典模式的 `ath11k_dp_rx_mon_dest_process`，导致从 DMA 环中获取了无效的 skb buffer id，进而引发内存访问错误或锁死，导致 RCU Stall。
+
+#解决方案
+在调用 `ath11k_dp_rx_mon_dest_process` 前增加硬件参数判断，仅当硬件不支持全监听模式（`!ab->hw_params.full_monitor_mode`）时才执行该函数。在全监听模式下跳过此经典处理流程，避免使用错误的格式解析 DMA 环数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8f4e128b532d820d07c7b1e7b601ec03ed37237a

@@ -1,0 +1,20 @@
+#标题
+drm/i915/power: for_each_set_bit() 在 abox 迭代中使用了错误的 size 参数
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel 显卡驱动电源管理代码中，`for_each_set_bit()` 宏在遍历 abox mask 时，错误地使用了字节数而不是位数作为 size 参数。虽然在当前实现中（mask 最高位仅为 bit 2 且变量类型为 unsigned long），该问题因内存对齐和填充字节恰好能正常工作，但如果使用更小的数据类型，将导致遍历范围不足，引发细微且极难追踪的逻辑错误，可能导致 ABOX 控制寄存器配置缺失或错误。
+
+#主要错误日志
+未知
+
+#问题根因
+`for_each_set_bit()` 宏期望的 size 参数单位是位，但代码中传入的是 `sizeof(abox_regs)`（字节数）。例如，若变量为 4 字节，则错误地遍历 4 个 bit 而不是 32 个 bit。根因是调用者对 API 参数单位的理解错误。
+
+#解决方案
+将 `for_each_set_bit()` 调用中的第三个参数从 `sizeof(abox_regs)` 修改为 `BITS_PER_TYPE(abox_regs)`。`BITS_PER_TYPE` 宏能够正确计算变量类型对应的位数（如 unsigned long 对应 64 位或 32 位），从而确保迭代范围覆盖整个掩码变量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7dc6ef9588908c8d7daebda65450407cd213386e

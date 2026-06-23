@@ -1,0 +1,20 @@
+#标题
+OP-TEE supplicant挂死导致客户端进程处于不可杀死的挂起状态
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统重启或关机过程中，若 OP-TEE supplicant 守护进程因崩溃、被杀死或挂死而无法响应，客户端进程会在内核中无限期等待，处于不可被杀死的状态。这会导致系统无法正常关闭，触发 hung-task watchdog，最终导致系统完全挂起，只能通过硬关机/开机来恢复。
+
+#主要错误日志
+未知
+
+#问题根因
+OP-TEE supplicant 是用户空间守护进程，在处理 OP-TEE RPC 调用过程中可能发生挂死、崩溃或被杀死。当出现错误的关闭顺序（supplicant 先于客户端应用退出）或 supplicant 异常时，内核中的客户端进程使用 `wait_for_completion_interruptible` 进入等待循环。由于该循环逻辑在 supplicant 不可用时未能正确退出，导致进程陷入死循环并处于不可中断（D状态）或不可杀死的等待状态，进而引发系统挂起。
+
+#解决方案
+将内核中等待 supplicant 响应的函数 `optee_supp_thrd_req` 中的等待逻辑从 `wait_for_completion_interruptible` 改为 `wait_for_completion_killable`。移除了原有的循环重试逻辑，允许在 supplicant 无响应时直接通过信号杀死客户端进程，防止其陷入无限等待的死循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ed53624c90228e9915dafe57a144d875eea6a8b1

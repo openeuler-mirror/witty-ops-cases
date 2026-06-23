@@ -1,0 +1,23 @@
+#标题
+mv88e6xxx DSA 驱动在删除 VLAN 时因 MST 不支持返回 -ENOENT 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除 VLAN 时，若硬件不支持 MST（生成树状态表）功能，内核返回 -ENOENT 错误码。这会导致 VLAN 删除操作失败，影响网络配置的正常清理流程。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于两个方面：
+1. `mv88e6xxx_mst_put` 函数逻辑判断不严谨：当芯片不支持 STU（Spanning Tree Unit）时，`sid` 变量数值虽可能默认为零，但代码未显式检查 STU 支持情况，导致错误地进入后续释放流程。
+2. `mv88e6xxx_vtu_get` 函数未初始化 `entry` 结构体：调用 `memset` 清零前，结构体中残留的随机值（特别是 `global` 等标志位）可能干扰后续 VTU 条目的查找与处理逻辑。
+
+#解决方案
+1. 在 `mv88e6xxx_mst_put` 函数中增加对 STU 功能支持的显式检查。若 `mv88e6xxx_has_stu(chip)` 返回假（即硬件不支持 MST），则直接返回 0，跳过不必要的 MST 资源释放操作。
+2. 在 `mv88e6xxx_vtu_get` 函数入口处，对 `entry` 结构体执行 `memset` 清零操作，确保后续逻辑不会受到未初始化字段的影响。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3cb00e12c107cabeed1747cfacbbcda677c8f558

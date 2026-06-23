@@ -1,0 +1,22 @@
+#标题
+ksmbd: fix slab-use-after-free in ksmbd_smb2_session_create
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行 ksmbd_smb2_session_create 函数时触发 slab-use-after-free 错误。该问题由 ksmbd_smb2_session_create 与 ksmbd_expire_session 之间的竞态条件引起，导致在全局会话表中添加或删除会话时访问了已被释放的内存。
+
+#主要错误日志
+slab-use-after-free in ksmbd_smb2_session_create
+
+#问题根因
+ksmbd_smb2_session_create 与 ksmbd_expire_session 函数之间存在竞态条件。在对全局会话表进行操作（添加或删除会话）时，缺少对 sessions_table_lock 锁的持有，导致并发操作引发内存访问错误。
+
+#解决方案
+在操作全局会话表时添加缺失的 sessions_table_lock 锁保护。具体修改包括：
+1. 在 ksmbd_expire_session 函数中，遍历会话列表前获取 sessions_table_lock 写锁，遍历结束后释放锁。
+2. 调整 ksmbd_sessions_deregister 函数中的锁释放位置，确保在操作全局会话表期间持有 sessions_table_lock 锁，修正了之前锁作用域不正确的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f844d0b2ab16c19f84c68daf24972acfeb6b6bb2

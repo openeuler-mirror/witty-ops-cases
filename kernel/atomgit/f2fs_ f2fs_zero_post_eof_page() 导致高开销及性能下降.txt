@@ -1,0 +1,25 @@
+#标题
+f2fs: f2fs_zero_post_eof_page() 导致高开销及性能下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行涉及文件大小调整或写入的操作（如 punch hole、write、expand、setattr 等）时，系统出现不必要的性能开销。由于 `f2fs_zero_post_eof_page()` 函数在处理页缓存时逻辑不够优化，导致在特定场景下进行了冗余的 `invalidate_lock` 锁获取以及不必要的页查找/无效化操作，增加了系统负载和时延。
+
+#主要错误日志
+未知
+
+#问题根因
+`f2fs_zero_post_eof_page()` 函数的实现存在两个效率问题：
+1. 在某些调用场景下，未在获取 `invalidate_lock` 之前检查 `new_size` 是否满足条件，导致可能执行了不必要的锁操作。
+2. 函数内部直接调用 `truncate_pagecache(inode, old_size)` 对从 `old_size` 开始的所有页面进行无效化处理，而实际上只需要处理 `[old_size, new_size]` 范围内的页面。这导致了超出预期范围的页面查找和无效化开销。
+
+#解决方案
+优化 `f2fs_zero_post_eof_page()` 函数的实现以降低开销：
+1. 将 `invalidate_lock` 的获取逻辑移至函数内部，并根据传入的 `lock` 参数决定是否加锁，允许调用者避免重复加锁或在更合适的时机加锁。
+2. 在获取锁之前增加前置检查：如果 `old_size >= new_size` 或者 `mapping` 为空，则直接返回，避免无谓的锁竞争和后续操作。
+3. 将全范围的 `truncate_pagecache` 调用替换为 `truncate_inode_pages_range`，仅针对 `[old_size, new_size]` 范围内的页面进行查找和无效化操作，避免处理不必要的页面。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b02823c07432b200cbf168e567eec7024dcc5bdf

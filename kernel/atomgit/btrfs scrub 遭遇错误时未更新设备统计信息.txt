@@ -1,0 +1,25 @@
+#标题
+btrfs scrub 遭遇错误时未更新设备统计信息
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Btrfs 文件系统执行 scrub 操作时，如果遇到读取错误或校验和不匹配错误，内核日志中仅打印具体的错误信息（如 checksum error、unable to fixup），但缺少设备统计错误更新的日志行。这导致用户无法通过设备统计信息监控到磁盘发生的错误。
+
+#主要错误日志
+BTRFS info (device dm-2): scrub: started on devid 1
+BTRFS error (device dm-2): unable to fixup (regular) error at logical 13631488 on dev /dev/mapper/test-scratch1 physical 13631488
+BTRFS warning (device dm-2): checksum error at logical 13631488 on dev /dev/mapper/test-scratch1, physical 13631488, root 5, inode 257, offset 0, length 4096, links 1 (path: file)
+BTRFS info (device dm-2): scrub: finished on devid 1 with status: 0
+
+#问题根因
+在迁移到新的 scrub_stripe 接口过程中，代码逻辑发生了变化，导致 scrub 检测到错误时不再调用 `btrfs_dev_stat_inc_and_print()` 函数，从而遗漏了设备统计信息的更新与打印。
+
+#解决方案
+1. 引入新的 bitmap 和计数器专门记录 metadata generation 不匹配错误。
+2. 在 `scrub_stripe_report_errors()` 函数中，针对 IO 错误、校验和错误和 generation 错误分别添加 `btrfs_dev_stat_inc_and_print()` 调用以更新设备统计。
+3. 在 `scrub_write_endio()` 函数中添加写错误的设备统计更新。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/169cef3b12d7bc0da125e94872d879e2c575d6e7

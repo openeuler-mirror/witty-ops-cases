@@ -1,0 +1,25 @@
+#标题
+perf/x86/intel: 分支计数器采样导致 UBSAN 移位越界告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持分支计数器采样的 CPU（如 CWF）上执行命令 `perf record -e "{instructions,instructions:p}" -j any,counter sleep 1` 时，内核触发 UBSAN "shift-out-of-bounds" 告警。系统日志打印移位指数 64 对于 64 位类型过大的警告信息，并打印相关的调用栈。
+
+#主要错误日志
+UBSAN: shift-out-of-bounds in /kbuild/src/consumer/arch/x86/events/intel/lbr.c:970:15
+shift exponent 64 is too large for 64-bit type 'long long unsigned int'
+......
+intel_pmu_lbr_counters_reorder.isra.0.cold+0x2a/0xa7
+intel_pmu_lbr_save_brstack+0xc0/0x4c0
+setup_arch_pebs_sample_data+0x114b/0x2400
+
+#问题根因
+在配置分支计数器采样事件组时，丢失了对组内最后一个新增事件的分支计数器约束检查。由于该事件尚未加入兄弟列表，导致其被错误地调度到固定计数器 0（索引为 32）上，而不是支持分支计数器采样的通用计数器（GP counters 0-3）。后续代码在处理计数器重排时，对该错误的计数器索引执行移位操作，导致右移 64 位从而触发越界告警。
+
+#解决方案
+在 `intel_pmu_hw_config()` 中补充对组内最后一个新增事件的分支计数器约束应用。同时引入新函数 `intel_set_branch_counter_constr()` 统一处理分支计数器约束的逻辑，避免代码重复，确保所有涉及分支计数器采样的事件都被正确编程到支持该功能的通用计数器上。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d60576762fff68f7464920ba8f719244a3e0daa9

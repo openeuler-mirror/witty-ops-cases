@@ -1,0 +1,27 @@
+#标题
+jbd2：修复日志超级块在内存中校验和与数据不一致导致挂载失败的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当文件系统以只读方式挂载时，若此时对所在磁盘进行拷贝操作（如使用 dd 命令），随后尝试挂载拷贝后的目标磁盘将会失败。
+具体表现为：
+1. 执行 mount 命令挂载目标设备时报错 “Bad message”。
+2. 系统日志打印 JBD2 校验和错误，提示无法加载日志 inode。
+
+#主要错误日志
+[ 1094.849826] JBD2: journal checksum error
+[ 1094.850927] EXT4-fs (sda): Could not load journal inode
+mount: mount /dev/sda on /mnt/test1 failed: Bad message
+
+#问题根因
+在文件系统挂载过程中调用 `jbd2_journal_set_features` 设置日志特性（如 `JBD2_FEATURE_INCOMPAT_CSUM_V3`）时，代码逻辑修改了内存中日志超级块（journal sb）的数据字段，但未同步更新其校验和。
+对于只读挂载的文件系统，`jbd2_write_superblock()` 函数不会被调用，导致内存中的超级块数据与校验和长期处于不一致状态。若此时通过块拷贝命令读取该磁盘数据，拷贝得到的是内存中“数据已修改但校验和未更新”的中间状态数据，导致新设备挂载时校验失败。
+
+#解决方案
+在 `jbd2_journal_set_features` 和 `jbd2_journal_clear_features` 函数中，修改完日志超级块特性字段后，立即调用 `jbd2_superblock_csum()` 重新计算并更新内存中超级块的校验和。
+这确保了即使在只读文件系统场景下，内存中的日志超级块数据与其校验和保持一致，避免外部拷贝工具读取到不一致的数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bb7c7c56e4504395dcea73862f2554313974ad88

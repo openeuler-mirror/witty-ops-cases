@@ -1,0 +1,20 @@
+#标题
+HID: roccat: 修复 roccat_report_event 中的释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下，当 roccat_report_event() 函数正在遍历 device->readers 链表时，另一个线程可能同时调用 roccat_release() 移除并释放该链表中的 reader 节点。这会导致 roccat_report_event() 访问已经被释放的内存，引发释放后使用故障，可能导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+roccat_report_event() 函数在遍历 device->readers 链表时，未持有 readers_lock 互斥锁。这导致并发执行的 roccat_release() 能够在链表遍历过程中移除并释放 reader，从而引发 use-after-free。
+
+#解决方案
+在 roccat_report_event() 函数中，于遍历 device->readers 链表的临界区前后，分别加上 mutex_lock(&device->readers_lock) 和 mutex_unlock(&device->readers_lock)，以确保链表遍历过程受到互斥锁保护，防止并发释放操作干扰。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/444672a8f0c9519e4a5ade498ec6a648f1735bce

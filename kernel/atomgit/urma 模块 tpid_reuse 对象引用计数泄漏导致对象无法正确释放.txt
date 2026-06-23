@@ -1,0 +1,20 @@
+#标题
+urma 模块 tpid_reuse 对象引用计数泄漏导致对象无法正确释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 urma 模块处理带有 tpid_reuse 的创建请求时，若发现 tpid_reuse 已存在（EEXIST），代码路径未执行引用计数的减少操作。这导致该对象的引用计数泄漏，使其无法被正常释放，最终可能导致相关资源无法回收。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `handle_create_req_with_tpid_reuse` 函数中，当 `ubcore_find_add_tpid_reuse` 返回 `-EEXIST` 时，代码逻辑处理了已存在的 `exist_tpid_reuse` 对象，但在处理完成后遗漏了调用 `ubcore_tpid_reuse_kref_put` 来减少引用计数。`ubcore_find_add_tpid_reuse` 内部会增加引用计数，根据“谁获取谁释放”的原则，调用者在使用完毕后必须释放该引用，原代码缺失了这一步骤。
+
+#解决方案
+在处理已存在 tpid_reuse 的分支逻辑中，使用完 `exist_tpid_reuse` 对象后，增加调用 `ubcore_tpid_reuse_kref_put(exist_tpid_reuse)` 以正确减少引用计数，防止内存泄漏。同时重构了该分支的返回逻辑，移除了跳转到 `send_success_resp` 标签的 `goto` 语句，改为直接构造响应并发送后返回。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c37ec05b6d514b1935691f18db28aafc6dbb0b8e

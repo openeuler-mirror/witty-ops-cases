@@ -1,0 +1,25 @@
+#标题
+fsl_sai: DSD格式下比特位顺序配置错误导致音频播放异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 pipewire 进行 DSD（Direct Stream Digital）音频格式播放测试时，音频数据传输出现异常。由于比特位顺序配置错误，导致 DSD little endian 格式数据在硬件传输时 oldest bit（最高有效位 MSB）未能优先发送，从而导致播放声音错误或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+DSD little endian 格式要求 MSB（最高有效位）优先发送，因为最旧的比特位位于 MSB。在内核代码中，当音频格式为 PDM（DSD 的一种传输模式）时，代码逻辑错误地设置了 `val_cr5` 的 FBT（First Bit Transmitted）字段。
+具体原因为：
+1. 之前的补丁在 `SND_SOC_DAIFMT_PDM` 分支中执行了 `val_cr4 &= ~FSL_SAI_CR4_MF`，并在 `fsl_sai_hw_params` 中判断 `sai->is_pdm_mode` 为真时，强制设置 `FBT(0)`（即 LSB first）。
+2. 这与 DSD little endian 格式的实际需求（MSB first）相悖，导致数据帧的比特发送顺序颠倒。
+
+#解决方案
+修改 `sound/soc/fsl/fsl_sai.c` 文件，移除对 PDM 模式下错误的比特顺序强制覆盖逻辑：
+1. 删除 `SND_SOC_DAIFMT_PDM` 分支中的 `val_cr4 &= ~FSL_SAI_CR4_MF;` 语句，避免错误修改帧格式配置。
+2. 修改 `fsl_sai_hw_params` 函数中的判断逻辑，移除 `|| sai->is_pdm_mode` 条件，使得 PDM 模式不再强制使用 LSB first（即 `FBT(0)`），从而允许硬件按照默认或正确的 MSB first 顺序传输 DSD 数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3a86c47bab059063d6976a94359becac2e3e4a22

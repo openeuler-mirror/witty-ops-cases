@@ -1,0 +1,28 @@
+#标题
+dm-table: realloc_argv内存拷贝越界导致内核Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在启动或设备映射器表加载过程中触发内核Panic，调用栈显示在 `dm_split_args` 函数中触发了 `__fortify_panic`，并报告 `kernel BUG at lib/string_helpers.c`。系统最终因致命异常而停止同步。
+
+#主要错误日志
+[    3.038929][    T1] kernel BUG at lib/string_helpers.c:1040!
+[    3.039147][    T1] Internal error: Oops - BUG: 00000000f2000800 [#1]  SMP
+[    3.056489][    T1] Call trace:
+[    3.056591][    T1]  __fortify_panic+0x10/0x18 (P)
+[    3.056773][    T1]  dm_split_args+0x20c/0x210
+[    3.056942][    T1]  dm_table_add_target+0x13c/0x360
+[    3.057132][    T1]  table_load+0x110/0x3ac
+[    3.058620][    T1] ---[ end trace 0000000000000000 ]---
+[    3.059083][    T1] Kernel panic - not syncing: Oops - BUG: Fatal exception
+
+#问题根因
+在 `realloc_argv` 函数中，代码逻辑错误地在执行 `memcpy` 之前更新了 `*size` 变量为新分配的大小（`new_size`），而不是保留旧数组的大小。这导致 `memcpy` 在拷贝数据时，使用了新分配的大尺寸作为拷贝长度，从而从源数组 `old_argv` 的已分配边界之外读取数据并拷贝，引发内存越界读取，最终触发 FORTIFY_SOURCE 机制导致的 Panic。
+
+#解决方案
+调整 `realloc_argv` 函数中的赋值顺序，将 `*size = new_size` 移到 `memcpy` 操作之后。确保 `memcpy` 使用的是源数组 `old_argv` 原有的尺寸进行拷贝，防止越界访问，拷贝完成后再更新数组尺寸记录。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/517ce2573caeb979527112807cb0db2c3daecfc5

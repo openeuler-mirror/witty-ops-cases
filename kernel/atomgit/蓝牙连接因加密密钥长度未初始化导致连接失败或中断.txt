@@ -1,0 +1,22 @@
+#标题
+蓝牙连接因加密密钥长度未初始化导致连接失败或中断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在建立蓝牙连接时，如果 HCI_OP_READ_ENC_KEY_SIZE 命令正在处理中（pending），`hcon->enc_key_size` 可能尚未初始化。此时若 `l2cap_check_enc_key_size` 进行检查，会导致连接被错误地拒绝或断开。该问题是由引入加密密钥长度检查的提交引起的回归问题。
+
+#主要错误日志
+bt_dev_err(hdev, "sending read key size failed");
+
+#问题根因
+引入的检查逻辑 `l2cap_check_enc_key_size` 依赖 `hcon->enc_key_size` 字段，但在加密变更事件发生时，该字段可能因 `HCI_OP_READ_ENC_KEY_SIZE` 命令尚未返回而未被初始化。此外，系统未利用已知密钥信息（如存储在 `link_key` 或 `smp_ltk` 中的长度），导致在读取命令未完成前无法确定正确的加密密钥长度，从而引发竞态条件。
+
+#解决方案
+1. 新增 `hci_conn_key_enc_size` 函数，从连接关联的 `link_key` (ACL_LINK) 或 `smp_ltk` (LE_LINK) 中提取已知的加密密钥长度。
+2. 重构 `hci_read_enc_key_size` 逻辑：若密钥长度已知（从 link_key/smp_ltk 获取），则直接将其赋值给 `conn->enc_key_size`；若未知，则暂时使用 `hdev->min_enc_key_size` 防止检查失败，等待命令返回。
+3. 在 `hci_cc_read_enc_key_size` 处理逻辑中增加检查：如果控制器返回的密钥长度小于之前存储的已知长度，视为安全降级并处理；同时更新存储的密钥长度以保持同步。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b429bfdbefc897cc8f565ca86da1a1df4672ad16

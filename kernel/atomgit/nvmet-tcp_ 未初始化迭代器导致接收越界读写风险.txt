@@ -1,0 +1,20 @@
+#标题
+nvmet-tcp: 未初始化迭代器导致接收越界读写风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 nvmet_tcp_build_pdu_iovec() 函数检测到 PDU 长度或偏移量越界时，虽然触发了致命错误处理流程，但由于函数返回值为 void，调用者无法感知错误发生。调用者继续错误地将队列接收状态设置为 NVMET_TCP_RECV_DATA，导致 Socket 接收循环尝试向未初始化的 msg_iter 迭代器读取网络数据，引发内核状态混乱或内存破坏。
+
+#主要错误日志
+[   xx.xxxxxx] queue %d: failed to build PDU iovec
+
+#问题根因
+函数 nvmet_tcp_build_pdu_iovec() 原返回类型为 void。当其检测到 PDU 越界等错误时，仅内部调用 nvmet_tcp_fatal_error() 并提前返回，未将错误状态传递给上层调用者。导致调用者（如 nvmet_tcp_handle_h2c_data_pdu）误以为操作成功，继续执行 queue->rcv_state = NVMET_TCP_RECV_DATA，此时 cmd->recv_msg.msg_iter 尚未初始化，造成后续接收逻辑操作未初始化的迭代器。
+
+#解决方案
+修改 nvmet_tcp_build_pdu_iovec() 函数返回类型为 int，在检测到错误时返回 -EPROTO。修改所有调用该函数的位置，增加返回值检查逻辑：若返回错误码，打印错误日志并向上层返回错误，停止后续状态机流转，从而避免使用未初始化的迭代器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f03593b9c397c3757952c5f5fdc841f4b857f47e

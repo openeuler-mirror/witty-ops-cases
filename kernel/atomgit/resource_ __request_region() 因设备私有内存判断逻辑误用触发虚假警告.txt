@@ -1,0 +1,24 @@
+#标题
+resource: __request_region() 因设备私有内存判断逻辑误用触发虚假警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了多个 CXL 内存扩展器的机器上，系统运行过程中会触发内核警告日志。该警告提示“Unaddressable device”资源冲突，但实际上系统功能未受影响，属于误报。此现象干扰了运维人员对真实硬件故障的判断。
+
+#主要错误日志
+Unaddressable device (null) %pR conflicts with %pR
+（注：根据 Commit 描述，原日志行末尾缺少换行符，且此处为虚假警告）
+
+#问题根因
+`__request_region()` 函数在检测到资源冲突时，仅依据 `conflict->desc == IORES_DESC_DEVICE_PRIVATE_MEMORY` 条件就判定为“不可寻址设备内存冲突”并打印警告。
+然而，hmem 设备资源滥用 `resource.desc` 字段来存储 NUMA 节点 ID（numa node id）。
+在特定环境下，某个 NUMA 节点 ID 的值恰好与 `IORES_DESC_DEVICE_PRIVATE_MEMORY` 的枚举值（6）相同，导致逻辑误判，触发了虚假警告。该警告逻辑本应仅适用于 `iomem_resource`，却应用到了所有资源类型。
+
+#解决方案
+在 `kernel/resource.c` 的 `__request_region_locked` 函数中增加对父资源类型的检查限制。
+修改后的逻辑仅在 `parent == &iomem_resource`（即父资源为 I/O 内存资源）时，才进行“不可寻址设备内存”的冲突检查与告警，从而避免了 hmem 设备等非 iomem 资源因 desc 字段复用导致的误报。同时，补丁修正了告警信息末尾缺失的换行符。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14e6505fe860fc207bbe2444e1814506d2f1d8d1

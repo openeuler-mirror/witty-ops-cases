@@ -1,0 +1,22 @@
+#标题
+xcall2.0 模块引用计数释放不及时导致内核模块无法卸载
+
+#内核版本
+OLK-6.6
+
+#问题现象
+进程退出且 xcall 注销后，内核模块无法正常卸载（rmmod 卡住或失败）。
+
+#主要错误日志
+未知
+
+#问题根因
+`clear_xcall_area()` 函数原本在 `__mmdrop()` 中调用。`mmput()` 仅将 `mm->mm_users` 引用计数减至 0，表示无用户空间进程使用该地址空间；而 `mmdrop()` 需将 `mm->mm_count` 减至 0 才会调用 `__mmdrop()`，表示所有对内存描述符的引用均已释放。
+由于 `mm_count` 归零的条件在进程退出后不一定立即满足，导致 `__mmdrop()` 中的 `put_xcall()` 调用延迟，进而导致 `module_put()` 未被及时执行，模块引用计数无法归零，最终导致模块无法卸载。
+
+#解决方案
+将 `clear_xcall_area()` 的调用位置从 `__mmdrop()` 移动至 `__mmput()` 中执行。
+具体修改为：在 `__mmput()` 函数中，位于 `exit_mmap()` 之后、`sp_mm_clean()` 之前调用 `clear_xcall_area(mm)`，确保在进程退出路径上及时释放 xcall 内核模块资源并减少模块引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/abf226d1cdeb2fb1615d792dad044939ba296558

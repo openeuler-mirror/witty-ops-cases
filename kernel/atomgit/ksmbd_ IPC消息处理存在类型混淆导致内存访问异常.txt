@@ -1,0 +1,20 @@
+#标题
+ksmbd: IPC消息处理存在类型混淆导致内存访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ksmbd 在处理 IPC 消息时，由于 `ksmbd_ipc_login_request` 和 `FSCTL_PIPE_TRANSCEIVE` ioctl 可能分配到相同的 `handle` 值，在竞态条件下会导致消息类型混淆。这种情况会导致消息错误投递，进而访问非预期的内存区域，造成内存破坏或内核崩溃。
+
+#主要错误日志
+pr_err("Waiting for IPC type %d, got %d. Ignore.\n", entry->type + 1, type);
+
+#问题根因
+在 `handle_response` 函数中，当检测到 IPC 响应消息类型不匹配（即等待的类型与实际获取的类型不一致）时，代码打印了错误日志但缺少 `continue` 语句。这导致程序未能跳过当前不匹配的响应去检查下一个响应，而是继续向下执行。结合 `ida_alloc` 机制导致的 `req->handle` 冲突，最终引发了类型混淆。
+
+#解决方案
+在 `fs/smb/server/transport_ipc.c` 文件的 `handle_response` 函数中，当检测到 IPC 类型不匹配并打印错误日志后，增加 `continue` 语句，确保跳过当前不匹配的响应条目，继续检查后续的响应，从而避免类型混淆。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4858500f9068d1a92efac4945f94bf93b28f3dd3

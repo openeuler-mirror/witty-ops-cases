@@ -1,0 +1,26 @@
+#标题
+net/9p: fix double req put in p9_fd_cancelled
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Syzkaller 进行测试时，触发了一个通用保护故障，导致内核崩溃。具体表现为在挂载 9p 文件系统过程中，发生野内存访问或双重释放，触发 KASAN 报错。
+
+#主要错误日志
+general protection fault, probably for non-canonical address 0xfbd59c0000000021: 0000 [#1] PREEMPT SMP KASAN NOPTI
+KASAN: maybe wild-memory-access in range [0xdead000000000108-0xdead00000000010f]
+RIP: 0010:p9_fd_cancelled+0xe9/0x200 net/9p/trans_fd.c:734
+
+#问题根因
+这是一个并发竞态问题。在 9p 客户端处理请求时，存在两个执行路径可能同时操作同一个请求的 `req_list`：
+1. 一个线程在 `p9_read_work()` 中调用 `p9_conn_cancel()` 或正常处理流程，将请求从列表中删除（`list_del`）。
+2. 另一个线程在 `p9_fd_cancelled()` 中，由于之前的检查条件仅判断 `req->status == REQ_STATUS_RCVD`，导致在状态已被更改为其他非 SENT 状态（如 ERROR）时，依然尝试执行 `list_del`。
+这导致请求被从链表中删除两次（double remove），引发内核崩溃。
+
+#解决方案
+修改 `net/9p/trans_fd.c` 文件中 `p9_fd_cancelled` 函数的判断逻辑。将判断条件从检查 `req->status == REQ_STATUS_RCVD` 修改为 `req->status != REQ_STATUS_SENT`。
+这意味着只有当请求状态仍为 SENT 时，函数才继续处理；如果状态已经改变（无论变为 RCVD 还是 ERROR），说明请求已经被其他路径处理并从列表中移除，当前函数应直接忽略，从而避免双重删除。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8acd0443ff576750e4af9596990e1ac0e3aefef5

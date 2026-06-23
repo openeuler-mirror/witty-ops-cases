@@ -1,0 +1,26 @@
+#标题
+smb: client: 修复使用硬件异步加密时的 use-after-free 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用硬件加密加速器进行 SMB 加密通信时，触发 use-after-free 漏洞，导致内核崩溃，通常表现为空指针引用。该问题发生在 `crypt_message` 函数处理异步加密操作时，请求结构体内存被提前释放。
+
+#主要错误日志
+未知
+
+#问题根因
+修复 CVE-2024-50047 的补丁移除了 `crypt_message()` 中的异步加密处理逻辑，错误地假设所有加密操作都是同步的。
+当使用硬件加密加速器时，`crypto_aead_encrypt` 或 `crypto_aead_decrypt` 可能返回 `-EINPROGRESS`，表示操作正在异步进行。由于缺少 `crypto_wait_req()` 等待机制，函数在异步操作完成前立即调用 `kvfree_sensitive` 释放了请求缓冲区（`creq`）。硬件加密驱动随后访问已释放的内存，导致 use-after-free 引发内核崩溃。
+此外，`crypto_alloc_aead()` 即使未指定 `CRYPTO_ALG_ASYNC` 标志，也可能选择异步实现，这增加了触发该问题的概率。
+
+#解决方案
+恢复异步加密处理机制，确保请求缓冲区在操作完成前不被释放。
+1. 引入 `DECLARE_CRYPTO_WAIT(wait)` 用于完成跟踪。
+2. 通过 `aead_request_set_callback()` 设置异步完成通知回调。
+3. 使用 `crypto_wait_req()` 包裹加密/解密调用，强制等待操作完成。
+这确保了无论底层实现是同步还是异步，请求缓冲区都在加密操作完成后才被释放，同时保留了 CVE-2024-50047 的原有修复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7ffff28ff120b2bb55d4d305bf6fae17d9a7c525

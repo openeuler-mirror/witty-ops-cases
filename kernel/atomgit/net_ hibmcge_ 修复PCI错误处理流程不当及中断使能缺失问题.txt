@@ -1,0 +1,31 @@
+#标题
+net: hibmcge: 修复PCI错误处理流程不当及中断使能缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 当发生PCI错误时，驱动在 `error_detected` 回调中过早调用 `netif_device_detach`，导致设备状态管理异常，可能在不需要断开连接的情况下错误移除设备。
+2. 在无PHY设备连接的场景下（phy_addr 为 0xFF），驱动仍尝试进行链路协商等待，导致不必要的延迟或潜在错误。
+3. 接收缓冲区可用中断处理完成后，未重新使能该中断，导致后续接收中断丢失，网络接收功能失效。
+
+#主要错误日志
+"failed to re-enable PCI device after reset\n"
+
+#问题根因
+1. **PCI错误处理逻辑不当**：在 `hbg_pci_err_detected` 函数中，无条件执行 `netif_device_detach` 和 `pci_disable_device`。正确流程应仅在 `pci_channel_io_perm_failure` 状态下 detach 设备，且 disable 操作应移至 `slot_reset` 阶段执行。
+2. **无PHY场景判断缺失**：`hbg_hw_adjust_link` 函数未检查 PHY 地址是否为 `HBG_NO_PHY` (0xFF)，导致无PHY设备时仍执行链路状态轮询逻辑。
+3. **中断处理遗漏**：`hbg_irq_handle_rx_buf_val` 中处理完中断后，遗漏了重新使能中断的步骤，导致中断仅能触发一次。
+
+#解决方案
+1. **修正PCI错误恢复流程**：
+   - 将 `netif_device_detach` 调用限制在 `state == pci_channel_io_perm_failure` 的分支中。
+   - 将 `pci_disable_device` 和 `netif_device_detach`（针对复位场景）的逻辑移至 `hbg_pci_err_slot_reset` 函数中，确保在重新使能设备前正确处理。
+2. **增加无PHY场景判断**：
+   - 在 `hbg_common.h` 中统一定义 `HBG_NO_PHY` 宏。
+   - 在 `hbg_hw_adjust_link` 函数开头增加判断，若 `phy_addr` 等于 `HBG_NO_PHY`，则直接返回，跳过链路协商等待。
+3. **修复中断使能问题**：
+   - 在 `hbg_irq_handle_rx_buf_val` 函数末尾增加 `hbg_hw_irq_enable(priv, irq_info->mask, true)`，确保每次中断处理完成后重新开启中断掩码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b6f2252ebe804648e2851b3caea757d806f4da62

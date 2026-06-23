@@ -1,0 +1,41 @@
+#标题
+ext4 快速提交回放路径访问未初始化自旋锁导致 lockdep 报警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 fast-commit 特性的文件系统上执行 fstest generic/629 测试用例时触发内核跟踪信息。系统报错 "trying to register non-static key"，提示代码在使用锁之前未初始化对象，随后 lockdep 关闭锁定正确性验证器。
+
+#主要错误日志
+INFO: trying to register non-static key.
+The code is fine but needs lockdep annotation, or maybe
+you didn't initialize this object before use?
+turning off the locking correctness validator.
+CPU: 0 PID: 866 Comm: mount Not tainted 6.10.0+ #11
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x66/0x90
+ register_lock_class+0x759/0x7d0
+ __lock_acquire+0x85/0x2630
+ lock_acquire+0xd1/0x2d0
+ _raw_spin_lock+0x33/0x40
+ __ext4_journal_get_write_access+0xd5/0x160
+ ext4_reserve_inode_write+0x61/0xb0
+ __ext4_mark_inode_dirty+0x79/0x270
+ ext4_ext_replay_set_iblocks+0x330/0x450
+ ext4_fc_replay+0x14c8/0x1540
+ do_one_pass+0x447/0xd00
+ jbd2_journal_recover+0x139/0x1b0
+ jbd2_journal_load+0x96/0x390
+ ext4_load_and_init_journal+0x253/0xd40
+ ext4_fill_super+0x2cc6/0x3180
+
+#问题根因
+在 ext4 快速提交（fast-commit）回放路径中，函数 ext4_check_bdev_write_error() 尝试获取 `sbi->s_bdev_wb_lock` 自旋锁。然而，此时该自旋锁尚未初始化，因为在 `__ext4_fill_super()` 函数中，该锁的初始化位置靠后，晚于日志恢复（journal replay）的执行点。
+
+#解决方案
+将 `sbi->s_bdev_wb_lock` 自旋锁的初始化操作 `spin_lock_init(&sbi->s_bdev_wb_lock)` 移至 `__ext4_fill_super()` 函数中更早的位置，确保在执行 ext4 快速提交回放路径之前该锁已被正确初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1a584285866bbbac069d259f5050ba05db0df510

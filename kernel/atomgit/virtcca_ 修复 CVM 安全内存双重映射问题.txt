@@ -1,0 +1,26 @@
+#标题
+virtcca: 修复 CVM 安全内存双重映射问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 VirtCCA CVM（Confidential Virtual Machine）场景下，设备（如 GIC ITS、Virtio 设备）进行 DMA 操作时可能出现内存映射冲突或异常。具体表现为 CVM 安全内存被错误地进行了“双重映射”，即内存既被设备直接访问，又被 SWIOTLB bounce buffer 机制接管，导致 DMA 数据传输错误、设备功能异常或潜在的内存一致性问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 VirtCCA CVM 环境中，设备初始化流程存在缺陷：
+1. 对于 GIC ITS、Virtio MMIO/PCI 等特定设备，DMA 默认配置未正确启用 SWIOTLB bounce buffer 机制，导致 CVM 安全内存被直接映射（第一重映射）。
+2. 同时，Virtio 环等机制可能再次尝试对这些内存进行映射或管理，造成“双重映射”冲突。
+根本原因是 `device_initialize` 默认初始化逻辑与 CVM 特定设备需求不匹配，且 `virtio_ring` 中未正确识别 CVM 域以强制使用 DMA API。
+
+#解决方案
+1. 新增 `enable_swiotlb_for_cvm_dev` 接口及 `virtcca_cvm_domain` 判断接口，统一管理 CVM 设备的 SWIOTLB 策略。
+2. 在 `drivers/base/core.c` 的 `device_initialize` 中默认禁用 SWIOTLB，防止全局默认开启导致问题。
+3. 针对 GIC ITS (`irq-gic-v3-its.c`)、Virtio MMIO (`virtio_mmio.c`) 和 Virtio PCI (`virtio_pci_common.c`) 等关键设备，在初始化时显式调用 `enable_swiotlb_for_cvm_dev(dev, true)` 启用 SWIOTLB，确保使用 bounce buffer 机制，避免直接映射。
+4. 在 `virtio_ring.c` 中增加 `virtcca_cvm_domain()` 判断，强制 CVM 场景下使用 DMA API，确保内存映射流程正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3152ab40e9c4bf7102b17a71e184fd503ea2040c

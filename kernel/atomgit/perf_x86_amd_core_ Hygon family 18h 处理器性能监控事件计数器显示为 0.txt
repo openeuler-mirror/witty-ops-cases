@@ -1,0 +1,22 @@
+#标题
+perf/x86/amd/core: Hygon family 18h 处理器性能监控事件计数器显示为 0
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hygon family 18h 处理器上使用 perf 工具进行性能监控时，部分事件计数器（如 cache-misses 和 cache-references）无法正常工作，统计数值始终显示为 0，无法反映真实的硬件性能数据。具体输出示例如下：
+  0    cache-misses  #  0.000 % of all cache refs
+  0    cache-references
+
+#主要错误日志
+未知
+
+#问题根因
+提交 a9843ce606ef ("perf/x86/amd/core: Update and fix stalled-cycles-* events for Zen 2 and later") 将性能事件映射表从 `amd_f17h_perfmon_event_map` 更改为 `amd_zen1_perfmon_event_map`，但该映射表的访问逻辑被限制为仅通过 `X86_FEATURE_ZEN1` 特性检查。由于 Hygon family 18h 处理器不具备 `X86_FEATURE_ZEN1` 特性标志，导致代码路径回退到错误的映射表，使得 cache-misses 和 cache-references 等事件无法正确映射到硬件寄存器，从而导致计数器读数始终为 0。
+
+#解决方案
+在 `amd_pmu_event_map` 函数中增加对 Hygon 厂商（`X86_VENDOR_HYGON`）的判断逻辑。当检测到 CPU 厂商为 Hygon 时，直接返回 `amd_zen1_perfmon_event_map` 作为事件映射表，确保 Hygon family 18h 处理器能正确使用性能监控事件映射，从而修复计数器显示为 0 的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3a33ea90b0470372c371c42d25fe3e631c683209

@@ -1,0 +1,25 @@
+#标题
+BPF 自测试 test_tcpnotify_user 执行失败及 SIGSEGV 崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. BPF 自测试 test_tcpnotify_user 运行失败，统计计数错误，报错信息显示期望调用 10 次，实际只捕获到 8 次。
+2. 测试程序在退出过程中触发 SIGSEGV（段错误）崩溃，原因是主线程清理 LIBBPF 数据结构时，另一线程仍在使用这些资源。
+
+#主要错误日志
+FAILED: Wrong stats Expected 10 calls, got 8
+FAILED: pthread_join
+
+#问题根因
+1. **统计计数错误**：内核提交 7ee988770326 ("timers: Implement the hierarchical pull model") 改变了定时器执行逻辑，允许定时器回调函数在与绑定的 CPU 不同的 CPU 上运行。测试程序原先将进程绑定在 CPU 0，并将 `BPF_MAP_TYPE_PERF_EVENT_ARRAY` 的 `max_entries` 硬编码为 2。当重传任务在其他 CPU（如 CPU 2）上运行时，调用 `bpf_perf_event_output` 会因 index 超出 map 定义的范围（>=2）而导致事件被丢弃。
+2. **程序崩溃**：测试代码中存在线程同步缺陷，轮询线程 `tcp_notifier_poller` 是一个死循环，主线程在清理资源退出时未通知该线程停止并等待其结束，导致轮询线程访问已释放的资源触发 SIGSEGV。
+
+#解决方案
+1. 移除 `test_tcpnotify_kern.c` 中 `perf_event_map` 的 `max_entries` 属性设置，让 libbpf 自动根据系统 CPU 数量填充该值，确保所有 CPU 的事件都能被正确索引和输出。
+2. 引入全局变量 `exit_thread` 控制轮询线程循环退出，在主线程结束前设置该标志，并调用 `pthread_join` 确保线程安全退出后再进行资源清理。
+3. 移除不再具有实际意义的进程绑定 CPU 0 的代码逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/37c47b902767179e1e2c3cffc538dbff92b11de6

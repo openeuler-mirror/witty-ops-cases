@@ -1,0 +1,22 @@
+#标题
+nfs: Clean up /proc/net/rpc/nfs when nfs_fs_proc_net_init() fails
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFS 网络命名空间初始化过程中，若 `nfs_fs_proc_net_init` 函数调用失败，内核未清理此前已成功注册的 `/proc/net/rpc/nfs` 条目，导致该文件残留于系统中，引发资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `nfs_net_init` 的错误处理逻辑不完整。在执行 `rpc_proc_register` 成功后，若后续调用的 `nfs_fs_proc_net_init` 返回错误，函数直接返回错误码，遗漏了对已注册的 rpc proc 接口的注销操作（`rpc_proc_unregister`），从而导致 proc 文件残留。
+
+#解决方案
+修改 `nfs_net_init` 函数的错误处理路径，引入 goto 跳转机制：
+1. 将 `rpc_proc_register` 的失败处理改为跳转至 `err_proc_rpc` 标签，执行 `nfs_clients_exit` 清理。
+2. 新增 `nfs_fs_proc_net_init` 的失败处理标签 `err_proc_nfs`，在此路径下先调用 `rpc_proc_unregister(net, "nfs")` 清理残留文件，再跳转至 `err_proc_rpc` 执行客户端退出清理，确保资源释放完整。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0da9f2943d456ff9907ee494580178a091f0a7fe

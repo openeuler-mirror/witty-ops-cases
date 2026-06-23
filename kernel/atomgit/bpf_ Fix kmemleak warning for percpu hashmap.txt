@@ -1,0 +1,20 @@
+#标题
+bpf: Fix kmemleak warning for percpu hashmap
+
+#内核版本
+OLK-6.6
+
+#问题现象
+BPF percpu hashmap 功能在运行过程中触发 kmemleak 内存泄漏检测告警，系统报告内存对象引用指针存储位置异常。
+
+#主要错误日志
+kmemleak相关警告日志（具体日志原文未在Commit中提供，依据Commit Message确认存在kmemleak warning）。
+
+#问题根因
+在 percpu hashmap 的实现中，`htab_elem_set_ptr` 和 `htab_elem_get_ptr` 函数在存取 percpu 指针时，直接使用 `l->key + key_size` 计算偏移地址。由于未进行内存对齐处理，导致存储的指针地址未按 8 字节对齐。这种非对齐的指针存储被 kmemleak 机制捕获并误报为内存泄漏或引用异常。
+
+#解决方案
+修改 `kernel/bpf/hashtab.c` 文件中的偏移计算逻辑。在计算 percpu 指针的存储位置时，使用 `roundup(key_size, 8)` 替代 `key_size`，确保 percpu 指针存储地址始终满足 8 字节对齐要求，从而消除 kmemleak 的误报告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cffd574345700165d43a4dfcfdef1bd20cd87e68

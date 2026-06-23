@@ -1,0 +1,20 @@
+#标题
+wifi: brcmsmac: 修复 dma_free_coherent 释放大小不一致问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 brcmsmac 驱动进行 DMA 环形内存分配过程中，若首次分配的地址跨越硬件边界，驱动会尝试释放该内存并重新分配。在释放过程中，传递给 `dma_free_coherent` 的 size 参数使用了原始请求大小，而非实际分配的对齐后大小。这可能导致内存释放错误，进而引发内存泄漏、内核崩溃或 DMA 操作异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`dma_alloc_consistent()` 函数可能会为了对齐而改变内存分配的大小，调整后的实际大小保存在 `alloced` 变量中。然而，在内存释放路径（重分配前的释放步骤）中，代码错误地使用了原始的 `size` 变量作为释放大小，未使用记录实际分配大小的 `*alloced` 变量，导致释放大小与分配大小不匹配。
+
+#解决方案
+修改 `drivers/net/wireless/broadcom/brcm80211/brcmsmac/dma.c` 文件中的 `dma_ringalloc` 函数。在调用 `dma_free_coherent` 进行释放时，将第二个参数由原始的 `size` 修改为 `*alloced`，确保释放的大小与实际分配的大小一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b02ca9cb9fb8e3ec2b3ac3d17d424b38251ef992

@@ -1,0 +1,20 @@
+#标题
+内存可靠机制下内存压力场景导致直接回收死循环引发服务卡死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内存压力场景下，当普通内存分配与驱动的 GFP_ATOMIC 分配并发竞争时，系统难以触发 OOM（Out-of-Memory）杀进程操作。生产环境中出现内存分配流程执行了 257 次 `__alloc_pages_direct_reclaim` 既未成功也未触发 OOM，导致服务卡死（service freezes）。
+
+#主要错误日志
+未知
+
+#问题根因
+在开启内存可靠特性的情况下，非镜像 zone 参与了水位线检查。GFP_ATOMIC 分配可以从较低的水位线（如 min 水位线的 3/8 处）成功分配内存，导致即使直接回收释放了少量页面，普通内存请求因当前水位线依然过高而失败。失败后 `should_reclaim_retry` 重置了 `no_progress_loops` 计数器并重试，导致系统陷入无意义的连续直接回收循环，无法触发 OOM，进而造成服务卡死。
+
+#解决方案
+在 `should_reclaim_retry` 函数中增加判断，如果启用了内存可靠特性且当前 zone 为非镜像 zone，则跳过该 zone 的水位线检查，避免进入无效的回收重试循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce7b69c31c4050bbdafe79b184a41b8323cafd73

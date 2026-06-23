@@ -1,0 +1,20 @@
+#标题
+cifs: smb3_reconfigure 错误路径缺少锁释放导致死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 SMB3 文件系统重新配置（remount/reconfigure）操作时，若 `smb3_sync_session_ctx_passwords` 函数执行失败，内核将直接返回错误码，但未释放此前持有的 `ses->session_mutex` 互斥锁。这会导致该互斥锁被永久持有（泄露），后续任何尝试获取该锁的操作（如其他文件系统操作）将进入不可中断的睡眠状态，从而引发内核线程阻塞或死锁，严重时导致系统挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `smb3_reconfigure` 中，代码逻辑在调用 `smb3_sync_session_ctx_passwords` 之前持有了 `ses->session_mutex` 锁。当 `smb3_sync_session_ctx_passwords` 调用失败时，代码直接执行 `return rc` 返回，遗漏了 `mutex_unlock(&ses->session_mutex)` 操作。根因是错误处理路径中缺少解锁步骤，导致锁资源泄露。
+
+#解决方案
+修改 `fs/smb/client/fs_context.c` 文件中的 `smb3_reconfigure` 函数。在 `smb3_sync_session_ctx_passwords` 失败的错误处理分支中，增加 `mutex_unlock(&ses->session_mutex)` 调用，确保在函数返回前正确释放互斥锁，避免死锁风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f5354125a283e5784c25f14657a386112488c7f3

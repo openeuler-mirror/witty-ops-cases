@@ -1,0 +1,23 @@
+#标题
+iwlwifi: mvm: 发送路径空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 iwlwifi 驱动发送数据包过程中，若 `sta` 结构体指针为 NULL，调用 `iwl_mvm_sta_from_mac80211` 时会触发 NULL pointer dereference，导致内核 panic 或 Oops。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000000
+RIP: 0010:iwl_mvm_tx_mpdu+0xXX/0xXXX [iwlmvm]
+Call Trace:
+ ? iwl_mvm_tx_skb_sta+0xXX/0xXXX [iwlmvm]
+
+#问题根因
+函数 `iwl_mvm_tx_mpdu()` 和 `iwl_mvm_tx_skb_sta()` 在处理发送逻辑时，先通过 `iwl_mvm_sta_from_mac80211(sta)` 获取 `mvmsta` 指针，之后再检查指针是否有效。然而，`iwl_mvm_sta_from_mac80211` 实际上是对 `sta` 指针进行了解引用操作。如果传入的 `sta` 指针本身为 NULL，在检查 `mvmsta` 是否为空之前，内核就已经发生了空指针解引用错误。
+
+#解决方案
+在调用 `iwl_mvm_sta_from_mac80211` 获取 `mvmsta` 之前，先检查 `sta` 指针是否为 NULL。如果 `sta` 为 NULL，则直接返回错误（-1），避免后续的解引用操作。同时移除了原先位置靠后的 `mvmsta` 空指针检查，因为确保 `sta` 非空后，通过容器宏获取的 `mvmsta` 必然有效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/65c306187244677610095005d479cf92a59b4fb4

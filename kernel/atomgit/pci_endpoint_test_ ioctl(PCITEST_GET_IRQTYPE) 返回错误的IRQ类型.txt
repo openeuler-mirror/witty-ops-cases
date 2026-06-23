@@ -1,0 +1,23 @@
+#标题
+pci_endpoint_test: ioctl(PCITEST_GET_IRQTYPE) 返回错误的IRQ类型
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在设置 PCI Endpoint 测试的中断类型后，通过 ioctl(PCITEST_GET_IRQTYPE) 获取当前中断类型时返回的是旧值而非刚设置的值。
+例如，使用旧版 `pcitest` 工具执行 `pcitest -i 0` 设置为 LEGACY 成功后，执行 `pcitest -I` 查询却显示为 MSI。在新版 kselftest 中，此问题会导致 `LEGACY_IRQ_TEST` 用例失败，提示 "Can't get Legacy IRQ type"。
+
+#主要错误日志
+# RUN           pci_ep_basic.LEGACY_IRQ_TEST ...
+# pci_endpoint_test.c:104:LEGACY_IRQ_TEST:Expected 0 (0) == ret (1)
+# pci_endpoint_test.c:104:LEGACY_IRQ_TEST:Can't get Legacy IRQ type
+
+#问题根因
+驱动中存在两个表示中断类型的变量：全局变量 `irq_type` 和结构体成员 `test->irq_type`。函数 `pci_endpoint_test_set_irq()` 虽然更新了 `test->irq_type`，但未将此值同步更新到全局变量 `irq_type`。由于 ioctl(PCITEST_GET_IRQTYPE) 操作读取的是全局变量 `irq_type`，导致其返回的是上一次设置的类型，而非当前设置的类型。
+
+#解决方案
+在 `pci_endpoint_test_set_irq()` 函数中，成功请求中断后，将当前的中断类型 `test->irq_type` 同步赋值给全局变量 `irq_type`，以确保后续查询接口能获取到正确的当前中断类型。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b8ab43c4ebf5d446b611735fbaceb287134a09f5

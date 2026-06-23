@@ -1,0 +1,31 @@
+#标题
+RDMA/rxe: 修复 rxe_queue_cleanup 中的 slab-use-after-free 读漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA 软件驱动的 CQ（Completion Queue）创建过程中，若初始化函数 `rxe_cq_from_init` 内部执行失败，后续清理流程触发 slab-use-after-free 错误。系统通过 KASAN 检测到该问题并打印报告，该漏洞被分配了 CVE 编号 CVE-2025-38024。
+
+#主要错误日志
+Call Trace:
+ <TASK>
+ __dump_stack lib/dump_stack.c:94 [inline]
+ dump_stack_lvl+0x7d/0xa0 lib/dump_stack.c:120
+ print_address_description mm/kasan/report.c:378 [inline]
+ print_report+0xcf/0x610 mm/kasan/report.c:489
+ kasan_report+0xb5/0xe0 mm/kasan/report.c:602
+ rxe_queue_cleanup+0xd0/0xe0 drivers/infiniband/sw/rxe/rxe_queue.c:195
+ rxe_cq_cleanup+0x3f/0x50 drivers/infiniband/sw/rxe/rxe_cq.c:132
+ __rxe_cleanup+0x168/0x300 drivers/infiniband/sw/rxe/rxe_pool.c:232
+ rxe_create_cq+0x22e/0x3a0 drivers/infiniband/sw/rxe/rxe_verbs.c:1109
+ ...
+
+#问题根因
+在函数 `rxe_create_cq` 中，当 `rxe_cq_from_init` 执行失败时，代码逻辑会调用 `rxe_cleanup` 来处理已分配的资源。然而，在 `rxe_cq_from_init` 函数内部，当 `do_mmap_info` 失败时，代码已经显式释放了部分内存资源（`vfree(cq->queue->buf)` 和 `kfree(cq->queue)`）。这导致上层调用 `rxe_cleanup` 进行清理时，试图再次访问或释放已经被释放的内存，从而引发 slab-use-after-free 错误。
+
+#解决方案
+修改 `rxe_cq_from_init` 函数的错误处理路径，移除 `do_mmap_info` 失败时的内存释放操作。这使得在初始化失败时，内存资源保持有效，统一交由上层 `rxe_create_cq` 调用 `rxe_cleanup` 进行完整的资源回收，避免了重复释放和 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/83a0d00ed6747d5289266c6e2ebb6cb9bfb76c25

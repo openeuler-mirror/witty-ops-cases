@@ -1,0 +1,20 @@
+#标题
+fsl-mc 总线设备添加失败时发生 double-free 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 fsl-mc 设备添加流程中，若设备初始化失败进入错误处理路径，内核会发生双重释放。该故障可导致内核 panic 或内存损坏，引发系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `fsl_mc_device_add` 的错误处理标签 `error_cleanup_dev` 中，代码逻辑存在缺陷。`mc_dev` 是通过 `kzalloc` 分配的，而 `mc_bus` 在某些执行路径下是指向 `mc_dev` 的指针（即两者指向同一内存对象）。原代码无条件地先后调用 `kfree(mc_bus)` 和 `kfree(mc_dev)`，导致同一块内存被释放两次，触发 double-free 错误。
+
+#解决方案
+修改 `drivers/bus/fsl-mc/fsl-mc-bus.c` 中的错误处理逻辑，在释放内存前增加指针有效性判断。若 `mc_bus` 非空，则仅释放 `mc_bus`；若 `mc_bus` 为空，则仅释放 `mc_dev`。以此确保内存指针仅被释放一次，避免 double-free 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0e7be8a8c16e0602692e15d036798142558315f5

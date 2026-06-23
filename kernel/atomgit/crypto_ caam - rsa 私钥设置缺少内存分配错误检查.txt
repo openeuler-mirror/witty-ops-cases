@@ -1,0 +1,20 @@
+#标题
+crypto: caam - rsa 私钥设置缺少内存分配错误检查
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 CAAM (Cryptographic Acceleration and Assurance Module) 驱动设置 RSA 私钥时，若底层内存分配失败，函数 `caam_rsa_set_priv_key_form` 未进行错误检查与处理，直接返回。这会导致上层调用者误认为私钥设置成功，进而可能引发内核空指针引用、内存越界访问或后续加密操作不可预知的错误。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `caam_rsa_rsa_set_priv_key_form` 在调用 `caam_read_raw_data` 获取 RSA 私钥组件（如 p、q 等参数）时，未对返回值进行 NULL 检查。当内存分配失败导致 `caam_read_raw_data` 返回 NULL 时，函数原本直接 return 而未向调用者返回错误码（-ENOMEM），导致错误未被传递和处理。
+
+#解决方案
+将函数 `caam_rsa_set_priv_key_form` 的返回类型由 void 修改为 int。在函数内部增加对 `caam_read_raw_data` 返回值的检查，若返回 NULL 则立即返回 -ENOMEM 错误码。同时在调用该函数的上层接口中增加对返回值的判断，确保错误发生时能正确清理资源并向上返回错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5d40f2f007508d3ed132c4ec558ac16a5d3f9c53

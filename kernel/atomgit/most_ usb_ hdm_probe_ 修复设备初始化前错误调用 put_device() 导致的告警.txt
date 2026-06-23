@@ -1,0 +1,20 @@
+#标题
+most: usb: hdm_probe: 修复设备初始化前错误调用 put_device() 导致的告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hdm_probe() 函数的早期错误处理路径中，当跳转到 err_free_mdev 标签时，由于 `mdev->dev` 尚未执行 `device_initialize()` 初始化，此时调用 `put_device(&mdev->dev)` 会触发设备核心层的 WARN 告警，并导致对未初始化的 kobject 执行 kref_put 操作。
+
+#主要错误日志
+内核日志中出现 WARNING 信息（具体日志格式取决于内核配置与打印级别，原文指出 "trigger a device core WARN"）。
+
+#问题根因
+在驱动探测函数 hdm_probe() 中，错误处理标签 `err_free_mdev` 处调用了 `put_device(&mdev->dev)`。然而，在某些早期错误分支跳转至此标签时，`device_initialize()` 尚未被调用，导致 `mdev->dev` 处于未初始化状态。此时调用 `put_device()` 会引发内核对未初始化 kobject 进行释放操作，从而触发告警。
+
+#解决方案
+修改 `err_free_mdev` 标签下的错误处理代码，将 `put_device(&mdev->dev)` 替换为 `kfree(mdev)`。在此错误路径中，结构体 `mdev` 仅进行了 kmalloc 分配，尚未作为设备注册，因此直接释放内存即可，避免了操作未初始化的设备结构体。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4e95d97ab1d6625579e7a2ccaa8c62940033d57f

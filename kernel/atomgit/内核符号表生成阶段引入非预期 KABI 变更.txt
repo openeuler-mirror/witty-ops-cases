@@ -1,0 +1,20 @@
+#标题
+内核符号表生成阶段引入非预期 KABI 变更
+
+#内核版本
+OLK-6.6
+
+#问题现象
+由于内核源码在全局范围内包含了 `<net/gro.h>` 头文件，导致 `struct sk_buff` 或相关核心数据结构的定义在符号表生成工具链处理过程中发生改变，破坏了内核应用程序二进制接口（KABI）的稳定性。该问题触发了 KABI 一致性检查失败，并被关联至 CVE-2025-21868 安全公告。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复提交 "net: allow small head cache usage with large MAX_SKB_FRAGS values" (14ad6ed30a10) 的过程中，直接在 `net/core/skbuff.c` 中包含了 `<net/gro.h>` 头文件。该包含操作在 `__GENKSYMS__` 构建阶段被意外展开，导致内核符号版本生成逻辑感知到了数据结构定义的变化，从而引入了非预期的 KABI 变更。
+
+#解决方案
+在 `net/core/skbuff.c` 文件中，通过 `#ifndef __GENKSYMS__` 预处理指令对 `#include <net/gro.h>` 进行条件包裹。这样在执行符号表生成构建时，编译器将忽略该头文件的包含，从而消除其对 KABI 符号版本的影响，确保 KABI 兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/50291dca2fd94d6b7e62fa5da1abeb6de512fa49

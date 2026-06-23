@@ -1,0 +1,24 @@
+#标题
+soc: imx8m 使用 devm_* 简化 probe 失败处理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 imx8m SoC 驱动 probing 过程中，若获取设备树节点、内存映射、时钟资源或注册 soc device 失败，驱动程序会返回错误码但未正确释放先前已分配的资源（如 kzalloc 分配的内存、kasprintf 生成的字符串、of_find_compatible_node 获取的设备节点引用计数等），导致内存泄漏和引用计数泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序使用非托管（non-managed）的内存和资源分配函数（如 kzalloc、kasprintf、of_find_compatible_node 等），在 probe 失败的多个退出分支中，代码直接 return 错误码，遗漏了必要的 kfree、of_node_put 等资源清理步骤，导致资源泄漏。
+
+#解决方案
+使用设备托管资源管理函数替换原有的手动分配函数：
+1. 将 `kzalloc` 替换为 `devm_kzalloc`。
+2. 将 `kasprintf` 替换为 `devm_kasprintf`。
+3. 使用 `__free(device_node)` 自动清理机制管理 `of_find_compatible_node` 返回的节点指针。
+通过上述修改，移除了冗余的手动错误处理标签和跳转逻辑，确保在 probe 失败时内核自动释放已分配的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/78d246de83ee8e6ca3422ca1d8d1cee008e02757

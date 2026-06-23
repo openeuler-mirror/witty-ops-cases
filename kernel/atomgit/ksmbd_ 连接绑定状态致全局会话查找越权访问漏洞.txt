@@ -1,0 +1,20 @@
+#标题
+ksmbd: 连接绑定状态致全局会话查找越权访问漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 实现 SMB3 多通道（multichannel）功能时，当连接处于绑定过程（binding）中，`conn->binding` 标志被置位。此时，`ksmbd_session_lookup_all` 函数会进入慢速查找路径执行全局会话查找。由于该标志是连接级别的，且未对找到的会话进行严格的归属验证，导致该连接可以通过 ID 查找到任何其他未绑定到当前连接的全局会话，造成会话越权访问或非预期的状态共享。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 `ksmbd_session_lookup_all` 函数的逻辑判断不够严谨。当 `conn->binding` 为真时，函数仅依据该标志位就允许进入 `ksmbd_session_lookup_slowpath` 进行全局会话查找，而没有验证找到的会话是否真正属于当前连接的通道列表（`sess->ksmbd_chann_list`）。由于 `conn->binding` 标志在 SESSION_SETUP 调用后保持设置状态，导致全局查找路径可以被滥用，解析出本不应被当前连接访问的会话。
+
+#解决方案
+在 `ksmbd_session_lookup_all` 函数中增加对会话通道列表的验证。当通过慢速路径（slowpath）查找到会话后，使用 `xa_load` 检查当前连接是否存在于该会话的通道列表（`sess->ksmbd_chann_list`）中。如果不存在，说明当前连接未绑定到该会话，函数将丢弃该会话引用并返回 NULL。这确保了只有已经被接受为会话通道的连接才能通过全局表查找到该会话，收紧了查找范围。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/40beb3cbec71f0d3bc823e53fbffb4564a1f5685

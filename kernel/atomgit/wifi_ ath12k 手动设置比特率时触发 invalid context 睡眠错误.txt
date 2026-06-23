@@ -1,0 +1,29 @@
+#标题
+wifi: ath12k 手动设置比特率时触发 invalid context 睡眠错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `iw wlan0 set bitrates legacy-2.4 1` 命令手动设置比特率时，内核报错 "sleeping function called from invalid context"，导致操作失败。
+
+#主要错误日志
+BUG: sleeping function called from invalid context at drivers/net/wireless/ath/ath12k/wmi.c:420
+in_atomic(): 0, irqs_disabled(): 0, non_block: 0, pid: 2236, name: iw
+preempt_count: 0, expected: 0
+RCU nest depth: 1, expected: 0
+Call Trace:
+ ath12k_wmi_cmd_send+0xb1/0x3d0 [ath12k]
+ ath12k_wmi_set_peer_param+0x340/0x5b0 [ath12k]
+ ath12k_mac_disable_peer_fixed_rate+0xa3/0x110 [ath12k]
+ ieee80211_iterate_stations_atomic+0xd4/0x200 [mac80211]
+ ath12k_mac_op_set_bitrate_mask+0x5d2/0x1080 [ath12k]
+
+#问题根因
+在 `ath12k_mac_op_set_bitrate_mask()` 函数中，代码调用了 `ieee80211_iterate_stations_atomic()` 进行站点迭代。在该原子迭代回调函数 `ath12k_mac_disable_peer_fixed_rate` 内部，调用了 `ath12k_wmi_set_peer_param`，该函数会进一步调用 `ath12k_wmi_cmd_send`。此发送函数包含可能导致睡眠的操作（如内存分配），而在原子上下文中调用睡眠函数违反了内核规则，从而触发 "sleeping from invalid context" 错误。
+
+#解决方案
+将 `ath12k_mac_op_set_bitrate_mask()` 函数中的 `ieee80211_iterate_stations_atomic()` 调用替换为 `ieee80211_iterate_stations_mtx()`。新接口允许在持有锁（mtx）的非原子上下文中执行迭代，从而合法地执行可能睡眠的 WMI 命令发送操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/66221a88b94a4655b6e786cf39c2a40d7540aeac

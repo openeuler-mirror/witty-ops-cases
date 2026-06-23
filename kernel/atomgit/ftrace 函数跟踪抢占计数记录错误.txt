@@ -1,0 +1,20 @@
+#标题
+ftrace 函数跟踪抢占计数记录错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用函数跟踪时，跟踪缓冲区中记录的抢占计数不准确。函数跟踪器本应在函数调用点记录当前的抢占级别，但由于在抢占禁用期间进行了错误的计数操作，导致记录到 trace buffer 中的抢占上下文信息比实际值少 1，影响对内核抢占行为的分析与追踪。
+
+#主要错误日志
+未知
+
+#问题根因
+在修复引用的提交 ce5e48036c9e7 ("ftrace: disable preemption when recursion locked") 中，代码逻辑移动了抢占禁用部分的位置。这导致在函数跟踪调用时，如果跟踪子系统递减了抢占计数器，但在将数据写入跟踪缓冲区前未正确修正该值，就会导致记录的抢占级别与函数实际被调用时的状态不一致。代码中错误地使用了 `tracing_gen_ctx()` 或手动获取 flags 的方式，未能正确处理因递减抢占计数带来的偏差。
+
+#解决方案
+修改 `kernel/trace/trace_functions.c` 文件中的函数跟踪调用逻辑，将 `tracing_gen_ctx()` 和 `tracing_gen_ctx_flags(flags)` 替换为 `tracing_gen_ctx_dec()`。该函数在可抢占内核上能够正确地将抢占计数减一，从而确保写入跟踪缓冲区的抢占上下文信息与函数实际调用点的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d162d16d9978486f6bab3ecea1c6bf7eb03dfdd6

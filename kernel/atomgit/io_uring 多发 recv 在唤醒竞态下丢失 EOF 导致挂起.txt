@@ -1,0 +1,20 @@
+#标题
+io_uring 多发 recv 在唤醒竞态下丢失 EOF 导致挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 socket 上连续发生数据发送和 shutdown 操作时，接收端的 multishot recv 请求可能无法正常结束。具体表现为：接收端读取了数据后，未能捕获到对端关闭连接的事件，导致 multishot recv 请求永久挂起，无法接收到 EOF，进程无法退出轮询循环。
+
+#主要错误日志
+未知
+
+#问题根因
+当 socket 的发送与 shutdown 连续发生时，会连续触发两次唤醒。第一次唤醒获取了 poll 所有权（poll_refs=1），第二次将其增加到 2。在 `io_poll_check_events` 循环中，`io_poll_issue` 执行 recv 读取数据并返回 `IOU_RETRY`，随后循环通过 `atomic_sub_return(2)` 将引用计数减为 0 并退出。由于只处理了第一个事件（数据读取），而 shutdown 作为一个持久状态变更虽然触发了第二次唤醒，但在循环退出时被忽略，且之后不会再有唤醒发生，导致 multishot recv 永远丢失了 shutdown（EOF）事件。
+
+#解决方案
+在 `io_poll_check_events` 函数中增加对挂起事件（HUP）的检查逻辑。如果检测到当前事件包含 `POLLHUP` 或 `POLLRDHUP`，且引用计数 `v` 大于 1（表示有积压的唤醒事件），则手动将引用计数减 1，强制循环再执行一次。这确保了在多发激活的情况下，shutdown 事件不会被丢失，从而正确处理连接关闭。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1cd727d2ed98c92a50c9cc997659e91da59318f1

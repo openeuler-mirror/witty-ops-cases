@@ -1,0 +1,20 @@
+#标题
+serial核心层PORT_UNKNOWN类型端口导致handle_tx无限循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用未正确初始化的 PORT_UNKNOWN 类型串口设备时，调用链路中出现逻辑不一致：`uart_write_room()` 返回大于 0 的值，而 `uart_write()` 返回 0。这导致依赖 `tty_write_room()` 判断写入空间的驱动程序（如 caif_serial）陷入无限循环，进而引发系统挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+对于 PORT_UNKNOWN 类型端口，其 `xmit_buf` 为 NULL（未初始化）。`uart_write_room()` 内部直接调用 `kfifo_avail()` 计算可用空间，未对 `xmit_buf` 进行 NULL 检查，导致返回值大于 0；而 `uart_write()` 对 `xmit_buf` 进行了 NULL 检查并直接返回 0。两者行为不一致，导致上层调用者在 `while (tty_write_room(tty) > 0)` 循环中无法退出。
+
+#解决方案
+在 `uart_write_room()` 函数中增加对 `state->xmit.buf` 的 NULL 检查。若 `xmit.buf` 为 NULL，直接返回 0，使其与 `uart_write()` 的行为保持一致，从而打破无限循环条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8a9f9f0ca996fa6743a8f8cdeb731868ac92e7ca

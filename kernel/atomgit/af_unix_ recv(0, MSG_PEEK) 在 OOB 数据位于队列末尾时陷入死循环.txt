@@ -1,0 +1,23 @@
+#标题
+af_unix: recv(0, MSG_PEEK) 在 OOB 数据位于队列末尾时陷入死循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 Unix 域套接字接收队列中最后一个 SKB 为带外数据且调用 `recv(0, MSG_PEEK)` 时，内核函数 `unix_stream_read_generic()` 会陷入无限循环，导致进程无法退出，CPU 持续占用，除非有新的普通数据到达。通过以下步骤可复现：
+1. `send(sv[0], "a", 1, 0)`
+2. `send(sv[0], "a", 1, MSG_OOB)`
+3. `recv(sv[1], buf, 0, MSG_PEEK)`
+
+#主要错误日志
+未知
+
+#问题根因
+在 `unix_stream_read_generic()` 函数中，当处理 MSG_PEEK 且遇到 OOB 数据时，`manage_oob()` 会跳过该 OOB skb 并返回 NULL。原逻辑判断条件为 `if (!skb && copied)`，意为仅当已读取数据时才跳出循环。但在 `recv(0, MSG_PEEK)` 场景下，`size` 为 0，`copied` 始终为 0。此时虽然 `skb` 被置为 NULL，但因不满足 `copied` 条件无法跳出循环，同时 `last != tail` 导致 `unix_stream_data_wait()` 立即返回，程序跳转至 `redo` 标签处无限循环。
+
+#解决方案
+修改 `net/unix/af_unix.c` 文件中 `unix_stream_read_generic()` 函数的跳出条件判断逻辑。将条件 `if (!skb && copied)` 修改为 `if (!skb && (copied || !size))`，增加对 `!size`（即读取长度为 0）的判断，确保在未读取数据且请求长度为 0 时能正确跳出循环，避免死循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f020d03d57619d380540a6e7dd354580e2467202

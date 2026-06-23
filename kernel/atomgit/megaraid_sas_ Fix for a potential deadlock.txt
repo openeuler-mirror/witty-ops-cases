@@ -1,0 +1,20 @@
+#标题
+megaraid_sas: Fix for a potential deadlock
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 megaraid_sas 驱动处理 VD（虚拟磁盘）设备移除的热插拔或 AEN（异步事件通知）轮询过程中，可能发生潜在的系统死锁，导致相关 SCSI 设备无法正常移除或系统响应挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `megasas_aen_polling` 工作队列函数中，代码在持有 `instance->reset_mutex` 互斥锁的情况下调用 `megasas_remove_scsi_device` 函数。由于 `megasas_remove_scsi_device` 内部逻辑可能会尝试获取同一个互斥锁或涉及锁的逆序获取，从而导致死锁风险。
+
+#解决方案
+在调用设备移除函数前释放 `reset_mutex` 锁，并在移除操作完成后重新获取该锁。具体修改为：在 `megasas_remove_scsi_device(sdev1)` 调用前增加 `mutex_unlock(&instance->reset_mutex)`，调用后增加 `mutex_lock(&instance->reset_mutex)`，避免在持有锁的状态下进行可能导致死锁的嵌套操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/88b69da4524a4c574fa7642d89cb392506b4595e

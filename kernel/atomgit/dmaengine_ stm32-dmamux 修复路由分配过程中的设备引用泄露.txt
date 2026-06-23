@@ -1,0 +1,24 @@
+#标题
+dmaengine: stm32-dmamux 修复路由分配过程中的设备引用泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+STM32 DMAMUX 驱动在进行 DMA 路由分配时，若遇到参数校验失败或内存分配失败等错误退出路径，或者即使在正常分配成功后，均未释放此前查找 DMA mux 平台设备时获取的设备引用计数。这会导致内核设备对象引用计数泄露，相关设备结构体无法被正常释放，可能引发内存泄露及设备卸载或重新探测时的异常。
+
+#主要错误日志
+- "invalid number of dma mux args\n"
+- "invalid mux request number: %d\n"
+- "can't get dma master\n"
+
+#问题根因
+驱动在 `stm32_dmamux_route_allocate` 函数中通过 `of_find_device_by_node`（隐含在查找逻辑中）查找平台设备时增加了设备引用计数，但在后续的校验失败分支（如 `args_count` 错误、请求号错误、内存分配失败）以及正常返回的成功分支中，均遗漏了调用 `put_device` 来释放该引用。Commit Message 明确指出：“holding a reference to a device does not prevent its driver data from going away so there is no point in keeping the reference”（持有设备引用并不能阻止其驱动数据被释放，因此保留引用没有意义）。
+
+#解决方案
+在 `stm32_dmamux_route_allocate` 函数中添加对 `put_device(&pdev->dev)` 的调用：
+1. 在所有错误处理分支（包括参数校验失败和内存分配失败）统一跳转到新增的 `err_put_pdev` 标签处执行释放操作。
+2. 在函数正常返回前，也显式调用 `put_device` 释放引用，确保引用计数平衡。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/df0cf7ce1b32a89af8aa7d91460dad8703e66d62

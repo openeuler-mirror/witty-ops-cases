@@ -1,0 +1,23 @@
+#标题
+USB serial kobil_sct: TIOCMBIS/TIOCMBIC ioctl 错误清除未屏蔽的控制线
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 KOBIL Smart Card Terminal USB 串口设备时，应用程序通过 `TIOCMBIS`（设置位）或 `TIOCMBIC`（清除位）ioctl 指令操作调制解调器控制线（如 DTR 或 RTS）时，会出现副作用：除了请求修改的控制线外，其他未被掩码覆盖的控制线也会被错误地置低。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序 `kobil_tiocmset` 函数中的逻辑错误。在处理 `clear` 参数（对应 `TIOCMBIC`）时，代码错误地将 `dtr` 和 `rts` 变量赋值为 0。根据后续代码逻辑，这导致未在掩码中指定的控制线也被强制设置为“清除”状态并发送给设备，这违反了 `TIOCMBIS`/`TIOCMBIC` 只应影响掩码内线路的语义定义。该缺陷自 2003 年引入。
+
+#解决方案
+修正 `kobil_tiocmset` 函数中的逻辑判断：
+1. 修改 `clear` 分支的逻辑，将 `rts` 和 `dtr` 标记设为 1（表示该线路需要被操作/清除），而非原先的 0，确保后续判断能正确区分“无需操作”和“清除操作”。
+2. 调整底层发送逻辑，仅在确实需要设置或清除特定线路时（`if (dtr)` 或 `else if (rts)`）才发送 USB 控制消息。
+3. 修正发送给设备的命令参数，确保是根据 `set` 或 `clear` 掩码来决定发送 `SUSBCR_SSL_SETDTR`/`SETRTS` 还是 `SUSBCR_SSL_CLRDTR`/`CLRRTS`，而不是根据局部变量的非零状态模糊判断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cf2e2e37bec067ed8adb2e099b1269c7843ece21

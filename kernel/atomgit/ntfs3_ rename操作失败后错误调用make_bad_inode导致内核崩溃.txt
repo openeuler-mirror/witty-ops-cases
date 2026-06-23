@@ -1,0 +1,23 @@
+#标题
+ntfs3: rename操作失败后错误调用make_bad_inode导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ntfs3 文件系统上执行重命名操作时，若源文件 i_link 已损坏，导致文件名删除失败，内核会错误地将该活跃 inode 标记为坏 inode（bad inode）。这会导致后续 icache 查找或 dcache 操作引发内核崩溃或 UAF（Use-After-Free）问题，具体表现为 syzbot 报告的 KASAN 异常或空指针引用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ni_rename` 函数中，当重命名操作回滚（即尝试将新名字移回原位置）失败时，代码错误地设置了 `is_bad` 标志并调用了 `_ntfs_bad_inode(inode)`。
+其根本错误在于对一个正处于活跃状态的 inode 调用了 `make_bad_inode()`。这可能发生在以下竞争场景中：一个线程在 icache 中找到了正常的 inode 并准备通过 `d_splice_alias()` 附加到 dentry，而此时另一个线程（或同一线程在错误处理路径中）调用 `make_bad_inode()` 将其逐出 icache，从而导致状态不一致引发崩溃。
+
+#解决方案
+移除在重命名回滚失败时错误设置坏 inode 的逻辑。
+1. 删除 `ni_rename` 函数中的 `is_bad` 输出参数。
+2. 将重命名回滚失败时的处理逻辑从“标记为坏 inode”修改为使用 `WARN_ON()` 进行警告，不再尝试修改 inode 的活跃状态，避免对活跃 inode 进行非法操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8944601f83b6a97cc2b99d7978425cafad0fa3c7

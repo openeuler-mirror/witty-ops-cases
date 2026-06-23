@@ -1,0 +1,23 @@
+#标题
+io_uring/cmd: fix tw <-> issue_flags conversion
+
+#内核版本
+OLK-6.6
+
+#问题现象
+io_uring 子系统中任务工作与 issue_flags 的转换逻辑存在错误。代码错误地使用 `!IO_URING_F_UNLOCKED` 来判断是否可用延迟完成机制，而正确的判断标志应为 `IO_URING_F_COMPLETE_DEFER`。虽然当前代码在 `io_uring_cmd_work()` 函数中因“负负得正”恰好未触发可见故障，但在取消操作路径下存在逻辑不一致风险。
+
+#主要错误日志
+未知
+
+#问题根因
+`io_uring_cmd_work()` 函数中，将 `ts->locked` 状态转换为 `issue_flags` 的逻辑不正确。原代码逻辑为 `ts->locked ? 0 : IO_URING_F_UNLOCKED`，导致无法正确传递 `IO_URING_F_COMPLETE_DEFER` 标志。
+`io_uring_cmd_done()` 函数中，判断是否执行延迟完成的条件 `!(issue_flags & IO_URING_F_UNLOCKED)` 语义错误，应检查 `IO_URING_F_COMPLETE_DEFER` 标志位。`!IO_URING_F_UNLOCKED` 并不等价于延迟完成基础设施可用，正确的标志是 `IO_URING_F_COMPLETE_DEFER`。
+
+#解决方案
+1. 修改 `io_uring_cmd_work()` 函数中的 flags 转换逻辑：当 `ts->locked` 为真时，设置 `issue_flags` 为 `IO_URING_F_COMPLETE_DEFER`，否则为 `IO_URING_F_UNLOCKED`。
+2. 修正 `io_uring_cmd_done()` 中的判断逻辑：将 `else if (!(issue_flags & IO_URING_F_UNLOCKED))` 修改为 `else if (issue_flags & IO_URING_F_COMPLETE_DEFER)`，并增加对 `IO_URING_F_UNLOCKED` 标志的 `WARN_ON_ONCE` 校验以防止错误标志组合。
+3. 在 `io_uring_try_cancel_uring_cmd()` 路径中补充 `IO_URING_F_COMPLETE_DEFER` 标志，确保语义完整。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3cb2328c9349151e10ef498afbffafaa704d99cb

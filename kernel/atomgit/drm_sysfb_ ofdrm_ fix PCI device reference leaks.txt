@@ -1,0 +1,22 @@
+#标题
+drm/sysfb: ofdrm: fix PCI device reference leaks
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 Open Firmware framebuffers (ofdrm) 驱动时，若 `pci_enable_device()` 初始化失败，或者驱动正常卸载退出，均会导致 `pci_dev` 结构体的引用计数泄漏（reference leak）。
+
+#主要错误日志
+drm_err(dev, "pci_enable_device(%s) failed: %d\n", dev_name(&pcidev->dev), ret);
+
+#问题根因
+函数 `display_get_pci_dev_of()` 通过 `pci_get_device()` 获取 PCI 设备，这会增加设备的引用计数。但在驱动初始化的失败路径中，`pci_enable_device()` 失败后直接返回，未调用 `pci_dev_put()` 释放引用；在驱动的正常清理路径中，`ofdrm_pci_release()` 仅调用了 `pci_disable_device()`，也遗漏了释放引用。这导致错误路径和正常清理路径均存在引用泄漏。
+
+#解决方案
+在两处关键位置添加 `pci_dev_put()` 调用以平衡引用计数：
+1. 在 `ofdrm_device_init_pci()` 函数中，当 `pci_enable_device()` 失败时，在返回错误前增加 `pci_dev_put(pcidev)` 调用。
+2. 在 `ofdrm_pci_release()` 回调函数中，在 `pci_disable_device()` 之后增加 `pci_dev_put(pcidev)` 调用，确保设备退出时正确释放引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6d3fd7b1ceaa13389aa7cdd208d92c3162a092f9

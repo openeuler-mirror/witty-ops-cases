@@ -1,0 +1,23 @@
+#标题
+HID: PantherLord 设备探测未处理力反馈初始化错误导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+PantherLord USB/PS2 2in1 Adapter 设备在插入或初始化过程中，若力反馈（Force Feedback, FF）初始化失败（例如内存分配失败等），驱动探测函数未捕获该错误并错误地返回探测成功。随后在首次使用力反馈功能时，内核将访问未初始化或无效的指针，导致空指针引用崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `pl_probe` 函数中，调用 `plff_init(hdev)` 进行力反馈初始化时，未检查其返回值。如果 `plff_init` 内部失败，相关数据结构未正确建立，但探测过程仍继续，导致后续 FF 使用时触发空指针引用。
+
+#解决方案
+修改 `drivers/hid/hid-pl.c` 中的 `pl_probe` 函数：
+1. 捕获 `plff_init(hdev)` 的返回值至 `ret` 变量。
+2. 增加判断逻辑，若 `ret` 不为 0（即初始化失败），则跳转至新增的 `stop` 标签。
+3. 在 `stop` 标签处调用 `hid_hw_stop(hdev)` 停止硬件设备，确保资源正确释放并向上层报告探测失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ab046a4eded12fa03a01f06b98bee6332feccb9a

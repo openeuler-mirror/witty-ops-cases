@@ -1,0 +1,20 @@
+#标题
+IIO GTS 辅助库内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `iio_gts_build_avail_scale_table()` 函数的执行过程中，若 for 循环内的 `per_time_scales[i]` 或 `per_time_gains[i]` 调用 `kcalloc` 分配内存失败，错误处理路径在释放内存时存在逻辑缺陷。当循环索引 `i` 递减至 0 时循环终止，导致 `per_time_scales[0]` 和 `per_time_gains[0]` 无法被释放，从而造成内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `iio_gts_build_avail_scale_table` 函数的错误处理标签 `err_free_out` 中，释放内存的循环条件写为 `for (i--; i; i--)`。在 C 语言中，当 `i` 自减为 0 时，循环条件判断为假，循环体不会执行。因此，索引为 0 的内存块（`per_time_scales[0]` 和 `per_time_gains[0]`）未被 `kfree` 释放，导致内存泄漏。
+
+#解决方案
+修改 `drivers/iio/industrialio-gts-helper.c` 文件中 `err_free_out` 标签下的循环判断条件。将 `for (i--; i; i--)` 修改为 `for (i--; i >= 0; i--)`，确保当 `i` 为 0 时循环仍能继续执行，从而正确释放索引为 0 的内存资源，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c49397deb07185c9b756bc7e03f4631161e38b68

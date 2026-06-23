@@ -1,0 +1,21 @@
+#标题
+ksmbd_extract_shortname() 中扩展名字符串拷贝错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当处理以点开头的文件名（如 `.example`）时，ksmbd 服务端在提取短文件名逻辑中，扩展名变量 `extension` 被错误地赋值为 `"__"`（两个下划线），而非预期的 `"___"`（三个下划线）。这导致生成的短文件名扩展名格式不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ksmbd_extract_shortname()` 中，调用 `strscpy` 拷贝字符串 `"___"` 到目标缓冲区 `extension` 时，错误地将 `strlen("___")`（源字符串长度，不包含 NUL 终止符）作为第三个参数传入，而非 `sizeof(extension)`（目标缓冲区大小）。
+由于 `strscpy` 的第三个参数是目标缓冲区的大小，传入源字符串长度导致拷贝操作仅拷贝了 2 个有效字符（源字符串长度为 3，但 strscpy 需要预留空间给 NUL，或因长度参数限制导致未完整拷贝），最终导致 `extension` 内容为 `"__"` 而非 `"___"`。
+
+#解决方案
+修改 `fs/smb/server/smb_common.c` 文件中的 `strscpy` 调用，将第三个参数由 `strlen("___")` 修改为 `sizeof(extension)`，确保使用目标缓冲区的大小进行拷贝，从而正确写入完整的字符串 `"___"`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3308cee72d97ac0a6d52bbfa06d4d296aef29287

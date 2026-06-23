@@ -1,0 +1,25 @@
+#标题
+wifi: mac80211: 修复 RCU 列表迭代不当引发的潜在并发问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mac80211 子系统中，部分代码路径（如 `ieee80211_get_max_required_bw`、`ieee80211_add_vht_ie` 及扫描完成处理流程）使用了 `list_for_each_entry_rcu` 进行链表遍历，但调用这些函数时并未始终持有 RCU 读锁。这违反了 RCU 的使用约定，可能导致内核出现不可预期的行为，严重时引发内核 Panic 或内存访问越界。
+
+#主要错误日志
+未知
+
+#问题根因
+代码中存在多处 RCU 列表迭代使用不当的问题。具体原因为：
+1. 在 `chan.c`、`mlme.c` 和 `scan.c` 中，遍历 `sta_list` 或 `interfaces` 链表时使用了 `list_for_each_entry_rcu`，但相关的调用上下文并未持有 RCU 读锁（RCU read lock），而是持有的是其他锁（如 wiphy mutex 或 iflist_mtx）。
+2. RCU 读锁缺失导致临界区保护不足，破坏了 RCU 机制的正确性。
+3. 在 `util.c` 的 `__iterate_interfaces` 中，虽然代码路径持有 `iflist_mtx` 或 wiphy mutex，但未在迭代宏中正确标注锁的依赖关系，导致锁检查工具（lockdep）无法正确验证。
+
+#解决方案
+根据调用上下文持有的实际锁类型，修正链表遍历方式：
+1. 对于已持有普通互斥锁（如 wiphy mutex）的场景，将 `list_for_each_entry_rcu` 替换为标准的 `list_for_each_entry`，并增加 `lockdep_assert_wiphy` 断言以确保锁持有。
+2. 对于 `__iterate_interfaces` 函数，保留 RCU 遍历方式，但在 `list_for_each_entry_rcu` 宏中添加 `lockdep_is_held` 条件参数，明确指出遍历受 `iflist_mtx` 或 `wiphy->mtx` 保护，从而修复锁合规性问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9b6f2ce26e434cc6f9e73ac70c16de60ce04b9ab

@@ -1,0 +1,20 @@
+#标题
+usb: gadget: f_tcm: 返回 check_condition 状态时未正确转换 sense 数据
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 USB Gadget 的 UASP（USB Attached SCSI Protocol）或 BOT（Bulk-Only Transport）模式时，若底层驱动 f_tcm 需向上层返回 CHECK_CONDITION 错误状态（例如遇到不支持的 SCSI 操作码），目标层（Target layer）无法正确翻译 f_tcm 报告的 sense reason。这导致主机端接收到的 sense 数据可能不正确或缺失关键错误信息，影响上层应用对错误的判断与处理。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `usbg_cmd_work` 和 `bot_cmd_work` 的错误处理路径中，调用 `transport_send_check_condition_and_sense` 时，第三个参数（from_transport）被错误地设置为 1（true）。根据逻辑，当该参数为 1 时，目标层不会对传入的 sense reason 进行翻译；这导致 f_tcm 报告的 sense 数据无法被正确转换为标准的 sense 格式返回给主机。
+
+#解决方案
+将 `drivers/usb/gadget/function/f_tcm.c` 文件中 `usbg_cmd_work` 和 `bot_cmd_work` 函数内调用 `transport_send_check_condition_and_sense` 时的第三个参数从 1 修改为 0。此举将清除 `from_transport` 标记，允许目标层正确翻译 f_tcm 报告的 sense reason，从而生成正确的 sense 数据返回给主机端。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/422d7de0d48e48d0b3203bc83ec173127c3dd17e

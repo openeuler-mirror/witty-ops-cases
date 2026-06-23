@@ -1,0 +1,21 @@
+#标题
+sched/fair: 调度器在多层 CFS 层级下错误停止 Tick 导致调度异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_NO_HZ_FULL 的场景下，当 CFS 调度队列存在多层层级（hierarchy）且整个层级中有超过 1 个任务运行时，调度器错误地停止了 Tick（时钟中断）。这会导致调度器无法正确进行时间记账、负载均衡或抢占处理，可能导致系统运行异常、卡顿或特定任务无法及时调度。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `sched_can_stop_tick()` 中，判断是否可以停止 Tick 的逻辑使用了 `rq->cfs.nr_running`。该变量仅跟踪当前层级（root cfs rq）的调度实体数量，忽略了整个调度层级中入队的任务总数。
+正确的逻辑应当使用 `rq->cfs.h_nr_running`，该变量跟踪整个层级中所有排队的任务数量。由于使用了错误的变量，当 root cfs rq 上仅有一个调度实体（该实体下可能挂载了多个任务组或任务）时，即使层级中实际有多个任务，代码也会错误地允许停止 Tick。
+
+#解决方案
+修改 `kernel/sched/core.c` 中的 `sched_can_stop_tick()` 函数，将判断条件从 `rq->cfs.nr_running > 1` 修改为 `rq->cfs.h_nr_running > 1`，确保在判断是否停止 Tick 时，能够正确统计整个 CFS 层级中的任务总数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5487e2c600b70054a05e675598841fbd8acb2e4d

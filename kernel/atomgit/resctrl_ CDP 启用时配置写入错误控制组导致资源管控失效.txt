@@ -1,0 +1,24 @@
+#标题
+resctrl: CDP 启用时配置写入错误控制组导致资源管控失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统启用 CDP（Code and Data Prioritization）功能，但底层资源（如 MATA）不支持该特性时，通过 resctrl 接口进行的资源配置会错误地应用到无效的控制组。这导致用户通过 schemata 接口配置的带宽或缓存掩码无法生效，或者读取到的配置状态与实际写入的不一致，进而引发资源隔离失效或系统行为不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `resctrl_arch_update_one()` 和 `resctrl_arch_get_config()` 函数处理逻辑中，当 CDP 已启用但特定资源不支持 CDP 时，系统需要将同一份配置同步应用到 CDP_CODE 和 CDP_DATA 两个 partid 上。
+然而，由于 `parse_bw()` 在设置 `staged_config` 时仅使用了 schema 自身的 `conf_type`，且后续更新流程中 partid 的计算方式有误，导致配置被应用到了错误的 `comp->cfg[partid]` 索引处，且未能正确同步到两个必要的 partid，造成配置错位。
+
+#解决方案
+1. 引入并统一使用 `resctrl_arch_hide_cdp()` 接口判断资源是否在 CDP 启用环境下实际支持 CDP。
+2. 修改 `parse_bw()` 函数逻辑：当检测到资源不支持 CDP 但 CDP 已全局启用时，显式地将配置分别写入 `CDP_CODE` 和 `CDP_DATA` 两种类型的 `staged_config` 中。
+3. 修正 `resctrl_arch_get_config()` 逻辑：在读取配置时，若资源不支持 CDP，明确从 `CDP_CODE` 类型的 partid 获取配置，确保读写一致性。
+4. 简化 `resctrl_arch_update_one()` 的处理流程，依赖于前置的 `staged_config` 正确设置，从而将配置正确应用到对应的 partid。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5e0e3aa64e83dff9703e3f887a2be3271801ed22

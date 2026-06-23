@@ -1,0 +1,32 @@
+#标题
+bpf_msg_pop_data 函数存在内存泄漏与逻辑缺陷导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+调用 BPF 辅助函数 `bpf_msg_pop_data` 时可能出现以下异常：
+1. 内核发生 BUG（kernel panic/oops），主要由于在 `sk_msg_shift_left` 函数中循环迭代逻辑错误，导致非法访问内存。
+2. 发生内存泄漏，scatterlist 元素移除时未正确释放对应的 page 页面。
+3. 在特定参数下（如 `len == 0` 或 pop 整个 msg）出现非预期的 `-EINVAL` 错误返回，导致功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `bpf_msg_pop_data` 及其子函数 `sk_msg_shift_left` 存在多处实现缺陷：
+1. **内存泄漏**：`sk_msg_shift_left` 在移除 scatterlist 元素前未调用 `put_page` 释放页面引用。
+2. **逻辑错误导致崩溃**：在 `sk_msg_shift_left` 内部的循环中，`i` 已经指向下一个元素，循环结束后再次调用 `sk_msg_iter_var_next(i)` 导致迭代器越界，引发 BUG。
+3. **边界检查错误**：原代码 `if (... || last >= msg->sg.size)` 禁止了 pop 整个 sk_msg 的合法操作。
+4. **变量计算错误**：变量 `a` 的计算逻辑有误，`int a = start` 应为 `int a = start - offset`，且后续分支判断逻辑混乱，导致数据处理异常。
+
+#解决方案
+通过修改 `net/core/filter.c` 文件修复上述问题：
+1. 在 `sk_msg_shift_left` 函数开头增加 `put_page(sg_page(sge))`，确保移除元素前释放页面内存。
+2. 删除 `sk_msg_shift_left` 调用处多余的 `sk_msg_iter_var_next(i)` 调用，防止迭代器越界。
+3. 增加对 `len == 0` 的早期返回处理，避免无效操作。
+4. 修正边界检查条件为 `last > msg->sg.size`，允许 pop 操作处理整个消息。
+5. 修正变量 `a` 的赋值为 `start - offset`，并调整后续数据处理分支的逻辑判断条件，确保正确计算与拷贝。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0e23f9310c783f1d9ed5d275e23e92051b239978

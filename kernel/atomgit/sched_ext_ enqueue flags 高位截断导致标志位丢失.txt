@@ -1,0 +1,20 @@
+#标题
+sched_ext: enqueue flags 高位截断导致标志位丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sched_ext 调度类中，当通过 `activate_task()` 调用 `enqueue_task_scx()` 时，32位及以上的入队标志位（如 `SCX_ENQ_PREEMPT`）被静默截断。这导致 BPF 调度器无法感知抢占等状态信息，虽然未引发系统崩溃或逻辑错误，但导致调度器行为信息缺失。
+
+#主要错误日志
+未知
+
+#问题根因
+`enqueue_task_scx()` 函数的调度类接口参数 `enq_flags` 定义为 `int` 类型，无法承载 32 位及以上的标志位。尽管引入了 `rq->scx.extra_enq_flags` 机制试图通过“或”运算恢复高位标志，但由于“或”运算的目标对象仍然是 `int` 类型的参数，导致高位标志位在运算过程中依然被截断丢失。
+
+#解决方案
+将 `enqueue_task_scx()` 函数的参数名修改为 `core_enq_flags` 以明确其来源，并在函数内部新定义一个 `u64` 类型的局部变量 `enq_flags`，用于正确合并接口传入的低位标志与 `rq->scx.extra_enq_flags` 中的高位标志，从而避免截断问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/76d11a840d86aaba3a11467a3c444cc514d99149

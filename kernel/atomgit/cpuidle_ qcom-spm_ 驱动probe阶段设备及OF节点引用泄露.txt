@@ -1,0 +1,26 @@
+#标题
+cpuidle: qcom-spm: 驱动probe阶段设备及OF节点引用泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 qcom-spm cpuidle 驱动过程中，内核存在资源泄露现象。具体表现为：
+1. 在 `spm_cpuidle_register` 函数中，通过 `of_find_device_by_node()` 获取 saw 设备的引用后，未在后续流程中释放，导致设备引用计数泄露。
+2. 若设备树中不存在 saw 节点或找不到对应的 saw 设备，此前已获取的 CPU 设备节点引用未被及时释放，导致 OF 节点引用泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码逻辑存在缺陷：
+1. 函数 `of_find_device_by_node()` 会增加设备的引用计数，但代码在获取驱动数据后未调用 `put_device()` 减少引用计数。
+2. 函数 `of_parse_phandle()` 获取 CPU 节点引用后，代码在检查 saw 节点存在性之前就提前返回，导致 CPU 节点引用在该异常分支下未被释放。
+
+#解决方案
+1. 调整 `of_node_put(cpu_node)` 的位置，将其移至 saw 节点解析判断之前，确保在 saw 节点不存在或 saw 设备未找到的异常分支退出前，CPU 节点引用已被正确释放。
+2. 在成功获取 saw 设备驱动数据后，立即调用 `put_device(&pdev->dev)` 释放设备引用。
+3. 在内存分配失败（`-ENOMEM`）的错误返回路径中，增加 `put_device(&pdev->dev)` 调用，防止该路径下的设备引用泄露。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3b9817acc7324b3f9a9055a12affcb20c5bd1fb5

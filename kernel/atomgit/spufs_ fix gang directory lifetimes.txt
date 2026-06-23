@@ -1,0 +1,28 @@
+#标题
+spufs: fix gang directory lifetimes
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Cell BE 架构的 SPU 文件系统（spufs）中，gang 目录的生命周期管理存在缺陷。由于在创建 gang 目录时未增加 dentry 的引用计数，且缺乏对 gang 对象存活状态的检查，导致在特定并发场景下（如创建上下文时），已销毁或正在销毁的 gang 目录仍可被访问，可能引发内核 Panic 或内存访问越界。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **引用计数缺失**：在 `spufs_mkgang` 函数中创建 gang 目录时，未调用 `dget()` 增加目录 dentry 的引用计数。这导致目录 dentry 在文件句柄关闭前就被释放。
+2. **生命周期管理缺失**：`spu_gang` 结构体缺少成员来标记其是否处于活跃状态（alive），导致无法判断 gang 是否已经被删除。
+3. **并发竞态**：在 `spufs_create_context` 中，未检查 gang 是否存活，且未增加存活计数，导致可能在 gang 正在销毁时创建上下文，或者 gang 目录在上下文创建过程中被意外删除。
+
+#解决方案
+1. **增加存活标记**：在 `spu_gang` 结构体中新增 `alive` 成员，用于跟踪 gang 的生命周期。
+2. **初始化存活状态**：在 `alloc_spu_gang` 中将 `alive` 初始化为 1。
+3. **增加 dentry 引用**：在 `spufs_mkgang` 创建 gang 目录成功后调用 `dget()` 增加引用，防止提前释放。
+4. **实现计数管理逻辑**：
+   - 引入 `unuse_gang()` 函数，在 gang 目录关闭或创建失败时减少 `alive` 计数，若计数归零则调用 `simple_recursive_removal` 删除目录。
+   - 在 `spufs_create_context` 中增加对 `gang->alive` 的检查，若为 0 则返回 `-ENOENT`；若创建成功则增加 `alive` 计数，失败时回滚计数。
+5. **自定义文件操作**：将 gang 目录的文件操作从 `simple_dir_operations` 替换为自定义的 `spufs_gang_fops`，在 `release` 回调中调用 `unuse_gang()` 确保生命周期正确结束。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/879fa9b9393f110fa2a1a20a1d7fe9a30241d184

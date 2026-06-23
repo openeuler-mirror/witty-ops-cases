@@ -1,0 +1,28 @@
+#标题
+调度器 EEVDF 实体重权值导致调度延迟与位置放置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 EEVDF 调度器中，当对调度实体进行重权值操作时，由于 `avg_vruntime()` 计算包含了当前正在运行的实体，导致 `place_entity()` 函数中的延迟计算逻辑失效。这破坏了 `avg_vruntime` 在重权值操作下的不变性，导致调度实体放置位置错误，引发调度延迟或调度行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于提交 6d71a9c61604 引入的逻辑错误。具体原因如下：
+1. `avg_vruntime()` 在计算时总是包含 `cfs_rq->curr`（当 `on_rq` 为真时）。
+2. 在 `reweight_entity` 流程中调用 `update_entity_lag` -> `avg_vruntime` 时，该平均值已经包含了待处理实体的状态。
+3. `place_entity()` 中的延迟缩放逻辑依赖于 `avg_vruntime()` 是新实体放置前的状态，但此时状态已被破坏，导致计算出的 lag 不正确。
+4. 这违反了 `avg_vruntime` 应在重权值操作下保持不变的原则，导致 vruntime 和 deadline 计算偏差。
+
+#解决方案
+通过引入新的辅助函数和重构重权值逻辑来修复此问题：
+1. 新增 `entity_lag()` 函数，允许显式传入 `avg_vruntime` 值进行 lag 计算，解耦与全局状态的依赖。
+2. 新增 `rescale_entity()` 函数，基于数学证明正确处理重权值时的 `vlag`、`deadline` 和 `vprot` 的缩放转换，确保 `avg_vruntime` 的不变性。
+3. 在 `reweight_entity()` 流程中，先计算并缓存 `avruntime`，使用该缓存值计算 lag 和更新 deadline，避免使用被破坏的实时平均值。
+4. 移除错误的 `place_entity()` 调用，直接根据缓存的 `avruntime` 和缩放后的 lag 值修正实体的 vruntime，确保实体在重权值后被放置在正确的虚拟时间位置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/874c066bd2841e7fc18a67982f65c32684e6e128

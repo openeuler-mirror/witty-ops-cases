@@ -1,0 +1,25 @@
+#标题
+ftrace: 并发读取 trace_pipe 时触发 trace_printk_seq 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 ftrace_dump（如 `echo z > /proc/sysrq-trigger`）操作的同时，若有其他进程并发读取 `/sys/kernel/tracing/trace_pipe`，会因竞态条件触发 `trace_printk_seq()` 函数中的 `WARN_ON_ONCE()` 警告。
+
+#主要错误日志
+WARN_ON_ONCE(s->seq.len >= s->seq.size)
+
+#问题根因
+在 `ftrace_dump_one()` 执行过程中，存在一个竞态窗口：
+1. CPU0 在调用 `trace_empty()` 检查后发现缓冲区非空。
+2. CPU0 执行 `trace_iterator_reset()` 将 `iter.seq.len` 和 `iter.seq.size` 均置为 0。
+3. 此时 CPU1 并发读取 `trace_pipe` 消耗了缓冲区数据。
+4. CPU0 继续执行 `trace_find_next_entry_inc()`，因缓冲区已被消费返回 NULL，导致 `iter.seq` 未被填充。
+5. 代码继续执行 `trace_printk_seq()`，此时 `iter.seq.len` (0) 大于等于 `iter.seq.size` (0)，触发了 `WARN_ON_ONCE` 警告。
+
+#解决方案
+将 `trace_printk_seq(&iter.seq)` 调用移动到检查 `trace_find_next_entry_inc()` 返回值非空的 if 语句块内部。这确保了只有在 `iter.seq` 被正确填充后才进行打印操作，避免了条件不满足时的无效调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6059c5dd15962a99496129aaf154a64c12c8b8d0

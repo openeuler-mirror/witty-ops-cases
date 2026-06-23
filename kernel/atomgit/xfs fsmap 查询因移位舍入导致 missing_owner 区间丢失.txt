@@ -1,0 +1,26 @@
+#标题
+xfs fsmap 查询因移位舍入导致 missing_owner 区间丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 XFS 文件系统中执行 `xfs_io -c 'fsmap -vvvv -d 104 107' /mnt` 指定范围查询时，本应返回 [104, 107) 范围内的记录（如 free space），但实际查询结果为空，无任何输出，导致该区间的空间使用情况无法被正确探测。
+
+#主要错误日志
+未知
+
+#问题根因
+问题由移位计算导致。在 fsmap 查询 `missing_owner` 区间（如 rmapbt 中的 freespace 或 bnobt 中的 unknown space）时，该区间是通过减法（间隙）获取的。计算 `rec_daddr` 时基于 `key[1]` 中记录的 `start_block` 并调用 `XFS_BB_TO_FSBT` 进行了右移转换。
+如果 `rec_daddr` 未超过 `info->next_daddr`（即 `keys[1].fmr_physical >> (mp)->m_blkbb_log <= info->next_daddr`），则不会显示任何记录。在示例中，104 和 107 右移后均为 12，相减结果为 0，导致该间隙被忽略：
+ before calculate ----------------> after shifting
+ 104(st)  107(ed)		      12(st/ed)
+ |---------|				  |
+ sector size			      block size
+
+#解决方案
+在 `xfs_getfsmap_info` 结构体中引入 `end_daddr` 字段，用于记录用户传入的高位 key 的结束地址（`key[1].fmr_physical + key[1].length`），粒度为扇区。同时增加 `nr_sectors` 字段用于边界检查。
+在最后一次查询处理中，如果当前查询是最后一次且 `end_daddr` 有效，则使用 `end_daddr` 作为 `rec_daddr`，从而防止因移位舍入导致的区间丢失问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/85c4985c08e9c5643b29aa82ef0fb95766d5d975

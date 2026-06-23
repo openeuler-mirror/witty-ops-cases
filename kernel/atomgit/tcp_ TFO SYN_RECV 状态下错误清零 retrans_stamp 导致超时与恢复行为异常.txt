@@ -1,0 +1,20 @@
+#标题
+tcp: TFO SYN_RECV 状态下错误清零 retrans_stamp 导致超时与恢复行为异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TCP Fast Open (TFO) 被动打开场景下，当服务端发送的 SYNACK 被客户端 ACK 确认，且该 ACK 携带了 SACK 信息导致服务端进入 TCP_CA_Recovery 状态时，内核错误地将 `retrans_stamp` 清零。这会导致后续的 `retransmits_timed_out()` 判断逻辑失效，进而引发错误的 ETIMEDOUT 超时判定或异常的 undo 恢复行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tcp_rcv_synrecv_state_fastopen()` 函数中，代码无条件地将 `retrans_stamp` 置为 0。虽然这旨在清除 SYNACK RTO 定时器设置的时间戳以防止虚假超时，但在 ACK 触发进入 `TCP_CA_Recovery` 状态的角落情况下，该时间戳对应的是正在进行的活跃快速恢复，不应被清零。无条件清零破坏了重传超时检测和撤销逻辑的正确性。
+
+#解决方案
+修改 `tcp_rcv_synrecv_state_fastopen()` 函数，移除无条件清零 `retrans_stamp` 的操作，改为调用 `tcp_retrans_stamp_cleanup(sk)` 函数。该函数能根据当前的拥塞控制状态正确处理 `retrans_stamp`：若处于 CA_Recovery 状态则保留时间戳以保证超时和撤销逻辑正确；若未进入恢复状态则将其清零以防止虚假超时。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fab856a1bd3ca119ad0cc7a61444ad2863919613

@@ -1,0 +1,20 @@
+#标题
+PCI: hv: Hyper-V 设备未设置 NUMA 节点导致 ARM64 性能下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 架构的 Hyper-V 环境中，当 PCI 设备没有 NUMA 亲和性信息（未设置 `HV_PCI_DEVICE_FLAG_NUMA_AFFINITY`）或 `virtual_numa_node` 超出范围时，设备 NUMA 节点未初始化。这导致设备被设置为 `NUMA_NO_NODE` (-1)，内核可能跨 NUMA 节点分散处理工作负载，导致设备性能显著下降，特别是对于 MANA 等高吞吐量设备。而在 x86_64 架构下，未初始化的默认值恰好为 0，因此未出现此性能问题，表现出架构间的不一致性。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `hv_pci_assign_numa_node()` 在处理设备时，若设备缺少 NUMA 亲和性标志或节点编号无效，代码逻辑直接跳过设置，导致设备 NUMA 节点保留未初始化状态。在 ARM64 上该默认值为 `NUMA_NO_NODE` (-1)，而测试表明当 Hyper-V 主机未提供 NUMA 信息时，将设备分配给节点 0 性能最优。代码未提供默认值导致 ARM64 上出现了非预期的跨节点资源分配，降低了性能。
+
+#解决方案
+在 `hv_pci_assign_numa_node()` 函数中，在进行条件性的 NUMA 亲和性检查之前，默认将设备 NUMA 节点设置为 0。这确保了当主机未提供 NUMA 信息时，设备能获得一个高性能的默认值，并使 x86_64 和 ARM64 架构下的行为保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/29df3e67c49bac3602c35476ce658722aa8aefcd

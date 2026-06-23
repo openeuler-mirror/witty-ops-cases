@@ -1,0 +1,20 @@
+#标题
+perf 采样导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进程退出时的极小时间窗口内触发 perf 采样，会导致内核发生空指针解引用，进而引发系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+此前内核代码仅通过检查 `current->flags` 中的 `PF_KTHREAD` 和 `PF_USER_WORKER` 标志来判断当前任务是否为用户任务。然而，在任务退出过程中，存在一个极小的时间窗口：任务的 `mm` 字段已被释放并置为 NULL，但其标志位尚未完全更新或仍表现为用户任务特征。此时若 perf 触发采样，代码会误判该任务为有效的用户空间任务并尝试访问其 `mm` 字段，从而触发 NULL 指针解引用导致崩溃。
+
+#解决方案
+在 `include/linux/sched.h` 中新增 `is_user_task()` 辅助函数，综合检查任务的 `mm` 指针与标志位。该函数要求任务必须同时满足 `task->mm` 非空且未设置 `PF_KTHREAD` 或 `PF_USER_WORKER` 标志，才判定为有效的用户任务。修改 `kernel/events/callchain.c` 和 `kernel/events/core.c` 中的相关逻辑，使用该函数替代原有的纯标志位检查，确保不会访问已退出的 `mm` 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/956ee50974bbc250482add8c15d0ad31b5a9d8cc

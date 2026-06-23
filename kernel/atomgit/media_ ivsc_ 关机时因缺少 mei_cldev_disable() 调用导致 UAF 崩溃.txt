@@ -1,0 +1,26 @@
+#标题
+media: ivsc: 关机时因缺少 mei_cldev_disable() 调用导致 UAF 崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统关机时触发 KASAN 检测到的 slab-use-after-free 错误，导致内核崩溃。具体表现为在执行关机流程（systemd-shutdown）时，MEI 驱动清理过程中访问了已被释放的内存地址。
+
+#主要错误日志
+[ 106.634504] ==================================================================
+[ 106.634623] BUG: KASAN: slab-use-after-free in mei_cl_set_disconnected (drivers/misc/mei/client.c:783) mei
+[ 106.634683] Read of size 4 at addr ffff88819cb62018 by task systemd-shutdow/1
+[ 106.635042] mei_stop (drivers/misc/mei/init.c:348) mei
+[ 106.635062] mei_vsc_remove (drivers/misc/mei/mei_dev.h:784 drivers/misc/mei/platform-vsc.c:393) mei_vsc
+[ 106.635066] platform_remove (drivers/base/platform.c:1424)
+
+#问题根因
+ACE 和 CSI 驱动的 remove() 函数中缺少 mei_cldev_disable() 调用。这导致 mei_cl 客户端对象虽已通过 mei_cl_bus_dev_release() 调用 kfree(cldev->cl) 被释放内存，但仍保留在 mei_device->file_list 链表中。
+关机时 mei_vsc_remove() 执行 mei_stop()，该函数先移除所有 mei bus 设备（触发 mei_ace_remove() 和 mei_csi_remove() 并释放内存），随后调用 mei_cl_all_disconnect() 遍历 mei_device->file_list，此时引用了刚才已被释放的 cldev->cl 指针，从而触发 use-after-free。
+
+#解决方案
+在 mei_ace_remove() 和 mei_csi_remove() 函数中添加缺失的 mei_cldev_disable(cldev) 调用。该操作确保在释放 mei_cl 内存之前，先将其从 mei_device->file_list 链表中移除，避免后续链表遍历时发生 UAF。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/21fb520b8d8d9de5423c87d92d7e026507c0f0cb

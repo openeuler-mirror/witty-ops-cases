@@ -1,0 +1,32 @@
+#标题
+phy: qcom-qusb2: 早期挂起时的空指针引用故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动过程中偶发崩溃，导致内核空指针引用错误。该问题由竞态条件引起，在 Runtime PM 启用后、设置禁止自动挂起前的短暂时间窗口内，挂起回调函数被错误调用，从而触发崩溃。
+
+#主要错误日志
+```
+Unable to handle kernel NULL pointer dereference at virtual address 00000000000000a1
+[...]
+CPU: 0 UID: 0 PID: 11 Comm: kworker/0:1 Not tainted 6.16.7+ #116 PREEMPT
+Workqueue: pm pm_runtime_work
+pstate: 20000005 (nzCv daif -PAN -UAO -TCO -DIT -SSBS BTYPE=--)
+pc : qusb2_phy_runtime_suspend+0x14/0x1e0 [phy_qcom_qusb2]
+lr : pm_generic_runtime_suspend+0x2c/0x44
+[...]
+```
+
+#问题根因
+在 `qusb2_phy_probe` 函数中，代码先调用了 `pm_runtime_enable` 启用 Runtime PM，随后才调用 `dev_set_drvdata` 将 QPHY 实例设置为驱动数据。这导致在 Runtime PM 启用后、驱动数据设置前的短暂窗口内，若 `qusb2_phy_runtime_suspend` 回调被触发，它试图获取驱动数据得到 NULL，进而引发空指针引用。此外，`pm_runtime_enable` 和 `pm_runtime_forbid` 的顺序也存在逻辑窗口，可能导致不必要的挂起尝试。
+
+#解决方案
+调整初始化顺序并使用设备资源管理接口：
+1. 将 `dev_set_drvdata(dev, qphy)` 移至 `pm_runtime_enable` 之前执行，确保回调函数执行时驱动数据已就绪。
+2. 重排 Runtime PM 初始化顺序，先设置设备为活跃状态，再禁止自动挂起，最后启用 Runtime PM。
+3. 使用 `devm_pm_runtime_enable` 替代 `pm_runtime_enable`，实现资源管理的对称性，确保驱动卸载时自动清理，移除手动调用 `pm_runtime_disable` 的冗余错误处理路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/61d1ce3f304e3edcf8c021644a7f03eb315c2df0

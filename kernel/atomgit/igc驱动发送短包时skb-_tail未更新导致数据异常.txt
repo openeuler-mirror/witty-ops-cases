@@ -1,0 +1,20 @@
+#标题
+igc驱动发送短包时skb->tail未更新导致数据异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当发送的数据包长度小于17字节时，igc_xmit_frame() 函数虽然将数据包填充至最小长度，但未正确更新 skb->tail 指针。这导致 skb 的数据指针与长度信息不一致，可能引发后续数据发送错误、内存数据读取越界或网络协议栈处理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 igc_xmit_frame() 函数处理最小包长填充的逻辑中，原代码使用 skb_padto() 并手动设置 skb->len = 17。这种方式仅修改了 skb 的长度字段和填充了数据，但遗漏了更新 skb->tail 指针。正确的流程应使用 skb_put_padto() 接口，该接口会在填充数据的同时同步更新 tail 指针与长度，保证 skb 内部状态的一致性。
+
+#解决方案
+修改 drivers/net/ethernet/intel/igc/igc_main.c 文件中的 igc_xmit_frame() 函数。移除原有的 skb_padto() 调用与手动设置 skb->len 的代码，替换为 skb_put_padto(skb, 17)。该函数会自动处理内存填充、tail 指针更新及长度设置，确保短包处理逻辑与其他 Intel 以太网驱动保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cb45f4eeee348268ff86d01b1658460c3ee2e7af

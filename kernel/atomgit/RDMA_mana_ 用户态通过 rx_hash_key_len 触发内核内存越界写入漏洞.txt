@@ -1,0 +1,20 @@
+#标题
+RDMA/mana: 用户态通过 rx_hash_key_len 触发内核内存越界写入漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+用户态程序可以通过 RDMA uAPI 接口传入恶意的 `rx_hash_key_len` 参数，导致内核在执行 `memcpy` 操作时发生缓冲区溢出，从而破坏内核内存，可能引发系统崩溃或提权。
+
+#主要错误日志
+未知
+
+#问题根因
+`rx_hash_key_len` 变量来源于用户态 API（uAPI）结构体，内核代码在未对其进行边界校验的情况下，直接将其作为长度参数传递给 `memcpy` 函数。这允许用户态控制拷贝长度，当该长度超过内核目标缓冲区 `req->hashkey` 的大小时，即发生内存越界写入。
+
+#解决方案
+在调用 `memcpy` 之前添加边界检查逻辑，判断 `rx_hash_key_len` 是否大于 `req->hashkey` 的大小。如果超出范围，直接返回 `-EINVAL` 错误，阻止非法内存写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1a0a3e01ad28e30226e283a1f070d3e448a0168f

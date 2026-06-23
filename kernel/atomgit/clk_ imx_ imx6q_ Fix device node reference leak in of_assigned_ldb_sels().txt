@@ -1,0 +1,23 @@
+#标题
+clk: imx: imx6q: Fix device node reference leak in of_assigned_ldb_sels()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `of_assigned_ldb_sels()` 函数处理 LDB 时钟选择时，因未释放设备节点引用，导致内核内存泄漏（device node reference leak）。若多次调用该逻辑，可能累积内存消耗。
+
+#主要错误日志
+- `ccm: parent clock %d not in ccm\n`
+- `ccm: child clock %d not in ccm\n`
+
+#问题根因
+函数 `of_assigned_ldb_sels()` 调用 `of_parse_phandle_with_args()` 获取设备节点引用后，在正常返回路径和错误处理返回路径上均未调用 `of_node_put()` 释放引用，导致引用计数泄漏。
+
+#解决方案
+在函数的所有退出路径上增加 `of_node_put(clkspec.np)` 调用，确保设备节点引用被正确释放。具体修复位置包括：
+1. 解析父时钟（parent clock）后，无论校验成功或失败，均释放引用。
+2. 解析子时钟（child clock）后，同样在获取信息后立即释放引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cb1e48075d564782ec647fc4ee8b48dc88cb9e54

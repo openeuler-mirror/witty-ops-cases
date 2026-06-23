@@ -1,0 +1,22 @@
+#标题
+xfs: fix file_path handling in tracepoints
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 XFS 文件系统使用 tracepoint 功能时，`xfile_create` 事件处理逻辑存在不合理的地方。由于 `file_path()` 函数需要输出缓冲区作为参数，原代码在 `TP_fast_assign` 阶段额外在栈上分配了一个 257 字节的临时缓冲区 `pathname`，再将路径复制到 tracepoint 结构体内部的 `__entry->pathname`，这导致了不必要的栈空间浪费。虽然在常规运行中可能无明显的用户态报错，但这是一个潜在的内核栈溢出风险点，特别是由 kernel test robot 报告并触发修复。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述与代码分析，根因在于 `xfile_create` tracepoint 的实现方式低效：
+原代码在获取文件路径时，先在栈上定义了一个临时变量 `pathname[257]`，调用 `file_path()` 将路径写入该栈变量，随后再通过 `strncpy` 将内容拷贝到 tracepoint 结构体内部的 `__entry->pathname` 数组中。
+实际上 `file_path()` 支持直接写入目标缓冲区，因此中间的栈变量分配是完全多余的，直接导致了栈空间的浪费。
+
+#解决方案
+修改 `fs/xfs/scrub/trace.h` 中的 `xfile_create` tracepoint 定义，移除 `TP_fast_assign` 中的临时栈变量 `pathname`。直接将 `__entry->pathname`（长度调整为 `MAXNAMELEN`）作为缓冲区参数传递给 `file_path()` 函数，实现路径数据的直接写入，从而减少栈空间的使用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a613578d6306347cbf710bdb1bc37d34ba92f0a1

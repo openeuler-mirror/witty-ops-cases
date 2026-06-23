@@ -1,0 +1,20 @@
+#标题
+Bluetooth: L2CAP socket 创建失败时遗留悬空 sk 指针
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 l2cap_sock_create 流程中，当 l2cap_chan_create() 创建失败时，函数返回 NULL 表示错误，但传入的 socket 结构体中的 sk 指针未被清空，仍指向一个已被释放的 sock 结构体。这导致上层逻辑可能通过该悬空指针访问已释放内存，引发内核崩溃（panic）或内存非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `l2cap_sock_alloc` 函数的错误处理路径中，当 `l2cap_chan_create()` 失败时，代码调用了 `sk_free(sk)` 释放了 sock 结构体内存，但未将 `sock->sk` 指针置为 NULL。由于 `sock->sk` 仍指向已释放的内存地址，导致出现悬空指针。
+
+#解决方案
+在 `l2cap_chan_create()` 失败的分支中，于 `sk_free(sk)` 之后增加 `sock->sk = NULL;` 语句，确保 socket 指针不指向已释放的内存，从而消除悬空指针隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75584e8c8650268ac981bdeee1a2e7d8ca2b9502

@@ -1,0 +1,28 @@
+#标题
+[urma] CM消息解析校验缺失及异步绑定回调内存释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. URMA协议在接收处理空或截断的 CM (Connection Management) 消息时，内核未进行有效性校验直接解析，可能导致内存越界访问或解析错误。
+2. uburma 模块在处理异步绑定回调时存在生命周期管理错误，可能导致内核崩溃或内存重复释放。
+
+#主要错误日志
+- ubcore_log_err("Invalid recv_cr payload");
+- ubcore_log_err("Invalid recv_cr payload len");
+
+#问题根因
+1. **CM消息校验逻辑反转与缺失**：`ubcore_cm_recv` 函数原条件判断 `recv_cr->payload != 0` 导致当 payload 指针为空（0）时跳过了长度校验，且未对消息体中嵌入的长度字段 `msg.len` 与实际接收缓冲区大小进行匹配校验，导致可能解析非法内存。
+2. **异步回调对象引用计数与释放错误**：`uburma_cmd_bind_jetty_async_callback` 函数在入队通知后未释放 notifier 的 uobject 引用；且在 `uburma_cmd_bind_jetty_async` 的 TLV append 失败路径中，调用了 `uburma_delete_bind_callback(cb)`，这可能释放掉一个已经被消费或正在被其他流程使用的回调对象，导致 UAF (Use-After-Free)。
+
+#解决方案
+1. **修正 CM 消息接收校验逻辑**：
+   - 修改判断条件，当 payload 为空或长度小于消息头大小时直接返回 `-EINVAL`。
+   - 新增校验逻辑，解析消息头后，判断 `msg.len` 是否超过剩余 payload 长度，防止越界访问。
+2. **修复异步绑定回调资源管理**：
+   - 在 `uburma_cmd_bind_jetty_async_callback` 完成事件通知后，显式调用 `uobj_put` 减少 notifier uobject 的引用计数。
+   - 移除 TLV append 失败路径中的 `uburma_delete_bind_callback(cb)` 调用，避免错误释放回调对象。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5ce5811a6c682087ffdb783a62983c2c92a6b7fd

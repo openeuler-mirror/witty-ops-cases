@@ -1,0 +1,26 @@
+#标题
+HID: asus 驱动 UAF（释放后使用）漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+恶意构造的 HID 设备（如 ASUS ROG N-Key 键盘）接入系统后，驱动加载过程中会触发释放后使用。该问题可通过 KASAN 检测工具发现，导致内核内存破坏。
+
+#主要错误日志
+```
+[   21.673700] BUG: KASAN: slab-use-after-free in asus_probe+0xeeb/0xf80
+[   21.673700] Write of size 8 at addr ffff88810a0ac000 by task kworker/1:2/54
+[   21.673700] Call Trace:
+[   21.673700]  asus_probe+0xeeb/0xf80
+[   21.673700]  hid_device_probe+0x2ee/0x700
+```
+
+#问题根因
+在 `hid_hw_start()` 调用期间，`hidinput_connect()` 会处理所有输入和输出报告。如果设备提供的描述符中包含未定义的 Usage Page（如 `HID_UP_UNDEFINED`），`hidinput_configure_usages()` 将跳过这些配置，导致 capability bitmaps 未被设置。这会使得 `hidinput_has_been_populated()` 检查失败，进而释放 `hid_input` 及底层的 input device。然而，驱动程序中的 `drvdata->input` 仍指向这块已释放的内存，后续代码对该指针指向的名称进行写入操作时触发了 UAF。
+
+#解决方案
+在 `asus_probe` 函数中增加对 `HID_CLAIMED_INPUT` 标志的校验。通过检查 `hdev->claimed & HID_CLAIMED_INPUT`，确认 input 设备是否已成功注册并被 HID 层接管，从而避免访问因未配置成功而被释放的 input 设备指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/30b68c08d8bf3a6dd323bfaee87cc6f120dcb626

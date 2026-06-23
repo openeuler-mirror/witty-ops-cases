@@ -1,0 +1,24 @@
+#标题
+sw64 S3唤醒后CSR寄存器状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构（特别是 C4 子架构）平台上，系统从 S3 挂起状态唤醒后，部分 CSR（控制状态寄存器）状态未正确恢复。具体表现为 CSR:SHTCLOCK 计数器在唤醒后停止计数，以及 CSR:KTP 寄存器值丢失或未恢复，导致系统时间相关功能异常或后续内核行为不可预期。
+
+#主要错误日志
+未知
+
+#问题根因
+S3 唤醒流程存在缺陷：
+1. 缺少对 CSR:KTP 寄存器的恢复操作，导致唤醒后该寄存器值未复原。
+2. `__io_write_longtime_start_en` 函数在 C4 架构（CPU_SW8A）分支下实现为空操作，导致 longtime 功能未使能，进而导致 CSR:SHTCLOCK 在唤醒后停止计数。
+
+#解决方案
+1. 在汇编文件 `suspend_asm.S` 的唤醒流程中，增加 `#ifdef CONFIG_SUBARCH_C4` 条件判断，显式调用 `csrw` 指令恢复 CSR:KTP 寄存器的值。
+2. 在头文件中修正 `__io_write_longtime_start_en` 的定义，使其正确写入 `GPIO_SWPORTA_DDR` 寄存器。
+3. 在 `chip_setup.c` 的 `intpu_restore` 函数中，增加对 `CPU_SW8A` 类型的处理分支，调用修复后的 `__io_write_longtime_start_en` 接口使能 longtime 功能，确保 CSR:SHTCLOCK 持续计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9355b72da7cfc2ab4836386e9df7364d60bb73c1

@@ -1,0 +1,26 @@
+#标题
+urma: 修复 jetty 异步调用逻辑错误及移除冗余调试日志
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 uburma 命令导入 jetty（import jetty）操作时，如果 TLV append 失败，系统可能因调用了错误的非导入回退函数（`ubcore_unimport_jetty_async`）而导致状态不一致或资源处理异常。此外，内核日志中会持续打印冗余的 primary EID 查找调试信息，干扰日志阅读与性能。
+
+#主要错误日志
+- 调试日志（已删除）：
+  `ubcore_log_err("lookup primary eid for dst eid " EID_FMT "\n", ...)`
+  `ubcore_log_err("dst_primary_eid " EID_FMT "\n", ...)`
+- 功能异常相关日志（上下文）：
+  `ubcore_log_err("get primary eid failed, ret = %d\n", ret)`
+
+#问题根因
+1. **函数调用逻辑错误**：在 `uburma_cmd_import_jetty_async` 函数中，当 `uburma_tlv_append` 失败时，错误地调用了 `ubcore_unimport_jetty_async` 并尝试 `uobj_alloc_abort`，这不符合该错误路径下的资源回收逻辑，应调用 `uburma_unimport_jetty` 进行同步处理。
+2. **日志滥用**：在 `ubmad_post_send` 流程中，针对 primary EID 的查找过程打印了过多的 `ubcore_log_err` 级别调试日志，这些日志对于生产环境无实际错误诊断价值，属于冗余输出。
+
+#解决方案
+1. **修正错误处理路径**：在 `uburma_cmd_import_jetty_async` 中，当 TLV append 失败时，删除不当的 `ubcore_unimport_jetty_async` 和 `uobj_alloc_abort` 调用，改为调用 `uburma_unimport_jetty(file, true, arg.out.handle)` 以正确同步地取消导入操作。
+2. **移除冗余日志**：从 `ubmad_post_send` 函数中移除 lookup primary eid 及其结果打印的调试日志代码，减少不必要的内核日志输出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0dbae7a1d470c97920d5ccca24332979786922d9

@@ -1,0 +1,20 @@
+#标题
+ipv6: fib_check_nh_v6_gw() 中 nhc_pcpu_rth_output 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 IPv6 网关路由时，若 `fib6_nh_init()` 初始化过程中分配 `fib6_nh->rt6i_pcpu` 失败，会导致内核发生内存泄漏（memleak）。该问题由特定提交引入，在错误处理路径上未正确释放已分配的资源。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fib6_nh_init()` 函数中，提交 `7dd73168e273` 将 `fib_nh_common_init()` 移到了 `alloc_percpu_gfp()` 之前。当 `alloc_percpu_gfp()` 分配 `fib6_nh->rt6i_pcpu` 失败时，错误处理路径没有清理 `fib6_nh->nh_common.nhc_pcpu_rth_output`，导致内存泄漏。原代码仅调用了 `lwtstate_put`，未调用 `fib_nh_common_release` 进行完整清理。
+
+#解决方案
+修改 `fib6_nh_init()` 的错误处理路径：在分配失败时调用 `fib_nh_common_release()` 来释放 `nhc_pcpu_rth_output`，并将指针置为 NULL，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3eddc663244bbd7791dd7fde513cec3cc18e7bc2

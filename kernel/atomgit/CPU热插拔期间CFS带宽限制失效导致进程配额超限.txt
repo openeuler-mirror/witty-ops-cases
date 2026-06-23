@@ -1,0 +1,31 @@
+#标题
+CPU热插拔期间CFS带宽限制失效导致进程配额超限
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启CPU热插拔操作（如反复offline/online）的情况下，Cgroup的CPU带宽限制失效。受限制的进程能够突破设定的配额运行，导致CPU使用时间远超预期值。
+
+具体表现：
+1. **配额限制失效**：在8 CPU系统中，给Cgroup设置50%的带宽限制（cpu.max 50000 100000），预期进程运行时间应约为10秒。在无热插拔时表现正常；但在CPU热插拔场景下，进程实际运行时间达到14.43秒，明显超出限制。
+2. **运行时异常重置**：当CPU offline时，如果cfs_rq处于非限流状态且`runtime_remaining`仍有剩余，该值会被错误地重置为1，导致剩余运行时间被迅速耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+在CPU热插拔操作期间，内核重建调度域并调用`cpu_attach_domain`更新根域。这会导致对每个活跃CPU都调用`rq_offline_fair`，进而执行`unthrottle_offline_cfs_rqs`。
+
+根本原因在于`unthrottle_offline_cfs_rqs`函数缺乏对目标CPU状态的判断，对所有活跃CPU上的队列都执行了解限流操作。该函数本应仅对正在下线的CPU执行解限流（以便进程迁移），但却错误地对所有CPU生效，导致系统范围内的进程被解除带宽限制，从而绕过了CPU控制器设定的配额。
+
+此外，原代码逻辑中无条件将`runtime_remaining`重置为1的操作，也对非限流状态的队列造成了副作用。
+
+#解决方案
+修改 `kernel/sched/fair.c` 中的 `unthrottle_offline_cfs_rqs` 函数逻辑：
+
+1. **增加CPU活跃状态检查**：在函数入口处增加判断，若当前CPU仍处于活跃状态（`cpu_active_mask`），则直接返回，不执行后续解限流操作。这确保了解限流逻辑仅在下线CPU上执行。
+2. **调整运行时重置逻辑**：将`runtime_remaining`的重置操作移动到确认`cfs_rq`处于限流状态（`cfs_rq_throttled`）的判断分支内部。这防止了对非限流队列运行时数据的意外破坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/18fe8ac5d3530624823322759538201074846dec

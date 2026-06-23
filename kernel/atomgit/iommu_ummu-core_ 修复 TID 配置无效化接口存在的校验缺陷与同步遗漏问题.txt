@@ -1,0 +1,23 @@
+#标题
+iommu/ummu-core: 修复 TID 配置无效化接口存在的校验缺陷与同步遗漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 调用 `ummu_core_invalidate_cfg_table` 接口进行 TID 配置无效化时，仅传递 TID 参数，缺少对所属进程 `mm` 结构的校验，可能导致错误地操作了不属于当前进程的 TID 资源。
+2. 在进行 SVA grant/ungrant 操作失败时，系统未执行 PLB（Permission Lookaside Buffer）同步操作，可能导致硬件缓存中残留陈旧的权限配置，引发后续内存访问异常或安全问题。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **接口设计缺陷**：原有的 `ummu_core_invalidate_cfg_table` 函数仅接收 `tid` 参数，无法校验该 TID 是否属于调用者进程（`mm`），存在资源访问控制缺失。
+2. **逻辑判断错误**：在 `iommu_sva_grant` 和 `iommu_sva_ungrant` 函数中，`iommu_plb_sync` 被包裹在 `if (!ret)` 条件中。当 grant/ungrant 操作返回错误时，同步函数不会被调用，导致硬件缓存未被及时清理。
+
+#解决方案
+1. **新增安全接口**：引入新函数 `ummu_core_invalidate_cfg`，通过传入 `ummu_invalid_cfg_param` 结构体（包含 `mm` 和 `tid`），在执行无效化操作前增加 `mm` 指针比对校验，确保 TID 归属正确。
+2. **修正同步逻辑**：移除 `iommu_sva_grant` 和 `iommu_sva_ungrant` 中对 `iommu_plb_sync` 的返回值判断（`if (!ret)`），确保无论 grant/ungrant 操作成功与否，均强制执行 PLB 同步操作，保证硬件缓存一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f27b54c0c4743de73d4cf7e3d20f3242333fa1e

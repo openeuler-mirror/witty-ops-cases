@@ -1,0 +1,23 @@
+#标题
+tty 子系统代码重构：引入 tty_port_tty_vhangup 辅助函数
+
+#内核版本
+OLK-6.6
+
+#问题现象
+无故障现象。此 Commit 为代码重构，旨在消除内核 TTY 子系统及驱动（如 usb-serial, bluetooth, capi 等）中重复的代码片段，统一 `tty_vhangup` 的调用逻辑。
+
+#主要错误日志
+未知
+
+#问题根因
+此 Commit 不涉及故障修复。其背景是内核中多处驱动代码（`drivers/isdn/capi/capi.c`、`drivers/staging/greybus/uart.c`、`drivers/tty/serial/serial_core.c` 等）重复使用了 “tty_get -> vhangup -> tty_put” 的代码模式。为了提升代码可维护性，需要引入一个通用的辅助函数来封装这一同步挂起流程。
+
+#解决方案
+引入新的辅助函数 `tty_port_tty_vhangup()`，并对原有 `tty_port_tty_hangup()` 进行重构：
+1. 在 `tty_port.c` 中实现 `__tty_port_tty_hangup()` 核心函数，通过新增的 `bool async` 参数区分同步（`vhangup`）与异步（`hangup`）行为。
+2. 在 `include/linux/tty_port.h` 中定义 `tty_port_tty_vhangup()` 内联函数，调用核心函数并固定 `async=false`。
+3. 将 `drivers/isdn/capi/capi.c`、`drivers/usb/serial/usb-serial.c`、`net/bluetooth/rfcomm/tty.c` 等多处驱动代码中冗余的 `tty_port_tty_get()`、`tty_vhangup()`、`tty_kref_put()` 调用统一替换为 `tty_port_tty_vhangup(&port)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1737c2ace2ce663cbe77fa2e48750b3da0bc8e9

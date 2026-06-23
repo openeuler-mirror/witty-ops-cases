@@ -1,0 +1,22 @@
+#标题
+bonding: 在 Bond 接口上创建 VLAN 设备后 GSO 封装特性未生效导致性能下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 UDP 隧道封装卸载特性（如 `tx-udp_tnl-segmentation`）的网卡（如 mlx5）上建立 Bond 接口，并在 Bond 接口上创建 VLAN 子设备后，通过 `ethtool -k` 查询发现 VLAN 设备的 GSO 封装特性（`tx-udp_tnl-segmentation`、`tx-udp_tnl-csum-segmentation`）显示为 `off [requested on]`，即虽然请求开启但实际未生效。
+这导致在 Cilium vxlan 隧道模式等场景下，内核无法利用硬件卸载能力进行封装分段，进而引发网络吞吐量显著下降等性能问题。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序（如 mlx5）在网卡硬件层面支持并通过 `vlan_features` 暴露了 `NETIF_F_GSO_UDP_TUNNEL` 等封装卸载特性，但在 Bonding 驱动的 `BOND_VLAN_FEATURES` 定义中缺失了 `NETIF_F_GSO_ENCAP_ALL` 标志位。
+导致 `bond_compute_features()` 函数在计算并传播特性时，无法将这些封装特性从 Slave 设备正确传递给 Bond 接口上的 VLAN 设备，最终导致 VLAN 设备无法继承硬件的封装卸载能力。
+
+#解决方案
+修改 `drivers/net/bonding/bond_main.c` 源码，在 `BOND_VLAN_FEATURES` 宏定义中增加 `NETIF_F_GSO_ENCAP_ALL` 标志位。这使得 Bond 驱动在计算特性时能够识别并向下传播封装相关的 GSO 特性，确保 VLAN 设备能正确继承底层硬件的封装卸载能力。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/719c3e6e4f78baab01786333df9568df4534320c

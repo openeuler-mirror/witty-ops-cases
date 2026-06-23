@@ -1,0 +1,29 @@
+#标题
+QAT驱动在禁用PCI_IOV配置时构建失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在编译 QAT vfio pci variant 驱动时，若内核配置项 CONFIG_PCI_IOV 未选中（设为 n），构建过程会中断并报告多个符号未定义的链接错误。
+
+#主要错误日志
+ERROR: modpost: "qat_vfmig_open" [drivers/vfio/pci/qat/qat_vfio_pci.ko] undefined!
+ERROR: modpost: "qat_vfmig_resume" [drivers/vfio/pci/qat/qat_vfio_pci.ko] undefined!
+ERROR: modpost: "qat_vfmig_save_state" [drivers/vfio/pci/qat/qat_vfio_pci.ko] undefined!
+ERROR: modpost: "qat_vfmig_suspend" [drivers/vfio/pci/qat/qat_vfio_pci.ko] undefined!
+ERROR: modpost: "qat_vfmig_load_state" [drivers/vfio/pci/qat/qat_vfio_pci.ko] undefined!
+ERROR: modpost: "qat_vfmig_reset" [drivers/vfio/pci/qat/qat_vfio_pci.ko] undefined!
+ERROR: modpost: "qat_vfmig_save_setup" [drivers/vfio/pci/qat/qat_vfio_pci.ko] undefined!
+ERROR: modpost: "qat_vfmig_destroy" [drivers/vfio/pci/qat/qat_vfio_pci.ko] undefined!
+ERROR: modpost: "qat_vfmig_close" [drivers/vfio/pci/qat/qat_vfio_pci.ko] undefined!
+ERROR: modpost: "qat_vfmig_cleanup" [drivers/vfio/pci/qat/qat_vfio_pci.ko] undefined!
+
+#问题根因
+关键源文件 `qat_mig_dev.o` 被错误地限定在 `intel_qat-$(CONFIG_PCI_IOV)` 条件下编译。当 CONFIG_PCI_IOV=n 时，该文件未被编译链接，导致 QAT vfio pci 驱动依赖的 live migration helpers 相关符号缺失，从而引发链接失败。
+
+#解决方案
+修改 `drivers/crypto/intel/qat/qat_common/Makefile`，将 `qat_mig_dev.o` 从 `intel_qat-$(CONFIG_PCI_IOV)` 条件列表中移除，添加到无条件编译的基础对象列表中，确保无论 PCI_IOV 配置是否开启，该模块始终参与构建。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/480b0965d7e9f3f66d4b9ca367c36312bb2e503c

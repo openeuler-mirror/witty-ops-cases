@@ -1,0 +1,23 @@
+#标题
+clsact qdisc 初始化/销毁回滚不对称导致 UAF 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在替换 clsact qdisc 实例过程中，若新实例初始化中途失败（例如在 ingress 初始化成功后、egress 初始化前失败），内核触发 clsact_destroy() 回滚销毁逻辑。此时由于销毁逻辑检查了旧实例遗留的非空指针，会错误地对未完成初始化的 egress 路径执行销毁操作，导致内核发生 Use-After-Free（UAF）崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+clsact_init() 初始化过程分为 ingress 和 egress 两步，若在中间步骤（如 `tcf_block_get_ext()` 获取 egress_block）失败，会触发 clsact_destroy() 进行回滚。
+问题在于 clsact_destroy() 仅通过检查 `dev->tcx_ingress` 和 `dev->tcx_egress` 指针是否非空来决定是否执行销毁。在替换失败的场景下，这两个指针实际上指向的是旧的 clsact 实例遗留的有效对象，而非当前正在初始化的新实例对象。
+具体而言，ingress 初始化时已调用了 `tcx_miniq_inc` 引用计数，但 egress 尚未初始化。然而 destroy 逻辑发现 egress 指针非空（来自旧实例），便错误地执行了销毁路径，导致对未完成初始化的 egress 侧进行释放，引发 UAF。
+
+#解决方案
+新增辅助函数 `mini_qdisc_pair_inited()`，用于检查 qdisc 实例自身的 miniq 是否已初始化（检查 `miniqp->p_miniq` 是否非空）。
+修改 `clsact_destroy()` 和 `ingress_destroy()` 函数，将原本基于全局设备指针（`dev->tcx_ingress/egress`）的非空判断，替换为基于实例内部状态的 `mini_qdisc_pair_inited()` 判断。确保在替换失败回滚时，只销毁当前实例真正初始化过的资源，避免误操作遗留指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e4d6a7c7ff1d728196848071441c699d97b9dd3

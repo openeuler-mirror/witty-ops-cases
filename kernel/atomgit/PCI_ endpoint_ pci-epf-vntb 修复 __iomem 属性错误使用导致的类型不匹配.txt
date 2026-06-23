@@ -1,0 +1,28 @@
+#标题
+PCI: endpoint: pci-epf-vntb 修复 __iomem 属性错误使用导致的类型不匹配
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 sparse 工具进行静态代码分析时，`pci-epf-vntb.c` 驱动会报出多个 "incorrect type in assignment (different address spaces)" 警告。这是由于代码中错误地使用了 `__iomem` 属性修饰非 MMIO 指针，导致地址空间类型不匹配。
+
+#主要错误日志
+drivers/pci/endpoint/functions/pci-epf-vntb.c:524:17: warning: incorrect type in assignment (different address spaces)
+drivers/pci/endpoint/functions/pci-epf-vntb.c:524:17:    expected void [noderef] __iomem *mw_addr
+drivers/pci/endpoint/functions/pci-epf-vntb.c:524:17:    got void *
+drivers/pci/endpoint/functions/pci-epf-vntb.c:530:21: warning: incorrect type in assignment (different address spaces)
+drivers/pci/endpoint/functions/pci-epf-vntb.c:530:21:    expected unsigned int [usertype] *epf_db
+drivers/pci/endpoint/functions/pci-epf-vntb.c:530:21:    got void [noderef] __iomem *mw_addr
+drivers/pci/endpoint/functions/pci-epf-vntb.c:542:38: warning: incorrect type in argument 2 (different address spaces)
+drivers/pci/endpoint/functions/pci-epf-vntb.c:542:38:    expected void *addr
+drivers/pci/endpoint/functions/pci-epf-vntb.c:542:38:    got void [noderef] __iomem *mw_addr
+
+#问题根因
+`mw_addr` 变量仅用于存储由 `pci_epf_alloc_space()` 函数返回的 `void *` 指针，该指针并非 MMIO（内存映射 I/O）指针。代码中错误地使用 `__iomem` 属性对其进行修饰，违反了内核对该属性的使用规范，导致编译器或静态分析工具报告地址空间类型不匹配错误。
+
+#解决方案
+移除 `mw_addr` 变量声明中错误的 `__iomem` 属性修饰，将其类型定义修正为 `void *`，以匹配 `pci_epf_alloc_space()` 的返回值类型并消除 sparse 警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/15c35a067e0d7d31e8f7bc9944e3effd6bd86ae9

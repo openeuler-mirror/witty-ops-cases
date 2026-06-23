@@ -1,0 +1,20 @@
+#标题
+s390/futex: FUTEX_OP_ANDN 实现逻辑错误导致原子操作结果异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 s390 架构下，当用户空间程序调用 futex 功能并使用 `FUTEX_OP_ANDN` 操作码时，内核无法正确执行预期的“按位与非”操作。该操作本应将目标内存值与参数的按位取反值进行与运算，但实际执行的是简单的“按位与”运算，导致计算结果与预期不符，可能引发依赖该原子操作的用户态应用程序逻辑错误或数据不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+s390 架构的 futex 相关代码实现中，`FUTEX_OP_ANDN` 分支的逻辑存在错误。该操作原本定义为 `*(int *)UADDR2 &= ~OPARG;`，即先将 `oparg` 按位取反，再与原值进行与操作。但代码实现中直接使用了 `oparg` 进行与操作，遗漏了对 `oparg` 的按位取反步骤，导致功能由“与非”变成了“与”。
+
+#解决方案
+修改 `arch/s390/include/asm/futex.h` 文件中 `arch_futex_atomic_op_inuser` 函数的 `FUTEX_OP_ANDN` 分支，在调用 `__futex_atomic_op` 时，将传入的 `oparg` 参数修改为 `~oparg`，从而在底层汇编指令执行前正确完成参数的按位取反，确保最终运算逻辑符合 `FUTEX_OP_ANDN` 的定义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a069a6bcd8e69cfe3020060821ae4490fe04ce3f

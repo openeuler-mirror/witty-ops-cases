@@ -1,0 +1,23 @@
+#标题
+ASoC: SOF: ipc4-topology: ALH copier 查找逻辑缺陷导致空指针崩溃及音频异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SoundWire/ALH 聚合时，如果非 DAI copier 组件具有与 ALH copier 相同的流名称，内核在遍历查找 ALH copier 时会发生 NULL 指针解引用，导致内核崩溃。即使未触发崩溃，错误的匹配逻辑也会导致 ALH 设备计数被错误计算，进而引发音频功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在 `sof_ipc4_widget_setup_comp_dai` 和 `sof_ipc4_prepare_copier_module` 函数中遍历 widget 列表查找 ALH copier 时，仅依据流名称进行匹配，未校验 widget 类型是否为 DAI 以及 DAI 类型是否为 ALH。当非 DAI copier 组件（无 `private` 数据或 `copier->data` 为 NULL）拥有相同的流名称时，代码错误地将其视为有效对象进行访问，导致 NULL 指针解引用或错误的设备计数统计。
+
+#解决方案
+加强循环查找逻辑的校验条件，在匹配流名称的基础上，增加两个判断条件：
+1. 检查 widget 是否为 DAI 类型（使用 `WIDGET_IS_DAI(w->id)`），确保 `w->private` 指针有效。
+2. 检查 DAI 类型是否为 `SOF_DAI_INTEL_ALH`，确保目标对象确为 ALH copier。
+通过严格的类型过滤，防止非 ALH DAI 组件被错误匹配，从而避免空指针崩溃和计数错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c31f77408653819c9db811ad3f751e8066fcddcd

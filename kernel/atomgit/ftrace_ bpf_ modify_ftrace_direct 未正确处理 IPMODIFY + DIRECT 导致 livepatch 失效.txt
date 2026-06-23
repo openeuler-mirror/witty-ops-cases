@@ -1,0 +1,28 @@
+#标题
+ftrace: bpf: modify_ftrace_direct 未正确处理 IPMODIFY + DIRECT 导致 livepatch 失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核函数上依次执行以下操作后，livepatch 功能失效，内核函数执行的是原始版本代码而非 livepatch 修改后的版本：
+1. 对某内核函数加载 livepatch；
+2. 向该函数挂载 BPF fentry 程序；
+3. 向该函数挂载 BPF fexit 程序。
+
+完成上述步骤后，原本应该执行的 livepatch 版本函数被跳过，系统行为回退到原始函数逻辑，导致热补丁失效且未产生任何告警。
+
+#主要错误日志
+未知
+
+#问题根因
+ftrace_hash_ipmodify_enable() 函数负责检查同一内核函数上的 IPMODIFY（livepatch 使用）和 DIRECT（BPF trampoline 使用）ftrace_ops 冲突，并在必要时调用 ops->ops_func() 让 direct ftrace 与 IPMODIFY 共存。
+该检查逻辑仅在 register_ftrace_direct() 路径中被调用，而 modify_ftrace_direct() 路径中缺失了该检查。当通过 modify_ftrace_direct() 修改 direct ftrace 时，未能正确处理与 IPMODIFY 的共存逻辑，导致 livepatch 的修改被覆盖或忽略。
+
+#解决方案
+在 __modify_ftrace_direct() 函数中增加对 __ftrace_hash_update_ipmodify() 的调用：
+1. 修改 __ftrace_hash_update_ipmodify() 函数，新增 update_target 参数用于区分是更新 direct 目标地址还是注册新的 direct 操作。
+2. 在 __modify_ftrace_direct() 中，在修改 direct 指针之前，显式调用 __ftrace_hash_update_ipmodify(ops, hash, hash, true)，触发 ops->ops_func 调用以正确处理与 IPMODIFY 的交互，确保 livepatch 逻辑不受破坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/93d8b07e2fb42ff3bfc9f126e3c5a735dfea4752

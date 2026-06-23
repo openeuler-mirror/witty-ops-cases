@@ -1,0 +1,25 @@
+#标题
+sched_ext 自测用例 exit 因使用无效 DSQ 导致执行失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+sched_ext 子系统的 selftest `exit` 测试用例执行失败。原因是测试代码中调用了 `scx_bpf_consume(SCX_DSQ_GLOBAL)`，而在内核提交 63fb3ec80516 之后，调度类（sched_ext）的 consume 路径仅允许使用用户自定义 DSQ，使用 `SCX_DSQ_GLOBAL` 已属于非法操作。修复后测试通过，日志显示 scheduler 能够正常 enable 和 disable。
+
+#主要错误日志
+未知
+（注：Commit 信息中仅展示了修复后的成功日志，未包含修复前的报错日志或 Oops 信息。）
+
+#问题根因
+在内核提交 63fb3ec80516 ("sched_ext: Allow only user DSQs for scx_bpf_consume()...") 中，更新了 `consume` 路径的逻辑，限制其仅接受用户 DSQ，因此直接消费 `SCX_DSQ_GLOBAL` 变成了非法操作。该自测用例 `exit.bpf.c` 未同步更新，仍然调用了 `scx_bpf_consume(SCX_DSQ_GLOBAL)`，导致测试失败。
+
+#解决方案
+修改 `tools/testing/selftests/sched_ext/exit.bpf.c` 测试代码：
+1. 定义一个自定义 DSQ ID（如 `#define DSQ_ID 0`）。
+2. 在 `exit_init` 函数中调用 `scx_bpf_create_dsq(DSQ_ID, -1)` 创建该 DSQ。
+3. 将 `exit_enqueue` 中的 `scx_bpf_dispatch` 目标队列从 `SCX_DSQ_GLOBAL` 改为 `DSQ_ID`。
+4. 将 `exit_dispatch` 中的 `scx_bpf_consume` 参数从 `SCX_DSQ_GLOBAL` 改为 `DSQ_ID`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/959a3249364fb505e460baf8ee47ec61444fa2bc

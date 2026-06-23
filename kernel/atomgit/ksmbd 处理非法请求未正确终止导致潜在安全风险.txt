@@ -1,0 +1,20 @@
+#标题
+ksmbd 处理非法请求未正确终止导致潜在安全风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd（内核 SMB 服务器）处理 SMB 命令请求时，若收到命令号超出范围（command >= conn->max_cmds）、命令未实现（cmds->proc 为空）或签名校验失败的情况，服务器逻辑上应终止处理并返回错误状态，但实际代码流程可能会继续尝试处理后续请求或保持连接，导致违反安全规范，可能引发 CVE-2026-23220 相关的安全漏洞。
+
+#主要错误日志
+ksmbd_debug(SMB, "*** not implemented yet cmd = %x\n", command);
+
+#问题根因
+在函数 `__process_request` 中，针对 `STATUS_INVALID_PARAMETER`、`STATUS_NOT_IMPLEMENTED` 和 `STATUS_ACCESS_DENIED` 三种错误场景，代码错误地返回了 `SERVER_HANDLER_CONTINUE`。该返回值允许连接继续处理，而未在检测到非法或错误请求时立即中止处理流程，导致了安全处理逻辑的缺失。
+
+#解决方案
+修改 `fs/smb/server/server.c` 文件中的 `__process_request` 函数，将上述三种错误场景下的返回值从 `SERVER_HANDLER_CONTINUE` 修改为 `SERVER_HANDLER_ABORT`，确保在遇到非法参数、未实现命令或访问拒绝时，服务器能够正确终止当前请求的处理流程，从而修复该安全漏洞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c8e0f060a45ff588edb5362ea48c5d57ac42f770

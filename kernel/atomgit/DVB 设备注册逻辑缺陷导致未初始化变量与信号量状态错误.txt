@@ -1,0 +1,23 @@
+#标题
+DVB 设备注册逻辑缺陷导致未初始化变量与信号量状态错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核配置项 `CONFIG_DVB_DYNAMIC_MINORS` 未设置（disabled）时，在 `dvb_register_device` 函数执行过程中若遇到错误路径，会导致变量 `ret` 未初始化即被使用，同时信号量 `minor_rwsem` 被遗留在错误的状态（未正确释放），造成内核状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `CONFIG_DVB_DYNAMIC_MINORS` 配置未启用的情况下，代码逻辑存在缺陷：
+1. 变量 `ret` 未被初始化，导致错误路径返回值不确定。
+2. 错误处理分支未复用统一的逻辑，导致信号量 `minor_rwsem` 处于错误状态。
+Commit 描述原文：“When CONFIG_DVB_DYNAMIC_MINORS, ret is not initialized, and a semaphore is left at the wrong state, in case of errors.”
+
+#解决方案
+重构 `dvb_register_device` 函数中的错误检查逻辑。将 `CONFIG_DVB_DYNAMIC_MINORS` 宏定义内的 `minor` 计算逻辑调整位置，并移除冗余的错误处理代码块，确保无论是否启用该配置项，都统一使用同一套错误检查逻辑，从而避免变量未初始化和信号量状态错误的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7e531866db0d836111c4527162ab7e60b3b3e873

@@ -1,0 +1,20 @@
+#标题
+bpf: ktls 与 sockmap 结合使用时触发内核 panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 sockmap 机制加速 KTLS（Kernel TLS）流量时，在特定的数据发送流程中，内核会触发 panic，导致系统崩溃或服务不可用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tls_sw_sendmsg_locked` 函数处理过程中，当 `tls_push_sg` 返回 `-ENOSPC` 且存在打开的记录（`ctx->open_rec`）时，原逻辑直接跳转到 `rollback_iter` 进行回滚。如果此时 `msg_pl->cork_bytes` 非零，错误的回滚处理流程会导致状态不一致，进而引发 panic。
+
+#解决方案
+在 `tls_sw_sendmsg_locked` 函数中增加判断逻辑：当返回值为 `-ENOSPC` 且 `ctx->open_rec` 为真时，检查 `msg_pl->cork_bytes` 是否非零。若 `cork_bytes` 存在，将 `ret` 置为 0 并跳转到 `send_end` 正常结束流程，而不是跳转到 `rollback_iter` 进行回滚，从而避免状态不一致导致的 panic。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0b33bb51a9bef1badf0227c8e431666e777f45df

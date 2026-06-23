@@ -1,0 +1,25 @@
+#标题
+xen/x86: PVH dom0 气球驱动初始化目标错误导致内存释放异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PVH dom0 环境下，由于气球驱动初始化时计算的目标内存值不正确，当工具栈后续调整 dom0 的内存目标时，会导致气球驱动功能异常，引发过度的内存释放。
+
+#主要错误日志
+未知
+
+#问题根因
+PVH dom0 复用了 PV dom0 的逻辑，将未分配给 dom0 的 RAM 范围用作映射外部页面的暂存内存，这些区域被标记为 reserved。
+在 HVM 和 PVH 模式下，气球驱动使用 `get_num_physpages()` 计算初始气球目标，该函数将用于暂存空间的未填充 RAM 区域也计入在内。而在 PV 模式下，初始气球目标计算使用的是特定的 Xen 数据，不考虑上述内存类型变化。
+这导致 PVH dom0 的初始气球目标计算偏大（包含了实际上不可用的暂存区域），当 dom0 内存目标被调整时，驱动程序误以为需要释放更多内存，导致计算逻辑错误。
+
+#解决方案
+1. 将 `xen_released_pages` 变量的定义移至 `enlighten.c`，使其对所有 Xen 启用构建可用。
+2. 在 `arch_xen_unpopulated_init` 中累加 `xen_released_pages`，用于统计内存映射中存在但未填充的页面（即用作暂存映射的区域）。
+3. 修改 `balloon_init` 中的初始目标计算逻辑，统一 PV 与 PVH/HVM 的处理方式，均使用 `get_num_physpages() - xen_released_pages` 来计算初始内存目标，确保统计准确性。
+4. 在 `balloon_add_regions` 和 `balloon_init` 中增加下溢检查，防止页面统计出现逻辑错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2ac6570d46da53322cf16635dd36d90c67594bc0

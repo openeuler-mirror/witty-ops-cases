@@ -1,0 +1,23 @@
+#标题
+ASoC: 多路音频流共享 BE DAI 时因时序错误导致 pcm_write 间歇性失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当多个音频流共享同一个 BE DAI 时，BE DAI widget 可能在硬件参数配置完成前就被上电，导致错误的处理序列，进而引发间歇性的 pcm_write 错误。
+具体复现场景（Tegra 平台）：
+执行命令组合：aplay(2 streams) -> AMX(mux) -> ADX(demux) -> arecord(2 streams)
+在此场景下，'AMX TX' 和 'ADX RX' 作为共享的 BE DAIs，会触发该故障。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dpcm_add_paths` 函数中，过滤逻辑对处于 `SND_SOC_DPCM_STATE_OPEN` 状态的 BE DAI 处理不当。当第一个 FE open() 将 BE DAI 状态设置为 SND_SOC_DPCM_STATE_OPEN 后，第二个 FE open() 不会将 BE DAI 回调添加到列表中。这导致后续第二个 FE 进行 hw_params() 时，BE DAI 的 hw_params() 回调被忽略，紧接着在 FE prepare() 阶段，Widget 在未调用 BE DAI hw_params() 的情况下被上电，破坏了正常的初始化时序。
+
+#解决方案
+修改 `sound/soc/soc-pcm.c` 中的 `dpcm_add_paths` 函数，在组件链模式下，允许将状态为 `SND_SOC_DPCM_STATE_OPEN` 或 `SND_SOC_DPCM_STATE_HW_PARAMS` 的 BE DAI 添加到列表中。这确保了 BE DAI widget 在 hw_params() 回调执行之后才被上电，修正了初始化序列。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a7dd0df586e48f93ec0d1d9259f1ad72d1607682

@@ -1,0 +1,20 @@
+#标题
+amdgpu_ttm_tt_pin_userptr 函数错误处理路径内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `amdgpu_ttm_tt_pin_userptr` 函数执行过程中，若 `dma_map_sgtable()` 映射失败，会导致内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `amdgpu_ttm_tt_pin_userptr` 函数中，当 `dma_map_sgtable()` 调用失败时，错误处理代码直接跳转至 `release_sg` 标签执行 `kfree(ttm->sg)`。由于在此之前已经分配了 sg table（通过 `sg_alloc_table` 或类似接口），但并未执行 `sg_free_table(ttm->sg)` 来释放 sg table 自身的内存结构，直接 kfree 导致了 sg table 结构体内存泄漏。
+
+#解决方案
+修改错误处理路径的逻辑。在 `dma_map_sgtable()` 失败时，增加一个新的错误处理标签 `release_sg_table`。在此标签中，先调用 `sg_free_table(ttm->sg)` 释放 sg table 资源，随后再跳转至原有的 `release_sg` 标签执行 `kfree(ttm->sg)`，从而避免内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba5511e70c2f05070c6462ec5bfdffb76758cf39

@@ -1,0 +1,22 @@
+#标题
+VFIO 容器配置调整导致 KABI 一致性破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+为了支持 vSVA 功能而关闭 VFIO_CONTAINER 配置项，导致内核数据结构 `struct kvm_vmid` 和 `struct vfio_group` 发生 KABI（内核应用程序二进制接口）一致性破坏。这种破坏可能影响内核模块的兼容性，导致系统升级后出现不可预知的崩溃或运行异常。
+
+#主要错误日志
+未知
+
+#问题根因
+为了支持 vSLA 特性，内核配置项关闭了 VFIO_CONTAINER。这导致 `struct vfio_group` 中的 `container_next` 成员变量消失，以及 `struct kvm_vmid` 中 `pinned` 成员变量的位置调整，从而破坏了既有内核数据结构的内存布局，引发了 KABI breakage。
+
+#解决方案
+通过使用 KABI 补偿宏（如 `KABI_FILL_HOLE` 和 `KABI_DEPRECATE`）来维持数据结构的稳定性：
+1. 在 `struct kvm_arch` 中使用 `KABI_FILL_HOLE` 宏保留 `pinned` 成员的内存空间，同时移除 `struct kvm_vmid` 中的 `pinned` 成员，相关逻辑改为通过 `container_of` 获取 `kvm_s2_mmu` 后访问 `arch->pinned`。
+2. 在 `struct vfio_group` 中，针对 `#else` 分支（即未启用 VFIO_CONTAINER 时）使用 `KABI_DEPRECATE` 宏保留 `container_next` 成员的占位，确保结构体大小不变。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/589acbca785c3d29e3e9bc2996fd4e0841200457

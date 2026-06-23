@@ -1,0 +1,20 @@
+#标题
+bridge: br_vlan_rtnl_init() 未处理 rtnl_register_module() 失败导致错误被忽略
+
+#内核版本
+OLK-6.6
+
+#问题现象
+网桥vlan模块在初始化过程中，若 `rtnl_register_module()` 注册失败（例如在系统内存不足 OOM 场景下），错误被忽略并继续执行后续流程。这导致模块处于部分初始化的不一致状态，且 syzkaller 等测试工具会报告虚假错误，无法保证模块 rtnetlink 功能的原子性（全有或全无）。
+
+#主要错误日志
+未知
+
+#问题根因
+自 `br_vlan_rtnl_init()` 引入以来，代码一直忽略 `rtnl_register_module()` 的返回值。当注册失败时（常见于 syzkaller 测试触发 OOM 或模块自动加载时），函数未向上层返回错误，导致 `br_netlink_init()` 误认为初始化成功，破坏了模块 rtnetlink 功能的完整性。
+
+#解决方案
+修改 `br_vlan_rtnl_init()` 函数，将原来独立调用的 `rtnl_register_module()` 替换为 `rtnl_register_many()` 接口，并使其返回注册结果。同时在 `br_netlink_init()` 中检查该返回值，若失败则跳转到错误处理路径（`goto out`），确保初始化失败时能正确回滚并报错。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31b5755b77f834548558b4a7db6b1699016dce93

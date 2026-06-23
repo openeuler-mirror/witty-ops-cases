@@ -1,0 +1,20 @@
+#标题
+x86/sev: SME 启动阶段全局变量引用未使用 RIP_REL_REF 导致潜在崩溃风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SEV/SME 启动早期代码执行过程中，可能发生内核崩溃。该问题源于对全局变量的位置依赖引用，属于早期启动阶段的内存访问错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的修复提交（1c811d403afd）中引入了 `RIP_REL_REF()` 宏用于强制对全局变量进行 RIP-relative（相对指令指针）访问，以解决早期启动代码中的位置依赖问题。但在 `sme_enable()` 函数中，对 `physical_mask` 和 `cc_vendor` 这两个全局变量的赋值操作未使用该宏。由于早期启动阶段代码运行环境特殊，直接访问全局变量可能导致内存访问异常或崩溃。
+
+#解决方案
+在 `arch/x86/mm/mem_encrypt_identity.c` 的 `sme_enable()` 函数中，补全了对 `physical_mask` 和 `cc_vendor` 变量的 `RIP_REL_REF()` 宏调用。将 `physical_mask &= ~me_mask;` 修改为 `RIP_REL_REF(physical_mask) &= ~me_mask;`，将 `cc_vendor = CC_VENDOR_AMD;` 修改为 `RIP_REL_REF(cc_vendor) = CC_VENDOR_AMD;`，以此强制使用 RIP-relative 访问，防止崩溃问题再次发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4347ea1e7e6ec45941d2077ab084819d0c2a974f

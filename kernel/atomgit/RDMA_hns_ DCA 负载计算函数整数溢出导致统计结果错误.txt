@@ -1,0 +1,21 @@
+#标题
+RDMA/hns: DCA 负载计算函数整数溢出导致统计结果错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hns RoCE 驱动的 DCA（Dynamic Connection Attachment）功能中，通过 debugfs 查看内存池统计信息或上下文内存负载时，由于计算过程中的整数溢出，导致显示的负载百分比数值错误。此外，该故障可能导致内存分配相关变量溢出，影响统计信息的准确性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `calc_loading_percent()` 函数中，参与计算的变量（如 `all_pages`、`free_pages` 等）被定义为 `u32` 类型。当两个 `u32` 类型的数值相乘时结果可能超出 32 位整数的表示范围，导致整数溢出。同时，`total` 和 `free` 虽为 `size_t` 类型，但在内存页数统计和百分比计算过程中，若数据量较大，`alloc_pages` 和 `free_pages` 也存在溢出风险，进而导致计算出错误的负载百分比。
+
+#解决方案
+1. 将 `calc_loading_percent()` 函数内部的 `all_pages`、`used_pages`、`free_pages` 以及 `scale` 变量类型从 `u32` 修改为 `u64`，避免乘法运算时的整数溢出。
+2. 修改异常处理逻辑，将 `percent` 初始化为 `U64_MAX`，并在调用该函数的 `dca_print_pool_stats` 和 `dca_stats_ctx_mem_in_seqfile` 接口中增加返回值检查。若返回值为 `U64_MAX`，直接返回不再打印，从而避免输出错误的统计结果。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c66cd73ad8d08ca2e14f52e3e4f8a3152bc91ebe

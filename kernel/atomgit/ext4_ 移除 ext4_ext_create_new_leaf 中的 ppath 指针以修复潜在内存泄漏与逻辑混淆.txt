@@ -1,0 +1,23 @@
+#标题
+ext4: 移除 ext4_ext_create_new_leaf 中的 ppath 指针以修复潜在内存泄漏与逻辑混淆
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ext4 文件系统执行涉及 extent 分裂或深度增长的特定操作时（如写入大文件导致树结构变化），内核可能出现内存泄漏，导致系统内存资源逐渐耗尽。此外，代码中 `path` 与 `ppath` 的混用增加了维护难度和潜在逻辑错误的风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ext4_ext_create_new_leaf` 函数中，使用了双重指针 `ppath` 与局部指针 `path` 混合管理 extent 路径。当函数内部调用 `ext4_ext_split` 或 `ext4_ext_grow_indepth` 失败并退出时，原有的错误处理逻辑直接跳转到 `out` 标签，未调用 `ext4_free_ext_path(path)` 释放已分配的路径内存，导致了内存泄漏。此外，这种指针传递方式使得代码逻辑复杂且难以阅读。
+
+#解决方案
+重构 `ext4_ext_create_new_leaf` 函数，移除 `ppath` 参数，统一使用 `path` 进行传递：
+1. 修改函数返回值为 `struct ext4_ext_path *`，直接返回更新后的 path 或错误指针。
+2. 在错误处理路径（`errout` 标签）显式调用 `ext4_free_ext_path(path)` 确保内存释放。
+3. 调整其调用者（如 `ext4_ext_insert_extent`）以适配新的函数接口，正确处理返回的 path 指针与错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bcd0f2049489c86a34cc3c9e4493cd23c764df35

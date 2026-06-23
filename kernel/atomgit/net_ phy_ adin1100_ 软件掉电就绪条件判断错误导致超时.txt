@@ -1,0 +1,21 @@
+#标题
+net: phy: adin1100: 软件掉电就绪条件判断错误导致超时
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `ifdown eth0` 关闭网络接口时，驱动尝试使 PHY 进入软件掉电模式失败，报错 `-110` (ETIMEDOUT)，导致链路关闭操作无法正常完成。
+
+#主要错误日志
+- `macb f802c000.ethernet eth0: Link is Down`
+- `ADIN1100 f802c000.ethernet-ffffffff:01: adin_set_powerdown_mode failed: -110`
+
+#问题根因
+在 `adin_set_powerdown_mode` 函数中，轮询检查掉电状态是否就绪的条件逻辑错误。代码将写入控制寄存器的值 `val`（开启时为 0x01）与状态寄存器中读取的就绪标志位 `ADIN_CRSM_SFT_PD_RDY`（值为 0x02）直接比较。由于 0x01 不等于 0x02，导致条件永远无法满足，触发超时。
+
+#解决方案
+修改 `phy_read_mmd_poll_timeout` 的判断条件，不再对比写入值，而是检查状态寄存器中的 `ADIN_CRSM_SFT_PD_RDY` 位是否符合预期的使能状态（`!!(ret & ADIN_CRSM_SFT_PD_RDY) == en`），正确判断 PHY 是否已进入或退出掉电模式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4d4d131a8b569052645a708057005dc0131976d2

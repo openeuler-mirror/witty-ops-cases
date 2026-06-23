@@ -1,0 +1,20 @@
+#标题
+rtc: pcf85063: 修复 PCF85063 NVMEM 读取时的潜在越界写入
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读写 PCF85063 RTC 设备的 NVMEM 时，如果用户态或调用者提供的缓冲区大小小于 4 字节（例如 1 字节），内核会发生越界写入，导致栈损坏或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+NVMEM 接口支持可变长度的缓冲区，而底层的 regmap 接口操作的是固定大小的存储（通常期望 unsigned int 大小）。原代码直接将 `val` 指针传递给 `regmap_read`，当 `val` 指向的缓冲区小于 `unsigned int` 的大小时，`regmap_read` 会写入超出缓冲区范围的内存，造成 OOB（Out-of-Bounds）写入。
+
+#解决方案
+引入一个中间变量 `unsigned int tmp` 作为 `regmap_read` 的存储目标，确保 regmap 操作的内存安全。读取成功后，仅将 `tmp` 的低 8 位数据拷贝到 `val` 指向的实际缓冲区中，从而避免越界写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fc30b6e71dbdb451337a9bf921f8e785ea7b722a

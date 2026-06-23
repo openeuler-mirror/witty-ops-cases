@@ -1,0 +1,47 @@
+#标题
+f2fs: 修复潜在死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在运行过程中触发死锁，导致相关进程（如 kswapd0）处于不可中断状态或系统挂起。syzbot 报告了具体的锁链冲突，提示 "possible unsafe locking scenario" 和 "*** DEADLOCK ***"。该问题涉及内存回收路径与文件系统错误处理路径之间的锁竞争。
+
+#主要错误日志
+```
+Chain exists of:
+  &sbi->cp_rwsem --> fs_reclaim --> sb_internal#2
+
+ Possible unsafe locking scenario:
+
+       CPU0                    CPU1
+       ----                    ----
+  rlock(sb_internal#2);
+                               lock(fs_reclaim);
+                               lock(sb_internal#2);
+  rlock(&sbi->cp_rwsem);
+
+ *** DEADLOCK ***
+
+3 locks held by kswapd0/73:
+ #0: ffffffff8e247a40 (fs_reclaim){+.+.}-{0:0}, at: balance_pgdat mm/vmscan.c:7015 [inline]
+ #0: ffffffff8e247a40 (fs_reclaim){+.+.}-{0:0}, at: kswapd+0x951/0x2800 mm/vmscan.c:7389
+ #1: ffff8880118400e0 (&type->s_umount_key#50){.+.+}-{4:4}, at: super_trylock_shared fs/super.c:562 [inline]
+ #1: ffff8880118400e0 (&type->s_umount_key#50){.+.+}-{4:4}, at: super_cache_scan+0x91/0x4b0 fs/super.c:197
+ #2: ffff888011840610 (sb_internal#2){.+.+}-{0:0}, at: f2fs_evict_inode+0x8d9/0x1b60 fs/f2fs/inode.c:890
+```
+
+#问题根因
+死锁源于 f2fs 处理错误时调用了同步函数 `f2fs_handle_error`，该函数内部调用 `f2fs_record_errors` 并试图获取 `sb_lock` 锁。这导致了复杂的锁依赖链：
+1. 在内存回收路径中，`fs_reclaim` (Lock A) 被持有，随后尝试获取 `sb_internal` (Lock B) 和 `cp_rwsem` (Lock C)。
+2. 在其他路径（如 ioctl 或 open）中，先持有 `cp_rwsem` (Lock C)，调用 `f2fs_handle_error` 时尝试获取 `sb_lock` (Lock D)，而获取 `sb_lock` 过程中可能触发内存分配进而请求 `fs_reclaim` (Lock A)。
+这就形成了 `fs_reclaim` -> `sb_internal` -> `cp_rwsem` -> `sb_lock` -> `fs_reclaim` 的循环依赖，从而引发死锁。
+
+#解决方案
+将 `f2fs_handle_error` 的实现改为异步方式以避免死锁：
+1. 删除原有的同步实现 `f2fs_handle_error` 及其调用的 `f2fs_record_errors` 函数（该函数负责获取 `sb_lock` 并同步提交超级块）。
+2. 将原有的异步实现 `f2fs_handle_error_async` 重命名为 `f2fs_handle_error`。
+3. 更新所有调用点，统一使用新的（异步）`f2fs_handle_error` 函数，确保在错误记录过程中不会尝试获取可能导致死锁的锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b3332db762cc2008b2320915efb6e5378c721396

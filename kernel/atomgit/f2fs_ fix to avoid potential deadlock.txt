@@ -1,0 +1,20 @@
+#标题
+f2fs: fix to avoid potential deadlock
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 F2FS 文件系统进行解压缩操作（decompress cluster）时，若解压缩失败且处理流程处于中断上下文（irq context），系统可能发生潜在死锁，导致系统挂起或相关进程无法继续执行。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `f2fs_decompress_cluster` 函数中，当解压缩失败时，代码逻辑尝试根据 `in_task` 变量判断当前上下文。原实现中，若处于中断上下文（`!in_task`），会调用 `f2fs_handle_error_async` 函数。该异步处理函数内部实现最终移除了对 `sb_lock` 信号量的保护或相关上下文检查，导致在中断上下文中尝试获取 `sb_lock` 信号量（通过 `f2fs_commit_super` 写入超级块），从而引发死锁。
+
+#解决方案
+移除 `f2fs_handle_error_async` 函数及其调用逻辑。修改 `f2fs_decompress_cluster` 中的错误处理路径，不再区分是否在中断上下文，统一调用 `f2fs_handle_error` 函数。该修复确保了在中断上下文中不会陷入可能导致死锁的路径，从而避免了潜在的系统挂起风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c30a9924c28c2d92776649b89107878c16d331b0

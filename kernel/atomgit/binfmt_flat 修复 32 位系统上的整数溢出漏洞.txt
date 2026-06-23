@@ -1,0 +1,20 @@
+#标题
+binfmt_flat 修复 32 位系统上的整数溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 32 位系统上加载损坏或构造特殊的 flat 格式二进制文件时，内核可能发生整数溢出，导致后续处理逻辑异常，严重时可引发内存越界访问或系统崩溃。
+
+#主要错误日志
+- pr_err("bad header\n");
+
+#问题根因
+在 `fs/binfmt_flat.c` 的 `load_flat_file` 函数中，原有代码对二进制文件头部的长度字段（text_len, data_len, bss_len, stack_len, full_data）进行了 28 位溢出校验，但遗漏了对 `relocs`（重定位计数）字段的校验。在 32 位系统上，若 `relocs` 值过大（超过 28 位表示范围），会导致整数溢出，从而绕过安全检查引发后续错误。
+
+#解决方案
+在溢出校验的条件判断语句中增加对 `relocs` 变量的检查，即修改为 `if ((text_len | data_len | bss_len | stack_len | relocs | full_data) >> 28)`，确保所有关键长度字段均未超过合理范围，防止整数溢出风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e44cc18d0cf8ce18b7974c6ed35c16aef9e1ab27

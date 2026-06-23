@@ -1,0 +1,29 @@
+#标题
+MPTCP sockopt 自测试错误信息打印与变量引用缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 MPTCP sockopt 自测试时，若出现计数器数值不匹配的情况，错误日志存在以下问题：
+1. 差异值未打印：错误信息格式串中缺少差异值参数，导致调试困难。
+2. 变量引用错误：在 `mptcpi_bytes_acked` 校验失败时，错误地使用了发送字节数变量 `ret2` 来填充期望值，而非正确的接收字节数变量 `ret`。
+3. 差异计算偏差：`mptcpi_rcv_delta` 的差异计算存在 off-by-one 错误，未与校验条件中的期望值保持一致。
+
+#主要错误日志
+未知
+
+#问题根因
+测试工具代码逻辑存在缺陷：
+1. `xerror` 函数调用时，格式字符串中未包含 `diff` 字段，导致传入的差异值参数无法显示。
+2. `mptcpi_bytes_acked` 检查分支中，错误地复用了 `ret2` 变量，导致错误日志中的期望值与实际期望不符。
+3. `mptcpi_rcv_delta` 差异计算公式为 `s.mptcpi_rcv_delta - ret`，但正确期望值为 `ret + 1`，导致计算结果偏差 1。
+
+#解决方案
+修正 selftests 测试代码中的格式字符串与变量引用：
+1. 在相关 `xerror` 调用中补全 `, diff %" PRId64` 格式字符串，确保差异值被正确打印。
+2. 修正 `mptcpi_bytes_acked` 校验分支，将期望值与差异计算中的 `ret2` 替换为 `ret`。
+3. 修正 `mptcpi_rcv_delta` 差异计算公式为 `s.mptcpi_rcv_delta - (ret + 1)`，确保与校验逻辑一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9b98f9582ed045fbebcace961268657da6f37d30

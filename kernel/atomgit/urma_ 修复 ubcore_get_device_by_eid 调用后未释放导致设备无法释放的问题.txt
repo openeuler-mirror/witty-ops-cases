@@ -1,0 +1,23 @@
+#标题
+urma: 修复 ubcore_get_device_by_eid 调用后未释放导致设备无法释放的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+调用 `ubcore_get_device_by_eid` 获取设备后，因缺少对应的 put 操作，导致设备引用计数未归零，设备无法被正常释放或注销，造成内存泄漏或设备卸载失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `get_physical_device` 和 `ubagg_nl_handle_user_msg` 函数中，调用了 `ubcore_get_device_by_eid` 获取设备指针，但在使用完毕后未调用相应的 put 接口（如 `ubagg_put_ubcore_device`）释放引用计数。这导致设备引用计数持续持有，设备无法释放。
+
+#解决方案
+在相关代码路径中补充设备引用计数的释放操作：
+1. 修改 `ubagg_put_ubcore_device` 函数的可见性，将其从 `static` 改为全局可见，并在头文件中声明。
+2. 在 `drivers/ub/urma/ubagg/ubagg_ioctl.c` 的 `get_physical_device` 函数循环中，处理完设备后增加 `ubagg_put_ubcore_device(dev)` 调用。
+3. 在 `drivers/ub/urma/ubagg/ubagg_netlink.c` 的 `ubagg_nl_handle_user_msg` 函数返回前，增加 `ubagg_put_ubcore_device(dev)` 调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2b95c4269bb717d800a13cf4d1fa0fd7b8b97fcf

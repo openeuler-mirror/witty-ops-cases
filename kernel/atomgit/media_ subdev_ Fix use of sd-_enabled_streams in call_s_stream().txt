@@ -1,0 +1,20 @@
+#标题
+media: subdev: Fix use of sd->enabled_streams in call_s_stream()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核子设备流处理逻辑中存在字段使用冲突。`call_s_stream()` 与 `v4l2_subdev_enable/disable_streams_fallback()` 函数共同操作 `sd->enabled_streams` 字段来跟踪流状态。虽然当前实现下双方设置的值相同，暂未触发运行时故障，但这种共享内部状态的设计是错误的，容易在未来修改逻辑时引发难以预测的 Bug。
+
+#主要错误日志
+未知
+
+#问题根因
+`call_s_stream()` 函数错误地使用了 `sd->enabled_streams` 字段来跟踪流是否已启用。然而，该字段已被 `v4l2_subdev_enable/disable_streams_fallback()` 函数使用。由于 fallback 函数会调用 `call_s_stream()`，导致两个字段使用者产生冲突。这属于状态管理逻辑缺陷，违反了字段专用的设计原则。
+
+#解决方案
+在 `struct v4l2_subdev` 结构体中新增专用的布尔类型字段 `s_stream_enabled`，专门供 `call_s_stream()` 内部使用以跟踪流状态。同时修改 `call_s_stream()` 函数逻辑，将对 `sd->enabled_streams` 的读写操作替换为对 `sd->s_stream_enabled` 的操作，从而解耦两个函数的状态管理，消除潜在的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f19295c49ca1a2b7b22931ad9dbc72faafa3acf7

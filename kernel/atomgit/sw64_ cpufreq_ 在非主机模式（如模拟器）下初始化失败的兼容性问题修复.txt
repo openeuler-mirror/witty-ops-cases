@@ -1,0 +1,21 @@
+#标题
+sw64: cpufreq: 在非主机模式（如模拟器）下初始化失败的兼容性问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Sunway 平台的模拟器环境或非主机模式下，cpufreq 驱动加载逻辑存在误判。原本代码仅通过 `is_in_guest()` 判断是否为客户机，导致不支持 cpufreq 的模拟器环境未被正确识别，进而可能导致驱动在不支持的平台上尝试初始化或报错退出。
+
+#主要错误日志
+- `cpufreq driver of Sunway platforms is only supported in host mode`（修复后的提示日志）
+- 推断修复前日志：`Now sw_64 CPUFreq does not support virtual machines`
+
+#问题根因
+原有的判断逻辑 `if (is_in_guest())` 仅覆盖了虚拟机场景，未全面覆盖非主机模式的场景。对于不支持 cpufreq 的模拟器环境，该条件判断为假，导致程序继续执行后续初始化流程，无法正确返回 `-ENODEV` 及时终止驱动加载。
+
+#解决方案
+修改 drivers/cpufreq/sunway-cpufreq.c 中的判断条件，将 `is_in_guest()` 替换为 `!is_in_host()`。该修改确保只有在主机模式下才进行 cpufreq 驱动的初始化，所有非主机模式（包括虚拟机和特定模拟器）均直接返回 `-ENODEV`，避免在不支持的环境中加载驱动。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ed9ff85bf291433a646c8de628e4b09a0b616ac

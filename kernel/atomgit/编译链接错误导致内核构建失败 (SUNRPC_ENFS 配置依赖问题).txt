@@ -1,0 +1,36 @@
+#标题
+编译链接错误导致内核构建失败 (SUNRPC_ENFS 配置依赖问题)
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 `CONFIG_SUNRPC_ENFS=m`、`CONFIG_ENFS=m` 且 `CONFIG_NFS=y` 的编译场景下，内核构建过程中出现链接错误，提示 `rpc_multipath_*` 相关函数存在未定义的引用，导致构建无法完成。
+
+#主要错误日志
+- ld: net/sunrpc/clnt.c:960: undefined reference to `rpc_multipath_ops_releas_clnt'
+- ld: net/sunrpc/clnt.c:1105: undefined reference to `rpc_multipath_ops_dec_queuelen'
+- ld: net/sunrpc/clnt.c:1832: undefined reference to `rpc_multipath_ops_task_need_call_start_again'
+- ld: net/sunrpc/clnt.c:2700: undefined reference to `rpc_multipath_ops_update_rpc_program'
+- ld: include/linux/sunrpc/sunrpc_enfs_adapter.h:73: undefined reference to `rpc_clnt_has_multipath'
+- ld: net/sunrpc/clnt.c:2559: undefined reference to `rpc_multipath_ops_failover_handle'
+- ld: net/sunrpc/clnt.c:1090: undefined reference to `rpc_multipath_ops_inc_queuelen'
+- ld: net/sunrpc/clnt.c:1166: undefined reference to `rpc_multipath_ops_set_transport'
+- ld: net/sunrpc/clnt.c:500: undefined reference to `rpc_multipath_ops_create_clnt'
+- ld: net/sunrpc/xprt.c:615: undefined reference to `rpc_multipath_ops_adjust_task_timeout'
+- ld: net/sunrpc/xprt.c:286: undefined reference to `rpc_multipath_ops_adjust_task_timeout'
+- ld: net/sunrpc/xprt.c:353: undefined reference to `rpc_multipath_ops_adjust_task_timeout'
+- ld: net/sunrpc/xprt.c:2114: undefined reference to `rpc_multipath_free_servername'
+- ld: net/sunrpc/xprt.c:1896: undefined reference to `rpc_multipath_ops_init_task_req'
+- ld: net/sunrpc/xprt.c:1972: undefined reference to `rpc_multipath_ops_xprt_iostat'
+- ld: net/sunrpc/xprt.c:2078: undefined reference to `rpc_multipath_set_servername'
+- ld: net/sunrpc/xprt.c:2088: undefined reference to `rpc_multipath_ops_create_xprt'
+
+#问题根因
+当 `CONFIG_NFS=y` 时，NFS 客户端代码被编译进内核镜像，它会调用 `sunrpc` 中的接口。若 `CONFIG_SUNRPC_ENFS` 配置为模块，相关的符号和代码不会链接进内核核心镜像，从而导致 NFS 核心代码在链接阶段找不到 `rpc_multipath_*` 等符号定义，引发“undefined reference”错误。
+
+#解决方案
+修改 `net/sunrpc/Kconfig` 文件，将 `CONFIG_SUNRPC_ENFS` 的配置类型从 `tristate`（三态：y/m/n）改为 `bool`（布尔：y/n），确保其只能编译进内核或禁用，从而避免模块化配置导致的符号缺失问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2b5eae5c990f2df1de43dbae22fd46ebab87a3af

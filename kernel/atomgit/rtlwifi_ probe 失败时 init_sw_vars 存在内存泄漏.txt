@@ -1,0 +1,20 @@
+#标题
+rtlwifi: probe 失败时 init_sw_vars 存在内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 rtlwifi 驱动在 probe 阶段调用 `ieee80211_register_hw` 失败时，此前在 `init_sw_vars` 函数中分配的固件内存无法被释放，导致内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `rtl_usb_probe` 函数中，如果 `ieee80211_register_hw` 调用失败，代码会跳转到 `error_init_vars` 标签进行错误处理。然而，该错误处理路径仅调用了 `wait_for_completion` 等待固件加载完成，却遗漏了调用 `deinit_sw_vars` 来释放 `init_sw_vars` 中分配的资源（如内存），导致内存泄漏。
+
+#解决方案
+在 `error_init_vars` 标签的错误处理路径中，补充调用 `rtlpriv->cfg->ops->deinit_sw_vars(hw)`，确保在 probe 失败时正确释放 `init_sw_vars` 分配的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f8a1d1eb35109d4bb46bbdf2f29feedbf964d70d

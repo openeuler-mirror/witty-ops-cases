@@ -1,0 +1,24 @@
+#标题
+Xen privcmd 驱动在非 dom0 环境下未限制目标域导致 Secure Boot 安全风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 Secure Boot 的系统中，当 Xen 以非 dom0（即 domU 模式）运行时，privcmd 驱动未对 hypercall 的目标域进行限制。这允许用户空间向任意非当前域发起 hypercall，破坏了域间的隔离性，导致存在安全泄露风险。此外，若未找到目标域配置，驱动会阻塞所有 hypercall 请求。
+
+#主要错误日志
+- `pr_err("No target domain found, blocking all hypercalls\n");`
+- `pr_warn("Kernel is locked down, parameter \"unrestricted\" ignored\n");`
+
+#问题根因
+在非 dom0 环境下，privcmd 驱动初始化时未对 hypercall 的目标域进行强制限制。原有逻辑中 `data->domid` 被初始化为 `DOMID_INVALID`（表示无限制），导致用户进程可以对非授权的目标域执行操作，绕过了 Secure Boot 的完整性保护机制。同时系统缺乏针对 "Xen guest user action" 的锁定状态检查。
+
+#解决方案
+1. **增加内核锁定原因**：在 `security/security.c` 中新增 `LOCKDOWN_XEN_USER_ACTIONS` 锁定原因，用于标识 Xen 用户动作的受限状态。
+2. **限制目标域**：引入 `target_domain` 全局变量，在非 dom0 模式下通过 `restrict_driver` 函数从 Xenstore 读取 "target" 域 ID，并将其设为默认目标域，替代原有的 `DOMID_INVALID`。
+3. **阻塞与同步机制**：若未找到目标域，打印错误日志并阻塞所有 hypercall；利用等待队列 `restrict_wait_wq` 确保在确定目标域策略前阻塞 `privcmd_open` 调用。
+4. **参数控制**：新增 `unrestricted` 模块参数，允许在非锁定状态下取消限制；若内核处于锁定状态，该参数将被忽略并打印警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f26278ad8e1e19dc9db619832d04a4eb9dfcf716

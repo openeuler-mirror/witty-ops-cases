@@ -1,0 +1,25 @@
+#标题
+crypto: ccp: Hygon平台宏重定义导致编译失败及SM4算法块大小使用错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 Hygon 平台上编译内核时，出现宏 `RI_XXX_PRESENT`（如 `RI_ECC_PRESENT`、`RI_SM4GCM_PRESENT` 等）重定义的编译错误，导致构建失败。
+2. SM4-XTS 算法实现中错误使用了 AES 的块大小常量，可能导致加密运算逻辑错误或内存越界。
+
+#主要错误日志
+SM4 GCM CCP ENGINE NOT SUPPORTED!
+SM4 XTS CCP ENGINE NOT SUPPORTED!
+
+#问题根因
+1. **宏命名冲突**：Hygon CCP 驱动定义的宏（如 `RI_ECC_PRESENT`、`RI_AES_PRESENT` 等）与 AMD 原生驱动中的宏名称相同但数值含义不同，导致在混合编译或头文件包含时出现“redefined”错误。
+2. **常量误用**：在 `ccp_run_sm4_cmd` 函数的 XTS 模式处理逻辑中，调用 `crypto_xor` 时错误地使用了 `AES_BLOCK_SIZE`（16字节），而 SM4 算法的块大小实际为 `SM4_BLOCK_SIZE`，导致数据块处理尺寸不匹配。
+
+#解决方案
+1. **重命名宏定义**：将 Hygon 相关的特性宏统一添加 `HYGON_` 前缀（例如将 `RI_ECC_PRESENT` 改为 `HYGON_RI_ECC_PRESENT`），避免与 AMD 定义冲突，并更新所有引用处。
+2. **修正块大小常量**：将 SM4-XTS 模式处理流程中的 `AES_BLOCK_SIZE` 全部替换为 `SM4_BLOCK_SIZE`，确保算法块大小正确。
+3. **调整配置规则**：修改 `anolis/config/examination` 中 x86 架构的 `CONFIG_SM4` 配置规则，由模块化（m）改为内建。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6866fb8200ba6895578bd1cb6253f97e9d7a1629

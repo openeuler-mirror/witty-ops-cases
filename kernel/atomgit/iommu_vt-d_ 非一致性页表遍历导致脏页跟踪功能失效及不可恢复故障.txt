@@ -1,0 +1,22 @@
+#标题
+iommu/vt-d: 非一致性页表遍历导致脏页跟踪功能失效及不可恢复故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IOMMU 页表遍历处于非一致性模式的场景下，若配置并开启了脏页跟踪功能，会导致 IOMMU 硬件在尝试原子更新页表项中的 A/D 位时触发不可恢复故障，造成系统异常或功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+脏页跟踪依赖于 IOMMU 原子更新页结构条目中的脏位，此操作要求页结构内存在 IOMMU 和 CPU 之间必须是一致的。如果 IOMMU 页表遍历是非一致性的，脏页跟踪将无法正常工作。
+根据 Intel VT-d 规范第 3.10 节 "Snoop Behavior" 描述：“重映射硬件遇到需要原子更新未被侦测的页结构条目中的 A/EA/D 位时，将导致不可恢复故障”。
+代码逻辑中，`ssads_supported` 的判断仅检查了 `ecap_slads`，遗漏了对 `ecap_smpwc`（Page Walk Coherency，页表遍历一致性）的检查，导致在不支持一致性的硬件上错误地开启了脏页跟踪支持。
+
+#解决方案
+修改 `ssads_supported` 宏定义，增加对 `ecap_smpwc` 的检查条件。仅当同时支持 `ecap_slads` 和 `ecap_smpwc` 时，才标记支持 SSADS（从而允许脏页跟踪），防止在不支持页表遍历一致性的硬件上启用该功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/66975dab5458d11d5f6ee70a62d6fca87b779f90

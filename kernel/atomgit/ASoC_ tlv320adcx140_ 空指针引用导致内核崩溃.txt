@@ -1,0 +1,24 @@
+#标题
+ASoC: tlv320adcx140: 空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 tlv320adcx140 音频编解码器驱动执行电源控制流程（如断电时）写入寄存器失败的情况下，内核尝试访问未初始化的指针 `component`，导致发生空指针引用错误，引发内核 panic 或 oops。
+
+#主要错误日志
+推断：
+Internal error: Oops: 00000000 [#1] PREEMPT SMP
+Call trace:
+ adcx140_pwr_ctrl+0xXX/0xXX [snd_soc_tlv320adcx140]
+
+#问题根因
+驱动私有数据结构 `adcx140_priv` 中的 `component` 指针成员定义后从未被赋值（初始化）。在 `adcx140_pwr_ctrl` 函数中，代码错误地引用了该空指针 `component->dev` 来打印错误日志，导致空指针引用崩溃。实际上，`dev` 指针已经直接存在于 `adcx140_priv` 结构体中，无需通过 `component` 间接获取。
+
+#解决方案
+1. 删除 `adcx140_priv` 结构体中未使用的 `component` 成员变量。
+2. 修改 `adcx140_pwr_ctrl` 函数中的 `dev_err` 调用，将 `component->dev` 替换为 `adcx140->dev`，直接使用私有数据中已有的设备指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bdd4345f9b15c96288d1db554dd98036531cc884

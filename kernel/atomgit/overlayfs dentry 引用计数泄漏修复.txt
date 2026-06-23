@@ -1,0 +1,20 @@
+#标题
+overlayfs dentry 引用计数泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 overlayfs 挂载期间，若违规操作将 workdir 移动到 lowerdir 下（即修改底层层结构），会触发 dentry 引用计数泄漏。该问题由 syzbot 测试发现。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ovl_copy_up_workdir` 函数中，当检测到临时文件或工作目录被非法移动（即 `temp->d_parent != c->workdir`）时，代码逻辑直接跳转到 `unlock` 标签并返回 `-EIO` 错误，但遗漏了执行 `dput(temp)` 操作来释放之前获取的 dentry 引用，从而导致 dentry 引用计数泄漏。
+
+#解决方案
+在检测到 workdir 或 temp 发生移动的异常处理分支中，增加 `dput(temp)` 调用，确保在返回 `-EIO` 错误前正确释放 dentry 引用，避免内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5e77697430d2e71307fa691ce8678889f00f89d6

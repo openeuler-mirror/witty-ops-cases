@@ -1,0 +1,40 @@
+#标题
+MIPS: lantiq: falcon: sysctrl 内存请求检查逻辑错误导致构建失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MIPS lantiq falcon 平台编译内核时，构建过程因编译器报错中断。编译器检测到代码中将指针与整数零进行有序比较，触发了 `-Werror=extra` 相关的错误选项，导致编译失败。
+
+#主要错误日志
+```
+arch/mips/lantiq/falcon/sysctrl.c:214:50: error: ordered comparison of pointer with integer zero [-Werror=extra]
+  214 |                                 res_status.name) < 0) ||
+      |                                                  ^
+arch/mips/lantiq/falcon/sysctrl.c:216:47: error: ordered comparison of pointer with integer zero [-Werror=extra]
+  216 |                                 res_ebu.name) < 0) ||
+      |                                               ^
+arch/mips/lantiq/falcon/sysctrl.c:219:50: error: ordered comparison of pointer with integer zero [-Werror=extra]
+  219 |                                 res_sys[0].name) < 0) ||
+      |                                                  ^
+arch/mips/lantiq/falcon/sysctrl.c:222:50: error: ordered comparison of pointer with integer zero [-Werror=extra]
+  222 |                                 res_sys[1].name) < 0) ||
+      |                                                  ^
+arch/mips/lantiq/falcon/sysctrl.c:225:50: error: ordered comparison of pointer with integer zero [-Werror=extra]
+  225 |                                 res_sys[2].name) < 0))
+      |
+```
+
+#问题根因
+`request_mem_region()` 函数在内存请求失败时返回的是 `NULL` 指针，而非负数错误码。原代码使用 `if (request_mem_region(...) < 0)` 进行判断，这导致了两个问题：
+1. 语义错误：试图将指针类型返回值与整数 0 进行小于比较，这在逻辑上无法正确捕获内存请求失败的情况（因为通常指针地址值不为负，且此类比较在语义上是错误的）。
+2. 编译错误：编译器检测到指针与整数的有序比较，视为潜在的错误用法，因开启 `-Werror` 而直接中止构建。
+
+#解决方案
+修正 `request_mem_region()` 返回值的检查逻辑。将错误的 `< 0` 判断修改为正确的 `!` 运算（即检查返回值是否为 NULL）。修改后的代码形如：
+`if (!request_mem_region(...))`
+这既解决了编译错误，也正确处理了内存请求失败时的异常流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ea77a4ff387eee104cadbec131c4e129912cd11

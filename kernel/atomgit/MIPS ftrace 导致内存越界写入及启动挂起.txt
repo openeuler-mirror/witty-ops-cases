@@ -1,0 +1,20 @@
+#标题
+MIPS ftrace 导致内存越界写入及启动挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核位于 32 位地址空间之外（大于 32 位地址）时，ftrace 机制会触发缓冲区溢出，导致 `__read_mostly` 区段的变量（如 `__cpu_primary_thread_mask`）被破坏，进而造成系统在启动极早期发生挂起。
+
+#主要错误日志
+ftrace: mcount address beyond 32 bits is not supported (%lX)
+
+#问题根因
+自 commit e424054000878 引入变更后，ftrace 代码使用 `UASM_i_LA` 宏来生成加载 `_mcount` 地址的指令，并假定该宏生成的指令数量不超过 2 条（对应存储在 `int[2]` 数组中）。然而，当 `_mcount` 地址超过 32 位时，该宏会生成多于 2 条的指令，导致写入越界，覆盖了相邻内存变量，引发内存破坏。
+
+#解决方案
+在 `ftrace_dyn_arch_init_insns` 函数中增加地址空间检查，通过 `uasm_in_compat_space_p` 判断 MCOUNT_ADDR 是否位于 32 位兼容地址空间内。若不在 32 位空间内，则跳过指令生成以防止缓冲区溢出，并打印警告日志。同时，在 `ftrace_make_call` 中增加保护逻辑，若目标代码不在内核核心代码段且地址不在兼容空间，则直接返回 `-EFAULT` 避免错误调用，牺牲部分 ftrace 功能以换取系统稳定性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/696c8ed71428b15a086b57e392f67b1e1b6bfd12

@@ -1,0 +1,23 @@
+#标题
+Hyper-V guest panic 通知在 kmsg_dump_get_buffer 失败时缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 Hyper-V 客户机内核发生 panic 时，如果 `kmsg_dump_get_buffer()` 返回错误或未能获取到消息字节（例如 bytes_written 为 0），`hv_kmsg_dump()` 会直接跳过后续流程返回。这导致 Hyper-V 宿主机无法收到关于客户机 panic 状态的通知，处于不确定状态，无法正确感知客户机已崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+`hv_kmsg_dump()` 函数原本的逻辑中，如果 `kmsg_dump_get_buffer()` 未写入任何字节（`!bytes_written`），函数会直接 return。这种处理方式是不正确的，因为即使没有获取到 dmesg 数据，也应该向 Hyper-V 宿主机发送 panic 通知，告知其客户机已发生崩溃。此外，变量 `bytes_written` 在 `kmsg_dump_get_buffer()` 失败时可能未被正确设置（虽然当前内核实现中可能存在副产物赋值，但在逻辑上不应依赖），存在使用未初始化变量的风险。
+
+#解决方案
+修改 `hv_kmsg_dump()` 函数逻辑：
+1. 移除 `if (!bytes_written) return;` 的判断，确保即使没有获取到消息数据，也能继续执行后续的 panic 通知流程。
+2. 在调用 `kmsg_dump_get_buffer()` 之前显式初始化 `bytes_written` 为 0，以消除静态检查工具警告并增加代码健壮性。
+3. 调整 `HV_MSR_CRASH_P3` 寄存器的设置逻辑，仅当 `bytes_written` 不为 0 时才写入 panic 页面的物理地址，否则写入 0。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aa2ec108dc92ebccace650754332d1727617b504

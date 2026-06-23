@@ -1,0 +1,20 @@
+#标题
+selftests/tracing 子系统事件测试偶发误报失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 ftrace selftests 中的 `subsystem-enable.tc` 测试用例时，测试脚本偶发性地报告失败。测试逻辑预期记录到至少 3 种不同的 sched 事件，但实际检查时统计到的事件数量少于 3，导致脚本退出并报错 "at least fork, exec and exit events should be recorded"。
+
+#主要错误日志
+at least fork, exec and exit events should be recorded
+
+#问题根因
+原测试脚本使用 `head -n 100 trace` 读取 trace 文件并通过管道进行事件统计。由于 trace 缓冲区的特性，在读取的瞬间缓冲区可能尚未积累足够的事件数据，或者读取的固定行数内未能覆盖足够多的事件类型，导致统计出的事件数量小于 3，从而引发误报。即读取操作可能过早结束或数据不完整，导致测试结果不可靠。
+
+#解决方案
+修改测试脚本 `tools/testing/selftests/ftrace/test.d/event/subsystem-enable.tc`，移除固定的 `head -n 100` 读取方式，引入 `check_unique` 函数。该函数持续读取 trace 文件流，动态统计不同的事件名称，一旦统计到 3 种不同事件立即退出读取并返回计数。此方法保证了在缓冲区有数据流出的情况下能够准确捕获到足够的事件类型，避免了因固定行数读取导致的数据不足或读取时机问题，从而消除了测试误报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e46fbbc0ad301c3517340bf966d39b8493a2ebb0

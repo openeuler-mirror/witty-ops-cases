@@ -1,0 +1,22 @@
+#标题
+exFAT文件系统IO错误时日志过量打印导致读操作严重卡顿
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当exFAT文件系统设置4MB的read_ahead_size时，若在读操作过程中移除存储设备，最后一次read系统调用会消耗约150秒才能返回（正常应为毫秒级或快速返回错误）。系统响应严重卡顿。应用层strace显示read返回EIO错误，但耗时极长。
+
+#主要错误日志
+[  333.696603] exFAT-fs (vdb): error, failed to access to FAT (entry 0x0000d780, err:-5)
+[  333.697378] exFAT-fs (vdb): error, failed to access to FAT (entry 0x0000d780, err:-5)
+[  333.698156] exFAT-fs (vdb): error, failed to access to FAT (entry 0x0000d780, err:-5)
+
+#问题根因
+当存储设备在读操作过程中被移除，exFAT文件系统会触发大量的错误日志打印。由于内核打印日志需要消耗时间，过量且密集的日志输出（约30万行）导致整个读系统调用被严重阻塞，从而造成了约150秒的延迟。
+
+#解决方案
+将 `fs/exfat/fatent.c` 文件中的 `exfat_ent_get` 函数内的 `exfat_fs_error` 调用替换为 `exfat_fs_error_ratelimit`。通过引入速率限制机制，避免在IO错误发生时产生海量日志，从而将读系统调用的延迟从150秒降低至约4秒。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c3a2514cd1609d741084e342007512818d7b1e90

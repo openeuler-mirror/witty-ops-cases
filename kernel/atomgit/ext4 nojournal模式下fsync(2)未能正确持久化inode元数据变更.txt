@@ -1,0 +1,20 @@
+#标题
+ext4 nojournal模式下fsync(2)未能正确持久化inode元数据变更
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ext4 文件系统以 nojournal 模式运行时，调用 fsync(2) 系统调用无法保证 inode 元数据变更被正确写入磁盘。当进程修改了 inode 元数据（如权限、时间戳等）后调用 fsync，系统底层未将 dirtied inode buffer 刷写到磁盘，导致元数据丢失，可能引发数据不一致问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 ext4 的 nojournal 模式下，元数据变更时（如调用 ext4_mark_inode_dirty）仅将元数据复制到块缓冲区中。由于缺少日志机制，这些缓冲区本应直接写回磁盘。然而，fsync 流程中并未将 inode 标记为脏，导致在 fsync 时未能触发 inode table buffer 的写回操作，进而丢失元数据更新。
+
+#解决方案
+在 `ext4_fsync_nojournal` 函数中显式调用 `ext4_write_inode()`，并将 `sync_mode` 设置为 `WB_SYNC_ALL`，强制将 inode table buffer 写入磁盘。这是一个临时修复方案，完整的解决方案需要对 metadata bh tracking 基础设施进行更大范围的重写。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4b5fb04718f3dd89c7abbca56b5f1e98fb0c7e72

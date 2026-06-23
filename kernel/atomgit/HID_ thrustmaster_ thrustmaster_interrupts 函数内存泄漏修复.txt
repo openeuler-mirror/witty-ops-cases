@@ -1,0 +1,20 @@
+#标题
+HID: thrustmaster: thrustmaster_interrupts 函数内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Thrustmaster 设备驱动加载或运行过程中，如果 USB 接口的端点检查失败（非中断端点），驱动程序会直接返回，导致此前分配的发送缓冲区无法释放，造成内核内存泄漏。随着设备反复插拔或错误复现，可能导致系统可用内存逐渐减少。
+
+#主要错误日志
+hid_err hdev, "Unexpected non-int endpoint\n"
+
+#问题根因
+在 `thrustmaster_interrupts()` 函数中，代码逻辑先分配了 `send_buf` 内存，随后调用 `usb_check_int_endpoints()` 进行检查。当该检查失败时，函数直接 `return` 返回，遗漏了 `kfree(send_buf)` 的操作，导致内存泄漏。
+
+#解决方案
+在 `usb_check_int_endpoints()` 检查失败的错误处理路径中，增加 `kfree(send_buf)` 语句，确保在函数返回前释放已分配的内存，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/65b6a41f091a05b1873664094bbb54759476da82

@@ -1,0 +1,25 @@
+#标题
+Hygon CSV1/CSV2虚拟机在特定固件版本下启动失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在Hygon 2g和C86-3g CPU上，当固件Build ID低于1878或1810时，CSV1/CSV2虚拟机无法启动或运行异常。具体表现为：
+1. 对于固件Build ID < 1878的环境，若宿主机内核未启用SME（Secure Memory Encryption），CSV客户机无法运行。
+2. 对于固件Build ID < 1810的环境，CSV2客户机可用ASID范围计算错误，可能导致ASID分配失败从而无法启动。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **SME依赖问题**：对于固件Build ID < 1878的Hygon CPU，CSV客户机运行强依赖宿主机内核开启SME功能，若宿主机未使用SME（`sme_me_mask`未设置），CSV硬件初始化应被阻止，但原代码未做此检查。
+2. **ASID分配逻辑错误**：对于固件Build ID < 1810的情况，CPUID寄存器位定义不同，原代码错误地使用了新固件的ASID分配策略，导致计算出的ASID范围为[0, 0)或范围错误，无法为CSV2客户机分配有效的ASID。
+
+#解决方案
+1. 增加固件版本检查逻辑，导出`hygon_csv_build`变量供KVM模块使用。
+2. 在`sev_hardware_setup`中增加检查：若为Hygon平台且固件Build ID < 1878且宿主机未开启SME，则直接跳过SEV硬件初始化。
+3. 修正ASID分配逻辑：当固件Build ID < 1810时，不强制将min_asid设为1，保留原有ASID范围计算逻辑；当固件Build ID >= 1810时，才将ASID范围设置为[1, max_sev_asid]。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/60b649bb3c3ac2d6c073ccc63fa68c3166183c34

@@ -1,0 +1,27 @@
+#标题
+ptp: ptp_vclock_in_use() 逻辑重构导致物理时钟调整失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在物理 PTP 时钟上运行 ptp4l 或调用 clock_adjtime() 系统调用时失败，错误码为 -EBUSY（Device or resource busy）。即使该物理时钟下没有创建任何虚拟时钟，依然无法进行时钟调整，导致 ptp4l 服务启动失败。复现方法为直接在物理时钟接口上启动 ptp4l。
+
+#主要错误日志
+ptp4l[58.425]: selected /dev/ptp0 as PTP clock
+[   58.429749] ptp: physical clock is free running
+ptp4l[58.431]: Failed to open /dev/ptp0: Device or resource busy
+failed to create a clock
+
+#问题根因
+先前的一次提交（87f7ce260a3c）错误地移除了 `ptp_vclock_in_use()` 函数中对 `ptp->n_vclocks` 的检查逻辑，错误地假设所有调用者已经预先检查了 `n_vclocks`。这导致 `ptp_vclock_in_use()` 仅通过判断 `!ptp->is_virtual_clock` 来决定是否在使用中。
+对于物理时钟，该函数直接返回 true，导致 `ptp_clock_freerun()` 误判物理时钟处于“有虚拟时钟在使用”的状态，进而禁止了对物理时钟的调整操作（返回 -EBUSY），即便实际上 `n_vclocks` 为 0。
+
+#解决方案
+恢复 `ptp_vclock_in_use()` 的原有逻辑，但进行了优化以解决原始代码可能触发的 lockdep 警告：
+1. **优先检查虚拟时钟标志**：先判断 `ptp->is_virtual_clock`，如果是虚拟时钟则直接返回 false。由于虚拟时钟不可能嵌套虚拟时钟，此检查无需加锁，避免了在持有父物理时钟锁的情况下再次获取子虚拟时钟锁导致的 lockdep 假阳性死锁警告。
+2. **恢复 n_vclocks 检查**：对于物理时钟，重新引入 `mutex_lock_interruptible` 保护下的 `ptp->n_vclocks` 检查。只有当 `n_vclocks` 大于 0 时才判定为 in_use。
+该修复确保了在无虚拟时钟时物理时钟可以正常调整，同时避免了锁类冲突问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7429868a6320a7d3e7f237f012553e05abc47c3c

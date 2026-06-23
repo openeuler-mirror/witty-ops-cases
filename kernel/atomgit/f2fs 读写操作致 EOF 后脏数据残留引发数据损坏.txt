@@ -1,0 +1,32 @@
+#标题
+f2fs 读写操作致 EOF 后脏数据残留引发数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+运行 fstest 测试集（generic/363）时失败，报告数据不一致错误。测试输出显示 `READ BAD DATA`，在特定偏移位置读取到的数据与预期不符（预期为 0x0000，实际读取到脏数据如 0x2a25）。具体表现为文件扩展后，原本位于 EOF（文件末尾）之后的未初始化数据（dummy data）被误包含进了文件内容中。
+
+#主要错误日志
+```text
+READ BAD DATA: offset = 0xd6fb, size = 0xf044, fname = /mnt/f2fs/junk
+OFFSET      GOOD    BAD     RANGE
+0x1540d     0x0000  0x2a25  0x0
+operation# (mod 256) for the bad data may be 37
+0x1540e     0x0000  0x2527  0x1
+```
+
+#问题根因
+用户可以通过 mmap 写入方式更新文件 EOF 之后的页面。f2fs 在执行 write、mapwrite、truncate、fallocate（包括 preallocate、zero_range、insert_range、collapse_range）等操作时，遗漏了对 EOF 后页面的清零处理。
+当这些操作后续触发 i_size 扩展时，旧 i_size 到新 i_size 之间的页面（即之前的 post-eof 页面）可能包含残留的脏数据。由于未在该区间执行清零（zero post-eof page），导致这些脏数据被错误地纳入文件有效内容中，从而引发数据损坏。
+
+#解决方案
+在相关文件操作路径中引入并调用 `f2fs_zero_post_eof_page` 函数，通过 `truncate_pagecache` 机制清理或清零 `[old_size, new_size]` 区间的页面缓存，确保在 i_size 扩展前清除可能存在的 post-eof 脏数据。
+具体修改点包括：
+1. 在 `f2fs_vm_page_mkwrite`（处理 mmap 写）中增加对 post-eof 页面的清零处理。
+2. 在 `f2fs_setattr`（处理 truncate 扩展）中，若新大小大于旧大小，先清零 post-eof 页面。
+3. 在 `f2fs_punch_hole`、`f2fs_do_collapse`、`f2fs_zero_range`、`f2fs_insert_range` 及 `f2fs_expand_inode_data` 等 fallocate 相关操作中，在修改文件大小或布局前增加清零逻辑。
+4. 在 `f2fs_write_checks` 中增加清零逻辑，处理常规 write 操作中的潜在风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e07de65b9490adea531051304b0b279f5d87d212

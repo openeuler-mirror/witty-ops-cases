@@ -1,0 +1,23 @@
+#标题
+ntb_hw_switchtec: 修复 shift-out-of-bounds 导致的内核 UBSAN 异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用内核 API `ntb_mw_clear_trans()` 时，若传入参数 addr 和 size 均为 0，会触发 UBSAN（Undefined Behavior Sanitizer）报错，检测到移位索引为负数。
+
+#主要错误日志
+[   23.734156] switchtec switchtec0: MW 0: part 0 addr 0x0000000000000000 size 0x0000000000000000
+[   23.734158] ================================================================================
+[   23.734172] UBSAN: shift-out-of-bounds in drivers/ntb/hw/mscc/ntb_hw_switchtec.c:293:7
+[   23.734418] shift exponent -1 is negative
+
+#问题根因
+内核 API `ntb_mw_clear_trans()` 会向 `switchtec_ntb_mw_set_trans` 函数传递 addr 和 size 均为 0 的参数。当 size 为 0 时，计算得到的 `xlate_pos` 变为负数（-1）。代码随后在 `IS_ALIGNED` 宏中直接调用 `BIT_ULL(xlate_pos)`，由于移位指数为负数，触发了 shift-out-of-bounds 错误。
+
+#解决方案
+在调用 `BIT_ULL(xlate_pos)` 进行对齐检查前，增加对 `xlate_pos` 的判断，确保其值大于等于 0，从而避免对负数进行移位操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cc8b341676a1f24ea28d35f69b45b96ec2991701

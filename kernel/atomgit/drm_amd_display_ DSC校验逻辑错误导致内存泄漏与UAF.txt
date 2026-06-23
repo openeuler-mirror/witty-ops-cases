@@ -1,0 +1,38 @@
+#标题
+drm/amd/display: DSC校验逻辑错误导致内存泄漏与UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在连接外接 DP-MST 屏幕时，可能触发内存泄漏；当该流后续被禁用时，触发 KASAN 检测到的 use-after-free 错误，导致内核崩溃或异常。
+
+#主要错误日志
+BUG: KASAN: use-after-free in dc_stream_release+0x25/0x90 [amdgpu]
+Write of size 4 at addr ffff88813d836524 by task kworker/9:9/29977
+
+Workqueue: events drm_mode_rmfb_work_fn
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x6e/0xa0
+ print_address_description.constprop.0+0x88/0x320
+ ? dc_stream_release+0x25/0x90 [amdgpu]
+ print_report+0xfc/0x1ff
+ kasan_report+0xe1/0x180
+ dc_stream_release+0x25/0x90 [amdgpu]
+ dc_state_destruct+0x14d/0x5c0 [amdgpu]
+ dc_state_release.part.0+0x4e/0x130 [amdgpu]
+ dm_atomic_destroy_state+0x3f/0x70 [amdgpu]
+ drm_atomic_state_default_clear+0x8ee/0xf30
+ __drm_atomic_state_free+0x15c/0x2d0
+ atomic_remove_fb+0x67e/0x980
+
+#问题根因
+自 commit 17ce8a6907f7 起，`pre_validate_dsc()` 在重新计算 DSC 配置且流时序无变化时，会将 CRTC 状态的 `mode_changed` 标志重置为 false。
+当同一个 KMS commit 中同时包含 MST/DSC 配置变更和另一个不相关的模式变更（如内屏因 HDR 开关等改变配置）时，该逻辑错误地将内屏的 `mode_changed` 标志清除。此时 `dm_update_crtc_state()` 已为这些不相关的变更创建了新流，但由于 `mode_changed` 被错误清除，`amdgpu_dm_commit_streams()` 既未释放旧流（导致内存泄漏），也未获取新流的引用。当该流后续被禁用时，触发 use-after-free。
+
+#解决方案
+在 `dm_crtc_state` 结构体中新增成员 `mode_changed_independent_from_dsc`。在进行 DSC 校验前，预先保存所有 CRTC 的 `mode_changed` 状态值。在 `pre_validate_dsc()` 中重置 `mode_changed` 标志时，恢复为之前保存的值，而不是直接置为 false，从而保留与 DSC 无关的模式变更状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8f2a16d218475aac627f609e38f0c6ef252a218f

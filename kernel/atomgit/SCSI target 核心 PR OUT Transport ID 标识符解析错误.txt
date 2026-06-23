@@ -1,0 +1,26 @@
+#标题
+SCSI target 核心 PR OUT Transport ID 标识符解析错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 SCSI 协议（如 SAS、FCP、SRP、SBP）进行 Persistent Reservations (PR) OUT 操作时，内核对 Transport ID 的解析处理错误。原实现直接返回原始二进制缓冲区指针，并将其与人类可读的字符串格式（如 `naa.xxxxxxxx`）进行比较。这导致字符串比较逻辑失败，进而导致 PR 相关操作（如 REGISTER_AND_MOVE 或指定 I_T Nexus 的注册操作）无法正确识别发起者，功能异常。
+
+#主要错误日志
+Unknown proto_id: 0x%02x
+（注：此为代码中原有的协议ID错误打印；故障本身主要表现为逻辑比较失败，可能无直接的内核错误日志，而是表现为 SCSI 命令处理逻辑异常。）
+
+#问题根因
+函数 `target_parse_pr_out_transport_id()` 的实现逻辑错误。对于 SAS、FCP、SRP 和 SBP 等协议，该函数原先仅返回指向协议数据包中原始二进制数据的指针（例如 `buf + offset`）。调用者期望得到的是经过格式化的、人类可读的字符串（例如 SAS 协议对应的 "naa." 前缀字符串，或 FCP 的冒号分隔字符串），导致后续的字符串比较操作（`strcmp` 等）在二进制数据和字符串之间进行，从而永远失败。
+
+#解决方案
+修改 `target_parse_pr_out_transport_id()` 函数及其相关子函数（`sas_parse_pr_out_transport_id`, `srp_parse_pr_out_transport_id` 等），使其不再返回原始指针，而是根据不同的 SCSI 协议类型，将二进制数据转换为标准的可读字符串格式并写入调用者提供的缓冲区 `i_str` 中：
+- SAS: 转换为 "naa." 前缀的 16 进制字符串。
+- FCP: 转换为冒号分隔的 16 进制字符串。
+- SRP: 转换为 "0x" 前缀的 128 位 ID 字符串。
+- SBP: 转换为纯 16 进制字符串。
+同时将函数返回值类型修改为 bool，以表示解析是否成功。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9f9bdf07655bd168aeade00fdc0e52a64a1d5d0

@@ -1,0 +1,20 @@
+#标题
+Bluetooth: hci_event: 修复 hci_le_remote_conn_param_req_evt 中的潜在 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 `hci_le_remote_conn_param_req_evt` 事件时，若 `hci_conn` 对象在查找并访问字段期间被其他线程并发释放，将导致 Use-After-Free（UAF）问题，可能引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hci_le_remote_conn_param_req_evt` 函数中，`hci_conn` 的查找操作和后续的字段访问（如检查 `hcon->state`、访问 `hcon->le_conn_max_interval` 等）未处于 `hdev` 锁的保护范围内。这导致在查找成功后、使用连接对象前，该对象可能被并发线程释放，从而引发 UAF。
+
+#解决方案
+扩展 `hci_dev_lock` 临界区范围，使其覆盖整个 `hci_conn` 查找与使用过程。具体修改为：在函数早期获取锁 `hci_dev_lock(hdev)`，确保后续所有对 `hcon` 的判断与访问均受锁保护，并将原来的 Master 角色处理分支中的解锁操作移至函数末尾统一处理，以此消除并发释放带来的竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ba96891f3ffb09c96617c4d8134e492b879a6b98

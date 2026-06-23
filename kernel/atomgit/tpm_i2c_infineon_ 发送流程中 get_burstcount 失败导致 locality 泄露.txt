@@ -1,0 +1,20 @@
+#标题
+tpm_i2c_infineon: 发送流程中 get_burstcount 失败导致 locality 泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Infineon I2C TPM 设备进行数据发送时，若 `get_burstcount()` 函数因超时返回 `-EBUSY`，驱动程序直接返回错误码，未释放先前获取的 locality 资源。这导致 locality 被持续占用（泄露），后续对该 TPM 的操作可能因无法获取 locality 而失败或阻塞。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tpm_tis_i2c_send()` 函数中，开始发送数据前已成功获取了 locality，但在随后的循环中调用 `get_burstcount()` 获取突发传输计数时，如果该函数返回负值（如 `-EBUSY`），代码逻辑直接 `return burstcnt` 返回了错误，跳过了函数末尾释放 locality 的清理步骤，从而导致资源泄露。
+
+#解决方案
+修改 `tpm_tis_i2c_send()` 函数中的错误处理路径。当 `get_burstcount()` 返回值小于 0 时，不再直接 return，而是将错误码赋给 `rc` 变量，并通过 `goto out_err` 跳转至函数的错误处理出口（out_err 标签），确保在返回错误前正确释放已获取的 locality。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad77551ec78a013a9dd63d68d4ded5fb4f979761

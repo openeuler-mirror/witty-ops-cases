@@ -1,0 +1,20 @@
+#标题
+perf probe 工具中的 libdw 内存泄漏故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 LeakSanitizer（内存泄漏检测工具）运行测试脚本 `tools/perf/tests/shell/test_uprobe_from_different_cu.sh` 时，检测到内存泄漏问题。泄漏发生在 `perf probe` 功能处理调试信息的过程中。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `debuginfo__find_trace_events` 函数中，`probe_finder` 结构体的成员 `cfi_eh` 是通过调用 `dwarf_getcfi_elf` 分配并持有的内存，但在相关处理流程结束时，缺少对应的 `dwarf_cfi_end` 调用来释放该内存。代码逻辑中混淆了 `cfi_eh`（需手动释放）与 `cfi_dbg`（内存由传入的 debuginfo 结构体管理，无需手动释放）的生命周期管理职责，导致 `cfi_eh` 指向的内存发生泄漏。
+
+#解决方案
+在 `tools/perf/util/probe-finder.c` 文件的 `debuginfo__find_trace_events` 函数返回前，增加对 `dwarf_cfi_end(tf.pf.cfi_eh)` 的调用，以正确释放 `cfi_eh` 占用的内存。同时在头文件中通过注释明确了 `cfi_eh` 为结构体拥有的内存（需释放），而 `cfi_dbg` 非结构体拥有的内存（不需释放），以防止后续维护混淆。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/27f3627478ad0bf0b6697e2363373ea1190857bb

@@ -1,0 +1,23 @@
+#标题
+gpio: sprd: 修复 PREEMPT_RT 内核下 spin_lock 导致的 lockdep 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 PREEMPT_RT 的内核环境下，加载 gpio_sprd 模块并请求中断时（如 charger 驱动 probe 过程），触发 lockdep 验证失败，系统报出 "BUG: Invalid wait context" 警告。该问题导致在中断上下文中使用了不适合的锁类型，破坏了实时内核的锁安全机制。
+
+#主要错误日志
+[    6.258269][T329@C6] [ BUG: Invalid wait context ]
+[    6.258273][T329@C6] modprobe/329 is trying to lock:
+[    6.258275][T329@C6] ffffff8081c91690 (&sprd_gpio->lock){....}-{3:3}, at: sprd_gpio_irq_unmask+0x4c/0xa4 [gpio_sprd]
+[    6.258283][T329@C6] context-{5:5}
+
+#问题根因
+在 PREEMPT_RT 内核中，普通的 spin_lock_t 会被转换为 rt_mutex，这是一种可睡眠锁。然而，sprd_gpio 驱动的锁会在 hard-irq（硬中断）上下文中使用（例如在 sprd_gpio_irq_unmask 中）。根据内核锁的正确性验证规则，在硬中断上下文中不能持有可睡眠的锁，否则会导致 "Invalid wait context" 错误。使用普通的 spin_lock 在此处对于实时内核是不安全的。
+
+#解决方案
+将 sprd_gpio 结构体中的锁类型从 spinlock_t 修改为 raw_spinlock_t，并将所有相关的锁操作函数（spin_lock_irqsave/spin_unlock_irqrestore）对应替换为 raw_spin_lock_irqsave/raw_spin_unlock_irqrestore。raw_spinlock_t 在 PREEMPT_RT 内核中不会被转换为 rt_mutex，始终保持忙等待状态，因此可以安全地在硬中断上下文中使用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/020cc03817739b27177ad76b91ae2b6df6a09182

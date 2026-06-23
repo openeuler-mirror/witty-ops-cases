@@ -1,0 +1,30 @@
+#标题
+sentry_urma_comm 模块因 TP 资源语义变更导致功能异常或干扰
+
+#内核版本
+OLK-6.6
+
+#问题现象
+由于底层的 `ubcore_get_tp_list` 函数语义发生变更，改为仅返回与其他组件共享的 TP（传输路径），这导致 sentry 驱动在使用该接口获取 TP 时，可能获取到被共享的资源，从而受到其他组件的干扰。该变更可能导致通信建立失败、数据传输异常或不稳定等问题。修复补丁通过引入专用的 TP 管理机制解决了此兼容性问题。
+
+#主要错误日志
+- `pr_err("%s failed: urma %d dev is not exist\n", __func__, die_index);`
+- `pr_warn("%s: create tpid[%d] failed, server eid is %s\n", __func__, i, sentry_urma_dev[die_index].server_eid_array[i]);`
+- `pr_warn("ubcore_import_jetty_ex err, server eid %s\n", sentry_urma_dev[die_index].server_eid_array[i]);`
+- `pr_err("%s: tpid[%d] create failed, eid %s\n", __func__, idx, sentry_urma_dev[die_index].server_eid_array[idx]);`
+- `pr_err("%s: tjetty[%d] ubcore_import_jetty_ex err, eid %s\n", __func__, idx, sentry_urma_dev[die_index].server_eid_array[idx]);`
+
+#问题根因
+`ubcore_get_tp_list` 函数的语义发生了变更，现在仅返回与其他组件共享的 TP。sentry 驱动原先直接调用 `ubcore_get_tp_list` 获取传输路径资源，这会导致 sentry 使用了非独占的共享 TP，进而可能受到其他组件的干扰，引发功能异常。
+
+#解决方案
+适配新的语义，不再使用 `ubcore_get_tp_list` 获取共享 TP，改为使用新增的 `ubcore_create_tpid` 接口创建专用的 TP 资源。
+具体修改如下：
+1. 在资源结构体 `sentry_ubcore_resource` 中增加 `tpid` 数组，用于管理每个节点的 TP 资源。
+2. 新增 `create_tpid()` 辅助函数，封装 `ubcore_create_tpid()` 调用以创建专用 TP。
+3. 修改 `create_tjetty()` 函数，移除内部对 `ubcore_get_tp_list` 的调用，改为接收 `tpid` 参数作为入参。
+4. 在 `import()` 和 `rebuild_tjetty()` 流程中，先调用 `create_tpid()` 创建专用 TP，再将其传递给 `create_tjetty()`，并增加对 TP 创建失败的错误处理。
+5. 在资源释放流程（如 `unimport_tjetty` 和 `rebuild_tjetty` 的清理逻辑）中，增加调用 `ubcore_delete_tpid()` 以正确释放 TP 资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c909ff096dee7ee42449c584aa816f6081877085

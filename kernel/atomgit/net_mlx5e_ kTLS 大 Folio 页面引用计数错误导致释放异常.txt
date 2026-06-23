@@ -1,0 +1,22 @@
+#标题
+net/mlx5e: kTLS 大 Folio 页面引用计数错误导致释放异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 kTLS 进行 sendfile() + ZC（零拷贝）传输时，若文件来自支持 large folios（大页）的 NFS 文件系统，内核会发生页面引用计数管理错误。具体表现为在释放路径上对 folio 页面进行过多的解引用操作，可能导致页面被提前释放或引发内存管理相关的内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+kTLS 发送处理代码在获取页面引用时混用了 `get_page()` 和 `page_ref_inc()` API。在获取路径（`tx_sync_info_get`）中使用了 `get_page()`，而在释放路径（`mlx5e_ktls_tx_handle_resync_dump_comp`）中仅使用了 `put_page()`。
+当处理来自 large folios 的页面时，`get_page()` 会将引用计数存储在 folio 页面上，而 `page_ref_inc()` 则直接增加到给定页面上。释放时调用 `put_page()` 会对 folio 页面进行解引用，导致引用计数不匹配，folio 页面被错误地多次减少引用计数。
+
+#解决方案
+将获取路径中的 `get_page()` 调用替换为 `page_ref_inc()`，同时在释放路径中将 `put_page()` 替换为 `page_ref_dec()`。
+修改确保了页面引用计数的增加和减少操作在语义和实现上保持一致，避免了混用 API 导致的大 folio 页面引用计数错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db65bb64cc9b3f9168edb3a696c243fd45295bc0

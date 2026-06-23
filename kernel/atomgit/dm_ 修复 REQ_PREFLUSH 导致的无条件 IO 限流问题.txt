@@ -1,0 +1,20 @@
+#标题
+dm: 修复 REQ_PREFLUSH 导致的无条件 IO 限流问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行块设备刷新操作时，系统对 IO 进行了无条件的限流，导致磁盘刷新性能下降，未能根据上层请求的属性（如 REQ_IDLE）进行正确的调度优化。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__send_empty_flush` 函数中，初始化 flush_bio 时，固定使用了 `REQ_OP_WRITE | REQ_PREFLUSH | REQ_SYNC` 标志位。代码逻辑未检查并保留原始 bio (`ci->io->orig_bio`) 中的 `REQ_IDLE` 标志位。由于缺少 `REQ_IDLE` 标志位，底层驱动无法识别该请求为空闲类请求，从而触发了无条件的 IO 限流机制。
+
+#解决方案
+在构建 flush_bio 时，增加对原始 bio 标志位的判断逻辑。如果原始 bio 同时设置了 `REQ_IDLE` 和 `REQ_SYNC` 标志位，则在 flush_bio 中同步设置 `REQ_IDLE` 标志位，确保刷新请求能正确传递调度提示，避免不必要的限流。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ea2bf564c9511027e8a471a46523f3b9924fbebd

@@ -1,0 +1,42 @@
+#标题
+urma: well-known jetty 创建/删除事件未与主 UE EID 事件正确关联导致资源管理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在配置拓扑或添加 EID 时，well-known jetty 资源无法正确创建或初始化，导致后续业务通信受阻。
+2. 系统日志中出现 "Primary eid not found" 或 "Failed to handle main ue eid event" 等错误提示。
+3. 在删除 EID 或设备下线时，相关 jetty 资源无法正确销毁，可能导致资源泄漏或访问无效内存。
+4. EID 查找逻辑可能返回错误的主 EID，导致业务绑定到错误的端点。
+
+#主要错误日志
+- `ubcore_log_err("Failed to handle main ue eid event, eid " EID_FMT ", event_type: %d, ret: %d.\n", ...)`
+- `ubcore_log_err("Failed to register main ue eid event cb, ret: %d.\n", ret)`
+- `ubcore_log_err("Failed to register ub_mad client, ret: %d.\n", ret)`
+- `ubcore_log_info("Primary eid not found, init deferred, dev:%s\n", ...)`
+- `ubcore_log_err("get primary eid failed, ret = %d\n", ret)`
+
+#问题根因
+1. **事件关联缺失**：原有的 well-known jetty 生命周期管理依赖于拓扑设置（`ubmgr_notify_set_topo`）或通用的 EID 事件通知，未与 Main UE EID 的添加/删除事件（First Add / Last Del）正确挂钩，导致资源创建时机错误或遗漏。
+2. **逻辑错误**：在查找 Primary EID 时，代码错误地使用了 `max_eid_cnt` 作为循环边界，而实际上应使用当前有效的 `eid_cnt`，导致遍历了无效的表项或遗漏了有效表项。
+3. **检测逻辑缺陷**：Primary EID 检测逻辑存在缺陷，无法在复杂场景下准确定位真实的主 EID，导致后续资源关联错误。
+
+#解决方案
+1. **重构事件驱动机制**：
+   - 移除旧的拓扑事件通知机制（`ubmgr_topo.c` 及相关 notifier）。
+   - 引入 `ubcore_main_ue_eid_event_cb` 机制，将 well-known jetty 的创建与销毁逻辑直接绑定到 `UBCORE_MAIN_UE_EID_FIRST_ADD` 和 `UBCORE_MAIN_UE_EID_LAST_DEL` 事件上。
+   - 在 `ubmad_init` 和 `ubmgr_ping_init` 中注册该回调，确保模块加载时即生效。
+
+2. **修复遍历边界错误**：
+   - 将 `ubcore_eid_trie_delete`、`ubmgr_get_first_eid` 等函数中的循环边界从 `max_eid_cnt` 修正为 `eid_cnt`，确保仅遍历有效的 EID 表项。
+
+3. **优化资源管理流程**：
+   - 实现延迟初始化策略，在 `ping_on_add_device` 阶段不再立即尝试初始化 jetty，而是等待 `FIRST_ADD` 事件触发。
+   - 完善 workqueue 的启停控制（增加 `wq_stopped` 标志），防止在资源销毁过程中并发插入新的工作项。
+
+4. **修正查找接口**：
+   - 新增 `ubmad_get_eid_info_by_eid` 和 `ping_find_eid_by_main_ue_eid` 辅助函数，确保通过 EID 查找设备表项时使用正确的比较逻辑和索引。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8e700301346ddfbbbd033644154d42d4765c60d3

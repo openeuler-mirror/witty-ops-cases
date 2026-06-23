@@ -1,0 +1,25 @@
+#标题
+uvb: CIS调用返回值未初始化及指针赋值错误导致潜在内存访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在调用 `cis_call_uvb` 或 `cis_call_uvb_sync` 函数时，若窗口缓冲区不存在，内核打印错误日志，但函数可能返回未初始化的 `err` 值（非预期的成功或随机错误码），导致上层调用者误判执行状态。
+2. 在窗口占用失败路径中，对二级指针 `wd_obtain` 进行了错误的赋值操作（`wd_obtain = NULL`），未能正确置空其指向的内容，导致后续逻辑可能访问已释放的内存或遗留悬空指针。
+
+#主要错误日志
+- `pr_err("no window buffer to save data\n");`
+- `pr_err("sync call no window buffer to save data\n");`
+
+#问题根因
+1. **变量未初始化**：函数 `cis_call_uvb` 和 `cis_call_uvb_sync` 中的局部变量 `err` 声明时未初始化。当执行路径遇到 `!wd->buffer` 判断为真并跳转至 `free_obtain` 标签时，`err` 未被赋值，导致函数返回随机值。
+2. **指针赋值逻辑错误**：在 `uvb_occupy_window` 函数中，`wd_obtain` 是一个二级指针，用于存储和传递指针地址。原代码直接将 `wd_obtain` 本身置为 NULL（`wd_obtain = NULL`），这仅修改了局部变量的值，未能修改调用者持有的指针内容（即 `*wd_obtain`），导致调用者持有的指针仍然指向已释放的内存区域。
+
+#解决方案
+1. **初始化返回值变量**：将 `cis_call_uvb` 和 `cis_call_uvb_sync` 函数中的 `int err;` 定义修改为 `int err = 0;`，确保默认返回值为 0，防止返回随机垃圾值。
+2. **修正错误码返回**：在 `!wd->buffer` 的错误处理分支中，显式设置 `err = -EOPNOTSUPP;`，确保该错误路径正确返回“操作不支持”的错误码。
+3. **修正指针赋值**：将 `uvb_occupy_window` 函数中的 `wd_obtain = NULL;` 修改为 `*wd_obtain = NULL;`，确保正确置空调用者传入的指针变量，避免悬空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/10eb635124b337203c787420e05f44e4f1fcecd6

@@ -1,0 +1,20 @@
+#标题
+Bluetooth: ISO 修复 iso_conn_free 可能的 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在蓝牙 ISO（Isochronous）协议处理流程中，当 socket 销毁时，若未正确断开 `conn` 与 `sk` 的关联，可能导致释放后使用。攻击者或本地用户可能通过特定操作序列触发该漏洞，造成内核内存破坏或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `iso_sock_kill` 函数中，socket 被标记为销毁状态时，未将 `iso_pi(sk)->conn->sk` 指针置空。这导致在 socket 释放后，`conn` 结构体仍持有指向已释放 socket 的悬垂指针，后续访问该指针时触发 UAF 漏洞。
+
+#解决方案
+在 `iso_sock_kill` 函数中，设置 `sock_set_flag(sk, SOCK_DEAD)` 之前，增加对 `iso_pi(sk)->conn` 的判断。如果连接存在，持有连接锁 (`iso_conn_lock`) 并将 `conn->sk` 显式置为 `NULL`，从而解除连接与 socket 的绑定关系，防止悬垂指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/40f8bf2edbed184e05f2c5c83b8f651141412d69

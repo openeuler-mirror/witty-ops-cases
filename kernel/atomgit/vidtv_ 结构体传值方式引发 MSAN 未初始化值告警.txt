@@ -1,0 +1,27 @@
+#标题
+vidtv: 结构体传值方式引发 MSAN 未初始化值告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核测试工具 KMSAN (Kernel Memory Sanitizer) 报告未初始化值的使用警告。具体表现为 `vidtv_ts_null_write_into` 函数触发了 "uninit-value" 类型的 syzbot 报告。虽然当时仅该函数触发报告，但 `vidtv_ts_pcr_write_into` 函数共享同样的代码缺陷模式。
+
+#主要错误日志
+未知
+（注：Commit 信息中未提供具体的 dmesg 崩溃日志或 KMSAN 详细报告文本，仅提及 syzbot 报告了 uninit-value warnings。）
+
+#问题根因
+函数 `vidtv_ts_null_write_into()` 和 `vidtv_ts_pcr_write_into()` 在接收参数结构体（分别为 `struct null_packet_write_args` 和 `struct pcr_write_args`）时，采用了值传递方式。
+这导致结构体在栈上被完整复制，KMSAN 随之为该栈副本生成影子内存和元数据。如果原结构体中存在未显式初始化的填充字节或保留字段，值传递操作会触发 KMSAN 发出未初始化值警告。
+
+#解决方案
+修改函数签名，将参数传递方式由“值传递”改为“传递常量指针”（const pointer）。
+具体修改如下：
+1. 在 `vidtv_ts.h` 头文件中，将 `vidtv_ts_null_write_into` 和 `vidtv_ts_pcr_write_into` 的参数类型分别修改为 `const struct null_packet_write_args *args` 和 `const struct pcr_write_args *args`。
+2. 在 `vidtv_ts.c` 实现文件中，相应更新函数定义，并将函数体内对参数成员的访问由 `args.member` 修改为 `args->member`。
+3. 在 `vidtv_mux.c` 调用处，将传参改为取地址形式（如 `vidtv_ts_null_write_into(&args)`）。
+此修改避免了结构体在栈上的复制，从而消除了 KMSAN 的误报警告，同时增加了 const 限定符确保函数不会修改参数内容。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f4080ccc004e6e13e58af0e9b2b50c5ec91c66d8

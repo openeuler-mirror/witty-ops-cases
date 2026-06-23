@@ -1,0 +1,35 @@
+#标题
+TIPC 子系统释放后使用致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行网络命名空间销毁操作时，内核发生 Use-After-Free 错误，导致空指针解引用并触发内核 Panic。该故障由 syzbot 在 `tipc_conn_close()` 函数中捕获，触发场景为 `cleanup_net` 工作队列执行过程中。
+
+#主要错误日志
+BUG: KASAN: use-after-free in tipc_conn_close+0x122/0x140 net/tipc/topsrv.c:165
+Read of size 8 at addr ffff888099305a08 by task kworker/u4:3/435
+Call Trace:
+ tipc_conn_close+0x122/0x140 net/tipc/topsrv.c:165
+ tipc_topsrv_stop net/tipc/topsrv.c:701 [inline]
+ tipc_topsrv_exit_net+0x27b/0x5c0 net/tipc/topsrv.c:722
+ cleanup_net+0x3b4/0x8b0 net/core/net_namespace.c:553
+
+#问题根因
+在 `tipc_topsrv_stop()` 函数中遍历 `conn_idr` 并调用 `tipc_conn_close()` 时，存在并发竞争问题。`tipc_conn_close()` 是在释放了 IDR 锁之后被调用的。此时，并发的 `tipc_conn_recv_work()` 可能正在运行，并对同一个 `tipc_conn` 调用 `tipc_conn_close()`，从而释放了该连接的最后一个 `kref`。当 `tipc_topsrv_stop()` 在释放锁后继续访问该连接时，无法保证 `tipc_conn` 结构体仍然存活，导致访问已释放内存。
+
+#解决方案
+在 `tipc_topsrv_stop()` 的遍历逻辑中，在释放 IDR 锁之前先通过 `conn_get(con)` 增加连接对象的引用计数，确保在调用 `tipc_conn_close()` 期间对象不会被释放；操作完成后调用 `conn_put(con)` 释放引用。修改涉及文件 `net/tipc/topsrv.c`，具体变更如下：
+```c
+if (con) {
+    conn_get(con);          // 新增：持有引用，防止并发释放
+    spin_unlock_bh(&srv->idr_lock);
+    tipc_conn_close(con);
+    conn_put(con);          // 新增：释放引用
+    spin_lock_bh(&srv->idr_lock);
+}
+```
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/79b40edc351b1a94fa826a08250f6f3723e90d8c

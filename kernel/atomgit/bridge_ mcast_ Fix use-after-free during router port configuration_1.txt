@@ -1,0 +1,36 @@
+#标题
+bridge: mcast: Fix use-after-free during router port configuration
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用或禁用 VLAN 多播 Snooping 的过程中，操作端口的多播路由器配置（mcast_router）后删除端口或 VLAN，会导致内核发生 Use-After-Free 或 Slab-Out-Of-Bounds 错误。
+具体复现路径如下：
+1. 全局路由器列表残留导致 UAF：创建网桥和端口，设置端口为多播路由器，启用 VLAN Snooping 后重新设置端口路由器模式，删除端口再添加新端口并设置路由器模式时触发。
+2. VLAN 路由器列表残留导致 UAF：创建带 VLAN Snooping 的网桥，配置 VLAN 路由器端口，禁用 VLAN Snooping 后重新设置 VLAN 路由器模式，删除 VLAN 后在其他端口操作该 VLAN 路由器模式时触发。
+
+#主要错误日志
+BUG: KASAN: slab-out-of-bounds in br_multicast_add_router.part.0+0x3f1/0x560
+Write of size 8 at addr ffff888004a67328 by task ip/384
+Call Trace:
+ br_multicast_add_router.part.0+0x3f1/0x560
+ br_multicast_set_port_router+0x74e/0xac0
+
+BUG: KASAN: slab-use-after-free in br_multicast_add_router.part.0+0x378/0x560
+Read of size 8 at addr ffff888009f00840 by task bridge/391
+Call Trace:
+ br_multicast_add_router.part.0+0x378/0x560
+ br_multicast_set_port_router+0x6f9/0xac0
+
+#问题根因
+自提交 4b30ae9adb04 重新实现 br_multicast_{enable, disable}_port 函数后，当启用 per-VLAN 多播 Snooping 时，禁用端口多播仅禁用了 per-{port, VLAN} 上下文而非 per-port 上下文。这导致端口在删除后仍残留在全局路由器端口列表中。
+同理，在禁用 per-VLAN 多播 Snooping 后删除 VLAN 时，由于 VLAN 上未启用 Snooping，per-{port, VLAN} 上下文未被禁用，导致端口残留在 per-VLAN 路由器端口列表中。
+当遍历这些列表（如添加新端口到列表）时，访问已释放的内存导致 Use-After-Free。
+
+#解决方案
+在 br_multicast_port_ctx_deinit 函数中增加逻辑，显式地从相关（全局或 per-VLAN）路由器端口列表中移除该端口。
+具体修复为：在删除多播路由器定时器后，持有 multicast_lock 锁，调用 br_ip6_multicast_rport_del 和 br_ip4_multicast_rport_del 清理残留列表项，并通知删除操作。这确保了端口删除或 VLAN 删除时，对应的多播路由器端口列表项被正确清理，避免悬垂指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3c7bb32f4f1b8a61704af84b7d235a783698c12

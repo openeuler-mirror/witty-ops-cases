@@ -1,0 +1,20 @@
+#标题
+hwmon: sy7636a驱动probe失败路径下regulator资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sy7636a_sensor_probe() 函数执行过程中，若 devm_hwmon_device_register_with_info() 注册失败，函数直接返回错误码，导致此前已调用的 regulator_enable() 无法配对执行 regulator_disable()，造成 regulator 资源引用计数泄漏，设备状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 sy7636a_sensor_probe() 错误处理路径中，缺少对 regulator_enable() 的回滚操作。具体流程为：驱动先调用 regulator_enable() 启用了 "vcom" 调节器，随后调用 devm_hwmon_device_register_with_info() 进行设备注册；若该注册函数失败，驱动直接返回错误，未关闭已启用的 regulator，从而导致资源引用计数泄漏。
+
+#解决方案
+将原本分离的 devm_regulator_get() 和 regulator_enable() 调用替换为托管版本的 devm_regulator_get_enable() 函数。该函数利用设备资源管理机制，在驱动卸载或探测失败时自动释放并关闭 regulator，从而消除了手动管理带来的资源泄漏隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f8686a10bc8345e33a59e270cab7cb8c444198d0

@@ -1,0 +1,41 @@
+#标题
+xcall2.0 模块在 DT 环境执行 detach 操作时触发 scheduling while atomic panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DT qemu 环境下运行 detach xcall 测试用例时，内核触发 panic。报错信息显示在进行原子操作（atomic）上下文时发生了调度行为，系统崩溃。
+
+#主要错误日志
+BUG: scheduling while atomic: bash/293/0x00000002
+Modules linked in: dynamic_xcall_test(C)
+CPU: 1 PID: 293 Comm: bash Tainted: GC 6.6.0-g49eee28051c5 #1
+Hardware name: linux,dummy-virt (DT)
+Call trace:
+ dump_backtrace+0x98/0xf8
+ show_stack+0x1c/0x30
+ dump_stack_lvl+0x44/0x58
+ dump_stack+0x14/0x20
+ __schedule_bug+0x54/0x70
+ __schedule+0x754/0x898
+ schedule+0x60/0x138
+ p9_client_rpc+0x118/0x430
+ p9_client_clunk+0x48/0xa8
+ v9fs_dentry_release+0x118/0x138
+ __dentry_kill+0x130/0x208
+ dput+0x25c/0x488
+ path_put+0x20/0x40
+ free_xcall_comm.part.0+0x38/0x58
+ free_xcall_comm+0x18/0x30
+ put_xcall+0x7c/0xc0
+ xcall_detach+0x68/0xc0
+
+#问题根因
+在 `xcall_detach()` 函数中，第二次调用 `put_xcall()` 时仍然持有自旋锁 `xcall_list_lock`。该调用链会触发 `path_put()`，进而可能调用 `schedule()` 进行调度。由于自旋锁属于原子上下文，不允许睡眠或调度，因此触发了 "scheduling while atomic" 错误导致 panic。
+
+#解决方案
+将第二次 `put_xcall()` 调用移出 `xcall_list_lock` 自旋锁保护的临界区，确保在释放路径可能涉及的调度操作不会在持有自旋锁时发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bbccd045d39be92d8d34ff047dc7622d0b986dc0

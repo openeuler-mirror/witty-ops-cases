@@ -1,0 +1,32 @@
+#标题
+[urma] ubcore_get_route_list 实现缺陷导致路由查询失败或数据异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+调用 `ubcore_get_route_list` 接口查询路由列表时，可能出现以下异常：
+1. 函数返回 `-EINVAL` 错误，导致路由查询失败。
+2. 输出的 `route_list` 结构体中 `route_num` 计数错误，或缓冲区 `buf` 中存储的路由数据（如 eid 地址）不正确。
+3. 存在数组越界访问风险（如循环变量 `k` 超出 `IODIE_NUM` 范围），可能导致内核内存非法访问或 panic。
+
+#主要错误日志
+- "Invalid route num.\n"
+- "Failed to get topo port eid, route_num: %u.\n"
+- "Failed to get primary eid, ret: %d.\n"
+- "Failed to get port eid, ret: %d.\n"
+- "Finish to query topo map.\n"
+
+#问题根因
+1. **逻辑实现不完整**：`ubcore_get_route_list` 函数原先仅根据传输类型（RTP/UTP/CTP）选择调用 `ubcore_get_route_port_eid` 或 `ubcore_get_route_primary_eid`，导致部分路由信息（如 Primary EID 或 Port EID）未被正确获取。
+2. **循环索引越界**：`ubcore_get_route_primary_eid` 函数内部循环变量 `k` 的取值范围未正确限制，导致访问 `io_die_info[k]` 时数组越界。
+3. **参数处理错误**：`ubcore_get_route_port_eid` 中直接使用指针修改 `route_num` 且处理逻辑不当，可能导致计数不准或数据覆盖异常。
+
+#解决方案
+1. **重构查询流程**：修改 `ubcore_get_route_list` 主逻辑，移除传输类型的分支判断，强制先调用 `ubcore_get_route_primary_eid` 获取主 EID，再调用 `ubcore_get_route_port_eid` 获取端口 EID，确保获取完整的路由列表。
+2. **修复数组越界**：修正 `ubcore_get_route_primary_eid` 中的循环逻辑，移除对 `IODIE_NUM` 的错误循环依赖，直接遍历 `node_num` 并增加对索引 `i` 和 `num` 的边界检查，防止数组越界。
+3. **规范计数与赋值**：引入局部变量 `num` 进行计数，避免直接操作指针，并在写入数据前进行 `UBCORE_MAX_ROUTE_NUM` 边界检查；将直接赋值操作修改为 `memcpy` 以确保内存拷贝安全。
+4. **新增宏定义**：在 `ubcore_types.h` 中新增 `UBCORE_MAX_ROUTE_NUM` 宏定义，统一数组大小限制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3868a60b7f0383777da1f38f7bf1e64c72691920

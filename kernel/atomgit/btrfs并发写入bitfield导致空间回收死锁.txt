@@ -1,0 +1,27 @@
+#标题
+btrfs并发写入bitfield导致空间回收死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在Btrfs文件系统进行事务提交（如删除block_group）与数据空间异步回收并发执行时，破坏了`space_info->flush`状态的不变性。具体表现为：回收线程已退出，但`flush`标志位仍被置为1，导致后续的内存分配请求在`__reserve_bytes()`中添加ticket后，因判断`flush`为1而不再唤醒工作队列，线程永久阻塞在ticket等待上，系统发生挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+根据内存屏障文档，编译器对bitfield（位域）通常生成非原子的读-改-写（RMW）序列。结构体`btrfs_space_info`中的`full`、`chunk_alloc`和`flush`成员原本定义为unsigned int位域，共享同一个底层存储字。
+问题发生在`btrfs_clear_space_info_full()`函数中，该函数在修改`found->full = 0`时未持有锁。与此同时，另一个线程在持有锁的情况下修改`flush`位。
+并发场景如下：
+1. 线程T1（无锁）读取位域字（例如值为1，即full=0, chunk_alloc=0, flush=1），准备将full置0。
+2. 线程T2（有锁）读取位域字（值为1），将flush清零（写回值为0）。
+3. 线程T1执行写回操作，将旧值中的flush位（值为1）写回，覆盖了线程T2的修改。
+最终导致`flush`位意外变回1，而此时回收工作线程已退出，系统陷入死锁状态。
+
+#解决方案
+将`btrfs_space_info`结构体中的三个位域成员（`full`、`chunk_alloc`、`flush`）的类型从`unsigned int`位域修改为`bool`类型。
+布尔类型（bool）通常占用完整的字节，避免了编译器生成跨位的读-改-写序列，从而保证了不同成员变量写入操作的独立性，消除了并发写入导致的数据覆盖风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d7f1cb67eeabd76703e0b4cb03b8bc843103e8b9

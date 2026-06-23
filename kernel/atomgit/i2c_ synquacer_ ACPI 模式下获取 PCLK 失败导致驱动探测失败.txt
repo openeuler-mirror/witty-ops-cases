@@ -1,0 +1,20 @@
+#标题
+i2c: synquacer: ACPI 模式下获取 PCLK 失败导致驱动探测失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ACPI 启动模式下，SynQuacer I2C 驱动加载失败。由于 ACPI 固件不提供 clocks 和 regulators 资源，而是直接在固件中配置 PCLK 频率，导致驱动在尝试获取并启用 "pclk" 时报错，进而引发 probe 探测失败。
+
+#主要错误日志
+failed to get and enable clock
+
+#问题根因
+代码使用 `devm_clk_get_enabled` 强制获取 "pclk" 时钟。但在 ACPI 启动场景下，系统不提供独立的时钟驱动接口，PCLK 频率由固件直接提供并在固件中已启用。驱动未将 "pclk" 时钟视为可选资源，导致在 ACPI 环境下获取失败并返回错误。
+
+#解决方案
+将获取时钟的函数从 `devm_clk_get_enabled` 修改为 `devm_clk_get_optional_enabled`，将 PCLK 时钟视为可选资源。同时增加判断逻辑，仅当时钟指针 `pclk` 有效时才调用 `clk_get_rate` 获取频率，否则使用设备树属性 "socionext,pclk-rate" 中读取的默认值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/125b42e123a5a39fe0b345d44607427bd781154c

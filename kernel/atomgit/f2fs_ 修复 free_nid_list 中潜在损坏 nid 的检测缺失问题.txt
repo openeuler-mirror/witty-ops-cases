@@ -1,0 +1,23 @@
+#标题
+f2fs: 修复 free_nid_list 中潜在损坏 nid 的检测缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当磁盘上的 footer.ino 和 footer.nid 相同且超出范围时，系统未能及时检测到 free_nid_list 中的节点 ID (nid) 损坏。这可能导致文件系统在使用已损坏的 nid 时出现异常行为，严重情况下引发文件系统元数据不一致。
+
+#主要错误日志
+- f2fs_err(sbi, "Corrupted nid %u in free_nid_list", i->nid);
+
+#问题根因
+根据 Commit 描述，磁盘数据存在损坏，表现为 on-disk footer.ino 和 footer.nid 相同且超出有效范围。内核在 `f2fs_alloc_nid()` 函数中分配 nid 时，缺乏对 `free_nid_list` 链表中取出的 nid 有效性（范围合法性）的健全性检查，导致潜在的损坏 nid 被继续使用。
+
+#解决方案
+在 `f2fs_alloc_nid()` 函数中增加对 nid 范围的校验逻辑：
+1. 新增并复用 `is_invalid_nid()` 辅助函数，判断 nid 是否小于根节点 INO 或大于等于最大 nid。
+2. 在从 `free_nid_list` 获取 nid 后，立即检查其有效性。
+3. 若发现无效 nid，打印错误日志 "Corrupted nid %u in free_nid_list"，调用 `f2fs_stop_checkpoint()` 停止检查点机制（原因码设为新增的 `STOP_CP_REASON_CORRUPTED_NID`），并返回 false 阻止分配，防止损坏扩散。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8427d525501c63519601a47484e765eab2993175

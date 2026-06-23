@@ -1,0 +1,23 @@
+#标题
+dev_uevent 中并发解绑设备导致空指针崩溃修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户空间读取设备的 "uevent" 属性时，若同时有其他线程将该设备与其驱动程序解绑，内核可能发生崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+读取 "uevent" 属性时未持有设备锁，直接读取 `dev->driver` 指针。此时若有其他线程执行解绑操作，`dev->driver` 会从有效指针变为 NULL，该并发变更导致空指针解引用引发崩溃。
+
+#解决方案
+1. 在设置 `dev->driver` 时使用 `WRITE_ONCE()` 宏，防止编译器拆写导致的数据撕裂。
+2. 新增 `dev_driver_uevent()` 函数处理 uevent 中的驱动信息填充。
+3. 在读取 `dev->driver` 指针时使用 `READ_ONCE()` 宏，确保读取到一致的指针值。
+4. 读取时获取总线（bus）的 drivers klist 自旋锁，确保在访问驱动对象期间其不会被注销释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1fb96e98bfa7ffc26c8ae47bd779de2ea682a3e

@@ -1,0 +1,20 @@
+#标题
+USB Gadget f_mass_storage 整数溢出导致内存越界风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当恶意 USB 主机发送请求大数据量的 SCSI READ 或 WRITE 命令时，由于左移操作发生整数溢出回绕，导致计算出的数据大小被截断。该截断值可绕过边界检查，进而可能导致内核内存损坏或越界访问。
+
+#主要错误日志
+未知
+
+#问题根因
+`check_command_size_in_blocks()` 函数通过将 `common->data_size_from_cmnd` 左移块大小位数 (`common->curlun->blkbits`) 来计算字节数，但未对该移位操作进行整数溢出校验。在初始化阶段，这两个变量之间的相互作用没有进行整数溢出检查，导致恶意主机发送大数据请求时，左移操作发生回绕，产生截断的数据大小。
+
+#解决方案
+引入 `linux/overflow.h` 头文件，使用 `check_shl_overflow()` 宏安全地执行移位操作。如果检测到溢出，设置 `phase_error` 标志并返回 `-EINVAL`，从而阻止潜在的越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/188a99d7abd91b441b4d1fe1302cd23dfe103d8c

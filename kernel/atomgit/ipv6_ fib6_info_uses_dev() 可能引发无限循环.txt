@@ -1,0 +1,23 @@
+#标题
+ipv6: fib6_info_uses_dev() 可能引发无限循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在高频 next hop 变动场景下，内核在执行 `fib6_info_uses_dev()` 函数时可能陷入无限循环，导致 CPU 100% 占用且无法调度（soft lockup），系统失去响应。
+
+#主要错误日志
+未知
+
+#问题根因
+`fib6_info_uses_dev()` 函数在遍历 `fib6_siblings` 链表时，未使用 RCU 保护机制，且未检查链表锚点是否已被移除。在 `fib6_del_route()` 或 `fib6_add_rt2node()` 并发执行并移除了链表节点的情况下，遍历循环无法终止，导致无限循环。
+
+#解决方案
+引入 RCU 保护机制并增加跳出条件：
+1. 将链表遍历宏从 `list_for_each_entry_safe` 替换为 `list_for_each_entry_rcu`，并在遍历期间持有 `rcu_read_lock`。
+2. 在循环内部增加检查 `if (!READ_ONCE(f6i->fib6_nsiblings))`，当检测到兄弟节点数量变为 0 时强制跳出循环，防止在锚点被并发删除后继续遍历。
+3. 读取 `fib6_nsiblings` 时使用 `READ_ONCE` 确保读取操作的原子性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f58d063feca59ca256edb7bd6a6500ac2bbe1ac

@@ -1,0 +1,20 @@
+#标题
+mmc: sdhci-pci: Vexia Edu Atla 10 平板 microSD 卡槽因缺少 CD GPIO 信息无法工作
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Vexia Edu Atla 10 平板（西班牙安达卢西亚地区学校发行版）上，microSD 卡槽无法使用。系统启动过程中，SDHCI 控制器驱动加载失败，导致 SD 卡无法被识别。
+
+#主要错误日志
+[   10.572113] sdhci-pci 0000:00:12.0: failed to setup card detect gpio
+
+#问题根因
+该平板的 SDHCI 控制器（用于 microSD 插槽）没有关联的 ACPI fwnode，因此缺少 ACPI GPIO 资源信息。这导致驱动程序无法获取卡检测（Card Detect, CD）GPIO 配置，进而初始化失败。
+
+#解决方案
+在 `sdhci-pci-core.c` 中增加 DMI quirk 机制。针对该特定机型，通过 `gpiod_lookup_table` 手动定义 CD GPIO 信息（指定 GPIO 控制器为 "INT33FC:00"，偏移 38，名称 "cd"），并通过 DMI 匹配规则（BIOS 日期 08/25/2014 等）绑定到设备。驱动初始化时，若检测到匹配的 DMI 表项，则注册该 GPIO 查找表，从而替代缺失的 ACPI 信息，成功配置卡检测功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0c6b44706f595d580c0cb8deaabbdf7414c929c6

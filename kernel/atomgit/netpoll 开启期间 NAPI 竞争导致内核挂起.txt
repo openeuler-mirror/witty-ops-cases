@@ -1,0 +1,24 @@
+#标题
+netpoll 开启期间 NAPI 竞争导致内核挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 virtio 驱动测试（如 xdp.py, ping.py, netcons_basic.sh 等组合测试）时，系统发生挂起。具体表现为测试进程在 `virtnet_close()` -> `virtnet_napi_tx_disable()` 流程中陷入死循环无法退出，导致内核线程或进程无法继续执行。
+
+#主要错误日志
+未知
+
+#问题根因
+当 NAPI 正在执行轮询（poll）时，如果此时 netpoll 被启用，会发生竞争条件：
+1. 正常的 NAPI 轮询流程检查 `dev->npinfo` 发现为 NULL（此时 netpoll 尚未完全启用），因此跳过锁操作直接进入 `__napi_poll`。
+2. 随后 netpoll 启用流程介入，获取了 NAPI 实例并设置 `NAPI_STATE_NPSVC` 状态。
+3. 原先的 NAPI 流程在 `napi_complete_done()` 中检测到 `NAPI_STATE_NPSVC` 被设置，因此返回 false 并退出，导致 SCHED 状态位未被清除。
+4. 此时 NAPI 状态显示为已调度（scheduled）但不在轮询列表中（`list_empty`），导致后续的 `virtnet_napi_tx_disable` 等待 NAPI 完成时永远无法满足条件，从而挂起系统。
+
+#解决方案
+在 `netpoll_setup` 函数中，在设置 `dev->npinfo` 并解锁 RTNL 之后，增加一个 `synchronize_rcu()` 调用。这确保了所有在 `dev->npinfo` 可见之前就已经启动的 NAPI 轮询实例都已经退出，防止它们在 netpoll 启用过程中因读取到旧的 NULL 指针而跳过锁检查，从而避免竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e008d4ef622ddda67a8bae5aa002cf3cbe6e6ca4

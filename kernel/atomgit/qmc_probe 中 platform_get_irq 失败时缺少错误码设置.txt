@@ -1,0 +1,20 @@
+#标题
+qmc_probe 中 platform_get_irq 失败时缺少错误码设置
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 QMC 驱动探测过程中，若 `platform_get_irq()` 获取中断号失败，函数直接跳转至错误处理流程，但未正确设置返回值 `ret`。这导致 `qmc_probe` 返回一个未初始化或旧值的错误码，掩盖了实际的失败原因，可能致使上层调用者无法准确判断失败的具体原因（如 -ENXIO 或 -EINVAL），影响错误处理逻辑。
+
+#主要错误日志
+qmc.c:1942 qmc_probe() warn: missing error code 'ret'
+
+#问题根因
+`qmc_probe` 函数在调用 `platform_get_irq(pdev, 0)` 失败时（返回值 `irq < 0`），虽然执行了错误跳转 `goto err_exit_xcc`，但在跳转前未将局部变量 `ret` 赋值为 `irq` 的错误码。导致函数返回时 `ret` 值不正确，违反了错误处理路径必须返回正确错误码的规范。
+
+#解决方案
+在 `platform_get_irq()` 失败的分支中，将 `irq` 的错误值赋给 `ret` 变量，确保函数返回正确的错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/256b6b4f725b0b400759217f2b85b46ec5a4c541

@@ -1,0 +1,24 @@
+#标题
+mlx5e 网卡 profile 变更回滚失败导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 mlx5e 网卡驱动执行 profile 切换（如 uplink rep 加载/卸载）时，若首次变更失败且回滚操作也失败，驱动内部状态不一致。后续再次尝试执行 profile 变更时，代码未对异常状态进行处理，导致内核崩溃。
+
+#主要错误日志
+- netdev_warn(netdev, "no original profile to rollback to\n");
+- netdev_err(netdev, "failed to rollback to orig profile, %d\n", rollback_err);
+
+#问题根因
+在 `mlx5e_netdev_change_profile` 函数中，如果 profile 变更失败且回滚也失败，驱动会将 `priv->profile` 置空并返回错误。然而，原有代码逻辑在后续调用该函数时，直接解引用 `priv->profile` 指针（如 `orig_profile = priv->profile`）而不检查是否为空，导致空指针解引用引发崩溃。此外，在 rep load 阶段调用 `netdev_priv(netdev)` 时，可能此时 `priv` 尚未初始化，进一步加剧了内存访问风险。
+
+#解决方案
+1. 修改 `mlx5e_netdev_change_profile` 函数接口，传入 `net_device` 和 `mdev` 指针而非 `mlx5e_priv`，以避免依赖可能未初始化的 priv 结构体。
+2. 在清理旧 profile 前，增加对 `priv->profile` 的非空检查；若为空（表示前次变更异常），则跳过清理步骤。
+3. 在回滚失败分支中，显式将 `priv->profile` 设置为 NULL，标记状态异常，防止后续操作访问无效指针。
+4. 在 `mlx5e_vport_uplink_rep_load` 中移除对 `netdev_priv` 的过早调用，直接使用 netdev 指针，避免内存访问违规。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4cbacd728cd960d32ba9629396608fef89b229e1

@@ -1,0 +1,23 @@
+#标题
+md/bitmap: resize 导致 write_page 发生通用保护错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行阵列扩容操作时，内核发生 General Protection Fault (GPF)。具体表现为 write_page 函数触发崩溃，调用栈显示 RIP 位于 write_page+0x22b/0x3c0 [md_mod]。这是一个典型的释放后使用问题，由并发访问导致。
+
+#主要错误日志
+RIP: 0010:write_page+0x22b/0x3c0 [md_mod]
+
+#问题根因
+这是一个 bitmap_daemon_work() 与 __bitmap_resize() 之间的竞态条件引发的释放后使用问题。
+1. bitmap_daemon_work() 在遍历 `bitmap->storage.filemap` 时未持有锁。
+2. resize 执行路径调用 md_bitmap_file_unmap() 释放了 storage 空间。
+3. `quiesce()` 未能停止 md 线程，导致 daemon 可以并发访问已被释放的页面，从而触发 GPF。
+
+#解决方案
+在 md_bitmap_resize 函数执行 bitmap 存储更新期间，增加持有 `mddev->bitmap_info.mutex` 锁的逻辑。具体修改是在调用 md_bitmap_file_unmap 替换 storage 前 mutex_lock，在更新完成并释放 spinlock 后 mutex_unlock，以此防止后台守护线程并发访问导致崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/48a5b0ae79ff9cf58b3002fc4997fda6c3b3eeb9

@@ -1,0 +1,26 @@
+#标题
+ocelot: hwstamp_set 错误处理缺失导致时间戳配置状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ocelot 网络驱动中进行硬件时间戳配置时，若用户传入不支持的 RX filter 或 `copy_to_user` 发生失败，内核未正确回滚之前的配置。具体表现为：
+1. 当设置不支持的 `rx_filter` 导致返回 `-ERANGE` 错误时，端口的 TX 时间戳配置已被修改，导致配置状态与用户预期不一致（配置失败但部分参数已生效）。
+2. 当向用户空间拷贝配置数据失败时，驱动已设置的 PTP traps 和 TX 配置未能恢复，造成资源泄露或状态残留。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ocelot_hwstamp_set` 函数中，代码逻辑未遵循事务处理原则：
+1. **提前提交状态**：在解析并验证 `rx_filter` 之前，函数就已经根据 `tx_type` 修改了 `ocelot_port->ptp_cmd`。如果后续 `rx_filter` 校验失败返回错误，之前修改的 TX 配置无法恢复。
+2. **缺少回滚机制**：在函数执行成功路径末尾，`copy_to_user` 失败时直接返回 `-EFAULT`，未对已执行的 `ocelot_setup_ptp_traps` 和 `ptp_cmd` 设置进行清理和回滚。
+
+#解决方案
+重构 `ocelot_hwstamp_set` 函数的错误处理逻辑，实现延迟更新与回滚机制：
+1. **延迟配置更新**：引入临时变量存储新的 `ptp_cmd`，将 `ocelot_port->ptp_cmd` 的实际赋值操作推迟到 `rx_filter` 校验成功之后。
+2. **增加回滚路径**：保存修改前的 `ptp_cmd` 和 `trap_proto` 状态（`old_ptp_cmd`, `old_l2`, `old_l4`）。若 `copy_to_user` 失败，跳转至错误处理标签 `out_restore_ptp_traps`，利用保存的旧值恢复 PTP traps 配置和 `ptp_cmd`，确保函数返回错误时设备状态保持不变。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/512f3b24bcb59c9b63662b453e0dd42be8e02777

@@ -1,0 +1,20 @@
+#标题
+smb: client: fix potential UAF in smb2_close_cached_fid()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SMB 客户端在处理缓存目录句柄时存在竞争条件，可能导致内核发生 Use-After-Free（UAF）故障。该问题出现在并发场景下，当 `kref_put()` 观测到引用计数降为零后，在获取锁之前，另一个线程通过 `find_or_create_cached_dir()` 获取了新的引用，进而导致已释放内存被非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb2_close_cached_fid()` 函数中，引用计数处理与锁获取之间存在时间窗口。具体原因为：`find_or_create_cached_dir()` 可能在 `kref_put()` 检测到引用计数降为零之后、但在 `cfid_list_lock` 被获取之前，抢占并获取一个新的引用。这导致了 Use-After-Free 问题。
+
+#解决方案
+将 `kref_put()` 替换为 `kref_put_lock()`，确保 `cfid_release()` 在持有 `cfid_list_lock` 锁的情况下被调用，从而关闭该竞争窗口。同时修改 `smb2_close_cached_fid()` 函数，使其假定调用者已持有锁（使用 `lockdep_assert_held` 进行断言），并移除函数内部的 `spin_lock` 调用以适配新的锁机制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/185113bb17404558b7fdf3727ea2291e80e0c868

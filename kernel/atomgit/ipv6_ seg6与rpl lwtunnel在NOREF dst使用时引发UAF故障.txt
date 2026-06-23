@@ -1,0 +1,21 @@
+#标题
+ipv6: seg6与rpl lwtunnel在NOREF dst使用时引发UAF故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PREEMPT_RT 内核配置下，ksoftirqd 可被抢占。当处理 seg6 或 rpl lwtunnels 数据包时，若发生并发 FIB 查找，内核会检测到 dst 状态异常，触发 WARN 警告并发生 use-after-free（UAF）。此时数据包转发路径受损，相关网络功能不可用。
+
+#主要错误日志
+WARN / use-after-free
+
+#问题根因
+在 `seg6_input_core()` 和 `rpl_input()` 函数中，调用 `ip6_route_input()` 会在 skb 上设置一个 NOREF（无引用计数）的 dst。随后代码将其传递给 `dst_cache_set_ip6()` 并无条件调用 `dst_hold()`。
+在 PREEMPT_RT 环境下，ksoftirqd 是可抢占的，若此时有更高优先级的任务通过共享 nexthop 对象的并发 FIB 查找释放了底层的 pcpu_rt，会导致当前任务在缓存 dst 前其引用计数已降为 0（dead 状态），从而在 `dst_hold()` 时触发 WARN 和 use-after-free。
+
+#解决方案
+在 `seg6_input_core()` 和 `rpl_input()` 中，于 `ip6_route_input()` 调用之后立即调用 `skb_dst_force()`。这强制将 NOREF dst 转换为带引用计数的 dst，防止在缓存或使用过程中因并发操作导致 dst 被释放。同时增加了对 dst 为空的判断处理，若无法获取 dst 则返回 `-ENETUNREACH` 并丢弃数据包。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/66cb5047a7991da0e9daf0c5a7519ccce9c77cdc

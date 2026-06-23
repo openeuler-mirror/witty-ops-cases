@@ -1,0 +1,33 @@
+#标题
+[net: phy] 启用 LEDS_TRIGGER_NETDEV 与 LED_TRIGGER_PHY 时触发 AB-BA 死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核同时启用 `LEDS_TRIGGER_NETDEV` 和 `LED_TRIGGER_PHY` 配置项时，系统在初始化网络设备或配置 LED 触发器过程中发生死锁，导致相关进程（如 ioctl 调用）挂起无法响应，且内核打印锁依赖相关的调用栈信息。
+
+#主要错误日志
+```
+[ 1362.049207] [<8054e4b8>] led_trigger_register+0x5c/0x1fc             <-- Trying to get lock "triggers_list_lock" via down_write(&triggers_list_lock);
+[ 1362.054536] [<80662830>] phy_led_triggers_register+0xd0/0x234
+[ 1362.060329] [<8065e200>] phy_attach_direct+0x33c/0x40c
+...
+[ 1362.094985] [<80694360>] sock_ioctl+0x2f4/0x4e0                       <-- Hold lock "rtnl_mutex" by calling rtnl_lock();
+...
+[ 1362.191101] [<806c2640>] register_netdevice_notifier+0x60/0x168      <-- Trying to get lock "rtnl_mutex" via rtnl_lock();
+[ 1362.197073] [<805504ac>] netdev_trig_activate+0x194/0x1e4
+[ 1362.202490] [<8054e28c>] led_trigger_set+0x1d4/0x360                 <-- Hold lock "triggers_list_lock" by down_read(&triggers_list_lock);
+```
+
+#问题根因
+这是一个典型的 AB-BA 死锁问题：
+1. 进程 A（路径：`dev_ioctl` -> `phy_attach_direct` -> `phy_led_triggers_register`）：先持有 `rtnl_mutex` 锁，随后尝试获取 `triggers_list_lock` 锁。
+2. 进程 B（路径：`led_trigger_write` -> `netdev_trig_activate` -> `register_netdevice_notifier`）：先持有 `triggers_list_lock` 锁，随后尝试获取 `rtnl_mutex` 锁。
+两个锁的获取顺序不一致导致循环等待，进而死锁。根本原因在于 `phy_led_triggers_register` 被放置在持有 RTNL 锁的 `phy_attach` 流程中调用。
+
+#解决方案
+将 `phy_led_triggers_register` 和 `phy_led_triggers_unregister` 的调用位置从 `phy_attach_direct`/`phy_detach`（持有 RTNL 锁的上下文）移动至 `phy_probe`/`phy_remove`（不持有 RTNL 锁的上下文）中。由于 PHY LED 触发器的注册不依赖 RTNL 锁保护，且无需 PHY 必须已挂载到 MAC，此调整避免了锁顺序冲突，从而修复死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8fecb69be5c8e689a1999adb7fce12fd34eb083b

@@ -1,0 +1,35 @@
+#标题
+i2c: designware: 关闭 CONFIG_PM 导致驱动卸载后时钟未关闭
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核配置关闭 CONFIG_PM（Power Management）的情况下，卸载 Designware I2C 驱动模块后，对应的时钟资源未正确释放，导致时钟引用计数泄露。具体表现为：
+1. 系统启动后，查看时钟使能计数初始值为 18。
+2. 绑定 I2C 设备驱动后，时钟使能计数增加至 20。
+3. 解绑（卸载）I2C 设备驱动后，时钟使能计数仍然维持在 20，未恢复至原值。
+
+#主要错误日志
+无 panic 或报错日志。故障通过调试文件系统观测到的计数异常体现：
+```bash
+# cat /sys/kernel/debug/clk/clk-pclk/clk_enable_count
+18
+# echo 1214a000.i2c > /sys/bus/platform/drivers/i2c_designware/bind
+# cat /sys/kernel/debug/clk/clk-pclk/clk_enable_count
+20
+# echo 1214a000.i2c > /sys/bus/platform/drivers/i2c_designware/unbind
+# cat /sys/kernel/debug/clk/clk-pclk/clk_enable_count
+20
+```
+
+#问题根因
+当 CONFIG_PM 未配置时，PM runtime 相关的函数如 pm_runtime_put_sync() 变为空操作，不会产生实际效果。在驱动移除（remove）流程中，代码仅调用了 pm_runtime_put_sync() 试图关闭时钟，但由于 CONFIG_PM 未开启，该函数无法真正关闭时钟。同时，因为 CONFIG_PM 关闭，时钟在设备 idle 状态下也不会被自动关闭，导致驱动退出时时钟一直处于开启状态，引发时钟资源泄露。
+
+#解决方案
+修改驱动移除函数 `dw_i2c_plat_remove` 的处理逻辑，确保在非 PM 环境下也能正确关闭时钟：
+1. 将 `pm_runtime_put_sync()` 替换为 `pm_runtime_put_noidle()`，该函数仅递减运行时 PM 使用计数而不执行回调，避免在无 PM 支持时产生无效操作。
+2. 在清理完 PM 资源后，显式调用 `i2c_dw_prepare_clk(dev, false)` 强制关闭时钟，确保时钟资源被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5e5240ffc9579be729dea28456ed0fdbf4ae06f0

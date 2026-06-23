@@ -1,0 +1,31 @@
+#标题
+s390/iucv: MSG_PEEK 标志导致 iucv_sock_destruct 内存泄漏与告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户空间程序在使用 AF_IUCV 套接字接收数据时传入 MSG_PEEK 标志，会导致 socket 缓冲区（skb）引用计数泄漏。随后在关闭套接字时，`skb_queue_purge` 无法正确释放内存，触发 `iucv_sock_destruct` 中的 `WARN_ON` 告警。
+
+#主要错误日志
+WARNING: CPU: 2 PID: 6292 at net/iucv/af_iucv.c:286 iucv_sock_destruct+0x144/0x1a0 [af_iucv]
+CPU: 2 PID: 6292 Comm: afiucv_test_msg Kdump: loaded Tainted: G        W          6.10.0-rc7 #1
+Hardware name: IBM 3931 A01 704 (z/VM 7.3.0)
+Call Trace:
+[<001587c682c4aa98>] iucv_sock_destruct+0x148/0x1a0 [af_iucv]
+[<001587c682c4a9d0>] iucv_sock_destruct+0x80/0x1a0 [af_iucv]
+[<001587c704117a32>] __sk_destruct+0x52/0x550
+[<001587c704104a54>] __sock_release+0xa4/0x230
+[<001587c704104c0c>] sock_close+0x2c/0x40
+...
+
+#问题根因
+在 `iucv_sock_recvmsg` 函数中，调用 `skb_recv_datagram()` 时如果设置了 `MSG_PEEK` 标志，内核会增加 skb 的引用计数（`skb->users`），但该函数在退出路径上未能相应地减少引用计数。这导致 skb 在套接字关闭时无法被正确释放，造成内存泄漏并触发异常处理路径中的 WARN_ON。
+
+#解决方案
+在 `iucv_sock_recvmsg` 函数中增加对 `MSG_PEEK` 标志的处理逻辑。具体修改如下：
+1. 在正常返回路径（`recvmsg` 成功完成）和错误返回路径（如 `err_out` 标签处），检查是否设置了 `MSG_PEEK` 标志。
+2. 如果设置了 `MSG_PEEK`，则调用 `skb_unref(skb)` 将增加的引用计数减一，确保引用计数的平衡，从而防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e97faacd8a3296075018e525475d503ec7ed80bb

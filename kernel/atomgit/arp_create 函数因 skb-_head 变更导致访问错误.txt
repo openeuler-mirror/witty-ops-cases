@@ -1,0 +1,20 @@
+#标题
+arp_create 函数因 skb->head 变更导致访问错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 arp_create 函数构建 ARP 包的过程中，由于内部调用的 dev_hard_header() 函数可能会改变 skb->head 的指向，导致原先缓存的 arp 指针失效。后续通过该失效指针操作 ARP 协议头数据时，可能引发内核崩溃或内存数据破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+arp_create() 函数是唯一一个假设 dev_hard_header() 调用不会改变 skb->head 的调用者。代码中在调用 dev_hard_header() 之前就通过 skb_put() 获取并保存了 arp 指针，但随后的 dev_hard_header() 调用（特别是受 commit db5b4e39c4e6 "ip6_gre: make ip6gre_header() robust" 影响后）可能导致 skb->head 发生变化，使得之前保存的 arp 指针指向错误的内存位置。
+
+#解决方案
+调整 arp 指针的初始化时机，将其从 dev_hard_header() 调用之前移至调用之后。具体修改为：在 dev_hard_header() 执行完毕后，通过 arp_hdr(skb) 重新获取正确的 ARP 头部指针，确保后续操作访问的是有效的内存地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/875992c56315eaba8ce689ea9f1d59178936e733

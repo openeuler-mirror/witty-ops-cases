@@ -1,0 +1,20 @@
+#标题
+RDMA/mlx5: 修复 mlx5_poll_one() 中 cur_qp 更新流程错误的 QP 匹配问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDMA mlx5 驱动中，`mlx5_poll_one` 函数处理完成队列轮询时，无法正确识别当前的 QP（队列对）。当硬件上报的 QP 号与软件维护的 `cur_qp` 进行比对时，因获取 QP 号的字段错误，导致判断逻辑失效，可能引发错误的 QP 上下文切换或处理流程异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mlx5_poll_one` 函数中，代码使用 `(*cur_qp)->ibqp.qp_num` 获取 QP 号与 CQE 中的 qpn 进行比较。然而，正确的 QP 号应从 `(*cur_qp)->trans_qp.base.mqp.qpn` 字段获取。使用错误的 `ibqp.qp_num` 字段导致比较值不匹配，从而破坏了 cur_qp 的更新与复用逻辑。
+
+#解决方案
+修改 `drivers/infiniband/hw/mlx5/cq.c` 文件中的 `mlx5_poll_one` 函数，将 QP 号的比较逻辑从 `(*cur_qp)->ibqp.qp_num` 修正为 `(*cur_qp)->trans_qp.base.mqp.qpn`，确保 QP 号比对正确，修复 cur_qp 更新流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7b2eddabb93ba465fc2fcb60de6316b84afdb334

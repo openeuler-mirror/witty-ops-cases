@@ -1,0 +1,21 @@
+#标题
+algif_hashaccept 双重释放漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 AF_ALG 接口的 hash 类型 socket 进行 accept 操作时，若 `crypto_ahash_import` 执行失败，内核会在清理过程中触发双重释放，导致系统崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `hash_accept` 中，当 `crypto_ahash_import` 调用失败时，原有代码逻辑执行了 `sock_orphan(sk2)` 和 `sock_put(sk2)`。
+由于后续代码路径（`out_free_state` 标签后）以及 socket 释放机制会继续对该 socket 进行处理，此处显式调用 `sock_put` 导致了引用计数错误，进而引发 socket 结构体被双重释放。
+
+#解决方案
+移除 `crypto_ahash_import` 失败分支中的 `sock_orphan` 和 `sock_put` 调用，避免手动错误释放 socket，交由正常的 socket 生命周期管理流程处理，从而消除双重释放隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/edcbca597872c6adf67c2ae1d9c970b9eef5b23e

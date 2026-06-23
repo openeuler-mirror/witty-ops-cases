@@ -1,0 +1,24 @@
+#标题
+bpf, sockmap: sk_msg_reset_curr 导致 cork 场景下数据覆盖故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 test_sockmap 中的 test_txmsg_pull 测试用例时，若配置了 txmsg_cork (如 512 字节)，会发生数据完整性测试失败。
+具体表现为：第一个 sendmsg 发送大小为 3 的 sk_msg 后，sk_msg_reset_curr 错误地将 copybreak 重置为 0；在第二个 sendmsg 进行 cork 合并时，由于 copybreak 为 0，第二个消息的数据错误地覆盖了第一个消息的数据。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 sk_msg_reset_curr 的逻辑实现错误。原实现通过循环遍历计算长度来定位 curr 指针，并在未考虑当前消息实际大小的情况下强制将 copybreak 设为 0。
+在 cork 场景下，当第一个消息已存在数据时，错误的 reset 操作导致 msg->sg.copybreak 变为 0，破坏了 scatterlist 的状态，使得后续消息处理错误地覆盖了前序数据。正确的逻辑应当是根据 msg->sg.size 是否为 0 来决定是初始化状态还是恢复到最后一个元素的状态。
+
+#解决方案
+修改 sk_msg_reset_curr 函数逻辑：
+1. 如果 msg->sg.size 为 0，说明无数据，将 curr 设置为 start，copybreak 设置为 0。
+2. 如果 msg->sg.size 不为 0，说明有数据，将 curr 指向 sg.end 的前一个元素，并将 copybreak 恢复为该元素的长度，从而保留正确的数据写入位置，避免覆盖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0611da982397780837069ffdf231a31a30a1a478

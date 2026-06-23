@@ -1,0 +1,20 @@
+#标题
+atmtcp: atmtcp_c_send 函数中无效长度 skb 未释放导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ATM over TCP 驱动处理过程中，若接收到的 socket buffer (skb) 长度小于 `struct atmtcp_hdr` 结构体的大小，函数直接返回 0 但未释放该 skb，导致内存泄漏（Memory Leak）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `atmtcp_c_send` 函数中，原有的长度校验逻辑 `if (!skb->len)` 仅检查长度是否为 0。当 skb 长度大于 0 但小于 `atmtcp_hdr` 结构体大小时，代码继续执行并在后续流程中返回，或者因校验不通过直接返回，但遗漏了对该无效 skb 的释放操作，从而导致内存泄漏。
+
+#解决方案
+修改 `atmtcp_c_send` 函数中的长度校验逻辑，将条件修改为 `if (skb->len < sizeof(struct atmtcp_hdr))`，并在条件成立时跳转至 `done` 标签（通常对应函数末尾的 `kfree_skb` 或类似清理逻辑），确保无效长度的 skb 被正确释放，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/49dd7cb71d1e3124bebb4b39176d84bf1c4c3143

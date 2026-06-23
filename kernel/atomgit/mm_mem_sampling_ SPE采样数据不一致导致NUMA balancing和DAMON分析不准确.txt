@@ -1,0 +1,26 @@
+#标题
+mm/mem_sampling: SPE采样数据不一致导致NUMA balancing和DAMON分析不准确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用SPE（Statistical Profiling Extension）内存访问记录功能的内核消费者（主要是NUMA自动平衡和DAMON）在进行内存分析时，获取到的采样数据不准确。具体表现为：
+1. 采样记录中的物理地址、虚拟地址或任务相关的元数据出现过时或不一致的情况。
+2. 在双缓冲配置下，当使用备份缓冲区时，消费者获取到的是陈旧或无效的采样数据，导致内核侧内存画像失真。
+
+#主要错误日志
+未知
+
+#问题根因
+故障根因主要包含两点：
+1. 暴露给内核消费者的 `mem_sampling_record` 结构体与底层的 `struct arm_spe_record` 未正确同步，导致相关字段（如物理地址、虚拟地址等）数据不一致。
+2. 在双缓冲配置下，函数 `mm_spe_getbuf_addr()` 未能返回正确的 `record_base`。当备份缓冲区处于使用状态时，该函数返回了错误的地址，导致消费者获取到无效数据。
+
+#解决方案
+通过修改代码逻辑修复数据同步与地址返回错误的问题：
+1. 在将采样数据传递给用户之前，显式地将 `struct arm_spe_record` 中的所有相关字段拷贝至 `mem_sampling_record` 结构体中，确保数据一致性。
+2. 更新 `mm_spe_getbuf_addr()` 函数实现，使其检查活动缓冲区和备份缓冲区的状态，并根据实际情况返回正确的 `record_base`，修正了双缓冲模式下的地址获取逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f73c5f16f573453dc6a16e9bc0b18b9cc681b271

@@ -1,0 +1,31 @@
+#标题
+btrfs: ref-verify 修复无效引用操作后的释放后使用（UAF）问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BTRFS 文件系统执行相关操作（如 unlinkat、balance、relocation 等）触发引用校验错误路径时，内核发生 slab-use-after-free（释放后使用）。KASAN 检测器报告在 `rb_first` 函数中访问了已释放内存，导致内核崩溃或系统不稳定。
+
+#主要错误日志
+BTRFS error (device loop0 state EA):   Ref action 2, root 5, ref_root 0, parent 8564736, owner 0, offset 0, num_refs 18446744073709551615
+...
+BTRFS error (device loop0 state EA):   Ref action 1, root 5, ref_root 5, parent 0, owner 260, offset 0, num_refs 1
+...
+BUG: KASAN: slab-use-after-free in rb_first+0x69/0x70 lib/rbtree.c:473
+Read of size 8 at addr ffff888042d1af38 by task syz.0.0/5329
+...
+Call Trace:
+ rb_first+0x69/0x70 lib/rbtree.c:473
+ free_block_entry+0x78/0x230 fs/btrfs/ref-verify.c:248
+ btrfs_free_ref_cache+0xa3/0x100 fs/btrfs/ref-verify.c:917
+ btrfs_ref_tree_mod+0x139f/0x15e0 fs/btrfs/ref-verify.c:898
+
+#问题根因
+在函数 `btrfs_ref_tree_mod()` 中，当一个新的 ref 条目被成功插入到块条目的红黑树后，如果遇到意外的 `BTRFS_DROP_DELAYED_REF` 操作，代码会进入错误处理路径。在该路径中，直接调用了 `kfree(ref)` 释放内存，但并未先将该 ref 条目从红黑树中移除。随后，当调用 `btrfs_free_ref_cache()` 遍历并清理块条目时，红黑树仍指向已被释放的内存地址，从而触发 use-after-free。
+
+#解决方案
+在 `btrfs_ref_tree_mod()` 函数的错误处理路径中，在释放 ref 条目内存之前，增加 `rb_erase(&ref->node, &be->refs)` 操作，将其从块条目的红黑树中移除，确保指针不再引用已释放的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d53ce772e66d59361a7159872f0264311e170a2b

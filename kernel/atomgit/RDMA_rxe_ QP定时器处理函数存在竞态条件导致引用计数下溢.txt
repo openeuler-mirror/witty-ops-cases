@@ -1,0 +1,25 @@
+#标题
+RDMA/rxe: QP定时器处理函数存在竞态条件导致引用计数下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中触发多个内核告警，包括 refcount_t underflow（引用计数下溢）、use-after-free 警告以及 rxe_sched_task 中的断言失败。具体表现为在执行 QP（Queue Pair）销毁操作与定时器回调函数并发执行时，出现引用计数异常。
+
+#主要错误日志
+WARNING: drivers/infiniband/sw/rxe/rxe_task.c:249 at rxe_sched_task+0x1c8/0x238 [rdma_rxe], CPU#0: swapper/0/0
+WARNING: drivers/infiniband/sw/rxe/rxe_task.c:38 at rxe_sched_task+0x1c0/0x238 [rdma_rxe], CPU#0: swapper/0/0
+WARNING: drivers/infiniband/sw/rxe/rxe_task.c:111 at do_work+0x488/0x5c8 [rdma_rxe], CPU#3: kworker/u17:4/93400
+refcount_t: underflow; use-after-free.
+WARNING: lib/refcount.c:28 at refcount_warn_saturate+0x138/0x1a0, CPU#3: kworker/u17:4/93400
+
+#问题根因
+问题由 retransmit_timer() 或 rnr_nak_timer() 定时器回调函数与 rxe_destroy_qp() 函数之间的竞态条件引起。
+当 CPU0 正在执行定时器回调（如 retransmit_timer）时，CPU1 同时执行 rxe_destroy_qp() 调用 __rxe_put() 将 QP 的引用计数减至 0。此时 CPU0 继续执行 rxe_sched_task() 时，读取到的 QP 引用计数已为 0 或负值，导致触发 WARN_ON 断言及 refcount underflow 警告。
+
+#解决方案
+在定时器回调函数（retransmit_timer 和 rnr_nak_timer）执行关键操作前，增加对 QP 对象的引用计数获取（rxe_get(qp)），并在操作完成后释放引用计数（rxe_put(qp)）。这确保了在定时器处理期间 QP 对象不会被提前释放，从而避免竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ecd655dcf3af91772b5b37f1b623de875dfac5f

@@ -1,0 +1,20 @@
+#标题
+vdpa/mlx5: 修复 null mkey 长度超过 32 位导致溢出的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mlx5 vdpa 驱动进行内存注册时，若内存映射间隙超过 2^32 字节（例如间隙达到 1GB 限制），fill_indir() 函数生成的 null mkey 条目的字节计数会超过 32 位整数的最大值。这导致 null mkey 无法正确填充内存映射间隙，可能引发内存映射错误或 vDPA 设备功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fill_indir()` 函数中，处理内存映射间隙的代码未对 `bcount` 进行 32 位长度限制。代码直接将 `dmr->start - preve`（间隙大小）强制转换为 `be32` 类型，当间隙大小超过 32 位无符号整数最大值（4GB）或硬件限制（1GB）时，会发生截断溢出。相比之下，`create_user_mr()` 函数包含正确的逻辑，会将范围限制在 1GB 以内，而 `fill_indir()` 缺失了该限制逻辑。
+
+#解决方案
+在 `fill_indir()` 函数处理间隙的分支中，引入 `min_t(u64, dmr->start - preve, MAX_KLM_SIZE)` 计算逻辑。通过取间隙长度与 `MAX_KLM_SIZE` 的最小值，确保赋值给 `klm->bcount` 的值不超过硬件或 32 位限制。同时修正 `preve` 指针的更新方式，使其按实际填充的 `bcount` 递增，而不是直接跳跃到 `dmr->start`，从而正确填充超出限制的大块间隙。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6c2c709edcc9331b5e76a07d7b64dc75fe6a7042

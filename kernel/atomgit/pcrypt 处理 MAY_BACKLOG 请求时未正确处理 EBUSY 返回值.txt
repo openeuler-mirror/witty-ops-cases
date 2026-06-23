@@ -1,0 +1,21 @@
+#标题
+pcrypt 处理 MAY_BACKLOG 请求时未正确处理 EBUSY 返回值
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 pcrypt 框架进行异步加密解密操作时，若请求设置了 MAY_BACKLOG 标志，当加密设备队列已满时返回 -EBUSY，内核未能正确处理该返回值，导致系统行为异常（如错误地触发了完成回调或导致数据处理流程中断），进而影响加密服务的可用性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 pcrypt 模块的加密（`pcrypt_aead_enc`）和解密（`pcrypt_aead_dec`）回调函数中，仅对 `crypto_aead_encrypt/decrypt` 返回的 `-EINPROGRESS` 进行了判断并直接返回，交由异步回调处理。然而，根据内核加密子系统的规范，设置了 `MAY_BACKLOG` 的请求在队列满时可能返回 `-EBUSY`，该情况同样意味着请求已排队待处理。现有代码未将 `-EBUSY` 纳入正常返回范畴，导致 `-EBUSY` 被错误地视为失败错误并继续执行后续流程。此外，在异步完成回调 `pcrypt_aead_done` 中，未过滤 `-EINPROGRESS` 状态，可能导致错误的回调通知。
+
+#解决方案
+1. 在 `pcrypt_aead_enc` 和 `pcrypt_aead_dec` 函数中，扩展返回值检查逻辑，将 `-EBUSY` 与 `-EINPROGRESS` 同等对待，即当返回值为这两个值之一时，函数直接返回，不进行错误处理。
+2. 在 `pcrypt_aead_done` 回调函数入口处增加判断，若错误码为 `-EINPROGRESS` 则直接返回，避免无效的后续处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b2041d99acc1127b9c9f2acff763a95e25073a39

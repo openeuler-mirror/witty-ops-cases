@@ -1,0 +1,32 @@
+#标题
+x86/acpi: MADT LAPIC标志位检查逻辑错误导致CPU拓扑枚举或热插异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在裸金属环境下，由于Linux拓扑枚举逻辑变更及对MADT LAPIC标志位检查不当，导致系统无法正确识别或忽略标记为“Enabled=0”的处理器条目，破坏了ACPI规范定义的行为。
+在QEMU虚拟机环境下，之前的修复试图纠正裸金属问题时，破坏了虚拟机的CPU热插拔功能，导致guestOS无法利用标记为“Enabled=0”的MADT条目进行CPU热添加。
+
+#主要错误日志
+Ignoring hot-pluggable APIC ID %x in present package.
+（注：此为修复前代码在裸金属环境下可能误报的日志，修复后该特定检查逻辑被移除）
+
+#问题根因
+ACPI v6.3定义了新的"Online Capable" MADT LAPIC标志位，该位与"Enabled"标志位共同决定CPU是否可被OS启用或热插拔。
+之前的内核代码在处理“Enabled=0”的LAPIC条目时逻辑混乱：
+1. 试图修复QEMU CPU热插拔问题时，引入了对裸金属环境的错误判断。
+2. 在`topology.c`中添加了针对裸金属环境的额外检查，试图忽略“present package”中的非存在APIC ID，但这与ACPI规范中“OS应完全忽略Enabled=0条目”的指导（针对不具备Online Capable位的老旧硬件）相冲突，且导致了逻辑不一致。
+根本原因是`acpi_is_processor_usable()`函数没有正确区分“支持Online Capable的新硬件”与“不支持该位的遗留硬件/虚拟化场景”，且未能妥善处理QEMU的特殊行为（QEMU使用Enabled=0表示可热插拔，而标准BIOS可能仅表示不可用）。
+
+#解决方案
+重构`acpi_is_processor_usable()`函数的检查逻辑，严格遵循ACPI规范并兼容QEMU的特殊处理：
+1. 如果LAPIC标志位中`ACPI_MADT_ENABLED`置位，则处理器可用。
+2. 如果系统支持`ACPI_MADT_ONLINE_CAPABLE`（acpi_support_online_capable为真），则直接依据该标志位判断是否可用。
+3. 对于不支持`ACPI_MADT_ONLINE_CAPABLE`的遗留情况：
+   - 在QEMU等虚拟化环境中（非X86_HYPER_NATIVE），认为“Enabled=0”的条目是可用的（支持热插拔）。
+   - 在裸金属环境中（X86_HYPER_NATIVE），遵循ACPI v6.0规范，认为“Enabled=0”的条目不可用，直接忽略。
+同时，删除`topology.c`中针对“present package”的冗余检查代码，统一由`acpi_is_processor_usable()`处理可用性判断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/79152b43b412a5e8f6d5bc3af84a01b420ec5783

@@ -1,0 +1,20 @@
+#标题
+drm_test_cmdline_tv_options 函数内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 DRM cmdline parser 相关的 KUnit 测试（ specifically `drm_test_cmdline_tv_options`）时，存在内核内存泄漏。测试用例调用 `drm_analog_tv_mode()` 及其变体函数创建了 `drm_display_mode` 对象，但在测试结束后未进行销毁释放，导致内存资源持续占用。
+
+#主要错误日志
+未知
+
+#问题根因
+`drm_analog_tv_mode()` 及其相关变体函数返回了一个动态分配的 `drm_display_mode` 结构体指针，该内存需要在后续被销毁以释放资源。然而，测试函数 `drm_test_cmdline_tv_options()` 虽然调用了创建函数并获取了 `expected_mode`，但从未调用相应的销毁函数，从而导致内存泄漏。
+
+#解决方案
+引入 `drm_kunit_helpers.h` 头文件，在测试函数中调用 `drm_kunit_add_mode_destroy_action()` 注册一个清理动作。该动作会在测试结束时自动销毁 `expected_mode` 对象，从而修复内存泄漏问题。同时将 `expected_mode` 的类型从 `const struct drm_display_mode *` 修改为 `struct drm_display_mode *` 以匹配相关操作需求，并增加了对返回值的错误检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/68c4811779d8629e49ca2958133331104ea8b514

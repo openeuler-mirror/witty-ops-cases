@@ -1,0 +1,20 @@
+#标题
+bridge: 802.1ad vlan_tunnel 出口处理导致 C-VLAN 标签丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 802.1ad 网桥并开启 vlan_tunnel 功能时，QinQ 帧在发出处理（egress）过程中，内层 C-VLAN 标签被错误剥离。在进行 VXLAN 封装后，接收端通过 tcpdump 抓包发现原本应存在的 C-VLAN 标签丢失，导致业务流量异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `br_handle_egress_vlan_tunnel()` 中，代码调用 `skb_vlan_pop()` 来移除 hwaccel 中的 S-VLAN 标签。然而，`skb_vlan_pop()` 的实现机制会将有效载荷中的下一个 VLAN 标签移动到 hwaccel 中。对于 QinQ 帧，这导致原本位于 payload 中的 C-VLAN 被移至 hwaccel，随后的 VXLAN 封装过程无法正确处理该 hwaccel 标签，最终导致 C-VLAN 信息丢失。
+
+#解决方案
+修改 `br_handle_egress_vlan_tunnel()` 函数，不再调用 `skb_vlan_pop()`，而是直接调用 `__vlan_hwaccel_clear_tag(skb)`。该函数仅清除 hwaccel 中的 S-VLAN 标签，保持有效载荷中的数据不变，从而确保 C-VLAN 在 VXLAN 封装过程中得以保留。此修复对 802.1Q 网桥同样适用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7cdfa3825490a18de5553095716fb1572d11e538

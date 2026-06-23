@@ -1,0 +1,23 @@
+#标题
+RDMA/cxgb4: VLAN环境下连接请求失败导致 RDMA_CM_EVENT_UNREACHABLE 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 iWARP 进行 RDMA 连接时，如果流量通过 VLAN 接口传输，尝试发送连接请求会失败，用户侧会收到 RDMA_CM_EVENT_UNREACHABLE 事件错误，导致连接无法建立。
+
+#主要错误日志
+RDMA_CM_EVENT_UNREACHABLE
+
+#问题根因
+在处理回环接口的 IPv4 连接请求时，`ip_dev_find()` 函数总是返回真实的网络设备地址。当流量实际运行在 VLAN 设备上时，代码错误地使用真实设备填充 endpoint 结构体，导致后续发送连接请求时参数不匹配，从而引发 UNREACHABLE 错误。
+
+#解决方案
+修改 `drivers/infiniband/hw/cxgb4/cm.c` 中的 `import_ep` 函数：
+1. 将 `ip_dev_find()` 替换为 `__ip_dev_find()` 以适应调用上下文。
+2. 在获取到设备后，增加对 VLAN 设备的判断逻辑。如果是 VLAN 设备，调用 `vlan_dev_real_dev()` 获取其对应的真实物理设备，确保 L2T 表项创建和后续连接请求使用正确的设备参数。
+3. 同时优化了错误处理路径，移除了多余的 `dev_put` 调用以避免引用计数问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6807408f59cc157b23b35ac4c813ad69165bde25

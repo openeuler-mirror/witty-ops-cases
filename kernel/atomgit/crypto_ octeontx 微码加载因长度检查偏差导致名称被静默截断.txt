@@ -1,0 +1,22 @@
+#标题
+crypto: octeontx 微码加载因长度检查偏差导致名称被静默截断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在向 `ucode_load` sysfs 接口写入长度刚好为 64 字节的微码名称字符串时，内核未返回错误，而是对字符串进行了静默截断。这导致写入的微码名称与用户预期不一致，可能引发后续微码加载或匹配逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+宏 `OTX_CPT_UCODE_NAME_LENGTH` 限制微码名称最大长度为 64 字节。原代码使用 `strlen(buf) > 64` 进行长度检查，存在差一错误（off-by-one）。
+当用户写入的字符串长度恰好为 64 字节时，该检查通过（64 不大于 64）。随后 `strscpy()` 函数在拷贝时只会拷贝前 63 个字符并追加 NUL 终止符，导致第 64 个字符被丢弃，字符串被意外截断。
+
+#解决方案
+修改 `drivers/crypto/marvell/octeontx/otx_cptpf_ucode.c` 中的长度检查逻辑，将 `strlen(buf)` 替换为 `count` 变量，并将判断条件修正为 `count >= OTX_CPT_UCODE_NAME_LENGTH`。
+这确保了当输入数据长度达到或超过限制时，直接返回 `-EINVAL` 错误，从而在早期拒绝非法输入，避免后续发生静默截断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3fc4d43a557a504417bc253e5abc4f5e507df8a

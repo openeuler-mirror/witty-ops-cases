@@ -1,0 +1,26 @@
+#标题
+rxrpc_connection attend 队列未初始化导致连接事件处理失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+rxrpc_connection 的 attend 队列从未被真正使用，导致连接一直处于“忙”状态，进而引发两个衍生问题：
+1. `rxrpc_input_conn_event()` 函数可能传入空指针（NULL sk_buff），导致内核异常。
+2. `RXRPC_SKB_MARK_SERVICE_CONN_SECURED` 消息未正确携带连接指针和引用计数，导致连接处理逻辑错误。
+
+#主要错误日志
+未知
+
+#问题根因
+根本原因是 `conn::attend_link` 成员变量从未进行初始化，导致其值始终为 NULL（或垃圾值被清零）。这导致 attend 队列机制失效，连接始终表现为“忙”状态，掩盖了后续代码逻辑中的缺陷：
+1. `rxrpc_input_conn_event()` 未处理 `skb` 为 NULL 的情况。
+2. `RXRPC_SKB_MARK_SERVICE_CONN_SECURED` 类型的消息在处理时未设置 `sp->conn` 且未获取连接的引用计数。
+
+#解决方案
+1. 在 `rxrpc_alloc_connection()` 中初始化 `attend_link` 链表头（`INIT_LIST_HEAD(&conn->attend_link)`），修复 attend 队列不可用的问题。
+2. 在 `rxrpc_input_conn_event()` 中增加对 `skb` 指针的非空检查（`if (skb)`），防止空指针访问。
+3. 在构建 `RXRPC_SKB_MARK_SERVICE_CONN_SECURED` 消息时，正确设置 `sp->conn` 指向当前连接并调用 `rxrpc_get_connection` 增加引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c42af0b12cc2874650642d94a9ffa4dec8a85ee6

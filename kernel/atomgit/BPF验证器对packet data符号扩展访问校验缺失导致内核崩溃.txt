@@ -1,0 +1,20 @@
+#标题
+BPF验证器对packet data符号扩展访问校验缺失导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当BPF程序通过32位符号扩展方式加载 `__sk_buff->data`、`data_end` 或 `data_meta` 字段时，验证器错误地通过了验证。这导致在运行时，经过符号扩展处理的包数据指针可能变为无效地址，进而引发内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在之前的修复提交 `1f1e864b6555` ("bpf: Handle sign-extenstin ctx member accesses") 中引入了问题。BPF验证器在处理 `__sk_buff` 结构中的 `data`、`data_end` 和 `data_meta` 字段访问时，未禁止32位符号扩展加载。在转换上下文访问期间，符号扩展操作（如 `r2 = (s32)r2`）会使原本有效的内核地址失效，从而导致运行时崩溃。
+
+#解决方案
+在 `bpf_skb_is_valid_access`、`xdp_is_valid_access` 和 `flow_dissector_is_valid_access` 等回调函数中增加对 `is_ldsx` 标志的检查。如果检测到对 `data`、`data_end` 或 `data_meta` 字段的访问带有符号扩展（`is_ldsx` 为真），则直接拒绝验证，确保此类非法访问在验证阶段失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/17605c5cdb30b9745d6be8e87cbd1e18b323e565

@@ -1,0 +1,21 @@
+#标题
+drm/amdgpu: SDMA 访问显存时因缺少锁保护导致任务排序异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 amdgpu 驱动通过 SDMA（直接内存访问）访问 VRAM（显存）时，由于未持有必要的锁，导致 GPU 任务（jobs）排序出现错乱。这可能导致显存访问数据不一致、GPU 硬件挂起或出现未定义的驱动行为，影响系统图形稳定性或导致相关进程异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `amdgpu_ttm_access_memory_sdma` 在使用 TTM entities 进行 SDMA 操作前，未获取 `gtt_window_lock` 互斥锁。根据驱动设计要求，使用者必须持有该锁才能保证 jobs 的正确排序，缺少该锁会导致并发访问时任务提交顺序混乱。
+
+#解决方案
+在 `amdgpu_ttm_access_memory_sdma` 函数中添加对 `adev->mman.gtt_window_lock` 的加锁与解锁操作。
+具体修改为：在调用 `amdgpu_res_first` 之前执行 `mutex_lock(&adev->mman.gtt_window_lock)`，在任务提交（`amdgpu_job_submit`）之后执行 `mutex_unlock(&adev->mman.gtt_window_lock)`，以确保在操作期间持有该锁，保证任务 ordering 的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/087183ceba3513d24692e8b941958c49eeaf7fa0

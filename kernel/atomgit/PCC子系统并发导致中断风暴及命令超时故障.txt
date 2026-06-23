@@ -1,0 +1,37 @@
+#标题
+PCC子系统并发导致中断风暴及命令超时故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中出现中断无人处理的情况，随后该中断被内核禁用。受此影响，依赖 PCC 通道的硬件通信命令执行超时，导致获取端口链路状态等信息失败。
+
+#主要错误日志
+kunpeng_hccs HISI04B2:00: PCC command executed timeout!
+kunpeng_hccs HISI04B2:00: get port link status info failed, ret = -110
+irq 13: nobody cared (try booting with the "irqpoll" option)
+Call trace:
+ dump_backtrace+0x0/0x210
+ show_stack+0x1c/0x2c
+ dump_stack+0xec/0x130
+ __report_bad_irq+0x50/0x190
+ note_interrupt+0x1e4/0x260
+ handle_irq_event+0x144/0x17c
+ handle_fasteoi_irq+0xd0/0x240
+ __handle_domain_irq+0x80/0xf0
+ gic_handle_irq+0x74/0x2d0
+ el1_irq+0xbc/0x140
+...
+handlers:
+ pcc_mbox_irq
+Disabling IRQ #13
+
+#问题根因
+`pcc_mbox_irq` 中断处理函数与 `pcc_send_data` 命令发送函数之间存在并发竞争问题。`chan_in_use` 标志位原本在中断处理函数调用 `mbox_chan_received_data` 之后才被清零，而该回调函数内部可能会触发新的命令发送并将 `chan_in_use` 置位。这导致标志位状态更新错乱，中断无法正确清除（电平触发模式下），进而触发中断风暴直至中断被系统禁用。
+
+#解决方案
+调整 `pcc_mbox_irq` 中断处理函数中的代码执行顺序，在调用 `mbox_chan_received_data` 之前先清除 `chan_in_use` 标志位，以避免与后续可能发生的命令发送流程产生竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/01a11f9121f299540af09249d80bab61c54b55e1

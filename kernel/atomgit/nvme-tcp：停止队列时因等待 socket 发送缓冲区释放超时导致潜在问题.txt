@@ -1,0 +1,23 @@
+#标题
+nvme-tcp：停止队列时因等待 socket 发送缓冲区释放超时导致潜在问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载或重置 NVMe over TCP 控制器期间，如果停止 IO 队列的操作未等待 socket 发送缓冲区完全排空，可能导致潜在的竞争条件或资源泄漏。在极端情况下，如果 socket 缓冲区未能及时释放，可能会触发等待超时的警告信息。
+
+#主要错误日志
+- `dev_warn(nctrl->device, "qid %d: timeout draining sock wmem allocation expired\n", qid);` （推断：当等待 socket wmem 分配超时触发）
+
+#问题根因
+原有的 `nvme_tcp_stop_queue` 函数在停止队列时，直接释放锁并返回，没有等待 socket 的写内存分配完全排空。这导致在并发或高负载场景下，socket 资源可能未能按预期完全清理，引入了潜在的可靠性风险。
+
+#解决方案
+重构 `nvme_tcp_stop_queue` 的实现逻辑：
+1. 将原函数拆分为 `nvme_tcp_stop_queue_nowait` 和 `nvme_tcp_wait_queue` 两部分。
+2. 新增 `nvme_tcp_wait_queue` 函数，实现循环等待机制：检查 `NVME_TCP_Q_ALLOCATED` 标志位及 `sk_wmem_alloc_get` 返回值，确保 socket 发送缓冲区数据排空，最长等待 200ms（每 2ms 检查一次）。
+3. 修改 `nvme_tcp_stop_io_queues` 流程，采用“先批量发起停止，再批量等待”的两阶段模式，提高多队列停止时的并发效率。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f1291888e830d8b41b191804b7ada16cc5077f1

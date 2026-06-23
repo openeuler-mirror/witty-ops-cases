@@ -1,0 +1,21 @@
+#标题
+bpf: 修复对 bpf_get_btf_vmlinux() 返回值的错误检查导致潜在空指针访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核配置未启用 CONFIG_DEBUG_INFO_BTF 时，创建 BPF struct_ops map 或进行相关 BPF 程序验证时，系统可能出现空指针崩溃；或在进行 BPF 功能探测（feature probing）时返回非预期的错误码，导致探测逻辑误判功能不支持。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bpf_struct_ops_map_alloc` 函数中，当 CONFIG_DEBUG_INFO_BTF 未配置时，`bpf_get_btf_vmlinux()` 返回 NULL，代码仅检查了 IS_ERR 错误指针，遗漏了对 NULL 指针的检查，导致后续 `bpf_struct_ops_find_value` 传入空指针引发崩溃。此外，在 `check_struct_ops_btf_id` 函数中，原有逻辑在 `prog->aux->attach_btf` 为空时会调用 `bpf_get_btf_vmlinux()` 重试，这与上层调用逻辑不一致，且在 attach_btf_id 未设置时未能正确处理功能探测的预期行为。
+
+#解决方案
+1. 在 `bpf_struct_ops_map_alloc` 中增加对 `bpf_get_btf_vmlinux()` 返回值为 NULL 的判断，若为 NULL 则返回 `-ENOTSUPP` 错误，保持与未支持该功能时的行为一致。
+2. 修改 `check_struct_ops_btf_id` 的逻辑，直接检查 `prog->aux->attach_btf_id`，若未设置则返回 `-ENOTSUPP`，移除不可靠的 fallback 调用，确保 BPF_PROG_TYPE_STRUCT_OPS 类型必须具备有效的 attach_btf_id。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/48ef10e5a15bf73f777efc3d11a4b13bd9ddfada

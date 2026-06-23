@@ -1,0 +1,20 @@
+#标题
+net: dsa: microchip: PTP IRQ 初始化失败导致 IRQ mapping 泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Microchip DSA 交换机驱动进行 PTP（精确时间协议）中断请求（IRQ）设置时，若 `request_threaded_irq()` 函数调用失败，已创建的 IRQ mapping 未能被正确释放，导致 IRQ mapping 资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ksz_ptp_msg_irq_setup()` 函数中，当 `request_threaded_irq()` 申请中断失败时，错误处理路径缺失。代码直接返回了错误码，却未调用 `irq_dispose_mapping()` 来释放之前通过 `irq_create_mapping()` 成功创建的 IRQ mapping。根据 Commit 描述，错误路径仅释放了那些成功设置的中断映射，遗漏了当前失败的映射。
+
+#解决方案
+修改 `ksz_ptp_msg_irq_setup()` 函数的错误处理逻辑：将 `request_threaded_irq()` 的返回值保存到临时变量 `ret` 中，判断若 `ret` 为真（即申请失败），则立即调用 `irq_dispose_mapping(ptpmsg_irq->num)` 释放该 IRQ mapping，随后返回错误码，从而避免资源泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e210627827ebb0309c9339f5230e35511f0e5983

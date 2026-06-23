@@ -1,0 +1,34 @@
+#标题
+ASoC: nau8821 重复调用 jack detect 函数导致中断申请失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在声卡驱动初始化或重试过程中，`nau8821_enable_jack_detect()` 函数被设计为支持多次调用以启用或禁用插孔事件报告。但由于缺乏状态保护，一旦首次启用后再次调用该函数，会导致中断申请失败，并触发内核调用栈打印（splat）。
+
+#主要错误日志
+[ 3136.996771] Hardware name: Valve Jupiter/Jupiter, BIOS F7A0131 01/30/2024
+[ 3136.996773] Workqueue: events_unbound deferred_probe_work_func
+[ 3136.996780] Call Trace:
+[ 3136.996782]  <TASK>
+[ 3136.996787]  dump_stack_lvl+0x6e/0xa0
+[ 3136.996796]  __setup_irq.cold+0x9c/0xce
+[ 3136.996803]  ? __pfx_irq_default_primary_handler+0x10/0x10
+[ 3136.996812]  ? __pfx_nau8821_interrupt+0x10/0x10 [snd_soc_nau8821]
+[ 3136.996825]  request_threaded_irq+0xd9/0x160
+[ 3136.996853]  devm_request_threaded_irq+0x71/0xd0
+[ 3136.996859]  ? __pfx_nau8821_interrupt+0x10/0x10 [snd_soc_nau8821]
+[ 3136.996882]  nau8821_enable_jack_detect+0xa5/0xc0 [snd_soc_nau8821]
+[ 3136.996901]  acp5x_8821_init+0x8d/0xa0 [snd_soc_acp5x_mach]
+[...]
+[ 3136.997508] nau8821 i2c-NVTN2020:00: Cannot request irq 58 (-16)
+
+#问题根因
+`nau8821_enable_jack_detect()` 函数原本旨在允许启用或禁用插孔事件报告，但代码实现中缺少对初始化状态的判断。当该函数被多次调用时（例如在设备探测重试流程中），会重复执行 `INIT_DELAYED_WORK` 和 `devm_request_threaded_irq`。由于中断线已经被首次调用占用，后续再次申请中断时返回错误码 `-16`（`-EBUSY`），导致函数执行失败并打印错误日志。
+
+#解决方案
+在驱动数据结构 `nau8821` 中新增 `jdet_active` 布尔标志位。在 `nau8821_enable_jack_detect()` 函数入口处检查该标志位，若已为真则直接返回成功，从而实现一次性初始化，防止重复初始化工作队列和申请中断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/00d259624478b0f9a4daa3fcdce9bf9322929f3a

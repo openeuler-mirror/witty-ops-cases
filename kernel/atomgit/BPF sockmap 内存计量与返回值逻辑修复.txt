@@ -1,0 +1,31 @@
+#标题
+BPF sockmap 内存计量与返回值逻辑修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在使用 BPF sockmap 进行数据处理时，可能出现接收缓冲区内存统计不一致，导致 `sk_rmem_alloc` 计数泄漏或统计错误，进而影响 TCP 流量控制与 socket 接收能力判断。
+2. `sk_msg_memcopy_from_iter` 函数返回值错误，总是返回固定的错误码或未定义值，而非实际拷贝的字节数，导致上层调用者（如 `tcp_bpf_sendmsg`）记录的发送字节数不准确。
+3. 在特定配置（如 NETACC_TERRACE）下或非该配置的标准内核中，因条件编译宏导致的内存统计逻辑缺失，引发内存管理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **内存统计逻辑错误与遗漏**：在 `bpf_tcp_ingress` 函数中，内存计量 (`sk_mem_charge`) 和原子计数 (`atomic_add`) 的时机与位置不匹配。原始代码仅在特定宏 `CONFIG_NETACC_TERRACE` 开启时才更新 `sk_rmem_alloc`，且未处理消息入队失败时的回滚逻辑，导致内存计数泄漏。
+2. **返回值错误**：`sk_msg_memcopy_from_iter` 函数在成功执行拷贝后，错误地返回了局部变量 `ret`（该变量在成功路径下仍为初始化值 -ENOSPC 或未正确更新），而非实际拷贝的字节数 `copied`。
+3. **入队状态处理缺失**：`sk_psock_queue_msg` 原本无返回值，调用者无法感知消息是否成功入队。若入队失败（如状态未 enable），消息被释放但此前已增加的内存计数未回滚。
+
+#解决方案
+1. **修复返回值逻辑**：修改 `sk_msg_memcopy_from_iter`，引入 `copied` 变量累计拷贝长度，并在函数返回时判断 `ret` 是否小于 0，若成功则返回 `copied`。
+2. **完善内存统计机制**：
+   - 移除 `CONFIG_NETACC_TERRACE` 条件编译限制，统一启用 `sk_rmem_alloc` 的原子计数逻辑。
+   - 在 `bpf_tcp_ingress` 中，每次成功转账消息数据时，同步调用 `atomic_add` 更新接收内存计数。
+3. **增加入队失败回滚机制**：
+   - 修改 `sk_psock_queue_msg` 使其返回 `bool` 值表示入队是否成功。
+   - 在 `bpf_tcp_ingress` 调用处，根据 `sk_psock_queue_msg` 的返回值判断：若入队失败，立即调用 `atomic_sub` 回滚之前增加的内存计数。
+4. **修正发送端统计**：在 `tcp_bpf_sendmsg` 中，使用 `sk_msg_memcopy_from_iter` 的正确返回值（存入 `ret`）更新 `copied`，确保发送字节统计准确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/10689ae56293e40cc4d6b647d9d6bd81d793d207

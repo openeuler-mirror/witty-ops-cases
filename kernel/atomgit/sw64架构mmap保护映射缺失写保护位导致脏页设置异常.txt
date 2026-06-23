@@ -1,0 +1,20 @@
+#标题
+sw64架构mmap保护映射缺失写保护位导致脏页设置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在Sunway（sw64）架构下，当应用程序通过mmap创建共享可写映射（shared writable）时，由于页表项中缺少FOW（Fault on Write）位，导致内核无法在异常处理流程中正确设置脏页位。这可能会导致内存数据一致性问题或写时复制（COW）机制失效，进而影响进程间共享内存的正确性。
+
+#主要错误日志
+未知
+
+#问题根因
+sw64架构的 `pgtable.h` 头文件中，`_PAGE_S(x)` 宏定义用于生成共享映射的页表项属性。原实现中，该宏仅传递了参数 `x`，未强制设置 `_PAGE_FOW`（Fault on Write）位。对于共享可写页面，必须设置 FOW 位，以便在发生写操作时触发异常，内核才能在异常处理上下文中合法地将页面标记为脏。
+
+#解决方案
+修改 `arch/sw_64/include/asm/pgtable.h` 文件中的 `_PAGE_S(x)` 宏定义，将其展开逻辑从 `_PAGE_NORMAL(x)` 修改为 `_PAGE_NORMAL((x) | _PAGE_FOW)`。通过强制对共享映射页表项添加 FOW 位，确保软件能够在异常处理中正确设置脏页位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5923165afc62ae48e7871dc5a5400913a82fd80d

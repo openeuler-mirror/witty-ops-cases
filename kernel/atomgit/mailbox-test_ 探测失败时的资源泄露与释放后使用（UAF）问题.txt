@@ -1,0 +1,20 @@
+#标题
+mailbox-test: 探测失败时的资源泄露与释放后使用（UAF）问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mailbox-test 驱动 probing（探测）过程中，若因内存分配失败（如 `devm_kzalloc` 返回 NULL）或 debugfs 初始化失败导致探测错误返回，已分配的 mailbox 通道（tx_channel 或 rx_channel）未被释放。这不仅导致资源泄露，还因客户端结构体是由 devm 托管分配、在驱动卸载时会自动释放，从而引发 Use-After-Free（UAF）安全风险。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `mbox_test_probe` 函数中，错误处理路径缺失。当探测过程出错时（如分配内存失败或添加 debugfs 失败），函数直接返回错误码，未调用 `mbox_free_channel` 释放之前已获取的通道资源。由于客户端结构体由 devm 机制管理，设备移除时该内存会被自动释放，导致已泄露的通道指针指向已释放的内存，造成 UAF 场景。
+
+#解决方案
+在 `mbox_test_probe` 函数中添加统一的错误处理标签 `err_free_chans`。当探测失败时，跳转至该标签，依次检查并调用 `mbox_free_channel` 释放 `tdev->tx_channel` 和 `tdev->rx_channel`，确保资源被正确回收后再返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/94eb2880bd59164fea464c5c892ac3787c1ea2a5

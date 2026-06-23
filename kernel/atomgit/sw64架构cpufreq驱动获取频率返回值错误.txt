@@ -1,0 +1,22 @@
+#标题
+sw64架构cpufreq驱动获取频率返回值错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过CCLK_CTL寄存器设置CPU频率之前，驱动无法通过PLL配置正确获取CPU频率。这导致cpufreq_driver->get()接口返回错误的频率值，可能导致cpufreq子系统核心层与硬件实际频率状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+原有的sunway_get_rate函数通过读取`CLU_LV1_SEL`寄存器来判断使用哪个PLL配置（PLL0/PLL1/PLL2）来计算频率。但在通过CCLK_CTL寄存器设置频率之前，硬件状态导致无法通过该逻辑正确获取CPU频率。实际上此时应由PLL2提供核心工作频率，且频率表中对应项可能无效（CPUFREQ_ENTRY_INVALID），需要通过hmcode（cpuid调用）获取实时频率，原代码未处理此情况。
+
+#解决方案
+1. 简化频率获取逻辑，固定使用PLL2配置（CORE_PLL2_CFG_SHIFT）作为核心工作频率来源，移除针对CLU_LV1_SEL的判断分支。
+2. 增加对频率表项有效性的检查：若查找到的频率表项标记为`CPUFREQ_ENTRY_INVALID`，则调用`cpuid(GET_CPU_FREQ, 0)`获取实际频率并返回。
+3. 为cpufreq驱动添加`CPUFREQ_NEED_INITIAL_FREQ_CHECK`标志，确保在驱动初始化时检查并同步正确的频率状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/60c093acb6ed846138987b44865dfb932ee2a243

@@ -1,0 +1,23 @@
+#标题
+RISC-V: ACPI: SVPBMT 开启导致 ACPI 表解析错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 SVPBMT 扩展的 RISC-V 架构上，内核在启动阶段解析 ACPI 表时失败。系统获取到的 ACPI 表数据不正确，导致 ACPI 表长度校验失败。
+
+#主要错误日志
+ACPI: [ACPI:0x18] Invalid zero length.
+
+#问题根因
+在调用 `__acpi_map_table()` 映射 ACPI 表时使用了 `early_ioremap`。当 SVPBMT（Supervisor-mode PBMT）功能开启时，`early_ioremap` 会通过 IO 属性直接访问 DDR 数据，而不是通过硬件缓存一致性机制。这导致 CPU 读取到的数据与内存中的实际数据不一致（缓存未命中或脏数据），从而获取到错误的 ACPI 表内容。
+
+#解决方案
+将 `__acpi_map_table` 和 `__acpi_unmap_table` 函数中的 IO 映射调用修改为内存映射调用：
+1. 将 `early_ioremap` 替换为 `early_memremap`，确保以可缓存的方式访问内存，而非 IO 属性访问。
+2. 将对应的 `early_iounmap` 替换为 `early_memunmap`。
+此修改避免了依赖软件手动维护缓存一致性，确保读取到的 ACPI 表数据正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/88f4851bd3850930ae15353ac7ecfb1290877d84

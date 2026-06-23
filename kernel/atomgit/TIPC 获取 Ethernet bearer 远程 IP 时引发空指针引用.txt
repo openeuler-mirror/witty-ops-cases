@@ -1,0 +1,27 @@
+#标题
+TIPC 获取 Ethernet bearer 远程 IP 时引发空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建 tun 接口并启用 l2 bearer 后，通过 TIPC_NL_UDP_GET_REMOTEIP 接口并将 media name 设置为 tun 时，触发内核空指针引用，导致 general protection fault，进程崩溃。
+
+#主要错误日志
+tipc: Started in network mode
+tipc: Node identity 8af312d38a21, cluster identity 4711
+tipc: Enabled bearer <eth:syz_tun>, priority 1
+Oops: general protection fault
+KASAN: null-ptr-deref in range
+CPU: 1 UID: 1000 PID: 559 Comm: poc Not tainted 6.16.0-rc1+ #117 PREEMPT
+Hardware name: QEMU Ubuntu 24.04 PC
+RIP: 0010:tipc_udp_nl_dump_remoteip+0x4a4/0x8f0
+
+#问题根因
+在 `tipc_udp_nl_dump_remoteip` 函数中，当通过 bearer ID 获取 bearer 时，虽然检查了 bearer 指针是否为空，但未检查该 bearer 是否为 UDP 类型。若并发线程修改了 bearer_list[bid]，可能导致获取到的 bearer 为 NULL 或非 UDP 类型的 media。此时若继续按 UDP bearer 结构处理（如访问其特定成员），会引发空指针引用或访问非法内存。
+
+#解决方案
+在 `tipc_udp_nl_dump_remoteip` 函数中增加对 bearer 类型的校验。在通过 name 或 id 查找到 bearer 后，额外检查 `b->bcast_addr.media_id` 是否等于 `TIPC_MEDIA_TYPE_UDP`。若 bearer 为空或类型不匹配，均返回 `-EINVAL`，从而避免对非 UDP bearer 进行非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/86a55704f8daf8be1f75affa746ca03573be0c00

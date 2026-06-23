@@ -1,0 +1,29 @@
+#标题
+erofs ztailpacking 场景下读取 inline data 失败导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 erofs 文件系统使用 ztailpacking 功能时，若读取 inline data 过程中收到致命信号（fatal signal），系统会触发空指针引用错误，导致内核崩溃。具体表现为：
+1. 内核日志打印 "failed to get inline data -4" 错误。
+2. 随后触发 "Unable to handle kernel NULL pointer dereference" 导致 Oops。
+3. 调用栈显示崩溃发生在 `z_erofs_decompress_queue` 函数中。
+
+#主要错误日志
+erofs: (device dm-1): z_erofs_pcluster_begin: failed to get inline data -4
+Unable to handle kernel NULL pointer dereference at virtual address 0000000000000008
+Call trace:
+ z_erofs_decompress_queue+0x4c8/0xa14
+ z_erofs_runqueue+0x908/0x97c
+ z_erofs_read_folio+0x128/0x228
+ ...
+
+#问题根因
+在处理 ztailpacking pclusters 时，代码逻辑顺序有误。原代码在分配并将 pclusters 添加到 I/O 链表之后，才去读取 inline 数据（`erofs_read_metabuf`）。如果 `read_mapping_folio` 执行过程中遇到致命信号（fatal signal），inline 数据读取会失败并返回错误（如 -4，即 -EINTR）。此时，pcluster 已经被加入队列，但相关的 compressed folios 并未实际读取成功（状态无效）。后续 `z_erofs_decompress_pcluster()` 默认这些 folios 是有效的，从而访问了空指针导致崩溃。
+
+#解决方案
+调整代码执行顺序，确保在分配 pcluster 并将其添加到 I/O 链表之前，先成功读取 inline 数据。具体修改为：将 `erofs_read_metabuf` 调用逻辑移动到 pcluster 分配逻辑之前。如果读取 inline 数据失败，直接返回错误，不再继续创建无效的 pcluster，从而避免后续的空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a5901f99aca798a760b6664951c4b4cf4b2da560

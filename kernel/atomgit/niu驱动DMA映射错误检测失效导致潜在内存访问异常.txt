@@ -1,0 +1,23 @@
+#标题
+niu驱动DMA映射错误检测失效导致潜在内存访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+niu网卡驱动在进行DMA映射失败时，未能正确检测到错误状态，可能导致驱动继续使用无效的DMA地址进行数据传输，引发内存数据损坏、设备功能异常或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+`dma_map_XXX()` 系列函数在映射失败时返回 `DMA_MAPPING_ERROR`（通常值为 ~0）。驱动代码中原有的检查逻辑（如 `if (!addr)`）仅判断地址是否为 0，无法识别 `DMA_MAPPING_ERROR` 这种非零的错误返回值。因此，当DMA映射失败时，错误被忽略，代码继续执行后续操作。
+
+#解决方案
+1. 在 `niu_ops` 结构体中新增 `mapping_error` 回调函数指针，底层调用 `dma_mapping_error()` 来正确判断映射是否失败。
+2. 修正 `niu_rbr_add_page()` 函数中的判断逻辑，将 `!addr` 替换为 `np->ops->mapping_error(np->device, addr)`。
+3. 在 `niu_start_xmit()` 函数中增加对 `mapping_error` 的检查。
+4. 完善 `niu_start_xmit()` 的错误处理路径，在发现映射失败时，正确释放之前已成功映射的页面资源，避免内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e344dd6f3bb09534ef74c9cca6e50b3888ddf0fc

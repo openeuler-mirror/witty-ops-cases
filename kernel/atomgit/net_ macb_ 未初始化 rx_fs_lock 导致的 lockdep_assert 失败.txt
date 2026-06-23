@@ -1,0 +1,31 @@
+#标题
+net: macb: 未初始化 rx_fs_lock 导致的 lockdep_assert 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当网卡硬件不支持 RX Flow Filters 功能时，若用户通过 ethtool 接口（set_rxnfc callback）尝试配置 RX 过滤规则，内核会触发 lockdep 校验失败，打印 "trying to register non-static key" 的警告信息，并关闭锁定正确性验证器。
+
+#主要错误日志
+INFO: trying to register non-static key.
+The code is fine but needs lockdep annotation, or maybe
+you didn't initialize this object before use?
+turning off the locking correctness validator.
+CPU: 1 PID: 949 Comm: syz.0.6 Not tainted 6.1.164+ #113
+...
+Call Trace:
+ ...
+ _raw_spin_lock_irqsave+0x33/0x50 kernel/locking/spinlock.c:162
+ gem_del_flow_filter drivers/net/ethernet/cadence/macb_main.c:3562 [inline]
+ gem_set_rxnfc+0x533/0xac0 drivers/net/ethernet/cadence/macb_main.c:3667
+ ...
+
+#问题根因
+如果硬件不支持 RX Flow Filters，驱动程序不会初始化 `rx_fs_lock` 自旋锁。然而，驱动的 `gem_set_rxnfc` 接口并未对此情况进行防御性检查，导致在后续操作流程中尝试使用该未初始化的锁，从而触发了 lockdep 机制对“注册非静态 key”的断言失败。
+
+#解决方案
+在 `gem_set_rxnfc` 函数入口处增加硬件能力检查：若网卡不支持 `NETIF_F_NTUPLE` 特性，直接返回 `-EOPNOTSUPP` 错误码，拒绝该操作请求。这避免了在硬件不支持时进入相关逻辑路径并使用未初始化的锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/11c88f5067e0b4922ca437cddd505ed32e807fe5

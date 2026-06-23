@@ -1,0 +1,47 @@
+#标题
+f2fs: inode 与 xattr nid 相同导致死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在创建节点（mknod）过程中，如果目录的 inode 编号与扩展属性 nid（xattr_nid）相同，内核会尝试对同一个 inode 页面进行两次加锁，导致任务长时间处于 D 状态（不可中断睡眠），触发 hung_task 检测报警，系统发生死锁。
+
+#主要错误日志
+INFO: task syz-executor140:5308 blocked for more than 143 seconds.
+      Not tainted 6.14.0-rc7-syzkaller-00069-g81e4f8d68c66 #0
+"echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+task:syz-executor140 state:D stack:24016 pid:5308  tgid:5308  ppid:5306   task_flags:0x400140 flags:0x00000006
+Call Trace:
+ context_switch kernel/sched/core.c:5378 [inline]
+ __schedule+0x190e/0x4c90 kernel/sched/core.c:6765
+ schedule+0x14b/0x320 kernel/sched/core.c:6857
+ io_schedule+0x8d/0x110 kernel/sched/core.c:7690
+ folio_wait_bit_common+0x839/0xee0 mm/filemap.c:1317
+ __folio_lock mm/filemap.c:1664 [inline]
+ folio_lock include/linux/pagemap.h:1163 [inline]
+ __filemap_get_folio+0x147/0xb40 mm/filemap.c:1917
+ pagecache_get_page+0x2c/0x130 mm/folio-compat.c:87
+ find_get_page_flags include/linux/pagemap.h:842 [inline]
+ f2fs_grab_cache_page+0x2b/0x320 fs/f2fs/f2fs.h:2776
+ __get_node_page+0x131/0x11b0 fs/f2fs/node.c:1463
+ read_xattr_block+0xfb/0x190 fs/f2fs/xattr.c:306
+ lookup_all_xattrs fs/f2fs/xattr.c:355 [inline]
+ f2fs_getxattr+0x676/0xf70 fs/f2fs/xattr.c:533
+ __f2fs_get_acl+0x52/0x870 fs/f2fs/acl.c:179
+ f2fs_acl_create fs/f2fs/acl.c:375 [inline]
+ f2fs_init_acl+0xd7/0x9b0 fs/f2fs/acl.c:418
+ f2fs_init_inode_metadata+0xa0f/0x1050 fs/f2fs/dir.c:539
+ f2fs_add_inline_entry+0x448/0x860 fs/f2fs/inline.c:666
+
+#问题根因
+在 f2fs 文件系统中，存在元数据损坏的情况，具体表现为 inode 的 `i_ino`（节点编号）与 `i_xattr_nid`（扩展属性节点编号）相同。在执行 mknod 操作时，流程如下：
+1. `f2fs_mknod` -> `f2fs_add_inline_entry` -> `f2fs_get_inode_page`：首次获取并锁定了该 inode 页面。
+2. 随后 `f2fs_init_acl` -> `f2fs_getxattr` -> `__get_node_page`：由于 `i_ino` 等于 `i_xattr_nid`，代码尝试再次获取并锁定同一个 inode 页面。
+由于该页面已被当前进程持有锁，导致自死锁，进程永久阻塞。
+
+#解决方案
+在 `sanity_check_inode` 函数中增加对 `ino_of_node(node_page)` 与 `fi->i_xattr_nid` 的检查。如果两者相等，说明 inode 元数据损坏，此时打印警告日志并返回 false 拒绝该 inode，避免后续流程发生死锁。同时提示用户运行 fsck 修复文件系统。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/028a6188b40d472ae778426364092f24aeea8c8c

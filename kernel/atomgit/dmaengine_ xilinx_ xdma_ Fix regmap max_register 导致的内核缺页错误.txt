@@ -1,0 +1,41 @@
+#标题
+dmaengine: xilinx: xdma: Fix regmap max_register 导致的内核缺页错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+通过 debugfs 读取 xdma 寄存器时触发内核缺页错误，导致用户态进程（如 tail）段错误退出。具体复现路径为执行命令：`tail /sys/kernel/debug/regmap/xdma.1.auto/registers`。
+
+#主要错误日志
+Unable to handle kernel paging request at virtual address ffff800082f70000
+Mem abort info:
+  ESR = 0x0000000096000007
+  EC = 0x25: DABT (current EL), IL = 32 bits
+  SET = 0, FnV = 0
+  EA = 0, S1PTW = 0
+  FSC = 0x07: level 3 translation fault
+[...]
+Call trace:
+ regmap_mmio_read32le+0x10/0x30
+ _regmap_bus_reg_read+0x74/0xc0
+ _regmap_read+0x68/0x198
+ regmap_read+0x68/0x198
+ regmap_read_debugfs+0x140/0x380
+ regmap_map_read_file+0x30/0x48
+ full_proxy_read+0x68/0xc8
+ vfs_read+0xcc/0x310
+[...]
+Segmentation fault
+
+#问题根因
+驱动在配置 regmap 的 `max_register` 字段时，错误地将其赋值为寄存器内存区域的大小（`XDMA_REG_SPACE_LEN`，值为 65536），而不是最后一个寄存器的偏移量。这导致 regmap 在通过 debugfs 读取时访问了超出实际映射范围的内存地址，触发 level 3 translation fault。
+
+#解决方案
+修正 `max_register` 的赋值逻辑，将其从寄存器空间长度修改为最后一个寄存器的偏移量（即 `XDMA_REG_SPACE_LEN - 4`）。
+代码修改涉及：
+1. 在 `xdma-regs.h` 中新增宏定义 `#define XDMA_MAX_REG_OFFSET (XDMA_REG_SPACE_LEN - 4)`。
+2. 在 `xdma.c` 中将 `xdma_regmap_config` 结构体的 `.max_register` 成员由 `XDMA_REG_SPACE_LEN` 修改为 `XDMA_MAX_REG_OFFSET`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bca9b7f66191f5f6a0dcacbd44b74acc2b5e0958

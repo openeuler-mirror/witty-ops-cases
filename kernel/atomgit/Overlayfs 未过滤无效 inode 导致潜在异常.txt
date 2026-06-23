@@ -1,0 +1,20 @@
+#标题
+Overlayfs 未过滤无效 inode 导致潜在异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Overlayfs 使用过程中，系统未能正确识别并过滤掉缺少查找（lookup）功能的无效 inode。这可能导致内核后续操作处理了不支持的目录项类型，引发非预期的行为或路径解析异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ovl_dentry_weird` 函数中，原有的校验逻辑仅检查了 `DCACHE_NEED_AUTOMOUNT` 等标志位，遗漏了对目录项类型的判断。对于既不是普通目录（`!d_can_lookup`）、也不是常规文件（`!d_is_file`）、也不是符号链接（`!d_is_symlink`）的特殊目录项（如某些无效 inode），内核未能将其识别为“异常（weird）”项，导致这些无效 inode 未被及时过滤。
+
+#解决方案
+在 `ovl_dentry_weird` 函数开头增加类型检查逻辑：若目录项不具备查找功能且非文件、非符号链接，则直接判定为异常并返回 true，从而在源头过滤掉此类无效 inode，防止后续处理流程出错。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f5b384662f982abaeed587c9ba93c6a342751d3d

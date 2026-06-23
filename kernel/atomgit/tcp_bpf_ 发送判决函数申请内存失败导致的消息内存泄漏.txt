@@ -1,0 +1,20 @@
+#标题
+tcp_bpf: 发送判决函数申请内存失败导致的消息内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统内存紧张或无法分配内存时，`tcp_bpf_send_verdict()` 函数在尝试分配 `psock->cork` 失败后，未释放传入的 `msg` 结构体占用的内存，同时也未清理已拷贝的字节数统计，导致内核内存泄漏及调用者状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tcp_bpf_send_verdict` 函数中，当 `kzalloc` 申请 `psock->cork` 内存失败时，代码路径直接返回了 `-ENOMEM` 错误码。在此之前，函数已经接管了 `msg` 参数，但在错误处理分支中遗漏了调用 `sk_msg_free(sk, msg)` 来释放消息内存，同时也未将 `*copied` 置零以回滚已记录的拷贝字节数，导致了资源泄漏。
+
+#解决方案
+在 `psock->cork` 申请失败的错误处理分支中，增加 `sk_msg_free(sk, msg)` 调用以释放消息内存，并将 `*copied` 赋值为 0，确保资源被正确释放且状态被正确回滚。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22a749d82a20957555df7f27d16bae156c0bc317

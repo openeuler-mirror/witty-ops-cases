@@ -1,0 +1,29 @@
+#标题
+ub: ubase: 修复 HIMAC 复位功能缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统检测到 HIMAC（高速接口MAC）异常时，驱动程序缺失相应的复位处理逻辑，导致无法对 HIMAC 进行状态检测、复位命令发送及调试信息输出。这会导致 HIMAC 异常无法恢复，影响设备的可靠性与稳定性，且调试视图中无法查看到 himac reset count 计数。
+
+#主要错误日志
+- `ubase_err(udev, "ras occurred, ubase need to reset himac.\n");`（推断：HIMAC 异常触发复位时）
+- `ubase_err(udev, "failed to send himac reset cmd, ret = %d.\n", ret);`（推断：复位命令发送失败时）
+
+#问题根因
+在引入 ELR 和 entity 复位支持（Commit 727362c0978c）时，遗漏了对 HIMAC 复位的处理支持。具体原因为：
+1. 错误处理服务任务（`ubase_errhandle_service_task`）中未包含针对 `UBASE_STATE_HIMAC_RESETTING_B` 状态位的检测与清除逻辑。
+2. 缺少发送 HIMAC 复位命令的实现函数。
+3. 缺少定义 HIMAC 复位所需的操作码 `UBASE_OPC_HIMAC_RESET`。
+4. 调试信息接口未统计和展示 HIMAC 复位计数。
+
+#解决方案
+通过补丁补全 HIMAC 复位相关的全链路支持：
+1. **新增复位命令字**：在 `ubase_comm_cmd.h` 中定义 `UBASE_OPC_HIMAC_RESET` 为 `0x6302`。
+2. **实现复位发送逻辑**：新增 `ubase_notify_himac_reset` 函数，用于填充命令缓冲区并向设备发送 HIMAC 复位指令，若发送失败则打印错误日志。
+3. **增加状态检测处理**：在 `ubase_errhandle_service_task` 主循环中增加对 `UBASE_STATE_HIMAC_RESETTING_B` 状态位的判断。一旦检测到该状态位被置位，立即调用上述复位函数、增加复位计数并返回。
+4. **完善调试输出**：在 `ubase_debugfs.c` 的统计信息输出中增加 "himac reset count" 的打印，以便跟踪复位情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6006cbfe442fd607d4042a4d6d82f8239d93aae4

@@ -1,0 +1,32 @@
+#标题
+l2tp: 修复 sk_dst_cache 竞争导致的 double dst_release() 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IPv6 L2TP (pppol2tp) 流量且存在黑洞路由的场景下，内核触发 `rcuref - imbalanced put()` 警告。该问题源于目的缓存引用计数不平衡，具体表现为内核警告并打印调用栈，指涉 `dst_release` 与 `__sk_dst_check` 函数。
+
+#主要错误日志
+rcuref - imbalanced put()
+WARNING: CPU: 0 PID: 899 at lib/rcuref.c:266 rcuref_put_slowpath+0x1ce/0x240
+RIP: 0010:rcuref_put_slowpath+0x1ce/0x240 lib/rcuref.c:266
+Call Trace:
+ __rcuref_put include/linux/rcuref.h:97 [inline]
+ dst_release+0x291/0x310 net/core/dst.c:167
+ __sk_dst_check+0x2d4/0x350 net/core/sock.c:604
+ inet6_csk_route_socket+0x6ed/0x10c0 net/ipv6/inet6_connection_sock.c:104
+ inet6_csk_xmit+0x12f/0x740 net/ipv6/inet6_connection_sock.c:121
+ l2tp_xmit_skb+0x1404/0x1910 net/l2tp/l2tp_core.c:1325
+ pppol2tp_sendmsg+0x3ca/0x550 net/l2tp/l2tp_ppp.c:302
+
+#问题根因
+故障根因是锁无关的 UDPv6 发送路径与持有锁的 L2TP/pppol2tp 发送路径在处理同一个已过期的 `sk->sk_dst_cache` 时发生了竞争。
+具体过程为：UDPv6 侧（通过 `sk_dst_check`）获取了额外引用并原子地窃取释放了缓存 dst，而 L2TP 侧（通过 `__sk_dst_check`）使用过期的缓存指针继续调用 `dst_release()`。两者叠加导致对同一个 dst 执行了额外的 `dst_release()`，从而触发引用计数不平衡警告。
+
+#解决方案
+修改 L2TP 的 IPv6 发送路径，不再使用 `inet6_csk_xmit()`（内部调用 `__sk_dst_check()`），而是新建 `l2tp_xmit_ipv6()` 函数。
+该函数开放编码了路由查找与发送逻辑：使用 `sk_dst_check()` 进行带有正确引用计数的目的缓存检查，配合 `ip6_dst_lookup_flow()` 进行查找，最后调用 `ip6_xmit()` 发送。这使得 UDPv6 和 L2TP IPv6 路径使用相同的 dst-cache 处理逻辑，消除了竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/63a9510d2d04c6c2d3752bcf3fd47056566faf09

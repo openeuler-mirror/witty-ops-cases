@@ -1,0 +1,22 @@
+#标题
+ocfs2: 修复因悬挂指针 dqi_priv 导致的 slab-use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 OCFS2 文件系统卸载配额（quota）或禁用配额功能后，若再次执行配额相关操作（如 `ocfs2_get_next_id`），内核发生 slab-use-after-free 错误。这可能导致内核崩溃、内存损坏或其他不可预期的异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 OCFS2 配额本地释放函数 `ocfs2_local_free_info` 中，释放 `oinfo` 内存后未将 `info->dqi_priv` 指针置为 NULL。这导致 `info->dqi_priv` 变成一个悬挂指针。
+后续在 `ocfs2_get_next_id` 函数中，代码使用 `sb_has_quota_loaded` 检查配额是否加载。由于 `sb_has_quota_loaded` 仅检查 `sb_dqopt(sb)->info[type].dqi_priv` 是否非空，悬挂指针的存在导致该检查通过（判定为已加载）。随后代码继续访问 `dqi_priv` 指向的已释放内存，从而触发 slab-use-after-free。
+
+#解决方案
+1. 在 `ocfs2_local_free_info` 函数中释放 `oinfo` 内存后，显式将 `info->dqi_priv` 设置为 NULL，防止产生悬挂指针。
+2. 将 `ocfs2_get_next_id` 中的配额状态检查从 `sb_has_quota_loaded` 修改为 `sb_has_quota_active`。`sb_has_quota_active` 能更准确地判断配额是否处于活动状态，避免在配额已禁用但指针未清空的中间状态下进行非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/00fe290577122c4ea4fc06bf7e301b1b749d2378

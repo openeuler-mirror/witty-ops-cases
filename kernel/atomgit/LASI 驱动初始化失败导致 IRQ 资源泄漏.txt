@@ -1,0 +1,20 @@
+#标题
+LASI 驱动初始化失败导致 IRQ 资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LASI 驱动初始化过程中，若 `request_irq()` 执行成功，但后续的 `gsc_common_setup()` 函数调用失败，会导致已申请的中断资源无法被正确释放，造成内核资源泄漏。该问题由静态分析工具 Smatch 检测发现。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动初始化流程中缺少完善的错误处理机制。具体表现为：当 `request_irq()` 成功申请了中断号，但后续 `gsc_common_setup()` 执行出错并退出函数时，代码逻辑直接进行了内存释放并返回，未调用 `free_irq()` 释放已申请的中断资源，从而导致 IRQ 泄漏。
+
+#解决方案
+在 `lasi_init_chip` 函数中引入 `goto` 标签实现统一的错误处理路径。修改了错误退出逻辑，确保在 `gsc_common_setup()` 失败时，跳转至 `err_irq` 标签执行 `free_irq()` 释放中断，随后跳转至 `err_free` 标签释放内存，以此保证资源按后进先出（LIFO）顺序正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5b2ffde35d8fb17d0bdde44e236a2092e02be447

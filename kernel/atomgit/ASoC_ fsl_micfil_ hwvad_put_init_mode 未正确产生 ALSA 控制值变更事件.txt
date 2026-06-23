@@ -1,0 +1,24 @@
+#标题
+ASoC: fsl_micfil: hwvad_put_init_mode 未正确产生 ALSA 控制值变更事件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在操作 fsl_micfil 组件的 Hardware Voice Activity Detector (HWVAD) 初始化模式控制项时，即使成功修改了模式值，ALSA 层也未生成相应的变更事件，导致用户空间无法感知控件值的状态变化。
+
+#主要错误日志
+未知
+
+#问题根因
+ALSA 控件的标准约定要求 put 操作应在控件值发生改变时返回 1，否则返回 0 或负错误码。函数 `hwvad_put_init_mode()` 在更新 `vad_init_mode` 变量后固定返回 0，导致 ALSA 核心误判为“值未改变”，从而不生成变更事件。
+
+#解决方案
+修改 `hwvad_put_init_mode` 函数逻辑：
+1. 新增 `change` 布尔变量。
+2. 在更新 `micfil->vad_init_mode` 前，检查新值 `val` 是否与当前值不同，将结果赋给 `change`。
+3. 函数最终返回 `change` 值（类型转换为 int），确保值变化时返回 1，未变化时返回 0。
+4. 同时补充了对 `val` 范围的合法性校验（`-EINVAL`）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a01e0347ff3155d95ef3df5816e09e2c3fceedaf

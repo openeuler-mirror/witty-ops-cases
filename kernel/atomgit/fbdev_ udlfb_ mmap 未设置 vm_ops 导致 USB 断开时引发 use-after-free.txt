@@ -1,0 +1,22 @@
+#标题
+fbdev: udlfb: mmap 未设置 vm_ops 导致 USB 断开时引发 use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 udlfb 驱动中，当用户态进程通过 mmap 映射 framebuffer 后，若通过 FBIOPUT_VSCREENINFO ioctl 触发 framebuffer 重新分配，随后进行 USB 设备断开操作，内核会发生 use-after-free。此时用户态进程依然持有指向已释放内核内存页的 PTE，可对其进行读写访问。
+
+#主要错误日志
+推断：refusing realloc: [N] active mmaps
+
+#问题根因
+dlfb_ops_mmap() 使用 remap_pfn_range() 将 vmalloc 分配的 framebuffer 页面映射到用户空间，但未在 VMA 上设置 vm_ops。这导致内核无法追踪活跃的 mmap 计数。当 dlfb_realloc_framebuffer() 通过 FBIOPUT_VSCREENINFO 替换后备缓冲区时，既有的 mmap PTE 未被失效。在 USB 断开时，dlfb_ops_destroy() 调用 vfree() 释放旧页面，而用户态 PTE 仍引用这些已释放的内核页面，从而引发 use-after-free。
+
+#解决方案
+1. 在 udlfb 驱动中增加 vm_operations_struct 结构体，实现 open/close 回调函数，用于维护 struct dlfb_data 中的原子变量 mmap_count。
+2. 在 dlfb_ops_mmap() 中设置 vm_ops 及 vm_private_data，并增加 mmap_count 计数。
+3. 在 dlfb_realloc_framebuffer() 函数中增加检查，若 mmap_count 大于 0，则打印警告日志并返回 -EBUSY，禁止在存在活跃映射时替换缓冲区，防止用户态持有失效的 PTE。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f8396797fb4ea895c361efae281ac8718f01af7

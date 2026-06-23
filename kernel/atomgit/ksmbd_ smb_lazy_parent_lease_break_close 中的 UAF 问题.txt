@@ -1,0 +1,20 @@
+#标题
+ksmbd: smb_lazy_parent_lease_break_close 中的 UAF 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 处理 SMB 文件共享请求时，如果并发写入者在与 `smb_lazy_parent_lease_break_close` 函数竞争，可能导致内核访问已释放的内存，引发 use-after-free 故障，进而造成内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb_lazy_parent_lease_break_close` 函数中，通过 `rcu_dereference(fp->f_opinfo)` 获取 opinfo 指针后，过早地调用了 `rcu_read_unlock()`。代码随后在 RCU 读临界区之外访问了 opinfo 指针的成员（如 `opinfo->is_lease` 和 `opinfo->o_lease->version`）。这引入了竞态条件：在解锁后、访问指针前，该内存可能被并发写入者释放，从而导致 use-after-free。
+
+#解决方案
+调整 `rcu_read_unlock()` 的调用位置，将其移至 opinfo 指针访问完成之后。具体修改是将原本在获取指针后立即调用的 `rcu_read_unlock()` 移动到条件判断逻辑之后，确保在检查 `opinfo->is_lease` 和 `opinfo->o_lease->version` 等字段时仍处于 RCU 读临界区内，防止内存被并发释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b74084a99dbb28b8f7e66b177d5f81e50d028ea9

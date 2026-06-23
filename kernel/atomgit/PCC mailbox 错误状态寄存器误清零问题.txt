@@ -1,0 +1,20 @@
+#标题
+PCC mailbox 错误状态寄存器误清零问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Type 3/4 PCC (Platform Communication Channel) 子空间时，内核在处理错误状态寄存器过程中，原本意图仅清除错误位并保留非错误位，但实际上错误处理逻辑会将错误状态寄存器的所有位全部清零，导致寄存器状态信息丢失。
+
+#主要错误日志
+未知
+
+#问题根因
+在错误检查与清除逻辑中，代码先通过 `val &= pchan->error.status_mask` 提取了错误状态位，随后试图通过 `val &= ~pchan->error.status_mask` 来清除错误。由于变量 `val` 此前已被掩码过滤，仅包含错误位，对其应用按位取反的掩码进行“清除”操作时，实际上将所有位都清零了，而非预期的保留非错误位。
+
+#解决方案
+修改 `pcc_parse_subspace_db_reg` 函数，在初始化错误寄存器时，将 `preserve_mask`（保留掩码）设置为错误状态掩码的按位取反值（`~pcct_ext->error_status_mask`）。在后续 `pcc_mbox_error_check_and_clear` 函数中，清除错误时直接使用该 `preserve_mask` 对原始读取值进行处理（`val &= pchan->error.preserve_mask`），从而确保仅清除错误位而保留其他位不变。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/09e3d547ddbb800714ae429c6c8043980ed12cd1

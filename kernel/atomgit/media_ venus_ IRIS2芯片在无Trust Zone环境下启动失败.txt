@@ -1,0 +1,20 @@
+#标题
+media: venus: IRIS2芯片在无Trust Zone环境下启动失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IRIS2 硬件平台上使用 "no_tz" 代码路径启动 Venus 驱动时，由于使用了错误的复位序列，导致驱动初始化失败或硬件状态异常，设备无法正常启动。
+
+#主要错误日志
+未知
+
+#问题根因
+在 commit c38610f8981e ("media: venus: firmware: Sanitize per-VPU-version") 中，代码逻辑对 IRIS2 和 IRIS2_1 进行了区分处理，但错误地将 IRIS2 排除在新的复位逻辑之外。实际上，IRIS2 与 IRIS2_1 同属 HFI v6 变体，大部分寄存器已移动到 "wrapper_tz_base"，因此 IRIS2 在 "no_tz" 模式下也需要与 IRIS2_1 相同的 boot/reset 序列。代码仅判断了 `IS_IRIS2_1` 而遗漏了 `IS_IRIS2`，导致 IRIS2 错误地走了旧的复位流程。
+
+#解决方案
+修改 `drivers/media/platform/qcom/venus/firmware.c` 中的条件判断逻辑，在 `venus_reset_cpu`、`venus_set_hw_state` 和 `venus_shutdown_no_tz` 等函数中，将 `IS_IRIS2_1(core)` 的判断条件修改为 `IS_IRIS2(core) || IS_IRIS2_1(core)`，确保 IRIS2 芯片使用正确的 `wrapper_tz_base` 地址和 XTSS 复位序列。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/993ae887883967ac661a1951aef6e9d79298e86f

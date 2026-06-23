@@ -1,0 +1,25 @@
+#标题
+mcp251x: 缺失电源启用错误处理导致设备状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+MCP251x CAN 控制器在打开设备或从挂起状态恢复时，若电源或收发器电源使能失败，驱动程序未正确处理错误。这导致内核无法感知电源控制失败，设备状态可能处于不一致（如电源未开启但驱动认为已开启），且在 resume 流程中错误码未返回给 PM 框架，可能导致系统休眠唤醒流程异常或设备功能不可用。
+
+#主要错误日志
+- `failed to enable transceiver power: %pe`
+- `failed to restore power: %pe`
+- `failed to restore transceiver power: %pe`
+
+#问题根因
+驱动程序在 `mcp251x_open()` 和 `mcp251x_can_resume()` 函数中调用 `mcp251x_power_enable()` 时，未检查返回值并进行相应的错误处理：
+1. 在 `mcp251x_open()` 中，电源使能失败后直接继续执行后续逻辑，未跳转到错误处理路径关闭 candev。
+2. 在 `mcp251x_can_resume()` 中，电源使能失败后未向 PM 框架返回错误码，也未记录日志，导致上层无法感知恢复失败。
+
+#解决方案
+1. 在 `mcp251x_open()` 函数中增加对 `mcp251x_power_enable()` 返回值的检查。若使能收发器电源失败，打印错误日志并跳转到 `out_close_candev` 标签，执行关闭 candev 的清理操作。
+2. 在 `mcp251x_can_resume()` 函数中增加对 `mcp251x_power_enable()` 返回值的检查。若恢复电源或收发器电源失败，打印错误日志，并在必要情况下回滚之前的操作（如收发器电源失败时关闭主电源），最后向调用者返回错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/75ccc59cf2f6a214a16c49f177ac6d75f99e3a13

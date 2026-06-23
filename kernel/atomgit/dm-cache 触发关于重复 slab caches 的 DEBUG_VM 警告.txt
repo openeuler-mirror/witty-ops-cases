@@ -1,0 +1,20 @@
+#标题
+dm-cache 触发关于重复 slab caches 的 DEBUG_VM 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核配置开启 `CONFIG_DEBUG_VM` 时，加载或使用 dm-cache 模块会触发内核警告。这是因为在创建多个 dm-cache 设备时，代码尝试为每个设备创建同名的 slab cache，导致 "duplicate cache names"（重复缓存名称）警告。
+
+#主要错误日志
+未知（注：Commit 信息中未提供具体日志原文，但明确指出是 `CONFIG_DEBUG_VM=y` 下由 commit 4c39529663b9 "slab: Warn on duplicate cache names when DEBUG_VM=y" 引发的警告。）
+
+#问题根因
+dm-cache 代码原先在 `btracker_create` 函数中为每个设备分配独立的 slab cache。当创建多个设备时，系统会尝试创建多个具有相同名称的 slab cache。在开启了 `CONFIG_DEBUG_VM` 的内核中，内存分配器（slab）会对重复的缓存名称发出警告。
+
+#解决方案
+修改 dm-cache 的 slab cache 分配策略，不再针对每个设备单独创建 slab cache。改为在模块初始化函数 `dm_cache_init` 中全局分配一个唯一的 slab cache（`btracker_work_cache`），并在模块退出时销毁该缓存，所有设备共享该缓存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/27e479a395b12c4072e3baeacd882c667f319f37

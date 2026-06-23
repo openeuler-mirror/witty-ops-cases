@@ -1,0 +1,28 @@
+#标题
+ubdevshm: 修复 UBA 异常释放空指针引用与资源泄露问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 ubdevshm 模块进行 UBA（User Buffer Area）异常释放流程时，内核发生空指针引用，导致内核崩溃。
+2. 由于引用计数使用不当，导致 shm_container 资源泄露。
+
+#主要错误日志
+- "ctx acquire ref is zero"
+- "uba is NULL"
+- "find access ctx inner failed"
+- "uba not matching access uba"
+- "refcnt is not zero, refcount is fail."（修复后调整为 pr_warn）
+
+#问题根因
+1. **空指针引用**：在 `ubdevshm_release_uba` 函数中，当处于简单模式（simple mode，即 `ctx` 为空）时，通过 `find_get_access_ctx_by_id` 获取到 `ctx_inner` 后，未获取对应的 `shm_container`（cntr）指针就直接使用。若后续流程进入异常处理分支（如 `is_same_role_task` 校验失败或 `out` 标签路径），代码会尝试调用 `shm_container_put(cntr)`，此时 `cntr` 未被初始化（为 NULL），导致空指针引用。
+2. **资源泄露**：在 `ubdevshm_release_uba` 的错误处理路径中，部分异常分支（如角色校验失败）遗漏了对 `shm_container` 的引用计数释放操作（缺少 `shm_container_put`），导致容器对象引用计数无法归零，造成内存资源泄露。
+
+#解决方案
+1. **重构上下文获取逻辑**：新增辅助函数 `find_get_shm_container_context`，统一处理简单模式和授权模式下 `shm_container` 与 `access_ctx_inner` 的获取逻辑。在简单模式下，成功获取 `ctx_inner` 后立即调用 `find_get_shm_container` 获取 `cntr`，确保指针有效后再进行后续操作。
+2. **修复资源泄露**：在新增的辅助函数中统一管理引用计数，确保在所有错误退出路径（如找不到容器、角色校验失败）均正确调用 `shm_container_put` 释放资源；同时修正了主函数 `ubdevshm_release_uba` 的退出逻辑，保证释放路径完整。
+3. **补充错误返回值**：在 `ubdevshm_acquire_uba` 中，当检测到 "ctx acquire ref is zero" 异常时，补充返回 `-ENOENT` 错误码，防止错误未向上传递。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/05bf967f7e2ae40251de6201bc524a669ac17cc6

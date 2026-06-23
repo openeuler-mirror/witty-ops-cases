@@ -1,0 +1,25 @@
+#标题
+mtd: rawnand: sunxi: 读取额外 OOB 数据时出现内容错乱
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 OOB（Out-of-Band）数据转储操作时，末尾的数据字节实际上被错误地复制成了 OOB 开头的数据内容，导致 OOB 数据显示异常或重复。例如在使用 BCH16 纠错、不开启扰码模式下，OOB 后半部分的数据会错误地显示为前半部分数据的副本，而非预期的 0xFF 填充或真实数据。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `sunxi_nfc_hw_ecc_read_extra_oob` 中，变量比较与跳转偏移量计算错误：
+1. 比较逻辑错误：代码将 `*cur_off`（页面起始偏移）与 `offset`（OOB 起始偏移）直接比较，未统一基准。
+2. 指针定位错误：函数 `nand_change_read_column_op` 的参数被设置为 `mtd->writesize`，这会将读取指针重置到 OOB 的开头，而不是预期的 `OOB + offset` 位置。
+这导致读取操作从 OOB 开头而非正确的偏移位置开始，使得末尾数据被开头数据覆盖。
+
+#解决方案
+修正 OOB 读取时的偏移量计算与比较逻辑：
+1. 修正判断条件：将 `*cur_off != offset` 更改为 `*cur_off != (offset + mtd->writesize)`，确保页面偏移与 OOB 偏移在同一个基准下比较。
+2. 修正读取指针位置：将 `nand_change_read_column_op` 的第二个参数从 `mtd->writesize` 更改为 `mtd->writesize + offset`，确保读取指针正确移动到 OOB 区域内的指定偏移位置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1aa3cd215e71bbee9bc686e387225120223b239b

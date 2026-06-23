@@ -1,0 +1,30 @@
+#标题
+ub/fwctl: 端口链路状态查询接口存在数据统计错误与校验缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+查询端口链路状态时，返回的链路信息统计计数不准确，link_up_num 与 link_down_num 计数未正确更新；同时，对于非法或无效的 port_id 输入，内核未进行有效性校验，可能导致查询结果不符合预期或返回无效数据。
+
+#主要错误日志
+ubctl_err(ucdev, "ubctl fill cmd failed.\n");
+ubctl_err(ucdev, "ubctl ubase cmd send failed, retval = %d.\n", ret);
+ubctl_err(ucdev, "ubctl check die id filed, die id = %u.\n", die_id);
+ubctl_err(ucdev, "ubctl query port bitmap failed, retval = %d.\n", ret);
+ubctl_err(ucdev, "ubctl port id does not meet expectations, port id = %u.\n", pkt_in->port_id);
+ubctl_err(ucdev, "ubctl get ucaps err, ucaps is null.\n");
+ubctl_err(ucdev, "out len is error = %zu.\n", query_cmd_param->out_len);
+
+#问题根因
+1. 链路状态统计计数缺失：在添加链路节点函数 `ubctl_port_add_link_node` 中，仅更新了链表节点，未对 `ubctl_port_link_list` 结构中的 `link_up_num` 和 `link_down_num` 计数器进行递增操作，导致统计信息始终为 0。
+2. 输入参数校验缺失：查询接口 `ubctl_query_port_link_status` 未对输入的 `port_id` 进行有效性检查（如是否在有效范围内、是否实际存在），直接进行查询处理，导致可能返回不符合预期的结果。
+3. 数据结构设计缺陷：查询接口的数据输出结构设计不合理，直接拷贝覆盖导致数据丢失，且未包含统计计数字段。
+
+#解决方案
+1. 完善计数统计：在 `ubctl_port_link_list` 结构体中新增 `link_up_num` 和 `link_down_num` 字段；修改 `ubctl_port_add_link_node` 函数，根据 `link_status` 状态实时更新对应计数器。
+2. 增加输入校验：新增 `ubctl_check_port_id` 函数及端口位图 `g_ubctl_port_bitmap`，在查询前检查 `die_id` 和 `port_id` 的有效性；若位图为空则通过新接口 `ubctl_query_port_bitmap_data` 查询并缓存端口位图，确保只处理合法的端口 ID。
+3. 优化输出结构：重构输出数据结构为 `ubctl_port_link_stats`，包含完整的链路信息数组及统计计数，修复数据拷贝逻辑，确保用户态能获取到准确的链路总数、Up/Down 计数及详细链路信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b6961d4191cd82bf0bf1fd9347a74581a3eba8ef

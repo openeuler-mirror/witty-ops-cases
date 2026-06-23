@@ -1,0 +1,24 @@
+#标题
+RDMA/hns: 创建 QP 失败时的错误处理路径缺少锁保护导致内存破坏风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hns_roce_create_qp_common() 函数执行过程中，若进入错误处理流程（如创建 QP 失败），系统在调用 hns_roce_qp_remove() 时可能发生内存破坏（memory corruption）。
+
+#主要错误日志
+未知
+
+#问题根因
+hns_roce_qp_remove() 函数要求调用者必须持有特定的锁（qp_list_lock 和 CQ 锁），但在 hns_roce_create_qp_common() 的错误回滚路径中，代码未获取这些锁就直接调用了该函数。相比之下，该函数的其他调用者均正确持有了锁，因此该错误路径违反了锁规则，导致存在内存破坏风险。
+
+#解决方案
+在错误处理路径调用 hns_roce_qp_remove() 之前，按照其他正常调用点的模式，补充获取相应的锁资源：
+1. 使用 spin_lock_irqsave 获取 hr_dev->qp_list_lock 锁；
+2. 调用 hns_roce_lock_cqs 锁住发送和接收完成队列（CQ）；
+3. 执行 hns_roce_qp_remove 操作；
+4. 随后按序释放 CQ 锁和自旋锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e00cff468b19148d05197d7a56ac25d5d9361ec

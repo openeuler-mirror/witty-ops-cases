@@ -1,0 +1,22 @@
+#标题
+9p/xen: 热插拔设备导致挂载挂起问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在热插拔 9pfs 设备过程中，出现大量挂载挂起现象。
+
+#主要错误日志
+未知
+
+#问题根因
+9pfs Xen 驱动程序尝试对自身进行多次初始化，导致前端和后端状态不一致：后端监听的通道并非前端发送消息的通道，从而导致处理停滞。具体原因为初始化序列逻辑缺陷，在 `XenbusStateInitWait` 状态下未正确判断当前设备状态，允许了重复初始化。
+
+#解决方案
+修正初始化序列逻辑，仅允许 9p 前端初始化一次：
+1. 在 `xen_9pfs_front_init` 函数中，成功分配资源后立即调用 `xenbus_switch_state(dev, XenbusStateInitialised)` 切换状态。
+2. 在 `xen_9pfs_front_changed` 函数处理 `XenbusStateInitWait` 事件时，增加判断 `if (dev->state != XenbusStateInitialising)`，确保只有在设备处于正在初始化状态时才执行初始化操作，防止重复初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/197d764199ccb9e3b99d4c673673d7ec84d4470c

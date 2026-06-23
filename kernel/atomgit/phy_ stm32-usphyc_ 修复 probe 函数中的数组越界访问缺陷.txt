@@ -1,0 +1,20 @@
+#标题
+phy: stm32-usphyc: 修复 probe 函数中的数组越界访问缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 STM32 USB PHY 控制器驱动加载过程中，如果设备树中配置的 PHY 索引值恰好等于物理层总数，驱动程序将判定该配置合法并继续执行，导致后续代码在访问 `usbphyc->phys[]` 数组时发生越界访问，可能引发内核崩溃或内存破坏。
+
+#主要错误日志
+- 推断日志：`invalid reg property: 0`（注：在原错误逻辑下，当 index 等于 nphys 时，条件 `index > usbphyc->nphys` 不成立，不会打印此错误；修复后此情况将正确打印此错误日志）。
+
+#问题根因
+在 `stm32_usbphyc_probe` 函数中，校验设备树属性 "reg"（即 PHY 索引）的判断条件存在差一错误。原代码使用 `index > usbphyc->nphys` 判断索引是否越界，但 `usbphyc->phys` 数组的有效下标范围为 0 到 `nphys - 1`。当 `index` 等于 `nphys` 时，原判断条件认为其合法，实际上已经指向了数组外部的内存区域，导致越界访问。
+
+#解决方案
+修改 `drivers/phy/st/phy-stm32-usbphyc.c` 文件中的边界检查条件，将大于号 `>` 修改为大于等于号 `>=`。修正后的判断条件 `index >= usbphyc->nphys` 能够正确拦截索引值等于数组长度的情况，防止数组越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a8607bbd054b563e992958d9b497356fa1e25c10

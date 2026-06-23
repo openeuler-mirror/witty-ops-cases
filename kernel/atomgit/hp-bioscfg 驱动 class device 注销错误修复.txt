@@ -1,0 +1,20 @@
+#标题
+hp-bioscfg 驱动 class device 注销错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hp-bioscfg 驱动初始化失败退出或模块卸载时，由于错误地使用了 `device_destroy()` 函数注销设备，该函数依据 `dev_t` 匹配设备，而 `firmware_attributes_class` 下的设备没有唯一的 `dev_t`，可能导致注销了错误的设备或引发内核异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`firmware_attributes_class` 下的设备不拥有唯一的 `dev_t`（主次设备号）。代码中使用 `device_destroy(&firmware_attributes_class, MKDEV(0, 0))` 进行注销时，该函数可能匹配到系统中任何 `dev_t` 为 0 的设备，从而错误地销毁了非目标设备。正确的做法应当是直接对目标设备对象 `bioscfg_drv.class_dev` 进行注销。
+
+#解决方案
+将 `hp_init()` 退出路径和 `hp_exit()` 函数中的 `device_destroy(&firmware_attributes_class, MKDEV(0, 0))` 替换为 `device_unregister(bioscfg_drv.class_dev)`。这确保了直接注销驱动自身注册的 class device，避免因设备号不唯一导致的误注销问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2122fc9d54c9504ad613ecac0298f3d09e5e6522

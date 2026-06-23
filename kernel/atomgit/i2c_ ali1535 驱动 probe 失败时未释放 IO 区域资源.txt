@@ -1,0 +1,21 @@
+#标题
+i2c: ali1535 驱动 probe 失败时未释放 IO 区域资源
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ali1535 I2C 控制器驱动加载过程中，若 `i2c_add_adapter` 注册适配器失败，驱动模块无法正常插入，且导致 IO 内存区域（IO region）泄漏。后续再次加载驱动或访问该 IO 区域时可能引发资源冲突。
+
+#主要错误日志
+- "ALI1535 not detected, module not inserted.\n" (推断：setup 阶段失败时打印)
+- i2c_add_adapter 相关错误返回值（无特定打印字面量，通过返回值判断）
+
+#问题根因
+在 `ali1535_probe` 函数的错误处理路径中，当 `i2c_add_adapter()` 调用失败时，代码直接返回了错误码，但未调用 `release_region()` 释放此前在 `ali1535_setup()` 中通过 `request_region()` 申请的 IO 区域资源。这违反了资源申请与释放的配对原则，导致资源泄漏。
+
+#解决方案
+修改 `ali1535_probe` 函数，引入 `ret` 变量接收 `i2c_add_adapter()` 的返回值。若返回值非 0（即注册失败），则跳转至新增的 `release_region` 标签处，执行 `release_region(ali1535_smba, ALI1535_SMB_IOSIZE)` 释放之前申请的 IO 资源，随后再返回错误码，确保资源被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9aa9de1e0613b075c7251358a083323917f07f31

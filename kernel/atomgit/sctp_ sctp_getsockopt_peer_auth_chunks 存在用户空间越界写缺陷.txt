@@ -1,0 +1,20 @@
+#标题
+sctp: sctp_getsockopt_peer_auth_chunks 存在用户空间越界写缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户态程序调用 `sctp_getsockopt` 获取对端 AUTH 块信息（`SCTP_PEER_AUTH_CHUNKS`）时，若提供的缓冲区长度 `len` 满足 `num_chunks <= len < sizeof(struct sctp_authchunks) + num_chunks` 条件，内核会向用户态缓冲区越界写入 8 字节数据。这导致用户态缓冲区后方相邻的内存数据（sentinel bytes）被覆盖为对端的 AUTH chunk 类型值，造成用户态数据静默损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `sctp_getsockopt_peer_auth_chunks` 在校验用户态缓冲区大小时，仅判断 `len < num_chunks`，忽略了结构体 `struct sctp_authchunks` 自身的头部大小（8 字节）。该结构体包含 8 字节的头部成员 `gauth_chunks`，数据需写入偏移量为 8 的位置。校验逻辑缺失导致在缓冲区不足以容纳头部+数据的情况下，`copy_to_user` 函数依然被执行，引发了向用户态缓冲区之外的越界写入。
+
+#解决方案
+修正长度校验逻辑，在判断缓冲区大小时加上结构体头部的长度。将判断条件从 `if (len < num_chunks)` 修改为 `if (len < sizeof(struct sctp_authchunks) + num_chunks)`，使其与姊妹函数 `sctp_getsockopt_local_auth_chunks` 的逻辑保持一致，确保用户提供的缓冲区足以容纳完整数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8590a4bb626fc2c9f2300a448fd01a470af6317a

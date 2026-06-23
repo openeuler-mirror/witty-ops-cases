@@ -1,0 +1,27 @@
+#标题
+inet_getpeer 在 RCU 保护下未正确处理引用计数导致潜在使用后释放风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核引用 `inet_peer` 结构时，由于调用者未获取永久引用计数（refcount），在 RCU 临界区外访问该结构可能导致 Use-After-Free 风险。虽然该补丁主要描述为性能优化，但修复了 `ip4_frag_init` 以外调用路径下的原子操作冗余与潜在的并发安全问题。在流量压力测试中，表现为处理大量 UDP 包时 CPU 开销过高。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述与代码分析，问题根因如下：
+1. 大部分 `inet_getpeer()` 的调用者（除 `ip4_frag_init` 外）实际上不需要获取对等体结构的永久引用计数，但之前的代码在 `lookup` 函数中无条件执行 `refcount_inc_not_zero()`，并在调用侧执行 `inet_putpeer()`，这导致在可能竞争的缓存行上执行了昂贵的原子操作。
+2. `inet_getpeer()` 内部在 RCU 读锁内部进行查找，但后续使用未统一受 RCU 保护，且引用计数的获取方式不够高效。
+3. 部分调用路径使用了非 RCU 安全的 `l3mdev_master_ifindex()` 函数，而非 `l3mdev_master_ifindex_rcu()`。
+
+#解决方案
+1. **移除通用路径的原子操作**：将 `refcount_inc_not_zero()` 从 `inet_getpeer()` 的通用查找逻辑中移除，改为依赖 RCU 保护机制，避免不必要的引用计数增减开销。
+2. **特殊处理分片逻辑**：仅在 `ip4_frag_init()` 中，显式调用 `refcount_inc_not_zero()` 来获取永久引用计数，因为该场景确实需要长期持有引用。
+3. **统一 RCU 保护**：修改 `inet_getpeer()` 及其调用者，确保在 RCU 读临界区（`rcu_read_lock()` 与 `rcu_read_unlock()`）内完成对 `inet_peer` 的查找与访问。
+4. **修正 API 调用**：将代码中的 `l3mdev_master_ifindex()` 调用替换为 RCU 安全版本 `l3mdev_master_ifindex_rcu()`，以符合 RCU 保护下的上下文要求。
+5. **移除冗余导出**：由于 `inet_putpeer()` 不再被大部分模块调用，移除其 `EXPORT_SYMBOL_GPL` 导出符号。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6cfc34f43028bde8df5037ce09d1febae2196d49

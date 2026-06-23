@@ -1,0 +1,20 @@
+#标题
+urma: 修复设备能力结构体长度因缺少保留字段导致的不一致问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在用户态通过 urma 接口查询设备能力（query device）时，内核态与用户态用于描述设备能力的结构体长度不一致（内核态结构体缺少 `reserved` 字段），可能导致内核向用户空间拷贝数据时出现内存越界读取、用户空间接收到的数据错位或解析错误，进而引发用户态应用程序异常或崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+内核态结构体 `ubcore_device_cap`、`ubagg_device_cap` 和用户态结构体 `uburma_cmd_device_cap` 在 `trans_mode` 字段后均直接定义了 `congestion_ctrl_alg` 字段，遗漏了协议或硬件规范中定义的 `reserved` 保留字段。这导致结构体实际大小与预期不符，且在数据填充流程（如 `uburma_fill_device_attr`）中未处理该保留字段，破坏了结构体成员的内存布局对齐。
+
+#解决方案
+在内核态头文件 `include/ub/urma/ubcore_types.h`、`drivers/ub/urma/ubagg/ubagg_ioctl.h` 以及用户态头文件 `drivers/ub/urma/uburma/uburma_cmd.h` 的相关结构体定义中，均在 `trans_mode` 成员后显式添加 `uint16_t reserved;` 字段。同时在数据填充逻辑 `uburma_fill_device_attr` 函数以及 TLV 序列化枚举 `uburma_cmd_query_device_attr_type` 中补充对该 `reserved` 字段的赋值与定义处理，确保结构体长度与成员偏移量在内核态与用户态保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14a9741b432c89e7ace344742d6eda2eea870f8b

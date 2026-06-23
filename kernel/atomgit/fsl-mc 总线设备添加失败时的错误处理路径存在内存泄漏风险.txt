@@ -1,0 +1,20 @@
+#标题
+fsl-mc 总线设备添加失败时的错误处理路径存在内存泄漏风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `fsl_mc_device_add()` 函数添加设备的过程中，如果后续步骤出错进入错误处理路径，代码直接调用 `kfree` 释放资源。由于此前已经调用了 `device_initialize()` 初始化设备，直接 `kfree` 会导致 `struct device` 内部的引用计数失衡及相关资源未被正确释放，从而造成内存泄漏（memory leak）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fsl_mc_device_add()` 函数中，代码逻辑先调用了 `device_initialize()` 初始化设备结构体，这会初始化设备的引用计数。当函数后续流程出错时，错误处理代码直接使用了 `kfree()` 来释放 `mc_dev` 或 `mc_bus` 结构体，而未调用 `put_device()` 来正确释放引用计数。根据内核设备模型规范，初始化后的设备必须通过 `put_device()` 来释放，以便触发注册的 release 回调函数（`fsl_mc_device_release`）来统一清理资源。直接 `kfree` 绕过了 release 机制，导致内存泄漏。
+
+#解决方案
+修改错误处理路径，移除冗余的 `kfree(mc_dev->regions)` 和针对 `mc_bus`/`mc_dev` 的条件 `kfree` 逻辑，统一替换为调用 `put_device(&mc_dev->dev)`。此举确保了在设备初始化后发生错误时，能通过引用计数机制正确调用释放回调函数，清理所有相关资源，避免内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6dd1b41db67ba19f8581069b87d4c07799b9221b

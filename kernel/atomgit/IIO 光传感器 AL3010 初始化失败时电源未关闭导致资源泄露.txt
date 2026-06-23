@@ -1,0 +1,20 @@
+#标题
+IIO 光传感器 AL3010 初始化失败时电源未关闭导致资源泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 al3010 驱动探测过程中，若初始化函数 `al3010_init` 内部的 `i2c_smbus_write_byte_data` 写入配置失败，驱动将直接返回错误退出，但此前已开启的传感器电源未能被正确关闭，导致设备电源状态异常保持开启。
+
+#主要错误日志
+未知
+
+#问题根因
+原代码逻辑中，`devm_add_action_or_reset` 注册的电源关闭回调函数（用于调用 `al3010_set_pwr(false)`）位于 `al3010_probe` 函数中，且执行顺序在 `al3010_init` 之后。当 `al3010_init` 中 `al3010_set_pwr(true)` 成功执行但后续配置写入失败时，函数直接返回错误码，此时电源关闭的自动回调尚未注册生效，导致电源无法被关闭。
+
+#解决方案
+将 `devm_add_action_or_reset` 的调用从 `al3010_probe` 移至 `al3010_init` 函数内部，且紧跟在 `al3010_set_pwr(true)` 成功执行之后。这样确保了一旦电源被开启，无论后续初始化步骤是否成功，都会通过托管机制自动调用 `al3010_set_pwr_off` 关闭电源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fbdb4d9bcb425586f5c5b444133c05ba7e6a9a80

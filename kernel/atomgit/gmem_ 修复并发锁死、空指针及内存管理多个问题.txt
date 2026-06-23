@@ -1,0 +1,38 @@
+#标题
+gmem: 修复并发锁死、空指针及内存管理多个问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 进程在调用 `fork` 复制内存空间时可能出现内存结构初始化异常。
+2. 在进行 `munmap` 操作时可能引发内核崩溃（Oops）或数据竞争。
+3. 执行 `hmemcpy` 操作时可能发生死锁。
+4. 调用 `vma_is_peer_shared` 时若传入 VMA 指针为空可导致空指针宕机。
+5. 在设备虚拟地址分配过程中可能触发非法内存访问或内核警告。
+
+#主要错误日志
+- gmem_err("hmemcpy failed due to src/dest conflict");
+- gmem_err("vma for addr %lx is NULL, should not happen\n", addr);
+
+#问题根因
+1. **fork 初始化时序错误**：在 `dup_mm` 中，`mm->gm_as` 的初始化位置在 `mm_init` 之后，但 `mm_init` 可能触发 gmem 相关回调（如通过 dup_mmap），导致访问未初始化的 `gm_as` 指针。
+2. **munmap 缺乏锁保护**：`__vm_munmap` 流程中调用 `gmem_unmap_region` 前未持有 `mmap_read_lock`，导致并发访问风险。
+3. **死锁风险**：`do_hmemcpy` 中对 `gm_mapping_src` 直接使用 `mutex_lock`，当源和目的映射存在特定依赖关系时可能触发死锁。
+4. **空指针解引用风险**：
+   - `vma_is_peer_shared` 函数未对传入的 `vma` 指针进行非空校验。
+   - `vm_object_split` 函数未检查 `vm_obj` 是否存在即进行操作。
+5. **VMA 边界检查不足**：`alloc_va_in_peer_devices` 中仅检查 `vma` 是否为空，未校验地址是否在 VMA 范围内，可能导致越界访问。
+
+#解决方案
+1. **调整初始化顺序**：将 `mm->gm_as = NULL` 的初始化移至 `mm_init` 之前，确保后续流程访问该成员时处于有效状态。
+2. **补全锁机制**：在 `__vm_munmap` 调用 `gmem_unmap_region` 前后分别添加 `mmap_read_lock` 和 `mmap_read_unlock`，确保内存描述符访问安全。
+3. **修复锁策略**：在 `do_hmemcpy` 中将 `mutex_lock` 替换为 `mutex_trylock`，若获取锁失败则解锁目标映射并跳转退出，避免死锁。
+4. **增加防御性检查**：
+   - 在 `vma_is_peer_shared` 入口增加 `if (!vma) return false;` 判空保护。
+   - 在 `vm_object_split` 入口增加 `vm_obj` 非空检查。
+   - 在 `alloc_va_in_peer_devices` 中完善 VMA 边界校验：`if (!vma || vma->vm_start >= addr + len)`。
+5. **修复对象创建逻辑**：调整 `alloc_va_in_peer_devices` 中 `vm_object_create` 的调用时机与错误处理，仅在 `ret == 0` 时创建对象并检查结果。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/faacf1352164d85a8db748e8a6fe78b7b249485a

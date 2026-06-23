@@ -1,0 +1,36 @@
+#标题
+ub: udma 驱动打印位置不当引发的潜在死锁与内存释放风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 UDMA 驱动加载或运行过程中，若遇到资源分配失败或异常检查（如 ID 分配失败、队列不存在等），可能导致进程挂起或系统调度异常，具体表现为持有自旋锁或互斥锁期间进行 I/O 操作或睡眠。
+2. 在 `udma_destroy_hugepage` 和 `udma_free_ucontext` 流程中，可能导致内核内存泄漏或 list 结构损坏（list corruption），引发潜在的内核崩溃。
+
+#主要错误日志
+- failed to alloc id, ret = %d.
+- user specify id %u been used.
+- all bitmaps have been used, bitmap_cnt = %u.
+- no completely bitmap for Jetty group.
+- ue idx info not exist, tpn %u.
+- mmap failed, j_id: %llu not exist
+- mmap failed, j_id: %llu, uctx invalid
+- async event for bogus queue number = %u.
+- async event for bogus jfr number = %u.
+- async event for bogus jfc number = %u.
+- async event for bogus jetty group number = %u.
+- num exceeds the maximum value.
+- alloc jfr id range (%u - %u) failed, ret = %d.
+
+#问题根因
+1. **锁与打印顺序错误**：在多处错误处理路径中，代码在持有自旋锁（spinlock）或 xarray 锁的状态下调用了 `dev_err` 或 `dev_warn` 进行打印。在某些内核配置或调用链下，打印函数可能引起睡眠或阻塞，导致在持锁期间睡眠，引发调度异常或死锁。
+2. **链表遍历删除错误**：在 `udma_destroy_hugepage` 和 `udma_free_ucontext` 函数中，使用 `list_for_each_entry` 遍历链表的同时执行删除操作，且未使用 `list_del` 将节点从链表中移除。正确的做法应使用 `list_for_each_entry_safe` 并显式调用 `list_del`，否则会导致链表节点被释放后仍被遍历访问，引发 Use-After-Free 或内核崩溃。
+
+#解决方案
+1. **调整打印与解锁顺序**：将所有错误处理分支中的 `dev_err`/`dev_warn` 打印操作移动到解锁操作（`spin_unlock`、`xa_unlock` 等）之后执行，确保不在持锁期间进行可能阻塞的操作。
+2. **修正链表删除逻辑**：将 `udma_destroy_hugepage` 和 `udma_free_ucontext` 中的 `list_for_each_entry` 替换为 `list_for_each_entry_safe`，增加临时变量存储下一个节点，并在循环中显式调用 `list_del(&priv->list)` 后再释放内存，确保链表操作的原子性与安全性。
+3. **移除冗余打印**：删除了 `udma_find_ue_idx_by_tpn` 函数中一处不必要的 `dev_warn` 打印，减少内核日志噪音。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4650a8abb5f2656fbe01b9bc9c0898f3f369fb53

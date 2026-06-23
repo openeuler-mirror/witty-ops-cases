@@ -1,0 +1,22 @@
+#标题
+ice: VF 无法禁用 FCS/CRC 剥离功能导致配置失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Intel ice 网卡驱动上的虚拟机（VF）在尝试禁用 FCS/CRC 剥离功能时无效。由于 PF 驱动未向 VF 透传 `VIRTCHNL_VF_OFFLOAD_CRC` 能力标志位，导致 VF 无法成功下发禁用 CRC 剥离的配置请求。在特定场景下，如果 VF 强制设置 `crc_disable` 标志但缺乏相应能力支持，可能导致配置失败或参数校验错误。
+
+#主要错误日志
+未知
+
+#问题根因
+PF 驱动在处理 `ice_vc_get_vf_res_msg` 请求时，未检查并将 VF 驱动声明的 `VIRTCHNL_VF_OFFLOAD_CRC` 能力透传给 VF 资源标志位。这导致 VF 驱动无法获知底层硬件支持 CRC 剥离去使能功能，进而在配置 Rx 队列时无法正确处理 `crc_disable` 标志，且相关逻辑未对无权限时的 `crc_disable` 请求进行合法性校验。
+
+#解决方案
+1. 在 `ice_vc_get_vf_res_msg` 函数中增加逻辑：检查 VF 的 `driver_caps` 是否包含 `VIRTCHNL_VF_OFFLOAD_CRC`，若包含则将其添加到返回给 VF 的 `vf_cap_flags` 中，以此向 VF 声明支持该功能。
+2. 在 `ice_vc_cfg_qs_msg` 函数中增加校验逻辑：如果 VF 请求 `crc_disable` 但未拥有 `VIRTCHNL_VF_OFFLOAD_CRC` 能力，则直接跳转至 `error_param` 拒绝该配置。
+3. 根据配置请求正确设置 Rx 队列的 `ICE_RX_FLAGS_CRC_STRIP_DIS` 标志位，确保硬件行为与配置一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cf7a7556b22bbf70b7178c519947f18ca94ccf49

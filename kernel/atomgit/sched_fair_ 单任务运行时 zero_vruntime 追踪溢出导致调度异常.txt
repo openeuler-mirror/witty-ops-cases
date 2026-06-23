@@ -1,0 +1,39 @@
+#标题
+sched/fair: 单任务运行时 zero_vruntime 追踪溢出导致调度异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统仅在单个 CPU 上运行单一任务时，`zero_vruntime` 追踪机制失效，导致 `entity_key()` 计算出的值无限增大，最终引发数值溢出。该溢出会导致调度器出现不可预期的行为，引发系统性能严重下降或调度逻辑错误。
+
+通过调试接口观察 `zero_vruntime` 和任务的 `vruntime`，可以看到数值异常快速增长（PRE 状态），而修复后数值恢复正常更新范围（POST 状态）。
+
+测试复现方法：
+1. 将当前 shell 绑定到 CPU 1：`taskset -c -p 1 $$`
+2. 在 CPU 2 上启动一个死循环任务：`taskset -c 2 bash -c 'while :; do :; done&'`
+3. 查看 CPU 2 的调度调试信息：`cat /sys/kernel/debug/sched/debug | awk '/^cpu#/ {P=0} /^cpu#2,/ {P=1} {if (P) print $0}' | grep -e zero_vruntime -e "^>"`
+
+#主要错误日志
+未知
+
+#问题根因
+问题根源在于 `zero_vruntime` 的更新路径存在缺陷以及原子性不一致：
+
+1. **单任务场景更新缺失**：`zero_vruntime` 的更新路径位于 `__enqueue_entity()` 和 `__dequeue_entity()` 函数中。当 CPU 上仅运行单个任务时，`pick_next_task()` 总是返回该任务，导致 `put_prev_set_next_task()` 既不执行 enqueue 也不执行 dequeue 操作，从而跳过了 `zero_vruntime` 的更新。这导致 `entity_key()` 的返回值随时间无限增大直至溢出。
+
+2. **统计逻辑不一致**：从 `{set_next,put_prev}_entity()` 调用更新函数时存在时序问题：
+   - `set_next_entity()` 先调用 `__dequeue_entity()` 再设置 `cfs_rq->curr`，导致 `avg_vruntime()` 看到了移除操作却未看到当前任务，造成统计缺失。
+   - `put_prev_entity()` 先调用 `__enqueue_entity()` 再清空 `cfs_rq->curr`，导致 `avg_vruntime()` 同时看到了入队操作和当前任务，造成重复统计。
+
+#解决方案
+移除显式的 `update_zero_vruntime()` 调用，重构 `avg_vruntime()` 函数使其自动更新 `zero_vruntime`，并优化计算逻辑。
+
+具体修改如下：
+1. **移除显式更新调用**：在 `__enqueue_entity()` 和 `__dequeue_entity()` 中删除显式的 `update_zero_vruntime()` 调用，消除原子性统计错误和不必要的 64 位除法开销。
+2. **内嵌更新逻辑**：修改 `avg_vruntime()` 函数，在计算平均运行时间的同时，通过新定义的 `update_zero_vruntime()` 辅助函数内部更新 `zero_vruntime`。
+3. **修复单任务计算**：优化 `avg_vruntime()` 的计算分支，当只有一个运行实体时，直接使用其 vruntime 进行计算，避免复杂的除法运算且修正了计算逻辑。
+4. **增加 Tick 更新**：在 `entity_tick()` 中调用 `avg_vruntime()`，利用其副作用在时钟中断时更新 `zero_vruntime`，确保即使在单任务运行场景下也能正常追踪 `zero_vruntime`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/06e92fca63222c4ee85fcac5a66b40dfea4410a5

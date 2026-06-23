@@ -1,0 +1,20 @@
+#标题
+USB-C 接入设备后 upower 误报系统处于 AC 供电状态
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统重启后首次插入普通 USB 设备时，upower 错误地判定系统连接了 AC 电源（处于交流供电状态），导致电源管理状态显示异常。
+
+#主要错误日志
+未知
+
+#问题根因
+USB-C 端口的当前功率方向（power direction）会影响 power_supply 的 online 状态。在内核处理功率角色变更（UCSI_CONSTAT_POWER_DIR_CHANGE）的逻辑中，代码调用了 `typec_set_pwr_role` 更新角色，但遗漏了调用 `ucsi_port_psy_changed` 来同步更新 power_supply 的状态。这导致在某些系统上，power_supply 的状态未能正确反映实际的供电角色，进而导致 upower 误判。
+
+#解决方案
+在 `ucsi_handle_connector_change` 函数处理 `UCSI_CONSTAT_POWER_DIR_CHANGE` 事件的分支中，于 `typec_set_pwr_role` 调用之后立即添加 `ucsi_port_psy_changed(con)` 调用，确保在功率角色改变时同步更新 power_supply 状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/da93fc8963aa9aa70ff525860bb3077e238501d0

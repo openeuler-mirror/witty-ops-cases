@@ -1,0 +1,21 @@
+#标题
+usbtmc: IOCTL WAIT_SRQ 因整型溢出导致错误的返回值
+
+#内核版本
+OLK-6.6
+
+#问题现象
+应用程序调用 `USBTMC488_IOCTL_WAIT_SRQ` ioctl 接口等待中断请求时，若等待时间较长（剩余 jiffies 大于 INT_MAX），该接口会返回随机的错误码，导致用户态程序误判调用失败或异常退出。
+
+#主要错误日志
+- 推断日志（基于 pr_debug 调用）：
+  `%s - wait interrupted %d\n` （原日志打印变量类型与实际返回值不符，修复后变为 `%ld`）
+
+#问题根因
+内核函数 `wait_event_interruptible_timeout` 返回值为 `long` 类型，但驱动代码中将其错误地赋值给了 `int` 类型的变量 `rv`。当剩余的 jiffies 数值超过 `INT_MAX` 时，发生了整型溢出，导致数值被截断或符号位翻转，进而产生错误的负值错误码返回给用户空间。
+
+#解决方案
+将接收 `wait_event_interruptible_timeout` 返回值的变量类型从 `int` 修改为 `long`，仅在最终返回给 ioctl 调用者时才转换为 `int`（仅在确实发生错误时）。同时修正了调试日志打印中的格式说明符，使其与变量类型匹配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/032b223c0aebe8ad2fb893f666ef5c3e3a5c4d44

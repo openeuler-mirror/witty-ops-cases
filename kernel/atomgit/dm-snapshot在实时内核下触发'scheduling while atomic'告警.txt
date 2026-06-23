@@ -1,0 +1,24 @@
+#标题
+dm-snapshot在实时内核下触发'scheduling while atomic'告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在实时内核中使用 dm-snapshot 功能时，系统触发 'scheduling while atomic' 错误，导致内核合法性检查失败，可能引发系统不稳定或异常行为。
+
+#主要错误日志
+BUG: scheduling while atomic
+
+#问题根因
+该故障的根本原因是 dm-snapshot 模块使用了 `hlist_bl` 类型的锁（bit lock）。`hlist_bl` 锁在实现上会在获取锁时调用 `preempt_disable()` 禁用抢占。然而，内核代码在持有该锁的情况下尝试获取其他自旋锁，导致在原子上下文中进行调度，从而在实时内核中触发 'scheduling while atomic' 错误。
+
+#解决方案
+将 dm-snapshot 中的异常表哈希锁机制从 `hlist_bl` 位锁转换为标准的 `spinlock_t` 自旋锁。
+具体修改包括：
+1. 将数据结构 `dm_exception` 和 `dm_exception_table` 中的哈希链表头类型从 `hlist_bl_head` 改为 `hlist_head`，并新增独立的 `spinlock_t` 成员。
+2. 将锁操作接口从 `hlist_bl_lock/hlist_bl_unlock` 替换为标准的 `spin_lock_nested/spin_unlock`。
+此修改避免了持有 `hlist_bl` 锁时禁用抢占与其他锁操作之间的冲突，修复了实时内核下的调度问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e3d80b1a7b0dbc15c4f0761f494fbbc0ca409faa

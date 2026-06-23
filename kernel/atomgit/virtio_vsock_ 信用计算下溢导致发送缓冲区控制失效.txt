@@ -1,0 +1,22 @@
+#标题
+virtio_vsock: 信用计算下溢导致发送缓冲区控制失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 virtio-vsock 通信过程中，若对端动态缩小其通告的接收缓冲区，且本端仍有数据在传输途中，信用计算逻辑可能发生无符号整数下溢。这将导致计算出的可用信用值异常变大（原本应为 0 或小值，却变成巨大的正数），进而导致发送端向对端注入超过其处理能力的数据，破坏流控机制，可能引发内存耗尽或连接异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`virtio_transport_get_credit()` 函数在进行信用值计算时使用了无符号算术运算：
+`ret = vvs->peer_buf_alloc - (vvs->tx_cnt - vvs->peer_fwd_cnt);`
+当对端缩小其通告缓冲区 (`peer_buf_alloc` 变小) 且本端有数据在途 (`tx_cnt - vvs->peer_fwd_cnt` 较大) 时，上述减法操作会发生无符号整数下溢，产生一个巨大的正数值，而不是预期的负值或零。
+
+#解决方案
+修改 `virtio_transport_get_credit()` 函数，移除原有的直接无符号减法逻辑，改为复用 `virtio_transport_has_space()` 函数。该函数内部已使用 s64（有符号 64 位整数）进行算术运算，能够正确处理缓冲区缩小导致的负值情况（将负值截断为 0），从而防止整数下溢并正确限制信用额度。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/92eab7e439dcbe2eb710b56237b3f491f6deeb65

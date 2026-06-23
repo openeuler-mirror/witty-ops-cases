@@ -1,0 +1,20 @@
+#标题
+ksmbd: fix racy issue from session lookup and expire
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ksmbd 内核模块在处理会话查找与过期逻辑时存在竞态条件。当会话查找操作未在锁内增加引用计数时，可能与会话过期处理过程发生冲突，导致释放后使用或内核崩溃，存在安全风险（ZDI-CAN-25737）。
+
+#主要错误日志
+pr_err("Invalid user session id: %llu\n", id);
+
+#问题根因
+在执行会话查找时，未在持有锁的临界区内增加会话对象的引用计数。这导致查找操作返回会话指针后、使用该会话之前，该会话可能被并发执行的过期处理逻辑释放，从而引发竞态问题。
+
+#解决方案
+在会话查找相关函数（如 `ksmbd_session_lookup`、`ksmbd_session_lookup_slowpath` 及加密密钥获取流程）中，将引用计数增加操作 `ksmbd_user_session_get` 移至锁内执行，确保查找到会话后引用计数有效递增，防止会话在使用过程中被提前释放；同时调整部分调用处逻辑，确保会话引用计数的获取与释放配对正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/be1fe7a233e95c3f67f7008ecd1e793b59156fae

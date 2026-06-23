@@ -1,0 +1,20 @@
+#标题
+sctp: GSO分片丢失encap_port导致SCTP-over-UDP连接中断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 GSO（Generic Segmentation Offload）功能时，SCTP-over-UDP 连接发生中断。分片 skb 未能正确继承封装端口（encap_port），导致接收端在处理分片时无法通过 sctp_vtag_verify 进行正确的校验，从而破坏了 SCTP-over-UDP 的正常通信。
+
+#主要错误日志
+未知
+
+#问题根因
+在 SCTP 输入控制块（SCTP_INPUT_CB）中，`encap_port` 字段用于 SCTP-over-UDP 处理过程中的 vtag 校验。在 GSO 场景下，`encap_port` 仅被设置在主 skb（head skb）上，而在 `sctp_inq_pop()` 函数中初始化分片 skb（fragment skbs）时，未将该字段从主 skb 拷贝至分片 skb，导致分片 skb 的 `encap_port` 值为 0。这使得分片在进行 vtag 校验时因端口信息缺失而失败，进而中断连接。
+
+#解决方案
+在 `net/sctp/inqueue.c` 文件的 `sctp_inq_pop()` 函数中，当处理 GSO 分片初始化时，增加一行代码将主 skb 控制块中的 `encap_port` 赋值给分片 skb 的控制块，确保分片 skb 携带正确的封装端口信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9fb780130aa3e306fc104befd21aeeb857d01cf7

@@ -1,0 +1,21 @@
+#标题
+hibmcge 驱动暂停帧统计计数错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用发包工具（如 mz）向网卡发送暂停帧后，通过 `ethtool -S` 查看统计信息，发现 `rx_pause_frames` 统计计数未增加，无法观测到接收到的暂停帧，统计数据显示不正确。
+具体表现为：发送 100 个暂停帧后，`ethtool -S` 显示 `rx_filt_pkt_cnt` 增加，但暂停帧专用计数器无数据；修复后 `ethtool --include-statistics -a` 能正确显示 `rx_pause_frames: 100`。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序虽然支持暂停帧功能，但在配置接收暂停使能时，未同步配置 MAC 硬件的透传功能。导致接收到的暂停帧在硬件层面被过滤掉，无法传递给驱动层进行统计，从而导致暂停帧统计计数不正确。
+
+#解决方案
+在函数 `hbg_hw_set_pause_enable` 中，当设置接收暂停使能时，同步配置 `HBG_REG_REC_FILT_CTRL_PAUSE_FRM_PASS_B` 寄存器位。将 `rx_en` 的值写入该寄存器，确保当接收暂停功能开启时，硬件允许暂停帧通过，从而保证统计信息的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/23380c19f58df1a2d395847b2cc3375380a05047

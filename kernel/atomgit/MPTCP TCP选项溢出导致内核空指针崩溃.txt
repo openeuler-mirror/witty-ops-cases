@@ -1,0 +1,28 @@
+#标题
+MPTCP TCP选项溢出导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核发生通用保护错误，伴随空指针解引用。该故障触发了 KASAN 报告，显示在释放 skb 页面时访问了无效地址，导致内核崩溃。调用栈显示该问题发生在 TCP 接收处理路径中，涉及 `put_page` 和 `skb_release_data` 函数。此问题由 syzbot 发现。
+
+#主要错误日志
+Oops: general protection fault, probably for non-canonical address 0xdffffc0000000001: 0000 [#1] PREEMPT SMP KASAN PTI
+KASAN: null-ptr-deref in range [0x0000000000000008-0x000000000000000f]
+RIP: 0010:_compound_head include/linux/page-flags.h:242 [inline]
+RIP: 0010:put_page+0x23/0x260 include/linux/mm.h:1552
+Call Trace:
+skb_page_unref include/linux/skbuff_ref.h:43 [inline]
+__skb_frag_unref include/linux/skbuff_ref.h:56 [inline]
+skb_release_data+0x483/0x8a0 net/core/skbuff.c:1119
+tcp_ack+0x2442/0x6bc0 net/ipv4/tcp_input.c:4032
+
+#问题根因
+MPTCP 选项长度计算存在缺陷。根据协议设计，ADD_ADDR 选项与 DSS 选项应当是互斥的。然而，`mptcp_established_options_add_addr()` 函数在某些情况下未正确强制执行这种互斥性，当 DSS 选项存在时仍尝试设置 ADD_ADDR 信息。由于 ADD_ADDR 信息和 DSS 共用同一个 union 字段，这种错误的写入导致 DSS 数据被破坏。在最坏情况下，这种破坏会导致 DSS 二进制布局长度超出计算值，进而覆写 skb 共享信息，导致内存破坏和后续的崩溃。
+
+#解决方案
+在 `mptcp_established_options_add_addr()` 函数中增加对 DSS 选项的检查，强制执行 ADD_ADDR 与 DSS 的互斥逻辑。具体修改为：如果检测到 `opts->suboptions` 中已设置 `OPTION_MPTCP_DSS`，且无法丢弃其他子选项，则直接返回 false，阻止 ADD_ADDR 选项的处理，从而避免数据结构损坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bbcf268ad64f5bf4f206aeda620d54e8baa772a9

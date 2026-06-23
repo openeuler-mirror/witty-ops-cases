@@ -1,0 +1,26 @@
+#标题
+ocfs2 reflink 操作中 xattr 清理逻辑缺陷导致数据未正确处理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 ocfs2 reflink 操作并涉及 xattr（扩展属性）preserve 处理时，若 xattr 条目需要清理，可能导致指针计算错误或首个条目未被清理。具体表现为：
+1. 清理数组条目后，'last' 指针未正确向后移动一个单位，导致后续内存移动或判断逻辑异常。
+2. 当 xh_count 为 1 时，代码逻辑未能正确清理第一个条目，可能导致残留数据或属性处理错误。
+
+#主要错误日志
+未知
+
+#问题根因
+此前修复 commit c06c303832ec ("ocfs2: fix xattr array entry __counted_by error") 并未覆盖所有场景，导致 cleanup job（清理工作）仍存在两个逻辑漏洞：
+1. 清理完一个数组条目后，'last' 指针应该向后移动一个单位，但代码未执行此操作。
+2. 现有代码逻辑在 xh_count 为 1 时，遗漏了对第一个条目的清理操作。
+
+#解决方案
+修改 `fs/ocfs2/xattr.c` 文件中的 `ocfs2_reflink_xattr_header` 函数，修正 xattr 条目清理逻辑：
+1. 在执行清理并 `memset` 后，更新 `last` 指针指向 `new_xh->xh_entries` 数组末尾的前一个位置。
+2. 增加 else 分支处理 xh_count 为 1 的情况，直接对当前条目 `xe` 进行清零操作，并将 `last` 指针置为 NULL，确保首个条目被正确清理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/71f9ce886abce3b867353e1cb4687abf0a97e9ab

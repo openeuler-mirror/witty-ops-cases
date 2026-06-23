@@ -1,0 +1,20 @@
+#标题
+i40e 驱动云过滤器 TC 编号校验逻辑错误导致越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i40e 网卡驱动处理云过滤器时，若传入的 TC（流量类别）编号等于 `vf->num_tc`，输入校验逻辑未能正确拦截，导致后续代码发生越界访问。
+
+#主要错误日志
+dev_info(&pf->pdev->dev, "VF %d: Invalid TC number %u\n", vf->vf_id, tc_filter->action_meta);
+
+#问题根因
+在 `i40e_validate_cloud_filter` 函数中，对 `action_meta`（TC 编号）的校验条件存在逻辑错误。原代码使用 `>`（大于）判断，仅当 `action_meta` 大于 `vf->num_tc` 时才报错。实际上 TC 编号的有效范围应小于 `vf->num_tc`（即 0 到 num_tc-1）。因此，当 `action_meta` 等于 `vf->num_tc` 时，校验通过，导致数组越界索引。
+
+#解决方案
+修改 `drivers/net/ethernet/intel/i40e/i40e_virtchnl_pf.c` 中的判断条件，将 `tc_filter->action_meta > vf->num_tc` 修正为 `tc_filter->action_meta >= vf->num_tc`，确保 TC 编号等于 `num_tc` 时被正确识别为无效值并拦截，防止越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d23e975adf824c807006bdbf0314638a48dc437e

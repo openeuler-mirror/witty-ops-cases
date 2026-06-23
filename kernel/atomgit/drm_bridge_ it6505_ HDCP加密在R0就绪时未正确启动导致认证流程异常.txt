@@ -1,0 +1,22 @@
+#标题
+drm/bridge: it6505: HDCP加密在R0就绪时未正确启动导致认证流程异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启动HDCP认证时，HDCP加密未能在R0'（R0 prime）检查就绪时正确启用。当repeater KSV列表检查失败时，系统无法正确重启HDCP认证流程，导致HDCP功能异常或认证挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+HDCP加密启用的时机不正确。原逻辑中，HDCP_TRIGGER_KSV_DONE 被错误地放置在 `it6505_hdcp_wait_ksv_list` 函数中触发，这导致硬件HDCP引擎触发时机错误，且在KSV列表检查失败的异常处理路径中，缺少重新启动HDCP认证的机制。
+
+#解决方案
+调整HDCP加密触发的时机与位置：
+1. 将HDCP加密使能操作移动到 `it6505_irq_hdcp_ksv_check` 中断处理函数中，确保在收到 "HDCP repeater R0 event Interrupt" 且R0就绪时立即启动加密。
+2. 修改 `it6505_hdcp_wait_ksv_list` 函数逻辑，当KSV列表检查失败（`ksv_list_check` 为 false）进入 timeout 处理流程时，直接调用 `it6505_start_hdcp(it6505)` 重启HDCP认证，移除原有的无效触发位设置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9737389e596b93e7b9994e2dda0167b293725d8f

@@ -1,0 +1,30 @@
+#标题
+RDMA/mlx5: ODP MR注销竞争导致CQE错误及UMR QP异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行ODP（On-Demand Paging）MR（Memory Region）注销流程期间，如果并发触发内存无效化操作，会导致硬件上报CQE（Completion Queue Entry）错误。错误表现为UMR QP进入错误状态，内核触发WARNING警告，调用栈显示在`madvise`系统调用处理过程中发生异常。
+
+#主要错误日志
+infiniband rocep8s0f0: dump_cqe:277:(pid 0): WC error: 6, Message: memory bind operation error
+cqe_dump: 00000000: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+cqe_dump: 00000010: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+cqe_dump: 00000020: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+cqe_dump: 00000030: 00 00 00 00 08 00 78 06 25 00 11 b9 00 0e dd d2
+
+WARNING: CPU: 15 PID: 1506 at drivers/infiniband/hw/mlx5/umr.c:394 mlx5r_umr_post_send_wait+0x15a/0x2b0 [mlx5_ib]
+
+#问题根因
+在 `__mlx5_ib_dereg_mr()` -> `mlx5_revoke_mr()` 流程中，`mlx5r_umr_revoke_mr()` 执行后，lkey 已从硬件视角被释放。
+此时，另一任务并发调用 `mlx5_ib_invalidate_range()` 试图对同一 lkey 进行无效化操作。该任务持有 `umem_odp->umem_mutex` 锁并在 UMR QP 上调用 `mlx5r_umr_update_xlt()`。由于 lkey 已被释放，硬件无法处理该请求，导致 CQE 错误，进而导致 UMR QP 进入错误状态。
+
+#解决方案
+在 `mlx5_revoke_mr()` 函数中引入互斥锁保护与状态检查机制：
+1. 在执行 revoke 操作前，对 ODP MR 获取 `umem_odp->umem_mutex` 锁。
+2. 在成功销毁 mkey 后，将 `umem_odp->private`（指向该 MR 的指针）设置为 NULL。
+3. 在 `mlx5_ib_invalidate_range()` 中增加对 `umem_odp->private` 的非空检查，如果为 NULL 则直接退出，避免对已注销的 lkey 执行无效化操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/83262ab5874c9a1cf2bb49a54f7d5d9b4664cf9a

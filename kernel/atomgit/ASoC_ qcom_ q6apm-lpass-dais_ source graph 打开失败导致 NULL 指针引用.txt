@@ -1,0 +1,33 @@
+#标题
+ASoC: qcom: q6apm-lpass-dais: source graph 打开失败导致 NULL 指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在音频处理过程中，若 source graph 打开失败（例如 ADSP 因 audioreach 拓扑错误拒绝请求），系统会关闭 graph 并将指针置为 NULL。随后在 sink graph 的准备阶段，调用 `q6apm_lpass_dai_prepare()` 时访问该 NULL 指针，导致内核发生 NULL 指针引用异常，系统崩溃。
+
+#主要错误日志
+```
+qcom-apm gprsvc:service:2:1: Error (1) Processing 0x01001002 cmd
+qcom-apm gprsvc:service:2:1: DSP returned error[1001002] 1
+q6apm-lpass-dais 30000000.remoteproc:glink-edge:gpr:service@1:bedais: fail to start APM port 78
+q6apm-lpass-dais 30000000.remoteproc:glink-edge:gpr:service@1:bedais: ASoC: error at snd_soc_pcm_dai_prepare on TX_CODEC_DMA_TX_3: -22
+Unable to handle kernel NULL pointer dereference at virtual address 00000000000000a8
+...
+Call trace:
+ q6apm_graph_media_format_pcm+0x48/0x120 (P)
+ q6apm_lpass_dai_prepare+0x110/0x1b4
+ snd_soc_pcm_dai_prepare+0x74/0x108
+ __soc_pcm_prepare+0x44/0x160
+ dpcm_be_dai_prepare+0x124/0x1c0
+```
+
+#问题根因
+在 `q6apm_lpass_dai_prepare` 函数的错误处理路径中，代码逻辑未区分播放流和捕获流。当 source graph 打开失败进入错误处理流程时，代码无条件地关闭 graph 并将 `dai_data->graph[dai->id]` 赋值为 NULL。然而，对于捕获流，该指针不应被置空，这导致后续 sink graph 准备操作访问了已被置空的 NULL 指针，从而触发内核空指针引用。
+
+#解决方案
+在 `q6apm_lpass_dai_prepare` 函数的错误处理代码块中增加流类型判断。仅当流类型为播放流（`SNDRV_PCM_STREAM_PLAYBACK`）时，才执行关闭 graph 和指针置空操作，避免错误地清理捕获流的 graph 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4580478bb98e6ac0d233a704ead09146f5836f2d

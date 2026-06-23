@@ -1,0 +1,21 @@
+#标题
+uvcvideo: 小帧尺寸URB缓冲区内存分配失败修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当视频帧大小小于或等于一个数据包大小时，由于代码中存在差一错误（off-by-one error），`uvc_alloc_urb_buffers()` 函数无法正确分配内存，导致 USB 视频类（UVC）设备无法正常工作或视频流无法启动。
+
+#主要错误日志
+"Failed to allocate URB buffers (%u bytes per packet)\n"
+
+#问题根因
+在 `uvc_alloc_urb_buffers()` 函数的内存分配重试循环中，循环条件被错误地设置为 `npackets > 1`。当帧大小非常小（仅需要 1 个 packet）时，循环条件直接判定为假导致循环体未执行，从而跳过了内存分配逻辑，导致函数返回失败。这是一个典型的差一错误。
+
+#解决方案
+1. 修正循环条件：将 `for (; npackets > 1; npackets /= 2)` 修改为 `for (; npackets > 0; npackets /= 2)`，确保当 `npackets` 为 1 时也能进入分配逻辑。
+2. 增加安全性赋值：在函数返回失败（返回 0）前，显式将 `stream->urb_size` 设置为 0，防止该变量在错误路径下保留无效的中间值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0fd3f0c19bc02299339a621640e70c02488a9a49

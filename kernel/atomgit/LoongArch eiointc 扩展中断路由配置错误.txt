@@ -1,0 +1,26 @@
+#标题
+LoongArch eiointc 扩展中断路由配置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构多核或多节点环境下，EIOINTC 中断控制器在处理中断亲和性切换或初始化时，中断路由计算逻辑错误，导致中断无法正确投递到目标 CPU，引发外设中断丢失或系统功能异常（如设备无响应）。在系统从挂起状态恢复时，也可能因路由状态未正确重置而导致类似问题。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **路由计算目标错误**：在中断路由设置函数 `eiointc_set_irq_route` 中，调用 `csr_any_send` 发送配置指令时，使用了 `node * CORES_PER_EIO_NODE` 计算目标，这依赖于物理编号连续的假设，但在某些拓扑下不成立，导致配置发送到错误的 CPU。
+2. **路由分发逻辑缺陷**：循环遍历 CPU 设置路由时，未及时清理已处理的节点映射，导致同一节点被重复配置。
+3. **初始化条件判断不当**：`eiointc_router_init` 中仅以 `cpu_logical_map(cpu) % cores == 0` 作为初始化判断条件，不够准确。
+4. **挂起恢复状态残留**：`eiointc_resume` 未重置全局节点映射状态，导致恢复后的初始化流程异常。
+
+#解决方案
+1. **修正路由发送目标**：将 `csr_any_send` 的目标参数由 `node * CORES_PER_EIO_NODE` 修改为 `cpu_logical_map(i)`，确保配置发送到正确的物理 CPU。
+2. **优化路由分发逻辑**：引入 `extioi_node_map` 变量并在循环中动态清除已处理的节点位，避免重复配置，同时调整代码结构确保逻辑正确覆盖。
+3. **改进初始化判断**：引入全局 `extioi_node_maps` 位图，替代原有的简单取模判断，精确记录已初始化的节点，并在初始化完成后置位。
+4. **修复 resume 流程**：在 `eiointc_resume` 函数入口处将 `extioi_node_maps` 重置为 `EXTIOI_NODE_MASK_NONE`，确保重新初始化时状态干净。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c0d9a87efd7845c763e936a5bd9c482c62f8ceb4

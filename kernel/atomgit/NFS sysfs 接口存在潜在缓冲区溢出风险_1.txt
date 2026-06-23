@@ -1,0 +1,22 @@
+#标题
+NFS sysfs 接口存在潜在缓冲区溢出风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFS 子系统中，当调用 `nfs_sysfs_link_rpc_client` 函数时，若 `clnt->cl_program->name` 长度接近或超过缓冲区边界，或者结合 `uniq` 字段拼接后超出缓冲区大小，可能导致内核栈缓冲区溢出，进而引发内核 Panic 或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+局部变量 `name` 定义为 `char[64]`（即 `RPC_CLIENT_NAME_SIZE`），而在构造链接名称时，源字符串 `clnt->cl_program->name` 长度未知。代码原实现使用 `strcpy` 和 `strcat` 直接进行字符串拷贝和拼接，未对目标缓冲区剩余空间进行校验，导致存在缓冲区溢出隐患。
+
+#解决方案
+将不安全的字符串操作函数替换为带长度检查的安全版本：
+1. 使用 `strscpy` 替代 `strcpy`，在拷贝 `clnt->cl_program->name` 时显式指定目标缓冲区大小。
+2. 使用 `strncat` 替代 `strcat`，在拼接 `uniq` 和 "_client" 字符串时，根据 `sizeof(name) - strlen(name) - 1` 限制写入长度，确保不会越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d633101fa3a08f60710e76993959c333bb4e4c63

@@ -1,0 +1,29 @@
+#标题
+md: md_seq_ops() 导致 /proc/mdstat 信息显示异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+读取 `/proc/mdstat` 时出现信息丢失或重复显示的异常行为，具体表现为：
+1. 若系统中无 md 设备（list all_mddevs 为空），则 "Personalities" 和 "unused devices" 信息不会显示给用户。
+2. 若 `md_seq_show()` 发生 seq_file 缓冲区溢出，`md_seq_start()` 会被再次调用，导致 "Personalities" 信息被重复显示。
+3. 若 `md_seq_stop()` 发生 seq_file 缓冲区溢出，由于 `seq_read_iter()` 处理机制问题，"unused devices" 信息不会显示给用户。
+
+#主要错误日志
+未知
+
+#问题根因
+此前提交 cf1b6d4441ff ("md: simplify md_seq_ops") 对 `md_seq_ops` 的简化引入了回归问题：
+1. 将 "Personalities" 打印逻辑移至 `md_seq_start()`，导致列表为空时不执行 start 函数（或不符合预期流程），进而丢失该信息；同时也导致了缓冲区溢出重启序列时的重复打印。
+2. 将 "unused devices" 打印逻辑移至 `md_seq_stop()`，导致在 `md_seq_stop()` 阶段发生缓冲区溢出时，后续处理逻辑无法正确补全该信息，造成丢失。
+
+#解决方案
+重构 `md_seq_ops` 实现，将 "Personalities" 和 "unused devices" 的打印逻辑统一迁移至 `md_seq_show()` 中处理：
+1. 新增 `status_personalities()` 函数。
+2. 在 `md_seq_show()` 中判断是否为列表头部，若是则打印 "Personalities"；若此时列表为空，则紧接着打印 "unused devices"。
+3. 在 `md_seq_show()` 遍历处理 md 设备时，判断是否为列表最后一个元素，若是则打印 "unused devices"。
+4. `md_seq_start()` 改为使用 `seq_list_start_head()` 以确保能正确迭代到列表头部，从而触发 show 函数中的逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/121a641e3afc6da8bb26741777b2daf67427c5f4

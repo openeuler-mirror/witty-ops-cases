@@ -1,0 +1,25 @@
+#标题
+ksmbd: 资源泄漏导致持久句柄未被清理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 ksmbd 的持久句柄功能场景下，当客户端断开连接后未能及时重连 reclaim 持久句柄，或者服务器会话销毁时，相关的持久句柄未被正确清理。这导致系统内存泄漏，文件句柄长期占用，且持久句柄 ID 无法被复用。随着时间推移，可能耗尽系统文件句柄资源或 ksmbd 内部文件表资源。
+
+#主要错误日志
+- pr_err("cannot start conn thread, err : %ld\n", PTR_ERR(server_conf.dh_task));
+  （注：当启动清理线程失败时会打印此错误，正常泄漏场景下可能无直观错误日志，仅体现为资源占用）
+
+#问题根因
+ksmbd 核心代码缺少针对持久句柄的自动清理机制。在会话销毁（`ksmbd_session_destroy`）或前一会话失效（`destroy_previous_session`）时，虽然销毁了文件表，但没有相应的逻辑去检查和清理那些超过配置时间仍未被客户端回收的持久句柄，导致这些句柄及其关联的资源滞留在系统中无法释放。
+
+#解决方案
+引入 "durable scavenger"（持久句柄清理）内核线程机制：
+1. 新增 `ksmbd_launch_ksmbd_durable_scavenger` 函数，在会话销毁等时机启动清理线程，扫描并关闭超时未被回收的持久句柄。
+2. 新增 `ksmbd_stop_durable_scavenger` 函数，在服务器重置或关闭时停止清理线程。
+3. 修改 `vfs_cache.c`，实现清理线程的主逻辑 `ksmbd_durable_scavenger`，通过定时扫描 `global_ft` ID 表，移除超时的持久句柄。
+4. 定义 `DURABLE_HANDLE_MAX_TIMEOUT` 宏（300000ms）作为最大超时限制，规范句柄的生命周期管理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/67606ca57913cd4919aeae301e2bfe2abc9b30a6

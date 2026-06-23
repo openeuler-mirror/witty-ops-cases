@@ -1,0 +1,32 @@
+#标题
+urma: tpid复用机制存在资源泄露与错误路径处理缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在处理urma（User Mode RDMA）的tpid（Transport Protection ID）复用逻辑时，若创建流程失败，系统未正确释放已分配的tpid资源，导致内核内存泄露。
+2. 在断开连接（disconnect）或销毁请求流程中，调用 `ubcore_free_tpid_reuse` 时未先调用 `ubcore_delete_tpid_priv`，导致底层资源未被正确清理。
+3. 日志级别使用不当，部分常规流程错误（如RTP交换信息）错误地使用了 `pr_err` 级别日志，造成不必要的错误日志刷屏。
+
+#主要错误日志
+- `ubcore_log_err("Failed to create tpid for reuse, ret: %d.\n", ret);`
+- `ubcore_log_err("Failed to init state for tpid list, ret = %d.\n", ret);`
+- `ubcore_log_err("Get tp list from ops failed, ret = %d.\n", ret);`
+- `ubcore_log_err("Update tpid list failed, ret = %d.\n", ret);`
+- （已移除的错误日志）`ubcore_log_err("rtp goto jfr exchange tp info");`
+- （已移除的错误日志）`ubcore_log_err("Tp_cnt decreased, old_cnt: %`
+
+#问题根因
+1. **资源泄露**：在 `ubcore_import_jfr_compat`、`ubcore_import_jetty_compat`、`ubcore_bind_jetty_reuse_compat` 等函数的错误处理路径中，创建 `tpid_priv` 失败或后续步骤失败时，缺少对已创建资源的 `ubcore_delete_tpid_priv` 回收操作。
+2. **清理流程缺失**：`ubcore_free_tpid_reuse` 函数被删除了内部删除tpid的逻辑，改为仅释放复用结构体本身，但其调用者（如 `handle_destroy_req_with_tpid_reuse` 和 `ubcore_disconnect_tpid_with_tpid_reuse`）未补齐删除tpid的操作，导致资源释放链条断裂。
+3. **日志滥用**：代码中在正常的RTP（Reliable Transport Protection）信息交换流程中使用了 `ubcore_log_err` 打印日志，这属于日志级别使用错误。
+
+#解决方案
+1. **修复资源泄露**：在所有涉及 `ubcore_create_tpid_priv` 的错误处理分支中，显式增加 `ubcore_delete_tpid_priv` 调用以释放已分配的资源。
+2. **完善清理流程**：在调用 `ubcore_free_tpid_reuse` 之前，统一由调用方负责调用 `ubcore_delete_tpid_priv`，确保底层资源先于复用结构体被释放。同时移除 `ubcore_free_tpid_reuse` 内部冗余的删除逻辑。
+3. **修正日志级别**：将正常流程或非严重错误的日志输出调整为 `info` 级别或直接删除冗余的 `err` 日志。
+4. **代码重构**：简化 `ubcore_tpid_list` 结构体，移除冗余的 `aware_list` 和 `unaware_list` 分类，统一使用 `create_list` 管理，并修正 `ubcore_create_tpid_priv` 函数签名，移除不再需要的 `is_aware` 参数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0daf360165473e4988e7c5d48fc94c9e412ceb18

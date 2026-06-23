@@ -1,0 +1,49 @@
+#标题
+Hisilicon加密驱动多项缺陷导致系统异常、RAS处理不当及DMA方向错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **Curve25519算法调用失败**：在硬件不支持或初始化失败的场景下，使用Curve25519算法时内核打印错误日志 `Failed to alloc curve25519 tfm!`，后续操作可能导致空指针崩溃或调用失败。
+2. **压缩算法回退失败**：当硬件压缩算法回退到软件实现时，若系统未加载相应软件算法模块，初始化时打印 `could not alloc soft tfm`，可能导致后续压缩/解压缩操作调用空指针崩溃。
+3. **中断上下文非法访问**：在异常中断处理流程中，访问设备寄存器时未获取电源管理引用计数，可能导致PM状态异常或内核崩溃。
+4. **控制器复位阻塞与失败**：驱动卸载或复位流程卡死；复位准备阶段失败时未正确清理硬件状态，导致后续设备不可用。
+5. **DMA内存管理错误**：DMA映射方向参数不一致，在错误处理路径中使用了错误的DMA解映射方向，可能导致内存泄漏或DMA异常。
+
+#主要错误日志
+- pr_err("Failed to alloc curve25519 tfm!\n");
+- dev_err(&qm->pdev->dev, "failed to get runtime PM for aeq handle\n");
+- pci_warn(qm->pdev, "Driver is down, need to reload driver!\n");
+- dev_err(&qm->pdev->dev, "failed to get runtime PM for controller\n");
+- pr_err("failed to do fallback %s work, ret=%d\n", algo, ret);
+- pr_err("could not alloc soft tfm %s\n", alg_name);
+
+#问题根因
+1. **Curve25519支持缺陷**：驱动未设置 `CRYPTO_ALG_NEED_FALLBACK` 标志，且在硬件初始化失败（返回 -ENODEV）时未尝试分配软件 `soft_tfm` 作为后备，导致后续操作无有效上下文。
+2. **回退机制不完善**：Zip驱动在初始化软件压缩 `soft_tfm` 前，未使用 `crypto_has_comp` 检查算法是否存在，直接分配导致失败。
+3. **PM引用计数缺失**：`qm_aeq_thread` 中断处理函数和复位工作队列 `hisi_qm_controller_reset` 在访问硬件前未调用 `qm_pm_get_sync` 获取PM计数，违反电源管理约束。
+4. **复位逻辑错误**：
+   - 使用 `QM_RST_SCHED` 位检查循环等待，易导致死锁。
+   - `qm_controller_reset_prepare` 失败后直接返回，未关闭 Master 传递及重置状态位，导致状态残留。
+5. **RAS处理不彻底**：错误清除与屏蔽操作使用了非全1掩码，可能无法清除所有残留错误状态；异常中断处理流程调用 `qm_process_dev_error` 判断复位需求，逻辑冗余且可能在驱动卸载时触发错误调度。
+6. **DMA方向参数不匹配**：`hisi_acc_sg_buf_map_to_hw_sgl` 函数错误路径中，`dma_unmap_sg` 使用了 `DMA_BIDIRECTIONAL`，而映射时使用的是传入的 `dir` 参数。
+
+#解决方案
+1. **完善算法回退机制**：
+   - 为 Curve25519 增加 `soft_tfm` 成员和 `CRYPTO_ALG_NEED_FALLBACK` 标志。
+   - 在 `init_tfm` 中处理 -ENODEV 返回值，分配软件算法实例；在相关算法接口中增加 fallback 分支处理。
+   - Zip驱动在分配软件算法前增加 `crypto_has_comp` 检查。
+2. **修正PM与复位逻辑**：
+   - 在 `qm_aeq_thread` 和 `hisi_qm_controller_reset` 中添加 `qm_pm_get_sync` 和 `qm_pm_put_sync` 调用。
+   - 移除 `QM_RST_SCHED` 位及相关循环等待逻辑，改用 `cancel_work_sync` 取消复位工作。
+   - 在 `qm_controller_reset` 的 `err_prepare` 标签处增加关闭 Master OOO 和停止收发队列的操作。
+3. **修复RAS与中断处理**：
+   - 统一使用 `GENMASK(31, 0)` 作为 RAS 清除和屏蔽的掩码（如 `QM_RAS_CLEAR_ALL`、`HPRE_RAS_MASK_ALL`），确保覆盖所有中断位。
+   - 简化 `qm_abnormal_irq` 处理，直接调度 `rst_work` 并打印警告，移除冗余的状态判断。
+4. **修复代码缺陷**：
+   - 修正 `hisi_acc_sg_buf_map_to_hw_sgl` 错误路径中的 `dma_unmap_sg` 参数，使用传入的 `dir` 变量。
+   - 降低 Hisilicon 硬件加密算法优先级（如 HPRE, SEC, ZIP 优先级调整为 80），确保优先使用标准软件实现或在无专用硬件时正确回退。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7bf6051b5c404918d02133a7e2aad8b059d6f6b0

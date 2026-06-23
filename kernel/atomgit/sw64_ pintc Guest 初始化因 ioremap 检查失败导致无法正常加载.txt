@@ -1,0 +1,24 @@
+#标题
+sw64: pintc Guest 初始化因 ioremap 检查失败导致无法正常加载
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SW64 架构的 Guest 虚拟机环境下，内核初始化 pintc 中断控制器时，由于对无需使用的 I/O 地址进行了非空检查，导致初始化流程误判为失败并中止，进而引发相关中断控制器功能不可用。Host 侧不受影响。
+
+#主要错误日志
+[    0.000000] failed to map mcu base address
+[    0.000000] failed to map pintc base address
+
+#问题根因
+ioremap 机制变更为将 I/O 物理地址映射到 vmalloc 段，而不再使用 __va() 宏。Guest 在初始化时传递了 size 为 0 的参数给 ioremap，导致 ioremap 返回 NULL。原有代码逻辑未区分 Guest 与 Host 场景，直接对返回值进行了非空校验，导致校验失败并返回 -ENXIO 错误。实际上 Guest 并不使用该 I/O 地址，该检查属于多余逻辑。
+
+#解决方案
+修改 `drivers/irqchip/irq-sunway-pintc.c` 中的检查逻辑，增加虚拟化环境判断条件：
+1. 在 `pintc_acpi_init_mcu` 函数中，将 `if (!chip_data->mcu_base)` 修改为 `if (!chip_data->vt && !chip_data->mcu_base)`。
+2. 在 `pintc_acpi_init` 函数中，将 `if (!chip_data->pintc_base)` 修改为 `if (!virtual && !chip_data->pintc_base)`。
+通过增加 `virtual` 或 `vt` 标志位判断，在 Guest 环境下直接跳过对 io 地址的非空检查，避免因 ioremap 返回 NULL 而导致的错误返回。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e63ba15509d96a09edcb3b0d92d1d62e0cb18262

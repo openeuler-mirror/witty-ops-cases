@@ -1,0 +1,20 @@
+#标题
+iommu/apple-dart: of_xlate 函数中存在设备引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Apple DART IOMMU 驱动的设备树解析过程中，函数 `apple_dart_of_xlate` 获取了 `iommu_pdev` 设备的引用计数，但在后续处理流程中未释放该引用。这会导致内核对象引用计数泄漏，表现为该 IOMMU 平台设备无法被正常释放或注销，长期运行可能引发内存资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `apple_dart_of_xlate` 函数中，代码通过查找获取了 `iommu_pdev` 设备结构，这会增加该设备的引用计数（通常通过 `of_find_device_by_node` 等函数实现）。然而，函数在处理完成后直接返回，未调用 `put_device` 来减少引用计数。根据 Commit 描述，这是自驱动引入（Commit 46d1fb072e76）以来就存在的缺陷，导致引用计数在每次 of_xlate 调用时都会增加且无法平衡。
+
+#解决方案
+在 `apple_dart_of_xlate` 函数中添加 `put_device(&iommu_pdev->dev)` 调用，确保在获取 driver data 之后及时释放对 IOMMU 平台设备的引用，从而修复引用计数泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d97ecbd567dc2912e9c5520c5126c5dfd8e73933

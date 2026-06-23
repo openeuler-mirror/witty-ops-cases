@@ -1,0 +1,27 @@
+#标题
+drm/amdgpu: SR-IOV 环境下 pf2vf 数据读取持续失败未触发恢复机制
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU SR-IOV 虚拟化环境中，当虚拟机（VF）连续读取 pf2vf（Physical Function to Virtual Function）数据失败达到 30 次时，系统缺乏自动恢复机制，导致通信异常持续存在且无法自动恢复。同时，在 FLR（Function Level Reset）等待 IDH_FLR_NOTIFICATION_CMPL 超时时，系统缺乏告警日志。
+
+#主要错误日志
+- `dev_err(adev->dev, "invalid pf2vf message size: 0x%x\n", pf2vf_info->size);`
+- `dev_err(adev->dev, "invalid pf2vf message: header checksum=0x%x calculated checksum=0x%x\n", checksum, checkval);`
+- `dev_err(adev->dev, "invalid pf2vf version: 0x%x\n", pf2vf_info->version);`
+- `dev_err(adev->dev, "Failed to queue work! at %s", __func__);`
+- `dev_warn(adev->dev, "waiting IDH_FLR_NOTIFICATION_CMPL timeout\n");`
+
+#问题根因
+在 SR-IOV 环境下，`amdgpu_virt_read_pf2vf_data` 函数可能因通信异常连续失败，但原有的 `amdgpu_virt_update_vf2pf_work_item` 逻辑仅简单跳过处理，未对失败次数进行累积统计，也未设定重试上限。当底层硬件或通信链路出现持续性故障时，驱动未能及时感知并触发 FLR（Function Level Reset）恢复流程，导致故障状态无法自愈。此外，部分错误日志使用通用的 `DRM_ERROR`，缺乏设备索引信息，不利于定位具体故障设备。
+
+#解决方案
+1. **引入重试计数与自动恢复机制**：在 `amdgpu_virt` 结构体中增加 `vf2pf_update_retry_cnt` 计数器，定义最大重试限制 `AMDGPU_VF2PF_UPDATE_MAX_RETRY_LIMIT` 为 30 次。在 `amdgpu_virt_update_vf2pf_work_item` 中，若连续读取失败达到 30 次，且处于运行时状态且未处于复位中，则调度 `flr_work` 触发 FLR 恢复流程。
+2. **优化错误日志打印**：将 pf2vf 数据校验失败（大小、校验和、版本错误）的日志打印从 `DRM_ERROR` 改为 `dev_err`，增加设备上下文信息，便于排查。
+3. **增加超时告警**：在 `mxgpu_ai.c` 和 `mxgpu_nv.c` 的 FLR 工作队列中，增加等待 `IDH_FLR_NOTIFICATION_CMPL` 超时的 `dev_warn` 告警日志。
+4. **修复重置逻辑**：调整 `amdgpu_device_gpu_recover` 流程，对于 SR-IOV VF 设备，不再调用 `amdgpu_device_stop_pending_resets`，避免在 VF 重置逻辑中产生冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/92a57cc28d4d81ee1d2059c6879d1f6d68a68791

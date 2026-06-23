@@ -1,0 +1,23 @@
+#标题
+i915 DP VSC 动态范围信令错误导致 RGB 格式色彩量化异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Intel 显卡（i915 驱动）通过 DP 接口输出显示时，若视频格式为 RGB，屏幕色彩显示异常。具体表现为接收端（Sink）应用了错误的量化范围（Quantization），导致画面颜色过亮、过暗或色彩失真，不符合 DP v1.4 规范要求。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `intel_dp_compute_vsc_colorimetry` 中，计算 VSC（Video Scrambler Control）数据包的色彩信息时逻辑错误。代码原先无条件地将 `dynamic_range` 设置为 `DP_DYNAMIC_RANGE_CTA`，导致 RGB 格式下无法根据 `crtc_state->limited_color_range` 正确区分动态范围。这使得接收端设备无法正确识别应用 CTA 还是 VESA 量化范围，从而导致色彩解析错误。
+
+#解决方案
+修改 `drivers/gpu/drm/i915/display/intel_dp.c` 中的逻辑，针对 RGB 格式动态设置动态范围：
+1. 判断像素格式是否为 `DP_PIXELFORMAT_RGB`。
+2. 若为 RGB，则根据 `crtc_state->limited_color_range` 状态设置动态范围：若为 limited 则设为 `DP_DYNAMIC_RANGE_CTA`，否则设为 `DP_DYNAMIC_RANGE_VESA`。
+3. 若非 RGB（如 YCbCr），保持原有逻辑，设置为 `DP_DYNAMIC_RANGE_CTA`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/94a2e1fb803725d6f215bc78afbb85d98381cf7b

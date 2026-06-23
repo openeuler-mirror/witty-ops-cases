@@ -1,0 +1,22 @@
+#标题
+调度模块触发 SCHED_WARN_ON(cfs_rq->throttled_clock) 告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 QOS 调度功能的场景下，当 CFS 任务入队（enqueue_entity）时，若 cfs_rq 被 QOS 限流，内核会触发 SCHED_WARN_ON(cfs_rq->throttled_clock) 告警，导致内核调度子系统抛出警告信息。
+
+#主要错误日志
+SCHED_WARN_ON(cfs_rq->throttled_clock)
+
+#问题根因
+在 enqueue_entity 函数中，当 cfs_rq 处于 throttled 状态时，代码逻辑未区分是由 CFS Bandwidth 限流还是由 QOS 限流导致。
+当 cfs_rq 被 QOS 限流（QOS_THROTTLED）时，代码错误地执行了 `cfs_rq->throttled_clock = rq_clock(rq)` 赋值操作。这导致了 `throttle_cfs_rq` 函数中的断言 `SCHED_WARN_ON(cfs_rq->throttled_clock)` 失败，因为在 QOS 限流路径下不应更新 throttled_clock。
+
+#解决方案
+在 enqueue_entity 函数处理 throttled_hierarchy 的分支中，增加了对 `cfs_rq->throttled` 状态的判断。
+在 CONFIG_QOS_SCHED 配置下，只有当 `cfs_rq->throttled != QOS_THROTTLED` 时，才执行 `cfs_rq->throttled_clock` 和 `cfs_rq->throttled_clock_self` 的赋值操作，从而避免对 QOS 限流的 cfs_rq 进行不当的时钟更新，消除非法告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/17edb7eddfe9f4165a6430f7d8e2b3546854275c

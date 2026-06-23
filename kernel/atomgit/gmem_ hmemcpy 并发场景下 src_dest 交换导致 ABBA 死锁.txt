@@ -1,0 +1,20 @@
+#标题
+gmem: hmemcpy 并发场景下 src/dest 交换导致 ABBA 死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发调用 `hmemcpy` 接口进行数据拷贝时，若两个并发流程的源地址和目的地址恰好互换，会触发 ABBA 死锁，导致相关进程或线程处于不可中断的睡眠状态（D 状态），系统对应功能卡死无响应。
+
+#主要错误日志
+- `hmemcpy failed due to src/dest conflict`
+
+#问题根因
+`do_hmemcpy` 函数在拷贝数据前按固定顺序获取锁：先持有 `mapping_dest` 锁，再获取 `mapping_src` 锁。当并发场景下出现两个源/目的地址互换的拷贝请求时（例如流程 A 从 X 拷贝到 Y，流程 B 从 Y 拷贝到 X），流程 A 持有 Y 的锁请求 X 的锁，而流程 B 持有 X 的锁请求 Y 的锁，从而形成典型的 ABBA 死锁。
+
+#解决方案
+修改 `do_hmemcpy` 中的加锁逻辑，在持有 `mapping_dest` 锁后，使用 `mutex_trylock` 尝试获取 `mapping_src` 锁。如果尝试获取失败，说明存在锁冲突，此时主动释放已持有的 `mapping_dest` 锁并直接返回，避免死锁发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ff319cfa97d5cf1c820d04e93c3d1a26b27da31a

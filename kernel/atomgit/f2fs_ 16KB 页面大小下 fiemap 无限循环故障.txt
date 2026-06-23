@@ -1,0 +1,25 @@
+#标题
+f2fs: 16KB 页面大小下 fiemap 无限循环故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 16KB 页面大小的系统中，对文件（如 Android 重挂载操作中的 16KB scratch.img）执行 fiemap 操作（fm_length=UINT64_MAX）时，内核陷入无限循环。该问题导致文件映射流程无法正常结束，系统挂起或响应极其缓慢。
+
+#主要错误日志
+```
+156.385767: f2fs_map_blocks: dev = (254,57), ino = 7449, file offset = 4026887876, start blkaddr = 0x0, len = 0x0, flags = 0, seg_type = 8, may_create = 0, multidevice = 0, flag = 1, err = 0
+156.385770: f2fs_map_blocks: dev = (254,57), ino = 7449, file offset = 3725340140, start blkaddr = 0x0, len = 0x0, flags = 0, seg_type = 8, may_create = 0, multidevice = 0, flag = 1, err = 0
+156.385772: f2fs_map_blocks: dev = (254,57), ino = 7449, file offset = 4026887876, start blkaddr = 0x0, len = 0x0, flags = 0, seg_type = 8, may_create = 0, multidevice = 0, flag = 1, err = 0
+156.385775: f2fs_map_blocks: dev = (254,57), ino = 7449, file offset = 3725340140, start blkaddr = 0x0, len = 0x0, flags = 0, seg_type = 8, may_create = 0, multidevice = 0, flag = 1, err = 0
+```
+
+#问题根因
+在 16KB 页面大小配置下，`max_inode_blocks` 函数计算出的最大块数未正确反映文件系统的最大限制。`f2fs_fiemap` 函数在检查是否继续映射（针对 HOLE 情况）时，使用 `blks_to_bytes(inode, max_inode_blocks(inode))` 作为判断条件。由于 16KB 页面大小下计算的块地址过大，导致 32 位的 `map.m_lblk` 在累加过程中发生整型溢出截断（例如 68451397316 截断为 4026887876）。截断后的字节大小未超过判断条件的阈值，导致循环跳出条件永远无法满足，进而引发无限循环。
+
+#解决方案
+移除不准确且导致溢出的 `max_inode_blocks` 函数。在 `f2fs_fiemap` 中，将循环边界检查条件由 `blks_to_bytes(inode, start_blk) < blks_to_bytes(inode, max_inode_blocks(inode))` 修改为 `blks_to_bytes(inode, start_blk) < maxbytes`。利用已定义的 `maxbytes` 变量（基于 Commit a6a010f5def5 设置的正确文件最大大小）来限制映射范围，从而正确终止循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d5aa4c8fc05feeb7db90c99344837439a6857d6e

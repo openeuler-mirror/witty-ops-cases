@@ -1,0 +1,20 @@
+#标题
+fsl-mc 总线 driver_override_show 存在并发 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 fsl-mc 总线下，当 `driver_override_show()` 函数与 `driver_override_store()` 函数并发执行时，可能触发内核 Use-After-Free（UAF）故障，导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`driver_override_show()` 函数在读取 `driver_override` 字符串时未持有 `device_lock` 锁。与此同时，`driver_override_store()` 函数在持有 `device_lock` 的情况下调用 `driver_set_override()` 修改并释放该字符串。这种并发场景导致 `show` 函数读取的指针可能已被 `store` 函数释放，从而引发 Use-After-Free。
+
+#解决方案
+在 `driver_override_show()` 函数中读取 `mc_dev->driver_override` 前后增加 `device_lock(dev)` 和 `device_unlock(dev)` 操作，通过持有设备锁确保读取操作与写入释放操作互斥，避免并发访问导致的 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/892c04068848cc090a701316e5d0bfe3b2d3b85a

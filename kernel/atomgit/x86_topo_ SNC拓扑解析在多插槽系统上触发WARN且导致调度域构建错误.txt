@@ -1,0 +1,26 @@
+#标题
+x86/topo: SNC拓扑解析在多插槽系统上触发WARN且导致调度域构建错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在HPE 8插槽（2机箱）且开启了SNC（Sub-NUMA Clustering）的系统上，内核触发WARN_ON警告信息。由于之前的代码错误地假设GNR/CWF平台“最多只有2个插槽”，导致在多于2个插槽的系统上，SLIT（System Locality Information Table）距离表解析逻辑出现偏差，进而导致调度域构建异常，无法正确识别NUMA拓扑结构。
+
+#主要错误日志
+[推断] 内核日志中可能出现如下WARN信息：
+sched: Expect only up to 2 packages for GNR or CWF, but saw %d packages when building sched domains.
+
+#问题根因
+1. **错误假设**：之前的修复补丁（4d6dd05d07d0）错误地假设所有GNR（Granite Rapids）和CWF平台最多只有2个插槽，且假设非本地的集群距离（off-trace cluster distance）大于20。这导致代码逻辑仅适用于小型系统。
+2. **拓扑误判**：HPE的8插槽系统虽然SLIT表是正常的（符合多插槽SNC拓扑），但因为违反了“最多2个插槽”的假设，触发了代码中的WARN警告。
+3. **逻辑缺陷**：对于SNC-3模式，硬件提供的SLIT表可能包含非对称的远程距离信息，直接使用会导致调度域层级过深或配置不合理；但对于非SNC-3（如SNC-2或SNC-4）的正常多插槽系统，原逻辑会错误地尝试平均化距离，破坏了正常的拓扑结构。
+
+#解决方案
+1. **移除硬编码假设**：删除了关于“最多2个插槽”的错误检查与假设，使代码能适配更多插槽（如8插槽）的系统。
+2. **引入SLIT表验证机制**：新增 `slit_validate()` 函数，通过检查每个节点簇是否对称以及每个簇是否具有唯一的Package ID，来验证SLIT表是否符合预期的SNC拓扑格式。
+3. **精准修复SNC-3**：仅在检测到节点数大于等于3（SNC-3模式）时才执行距离平均化操作，避免误伤SNC-2或SNC-4等正常拓扑。
+4. **异常处理**：如果SLIT表验证失败，打印 `FW_BUG` 错误日志并禁用修复逻辑，直接回退使用固件提供的原始距离表。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b8d19b3412f4990567d6fd7b555cac345c24bf08

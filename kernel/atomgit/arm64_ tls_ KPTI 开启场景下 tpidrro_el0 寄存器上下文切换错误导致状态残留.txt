@@ -1,0 +1,21 @@
+#标题
+arm64: tls: KPTI 开启场景下 tpidrro_el0 寄存器上下文切换错误导致状态残留
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 KPTI（Kernel Page Table Isolation）特性的 ARM64 系统上，当前一个任务为 32 位（compat）任务，随后切换到一个原生 64 位任务时，`tpidrro_el0` 寄存器未被正确清零。这会导致 64 位任务看到残留的、非零的陈旧寄存器值，破坏了任务的 TLS（Thread Local Storage）上下文隔离，可能导致用户态程序运行异常或数据错误。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit 18011eac28c7 引入的优化逻辑存在缺陷。该优化错误地假设在 KPTI 开启时，KPTI trampoline 入口代码已经处理了 `tpidrro_el0` 寄存器的清零工作，因此在 `tls_thread_switch()` 中判断如果下一个任务是原生 64 位任务且 KPTI 开启，就跳过清零操作。
+然而，trampoline 代码确实会在入口处清零，但 `tls_thread_switch()` 的检查是针对 *下一个* 任务的。如果当前正在运行的任务（即即将被切换出的任务）是 32 位任务，它会将 `tpidrro_el0` 设置为非零值；此时切换到原生 64 位任务时，由于上述错误的优化逻辑跳过了清零，导致 32 位任务的值残留在寄存器中。
+
+#解决方案
+移除 `tls_thread_switch()` 函数中基于 `arm64_kernel_unmapped_at_el0()` 的条件判断优化。在切换到原生 64 位任务时，无条件地对 `tpidrro_el0` 寄存器写入 0，确保不会残留上一个任务的寄存器状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/267e785b3d6f7c5ff211ba56ae74ee1265f6c2e6

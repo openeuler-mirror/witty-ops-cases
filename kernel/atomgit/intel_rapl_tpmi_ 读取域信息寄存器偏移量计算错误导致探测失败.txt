@@ -1,0 +1,20 @@
+#标题
+intel_rapl_tpmi: 读取域信息寄存器偏移量计算错误导致探测失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在支持 TPMI (Topology Aware Register and PM Capsule Interface) RAPL 的平台上，内核加载 intel_rapl_tpmi 模块时，系统域（System Domain）探测失败。驱动程序检测到固件报告了域信息寄存器支持，但在实际读取时，由于偏移量计算错误，导致读取到错误的寄存器地址内容或引发非预期的硬件访问行为，最终导致该功率限制域无法正常注册和工作。
+
+#主要错误日志
+pr_warn(FW_BUG "System domain must support Domain Info register\n");
+
+#问题根因
+在函数 `parse_one_domain` 中，读取 `TPMI_RAPL_REG_DOMAIN_INFO` 寄存器时，代码直接使用了 `offset + TPMI_RAPL_REG_DOMAIN_INFO` 作为地址偏移。根据硬件规范，`TPMI_RAPL_REG_DOMAIN_INFO` 的值需要乘以 8 才能得到正确的寄存器偏移量（即寄存器索引转字节偏移）。由于缺少乘 8 的操作，导致读取了错误的内存位置，获取到错误的域信息，进而导致后续逻辑判断失败。
+
+#解决方案
+修正寄存器读取地址的计算逻辑，在访问 `TPMI_RAPL_REG_DOMAIN_INFO` 时，将其值乘以 8 以获取正确的字节偏移量。修改后的代码为：`readq(trp->base + offset + TPMI_RAPL_REG_DOMAIN_INFO * 8)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b693b62bd4ff291d6071294b1b2cd40de034c00

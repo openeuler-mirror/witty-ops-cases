@@ -1,0 +1,20 @@
+#标题
+x86/mce/amd: 阈值限制重置逻辑缺陷导致错误计数无法清零
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD 处理器上处理 MCA（Machine Check Architecture）阈值中断时，由于复位逻辑判断条件不完善，导致在某些特定场景下阈值限制无法被正确重置。这使得错误计数器和溢出位在中断服务完成后未被清理，可能导致后续的错误统计不准确或中断处理逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`threshold_restart_bank()` 函数中的复位逻辑依赖于对当前阈值限制与寄存器值的隐式假设来决定是否执行重置。原代码逻辑判断 `if (tr->b->threshold_limit < (hi & THRESHOLD_MAX))` 来设置 `reset` 标志，这种假设在某些情况下不成立，导致本应执行的“错误计数清零和溢出位清除”操作被跳过。
+
+#解决方案
+修改 `threshold_restart_bank()` 函数，移除隐式的 `reset` 标志及其判断逻辑，改为显式检查重置条件：当检测到溢出位（`MASK_OVERFLOW_HI`）被置位，或者正在进行初始化设置（`tr->set_lvt_off`）时，强制清除错误计数器和溢出位，并重新设置阈值限制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ec8edea91cc9b8629b36b4e4f36b650cdc6699eb

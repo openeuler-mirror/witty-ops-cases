@@ -1,0 +1,54 @@
+#标题
+btrfs: start_transaction 阶段因未检查事务类型导致 wait_current_trans 死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在执行 Btrfs 文件系统操作（如 fsync 或写入后触发 ordered io）时发生死锁，导致相关进程（如 kworker 线程和用户态同步线程）处于不可中断睡眠状态（D 状态），系统响应停滞。
+
+具体复现场景涉及两个事务和 pending ordered extents 的竞争：
+1. 事务 A 处于 TRANS_STATE_COMMIT_DOING 状态。
+2. 某个处理 ordered extent 的 kworker 调用 start_transaction(TRANS_JOIN)。
+3. 因事务 A 状态导致 join_transaction() 返回 -EBUSY。
+4. 事务 A 完成，新事务 B 创建并开始提交，进入 TRANS_STATE_COMMIT_START 状态。
+5. kworker 最终执行到 wait_current_trans()，看到事务 B 处于 blocked 状态，开始无条件等待。
+6. 事务 B 在提交过程中等待 kworker 处理的 ordered extent 完成。
+7. 形成死锁：事务 B 等待 ordered extent，ordered extent (kworker) 等待事务 B。
+
+#主要错误日志
+Task bstore_kv_sync in btrfs_commit_transaction waiting for ordered extents:
+  __schedule+0x2e7/0x8a0
+  schedule+0x64/0xe0
+  btrfs_commit_transaction+0xbf7/0xda0 [btrfs]
+  btrfs_sync_file+0x342/0x4d0 [btrfs]
+  __x64_sys_fdatasync+0x4b/0x80
+  do_syscall_64+0x33/0x40
+  entry_SYSCALL_64_after_hwframe+0x44/0xa9
+
+Task kworker in wait_current_trans waiting for transaction commit:
+  Workqueue: btrfs-syno_nocow btrfs_work_helper [btrfs]
+  __schedule+0x2e7/0x8a0
+  schedule+0x64/0xe0
+  wait_current_trans+0xb0/0x110 [btrfs]
+  start_transaction+0x346/0x5b0 [btrfs]
+  btrfs_finish_ordered_io.isra.0+0x49b/0x9c0 [btrfs]
+  btrfs_work_helper+0xe8/0x350 [btrfs]
+  process_one_work+0x1d3/0x3c0
+  worker_thread+0x4d/0x3e0
+  kthread+0x12d/0x150
+  ret_from_fork+0x1f/0x30
+
+#问题根因
+在 `start_transaction()` 函数中调用 `wait_current_trans()` 时，未考虑当前事务类型（type）是否应该等待特定的事务状态。
+具体原因为：`wait_current_trans()` 仅检查事务是否处于 blocked 状态，如果处于 blocked 状态则无条件等待。然而，`btrfs_blocked_trans_types[]` 数组定义了某些事务类型（如 `TRANS_JOIN`）在特定状态下（如 `TRANS_STATE_COMMIT_START`）是不应该等待的，可以直接加入。由于缺少对 `btrfs_blocked_trans_types[cur_trans->state]` 与当前传入的 `type` 的匹配检查，导致 `TRANS_JOIN` 类型的事务错误地等待了它本不该等待的事务状态，进而与 ordered extent 的处理逻辑形成循环等待，导致死锁。
+
+#解决方案
+修改 `wait_current_trans()` 函数接口，增加 `unsigned int type` 参数，并在判断是否需要等待时增加条件检查。
+具体变更：
+1. 在 `wait_current_trans()` 函数中，除了检查当前事务是否 blocked (`is_transaction_blocked(cur_trans)`)，还增加了检查：`(btrfs_blocked_trans_types[cur_trans->state] & type)`。
+2. 只有当事务状态是当前事务类型需要阻塞等待的类型时，才会真正进入等待流程。
+3. 同步更新 `start_transaction()` 和 `btrfs_throttle()` 中对 `wait_current_trans()` 的调用，传入正确的事务类型（如 `type` 或 `TRANS_START`）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c960d547caef435db6539036b5a0be076c226e71

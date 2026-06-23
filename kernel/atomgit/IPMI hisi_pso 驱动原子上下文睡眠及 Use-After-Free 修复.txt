@@ -1,0 +1,29 @@
+#标题
+IPMI hisi_pso 驱动原子上下文睡眠及 Use-After-Free 修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在原子上下文（如 notifier 回调链）中调用 IPMI 发送接口时，因调用 `wait_for_completion_timeout` 导致内核调度睡眠，引发内核 BUG 或调度警告。同时，IPMI 响应回调函数访问已释放的事务内存，触发 Use-After-Free 漏洞，可能导致内核崩溃或内存数据损坏。
+
+#主要错误日志
+- 推断日志（原子上下文睡眠）：
+  `BUG: scheduling while atomic`
+- 推断日志（Use-After-Free 相关）：
+  `BUG: unable to handle page fault`
+  或 KASAN 报错：
+  `BUG: KASAN: use-after-free in pso_recv`
+
+#问题根因
+1. **原子上下文睡眠**：原实现中的 `pso_send` 函数通过 `wait_for_completion_timeout` 同步等待 BMC 响应，但该函数被 `ipmi_pso_notifier_call` 等可能在原子上下文（持有 spinlock 或 RCU 读锁）中执行的回调函数调用，导致在原子上下文中睡眠。
+2. **Use-After-Free**：`pso_send` 函数将栈上的局部变量 `txn` 的地址传递给 IPMI 子系统作为回调数据。如果发送超时（3秒），函数直接返回并释放栈帧，而 IPMI 响应可能在随后到达并调用 `pso_recv`，此时访问已失效的栈内存地址造成 Use-After-Free。
+
+#解决方案
+1. **异步化改造**：移除同步等待机制，引入 `workqueue` 机制。新增 `pso_work` 和 `pso_target_state` 变量，将耗时的 IPMI 发送操作延后到工作队列线程中执行，避免在原子上下文中睡眠。
+2. **移除栈内存传递**：修改 IPMI 请求接口的传递参数，将 `user_msg_data` 设为 `NULL`，不再传递栈上的 `txn` 结构体指针，彻底消除 Use-After-Free 隐患。
+3. **回调逻辑调整**：`pso_recv` 回调函数改为仅打印日志并释放消息，不再尝试回写事务状态。
+4. **生命周期管理**：在模块卸载（`ipmi_pso_exit`）和重启处理（`ipmi_pso_reboot_handler`）中增加 `cancel_work_sync(&pso_work)`，确保工作队列任务被正确取消，防止资源竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/658b28e1861b36d609da75321343e568f8698462

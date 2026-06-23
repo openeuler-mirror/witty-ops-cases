@@ -1,0 +1,20 @@
+#标题
+net: stmmac: 禁用 tc cbs 时触发除零错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在禁用 tc cbs（Time-Aware Shaper/Credit-Based Shaper）功能时，内核发生除零错误。由于先前提交允许 `port_transmit_rate_kbps` 设为 0，该值被传递给 `div_s64` 函数进行除法运算，导致内核 panic 或 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+修复补丁 b8c43360f6e4 ("net: stmmac: No need to calculate speed divider when offload is disabled") 允许在 offload 禁用时将 `port_transmit_rate_kbps` 设置为 0。当 tc-cbs 被禁用时，代码流程继续执行后续逻辑，将值为 0 的 `port_transmit_rate_kbps` 传递给 `div_s64` 函数，从而引发了除零错误。
+
+#解决方案
+在 `stmmac_tc.c` 文件的 `tc_setup_cbs` 函数中，当处理 tc-cbs 禁用逻辑时（将 txQ 模式设置为 DCB 后），增加一个 `return 0` 语句直接返回。这避免了后续不必要的计算逻辑执行，从而防止了零值传递给除法函数，消除了除零错误风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/20f9c9833170e90843cfdd647a0a549ade1bb6af

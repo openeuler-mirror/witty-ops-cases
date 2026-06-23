@@ -1,0 +1,24 @@
+#标题
+sw64 KVM 五级页表遍历错误导致 unmap_apt_range 页面释放异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构 KVM 虚拟化环境中进行五级页表遍历时，`unmap_apt_range` 函数逻辑存在错误。该故障会导致解除 APT（Aliased Page Table）地址范围映射时，页表项遍历与更新逻辑不匹配，可能引发内存管理混乱、内存泄漏或宿主机内核异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`unmap_apt_range` 函数在处理五级页表时存在两处逻辑错误：
+1. 循环中计算下一级地址时，错误地使用了 `p4d_addr_end` 函数，而该函数用于处理 P4D 级别的地址范围，导致循环边界计算错误。
+2. 循环迭代部分使用了 `pgd++` 进行指针递增，但在五级页表遍历中，当前层级应为 P4D 表项，应使用 `p4d++` 进行递增。
+
+#解决方案
+修改 `arch/sw_64/kvm/mmu.c` 文件中的 `unmap_apt_range` 函数：
+1. 将 `next = p4d_addr_end(addr, end);` 修改为 `next = pgd_addr_end(addr, end);`，修正地址范围的计算逻辑。
+2. 将 `while` 循环条件中的 `pgd++` 修改为 `p4d++`，确保遍历的是正确的 P4D 表项。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/59dc7698bfe463affa29aba3921d74272124c648

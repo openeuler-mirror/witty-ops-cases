@@ -1,0 +1,20 @@
+#标题
+PCI: cadence-ep: Correct PBA offset in .set_msix() callback
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用依赖 PCI endpoint 子系统的设备进行 PCI 直通时，QEMU 报错导致直通失败。错误提示表明 MSI-X 的 Table 与 PBA 区域重叠，或无法正确放入 BAR 空间，或对齐异常。
+
+#主要错误日志
+failed to add PCI capability 0x11[0x50]@0xb0: table & pba overlap, or they don't fit in BARs, or don't align
+
+#问题根因
+cadence PCIe Endpoint 驱动在 `cdns_pcie_ep_set_msix()` 函数中计算 PBA（Pend Bit Array）偏移量时存在错误。虽然 Table Size 字段正确写入了 N-1（符合规范），但在计算 PBA 的起始偏移时，代码错误地使用了 `interrupts`（即 N-1）来计算 MSI-X Table 占用的空间，导致 PBA 偏移量少算了一个条目的大小。这使得 PBA 区域与 MSI-X Table 区域在配置空间中发生重叠，从而触发 QEMU 的合规性检查错误。
+
+#解决方案
+修正 PBA 偏移量的计算逻辑。引入变量 `actual_interrupts`（值为 `interrupts + 1`），在计算 PBA 偏移时使用该变量乘以 `PCI_MSIX_ENTRY_SIZE`，确保为 N 个中断条目预留足够的空间，从而避免 Table 与 PBA 区域重叠。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e35018533f6f4d6abc9c30568309032f5e22714f

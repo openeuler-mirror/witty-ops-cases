@@ -1,0 +1,26 @@
+#标题
+mlx5: Fix default values in create CQ
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Mellanox mlx5 驱动在创建完成队列（CQ）时，由于回调函数和门限寄存器初始化顺序不当，可能导致内核 CQ 创建过程中使用了错误的默认回调函数，从而触发无效回调处理；同时，硬件可能在初始化完成前对 CQ 进行门限操作，导致潜在的硬件状态不一致或错误。
+
+#主要错误日志
+mlx5_core_err(cq->eq->core.dev, "CQ default completion callback, CQ #%u\n", cq->cqn);
+（推断：若未正确设置回调，可能触发上述新增的默认回调错误日志）
+
+#问题根因
+问题根源在于 CQ 创建逻辑中回调函数设置与硬件命令提交的时序问题：
+1. 在 `mlx5_ib_create_cq` 中，回调函数 `mcq.comp` 的赋值发生在 `mlx5_core_create_cq` 命令提交之后。如果命令执行期间产生中断，中断处理程序可能访问到未初始化的回调指针，或者错误地使用了默认回调。
+2. 在 `mlx5_create_cq` 中，默认回调被错误地设置为 `mlx5_add_cq_to_tasklet`，这对于内核 CQ 是不合适的，导致内核 CQ 陷入错误的处理路径。
+3. `arm_db` 的初始化值被设置为 0，而硬件要求该字段在 CQ 创建前应初始化为特定值（`MLX5_CQ_INIT_CMD_SN`），以避免硬件在初始化阶段执行错误的门限恢复逻辑。
+
+#解决方案
+1. 调整回调函数设置顺序：在调用 `mlx5_core_create_cq` 向硬件下发命令前，预先设置好 `cq->mcq.comp` 回调函数，确保中断发生时回调已就绪。
+2. 修正默认回调逻辑：在 `mlx5_create_cq` 中，将默认回调从 `mlx5_add_cq_to_tasklet` 改为 `mlx5_core_cq_dummy_cb`，并导出 `mlx5_add_cq_to_tasklet` 供其他模块显式调用。
+3. 规范 `arm_db` 初始化：移除各子模块（如 steering, fpga, en_main）中对 `arm_db` 的零值初始化或错误值设置，改为在 `mlx5_create_cq` 核心函数中统一判断并初始化为 `MLX5_CQ_INIT_CMD_SN`，确保在 CQ 创建命令下发前该值已正确写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/990a167d5635b1117b4fbe9e3902e933603c2f85

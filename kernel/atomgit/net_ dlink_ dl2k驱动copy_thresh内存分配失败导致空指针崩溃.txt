@@ -1,0 +1,23 @@
+#标题
+net: dlink: dl2k驱动copy_thresh内存分配失败导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 D-Link DGE-550T 网卡驱动处理接收数据包过程中，当数据包长度小于等于 `copy_thresh` 阈值时，驱动调用 `netdev_alloc_skb_ip_align()` 分配 skb 内存。若该内存分配失败（例如内存不足），驱动未进行错误处理直接引用 skb 指针，导致内核发生空指针引用，进而引发系统崩溃或异常重启。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `receive_packet` 函数中，针对小数据包处理路径（`pkt_len <= copy_thresh`）缺少对 `netdev_alloc_skb_ip_align()` 返回值的检查。当内存分配失败返回 NULL 时，代码未捕获该错误，后续直接访问 `skb->protocol` 成员引发空指针解引用。
+
+#解决方案
+修改 `drivers/net/ethernet/dlink/dl2k.c` 文件中的接收逻辑，调整内存分配与错误处理流程：
+1. 将 `netdev_alloc_skb_ip_align()` 的调用移至条件判断之前，并初始化 skb 指针为 NULL。
+2. 增加对 skb 指针的非空检查（`if (!skb)`）。
+3. 若分配失败或为大包处理逻辑，统一跳转至现有的 fallback 处理路径（使用原有的接收缓冲区），从而避免空指针访问并保证数据包处理的连续性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/25393136368b2b40a95d34dd960df35338376583

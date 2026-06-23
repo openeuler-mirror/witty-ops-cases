@@ -1,0 +1,20 @@
+#标题
+ALSA: hda: 耳机检测失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动或声卡初始化过程中，内核对音频引脚进行解析和排序时，因排序算法不稳定导致耳机设备的输入类型判断错误，最终导致耳机检测失败，设备无法正常工作。
+
+#主要错误日志
+未知
+
+#问题根因
+内核 `hda_auto_parser.c` 中的 `compare_input_type` 函数此前假设 `sort()` 函数是稳定排序，但内核的 `sort()` 实现采用堆排序，这从来都不是稳定排序。在引入提交 "lib/sort: optimize heapsort with double-pop variation" 后，相等元素的顺序发生了改变，打破了原有逻辑对元素次序的依赖，从而导致耳机检测失败。
+
+#解决方案
+在结构体 `auto_pin_cfg_item` 中新增 `order` 成员用于记录元素的原始次序。在排序前遍历输入配置数组，记录每个元素的原始索引。修改 `compare_input_type` 比较函数，当元素的主要排序键值（如 `has_boost_on_pin`）相等时，使用记录的原始次序 `order` 作为决胜条件，确保排序结果的确定性和正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/311c7315ffd8b3064238eb1be7d136122ebbcc58

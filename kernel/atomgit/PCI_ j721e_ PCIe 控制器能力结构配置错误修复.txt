@@ -1,0 +1,25 @@
+#标题
+PCI: j721e: PCIe 控制器能力结构配置错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+TI K3 SoCs 集成的 Cadence PCIe 控制器在 Root-Complex 模式下，其 PCIe 配置空间中的能力结构显示错误。具体表现为部分本应支持的能力被错误地显示为不支持，受影响的能力包括：
+- Link Bandwidth Notification（链路带宽通知）
+- Alternate Routing ID (ARI) Forwarding Support（ARI 转发支持）
+- Advanced Error Reporting (AER) capability 中的 Next capability offset（下一个能力偏移量）
+
+#主要错误日志
+- Failed to power off PCIe Controller
+- Failed to power on PCIe Controller
+- Failed to set pci mode
+
+#问题根因
+PCIe 控制器在上电后立即锁存寄存器的“复位值”。如果 Glue Layer 配置（即对 CTRL_MMR 空间中 PCIEn_CTRL 寄存器的 "strap" 设置编程）不是在 PCIe 控制器处于关闭状态时进行的，控制器将锁存错误的“复位值”。这是因为在编程 strap 设置时控制器已经处于上电状态，导致其锁存了与预期模式不匹配的初始值。
+
+#解决方案
+修改 `j721e_pcie_ctrl_init` 函数中的配置顺序，在编程 "strap" 设置之前关闭 PCIe 控制器电源，编程完成后再重新开启。具体通过调用 `pm_runtime_put_sync()` 关闭电源，配置完成后再调用 `pm_runtime_get_sync()` 开启电源，确保控制器在锁存复位值时采样到正确的 strap 配置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/58d1127dcbe10a13005510dab1d6d8935950ab3e

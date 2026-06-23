@@ -1,0 +1,39 @@
+#标题
+writeback: __mark_inode_dirty 中的 use-after-free 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在运行过程中（如 systemd-random-seed 服务执行写入操作时）触发内核崩溃，具体表现为在 `__mark_inode_dirty` 函数中发生 Use-After-Free 错误。调用栈显示崩溃发生在文件写入路径，涉及 ext4 文件系统及回写机制。
+
+#主要错误日志
+```text
+CPU: 1 PID: 562 Comm: systemd-random- Not tainted 6.6.56-gb4403bd46a8e #1
+......
+pc : __mark_inode_dirty+0x124/0x418
+lr : __mark_inode_dirty+0x118/0x418
+......
+Call trace:
+ __mark_inode_dirty+0x124/0x418
+ generic_update_time+0x4c/0x60
+ file_modified+0xcc/0xd0
+ ext4_buffered_write_iter+0x58/0x124
+ ext4_file_write_iter+0x54/0x704
+ vfs_write+0x1c0/0x308
+ ksys_write+0x74/0x10c
+```
+
+#问题根因
+这是一个并发竞态条件导致的 Use-After-Free 问题。
+当 `__mark_inode_dirty()` 正在执行时，另一个工作队列（kworker）正在处理 inode 的回写控制结构切换。
+问题流程如下：
+1. `__mark_inode_dirty` 获取 `inode->i_wb` 指针后，释放了 `inode->i_lock` 和 `wb->list_lock`。
+2. 此时，`inode_switch_wbs_work_fn` 函数获取锁，完成了 `inode->i_wb` 的切换（指向新的 wb），并释放了旧的 wb 结构。
+3. `__mark_inode_dirty` 继续执行 `wb_wakeup_delayed()`，此时它访问的是已经被释放的旧 wb 指针，从而触发 Use-After-Free。
+
+#解决方案
+调整锁的持有范围以修复竞态条件。在执行 `wb_wakeup_delayed()` 之前，保持 `inode->i_lock` 的持有状态，直到 `wakeup_bdi` 判断和 `wb_wakeup_delayed` 调用完成后才释放锁。这确保了在访问 wb 结构期间，该结构不会被并发切换或释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6349ec959f7999e58cacdd8906e90c313abd3e30

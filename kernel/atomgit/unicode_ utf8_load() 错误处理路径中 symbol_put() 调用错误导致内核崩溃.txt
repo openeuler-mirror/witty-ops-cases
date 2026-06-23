@@ -1,0 +1,35 @@
+#标题
+unicode: utf8_load() 错误处理路径中 symbol_put() 调用错误导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用 utf8_load() 请求加载不被支持的 UTF-8 版本时，内核在错误处理路径中触发 BUG()，导致系统崩溃并打印调用栈，栈中显示崩溃发生在 `__symbol_put` 函数中。
+
+#主要错误日志
+kernel BUG at kernel/module/main.c:786!
+RIP: 0010:__symbol_put+0x93/0xb0
+Call Trace:
+ <TASK>
+ ? __die_body.cold+0x19/0x27
+ ? die+0x2e/0x50
+ ? do_trap+0xca/0x110
+ ? do_error_trap+0x65/0x80
+ ? __symbol_put+0x93/0xb0
+ ? exc_invalid_op+0x51/0x70
+ ? __symbol_put+0x93/0xb0
+ ? asm_exc_invalid_op+0x1a/0x20
+ ? __pfx_cmp_name+0x10/0x10
+ ? __symbol_put+0x93/0xb0
+ ? __symbol_put+0x62/0xb0
+ utf8_load+0xf8/0x150
+
+#问题根因
+在 `utf8_load()` 函数中，当请求的 UTF-8 版本不支持时，代码进入错误处理路径 `out_symbol_put`。此时代码错误地调用 `symbol_put(um->tables)`，试图使用已加载符号的指针作为参数。然而，`symbol_put()` 函数期望的参数是用于唯一标识该符号的字符串名称（即 "utf8_data_table"），而不是符号指针。向 `symbol_put()` 传递指针导致内核触发 BUG()。
+
+#解决方案
+修改 `fs/unicode/utf8-core.c` 文件中 `utf8_load()` 函数的错误处理路径，将 `symbol_put(um->tables)` 修改为 `symbol_put(utf8_data_table)`，确保传入正确的符号名称字符串。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/11d9d08c50a6671b2979e2b2ccf73c6e1d5022f8

@@ -1,0 +1,23 @@
+#标题
+udp: Fix memory accounting leak
+
+#内核版本
+OLK-6.6
+
+#问题现象
+UDP 协议栈在处理数据包接收与释放过程中存在内存统计泄漏问题。该缺陷会导致套接字（sock）的内存占用统计不准确，随着时间推移可能造成系统内存资源无法正确回收，影响系统稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `udp_rmem_release` 函数中，计算内存释放量 `amt` 的逻辑存在错误。原代码在更新 `sk->sk_forward_alloc` 之前就基于其旧值计算 `amt`，且计算公式未能正确抵消已释放的内存大小，导致内存统计信息更新不一致，引发内存泄漏。
+
+#解决方案
+修改 `udp_rmem_release` 函数中的内存统计计算逻辑：
+1. 将相关变量 `size` 和 `amt` 的类型从 `int` 修改为 `unsigned int` 以避免潜在的符号问题。
+2. 修正 `amt` 的计算公式为 `(size + sk->sk_forward_alloc - partial) & ~(PAGE_SIZE - 1)`。
+3. 调整 `sk_forward_alloc_add` 的调用参数为 `size - amt`，确保内存统计数据的增加与减少正确配对，从而修复内存泄漏。同时修正了 `first_packet_length` 函数中 `total` 变量的类型以保持一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e91da002953b07c9b311675aa76fca2cfddf5392

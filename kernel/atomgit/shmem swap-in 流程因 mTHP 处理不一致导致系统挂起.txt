@@ -1,0 +1,31 @@
+#标题
+shmem swap-in 流程因 mTHP 处理不一致导致系统挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 shmem 交换入操作时，若发生特定竞争条件，后续的交换入操作会触发死循环或无限重试，导致相关进程或系统线程挂起，无法继续执行。
+
+#主要错误日志
+未知
+
+#问题根因
+当前 swap-in 代码假设当 shmem mapping 中的交换项（swap entry）为 0 阶时，其缓存的 folio 也必须是 0 阶，但该假设并不总是成立。
+根本原因在于 `shmem_split_large_entry` 在确认 folio 能成功换入之前就被调用。存在如下竞争场景：
+1. CPU1 尝试换入一个高阶（order > 0）交换项 S1，分配 folio 失败后被中断。
+2. CPU2 成功换入 S1 并将其写出，此时 folio 被缓存且阶数大于 0。
+3. CPU1 恢复执行 `shmem_split_large_entry`，将 S1 分割。
+4. 此时 S1 变为 0 阶，但其对应的缓存 folio 阶数仍大于 0。
+这导致后续对 S1 的换入操作中，`xa_get_order` 返回 0，但 folio 查找返回高阶 folio。校验逻辑 `xa_get_order(&mapping->i_pages, index) != folio_order(folio)` 始终为真，导致 swap-in 返回 -EEXIST 并无限重试，造成挂起。
+
+#解决方案
+修改 shmem 交换入逻辑，允许在交换缓存中查看到更大的 folio，并在插入 folio 时检查整个 shmem mapping 范围是否具有正确的交换值。同时移除插入前的冗余树遍历操作。具体修改包括：
+1. 在 `shmem_add_to_page_cache` 函数中，优化了冲突检测逻辑，通过 `xas_for_each_conflict` 遍历检查条目是否为预期的交换项，确保范围内一致性。
+2. 在 `shmem_swapin_folio` 函数中，调整了阶数校验逻辑：
+   - 将 `order != folio_order(folio)` 改为 `order > folio_order(folio)` 以放宽限制。
+   - 新增 `order < folio_order(folio)` 的处理分支，调整 swap 和 index 以对齐 folio 阶数。
+   - 移除了 `xa_get_order` 的校验，仅依赖 `shmem_confirm_swap` 和 folio lock 来保证一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6499827612073b7d334feb16119b5859a2521194

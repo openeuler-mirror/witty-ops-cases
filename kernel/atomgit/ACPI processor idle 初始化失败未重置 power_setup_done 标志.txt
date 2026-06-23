@@ -1,0 +1,20 @@
+#标题
+ACPI processor idle 初始化失败未重置 power_setup_done 标志
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ACPI processor 驱动初始化过程中，若 cpuidle 驱动注册或 per-CPU 设备注册失败，`power_setup_done` 标志位未被重置，导致该标志位状态与实际初始化结果不一致。这会导致驱动中的其他功能模块误判 cpuidle 已正确配置可用，进而引发不可预期的异常行为。
+
+#主要错误日志
+pr_debug("register %s failed.\n", acpi_idle_driver.name);
+
+#问题根因
+`power_setup_done` 标志位在初始化早期被置位，但在后续关键步骤（如 `acpi_processor_register_idle_driver` 中的驱动注册或 `acpi_processor_power_init` 中的设备注册）失败时，代码路径缺少将该标志位重置为 0 的操作。
+
+#解决方案
+在 `acpi_processor_register_idle_driver()` 注册失败的错误处理路径中增加 `pr->flags.power_setup_done = 0`；在 `acpi_processor_power_init()` 设备注册失败的错误处理路径中增加 `pr->flags.power_setup_done = 0`；同时在 `acpi_processor_unregister_idle_driver()` 反注册流程中遍历 CPU 重置该标志位，确保状态一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7bc76c6a0a8dd660d3d424956d27cefcc06fe06d

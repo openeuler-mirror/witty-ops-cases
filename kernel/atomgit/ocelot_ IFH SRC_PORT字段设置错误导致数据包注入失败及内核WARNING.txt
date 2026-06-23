@@ -1,0 +1,35 @@
+#标题
+ocelot: IFH SRC_PORT字段设置错误导致数据包注入失败及内核WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ocelot-8021q DSA tag 协议时，CPU 注入的数据包发送超时。内核运行过程中触发 WARNING 并打印调用栈，提示无法将值存入指定比特位。伴随数据包发送超时与时间戳轮询超时现象。
+
+#主要错误日志
+------------[ cut here ]------------
+Cannot store 0x40 inside bits 46-43 - will truncate
+sja1105 spi2.0: xmit timed out
+WARNING: CPU: 1 PID: 102 at lib/packing.c:98 __pack+0x90/0x198
+sja1105 spi2.0: timed out polling for tstamp
+CPU: 1 UID: 0 PID: 102 Comm: felix_xmit
+Tainted: G        W        N 6.13.0-rc1-00372-gf706b85d972d-dirty #2605
+Call trace:
+ __pack+0x90/0x198 (P)
+ __pack+0x90/0x198 (L)
+ packing+0x78/0x98
+ ocelot_ifh_set_basic+0x260/0x368
+ ocelot_port_inject_frame+0xa8/0x250
+ felix_port_deferred_xmit+0x14c/0x258
+ kthread_worker_fn+0x134/0x350
+ kthread+0x114/0x138
+
+#问题根因
+在 `ocelot_ifh_set_basic()` 函数中，设置 IFH（Injection Frame Header）的 SRC_PORT 字段时，错误地使用了 `BIT_ULL(ocelot->num_phys_ports)`。该字段应为单一的端口号索引，而非位掩码。错误的位掩码值超出了字段所能容纳的位数范围，导致底层 packing 库在尝试写入时报错并触发 WARNING。
+
+#解决方案
+修改 `drivers/net/ethernet/mscc/ocelot.c` 文件中 `ocelot_ifh_set_basic` 函数的实现，将 `ocelot_ifh_set_src` 的参数从 `BIT_ULL(ocelot->num_phys_ports)` 修正为 `ocelot->num_phys_ports`，确保传入的是 CPU 端口索引值而非位掩码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cacf8e641eab5aefa527dc22829d1ba08f3f96f2

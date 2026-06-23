@@ -1,0 +1,22 @@
+#标题
+PMT Discovery 驱动编译时触发的 format-security 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 `-Wformat-security` 编译选项的环境下编译内核时，编译过程因报错而中断。具体表现为 `drivers/platform/x86/intel/pmt/discovery.c` 文件中的 `pmt_features_discovery` 函数触发了 "format not a string literal and no format arguments" 的编译错误。
+
+#主要错误日志
+drivers/platform/x86/intel/pmt/discovery.c: In function 'pmt_features_discovery':
+drivers/platform/x86/intel/pmt/discovery.c:505:36: error: format not a string literal and no format arguments [-Werror=format-security]
+  505 |                                    pmt_feature_names[feature->id]);
+
+#问题根因
+在调用 `kobject_init_and_add` 函数时，直接将动态获取的字符串 `pmt_feature_names[feature->id]` 作为 format 参数传入，而非作为字符串内容参数。这导致编译器认为存在格式化字符串安全风险（该字符串可能包含格式化占位符如 `%s`，从而导致内存访问越界或崩溃），因此在开启 `-Wformat-security` 检查时报错。
+
+#解决方案
+修改 `kobject_init_and_add` 的调用方式，显式使用 `"%s"` 作为格式化字符串，将 `pmt_feature_names[feature->id]` 作为该格式的参数传入，从而消除编译器的安全警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8c1af89b67581fc663c43f1c46f8ed19c303c3cb

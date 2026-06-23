@@ -1,0 +1,20 @@
+#标题
+ACPI processor idle 状态因无效 entry method 被禁用缺乏调试日志
+
+#内核版本
+OLK-6.6
+
+#问题现象
+根据 ACPI 规范，LPI (Low Power Idle) 子包中的 entry method 必须是缓冲区或整数类型。当驱动程序解析到 entry method 类型无效的状态时，会通过清零 struct acpi_lpi_state 中的 flags 来禁用该状态。由于此前缺乏相应的调试日志，开发者难以感知状态被禁用的具体原因，导致无法有效排查空闲状态配置异常问题。
+
+#主要错误日志
+pr_debug("Entry method of state-%d is invalid, disable it.\n", state_idx);
+
+#问题根因
+ACPI 处理器空闲驱动在解析 LPI 状态时，若发现 entry method 既不是缓冲区也不是整数（即无效类型），代码逻辑虽会禁用该状态，但未输出任何调试信息。由于 entry method 是 cpuidle 的关键参数，缺少日志导致开发者难以定位状态失效的具体原因。
+
+#解决方案
+在 drivers/acpi/processor_idle.c 的 acpi_processor_evaluate_lpi 函数中，针对 entry method 类型无效的分支添加 pr_debug 调试日志。该日志明确打印无效状态的索引，提示该状态因 entry method 无效已被禁用，便于开发者追踪问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/50d1d0c7cc17391ed761bf2b261e0321b9b16a10

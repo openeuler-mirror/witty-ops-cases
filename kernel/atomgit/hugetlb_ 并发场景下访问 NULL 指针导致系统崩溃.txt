@@ -1,0 +1,24 @@
+#标题
+hugetlb: 并发场景下访问 NULL 指针导致系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `__update_and_free_hugetlb_folio()` 与 `replace_free_hugepage_folios()` 发生竞态条件时，内核会触发 NULL 指针解引用错误，导致系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+存在一个潜在的竞态条件：
+1. `replace_free_hugepage_folios()` 在 CPU2 上执行 `folio_test_hugetlb(folio)` 判断成功，此时页面仍为 hugetlb folio。
+2. 此时 CPU1 上的 `__update_and_free_hugetlb_folio()` 执行了 `__folio_clear_hugetlb(folio)` 和 `hugetlb_free_folio(folio)`，导致页面状态发生变化。
+3. CPU2 继续执行 `h = folio_hstate(folio)`，由于 folio 已被释放或清除状态，该函数返回 NULL。
+4. 后续代码访问该 NULL 指针 `h`，触发系统崩溃。
+
+#解决方案
+在 `replace_free_hugepage_folios()` 函数中，通过获取 `hugetlb_lock` 锁来保护 `folio_test_hugetlb()` 检查与 `folio_hstate()` 获取操作。确保在检查 folio 状态和获取 hstate 期间，folio 不会被并发 dissolve 或释放，从而避免 `folio_hstate()` 返回 NULL。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0436d6984b4bc93f1ce3c4cf8bdb721711d94682

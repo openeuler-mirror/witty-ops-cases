@@ -1,0 +1,30 @@
+#标题
+net: thunderx: snprintf 缓冲区过小导致编译报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 `-Werror` 编译选项构建内核时，驱动 `drivers/net/ethernet/cavium/thunder/thunder_bgx.c` 编译失败，报 `-Wformat-truncation` 错误，提示 `snprintf` 输出可能发生截断。
+
+#主要错误日志
+```
+drivers/net/ethernet/cavium/thunder/thunder_bgx.c: In function ‘bgx_acpi_match_id’:
+drivers/net/ethernet/cavium/thunder/thunder_bgx.c:1434:27: error: ‘%d’ directive output may be truncated writing between 1 and 3 bytes into a region of size 2 [-Werror=format-truncation=]
+  snprintf(bgx_sel, 5, "BGX%d", bgx->bgx_id);
+                           ^~
+drivers/net/ethernet/cavium/thunder/thunder_bgx.c:1434:23: note: directive argument in the range [0, 255]
+  snprintf(bgx_sel, 5, "BGX%d", bgx->bgx_id);
+                       ^~~~~~~
+drivers/net/ethernet/cavium/thunder/thunder_bgx.c:1434:2: note: ‘snprintf’ output between 5 and 7 bytes into a destination of size 5
+  snprintf(bgx_sel, 5, "BGX%d", bgx->bgx_id);
+```
+
+#问题根因
+`bgx_acpi_match_id` 函数中定义的缓冲区 `bgx_sel` 大小为 5 字节，用于存放格式化字符串 "BGX%d"。由于 `bgx_id` 的取值范围是 [0, 255]，格式化后的字符串长度可能在 5 到 7 字节之间（如 "BGX255"），导致缓冲区空间不足，触发编译器的 format-truncation 警告。
+
+#解决方案
+将缓冲区 `bgx_sel` 的大小从 5 增加到 7，确保能容纳最大可能的输出字符串；同时将 `snprintf` 的长度参数从硬编码的数字 5 改为 `sizeof(bgx_sel)`，以增强代码安全性和可维护性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e07585d6b0097fd637fb7c5bdae3afeef5f57bb6

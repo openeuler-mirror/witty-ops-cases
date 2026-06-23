@@ -1,0 +1,24 @@
+#标题
+usb core: 修复 get_bMaxPacketSize0 管道创建错误导致端口重初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 USB hub 端口在遇到不良线缆连接后尝试重新初始化时失败，系统持续报错并尝试重新枚举设备，具体表现为无法复位端口、无法使能设备、读取设备描述符出错。
+
+#主要错误日志
+- usb usb2-port1: cannot reset (err = -32)
+- usb usb2-port1: Cannot enable. Maybe the USB cable is bad?
+- usb usb2-port1: attempt power cycle
+- usb 2-1: new high-speed USB device number 5 using ci_hdrc
+- usb 2-1: device descriptor read/8, error -71
+
+#问题根因
+在 `get_bMaxPacketSize0` 函数中调用 `usb_control_msg` 时，使用了 `usb_rcvaddr0pipe` 宏来创建 USB 管道。该宏不包含端点设备号，这与之前使用的 `usb_rcvctrlpipe` 宏（包含端点设备号）行为不一致。此问题源于提交 85d07c556216 ("USB: core: Unite old scheme and new scheme descriptor reads")，导致在 USB hub 端口重初始化过程中，由于管道创建不当引发失败。
+
+#解决方案
+修改 `get_bMaxPacketSize0` 函数，将创建 USB 管道的宏从 `usb_rcvaddr0pipe` 替换为 `usb_rcvctrlpipe(udev, 0)`。这确保了 USB 管道中包含正确的端点设备号。若端点尚未设置设备号，由于 udev 中设备号默认为 0，该修改依然保持兼容性。同时删除了不再使用的 `usb_rcvaddr0pipe` 宏定义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db1a1b939c5c7dd8a81507c76aa7dacee49501fc

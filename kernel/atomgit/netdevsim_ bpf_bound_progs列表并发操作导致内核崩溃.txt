@@ -1,0 +1,31 @@
+#标题
+netdevsim: bpf_bound_progs列表并发操作导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+netdevsim驱动在操作bpf_bound_progs链表时存在并发竞争风险。当nsim_bpf_create_prog()执行链表添加操作的同时，nsim_bpf_destroy_prog()正在执行链表删除操作，这种并发操作会导致链表结构损坏，进而触发内核BUG，系统崩溃并打印无效操作码错误。
+
+#主要错误日志
+```
+[  417.290971] kernel BUG at lib/list_debug.c:62!
+[  417.290983] invalid opcode: 0000 [#1] PREEMPT SMP NOPTI
+[  417.291021] RIP: 0010:__list_del_entry_valid_or_report+0xa7/0xc0
+[  417.291103]  nsim_bpf_destroy_prog+0x31/0x80 [netdevsim]
+[  417.291163]  bpf_prog_dev_bound_destroy+0x6f/0xb0
+[  417.291171]  bpf_prog_free_deferred+0x18e/0x1a0
+```
+
+#问题根因
+netdevsim驱动对bpf_bound_progs链表的操作缺乏保护机制。在nsim_bpf_create_prog函数中进行list_add_tail操作时，可能同时有nsim_bpf_destroy_prog函数在进行list_del操作，并发操作导致链表损坏。
+
+#解决方案
+在驱动中引入互斥锁（mutex）机制，对链表操作进行保护：
+1. 在struct nsim_dev结构体中新增成员`struct mutex progs_list_lock`。
+2. 在驱动初始化probe时调用`mutex_init`初始化该锁，在移除设备remove时调用`mutex_destroy`销毁该锁。
+3. 在nsim_bpf_create_prog函数的`list_add_tail`操作前后分别加锁和解锁。
+4. 在nsim_bpf_destroy_prog函数的`list_del`操作前后分别加锁和解锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ebf3b1689e4cda13fa58cd94377ef374ac664a6

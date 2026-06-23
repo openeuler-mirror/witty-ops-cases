@@ -1,0 +1,20 @@
+#标题
+CALIPSO 模块在 IPv4 套接字上触发空指针异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统使用 CALIPSO 进行网络标签处理时，若 IPv4 套接字（IPv4 socket）发起连接至 IPv6 地址，内核在调用 `netlbl_conn_setattr` 流程中触发空指针解引用，导致内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `netlbl_conn_setattr` 函数中，代码根据 `addr->sa_family` 决定处理逻辑。当 IPv4 套接字连接 IPv6 地址时，触发了 CALIPSO 相关函数（如 `calipso_sock_setattr`）。这些函数内部直接调用 `inet6_sk(sk)` 获取 IPv6 专用结构体。由于当前套接字本质上是 IPv4 套接字，其 `pinet6` 指针为 NULL，导致 `inet6_sk(sk)` 返回 NULL，后续直接访问该指针引发空指针解引用。
+
+#解决方案
+在 `calipso_sock_getattr`、`calipso_sock_setattr` 和 `calipso_sock_delattr` 等函数中增加对 `inet6_sk(sk)` 返回值的非空检查。如果返回值为 NULL，立即返回 `-EAFNOSUPPORT` 错误码（或直接返回），避免后续访问空指针导致的内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/28299b28d2f8c7c05f71de3ee035eea85c168c58

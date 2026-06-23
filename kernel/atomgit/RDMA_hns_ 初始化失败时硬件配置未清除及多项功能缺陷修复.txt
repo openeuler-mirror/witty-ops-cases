@@ -1,0 +1,36 @@
+#标题
+RDMA/hns: 初始化失败时硬件配置未清除及多项功能缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 驱动初始化失败时，硬件配置未被正确清除，导致硬件状态残留。
+2. 驱动查询功能能力时访问未初始化的资源，可能导致内核崩溃或数据异常。
+3. 内核编译时报错 "-Wframe-larger-than"（栈内存占用过大）。
+4. 设备复位流程中内存管理函数使用错误，对复合页调用了 put_page 而非 __free_page，可能导致内存泄露或引用计数错误。
+5. debugfs 下计算内存负载百分比时，若总页数为 0 可能触发除零错误。
+6. DCA（动态连接适配）参数配置逻辑异常，min_size 可能大于 max_size。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **错误流处理缺失**：`hns_roce_v2_init` 函数在申请 HEM table 失败时，未调用 `hns_roce_function_clear` 清除硬件配置。
+2. **栈内存占用过大**：`hns_roce_v2_modify_qp` 函数中，`hns_roce_v2_qp_context` 结构体实例在栈上直接分配，大小超过编译器警告阈值。
+3. **未初始化资源访问**：`hns_roce_query_caps` 中数组 `desc` 未初始化，且 HIP08 芯片版本读取了未赋值的 `resp_f` 结构体数据；同时 `modify_qp_init_to_rtr` 中使用了硬编码的 `max_ack_req_msg_len` 而非从硬件查询到的值。
+4. **内存 API 误用**：`hns_roce_v2_get_reset_page` 申请的是复合页，但在错误处理和释放路径中错误使用了 `put_page`，应使用 `__free_page`。
+5. **除零风险**：`calc_loading_percent` 函数未对 `all_pages` 为 0 的情况进行防御性判断。
+6. **逻辑漏洞**：`load_kdca_param` 中缺少对 `dca_min_size > dca_max_size` 的边界检查。
+
+#解决方案
+1. **修复错误流**：在 `hns_roce_v2_init` 中增加 `err_get_hem_table_failed` 标签，在 HEM table 申请失败时跳转至该标签执行 `hns_roce_function_clear`。
+2. **解决栈溢出**：将 `hns_roce_v2_modify_qp` 中的栈变量 `ctx` 改为使用 `kvzalloc` 动态分配内存，并在函数返回前调用 `kvfree` 释放。
+3. **修复资源初始化**：在 `hns_roce_query_caps` 中对 `desc` 数组进行初始化（`= {}`）；针对 HIP08 版本调整命令数量；从硬件查询 `max_ack_req_msg_len` 并存储到 `caps` 结构体中，修正 `modify_qp_init_to_rtr` 中的判断逻辑。
+4. **修正内存释放**：将 `hns_roce_v2_get_reset_page` 和 `hns_roce_v2_put_reset_page` 中的 `put_page` 调用替换为 `__free_page`。
+5. **防御性编程**：在 `calc_loading_percent` 中添加对 `all_pages` 为 0 的判断，直接返回 0 避免除零。
+6. **完善参数校验**：在 `load_kdca_param` 中增加 `dca_min_size > dca_max_size` 的判断逻辑。
+7. **其他清理**：移除 `hns_roce_alloc_hem` 中冗余的 `gfp_mask` 参数及 `GFP_NOWARN` 标志；清理头文件依赖和互斥锁初始化的条件判断。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/80e78cd83255cf14440e37db699970b4c81334a2

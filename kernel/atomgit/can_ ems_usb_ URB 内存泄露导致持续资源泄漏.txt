@@ -1,0 +1,21 @@
+#标题
+can: ems_usb: URB 内存泄露导致持续资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 EMS CPC-USB/ARM7 CAN/USB 接口设备时，在数据接收过程中，已完成传输的 URB（USB Request Block）未能被正确释放。随着系统运行时间的增加或数据交互频率的增加，内核 URB 资源持续泄露。在设备关闭（调用 ems_usb_close）时，已完成的 URB 不会被释放，最终可能导致系统内存资源耗尽或设备无法正常重新打开。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ems_usb_open()` 中分配并提交了用于 USB 输入传输的 URB，这些 URB 被添加到 `dev->rx_submitted` 锚点中。然而，USB 核心框架会在调用完成回调函数 `ems_usb_read_bulk_callback()` 之前将 URB 从锚点中取消锚定（unanchor）。
+原代码在 `ems_usb_read_bulk_callback()` 中处理完数据后直接重新提交 URB，但没有将其重新锚定回 `dev->rx_submitted`。这意味着一旦一个 in-URB 完成了传输，它就不再受锚点管理。因此，当调用 `ems_usb_close()` 执行 `usb_kill_anchored_urbs()` 时，这些已经完成传输且未被重新锚定的 URB 不会被杀死和释放，从而导致内存泄露。
+
+#解决方案
+在 `ems_usb_read_bulk_callback()` 函数中，重新提交 URB 之前先调用 `usb_anchor_urb()` 将其重新锚定到 `dev->rx_submitted` 锚点。同时增加对 `usb_submit_urb()` 返回值的判断：若提交成功则直接返回；若提交失败，则调用 `usb_unanchor_urb()` 取消锚定以防止资源悬挂，并打印错误日志。这确保了 URB 在整个生命周期内都受锚点管理，从而在设备关闭时能被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/16aaf0b6d29e8592ac30f611e6ff978813022c86

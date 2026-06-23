@@ -1,0 +1,25 @@
+#标题
+AppArmor DFA 匹配宏副作用导致越界读取
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 KASAN 的系统中，AppArmor 进行文件权限检查时触发 slab 越界读取（slab-out-of-bounds）。具体表现为进程打开文件时，内核在 `aa_dfa_match` 函数中检测到非法内存访问，导致 KASAN 报警。该问题源于 `match_char()` 宏在处理参数时的副作用，导致输入字符被意外跳过，指针越界。
+
+#主要错误日志
+[   94.985301] BUG: KASAN: slab-out-of-bounds in aa_dfa_match+0x5ae/0x760
+[   94.985655] Read of size 1 at addr ffff888100342000 by task file/976
+[   94.986405]  aa_dfa_match+0x5ae/0x760
+[   94.986408]  __aa_path_perm+0x131/0x400
+[   94.986424]  apparmor_file_open+0x345/0x570
+[   94.986442]  do_dentry_open+0x2f6/0x1120
+
+#问题根因
+`match_char()` 宏在遍历差分编码链时会多次计算其字符参数。当调用该宏时传入 `*str++` 作为参数，字符串指针 `str` 会在内层 do-while 循环的每次迭代中前进，导致 DFA 在每次迭代时检查的是不同的字符。这使得输入字符被跳过，指针最终越过了输入缓冲区边界，引发越界读取。
+
+#解决方案
+修改 `security/apparmor/match.c` 中的 `aa_dfa_match_len` 和 `aa_dfa_match` 函数，在调用 `match_char()` 宏之前，先将当前字符提取到局部变量（如 `u8 c`）中，确保字符求值和指针自增操作分离。这样可以保证每次外层循环只处理一个字符，避免宏展开带来的副作用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3f394df58c33a6f8eac8e6a38887ec0fc095d488

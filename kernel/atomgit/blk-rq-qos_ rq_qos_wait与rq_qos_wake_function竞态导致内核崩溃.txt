@@ -1,0 +1,32 @@
+#标题
+blk-rq-qos: rq_qos_wait与rq_qos_wake_function竞态导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在运行过程中发生内核崩溃，具体表现为无法处理页面错误，在 `rq_qos_wake_function` 调用链中出现 Oops，导致系统异常终止或重启。
+
+#主要错误日志
+BUG: unable to handle page fault for address: ffffafe180a40084
+#PF: supervisor write access in kernel mode
+#PF: error_code(0x0002) - not-present page
+Oops: Oops: 0002 [#1] PREEMPT SMP PTI
+RIP: 0010:_raw_spin_lock_irqsave+0x1d/0x40
+Call Trace:
+ <IRQ>
+ try_to_wake_up+0x5a/0x6a0
+ rq_qos_wake_function+0x71/0x80
+ __wake_up_common+0x75/0xa0
+ __wake_up+0x36/0x60
+ scale_up.part.0+0x50/0x110
+ wb_timer_fn+0x227/0x450
+
+#问题根因
+`rq_qos_wake_function()` 与 `rq_qos_wait()` 之间存在竞态条件。`rq_qos_wake_function()` 在调用 `wake_up_process(data->task)` 之前先执行了 `list_del_init(&curr->entry)` 删除了等待队列条目。这导致 `rq_qos_wait()` 中的 `finish_wait()` 检测到队列已空而立即返回，并继续执行其他代码路径，从而覆盖了栈上 `data` 结构体中的 `task` 指针（变为垃圾数据）。随后，`rq_qos_wake_function()` 使用该已被破坏的 `data->task` 指针调用 `wake_up_process()`，导致访问非法内存地址引发崩溃。
+
+#解决方案
+调整 `rq_qos_wake_function()` 中的执行顺序，先调用 `wake_up_process(data->task)` 唤醒进程，再执行删除等待队列条目的操作。同时，将删除操作改为使用 `list_del_init_careful()`，以便与 `finish_wait()` 中的 `list_empty_careful()` 检查正确同步，防止竞态发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b6ad16584887afb695194f75156a8704d3000392

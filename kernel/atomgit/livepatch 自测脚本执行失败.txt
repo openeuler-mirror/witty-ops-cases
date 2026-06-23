@@ -1,0 +1,37 @@
+#标题
+livepatch 自测脚本执行失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 livepatch 自测脚本（如 test-callbacks.sh、test-ftrace.sh、test-livepatch.sh 等）时，所有测试项均显示 "not ok"，导致自测失败。具体失败的测试项包括：
+- target module before livepatch
+- livepatch interaction with ftrace_enabled sysctl
+- basic function patching
+- system state modification
+- patch getpid syscall while being heavily hammered
+- sysfs test
+
+#主要错误日志
+$ sudo ./test-callbacks.sh
+TEST: target module before livepatch ... not ok
+$ sudo ./test-ftrace.sh
+TEST: livepatch interaction with ftrace_enabled sysctl ... not ok
+$ sudo ./test-livepatch.sh
+TEST: basic function patching ... not ok
+$ sudo ./test-state.sh
+TEST: system state modification ... not ok
+$ sudo ./test-syscall.sh
+TEST: patch getpid syscall while being heavily hammered ... not ok
+$ sudo ./test-sysfs.sh
+TEST: sysfs test ... not ok
+
+#问题根因
+内核编译链接错误。在启用 `CONFIG_LIVEPATCH_FTRACE` 的情况下，构建系统未正确将 patch.o、shadow.o、state.o 和 transition.o 这些关键模块文件链接到 livepatch 内核模块中，导致 livepatch 核心功能缺失，进而引发自测脚本运行失败。该问题由提交 601dd19ce894 引入。
+
+#解决方案
+修改 `kernel/livepatch/Makefile` 文件，调整编译逻辑。当配置项 `CONFIG_LIVEPATCH_FTRACE` 为 'y' 时，显式将 core.o、patch.o、shadow.o、state.o 和 transition.o 合并编译进 livepatch 模块；否则仅编译 core.o。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7d1e9e121eb9a58e9dc11dc53ab81b24df1db388

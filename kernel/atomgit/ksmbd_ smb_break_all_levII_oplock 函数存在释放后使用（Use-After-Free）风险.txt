@@ -1,0 +1,23 @@
+#标题
+ksmbd: smb_break_all_levII_oplock 函数存在释放后使用（Use-After-Free）风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 内核模块处理 SMB 协议的 Level II oplock（机会锁）中断逻辑时，存在并发竞态条件。在遍历 `m_op_list` 链表过程中释放了 RCU 读锁，导致进程上下文可以并发修改或释放链表节点。这可能引发内核崩溃、内存损坏或释放后使用，造成系统不稳定或服务拒绝。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb_break_all_levII_oplock` 函数中，代码在 RCU 读锁保护下遍历链表，但在循环内部处理每个节点时提前释放了 RCU 读锁（调用 `rcu_read_unlock()`），并在循环末尾重新获取。这种在循环中间歇性解锁的行为制造了一个竞态窗口，使得其他线程可以在此期间获取写锁并删除或释放当前正在处理的 `brk_op` 节点，从而导致后续操作访问已释放内存。
+
+#解决方案
+移除 RCU 机制，改用标准的读写信号量（`rw_semaphore`）保护整个链表遍历过程。
+1. 在 `smb_break_all_levII_oplock` 函数入口处使用 `down_read(&ci->m_lock)` 获取读锁，并在函数末尾使用 `up_read(&ci->m_lock)` 释放，确保遍历过程中链表不被修改。
+2. 删除循环体内原有的 `rcu_read_unlock()` 和 `rcu_read_lock()` 调用。
+3. 同步修改关联的链表操作辅助函数（如 `opinfo_get_list`、`opinfo_add`、`opinfo_del`）及内存释放逻辑，将 RCU 安全的链表操作（如 `list_add_rcu`、`list_del_rcu`）替换为标准的信号量保护操作（如 `list_add`、`list_del`），并移除 `struct oplock_info` 中无用的 `rcu_head` 成员。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/02495876ddd4340e05ac070cd42da83fa88bca1c

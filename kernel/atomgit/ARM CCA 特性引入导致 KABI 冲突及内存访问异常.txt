@@ -1,0 +1,34 @@
+#标题
+ARM CCA 特性引入导致 KABI 冲突及内存访问异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在开启 ARM CCA (Confidential Computing Architecture) 特性后，由于内核结构体 `kvm_arch` 和 `kvm_vcpu_arch` 发生变化，导致 KABI（内核应用程序二进制接口）一致性检查失败（CRC 校验不通过）。
+2. 因结构体成员 `rec` 由值类型改为指针类型但代码未同步更新访问方式，导致内核在运行时访问非法内存地址，引发内核崩溃或空指针解引用。
+
+#主要错误日志
+- 推断日志：Unable to handle kernel NULL pointer dereference at virtual address...
+- 推断日志：Internal error: Oops - BUG: kernel NULL pointer dereference...
+- 实际日志（代码中包含的错误打印上下文）：
+  `vcpu_err(vcpu, "Unhandled exit reason from realm (ESR: %#llx)\n", rec->run->exit.esr);`
+  `vcpu_err(vcpu, "Unhandled instruction abort (ESR: %#llx).\n", rec->run->exit.esr);`
+
+#问题根因
+1. **KABI 冲突**：引入 ARM CCA 特性时，宏 `KVM_VCPU_MAX_FEATURES` 从 7 增加到 10。结构体成员 `vcpu_features` 和 `features` 虽然实际存储空间未变（bitmap 大小计算后一致），但表达式变化导致 KABI CRC 计算结果改变，引发 KABI 冲突。
+2. **类型变更未同步**：为了解决空间和冲突问题，结构体成员 `struct realm_rec rec` 和 `struct virtcca_cvm_tec tec` 等被修改为指针类型（如 `struct realm_rec *rec`），但大量相关代码（如 `vcpu->arch.rec.run`）仍沿用值类型的直接访问方式（应改为 `vcpu->arch.rec->run`），导致内存访问错误。
+
+#解决方案
+1. **修复 KABI 冲突**：
+   - 引入 `KVM_VCPU_MAX_FEATURES_KABI_BASELINE` 宏保持基线值 7。
+   - 使用 `KABI_REPLACE` 宏封装 `vcpu_features` 和 `features` 成员，确保 KABI CRC 计算时使用基线值，运行时实际使用扩展后的值。
+   - 使用 `KABI_REPLACE` 和 `KABI_EXTEND` 宏处理 `kvm_arch` 和 `kvm_vcpu_arch` 结构体中的新增成员（如 `is_realm`, `pmcr_n` 等），保证结构体布局兼容性。
+   
+2. **修复指针访问错误**：
+   - 修改 `kvm_vcpu_arch` 结构体定义，将 `rec` 和 `tec` 成员明确修改为指针类型，并使用 `KABI_REPLACE` 进行联合体封装以兼容不同场景。
+   - 全量修正内核代码中所有对 `rec` 和 `tec` 成员的访问方式，将点操作符（`.`）改为箭头操作符（`->`），例如将 `vcpu->arch.rec.run` 修改为 `vcpu->arch.rec->run`。
+   - 在 `kvm_arch_vcpu_create` 中增加 `kvm_arch_rec_init` 函数调用，为 `rec` 指针动态分配内存并初始化；在 `kvm_arm_vcpu_destroy` 中增加对应的内存释放逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fa36fa3469d2461c1887e823371059401941ae8a

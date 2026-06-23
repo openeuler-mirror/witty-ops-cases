@@ -1,0 +1,20 @@
+#标题
+smb: client: fix potential race in cifs_put_tcon()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB 客户端断开连接（put tcon）过程中，如果配置了 DFS（Distributed File System）功能，`dfs_cache_refresh()` 延迟工作队列可能与 `cifs_put_tcon()` 函数发生并发竞争。这种竞争可能导致内核崩溃（panic）或内存访问异常，具体表现为 UAF（Use-After-Free）或列表操作相关的内核错误。
+
+#主要错误日志
+未知
+
+#问题根因
+`dfs_cache_refresh()` 延迟工作队列（delayed worker）可能与 `cifs_put_tcon()` 函数产生竞争条件（race condition）。在原有代码逻辑中，`list_replace_init(&tcon->dfs_ses_list, ...)` 操作在取消延迟工作队列之前执行，且处于持有锁的状态下。如果此时延迟工作队列正在运行或尚未完全取消，可能会访问到正在被清理的 `tcon` 结构或其列表成员，从而引发竞争问题。
+
+#解决方案
+调整 `list_replace_init(&tcon->dfs_ses_list, &ses_list)` 的执行位置，将其移至 `cancel_delayed_work_sync(&tcon->dfs_cache_work)` 调用之后执行。这确保了在操作 `dfs_ses_list` 列表前，相关的延迟工作队列已经完全停止运行或已取消，从而避免了竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/710e039ad3b390fc436402626a64989e96f717e8

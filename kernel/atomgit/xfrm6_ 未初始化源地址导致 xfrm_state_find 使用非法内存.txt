@@ -1,0 +1,35 @@
+#标题
+xfrm6: 未初始化源地址导致 xfrm_state_find 使用非法内存
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 IPv6 XFRM 策略相关接口（如 `udp_sendmsg` 触发 `xfrm_lookup_route`）时，若内核无法找到合适的源地址，`xfrm6_get_saddr()` 会返回成功（0）并保留 `saddr` 为未初始化状态。后续 `xfrm_tmpl_resolve_one()` 在 `xfrm_state_find()` 中使用该未初始化地址，触发内核内存安全警告（KMSAN）或可能导致内核崩溃。
+
+#主要错误日志
+=====================================================
+BUG: KMSAN: uninit-value in xfrm_state_find+0x2424/0xa940
+ xfrm_state_find+0x2424/0xa940
+ xfrm_resolve_and_create_bundle+0x906/0x5a20
+ xfrm_lookup_with_ifid+0xcc0/0x3770
+ xfrm_lookup_route+0x63/0x2b0
+ ip_route_output_flow+0x1ce/0x270
+ udp_sendmsg+0x2ce1/0x3400
+ inet_sendmsg+0x1ef/0x2a0
+ __sock_sendmsg+0x278/0x3d0
+ __sys_sendto+0x593/0x720
+ __x64_sys_sendto+0x130/0x200
+ x64_sys_call+0x332b/0x3e70
+ do_syscall_64+0xd3/0xf80
+ entry_SYSCALL_64_after_hwframe+0x77/0x7f
+=====================================================
+
+#问题根因
+函数 `xfrm6_get_saddr()` 在调用 `ipv6_dev_get_saddr()` 获取源地址时，未检查其返回值。当 `ipv6_dev_get_saddr()` 查找源地址失败（返回 `-EADDRNOTAVAIL`）时，`saddr->in6` 处于未初始化状态，但 `xfrm6_get_saddr()` 依然返回 0（成功），导致上层调用者错误地使用了未初始化的内存数据。
+
+#解决方案
+在 `xfrm6_get_saddr()` 函数中增加对 `ipv6_dev_get_saddr()` 返回值的检查。如果函数返回错误（即获取地址失败），则立即返回 `-EHOSTUNREACH` 错误码，阻止后续流程使用未初始化的地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/37fee2d75aa8b17c8ebe1449d5825681c0e4321c

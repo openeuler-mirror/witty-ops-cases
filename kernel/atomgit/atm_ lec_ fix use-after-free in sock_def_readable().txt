@@ -1,0 +1,22 @@
+#标题
+atm: lec: fix use-after-free in sock_def_readable()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ATM LANE（LAN Emulation）模块中，当 `lecd` 守护进程关闭连接（调用 `lec_atm_close`）后，若此时有并发数据发送（如 `lec_start_xmit` 或 `lec_atm_send`），内核可能访问已被释放的 `lecd` 指针，导致 UAF（Use-After-Free）漏洞，引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+`priv->lecd` 指针在多个发送路径中被读取，但在关闭路径 `lec_atm_close` 中被置空（`priv->lecd = NULL`）时未使用同步机制。这导致发送路径可能读取到旧的指针值并尝试向已关闭或正在关闭的 socket 发送数据，从而触发 UAF。
+
+#解决方案
+将 `struct lec_priv` 中的 `lecd` 成员声明为 `__rcu` 指针，并使用 RCU 机制保护所有读写路径：
+1. **写入/置空路径**：在 `lec_atm_close` 中使用 `rcu_assign_pointer(priv->lecd, NULL)` 进行置空，并调用 `synchronize_rcu()` 确保所有读端临界区完成后再继续清理；在 `lecd_attach` 中使用 `rcu_assign_pointer` 进行赋值。
+2. **读取/发送路径**：在 `lec_handle_bridge`、`lec_atm_send`、`send_to_lecd` 及 `lec_start_xmit` 等函数中，使用 `rcu_read_lock()` 和 `rcu_dereference()` 安全获取 `lecd` 指针，并在指针非空时执行操作，若指针为空则释放相关 skb。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c51a635d5bedeb33e67fe83285b84cd514fa6ad7

@@ -1,0 +1,20 @@
+#标题
+md: 移除 md_write_start 中冗余的挂起中止逻辑
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在当前内核版本中，`md_write_start()` 函数包含针对 mddev 挂起状态的检查与中止逻辑。由于 `mddev_suspend()` 现已包含 `lockdep_assert_not_held()` 且不再持有 `reconfig_mutex`，原有的中止逻辑已不再必要，且导致函数返回值类型复杂化。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit cc27b0c78c79 为了修复持有 `reconfig_mutex` 时调用 `mddev_suspend()` 导致的死锁问题，在 `md_write_start()` 中增加了当 mddev 挂起时中止写操作的逻辑。如今 `mddev_suspend()` 不再持有 `reconfig_mutex`，该死锁隐患已消除，因此之前增加的中止逻辑变为冗余代码。
+
+#解决方案
+移除 `md_write_start()` 中检测到 mddev 挂起时返回 false 的逻辑，并将该函数的返回值类型从 `bool` 修改为 `void`。同时，清理 raid1、raid10、raid5 等调用该函数处的返回值检查代码，简化了写请求的起始流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5fe68af5fac3206ccae4b26acd09967c71d0f8d3

@@ -1,0 +1,35 @@
+#标题
+NFSv4.0 并发打开文件失败时致 seqid 释放不当引发 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFSv4.0 场景下，两个使用相同 cred 的线程并发打开不同文件时，若执行强制卸载（`umount -f`），内核会触发 KASAN 检测到的 slab-use-after-free 错误，导致内核崩溃。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in rpc_wake_up_queued_task+0xbb/0xc0
+Read of size 8 at addr ff11000007639930 by task bash/792
+Call Trace:
+ dump_stack_lvl+0xa3/0x120
+ print_address_description.constprop.0+0x63/0x510
+ print_report+0xf5/0x360
+ kasan_report+0xd9/0x140
+ __asan_report_load8_noabort+0x24/0x40
+ rpc_wake_up_queued_task+0xbb/0xc0
+ nfs_release_seqid+0x1e1/0x2f0
+ nfs_free_seqid+0x1a/0x40
+ nfs4_opendata_free+0xc6/0x3e0
+ ...
+
+#问题根因
+当两个线程使用相同的 `nfs4_state_owner` 并发打开文件时，第二个线程会在 `nfs_wait_on_sequence` 中等待第一个线程完成。此时若发生强制卸载（`umount -f`），`nfs_umount_begin` 会发送信号终止任务。
+第二个线程被唤醒后因状态为 `-ERESTARTSYS` 而退出，并在 `nfs4_open_release` 中未调用 `nfs4_opendata_to_nfs4_state`，导致其任务结构虽然被释放，但仍保留在 `sequence->list` 链表中。
+随后，第一个线程调用 `nfs_release_seqid` 时，尝试遍历链表唤醒下一个任务（即已被释放的第二个线程的任务结构），从而触发 Use-After-Free。
+
+#解决方案
+在 `nfs4_open_release` 函数中增加判断，当发现打开操作失败（`data->rpc_status != 0`）或未完成（`!data->rpc_done`）时，调用新增的 `nfs_release_seqid_inorder` 函数。
+该函数不仅将当前 seqid 从链表中移除，还会安全地唤醒链表中下一个等待的任务，确保已释放的任务结构不会被访问，从而避免 UAF 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8a6f6a9db172b695e45be869e515ac87557dbfb7

@@ -1,0 +1,27 @@
+#标题
+vxlan: 开启 proxy 选项时因使用 nexthop 对象导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 VXLAN 设备上启用 "proxy" 选项，并配置 FDB nexthop group 条目的情况下，收到 ARP 请求或 IPv6 邻居请求报文时触发内核空指针引用。具体表现为使用 arping 或 ndisc6 工具触发报文发送时，系统发生 panic，RIP 指向 vxlan_xmit 函数。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000000
+...
+RIP: 0010:vxlan_xmit+0xb58/0x15f0
+...
+Call Trace:
+ <TASK>
+ dev_hard_start_xmit+0x5d/0x1c0
+ __dev_queue_xmit+0x246/0xfd0
+
+#问题根因
+代码逻辑缺陷。在 `arp_reduce()` 和 `neigh_reduce()` 函数中，代码假设 FDB 条目对应的 MAC 地址指向一个有效的远端目的地址，但在该 FDB 条目关联的是 nexthop group 对象时，`first_remote_rcu()` 可能返回 NULL。代码未进行检查便直接解引用了该指针，从而导致空指针崩溃。
+
+#解决方案
+在解引用远端目的地址前增加有效性检查。修改 `arp_reduce` 和 `neigh_reduce` 函数逻辑，通过中间变量 `rdst` 接收 `first_remote_rcu(f)` 的返回值，并判断 `rdst` 非空后再访问其 `remote_ip` 成员，避免对 NULL 指针的解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3a6c1af2bc8878156c909ea7a1ca9d7e62fb78b8

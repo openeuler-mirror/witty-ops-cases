@@ -1,0 +1,21 @@
+#标题
+hp-bioscfg 驱动注册空名称属性触发内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 HP BIOS 返回属性名为空的字符串时，hp-bioscfg 驱动尝试注册名称为空的 kobject，导致内核抛出警告信息，并打印调用栈。这会导致驱动在加载或运行过程中产生不必要的内核告警，影响系统日志的洁净度。
+
+#主要错误日志
+- kobject: (00000000135fb5e6): attempted to be registered with empty name!
+- WARNING: CPU: 14 PID: 3336 at lib/kobject.c:219 kobject_add_internal+0x2eb/0x310
+
+#问题根因
+hp-bioscfg 驱动在 `hp_init_bios_buffer_attribute()` 函数中解析 WMI 缓冲区的属性名时，未对解析出的字符串长度进行校验。当 HP BIOS 返回了空名称的属性字符串时，驱动直接尝试注册该 kobject，而内核 kobject 机制禁止注册空名称的对象，从而触发 `kobject_add_internal` 中的 WARNING。
+
+#解决方案
+在 `hp_init_bios_buffer_attribute()` 函数中增加校验逻辑，在解析完属性名后检查其长度。如果属性名为空（`strlen(str) == 0`），则打印 debug 级别日志并跳过该属性的注册流程（直接返回成功），允许驱动继续处理其他有效属性，避免触发内核警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5987ae4f37251ed778c98fdfe8279aead3c95365

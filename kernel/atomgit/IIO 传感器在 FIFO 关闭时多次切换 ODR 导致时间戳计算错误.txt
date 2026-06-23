@@ -1,0 +1,20 @@
+#标题
+IIO 传感器在 FIFO 关闭时多次切换 ODR 导致时间戳计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当传感器缓冲区（FIFO）处于关闭状态时，若多次修改输出数据率（ODR），例如先从 50Hz 切换到 200Hz，再切换回 50Hz，随后重新启动缓冲区，内核将使用错误的频率（200Hz）对数据进行时间戳标记，而非预期的 50Hz。这导致传感器数据的时间戳信息不准确，影响系统对运动数据的处理逻辑。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `inv_sensors_timestamp_update_odr` 函数中，代码逻辑判断是否执行 ODR 更新时，错误地比对了当前生效的乘数（`mult`）与旧值（`ts->mult`），而未正确处理新的乘数（`new_mult`）。当 FIFO 关闭期间发生多次 ODR 切换时，中间状态的变更被忽略，导致恢复 FIFO 时应用了错误的 ODR 配置。
+
+#解决方案
+修改 `inv_sensors_timestamp_update_odr` 函数逻辑，当检测到 FIFO 处于关闭状态时，直接调用 `inv_sensors_timestamp_apply_odr` 立即应用新的 ODR 设置。同时，清理 `inv_mpu6050` 和 `inv_icm42600` 驱动中冗余的 `apply_odr` 调用代码，统一由核心层在 FIFO 关闭时自动处理，确保 ODR 状态实时更新。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/19d0b4364d3e6629f0aa59c21af2b6d79cfbf26e

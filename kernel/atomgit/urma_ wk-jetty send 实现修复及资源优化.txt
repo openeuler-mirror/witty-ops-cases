@@ -1,0 +1,35 @@
+#标题
+urma: wk-jetty send 实现修复及资源优化
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在发送数据路径上，可能出现死锁或响应缓慢的现象，特别是在内存紧张或高优先级任务繁重时。
+2. 连接建立过程可能因超时设置过短（16秒）导致失败，特别是在高延迟网络环境中。
+3. 数据发送过程中可能出现异常，未能正确处理已导入的 tjetty 实例。
+4. 系统 dmesg 可能报告工作队列创建失败或相关驱动初始化错误。
+
+#主要错误日志
+ubcore_log_err("Fail to alloc session workqueue.");
+ubcore_log_err("Failed to alloc ubcm workqueue.\n");
+ubcore_log_err("create rt_wq failed. dev_name: %s\n", device->dev_name);
+ubcore_log_err("create conn_wq failed. dev_name: %s\n", device->dev_name);
+ubcore_log_err("alloc agent_priv workqueue_s failed.\n");
+ubcore_log_err("alloc agent_priv workqueue_r failed.\n");
+ubcore_log_info("tjetty0 already imported. eid " EID_FMT "\n", ...);
+ubcore_log_err("do post send failed, ret: %d\n", ret);
+
+#问题根因
+1. **工作队列属性配置不当**：多个模块在创建工作队列时未指定 `WQ_UNBOUND`、`WQ_HIGHPRI` 和 `WQ_MEM_RECLAIM` 标志。这导致在内存回收路径或高负载场景下，工作队列任务可能因内存申请受限或调度优先级问题发生死锁或阻塞。
+2. **连接超时设置不合理**：默认连接超时时间设置为 16384ms (16s)，在某些场景下不足以完成连接建立，导致连接超时失败。
+3. **发送逻辑缺陷**：`ubmad_post_send` 函数在发送数据前未检查目标 tjetty 是否已经导入。如果已导入，应当直接使用现有 tjetty 进行发送，原逻辑可能遗漏了这一快速路径，导致重复处理或资源使用不当。
+
+#解决方案
+1. **优化工作队列属性**：在 `ubcore_session.c`、`ub_cm.c`、`ub_mad.c`、`ubcore_workqueue.c` 等文件中，将 `alloc_workqueue` 的 flags 参数从 0 修改为 `WQ_UNBOUND | WQ_HIGHPRI | WQ_MEM_RECLAIM`，确保工作队列在内存紧张时能正常工作并具备较高调度优先级。
+2. **调整连接超时时间**：将 `ubcore_conn_timeout` 的默认值从 `UBCORE_DEF_CONN_TIMEOUT` (16384ms) 修改为 `UBCORE_CONN_MAX_TIMEOUT` (30s)，提高连接建立的容错率。
+3. **修复发送逻辑**：在 `ubmad_post_send` 中增加对 `tjetty` 的查找逻辑。通过哈希查找和锁保护，判断目标 `tjetty` 是否已导入；若已导入则直接调用 `ubmad_do_post_send` 进行发送并返回，避免重复处理。
+4. **修正资源定义**：调整 JFS/JFR 深度及 Buffer 大小等宏定义以匹配实际需求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/db27e9a21e88460e8f831962eeb910ef216bc6fb

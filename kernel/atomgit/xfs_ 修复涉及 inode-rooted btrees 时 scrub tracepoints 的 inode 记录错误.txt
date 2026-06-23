@@ -1,0 +1,20 @@
+#标题
+xfs: 修复涉及 inode-rooted btrees 时 scrub tracepoints 的 inode 记录错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当启用 inode-rooted btrees 功能时，XFS scrub 的跟踪点记录了错误的 inode 号码。虽然代码对于 bmap btree 能正常工作，但在特定场景下逻辑不够严谨，导致 trace 信息中记录的 inode 号可能不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `TRACE_EVENT(xchk_ifork_btree_error)` 的 `TP_fast_assign` 宏中，代码错误地使用 `sc->ip->i_ino` 来获取 inode 号。这属于代码逻辑失误，正确的做法应当是从 btree cursor (`cur`) 中获取关联的 inode，即 `cur->bc_ino.ip->i_ino`。原有代码在处理非 bmap btree 的 inode-rooted btrees 场景时，获取的 inode 指针来源不正确。
+
+#解决方案
+修改 `fs/xfs/scrub/trace.h` 文件，将 `xchk_ifork_btree_error` 跟踪事件中的赋值语句从 `__entry->ino = sc->ip->i_ino;` 更正为 `__entry->ino = cur->bc_ino.ip->i_ino;`，确保从 btree cursor 结构体中正确获取 inode 号。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/262774fe6a25229ee9a99215ce8d945e98055aae

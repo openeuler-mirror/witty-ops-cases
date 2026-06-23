@@ -1,0 +1,23 @@
+#标题
+bridge: VLAN状态变更未更新组播上下文导致IGMP查询失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启VLAN过滤和组播VLAN Snooping（mcast_vlan_snooping）的场景下，通过 `bridge vlan` 命令将VLAN状态从 blocking (state 4) 切换为 forwarding (state 3) 后，网口不会发送 IGMP Query 报文。
+具体表现为：查看网口的组播统计信息（`igmp_queries tx_v2`），计数器数值未增加，组播查询功能未随VLAN状态恢复而启动。
+
+#主要错误日志
+未知
+
+#问题根因
+VLAN的STP状态变更会影响组播行为（如IGMP查询）。在 per-VLAN Snooping 场景下，当 VLAN 状态变为 forwarding 时，需要更新对应的组播上下文以重新启动端口查询定时器。
+原有代码在 `br_vlan_set_state()` 函数中仅更新了 VLAN 的状态值，未调用相关逻辑去刷新组播上下文（`br_multicast_update_vlan_mcast_ctx`），导致组播查询定时器未被重新使能，进而导致查询报文不发送。
+
+#解决方案
+在 `br_vlan_set_state()` 函数中增加对 `br_multicast_update_vlan_mcast_ctx()` 的调用。
+当 VLAN 状态发生变更时，该函数会检查 VLAN 是否可用、是否使能了组播 VLAN Snooping，若状态允许转发（forwarding），则调用 `br_multicast_enable_port_ctx` 使能组播端口上下文，从而重置查询定时器，确保组播查询功能随 VLAN 状态正确生效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/10f8ea2d445d231ce97ecbdd7afe745002c23c0c

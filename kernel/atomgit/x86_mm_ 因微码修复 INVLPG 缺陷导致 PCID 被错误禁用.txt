@@ -1,0 +1,20 @@
+#标题
+x86/mm: 因微码修复 INVLPG 缺陷导致 PCID 被错误禁用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Alderlake 和 Raptorlake 等受影响的 Intel CPU 型号上，即使已经安装了修复 INVLPG 指令缺陷的微码更新，内核仍然错误地禁用了 PCID（Process-Context Identifiers）功能。这导致系统无法利用 PCID 提供的性能优化（如避免 TLB 刷新），从而导致系统性能下降。
+
+#主要错误日志
+pr_info("Incomplete global flushes, disabling PCID");
+
+#问题根因
+早期内核代码为了规避 INVLPG 指令在特定 Intel CPU 上无法正确刷新全局 TLB 条目的硬件缺陷，简单根据 CPU 型号匹配列表直接禁用了 PCID 功能。Intel 在 2024年3月发布的微码更新中已修复了该硬件问题。根本原因在于内核修复补丁应用前，缺乏对微码版本的检查逻辑，只要 CPU 型号匹配就禁用 PCID，未识别微码已修复的情况。
+
+#解决方案
+修改 `setup_pcid()` 函数逻辑，在检查 CPU 型号匹配的同时增加微码版本号判断。更新 `invlpg_miss_ids` 数组，为每个受影响的 CPU 型号添加对应的最低修复微码版本号。仅当 CPU 型号匹配且当前微码版本低于修复版本时，才打印警告日志并禁用 PCID；若微码版本已修复，则保留 PCID 功能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8520f26e88c77c5e02550ee8beba9988f7e90233

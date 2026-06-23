@@ -1,0 +1,20 @@
+#标题
+regulator: fixed: 修复注册失败时的 GPIO 描述符泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 regulator 注册失败的场景下，驱动程序未释放已获取的 GPIO 描述符，导致 GPIO 资源泄漏。
+
+#主要错误日志
+"Failed to register regulator: %ld\n"
+
+#问题根因
+在引用的修复提交中，`devm_gpiod_get_optional()` 被替换为手动 GPIO 管理，期望依赖 regulator 核心层来释放 GPIO 描述符。然而该逻辑未考虑错误路径：当 regulator 注册失败时，核心层从未接管该 GPIO，导致驱动未调用释放接口直接返回，从而引发资源泄漏。
+
+#解决方案
+在 `reg_fixed_voltage_probe` 函数中，当检测到 `regulator_register` 调用失败时，在返回错误码之前显式调用 `gpiod_put(cfg.ena_gpiod)` 释放 GPIO 描述符，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6bbdb34bbd4a6af8907c654615894b41d55a4ff2

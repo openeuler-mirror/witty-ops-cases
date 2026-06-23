@@ -1,0 +1,34 @@
+#标题
+urma: tpid 内存泄漏导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 URMA 连接相关的创建、销毁或异常处理流程中（如 tpid 复用、断开连接、销毁请求等场景），内核内存发生泄漏。具体表现为：
+1. 在 `ubcore_create_tpid_priv` 函数中分配的 `struct ubcore_tpid` 结构体内存未被释放。
+2. 在 tpid 复用流程出错或断开连接时，底层驱动创建的 tpid 资源（tp_handle）未被正确删除。
+3. 在 `ubcore_get_tp_list` 获取 tp 列表流程中，临时创建的 tpid 内存未释放。
+
+#主要错误日志
+- "Failed to fill tpid cfg, ret=%d"
+- "Failed to create tpid, ret=%d"
+- "Failed to modify tpid:%u to RTS, ret:%d"
+- "Exchange_tp_info Failed: dev_name is %s, local_tp_handle is %llu"
+- "Failed to delete tpid, ret = %d.\n" (推断：修复补丁中新增的错误打印)
+
+#问题根因
+1. **内存泄漏**：原代码中 `ubcore_create_tpid_priv` 返回一个动态分配的 `struct ubcore_tpid` 指针，部分调用点（如 `ubcore_get_tp_list`）仅使用其中的句柄值，使用后未调用释放接口，导致内存泄漏。
+2. **资源泄漏**：在 `handle_create_req_with_tpid_reuse` 等函数中，当连接建立过程失败或断开连接时，代码逻辑直接返回或调用 `ubcore_free_tpid_reuse`，但遗漏了调用 `ubcore_delete_tpid_priv` 来删除底层已分配的 tpid 资源。
+3. **状态管理缺失**：`ubcore_tpid_reuse` 结构体缺少对 `tp_handle` 是否有效状态的记录，导致在释放资源时无法判断是否需要清理底层 tpid 资源。
+
+#解决方案
+1. **重构接口设计**：修改 `ubcore_create_tpid_priv` 接口，将其返回值从指针改为整型错误码，并增加 `union ubcore_tp_handle *tp_handle` 出参。这样调用者无需分配额外的 `ubcore_tpid` 结构体即可获取句柄，消除了一类内存泄漏的根源。
+2. **完善释放逻辑**：
+   - 在 `ubcore_tpid_reuse` 结构体中新增 `tp_handle_valid` 布尔成员，标记 tpid 句柄是否有效。
+   - 在 `ubcore_free_tpid_reuse` 函数中增加检查：如果 `tp_handle_valid` 为真，则调用 `ubcore_delete_tpid_priv` 删除底层资源，确保资源正确回收。
+   - 在 `ubcore_disconnect_tpid_with_tpid_reuse` 和 `handle_destroy_req_with_tpid_reuse` 中移除冗余的删除调用，统一由 `ubcore_free_tpid_reuse` 处理，避免重复删除或逻辑遗漏。
+3. **修复错误处理路径**：在 `handle_create_req_with_tpid_reuse` 等函数的错误处理分支中，增加 `ubcore_hash_table_rmv_tpid_reuse` 和 `ubcore_free_tpid_reuse` 调用，确保失败时清理已分配的内存和资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ff4176a6395c1ddd00b72e297f318c5797e5c67b

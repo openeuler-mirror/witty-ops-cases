@@ -1,0 +1,22 @@
+#标题
+PCI: xilinx-cpm 探测错误路径下 IRQ domain 资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Xilinx CPM PCIe 控制器驱动在加载探测过程中，若 `resource_list_first_type()` 获取总线资源失败或设备树解析失败，驱动会直接返回错误码退出，但未释放此前已分配的 IRQ domain。这会导致内核资源泄漏，可能影响后续设备操作或系统稳定性。
+
+#主要错误日志
+[    ] Parsing DT failed
+
+#问题根因
+在 `xilinx_cpm_pcie_probe` 函数的错误处理路径中，当检查 `bus` 资源为空或设备树解析失败时，代码直接返回或跳转到未包含 IRQ domain 清理逻辑的标签，导致之前分配的 IRQ domain 未被释放。
+
+#解决方案
+修改驱动探测函数的错误处理逻辑：
+1. 当 `resource_list_first_type()` 返回 NULL 时，不再直接返回，而是跳转到 `err_free_irq_domains` 标签执行清理。
+2. 调整 `xilinx_cpm_pcie_parse_dt` 失败后的跳转标签，从 `err_parse_dt` 改为 `err_free_irq_domains`，确保在解析失败时也能正确释放已分配的 IRQ domain。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1b38743eb6a3937d18b6765f139e1fa2053c24f7

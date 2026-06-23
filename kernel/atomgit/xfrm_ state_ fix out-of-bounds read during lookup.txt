@@ -1,0 +1,20 @@
+#标题
+xfrm: state: fix out-of-bounds read during lookup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 IPsec (xfrm) 状态查找时，由于哈希表指针与哈希掩码读取不一致，可能导致内核发生越界读。该问题可能在并发场景下触发，导致系统崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 RCU 保护的查找路径中，读取哈希表指针（如 `state_bydst`、`state_bysrc` 等）与读取哈希掩码（`state_hmask`）这两个操作没有在同一个序列计数保护区内进行。若在此期间哈希表发生调整，可能导致使用了新表的指针但配合了旧表的掩码，或者反之，从而计算出错误的哈希索引，引发越界访问。
+
+#解决方案
+引入 `xfrm_hash_state_ptrs` 结构体用于封装哈希表指针和掩码，并新增 `xfrm_hash_ptrs_get` 函数。该函数通过 `read_seqcount_begin` 和 `read_seqcount_retry` 机制，确保在读取哈希表指针、掩码等关键信息时处于一致的快照中，消除了并发读取导致的不一致问题，从而修复了越界读风险。同时，在相应的查找函数中替换原有的直接读取逻辑，改为调用新的安全获取接口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d538e72ceb2dc38216b20b9a53ec151342c61e21

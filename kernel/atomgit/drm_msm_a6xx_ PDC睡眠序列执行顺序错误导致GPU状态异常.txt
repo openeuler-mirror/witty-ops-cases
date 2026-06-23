@@ -1,0 +1,26 @@
+#标题
+drm/msm/a6xx: PDC睡眠序列执行顺序错误导致GPU状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在A6XX GPU子系统中，PDC（Power Domain Controller）进入错误状态后无法复位。由于PDC睡眠/唤醒序列的触发顺序不正确，可能导致GPU RSC（Resource State Coordinator）无法正常下电，或者在GMU（Graphics Management Unit）固件未初始化完成时错误触发PDC睡眠序列，进而引发GPU电源管理流程异常。
+
+#主要错误日志
+DRM_DEV_ERROR(gmu->dev, "Unable to power off the GPU RSC\n")
+
+#问题根因
+PDC位于GPU子系统外部，一旦进入错误状态便无法复位，因此必须严格控制PDC唤醒/睡眠序列的触发顺序。根本原因在于：
+1. PDC唤醒序列只能在PDC睡眠序列之后执行，原有代码未严格检查此依赖关系。
+2. GMU固件必须先初始化部分寄存器，内核驱动（KMD）才能触发PDC睡眠序列。原有代码在GMU固件未初始化时也可能触发睡眠序列，违反了硬件依赖约束。
+
+#解决方案
+引入一个新的状态变量 `status` 及相关位定义（`GMU_STATUS_FW_START` 和 `GMU_STATUS_PDC_SLEEP`）来跟踪依赖状态，并调整调用逻辑：
+1. 在 `a6xx_gmu_start` 成功后设置 `GMU_STATUS_FW_START` 标志，表示GMU固件已初始化。
+2. 在 `a6xx_rpmh_stop` 函数入口处检查 `GMU_STATUS_FW_START`，若未设置则直接返回，避免在固件未就绪时触发PDC睡眠；成功执行停止流程后设置 `GMU_STATUS_PDC_SLEEP` 标志。
+3. 在 `a6xx_rpmh_start` 函数入口处检查并清除 `GMU_STATUS_PDC_SLEEP` 标志，确保仅在已执行过睡眠序列后才触发唤醒序列。
+4. 移除 `a6xx_gmu_rpmh_init` 中不当的 `a6xx_rpmh_stop` 调用，并在 `a6xx_gmu_force_off` 中补充调用 `a6xx_rpmh_stop` 以确保关机流程完整。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cec23aebcec09e68cacb5037130a83ec873a5c5c

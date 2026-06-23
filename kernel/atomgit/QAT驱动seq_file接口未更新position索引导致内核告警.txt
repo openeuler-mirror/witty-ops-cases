@@ -1,0 +1,20 @@
+#标题
+QAT驱动seq_file接口未更新position索引导致内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读取QAT设备的debugfs环形缓冲区文件（如 `/sys/kernel/debug/qat_c6xx_<D:B:D:F>/transport/bank_00/ring_00`）时，触发内核告警。系统日志显示 seq_file 机制的 `.next` 函数 `adf_ring_next` 存在缺陷，未正确更新位置索引。
+
+#主要错误日志
+[27725.022965] seq_file: buggy .next function adf_ring_next [intel_qat] did not update position index
+
+#问题根因
+`adf_ring_next()` 函数在遍历到环形缓冲区末尾时，直接返回 NULL，但未对 `*pos` 索引进行递增操作。这违反了 seq_file 接口规范要求（`.next` 函数在返回 NULL 前必须更新位置索引），导致内核检测到不一致状态并打印告警信息。
+
+#解决方案
+修改 `drivers/crypto/intel/qat/qat_common/adf_transport_debug.c` 文件中的 `adf_ring_next` 函数。在判断已到达环形缓冲区末尾（`*pos` 超出范围）并返回 NULL 之前，显式执行 `(*pos)++` 操作，确保位置索引被正确更新，从而符合 seq_file API 要求并消除告警。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f517615accbcb71289b86292a574604f4d4cb0f1

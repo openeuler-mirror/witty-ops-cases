@@ -1,0 +1,22 @@
+#标题
+SUNRPC: svc_destroy 中使用 WARN_ONCE 替代 BUG_ON 避免系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 SUNRPC 服务销毁时，若 `sv_permsocks` 或 `sv_tempsocks` 链表非空（即存在残留的传输套接字），内核会触发 BUG_ON 导致系统 Panic，直接宕机重启，影响系统可用性。
+
+#主要错误日志
+- 触发 Panic 前的断言条件（原代码逻辑）：
+  `BUG_ON(!list_empty(&serv->sv_permsocks));`
+  `BUG_ON(!list_empty(&serv->sv_tempsocks));`
+
+#问题根因
+在 `svc_destroy` 函数中，代码使用 `BUG_ON` 宏来断言套接字链表必须为空。当某些异常场景导致传输数据结构处于未知状态或有残留资源未被释放时，`BUG_ON` 触发内核 Panic 从而导致整个系统宕机。实际上，此类内部断言错误不应直接导致系统崩溃，且在数据结构状态未知的情况下尝试“挽救”风险较大，不如仅报警并泄露资源以保持系统运行。
+
+#解决方案
+将 `svc_destroy` 中的 `BUG_ON` 调用替换为 `WARN_ONCE`。修改后，当检测到残留套接字时，内核仅打印警告日志（包含服务程序名称）而不会触发 Panic，从而提升了系统的可靠性和可用性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0033d731a439f9b8e96c997a6a05deba18235df1

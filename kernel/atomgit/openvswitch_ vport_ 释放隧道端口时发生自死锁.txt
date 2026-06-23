@@ -1,0 +1,20 @@
+#标题
+openvswitch: vport: 释放隧道端口时发生自死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除 Open vSwitch 的隧道端口设备时，系统发生自死锁，导致设备移除操作无法完成，进程挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+vport 由 RCU 保护并发使用，`netdev_put()` 需在 RCU 宽限期后执行。现有代码在持有 RTNL 锁的情况下调用 `rtnl_delete_link()` 后释放锁，随后调用 `call_rcu()`。然而，设备删除操作 `rtnl_unlock()` 会触发 `netdev_run_todo()` 并阻塞等待所有引用释放。由于 `call_rcu()` 在 `rtnl_unlock()` 之后执行，此时系统阻塞等待引用释放，而引用释放依赖的 RCU 回调尚未执行，从而导致自死锁。
+
+#解决方案
+调整代码执行顺序，将 `call_rcu(&vport->rcu, vport_netdev_free)` 移至 `rtnl_unlock()` 之前执行。这样在 `rtnl_unlock()` 触发 `netdev_run_todo()` 调用 `synchronize_net()` 时，RCU 回调已调度并可执行，从而避免死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/440801603a8012dba08f1404a63b6168b519a418

@@ -1,0 +1,24 @@
+#标题
+blk-iocost: 磁盘饱和时busy_level错误重置导致vrate调节失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 iocost 的场景下，当磁盘处于饱和状态且在一个定时周期内没有 IO 完成时，iocost 未能正确识别负载繁忙状态，错误地将 `busy_level` 重置为 0。这导致 `busy_level` 无法达到调整速率所需的阈值（4），进而导致 vrate（virtual rate）在数秒内无法降低，无法有效抑制“吵闹邻居”问题。
+
+具体表现为：在 Azure Premium SSD 等云存储上，当 cgA（高负载）使磁盘饱和时，cgB（延迟敏感型）的 IOPS 远低于预期（仅 5-6 IOPS，预期约 200 IOPS），且完成延迟极高（clat avg 约 170-190ms，预期低于几毫秒）；修复后，cgB 能够达到预期 IOPS 且延迟显著降低。
+
+#主要错误日志
+未知
+
+#问题根因
+当磁盘饱和时，经常出现一个定时周期内没有任何 IO 完成的情况。在此场景下，代码逻辑将 `rq_wait_pct` 和 `missed_ppm` 计算为 0，iocost 错误地将其解释为满足 QoS 目标，从而将 `busy_level` 重置为 0。
+该重置行为阻止了 `busy_level` 积累达到调整 vrate 所需的阈值，导致在磁盘饱和期间无法触发降速机制，无法缓解邻居干扰。
+
+#解决方案
+在 `ioc_lat_stat` 函数中增加对周期内 IO 完成数量 `nr_done` 的统计。
+在 `ioc_timer_fn` 的繁忙级别判断逻辑中，增加对 `nr_done` 的检查：如果 `nr_done` 为 0 且存在滞后的 IOs（`nr_lagging`），则视为磁盘状态未知，保持 `busy_level` 不变，避免错误重置；仅在确认有 IO 完成或无滞后 IO 时，才根据统计数据更新 `busy_level`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/efb711ede89264628fecaaac0c139677cbaafff9

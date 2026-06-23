@@ -1,0 +1,26 @@
+#标题
+Hygon family 18h model 6h~10h UMC 实例 ID 计算错误导致地址翻译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hygon family 18h model 6h~10h 处理器平台上，当发生内存错误时，系统无法正确进行地址翻译。由于实例 ID（instance id）计算错误，导致无法正确访问对应的 CS（Chip Select）寄存器，进而导致内存错误解码功能异常，无法准确定位故障内存位置。
+
+#主要错误日志
+未知
+
+#问题根因
+对于 Hygon family 18h model 6h~10h 型号处理器，每个 DDR 拥有两个子通道，每个子通道有一个 MCA bank 对应一个 CS。在地址翻译过程中，需要正确的 CS 实例 ID 才能访问相关寄存器。
+原有代码逻辑存在缺陷：
+1. 条件判断仅覆盖了 model 0x10，未覆盖 model 6h~10h 的完整范围。
+2. 对于 model 0x6 及以上型号，计算 `umc`（实例 ID）时仅使用了 `err.channel << 1`，忽略了 `m->ipid` 中的 BIT(13) 位信息，导致计算出的实例 ID 不正确。
+
+#解决方案
+修改 `drivers/edac/amd64_edac.c` 中的 `decode_umc_error` 函数：
+1. 扩展条件判断范围，将 `boot_cpu_data.x86_model == 0x10` 修改为调用 `hygon_f18h_m10H()` 以覆盖更广泛的型号。
+2. 修正实例 ID 计算逻辑，将判断条件从 `boot_cpu_data.x86_model == 0x6` 改为 `boot_cpu_data.x86_model >= 0x6`。
+3. 更新 `umc` 计算公式为 `(err.channel << 1) + ((m->ipid & BIT(13)) >> 13)`，通过提取 MCA IPID 寄存器的第 13 位来正确区分子通道，确保获取正确的实例 ID。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/86e099284e4aa630e0370315017e7432ec286468

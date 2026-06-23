@@ -1,0 +1,22 @@
+#标题
+w1: 修复 w1_attach_slave_device() 中的冗余计数器递减
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 1-Wire 总线挂载从设备过程中，若 `__w1_attach_slave_device()` 执行失败，内核在清理资源时会触发计数器的二次递减。这会导致设备引用计数与总线从设备计数值低于实际值，可能引发设备引用计数溢出（underflow）、设备意外释放或总线状态统计错误等异常行为。
+
+#主要错误日志
+dev_err(&dev->dev, "%s: Attaching %s failed.\n", __func__, sl->name);
+
+#问题根因
+在函数 `w1_attach_slave_device()` 中，当 `__w1_attach_slave_device()` 调用失败时，错误处理流程不仅调用了 `put_device()`，还显式执行了 `dev->slave_count--` 和 `w1_family_put(sl->family)`。
+而在 `put_device()` 调用的释放回调 `w1_slave_release()` 中，已经对 `sl->family->refcnt` 和 `sl->master->slave_count` 进行了递减操作。
+这导致了上述计数器被错误地递减了两次。
+
+#解决方案
+移除 `w1_attach_slave_device()` 错误处理路径中的冗余递减操作（即删除 `dev->slave_count--` 和 `w1_family_put(sl->family)` 这两行代码），确保计数器仅在 `w1_slave_release()` 中被正确递减一次。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/53c0648f5e015c5cb38bdf649c20a4d8a85b174d

@@ -1,0 +1,21 @@
+#标题
+wifi: mac80211 非 MLO 站点接收链路分配错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在混合 MLO（多链路操作）环境中，当接口支持多链路（MLO）但连接的站点不支持（non-MLO）时，接收路径上的链路分配处理不正确。这会导致链路分配错误，或在访问链路信息时触发不可预期的警告。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ieee80211_rx_data_set_sta` 未正确处理“接口支持 MLO 但站点不支持 MLO”的场景。原代码逻辑在 `link_id < 0` 时直接使用 `&rx->sdata->deflink`，未针对 non-MLO 站点检查其有效链路状态并使用其默认链路 ID，导致链路关联错误。
+
+#解决方案
+在 `net/mac80211/rx.c` 的 `ieee80211_rx_data_set_sta` 函数中增加判断逻辑：
+当 `link_id < 0` 时，检查接口是否为 MLD 且站点是否无有效链路（`!sta->sta.valid_links`）。若是，则使用站点的默认链路 ID（`sta->deflink.link_id`）来获取对应的 sdata link；否则回退到原有的默认链路逻辑。这确保了在混合环境下链路关联的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e60ea6cdc0d771a32dced53cc394591164dd2f23

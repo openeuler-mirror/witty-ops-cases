@@ -1,0 +1,22 @@
+#标题
+ag71xx 网卡驱动缺失 DMA 映射错误检查导致潜在异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ag71xx 网卡驱动在运行过程中，若 DMA 映射失败，驱动程序未进行错误处理，可能导致后续使用无效的 DMA 地址进行数据传输，引发内存数据破坏或网卡发送/接收功能异常；在发送路径映射失败时，可能造成 skb 泄漏。
+
+#主要错误日志
+netif_dbg(ag, tx_err, ndev, "DMA mapping error\n");
+
+#问题根因
+驱动代码中调用 `dma_map_single` 函数进行 DMA 映射后，未检查返回值是否映射成功（即是否返回错误），导致在 DMA 映射失败的场景下程序继续执行，进而使用了无效的 DMA 地址。
+
+#解决方案
+在 `ag71xx_fill_rx_buf` 和 `ag71xx_hard_start_xmit` 函数中，补充对 `dma_map_single` 返回值的检查。通过调用 `dma_mapping_error` 进行判断：
+1. 在接收路径中，若映射失败则释放已分配的内存碎片并将缓冲区指针置空，返回 false。
+2. 在发送路径中，若映射失败则打印错误日志并跳转到错误处理流程丢弃报文。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8b8e802b99a5215d9ca584183ba0408851bee89b

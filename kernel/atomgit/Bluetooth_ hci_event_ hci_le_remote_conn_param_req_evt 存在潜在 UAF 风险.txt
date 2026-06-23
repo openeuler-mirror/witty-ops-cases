@@ -1,0 +1,20 @@
+#标题
+Bluetooth: hci_event: hci_le_remote_conn_param_req_evt 存在潜在 UAF 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 HCI LE Remote Connection Parameter Request 事件时，若连接句柄查找失败或连接状态检查未通过，函数在持有锁之前提前返回，导致后续访问连接对象时存在潜在的 Use-After-Free（UAF）风险；或在并发场景下访问 `hcon` 成员时因缺乏锁保护导致内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `hci_le_remote_conn_param_req_evt` 在查找 `hcon` 对象及访问其成员（如 `state`、`le_conn_max_interval`、`role` 等）之前未持有 `hci_dev_lock` 锁。原代码仅在 `hcon->role == HCI_ROLE_MASTER` 分支内部加锁，导致前面的错误检查路径（如 `!hcon` 或参数检查失败）在无锁状态下访问了共享资源，引发竞态条件及潜在的 UAF 问题。
+
+#解决方案
+将 `hci_dev_lock(hdev)` 的加锁操作移至函数开头，在查找和检查 `hcon` 之前执行；同时调整错误处理路径，移除原有的直接 `return` 语句，改为跳转至函数末尾的 `unlock` 标签处统一解锁，确保所有对 `hcon` 及相关共享数据的访问均在临界区内进行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0a83b95ac1787367b38d53988bbe84ecfb81fd47

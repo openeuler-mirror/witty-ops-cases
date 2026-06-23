@@ -1,0 +1,47 @@
+#标题
+ub/ubase: UNIC/UBASE 驱动多项功能修复与补全
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1.  **功能查询缺陷**：ethtool 无法正常查询 FEC、Speed 等配置信息，且无法获取网卡队列统计信息；debugfs 缺失 vport_ctx 和 vport_buf 的查询功能；链路状态时间戳显示为当前时间而非历史记录时间。
+2.  **配置与兼容性问题**：控制面消息（CTRLQ）缺少版本号与序列号校验，易收到非法请求导致处理异常；控制面白名单机制不完善，部分消息返回错误码不符合预期。
+3.  **QoS 与复位异常**：SL bitmap 检查逻辑有误，使用了错误的位图集合；设备挂起期间工作队列未刷新，导致复位过程中可能仍在执行工作队列任务；HIMAC 复位功能缺失。
+4.  **日志与错误处理**：IP 地址同步流程中，日志描述信息不准确（"by accident" 语义模糊）；部分配置接口（如 coalesce）在设备未激活状态下错误返回 -EBUSY 或忽略错误。
+
+#主要错误日志
+- `failed to send cmd in config autoneg(%u), ret = %d.`
+- `failed to send cmd in config speed(%u), ret = %d.`
+- `failed to set promisc mode, ret = %d.`
+- `failed to config vl rate limit, ret = %d.`
+- `failed to query dfx reg num, ret = %d.`
+- `failed to get dfx regs, ret = %d.`
+- `ctrlq msg in param error.`
+- `ctrlq msg out param error.`
+- `ctrlq msg in_size(%u) exceeds the maximum(%u).`
+- `invalid ue2ue ctrlq seq(%u).`
+- `failed to query vport ctx, offset = %u, ret = %d.`
+- `stack deleted an planned ip %s, need to re-add it.` (推断：修正后的日志)
+- `stack added a non-planned ip %s, need to delete it.` (推断：修正后的日志)
+
+#问题根因
+1.  **代码逻辑缺失与错误**：
+    -   统计信息查询接口未注册 `get_ethtool_stats` 等钩子，且寄存器查询错误处理逻辑不合理（忽略了 -EPERM 导致的失败）。
+    -   `ubase_ctrlq` 模块对消息类型（同步/异步/通知/响应）判断逻辑不完善，缺少对 `is_async` 标志位的校验，且未对 `seq` 序列号进行有效性校验。
+    -   `sl_priqos->sl_bitmap` 初始化未正确合并 UNIC 和 UDMA 支持的 SL 位图，导致 QoS 检查基于错误的范围。
+    -   `unic_set_coalesce` 接口在设备去激活状态下行为了错误判断，且未正确处理 MTU、Speed 等配置的返回值。
+    -   链路状态记录使用了 `ktime_get_real_seconds()` 获取当前时间，而非记录中的历史时间戳。
+2.  **功能缺失**：
+    -   debugfs 中未实现 `vport_ctx` 和 `vport_buf` 的查询节点。
+    -   缺少 HIMAC 复位的相关处理逻辑。
+    -   缺少对控制面请求版本号的兼容性检查。
+
+#解决方案
+1.  **完善查询接口与 Debugfs**：注册 ethtool 的 `get_ethtool_stats`, `get_strings`, `get_sset_count` 接口以支持统计查询；在 debugfs 中新增 `vport` 节点及 `vport_buf`, `vport_ctx` 查询功能；修正链路状态时间戳读取源。
+2.  **增强消息校验与兼容性**：在 CTRLQ 处理流程中增加消息版本号校验、序列号有效性检查，并完善同步/异步/响应等消息类型的参数校验逻辑；引入消息白名单机制，过滤非支持消息并返回特定错误码。
+3.  **修复配置与复位逻辑**：修正 QoS `sl_bitmap` 的初始化与检查逻辑；移除 `unic_set_coalesce` 中对 `UNIC_STATE_DEACTIVATE` 的错误检查，改为正确处理返回值；在 suspend/复位阶段增加 `flush_workqueue` 调用，确保无遗留任务；补充 HIMAC 复位支持。
+4.  **修正日志与错误处理**：修正 IP 地址同步流程中的提示信息，使其更准确；统一各配置接口的错误处理逻辑，避免遗漏错误返回值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/54d9af5e91451e56e898f7a78b501c49e01a206d

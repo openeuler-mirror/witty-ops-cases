@@ -1,0 +1,32 @@
+#标题
+sentry 驱动内存分配不足及初始化缺失导致潜在内存越界与逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在多 Die（超过 2 个）或广播通信场景下，内核模块加载或运行时可能出现内存越界访问、数据损坏或内核 Crash。
+2. `sentry_urma_comm_init` 初始化时 proc 目录权限设置硬编码错误。
+3. 部分通信接口（如 `urma_send`）在目标 EID 为空（广播模式）时错误返回参数无效，导致广播功能失效。
+
+#主要错误日志
+- pr_err("Invalid param, failed to send data\n") （推断：在广播模式下错误触发）
+- pr_err("Failed to allocate memory for msg_str\n")
+- pr_err("Invalid param, failed to process multi eid string\n")
+
+#问题根因
+1. **内存分配不足**：`msg_str` 数组分配大小时仅计算了 `MAX_NODE_NUM * 2`，但实际使用时循环遍历或索引范围达到了 `MAX_NODE_NUM * MAX_DIE_NUM`。当 `MAX_DIE_NUM` 大于 2 时，会导致数组越界访问。
+2. **栈变量未初始化**：多个函数（如 `send_msg_to_userspace_and_ack`、`process_urma_data` 等）中的结构体变量 `msg` 或数组 `send_ack` 未进行初始化（`= {0}`），可能导致后续逻辑判断错误或泄露栈上垃圾数据。
+3. **逻辑与参数校验错误**：`urma_send` 函数未考虑广播模式下 `dst_eid` 为 NULL 的合法情况，导致广播发送失败；`process_multi_eid_string` 中存在冗余且可能错误的参数校验；proc 目录创建时权限使用了硬编码数值而非宏定义。
+
+#解决方案
+1. **修正内存分配**：将 `msg_str` 的内存分配大小由 `MAX_NODE_NUM * 2` 修正为 `MAX_NODE_NUM * MAX_DIE_NUM`，同步修正对应的释放函数 `free_char_array` 的参数，确保分配与访问范围一致。
+2. **完善变量初始化**：对所有涉及的栈上结构体（如 `sentry_msg_helper_msg`、`cis_message`）和字符数组（`send_ack`）强制初始化为 0。
+3. **修复逻辑判断**：
+   - 移除 `urma_send` 中对 `dst_eid` 非空的强制检查，允许广播模式（dst_eid 为 NULL）。
+   - 移除 `process_multi_eid_string` 中对 `eid_max_num` 的不正确限制。
+   - 修正 `LOCAL_EID_MAX_LEN` 宏定义计算逻辑。
+   - 将 `proc_mkdir_mode` 的权限参数由硬编码 `0550` 改为宏 `PROC_DIR_PERMISSION`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fbd470532402c4427300c84ac5056fcce7ac5b5b

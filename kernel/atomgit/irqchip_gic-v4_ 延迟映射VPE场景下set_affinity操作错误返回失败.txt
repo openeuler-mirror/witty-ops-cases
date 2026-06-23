@@ -1,0 +1,20 @@
+#标题
+irqchip/gic-v4: 延迟映射VPE场景下set_affinity操作错误返回失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 GICv4.0 且依赖 ITSList 特性的实现场景下，当 Guest 尚未发送 MAPTI 命令导致 VPE 处于延迟映射（lazily-mapped）状态时，对 VPE 执行 set_affinity 操作会错误地返回失败，影响中断亲和性设置流程。
+
+#主要错误日志
+未知
+
+#问题根因
+由于 `its_vpe_set_affinity` 函数在检查 `vmapp_count` 为 0（即 VPE 尚未映射）时，直接返回 `-EINVAL` 错误码，未区分 GICv4.1 的主动映射（Eager mapping）与 GICv4.0 的延迟映射（Lazy mapping）场景。对于延迟映射的 VPE，在硬件层面尚未映射时执行 set_affinity 是合法操作，不应返回错误。
+
+#解决方案
+修改 `its_vpe_set_affinity` 函数逻辑：当检测到 `vmapp_count` 为 0 时，增加对映射模式的判断。若为主动映射模式（`gic_requires_eager_mapping()` 为真），则返回 `-EINVAL`；若为延迟映射模式，则视为正常情况，直接更新中断的有效亲和性并返回 `IRQ_SET_MASK_OK_DONE`，避免不必要的硬件操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3424b485dd59c99c9f84f6c48acfc9ae3314ef97

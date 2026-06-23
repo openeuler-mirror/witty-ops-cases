@@ -1,0 +1,24 @@
+#标题
+mptcp: pm: ADD_ADDR ID 0 重传时使用了错误的 ID
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MPTCP (MultiPath TCP) 协议中，当端点对应初始子流（Initial Subflow）时，其 ID 应被设置为 0。但在处理 ADD_ADDR 选项的重传时，系统使用了错误的 ID（非 0 的初始 ID），而不是正确的 ID 0。这导致 ADD_ADDR 消息的重传行为不符合 MPTCP 协议规范，可能影响地址通告的正确性。
+
+#主要错误日志
+未知
+
+#问题根因
+在将 ADD_ADDR 信息添加到列表时，代码先拷贝了地址信息（包含 IP、端口和 ID）。根据 MPTCP 协议，如果端点对应初始子流，ID 应设置为 0。然而，代码逻辑中 ID 重置为 0 的操作发生在 ADD_ADDR 条目拷贝之后。具体来说，`mptcp_pm_alloc_anno_list()` 函数被调用时使用的是原始 ID（非 0），随后的 ID 0 修正逻辑虽然修改了 `local.addr.id`，但并未影响已拷贝到 anno list 中的数据。因此，重传机制从列表中获取到的 ID 依然是错误的初始 ID。
+
+#解决方案
+调整 ID 处理顺序，在调用 `mptcp_pm_alloc_anno_list()` 分配并拷贝 ADD_ADDR 条目之前，先判断并修正 ID。具体修改为：
+1. 在调用 `mptcp_pm_alloc_anno_list` 之前，先保存原始端点 ID 到临时变量 `endp_id`。
+2. 判断如果端点 ID 等于 `mpc_endpoint_id`，则将 `local.addr.id` 修改为 0。
+3. 使用修正后的 `local.addr.id` 调用 `mptcp_pm_alloc_anno_list`，确保存入列表的是正确的 ID 0。
+4. 后续清除位图操作使用保存的原始 `endp_id`，保证逻辑一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/63e53b268505c242fea263b2034a5748b77f57e4

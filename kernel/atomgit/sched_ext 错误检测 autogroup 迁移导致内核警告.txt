@@ -1,0 +1,36 @@
+#标题
+sched_ext 错误检测 autogroup 迁移导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当进程从非根 cgroup 迁移到根 cgroup 的 autogroup 时，`scx_move_task()` 错误地将其识别为 autogroup 迁移并忽略处理，导致触发内核 `WARNING` 警告。调用栈显示警告发生在 `scx_cgroup_can_attach` 函数中，系统检测到不一致的状态。
+
+#主要错误日志
+WARNING: CPU: 7 PID: 1 at kernel/sched/ext.c:3725 scx_cgroup_can_attach+0x196/0x340
+...
+Call Trace:
+  <TASK>
+    cgroup_migrate_execute+0x5b1/0x700
+    cgroup_attach_task+0x296/0x400
+    __cgroup_procs_write+0x128/0x140
+    cgroup_procs_write+0x17/0x30
+    kernfs_fop_write_iter+0x141/0x1f0
+    vfs_write+0x31d/0x4a0
+    __x64_sys_write+0x72/0xf0
+    do_syscall_64+0x82/0x160
+    entry_SYSCALL_64_after_hwframe+0x76/0x7e
+
+#问题根因
+`scx_move_task()` 由 `sched_move_task()` 调用，后者同时处理 cgroup 迁移和 autogroup 迁移。原实现试图通过检查目标 cgroup 和 `PF_EXITING` 标志来过滤掉 autogroup 迁移，但这种判断方式不够准确。在没有明确标记当前线程是否正在进行 cgroup 迁移的情况下，无法有效区分“竞争迁移到根 cgroup”与“autogroup 迁移”这两种情况。这导致从非根 cgroup 迁移到根 cgroup 的 autogroup 时，代码错误地忽略了这次迁移操作，从而触发警告。
+
+#解决方案
+为 `sched_move_task()` 函数增加一个 `bool for_autogroup` 参数，用于明确指示当前调用是否针对 autogroup 迁移。
+1. 修改 `kernel/sched/core.c` 中的 `sched_move_task()` 定义，增加参数，并在函数内部仅当 `for_autogroup` 为 `false` 时调用 `scx_cgroup_move_task()`（原 `scx_move_task()`）。
+2. 修改 `kernel/sched/autogroup.c` 中的调用点，传入 `true` 表示这是 autogroup 迁移。
+3. 修改 `kernel/sched/core.c` 中 `cpu_cgroup_attach` 的调用点，传入 `false` 表示这是 cgroup 迁移。
+4. 将 `scx_move_task()` 重命名为 `scx_cgroup_move_task()` 以更准确反映其功能，并移除了原先不准确的过滤逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e179127c13cb76525e87c16a39c19d4fa76e78a8

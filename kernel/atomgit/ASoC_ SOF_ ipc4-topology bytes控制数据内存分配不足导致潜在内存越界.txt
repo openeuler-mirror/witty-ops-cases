@@ -1,0 +1,27 @@
+#标题
+ASoC: SOF: ipc4-topology bytes控制数据内存分配不足导致潜在内存越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载字节控制类型的音频拓扑时，驱动分配的内存大小不足以容纳完整的负载数据。这可能导致内核内存越界写入，进而引发内核崩溃或内存破坏。
+
+#主要错误日志
+- "insufficient maximum size for a bytes control %s: %zu.\n"
+- "bytes control %s initial data size %zu exceeds max %zu.\n"
+- "bytes control %s initial data size %zu is insufficient.\n"
+
+#问题根因
+在处理 SOF（Sound Open Firmware）ipc4-topology 的 bytes controls 时，分配 `scontrol->ipc_control_data` 内存仅依据拓扑提供的 `max_size`，未考虑到该结构体实际所需内存应包含两部分：
+1. 内核本地结构体 `struct sof_ipc4_control_data` 的大小；
+2. 拓扑定义的 `sof_abi_hdr` 及其 payload 大小（即 `max_size`）。
+由于缺少对 `struct sof_ipc4_control_data` 大小的预留，导致分配的内存空间小于实际写入的数据大小。
+
+#解决方案
+修正内存分配逻辑与校验条件：
+1. 调整内存分配大小计算公式，将 `struct sof_ipc4_control_data` 的大小计入总分配量：`kzalloc(sizeof(*control_data) + scontrol->max_size, GFP_KERNEL)`。
+2. 修正对 `max_size` 和 `priv_size` 的边界检查逻辑，确保拓扑提供的参数满足最小要求（如 `max_size` 必须至少为 `sof_abi_hdr` 大小）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/69a3f4fbbeb0c466c929f4adb4aabb29c1257ea7

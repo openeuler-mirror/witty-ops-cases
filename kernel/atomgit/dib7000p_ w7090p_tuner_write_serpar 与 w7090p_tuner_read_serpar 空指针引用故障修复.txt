@@ -1,0 +1,24 @@
+#标题
+dib7000p: w7090p_tuner_write_serpar 与 w7090p_tuner_read_serpar 空指针引用故障修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 w7090p_tuner_write_serpar 或 w7090p_tuner_read_serpar 函数时，若传入的 i2c_msg 数据长度不符合预期（过小），代码会直接访问 msg[0].buf[0] 或后续缓冲区指针，导致发生空指针解引用，引发内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 w7090p_tuner_write_serpar 和 w7090p_tuner_read_serpar 在处理 i2c_msg 时，未对消息长度 `msg[0].len` 和 `msg[1].len` 进行有效性检查。
+在 `w7090p_tuner_write_serpar` 中，代码直接访问 `msg[0].buf[0]`，若 `msg[0].len` 小于 3，可能导致越界访问。
+在 `w7090p_tuner_read_serpar` 中，代码直接访问 `msg[0].buf[0]` 并可能写入 `msg[1].len` 相关缓冲区，若 `msg[0].len` 小于 1 或 `msg[1].len` 小于 2，会导致空指针解引用或内存越界。
+
+#解决方案
+在函数入口处增加对 i2c_msg 长度的校验。
+在 `w7090p_tuner_write_serpar` 中增加判断：若 `msg[0].len < 3`，直接返回 `-EOPNOTSUPP`。
+在 `w7090p_tuner_read_serpar` 中增加判断：若 `msg[0].len < 1` 或 `msg[1].len < 2`，直接返回 `-EOPNOTSUPP`。以此防止后续代码对非法长度的缓冲区进行访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c247e11b31413e05302a06d7bc77b406b94d221c

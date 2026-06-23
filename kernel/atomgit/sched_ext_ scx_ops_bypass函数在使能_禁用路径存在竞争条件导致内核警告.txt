@@ -1,0 +1,32 @@
+#标题
+sched_ext: scx_ops_bypass函数在使能/禁用路径存在竞争条件导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 sched_ext 自测测试用例（如 `exit` 测试）时，触发内核 WARNING，导致测试失败。具体表现为在内核调度器扩展模块的初始化或退出流程中，`scx_ops_bypass` 函数内部的 `WARN_ON_ONCE` 被触发，打印调用栈信息。
+
+#主要错误日志
+[   14.935078] WARNING: CPU: 2 PID: 360 at kernel/sched/ext.c:4332 scx_ops_bypass+0x1ca/0x280
+[   14.935244] RIP: 0010:scx_ops_bypass+0x1ca/0x280
+[   14.953383] WARNING: CPU: 2 PID: 360 at kernel/sched/ext.c:4335 scx_ops_bypass+0x1d8/0x280
+
+#问题根因
+`scx_ops_bypass()` 函数在 ops enable/disable 路径上存在竞争条件。原实现使用原子变量 `scx_ops_bypass_depth` 进行计数，但在多线程并发调用时（例如一个线程在 init 路径退出调度 `scx_ops_disable_workfn()`，另一个线程在 enable 路径调用），会出现如下竞争场景：
+1. 线程A调用 `scx_ops_bypass(true)`，depth 设为 1。
+2. 线程B在 init 路径退出，调度 `scx_ops_disable_workfn()`。
+3. 线程B调用 `scx_ops_bypass(false)`，depth 减为 0。
+4. 线程A再次调用 `scx_ops_bypass(true)`，depth 设为 1。
+5. 此时 `scx_ops_bypass()` 在遍历 CPU 时发生竞争，导致状态不一致（如 depth 计数错误或触发断言）。
+
+#解决方案
+将 `scx_ops_bypass_depth` 从原子变量修改为普通整型变量，并引入 `raw_spinlock` 锁（`__scx_ops_bypass_lock`）来同步 `scx_ops_bypass()` 的执行。
+具体修改包括：
+1. 新增 `static DEFINE_RAW_SPINLOCK(__scx_ops_bypass_lock)`。
+2. 将 `scx_ops_bypass_depth` 定义改为普通 `int` 类型。
+3. 在 `scx_ops_bypass()` 函数入口处使用 `raw_spin_lock_irqsave` 加锁，出口处解锁。
+4. 将临界区内的 `rq_lock_irqsave` 改为 `rq_lock`，`rq_unlock_irqrestore` 改为 `rq_unlock`，因为外层锁已经提供了中断保护。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7b489cd64ada04c12364a7341f6a0c286b931384

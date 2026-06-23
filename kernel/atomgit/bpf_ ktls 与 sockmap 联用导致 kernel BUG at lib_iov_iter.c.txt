@@ -1,0 +1,26 @@
+#标题
+bpf: ktls 与 sockmap 联用导致 kernel BUG at lib/iov_iter.c
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 BPF 程序操作 ktls (kernel TLS) 与 sockmap 交互时，若 BPF 程序调用了 `bpf_msg_push_data` 增加数据长度并设置了 `cork_bytes`，系统触发 kernel BUG，导致 panic。调用栈显示崩溃发生在 `iov_iter_revert` 函数中。
+
+#主要错误日志
+[ 2172.936997] ------------[ cut here ]------------
+[ 2172.936999] kernel BUG at lib/iov_iter.c:629!
+......
+[ 2172.945795]  ? iov_iter_revert+0x178/0x180
+[ 2172.946031]  ? iov_iter_revert+0x178/0x180
+......
+[ 2172.947913]  tls_sw_sendmsg_locked.isra.0+0x794/0x840
+
+#问题根因
+在 `tls_sw_sendmsg_locked` 处理过程中，BPF 程序通过 `bpf_msg_push_data` 增加了 `msg_pl->sg` 的长度。当 BPF 程序设置 `cork_bytes` 且 `sg.size` 小于 `cork_bytes` 时，函数返回 `-ENOSPC`。原代码逻辑尝试通过 `iov_iter_revert` 回滚 `msg->msg_iter`，但因为 `msg_pl->sg.size` 已经被 BPF 修改（增大），回滚的字节数计算错误，导致 `msg_iter` 指针越界或状态不一致，从而触发 `iov_iter_revert` 中的 BUG。
+
+#解决方案
+修改 `tls_sw_sendmsg_locked` 中的错误处理逻辑：当检测到返回值为 `-ENOSPC` 且设置了 `cork_bytes` 时，不再尝试回滚 `msg_iter` (即不跳转至 `rollback_iter`)，而是直接将返回值置为 0 并跳转至 `send_end` 结束发送。这避免了错误的 `iov_iter_revert` 调用，同时也符合 cork 场景下数据缓存而不报错的行为预期。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/49012c4ad7d5a73de0cbe1707f3edfec2f39c17c

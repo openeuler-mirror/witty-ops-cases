@@ -1,0 +1,29 @@
+#标题
+arm64/mpam: CDP启用时closid配置访问错误导致资源配置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统启用 CDP（Code and Data Prioritization）功能，但硬件资源不支持 CDP 的场景下，MPAM 模块对 closid 的配置访问错误。具体表现为：
+1. 资源配置读取（resctrl_arch_get_config）时，可能获取到错误的配置索引。
+2. 资源配置更新（resctrl_arch_update_one）时，配置未能正确同步应用到对应的硬件部分。
+3. 带宽控制解析逻辑异常，可能导致配置应用失败或行为不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+当 CDP 在系统层面启用，但特定资源不支持 CDP 时（通过 `mpam_resctrl_hide_cdp` 判断为真），代码中对 `resctrl_get_config_index` 的调用逻辑存在缺陷：
+1. **获取配置时**：原代码强制使用 `CDP_CODE` 类型计算 partid，忽略了实际传入的 type，导致索引计算可能与预期不符。
+2. **更新配置时**：原代码未处理“不支持 CDP 的资源在 CDP 启用时需同时更新 CODE 和 DATA 两个部分”的逻辑，导致配置更新不完整。
+3. **架构接口滥用**：`resctrl_arch_hide_cdp` 接口被不合理地导出并在通用代码中使用，且 x86 架构定义该接口始终返回 false，导致逻辑判断与 MPAM 实际需求不一致。
+
+#解决方案
+1. **修正配置获取逻辑**：在 `resctrl_arch_get_config` 中，若资源不支持 CDP 但系统开启了 CDP，统一将 type 重置为 `CDP_DATA` 进行索引计算，修正 partid 获取逻辑。
+2. **修正配置更新逻辑**：在 `resctrl_arch_update_one` 中，增加对 `mpam_resctrl_hide_cdp` 场景的处理。当检测到此条件时，分别计算 `CDP_CODE` 和 `CDP_DATA` 对应的 partid，并将配置同时应用到这两个部分，确保底层硬件配置的一致性。
+3. **优化带宽解析路径**：移除 `parse_bw` 函数中对 `resctrl_arch_hide_cdp` 的显式判断分支，直接使用 schema 的 `conf_type` 进行配置，简化逻辑并修正调用层级。
+4. **接口重构**：将 `resctrl_arch_hide_cdp` 从通用接口改为 MPAM 内部静态函数 `mpam_resctrl_hide_cdp`，并移除 x86 架构中的冗余定义，确保该逻辑仅作用于 MPAM 架构内部。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/237bf999e9491bdf17f0d0c2f3e1c3e27ce11383

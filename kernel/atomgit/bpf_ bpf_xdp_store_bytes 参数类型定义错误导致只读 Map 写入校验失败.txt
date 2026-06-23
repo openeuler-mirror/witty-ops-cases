@@ -1,0 +1,23 @@
+#标题
+bpf: bpf_xdp_store_bytes 参数类型定义错误导致只读 Map 写入校验失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BPF 程序中调用 `bpf_xdp_store_bytes` 辅助函数，且第三个参数（`arg3`）指向一个具有 `BPF_F_RDONLY_PROG` 标记的只读 Map 时，BPF 校验器错误地拒绝加载，报错提示禁止写入 Map，导致合法的 BPF 程序无法运行。
+
+#主要错误日志
+```
+639: (85) call bpf_xdp_store_bytes#190
+write into map forbidden, value_size=6 off=0 size=4
+```
+
+#问题根因
+`bpf_xdp_store_bytes_proto` 结构体中，第三个参数的类型 `arg3_type` 被错误地定义为 `ARG_PTR_TO_UNINIT_MEM`。该类型在 BPF 校验器内部包含 `MEM_WRITE` 标志，导致校验器对该参数进行写权限检查。当传入的指针指向只读 Map 时，校验器检测到写操作并拒绝执行。实际上该参数应允许传入只读内存指针，定义与函数实际行为不匹配。
+
+#解决方案
+修改 `net/core/filter.c` 文件中 `bpf_xdp_store_bytes_proto` 的 `arg3_type` 定义，将其从 `ARG_PTR_TO_UNINIT_MEM` 更正为 `ARG_PTR_TO_MEM | MEM_RDONLY`，移除不必要的写权限强制要求，使其与 `bpf_skb_store_bytes` 的参数定义保持一致，从而允许 BPF 程序传入只读 Map 的指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e51cfabb17ac0753403e82d90c951d917b76f3c9

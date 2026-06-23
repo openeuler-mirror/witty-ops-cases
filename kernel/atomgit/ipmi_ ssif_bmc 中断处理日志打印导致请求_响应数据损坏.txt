@@ -1,0 +1,29 @@
+#标题
+ipmi: ssif_bmc 中断处理日志打印导致请求/响应数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在长时间运行的压力测试中，SSIF BMC 驱动出现请求或响应数据损坏。由于 I2C 从机中断处理程序执行时间过长，改变了 I2C 传输的时序行为，导致数据传输异常。
+
+#主要错误日志
+（注：以下为修复前可能触发的警告日志，修复后级别变更为 dbg）
+- "Warn: Request exceeded 254 bytes, aborting"
+- "Warn: %s unexpected READ REQUESTED in state=%s\n"
+- "Warn: Unknown SMBus read command=0x%x"
+- "Warn: %s unexpected READ PROCESSED in state=%s\n"
+- "Warn: %s unexpected WRITE REQUEST in state=%s\n"
+- "Warn: %s unexpected WRITE RECEIVED in state=%s\n"
+- "Warn: Unknown SMBus write command=0x%x"
+- "Warn: %s unexpected SLAVE STOP in state=%s\n"
+- "Warn: Unknown i2c slave event\n"
+
+#问题根因
+I2C 从机中断处理器需要尽可能快地执行，大多数 I2C 从机 IRQ 实现是基于字节级别的。在中断上下文中使用 dev_warn 进行日志打印，会显著影响传输行为和时序，偶尔会破坏时序从而导致请求/响应数据损坏。
+
+#解决方案
+将 SSIF BMC 驱动中断回调函数中的日志打印级别从 dev_warn 降低为 dev_dbg，以减少中断处理耗时，避免干扰 I2C 传输时序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a5fe8cc38b71d182c87e5320e71023b0a51a0b9f

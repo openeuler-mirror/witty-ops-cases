@@ -1,0 +1,20 @@
+#标题
+ipv4: inet_blackhole_dev_init 函数 NULL 与错误指针检查修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统初始化阶段，若 `inetdev_init` 函数执行失败，`inet_blackhole_dev_init` 原有的错误检查逻辑无法正确识别失败状态。由于 `inetdev_init` 从不返回 NULL，原有的 `!inetdev_init(...)` 判断永远为假，导致错误被忽略，函数返回 0（成功）。这可能掩盖内存分配失败等异常，导致后续 blackhole_netdev 设备处于未正确初始化的状态，可能引发内核恐慌或网络子系统的不确定行为。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `inetdev_init()` 的返回值遵循标准的 ERR_PTR 机制，它从不返回 NULL，而是通过返回错误指针（如 `-ENOMEM`）来表示失败。代码中的错误检查逻辑 `if (!inetdev_init(blackhole_netdev))` 错误地检查了是否为 NULL，该条件永远不成立，导致无法捕获初始化失败的情况，错误地将失败状态视为成功。
+
+#解决方案
+修改 `inet_blackhole_dev_init` 函数的错误处理逻辑。将 `inetdev_init` 的返回值保存到局部变量 `in_dev` 中，并使用 `PTR_ERR_OR_ZERO(in_dev)` 宏替代原有的错误检查代码。该宏能够正确处理错误指针和正常指针，若为错误指针则返回相应的错误码，若为正常指针则返回 0，从而正确向上层传递初始化结果。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e43b1aed4ff059c1e2f2d19b485a2ff41820990f

@@ -1,0 +1,20 @@
+#标题
+crypto: algif_hash 哈希 accept 调用致双重释放漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `algif_hash` 类型的 socket 上调用 `accept(2)` 系统调用时，若设置了 `MSG_MORE` 标志且 `crypto_ahash_import` 执行失败，会触发 slab-use-after-free（释放后使用）错误，导致内核内存管理混乱或系统崩溃。
+
+#主要错误日志
+slab-use-after-free
+
+#问题根因
+在函数 `hash_accept` 中，当 `crypto_ahash_import` 失败时，代码逻辑会显式调用 `sock_orphan(sk2)` 和 `sock_put(sk2)` 释放 socket 结构体 `sk2`。然而，后续的错误处理流程或正常的 socket 关闭流程（通过 `af_alg_release`）会再次释放该 socket，导致双重释放错误。
+
+#解决方案
+删除 `hash_accept` 函数中 `crypto_ahash_import` 失败分支内的 `sock_orphan` 和 `sock_put` 调用。修复后，错误处理跳转至 `out_free_state` 标签，仅释放临时的 state 内存，socket 资源的释放交由上层调用者或标准 socket 生命周期管理函数处理，从而避免重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca3e435628eb17afbac0e75f8e1d12fb2dcfd16d

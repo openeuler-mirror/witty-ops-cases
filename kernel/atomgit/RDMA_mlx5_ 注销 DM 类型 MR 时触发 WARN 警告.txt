@@ -1,0 +1,31 @@
+#标题
+RDMA/mlx5: 注销 DM 类型 MR 时触发 WARN 警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 RDMA 设备或注销 MR（Memory Region）时，若 MR 类型为 DM（Device Memory），内核会触发 WARN_ON 警告。具体场景为调用 `__mlx5_ib_dereg_mr` -> `mlx5_free_priv_descs` 流程时，代码错误地尝试对一个未映射的 DMA 地址执行 `dma_unmap_single()` 操作，导致 IOMMU 子系统检测到非法映射地址并打印警告堆栈。此问题伴随 CVE-2025-21888。
+
+#主要错误日志
+WARNING: CPU: 12 PID: 1346 at drivers/iommu/dma-iommu.c:1230 iommu_dma_unmap_page+0x79/0x90
+...
+Call Trace:
+ <TASK>
+ ? __warn+0x84/0x190
+ ? iommu_dma_unmap_page+0x79/0x90
+ ...
+ dma_unmap_page_attrs+0xe6/0x290
+ mlx5_free_priv_descs+0xb0/0xe0 [mlx5_ib]
+ __mlx5_ib_dereg_mr+0x37e/0x520 [mlx5_ib]
+ ib_dereg_mr_user+0x5f/0x120 [ib_core]
+ ...
+
+#问题根因
+DM（Device Memory）类型的内存区域（MR）没有关联的 `umem` 结构。在 `mlx5_free_priv_descs` 函数中，原有的判断条件仅检查了 `!mr->umem`。由于 DM 类型的 MR 满足 `!mr->umem` 这一条件，导致代码错误地进入了释放分支，试图对并未进行 DMA 映射的地址调用 `dma_unmap_single()`，从而触发了 IOMMU 层的警告。
+
+#解决方案
+在 `mlx5_free_priv_descs` 函数的判断条件中增加对 MR 类型的检查。修改后的逻辑排除了 `IB_MR_TYPE_DM` 类型，确保 DM 类型的 MR 不会执行错误的 DMA 解映射操作。具体修改为将判断条件从 `if (!mr->umem && mr->descs)` 修改为 `if (!mr->umem && mr->ibmr.type != IB_MR_TYPE_DM && mr->descs)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/356c815756bb28f0528b17e6dde8289fdd4afeb5

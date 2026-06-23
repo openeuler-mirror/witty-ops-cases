@@ -1,0 +1,24 @@
+#标题
+KVM nSVM: LMSW 指令模拟未正确触发 SVM_EXIT_CR0_SEL_WRITE 退出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 KVM 嵌套虚拟化场景下，L1 虚拟机监控程序（Hypervisor）设置了对 CR0 寄存器的选择性写拦截（INTERCEPT_SELECTIVE_CR0）。当 L2 客户机执行 LMSW（Load Machine Status Word）指令修改 CR0 时，KVM 错误地应用了 MOV-to-CR0 的拦截逻辑（即仅当 CR0.MP 和 CR0.TS 以外的位发生变化时才触发退出）。这导致本应触发的 VMEXIT 被忽略，L1 无法捕获到 L2 的 CR0 变更行为，破坏了 L1 Hypervisor 对 L2 客户机行为的控制与隔离预期。
+
+#主要错误日志
+未知
+
+#问题根因
+根因在于 `svm_check_intercept` 函数在处理 `x86_intercept_lmsw` 时，错误地复用了 MOV-to-CR0 的检查逻辑。
+根据 AMD 处理器编程手册（APM）Table 15-7 说明，LMSW 指令应将“选择性 CR0 写拦截”视为“非选择性拦截”，即无论写入的值是什么，只要设置了拦截位就应触发退出。代码中原本的逻辑却先屏蔽了部分位再比较差异，导致不符合硬件规范的拦截行为。
+
+#解决方案
+修改 `arch/x86/kvm/svm/svm.c` 文件中的 `svm_check_intercept` 函数逻辑：
+1. 在处理 CR0 相关拦截时，增加对 `x86_intercept_lmsw` 的特判。
+2. 若拦截类型为 `x86_intercept_lmsw`，直接设置退出码为 `SVM_EXIT_CR0_SEL_WRITE` 并跳出，不再进行后续的位掩码比对检查。
+3. 仅对 MOV-to-CR0 操作保留原有的位变更检查逻辑，确保符合硬件规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/794b7bedbb4a5b9144fb04da628d57399f7e30d4

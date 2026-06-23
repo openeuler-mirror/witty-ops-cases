@@ -1,0 +1,22 @@
+#标题
+hwmon: (acpi_power_meter) 误报电源告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在不支持通知机制的平台上，当电源受限（power capping）结束时，如果当前平均功率小于功率上限值，用户查询 `power1_alarm` 属性仍会收到虚假的电源告警（fake power alarm），显示状态为告警触发，但实际上功率已低于上限。
+
+#主要错误日志
+未知
+
+#问题根因
+资源结构体中的 `resource->power_alarm` 标志位在第一步查询（发生电源受限时）被设置为 true。后续在电源受限结束且功率已低于上限的场景下查询 `power1_alarm` 时，代码逻辑直接使用了旧的 `power_alarm` 状态值，而未根据当前实际功率与上限值的比较结果来更新该标志位，导致上报了过时的、虚假的告警状态。
+
+#解决方案
+修改 `show_val` 函数逻辑，区分是否支持通知机制：
+1. 若不支持通知机制，每次查询时直接比较当前功率与上限值来判定告警状态，并更新 `resource->power_alarm` 标志位。
+2. 确保在功率已低于上限时，`power_alarm` 标志位被正确更新为 false，从而避免误报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4165684bff17d0345a7e6930384b9da3eed89c0d

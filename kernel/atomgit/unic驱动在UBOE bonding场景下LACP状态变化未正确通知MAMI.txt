@@ -1,0 +1,27 @@
+#标题
+unic驱动在UBOE bonding场景下LACP状态变化未正确通知MAMI
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UBOE bonding 场景下，当 LACP（链路聚合控制协议）握手状态发生变化时，驱动未能正确通知 MAMI 修改 bonding 表。具体表现为：LACP 握手成功时未发送端口添加请求，或者握手失败时未发送端口删除请求，导致系统侧 bonding 状态与实际链路状态不一致，可能引发网络流量转发异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 UBOE bonding 场景下，驱动程序通知 MAMI 修改 bonding 表的机制存在逻辑错误。原实现未正确区分 LACP 握手成功与失败两种状态下的处理动作，导致无法在 LACP 状态变化时向 MAMI 发送正确的端口添加或删除请求。
+
+#解决方案
+修改了通知 MAMI 修改 bonding 表的机制，具体修改如下：
+1. 引入 `unic_bond_status` 结构体记录当前状态 `cur_status` 和上次通知状态 `last_notify_status`，并增加互斥锁保护。
+2. 注册 `NETDEV_CHANGELOWERSTATE` 事件回调，捕获 LACP 状态变化（`tx_enabled`），更新内部 `cur_status` 状态并记录日志。
+3. 在同步 bonding 状态函数 `unic_sync_bond_status` 中，比对当前状态与上次通知状态：
+   - 若状态发生变化且当前状态为有效，发送端口添加请求（`UNIC_CTRLQ_BOND_ADD_PORT`）。
+   - 若状态发生变化且当前状态为无效，发送端口删除请求（`UNIC_CTRLQ_BOND_DEL_PORT`）。
+   - 发送成功后更新 `last_notify_status`。
+4. 增加了 debugfs 接口 `bond_status_record` 和 `clear_bond_status_record`，用于查询和清除 bonding 状态变化的历史记录，辅助故障定位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0c84cd76374419dcd3fc508cae9a39bad7011df4

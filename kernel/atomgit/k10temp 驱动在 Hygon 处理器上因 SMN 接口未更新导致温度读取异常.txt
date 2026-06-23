@@ -1,0 +1,23 @@
+#标题
+k10temp 驱动在 Hygon 处理器上因 SMN 接口未更新导致温度读取异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hygon 处理器平台上，k10temp 驱动无法正常工作，导致 CPU 核心温度读取失败或数据异常。具体表现为系统无法正确获取 CPU 温度信息，可能导致监控工具显示错误的温度值或无法显示温度。
+
+#主要错误日志
+未知
+
+#问题根因
+Hygon NB 驱动已从 AMD NB 驱动中分离，SMN（System Management Network）接口现已独立实现。k10temp 驱动代码中针对 Hygon 处理器仍使用旧的 `amd_smn_read` 接口及 AMD 相关的 PCI 设备 ID 宏，导致 SMN 读取接口不匹配，无法正确访问硬件寄存器。
+
+#解决方案
+1. 引入 Hygon NB 头文件 `asm/hygon/hygon_nb.h`。
+2. 新增 Hygon 专用的 SMN 读取函数 `read_tempreg_nb_hygon` 和 `read_hygon_ccd_temp_reg`，替换原有的 AMD 接口调用。
+3. 在温度寄存器读取路径中增加对 Hygon CPU（X86_VENDOR_HYGON && x86 == 0x18）的判断分支，调用 Hygon 专用接口 `hygon_smn_read` 替代 `amd_smn_read`。
+4. 修正 `k10temp_id_table` 中的 PCI 设备 ID 定义，将错误的 AMD 设备 ID `PCI_DEVICE_ID_AMD_17H_M30H_DF_F3` 替换为 Hygon 专用 ID `PCI_DEVICE_ID_HYGON_18H_M04H_DF_F3`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/69ed273fc9c2513b1cdb341b5e6b484d6eb8f92d

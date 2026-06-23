@@ -1,0 +1,21 @@
+#标题
+ubagg: 修复自旋锁解锁函数不匹配问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `ubagg` 模块中查找设备时，若匹配到目标设备，内核尝试释放自旋锁。由于锁的获取与释放函数不匹配（获取时未关闭中断，释放时却尝试恢复中断），可能导致内核状态异常或运行时警告，严重时引发内核恐慌。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `ubagg_find_dev_by_name` 中，锁的获取使用的是 `spin_lock`，而在找到设备返回路径中，锁的释放错误地使用了 `spin_unlock_irqrestore`。
+`spin_lock` 与 `spin_unlock_irqrestore` 必须配对使用，且 `spin_unlock_irqrestore` 需要传入 `flags` 参数来恢复之前的中断状态。原代码中定义了 `flags` 变量但未初始化，且锁获取并未保存中断状态，导致解锁函数不匹配及未初始化变量使用的问题。
+
+#解决方案
+将匹配分支中的解锁函数由 `spin_unlock_irqrestore` 修改为 `spin_unlock`，以确保与入口处的 `spin_lock` 配对，同时删除了未使用的 `flags` 变量，保持代码逻辑正确与整洁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2b60a54831fcbef7d6c9920eaa3aaaed15d2c805

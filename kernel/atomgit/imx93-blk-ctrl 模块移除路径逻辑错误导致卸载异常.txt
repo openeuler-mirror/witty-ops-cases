@@ -1,0 +1,21 @@
+#标题
+imx93-blk-ctrl 模块移除路径逻辑错误导致卸载异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 imx93-blk-ctrl 设备时，由于移除路径函数 `imx93_blk_ctrl_remove` 中的循环条件错误，导致循环无法正常终止（死循环），进而引发内核挂起或阻塞，无法完成驱动卸载流程。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `imx93_blk_ctrl_remove` 中的 for 循环条件书写错误，写成了 `for (i = 0; bc->onecell_data.num_domains; i++)`。由于循环条件 `bc->onecell_data.num_domains` 只要不为 0 即为真，且在循环过程中该值未改变，导致该条件恒真，从而引发死循环。正确的逻辑应为 `i < bc->onecell_data.num_domains`。此外，原移除路径缺少 `pm_runtime_disable` 调用。
+
+#解决方案
+1. 修正 for 循环条件，将错误的 `bc->onecell_data.num_domains` 修改为 `i < bc->onecell_data.num_domains`，确保循环能按预期索引遍历并终止。
+2. 在删除 genpd provider 之后、移除 genpd 域之前，补充调用 `pm_runtime_disable(&pdev->dev)`，确保电源管理资源正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9e7f01f21883b8c1e74302dbac8030cf2771b5ae

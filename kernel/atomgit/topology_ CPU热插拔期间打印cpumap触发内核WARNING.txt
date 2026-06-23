@@ -1,0 +1,31 @@
+#标题
+topology: CPU热插拔期间打印cpumap触发内核WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 fuzz 测试场景下（包含 CPU 热插拔操作），读取 `core_siblings_list` 等拓扑属性时触发内核告警。内核检测到 `kvasprintf` 函数中两次计算格式化字符串长度不一致（例如分别返回 15 和 11），导致 WARNING 并打印调用栈。
+
+#主要错误日志
+WARNING: CPU: 55 PID: 1168477 at lib/kasprintf.c:30 kvasprintf+0x121/0x130
+Call Trace:
+ kvasprintf+0x121/0x130
+ kasprintf+0xa6/0xe0
+ bitmap_print_to_buf+0x89/0x100
+ core_siblings_list_read+0x7e/0xb0
+ kernfs_file_read_iter+0x15b/0x270
+ new_sync_read+0x153/0x260
+ vfs_read+0x215/0x290
+ ksys_read+0xb9/0x160
+ do_syscall_64+0x56/0x100
+ entry_SYSCALL_64_after_hwframe+0x78/0xe2
+
+#问题根因
+`kvasprintf` 函数分两步处理：第一步计算格式化字符串长度，第二步分配缓冲区后实际格式化字符串。在读取 topology 的 cpumap 接口（如 `core_siblings_list_read`）时，如果发生 CPU 热插拔，底层的 `core_cpumask` 会在上述两步之间被修改。这导致第一步和第二步中 `vsnprintf("%*pbl", ...)` 处理的 cpumask 数据不一致，计算出的长度不匹配，从而触发内核 WARNING。
+
+#解决方案
+在 `topology.c` 的 `name##_read` 和 `name##_list_read` 接口函数中，在调用打印函数前，先分配一个临时的 cpumask 变量，将当前的 topology mask 拷贝到该临时变量中。后续打印操作均使用该临时变量，确保在打印过程中 cpumask 数据保持不变，避免并发修改导致的不一致问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b514371d703fbed003ffec049469dc901fadb5fb

@@ -1,0 +1,20 @@
+#标题
+net/handshake: 重复取消握手请求导致套接字泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当对一个握手请求进行重复取消操作时（例如服务端和客户端同时因超时触发取消），会导致套接字引用计数错误。具体表现为：第二次取消请求触发了引用计数下溢，造成套接字泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+当握手请求被取消时，它会被从 `handshake_net->hn_requests` 链表中移除，但在销毁前仍保留在 `handshake_rhashtbl` 中。如果此时第二个取消请求到达，`remove_pending()` 会返回 false。如果此时 `HANDSHAKE_F_REQ_COMPLETED` 标志位未设置，代码会继续执行 `out_true` 标签处的逻辑，导致再次对 sock 进行 put 操作，引发引用计数下溢。典型触发场景为：SUNRPC 客户端发送 AUTH_TLS 探测后因 tlshd 问题未发送 ClientHello，导致服务端与客户端先后因超时触发取消请求。
+
+#解决方案
+在取消路径中增加 `test_and_set_bit(HANDSHAKE_F_REQ_COMPLETED, ...)` 检测，确保如果标志位已被设置（即请求已完成或正在被处理），能立即识别出重复的取消请求并返回 false，从而避免重复释放引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7680428c73cc401a91b40d7e9b2f6b0f5d494ef2

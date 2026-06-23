@@ -1,0 +1,28 @@
+#标题
+AMD IOMMU 页表等级提升时的并发竞争风险修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD IOMMU 驱动进行页表等级提升操作时，若同时存在并发的页表访问请求（如 `alloc_pte` 或 `fetch_pte`），可能导致读取到不一致的页表根指针与页表模式数值。这会导致计算出的页表索引错误，进而引发内存访问越界、IOMMU 映射错误，严重时可能导致内核崩溃或 DMA 数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 `increase_address_space` 函数更新页表根指针（`domain->iop.root`）与页表模式（`domain->iop.mode`）时缺乏同步保护。
+这两个成员变量的更新是非原子的：
+1. 先更新了 `root` 指针。
+2. 随后才增加 `mode` 的值。
+并在这一更新窗口期间，并发的 `alloc_pte` 或 `fetch_pte` 可能读取到新的 `root` 指针但搭配旧的 `mode` 值（或反之），导致计算出错误的页表层级与索引，引发竞争条件。
+
+#解决方案
+引入 seqlock（顺序锁）机制来保护页表根指针与模式的并发更新与读取：
+1. 在 `amd_io_pgtable` 结构体中新增 `seqcount` 成员。
+2. 在 `increase_address_space` 函数中，使用 `write_seqcount_begin` 和 `write_seqcount_end` 包裹对 `root` 和 `mode` 的更新操作，确保写操作的原子性语义。
+3. 在 `alloc_pte` 和 `fetch_pte` 函数中，使用 `read_seqcount_begin` 和 `read_seqcount_retry` 循环来读取 `mode` 和 `root`，确保读取过程中未发生写更新，若发生更新则重试读取。
+4. 在页表初始化函数 `v1_alloc_pgtable` 中初始化该 seqcount。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca58c981fa740c56fa050ac218f4f6b4dbfc0314

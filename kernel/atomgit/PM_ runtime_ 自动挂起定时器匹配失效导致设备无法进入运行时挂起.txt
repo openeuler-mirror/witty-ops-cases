@@ -1,0 +1,20 @@
+#标题
+PM: runtime: 自动挂起定时器匹配失效导致设备无法进入运行时挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用 `pm_runtime_put_autosuspend()` 触发设备的自动挂起时，如果 hrtimer 回调函数 `pm_suspend_timer_fn()` 检测到当前时间恰好等于设定的过期时间（`dev->power.timer_expires`），内核会错误地跳过执行运行时挂起操作。此外，由于过期时间变量未被清零，后续所有的自动挂起请求都将无法正确启动 hrtimer，导致设备彻底失去自动挂起功能。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `pm_suspend_timer_fn()` 函数中，判断是否执行挂起的条件逻辑存在缺陷。原代码仅当 `expires < ktime_get_mono_fast_ns()`（即当前时间已超过过期时间）时才执行挂起。当当前时间精确等于过期时间时，条件判断失败，导致函数直接退出，未执行 `rpm_suspend()`。同时，由于此时 `dev->power.timer_expires` 未被重置为 0，导致后续在 `rpm_suspend()` 中检查 `dev->power.timer_expires` 时误判定时器已处于活动状态，从而拒绝启动新的 hrtimer，阻塞了后续的自动挂起流程。
+
+#解决方案
+修改 `drivers/base/power/runtime.c` 文件中 `pm_suspend_timer_fn()` 的判断条件，将“小于”改为“小于等于”。即从 `expires < ktime_get_mono_fast_ns()` 修改为 `expires <= ktime_get_mono_fast_ns()`，确保当当前时间到达或超过过期时间时，都能正确触发挂起流程并重置 `timer_expires` 变量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/99cc71280c7783882a9cb3c99ab905bf47b99a4d

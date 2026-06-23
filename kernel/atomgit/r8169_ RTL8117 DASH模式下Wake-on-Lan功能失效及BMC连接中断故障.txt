@@ -1,0 +1,22 @@
+#标题
+r8169: RTL8117 DASH模式下Wake-on-Lan功能失效及BMC连接中断故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ASUS Pro WS X570-ACE主板（搭载RTL8168fp/RTL8117网卡）上，当网卡处于DASH模式时，Wake-on-Lan（WoL）网络唤醒功能无法正常工作。此外，在尝试修复WoL过程中，可能会导致OOB（带外）RTL8117远程管理BMC连接中断，影响远程管理功能。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `rtl_prepare_power_down` 中，代码逻辑检测到 `dash_enabled` 时直接返回，导致后续的电源管理准备步骤（包括WoL相关配置）被跳过，从而导致WoL失效。
+同时，在 `rtl8169_down` 函数中，只要检测到 `dash_type != RTL_DASH_NONE` 就会调用 `rtl8168_driver_stop`，这会在启用WoL时错误地停止驱动，进而断开BMC的远程管理连接。
+
+#解决方案
+1. 删除 `rtl_prepare_power_down` 函数中针对 `tp->dash_enabled` 的早期返回逻辑，确保WoL配置流程能够继续执行。
+2. 修改 `rtl8169_down` 函数中的条件判断，在调用 `rtl8168_driver_stop` 前增加对 `!tp->saved_wolopts` 的检查。即仅当DASH模式开启且WoL未启用时才停止驱动，避免在WoL启用时破坏BMC连接。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ca413512220817f741256b479b11a4866df276d9

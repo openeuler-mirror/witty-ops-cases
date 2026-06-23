@@ -1,0 +1,20 @@
+#标题
+GRO 模块将 BUG_ON 宏替换为调试警告以避免潜在内核 panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在网络收包流程使用 GRO (Generic Receive Offload) 功能时，若 `gro_pull_from_frag0` 函数中的 `skb` 尾部空间不足（即 `skb->end - skb->tail < grow`），内核会触发 `BUG_ON()` 导致系统 panic 并立即停止运行。该问题属于防御性代码检查触发，虽然历史记录显示该断言从未被触发过，但一旦触发后果严重。
+
+#主要错误日志
+kernel panic - not syncing: kernel BUG at net/core/gro.c:xxx! (推断，基于 BUG_ON 触发机制)
+
+#问题根因
+原代码在 `gro_pull_from_frag0` 函数中使用 `BUG_ON()` 检查 skb 尾部可用空间。这种实现过于激进，如果条件满足会导致内核直接 panic。实际上该检查点历史上从未触发过错误，且对于此类非致命性、可通过其他方式恢复或调试的内存空间检查，不应使用 `BUG_ON()` 导致系统不可用。
+
+#解决方案
+将 `net/core/gro.c` 文件中 `gro_pull_from_frag0` 函数内的 `BUG_ON(skb->end - skb->tail < grow)` 替换为 `DEBUG_NET_WARN_ON_ONCE(skb->end - skb->tail < grow)`。此修改将致命的 panic 行为降级为仅在网络调试模式下输出警告，避免系统因该检查条件而崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/50592307be02bc9680b682a92a8e3b9276093ef3

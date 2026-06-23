@@ -1,0 +1,20 @@
+#标题
+drm/amdgpu: 提交多个 BO_HANDLES chunks 时错误码被覆盖问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在向 amdgpu 驱动提交数据时，如果用户态传入多个 BO_HANDLES chunks，内核应返回无效参数错误（-EINVAL），但由于逻辑错误，该错误码可能被后续操作的返回值覆盖，导致用户态无法正确感知输入参数违规，可能引发后续处理逻辑异常或状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `amdgpu_cs_pass1` 中，检测到存在多个 BO_HANDLES chunks 时，代码虽然设置了错误返回值 `ret = -EINVAL`，但并未立即退出循环或返回。程序继续向下执行调用 `amdgpu_cs_p1_bo_handles()`，该函数的返回值覆盖了之前的 `ret`，导致原本应保留的 -EINVAL 错误码丢失。
+
+#解决方案
+修改 `drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c` 文件中的逻辑，当检测到多个 BO_HANDLES chunks（即 `p->bo_list` 已存在）时，直接跳转至错误处理标签 `goto free_partial_kdata`，确保 -EINVAL 错误码不被覆盖并立即终止处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4cc1ad5081679a5a39aba367f8dd305a670ad0ba

@@ -1,0 +1,29 @@
+#标题
+scsi: storvsc: PREEMPT_RT 下调度原子上下文导致系统死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 PREEMPT_RT 的 Hyper-V 环境中运行 IO 负载（如 stress-ng-iomix）时，系统触发 "BUG: scheduling while atomic" 错误，并导致系统死锁。
+
+#主要错误日志
+[  415.140818] BUG: scheduling while atomic: stress-ng-iomix/1048/0x00000002
+[  415.140823] Modules linked in: intel_rapl_msr intel_rapl_common ... hv_storvsc ...
+[  415.140846] Preemption disabled at:
+[  415.140847] [<ffffffffc0656171>] storvsc_queuecommand+0x2e1/0xbe0 [hv_storvsc]
+[  415.140854] CPU: 8 UID: 0 PID: 1048 Comm: stress-ng-iomix Not tainted 6.19.0-rc7 #30 PREEMPT_{RT,(full)}
+...
+[  415.140891]  rt_spin_lock+0x89/0x1e0
+[  415.140893]  hv_ringbuffer_write+0x87/0x2a0
+[  415.140899]  vmbus_sendpacket_mpb_desc+0xb6/0xe0
+[  415.140902]  storvsc_queuecommand+0x669/0xbe0 [hv_storvsc]
+
+#问题根因
+在 PREEMPT_RT 内核配置下，`hv_ringbuffer_write` 函数中使用的自旋锁会被转换为 rt-mutex。原代码在 `storvsc_queuecommand` 中调用 `get_cpu()` 禁用了抢占，随后在调用链中尝试获取已转为 rt-mutex 的锁。由于 rt-mutex 是可睡眠的，在抢占被禁用的原子上下文中尝试获取该锁导致了调度错误和死锁。
+
+#解决方案
+将 `storvsc_queuecommand` 函数中获取 CPU ID 的方式由 `get_cpu()`（禁用抢占）修改为 `smp_processor_id()`，并使用 `migrate_disable()` 和 `migrate_enable()` 包裹临界区。此举仅禁用迁移而不禁用抢占，允许在持有 rt-mutex 时进行必要的调度，从而避免 "scheduling while atomic" 错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f22486bb7455dc8385f44b2679e0d7436b16afa5

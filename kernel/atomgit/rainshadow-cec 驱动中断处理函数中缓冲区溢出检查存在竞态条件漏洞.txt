@@ -1,0 +1,20 @@
+#标题
+rainshadow-cec 驱动中断处理函数中缓冲区溢出检查存在竞态条件漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 high-throughput 场景下，rainshadow USB CEC 设备驱动的中断处理函数可能触发缓冲区溢出，导致内核内存越界写入，进而引发系统崩溃或内核数据损坏。
+
+#主要错误日志
+dev_warn_once(rain->dev, "buffer overflow\n");
+
+#问题根因
+在中断处理函数 `rain_interrupt` 中，对缓冲区溢出的检查（`if (rain->buf_len == DATA_SIZE)`）与后续的缓冲区数据写入操作未在同一个临界区内执行。原有代码在持有自旋锁 `rain->buf_lock` 之前就进行了 `buf_len` 的判断，导致存在竞态条件窗口。多个中断可能同时通过溢出检查，并在未同步的情况下写入数据，最终导致缓冲区实际溢出。
+
+#解决方案
+将 `spin_lock` 加锁操作提前至缓冲区溢出检查之前。确保对 `buf_len` 的判断以及后续的数据写入操作均在持有自旋锁的保护下进行，从而消除竞态条件，防止并发中断导致的缓冲区越界写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2f31ed5e4496f3d7faeea3c7d798d8ed3a97b359

@@ -1,0 +1,20 @@
+#标题
+of: unittest: fix use-after-free in testdrv_probe
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 unittest 测试驱动 probe 流程时，触发 use-after-free 故障。具体表现为 `testdrv_probe()` 函数中，在调用 `of_node_put(dn)` 释放设备节点引用后，后续调用 `of_platform_default_populate()` 时访问了已被释放的指针 `dn`。
+
+#主要错误日志
+未知
+
+#问题根因
+`testdrv_probe()` 函数从 PCI 设备获取 `device_node` 指针 `dn` 后，错误地调用了 `of_node_put(dn)`。该引用由 PCI 核心持有，驱动程序不应释放。调用 `of_node_put(dn)` 导致引用计数归零并释放了该节点，随后代码又将已释放的指针 `dn` 传递给 `of_platform_default_populate()`，引发 use-after-free。
+
+#解决方案
+移除 `testdrv_probe()` 函数中错误的 `of_node_put(dn)` 调用，保留设备模型对该引用的所有权，防止节点被提前释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/355b9c94389a4af345ab2d4104290a8eb4db18da

@@ -1,0 +1,27 @@
+#标题
+sctp_vrf.sh 自测脚本因关联未完全释放导致服务端 bind 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+运行 selftests/net/sctp_vrf.sh 测试脚本时，部分测试用例（如 TEST 12）失败。
+具体表现为服务端在重新启动时 bind 系统调用失败，导致测试脚本返回 exit=3。
+复现场景为：客户端发送数据后立即关闭，随后服务端被 kill，此时新启动的服务端尝试绑定端口失败。
+
+#主要错误日志
+TEST 12: bind vrf-2 & 1 in server, connect from client 1 & 2, N [FAIL]
+not ok 1 selftests: net: sctp_vrf.sh # exit=3
+
+#问题根因
+客户端在发送数据后立即关闭连接，若数据未被确认（unacked），客户端将忽略服务端发送的 SHUTDOWN 包。此时服务端被 kill，旧关联（association）在客户端侧仍然存活。
+在下一轮测试中，新服务端尝试 bind 端口时，因与上一轮残留的关联冲突而失败。该残留关联需等待服务端 T2 定时器超时（约 3秒）并完成第二次 SHUTDOWN 后才会消失。
+
+#解决方案
+修改测试工具 sctp_hello.c 与脚本 sctp_vrf.sh，优化测试流程以避免残留关联：
+1. 客户端不再主动发送数据，改为阻塞在 recv() 上等待服务端关闭，确保连接正常退出。
+2. 在 stop_server 和 wait_client 函数中增加等待逻辑，确保服务端和客户端套接字完全释放后再进行下一轮测试。
+3. 修正了测试脚本中 sysctl 和 grep 命令的输出重定向语法，并修正了 TEST 12 描述中的预期结果 typo（N 改为 Y）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e9c617dbffa2cfce8ac890160d748b5a5de1bc8c

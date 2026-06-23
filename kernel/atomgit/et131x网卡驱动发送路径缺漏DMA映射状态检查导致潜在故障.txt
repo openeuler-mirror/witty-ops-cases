@@ -1,0 +1,22 @@
+#标题
+et131x网卡驱动发送路径缺漏DMA映射状态检查导致潜在故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 et131x 网卡驱动进行数据包发送时，若遇到 DMA 映射失败（例如内存不足或设备资源耗尽），驱动程序未进行错误检查便直接使用无效的 DMA 地址配置硬件描述符。这可能导致网卡硬件无法正确读取数据，引发发送失败、网络通信异常；在 IOMMU 开启的环境中，可能触发 IOMMU 页错误，导致内核打印错误日志或引发系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 `nic_send_packet` 函数中调用 `dma_map_single` 或 `dma_map_page` 进行 DMA 地址映射后，未调用 `dma_mapping_error` 检查映射是否成功。当 DMA 映射失败时，代码继续使用无效的 DMA 地址操作硬件，违反了 DMA API 的使用规范。
+
+#解决方案
+在所有 DMA 映射调用点后立即增加 `dma_mapping_error` 检查。若检查发现映射失败，执行以下恢复逻辑：
+1. 立即停止后续描述符处理并返回 `-ENOMEM` 错误。
+2. 对于已经映射成功的描述符，按照映射时的逆序调用 `dma_unmap_page` 或 `dma_unmap_single` 进行资源回滚释放，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aab5b094e3a0dee7e368a38deaac5c4cf5332517

@@ -1,0 +1,29 @@
+#标题
+KASAN 报告触发 vmalloc 死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在运行过程中，当 KASAN 检测到非法地址访问并尝试打印错误报告时，可能会触发内核死锁，导致系统挂起或无响应。该问题通常发生在 vmalloc 分配与 KASAN 报告并发的场景下。
+
+#主要错误日志
+推断：在死锁发生前，通常伴随 KASAN 的错误报告触发，日志中可能包含：
+"The buggy address belongs to the virtual mapping at"
+或修复后变更为：
+"The buggy address %px belongs to a vmalloc virtual mapping"
+
+#问题根因
+KASAN 在报告错误信息时调用了 `kasan_find_vm_area()`，该函数内部会调用 `find_vm_area()`。根据内核定义，`find_vm_area()` 不能在原子上下文中调用。
+死锁发生的典型场景如下：
+1. CPU0 在执行 `vmalloc()` 时持有锁 `spin_lock(&vn->busy.lock)`。
+2. 此时发生中断，CPU0 进入软中断上下文并尝试获取另一个锁 `spin_lock(&some_lock)`。
+3. 同时，CPU1 已经持有 `spin_lock_bh(&some_lock)`，并在访问非法地址时触发 KASAN 报告。
+4. KASAN 报告流程中调用 `find_vm_area()` 尝试获取 `spin_lock(&vn->busy.lock)`。
+5. 此时 CPU0 持有 `vn->busy.lock` 等待 `some_lock`，而 CPU1（或软中断上下文）持有 `some_lock` 等待 `vn->busy.lock`，形成死锁。
+
+#解决方案
+移除 `kasan_find_vm_area()` 函数调用，不再通过 `find_vm_area()` 查询 vmalloc 区域信息。修改 `print_address_description` 函数逻辑，直接使用 `vmalloc_to_page()` 处理 vmalloc 地址，简化打印信息，仅输出该地址属于 vmalloc 映射，不再打印具体的虚拟映射范围和调用者信息，从而避免在 KASAN 报告路径中获取可能导致死锁的锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1378cacaaca134f12f8c6dc711cbae23d78bc12d

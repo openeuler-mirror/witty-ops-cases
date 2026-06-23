@@ -1,0 +1,22 @@
+#标题
+sw64架构512M大页页表映射错误导致用户态访问地址异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 512M 大页的场景下，应用程序访问内存时发生错误地址访问（incorrect address access）。该问题由 `gup_huge_pmd()` 函数获取到错误的页面引发，导致数据访问异常或潜在的内存数据不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 sw64 架构上，512M 大页由 64 个连续的 8M 大页组成。在设置页表项时，代码错误地将第一个 8M 大页的 PFN（页帧号）赋值给了所有 64 个连续的 PMD（页中间目录）项，并设置了 HPFN 位。由于 `gup_huge_pmd()` 中会使用 `PMD_MASK` 进行地址计算，错误的 PFN 设置导致计算出的页面地址错误，从而引发访问异常。
+
+#解决方案
+修复页表设置逻辑，确保每个 PMD 的 PFN 独立递增对应到具体的 8M 大页。具体修改如下：
+1. 在 `set_huge_pte_at`、`huge_ptep_set_wrprotect`、`huge_ptep_set_access_flags` 以及 KVM 的 `apt_set_pmd_huge` 函数中引入 `dpfn` 变量（值为 `PMD_SIZE >> PAGE_SHIFT`）。
+2. 在循环设置连续 PMD 项时，每次迭代将 PFN 值增加 `dpfn`，并同步更新 `new_pmd` 结构，保证每个 PMD 项映射到正确的物理内存区域。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/96c78807d948755bd323a8dcc61d3308f7d80dd4

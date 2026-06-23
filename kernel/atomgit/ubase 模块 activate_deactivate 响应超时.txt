@@ -1,0 +1,25 @@
+#标题
+ubase 模块 activate/deactivate 响应超时
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 ctrlq crq 任务执行时间过长时，会阻塞 cmdq crq 任务，导致 ubase 模块无法及时响应 activate（激活）或 deactivate（去激活）消息，出现响应超时现象。
+
+#主要错误日志
+ubase_warn(udev, "ctrlq crq callback executed in %lums.\n", time_cost);
+ubase_warn(udev, "rate limited log: ctrlq_self_seq_invalid_log_cnt = %u, ctrlq_other_seq_invalid_log_cnt = %u.\n", ...);
+ubase_err(udev, "failed to alloc ubase ctrlq workqueue.\n");
+
+#问题根因
+当前代码实现中，cmdq crq 任务和 ctrlq crq 任务共用同一个 workqueue。当 ctrlq crq 任务的处理逻辑耗时较长时，会占用该工作队列，从而阻塞 cmdq crq 任务的调度与执行，进而导致 ubase activate/deactivate 消息响应超时。
+
+#解决方案
+将 cmdq crq 任务和 ctrlq crq 任务的执行隔离到两个不同的 workqueue 中。
+1. 新增独立的 `ubase_ctrlq_wq` 工作队列，并在设备初始化时创建。
+2. 将 ctrlq 相关的服务任务（`ubase_ctrlq_crq_service_task`）绑定到新创建的 `ubase_ctrlq_wq` 上执行。
+3. 同时增加了 ctrlq crq 回调耗时的监控日志，当执行时间超过 200ms 时打印警告信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/213eaceb5fe75af444c531bed249fa235ab7f148

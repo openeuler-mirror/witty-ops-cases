@@ -1,0 +1,20 @@
+#标题
+scsi: ufs: mcq: 修复 ufshcd_mcq_abort 中空指针访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UFS MCQ（Multi-Circular Queue）模式下执行 IO 命令中止操作（abort）时，如果对应的命令已经执行完成，`ufshcd_mcq_req_to_hwq` 函数可能返回 NULL。此时若直接使用该返回值进行后续操作，将引发空指针解引用，导致内核崩溃或调用栈异常。
+
+#主要错误日志
+- dev_err(hba->dev, "%s: skip abort. cmd at tag %d already completed.\n", __func__, tag);
+
+#问题根因
+原代码逻辑先检查 `ufshcd_cmd_inflight`，若命令不在执行中则直接返回，这在 MQC 场景下判断不准确。修复前的代码流程中，未对 `ufshcd_mcq_req_to_hwq` 的返回值进行 NULL 校验就直接使用。当命令已完成时，该函数返回 NULL，后续代码直接使用该指针导致空指针访问故障。
+
+#解决方案
+删除了对 `ufshcd_cmd_inflight` 的前置检查逻辑，改为在调用 `ufshcd_mcq_req_to_hwq` 获取硬件队列指针后，立即增加 NULL 判断。若 `hwq` 为 NULL，则打印错误日志并返回 `FAILED`，从而避免对空指针的后续访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/07ed41d10809d8b262bd41c2464cf07b731bc227

@@ -1,0 +1,20 @@
+#标题
+aspeed-lpc-snoop: platform_get_irq 返回值判断逻辑错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动代码中存在逻辑判断错误，导致无法正确处理 `platform_get_irq()` 的返回值。具体表现为：当 `platform_get_irq()` 返回有效的中断号（非零正整数）时，原有的 `!lpc_snoop->irq` 判断条件可能误判为真，导致驱动错误地返回 `-ENODEV` 从而初始化失败；或者当返回负数错误码时，判断条件未能按预期逻辑捕获（虽然此处主要修复点在于零值误判）。该问题由静态代码分析工具 Smatch 检出。
+
+#主要错误日志
+未知
+
+#问题根因
+`platform_get_irq()` 函数成功时返回非零的中断号，失败时返回负数错误码，不会返回零。原代码使用 `if (!lpc_snoop->irq)` 进行判断，意图是检查错误，但由于 IRQ 号通常是非零值，该条件判断逻辑是不可能的或错误的（ Impossible judgment condition ），无法正确区分“成功获取中断号”和“获取失败”的情况。
+
+#解决方案
+修改 drivers/soc/aspeed/aspeed-lpc-snoop.c 中的判断条件，将 `if (!lpc_snoop->irq)` 更正为 `if (lpc_snoop->irq < 0)`，以正确匹配 `platform_get_irq()` 的返回值语义，仅在返回负数错误码时进行错误处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a4d72511d23327516d431a459d4260643f7bc37d

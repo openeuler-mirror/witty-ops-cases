@@ -1,0 +1,23 @@
+#标题
+zswap 未正确处理大页加载导致潜在内存数据错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 zswap 的场景下，如果系统尝试加载 large folios（大页），zswap 现有逻辑无法正确处理，可能导致大页仅部分数据在 zswap 中，从而引发内存数据错误或不一致。修复补丁介入后，此类非法操作会触发警告，并最终向用户态发送 SIGBUS 信号（例如在 do_swap_page() 阶段）。
+
+#主要错误日志
+- 内核日志：`WARN_ON_ONCE(folio_test_large(folio))` 触发的内核警告栈信息。
+- 用户态表现：进程接收到 SIGBUS 信号（推断，源于 `do_swap_page()` 对非 uptodate folio 的处理）。
+
+#问题根因
+zswap 机制当前不支持正确加载 large folios（大页）。如果尝试加载大页，可能存在大页仅有一部分存储在 zswap 中的情况，导致数据加载不完整。同时，在 `swap_read_folio` 接口中，无论 `zswap_load` 是否真正成功加载数据，都过早地执行了 `folio_mark_uptodate` 操作，掩盖了潜在的 I/O 错误，导致系统未正确处理该异常情况。
+
+#解决方案
+1. 在 `zswap_load` 函数入口处增加校验，如果检测到入参为 large folio，触发 `WARN_ON_ONCE` 警告并直接返回 true，但不再标记 folio 为 uptodate。
+2. 将 `folio_mark_uptodate` 的调用从 `swap_read_folio` 函数移除，转移至 `zswap_load` 内部。仅在数据确认正确加载（`ret == true`）后，才执行 `folio_mark_uptodate`。
+此举确保了大页加载错误能被正确识别并转换为 I/O 错误（发送 SIGBUS），防止错误数据被应用程序使用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ed1aa13f2fae9cffac42a80fc0ccbe66bf0ef510

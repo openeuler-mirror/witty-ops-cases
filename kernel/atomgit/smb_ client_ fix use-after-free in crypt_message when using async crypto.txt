@@ -1,0 +1,23 @@
+#标题
+smb: client: fix use-after-free in crypt_message when using async crypto
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 SMB 客户端进行异步加密操作时，`crypt_message` 函数发生 Use-After-Free（释放后使用）故障。这通常会导致内核崩溃、内存损坏或随机的系统不稳定现象，具体表现为访问已释放的内存地址。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `crypt_message` 函数中，当使用异步加密 API 时，代码直接调用了 `crypto_aead_encrypt` 或 `crypto_aead_decrypt` 而未等待异步操作完成。这导致函数在加密操作尚未结束时就可能返回并释放相关资源（如栈上的变量或请求上下文），从而引发 Use-After-Free 问题。
+
+#解决方案
+在 `crypt_message` 函数中引入同步等待机制。具体修改包括：
+1. 声明 `DECLARE_CRYPTO_WAIT(wait)` 用于等待队列。
+2. 为 aead_request 设置回调 `crypto_req_done` 和标志 `CRYPTO_TFM_REQ_MAY_BACKLOG`。
+3. 使用 `crypto_wait_req` 封装加密/解密调用，确保在函数返回前异步操作已完成，避免资源过早释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a2a3da5cd656efc89b40dfa75a78caba0b733151

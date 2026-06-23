@@ -1,0 +1,20 @@
+#标题
+nfp 驱动 RSS 不支持时返回错误的哈希密钥大小
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当网卡设备不支持 RSS 功能时，调用 `nfp_net_get_rxfh_key_size()` 接口获取 RSS 哈希密钥大小，函数返回了负的错误码 `-EOPNOTSUPP`。由于该接口定义的返回类型为 `u32`（无符号32位整数），调用者会将该负数错误码误判为一个巨大的正整数值，导致上层应用或用户获取到错误的 RSS 密钥长度。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `nfp_net_get_rxfh_key_size()` 在设备不支持 RSS（`!(nn->cap & NFP_NET_CFG_CTRL_RSS_ANY)`）时，直接返回了整型负值 `-EOPNOTSUPP`。因函数返回类型为 `u32`，该负值被隐式转换为巨大的无符号正整数，违反了 ethtool 接口 `.get_rxfh_key_size()` 在此类情况下应返回 0 的规范要求。
+
+#解决方案
+修改 `drivers/net/ethernet/netronome/nfp/nfp_net_ethtool.c` 文件中的 `nfp_net_get_rxfh_key_size` 函数逻辑：将设备不支持 RSS 时的返回值从 `-EOPNOTSUPP` 修改为 `0`，以符合 ethtool 接口规范并避免类型转换导致的数值异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4c09d5f010d8787c6d5fa36fd254f6bd546e5681

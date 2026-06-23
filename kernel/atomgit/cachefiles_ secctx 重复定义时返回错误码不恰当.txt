@@ -1,0 +1,20 @@
+#标题
+cachefiles: secctx 重复定义时返回错误码不恰当
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户通过 daemon 接口向 cachefiles 第二次配置 secctx（安全上下文）时，系统返回 `-EINVAL`（无效参数）错误码，无法准确区分“参数格式错误”与“资源重复定义”这两种不同的错误场景，影响用户态程序对错误的精准判断与处理。
+
+#主要错误日志
+- `cachefiles: Second security context specified`（内核日志 pr_err 输出）
+
+#问题根因
+在函数 `cachefiles_daemon_secctx()` 中，检测到 `cache->secctx` 已经由值（即 secctx 已被定义）时，代码直接返回了 `-EINVAL`。该返回值含义模糊，未能像 `cachefiles_daemon_dir()` 等类似函数那样明确指示“对象已存在”的状态，导致错误分类不清晰。
+
+#解决方案
+修改 `cachefiles_daemon_secctx()` 函数的逻辑，当检测到 secctx 已被定义时，将返回值从 `-EINVAL` 修改为 `-EEXIST`。此举使得错误返回值与“重复定义”的实际场景相匹配，保持了与同类接口（如 `cachefiles_daemon_dir`）行为的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7811a515b8f00c8e27c4d34612bdbd76e3340eff

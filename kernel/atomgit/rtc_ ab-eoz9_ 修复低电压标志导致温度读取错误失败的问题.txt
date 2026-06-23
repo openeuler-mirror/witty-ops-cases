@@ -1,0 +1,20 @@
+#标题
+rtc: ab-eoz9: 修复低电压标志导致温度读取错误失败的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RTC（AB-EOZ9）设备处于低电压状态后，系统读取温度传感器数据时意外失败，用户空间无法获取当前温度值。尽管系统恢复运行且 RTC 电压已稳定，温度读取操作仍被错误地判定为无效并终止。
+
+#主要错误日志
+- (推断) dmesg 或内核日志中出现：`thermometer might be disabled due to low voltage`
+
+#问题根因
+驱动程序在 `abeoz9z3_temp_read` 函数中对接收到的电压低标志位（V1F 或 V2F）处理逻辑过于严格。驱动错误地认为只要存在低电压标志，温度计就已关闭且无法读取温度。实际上，VLOW1 阈值仅表示温度计曾关闭且时间补偿已停止，并不代表当前无法读取温度。当系统正在运行时，RTC 电压已建立，应当允许读取温度。
+
+#解决方案
+移除 `drivers/rtc/rtc-ab-eoz9.c` 中 `abeoz9z3_temp_read` 函数内检查电压标志位（V1F/V2F）并直接返回 `-EINVAL` 的代码逻辑，允许在低电压标志存在的情况下继续执行温度读取操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1671b1b7276f486c0f526d8cb2cecca1a4772660

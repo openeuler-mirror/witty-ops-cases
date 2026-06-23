@@ -1,0 +1,21 @@
+#标题
+net: bridge: MST静态键使用错误导致多桥接实例功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统中配置多个启用了MST（Multiple Spanning Tree）模式的网桥时，若销毁其中一个网桥，会导致MST功能在全局范围内被错误地禁用，从而影响其他正在运行的MST网桥的正常功能。
+
+#主要错误日志
+未知
+
+#问题根因
+MST功能的静态键使用逻辑存在缺陷，错误地使用了 static_branch_enable/disable 接口。这两个接口是开关型的，而非计数型的。当系统中有多个网桥启用MST时，销毁其中一个网桥会调用 static_branch_disable，这会直接将全局的MST静态键关闭，导致其他仍在运行的MST网桥无法使用该功能。
+
+#解决方案
+1. 将静态键的操作接口从 static_branch_enable/disable 修改为 static_branch_inc/dec，通过引用计数的方式管理静态键的状态，确保只有在引用计数归零时才真正禁用该功能。
+2. 在网桥销毁接口 br_dev_delete 中增加调用 br_mst_uninit，确保在网桥退出时，若此前启用了MST，则调用 static_branch_dec 递减计数，防止资源泄漏或状态错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/236fa9745286b4c9f12fbe9ad5b019d14b4d6180

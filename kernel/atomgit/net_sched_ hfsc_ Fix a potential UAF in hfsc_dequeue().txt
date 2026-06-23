@@ -1,0 +1,20 @@
+#标题
+net_sched: hfsc: Fix a potential UAF in hfsc_dequeue()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 HFSC（Hierarchical Fair Service Curve）队列调度策略时，若子类挂载的 qdisc 为 netem 或 codel 等特定实现，在进行流量出队（dequeue）操作过程中可能触发内核 UAF（Use-After-Free）漏洞，导致系统崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hfsc_dequeue()` 函数中，代码首先检查 `cl->qdisc->q.qlen != 0`，随后调用 `qdisc_peek_len(cl->qdisc)` 获取下一个数据包长度。然而，对于 netem 或 codel 等特定 qdisc 实现，`peek` 操作可能会改变队列状态（例如因时间条件不满足而丢弃数据包），导致队列实际上已变空。此时 `next_len` 可能返回一个无效值或指向已释放内存。后续代码基于该返回值调用 `update_ed(cl, next_len)` 或 `update_d(cl, next_len)` 时，可能会访问已释放的内存区域，从而引发 UAF。
+
+#解决方案
+在调用 `qdisc_peek_len()` 获取 `next_len` 后，再次检查 `cl->qdisc->q.qlen` 是否为 0。如果队列已空，则跳过后续的 `update_ed` 或 `update_d` 操作，避免使用无效的 `next_len` 值，从而规避 UAF 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9d42ed46e68c201d3fb12b4ca3712d93c15a64f

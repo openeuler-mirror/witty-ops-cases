@@ -1,0 +1,25 @@
+#标题
+futex: requeue-PI 机制在高优先级抢占场景下导致系统死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 futex wait-requeue-pi 操作时，若任务 A 因超时或信号提前退出等待，而任务 B 正在执行 requeue 操作且优先级较高，系统会发生活锁。具体表现为任务 A 阻塞在 hash bucket 锁上无法推进，任务 B 在循环中忙等无法获取锁，导致系统陷入死锁状态。在单核（UP）系统中尤为严重，任务 A 可能永远无法被调度以获取锁。
+
+#主要错误日志
+未知
+
+#问题根因
+在 requeue-PI 流程中存在竞争条件：
+任务 A（等待者）因超时/信号准备退出，更新了 `requeue_state` 状态，但在从队列移除自身前需要获取 `hb` 锁。
+任务 B（重排队者）持有 `hb` 锁，尝试通过 `futex_requeue_pi_prepare` 原子操作获取 PI 锁，但因任务 A 已更改状态导致操作失败返回 `-EAGAIN`。
+若任务 B 优先级高于任务 A，任务 A 在任务 B 释放锁后无法及时抢占获取锁，导致任务 A 无法从队列移除，任务 B 在重试循环中始终检测到该任务存在并反复失败，形成活锁。
+
+#解决方案
+修改 `futex_proxy_trylock_atomic` 和 `handle_early_requeue_pi_wakeup` 函数逻辑：
+1. 在 `futex_proxy_trylock_atomic` 中，若 `futex_requeue_pi_prepare` 失败，主动将当前的 top waiter 从等待链表中移除，允许后续任务继续推进。
+2. 在 `handle_early_requeue_pi_wakeup` 中，增加条件判断，仅在任务节点非空时才执行从链表移除的操作，防止重复移除。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ece1f5ea39be1abe809710c65d1542eab05ff5d9

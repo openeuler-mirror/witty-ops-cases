@@ -1,0 +1,20 @@
+#标题
+atyfb 驱动未检查 init_pll 返回值导致系统死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 atyfb 显卡非系统主 VGA 设备（未执行 BIOS）时，驱动加载过程中尽管内核日志打印了 "Unsupported xclk source" 错误，但未正确处理错误返回值，导致驱动继续执行并最终引发系统硬死锁。
+
+#主要错误日志
+[   61.496112] atyfb: Unsupported xclk source:  5.
+
+#问题根因
+驱动代码在调用 `par->pll_ops->init_pll()` 函数时，未检查其返回值。当该函数因硬件初始化失败（如 BIOS 未运行导致 xclk source 不被支持）返回错误码时，驱动未中止初始化流程，而是继续运行导致后续操作引发系统崩溃。
+
+#解决方案
+在调用 `pll_ops->init_pll` 后增加返回值检查逻辑。若函数返回非零错误码，立即终止 `aty_init` 函数并向上返回错误，防止在硬件未正确初始化的情况下继续执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b110bc27b6f9a825dd7378a62287157d6edf258f

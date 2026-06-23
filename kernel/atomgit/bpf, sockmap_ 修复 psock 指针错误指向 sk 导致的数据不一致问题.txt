@@ -1,0 +1,24 @@
+#标题
+bpf, sockmap: 修复 psock 指针错误指向 sk 导致的数据不一致问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 selftest 测试用例 sockmap_redir 时，发现内核处于不一致状态。具体表现为在处理 backlog（积压工作队列）时，`sk_psock(psock->sk)` 的返回值不等于当前的 `psock` 指针。这是由于 socket 被快速从 sockmap 中移除并重新添加，导致旧 psock 结构体仍指向该 socket，进而引发处理逻辑错误。
+
+#主要错误日志
+未知
+
+#问题根因
+该问题源于 sockmap_redir 特殊行为下的并发竞争。在对同一个 socket 频繁执行 `map_update()` 和 `map_delete()` 操作时：
+1. `map_update()` 为 socket 创建新的 psock（如 psock2）。
+2. `map_delete()` 释放旧的 psock（如 psock1），但释放操作通过 `rcu_work` 延迟执行。
+3. 如果在旧 psock 释放前立即执行 `map_update()`，会分配新的 psock2 并指向同一个 sk，导致两个 psock 同时指向同一个 sk。
+4. 当旧 psock 的延迟工作队列被触发执行 I/O 操作时，它使用的是已过时的 psock1 去访问 sk，导致状态不一致。
+
+#解决方案
+在 `sk_psock_backlog` 函数中增加状态检查。在处理 backlog 之前，检查 `SK_PSOCK_TX_ENABLED` 状态位。如果该状态未置位，说明该 psock 已经停止使用，直接返回退出处理流程。这防止了挂起的 backlog 任务使用已停止或失效的 psock 进行 I/O 操作，从而解决了双重 psock 指向同一 sk 引发的冲突问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/089d3b66f800b38135d3091d110e94e7ebee4546

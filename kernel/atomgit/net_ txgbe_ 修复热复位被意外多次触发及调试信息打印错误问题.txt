@@ -1,0 +1,27 @@
+#标题
+net: txgbe: 修复热复位被意外多次触发及调试信息打印错误问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 当 lan0 执行热复位时，如果关闭 lan0 时存在 pending（挂起）状态位，会导致热复位功能被意外再次触发，形成重复复位。
+2. 当 lan1 检测到错误并触发热复位标志时，如果 lan0 随即调用热复位函数，系统会错误地 dump 出 lan0 的调试信息，而实际上需要的是 lan1 的调试信息以定位故障。
+
+#主要错误日志
+- e_dev_err("master disable timed out\n")
+- e_err(drv, "TDM non-fatal error, queue[%d]", i) (推断)
+- e_info(probe, "check_ring_dump_subtask: set recover on Lan0\n") (推断)
+- e_info(probe, "check_ring_dump_subtask: set recover on Lan1\n") (推断)
+
+#问题根因
+1. 热复位流程控制缺失：在处理复位过程中，未能有效屏蔽或标记 IO 错误状态，导致在某些 pending 状态下引发不必要的重复热复位。
+2. 调试信息采集逻辑错误：在多网卡（lan0/lan1）场景下，热复位触发与调试信息 dump 的关联逻辑不正确，导致 dump 了非故障网卡的寄存器信息，无法获取有效故障现场。
+
+#解决方案
+1. 新增 `io_err` 标志位：在 `txgbe_io_error_detected` 中设置该标志，在 `txgbe_io_resume` 中清除，并在 `txgbe_reset` 处理 `MASTER_REQUESTS_PENDING` 错误时检查该标志。如果 `io_err` 为真，则避免再次调用 `txgbe_tx_timeout_dorecovery`，防止重复复位。
+2. 解耦调试信息打印与复位流程：引入 `TXGBE_FLAG2_RING_DUMP` 标志位，新增 `txgbe_check_ring_dump_subtask` 服务任务。在检测到需要复位时，先设置 `RING_DUMP` 标志，在独立的 subtask 中根据硬件状态正确识别并 dump 发起复位的 Lan（lan0 或 lan1）的调试信息，确保日志与实际故障源匹配。
+3. 版本更新：驱动版本号更新为 2.1.1.3oe。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/33c8e20c9ff20e17b1ba5596ff13f933037acb67

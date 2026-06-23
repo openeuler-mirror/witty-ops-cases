@@ -1,0 +1,20 @@
+#标题
+seg6：下一跳地址验证策略设置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 IPv6 Segment Routing (seg6) 的本地策略时，针对 `SEG6_LOCAL_NH4` 和 `SEG6_LOCAL_NH6` 属性的下一跳地址验证不严格。虽然定义了长度限制，但使用 `NLA_BINARY` 类型可能导致对属性数据的校验逻辑不够精确，无法确保传入的下一跳地址数据完全符合 `struct in_addr` 或 `struct in6_addr` 的预期长度，可能导致内核接受格式不正确的下一跳数据。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `seg6_local_policy` 策略数组中，`SEG6_LOCAL_NH4` 和 `SEG6_LOCAL_NH6` 属性使用了 `.type = NLA_BINARY` 配合 `.len` 的方式进行定义。这种定义方式在 Netlink 属性解析时，虽然指定了最大长度，但并不强制要求数据长度必须精确匹配结构体大小，导致对 IPv4/IPv6 下一跳地址的校验缺乏应有的精确性。
+
+#解决方案
+修改 `seg6_local_policy` 数组中 `SEG6_LOCAL_NH4` 和 `SEG6_LOCAL_NH6` 的定义，将原有的 `{ .type = NLA_BINARY, .len = ... }` 形式替换为 `NLA_POLICY_EXACT_LEN()` 宏。此修改强制要求数据净荷长度必须精确等于 `sizeof(struct in_addr)` 或 `sizeof(struct in6_addr)`，从而确保下一跳地址数据的格式正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9a9b16a4624ade416027783f67796a31ac85794a

@@ -1,0 +1,23 @@
+#标题
+netkit 设备 L2 模式下 BPF 程序修改的 pkt_type 被错误覆盖导致连通性测试失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 netkit L2 模式下运行 Cilium 连通性测试套件时，部分测试用例失败。具体表现为：将流量导入 host 命名空间中的 L7 代理时失败。相比之下，tcx 模式下相同测试可以通过。其根本现象是 BPF 程序调用 `bpf_skb_change_type()` helper 设置的数据包类型在 netkit 处理过程中被后续的 `eth_type_trans()` 调用错误覆盖，导致内核网络栈无法正确识别数据包类型。
+
+#主要错误日志
+未知
+
+#问题根因
+在 netkit 驱动的 `netkit_xmit` 函数中，对于 `NETKIT_PASS` 的处理直接调用了 `eth_type_trans()`。该函数内部会无条件调用 `eth_skb_pkt_type()` 重新计算并设置 `skb->pkt_type`。这导致 BPF 程序在运行前（或运行中）通过 `bpf_skb_change_type()` 设置的类型被覆盖，从而丢失了原有的决策结果。而在 tcx 模式下，`eth_type_trans` 在 BPF 程序运行前即已完成，因此 BPF 设置的类型能够保留。
+
+#解决方案
+重构数据包处理流程，将 `eth_type_trans()` 的功能拆解：
+1. 将 `eth_skb_pkt_type()` 的调用提前至 BPF 程序运行之前（具体在 `netkit_prep_forward` 之后），确保 BPF 程序运行时 `pkt_type` 已设置，且 BPF 程序的修改不会被后续流程覆盖。
+2. 将 MAC 头的重置操作（`skb_reset_mac_header`）移至 `netkit_prep_forward` 函数中。
+3. 新增并使用 `eth_skb_pull_mac()` 辅助函数，仅在数据包传递给协议栈前（`NETKIT_PASS` 分支）剥离 MAC 头，替代原有的 `eth_type_trans()` 调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5354dfec71a69bea208620fea14f21b8dfedac99

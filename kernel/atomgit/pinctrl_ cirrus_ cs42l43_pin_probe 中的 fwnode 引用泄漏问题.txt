@@ -1,0 +1,23 @@
+#标题
+pinctrl: cirrus: cs42l43_pin_probe 中的 fwnode 引用泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 cs42l43 pinctrl 驱动模块时，由于驱动调用了 `fwnode_get_named_child_node()` 获取子节点引用但在退出时未释放，导致内核对象引用计数泄漏（reference leak）。长期运行或频繁进行设备探针/移除操作可能导致内存资源无法正确回收。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `cs42l43_pin_probe` 函数中调用 `fwnode_get_named_child_node()` 获取了子节点的引用，该函数会增加节点的引用计数。然而，驱动代码中从未调用 `fwnode_handle_put()` 来释放该引用，导致了引用计数泄漏。
+
+#解决方案
+引入自动资源管理机制修复泄漏。
+1. 新增辅助函数 `cs42l43_fwnode_put`，用于封装 `fwnode_handle_put` 操作。
+2. 在获取子节点引用后，使用 `devm_add_action_or_reset()` 将 `cs42l43_fwnode_put` 注册为设备移除时的自动回调。
+3. 这样可以确保无论 probe 成功还是失败，在设备生命周期结束时都会自动释放 fwnode 引用，同时也修正了之前直接修改 `fwnode->dev` 的不当逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bbbe32e991600b1b92be06c774bbbc4f1ad2a253

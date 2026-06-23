@@ -1,0 +1,20 @@
+#标题
+misc: fastrpc: copy_to_user 失败导致 map 泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Fastrpc 驱动执行 Invoke 方法时，若 `copy_to_user` 向用户空间拷贝数据失败，函数直接返回错误码，未清理已被 DSP 更新过的 fdlist。这导致映射的缓冲区未被正确释放，造成内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `fastrpc_put_args` 函数中，当 `copy_to_user()` 执行失败时，代码逻辑直接 `return -EFAULT` 返回，跳过了后续 `cleanup_fdlist` 的清理流程。由于 fdlist 已被 DSP 更新，跳过清理步骤导致相关的 map 对象引用计数未减少，从而引发内存泄漏。
+
+#解决方案
+修改 `fastrpc_put_args` 函数的错误处理路径。当 `copy_to_user()` 失败时，不再直接返回，而是将错误码保存在局部变量 `ret` 中，并通过 `goto cleanup_fdlist` 跳转至清理代码段。这确保了在返回错误前，能遍历并清理 fdlist 中所有已更新的映射缓冲区，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/03a29bd67b1132830bfe6991dd2aa98dd0c36dc5

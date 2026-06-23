@@ -1,0 +1,25 @@
+#标题
+USB视频类设备驱动(UVC)实体ID解析违规导致潜在内存越界或功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当接入不符合UVC 1.1+规范的USB摄像头设备时，若其描述符中包含ID为0或重复ID的单元，内核驱动程序可能发生功能异常、解析错误，或在后续处理流程中因引用无效实体导致内存越界访问。
+
+#主要错误日志
+- "Found Unit with invalid ID 0\n"
+- "Found multiple Units with ID %u\n"
+- "UVC non compliance: Invalid USB header. The streaming entity has an invalid ID, guessing the correct one."
+
+#问题根因
+部分USB摄像头设备不符合UVC 1.1+规范（Spec 3.7.2），其描述符中包含了ID为0（规范要求非零）或ID重复（规范要求唯一）的实体。原驱动代码在 `uvc_alloc_entity` 分配实体时缺乏对ID有效性和唯一性的校验，导致后续通过 `uvc_entity_by_id` 查找实体时可能返回错误的实体指针或空指针，进而引发系统崩溃或功能失效。
+
+#解决方案
+1. 在实体分配函数 `uvc_alloc_new_entity` 中增加ID校验逻辑：检测ID是否为0，并调用 `uvc_entity_by_id` 检测ID是否已被使用。
+2. 引入 `UVC_INVALID_ENTITY_ID` 宏定义无效ID标记，当检测到ID为0或重复时，将实体ID标记为无效，并打印错误日志。
+3. 修改 `uvc_entity_by_id` 函数，当传入ID为 `UVC_INVALID_ENTITY_ID` 时直接返回NULL，防止误匹配。
+4. 在 `uvc_stream_by_id` 中增加启发式处理逻辑，当流的终端链接ID无效且仅有一个流实体时，发出警告并自动推测正确的流实体，增强对非合规设备的兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/09f69a88590c42fc2c8731d21d752c6712952630

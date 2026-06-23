@@ -1,0 +1,20 @@
+#标题
+inetpeer: inet_getpeer 中未更新时间戳导致 GC 逻辑潜在问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+inet_peer 结构体的时间戳（dtime）更新时机不正确。原本的时间戳更新操作位于 inet_putpeer() 函数中，这导致在查找（get）peer 时，该时间戳未能及时更新。这可能干扰 inet_peer 的垃圾回收（GC）判断逻辑，导致 peer 的存活时间计算出现偏差，进而影响系统中 inet_peer 对象的生命周期管理。
+
+#主要错误日志
+未知
+
+#问题根因
+在原有实现中，inet_peer 的时间戳 p->dtime 仅在 inet_putpeer() 释放对等体引用时被更新。这导致在多次调用 inet_getpeer() 查找并引用同一个对等体期间，时间戳保持为旧值。后续的垃圾回收机制（inet_peer_gc）依赖该时间戳来计算对等体的空闲时间（delta = jiffies - p->dtime），时间戳未更新会导致 GC 可能错误地回收仍在频繁使用的对等体，或者未能及时回收陈旧对象。
+
+#解决方案
+将 inet_peer 时间戳的更新逻辑从 inet_putpeer() 移至 inet_getpeer() 的查找路径中。具体修改为：在 lookup 函数成功找到 peer 后，立即检查并更新 p->dtime 为当前 jiffies 值。此举确保了时间戳反映的是最后一次成功查找的时间，为后续移除 refcount 机制及优化 GC 逻辑做准备。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1d676af1bd9c5e52d4d151f1518a1cff2dd4649

@@ -1,0 +1,21 @@
+#标题
+bio_first_folio() 在非 VMEMMAP 的 SPARSEMEM 模式下计算偏移错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 SPARSEMEM 但未启用 SPARSEMEM_VMEMMAP 的内核配置下，物理上连续的 folios 可能拥有不连续的 struct pages。bio_first_folio() 函数在使用 bio_for_each_folio_all() 遍历 bio 时，由于错误地计算了 folio 内部的偏移量（offset），可能导致数据处理逻辑异常、数据损坏或内存访问越界。
+
+#主要错误日志
+未知
+
+#问题根因
+在 SPARSEMEM 内存模型未启用 VMEMMAP 的情况下，物理连续的内存页对应的 struct page 结构体在虚拟地址空间上可能是不连续的。
+原代码在 `bio_first_folio()` 中使用开源码 `bvec->bv_page - &fi->folio->page` 来计算页索引，这是一种简单的指针算术运算，隐含假设了 struct page 是连续排列的（即 VMEMMAP 模型）。当该假设不成立时，计算出的偏移量是错误的。而内核提供的 `folio_page_idx()` 函数已经正确处理了这种非连续 struct page 的情况。
+
+#解决方案
+移除 `bio_first_folio()` 函数中计算偏移量的开源实现，替换为标准的 `folio_page_idx()` 函数来获取正确的页索引。修改后的计算方式为：`PAGE_SIZE * folio_page_idx(fi->folio, bvec->bv_page)`，从而确保在所有 SPARSEMEM 配置下都能正确计算偏移量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/91d4311f91654d31f5f4a467158f3ae2be0a44e4

@@ -1,0 +1,25 @@
+#标题
+ubase 驱动 ue2ue ctrlq 数据长度校验缺失及模块初始化依赖问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 内核在处理 ue2ue ctrlq 事件时，可能因数据长度校验逻辑错误导致内存越界访问或解析异常。
+2. 系统启动或加载驱动过程中，因模块加载顺序未严格约束，可能导致 ubase 驱动初始化失败或因依赖未就绪而发生异常。
+
+#主要错误日志
+- 推断（基于代码逻辑）：`invalid ue2ue data len(%u), ctrlq msg len(%u).`
+
+#问题根因
+1. **数据长度校验缺陷**：在 `ubase_handle_ue2ue_ctrlq_event` 函数中，原逻辑使用 `u16` 类型的 `data_len` 计算数据长度，且未对 `ue2ue_data_len` 与 `ctrlq_msg_len` 进行严格的大小校验。当硬件上报的数据块长度不匹配时，可能将错误的长度参数传递给后续处理函数，引发异常。
+2. **模块依赖缺失**：`ubase_main` 模块依赖 `ummu` 模块，但未显式声明 pre-softdep，导致在某些启动场景下模块加载顺序错误。
+3. **头文件依赖冗余**：部分 `.c` 文件包含了不再需要的头文件（如 `ubase_comm_mbx.h`），且缺少必要的头文件（如 `pm.h`），影响代码健壮性。
+
+#解决方案
+1. **修正数据校验逻辑**：将长度变量类型修正为 `u32`，增加 `ue2ue_data_len` 与 `ctrlq_msg_len` 的比较校验。若数据长度小于消息长度，返回 `-EINVAL`，确保仅传递合法长度的数据给 `ubase_ctrlq_handle_crq_msg`。
+2. **增加模块依赖声明**：在 `ubase_main.c` 中添加 `MODULE_SOFTDEP("pre: ummu")`，确保 `ummu` 模块先于 `ubase` 加载。
+3. **代码清理与完善**：移除无用头文件引用，添加缺失的头文件引用，并修正 `ubase_ubus_shutdown` 中的日志打印接口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2d756332159bfd0ae7ea47b78425d0e83bc8eee2

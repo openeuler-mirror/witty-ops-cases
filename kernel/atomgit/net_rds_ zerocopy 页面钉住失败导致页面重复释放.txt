@@ -1,0 +1,20 @@
+#标题
+net/rds: zerocopy 页面钉住失败导致页面重复释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RDS（Reliable Datagram Sockets）使用 zerocopy 机制发送数据时，若 `iov_iter_get_pages2()` 获取页面失败，系统后续在清理消息资源时会再次尝试释放已经被释放的页面，导致双重释放问题。这可能引发内核内存损坏、 Panic 或其他不可预期的异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `rds_message_zcopy_from_user()` 中，当 `iov_iter_get_pages2()` 失败时，代码逻辑会调用 `put_page()` 释放已钉住的页面并清理 `rm->data.op_mmp_znotifier`，但未将 `rm->data.op_nents` 重置为 0。后续在 `rds_sendmsg()` 调用 `rds_message_purge()` 进行清理时，清理循环依据非零的 `op_nents` 值遍历并尝试再次释放这些页面，从而触发双重释放。
+
+#解决方案
+在 `rds_message_zcopy_from_user()` 函数的错误处理路径中，在释放已钉住页面的循环之后，显式将 `rm->data.op_nents` 重置为 0，确保后续的资源清理逻辑不会重复操作已释放的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6cecad2f5380ab63c06d237672b7e371086ef73d

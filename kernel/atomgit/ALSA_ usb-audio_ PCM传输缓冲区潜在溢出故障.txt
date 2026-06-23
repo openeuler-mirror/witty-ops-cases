@@ -1,0 +1,20 @@
+#标题
+ALSA: usb-audio: PCM传输缓冲区潜在溢出故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+USB音频驱动在处理PCM流数据传输时，动态计算的数据包大小可能超过USB描述符限制的最大包大小，导致缓冲区溢出。该问题由syzbot发现，可能引发内核内存破坏或相关异常。
+
+#主要错误日志
+- `Too small maxpacksize %u for rate %u / pps %u\n`（参数设置阶段检测到异常时的调试日志）
+
+#问题根因
+USB音频驱动的PCM流数据通过USB URB包缓冲区传输，数据包大小由采样率和PPS动态计算得出。在现有代码逻辑中，计算出的包大小仅由速率（rate）和PPS决定，未充分考虑USB描述符中的 `wMaxPacketSize` 限制。当计算出的包大小大于 `maxpacksize` 时，导致缓冲区溢出。这通常意味着USB描述符配置异常。
+
+#解决方案
+在参数设置阶段增加健全性检查。在 `snd_usb_endpoint_set_params` 函数中，比较计算出的包大小 `ep->packsize[1]` 与 `ep->maxpacksize`。如果 `ep->packsize[1]` 大于 `ep->maxpacksize`，则判定参数异常，打印调试信息并返回 `-EINVAL` 错误，从而在传输开始前阻止潜在的溢出风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3b1daae7cf0ddeffa2f17227344c252ba873eb5d

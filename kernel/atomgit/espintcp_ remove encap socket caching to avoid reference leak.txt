@@ -1,0 +1,22 @@
+#标题
+espintcp: remove encap socket caching to avoid reference leak
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理 ESP（Encapsulating Security Payload）over TCP 场景时，由于封装套接字缓存机制存在缺陷，导致 socket 引用计数泄漏。该问题最终引发系统内存泄漏，且关联的 TCP socket 无法被正确释放和关闭，表现为相关资源长时间处于占用状态。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `esp_find_tcp_sk` 和 `esp6_find_tcp_sk` 函数中对 `x->encap_sk` 的缓存逻辑。代码尝试缓存查找的 socket 以提高性能，但在多次查找或并发处理路径中，缓存更新与引用计数管理不一致。具体表现为：
+1. 缓存的 socket 引用在某些更新路径中被替换或清除，但未正确释放对应的引用计数。
+2. 修复补丁移除了 `struct xfrm_state` 中的 `encap_sk` 字段缓存机制，改为每次直接查找 socket 并在使用后立即释放引用，从而消除了引用泄漏的源头。
+
+#解决方案
+移除 `xfrm_state` 结构中对 encap socket 的缓存机制（包括相关字段 `encap_sk` 的使用和 `esp_tcp_sk` 结构体），改为在 `esp_output_tcp_finish` 和 `esp_output_tcp_encap` 等函数中，每次通过 `inet_lookup_established` 查找 socket 后，在使用完毕立即调用 `sock_put` 释放引用。该修复同时解决了 KABI（Kernel ABI）兼容性问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/969ec5aeaefa600ecd3fcd79b7f821cae9186b12

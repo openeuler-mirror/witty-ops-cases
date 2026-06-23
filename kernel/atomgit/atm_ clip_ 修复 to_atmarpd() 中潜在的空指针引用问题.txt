@@ -1,0 +1,24 @@
+#标题
+atm: clip: 修复 to_atmarpd() 中潜在的空指针引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ATM CLIP 模块中，当 `atmarpd` 设备正在关闭或未初始化时，若此时调用 `to_atmarpd()` 函数（例如通过 `clip_neigh_solicit` 触发），可能会触发空指针引用导致内核崩溃。该故障路径涉及不可休眠的上下文，原有的 RTNL 锁机制无法提供有效保护。
+
+#主要错误日志
+未知
+
+#问题根因
+`atmarpd` 指针的访问存在并发竞争问题。虽然 `atmarpd` 在设置和关闭时由 RTNL 锁保护，但 `to_atmarpd()` 函数可能在未持有 RTNL 锁的情况下被调用（特别是在 `clip_neigh_solicit()` / `neigh_ops->solicit()` 这种不可休眠的上下文中）。这导致在检查 `atmarpd` 是否为空和使用它之间存在竞态窗口，若 `atmarpd` 在此期间被置空，将引发空指针引用。
+
+#解决方案
+使用互斥锁和 RCU（Read-Copy-Update）机制替代 RTNL 来保护 `atmarpd` 的访问：
+1. 将 `atmarpd` 定义为 `__rcu` 指针，并引入专用互斥锁 `atmarpd_lock`。
+2. 在 `to_atmarpd()` 中使用 `rcu_read_lock()` 和 `rcu_dereference()` 安全读取指针，确保在 RCU 读侧临界区内指针有效。
+3. 在 `atm_init_atmarp()` 和 `atmarpd_close()` 中，使用 `mutex_lock()` 保护修改操作，并通过 `rcu_assign_pointer()` 和 `RCU_INIT_POINTER()` 更新指针。
+4. 在 `atmarpd_close()` 中增加 `synchronize_rcu()`，确保所有读侧临界区退出后再清理资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9d747a5ebcbe3e7f838c672c2ef7648f3490dafa

@@ -1,0 +1,24 @@
+#标题
+cpufreq: qcom: clk_set_rate() 因缺失 determine_rate 回调导致返回 EINVAL
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 qcom_cpufreq 相关时钟调用 clk_set_rate() 设置频率时失败，导致 OPP（Operating Performance Point）配置时钟频率失败。
+该问题通常在 clk_set_rate() 的上游逻辑修复（改为比较目标频率与实际频率而非缓存频率）后触发，导致 CPU 频率调节功能异常。
+
+#主要错误日志
+cpu cpu0: _opp_config_clk_single: failed to set clock rate: -22
+
+#问题根因
+qcom_cpufreq_hw_clk_ops 结构体中未实现 determine_rate() 或 round_rate() 回调函数。
+根据 clk_set_rate() API 逻辑，若缺少该回调，API 会假定时钟无法设置目标频率，且由于该时钟无父时钟，最终直接返回 -EINVAL（错误码 -22）。
+此前该问题未暴露，是因为 clk_set_rate() 错误地将目标频率与缓存频率进行了比较并提前退出；一旦该比较逻辑被修复为与实际频率比较，此缺陷便会触发。
+
+#解决方案
+在 qcom_cpufreq_hw_clk_ops 结构体中实现并注册 determine_rate() 回调函数。
+由于无法计算目标频率的最接近支持频率，该回调函数直接调用 qcom_cpufreq_hw_recalc_rate() 返回当前时钟运行的实际频率，从而使 clk_set_rate() 能够正确处理频率设置请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/82ed93774e0e22d867aa1838446d26426b22c346

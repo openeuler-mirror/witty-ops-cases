@@ -1,0 +1,31 @@
+#标题
+LoongArch huge_pte_offset 函数空指针引用导致内核 Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在执行涉及 HugeTLB 页面的操作（如 madvise 系统调用）时，触发内核缺页异常，导致内核 Panic。具体表现为 CPU 无法处理虚拟地址 0x0 处的内核分页请求，调用栈显示异常发生在 `huge_pte_offset` 函数中。
+
+#主要错误日志
+CPU 25 Unable to handle kernel paging request at virtual address 0x0
+         ...
+ Call Trace:
+ [<900000000023c30c>] huge_pte_offset+0x3c/0x58
+ [<900000000057fd4c>] hugetlb_follow_page_mask+0x74/0x438
+ [<900000000051fee8>] __get_user_pages+0xe0/0x4c8
+ [<9000000000522414>] faultin_page_range+0x84/0x380
+ [<9000000000564e8c>] madvise_vma_behavior+0x534/0xa48
+ [<900000000056689c>] do_madvise+0x1bc/0x3e8
+ [<9000000000566df4>] sys_madvise+0x24/0x38
+ [<90000000015b9e88>] do_syscall+0x78/0x98
+ [<9000000000221f18>] handle_syscall+0xb8/0x158
+
+#问题根因
+在 `huge_pte_offset` 函数中，代码逻辑未检查 `pmd` 指针是否为 NULL。在某些特定场景下（如 PMD 无效时），`pmd` 可能为 NULL，原代码直接调用 `pmd_none(pmdp_get(pmd))` 访问了 NULL 指针，从而触发内核 Panic。
+
+#解决方案
+在 `huge_pte_offset` 函数返回前增加对 `pmd` 指针的 NULL 判断。修改后的逻辑为：如果 `pmd` 为 NULL 或者 `pmd` 为空（none），则返回 NULL，否则返回 `pmd` 指针，从而避免空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7ddc09883d671a175e6cbce06a87c7e981c37601

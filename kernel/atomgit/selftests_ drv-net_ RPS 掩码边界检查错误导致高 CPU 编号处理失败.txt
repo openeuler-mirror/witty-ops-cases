@@ -1,0 +1,20 @@
+#标题
+selftests: drv-net: RPS 掩码边界检查错误导致高 CPU 编号处理失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 `selftests/net/toeplitz` 测试时，若配置的 RPS（Receive Packet Steering）CPU 掩码包含编号大于 3 的 CPU（如 CPU 4-15），程序会错误地报错并退出，导致无法对高编号 CPU 进行 RPS 功能测试。
+
+#主要错误日志
+推断：`rps bitmap 0x[bitmap] out of bounds 0..[max_cpu]`
+
+#问题根因
+代码中的 RPS 掩码边界检查逻辑存在计算错误。原代码使用 `~(RPS_MAX_CPUS - 1)` 进行校验，当 `RPS_MAX_CPUS` 为 16 时，该表达式计算结果为 `~15`（即 `0xfff0`），导致只有 CPU 0-3 被认为是合法的，错误地将 CPU 4-15 判定为越界。
+
+#解决方案
+修正掩码边界检查的计算表达式。将 `~(RPS_MAX_CPUS - 1)` 修改为 `~((1UL << RPS_MAX_CPUS) - 1)`。修正后的计算结果为 `~0xffff`，正确支持 CPU 0-15 的范围，同时更新了错误提示信息使其更加准确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5f70165f61252fd22bafbf0836e5be4ec1fb620a

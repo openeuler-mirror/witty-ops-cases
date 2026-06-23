@@ -1,0 +1,26 @@
+#标题
+RDMA/hns: 错误掩盖导致实际故障码丢失及潜在非预期行为
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HNS RDMA 驱动中，当 `create_ah` 或 QP 状态修改流程调用底层硬件接口（如 `get_dscp`、`query_cqc`、`query_mpt`）失败时，上层应用接收到的错误码被错误地统一覆盖为固定值（如 `-EINVAL` 或 `0`），导致无法通过返回值定位真实的硬件或驱动错误原因。在 `hns_roce_create_ah` 流程中，若 `get_dscp` 失败且 GID 类型非 RoCE UDP 封装，错误码可能被忽略（返回 0），导致 AH 创建成功但配置可能不符合预期。
+
+#主要错误日志
+- 推断：`ibdev_err_ratelimited(ibdev, "failed to get dscp, ret = %d.\n", ret);`
+
+#问题根因
+1. **错误码覆盖**：在 `hns_roce_fill_res_cq_entry_raw` 和 `hns_roce_fill_res_mr_entry_raw` 函数中，底层硬件查询函数（`query_cqc`、`query_mpt`）返回的错误码被强制替换为 `-EINVAL`，丢失了原始错误信息。
+2. **逻辑判断缺陷**：在 `hns_roce_create_ah` 和 `hns_roce_set_sl` 中，对 `get_dscp` 返回值的处理逻辑不够严谨。原逻辑在特定条件下（如非 UDP 封装场景）忽略了错误返回，或者在未区分错误类型的情况下直接跳转错误处理，导致非 `-EOPNOTSUPP` 的真实错误被掩盖或处理不当。
+
+#解决方案
+1. **保留原始错误码**：修改 `hns_roce_fill_res_cq_entry_raw` 和 `hns_roce_fill_res_mr_entry_raw`，当底层查询函数失败时，直接返回其实际的错误码 `ret`，而非固定的 `-EINVAL`。
+2. **修正错误处理逻辑**：
+   - 在 `hns_roce_create_ah` 和 `hns_roce_set_sl` 中，调整 `get_dscp` 的调用与判断逻辑。
+   - 仅当 GID 类型为 `IB_GID_TYPE_ROCE_UDP_ENCAP` 时才调用并处理 `get_dscp` 结果。
+   - 对于 `get_dscp` 的返回值，仅忽略 `-EOPNOTSUPP`（返回 0），其他错误码（如 `-EFAULT` 等）必须正确返回给调用者，避免错误掩盖。
+   - 确保在非 DSCP 模式或非 UDP 封装场景下，SL 值正确取自 `rdma_ah_get_sl`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e039f8bc50108c27072617dc0018f4f2410ae82c

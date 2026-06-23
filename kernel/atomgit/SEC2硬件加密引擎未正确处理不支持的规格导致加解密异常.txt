@@ -1,0 +1,32 @@
+#标题
+SEC2硬件加密引擎未正确处理不支持的规格导致加解密异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 SEC2 硬件加速器进行加密或解密操作时，若用户请求使用了硬件不支持的规格（如特定的数据长度、算法模式组合），系统未能正确回退到软件计算模式，导致加解密请求处理异常或失败。部分情况下可能出现内核打印错误信息，如“failed to alloc fallback tfm”或“input param error”等，伴随功能不可用。
+
+#主要错误日志
+- pr_err("failed to alloc fallback tfm for %s!\n", alg);
+- dev_err(dev, "failed to set fallback skcipher key!\n");
+- dev_err(dev, "sec extract aead keys err!\n");
+- dev_err(dev, "skcipher input param error!\n");
+- dev_err(dev, "aead cbc mode input data length error!\n");
+- dev_err_ratelimited(dev, "CCM input aad parameter is too long!\n");
+
+#问题根因
+在加密和解密过程中，驱动程序的参数检查逻辑存在缺陷。当用户请求使用了硬件不支持的规格时，代码逻辑未正确触发回退机制，而是直接报错或进行错误处理。具体包括：
+1. skcipher 模式下，对超过硬件处理限制的数据长度未标记 `need_fallback`。
+2. aead 模式下，参数检查函数 `sec_aead_param_check` 和 `sec_aead_spec_check` 的返回值处理逻辑有误，导致本应回退到软件处理的场景被错误地判定为无效参数直接返回。
+3. 原有代码中部分硬件版本检查（如 QM_HW_V2）和规格检查逻辑阻碍了正常的回退路径。
+
+#解决方案
+修改 SEC2 驱动的参数检查与回退逻辑，确保在硬件不支持特定规格时能够正确回退到软件计算：
+1. 在 `sec_skcipher_param_check` 中增加判断，当数据长度超过 `MAX_INPUT_DATA_LEN` 时设置 `need_fallback` 标志位，并在主处理函数中据此调用 `sec_skcipher_soft_crypto`。
+2. 优化 `sec_aead_spec_check` 逻辑，移除阻碍回退的错误标记，针对 CCM 和 CBC 模式进行严格的规格校验，不符合硬件规格时返回错误以触发上层回退逻辑。
+3. 调整 `sec_aead_param_check` 接口，增加 `need_fallback` 指针参数，当检测到硬件规格不支持时，设置该标志位并引导流程进入 `sec_aead_soft_crypto` 进行软件处理。
+4. 移除 `sec_aead_req` 结构体中冗余的 `fallback` 成员变量，统一通过函数返回值和新增的标志位来控制回退行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9c1c6c8b25df9b4f3f8164fa019b40f05934da0

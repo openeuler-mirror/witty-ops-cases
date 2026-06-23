@@ -1,0 +1,20 @@
+#标题
+ASoC: nau8821: IRQ handler unnecessary blocking leading to user-space confusion
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在音频子系统 nau8821 编解码驱动中，中断处理函数在处理耳机插拔事件时，若调用 `cancel_work_sync` 等待前一个挂起的检测工作队列完成，会进入非预期的阻塞状态。由于该工作队列包含 `msleep` 操作，导致中断处理流程被阻塞。此行为可能产生瞬时的输入报告，进而干扰用户空间对耳机状态的判断。
+
+#主要错误日志
+未知
+
+#问题根因
+中断处理函数 `nau8821_interrupt` 将麦克风检测逻辑卸载到 `nau8821_jdet_work` 中执行，该工作队列内部包含睡眠操作（`msleep(20)`）。在处理后续的热插拔事件前，中断处理函数需要等待之前调度的工作完成（通过 `cancel_work_sync`）。这导致中断处理函数在尝试取消最近调度的工作项时发生不必要的阻塞。
+
+#解决方案
+将 `jdet_work` 从标准工作队列（`struct work_struct`）转换为延迟工作队列（`struct delayed_work`）。通过 `schedule_delayed_work` 将原本在工作队列中的 `msleep(20)` 睡眠时间转化为延迟调度的时间（`msecs_to_jiffies(20)`），从而移除工作队列函数中的显式睡眠。这消除了在中断上下文中调用 `cancel_delayed_work_sync` 时的阻塞行为，减少了对用户空间的干扰。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/710e81312d2720484b355b434d1a9841098ad92a

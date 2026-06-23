@@ -1,0 +1,20 @@
+#标题
+net: socket创建失败时sk指针未清空导致KASAN报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用 `arping` 等使用 AF_PACKET socket 的程序时，若 `packet_create` 执行失败，内核会产生与 commit 6cd4a78d962b 相同的 KASAN splat（内存越界访问/释放后使用）告警。该问题源于 socket 创建失败路径中，虽然释放了 sk 对象，但未将指针置空，导致留下了悬垂指针。
+
+#主要错误日志
+KASAN splat（具体日志原文未在 Commit 中给出，但 Commit 描述中提及 "noticed the exact same KASAN splat as in commit 6cd4a78d962b"）。
+
+#问题根因
+在 `__sock_create` 函数中，当 `pf->create` 执行失败时，部分协议实现（如 AF_PACKET 的 `packet_create`）在错误处理路径中调用 `sk_free` 释放了 `sk` 对象，但未将 `sock->sk` 指针置为 NULL。这导致 `sock->sk` 成为一个悬垂指针，随后可能被错误访问，触发 KASAN 报错。此前的修复（commit 6cd4a78d962b）仅针对特定情况，未覆盖所有 `pf->create` 实现变体。
+
+#解决方案
+在 `__sock_create` 函数中，当 `pf->create` 调用失败（返回值 `err < 0`）时，显式地将 `sock->sk` 设置为 NULL。此举统一在调用入口处消除了悬垂指针风险，避免依赖各个具体协议实现的错误处理逻辑来清理指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/983c69ef215d427e05654581cc9bf2266e12411a

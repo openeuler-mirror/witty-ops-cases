@@ -1,0 +1,24 @@
+#标题
+i40e驱动并发修改MAC/VLAN过滤器导致内存破坏与过滤器泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多线程并发对虚拟功能（VF）执行修改MAC地址和设置端口VLAN的高负载操作时，触发内核竞态条件。导致MAC/VLAN过滤器结构体被破坏或内存泄漏。
+
+#主要错误日志
+"Error I40E_AQ_RC_ENOSPC adding RX filters on VF XX, please set promiscuous on manually for VF XX"
+
+#问题根因
+i40e驱动在处理MAC/VLAN过滤器时存在竞态条件：
+1. 线程T0在 `i40e_ndo_set_vf_port_vlan()` 中调用 `i40e_add_filter()` 分配了一个过滤器。
+2. 线程T1同时在 `i40e_ndo_set_vf_mac()` 中调用 `__i40e_del_filter()` 释放了该过滤器。
+3. 随后 `i40e_service_task()` 调用 `i40e_sync_vsi_filters()` 时，引用了已被释放的过滤器内存，导致内存破坏。
+
+#解决方案
+在过滤器状态枚举中新增 `I40E_FILTER_NEW_SYNC` 中间状态。
+当过滤器被加入 `tmp_add_list` 处于同步过程中时，将其状态从 `I40E_FILTER_NEW` 变更为 `I40E_FILTER_NEW_SYNC`。此状态标记过滤器正处于同步流程中，防止其被并发线程直接从哈希列表中删除，必须通过完整流程进行处理，从而修复竞态问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/76bdd117c36aabde45c1c31a2c4751ba55d19599

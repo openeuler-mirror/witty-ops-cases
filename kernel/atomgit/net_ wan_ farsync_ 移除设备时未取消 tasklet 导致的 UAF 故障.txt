@@ -1,0 +1,35 @@
+#标题
+net: wan: farsync: 移除设备时未取消 tasklet 导致的 UAF 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当卸载 FarSync T-series 卡驱动模块（rmmods）或进行设备热拔插时，如果此时正好有发送中断处理或任务正在执行，内核会触发 Use-After-Free 错误。该问题通常由 KASAN 捕获并打印相关 slab-use-after-free 日志，系统可能伴随发生 kernel panic 或内存损坏。
+
+#主要错误日志
+```
+BUG: KASAN: slab-use-after-free in do_bottom_half_tx+0xb88/0xd00
+Read of size 4 at addr ffff88800aad101c by task ksoftirqd/3/32
+...
+Call Trace:
+ <IRQ>
+ dump_stack_lvl+0x55/0x70
+ print_report+0xcb/0x5d0
+ ? do_bottom_half_tx+0xb88/0xd00
+ kasan_report+0xb8/0xf0
+ ? do_bottom_half_tx+0xb88/0xd00
+ do_bottom_half_tx+0xb88/0xd00
+ ...
+ fst_process_tx_work_q+0x67/0x90
+ tasklet_action_common+0x1fa/0x720
+```
+
+#问题根因
+在 `fst_remove_one()` 函数中，`fst_card_info` 结构体被释放（kfree）后，与之关联的 `fst_tx_task` 和 `fst_int_task` 这两个 tasklet 可能仍在运行或处于 pending 状态。这导致 tasklet 的处理函数 `fst_process_tx_work_q()` 或 `fst_process_int_work_q()` 随后访问已释放的 `fst_card_info` 内存，从而触发 Use-After-Free 漏洞。
+
+#解决方案
+在释放设备内存前，显式调用 `tasklet_kill()` 函数同步并终止 `fst_tx_task` 和 `fst_int_task`。根据代码逻辑，此操作应放置在 `fst_disable_intr()` 和 `free_irq()` 之后，以确保中断已被禁用且数据传输已停止，从而安全地消灭 tasklet。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6a837da233ecb6bc540649a402f0e096b76aff22

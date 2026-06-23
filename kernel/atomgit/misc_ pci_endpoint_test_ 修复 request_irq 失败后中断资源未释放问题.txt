@@ -1,0 +1,21 @@
+#标题
+misc: pci_endpoint_test: 修复 request_irq 失败后中断资源未释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 pci_endpoint_test 驱动加载或测试过程中，若中断请求失败，系统会打印 WARN() 警告信息，指出存在目录非空导致的内存泄漏，具体表现为 `/proc/irq/*` 下残留未清理的条目。
+
+#主要错误日志
+remove_proc_entry: removing non-empty directory 'irq/30', leaking at least 'pci-endpoint-test.0'
+WARNING: CPU: 0 PID: 202 at fs/proc/generic.c:719 remove_proc_entry +0x190/0x19c
+
+#问题根因
+在 `pci_endpoint_test_request_irq()` 函数中，当 `devm_request_irq()` 调用失败时，代码逻辑直接调用了 `pci_endpoint_test_free_irq_vectors()`。由于此前部分 IRQ 已经请求成功但未被释放，导致 `/proc/irq/` 下对应的条目仍然存在，进而触发 `remove_proc_entry` 的警告和非空目录泄漏问题。
+
+#解决方案
+在 `devm_request_irq()` 失败的处理路径中，增加对已请求成功 IRQ 的释放逻辑。具体修改是在错误返回前，将当前已成功的计数 `i` 赋值给 `test->num_irqs`，并显式调用 `pci_endpoint_test_release_irq()` 释放这些已申请的资源，确保后续清理流程正常执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0fddee9cfdb21829031d68730acc90426fab1c10

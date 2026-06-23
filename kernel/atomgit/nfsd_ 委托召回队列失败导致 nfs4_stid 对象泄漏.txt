@@ -1,0 +1,40 @@
+#标题
+nfsd: 委托召回队列失败导致 nfs4_stid 对象泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFS 服务端运行过程中，当尝试处理委托召回（delegation recall）时，若队列操作失败，会导致内核内存泄漏。系统运行一段时间后，可观测到大量“unreferenced object”内存泄漏报告，涉及 `nfs4_stid` 结构体对象。
+
+#主要错误日志
+```
+unreferenced object 0xffff88812067b578 (size 344):
+  comm "nfsd", pid 2761, jiffies 4295044002 (age 5541.241s)
+  hex dump (first 32 bytes):
+    01 00 00 00 6b 6b 6b 6b b8 02 c0 e2 81 88 ff ff  ....kkkk........
+    00 6b 6b 6b 6b 6b 6b 6b 00 00 00 00 ad 4e ad de  .kkkkkkk.....N..
+  backtrace:
+    kmem_cache_alloc+0x4b9/0x700
+    nfsd4_process_open1+0x34/0x300
+    ...
+unreferenced object 0xffff8881499f4d28 (size 368):
+  comm "nfsd", pid 2761, jiffies 4295044005 (age 5541.239s)
+  hex dump (first 32 bytes):
+    01 00 00 00 00 00 00 00 30 4d 9f 49 81 88 ff ff  ........0M.I....
+    30 4d 9f 49 81 88 ff ff 20 00 00 00 01 00 00 00  0M.I.... .......
+  backtrace:
+    kmem_cache_alloc+0x4b9/0x700
+    nfs4_alloc_stid+0x29/0x210
+    alloc_init_deleg+0x92/0x2e0
+    ...
+```
+
+#问题根因
+在调用 `nfsd4_run_cb` 将 `dl_recall` 加入工作队列之前，代码已经通过 `refcount_inc` 增加了 `dl_stid` 的引用计数。正常流程下，工作队列处理完成后会通过回调函数 `nfsd4_cb_recall_release` 减少该引用计数。但是，如果 `nfsd4_run_cb` 调用失败（即未能成功入队），之前增加的引用计数不会被减少，导致 `dl_stid` 对象无法被释放，从而引发内存泄漏。
+
+#解决方案
+在 `nfsd_break_one_deleg` 函数中，检查 `nfsd4_run_cb` 的返回值。如果队列添加失败，立即调用 `nfs4_put_stid` 减少引用计数，确保资源被正确释放。同时，将原先的 `WARN_ON_ONCE(!nfsd4_run_cb(...))` 调整为先获取返回值再报警告，并在失败路径执行释放操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/232899bc53018a526f53f8f0123a1b2867a37a56

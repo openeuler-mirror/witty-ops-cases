@@ -1,0 +1,28 @@
+#标题
+ipvlan l3s 模式注销引发内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在删除 l3s 模式的 ipvlan 设备时（执行 `ip link del link eth0 ipvlan1 type ipvlan mode l3s`），内核发生空指针引用，导致主机崩溃并打印调用栈。
+
+#主要错误日志
+Call trace:
+ ip_rcv_finish+0x48/0xd0
+ ip_rcv+0x5c/0x100
+ __netif_receive_skb_one_core+0x64/0xb0
+ __netif_receive_skb+0x20/0x80
+ process_backlog+0xb4/0x204
+ napi_poll+0xe8/0x294
+ net_rx_action+0xd8/0x22c
+ __do_softirq+0x12c/0x354
+
+#问题根因
+这是一个并发竞态问题。当 CPU1 正在执行 `l3mdev_l3_rcv()` 处理网络包时，CPU2 并发执行 `ipvlan_l3s_unregister()` 注销设备。CPU2 将 `dev->l3mdev_ops` 设置为 NULL，而 CPU1 在检查完 `dev->priv_flags` 后继续访问 `master->l3mdev_ops`，导致访问空指针引发崩溃。
+
+#解决方案
+在 `ipvlan_l3s_unregister` 函数中移除将 `dev->l3mdev_ops` 置为 NULL 的操作。此举避免了注销路径与数据包接收路径之间的竞态条件，防止接收流程访问到空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/32a9231117b1e90c135350c5fead3a87dc05df9e

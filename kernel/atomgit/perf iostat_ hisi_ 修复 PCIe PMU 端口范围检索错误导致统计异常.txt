@@ -1,0 +1,20 @@
+#标题
+perf iostat: hisi: 修复 PCIe PMU 端口范围检索错误导致统计异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HiSilicon PCIe PMU 监控场景下，当不同的 PCIe PMU 监控的 Root Ports 位于同一个 Root Bus 上时，工具会错误地匹配该总线上所有的 Root Ports 给某一个 PCIe PMU。这导致 perf iostat 统计到的端口范围不正确，进而导致监控数据不准确或监控到非目标端口的流量。
+
+#主要错误日志
+未知
+
+#问题根因
+由不同 PCIe PMU 监控的 Root Ports 可能位于同一个 Root Bus 上。原有代码逻辑在检索端口范围时，未根据 PMU 的实际 BDF（Bus, Device, Function）范围进行过滤，而是简单地将同一个总线上的所有 Root Ports 都匹配给当前 PMU，导致端口归属判断错误。同时，在计算端口掩码（mask）时，未考虑到设备号基址偏移，导致掩码计算错误。
+
+#解决方案
+在初始化 Root Ports 时，从 sysfs 中读取 PMU 对应的 `bdf_min` 和 `bdf_max` 参数，严格限定 BDF 范围。在遍历 PCI 设备时，增加对 BDF 范围的校验，只将落在当前 PMU BDF 范围内的端口加入列表。同时修正了 `hisi_pcie_init_root_port_mask` 函数，在计算掩码时传入设备基址（`PCI_SLOT(bdf_min)`），确保掩码计算相对于端口范围起始位置正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/313828a0bc4dff454d20721ff3a1b99ab7ac3c9b

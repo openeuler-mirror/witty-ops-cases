@@ -1,0 +1,46 @@
+#标题
+AX25 协议 SO_BINDTODEVICE 选项导致引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当通过设置 SO_BINDTODEVICE socket 选项将 AX25 设备绑定到套接字，随后释放套接字时，内核检测到引用计数下溢，触发 WARNING 并打印调用栈。这表明存在内存泄漏风险。
+
+#主要错误日志
+================================================================
+refcount_t: decrement hit 0; leaking memory.
+WARNING: CPU: 1 PID: 5932 at lib/refcount.c:31 refcount_warn_saturate+0x1ed/0x210 lib/refcount.c:31
+Modules linked in:
+CPU: 1 UID: 0 PID: 5932 Comm: syz-executor424 Not tainted 6.13.0-rc4-syzkaller-00110-g4099a71718b0 #0
+Hardware name: QEMU Standard PC (Q35 + ICH9), 2009), BIOS 1.16.3-debian-1.16.3-2~bpo12+1 04/01/2014
+RIP: 0010:refcount_warn_saturate+0x1ed/0x210 lib/refcount.c:31
+Call Trace:
+ <TASK>
+ __refcount_dec include/linux/refcount.h:336 [inline]
+ refcount_dec include/linux/refcount.h:351 [inline]
+ ref_tracker_free+0x710/0x820 lib/ref_tracker.c:236
+ netdev_tracker_free include/linux/netdevice.h:4156 [inline]
+ netdev_put include/linux/netdevice.h:4173 [inline]
+ netdev_put include/linux/netdevice.h:4169 [inline]
+ ax25_release+0x33f/0xa10 net/ax25/af_ax25.c:1069
+ __sock_release+0xb0/0x270 net/socket.c:640
+ sock_close+0x1c/0x30 net/socket.c:1408
+ ...
+</TASK>
+================================================================
+
+#问题根因
+在之前的修复提交 9fd75b66b8f6 中，为了解决 ax25_cb_del() 引起的引用计数泄漏，在 ax25_release() 中增加了设备引用计数的递减操作。这要求设备绑定到套接字时引用计数必须已经递增。
+AX25 设备可以通过两种方式绑定到套接字：调用 ax25_bind() 或设置 SO_BINDTODEVICE socket 选项。在 ax25_bind() 中正确执行了引用计数递增操作，但在 ax25_setsockopt() 处理 SO_BINDTODEVICE 的路径中遗漏了引用计数的递增。
+因此，当套接字关闭时，ax25_release() 尝试递减引用计数，导致引用计数错误地降为 0 甚至负值，触发 "decrement hit 0; leaking memory" 警告。
+
+#解决方案
+修改 ax25_setsockopt() 函数中处理 SO_BINDTODEVICE 选项的逻辑：
+1. 在绑定新设备前，检查当前是否已绑定设备（ax25->ax25_dev）。
+2. 若已绑定设备且新指定的设备与当前设备不同，先释放旧设备的引用（调用 netdev_put 和 ax25_dev_put）。
+3. 若新指定的设备与当前设备相同，直接返回，避免重复操作。
+4. 在成功绑定新设备后，增加新设备的引用计数（调用 netdev_hold 和 ax25_dev_hold），确保引用计数平衡。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d3573cfe4ac3b055eb6a88f354504f8a085de1dd

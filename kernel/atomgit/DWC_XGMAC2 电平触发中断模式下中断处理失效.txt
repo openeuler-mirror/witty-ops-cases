@@ -1,0 +1,20 @@
+#标题
+DWC_XGMAC2 电平触发中断模式下中断处理失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 DWC_XGMAC2 控制器的 DMA_Mode 寄存器中 INTM 位被设置为 2（电平触发模式）时，网络设备的收发中断处理流程无法正常执行。具体表现为驱动程序的中断处理函数 `dwxgmac2_dma_interrupt` 未能按预期响应 Rx 或 Tx 中断事件，导致网络通信功能受损或中断处理逻辑被完全绕过。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Synopsys Controller IP XGMAC-10G Ethernet MAC Databook v3.30a (section 2.7.2)，当 INTM 位设置为 2 时，DMA 不会为 Rx 或 Tx 中断事件置位 XGMAC_NIS 状态位。驱动代码原先的逻辑使用 `if (likely(intr_status & XGMAC_NIS))` 作为判断入口，由于硬件在此模式下不置位 XGMAC_NIS，该条件永远为假，导致内部的 RI（接收中断）和 TI（发送中断）处理逻辑永远不会被执行。
+
+#解决方案
+移除对 `XGMAC_NIS` 状态位的依赖检查，直接判断 `XGMAC_RI`（接收中断位）和 `XGMAC_TI|XGMAC_TBU`（发送中断位）。修改后，无论是边沿触发（INTM=0）还是电平触发（INTM=2）模式，驱动均能正确进入中断处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a73702061108ed4c15a5bc99c2e5964aad083205

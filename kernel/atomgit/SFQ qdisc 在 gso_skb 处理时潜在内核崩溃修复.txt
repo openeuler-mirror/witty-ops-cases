@@ -1,0 +1,21 @@
+#标题
+SFQ qdisc 在 gso_skb 处理时潜在内核崩溃修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在网络流量控制（tc）配置使用 SFQ（Stochastic Fairness Queueing）队列规则且 limit 参数设置较小的情况下，若开启了 TSO/GSO 卸载功能，当 `sch->q.len` 因 `gso_skb` 重入队而被人为膨胀时，可能导致 `sfq_drop()` 函数处理逻辑错误，进而引发内核 crash（如访问空指针或非法内存地址）。
+
+#主要错误日志
+未知
+
+#问题根因
+SFQ 代码逻辑中存在一个假设：总是能够容纳至少一个数据包。然而，在引入特定提交（a53851e2c321）后，`sch->q.len` 的计数包含了处于 `sch->gso_skb` 中的数据包。这导致在一个外观上为“空”的 SFQ qdisc 上执行 `enqueue()` 操作后，可能立即触发 `drop` 操作。
+在 `sfq_drop()` 的处理逻辑中，当所有活跃 slot 的长度均为 1 时，代码进入特定分支移除 slot。原代码未检查该 slot 是否为链表中仅存的活跃 slot，直接执行 `q->tail->next = slot->next`。如果此时被移除的 slot 是最后一个活跃 slot（`slot->next == x`），`q->tail` 应当被置空，否则后续继续操作 `q->tail` 将导致指针引用错误。
+
+#解决方案
+修改 `net/sched/sch_sfq.c` 中的 `sfq_drop()` 函数。在移除长度为 1 的 slot 时，增加判断逻辑：检查 `slot->next` 是否等于当前 slot 的索引 `x`。如果是，说明这是最后一个活跃 slot，将 `q->tail` 置为 `NULL`；否则，正常更新 `q->tail->next` 指针。此修复确保了在队列为空时 `q->tail` 状态的正确性，防止后续崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/29a0725f392ff3b1a0022755b75e5c3f8d31b7c2

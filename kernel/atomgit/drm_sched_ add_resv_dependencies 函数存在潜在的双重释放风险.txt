@@ -1,0 +1,23 @@
+#标题
+drm/sched: add_resv_dependencies 函数存在潜在的双重释放风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DRM 调度器处理任务依赖关系时，若 `drm_sched_job_add_dependency` 内部因 xarray 扩展失败等原因返回错误，会导致 `dma_fence` 对象发生双重释放。这可能引发内核内存损坏、空指针崩溃或无法预测的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `drm_sched_job_add_resv_dependencies` 在遍历 fence 时，错误地处理了引用计数。它先调用 `dma_fence_get(fence)` 增加引用，随后调用 `drm_sched_job_add_dependency(job, fence)`。
+根据 API 设计，`drm_sched_job_add_dependency` 无论成功还是失败都会“消耗”传入的 fence 引用（即内部会负责释放该引用）。
+原代码逻辑中，当 `drm_sched_job_add_dependency` 返回失败时，代码路径又显式调用了 `dma_fence_put(fence)` 尝试释放。这就导致同一个 fence 引用被释放了两次（一次被 add_dependency 内部消耗，一次被调用者显式释放），从而造成双重释放。
+
+#解决方案
+修改 `drm_sched_job_add_resv_dependencies` 函数的引用传递逻辑。将 `dma_fence_get(fence)` 直接作为参数传递给 `drm_sched_job_add_dependency`，移除失败路径下的显式 `dma_fence_put(fence)` 调用。
+这确保了引用计数的正确流转：显式获取的一个引用直接移交给 add_dependency 函数消耗，避免了所有权混淆。同时更新了代码注释，明确说明了获取引用的原因。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/68ceda4b7e82643802bf1672f0fab3193635d64d

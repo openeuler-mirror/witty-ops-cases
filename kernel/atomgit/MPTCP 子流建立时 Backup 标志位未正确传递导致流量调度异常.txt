@@ -1,0 +1,23 @@
+#标题
+MPTCP 子流建立时 Backup 标志位未正确传递导致流量调度异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+对于配置了 signal 和 backup 标志的 MPTCP 端点，在建立连接时，MP_JOIN 回复报文中未包含预期的 backup 标志。该行为导致具备 backup 属性的子流未能被正确标记为备份路径，违反了 MPTCP 协议的预期行为，可能导致流量未按预期路径调度。
+
+#主要错误日志
+未知
+
+#问题根因
+MPTCP 路径管理器在处理 MP_JOIN 请求时，仅支持在连接过程中端点标志发生变更的场景，而未处理端点初始即配置为 backup 的场景。代码逻辑在获取本地 ID 时，遗漏了查询并设置该端点的 backup 状态，导致发送 SYN+ACK 时底层基础设施虽然存在，但 backup 标志位始终未被置位。
+
+#解决方案
+在 MPTCP 子流建立和检查流程中增加对端点 backup 状态的查询与设置。具体修改如下：
+1. 新增 `mptcp_pm_is_backup` 接口及其在 netlink 和 userspace 路径管理器中的实现，用于根据地址查询其 backup 标志。
+2. 在 `subflow_token_join_request` 函数处理 MP_JOIN 请求时，调用新增接口查询 backup 状态并赋值给 `subflow_req->request_bkup`。
+3. 在 `subflow_chk_local_id` 函数中同样调用该接口，更新 `subflow->request_bkup` 状态，确保子流属性正确同步。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf24d8c1216d180fb88e28a73ac588b410cc8120

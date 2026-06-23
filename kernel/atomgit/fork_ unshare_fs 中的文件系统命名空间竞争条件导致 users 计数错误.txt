@@ -1,0 +1,20 @@
+#标题
+fork: unshare_fs 中的文件系统命名空间竞争条件导致 users 计数错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当进程调用 unshare 系统调用并指定 CLONE_NEWNS 标志创建新的挂载命名空间时，若当前 fs_struct 的引用计数（users）为 1，内核会错误地跳过复制 fs_struct 的流程。这可能导致在新的命名空间中文件系统状态不一致，或在后续操作中引发内存访问错误或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `unshare_fs` 函数中，原有的判断逻辑仅检查 `fs->users == 1` 来决定是否跳过复制。当进程请求创建新的挂载命名空间（`CLONE_NEWNS`）时，必须确保文件系统结构体被正确复制以隔离命名空间，但原有逻辑在这种情况下错误地直接返回，未能创建副本，破坏了命名空间隔离的语义。
+
+#解决方案
+修改 `kernel/fork.c` 中的 `unshare_fs` 函数判断条件。在检查 `fs->users == 1` 之前，增加对 `CLONE_NEWNS` 标志的检查。即：如果设置了 `CLONE_NEWNS` 标志，强制执行 `copy_fs_struct` 复制操作，不再跳过。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4adb23d42382638b5531f81abefe383ae2192bab

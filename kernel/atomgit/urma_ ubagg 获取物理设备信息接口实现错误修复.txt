@@ -1,0 +1,37 @@
+#标题
+urma: ubagg 获取物理设备信息接口实现错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+用户态通过 `GET_PHYSICAL_DEVICE`（原 `GET_SLAVE_DEVICE`）ioctl 接口查询 ubagg 聚合设备的物理设备信息时，获取到的信息不准确或接口调用失败，导致无法正确获取 EID 索引、设备名称等关键物理设备信息，影响上层业务对聚合设备拓扑的认知与管理。
+
+#主要错误日志
+- "Bonding device not exist."
+- "global topo map is NULL\n"
+- "find cur node index failed\n"
+- "Failed to query primary dev, eid: " EID_FMT "\n"
+- "Failed to query primary eid information, eid: " EID_FMT "\n"
+- "Failed to query port eid information, eid: " EID_FMT "\n"
+- "Failed to get physical device:%s"
+- "ubagg user ctl has no enough space, buffer size:%u, needed size:%lu"
+
+#问题根因
+原有的 `ubagg_get_slave_device` 接口实现逻辑过于简单，仅查找并复制了从设备名称列表，未正确实现根据聚合设备（bonding eid）查询底层物理设备详细信息的功能。具体根因包括：
+1. 缺失根据 bonding eid 查找全局拓扑映射表中聚合设备信息的逻辑。
+2. 缺失根据拓扑信息查询物理设备 primary eid 及 port eid 对应 eid_index 的逻辑。
+3. `ubagg_device` 结构体中未存储聚合设备的 `bonding_eid`，导致查询时缺少关键索引依据。
+4. 接口返回的数据结构定义与实际需求不符，原 `ubagg_slave_device` 结构混杂且字段不足以表达物理设备详情。
+
+#解决方案
+1. **重构接口逻辑**：将 `ubagg_get_slave_device` 重命名为 `ubagg_get_physical_device`，重新实现查询逻辑。新增 `get_physical_device` 函数，通过全局 topo map 查找聚合设备，遍历其下的物理单元，并根据 EID 获取对应的 ubcore 设备和 eid_index。
+2. **完善数据结构**：
+   - 修改 `ubagg_device` 结构体，新增 `bonding_eid` 成员，用于保存聚合设备的 EID。
+   - 修改用户态接口结构体，将 `ubagg_slave_device` 替换为 `ubagg_physical_device_out`，明确输出物理设备数量及设备信息数组。
+   - 调整枚举值 `GET_SLAVE_DEVICE` 为 `GET_PHYSICAL_DEVICE`。
+3. **补充初始化逻辑**：在 `init_ubagg_dev` 函数中增加对 `ubagg_dev->bonding_eid` 的初始化赋值，确保后续查询流程可用。
+4. **增强校验与日志**：新增对 global topo map、topo agg dev、primary dev 的有效性校验，并在查找失败时打印详细的错误日志。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9c9d911a6d0d1515525b80bdaa0db6f4bbc2ba8

@@ -1,0 +1,20 @@
+#标题
+cxl_bus_rescan() 因 bus_rescan_devices() 跳过正在状态切换设备导致无法充当探测屏障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+`cxl_bus_rescan()` 调用 `bus_rescan_devices()` 时，若目标设备正处于与驱动绑定或解绑的过程中，该设备会被跳过，导致 `cxl_bus_rescan()` 无法作为有效的探测屏障，引发内核行为与预期不符。
+
+#主要错误日志
+未知
+
+#问题根因
+内核 API `bus_rescan_devices()` 自 2.6.12 版本以前引入以来，存在一个设计特性：它会跳过那些正在与驱动进行 attach 或 detach 操作的设备，通过无锁方式读取 `dev->driver`，这在 CXL 场景下是不被期望的竞争行为。CXL 期望 `cxl_bus_rescan()` 是一个严格的探测屏障，但底层实现无法满足该要求。
+
+#解决方案
+修改 `cxl_bus_rescan_queue()` 的实现，不再调用 `bus_rescan_devices()`，而是改用 `bus_for_each_dev()` 配合新增的 `cxl_rescan_attach()` 回调函数。在回调中直接调用 `device_attach()`，从而确保对每个设备都执行探测操作，实现真正的探测屏障。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac85927dd81f6cc6aa5b6792f352641ba90a47d7

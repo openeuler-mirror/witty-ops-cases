@@ -1,0 +1,22 @@
+#标题
+xfs: 扩展属性条目未定义标志位缺失校验导致潜在问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+XFS 扩展属性 scrubber（xattr scrubber）在检查 shortform 属性条目时，未对未定义的标志位进行校验。这可能导致磁盘上存储了带有无效标志位的属性条目，但内核未检测到该损坏，从而可能引发后续的解析错误或数据不一致。在 dabtree 扫描函数中，相关检查也存在冗余或定义不统一的情况。
+
+#主要错误日志
+未知
+
+#问题根因
+xchk_xattr_actor 函数中缺少对 shortform 属性条目中无效标志位的检查；xchk_xattr_rec 函数中对无效标志位的掩码定义（badflags）是局部且硬编码的，未与全局定义保持一致。这导致 scrubber 无法识别出带有未知标志位的损坏属性条目。
+
+#解决方案
+1. 在 `xfs_da_format.h` 中统一定义宏 `XFS_ATTR_ONDISK_MASK`，包含所有合法的磁盘属性标志位（XFS_ATTR_ROOT, XFS_ATTR_SECURE, XFS_ATTR_LOCAL, XFS_ATTR_INCOMPLETE）。
+2. 在 `xchk_xattr_listent` 函数中新增校验逻辑：`if (flags & ~XFS_ATTR_ONDISK_MASK)`，若检测到非法标志位则调用 `xchk_fblock_set_corrupt` 标记损坏。
+3. 重构 `xchk_xattr_rec` 函数，将原有的硬编码 `badflags` 检查逻辑替换为使用新的 `XFS_ATTR_ONDISK_MASK` 宏，确保校验逻辑的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1bec3bdc21d121a6dde22dd492b36e0b99d0c202

@@ -1,0 +1,20 @@
+#标题
+nosmp 模式下 secondary CPUs 仍被标记为 possible 导致状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核启动参数配置为 `nosmp` (或 `maxcpus=0`) 时，系统本应运行在单处理器（UP）模式下。但实际上，`cpu_possible_mask` 掩码中仍包含了次要 CPUs，导致 `cpu_possible_mask` 状态与实际的 `nosmp` 启动策略不一致。虽然 `smp_prepare_cpus()` 会阻止次要 CPU 上线，但在此之前 `smp_init_cpus()` 阶段已将其标记为 possible，可能误导依赖该掩码判断系统 CPU 资源的子系统或用户空间工具。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smp_init_cpus()` 函数执行流程中，代码会解析固件（ACPI 或 DT）描述的 CPU 信息并调用 `set_cpu_possible()` 将次要 CPUs 标记为 possible。虽然后续的 `smp_prepare_cpus()` 函数检测到 `maxcpus=0` 会直接返回，不再进行后续初始化，但此时次要 CPUs 已经被错误地标记为了 possible 状态。这是因为在 `smp_init_cpus()` 中缺少对 `setup_max_cpus` 变量的检查，导致在 `nosmp` 模式下仍然解析并设置了次要 CPU 的 possible 掩码位。
+
+#解决方案
+在 `smp_init_cpus()` 函数中增加对 `setup_max_cpus` 的判断。如果检测到 `setup_max_cpus` 为 0（即 `nosmp` 或 `maxcpus=0`），函数直接返回，不再继续处理和标记次要 CPUs。这确保了在 `nosmp` 启动策略下，`cpu_possible_mask` 仅包含引导 CPU（Boot CPU），从而正确反映系统的单处理器运行状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/35fe1201c5af065dd388b78badd1cc877a43ccf3

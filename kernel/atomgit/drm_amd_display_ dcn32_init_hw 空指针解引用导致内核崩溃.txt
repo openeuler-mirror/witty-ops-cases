@@ -1,0 +1,21 @@
+#标题
+drm/amd/display: dcn32_init_hw 空指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 显示驱动初始化过程中（`dcn32_init_hw` 函数执行时），若 `dc->clk_mgr` 或其成员为空，访问其函数指针将导致内核发生空指针解引用，进而引发 Oops 或 Panic，导致系统崩溃或显示服务无法启动。
+
+#主要错误日志
+[由静态分析工具 smatch 检测出的日志推断]
+drivers/gpu/drm/amd/amdgpu/../display/dc/hwss/dcn32/dcn32_hwseq.c:961 dcn32_init_hw() error: we previously assumed 'dc->clk_mgr' could be null (see line 782)
+
+#问题根因
+`dcn32_init_hw` 函数在代码第 782 行曾假设 `dc->clk_mgr` 可能为空并进行了判断，但在后续第 961 行附近的代码路径中，直接访问了 `dc->clk_mgr->funcs` 及其成员函数，未再次进行空指针检查。这种逻辑不一致导致在特定硬件初始化流程下，若 `clk_mgr` 未正确分配或初始化，将触发空指针解引用错误。
+
+#解决方案
+在 `dcn32_init_hw` 函数中调用 `dc->clk_mgr` 相关功能前，增加对 `dc->clk_mgr` 指针及其 `funcs` 成员的非空检查，确保指针有效后才进行解引用操作，从而避免崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f6e2861486655001729294b185e56a58c0d18be8

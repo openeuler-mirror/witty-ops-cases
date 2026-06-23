@@ -1,0 +1,22 @@
+#标题
+TPM事件日志分配失败触发内核WARNING警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 HPE ProLiant DL320 Gen12 服务器启动过程中，内核加载 TPM 驱动时触发 WARNING 警告。系统日志显示 `__alloc_pages_noprof` 函数检测到分配订单过大（order > MAX_ORDER），导致调用栈打印和内核告警，影响系统启动体验。
+
+#主要错误日志
+[   10.853559][    T1] WARNING: CPU: 59 PID: 1 at mm/page_alloc.c:4727 __alloc_pages_noprof+0x2ca/0x330
+[   10.862827][    T1] Modules linked in:
+[   10.892170][    T1] Hardware name: HPE ProLiant DL320 Gen12/ProLiant DL320 Gen12, BIOS 1.20 10/28/2024
+
+#问题根因
+ACPI 表明 TPM 事件日志缓冲区大小为 16 MiB。原代码使用 `devm_kmalloc()` 尝试分配该大小的连续物理内存，导致内存分配订单（order）为 12（即 2^12 页），超过了 `__alloc_pages_noprof` 允许的最大订单限制（通常为 10），从而触发 `mm/page_alloc.c` 中的 WARNING 警告并导致分配失败。
+
+#解决方案
+将内存分配方式从连续物理内存分配 `devm_kmalloc()` 修改为 `kvmalloc()`。`kvmalloc()` 在小块内存时使用 `kmalloc()`，在大块内存时自动降级为 `vmalloc()`（使用虚拟连续内存），从而规避大订单内存分配的限制。同时，引入 `tpm_bios_log_free` 回调函数并通过 `devm_add_action()` 注册，以确保内存在设备生命周期结束时能被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ceea170f6dd7c8169e81a8a31f5a83ef59a1a12a

@@ -1,0 +1,20 @@
+#标题
+GFS2 gdlm_put_lock 因卸载竞争导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 GFS2 文件系统卸载过程中，存在一个极小的时间窗口，此时 DFL_UNMOUNT 标志已设置但 lockspace 尚未释放。在此窗口期内，若 DLM 回调 gdlm_ast 或 gdlm_bast 访问已释放的 glock 对象，将导致内核崩溃或内存访问错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `gdlm_put_lock` 中，原逻辑仅检查 `DFL_UNMOUNT` 标志便直接释放 glock 对象。然而，`DFL_UNMOUNT` 标志设置并不代表 lockspace 已完全释放，此时 DLM 仍可能回调该 glock。如果在 `DFL_UNMOUNT` 设置后、lockspace 释放前释放 glock，后续的回调函数将访问已释放内存，导致 UAF（Use-After-Free）。
+
+#解决方案
+移除仅依赖 `DFL_UNMOUNT` 标志检查即释放 glock 的逻辑。改为在调用 `dlm_unlock` 后检查返回值，仅当返回值为 `-ENODEV`（表示设备不存在/lockspace 已销毁）时，才安全地释放 glock 对象，从而确保在 lockspace 有效期间 glock 不会被提前释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f16434fe08bdbfc68fa23e9a9e5e8ed30f4a78d5

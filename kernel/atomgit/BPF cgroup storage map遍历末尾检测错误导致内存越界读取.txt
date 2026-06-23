@@ -1,0 +1,20 @@
+#标题
+BPF cgroup storage map遍历末尾检测错误导致内存越界读取
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `bpf_map_get_next_key` 遍历 cgroup storage map 时，当迭代至最后一个元素后，函数未能正确返回 `-ENOENT` 表示遍历结束，而是继续从无效指针处读取数据并拷贝至用户空间。这导致用户空间接收到错误的 key 值，且内核读取了 bogus pointer（伪造/非法指针）指向的内存，可能造成内存越界读取或信息泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+内核链表遍历宏 `list_next_entry()` 的实现机制是：当当前元素为链表末尾元素时，它不会返回 NULL，而是通过 `container_of()` 宏回绕指向链表头节点。原代码中对 `storage` 进行 NULL 检查（`if (!storage)`）属于无效的死代码，永远无法成立。因此，遍历无法在链表末尾正确停止，导致后续代码错误地将链表头部的内存区域当作 `storage->key` 进行读取。
+
+#解决方案
+修改 `cgroup_storage_get_next_key` 函数中的链表末尾检测逻辑。删除无效的 NULL 检查，改用 `list_entry_is_head()` 宏来判断遍历是否回到链表头。若检测到当前项已指向链表头，则跳转至 `enoent` 标签正确返回 `-ENOENT`，从而终止无效的内存读取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3565d01141cd3b329f86f4bc8f342435b5f0d8bf

@@ -1,0 +1,20 @@
+#标题
+nvme-multipath: 修复分区扫描引发的 lockdep 死锁警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+运行 Blktests 测试用例 nvme/014、057 和 058 时偶现失败，内核触发 lockdep WARN。警告信息指示存在潜在的死锁风险，死锁依赖链涉及 disk->open_mutex 锁、kblockd 工作队列完成以及 partition_scan_work 完成之间的依赖关系。
+
+#主要错误日志
+未知
+
+#问题根因
+在 nvme_mpath_set_live 函数中，partition_scan_work 通过 kblockd_schedule_work 提交到 kblockd 工作队列执行。这导致了 disk->open_mutex、kblockd 工作队列完成和 partition_scan_work 完成之间产生了循环依赖，从而引发 lockdep 死锁警告。
+
+#解决方案
+将 partition_scan_work 的执行队列从 kblockd 工作队列更改为 nvme_wq 工作队列，以此切断上述依赖链，避免 lockdep 警告及潜在的死锁风险。代码层面将 `kblockd_schedule_work(&head->partition_scan_work)` 修改为 `queue_work(nvme_wq, &head->partition_scan_work)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9c0805785cec15f92a926234f9b116712baa07b0

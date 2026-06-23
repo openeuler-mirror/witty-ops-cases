@@ -1,0 +1,24 @@
+#标题
+netfilter: nft_set_pipapo 中 pipapo_drop 函数栈越界读取故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `pipapo_drop` 函数进行 netfilter 规则处理时，触发内核地址消毒剂（KASAN）报警，检测到栈越界读取。系统调用栈可能受损或导致不可预期的行为。
+
+#主要错误日志
+BUG: KASAN: stack-out-of-bounds in pipapo_drop+0x50c/0x574 [nf_tables]
+Read of size 4 at addr ffff8000810e71a4
+This frame has 1 object:
+ [32, 160) 'rulemap'
+The buggy address is at offset 164 -- exactly 4 bytes past the end of the rulemap array.
+
+#问题根因
+在 `pipapo_drop()` 函数的循环中，传递给 `pipapo_unmap()` 的参数 `rulemap[i + 1].n` 在每次迭代时都会被求值。当循环进行到最后一次迭代（`i == m->field_count - 1`）时，代码尝试访问 `rulemap[i + 1]`，即访问了栈上分配的数组 `rulemap[NFT_PIPAPO_MAX_FIELDS]` 之外的位置。虽然 `pipapo_unmap()` 函数内部会在 `is_last` 为真时提前返回而不使用该值，但函数调用时参数求值过程已经发生，导致实质的栈越界读取。
+
+#解决方案
+在循环内部增加一个布尔变量 `last` 用于判断当前迭代是否为最后一次。在调用 `pipapo_unmap()` 时，如果是最后一次迭代，将越界的参数 `rulemap[i + 1].n` 替换为常量 `0`，从而避免访问数组越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f9a8067447ac05756f994b3ad556b72aabc9dbde

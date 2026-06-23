@@ -1,0 +1,26 @@
+#标题
+UAS设备拔出时数据传输过程中导致系统Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当UAS（USB Attached SCSI）设备在数据传输过程中被拔出时，系统有一定概率发生Panic。
+
+#主要错误日志
+未知
+
+#问题根因
+当UAS设备在数据传输过程中被拔出时，访问了无效的内存地址，具体发生在URB回调处理期间。
+1. SCSI驱动通过 `uas_queuecommand_lck()` 调用 `uas_submit_urbs()` 提交请求，期间依次提交 sense_urb、data_urb 和 cmd_urb。
+2. 设备移除可能发生在提交过程中的任意时刻，导致部分URB提交成功，部分失败（返回 `-ENODEV`）。
+3. 原有的错误处理逻辑在收到 `-ENODEV` 后直接调用 `scsi_done()`，进而触发 `scsi_end_request()` 释放了 sgtable（sg数据结构）。
+4. 之前已成功提交的URB在回调时调用 `usb_hcd_unmap_urb_for_dma()`，试图操作 `dma_direct_unmap_sg()`，此时 `sg->dma_address` 为0且sg数据结构已被释放，导致访问无效内存引发Panic。
+
+#解决方案
+修改 `uas_submit_urbs()` 函数中的错误条件检查逻辑。
+当UAS设备被移除（返回 `-ENODEV`），但检测到一个或多个URB已经成功提交（即 `cmdinfo->state` 包含 `COMMAND_INFLIGHT`、`DATA_IN_URB_INFLIGHT` 或 `DATA_OUT_URB_INFLIGHT` 状态位）时，不再立即调用 `scsi_done()`，而是将命令保存到 `devinfo->cmnd` 数组中。
+这样，已提交的URB会在后续 `uas_try_complete()` 或 `uas_zap_pending()` 中正确处理完毕后再调用 `scsi_done()`，避免了sg结构体被提前释放的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0a91be170b8c8fd6d39906bb391995806f9fd2ae

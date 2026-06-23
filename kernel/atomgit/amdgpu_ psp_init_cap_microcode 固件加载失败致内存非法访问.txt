@@ -1,0 +1,20 @@
+#标题
+amdgpu: psp_init_cap_microcode 固件加载失败致内存非法访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD GPU 驱动初始化过程中，若 `psp_init_cap_microcode` 函数加载固件失败（返回值非 0 且非 -ENODEV），驱动未正确退出函数而是继续执行后续代码，导致无效内存访问。
+
+#主要错误日志
+[   ] dev_err(adev->dev, "fail to initialize cap microcode\n");
+
+#问题根因
+在函数 `psp_init_cap_microcode()` 中，当加载固件失败时，代码逻辑错误地打印了错误日志 "fail to initialize cap microcode" 但并未跳出函数或返回错误，而是继续向下执行，导致后续访问相关数据结构时引发无效内存访问。这是由提交 07dbfc6b6b102e 引入的逻辑缺陷。
+
+#解决方案
+修改 `drivers/gpu/drm/amd/amdgpu/amdgpu_psp.c` 文件中的控制流逻辑。当固件加载失败时，增加 `else` 分支处理错误打印，并将 `goto out` 语句移至条件判断块之外，确保在加载失败（非 -ENODEV 场景）时能正确跳转到退出处理流程，避免继续执行无效代码路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/181c4b4fc03a3ba80200d471f1f98c7c79db0df3

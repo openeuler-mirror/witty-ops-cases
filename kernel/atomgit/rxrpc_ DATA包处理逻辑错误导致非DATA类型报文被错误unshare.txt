@@ -1,0 +1,20 @@
+#标题
+rxrpc: DATA包处理逻辑错误导致非DATA类型报文被错误unshare
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 RxRPC 协议报文时，`rxrpc_input_call_event()` 函数对报文类型的判断存在缺陷。对于需要解密处理的连接（securityIndex 不为 0），系统不仅会对 DATA 类型的数据包执行 unshare 操作，还会错误地对 ACK、ABORT 等控制类型的报文执行 unshare。这会导致非 DATA 类型的报文被不必要地修改或处理，可能引发协议处理异常或内存相关问题。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `rxrpc_input_call_event()` 在判断是否需要对 sk_buff 进行 unshare 操作（以便进行原位解密）时，条件检查不完整。原代码仅检查了 `sp->hdr.securityIndex != 0` 和 `skb_cloned(skb)`，遗漏了对报文类型 `sp->hdr.type` 的判断。根据协议逻辑，解密操作仅针对 DATA 数据包，ACK、ABORT 等控制包不应进行 unshare 操作。
+
+#解决方案
+在 `net/rxrpc/call_event.c` 文件的 `rxrpc_input_call_event()` 函数中，增加对报文类型的判断条件。修改后的逻辑仅在报文类型为 `RXRPC_PACKET_TYPE_DATA`、连接使用加密（securityIndex 不为 0）且 skb 为克隆包时，才执行 unshare 操作。此举确保了仅 DATA 包在解密前被正确处理，避免了非 DATA 包的错误修改。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eee4ef1ebfa650bd63d1f18d943085a4603789bb

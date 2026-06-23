@@ -1,0 +1,20 @@
+#标题
+drm/amd/pm: 修复 si_upload_smc_data 函数错误返回值检查导致 DPM 功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD SI 显卡平台上，`si_upload_smc_data` 函数执行失败，导致显卡动态电源管理（DPM）相关功能异常。具体表现为 SMC（System Management Controller）寄存器值未能正确设置，且在无显示器连接时，MCLK（显存时钟）切换受到非必要的限制，影响功耗管理与性能表现。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `si_upload_smc_data` 调用 `si_write_smc_soft_register` 设置 SMC 寄存器时，错误地预期返回值为 `PPSMC_Result_OK`（值为 1）。实际上，`si_write_smc_soft_register` 函数并不向 SMC 发送命令，其在成功时返回 0。这导致原本成功的写操作被误判为失败，函数提前返回，阻碍了后续逻辑的执行。此外，原代码逻辑在无显示器连接时直接返回，未将相关寄存器清零，导致 MCLK 切换策略受限。
+
+#解决方案
+移除对 `si_write_smc_soft_register` 返回值的错误检查逻辑，确保寄存器写入操作能够执行。重构代码逻辑，正确处理无显示器连接的场景：当无显示器连接时，将 `crtc_index` 及 MCLK 切换限制参数置为 0，以解除对 MCLK 切换的非必要限制。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e10b642d8aacb07122144f78ff9da8adbce49825

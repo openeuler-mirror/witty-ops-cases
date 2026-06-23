@@ -1,0 +1,21 @@
+#标题
+btrfs: find_lock_delalloc_range 函数因 max_bytes 计算错误导致内核 ASSERT 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定文件系统块大小与页大小配置下（如 bs > ps 或 bs < ps），进行涉及脏页落盘的写回操作时，内核触发 ASSERT 失败。具体表现为在 `submit_one_sector()` 函数中触发断言 `ASSERT(block_start != EXTENT_MAP_HOLE)`，导致内核崩溃或异常流程。该问题导致脏数据范围未能正确锁定和处理，部分脏块在没有对应有序区间的情况下被提交。
+
+#主要错误日志
+ASSERT(block_start != EXTENT_MAP_HOLE);
+
+#问题根因
+在 `find_lock_delalloc_range()` 函数中，当锁定页失败并返回 `-EAGAIN` 时，代码尝试通过缩短搜索范围来重试。此时 `max_bytes` 被错误地设置为固定值 `PAGE_SIZE`。
+如果文件系统的块大小与页大小不一致，`max_bytes` 可能小于实际的块大小。例如在 8K 块大小、4K 页大小的场景下，重试时 `max_bytes` 被设为 4K，小于块大小 8K。这导致 `btrfs_find_delalloc_range()` 无法找到并返回任何脏数据范围，进而使得 `writepage_delalloc()` 漏掉部分脏块的处理，破坏了“脏数据范围必须对应有序区间”的假设，最终触发 ASSERT 失败。
+
+#解决方案
+修改 `find_lock_delalloc_range()` 函数的重试逻辑，将 `max_bytes` 的赋值从 `PAGE_SIZE` 修改为 `fs_info->sectorsize`，确保 `max_bytes` 至少为一个块大小，从而保证后续查找操作能正确覆盖脏数据范围。同时增加一个 ASSERT 检查，确保传入 `btrfs_find_delalloc_range()` 的 `max_bytes` 不小于块大小。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fda4513c242cc78d3bc91a477435c5b87355b63e

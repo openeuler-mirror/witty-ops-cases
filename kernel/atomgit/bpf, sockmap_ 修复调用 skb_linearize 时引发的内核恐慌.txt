@@ -1,0 +1,23 @@
+#标题
+bpf, sockmap: 修复调用 skb_linearize 时引发的内核恐慌
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BPF sockmap 场景下，当 sk_psock_skb_ingress_enqueue 函数处理 skb 时，若 skb 的片段数量超过限制（MAX_MSG_FRAGS），代码会调用 skb_linearize 对 skb 进行线性化处理。此操作会导致内核发生 panic（内核恐慌）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 sk_psock_skb_ingress_enqueue 函数中调用 skb_linearize 之前，调用者（如 sk_psock_handle_skb）已经通过 skb_get 增加了 skb 的引用计数。skb_linearize 函数要求操作的 skb 不能是共享状态，即在调用时 skb 的引用计数应为 1。由于引用计数不满足条件，导致 skb_linearize 内部触发 panic。
+
+#解决方案
+修改 skb 引用计数的管理方式：
+1. 在 sk_psock_skb_ingress_enqueue 函数中增加一个布尔类型参数 `take_ref`，用于控制是否获取 skb 的引用。
+2. 移除 sk_psock_handle_skb 函数中对 skb_get 的无条件调用，改为在 enqueue 阶段根据上下文决定是否获取引用。
+3. 确保在调用 skb_linearize 之前不增加 skb 的引用计数，使其保持在非共享状态；线性化成功后，再根据 `take_ref` 参数决定是否调用 skb_get 增加引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5e430d27c09db151c78c0f98ec17ac501196fb97

@@ -1,0 +1,20 @@
+#标题
+scsi: hpsa: hpsa_big_passthru_ioctl 潜在内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 hpsa 驱动的 hpsa_big_passthru_ioctl 接口进行大数据量传输时，若用户空间数据拷贝失败（copy_from_user 返回非零值），内核会发生内存泄漏。该问题不会引发 panic，但会导致系统可用内存随错误调用次数增加而逐渐减少。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 hpsa_big_passthru_ioctl 中，代码先通过 kmalloc 分配了内存 buff[sg_used]，随后调用 copy_from_user 从用户空间拷贝数据。当 copy_from_user 失败时，代码跳转到 cleanup1 标签进行清理，但 cleanup1 清理逻辑未能释放此前已分配的 buff[sg_used] 内存，从而导致内存泄漏。
+
+#解决方案
+使用 memdup_user() 函数替换原有的 kmalloc() 加 copy_from_user() 组合。memdup_user 内部实现了内存分配与拷贝的原子性处理，若拷贝失败会自动释放已分配的内存，从而避免了内存泄漏。同时，针对非写入（读）方向的操作，将原有的 kmalloc 加 memset(0) 组合替换为 kzalloc()，简化了代码逻辑并确保内存初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dd100968fad4faf9e5d9fe3dd1a979c585f4d693

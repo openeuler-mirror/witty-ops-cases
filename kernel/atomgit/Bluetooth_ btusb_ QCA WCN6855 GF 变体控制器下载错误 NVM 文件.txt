@@ -1,0 +1,24 @@
+#标题
+Bluetooth: btusb: QCA WCN6855 GF 变体控制器下载错误 NVM 文件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+对于没有烧写 board ID 的 WCN6855 GF 变体控制器，驱动程序会错误地选择通用的 NVM 文件（如 `qca/nvm_usb_00130201.bin`）进行下载，而不是正确的 GF 变体专用 NVM 文件（如 `qca/nvm_usb_00130201_gf.bin`）。这导致蓝牙控制器因加载不匹配的固件配置而功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `btusb_generate_qca_nvm_name()` 中的 NVM 文件名生成逻辑存在缺陷。原逻辑在判断是否添加 "_gf" 后缀时，嵌套在 `QCA_FLAG_MULTI_NVM` 标志检查及 `board_id` 非零的条件分支内。当 WCN6855 GF 变体控制器未烧写 board ID（即 board_id 为 0）时，代码直接跳过了判断 `ram_version` 是否为 GF 变体的 switch 分支，导致生成的文件名缺少 "_gf" 后缀。
+
+#解决方案
+重构 `btusb_generate_qca_nvm_name()` 函数，将 GF 变体的识别逻辑（检查 `ram_version`）提前，使其不再依赖于 `board_id` 是否为 0 的判断。
+具体修改：
+1. 新增辅助函数 `qca_extract_board_id()` 专门处理 board ID 的提取，将 board_id 为 0xffff 的情况统一转换为 0。
+2. 在生成文件名时，优先根据 `ram_version` 判断是否为 GF 变体并确定 `variant` 后缀。
+3. 按顺序拼接字符串：基础路径 + rom_version + variant（若存在）+ board_id（若非 0）+ 后缀，确保无 board ID 的 GF 变体也能生成包含 "_gf" 的正确 NVM 文件名。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e7b751de73341904e21667deca124aec09ae78e2

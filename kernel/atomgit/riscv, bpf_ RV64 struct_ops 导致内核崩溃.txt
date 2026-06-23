@@ -1,0 +1,26 @@
+#标题
+riscv, bpf: RV64 struct_ops 导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RV64 架构上触发 bpf_tcp_ca 测试用例时，系统发生不可预测的内核崩溃。具体表现为无法处理内核页面请求，导致 Oops 异常，崩溃发生在 `tcp_ack` 函数调用路径中，此时程序计数器（epc）指向非法地址。
+
+#主要错误日志
+Unable to handle kernel paging request at virtual address ff60000088554500
+Oops [#1]
+CPU: 3 PID: 458 Comm: test_progs Tainted: G           OE      6.8.0-rc1-kselftest_plain #1
+Hardware name: riscv-virtio,qemu (DT)
+epc : 0xff60000088554500
+ ra : tcp_ack+0x288/0x1232
+status: 0000000200000120 badaddr: ff60000088554500 cause: 000000000000000c
+
+#问题根因
+上游 commit 2cd3e3772e41 ("x86/cfi,bpf: Fix bpf_struct_ops CFI") 将 struct_ops 中 `arch_prepare_bpf_trampoline` 的 `func_addr` 从 NULL 修改为非 NULL。在 RV64 架构上，原先使用 `func_addr` 来区分 struct_ops 和常规 trampoline，该变更导致判断逻辑错误，生成了错误的 prologue 和 epilogue，从而引发了不可预测的内核崩溃。
+
+#解决方案
+修改 `arch/riscv/net/bpf_jit_comp64.c` 中的 `__arch_prepare_bpf_trampoline` 函数，不再使用 `func_addr` 作为区分条件，改为使用 `BPF_TRAMP_F_INDIRECT` 标志位（该标志在 struct_ops 中总是被设置）来区分 struct_ops 和常规 trampoline，确保生成正确的 trampoline 上下文代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/acf84560239435644f6ea6e74d5659b96ce8e291

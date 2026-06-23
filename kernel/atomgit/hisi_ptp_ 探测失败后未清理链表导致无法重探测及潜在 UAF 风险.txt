@@ -1,0 +1,27 @@
+#标题
+hisi_ptp: 探测失败后未清理链表导致无法重探测及潜在 UAF 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动探测失败时，设备未从全局链表中删除且计数未减少，导致：
+1. 无法对该设备执行 reprobe（重探测）操作。
+2. 存在 use-after-free（释放后使用）风险。
+
+#主要错误日志
+- failed to probe rx device, please check the asl file!
+- rx_total:%u, current rx_total:%u, rx_cnt:%u
+- failed to probe, no base rx device, please check the asl file!
+
+#问题根因
+在 `hisi_ptp_probe` 函数中，当 `hisi_ptp_get_rx_resource` 或 `hisi_ptp_create_clock` 等步骤返回失败时，驱动未将已添加到全局 `ptp->ptp_rx_list` 链表中的设备节点删除，也未执行 `ptp->rx_cnt--` 操作。这导致资源清理不完全，阻塞了后续的重新探测，并遗留了无效指针引用的隐患。
+
+#解决方案
+1. 新增 `hisi_ptp_remove_resource` 函数，封装从链表删除设备节点、减少引用计数及置空指针的逻辑。
+2. 在 `hisi_ptp_probe` 的错误处理路径中调用 `hisi_ptp_remove_resource`，确保探测失败时正确回滚资源。
+3. 统一 `hisi_ptp_remove` 函数的资源清理逻辑，复用 `hisi_ptp_remove_resource` 函数，避免代码冗余。
+4. 修正 `hisi_ptp_get_rx_resource` 中的错误处理，在返回错误前减少 `ptp->rx_cnt` 并调整打印日志中的计数值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5c593d5841fafdc84553bea4c26bb6ac86635a54

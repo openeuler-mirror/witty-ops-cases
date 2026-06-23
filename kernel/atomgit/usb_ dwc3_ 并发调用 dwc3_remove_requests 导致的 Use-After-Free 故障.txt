@@ -1,0 +1,25 @@
+#标题
+usb: dwc3: 并发调用 dwc3_remove_requests 导致的 Use-After-Free 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 `adb root` 触发 USB 功能解绑/绑定操作，同时发生 USB 复位中断处理时，系统发生崩溃。崩溃由 Use-After-Free（释放后使用）条件触发，具体表现为进程访问了已被释放的 USB 请求内存，导致内核恐慌或异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根源在于 `dwc3_remove_requests()` 函数在多个执行路径间存在竞态条件且缺乏同步机制。具体涉及三条路径：
+1. 路径 1：USB 复位处理通过 `dwc3_gadget_reset_interrupt()` -> `dwc3_ep0_out_start()` 调用 `dwc3_remove_requests()`。
+2. 路径 2：USB 复位处理通过 `dwc3_gadget_reset_interrupt()` -> `dwc3_stop_active_transfers()` 调用 `dwc3_remove_requests()`。
+3. 路径 3：`adb root` 执行时异步触发 `gserial_disconnect()` -> `dwc3_gadget_ep_disable()` 调用 `dwc3_remove_requests()`。
+
+路径 3 异步执行且未与路径 1、2 同步。当路径 3 率先完成时，它会禁用端点并释放 'out' 请求的内存；若此时路径 1 或 2 仍在处理这些请求，访问已释放的内存即导致 Use-After-Free 崩溃。
+
+#解决方案
+在 `dwc3_gadget_giveback()` 函数中增加对请求状态的检查。如果发现请求状态已为 `DWC3_REQUEST_STATUS_COMPLETED`（已完成），则直接跳过处理，避免对已释放内存的重复操作。同时，在 `__dwc3_gadget_ep0_queue` 中添加请求状态的初始化，确保状态机正确流转。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0333749406b3c04ef1f32aafa5dc6a52b6dd9f85

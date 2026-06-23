@@ -1,0 +1,20 @@
+#标题
+tegra124-emc: DLL状态检测逻辑反转导致内存时序配置错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Tegra124 设备在切换内存时序时，驱动程序对 DLL（延迟锁定环）使能状态的判断逻辑与硬件规范相反。这导致在需要开启 DLL 时错误地判定为关闭，或在需要关闭时错误地判定为开启，进而导致 `dll_change` 状态标记设置错误，可能引发内存控制器配置异常或不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+代码检查指定的内存时序是否在 EMRS 寄存器中启用 DLL 时逻辑写反。根据硬件规范，DLL 是通过 EMRS 寄存器的 bit A0（即代码中的 bit 0）来控制的，且当 bit A0 为低电平（0）时 DLL 处于使能状态。原代码中 `else if (timing->emc_mode_1 & 0x1)` 判断逻辑错误，导致 DLL 状态识别相反。
+
+#解决方案
+修改 `drivers/memory/tegra/tegra124-emc.c` 中的判断条件，将 `else if (timing->emc_mode_1 & 0x1)` 修正为 `else if (!(timing->emc_mode_1 & 0x1))`。通过取反操作，确保当 bit 0 为 0 时正确识别为 DLL_CHANGE_ON，符合硬件“低电平使能”的规范。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bd2014a82f6a253d82c2888527d46730968625d3

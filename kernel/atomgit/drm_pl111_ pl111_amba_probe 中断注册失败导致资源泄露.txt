@@ -1,0 +1,20 @@
+#标题
+drm/pl111: pl111_amba_probe 中断注册失败导致资源泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `pl111_amba_probe` 函数执行过程中，若 `devm_request_irq()` 注册中断失败，驱动直接返回错误码，导致此前已初始化的资源（如 DRM 设备对象、保留内存等）未被正确释放，引发内核资源泄露（resource leak）。
+
+#主要错误日志
+dev_err(dev, "%s failed irq %d\n", __func__, ret);
+
+#问题根因
+在 `pl111_amba_probe` 探测函数中，错误处理路径逻辑缺失。当 `devm_request_irq()` 调用失败时，代码直接执行 `return ret` 返回，未跳转至现有的 `dev_put` 标签进行处理。这导致 `drm_dev_put()` 和 `of_reserved_mem_device_release()` 清理函数未被调用，从而导致资源泄露。
+
+#解决方案
+修改 `pl111_amba_probe` 函数中的错误处理逻辑，将 `devm_request_irq()` 失败后的 `return ret` 修改为 `goto dev_put`。确保在中断注册失败时，正确跳转到清理流程释放已分配的资源，避免内存泄露。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e63b504cb02db5fe0bf9022c0cc46a96a5c95d8d

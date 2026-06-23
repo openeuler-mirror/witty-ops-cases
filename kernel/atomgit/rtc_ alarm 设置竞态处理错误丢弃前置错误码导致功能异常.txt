@@ -1,0 +1,20 @@
+#标题
+rtc: alarm 设置竞态处理错误丢弃前置错误码导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 rtc-abx080x 等设备上调用 timer_enqueue 或执行 `hwclock` 操作时，驱动层本应返回无效参数错误（因为 alarm feature 未启用或 set_alarm 失败），但内核却错误地返回了成功。这导致用户态程序行为异常，例如 `hwclock` 报错 "select() to /dev/rtc0 to wait for clock tick timed out"，误导调用者认为操作成功或状态正常。
+
+#主要错误日志
+hwclock: select() to /dev/rtc0 to wait for clock tick timed out
+
+#问题根因
+内核 Commit 795cda8338ea ("rtc: interface: Fix long-standing race when setting alarm") 引入了一个逻辑缺陷：在 `__rtc_set_alarm` 函数中，当判断 `(scheduled - now) <= 1` 时，直接进入时间读取逻辑并可能覆盖之前的错误码。如果在此之前的校验（如 set_alarm 操作）已经产生了错误（err 非零），该逻辑仍会尝试执行 `__rtc_read_time`，若读取成功则会将之前的错误码覆盖为 0，导致原本应返回给调用者的有效错误信息（如无效参数或功能禁用）被丢弃，从而返回成功状态，误导调用者。
+
+#解决方案
+修改 `drivers/rtc/interface.c` 中的 `__rtc_set_alarm` 函数逻辑，在判断 `(scheduled - now) <= 1` 时增加对 `err` 变量的检查。只有当 `err` 为 0（即前置操作无错误）时，才继续执行后续的时间读取逻辑，确保前置校验产生的错误码能正确传递给调用者，不会被意外覆盖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7b6e91d13cc2df516669a36dd7507fc31c4e9d08

@@ -1,0 +1,35 @@
+#标题
+kvm: x86: fix infinite loop in kvm_guest_time_update when tsc is 0
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Syzkaller 测试检测到软锁卡死。CPU#3 卡死 127 秒，触发了 soft lockup。调用栈显示进程在 `kvm_guest_time_update` -> `kvm_get_time_scale` 路径中陷入无限循环。
+
+#主要错误日志
+watchdog: BUG: soft lockup - CPU#3 stuck for 127s! [syz.1.2088:9817]
+RIP: 0010:__sanitizer_cov_trace_const_cmp4+0x8/0x20 kernel/kcov.c:313
+Call Trace:
+ <TASK>
+ kvm_get_time_scale arch/x86/kvm/x86.c:2458 [inline]
+ kvm_guest_time_update+0x926/0xb00 arch/x86/kvm/x86.c:3268
+ vcpu_enter_guest.constprop.0+0x1e70/0x3cf0 arch/x86/kvm/x86.c:10678
+ vcpu_run+0x129/0x8d0 arch/x86/kvm/x86.c:11126
+ kvm_arch_vcpu_ioctl_run+0x37a/0x13d0 arch/x86/kvm/x86.c:11352
+
+#问题根因
+在函数 `__scale_tsc` 中使用定点数计算 TSC 时存在进度丢失问题。当 TSC 缩放计算结果（例如 `0.999...`）被截断为 0 时，`kvm_get_time_update` 进一步调用 `kvm_get_time_scale`。此时 `tps32`、`tps64` 和 `base_hz` 均为 0，导致 `kvm_get_time_scale` 中的第二个 `while` 循环陷入无限循环。在 `CONFIG_PREEMPT` 关闭的情况下，这导致了 soft lockup 问题。
+
+#解决方案
+在 `__scale_tsc` 函数中增加对计算结果为 0 的检查。如果定点数计算结果 `_tsc` 为 0，则强制返回 1，以此避免因 TSC 值为 0 导致的无限循环。具体代码修改为：
+```c
+static inline u64 __scale_tsc(u64 ratio, u64 tsc)
+{
+	u64 _tsc = mul_u64_u64_shr(tsc, ratio, kvm_caps.tsc_scaling_ratio_frac_bits);
+	return  !_tsc ? 1 : _tsc;
+}
+```
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9bbca0a323839875c1ad8b1ba5be8c0aa76fa3af

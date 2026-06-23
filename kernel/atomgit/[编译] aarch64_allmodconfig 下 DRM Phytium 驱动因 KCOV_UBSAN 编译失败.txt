@@ -1,0 +1,24 @@
+#标题
+[编译] aarch64/allmodconfig 下 DRM Phytium 驱动因 KCOV/UBSAN 编译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 aarch64 架构下执行 `make allmodconfig` 编译内核时，构建过程报错中止。具体表现为编译器在处理 DRM Phytium 驱动时，因启用 CONFIG_KCOV 和 CONFIG_UBSAN 选项而触发 modpost 阶段的错误，导致内核无法正常编译生成。
+
+#主要错误日志
+ERROR: modpost: "__sanitizer_cov_trace_cmpf" [drivers/gpu/drm/phytium/phytium_crtc.c]
+
+#问题根因
+1. **代码使用了浮点运算**：DRM Phytium 驱动中的 `phytium_crtc.c` 文件包含大量浮点运算逻辑（如 `dc_sinc_filter`、`dc_sint` 等函数）。
+2. **内核浮点支持限制**：Linux 内核代码通常不直接支持浮点运算，但在 ARM64 和 x86 架构下可通过 `kernel_neon_begin/kernel_fpu_begin` 等接口在特定上下文中使用。
+3. **Sanitizer 冲突**：当启用 CONFIG_KCOV（代码覆盖率测试）或 CONFIG_UBSAN（未定义行为检测）时，编译器会插入 `__sanitizer_cov_trace_cmpf` 等插桩函数。这些插桩函数与内核模式下的浮点运算上下文不兼容，或者该驱动配置在 `allmodconfig` 下未能正确处理浮点保护与 Sanitizer 的依赖关系，导致链接阶段找不到符号或产生非法引用。
+4. **Kconfig 依赖不当**：原 Kconfig 中 `DRM_PHYTIUM` 仅依赖于 `ARCH_PHYTIUM`，导致在非 Phytium 平台（如通用 aarch64 环境）执行 `allmodconfig` 编译时也会编译此驱动，从而暴露上述问题。
+
+#解决方案
+1. **删除浮点运算代码**：从 `phytium_crtc.c` 中移除了所有涉及浮点运算的静态函数（如 `dc_sint`、`dc_sinc_filter`、`dc_calculate_sync_table`）以及调用这些函数的 `phytium_dc_scaling_config` 函数实现，彻底消除了编译错误的根源。
+2. **修正 Kconfig 依赖**：修改 `drivers/gpu/drm/phytium/Kconfig`，将 `DRM_PHYTIUM` 的依赖条件从 `depends on DRM && ARCH_PHYTIUM` 修改为 `depends on DRM && (ARM64 || X86)`，扩展了驱动的适用架构范围（同时修正了 X86 平台的编译支持），配合 `openeuler_defconfig` 中开启 `CONFIG_DRM_PHYTIUM` 进行适配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1af5afdad11d0c640279566bfe5ea14906d651db

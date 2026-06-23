@@ -1,0 +1,20 @@
+#标题
+efi/arm64: Fix kmemleak false positive in arm64_efi_rt_init
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 架构上运行 kmemleak 内存泄漏检测工具时，会报告 `arm64_efi_rt_init` 函数中分配的内存存在泄漏（false positive），即工具误报了未被引用的有效内存对象。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `arm64_efi_rt_init` 函数中通过 `__get_free_pages` 等接口分配了内存用于 EFI 运行时栈，该内存指针保存在全局变量 `efi_rt_stack_top` 中（经过偏移计算）。由于保存的是偏移后的地址而非直接返回的指针 `p`，kmemleak 无法跟踪到该内存块的引用关系，从而将其判定为泄漏对象，导致误报。
+
+#解决方案
+在内存分配成功后，调用 `kmemleak_not_leak(p)` 函数显式告知 kmemleak 该内存指针 `p` 不是泄漏对象，以此消除误报。同时需要在文件头部包含 `<linux/kmemleak.h>` 头文件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3e5da20e1c4838e6354f0dfadf719b00c124955e

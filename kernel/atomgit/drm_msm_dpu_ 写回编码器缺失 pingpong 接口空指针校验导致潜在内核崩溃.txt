@@ -1,0 +1,23 @@
+#标题
+drm/msm/dpu: 写回编码器缺失 pingpong 接口空指针校验导致潜在内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DPU（Display Processing Unit）写回场景下，若 `pingpong` 接口（`hw_pp`）不存在，内核在执行 `dpu_encoder_phys_wb_setup_ctl` 函数时直接访问 `phys_enc->hw_pp->merge_3d` 或 `phys_enc->hw_pp->idx` 成员，导致发生 NULL Pointer Dereference（空指针解引用），引发内核 Oops 或 Panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `dpu_encoder_phys_wb_setup_ctl()` 中，代码逻辑大部分情况下都对 `hw_pp` 进行了非空检查，但在处理 `merge_3d` 模式设置和 `bind_pingpong_blk` 绑定的两处代码路径中，直接使用了 `phys_enc->hw_pp` 而未进行 NULL 指针检查。当硬件配置或状态导致 `hw_pp` 为空时，直接访问其成员引发空指针崩溃。
+
+#解决方案
+在相关代码路径中补充对 `hw_pp` 指针的非空检查。具体修改如下：
+1. 在设置 `merge_3d` 模式前，将判断条件从仅检查 `merge_3d` 和 `ops` 改为先检查 `hw_pp` 是否存在。
+2. 在绑定 `pingpong_blk` 前，确保 `hw_pp` 非空才执行绑定操作。
+3. 同时优化代码风格，使用局部变量 `hw_pp` 和 `hw_wb` 替代直接访问 `phys_enc->*`，提升代码一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/393a314f2f3d9bcbe83153d1703e1e7066dd6c0e

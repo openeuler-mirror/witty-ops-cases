@@ -1,0 +1,20 @@
+#标题
+p54spi: request_irq 与 disable_irq 间存在中断竞态窗口
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 p54spi 驱动加载初始化过程中，`request_irq()` 注册中断处理函数后、`disable_irq()` 显式禁用中断前，存在一个时间窗口。在此窗口期内，中断可能提前触发并进入系统处理流程，导致内核异常或驱动初始化逻辑错误（如访问未就绪的资源）。
+
+#主要错误日志
+[   ...] p54spi: request_irq() failed
+
+#问题根因
+驱动在 `p54spi_probe` 中调用 `request_irq()` 时默认会自动使能中断，代码紧接着调用 `disable_irq()` 试图禁用该中断。这两个操作之间存在时间间隙，导致中断可能在被显式禁用前就已经触发，引发竞态条件。
+
+#解决方案
+在调用 `request_irq()` 时直接传入 `IRQF_NO_AUTOEN` 标志，该标志会禁止中断在注册时自动使能，从而消除了后续调用 `disable_irq()` 的必要性及中间存在的竞态窗口。代码修改为将 `request_irq` 的 flags 参数由 0 改为 `IRQF_NO_AUTOEN`，并移除后续冗余的 `disable_irq()` 调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c666690bd0c39268a8ad2e12fba3aab94c896fe5

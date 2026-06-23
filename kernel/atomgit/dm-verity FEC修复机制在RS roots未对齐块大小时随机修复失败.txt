@@ -1,0 +1,26 @@
+#标题
+dm-verity FEC修复机制在RS roots未对齐块大小时随机修复失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 dm-verity 的 RS-FEC（Reed-Solomon Forward Error Correction）功能时，若配置的 RS roots 参数与块大小未对齐（例如 roots=20），即使数据损坏程度在理论上可修复范围内，FEC 修复机制也会随机失败。
+具体表现为：对 verity 设备发起读取时，内核日志报告修复失败，导致 I/O 错误，用户无法读取受损但本应被修复的数据块。
+
+#主要错误日志
+- verity-fec: 7:1: FEC 0: failed to correct: -74
+- device-mapper: verity: 7:1: data block 0 is corrupted
+
+#问题根因
+该问题是由于之前的一次修复提交（8ca7cab82bda）引入的错误逻辑导致。
+当 Reed-Solomon roots 设置跨越多个块边界时，代码错误地使用了数据块大小作为 dm-bufio 的块大小（例如 roots=20 时使用了 4096），而非合适的对齐大小。这导致在读取校验字节时，如果数据跨越了两个块，代码无法正确获取完整的奇偶校验字节，而是使用了错误的字节进行计算，从而导致修复算法随机失败。
+
+#解决方案
+修改 dm-verity FEC 的 IO 处理逻辑：
+1. 强制使用配置的数据块大小作为 dm-bufio 的块大小，以避免 IO 未对齐问题。
+2. 新增一个缓存机制，用于存储已处理的奇偶校验字节。
+3. 当校验字节跨越两个块边界时，通过缓存机制将前一个块的末尾字节与下一个块的起始字节拼接，确保传递给 RS 解码器的是完整且正确的校验数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c6fc3cc0bc3f13463565dcdf486a44f7196870a

@@ -1,0 +1,25 @@
+#标题
+SMB3 Kerberos AES-256 加密导致挂载失败或通信异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 Kerberos 认证（sec=krb5）并强制要求 AES-256 加密（require_gcm_256=1）挂载 SMB3 共享时，挂载失败。原因是客户端与服务器端生成的加密/解密密钥不匹配，导致后续加密通信无法正常进行。
+
+#主要错误日志
+cifs_server_dbg(VFS, "%s: Could not set with session key\n", __func__);
+
+#问题根因
+在 SMB3.1.1 方言下使用 AES-256-CCM 或 AES-256-GCM 加密时，根据 MS-SMB2 协议规范（3.2.5.3.1 节），加密和解密密钥的派生必须使用完整的 Session.FullSessionKey（Kerberos AES-256 场景下为 32 字节）。
+然而，内核函数 `generate_key()` 在进行 HMAC-SHA256 运算时，硬编码使用了 `SMB2_NTLMV2_SESSKEY_SIZE`（16 字节）作为密钥输入长度。这导致在处理 32 字节的 Kerberos 会话密钥时，仅使用了前 16 字节进行密钥派生，产生的加密密钥与服务器端不匹配，进而导致挂载失败。此外，`cifs_dump_full_key()` 同样存在硬编码 16 字节长度的问题，导致用户态工具（如 Wireshark）无法获取正确的密钥进行解密分析。
+
+#解决方案
+1. 修改 `generate_key()` 函数，增加 `full_key_size` 参数，允许调用者指定用于 KDF 的密钥长度。
+2. 在 `generate_smb3signingkey()` 中区分场景：
+   - 签名密钥派生继续使用 16 字节。
+   - 当方言为 SMB3.1.1 且加密算法为 AES-256 时，使用 `ses->auth_key.len`（即完整会话密钥长度）进行加密和解密密钥的派生。
+3. 修正 `cifs_dump_full_key()` 中的 `session_key_length` 输出逻辑，使用 `ses->auth_key.len` 替代硬编码的 `CIFS_SESS_KEY_SIZE`，确保导出给用户态工具的密钥长度正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/625fcb61b20ab279264b5d2fe4c221807c5632c3

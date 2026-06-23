@@ -1,0 +1,23 @@
+#标题
+tegra20-emc: OF节点引用计数导致的释放后使用(UAF)故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Tegra20 EMC 驱动加载或运行过程中，因设备树节点引用计数处理不当，导致节点在仍在使用时被提前释放，可能引发内核崩溃或内存非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `tegra_emc_find_node_by_ram_code()` 中调用了 `of_find_node_by_name()`。该函数会自动释放传入参数（上一级节点）的引用计数。这导致父节点在子节点（如 "lpddr2"）仍在遍历或使用时就被释放，从而引发释放后使用问题。
+
+#解决方案
+修改节点遍历与查找方式，移除对 `of_find_node_by_name()` 的依赖，改用更安全的节点操作接口：
+1. 将父节点的遍历逻辑从 `of_find_node_by_name` 改为 `for_each_child_of_node` 宏，避免引用计数被错误释放。
+2. 将查找 "lpddr2" 子节点的逻辑从 `of_find_node_by_name` 改为 `of_get_child_by_name`，确保正确增加引用计数。
+3. 移除循环中多余的 `of_node_put(np)` 调用，防止重复释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/36ad135a58dd2c6bac5d84654174b4abf846fca5

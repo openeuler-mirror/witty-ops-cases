@@ -1,0 +1,20 @@
+#标题
+x86-android-tables 模块 platform_device_register() 失败引发释放后使用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 x86 Android 平板设备驱动初始化过程中，若 `platform_device_register_full()` 注册失败，驱动会调用 `x86_android_tablet_remove()` 进行资源清理。由于在清理后仍尝试访问已释放的 `pdevs[]` 数组以获取错误码，导致发生“释放后使用”的内存错误，可能引发内核崩溃或不可预期的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于代码逻辑顺序错误。当 `platform_device_register_full()` 返回错误时，代码先调用 `x86_android_tablet_remove(pdev)` 进行清理，该函数内部会释放 `pdevs[]` 数组的内存。然而，清理完成后代码依然尝试执行 `return PTR_ERR(pdevs[i])`，此时访问 `pdevs[i]` 即是在访问已被释放的内存，导致 UAF（Use-After-Free）。
+
+#解决方案
+在调用 `x86_android_tablet_remove()` 之前，先将 `pdevs[x]` 的错误指针转换为错误码并存储在局部变量 `ret` 中。修改后的逻辑先保存错误值，再执行资源释放，最后返回保存的错误码，从而避免在释放后访问 `pdevs[]` 数组。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/37f85855d7fa503834e04e2c0fdc1a3cf1a1a9ea

@@ -1,0 +1,20 @@
+#标题
+dm mirror: create_dirty_log函数整型溢出漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户通过设备映射器表字符串提供一个接近 UINT_MAX 的 param_count 时，会在 `create_dirty_log()` 函数中触发整型溢出。该溢出导致参数数量检查被绕过，随后将溢出后的值作为参数个数传递给 `dm_dirty_log_create()`，导致对 argv 数组进行越界读取。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `create_dirty_log()` 函数中，代码原先在验证参数个数之前先执行了 `*args_used = 2 + param_count` 的无符号加法计算。当用户提供的 param_count 接近 UINT_MAX 时，加法发生溢出回绕为一个较小的数值，导致后续的 `argc < *args_used` 校验失效（被绕过）。溢出后的 param_count 随后被传递给底层函数，引发越界读取。
+
+#解决方案
+调整参数校验逻辑顺序，在执行加法运算前先进行比较。修改代码先判断 `param_count > argc - 2`，如果成立则报错返回，否则再执行 `*args_used = 2 + param_count`。由于代码已保证 argc >= 2，因此减法操作是安全的。该修复模式与同文件中的 `parse_features()` 函数保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6c5ee8a7882ec6a3f27dce0912dd84e5eaaf5778

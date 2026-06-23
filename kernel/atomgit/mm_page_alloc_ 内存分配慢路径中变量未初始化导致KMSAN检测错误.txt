@@ -1,0 +1,36 @@
+#标题
+mm/page_alloc: 内存分配慢路径中变量未初始化导致KMSAN检测错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内存分配过程中，KMSAN（Kernel Memory Sanitizer）检测到使用了未初始化的变量值。触发条件涉及文件系统操作（如 ext4 查找入口、缓冲区增长等）路径，最终导致内核报错并打印调用栈。函数 `should_compact_retry()` 可能因读取未初始化的 `compact_result` 而产生不可预期的行为。
+
+#主要错误日志
+BUG: KMSAN: uninit-value in __alloc_pages_slowpath+0xee8/0x16c0 mm/page_alloc.c:4416
+ __alloc_pages_slowpath+0xee8/0x16c0 mm/page_alloc.c:4416
+ __alloc_frozen_pages_noprof+0xa4c/0xe00 mm/page_alloc.c:4752
+ alloc_pages_mpol+0x4cd/0x890 mm/mempolicy.c:2270
+ alloc_frozen_pages_noprof mm/mempolicy.c:2341 [inline]
+ alloc_pages_noprof mm/mempolicy.c:2361 [inline]
+ folio_alloc_noprof+0x1dc/0x350 mm/mempolicy.c:2371
+ filemap_alloc_folio_noprof+0xa6/0x440 mm/filemap.c:1019
+ __filemap_get_folio+0xb9a/0x1840 mm/filemap.c:1970
+ grow_dev_folio fs/buffer.c:1039 [inline]
+ grow_buffers fs/buffer.c:1105 [inline]
+ __getblk_slow fs/buffer.c:1131 [inline]
+ bdev_getblk+0x2c9/0xab0 fs/buffer.c:1431
+...
+
+Local variable compact_result created at:
+ __alloc_pages_slowpath+0x66/0x16c0 mm/page_alloc.c:4218
+
+#问题根因
+在函数 `__alloc_pages_slowpath()` 中，局部变量 `compact_result` 未进行初始化。在某些执行路径下，该变量在赋值前就被传递给函数 `should_compact_retry()` 使用，导致读取了未初始化的值。
+
+#解决方案
+在 `__alloc_pages_slowpath` 函数的重启逻辑中，显式将变量 `compact_result` 初始化为 `COMPACT_SKIPPED`，确保在后续流程中该变量具有确定的初始值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8089d0e0a33016cb2bff0c1e18345accbaca2b00

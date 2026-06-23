@@ -1,0 +1,21 @@
+#标题
+unic网卡在MUE场景修改队列参数导致calltrace
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多网口MUE流媒体场景下，同时修改队列参数时，单播完成事件在通道等队列资源销毁过程中被中断。此时获取队列资源（如 rq 和 sq）会导致系统挂起并触发调用栈。
+
+#主要错误日志
+未知
+
+#问题根因
+在处理端口复位流程时，`unic_port_handler` 函数提前检查了 `netif_running` 状态，导致在设备未处于 running 状态时直接返回，跳过了必要的复位处理逻辑。而在 `unic_reset_down` 和 `unic_reset_init` 中，使用局部变量缓存 `if_running` 状态后，该状态值可能已过时，无法正确反映实时状态，导致在资源销毁或获取过程中出现竞争，引发 calltrace。
+
+#解决方案
+1. 将 `netif_running` 的状态检查从 `unic_port_handler` 函数移动到具体的复位处理函数 `unic_ub_port_reset` 和 `unic_eth_port_reset` 内部，确保复位流程入口不被过早拦截，且在复位逻辑内部能正确处理非运行状态。
+2. 在 `unic_reset_down` 和 `unic_reset_init` 函数中，移除局部变量 `if_running` 的缓存，改为在调用 `unic_net_stop` 或 `unic_net_open` 前实时调用 `netif_running` 获取设备状态，避免因状态不同步导致的逻辑错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7df248c3f03d95decd61865b82bc76ef81354dc0

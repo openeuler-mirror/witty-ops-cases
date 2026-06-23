@@ -1,0 +1,26 @@
+#标题
+weighted interleave sysfs 内存泄漏与 kernfs WARN_ON 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 weighted interleave 功能的 sysfs 接口初始化失败或节点移除过程中，发生内存泄漏。此外，在清理 sysfs 条目时，可能触发 kernfs 中的 `WARN_ON()` 警告，表明 sysfs 状态访问异常。由于该路径仅在内存分配失败（-ENOMEM）时触发，且发生在系统启动晚期的 `late_initcall` 阶段，通常风险较低，但在内存压力较大场景下可能出现。
+
+#主要错误日志
+- `pr_err("failed to add sysfs [node%d]\n", nid);`（初始化失败时打印）
+- `kernfs` 子系统中可能触发的 `WARN_ON()` 内核警告日志（推断，由访问无效 sysfs 状态导致）。
+
+#问题根因
+在移除 weighted interleave 的 sysfs 属性时，kobject 的释放流程处理不当：
+1. **内存泄漏**：错误处理路径中直接调用 `kfree()` 释放 kobject，而未调用 `kobject_del()` 和 `kobject_put()`，导致 release 回调函数未被执行，关联内存未正确释放。
+2. **状态访问异常**：原代码在 release 函数中调用 `sysfs_remove_file()`，但此前可能已调用 `kobject_del()` 移除了 kobject，导致 sysfs 内部状态已被清理，此时访问无效的 sysfs 状态触发了 kernfs 的 `WARN_ON()` 检查。
+
+#解决方案
+重构 sysfs 清理与释放流程：
+1. 移除不安全的 `kfree()` 调用，替换为标准的 `kobject_del()` 和 `kobject_put()` 序列，确保 kobject 引用计数正确减少并触发 release 回调。
+2. 在调用 `kobject_del()` 之前完成所有属性文件的移除操作，避免在 release 函数中操作已销毁的 sysfs 状态。
+3. 引入 `wi_cleanup()` 和 `wi_kobj_release()` 函数，明确分离属性删除与对象释放逻辑，确保资源按序安全释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/32c6139fef0a561f4e90b1f994aaffb932614f22

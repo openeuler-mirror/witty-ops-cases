@@ -1,0 +1,20 @@
+#标题
+ext4: ext4_ext_show_leaf() 中的 use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ext4 文件系统处理 extent 分割或 unwritten extents 过程中，若路径指针 `ppath` 指向的结构被重新分配或释放，调用 `ext4_ext_show_leaf()` 时可能会访问已释放的内存地址，导致内核发生 Use-After-Free 故障或数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ext4_split_extent` 和 `ext4_ext_handle_unwritten_extents` 函数中，传入的参数是指向路径指针的指针 `ppath`。代码中使用了一个局部变量 `path` 来暂存 `*ppath` 的值（或隐式使用了旧值），并在后续调用 `ext4_ext_show_leaf(inode, path)` 时传入该局部变量。由于在这些执行路径中，`ppath` 指向的内容可能已通过 `ext4_split_extent_at` 等函数进行了更新或重新分配，导致原先的 `path` 指针指向的内存可能已被释放。因此，使用旧的 `path` 指针进行访问会触发 Use-After-Free。
+
+#解决方案
+移除不再需要的局部变量 `path`，直接在 `ext4_ext_show_leaf()` 调用中解引用 `ppath`（即传入 `*ppath`）。这确保了该函数始终使用最新的、有效的路径指针，避免访问已释放的旧指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/865d9554f35979726255aa9dacc1f947243c37c8

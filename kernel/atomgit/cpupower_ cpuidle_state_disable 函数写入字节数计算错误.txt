@@ -1,0 +1,26 @@
+#标题
+cpupower: cpuidle_state_disable 函数写入字节数计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 `cpupower` 工具禁用 CPU idle 状态时，`cpuidle_state_disable` 函数向 sysfs 文件写入的数据长度不正确。由于传递了错误的 size 参数（变量 `disable` 的内存大小 4 字节，而非字符串实际长度），导致写入操作可能包含多余的无效字节，从而影响对 cpuidle state disable 文件的写入结果，导致禁用操作行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `cpuidle_state_disable` 函数中，调用 `cpuidle_state_write_file` 时错误地使用了 `sizeof(disable)` 作为大小参数。
+1. 变量 `disable` 类型为 `unsigned int`，`sizeof(disable)` 返回的是该整型变量的内存大小（通常为 4 字节）。
+2. 实际需要写入的是变量 `value` 中存储的字符串，该字符串由 `snprintf` 格式化生成。
+3. 代码应使用 `snprintf` 的返回值（即字符串的实际长度 `len`）作为写入大小，而不是整型变量的内存大小。
+
+#解决方案
+修改 `tools/power/cpupower/lib/cpuidle.c` 文件中的逻辑：
+1. 新增变量 `len` 用于接收 `snprintf` 的返回值。
+2. 将 `snprintf` 调用改为赋值形式：`len = snprintf(value, SYSFS_PATH_MAX, "%u", disable);`。
+3. 将 `cpuidle_state_write_file` 函数的 size 参数从 `sizeof(disable)` 修改为 `len`，确保写入的是字符串的实际有效长度。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0bf2dcc3e4967a92a2e578a4fa6daf18f5516d0a

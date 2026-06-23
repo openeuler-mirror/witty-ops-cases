@@ -1,0 +1,23 @@
+#标题
+Bluetooth: rfcomm modem control signals confusion between local and remote
+
+#内核版本
+OLK-6.6
+
+#问题现象
+RFCOMM 驱动混淆了本地和远程调制解调器控制信号。具体表现为：通过 TIOCMGET 获取的状态中，报告的 DTR（数据终端就绪）和 RTS（请求发送）状态实际上反映的是对端的 DSR（数据集就绪）和 CTS（清除发送）状态。这导致应用程序无法正确获取本地串口控制线的真实状态，可能引起串口通信控制逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+RFCOMM 驱动在处理调制解调器状态时，错误地将远程信号（DSR、CTS）映射到了本地信号（DTR、RTS）的标志位上。该问题源于 2002 年原始驱动代码的一个逻辑错误：在 `rfcomm_dev_modem_status` 函数中，收到远程的 `RFCOMM_V24_RTC` 信号时，同时设置了 `TIOCM_DSR` 和 `TIOCM_DTR`，导致本地 DTR 状态被错误覆盖。同时，`rfcomm_tty_tiocmget` 仅返回了 `dev->modem_status`（混合了错误的远程信号），而未包含实际的本地 DTR/RTS 输出状态。此外，`tiocmset` 中还存在试图控制输入信号（RI、DCD）的死代码逻辑。
+
+#解决方案
+修正调制解调器状态信号的映射逻辑，区分本地输出信号与远程输入信号：
+1. 在 `rfcomm_dev_modem_status` 中，移除对本地信号（DTR、RTS）的错误设置，仅将远程信号正确映射为 `TIOCM_DSR` 和 `TIOCM_CTS`。
+2. 在 `rfcomm_tty_tiocmget` 返回值中，增加从 DLC（数据链路连接）获取的本地输出信号（DTR、RTS），确保返回的状态包含正确的本地与远程信号组合。
+3. 清理 `rfcomm_tty_tiocmset` 中的冗余代码，移除对输入信号（RI、DCD）的错误控制逻辑，仅保留对 DTR 和 RTS 的设置与清除操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c716dabbabafa4710e5641815d81a308c081873

@@ -1,0 +1,25 @@
+#标题
+urma: 修复 vtpn 结构体空指针访问及句柄未初始化问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 urma 模块进行某些特定场景（如发现 target 中存在 tpid 或复用 rtp tpid）的连接操作时，内核可能会发生空指针解引用，导致内核崩溃；同时 vtpn 结构体中的 `tp_handle` 与 `peer_tp_handle` 成员可能处于未初始化或错误的值，导致后续业务流程异常。
+
+#主要错误日志
+ubcore_log_info("Find tpid in target, hash: %u.\n", hash);
+ubcore_log_info("tp_handle is %llu, peer_tp_handle is %llu.", ctx->tp_handle, ctx->peer_tp_handle);
+
+#问题根因
+1. 在 `ubcore_fadd_init_tpid_ctx` 函数中，当发现 target 中存在 tpid 时，调用了已删除的 `ubcore_update_vtpn` 函数尝试访问 `vtpn` 指针。该场景下 `vtpn` 可能未有效初始化，导致空指针访问风险。
+2. 在 `ubcore_reuse_init_rtp_tpid` 函数中，错误地通过 `tjetty->vtpn` 赋值，而正确的数据来源应该是在 `ubcore_create_vtpn` 函数中根据 `ctx` 状态直接对 `vtpn` 进行赋值。
+3. 原有代码逻辑混乱，导致 `vtpn` 的关键句柄成员未被正确赋值即被使用。
+
+#解决方案
+1. 删除存在风险的 `ubcore_update_vtpn` 内联函数。
+2. 在 `ubcore_fadd_init_tpid_ctx` 流程中，移除对 `vtpn` 的无效访问逻辑，确保不再触发空指针解引用。
+3. 将 `vtpn` 成员的赋值逻辑移至 `ubcore_create_vtpn` 函数中：当检测到 `ctx` 存在且状态为 `UBCORE_TP_ACTIVE` 时，显式赋值 `vtpn->tp_handle` 和 `vtpn->peer_tp_handle`，确保句柄初始化的正确性与数据一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3f42b1678dc2571ec669f0c1950f9c2b4d8f47a1

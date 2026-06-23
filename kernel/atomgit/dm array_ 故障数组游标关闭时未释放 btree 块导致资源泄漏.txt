@@ -1,0 +1,20 @@
+#标题
+dm array: 故障数组游标关闭时未释放 btree 块导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 dm-array 游标 API 时，若数组为空或遇到不可读的数组块，`dm_array_cursor` 中的缓存块指针为 NULL。在此状态下调用 `dm_array_cursor_end()` 关闭游标时，底层的 btree 块未被正确释放，导致资源泄漏。该问题可通过 dm-unit 测试工具中的 "array_cursor/iterate/empty" 用例验证。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `dm_array_cursor_end()` 中的 `dm_btree_cursor_end()` 调用被包裹在 `if (c->block)` 判断语句中。当游标遇到不可读数组块或数组为空时，`c->block` 指针为 NULL，导致条件判断失败，跳过了 `dm_btree_cursor_end()` 的执行，使得底层 btree 块无法释放。
+
+#解决方案
+修改 `dm_array_cursor_end()` 函数逻辑，将 `dm_btree_cursor_end(&c->cursor)` 调用移至 `if (c->block)` 判断语句之外，确保无论 `c->block` 是否为空，都能无条件调用 `dm_btree_cursor_end()` 释放底层资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bc28772550894ca4f8c9ee0c7201b174e71800a3

@@ -1,0 +1,20 @@
+#标题
+scsi: sg: sg_release 中存在 slab-use-after-free 读漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 sg_release 函数释放 SCSI generic (sg) 设备时，内核发生 Slab-use-after-free 读错误。该问题可能导致内核崩溃或内存数据被非法读取，触发 KASAN 等内存检测工具报警。
+
+#主要错误日志
+未知
+
+#问题根因
+在 sg_release 函数中，`kref_put(&sfp->f_ref, sg_remove_sfp)` 被错误地放置在 `mutex_unlock(&sdp->open_rel_lock)` 之前执行。`sg_remove_sfp` 函数内部会获取同一个锁 `sdp->open_rel_lock`。由于该锁在调用 `sg_remove_sfp` 前未被释放，导致在 `sg_remove_sfp` 中尝试获取已持有的锁，进而引发引用计数处理错误或锁竞争，最终导致 use-after-free 问题。
+
+#解决方案
+调整 `kref_put(&sfp->f_ref, sg_remove_sfp)` 的位置，将其移动到 `mutex_unlock(&sdp->open_rel_lock)` 之后执行。这样可以确保在释放 sfp 对象引用计数时，已经释放了锁资源，避免锁竞争和潜在的 use-after-free 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c4e833d509e74bb28116a49e76f49622679953aa

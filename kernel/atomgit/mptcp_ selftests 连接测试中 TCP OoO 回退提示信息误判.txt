@@ -1,0 +1,20 @@
+#标题
+mptcp: selftests 连接测试中 TCP OoO 回退提示信息误判
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 MPTCP 自测套件（mptcp_connect.sh）时，当接收到的 MPC ACK 数量少于预期且存在乱序包（OoO）的情况下，脚本未能按预期打印 "fallback due to TCP OoO" 提示信息，而是错误地进入了失败分支或未触发任何提示，导致测试结果无法准确反映因乱序包导致的协议回退情况。
+
+#主要错误日志
+未知（此问题为测试脚本逻辑错误，不产生内核运行时错误日志，主要表现为测试输出信息缺失或不符合预期）
+
+#问题根因
+测试脚本 `mptcp_connect.sh` 中的条件判断逻辑存在冗余错误。在 `do_transfer()` 函数中，父级 if 语句已经判断了 `stat_ooo_now -eq 0`，导致内部的子级 if 语句再次判断 `stat_ooo_now -eq 0` 时条件永远为真，else 分支（用于处理存在 OoO 包的情况）永远无法被执行。
+
+#解决方案
+修改 `tools/testing/selftests/net/mptcp/mptcp_connect.sh` 脚本，调整条件判断结构。将原本嵌套在父级 if 语句内部的 `stat_ooo_now` 检查逻辑移出，修改为平级的嵌套结构：先判断 ACK 数量是否小于预期，再在内层判断是否存在 OoO 包，从而确保 else 分支（打印 OoO 回退提示）能够被正确触发。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/19ddb76a8fa785edab558db7e857992e035dbae7

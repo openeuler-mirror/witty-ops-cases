@@ -1,0 +1,25 @@
+#标题
+usb: gadget: f_ecm: 修复 net_device 生命周期管理不当导致的 sysfs 悬空链接问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 USB ECM gadget 功能解绑后，net_device 仍然存活，但其 sysfs 父设备已被销毁，导致 sysfs 中出现指向不存在路径的悬空符号链接。
+具体表现为访问 `/sys/class/net/usb0` 时指向一个无效的目标路径：
+`ls: .../gadget.0/net/usb0: No such file or directory`
+
+#主要错误日志
+未知
+
+#问题根因
+net_device 在函数实例创建时分配，并在 bind 阶段以 gadget device 作为 sysfs 父设备进行注册。当功能 unbind 时，父设备被销毁，但 net_device 仍然存活，导致 sysfs 中出现悬空的符号链接，破坏了 sysfs 拓扑结构和电源管理顺序。
+
+#解决方案
+使用 `device_move()` 在 bind 和 unbind 周期中重新指定 net_device 的父设备。
+1. 在最终 unbind 时，调用 `device_move(NULL)` 将 net_device 移至 `/sys/devices/virtual` 设备树，避免随 gadget 设备一起销毁。
+2. 在重新 bind 时，通过 `device_move()` 将设备重新挂载到新的 gadget 设备下。
+3. 增加 `bind_count` 字段跟踪绑定计数，并结合 `bound` 标志兼容遗留复合驱动，防止 net_device 重复注册。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ce89fc0a27111865e8a60354e5f3103fde96a62e

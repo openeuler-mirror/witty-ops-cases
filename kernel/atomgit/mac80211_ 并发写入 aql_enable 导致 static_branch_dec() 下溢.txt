@@ -1,0 +1,26 @@
+#标题
+mac80211: 并发写入 aql_enable 导致 static_branch_dec() 下溢
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当多个进程并发写入 mac80211 debugfs 中的 `aql_enable` 文件时，内核触发 WARNING，指示 `static_branch_dec()` 发生下溢。具体表现为在 `aql_enable_write` 函数执行过程中，`__static_key_slow_dec_cpuslocked` 检测到静态键引用计数异常，导致内核打印警告日志并打印调用栈。
+
+#主要错误日志
+WARNING: kernel/jump_label.c:311 at __static_key_slow_dec_cpuslocked.part.0+0x107/0x120 kernel/jump_label.c:311, CPU#0: syz.1.3155/20288
+RIP: 0010:__static_key_slow_dec_cpuslocked.part.0+0x107/0x120 kernel/jump_label.c:311
+Call Trace:
+ __static_key_slow_dec_cpuslocked kernel/jump_label.c:297 [inline]
+ __static_key_slow_dec kernel/jump_label.c:321 [inline]
+ static_key_slow_dec+0x7c/0xc0 kernel/jump_label.c:336
+ aql_enable_write+0x2b2/0x310 net/mac80211/debugfs.c:343
+
+#问题根因
+`aql_enable_write()` 函数在处理 debugfs 写入时，缺乏对并发写入操作的串行化保护。原代码逻辑先读取静态键状态（`static_key_false`），随后根据状态决定执行 `static_branch_inc()` 或 `static_branch_dec()`。在并发场景下，多个线程可能同时读取到相同的状态，导致对静态键的引用计数增加或减少次数不匹配，进而导致 `static_branch_dec()` 操作时引用计数下溢。
+
+#解决方案
+修改 `aql_enable_write()` 函数，移除原有的状态检查与 `inc/dec` 逻辑，改为直接调用 `static_branch_enable()` 和 `static_branch_disable()`。这两个函数内部实现了必要的加锁和状态判断，能够安全处理并发情况，避免了引用计数管理不当导致的下溢问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/07ac6d24992917a4b99b5a2df6599e6a8f8c894d

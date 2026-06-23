@@ -1,0 +1,20 @@
+#标题
+nouveau 驱动固件加载模块内存泄漏导致 kmemleak 告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中，kmemleak 内存泄漏检测工具报告 `nvkm_falcon_fw::boot` 相关的内存泄漏警告。该问题由 nouveau 显卡驱动在处理 ACR（Access Control Region）固件时引入，导致内核无法自动回收已分配的内存对象。
+
+#主要错误日志
+kmemleak: nouveau: nvkm_falcon_fw::boot is allocated, but no one frees it.
+
+#问题根因
+在 `nvkm_falcon_fw` 结构体中，成员指针 `boot` 通过分配获得内存，但在驱动的析构函数 `nvkm_falcon_fw_dtor` 中，代码仅释放了其他相关资源（如 `inst`、`sigs`、`fw`），遗漏了对 `boot` 指针指向内存的释放操作。导致该块内存无法被回收，产生内存泄漏。
+
+#解决方案
+在 `nvkm_falcon_fw_dtor` 函数中补充对 `fw->boot` 的释放逻辑。具体修改为在释放其他资源后，调用 `kfree(fw->boot)` 释放内存，并将指针置为 `NULL`，防止悬垂指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/11e56f90d913ee80e121e85a2e686871db67e39d

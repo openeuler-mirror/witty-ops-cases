@@ -1,0 +1,20 @@
+#标题
+iBMA veth 接口大文件传输导致 soft lockup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TaiShan 500 (Model 2280) 环境下，通过 veth 接口进行大文件传输时，系统发生 soft lockup，导致系统挂起无响应。
+
+#主要错误日志
+未知
+
+#问题根因
+在进行 DMA 操作前，Send Queue (SQ) 缓冲区描述符的同步机制缺失。具体原因为：驱动在更新 SQ 尾指针启动 DMA 前，未执行读操作确保缓冲区描述符已正确写入本地 SQ，导致硬件读取到损坏的描述符，进而引发系统死锁。
+
+#解决方案
+在 `submit_dma_queue_sq` 函数中，于设置 SQ 尾指针（`set_dma_queue_sq_tail`）之前增加一次 `readl` 操作。该操作读取 SQ 缓冲区描述符的最后一个 u32，以确保描述符数据已同步写入本地 SQ，从而保证 DMA 操作前数据的一致性，防止描述符损坏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56e1767fa109546cd789662fbdc75d06f7c6b2c0

@@ -1,0 +1,26 @@
+#标题
+drm/amd/amdgpu: 修复 amdgpu_mes_add_ring 中的互斥锁双重释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `amdgpu_mes_add_ring` 函数中，当 `amdgpu_ring_init` 初始化失败时，触发错误处理路径，导致互斥锁 `adev->mes.mutex_hidden` 被重复解锁，可能引发内核状态不一致或未定义行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 commit d0c423b64765 引入的代码逻辑中，错误处理流程存在缺陷：
+当 `amdgpu_ring_init` 返回错误（第 1206 行）时，代码直接跳转到 `clean_up_memory` 标签。随后在 `clean_up_memory` 处执行了 `amdgpu_mes_unlock`（第 1240 行）。
+然而，正常的执行流程中，互斥锁已经在第 1213 行被解锁。这意味着如果 `amdgpu_ring_init` 失败，代码跳转绕过了第 1213 行的解锁操作，导致只有在 `clean_up_memory` 处的一次解锁；但如果逻辑稍有变动或理解偏差，实际上该函数内部存在多次解锁的风险（Smatch 静态检查器报告了双重解锁警告）。
+根据补丁描述，核心问题是互斥锁在特定的错误条件下被解锁了两次，或者解锁顺序混乱，具体表现为 `amdgpu_ring_init` 失败后跳转至清理标签时锁状态管理不当。
+
+#解决方案
+修改 `amdgpu_mes_add_ring` 函数的错误处理路径：
+1. 当 `amdgpu_ring_init` 失败时，在跳转到 `clean_up_memory` 标签之前，显式调用 `amdgpu_mes_unlock` 解锁互斥锁。
+2. 删除 `clean_up_memory` 标签处的 `amdgpu_mes_unlock` 调用。
+这确保了在 `amdgpu_ring_init` 失败的分支中，互斥锁只被解锁一次，从而避免了双重解锁问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/880273d44b2d666a7abded38d8659f7c50edfbbb

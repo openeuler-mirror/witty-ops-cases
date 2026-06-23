@@ -1,0 +1,32 @@
+#标题
+EDAC/mc: edac_mc_alloc 错误路径中 kobject 未初始化导致内核 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 edac_mc_alloc() 函数中，当 mci->pvt_info 内存分配失败时，错误处理路径触发内核 WARNING。系统打印 "kobject: '(null)': is not initialized, yet kobject_put() is being called" 警告信息，并伴随调用栈回溯，影响 systemd-udevd 进程正常运行。
+
+#主要错误日志
+MCE: In-kernel MCE decoding enabled.
+------------[ cut here ]------------
+kobject: '(null)': is not initialized, yet kobject_put() is being called.
+WARNING: lib/kobject.c:734 at kobject_put, CPU#22: systemd-udevd
+CPU: 22 UID: 0 PID: 538 Comm: systemd-udevd Not tainted 7.0.0-rc1+ #2 PREEMPT(full)
+RIP: 0010:kobject_put
+Call Trace:
+ <TASK>
+ edac_mc_alloc+0xbe/0xe0 [edac_core]
+ amd64_edac_init+0x7a4/0xff0 [amd64_edac]
+ ? __pfx_amd64_edac_init+0x10/0x10 [amd64_edac]
+ do_one_initcall
+ ...
+
+#问题根因
+edac_mc_alloc() 函数内的初始化顺序错误。device_initialize() 和 mci->dev.release 的设置位于 mci->pvt_info 内存分配之后。当 mci->pvt_info 分配失败进入错误处理路径时，put_device() 被调用，但此时 device 结构体及其 release 函数指针尚未初始化，导致调用未初始化的 kobject 引发 WARNING。
+
+#解决方案
+调整 edac_mc_alloc() 函数中的调用顺序，将 mci->dev.release 指针赋值和 device_initialize() 调用移至 mci->pvt_info 内存分配之前。确保在进入可能的错误处理路径（调用 put_device）之前，设备结构体已正确初始化，从而避免访问未初始化的 kobject。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ede843ce5785f9f7a9e67566c184fbe47fa499f5

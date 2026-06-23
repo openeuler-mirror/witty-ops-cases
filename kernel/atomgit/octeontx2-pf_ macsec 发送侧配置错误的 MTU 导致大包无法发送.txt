@@ -1,0 +1,20 @@
+#标题
+octeontx2-pf: macsec 发送侧配置错误的 MTU 导致大包无法发送
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在物理设备 MTU 为 1500 的场景下，创建 MACSEC 接口后，该接口 MTU 自动调整为 1468（扣除 SecTag 和 ICV 长度）。当通过 MACSEC 接口发送数据包长度大于等于 1468 字节的报文时，报文无法发出。
+
+#主要错误日志
+未知
+
+#问题根因
+MACSEC 硬件块中 TX secy 的最大发送尺寸字段配置错误。驱动程序错误地将该字段设置为 macsec 接口的 MTU 值（例如 1468），而硬件要求该尺寸应为包含 L2 头部、SecTag 和 ICV 的完整数据包大小。正确的值应为底层真实设备的 MTU 加上以太网头部长度（例如 1500 + 14 = 1514），导致硬件限制了大包的发送。
+
+#解决方案
+修改 `cn10k_mcs_write_tx_secy` 函数中策略寄存器的写入逻辑，将 TX secy 的最大发送尺寸（MTU 字段）配置修正为底层物理设备的 MTU 加上以太网头部长度（`pfvf->netdev->mtu + OTX2_ETH_HLEN`），确保硬件能正确处理完整帧长的报文。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/134958012ac0f04ccc0d1c9a08cc48b48fbc553a

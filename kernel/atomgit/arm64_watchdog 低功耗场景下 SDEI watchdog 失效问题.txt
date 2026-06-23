@@ -1,0 +1,25 @@
+#标题
+arm64/watchdog 低功耗场景下 SDEI watchdog 失效问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 架构低功耗场景（如 CPU 进入空闲状态）下，SDEI watchdog 机制失效，导致无法正常检测硬锁死或触发预期中的 NMI 中断，系统可靠性降低。
+
+#主要错误日志
+- `Failed to register sdei PM notifier...`（推断：若注册电源管理通知链失败时打印）
+
+#问题根因
+在低功耗场景下，CPU 会进入睡眠状态，而 SDEI（Software Delegated Exception Interface）事件在 CPU 睡眠期间未被正确处理。具体原因为 SDEI watchdog 驱动未注册 CPU PM（Power Management）通知链回调，导致在 CPU 进入低功耗状态前未禁用 SDEI watchdog 事件，唤醒后也未重新使能，从而导致 watchdog 功能异常或失效。
+
+#解决方案
+在 `arch/arm64/kernel/watchdog_sdei.c` 中添加 CPU PM 通知链的支持。
+1. 引入 `linux/cpu_pm.h` 头文件。
+2. 新增 `sdei_watchdog_pm_notifier` 回调函数：
+   - 在 `CPU_PM_ENTER` 事件（CPU 进入低功耗）时，调用 `sdei_api_event_disable` 禁用 SDEI watchdog 事件。
+   - 在 `CPU_PM_EXIT` 事件（CPU 退出低功耗）时，调用 `sdei_api_event_enable` 重新使能 SDEI watchdog 事件。
+3. 在 `sdei_watchdog_hardlockup_probe` 探测函数中注册该通知链回调，确保在系统运行时能正确响应低功耗状态切换。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9e6ec001662a376522f36604dfec47c30530549

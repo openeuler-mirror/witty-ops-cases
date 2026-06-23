@@ -1,0 +1,28 @@
+#标题
+蓝牙 L2CAP 在 ACL 链路上错误发送 LE 流控导致命令被拒绝
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 L2CAP 通道模式为 L2CAP_MODE_ERTM 或 L2CAP_MODE_STREAMING 时，系统会在 ACL 链路上错误地发送 LE flow credits。远程设备无法识别该数据包，返回“Command not understood”拒绝命令，导致蓝牙通信异常。
+
+#主要错误日志
+> ACL Data RX: Handle 129 flags 0x02 dlen 12
+      L2CAP: Unknown (0x16) ident 4 len 4
+        40 00 ed 05
+< ACL Data TX: Handle 129 flags 0x00 dlen 10
+      L2CAP: Command Reject (0x01) ident 4 len 2
+        Reason: Command not understood (0x0000)
+
+Bluetooth: Unknown BR/EDR signaling command 0x16
+Bluetooth: Wrong link type (-22)
+
+#问题根因
+函数 `l2cap_chan_le_send_credits` 在执行时未充分检查通道模式。当 L2CAP 通道模式为 L2CAP_MODE_ERTM 或 L2CAP_MODE_STREAMING 时，`l2cap_publish_rx_avail` 会被调用并触发 `l2cap_chan_rx_avail`，进而导致在 ACL 链路上发送 LE flow credits，而 LE 流控机制仅适用于 L2CAP_MODE_LE_FLOWCTL 或 L2CAP_MODE_EXT_FLOWCTL 模式。
+
+#解决方案
+在 `l2cap_chan_le_send_credits` 函数中增加模式检查。如果通道模式不是 L2CAP_MODE_LE_FLOWCTL 或 L2CAP_MODE_EXT_FLOWCTL，函数直接返回，避免在非 LE 流控模式下发送 LE 流控信用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f77ef475cac37c6c6fa46afc1d520971aaedc12e

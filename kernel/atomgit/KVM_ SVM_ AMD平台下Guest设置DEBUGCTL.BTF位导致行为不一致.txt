@@ -1,0 +1,20 @@
+#标题
+KVM: SVM: AMD平台下Guest设置DEBUGCTL.BTF位导致行为不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在AMD平台的KVM虚拟化环境中，Guest尝试设置`DEBUGCTL`寄存器的BTF（Branch Trap Flag）位时，KVM未能正确处理该保留位。由于KVM实际上不支持BTF虚拟化，这导致AMD平台与Intel平台（VMX已抑制BTF）行为不一致，且可能因KVM内部处理缺陷（如模拟器、guest_debug、#DB拦截及嵌套SVM交互问题）引发不可预期的虚拟机行为或错误。
+
+#主要错误日志
+未知
+
+#问题根因
+KVM在AMD平台上未将`DEBUGCTL.BTF`标记为保留位，且未实现对BTF的虚拟化支持。当Guest尝试通过WRMSR设置BTF位时，KVM未像Intel VMX那样抑制该标志位，导致硬件行为与软件模拟不一致。此外，由于无法向Guest显式传达不支持BTF的信息，直接注入#GP也不可行，从而导致潜在的兼容性问题和复杂的交互Bug。
+
+#解决方案
+在AMD架构的`svm_set_msr`函数中增加对`DEBUGCTLMSR_BTF`位的检测与抑制逻辑。当Guest尝试设置BTF位时，打印未实现WRMSR日志并主动清除该位，随后继续处理请求而非报错返回，以此统一AMD与Intel平台对BTF位的处理行为。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9a34f58febb6413efd056d05ce87df93f36f5c29

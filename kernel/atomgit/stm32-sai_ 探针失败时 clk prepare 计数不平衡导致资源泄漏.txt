@@ -1,0 +1,21 @@
+#标题
+stm32-sai: 探针失败时 clk prepare 计数不平衡导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+STM32 SAI 子设备驱动在加载过程中，若因资源获取失败（如 IRQ 请求失败、PCM DMA 注册失败等）导致 probe 流程中止（特别是涉及 probe deferral 探针延迟重试场景），内核时钟框架中的 prepare 计数无法正确减少。此问题会导致时钟资源状态不一致，可能引发后续驱动加载失败或系统资源泄漏。
+
+#主要错误日志
+- "IRQ request returned %d\n"
+- "Could not register pcm dma\n"
+
+#问题根因
+驱动在 `stm32_sai_sub_parse_of` 和 `stm32_sai_sub_probe` 函数中，申请了 `pclk` 时钟并执行了 `clk_prepare` 操作，但在后续的多个错误处理分支中，直接返回了错误码，遗漏了 `clk_unprepare` 的调用。这破坏了时钟资源的获取与释放配对逻辑，导致在探针失败时出现 clk prepare imbalance（时钟准备计数不平衡）。
+
+#解决方案
+修改驱动代码，在 `stm32_sai_sub_parse_of` 和 `stm32_sai_sub_probe` 函数中增加统一的错误处理标签 `err_unprepare_pclk`。在各个可能失败的错误路径中，使用 `goto` 语句跳转至该标签，确保在返回错误码前调用 `clk_unprepare(sai->pdata->pclk)` 正确释放时钟资源，保证资源申请与释放的对称性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6f38cec0919b2e7f9dc012864842f3ec3df768f3

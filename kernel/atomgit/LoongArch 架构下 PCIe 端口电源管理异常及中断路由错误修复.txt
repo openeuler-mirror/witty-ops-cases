@@ -1,0 +1,33 @@
+#标题
+LoongArch 架构下 PCIe 端口电源管理异常及中断路由错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1.  **PCIe 设备电源管理故障**：在 LoongArch 架构下，挂接在特定 Loongson PCIe 端口（如 LS7A2000）下的设备，在进行挂起/唤醒（Suspend/Resume）或电源状态转换时，出现功能异常或系统不稳定现象。
+2.  **网络功能异常**：Loongson DWMAC 控制器的 Mac DMA 重置操作未能正确执行，可能导致网络通信初始化失败或通信中断。
+3.  **中断路由错误**：在多核/多节点环境下，外部中断的路由配置不正确，导致中断无法正确投递到目标 CPU 核心。
+4.  **系统拓扑信息不准确**：CPU Package 数量的计算方式有误，导致 `topology_max_packages()` 返回错误值，影响依赖该信息的调度策略或用户态监控工具（如 hwmon）。
+
+#主要错误日志
+未知
+
+#问题根因
+1.  **PCIe 电源管理**：特定型号的 Loongson PCIe 端口硬件在电源状态切换（如进入 D3 状态）或链路速度改变时存在缺陷，需要通过软件规避，禁止相关设备进入 D3 状态或改变链路速度。
+2.  **网络驱动**：`dwmac-loongson` 驱动未绑定正确的 SoC 层重置回调函数（`fix_soc_reset`），导致 DMA 软件重置流程缺失。
+3.  **中断控制器**：`eiointc` 驱动在中断路由设置逻辑中，遍历与设置目标节点的算法存在逻辑漏洞，导致路由信息写入错误。
+4.  **拓扑计算**：内核未定义 `topology_max_packages` 的具体实现，且相关全局变量未正确累加，导致 Package 计数始终为初始值（通常为 0 或 1），无法反映真实的物理封装数量。
+
+#解决方案
+1.  **PCIe Quirks 修复**：在 `drivers/pci/quirks.c` 中增加 `loongson_d3_and_link_quirk` 函数，针对 LS7A2000 等相关 PCIe 端口设备，设置 `PCI_DEV_FLAGS_NO_D3`、`PCI_DEV_FLAGS_NO_LINK_SPEED_CHANGE` 标志位，并禁止 D1/D2 状态支持，以此规避硬件电源管理缺陷。
+2.  **网络驱动修复**：在 `dwmac-loongson.c` 中实现并注册 `loongson_fix_soc_reset` 回调，显式执行 DMA 总线模式复位（DMA_BUS_MODE_SFT_RESET）并轮询等待完成。
+3.  **中断控制器修复**：重构 `eiointc_set_irq_route` 函数逻辑，修复节点掩码处理与路由数据计算；修正 `eiointc_router_init` 中的初始化判断逻辑，引入 `extioi_node_maps` 位图确保每个节点只初始化一次，并在恢复路径中重置该位图。
+4.  **拓扑及杂项修复**：
+    *   在 `arch/loongarch/include/asm/topology.h` 中定义 `topology_max_packages()` 宏。
+    *   在 `arch/loongarch/kernel/setup.c` 的 `parse_cpu_table` 中增加 `__max_packages` 的累加计数。
+    *   在 `arch/loongarch/kernel/smp.c` 中导出 `__max_packages` 符号。
+    *   同步修复 I2C 频率寄存器读写方式（改为按字节读写）、GPIO 驱动中断映射及控制模式支持、以及 SE 驱动的 ACPI 固件支持适配。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/82151bacab3ce4a77fd50ec8171d138179b53fac

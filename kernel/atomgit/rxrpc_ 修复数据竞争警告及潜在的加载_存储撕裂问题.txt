@@ -1,0 +1,27 @@
+#标题
+rxrpc: 修复数据竞争警告及潜在的加载/存储撕裂问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核 KCSAN 数据竞争检测工具报告在 `rxrpc_peer_keepalive_worker` 与 `rxrpc_send_data_packet` 函数之间存在数据竞争。此外，在 32 位系统架构上，对 `time64_t` 类型变量 `last_tx_at` 的读写操作可能发生撕裂，导致时间戳数据损坏。
+
+#主要错误日志
+BUG: KCSAN: data-race in rxrpc_peer_keepalive_worker / rxrpc_send_data_packet
+
+#问题根因
+问题源于对 `rxrpc_peer` 结构体中 `last_tx_at` 成员的无锁访问。
+1. **数据竞争**：一处代码（发送数据包路径）正在写入 `conn->peer->last_tx_at`，而另一处代码（保活工作队列）正在读取 `peer->last_tx_at` 以计算保活时间，两者未受锁保护，触发了 KCSAN 警告。
+2. **潜在撕裂**：`last_tx_at` 被定义为 `time64_t`（64 位），在 32 位架构上，对该变量的读写不是原子操作，可能导致加载/存储撕裂，获取到错误的时间值。
+尽管读操作只需要一个大致的传输时间用于判断是否发送保活包，但数据类型和访问方式导致了上述问题。
+
+#解决方案
+将 `last_tx_at` 的类型从 `time64_t` 修改为 `unsigned int`，仅存储 `time64_t` 的低 32 位（LSW），并使用 `WRITE_ONCE` 和 `READ_ONCE` 进行访问：
+1. **类型降级**：将 `struct rxrpc_peer` 中的 `last_tx_at` 字段类型改为 `unsigned int`，避免 32 位系统上的 64 位赋值撕裂问题。
+2. **原子写入**：新增辅助函数 `rxrpc_peer_mark_tx`，使用 `WRITE_ONCE` 原子地更新 `last_tx_at`，替换所有直接赋值操作。
+3. **原子读取与重构**：新增辅助函数 `rxrpc_peer_get_tx_mark`，使用 `READ_ONCE` 读取值，并通过计算差值（基于当前时间基准）重构完整的保活时间，确保在不超过约 68 年的时间跨度内计算结果有效。
+4. **调整显示逻辑**：在 `/proc` 文件输出中相应调整时间差的计算方式，使用 `(s32)` 强制转换配合 `unsigned int` 读取值进行计算。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2a4117f8e99cd5f99567f3bd5280f0fa318a4077

@@ -1,0 +1,24 @@
+#标题
+iommu/ummu: 修复虚拟机多实例场景下 UMMU 实例遍历错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行多个虚拟机实例的场景下，UMMU 驱动在遍历 UMMU 实例时出现逻辑错误，导致设备绑定或域名同步流程处理异常，影响虚拟机的正常 IOMMU 域操作。
+
+#主要错误日志
+未知
+
+#问题根因
+1. 在 `ummu_cfg_sync` 函数中，获取 UMMU 设备指针的来源错误，错误地从 `u_domain->base_domain.core_dev` 获取，而应直接从传入的 `base_domain->core_dev` 获取，导致在多实例场景下引用了错误的实例对象。
+2. 在 `logic_ummu_attach_dev` 处理同步类型时，变量 `sync_type` 初始化缺失，且在 `domain` 类型非 NESTED 时逻辑存在缺陷，导致 `sync_type` 可能未被正确赋值即被使用。
+3. 代码中存在冗余的 `SYNC_NESTED_DOM_MUTI_CFG` 处理分支，进一步混淆了同步逻辑，导致多实例遍历与配置同步流程不符合预期。
+
+#解决方案
+1. 修正 `ummu_cfg_sync` 中获取 UMMU 设备指针的逻辑，直接使用传入参数 `base_domain->core_dev`，确保引用正确的设备实例。
+2. 删除冗余的 `SYNC_NESTED_DOM_MUTI_CFG` 枚举定义及其对应的 switch case 处理分支。
+3. 优化 `logic_ummu_attach_dev` 中的同步类型判断逻辑，新增 `SYNC_TYPE_NONE` 枚举项并将 `sync_type` 初始化为该值，修正非 NESTED 域类型的赋值逻辑，确保同步类型正确设置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/005bd47130be6f04dc315eb4322531714d1c64bf

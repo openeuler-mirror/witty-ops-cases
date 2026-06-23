@@ -1,0 +1,23 @@
+#标题
+xfs: 属性注销流程处理不当导致潜在问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 XFS 文件系统进行属性失效处理时，若属性以 Node 形式存储，原有逻辑在处理过程中可能导致状态不一致或处理流程异常。这通常发生在删除大量扩展属性或 inode 销毁时。
+
+#主要错误日志
+未知
+
+#问题根因
+原有代码在 `xfs_attr3_node_inactive` 处理属性树节点时，使用了非原子性的方式处理节点项的移除，并且使用了 `XFS_DABUF_MAP_HOLE_OK` 标志读取块，这可能导致在处理过程中如果块已被释放或不存在，逻辑跳过正确处理，或者在事务回滚过程中出现不一致。同时，在截断属性 fork 时，断言 `ASSERT(new_size <= XFS_ISIZE(ip))` 对于属性 fork 并不总是成立，导致校验失败。
+
+#解决方案
+1. 重构属性注销逻辑，移除 `XFS_DABUF_MAP_HOLE_OK` 标志，确保读取操作的严谨性。
+2. 在 `xfs_attr3_node_inactive` 中，改为从后向前遍历或循环移除节点项，并显式调用 `xfs_da3_node_entry_remove` 从父节点中移除条目，确保原子性。
+3. 如果属性树的根节点被清空，将其转换为叶子节点格式，而不是保留空节点。
+4. 修改 `xfs_itruncate_extents_flags` 中的断言逻辑，允许属性 fork 的新尺寸可以大于当前 inode 大小，修复属性截断时的校验错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd177adaa4856b17cfcbdcc82bb439d4ac302628

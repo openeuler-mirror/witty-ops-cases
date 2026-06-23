@@ -1,0 +1,32 @@
+#标题
+内核网络子系统中 nf_tables 规则校验及多处协议栈缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **nf_tables 风险**：在处理大型或复杂的 nftables 规则集时，校验过程耗时极长，可能导致用户态进程挂起或内核在 commit 阶段长时间处于不可中断状态。
+2. **IPVS 转发异常**：在特定错误路径下发送 ICMP 目的不可达报文时，可能导致内核崩溃或内存访问错误。
+3. **网络设备驱动崩溃**：调用 `arp_create` 时，若设备驱动修改了 `skb->head`，会导致内存破坏。
+4. **Ethtool 统计数据不一致**：获取统计数据时，若驱动返回的统计项数量与用户预期不符，可能导致内核内存越界读写。
+5. **IPv6 GRE 隧道故障**：发送报文时因 skb 头部空间不足导致 panic。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **nf_tables 性能瓶颈**：规则校验逻辑未记录已校验链的状态，导致在存在大量跳转或集查找时，相同的链被重复递归校验，引发指数级的时间复杂度增长。
+2. **IPVS 空指针解引用**：在错误路径 `err_unreach` 中调用 `dst_link_failure` 之前，`skb->dev` 尚未赋值，导致访问空指针。
+3. **ARP 头部指针失效**：`arp_create` 函数在调用 `dev_hard_header` 之前就获取了 arp 头部指针，部分驱动在该函数内会改变 `skb->head`，导致后续填充 ARP 字段时使用的是旧指针。
+4. **Ethtool 边界检查缺失**：内核直接信任并使用了驱动返回的统计数量，未校验其是否与用户空间传入的结构体大小匹配，导致数据拷贝越界。
+5. **IPv6 GRE 头部空间不足**：`ip6gre_header` 直接调用 `skb_push` 而未检查 headroom 是否足够，且缺少 `pskb_expand_head` 扩展逻辑。
+
+#解决方案
+1. **nf_tables 优化**：引入 `struct nft_chain_validate_state` 结构体记录链的校验状态（hook_mask 和 depth），在 `nft_chain_validate` 中实现缓存机制，若当前上下文已校验过该链则直接返回，避免重复递归。
+2. **IPVS 修复**：在 `err_unreach` 标签处增加判断，若 `skb->dev` 为空则将其设置为 `skb_dst(skb)->dev`，确保后续调用安全。
+3. **ARP 修复**：调整 `arp_create` 逻辑，将 `skb_put` 和头部填充操作移至 `dev_hard_header` 调用之后，确保获取的 arp 头部指针有效。
+4. **Ethtool 修复**：在 `ethtool_get_strings`、`ethtool_get_stats` 等函数中增加一致性检查，若驱动返回的统计数量与用户预期不符，则将数量置 0 并返回，避免内存操作风险。
+5. **IPv6 GRE 修复**：在 `ip6gre_header` 中增加 `skb_headroom` 检查，空间不足时调用 `pskb_expand_head` 进行扩展。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/240e552eaaa75c6123d8a2fe2ac55db679eefdc8

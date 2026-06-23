@@ -1,0 +1,27 @@
+#标题
+hostfs: fix string handling in __dentry_name()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hostfs 文件系统中调用 `__dentry_name` 函数处理路径名时，若源字符串与目的缓冲区存在潜在重叠，使用 `strcpy()` 会导致内存破坏；此外，原代码中的 `strscpy()` 调用冗余，且包含的 `BUG_ON` 检查可能在特定条件下触发内核 panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__dentry_name` 函数中，路径拼接逻辑存在缺陷：
+1. 使用了 `strcpy()` 进行字符串拷贝，但目的地址（`name + len`）可能与源地址（`p`）存在重叠，`strcpy` 不保证重叠情况下的正确拷贝行为，可能导致数据损坏。
+2. 原逻辑使用了 `strscpy()`，但实际上已知需要拷贝的长度，无需使用该函数，且该函数在此处无意义。
+3. 原代码包含 `BUG_ON(p + strlen(p) + 1 != name + PATH_MAX)`，这是一个过于严苛的断言，可能在非预期路径下导致内核 panic。
+
+#解决方案
+重构 `__dentry_name` 函数中的字符串处理逻辑：
+1. 移除 `strcpy()` 和 `strscpy()` 调用。
+2. 使用 `memcpy()` 拷贝 root 路径，因为已知长度且源和目的此时不重叠。
+3. 使用 `memmove()` 拼接剩余路径部分，该函数专门用于处理源和目的缓冲区重叠的情况，确保数据安全。
+4. 移除不必要的 `BUG_ON` 检查，改为在拷贝前进行长度边界检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f2de41640f60fd8a97e183e5f441b4f10326653e

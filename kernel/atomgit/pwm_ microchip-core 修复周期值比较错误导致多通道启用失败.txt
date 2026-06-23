@@ -1,0 +1,21 @@
+#标题
+pwm: microchip-core 修复周期值比较错误导致多通道启用失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Microchip core PWM 驱动中，当配置第一个通道使其硬件周期步数（hw_period_steps）达到最大值时，若随后启用第二个通道，驱动的 `.apply` 回调函数会错误地返回失败（-EINVAL）。这导致在多通道启用场景下，合法的周期配置被拒绝，PWM 功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `mchp_core_pwm_apply_locked()` 函数中使用了错误的比较逻辑。代码原判断条件为 `hw_period_steps == MCHPCOREPWM_PERIOD_STEPS_MAX`，将最大值视为非法值并报错。
+实际上，最大值是允许的合法配置，真正需要避免的值是 255（即 `PERIOD_STEPS_MAX + 1`）。当第一个通道将周期设置为最大值后，第二个通道启用时读取硬件状态，发现该值为最大值便触发了错误的合法性检查，导致函数返回 `-EINVAL`。
+
+#解决方案
+修改 `drivers/pwm/pwm-microchip-core.c` 中的比较条件，将 `if (hw_period_steps == MCHPCOREPWM_PERIOD_STEPS_MAX)` 修改为 `if (hw_period_steps > MCHPCOREPWM_PERIOD_STEPS_MAX)`。通过改为“大于”比较，排除了真正的非法值（大于最大值的情况），同时允许最大值作为合法参数通过检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d0f5cdc83220ccabd67bcd0d7147fb519990e610

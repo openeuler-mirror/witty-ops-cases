@@ -1,0 +1,20 @@
+#标题
+lib: test_hmm 释放文件句柄时未驱逐设备页面导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 `mm/ksft_hmm.sh` 自测试时，若测试失败触发 SIGABRT，系统尝试生成 coredump 文件。在此过程中，内核遍历 VMA 对设备私有页面进行缺页处理时发生空指针或非法指针解引用，导致内核 panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `dmirror_fops_release()` 函数中，释放 `dmirror` 结构体之前未将设备私有页面迁移回系统内存。这导致这些页面内部指向 `dmirror` 结构体的 `zone_device_data` 指针变为悬垂指针。当后续发生缺页中断（如 coredump 场景）时，`dmirror_devmem_fault()` 回调函数解引用了该悬垂指针，从而触发 use-after-free 导致内核崩溃。
+
+#解决方案
+在 `dmirror_fops_release()` 函数中，释放 `dmirror` 结构体之前，遍历所有设备内存块（devmem chunks），调用 `dmirror_device_evict_chunk()` 将所有设备私有页面迁移回系统内存，确保释放前清除所有相关的引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/57c24cbb55697e5a24a0fe36e960f086f7e8ac7f

@@ -1,0 +1,26 @@
+#标题
+USB TypeC anx7411 驱动 OF node 引用计数泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 anx7411 TypeC 驱动过程中，若驱动探测失败或后续设备注销时，内核存在资源泄漏现象。具体表现为设备树（OF）节点的引用计数未被正确释放，导致内核内存对象泄漏。在驱动探测失败的错误路径中，可能伴随注册失败的错误打印。
+
+#主要错误日志
+[   xx.xxxxxx] anx7411-typec: failed register switch
+[   xx.xxxxxx] anx7411-typec: no typec mux exist
+[   xx.xxxxxx] anx7411-typec: failed register mode switch
+（注：日志关键词提取自 diff 中的 dev_err 调用）
+
+#问题根因
+在 `anx7411_typec_switch_probe` 函数中，代码通过 `of_get_child_by_name()` 获取了 OF 节点，该函数会增加节点的引用计数。然而，在函数返回、错误处理路径以及设备注销流程中，代码未调用相应的释放函数（如 `of_node_put`）来递减引用计数，导致 OF node reference leaks（节点引用计数泄漏）。
+
+#解决方案
+1. 将 `of_get_child_by_name()` 调用替换为 `device_get_named_child_node()`，该函数返回 `fwnode_handle` 类型。
+2. 在驱动私有数据结构 `anx7411_data` 中新增 `switch_node` 和 `mux_node` 成员，用于存储获取到的节点句柄。
+3. 在 `anx7411_unregister_switch` 和 `anx7411_unregister_mux` 注销函数中，增加 `fwnode_handle_put()` 调用，确保设备卸载时释放节点引用。
+4. 在探测过程的错误处理路径中，增加 `fwnode_handle_put()` 调用，确保探测失败时释放已获取的节点引用，避免内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/13d2f0c642f06fc8d8b1bd5fb599c789c89e3969

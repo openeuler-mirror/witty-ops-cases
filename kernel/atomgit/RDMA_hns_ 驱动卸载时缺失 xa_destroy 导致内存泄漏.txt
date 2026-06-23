@@ -1,0 +1,23 @@
+#标题
+RDMA/hns: 驱动卸载时缺失 xa_destroy 导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 hns_roce 驱动模块时，内核未正确释放 SRQ、CQ 及 QP 表对应的 xarray 结构内存，导致内存泄漏资源无法回收。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在清理位图和表资源（`hns_roce_cleanup_bitmap`、`hns_roce_cleanup_cq_table`、`hns_roce_cleanup_qp_table`）时，仅调用了 `ida_destroy` 释放 IDA 内存，遗漏了调用 `xa_destroy` 来销毁对应的 xarray 结构（包括 `srq_table.xa`、`cq_table.array` 和 `qp_table_xa`），导致内存未被正确释放。
+
+#解决方案
+在驱动资源清理函数中补充调用 `xa_destroy`：
+1. 在 `hns_roce_cleanup_bitmap` 函数中，销毁 SRQ IDA 后添加 `xa_destroy(&hr_dev->srq_table.xa)`。
+2. 在 `hns_roce_cleanup_cq_table` 函数中，销毁 CQ bank IDA 后添加 `xa_destroy(&hr_dev->cq_table.array)`。
+3. 在 `hns_roce_cleanup_qp_table` 函数中，销毁 QP dip_xa 后添加 `xa_destroy(&hr_dev->qp_table_xa)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f78cf185e79fd2dc64a361505cf5604a12707d7e

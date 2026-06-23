@@ -1,0 +1,23 @@
+#标题
+ummu-core: 修复 ummu_core_invalidate_cfg 中的 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ummu_core_invalidate_cfg` 函数时，若进程已退出或资源已被释放，内核可能发生 Use-After-Free（UAF）故障，导致系统崩溃或内存被非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+原代码在 `ummu_core_invalidate_cfg` 函数中，通过 `global_core_device` 全局指针和 `param->tid` 来查找 `mm_struct` 和 `device` 指针。这种查找方式无法保证指针的生命周期安全，当进程关闭文件描述符释放资源后，通过 `tid` 查找到的关联指针可能已失效，从而导致 UAF。此外，`proc_manager` 使用 `tgid` 和 `start_time` 组合作为键值存储在 xarray 中，在高并发或进程退出的场景下，若进程资源释放与 invalidate 操作存在竞争，旧代码无法安全地验证 `param->mm` 与当前资源的归属关系。
+
+#解决方案
+重构了进程管理及 invalidate 的实现逻辑：
+1. 将 `proc_manager` 的索引键值从 `(tgid, start_time)` 组合改为 `mm_struct` 指针，在 `proc_manager_open` 时调用 `mmgrab` 增加引用计数，在 `close` 时调用 `mmdrop` 释放，确保进程上下文的生命周期安全。
+2. 新增 `ummu_core_invalidate_tid` 函数，该函数直接通过 `mm_struct` 指针在受锁保护的 xarray 中查找 `proc_manager`，并基于该安全上下文查找对应的 `ktid_info` 和 `domain`。
+3. 将 `ummu_core_invalidate_cfg` 的实现逻辑简化为直接调用 `ummu_core_invalidate_tid`，移除了原先不安全的全局设备查找和指针引用逻辑，从而避免了 UAF 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/544a7522debdd2a812ea0791cda88a43434b8fff

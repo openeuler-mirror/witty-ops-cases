@@ -1,0 +1,20 @@
+#标题
+dmaengine: idxd: 释放 IDA 资源过晚导致 use-after-free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 DEBUG_KOBJECT_RELEASE 的情况下，强制触发 PCI 设备提前解绑时，由于驱动已先行调用 ida_destroy() 销毁了 IDA 数据结构，后续字符设备 .release() 回调函数执行 ida_free() 时引发故障（潜在 Oops 或内存非法访问）。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在 PCI 解绑路径上调用 ida_destroy() 的时机早于字符设备的 .release() 回调。当 .release() 被调用时，其内部执行 ida_free() 操作试图释放 minor ID，但此时 IDA 结构已被销毁，导致访问已释放内存或无效内存。
+
+#解决方案
+将 `ida_free()` 调用从 `idxd_cdev_dev_release()` 函数移至 `idxd_wq_del_cdev()` 函数中执行。确保在销毁 IDA 之前，资源已被正确释放，修复资源释放顺序错误问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8abbd53b4c663b4b88c74aeb83b92f54ce3804ee

@@ -1,0 +1,29 @@
+#标题
+urma: uvs TLV 格式定义错误导致数据解析异常及接口冗余
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 用户态工具（如 uvs）通过 ioctl 下发 `UBCORE_CMD_GET_PATH_SET`、`UBCORE_CMD_INSERT_MAIN_UE_EID` 或 `UBCORE_CMD_INSERT_MAIN_UE_EID_BATCH` 命令时，内核返回的数据解析失败或读到错误的字段值。
+2. 内核日志可能出现 `Failed to get path set, ret: ...` 的错误打印。
+3. 查询路由列表功能（`UBCORE_CMD_GET_ROUTE_LIST`）实现逻辑冗余且不符合规范。
+
+#主要错误日志
+- `ubcore_log_err("Failed to get path set, ret: %d\n", ret);` (推断上下文)
+- `ubcore_log_err("Failed to parse ubcore cmd tlv.\n");` (推断上下文)
+- `ubcore_log_err("Failed to get_route_list, ret: %d.\n", ret);` (删除的旧接口)
+
+#问题根因
+1. **TLV 序列化字段定义错误**：在 `ubcore_cmd_tlv.h` 和 `ubcore_cmd_tlv.c` 中，`GET_PATH_SET_OUT_PATH_SET`、`INSERT_MAIN_UE_EID_IN_ENTRY` 等枚举定义直接对应整个结构体，导致序列化时只输出一个整体 TLV 块，用户态无法按字段正确解析，丢失了内部字段的详细定义（如 `topo_type`, `src_node` 等）。
+2. **接口参数传递不匹配**：`ubcore_cmd_get_path_set` 函数调用 `ubcore_get_path_set` 时，传入的是 `&arg.out`，但函数期望的是 `struct ubcore_path_set` 类型指针；修复后结构体定义变更，需传入 `&arg.out.path_set` 才能正确赋值。
+3. **冗余代码**：`ubcore_get_route_list` 接口与 `ubcore_get_path_set` 功能重叠且实现复杂，应被移除以简化逻辑。
+
+#解决方案
+1. **细化 TLV 字段定义**：修改 `ubcore_cmd_tlv.c` 中的 `fill_spec` 函数，将原本聚合的字段（如 `GET_PATH_SET_OUT_PATH_SET`）拆解为具体的成员字段（如 `GET_PATH_SET_OUT_PATH_SET_TOPO_TYPE`, `GET_PATH_SET_OUT_PATH_SET_SRC_NODE` 等），确保每个成员都有独立的 TLV 定义。
+2. **修正函数调用参数**：在 `ubcore_uvs_cmd.c` 中调用 `ubcore_get_path_set` 时，将参数从 `&arg.out` 修正为 `&arg.out.path_set`。
+3. **移除冗余接口**：删除 `UBCORE_CMD_GET_ROUTE_LIST` 相关的枚举、结构体、处理函数及调用逻辑，统一使用 `ubcore_get_path_set` 替代。
+4. **重构实现逻辑**：简化 `ubcore_get_route_list` 实现，内部直接调用 `ubcore_get_path_set` 获取数据并转换格式，避免重复代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/461f696092c020c099605cae93e046ebdde05fb9

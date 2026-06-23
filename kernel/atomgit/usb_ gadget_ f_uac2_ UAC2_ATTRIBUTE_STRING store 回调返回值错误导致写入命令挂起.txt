@@ -1,0 +1,23 @@
+#标题
+usb: gadget: f_uac2: UAC2_ATTRIBUTE_STRING store 回调返回值错误导致写入命令挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ConfigFS 中通过 `echo` 命令修改 UAC2 功能的字符串属性（如 `function_name`）时，Shell 进程会出现挂起现象。系统试图反复写入最后的换行符，导致命令无法正常退出。
+
+#主要错误日志
+未知
+
+#问题根因
+ConfigFS 的 store 回调函数应当返回实际写入并消耗的字节数（即入参 `len`），而不是内部存储的字符串长度。
+在修复前的代码中，回调函数返回了 `scnprintf` 的返回值（即实际存入缓冲区的字符数）。当用户写入的字符串包含换行符（例如 `echo foo > function_name`），代码逻辑会剔除换行符，导致实际存储的长度小于写入的总长度。由于返回值不匹配写入的字节数，调用者（如 Shell 或用户空间写入逻辑）会认为写入未完成或失败，从而尝试继续写入剩余的字节（即换行符），导致无限循环或挂起。
+
+#解决方案
+修改 `drivers/usb/gadget/function/f_uac2.c` 中的 `f_uac2_opts_##name##_store` 函数逻辑：
+1. 将返回值变量 `ret` 的初始值直接设置为入参 `len`，表示消耗了全部传入的字节数。
+2. 移除 `scnprintf` 对 `ret` 的赋值操作，仅在内部进行字符串截断存储，确保函数始终返回传入的长度 `len`，从而正确通知用户空间写入操作已完成。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/59accfa067799f88b9682d558f44dca8cfb016cd

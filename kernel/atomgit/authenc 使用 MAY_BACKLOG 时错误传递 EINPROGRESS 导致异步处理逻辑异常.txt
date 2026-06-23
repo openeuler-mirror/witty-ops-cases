@@ -1,0 +1,26 @@
+#标题
+authenc 使用 MAY_BACKLOG 时错误传递 EINPROGRESS 导致异步处理逻辑异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 authenc 模块被配置为 MAY_BACKLOG 模式调用时，如果底层算法同步返回 EBUSY，内核无法正确将 EINPROGRESS 通知传递回调用者。
+特别地，如果 EBUSY 发生在 authenc 调用的第二部分（异步阶段），系统会错误地将该 EBUSY 以及后续的 EINPROGRESS 通知传递给上层调用者，破坏了异步接口的预期行为。这是原始实现中的一个缺陷，因为最初并未预期 authenc 会在 MAY_BACKLOG 场景下使用。
+
+#主要错误日志
+未知
+
+#问题根因
+authenc 在处理 MAY_BACKLOG 标志时存在逻辑缺陷。在 authenc 操作的后半部分（异步回调阶段）启动时，代码未能正确屏蔽（mask）EBUSY 和 EINPROGRESS 通知。
+根据提交信息描述：“When authenc is invoked with MAY_BACKLOG, it needs to pass EINPROGRESS notifications back up to the caller when the underlying algorithm returns EBUSY synchronously. However, if the EBUSY comes from the second part of an authenc call, i.e., it is asynchronous, both the EBUSY and the subsequent EINPROGRESS notification must not be passed to the caller.”
+根本原因在于缺少一种机制来区分当前是同步阶段还是异步阶段，从而决定是否应该将 EBUSY/EINPROGRESS 向上层透传。
+
+#解决方案
+修改 `crypto/authenc.c`，引入 mask 掩码机制来控制标志传递：
+1. 在 `authenc_request_complete` 函数中增加对 `-EBUSY` 的判断，确保在需要屏蔽时不触发完成回调。
+2. 新增辅助函数 `authenc_geniv_ahash_done2` 和 `authenc_decrypt_tail_done`，专门用于处理异步回调上下文中的后续操作，这些函数会“吞掉”（忽略）不应传递的 EINPROGRESS 通知。
+3. 修改 `crypto_authenc_genicv` 和 `crypto_authenc_decrypt_tail` 函数接口，增加 `mask` 参数。在异步回调路径（即第二部分操作）调用这些函数时传入 `CRYPTO_TFM_REQ_MAY_SLEEP` 作为掩码，以此清除可能导致错误通知的标志位，并根据 mask 值选择使用新的回调处理函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4627f2afc4c92f06e049dd335e28fc8e055acb8e

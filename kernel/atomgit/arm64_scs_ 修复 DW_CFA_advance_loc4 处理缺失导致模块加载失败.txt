@@ -1,0 +1,20 @@
+#标题
+arm64/scs: 修复 DW_CFA_advance_loc4 处理缺失导致模块加载失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ARM64 架构下启用了影子调用栈（SCS）功能的内核中，加载内核模块时失败。原因是内核在解析模块的 eh_frame 信息时，遇到 `DW_CFA_advance_loc4` 操作码默认判定为 `EDYNSCS_INVALID_CFA_OPCODE`（无效操作码），从而触发错误逻辑，错误地阻止了模块的正常加载。
+
+#主要错误日志
+未知
+
+#问题根因
+内核对 DWARF CFA（Call Frame Information）指令解析处理不完整。`DW_CFA_advance_loc4` 操作码虽然在规范中定义，但在 `arch/arm64/kernel/patch-scs.c` 的 `scs_handle_fde_frame` 函数中缺少对应的 case 处理分支。代码流程中该操作码落入默认分支，被误判为无效操作码，导致模块加载流程中止。
+
+#解决方案
+在 `arch/arm64/kernel/patch-scs.c` 文件的 `scs_handle_fde_frame` 函数中增加对 `DW_CFA_advance_loc4` 的处理逻辑。具体修改为：增加相应的 case 分支，正确解析该操作码后紧随的 4 个字节作为地址增量，并更新 loc 变量，确保 CFA 解析流程继续正常执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3f128ca24c0e51505a95a9a9d684b4f0159a62cd

@@ -1,0 +1,23 @@
+#标题
+wifi: ath11k: 处理 monitor destination ring 时因无效 buf_id 导致 RCU stall 及内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 monitor destination ring 时，若驱动无法根据硬件返回的 buf_id 获取到有效的 buffer，会导致目的地址处理流程陷入无限循环，进而引发 RCU stall 并最终导致内核崩溃。
+
+#主要错误日志
+ath11k_pci 0000:58:00.0: data msdu_pop: invalid buf_id 309
+ath11k_pci 0000:58:00.0: data dp_rx_monitor_link_desc_return failed
+ath11k_pci 0000:58:00.0: data msdu_pop: invalid buf_id 309
+ath11k_pci 0000:58:00.0: data dp_rx_monitor_link_desc_return failed
+
+#问题根因
+驱动在从 link descriptor 中获取 MSDU 时，根据 buf_id 查找对应的 buffer。当硬件返回了无效的 buf_id（例如日志中的 309），驱动无法找到对应的 msdu 对象。原代码逻辑在遇到此情况时直接 `break` 跳出循环，但这导致后续处理未能正确推进，引发无限循环和 RCU stall。
+
+#解决方案
+修改 `ath11k_dp_rx_mon_mpdu_pop` 和 `ath11k_dp_rx_full_mon_mpdu_pop` 函数的错误处理逻辑。当遇到无效 buf_id 时，不再直接 `break` 退出，而是跳转至 `next_msdu` 标签处以跳过当前有问题的 buf_id 并继续处理下一个条目，从而避免陷入死循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/23b41dda78ea3496d69742981b08dd74d206f9e2

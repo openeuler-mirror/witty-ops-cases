@@ -1,0 +1,26 @@
+#标题
+BPF cgroup local storage tail call 越界访问故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当两个 BPF 程序分别使用不同 value 大小的 cgroup local storage，且其中一个程序通过 tail call（尾调用）进入另一个程序时，可以构造出越界访问。尽管 BPF 校验器会分别通过两个程序的检查，但在运行时，第二个程序调用 `bpf_get_local_storage()` 时会错误地获取到前一个程序的 map，导致因大小不匹配而引发越界内存访问。
+
+#主要错误日志
+未知
+
+#问题根因
+BPF 程序通过 tail call 调用时，运行时上下文 `bpf_cg_run_ctx` 包含 `bpf_prog_array_item`，该结构体持有 BPF 程序及其使用的 cgroup local storage。
+问题在于，tail call 后的目标程序在运行时获取到的是原程序（调用者）的 `cgroup_storage` 指针，而非自身的 map 指针。如果两个程序的 cgroup local storage 大小不一致，`bpf_get_local_storage()` 辅助函数在访问数据时会发生越界访问。
+根本原因是缺少对 tail call 组合场景下 cgroup storage 一致性的校验机制。
+
+#解决方案
+在 `bpf_map_owner` 结构体中扩展 `storage_cookie[]` 数组，用于记录和匹配 cgroup local storage 的 cookie。
+在 `bpf_prog_map_compatible` 函数中增加校验逻辑：
+1. 在设置 map owner 时，保存程序的 cgroup storage cookie。
+2. 在后续程序兼容性检查时，比对程序的 storage cookie 与 map owner 保存的 cookie 是否一致，或者程序未使用 cgroup storage。
+这确保了只有在 cgroup storage 匹配或未使用的情况下，tail call 组合才是被允许的，从而防止了运行时的越界访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ed89ddc03ce4988bb257085d94706701f3989f5a

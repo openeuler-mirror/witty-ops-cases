@@ -1,0 +1,22 @@
+#标题
+wifi: ath12k: 监控模式下WMI管理帧TX完成路径导致radiotap长度无效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当同时启用 AP/STA 接口和监控接口时，在处理管理帧的 WMI TX 完成路径中，由于 `skb->cb` 未清零，导致 mac80211 在为监控模式生成 radiotap 头时读取到未初始化的垃圾值，进而导致 radiotap 长度无效。
+
+#主要错误日志
+未知
+
+#问题根因
+在数据帧处理路径中，`ieee80211_tx_status()` 会正确使用 memset 将 `skb->cb` 清零；但在 WMI 管理帧处理路径中缺失了这一步骤。此外，`info->status.rates[0].idx` 未初始化，可能被误判为有效的速率信息索引，导致 mac80211 解析出错误的 radiotap 长度。
+
+#解决方案
+在 WMI TX 完成处理路径中：
+1. 显式调用 `memset(&info->status, 0, sizeof(info->status))` 将状态字段清零，确保行为一致。
+2. 设置 `info->status.rates[0].idx = -1`，明确指示无有效速率信息，避免垃圾值被错误解读。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d3821105dab8ffe89d802757ae241685a057a7aa

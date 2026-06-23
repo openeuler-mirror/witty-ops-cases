@@ -1,0 +1,20 @@
+#标题
+net: selftests: fix TCP packet checksum
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核网络自测试代码在构建 TCP 数据包时，伪首部中的长度字段计算错误，导致生成的 TCP 校验和（checksum）不正确，影响自测试的准确性。
+
+#主要错误日志
+未知
+
+#问题根因
+TCP 伪首部中的长度字段应当是 L3 载荷的长度（即 L4 首部 + 载荷长度）。自测代码从底层向上构建数据包，在构造 L4 层校验和时，所有下层首部已经 push 到 skb 中。代码直接使用了 `skb->len`（包含了 IP 头等下层头部长度）作为长度参数，未减去下层头部的偏移量，导致传入 `tcp_v4_check` 的长度值错误。
+
+#解决方案
+修改 `net/core/selftests.c` 文件中的逻辑，在计算 TCP 校验和前，先计算出正确的 L4 长度：`int l4len = skb->len - skb_transport_offset(skb)`，然后将 `tcp_v4_check` 函数的入参由 `skb->len` 替换为 `l4len`，确保伪首部长度字段仅包含 L4 及其载荷的长度。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a5fa31a6d3fdd9514995287b895bff081bcd88ed

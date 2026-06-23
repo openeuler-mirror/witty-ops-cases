@@ -1,0 +1,20 @@
+#标题
+mm/huge_memory: 修复分裂 folio 时的空指针引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行大页分裂操作时，如果 folio 刚好被截断，内核会发生空指针引用，可能导致内核崩溃或异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `split_huge_page_to_list_to_order` 函数中，针对非匿名 folio 的处理逻辑存在时序缺陷。原代码在函数深处才检查 `folio->mapping` 是否为 NULL（以此判断 folio 是否被截断），但在进入该检查代码块之前，若 folio 已被截断，代码仍会尝试访问 `folio->mapping` 成员进行相关操作，从而触发空指针引用。
+
+#解决方案
+将 `folio->mapping` 的 NULL 检查逻辑提前至函数入口处。在函数开始阶段即判断：若 folio 为非匿名且 `mapping` 为 NULL，则直接返回 `-EBUSY` 以指示存在竞争条件，从而避免后续代码路径访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0149e62e21b87db048fe102edca26689a7c64652

@@ -1,0 +1,28 @@
+#标题
+module: 符号节区索引越界导致内核 panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载内核模块时，如果模块 ELF 文件中符号表项的 `st_shndx`（节区索引）值越界（例如为 0xffff），内核会发生崩溃。
+具体表现为加载模块时触发无法处理的缺页错误，并在 `simplify_symbols` 函数中引发 Kernel Panic，导致系统无法正常同步或继续运行。该问题可能源于损坏的模块文件或特定工具（如存在 bug 的 llvm-objcopy）生成的特殊 ELF 文件。
+
+#主要错误日志
+BUG: unable to handle page fault for address: ...
+RIP: 0010:simplify_symbols+0x2b2/0x480
+...
+Kernel panic - not syncing: Fatal exception
+（修复后新增日志）：
+%s: Symbol %s has an invalid section index %u (max %u)
+
+#问题根因
+内核模块加载器在 `simplify_symbols` 函数中处理符号时，未对 `sym[i].st_shndx` 的值进行边界检查。代码直接使用该索引访问 `info->sechdrs` 数组：
+`secbase = info->sechdrs[sym[i].st_shndx].sh_addr;`
+当 `st_shndx` 值超出 ELF 文件头中定义的节区数量范围（`e_shnum`）时，会导致数组越界访问，引发非法内存访问和内核 panic。
+
+#解决方案
+在 `simplify_symbols` 函数的 `default` 分支中增加边界检查逻辑。在使用 `st_shndx` 访问 `sechdrs` 数组前，判断其值是否大于等于节区头数量（`info->hdr->e_shnum`）。如果越界，打印错误日志并返回 `-ENOEXEC` 错误码，从而阻止非法访问并安全终止模块加载过程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/261222414a884b87a953b61ccd8b27d5f8a0ea22

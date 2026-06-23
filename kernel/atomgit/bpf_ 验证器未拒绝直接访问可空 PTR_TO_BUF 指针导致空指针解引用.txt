@@ -1,0 +1,20 @@
+#标题
+bpf: 验证器未拒绝直接访问可空 PTR_TO_BUF 指针导致空指针解引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BPF 程序中，当 map 迭代器的 stop 回调函数被执行时，ctx->key 和 ctx->value 指针处于 NULL 状态。由于内核验证器未能正确识别并拒绝针对这些可空指针的直接解引用操作，导致触发内核 NULL 指针解引用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `check_mem_access()` 函数中，代码使用 `base_type()` 来匹配 `PTR_TO_BUF` 类型。`base_type()` 函数会剥离 `PTR_MAYBE_NULL` 标记，导致验证器允许对带有 `PTR_MAYBE_NULL` 属性的 `PTR_TO_BUF` 指针进行直接访问（解引用），从而绕过了空指针检查。由于 map 迭代器的 ctx->key 和 ctx->value 在 stop 回调中实际为 NULL，这直接导致了内核空指针解引用故障。
+
+#解决方案
+在 `kernel/bpf/verifier.c` 的 `check_mem_access` 函数中，针对 `PTR_TO_BUF` 类型的处理分支增加 `type_may_be_null()` 判断条件。只有当指针类型不是“可能为空”时，才允许后续的直接内存访问操作。该修复参照了现有的 `PTR_TO_BTF_ID` 处理模式，确保验证器强制执行空指针检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e58a9f0793dec8ac47f0d4dc5fc15c4d1fa203ee

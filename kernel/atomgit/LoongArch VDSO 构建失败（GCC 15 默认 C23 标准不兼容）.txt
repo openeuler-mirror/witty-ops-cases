@@ -1,0 +1,30 @@
+#标题
+LoongArch VDSO 构建失败（GCC 15 默认 C23 标准不兼容）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用默认标准为 -std=gnu23 的 GCC 15 编译 LoongArch 架构内核时，编译过程在 arch/loongarch/vdso/vgetcpu.o 阶段失败，提示语法错误和类型定义冲突。
+
+#主要错误日志
+```text
+./include/linux/stddef.h:11:9: error: expected identifier before 'false'
+   11 |         false   = 0,
+      |         ^~~~~
+./include/linux/types.h:35:33: error: two or more data types in declaration specifiers
+   35 | typedef _Bool                   bool;
+      |                                 ^~~~
+./include/linux/types.h:35:1: warning: useless type name in empty declaration
+   35 | typedef _Bool                   bool;
+      | ^~~~~~~
+```
+
+#问题根因
+LoongArch 架构的 VDSO Makefile 未像内核主体部分那样显式指定 C 语言标准。内核主体使用 -std=gnu11 编译，而 VDSO 部分使用了默认标准。当使用 GCC 15（默认 -std=gnu23）编译时，C23 标准对 `false` 等关键字和 `bool` 类型定义的处理与内核代码（基于 C11/GNU 扩展）不兼容，导致编译器报错。
+
+#解决方案
+在 arch/loongarch/vdso/Makefile 的 cflags-vdso 变量中显式添加 -std=gnu11 编译选项，强制 VDSO 代码使用与内核主体一致的 C 语言标准进行编译，从而解决 GCC 15 下的构建失败问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f7e1e208f7beb8023fb26ff73bbca659dcb8f569

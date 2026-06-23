@@ -1,0 +1,20 @@
+#标题
+mdio_bus: Fix potential out-of-bounds read/write access
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户使用 mdio-tools 等工具通过 ioctl 对网络接口及其 PHY 进行读写操作时，系统未对传入的 mdio 地址参数进行校验，允许传入超过内核支持范围（PHY_MAX_ADDR，即 32）的地址值。虽然底层的读写操作通常会失败，但由于 mdiobus 统计数组的大小固定，传入的非法地址可能导致内核对该数组进行越界读写访问，存在潜在的安全风险。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在 `__mdiobus_read` 和 `__mdiobus_write` 函数中未校验传入的 `addr` 参数。虽然内核通过 `PHY_MAX_ADDR` 定义仅支持 32 个地址，但 ioctl 接口允许用户传入任意值。由于 mdiobus 提供了统计数组，当传入地址 `addr` 大于等于 `PHY_MAX_ADDR` 时，代码逻辑会基于该错误地址索引访问统计数组，从而导致越界读写的安全漏洞。
+
+#解决方案
+在 `__mdiobus_read` 和 `__mdiobus_write` 函数执行具体读写操作前，增加边界检查逻辑：判断地址 `addr` 是否大于等于 `PHY_MAX_ADDR`。若地址非法，函数直接返回 `-ENXIO` 错误，从而阻止越界访问统计数组，提升读写操作的安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dde399fda92adab42693928980a30bcde3d34377

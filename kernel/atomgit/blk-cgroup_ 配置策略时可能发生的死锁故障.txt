@@ -1,0 +1,22 @@
+#标题
+blk-cgroup: 配置策略时可能发生的死锁故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对块设备进行 blk-cgroup 策略配置时（如写入 `/sys/fs/cgroup/...` 或调用相关配置接口），系统可能发生死锁。表现为配置操作卡死无响应，进程处于不可中断睡眠状态（D状态），且无法通过常规手段终止，严重影响系统调度或 I/O 配置功能。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `blkg_conf_prep` 函数中，原代码逻辑使用 `blk_queue_enter` 来防止与 `blkcg_deactivate_policy` 并发，但这引入了死锁风险。此外，在持有特定锁或资源的情况下进行内存分配（`blkg_alloc` 和 `radix_tree_preload`）使用了 `GFP_KERNEL` 标志，可能引起递归调度或内存回收导致的死锁。具体根因是不恰当的锁竞争处理和非原子上下文下的内存分配行为。
+
+#解决方案
+1. 移除 `blk_queue_enter` 的调用，改为使用 `mutex_lock(&q->blkcg_mutex)` 来防止与 `blkcg_deactivate_policy` 的并发冲突，从而避免原有逻辑导致的死锁路径。
+2. 将 `blkg_alloc` 的内存分配标志从 `GFP_KERNEL` 修改为 `GFP_NOIO`，防止在 IO 路径中发生递归调用或死锁。
+3. 相应调整错误处理路径，移除 `blk_queue_exit` 并确保 `mutex_unlock` 正确执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fad56aac3426f4f4643424426548107ed467e829

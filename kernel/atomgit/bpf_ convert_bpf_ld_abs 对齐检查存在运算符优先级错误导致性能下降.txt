@@ -1,0 +1,20 @@
+#标题
+bpf: convert_bpf_ld_abs 对齐检查存在运算符优先级错误导致性能下降
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在未开启 CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS 的架构平台上，cBPF BPF_LD_ABS 数据包加载几乎无法命中内联快速路径，导致绝大多数加载操作被迫进入 bpf_skb_load_helper 慢速路径，造成性能显著下降。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `convert_bpf_ld_abs()` 函数的对齐检查逻辑中，C 语言运算符优先级存在误用。原代码表达式 `offset + ip_align % size` 因取模运算符 `%` 优先级高于加法运算符 `+`，被解析为 `offset + (ip_align % size)`。这导致原本用于验证数据包加载偏移量是否按 size 对齐的检查逻辑失效。正确的逻辑应为 `(offset + ip_align) % size == 0`。在 NET_IP_ALIGN == 2 的常见配置下，该错误直接导致对齐检查条件几乎无法满足。
+
+#解决方案
+修改 `net/core/filter.c` 文件中 `convert_bpf_ld_abs` 函数的对齐判断条件，在 `offset + ip_align` 表达式两侧增加括号，修正运算优先级，确保偏移量对齐检查逻辑正确执行，从而使 BPF 指令能够正确命中直接访问的快速路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/20906ce722ba3fe67e8bae7d8fa76994c8baf08a

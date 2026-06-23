@@ -1,0 +1,21 @@
+#标题
+UML physmem 初始化阶段整数溢出导致内存设置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UML (User-Mode Linux) i386 架构下，当实际内存映射大小超过 LONG_MAX 时，发生整数溢出。这会导致内存设置逻辑判断错误，可能引发初始化失败或内存映射行为异常。
+
+#主要错误日志
+os_warn("Too few physical memory! Needed=%lu, given=%lu\n", reserve, len);
+os_warn("setup_physmem - mapping %lu bytes of memory at 0x%p failed - errno = %d\n", map_size, (void *) reserve_end, err);
+
+#问题根因
+变量 `map_size` 被定义为有符号长整型（`long`），当其值大于 `LONG_MAX` 时会发生溢出变为负值。原代码使用 `if(map_size <= 0)` 进行检查，溢出导致的负值会误触发“物理内存不足”的错误处理逻辑；同时负值传递给内存映射接口也会引发问题。
+
+#解决方案
+将 `map_size` 的变量类型从 `long` 修改为 `unsigned long`，并将判断逻辑修改为直接比较无符号数 `if (len <= reserve)`，同时更新相关打印格式说明符为 `%lu`，从而消除整数溢出隐患并修正判断逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3c367743c8b16a3e4e786abde77ed0a35cd5094

@@ -1,0 +1,28 @@
+#标题
+tracing: filter string testing 过滤功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 tracing 子系统中使用 filter 对 syscalls 事件的字符串指针（如 `filename.ustring`）进行过滤测试时，过滤功能失效，导致无法正确匹配预期的系统调用事件。
+例如，执行以下命令序列后，trace 文件中无任何输出（预期应显示 `sys_enter_openat` 相关的跟踪信息）：
+1. `echo "filename.ustring ~ \"/proc*\"" > events/syscalls/sys_enter_openat/filter`
+2. `echo 1 > events/syscalls/sys_enter_openat/enable`
+3. `ls /proc/$$/maps`
+4. `cat trace`
+结果为空，修复后将正确显示 trace 信息。
+
+#主要错误日志
+未知
+
+#问题根因
+代码在调用 `strncpy_from_kernel_nofault()` 和 `strncpy_from_user_nofault()` 获取字符串时的返回值判断逻辑错误。
+原代码使用 `if (!strncpy_from_...)` 进行判断，误将返回值为 0（表示成功拷贝了 0 个字节，即空字符串）视为失败，导致函数错误地返回 NULL。实际上，只有当返回值为负数时才表示发生错误。该错误逻辑拦截了合法的返回值，导致过滤测试失败。
+
+#解决方案
+修正返回值判断逻辑。
+将 `trace_events_filter.c` 中的判断条件由 `!strncpy_from_kernel_nofault(...)` 和 `!strncpy_from_user_nofault(...)` 修改为 `< 0`，确保仅在函数返回负值（真正错误）时才返回 NULL，从而允许返回值为 0 的合法情况通过检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a7d21af6c4c43bb8be389618fef954c8004b9bc6

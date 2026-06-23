@@ -1,0 +1,22 @@
+#标题
+cros_ec_typec 探测失败未等待 EC 父设备注册
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核模块加载顺序不当或设备初始化竞争的情况下，若 cros-ec-typec.ko 在 EC 总线层模块（如 cros_ec_lpcs.ko 或 cros_ec_spi.ko）之前加载，cros_typec_probe 探测函数会因找不到父 EC 设备而直接失败，导致 TypeC 功能无法正常初始化。
+
+#主要错误日志
+couldn't find parent EC device
+
+#问题根因
+cros_typec_probe 函数在获取父设备驱动数据（dev_get_drvdata）失败时，错误地返回了 -ENODEV，导致驱动核心不再重试探测。实际上，此时 EC 设备可能尚未注册完成，驱动应当返回 -EPROBE_DEFER 以请求延迟探测，而不是直接放弃。
+
+#解决方案
+修改 drivers/platform/chrome/cros_ec_typec.c 中的 cros_typec_probe 函数：
+1. 将获取不到 EC 父设备时的日志打印级别从 dev_err 降低为 dev_warn。
+2. 将返回值从 -ENODEV 修改为 -EPROBE_DEFER，确保在 EC 设备后续注册成功后，驱动核心能再次触发 probe 函数执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/132abc1bb71f5a9823a9e5c56dc31c52dc0c1837

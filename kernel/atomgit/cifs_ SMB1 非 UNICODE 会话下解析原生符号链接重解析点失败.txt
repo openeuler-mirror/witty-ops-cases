@@ -1,0 +1,22 @@
+#标题
+cifs: SMB1 非 UNICODE 会话下解析原生符号链接重解析点失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB1 协议且未启用 UNICODE 会话的场景下，客户端无法正确读取或解析原生的符号链接，导致符号链接功能异常，无法获取正确的重解析点数据。
+
+#主要错误日志
+未知
+
+#问题根因
+SMB1 的 `NT_TRANSACT_IOCTL` / `FSCTL_GET_REPARSE_POINT` 接口即使在非 UNICODE 模式下，其返回的重解析缓冲区也始终是 UNICODE/UTF-16 格式的。
+这是因为 `FSCTL_GET_REPARSE_POINT` 是基于 NT 的 IOCTL，它不区分 8 位非 UNICODE 和 16 位 UNICODE 模式，其路径缓冲区总是使用 UTF-16 编码。
+原代码错误地根据响应头中的 `SMBFLG2_UNICODE` 标志来判断重解析点数据的编码格式，导致在非 UNICODE 会话下错误地解析 UTF-16 数据。
+
+#解决方案
+修改 `fs/smb/client/smb1ops.c` 中的 `cifs_parse_reparse_point` 函数，强制将 `parse_reparse_point` 函数的 `unicode` 参数设置为 `true`，不再依赖 SMB 响应头中的 Flags2 标志，从而正确处理 UTF-16 格式的重解析点缓冲区。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d85b9bc702d40233813b06f0acc9e03cbdce3538

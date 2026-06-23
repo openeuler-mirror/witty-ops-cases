@@ -1,0 +1,20 @@
+#标题
+mlx5e: IPSec全卸载模式下ESN更新竞态条件导致反重放失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在IPSec full offload模式下，当设备报告ESN（Extended Sequence Number）回滚事件时，驱动程序处理该事件存在竞态条件。如果硬件因其他原因发送了重复事件，驱动会重复处理同一个ESN更新，导致ESN高位（esn_msb）被错误递增。驱动随后将无效的ESN状态写入硬件，引发反重放失败，最终导致IPSec流量完全中断。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在处理ESN回滚事件时，先调用 `mlx5_accel_esp_modify_xfrm()` 更新内核的xfrm状态，之后再重新“武装”硬件事件（设置 `esn_event_arm` 为 0x1）。`mlx5_accel_esp_modify_xfrm()` 函数内部会临时释放并重新获取 xfrm state 锁。在这个锁释放的窗口期内，如果硬件再次发送事件，驱动会再次处理同一个ESN更新，导致ESN高位错误递增。
+
+#解决方案
+调整代码执行顺序，在验证事件发生后立即重新“武装”ESN事件（设置 `esn_event_arm` 为 0x1），然后再调用 `mlx5_accel_esp_modify_xfrm()` 更新状态。具体修改为：将 `mlx5_accel_esp_modify_xfrm()` 调用移至 `mlx5e_ipsec_handle_event` 函数中锁保护区域之外执行，并确保在解锁前完成事件的重新武装。这确保了任何虚假的、重复的事件都能被正确忽略，从而关闭竞态窗口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8799bdfdb1b6bbd70c88711dd294c961397a77c1

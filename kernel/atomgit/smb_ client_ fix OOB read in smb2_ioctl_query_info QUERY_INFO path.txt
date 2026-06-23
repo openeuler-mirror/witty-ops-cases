@@ -1,0 +1,20 @@
+#标题
+smb: client: fix OOB read in smb2_ioctl_query_info QUERY_INFO path
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SMB客户端在执行 `smb2_ioctl_query_info` 的 `QUERY_INFO` 操作路径时，可能发生越界读取（Out-of-Bounds read）漏洞。该问题可能导致内核内存非法访问，引发内核崩溃或潜在的信息泄露风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb2_ioctl_query_info` 函数处理查询信息响应时，仅校验了服务器返回的 `OutputBufferLength` 是否小于请求的 `input_buffer_length`，并据此调整了 `input_buffer_length`。但代码未校验调整后的 `input_buffer_length` 加上结构体头部大小后是否超过了实际接收到的响应数据包长度（`rsp_iov[1].iov_len`）。当服务器返回一个畸形或恶意的响应包时，后续的内存访问操作会超出实际数据包的边界，导致越界读取。
+
+#解决方案
+在赋值 `qi.input_buffer_length` 之后、使用该长度访问内存之前，增加边界校验逻辑。使用 `struct_size` 宏计算包含头结构和数据缓冲区的预期总大小，并将其与实际响应向量长度 `rsp_iov[1].iov_len` 进行比较。若计算出的预期大小超过实际长度，则判定为非法访问，返回 `-EFAULT` 错误并跳转至 `out` 标签退出，从而防止越界读取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/98aef9695ecdacee5f5a9db97600ea9e342efcd6

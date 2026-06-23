@@ -1,0 +1,23 @@
+#标题
+Renesas R-Car Gen3 USB2 PHY 驱动 unbind/bind 后角色自动检测失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Renesas RZ/G3S SoC 上执行 PHY 驱动的 unbind 和 bind 操作后，USB 角色自动检测功能失效。该问题在 PHY 3（PHY_INDEX_EHCI）作为第一个被初始化的 PHY 时必现，导致系统无法正确识别或切换 USB 设备角色。
+
+#主要错误日志
+未知
+
+#问题根因
+PHY 3 没有与 USB2_INT_ENABLE 寄存器关联的中断（对应 `rcar_gen3_int_enable[3]` 为 0）。在驱动 unbind/bind 流程中，如果 PHY 3 被首先初始化，代码逻辑错误地调用了 `rcar_gen3_init_otg()` 来初始化 OTG，但因该 PHY 没有中断位而未能使能 PHY 中断。同时，原有的 `otg_initialized` 标志位逻辑无法正确反映具有中断能力的 PHY 初始化状态，导致后续 `role_store()`/`role_show()` 判断条件出错，引发角色检测失败。
+
+#解决方案
+移除 `struct rcar_gen3_phy` 中冗余的 `otg_initialized` 成员变量。
+新增辅助函数 `rcar_gen3_is_any_otg_rphy_initialized()`，用于检查是否有任何已初始化且具备中断能力的 PHY。
+修改 `rcar_gen3_phy_usb2_init()` 函数，仅在当前 PHY 具有中断使能位（`int_enable_bits` 不为 0）时才调用 `rcar_gen3_init_otg()` 进行初始化。
+更新 `role_store()`、`role_show()` 以及 `rcar_gen3_init_otg()` 的入口检查逻辑，使用新增的辅助函数确保仅在合适的条件下执行 OTG 相关操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/df8f820b2f189e5607b6c5ead29947e63b289fc8

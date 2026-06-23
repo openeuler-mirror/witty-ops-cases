@@ -1,0 +1,20 @@
+#标题
+libbpf: btf_dump__free 函数内存分配失败导致空指针引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `btf_dump__new()` 函数在为内部 hashmap (`btf_dump->type_names`) 分配内存失败时，会返回错误码。若此时调用清理函数 `btf_dump__free()`，该函数会尝试释放 `btf_dump->type_names`。由于此指针为 NULL 且未经过校验，导致系统发生空指针引用错误。
+
+#主要错误日志
+未知
+
+#问题根因
+`btf_dump__new()` 在内存分配失败时返回错误码，此时 `btf_dump->type_names` 指针为 NULL。清理函数 `btf_dump__free()`（内部调用 `btf_dump_free_names`）在释放该 hashmap 时，未检查指针是否为 NULL，直接对其执行遍历和释放操作，从而触发了空指针引用。
+
+#解决方案
+在 `btf_dump_free_names` 函数中增加了空指针检查逻辑。在遍历和释放 hashmap 之前，先判断传入的 map 指针是否为 NULL，若为 NULL 则直接返回，避免了空指针引用的发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2bd9711fac24e6dfe757e77c90b884be83ceff16

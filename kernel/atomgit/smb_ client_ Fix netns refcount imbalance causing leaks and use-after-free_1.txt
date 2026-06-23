@@ -1,0 +1,26 @@
+#标题
+smb: client: Fix netns refcount imbalance causing leaks and use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SMB 客户端在网络命名空间管理上存在引用计数不平衡，导致两种主要故障现象：
+1. **Netns refcount leaks（命名空间引用计数泄漏）**：在 `cifs_reconnect` 重连流程中，`server->ssocket` 被释放但未调用相应的 `put_net()`，导致网络命名空间对象无法释放。
+2. **Potential use-after-free（潜在的释放后使用）**：在 socket 绑定失败的异常处理路径中，`get_net()` 与 `put_net()` 调用次数不匹配，可能导致 `server->net` 引用计数过早降为零并被释放，后续访问导致 UAF。
+
+#主要错误日志
+未知
+
+#问题根因
+前序提交（ef7134c7fc48 和 e9f2517a3e18）尝试修复 netns use-after-free 和 TCP timers deadlock 问题，但在调整 `get_net()` 和 `put_net()` 的逻辑时引入了新的缺口：
+1. 在 `cifs_abort_connection` 中释放 socket 时，遗漏了释放之前在 `generic_ip_connect` 中获取的 netns 引用。
+2. 在 `generic_ip_connect` 的 socket 绑定失败（`bind_socket` 失败）或其他错误路径中，错误地提前调用了 `put_net()`，导致引用计数与生命周期不匹配。
+
+#解决方案
+将 netns 引用计数与 `server->ssocket` 及 server 的生命周期严格绑定：
+1. 在 `cifs_abort_connection` 函数中，释放 `server->ssocket` 后立即调用 `put_net(cifs_net_ns(server))` 释放对应的网络命名空间引用。
+2. 移除 `generic_ip_connect` 函数中错误路径（如 `bind_socket` 失败或 `ip_rfc1001_connect` 失败时）下冗余的 `put_net()` 调用，确保引用仅在 socket 销毁或 server 拆卸时释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b2af53e61dae5b16364531331184f5870c69ed31

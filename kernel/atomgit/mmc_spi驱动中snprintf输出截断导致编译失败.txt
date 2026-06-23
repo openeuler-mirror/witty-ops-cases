@@ -1,0 +1,24 @@
+#标题
+mmc_spi驱动中snprintf输出截断导致编译失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 GCC 13 编译内核时，`drivers/mmc/host/mmc_spi.c` 文件编译报错，提示 `snprintf` 输出可能被截断，导致构建中断。
+
+#主要错误日志
+drivers/mmc/host/mmc_spi.c: In function ‘mmc_spi_response_get’:
+drivers/mmc/host/mmc_spi.c:227:64: error: ‘snprintf’ output may be truncated before the last format character [-Werror=format-truncation=]
+  227 |         snprintf(tag, sizeof(tag), "  ... CMD%d response SPI_%s",
+      |                                                                ^
+drivers/mmc/host/mmc_spi.c:227:9: note: ‘snprintf’ output between 26 and 43 bytes into a destination of size 32
+
+#问题根因
+代码中使用 `snprintf` 将 `" ... CMD%d response SPI_%s"` 格式化字符串写入一个 32 字节的 `tag` 缓冲区。GCC 13 编译器检测到，根据格式化参数的不同，输出长度可能在 26 到 43 字节之间，超过目标缓冲区大小（32字节），从而触发了 `format-truncation` 警告，并因 `-Werror` 配置导致编译错误。
+
+#解决方案
+移除有问题的 `snprintf` 调用及其中间缓冲区变量 `tag`，直接将格式化字符串和相关参数内联到函数末尾唯一的打印调用 `dev_dbg()` 中，从而消除了缓冲区截断风险并修复了编译错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ea9fe52cdb9ec743385fc7896a00456c8dd505c4

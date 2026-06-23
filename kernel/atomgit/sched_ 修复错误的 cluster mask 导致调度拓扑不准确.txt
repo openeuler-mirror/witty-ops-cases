@@ -1,0 +1,22 @@
+#标题
+sched: 修复错误的 cluster mask 导致调度拓扑不准确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在构建 soft domain 时，`cpu_clustergroup_mask()` 函数返回的 CPU 掩码不能正确代表实际的 CPU 拓扑结构，导致调度域构建错误，进而影响调度器对 CPU 资源视图的判断。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `build_soft_sub_domain` 函数中，代码错误地使用了 `cpu_clustergroup_mask(i)` 来计算 soft domain 的跨度。该函数无法正确反映实际的 CPU 拓扑，导致生成的调度域掩码与硬件实际拓扑不一致。
+
+#解决方案
+1. 将获取 CPU 拓扑掩码的接口由 `cpu_clustergroup_mask(i)` 替换为正确的 `topology_cluster_cpumask(i)`。
+2. 重构 `build_soft_sub_domain` 函数逻辑，将其调用粒度从“遍历每个 LLC domain”调整为“遍历每个 NUMA node（通过 `nr_node_ids`）”。
+3. 移除对 `sd_llc` 调度域依赖的查找逻辑，直接使用 `cpumask_of_node(nid)` 作为跨度来源，确保 soft domain 构建基于准确的 NUMA node 拓扑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/aee334330ccf7fa3b8299a46c8481d887ee2c108

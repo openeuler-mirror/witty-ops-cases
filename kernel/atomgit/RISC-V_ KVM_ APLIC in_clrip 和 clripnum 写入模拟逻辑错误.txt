@@ -1,0 +1,21 @@
+#标题
+RISC-V: KVM: APLIC in_clrip 和 clripnum 写入模拟逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V KVM 虚拟化环境中，当 APLIC（高级平台级中断控制器）配置为 MSI 交付模式（domaincfg.DM = 1）且中断源模式为电平触发（Level1 或 Level0）时，Guest OS 对 `in_clrip` 寄存器或 `clripnum` 寄存器执行写入操作以清除挂起状态时，写入操作被忽略，导致中断挂起位无法正确清除，进而导致中断处理逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 RISC-V AIA 规范 "4.7 Precise effects on interrupt-pending bits" 章节定义：当源模式为 Level1 或 Level0 且中断域配置为 MSI 交付模式时，无论输入值如何，只要通过 MSI 转发中断或对 `in_clrip`/`clripnum` 执行相关写入，挂起位都应被清除。
+代码中的 `aplic_write_pending()` 函数逻辑有误，当 `pending` 为 false（即请求清除挂起位）且源模式为电平触发时，代码直接跳转到了 `skip_write_pending` 标签，导致清除挂起位的写操作被忽略，未能正确更新中断状态。
+
+#解决方案
+修改 `arch/riscv/kvm/aia_aplic.c` 文件中的 `aplic_write_pending` 函数逻辑。当源模式为电平触发且请求清除挂起位（`pending` 为 false）时，不再跳过写入操作，而是强制执行挂起位的清除，使其符合 RISC-V AIA 规范要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6ce5aff1fc572643e44b0d25b6963a1605393c42

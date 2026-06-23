@@ -1,0 +1,22 @@
+#标题
+IB/mlx5: MR注销流程潜在死锁修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载RDMA驱动模块或注销Memory Region (MR) 时，系统可能发生死锁，导致相关进程处于不可中断睡眠状态（D状态），模块卸载挂起或设备资源无法正常释放。
+
+#主要错误日志
+未知
+
+#问题根因
+在MR注销流程中，代码逻辑存在锁序冲突。原 `mlx5_revoke_mr` 函数在持有 ODP (On-Demand Paging) 相关的 `umem_mutex` 锁的情况下调用 `cache_ent_find_and_store`，而后者可能会尝试获取同样的 `umem_mutex`，导致自死锁或与上下文中的其他锁路径形成死锁。
+
+#解决方案
+重构 MR 注销代码，将原本的 `mlx5_revoke_mr` 函数拆分为 `mlx5_umr_revoke_mr_with_lock` 和 `mlx5r_handle_mkey_cleanup` 两个函数。主要修改包括：
+1. 将 `mlx5r_umr_revoke_mr` 的调用及其关联的 ODP 锁定逻辑封装在 `mlx5_umr_revoke_mr_with_lock` 中，确保该函数在释放锁之前完成必要的操作，避免锁穿透到后续流程。
+2. 在 `mlx5r_handle_mkey_cleanup` 中重新规划锁的获取顺序，确保在进行 `destroy_mkey` 等清理操作时，锁的获取与释放遵循正确的嵌套层级，避免交叉持有锁导致的死锁风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cd1d41e64ee978194fcc26daf6d99dac0d3cc9d9

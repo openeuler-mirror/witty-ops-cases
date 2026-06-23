@@ -1,0 +1,24 @@
+#标题
+intel_th: 设备引用计数泄漏故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在打开 Intel Trace Hub (intel_th) 输出设备时，内核设备对象的引用计数发生泄漏。若在打开过程中遇到错误（如驱动未绑定）或正常关闭设备文件时，系统未能正确释放此前查找设备时获取的引用，导致设备对象无法被正常释放，可能引发资源泄漏或设备无法正常移除的问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `intel_th_output_open` 函数中，通过 `bus_find_device_by_devt` 查找设备时会增加设备的引用计数，但在以下两种情况下未能正确释放引用：
+1. 当查找到设备但设备驱动未绑定时（`!dev->driver`），代码直接跳转错误处理路径，但此前未执行 `put_device` 操作；
+2. 设备打开成功后，缺乏对应的 release 机制，导致关闭文件时无法释放该引用计数。
+
+#解决方案
+1. 修改 `intel_th_output_open` 函数的错误处理逻辑，当设备驱动不存在时，跳转至 `out_put_device` 标签执行 `put_device(dev)` 以释放引用。
+2. 新增 `intel_th_output_release` 函数，在文件关闭（release）时调用 `put_device` 释放设备引用。
+3. 在 `intel_th_output_fops` 结构体中注册该 `.release` 回调函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/983d68714a8eaed2eb4d4eb1453adb22b774ae5d

@@ -1,0 +1,20 @@
+#标题
+AF_ALG 接口 Scatter/Gather List 链接时引发的空指针解引用故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户态程序通过 AF_ALG 接口调用 `sendmsg()` 发送数据时，如果某次发送恰好将 Scatter/Gather List (SGL) 填满至 `MAX_SGL_ENTS`，随后再次调用 `sendmsg()` 触发新的 SGL 分配与链接操作时，内核会发生 panic。这是因为 crypto scatterwalk 在遍历链表时遇到过早的结束标记，导致 `sg_next()` 返回 NULL，后续代码在解引用该指针时触发空指针访问错误。
+
+#主要错误日志
+未知
+
+#问题根因
+AF_ALG 接口在链接新的 `af_alg_tsgl` 结构体时存在缺陷。如果一个 `sendmsg()` 调用将 SGL 恰好填充至 `MAX_SGL_ENTS`，该最后一个条目会被标记为结束。后续的 `sendmsg()` 分配了新的 SGL 并通过 `sg_chain()` 将其链接到前一个 SGL 后，但未能清除前一个 SGL 最后一个数据条目上的结束标记。这导致 scatterwalk 在遍历时误判列表结束，`sg_next()` 返回 NULL，进而引发空指针解引用。
+
+#解决方案
+在 `af_alg_alloc_tsgl()` 函数中，执行 `sg_chain()` 链接新 SGL 之前，显式调用 `sg_unmark_end()` 清除前一个 SGL 最后一个条目的结束标记，确保 scatterwalk 能够正确遍历到新链接的 SGL。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/11e6b02a78981af3e838a5c5f6496c8458fb625d

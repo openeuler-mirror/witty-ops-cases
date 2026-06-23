@@ -1,0 +1,20 @@
+#标题
+nvme-passthrough 未校验元数据支持导致潜在内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在不支持元数据的 NVMe 命名空间上，通过 io-passthru 发送携带元数据的 IO 命令时，可能触发内核补全路径中的异常；此外，对于携带元数据的管理命令，系统可能错误地忽略元数据并报告成功，导致未定义行为或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `nvme_map_user_request()` 在处理 passthrough 命令时，未检查 NVMe 命名空间是否真正支持元数据就直接下发请求。这导致在不支持元数据的设备上处理带元数据的 IO 命令时触发补全路径问题；同时，对于管理命令（bdev == NULL），代码逻辑会忽略元数据并可能错误报告成功，缺乏必要的输入校验。
+
+#解决方案
+在 `nvme_map_user_request` 函数中增加校验逻辑：定义 `supports_metadata` 变量检查块设备是否支持完整性（元数据）功能。如果请求携带元数据（`has_metadata` 为真）但设备不支持元数据（`supports_metadata` 为假），则直接返回 `-EINVAL` 拒绝该请求，从而防止非法命令下发。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/643fce2fbc9e1984ced6f1b76afc0deba2164efd

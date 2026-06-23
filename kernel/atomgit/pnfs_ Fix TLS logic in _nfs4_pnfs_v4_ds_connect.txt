@@ -1,0 +1,24 @@
+#标题
+pnfs: Fix TLS logic in _nfs4_pnfs_v4_ds_connect
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 NFSv4.1 pNFS 并且开启 TLS 功能的场景下，数据服务器连接逻辑存在缺陷。当客户端尝试连接数据服务器时，可能错误地尝试将 RDMA 传输层添加到已标记为 TCP/TLS 类型的客户端中，导致连接建立失败或触发内核逻辑错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `_nfs4_pnfs_v4_ds_connect` 函数中，TLS 传输策略的判断逻辑存在错误：
+1. 连接匹配检查不当：原代码在判断传输类型匹配时，逻辑不够严谨，未正确处理已建立的 TCP/TLS 客户端与 RDMA 传输地址之间的关系，导致可能尝试将不兼容的 RDMA 传输添加到 TCP/TLS 客户端。
+2. 新连接传输类型判断错误：在创建新的数据服务器客户端时，原代码错误地直接修改了地址结构体中的传输类型（`da->da_transport`），而未根据 MDS 服务器的安全策略（`xprtsec_policy`）来正确决定是否应使用 TCP_TLS。
+
+#解决方案
+修改 `fs/nfs/pnfs_nfs.c` 中的连接逻辑：
+1. 修正匹配逻辑：在匹配现有客户端连接时，改用 `xprt_args.ident` 与 `clp->cl_proto` 进行比较，确保传输协议标识符的一致性，避免协议不匹配导致的连接错误。
+2. 修正新建连接逻辑：引入局部变量 `ds_proto` 存储传输协议类型。仅当原始协议为 TCP 且 MDS 客户端配置了非 NONE 的传输安全策略（`xprtsec_policy != RPC_XPRTSEC_NONE`）时，才将 `ds_proto` 设置为 `XPRT_TRANSPORT_TCP_TLS`，并将此变量传递给 `nfs4_set_ds_client`，避免修改原始地址数据结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/53b7929327da3215aaeb26fc6e81817039e49197

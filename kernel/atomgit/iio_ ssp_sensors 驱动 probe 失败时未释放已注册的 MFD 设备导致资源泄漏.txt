@@ -1,0 +1,23 @@
+#标题
+iio: ssp_sensors 驱动 probe 失败时未释放已注册的 MFD 设备导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ssp_sensors 驱动加载过程中，若 `spi_setup` 初始化失败，驱动 probe 流程异常退出，但未释放在此之前已通过 `mfd_add_devices` 成功注册的 MFD 设备资源。这导致内核中残留未清理的设备资源，可能引发内存泄漏或后续设备注册冲突。
+
+#主要错误日志
+- "Failed to setup spi\n"
+- "Probe failed!\n"
+
+#问题根因
+驱动 `ssp_probe` 函数中，`mfd_add_devices` 调用成功后，若后续的 `spi_setup` 步骤失败，代码直接返回错误值，未跳转到错误处理流程调用 `mfd_remove_devices` 进行资源清理。根本原因是错误处理路径缺失，未遵循“谁申请谁释放”的原则，导致资源泄漏。
+
+#解决方案
+修改 `ssp_probe` 函数的错误处理逻辑：
+1. 当 `spi_setup` 失败时，不再直接 `return ret`，而是通过 `goto err_setup_spi` 跳转至统一的错误处理标签。
+2. 在错误处理标签 `err_setup_spi` 处增加 `mfd_remove_devices` 调用，确保在 probe 失败退出前正确移除已注册的 MFD 设备，从而修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae66c10c57508ec45173b75ed9e304b0b29cafb0

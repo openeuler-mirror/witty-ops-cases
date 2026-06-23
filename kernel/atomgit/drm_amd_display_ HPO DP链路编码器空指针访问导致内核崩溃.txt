@@ -1,0 +1,21 @@
+#标题
+drm/amd/display: HPO DP链路编码器空指针访问导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在AMD显卡显示驱动中，当调用 `enable_hpo_dp_link_output` 或 `disable_hpo_dp_link_output` 函数时，若 `link_res->hpo_dp_link_enc` 指针为空，代码继续执行后续成员访问将导致内核空指针解引用，引发系统崩溃或显示功能异常。
+
+#主要错误日志
+[   XX.XXXXXX] [drm:enable_hpo_dp_link_output] *ERROR* enable_hpo_dp_link_output: invalid hpo_dp_link_enc
+[   XX.XXXXXX] [drm:disable_hpo_dp_link_output] *ERROR* disable_hpo_dp_link_output: invalid hpo_dp_link_enc
+
+#问题根因
+代码逻辑存在缺陷，在 `link_hwss_hpo_dp.c` 文件的 `enable_hpo_dp_link_output` 和 `disable_hpo_dp_link_output` 函数中，直接使用 `link_res->hpo_dp_link_enc` 指针调用函数或访问成员，未预先检查该指针是否为 NULL。当硬件状态异常或初始化未完成导致该指针为空时，触发空指针访问故障。该问题关联 CVE-2024-47704。
+
+#解决方案
+在 `enable_hpo_dp_link_output` 和 `disable_hpo_dp_link_output` 函数入口处增加对 `link_res->hpo_dp_link_enc` 指针的有效性检查。若指针为空，调用 `DC_LOG_ERROR` 记录错误日志并直接返回，避免后续的非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9cb5e0564ae5253c0bb3c1cb9b47839290d311fe

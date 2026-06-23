@@ -1,0 +1,23 @@
+#标题
+spi: tegra210-quad: 修复超时处理导致的内存访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 CPU 负载极高（通常为 CPU 0）的情况下，QSPI 中断处理线程（IRQ thread）可能无法在传输超时时间到达前被调度运行。当超时发生时，驱动程序清理了待处理的传输并将消息标记为失败，但 `curr_xfer` 指针仍指向已释放或失效的内存。随后当 IRQ 线程最终被调度执行时，可能访问该无效指针，导致内核崩溃或不可预知的行为。
+
+#主要错误日志
+- dev_err(tqspi->dev, "error in transfer, fifo status 0x%08x\n", tqspi->status_reg);
+- dev_warn_once(tqspi->dev, "device reset failed\n");
+
+#问题根因
+当 QSPI 传输发生超时时，驱动程序会清理传输状态，但未将 `curr_xfer` 指针置空。如果此时 IRQ 线程因 CPU 繁忙延迟运行，它会尝试访问已经被清理的 `curr_xfer` 所指向的陈旧内存。此外，在设备复位失败时未清除中断，可能导致后续中断无法正常触发。
+
+#解决方案
+1. 在传输超时处理路径及传输结束处，显式将 `tqspi->curr_xfer` 设置为 NULL，避免悬挂指针。
+2. 在 IRQ 线程处理函数 `tegra_qspi_isr_thread` 入口处增加 `curr_xfer` 有效性检查，若为 NULL 则直接返回 `IRQ_NONE`，防止处理陈旧传输。
+3. 在设备复位失败（`device_reset` 返回错误）时，调用 `tegra_qspi_mask_clear_irq` 清除中断状态，确保后续中断能正常运行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6a429672255d01e51111e66c8cc4cfe91003fb24

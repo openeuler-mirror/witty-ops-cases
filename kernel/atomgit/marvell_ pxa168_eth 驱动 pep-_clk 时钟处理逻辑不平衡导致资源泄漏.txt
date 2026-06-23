@@ -1,0 +1,20 @@
+#标题
+marvell: pxa168_eth 驱动 pep->clk 时钟处理逻辑不平衡导致资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动在探测（probe）过程中，若 pep->clk 时钟获取成功但后续初始化步骤（如 alloc_etherdev）失败，时钟未被禁用，导致时钟资源泄漏及调用计数不平衡。
+
+#主要错误日志
+Fast Ethernet failed to get and enable clock
+
+#问题根因
+在 pxa168_eth_probe 函数中，原代码使用 devm_clk_get 获取时钟后手动调用 clk_prepare_enable 启用时钟，但在 alloc_etherdev 等后续错误处理路径中，缺少对应的 clk_disable_unprepare 调用。这导致在 probe 失败时，已启用的时钟未被正确关闭，破坏了时钟使能/禁用的调用平衡。
+
+#解决方案
+将 devm_clk_get 替换为 devm_clk_get_enabled 辅助函数。该函数由设备资源管理器（devres）自动管理时钟的获取与使能，确保在驱动探测失败或设备移除时，时钟资源能被自动释放与禁用，从而修正了错误路径下的资源泄漏问题，并移除了手动处理时钟关闭的错误处理标签。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/782c359f728c9a2e4b51548c74ba5bd29d28f209

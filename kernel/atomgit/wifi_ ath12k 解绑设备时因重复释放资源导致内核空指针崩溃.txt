@@ -1,0 +1,26 @@
+#标题
+wifi: ath12k 解绑设备时因重复释放资源导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在固件初始化过程中发生错误（例如在虚拟机环境中 MSI 寻址初始化失败），随后进行设备解绑操作时，系统触发内核崩溃。具体表现为出现 `kernel NULL pointer dereference` 错误，导致系统不稳定或死机。该问题在虚拟机环境下由于 MSI 初始化容易失败而极易复现。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000020
+at RIP: 0010:ath12k_dp_cc_cleanup.part.0+0xb6/0x500 [ath12k]
+Call Trace:
+ath12k_dp_cc_cleanup
+ath12k_dp_free
+ath12k_core_deinit
+ath12k_pci_remove
+
+#问题根因
+当固件相关的初始化出错时，函数 `ath12k_dp_cc_cleanup` 会被调用以释放资源（如 `dp->spt_info`）。然而，当设备解绑时，该函数会在 `ath12k_pci_remove` 流程中再次被调用。由于第一次释放后指针未被置为 NULL，导致释放后的结构体指针被再次访问，引发 Use-After-Free 或空指针解引用错误。
+
+#解决方案
+在函数 `ath12k_dp_cc_cleanup` 中，释放 `dp->spt_info` 内存后，立即将指针置为 NULL。这样可以防止后续解绑流程中对该指针进行无效访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0b2f01a96d4f35a17c0b4e85284bbfea0274c233

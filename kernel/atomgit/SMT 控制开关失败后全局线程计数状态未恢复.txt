@@ -1,0 +1,20 @@
+#标题
+SMT 控制开关失败后全局线程计数状态未恢复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 `echo off > /sys/devices/system/cpu/smt/control` 时，若内部禁用流程失败（如返回“resource busy”错误），全局变量 `cpu_smt_num_threads` 错误地被更新为目标值。导致 SMT 状态机不一致，后续再次尝试禁用 SMT 时命令无法生效，必须手动执行 `echo on > /sys/devices/system/cpu/smt/control` 才能恢复功能。
+
+#主要错误日志
+resource busy
+
+#问题根因
+在 SMT 禁用流程中，函数 `cpuhp_smt_disable` 执行失败时，调用者未进行异常处理，导致全局变量 `cpu_smt_num_threads` 提前被修改且未回滚，从而与实际硬件状态不一致。
+
+#解决方案
+在 `__store_smt_control` 函数中增加异常判断，若 `cpuhp_smt_disable` 调用失败（返回值 `ret` 非零），将全局变量 `cpu_smt_num_threads` 恢复为原始值 `orig_threads`，确保状态一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/209a24d6d294b87890a3d3403290d4f9133dd24c

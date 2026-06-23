@@ -1,0 +1,20 @@
+#标题
+sun4i_can 驱动因缺少 MTU 校验导致缓冲区溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+攻击者可通过 PF_PACKET 绕过 CAN 框架逻辑，利用 sun4i_can 驱动未实现 `ndo_change_mtu` 的缺陷，将接口 MTU 设置为非法大值（如 9999），随后发送特制的 CAN XL 帧。驱动错误处理该帧导致缓冲区溢出，可能引发内核内存破坏或崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+sun4i_can 驱动未填充 `net_device_ops` 结构体中的 `ndo_change_mtu` 函数指针，导致系统允许将 CAN 接口的 MTU 设置为超过驱动处理能力的值（最大仅支持 CAN_MTU）。当攻击者构造恶意 CAN XL 帧（如 `len` 字段被误解析为 0xff）并通过 PF_PACKET 发送时，驱动在 `sun4ican_start_xmit` 函数中直接使用该长度进行内存写入循环，导致 247 字节的缓冲区溢出。
+
+#解决方案
+在驱动的 `net_device_ops` 结构体中添加 `.ndo_change_mtu = can_change_mtu` 成员。这会调用 CAN 子系统的通用校验函数，强制限制接口 MTU 不能大于 CAN_MTU，从而在源头阻止非法大包的构建与发送，修复缓冲区溢出漏洞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cb11a738c24b9771909d8f6e3da286cc6fb8c465

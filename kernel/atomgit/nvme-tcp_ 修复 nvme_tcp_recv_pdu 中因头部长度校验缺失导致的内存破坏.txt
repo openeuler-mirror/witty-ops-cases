@@ -1,0 +1,21 @@
+#标题
+nvme-tcp: 修复 nvme_tcp_recv_pdu 中因头部长度校验缺失导致的内存破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 NVMe over TCP 启用头部摘要功能时，若远端目标端发送带有无效头部长度（例如 255）的恶意数据包，会导致内核访问已分配区域之外的内存，并在计算摘要时覆写该内存区域，从而引发内存破坏或内核崩溃。
+
+#主要错误日志
+- pdu type %d has unexpected header length (%d)\n
+- unsupported pdu type (%d)\n
+
+#问题根因
+函数 `nvme_tcp_recv_pdu()` 在处理接收到的 PDU（Protocol Data Unit）时，未对报头长度（`hdr->hlen`）的有效性进行校验。在头部摘要功能开启的情况下，若 `hdr->hlen` 被恶意设置为非法值（如 255），`nvme_tcp_verify_hdgst()` 函数会基于该非法长度访问并覆写越界内存，导致内存破坏。
+
+#解决方案
+在 `nvme_tcp_recv_pdu()` 函数中增加对 PDU 头部长度的校验逻辑。如果接收到的 PDU 头部长度不符合预期（不为 `struct nvme_tcp_rsp_pdu` 的大小），则拒绝该数据包并返回 `-EPROTO` 错误，防止后续校验函数访问越界内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/10809417ba9bfb6859051961f97244e442d859eb

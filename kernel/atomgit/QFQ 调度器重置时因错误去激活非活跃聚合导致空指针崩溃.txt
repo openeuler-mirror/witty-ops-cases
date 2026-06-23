@@ -1,0 +1,30 @@
+#标题
+QFQ 调度器重置时因错误去激活非活跃聚合导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定配置下（一个 QFQ qdisc 作为根，另一个正在销毁），当通过根 QFQ 入队数据包导致共享的 leaf_qdisc 队列长度增加，同时另一个 QFQ 触发 qdisc_destroy 进入 qfq_reset 时，内核触发 NULL pointer dereference，导致 Oops 并引发 Kernel Panic。
+
+#主要错误日志
+[    0.903172] BUG: kernel NULL pointer dereference, address: 0000000000000000
+[    0.903571] #PF: supervisor write access in kernel mode
+[    0.903860] #PF: error_code(0x0002) - not-present page
+[    0.904177] PGD 10299b067 P4D 10299b067 PUD 10299c067 PMD 0
+[    0.904502] Oops: Oops: 0002 [#1] SMP NOPTI
+[    0.906046] Code: 0f 84 4d 01 00 00 48 89 70 18 8b 4b 10 48 c7 c2 ff ff ff ff 48 8b 78 08 48 d3 e2 48 21 f2 48 2b 13 48 8b 30 48 d3 ea 8b 4b 18 0
+[    0.910638]  qfq_reset_qdisc (net/sched/sch_qfq.c:357 net/sched/sch_qfq.c:1485)
+[    0.911040]  __qdisc_destroy (net/sched/sch_generic.c:1076)
+[    0.911236]  tc_new_tfilter (net/sched/cls_api.c:2447)
+[    0.922240] Kernel panic - not syncing: Fatal exception
+
+#问题根因
+`qfq_class->leaf_qdisc->q.qlen > 0` 并不意味着该 class 本身处于活跃状态。
+两个 qfq_class 对象可能指向同一个 leaf_qdisc（例如一个 QFQ 作为根 qdisc，另一个待销毁的 QFQ 临时引用了它）。当根 QFQ 入队包导致共享 leaf_qdisc->q.qlen 增加时，待销毁的 QFQ 进入 `qfq_reset()`，其自身的 `q->q.qlen` 为 0，但其 class 的 `leaf qdisc->q.qlen > 0`。原代码仅依据 `cl->qdisc->q.qlen > 0` 判断，错误地尝试去激活一个实际上并未激活的聚合，从而在 `qfq_deactivate_agg` 中触发空指针解引用。
+
+#解决方案
+在 `qfq_reset_qdisc` 函数中，将判断条件从检查队列长度 `cl->qdisc->q.qlen > 0` 修改为直接检查类是否处于活跃状态 `cl_is_active(cl)`。这确保了仅对已激活的聚合执行去激活操作，避免了对非活跃聚合的错误操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/73e41f2fae59498cd3f8b6e9efe3a5c7060e99bf

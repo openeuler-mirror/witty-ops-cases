@@ -1,0 +1,20 @@
+#标题
+regulator: of: of_regulator_match函数错误路径下OF节点引用泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在解析设备树（DT） regulator 配置时，若 `of_regulator_match()` 函数解析失败，会导致 OF 节点引用计数泄漏。由于部分驱动（如 s2mps11_pmic_driver）在调用此函数失败后不会直接退出，可能会继续使用已释放或无效的数据结构，进而引发不可预期的内核行为或内存泄漏。
+
+#主要错误日志
+[    ] failed to parse DT for regulator %pOFn
+
+#问题根因
+`of_regulator_match()` 函数在处理设备树匹配时，若遇到解析失败的情况（如 `of_get_regulator_init_data` 返回错误），直接返回 `-EINVAL`，未释放之前循环中已增加引用计数的 OF 节点（缺少 `of_node_put` 操作），同时也未清理 `matches` 数组中已赋值的 `init_data` 和 `of_node` 指针，导致资源泄漏及潜在的后继使用风险。
+
+#解决方案
+在函数返回 `-EINVAL` 错误前增加错误处理路径（`err_put` 标签）：遍历 `matches` 数组，对所有已匹配的条目将其 `init_data` 置空，并调用 `of_node_put()` 释放持有的 OF 节点引用，随后将 `of_node` 置空，确保资源正确释放且避免调用者误用残留指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f146cbc2748a1bfbf8186004e214553794293e6d

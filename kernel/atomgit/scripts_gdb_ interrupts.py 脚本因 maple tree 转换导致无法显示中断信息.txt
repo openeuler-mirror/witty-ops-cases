@@ -1,0 +1,24 @@
+#标题
+scripts/gdb: interrupts.py 脚本因 maple tree 转换导致无法显示中断信息
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 GDB 调试工具配合内核提供的 `interrupts.py` 脚本查看中断信息时，脚本无法输出任何中断内容。该问题发生在内核将中断描述符管理从 `irq_desc_tree`（基树）转换为 `sparse_irqs`（maple tree）之后，导致脚本因找不到旧符号而失效，输出结果为空，无法像 `/proc/interrupts` 那样展示中断数据。
+
+#主要错误日志
+Unable to find the sparse IRQ tree, is CONFIG_SPARSE_IRQ enabled?
+（注：此为补丁修复后新增的错误提示。在修复前，脚本仅因查找不到符号而静默返回，不产生有效输出。）
+
+#问题根因
+在内核提交 `721255b9826b` ("genirq: Use a maple tree for interrupt descriptor management") 中，中断描述符的管理结构从 `irq_desc_tree`（radix tree/radixtree）替换为了 `sparse_irqs`（maple tree）。原有的 `scripts/gdb/linux/interrupts.py` 脚本仍硬编码查找 `irq_desc_tree` 符号，且使用 radix tree 的查找逻辑，导致无法在新内核结构中找到中断描述符，进而导致功能失效。
+
+#解决方案
+1. **更新查找目标与逻辑**：将 `interrupts.py` 中的查找目标从 `irq_desc_tree` 更改为 `sparse_irqs`，并将查找方式从 radix tree 查找改为 maple tree 查找。
+2. **新增 maple tree 支持模块**：新增 `scripts/gdb/linux/mapletree.py` 模块，实现了 `mtree_load()` 等核心函数，模拟内核 C 语言版本的 maple tree 遍历逻辑，以支持在 Python/GDB 环境下正确解析 maple tree 数据结构。
+3. **修正类型转换**：修复了 `show_irq_desc` 函数中 `desc` 指针类型转换的错误，确保能正确处理查找结果。
+4. **增加配置检查**：添加对 `sparse_irqs` 符号的检查，若不存在则抛出明确的 GDB 错误提示（询问是否启用了 `CONFIG_SPARSE_IRQ`）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6352e6b4d1db9b3f0e9de907f60fb37fc37aec09

@@ -1,0 +1,20 @@
+#标题
+perf/core: AUX 缓冲区分配失败导致引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行性能监控事件（perf event）的 mmap 操作且涉及 AUX 缓冲区分配时，若 `rb_alloc_aux` 函数分配失败，会导致环形缓冲区（ring buffer）的引用计数 `mmap_count` 意外减少。这将导致缓冲区引用计数管理混乱，可能引发缓冲区被错误释放、释放后使用（UAF）或资源泄漏等不可预期的内核行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在原代码逻辑中，`rb->aux_mmap_count` 被过早地设置为 1（在尝试分配 AUX 缓冲区之前）。当后续的 AUX 缓冲区分配失败时，代码跳转到错误处理路径，执行了 `atomic_dec(&rb->mmap_count)`。由于 AUX 分配失败，实际上并没有成功映射 AUX 缓冲区，但此前设置的 `aux_mmap_count` 和失败路径中的 `mmap_count` 减少操作共同导致了引用计数的不一致（泄漏）。
+
+#解决方案
+将 `atomic_set(&rb->aux_mmap_count, 1)` 的操作移动到 `rb_alloc_aux` 成功返回之后执行。确保只有在 AUX 缓冲区真正分配成功时才增加引用计数，从而避免了分配失败场景下的引用计数泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6fa264b73cc289548c1fdaccb8323eac7e9da22c

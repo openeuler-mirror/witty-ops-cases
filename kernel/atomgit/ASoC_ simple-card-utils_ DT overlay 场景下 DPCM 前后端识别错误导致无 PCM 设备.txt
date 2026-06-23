@@ -1,0 +1,21 @@
+#标题
+ASoC: simple-card-utils: DT overlay 场景下 DPCM 前后端识别错误导致无 PCM 设备
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 DT overlay 加载 DPCM 拓扑结构时，声卡注册成功但无 PCM 设备生成。系统错误地将所有前端链接识别为后端，导致音频功能失效。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `graph_util_is_ports0()` 通过调用 `of_get_child_by_name()` 查找第一个 "ports" 子节点并比较指针来区分 DPCM 前端和后端。此逻辑依赖于子节点迭代顺序与 DTS 源码顺序一致。
+当 DPCM 拓扑来自 DT overlay 时，`__of_attach_node()` 将新子节点插入到兄弟链表的头部，导致顺序反转。此时 `of_get_child_by_name()` 返回的是 ports@1 而非 ports@0，导致所有前端链接被错误分类为后端。
+
+#解决方案
+修改 `graph_util_is_ports0()` 函数逻辑，不再依赖不可靠的兄弟节点顺序和指针比较，改为直接从节点名称中匹配单元地址。通过检查节点名称是否包含 "@0" 或不包含 "@" 来准确识别 ports@0，从而正确区分前端与后端。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fc03773ed2c5732224832d76cb9c2534eb18e0af

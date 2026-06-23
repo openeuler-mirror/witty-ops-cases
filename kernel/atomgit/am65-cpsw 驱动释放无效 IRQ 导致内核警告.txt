@@ -1,0 +1,21 @@
+#标题
+am65-cpsw 驱动释放无效 IRQ 导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行时通过 ethtool 等工具调用 `.set_channels` 接口调整通道数时，若硬件资源获取失败导致中断号（IRQ）为负值，后续再次调整通道数时会触发内核警告（WARNING）。具体表现为：当增加通道数操作时，驱动尝试释放一个无效（负值）的 IRQ，导致内核抛出警告信息。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动函数 `k3_udma_glue_tx_get_irq()` 在获取 IRQ 失败时返回负值错误码。代码中原有的判断逻辑 `if (tx_chn->irq)` 仅检查 IRQ 是否非零，未区分有效 IRQ（大于 0）与错误码（小于 0）。
+在 `.set_channels` 调用链中，若 `am65_cpsw_nuss_init_tx_chns()` 获取 IRQ 失败，`tx_chn->irq` 会被赋值为负值。随后在清理函数 `am65_cpsw_nuss_remove_tx_chns()` 中，该负值被误判为有效 IRQ 并传递给 `devm_free_irq()`，从而引发内核警告。
+
+#解决方案
+修改 `am65_cpsw_nuss_remove_tx_chns()` 函数中的 IRQ 有效性判断条件，将 `if (tx_chn->irq)` 修改为 `if (tx_chn->irq > 0)`，确保仅释放有效的 IRQ 资源，忽略错误码情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c4d7054418d5d1e46bc1ac84de1bd8c665fc642e

@@ -1,0 +1,41 @@
+#标题
+urma内核模块资源管理流程缺陷与输入校验修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在创建 jetty 资源失败时，未回滚已创建的全局拓扑映射（global topo map），导致资源泄漏。
+2. 在查询设备属性时，若用户传入的设备名称（dev_name）过长或无效，可能导致内核访问越界或错误处理不当。
+3. 在处理 jfc、jfs、jfr、jetty 对象销毁时，未根据对象状态（is_actived）区分处理路径，导致对非激活对象执行了错误的删除操作。
+
+#主要错误日志
+- "Failed to create jetty rsrc\n"
+- "Invalid dev_name length.\n"
+- "Invalid parameter with error dev_name.\n"
+- "Failed to delete jfc, id: %u, ret: %d, why: %d.\n"
+- "Failed to free jfc, id: %u, ret: %d, why: %d.\n"
+- "Failed to delete jfs, id: %u, ret: %d, why: %d.\n"
+- "Failed to free jfs, id: %u, ret: %d, why: %d.\n"
+- "Failed to delete jfr, id: %u, ret: %d, why: %d.\n"
+- "Failed to free jfr, id: %u, ret: %d, why: %d.\n"
+- "Failed to delete jetty, id: %u, ret: %d, why: %d.\n"
+- "Failed to free jetty_id, id: %u, ret: %d, why: %d.\n"
+
+#问题根因
+1. **资源泄漏**：函数 `ubcore_cmd_set_topo` 中，`ubcore_create_jetty_rsrc` 失败后直接返回，遗漏了 `ubcore_delete_global_topo_map` 的调用。
+2. **输入校验缺失**：`uburma_cmd_query_device_attr` 使用栈上的结构体解析用户输入，且未对 `dev_name` 字符串进行长度校验，存在安全隐患。
+3. **对象释放逻辑错误**：`uburma_free_jfc`、`uburma_free_jfs`、`uburma_free_jfr`、`uburma_free_jetty` 等函数在销毁对象时，未检查对象的 `is_actived` 状态。对于非激活状态的对象，错误地调用了 `ubcore_delete_xxx` 系列接口，应调用 `ubcore_free_xxx` 接口。
+
+#解决方案
+1. **修复资源泄漏**：在 `ubcore_cmd_set_topo` 函数中，当 `ubcore_create_jetty_rsrc` 返回失败时，增加调用 `ubcore_delete_global_topo_map()` 进行回滚。
+2. **增强输入校验**：
+   - 将 `uburma_cmd_query_device_attr` 中的局部变量改为动态内存分配。
+   - 增加 `strnlen` 检查，确保 `dev_name` 长度不超过 `UBCORE_MAX_DEV_NAME`，防止越界访问。
+   - 检查内存分配是否成功（IS_ERR_OR_NULL），并在错误路径中正确释放内存。
+3. **修正对象销毁逻辑**：在 `uburma_free_jfc`、`uburma_free_jfs`、`uburma_free_jfr`、`uburma_free_jetty` 函数中增加对 `is_actived` 字段的判断：
+   - 若 `is_actived == true`，调用 `ubcore_delete_xxx` 接口。
+   - 若 `is_actived != true`，调用 `ubcore_free_xxx` 接口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/88594915a77c6100f54a33dd640d36365c3ee3d7

@@ -1,0 +1,20 @@
+#标题
+bpf: Remove smap argument from bpf_selem_free()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在BPF本地存储更新过程中，若分配存储元素后因后续步骤失败（如`bpf_local_storage_alloc`失败）而调用`bpf_selem_free`进行清理，由于此时元素尚未链接到map，若通过外部参数传递smap指针可能导致逻辑不一致或访问无效指针。
+
+#主要错误日志
+未知
+
+#问题根因
+`bpf_selem_free`函数原本需要调用者显式传递`smap`参数，但在`bpf_local_storage_update`的某些错误处理路径中，`selem`分配成功但尚未链接到`smap`（即`bpf_selem_link_map`未执行），此时调用`bpf_selem_free`传入的smap参数与selem内部状态不同步，导致潜在问题。
+
+#解决方案
+修改`bpf_selem_free`函数，移除`smap`参数，改为直接从`selem`结构体中获取`smap`指针。同时，将`SDATA(selem)->smap`的赋值操作从`bpf_selem_link_map`函数移至`bpf_selem_alloc`函数中，确保在selem分配时即完成smap指针的初始化，使得在任何需要释放selem的场景下都能正确获取到smap。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4a16bd31a4168d5f69dd16be671c991bd24e3303

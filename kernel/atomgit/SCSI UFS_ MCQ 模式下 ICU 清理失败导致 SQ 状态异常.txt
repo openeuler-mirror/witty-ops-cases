@@ -1,0 +1,23 @@
+#标题
+SCSI UFS: MCQ 模式下 ICU 清理失败导致 SQ 状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UFS MCQ（Multi-Circular Queue）模式下执行发送队列清理时，ICU（Initiate Cleanup）操作失败。具体表现为：设置 ICU 位时未遵循 read-modify-write 机制，导致 SQRTCy 寄存器意外重启 SQ（Submission Queue），固件返回 RTC 错误码 2（Failure - SQ not stopped）。此外，原有的错误日志无法准确打印出 RTC 返回的具体错误码，导致该类故障难以观测和定位。
+
+#主要错误日志
+推断日志格式：
+dev_err(hba->dev, "%s: failed. hwq=%d, tag=%d err=%d RTC=%d\n", __func__, id, task_tag, err, rtc);
+（注：修复前日志未包含 RTC 字段，无法看到具体的 RTC 错误码；修复后可见 "RTC=2" 等具体错误值）
+
+#问题根因
+在 `ufshcd_mcq_sq_cleanup` 函数中设置 ICU 位时，直接使用 `writel(SQ_ICU, ...)` 进行写入，而未采用 read-modify-write（读-改-写）方式。这导致在设置 ICU 位的同时，清除了寄存器中的其他控制位，致使 SQRTCy 重启 SQ，进而触发 RTC 返回错误码 2。同时，错误处理分支的日志打印逻辑不完善，未能将 `SQ_ICU_ERR_CODE_MASK` 提取出的 RTC 错误码输出。
+
+#解决方案
+1. 修正寄存器写入逻辑：将 `writel(SQ_ICU, ...)` 修改为 `writel(readl(...) | SQ_ICU, ...)`，确保在设置 ICU 位时保留寄存器原有状态，遵循 read-modify-write 原则。
+2. 完善错误日志：提取寄存器中的 RTC 错误码字段，并在 dev_err 日志中增加 "RTC=%d" 的打印，以便能明确观测到 "SQ not stopped" 等具体错误原因。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d10652de8194de07d639edd2322b4bf05839867e

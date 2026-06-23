@@ -1,0 +1,20 @@
+#标题
+fs/buffer: fix use-after-free when call bh_read() helper
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `bh_read()` 辅助函数时触发释放后使用。由于 `end_buffer_read_sync` 函数先执行释放操作再进行状态更新，导致内核访问已释放的 buffer_head 对象，可能引发内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `end_buffer_read_sync` 函数中，代码执行顺序错误。原代码先调用 `__end_buffer_read_notouch(bh, uptodate)` 对 buffer_head 进行处理，随后调用 `put_bh(bh)` 释放引用计数。然而，如果 `put_bh(bh)` 导致引用计数归零并触发释放，后续的 `__end_buffer_read_notouch` 操作将访问已释放的内存对象，从而造成 UAF（Use-After-Free）。
+
+#解决方案
+调整 `end_buffer_read_sync` 函数中的代码执行顺序。将 `put_bh(bh)` 移至 `__end_buffer_read_notouch(bh, uptodate)` 之后，确保在释放 buffer_head 对象引用之前完成所有必要的状态更新和访问操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c20828d95b1ae78fe1481492ef166df44989fd5a

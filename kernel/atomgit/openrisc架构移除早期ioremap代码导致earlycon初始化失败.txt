@@ -1,0 +1,35 @@
+#标题
+openrisc架构移除早期ioremap代码导致earlycon初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在OpenRISC架构下，当内核命令行参数带有 `earlycon` 时，系统启动过程中触发警告信息并导致earlycon设置失败。
+
+#主要错误日志
+```
+Kernel command line: earlycon
+------------[ cut here ]------------
+WARNING: CPU: 0 PID: 0 at mm/ioremap.c:23
+generic_ioremap_prot+0x118/0x130
+...
+Call trace:
+[<(ptrval)>] generic_ioremap_prot+0x118/0x130
+[<(ptrval)>] ioremap_prot+0x20/0x30
+[<(ptrval)>] of_setup_earlycon+0xd4/0x2e0
+...
+---[ end trace 0000000000000000 ]---
+```
+
+#问题根因
+在之前的提交 `53c98e35dcbc` ("openrisc: mm: remove unneeded early ioremap code") 中错误地移除了早期 ioremap 代码，但早期控制台（earlycon）实际上依赖该机制进行早期内存映射。这导致 `generic_ioremap_prot` 在未正确初始化或上下文不正确的情况下被调用，从而触发 WARNING 并导致 earlycon 无法工作。
+
+#解决方案
+为OpenRISC架构实现基本的 fixmap 支持，替代被移除的早期 ioremap 机制。具体修改包括：
+1. 在 Kconfig 中新增 `CONFIG_FIX_EARLYCON_MEM` 配置项。
+2. 修改 `fixmap.h`，移除旧的 `FIX_IOREMAP` 插槽定义，新增 `FIX_EARLYCON_MEM_BASE` 枚举，并定义 `FIXMAP_PAGE_IO` 及 `__set_fixmap` 接口。
+3. 在 `init.c` 中实现 `map_page` 和 `__set_fixmap` 函数，用于建立早期物理地址到虚拟地址的页表映射。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c432faa84617ae3fc3ba17eedb7bc756f1ea0c9c

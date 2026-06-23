@@ -1,0 +1,22 @@
+#标题
+sentry模块convert_str_to_smh_msg函数存在缓冲区溢出风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+UVB和URMA通信过程中存在安全隐患，攻击者可能向sentry发送恶意消息，触发`convert_str_to_smh_msg`函数内的缓冲区溢出，导致内核内存越界写入或系统崩溃。
+
+#主要错误日志
+[   10.000000] convert_str_to_smh_msg: Invalid string, failed to convert it to smh_msg.
+
+#问题根因
+`convert_str_to_smh_msg`函数在处理输入字符串时，未对输入长度进行有效校验。当传入的字符串长度超过`URMA_SEND_DATA_MAX_LEN`时，可能导致局部缓冲区`input_copy`溢出；同时缺少对输入参数`str`的空指针校验。
+
+#解决方案
+1. 在函数入口处增加参数校验，检查`str`是否为空，并使用`strnlen`确保字符串长度不超过`URMA_SEND_DATA_MAX_LEN`，若校验失败则返回`-EINVAL`并打印错误日志。
+2. 将局部缓冲区`input_copy`的大小扩大一个字节（`URMA_SEND_DATA_MAX_LEN + 1`）并初始化为0，作为安全边界。
+3. 引入`<linux/string.h>`头文件以支持`strnlen`函数调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e2e062ae72ea88db5db1ee2dd830e93e30330bf9

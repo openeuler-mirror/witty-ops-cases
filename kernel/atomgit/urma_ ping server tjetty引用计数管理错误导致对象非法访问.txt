@@ -1,0 +1,32 @@
+#标题
+urma: ping server tjetty引用计数管理错误导致对象非法访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 urma ping server 场景下，由于 tjetty 对象的查找与创建逻辑存在缺陷，导致对象引用计数管理混乱。具体表现为：
+1. 在并发或多次连接场景下，tjetty 对象可能在仍在使用时被提前释放，导致内核 Crash 或 Oops（Use-After-Free）。
+2. 发送完成回调（`ping_wq_on_sended`）中错误的参数传递导致 `ping_tjetty_put` 无法正确释放引用，造成对象泄漏或访问非法地址。
+3. 日志中可能出现 "Tx status error" 或 "Failed to get tjetty for remote_id" 等错误提示。
+
+#主要错误日志
+ubcore_log_err("Failed to import tjetty. eid " EID_FMT "\n", ...);
+ubcore_log_err("Failed to get tjetty for remote_id\n");
+ubcore_log_err("Fail to post send wr, ret:%d\n", ret);
+ubcore_log_err("Tx status error. status %d, comp_len %u.\n", ...);
+
+#问题根因
+1. **查找匹配不完整**：`__ping_tjetty_find` 在查找 tjetty 时仅匹配了 `dst_eid`，未匹配 `remote_jetty_id`。这导致不同 jetty_id 但相同 eid 的请求会错误地复用同一个 tjetty entry，进而导致引用计数与实际使用情况不符。
+2. **并发添加逻辑错误**：`__ping_tjetty_add` 中错误地使用了 `kref_get` 增加了新分配 entry 的引用计数（初始值应为1），且在发现 entry 已存在时，对已存在的 entry 也进行了 `kref_get`，导致引用计数翻倍，掩盖了真实的生命周期。
+3. **释放逻辑错误**：`__ping_tjetty_free_entry` 中未执行 `kfree(entry)`，导致内存泄漏；而 `ping_tjetty_put` 在查找失败时直接返回，未正确处理引用计数减少逻辑，导致对象无法释放。
+4. **回调上下文丢失**：`ping_wq_on_recved` 将 `sge.addr` 直接作为 `user_ctx` 传递给发送请求，导致发送完成回调 `ping_wq_on_sended` 中无法获取正确的 tjetty entry 指针，进而调用 `ping_tjetty_put(ctx, &cr->remote_id.eid)` 时使用了错误的参数，破坏了引用计数管理。
+
+#解决方案
+1. **完善查找与创建逻辑**：修改 `__ping_tjetty_new_entry` 和 `__ping_tjetty_find`，增加对 `remote_jetty_id` 的校验，确保查找和创建对象的唯一性。
+2. **修正引用计数管理**：移除 `__ping_tjetty_add` 中多余的 `kref_get` 调用，确保新创建的 entry 引用计数初始化正确；修正 `ping_tjetty_put` 逻辑，确保在引用计数归零时正确从哈希表删除并释放内存。
+3. **重构回调上下文**：引入 `ubmgr_ping_resp_ctx` 结构体，在发送请求时将 `entry` 指针和 `sge_addr` 封装在上下文中传递，确保发送完成回调能够正确获取并释放 tjetty entry 的引用。
+4. **修复内存泄漏**：在 `__ping_tjetty_free_entry` 回调及异常处理路径中正确添加 `kfree(entry)`，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0eea5b0a39c15929adc64ccbc98c3bfcb9e2af22

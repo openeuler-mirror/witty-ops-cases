@@ -1,0 +1,23 @@
+#标题
+BPF子系统写入只读内存导致安全漏洞及KABI破坏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+BPF程序在调用特定helper函数（如 bpf_strtol, bpf_strtoul 等）时，通过传入指针参数能够向只读（read-only）内存区域写入数据，违反了内存保护机制。该缺陷可能被利用导致内核内存破坏，触发 Crash 或造成权限提升（对应 CVE-2024-49861）。
+
+#主要错误日志
+未知
+
+#问题根因
+BPF验证器在处理 `ARG_PTR_TO_INT` 和 `ARG_PTR_TO_LONG` 类型参数时，未正确强制检查内存写入权限和对齐约束，导致BPF程序绕过限制向只读区域写入数据。同时，在修复该安全漏洞的过程中引入了对 `enum bpf_type_flag` 和 `enum bpf_arg_type` 的修改，导致了内核ABI（KABI）破坏。
+
+#解决方案
+1. **移除不安全的参数类型定义**：从 `enum bpf_arg_type` 中移除 `ARG_PTR_TO_INT` 和 `ARG_PTR_TO_LONG`，消除由此导致的安全隐患。
+2. **引入严格的参数类型检查**：将原使用 `ARG_PTR_TO_LONG`/`ARG_PTR_TO_INT` 的helper函数参数类型替换为 `ARG_PTR_TO_FIXED_SIZE_MEM | MEM_UNINIT | MEM_ALIGNED`，强制要求固定大小、内存对齐，并正确处理未初始化内存。
+3. **增强内存访问验证逻辑**：在 `kernel/bpf/verifier.c` 中，增加对 `MEM_ALIGNED` 标志的显式检查，确保指针参数符合对齐要求。
+4. **修复KABI破坏问题**：利用 `KABI_BROKEN_INSERT_ENUM` 和 `KABI_BROKEN_REMOVE_ENUM` 宏，在 `include/linux/bpf.h` 中维护数据结构的兼容性，修复因新增 `MEM_ALIGNED` 枚举值和移除旧枚举值带来的KABI冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/429a19874eb589d27346ba7363fa091d7e4ff99a

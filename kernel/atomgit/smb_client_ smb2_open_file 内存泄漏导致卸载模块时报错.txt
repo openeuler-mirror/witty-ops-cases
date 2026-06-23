@@ -1,0 +1,36 @@
+#标题
+smb/client: smb2_open_file 内存泄漏导致卸载模块时报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在服务端导出只读目录、客户端挂载后执行写入操作（dd with oflag=direct），随后卸载挂载点并移除 cifs 模块时，系统检测到内存泄漏。具体表现为卸载模块时报 WARNING，提示 slab 缓存 `cifs_small_rq` 中仍有对象未被释放。
+
+#主要错误日志
+```
+BUG cifs_small_rq (Not tainted): Objects remaining on __kmem_cache_shutdown()
+-----------------------------------------------------------------------------
+
+Object 0x00000000d47521be @offset=14336
+...
+WARNING: mm/slub.c:1251 at __kmem_cache_shutdown+0x34e/0x440, CPU#0: modprobe/1577
+...
+Call Trace:
+ <TASK>
+ kmem_cache_destroy+0x94/0x190
+ cifs_destroy_request_bufs+0x3e/0x50 [cifs]
+ cleanup_module+0x4e/0x540 [cifs]
+ ...
+kmem_cache_destroy cifs_small_rq: Slab cache still has objects when called from cifs_destroy_request_bufs+0x3e/0x50 [cifs]
+WARNING: mm/slab_common.c:532 at kmem_cache_destroy+0x16b/0x190, CPU#0: modprobe/1577
+```
+
+#问题根因
+在 `smb2_open_file` 函数中，当 `SMB2_open` 调用返回 `-EACCES` 权限错误且需要进行重试（retry_without_read_attributes）时，代码直接修改访问权限并重试，但未释放第一次 `SMB2_open` 调用分配的响应缓冲区（`err_iov.iov_base`，类型为 `err_buftype`）。这导致该内存块在重试路径中丢失，模块卸载时无法回收，触发 kmem_cache 泄漏告警。
+
+#解决方案
+在 `smb2_open_file` 函数的重试分支中，即在检查到 `rc == -EACCES && retry_without_read_attributes` 条件成立后、进行重试操作前，增加调用 `free_rsp_buf(err_buftype, err_iov.iov_base)` 以释放前一次调用分配的响应缓冲区，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/23be6ac3ef0e3c3c56226efc838a64d2ede2c493

@@ -1,0 +1,35 @@
+#标题
+arm_scmi: scmi_bus_notifier 触发 slab-use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动或 SCMI 设备注销过程中，触发 KASAN 检测到的 slab-use-after-free 错误。具体表现为在 `scmi_bus_notifier` 函数中访问 `scmi_dev->name` 时，该内存区域已被释放，导致内核报错并打印调用栈跟踪信息。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in strncmp+0xe4/0xec
+Read of size 1 at addr ffffff80a482bcc0 by task swapper/0/1
+Call trace:
+ dump_backtrace+0x94/0x114
+ show_stack+0x18/0x24
+ dump_stack_lvl+0x48/0x60
+ print_report+0xf4/0x5b0
+ kasan_report+0xa4/0xec
+ strncmp+0xe4/0xec
+ scmi_bus_notifier+0x5c/0x54c
+ notifier_call_chain+0xb4/0x31c
+ blocking_notifier_call_chain+0x68/0x9c
+ bus_notify+0x54/0x78
+ device_del+0x1bc/0x840
+ device_unregister+0x20/0xb4
+ __scmi_device_destroy+0xac/0x280
+
+#问题根因
+在 `__scmi_device_destroy()` 函数中，`scmi_dev->name` 被过早释放。该释放操作发生在 `device_unregister()` 调用之前，而 `device_unregister()` 会触发总线通知链调用 `scmi_bus_notifier()`，该通知回调函数仍需访问 `scmi_dev->name` 进行字符串比较，从而导致访问已释放内存。
+
+#解决方案
+将 `scmi_dev->name` 的释放操作从 `__scmi_device_destroy()` 移至 `scmi_device_release()` 函数中执行。这确保了在设备引用计数归零、设备对象真正销毁之前，`scmi_dev->name` 始终有效，避免了释放后访问的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5a39c7ccc4df781b04cd27bc24eec7ff1d9226c2

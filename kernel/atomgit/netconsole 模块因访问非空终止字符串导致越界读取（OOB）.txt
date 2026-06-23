@@ -1,0 +1,35 @@
+#标题
+netconsole 模块因访问非空终止字符串导致越界读取（OOB）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启用 netconsole 功能时触发 KASAN（Kernel Address Sanitizer）检测到的 slab 越界读取错误。具体表现为内核打印“BUG: KASAN: slab-out-of-bounds”，并伴随调用栈回溯，涉及 netconsole_write 及 vsnprintf 等函数。
+
+#主要错误日志
+printk: console [netcon_ext0] enabled
+BUG: KASAN: slab-out-of-bounds in string+0x1f7/0x240
+Read of size 1 at addr ffff88813b6d4c00 by task pr/netcon_ext0/594
+
+CPU: 65 UID: 0 PID: 594 Comm: pr/netcon_ext0 Not tainted 6.19.0-11754-g4246fd6547c9
+Call Trace:
+ kasan_report+0xe4/0x120
+ string+0x1f7/0x240
+ vsnprintf+0x655/0xba0
+ scnprintf+0xba/0x120
+ netconsole_write+0x3fe/0xa10
+ nbcon_emit_next_record+0x46e/0x860
+ nbcon_kthread_func+0x623/0x750
+
+The buggy address is located 0 bytes to the right of
+allocated 3072-byte region [ffff88813b6d4000, ffff88813b6d4c00)
+
+#问题根因
+从 console 子系统传递给 netconsole 的 msg 指针并不保证以 NUL 字符（'\0'）结尾。在 send_ext_msg_udp 函数中，代码使用 `scnprintf(buf, MAX_PRINT_CHUNK, "%s,%s", release, msg)` 格式化字符串时，`%s` 格式符会持续读取内存直到遇到 NUL 终止符，导致读取越界。此前该问题未被发现是因为消息存放在静态全局缓冲区 printk_shared_pbufs 中，KASAN 难以检测；在转换为 NBCON console 基础设施后，内存分配方式改变，KASAN 捕获了该越界访问。
+
+#解决方案
+修改 send_ext_msg_udp 函数中的 scnprintf 调用，使用 `%.*s` 格式说明符替代 `%s`。`%.*s` 允许显式指定字符串的读取长度（即 msg_len），从而确保 scnprintf 仅处理 msg 中有效的数据部分，不再依赖 NUL 终止符来界定字符串结尾，避免越界读取。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/11cb357ba205cae5868bdc9f88262dc2f06a242a

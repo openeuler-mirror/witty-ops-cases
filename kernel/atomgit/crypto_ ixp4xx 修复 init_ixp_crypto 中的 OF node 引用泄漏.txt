@@ -1,0 +1,20 @@
+#标题
+crypto: ixp4xx 修复 init_ixp_crypto 中的 OF node 引用泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在初始化 IXP4XX crypto 模块时，若设备树（Device Tree）中配置了 `npe`、`queue-rx` 或 `queue-txready` 节点，驱动程序 `init_ixp_crypto()` 函数会解析这些节点。解析过程中，内核对象引用计数发生泄漏，导致相关的设备树节点对象无法被正常释放。长期运行或反复加载驱动可能导致内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `init_ixp_crypto()` 多次调用 `of_parse_phandle_with_fixed_args()` 解析设备树节点，该函数调用成功后会增加设备树节点的引用计数（refcount），但代码逻辑中仅在部分错误处理路径中释放了引用，在正常处理路径及部分错误返回路径中遗漏了调用 `of_node_put()` 来释放引用计数，导致 OF node 引用泄漏。
+
+#解决方案
+在 `init_ixp_crypto()` 函数中，分别在获取 `npe`、`queue-rx` 和 `queue-txready` 的参数后，增加对应的 `of_node_put()` 调用，确保无论是正常流程还是错误返回流程，设备树节点的引用计数都能被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/16e0d71be1e5f73a792c15d7f06f0b3a7b467356

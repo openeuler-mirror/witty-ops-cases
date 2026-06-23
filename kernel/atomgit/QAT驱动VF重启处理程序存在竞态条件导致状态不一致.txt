@@ -1,0 +1,25 @@
+#标题
+QAT驱动VF重启处理程序存在竞态条件导致状态不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Intel QAT驱动在处理物理函数（PF）向虚拟函数（VF）发送重启消息（ADF_PF2VF_MSGTYPE_RESTARTING）的过程中，存在竞态条件。在旧代码逻辑下，如果 VF 处理重启完成消息（ADF_VF2PF_MSGTYPE_RESTARTING_COMPLETE）的速度非常快，可能导致 `vf->restarting` 标志位状态管理混乱，进而影响驱动 recovery 机制的正确性。
+
+#主要错误日志
+dev_err(&GET_DEV(accel_dev), "Failed to send restarting msg to VF%d\n", i);
+
+#问题根因
+问题根因是 `vf->restarting` 标志位的设置时机与消息发送顺序不当，引发了竞态条件。
+在修复前的代码中，PF 在发送 `ADF_PF2VF_MSGTYPE_RESTARTING` 消息**之后**才将 `vf->restarting` 设置为 true。如果 VF 响应极快，在 PF 执行设置标志位的代码之前，PF 就接收并处理了 VF 发回的 `ADF_VF2PF_MSGTYPE_RESTARTING_COMPLETE` 消息（该处理程序会将 `vf->restarting` 设置为 false）。这将导致标志位最终状态与预期不符（本应为 true 却变为 false，或被后续的设置覆盖），破坏了重启同步逻辑。
+
+#解决方案
+调整代码执行顺序，确保在发送重启消息之前设置标志位。
+具体修改如下：
+1. 在发送 `ADF_PF2VF_MSGTYPE_RESTARTING` 消息**之前**，将 `vf->restarting` 标志位设置为 true。
+2. 增加版本兼容性检查，仅当 VF 已初始化且协议版本支持（`vf->vf_compat_ver >= ADF_PFVF_COMPAT_FALLBACK`）时才进行上述设置；否则显式设置为 false。
+此修复消除了消息发送与标志位设置之间的竞态窗口，确保了状态机的正确流转。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/645db3b7f8cc6a52d8e14e30fb9516aa517ea359

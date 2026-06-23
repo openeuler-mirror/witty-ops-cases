@@ -1,0 +1,22 @@
+#标题
+Hyper-V VM 休眠唤醒后内核日志时间戳异常巨大
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Hyper-V 虚拟机执行休眠并唤醒后，内核消息的时间戳显示异常。新的内核消息会被加上一个巨大的时间戳前缀，该现象通常持续数秒，直到时钟计数器增长到足够大的数值。这是由于调度时钟返回了错误的巨大数值所致。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `read_hv_sched_clock_tsc()` 假设 Hyper-V 时钟计数器始终大于系统早期启动时缓存的 `hv_sched_clock_offset` 变量。然而，当休眠的虚拟机重新启动并恢复时，硬件时钟计数器从 0 重新开始计数，而 `hv_init_tsc_clocksource()` 在休眠/唤醒过程中并未被调用。这导致 `read_hv_sched_clock_tsc()` 计算出的差值为负数，由于返回类型是 u64，该负数被解释为一个巨大的正整数，从而导致内核日志时间戳异常。
+
+#解决方案
+1. 修改 `hv_sched_clock_offset` 属性，移除 `__ro_after_init` 标记以允许其在运行时被修改。
+2. 新增 `save_hv_clock_tsc_state` 和 `restore_hv_clock_tsc_state` 函数，分别在挂起前保存当前时钟计数器，并在恢复时计算并调整偏移量，以修正休眠期间逝去的时间。
+3. 通过覆盖 `x86_platform.save_sched_clock_state` 和 `x86_platform.restore_sched_clock_state` 接口，确保在系统挂起和恢复流程中尽早执行上述时钟状态的保存与修正操作，保证 TSC 页调度时钟的连续性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1151a1ef22085a683a44b4af5ba84fcab920d3c5

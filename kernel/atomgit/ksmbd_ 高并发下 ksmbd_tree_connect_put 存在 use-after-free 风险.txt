@@ -1,0 +1,20 @@
+#标题
+ksmbd: 高并发下 ksmbd_tree_connect_put 存在 use-after-free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在高并发场景下，当一个路径正在处理 tree-connection 对象（tcon）时，另一个断开连接的路径可能已经释放了该对象，导致正在使用的路径后续执行 *_put() 或写操作时发生 use-after-free，可能引发内核崩溃或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在高并发环境下，tree-connection 对象（tcon）在断开连接的路径中被释放，而此时另一个路径仍持有该对象的引用并在随后对其执行 put 操作或写入。原有的引用计数与等待队列逻辑在并发处理上存在缺陷，导致对象被提前释放，从而引发 use-after-free。
+
+#解决方案
+移除了 `tree_conn` 结构体中的 `refcount_q` 等待队列及相关复杂的同步逻辑。修改了 `ksmbd_tree_connect_put` 和 `ksmbd_tree_conn_disconnect` 函数，改用标准的 `atomic_dec_and_test` 原子操作来判断引用计数是否归零并立即释放对象。同时清理了 `smb2_tree_disconnect` 中不必要的 WARN_ON_ONCE 检查和指针置空操作，通过简化引用计数管理逻辑来修复并发释放问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c4ee9fa2795be5830a7c052697365671471f2016

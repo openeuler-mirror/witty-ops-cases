@@ -1,0 +1,20 @@
+#标题
+arm64: ptrace 中 NT_ARM_TAGGED_ADDR_CTRL SETREGSET 操作致内核栈信息泄露与状态不稳定
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 ptrace 系统调用的 `SETREGSET` 操作时，若针对 `NT_ARM_TAGGED_ADDR_CTRL` regset 传入的数据长度为零，会导致内核栈上 64 位内存信息泄露。由于泄露的未初始化变量数值随机，还会导致本应成功的配置操作随机失败。攻击者可利用此缺陷读取内核栈特定槽位的内存内容。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `tagged_addr_ctrl_set()` 函数中，临时变量 `ctrl` 在使用前未初始化。当 `SETREGSET` 调用的数据长度为零时，`user_regset_copyin` 不会向 `ctrl` 写入任何数据，导致函数后续逻辑使用了栈上的随机未初始化值。该随机值一方面会被写入目标地址控制配置，导致数据泄露；另一方面由于 `set_tagged_addr_ctrl()` 校验要求 bits [63:4] 必须为零，随机值会导致校验随机失败。
+
+#解决方案
+在 `tagged_addr_ctrl_set()` 中调用 `user_regset_copyin` 从用户空间拷贝数据之前，先调用 `get_tagged_addr_ctrl(target)` 获取当前有效的 `ctrl` 值进行初始化。若用户空间传入数据长度为零，则保留该当前值，从而避免使用未初始化的栈变量。同时，在 `tagged_addr_ctrl_get()` 和 `tagged_addr_ctrl_set()` 中增加 `WARN_ON_ONCE` 检查，确保 `get_tagged_addr_ctrl()` 返回值有效，防止错误处理缺失。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/453b94178a1f554bce6a162c933c495f7266e9df

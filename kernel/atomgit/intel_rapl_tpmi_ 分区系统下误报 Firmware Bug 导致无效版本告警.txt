@@ -1,0 +1,23 @@
+#标题
+intel_rapl_tpmi: 分区系统下误报 Firmware Bug 导致无效版本告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在分区系统上加载 intel_rapl_tpmi 驱动时，内核日志中打印固件错误告警。由于分区系统中每个 Package 可能存在多个 TPMI 实例，但 RAPL 寄存器仅对其中一个实例有效，其他实例会返回无效版本，导致驱动误报固件 Bug。
+
+#主要错误日志
+intel_rapl_tpmi: [Firmware Bug]: Invalid version
+
+#问题根因
+在分区系统上，每个 Package 可能存在多个 TPMI 实例，但 RAPL 寄存器具有 Package 级别的控制范围，仅对其中一个实例有效。对于其他无效实例，在解析域时会返回无效版本，这是该场景下的预期行为。原代码逻辑将此预期行为判定为固件错误并使用 `pr_warn(FW_BUG...)` 打印告警，导致产生误导性的内核日志。
+
+#解决方案
+修改 `parse_one_domain` 函数中的版本检查逻辑：
+1. 移除 `FW_BUG` 标签，不再将此情况标记为固件 Bug。
+2. 将日志级别从 `pr_warn` 降级为 `pr_debug`。
+3. 更新日志信息为 "Invalid version, other instances may be valid"，以说明在分区系统上其他实例有效是正常现象。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fdf02f50def3e2427d9a444efe0169a58fca60bd

@@ -1,0 +1,23 @@
+#标题
+ALSA: usb-audio: Audio Advantage Micro II SPDIF 开关切换失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Audio Advantage Micro II 音频设备的 SPDIF 开关功能失效。用户尝试切换 SPDIF 开关状态时，操作被系统忽略，无法生效；而执行无实际变更的写入操作时，系统却仍发送 USB 控制命令并报告成功。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `snd_microii_spdif_switch_put` 中，判断 SPDIF 开关值是否需要更新的逻辑比较符写反了（写成了 `!=`）。这导致：
+1. 当用户请求的寄存器值与缓存值**不一致**（需要更新）时，函数直接返回 0，跳过了后续的硬件配置流程。
+2. 当请求值与缓存值**一致**（无需更新）时，反而继续执行了 USB SET_CUR 命令。
+该问题是此前添加 resume 支持的代码重构过程中引入的逻辑错误。
+
+#解决方案
+修正 `sound/usb/mixer_quirks.c` 文件中 `snd_microii_spdif_switch_put` 函数的条件判断逻辑，将 `if (reg != list->kctl->private_value)` 修改为 `if (reg == list->kctl->private_value)`。确保当请求值与缓存值相同时才直接返回（跳过写入），不同时执行更新操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4bcbf98143e52a42b8c2d5b75ae6c8e58aa4f099

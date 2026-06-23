@@ -1,0 +1,34 @@
+#标题
+Hisilicon VF 迁移与复位异常导致功能失效或超时
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 虚拟机热迁移过程中，如果目的端 VF 设备未加载驱动，会导致迁移流程异常或状态不一致。
+2. 在 VF 设备复位过程中，由于并发控制缺失，可能导致复位操作超时失败，打印 "reset prepare failed" 错误日志。
+3. 热迁移过程中出现重复的迁移状态，导致状态管理混乱。
+4. 设备重新打开时，由于状态未清理，可能导致迁移匹配逻辑错误。
+
+#主要错误日志
+- dev_err(dev, "failed to get vft qp nums\n");
+- dev_err(dev, "failed to match VF qp num\n");
+- dev_err(dev, "failed to write QM_VF_STATE\n");
+- dev_err(dev, "failed to read QM_VF_STATE!\n");
+- dev_err(dev, "reset prepare failed\n");
+
+#问题根因
+1. **缺少驱动状态检查**：迁移加载状态流程未检查目的端 VF 设备的驱动状态（`vf_qm_state`），在设备未就绪时强制加载数据导致异常。
+2. **复位并发竞争**：设备复位流程中，`reset_prepare` 与 `reset_done`（AER reset）之间缺乏同步机制，未使用 `QM_RESETTING` 位进行互斥保护，导致复位等待超时。
+3. **状态保存/恢复时机错误**：`QM_VF_STATE` 的保存和恢复逻辑位置不当，且在设备打开时未重置 `match_done` 标志，导致状态重复或不匹配。
+4. **返回值处理错误**：`qm_get_vft` 函数返回队列号数值，原代码错误地将该数值作为错误码（ret）进行判断和返回，导致逻辑错误。
+
+#解决方案
+1. **增加驱动状态判断**：在 `hisi_acc_vf_load_state` 函数入口增加判断，若 `vf_qm_state` 不等于 `QM_READY` 则直接返回，避免对未初始化设备进行操作。
+2. **引入复位同步机制**：新增 `hisi_acc_vf_pci_reset_prepare` 回调函数，通过循环检测并设置 `QM_RESETTING` 位来排队处理复位请求，防止并发冲突；若等待超时（超过 `QM_RESET_WAIT_TIMEOUT` 400ms）则报错。同时新增 `set_reset_flag` 标志位，在 `reset_done` 阶段根据该标志位清理 `QM_RESETTING` 状态。
+3. **修正状态管理逻辑**：将 `QM_VF_STATE` 的读取操作移至 `vf_qm_get_match_data` 函数中，写入操作移至 `vf_qm_check_match` 函数中，确保状态在正确的迁移阶段被保存和恢复。
+4. **修复返回值逻辑**：修正 `qm_get_vft` 的调用逻辑，使用专门的变量 `qp_num` 接收队列数，而非复用错误码变量 `ret`，并在判断有效后赋值给 `vf_qm->qp_num`。
+5. **重置迁移标记**：在 `hisi_acc_vfio_pci_open_device` 流程中，将 `match_done` 重置为 0，确保设备重新打开时迁移匹配逻辑重新执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bb7ccaf562cc53c075658776ec06a2950d07aa55

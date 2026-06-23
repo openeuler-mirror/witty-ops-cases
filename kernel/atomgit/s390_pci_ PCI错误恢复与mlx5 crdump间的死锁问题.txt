@@ -1,0 +1,20 @@
+#标题
+s390/pci: PCI错误恢复与mlx5 crdump间的死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 s390 架构下，当进行 PCI 错误恢复时，系统可能发生死锁，具体表现为 mlx5 网卡驱动在进行 crdump 操作时与 PCI 错误恢复流程产生锁竞争，导致相关进程或内核线程挂起，无法继续执行恢复或转储任务。
+
+#主要错误日志
+未知
+
+#问题根因
+原代码在 `zpci_event_attempt_error_recovery` 函数中使用了 `pci_dev_lock(pdev)` 来锁定设备。然而，mlx5 驱动的 crdump 机制在执行时会获取 `device_lock`。这导致了锁获取顺序的不一致：错误恢复路径先持有 `pci_dev_lock`（内部包含 `device_lock`），而其他路径可能先持有 `device_lock` 再请求其他资源，从而引发了 ABBA 死锁。
+
+#解决方案
+将 `zpci_event_attempt_error_recovery` 函数中的锁操作由 `pci_dev_lock(pdev)` 修改为 `device_lock(&pdev->dev)`，相应地解锁操作修改为 `device_unlock(&pdev->dev)`。此举统一了锁的获取策略，避免了因锁层级不一致导致的死锁风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a6488e6a50a8bf19ba97af066131a40a1681f29d

@@ -1,0 +1,29 @@
+#标题
+rcu_read_unlock() 在 IRQ work 处理过程中引发死循环导致系统死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在执行 RCU 读端临界区解锁（rcu_read_unlock）时，若恰逢中断退出（irq_exit）阶段，可能触发死循环，导致 CPU 空转或系统挂起。具体表现为：在调用 BPF 程序挂载到 `trace_tick_stop` tracepoint 时，或者模拟在 `tick_irq_exit` 中触发 `rcu_read_unlock` 时，系统启动过程中发生挂起。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `rcu_read_unlock_special()` 处理过程中，如果发生在 `irq_exit()` 期间，且 IRQ work 被触发，则会引发递归死锁。具体流程为：
+1. `irq_exit()` 调用 `__irq_exit_rcu()`，在 `preempt_count_sub(HARDIRQ_OFFSET)` 后，`in_hardirq()` 返回 false。
+2. 随后调用链经过 `tick_irq_exit()` -> `tick_nohz_stop_sched_tick()` -> `trace_tick_stop()` -> BPF 程序执行。
+3. BPF 程序执行完毕调用 `rcu_read_unlock_special()` 时，试图通过 `irq_work_queue_on` 向自身发送 IPI。
+4. 该 IPI 自身又会触发 `irq_exit()` 路径，导致递归调用，最终形成死锁。
+此外，如果 IRQ work handler 在 RCU 读端临界区中间运行，它可能无法报告静默状态（QS），且由于状态管理不正确（一直是 PENDING 状态），导致不会重新排队 IRQ work，从而无法得到调度器的关注。
+
+#解决方案
+通过正确管理 `defer_qs_iw_pending` 的状态来修复死循环问题：
+1.  将 `defer_qs_iw_pending` 的类型从 `bool` 改为 `int`，并引入 `DEFER_QS_IDLE`（0）和 `DEFER_QS_PENDING`（1）两种状态。
+2.  在 `rcu_preempt_deferred_qs_irqrestore()` 函数开头，如果发现状态为 `DEFER_QS_PENDING`，则立即将其重置为 `DEFER_QS_IDLE`，防止状态残留。
+3.  在 `rcu_preempt_deferred_qs_handler()` 中，如果检测到仍在 RCU 读端临界区内（`rcu_preempt_depth() > 0`），则将状态重置为 `DEFER_QS_IDLE`，以便后续能重新排队 IRQ work。
+4.  在 `rcu_read_unlock_special()` 中，仅当状态不为 `DEFER_QS_PENDING` 时才去初始化并排队 IRQ work，避免重复触发。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0ae66d90f40c8e9b4d19ed8c88986f3ba2902fa2

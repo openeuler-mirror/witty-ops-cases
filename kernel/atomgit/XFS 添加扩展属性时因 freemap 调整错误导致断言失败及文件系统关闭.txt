@@ -1,0 +1,24 @@
+#标题
+XFS 添加扩展属性时因 freemap 调整错误导致断言失败及文件系统关闭
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 xfs/592 和 xfs/794 测试用例约 20 分钟后，触发内核断言失败，导致文件系统关闭。该问题在向叶子节点块添加本地扩展属性时发生，具体表现为 freemap 状态不一致，导致名称区域起始地址与条目数组区域重叠。
+
+#主要错误日志
+ASSERT(ichdr->firstused >= ichdr->count * sizeof(xfs_attr_leaf_entry_t) + xfs_attr3_leaf_hdr_size(leaf));
+
+#问题根因
+在向 XFS 属性叶子节点添加新条目时，`xfs_attr3_leaf_add_work` 函数仅调整了紧邻条目数组末尾的 freemap 条目，未检查并调整所有与新扩展的条目数组重叠的 freemap 条目。
+这导致部分 freemap 条目的 base 地址仍指向已被条目数组占用的空间，造成 freemap 记录的空闲空间与条目数组区域重叠。当后续操作基于错误的 freemap 分配空间时，破坏了元数据一致性，从而触发断言检查失败。
+
+#解决方案
+修改 `xfs_attr3_leaf_add_work` 函数中的 freemap 调整逻辑：
+1. 计算条目数组扩展前后的结束地址。
+2. 遍历所有 freemap 条目，检查其 base 地址是否落在新的条目数组范围内。
+3. 若 freemap 条目与扩展后的条目数组重叠，计算重叠大小，相应地增加该 freemap 条目的 base 地址并减小其 size，确保所有 freemap 条目不与条目数组发生冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/342b2e3e8ba07b304c7ce127f65306ccf9ccd9c1

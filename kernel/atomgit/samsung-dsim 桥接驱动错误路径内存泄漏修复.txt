@@ -1,0 +1,20 @@
+#标题
+samsung-dsim 桥接驱动错误路径内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 samsung-dsim 驱动加载或设备绑定过程中，若 `samsung_dsim_register_te_irq()` 或 `pdata->host_ops->attach()` 执行失败，会导致内核对象内存泄漏。具体表现为驱动初始化失败后，相关资源未正确释放，可能导致后续无法重新加载驱动或系统资源耗尽。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `samsung_dsim_host_attach()` 中，代码逻辑先调用了 `drm_bridge_add()` 添加桥接设备。随后的步骤中，如果 `samsung_dsim_register_te_irq()` 或 `pdata->host_ops->attach()` 调用失败，函数直接返回错误码，但未执行 `drm_bridge_remove()` 操作。这导致先前添加的 bridge 对象未被移除，从而引发内存泄漏。
+
+#解决方案
+在 `samsung_dsim_host_attach()` 函数中引入 `goto` 标签进行统一的错误处理。当后续步骤（如 TE IRQ 注册或 attach 操作）失败时，跳转至对应的错误处理标签，确保按逆序调用 `samsung_dsim_unregister_te_irq()` 和 `drm_bridge_remove()`，从而正确释放已分配的资源。同时，为了避免前向声明，将 `samsung_dsim_unregister_te_irq()` 函数定义移至 `samsung_dsim_host_attach()` 之前。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9fa9f21b20e68564becdf61239041b022d563ddf

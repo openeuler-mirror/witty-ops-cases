@@ -1,0 +1,20 @@
+#标题
+clk: microchip: core: 修正 *_get_parent() 函数返回值类型错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Microchip 时钟驱动框架中 `roclk_get_parent()` 和 `sclk_get_parent()` 函数存在返回值类型不匹配问题。由于这两个函数的返回类型定义为 `u8`（无符号），但代码逻辑中存在返回 `-EINVAL` 的路径，导致本应表示错误的负数返回值被错误地解释为合法的父时钟索引，可能导致时钟树初始化异常或父子关系指向错误的时钟。
+
+#主要错误日志
+未知
+
+#问题根因
+`roclk_get_parent()` 和 `sclk_get_parent()` 函数返回类型为 `unsigned`（u8），但在未找到匹配父时钟映射表项时直接返回了 `-EINVAL`。在 C 语言中，将负数赋值给无符号类型变量会产生极大的正整数，而时钟框架期望该调用总是成功且返回有效索引。当 `parent_map` 存在但硬件寄存器值无法在映射表中找到对应项时，错误的返回值可能越界或被误用。
+
+#解决方案
+修改 `roclk_get_parent()` 和 `sclk_get_parent()` 的逻辑：当 `parent_map` 未定义或无法在映射表中找到匹配项时，直接返回硬件寄存器中读取到的当前值 `v`，而不是返回 `-EINVAL`。这确保了返回值始终是合法的无符号数值，符合时钟框架 `clk_core_get_parent_by_index()` 的预期。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3e11facaee15eed873da6216f291f6a2ef27c4b9

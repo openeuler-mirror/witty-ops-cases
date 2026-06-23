@@ -1,0 +1,21 @@
+#标题
+libnvdimm/labels: 修复 nd_label_data_init 中的除零错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 CXL 内存设备返回错误的零 LSA 大小时，内核在加载 libnvdimm 模块初始化标签数据时触发除零错误，导致系统崩溃。
+
+#主要错误日志
+Oops: divide error: 0000 [#1] PREEMPT SMP NOPTI
+RIP: 0010:nd_label_data_init+0x10e/0x800 [libnvdimm]
+
+#问题根因
+CXL 设备响应 Identify Memory Device 命令（Opcode 4000h）时返回了值为 0 的 LSA 大小。该值被赋给 config_size，随后在计算 max_xfer 时导致 max_xfer 也被设置为 0。最终在 nd_label_data_init 函数中执行 DIV_ROUND_UP(read_size, max_xfer) 时触发了除零错误。
+
+#解决方案
+在 nd_label_data_init 函数中扩展现有的参数合法性检查，增加对 config_size 是否为 0 的判断。如果 config_size 为 0，则直接返回 -ENXIO 错误，避免后续计算发生除零错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e6dfdd107b5075a769b641ead93edbdc8cec43ed

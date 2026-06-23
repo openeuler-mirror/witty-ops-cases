@@ -1,0 +1,28 @@
+#标题
+set_blocksize与读路径并发导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在大扇区尺寸（large sector size）支持场景下，当 `set_blocksize` 与读取路径并发执行时，会导致内核崩溃。具体场景为：udev-worker 调用 libblkid 读取块设备（如读取 4k 数据）时被抢占，此时若另一个进程挂载该设备并调用 `set_blksize` 将块大小设置为 8k，udev 恢复运行后提交 bio 时会触发空指针崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+`set_blocksize` 修改 `i_blksize` 和 folio 顺序时，未与并发的读取操作进行同步，导致状态不一致。
+具体过程如下：
+1. 读取路径分配了一个 order-0 的 folio（4k 大小）。
+2. `set_blocksize` 将 `i_blksize` 设置为 8192，并将最小 folio 顺序设为 1。
+3. 读取路径恢复，调用 `do_mpage_readahead` 为该 order-0 folio 创建 bufferheads。
+4. 由于页面大小（4096）小于块大小（8192），计算得出 `blocks_per_folio == 0`，导致没有附加 bufferheads，`bdev` 未被设置。
+5. 最终提交 bio 时 `bdev` 为 NULL，触发内核崩溃。
+
+#解决方案
+在 `set_blocksize` 更新 `i_blkbits` 前后，引入锁机制并截断页缓存，以避免与文件 IO 和页错误发生竞争。具体措施：
+1. 在 `set_blocksize` 流程中，刷新并截断页缓存（`kill_bdev`）之前，先获取 `i_rwsem` 和 `invalidate_lock` 的排他锁。
+2. 同步修改块设备的读写及 fallocate 等操作路径，使其在执行前获取 `i_rwsem` 和 `invalidate_lock` 的共享锁，确保在更改块大小时阻塞新的 IO 请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b46f1cf0860beefb4a42999727510b608eebd0c7

@@ -1,0 +1,20 @@
+#标题
+sw64架构下syscall(-1)执行行为不一致导致返回值异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户态程序执行 `syscall(-1)` 时，内核无法正确区分这是用户主动发起的无效系统调用，还是调试器通过 ptrace 试图跳过系统调用的操作。如果调试器未设置跳过操作，内核可能保持寄存器 r0 的原始值，导致用户态接收到非预期的返回值，而非标准的 `-ENOSYS` 错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 sw64 架构的系统调用入口处理路径中，如果系统调用号为 -1 (NO_SYSCALL)，内核无法区分“用户直接调用 syscall(-1)”与“ptrace 调试器将系统调用号修改为 -1 以跳过该调用”这两种场景。代码逻辑中，如果调试器未介入或未显式设置返回值，r0 寄存器的值未被初始化为错误码，导致返回路径上行为不一致。
+
+#解决方案
+在检测到系统调用号为 NO_SYSCALL 且存在 syscall work 标志时，提前强制将返回值设置为 -ENOSYS。修改位置在 `do_entSys` 函数中，在进入 `syscall_trace_enter` 之前，若发现 `nr == NO_SYSCALL`，立即调用 `syscall_set_return_value` 将 r0 设为 -ENOSYS。这确保了无论是用户直接调用还是 ptrace 场景，未跳过的无效系统调用均能正确返回 -ENOSYS。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b1b02ad524924cfaabddb163316f6eae34d94390

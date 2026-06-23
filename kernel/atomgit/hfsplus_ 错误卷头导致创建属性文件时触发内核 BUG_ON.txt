@@ -1,0 +1,20 @@
+#标题
+hfsplus: 错误卷头导致创建属性文件时触发内核 BUG_ON
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 HFS+ 文件系统的卷头包含不反映文件系统实际状态的错误值时，`hfsplus_fill_super` 会错误地假设属性文件尚未创建。随后在调用 `hfsplus_create_attributes_file` 时，会因检测到属性文件大小不为 0 而触发 `BUG_ON()`，导致内核 panic 或系统崩溃。
+
+#主要错误日志
+- pr_err("detected inconsistent attributes file, running fsck.hfsplus is recommended.\n")
+
+#问题根因
+文件系统卷头数据异常（包含错误值），导致内核误判属性文件状态。在 `hfsplus_create_attributes_file` 函数中，代码使用 `BUG_ON(i_size_read(attr_file) != 0)` 进行检查，当发现属性文件大小非 0 时直接触发内核崩溃，而非进行错误处理。
+
+#解决方案
+移除 `hfsplus_create_attributes_file` 函数中的 `BUG_ON()` 调用。改为判断属性文件大小是否为 0，若不为 0 则返回 `-EIO` 错误，并通过 `pr_err` 打印日志提示用户运行 `fsck.hfsplus` 工具修复文件系统，从而避免内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bf4ff35746cc9ba5477e6a694b4432fa401ede49

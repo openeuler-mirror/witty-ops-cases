@@ -1,0 +1,20 @@
+#标题
+cifs: SMB2+ 连接建立 NetBIOS 会话失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 SMB2 或 SMB3 协议通过 TCP 端口 139 连接服务器（如 Windows Server 2022）时，连接建立失败。原因是客户端发送了格式错误的 NetBIOS Session Request 报文，导致服务器无法解析，从而无法完成 NetBIOS 会话建立过程。SMB1 连接不受此影响。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `ip_rfc1001_connect()` 负责为 SMB 连接建立 NetBIOS 会话，该函数错误地使用了 `smb_send()` 来发送 NetBIOS Session Request 报文。`smb_send()` 函数假定传入的缓冲区是 SMB 报文，对于 SMB2+ 连接，它会修改报文头，导致预先准备好的 NetBIOS Session Request 报文被破坏，发送出去的是无效的“垃圾”数据包。而对于 SMB1 连接，该函数不会进行此类破坏性处理，因此仅 SMB2+ 受影响。
+
+#解决方案
+修改 `ip_rfc1001_connect()` 函数，弃用 `smb_send()`，改用 `smb_send_kvec()` 函数发送报文。`smb_send_kvec()` 会原样发送数据，不会对准备好的 NetBIOS 报文头进行篡改。同时调整了报文长度计算逻辑，确保发送的数据符合 RFC1002 标准。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/210531f6a962d1210ff39fd9ce79f6e5d02729ad

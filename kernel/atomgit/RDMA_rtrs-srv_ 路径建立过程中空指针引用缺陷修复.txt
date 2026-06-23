@@ -1,0 +1,27 @@
+#标题
+RDMA/rtrs-srv: 路径建立过程中空指针引用缺陷修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RTRS（RDMA Transport for Remote Persistent Memory）路径建立过程中，若服务端状态异常或连接资源未正确初始化，内核在处理 info_req 消息交换或投递接收请求（post_recv）时触发空指针引用，导致内核崩溃或路径建立流程异常中断。
+
+#主要错误日志
+- rtrs_err(s, "Path state invalid. state %s\n", rtrs_srv_state_str(srv_path->state));
+- rtrs_err(s, "Conn not set for %d\n", cid);
+
+#问题根因
+RTRS 客户端发起路径建立并完成 con_num 个连接后，会通过 info_req 消息与服务端交换信息。在此过程中，服务端代码未对关键条件进行校验：
+1. 未校验 RTRS 服务端路径状态是否已达到 CONNECTED 状态；
+2. 未校验连接结构体指针 `srv_path->s.con[cid]` 是否有效（非空）。
+若在不满足预设条件（如连接未完全建立或状态不一致）的场景下继续执行，会导致后续代码访问空指针引发内核 Panic。
+
+#解决方案
+在 `post_recv_path` 函数中增加两项健全性检查：
+1. 检查 `srv_path->state` 是否为 `RTRS_SRV_CONNECTING`，若状态无效则打印错误日志并返回 `-EIO`；
+2. 检查 `srv_path->s.con[cid]` 指针是否为空，若未设置则打印错误日志并返回 `-EIO`。
+通过提前检测异常状态并中止处理流程，避免后续代码发生空指针引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6feb39c459c3ebc10b57d5f287f9306903b97815

@@ -1,0 +1,22 @@
+#标题
+btrfs: scrub：元数据块 bytenr 不匹配时错误报告类型错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 BTRFS 文件系统执行 scrub 操作时，如果元数据树块的 bytenr 不匹配，内核会错误地将其报告为校验和错误，而不是更准确的元数据错误。这导致用户或管理工具在查看 scrub 结果时，无法正确区分是数据校验问题还是元数据本身的结构问题。
+
+#主要错误日志
+```
+btrfs_warn_rl: "tree block %llu mirror %u has bad bytenr, has %llu want %llu"
+```
+
+#问题根因
+在 `scrub_verify_one_metadata` 函数中，当检测到逻辑地址与 `btrfs_stack_header_bytenr` 不匹配时，代码错误地设置了 `csum_error_bitmap`（校验和错误位图）。实际上，bytenr 不匹配属于元数据错误，应当设置 `meta_error_bitmap`。错误的位图设置导致了错误类型的误报。
+
+#解决方案
+修改 `fs/btrfs/scrub.c` 文件中的逻辑，将 bytenr 不匹配情况下的位图设置从 `stripe->csum_error_bitmap` 更正为 `stripe->meta_error_bitmap`，确保错误类型被正确标记为元数据错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d04df0269c72af2b38e6d8c9e29dd4c0da5661b9

@@ -1,0 +1,26 @@
+#标题
+nouveau 驱动因中断风暴防护机制错误禁用 nonstall 中断导致超时
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NVIDIA Blackwell 架构显卡及其他环境下，nouveau 驱动频繁出现超时错误。该问题在常规操作中偶发，但在特定硬件上变得非常明显。
+
+#主要错误日志
+未知
+
+#问题根因
+nouveau 驱动的中断处理逻辑中存在缺陷。当内核收到中断请求（IRQ）但未找到允许的处理程序时，会触发“中断风暴”防护代码自动禁用该中断。
+对于 nonstall（非阻塞）类型的中断，DRM 驱动程序经常在推送任务提交时请求其触发，但在其他时间点会将其禁用。现有的防护逻辑错误地在正常操作期间禁用了 nonstall 中断，导致后续请求无法得到响应，从而引发超时。
+
+#解决方案
+修改 nonstall 中断的处理策略，禁止在正常操作中禁用 nonstall 中断。事件处理代码会负责过滤这些中断，驱动程序仅在加载和卸载时进行中断的启用与禁用控制。
+具体代码修改包括：
+1. 清空 `ga100_fifo_nonstall_block` 和 `ga100_fifo_nonstall_allow` 函数体，移除运行时的中断屏蔽/使能操作。
+2. 新增 `ga100_fifo_nonstall_dtor` 函数，在驱动卸载阶段显式阻塞 nonstall 中断，确保资源清理。
+3. 在构造函数 `ga100_fifo_nonstall_ctor` 中初始化时显式允许中断。
+4. 在 `nvkm_fifo_func` 结构体中注册新增的 `nonstall_dtor` 回调函数，并在析构流程中调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/00fea2d82f42667b0b20e3a8c8086d3bc533ba31

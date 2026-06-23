@@ -1,0 +1,20 @@
+#标题
+x86/fpu: XRSTOR 指令失败后内核警告信息指令指针定位错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 XRSTOR 指令因坏掉的 FPU 状态触发 #GP 异常后，内核打印警告信息并重新初始化 FPU 寄存器。但警告信息中显示的指令指针（RIP）和 "Code:" 段中高亮的指令均指向 XRSTOR 指令之后的那条指令，而非实际出错的 XRSTOR 指令。这导致错误现场看起来像是一条非 FPU 相关的指令触发了 #GP 异常，干扰故障定位。
+
+#主要错误日志
+Bad FPU state detected at restore_fpregs_from_fpstate+0x9a/0x170, reinitializing FPU registers.
+
+#问题根因
+在 `ex_handler_fprestore` 异常处理函数中，代码逻辑先执行了 `regs->ip = ex_fixup_addr(fixup)` 将指令指针（RIP）向前推进以跳过出错的 XRSTOR 指令，随后才调用 `WARN_ONCE` 打印警告信息。这导致打印出的位置是修复后的 RIP（即 XRSTOR 后的一条指令），而非触发异常的指令位置。
+
+#解决方案
+调整处理顺序，移除显式的提前 RIP 修正逻辑。改为在打印警告信息后，调用通用的 `ex_handler_default()` 函数来处理 RIP 的修正。这确保了警告打印时 RIP 仍指向触发异常的指令，从而输出准确的错误位置信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/14ab66bdb9229986f1dacbf38536827cda982eea

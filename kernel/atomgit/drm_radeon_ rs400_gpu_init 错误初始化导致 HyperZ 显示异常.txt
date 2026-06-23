@@ -1,0 +1,20 @@
+#标题
+drm/radeon: rs400_gpu_init 错误初始化导致 HyperZ 显示异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ATI Mobility Radeon Xpress 200M (RC410) 显卡在运行过程中出现 HyperZ 功能故障，表现为画面渲染出现视觉瑕疵。具体根因是内核驱动初始化阶段错误地将 `num_gb_pipes` 设置为 3，而该显卡实际仅支持 1 个管道，导致后续快速 Z 清除操作异常。
+
+#主要错误日志
+rs400: Failed to wait MC idle while programming pipes. Bad things might happen. %08x
+
+#问题根因
+在 `rs400_gpu_init` 函数中，原代码错误地调用了 `r420_pipes_init` 进行管道初始化。由于 RS400 芯片本质上属于 R300 架构系列而非 R400 系列，导致管道配置逻辑不匹配。这在 Mobility Radeon Xpress 200M RC410 显卡上导致 `num_gb_pipes` 被错误赋值为 3（正确值应为 1），进而引发 HyperZ 功能在快速 Z 清除时出现故障。
+
+#解决方案
+修改 `rs400_gpu_init` 的初始化流程，移除针对 R420 架构的 `r420_pipes_init` 调用，改为调用适配 R300 架构的 `r300_gpu_init` 函数。同时将 `r300_gpu_init` 函数及其声明从 `static` 修改为全局可见，以便 RS400 驱动调用。此修改能正确识别 RS400 显卡的管道数量，修复 HyperZ 故障。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5af4a44bfcec21a021ba8dc95fc41be4e8c7f959

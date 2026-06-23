@@ -1,0 +1,24 @@
+#标题
+mm: finish_fault 处理大页 folio 时陷入无限重试死循环
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理匿名 shmem 缺页中断时，若 `finish_fault()` 试图为大 folio 批量安装页表项（PTE），过程中检测到目标范围内存在非 `pte_none` 的表项，系统会触发无限缺页重试。此时缺页处理流程无法向前推进，导致相关进程陷入死循环，CPU 占用率持续高涨，无法正常完成内存访问操作。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `finish_fault()` 函数处理匿名 shmem 大 folio 安装逻辑时，代码检查了目标 PTE 范围是否全部为空（`pte_range_none`）。如果发现范围内存在非空 PTE，原逻辑直接调用 `update_mmu_tlb_range` 并返回 `VM_FAULT_NOPAGE`。这导致缺页处理流程未实际安装 PTE 即返回，触发缺页重试。由于触发缺页的地址对应的 PTE 实际上可能仍为空，且阻塞性条件未消除，系统陷入无限重试的死循环，无法恢复正常执行流。
+
+#解决方案
+修改 `finish_fault()` 的处理逻辑，引入回退机制：
+1. 新增 `needs_fallback` 标志位。
+2. 当检测到 PTE 范围不全部为空时，不再直接返回 `VM_FAULT_NOPAGE`，而是将 `needs_fallback` 标志置为 true。
+3. 释放当前持有的页表锁，跳转回 `fallback` 标签处重新执行。
+4. 在后续流程判断中，若 `needs_fallback` 为 true，强制将 `nr_pages` 设置为 1，回退到单页 PTE 安装模式，确保缺页处理能够向前推进，避免死循环。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/045407559c21b1f140316b829f8be9ef320df1f4

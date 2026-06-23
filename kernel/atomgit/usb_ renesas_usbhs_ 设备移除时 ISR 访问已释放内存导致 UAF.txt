@@ -1,0 +1,20 @@
+#标题
+usb: renesas_usbhs: 设备移除时 ISR 访问已释放内存导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 Renesas USBHS 驱动设备时，若中断处理程序（ISR）在资源释放过程中被触发，内核可能发生 Use-After-Free（UAF）错误，导致系统崩溃或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `usbhs_remove()` 函数中，驱动程序在释放资源（包括 pipe 数组）时，中断处理程序（`usbhs_interrupt`）仍然处于注册状态。如果在中断处理程序访问内存之前，相关资源（如 `usbhs_pipe_remove` 释放的资源）已被释放，就会触发 UAF。
+
+#解决方案
+在释放资源前显式调用 `devm_free_irq()`。该函数会调用 `free_irq()`，不仅禁用中断处理程序，还会等待正在运行的 ISR 执行完成，从而确保在调用 `usbhs_pipe_remove()` 之前 ISR 已完全停止，防止 UAF 发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e74ce882157921deae611e05cf932389153a6355

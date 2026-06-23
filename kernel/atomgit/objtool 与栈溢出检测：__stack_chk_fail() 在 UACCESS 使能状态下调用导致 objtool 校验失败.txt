@@ -1,0 +1,22 @@
+#标题
+objtool 与栈溢出检测：__stack_chk_fail() 在 UACCESS 使能状态下调用导致 objtool 校验失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_TRACE_BRANCH_PROFILING 配置项编译内核时，objtool 校验阶段报错，提示 `ftrace_likely_update` 函数在 UACCESS（用户空间访问）使能状态下调用了 `__stack_chk_fail()`，导致编译无法通过。
+
+#主要错误日志
+kernel/trace/trace_branch.o: error: objtool: ftrace_likely_update+0x1ea: call to __stack_chk_fail() with UACCESS enabled
+
+#问题根因
+`__stack_chk_fail()` 函数可能被 UACCESS（用户空间访问）使能状态的代码调用（例如 `ftrace_likely_update`）。根据内核调用约定，在 UACCESS 使能状态下调用 `panic()` 是不安全的，必须先禁用 UACCESS（SMAP）才能安全地执行 panic 流程，否则违反了 objtool 的静态检查规则。
+
+#解决方案
+1. 在 `kernel/panic.c` 的 `__stack_chk_fail()` 函数中，调用 `panic()` 前使用 `user_access_save()` 保存当前 UACCESS 状态并禁用它。
+2. 在 `panic()` 调用返回前（虽然通常不会返回）使用 `user_access_restore()` 恢复状态。
+3. 同时在 `tools/objtool/check.c` 的 `uaccess_safe_builtin` 列表中添加 `__stack_chk_fail`，告知 objtool 该函数内部已正确处理 UACCESS 状态，不再报错。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fc8b037f934b81e31196e018342569e9d79add1c

@@ -1,0 +1,38 @@
+#标题
+ksmbd: durable scavenger 竞态条件导致链表破坏与 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ksmbd（Linux内核SMB服务器）并开启 Durable Handle（持久句柄）功能场景下，当后台清理线程（durable scavenger）清理过期句柄时，可能与正在遍历文件句柄列表（m_fp_list）的其他操作（如 ksmbd_vfs_rename 或 share-mode 检查）发生竞态。
+
+现象1：内核链表结构被破坏，如果开启了 CONFIG_DEBUG_LIST，系统会报告链表异常。
+现象2：引发 Use-After-Free（UAF）漏洞，导致内核崩溃或内存数据损坏。KASAN 等检测工具可能报告内存非法访问。
+
+#主要错误日志
+（Commit 信息中未提供具体的 Panic 或系统日志原文，推断可能触发以下内核警告）
+- list_del corruption. (CONFIG_DEBUG_LIST 检测到链表破坏时)
+- BUG: KASAN: use-after-free in ksmbd_lookup_fd_inode ... (KASAN 检测到 UAF 时)
+
+#问题根因
+ksmbd_durable_scavenger() 在处理过期持久句柄时存在两个严重的竞态条件缺陷：
+
+1. **链表节点复用导致链表破坏**：
+Scavenger 线程将过期的 fp 从全局 IDR 移除后，使用 `list_add(&fp->node, &scavenger_list)` 将其加入本地清理链表。然而，`fp->node` 同时也被 `m_fp_list` 链表使用。此时该句柄可能仍链接在 `m_fp_list` 上供其他线程查找，复用 `fp->node` 直接覆盖了 `m_fp_list` 的链接指针，导致链表结构双向断裂或环形闭环，破坏了全局文件句柄链表。
+
+2. **引用计数竞态导致 UAF**：
+Scavenger 在持有锁时判断 `refcount > 1`，但在释放锁之后、真正从 `m_fp_list` 解链之前，存在一个时间窗口。在此窗口内，其他线程（如 ksmbd_lookup_fd_inode）可能通过 `m_fp_list` 找到该 fp 并成功增加引用计数（`atomic_inc_not_zero`），而 Scavenger 随后解链并释放了该 fp。这导致持有者持有了一个已被释放的指针，后续访问触发 UAF。
+
+#解决方案
+1. **修改句柄清理方式**：
+停止复用 `fp->node` 作为本地清理链表节点。改为在持有 `global_ft.lock` 时获取一个临时引用计数，释放锁后，再在 `f_ci->m_lock` 保护下将 fp 从 `m_fp_list` 移除。使用 `atomic_sub_and_test(2, &fp->refcount)` 同时减去持久引用和临时引用，确保清理线程与并发查找线程互斥，由最后一次持有引用的一方执行释放操作。
+
+2. **清理 persistent_id 防止 IDR 冲突**：
+在 `__ksmbd_remove_durable_fd()` 中移除 IDR 后立即清除 `fp->persistent_id`，防止延迟释放逻辑错误地对已分配给新句柄的 ID 执行重复移除操作。
+
+3. **修正 open_files_count 统计**：
+在 `__put_fd_final()` 中增加判断，如果 `fp->conn` 为 NULL（表示该句柄已从会话中剥离），则不减少当前 work->conn 的 open_files_count 计数，防止不相关的连接统计计数器下溢。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/94bfc247407cc3954a08250582d7f91bbb51e24b

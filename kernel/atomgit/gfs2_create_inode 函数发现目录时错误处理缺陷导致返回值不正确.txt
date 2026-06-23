@@ -1,0 +1,20 @@
+#标题
+gfs2_create_inode 函数发现目录时错误处理缺陷导致返回值不正确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 O_CREAT 标志打开 GFS2 文件系统中的一个现有目录时，gfs2_create_inode 函数虽然检测到了目录类型，但未能正确向上层传递 -EISDIR 错误码，导致系统调用返回值异常，未按预期返回正确的目录错误提示。
+
+#主要错误日志
+未知
+
+#问题根因
+在 gfs2_create_inode 函数中，当发现路径已存在且为目录时（S_ISDIR(inode->i_mode)），代码执行了 iput(inode) 释放 inode，并将 inode 指针设置为 ERR_PTR(-EISDIR)。然而，后续代码跳转到 fail_gunlock 标签时，函数直接返回了 inode 指针（即 ERR_PTR），而没有将局部的 error 变量设置为 -EISDIR。这导致函数返回值逻辑不一致，未能正确返回错误状态。
+
+#解决方案
+修改 fs/gfs2/inode.c 中的 gfs2_create_inode 函数。在检测到目录并释放 inode 后，显式将 error 变量设置为 -EISDIR，并将 inode 指针置为 NULL，确保函数跳转到错误处理分支时能正确返回错误码，而不是返回一个错误的指针值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/40c0f9d6f5fc48dcbe786ecae3366252470a04fb

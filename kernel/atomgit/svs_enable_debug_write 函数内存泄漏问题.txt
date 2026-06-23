@@ -1,0 +1,20 @@
+#标题
+svs_enable_debug_write 函数内存泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 svs_enable_debug_write() 函数中，当 kstrtoint() 解析失败时，此前通过 memdup_user_nul() 分配的内存缓冲区未被释放，导致内核内存泄漏。该问题通过代码审查或内存检测工具（如 kmemleak）可被发现。
+
+#主要错误日志
+未知
+
+#问题根因
+在 svs_enable_debug_write() 函数中，buf 指针由 memdup_user_nul() 分配。如果后续调用 kstrtoint() 失败，函数会直接返回错误码，但未执行 kfree(buf) 操作，导致该内存块无法被回收。
+
+#解决方案
+引入 `linux/cleanup.h` 机制，将 `char *buf` 声明为 `char *buf __free(kfree) = NULL`。利用内核的自动清理机制，当变量超出作用域（函数返回）时自动调用 kfree 释放内存，从而避免因错误分支返回导致的内存泄漏，同时移除了显式的 kfree 调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c007d61e05185bd07cf429942e50258272ab40ce

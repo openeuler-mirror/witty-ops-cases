@@ -1,0 +1,22 @@
+#标题
+BPF模块结构体变更导致KABI一致性破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在合入LTS提交4b359df7b2ad ("bpf: Optimize the free of inner map") 后，内核引入了 `free_after_rcu_gp` 和 `sleepable_refcnt` 两个新字段，导致 `struct bpf_map` 结构体布局发生变化，破坏了内核应用程序二进制接口（KABI）的一致性。
+
+#主要错误日志
+未知
+
+#问题根因
+合入LTS提交 4b359df7b2ad 时，直接在 `struct bpf_map` 中新增了 `free_after_rcu_gp` 和 `sleepable_refcnt` 字段。新增字段改变了结构体的成员布局和偏移，导致结构体大小或内存对齐发生变化，从而破坏了KABI兼容性。
+
+#解决方案
+利用内核KABI兼容性宏对结构体进行重组修复：
+1. 使用 `KABI_FILL_HOLE` 宏将 `free_after_rcu_gp` 字段填充至结构体原有的 1 字节空洞中，避免破坏后续成员偏移。
+2. 使用 `KABI_USE` 宏复用原有的 `KABI_RESERVE(1)` 保留字段空间来存放 `sleepable_refcnt` 字段，在不改变结构体整体布局的前提下容纳新增成员。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a81cf1590dd83a874a47f56e00beadb195442311

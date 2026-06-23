@@ -1,0 +1,24 @@
+#标题
+net: usb: rtl8150: xmit 路径 usb_submit_urb 失败导致 skb 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 rtl8150 网卡驱动在发送数据包（xmit）时，若 `usb_submit_urb()` 调用失败，驱动虽然向网络协议栈返回 `NETDEV_TX_OK` 表示数据包已处理，但实际上并未释放对应的 `skb` 数据结构。这导致每次提交失败都会发生一次 skb 内存泄漏。同时，驱动内部维护的 `dev->tx_skb` 指针持续指向已被视为“已消费”的内存区域，可能导致后续操作引用悬空指针。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `rtl8150_start_xmit` 函数中，发送路径的代码逻辑存在缺陷：
+1. 函数在提交 URB 之前将 `skb` 赋值给 `dev->tx_skb`。
+2. 当 `usb_submit_urb()` 提交失败时，代码仅更新了统计计数并重启队列，并未调用 `kfree_skb` 相关函数释放 `skb`。
+3. 由于提交失败，USB 核心层不会触发 `write_bulk_callback` 回调，因此该回调中预期的释放逻辑也不会执行。
+4. 驱动直接返回 `NETDEV_TX_OK`，导致网络层认为 skb 已由驱动接管，从而造成内存泄漏及潜在的悬空指针问题。
+
+#解决方案
+在 `rtl8150_start_xmit` 函数中 `usb_submit_urb()` 失败的错误处理分支内，显式调用 `dev_kfree_skb_any(skb)` 释放 socket buffer，并将 `dev->tx_skb` 置为 NULL，防止指针悬挂。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a8d37b9329df868a0ceaafa6dede0e8955fc88da

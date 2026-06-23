@@ -1,0 +1,52 @@
+#标题
+mpage_readahead 函数中大预读窗口导致系统 softlockup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 null_blk 设备且配置较大的预读窗口时，通过调用 madvise 触发预读操作会导致系统软死锁。表现为 CPU 在 mpage_readahead 循环中长时间停留无法调度，其他进程无法运行，系统响应失效。
+
+#主要错误日志
+Call Trace:
+bio_add_page+0x7f/0x120
+bio_add_folio+0x24/0x40
+do_mpage_readpage+0x6de/0xbc0
+xas_load+0x1e/0x240
+xa_load+0x8f/0xf0
+mpage_readahead+0xe7/0x230
+__pfx_blkdev_get_block+0x10/0x10
+blkdev_readahead+0x14/0x30
+read_pages+0x71/0x460
+folio_add_lru+0x6a/0x140
+? filemap_add_folio+0xb6/0x190
+page_cache_ra_unbounded+0x197/0x2a0
+do_page_cache_ra+0x42/0x70
+page_cache_ra_order+0x360/0x610
+filemap_fault+0x7d8/0x1200
+__do_fault+0x3e/0x380
+do_pte_missing+0x628/0x1cd0
+? __pte_offset_map+0x1a/0x200
+__handle_mm_fault+0x7f2/0x19b0
+? __pte_offset_map+0x1a/0x200
+? __pte_offset_map_lock+0x78/0x170
+handle_mm_fault+0x275/0x560
+__get_user_pages+0x1f0/0xbd0
+faultin_page_range+0xae/0x460
+madvise_vma_behavior+0x62e/0xfa0
+? find_vma_prev+0x85/0xe0
+do_madvise+0x1eb/0x5a0
+__x64_sys_madvise+0x2b/0x40
+x64_sys_call+0x23b3/0x4620
+do_syscall_64+0x9e/0x1b0
+? irqentry_exit_to_user_mode+0x7d/0x300
+entry_SYSCALL_64_after_hwframe+0x78/0xe2
+
+#问题根因
+在 mpage_readahead 函数的循环处理中，当预读窗口非常大时，CPU 会长时间停留在该循环中执行任务。由于循环体内缺乏主动调度点，导致 CPU 无法调度其他任务运行，从而引发 softlockup。
+
+#解决方案
+在 mpage_readahead 函数的主循环开始处添加 cond_resched() 调用，允许 CPU 在必要时进行任务调度，避免在重度预读操作期间发生软死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/614884a3e6a68b63046a976b6d8b8e12daf13a15

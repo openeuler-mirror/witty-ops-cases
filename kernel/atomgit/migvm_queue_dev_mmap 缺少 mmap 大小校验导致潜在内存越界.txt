@@ -1,0 +1,20 @@
+#标题
+migvm_queue_dev_mmap 缺少 mmap 大小校验导致潜在内存越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 migvm_queue 设备执行 mmap 操作时，若用户态请求映射的内存区域大小超过驱动预分配的缓冲区大小，内核未进行有效校验，可能导致内核内存越界访问或数据损坏。错误发生时，内核将打印错误日志并返回无效参数错误。
+
+#主要错误日志
+migvm_queue: mmap size %lu exceeds alloc %lu
+
+#问题根因
+`migvm_queue_dev_mmap` 函数在进行内存映射时，未对用户传入的映射大小 `size` 与驱动预分配的缓冲区大小 `ALLOC_SIZE` 进行比较校验。这允许用户态进程映射比实际分配内存更大的区域，从而引发越界访问风险。
+
+#解决方案
+在 `migvm_queue_dev_mmap` 函数中增加边界检查逻辑。在执行具体的映射偏移处理前，判断请求的 `size` 是否大于 `ALLOC_SIZE`。若超过限制，通过 `pr_err` 打印错误日志并返回 `-EINVAL`，阻止非法映射。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4da4eeeca5129e861d24181e5bce444415b9c328

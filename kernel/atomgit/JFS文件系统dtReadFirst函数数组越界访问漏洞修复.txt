@@ -1,0 +1,20 @@
+#标题
+JFS文件系统dtReadFirst函数数组越界访问漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统挂载损坏或恶意的JFS文件系统镜像时，在读取目录树节点过程中，可能触发数组索引越界访问。该问题被Syzkaller fuzzing工具检测到，可能导致内核崩溃或内存破坏。
+
+#主要错误日志
+stbl[0] out of bound
+
+#问题根因
+在函数 `dtReadFirst` 中，变量 `stbl` 的值直接来源于文件系统数据。如果文件系统镜像损坏（bad filesystem），`stbl` 的值可能超出预期范围，导致后续代码 `& p->slot[stbl[0]]` 发生数组越界访问。
+
+#解决方案
+在获取 `stbl` 指针后，增加对 `stbl[0]` 数值的合法性校验。如果数值小于0或大于127，判定为越界，立即释放页面锁、调用 `jfs_error` 记录错误日志并返回 `-EIO` 错误码，从而防止越界访问发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/89e856991b2890840a537790a379c5bc95d0671d

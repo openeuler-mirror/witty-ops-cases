@@ -1,0 +1,34 @@
+#标题
+nf_tables: nft_dynset 状态表达式错误路径内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 nf_tables 动态集进行表达式克隆时，若在 GFP_ATOMIC 分配模式下克隆第二个状态表达式失败，会导致第一个已克隆的状态表达式未被释放，从而造成内存泄漏。该问题通常在 softirq 上下文触发，可通过 kmemleak 检测到未释放的对象。
+
+#主要错误日志
+unreferenced object (percpu) 0x607b97e9cab8 (size 16):
+  comm "softirq", pid 0, jiffies 4294931867
+  hex dump (first 16 bytes on cpu 3):
+    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  backtrace (crc 0):
+    pcpu_alloc_noprof+0x453/0xd80
+    nft_counter_clone+0x9c/0x190 [nf_tables]
+    nft_expr_clone+0x8f/0x1b0 [nf_tables]
+    nft_dynset_new+0x2cb/0x5f0 [nf_tables]
+    nft_rhash_update+0x236/0x11c0 [nf_tables]
+    nft_dynset_eval+0x11f/0x670 [nf_tables]
+    nft_do_chain+0x253/0x1700 [nf_tables]
+    nft_do_chain_ipv4+0x18d/0x270 [nf_tables]
+    nf_hook_slow+0xaa/0x1e0
+    ip_local_deliver+0x209/0x330
+
+#问题根因
+在 `nft_dynset_expr_setup` 函数中，当循环克隆多个状态表达式时，如果后续（如第二个）表达式的 `nft_expr_clone` 调用失败，函数直接返回错误，未对循环中前面已成功克隆的表达式执行销毁操作，导致内存泄漏。
+
+#解决方案
+修改 `nft_dynset_expr_setup` 函数的错误处理路径。当克隆失败时，跳转至 `err_out` 标签，调用 `nft_set_elem_expr_destroy` 函数释放之前已分配的表达式资源，然后返回错误码。同时，将 `nft_set_elem_expr_destroy` 函数的可见性从 static 修改为全局可见，以便在 `nft_dynset.c` 中调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e5a9833014961678868221065f70ac072fbca0e4

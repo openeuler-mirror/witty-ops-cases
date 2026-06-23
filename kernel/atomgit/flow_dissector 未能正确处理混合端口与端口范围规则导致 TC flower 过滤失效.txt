@@ -1,0 +1,22 @@
+#标题
+flow_dissector 未能正确处理混合端口与端口范围规则导致 TC flower 过滤失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 `tc filter` 配置 TC flower 规则时，若同时指定具体目的端口（dst_port）和源端口范围（src_port range），过滤规则无法正常匹配数据包，导致预期的流量控制动作（如 drop）不生效。
+例如执行以下命令后，相关流量未被正确拦截：
+`tc filter add dev ens38 ingress protocol ip flower ip_proto udp dst_port 5000 src_port 2000-3000 action drop`
+
+#主要错误日志
+未知
+
+#问题根因
+在 `__skb_flow_dissect_ports()` 函数中，代码逻辑采用了 `if-else` 结构来处理 `FLOW_DISSECTOR_KEY_PORTS` 和 `FLOW_DISSECTOR_KEY_PORTS_RANGE` 标志位。这种互斥逻辑导致函数仅填充了这两个键值中的某一个（取决于枚举检查中谁先出现），而忽略另一个。当规则同时需要具体端口和端口范围匹配时，其中一个键值保持为 0，导致过滤器无法按预期匹配数据包。
+
+#解决方案
+修改 `__skb_flow_dissect_ports()` 函数，移除原有的互斥（either/or）逻辑。改为独立检查 `FLOW_DISSECTOR_KEY_PORTS` 和 `FLOW_DISSECTOR_KEY_PORTS_RANGE` 标志位，分别获取对应的 target 指针，并在各自有效时独立填充端口信息，确保两者在使用时都能被正确赋值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2bce12f65fae6d33e3331d610bf4124dc4948f03

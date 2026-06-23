@@ -1,0 +1,20 @@
+#标题
+um: ubd: start_io_thread 函数丢失错误检查导致错误状态被覆盖
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UBD（User Mode Linux Block Device）驱动初始化 IO 线程时，若第一个文件描述符的非阻塞设置成功，但第二个文件描述符的非阻塞设置失败，内核将错误地认为操作成功，导致后续 IO 线程在非预期的阻塞模式下运行，可能引发 IO 行为异常。
+
+#主要错误日志
+start_io_thread - failed to set nonblocking I/O.
+
+#问题根因
+函数 `start_io_thread()` 中连续两次调用 `os_set_fd_block()` 设置非阻塞 IO。第二次调用的返回值直接赋值给了 `err` 变量，覆盖了第一次调用的返回值。如果第一次调用失败（返回非零值）而第二次调用成功（返回 0），最终的 `err` 值为 0，导致错误检查失效，遗漏了对第一个文件描述符设置失败的检测。
+
+#解决方案
+修改 `start_io_thread()` 函数中的错误处理逻辑，将第二次 `os_set_fd_block()` 调用的返回值与之前的 `err` 变量进行“或”操作（`err |= ...`）。这样可以累积两次调用的错误状态，只要有一次调用失败，`err` 就不为 0，从而正确触发错误处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2f74146b907d9a22281c465001ba70595d38adb9

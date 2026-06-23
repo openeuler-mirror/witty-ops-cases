@@ -1,0 +1,20 @@
+#标题
+[phy: tegra_xusb_port_init 错误处理流程修复]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[在 Tegra XUSB 端口初始化过程中，若 device_add() 函数调用失败，错误处理代码错误地调用了 device_unregister()。这可能导致内核内部状态不一致或引发进一步的内核错误（如引用计数错误或对象释放异常），该问题通过代码审查发现。]
+
+#主要错误日志
+[未知]
+
+#问题根因
+[根因在于错误处理逻辑违反了设备模型 API 的使用规范。当 device_add() 失败时，代码错误地调用了 device_unregister()。device_unregister() 包含 device_del() 和 put_device() 两个操作，其中 device_del() 用于撤销 device_add() 的操作。若 device_add() 未成功执行，调用 device_del() 是非法的，会导致状态不一致。正确的做法是在 device_add() 失败时仅调用 put_device() 来释放引用计数。]
+
+#解决方案
+[修改 drivers/phy/tegra/xusb.c 中的 tegra_xusb_port_init 函数。将 device_add() 失败后的错误处理跳转标签从 unregister 修改为 put_device，并将对应的处理函数从 device_unregister(&port->dev) 修改为 put_device(&port->dev)，确保在设备添加失败时仅释放设备引用，而不执行注销操作。]
+
+#来源
+[https://atomgit.com/openeuler/kernel/commit/7891666a47b8b0648754a3b88edcc870d304cb4d]

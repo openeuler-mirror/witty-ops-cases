@@ -1,0 +1,20 @@
+#标题
+can: j1939: j1939_sk_bind() 引用计数泄漏导致对象无法释放
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 j1939_sk_bind() 函数调用失败后再次被调用时，发生 j1939_priv 结构体的引用计数泄漏（refcount leak）。由于引用计数无法归零，导致相关对象无法被正常释放，造成内存资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 commit 25fe97cb7620 中，逻辑预期 j1939_priv_put() 可以无条件地延迟到 j1939_sk_sock_destruct() 回调中执行。但是，如果在 j1939_sk_bind() 过程中 j1939_local_ecu_get() 返回错误，此时 jsk->priv 已经被设置，但并没有正确的机制触发 j1939_sk_sock_destruct() 来释放引用。因此，当 j1939_sk_bind() 再次被调用时，之前未释放的引用计数依然存在，从而导致引用计数泄漏。根本原因是在 j1939_local_ecu_get() 失败的错误处理路径中，缺少对 j1939_priv_put() 的立即调用。
+
+#解决方案
+在 j1939_sk_bind() 函数中，当 j1939_local_ecu_get() 调用失败时，立即执行引用计数释放操作。具体修改为：在错误处理分支中先将 jsk->priv 设置为 NULL，调用 synchronize_rcu() 确保同步，然后显式调用 j1939_priv_put(priv)，确保在函数返回错误前正确释放引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a1402cee1fbdc4091c7bdc2574ecf8d34ccb8d3c

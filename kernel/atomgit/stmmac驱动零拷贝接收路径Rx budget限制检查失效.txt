@@ -1,0 +1,20 @@
+#标题
+stmmac驱动零拷贝接收路径Rx budget限制检查失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 stmmac 网卡驱动的 AF_XDP 零拷贝（zero-copy, XSK）模式接收数据时，由于 `stmmac_rx_zc` 函数中的循环限制检查逻辑位置不当，当处理非最后描述符帧（status包含rx_not_ls）并跳转回 `read_again` 标签时，`count` 计数值增加但未重新检查是否超过 `limit` 限制。这导致接收循环无法正确在预算边界处停止，可能引发接收处理超出预期负载，进而影响系统性能或导致处理延迟。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `stmmac_rx_zc` 函数中，原有的 `if (count >= limit)` 检查位于 `read_again` 标签之前。当程序处理到 `status & rx_not_ls`（非最后帧段）的情况时，代码会执行 `count++` 随后通过 `goto read_again` 跳转。由于跳转点在限制检查之前，导致增加后的 `count` 值未经过边界检查就直接进入了下一轮处理流程。这使得 `count` 可能突破 `limit` 限制，导致 Rx budget 限制失效。该问题与此前在 `stmmac_rx()` 函数中修复的问题一致。
+
+#解决方案
+调整 `read_again` 标签与 `if (count >= limit)` 检查代码块的先后顺序。将 `read_again` 标签移动到 `if (count >= limit)` 检查之前，确保每次通过 `goto read_again` 跳转回来时，都会首先执行 `count` 的边界检查，从而保证循环在达到 budget 限制时能正确退出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/045ee61c694f028ad735159ac5d8d62731f0bb42

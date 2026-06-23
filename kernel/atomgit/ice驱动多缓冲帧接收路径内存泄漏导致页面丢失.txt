@@ -1,0 +1,20 @@
+#标题
+ice驱动多缓冲帧接收路径内存泄漏导致页面丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ice 驱动的网卡处理大帧（如 9K MTU jumbo frames）或多缓冲帧时，当硬件下发的描述符 size 为 0 时，会导致接收环形缓冲区中的页面发生泄漏。泄漏的页面既不会被重用也不会被释放，导致内存随着流量持续增长。此外，由于 `next_to_alloc` 指针未正确更新，后续的 `ice_reuse_rx_page` 函数可能会错误地覆盖尚未处理的缓冲区页面，导致数据丢失或系统不稳定。单缓冲帧不受此影响。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ice_put_rx_mbuf()` 函数处理多缓冲帧的逻辑中，原先的实现仅根据缓存的片段数量进行迭代处理。当硬件下发了 size 为 0 的描述符时，该描述符在 `ice_add_xdp_frag` 中被跳过，未计入片段数。导致 `ice_put_rx_mbuf()` 在迭代时遗漏了对该缓冲区的处理，未调用 `ice_put_rx_buf()`。这导致该页面的引用计数管理缺失，既无法重用也无法释放，同时也未推进 `next_to_alloc` 指针，破坏了页面回收逻辑。
+
+#解决方案
+修改 `ice_put_rx_mbuf()` 和 `ice_get_pgcnts()` 的迭代逻辑，不再依赖缓存的片段计数，而是改为从 `first_desc` 迭代直到 `next_to_clean`（即当前帧结束后的位置），确保覆盖帧内的所有缓冲区。同时，调整 `ice_clean_rx_irq()` 中 `ntc`（next_to_clean）的递增时机，确保在调用上述函数前 `ntc` 已指向正确的位置。此外，移除了 `rx_ring` 结构体中不再需要的 `nr_frags` 字段，并优化了 `pagecnt_bias` 的调整逻辑以处理 XDP 程序调整尾部的情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f2038640dc6e480f8ca1e2966a82201264fc75be

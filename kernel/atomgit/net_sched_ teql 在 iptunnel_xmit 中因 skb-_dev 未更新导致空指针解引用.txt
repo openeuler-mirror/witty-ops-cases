@@ -1,0 +1,32 @@
+#标题
+net/sched: teql 在 iptunnel_xmit 中因 skb->dev 未更新导致空指针解引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当使用 gretap 隧道作为 TEQL slave 设备时，发送数据包触发内核崩溃。系统无法处理页错误，导致 Oops，RIP 指向 `iptunnel_xmit` 函数。
+
+#主要错误日志
+BUG: unable to handle page fault for address: ffff8880e6659018
+#PF: supervisor write access in kernel mode
+#PF: error_code(0x0002) - not-present page
+Oops: Oops: 0002 [#1] SMP KASAN PTI
+RIP: 0010:iptunnel_xmit (./include/net/ip_tunnels.h:664 net/ipv4/ip_tunnel_core.c:89)
+Call Trace:
+ <TASK>
+ ip_tunnel_xmit (net/ipv4/ip_tunnel.c:847)
+ __gre_xmit (net/ipv4/ip_gre.c:478)
+ gre_tap_xmit (net/ipv4/ip_gre.c:779)
+ teql_master_xmit (net/sched/sch_teql.c:319)
+
+#问题根因
+`teql_master_xmit()` 在调用 `netdev_start_xmit(skb, slave)` 通过 slave 设备发包前，未将 `skb->dev` 更新为 slave 设备。
+当 gretap 隧道作为 TEQL slave 时，发送路径进入 `iptunnel_xmit()`，该函数获取 `dev = skb->dev`（此时仍指向 teql0 master 设备）。随后调用 `iptunnel_xmit_stats(dev, pkt_len)` 执行 `get_cpu_ptr(dev->tstats)`。
+由于 `teql_master_setup()` 未设置 `dev->pcpu_stat_type` 为 `NETDEV_PCPU_STAT_TSTATS`，内核未为 teql0 设备分配 tstats，导致 `dev->tstats` 为 NULL。`get_cpu_ptr(NULL)` 计算地址引发页错误。
+
+#解决方案
+在 `teql_master_xmit()` 函数中，于调用 `netdev_start_xmit()` 之前，插入 `skb->dev = slave;` 语句。此举确保隧道发送函数看到正确的 slave 设备（已正确分配 tstats），而非未分配统计信息的 teql0 master 设备。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/da81f6d0cd51ba0fadd902aa6fb0f19ab495d8f2

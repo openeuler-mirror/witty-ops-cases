@@ -1,0 +1,22 @@
+#标题
+drm/mediatek: 使用错误的 drm 私有数据绑定 mediatek-drm 导致显示路径错乱
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mt8195 多 mmsys 支持场景下，驱动初始化过程中 `all_drm_priv` 数组未按显示路径顺序正确赋值，导致 `all_drm_priv[CRTC_MAIN]`、`all_drm_priv[CRTC_EXT]` 等数组元素存储了错误的 drm 私有数据。这会导致后续 kms 初始化时，各 CRTC 绑定了错误的配置路径，引发显示功能异常或初始化失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mtk_drm_get_all_drm_priv()` 函数中，原逻辑遍历设备节点时，直接按遍历顺序（而非显示路径类型）将 `drm_priv` 赋值给 `all_drm_priv[cnt]`。这忽略了 `mtk_drm_kms_init()` 中要求的 `all_drm_priv` 数组必须按 `CRTC_MAIN`、`CRTC_EXT`、`CRTC_THIRD` 顺序存储对应路径数据的约束。因缺少对 `main_len`、`ext_len`、`third_len` 的长度检查与路径判断，导致数据存储位置错乱。
+
+#解决方案
+在 `mtk_drm_get_all_drm_priv()` 函数中增加路径类型判断逻辑：
+1. 在遍历设备节点获取 `temp_drm_priv` 后，检查其 `data->main_len`、`ext_len` 或 `third_len` 是否有效。
+2. 根据检查结果，将 `temp_drm_priv` 分别赋值给 `all_drm_priv[CRTC_MAIN]`、`all_drm_priv[CRTC_EXT]` 或 `all_drm_priv[CRTC_THIRD]`，确保数组元素按显示路径顺序正确存储对应的私有数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3d18290b6ad582bb7509a7ee51440b6a457066dd

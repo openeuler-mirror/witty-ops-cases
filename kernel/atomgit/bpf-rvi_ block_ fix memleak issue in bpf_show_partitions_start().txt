@@ -1,0 +1,20 @@
+#标题
+bpf-rvi: block: fix memleak issue in bpf_show_partitions_start()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行涉及 BPF 分区迭代（bpf_show_partitions）的操作时，内核发生内存泄漏。具体表现为在 `bpf_show_partitions_start` 函数执行过程中分配的内存未在操作结束时被释放，导致内存资源持续占用。
+
+#主要错误日志
+未知
+
+#问题根因
+`bpf_partitions_op` 结构体的 `.stop` 回调函数原本指向 `bpf_disk_seqf_stop`，该函数未对 `bpf_show_partitions_start` 中分配并存储在 `xarray`（`priv->dev_list`）中的 `block_device` 条目进行清理。导致每次迭代结束后，`xarray` 中的条目及其对应的内存未被释放，从而引发内存泄漏。
+
+#解决方案
+实现专用的 `bpf_show_partitions_stop` 函数替换原有的 `bpf_disk_seqf_stop`。新函数在调用原有停止逻辑 `bpf_disk_seqf_stop` 的基础上，增加了对 `priv->dev_list` 的遍历逻辑，依次从 `xarray` 中擦除条目并调用 `kfree` 释放内存，确保资源被正确回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1839cc18da218dd558893d5f27f98ca5b16182de

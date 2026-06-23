@@ -1,0 +1,25 @@
+#标题
+[编译] arm32架构下开启CGROUP_IFS导致内核链接失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 32 位 ARM 架构上编译开启 CGROUP_IFS 功能的内核时，链接阶段失败，无法生成内核映像。
+
+#主要错误日志
+arm-linux-gnueabi-ld: kernel/cgroup/ifs.o: in function `tdesc_print':
+ifs.c:(.text.unlikely+0xa8): undefined reference to `__aeabi_uldivmod'
+arm-linux-gnueabi-ld: ifs.c:(.text.unlikely+0xc4): undefined reference to `__aeabi_uldivmod'
+arm-linux-gnueabi-ld: ifs.c:(.text.unlikely+0x130): undefined reference to `__aeabi_uldivmod'
+arm-linux-gnueabi-ld: ifs.c:(.text.unlikely+0x14c): undefined reference to `__aeabi_uldivmod'
+arm-linux-gnueabi-ld: ifs.c:(.text.unlikely+0x190): undefined reference to `__aeabi_uldivmod'
+
+#问题根因
+在 `tdesc_print()` 和 `tdesc_init()` 函数中使用了 64 位除法操作。32 位 ARM 架构缺乏原生的 64 位除法指令支持，需依赖编译器提供的辅助函数（如 `__aeabi_uldivmod`）。在当前的内核编译配置环境下，这些辅助函数不可用或未正确链接，导致构建失败。
+
+#解决方案
+在 Kconfig 配置文件中为 CGROUP_IFS 选项增加架构依赖限制，使其仅在 x86 和 ARM64 架构下可选与编译，从而避免在不支持的 arm32 架构上触发构建错误。具体修改为：`depends on X86 || ARM64`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f31e49383546b5de3d4e2761cc11a540e6c731a2

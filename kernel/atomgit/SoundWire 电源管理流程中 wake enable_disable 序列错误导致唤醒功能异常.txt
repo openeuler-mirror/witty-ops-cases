@@ -1,0 +1,26 @@
+#标题
+SoundWire 电源管理流程中 wake enable/disable 序列错误导致唤醒功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AMD 平台上，SoundWire 控制器在处理电源管理流程时行为异常：
+1. 在运行时挂起场景下，系统未能正确启用 SoundWire 唤醒功能，可能导致设备无法从低功耗状态唤醒。
+2. 在系统级挂起/关机场景下，未能正确禁用 SoundWire 唤醒功能，违背硬件设计流程，可能影响电源状态切换的稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序未按照硬件设计流程正确管理唤醒状态。具体原因为：
+在 `amd_suspend`（系统级挂起）和 `amd_suspend_runtime`（运行时挂起）函数处理 `AMD_SDW_POWER_OFF_MODE` 模式的分支中，缺失了对 `amd_sdw_wake_enable` 的调用。
+正确的逻辑应为：运行时挂起时需启用唤醒，而系统级挂起时需禁用唤醒，但原代码在 power-off 模式下漏掉了这一关键步骤。
+
+#解决方案
+修改 `drivers/soundwire/amd_manager.c` 文件，补充缺失的唤醒控制逻辑：
+1. 在 `amd_suspend` 函数的 `AMD_SDW_POWER_OFF_MODE` 分支中，添加 `amd_sdw_wake_enable(amd_manager, false)`，确保系统级挂起时禁用唤醒。
+2. 在 `amd_suspend_runtime` 函数的 `AMD_SDW_POWER_OFF_MODE` 分支中，添加 `amd_sdw_wake_enable(amd_manager, true)`，确保运行时挂起时启用唤醒。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5878940af2e883748f62cbf214dd90fa9d116812

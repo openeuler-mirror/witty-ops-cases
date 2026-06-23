@@ -1,0 +1,22 @@
+#标题
+ext4 sysfs notify 与 kobject_del 竞争引发的使用后释放风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ext4 文件系统发生错误并触发 sysfs 通知时，若并发执行文件系统卸载（unmount）操作，可能导致内核崩溃或内存非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+`ext4_notify_error_sysfs` 函数与 `ext4_unregister_sysfs` 函数之间存在竞争条件。`ext4_notify_error_sysfs` 调用 `sysfs_notify` 时仅依赖 RCU 保护，未持有锁，而 `ext4_unregister_sysfs` 会调用 `kobject_del` 移除 kobject。这导致在通知过程中，kobject 可能已被并发删除，从而引发对已删除对象的访问。
+
+#解决方案
+在 ext4_sb_info 结构体中新增互斥锁 `s_error_notify_mutex`，用于保护 sysfs 通知操作与 kobject 删除操作的同步。具体修改包括：
+1. 在 `ext4_notify_error_sysfs` 中加锁，并在调用 `sysfs_notify` 前检查 `s_kobj.state_in_sysfs` 状态，确保对象存在。
+2. 在 `ext4_register_sysfs` 和 `ext4_unregister_sysfs` 中同样使用该锁保护 kobject 的初始化与删除过程，防止竞争。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0874ac5cb99dfa0d47278d821fda4c661f726363

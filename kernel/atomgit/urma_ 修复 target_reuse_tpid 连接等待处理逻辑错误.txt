@@ -1,0 +1,22 @@
+#标题
+urma: 修复 target_reuse_tpid 连接等待处理逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 URMA 模块进行连接创建时，`target_reuse_tpid` 函数在正常等待路径下错误地直接返回失败（CREATE_CONN_FAIL），导致原本应当成功的连接建立流程异常终止，业务无法正常建立连接。同时，在 `ubcore_modify_tpid` 状态转换检查中，当状态已经为 RTS 时错误返回 0，可能导致上层调用者无法正确感知状态异常。
+
+#主要错误日志
+ubcore_log_err("Invalid state transition: %d -> RTS.\n", old_state);
+
+#问题根因
+1. **逻辑分支错误**：在 `target_reuse_tpid` 函数中，当条件不满足时，代码逻辑错误地执行了 `mutex_unlock` 和 `return CREATE_CONN_FAIL`，这导致在正常等待路径下直接退出了函数，而不是继续执行下一次循环等待。这是由于 Commit 59333a4f1807 引入的代码缩进或逻辑结构调整不当导致。
+2. **返回值处理不当**：在 `ubcore_modify_tpid` 中，状态转换检查逻辑存在缺陷，当状态已经是 RTS（UBCORE_TPID_STATE_RTS）时返回 0，这在某些错误处理路径下掩盖了错误状态，应当根据具体状态返回相应的错误码（-EINVAL）。
+
+#解决方案
+1. **修正循环逻辑**：修改 `target_reuse_tpid` 函数，移除正常等待路径下的直接返回语句，确保在等待条件下能够继续进行循环迭代；同时在条件判断中增加 `else` 分支，明确仅在特定失败条件下返回 `CREATE_CONN_FAIL`。
+2. **修正返回值**：修改 `ubcore_modify_tpid` 函数的返回逻辑，当检测到无效状态转换时，判断原状态是否为 RTS，若是则返回 0，否则返回 -EINVAL，确保状态机转换的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d4ae6f88e79aa31087cc0e0fdf3928810691371

@@ -1,0 +1,23 @@
+#标题
+interconnect: debugfs 接口在路径为空时错误返回成功状态
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 interconnect 子系统的 debugfs 接口设置带宽请求时，若未配置路径（cur_path 为 NULL），操作本应失败，但系统却错误地返回了成功状态（返回值为 0）。这导致用户误以为带宽请求已成功提交，实际上并未执行任何操作，造成了静默失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `icc_commit_set()` 函数中，代码使用 `IS_ERR_OR_NULL(cur_path)` 检查指针有效性。虽然该宏能正确识别 NULL 指针，但在处理分支中调用的 `PTR_ERR(NULL)` 返回值为 0。这导致函数在 cur_path 为 NULL 时错误地返回了 0（表示成功），而不是预期的错误码。
+
+#解决方案
+修改 `drivers/interconnect/debugfs-client.c` 中的 `icc_commit_set()` 函数逻辑，将 `IS_ERR_OR_NULL` 的判断拆分：
+1. 优先显式检查 `!cur_path`，若成立则直接返回 `-EINVAL`，确保空指针场景报错明确。
+2. 随后再检查 `IS_ERR(cur_path)`，处理其他错误指针场景。
+通过此修改，防止在路径无效时返回成功状态，确保无效操作序列立即被报告为错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b24984bb6943508527634710bf20cd6e11b48aef

@@ -1,0 +1,30 @@
+#标题
+PowerPC32 架构 Clang 编译内核时内联汇编报错 invalid operand for instruction
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 Clang 16.0.6 编译 PowerPC32 (PPC32) 内核时，编译过程报错终止，提示内联汇编指令操作数无效（invalid operand for instruction）。具体触发路径为编译 `kernel/rseq.c` 时调用 `unsafe_get_user` 宏，展开后的汇编代码将寄存器编号错误地解析为算术表达式。
+
+#主要错误日志
+```
+include/linux/uaccess.h:608:2: note: expanded from macro 'unsafe_get_user'
+arch/powerpc/include/asm/uaccess.h:258:4: note: expanded from macro '__get_user_asm2'
+                  "       li %1+1,0\n"                    \
+                   ^
+<inline asm>:7:5: note: instantiated into assembly here
+          li 31+1,0
+             ^
+1 error generated.
+```
+
+#问题根因
+在 PPC32 架构下处理 64 位变量时，通常使用寄存器对（如 r3/r4）来存储，其中小编号寄存器存放高位，大编号寄存器存放低位。原代码在 `.fixup` 段的内联汇编中使用了 `%1+1` 来表示寄存器对中的第二个寄存器。
+GCC 编译器能正确处理 `%1+1` 这种写法并将其解析为对应的寄存器编号，但 Clang 编译器在处理 `%1+1` 时，会将其视为字符串拼接或算术运算而非寄存器索引表达式，导致汇编代码展开后变成了非法指令（例如 `li 31+1,0`），或者因寄存器分配逻辑不同导致生成了不存在的寄存器引用。
+
+#解决方案
+修改 `arch/powerpc/include/asm/uaccess.h` 中的 `__get_user_asm2` 宏定义，将内联汇编中表示寄存器对第二部分的写法从 `%1+1` 更改为标准内联汇编修饰符 `%L1`。`%L1` 是 GCC 和 Clang 通用且明确的语法，用于引用多寄存器操作数中的第二个寄存器，从而兼容两种编译器的构建。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e934e5ce8fb9eca7861dbf87e5ed765671031b00

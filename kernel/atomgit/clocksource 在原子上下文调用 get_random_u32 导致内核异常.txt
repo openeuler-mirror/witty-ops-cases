@@ -1,0 +1,25 @@
+#标题
+clocksource 在原子上下文调用 get_random_u32 导致内核异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 clocksource 进行 percpu 同步校验时，内核可能在原子上下文中错误地调用 `get_random_u32()` 函数，导致内核抛出警告或触发原子上下文睡眠错误。
+
+#主要错误日志
+推断日志：
+BUG: assuming atomic context at mm/...
+或
+BUG: sleeping function called from invalid context
+
+#问题根因
+在 `clocksource_verify_percpu` 函数中，代码使用 `preempt_disable()` 禁用了抢占。此时上下文处于原子状态。随后调用 `clocksource_verify_choose_cpus()` 函数选择校验 CPU，该函数内部会调用 `get_random_u32()` 来随机选择 CPU。在原子上下文中调用可能睡眠或调度的随机数生成函数，导致了原子上下文违规。
+
+#解决方案
+1. 将 `preempt_disable()` 替换为 `migrate_disable()`。这使得当前任务不会被迁移到其他 CPU，但允许抢占，从而不再处于强制原子上下文，避免在调用 `get_random_u32()` 时触发原子上下文错误。
+2. 调整代码逻辑，在调用 `clocksource_verify_choose_cpus()` 之前禁用迁移而非抢占，并在后续真正需要禁用抢占的循环检测阶段再使用 `preempt_disable()`。
+3. 同时将同步检查的提示信息打印级别从 `pr_warn` 调整为 `pr_info`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ac3aec769e5a1cb8e58dd4660ff10f19f0d5c906

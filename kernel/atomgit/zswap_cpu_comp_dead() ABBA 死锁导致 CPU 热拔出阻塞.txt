@@ -1,0 +1,20 @@
+#标题
+zswap_cpu_comp_dead() ABBA 死锁导致 CPU 热拔出阻塞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 CPU 热拔出操作时，系统发生死锁，导致相关进程或内核线程处于不可中断的等待状态（D状态）。该问题在内存回收触发 zswap 操作与 CPU offline 并发执行时容易复现。
+
+#主要错误日志
+未知
+
+#问题根因
+`zswap_cpu_comp_dead()` 函数在持有 per-CPU 的 `acomp_ctx->mutex` 锁的情况下调用 `crypto_free_acomp()`，而后者内部会持有 `scomp_lock`。与此同时，另一个执行路径 `crypto_alloc_acomp_node()` 会先持有 `scomp_lock`，然后在内存分配时可能触发内存回收，回收流程试图获取 `acomp_ctx->mutex`。这两个锁的获取顺序相反，构成了 ABBA 死锁。
+
+#解决方案
+将 `crypto_free_acomp()`、`acomp_request_free()` 以及 `kfree()` 等资源释放操作移至 `mutex_unlock()` 之后执行。在持有锁期间仅将相关指针设置为 NULL，从而避免在持有 per-CPU 互斥锁时深入其他子系统可能持有的锁，消除了死锁依赖链。同时优化了 `acomp_ctx` 的空值检查顺序，使其在获取互斥锁引用之前进行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5d6fa454525cea33d196cf2863e6377f2a0fa130

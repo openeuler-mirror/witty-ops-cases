@@ -1,0 +1,21 @@
+#标题
+cifs: 多通道会话设置期间未正确处理 credit 配置导致功能受限
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 CIFS 多通道场景下，会话建立成功后立即进行的 I/O 操作（如 open 操作）可能出现异常。具体表现为：由于在会话设置阶段跳过了 `change_conf` 调用，导致新建立的辅助通道无法为回声和 oplock 预留足够的 credits。这使得后续的 oplock 请求可能被禁用，影响文件锁和缓存功能的正常使用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 SMB2 协议处理中，`smb2_add_credits` 函数在 `in_flight` 减为 0 时会调用 `change_conf` 来重新平衡 credits 配置。但在原有逻辑中，对于协商操作（`CIFS_NEG_OP`）和会话设置操作（`CIFS_SESS_OP`），代码直接跳过了 `change_conf` 的调用。
+在多通道场景下，会话建立后的第一个请求可能是挂载点上的 I/O 操作。如果此时未调用 `change_conf`，且总 credits 不足（未预留 echoes 和 oplocks 的 credits），会导致后续的 oplock 功能被意外禁用，从而影响 I/O 性能与正确性。
+
+#解决方案
+修改 `fs/smb/client/smb2ops.c` 中的 `smb2_add_credits` 函数逻辑，在会话设置操作（`CIFS_SESS_OP`）结束且 `in_flight` 为 0 时，增加判断条件：如果当前总 credits 数量大于 2（即足以预留 echoes 和 oplocks），则强制调用 `change_conf` 进行配置重平衡。这确保了在会话建立的最后阶段（通常是最后一个 SESSION_SETUP 响应），能够正确预留 credits，防止禁用 oplock 请求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2b21e40c541b21aa41fec49baca9103783274f8c

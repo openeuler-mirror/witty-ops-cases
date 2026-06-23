@@ -1,0 +1,20 @@
+#标题
+efi/libstub: 错误处理路径中释放指针参数导致内存管理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 EFI stub 处理内核命令行失败时，错误处理代码尝试释放 `cmdline_ptr` 指针。由于 `cmdline_ptr` 是一个输出参数，通常指向调用者的栈内存而非通过 `free_pool` 分配的堆内存，这会导致释放无效指针，可能引发内存损坏或不可预测的系统行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `efi_handle_cmdline` 函数中，`cmdline_ptr` 被定义为 out 参数（输出参数），它指向调用者的栈，而不是由该函数分配的内存池指针。当函数执行失败进入 `fail_free_cmdline` 标签时，代码错误地调用了 `efi_bs_call(free_pool, cmdline_ptr)`。正确的逻辑应该是释放实际分配的内存池对象 `cmdline`，而非输出参数 `cmdline_ptr`。
+
+#解决方案
+修改 `efi_handle_cmdline` 函数中 `fail_free_cmdline` 标签下的代码，将 `efi_bs_call(free_pool, cmdline_ptr)` 更改为 `efi_bs_call(free_pool, cmdline)`，确保释放的是正确的内存池指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/728a639d63acf30805d70fbd19b6a1f4b31507f8

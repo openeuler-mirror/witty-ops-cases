@@ -1,0 +1,20 @@
+#标题
+mm/readahead: 异步预读场景下大页映射功能失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 XFS 文件系统上使用 mmap 进行大文件（如 1GB）顺序读取并设置 MADV_HUGEPAGE 时，系统未能充分映射大页。当 `/sys/block/*/queue/read_ahead_kb` 设置为较小值（如 128KB）时，仅有极少量内存表现为大页映射，导致大页支持功能在预读路径下无法正常工作，性能未达预期。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在异步预读逻辑中计算下一次预读大小时，未充分考虑 MADV_HUGEPAGE 场景。代码逻辑强制将预读窗口大小重置为 `get_next_ra_size` 的返回值，忽略了当前已分配的 `ra->size` 可能已经大于计算出的窗口大小的情况。由于预读窗口被强行缩小，导致无法满足大页映射所需的连续物理内存条件，使得大页映射依赖于 `read_ahead_kb` 的具体配置值，在配置较小时功能失效。
+
+#解决方案
+修改 `mm/readahead.c` 中的 `ondemand_readahead` 函数，在更新 `ra->size` 时，取当前值与计算值的最大值（`max(ra->size, get_next_ra_size(...))`）。这确保了在 MADV_HUGEPAGE 等场景下，预读窗口大小不会意外回退变小，从而保证大页映射机制的正常运作，使其不再依赖于 `read_ahead_kb` 的具体设置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eeba50f31f57c2ece28de7ffabd5929f7cd9566d

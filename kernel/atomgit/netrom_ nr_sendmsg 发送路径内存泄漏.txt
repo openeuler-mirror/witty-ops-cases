@@ -1,0 +1,28 @@
+#标题
+netrom: nr_sendmsg 发送路径内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 nr_sendmsg 发送数据时，若内部 nr_output 函数中的 sock_alloc_send_skb 分配失败，会导致之前分配的 skb 对象未被释放，从而引发内核内存泄漏。该问题由 syzbot 检测并上报。
+
+#主要错误日志
+BUG: memory leak
+unreferenced object 0xffff888129f35500 (size 240):
+  comm "syz.0.17", pid 6119, jiffies 4294944652
+  backtrace (crc 1456a3e4):
+    kmem_cache_alloc_node_noprof+0x36f/0x5e0 mm/slub.c:5340
+    __alloc_skb+0x203/0x240 net/core/skbuff.c:660
+    alloc_skb_with_frags+0x69/0x3f0 net/core/skbuff.c:6671
+    sock_alloc_send_pskb+0x379/0x3e0 net/core/sock.c:2965
+    nr_sendmsg+0x287/0x450 net/netrom/af_netrom.c:1105
+
+#问题根因
+在 `nr_output` 函数中，当 `sock_alloc_send_skb()` 返回 NULL 时，函数直接 return，但未对传入参数 `skb`（在 `nr_sendmsg` 中分配）进行释放。这导致了该 skb 内存块未被回收，造成内存泄漏。
+
+#解决方案
+在 `net/netrom/nr_out.c` 的 `nr_output` 函数中，当 `sock_alloc_send_skb` 分配失败时，在返回前增加调用 `kfree_skb(skb)` 来释放传入的 skb 对象，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f2000800add63d2fcd360b402f374c5cd24a75b9

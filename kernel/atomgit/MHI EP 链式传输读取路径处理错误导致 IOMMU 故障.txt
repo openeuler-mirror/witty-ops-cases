@@ -1,0 +1,20 @@
+#标题
+MHI EP 链式传输读取路径处理错误导致 IOMMU 故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 Host-to-Device 的 MHI 链式传输时，系统出现 IOMMU faults（IOMMU 故障），并可能处理已过期的 TRE（Transfer Ring Elements，传输环元素）。具体表现为设备尝试访问未映射的主机内存，导致内存访问错误。
+
+#主要错误日志
+未知
+
+#问题根因
+`mhi_ep_read_channel` 函数错误地假设链式事务中的每个数据包都存在传输结束位。这导致函数在 EOT 尚未到达时，就将 `mhi_chan->rd_offset` 推进到了 `wr_offset` 之后。这种超前读取导致设备访问了未映射的主机内存，从而引发 IOMMU 故障并处理了无效的陈旧 TRE。
+
+#解决方案
+修改 `mhi_ep_read_channel` 函数中的循环条件，确保仅在 MHI 队列不为空时进行处理，从而保证函数仅处理当前写指针之前的有效 TRE，防止过早读取。同时，由于每次都会分配新的缓存缓冲区，`buf_left` 变量和 `write_offset` 变量变得多余，将其从循环条件和逻辑中移除，以确保完整读取传输环且避免提前退出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/71799b28147a44be5efee38d3b62a141ddd9c517

@@ -1,0 +1,26 @@
+#标题
+crypto: hisilicon/sec2 - 非backlog模式下资源泄漏问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非backlog模式下，SEC2驱动处理请求时存在资源泄漏问题。具体表现为：
+1. 设备异常时，发送函数返回 EAGAIN 并打印错误日志。
+2. 设备队列已满时，发送函数返回 ENOSPC。
+3. 任务正常发送时返回 EINPROGRESS。
+在异常分支中，驱动未能正确释放相关资源，且原有逻辑会错误地切换到软件计算模式，导致调用者无法感知硬件处理的实际失败状态。
+
+#主要错误日志
+send sec request failed!
+
+#问题根因
+在非backlog模式下，当请求发送失败（如返回 EAGAIN 或 ENOSPC）时，代码逻辑跳转到错误处理标签 `err_send_req`，但该路径未调用 `sec_request_uninit` 释放资源，导致资源泄漏。此外，错误处理逻辑中强制切换到软件计算（soft crypto），掩盖了硬件发送失败的真实情况，导致上层调用者无法正确处理实际故障。
+
+#解决方案
+1. 移除发送失败后的软件计算回退逻辑（`sec_aead_soft_crypto` 和 `sec_skcipher_soft_crypto`），让调用者直接处理返回值。
+2. 调整错误处理流程，仅在返回值非 EINPROGRESS、EBUSY 且非 ENOSPC 时打印错误日志。
+3. 在底层发送函数 `sec_alg_send_message_retry` 中，将超时重试后的 -EBUSY 转换为 -ENOSPC 返回，以区分设备繁忙与队列满的状态，确保异常流程可控。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f1411353c5246607af601f1654f720b4654f7228

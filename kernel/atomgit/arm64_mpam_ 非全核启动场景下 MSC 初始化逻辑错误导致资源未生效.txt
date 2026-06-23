@@ -1,0 +1,25 @@
+#标题
+arm64/mpam: 非全核启动场景下 MSC 初始化逻辑错误导致资源未生效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非全核启动场景下，系统错误地跳过了本应进行初始化的 MSC（Memory System Component）硬件资源。这导致 MPAM（Memory Partitioning and Monitoring）功能部分失效，对应离线 CPU 的 L2 MSC 本应被跳过，但该逻辑误伤了需要初始化的 MSC，导致 `mpam_enable()` 未正确等待或初始化所有可用设备。
+
+#主要错误日志
+未知
+
+#问题根因
+在非全核启动场景下，代码试图通过 `skipped` 布尔标记来跳过离线 CPU 对应的 L2 MSC。然而，该标记一旦被设置，会导致 `mpam_enable()` 错误地忽略那些实际上需要进行初始化的 MSC 设备。
+具体原因为在 `mpam_discovery_cpu_online` 函数中，当 CPU 不在 MSC 的 `accessibility` 掩码中时，代码设置 `msc->skipped = true` 并将 `msc->probed` 置为 true。后续 `mpam_enable` 及特性初始化流程仅依赖 `skipped` 标记进行判断，错误地排除了有效 MSC，导致初始化流程异常。
+
+#解决方案
+移除 `skipped` 标记字段，改为直接使用 `probed` 状态结合 CPU 掩码逻辑进行判断：
+1. 删除 `struct mpam_msc` 结构体中的 `skipped` 成员变量。
+2. 在 `mpam_discovery_cpu_online` 中，仅检查 CPU 可访问性，不再设置 `skipped` 标记。
+3. 在 `mpam_enable()` 中，增加逻辑检查：如果 MSC 未被探测（`!msc->probed`），则计算其可访问掩码与在线 CPU 掩码的交集；若交集非空，则判定该设备需要初始化，设置 `all_devices_probed = false`。
+4. 将特性初始化流程中的 `!ris->msc->skipped` 判断逻辑修正为 `ris->msc->probed`，确保已探测设备正确初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2b7f2328bfbb02eeec51e1d7523b45ff7fe36a0d

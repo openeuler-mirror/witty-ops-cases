@@ -1,0 +1,20 @@
+#标题
+wcd9335 编解码器驱动存在资源泄漏与 regulator 引用计数失衡问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 wcd9335 编解码器驱动初始化（probe）失败或驱动解绑（unbind）时，发生内存泄漏与调节器使能计数失衡。由于驱动未在错误处理路径或移除回调中正确释放资源，导致系统无法回收相关内存，且 regulator 的 enable 计数无法归零，可能影响相关电源轨的正常关闭或后续使用。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `wcd9335_parse_dt()` 和 `wcd9335_power_on_reset()` 函数中获取并启用了所有的 regulator supplies，但在 probe 失败的错误处理路径以及 unbind 流程中（因为缺少 remove 回调），没有执行相应的清理和释放操作。
+
+#解决方案
+将代码中的 regulator 资源管理方式转换为 `devm_regulator_bulk_get_enable()`。该函数利用设备资源管理机制自动处理资源的获取与使能，并在驱动解绑或 probe 失败时自动释放资源，从而修复了泄漏问题，同时也简化了代码逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/39b16602e9b8cffe9908cc5e7119990e0b220a89

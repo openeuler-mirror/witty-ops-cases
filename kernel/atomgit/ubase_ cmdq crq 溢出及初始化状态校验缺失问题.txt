@@ -1,0 +1,34 @@
+#标题
+ubase: cmdq crq 溢出及初始化状态校验缺失问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在处理 CRQ（Command Request Queue）消息过程中，如果遇到无效消息（invalid crq message），处理流程直接跳过更新硬件寄存器头指针（CRQ_HEAD_REG），导致硬件与软件的队列指针不一致，进而引发 cmdq crq 溢出。
+2. 在设备初始化或复位期间，若未对通道资源进行有效性检查，可能导致访问未初始化的资源，引发异常。
+3. 在非 UBL 支持的场景下，IP 地址查询和自测试等功能可能执行失败或报错。
+4. 混杂模式设置可能因结构体未清零而包含脏数据。
+
+#主要错误日志
+- "drop invalid crq message, opcode = 0x%x, bd_num = %u, flag = 0x%x."
+- "failed to self test, due to dev initing or resetting."
+- "failed to alloc netdev because of CONFIG_UB_UNIC_UBL is not enabled."
+
+#问题根因
+1. **CRQ 溢出**：在 `ubase_cmd_crq_handler` 函数中，当检测到无效 CRQ 消息时，代码逻辑直接 `continue` 跳过后续处理，遗漏了更新硬件 CRQ 头指针（`UBASE_CRQ_HEAD_REG`）的步骤。这导致硬件认为描述符未被处理，持续写入导致队列溢出。
+2. **空指针/初始化遗漏**：`unic_backup_stats` 和 `unic_self_test_is_unexecuted` 等函数在执行关键操作前，未检查 `unic_dev->channels.c` 是否已分配或初始化，在设备处于 resetting 或 initing 状态时触发了非法内存访问或错误逻辑。
+3. **功能支持检查缺失**：`unic_handle_notify_ip_event` 和 `unic_query_ip_addr` 未检查设备是否支持 UBL 功能，导致在不支持的设备上执行了不应该执行的逻辑。
+4. **脏数据问题**：`unic_fill_promisc_en` 函数未将 `promisc_en` 结构体初始化为零，导致保留字段可能包含随机值。
+
+#解决方案
+1. **修复 CRQ 溢出**：修改 `ubase_cmd_crq_handler` 函数，确保在处理无效消息分支（`continue`）和正常处理循环结束后，均调用 `ubase_write_dev` 更新 `UBASE_CRQ_HEAD_REG`，保证硬件指针与软件同步。
+2. **增加状态与资源检查**：
+   - 在 `unic_backup_stats` 中增加 `if (!unic_dev->channels.c) return -EEXIST;` 检查。
+   - 在 `unic_self_test_is_unexecuted` 的判断条件中增加 `|| !unic_dev->channels.c`。
+3. **增加功能支持检查**：
+   - 在 `unic_handle_notify_ip_event` 和 `unic_query_ip_addr` 入口处增加 `if (!unic_dev_ubl_supported(priv))` 检查，不支持的设备直接返回。
+4. **修复数据结构初始化**：在 `unic_fill_promisc_en` 函数开头添加 `memset(promisc_en, 0, sizeof(*promisc_en));`，确保结构体所有字段清零。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/90abdaf249bdc428742aab703c395e3f9629f79c

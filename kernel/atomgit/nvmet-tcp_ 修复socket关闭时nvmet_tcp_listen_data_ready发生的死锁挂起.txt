@@ -1,0 +1,23 @@
+#标题
+nvmet-tcp: 修复socket关闭时nvmet_tcp_listen_data_ready发生的死锁挂起
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 socket 处于 TCP_LISTEN 状态被关闭时，系统可能会发生死锁，导致进程挂起，无法正常销毁监听 socket。
+
+#主要错误日志
+未知
+
+#问题根因
+当 socket 在 TCP_LISTEN 状态下被关闭时，内核会运行回调函数来刷新所有未处理的数据包，该回调过程会持有 `sk_callback_lock` 锁，并调用 `nvmet_tcp_listen_data_ready()` 函数。
+而在 `nvmet_tcp_listen_data_ready()` 函数内部，代码逻辑未预先检查 socket 状态，直接尝试获取 `sk_callback_lock` 锁。
+由于外层回调已经持有该锁，导致发生自死锁，进而导致系统挂起。
+
+#解决方案
+在 `nvmet_tcp_listen_data_ready()` 函数中，将 `sk->sk_state` 的检查逻辑移到获取 `sk_callback_lock` 锁之前。
+具体修改为：在尝试获取锁之前，先判断 `sk->sk_state != TCP_LISTEN`，如果为真则直接返回，避免在非 LISTEN 状态下尝试获取已持有的锁，从而避免死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3f0d3fc2135b16ff0b29d713ac2c39374e860574

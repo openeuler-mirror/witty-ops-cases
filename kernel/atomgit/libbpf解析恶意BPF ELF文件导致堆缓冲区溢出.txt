@@ -1,0 +1,40 @@
+#标题
+libbpf解析恶意BPF ELF文件导致堆缓冲区溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当libbpf加载一个被恶意构造的BPF ELF文件时，会触发堆缓冲区溢出。攻击者可通过设置BPF程序符号（symbol）的section offset为一个极大的无符号数值，导致地址计算发生整型溢出，使得程序指针指向实际section数据之前的内存区域。
+观测到的现象包括：
+1. AddressSanitizer检测到堆缓冲区溢出错误。
+2. 进程可能在memcpy操作期间发生崩溃。
+
+#主要错误日志
+```
+==1232==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x7c7302fe0000 at pc 0x7fc3046e4b77 bp 0x7ffe64677cd0 sp 0x7ffe64677490
+READ of size 104 at 0x7c7302fe0000 thread T0
+    #0 0x7fc3046e4b76 in memcpy (/lib64/libasan.so.8+0xe4b76)
+    #1 0x00000040df3e in bpf_object__init_prog /src/libbpf/src/libbpf.c:856
+    ...
+0x7c7302fe0000 is located 64 bytes before 104-byte region [0x7c7302fe0040,0x7c7302fe00a8)
+```
+运行时警告日志（由修复补丁触发）：
+```
+sec '%s': program at offset %zu crosses section boundary
+```
+
+#问题根因
+在`bpf_object__add_programs`函数中，原有的边界检查逻辑`sec_off + prog_sz > sec_sz`仅检查了程序结束位置是否超出section边界，但未检测`sec_off + prog_sz`是否发生了无符号整型下溢/溢出。
+当BPF ELF文件被恶意篡改，将符号的偏移量（`sec_off`）设置为一个极大的数值（如 `0xffffffffffffffb8`）时，`sec_off + prog_sz`发生回绕，结果变成一个很小的值，从而绕过了边界检查。这导致后续`memcpy`操作读取了section数据之前的非法内存区域，引发堆缓冲区溢出。该检查逻辑此前被commit 6245947c1b3c移除，导致了此安全漏洞。
+
+#解决方案
+在`tools/lib/bpf/libbpf.c`文件的`bpf_object__add_programs`函数中增加整型溢出检测。
+修改前的检查：
+`if (sec_off + prog_sz > sec_sz)`
+修改后的检查：
+`if (sec_off + prog_sz > sec_sz || sec_off + prog_sz < sec_off)`
+新增的条件`sec_off + prog_sz < sec_off`用于检测加法运算是否发生了溢出（回绕），若发生溢出则判定程序越界，从而拒绝加载恶意的BPF ELF文件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3fd38f2ebff181bf97ab3eb2faefa9fa415157a2

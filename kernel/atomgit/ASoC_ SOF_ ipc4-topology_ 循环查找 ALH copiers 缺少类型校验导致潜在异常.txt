@@ -1,0 +1,28 @@
+#标题
+ASoC: SOF: ipc4-topology: 循环查找 ALH copiers 缺少类型校验导致潜在异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 Sound Open Firmware (SOF) 拓扑组件时，内核在遍历 widget 列表查找 ALH copiers 的过程中，未正确过滤非 DAI 类型的 widget 且未校验 DAI 类型。这可能导致内核访问非预期的内存区域或引发逻辑错误（如 device_count 计数错误、mapping 配置错误），进而影响音频数据通路或导致内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+代码在 `sof_ipc4_widget_setup_comp_dai` 和 `sof_ipc4_prepare_copier_module` 函数中遍历 `sdev->widget_list` 时，仅检查了 widget 的 stream name (`sname`)，忽略了以下关键检查：
+1. 未检查 widget 是否为 DAI 类型 (`WIDGET_IS_DAI`)。
+2. 未检查 DAI 的具体类型是否为 Intel ALH (`SOF_DAI_INTEL_ALH`)。
+此外，`dai` 结构体中缺少 `type` 字段的存储与初始化，导致循环内无法进行类型匹配校验。
+
+#解决方案
+1. 在 `struct snd_sof_dai` 结构体中新增 `type` 成员变量。
+2. 在拓扑解析阶段（`sof_dspless_widget_ready`）动态分配 `snd_sof_dai` 结构体，解析 DAI 类型 token 并存入 `sdai->type`，将其保存到 widget 的 private 数据中。
+3. 在 `sof_ipc4_widget_setup_comp_dai` 和 `sof_ipc4_prepare_copier_module` 的遍历循环中增加防护逻辑：
+   - 增加判定 `!WIDGET_IS_DAI(w->id)` 跳过非 DAI widget。
+   - 增加判定 `alh_dai->type != SOF_DAI_INTEL_ALH` 跳过非 ALH 类型的 DAI。
+4. 同步修正 `sof_widget_free_unlocked` 中的指针引用逻辑，防止空指针访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/80e04fb757413404d0523eb2235bb2525be183eb

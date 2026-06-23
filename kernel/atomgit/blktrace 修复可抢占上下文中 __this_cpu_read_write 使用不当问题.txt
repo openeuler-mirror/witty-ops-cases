@@ -1,0 +1,20 @@
+#标题
+blktrace 修复可抢占上下文中 __this_cpu_read/write 使用不当问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启内核抢占（PREEMPT）的场景下使用 blktrace 功能时，系统可能触发 "BUG: using __this_cpu_read/write() in preemptible context" 的警告或调用栈打印，表明内核在非原子上下文中错误使用了每CPU变量访问原语。
+
+#主要错误日志
+BUG: using __this_cpu_read/write() in preemptible context
+
+#问题根因
+在 `__blk_add_trace` 函数中，原有代码在调用 `trace_buffer_lock_reserve` 之前先调用了 `tracing_record_cmdline(current)`。`tracing_record_cmdline` 内部使用了 `__this_cpu_read/write` 类操作，这些操作要求当前进程不能被抢占。然而，在调用 `trace_buffer_lock_reserve` 获取 Ring Buffer 预留空间之前，当前 CPU 可能发生调度或抢占，导致代码在可抢占上下文中执行了禁止抢占的每 CPU 变量操作，从而引发上述 BUG。
+
+#解决方案
+调整代码执行顺序，将 `tracing_record_cmdline(current)` 的调用移动到 `trace_buffer_lock_reserve` 成功执行之后。由于 `trace_buffer_lock_reserve` 会持有相关锁或禁用抢占，确保了后续执行上下文的原子性，从而在调用 `tracing_record_cmdline` 时满足 `__this_cpu_read/write` 的上下文约束，避免了在可抢占上下文中错误调用的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/df98225827763dd206630b64580fff064331a1bf

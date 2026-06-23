@@ -1,0 +1,20 @@
+#标题
+scsi: stex: 驱动探测失败路径中 reboot_notifier 泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 stex_probe() 函数执行过程中，若注册 reboot_notifier 之后、后续初始化步骤（如 SCSI host 分配或硬件初始化）失败，驱动将直接返回错误并退出，导致此前注册的 reboot_notifier 未被注销。这会造成内核资源泄漏，若反复触发探测失败，可能积累大量无效的 notifier 节点。
+
+#主要错误日志
+未知
+
+#问题根因
+在 stex_probe() 函数入口处调用了 register_reboot_notifier()，但在后续初始化失败的错误处理路径（如 out_disable 标签处）中，缺少对应的 unregister_reboot_notifier() 调用。函数在遇到错误时直接返回，未清理已注册的通知链节点。
+
+#解决方案
+在 stex_probe() 的错误处理路径 out_disable 标签下，增加 unregister_reboot_notifier(&stex_notifier) 调用，确保在探测失败退出前正确注销已注册的 reboot notifier，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b98646c359630cc4a2318087b4999c49711b03d5

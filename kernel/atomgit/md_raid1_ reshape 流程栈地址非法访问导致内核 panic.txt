@@ -1,0 +1,20 @@
+#标题
+md/raid1: reshape 流程栈地址非法访问导致内核 panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 RAID1 reshape 操作后，进行 I/O 请求处理时，若内存池分配失败触发回收逻辑，内核访问无效的栈地址引发 panic。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `raid1_reshape` 函数中，结构体 `newpool` 分配在栈上，其内部成员 `wait.head` 初始化时指向了栈地址。当将 `newpool` 赋值给 `conf->r1bio_pool` 后，`conf->r1bio_pool.wait.head` 依然指向已经失效的栈地址。后续在 `raid1_read_request` 或 `raid1_write_request` 调用链中，若 `mempool_alloc` 失败并调用 `mempool_free` 尝试唤醒等待队列（`wake_up(&pool->wait)`）时，会访问该无效栈地址导致内核 panic。
+
+#解决方案
+在 `raid1_reshape` 函数中将 `newpool` 赋值给 `conf->r1bio_pool` 之后，立即调用 `init_waitqueue_head` 对 `conf->r1bio_pool.wait` 进行重新初始化，确保等待队列头指针指向有效的内核内存，而非失效的栈地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/762d2b24a7628c8070427804fe5601891164cd22

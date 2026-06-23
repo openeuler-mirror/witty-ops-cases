@@ -1,0 +1,21 @@
+#标题
+spi: s3c64xx: 控制器注销与资源释放顺序错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 s3c64xx SPI 驱动（执行 driver unbind 操作）时，由于控制器注销流程滞后，导致在底层资源（如 DMA 资源）已释放后，SPI 控制器仍处于活动或注册状态。这可能引发内核崩溃、Oops 或内存访问错误，因为后续的 SPI 通信或中断处理可能会访问已释放的资源。
+
+#主要错误日志
+未知
+
+#问题根因
+在驱动探测阶段使用了托管版本的注册函数 `devm_spi_register_controller`，该机制会在驱动卸载时自动执行注销，但其执行顺序是在驱动私有数据释放之后。这导致驱动移除时，DMA 等资源先被释放，而 SPI 控制器后注销，违反了资源依赖顺序。根本原因是引入托管注册的提交 `91800f0e9005` ("spi/s3c64xx: Use managed registration") 改变了注销顺序，破坏了正确的资源释放逻辑。
+
+#解决方案
+1. 在探测函数 `s3c64xx_spi_probe` 中，将托管注册函数 `devm_spi_register_controller` 替换为手动注册函数 `spi_register_controller`。
+2. 在移除函数 `s3c64xx_spi_remove` 中，显式添加 `spi_unregister_controller` 调用，并将其置于禁用中断和释放 DMA 资源之前。这确保了控制器先注销（不再处理新请求），然后再释放底层硬件资源，保证了注销与资源释放的正确顺序。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8cdb80d5dfe976e3a8eb88996aaa135f323a4210

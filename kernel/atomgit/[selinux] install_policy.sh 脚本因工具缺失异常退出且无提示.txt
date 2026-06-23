@@ -1,0 +1,27 @@
+#标题
+[selinux] install_policy.sh 脚本因工具缺失异常退出且无提示
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用了 `errexit`（`set -e`）的环境下执行 `scripts/selinux/install_policy.sh` 脚本时，若系统缺少 `setfiles`、`checkpolicy` 或 `selinuxenabled` 等必要工具，脚本会立即退出，但不会打印预期的 "Could not find ..." 等错误提示信息，导致用户无法直观获知缺失的具体工具或依赖包。
+
+#主要错误日志
+Could not find setfiles
+Do you have policycoreutils installed?
+
+Could not find checkpolicy
+Do you have checkpolicy installed?
+
+Could not find selinuxenabled
+Do you have libselinux-utils installed?
+
+#问题根因
+脚本使用了 `which command` 配合 `$?` 检查命令是否存在。由于脚本开启了 `errexit` 模式（即 `set -e`），子 shell 中的命令执行失败（如 `which` 找不到命令返回非零值）会触发 shell 立即退出，导致后续原本用于输出错误信息的逻辑（如 `if [ $? -eq 1 ]; then ...`）无法被执行，从而丢失了错误提示。
+
+#解决方案
+修改错误检测逻辑，将命令赋值与错误检查合并为同一个逻辑判断单元。利用逻辑操作符 `||`（或）连接命令与错误处理代码块。在 shell 中，由 `||` 或 `&&` 连接的命令序列不受 `errexit` 模式影响（即命令失败不会导致脚本立即退出），从而保证了后续错误提示信息的正常打印。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3765e492a407633c56a36d44a4b7cd2737cb80dc

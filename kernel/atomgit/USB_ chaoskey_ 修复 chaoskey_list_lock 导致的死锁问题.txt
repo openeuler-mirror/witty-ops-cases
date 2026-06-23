@@ -1,0 +1,40 @@
+#标题
+USB: chaoskey: 修复 chaoskey_list_lock 导致的死锁问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核检测到两种可能的死锁风险：
+1. 递归锁定：在 `chaoskey_release` 函数中，进程试图在已持有 `chaoskey_list_lock` 锁的情况下再次获取该锁，导致 AA 死锁。
+2. 循环锁定依赖：在 `chaoskey_disconnect` 函数中，持有 `chaoskey_list_lock` 时调用 `usb_deregister_dev` 获取 `minor_rwsem`，而在 `chaoskey_open` 路径中则是先持有 `minor_rwsem` 再获取 `chaoskey_list_lock`，导致 AB-BA 死锁。
+
+#主要错误日志
+WARNING: possible recursive locking detected
+6.12.0-rc1-syzkaller-00027-g4a9fe2a8ac53 #0 Not tainted
+--------------------------------------------
+syz-executor363/2651 is trying to acquire lock:
+ffffffff89b120e8 (chaoskey_list_lock){+.+.}-{3:3}, at: chaoskey_release+0x15d/0x2c0 drivers/usb/misc/chaoskey.c:322
+
+but task is already holding lock:
+ffffffff89b120e8 (chaoskey_list_lock){+.+.}-{3:3}, at: chaoskey_release+0x7f/0x2c0 drivers/usb/misc/chaoskey.c:299
+
+WARNING: possible circular locking dependency detected
+6.12.0-rc1-syzkaller-00027-g4a9fe2a8ac53 #0 Not tainted
+------------------------------------------------------
+kworker/0:2/804 is trying to acquire lock:
+ffffffff899dadb0 (minor_rwsem){++++}-{3:3}, at: usb_deregister_dev+0x7c/0x1e0 drivers/usb/core/file.c:186
+
+but task is already holding lock:
+ffffffff89b120e8 (chaoskey_list_lock){+.+.}-{3:3}, at: chaoskey_disconnect+0xa8/0x2a0 drivers/usb/misc/chaoskey.c:235
+
+#问题根因
+1. **AA 死锁**：`chaoskey_release` 函数中存在逻辑错误，在代码末尾错误地调用了 `mutex_lock(&chaoskey_list_lock)` 而非 `mutex_unlock`，导致进程重复持锁。
+2. **AB-BA 死锁**：`chaoskey_disconnect` 函数中的锁获取顺序与 `chaoskey_open` 函数中的锁获取顺序不一致。`chaoskey_disconnect` 先持有 `chaoskey_list_lock` 再通过 `usb_deregister_dev` 获取 `minor_rwsem`，而 `chaoskey_open` 先通过 `usb_open` 获取 `minor_rwsem` 再获取 `chaoskey_list_lock`，从而形成死锁循环。
+
+#解决方案
+1. 修复 `chaoskey_release` 中的笔误，将 `mutex_lock(&chaoskey_list_lock)` 改为 `mutex_unlock(&chaoskey_list_lock)`，释放锁资源。
+2. 调整 `chaoskey_disconnect` 中的锁序，将 `usb_deregister_dev` 调用移至 `mutex_lock(&chaoskey_list_lock)` 之前执行，确保不违反锁的获取顺序，从而消除循环依赖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/15a26ed38fa00a8e60e2c3b989a56a57ca97d585

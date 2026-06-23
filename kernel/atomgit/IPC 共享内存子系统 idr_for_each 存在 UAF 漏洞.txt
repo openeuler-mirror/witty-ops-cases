@@ -1,0 +1,20 @@
+#标题
+IPC 共享内存子系统 idr_for_each 存在 UAF 漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行共享内存孤儿销毁流程时触发 Use-After-Free 漏洞。该漏洞由 syzbot 发现，可能导致读取到已释放的内存地址，进而引发内核崩溃或被利用进行权限提升。
+
+#主要错误日志
+未知
+
+#问题根因
+`idr_for_each()` 虽然受 rwsem 信号量保护，但这并不足以防止 UAF。若未处于 RCU 读临界区，当 `idr_for_each()` 通过 `call_rcu()` 调用 `radix_tree_node_free()` 释放 `radix_tree_node` 结构时，该节点会立即被释放。此时，`radix_tree_for_each_slot()` 在读取下一个节点时可能会访问到已被释放的内存。
+
+#解决方案
+在 `shm_destroy_orphaned()` 函数中调用 `idr_for_each()` 前后添加 RCU 读临界区保护。具体修改为：在 `idr_for_each` 调用前增加 `rcu_read_lock()`，调用后增加 `rcu_read_unlock()`，确保遍历过程中节点内存不会被提前释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5b0887a99326330495e9d1d2e3e1b05ecdf78a28

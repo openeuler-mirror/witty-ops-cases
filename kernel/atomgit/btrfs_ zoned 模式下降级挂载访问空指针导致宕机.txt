@@ -1,0 +1,20 @@
+#标题
+btrfs: zoned 模式下降级挂载访问空指针导致宕机
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BTRFS 开启 Zoned 模式且配置为 RAID 的情况下，若因磁盘缺失以降级模式挂载文件系统，在进行 Zone 激活操作时，内核会访问缺失设备的 `zone_info` 指针（该指针未初始化为 NULL），导致访问非法地址从而引发 NULL Pointer Dereference 或 Oops 宕机。
+
+#主要错误日志
+未知
+
+#问题根因
+在调用 `btrfs_zone_activate()` 函数时，代码遍历条带中的设备并尝试访问 `device->zone_info` 指针。当文件系统处于降级模式或存在缺失设备时，缺失设备的 `btrfs_device::zone_info` 指针未被设置（为空）。代码未对设备是否存在（即 `device->bdev` 是否有效）进行检查，直接解引用了空指针。
+
+#解决方案
+在 `btrfs_zone_activate()` 函数的设备遍历循环中，增加对 `device->bdev` 指针的有效性检查。如果 `device->bdev` 为空，说明设备缺失，直接跳过该设备的 zone 激活流程，避免访问无效的 `zone_info` 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/774c2ca157be4ccb84dc5f3edfde54cdbbb58e00

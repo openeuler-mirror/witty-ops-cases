@@ -1,0 +1,20 @@
+#标题
+JFS文件系统evict_inode可能导致页面缓存残留或释放顺序错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在JFS文件系统中，当inode进行驱逐（evict）操作时，若`JFS_IP(inode)->fileset`不等于`FILESYSTEM_I`，`truncate_inode_pages_final`函数将不会被调用。这会导致页面缓存未被正确释放，进而可能引发内存泄漏或文件系统一致性相关问题；同时，该操作的理想执行时机应在特定条件判断之前，以确保资源释放顺序的正确性。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数`jfs_evict_inode`中，调用`truncate_inode_pages_final`清理页面缓存的代码位置被错误地放置在`if (JFS_IP(inode)->fileset == FILESYSTEM_I)`条件判断内部。这意味着对于非`FILESYSTEM_I`类型的inode，系统跳过了页面缓存的最终截断操作，导致资源未被正确释放。
+
+#解决方案
+将`truncate_inode_pages_final(&inode->i_data);`调用从`if (JFS_IP(inode)->fileset == FILESYSTEM_I)`条件块内移出，放置在条件判断之前执行。这确保了无论是何种类型的inode，在驱逐过程中都能正确执行页面缓存的最终清理工作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/335154e798f628496c27b3dc2c734d4d4db38dd8

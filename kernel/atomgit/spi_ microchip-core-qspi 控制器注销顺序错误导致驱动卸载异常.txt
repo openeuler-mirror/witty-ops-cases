@@ -1,0 +1,22 @@
+#标题
+spi: microchip-core-qspi 控制器注销顺序错误导致驱动卸载异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动unbind或卸载过程中，由于注销顺序不当，可能导致系统异常。具体表现为：驱动在注销 SPI 控制器前就关闭了底层硬件资源（如中断），这可能导致在控制器注销过程中访问已禁用的硬件资源，引发潜在的功能异常或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `mchp_coreqspi_remove` 函数中处理顺序错误：未先注销 SPI 控制器，而是先禁用了中断和硬件控制寄存器。此外，`probe` 阶段错误地使用了 `devm_spi_register_controller`，该函数注册的控制器在资源释放顺序上与手动管理不一致，且 `platform_set_drvdata` 保存的数据结构指针也不匹配，导致 remove 时无法正确获取控制器对象进行注销。
+
+#解决方案
+1. 修改 `probe` 阶段逻辑，将 `devm_spi_register_controller` 替换为 `spi_register_controller`，以便在 remove 时显式控制注销顺序。
+2. 修正 `platform_set_drvdata` 保存的对象为 `ctlr`（spi_controller结构体指针），而非 `qspi`，确保 remove 时能正确获取控制器句柄。
+3. 在 `remove` 函数中，增加 `spi_unregister_controller` 调用，并将其置于禁用中断和关闭硬件控制器之前，确保控制器先从子系统注销，再关闭底层硬件资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/44d7f6ff4b7a2c7cce67dbe1e001f453ac406a36

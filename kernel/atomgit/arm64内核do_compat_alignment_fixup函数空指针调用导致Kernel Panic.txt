@@ -1,0 +1,35 @@
+#标题
+arm64内核do_compat_alignment_fixup函数空指针调用导致Kernel Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ARM64架构运行32位兼容模式程序时，若触发特定指令（如LDREX）的对齐错误，内核会调用空指针函数导致Kernel Panic。系统崩溃并打印调用栈，无法继续运行。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
+Mem abort info:
+  ESR = 0x0000000086000006
+  EC = 0x21: IABT (current EL), IL = 32 bits
+  SET = 0, FnV = 0
+  EA = 0, S1PTW = 0
+  FSC = 0x06: level 2 translation fault
+Internal error: Oops: 0000000086000006 [#1] SMP
+Call trace:
+ 0x0
+ do_alignment_fault+0x40/0x50
+ do_mem_abort+0x4c/0xa0
+ el0_da+0x48/0xf0
+ el0t_32_sync_handler+0x110/0x140
+ el0t_32_sync+0x190/0x194
+Code: bad PC value
+
+#问题根因
+函数 `do_alignment_t32_to_handler()` 仅处理特定指令的对齐故障修复，对于未支持的指令（如 LDREX）会返回 NULL。调用者 `do_compat_alignment_fixup()` 在未检查返回值是否为 NULL 的情况下直接调用该函数指针，导致执行地址 0x0 触发空指针解引用异常。
+
+#解决方案
+在 `do_compat_alignment_fixup()` 函数中增加对 `handler` 指针的非空检查。如果 `handler` 为 NULL，函数直接返回 1，交由上层标准的对齐故障处理逻辑（即发送 SIGBUS 信号），从而避免空指针调用导致的内核崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4f2f84caee0541eab7f60dfdb7d4623cf1152348

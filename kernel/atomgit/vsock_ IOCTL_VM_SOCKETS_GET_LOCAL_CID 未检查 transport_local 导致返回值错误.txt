@@ -1,0 +1,20 @@
+#标题
+vsock: IOCTL_VM_SOCKETS_GET_LOCAL_CID 未检查 transport_local 导致返回值错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当系统未加载 guest-to-host 或 host-to-guest 的 vsock 传输模块，而仅有 local transport 可用时，用户态程序调用 `IOCTL_VM_SOCKETS_GET_LOCAL_CID` 接口获取本地 CID 时，无法正确返回 `VMADDR_CID_LOCAL`，导致接口返回值不符合预期，影响依赖该 CID 进行本地通信的功能。
+
+#主要错误日志
+未知
+
+#问题根因
+内核函数 `vsock_dev_do_ioctl` 在处理 `IOCTL_VM_SOCKETS_GET_LOCAL_CID` 请求时，逻辑存在缺失。原代码仅依次检查了 `transport_g2h` 和 `transport_h2g`，若二者均未注册（返回 `VMADDR_CID_ANY`），则直接返回 `VMADDR_CID_ANY`，遗漏了对 `transport_local` 的检查。这导致在仅有本地传输层可用的场景下，无法返回正确的 `VMADDR_CID_LOCAL`。
+
+#解决方案
+在 `net/vmw_vsock/af_vsock.c` 的 `vsock_dev_do_ioctl` 函数中，增加对 `transport_local` 的检查逻辑。当 `transport_g2h` 和 `transport_h2g` 的 CID 均为 `VMADDR_CID_ANY` 时，继续调用 `vsock_registered_transport_cid` 检查 `transport_local`，以确保在本地传输可用时能正确返回对应的 CID。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/add18871b5a7795313faf51d86543aaa2ff1d109

@@ -1,0 +1,20 @@
+#标题
+NFSD/blocklayout: 修复 proc_layoutget 中的 minlength 检查逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 pNFS 块布局（block layout）场景下，当文件系统返回的 extent 起始偏移量小于客户端请求的 segment 偏移量时，服务端可能错误地判断 extent 长度满足要求，导致客户端无法继续执行读写操作。
+
+#主要错误日志
+pnfsd: extent smaller than minlength
+
+#问题根因
+文件系统返回的 extent 可能具有比客户端请求的 segment 更小的偏移量。原代码直接将文件系统返回的 `iomap.length` 与客户端请求的 `args->lg_minlength` 进行比较，未考虑偏移量不一致的情况。正确的做法应当是计算该 extent 在请求范围内的有效长度（即 `iomap.offset + iomap.length - seg->offset`），并将该有效长度与最小长度要求进行比较。
+
+#解决方案
+修改 `fs/nfsd/blocklayout.c` 中的 `nfsd4_block_proc_layoutget` 函数。引入局部变量 `length` 用于计算 extent 在请求 segment 内的有效长度，公式为 `length = iomap.offset + iomap.length - seg->offset`。将 minlength 检查逻辑修改为比较该有效长度 `length` 与 `args->lg_minlength`，确保只有在请求范围内的有效数据长度满足最小要求时才通过检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/850f5751f997b1b7b03ecc31cdb1e29fc6c29f98

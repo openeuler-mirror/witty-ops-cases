@@ -1,0 +1,24 @@
+#标题
+misc_init() 函数返回错误码不当导致故障信息不准确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当字符设备 misc 子系统初始化过程中 `__register_chrdev()` 注册失败时，`misc_init()` 错误地向上层返回了 `-EIO`（I/O错误），掩盖了字符设备注册失败的真正原因；同时 `-EIO` 无法准确覆盖 `__register_chrdev()` 可能返回的多种错误码，导致调用者无法根据返回值进行准确的错误处理或诊断。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `misc_init()` 函数中，调用 `__register_chrdev()` 进行字符设备注册时，代码逻辑错误地将返回值强制覆盖为 `-EIO`。根据代码分析：
+1. `-EIO` 通常用于表示 I/O 错误，但 `__register_chrdev()` 函数内部并不执行 I/O 操作，返回 `-EIO` 不符合错误语义。
+2. `__register_chrdev()` 可能返回多种具体的错误码（如 `-ENOMEM` 等），强制返回 `-EIO` 导致具体错误信息丢失，无法反映真实的失败原因。
+
+#解决方案
+修改 `drivers/char/misc.c` 文件中的 `misc_init()` 函数：
+移除强制设置 `err = -EIO` 的语句，改为直接将 `__register_chrdev()` 的返回结果赋值给 `err` 变量。
+同时调整判断条件，从 `if (__register_chrdev(...))`（即判断非0）改为 `if (err < 0)`，仅在返回具体错误码（小于0）时跳转至错误处理流程，确保向调用者返回准确、原始的错误码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eec666f05524d9f4156a831816767acd7a418ab1

@@ -1,0 +1,28 @@
+#标题
+hibmcge 网卡驱动存在 RTNL 死锁、除零异常及链路状态误报故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在进行网卡复位（如 FLR）操作时，系统发生 RTNL 锁死。
+2. 在特定竞态条件下，驱动计算队列使用量时触发除零错误导致内核崩溃。
+3. 网卡调整链路状态后，误报 `np_link_fail` 错误，实际链路已正常连通。
+
+#主要错误日志
+- "failed to reset because port is up"
+- "failed to rebuild after reset"
+- "reset done"
+
+#问题根因
+1. **RTNL 死锁**：`hbg_reset_prepare` 和 `hbg_reset_done` 函数内部调用了 `ASSERT_RTNL()`，且在 PCI 错误处理流程 `hbg_pci_err_reset_prepare` 中先获取了 `rtnl_lock`，导致锁检查逻辑冲突或锁未释放引发死锁。
+2. **除零异常**：`hbg_get_queue_used_num` 函数在计算取模运算时，未检查 `ring->len` 是否为 0，若 `len` 为 0 则直接触发除零错误。
+3. **链路误报**：`hbg_hw_adjust_link` 函数在使能 MAC 后立即检查链路状态，未等待链路协商完成（MAC Link Up），导致误判链路失败并错误调度 `np_link_fail_task`。
+
+#解决方案
+1. **消除死锁**：移除 `hbg_reset_prepare`、`hbg_reset_done` 及 `hbg_reset` 函数中的 `ASSERT_RTNL()` 调用，并移除 PCI 错误处理函数 `hbg_pci_err_reset_prepare` 中的 `rtnl_lock` 与 `hbg_pci_err_reset_done` 中的 `rtnl_unlock`，通过状态位 `HBG_NIC_STATE_RESETTING` 替代锁检查来保护复位流程。
+2. **防止除零**：在 `hbg_get_queue_used_num` 计算前增加对 `ring->len` 的非零检查，若为 0 则直接返回 0，并使用 `READ_ONCE` 确保读取操作的原子性。
+3. **修复链路检查**：在 `hbg_hw_adjust_link` 使能 MAC 后，增加 `readl_poll_timeout` 轮询等待机制，等待 MAC 链路建立成功（超时 500ms），仅当等待超时才触发 `np_link_fail_task_schedule`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a5185c1b0fd7a9b3ea9b6923d5bcedc7392c59b7

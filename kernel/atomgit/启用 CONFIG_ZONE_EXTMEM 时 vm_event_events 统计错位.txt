@@ -1,0 +1,23 @@
+#标题
+启用 CONFIG_ZONE_EXTMEM 时 vm_event_events 统计错位
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当内核开启 CONFIG_ZONE_EXTMEM 配置项时，由于统计宏定义逻辑未适配，导致 ZONE_MOVABLE 和 ZONE_DEVICE 的内存统计项被记录到错误的槽位中，造成内存事件统计数据的错误或丢失，影响内存管理的准确性与可观测性。
+
+#主要错误日志
+未知
+
+#问题根因
+FOR_ALL_ZONES 宏定义未包含 ZONE_EXTMEM，导致 vm_event_states 结构体中没有为 ZONE_EXTMEM 预留统计槽位。而原有的 `__count_zid_vm_events` 宏仅进行了简单的线性偏移计算，未考虑到 ZONE_EXTMEM 缺失的情况，从而导致 ZONE_EXTMEM 之后的区域（如 ZONE_MOVABLE 和 ZONE_DEVICE）的统计项被写入错误的内存位置。
+
+#解决方案
+修改 `__count_zid_vm_events` 宏定义逻辑，为 CONFIG_ZONE_EXTMEM 场景提供专门的处理分支：
+1. 若区域 ID（zid）小于 ZONE_EXTMEM，维持原有计算逻辑。
+2. 若区域 ID（zid）大于 ZONE_EXTMEM，将计算偏移量减 1，以跳过缺失的 ZONE_EXTMEM 槽位，确保写入正确的统计位置。
+3. 若区域 ID 等于 ZONE_EXTMEM，则跳过计数（因无对应槽位），以此保持 KABI 兼容性而不修改 vm_event_states 结构体大小。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/796a187724e55bd17c13737a7f9a7b8925caeaff

@@ -1,0 +1,20 @@
+#标题
+netfilter: xt_IDLETIMER 标签复用导致定时器类型冲突检测缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 netfilter IDLETIMER 规则时，若使用相同的 label 标签但配置了不同的定时器类型（例如已存在基于 alarm 的定时器，新规则尝试创建普通 timer），系统未拦截此类冲突操作，可能导致内核状态不一致或功能异常。
+
+#主要错误日志
+- pr_debug("Adding/Replacing rule with same label and different timer type is not allowed\n")
+
+#问题根因
+在 `idletimer_tg_checkentry` 函数中，当通过 label 找到已存在的 timer 时，代码仅增加了引用计数并更新定时器，遗漏了对 `timer_type` 的校验。这允许用户添加或替换具有相同 label 但 `timer_type` 不同的规则，违反了该模块对同一 label 行为一致性的约束。
+
+#解决方案
+在 `idletimer_tg_checkentry` 函数中增加类型检查逻辑：当发现同名 label 已存在时，检查已有 timer 的 `timer_type` 是否与当前请求一致。如果检测到 `XT_IDLETIMER_ALARM` 类型冲突，则释放互斥锁并返回 `-EINVAL` 错误，阻止规则添加。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4bc142dae5836d4a803363b2fe1a3ab79cc1dc9a

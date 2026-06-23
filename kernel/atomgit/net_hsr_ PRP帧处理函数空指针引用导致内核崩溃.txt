@@ -1,0 +1,27 @@
+#标题
+net/hsr: PRP帧处理函数空指针引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 HSR/PRP 网络帧时，若内存分配失败，内核触发通用保护故障，导致系统崩溃。具体表现为调用 `prp_get_untagged_frame()` 时发生 Oops，并在日志中打印 `general protection fault` 与 `null-ptr-deref` 信息，调用栈包含 `skb_clone` 与 `hsr_forward_skb`。
+
+#主要错误日志
+Oops: general protection fault, probably for non-canonical address 0xdffffc000000000f: 0000 [#1] SMP KASAN NOPTI
+KASAN: null-ptr-deref in range [0x0000000000000078-0x000000000000007f]
+RIP: 0010:skb_clone+0xd7/0x3a0 net/core/skbuff.c:2041
+Call Trace:
+ <TASK>
+ hsr_forward_do net/hsr/hsr_forward.c:-1 [inline]
+ hsr_forward_skb+0x1013/0x2860 net/hsr/hsr_forward.c:741
+ hsr_handle_frame+0x6ce/0xa70 net/hsr/hsr_slave.c:84
+
+#问题根因
+函数 `prp_get_untagged_frame()` 调用 `__pskb_copy()` 创建 `frame->skb_std`，但未检查返回值是否为空。当 `__pskb_copy()` 因内存不足等原因返回 NULL 时，后续代码直接将该 NULL 指针传递给 `skb_clone()` 进行处理，从而引发空指针引用导致内核崩溃。
+
+#解决方案
+在 `prp_get_untagged_frame()` 函数中，于 `__pskb_copy()` 调用之后立即添加 NULL 检查。如果分配失败（即 `frame->skb_std` 为 NULL），函数直接返回 NULL，避免后续操作解引用空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/585c8e3b15e4a64a7f510ab7376da8cfc21c694c

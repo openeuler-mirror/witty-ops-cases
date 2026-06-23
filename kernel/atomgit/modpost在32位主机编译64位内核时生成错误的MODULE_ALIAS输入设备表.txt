@@ -1,0 +1,21 @@
+#标题
+modpost在32位主机编译64位内核时生成错误的MODULE_ALIAS输入设备表
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在32位编译主机上交叉编译64位内核时，`scripts/mod/file2alias.c` 生成的 `MODULE_ALIAS` 入口不正确。
+例如编译 `CONFIG_INPUT_MOUSEDEV=m` 时，生成的别名包含错误的位掩码数据（如出现 `*130,*` 而非正确的 `*110,*`），导致内核模块自动加载功能（udev/mdev）无法正确匹配硬件设备。同样的问题也出现在 `CONFIG_INPUT_JOYDEV=m` 的编译过程中。
+
+#主要错误日志
+未知
+
+#问题根因
+编译64位内核时，`BITS_PER_LONG` 被定义为64，但在32位编译主机上，代码中使用的常量 `1L` 是一个32位的有符号长整型。当进行左移操作 `1L << (i%BITS_PER_LONG)` 且移位位数超过31位时，会发生整型溢出回绕，导致生成的设备别名掩码数据错误。
+
+#解决方案
+将 `scripts/mod/file2alias.c` 文件中 `do_input` 函数内的位移操作数从 `1L` 修改为 `1ULL`。使用无符号长长整型（unsigned long long）确保在32位主机上也能提供64位的宽度，从而避免移位溢出，正确生成64位内核的输入设备别名表。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56361ef52a5b465231c80c4d3ce7cd98250a48c2

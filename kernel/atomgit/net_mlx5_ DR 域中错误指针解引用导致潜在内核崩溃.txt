@@ -1,0 +1,20 @@
+#标题
+net/mlx5: DR 域中错误指针解引用导致潜在内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mlx5 驱动的 DR（Direct Rules）域处理过程中，当 `dr_domain_add_vport_cap()` 函数遇到 `-ENOMEM` 错误时，错误地返回了 ERR_PTR 指针而非 NULL。该错误指针随后被传播并在 `dr_ste_v0_build_src_gvmi_qpn_tag()` 函数中被解引用，可能导致内核崩溃或不可预期的行为。
+
+#主要错误日志
+Couldn't insert new vport into xarray (%d)
+
+#问题根因
+函数 `dr_domain_add_vport_cap()` 设计上通常在错误时返回 NULL，但在处理 xarray 插入失败时，无论是 `-EBUSY` 还是 `-ENOMEM` 错误，均直接调用了 `ERR_PTR(ret)`。当错误码为 `-ENOMEM` 时，返回的错误指针被传递给调用者并最终被解引用，触发了错误指针解引用缺陷。
+
+#解决方案
+修改 `dr_domain_add_vport_cap()` 函数的错误处理逻辑，仅在错误码为 `-EBUSY`（调用者可重试）时返回 `ERR_PTR(-EBUSY)`，其余错误情况（如 `-ENOMEM`）则返回 NULL，以此防止无效的错误指针被传递及解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e684c67af068312913fd43a25d4f8a56ae87c6d5

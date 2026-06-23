@@ -1,0 +1,25 @@
+#标题
+vxlan: 组播地址变更后未正确处理 IGMP 加入/离开组
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 VXLAN 设备处于 UP 状态时，若修改其默认远端组播地址或通信接口，设备未离开旧的组播组且未加入新的组播组。这导致组播流量无法按预期接收，网络通信中断。该问题在 vnifilter 模式下表现为组播组切换后仍能看到 IGMP 报告，但在非 vnifilter 模式下原有逻辑完全缺失对应处理。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `vxlan_changelink` 函数中，当 VXLAN 设备启动（UP）时，如果配置了默认远端组播地址，设备会加入该组。但是，当修改远端组播地址或通信接口（`remote_ifindex`）时，代码路径缺乏调用 `vxlan_igmp_join()` 和 `vxlan_igmp_leave()` 的逻辑，导致设备无法切换到新的组播组。
+
+#解决方案
+在 `vxlan_changelink` 函数中增加 IGMP 成员关系变更的处理逻辑：
+1. 检测远端 IP 地址（`remote_ip`）或通信接口是否发生变更。
+2. 若发生变更且设备处于 UP 状态，先调用 `vxlan_multicast_leave` 离开旧的组播组。
+3. 应用新的配置更改。
+4. 随后调用 `vxlan_multicast_join` 加入新的组播组。
+此修复对齐了 vnifilter 模式下的行为，即“先离开后加入”，若离开失败则不尝试加入，且不进行回滚。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9416ed69a5f425145e5d5fdcfb63b222a764f89c

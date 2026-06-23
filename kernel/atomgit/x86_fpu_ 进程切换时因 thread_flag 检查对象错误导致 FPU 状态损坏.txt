@@ -1,0 +1,20 @@
+#标题
+x86/fpu: 进程切换时因 thread_flag 检查对象错误导致 FPU 状态损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进程上下文切换期间，如果上一个任务设置了 TIF_USING_FPU_NONATOMIC 标志而下一个任务未设置，会导致上一个任务的 FPU 非原子状态（YMM0-YMM7 寄存器）未能保存。当该任务被重新调度执行时，其寄存器内容已被覆盖，导致正在进行的 NT copy（非临时拷贝）数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `switch_kernel_fpu_prepare(prev, cpu)` 中错误地使用了 `test_thread_flag(TIF_USING_FPU_NONATOMIC)` 进行检查。该宏固定读取 `current_thread_info()`，而在 `__switch_to()` 执行流程中，`current` 指针已经指向了下一个任务，而非上一个任务。因此代码实际检查的是下一个任务的标志位，而非上一个任务的标志位，导致上一个任务的 FPU 状态未被正确保存。
+
+#解决方案
+将 `switch_kernel_fpu_prepare` 函数中的检查逻辑修正为显式检查上一个任务的线程信息。将 `test_thread_flag` 替换为 `test_ti_thread_flag(task_thread_info(prev), ...)`，确保在上下文切换时正确判断并保存上一个任务的 FPU 非原子状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/72561da287cd8b483d34a600d45f02025edf97a8

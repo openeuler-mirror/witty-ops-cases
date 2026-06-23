@@ -1,0 +1,45 @@
+#标题
+usb: renesas_usbhs 驱动解绑时触发同步外部中止
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Renesas RZ/G3S SoC 平台上，对 USBHS 驱动执行 unbind 操作时触发同步外部中止。具体复现步骤如下：
+1. 加载 usb_f_ecm、libcomposite、configfs 模块。
+2. 在 /sys/kernel/config/usb_gadget 下配置 gadget 设备（如设置 Vendor ID、Product ID、创建 ECM 功能等）。
+3. 将 UDC 绑定到 "11e20000.usb"。
+4. 执行 `echo 11e20000.usb > /sys/bus/platform/drivers/renesas_usbhs/unbind` 进行解绑。
+此时系统发生 panic，提示 "Internal error: synchronous external abort"。
+
+#主要错误日志
+Internal error: synchronous external abort: 0000000096000010 [#1] SMP
+CPU: 0 UID: 0 PID: 188 Comm: sh Tainted: G M 6.17.0-rc7-next-20250922-00010-g41050493b2bd #55 PREEMPT
+Tainted: [M]=MACHINE_CHECK
+Hardware name: Renesas SMARC EVK version 2 based on r9a08g045s33 (DT)
+pc : usbhs_sys_function_pullup+0x10/0x40 [renesas_usbhs]
+lr : usbhsg_update_pullup+0x3c/0x68 [renesas_usbhs]
+Call trace:
+ usbhs_sys_function_pullup+0x10/0x40 [renesas_usbhs] (P)
+ usbhsg_pullup+0x4c/0x7c [renesas_usbhs]
+ usb_gadget_disconnect_locked+0x48/0xd4
+ gadget_unbind_driver+0x44/0x114
+ device_remove+0x4c/0x80
+ device_release_driver_internal+0x1c8/0x224
+ device_release_driver+0x18/0x24
+ bus_remove_device+0xcc/0x10c
+ device_del+0x14c/0x404
+ usb_del_gadget+0x88/0xc0
+ usb_del_gadget_udc+0x18/0x30
+ usbhs_mod_gadget_remove+0x24/0x44 [renesas_usbhs]
+ usbhs_mod_remove+0x20/0x30 [renesas_usbhs]
+ usbhs_remove+0x98/0xdc [renesas_usbhs]
+
+#问题根因
+在 `usbhs_remove` 函数中，代码逻辑过早地关闭了 USBHS IP 的时钟（调用了 `usbhsc_power_ctrl` 和 `pm_runtime_disable`）。随后在移除 gadget 设备的过程中，`usbhsg_pullup` -> `usbhs_sys_function_pullup` 试图访问已经关闭时钟的 IP 寄存器。在 Renesas RZ/G3S SoC 上，当模块时钟停止且模块停止功能激活后，如果主设备访问该模块，就会产生总线错误，导致同步外部中止。
+
+#解决方案
+调整 `usbhs_remove` 函数中的资源释放顺序，将 IP 时钟和电源的关闭操作移至所有模块移除操作（`usbhs_mod_remove`、`usbhs_fifo_remove`、`usbhs_pipe_remove`）完成之后执行。确保在访问 IP 寄存器的操作全部结束后，才关闭时钟和电源，从而避免访问已断电的硬件地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f006923b7d7b59d4d905fa932b13bf67e83faa5

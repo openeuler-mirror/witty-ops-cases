@@ -1,0 +1,30 @@
+#标题
+btrfs_sync_file tracepoint 在原子上下文中调用 dput 导致睡眠错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+启用 btrfs_sync_file 跟踪事件后，在运行 fstests 的 btrfs/056 测试用例时触发内核 splat，系统报告在无效上下文中调用了睡眠函数（sleeping function called from invalid context）。
+
+#主要错误日志
+[53.919] BUG: sleeping function called from invalid context at fs/dcache.c:970
+[53.947] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 32773, name: xfs_io
+[53.988] preempt_count: 2, expected: 0
+[53.967] RCU nest depth: 0, expected: 0
+[54.078] CPU: 0 UID: 0 PID: 32773 Comm: xfs_io Tainted: G        W           7.1.0-rc1-btrfs-next-232+ #1 PREEMPT(full)
+[54.074]  <TASK>
+[54.076]  dump_stack_lvl+0x56/0x80
+[54.079]  __might_resched.cold+0xd6/0x10f
+[54.072]  dput.part.0+0x24/0x110
+[54.078]  trace_event_raw_event_btrfs_sync_file+0x75/0x140 [btrfs]
+[54.089]  btrfs_sync_file+0x1ed/0x530 [btrfs]
+
+#问题根因
+trace event btrfs_sync_file() 处于原子上下文（所有 trace events 均如此），但代码中调用了 dget_parent() 及其对应的 dput()。dput() 函数可能会睡眠，因此在 tracepoint 的原子上下文中调用它触发了内核合法性检查错误。
+
+#解决方案
+移除可能导致睡眠的 dget_parent() 和 dput() 调用，直接通过 `dentry->d_parent` 访问父目录项，这与 ext4 文件系统中类似的 tracepoint (ext4_sync_file_enter) 处理方式保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f6fd04fc312d07181998cc83b2d8e9b91a0b50f

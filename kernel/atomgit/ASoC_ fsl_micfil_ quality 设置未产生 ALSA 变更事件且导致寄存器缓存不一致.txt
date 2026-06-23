@@ -1,0 +1,23 @@
+#标题
+ASoC: fsl_micfil: quality 设置未产生 ALSA 变更事件且导致寄存器缓存不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+修改 micfil 的 quality 设置时，ALSA 控制层无法感知到值的变化，导致上层应用或用户空间无法接收到相应的变更事件。同时，在设备处于挂起状态时修改配置，会导致 regmap 缓存数据与硬件寄存器实际值不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **返回值错误**：`micfil_quality_set()` 函数作为 ALSA control 的 put 操作回调，仅返回 0 或负数错误码，未遵循 ALSA 框架规范（即当控件值发生变化时应返回 1），导致 ALSA 核心层判断值未改变，不生成变更事件。
+2. **PM 状态与缓存不一致**：原代码在未唤醒设备（未调用 `pm_runtime_resume`）的情况下直接调用 `micfil_set_quality()` 更新硬件，导致 regmap 缓存可能与硬件实际状态不同步。
+
+#解决方案
+1. 在 `micfil_quality_set()` 函数中增加数值比较逻辑：若新值与旧值不同，才执行更新操作，并在成功后返回 1（表示值已改变）；若相同则直接返回 0。
+2. 在更新硬件前调用 `pm_runtime_resume_and_get()` 唤醒设备，确保硬件处于活跃状态，操作完成后调用 `pm_runtime_put_autosuspend()` 释放引用，从而保证 regmap 缓存与硬件数据的一致性。
+3. 增加错误回滚机制：若硬件设置失败，将 `micfil->quality` 恢复为旧值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e731bcf77f53bff298ecde6e2e7fb36a0c6e40f1

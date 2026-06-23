@@ -1,0 +1,20 @@
+#标题
+tracing/hwlat: cpuhp处理期间存在竞态条件导致线程启动异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在percpu模式的hwlat tracer运行过程中，当进行CPU热插拔（hotplug）操作时，存在理论上的竞态条件。具体表现为：在CPU状态已变为CPUHP_OFFLINE的情况下，内核线程仍可能被错误地启动（start_kthread）以绑定该离线CPU，导致tracer状态异常或内核线程绑定失败。
+
+#主要错误日志
+未知
+
+#问题根因
+CPU热插拔上下文处理存在竞态窗口。在`hwlat_hotplug_workfn`函数执行期间，T1线程（hwlat_hotplug_workfn）在获取`cpus_read_lock`前，T2线程可能已完成`takedown_cpu`操作并将CPU状态置为`CPUHP_OFFLINE`。此时T1继续执行`start_kthread`，尝试在一个已经离线的CPU上启动内核线程。
+
+#解决方案
+在`hwlat_hotplug_workfn`函数中增加CPU在线状态检查。在尝试启动内核线程前，调用`cpu_online(cpu)`判断目标CPU是否在线，若CPU已处于离线状态则直接跳过后续处理，避免在离线CPU上启动线程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c1bc8df77ddfe8ee76614b50138aa54ed89a5898

@@ -1,0 +1,25 @@
+#标题
+ALSA: usb-audio: snd_usbmidi_free 函数存在竞争条件导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 USB MIDI 设备时，内核存在竞态条件，导致释放后使用（UAF）。具体表现为：
+1. 错误定时器在端点删除后才被停止，引发 UAF。
+2. 缺少对 URB 的 kill-cleanup 操作，导致在中断上下文中访问已释放内存，引发 UAF。
+3. 该问题虽然发生概率较低，但可被 Syzkaller 等模糊测试工具检测到。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `snd_usbmidi_free` 函数中，错误定时器的停止操作发生在端点删除之后，且缺少对 URB 的清理操作。这导致在某些竞态条件下，定时器回调或 URB 中断处理程序可能会访问已经被释放的端点内存，从而触发 UAF。
+
+#解决方案
+调整 `snd_usbmidi_free` 函数中的资源释放顺序，确保在释放内存前正确断开连接并停止相关异步操作：
+1. 在函数入口处，如果设备未断开连接，立即调用 `snd_usbmidi_disconnect`。该函数内部会同步停止错误定时器并杀死 URB，确保在释放内存前不再有异步回调执行。
+2. 移除了原先分离的 `snd_usbmidi_out_endpoint_delete` 和 `snd_usbmidi_in_endpoint_delete` 调用，直接使用 `kfree` 释放端点内存（因为断开连接操作已完成资源清理）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f08a5bf0491901e1fea46ed151b9f078b4605f12

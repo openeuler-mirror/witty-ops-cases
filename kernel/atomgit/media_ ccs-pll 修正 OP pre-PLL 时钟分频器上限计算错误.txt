@@ -1,0 +1,20 @@
+#标题
+media: ccs-pll 修正 OP pre-PLL 时钟分频器上限计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置 CCS（Camera Serial Interface）PLL 时，PLL 计算器在搜索有效的 OP pre-PLL 时钟分频器配置空间时，计算出的分频器最大上限值不正确。具体表现为当硬件支持扩展输入 PLL 时钟分频器（CCS_PLL_FLAG_EXT_IP_PLL_DIVIDER 标志位置位）时，奇数分频器（除 1 以外）本应有效，但计算逻辑错误地排除了这些值，导致无法找到最优或有效的 PLL 配置，可能引发摄像头或其他媒体设备初始化失败、时钟配置异常。
+
+#主要错误日志
+未知
+
+#问题根因
+PLL 计算器在计算 `max_op_pre_pll_clk_div`（最大 OP pre-PLL 时钟分频值）时，使用了 `clk_div_even` 宏进行计算。该宏强制将结果转换为偶数，这在一般模式下是正确的，但未考虑 `CCS_PLL_FLAG_EXT_IP_PLL_DIVIDER` 标志存在的情况。当该标志置位时，硬件支持奇数分频器，原逻辑强制取偶导致上限值小于实际支持的硬件上限，从而丢失了有效的奇数分频配置选项。
+
+#解决方案
+修改 `drivers/media/i2c/ccs-pll.c` 中的计算逻辑，将 `max_op_pre_pll_clk_div` 的计算从 `clk_div_even` 宏修改为 `DIV_ROUND_UP` 宏。该修改移除了强制偶数限制，允许在硬件支持的情况下（通过后续逻辑或标志位判断）使用奇数分频值，从而正确覆盖所有有效的 PLL 配置空间。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d4ccc50ee3d75a5aedb171d57bfeeed423ea2fe8

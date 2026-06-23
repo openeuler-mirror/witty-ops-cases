@@ -1,0 +1,20 @@
+#标题
+ext4: ext4_ind_migrate 函数中 i_data_sem 信号量解锁顺序错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 ext4_ind_migrate 相关操作时，由于信号量 `i_data_sem` 与日志句柄 `handle` 的释放顺序错误，可能导致内核锁依赖（lockdep）警告，甚至引发死锁或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ext4_ind_migrate` 函数的错误退出路径中，代码先调用了 `ext4_journal_stop(handle)`，随后才执行 `up_write(&EXT4_I(inode)->i_data_sem)`。这违反了 ext4 文件系统要求的锁获取与释放顺序：必须先释放 `i_data_sem` 信号量，再停止日志句柄。错误的顺序破坏了锁的层级关系。
+
+#解决方案
+调整 `errout` 标签处的代码执行顺序，先执行 `up_write(&EXT4_I(inode)->i_data_sem)` 释放写信号量，然后再调用 `ext4_journal_stop(handle)` 停止日志事务，以符合正确的锁依赖规则。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d487bd641d8c09d94cd4030459e1115d9684f5cb

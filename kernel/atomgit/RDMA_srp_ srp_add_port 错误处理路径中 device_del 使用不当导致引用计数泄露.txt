@@ -1,0 +1,21 @@
+#标题
+RDMA/srp: srp_add_port 错误处理路径中 device_del 使用不当导致引用计数泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 srp_add_port 函数执行失败并进入错误处理分支（put_host 标签）时，由于错误地调用了 device_del()，导致内核对象引用计数处理异常，潜在引发内存泄露或设备释放时的空指针崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 信息，问题根因是对 device_add() 语义理解错误。device_add() 的注释说明：如果 device_add() 成功，销毁设备时应调用 device_del()；如果 device_add() 未成功（或尚未调用），则只能调用 put_device() 来减少引用计数。
+在 srp_add_port 函数中，当执行流跳转到 put_host 标签时，device_add() 尚未执行或未成功，此时代码错误地调用了 device_del()，随后又调用了 put_device()。正确的做法是仅调用 put_device() 进行清理。
+
+#解决方案
+移除 srp_add_port 函数 put_host 标签下的 device_del() 调用，仅保留 put_device() 调用，以确保在 device_add() 未成功的情况下正确释放设备引用计数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/92f0f5eb4538827ffc0e178df1443b83594fe66e

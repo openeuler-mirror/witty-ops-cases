@@ -1,0 +1,25 @@
+#标题
+media: verisilicon: G2解码器总线错误导致CPU卡死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行压力测试时，G2解码器触发总线错误（bus error）中断。此时解码器的 `dec_bus_int` 和 `dec_e` 标志位处于置位状态，意味着解码器在发生错误后仍在运行。该状态导致系统出现CPU stalls（CPU卡死/停顿）现象。
+
+#主要错误日志
+- "device still running, aborting"（推断，关联 reset 流程）
+- "decode operation aborted."
+- "not all macroblocks were decoded."
+- "bus error detected."
+- "decode error detected."
+- "frame decode timed out."
+
+#问题根因
+在G2解码器发生总线错误等异常时，原有的中断处理逻辑未能正确处理解码器仍在运行（`dec_e` bit 为高）的情况。中断处理程序可能在硬件仍在尝试操作总线时过早地结束任务或进行不恰当的软件复位操作，导致硬件状态与软件状态不一致，进而引发CPU卡死。
+
+#解决方案
+重构IRQ中断处理程序，仅在解码真正完成时才结束任务。如果解码器遇到错误但仍在运行（`dec_e` 置位），则不再立即强制软件复位，而是让硬件继续执行，直到触发硬件看门狗超时自动停止。同时，将软件复位操作移至软件看门狗触发时的 `reset` 回调函数中执行，增加延时等待逻辑以确保设备空闲，避免对正在运行的IP进行编程导致的CPU挂起。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c71a87d5632468bb90bf434f91d01b3dbba7b287

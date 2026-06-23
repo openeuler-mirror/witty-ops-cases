@@ -1,0 +1,24 @@
+#标题
+MCE 阈值限制未继承 APEI/BIOS 配置导致策略失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统启动后，MCA（Machine Check Architecture）阈值限制（threshold limit）未继承 BIOS 中设置的 APEI HEST 配置值，而是被强制重置为默认值。这导致管理员在 BIOS 中设定的纠错错误阈值策略无法在 OS 管理模式下生效，系统行为与预期管理策略不一致。
+
+#主要错误日志
+- `HEST corrected error threshold limit: %u`（注：此为修复后新增的提示日志，用于确认已正确获取 APEI 阈值）
+
+#问题根因
+MCA 阈值限制通常在系统管理策略中设定，许多系统允许用户通过 BIOS 设置该值，并通过 APEI HEST 条目报告。然而，当 MCA 阈值处理为 OS 管理模式时，内核在初始化阈值块（threshold block）时直接使用了硬编码的默认值 `THRESHOLD_MAX`，忽略了 BIOS 通过 APEI 传递的 `error_threshold_value`。
+此外，APEI 的解析发生在 MCE 初始化之后，导致早期初始化时无法获取该配置值。
+
+#解决方案
+1. 新增全局变量 `mce_apei_thr_limit` 用于存储 APEI 解析出的阈值限制。
+2. 在 APEI 解析流程（`arch_apei_enable_cmcff`）中，提取 HEST 条目的 `error_threshold_value` 并保存。
+3. 修改阈值块初始化逻辑，优先使用保存的 APEI 阈值限制；若 APEI 未提供或值为 0，则回退使用默认值 `THRESHOLD_MAX`。
+4. 调整初始化时序，确保在 APEI 解析完成后重置阈值块，从而正确应用 BIOS 配置的策略值。用户仍可通过 sysfs 接口覆盖此值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dad5eacdd63a0be34ad04491f59212519c637dbb

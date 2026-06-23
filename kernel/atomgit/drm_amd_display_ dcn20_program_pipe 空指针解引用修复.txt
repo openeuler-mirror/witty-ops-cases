@@ -1,0 +1,20 @@
+#标题
+drm/amd/display: dcn20_program_pipe 空指针解引用修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 `dcn20_program_pipe` 函数执行过程中，若 `pipe_ctx->plane_state` 为空指针，直接访问其成员变量（如 `update_flags` 或 `visible`）会导致内核空指针解引用，进而引发内核 panic 或显示相关 oops 异常。
+
+#主要错误日志
+drivers/gpu/drm/amd/amdgpu/../display/dc/hwss/dcn20/dcn20_hwseq.c:1925 dcn20_program_pipe() error: we previously assumed 'pipe_ctx->plane_state' could be null (see line 1877)
+
+#问题根因
+代码逻辑中缺乏对 `pipe_ctx->plane_state` 指针有效性的检查。在函数 `dcn20_program_pipe` 的多处条件判断中，代码直接解引用了 `pipe_ctx->plane_state` 来访问 `update_flags` 或 `visible` 成员。根据静态分析工具 smatch 的报告，该指针在此上下文中可能为 null，从而导致空指针解引用故障。
+
+#解决方案
+在 `dcn20_program_pipe` 函数中访问 `pipe_ctx->plane_state` 成员前增加非空检查。具体修改涉及多处条件判断语句，将直接访问改为先判断 `pipe_ctx->plane_state` 是否存在，再进行后续成员访问（如 `pipe_ctx->plane_state && pipe_ctx->plane_state->update_flags.raw`），从而避免空指针解引用风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/355d7e0e8ee0fcf209ea1dfa90042379638edaea

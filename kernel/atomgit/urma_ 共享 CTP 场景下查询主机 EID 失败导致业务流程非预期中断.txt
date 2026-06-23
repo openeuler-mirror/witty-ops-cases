@@ -1,0 +1,27 @@
+#标题
+urma: 共享 CTP 场景下查询主机 EID 失败导致业务流程非预期中断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用共享 CTP（shared-ctp）功能场景下，当驱动尝试查询本端或对端主机 EID（Endpoint ID）失败（例如返回 -ENOENT）时，系统错误地中断了当前的连接管理操作（如创建、销毁或复用 TP）。这可能导致本应继续执行的连接建立或销毁流程被异常终止，影响业务可用性。
+
+#主要错误日志
+- 推断日志（基于补丁移除的错误打印）：
+  `Failed to lookup local host eid, ret=%d, local_port_eid=...`
+  `Failed to lookup peer host eid, ret=%d, peer_port_eid=...`
+  `Failed to lookup host info in create req.`
+  `Failed to lookup host info in destroy req, ret=%d`
+  `Failed to lookup host info in isref_req, ret=%d`
+
+#问题根因
+在 `ubcore_lookup_host_info_local_and_peer` 函数中，当查询主机 EID 失败时，函数返回了错误的错误码（如 `-ENOENT`）。调用侧代码（如 `ubcore_fill_tpid_reuse_key`、`handle_create_req_with_tpid_reuse` 等）直接检查该返回值，若非 0 则直接返回错误或跳过后续逻辑。此设计过于严格，查询 EID 失败不应作为阻断业务流程的致命错误条件。
+
+#解决方案
+1. 修改 `ubcore_lookup_host_info_local_and_peer` 函数返回类型为 `void`，移除错误码返回逻辑。
+2. 在查询失败时，将原本的 `ubcore_log_err` 错误日志降级为 `ubcore_log_warn_rl`（限流警告），仅提示查询无结果，不再作为错误抛出。
+3. 移除所有调用侧对该函数返回值的检查逻辑（如 `if (ret != 0)`），确保即便 EID 查询失败，后续的连接处理流程仍能正常继续。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/97ab7df782d3c477965766a2fe137af74a41995e

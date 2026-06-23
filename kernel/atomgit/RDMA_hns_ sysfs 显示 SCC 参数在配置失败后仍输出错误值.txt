@@ -1,0 +1,23 @@
+#标题
+RDMA/hns: sysfs 显示 SCC 参数在配置失败后仍输出错误值
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当通过 sysfs 接口配置 RoCE 设备的 SCC（拥塞控制）参数时，若硬件配置失败，后续通过 sysfs 读取到的参数值仍为失败前尝试配置的值，而非硬件中实际生效的参数值。这导致用户在配置失败后，查看到的参数与硬件实际状态不一致，产生误导。
+
+#主要错误日志
+failed to configure scc param, opcode: 0x%x, ret = %d.
+
+#问题根因
+struct hns_roce_scc_param 结构体中的 param[] 数组被同时用于存储 sysfs 输入的临时配置值和用于 sysfs 展示的当前值。当向硬件下发配置失败时，param[] 数组已被更新为输入的新值，但硬件中的实际参数未变更，导致后续 sysfs 读取时展示了错误的参数值，与硬件状态不同步。
+
+#解决方案
+在 struct hns_roce_scc_param 结构体中新增 latest_param[] 成员，专门用于存储硬件中实际生效的最新参数值。修改逻辑如下：
+1. 仅在硬件配置成功（命令返回成功）后，才将配置值更新到 latest_param[] 中。
+2. sysfs 展示接口（scc_attr_show）改为从 latest_param[] 读取数据，确保无论配置是否成功，展示的始终是硬件中当前生效的正确参数值。
+3. 原 param[] 数组现在仅用于暂存 sysfs 输入的待配置临时值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5a71b75e363e02cef53ad2987ca7fcba058baeb4

@@ -1,0 +1,20 @@
+#标题
+smb: client: automount_fullpath 缺少 page 参数空指针检查导致潜在内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SMB 客户端处理 automount（自动挂载）构建路径时，若传入的 `page` 参数为 NULL，且 `tcon->origin_fullpath` 已设置，代码将直接使用该空指针调用 `dentry_path_raw`，导致 NULL 指针解引用，引发内核 panic 或 oops。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `automount_fullpath` 中，调用 `__build_path_from_dentry_optional_prefix` 时，若 `tcon->origin_fullpath` 未设置，代码逻辑中包含对 `page` 是否为 NULL 的检查。然而，当 `tcon->origin_fullpath` 已设置时，代码路径直接跳过了该检查，缺失了对 `page` 指针的有效性验证，从而导致潜在的空指针解引用风险。
+
+#解决方案
+在 `fs/smb/client/namespace.c` 的 `automount_fullpath` 函数中，在调用 `dentry_path_raw` 使用 `page` 指针之前，增加 `if (unlikely(!page))` 判断。若 `page` 为空，直接返回 `ERR_PTR(-ENOMEM)`，防止后续发生空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d41311c4e9e69b65c9cb746e6b0de2710b6cbc5e

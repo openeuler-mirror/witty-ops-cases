@@ -1,0 +1,23 @@
+#标题
+tracing: 修复 tracer 切换时 print_graph_function_flags 的 UAF 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 tracer 切换（例如从 irqsoff tracer 或 wakeup tracer 切换到其他 tracer）时，内核可能发生 Use-After-Free（释放后使用）故障，导致内核 panic 或内存被非法访问。该问题触发于 `print_graph_function_flags` 函数执行过程中，访问了已释放的私有数据指针。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `irqsoff_trace_open` 和 `wakeup_trace_open` 函数中，当不使用图形模式（`is_graph(iter->tr)` 为假）时，代码会将 `iter->private` 设置为 NULL。然而，对应的 `graph_trace_close` 函数在释放 `iter->private` 指向的内存后，并未将 `iter->private` 指针置 NULL。
+当后续进行 tracer 切换时，如果触发 close 操作后再访问 `iter->private`，由于该指针未被清零且指向的内存已被释放，从而导致 Use-After-Free 风险。
+
+#解决方案
+将指针置 NULL 的操作统一移至内存释放函数中。
+1. 在 `graph_trace_close` 函数中，在执行 `kfree(data)` 释放内存后，立即将 `iter->private` 设置为 NULL，防止产生悬垂指针。
+2. 移除 `irqsoff_trace_open` 和 `wakeup_trace_open` 函数中冗余的 `else iter->private = NULL` 逻辑，统一由 close 函数处理指针清理，确保释放与置 NULL 操作的原子性与一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad5bd47cdfefe97e46a912ac20ead421d2b66016

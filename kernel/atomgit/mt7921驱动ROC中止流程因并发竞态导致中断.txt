@@ -1,0 +1,20 @@
+#标题
+mt7921驱动ROC中止流程因并发竞态导致中断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在mt7921芯片组使用过程中，ROC（remain_on_channel）中止流程可能被意外中断，导致ROC过程无法按预期正常中止。
+
+#主要错误日志
+未知
+
+#问题根因
+`mt7921_set_roc` API与`mt7921_roc_work`工作队列存在并发执行竞态条件。具体发生在`mt7921_roc_work`中检查并清除`MT76_STATE_ROC`状态位与执行`ieee8021_iterate_active_interfaces`之间的时间窗口。该竞态导致ROC中止流程被中断，状态变更未得到正确同步。
+
+#解决方案
+将`MT76_STATE_ROC`状态位的修改操作放入互斥锁临界区内保护。具体修改为：在`mt7921_roc_work`函数中，先调用`mt792x_mutex_acquire`获取锁，再执行`test_and_clear_bit`操作；若状态检查失败，需在返回前释放锁。这确保了ROC状态变更的同步性，防止了竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c907ef1492ba497b4c57f6a5ce2c85b978ee6c2b

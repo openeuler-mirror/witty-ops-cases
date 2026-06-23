@@ -1,0 +1,23 @@
+#标题
+ext4: iomap路径下punch hole操作导致的数据陈旧问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ext4文件系统使用iomap路径执行punch hole操作时，可能出现陈旧数据未被正确清除的问题。具体表现为：在执行hole punch后，通过读取操作仍能获取到该范围内应被清零的旧数据，导致数据不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ext4_punch_hole` 函数中，清理页面缓存的函数 `ext4_truncate_page_cache_block_range` 调用时机及参数传递错误。
+原代码逻辑在对文件系统进行磁盘块释放操作之前，就尝试清理页面缓存，且传入的参数为 `first_block_offset` 和 `last_block_offset + 1`（基于块对齐）。这导致指定的范围可能无法正确覆盖用户请求的 `offset` 到 `offset + length` 区域，特别是在iomap路径下，未能有效清理用户请求范围内的页面缓存，从而暴露了陈旧数据。
+
+#解决方案
+调整 `ext4_truncate_page_cache_block_range` 的调用位置与参数。
+1. 将该函数调用移至磁盘空间释放操作之前（代码逻辑上的调整，此处补丁将其移出特定条件块，修正了执行顺序）。
+2. 修改函数参数，直接使用用户态传入的偏移量 `offset` 和长度 `length` 计算范围（`offset` 到 `offset + length`），不再使用块对齐后的边界值。这确保了用户请求的特定字节范围在页面缓存中被完全清零，避免了陈旧数据残留。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a609147a7a2cfc7ee44a25a6b4fb6a1f9b0e23d3

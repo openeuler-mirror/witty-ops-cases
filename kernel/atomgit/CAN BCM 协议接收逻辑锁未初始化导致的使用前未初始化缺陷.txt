@@ -1,0 +1,20 @@
+#标题
+CAN BCM 协议接收逻辑锁未初始化导致的使用前未初始化缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 CAN BCM（Broadcast Manager）协议的接收设置接口（`bcm_rx_setup`）创建新的 CAN ID 过滤操作时，对应操作结构体中的自旋锁 `bcm_tx_lock` 未被初始化。后续代码路径中若直接使用该锁，会导致内核出现不可预测的行为，可能引发内核崩溃、死锁或数据竞争破坏内存结构。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `net/can/bcm.c` 文件的 `bcm_rx_setup` 函数中，当创建新的操作（`op`）结构体时，遗漏了对结构体内部成员 `bcm_tx_lock` 自旋锁的初始化。尽管结构体通过 `kzalloc` 分配，但显式的锁初始化缺失导致该锁处于未定义状态，无法正常使用。
+
+#解决方案
+在 `bcm_rx_setup` 函数中分配完操作结构体 `op` 后，立即调用 `spin_lock_init(&op->bcm_tx_lock)` 对该自旋锁进行初始化，确保在使用该结构体进行后续处理前，锁机制已正确建立。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f229ffc5721d02020e0816dcabd4980b36910d0d

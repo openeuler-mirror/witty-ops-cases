@@ -1,0 +1,31 @@
+#标题
+zcopy 模块处理 PUD-SIZE 页面导致 softlockup
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在调用 zcopy 接口挂接（attach）PUD-SIZE 大小的页面时触发 softlockup，导致 CPU 卡死并最终引发 Kernel panic。具体表现为进程 `ioctl_zcopy_too` 在获取自旋锁时长时间阻塞（超过 23 秒），触发 watchdog 并导致系统崩溃。
+
+#主要错误日志
+watchdog: BUG: soft lockup - CPU#22 stuck for 23s!
+[ioctl_zcopy_too:2604618]
+CPU: 22 PID: 2604618 Comm: ioctl_zcopy_too Kdump: loaded Tainted: G           OE     5.10.0+ #12
+Hardware name: Huawei TaiShan 2280 /BC11SPCD, BIOS 1.79 12/28/2022
+...
+Call trace:
+ native_queued_spin_lock_slowpath+0x15c/0x390
+ attach_page_range+0x214/0x4f0 [zcopy]
+ attach_pages+0xf8/0x3a0 [zcopy]
+ zcopy_ioctl.part.0+0x98/0xf0 [zcopy]
+ ...
+Kernel panic - not syncing: softlockup: hung tasks
+
+#问题根因
+zcopy 模块当前不支持 PUD-SIZE 页面的挂接处理。在函数 `zcopy_get_pud` 中，代码缺乏对 PUD entry 是否为页表项的检查。当传入 PUD-SIZE 页面时，PUD entry 指向的是一个物理大页而非下一级页表，代码尝试将其当作页表项进行访问和锁定，导致陷入死循环或错误的内存访问，从而引发 softlockup。
+
+#解决方案
+在 `zcopy_get_pud` 函数中增加对 PUD entry 的属性检查。通过添加 `if (!pud_table(*pud)) return NULL;` 判断，若检测到该 PUD entry 不是页表（即指向 PUD-SIZE 大页），则直接返回 NULL 忽略处理，避免后续流程进入错误路径。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56b1f57cb8dee653eaaa1ed3748ad3eb5ac4bf34

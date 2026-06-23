@@ -1,0 +1,26 @@
+#标题
+amdkfd: SVM迁移DMA映射方向不一致导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行AMD GPU SVM（共享虚拟内存）迁移操作（如将数据从RAM迁移到VRAM）时，DMA核心子系统检测到DMA映射方向不一致，触发内核WARNING警告。调用栈显示警告发生在`debug_dma_unmap_page`检测过程中，涉及`svm_migrate_ram_to_vram`函数。
+
+#主要错误日志
+[  150.834218] WARNING: CPU: 8 PID: 1812 at kernel/dma/debug.c:1028 check_unmap+0x1cc/0x930
+[  150.834453]  svm_range_dma_unmap_dev+0x8a/0xf0 [amdgpu]
+[  150.834710]  svm_migrate_ram_to_vram+0x361/0x740 [amdgpu]
+
+#问题根因
+SVM迁移过程中的DMA映射方向设置与取消映射时的方向设置不一致。
+具体表现为：在`svm_migrate_copy_to_vram`中映射页面时使用了`DMA_TO_DEVICE`，在`svm_migrate_copy_to_ram`中映射页面时使用了`DMA_FROM_DEVICE`，但在取消映射时统一使用了其他方向（通常隐含为BIDIRECTIONAL或由DMA debug机制检测到不匹配）。这种方向设置的不一致导致DMA核心在`check_unmap`校验时报错。
+
+#解决方案
+修改`drivers/gpu/drm/amd/amdkfd/kfd_migrate.c`中的DMA映射方向参数：
+1. 在`svm_migrate_copy_to_vram`函数中，将`dma_map_page`的方向参数从`DMA_TO_DEVICE`修改为`DMA_BIDIRECTIONAL`。
+2. 在`svm_migrate_copy_to_ram`函数中，将`dma_map_page`的方向参数从`DMA_FROM_DEVICE`修改为`DMA_BIDIRECTIONAL`。
+以此确保DMA map与unmap的方向保持一致，消除DMA debug模块的警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d14b7b40fb2081a913d5ff0bf25f64957a63bbdf

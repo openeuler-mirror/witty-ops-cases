@@ -1,0 +1,29 @@
+#标题
+adv7511 探测期间中断导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 adv7511 驱动探测阶段，如果硬件中断状态已置位，中断处理程序会在 CEC 模块初始化完成前被触发。此时中断处理函数访问未初始化的数据结构，导致内核发生 Oops 并崩溃。具体表现为加载驱动时触发“Unable to handle kernel read from unreadable memory”错误。
+
+#主要错误日志
+Unable to handle kernel read from unreadable memory at virtual address 00000000000003d5
+Internal error: Oops: 96000004 [#1] PREEMPT_RT SMP
+Call trace:
+ cec_received_msg_ts+0x48/0x990 [cec]
+ adv7511_cec_irq_process+0x1cc/0x308 [adv7511]
+ adv7511_irq_process+0xd8/0x120 [adv7511]
+ adv7511_irq_handler+0x1c/0x30 [adv7511]
+ irq_thread_fn+0x30/0xa0
+ irq_thread+0x14c/0x238
+ kthread+0x190/0x1a8
+
+#问题根因
+在 `adv7511_probe()` 函数中，IRQ（中断请求）注册的位置过早，位于 `adv7511_cec_init` 之前。如果在探测过程中 IRQ 已处于挂起状态，中断线程会立即执行并调用 `adv7511_cec_irq_process`，进而调用 `cec_received_msg_ts`。由于此时 CEC 相关数据尚未初始化，导致访问未初始化的内存地址引发崩溃。
+
+#解决方案
+将 IRQ 注册代码块（`devm_request_threaded_irq` 及相关初始化）移动到 `adv7511_probe()` 函数的末尾。这确保了在使能中断处理之前，CEC 等所有必要的子模块和数据结构均已正确初始化，从而避免中断处理程序访问未初始化数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8d6d3a61183b2233f5c2582ef2c6cfc6a8454c21

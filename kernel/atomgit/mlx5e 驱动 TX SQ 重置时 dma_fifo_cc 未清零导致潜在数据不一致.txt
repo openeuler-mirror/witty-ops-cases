@@ -1,0 +1,20 @@
+#标题
+mlx5e 驱动 TX SQ 重置时 dma_fifo_cc 未清零导致潜在数据不一致
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mlx5 网卡驱动发送队列（SQ）重置流程中，若 `sq->cc` 与 `sq->pc` 不一致，重置后可能出现 DMA FIFO 控制计数器与预期状态不符，潜在导致后续发送数据路径错误或内存管理异常。
+
+#主要错误日志
+"SQ 0x%x: cc (0x%x) != pc (0x%x)\n"
+
+#问题根因
+在 `mlx5e_reset_txqsq_cc_pc` 函数中，重置 SQ 指针时仅清零了 `sq->cc` 和 `sq->pc`，遗漏了对 `sq->dma_fifo_cc` 的清零操作，导致 DMA FIFO 消费者计数器残留旧值，破坏了重置后的状态一致性。
+
+#解决方案
+删除 `sq->dma_fifo_cc = 0;` 这一行的赋值操作（或确认该变量不应在此处被清零以匹配逻辑），确保重置逻辑与硬件实际行为或后续初始化流程保持一致，避免状态不一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6fbe03c98d6e4d76316aecb65c164f9e949a93cd

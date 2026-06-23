@@ -1,0 +1,28 @@
+#标题
+hisi_trng 多线程并发场景下设备占用导致任务失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多线程并发调用 TRNG 设备的场景下，当设备处于忙状态时，驱动尝试申请软件计算的 tfm（drbg）作为回退方案。由于申请软件 tfm 失败或逻辑处理不当，导致随机数生成任务无法正常执行，进而导致业务流程失败。
+
+#主要错误日志
+- pr_err("slen(%u) is not matched with trng(%d)\n", slen, SW_DRBG_SEED_SIZE);
+- pr_err("failed to init trng(%d)\n", ret);
+- pr_err("output is error, dlen %u !\n", dlen);
+- pr_err("failed to generate random number(%d)!\n", ret);
+- pr_err("failed to register crypto(%d)\n", ret);
+
+#问题根因
+原驱动实现中，通过 `is_used` 标记设备占用状态，当设备被标记为忙（`is_used` 为 true）时，`hisi_trng_init` 函数会尝试通过 `crypto_alloc_rng` 申请软件 tfm（drbg_nopr_ctr_aes256）来处理请求。这种回退机制在并发场景下存在缺陷，导致无法正确获取 tfm 资源，从而引发任务失败。
+
+#解决方案
+移除了原有的“设备忙时回退申请软件 tfm”的机制，重构了并发处理逻辑：
+1. 删除了 `is_used` 标记及相关的软件 tfm 申请代码，移除了对 `CRYPTO_DRBG_CTR` 配置的依赖。
+2. 引入互斥锁 `mutex` 保护硬件 TRNG 设备的操作，确保多线程串行访问硬件资源。
+3. 实现了内建的 reseed（重置种子）逻辑，在 `random_bytes` 达到阈值（SW_MAX_RANDOM_BYTES）时自动触发重置种子，不再依赖外部软件算法。
+4. 优化了设备列表管理，通过 `ctx_num` 计数来管理设备上下文，支持多线程共享同一硬件设备。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56da8c1ec8638f6ad4df737a133a41b106a3ce42

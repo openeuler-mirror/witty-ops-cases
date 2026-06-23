@@ -1,0 +1,27 @@
+#标题
+sfc 驱动 ef100_process_design_param 空指针解引用导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 sfc 驱动进行 ef100 网卡设备探测时，由于 `ef100_probe_main()` 在 `net_dev` 结构体创建之前被调用，导致在 `ef100_process_design_param()` 函数中访问尚未初始化的 `efx->net_dev` 时发生 NULL 指针解引用（NULL dereference），引发内核 panic 或 oops。
+
+#主要错误日志
+推断：内核日志中将包含空指针解引用的调用栈，指向 ef100_process_design_param 函数。
+修复前的典型报错日志原文（出自代码 diff）：
+- "TSO_MAX_HDR_NUM_SEGS < 1\n"
+- "%s size granularity is %llu, can't guarantee safety\n"
+- "DP_COMPAT has unknown bits %#llx, driver not compatible with this hw\n"
+- "truncated design parameter (incomplete type %u)\n"
+- "truncated design parameter %u\n"
+
+#问题根因
+自提交 98ff4c7c8ac7 ("sfc: Separate netdev probe/remove from PCI probe/remove") 引入变更后，`ef100_probe_main()` 及其调用的 `ef100_check_design_params()` 在 `efx->net_dev` 创建之前运行。此时，代码中调用的 `netif_set_tso_max_size()`、`netif_set_tso_max_segs()` 以及 `netif_err()` 等函数尝试访问 `efx->net_dev` 指针，导致了空指针解引用。
+
+#解决方案
+1. 将 `netif_set_tso_max_size()` 和 `netif_set_tso_max_segs()` 的调用从 `ef100_process_design_param()` 移至 `ef100_probe_netdev()` 中，确保在 `net_dev` 创建并赋值后再进行设置。
+2. 将 `ef100_process_design_param()` 和 `ef100_check_design_params()` 中的日志打印函数从 `netif_err`/`netif_dbg` 替换为 `pci_err`/`pci_dbg`，以避免对 `efx->net_dev` 的依赖。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9260ef815e68a600ff6041b8a85a68c9d56d20c7

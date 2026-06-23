@@ -1,0 +1,20 @@
+#标题
+clk: tegra: tegra124-emc: fix device leak on set_rate()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Tegra124 EMC（External Memory Controller）时钟驱动在执行 `set_rate()` 操作时存在设备引用计数泄漏。由于在首次调用 `set_rate()` 查找 EMC 设备及其驱动数据时获取了设备引用，但未在成功路径上释放，导致对应的设备对象引用计数无法归零，造成内核资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `emc_ensure_emc_driver` 函数中，代码通过查找获取了 EMC 设备（`pdev`）的引用。原逻辑仅在获取驱动数据失败（`!tegra->emc`）时调用 `put_device()` 释放引用。然而，在成功获取驱动数据的正常流程中，代码直接返回了指针而忘记调用 `put_device()`。虽然持有设备引用可以防止设备对象被释放，但它不能防止驱动数据（`driver_data`）被清除，因此持有该引用对于后续操作是无意义的，且导致了引用计数泄漏。
+
+#解决方案
+调整 `put_device()` 的调用位置，将其移至获取驱动数据操作之后、错误检查之前。这确保了无论是否成功获取到驱动数据，在完成访问后都立即释放设备引用，从而修复了资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/002a8c2c7e920961db47df0b092b2bea3008b742

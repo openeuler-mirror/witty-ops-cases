@@ -1,0 +1,23 @@
+#标题
+urma: 修复 target_reuse_tpid 连接等待时的锁与状态转换处理缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 URMA 模块处理 TPID 重用连接过程中，若状态不满足条件，函数在持有互斥锁的情况下直接返回失败，导致锁未释放，引发死锁或后续连接挂起。
+2. 在修改 TPID 状态时，对于无效的状态转换（如非 RTS 状态转为 RTS），错误地返回了成功（0），导致上层调用者误判操作结果，可能引发后续流程异常。
+
+#主要错误日志
+ubcore_log_err("Invalid state transition: %d -> RTS.\n", old_state);
+
+#问题根因
+1. `target_reuse_tpid` 函数逻辑错误：在 `tpid_reuse->is_ref` 为 false 的分支中，直接返回 `CREATE_CONN_FAIL`，跳过了后续的 `mutex_unlock` 操作，导致锁泄漏。
+2. `ubcore_modify_tpid` 函数逻辑错误：在检测到无效状态转换时，仅打印了错误日志，但返回值错误地置为 0（成功），且未正确处理原状态即为 RTS 的特殊情况，导致对错误状态转换的掩盖。
+
+#解决方案
+1. 调整 `target_reuse_tpid` 函数的返回路径，将 `CREATE_CONN_FAIL` 的返回动作移至 `else` 分支内部，确保在返回前先执行 `mutex_unlock` 释放锁资源。
+2. 修正 `ubcore_modify_tpid` 函数的返回值逻辑：若原状态已经是 RTS，则返回 0（无需切换）；若原状态非 RTS 且尝试切换至 RTS，则返回 -EINVAL 以示参数错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5955c8f38775875fe2f325326772a47fe7321252

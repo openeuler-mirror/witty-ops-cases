@@ -1,0 +1,32 @@
+#标题
+macb驱动设备移除时因注销顺序错误触发kernfs内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除 macb 网络设备（如执行设备卸载或驱动移除）时，内核日志中打印 WARNING 警告信息及调用栈，提示无法移除 `attached_dev` 目录。
+
+#主要错误日志
+------------[ cut here ]------------
+kernfs: can not remove 'attached_dev', no directory
+WARNING: CPU: 1 PID: 27146 at fs/kernfs/dir.c:1683
+Call trace:
+  kernfs_remove_by_name_ns+0xd8/0xf0
+  sysfs_remove_link+0x24/0x58
+  phy_detach+0x5c/0x168
+  phy_disconnect+0x4c/0x70
+  phylink_disconnect_phy+0x6c/0xc0 [phylink]
+  macb_close+0x6c/0x170 [macb]
+  ...
+  macb_remove+0x60/0x168 [macb]
+  platform_remove+0x5c/0x80
+
+#问题根因
+在 `macb_remove` 函数中，驱动错误地在注销网络设备（`unregister_netdev`）之前调用了 `phy_exit`。由于此时网络设备仍处于注册状态，触发了 PHY 设备退出流程中的 sysfs 文件移除操作，导致内核试图移除一个不存在的 kernfs 目录从而触发 WARN。
+
+#解决方案
+调整 `macb_remove` 函数中的资源释放顺序，将 `unregister_netdev(dev)` 调用移动到 `phy_exit(bp->sgmii_phy)` 之前执行，确保先注销网络设备再关闭 PHY 及清理 MDIO 总线。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e87a32010b6d17b265ee6ed25a2591711e8aa861

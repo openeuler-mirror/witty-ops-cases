@@ -1,0 +1,25 @@
+#标题
+sw64 KVM 虚拟机热迁移失败后源端无法正常运行
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构下进行 KVM 虚拟机热迁移操作，当热迁移失败时，源端虚拟机无法恢复正常运行，出现状态异常或功能受损的现象。
+
+#主要错误日志
+未知
+
+#问题根因
+热迁移失败回滚时，内核未正确清理内存区域的 `migration_mark` 标记，且未执行必要的 TLB 刷新操作。具体逻辑缺陷在于：
+1. 在 `kvm_arch_commit_memory_region` 函数中，当停止脏页记录（dirty logging stopped）时，原有代码逻辑未正确处理，导致迁移标记残留。
+2. 条件判断不严谨，原有代码判断 `if ((change != KVM_MR_DELETE)` 覆盖范围过宽，未精确匹配“停止脏页记录”这一特定场景，导致清理流程缺失。
+
+#解决方案
+修改 `arch/sw_64/kvm/kvm_core3.c` 和 `arch/sw_64/kvm/mmu.c` 中的 `kvm_arch_commit_memory_region` 函数逻辑：
+1. 精确判断条件：当内存变更类型为 `KVM_MR_FLAGS_ONLY`，且旧标志包含 `KVM_MEM_LOG_DIRTY_PAGES` 而新标志不包含时，确认为“停止脏页记录”场景。
+2. 在此场景下，显式调用 `kvm_mark_migration(kvm, 0)` 清除迁移标记。
+3. 通过上述修复，确保热迁移失败后源端虚拟机能正确清除标记并执行必要的 TLB 刷新（由标记清除后的流程触发），恢复源端虚拟机的正常运行状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/93a7af97de47add862a1f3372c40b86c0ae03804

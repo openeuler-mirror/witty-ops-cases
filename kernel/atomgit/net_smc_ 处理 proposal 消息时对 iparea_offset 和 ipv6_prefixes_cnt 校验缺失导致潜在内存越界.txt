@@ -1,0 +1,25 @@
+#标题
+net/smc: 处理 proposal 消息时对 iparea_offset 和 ipv6_prefixes_cnt 校验缺失导致潜在内存越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+SMC 协议在处理接收到的 proposal 消息时，未对 `iparea_offset` 和 `ipv6_prefixes_cnt` 字段进行有效性校验。如果接收到的消息中这些字段被构造为异常值，可能导致内核读取到无效内存地址，引发内存越界访问或程序异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+代码在解析 SMC proposal 消息时存在两处缺陷：
+1. `smc_clc_proposal_get_prefix` 函数直接使用接收到的 `iparea_offset` 计算指针地址，未判断偏移量是否超出有效范围，导致可能返回非法指针。
+2. `smc_clc_msg_prop_valid` 等校验函数未检查 `ipv6_prefixes_cnt` 是否超过 `SMC_CLC_MAX_V6_PREFIX` 限制。
+3. `smc_find_ism_v1_device_serv` 函数在访问 `pclc_smcd` 成员前未检查指针是否为空。
+
+#解决方案
+1. 在 `smc_clc_proposal_get_prefix` 函数中增加对 `iparea_offset` 的边界检查，若 offset 超过 `sizeof(struct smc_clc_msg_smcd)` 则返回 NULL。
+2. 在 `smc_clc_msg_prop_valid` 校验函数中增加对 `ipv6_prefixes_cnt` 的判断，超过最大值时返回 false。
+3. 在 `smc_listen_prfx_check` 和 `smc_find_ism_v1_device_serv` 调用处增加对返回值 NULL 的判断，若校验失败则返回 `-EPROTO` 或跳过处理，防止非法内存访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b3243fe931990b1483019a8af5cafa1877d3478a

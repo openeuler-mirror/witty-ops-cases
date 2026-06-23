@@ -1,0 +1,32 @@
+#标题
+mlx5 Bridge 移除 LAG 设备时因状态检查逻辑错误导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当从网桥中移除 LAG（Link Aggregation）设备时，系统触发 NETDEV_CHANGEUPPER 事件，导致内核发生 "stack segment" 错误并崩溃（Oops）。该故障发生在 `mlx5_bridge_wq` 工作队列处理过程中，具体表现为访问已被销毁的 bond 网络设备时出现非法内存访问。
+
+#主要错误日志
+Oops: stack segment: 0000 [#1] SMP
+CPU: 3 UID: 0 PID: 23695 Comm: kworker/u40:3 Tainted: G           OE      6.11.0_mlnx #1
+Workqueue: mlx5_bridge_wq mlx5_esw_bridge_update_work [mlx5_core]
+RIP: 0010:br_switchdev_event+0x2c/0x110 [bridge]
+Call Trace:
+ ? br_switchdev_event+0x2c/0x110 [bridge]
+ notifier_call_chain+0x4b/0xa0
+ atomic_notifier_call_chain+0x16/0x20
+ mlx5_esw_bridge_update+0xec/0x170 [mlx5_core]
+ mlx5_esw_bridge_update_work+0x19/0x40 [mlx5_core]
+ process_scheduled_works+0x81/0x390
+ worker_thread+0x106/0x250
+
+#问题根因
+在移除 LAG 设备过程中，驱动程序处理 NETDEV_CHANGEUPPER 事件时，调用 `mlx5_esw_bridge_lag_rep_get()` 查找下层设备（PF）以刷新卸载条目。该函数内部调用了 `mlx5_lag_is_shared_fdb()` 进行检查，若其中某个 PF 已卸载，该检查返回 false，导致函数返回 NULL 而非存活的 PF，使得刷新操作被跳过。
+同时，网桥 FDB 条目的 `lastuse` 时间在事件处理程序中更新。由于刷新被跳过，且上层 bond 接口已删除，SWITCHDEV_FDB_ADD_TO_BRIDGE 事件被忽略，导致条目无法老化。工作队列持续发送该事件，内核网桥通知器在处理时尝试访问已销毁的 bond netdev，从而触发崩溃。
+
+#解决方案
+移除 `mlx5_esw_bridge_lag_rep_get()` 和 `mlx5_esw_bridge_is_local()` 函数中对 `mlx5_lag_is_shared_fdb()` 的冗余检查，确保在 LAG 状态变化时仍能正确获取存活的 PF 设备并执行刷新操作。同时，在 `mlx5_esw_bridge_switchdev_event()` 中针对 LAG master 设备增加 `mlx5_lag_is_shared_fdb()` 状态检查，以跳过无效状态下的 offload 操作，避免在 LAG 初始化后变为无效状态时继续处理事件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/06c84a78a8d7bf03783f2530184bfcfb9e09ecef

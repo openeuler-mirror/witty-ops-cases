@@ -1,0 +1,20 @@
+#标题
+smb/server: parse_durable_handle_context 函数引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SMB2 协议的 Durable Handle 上下文解析时，若 `SMB2_CLIENT_GUID_SIZE` 匹配失败且请求头未设置 `SMB2_FLAGS_REPLAY_OPERATION` 标志，函数将返回 `-ENOEXEC` 错误。在此错误处理路径中，未释放之前已获取的文件指针资源，导致引用计数泄漏，进而可能引发文件句柄无法正常关闭或资源长期占用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `parse_durable_handle_context` 函数中，当 GUID 校验失败进入错误处理分支（`err = -ENOEXEC`）时，代码直接通过 `goto out` 跳转返回，遗漏了对 `dh_info->fp` 指向的结构体执行引用计数释放操作（`ksmbd_put_durable_fd`）。此前逻辑中该结构体的引用计数已被增加，错误路径未配对执行减少操作，导致引用计数泄漏。
+
+#解决方案
+在 GUID 校验失败的错误处理分支中，增加调用 `ksmbd_put_durable_fd(dh_info->fp)` 函数，确保在返回错误码前正确释放文件指针的引用计数，修复资源泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2117c4780c033dacc1df38eb186c4d761e9b2780

@@ -1,0 +1,20 @@
+#标题
+wifi: libertas: 适配器释放时存在释放后使用（UAF）风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载或移除 libertas 无线网卡驱动过程中，若 `command_timer` 或 `tx_lockup_timer` 定时器回调函数恰好在释放适配器结构体的时间窗口内并发执行，内核将发生释放后使用。此行为可能导致内核崩溃、Oops 或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `lbs_free_adapter()` 函数中，代码使用 `timer_delete()`（非同步版本）来删除 `command_timer` 和 `tx_lockup_timer`，随即释放了包含这些定时器的结构体内存。由于 `timer_delete()` 不会等待正在运行的定时器回调函数执行完成，若回调函数正在执行，它将在结构体被释放后继续访问已释放的内存（如 `priv->driver_lock`、`priv->cur_cmd` 等字段），从而触发 UAF 漏洞。
+
+#解决方案
+将 `lbs_free_adapter()` 函数中针对 `command_timer` 和 `tx_lockup_timer` 的删除操作从 `timer_delete()`（原 `del_timer`）修改为 `timer_delete_sync()`。这确保了在释放适配器结构体内存之前，所有正在运行的定时器回调函数都已执行完毕，避免了竞争条件引发的释放后使用问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/293c0f6d43a1f1d8ef21dbd21311484e68491a4f

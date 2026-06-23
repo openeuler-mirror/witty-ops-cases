@@ -1,0 +1,24 @@
+#标题
+UBASE ELR复位流程非超时失败处理缺失导致流卡死
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ELR复位过程中，若发生非管理面交互超时的失败场景（如UBUS返回-EINVAL），UBASE未执行abort复位流程，而是继续执行清理操作，导致流停止操作未按预期返回-EBUSY，进而造成业务流卡死或状态异常。此外，管理面超时与非管理面超时场景共用重试计数器，可能导致重试次数不足或逻辑混乱。
+
+#主要错误日志
+- `ubase_warn(udev, "wait reset done reg time out, reg = 0x%x.\n", reset_done_reg);`
+
+#问题根因
+1. **非超时失败处理缺失**：原代码在 `ubase_resume` 中仅针对返回值为 `-ETIMEDOUT` 或 `-EAGAIN` 的情况进行了特殊处理（跳转到 `timeout_resume`），对于其他错误返回值（如 `-EINVAL`）缺乏处理，导致未正确进入 abort 流程，状态机继续执行清理操作引发异常。
+2. **重试计数器逻辑缺陷**：管理面交互超时和非管理面交互超时场景共享同一个重试计数变量 `reset_retry_cnt`。原逻辑中管理面超时使用 `U32_MAX` 进行无限重试，非管理面超时限制 5 次。当两者交替出现时，计数器未被正确重置或独立统计，导致非管理面场景重试次数少于 5 次甚至不重试。
+
+#解决方案
+1. **扩展错误处理范围**：修改 `ubase_resume` 函数逻辑，将错误处理范围从特定的超时错误扩展至所有错误返回值（`if (ret)`）。对于非超时错误，新增跳转至 `err_resume` 标签执行 abort 处理流程，确保复位失败时能正确中止并清理状态。
+2. **修正重试计数逻辑**：修改 `ubase_reset_err_handle` 中的计数器管理逻辑。当发生管理面交互超时（`UBASE_STATE_RST_TIMEOUT_RETRY_B` 置位）时，将 `reset_retry_cnt` 重置为 0；发生非管理面失败时，对 `reset_retry_cnt` 进行加 1 操作并限制最大值为 5，确保两种场景的重试逻辑互不干扰。
+3. **补充取消复位工作队列**：在设备反初始化函数 `ubase_dev_uninit` 中增加对 `reset_service_task` 的取消同步操作，防止潜在的资源竞争或空指针访问。
+4. **完善日志打印**：在 `ubase_reset_task_schedule` 中移除重试计数的打印，并在 `ubase_ue_reset_done_check` 超时日志中增加寄存器值输出，便于问题定位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e34ade3dba086a9bced69027c8bd3f97f949d468

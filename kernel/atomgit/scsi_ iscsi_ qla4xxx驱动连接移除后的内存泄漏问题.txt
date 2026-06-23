@@ -1,0 +1,21 @@
+#标题
+scsi: iscsi: qla4xxx驱动连接移除后的内存泄漏问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 qla4xxx 硬件 iSCSI 网卡（offload card）的场景下，移除 iSCSI 连接（connection）后发生内存泄漏，相关连接对象的内存无法被释放。
+
+#主要错误日志
+未知
+
+#问题根因
+此前提交 c577ab7ba5f3 为了修复 "HW conn removal use after free" 问题，移除了 `iscsi_iter_destroy_conn_fn()` 函数中的 `iscsi_put_conn()` 调用。
+然而，对于 qla4xxx 驱动，其 `->destroy_conn()` 回调函数并不会调用 `iscsi_remove_conn()` 和 `iscsi_put_conn()` 来从会话列表移除连接或释放连接的初始引用计数。因此，移除 `iscsi_put_conn()` 导致 qla4xxx 场景下连接对象的引用计数无法归零，从而引发内存泄漏。
+
+#解决方案
+通过 Revert 提交 c577ab7ba5f3，恢复 `iscsi_iter_destroy_conn_fn()` 函数中对 `iscsi_put_conn()` 的调用。这确保了在 qla4xxx 驱动场景下，连接的初始引用计数能被正确释放，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd260ca6864fc9cce2da9621e9375f6208359024

@@ -1,0 +1,20 @@
+#标题
+md/raid10: 修复 raid10_sync_request 中 any_working 标志位处理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RAID10 同步请求处理过程中，当阵列中仅剩一个处于 In_sync 状态的磁盘且该磁盘存在坏块时，`any_working` 标志位可能被错误地置为 1，但实际上并未提交任何 IO 请求。这会导致同步逻辑对工作状态的判断出现异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `raid10_sync_request()` 中，`any_working` 变量用于指示是否提交了 IO。原代码在执行坏块检查之前就将 `any_working` 置为 1。如果该磁盘随后被 `is_badblock` 检查出坏块并跳过当前处理，则会出现 `any_working` 为 1 但实际无 IO 提交的不一致状态。
+
+#解决方案
+调整 `any_working = 1` 的赋值位置，将其移动到坏块检查逻辑之后。确保只有在确认该磁盘未因坏块被跳过、即将进行后续 IO 提交操作时，才将 `any_working` 标志置为 1。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b6582b68c6b5c0d68ce57b6dca47705a17754467

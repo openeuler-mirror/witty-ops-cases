@@ -1,0 +1,20 @@
+#标题
+ksmbd: 连接释放时未销毁 async_ida 导致资源泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ksmbd 模块在处理连接断开释放资源时，未调用 ida_destroy() 销毁内嵌的 async_ida。这违反了内核 IDA API 的生命周期配对规则（ida_init 与 ida_destroy 需配对使用），导致 IDA 的底层 xarray 内存结构在连接释放后仍然残留，造成内存资源泄露。虽然在测试中未观察到明显的泄露现象，但代码逻辑存在缺陷。
+
+#主要错误日志
+未知
+
+#问题根因
+在历史提交将 per-connection 的 async_ida 从动态分配的 ksmbd_ida 改为内嵌的 struct ida 时，删除了原有的 ksmbd_ida_free() 调用，但遗漏了添加对应的 ida_destroy() 调用。这导致在连接释放路径中，IDA 的生命周期未正确结束，其内部数据结构未被清理。
+
+#解决方案
+在 ksmbd_conn_free() 函数中，当连接引用计数减为 0（即 refcnt 测试通过）且准备释放连接内存前，显式调用 ida_destroy(&conn->async_ida)。这确保了 IDA 的生命周期与 struct ksmbd_conn 的生命周期正确配对，并在 kfree(conn) 之前清理掉 IDA 的后备 xarray。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ef399af999598af259989b106af1df2ddc7a298a

@@ -1,0 +1,20 @@
+#标题
+xhci: dbc: Debug Cable反复重连导致传输环填满无法发送数据
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 USB Debug Cable（DbC）在传输环启动前反复断开连接时，传输环最终会被 No-op TRB 填满。一旦环被填满，驱动程序将无法排队新的传输请求，导致数据传输功能失效，系统打印 TRB 排队失败的错误信息。
+
+#主要错误日志
+xhci_hcd 0000:00:14.0: failed to queue trbs
+
+#问题根因
+根据 xHCI 规范，断开连接时会刷新待处理请求并将相应的 TRB 转换为 No-op TRB。如果 Debug Cable 在环启动前反复重连，传输环会逐渐积累 No-op TRB。对于 'in' 传输，TRB 总是预先入队以准备接收数据，若无数据到达且设备断开，环的 dequeue 指针会停留在起始位置，而 enqueue 指针会指向最后一个取消的 No-op TRB 之后的空闲 TRB。随着重连次数增加，整个环最终被 No-op TRB 填满，导致无法入队新的 TRB。
+
+#解决方案
+在 Debug Cable 断开连接且 DbC 离开配置状态时，重新初始化端点传输环。具体措施包括清空整个环缓冲区，将 enqueue 和 dequeue 指针重置到环的起始位置，并将 Cycle Bit 设置为初始状态，从而释放被 No-op TRB 占用的空间。代码层面通过新增 `xhci_dbc_reinit_ep_rings` 函数，在检测到断开连接事件时调用该函数重置 BULK_IN 和 BULK_OUT 环及其上下文。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3d2e9713ff51a1f6eab75c79d2827bb5da553b27

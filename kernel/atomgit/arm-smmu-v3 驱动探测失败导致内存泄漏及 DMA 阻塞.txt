@@ -1,0 +1,29 @@
+#标题
+arm-smmu-v3 驱动探测失败导致内存泄漏及 DMA 阻塞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 arm-smmu-v3 驱动探测（probe）失败时引发两个问题：
+1. kmemleak 检测到内存泄漏，泄露了在 `arm_smmu_init_structures()` 中分配的 iopf queue。
+2. SMMU 设备处于使能状态但 Stream Table 为空，导致静默阻塞所有 DMA 操作，严重影响后续调试与系统运行。
+
+#主要错误日志
+- 推断：kmemleak 报告的内存泄漏信息。
+- 原文：dev_err(dev, "Failed to register iommu\n");
+
+#问题根因
+驱动在 `arm_smmu_device_probe()` 流程中，若后续步骤（如 `arm_smmu_device_reset` 或 `iommu_device_register`）执行失败，代码直接返回错误码，未回滚已执行的初始化操作：
+1. 未释放 `arm_smmu_init_structures()` 中分配的 iopf queue 内存。
+2. 未调用 disable 操作将 SMMU 设备恢复至未探测状态，导致设备残留在使能状态。
+
+#解决方案
+修改 `arm_smmu_device_probe()` 函数的错误处理路径，引入标签（label）机制进行资源清理：
+1. 增加 `err_free_iopf` 标签：在探测初期初始化结构体失败时，确保释放已分配的 iopf queue。
+2. 增加 `err_disable` 标签：在设备复位或注册 sysfs 失败时，调用 `arm_smmu_device_disable(smmu)` 关闭 SMMU 设备。
+3. 增加 `err_free_sysfs` 标签：在注册 iommu 设备失败时，先移除 sysfs 相关资源，再跳转至 disable 流程。
+通过上述回滚操作，确保探测失败后资源被正确释放且设备状态恢复正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0a450ed33b50082da36345afd53572ccd6627097

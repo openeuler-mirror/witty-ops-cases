@@ -1,0 +1,24 @@
+#标题
+stm32-sai: 探测失败或卸载时 OF node 引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+STM32 SAI 驱动在加载过程中若遇到探测延迟或探测失败，以及驱动卸载时，会发生 Device Tree (OF) node 引用计数泄漏。这可能导致内核内存泄漏，长期运行或频繁插拔设备可能造成资源耗尽，且在特定场景下若 DAI 重新探测而底层平台驱动未重新绑定，存在潜在的 Use-After-Free 风险。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在探测平台设备时获取了 sync provider 的 OF node 引用，但在探测失败（如 set_sync 回调失败、探测延迟、时钟获取失败等）和驱动卸载的路径中，未正确调用 of_node_put 释放该引用。具体表现为 `stm32_sai_set_sync` 函数内部逻辑变更不当以及 `stm32_sai_sub_parse_of` 和 `stm32_sai_sub_probe` 的错误处理路径缺失释放操作。
+
+#解决方案
+修改驱动代码，确保在所有错误处理路径和移除路径中正确释放 OF node 引用：
+1. 在 `stm32_sai_sub_parse_of` 函数的错误处理流程中增加 `of_node_put(sai->np_sync_provider)` 调用。
+2. 在 `stm32_sai_sub_probe` 函数的错误处理标签 `err_unprepare_pclk` 后增加 `of_node_put(sai->np_sync_provider)` 调用。
+3. 在 `stm32_sai_sub_remove` 函数中增加 `of_node_put(sai->np_sync_provider)` 调用。
+4. 重构 `stm32_sai_set_sync` 函数，移除内部错误的 of_node_put 调用，统一由调用者管理引用计数的释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad71880e585b5b404085b15dfdacd3e1b70b086f

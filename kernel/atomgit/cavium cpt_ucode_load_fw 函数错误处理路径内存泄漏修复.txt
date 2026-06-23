@@ -1,0 +1,20 @@
+#标题
+cavium cpt_ucode_load_fw 函数错误处理路径内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Octeon-tx CPT 加密引擎驱动加载固件的过程中，如果 `do_cpt_init` 函数初始化失败，驱动程序未释放此前已分配的 DMA 一致性内存（dma_alloc_coherent），导致内存泄漏。
+
+#主要错误日志
+do_cpt_init failed with ret: %d
+
+#问题根因
+函数 `cpt_ucode_load_fw` 的错误处理逻辑不完整。在调用 `do_cpt_init` 之前，代码通过 `dma_alloc_coherent` 分配了内存并存储在 `mcode->code` 中；当 `do_cpt_init` 执行失败时，代码直接跳转至错误处理分支，但遗漏了对该段 DMA 内存的释放操作，从而导致内存泄漏。
+
+#解决方案
+在 `cpt_ucode_load_fw` 函数中，当检测到 `do_cpt_init` 返回错误时，增加调用 `dma_free_coherent` 函数，传入对应的参数（设备指针、内存大小、虚拟地址和物理地址），确保在退出前释放已分配的 DMA 内存资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b4405e71be968f47b18f09c2cb9f19d3d129770d

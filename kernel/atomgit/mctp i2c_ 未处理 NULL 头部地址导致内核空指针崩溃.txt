@@ -1,0 +1,23 @@
+#标题
+mctp i2c: 未处理 NULL 头部地址导致内核空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MCTP I2C 接口发送数据包时，若邻居表中不存在目的地址条目，或者数据包由非 MCTP 协议栈构造并发送，内核将因对 NULL 地址指针进行解引用而触发空指针异常，导致系统崩溃或相关内核线程异常退出。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `mctp_i2c_header_create` 中，代码直接对 `daddr` 和 `saddr` 指针进行解引用操作（如 `lldst = *((u8 *)daddr);`），但未在前置逻辑中检查指针是否为空。
+具体场景：
+1. `daddr` 可能为 NULL：当邻居表中没有目的地址条目时；
+2. `saddr` 可能为 NULL：当数据包通过非 MCTP 核心协议栈发送时（通常由 MCTP 核心设置，但其他协议可能未设置）。
+
+#解决方案
+在 `mctp_i2c_header_create` 函数中增加对 `daddr` 和 `saddr` 的非空校验。若任一指针为 NULL，函数直接返回 `-EINVAL` 以丢弃该发送数据包，避免后续解引用操作导致的空指针崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3bc53c5813627f0df58d62ac19b227f721cdb37

@@ -1,0 +1,24 @@
+#标题
+usbnet: gl620a驱动endpoint检查缺失导致内核WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当接入特定（如人工制造的恶意）USB设备时，gl620a驱动在绑定过程中未正确检查端点是否存在，导致后续数据包发送时触发内核WARNING（usb_submit_urb报错），造成设备无法正常工作。
+
+#主要错误日志
+usb 5-1: BOGUS urb xfer, pipe 3 != type 1
+WARNING: CPU: 2 PID: 1841 at drivers/usb/core/urb.c:503 usb_submit_urb+0xe4b/0x1730 drivers/usb/core/urb.c:503
+RIP: 0010:usb_submit_urb+0xe4b/0x1730 drivers/usb/core/urb.c:503
+Call Trace:
+ usbnet_start_xmit+0x6be/0x2780 drivers/net/usb/usbnet.c:1467
+
+#问题根因
+gl620a驱动的 `genelink_bind()` 函数直接使用 `driver_info` 中预设的端点号创建管道，未验证USB设备是否实际提供了这些端点。当设备描述符与驱动预期不符（如缺少对应端点）时，`usb_submit_urb()` 会检测到管道类型与实际传输类型不匹配，从而触发WARNING。
+
+#解决方案
+修改 `genelink_bind()` 函数，移除硬编码的端点分配逻辑，改为调用 `usbnet_get_endpoints()` 工具函数。该函数会自动扫描并验证设备端点，确保在端点缺失时提前返回错误，避免后续非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ec9492bc1b2c4a348d88890ebe594b42206b8867

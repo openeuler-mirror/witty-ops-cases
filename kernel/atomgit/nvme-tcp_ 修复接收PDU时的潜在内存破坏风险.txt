@@ -1,0 +1,21 @@
+#标题
+nvme-tcp: 修复接收PDU时的潜在内存破坏风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NVMe over TCP 控制器接收 PDU（Protocol Data Unit）数据时，若收到错误的 PDU 头部长度（hdr->hlen），且该 hlen 不等于 `struct nvme_tcp_rsp_pdu` 的大小，代码逻辑未进行有效性校验直接继续执行。这可能导致后续访问内存越界或内存破坏，进而引发系统不稳定或内核 panic。
+
+#主要错误日志
+- "pdu type %d has unexpected header length (%d)\n"（推断：由补丁新增打印触发）
+- "unsupported pdu type (%d)\n"
+
+#问题根因
+在 `nvme_tcp_recv_pdu` 函数中，处理接收到的 PDU 头部时，未校验头部长度 `hdr->hlen` 的合法性。如果对端发送了非标准的 hlen 值，代码可能基于错误的长度进行内存操作，从而导致潜在的内存破坏风险。
+
+#解决方案
+在函数入口处新增对 `hdr->hlen` 的校验逻辑。新增辅助函数 `nvme_tcp_recv_pdu_supported` 用于判断 PDU 类型是否受支持。若 hlen 异常，对于不支持的 PDU 类型直接报错返回，对于支持的 PDU 类型打印错误日志并返回 `-EPROTO` 协议错误，防止后续处理流程访问非法内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8ca02c70893a7f22ed2596195b5edbd8579b48d4

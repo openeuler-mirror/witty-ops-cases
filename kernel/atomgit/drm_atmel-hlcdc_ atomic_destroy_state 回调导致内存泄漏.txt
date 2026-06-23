@@ -1,0 +1,37 @@
+#标题
+drm/atmel-hlcdc: atomic_destroy_state 回调导致内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行一段时间后，Slab 内存持续增长。在长时间运行图形应用程序（如 egt_basic）或使用 kmemleak 工具检测时，发现存在大量 `drm_crtc_commit` 对象未被释放，导致内存泄漏。
+
+#主要错误日志
+```
+unreferenced object 0xc63a6580 (size 64):
+  comm "egt_basic", pid 171, jiffies 4294940784
+  hex dump (first 32 bytes):
+    40 50 34 c5 01 00 00 00 ff ff ff ff 8c 65 3a c6  @P4..........e:.
+    8c 65 3a c6 ff ff ff ff 98 65 3a c6 98 65 3a c6  .e:......e:..e:.
+  backtrace (crc c25aa925):
+    kmemleak_alloc+0x34/0x3c
+    __kmalloc_cache_noprof+0x150/0x1a4
+    drm_atomic_helper_setup_commit+0x1e8/0x7bc
+    drm_atomic_helper_commit+0x3c/0x15c
+    drm_atomic_commit+0xc0/0xf4
+    drm_atomic_helper_set_config+0x84/0xb8
+    drm_mode_setcrtc+0x32c/0x810
+    drm_ioctl+0x20c/0x488
+    sys_ioctl+0x14c/0xc20
+    ret_fast_syscall+0x0/0x54
+```
+
+#问题根因
+在 `atmel_hlcdc_plane_atomic_destroy_state` 回调函数中，代码逻辑不完整。原先的实现仅调用了 `drm_framebuffer_put(s->fb)` 来释放 framebuffer，但未对 drm plane state 中其他不再需要的对象进行清理。这导致 `drm_crtc_commit` 等对象引用计数未减少，无法被释放，从而造成内存泄漏。
+
+#解决方案
+修改 `atmel_hlcdc_plane_atomic_destroy_state` 函数，移除单独的 framebuffer put 操作，改为调用 `__drm_atomic_helper_plane_destroy_state(s)` 辅助函数。该辅助函数能够正确处理并释放 plane state 中所有不再需要的对象（包括 framebuffer 等），从而彻底修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c06136217b923f61741e20972765a24d04fe30e

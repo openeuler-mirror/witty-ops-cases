@@ -1,0 +1,30 @@
+#标题
+ub: udma 驱动打印消息及相关逻辑修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 当设备不支持 UBL 模式时，查询端口统计信息逻辑错误，可能导致获取到的统计数据全为 0 或数据异常。
+2. 在 `get_dev_caps_from_ubase` 函数中，若获取设备能力失败（返回 NULL），后续代码访问空指针导致内核 panic 或 oops。
+3. 驱动初始化 probe 失败时，缺乏故障记录日志，难以定位初始化失败原因。
+4. 设备移除（remove）过程中，关闭 UE RX 超时或重试时缺乏故障记录，难以排查移除卡死或阻塞问题。
+
+#主要错误日志
+- dev_err(udma_dev->dev, "failed to query port stats, ret = %d.\n", ret);
+- dev_err_ratelimited(&adev->dev, "enter shutdown process.\n");
+- dev_err_ratelimited(&adev->dev, "udma close ue rx failed in remove process.\n");
+
+#问题根因
+1. `udma_query_stats` 函数未对设备是否支持 UBL 模式进行判断，直接调用 `ubase_get_ub_port_stats` 并使用 UBL 相关字段赋值，导致非 UBL 场景下统计逻辑错误。
+2. `get_dev_caps_from_ubase` 函数未对 `ubase_get_dev_caps` 的返回值进行 NULL 校验，直接解引用空指针导致崩溃。
+3. `udma_probe` 和 `udma_remove` 流程中的异常分支（如初始化失败、关闭 RX 超时）缺少 `ubase_adev_fault_log` 调用，导致故障信息缺失。
+
+#解决方案
+1. 在 `udma_query_stats` 中增加 `ubase_adev_ubl_supported` 判断，区分 UBL 模式与以太网模式，分别调用对应的统计接口并正确赋值。
+2. 在 `get_dev_caps_from_ubase` 中增加对 `ubase_caps` 指针的 NULL 判断，若为空则直接返回，避免空指针访问。
+3. 在 `udma_probe` 失败分支增加 `ubase_adev_fault_log` 记录故障事件。
+4. 在 `udma_remove` 的重试循环中，针对重试场景（包括初始等待和后续等待）增加 `ubase_adev_fault_log` 记录故障事件，提升故障可追溯性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/23d410803bcb9319c8bf7484b19eae82dc745a7c

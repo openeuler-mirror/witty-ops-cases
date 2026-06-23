@@ -1,0 +1,20 @@
+#标题
+btrfs：日志回放期间搜索 inode refs 时缺少错误处理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 Btrfs 文件系统日志回放时，函数 `__add_inode_ref()` 调用 `btrfs_search_slot()` 搜索 inode ref keys 时忽略了返回的错误码。这可能导致日志回放错误地标记为成功，而实际上存在真实的错误，进而导致子卷树（subvolume tree）中留下元数据不一致的问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `__add_inode_ref()` 中，代码调用 `btrfs_search_slot()` 搜索 inode 引用，但随后的逻辑仅判断了返回值是否为 0（`if (ret == 0)`），未处理返回值小于 0 的情况（即错误情况）。当 `btrfs_search_slot()` 返回错误时，该错误被忽略，程序继续执行，导致错误未被正确传递给调用者，掩盖了实际发生的故障。
+
+#解决方案
+修改 `fs/btrfs/tree-log.c` 文件中的 `__add_inode_ref()` 函数，在调用 `btrfs_search_slot()` 后增加对返回值小于 0 的判断。如果返回值小于 0（表示发生错误），立即返回该错误码给上层调用者，从而终止日志回放流程，避免在不一致的状态下继续操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2b9f5a385b055d649a777e216979ff662761f688

@@ -1,0 +1,26 @@
+#标题
+bnxt_en: 修复创建 sw mqprio TC 后的潜在崩溃及资源变更时的内存越界
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在创建软件 mqprio TC（Traffic Classes）后，系统可能发生崩溃。
+2. 在网卡关闭期间，若固件资源发生变化，可能导致内存越界。
+
+#主要错误日志
+netdev_err(bp->dev, "tx ring reservation failure\n");
+netdev_warn(bp->dev, "Unable to reserve tx rings\n");
+
+#问题根因
+驱动程序在多处关键路径上使用了 `netdev_get_num_tc(dev)` 来获取 TC（流量类别）数量，该函数返回的是 netdev 结构中的实时状态。然而，在驱动内部执行 `bnxt_setup_mq_tc` 等配置更改流程中，或者在进行 rings 资源预留、重置操作时，netdev 的 TC 数量可能与驱动内部实际的 TC 配置状态不同步。
+这种不一致导致了 TX ring 数量计算错误（例如在 `bp->tx_nr_rings_per_tc * tc` 计算时使用了错误的 TC 值），进而引发崩溃或内存越界。特别是在 `bnxt_reserve_rings` 失败处理路径中，未重置 `bp->num_tc`，导致状态残留。
+
+#解决方案
+1. 在驱动结构体 `bnxt` 中新增成员变量 `num_tc`，用于维护驱动内部的 TC 数量状态，替代直接查询 netdev 的方式。
+2. 在 `bnxt_setup_mq_tc`、`bnxt_reserve_rings`（含失败回滚路径）、`bnxt_setup_inta` 等函数中，同步更新 `bp->num_tc` 的值，确保其与实际配置一致。
+3. 将所有调用 `netdev_get_num_tc(dev)` 进行逻辑判断或计算的地方（如 `bnxt_setup_msix`、`bnxt_tx_nr_rings` 等）替换为使用 `bp->num_tc`。
+4. 新增辅助函数 `bnxt_tx_nr_rings` 和 `bnxt_tx_nr_rings_per_tc`，基于 `bp->num_tc` 正确计算 TX rings 数量，避免计算错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/49eee28051c5f8d2588694035697deb9d41c8506

@@ -1,0 +1,22 @@
+#标题
+rxrpc 多 token 密钥配额计算错误导致配额值丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理包含多个 token 的 rxrpc 密钥时，密钥配额计算逻辑存在缺陷。每解析一个 token 都会覆盖前一个 token 设置的配额值，导致最终只保留了最后一个 token 的配额，之前的配额计算结果丢失，造成密钥配额统计不准确。
+
+#主要错误日志
+未知
+
+#问题根因
+在 rxrpc 密钥预解析函数（如 `rxrpc_preparse_xdr_rxkad` 和 `rxrpc_preparse`）中，对 `prep->quotalen` 赋值使用的是赋值运算符（`=`）而非累加运算符（`+=`）。对于多 token 密钥，后续 token 的处理会直接覆盖之前的 `quotalen` 值，而不是进行累加，导致前序 token 的配额额度丢失。
+
+#解决方案
+修改 `net/rxrpc/key.c` 中的配额计算逻辑：
+1. 在多 token 解析循环开始前，初始化 `prep->quotalen` 为 0。
+2. 将 `rxrpc_preparse_xdr_rxkad` 和 `rxrpc_preparse` 函数中的 `prep->quotalen = ...` 修改为 `prep->quotalen += ...`，确保每次处理 token 时是在原有配额基础上进行累加，从而正确计算多 token 密钥的总配额。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/144f1d505ba8977d8a7bbae4de9d34adf5c0c36c

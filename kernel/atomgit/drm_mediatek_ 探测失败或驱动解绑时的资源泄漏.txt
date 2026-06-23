@@ -1,0 +1,23 @@
+#标题
+drm/mediatek: 探测失败或驱动解绑时的资源泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Mediatek DRM 驱动加载过程中，如果探测失败（例如发生探测延迟 deferral）或驱动解绑，会导致内核资源泄漏。具体表现为组件的 IO 内存映射区域未被释放，以及时钟资源未被归还。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mtk_ddp_comp_init` 函数中，代码原本使用 `of_iomap()` 进行内存映射，使用 `of_clk_get()` 获取时钟，但在探测失败的错误处理路径或驱动解绑路径中，缺少对应的 `iounmap()` 和 `clk_put()` 调用，导致资源无法正确释放。
+
+#解决方案
+将资源管理方式修改为托管资源管理：
+1. 将 `of_iomap()` 替换为 `devm_of_iomap()`，利用设备托管机制自动释放 IO 内存，且该函数会检查区域是否已被映射。
+2. 增加 `devm_add_action_or_reset()` 机制注册 `clk_put` 的回调函数 `mtk_ddp_comp_clk_put`，确保在探测失败或驱动解绑时自动释放时钟资源。
+3. 同步修改 `mtk_ddp_comp_init` 函数接口，增加 `struct device *dev` 参数以支持上述托管 API 的调用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a823199d9fa52ecf76bb71514fd9657cbfab52a8

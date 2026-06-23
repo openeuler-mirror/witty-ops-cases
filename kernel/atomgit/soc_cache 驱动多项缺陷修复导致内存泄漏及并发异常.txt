@@ -1,0 +1,32 @@
+#标题
+soc_cache 驱动多项缺陷修复导致内存泄漏及并发异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 驱动模块卸载或加载失败时发生内存泄漏。
+2. 驱动移除过程中存在竞态条件，可能导致内核崩溃或数据不一致。
+3. L3 Cache 锁定操作错误返回 -EBUSY，掩盖真实错误码。
+4. 进程传递非页对齐地址进行 Cache 操作时，可能越界访问或操作失败。
+5. 模块初始化失败时错误释放 CPU 热插拔回调状态，可能导致系统 CPU 热插拔机制异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **参数使用错误**：`hisi_soc_l3c_init` 和 `hisi_soc_l3c_exit` 中调用 `cpuhp_remove_multi_state` 时错误使用了宏 `CPUHP_AP_ONLINE_DYN`，应使用实际分配的状态句柄 `hisi_l3c_cpuhp_state`。
+2. **内存泄漏**：`hisi_soc_cache_mgmt_ioctl` 函数中动态分配的 `param` 结构体内存，在 `copy_from_user` 失败或默认分支情况下未释放即返回。
+3. **竞态条件**：`hisi_soc_l3c_remove` 函数中先执行移除锁操作，后删除组件实例，存在时序错误；同时 `hisi_soc_cache_lock/unlock` 在检查实例数量前未持有锁。
+4. **逻辑缺陷**：`hisi_soc_l3c_do_lock` 在 `hisi_soc_l3c_alloc_lock_reg_set` 返回失败时，直接返回 `-EBUSY` 而非返回实际错误码。
+5. **计算错误**：`hisi_soc_cache_maint_pte_entry` 中未正确计算物理地址偏移和大小，导致对非对齐地址的处理不正确。
+
+#解决方案
+1. 修正 CPU 热插拔状态释放逻辑，将 `cpuhp_remove_multi_state` 的参数由 `CPUHP_AP_ONLINE_DYN` 更正为 `hisi_l3c_cpuhp_state`。
+2. 移除不必要的动态内存分配，将 `hisi_soc_cache_ioctl_param` 改为局部栈变量，彻底消除内存泄漏风险。
+3. 调整组件移除顺序：先从系统链表中删除组件实例并移除 CPU 热插拔回调，再执行锁清理操作；同时将对 `inst_num` 的判断移入锁保护区域内。
+4. 修正 `hisi_soc_l3c_do_lock` 错误返回路径，直接返回 `hisi_soc_l3c_alloc_lock_reg_set` 的返回值。
+5. 修正页遍历逻辑，正确处理用户态传入的地址偏移与大小，确保物理地址计算与操作范围准确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fbbeae9f598c6454d535b37f049f18116e417463

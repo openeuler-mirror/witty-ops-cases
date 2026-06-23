@@ -1,0 +1,20 @@
+#标题
+hwmon: (drivetemp) 驱动在 SCSI 错误发生时产生垃圾数据
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 drivetemp 驱动执行 SCSI 命令过程中发生错误时，驱动程序未正确处理错误状态，导致返回给用户空间的温度数据为无效的垃圾数据，而非报错，可能导致监控系统获取到错误的硬盘温度读数。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `drivetemp_scsi_command` 调用 `scsi_execute_cmd` 执行 SCSI 命令，该函数返回值若大于 0 表示 SCSI 命令执行结果有误（即发生了 SCSI 错误）。原代码直接将该返回值返回，未对其进行有效性校验与错误转换，导致上层调用者误认为命令执行成功并读取了缓冲区中未初始化或无效的数据。
+
+#解决方案
+在 `drivetemp_scsi_command` 函数中增加对 `scsi_execute_cmd` 返回值的判断：若返回值大于 0，则将其转换为标准错误码 `-EIO` 返回，确保上层调用能正确识别 SCSI 命令执行失败，避免传递垃圾数据。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7c8349500bcad2eded8afae5f03345e9f96c2c98

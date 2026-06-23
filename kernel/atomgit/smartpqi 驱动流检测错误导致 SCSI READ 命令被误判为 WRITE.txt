@@ -1,0 +1,20 @@
+#标题
+smartpqi 驱动流检测错误导致 SCSI READ 命令被误判为 WRITE
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统下发 SCSI READ 命令时，驱动错误地将其识别为 SCSI WRITE 命令。如果这些请求被识别为顺序 IO，驱动会错误地通过 RAID 路径提交请求，而不是通过 AIO 路径提交。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码中 `pqi_scsi_dev_raid_map_data` 结构体变量 `rmd` 未进行初始化（未置零）。这导致 `is_write` 标志位可能处于未定义状态（非零值），使得驱动将 SCSI READ 命令误判为 SCSI WRITE 命令，进而导致 IO 路径选择错误。
+
+#解决方案
+在 `drivers/scsi/smartpqi/smartpqi_init.c` 文件的 `pqi_is_parity_write_stream` 函数中，将结构体变量 `rmd` 的声明从 `struct pqi_scsi_dev_raid_map_data rmd;` 修改为 `struct pqi_scsi_dev_raid_map_data rmd = { 0 };`，确保结构体内容初始化为 0，从而保证 `is_write` 等标志位的初始状态正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b8e1027f015562da4fffcbba073d8f4acf10bbed

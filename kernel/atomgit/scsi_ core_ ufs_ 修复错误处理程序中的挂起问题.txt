@@ -1,0 +1,20 @@
+#标题
+scsi: core: ufs: 修复错误处理程序中的挂起问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+UFS（通用闪存存储）设备在进行异常处理时，系统出现挂起无响应。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ufshcd_err_handler` 函数中，调用 `ufshcd_err_handling_prepare(hba)` 时仍持有自旋锁 `hba->host->host_lock`且关闭了本地中断。而 `ufshcd_err_handling_prepare` 函数内部可能会执行睡眠操作（如内存分配或互斥锁争用），导致在持有自旋锁的情况下睡眠，从而触发内核挂起或死锁。
+
+#解决方案
+调整代码执行顺序，将 `ufshcd_err_handling_prepare(hba)` 的调用移至释放自旋锁 `hba->host->host_lock` 之后，确保在执行可能睡眠的操作前已释放锁，并在操作完成后重新获取锁，从而避免在持锁期间睡眠导致的挂起问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dd6103af141f11d0ed9bc074eccb3560cdd3d3e1

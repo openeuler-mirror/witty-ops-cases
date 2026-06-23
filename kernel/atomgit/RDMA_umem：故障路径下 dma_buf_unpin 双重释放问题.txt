@@ -1,0 +1,20 @@
+#标题
+RDMA/umem：故障路径下 dma_buf_unpin 双重释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ib_umem_dmabuf_get_pinned_with_dma_device()` 函数获取 pinned dmabuf 时，若内部的 `ib_umem_dmabuf_map_pages()` 调用失败，会触发错误处理流程。当后续调用 `ib_umem_release()` 进行资源清理时，会发生 dma_buf 的双重 unpin 操作，导致引用计数错误或内核状态异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ib_umem_dmabuf_get_pinned_with_dma_device()` 函数中，当 `ib_umem_dmabuf_map_pages()` 执行失败时，代码逻辑立即调用了 `dma_buf_unpin()` 进行取消固定操作，但此时 `umem_dmabuf->pinned` 标志位仍然处于置位状态。随后在错误清理流程中调用 `ib_umem_release()` 时，它会调用 `ib_umem_dmabuf_revoke()`，该函数检测到 `pinned` 标志位已设置，会再次调用 `dma_buf_unpin()`，从而导致双重 unpin。此外，这也破坏了 unmap-unpin 的正确卸载顺序。
+
+#解决方案
+修改 `drivers/infiniband/core/umem_dmabuf.c` 文件中的错误处理逻辑：删除 `ib_umem_dmabuf_map_pages()` 失败时直接调用 `dma_buf_unpin()` 的代码。改为直接跳转到 `err_release` 标签，让 `ib_umem_release` 及其内部的 revoke 逻辑统一处理资源的释放与 unpin 操作，以此避免双重释放并保证资源释放顺序的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/eda7309f3859e95971d9b54ea7e424f23e4e4f47

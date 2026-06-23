@@ -1,0 +1,32 @@
+#标题
+Bluetooth: SCO: sco_sock_connect并发导致use-after-free与内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当两个线程同时对同一个SCO socket并发执行connect()系统调用时，会产生竞争条件。该问题导致以下现象：
+1. **Use-After-Free**：线程B将已关闭（BT_CLOSED）且被标记为ZAPPED的socket重新置为BT_CONNECT状态，后续清理流程触发双重sock_put()，导致use-after-free。
+2. **内存泄漏**：原socket关联的SCO连接结构体（conn1）被孤立，导致内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根源在于 `sco_sock_connect()` 函数在检查 socket 状态（`sk_state`）和类型（`sk_type`）时未持有 socket 锁。两个并发的 connect() 调用可能同时通过检查并进入 `sco_connect()`，导致状态混乱：
+1. 线程A完成连接后，连接被HCI层断开，socket状态被置为BT_CLOSED并被ZAPPED。
+2. 线程B此前已通过状态检查，此时继续执行并成功建立新连接，将僵尸socket状态改为BT_CONNECT。
+3. 后续清理时触发双重释放。
+
+此外，原代码中 `sk_type != SOCK_SEQPACKET` 的检查逻辑有误，仅赋值错误码而未直接返回。
+
+#解决方案
+通过加锁顺序调整和多重防御检查修复竞争条件：
+1. **加锁顺序调整**：在 `sco_sock_connect()` 中，将 `lock_sock(sk)` 移至 `sk_state` 和 `sk_type` 检查之前，强制串行化并发连接请求。
+2. **修正返回逻辑**：修复 `sk_type` 检查分支，确保类型不匹配时直接返回 `-EINVAL`。
+3. **状态重检**：在 `sco_connect()` 中获取锁后，再次检查 `sk_state`，若状态已被其他线程修改（非 BT_OPEN 或 BT_BOUND），则释放连接并返回错误。
+4. **防止双重绑定**：在 `sco_chan_add()` 中增加对 `sco_pi(sk)->conn` 的检查，防止socket被重复绑定到多个连接。
+5. **防止资源泄漏**：在 `sco_chan_add()` 失败路径及状态检查失败路径中添加 `hci_conn_drop()`，确保HCI连接资源被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f2c3d97e847380b7238a517d25c8f00c028ff3ad

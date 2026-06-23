@@ -1,0 +1,20 @@
+#标题
+bonding 驱动获取链路速率时错误地将状态置为 unknown 导致状态闪烁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读取 `/proc/net/bonding` 接口信息时，可能会观察到 slave 网卡的速率和双工模式短暂显示为 unknown，随后又恢复正常值。特别是在用户空间程序（如监控脚本）定期调用 ethtool 获取状态时，该竞态问题更加明显，导致 bonding 状态出现不必要的误报或状态震荡。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `bond_update_speed_duplex()` 中，代码逻辑先强制将 slave 的速率和双工模式设置为 unknown，然后再调用底层驱动接口获取实际值。由于获取速率和双工模式的操作可能耗时较长，在此期间存在一个时间窗口，使得读取 `/proc/net/bonding` 的用户能观测到这个中间状态，从而引发状态显示错误。
+
+#解决方案
+修改 `bond_update_speed_duplex()` 函数逻辑，移除函数入口处预置 speed/duplex 为 unknown 的操作。改为仅在底层驱动获取失败、或获取到的速率/双工值无效时，才通过 `goto` 语句跳转到错误处理分支，将 speed/duplex 设置为 unknown。这样可以确保仅在链路状态真的未知时才改变状态值，消除了正常更新过程中的状态闪烁问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e7e00acad8b2edb8acad93762c497a30fceb4fa3

@@ -1,0 +1,20 @@
+#标题
+x86/AMD: 非Zen2 CPU在微码热加载后错误应用Zenbleed修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在非 Zen2 架构的 AMD CPU 上执行微码热加载时，内核错误地触发了 Zenbleed 漏洞的修复路径。这导致系统在 DE_CFG MSR（调试配置寄存器）中错误地设置了相关比特位，可能引发非预期的硬件行为或性能问题。该问题仅发生在微码更新过程中，对非 Zen2 CPU 造成了错误的硬件配置修改。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit f69759be251d 将 Zenbleed 检查逻辑移动到了 Zen2 初始化函数中，并移除了 `zen2_zenbleed_check()` 函数内部的 `cpu_has_amd_erratum()` CPU 型号检查。这导致微码热加载路径调用 `amd_check_microcode()` -> `zen2_zenbleed_check()` 时，不再校验 CPU 是否为 Zen2 架构。结果是所有 AMD CPU（包括非 Zen2）都会执行该修复逻辑，并在 DE_CFG MSR 中错误地设置比特位。
+
+#解决方案
+在微码热加载的回调函数 `amd_check_microcode()` 中增加 CPU 特性校验。仅在检测到 CPU 支持 `X86_FEATURE_ZEN2` 特性时，才调用 `on_each_cpu` 执行 `zenbleed_check_cpu` 回调函数，确保 Zenbleed 修复逻辑仅在 Zen2 处理器上执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f79c739881ebf5203994e2c1f0681439a5f212f

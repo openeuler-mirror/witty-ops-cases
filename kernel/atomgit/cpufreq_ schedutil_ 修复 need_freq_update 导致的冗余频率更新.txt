@@ -1,0 +1,26 @@
+#标题
+cpufreq: schedutil: 修复 need_freq_update 导致的冗余频率更新
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统运行过程中，cpufreq schedutil 调度器频繁执行不必要的频率更新操作。具体表现为：
+1. 对于设置了 CPUFREQ_NEED_UPDATE_LIMITS 标志的驱动，即使没有发生策略限制变更，也会持续接收到频率更新请求，因为 need_freq_update 标志位从未被清除。
+2. 在频率未发生实际变化（即下一个频率与当前频率相同）时，仍会触发冗余的频率更新。
+
+#主要错误日志
+未知
+
+#问题根因
+变量 need_freq_update 的逻辑处理存在缺陷：
+1. 在 limits_changed 发生时，代码无条件将 need_freq_update 设为 true，而实际上只有在驱动设置了 CPUFREQ_NEED_UPDATE_LIMITS 标志时才真正需要强制更新。
+2. 在 sugov_update_next_freq 函数中，need_freq_update 的清除依赖于特定的驱动标志检查，而非在完成更新后直接清除，导致该标志长时间保持置位状态，引发后续不必要的更新。
+
+#解决方案
+修改 kernel/sched/cpufreq_schedutil.c 文件中的逻辑：
+1. 在 sugov_should_update_freq 函数中处理 limits_changed 时，仅当驱动设置了 CPUFREQ_NEED_UPDATE_LIMITS 标志时才将 need_freq_update 设为 true。
+2. 在 sugov_update_next_freq 函数中，当 need_freq_update 为真时，直接将其置为 false，确保在执行完必要的更新后清除该标志，从而避免后续的冗余更新。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/42a2a96c84a66b817614911ec6654641e1a986a1

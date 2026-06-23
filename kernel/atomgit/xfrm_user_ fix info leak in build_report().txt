@@ -1,0 +1,20 @@
+#标题
+xfrm_user: fix info leak in build_report()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在调用 `build_report` 函数处理 XFRM（IPsec）报告时，结构体 `xfrm_user_report` 中存在 3 字节的未初始化填充字段。该结构体被拷贝发送至用户空间时，这些填充字段携带了内核栈上的敏感数据（内核内存信息），导致发生信息泄露漏洞。
+
+#主要错误日志
+未知
+
+#问题根因
+结构体 `xfrm_user_report` 由一个 `__u8 proto` 字段和后续的 `struct xfrm_selector` 组成，两者之间存在 3 字节的内存对齐填充。代码在初始化该结构体时，未先将整个结构体清零，而是直接对 `proto` 字段和 `sel` 字段进行赋值，导致中间的填充字节保留了栈上的随机数据（垃圾数据），随后的 `nlmsg_data` 拷贝操作将这些未清理的内核数据泄露给了用户空间。
+
+#解决方案
+在 `build_report` 函数中获取 `nlmsg_data` 指针后，立即使用 `memset(ur, 0, sizeof(*ur))` 对整个结构体进行清零操作。这确保了结构体中的填充字节被初始化为 0，消除了向用户空间泄露内核栈内存的风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e1239fcc8abcad3ca45f5f2040c65d0b7165d513

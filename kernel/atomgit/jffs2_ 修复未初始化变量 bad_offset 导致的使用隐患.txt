@@ -1,0 +1,28 @@
+#标题
+jffs2: 修复未初始化变量 bad_offset 导致的使用隐患
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 `-Wmaybe-uninitialized` 编译选项构建内核时，编译器报错提示变量 `bad_offset` 可能未被初始化即被使用。在运行时场景下，若 MTD 层使用 `mtd->point()` 方法且擦除校验失败（返回 -EIO），`jffs2_erase_failed` 函数将使用未初始化的 `bad_offset` 值，导致记录的错误偏移量异常或不可预测。
+
+#主要错误日志
+- 编译警告：
+```
+fs/jffs2/erase.c:474:9: warning: 'bad_offset' may be used uninitialized [-Wmaybe-uninitialized]
+  474 |         jffs2_erase_failed(c, jeb, bad_offset);
+```
+- 运行时打印（修复后正确输出）：
+```
+pr_warn("Newly-erased block contained word 0x%lx at offset 0x%08x\n", *wordebuf, *bad_offset);
+```
+
+#问题根因
+在 `jffs2_block_check_erase` 函数中，当使用 `mtd->point()` 进行擦除检查时，若发现新擦除的块包含非 0xFF 数据（即数据校验失败），代码路径会返回 `-EIO`。然而，在该错误路径下，变量 `bad_offset` 未被赋值初始化。随后在 `jffs2_mark_erased_block` 函数的 `filebad` 标签处，代码调用 `jffs2_erase_failed(c, jeb, bad_offset)` 时使用了这个未初始化的变量。
+
+#解决方案
+在 `jffs2_block_check_erase` 函数的数据校验失败分支中，显式设置 `bad_offset` 的值。具体修改为：在返回 `-EIO` 前，计算并赋值 `*bad_offset = jeb->offset + c->sector_size - retlen * sizeof(*wordebuf);`，确保传递给错误处理函数的偏移量参数有效。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/255d8565efb75d270acf3eceaeeaf960160ec0c5

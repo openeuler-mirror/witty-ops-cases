@@ -1,0 +1,27 @@
+#标题
+DAMON sysfs 方案目录创建失败致内存泄漏与接口损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 DAMON sysfs 接口创建 scheme 目录时，若在 access_pattern 目录创建完成后的后续步骤（如 quotas 设置）中失败，会导致 access_pattern 的子目录未被清理。
+该故障会导致：
+1. 内存泄漏：未移除的目录占用的内存无法释放。
+2. DAMON sysfs 接口近乎损坏：接口状态异常，直至系统重启前无法恢复正常使用。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `damon_sysfs_scheme_add_dirs` 函数中，错误处理路径逻辑不完整。当 `damon_sysfs_scheme_set_quotas` 或后续函数调用失败时，代码跳转到 `put_access_pattern_out` 标签，该处理逻辑仅调用了 `kobject_put` 释放 kobject 引用，但遗漏了对 `access_pattern` 目录下的子目录进行清理（调用 `damon_sysfs_access_pattern_rm_dirs`），导致子目录残留及相应的内存泄漏。
+
+#解决方案
+修改 `damon_sysfs_scheme_add_dirs` 函数的错误处理路径：
+1. 新增 `rmdir_put_access_pattern_out` 标签。
+2. 在该标签处，先调用 `damon_sysfs_access_pattern_rm_dirs(scheme->access_pattern)` 清理子目录。
+3. 随后调用 `kobject_put` 释放 kobject 本身。
+4. 将 `damon_sysfs_scheme_set_quotas` 失败时的跳转目标从 `put_access_pattern_out` 修改为 `rmdir_put_access_pattern_out`，确保失败时彻底清理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/97253bfe8f6b862fe4f8f9ea013127046a2ea846

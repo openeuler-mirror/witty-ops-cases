@@ -1,0 +1,24 @@
+#标题
+MHI host驱动 power_up 与 SYSERR 处理冲突导致设备初始化失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `mhi_async_power_up()` 启用 IRQ 时，若固件崩溃发送 SYSERR 通知，会导致 SYSERR 工作项与 PBL 状态转换工作项发生冲突。SYSERR 工作项尝试复位 MHI 状态机时超时，导致设备处于未初始化状态，最终设备无法正常工作。
+
+#主要错误日志
+mhi mhi3: Requested to power ON
+Qualcomm Cloud AI 100 0000:36:00.0: Fatal error received from device.  Attempting to recover
+mhi mhi3: Power on setup success
+mhi mhi3: Device failed to exit MHI Reset state
+mhi mhi3: Device MHI is not in valid state
+
+#问题根因
+`mhi_async_power_up()` 启用 IRQ 后可能收到固件崩溃引发的 SYSERR 通知，该通知排队的工作项必须等待 `pm_mutex` 释放才能执行。如果 `mhi_async_power_up()` 检测到 SYSERR 并处理，PBL 状态转换事件会被排队在 SYSERR 工作项之后。当 SYSERR 工作项执行时，它会盲目尝试复位 MHI 状态机，但对于 PBL/SBL 状态，除非设备主动广播 SYSERR，否则它们会忽略 MHI 复位。这导致 SYSERR 工作项等待复位清除超时，主机状态停留在 SYSERR 处理中，随后的 PBL 转换工作项因状态无效而失败。
+
+#解决方案
+在 SYSERR 工作项处理函数 `mhi_pm_sys_error_transition` 中增加检查逻辑：仅在设备处于 SYSERR 状态，或者当前执行环境（EE）不在 PBL 或 SBL 阶段时，才触发 MHI RESET 操作。这样可以避免在 PBL/SBL 阶段且 SYSERR 已清除的情况下盲目发起无效复位，从而防止状态机死锁和初始化失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e2dd460bf8ea4c634905c528ca9e914c0f8d50ea

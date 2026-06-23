@@ -1,0 +1,22 @@
+#标题
+LoongArch KVM 虚拟机 LL/SC 原子指令在 MMU 映射变更时发生竞态数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch KVM 虚拟化环境下，当 VCPU 正在执行 LL/SC（链接加载/条件存储）原子操作序列时，如果二级 MMU 映射（secondary mmu mapping）发生变更（如页面被替换），会导致 SC 指令错误地执行成功。该现象破坏了原子操作的语义一致性，导致多核 VCPU 竞态条件下数据损坏或逻辑错误，例如 `atomic64_fetch_add_unless` 操作在内存已被其他 VCPU 修改的情况下仍然写入成功。
+
+#主要错误日志
+未知
+
+#问题根因
+LLBCTL 寄存器在 Guest 与 Host 模式下是分离的。普通的异常 ERET 指令会清除 Host 的 LLBCTL 寄存器，Guest 模式下的异常会清除 Guest 的 LLBCTL 寄存器，但 TLB 重填（tlb refill）异常中的 ERET 指令不会清除 LLBCTL 寄存器。
+当 Guest 执行 LL/SC 指令对时，LL 指令基于旧地址设置 LLBCTL 标志。如果在 LL 和 SC 指令执行之间，二级 MMU 映射发生改变，导致物理地址变更，由于 TLB 重填不会清除 LLBCTL，SC 指令检查到 LLBCTL 标志仍为开启状态，便会误认为链接状态有效，直接对**新地址**执行写入操作。这导致 SC 指令在内存已被其他 VCPU 修改的情况下仍能成功写入，破坏了 LL/SC 本应提供的原子性保护机制。
+
+#解决方案
+在检测到 VCPU 的二级 MMU 映射发生变更时（如 `kvm_check_vpid` 函数中迁移到新 CPU 或 VPID 更新时），显式清除 Guest LLBCTL 寄存器中的 WCLLB 标志位。
+代码修改将 `set_gcsr_llbctl(LOONGARCH_CSR_LLBCTL)` 更正为 `set_gcsr_llbctl(CSR_LLBCTL_WCLLB)`，确保在映射变更导致物理页面替换时，强制失效之前的 LL 链接状态，从而让后续的 SC 指令正确失败，保证原子操作的正确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c56daf1fda9b6d712ddd0248d1906e6d1921b89

@@ -1,0 +1,20 @@
+#标题
+sched_ext: pick_task_scx() 误选非队列状态任务致系统死锁
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定调度场景下（如 fair 类调度器 bug 导致 `pick_task_scx()` 在未调用 `balance_scx()` 的情况下被调用），系统可能选中一个不再处于可运行状态的任务。这会导致任务处于 `!on_rq && on_cpu` 的异常状态，进而导致潜在的唤醒者在忙循环中等待，极易引发系统死锁或其他不可预期的调度混乱。
+
+#主要错误日志
+未知
+
+#问题根因
+之前的修复补丁为了处理 `pick_task_scx()` 未配对调用 `balance_scx()` 的问题，引入了判断逻辑错误：仅通过检查 `@prev` 是否属于 SCX 调度类来决定是否继续运行该任务。这是不正确的，因为任务可能属于 SCX 类但已不再处于可运行状态。错误的判断导致函数返回了一个不可运行的任务，破坏了调度器状态一致性。
+
+#解决方案
+修改 `kernel/sched/ext.c` 中的判断逻辑，将判断条件从检查 `prev->sched_class == &ext_sched_class` 修改为检查 `prev->scx.flags & SCX_TASK_QUEUED`，确保仅当任务真正处于 queued 状态时才允许被选中继续运行，从而避免返回非队列状态的任务。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e4929157f83a2604bda34f3a51b931cfea253857

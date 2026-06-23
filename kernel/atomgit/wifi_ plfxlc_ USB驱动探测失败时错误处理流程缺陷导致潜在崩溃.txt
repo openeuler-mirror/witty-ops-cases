@@ -1,0 +1,29 @@
+#标题
+wifi: plfxlc: USB驱动探测失败时错误处理流程缺陷导致潜在崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+pureLiFi X/XL/XC设备的USB驱动在加载过程中，若探测函数在 `ieee80211_register_hw()` 成功执行前失败（例如MAC地址上传失败、MAC初始化失败或注册硬件失败），驱动程序会错误地调用 `ieee80211_unregister_hw()`。由于 `ieee80211_unregister_hw()` 的实现前提是硬件已成功注册，此违规调用可能导致内核崩溃或各种不可预期的错误行为。
+
+#主要错误日志
+[推断] 硬件注册前失败时可能伴随以下日志之一：
+- "MAC and Serial upload failed (%d)\n"
+- "Init mac failed (%d)\n"
+- "Register device failed (%d)\n"
+[推断] 最终统一打印的错误日志：
+- "pureLifi:Device error"
+
+#问题根因
+驱动程序的 probe 函数中，错误处理路径设计不合理。原有的错误处理代码未区分 `ieee80211_register_hw()` 执行前后的状态，统一执行了 `ieee80211_unregister_hw()`。这导致在硬件注册失败或注册前其他步骤失败时，触发了对未注册硬件的注销操作，违反了 API 使用约定。此外，资源释放顺序也存在问题，`ieee80211_unregister_hw()` 应在 `plfxlc_mac_release()` 之前调用，且 `ieee80211_free_hw()` 应包含在释放函数内部以保持与分配函数的对称性。
+
+#解决方案
+重构 probe 函数的错误处理流程，引入标签化的跳转机制：
+1. 将错误处理分为 `error_unreg_hw` 和 `error_free_hw` 两个阶段。
+2. 仅当 `ieee80211_register_hw()` 成功执行后，在后续错误处理中（如 FPGA 下载失败、USB 初始化失败等）才跳转至 `ieee80211_unregister_hw()` 进行注销。
+3. 若在注册硬件之前失败，直接跳转至 `error_free_hw` 仅释放硬件资源。
+4. 重构 `plfxlc_mac_release_hw()` 函数，确保资源释放顺序正确：先调用 `ieee80211_unregister_hw`（如果需要），再调用 `plfxlc_chip_release`，最后调用 `ieee80211_free_hw`，保证资源分配与释放的对称性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/09d74a7326f00d6ef8c09ae2c816d01545af9e02

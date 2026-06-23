@@ -1,0 +1,34 @@
+#标题
+netcp: knav_dma_open_channel 错误指针不一致导致内核对齐异常崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Keystone 平台上启动网络接口（如调用 ip_auto_config 或 ifconfig up）时，触发内核崩溃。系统打印 "Unhandled fault: alignment exception" 并进入 oops 状态，导致网络功能无法正常初始化。
+
+#主要错误日志
+Unhandled fault: alignment exception (0x221) at 0xfffffff2
+[fffffff2] *pgd=80000800207003, *pmd=82ffda003, *pte=00000000
+Internal error: : 221 [#1] SMP ARM
+CPU: 0 UID: 0 PID: 1 Comm: swapper/0 Not tainted 6.17.0-rc7 #1 NONE
+Hardware name: Keystone
+PC is at knav_dma_close_channel+0x30/0x19c
+LR is at netcp_free_navigator_resources+0x2c/0x28c
+Call trace:
+ knav_dma_close_channel from netcp_free_navigator_resources+0x2c/0x28c
+ netcp_free_navigator_resources from netcp_ndo_open+0x430/0x46c
+
+#问题根因
+`knav_dma_open_channel` 函数的错误处理行为不一致。
+1. 函数实现 `drivers/soc/ti/knav_dma.c` 在失败时返回 `(void *)-EINVAL`（即非 NULL 的错误指针），但头文件 `include/linux/soc/ti/knav_dma.h` 在驱动禁用时返回 `NULL`。
+2. 调用者 `netcp_core.c` 使用 `IS_ERR` 检查返回值，无法正确识别 `(void *)-EINVAL` 这种非标准错误指针（在某些架构或配置下可能未被 `IS_ERR` 捕获，或者被视为有效指针）。
+3. 当 `knav_dma_open_channel` 失败时，调用者误认为返回了有效指针，随后在清理资源调用 `knav_dma_close_channel` 时，传入了无效的指针值（如 0xfffffff2），导致访问非法地址引发对齐异常崩溃。
+
+#解决方案
+统一 `knav_dma_open_channel` 的错误返回值为 `NULL`。
+1. 修改 `drivers/soc/ti/knav_dma.c` 中所有错误返回路径，将 `return (void *)-EINVAL` 改为 `return NULL`。
+2. 同步修改 `drivers/net/ethernet/ti/netcp_core.c` 中的调用逻辑，将 `IS_ERR` 检查改为 `!ptr` 检查，并在出错时返回 `-EINVAL` 错误码，确保错误处理流程的一致性和安全性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/981d744d41f1fd3244c1249909c613972edd8a02

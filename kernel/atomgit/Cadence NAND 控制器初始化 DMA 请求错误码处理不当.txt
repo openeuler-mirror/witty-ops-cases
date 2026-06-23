@@ -1,0 +1,21 @@
+#标题
+Cadence NAND 控制器初始化 DMA 请求错误码处理不当
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Cadence NAND 驱动在初始化过程中请求 DMA 通道失败时，错误码被固定设置为 -EBUSY，无法正确反映实际的错误原因（如 -EPROBE_DEFER），可能导致驱动探测逻辑异常或问题排查困难。
+
+#主要错误日志
+"Unable to get a DMA channel\n" (修复前)
+"%d: Failed to get a DMA channel\n" (修复后，含具体错误码)
+
+#问题根因
+驱动使用 dma_request_channel() 函数请求 DMA 通道，当请求失败时，代码逻辑仅返回固定的 -EBUSY 错误码，而不是返回具体的失败原因。由于 dma_request_channel() 失败时不提供具体错误指针（ERR_PTR），导致无法传递如 -EPROBE_DEFER 等关键错误信息。
+
+#解决方案
+将 DMA 通道请求函数由 dma_request_channel() 替换为 dma_request_chan_by_mask()，并使用 IS_ERR() 检查返回值。同时，利用 dev_err_probe() 辅助函数打印错误日志并返回正确的错误码（由 PTR_ERR 获取），从而准确传递失败原因。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a7712e64992e8ee5c130d440d7fa3ba120da9978

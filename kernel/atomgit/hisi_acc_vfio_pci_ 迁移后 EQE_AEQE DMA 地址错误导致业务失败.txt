@@ -1,0 +1,23 @@
+#标题
+hisi_acc_vfio_pci: 迁移后 EQE/AEQE DMA 地址错误导致业务失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+虚拟机发生迁移后，内核态加密服务启动失败或运行异常。
+
+#主要错误日志
+- `migration driver version<%u.%u> not match!`（推断：版本不匹配时打印）
+- `failed to match ACC_DEV_MAGIC`（原有日志：magic 校验失败时打印）
+
+#问题根因
+驱动从寄存器读取数据组合 EQE 和 AEQE 的 DMA 地址时，高位地址与低位地址的数组下标（索引）使用错误，导致组合出的 DMA 地址不正确。此外，旧版本内核生成的迁移数据（magic number 为 V1）迁移到新内核上时，如果不进行兼容处理，也会导致地址数据错误。
+
+#解决方案
+1. 修正 DMA 地址组合逻辑，使用宏定义 `QM_XQC_ADDR_HIGH` 和 `QM_XQC_ADDR_LOW` 替换原本硬编码的数组下标 1 和 0，确保高位和低位地址组合顺序正确。
+2. 引入版本检查机制 `vf_qm_version_check`，区分 V1 和 V2 版本的迁移数据。针对 V1 版本数据，重新计算并修正 eqe_dma 和 aeqe_dma 地址；针对 V2 版本数据，增加驱动版本号匹配检查。
+3. 更新迁移数据结构，添加 `major_ver` 和 `minor_ver` 字段，并将 `acc_magic` 更新为 V2 版本。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6026c4c692a4247017d8d55271510f6677f26c0ad

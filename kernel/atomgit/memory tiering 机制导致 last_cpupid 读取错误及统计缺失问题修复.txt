@@ -1,0 +1,25 @@
+#标题
+memory tiering 机制导致 last_cpupid 读取错误及统计缺失问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在开启 memory tiering（内存分层）模式时，内核对慢速内存页的 `last_cpupid` 读取逻辑存在错误，可能导致 NUMA 迁移决策异常。
+2. 系统未能正确统计和记录从慢速内存节点提升到快速内存节点的页面数量，导致 `PGPROMOTE_SUCCESS` 计数在 memory tiering 模式下缺失。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **逻辑判断不一致**：原代码在 `do_huge_pmd_numa_page` 中使用 `node_is_toptier(nid)` 判断是否读取 `last_cpupid`，而实际上应该判断的是“当前页是否需要利用 cpupid 字段来记录访问时间”。对于慢速内存页，其 `cpupid` 被复用记录访问时间，不应按常规 cpupid 逻辑处理，原判断条件与实际需求相反或不明确。
+2. **判断逻辑分散**：关于“是否处于 memory tiering 模式且为慢速内存页”的判断逻辑分散在多个文件中（如 `huge_memory.c`, `memory.c`, `mprotect.c`），代码重复且易出错。
+3. **统计条件缺失**：在 `migrate.c` 中更新 `PGPROMOTE_SUCCESS` 统计时，原代码未检查系统是否开启了 `NUMA_BALANCING_MEMORY_TIERING` 标志，导致在未开启分层模式时也可能错误统计，或在特定场景下统计逻辑不完整。
+
+#解决方案
+1. **封装判断逻辑**：引入并实现新函数 `folio_use_access_time(folio)`，统一封装判断逻辑：检查系统是否开启 `NUMA_BALANCING_MEMORY_TIERING` 且页面所在节点非顶层节点。这明确了慢速内存页复用 cpupid 字段记录访问时间的语义。
+2. **修正读取逻辑**：在 `do_huge_pmd_numa_page` 和 `do_numa_page` 中，使用 `folio_use_access_time(folio)` 替换原有的复杂判断。对于需要记录访问时间的页面，不再读取其 `last_cpupid`，而是使用默认值，修正了之前的逻辑反义或模糊之处。
+3. **完善统计条件**：在 `migrate.c` 的 `migrate_misplaced_folio` 函数中，增加对 `sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING` 的检查，确保仅在 memory tiering 模式下才对页面提升（promotion）进行计数统计。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cec470c90dfbd97ab13962ac687086c660f238c6

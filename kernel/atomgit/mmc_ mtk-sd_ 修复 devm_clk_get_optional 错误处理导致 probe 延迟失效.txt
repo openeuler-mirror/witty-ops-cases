@@ -1,0 +1,20 @@
+#标题
+mmc: mtk-sd: 修复 devm_clk_get_optional 错误处理导致 probe 延迟失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mtk-sd 驱动探测过程中，当 `devm_clk_get_optional` 获取时钟失败（返回 `-EPROBE_DEFER`）时，驱动错误地将返回值处理为 `NULL`，导致 probe 流程继续执行而非立即返回并延迟探测。这可能导致驱动初始化失败或后续功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `devm_clk_get_optional` 在找不到时钟时会返回 `NULL`，但在出错时可能返回错误指针（例如 `-EPROBE_DEFER`）。原代码逻辑仅检查了 `IS_ERR`，但在出错分支直接将指针置为 `NULL` 并继续执行，未正确向上传递错误码（特别是 `EPROBE_DEFER`），违反了驱动 probe 的错误处理契约。
+
+#解决方案
+修改 `msdc_drv_probe` 函数中的错误处理逻辑：当 `devm_clk_get_optional` 返回错误指针（`IS_ERR` 为真）时，直接通过 `PTR_ERR` 转换并返回该错误码，不再将其忽略置为 `NULL`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/66a1888ad812ede594f06864bec74e5483d21dfa

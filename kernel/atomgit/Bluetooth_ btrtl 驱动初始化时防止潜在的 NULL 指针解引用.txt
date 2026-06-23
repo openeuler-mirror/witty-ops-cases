@@ -1,0 +1,20 @@
+#标题
+Bluetooth: btrtl 驱动初始化时防止潜在的 NULL 指针解引用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 Realtek 蓝牙驱动时，若指定的 mandatory config 文件未找到且 `btrtl_dev->cfg_len` 恰好为 0，函数返回值为 0（即成功状态），但相关的设备信息结构体已被释放，导致后续代码使用该指针时引发 NULL 指针解引用或 Use-After-Free 异常。
+
+#主要错误日志
+rtl_dev_err(hdev, "mandatory config file %s not found", btrtl_dev->ic_info->cfg_name);
+
+#问题根因
+在 `btrtl_initialize` 函数的错误处理路径中，当配置文件未找到时，直接将 `btrtl_dev->cfg_len` 赋值给返回值 `ret`。如果 `cfg_len` 为 0，函数最终会返回 0，这会被调用者误判为初始化成功。然而代码逻辑随后跳转到 `err_free` 标签释放了设备信息结构体并置空，导致返回的是一个已释放资源的无效指针，引发后续的空指针引用或内存访问错误。
+
+#解决方案
+在配置文件未找到的错误分支中，增加对返回值 `ret` 的判断：如果 `ret` 为 0，则强制将其设置为 `-EINVAL`（无效参数），确保函数返回一个负的错误码，从而正确向调用者指示初始化失败，避免后续对已释放资源的访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d4c914cee77d424e4f3b3c761fe29540cdcc4d59

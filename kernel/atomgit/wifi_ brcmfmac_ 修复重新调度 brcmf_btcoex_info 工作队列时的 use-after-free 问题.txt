@@ -1,0 +1,20 @@
+#标题
+wifi: brcmfmac: 修复重新调度 brcmf_btcoex_info 工作队列时的 use-after-free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 brcmfmac 驱动（detach）过程中，若 `btcoex` 定时器回调函数正在执行并重新调度工作队列，可能触发 use-after-free 内核崩溃。具体表现为驱动卸载后内核发生 panic 或出现内存访问相关的 Oops。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `brcmf_btcoex_detach` 函数中，原代码逻辑先判断 `timer_on` 标志并置为 false，随后才调用 `timer_shutdown_sync`。这导致了一个竞态窗口：如果在标志位置 false 之后、但定时器关闭之前，定时器回调被触发，回调函数会检测到 `timer_on` 为 false 从而退出，但若此时工作队列相关资源已被释放，后续的工作队列调度将引发 use-after-free。
+
+#解决方案
+调整 `brcmf_btcoex_detach` 中的执行顺序，先调用 `timer_shutdown_sync` 确保定时器完全停止且没有回调在运行，然后再将 `timer_on` 标志置为 false。这样可以确保在清理资源前，定时器及其回调不会再访问相关数据结构，从而避免 use-after-free。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5a7d30fe7240cfbb3274222e5d44412458ca9c2a

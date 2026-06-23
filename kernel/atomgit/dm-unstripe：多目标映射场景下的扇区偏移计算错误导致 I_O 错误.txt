@@ -1,0 +1,20 @@
+#标题
+dm-unstripe：多目标映射场景下的扇区偏移计算错误导致 I/O 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 dm-unstripe 目标配置包含多个目标的映射表时（即目标的起始扇区不为 0），扇区偏移计算错误。具体表现为：映射设备的前半部分（首个目标）能正确映射到 RAID0 磁盘，但后半部分（后续目标）的访问会被错误地映射到 RAID0 设备的末尾范围之外，导致对这些扇区的访问返回 I/O 错误。
+
+#主要错误日志
+未知
+
+#问题根因
+dm-unstripe 模块的 `map_to_core` 函数在进行扇区计算时，直接使用了 bio 中的扇区号（`bio->bi_iter.bi_sector`），该扇区号是相对于整个映射设备的，而没有减去当前目标在映射设备中的起始偏移量。这导致当目标（target）的起始位置不为 0 时，计算出的物理扇区地址远超实际物理设备的范围。
+
+#解决方案
+修改 `drivers/md/dm-unstripe.c` 文件中的 `map_to_core` 函数，在计算扇区偏移时使用 `dm_target_offset(ti, bio->bi_iter.bi_sector)` 替代直接使用 `bio->bi_iter.bi_sector`，确保计算基于当前目标（target）内的相对扇区偏移，而非整个映射设备的绝对扇区偏移。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1e11785fc6a1fe8674b0585ccf2e2d9b5e8c370c

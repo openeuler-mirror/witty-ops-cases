@@ -1,0 +1,23 @@
+#标题
+[urma] 共享TP模式下PSN交换异常导致通信状态不确定
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 share_tp（共享TP）模式下，当本地和远端同时创建 Jetty 时，会导致两端各生成大于等于 2 个 tx_psn（传输序列号）值，而实际只存在一个活跃的 TP。在并发条件下，无法确定实际使用的是哪一个 tx_psn 值，导致 PSN 交换异常，可能引发通信连接状态混乱或数据传输错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在创建 rm_tp_info 的过程中，tx_psn 的生成时机不正确。原逻辑在处理路径中多次调用 `get_random_u32()` 获取 tx_psn，导致在共享 TP 模式下可能生成多个不一致的 PSN 值。根本原因在于未能在创建 `rm_tp_info` 结构体时就确定并保存唯一的 tx_psn，导致后续交换 PSN 值时使用了不确定的值。
+
+#解决方案
+修改 tx_psn 的生成与获取逻辑，确保在共享 TP 模式下 PSN 的唯一性：
+1. 在 `ubcore_get_rm_stp_list` 函数中，创建新的 `rm_tp_info` 时立即生成并存储 `tx_psn` 到结构体中；若是已存在的 TP，则直接读取已存储的 `tx_psn`。
+2. 将确定的 `tx_psn` 值回填到 `stp_cfg` 配置中。
+3. 在 `handle_create_req` 和 `ubcore_import_jetty_compat` 函数中，针对共享 TP 模式直接使用配置中传递的 `stp_cfg.tx_psn`，而非重新随机生成，从而保证 PSN 交换的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3d43b447c531bc475ad4b2413982c1e2aa56f5aa

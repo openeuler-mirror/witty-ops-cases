@@ -1,0 +1,22 @@
+#标题
+can: rcar_canfd: R-Car Gen4 与 RZ/G3E SoC 默认模式错误设置为 FD-Only
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 R-Car Gen4 和 RZ/G3E SoC 上，CAN 控制器的默认模式被错误地设置为 FD-Only 模式，而非预期的 CAN-FD 模式。这导致控制器无法按预期在标准 CAN-FD 模式下初始化或工作，影响了设备的正常通信功能。
+
+#主要错误日志
+未知
+
+#问题根因
+提交 5cff263606a1 ("can: rcar_canfd: Fix controller mode setting") 虽然依据硬件手册修正了模式设置流程，但其逻辑实现存在缺陷。该错误的逻辑导致 R-Car Gen4 和 RZ/G3E SoC 在初始化时，默认进入了 FD-Only 模式而不是 CAN-FD 模式。此外，不同 SoC 对模式设置的时序要求不同（部分需在全局复位模式下设置，部分需在通道复位模式下设置），原有的 `rcar_canfd_set_mode` 函数未能正确处理这些约束。
+
+#解决方案
+删除独立的 `rcar_canfd_set_mode()` 函数，并将模式设置逻辑集成到 `rcar_canfd_reset_controller()` 函数中，以确保满足不同 SoC 的时序约束：
+1. 对于非 Gen4 的 SoC，在全局复位阶段设置 CAN-FD 模式。
+2. 对于 Gen4 SoC，在通道复位阶段设置模式。代码采用了反转逻辑以简化后续对 FD-only 模式的支持：若 `fdmode` 为真则使能 FDOE 并禁用 CLOE，否则禁用 FDOE 并使能 CLOE，确保控制器默认处于 CAN-FD 模式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0c5d7965747f3a163a21b617719d485ab2996c27

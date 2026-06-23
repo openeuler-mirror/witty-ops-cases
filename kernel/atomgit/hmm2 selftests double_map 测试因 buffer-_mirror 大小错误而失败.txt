@@ -1,0 +1,23 @@
+#标题
+hmm2 selftests double_map 测试因 buffer->mirror 大小错误而失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 `hmm2` 子测试 `hmm2_device_private.double_map` 时，测试用例触发断言失败并异常终止，导致测试无法通过。
+
+#主要错误日志
+# hmm-tests.c:1680:double_map:Expected ret (-14) == 0 (0)
+# double_map: Test terminated by assertion
+#          FAIL  hmm2.hmm2_device_private.double_map
+not ok 53 hmm2.hmm2_device_private.double_map
+
+#问题根因
+测试代码中分配 `buffer->mirror` 缓冲区时使用了错误的长度参数 `npages`（值为 6），而实际期望的大小应为 `6 * PAGE_SIZE`（即变量 `size`）。这导致内核在执行 `copy_to_user` 操作时，试图将一个 `6 * PAGE_SIZE` 大小的数据拷贝到一个仅有 6 字节大小的用户态缓冲区中，从而引发 `copy_to_user` 失败（返回 -EFAULT），进而触发测试断言失败。
+
+#解决方案
+修正 `tools/testing/selftests/mm/hmm-tests.c` 文件中 `double_map` 测试用例的内存分配逻辑，将 `buffer->mirror` 的分配大小参数从 `npages` 修改为 `size`，确保用户态缓冲区大小与实际拷贝数据大小一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f1e5a76e72884c437c8c113c10ac673831faa96f

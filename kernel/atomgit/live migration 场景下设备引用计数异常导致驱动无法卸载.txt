@@ -1,0 +1,21 @@
+#标题
+live migration 场景下设备引用计数异常导致驱动无法卸载
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在虚拟机热迁移场景下，如果目的端虚拟功能（VF）数量大于源端，恢复操作会失败。QEMU 在退出后未能完成设备文件描述符的关闭流程，导致设备引用计数异常，进而导致驱动程序无法被正常卸载。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hisi_acc_vfio_pci_close_device` 函数中，缺少对相关文件描述符的清理操作（`hisi_acc_vf_disable_fds`）。当热迁移过程中出现目的端 VF 数量大于源端等异常情况导致恢复失败时，设备 FD 未被正确关闭，从而导致设备引用计数泄露。
+
+#解决方案
+1. 在 `hisi_acc_vfio_pci_close_device` 函数中增加 `hisi_acc_vf_disable_fds` 调用，确保在设备关闭时及时释放相关 FD，防止引用计数异常。
+2. 在 `hisi_acc_vfio_pci_migrn_init_dev` 初始化函数中，将 `vf_qm_state` 初始化为 `QM_NOT_READY`，保证设备状态的初始一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/da4c61580411a7e396f6d7ea9df2ffdbbc8b4450

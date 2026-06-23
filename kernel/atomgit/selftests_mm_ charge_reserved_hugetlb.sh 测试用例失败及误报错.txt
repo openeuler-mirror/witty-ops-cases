@@ -1,0 +1,29 @@
+#标题
+selftests/mm: charge_reserved_hugetlb.sh 测试用例失败及误报错
+
+#内核版本
+OLK-6.6
+
+#问题现象
+运行 `charge_reserved_hugetlb.sh` 自测试用例时，偶现以下异常现象：
+1. 测试脚本输出 "Detach failure: Invalid argument" 错误信息。
+2. 卸载 hugetlbfs 时报错 "umount: /mnt/huge: target is busy"。
+3. 最终测试结果显示失败，退出码为 32。
+
+#主要错误日志
+- Detach failure: Invalid argument
+- umount: /mnt/huge: target is busy.
+- not ok 10 charge_reserved_hugetlb.sh -cgroup-v2 # exit=32
+
+#问题根因
+该问题包含两个缺陷：
+1. **卸载失败**：测试脚本使用 `killall` 终止 `write_to_hugetlbfs` 进程时，未等待进程实际退出。进程可能仍持有 hugetlbfs 文件句柄，导致后续 umount 操作因 "target is busy" 而失败。
+2. **Detach 失败**：`write_to_hugetlbfs.c` 中的信号处理函数无条件执行 `shmdt()` 清理操作。当测试场景仅使用 mmap 映射 hugetlb 文件而非共享内存（SHM）时，`shmaddr` 指针未初始化（或为空），导致 `shmdt()` 调用失败并返回 "Invalid argument"。
+
+#解决方案
+通过修改测试工具代码修复上述问题：
+1. **修复脚本等待逻辑**：在 `charge_reserved_hugetlb.sh` 中，将 `killall -2 write_to_hugetlbfs` 修改为 `killall -2 --wait write_to_hugetlbfs`，确保等待进程完全退出后再执行清理和卸载操作。
+2. **修复 C 程序清理逻辑**：在 `write_to_hugetlbfs.c` 中，将 `shmaddr` 初始化检查加入信号处理函数。仅当 `shmaddr` 非空时才执行 `shmdt()` 和 `shmctl()` 相关清理操作，避免对非 SHM 场景进行无效的系统调用。同时修正了 SHM 场景下 `shmaddr` 未正确赋值的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2e6ca2bcd623ccf521c0c3157913fb08883000ce

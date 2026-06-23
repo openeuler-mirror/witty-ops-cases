@@ -1,0 +1,28 @@
+#标题
+can: c_can: 总线错误统计计数器更新错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Bosch C_CAN 控制器进行 CAN 通信时，若发生总线错误（如位错误、应答错误），内核网络设备统计信息中的错误计数不准确。具体表现为：在发送过程中发生位错误或应答错误时，`rx_errors`（接收错误计数）异常增加，而 `tx_errors`（发送错误计数）未相应更新，导致用户通过 `ifconfig` 或 `ip -s link` 观察到的错误统计与实际链路状态不符。
+
+#主要错误日志
+- stuff error
+- form error
+- ack error
+- bit1 error
+- bit0 error
+- CRC error
+（注：以上为代码中 `netdev_dbg` 打印内容，实际运行中需开启调试日志可见；故障本身主要体现在统计计数器的异常增加。）
+
+#问题根因
+`c_can_handle_bus_err()` 函数在处理总线错误时逻辑有误，无论错误类型如何，均无条件地执行 `stats->rx_errors++` 操作。这导致即使在发送过程中发生的错误（如 LEC_ACK_ERROR、LEC_BIT1_ERROR、LEC_BIT0_ERROR），也被错误地计入接收错误统计，未能根据实际错误类型区分更新 `rx_errors` 或 `tx_errors`。
+
+#解决方案
+移除函数入口处统一增加 `rx_errors` 的代码，改为在具体的错误类型分支中根据错误属性分别更新统计计数器：
+- 对于接收相关错误（如填充错误、格式错误、CRC错误），增加 `rx_errors`；
+- 对于发送相关错误（如应答错误、位1错误、位0错误），增加 `tx_errors`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1e83e96fa39ad1caa0d9984db00b012a63896755

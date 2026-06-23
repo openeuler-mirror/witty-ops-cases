@@ -1,0 +1,20 @@
+#标题
+mlxsw: spectrum_mr: 更新组播路由统计时出现 Use-After-Free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在更新组播路由统计信息时，系统发生 Use-After-Free 错误。该问题发生在 `mlxsw_sp_mr_route_add` 流程中，当处理原始路由对象时，该对象在仍可能被其他并发路径访问的情况下被销毁，导致内核内存访问违规或系统崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mlxsw_sp_mr_route_add` 函数中，处理原始路由对象（`mr_orig_route`）时，从哈希表中移除该对象后，直接调用 `list_del` 将其从链表中删除并随后销毁。该操作未持有 `mr_table->route_list_lock` 互斥锁，导致在多核或并发场景下，其他线程可能仍在遍历或访问该路由对象的链表节点，从而引发 Use-After-Free。
+
+#解决方案
+在删除原始路由对象的链表节点时，增加 `mutex_lock` 和 `mutex_unlock` 对 `mr_table->route_list_lock` 进行加锁保护，确保在从链表中删除节点并销毁对象的过程中，链表状态的一致性，防止并发访问导致的内存释放后使用问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/840a0b8b3eb1fb5c255f2841ba9260c12370040c

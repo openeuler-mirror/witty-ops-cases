@@ -1,0 +1,20 @@
+#标题
+SCSI tape ERASE 命令错误清除磁带位置变量导致定位异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 SCSI ERASE 命令后，磁带驱动程序错误地将位置变量（fileno、blkno、at_sm）清零，导致驱动记录的磁带位置与实际物理位置不一致。由于 SCSI ERASE 命令是从当前位置向后擦除，磁头位置并未改变，此行为会导致后续的磁带定位操作或数据读写基于错误的位置基准，引发数据覆盖或定位失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `st_int_ioctl` 函数处理 `MTIOCTOP`/`MTBSR` 等相关 ioctl 逻辑中，针对 ERASE 命令的处理分支错误地执行了 `fileno = blkno = at_sm = 0;` 操作。根因在于开发者误以为 ERASE 命令会改变磁带位置，实际上 SCSI ERASE 命令仅擦除数据，磁带逻辑位置保持不变。
+
+#解决方案
+删除 `drivers/scsi/st.c` 中 ERASE 命令处理分支下的 `fileno = blkno = at_sm = 0;` 代码行，确保 ERASE 操作后驱动保留正确的磁带位置状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5901245a2b1bcf20c1804a4b4d0df77ccab1f437

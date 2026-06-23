@@ -1,0 +1,29 @@
+#标题
+MIPS 架构禁用 MIPS_FP_SUPPORT 时触发编译警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在禁用 MIPS_FP_SUPPORT 配置选项编译内核时，编译过程触发 GCC 警告 `-Wempty-body`，导致构建警告信息产生，影响编译洁净度。
+
+#主要错误日志
+```text
+In file included from kernel/sched/core.c:79:
+kernel/sched/core.c: In function 'context_switch':
+./arch/mips/include/asm/switch_to.h:114:39: warning: suggest braces around empty body in an 'if' statement [-Wempty-body]
+  114 |                 __sanitize_fcr31(next);                                 \
+      |                                       ^
+kernel/sched/core.c:5316:9: note: in expansion of macro 'switch_to'
+ 5316 |         switch_to(prev, next, prev);
+      |         ^~~~~~~~~
+```
+
+#问题根因
+当配置项 MIPS_FP_SUPPORT 被禁用时，宏 `__sanitize_fcr31(next)` 被定义为空。由于该宏在 `switch_to` 宏的 `if` 语句分支中被调用，空定义导致 `if` 语句体为空，从而触发 GCC 关于空语句体的警告。
+
+#解决方案
+修改 `arch/mips/include/asm/switch_to.h` 文件，将 `__sanitize_fcr31(next)` 的空定义修改为 `do { (void) (next); } while (0)`。此举为宏提供了一个有效的空语句体，消除了编译器警告，同时通过 `(void) (next)` 避免了未使用变量的编译警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/389cf8893f595a4f168773b5675d68e4952716b4

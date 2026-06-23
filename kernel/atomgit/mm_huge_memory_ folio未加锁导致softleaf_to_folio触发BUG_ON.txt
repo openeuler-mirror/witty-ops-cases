@@ -1,0 +1,20 @@
+#标题
+mm/huge_memory: folio未加锁导致softleaf_to_folio触发BUG_ON
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `softleaf_to_folio` 相关流程处理迁移项时，内核触发 `BUG_ON` 检查失败导致系统崩溃或 Panic。具体表现为代码逻辑断言 folio 处于锁定状态失败。
+
+#主要错误日志
+BUG_ON(!folio_test_locked(folio));
+
+#问题根因
+在处理迁移项并调用 `pfn_swap_entry_to_page` 或 `pfn_swap_entry_folio` 时，代码直接断言 folio 必须处于锁定状态。然而，如果此时正发生 folio split 操作，split 可能会将 tail pages 转化为新的 folios，导致当前进程观测到未锁定的 folio。原代码缺乏内存屏障来同步 `is_migration_entry` 检查与 folio 锁定状态之间的竞态条件。
+
+#解决方案
+在 `pfn_swap_entry_to_page` 和 `pfn_swap_entry_folio` 函数中，移除直接的 `BUG_ON` 锁断言。新增 `migration_entry_sync` 函数，在判断为迁移项后，先执行读内存屏障，以匹配 `__split_folio_to_order` 中的写屏障，确保不会因与 split 操作竞态而观察到未锁定的 folio，然后再进行锁定状态检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a7776f4cad1373ea8d15c12c218dfea9cfa3e76c

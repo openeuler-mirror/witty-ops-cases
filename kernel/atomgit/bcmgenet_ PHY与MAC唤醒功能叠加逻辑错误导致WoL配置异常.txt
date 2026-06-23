@@ -1,0 +1,30 @@
+#标题
+bcmgenet: PHY与MAC唤醒功能叠加逻辑错误导致WoL配置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 当PHY支持Wake-on-LAN（WoL）时，MAC层支持的特定唤醒模式（如WAKE_FILTER）被错误覆盖，导致用户无法使用MAC层独有的唤醒功能。
+2. 在禁用Wake-on-LAN时，如果PHY层处理成功，驱动直接返回，导致MAC层的唤醒状态未被正确清除，MAC仍保持唤醒状态。
+3. 查询WoL配置时，若配置了PHY层的WAKE_MAGICSECURE，可能无法正确获取到MAC层配置的SecureOn密码。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在处理PHY与MAC层的WoL功能叠加时逻辑存在缺陷：
+1. `bcmgenet_get_wol`函数中，当PHY支持WoL时，直接用MAC的配置（`priv->wolopts`）覆盖了`wol->wolopts`，而非进行逻辑“或”叠加，导致PHY层已设置的唤醒选项丢失。
+2. `bcmgenet_set_wol`函数中，在禁用WoL（`wol->wolopts`为0）时，调用PHY层设置函数若返回成功（非`-EOPNOTSUPP`），驱动直接返回，跳过了后续MAC层的禁用操作。
+
+#解决方案
+1. 修改`bcmgenet_get_wol`函数：
+   - 保存PHY层返回的`wol->wolopts`到临时变量`phy_wolopts`。
+   - 将MAC层支持的唤醒模式（WAKE_MAGIC | WAKE_MAGICSECURE | WAKE_FILTER）添加到`supported`掩码中。
+   - 使用逻辑“或”操作（`|=`）将MAC层配置叠加到`wol->wolopts`中，确保PHY和MAC的配置共存。
+   - 修正SecureOn密码返回逻辑，优先返回PHY配置的密码，否则返回MAC配置的密码。
+2. 修改`bcmgenet_set_wol`函数：
+   - 调整判断条件，只有当PHY层设置操作成功且`wol->wolopts`非零（即非禁用操作）时才提前返回，确保禁用WoL的指令能继续下发到MAC层。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e6093978349c705cef7d37d7034c89bedd530955

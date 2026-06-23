@@ -1,0 +1,20 @@
+#标题
+x86/unwind/orc: 新建任务栈回溯不可靠导致 arch_stack_walk_reliable 返回错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当调用 arch_stack_walk_reliable() 对新建的进程任务进行栈回溯时，函数返回值为负数，表示调用栈不可靠，这不符合预期行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在提交 3aec4ecb3d1f ("x86: Rewrite ret_from_fork() in C") 之后，新建任务的返回地址（ret_addr）变更为 ret_from_fork_asm（见 copy_thread()）。但在 __unwind_start() 函数中，判断初始 "signal" 状态时仍使用 ret_from_fork 进行比较，导致判断错误。这进而使得地址在调用 orc_find() 时被错误地递减，最终导致获取到错误的 ORC 数据。
+
+#解决方案
+修改 arch/x86/kernel/unwind_orc.c 中的 __unwind_start() 函数，将判断初始 "signal" 的比较对象由 ret_from_fork 修改为 ret_from_fork_asm，以匹配新建任务实际的返回地址。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5962e2c43036694c1181d32cd7a426f444101efd

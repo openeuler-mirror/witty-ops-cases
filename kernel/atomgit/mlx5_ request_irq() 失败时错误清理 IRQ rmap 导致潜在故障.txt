@@ -1,0 +1,20 @@
+#标题
+mlx5: request_irq() 失败时错误清理 IRQ rmap 导致潜在故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mlx5 驱动处理流程中，当 `request_irq()` 申请中断失败时，错误处理路径会执行清理操作。原有的清理逻辑错误地释放了整个 `irq_cpu_rmap`，而不是仅移除当前失败的 IRQ 条目。这会导致其他正在使用的 IRQ 资源与 rmap 的关联丢失，可能引发后续的网络设备功能异常或内存访问错误。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `mlx5_irq_alloc` 函数中，`request_irq()` 失败后的错误处理分支（`err_req_irq`）存在逻辑错误。代码直接调用了 `free_irq_cpu_rmap(*rmap)` 来释放整个 rmap 结构，但实际上该 rmap 可能已被其他 IRQ 条目使用。正确的做法应当是仅将当前失败的 IRQ 从 rmap 中移除（即调用 `irq_cpu_rmap_remove`），而不是销毁整个 rmap 资源。
+
+#解决方案
+修改 `drivers/net/ethernet/mellanox/mlx5/core/pci_irq.c` 中 `err_req_irq` 标签下的错误处理代码。将 `free_irq_cpu_rmap(*rmap)` 替换为 `irq_cpu_rmap_remove(*rmap, irq->map.virq)`，确保仅清理当前失败的 IRQ 关联，保留其他有效的 rmap 资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8fcd2fc5e6dd9ff7190a1ee477a77d05b9f55a2c

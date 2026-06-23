@@ -1,0 +1,28 @@
+#标题
+drm/stm: 驱动卸载时 CRTC 和 Plane 资源释放导致的 Use-After-Free 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 STM DRM 驱动卸载或设备移除过程中，发生 Use-After-Fault（释放后使用）问题。具体表现为内核访问已释放的内存地址（通常为 `struct drm_crtc` 或 `struct drm_plane` 相关结构体），可能导致内核 Oops、Panic 或内存数据损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动代码使用 `devm_kzalloc` 分配 CRTC 和 Plane 结构体内存，并注册了标准的 `.destroy` 回调函数（如 `drm_crtc_cleanup`、`drm_plane_cleanup`）。这导致了资源生命周期管理的不一致：
+1. 当 DRM 设备注销时，`drm_mode_config_cleanup` 会调用 `.destroy` 回调释放资源。
+2. 由于使用 `devm_kzalloc`，底层 `devres` 机制会在驱动解绑后自动释放内存。
+如果 `.destroy` 回调的执行时机与 `devres` 自动释放的时机不匹配（例如 `.destroy` 仅仅清理资源但未释放内存，随后 `devres` 释放内存，或者 `.destroy` 提前释放了 `devres` 管理的内存但未从 `devres` 链表中移除），后续操作（如 DRM 核心层的清理流程）再次访问这些结构体时，就会访问到已被释放的内存，触发 Use-After-Free。
+
+#解决方案
+采用 DRM Managed Resources（`drmm_`）API 替换原有的 `devm_kzalloc` 和手动初始化方式，利用 DRM 设备生命周期自动管理资源：
+1. 将 CRTC 的内存分配和初始化替换为 `drmm_kzalloc` 和 `drmm_crtc_init_with_planes`。
+2. 将 Plane 的内存分配和初始化替换为 `drmm_universal_plane_alloc`。
+3. 将 Encoder 的分配替换为 `drmm_simple_encoder_alloc`。
+4. 将 Panel Bridge 的添加替换为 `drmm_panel_bridge_add`。
+5. 移除 `ltdc_crtc_funcs` 和 `ltdc_plane_funcs` 中显式的 `.destroy` 回调函数（如 `drm_crtc_cleanup` 和 `drm_plane_cleanup`），因为 `drmm_` 机制会随 DRM 设备销毁自动处理资源释放，确保资源与设备生命周期的严格绑定，避免双重释放或释放后使用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3c800ab886b6bd76f0324d8548251d73feab5ffd

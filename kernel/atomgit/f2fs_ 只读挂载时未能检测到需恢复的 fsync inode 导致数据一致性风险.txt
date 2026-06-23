@@ -1,0 +1,40 @@
+#标题
+f2fs: 只读挂载时未能检测到需恢复的 fsync inode 导致数据一致性风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在突然断电前创建并 fsync 新 inode，且该 inode 不存在于上一个检查点的情况下，以只读方式挂载文件系统时，挂载意外成功。这导致系统未能阻止挂载操作，从而无法触发恢复流程或提示用户处理，存在数据一致性风险。
+
+复现步骤：
+1. mkfs.f2fs /dev/vdd
+2. mount /dev/vdd /mnt/f2fs
+3. touch /mnt/f2fs/foo
+4. sync
+5. touch /mnt/f2fs/bar
+6. f2fs_io fsync /mnt/f2fs/bar
+7. f2fs_io shutdown 2 /mnt/f2fs
+8. umount /dev/vdd
+9. blockdev --setro /dev/vdd
+10. mount /dev/vdd /mnt/f2fs
+
+预期结果：挂载失败，提示需要恢复数据但无写权限。
+实际结果：挂载成功，提示 "mount: /mnt/f2fs: WARNING: source write-protected, mounted read-only."。
+
+#主要错误日志
+- 故障现象日志（修复前）：
+  mount: /mnt/f2fs: WARNING: source write-protected, mounted read-only.
+- 修复后预期日志：
+  F2FS-fs (vdd): Need to recover fsync data, but write access unavailable, please try mount w/ disable_roll_forward or norecovery
+
+#问题根因
+在 `f2fs_recover_fsync_data()` 流程中，`find_fsync_dnodes()` 函数在 dryrun 模式（check_only）下遍历 fsync dnodes 时，如果遇到一个新的 inode（即 inode node 的 nat 不存在于上一个 checkpoint 中），`add_fsync_inode()` 会返回 -ENOENT 并直接跳过。这导致该 inode 未被链接到 `inode_list` 中。
+随后的检查逻辑 `list_empty(&inode_list)` 误判为没有需要恢复的数据，导致在只读挂载场景下未能正确检测到存在不可恢复的 fsync inode，从而错误地允许了挂载继续进行。
+
+#解决方案
+修改 `find_fsync_dnodes()` 函数，增加一个输出参数 `new_inode` 用于标记是否遇到了不存在于上次 checkpoint 的新 inode。当 `add_fsync_inode()` 返回 -ENOENT 且处于 `check_only` 模式时，将 `new_inode` 标志置为 true。
+同时修改调用处 `f2fs_recover_fsync_data()` 的判断逻辑，将条件从 `list_empty(&inode_list)` 改为 `list_empty(&inode_list) && (!check_only || !new_inode)`。这样在 dryrun 模式下，即便 `inode_list` 为空，只要检测到了新的 fsync inode，就会进入恢复流程的后续检查，从而正确识别出需要写权限才能恢复数据的场景并报错。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3a2658f56fb3815a783b661625b06dbf22c32b38

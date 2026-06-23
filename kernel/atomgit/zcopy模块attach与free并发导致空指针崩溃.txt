@@ -1,0 +1,32 @@
+#标题
+zcopy模块attach与free并发导致空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在执行 zcopy 模块的 attach 操作时触发空指针引用，导致内核 Oops/Machine Check，系统崩溃。具体表现为访问非法虚拟地址 0000000000000000 时发生 Data Abort，触发内部错误并打印调用栈。
+
+#主要错误日志
+Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
+Mem abort info:
+ESR = 0x0000000096000006
+EC = 0x25: DABT (current EL), IL = 32 bits
+SET = 0, FnV = 0
+EA = 0, S1PTW = 0
+FSC = 0x06: level 2 translation fault
+Internal error: Oops: 0000000096000006 [#1] SMP
+Call trace:
+ attach_pte_range+0x190/0x9a0 [zcopy]
+ attach_page_range+0x22c/0x618 [zcopy]
+ attach_pages+0x2b8/0x8b8 [zcopy]
+ zcopy_ioctl+0xe8/0x168 [zcopy]
+
+#问题根因
+zcopy 模块在进行页面 attach 操作时，缺乏对源进程 mm_struct 的 mmap_lock 读锁保护。这导致 attach 操作与并发的 free 操作（如 munmap 等）发生竞争条件，使得 attach_pte_range 函数访问了无效或已释放的内存地址，从而引发空指针解引用。
+
+#解决方案
+在 `attach_pages` 函数调用 `attach_page_range` 前后，分别增加 `mmap_read_lock(src_mm)` 和 `mmap_read_unlock(src_mm)` 操作，通过持有 mmap 读锁来同步内存映射的变更，避免 attach 与 free 操作之间的竞争，防止访问已释放的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/71dc3bdb14c43c19645e74ea991926c4daf8ebca

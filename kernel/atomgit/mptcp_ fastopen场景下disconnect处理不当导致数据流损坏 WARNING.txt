@@ -1,0 +1,26 @@
+#标题
+mptcp: fastopen场景下disconnect处理不当导致数据流损坏 WARNING
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在MPTCP协议使用fastopen进行连接时，若发生连接错误并触发内部断开连接流程，会导致数据流损坏，进而触发内核WARNING。具体表现为在 `__mptcp_clean_una` 函数中触发警告，调用链显示问题出现在 `mptcp_sendmsg_fastopen` -> `mptcp_disconnect` 相关处理路径中。
+
+#主要错误日志
+WARNING: CPU: 0 PID: 9846 at net/mptcp/protocol.c:1024 __mptcp_clean_una+0xddb/0xff0 net/mptcp/protocol.c:1024
+RIP: 0010:__mptcp_clean_una+0xddb/0xff0 net/mptcp/protocol.c:1024
+Call Trace:
+ __mptcp_clean_una_wakeup+0x7f/0x2d0 net/mptcp/protocol.c:1074
+ mptcp_release_cb+0x7cb/0xb30 net/mptcp/protocol.c:3493
+ release_sock+0x1aa/0x1f0 net/core/sock.c:3640
+ mptcp_sendmsg_fastopen+0x2a2/0x530 net/mptcp/protocol.c:1755
+
+#问题根因
+根因是MPTCP协议在处理fastopen连接错误产生的内部disconnect()时处理不当。当fastopen发生错误时，代码会尝试调用 `mptcp_disconnect`，但未增加套接字的 `sk_disconnects` 计数器。这导致其他正在等待同一套接字锁的线程无法正确识别断开状态并报错退出，从而引发数据流损坏和WARNING。
+
+#解决方案
+在fastopen错误处理路径中，当 `mptcp_disconnect` 成功执行时，同步增加 `sk->sk_disconnects` 计数器，确保套接字状态正确更新，允许其他线程正确处理断开连接的情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/96128352aba783a80cc511d9edfe6f6fb7e81aba

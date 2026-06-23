@@ -1,0 +1,23 @@
+#标题
+ocfs2: 字节序转换错误导致挂载失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+挂载 ocfs2 文件系统失败。
+
+#主要错误日志
+```
+found superblock with incorrect block size: found %u, should be %u
+```
+（注：由于错误字节序转换导致计算结果错误，触发此块大小校验失败的日志）
+
+#问题根因
+修复 UBSAN 警告的提交 23aab037106d 引入了回归缺陷。在 `ocfs2_verify_volume` 函数中，变量 `blksz_bits` 在之前的代码逻辑中已经被转换为 CPU 端序，但该补丁错误地再次对其调用了 `le32_to_cpu()` 进行转换。这种重复转换导致数值错误，进而引发块大小校验失败，最终导致挂载失败。
+
+#解决方案
+删除错误的 `le32_to_cpu()` 转换调用，直接使用变量 `blksz_bits` 进行块大小计算与校验。修改代码行从 `(1 << le32_to_cpu(blksz_bits))` 改为 `(1 << blksz_bits)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1a7971bbc1bdaba468d6b2c8d087b6ea9df5c689

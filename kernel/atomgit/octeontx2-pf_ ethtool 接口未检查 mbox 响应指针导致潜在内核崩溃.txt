@@ -1,0 +1,22 @@
+#标题
+octeontx2-pf: ethtool 接口未检查 mbox 响应指针导致潜在内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ethtool 工具查询网卡暂停帧配置或设置 FEC 配置时，若底层 mbox 通信出现异常，内核可能访问无效指针，导致系统崩溃或出现 Oops 异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `otx2_get_pauseparam` 和 `otx2_set_fecparam` 函数中，调用 `otx2_mbox_get_rsp()` 获取响应消息后，未使用 `IS_ERR()` 检查返回指针的有效性。当 `otx2_mbox_get_rsp()` 返回错误指针（ERR_PTR）时，代码直接对其进行解引用操作，导致内核崩溃。
+
+#解决方案
+在 `otx2_mbox_get_rsp()` 调用后增加 `IS_ERR(rsp)` 判断逻辑：
+1. 对于 `otx2_get_pauseparam`，若返回错误指针，直接释放互斥锁并返回，避免解引用无效指针。
+2. 对于 `otx2_set_fecparam`，若返回错误指针，提取错误码并跳转到错误处理标签 `end` 进行资源清理和返回。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b2c5bf75f423b100da1d085be690a2bd10fb9662

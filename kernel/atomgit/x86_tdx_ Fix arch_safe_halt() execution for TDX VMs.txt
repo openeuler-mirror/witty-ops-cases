@@ -1,0 +1,24 @@
+#标题
+x86/tdx: Fix arch_safe_halt() execution for TDX VMs
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 TDX 虚拟机中，当通过 `kvm_wait()` 等路径调用 `arch_safe_halt()` 时，若 HLT 指令在 STI-shadow 状态下执行，会导致唤醒事件丢失。此问题严重影响了存在大量锁竞争场景（如 specjbb2015 基准测试）的性能，导致 TDX 虚拟机得分低下。
+
+#主要错误日志
+未知
+
+#问题根因
+TDX 虚拟机直接执行 HLT 指令会触发 #VE 异常，该异常通过 TDCALL 路由给 Hypervisor。如果 HLT 指令在 STI-shadow（中断屏蔽窗口）中执行，产生的 #VE 处理程序会在 TDCALL 路由给 Hypervisor 之前启用中断。由于当前 TDX 规范未公开中断状态信息，#VE 处理程序无法选择性开启中断，这导致在 TDCALL 调用前中断已被开启，从而引发唤醒事件丢失。
+此前提交 bfe6ed0c6727 仅修复了 idle 常规路径，但遗漏了 paravirt 路径（如 `kvm_wait() => safe_halt() => ... => pv_native_safe_halt()`），该路径仍可能触发上述危险行为。
+
+#解决方案
+1. 在 Kconfig 中为 `INTEL_TDX_GUEST` 增加对 `PARAVIRT` 的依赖。
+2. 将原有的 `tdx_safe_halt` 重命名为 `tdx_halt`，作为基础的 TDX HLT 处理函数。
+3. 新增 `tdx_safe_halt` 函数，该函数先调用 `tdx_halt()` 执行 TDCALL，随后使用 `raw_local_irq_enable()` 恢复中断状态，确保 HLT 逻辑执行可靠。
+4. 在 TDX 初始化过程中，通过修改 `pv_ops.irq.safe_halt` 和 `pv_ops.irq.halt` 指向 TDX 特定的处理函数，覆盖 paravirt 路径的默认行为，避免 HLT 相关的 #VE 异常并修正中断处理逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e69c02114459574092647fb7bb6e5edc4f9a7c92

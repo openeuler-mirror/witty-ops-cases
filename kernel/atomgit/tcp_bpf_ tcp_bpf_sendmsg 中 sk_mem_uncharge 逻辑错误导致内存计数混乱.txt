@@ -1,0 +1,27 @@
+#标题
+tcp_bpf: tcp_bpf_sendmsg 中 sk_mem_uncharge 逻辑错误导致内存计数混乱
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 eBPF TCP Hook 功能时，tcp_bpf_sendmsg 处理数据发送逻辑存在缺陷。当发生重定向（__SK_REDIRECT）或丢包（__SK_DROP）时，套接字内存计费与释放逻辑不匹配，可能导致内核内存计数混乱，严重时引发内存泄漏或套接字内存统计异常。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **内存重复释放风险**：原代码在发送重定向逻辑中，在释放锁（release_sock）前调用了 `sk_msg_return`，而在后续错误处理路径中又调用了 `sk_msg_free_nocharge`，导致内存计数被重复扣除，引发内存统计错误。
+2. **内存计费逻辑缺失**：在 `__SK_DROP` 路径中，原代码仅调用了 `sk_msg_free_partial` 且未处理剩余内存计数，导致内存未正确归还给套接字。
+3. **错误的计费补偿**：在 `more_data` 标签处的重定向路径中，原代码错误地尝试调用 `sk_mem_charge(sk, tosend - sent)` 进行补偿，但这掩盖了前面逻辑错误且不符合内存管理规范。
+
+#解决方案
+修复内存计数管理逻辑，确保内存释放与计费操作正确配对：
+1. 移除 `release_sock` 前不合理的 `sk_msg_return` 调用。
+2. 在发送完成并重新获取锁（lock_sock）后，显式调用 `sk_mem_uncharge(sk, sent)` 归还已发送部分的内存。
+3. 在错误处理路径中将 `sk_msg_free_nocharge` 替换为 `sk_msg_free`，确保在释放消息结构时正确处理内存计数。
+4. 在 `__SK_DROP` 路径中调用 `sk_msg_free` 替代 `sk_msg_free_partial`，确保完整释放内存并修正计数。
+5. 移除 `more_data` 处冗余的 `sk_mem_charge` 补偿代码，依靠修正后的流程自然管理内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/82b79eea8b7a221a6f63cb3cc81b8292c5e4d02e

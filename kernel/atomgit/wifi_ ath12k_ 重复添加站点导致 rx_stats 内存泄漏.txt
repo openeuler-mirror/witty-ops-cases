@@ -1,0 +1,20 @@
+#标题
+wifi: ath12k: 重复添加站点导致 rx_stats 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 wifi ath12k 驱动中，当同一个 station（站点）被多次添加时，驱动会重复调用 `ath12k_mac_station_add` 函数。由于该函数每次都会申请新的 `rx_stats` 内存而未检查是否已分配，导致旧的 `rx_stats` 指针丢失且无法释放，从而造成内核内存泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+`ath12k_mac_station_add` 函数在处理站点添加时，未检查 `arsta->rx_stats` 是否已经分配过内存，直接执行 `kzalloc` 进行分配。若同一站点被重复添加，会导致原有的内存指针被覆盖丢失，且该内存在站点移除时本应被释放，但因指针丢失导致无法回收，最终引发内存泄漏。
+
+#解决方案
+在 `ath12k_mac_station_add` 函数中申请 `rx_stats` 内存前，增加对 `arsta->rx_stats` 指针是否为空的判断。仅当 `arsta->rx_stats` 为 NULL 时才进行内存分配，避免重复分配导致的内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c24a2ed30cffa66cb0a958f7be200c3490ad3712

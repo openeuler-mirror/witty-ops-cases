@@ -1,0 +1,29 @@
+#标题
+udp_sock_create6 在 CONFIG_IPV6=n 时引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核编译时禁用 IPv6（CONFIG_IPV6=n）的情况下，调用 udp_sock_create6 函数创建 socket 时，该函数错误地返回成功（0），但并未实际创建 socket。调用者（如 fou_create）随后尝试解引用未初始化的 socket 指针，导致内核发生空指针解引用崩溃。特权用户可通过 netlink 接口触发此问题。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 0000000000000018
+RIP: 0010:fou_nl_add_doit (net/ipv4/fou_core.c:590 net/ipv4/fou_core.c:764)
+Call Trace:
+ <TASK>
+ genl_family_rcv_msg_doit.constprop.0 (net/netlink/genetlink.c:1114)
+ genl_rcv_msg (net/netlink/genetlink.c:1194 net/netlink/genetlink.c:1209)
+ netlink_rcv_skb (net/netlink/af_netlink.c:2550)
+ genl_rcv (net/netlink/genetlink.c:1219)
+ netlink_unicast (net/netlink/af_netlink.c:1319 net/netlink/af_netlink.c:1344)
+ netlink_sendmsg (net/netlink/af_netlink.c:1894)
+
+#问题根因
+当 CONFIG_IPV6 被禁用时，udp_sock_create6() 函数的内联实现错误地返回了 0（表示成功），但没有创建 socket。这导致调用者（例如 fou_create()）误以为操作成功，进而尝试解引用未初始化的 socket 指针，最终触发空指针解引用错误。
+
+#解决方案
+修改 `include/net/udp_tunnel.h` 中 `udp_sock_create6` 的静态内联实现，将返回值从 0 修改为 `-EPFNOSUPPORT`。这确保了在 IPv6 未编译进内核时，函数返回明确的错误码，调用者能够正确进入错误处理路径，避免解引用空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f0fd739ced5596412e52c1a978242e06644c1e0

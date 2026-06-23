@@ -1,0 +1,24 @@
+#标题
+v4l2-ctrls-api: fix error handling for v4l2_g_ctrl()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+v4l2_g_ctrl() 函数在底层操作失败时错误地返回成功状态，导致用户空间应用程序无法感知错误。当 ptr_to_user() 或相关填充控制值的操作失败时，应用程序可能接收到错误的返回值，进而导致应用程序运行失败或行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+get_ctrl() 函数内部的错误检查逻辑存在缺陷。当处理 volatile controls 时，函数调用了 `call_op(master, g_volatile_ctrl)`，随后直接执行 `new_to_user(c, ctrl)` 而未检查 `call_op` 的返回值；对于非 volatile controls，直接执行 `cur_to_user(c, ctrl)` 也忽略了其可能的错误返回。这导致当上述填充数据的操作失败时，错误码被丢弃，v4l2_g_ctrl() 向用户空间返回了成功（0），掩盖了实际的故障。
+
+#解决方案
+修正错误处理逻辑，确保错误码能正确传递回用户空间：
+1. 在 get_ctrl() 中，对于 volatile controls，增加对 `call_op(master, g_volatile_ctrl)` 返回值的检查，仅当操作成功时才调用 `new_to_user`，否则保留错误码。
+2. 在 get_ctrl() 中，对于非 volatile controls，捕获 `cur_to_user` 的返回值并赋给 ret。
+3. 在 v4l2_g_ctrl() 中，增加对 get_ctrl() 返回值的判断，仅在返回值为成功（0）时才更新 control->value。
+4. 同步修复 set_ctrl_lock() 中的类似问题，确保 `user_to_new`、`set_ctrl` 和 `cur_to_user` 串联调用时，每一步的错误都能正确传递，一旦前步失败则终止后续操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bdd1a5562689448a9d32c2e015a22a557e348222

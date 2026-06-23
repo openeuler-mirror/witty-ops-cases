@@ -1,0 +1,28 @@
+#标题
+ASoC: nau8821 驱动卸载时因延迟工作队列未取消导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在驱动卸载过程中，如果此时有一个 jack detection（插孔检测）工作项正在等待执行，内核将会崩溃。具体表现为无法处理的页错误，通常发生在工作队列执行回调函数时访问了已卸载的模块地址。
+
+#主要错误日志
+[ 1984.896308] BUG: unable to handle page fault for address: ffffffffc10c2a20
+[ 1984.896388] Hardware name: Valve Jupiter/Jupiter, BIOS F7A0131 01/30/2024
+[ 1984.896396] Workqueue: events nau8821_jdet_work [snd_soc_nau8821]
+[ 1984.896414] RIP: 0010:__mutex_lock+0x9f/0x11d0
+[ 1984.896524] ? snd_soc_dapm_disable_pin+0x26/0x60 [snd_soc_core]
+[ 1984.896596] snd_soc_dapm_disable_pin+0x26/0x60 [snd_soc_core]
+[ 1984.896622] nau8821_jdet_work+0xeb/0x1e0 [snd_soc_nau8821]
+[ 1984.896636] process_one_work+0x211/0x590
+[ 1984.896670] worker_thread+0x1cd/0x3a0
+
+#问题根因
+驱动卸载时未正确处理挂起的延迟工作队列 `jdet_work`。当驱动模块被移除后，此前挂起的 `nau8821_jdet_work` 工作项仍在工作队列中，并在后续被调度执行。此时该工作项试图访问已经卸载的驱动代码或数据结构，导致内核崩溃。
+
+#解决方案
+在驱动的 `component_remove` 回调函数中增加对延迟工作队列的处理。具体措施为：检查 `jdet_active` 标志位，如果处于活跃状态，则调用 `cancel_delayed_work_sync` 函数取消未执行的延迟工作项或等待其执行完成，确保在组件驱动移除前资源已安全释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/33e324112b237b6b622b8a2e7ffec65c5c817d33

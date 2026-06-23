@@ -1,0 +1,20 @@
+#标题
+smb/client: symlink_data 函数越界读取漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SMB2 符号链接错误响应时，若服务器返回的数据包长度异常（例如仅包含基本的 SMB2 头部 64 字节），内核在 `symlink_data()` 函数中访问 `err->ErrorContextCount`（偏移 66）或 `err->ByteCount` 时会发生越界读取，可能导致内核崩溃或内存信息泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+`smb2_check_message()` 函数在处理 `STATUS_STOPPED_ON_SYMLINK` 错误响应时存在逻辑缺陷，未对数据包长度进行充分校验就直接返回成功。这导致后续的 `symlink_data()` 函数误以为数据合法，当 `iov->iov_len` 小于 `sizeof(struct smb2_err_rsp)` 时，访问结构体成员造成了越界读取。
+
+#解决方案
+在 `smb2_check_message()` 函数中增加长度校验条件。在判定为符号链接错误响应（`command == SMB2_CREATE_HE` 且 `shdr->Status == STATUS_STOPPED_ON_SYMLINK`）时，额外检查 `len > calc_len`，确保响应数据长度足够包含错误响应结构，防止后续处理发生越界。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d2c140a6c295e7f97a9375ef538d48059789c70f

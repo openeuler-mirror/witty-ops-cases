@@ -1,0 +1,22 @@
+#标题
+xHCI 控制器命令提交失败时状态信息打印不全
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 USB 子系统遭遇错误时，系统日志显示 xHCI 处于 dying 或 halted 状态，导致无法提交命令，随后出现命令环段分配失败及 USB 设备无法分配的问题。由于日志未明确区分具体状态，导致难以定位故障的根本原因。
+
+#主要错误日志
+xhci_hcd 0000:4a:00.2: xHCI dying or halted, can't queue_command
+xhci_hcd 0000:4a:00.2: FIXME: allocate a command ring segment
+usb usb5-port6: couldn't allocate usb_device
+
+#问题根因
+在 `queue_command` 函数中，当检测到 `xhci->xhc_state` 处于 `XHCI_STATE_DYING` 或 `XHCI_STATE_HALTED` 状态时，内核仅打印了 "xHCI dying or halted" 的字符串提示，并未输出状态寄存器的具体数值。这导致在排查问题时，无法通过日志快速判断控制器究竟是处于 Dying 状态还是 Halted 状态，增加了定位难度。
+
+#解决方案
+修改 `drivers/usb/host/xhci-ring.c` 文件中的 `queue_command` 函数，在状态检查的日志打印语句中增加 `xhci->xhc_state` 的十六进制值输出。修改后，当命令提交失败时，日志将显示具体的状态值（如 "state: 0x%x"），从而帮助开发者精确定位故障原因。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/76ceb823375286452ee3b27e74ab35246b3eedd6

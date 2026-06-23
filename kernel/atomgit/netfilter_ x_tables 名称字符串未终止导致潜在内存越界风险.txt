@@ -1,0 +1,20 @@
+#标题
+netfilter: x_tables 名称字符串未终止导致潜在内存越界风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在使用 `xt_cgroup` 或 `xt_rateest` 模块配置 netfilter 规则时，若用户传入的路径或名称字符串未以空字符（`\0`）结尾，内核可能将其作为非终止字符串处理，导致后续依赖 C-String 格式的函数（如 `cgroup_get_from_path` 或 `xt_rateest_lookup`）发生越界读取，可能触发内核崩溃（Kernel Crash/Oops）或信息泄露。
+
+#主要错误日志
+未知
+
+#问题根因
+内核在处理 netfilter 规则参数时，未对用户空间传入的 `info->path`、`info->name1` 及 `info->name2` 等字符数组进行严格的 NUL 终止符校验。这些字段虽然具有固定长度（sizeof），但在传入内部处理函数前缺乏 `strnlen` 检查，导致部分未终止的字符串被误当作合法的 C 字符串处理，引发越界访问。
+
+#解决方案
+在 `xt_cgroup.c` 的 `cgroup_mt_check_v1` 和 `cgroup_mt_check_v2` 函数，以及 `xt_rateest.c` 的 `xt_rateest_mt_checkentry` 函数中增加输入校验。使用 `strnlen` 检查传入的字符串长度是否小于存储该字符串的缓冲区大小（即 `sizeof(field)`），若长度等于或大于缓冲区大小，说明字符串未以空字符结尾，直接返回 `-ENAMETOOLONG` 错误，拒绝该规则的加载。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/595946708a5fdfd5b0a2919923d51431d45cfb56

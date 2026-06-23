@@ -1,0 +1,31 @@
+#标题
+wcd9335 编解码器 regulator 资源泄漏及探测失败处理缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 驱动卸载或探针延期时，已申请的 regulator 电源供应未被释放，导致内核资源泄漏。
+2. 驱动探针遇到资源获取失败（如 GPIO、时钟缺失）时，错误日志打印不规范，且未正确处理 -EPROBE_DEFER，导致驱动加载异常且日志信息不足。
+3. 设备树中 reset-gpios 定义为高有效，但驱动逻辑将其视为低有效，导致复位时序逻辑反转。
+
+#主要错误日志
+- Reset GPIO missing from DT
+- mclk not found
+- slimbus clock not found
+- Failed to get and enable supplies
+- Error parsing DT: %d
+（注：部分日志为旧代码逻辑产生，修复后统一使用 dev_err_probe 封装）
+
+#问题根因
+1. **资源泄漏**：驱动在 `wcd9335_parse_dt` 中使用 `regulator_bulk_get` 获取了 regulator 资源，但在后续探针失败路径或设备移除时，缺少对应的 `regulator_bulk_disable` 或 `regulator_bulk_free` 调用，导致资源无法释放。
+2. **GPIO 接口陈旧**：代码使用了已废弃的 `of_get_named_gpio` 和 `gpio_direction_output` 接口，且 `reset_gpio` 存在电平极性逻辑反转问题（高有效配置下逻辑错误）。
+3. **错误处理简化不足**：获取资源失败时直接返回 err pointer 或打印通用错误，未使用 `dev_err_probe` 机制，无法在探针延期时自动抑制多余日志并正确传递延期状态。
+
+#解决方案
+1. **修复资源泄漏**：移除手动的 `regulator_bulk_get` 和 `regulator_bulk_enable` 调用，改用 `devm_regulator_bulk_get_enable` 托管函数。该接口自动管理资源的获取与使能，并在驱动解绑或探针失败时自动释放，彻底解决泄漏问题。
+2. **转换 GPIO 描述符**：将旧的 GPIO 整数接口迁移至 GPIO 描述符接口。使用 `devm_gpiod_get` 获取 `reset_gpio`，并利用 `gpiod_set_value` 进行状态设置，修正了复位引脚的极性与时序逻辑。
+3. **优化探针延期处理**：统一使用 `dev_err_probe` 替代传统的 `dev_err` 和直接返回错误码。此举简化了代码，统一了错误日志格式，并自动处理了 `-EPROBE_DEFER` 的日志抑制逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/17b2adc34805ebb320aa1e49c29869593cf83afe

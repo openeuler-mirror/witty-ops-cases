@@ -1,0 +1,20 @@
+#标题
+x86/uprobes: Fix XOL allocation failure for 32-bit tasks
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 64 位内核上运行 32 位任务时，uprobes 的 XOL（Execution Out of Line）区域分配失败。这会导致 uprobes 无法正常工作，相关探测点失效或无法注册。
+
+#主要错误日志
+未知
+
+#问题根因
+对于 32 位任务，内核态 `get_unmapped_area()` 函数在计算 `vm_unmapped_area_info.high_limit` 时，忽略了线程标志位 `TIF_ADDR32`，而是依赖 `in_32bit_syscall()` 来判断地址空间上限。由于 uprobes 分配 XOL 区域时并非处于系统调用上下文中，导致计算出的地址空间上限错误，进而导致内存分配失败。
+
+#解决方案
+引入 `arch_uprobe_get_xol_area()` 回调函数，在 `arch/x86/kernel/uprobes.c` 中针对 CONFIG_IA32_EMULATION 配置进行定制化实现。在分配内存前，手动设置线程状态标志 `TS_COMPAT`，强制 `get_unmapped_area()` 使用正确的 32 位地址空间限制进行分配，分配完成后清除该标志，从而修复分配失败的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/45290467cf139b267949aadeb9c2f232348dd181

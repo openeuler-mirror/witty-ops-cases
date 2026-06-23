@@ -1,0 +1,20 @@
+#标题
+xfs：xfs_dax_write_iomap_end 未传播 xfs_reflink_cancel_cow_range 的错误码
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 XFS 文件系统使用 DAX 模式进行写入操作时，若写入字节数为 0（!written）且需要取消 CoW（Copy-on-Write）范围，函数 `xfs_dax_write_iomap_end` 始终返回 0，导致底层 `xfs_reflink_cancel_cow_range` 发生的错误被忽略。这可能导致上层调用者无法感知操作失败，引发后续数据处理异常或状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `xfs_dax_write_iomap_end` 中，当条件 `!written` 成立时，代码直接调用了 `xfs_reflink_cancel_cow_range` 但随即返回了硬编码的 `0`，未将该函数的返回值（错误码）传递给上层调用者，导致错误丢失。
+
+#解决方案
+修改 `xfs_dax_write_iomap_end` 函数的逻辑，在 `!written` 分支中直接返回 `xfs_reflink_cancel_cow_range` 的执行结果，确保错误码能够正确向上传播，提升代码健壮性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/49704656e199db262e9e863fbb5ec57d39b01606

@@ -1,0 +1,20 @@
+#标题
+VMCI: vmci_host_setup_notify与vmci_ctx_unset_notify之间的竞态条件修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+VMCI（Virtual Machine Communication Interface）模块在处理宿主与虚拟机通信时，由于 `vmci_host_setup_notify` 函数中对 `context->notify_page` 的赋值存在竞态窗口，可能导致内核崩溃或内存管理错误。具体表现为在并发执行 `vmci_ctx_unset_notify` 时，可能出现指针状态不一致，引发 Use-After-Free 或无效指针引用。
+
+#主要错误日志
+未知
+
+#问题根因
+在原代码逻辑中，`get_user_pages_fast` 获取页面的指针后，在检查返回值之前或检查失败时，未正确隔离中间状态。特别是当 `get_user_pages_fast` 返回值不为 1 时，原代码尝试将 `context->notify_page` 置为 NULL，但若在此之前 `context->notify_page` 已有旧值，可能导致并发上下文错误地释放该页面。此外，直接将页面暂存于 `context->notify_page` 这一长期可见的结构体成员中，导致了与 `vmci_ctx_unset_notify` 之间的竞态条件，使得在设置过程中该指针可能被其他线程误操作。
+
+#解决方案
+引入局部变量 `page` 作为 `get_user_pages_fast` 的临时存储目标，而非直接写入 `context->notify_page`。只有在 `get_user_pages_fast` 成功返回（retval == 1）后，才将获取到的有效页面指针原子性地赋值给 `context->notify_page`。这样消除了在获取页面过程中 `context->notify_page` 处于不稳定中间状态（如指向一个即将被释放或无效的页面）的竞态窗口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e3025e28c0638b093290d6386a897c50ce2f2110

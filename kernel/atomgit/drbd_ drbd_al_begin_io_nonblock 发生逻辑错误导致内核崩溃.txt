@@ -1,0 +1,24 @@
+#标题
+drbd: drbd_al_begin_io_nonblock 发生逻辑错误导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 DRBD 进行活动日志（Activity Log）操作时，若 `drbd_al_begin_io_nonblock` 函数中 `lc_get_cumulative()` 获取失败（例如被其他路径 `lc_try_lock` 干扰），系统会打印 "LOGIC BUG" 日志但未返回错误。这会导致后续代码基于错误的假设运行，破坏重同步与应用 I/O 的互斥性，并在请求完成时触发 `lc_put()` 中的 `BUG_ON(refcnt == 0)` 导致内核崩溃（Kernel Panic）。
+
+#主要错误日志
+- drbd_info(device, "LOGIC BUG for enr=%u\n", enr);
+- drbd_err(device, "al_complete_io() called on inactive extent %u\n", enr);
+- kernel BUG at ... (triggered by BUG_ON(refcnt == 0) in lc_put())
+
+#问题根因
+代码原先假设在持有 `al_lock` 自旋锁且通过初步检查的情况下，`lc_get_cumulative()` 必定成功。然而，如果此时其他代码路径恰好执行了 `lc_try_lock()`，`lc_get_cumulative()` 仍可能失败。
+原代码在 `lc_get_cumulative()` 返回 NULL 时仅打印了 "LOGIC BUG" 日志，却没有返回错误码，导致上层调用者误以为已成功获取活动日志区间的引用。随后在 I/O 完成调用 `drbd_al_complete_io` 时，代码尝试释放并不持有的引用，触发 `lc_put()` 中的 `BUG_ON(refcnt == 0)`，引发内核崩溃。
+
+#解决方案
+1. **修改 `drbd_al_begin_io_nonblock` 逻辑**：不再盲目假设 `lc_get_cumulative()` 必定成功。若调用失败，记录当前处理到的_extent_位置（存储在 `drbd_interval` 结构新增的 `partially_in_al_next_enr` 字段），并立即返回 `-ENOBUFS` 错误，允许后续重试从断点处恢复。
+2. **防御性处理 `drbd_al_complete_io`**：放宽 `lc_put` 前的检查条件，除了检查 extent 是否存在外，增加检查 `refcnt == 0` 的情况。如果 extent 不活跃或引用计数已为 0，打印错误日志并跳过 `lc_put` 操作，避免触发 `BUG_ON` 导致系统崩溃，将严重的内核 BUG 转变为可容忍的错误信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56afdf80453c64673357ef917c4eca241cecbeeb

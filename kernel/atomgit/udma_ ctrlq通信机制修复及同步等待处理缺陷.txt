@@ -1,0 +1,37 @@
+#标题
+udma: ctrlq通信机制修复及同步等待处理缺陷
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在UDMA设备进行TP（Transport Path）flush操作时，内核日志打印通知UE（User Entity）失败：“fail to notify ue the tp flush done, ret %d”。
+2. 在执行获取设备资源比例或TP信息交互时，可能出现内核内存访问越界或数据截断，导致内核panic或数据不一致。
+3. 在卸载驱动或注销CRQ事件时，若存在未完成的同步等待请求，可能导致内存泄漏或释放后使用，引发系统崩溃。
+4. 驱动与固件/UE交互过程中，若响应超时或序列号无效，会导致进程挂起或错误返回。
+
+#主要错误日志
+- "fail to notify ue the tp flush done, ret %d.\n"
+- "get dev resource ratio, addr is NULL.\n"
+- "save resp completion failed, ret = %d.\n"
+- "send req msg cmd failed, ret is %d.\n"
+- "wait resp timeout, seq = %u.\n"
+- "seq_num of crq resp is invalid, seq_num = %u.\n"
+- "len of data in crq resp is invalid, len = %u.\n"
+- "udma save tp info failed, ret = %d.\n"
+- "udma send tp resp failed, ret = %d.\n"
+- "udma receive invalid opcode, opcode = %u.\n"
+
+#问题根因
+1. **通信接口不匹配与内存操作错误**：原代码使用 `send_resp_to_ue` 发送flush通知，但该接口分配了不必要的内存且参数类型不匹配；在获取资源比例时，错误地使用了中间变量进行内存拷贝，导致用户态与内核态交互数据不一致。
+2. **缺失同步等待机制**：驱动向MUE（Management UE）发送请求后，没有实现等待响应的同步机制，无法处理异步响应或超时情况，且无法将执行结果正确反馈给调用者。
+3. **响应处理逻辑缺失与资源泄漏**：CRQ（Command Receive Queue）接收处理函数未覆盖所有必要的操作码（如 `UDMA_CMD_NOTIFY_MUE_SAVE_TP` 的响应处理），且在注销CRQ事件时，未清理等待队列中的残留请求，导致资源泄漏。
+
+#解决方案
+1. **重构消息发送接口**：将 `udma_send_req_to_ue` 替换为 `udma_send_msg_to_ue`，移除冗余的内存分配逻辑，确保正确发送flush通知。
+2. **实现同步通信机制**：新增 `udma_send_sync_msg_to_mue`、`udma_send_tp_resp_to_ue` 和 `udma_recv_tp_resp_from_mue` 函数，利用 `completion` 机制和 `xarray` 存储序列号，实现请求-响应的同步等待、超时处理及结果回传。
+3. **修复资源获取与数据交互**：修正 `udma_get_dev_resource_ratio` 函数，直接使用用户提供的地址空间进行DMA交互，避免中间变量截断数据。
+4. **完善CRQ事件处理与清理**：扩展CRQ接收处理函数以支持新的消息类型（如 `UDMA_CMD_NOTIFY_MUE_SAVE_TP`），并在注销流程中增加对 `wait_cmdq_info` 的清理逻辑，防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b152ee52b9f599b41d2b4789c521a8c6f2c11e50

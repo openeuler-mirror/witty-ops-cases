@@ -1,0 +1,20 @@
+#标题
+gpio-charger 设置充电电流限制时越界访问导致内存破坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当设备支持的最低充电电流限制大于 0，且用户请求设置的充电电流限制值低于该最低限制时，驱动程序会发生内存越界访问。这可能导致内核崩溃、未定义行为或内存破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `set_charge_current_limit` 函数中，代码遍历 `current_limit_map` 数组以寻找匹配的电流限制值。如果请求的电流值 `val` 低于设备支持的最低电流限制（即数组中所有元素的 `limit_ua` 都大于 `val`），循环变量 `i` 会递增直到等于 `current_limit_map_size`。随后代码直接使用该索引 `i` 访问数组元素 `gpio_charger->current_limit_map[i]`，导致访问了已分配内存边界之外的地址。
+
+#解决方案
+在访问数组元素前增加边界检查。如果索引 `i` 大于或等于数组大小 `current_limit_map_size`，将其强制重置为最后一个有效索引（`current_limit_map_size - 1`），即默认使用设备支持的最小电流限制值，以确保访问安全。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2cd3c1b2864fabf0e90142bdcd8c277d5f1a2975

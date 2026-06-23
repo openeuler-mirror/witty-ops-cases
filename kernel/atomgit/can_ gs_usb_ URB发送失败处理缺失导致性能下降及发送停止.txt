@@ -1,0 +1,26 @@
+#标题
+can: gs_usb: URB发送失败处理缺失导致性能下降及发送停止
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 CAN 设备通过 USB 批量传输发送数据（URB）失败时，驱动程序未进行有效的资源清理。每次发送失败都会导致可用 URB 数量减 1，随着错误累积，可用 URB 被耗尽，进而导致发送性能显著下降，最终导致发送队列完全停止，无法继续发送数据。
+
+#主要错误日志
+[推断] netdev_info: "failed to xmit URB %u: %pe\n" (修复后日志，含速率限制)
+[原有日志] netdev_info: "usb xmit fail %u\n"
+
+#问题根因
+驱动程序在 `gs_usb_xmit_callback` 回调函数中，针对 URB 发送失败（`urb->status` 非零）的场景处理逻辑缺失。原代码仅在失败时打印一条信息，未执行资源回收操作，包括：未更新网卡统计信息、未释放 `echo_skb`、未释放驱动上下文 `txc`、未递减活跃 URB 计数 `active_tx_urbs`、未唤醒发送队列 `netif_wake_queue`。这导致每次失败都会永久泄漏一个 URB 资源。
+
+#解决方案
+在 `gs_usb_xmit_callback` 函数中增加对 URB 发送失败场景的完整错误处理逻辑：
+1. 更新网卡统计信息（增加 `tx_dropped` 和 `tx_errors`）。
+2. 调用 `can_free_echo_skb` 释放 echo socket buffer。
+3. 调用 `gs_free_tx_context` 释放发送上下文。
+4. 调用 `atomic_dec` 递减活跃 URB 计数器。
+5. 调用 `netif_wake_queue` 唤醒网络发送队列，确保后续数据能正常发送。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/283a401b9df800d875e4a74b0335ea4e9f6d07c5

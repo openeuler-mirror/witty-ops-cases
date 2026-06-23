@@ -1,0 +1,23 @@
+#标题
+udma 模块卸载流程中 rx 关闭失败导致设备移除异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 udma 设备驱动（执行 remove 流程）时，若 `udma_close_ue_rx` 操作未能立即成功，驱动会直接打印错误日志并返回，导致设备移除流程中断，可能引发设备状态异常或卸载失败。
+
+#主要错误日志
+- dev_err: "udma close ue rx failed in remove process.\n"
+- dev_err_ratelimited: "udma close ue rx failed in remove process.\n" (修复后使用)
+
+#问题根因
+在 `udma_remove` 函数中，调用 `udma_close_ue_rx` 关闭 rx 资源时，代码逻辑设计不合理：一旦该函数返回失败（非零值），流程直接返回并释放互斥锁，未进行重试等待。这导致在资源暂时繁忙或需延迟释放的场景下，设备无法正常移除。此外，在非 rmmod（如热拔出）场景下调用 `ubase_activate_dev` 可能引发异常。
+
+#解决方案
+1. 将 `udma_close_ue_rx` 的单次调用改为循环重试机制，设置最小睡眠时间（100ms）、最大睡眠时间（800ms）及增长倍率（2倍），若关闭失败则休眠后重试，直至成功，避免因暂时性失败导致流程中断。
+2. 将错误日志打印函数从 `dev_err` 修改为 `dev_err_ratelimited`，防止高频重试期间内核日志刷屏。
+3. 增加 `is_rmmod` 判断，仅在模块卸载场景下调用 `ubase_activate_dev`，修复非卸载场景下的逻辑漏洞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/82ba2bc6121dd1485447223291fd68cfbfaa1544

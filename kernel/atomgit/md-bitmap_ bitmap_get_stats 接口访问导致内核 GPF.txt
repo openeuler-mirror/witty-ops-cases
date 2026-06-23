@@ -1,0 +1,29 @@
+#标题
+md-bitmap: bitmap_get_stats 接口访问导致内核 GPF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用外部位图的 MD 设备上读取 proc 统计信息时，触发通用保护错误，导致内核崩溃。具体表现为访问位图统计接口时系统发生 Oops。
+
+#主要错误日志
+Oops: GPF, probably for non-canonical address 0x1cd66f1f40000028
+RIP: 0010:bitmap_get_stats+0x45/0xd0
+Call Trace:
+ seq_read_iter+0x2b9/0x46a
+ seq_read+0x12f/0x180
+ proc_reg_read+0x57/0xb0
+ vfs_read+0xf6/0x380
+ ksys_read+0x6d/0xf0
+ do_syscall_64+0x8c/0x1b0
+ entry_SYSCALL_64_after_hwframe+0x76/0x7e
+
+#问题根因
+在 `md_bitmap_get_stats` 函数中，校验位图超级块的逻辑存在缺陷。原有代码仅在“内部位图”模式下检查 `sb_page` 是否存在，而忽略了“外部位图”模式。对于外部位图，若超级块不存在（即 `sb_page` 为空），代码跳过了校验直接尝试访问，导致访问非法地址触发 GPF。
+
+#解决方案
+修改 `md_bitmap_get_stats` 函数中的条件判断逻辑，移除对 `bitmap_info.external` 的判断，统一检查 `bitmap->storage.sb_page` 是否存在。无论是内部位图还是外部位图，若无有效的超级块页面，均直接返回 `-EINVAL`，避免后续解引用空指针导致的崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e7e6c411722ded61a80d9cd99b0b6566f8fd165c

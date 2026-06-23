@@ -1,0 +1,24 @@
+#标题
+brcmfmac 驱动修复芯片识别流程中的错误指针解引用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 brcmfmac 驱动进行芯片识别（chip recognition）过程中，若 `brcmf_chip_add_core()` 函数返回错误指针（ERR_PTR），代码后续直接对返回值进行解引用操作，导致系统发生空指针或错误指针解引用错误，可能引发内核 Panic 或驱动初始化失败。
+
+#主要错误日志
+drivers/net/wireless/broadcom/brcm80211/brcmfmac/chip.c:1010 brcmf_chip_recognition() error: 'core' dereferencing possible ERR_PTR()
+drivers/net/wireless/broadcom/brcm80211/brcmfmac/chip.c:1013 brcmf_chip_recognition() error: 'core' dereferencing possible ERR_PTR()
+drivers/net/wireless/broadcom/brcm80211/brcmfmac/chip.c:1016 brcmf_chip_recognition() error: 'core' dereferencing possible ERR_PTR()
+drivers/net/wireless/broadcom/brcm80211/brcmfmac/chip.c:1019 brcmf_chip_recognition() error: 'core' dereferencing possible ERR_PTR()
+drivers/net/wireless/broadcom/brcm80211/brcmfmac/chip.c:1022 brcmf_chip_recognition() error: 'core' dereferencing possible ERR_PTR()
+
+#问题根因
+函数 `brcmf_chip_recognition()` 调用 `brcmf_chip_add_core()` 时，未对返回值进行错误指针检查。当 `brcmf_chip_add_core()` 返回 ERR_PTR 时，代码直接将其作为有效指针传递给 `brcmf_chip_sb_corerev()` 进行解引用操作，从而导致内核错误。
+
+#解决方案
+在 `brcmf_chip_recognition()` 函数中，针对所有 `brcmf_chip_add_core()` 的调用点增加返回值检查。通过 `IS_ERR(core)` 判断返回值是否为错误指针，若是则立即返回 `PTR_ERR(core)` 错误码，避免后续对无效指针的解引用操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/84574775bd76cec37dc33f2022c63c9166919848

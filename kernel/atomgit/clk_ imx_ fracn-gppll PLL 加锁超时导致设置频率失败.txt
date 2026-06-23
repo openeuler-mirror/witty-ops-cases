@@ -1,0 +1,21 @@
+#标题
+clk: imx: fracn-gppll PLL 加锁超时导致设置频率失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i.MX93 平台（双核 Cortex-A55 + DSU）上，配置 fracn-gppll PLL 时，偶现 PLL 加锁超时错误，导致时钟设置流程异常返回失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 i.MX93 SoC 上使用 `writel_relaxed` 写入 PLL 寄存器时，数值可能会被缓冲，并未立即写入硬件。
+在极端-corner-case 下，步骤 1 中的写入操作和步骤 2 中的读取操作均被 SoC 内部的其他总线事务阻塞较长时间。这导致虽然代码已进入超时检测循环，但数值实际才刚刚写入硬件。此时可能出现 PLL 锁定位尚未置位，但超时时间已耗尽的情况，从而导致 `readl_poll_timeout` 误判返回超时错误。
+
+#解决方案
+在 `writel_relaxed` 写入 PLL 寄存器后，立即调用 `readl` 进行回读操作。此举可确保写入操作已穿透缓存到达硬件寄存器，避免因总线阻塞导致的超时误判。同时，在 `udelay` 前增加 `readl` 确保延时计时的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/200ab7d8757f864f2a108c60ac3cc12e0a19f96f

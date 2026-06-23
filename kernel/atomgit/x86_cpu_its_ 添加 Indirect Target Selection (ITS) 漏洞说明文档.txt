@@ -1,0 +1,25 @@
+#标题
+x86/cpu/its: 添加 Indirect Target Selection (ITS) 漏洞说明文档
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Intel 部分支持 Enhanced IBRS 的旧款 CPU（Alder Lake 之前）存在 Indirect Target Selection (ITS) 漏洞（CVE-2024-28956）。该漏洞可能允许攻击者控制位于缓存行下半部分的间接分支和 RET 指令的预测目标。具体影响包括：
+1. **eIBRS Guest/Host 隔离失效**：KVM 或内核中的间接分支可能被错误预测为 Guest 中的分支目标。
+2. **Intra-Mode BTI**：内核内部可能通过 cBPF 或其他原生 gadget 进行训练并实施攻击。
+3. **IBPB 隔离失效**：在执行 IBPB（间接分支预测屏障）后，间接分支仍可能被预测为 IBPB 之前执行的直接分支目标。
+
+#主要错误日志
+未知
+
+#问题根因
+特定 Intel CPU（如 SKYLAKE_X、ICELAKE、TIGERLAKE、KABYLAKE、COMETLAKE、ROCKETLAKE 等）在硬件层面存在缺陷，位于缓存行下半部分的间接分支和 RET 指令易受 Indirect Target Selection (ITS) 攻击。由于硬件预测机制的问题，即使启用了 Enhanced IBRS，攻击者仍可能通过控制分支预测实施跨模式攻击。
+
+#解决方案
+1. **内核缓解机制**：通过内核参数 `indirect_target_selection` 控制，默认启用 "Aligned branch/return thunks" 缓解措施。该方案利用现有的 retpoline 支持，将受 ITS 影响的间接分支和 RET 指令运行时修补到新添加的、位于缓存行上半部分的安全 thunk 上。
+2. **微码更新**：针对 IBPB 隔离失效问题，需要安装 IPU 2025.1 或更高版本的微码更新。
+3. **替代方案**：如果启用了 Retpoline，则仅需对 RET 指令进行对齐 thunk 处理；若启用 RSB Stuffing（通过 Call Depth Tracking），亦可缓解 RET 相关的 ITS 问题。Guest 端默认部署缓解措施，除非 VMM 通过 MSR IA32_ARCH_CAPABILITIES 的 bit 62 (ITS_NO) 告知 Guest 主机不受影响。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c713a170c3337d9ef9390c0c3a39b5363d2c99a5

@@ -1,0 +1,28 @@
+#标题
+pinmux并发竞态导致mux_owner为NULL引发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当两个客户端对同一gpio调用 pinctrl_select_state() 时，由于并发竞态，会导致引脚状态出现不一致：引脚显示正在使用（mux_usecount == 1），但所有者为空（mux_owner == NULL）。后续在对该引脚进行 pin_request 操作时，访问 desc->mux_owner 会触发 NULL pointer dereference（空指针引用）错误，导致内核崩溃。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference
+(推断日志：根据 "resulting in NULL pointer issue while accessing desc->mux_owner" 描述推断)
+
+#问题根因
+问题根因是 `pin_free()` 和 `pin_request()` 在处理 `mux_usecount` 和 `mux_owner` 时存在锁保护的竞态条件（Race Condition）。之前的修复补丁未将临界区范围扩大到硬件操作之后，导致在 `pin_free()` 释放锁后、再次获取锁清除 `mux_owner` 前，`pin_request()` 可能已经获取锁并设置了新的 `mux_usecount` 和 `mux_owner`。
+具体竞态过程如下：
+1. CPU1 执行 `pin_free()`，将 `mux_usecount` 减为 0 后释放锁。
+2. CPU0 执行 `pin_request()`，获取锁并将 `mux_usecount` 加为 1，设置 `mux_owner`，随后释放锁。
+3. CPU1 再次获取锁，将 `mux_owner` 置为 NULL。
+最终导致引脚状态为 "已使用" 但 "所有者为空"，引发后续空指针崩溃。
+
+#解决方案
+修改 `pin_free()` 函数中的锁保护范围，将 `mux_owner` 和 `mux_usecount` 的更新操作在时序上提前，并确保它们在同一个临界区内原子执行。具体变更如下：
+将清理 `gpio_owner`、`mux_owner`、`mux_setting` 的代码块上移至 `mux_usecount` 检查之后、调用底层 `ops->free()` 释放硬件资源之前执行。
+这样确保了当 `mux_usecount` 减为 0 时，立即在持锁状态下清除 owner 指针，防止在释放锁与清除 owner 之间的时间窗口内被其他进程抢占并修改状态，从而避免了状态不一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/edd1a844efb064887bc6e7fc8cdc64c2266b762d

@@ -1,0 +1,25 @@
+#标题
+drm/tilcdc 驱动探测失败路径中清理操作不当导致内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 tilcdc DRM 驱动加载过程中，如果探测过程失败或延迟，驱动卸载流程会无条件调用 `drm_kms_helper_poll_fini()` 和 `drm_atomic_helper_shutdown()` 函数。由于此时设备尚未成功注册，触发内核 WARNING 并打印调用栈信息。
+
+#主要错误日志
+[    7.972317] WARNING: CPU: 0 PID: 23 at drivers/gpu/drm/drm_atomic_state_helper.c:175 drm_atomic_helper_crtc_duplicate_state+0x60/0x68
+[    8.005820]  drm_atomic_helper_crtc_duplicate_state from drm_atomic_get_crtc_state+0x68/0x108
+[    8.005858]  drm_atomic_get_crtc_state from drm_atomic_helper_disable_all+0x90/0x1c8
+[    8.005885]  drm_atomic_helper_disable_all from drm_atomic_helper_shutdown+0x90/0x144
+[    8.005911]  drm_atomic_helper_shutdown from tilcdc_fini+0x68/0xf8 [tilcdc]
+[    8.005957]  tilcdc_fini [tilcdc] from tilcdc_pdev_probe+0xb0/0x6d4 [tilcdc]
+
+#问题根因
+`drm_kms_helper_poll_fini()` 和 `drm_atomic_helper_shutdown()` 辅助函数仅应在设备成功注册后调用。当前代码在 `tilcdc_fini()` 中无条件调用这些函数，且在探测失败路径中直接跳转至 `init_failed` 标签执行 `tilcdc_fini()`，导致在设备未注册（probe deferral）场景下触发了非法清理操作。
+
+#解决方案
+重写探测失败的清理路径，采用标准的 goto error 处理模式。确保清理函数仅作用于已成功初始化的资源，并在对应的错误处理标签中按逆序释放资源。同时移除了不再需要的 `is_registered` 标志位，并在 `drm_dev_register` 失败时直接跳转到特定的清理标签（如 `stop_poll`）而不是通用的 `init_failed`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/22960f52ce8516e2ece19159a8fec4bf92134a08

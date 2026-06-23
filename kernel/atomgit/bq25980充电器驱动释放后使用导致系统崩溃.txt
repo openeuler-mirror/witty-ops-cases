@@ -1,0 +1,22 @@
+#标题
+bq25980充电器驱动释放后使用导致系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载驱动或中断触发场景下，系统发生崩溃或内存静默损坏。具体表现为：
+1. 驱动移除时，若中断恰好在中断处理程序注销前、但在 power_supply 句柄释放后触发，会导致系统崩溃。
+2. 驱动初始化期间，中断可能在 power_supply 句柄注册前触发，导致使用未初始化的句柄。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动使用 `devm_` 托管机制时，资源释放顺序遵循申请的逆序。原代码先申请 IRQ，后注册 `power_supply`，导致释放时先释放 `power_supply`，后注销 IRQ。这就造成了一个竞态窗口：在设备移除过程中，IRQ 可能在 `power_supply` 句柄被释放后、IRQ 注销前触发，中断处理函数 `bq25980_irq_handler_thread` 调用 `power_supply_changed()` 时访问了已释放的内存，引发 Use-After-Free。
+
+#解决方案
+调整代码执行顺序，确保 `power_supply` 的注册先于 IRQ 的申请。通过交换 `bq25980_power_supply_init` 和 `devm_request_threaded_irq` 的调用顺序，保证在 IRQ 处理程序运行时，`power_supply` 句柄始终有效且已初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b418d5530e6771e4fd62f0ad08c724df68c95ac7

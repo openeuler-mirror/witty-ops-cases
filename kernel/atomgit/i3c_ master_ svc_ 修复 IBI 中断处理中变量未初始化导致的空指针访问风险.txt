@@ -1,0 +1,22 @@
+#标题
+i3c: master: svc: 修复 IBI 中断处理中变量未初始化导致的空指针访问风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 svc_i3c_master_ibi_work 处理 IBI（带内中断）过程中，若 svc_i3c_master_error 检测到错误，且此时 'dev' 变量未经初始化（保留为随机垃圾值），代码逻辑会错误地尝试访问该指针，导致内核崩溃或不可预知的行为。该问题由内核测试机器人发现。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 svc_i3c_master_ibi_work 中的局部变量 `struct i3c_dev_desc *dev` 在声明时未进行初始化。在后续的错误处理路径 `if (svc_i3c_master_error(master))` 分支中，代码直接引用了该变量（`if (master->ibi.tbq_slot && dev)` 之前或修改前的逻辑中），若该变量尚未被正确赋值即进入错误处理流程，将导致访问非法内存。
+
+#解决方案
+在 `drivers/i3c/master/svc-i3c-master.c` 的 `svc_i3c_master_ibi_work` 函数中：
+1. 将 `struct i3c_dev_desc *dev` 的声明修改为 `struct i3c_dev_desc *dev = NULL`，确保变量初始化。
+2. 在错误处理路径中增加对 `dev` 的非空检查：`if (master->ibi.tbq_slot && dev)`，防止在 `dev` 为空时访问无效指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fbbfced311b1b3b79c267ed2bdbaa5460d007ab7

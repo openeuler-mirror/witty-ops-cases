@@ -1,0 +1,24 @@
+#标题
+btrfs: 预读扩展长度计算错误导致文件结尾后数据被错误清零
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 Btrfs 文件系统预读时，若文件存在特定的压缩 extent 场景（一个大的压缩 extent 被多个文件 extent 引用，且中间穿插非压缩 extent），预读逻辑会错误地扩展读取范围，导致读取操作越过文件结尾（EOF）。
+这会导致内核将超过文件结尾的页面错误地清零并标记为 uptodate。在启用 fs-verity 的场景下，这种错误的预读行为会污染 verity 虚拟空间，进而导致 verity 校验失败。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `btrfs_readahead_expand()` 在计算扩展长度时，错误地使用了 `em->ram_bytes` 而非 `em->len`。
+在存在“空洞覆盖压缩 extent”的场景下（例如：一个大的物理压缩 extent C 被写入的非压缩 extent N1、N2 分割成逻辑上的 C1、C2），`ram_bytes` 保存的是原始物理 extent C 的完整未压缩长度。
+当预读发生在 C1 时，代码依据 `ram_bytes` 计算扩展范围，导致预读越过 C1 的边界、越过 N2 甚至越过 C2，一直扩展到 C 的结束位置，远远超过了文件的实际边界。
+
+#解决方案
+修改 `fs/btrfs/extent_io.c` 文件中 `btrfs_readahead_expand` 函数的计算逻辑，将预读扩展长度的计算依据从 `em->ram_bytes` 修正为 `em->len`。
+这样可以确保预读操作正确地在当前 extent 的边界处停止，防止越界读取和错误清零。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f479623e47e5ce7e9e581ab46c109ae43c604ddf

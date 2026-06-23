@@ -1,0 +1,26 @@
+#标题
+NCSI 响应与 AEN 处理程序错误路径 skb 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 NCSI（Network Controller Sideband Interface）协议时，若收到无效的 AEN（Asynchronous Event Notification）包，或者响应处理函数 `ncsi_rcv_rsp` 在解析设备、响应处理器或请求失败时，内核会发生内存泄漏。系统运行过程中可能观察到内存缓慢增长，或者在频繁触发异常路径时出现内存资源耗尽的情况。
+
+#主要错误日志
+- `netdev_warn(ndp->ndev.dev, "Invalid AEN (0x%x) received\n", h->type);`
+- `netdev_err(nd->dev, "Received unrecognized packet (0x%x)\n", hdr->type);`
+
+#问题根因
+`ncsi_aen_handler` 和 `ncsi_rcv_rsp` 函数中的早期返回路径（early return paths）存在缺陷：
+1. `ncsi_aen_handler` 在收到无效 AEN 包时直接返回错误码，未释放传入的 skb 结构体。
+2. `ncsi_rcv_rsp` 在查找 NCSI 设备、查找响应处理器或关联请求失败时，直接返回错误码，未释放传入的 skb 结构体。
+这导致在上述错误场景下，接收到的 socket buffer（skb）无法被正确释放，从而造成内核内存泄漏。
+
+#解决方案
+修改 `ncsi_aen_handler` 和 `ncsi_rcv_rsp` 函数的错误处理路径，确保在函数返回前释放 skb：
+1. 在 `ncsi_aen_handler` 中，当检测到无效 AEN 包时，不再直接 return，而是设置错误码并跳转至统一出口（out 标签），确保 skb 被释放。
+2. 在 `ncsi_rcv_rsp` 中，添加 `err_free_skb` 标签处理逻辑。当解析设备、处理器或请求失败时，跳转至 `err_free_skb` 标签，显式调用 `kfree_skb(skb)` 释放内存后再返回。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7366467552fa877e4e67f332059894046150eb06

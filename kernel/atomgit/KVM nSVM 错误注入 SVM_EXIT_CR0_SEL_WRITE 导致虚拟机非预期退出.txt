@@ -1,0 +1,23 @@
+#标题
+KVM nSVM 错误注入 SVM_EXIT_CR0_SEL_WRITE 导致虚拟机非预期退出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 KVM nSVM（嵌套虚拟化）场景下，当 L1 Guest 开启了对 CR0 的非选择性写拦截（SVM_EXIT_WRITE_CR0）时，L2 Guest 写 CR0 仍可能错误地触发 SVM_EXIT_CR0_SEL_WRITE 退出。此行为违反了 AMD APM 规范规定的拦截优先级，导致 L1 Hypervisor 接收到错误的退出原因，可能引发 L1 对 L2 状态管理的逻辑错误或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `svm_check_intercept` 函数处理 CR0 写拦截模拟时，代码仅检查了 L1 是否开启了选择性 CR0 拦截（INTERCEPT_SELECTIVE_CR0），却未检查优先级更高的非选择性 CR0 写拦截（INTERCEPT_CR0_WRITE）。根据 AMD APM 文档（表 15-7），当两种拦截同时激活时，非选择性拦截具有更高优先级。原逻辑忽略了此优先级规则，导致在 L1 仅开启非选择性拦截或两者都开启时，错误地生成了选择性拦截退出码。
+
+#解决方案
+修改 `arch/x86/kvm/svm/svm.c` 中的 `svm_check_intercept` 函数逻辑：
+1. 在判定是否注入 `SVM_EXIT_CR0_SEL_WRITE` 之前，增加对 `INTERCEPT_CR0_WRITE` 的检查。
+2. 若 L1 已开启 `INTERCEPT_CR0_WRITE`（非选择性拦截），则直接跳过选择性拦截的检查与注入逻辑，确保遵循硬件优先级规范。
+3. 优化了对非 CR0 寄存器写操作的处理流程，提前退出以明确仅 CR0 拥有选择性拦截逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/98d3a2e02fd8148a23166cc46d8bccafdd890a8d

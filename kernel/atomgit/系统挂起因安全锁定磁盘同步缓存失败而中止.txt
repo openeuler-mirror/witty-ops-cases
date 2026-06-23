@@ -1,0 +1,23 @@
+#标题
+系统挂起因安全锁定磁盘同步缓存失败而中止
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统执行挂起操作时，若 ATA 磁盘处于安全锁定状态，系统无法正常挂起并中止流程。
+
+#主要错误日志
+sd 1:0:0:0: PM: dpm_run_callback(): scsi_bus_suspend returns -5
+sd 1:0:0:0: PM: failed to suspend async: error -5
+PM: Some devices failed to suspend, or early wake event detected
+
+#问题根因
+前序提交 cf3fc037623c 修正了 ata_to_sense_error() 的状态处理，使其对失败的命令返回 sense key ABORTED COMMAND 而非原先错误的 ILLEGAL REQUEST。
+然而，SCSI 磁盘驱动对 Synchronize Cache 命令的处理逻辑特殊：它将任何 sense key 为 ILLEGAL REQUEST 的情况均视为命令成功。修正后的代码不再返回 ILLEGAL REQUEST，导致该命令失败，进而导致系统挂起流程被中止。
+
+#解决方案
+在 ata_gen_ata_sense() 函数中增加对安全锁定磁盘的判断。如果检测到磁盘已锁定，直接返回 sense key 为 DATA_PROTECT、附加感测码为 LOGICAL UNIT ACCESS NOT AUTHORIZED (0x74/0x71) 的感测数据。SCSI 磁盘驱动会将此特定的感测数据视为命令成功，从而允许系统挂起流程继续执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/550ce570b1785dada8f4c36f9b6d4c0ebafa335f

@@ -1,0 +1,20 @@
+#标题
+algif_aead 使用 memcpy_sglist 替换 null skcipher 修复潜在问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用内核 crypto API 的 AEAD（Authenticated Encryption with Associated Data）算法接口时，底层依赖于 "null skcipher" 进行 scatterlist 数据拷贝。这种实现方式增加了不必要的复杂性和潜在的资源管理风险（如内存分配失败、上下文切换开销等），可能导致 AEAD 操作在某些边界条件下出现异常或性能下降。该提交关联 CVE-2026-31431，表明其修复了与该实现方式相关的安全或稳定性隐患。
+
+#主要错误日志
+未知
+
+#问题根因
+原实现在 `algif_aead` 中为了在两个 scatterlist 之间拷贝数据，使用了一个名为 "null skcipher" 的辅助机制。这需要额外的同步请求栈分配（`SYNC_SKCIPHER_REQUEST_ON_STACK`）和加密框架调用流程，不仅代码逻辑复杂，而且引入了不必要的开销和潜在的错误源头。
+
+#解决方案
+移除了对 `CRYPTO_NULL` 和 `null skcipher` 的依赖，删除了 `crypto_aead_copy_sgl` 函数及相关的 `aead_tfm` 包装结构体。直接使用内核提供的 `memcpy_sglist()` 函数来完成 scatterlist 之间的数据拷贝，从而简化了代码路径，消除了因使用加密接口进行单纯内存拷贝而引入的复杂性和风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e9c56bd78d42149369a907007f447c7ce842e077

@@ -1,0 +1,20 @@
+#标题
+bpf: test_run: Fix ctx leak in bpf_prog_test_run_xdp error path
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 BPF_PROG_TEST_RUN 测试接口时，若输入数据大小不满足最小以太网头长度要求，函数提前返回失败，导致内核内存泄漏。通过 kmemleak 工具或在模糊测试中可观测到内存泄漏对象。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bpf_prog_test_run_xdp()` 函数中，调用 `bpf_ctx_init()` 分配了上下文内存。随后的代码检查数据大小：`if (kattr->test.data_size_in - meta_sz < ETH_HLEN)`。当该检查失败时，代码直接执行 `return -EINVAL` 返回，绕过了函数末尾的 `free_ctx` 清理标签，导致此前分配的 `ctx` 内存未被释放，从而引发内存泄漏。
+
+#解决方案
+将错误处理路径中的直接返回语句 `return -EINVAL` 修改为跳转语句 `goto free_ctx`，确保在函数退出前执行内存释放逻辑，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c1aa54230cb1e4fe42c2656093c0e9de9fbbd14d

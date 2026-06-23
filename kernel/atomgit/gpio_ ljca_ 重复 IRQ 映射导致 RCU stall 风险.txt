@@ -1,0 +1,21 @@
+#标题
+gpio: ljca: 重复 IRQ 映射导致 RCU stall 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel LJCA USB GPIO 驱动处理中断事件时，可能触发 RCU stall。此前驱动在中断处理路径中显式调用 `irq_find_mapping` 查找 IRQ 号，随后将该 IRQ 号传递给 `generic_handle_domain_irq`，导致对硬件 IRQ 进行了冗余的映射操作。
+
+#主要错误日志
+推断：gpio_id %u does not mapped to IRQ yet
+（注：此为补丁删除分支中的错误打印，原代码在映射查找失败时会打印此日志；补丁修复后已移除该逻辑）
+
+#问题根因
+`generic_handle_domain_irq()` 函数内部已经包含了解析硬件 IRQ 的逻辑。驱动在调用该函数前，额外调用了 `irq_find_mapping()` 进行了一次重复的映射查找。这种重复映射不仅没有必要，还破坏了预期的处理流程，从而可能导致 RCU stall。
+
+#解决方案
+删除冗余的 `irq_find_mapping()` 调用及其相关的错误检查逻辑，直接将硬件 IRQ（`packet->item[i].index`）传递给 `generic_handle_domain_irq()` 函数，由该函数在内部完成解析处理，同时移除了不再使用的变量 `irq`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/53dc89f0a2f26e4f0b123d48a1e33e7894baa2a6

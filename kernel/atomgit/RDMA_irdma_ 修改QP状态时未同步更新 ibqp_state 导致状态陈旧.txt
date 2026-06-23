@@ -1,0 +1,20 @@
+#标题
+RDMA/irdma: 修改QP状态时未同步更新 ibqp_state 导致状态陈旧
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 irdma 驱动的 QP（队列对）已经处于 ERROR 状态时，应用程序调用修改 QP 状态的接口尝试将其转换为 ERROR 或 RESET 状态。此时底层硬件状态虽然正确，但由于驱动未更新内部维护的 `ibqp_state` 字段，导致该状态对上层消费者应用不可见，应用查询到的 QP 状态仍为旧的陈旧状态，可能导致应用后续逻辑判断错误或状态机异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `irdma_modify_qp()` 和 `irdma_modify_qp_roce()` 函数中，存在判断逻辑 `if (iwqp->iwarp_state == IRDMA_QP_STATE_ERROR)`。当 QP 已经处于 ERROR 状态时，代码直接解锁返回，遗漏了对 `iwqp->ibqp_state` 的赋值更新。这导致 `ibqp_state`（即对消费者可见的 QP 状态）没有同步更新为用户请求的目标状态（如 IB_QPS_ERR），从而保留了陈旧的状态值。
+
+#解决方案
+在 `irdma_modify_qp_roce` 和 `irdma_modify_qp` 函数中，针对 QP 已处于 ERROR 状态的分支处理逻辑里，在解锁返回前增加 `iwqp->ibqp_state = attr->qp_state;` 赋值语句，确保将 `ibqp_state` 更新为用户请求的目标状态，保持与实际操作结果的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e2760290b7980ea64d11db2719ed7c99dade23df

@@ -1,0 +1,20 @@
+#标题
+drm/amd/display: HDCP销毁时触发slab-use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在销毁HDCP（High-bandwidth Digital Content Protection）工作队列资源时，若 `property_validate_dwork` 延迟工作队列仍在运行，将触发 slab-use-after-free 错误。
+
+#主要错误日志
+slab-use-after-free
+
+#问题根因
+在销毁 HDCP 工作队列（`hdcp_destroy`）时，代码仅取消（cancel）了 `callback_dwork` 和 `watchdog_timer_dwork` 两个延迟工作队列，但遗漏了取消 `property_validate_dwork`。当 HDCP 资源被释放后，该仍在运行的延迟工作队列访问了已释放的内存，导致 slab-use-after-free。
+
+#解决方案
+在 `hdcp_destroy` 函数的销毁流程中，增加对 `property_validate_dwork` 延迟工作队列的取消操作（调用 `cancel_delayed_work_sync`），确保在释放资源前停止所有正在运行的工作队列。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/93b1a14bc88c4b6f7396f97eff65407166e62fe7

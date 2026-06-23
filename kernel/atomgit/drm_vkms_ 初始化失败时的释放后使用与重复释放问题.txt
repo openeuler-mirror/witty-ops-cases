@@ -1,0 +1,20 @@
+#标题
+drm/vkms: 初始化失败时的释放后使用与重复释放问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+vkms 驱动初始化过程中，若 `vkms_create` 调用失败，会导致 `vkms_exit()` 函数访问未初始化或已释放的 `default_config` 指针，从而引发内核崩溃或内存不一致问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在驱动初始化函数 `vkms_init` 中，`default_config` 全局指针在调用 `vkms_create` 之前就被赋值。当 `vkms_create` 执行失败时，代码逻辑虽然释放了 `config` 内存，但 `default_config` 仍指向该已释放内存。随后若调用 `vkms_exit`，它会访问该无效指针并尝试再次释放，导致 Use After Free 和 Double Free 错误。
+
+#解决方案
+调整 `default_config` 指针的赋值时机，将其移至 `vkms_create` 成功执行之后。同时优化错误处理路径：若创建失败，立即释放内存并返回错误码。此外，在 `vkms_exit` 中增加对 `default_config` 指针的有效性检查，防止访问空指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3249e36e35fb67820ccd775a67bc419c00574aa5

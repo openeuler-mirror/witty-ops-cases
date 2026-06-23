@@ -1,0 +1,23 @@
+#标题
+mm: shmem 构建错误及 NUMA 故障计数统计错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在关闭 CONFIG_SWAP 配置项的情况下编译内核，shmem 相关模块出现构建失败（编译错误）。
+2. 内核 NUMA 自动平衡机制在处理迁移后的页面时，统计信息不准确，numa fault 计数错误（少计）。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **构建错误**：Commit ed205f43 修改了 swap_cluster_readahead 的函数签名（返回值和参数），但在 mm/swap.h 中针对 CONFIG_SWAP 未定义时的静态内联存根函数未同步更新，导致编译时函数签名不匹配。
+2. **计数错误**：Commit 3bfa35c 引入的修改在调用 task_numa_fault 进行 NUMA 故障统计时，错误地将参数固定传递为 1，而未使用表示实际页数的变量 nr_pages，导致无法正确统计大页（folio）场景下的故障次数。
+
+#解决方案
+1. 修复 mm/swap.h 中 swap_cluster_readahead 存根函数的签名，使其与实际接口定义保持一致，解决 CONFIG_SWAP 关闭时的编译问题。
+2. 修正 do_numa_page 函数中 task_numa_fault 的调用参数，将硬编码的 1 替换为 nr_pages 变量，确保 NUMA 故障计数的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8cfd799ba03a001aaf53019948d7a8f7d8e5ad2d

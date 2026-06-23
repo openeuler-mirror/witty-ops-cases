@@ -1,0 +1,28 @@
+#标题
+Intel-SST 驱动因次版本号不匹配导致加载失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当硬件 TPMI（Topology Aware Register Interface）接口定义更新了次版本号，且主版本号未变时，当前驱动实现会直接判定版本不匹配并返回错误，导致驱动无法加载，用户无法使用 SST（Speed Select Technology）功能。实际上，次版本号的变更通常仅代表新增字段，不影响现有功能，驱动应能继续正常工作。
+
+#主要错误日志
+- **修复前触发的错误日志**：
+  `SST: Unsupported version:%x`
+- **修复后可能出现的提示日志**：
+  `SST: Unsupported major version:%lx`（主版本不匹配时）
+  `SST: Ignore: Unsupported minor version:%lx`（次版本不匹配时，仅提示）
+
+#问题根因
+驱动程序原有的版本校验逻辑过于严格，将“主版本”和“次版本”作为一个整体数值进行比对。根据硬件定义，主版本变化代表 MMIO 偏移或字段定义修改（不兼容），而次版本变化仅代表新增字段（向后兼容）。驱动未能区分处理这两种情况，导致在硬件仅升级次版本号时错误地返回 `-ENODEV`，拒绝了兼容的硬件设备。
+
+#解决方案
+修改版本校验逻辑，区分主版本号和次版本号进行检查：
+1. 将原有的单一版本宏定义拆分为 `ISST_MAJOR_VERSION` 和 `ISST_MINOR_VERSION`。
+2. 增加对无效版本的检查。
+3. 若主版本号不匹配，保持原有的报错并拒绝加载逻辑。
+4. 若次版本号不匹配，仅打印 `dev_info` 信息提示，驱动继续加载，忽略次要差异以保证功能可用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cdc54bcf64ef4e47f9d694b01a4290e380b59424

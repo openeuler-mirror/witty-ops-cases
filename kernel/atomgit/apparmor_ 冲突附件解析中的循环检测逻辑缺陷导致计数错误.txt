@@ -1,0 +1,26 @@
+#标题
+apparmor: 冲突附件解析中的循环检测逻辑缺陷导致计数错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 AppArmor 进行重叠域附件解析时，由于循环检测逻辑存在缺陷，导致 `aa_dfa_leftmatch` 函数调整步骤计算出负数计数值。该问题影响基于 DFA 状态遍历数量的解析决策，可能导致附件解析结果不符合预期。
+
+#主要错误日志
+未知
+
+#问题根因
+循环计数逻辑包含以下三个缺陷：
+1. `inc_wb_pos` 宏中对 `len` 字段的更新使用了掩码操作，导致其在达到缓冲区容量时发生回绕，而不是预期的饱和。
+2. `is_loop` 函数在遍历历史记录未找到重访问状态时，错误地返回 true 并设置 adjust 值，导致无循环的 DFA 在遍历足够状态时产生负数计数。
+3. `is_loop` 函数中的循环条件使用了 `<=`，导致迭代越界，正确逻辑应为 `<`。
+
+#解决方案
+修复 `security/apparmor/match.c` 与 `security/apparmor/include/match.h` 中的逻辑缺陷：
+1. 修改 `inc_wb_pos` 宏，使 `len` 字段在达到 `WB_HISTORY_SIZE` 时饱和，不再回绕。
+2. 修正 `is_loop` 函数逻辑，当历史缓冲区中未找到循环时直接返回 false；修正循环迭代条件防止越界。
+3. 清理 `match_workbuf` 结构体，移除未使用的 `count` 和 `size` 字段，并将 `history` 字段类型修正为语义正确的 `aa_state_t`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/605c6f4df8a1a39a21b0c105b069963f0b3d5bba

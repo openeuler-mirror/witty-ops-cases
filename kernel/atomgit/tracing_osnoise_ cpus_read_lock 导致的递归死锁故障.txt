@@ -1,0 +1,43 @@
+#标题
+tracing/osnoise: cpus_read_lock 导致的递归死锁故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 osnoise 模块处理 CPU 热插拔事件时，若线程启动失败，内核 Lockdep 检测到递归锁定风险并报告 "possible recursive locking detected" 警告。此时系统可能无法正常启动采样线程，触发调用栈警告。
+
+#主要错误日志
+osnoise: could not start sampling thread
+============================================
+WARNING: possible recursive locking detected
+--------------------------------------------
+       CPU0
+       ----
+  lock(cpu_hotplug_lock);
+  lock(cpu_hotplug_lock);
+
+ Call Trace:
+  <TASK>
+  print_deadlock_bug+0x282/0x3c0
+  __lock_acquire+0x1610/0x29a0
+  lock_acquire+0xcb/0x2d0
+  cpus_read_lock+0x49/0x120
+  stop_per_cpu_kthreads+0x7/0x60
+  start_kthread+0x103/0x120
+  osnoise_hotplug_workfn+0x5e/0x90
+  process_one_work+0x44f/0xb30
+  worker_thread+0x33e/0x5e0
+  kthread+0x206/0x3b0
+  ret_from_fork+0x31/0x50
+  ret_from_fork_asm+0x11/0x20
+  </TASK>
+
+#问题根因
+在 `osnoise_hotplug_workfn()` 函数中使用了 `guard(cpus_read_lock)` 进行加锁，随后调用 `start_kthread()`。当 `start_kthread()` 执行失败（如创建线程返回 IS_ERR）时，其内部调用了 `stop_per_cpu_kthreads()`，而后者内部再次调用 `cpus_read_lock()`。由于外层函数已持有该锁，导致在同一上下文中对同一锁进行了二次嵌套加锁，从而触发了 AA 死锁（递归死锁）。
+
+#解决方案
+删除 `start_kthread()` 函数中错误处理路径下的 `stop_per_cpu_kthreads()` 调用。理由如下：当单个 CPU 热插拔启动线程失败时，无需停止系统中所有其他 CPU 的 osnoise 线程；外层调用者 `start_per_cpu_kthreads()` 在检测到 `start_kthread()` 返回错误时，已具备调用 `stop_per_cpu_kthreads()` 进行清理的逻辑。移除该冗余调用即可避免死锁。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/368a1d6e0a264f258fe9607ba9d5706accaa6006

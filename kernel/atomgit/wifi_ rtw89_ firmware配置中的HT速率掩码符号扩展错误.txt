@@ -1,0 +1,27 @@
+#标题
+wifi: rtw89: firmware配置中的HT速率掩码符号扩展错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+驱动在计算HT速率掩码（ra_mask）时，由于隐式符号扩展导致计算结果异常。虽然最终经过与支持速率的位与操作后结果巧合地保持正确，但中间变量存在严重的数值错误。
+具体表现为：当 `rx_mask` 字节值为 `0xff` 时，左移操作触发符号扩展，导致 `ra_mask` 的高 32 位被错误地置为全 1（如 `0xffffffff_ff0ff000`），而非预期的 0（如 `0x00000000_ff0ff000`）。
+
+#主要错误日志
+未知
+
+#问题根因
+Coverity 静态分析工具报告了“非预期的符号扩展”问题。
+根本原因在于 C 语言运算类型提升规则：`u8` 类型的变量 `rx_mask` 在执行左移 24 位操作时，其结果会被隐式转换为 `signed 32-bit` 类型（int）。随后将该结果赋值给 `u64` 变量时，发生了符号扩展。
+例如，当 `rx_mask[1]` 为 `0xff` 时，`0xff << 24` 结果为 `0xff000000`（被视为负数）。将其转换为 `u64` 时，根据符号扩展规则，高位补 1，结果变为 `0xffffffff_ff000000`，而非预期的 `0x00000000_ff000000`。
+
+#解决方案
+在代码逻辑中显式强制类型转换为 `u64`。
+修改 `drivers/net/wireless/realtek/rtw89/phy.c` 文件，在进行左移操作前，先将操作数强制转换为 `u64`：
+- 将 `sta->deflink.ht_cap.mcs.rx_mask[1] << 24` 修改为 `((u64)sta->deflink.ht_cap.mcs.rx_mask[1] << 24)`
+- 将 `sta->deflink.ht_cap.mcs.rx_mask[0] << 12` 修改为 `((u64)sta->deflink.ht_cap.mcs.rx_mask[0] << 12)`
+此举确保在移位过程中使用 64 位无符号整数运算，避免隐式符号扩展导致的数值错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/032faf5cfc569cc4b238f1387dbab45dcec7930f

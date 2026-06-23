@@ -1,0 +1,23 @@
+#标题
+ACPI: property: 子节点 buffer 属性提取作用域错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在解析 ACPI 设备的 data-only subnodes（纯数据子节点）时，buffer 属性提取失败。由于传入了错误的 ACPI 句柄（handle），导致无法正确解析某些特定的 _DSD 配置，这可能表现为相关设备驱动无法正确获取固件提供的属性数据，进而导致设备初始化异常或功能配置丢失。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `acpi_nondev_subnode_extract()` 函数中，调用 `acpi_extract_properties()` 时错误地传入了 data-only subnode 的 handle。
+1. Data-only subnodes 对应的 ACPI 对象无法在其作用域内包含其他对象（如控制方法），因此该 handle 不能用于补全相对路径段。
+2. 如果 data-only subnode 位于另一个设备（例如父设备 B）的作用域内，正确的查找作用域应当是设备 B 的作用域，而非 subnode 自身的 handle。
+代码逻辑错误地使用了 subnode handle 作为属性提取的作用域，而非其父设备的作用域。
+
+#解决方案
+修改 `acpi_nondev_subnode_extract()` 函数逻辑，统一属性提取和子节点对象查找的作用域。具体做法是：在调用 `acpi_extract_properties()` 之前，先通过 `acpi_get_parent(handle, &scope)` 获取父设备的作用域句柄，并将该 `scope` 同时传递给 `acpi_extract_properties()` 和 `acpi_enumerate_nondev_subnodes()`，确保在正确的作用域下解析属性和查找对象。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ff00d524020295fbd3cd639ca084d0734bf710f5

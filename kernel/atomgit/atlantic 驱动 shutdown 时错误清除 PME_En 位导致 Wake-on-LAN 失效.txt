@@ -1,0 +1,20 @@
+#标题
+atlantic 驱动 shutdown 时错误清除 PME_En 位导致 Wake-on-LAN 失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 atlantic 驱动的网卡（如 AQC107/108/111/112/113）在通过 ethtool 配置并启用 Wake-on-LAN (WOL) 功能后，执行关机操作，系统无法被网络唤醒。若不加载 atlantic 驱动，WOL 功能正常；一旦驱动执行过 shutdown 流程，WOL 即失效。从挂起状态（S3）唤醒不受此影响。
+
+#主要错误日志
+未知
+
+#问题根因
+在驱动 shutdown 处理函数 `aq_pci_shutdown()` 中，代码无条件调用 `pci_wake_from_d3(pdev, false)`，这强制清除了 PCI 配置空间中的 PME_En 位。尽管 `aq_nic_shutdown()` 已正确将网卡固件编程为监听魔术包，但由于 PCI 子系统的 PME_En 位被清除，PCI 子系统无法向上传播 D3 状态下的 PME 唤醒事件，导致系统关机后无法被唤醒。
+
+#解决方案
+修改 `aq_pci_shutdown()` 函数逻辑，在调用 `pci_wake_from_d3()` 时，不再硬编码传入 `false`，而是传入网卡配置中保存的 WOL 状态值 (`self->aq_hw->aq_nic_cfg->wol`)。这确保了当用户启用了 WOL 功能时，PCI PME_En 位在关机过程中被保留，从而允许 PCI 子系统正确响应唤醒事件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/dc59d1c18cfa9551f61526c7262b29d7bc221fc7

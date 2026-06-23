@@ -1,0 +1,21 @@
+#标题
+drm/vmwgfx: cursor snooper 空指针访问导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 SVGA 命令处理 DMA 操作时，若 surface ID 被设定为 `SVGA3D_INVALID_ID`（表示“无 surface”），`vmw_cmd_res_check` 函数会通过检查，但返回的 resource 指针为空。后续代码在 `vmw_kms_cursor_snoop` 函数中未判空直接使用该指针，导致发生空指针引用，引发内核 Oops 或崩溃。
+
+#主要错误日志
+- VMW_DEBUG_USER("Invalid DMA surface.\n")（推断：修复补丁新增的错误日志，用于拦截非法输入）
+- VMW_DEBUG_USER("could not find surface for DMA.\n")（推断：现有日志，非本场景触发）
+
+#问题根因
+`vmw_cmd_res_check` 允许显式的无效标识符（如 `SVGA3D_INVALID_ID`），因为部分 SVGA 命令接受该值表示“无 surface”。然而，在 `vmw_cmd_dma` 函数中，代码直接从 `res_cache` 中获取资源并将其转换为 surface 对象，未验证资源指针是否存在。当 ID 为无效值时，缓存的资源指针为 NULL，后续直接传递给 `vmw_kms_cursor_snoop` 使用导致了空指针引用。
+
+#解决方案
+在调用 `vmw_kms_cursor_snoop` 之前增加对资源指针的合法性检查。从 `sw_context->res_cache` 获取资源后，判断指针是否为空：若为空则打印调试日志并返回 `-EINVAL`，阻止空指针被传递给底层函数。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/635e20547098757ad081fe839bf736f92f2430da

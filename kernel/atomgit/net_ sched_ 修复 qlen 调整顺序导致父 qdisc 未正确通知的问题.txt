@@ -1,0 +1,20 @@
+#标题
+net: sched: 修复 qlen 调整顺序导致父 qdisc 未正确通知的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在流量控制（Qdisc）处理过程中，当子 qdisc 队列即将变空时，系统未能正确通知父 qdisc。这可能导致父 qdisc 的状态与子 qdisc 实际状态不一致，进而影响流量整形的准确性或导致队列调度逻辑异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在调用 `qdisc_tree_reduce_backlog()` 函数之前，代码先更新了 backlog 统计信息，随后才更新 `sch->q.qlen`。根据正确的逻辑，对 `sch->q.qlen` 的修改必须发生在调用 `qdisc_tree_reduce_backlog()` **之前**。如果在调用该函数之后才减少 qlen 计数，函数内部检查时子 qdisc 可能尚未标记为“即将变空”，从而遗漏了对父 qdisc 的通知。
+
+#解决方案
+调整代码执行顺序，确保对 `sch->q.qlen` 的减少操作位于 `qdisc_tree_reduce_backlog()` 调用之前。具体修复涉及 `sch_cake.c` 和 `sch_choke.c` 两个文件，将 `sch->q.qlen--` 或 `--sch->q.qlen` 语句移动到 `qdisc_tree_reduce_backlog()` 调用之前执行。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/235345cf6fbf61a4d20f74aae32601eccca4f094

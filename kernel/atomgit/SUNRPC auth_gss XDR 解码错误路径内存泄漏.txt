@@ -1,0 +1,20 @@
+#标题
+SUNRPC auth_gss XDR 解码错误路径内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NFS/SUNRPC 使用 GSS 认证的场景下，如果 XDR 解码过程中发生错误（例如 `gssx_dec_ctx`、`gssx_dec_status` 或 `gssx_dec_name` 函数中后续的字段解码失败），此前已成功分配的内存缓冲区（如 `exported_context_token`、`mech`、`src_name` 等）未被释放。这会导致内核内存泄漏，随着解码错误次数增加，系统可用内存逐渐减少，可能影响系统长期运行的稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+`gssx_dec_ctx()`、`gssx_dec_status()` 和 `gssx_dec_name()` 函数通过调用 `gssx_dec_buffer()`（内含 `kmemdup`）分配内存。当解码序列中后续的操作失败时，这些函数直接返回错误码，而未释放之前步骤中已分配的内存缓冲区。特别在 `gssx_dec_ctx()` 中，调用方（`gssp_accept_sec_context_upcall`）会将部分缓冲区长度字段初始化为非零值（如 `GSSX_max_output_handle_sz`），导致内存分配确实发生。如果后续解码（如 `targ_name`）失败，之前分配的内存（如 `src_name.display_name`）将变成无主内存无法回收。
+
+#解决方案
+在相关解码函数中引入基于 `goto` 语句的错误处理清理逻辑。当解码过程中某一步骤失败时，代码将跳转至对应的清理标签，逐层释放之前步骤中已分配的内存资源（使用 `kfree`），从而防止内存泄漏。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7f93121615bad9f80a37563dc57a6205dcb902a7

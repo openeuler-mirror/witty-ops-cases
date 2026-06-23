@@ -1,0 +1,22 @@
+#标题
+LED亮度设置并发竞态导致状态异常故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行LED亮度设置操作时，若连续快速调用 `led_set_brightness(LED_OFF)` 和 `led_set_brightness(any)`（例如先关闭LED再开启），由于内核内部工作队列调度存在竞态条件，导致指令执行顺序错乱。最终表现为LED状态与预期不符，例如用户期望LED开启，但实际LED保持关闭状态。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根因在于 `set_brightness_delayed()` 工作队列处理逻辑中存在竞态窗口。在 `led_set_brightness(LED_OFF)` 紧接着 `led_set_brightness(any)` 的场景下，如果 CPU 调度导致工作标志位（`work_flags`）的设置与处理时序交错，会导致 `LED_SET_BRIGHTNESS_OFF` 标志的处理发生在 `LED_SET_BRIGHTNESS` 标志处理之后，或者清除操作滞后，从而使得亮度设置顺序被倒置，最终 LED 保持关闭状态而未按预期点亮。此外，引入有序工作队列的提交移除了 `flush_work()`，使得该竞态更容易被触发。
+
+#解决方案
+修改 `drivers/leds/led-core.c` 中的亮度设置逻辑：
+1. 在处理 `LED_SET_BRIGHTNESS_OFF` 标志并关闭 LED 后，检查 `delayed_set_value` 是否不为 `LED_OFF`。如果是，则重新设置 `LED_SET_BRIGHTNESS` 标志，强制再次配置亮度，确保最终状态正确。
+2. 在 `led_set_brightness_nopm()` 函数中，将 `delayed_set_value` 的赋值逻辑提前，并使用 `smp_mb__before_atomic()` 内存屏障确保 `delayed_set_value` 的修改在设置工作标志位之前对所有 CPU 可见，防止因内存可见性问题导致的竞态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9993b1140e73d1cebe4fe21fc0f871ad2c3122bc

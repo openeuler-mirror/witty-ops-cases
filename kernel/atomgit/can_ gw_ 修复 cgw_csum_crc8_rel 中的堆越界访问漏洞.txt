@@ -1,0 +1,25 @@
+#标题
+can: gw: 修复 cgw_csum_crc8_rel 中的堆越界访问漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了 CAN FD 帧的 CRC8 校验和规则后，特制恶意参数可导致内核发生堆越界读写。在启用 KASAN 的系统上，触发该漏洞会立即检测到越界访问并打印错误信息，导致内核恐慌或系统不稳定。攻击者可能利用此漏洞导致内核崩溃或潜在的其他安全影响。
+
+#主要错误日志
+BUG: KASAN: slab-out-of-bounds in cgw_csum_crc8_rel+0x515/0x5b0
+Read of size 1 at addr ffff8880076619c8 by task poc_cgw_oob/62
+
+#问题根因
+函数 `cgw_csum_crc8_rel()` 虽然通过 `calc_idx()` 计算了边界安全的索引变量（`from`, `to`, `res`）并进行了合法性检查，但在后续的循环操作和结果写入时，错误地直接使用了原始的 `s8` 类型字段（`crc8->from_idx`, `crc8->to_idx`, `crc8->result_idx`）。
+当这些原始字段被设置为负值（如 -64）且帧长度满足特定条件时，`calc_idx()` 计算出的安全索引为 0 从而绕过检查，但后续代码使用负值作为数组索引访问 `cf->data`，导致读取未授权内存或向堆内存前的非法地址写入数据。
+
+#解决方案
+修改 `cgw_csum_crc8_rel()` 函数内部实现，在 for 循环迭代和最终结果写入时，将原始字段替换为经过边界计算的安全变量。具体包括：
+1. 将循环变量 `i` 的起始与结束条件从 `crc8->from_idx`/`crc8->to_idx` 修改为 `from`/`to`。
+2. 将结果写入位置 `cf->data[crc8->result_idx]` 修改为 `cf->data[res]`。
+以此确保所有的数组访问都在合法边界内。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ccad7013b817ff7eb98d3c85d02e212295521f64

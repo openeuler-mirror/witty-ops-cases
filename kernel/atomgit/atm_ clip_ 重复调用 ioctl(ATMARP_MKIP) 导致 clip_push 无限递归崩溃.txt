@@ -1,0 +1,32 @@
+#标题
+atm: clip: 重复调用 ioctl(ATMARP_MKIP) 导致 clip_push 无限递归崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当用户空间对同一个 ATM socket 重复调用 `ioctl(ATMARP_MKIP)` 超过一次时，内核会触发无限递归调用，导致栈溢出。系统打印 "stack guard page was hit" 错误信息，并触发 Oops/panic，调用栈显示 `clip_push` 函数无限循环调用自身，最终导致内核崩溃。
+
+#主要错误日志
+BUG: TASK stack guard page was hit at ffffc9000d66fff8 (stack is ffffc9000d670000..ffffc9000d678000)
+Oops: stack guard page: 0000 [#1] SMP KASAN NOPTI
+RIP: 0010:clip_push+0x5/0x720 net/atm/clip.c:191
+Call Trace:
+ <TASK>
+ clip_push+0x6dc/0x720 net/atm/clip.c:200
+ clip_push+0x6dc/0x720 net/atm/clip.c:200
+ clip_push+0x6dc/0x720 net/atm/clip.c:200
+...
+ clip_push+0x6dc/0x720 net/atm/clip.c:200
+ vcc_destroy_socket net/atm/common.c:183 [inline]
+ vcc_release+0x157/0x460 net/atm/common.c:205
+
+#问题根因
+在第一次调用 `ioctl(ATMARP_MKIP)` 时，`clip_mkip()` 函数会将 `clip_push` 赋值给 `vcc->push()`。如果第二次调用该 ioctl，`clip_push` 会被错误地拷贝到 `clip_vcc->old_push()`。
+此后，当 socket 关闭时，`vcc_destroy_socket()` 传递 NULL skb 给 `clip_push()`，`clip_push()` 内部调用 `clip_vcc->old_push()` 实际上又调用了 `clip_push` 自身，从而引发了无限递归调用。
+
+#解决方案
+在 `clip_mkip()` 函数中增加对 `vcc->user_back` 的检查。由于 `vcc->user_back` 是在第一次调用 `ioctl(ATMARP_MKIP)` 时分配的 `clip_vcc` 结构体，如果检测到它非空，说明该 ioctl 已经被调用过，此时直接返回 `-EINVAL` 以拒绝重复调用，从而避免递归风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e94b3a5063191684848013f44f7d8f173f81a32b

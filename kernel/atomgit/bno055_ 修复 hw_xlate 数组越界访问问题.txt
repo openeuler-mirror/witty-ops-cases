@@ -1,0 +1,22 @@
+#标题
+bno055: 修复 hw_xlate 数组越界访问问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在访问 bno055 IMU 传感器的陀螺仪比例尺或低通滤波器（LPF）配置时，内核可能会访问 `hw_xlate` 数组之外的内存区域。该缺陷关联 CVE-2025-39719，可能导致内核崩溃或内存损坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bno055_get_regmask` 函数中，遍历 `hw_xlate` 数组时的循环条件错误地使用了 `attr->len`（即 `vals` 数组的长度）作为边界。由于 `vals` 数组的长度与 `hw_xlate` 数组的长度不一致，当寄存器值匹配到 `hw_xlate` 数组末尾的元素时，循环迭代次数超过了 `hw_xlate` 数组的实际大小，导致越界访问。
+
+#解决方案
+1. 在 `struct bno055_sysfs_attr` 结构体中新增 `hw_xlate_len` 成员，用于专门记录 `hw_xlate` 数组的长度。
+2. 为 `bno055_gyr_scale` 和 `bno055_gyr_lpf` 属性分别初始化对应的 `hw_xlate_len`。
+3. 修改 `bno055_get_regmask` 函数中的循环判断条件，将边界从 `attr->len` 修改为 `attr->hw_xlate_len`，确保遍历范围限制在 `hw_xlate` 数组的实际范围内。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f0964702164a2340f84baf6d1616217ef26cf3b1

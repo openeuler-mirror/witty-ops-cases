@@ -1,0 +1,20 @@
+#标题
+块层 bio_split_rw 未考虑 zone_write_granularity 导致分区设备写入非对齐
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在对 Zoned 块设备进行写入操作时，由于 BIO 切分逻辑未遵循设备的区域写入粒度限制，导致产生非对齐的写入请求。这可能导致设备 I/O 错误或数据写入异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bio_split_rw` 函数中，对 BIO 进行切分后执行对齐操作时，原代码仅使用 `lim->logical_block_size` 进行对齐。对于 Zoned 设备，写入操作必须遵循 `zone_write_granularity` 的对齐要求，而原逻辑忽略了该限制，从而在切分时创建了不满足 Zoned 设备写入粒度要求的非对齐写入请求。
+
+#解决方案
+引入新函数 `bio_split_alignment`，该函数根据当前 BIO 的操作类型判断对齐需求：如果是写操作且设备指定了 `zone_write_granularity`，则使用该粒度作为对齐标准；否则使用默认的 `logical_block_size`。修改 `bio_split_rw` 中的对齐计算逻辑，调用 `bio_split_alignment` 替换原有的硬编码 `lim->logical_block_size`，确保切分后的 BIO 满足 Zoned 设备的写入粒度要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a3286e144791982a4bbbf5db1c573113918f201b

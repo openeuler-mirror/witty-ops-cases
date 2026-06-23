@@ -1,0 +1,23 @@
+#标题
+spi: omap2-mcspi 驱动卸载时资源释放顺序错误导致 use-after-free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 omap2-mcspi 驱动解绑（unbind）操作时，由于控制器注销与资源释放顺序不当，可能导致内核崩溃或内存非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在移除（remove）过程中，先调用了 `spi_unregister_controller` 注销控制器，随后释放了 DMA 等底层资源。但在 `probe` 阶段使用了 `devm_spi_register_controller`，该函数在驱动卸载时通过 devres 机制自动执行注销，这导致实际的资源释放顺序被颠倒：底层 DMA 资源先被释放，而控制器注销后延发生。此时如果控制器仍在尝试访问已被释放的资源，将引发 use-after-free 错误。
+
+#解决方案
+1. 将 `probe` 函数中的 `devm_spi_register_controller` 替换为 `spi_register_controller`，移除托管自动注销功能。
+2. 在 `remove` 函数中，显式增加引用计数 `spi_controller_get`，确保先执行 `spi_unregister_controller` 注销控制器。
+3. 在控制器注销完成之后，再调用 `omap2_mcspi_release_dma` 释放 DMA 资源及其他运行时 PM 资源。
+4. 最后显式调用 `spi_controller_put` 减少引用计数，确保资源按正确顺序完全释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/edbc38b64c9c4c902805cce324fb81d3451237b8

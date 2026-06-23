@@ -1,0 +1,25 @@
+#标题
+KASAN 报告中 vmalloc 区域错误信息缺失关键分配详情
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 KASAN 检测到 vmalloc 区域的越界访问等错误时，错误报告仅输出 "The buggy address belongs to a vmalloc virtual mapping"，缺少该内存区域的具体起始地址、大小以及分配调用栈等详细信息，导致开发者难以快速定位故障源头。修复后报告中应包含类似 "The buggy address belongs to a 1-page vmalloc region starting at 0xffffc900002fd000 allocated at vmalloc_oob+0x36/0x610" 的描述。
+
+#主要错误日志
+BUG: KASAN: vmalloc-out-of-bounds in vmalloc_oob+0x4c9/0x610
+Read of size 1 at addr ffffc900002fd7f3 by task kunit_try_catch/493
+...
+The buggy address belongs to a vmalloc virtual mapping
+（修复后应包含）：
+The buggy address belongs to a 1-page vmalloc region starting at 0xffffc900002fd000 allocated at vmalloc_oob+0x36/0x610
+
+#问题根因
+在之前的提交 6ee9b3d84775 ("kasan: remove kasan_find_vm_area() to prevent possible deadlock") 中，为了修复潜在的死锁问题，移除了查找 vmalloc 区域详细信息的逻辑。这导致 KASAN 报告中丢失了原本有用的 vmalloc 分配信息，且未尝试寻找替代方案来保留该功能。
+
+#解决方案
+修改 `mm/kasan/report.c` 文件中的 `print_address_description` 函数，引入 `vmalloc_dump_obj()` 函数。该函数可以在避免死锁风险的前提下，尝试打印 vmalloc 区域的详细信息（如起始地址、页数、分配调用栈）。如果打印成功，则输出详细信息；如果失败，则回退到原有的通用打印逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e548b19187ceaa5fe6550c075bf2166a98edfb40

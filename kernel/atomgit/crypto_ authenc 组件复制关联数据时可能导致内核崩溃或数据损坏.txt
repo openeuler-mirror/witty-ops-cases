@@ -1,0 +1,24 @@
+#标题
+crypto: authenc 组件复制关联数据时可能导致内核崩溃或数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 authenc 或 authencesn 加密算法进行 AEAD（认证加密）操作时，若输入源 scatterlist（req->src）与输出目标 scatterlist（req->dst）不是同一块内存区域，内核可能发生不可预测的行为。具体表现为：在进行 IPsec 等依赖该算法的加密传输时，可能触发内核 panic、内存越界访问，或者产生静默的数据损坏（关联数据复制错误）。
+
+#主要错误日志
+未知
+
+#问题根因
+在 crypto/authenc.c 和 crypto/authencesn.c 中，当需要拷贝关联数据时，原实现通过分配并使用一个所谓的 "null skcipher"（空对称加密算法）来执行 scatterlist 之间的数据拷贝。这种通过加密框架进行简单内存拷贝的方式既复杂又低效，且在特定场景下可能存在稳定性风险。根本原因在于使用了不当的底层机制来实现简单的内存拷贝功能。
+
+#解决方案
+移除对 "null skcipher" 的依赖，将 `crypto_authenc_copy_assoc` 和 `crypto_authenc_esn_copy` 函数中复杂的 skcipher 拷贝逻辑替换为直接调用 `memcpy_sglist()` 函数。具体修改包括：
+1. 删除 `crypto/authenc.c` 和 `crypto/authencesn.c` 中对 `` 头文件的引用。
+2. 从 Kconfig 中移除 `CRYPTO_AUTHENC` 对 `CRYPTO_NULL` 的依赖。
+3. 删除 `crypto_authenc_ctx` 和 `crypto_authenc_esn_ctx` 结构体中的 `null` 指针成员及相关初始化、销毁代码。
+4. 在 `crypto_authenc_encrypt`、`crypto_authenc_esn_encrypt` 和 `crypto_authenc_esn_decrypt` 函数中，将原先的 skcipher 加密拷贝调用直接替换为 `memcpy_sglist(req->dst, req->src, len)`，简化代码逻辑并消除潜在风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/47e12905ca6515df6c408e041ff045a5201d1cb8

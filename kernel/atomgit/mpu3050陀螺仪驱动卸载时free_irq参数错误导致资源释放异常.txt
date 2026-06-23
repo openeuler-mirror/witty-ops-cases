@@ -1,0 +1,20 @@
+#标题
+mpu3050陀螺仪驱动卸载时free_irq参数错误导致资源释放异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除mpu3050陀螺仪设备驱动（如执行设备分离或驱动卸载）时，内核无法正确释放该设备占用的中断资源。由于传递给`free_irq`的句柄参数错误，导致中断处理程序与注册时不匹配，可能引发内核警告或导致设备再次 Probe 时中断申请失败。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在注册中断时使用的 handler 参数为 `mpu3050->trig`，但在移除函数 `mpu3050_common_remove` 中调用 `free_irq()` 时错误地传入了 `mpu3050` 作为参数。根据内核 IRQ 子系统逻辑，`free_irq` 需要与 `request_irq` 时的 dev_id 参数严格匹配才能正确释放中断，参数不一致导致释放失败。
+
+#解决方案
+修改 `drivers/iio/gyro/mpu3050-core.c` 文件中的 `mpu3050_common_remove` 函数，将 `free_irq(mpu3050->irq, mpu3050)` 修正为 `free_irq(mpu3050->irq, mpu3050->trig)`，确保释放中断时传入正确的句柄变量，与注册时的参数保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/31cdb9cbde8c065ee76590e41c4e2426f04261d8

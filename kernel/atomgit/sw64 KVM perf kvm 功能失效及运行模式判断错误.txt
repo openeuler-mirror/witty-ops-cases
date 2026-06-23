@@ -1,0 +1,24 @@
+#标题
+sw64 KVM perf kvm 功能失效及运行模式判断错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sw64 架构下使用 `perf kvm` 工具监控虚拟机性能时无法正常工作，无法正确识别 Guest 上下文。此外，在 core4 架构上，KVM 对 vCPU 运行模式的判断逻辑有误，导致无法准确区分 vcpu 处于 Guest 模式还是内核模式。
+
+#主要错误日志
+未知
+
+#问题根因
+1. KVM 模块初始化时未注册 perf 回调函数，导致 perf 子系统无法获取 Guest 信息。
+2. 对于 core4 处理器，判断 vcpu 运行模式的逻辑有误：原代码依据 PS 寄存器的 bit 3 进行判断，但实际上 core4 需要通过 PC 寄存器（Program Counter）的 CPU 模式位来判断运行模式。
+
+#解决方案
+1. 在 Kconfig 中选中 `GUEST_PERF_EVENTS` 配置项以开启相关支持。
+2. 将 `kvm_arch_pmi_in_guest` 函数定义移至 `kvm_host.h` 头文件中作为内联函数导出，供 perf 模块调用。
+3. 在 `kvm_core3_init` 和 `kvm_core4_init` 初始化函数中添加 `kvm_register_perf_callbacks(NULL)` 调用，注册 perf 回调。
+4. 修正 `kvm_arch_vcpu_in_kernel` 判断逻辑：对于 C3B 架构维持原 PS 寄存器判断方式，对于其他架构（如 core4），改为通过读取 PC 寄存器的 CPU 模式位（`pc & 0x3 == 0x2`）来判定是否处于内核态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b486f4c2d424b27d65e55f7d995e81bbe2ca2cef

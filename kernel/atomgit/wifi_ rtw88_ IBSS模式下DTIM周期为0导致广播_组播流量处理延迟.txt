@@ -1,0 +1,21 @@
+#标题
+wifi: rtw88: IBSS模式下DTIM周期为0导致广播/组播流量处理延迟
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 IBSS (ad-hoc) 模式下，当 mac80211 设置的 DTIM 周期（dtim_period）为 0 时，驱动程序无条件的减 1 操作导致寄存器值下溢回绕至 0xFF。这导致广播和组播流量处理出现显著延迟，并引发 ad-hoc 操作功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `rtw_set_dtim_period()` 的参数类型定义为 `int`，而 mac80211 在结构体 `ieee80211_bss_conf` 中提供的 `dtim_period` 类型为 `u8`。在 IBSS 模式下，mac80211 可能将 `dtim_period` 设置为 0。驱动代码在未做判断的情况下执行 `dtim_period - 1` 并写入寄存器 `REG_DTIM_COUNTER_ROOT`，导致整型下溢，将错误的值 0xFF 写入硬件寄存器。
+
+#解决方案
+1. 将 `rtw_set_dtim_period` 函数的参数类型从 `int` 修改为 `u8`，以匹配 `ieee80211_bss_conf` 结构体中的定义。
+2. 增加对 `dtim_period` 为 0 的判断逻辑：若 `dtim_period` 为 0，直接向寄存器写入 0；否则写入 `dtim_period - 1`，以此避免整型下溢导致的寄存器配置错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/802e01b668054b0b3701348cc0fc3e4f58c9ef21

@@ -1,0 +1,24 @@
+#标题
+lan966x: 修复IPv4/IPv6报文1-step PTP时间戳位置错误导致报文损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 lan966x 网卡上启用 PTP（精确时间协议）的 1-step（单步）时间戳功能时，如果 PTP 报文封装在 UDPv4 或 UDPv6 中，硬件会在报文的错误偏移位置插入时间戳。这导致报文被错误修改（malformed），造成 PTP 协议通信异常。该问题在 L2（二层）PTP 报文中不会出现。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序在向硬件发送报文时，未在 IFH（Injection Frame Header）中正确设置 PDU_TYPE 字段。硬件依赖 PDU_TYPE 来识别报文类型（L2、IPv4 或 IPv6），从而确定在何处插入 1-step 时间戳。由于未设置该字段，PDU_TYPE 默认值为 0（对应 L2 帧），导致硬件将 IPv4/IPv6 报文误判为 L2 报文，并在错误的偏移量处插入了时间戳，破坏了报文结构。
+
+#解决方案
+在驱动中增加对 PTP 报文类型的识别逻辑，提取报文的 PDU 类型（IPv4、IPv6 或 L2），并将其正确填充至发送描述符（IFH）的 PDU_TYPE 字段中。
+具体修改如下：
+1. 定义 IFH_PDU_TYPE 宏（NONE=0, IPV4=7, IPV6=8）。
+2. 修改 `lan966x_ptp_classify` 函数，使其能够识别报文是 IPv4 还是 IPv6 封装，并返回对应的 pdu_type。
+3. 在 `lan966x_port_xmit` 发送路径中，调用 `lan966x_ifh_set_oam_type` 将识别出的 pdu_type 写入 IFH，指导硬件在正确位置插入时间戳。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b6fc1cd332273911d0bd530ff9e20b368c8553c8

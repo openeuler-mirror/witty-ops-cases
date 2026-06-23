@@ -1,0 +1,29 @@
+#标题
+urma: 多进程隔离场景下日志打印过多及资源泄露问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多进程隔离场景下，系统日志打印过于频繁，可能导致日志刷屏，影响系统性能和日志可读性。
+在 URMA 模块的 tpid 复用和连接断开流程中，存在资源泄露问题，具体表现为 tpid_priv 资源未被正确释放，可能导致内存泄露或后续资源分配失败。
+
+#主要错误日志
+- "Failed to delete tpid, ret = %d.\n"（推断，源自被移除的错误处理分支）
+- "Failed to create tpid for reuse, ret: %d.\n"
+- "rtp goto jfr exchange tp info"（调试日志，已在修复中移除）
+- "kref_put: ref_cnt is %u"（调试日志，已在修复中移除）
+
+#问题根因
+1. **日志级别使用不当**：部分业务流程日志使用了错误的打印级别（如将正常流程日志误用为错误级别 `ERR`），导致多进程场景下日志量激增。
+2. **资源释放逻辑缺失**：在 `ubcore_connect_adapter.c` 中，`ubcore_free_tpid_reuse` 函数仅释放了复用结构体本身，但遗漏了删除底层 `tpid_priv` 资源的操作；同时，在错误处理分支和断开连接流程中，也未调用 `ubcore_delete_tpid_priv` 进行资源清理。
+3. **设计冗余**：旧代码区分了 `aware` 和 `unaware` 两种列表管理模式，增加了复杂度且存在逻辑混淆，导致资源管理不清。
+
+#解决方案
+1. **调整日志级别**：将非错误类的关键路径日志调整为 `info` 级别（如 `ubcore_log_info_rl`），移除冗余的调试日志（如 `dump_stack` 调用和部分 `ubcore_log_err`），避免日志刷屏。
+2. **补全资源释放逻辑**：
+   - 在 `ubcore_free_tpid_reuse` 流程中移除不合理的删除操作（统一由上层释放），并在多处 `goto err_out` 错误处理分支、`ubcore_disconnect_tpid_with_tpid_reuse` 断开流程、`handle_destroy_req_with_tpid_reuse` 销毁流程以及 `ubcore_disconnect_vtp` 流程中，显式增加 `ubcore_delete_tpid_priv` 调用，确保 `tpid_priv` 资源被正确回收。
+3. **简化数据结构与逻辑**：移除 `aware_list` 和 `unaware_list` 的区分，统一使用单一的 `create_list` 进行管理，将 `acnt` 和 `ucnt` 合并为 `cnt`；调整 `ubcore_create_tpid_priv` 函数接口，移除不再需要的 `is_aware` 参数，简化调用逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2520b82058725f427c05eaeb53162763fc0abb12

@@ -1,0 +1,21 @@
+#标题
+hfs: HFS文件系统bitmap初始化未清零导致KMSAN未初始化值访问错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载并操作HFS文件系统时（如执行truncate操作），内核内存检测工具KMSAN报告未初始化值使用错误。触发路径为 `hfs_find_set_zero_bits` 函数访问位图内存，可能导致文件系统位图操作异常，进而引发卷损坏或文件系统驱动缺陷。
+
+#主要错误日志
+BUG: KMSAN: uninit-value in hfs_find_set_zero_bits+0x74d/0xb60 fs/hfs/bitmap.c:45
+CPU: 1 UID: 0 PID: 12609 Comm: syz.1.2692 Not tainted 6.16.0-syzkaller #0 PREEMPT(none)
+
+#问题根因
+HFS文件系统在 `hfs_mdb_get` 函数中分配位图内存时使用了 `kmalloc`，该函数不会将分配的内存清零。虽然新创建的分配位图应该所有可用块都空闲，但潜在的位图读取初始化操作可能未填满整个分配的内存区域。残留的内存“垃圾”数据影响了后续的位图操作，导致检测到未初始化值访问。
+
+#解决方案
+将 `fs/hfs/mdb.c` 文件中 `hfs_mdb_get` 函数内的 `kmalloc(8192, GFP_KERNEL)` 替换为 `kzalloc(8192, GFP_KERNEL)`。通过将内存分配改为清零分配，确保位图内存初始状态全为0，保证位图操作的正确性，避免未初始化内存导致的错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8e6b2a2a17a69987398eb4081219cb44b7f2f10a

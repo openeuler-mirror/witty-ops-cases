@@ -1,0 +1,20 @@
+#标题
+kbuild: userprogs 在混合使用 clang 和 GNU ld 时使用了错误的链接器
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 clang 编译器配合 GNU ld 链接器构建内核用户态程序时，构建系统未能使用 Makefile 中配置的正确链接器（$(LD)），而是错误地回退使用了系统默认的 `/usr/bin/ld`。这导致在交叉编译场景下构建失败。
+
+#主要错误日志
+未知
+
+#问题根因
+userprogs 构建基础设施中的条件判断逻辑不完善。原逻辑仅在检测到“编译器为 clang 且链接器为 LLD”的组合时才配置 `--ld-path` 参数。当用户混合使用 clang 和 GNU ld（例如在 SPARC64 架构下，因为 ld.lld 功能不足必须使用 GNU ld）时，条件判断失败，导致构建系统未将配置的 $(LD) 传递给编译器，进而错误地调用了默认路径下的链接器，破坏了交叉编译环境的一致性。
+
+#解决方案
+修改 Makefile 中的条件判断逻辑，将原有的 `ifeq ($(CONFIG_CC_IS_CLANG)$(CONFIG_LD_IS_LLD),yy)` 修改为 `ifdef CONFIG_CC_IS_CLANG`。该修改放宽了条件检查，只要检测到编译器为 clang，就使用 `--ld-path=$(LD)` 选项显式指定链接器路径，从而确保在各种链接器组合（包括 clang + GNU ld）下都能正确调用指定的链接器。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f673ccf46de286c0591caf3d1d61b0726af22774

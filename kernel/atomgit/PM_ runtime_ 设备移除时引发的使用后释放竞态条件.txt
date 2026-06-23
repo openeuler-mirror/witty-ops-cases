@@ -1,0 +1,38 @@
+#标题
+PM: runtime: 设备移除时引发的使用后释放竞态条件
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行设备移除操作（如删除 SCSI 设备）时，若触发运行时电源管理（Runtime PM）相关逻辑，内核会偶发地触发 KASAN 检测到的 "slab-use-after-free" 错误。该问题在 blktest block/001 测试中偶现，表现为内核工作队列进程（如 kworker）试图访问已被释放的父设备内存地址，导致内核崩溃或数据污染。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in lock_acquire+0x70/0x160
+Read of size 1 at addr ffff88812bef7198 by task kworker/u553:1/3081
+Workqueue: pm pm_runtime_work
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0x61/0x80
+ print_address_description.constprop.0+0x8b/0x310
+ print_report+0xfd/0x1d7
+ kasan_report+0xd8/0x1d0
+ __kasan_check_byte+0x42/0x60
+ lock_acquire.part.0+0x38/0x230
+ lock_acquire+0x70/0x160
+ _raw_spin_lock+0x36/0x50
+ rpm_suspend+0xc6a/0xfe0
+ rpm_idle+0x578/0x770
+ pm_runtime_work+0xee/0x120
+ process_one_work+0xde3/0x1410
+ </TASK>
+
+#问题根因
+在 `pm_runtime_work()` 函数中，代码尝试解引用 `dev->parent` 指针以检查父设备是否可以挂起。存在竞态条件：当子设备正在处理电源管理工作的同时，父设备可能已经被另一个执行流释放。此时 `pm_runtime_work()` 访问 `parent->power.lock` 会触发 "使用后释放" 错误，导致内核访问已释放的 slab 内存。
+
+#解决方案
+在 `pm_runtime_remove()` 函数中增加 `flush_work(&dev->power.work)` 调用。
+该修改确保在设备移除并禁用运行时电源管理后，必须等待该设备上所有待处理的电源管理工作队列任务执行完毕，从而避免在父设备释放后，子设备的工作队列仍然尝试访问父设备的锁或指针，彻底消除竞态条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c207192ad35ae1b3f03a31d87aaf8b29de65630a

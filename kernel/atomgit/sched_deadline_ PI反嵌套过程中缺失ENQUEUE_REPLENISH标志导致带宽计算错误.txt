@@ -1,0 +1,36 @@
+#标题
+sched/deadline: PI反嵌套过程中缺失ENQUEUE_REPLENISH标志导致带宽计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在RT内核的大规格机器上运行 `stress-ng --schedpolicy 0` 压测时，内核触发 WARNING，提示 DEADLINE 任务在 PI（优先级继承）反嵌套过程中缺失 REPLENISH 标志，并导致 `running_bw` 带宽统计下溢。
+
+#主要错误日志
+sched: DL de-boosted task PID 22725: REPLENISH flag missing
+WARNING: CPU: 93 PID: 0 at kernel/sched/deadline.c:239 dequeue_task_dl+0x15c/0x1f8
+... (running_bw underflow)
+Call trace:
+ dequeue_task_dl+0x15c/0x1f8 (P)
+ dequeue_task+0x80/0x168
+ activate_task+0x24/0x50
+ push_dl_task+0x264/0x2e0
+ dl_task_timer+0x1b0/0x228
+ __hrtimer_run_queues+0x188/0x378
+ hrtimer_interrupt+0xfc/0x260
+
+#问题根因
+当一个 SCHED_DEADLINE 任务（锁持有者）通过 `sched_setscheduler()` 被修改为更低优先级的调度类时，如果它此前未曾继承过捐赠者的参数（例如当时的 deadline 比捐赠者更短），此时会失败于正确继承潜在的 DEADLINE 捐赠者参数。这导致 `enqueue_task_dl()` 无法识别该锁持有者处于被提升状态，进而引发带宽统计混乱。
+
+具体故障场景如下：
+1. 一个 DEADLINE 任务（捐赠者）阻塞在另一个 DEADLINE 任务（持有者）持有的 PI mutex 上，但持有者未继承参数（因其已有更短的 deadline）。
+2. 在持有者仍持有 mutex 时，`sched_setscheduler()` 将其从 DEADLINE 切换到更低优先级的类。
+3. 持有者此时应继承捐赠者的 DEADLINE 参数并以 `ENQUEUE_REPLENISH` 标志入队，但原逻辑未执行此操作。
+
+#解决方案
+引入新函数 `__setscheduler_dl_pi()` 用于检测 DEADLINE 任务（包括自身是或被提升为）被 setschedule 到更低优先级类的情况。
+在该情况下，函数使任务继承捐赠者（pi_se）的 DEADLINE 参数，并设置 `ENQUEUE_REPLENISH` 标志，确保在下一次入队操作时进行正确的带宽统计与补充。在 `__sched_setscheduler()` 流程中调用该函数以修复此缺陷。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0ee4371c8c32558332ad709909c0e1b051b25a7f

@@ -1,0 +1,22 @@
+#标题
+sja1105驱动删除表项时触发KASAN越界警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 sja1105_table_delete_entry 函数删除 DSA 交换机驱动中的表项时，内核触发 KASAN (KernelAddressSANitizer) 越界访问警告。
+
+#主要错误日志
+KASAN: out-of-bounds in sja1105_table_delete_entry
+
+#问题根因
+函数 sja1105_table_delete_entry 在执行 memmove 操作时，计算源地址和拷贝长度的逻辑存在错误：
+1. 未对边界条件进行校验，当删除最后一个表项（即 `i` 等于 `table->entry_count - 1`）时，计算出的源地址 `entries + (i + 1) * entry_size` 已经超出了有效条目的范围。
+2. 拷贝长度计算公式 `(table->entry_count - i) * entry_size` 同样包含了无效的内存区域，导致内存越界访问。
+
+#解决方案
+在执行 memmove 之前增加边界判断条件 `if (i + 1 < table->entry_count)`，仅当被删除项不是最后一项时才执行内存移动操作；同时修正拷贝长度计算公式为 `(table->entry_count - i - 1) * entry_size`，确保操作严格限制在有效表项范围内。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/909e4c1d99f90757a7c9164d64fcddc6745516c4

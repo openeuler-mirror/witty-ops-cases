@@ -1,0 +1,24 @@
+#标题
+cls_flower 删除流程中掩码引用计数处理逻辑错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在内核代码合并过程中，`cls_flower` 模块的 `__fl_delete` 函数意外包含了不相关的错误变更。原错误代码引入了未使用的局部变量 `mask`，并调整了 `fl_mask_put` 的调用位置，使其延迟到 `fl_hw_destroy_filter` 和 `__fl_put` 之后执行。这种变更可能导致在流规则删除过程中，掩码对象的引用计数释放时机不正确，进而引发潜在的内存管理问题或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+开发人员在应用 commit 4ca07b9239bd ("net: mctp i2c: check length before marking flow active") 时，无意中包含了两项不相关且不可接受的变更：
+1. 在 `__fl_delete` 函数中声明了一个未使用的局部变量 `struct fl_flow_mask *mask`。
+2. 将 `fl_mask_put(head, f->mask)` 的调用点移动，使其脱离了正常的逻辑顺序（原逻辑应在硬件销毁过滤器之前处理掩码引用）。
+
+#解决方案
+还原 `net/sched/cls_flower.c` 文件中的意外变更：
+1. 移除无用的 `struct fl_flow_mask *mask` 变量声明。
+2. 将 `fl_mask_put(head, f->mask)` 调用恢复至原位置，确保在调用 `fl_hw_destroy_filter` 之前正确处理掩码引用，同时直接将返回值赋给 `*last`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a7cb38c59e4c0be333e2ac9818c391654eb41f66

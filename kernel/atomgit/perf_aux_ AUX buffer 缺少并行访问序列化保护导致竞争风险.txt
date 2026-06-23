@@ -1,0 +1,24 @@
+#标题
+perf/aux: AUX buffer 缺少并行访问序列化保护导致竞争风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下对 PERF AUX buffer 进行 mmap 操作时，因缺少专用的互斥锁保护，可能导致 AUX buffer 的序列化不完整，进而引发竞争条件。该问题可能表现为数据流损坏、内存管理状态不一致或内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+原实现中仅使用 `event->mmap_mutex` 来试图序列化 AUX buffer，但该锁不足以提供完整的序列化保护。AUX buffer 作为一个严格的子缓冲区，在并发 mmap 访问时缺乏独立且粒度合适的锁机制，导致存在竞争风险。
+
+#解决方案
+在 `perf_buffer` 结构体中新增专用的 `aux_mutex` 互斥锁，用于专门序列化 AUX buffer 的访问。
+1. 修改 `perf_mmap_close` 函数，将 AUX buffer 相关的锁定与解锁操作从 `event->mmap_mutex` 替换为 `rb->aux_mutex`。
+2. 修改 `perf_mmap` 函数，在处理 AUX buffer 前获取 `rb->aux_mutex`，处理完成后释放。
+3. 在 `ring_buffer_init` 中初始化新增的 `aux_mutex`，确保锁可用。
+此举确保了 AUX buffer 的完全序列化，避免了多线程并发访问时的竞争条件。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a765a93281f4f56cf9206dfcff8f5c497e97d4cc

@@ -1,0 +1,20 @@
+#标题
+nouveau/svm: 修复 make_device_exclusive_range() 失败后 folio 未解锁与引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 nouveau SVM（共享虚拟内存）原子访问操作时，若 `make_device_exclusive_range()` 函数内部因获取 folio 锁失败需要重试，会导致该函数持续失败，无法成功执行。同时，函数返回时 folio 仍处于加锁且引用计数未减少的状态，导致内核资源泄漏及后续操作阻塞。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `nouveau_atomic_range_fault` 函数的重试循环路径中，代码逻辑遗漏了对 folio 的解锁（`folio_unlock`）和引用计数释放（`folio_put`）操作。当因为 `mmu_interval_read_retry` 检查失败而进入重试时，此前已获取的 folio 未被正确释放，导致后续再次调用 `make_device_exclusive_range()` 时因无法获取 folio 锁而死循环式失败，且该 folio 永远处于 locked 和 referenced 状态。
+
+#解决方案
+在重试循环的退出点（`mutex_unlock` 之后）补充缺失的 `folio_unlock(folio)` 和 `folio_put(folio)` 调用，确保在重试前释放对 folio 的占用。同时，将函数末尾正常路径下的 `unlock_page` 和 `put_page` 调用统一替换为 `folio_unlock` 和 `folio_put`，以保持代码接口的一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/afea20b13b3d5a6c5e84996429f54fe7a4b2e896

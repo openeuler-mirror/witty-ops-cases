@@ -1,0 +1,24 @@
+#标题
+dell_rbu 驱动 list 遍历接口误用导致链表操作异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 dell_rbu (Remote BIOS Update) 驱动进行 BIOS 更新包的读取或清理操作时，由于链表遍历接口参数传入错误，导致内核无法正确遍历链表头，可能引发内核宕机（kernel panic）或内存访问越界，造成 BIOS 更新流程失败。
+
+#主要错误日志
+未知
+
+#问题根因
+代码编写时对 `list_for_each_entry` 和 `list_for_each_entry_safe` 宏的参数理解有误。代码中错误地将 `(&packet_data_head.list)->next`（即链表第一个节点的地址）作为链表头指针传入，而不是传入链表头 `&packet_data_head.list`。
+正确的宏定义要求传入链表头指针，宏内部会自动处理从 `head->next` 开始遍历。错误的参数导致遍历逻辑直接以首节点为“头”，跳过了链表头的校验或导致指针指错位置，引发严重的逻辑错误。
+
+#解决方案
+修正 `packet_read_list` 和 `packet_empty_list` 函数中的链表遍历调用：
+1. 将 `list_for_each_entry` 的第二个参数从 `(&packet_data_head.list)->next` 修改为 `&packet_data_head.list`。
+2. 将 `list_for_each_entry_safe` 的第二个参数从 `(&packet_data_head.list)->next` 修改为 `&packet_data_head.list`。
+确保传入的是链表头部的指针，使链表遍历宏能正确地从头节点的下一个节点开始迭代。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1026928bfdb2704986f245fd633f5cf61a615490

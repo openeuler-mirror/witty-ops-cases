@@ -1,0 +1,21 @@
+#标题
+cpufreq: CPPC: 修复 cppc_scale_freq_workfn 中的错误处理逻辑
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 CPU 处于低功耗空闲状态时，性能计数器读取可能返回 0 或失败。原有逻辑未区分临时性错误（如空闲状态）与实际故障，导致在 CPU 仅处于空闲状态时错误地终止频率更新流程，或者在发生真实读取故障时未正确移除频率不变性（FIE）源，可能导致后续持续报错或频率统计功能异常。
+
+#主要错误日志
+pr_warn("%s: failed to read perf counters\n", __func__);
+
+#问题根因
+Perf counters（性能计数器）在 CPU 处于低功耗空闲状态时可能为 0。原代码在 `cppc_get_perf_ctrs` 返回错误时，未区分由于空闲状态导致的临时性错误（如 -EFAULT）和实际失败，统一进行了错误处理，既导致不必要的重试失败，也未在实际失败时清理 FIE source。
+
+#解决方案
+1. 区分错误类型：若 `cppc_get_perf_ctrs` 返回 `-EFAULT`，视为 CPU 处于空闲状态导致的临时情况，直接返回等待下一次尝试，不进行错误处理。
+2. 完善失败处理：对于其他非 `-EFAULT` 的错误返回值，打印警告日志，并调用 `topology_clear_scale_freq_source` 移除 CPPC 频率源，防止持续失败。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2eab37aa8a55cdb8b85a912a4b1156c39689c89d

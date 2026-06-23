@@ -1,0 +1,24 @@
+#标题
+gpio: virtio: 修复配置空间读取不符合 Virtio 规范问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+virtio-gpio 驱动在读取设备配置空间时未遵循 Virtio 规范要求的访问宽度与对齐方式，可能导致在某些架构或实现下读取到错误的 GPIO 配置信息（如 GPIO 数量 ngpio 或名称大小 gpio_names_size），进而引发驱动初始化异常或功能错误。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Virtio 规范第 4.2.2.2 章节，驱动程序访问设备特定配置空间时必须遵循严格的宽度与对齐规则：8 位字段必须使用 8 位宽访问，16 位字段必须使用 16 位宽且对齐的访问，32 位和 64 位字段同理。
+原代码使用 `virtio_cread_bytes` 函数以字节流方式一次性读取整个 `virtio_gpio_config` 结构体，再通过内存偏移解析字段，这种方式违反了上述规范，可能导致硬件无法正确响应非对齐或非标准宽度的配置空间访问。
+
+#解决方案
+修改 `virtio_gpio_probe` 函数中的配置读取逻辑，不再使用 `virtio_cread_bytes` 批量读取，改为针对具体字段使用符合规范的访问函数：
+1. 对于 32 位的 `gpio_names_size` 字段，使用 `virtio_cread32` 并结合 `offsetof` 指定偏移量进行读取。
+2. 对于 16 位的 `ngpio` 字段，使用 `virtio_cread16` 并结合 `offsetof` 指定偏移量进行读取。
+以此确保配置空间的访问操作完全符合 Virtio 规范要求。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b44a815f00a36e554987f48d2f3fd3c146b11604

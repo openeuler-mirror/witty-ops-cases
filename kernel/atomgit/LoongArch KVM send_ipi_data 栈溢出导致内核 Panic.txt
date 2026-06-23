@@ -1,0 +1,32 @@
+#标题
+LoongArch KVM send_ipi_data 栈溢出导致内核 Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 `CONFIG_STACKPROTECTOR` 的情况下，LoongArch KVM 虚拟机处理 IPI（处理器间中断）数据读写时触发栈溢出保护机制，导致内核 Panic。具体场景为模拟访问 IOCSR 寄存器时调用 `send_ipi_data` 函数。
+
+#主要错误日志
+Kernel panic - not syncing: stack-protector: Kernel stack is corrupted in: send_ipi_data+0x194/0x1a0 [kvm]
+PREEMPT(full)
+Stack : 9000000005901568 0000000000000000 9000000003af371c 900000013c68c000
+...
+[<9000000003ad0ca8>] panic+0x3c/0x40
+[<9000000004eb0a1c>] __stack_chk_fail+0x14/0x18
+[<ffff8000023473f8>] send_ipi_data+0x190/0x1a0 [kvm]
+[<ffff8000023313e4>] __kvm_io_bus_write+0xa4/0xe8 [kvm]
+[<ffff80000233147c>] kvm_io_bus_write+0x54/0x90 [kvm]
+[<ffff80000233f9f8>] kvm_emu_iocsr+0x180/0x310 [kvm]
+[<ffff80000233fe08>] kvm_handle_gspr+0x280/0x478 [kvm]
+[<ffff8000023443e8>] kvm_handle_exit+0xc0/0x130 [kvm]
+
+#问题根因
+在 `send_ipi_data()` 函数中，局部变量 `val` 原本定义为 `uint32_t` 类型，但在调用 `kvm_io_bus_read()` 时，底层的模拟函数（如 `loongarch_ipi_readl()` 和 `kvm_eiointc_read()`）会忽略传入的长度参数，强制以 8 字节方式进行符号扩展写入。
+由于 `val` 仅有 4 字节大小且可能位于栈上，8 字节的写入操作导致缓冲区溢出，覆盖了相邻的栈内存。当开启 `CONFIG_STACKPROTECTOR` 时，栈保护机制检测到栈被破坏，从而触发 Panic。
+
+#解决方案
+将 `send_ipi_data()` 函数中的变量 `val` 类型从 `uint32_t` 修改为 `u64`（64位），确保缓冲区大小足以容纳 8 字节数据；同时修正 `kvm_io_bus_read` 和 `kvm_io_bus_write` 调用时的长度参数，明确指定操作长度为 4 字节，以匹配实际的寄存器访问宽度。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8a064d94144fb750319eb5fab778713637083712

@@ -1,0 +1,25 @@
+#标题
+iommu/vt-d: kdump内核中设备释放时触发空指针崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 kdump 内核环境中，IOMMU 处于 deferred_attach 模式。当设备（如通过 pci_remove_bus_device 移除的设备）被释放时，`intel_iommu_release_device` 函数访问 `info->domain` 成员引发内核崩溃。具体表现为内核 NULL 指针解引用，导致系统 panic。
+
+#主要错误日志
+BUG: kernel NULL pointer dereference, address: 000000000000003c
+...
+RIP: 0010:do_raw_spin_lock+0xa/0xa0
+...
+_raw_spin_lock_irqsave+0x1b/0x30
+intel_iommu_release_device+0x96/0x170
+
+#问题根因
+在 kdump 内核中，IOMMU 运行在 deferred_attach 模式，此时设备的 `info->domain` 可能尚未分配。当调用 `intel_iommu_release_device` 时，旧代码逻辑直接尝试获取 `info->domain` 的锁（`spin_lock_irqsave(&domain->lock, flags)`），由于 `domain` 指针为 NULL，导致解引用空地址而发生崩溃。
+
+#解决方案
+引入 `release_domain` 机制，将 `intel_iommu_ops` 的 `release_domain` 指向 `blocking_domain`。重构 `intel_iommu_release_device` 函数，移除旧有的 `dmar_remove_one_dev_info` 调用，改为判断如果是可扩展模式且非真实 DMA 子设备，则调用 `intel_pasid_teardown_sm_context` 清理上下文条目，从而避免在设备释放路径中访问可能为空的 `info->domain`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/21dc2d6272faec76e38f296998098ae49883fcde

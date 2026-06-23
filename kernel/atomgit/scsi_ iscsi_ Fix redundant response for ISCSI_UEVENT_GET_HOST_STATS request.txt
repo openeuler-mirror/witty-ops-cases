@@ -1,0 +1,20 @@
+#标题
+scsi: iscsi: Fix redundant response for ISCSI_UEVENT_GET_HOST_STATS request
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 ISCSI_UEVENT_GET_HOST_STATS 请求时，系统发送了冗余的响应。具体表现为：当用户空间发起获取主机统计信息的请求且执行成功时，内核在 `iscsi_get_host_stats()` 函数内部已经发送了包含统计数据的回复，但在外层 `iscsi_if_rx()` 处理逻辑中，仍会再次调用 `iscsi_if_send_reply()` 发送一个空的或多余的确认响应，导致用户空间接收到重复的消息。
+
+#主要错误日志
+未知
+
+#问题根因
+内核 `iscsi_if_rx()` 函数中缺少对 `ISCSI_UEVENT_GET_HOST_STATS` 请求类型的特殊处理逻辑。根据代码流程，该请求在 `if_recv_msg()` 调用的 `iscsi_get_host_stats()` 中已经处理并发送了回复，但 `iscsi_if_rx()` 未像处理 `ISCSI_UEVENT_GET_STATS` 和 `ISCSI_UEVENT_GET_CHAP` 那样在成功后直接退出（break），而是继续执行了后续的通用回复发送路径，导致冗余响应被发出。
+
+#解决方案
+在 `iscsi_if_rx()` 函数的处理循环中，增加对 `ISCSI_UEVENT_GET_HOST_STATS` 事件的判断。当事件类型为 `ISCSI_UEVENT_GET_HOST_STATS` 且处理未返回错误（`!err`）时，直接跳出循环（break），跳过后续冗余的 `iscsi_if_send_reply()` 调用，确保仅在成功时不发送重复响应，仅在出错时按默认流程处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/241f59872179043a67f985c5272a2e0a66fd8b54

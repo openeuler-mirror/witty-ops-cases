@@ -1,0 +1,47 @@
+#标题
+UFS 挂起期间因竞态条件触发异步 SError 导致内核恐慌
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在执行 UFS（Universal Flash Storage）挂起流程时，触发 Asynchronous SError Interrupt，导致内核恐慌。错误发生在 `ufshcd_rtc_work()` 执行过程中，此时 UFS 设备正处于挂起状态。
+
+#主要错误日志
+Kernel panic - not syncing: Asynchronous SError Interrupt
+Call trace:
+ dump_backtrace+0xec/0x128
+ show_stack+0x18/0x28
+ dump_stack_lvl+0x40/0xa0
+ dump_stack+0x18/0x24
+ panic+0x148/0x374
+ nmi_panic+0x3c/0x8c
+ arm64_serror_panic+0x64/0x8c
+ do_serror+0xc4/0xc8
+ el1h_64_error_handler+0x34/0x4c
+ el1h_64_error+0x68/0x6c
+ el1_interrupt+0x20/0x58
+ el1h_64_irq_handler+0x18/0x24
+ el1h_64_irq+0x68/0x6c
+ ktime_get+0xc4/0x12c
+ ufshcd_mcq_sq_stop+0x4c/0xec
+ ufshcd_mcq_sq_cleanup+0x64/0x1dc
+ ufshcd_clear_cmd+0x38/0x134
+ ufshcd_issue_dev_cmd+0x298/0x4d0
+ ufshcd_exec_dev_cmd+0x1a4/0x1c4
+ ufshcd_query_attr+0xbc/0x19c
+ ufshcd_rtc_work+0x10c/0x1c8
+ process_scheduled_works+0x1c4/0x45c
+ worker_thread+0x32c/0x3e8
+ kthread+0x120/0x1d8
+ ret_from_fork+0x10/0x20
+
+#问题根因
+在 `__ufshcd_wl_suspend()` 函数中，取消 UFS RTC 任务的 `cancel_delayed_work_sync()` 调用位置不当。该函数被放置在 `ufshcd_vops_suspend(hba, pm_op, POST_CHANGE)` 之后，导致 `ufshcd_rtc_work()` 在 `ufshcd_vops_suspend()` 执行期间仍可能处于运行状态。
+当硬件不支持 `UFSHCD_CAP_CLK_GATING` 时，条件 `!hba->clk_gating.active_reqs` 始终为真，导致 `ufshcd_update_rtc()` 被执行。由于 `ufshcd_vops_suspend()` 通常会执行时钟门控操作，此时执行 `ufshcd_update_rtc()` 会触发硬件异常，从而引发 SError。
+
+#解决方案
+将 `cancel_delayed_work_sync(&hba->ufs_rtc_update_work)` 的调用移至 `ufshcd_vops_suspend(hba, pm_op, PRE_CHANGE)` 之前。这确保在进行挂起操作的预变更阶段之前，UFS RTC 工作任务已经完全完成或被取消，从而避免竞态条件和随后的硬件错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cc36538ba0f0a1e1b7267d9604118c6d77b4de04

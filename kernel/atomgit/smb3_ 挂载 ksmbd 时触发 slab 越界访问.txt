@@ -1,0 +1,20 @@
+#标题
+smb3: 挂载 ksmbd 时触发 slab 越界访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载（mount）ksmbd 服务时，内核发生 slab out of bounds（slab 越界）错误。该问题发生在解析服务器网络接口响应数据的过程中，由于对缓冲区边界校验不严，导致内存访问越界。
+
+#主要错误日志
+CIFS VFS: parse_server_interfaces: invalid Next pointer %zu > %zd
+
+#问题根因
+在 `parse_server_interfaces` 函数解析网络接口信息时，代码在遍历缓冲区过程中使用了 `next` 指针变量向后移动。如果 `next` 的值大于剩余的 `bytes_left`，指针移动将超出缓冲区范围，导致 slab 越界访问。此外，原代码在处理 Azure 环境下缓冲区对齐边界检查时也存在逻辑缺陷，可能访问不完整的接口信息结构体。
+
+#解决方案
+在 `fs/smb/client/smb2ops.c` 的循环遍历逻辑中增加边界校验：如果 `next` 指针的值大于剩余字节数 `bytes_left`，则判定为无效数据，打印错误日志并返回 `-EINVAL` 错误，避免越界访问。同时修正了结尾处针对 Azure 缓冲区对齐场景的判断逻辑，确保在访问 `p->Next` 成员前有足够的数据长度。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56172d5906a5f36fe2b852e08501e42e82965d18

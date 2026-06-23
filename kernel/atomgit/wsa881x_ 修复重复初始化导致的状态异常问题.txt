@@ -1,0 +1,22 @@
+#标题
+wsa881x: 修复重复初始化导致的状态异常问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+wsa881x 音频编解码器的 SoundWire update_status 回调函数在设备已处于 ATTACHED 状态时可能被重复调用，导致设备硬件寄存器被不必要的重复配置与初始化，可能引发配置状态冲突或设备功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+SoundWire update_status() 回调函数可能会以相同的 ATTACHED 状态被多次调用，但硬件初始化流程仅应在设备状态从 UNATTACHED 转换为 ATTACHED 时执行。原代码逻辑缺少状态判断与保护机制，导致在已连接状态下重复执行初始化函数 wsa881x_init()。
+
+#解决方案
+在 wsa881x_priv 结构体中新增 bool 类型的 hw_init 标志位用于记录初始化状态。
+1. 在 wsa881x_init() 函数入口处检查 hw_init 标志位，若已初始化则直接返回，避免重复执行；初始化完成后将该标志位置为 true。
+2. 在 wsa881x_update_status() 回调中，当检测到设备状态变为 SDW_SLAVE_UNATTACHED 时，将 hw_init 标志位重置为 false，确保下次重新连接时能正确执行初始化。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ad391df5bc8dfde5fc2e6ae268ec3a3a2ec8eaf0

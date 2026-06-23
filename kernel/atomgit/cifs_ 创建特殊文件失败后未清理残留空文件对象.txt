@@ -1,0 +1,20 @@
+#标题
+cifs: 创建特殊文件失败后未清理残留空文件对象
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 CIFS/SMB 协议创建特殊文件（如通过 reparse points）时，如果 CREATE 操作成功但后续的 SMB2_OP_SET_REPARSE 操作失败，服务器上会遗留一个空文件对象。该问题导致在服务器不支持该操作时，文件系统中出现非预期的空文件残留。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `smb2_get_reparse_inode` 函数中，创建特殊文件的流程分为两步：CREATE 和 SMB2_OP_SET_REPARSE。原逻辑在 CREATE 成功但 SMB2_OP_SET_REPARSE 失败时，没有回滚删除已创建的中间对象，导致空文件留在服务器上。
+
+#解决方案
+修改 `smb2_get_reparse_inode` 函数逻辑，捕获复合操作中各个步骤的输出结果。当检测到 CREATE 步骤成功（Status == STATUS_SUCCESS）但后续 SET_REPARSE 步骤失败时，调用 `smb2_unlink` 删除刚创建的中间对象，并释放相关的响应缓冲区资源，确保操作的原子性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6c15aa2a50a3c54195c7a036c9a0856ef95facf8

@@ -1,0 +1,21 @@
+#标题
+migration: RAS 错误处理后的状态更新逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当设备发生 RAS (Reliability, Availability, and Serviceability) 错误并触发 AER 处理流程时，驱动程序错误地跳过了迁移状态的更新操作。这导致设备在经过错误处理后，其内部迁移状态未得到正确清理或更新，可能导致后续的设备迁移功能异常或状态不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hisi_acc_vf_pci_aer_reset_done` 函数中，判断是否执行状态更新的逻辑存在笔误。原代码使用 `if (hisi_acc_vdev->core_device.vdev.mig_ops)` 来检查迁移操作指针，根据上下文逻辑，当指针存在（即支持迁移操作）时，原本的代码反而直接 `return` 退出了函数，导致应有的状态更新流程被意外跳过。
+
+#解决方案
+修正 `hisi_acc_vf_pci_aer_reset_done` 函数中的判断条件，将 `if (hisi_acc_vdev->core_device.vdev.mig_ops)` 修改为 `if (!hisi_acc_vdev->core_device.vdev.mig_ops)`。
+修改后的逻辑为：若设备不支持迁移操作（mig_ops 为空），则直接返回；若支持迁移，则继续持有互斥锁并执行后续的状态更新流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ca83de3cbd1afcc3038a46ab4c4c4626b9a4712

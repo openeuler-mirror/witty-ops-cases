@@ -1,0 +1,22 @@
+#标题
+i.MX6QDL PCIe 控制器挂起恢复支持异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 i.MX6QDL 平台上进行系统挂起和恢复操作时，PCIe 子系统无法正常工作。受 ERR005723 errata 影响，PCIe 不支持 L2 电源下电，直接执行标准的挂起流程会导致恢复后 PCIe 链路无法建立或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根本原因是硬件存在 ERR005723 errata，即 PCIe 不支持 L2 power down。原驱动代码在挂起流程中未针对该 errata 进行特殊处理，导致挂起恢复流程与硬件实际能力不匹配，进而引发功能失效。
+
+#解决方案
+针对受 ERR005723 影响的 i.MX6QDL 设备，引入 `IMX6_PCIE_FLAG_BROKEN_SUSPEND` 标志位并在 `drvdata` 中置位。修改挂起与恢复回调函数逻辑：
+1. 挂起时：跳过原有的 L2 电源下电流程，改为 Assert Core Reset 并保持参考时钟，以此作为最低限度的变通方案以节省功耗。
+2. 恢复时：重新使能参考时钟、Deassert Core Reset，并重新配置 Root Complex 及恢复 MSI 寄存器，以修复因使用特定电源管理位导致的 PCIe 功能丢失。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3244b551bf61f4d9ad242ebfcb740a5925c05ce3

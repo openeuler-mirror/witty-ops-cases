@@ -1,0 +1,22 @@
+#标题
+procfs: 读取 /proc/[pid]/stat 时因缺少 RCU 保护导致 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在读取 /proc/[pid]/stat 文件时，内核可能发生 Use-After-Free (UAF) 错误，导致内核崩溃或不稳定。该问题在多核并发场景下触发，具体表现为访问已释放的 task_struct 结构体。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `do_task_stat()` 函数中访问 `task->real_parent` 时，使用了 `task_tgid_nr_ns()` 函数而非 `task_ppid_nr_ns()`。这导致在获取 `task->real_parent` 指针时未处于 RCU 临界区内。
+当 CPU 0 读取 `task->real_parent` 后，CPU 1 可能并发执行 `release_task` 并通过 `call_rcu` 释放该 parent task 结构体。此时 CPU 0 继续在 `task_tgid_nr_ns` 内部调用 `rcu_read_lock` 为时已晚，无法保护之前获取的指针，进而导致访问已释放内存（UAF）。
+
+#解决方案
+将 `do_task_stat()` 中获取父进程 PID 的调用从 `task_tgid_nr_ns(task->real_parent, ns)` 替换为 `task_ppid_nr_ns(task, ns)`。
+`task_ppid_nr_ns()` 函数内部封装了正确的 RCU 保护逻辑，确保在访问 `task->real_parent` 时持有 RCU 锁，从而防止并发释放导致的 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb7dc82f11a78eb6e3c0e257e93b2fa97a645f90

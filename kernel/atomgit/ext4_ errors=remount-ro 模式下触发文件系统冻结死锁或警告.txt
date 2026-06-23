@@ -1,0 +1,21 @@
+#标题
+ext4: errors=remount-ro 模式下触发文件系统冻结死锁或警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 ext4 文件系统以 `errors=remount-ro` 选项挂载时，若触发文件系统错误导致内核尝试将文件系统重挂载为只读，可能会引发内核警告甚至死锁。具体表现为：文件系统冻结流程（如执行 freeze 操作）中代码逻辑被混淆，检测到 `SB_RDONLY` 状态异常变化，从而触发 WARNING 或导致系统挂起。
+
+#主要错误日志
+Remounting filesystem read-only
+（推断）内核可能在冻结检查路径中打印 WARNING 或 Call Trace，提示 SB_RDONLY 状态不一致或锁竞争问题（参考 Link: https://lore.kernel.org/all/000000000000b90a8e061e21d12f@google.com）。
+
+#问题根因
+在处理文件系统错误并执行 `errors=remount-ro` 逻辑时，内核直接设置 `sb->s_flags |= SB_RDONLY` 标志位，而未持有 `sb->s_umount` 信号量且未经过标准的重挂载流程。这种非标准的只读状态设置干扰了其他内核子系统（如 `freeze_super()`）对超级块状态的判断，导致相关代码被 `SB_RDONLY` 的突变所混淆，进而引发死锁或警告。
+
+#解决方案
+移除在错误处理路径中直接设置 `SB_RDONLY` 标志位的代码。由于当前代码在错误处理时已经设置了 `EXT4_FLAGS_SHUTDOWN` 标志，该标志足以阻止所有文件系统修改操作，不再需要额外设置 `SB_RDONLY`。此举避免了因缺少锁保护而导致的死锁及状态不一致问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/88a5f8ce0c0bce7d85d112a8ca819557d428e50f

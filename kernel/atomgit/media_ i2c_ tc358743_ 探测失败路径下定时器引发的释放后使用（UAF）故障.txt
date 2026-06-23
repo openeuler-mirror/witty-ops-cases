@@ -1,0 +1,35 @@
+#标题
+media: i2c: tc358743: 探测失败路径下定时器引发的释放后使用（UAF）故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 tc358743 驱动探测（probe）失败的场景下，内核发生释放后使用。KASAN 检测到 `swapper/1` 任务在处理定时器软中断时，写入了已被释放的 `tc358743_state` 对象内存。故障导致内核抛出 "BUG: KASAN: slab-use-after-free" 并打印详细的调用栈追踪。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in __run_timer_base.part.0+0x7d7/0x8c0
+Write of size 8 at addr ffff88800ded83c8 by task swapper/1/0
+...
+Call Trace:
+ <IRQ>
+ dump_stack_lvl+0x55/0x70
+ print_report+0xcf/0x610
+ kasan_report+0xb8/0xf0
+ __run_timer_base.part.0+0x7d7/0x8c0
+...
+
+#问题根因
+`state->timer` 是一个循环定时器，用于调度 `work_i2c_poll` 和 `delayed_work_enable_hotplug`，并在执行后重新设置自身。
+在驱动探测失败的错误处理路径中，代码使用 `timer_delete()`（旧接口 `del_timer`）和 `cancel_delayed_work()` 来终止定时器和工作队列。
+然而，`timer_delete()` 无法保证定时器回调函数已经执行完毕，`cancel_delayed_work()` 也无法确保正在执行的 `delayed_work_enable_hotplug` 已彻底终止。
+当探测失败继续执行资源清理时，定时器回调或工作队列可能仍在运行（成为孤儿任务），并引用已被释放的 `tc358743_state` 对象，从而触发释放后使用。
+
+#解决方案
+在探测失败的错误处理路径中，将异步终止接口替换为同步终止接口：
+1. 将 `del_timer(&state->timer)` 替换为 `timer_delete_sync(&state->timer)`，确保定时器回调彻底停止。
+2. 将 `cancel_delayed_work(&state->delayed_work_enable_hotplug)` 替换为 `cancel_delayed_work_sync(&state->delayed_work_enable_hotplug)`，确保工作队列任务彻底执行完毕或取消。
+通过同步等待机制，防止在定时器和工作还在运行时释放相关资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e79a4c8de8132879e87190ec0ee6bb7bb89a57c6

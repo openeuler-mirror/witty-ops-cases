@@ -1,0 +1,20 @@
+#标题
+drm/amdkfd: kfd_event_page_set 函数越界写入导致提权风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+非特权用户空间进程可以通过向 `kfd_event_page_set` 函数传递一个较小的缓冲区 size 参数，触发内核内存越界写入。该漏洞可能导致内核内存破坏，进而引发系统崩溃或造成权限提升。
+
+#主要错误日志
+Event page size %llu is too small, need at least %lu bytes
+
+#问题根因
+`kfd_event_page_set()` 函数在执行 `memset` 操作时，固定写入 `KFD_SIGNAL_EVENT_LIMIT * 8` 字节的数据，但未对传入的缓冲区 `size` 参数进行有效性校验。当用户空间传入的缓冲区 size 小于实际写入的大小时，即发生越界写。
+
+#解决方案
+在 `kfd_event_page_set()` 函数中增加边界检查逻辑，判断传入的 size 是否小于 `KFD_SIGNAL_EVENT_LIMIT * 8`。若缓冲区大小不足，则通过 `pr_err` 打印错误日志并返回 `-EINVAL`，阻止越界写入操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b97b6e74e1f70f73aa67aa9b5c0a95d03d3e16d0

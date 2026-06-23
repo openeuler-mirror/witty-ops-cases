@@ -1,0 +1,20 @@
+#标题
+bnxt 驱动在 mb-xdp-pass 场景下 truesize 计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 Broadcom bnxt 网卡驱动并开启 XDP 多缓冲（multi-buffer XDP）功能时，若数据包通过 XDP_PASS 路径传递给协议栈，会导致内核对 sk_buff 的 truesize 统计出现偏差。这可能引发 TCP 内存管理机制的异常反应，导致网络吞吐量下降或内存计数错误，严重时可能影响系统的网络性能稳定性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `bnxt_xdp_build_skb` 函数处理 XDP_PASS 路径时，传递给 `xdp_update_skb_shared_info` 的 truesize 参数计算逻辑有误。代码原本使用 `BNXT_RX_PAGE_SIZE * sinfo->nr_frags` 计算 truesize，但在 mb-xdp 场景下，sinfo 中记录的 frag 数量可能已经被消耗或不再准确，导致计算出的 truesize 不正确。正确的做法应使用当前实际的有效 frag 数量 `num_frags` 进行计算。
+
+#解决方案
+修改 `drivers/net/ethernet/broadcom/bnxt/bnxt_xdp.c` 文件中的 `bnxt_xdp_build_skb` 函数，将 truesize 的计算参数从 `sinfo->nr_frags` 修正为函数传入的 `num_frags`，确保 sk_buff 的 truesize 能够准确反映实际的数据片段大小。同时，在 `bnxt.c` 中补充了 `xdp_buff_has_frags` 的判断逻辑，以正确获取并更新 frags 数量。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/56d3adf3404bbb781fed2d1a8d1d8eea752d1a72

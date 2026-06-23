@@ -1,0 +1,23 @@
+#标题
+LoongArch CPU热拔插时定时器未关闭导致虚拟机vCPU线程占用过高
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在物理CPU下线时，LoongArch 架构的定时器未正确关闭。该问题对物理机无害，但在虚拟机场景下，会导致被下线的 vCPU 线程 CPU 使用率异常飙升，呈现极高的占用率。
+
+#主要错误日志
+- 推断日志（若热插拔注册失败）：
+  `Failed to setup timer hotplug state: %d\n`
+
+#问题根因
+当 CPU 执行下线操作时，LoongArch 定时器未被正确关闭。此外，在关闭定时器之前，可能因为中断被禁用而存在处于 pending 状态的定时器中断，这两个因素共同作用导致虚拟机中离线 vCPU 线程无法正确进入暂停状态，进而导致高 CPU 占用。
+
+#解决方案
+1. 为 LoongArch 架构注册 CPU 热插拔事件（CPUHP_AP_LOONGARCH_ARCH_TIMER_STARTING）。
+2. 实现 `arch_timer_dying` 回调函数，在 CPU 下线时调用 `constant_set_state_shutdown` 关闭定时器。
+3. 在关闭定时器后，显式清除定时器中断状态（写 `CSR_TINTCLR_TI`），以消除 pending 状态的中断，确保 vCPU 线程能正确 halt。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0defd1ee1ef178a23742e0fc4bf88ca87cdc733a

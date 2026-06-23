@@ -1,0 +1,20 @@
+#标题
+pinctrl: samsung: 修复 platform_get_irq_optional() 失败时的 fwnode 引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Samsung pinctrl 驱动探测过程中，若 `samsung_pinctrl_get_soc_data()` 执行成功但随后 `platform_get_irq_optional()` 调用失败，驱动将直接返回错误码退出，导致已获取的 pin banks 子节点引用（fwnode refcount）未被释放，造成内存资源泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit a382d568f144 引入了 `platform_get_irq_optional()` 调用，但在其错误处理路径中使用了直接 `return ret` 语句。此时 `samsung_pinctrl_get_soc_data()` 已成功获取了 pin banks 的引用，直接返回跳过了后续的清理逻辑，导致 fwnode 引用计数未减少。
+
+#解决方案
+修改 `samsung_pinctrl_probe` 函数中的错误处理逻辑，将 `platform_get_irq_optional()` 失败时的 `return ret` 替换为 `goto err_put_banks`，跳转至统一的清理函数以正确释放已获取的资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/61fb1adc826c43421415a2675bae30d46b18baf6

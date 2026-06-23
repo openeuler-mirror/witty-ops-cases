@@ -1,0 +1,23 @@
+#标题
+bpf: 结构体 module 新增成员导致 KABI 破损
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在合入 resilient split BTF 特性补丁后，内核结构体 `struct module` 的布局发生变化（新增了 `btf_base_data_size` 和 `btf_base_data` 成员），导致 KABI（内核应用程序二进制接口）一致性校验失败，可能引发内核模块加载异常或系统稳定性问题。
+
+#主要错误日志
+未知
+
+#问题根因
+在反向移植 resilient split BTF 功能时，直接向 `struct module` 添加了 `unsigned int btf_base_data_size` 和 `void *btf_base_data` 成员。原补丁未充分利用结构体中的空洞和保留域，破坏了结构体的二进制布局，导致 KABI 破损。
+
+#解决方案
+利用 KABI 补丁机制对结构体布局进行修复，确保 KABI 兼容性：
+1. 利用 `KABI_FILL_HOLE` 宏将 `btf_base_data_size` 成员填充到结构体现有的 4 字节空洞中。
+2. 利用 `KABI_USE` 宏将原本保留的 `KABI_RESERVE(1)` 空间分配给 `btf_base_data` 成员使用。
+3. 移除多余的 `KABI_DEPRECATE` 定义，恢复 `CONFIG_DEBUG_INFO_BTF_MODULES` 配置下的标准定义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f30448cd3867394afef484d74efa1e6e257b618b

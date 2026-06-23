@@ -1,0 +1,20 @@
+#标题
+v4l2_subdev_call_state_try 宏未处理内存分配失败导致空指针或非法访问
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 `__v4l2_subdev_state_alloc` 分配内存失败时，`v4l2_subdev_call_state_try` 宏未对返回值进行有效性检查，直接对无效指针执行 `v4l2_subdev_lock_state` 等操作，可能导致内核 panic 或非法地址访问。
+
+#主要错误日志
+未知
+
+#问题根因
+`v4l2_subdev_call_state_try` 宏在调用 `__v4l2_subdev_state_alloc` 获取状态结构体后，缺失了对 `IS_ERR(state)` 的判断逻辑。若内存分配失败，函数返回错误指针，后续代码直接解引用该指针进行加锁操作，从而引发内核崩溃。
+
+#解决方案
+在 `v4l2_subdev_call_state_try` 宏定义中增加对 `state` 指针的有效性检查。使用 `IS_ERR(state)` 判断分配是否成功：若失败则将错误码 `PTR_ERR(state)` 赋给 `__result` 并直接返回；若成功则继续执行原有的加锁、调用、解锁和释放流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4bd802eb810aced0425a9fbdedbf306c0c1e0fda

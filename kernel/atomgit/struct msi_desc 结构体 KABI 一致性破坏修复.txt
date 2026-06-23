@@ -1,0 +1,20 @@
+#标题
+struct msi_desc 结构体 KABI 一致性破坏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核升级或热补丁加载过程中，由于 `struct msi_desc` 结构体大小或成员偏移量发生变化，导致 KABI（内核应用程序二进制接口）一致性检查失败。这可能引发内核模块加载异常、内核 panic 或依赖于该结构体布局的驱动程序运行时错误。
+
+#主要错误日志
+未知
+
+#问题根因
+上游提交 7d0625984422 ("genirq/msi: Store the IOMMU IOVA directly in msi_desc instead of iommu_cookie") 对 `struct msi_desc` 结构体进行了修改，将原有的 `const void *iommu_cookie` 成员替换为了 `u64 iommu_msi_iova` 和 `u64 iommu_msi_shift` 两个位域成员。这一变更改变了结构体的成员布局和大小，从而破坏了内核 KABI 的稳定性。
+
+#解决方案
+在 `include/linux/msi.h` 的 `struct msi_desc` 定义中引入 KABI 兼容性处理。通过 `#ifdef __GENKSYMS__` 宏控制，在生成符号表时保留原有的 `const void *iommu_cookie` 成员，而在实际编译时使用新的位域成员 `iommu_msi_iova` 和 `iommu_msi_shift`。该方法确保了导出的内核符号与旧版本一致，修复了 KABI break 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e429a04885c8df8705288abfb10a28d62dec8de4

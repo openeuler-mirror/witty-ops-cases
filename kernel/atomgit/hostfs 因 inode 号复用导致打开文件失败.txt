@@ -1,0 +1,26 @@
+#标题
+hostfs 因 inode 号复用导致打开文件失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hostfs 文件系统中，应用程序打开新建文件时收到 -ENXIO 错误。该问题发生在特定场景下：应用程序创建并删除了一个 socket 文件后，宿主机文件系统（如 ext4）复用了该 inode 号，导致 hostfs 错误地复用了缓存中的旧 inode（socket 类型），从而使后续针对新建文件的操作失败。
+
+#主要错误日志
+未知
+
+#问题根因
+宿主机文件系统（如 ext4）在 inode 不再使用时会复用 inode 号。hostfs 通常会为每个 inode 保持一个打开的文件描述符（FD）以防止此类问题，但对于 socket 等特殊文件无法打开 FD。
+当发生以下事件序列时触发故障：
+1. 应用程序创建并删除一个 socket；
+2. hostfs 在宿主机上创建/删除该 socket，但 inode 仍残留在 hostfs 缓存中；
+3. 宿主机创建新文件并复用了之前 socket 的 inode 号；
+4. hostfs 查找 inode 时，仅比对 inode 号和设备号，导致新建文件错误匹配到缓存中旧的 socket inode；
+5. 应用程序尝试打开该文件时，因 inode 类型不匹配（期望普通文件但实际是 socket）而返回 -ENXIO。
+
+#解决方案
+修改 `hostfs_inode_test` 函数，在查找比对 inode 时，增加对 inode 类型（`i_mode`）和创建时间（`btime`）的校验。同时，将底层的 `stat64` 调用升级为 `statx` 以支持获取文件的创建时间（birth time），从而确保在 inode 号被复用时，hostfs 能正确区分新旧文件并创建新的 inode，避免错误复用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/945f4411c53a268f13f415188eb05be847919c6b

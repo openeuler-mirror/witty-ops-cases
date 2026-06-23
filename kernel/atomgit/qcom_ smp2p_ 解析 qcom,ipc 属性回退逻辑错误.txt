@@ -1,0 +1,20 @@
+#标题
+qcom: smp2p: 解析 qcom,ipc 属性回退逻辑错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Qualcomm 平台上，当设备树中缺少 `mboxes` 属性时，smp2p 驱动probe过程本应回退尝试解析旧的 `qcom,ipc` 属性，但由于错误码判断逻辑未同步更新，导致驱动加载失败，smp2p 通信功能无法建立。
+
+#主要错误日志
+未知
+
+#问题根因
+上游 commit 24fdd5074b20 ("mailbox: use error ret code of of_parse_phandle_with_args()") 修改了 `mbox_request_channel()` 函数的错误返回值行为。当设备树节点中不存在 `mboxes` 属性时，该函数现在返回 `-ENOENT` 而非之前的 `-ENODEV`。smp2p 驱动中的判断逻辑 `if (PTR_ERR(smp2p->mbox_chan) != -ENODEV)` 未随之更新，导致无法识别“属性不存在”的情况，错误地直接返回了失败值，跳过了后续的 fallback 处理流程。
+
+#解决方案
+修改 `drivers/soc/qcom/smp2p.c` 中的错误码判断逻辑，将 `PTR_ERR(smp2p->mbox_chan)` 的比较值从 `-ENODEV` 修改为 `-ENOENT`，使其与 `mbox_request_channel()` 在无 `mboxes` 属性时的返回值相匹配，从而正确进入 fallback 流程解析 `qcom,ipc` 属性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/312d73d4bbd42e60bc0a7be2bfe89c38d2a188e4

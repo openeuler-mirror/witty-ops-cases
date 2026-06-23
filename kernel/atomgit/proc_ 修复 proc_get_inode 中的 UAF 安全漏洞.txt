@@ -1,0 +1,42 @@
+#标题
+proc: 修复 proc_get_inode 中的 UAF 安全漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行模块卸载（rmmod）与 `/proc` 下文件查找并发执行时，触发内核空指针或非法地址访问，导致内核 Panic（Oops）。具体表现为访问已释放模块内存地址，引发 `unable to handle page fault`。
+
+#主要错误日志
+BUG: unable to handle page fault for address: fffffbfff80a702b
+PGD 817fc4067 P4D 817fc4067 PUD 817fc0067 PMD 102ef4067 PTE 0
+Oops: Oops: 0000 [#1] PREEMPT SMP KASAN PTI
+CPU: 26 UID: 0 PID: 2667 Comm: ls Tainted: G
+RIP: 0010:proc_get_inode+0x302/0x6e0
+Call Trace:
+ <TASK>
+ proc_lookup_de+0x11f/0x2e0
+ __lookup_slow+0x188/0x350
+ walk_component+0x2ab/0x4f0
+ path_lookupat+0x120/0x660
+ filename_lookup+0x1ce/0x560
+ vfs_statx+0xac/0x150
+ __do_sys_newstat+0x96/0x110
+ do_syscall_64+0x5f/0x170
+ entry_SYSCALL_64_after_hwframe+0x76/0x7e
+
+#问题根因
+该故障是一个典型的 Use-After-Free (UAF) 竞争条件问题。
+根本原因在于 `proc_get_inode()` 函数在实例化 inode 时，直接解引用 `de->proc_ops` 指针（例如检查 `de->proc_ops->proc_read_iter`）。`pde->proc_ops` 指针指向的是内核模块定义的 `proc_ops` 结构体，而不属于 `/proc` 文件系统本身。
+当 `rmmod` 操作移除模块时，会调用 `proc_remove` 并最终释放模块内存；若此时并发存在 `/proc` 文件查找操作，`proc_get_inode` 可能在模块内存被释放后继续访问 `de->proc_ops`，导致访问非法内存地址。
+
+#解决方案
+修改 `proc_get_inode` 的逻辑，避免在 inode 实例化过程中直接解引用 `proc_ops` 指针。
+具体修复措施如下：
+1. 在 `proc_dir_entry` 结构体中新增标志位 `PROC_ENTRY_proc_read_iter` 和 `PROC_ENTRY_proc_compat_ioctl`。
+2. 在模块注册 proc 入口（`proc_register` 之前）时，预先解析 `proc_ops` 中的 `proc_read_iter` 和 `proc_compat_ioctl` 字段，并将结果保存到 `pde->flags` 中。
+3. 在 `proc_get_inode` 中，使用 `pde_has_proc_read_iter(de)` 和 `pde_has_proc_compat_ioctl(de)` 辅助函数检查标志位，替代直接解引用 `de->proc_ops`。
+此方法避免了在查找路径上执行原子操作（`use_pde/unuse_pde`），同时确保即使模块已卸载，也能安全访问保存在 PDE 自身的信息。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/5f8a75b00f4c0f2b9ac7857674fcee1d34d6ba0e

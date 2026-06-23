@@ -1,0 +1,25 @@
+#标题
+xsk: 删除元素时因类型转换导致越界写
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `xsk_map_delete_elem` 删除 AF_XDP socket map 元素时，若用户传入特定的键值，内核会触发页错误并发生 Oops。具体表现为内核无法处理越界的内存访问，导致系统崩溃或内存损坏。
+
+#主要错误日志
+[76612.897343] BUG: unable to handle page fault for address: ffffc8fc2e461108
+[76612.904330] #PF: supervisor write access in kernel mode
+[76612.909639] #PF: error_code(0x0002) - not-present page
+[76612.914855] PGD 0 P4D 0
+[76612.917431] Oops: Oops: 0002 [#1] PREEMPT SMP
+[76612.939781] RIP: 0010:xsk_map_delete_elem+0x2d/0x60
+
+#问题根因
+在 `xsk_map_delete_elem` 函数中，变量 `k` 被定义为 `int`（有符号整型），而 `map->max_entries` 为无符号整型。在进行比较 `if (k >= map->max_entries)` 时，由于隐式类型转换，若用户输入的 key 为负数，该边界检查会被绕过。随后该负数值作为数组索引用于 `m->xsk_map[k]`，导致越界访问（Out-of-Bounds access）。随后执行的 `xchg` 操作导致了越界写，进一步引发内存破坏。
+
+#解决方案
+将 `xsk_map_delete_elem` 函数中的局部变量 `k` 的类型从 `int` 修改为 `u32`，使其与传入的 key 指针类型及 map 定义保持一致，从而避免符号扩展导致的边界检查绕过问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bd9c69575245598c5caca1f2ee724526df7d3d1d

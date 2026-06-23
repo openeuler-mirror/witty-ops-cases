@@ -1,0 +1,20 @@
+#标题
+bpf: trie_get_next_key 函数存在越界写漏洞
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 BPF LPM TRIE map 操作中，当调用 `trie_get_next_key` 函数遍历具有从根节点到叶子节点完整路径的 trie 时，可能触发内核越界写。例如，在一个 `max_prefixlen` 为 8 的 trie 中插入了前缀长度从 0 到 8 的一组节点，当调用 `trie_get_next_key` 且参数 `_key` 的 `prefixlen` 为 8 时，会向大小为 8 的节点栈中写入 9 个节点，导致内存越界。
+
+#主要错误日志
+未知
+
+#问题根因
+`trie_get_next_key()` 函数在分配节点栈内存时，使用的分配大小为 `trie->max_prefixlen`。然而，当 trie 中存在从根到叶子的完整路径时（例如节点路径长度依次递增），该函数会向栈中写入 `trie->max_prefixlen + 1` 个节点。这导致分配的缓冲区大小不足，引发越界写。
+
+#解决方案
+修改 `kernel/bpf/lpm_trie.c` 中 `trie_get_next_key` 函数的内存分配逻辑，将 `kmalloc_array` 的分配大小参数从 `trie->max_prefixlen` 修正为 `trie->max_prefixlen + 1`，以确保栈空间足够容纳所有可能写入的节点。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6c128f0d583ba86ce42c0a7aa0a4749ae8bf0d2a

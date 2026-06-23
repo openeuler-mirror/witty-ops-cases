@@ -1,0 +1,24 @@
+#标题
+irqchip/gic-v3: ALLINT掩码逻辑错误导致系统无法响应中断
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在CPU支持FEAT_NMI特性但GICv3中断控制器不支持（或未启用）NMI功能的平台上，内核在处理IRQ时PSTATE.ALLINT未被正确清除。由于硬件在异常进入时自动置位ALLINT，导致ALLINT保持永久置位状态。这会屏蔽后续的标准IRQ和NMI，致使系统在执行软中断等后续流程中完全丧失对外部中断的响应能力。
+
+#主要错误日志
+- 推断日志（启动阶段）：`GICD_TYPER NMI is not supported.`
+- 注：故障本身表现为系统无响应/中断丢失，无特定运行时错误日志打印。
+
+#问题根因
+代码逻辑错误的将PE级别的状态寄存器PSTATE.ALLINT的管理与GICv3的NMI支持状态强耦合。
+原实现使用 `has_v3_3_nmi()`（依赖 `gic_data.has_nmi`）来判断是否清除 ALLINT。若GIC不支持NMI，即使CPU支持FEAT_NMI，代码也不会清除ALLINT。而硬件特性规定，只要PE支持FEAT_NMI且SCTLR_EL1.NMI已使能，异常进入时硬件会自动置位ALLINT。因此，当GIC不支持NMI时，ALLINT未被清除而保持置位，从而屏蔽了所有中断。
+
+#解决方案
+1. 修改 `__gic_handle_irq_from_irqson()` 和 `gic_handle_irq_noack()` 函数，将清除 ALLINT 的条件判断从 `has_v3_3_nmi()` 修改为 `system_uses_nmi()`。该函数仅检查PE硬件能力，确保只要CPU支持FEAT_NMI就正确清除ALLINT，解耦了对GIC NMI功能的依赖。
+2. 在GIC初始化阶段增加日志打印，显式输出GICD_TYPER.NMI状态，便于排查部署验证。
+3. 针对 `_allint_clear` 和 `_allint_set` 函数增加了 `#ifdef CONFIG_ARM64_NMI` 的空实现保护，防止配置缺失导致编译错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/afea3250e80871a6b79d5004d56c5020ed9be969

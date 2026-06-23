@@ -1,0 +1,20 @@
+#标题
+fbdev: offb 驱动探针失败导致 PCI 设备引用计数泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在初始化 offb (Open Firmware Framebuffer) 驱动时，若 PCI 设备获取成功但使能失败（`pci_enable_device` 返回错误），内核未释放已获取的 PCI 设备引用。这会导致该 PCI 设备的引用计数泄漏，可能阻碍后续对该设备的卸载或重新探测。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `offb_init_nodriver()` 调用 `pci_get_device()` 获取了一个 PCI 设备，这会增加设备的引用计数。当随后的 `pci_enable_device()` 调用失败时，代码逻辑直接返回，遗漏了调用 `pci_dev_put()` 来释放之前获取的引用计数，从而导致设备引用泄漏。
+
+#解决方案
+修改 `offb_init_nodriver()` 函数中的错误处理路径。将 `pci_enable_device()` 的判断逻辑拆分为独立的错误处理块：当 `pci_enable_device(pdev)` 失败时，显式调用 `pci_dev_put(pdev)` 释放设备引用，然后再返回，确保资源正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/937c1efdd0d55171d23c3505164973b0a82a1cfc

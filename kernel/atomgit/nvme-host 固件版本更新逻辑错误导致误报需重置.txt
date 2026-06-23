@@ -1,0 +1,23 @@
+#标题
+nvme-host 固件版本更新逻辑错误导致误报需重置
+
+#内核版本
+OLK-6.6
+
+#问题现象
+NVMe 控制器在执行固件激活后，内核未能正确更新显示的固件版本。特别是在“next slot”等于“current slot”的场景下，系统错误地打印日志提示 "Firmware is activated after next Controller Level Reset"，误导用户认为需要再次进行控制器重置才能生效，实际上此时固件版本应当被立即更新且无需重置。
+
+#主要错误日志
+"Firmware is activated after next Controller Level Reset"
+
+#问题根因
+内核代码对 NVMe AFI（Active Firmware Info）寄存器的判断逻辑存在缺陷。原代码逻辑认为只要“next slot”字段不为 0，或者“current slot”字段为 0，就需要重置。然而，NVMe 规范允许“next slot”与“current slot”值相等的情况，这表示当前固件槽位已在激活状态或将在下次重置后保持不变，此时并不需要额外的控制器重置，且固件版本应被视作已更新。原逻辑错误地涵盖了这一合法场景，导致固件版本未能及时更新并错误提示需要重置。
+
+#解决方案
+修改 `drivers/nvme/host/core.c` 中 `nvme_get_fw_slot_info` 函数的判断逻辑。仅在下述两种情况下才判定需要控制器重置并放弃更新固件版本：
+1. “current slot” 字段为 0（无效状态）。
+2. “next slot” 字段不为 0 且不等于 “current slot” 值（意味着下次重置将切换到不同的固件槽位）。
+对于“next slot”等于“current slot”的情况，代码将正常执行 `memcpy` 更新 `firmware_rev`，不再错误提示需要重置。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fd83df09eca278a0013a12e32decda922cfdf2b3

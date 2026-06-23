@@ -1,0 +1,21 @@
+#标题
+afs: 文件系统 cell 名称超长触发 procfs 创建失败及内核警告
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 kafs 文件系统的 cell 名称长度达到之前允许的最大值 256 字节时，内核在尝试于 `/proc/net/afs/` 下创建以 cell 名命名的目录时会失败。失败原因为 procfs 限制文件名最大长度为 255 字节，导致触发内核 WARNING。同时，这也可能导致无法创建 `/afs/.<cell>/` 挂载点。
+
+#主要错误日志
+WARNING: CPU: 0 PID: 9 at fs/proc/generic.c:405
+
+#问题根因
+kafs 文件系统定义的最大 cell 名称长度（AFS_MAXCELLNAME）为 256 字节，但 procfs 限制文件名最大长度为 255 字节。若 cell 名称过长，会导致 procfs 目录创建失败并触发警告。此外，DNS 协议本身限制查找长度为 255 字节（减去长度计数和结尾 NUL 实际为 253 字节），原定义未正确对齐此限制。
+
+#解决方案
+将 `AFS_MAXCELLNAME` 宏定义从 256 修改为 253，以符合 DNS 和 procfs 的限制。
+在 YFS VL 记录处理中，引入 `YFS_VL_MAXCELLNAME` 宏（保持 256 以适配协议），并在 `yfs_check_canonical_cell_name` 函数中增加校验逻辑：若从 YFS VL.GetCellName 获取的名称长度超过 253 字节，则返回 `-EOPNOTSUPP` 错误，从而防止超长名称进入系统。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7a8ef952da81e78c05f03b4d829edb005be85d7d

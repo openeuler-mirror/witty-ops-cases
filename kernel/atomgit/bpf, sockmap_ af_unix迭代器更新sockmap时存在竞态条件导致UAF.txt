@@ -1,0 +1,36 @@
+#标题
+bpf, sockmap: af_unix迭代器更新sockmap时存在竞态条件导致UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当BPF迭代器程序尝试更新sockmap时，若发生TCP_ESTABLISHED到TCP_CLOSE的状态转换，会触发竞态条件。该问题导致内核发生 slab-use-after-free 错误，具体表现为在 `unix_stream_bpf_update_proto` 函数中访问了已释放的 `peer` 指针。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in unix_stream_bpf_update_proto+0x155/0x490
+Write of size 4 at addr ffff8881178c9a00 by task test_progs/2231
+Call Trace:
+ dump_stack_lvl+0x5d/0x80
+ print_report+0x170/0x4f3
+ kasan_report+0xe4/0x1c0
+ kasan_check_range+0x125/0x200
+ unix_stream_bpf_update_proto+0x155/0x490
+ sock_map_link+0x71c/0xec0
+ sock_map_update_common+0xbc/0x600
+ sock_map_update_elem+0x19a/0x1f0
+ bpf_prog_bbbf56096cdd4f01_selective_dump_unix+0x20c/0x217
+ bpf_iter_run_prog+0x21e/0xae0
+ bpf_iter_unix_seq_show+0x1e0/0x2a0
+ bpf_seq_read+0x42c/0x10d0
+ vfs_read+0x171/0xb20
+ ksys_read+0xff/0x200
+
+#问题根因
+在 `bpf_iter_unix_seq_show` 中，代码仅持有 `lock_sock(sk)`，但在执行 BPF 程序更新 sockmap 时，`unix_stream_bpf_update_proto()` 会读取 `sk_pair = unix_peer(sk)`。此时，如果另一个 CPU 正在执行 close 操作（`unix_release_sock`），它会将 `unix_peer(sk)` 置空并释放 peer socket。由于缺乏 `unix_state_lock` 保护，BPF 侧读取到的 `sk_pair` 指针在后续操作（如 `sock_hold`）时可能已失效，导致 Use-After-Free。
+
+#解决方案
+在 `net/unix/af_unix.c` 的 `bpf_iter_unix_seq_show` 函数中，增加 `unix_state_lock(sk)` 调用。这确保了在迭代器执行期间，unix socket 的状态和对端指针保持稳定，防止在状态转换（如 TCP_ESTABLISHED -> TCP_CLOSE）期间发生竞态条件和 UAF。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cc1098b03dc3c7928df099b78529523f12ce8a91

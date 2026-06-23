@@ -1,0 +1,20 @@
+#标题
+mwifiex: 11n聚合包处理函数内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 mwifiex_11n_aggregate_pkt() 函数处理过程中，若 mwifiex_is_ralist_valid() 校验失败，函数直接返回 -1，导致此前已分配的 skb_aggr 内存未被释放，造成内核内存泄漏。该问题由静态分析工具与代码审查发现。
+
+#主要错误日志
+未知
+
+#问题根因
+在 mwifiex_11n_aggregate_pkt() 函数中，skb_aggr 通过 mwifiex_alloc_dma_align_buf() 分配内存。当后续调用 mwifiex_is_ralist_valid() 返回 false 时，函数直接返回 -1 退出。由于此时 skb_aggr 尚未通过 skb_queue_tail() 入队，不存在其他引用，必须在此处释放。原代码遗漏了释放步骤，导致内存泄漏。
+
+#解决方案
+在 mwifiex_is_ralist_valid() 校验失败的分支中，返回错误前增加调用 mwifiex_write_data_complete(adapter, skb_aggr, 1, -1)，主动释放 skb_aggr 资源，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/64a12e84272c8e31490efe5e8ee5512f83f3dde2

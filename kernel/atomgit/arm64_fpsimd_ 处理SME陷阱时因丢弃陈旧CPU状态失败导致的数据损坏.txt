@@ -1,0 +1,23 @@
+#标题
+arm64/fpsimd: 处理SME陷阱时因丢弃陈旧CPU状态失败导致的数据损坏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在ARM64架构下，当任务启用了SME（Scalable Matrix Extension）但在运行时产生了SME访问陷阱时，如果任务当前未绑定到该CPU（即不在当前CPU上运行），系统未能正确刷新任务的FPSIMD/SVE/SME状态。这导致任务保留了陈旧的CPU状态记录，后续执行可能加载错误的数据，进而引发用户态数据损坏或程序计算结果异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `do_sme_acc` 函数处理SME陷阱时，代码逻辑分为两部分：
+1. 当任务位于当前CPU时，通过 `fpsimd_bind_task_to_cpu()` 正确更新状态；
+2. 当任务不在当前CPU时（else分支），原代码直接跳过处理。
+根本原因是遗漏了对非当前CPU情况下任务状态的清理，导致 `task->thread.uw.fpsimd_state` 或相关标记未更新，任务仍持有指向旧CPU或旧数据的陈旧状态，破坏了状态的一致性。此问题被收录为 CVE-2025-38170。
+
+#解决方案
+在 `do_sme_acc` 函数中，针对任务不在当前CPU的分支（else情况），增加调用 `fpsimd_flush_task_state(current)`。该函数强制刷新并丢弃当前任务的FPSIMD/SVE/SME状态，确保下次使用时重新从内存加载正确数据，从而避免使用陈旧的CPU状态。修复补丁通过添加 `fpsimd_flush_task_state(current);` 调用解决了该数据一致性问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9f7917e90ec872036160e2cb3a1d3c1856cb406

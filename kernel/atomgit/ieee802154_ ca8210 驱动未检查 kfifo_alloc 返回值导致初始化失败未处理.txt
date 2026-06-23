@@ -1,0 +1,20 @@
+#标题
+ieee802154: ca8210 驱动未检查 kfifo_alloc 返回值导致初始化失败未处理
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在加载 CA8210 IEEE 802.15.4 设备驱动（ca8210_probe）时，若启用了 CONFIG_IEEE802154_CA8210_DEBUGFS 配置项，且内核 FIFO 分配（kfifo_alloc）失败，驱动程序未能捕获该错误。这导致驱动继续执行后续初始化流程，可能引发内核崩溃或设备功能异常，且无法正确释放已分配的资源。
+
+#主要错误日志
+dev_crit(&spi_device->dev, "ca8210_test_interface_init failed\n");
+
+#问题根因
+函数 `ca8210_test_interface_init()` 内部调用了 `kfifo_alloc()`，当内存分配失败时会返回非零错误码。然而，其调用者 `ca8210_probe()` 在调用 `ca8210_test_interface_init()` 时，未检查其返回值，直接忽略了可能发生的分配失败错误，导致错误处理路径缺失。
+
+#解决方案
+在 `ca8210_probe()` 函数中增加对 `ca8210_test_interface_init()` 返回值的检查。如果函数返回非零值（表示失败），则打印关键错误日志并跳转到错误处理标签（`goto error`），确保正确清理资源并终止设备探测流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/73c0df087fca21223eadff3dc40dd52df7d05a32

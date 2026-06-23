@@ -1,0 +1,24 @@
+#标题
+xHCI 控制器因 DESI 位设置错误导致中断风暴
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用多于一个事件环段（ERSTSZ > 1）的场景下，xHCI 驱动未正确设置 ERDP 寄存器中的 DESI 位（Dequeue Entity Segment Index）。在 Renesas uPD720201 主机控制器上，此缺陷会导致系统出现严重的中断风暴；在 VIA VL805 控制器上可能表现为 xHC 将事件入队到 Dequeue 指针之后，导致事件处理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 xHCI 规范（sec 5.5.2.3.3），当 ERSTSZ > 1 时，软件必须将 ERDP 寄存器中的 DESI 位设置为当前 Dequeue 指针所指向的段号。xHC 硬件可能利用 DESI 位作为捷径来判断是否需要检查“事件环满”条件。
+旧代码在更新 Dequeue 指针时，使用位掩码 `ERST_DESI_MASK` 保留了原有的 DESI 位值，而非更新为当前段号；在初始化和清理时，错误地将 DESI 位视为保留位处理。这导致 DESI 位指向了错误的段号，Renesas uPD720201 控制器因此触发了中断风暴。
+
+#解决方案
+1. 在 `xhci_segment_alloc()` 函数中新增 `num` 参数，为每个 `xhci_segment` 结构体显式分配并记录段号。
+2. 在 `xhci_update_erst_dequeue()` 函数中，更新 ERDP 寄存器时，从当前 `deq_seg` 结构体中读取正确的段号并写入 DESI 位，替换原有的掩码保留操作。
+3. 在 `xhci_set_hc_event_deq()` 初始化函数中，确保 DESI 位从 0 开始（段 0）。
+4. 在 `xhci_free_interrupter()` 清理函数中，正确处理 ERDP 寄存器，确保 DESI 位被清零处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/38ec615a41929820a2277a1fb4a430875959b3f6

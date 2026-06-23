@@ -1,0 +1,25 @@
+#标题
+dpaa2-switch 驱动因错误使用 DPBP ID 导致第二个 DPSW 对象探测失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在系统上探测第二个 DPSW 对象时驱动加载失败，具体表现为：
+- 驱动探测阶段直接返回错误，退出码为 -12（ENOMEM）。
+- MC firmware 日志中出现 QBMAN 访问违规可恢复错误。
+
+#主要错误日志
+fsl_dpaa2_switch dpsw.1: fsl_mc_driver_probe failed: -12
+fsl_dpaa2_switch dpsw.1: probe with driver fsl_dpaa2_switch failed with error -12
+[E, qbman_rec_isr:391, QBMAN]  QBMAN recoverable event 0x1000000
+
+#问题根因
+驱动在向缓冲池释放缓冲区时，错误地使用了 DPBP 对象的 ID（dpbp_attrs.id）而不是硬件缓冲池 ID（bpid）。
+DPSW 对象使用两个缓冲池，一个由 Linux 驱动管理用于控制流量，另一个由 MC 固件管理用于卸载流量。MC 固件管理的缓冲池没有对应的外部 DPBP 对象。当创建多个 DPSW 对象时，后续创建的 DPBP 对象 ID 会与底层硬件缓冲池 ID 不一致，导致缓冲池种子填充失败，进而引发 QBMAN 访问违规和探测失败。
+
+#解决方案
+修改 `dpaa2_switch_setup_dpbp` 函数，将 `ethsw->bpid` 的赋值从 `dpbp_attrs.id` 修正为 `dpbp_attrs.bpid`，确保使用正确的硬件缓冲池 ID 进行缓冲区释放操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/cb6723c304e37cad7aac8dc735fba7b20429d2f9

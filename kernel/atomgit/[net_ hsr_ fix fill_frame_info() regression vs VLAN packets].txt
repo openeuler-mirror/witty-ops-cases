@@ -1,0 +1,32 @@
+#标题
+[net: hsr: fix fill_frame_info() regression vs VLAN packets]
+
+#内核版本
+OLK-6.6
+
+#问题现象
+HSR（高可用无缝冗余）模块在处理 VLAN 数据包时出现功能异常。具体表现为 `fill_frame_info()` 函数因错误的长度检查逻辑返回 `-EINVAL`，导致 VLAN 流量无法正常处理。调试跟踪显示 `skb->mac_len` 在 VLAN 流量下数值不正确（例如显示为 14，而实际期望的头部偏移不同），触发了错误的判断条件。
+
+#主要错误日志
+kernel: skb len=170 headroom=2 headlen=170 tailroom=20
+kernel:         mac=(2,14) mac_len=14 net=(16,-1) trans=-1
+kernel:         shinfo(txflags=0 nr_frags=0 gso(size=0 type=0 segs=0))
+kernel:         csum(0x0 start=0 offset=0 ip_summed=0 complete_sw=0 valid=0 level=0)
+kernel:         hash(0x0 sw=0 l4=0) proto=0x0000 pkttype=0 iif=0
+kernel:         priority=0x0 mark=0x0 alloc_cpu=0 vlan_all=0x0
+kernel:         encapsulation=0 inner(proto=0x0000, mac=0, net=0, trans=0)
+kernel: dev name=prp0 feat=0x0000000000007000
+
+#问题根因
+在之前的修复提交（b9653d19e556）中，代码尝试使用 `skb->mac_len` 来检查 VLAN 头部是否存在，但对于 VLAN 流量，`skb->mac_len` 的值并不正确。代码原本的逻辑是：
+`if (skb->mac_len < offsetofend(struct hsr_vlan_ethhdr, vlanhdr))`
+由于 `mac_len` 值错误，导致检查失败并错误地返回 `-EINVAL`，从而破坏了 VLAN 支持。
+
+#解决方案
+修改 `fill_frame_info()` 函数中的头部检查逻辑，不再依赖不可靠的 `skb->mac_len`。
+1. 使用 `pskb_may_pull()` 函数确保线性数据区包含预期的头部数据。
+2. 检查条件更改为：`pskb_may_pull(skb, skb_mac_offset(skb) + offsetofend(struct hsr_vlan_ethhdr, vlanhdr))`。
+3. 获取 VLAN 头部指针的方式改为通过 `skb_mac_header(skb)` 获取，而不是之前的 `ethhdr`，以确保指针位置正确。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3a4804f47936c1eaccd4717b734a40b96cd7197b

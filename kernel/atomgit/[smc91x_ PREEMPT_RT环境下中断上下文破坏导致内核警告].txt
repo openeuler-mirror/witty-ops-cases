@@ -1,0 +1,24 @@
+#标题
+[smc91x: PREEMPT_RT环境下中断上下文破坏导致内核警告]
+
+#内核版本
+[OLK-6.6]
+
+#问题现象
+[在使能了 PREEMPT_RT 的内核环境下，smc91x 网卡驱动工作时触发内核 BUG 程序。系统日志打印 "workqueue leaked atomic, lock or RCU" 警告信息，并伴随调用栈回溯，表明工作队列上下文状态被破坏。]
+
+#主要错误日志
+[   13.062137] BUG: workqueue leaked atomic, lock or RCU: kworker/2:1[106]
+[   13.062137]      preempt=0x00000000 lock=0->0 RCU=0->1 workfn=mld_ifc_work
+[   13.062266] CPU: 2 UID: 0 PID: 106 Comm: kworker/2:1 Not tainted 6.18.0-dirty #179 PREEMPT_{RT,(full)}
+[   13.062382] Workqueue: mld mld_ifc_work
+[   13.062494]  show_stack+0x24/0x40 (C)
+
+#问题根因
+[在 PREEMPT_RT 配置下，smc_special_trylock() 宏定义中的 local_irq_save() 禁用了中断（IRQs），但对应的 smc_special_unlock() 调用 spin_unlock_irqrestore() 时，未能正确恢复 PREEMPT_RT 下的中断状态。这导致 __dev_queue_xmit() 中的 rcu_read_unlock_bh() 在 current->softirq_disable_cnt 归零时，无法通过 __local_bh_enable_ip() 正确调用 rcu_read_unlock()，从而引发上下文泄露警告。]
+
+#解决方案
+[修改 smc_special_trylock() 宏的实现，移除显式的 local_irq_save() 与条件判断逻辑，直接替换为标准的 spin_trylock_irqsave() 接口，确保在 PREEMPT_RT 环境下加锁与中断状态保存/恢复的语义正确且配对。]
+
+#来源
+[https://atomgit.com/openeuler/kernel/commit/a2e4a8f6b5c47a96920162a8fa0af4345cc489d4]

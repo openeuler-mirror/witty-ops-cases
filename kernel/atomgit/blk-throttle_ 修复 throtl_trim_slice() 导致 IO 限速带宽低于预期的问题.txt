@@ -1,0 +1,21 @@
+#标题
+blk-throttle: 修复 throtl_trim_slice() 导致 IO 限速带宽低于预期的问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在启用 Block IO 限流时，实际观测到的 IO 吞吐量低于配置的 bps 限额值。具体表现为：当 IO 提交时间因计算余数或定时器唤醒延迟而超出预期等待时间时，限速切片被错误地更新，导致已等待的时间被丢弃，后续 IO 需要等待更长时间，从而拉低了整体速率。该问题在 CONFIG_HZ_100=y 配置下容易复现，会导致 blktests 测试用例 throtl/001 失败。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `throtl_trim_slice()` 函数中，当 IO 提交时间比预期等待时间多出几个 jiffies（原因包括 `tg_within_bps_limit()` 中 `extra_bytes` 无法整除以及定时器唤醒延迟）时，代码直接将 `slice_start` 调整为当前 `jiffies`。
+这会导致多余的等待时间被丢弃。虽然现有代码通过 `rounddown()` 处理了部分偏差，但当 `jiffies - slice_start` 是 `throtl_slice` 的整数倍时，这种处理不足以保留必要的时间余量，从而导致实际速率低于预期配置。
+
+#解决方案
+修改 `block/blk-throttle.c` 中的 `throtl_trim_slice()` 函数逻辑。在计算已用时间时，保留一个额外的 slice 用于偏差修正。具体改动为：将判断条件从 `if (!time_elapsed)` 修改为 `if (time_elapsed < tg->td->throtl_slice * 2)`，即只有在至少使用了 2 个 slice 时才进行修剪；并在后续计算中执行 `time_elapsed -= tg->td->throtl_slice`。这确保了在更新切片起点时，保留一个额外切片的时间量，防止因丢弃额外等待时间而导致的速率下降。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/84f93ada58d895541f42f8290122ea32bcc45b2b

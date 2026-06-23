@@ -1,0 +1,24 @@
+#标题
+urma 日志级别误用导致错误信息刷屏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统运行过程中，在正常业务逻辑处理（如 tpid 未复用或引用计数释放）时，内核日志中大量打印错误级别的日志信息。这会污染系统错误日志，干扰运维人员对真实故障的判断，且可能导致日志缓冲区被无用信息快速填满。
+
+#主要错误日志
+- active_tp_cfg tpid_reuse is false, do import_jfr_ex_old.
+- active_tp_cfg tpid_reuse is false, do import_jetty_ex_old.
+- kref_put: ref_cnt is %u
+
+#问题根因
+代码逻辑判断不当，将正常的业务分支流程（如 `tpid_reuse` 为 false 时执行 old 版本导入逻辑）和常规的引用计数释放流程，误判为异常情况，使用了 `ubcore_log_err` 和 `dump_stack` 进行错误日志打印。实际上这些是正常的提示性信息，不应作为错误级别输出。
+
+#解决方案
+修改日志打印级别，将原本的错误级别打印降级为信息级别：
+1. 在 `ubcore_import_jfr_ex` 和 `ubcore_import_jetty_ex` 函数中，将 `tpid_reuse` 为 false 时的日志打印从 `ubcore_log_err` 修改为 `ubcore_log_info_rl`（限速打印）。
+2. 在 `ubcore_tpid_list_kref_put` 函数中，将引用计数相关的日志打印从 `ubcore_log_err` 修改为 `ubcore_log_info_rl`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/573721afed72eaf618a3f418a624304896cb4988

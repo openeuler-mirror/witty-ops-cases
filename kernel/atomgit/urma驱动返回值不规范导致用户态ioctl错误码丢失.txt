@@ -1,0 +1,28 @@
+#标题
+urma驱动返回值不规范导致用户态ioctl错误码丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 urma 子系统的底层驱动执行失败时，用户态程序通过 ioctl 获取的错误码不正确，无法获取底层驱动返回的具体错误值。在部分操作（如 `deactive_tp`、`modify_jfc` 等）失败时，内核日志仅打印普通错误信息，未能区分是驱动层面的错误，导致上层应用难以进行精准故障定位。
+
+#主要错误日志
+- [DRV_ERROR]Failed to deactivate tp, ret: %d.
+- [DRV_ERROR]Failed to exec user_ctl, ret: %d.
+- [DRV_ERROR]Failed to modify jfc, jfc_id:%u, ret: %d.
+- [DRV_ERROR]Failed to set_jfc_opt, jfc_id:%u, ret %d.
+- [DRV_ERROR]Failed to get tp list, ret: %d.
+- failed to alloc jfs, ret is %d.
+- Failed to free jfs, ret: %d, jfs_id: %u.
+
+#问题根因
+在 urma 子系统中，调用底层驱动回调函数失败后，代码直接返回了通用的内核错误码（如 `-EPERM`、`-ENOSPC`、`-ENOEXEC`）或者原样返回了驱动的返回值，未将其统一转换为内核定义的合法错误范围值。此外，部分错误处理逻辑中，日志打印未能体现具体的错误返回值，导致上层 ioctl 无法正确获取底层驱动的错误状态。
+
+#解决方案
+1. 定义专用驱动错误宏 `UBCORE_DRV_ERRNO`（值为 2048），统一处理底层驱动失败时的返回值。
+2. 修改各接口的错误处理逻辑，当底层驱动操作失败时，将返回值统一转换为 `-UBCORE_DRV_ERRNO`，确保内核层能识别并传递该错误。
+3. 更新日志打印格式，增加 `[DRV_ERROR]` 前缀并输出具体的返回值 `ret`，便于区分驱动层错误与框架层错误，同时修正部分拼写错误（如 `to list` -> `tp list`）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4daa9fe27d58827bd3c0b9c489db04a5f2d99f5a

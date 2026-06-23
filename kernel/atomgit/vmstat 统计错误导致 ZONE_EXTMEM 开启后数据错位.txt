@@ -1,0 +1,20 @@
+#标题
+vmstat 统计错误导致 ZONE_EXTMEM 开启后数据错位
+
+#内核版本
+OLK-6.6
+
+#问题现象
+开启 CONFIG_ZONE_EXTMEM 配置项后，内核通过 `/proc/vmstat` 暴露的内存统计事件数据不准确。具体表现为 `pgalloc_device` 等统计项显示的数值实为其他 Zone（如 ZONE_MOVABLE）的统计结果，导致系统内存事件监控数据失真，影响性能分析或故障诊断。
+
+#主要错误日志
+未知
+
+#问题根因
+宏 `FOR_ALL_ZONES` 未定义 `ZONE_EXTMEM`，导致 `vm_event_states` 结构体中缺少 `ZONE_EXTMEM` 对应的统计槽位（slots）。函数 `__count_zid_vm_events()` 在计算槽位索引时，未考虑缺失的 `ZONE_EXTMEM`，导致 `ZONE_EXTMEM` 之后的 Zone（如 `ZONE_MOVABLE`、`ZONE_DEVICE`）的统计值被错误地写入到前一个 Zone 的槽位中。例如，`ZONE_DEVICE` 的计数被错误地累加到了 `ZONE_MOVABLE` 对应的变量中。
+
+#解决方案
+在 `include/linux/vmstat.h` 中针对 `CONFIG_ZONE_EXTMEM` 配置重写 `__count_zid_vm_events` 宏逻辑。为遵守 KABI（内核应用程序二进制接口）兼容性要求，不修改 `vm_event_states` 结构体大小，而是采用偏移补偿策略：统计时跳过 `ZONE_EXTMEM`，并对 `ZONE_EXTMEM` 之后的 Zone 进行索引减 1 操作，确保数据写入正确的统计槽位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9b73b5dee051f051d659b4be264082a9dbcdc011

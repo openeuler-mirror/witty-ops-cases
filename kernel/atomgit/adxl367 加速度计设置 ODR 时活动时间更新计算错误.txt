@@ -1,0 +1,20 @@
+#标题
+adxl367 加速度计设置 ODR 时活动时间更新计算错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `_adxl367_set_odr()` 设置新的输出数据率（ODR）时，活动时间寄存器（ADXL367_REG_TIME_ACT）的更新值计算错误。系统基于旧的 ODR 值计算频率并更新活动时间，导致活动检测时间配置不符合预期，影响设备功耗管理与活动检测功能的准确性。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `_adxl367_set_odr()` 的执行流程中，代码先将新的 ODR 值写入硬件寄存器 `ADXL367_REG_FILTER_CTL`，随后调用 `_adxl367_set_act_time_ms()` 更新活动时间。此时结构体成员 `st->odr` 仍未更新，保存的是旧值。`_adxl367_set_act_time_ms()` 内部调用 `adxl367_time_ms_to_samples()` 时使用 `st->odr` 来计算频率，导致计算依据的是旧的 ODR 值而非刚设置的最新值。赋值语句 `st->odr = odr` 在函数返回前才执行，导致了此时序错误。
+
+#解决方案
+调整 `st->odr = odr` 赋值语句的位置，将其移至写入硬件寄存器之后、调用 `_adxl367_set_act_time_ms()` 之前。确保在更新活动时间相关计算时，`st->odr` 已保存最新的 ODR 值，从而正确计算基于当前 ODR 的活动时间。同时简化了函数末尾的返回逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/afcc88a2638ee27a50435e4cea0da8c9229b31c2

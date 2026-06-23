@@ -1,0 +1,23 @@
+#标题
+rcu-tasks: do_exit() 与 RCU-tasks 死锁问题修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在进程退出（do_exit）过程中与 RCU-tasks 机制产生死锁，导致系统挂起或相关进程无法正常退出。
+
+#主要错误日志
+未知
+
+#问题根因
+在进程退出期间，`do_exit()` 与 RCU-tasks 之间存在死锁风险。原有的 `exit_tasks_rcu_start()` 和 `exit_tasks_rcu_stop()` 机制不足以完全消除这种死锁，特别是在处理 tasklist 扫描盲点时，需要更健壮的追踪机制来管理正在退出的任务。
+
+#解决方案
+重构了 `exit_tasks_rcu_start()` 和 `exit_tasks_rcu_stop()` 函数，引入了 per-CPU 的退出链表（`rtp_exit_list`）机制：
+1. 在 `exit_tasks_rcu_start()` 中，将当前任务添加到 per-CPU 的 `rcu_tasks_exit_list` 链表中，并记录当前 CPU ID，以便跟踪正在退出的任务。
+2. 在 `exit_tasks_rcu_stop()` 中，将任务从链表中移除，确保在 `do_exit()` 变为不可抢占状态后，`synchronize_rcu()` 能够正确等待。
+此举替代了原有的 SRCU 锁机制，消除了死锁隐患。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9c980625794a3efc4beae164786668f745327a65

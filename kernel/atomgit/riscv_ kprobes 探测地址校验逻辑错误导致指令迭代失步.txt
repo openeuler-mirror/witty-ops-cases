@@ -1,0 +1,20 @@
+#标题
+riscv: kprobes 探测地址校验逻辑错误导致指令迭代失步
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 RISC-V 架构上注册 kprobe 探测点时（例如使用 "p:probe/tcp_sendmsg _text+15392192" 这种形式），内核地址校验逻辑可能误判探测地址无效，导致探测注册失败；或者因指令迭代失步导致内核行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+`arch_check_kprobe` 函数在校验探测地址时，从 `_text` 起始地址开始遍历所有指令，直到目标探测地址。这种做法不仅效率低下，而且在遍历过程中会将指令流中的字面量（literal values，例如函数修补留下的数据）误判为指令进行解码，导致指令解析逻辑与实际指令流发生“失步”（desync），从而导致校验结果错误。
+
+#解决方案
+参考 x86 架构的实现方式，修改地址校验逻辑：不再从固定的起始地址开始遍历，而是利用 `kallsyms_lookup_size_offset` 函数找到距离目标探测地址最近的、位于其前方的符号（closest preceding symbol），以此为起点开始指令迭代校验。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/20415ee25e417f8c7c4fb61f299cf5293be74f6d

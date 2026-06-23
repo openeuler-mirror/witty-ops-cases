@@ -1,0 +1,20 @@
+#标题
+coresight: ETR 缓冲区释放后使用问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 ETR（Embedded Trace Router）以 CS_MODE_SYSFS 模式使能时，如果修改了缓冲区大小并再次使能，会导致内核发生内存释放后使用。此时 sysfs_buf 指针指向新分配的内存，而正在运行中的 ETR 硬件仍在引用已被释放的旧内存指针，造成系统内存破坏或不可预知的崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 CS_MODE_SYSFS 模式下重新配置 ETR 缓冲区时，代码逻辑存在缺陷：当缓冲区大小发生变化时，驱动程序会分配新内存并将 sysfs_buf 指针更新指向新内存，随后释放旧内存。然而，此时 ETR 硬件实际使用的 etr_buf 指针仍指向已被释放的旧内存地址，未正确更新为新内存地址，从而引发 use-after-free 问题。
+
+#解决方案
+在获取 sysfs 缓冲区的函数 `tmc_etr_get_sysfs_buffer` 中增加模式检查。在持有锁之后、尝试更新或释放缓冲区之前，判断当前 ETR 模式是否为 `CS_MODE_SYSFS`。如果 ETR 已经处于使能状态（mode == CS_MODE_SYSFS），则直接跳过缓冲区的更新与释放逻辑，继续使用现有的缓冲区，避免在硬件运行期间修改缓冲区指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7e79537c9dbd6254e4d360dfd6bf14ed510d70d8

@@ -1,0 +1,30 @@
+#标题
+net: stmmac: xgmac 错误移除 10M/100M 速度模式支持导致功能缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+XGMAC IP 核本应支持的 10M 和 100M 速度模式无法使用。
+先前的一个修复提交（Commit 9cb54af214a7）错误地从 XGMAC 驱动中移除了 10M 和 100M 模式的支持，导致符合 XGMAC databook 规范的低速链路功能丢失。对于 XGMAC version >= 2_20 的 IP 核，或在 HDSEL 位已设置的情况下，硬件支持 10M/100M 全双工或半双工模式，但驱动未正确启用这些能力。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 Commit 描述，根本原因是之前的提交 9cb54af214a7 ("net: stmmac: Fix IP-cores specific MAC capabilities") 错误地从 XGMAC 驱动的 link caps 中移除了 10M、100M 和 1000HD 支持。
+实际上，XGMAC IP 硬件是支持这些模式的：
+1. 对于 XGMAC version >= 2_20，支持 10M 和 100M 全双工（FD）模式；
+2. 如果 MAC_HW_FEATURE0 寄存器中的 HDSEL 位置位，支持 10M 和 100M 半双工（HD）模式。
+驱动代码在初始化时默认移除了这些能力，且未根据硬件特性寄存器（MAC_HW_FEATURE0）和 IP 版本号正确恢复对 10M/100M 的支持。
+
+#解决方案
+修正 XGMAC 驱动中对 10M 和 100M 速度模式的支持逻辑：
+1. 在 `dwxgmac2_setup` 函数中，恢复 `mac->link.caps` 对 `MAC_10` 和 `MAC_100` 能力的默认支持。
+2. 新增 `dwxgmac2_update_caps` 回调函数，在运行时根据硬件实际能力修正 link caps：
+   - 若 DMA 能力不支持 10M/100M（`!priv->dma_cap.mbps_10_100`），则移除 `MAC_10` 和 `MAC_100` 支持。
+   - 若不支持半双工（`!priv->dma_cap.half_duplex`），则移除 `MAC_10HD` 和 `MAC_100HD` 支持。
+3. 在 `dwxgmac2_get_hw_feature` 函数中增加逻辑：如果支持 1000M 模式且 Synopsys ID 大于等于 DWXGMAC_CORE_2_20，则置位 `dma_cap->mbps_10_100`，从而正确识别硬件支持的低速模式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/023a0a93dd34e1eba777ff434a8e3bc97230617b

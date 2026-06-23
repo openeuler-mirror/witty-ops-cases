@@ -1,0 +1,24 @@
+#标题
+drm/mediatek: DP 模式验证计算错误导致显示异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+DP（DisplayPort）在链接训练后，因模式有效性的带宽计算不准确，可能导致在极限状态下出现显示异常，无法正确选择最佳的颜色格式（如 RGB 或 YUV422），或错误地判定模式时钟过高。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **带宽计算基准错误**：原代码使用 `rx_cap`（接收端能力）和 `max_linkrate`/`max_lanes`（最大能力）来计算速率，而非链接训练后实际协商出的 `train_info.lane_count` 和 `link_rate`，导致计算出的带宽与当前链路实际状态不匹配。
+2. **开销计算缺失**：未考虑 DP 1.4a 规范中 FEC（前向纠错）约 2.4% 和 Down-spread 约 0.5% 的开销（合计约 3%），导致高估了可用有效带宽。
+3. **时钟换算冗余**：代码逻辑中未正确处理 `mode->clock` 的单位换算，原代码对比逻辑未对 `rate` 进行正确的折算处理（rate 已除以 10，不应再对 mode->clock 乘以 10）。
+
+#解决方案
+1. **修正带宽计算来源**：将速率计算改为基于链接训练后的实际状态 `mtk_dp->train_info`（包括 `lane_count` 和 `link_rate`），确保使用当前链路的真实有效带宽。
+2. **增加开销折扣**：在带宽判定公式中增加约 3% 的开销折扣，使用 `(rate * 97 / 100)` 作为实际可用带宽进行判断，符合 DP 1.4a 规范。
+3. **修正判定逻辑**：调整 `mtk_dp_bridge_mode_valid` 和 `mtk_dp_bridge_atomic_get_input_fmts` 中的带宽比较逻辑，确保在 RGB 与 YUV422 格式选择及 MODE_CLOCK_HIGH 判定时的准确性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/68cfd02825a259d716fc027fdb629b9aab355c33

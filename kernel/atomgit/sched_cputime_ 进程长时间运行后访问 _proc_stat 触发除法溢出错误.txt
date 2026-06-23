@@ -1,0 +1,27 @@
+#标题
+sched/cputime: 进程长时间运行后访问 /proc/stat 触发除法溢出错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当进程拥有数百个线程且长时间运行时，其线程组的聚合 stime 或 utime 会变得极大。此时如果访问 /proc/xx/stat 文件，会触发内核除法错误，导致系统打印 oops 信息并可能引起进程崩溃。
+
+#主要错误日志
+divide error: 0000 [#1] SMP NOPTI
+CPU: 273 PID: 4619 Comm: ... Tainted: 5.10.0 x86_64
+RIP: 0010:cputime_adjust+0x55/0xb0
+RSP: 0018:ffffae408e07bbc8 EFLAGS: 00010807
+...
+Call Trace:
+ thread_group_cputime_adjusted+0x4b/0x70
+ do_task_stat+0x2d8/0xdc0
+
+#问题根因
+在 cputime_adjust() 函数中，计算 `stime + utime` 时发生了无符号整数溢出。溢出后的数值被传递给 mul_u64_u64_div_u64() 函数进行除法运算，从而触发了除法错误。
+
+#解决方案
+在 cputime_adjust() 中增加溢出检测逻辑。如果检测到 `stime + utime` 发生溢出（即和小于任一操作数），则对 stime 和 utime 进行右移操作以缩小数值范围，同时调整后续计算逻辑以保证计算语义正确，从而避免除法错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e29ae8042ec46f647d846d557d5058acbcb16cc9

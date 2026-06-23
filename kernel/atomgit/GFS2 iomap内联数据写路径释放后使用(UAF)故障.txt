@@ -1,0 +1,31 @@
+#标题
+GFS2 iomap内联数据写路径释放后使用(UAF)故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在GFS2文件系统执行内联数据写入操作时，内核检测到释放后使用错误。具体表现为 KASAN (Kernel Address Sanitizer) 报告检测到对已释放内存的写入操作。该问题涉及 `iomap_write_end_inline()` 函数尝试向已释放的缓冲区执行 memcpy 写入，可能触发内核崩溃或内存损坏。
+
+#主要错误日志
+KASAN: use-after-free Write
+(注：根据 Commit 描述，原始日志为 KASAN 检测到的 UAF 写入报告，原文未提供具体完整日志串，此处为关键字提炼)
+
+#问题根因
+在 `gfs2_iomap_begin()` 函数中，内联数据缓冲头通过 `release_metapath()` 被过早释放。
+故障触发流程如下：
+1. `gfs2_iomap_begin()` 调用 `gfs2_meta_inode_buffer()` 读取 inode 元数据到 dibh。
+2. 代码设置 `iomap->inline_data` 指向 `dibh->b_data` 偏移处。
+3. 随后调用 `release_metapath()` 执行 `brelse(dibh)`，导致引用计数降为 0。
+4. kswapd 回收该页面（约 39ms 后）。
+5. 后续 `iomap_write_end_inline()` 尝试向 `iomap->inline_data` 执行 `memcpy()` 时，访问了已被释放的内存，触发 UAF。
+
+#解决方案
+在 `gfs2_iomap_begin()` 中增加对缓冲头的引用计数，确保其在整个 iomap 操作周期内有效；并在操作结束后正确释放。
+具体修改：
+1. 在 `gfs2_iomap_begin()` 中，针对 `IOMAP_INLINE` 类型，将 dibh 存储到 `iomap->private`，并调用 `get_bh()` 增加引用计数。
+2. 在 `gfs2_iomap_end()` 中检查 `iomap->private`，若存在则调用 `brelse()` 释放缓冲头。
+此修复确保了在内联数据写入完成前，缓冲区对应的页面不会被回收。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2c172f6e601554f9668ba46e6a4248f35ba9b849

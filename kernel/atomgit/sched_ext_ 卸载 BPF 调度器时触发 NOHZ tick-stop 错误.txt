@@ -1,0 +1,20 @@
+#标题
+sched_ext: 卸载 BPF 调度器时触发 NOHZ tick-stop 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 BPF 调度器（BPF scheduler）的过程中，有时会触发 NOHZ tick-stop 错误警告，导致 CPU 在仍有 pending softirq 的情况下进入空闲状态。
+
+#主要错误日志
+NOHZ tick-stop error: local softirq work is pending, handler #80!!!
+
+#问题根因
+在 BPF 调度器卸载路径中，系统会进入 bypass 模式（此时调度忽略 BPF 调度器并转为全局 FIFO）。原有的 bypass 状态切换通过全局变量 `scx_ops_bypass_depth` 判断，该转换过程未与运行队列的 rq 锁同步。这导致 enqueue（入队）和 dispatch（分发）路径对 bypass 模式是否开启存在判断不一致，进而引发 CPU 错误地进入空闲状态。
+
+#解决方案
+将 bypass 状态的追踪从全局维度改为 per-rq（每运行队列）维度。在 `sched.h` 中新增 `SCX_RQ_BYPASSING` 标志位，修改 `scx_ops_bypass()` 函数实现，使其在持有 rq 锁的情况下修改该标志位，确保 bypass 状态变更与队列操作同步，从而消除因状态不一致导致的错误警告。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/98d3ad25b88bbbb9a12cd9469a5b1730476251a0

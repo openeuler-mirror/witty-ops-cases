@@ -1,0 +1,24 @@
+#标题
+btrfs: 日志树重放失败导致无法挂载（文件0链接计数场景）
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在特定场景下（新建文件、写入数据、unlink删除、通过fd进行fsync，随后创建新文件并fsync，最后掉电），系统重启后挂载 Btrfs 文件系统时，日志树重放失败。
+具体表现为 mount 操作返回错误码 -ENOENT（在旧版本内核或特定处理逻辑下可能表现为 -EINVAL 或 -EIO），导致文件系统无法正常挂载和使用。
+
+#主要错误日志
+未知
+
+#问题根因
+日志重放逻辑在处理链接计数为 0 的 inode 时存在缺陷。
+具体原因为：在 `replay_one_buffer()` 函数中，更新 `wc->ignore_cur_inode` 标志位的逻辑被限制在 `LOG_WALK_REPLAY_INODES` 阶段执行。
+当处于 `LOG_WALK_REPLAY_ALL` 阶段时，如果遇到一个链接计数为 0 且拥有数据扩展区的 inode（例如已被 unlink 但仍被 fsync 的文件），代码未能正确设置 `ignore_cur_inode`。这导致后续在 `replay_one_extent()` 阶段尝试重放该文件的扩展区时，会去子卷树中查找该 inode，由于该 inode 已删除（不存在），导致查找失败并返回错误，进而中断整个日志重放过程。
+
+#解决方案
+修改 `fs/btrfs/tree-log.c` 中的逻辑，将 `wc->ignore_cur_inode` 的更新判断逻辑移至 `BTRFS_INODE_ITEM_KEY` 的通用处理分支中。
+修复后，无论当前处于哪个重放阶段（`LOG_WALK_REPLAY_ALL` 或 `LOG_WALK_REPLAY_INODES`），只要检测到 inode item 的链接计数为 0，就立即设置 `ignore_cur_inode` 为 true，从而跳过对该 inode 后续无效数据的重放，避免查找不存在的 inode 而报错。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f7e81505eb80b83d890bcf8dcaf1fe03535fbbee

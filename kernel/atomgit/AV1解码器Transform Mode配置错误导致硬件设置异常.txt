@@ -1,0 +1,27 @@
+#标题
+AV1解码器Transform Mode配置错误导致硬件设置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+Verisilicon AV1硬件解码器在处理视频流时，由于Transform Mode（变换模式）设置错误，导致硬件寄存器配置与AV1规范定义不匹配。具体表现为：AV1规范定义了3种tx模式（4x4 only、largest、select），而硬件支持5种模式（4x4 only、8x8、16x16、32x32、select），旧代码逻辑仅简单判断`tx_mode == 1`来设置寄存器，导致规范中的"Largest"模式无法正确映射到硬件要求的"32x32"模式，可能引发解码异常或画面错误。
+
+#主要错误日志
+未知
+
+#问题根因
+AV1规范与硬件寄存器对Transform Mode的定义存在差异：
+1. AV1规范定义：V4L2_AV1_TX_MODE_ONLY_4X4、V4L2_AV1_TX_MODE_LARGEST、V4L2_AV1_TX_MODE_SELECT。
+2. 硬件寄存器定义：ROCKCHIP_AV1_TX_MODE_ONLY_4X4 (0)、ROCKCHIP_AV1_TX_MODE_8X8 (1)、ROCKCHIP_AV1_TX_MODE_16x16 (2)、ROCKCHIP_AV1_TX_MODE_32x32 (3)、ROCKCHIP_AV1_TX_MODE_SELECT (4)。
+驱动代码中直接使用了简单的三元运算 `(ctrls->frame->tx_mode == 1) ? 3 : 4` 进行设置，这种硬编码方式无法正确处理规范中的 `ONLY_4X4` 模式（应映射为0）和 `LARGEST` 模式（应映射为3），导致模式映射错误。
+
+#解决方案
+在驱动代码 `rockchip_vpu981_hw_av1_dec.c` 中新增 `rockchip_av1_tx_mode` 枚举定义和映射函数 `rockchip_vpu981_av1_get_hardware_tx_mode`。该函数将V4L2标准定义的tx mode正确映射到硬件寄存器值：
+- `V4L2_AV1_TX_MODE_ONLY_4X4` 映射为 `ROCKCHIP_AV1_TX_MODE_ONLY_4X4` (0)；
+- `V4L2_AV1_TX_MODE_LARGEST` 映射为 `ROCKCHIP_AV1_TX_MODE_32x32` (3)；
+- `V4L2_AV1_TX_MODE_SELECT` 映射为 `ROCKCHIP_AV1_TX_MODE_SELECT` (4)。
+在 `rockchip_vpu981_av1_dec_set_parameters` 函数中调用该映射函数获取正确的寄存器值，替代原有的硬编码逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1fb949ee0f6791e3fa664e718bf2c6e4059b9c28

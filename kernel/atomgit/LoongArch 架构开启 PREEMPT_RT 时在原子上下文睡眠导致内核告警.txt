@@ -1,0 +1,20 @@
+#标题
+LoongArch 架构开启 PREEMPT_RT 时在原子上下文睡眠导致内核告警
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 LoongArch 架构下开启 CONFIG_PREEMPT_RT 配置编译并运行内核时，系统启动或 CPU 上线过程中触发睡眠函数在原子上下文被调用的错误，可能导致内核报错或死锁。
+
+#主要错误日志
+未知
+
+#问题根因
+在 setup_tlb_handler 函数中，当开启 CONFIG_NUMA 时会调用 `pcpu_handlers[cpu]` 相关的处理逻辑，该逻辑内部可能包含获取自旋锁等操作。在普通内核中这是允许的，但在 CONFIG_PREEMPT_RT (Real-Time) 内核中，自旋锁会被转化为可睡眠的 rt_mutex。若在此处调用，将发生在原子上下文（atomic context）中睡眠的违规行为，因为此时的执行上下文不允许睡眠。
+
+#解决方案
+修改 `arch/loongarch/mm/tlb.c` 文件中的条件编译判断逻辑，将原有的 `#ifdef CONFIG_NUMA` 修改为 `#if defined(CONFIG_NUMA) && !defined(CONFIG_PREEMPT_RT)`。该修改确保在开启实时抢占（PREEMPT_RT）模式时，跳过可能引发睡眠问题的 NUMA 相关 tlb handler 初始化代码路径，从而避免在原子上下文中睡眠。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1ed9ff8809e50cb0a4680ba88981764287fb3ba2

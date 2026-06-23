@@ -1,0 +1,23 @@
+#标题
+io_uring/poll 修复 POLLERR 处理逻辑错误导致功能异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+使用 io_uring 进行操作时，凡是涉及 EPOLLERR 事件的请求均被错误标记为失败，导致所有依赖错误队列接收接口的功能失效，且 connect 操作的行为偏离标准的 connect(2) 系统调用规范。
+
+#主要错误日志
+未知
+
+#问题根因
+之前的代码提交 8c8492ca64e7 在通用轮询处理逻辑中实现了一个不恰当的 hack，错误地假定 `POLLERR` 等同于请求失败。这导致在 `io_poll_check_events` 中一旦检测到 `EPOLLERR` 就直接调用 `req_set_fail(req)` 设置失败状态，从而破坏了所有需要正常处理 POLLERR 的用户（如错误队列 recv 接口）。
+
+#解决方案
+将处理 EPOLLERR 的逻辑从通用的 poll 处理路径（io_uring/poll.c）中移除，并将其下沉到特定的 `io_connect()` 函数中处理。
+具体修改：
+1. 在 `io_uring/poll.c` 中删除 `if (unlikely(req->cqe.res & EPOLLERR)) req_set_fail(req);` 代码段，避免错误地将所有 EPOLLERR 标记为失败。
+2. 在 `io_uring/net.c` 的 `io_connect` 函数中，针对连接进行中的场景，显式通过 `vfs_poll` 检查 `EPOLLERR` 状态，若存在错误则跳转至获取 socket 错误码的逻辑，从而仅在 connect 场景下精确处理错误，不影响其他通用 poll 逻辑。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f3c44c258da89f4595e8486aa591ce743a6034fb

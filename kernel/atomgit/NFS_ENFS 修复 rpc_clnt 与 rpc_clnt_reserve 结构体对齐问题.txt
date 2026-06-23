@@ -1,0 +1,26 @@
+#标题
+NFS/ENFS 修复 rpc_clnt 与 rpc_clnt_reserve 结构体对齐问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ENFS（增强型网络文件系统）功能时，内核对 `struct rpc_clnt` 与 `struct rpc_clnt_reserve` 进行强制类型转换操作。由于两个结构体定义不一致（字段布局、大小或对齐方式不匹配），导致内存访问越界或数据错乱。该问题可能导致内核 Panic、Oops，或引发 NFS 客户端功能异常（如多路径切换失败、状态判断错误）。
+
+#主要错误日志
+未知
+
+#问题根因
+问题根源在于代码维护不当导致的数据结构定义冗余与不一致。
+原有代码为了扩展 ENFS 功能，定义了一个独立的结构体 `struct rpc_clnt_reserve`，试图通过强制类型转换 `(struct rpc_clnt_reserve *)clnt` 将 `rpc_clnt` 指针转换为 `rpc_clnt_reserve` 指针来访问 `cl_enfs` 字段。
+然而，`struct rpc_clnt_reserve` 无法保证与内核核心结构体 `struct rpc_clnt` 在内存布局上严格对齐。当 `struct rpc_clnt` 发生变更（如字段调整、编译选项变化导致的对齐填充改变）时，`rpc_clnt_reserve` 未能同步更新，导致偏移量计算错误。这种不安全的强制转换破坏了内存访问的正确性。
+
+#解决方案
+移除冗余的 `struct rpc_clnt_reserve` 结构体定义，直接在核心结构体 `struct rpc_clnt` 中新增 `cl_enfs` 字段。
+具体修改如下：
+1. 删除 `include/linux/sunrpc/clnt.h` 中 `struct rpc_clnt_reserve` 的整个定义。
+2. 在 `struct rpc_clnt` 的位域定义中直接添加 `cl_enfs : 1` 字段（需配合 `__GENKSYMS` 宏处理 ABI 兼容性，将其放入联合体或条件编译块中）。
+3. 删除所有针对 `struct rpc_clnt_reserve` 的强制类型转换代码，将对 `clnt_reserve->cl_enfs` 的访问统一修改为直接访问 `clnt->cl_enfs`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/59da5fcc7897637e47a2f7c63535379b01e26909

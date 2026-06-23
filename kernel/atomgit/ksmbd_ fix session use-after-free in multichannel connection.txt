@@ -1,0 +1,27 @@
+#标题
+ksmbd: fix session use-after-free in multichannel connection
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在配置了多通道的 SMB3 连接场景下，会话对象发生 Use-After-Free（释放后使用）故障。这可能导致内核崩溃、内存损坏或不可预测的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在多通道连接场景中，会话引用计数的管理存在逻辑错误：
+1. 在 `ksmbd_get_encryption_key` 函数中，加密路径获取会话引用，但在解密路径未释放引用，导致引用计数泄漏。
+2. 会话过期逻辑判断条件为 `refcnt == 0`，而在会话创建时 `refcnt` 初始化为 1。如果引用计数管理不当，会话对象可能提前被释放，随后又被访问，导致 Use-After-Free。
+3. 在会话注销流程中，`ksmbd_user_session_put` 仅执行引用计数减一操作，未处理计数归零时的销毁逻辑，导致资源管理不一致。
+
+#解决方案
+1. 修正引用计数操作逻辑：在 `ksmbd_get_encryption_key` 中，改为解密路径下调用 `ksmbd_user_session_put` 释放引用，确保加解密路径引用计数平衡。
+2. 调整初始引用计数：将会话创建时的初始 `refcnt` 设置为 2，防止过早释放。
+3. 放宽过期判断条件：将会话过期检查条件从 `refcnt == 0` 修改为 `refcnt <= 1`，确保在仍有其他引用（如初始引用）存在时不被错误清理。
+4. 完善销毁触发机制：在 `ksmbd_sessions_deregister` 和 `ksmbd_user_session_put` 函数中，当引用计数减至 0 时立即调用 `ksmbd_session_destroy` 销毁会话，防止资源泄漏或野指针存留。
+5. 增加空指针检查：在 `smb2_session_logoff` 中增加对 `sess->user` 的非空判断，防止空指针解引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c15e1e0dc6959897533296349c191a2749fbe6c3

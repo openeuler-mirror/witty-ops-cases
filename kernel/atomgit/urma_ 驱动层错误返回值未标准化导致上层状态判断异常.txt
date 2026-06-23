@@ -1,0 +1,47 @@
+#标题
+urma: 驱动层错误返回值未标准化导致上层状态判断异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当底层驱动程序（Provider）执行相关操作失败时，urma 子系统未正确向上层返回特定的驱动错误码（如 `UBCORE_DRV_ERRNO`），而是返回了通用的内核错误码（如 `-ENOEXEC`、`-ENOSPC`、`-EPERM`）或直接返回驱动的原始返回值。这导致上层应用或调用者无法准确区分是内核通用错误还是底层驱动具体错误，可能导致错误处理逻辑失效、资源状态不一致或业务流程异常中断。
+
+#主要错误日志
+- [DRV_ERROR]Failed to deactivate tp, ret: %d.
+- [DRV_ERROR]Failed to modify jfc, jfc_id:%u, ret: %d.
+- [DRV_ERROR]Failed to set_jfc_opt, jfc_id:%u, ret %d.
+- [DRV_ERROR]Failed to get_jfc_opt, jfc_id:%u, ret: %d.
+- [DRV_ERROR]Failed to active jfc, jfc_id:%u, ret: %d.
+- [DRV_ERROR]Failed to deactivate jfc, jfc_id:%u, ret: %d.
+- [DRV_ERROR]Failed to modify jfs, jfs_id:%u, ret: %d.
+- [DRV_ERROR]Failed to query jfs, jfs_id:%u, ret: %d.
+- [DRV_ERROR]Failed to free jfs, ret: %d, jfs_id: %u.
+- [DRV_ERROR]Failed to set_jfs_opt, jfs_id:%u, ret %d.
+- [DRV_ERROR]Failed to get to list, ret: %d.
+- [DRV_ERROR]Failed to set tp attr, ret: %d.
+- [DRV_ERROR]Failed to get tp attr, ret: %d.
+- [DRV_ERROR]Failed to get_eid_by_ip, ret: %d.
+- [DRV_ERROR]Failed to get_ip_by_eid, ret: %d.
+- [DRV_ERROR]Failed to active tp, ret: %d, dev_name: %s.
+- [DRV_ERROR]Failed to exec user_ctl, ret: %d.
+- failed to alloc jfs, ret is %d.
+- failed to query device attr, ret: %d.
+
+#问题根因
+在 urma 子系统中，多个接口函数在处理底层驱动（`dev->ops`）返回的错误时，存在以下问题：
+1. 部分接口（如 `ubcore_create_jfc`, `ubcore_create_jfs`, `ubcore_alloc_vtpn` 等）在驱动返回失败时，使用 `UBCORE_CHECK_RETURN_ERR_PTR` 宏强制转换错误码为通用错误（如 `ENOEXEC`, `ENOSPC`），掩盖了驱动的真实错误意图。
+2. 部分接口（如 `ubcore_query_device_attr`）硬编码返回 `-EPERM`，丢失了驱动返回的具体错误值。
+3. 部分接口在日志记录错误后直接返回驱动的原始返回值，未将其标准化为 `UBCORE_DRV_ERRNO`，导致错误码定义不一致。
+根本原因是缺乏统一的错误码转换机制，导致底层驱动错误无法正确传递给上层调用者。
+
+#解决方案
+1. **定义驱动专用错误码**：在 `ubcore_priv.h` 中新增宏定义 `#define UBCORE_DRV_ERRNO 2048`，用于统一标识驱动层返回的错误。
+2. **统一错误返回值**：修改 `ubcore_connect_adapter.c`、`ubcore_device.c`、`ubcore_jetty.c`、`ubcore_tp.c`、`ubcore_vtp.c`、`ubcore_segment.c` 等文件中的错误处理逻辑。当底层驱动操作（如 `create`, `modify`, `delete`, `query`, `alloc`, `free` 等）返回失败时，统一返回 `-UBCORE_DRV_ERRNO` 或通过 `ERR_PTR(-UBCORE_DRV_ERRNO)` 返回指针错误。
+3. **修正特定函数逻辑**：
+   - 对于 `ubcore_query_device_attr`，直接返回驱动返回值而非硬编码 `-EPERM`。
+   - 对于 `ubcore_user_control`，保留原返回值不转换为 `UBCORE_DRV_ERRNO`，但增加日志前缀 `[DRV_ERROR]` 以便区分。
+4. **增强日志可读性**：在部分关键错误日志中增加 `[DRV_ERROR]` 前缀，便于快速定位驱动层错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c4b5aa5479482ef4ea6a68bf5c17819aecc4c542

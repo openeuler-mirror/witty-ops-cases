@@ -1,0 +1,20 @@
+#标题
+USB: serial: io_edgeport: 修复 debug 打印中的 UAF (use after free) 问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 io_edgeport 驱动的 `edge_bulk_out_cmd_callback` 函数中，当 USB URB 传输完成并释放后，若传输状态非零，代码继续访问已释放的 `urb` 指针以获取设备指针进行日志打印。这会导致内核发生 Use-After-Free (UAF) 故障，可能引发内核崩溃、内存损坏或不可预测的行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `edge_bulk_out_cmd_callback` 中，代码先调用了 `usb_free_urb(urb)` 释放了 `urb` 结构体，随后在检查 `status` 的分支中，又尝试通过 `urb->dev->dev` 访问设备结构体进行 `dev_dbg` 打印。此时 `urb` 指针已指向被释放的内存，构成了典型的释放后使用错误。
+
+#解决方案
+在函数入口处、释放 `urb` 之前，先将 `&urb->dev->dev` 指针保存到一个局部变量 `dev` 中。后续所有的调试日志打印均使用该局部变量 `dev`，而不再通过已释放的 `urb` 指针进行访问，从而避免 Use-After-Free 风险。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/71902fa022adf72a6cdd70cec65f536acc47f438

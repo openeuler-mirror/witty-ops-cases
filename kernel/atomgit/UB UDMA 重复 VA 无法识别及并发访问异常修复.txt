@@ -1,0 +1,37 @@
+#标题
+UB UDMA 重复 VA 无法识别及并发访问异常修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在使用 USVA（User SVA）功能时，对于重复的虚拟地址（VA）无法被正确识别和处理，导致地址映射或权限管理异常。
+2. 在并发场景下，对 `jfc_table` 进行操作时可能触发内核锁定错误或数据竞争，因为使用了非原子上下文安全的 `xa_lock` 而非 `xa_lock_irqsave`。
+3. 在 IOMMU 映射失败时，系统未能正确释放已占用的区间资源，可能导致内存泄漏或后续映射失败。
+4. 在 `UBCORE_TP_UM` 传输模式下，当 `order_type` 为 `UBCORE_OL` 时，类型判断错误，未能正确识别为 `JETTY_RC` 类型。
+
+#主要错误日志
+- `dev_err(dev->dev, "failed to alloc separate pages USVA device.\n");`
+- `dev_err(dev->dev, "failed to init segment_range.\n");`
+- `dev_err(dev->dev, "failed to store segment_range, ret=%d.\n", ret);`
+- `dev_err(ctx->dev->dev, "IOMMU segment failed, ret = %d.\n", ret);`
+- `dev_err(ctx->dev->dev, "IOMMU partial overlap segment failed, ret = %d.\n", ret);`
+- `dev_err(udev->dev, "failed to query tpid(%u) in ubcore, ret = %d.\n", ...);`
+- `pr_warn("seg_tree_table is not empty.\n");` （模块卸载时）
+- `dev_info_ratelimited(ctx->dev->dev, "the mv_start and/or mv_end of VMA was modified.\n");`
+
+#问题根因
+1. **全局资源隔离问题**：`seg_tree_table` 和 `seg_tree_mutex` 挂载在 `udma_dev` 设备结构体下，导致不同设备实例间的 TID 查找和销毁操作互相干扰。在 `udma_get_usva_tid` 中，若 `xa_load` 未找到已有条目，代码会创建新条目并存储，但由于资源未全局共享，导致对“重复 VA”场景下的查找失败，无法复用已存在的 seg_tree 结构，引发识别问题。
+2. **并发保护缺失**：`udma_bind_jfc` 等函数在对 `xarray` 进行操作时使用了 `xa_lock`，未关闭本地中断。在进程上下文被中断处理程序打断时，若中断处理程序也操作该锁，将引发死锁或数据损坏。
+3. **错误处理路径不完整**：`udma_iommu_local_map` 在 IOMMU 映射失败时，直接返回错误，未调用 `udma_seg_range_release` 清理已占用的区间资源。
+4. **逻辑判断遗漏**：`to_udma_type` 函数在处理 `UBCORE_TP_UM` 传输模式时，未考虑 `order_type` 参数，导致特定配置下（`UBCORE_OL`）无法返回正确的设备类型 `JETTY_RC`。
+
+#解决方案
+1. **全局化关键资源**：将 `seg_tree_table` 和 `seg_tree_mutex` 从 `udma_dev` 结构体中移出，改为全局静态变量 `g_seg_tree_table` 和 `g_seg_tree_mutex`。修改所有相关引用，确保跨设备实例的全局唯一性和正确查找，从而解决重复 VA 无法识别的问题。
+2. **修复锁机制**：将 `udma_bind_jfc`、`udma_unbind_jfc` 等函数中的 `xa_lock` 替换为 `xa_lock_irqsave`，对应的 `xa_unlock` 替换为 `xa_unlock_irqrestore`，确保在并发中断环境下的安全性。
+3. **完善错误处理**：在 `udma_iommu_local_map` 中，增加对 IOMMU 映射失败时的资源回滚逻辑，调用 `udma_seg_range_release` 释放区间占用。
+4. **修正类型判断逻辑**：修改 `to_udma_type` 函数，增加 `order_type` 参数，当 `trans_mode` 为 `UBCORE_TP_UM` 且 `order_type` 为 `UBCORE_OL` 时，正确返回 `JETTY_RC`。
+5. **其他修复**：修复 `udma_destroy_seg_tree_table` 的调用位置与参数（改为全局清理），修正 `udma_eq.c` 中的格式化字符串参数类型，并在 `udma_alloc_ucontext` 失败路径中增加 `udma_unset_dtu_va_info` 调用以清理资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/82cd6f191b971f84b8b2e082175633e5b14a71db

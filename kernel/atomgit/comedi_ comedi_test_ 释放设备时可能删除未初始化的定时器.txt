@@ -1,0 +1,20 @@
+#标题
+comedi: comedi_test: 释放设备时可能删除未初始化的定时器
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 comedi_test 驱动加载过程中，若 `waveform_common_attach()` 函数在分配设备私有数据后、但在初始化定时器之前因错误而退出，驱动核心会调用 `waveform_detach()` 进行清理。此时由于定时器尚未初始化，执行 `del_timer_sync()` 删除操作会导致内核崩溃或内存非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+`waveform_detach()` 函数用于判断是否删除定时器的条件检查不完整。原代码仅检查了设备私有数据指针 `devpriv` 是否存在，但未检查子设备是否已分配。根据代码逻辑，定时器的初始化发生在子设备分配之后。如果初始化流程在分配子设备之前失败，`devpriv` 非空但定时器未初始化，此时强制删除定时器引发故障。
+
+#解决方案
+修改 `waveform_detach()` 函数中的判断条件，在执行 `del_timer_sync()` 前，除了检查 `devpriv` 外，增加对 `dev->n_subdevices` 的检查。确保只有在子设备成功分配（意味着定时器已完成初始化）的情况下，才执行定时器删除操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a4e554ddc6524d66a45fcf8a4950fed727f59cb4

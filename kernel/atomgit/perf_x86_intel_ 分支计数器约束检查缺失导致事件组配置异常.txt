@@ -1,0 +1,20 @@
+#标题
+perf/x86/intel: 分支计数器约束检查缺失导致事件组配置异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Intel 平台上使用 perf 工具配置包含分支计数器（branch counters）的事件组时，如果事件尚未作为兄弟事件安装到组中，内核未正确应用相应的硬件约束。这可能导致事件配置逻辑出现偏差，或在不应允许的情况下错误地设置了 `PERF_X86_EVENT_BRANCH_COUNTERS` 标志，影响性能监控功能的准确性。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `intel_pmu_hw_config` 函数处理分支计数器事件组逻辑时，原有代码仅遍历了 `group_leader` 和已有的 `sibling` 事件来应用约束，但遗漏了对当前正在配置的 `event` 自身的检查。如果该 `event` 不是 `leader`，它在遍历 `for_each_sibling_event` 时还尚未被加入兄弟列表，导致其特定的分支计数器约束未被应用。
+
+#解决方案
+提取分支计数器约束应用逻辑为独立函数 `intel_set_branch_counter_constr`。在事件组配置流程中，显式增加对当前 `event` 自身的约束检查：若 `event` 不是 `leader`，则单独调用 `intel_set_branch_counter_constr` 对其进行检查，确保所有相关事件的约束条件均被正确处理。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7082713f0f1ddd97cbc04a88e4237190e8b3ede3

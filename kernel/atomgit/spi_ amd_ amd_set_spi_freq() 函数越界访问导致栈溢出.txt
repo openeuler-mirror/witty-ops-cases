@@ -1,0 +1,22 @@
+#标题
+spi: amd: amd_set_spi_freq() 函数越界访问导致栈溢出
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使能了 UBSAN（Undefined Behavior Sanitizer）的内核编译环境中，编译阶段 objtool 检查报错，提示函数 `amd_set_spi_freq()` 存在越界访问导致栈破坏，错误信息显示该函数非正常执行流穿透到了下一个函数 `amd_spi_set_opcode()`。运行时若触发特定条件，可能导致内核崩溃或内存破坏。
+
+#主要错误日志
+```
+drivers/spi/spi-amd.o: error: objtool: amd_set_spi_freq() falls through to next function amd_spi_set_opcode()
+```
+
+#问题根因
+在 `amd_set_spi_freq()` 函数中，当 `speed_hz` 参数小于 `AMD_SPI_MIN_HZ` 时，循环迭代会遍历整个 `amd_spi_freq` 数组而不提前退出。由于循环终止条件 `i < ARRAY_SIZE(amd_spi_freq)` 允许索引 `i` 达到数组最大下标加 1，导致循环结束后 `i` 越界，进而引发数组越界访问（Out-of-Bounds）。这种越界访问破坏了栈结构，导致函数控制流异常“穿透”至相邻函数。
+
+#解决方案
+修改循环终止条件，将 `i < ARRAY_SIZE(amd_spi_freq)` 调整为 `i < ARRAY_SIZE(amd_spi_freq)-1`。此举确保循环在达到数组最后一个条目时停止，避免索引越界，使得低于最小频率的 `speed_hz` 值能被正确截断处理为 `AMD_SPI_MIN_HZ`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6fb42df6e912a02355706169fcb9ee2b611c53ac

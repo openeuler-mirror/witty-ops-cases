@@ -1,0 +1,20 @@
+#标题
+scsi: ibmvscsi_tgt: dma_unmap_sg() 参数 nents 值错误修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+IBM VSCSI Target 驱动在进行 DMA 数据传输后的清理阶段，`dma_unmap_sg()` 函数被传入了错误的 nents 参数值。这可能导致内核 DMA 映射层维护错误的映射计数或状态，进而引发内存泄漏、I/O 数据不一致，严重时可能导致系统崩溃或内核 panic（具体表现依赖于底层 DMA 映射实现）。
+
+#主要错误日志
+未知
+
+#问题根因
+根据内核 DMA API 规范，`dma_unmap_sg()` 函数的 `nents` 参数必须传入与 `dma_map_sg()` 相同的值（即原始 scatterlist 条目数），而不是 `dma_map_sg()` 返回的映射后条目数。代码原实现错误地传递了变量 `nsg`，该变量存储的是映射后的返回值，导致 DMA 解映射操作参数不匹配，违反了 API 使用约定。
+
+#解决方案
+修改 `drivers/scsi/ibmvscsi_tgt/libsrp.c` 文件中的 `srp_direct_data` 和 `srp_indirect_data` 函数，在调用 `dma_unmap_sg()` 时，将参数从变量 `nsg` 修改为 `cmd->se_cmd.t_data_nents`，确保传入的是原始分配的 scatterlist 条目数量，从而保证 DMA 映射与解映射的参数一致性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/29638a9f57a3697f887c9ad2269f127b0def705c

@@ -1,0 +1,20 @@
+#标题
+f2fs：压缩写回结束处理中 sbi 的 use-after-free 修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发卸载文件系统时，f2fs 压缩写回的结束 IO 处理路径可能触发 use-after-free 故障。具体表现为：当 `f2fs_put_super()` 等待所有页写入完成时，若计数器归零触发卸载流程继续执行，销毁了 `sbi` 及其 slab 缓存；此时并发的 bio 完成回调仍在访问已释放的 `sbi` 结构体成员，导致内核崩溃或数据结构破坏。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `f2fs_compress_write_end_io()` 函数中，调用 `dec_page_count(sbi, type)` 会使 `F2FS_WB_CP_DATA` 计数器减至零，从而解除 `f2fs_put_super()` 中 `f2fs_wait_on_all_pages()` 的阻塞，导致卸载线程继续执行并调用 `f2fs_destroy_page_array_cache(sbi)` 销毁 `sbi->page_array_slab`，最终释放 `sbi`。然而，bio 完成回调函数随后仍会调用 `page_array_free(sbi, ...)`，试图解引用已被销毁的 slab 缓存指针 `sbi->page_array_slab` 来执行 `kmem_cache_free()`，从而引发 use-after-free。这与 CVE-2026-23234 属于同一类问题。
+
+#解决方案
+调整 `dec_page_count()` 的调用位置，确保其对 `sbi` 的访问发生在最后一次引用之前。具体修改为：对于非最后一个 folio 的情况，立即调用 `dec_page_count()` 并返回；对于最后一个 folio，将 `dec_page_count()` 移至函数末尾执行。这样保证了 `page_array_free()` 对 `sbi` 的访问完成时，`F2FS_WB_CP_DATA` 计数器尚未归零，阻止卸载线程提前销毁 `sbi`，从而避免 use-after-free。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/591f7858e63fa848f94058c84352b29dfcc5db3b

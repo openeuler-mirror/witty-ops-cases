@@ -1,0 +1,27 @@
+#标题
+hfsplus: generic/070 测试导致卷损坏及未使用节点未清零问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+执行 xfstests 的 generic/070 测试用例后，HFS+ 文件系统卷处于损坏状态。使用 `fsck.hfsplus` 检查时报错 "Unused node is not erased (node = 1)"，指出 extents overflow 文件中存在未擦除的未使用节点。测试报告显示 "filesystem on /dev/loopX is inconsistent"，修复前测试失败，修复后测试通过。
+
+#主要错误日志
+- **fsck.hfsplus 检测输出：**
+  `Unused node is not erased (node = 1)`
+  `Verify Status: VIStat = 0x0000, ABTStat = 0x0000 EBTStat = 0x0004`
+- **内核调试日志（推断）：**
+  `hfsplus: node 1, num_recs 0, flags 0x10`
+  `hfsplus: tree->cnid 3, volume_attr 0x80000800`
+- **xfstests 输出：**
+  `_check_generic_filesystem: filesystem on /dev/loop50 is inconsistent`
+
+#问题根因
+函数 `hfs_bnode_need_zeroout()` 在判断是否需要将节点清零时，逻辑存在缺陷。原代码强制要求 `tree->cnid == HFSPLUS_CAT_CNID`（即仅针对目录文件），同时检查 `HFSPLUS_VOL_UNUSED_NODE_FIX` 属性。然而，调试信息显示 extents overflow 文件（tree->cnid 为 3）同样请求了 `HFSPLUS_VOL_UNUSED_NODE_FIX` 属性（volume_attr 包含该标志），但因类型检查限制未执行清零操作，导致未使用的节点未被擦除，进而引发文件系统不一致。
+
+#解决方案
+修改 `hfs_bnode_need_zeroout()` 函数，移除对 b-tree 类型 ID（`tree->cnid == HFSPLUS_CAT_CNID`）的严格检查，仅依据卷属性 `volume_attr` 中的 `HFSPLUS_VOL_UNUSED_NODE_FIX` 标志位进行判断。这使得节点清零功能可以应用于所有 HFS+ b-tree 类型（包括 extents overflow 文件），从而彻底修复卷损坏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/33a897dbef5afb7dbf01207014b7d8c7a851285f

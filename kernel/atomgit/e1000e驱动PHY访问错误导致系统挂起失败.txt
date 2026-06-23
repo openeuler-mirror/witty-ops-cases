@@ -1,0 +1,26 @@
+#标题
+e1000e驱动PHY访问错误导致系统挂起失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统执行挂起（pm_suspend）操作时，e1000e网卡驱动因PHY访问错误导致挂起流程失败，系统无法进入低功耗状态。后续尝试再次挂起时持续失败，且系统无法从该错误状态中自动恢复。
+
+#主要错误日志
+[ 1663.694828] e1000e 0000:00:19.0 eth0: Failed to disable ULP
+[ 1665.093513] e1000e 0000:00:19.0 eth0: Hardware Error
+[22909.393854] PM: pci_pm_suspend(): e1000e_pm_suspend+0x0/0x760 [e1000e] returns -2
+[22909.393858] PM: dpm_run_callback(): pci_pm_suspend+0x0/0x160 returns -2
+[22909.393861] PM: Device 0000:00:1f.6 failed to suspend async: error -2
+[推断] e1000e 0000:00:19.0 eth0: Failed to enable wakeup
+[推断] e1000e 0000:00:19.0 eth0: Failed to enable ULP
+
+#问题根因
+在系统挂起过程中，e1000e网卡驱动尝试访问PHY（如启用PHY唤醒或启用ULP低功耗链路）时发生硬件错误。驱动程序之前的处理逻辑是向上层返回错误码（如-2），这导致PM核心层判定设备挂起失败，进而中止整个系统的挂起流程，并导致后续挂起操作持续失败。
+
+#解决方案
+修改 `__e1000_shutdown` 和 `e1000e_pm_suspend` 函数的返回值逻辑，使其在遇到PHY访问等硬件错误时不再向系统返回失败错误码，而是返回0（成功）。同时，在错误发生时通过内核日志打印警告信息。此举将设备级的硬件故障影响范围限制在网卡本身（可能导致耗电量稍高或Wake on LAN功能失效），避免了系统级挂起失败的严重后果。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d8e11a1a8c0bac0474b6b45921a64c9bea8f9d85

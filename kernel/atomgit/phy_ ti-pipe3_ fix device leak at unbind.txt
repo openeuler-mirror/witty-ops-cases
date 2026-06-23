@@ -1,0 +1,20 @@
+#标题
+phy: ti-pipe3: fix device leak at unbind
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载（unbind）ti-pipe3 驱动时，存在内核资源泄露问题。具体表现为驱动在 probe 阶段通过 `of_find_device_by_node()` 获取并引用了控制设备（control device），但在驱动移除时未释放该引用计数，导致对应的设备对象无法被正常释放。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在 `ti_pipe3_get_sysctrl()` 函数中调用 `of_find_device_by_node()` 查找控制节点时，该函数内部会增加对应设备的引用计数（kref）。然而，驱动在卸载路径中缺失了对应的 `put_device()` 调用，导致设备引用计数无法归零，从而引发设备对象泄露。该缺陷自提交 918ee0d21ba4 ("usb: phy: omap-usb3: Don't use omap_get_control_dev()") 引入。
+
+#解决方案
+在获取控制设备后，使用 `devm_add_action_or_reset()` 机制注册一个自动清理回调函数 `ti_pipe3_put_device()`。该回调函数内部调用 `put_device()` 来释放设备引用。通过设备资源管理机制，确保在驱动解绑时自动执行该回调，从而正确释放控制设备的引用，修复内存泄露问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0c17657099600509c76e7ecca4014da863c84f03

@@ -1,0 +1,28 @@
+#标题
+simple_xattr_list 未包含 security.* 扩展属性导致 ls -Z 显示异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 tmpfs 或 kernfs-based 文件系统（如 sysfs）上，当 security.* 扩展属性未由用户显式设置或 inode 创建时未初始化时，调用 `listxattr` 系统调用无法获取到 `security.selinux` 等安全标签属性名称。
+这导致 `coreutils` 的 `ls -Z` 命令（通过 libselinux 实现）无法显示这些 inode 的安全上下文，因为 libselinux 仅在 `listxattr` 返回相应属性名时才会调用 `getxattr`。
+具体表现为：
+- `getfattr -m.*` 对特定文件（如 /run/initramfs, /sys/kernel/fscaps）执行后无输出。
+- `ls -Z` 无法显示对应文件的安全标签。
+
+#主要错误日志
+未知
+
+#问题根因
+VFS 长期以来有一种回退机制，当文件系统未实现自身的 `listxattr` 时，会从 LSM（Linux Security Modules）获取 `security.*` 扩展属性。
+后来 shmem/tmpfs 和 kernfs 为了支持其他扩展属性而引入了自己的 xattr handlers。这导致了一个副作用：对于 tmpfs 和 kernfs 类文件系统，`listxattr` 不再经过 VLSM 的回退逻辑，因此不再返回合成的 `security.*` 属性名，除非这些属性已被显式设置。
+
+#解决方案
+修改 `fs/xattr.c` 中的 `simple_xattr_list` 函数：
+1. 新增辅助函数 `xattr_is_maclabel` 用于识别 MAC（强制访问控制）标签属性。
+2. 在遍历文件系统自身的扩展属性之前，显式调用 `security_inode_listsecurity` 将 LSM 管理的 `security.*` 属性添加到列表中。
+3. 在随后的属性遍历中，通过 `xattr_is_maclabel` 判断并跳过 MAC 标签属性，避免重复列出（因为已由 LSM 提供）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4ccd2989760d3a3bd713bf6075d819c95241e74b

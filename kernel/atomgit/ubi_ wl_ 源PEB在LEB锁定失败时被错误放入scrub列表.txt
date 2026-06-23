@@ -1,0 +1,20 @@
+#标题
+ubi: wl: 源PEB在LEB锁定失败时被错误放入scrub列表
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 Fastmap 的小容量 UBIFS 分区（<64M）上运行 fsstress 压力测试 5~10 分钟可复现。系统产生大量额外的、无效的磨损均衡任务，导致不必要的 PEB 搬运操作，影响 Flash 使用寿命。日志中出现非 scrub 类型的 PEB 被错误标记并处理为 scrub 操作的记录。
+
+#主要错误日志
+ubi0: scrubbed PEB 66 (LEB 0:10), data moved to PEB 165
+
+#问题根因
+在磨损均衡过程中，当源 LEB 在 `ubi_eba_copy_leb()` 中因锁定失败（`leb_write_trylock` 失败）返回 `MOVE_RETRY` 时，代码逻辑错误地将变量 `scrubbing` 设置为 1。这导致非 scrub 类型的源 PEB 被错误地放入 `ubi->scrub` 列表，而不是放回 `ubi->used` 列表。这使得该 PEB 在后续被误判为需要 scrub 的块，触发多余的搬运操作。
+
+#解决方案
+修改 `wear_leveling_worker` 函数逻辑：当捕获到 `MOVE_RETRY` 错误时，不再强制设置 `scrubbing = 1`，而是将 `keep` 变量设置为 1。根据代码逻辑，`scrubbing` 为 1 的 PEB 会被放入 scrub 列表，而 `keep` 为 1 的非 scrub PEB 会被正确放回 used 列表，从而避免错误的列表归属和无效的磨损均衡操作。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/798a0b4cef7dc82c19551e6084224b0d20aa4ff1

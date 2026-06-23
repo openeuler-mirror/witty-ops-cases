@@ -1,0 +1,25 @@
+#标题
+PCI: tegra194: Handle errors in BPMP response
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Tegra194 PCIe endpoint 模式下，当与 BPMP 的 IPC 事务失败时，驱动程序未能正确处理错误。这导致 `pcie->ep_state` 被错误地设置为 `EP_STATE_ENABLED`，与硬件实际状态不同步。后续的 PERST# 复位操作因此变为空操作，无法触发硬件初始化序列。
+
+例如，在使用 rock5b 作为主机时，若初次 PERST# assert + deassert 过程中 PHY 初始化失败，后续 Linux 驱动加载时的第二次 PERST# 操作将无法重试硬件初始化，导致 PCIe 设备无法正常工作。
+
+#主要错误日志
+未知
+
+#问题根因
+`tegra_bpmp_transfer()` 函数的返回值仅表示 IPC 事务是否成功传输，并未包含 BPMP 命令执行结果。代码原逻辑直接返回 `tegra_bpmp_transfer()` 的返回值，忽略了检查 `msg.rx.ret` 中 BPMP 命令的实际执行结果。这导致在命令执行失败时，上层逻辑误判为成功，进而错误地更新了状态机。
+
+#解决方案
+修改 `tegra_pcie_bpmp_set_ctrl_state` 和 `tegra_pcie_bpmp_set_pll_state` 函数：
+1. 捕获 `tegra_bpmp_transfer()` 的返回值，若传输失败则直接返回错误。
+2. 额外检查 `msg.rx.ret` 字段，若该字段非零（表示 BPMP 命令执行失败），则返回 `-EINVAL`。
+通过上述修改，确保只有在 IPC 传输成功且 BPMP 命令执行成功时才视为操作成功，防止状态机与硬件实际状态脱节。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/7304304f38234d1c382187b51173968c905f797c

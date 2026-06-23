@@ -1,0 +1,28 @@
+#标题
+powerpc book3s 32位架构下 mprotect 权限保护失效
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 32 位 book3s 架构（使用 hash MMU）的处理器上，调用 mprotect 修改内存页属性（如改为只读）后，内存保护机制失效。写入操作本应触发段错误，但实际上写入成功，导致内存权限控制功能异常。
+复现步骤如下：
+1. 使用 mmap 分配一段可读写内存；
+2. 执行写入操作以强制创建 HPTE；
+3. 调用 mprotect 将该内存设置为只读（PROT_READ）；
+4. 尝试再次写入，预期发生 Segfault，但实际写入成功。
+
+#主要错误日志
+未知
+
+#问题根因
+在 32 位 book3s hash-MMU 架构上，tlb_flush() 函数实现有误。当 CPU 支持 HPTE 表时，原代码逻辑直接调用 _tlbia() 或未做有效处理，导致 tlb_flush() 实际上是一个空操作。
+自内核 5.19 引入 commit 4a18419f71cd ("mm/mprotect: use mmu_gather") 后，mprotect 流程开始使用 tlb_gather_mmu() 机制。由于 tlb_flush() 未正确刷新 TLB，导致修改后的页权限未生效，硬件仍使用旧的 TLB 条目进行访问，从而绕过了权限检查。
+
+#解决方案
+修改 arch/powerpc/include/asm/book3s/32/tlbflush.h 中的 tlb_flush() 函数逻辑，并在 arch/powerpc/mm/book3s32/tlb.c 中新增刷新接口：
+1. 新增 hash__flush_gather() 函数，根据 mmu_gather 结构体的标志位（fullmm 或 need_flush_all）选择调用 hash__flush_tlb_mm() 进行全 TLB 刷新，或调用 hash__flush_range() 进行范围刷新。
+2. 修正 tlb_flush() 的条件判断，当检测到 MMU_FTR_HPTE_TABLE 特性时，调用新增的 hash__flush_gather() 进行有效的 TLB 刷新；否则调用 _tlbia()。此举使 32 位 book3s 的行为与 64 位保持一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d69a9194b9b1a91c6315bb993a0de41f1b320f01

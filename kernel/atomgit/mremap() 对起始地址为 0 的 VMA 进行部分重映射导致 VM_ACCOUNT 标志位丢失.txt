@@ -1,0 +1,20 @@
+#标题
+mremap() 对起始地址为 0 的 VMA 进行部分重映射导致 VM_ACCOUNT 标志位丢失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当对起始地址为 0 且带有 VM_ACCOUNT 标志的 VMA 执行部分 mremap() 操作（导致 VMA 分裂）并发生移动时，内核错误地清除了分裂后剩余 VMA 的 VM_ACCOUNT 标志。这导致该内存区域的记账信息不正确，可能引发后续内存管理行为异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 move_vma() 函数处理部分重映射的逻辑中，使用了 `account_start` 和 `account_end` 变量来判断是否需要恢复 VM_ACCOUNT 标志。代码将 `vma->vm_start`（可能为 0）赋值给 `account_start`，随后通过 `if (account_start)` 进行判断。由于 `account_start` 被定义为 `unsigned long` 类型，当 VMA 起始地址为 0 时，该变量值为 0，导致条件判断为假，跳过了恢复 VM_ACCOUNT 标志的逻辑，使得该 VMA 错误地丢失了记账属性。
+
+#解决方案
+将 `account_start` 和 `account_end` 变量的类型从 `unsigned long` 修改为 `bool`。逻辑上不再存储具体的地址值，而是存储布尔状态（true/false）来表示是否需要进行记账处理，从而避免了因地址值为 0 导致的判断失效问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0c66599be95d36cbe0b318ae073b057eeaddcfb2

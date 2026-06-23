@@ -1,0 +1,30 @@
+#标题
+ksmbd: ipc: fix use-after-free in ipc_msg_send_request
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 ksmbd 模块处理通用 netlink 回复时，高并发场景下触发 KASAN 检测到的 slab-use-after-free 错误，导致内核报错并打印调用栈。具体表现为 `handle_generic_event` 函数在写入数据时访问了已被 `ipc_msg_send_request` 释放的内存地址。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in handle_generic_event+0x3c4/0x5f0 [ksmbd]
+Write of size 12 at addr ffff888198ee6e20 by task pool/109349
+...
+Freed by task:
+  kvfree
+  ipc_msg_send_request [ksmbd]
+  ksmbd_rpc_open -> ksmbd_session_rpc_open [ksmbd]
+
+#问题根因
+`ipc_msg_send_request()` 函数在栈上使用 `ipc_msg_table_entry` 等待通用 netlink 回复。虽然通用 netlink 处理程序（`handle_generic_event`/`handle_response`）在持有 `ipc_msg_table_lock` 的情况下填充 `entry->response`，但 `ipc_msg_send_request()` 在验证和释放 `entry->response` 时未持有该锁。
+这导致在高并发情况下出现竞态条件：`handle_response()` 正在向 `entry->response` 拷贝数据，而 `ipc_msg_send_request()` 已经释放了该内存，从而触发 Use-After-Free。
+
+#解决方案
+修改 `ipc_msg_send_request()` 函数，确保对 `entry->response` 的所有访问均在 `ipc_msg_table_lock` 锁的保护下进行：
+1. 在验证 `entry->response` 以及处理错误路径释放内存时，先获取 `ipc_msg_table_lock` 写锁。
+2. 将 `hash_del` 操作和 `entry->response` 的返回操作移至锁的保护范围内。
+3. 确保仅在从哈希表中移除条目后，才将最终的 `entry->response` 指针返回给调用者，从而消除竞态窗口。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/4b3857b36953d90c292b94f3aa71aa851e76e3cd

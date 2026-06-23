@@ -1,0 +1,20 @@
+#标题
+intel-uncore-freq: 分区系统中 sysfs 条目重复告警修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在分区系统配置阶段，若系统仅配置了一个 package 和一个计算 die，内核会产生 sysfs 条目重复的告警。这通常发生在平台启动阶段。
+
+#主要错误日志
+sysfs: duplicate entry
+
+#问题根因
+在分区系统中，`topology_max_dies_per_package()` 返回值为 1，导致代码逻辑未能正确处理多分区场景。此时，Partition 0 会创建 root domain，而 Partition 1 由于拥有相同的 package ID，尝试再次创建相同的 sysfs 节点，从而触发重复条目告警。原有的判断条件 `topology_max_dies_per_package() > 1` 无法覆盖单 die 多分区的场景。
+
+#解决方案
+修改 `drivers/platform/x86/intel/uncore-frequency/uncore-frequency-tpmi.c` 中的判断条件，在检查 `topology_max_die_per_package() > 1` 的基础上，增加对 `plat_info->partition` 的检查（即检查是否存在非零分区）。如果存在分区配置，则同样跳过后续可能导致冲突的 root domain 创建流程，从而避免 sysfs 条目重复。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/61c4fc07a2ed62721fd75f484badd37595bb8b3e

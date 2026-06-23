@@ -1,0 +1,20 @@
+#标题
+powerpc/eeh: EEH错误恢复uevent上报状态信息不准确
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在PowerPC架构下，当发生EEH（Enhanced Error Handling）错误并开始恢复流程时，系统通过uevent向用户空间上报的PCI错误恢复状态始终为 `PCI_ERS_RESULT_NONE`。这导致用户空间无法获取到 `error_detected()` 回调函数的真实返回结果，无法准确判断设备的实际错误状态或恢复需求，与AER机制的行为不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+问题源于 `arch/powerpc/kernel/eeh_driver.c` 文件中的 `eeh_report_error` 函数。在调用驱动的 `error_detected()` 回调函数后，代码将 `PCI_ERS_RESULT_NONE` 硬编码作为参数传递给 `pci_uevent_ers()`，而忽略了 `error_detected()` 的实际返回值 `rc`。该问题自 EEH uevent 支持引入以来便存在。
+
+#解决方案
+修改 `eeh_report_error` 函数，调用 `pci_uevent_ers()` 时传入 `error_detected()` 的实际返回值 `rc`，而非固定的 `PCI_ERS_RESULT_NONE`。此举使 EEH 的行为与 AER 及 s390 架构保持一致，确保用户空间能接收到准确的错误恢复状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/f1a3ee91a4d52933f9394539d4dadf0662c4c894

@@ -1,0 +1,20 @@
+#标题
+drm/tests: probe-helper 测试用例中 drm_display_mode 内存泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 DRM probe-helper 相关的 KUnit 测试（特别是 `drm_test_connector_helper_tv_get_modes_check`）时，系统发生内存泄漏。`drm_analog_tv_mode()` 及其变体函数返回的 `drm_display_mode` 对象在测试结束后未被释放。
+
+#主要错误日志
+未知
+
+#问题根因
+测试函数 `drm_test_connector_helper_tv_get_modes_check()` 调用 `drm_analog_tv_mode()` 及其变体获取期望的显示模式（`expected`），这些函数动态分配了 `drm_display_mode` 内存。然而，测试逻辑中仅将 `expected` 指针声明为 `const` 并用于比对，从未调用销毁函数释放该内存，导致内存泄漏。
+
+#解决方案
+修改测试代码，将 `expected` 变量类型从 `const struct drm_display_mode *` 修改为 `struct drm_display_mode *`，以便对其进行释放操作。在使用完 `expected` 模式后，调用 `drm_kunit_add_mode_destroy_action()` 函数将其添加到 KUnit 测试的资源管理列表中，确保测试结束时自动释放该内存，修复内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6b8743bda4162f2183ef5cb3268b50cbbe5eb703

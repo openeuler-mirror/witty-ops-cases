@@ -1,0 +1,27 @@
+#标题
+NVMe/TCP target 处理畸形 PDU 导致越界访问风险修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 NVMe over TCP target 模式下，当主机端发送特制的畸形 PDU（如 pdu_len 与实际 SGL 不匹配）时，target 侧在 `nvmet_tcp_build_pdu_iovec` 函数中构建 IO 向量时可能发生越界访问。该问题可能导致内核崩溃、内存破坏或潜在的提权风险。
+
+#主要错误日志
+未知
+
+#问题根因
+`nvmet_tcp_build_pdu_iov` 函数在处理 PDU 数据时，未充分校验 `cmd->req.sg_cnt`（SGL 条目计数）与 `pdu_len`（PDU 数据长度）的一致性。
+具体缺陷包括：
+1. 未检查 `sg_cnt` 是否为 0，也未检查当前索引 `sg_idx` 是否超出 `sg_cnt` 范围，直接访问 `cmd->req.sg[cmd->sg_idx]` 导致越界读。
+2. 在遍历 scatterlist 的循环中，未检查剩余 SGL 条目数量 `sg_remaining`，若 `pdu_len` 大于实际 SGL 承载能力，循环将越界遍历。
+3. 未校验单个 `sg->length` 是否有效（为 0 或小于 `sg_offset`），导致计算 `iov_len` 时出现非法值。
+
+#解决方案
+在 `nvmet_tcp_build_pdu_iovec` 函数中增加防御性边界检查，一旦检测到参数异常立即触发致命错误终止连接：
+1. 在访问 scatterlist 前，校验 `sg_cnt` 与 `sg_idx`；若无效则调用 `nvmet_tcp_fatal_error` 并返回。
+2. 引入 `sg_remaining` 计数器，在遍历循环中持续递减并校验，防止越界循环。
+3. 校验 `sg->length` 合法性，若长度为 0 或不足以满足偏移量，同样触发致命错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2368743d6a6d44813c959df8a6a3186df8219712

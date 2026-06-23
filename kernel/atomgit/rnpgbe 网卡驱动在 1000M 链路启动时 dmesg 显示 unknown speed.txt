@@ -1,0 +1,24 @@
+#标题
+rnpgbe 网卡驱动在 1000M 链路启动时 dmesg 显示 unknown speed
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当 rnpgbe 网卡建立 1000M 链路连接时，dmesg 日志错误地显示链路速度为 "unknown speed"，而非正确的 "1000 Mbps"，导致用户无法从日志中获取正确的链路状态信息。
+
+#主要错误日志
+[17.191643] rnpgbe 0000:82:00.3 enp130s0f3: NIC Link is Up unknown speed, Full Duplex, Flow Control: RX/TX
+
+#问题根因
+驱动代码逻辑存在两处错误：
+1. 在 `rnpgbe_watchdog_update_link` 函数中，当没有 `check_link` 功能时的默认回退逻辑错误地将链路速度设置为 `RNP_LINK_SPEED_10GB_FULL`（10G），而实际物理链路为 1000M。
+2. 后续的打印判断逻辑错误，仅当速度变量等于 `RNP_LINK_SPEED_1GB_FULL` 时才打印 "1000 Mbps"，由于前置错误赋值为 10G，导致判断失效，进入了未知的 default 分支打印 "unknown speed"。
+
+#解决方案
+修改 `drivers/net/ethernet/mucse/rnpgbe/rnpgbe_main.c` 文件：
+1. 将默认链路速度变量的赋值从 `RNP_LINK_SPEED_10GB_FULL` 修正为 `RNP_LINK_SPEED_1GB_FULL`。
+2. 调整日志打印的速度判断条件，从 `RNP_LINK_SPEED_10GB_FULL` 修正为 `RNP_LINK_SPEED_1GB_FULL`，确保与物理链路状态一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fdd8001f00fa92c40ef8f09da46d1299d3d217c2

@@ -1,0 +1,20 @@
+#标题
+netfilter: nf_tables 新建流表错误路径引发 use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在通过 netlink 接口创建 nf_tables 流表（flowtable）的过程中，若因达到 hook 数量上限或硬件卸载设置失败而触发错误处理路径，内核可能出现 use-after-free。该故障可被 KASAN 检测到，具体表现为在通过 nfnetlink_hook 路径 dump hooks 信息时访问了已释放的内存。
+
+#主要错误日志
+KASAN: use-after-free in nfnetlink_hook path
+
+#问题根因
+在 `nf_tables_newflowtable` 的错误处理路径（`err_flowtable_hooks`）中，虽然后续会销毁事务和 hooks，但在此之前没有调用 `synchronize_rcu()` 等待 RCU 宽限期结束。由于相关的 hook 可能已经注册并暴露给数据包处理路径及 `nfnetlink_hook` 控制平面，此时若直接销毁流表对象，会导致其他 CPU 上的进程或软中断（如正在遍历 hooks 或 dump hooks 的进程）访问到已被释放的流表内存，从而引发 use-after-free。
+
+#解决方案
+在 `nf_tables_newflowtable` 函数的错误处理标签 `err_flowtable_hooks` 下，在销毁事务（`nft_trans_destroy`）之前增加 `synchronize_rcu()` 调用。这确保了在释放流表资源前，所有正在进行的 RCU 读侧临界区（如数据包处理路径）已完成，避免对已释放内存的并发访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1044354f3dc0caaae32942f929dcc28908794530

@@ -1,0 +1,35 @@
+#标题
+f2fs开启checkpoint禁用与lfs模式时因脏数据统计缺失导致系统Panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在同时开启 checkpoint_disabling 和 lfs_mode 的场景下，执行数据覆盖写入并触发 sync 操作时，系统触发 kernel BUG，导致 Panic。调用栈显示在 `new_curseg` 函数中触发崩溃，路径经由 `f2fs_allocate_data_block` -> `do_write_page` -> `f2fs_do_sync_file`。
+
+#主要错误日志
+```text
+------------[ cut here ]------------
+kernel BUG at fs/f2fs/segment.c:2752!
+RIP: 0010:new_curseg+0xc81/0x2110
+Call Trace:
+ f2fs_allocate_data_block+0x1c91/0x4540
+ do_write_page+0x163/0xdf0
+ f2fs_outplace_write_data+0x1aa/0x340
+ f2fs_do_write_data_page+0x797/0x2280
+ f2fs_write_single_data_page+0x16cd/0x2190
+ f2fs_write_cache_pages+0x994/0x1c80
+ f2fs_write_data_pages+0x9cc/0xea0
+ ...
+ f2fs_do_sync_file+0x26f/0x1c50
+ ...
+```
+
+#问题根因
+当开启 checkpoint禁用（checkpoint_disabling）和 LFS 模式（lfs_mode）时，所有覆写数据都会触发 OPU（Out-Place-Update）写入，这会比预期消耗更多的空闲段。根因在于函数 `__get_secs_required` 在计算所需段数量时，未统计脏数据页。这导致内核低估了空闲段需求，未能提前返回 ENOSPC 错误，而是在实际块分配过程中因耗尽空闲段而触发 kernel BUG。
+
+#解决方案
+修改 `__get_secs_required` 函数，在 LFS 模式且禁用检查点（SBI_CP_DISABLED）的特殊条件下，增加对 `F2FS_DIRTY_DATA` 脏数据页的统计。将脏数据页占用的段数和块数纳入总需求计算中，确保能正确判断剩余空间，提前返回 ENOSPC，避免在分配块时因空间不足触发 Panic。同时调整 `has_curseg_enough_space` 函数接口以支持传入数据块参数进行检查。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bdb86451f0de1f90cfff109063d63118a190ea6f

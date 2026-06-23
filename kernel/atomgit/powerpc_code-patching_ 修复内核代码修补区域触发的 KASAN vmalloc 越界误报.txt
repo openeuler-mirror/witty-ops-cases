@@ -1,0 +1,32 @@
+#标题
+powerpc/code-patching: 修复内核代码修补区域触发的 KASAN vmalloc 越界误报
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 PowerMac G4 等设备上启动启用了 KASAN 的内核时，系统启动过程中触发 KASAN 内存错误检测机制，报告 vmalloc-out-of-bounds 越界写入错误。该问题发生在 chronyd 进程尝试进行 BPF JIT 编译时，导致内核污渍。
+
+#主要错误日志
+BUG: KASAN: vmalloc-out-of-bounds in copy_to_kernel_nofault+0xd8/0x1c8
+Write of size 8 at addr f1000000 by task chronyd/1293
+...
+The buggy address belongs to the virtual mapping at
+ [f1000000, f1002000) created by:
+ text_area_cpu_up+0x20/0x190
+...
+Memory state around the buggy address:
+ f0ffff80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+>f1000000: f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8
+            ^
+
+#问题根因
+PowerPC 架构的代码修补基础设施在分配虚拟内存区域时，调用 `get_vm_area()` 函数并错误地设置了 `VM_ALLOC` 标志。
+`VM_ALLOC` 标志旨在用于 `vmalloc()` 分配的内存，KASAN 机制会认为此类内存区域在调用 `__vmalloc_node_range()` 进行实际分配和初始化之前是无效的（状态标记为 `f8`，即 `KASAN_VMALLOC_INVALID`）。
+然而，该代码修补区域实际上是通过 `map_kernel_page()` 按需直接映射的，并不会调用 `vmalloc` 相关的初始化函数，导致 KASAN 误判该区域未初始化且不可访问，从而在写入时触发越界报警。
+
+#解决方案
+修改 `arch/powerpc/lib/code-patching.c` 文件中 `text_area_cpu_up` 函数的实现，在调用 `get_vm_area()` 分配内存区域时，将第二个参数从 `VM_ALLOC` 修改为 `0`（即不传递特定标志）。这样 KASAN 将不会对该区域应用 vmalloc 特有的延迟初始化检查规则，避免了误报。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/932ea61d553dc0a2749ab4166d9a390cd744c18d

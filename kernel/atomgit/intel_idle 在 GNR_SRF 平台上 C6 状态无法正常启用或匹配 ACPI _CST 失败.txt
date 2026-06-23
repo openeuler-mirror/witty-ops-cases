@@ -1,0 +1,23 @@
+#标题
+intel_idle 在 GNR/SRF 平台上 C6 状态无法正常启用或匹配 ACPI _CST 失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Granite Rapids (GNR) 和 Sierra Forest (SRF) 平台上，当 BIOS 开启 ACPI C2 状态时，intel_idle 驱动的 C6 状态未能按预期工作。具体表现为：C6 状态无法正确启用或被禁用，系统无法进入预期的 C6 深度睡眠状态。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **缺少平台支持**：内核缺乏对 Granite Rapids (GNR) 平台 intel_idle 状态表的特定支持。
+2. **Sub-state 匹配逻辑缺陷**：在 GNR 和 SRF 平台上，ACPI _CST 提供的 MWAIT hint 与驱动自定义状态表中的 hint 在 sub-state 部分（低 4 位）可能不一致。原有代码进行精确匹配时会导致匹配失败，错误地认为该状态不存在，从而通过 `intel_idle_off_by_default` 函数错误地禁用了 C6 等关键节能状态。
+
+#解决方案
+1. **新增 GNR 平台支持**：添加了 `gnr_cstates` 状态表，定义了 C1, C1E, C6, C6P 状态，并通过 `intel_idle_ids` 匹配 GRANITERAPIDS_X 型号。
+2. **引入部分匹配标志**：新增 `CPUIDLE_FLAG_PARTIAL_HINT_MATCH` 标志位。
+3. **修复匹配逻辑**：修改 `intel_idle_off_by_default` 函数。对于设置了 `CPUIDLE_FLAG_PARTIAL_HINT_MATCH` 标志的状态（如 GNR 的 C6/C6P 和 SRF 的 C6S/C6SP），在比较 MWAIT hint 时忽略 sub-state 部分（通过 `& ~MWAIT_SUBSTATE_MASK` 实现），仅匹配主要的 C-state 编号，确保 ACPI _CST 与驱动状态表能正确匹配，从而修复 C6 状态启用失败的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/15bd887bf6e95b9bf10a564c75e14dee327ed0bc

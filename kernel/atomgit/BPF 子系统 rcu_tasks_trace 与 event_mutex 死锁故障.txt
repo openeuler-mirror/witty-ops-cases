@@ -1,0 +1,23 @@
+#标题
+BPF 子系统 rcu_tasks_trace 与 event_mutex 死锁故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+系统在执行 BPF 程序测试或使用 bpf_trace_printk 功能时，可能触发死锁，导致相关进程挂起（D 状态），无法继续执行。具体场景为：当 CPU A 正在销毁 perf event 并持有 `event_mutex` 等待 RCU 同步时，CPU B 同时在 RCU 读临界区中尝试获取 `event_mutex`，导致双向等待，系统陷入死锁。
+
+#主要错误日志
+pr_warn_ratelimited("could not enable bpf_trace_printk events");
+
+#问题根因
+死锁由 `rcu_tasks_trace` 与 `event_mutex` 之间的锁依赖反转导致：
+1. CPU A 路径（如 `_free_event` -> `perf_kprobe_destroy`）：先获取 `event_mutex`，随后调用 `synchronize_rcu_tasks_trace()` 等待 RCU 回调完成。
+2. CPU B 路径（如 `bpf_prog_test_run_syscall` -> `bpf_get_trace_printk_proto`）：先进入 `rcu_read_lock_trace()` 临界区（持有 RCU 读锁），随后调用 `trace_set_clr_event()` 尝试获取 `event_mutex`。
+这导致了 CPU A 持有 mutex 等 RCU，CPU B 持有 RCU 等 mutex，从而形成死锁闭环。
+
+#解决方案
+通过解除 RCU 读临界区内的 `event_mutex` 锁依赖来修复。具体做法是将 `trace_set_clr_event()` 的调用逻辑从同步执行改为异步执行：使用工作队列（workqueue）机制，将 `__set_printk_clr_event()` 委托给 `set_printk_work` 执行。修改后，在 `bpf_get_trace_printk_proto()` 和 `bpf_get_trace_vprintk_proto()` 中不再直接调用可能涉及 mutex 竞争的函数，而是调用 `schedule_work(&set_printk_work)`，从而避免了在 RCU 读临界区内获取 `event_mutex`，打破了死锁链条。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/575f5a9f433dd397c81bf557902e8533f384a1c5

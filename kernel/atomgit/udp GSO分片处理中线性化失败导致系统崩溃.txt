@@ -1,0 +1,20 @@
+#标题
+udp GSO分片处理中线性化失败导致系统崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 UDP GSO (Generic Segmentation Offload) 数据包分片处理时，如果 skb 数据从 frag_list 中 pull 出来后，在执行 `__skb_linearize` 进行线性化处理失败（如内存不足），内核未对该错误进行处理，导致后续访问无效内存或出现不可预知的异常行为。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `__udp_gso_segment` 中，当处理 frag_list 类型的 GSO 数据包时，代码逻辑调用了 `__skb_linearize(gso_skb)` 试图线性化数据，但未检查其返回值。如果线性化失败，函数继续执行后续操作，导致系统状态不一致或引发崩溃。
+
+#解决方案
+在 `net/ipv4/udp_offload.c` 文件的 `__udp_gso_segment` 函数中，增加对 `__skb_linearize` 返回值的检查。如果线性化失败（返回非零值），函数立即返回错误指针 `ERR_PTR(ret)`，终止后续处理以避免故障发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a9b7b47db8dba17e6d8c2ce3b21268aa955ea207

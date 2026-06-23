@@ -1,0 +1,22 @@
+#标题
+ds90ub913: 初始化函数缺少寄存器写入错误处理可能导致配置失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ds90ub913 驱动初始化过程中，`ub913_hw_init` 函数对 `UB913_REG_GENERAL_CFG` 寄存器的写操作缺少错误检查。若 `regmap_update_bits` 写入失败，驱动将继续执行后续流程而未感知到硬件配置错误，可能导致设备配置状态不正确，进而引发后续功能异常或初始化流程无法及时发现硬件通信故障。
+
+#主要错误日志
+Cannot update register 0x%02x %d!
+
+#问题根因
+`ub913_hw_init` 函数中，通过 `ub913_read` 和 `ub913_write` 组合修改寄存器位时，未捕获和处理 `ub913_write` 可能返回的错误码。同时，原实现使用 `read-modify-write` 逻辑而非原子的 `update_bits` 操作，且未对写操作结果进行校验，导致硬件配置失败时无法及时中止初始化并上报错误。
+
+#解决方案
+1. 新增 `ub913_update_bits` 辅助函数，封装 `regmap_update_bits` 调用，并在其内部增加错误判断与日志打印。
+2. 在 `ub913_hw_init` 中替换原有的 `read/write` 组合逻辑，改用 `ub913_update_bits` 进行原子的寄存器位修改。
+3. 检查 `ub913_update_bits` 的返回值，若失败则直接返回错误码，终止初始化流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c69fac6b025e2ba52113fc6e549478ddfbc20c53

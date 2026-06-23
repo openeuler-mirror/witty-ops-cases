@@ -1,0 +1,23 @@
+#标题
+[crypto] ccp: 重新绑定 ccp 设备时内核崩溃修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在执行 ccp 设备的解绑与重新绑定操作时，触发内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ccp5_debugfs_destroy` 函数中，移除 debugfs 目录的操作未加锁保护，且移除后未将全局指针 `ccp_debugfs_dir` 置空。在设备重新绑定的并发场景下，这导致多个线程可能同时操作该目录，或操作已释放的目录指针，从而引发内核崩溃。
+
+#解决方案
+在 `ccp5_debugfs_destroy` 函数中引入互斥锁机制：
+1. 在调用 `debugfs_remove_recursive` 前获取 `ccp_debugfs_lock` 锁。
+2. 移除目录后，显式将 `ccp_debugfs_dir` 指针置为 NULL，防止悬垂指针引用。
+3. 操作完成后释放锁，确保并发安全。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bff3be06330c25ff347ddd025f40caaa074fa615

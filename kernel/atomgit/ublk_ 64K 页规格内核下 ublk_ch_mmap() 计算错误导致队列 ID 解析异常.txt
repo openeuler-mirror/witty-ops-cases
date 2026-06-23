@@ -1,0 +1,23 @@
+#标题
+ublk: 64K 页规格内核下 ublk_ch_mmap() 计算错误导致队列 ID 解析异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 64K 页大小的内核环境下，ublk 驱动的 `ublk_ch_mmap` 函数在计算队列 ID 时出错。由于 `max_cmd_buf_size` 的计算结果未与页大小对齐，导致 mmap 偏移计算逻辑错误，进而导致用户态与内核态关于队列 command buffer 的映射关系错乱，无法正确获取对应的 queue id。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `ublk_ch_mmap()` 中，队列 ID 的计算方式为 `(vma->vm_pgoff << PAGE_SHIFT) / max_cmd_buf_size`。
+`max_cmd_buf_size` 定义为 `UBLK_MAX_QUEUE_DEPTH * sizeof(struct ublksrv_io_desc)`。
+在 4K 页大小的内核中，该计算结果天然是页对齐的；但在 64K 页大小的内核中，该结果不再是页对齐的。这导致在进行队列 ID 计算时，除数 `max_cmd_buf_size` 不符合预期的对齐要求，从而导致计算出的队列 ID 不正确。
+
+#解决方案
+修复补丁通过引入辅助函数 `__ublk_queue_cmd_buf_size` 和 `ublk_max_cmd_buf_size`，强制将 command buffer 的大小向上取整到 `PAGE_SIZE`。
+具体修改为：将 `ublk_ch_mmap` 中计算 `max_sz` 的逻辑从直接的乘法运算 `UBLK_MAX_QUEUE_DEPTH * sizeof(struct ublksrv_io_desc)` 修改为调用 `ublk_max_cmd_buf_size()`，确保无论内核页大小是 4K 还是 64K，计算出的 buffer 大小都是页对齐的。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/453bd209dacc110418c0961ae141414052d6e5ff

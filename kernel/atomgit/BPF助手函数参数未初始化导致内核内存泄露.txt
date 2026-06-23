@@ -1,0 +1,24 @@
+#标题
+BPF助手函数参数未初始化导致内核内存泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+BPF程序调用 `bpf_strtol`、`bpf_strtoul`、`bpf_kallsyms_lookup_name` 或 `bpf_*_check_mtu` 等助手函数时，若函数执行失败并返回错误，此前传入的用于存储结果的指针参数（如 `ARG_PTR_TO_{LONG,INT}` 类型）未被清零。这导致该指针指向的内存位置保留了旧的栈数据或未初始化的内核内存内容，进而造成内核内存信息泄露给用户态BPF程序。
+
+#主要错误日志
+未知
+
+#问题根因
+相关BPF助手函数在处理输入参数时，如果执行过程中遇到错误（如参数校验失败、查找失败等），直接返回错误码，但未对用户传入的结果指针指向的内存进行清零处理。根据Commit描述，这会导致“leak memory”（内存泄露），因为未初始化的指针变量可能包含敏感的内核栈数据。对于tracing类程序因有 `CAP_PERFMON` 权限限制被视为可接受，但对于非tracing类程序这是一个安全漏洞（CVE-2024-47728）。
+
+#解决方案
+在相关BPF助手函数的入口处或错误返回路径上，显式地将结果指针指向的内存值置为0。
+具体修改如下：
+1. `bpf_strtol` 和 `bpf_strtoul`：在函数开始处理前，先将 `*res` 设为 0。
+2. `bpf_kallsyms_lookup_name`：在函数开始处理前，先将 `*res` 设为 0。
+3. `bpf_skb_check_mtu` 和 `bpf_xdp_check_mtu`：在遇到 `-EINVAL` 或 `-ENODEV` 等错误路径跳转前，或在函数入口初始化时，确保 `*mtu_len` 被清零，防止泄露内核状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6adaeae665805749c463454ac9d8d13cc41807b0

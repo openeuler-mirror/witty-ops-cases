@@ -1,0 +1,20 @@
+#标题
+RDMA/mana: mana_ib_create_qp_rss 函数错误处理路径中存在资源泄露
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `mana_ib_create_qp_rss` 函数创建基于 RSS（Receive Side Scaling）的 QP（Queue Pair）时，如果最后一步 `ib_copy_to_udata` 拷贝数据到用户空间失败，函数将直接跳转到错误处理标签 `fail` 并返回错误码。此时，先前调用 `mana_ib_cfg_vport_steering` 配置的 steering 设置未被清理，导致资源泄露。正常销毁路径中包含该清理步骤，但在该错误分支中被遗漏。
+
+#主要错误日志
+未知
+
+#问题根因
+`mana_ib_create_qp_rss` 函数在错误处理路径上不完整。当 `ib_copy_to_udata` 失败时，代码直接跳转至 `fail` 标签退出，遗漏了对 `mana_disable_vport_rx` 的调用。这导致先前配置的 vport steering 资源未被释放，进而引发资源泄露。
+
+#解决方案
+修改 `mana_ib_create_qp_rss` 函数的错误跳转逻辑。当 `ib_copy_to_udata` 失败时，不再直接跳转到 `fail` 标签，而是跳转到新增的 `err_disable_vport_rx` 标签。在该标签下，首先调用 `mana_disable_vport_rx(mpc)` 清理 vport steering 资源，随后再进入现有的 `fail` 处理流程，确保资源被正确释放。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1cc4e81a8cad0e18e721a9ed34244529e8c3bfa0

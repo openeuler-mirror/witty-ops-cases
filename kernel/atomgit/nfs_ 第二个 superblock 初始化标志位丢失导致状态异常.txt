@@ -1,0 +1,20 @@
+#标题
+nfs: 第二个 superblock 初始化标志位丢失导致状态异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 NFS4 挂载时，第二个 superblock（dentry->d_sb）中原本已初始化的标志位丢失。由于代码直接使用 `fc->sb_flags` 对 `dentry->d_sb->s_flags` 进行整体覆盖，导致除只读（SB_RDONLY）以外的其他关键初始化标志位被错误清空，可能引发文件系统状态不一致或功能异常。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit 573573887e0b ("nfs: pass flags to second superblock") 引入的代码错误。该提交在 `do_nfs4_mount` 函数中，直接将 `fc->sb_flags` 赋值给 `dentry->d_sb->s_flags`（即 `dentry->d_sb->s_flags = fc->sb_flags`）。这个直接赋值操作是破坏性的，它覆盖了 `dentry->d_sb->s_flags` 中原有的已初始化标志位，导致这些标志位信息丢失。
+
+#解决方案
+修改 `fs/nfs/nfs4super.c` 中的赋值逻辑，将直接赋值改为位操作。仅将 `fc->sb_flags` 中的 `SB_RDONLY` 标志位传递给 `dentry->d_sb->s_flags`，即修改为 `dentry->d_sb->s_flags |= (fc->sb_flags & SB_RDONLY)`。这样既传递了必要的挂载标志，又保留了 superblock 中原有的其他初始化标志位。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/a94b6e8ae792a9fd1cf555ffe46d39a4961cdfd9

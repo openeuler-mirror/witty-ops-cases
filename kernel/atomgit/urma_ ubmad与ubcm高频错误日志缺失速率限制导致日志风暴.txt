@@ -1,0 +1,25 @@
+#标题
+urma: ubmad与ubcm高频错误日志缺失速率限制导致日志风暴
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 UB（Ultra Band）通信模块（ubmad 和 ubcm）处理逻辑中，当出现发送失败、资源阈值越界等异常情况时，相关错误日志会以极高频率重复打印。在故障持续或高并发异常场景下，会导致内核日志缓冲区被迅速填满，产生日志风暴，影响系统性能并可能掩盖其他关键日志信息。
+
+#主要错误日志
+- "Failed to send cm message, ret:%d, ..."
+- "Invalid threshold, tx_in_queue: %u.\n"
+- "post send failed. msg type %d ret %d\n"
+- "do post send failed, ret: %d\n"
+- "Failed to send message, ret: %d, length: %u.\n"
+- "Failed to send msg to " EID_FMT "\n"
+
+#问题根因
+在驱动代码路径 `drivers/ub/urma/ubcore/` 下的 `ubcore_cm.c`、`ubmad_datapath.c` 及 `ubcore_connect_bonding.c` 文件中，多处错误处理分支使用了普通的 `ubcore_log_err` 或 `ubcore_log_info` 接口进行日志输出。这些接口不具备速率限制功能，当异常逻辑被频繁触发时（如网络持续不可达或资源耗尽），日志会无限制打印，从而导致系统日志泛滥。
+
+#解决方案
+将受影响文件中高频触发路径下的日志打印接口从 `ubcore_log_err`/`ubcore_log_info` 替换为具备速率限制功能的对应接口 `ubcore_log_err_rl`/`ubcore_log_info_rl`。此修改在不丢失错误诊断信息的前提下，限制了日志的打印频率，防止日志风暴的发生。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/579123ff2258a3a6ea5da1c5fed1df2dc3bc9e28

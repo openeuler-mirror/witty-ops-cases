@@ -1,0 +1,26 @@
+#标题
+spi: synquacer 控制器注销顺序错误导致资源释放异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在卸载 synquacer SPI 驱动（执行 driver unbind 或模块移除）时，由于底层时钟等资源先于 SPI 控制器被禁用，可能导致内核崩溃或 SPI 子系统访问已释放的资源，引发系统不稳定。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动在移除时（`synquacer_spi_remove`）未正确处理注销顺序。代码先调用了 `pm_runtime_disable` 和 `clk_disable_unprepare` 禁用了底层资源（如时钟），此时 SPI 控制器尚未注销。这导致在控制器注销过程中，系统可能仍在尝试访问已禁用的资源。此外，原代码使用 `devm_spi_register_controller` 自动管理资源，但其注销回调触发时机晚于 `remove` 函数中的手动资源释放，造成了资源使用与释放的竞争条件。
+
+#解决方案
+1. 将 `synquacer_spi_probe` 中的 `devm_spi_register_controller` 替换为 `spi_register_controller`，避免托管注销带来的时序问题。
+2. 在 `synquacer_spi_remove` 中调整注销顺序：
+   - 先调用 `spi_controller_get` 增加引用计数。
+   - 紧接着调用 `spi_unregister_controller` 注销控制器。
+   - 随后再执行 `pm_runtime_disable` 和 `clk_disable_unprepare` 关闭底层资源。
+   - 最后调用 `spi_controller_put` 减少引用计数。
+此修复确保了控制器先注销，然后再禁用其依赖的底层硬件资源。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6215e99be77a68400de36fecd94595b7cc7c64cb

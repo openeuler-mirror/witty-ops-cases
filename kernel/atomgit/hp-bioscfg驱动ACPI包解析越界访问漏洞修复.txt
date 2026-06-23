@@ -1,0 +1,21 @@
+#标题
+hp-bioscfg驱动ACPI包解析越界访问漏洞修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在解析HP BIOS配置驱动的ACPI包数据时，处理多元素字段（如PREREQUISITES和ENUM_POSSIBLE_VALUES）可能触发越界数组访问。若发生越界访问，内核将打印错误日志 "Error enum-objects package is too small" 或 "Error elem-objects package is too small"，并返回 -EINVAL 错误，导致相应的BIOS属性枚举或配置功能异常。
+
+#主要错误日志
+- `pr_err("Error enum-objects package is too small\n");`
+- `pr_err("Error elem-objects package is too small\n");`
+
+#问题根因
+`hp_populate_*_elements_from_package()` 系列函数在解析ACPI包时存在逻辑缺陷。代码使用循环变量 `elem` 遍历数组，但在处理内部嵌套的多元素字段（如 `PREREQUISITES`）时，使用了形如 `obj[elem + reqs]` 的索引访问数组。原有的边界检查仅验证了 `elem` 是否小于数组总数 `obj_count`，未将内部循环的偏移量 `reqs` 纳入边界计算，导致当访问 `elem + reqs` 时数组索引越界。
+
+#解决方案
+修正数组边界检查逻辑。将原有的单一索引检查 `elem >= obj_count` 修改为实际访问索引的检查 `elem + reqs >= obj_count`（或 `elem + pos_values >= obj_count`），确保在访问多元素字段时，实际访问的索引位置不会超出ACPI包数组的有效范围。涉及修复的文件包括 `enum-attributes.c`、`int-attributes.c`、`order-list-attributes.c`、`passwdobj-attributes.c` 和 `string-attributes.c`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/13bb2616167ec9e78c6c1eb2f61919b906817347

@@ -1,0 +1,20 @@
+#标题
+CIFS SPNEGO 凭证校验缺失导致权限提升风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+本地用户可以通过 `request_key(2)` 或 `add_key(2)` 系统调用创建 `cifs.spnego` 类型的密钥。由于该类型密钥的描述被 CIFS 内核代码视为权威输入并传递给 `cifs.upcall` 用户空间助手程序，恶意用户可以构造包含 pid/uid/creduid/upcall_target 等字段的描述，从而欺骗助手程序，导致越权访问或提权。
+
+#主要错误日志
+未知
+
+#问题根因
+`cifs.spnego` 密钥类型的定义中缺少对描述的校验回调函数（`.vet_description`）。这导致用户空间进程能够随意添加该类型的密钥，而内核未验证该操作是否源自拥有特定凭证（`spnego_cred`）的合法内核上下文，破坏了密钥描述中 pid/uid 等字段的信任链条。
+
+#解决方案
+在 `fs/smb/client/cifs_spnego.c` 中增加 `cifs_spnego_key_vet_description` 函数，并将其注册到 `cifs_spnego_key_type` 结构体的 `.vet_description` 成员。该函数通过比较当前进程凭证（`current_cred()`）与内核内部安装的 `spnego_cred` 来验证请求来源的合法性，如果凭证不匹配则拒绝操作并返回 `-EPERM`，从而阻止用户空间伪造 SPNEGO 密钥描述。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3f14e57bf1954dd5dfcd3ba8ede1202af3caafff

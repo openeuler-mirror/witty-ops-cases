@@ -1,0 +1,24 @@
+#标题
+rsi驱动线程销毁逻辑缺陷导致潜在Use-After-Free风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在移除RSI无线网卡驱动或触发设备卸载时，内核可能发生Use-After-Free故障，导致系统崩溃或内存被非法篡改。
+
+#主要错误日志
+未知
+
+#问题根因
+rsi_kill_thread 函数原有的实现中，调用 atomic_inc 设置线程退出标志后，直接调用 kthread_stop 来停止内核线程。这种处理方式存在同步隐患：kthread_stop 会强制唤醒并终止线程，但未确保线程处理函数已安全执行完清理流程并退出。这导致线程可能在持有锁或访问关键数据结构时被强行终止，随后主线程继续执行释放资源操作，从而引发Use-After-Free或空指针引用等内存安全问题。
+
+#解决方案
+修改 rsi_kill_thread 函数的线程停止机制，移除强制性的 kthread_stop 调用，改为同步等待机制。具体措施包括：
+1. 将函数返回类型由 int 改为 void，使其成为纯通知型函数。
+2. 保留 atomic_inc 和 rsi_set_event 通知线程准备退出。
+3. 使用 wait_for_completion 替代 kthread_stop，等待线程处理函数主动执行 complete 通知退出完成。
+该方案要求线程处理函数配合进行相应的退出逻辑改造，确保线程在收到停止信号后能自行清理并安全退出，避免资源访问冲突。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/0ea7e123fca8f3ef0ee5279c3750527fe5e78345

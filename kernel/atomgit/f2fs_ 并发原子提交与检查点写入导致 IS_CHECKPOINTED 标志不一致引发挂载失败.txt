@@ -1,0 +1,22 @@
+#标题
+f2fs: 并发原子提交与检查点写入导致 IS_CHECKPOINTED 标志不一致引发挂载失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 SPO（突然断电）测试后，挂载 F2FS 文件系统时失败，系统返回 `-EINVAL` 错误。该问题仅在原子写场景下并发执行 `f2fs_ioc_commit_atomic_write` 与 `f2fs_write_checkpoint` 时发生。
+
+#主要错误日志
+未知
+
+#问题根因
+在原子写场景下，线程 A 执行 `f2fs_ioc_commit_atomic_write`，线程 B 执行 `f2fs_write_checkpoint`。当线程 B 完成检查点写入并设置 NAT entry 的 `IS_CHECKPOINTED` 标志后，线程 A 仍在执行后续流程。
+由于缺少 `sbi->node_write` 锁的保护，线程 A 在调用 `f2fs_need_dentry_mark` 检查时，可能发现 `IS_CHECKPOINTED` 标志尚未设置（尽管实际检查点写入已完成或正在提交），导致错误地再次设置 `dentry_mark` 并写入 last_folio。
+断电重启后，系统检测到 `node_info->blk_addr` 不为 `NULL_ADDR`（因为线程 B 已成功写入检查点），但元数据状态不一致，从而导致 `f2fs_recover_inode_page` 返回 `-EINVAL`。
+
+#解决方案
+将原子文件 fsync 场景下的 `set_dentry_mark` 操作移至 `__write_node_page` 函数内部，并在该处获取 `sbi->node_write` 锁（通过调用流程保证）。这确保了在设置 `dentry_mark` 时，`IS_CHECKPOINTED` 标志能正确反映检查点写入是否已完成，从而避免了并发导致的状态不一致。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9cdcd60a664a1624aacc901fb1fad782827c1e4d

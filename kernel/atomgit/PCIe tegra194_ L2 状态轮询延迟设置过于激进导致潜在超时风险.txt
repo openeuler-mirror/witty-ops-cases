@@ -1,0 +1,22 @@
+#标题
+PCIe tegra194: L2 状态轮询延迟设置过于激进导致潜在超时风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 Tegra194 PCIe 控制器驱动中，当发送 PME_Turn_Off 消息后进入 L2 状态的过程中，驱动程序使用 1 微秒的间隔进行高频轮询等待 PME_TO_Ack 消息。这种轮询方式过于激进，不符合 PCIe 规范要求的 1-10 毫秒等待时间窗口，可能导致不必要的 CPU 负载或在特定硬件环境下引发超时问题。
+
+#主要错误日志
+未知
+
+#问题根因
+根据 PCIe r7.0 规范第 5.3.3.2.1 节，Root Port 在发送 PME_Turn_Off 消息后，应等待 1-10 毫秒以接收 PME_TO_Ack 消息。当前驱动代码使用 `readl_poll_timeout_atomic` 函数，以 1 微秒为间隔轮询 10 毫秒（10000 微秒），这种轮询频率过于激进。同时，该代码路径运行在非原子上下文中，不应使用原子轮询函数。
+
+#解决方案
+修改 `tegra_pcie_try_link_l2` 函数中的轮询逻辑：
+1. 将轮询函数从 `readl_poll_timeout_atomic` 替换为适用于非原子上下文的 `readl_poll_timeout`。
+2. 调整轮询间隔，使用现有的宏 `PCIE_PME_TO_L2_TIMEOUT_US`（约 10 毫秒）作为总超时时间，并将轮询间隔设置为该值的 1/10（即 1 毫秒），以符合规范要求并减少 CPU 占用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/572a0d40a066ff5929dd08b978ad1a516f33f7d0

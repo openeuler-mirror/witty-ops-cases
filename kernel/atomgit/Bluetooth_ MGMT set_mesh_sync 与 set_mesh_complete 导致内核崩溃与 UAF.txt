@@ -1,0 +1,23 @@
+#标题
+Bluetooth: MGMT set_mesh_sync 与 set_mesh_complete 导致内核崩溃与 UAF
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 在 `set_mesh_sync` 函数中执行 `memcpy` 时触发 KASAN 检测错误：“BUG: KASAN: stack-out-of-bounds”，原因是栈上灵活数组声明错误导致越界访问。
+2. 在 `set_mesh_complete` 函数中发生内核崩溃，原因是 `mgmt_pending_valid` 和 `mgmt_pending_remove` 导致 double list_del（链表双重删除），引发 Use-After-Free 问题。
+
+#主要错误日志
+BUG: KASAN: stack-out-of-bounds in set_mesh_sync
+
+#问题根因
+1. **栈越界访问**：`struct mgmt_cp_set_mesh` 结构体中包含灵活数组成员 `ad_types`，但在 `set_mesh_sync` 中声明该结构体变量时未正确使用 `DEFINE_FLEX` 等机制分配空间，直接进行 `memcpy` 导致栈越界写入。
+2. **双重删除/UAF**：在 `set_mesh_complete` 错误处理路径中，先调用 `mgmt_pending_foreach`（内部调用 `mgmt_pending_valid` 移除了 cmd），随后又调用 `mgmt_pending_remove` 再次尝试从链表删除同一个 cmd，导致 double list_del 引发崩溃。
+
+#解决方案
+1. **修复栈越界**：在 `set_mesh_sync` 中使用 `DEFINE_FLEX` 宏正确声明带灵活数组的结构体 `cp`，并使用 `min(__struct_size(cp), len)` 限制拷贝长度，防止内存越界。
+2. **修复双重删除**：在 `set_mesh_complete` 的错误处理路径中，移除 `mgmt_pending_remove` 调用，改为直接调用 `mgmt_pending_free` 释放内存。同时补充缺失的错误状态上报（`mgmt_cmd_status`），确保流程正确退出。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/bdc7d5a5ba744fc6b6f873dce9260e5d25688f56

@@ -1,0 +1,20 @@
+#标题
+mm: COW 故障处理时错误安装 PMD 映射导致潜在内存一致性问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理写时复制（COW）相关缺页故障（包括写操作 FAULT_FLAG_WRITE 和取消共享 FAULT_FLAG_UNSHARE）时，内核错误地安装了大页（PMD）映射。这可能导致内存数据不一致或相关的内存管理异常。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `do_set_pmd` 函数中，原有逻辑未对触发 COW 的场景进行充分检查。当发生 COW 故障（`is_cow_mapping` 且带有 `FAULT_FLAG_WRITE` 或 `FAULT_FLAG_UNSHARE` 标志）时，代码路径继续执行并尝试安装 PMD 级别的映射。根据补丁描述“We're about to trigger CoW, so never map it through a PMD”，在即将触发 COW 时直接映射 PMD 是不正确的，破坏了 COW 的语义或机制。
+
+#解决方案
+在 `mm/memory.c` 的 `do_set_pmd` 函数中增加判断逻辑：检查 VMA 标志是否为 COW 映射（`is_cow_mapping`），同时检查故障标志是否为写操作或取消共享。如果是，则直接返回 `ret`（不执行 PMD 映射安装），确保在处理 COW 故障时不使用 PMD 映射，从而正确触发后续的 COW 处理流程。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/8546804bddc00b58c3cd07db65d77ff1dda2fb9a

@@ -1,0 +1,20 @@
+#标题
+netfilter: nft_inner IPv6 内部传输头偏移量计算错误导致防火墙绕过
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理包含 IPv6 扩展头的内部隧道数据包时，`nft_inner` 模块计算传输层头部偏移量（`inner_thoff`）与实际协议类型（`l4proto`）不一致。这导致内核无法正确解析内部传输层头部，可能造成防火墙规则匹配错误，进而导致传输头部伪造或防火墙绕过风险。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `nft_inner_parse_l2l3()` 处理内部 IPv6 数据包时，代码首先调用 `ipv6_find_hdr()` 正确计算了包含所有扩展头的传输层头部偏移量。然而，随后代码错误地使用 `thoff = nhoff + sizeof(_ip6h)`（即仅固定偏移 40 字节的 IPv6 基础头大小）覆盖了正确的结果。这导致 `inner_thoff` 指向了扩展头的起始位置而非真正的传输头位置，与 `l4proto`（如 IPPROTO_TCP）产生脱节。
+
+#解决方案
+删除 `nft_inner_parse_l2l3()` 函数中错误覆盖 `thoff` 变量的代码行。保留 `ipv6_find_hdr()` 函数计算出的正确偏移量，确保 `inner_thoff` 准确指向传输层头部，从而修复偏移量不同步问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/9ac56d18b7f72fb600d8e1242c921a46efd8dc9d

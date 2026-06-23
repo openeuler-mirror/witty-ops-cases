@@ -1,0 +1,24 @@
+#标题
+ubdevshm: 相同va多Ops场景下注销段失败
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在多次注册具有相同虚拟地址和尺寸的操作时，注销共享内存段失败，导致资源无法正常释放。
+
+#主要错误日志
+FATAL err: find cntr owner access ctx failed
+
+#问题根因
+函数 `find_cntr_owner_access_ctx` 的查找逻辑存在缺陷。原实现传入 `struct shm_area` 参数，并在遍历时仅根据 `is_same_role` 判断是否为 container 的 owner。在相同 VA 多 Ops 场景下，该查找逻辑无法正确匹配到当前的访问上下文，导致查找失败，进而引发注销流程报错返回 `-ENOENT`。
+
+#解决方案
+修改 `find_cntr_owner_access_ctx` 函数接口及实现：
+1. 将函数入参由 `struct shm_area *sa` 修改为 `struct access_ctx_inner *ctx_inner`，以便获取更完整的上下文信息。
+2. 在函数内部通过 `fill_role_info` 和当前上下文的 provider 信息构建 `role_provider` 结构体。
+3. 将遍历时的匹配逻辑由判断 `is_same_role` 修改为调用 `role_provider_equal`，确保能准确匹配到目标访问上下文。
+4. 更新调用点，传入正确的 `ctx_inner` 指针。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1764f7bed08209e7263a4ab91a1dae6f48a46995

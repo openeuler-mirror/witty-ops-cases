@@ -1,0 +1,38 @@
+#标题
+urma: TPID复用机制导致链路建立失败及引用计数处理异常
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在URMA（Userspace Remote Memory Access）场景下，当使用TPID（Transport ID）复用功能建立链路时，可能出现以下故障现象：
+1.  **链路建立失败**：在TPID复用过程中，对端收到请求后无法正确识别，导致连接请求被拒绝或忽略，进而导致启动链路报错。
+2.  **内核空指针崩溃**：在接收侧处理重传消息时，如果LRU链表为空，`list_first_entry` 误取到无效指针，引发系统Panic或Oops。
+3.  **引用计数泄露**：断开连接时，如果`use_cnt`计数管理不当，可能导致TPID资源无法正确释放，造成资源泄露。
+
+#主要错误日志
+- `Connect service, Unrecognized msg type %u`（推断：当消息类型无法识别时打印）
+- `Failed to send is_ref req, ret = %d.`（推断：发送引用检查请求失败）
+- `Failed to send msg`（推断：通用消息发送失败）
+- `invalid cr.user_ctx. sge addr should not < seg addr`（推断：数据路径处理错误）
+- `Failed to find state of tp_id = %u.`（推断：TPID状态查找失败）
+
+#问题根因
+1.  **协议不匹配**：TPID复用场景下需要发送引用检查请求（`UBCORE_NET_ISREF_REQ`），但代码中未定义该消息类型，发送模块也未将其映射为`UBCORE_CM_SINGLE_REQ`，导致对端无法识别该消息，连接建立失败。
+2.  **链表处理缺陷**：`ubmad_check_recv_msn_duplicate` 函数中使用 `list_first_entry` 处理LRU链表，未对链表是否为空进行校验。当链表为空时，该宏返回非法指针，后续访问导致内核崩溃。
+3.  **逻辑与资源管理漏洞**：
+    - **断开连接逻辑错误**：原 `ubcore_disconnect_vtp_with_tpid_reuse` 实现存在竞态条件与逻辑漏洞，导致在 `use_cnt` 不为0时错误移除哈希表节点或提前释放资源。
+    - **状态机检查缺失**：`ubcore_modify_tpid` 在状态从非RTR转换到RTS时，本应返回错误，但原代码逻辑在某些路径下被忽略，导致状态流转异常。
+    - **内存释放缺失**：`ubcore_query_select_tpid_list` 函数中，在获取TP列表失败或状态查找失败的错误处理路径上，遗漏了 `kfree(tp_list)` 操作，导致内存泄露。
+
+#解决方案
+1.  **完善消息协议**：在 `ubcore_protocol.h` 中新增 `UBCORE_NET_ISREF_REQ` 枚举定义；在 `ubcore_cm.c` 的 `ubcore_ubcm_service_connect_send_to` 函数中增加对该消息类型的识别，并将其映射为 `UBCORE_CM_SINGLE_REQ` 进行发送。
+2.  **修复空指针风险**：在 `ubmad_datapath.c` 中，将 `list_first_entry` 替换为 `list_first_entry_or_null`，并在访问前增加指针有效性检查，防止空链表导致的异常访问。
+3.  **重构资源管理逻辑**：
+    - **新增专用断开函数**：实现 `ubcore_disconnect_tpid_with_tpid_reuse`，修正引用计数 `use_cnt` 的减操作与资源释放逻辑，确保在计数归零且状态正确时才执行资源回收。
+    - **修正状态转换检查**：在 `ubcore_modify_tpid` 中，修正状态转换检查逻辑，确保非法状态转换（非RTR到RTS）正确返回错误码。
+    - **修复内存泄露**：在 `ubcore_query_select_tpid_list` 的错误处理分支中增加 `kfree(tp_list)`，确保内存正确释放。
+    - **代码优化**：移除冗余的日志打印，修正 `ubcore_ht_params` 中的哈希表类型索引错误（`UBCORE_HT_TP_ID_STATE` 改为 `UBCORE_HT_TPID_STATE`）。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/2404f4658f5de5e796444e0d2c5c259dd31cdd69

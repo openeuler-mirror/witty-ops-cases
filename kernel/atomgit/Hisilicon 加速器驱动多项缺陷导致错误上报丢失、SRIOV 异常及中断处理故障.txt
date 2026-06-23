@@ -1,0 +1,47 @@
+#标题
+Hisilicon 加速器驱动多项缺陷导致错误上报丢失、SRIOV 异常及中断处理故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. **错误上报丢失**：设备发生硬件错误并处理完成后，固件可能禁用错误上报功能，导致后续硬件错误无法及时上报，系统无法感知设备故障。
+2. **SRIOV 配置错误**：启用 VF（Virtual Function）失败时，`vfs_num` 计数未清零，导致驱动内部状态与实际硬件状态不一致；禁用 VF 时，若清理 VFT 配置失败，函数返回值被忽略，无法感知清理失败。
+3. **中断注册失败**：设备中断向量数量为 0 或非 2 的幂次方时，PCI 中断分配失败或行为异常。
+4. **算法暴露错误**：ZIP 设备在 UACCE 模式为 2（非 SVA 模式）时，错误地暴露了 hashagg 算法。
+5. **Sysfs 属性异常**：在未实现隔离阈值读写接口的情况下，`isolate_strategy` 节点仍然可见，导致接口行为不符合预期。
+
+#主要错误日志
+- `pci_err(pdev, "Can't enable VF!\n");`
+- `pci_err(pdev, "Failed to disable VFs as VFs are assigned!\n");`
+- `pci_err(pdev, "Failed to clear vft config!\n");`
+- `dev_err(&pdev->dev, "failed to request reserved irq, ret = %d!\n", ret);`
+- `dev_err(dev, "Device irq num is zero!\n");`
+- `dev_err(dev, "Failed to enable MSI vectors!\n");`
+- `dev_info(&qm->pdev->dev, "Reserved interrupt, ignore!\n");`
+
+#问题根因
+1. **错误上报**：驱动在处理完硬件错误状态后，缺少重新使能错误上报寄存器的步骤，导致固件禁用该功能后无法恢复。
+2. **SRIOV**：`hisi_qm_sriov_enable` 函数在 `pci_enable_sriov` 失败分支未重置 `vfs_num`；`hisi_qm_sriov_disable` 函数直接返回 `qm_clear_vft_config` 的结果，忽略了其返回值并强制返回 0。
+3. **中断处理**：`qm_get_irq_num` 返回值未做有效性检查（如是否为 0）及对齐处理（MSI 要求向量数为 2 的幂），直接传递给 `pci_alloc_irq_vectors` 导致问题；VF 注册异常中断逻辑在旧版本硬件上存在判断缺陷。
+4. **算法暴露**：`hisi_dae_set_alg` 仅检查了 `qm->uacce` 指针，未结合 `qm->mode` 进行判断，导致非 SVA 模式下算法暴露错误。
+5. **Sysfs 与代码逻辑**：`uacce_dev_is_visible` 中判断条件逻辑错误（使用了 `&&` 而非 `||`），导致只要实现了读写接口之一，节点就会显示；`uacce_alloc` 中存在冗余的参数检查；TRNG 驱动使用运行时初始化互斥锁，应改为静态定义；打印格式中 `unsigned long` 类型使用了错误的格式符。
+
+#解决方案
+1. **修复错误上报**：在 `hpre`, `sec2`, `zip`, `dae` 等驱动的错误处理流程中，增加 `xxx_enable_error_report` 调用，在清除错误状态后重新配置 RAS 寄存器以使能错误上报。
+2. **修复 SRIOV 逻辑**：
+   - 在 `pci_enable_sriov` 失败的 error path 中增加 `qm->vfs_num = 0` 赋值。
+   - 修改 `hisi_qm_sriov_disable`，使用中间变量接收 `qm_clear_vft_config` 返回值，失败时打印错误日志，函数最终返回 0。
+3. **修复中断处理**：
+   - 对 `qm_get_irq_num` 返回值进行校验，若为 0 则返回 `-EINVAL`。
+   - 使用 `roundup_pow_of_two` 将中断向量数向上对齐到 2 的幂。
+   - 修正 VF 异常中断注册逻辑，针对硬件版本 V3 引入 `qm_rsvd_irq` 处理保留中断。
+4. **修复算法暴露**：在 `hisi_dae_set_alg` 中增加 `qm->mode != UACCE_MODE_SVA` 的判断条件。
+5. **修复 UACCE 与杂项**：
+   - 修正 `uacce_dev_is_visible` 中隔离策略显示逻辑，改为 `||` 判断。
+   - 使用 `DEFINE_MUTEX(trng_device_lock)` 静态定义 TRNG 互斥锁，移除运行时初始化代码。
+   - 修正 `uacce_alloc_dma_buffers` 中打印格式为 `%lu`。
+   - 移除 `uacce_alloc` 中冗余的参数检查代码。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3e032827c91f8065a4601be4a028341b55be21b2

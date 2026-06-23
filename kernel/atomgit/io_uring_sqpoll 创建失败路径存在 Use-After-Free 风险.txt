@@ -1,0 +1,32 @@
+#标题
+io_uring/sqpoll 创建失败路径存在 Use-After-Free 风险
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 SQPOLL 线程创建过程中，若 `io_uring_alloc_task_context` 分配内存失败，触发错误处理路径时，内核可能发生 Slab Use-After-Free（UAF）。该问题通常需要通过故障注入来复现，现象表现为内核崩溃或 KASAN 报告非法内存访问。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in __lock_acquire+0x370b/0x4a10 kernel/locking/lockdep.c:5089
+Call Trace:
+<TASK>
+...
+_raw_spin_lock_irqsave+0x3d/0x60 kernel/locking/spinlock.c:162
+class_raw_spinlock_irqsave_constructor include/linux/spinlock.h:551 [inline]
+try_to_wake_up+0xb5/0x23c0 kernel/sched/core.c:4205
+io_sq_thread_park+0xac/0xe0 io_uring/sqpoll.c:55
+io_sq_thread_finish+0x6b/0x310 io_uring/sqpoll.c:96
+io_sq_offload_create+0x162/0x11d0 io_uring/sqpoll.c:497
+io_uring_create io_uring/io_uring.c:3724 [inline]
+io_uring_setup+0x1728/0x3230 io_uring/io_uring.c:3806
+...
+
+#问题根因
+SQPOLL 创建过程中的错误处理存在竞态条件（race condition）。当 `io_uring_alloc_task_context()` 失败时，进入错误处理流程；与此同时，已创建的 `io_sq_thread()` 内核线程可能已经运行并执行完退出逻辑。这导致错误处理代码中的 `io_sq_thread_finish()` 试图操作一个已经被释放（killed）的任务结构体（task struct），从而引发 Use-After-Free。
+
+#解决方案
+在 SQPOLL 线程创建并赋值给 `sqd->thread` 后，立即通过 `get_task_struct()` 增加任务引用计数，并将该任务指针暂存于本地变量 `task_to_put`。无论后续流程是成功返回还是跳转到错误处理标签 `err`，在函数退出前均调用 `put_task_struct()` 释放引用。这确保了在错误处理路径中访问任务结构体时，其内存不会被提前释放，从而修复了 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/612f38aebe887216d81508da7d3ec3bd0fe0552c

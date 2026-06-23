@@ -1,0 +1,29 @@
+#标题
+ub: cdma: 修复代码逻辑缺陷与返回值处理错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. cdma_mmap 接口在调用时，若传入的虚拟内存区域大小不等于页大小，触发错误检查，导致 mmap 调用失败。
+2. cdma_create_ucontext 接口在 copy_from_user 获取用户数据失败时，错误地将该函数的返回值直接作为 ioctl 的返回值返回，而非标准的错误码，可能导致用户空间无法正确识别错误类型（如 EFAULT）。
+3. cdma_unmap_vma_pages 函数在操作 VMA 时缺乏必要的 mmap_lock 锁保护，存在并发访问安全隐患。
+
+#主要错误日志
+- `pr_err("expect size 0x%lx, but got 0x%lx\n", PAGE_SIZE, size);`
+- `dev_err(cdev->dev, "get user data failed, ret = %d.\n", ret);`
+
+#问题根因
+1. **mmap 大小检查逻辑不合理**：原代码检查 vma 大小是否为页大小的整数倍，但实际驱动仅支持等于页大小的场景，导致非单页大小但为整数倍的请求未被拒绝。
+2. **返回值转换缺失**：`cdma_create_ucontext` 函数中，`copy_from_user` 失败时直接返回了其剩余字节数或错误码，未转换为标准的 `-EFAULT` 错误码。
+3. **锁机制缺失**：`cdma_unmap_vma_pages` 函数在遍历并操作 VMA（如调用 `zap_vma_ptes`）时，未持有 `mm->mmap_lock` 锁，无法保证 VMA 指针的安全性与一致性。
+4. **代码格式问题**：存在不必要的强制类型转换、魔数使用等不规范写法。
+
+#解决方案
+1. **修正 mmap 大小校验**：将 `cdma_mmap` 中的大小检查逻辑修改为严格相等判断（`size != PAGE_SIZE`），并更新相应的错误日志输出。
+2. **修正返回值**：在 `cdma_create_ucontext` 中，当 `copy_from_user` 失败时，明确返回 `-EFAULT`。
+3. **增加锁保护**：在 `cdma_unmap_vma_pages` 函数操作 VMA 前后增加 `mmap_read_lock(mm)` 和 `mmap_read_unlock(mm)` 调用，确保进程 VMA 指针在代码层面的安全性。
+4. **代码规范化**：移除冗余的强制类型转换，将魔数替换为宏定义（如 `CDMA_S_IRUSR`），修正代码缩进格式。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/792b9535641fd255e84f16d0b8cace7193b9949d

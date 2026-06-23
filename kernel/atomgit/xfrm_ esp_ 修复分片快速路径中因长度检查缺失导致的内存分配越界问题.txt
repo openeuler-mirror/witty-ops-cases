@@ -1,0 +1,27 @@
+#标题
+xfrm: esp: 修复分片快速路径中因长度检查缺失导致的内存分配越界问题
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 ESP (Encapsulating Security Payload) 协议进行数据包发送时，若触发 out-of-place 快速路径，内核可能因错误判断内存分配需求导致内存越界或数据损坏。具体表现为：
+1. 当 `skb->data_len` 与 `tailen` 之和超过一个页面的长度时，快速路径未能正确拦截。
+2. 底层函数 `skb_page_frag_refill()` 可能仅分配了单个页面，但目标 scatter-gather 列表跨度却超过了该页面大小，引发内存非法访问。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `esp_output_head()` 处理 ESP out-of-place 快速路径时，代码逻辑先追加了 trailer 数据，随后才在 `esp_output_tail()` 中分配目标 page frag。
+原有的检查逻辑错误地分别对 `tailen` 和 `skb->data_len` 进行对齐后的独立长度检查：
+`if (ALIGN(tailen, L1_CACHE_BYTES) > PAGE_SIZE || ALIGN(skb->data_len, L1_CACHE_BYTES) > PAGE_SIZE)`
+然而，`esp_output_tail()` 中的内存分配是基于追加了 trailer 后的组合长度（即 `skb->data_len` 已包含 tailen 的影响）。如果两者单独检查均未超过页大小，但相加后超过页大小，代码会继续尝试快速路径。此时 `skb_page_frag_refill()` 可能回退到分配单个页面，但目标 sg 列表却试图跨越组合后的数据长度，导致内存分配不足以容纳数据。
+
+#解决方案
+修改 `net/ipv4/esp4.c` 和 `net/ipv6/esp6.c` 中的检查条件，将 `skb->data_len` 与 `tailen` 先求和再进行对齐检查，恢复正确的组合长度页门限检查：
+将 `ALIGN(tailen, L1_CACHE_BYTES) > PAGE_SIZE || ALIGN(skb->data_len, L1_CACHE_BYTES) > PAGE_SIZE` 修改为 `ALIGN(skb->data_len + tailen, L1_CACHE_BYTES) > PAGE_SIZE`。
+这确保了当组合后的数据长度超过一个页面时，直接跳过（goto cow）快速路径，避免因内存分配不足导致的问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ae3571e81124267d18270bc2fa811710f95ba118

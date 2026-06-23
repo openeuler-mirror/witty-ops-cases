@@ -1,0 +1,23 @@
+#标题
+btrfs同步文件tracepoint在overlay场景下导致内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 btrfs 文件系统之上使用 overlayfs 时，触发 `btrfs_sync_file` 相关的 tracepoint 事件，会导致内核崩溃。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `btrfs_sync_file` tracepoint 的实现中，代码直接使用了 `file->f_path.dentry->d_sb` 来获取 superblock。当 btrfs 作为 overlayfs 的底层文件系统时，`file->f_path.dentry` 指向的是 overlayfs 的 dentry，因此 `dentry->d_sb` 获取的是 overlayfs 的 superblock 而非 btrfs 的 superblock。在后续进行 fsid 赋值等操作时，错误的 superblock 指针导致内核崩溃。
+
+#解决方案
+修改 `include/trace/events/btrfs.h` 中的 `btrfs_sync_file` tracepoint 实现：
+1. 使用 `file_inode(file)->i_sb` 替代 `file->f_path.dentry->d_sb` 来获取 superblock，确保始终能获取到 btrfs 的 superblock。
+2. 使用 `file_dentry(file)` 和 `file_inode(file)` 辅助函数获取 dentry 和 inode。
+3. 在获取父目录 inode 时，先通过 `dget_parent(dentry)` 获取父 dentry，使用后再通过 `dput(parent)` 释放，避免直接访问 `dentry->d_parent` 可能引发的竞态或不正确引用。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6762c78c84be33c2aea2c2a2a728bd2c0d100ed2

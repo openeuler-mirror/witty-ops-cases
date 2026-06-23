@@ -1,0 +1,21 @@
+#标题
+gpiolib: gpiochip_get_ngpios 函数错误打印可能引发内核崩溃
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在注册 GPIO 芯片时，若 GPIO 数量（ngpio）为 0 或超过 FASTPATH_NGPIO 限制，内核在尝试打印错误或警告日志时触发崩溃。
+
+#主要错误日志
+- "tried to insert a GPIO chip with zero lines"
+- "line cnt %u is greater than fast path cnt %u"
+
+#问题根因
+在 `gpiochip_get_ngpios` 函数中，当 `gc->ngpio` 为 0 或大于 `FASTPATH_NGPIO` 时，代码调用了 `chip_err` 和 `chip_warn` 宏进行日志打印。这两个宏内部会尝试解引用 `gc->parent` 指针。然而，在某些调用场景下（如通过 `gpio_sim` 模拟器注册设备），`gc->parent` 可能未初始化（为 NULL），导致解引用空指针从而引发内核崩溃。
+
+#解决方案
+将 `gpiochip_get_ngpios` 函数中的日志打印接口从 `chip_err`/`chip_warn` 修改为 `dev_err`/`dev_warn`。该修复利用传入的 `struct device *dev` 参数直接进行打印，避免了访问可能为空的 `gc->parent` 指针，从而防止崩溃。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/676ce157c2d43b2ea54423106cc059c27b5718ff

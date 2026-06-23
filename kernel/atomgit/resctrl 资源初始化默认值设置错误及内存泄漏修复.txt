@@ -1,0 +1,26 @@
+#标题
+resctrl 资源初始化默认值设置错误及内存泄漏修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. 创建 resctrl 控制组时，非 CAT 类资源（如 MBA、SMBA）的默认配置未正确初始化，可能导致资源配置异常或功能不符合预期。
+2. resctrl 模块初始化失败时，存在内存泄漏，导致系统内存资源浪费。
+3. resctrl 命令行操作可能残留上一次的错误提示信息，干扰用户判断。
+
+#主要错误日志
+未知
+
+#问题根因
+1. **初始化逻辑缺陷**：在 `rdtgroup_init_alloc` 函数中，原逻辑仅针对 `RDT_RESOURCE_MBA` 和 `RDT_RESOURCE_SMBA` 调用初始化函数，导致 L2/L3 等资源路径与其他资源路径处理逻辑互斥，使得部分资源未恢复默认设置。
+2. **内存泄漏**：函数 `domain_setup_mon_state` 在分配 `mbm_core` 失败时的错误处理路径中，遗漏了对已分配内存 `mbm_total` 和 `mbm_local` 的释放。
+3. **状态清理遗漏**：在 `rdtgroup_cpus_write` 和 `mkdir_rdt_prepare` 执行流程中，进入关键判断逻辑前未调用 `rdt_last_cmd_clear()` 清除之前的命令状态。
+
+#解决方案
+1. **修正初始化流程**：调整 `rdtgroup_init_alloc` 中的逻辑分支，优先处理 L2/L3 资源，将其余资源统一走默认初始化路径（调用重命名后的 `rdtgroup_init_res`），确保所有资源类型都能正确初始化。
+2. **修复内存泄漏**：在 `domain_setup_mon_state` 的错误处理分支中，增加 `kfree(d->mbm_total)` 和 `kfree(d->mbm_local)`，确保失败时释放所有已分配的相关内存。
+3. **完善状态清理**：在 `rdtgroup_cpus_write` 和 `mkdir_rdt_prepare` 中添加 `rdt_last_cmd_clear()` 调用，确保每次操作前清除残留的错误命令状态。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb62fea0a81a08823f133facca690b2f666a49ef

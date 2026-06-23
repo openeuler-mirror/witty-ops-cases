@@ -1,0 +1,20 @@
+#标题
+shmem: __shmem_file_setup 中缺少 shmem_unacct_size 调用导致内存统计泄漏
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在挂载了 idmapped 的 tmpfs 文件系统上创建文件时，若 `is_idmapped_mnt()` 检查失败返回 -EINVAL，会导致此前已执行的 `shmem_acct_size()` 申请的内存配额未被回退（missing shmem_unacct_size），造成内存统计信息泄漏。
+
+#主要错误日志
+未知
+
+#问题根因
+在函数 `__shmem_file_setup` 中，原代码逻辑先调用 `shmem_acct_size(flags, size)` 进行内存记账，随后调用 `is_idmapped_mnt(mnt)` 进行检查。当 `is_idmapped_mnt(mnt)` 返回失败（return ERR_PTR(-EINVAL)）时，函数直接退出，未执行 `shmem_unacct_size()` 进行配额回退，导致了内存统计泄漏。
+
+#解决方案
+调整代码执行顺序，将 `is_idmapped_mnt(mnt)` 的检查逻辑移动到 `shmem_acct_size(flags, size)` 调用之前。这样可以确保只有在检查通过后才会进行内存记账，从而避免了检查失败时的内存泄漏问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d9cfb2faa42581a192a3627466be8170b4cd6813

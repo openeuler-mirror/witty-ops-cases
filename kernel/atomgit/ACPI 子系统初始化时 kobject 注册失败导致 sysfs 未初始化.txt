@@ -1,0 +1,20 @@
+#标题
+ACPI 子系统初始化时 kobject 注册失败导致 sysfs 未初始化
+
+#内核版本
+OLK-6.6
+
+#问题现象
+ACPI sysfs 代码初始化失败，导致部分 ACPI 驱动程序无法正常工作。由于内核继续执行后续初始化流程，可能导致依赖 ACPI kobject 的功能出现未定义行为或静默失败。
+
+#主要错误日志
+pr_err("Failed to register kobject\n");
+
+#问题根因
+ACPI 子系统在初始化过程中调用 `kobject_create_and_add` 创建 "acpi" kobject 时可能失败（返回 NULL）。原代码仅打印了 `pr_debug` 调试信息，未终止初始化流程，导致 `acpi_kobj` 为空，进而引发后续 ACPI sysfs 初始化及依赖该 kobject 的驱动程序异常。
+
+#解决方案
+在 `acpi_init` 函数中，检测到 `kobject_create_and_add` 返回 NULL 时，将日志级别提升为 `pr_err` 输出错误信息，并直接返回 `-ENOMEM` 错误码，以此终止 ACPI 子系统初始化流程，避免后续异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e5e9de75af158ec2f26bcc2fef61d9de1a6d1141

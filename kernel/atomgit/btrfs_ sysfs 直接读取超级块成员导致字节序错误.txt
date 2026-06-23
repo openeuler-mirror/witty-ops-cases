@@ -1,0 +1,25 @@
+#标题
+btrfs: sysfs 直接读取超级块成员导致字节序错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 sysfs 接口查看 btrfs 文件系统信息时，以下条目显示的数值错误：
+- /sys/fs/btrfs/<uuid>/nodesize
+- /sys/fs/btrfs/<uuid>/sectorsize
+- /sys/fs/btrfs/<uuid>/clone_alignment
+
+该问题由字节序不一致引起，可能导致用户态工具读取到非预期的错误数值。
+
+#主要错误日志
+未知
+
+#问题根因
+sysfs 相关的 show 函数（`btrfs_nodesize_show`、`btrfs_sectorsize_show`、`btrfs_clone_alignment_show`）直接读取了 `super_copy` 结构体中的成员（如 `nodesize` 和 `sectorsize`）。由于 `super_copy` 中的数据可能保留磁盘上的字节序（大端），直接读取会导致在字节序不一致的架构上输出错误的值。此外，虽然这些值在结构体中对齐，不会触发未对齐读取错误，但字节序问题依然存在。
+
+#解决方案
+修改 sysfs 接口实现，不再直接访问 `fs_info->super_copy` 中的成员，改为访问已经转换好字节序的、缓存在内存中的原生成员（如 `fs_info->nodesize` 和 `fs_info->sectorsize`），确保输出正确的数值。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1c9668ce3901e099a76e4585bc8d82c9e146a00e

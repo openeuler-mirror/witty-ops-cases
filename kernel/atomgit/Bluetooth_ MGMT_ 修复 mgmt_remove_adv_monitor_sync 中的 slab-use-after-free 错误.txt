@@ -1,0 +1,37 @@
+#标题
+Bluetooth: MGMT: 修复 mgmt_remove_adv_monitor_sync 中的 slab-use-after-free 错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+内核在处理蓝牙设备关闭与移除广播监视器并发操作时，触发 KASAN 检测到的 slab-use-after-free 错误，导致内核崩溃。具体表现为在 `mgmt_remove_adv_monitor_sync` 函数中读取了已被释放的内存地址。
+
+#主要错误日志
+```
+BUG: KASAN: slab-use-after-free in mgmt_remove_adv_monitor_sync+0x3a/0xd0 net/bluetooth/mgmt.c:5543
+Read of size 8 at addr ffff88814128f898 by task kworker/u9:4/5961
+Call Trace:
+ mgmt_remove_adv_monitor_sync+0x3a/0xd0 net/bluetooth/mgmt.c:5543
+ hci_cmd_sync_work+0x22b/0x400 net/bluetooth/hci_sync.c:332
+ ...
+Freed by task 16022:
+ kfree+0x196/0x420 mm/slub.c:4746
+ mgmt_pending_foreach+0xd1/0x130 net/bluetooth/mgmt_util.c:259
+ __mgmt_power_off+0x183/0x430 net/bluetooth/mgmt.c:9550
+ hci_dev_close_sync+0x6c4/0x11c0 net/bluetooth/hci_sync.c:5208
+ ...
+```
+
+#问题根因
+这是一个典型的并发竞态问题。当蓝牙设备关闭（如调用 `hci_dev_close`）时，`__mgmt_power_off` 函数会通过 `mgmt_pending_foreach` 遍历并释放所有挂起的命令（pending commands），包括 `REMOVE_ADV_MONITOR` 命令。
+与此同时，工作队列中的 `hci_cmd_sync_work` 可能正在执行或即将执行 `mgmt_remove_adv_monitor_sync` 回调函数。
+由于缺少必要的检查，`mgmt_remove_adv_monitor_sync` 函数试图访问已经被 `__mgmt_power_off` 释放的 `cmd` 内存结构，导致 "slab-use-after-free" 内存非法访问。
+
+#解决方案
+在 `mgmt_remove_adv_monitor_complete` 和 `mgmt_remove_adv_monitor_sync` 函数中增加状态检查逻辑：
+1. 在执行具体操作前，通过 `pending_find(MGMT_OP_REMOVE_ADV_MONITOR, hdev)` 检查当前命令是否仍在挂起列表中。
+2. 如果命令不在列表中（已被其他路径如设备关闭流程移除/释放），或者状态为 `-ECANCELED`，则直接返回，避免访问已释放的内存结构。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/341e3a56c36569e48da9e5e5226b9a84369d666a

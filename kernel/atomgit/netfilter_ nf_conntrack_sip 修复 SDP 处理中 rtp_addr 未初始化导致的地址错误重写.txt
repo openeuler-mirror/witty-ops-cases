@@ -1,0 +1,23 @@
+#标题
+netfilter: nf_conntrack_sip 修复 SDP 处理中 rtp_addr 未初始化导致的地址错误重写
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在处理 SIP 协议的 SDP（Session Description Protocol）消息时，若 SDP 正文不包含媒体描述行（m= 行）、仅包含非活跃媒体部分（如 m=audio 0）或无法识别的媒体类型，内核会将未初始化的栈变量 `rtp_addr` 传递给 NAT 钩子函数。这导致 nf_nat_sdp_session() 将栈上的随机值或零值格式化为 IP 地址，并错误地重写 SDP 会话的 `o=`（owner）和 `c=`（connection）行地址。在开启 `CONFIG_INIT_STACK_ALL_ZERO`（多数发行版默认开启）的情况下，表现为非活跃 SDP 会话的地址被错误重写为 0.0.0.0；未开启栈初始化时，则重写为随机垃圾地址。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `process_sdp()` 在栈上声明了联合体变量 `rtp_addr`，但仅在 SDP 媒体循环中找到有效端口且识别媒体类型时才对其进行赋值。当 SDP 消息体不含 `m=` 行、仅含非活跃媒体或无法识别的媒体类型时，`rtp_addr` 未被赋值。此时函数仍调用 `hooks->sdp_session()` 并传递 `&rtp_addr` 指针，导致后续处理流程使用该未初始化的栈内存进行地址重写。
+
+#解决方案
+1. 新增布尔标志变量 `have_rtp_addr` 用于标记是否已获取到有效的 RTP 地址。
+2. 在解析 SDP 会话级连接地址（`caddr`）成功时，预先使用 `caddr` 初始化 `rtp_addr` 并置位 `have_rtp_addr`。
+3. 在媒体处理循环中，成功获取媒体地址时同样置位 `have_rtp_addr`。
+4. 在调用 `hooks->sdp_session()` 前增加对 `have_rtp_addr` 的检查，确保仅在存在有效地址时才执行 SDP 会话修改操作，避免使用未初始化的内存。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/6d50d7528b60820a6b629915da6af7955be5b2a8

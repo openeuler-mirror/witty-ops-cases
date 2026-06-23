@@ -1,0 +1,28 @@
+#标题
+MPTCP 协议断开连接时触发除零错误导致内核 Oops
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 MPTCP 协议处理过程中，当出现竞争性断开连接操作时，触发了内核除零错误，导致系统抛出 Oops 并打印调用栈。该问题由 syzkaller 发现，复现路径涉及 recvfrom 系统调用。
+
+#主要错误日志
+Oops: divide error: 0000 [#1] PREEMPT SMP KASAN PTI
+CPU: 1 UID: 0 PID: 6094 Comm: syz-executor317 Not tainted
+RIP: 0010:__tcp_select_window+0x5b4/0x1310 net/ipv4/tcp_output.c:3163
+Call Trace:
+<TASK>
+__tcp_cleanup_rbuf+0x3e7/0x4b0 net/ipv4/tcp.c:1493
+mptcp_rcv_space_adjust net/mptcp/protocol.c:2085 [inline]
+mptcp_recvmsg+0x2156/0x2600 net/mptcp/protocol.c:2289
+inet_recvmsg+0x469/0x6a0 net/ipv4/af_inet.c:885
+
+#问题根因
+根本原因是对竞争性断开连接的处理不当。在特定提交之后，`sk_wait_data()` 可能会带着错误返回，此时底层的 socket 已经断开连接，导致 `rcv_mss` 变为零。如果此时继续执行 `mptcp_rcv_space_adjust` 操作，会进一步调用 TCP 相关函数触发除零错误。
+
+#解决方案
+在 `mptcp_recvmsg` 函数中，检查 `sk_wait_data()` 的返回值。如果返回错误（`err < 0`），则立即跳转到错误处理出口 `out_err`，不再执行后续的 `mptcp_rcv_space_adjust` 调整操作，从而避免在 socket 已断开的情况下触发除零异常。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b80e172d91843160847e5deb09e72e3cc0563541

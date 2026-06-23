@@ -1,0 +1,23 @@
+#标题
+CAN 控制器错误统计计数器类型统计错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用 IFI CANFD 控制器驱动时，当发生位错误或应答错误时，系统网络接口统计信息中的错误计数器计数异常。具体表现为：在发送过程中发生传输类错误时，`rx_errors`（接收错误计数）错误地增加，而 `tx_errors`（发送错误计数）未相应增加，导致用户通过 `ifconfig` 或 `ip -s link` 查看到的错误统计信息与实际链路错误类型不符。
+
+#主要错误日志
+未知
+
+#问题根因
+驱动程序中的 `ifi_canfd_handle_lec_err` 函数在处理 CAN 总线错误时逻辑有误。代码在检测到错误中断后，无条件地增加 `stats->rx_errors` 计数器。然而，根据 CAN 协议规范，位错误和应答错误通常发生在发送阶段，应归类为发送错误并增加 `tx_errors` 计数器。驱动未根据具体的错误类型（如 `IFI_CANFD_ERROR_CTR_ACK_ERROR_FIRST` 或 `IFI_CANFD_ERROR_CTR_BIT0_ERROR_FIRST`）区分接收错误与发送错误，导致统计数据偏差。
+
+#解决方案
+修改 `ifi_canfd_handle_lec_err` 函数，移除开头对 `rx_errors` 的无条件递增。根据读取到的错误状态寄存器标志位，分类处理错误计数：
+1. 对于应答错误（ACK_ERROR）、显性位错误（BIT0_ERROR）和隐性位错误（BIT1_ERROR），增加 `stats->tx_errors`。
+2. 对于过载错误（OVERLOAD）、填充错误（STUFF_ERROR）、CRC 错误（CRC_ERROR）和格式错误（FORM_ERROR），增加 `stats->rx_errors`。
+此修复确保了网络设备错误统计数据准确反映实际的收发错误情况。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1889d5b9f8f40989af0d05eaf63f87cfb40ea2b1

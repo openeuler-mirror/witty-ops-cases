@@ -1,0 +1,22 @@
+#标题
+mm/damon: core-kunit 测试用例内存分配失败处理缺失
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在运行 DAMON 核心模块的 KUnit 测试（`damon_test_merge_regions_of`）时，若遇到极端内存压力导致动态内存分配失败，内核可能发生非预期的内存访问错误。该问题仅在理论上的内存分配失败场景下触发，实际生产环境中触发概率较低。
+
+#主要错误日志
+未知
+
+#问题根因
+`damon_test_merge_regions_of()` 函数代码逻辑默认假设所有的动态内存分配（如 `damon_new_target` 和 `damon_new_region`）都会成功。虽然在真实场景中这些小内存分配很难失败，但在理论上存在失败的可能性。如果分配失败，代码未做任何检查便继续执行后续操作，导致对空指针或无效内存的访问。
+
+#解决方案
+在 `damon_test_merge_regions_of` 函数中增加对内存分配结果的检查：
+1. 检查 `damon_new_target()` 的返回值，若失败则调用 `kunit_skip` 跳过测试。
+2. 在循环中检查 `damon_new_region()` 的返回值，若失败则先清理已分配的 `target` 内存（`damon_free_target`），再调用 `kunit_skip` 跳过测试，防止内存泄漏和非法访问。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/63c308a1ff66b786728fb41e2e18aaf52cc2ec48

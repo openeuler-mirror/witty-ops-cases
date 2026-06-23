@@ -1,0 +1,20 @@
+#标题
+MPTCP 子流数量限制导致 MPJoinAckHMacFailure 计数器错误增加
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在进行 MPTCP 本地连接调试时，服务端观测到 `MPJoinAckHMacFailure` 统计计数器不为零。该计数器本应仅记录 HMAC 校验失败的情况，但实际上在服务端因达到子流数量限制而拒绝新建子流时，该计数器也被错误地累加，导致统计数据不准确，混淆了真正的 HMAC 校验失败与正常的子流限制拒绝。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `subflow_syn_recv_sock` 函数中，代码逻辑将 HMAC 校验失败判断 (`subflow_hmac_valid`) 与新建子流许可判断 (`mptcp_can_accept_new_subflow`) 放在同一个条件判断语句中。只要任一条件不满足，程序流程即进入错误处理分支并增加 `MPTCP_MIB_JOINACKMAC` 计数器。这导致当仅因达到子流数量限制而拒绝连接时，错误地触发了 HMAC 失败的计数统计。
+
+#解决方案
+将 HMAC 校验判断与子流数量限制判断的逻辑分离。仅当 `subflow_hmac_valid` 校验失败时，才增加 `MPTCP_MIB_JOINACKMAC` 计数器；对于因 `mptcp_can_accept_new_subflow` 返回 false 而拒绝连接的情况，不再增加该 HMAC 失败计数器，从而确保统计指标准确反映 HMAC 校验结果。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/3fe9345aaa7761a07e6f9fa8e7677236f67037a9

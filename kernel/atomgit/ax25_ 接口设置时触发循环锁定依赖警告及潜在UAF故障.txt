@@ -1,0 +1,40 @@
+#标题
+ax25: 接口设置时触发循环锁定依赖警告及潜在UAF故障
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 `ax25_setsockopt` 系统调用时，内核检测到可能的循环锁定依赖，触发 lockdep 警告。系统报告 `syzkaller` 进程在持有 `sk_lock-AF_AX25` 锁的情况下尝试获取 `rtnl_mutex`，这与现有的锁依赖链（`rtnl_mutex` -> `sk_lock-AF_AX25`）冲突，存在死锁风险。此外，该问题还关联到 AX.25 设备指针访问的潜在 Use-After-Free（UAF）风险。
+
+#主要错误日志
+```
+WARNING: possible circular locking dependency detected
+6.13.0-rc3-syzkaller-00762-g9268abe611b0 #0 Not tainted
+------------------------------------------------------
+syz.5.1818/12806 is trying to acquire lock:
+ ffffffff8fcb3988 (rtnl_mutex){+.+.}-{4:4}, at: ax25_setsockopt+0xa55/0xe90 net/ax25/af_ax25.c:680
+
+but task is already holding lock:
+ ffff8880617ac258 (sk_lock-AF_AX25){+.+.}-{0:0}, at: ax25_setsockopt+0x209/0xe90 net/ax25/af_ax25.c:574
+...
+ Possible unsafe locking scenario:
+
+       CPU0                    CPU1
+       ----                    ----
+  lock(sk_lock-AF_AX25);
+                               lock(rtnl_mutex);
+                               lock(sk_lock-AF_AX25);
+  lock(rtnl_mutex);
+
+ *** DEADLOCK ***
+```
+
+#问题根因
+在 `ax25_setsockopt` 函数中，代码在持有 socket 锁（`sk_lock-AF_AX25`）的情况下调用了 `rtnl_lock()`，这导致了锁的获取顺序与 `ax25_kill_by_device` 路径（先获取 `rtnl_mutex` 再获取 `sk_lock`）相反，从而形成循环依赖。同时，`dev->ax25_ptr` 的访问缺乏 RCU 保护，在并发场景下可能引发 Use-After-Free 问题。
+
+#解决方案
+将 `dev->ax25_ptr` 修改为受 RCU 保护的指针（`struct ax25_dev __rcu *ax25_ptr`），并在相关数据结构中添加 RCU 回调头。在 `ax25_setsockopt` 中移除 `rtnl_lock`/`rtnl_unlock` 调用，改为使用 `rcu_read_lock`/`rcu_read_unlock` 保护临界区，并使用 `dev_get_by_name_rcu` 查找设备。同时，更新 `ax25_dev_ax25dev` 等相关函数以使用 RCU 解引用接口，确保指针访问的安全性，从而消除死锁隐患并修复 UAF 漏洞。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/1758682227175583f9b7d7e0d9ca2c4de767dcc0

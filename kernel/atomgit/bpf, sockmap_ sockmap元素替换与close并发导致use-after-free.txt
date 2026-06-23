@@ -1,0 +1,28 @@
+#标题
+bpf, sockmap: sockmap元素替换与close并发导致use-after-free
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在并发场景下，当用户对 sockmap 中的元素进行替换操作（map_update_elem）的同时，对被替换的 socket 执行 close 操作，会引发内核崩溃。具体表现为 KASAN 检测到 slab-use-after-free 错误，伴随 refcount_t 引用计数警告（加法溢出与下溢），最终导致系统不稳定或 panic。
+
+#主要错误日志
+BUG: KASAN: slab-use-after-free in sock_map_free+0x10e/0x330
+Write of size 4 at addr ffff88811f5b9100 by task kworker/u64:12/1063
+refcount_t: addition on 0; use-after-free.
+WARNING: CPU: 14 PID: 1063 at lib/refcount.c:25 refcount_warn_saturate+0xce/0x150
+refcount_t: underflow; use-after-free.
+WARNING: CPU: 14 PID: 1063 at lib/refcount.c:28 refcount_warn_saturate+0xee/0x150
+
+#问题根因
+问题根因是 `__sock_map_delete()` 函数中存在竞态条件（Race Condition）。
+原代码逻辑在获取自旋锁后，先读取指针 `sk = *psk`，然后判断 `sk_test == sk`。如果在读取 `sk` 之后、判断之前，另一个线程通过 `map_update_elem` 将 `*psk` 指向的 socket 替换成了新的 socket（例如 s0 被替换为 s1），此时 `sk` 仍指向旧值 s0，而 `*psk` 已指向 s1。
+判断条件 `sk_test == sk`（即 s0 == s0）成立，导致代码错误地执行 `sk = xchg(psk, NULL)`，这将新插入的 socket (s1) 从 map 中取出并置为 NULL，随后对 s1 执行 `sock_map_unref()`。这导致 s1 的引用计数被错误减少，触发了 use-after-free 和 refcount 下溢/溢出警告。
+
+#解决方案
+修改 `__sock_map_delete()` 函数的逻辑，将指针读取与比较操作合并，直接比较 `sk_test == *psk`。
+修复后的代码不再预先读取 `*psk` 到局部变量，而是直接判断 `sk_test` 是否等于当前 map 槽位中的指针 `*psk`。只有当测试指针与当前槽位指针一致时（说明未发生并发替换），才执行 `xchg(psk, NULL)` 操作取出元素。这避免了操作已被替换的元素，从而修复了引用计数管理错误。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/d062e20186d040255e9c2899706a02ab74682720

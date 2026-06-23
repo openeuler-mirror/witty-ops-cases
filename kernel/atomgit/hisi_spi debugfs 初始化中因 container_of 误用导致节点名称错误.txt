@@ -1,0 +1,20 @@
+#标题
+hisi_spi debugfs 初始化中因 container_of 误用导致节点名称错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在 hisi_spi 驱动的 debugfs 初始化过程中，生成的 debugfs 节点名称（如 `hisi_spi%d`）可能显示为错误的总线号，导致无法正确通过 debugfs 节点识别或访问对应的 SPI 控制器。
+
+#主要错误日志
+未知
+
+#问题根因
+在 `hisi_spi_debugfs_init` 函数中，使用 `container_of` 宏通过 `hs->dev` 成员获取 `spi_controller` 指针（host）的方法是错误的。`hs->dev` 实际指向的是 `platform_device` 中的 `dev`（即 `pdev->dev`），而 `host->dev` 指向的是 `pdev->dev.parent`，两者内存布局不一致。直接使用 `container_of` 计算偏移导致获取到的 host 指针非法或错误，进而导致 `host->bus_num` 读取到错误的值。
+
+#解决方案
+修正获取 `spi_controller` 指针的方式，不再使用 `container_of` 宏进行转换，而是直接通过 `hs->dev->driver_data` 获取。因为在驱动 probe 阶段，`driver_data` 已经被设置为指向该 SPI 控制器数据的指针，这样可以正确获取 host 指针并生成正确的 debugfs 节点名称。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e5df272bf16ea59ee8c16986f982784c57a8ee8b

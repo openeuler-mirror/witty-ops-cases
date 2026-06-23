@@ -1,0 +1,20 @@
+#标题
+BPF devmap 重定向路径因上层设备过多导致栈越界写
+
+#内核版本
+OLK-6.6
+
+#问题现象
+当网卡设备存在大量上层设备（如超过 8 个 macvlan 接口）且挂载了使用 BPF_F_BROADCAST | BPF_F_EXCLUDE_INGRESS 标志的 XDP 程序时，发送数据包触发 XDP 重定向路径会导致内核发生栈越界写。该漏洞可能破坏内核栈数据，引发内核崩溃或潜在的系统提权风险。
+
+#主要错误日志
+未知
+
+#问题根因
+函数 `get_upper_ifindexes()` 在遍历并记录设备的所有上层设备索引时，未对写入的数组进行边界检查。同时，调用者错误地假设上层设备的最大数量不会超过 `MAX_NEST_DEV`（定义为 8），并在栈上分配了大小为 `excluded_devices[1+MAX_NEST_DEV]` 的数组。实际上，设备可能拥有超过该限制的上层设备（例如大量 macvlan），导致写入操作越过数组边界，引发栈越界写。
+
+#解决方案
+在 `get_upper_ifindexes()` 函数中增加 `max` 参数以限制最大写入数量。在遍历上层设备时增加边界检查，若待写入设备数量超过 `max`，则直接返回 `-EOVERFLOW` 并中止重定向操作，从而防止数组越界写入。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/c0732c06fcc159bd65561a1c461a82d5ae066fac

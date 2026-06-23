@@ -1,0 +1,31 @@
+#标题
+f2fs在LVM设备创建快照后触发内核WARNING及panic
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在LVM设备上挂载F2FS文件系统，执行文件创建、删除、同步操作后创建LVM快照，随后卸载文件系统时触发内核WARNING。系统调用栈显示在 `__submit_discard_cmd` 函数中触发 panic，导致内核不可用。
+
+#主要错误日志
+```text
+------------[ cut here ]------------
+WARNING: CPU: 2 PID: 969 at fs/f2fs/segment.c:1330
+RIP: 0010:__submit_discard_cmd+0x27d/0x400 [f2fs]
+Call Trace:
+ __issue_discard_cmd+0x1ca/0x350 [f2fs]
+ issue_discard_thread+0x191/0x480 [f2fs]
+ kthread+0xcf/0x100
+ ret_from_fork+0x31/0x50
+ ret_from_fork_asm+0x1a/0x30
+```
+
+#问题根因
+在LVM设备创建快照后，系统会将该挂载设备的 `discard_max_bytes` 更新为零。此时F2FS若继续尝试提交丢弃命令，`__submit_discard_cmd()` 函数会将值为零的 `nr_sects` 参数传递给 `__blkdev_issue_discard()`，导致后者返回空指针（NULL bio pointer），进而引发内核 panic。
+
+#解决方案
+1. 在 `__submit_discard_cmd()` 函数中增加检查，若设备不支持丢弃操作（`bdev_max_discard_sectors` 为零），直接返回 `-EOPNOTSUPP`，停止下发丢弃命令。
+2. 在 `f2fs_unfreeze()` 函数中增加逻辑，检测到设备不再支持丢弃操作时（如LVM快照创建后），调用 `f2fs_issue_discard_timeout()` 清理所有剩余的丢弃命令。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/b86c8a34d49b147f898ef19f1f0d8bb4d7185f53

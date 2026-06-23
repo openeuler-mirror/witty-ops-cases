@@ -1,0 +1,28 @@
+#标题
+urma内核模块日志打印实现优化与冗余报错修复
+
+#内核版本
+OLK-6.6
+
+#问题现象
+1. urma相关内核模块（ubagg, ubcore, uburma）的默认日志级别设置过高（设置为 WARNING），导致正常的 INFO 级别业务流水日志（如设备注册成功、拓扑信息设置完成等）无法输出，不利于业务状态监控和问题定位。
+2. 在 `uburma_jfce_wait` 函数中，当 `wait_event` 返回 `-EAGAIN`（即非阻塞模式下条件未满足或信号中断等正常重试场景）时，内核日志会错误地打印 "Failed to wait jfce event" 错误信息，干扰运维判断。
+
+#主要错误日志
+- `uburma_log_err("Failed to wait jfce event, ret: %d.\n", ret);`
+- `ubcore_log_warn("ubcore topo map doesn't exist.\n");`（推断：补丁将其改为限速打印，原打印可能在高并发下导致日志风暴）
+
+#问题根因
+1. **日志级别配置不当**：`g_ubagg_log_level`、`g_ubcore_log_level` 和 `g_uburma_log_level` 全局变量被初始化为 `LOG_LEVEL_WARNING`，导致所有低于 WARNING 级别的日志（如 INFO、NOTICE）被过滤，关键业务流水无法记录。
+2. **日志宏定义缺失**：原代码中缺少 `notice` 级别的日志宏定义（如 `ubagg_log_notice`），无法按标准日志层级输出信息。
+3. **错误码处理逻辑缺陷**：`uburma_jfce_wait` 函数未对返回值 `-EAGAIN` 进行特殊处理，将其归类为错误并打印报错日志，实际上该状态码通常表示需要重试，不应视为故障。
+
+#解决方案
+1. **调整默认日志级别**：将 ubagg、ubcore、uburma 三个模块的默认日志级别从 `WARNING` 下调至 `NOTICE`，确保重要但非错误的事件日志能够输出。
+2. **完善日志宏定义**：新增 `ubagg_log_notice`、`ubagg_log_notice_rl`、`ubcore_log_notice`、`ubcore_log_notice_rl`、`uburma_log_notice`、`uburma_log_notice_rl` 等宏定义，并调整宏定义的顺序结构，规范日志层级体系。
+3. **修复误报逻辑**：在 `uburma_jfce_wait` 中增加对返回值 `-EAGAIN` 的判断，若为 `-EAGAIN` 则不打印错误日志，避免正常重试场景下的日志干扰。
+4. **增加关键业务日志**：在 `ubagg_cmd_set_topo_info`、`ubagg_create_dev`、`ubagg_delete_dev` 等关键流程结尾处增加 `notice` 级别的成功日志，补全业务操作痕迹。
+5. **优化日志打印频率**：将部分高频或可能密集打印的日志（如 `ubcore_log_info` 改为 `ubcore_log_notice_rl`）调整为限速打印（rate limited），防止潜在的日志风暴影响系统性能。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/fb678c3fba9c8f04f39b1aa295b35c891835185f

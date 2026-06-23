@@ -1,0 +1,20 @@
+#标题
+arm64: LTO 构建下 __READ_ONCE() 宏语义缺失导致内存访问非原子
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在开启 CONFIG_LTO=y 的内核构建环境下，__READ_ONCE() 宏处理大于 8 字节的数据类型时，未能正确实施“一次性”访问语义。这导致编译器进行了错误的优化，违反了 READ_ONCE 应有的原子性语义。实际观测到相关内核函数（如 `xen_manage_runstate_time` 和 `xen_steal_clock`）的代码体积发生变化（例如分别从 884/248 字节变为 944/340 字节），表明编译器生成的访问指令序列与预期不符，可能导致读取到的数据不一致或被撕裂。
+
+#主要错误日志
+未知
+
+#问题根因
+在 CONFIG_LTO=y 配置下，__READ_ONCE() 宏中对大于 8 字节类型的 fallback 处理代码存在类型转换错误。原代码 `(*(volatile typeof(__x))__x)` 将 `volatile` 限定符应用在了指针类型本身，而非指针所指向的对象。这导致实际上创建了一个指向非易失性类型的易失性指针，未能正确告知编译器该内存访问是 volatile 的，从而违反了 __READ_ONCE() 的语义，允许编译器进行了本应被抑制的优化。
+
+#解决方案
+修正 arch/arm64/include/asm/rwonce.h 中的类型转换语法。将 `(*(volatile typeof(__x))__x)` 修改为 `(*(volatile typeof(*__x) *)__x)`，确保 `volatile` 限定符正确作用于指针所指向的数据类型，从而保证 __READ_ONCE() 在非原子上下文中也能正确抑制编译器优化，维持“一次性”访问语义。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/16716a8b8e57680e3c25c918d16504e11c9654fc

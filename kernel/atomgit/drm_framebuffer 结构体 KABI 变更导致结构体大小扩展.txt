@@ -1,0 +1,20 @@
+#标题
+drm/framebuffer 结构体 KABI 变更导致结构体大小扩展
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在引入 Commit f6bfc9afc751 ("drm/framebuffer: Acquire internal references on GEM handles") 后，`struct drm_framebuffer` 结构体新增了 `internal_flags` 成员。由于该成员位置安排不当，导致结构体填充字节增加，最终改变了结构体的总大小。这种 KABI（内核应用程序二进制接口）的破坏会导致内核模块兼容性问题，可能引发依赖于该结构体布局的驱动或子系统加载失败或运行异常。
+
+#主要错误日志
+未知
+
+#问题根因
+Commit f6bfc9afc751 在 `struct drm_framebuffer` 中直接追加 `unsigned int internal_flags` 成员，未考虑内存对齐与空洞利用。原结构体中 `hot_y` 成员后存在 4 字节的填充空洞，直接追加新成员导致结构体额外增加 4 字节空洞，从而改变了结构体总大小，破坏了 KABI 稳定性。
+
+#解决方案
+利用 `KABI_FILL_HOLE` 机制将 `internal_flags` 成员移动到 `hot_y` 成员之后。利用 `hot_y` 后原本存在的 4 字节空洞来存储该新成员，从而在不改变结构体总大小（保持 200 字节）的情况下完成修复，保证了 KABI 兼容性。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/322205cb0caa7b7d18056236fd63583e1e44a884

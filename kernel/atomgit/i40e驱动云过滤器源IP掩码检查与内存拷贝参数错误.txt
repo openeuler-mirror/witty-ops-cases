@@ -1,0 +1,26 @@
+#标题
+i40e驱动云过滤器源IP掩码检查与内存拷贝参数错误
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在使用i40e网卡驱动进行云过滤器配置时，源IP掩码检查逻辑错误，导致无法正确匹配源IP地址规则；IPv4地址拷贝使用了错误的数组大小计算方式；IPv6删除路径中比较了错误的字段长度。这会导致基于源IP的云过滤器添加或删除功能异常，可能引发规则配置失败或错误匹配。
+
+#主要错误日志
+未知
+
+#问题根因
+在i40e驱动的云过滤器添加与删除路径代码中存在多处逻辑与参数错误：
+1. 源IP掩码检查条件错误：代码中 `else if (mask.src_ip[0] & tcf.dst_ip[0])` 错误地将掩码与目的IP（dst_ip）进行比较，而非源IP（src_ip）。
+2. 内存拷贝参数错误：IPv4地址拷贝使用 `ARRAY_SIZE(tcf.dst_ip)` 作为长度，虽然实际长度可能正确，但语义不当。
+3. 内存比较参数错误：IPv6删除路径中 `memcmp(&cfilter.ip.v6.dst_ip6, ...)` 使用了 `sizeof(cfilter.ip.v6.src_ip6)` 作为比较长度，而非对应的目的IP长度。
+
+#解决方案
+修复i40e_virtchnl_pf.c文件中云过滤器处理函数的判断逻辑与API参数：
+1. 修正源IP掩码判断条件，将 `tcf.dst_ip[0]` 改为 `tcf.src_ip[0]`。
+2. 将IPv4地址拷贝的长度参数改为显式的 `sizeof(cfilter->ip.v4.dst_ip)` 和 `sizeof(cfilter->ip.v4.src_ip)`，确保拷贝长度语义正确。
+3. 修正IPv6目的地址比较的长度参数，将 `sizeof(cfilter.ip.v6.src_ip6)` 改为 `sizeof(cfilter.ip.v6.dst_ip6)`。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/13f64a0298dc2a08571365875f38db0450200916

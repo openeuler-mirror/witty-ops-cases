@@ -1,0 +1,32 @@
+#标题
+hisi_sas 高并发 I/O 场景下中断处理线程阻塞导致 IRQ 被禁用
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在高并发 I/O 性能测试场景下，当大量 I/O 硬件完成中断快速连续生成时，系统打印“nobody cared”错误信息并伴随调用栈打印，最终导致 IRQ #134 被内核自动禁用，磁盘 I/O 功能失效。
+
+#主要错误日志
+[ 4682.678657][  C129] irq 134: nobody cared (try booting with the "irqpoll" option)
+[ 4682.708455][  C129] Call trace:
+[ 4682.711589][  C129]  dump_backtrace+0x0/0x1e4
+[ 4682.715934][  C129]  show_stack+0x20/0x2c
+...
+[ 4682.855577][  C129] handlers:
+[ 4682.855577][  C129] [<00000000949e52bf>] cq_interrupt_v3_hw [hisi_sas_v3_hw] threaded [<000000005d8e3b68>] cq_thread_v3_hw [hisi_sas_v3_hw]
+[ 4682.868084][  C129] Disabling IRQ #134
+
+#问题根因
+当前中断报告模式下，每个 CQ 入口都会上报一个中断。在高性能 I/O 场景下，硬件中断连续且快速地产生，导致中断处理线程在 `irq_thread()` 中被循环调用而无法退出。这影响了中断线程对硬件中断的及时响应，导致 `irqs_unhandled` 计数快速增长。当 `irq_count` 达到 100000 且 `irqs_unhandled` 达到 99000 时，内核判定中断处理异常，触发错误处理逻辑并禁用该 IRQ。
+
+#解决方案
+默认开启中断聚合功能，减少硬件中断的产生频率。
+具体修改措施：
+1.  将中断聚合使能位 `INT_COAL_EN` 设置为 0x3（开启聚合）。
+2.  配置 `OQ_INT_COAL_TIME` 为 0xa，将中断聚合超时时间设置为 10us。
+3.  配置 `OQ_INT_COAL_CNT` 为 0xa，将 CQ 条目计数阈值设置为 10。
+此修复在减少中断风暴的同时，使 4K 读写性能提升约 3%，且对 256K 读写性能无影响。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/e92d22ee9c6aa1f2e106d62df273b69702c19509

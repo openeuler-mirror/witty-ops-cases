@@ -1,0 +1,23 @@
+#标题
+block, bfq: fix waker_bfqq UAF after bfq_split_bfqq()
+
+#内核版本
+OLK-6.6
+
+#问题现象
+在调用 bfq_split_bfqq() 函数后，系统可能发生 Use-After-Free (UAF) 故障。具体表现为访问已释放的 waker_bfqq 指针，可能导致内核崩溃或数据不一致。
+
+#主要错误日志
+未知
+
+#问题根因
+在 bfq_waker_bfqq() 函数中，当 waker_bfqq 位于合并链中且是唯一进程（引用计数为 1）时，它可能被释放，但原有逻辑直接 break 导致后续继续返回该可能已释放的指针。此外，若 waker_bfqq 不在合并链中且其进程引用计数为 0，它也可能已被释放，但函数仍尝试返回该指针，从而导致 UAF。
+
+#解决方案
+在 bfq_waker_bfqq() 函数中增加防御性检查：
+1. 当 waker_bfqq 在合并链中且引用计数为 1 时，直接返回 NULL，避免返回即将被释放的指针。
+2. 在遍历完合并链后，增加对 waker_bfqq 引用计数的检查，若引用计数为 0，则返回 NULL。
+通过这两处检查，确保函数不会返回已被释放或即将被释放的 bfq_queue 指针，从而修复 UAF 问题。
+
+#来源
+https://atomgit.com/openeuler/kernel/commit/ff870734994171fa89152fbeefd99d93f6f35f24
