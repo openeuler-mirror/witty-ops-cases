@@ -1,0 +1,10 @@
+{
+  "title": "XFS持续写入时内存回收阻塞导致桌面卡死",
+  "kernel_version": "4.19.16（亦见于 4.19.19, 5.4.x）",
+  "phenomenon": "- 在XFS文件系统上进行持续写入操作（如rsync大文件、dd生成小文件）时，整个桌面环境出现严重卡顿，持续时间可达数秒。\n- 卡顿期间鼠标指针停止移动，Xorg进程被阻塞，甚至不涉及磁盘I/O的进程（如终端打印脚本）也会暂停。\n- 内核日志显示进程处于不可中断睡眠状态（D状态），堆栈显示 `Xorg` 和 `kswapd0` 均阻塞在 `xfs_reclaim_inodes_nr` 相关路径。",
+  "root_cause": "GPU驱动（amdgpu/ttm）在进行内存分配时使用了允许文件系统回收和I/O操作的标志位（`GFP_USER` 包含 `__GFP_FS` 和 `__GFP_IO`）。当系统内存压力主要来自XFS缓存时，直接内存回收机制调用 `xfs_reclaim_inodes_nr`。XFS在回收inode过程中执行了同步元数据写入（如 `xfs_bwrite`），导致内存分配进程及 `kswapd` 内核线程等待I/O完成，进而阻塞了依赖GPU内存分配的图形界面进程。",
+  "solution": "暂无上游官方修复。规避方案包括：\n1. 更换文件系统为 ext4。\n2. 应用非官方补丁 \"xfs: add a sysctl to disable memory reclaim participation\" 并设置 `fs.xfs.memory_reclaim = 1`，限制仅回收干净的inode。",
+  "category": "kernel",
+  "source_file": "XFS持续写入时内存回收阻塞导致桌面卡死.txt",
+  "content": "内核版本：4.19.16（亦见于 4.19.19, 5.4.x）\n\n## 问题现象\n- 在XFS文件系统上进行持续写入操作（如rsync大文件、dd生成小文件）时，整个桌面环境出现严重卡顿，持续时间可达数秒。\n- 卡顿期间鼠标指针停止移动，Xorg进程被阻塞，甚至不涉及磁盘I/O的进程（如终端打印脚本）也会暂停。\n- 内核日志显示进程处于不可中断睡眠状态（D状态），堆栈显示 `Xorg` 和 `kswapd0` 均阻塞在 `xfs_reclaim_inodes_nr` 相关路径。\n\n## 问题根因\nGPU驱动（amdgpu/ttm）在进行内存分配时使用了允许文件系统回收和I/O操作的标志位（`GFP_USER` 包含 `__GFP_FS` 和 `__GFP_IO`）。当系统内存压力主要来自XFS缓存时，直接内存回收机制调用 `xfs_reclaim_inodes_nr`。XFS在回收inode过程中执行了同步元数据写入（如 `xfs_bwrite`），导致内存分配进程及 `kswapd` 内核线程等待I/O完成，进而阻塞了依赖GPU内存分配的图形界面进程。\n\n## 解决方案\n暂无上游官方修复。规避方案包括：\n1. 更换文件系统为 ext4。\n2. 应用非官方补丁 \"xfs: add a sysctl to disable memory reclaim participation\" 并设置 `fs.xfs.memory_reclaim = 1`，限制仅回收干净的inode。"
+}

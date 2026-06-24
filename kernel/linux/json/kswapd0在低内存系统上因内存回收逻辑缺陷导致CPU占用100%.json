@@ -1,0 +1,10 @@
+{
+  "title": "kswapd0在低内存系统上因内存回收逻辑缺陷导致CPU占用100%",
+  "kernel_version": "3.12（受影响版本包括 3.19、4.2、4.8 等）",
+  "phenomenon": "- kswapd0 进程随机占用单核 CPU 100%，导致系统卡顿或响应缓慢。\n- 现象多见于 2GB 内存的小型系统（如 Acer C720、AWS t2.small）或关闭 Swap 的环境。\n- perf 工具显示热点函数集中在 shrink_lruvec、mem_cgroup_iter、shrink_slab 及 _raw_spin_lock。\n- /proc/zoneinfo 显示空闲页面远高于水位线，但 kswapd 仍持续运行。",
+  "root_cause": "在小内存系统（约 4GB 以下）中，Normal zone 管理的页面数量极少。旧版内核的内存回收逻辑基于 \"per zone\"（按区域）执行。当 kswapd 发现高水位已满足而无需回收页面，但内存规整逻辑发现其自身要求未满足时，会不断循环检查区域，导致 kswapd 陷入无效循环，持续消耗 CPU 资源。",
+  "solution": "- 根本修复：升级内核至包含 Mel Gorman \"per-node reclaim\" 补丁系列的版本（该补丁将内存回收逻辑从 per-zone 改为 per-node，修复了此问题）。\n- 规避措施：\n  1. 设置 sysctl 参数：vm.min_free_kbytes=67584。\n  2. 限制系统可用内存：在内核启动参数中添加 mem=1920M（略小于物理内存）。\n  3. Xen 环境：禁用内存热添加，执行 touch /etc/udev/rules.d/40-vm-hotadd.rules 后重启。\n  4. 临时缓解：执行 echo 3 > /proc/sys/vm/drop_caches 清理缓存。",
+  "category": "kernel",
+  "source_file": "kswapd0在低内存系统上因内存回收逻辑缺陷导致CPU占用100%.txt",
+  "content": "内核版本：3.12（受影响版本包括 3.19、4.2、4.8 等）\n\n## 问题现象\n- kswapd0 进程随机占用单核 CPU 100%，导致系统卡顿或响应缓慢。\n- 现象多见于 2GB 内存的小型系统（如 Acer C720、AWS t2.small）或关闭 Swap 的环境。\n- perf 工具显示热点函数集中在 shrink_lruvec、mem_cgroup_iter、shrink_slab 及 _raw_spin_lock。\n- /proc/zoneinfo 显示空闲页面远高于水位线，但 kswapd 仍持续运行。\n\n## 问题根因\n在小内存系统（约 4GB 以下）中，Normal zone 管理的页面数量极少。旧版内核的内存回收逻辑基于 \"per zone\"（按区域）执行。当 kswapd 发现高水位已满足而无需回收页面，但内存规整逻辑发现其自身要求未满足时，会不断循环检查区域，导致 kswapd 陷入无效循环，持续消耗 CPU 资源。\n\n## 解决方案\n- 根本修复：升级内核至包含 Mel Gorman \"per-node reclaim\" 补丁系列的版本（该补丁将内存回收逻辑从 per-zone 改为 per-node，修复了此问题）。\n- 规避措施：\n  1. 设置 sysctl 参数：vm.min_free_kbytes=67584。\n  2. 限制系统可用内存：在内核启动参数中添加 mem=1920M（略小于物理内存）。\n  3. Xen 环境：禁用内存热添加，执行 touch /etc/udev/rules.d/40-vm-hotadd.rules 后重启。\n  4. 临时缓解：执行 echo 3 > /proc/sys/vm/drop_caches 清理缓存。"
+}

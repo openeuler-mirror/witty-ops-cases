@@ -1,0 +1,10 @@
+{
+  "title": "uinput与evdev互斥锁死锁导致进程D状态挂起",
+  "kernel_version": "6.1.52 (Steam Deck Neptune 内核)",
+  "phenomenon": "- Steam Deck 从睡眠唤醒后，若蓝牙控制器已断开，运行触觉反馈（Haptic）测试程序时进程挂起。\n- 进程状态为不可中断睡眠（D状态），堆栈显示卡在 `evdev_cleanup` -> `__mutex_lock` -> `schedule`。\n- 用户态调用 `ioctl(EVIOCSFF)` 上传力反馈效果时阻塞，持续时间约30秒或无限期挂起。",
+  "root_cause": "uinput 驱动与 evdev 子系统之间存在互斥锁死锁：\n1. uinput 所有者在发送 ioctl 时持有 uinput mutex，在销毁设备时持有 evdev mutex。\n2. 客户端在上传 ff pattern 到 evdev 设备时，先锁定 evdev mutex，随后尝试锁定 uinput mutex。\n3. 这种锁获取顺序的不一致导致了 AB-BA 死锁。",
+  "solution": "开发者已制作修复补丁（Patch 2 v3）以解决互斥锁死锁问题，并计划上游合并。注：原始报告的特定复现场景最终被确认主要源于 Steam 客户端软件的 Bug，但内核层面的死锁问题已通过补丁修复。",
+  "category": "kernel",
+  "source_file": "uinput与evdev互斥锁死锁导致进程D状态挂起.txt",
+  "content": "内核版本：6.1.52 (Steam Deck Neptune 内核)\n\n## 问题现象\n- Steam Deck 从睡眠唤醒后，若蓝牙控制器已断开，运行触觉反馈（Haptic）测试程序时进程挂起。\n- 进程状态为不可中断睡眠（D状态），堆栈显示卡在 `evdev_cleanup` -> `__mutex_lock` -> `schedule`。\n- 用户态调用 `ioctl(EVIOCSFF)` 上传力反馈效果时阻塞，持续时间约30秒或无限期挂起。\n\n## 问题根因\nuinput 驱动与 evdev 子系统之间存在互斥锁死锁：\n1. uinput 所有者在发送 ioctl 时持有 uinput mutex，在销毁设备时持有 evdev mutex。\n2. 客户端在上传 ff pattern 到 evdev 设备时，先锁定 evdev mutex，随后尝试锁定 uinput mutex。\n3. 这种锁获取顺序的不一致导致了 AB-BA 死锁。\n\n## 解决方案\n开发者已制作修复补丁（Patch 2 v3）以解决互斥锁死锁问题，并计划上游合并。注：原始报告的特定复现场景最终被确认主要源于 Steam 客户端软件的 Bug，但内核层面的死锁问题已通过补丁修复。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "natsemi驱动读取EEPROM时序不足导致MAC地址全零",
+  "kernel_version": "2.6.33, 3.2.0",
+  "phenomenon": "- 加载 natsemi.ko 驱动后，网卡 eth0 的 MAC 地址显示为 00:00:00:00:00:00\n- dmesg 和 ifconfig 均显示 MAC 地址全为零\n- 使用 nictools-pci 工具包中的 natsemi-diag 工具可读取到 EEPROM 中存储的有效 MAC 地址\n- 手动通过 ifconfig 设置 MAC 地址后网卡可正常工作",
+  "root_cause": "natsemi 驱动中 `eeprom_read` 函数存在时序问题。驱动代码中将 `eeprom_delay` 宏定义为单次 `readl(ee_addr)` 操作，该延迟时间不足以满足 EEPROM 时钟转换的要求，导致驱动无法正确从 EEPROM 读取 MAC 地址。相比之下，用户态工具 `natsemi-diag` 使用了双读操作（`inl` 或 `readl` 执行两次）来增加延迟，能够正确读取数据。",
+  "solution": "用户建议修改 `drivers/net/ethernet/natsemi/natsemi.c` 文件，将 `eeprom_delay` 宏定义修改为执行两次 `readl(ee_addr)` 操作以增加延迟：\n`#define eeprom_delay(ee_addr) readl(ee_addr); readl(ee_addr)`\n临时规避方法为手动执行命令设置 MAC 地址：`ifconfig eth0 hw ether <MAC地址>`。",
+  "category": "kernel",
+  "source_file": "natsemi驱动读取EEPROM时序不足导致MAC地址全零.txt",
+  "content": "内核版本：2.6.33, 3.2.0\n\n## 问题现象\n- 加载 natsemi.ko 驱动后，网卡 eth0 的 MAC 地址显示为 00:00:00:00:00:00\n- dmesg 和 ifconfig 均显示 MAC 地址全为零\n- 使用 nictools-pci 工具包中的 natsemi-diag 工具可读取到 EEPROM 中存储的有效 MAC 地址\n- 手动通过 ifconfig 设置 MAC 地址后网卡可正常工作\n\n## 问题根因\nnatsemi 驱动中 `eeprom_read` 函数存在时序问题。驱动代码中将 `eeprom_delay` 宏定义为单次 `readl(ee_addr)` 操作，该延迟时间不足以满足 EEPROM 时钟转换的要求，导致驱动无法正确从 EEPROM 读取 MAC 地址。相比之下，用户态工具 `natsemi-diag` 使用了双读操作（`inl` 或 `readl` 执行两次）来增加延迟，能够正确读取数据。\n\n## 解决方案\n用户建议修改 `drivers/net/ethernet/natsemi/natsemi.c` 文件，将 `eeprom_delay` 宏定义修改为执行两次 `readl(ee_addr)` 操作以增加延迟：\n`#define eeprom_delay(ee_addr) readl(ee_addr); readl(ee_addr)`\n临时规避方法为手动执行命令设置 MAC 地址：`ifconfig eth0 hw ether <MAC地址>`。"
+}

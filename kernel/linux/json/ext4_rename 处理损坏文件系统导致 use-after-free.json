@@ -1,0 +1,10 @@
+{
+  "title": "ext4_rename 处理损坏文件系统导致 use-after-free",
+  "kernel_version": "4.18",
+  "phenomenon": "- 挂载特制的 ext4 文件系统镜像并执行 rename 操作时，内核触发 WARNING：`drop_nlink+0x69/0x90`。\n- 卸载文件系统时，内核报告 `Inode 16: orphan list check failed!` 并触发 use-after-free。\n- Call Trace 显示异常路径涉及 `ext4_rename` 和 `ext4_destroy_inode`。",
+  "root_cause": "文件系统镜像已损坏，存在 inode (#16) 的 `i_nlink` 计数（为 1）与实际硬链接数（两个目录项指向它）不一致的情况。在 rename 操作覆盖旧文件时，内核未检查目标 inode 的 `i_nlink` 是否为 0。具体触发流程如下：\n1. unlink 操作将 `i_nlink` 降为 0，因引用计数 `i_count > 0`（dcache 存在），该 inode 被加入 orphan list。\n2. rename 操作尝试再次减少 `i_nlink`，触发警告，随后引用计数降为 0 导致 inode 被释放。\n3. 此时 inode 仍留在 orphan list 中，卸载时访问该已释放的 inode 引发 use-after-free。",
+  "solution": "已提交修复补丁：http://patchwork.ozlabs.org/patch/962339/。\n修复方法：在 `ext4_rename` 函数中增加检查，若 `new.inode` 存在且其 `i_nlink` 为 0，则判定文件系统损坏，返回 EFSCORRUPTED 错误。",
+  "category": "kernel",
+  "source_file": "ext4_rename 处理损坏文件系统导致 use-after-free.txt",
+  "content": "内核版本：4.18\n\n## 问题现象\n- 挂载特制的 ext4 文件系统镜像并执行 rename 操作时，内核触发 WARNING：`drop_nlink+0x69/0x90`。\n- 卸载文件系统时，内核报告 `Inode 16: orphan list check failed!` 并触发 use-after-free。\n- Call Trace 显示异常路径涉及 `ext4_rename` 和 `ext4_destroy_inode`。\n\n## 问题根因\n文件系统镜像已损坏，存在 inode (#16) 的 `i_nlink` 计数（为 1）与实际硬链接数（两个目录项指向它）不一致的情况。在 rename 操作覆盖旧文件时，内核未检查目标 inode 的 `i_nlink` 是否为 0。具体触发流程如下：\n1. unlink 操作将 `i_nlink` 降为 0，因引用计数 `i_count > 0`（dcache 存在），该 inode 被加入 orphan list。\n2. rename 操作尝试再次减少 `i_nlink`，触发警告，随后引用计数降为 0 导致 inode 被释放。\n3. 此时 inode 仍留在 orphan list 中，卸载时访问该已释放的 inode 引发 use-after-free。\n\n## 解决方案\n已提交修复补丁：http://patchwork.ozlabs.org/patch/962339/。\n修复方法：在 `ext4_rename` 函数中增加检查，若 `new.inode` 存在且其 `i_nlink` 为 0，则判定文件系统损坏，返回 EFSCORRUPTED 错误。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "btwilink驱动probe函数返回值错误导致Kernel Oops",
+  "kernel_version": "4.1.2（影响所有包含该驱动的版本）",
+  "phenomenon": "当系统中存在其他蓝牙设备（如USB蓝牙适配器），导致btwilink设备成为第二个hci设备（hci1）时，系统触发BUG/Oops/Panic。崩溃通常发生在 `ti_st_send_frame()` 调用 `ti_st_tx_complete()` 时，此时 `hdev->hst->hdev` 指针已损坏，指向其他模块的函数指针而非正确的设备结构体。",
+  "root_cause": "`btwilink` 驱动的 `bt_ti_probe()` 函数错误地返回了 `hci_register_dev()` 的结果（即 HCI 设备编号）。当该设备作为第二个 HCI 设备注册时，返回值为 1（正值）。Linux 驱动模型规定 probe 函数成功应返回 0，失败返回负值。返回正值导致 `platform_drv_probe()` 和 `really_probe()` 误判为失败，进而调用 `dev_pm_domain_detach()` 并释放资源，但 HCI 设备并未被移除。后续设备尝试访问已释放的资源导致指针解引用错误引发崩溃。",
+  "solution": "修改 `drivers/bluetooth/btwilink.c` 中 `bt_ti_probe()` 函数，将 `return err;` 修改为 `return 0;`。补丁已提交至 bluetooth-next：commit 604907eeed85ca3e0e6eb5a6cbb0a9246b7217cc。",
+  "category": "kernel",
+  "source_file": "btwilink驱动probe函数返回值错误导致Kernel Oops.txt",
+  "content": "内核版本：4.1.2（影响所有包含该驱动的版本）\n\n## 问题现象\n当系统中存在其他蓝牙设备（如USB蓝牙适配器），导致btwilink设备成为第二个hci设备（hci1）时，系统触发BUG/Oops/Panic。崩溃通常发生在 `ti_st_send_frame()` 调用 `ti_st_tx_complete()` 时，此时 `hdev->hst->hdev` 指针已损坏，指向其他模块的函数指针而非正确的设备结构体。\n\n## 问题根因\n`btwilink` 驱动的 `bt_ti_probe()` 函数错误地返回了 `hci_register_dev()` 的结果（即 HCI 设备编号）。当该设备作为第二个 HCI 设备注册时，返回值为 1（正值）。Linux 驱动模型规定 probe 函数成功应返回 0，失败返回负值。返回正值导致 `platform_drv_probe()` 和 `really_probe()` 误判为失败，进而调用 `dev_pm_domain_detach()` 并释放资源，但 HCI 设备并未被移除。后续设备尝试访问已释放的资源导致指针解引用错误引发崩溃。\n\n## 解决方案\n修改 `drivers/bluetooth/btwilink.c` 中 `bt_ti_probe()` 函数，将 `return err;` 修改为 `return 0;`。补丁已提交至 bluetooth-next：commit 604907eeed85ca3e0e6eb5a6cbb0a9246b7217cc。"
+}

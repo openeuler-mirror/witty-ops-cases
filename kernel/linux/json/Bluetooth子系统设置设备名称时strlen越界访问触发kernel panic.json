@@ -1,0 +1,10 @@
+{
+  "title": "Bluetooth子系统设置设备名称时strlen越界访问触发kernel panic",
+  "kernel_version": "5.17.6-1-MANJARO #1",
+  "phenomenon": "- 用户进程在通过 HCI socket 设置蓝牙 short/longname 时冻结无响应。\n- 内核日志显示 \"detected buffer overflow in strlen\"，触发 `kernel BUG at lib/string_helpers.c:974`，错误码为 `invalid opcode: 0000 [#1]`。\n- 调用栈显示：`fortify_panic` <- `append_eir_data_to_buf` <- `ext_info_changed` <- `set_local_name` <- `hci_sock_sendmsg`。",
+  "root_cause": "在 `net/bluetooth/mgmt.c` 的 `set_local_name` 函数中，使用 `memcpy` 将用户空间传入的名称数据拷贝到 `hci_dev` 结构体内部的 `dev_name` 数组。由于 `MGMT_MAX_NAME_LENGTH`（249）比 `HCI_MAX_NAME_LENGTH`（248）大 1，若用户输入数据未以双 NUL 结尾，`memcpy` 可能导致 `dev_name` 数组末尾缺少 NUL 终止符。后续 `append_eir_data_to_buf` 函数调用 `strlen(hdev->dev_name)` 计算长度时发生缓冲区越界读取，触发内核加固机制 `CONFIG_FORTIFY_SOURCE` 校验失败，引发 `fortify_panic`。",
+  "solution": "临时规避：用户态发送名称命令时，确保参数以双 NUL 字节结尾。\n官方修复：开发者已提交补丁（https://patchwork.kernel.org/project/bluetooth/patch/20220524202630.3569412-1-luiz.dentz@gmail.com/）以修复该问题。",
+  "category": "kernel",
+  "source_file": "Bluetooth子系统设置设备名称时strlen越界访问触发kernel panic.txt",
+  "content": "内核版本：5.17.6-1-MANJARO #1\n\n## 问题现象\n- 用户进程在通过 HCI socket 设置蓝牙 short/longname 时冻结无响应。\n- 内核日志显示 \"detected buffer overflow in strlen\"，触发 `kernel BUG at lib/string_helpers.c:974`，错误码为 `invalid opcode: 0000 [#1]`。\n- 调用栈显示：`fortify_panic` <- `append_eir_data_to_buf` <- `ext_info_changed` <- `set_local_name` <- `hci_sock_sendmsg`。\n\n## 问题根因\n在 `net/bluetooth/mgmt.c` 的 `set_local_name` 函数中，使用 `memcpy` 将用户空间传入的名称数据拷贝到 `hci_dev` 结构体内部的 `dev_name` 数组。由于 `MGMT_MAX_NAME_LENGTH`（249）比 `HCI_MAX_NAME_LENGTH`（248）大 1，若用户输入数据未以双 NUL 结尾，`memcpy` 可能导致 `dev_name` 数组末尾缺少 NUL 终止符。后续 `append_eir_data_to_buf` 函数调用 `strlen(hdev->dev_name)` 计算长度时发生缓冲区越界读取，触发内核加固机制 `CONFIG_FORTIFY_SOURCE` 校验失败，引发 `fortify_panic`。\n\n## 解决方案\n临时规避：用户态发送名称命令时，确保参数以双 NUL 字节结尾。\n官方修复：开发者已提交补丁（https://patchwork.kernel.org/project/bluetooth/patch/20220524202630.3569412-1-luiz.dentz@gmail.com/）以修复该问题。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "iomap_finish_ioend函数bio释放后访问ioend导致use-after-free",
+  "kernel_version": "linux 5.4+ with xfs-5.5-merge-15 and iomap-5.5-merge-11",
+  "phenomenon": "- 运行 xfstests generic/461 测试用例时触发 KASAN 报错：BUG: KASAN: use-after-free in iomap_finish_ioend+0x58c/0x5c0\n- 故障发生在 kworker 进程，调用栈显示为 xfs_end_io -> iomap_finish_ioends -> iomap_finish_ioend\n- 内核日志中伴随 writeback error on inode 错误信息",
+  "root_cause": "在 `iomap_finish_ioend` 函数中，代码遍历 bio 链表并调用 `bio_put(bio)` 释放内存。由于 `ioend` 结构体与 bio 对象关联，bio 释放后 `ioend` 结构体即失效。若发生 I/O 错误，函数末尾的错误打印逻辑 `printk_ratelimited` 试图访问已释放的 `ioend->io_offset` 成员，导致 use-after-free。",
+  "solution": "修改 `iomap_finish_ioend` 函数，在调用 `bio_put` 释放 bio 之前，将后续错误打印所需的 `ioend->io_offset` 等信息保存到局部变量中，避免在 bio 释放后访问 `ioend` 结构体成员。报告者计划提交相应修复补丁。",
+  "category": "kernel",
+  "source_file": "iomap_finish_ioend函数bio释放后访问ioend导致use-after-free.txt",
+  "content": "内核版本：linux 5.4+ with xfs-5.5-merge-15 and iomap-5.5-merge-11\n\n## 问题现象\n- 运行 xfstests generic/461 测试用例时触发 KASAN 报错：BUG: KASAN: use-after-free in iomap_finish_ioend+0x58c/0x5c0\n- 故障发生在 kworker 进程，调用栈显示为 xfs_end_io -> iomap_finish_ioends -> iomap_finish_ioend\n- 内核日志中伴随 writeback error on inode 错误信息\n\n## 问题根因\n在 `iomap_finish_ioend` 函数中，代码遍历 bio 链表并调用 `bio_put(bio)` 释放内存。由于 `ioend` 结构体与 bio 对象关联，bio 释放后 `ioend` 结构体即失效。若发生 I/O 错误，函数末尾的错误打印逻辑 `printk_ratelimited` 试图访问已释放的 `ioend->io_offset` 成员，导致 use-after-free。\n\n## 解决方案\n修改 `iomap_finish_ioend` 函数，在调用 `bio_put` 释放 bio 之前，将后续错误打印所需的 `ioend->io_offset` 等信息保存到局部变量中，避免在 bio 释放后访问 `ioend` 结构体成员。报告者计划提交相应修复补丁。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "ReiserFS写锁调度时未完全释放导致死锁与数据丢失",
+  "kernel_version": "2.6.36, 2.6.37, 2.6.39, 3.0",
+  "phenomenon": "- 系统运行一段时间后，访问 ReiserFS 文件系统的进程进入不可中断睡眠状态（D 状态），内核日志报错 \"INFO: task blocked for more than 120 seconds\"。\n- 进程堆栈显示阻塞在 `queue_log_writer`、`do_journal_begin_r` 或 `xattr_lookup` 等函数中。\n- Lockdep 检测到锁状态不一致：\"{IN-RECLAIM_FS-R} -> {RECLAIM_FS-ON-W} usage\"。\n- 故障可能导致系统挂起，重启后可能出现文件系统数据丢失。\n- 使用 `acl` 或 `user_xattr` 挂载选项时更容易触发该问题。",
+  "root_cause": "BKL（Big Kernel Lock）移除相关的补丁引入了回归问题。ReiserFS 的写锁支持嵌套，但在发生调度（`schedule`）时，代码仅释放了一层锁引用计数，而非完全释放锁。当锁被嵌套持有（例如在使用 ACL 或扩展属性触发事务嵌套时）且发生调度，锁实际上并未被释放，导致其他等待该锁的线程发生死锁。",
+  "solution": "该问题已在内核 3.12-rc1 中修复，相关补丁包括 `reiserfs: locking, handle nested locks properly` 和 `reiserfs: locking, release lock around quota operations` 等。建议升级内核至 3.12 或更高版本。作为规避措施，可在挂载 ReiserFS 文件系统时避免使用 `acl` 和 `user_xattr` 选项。",
+  "category": "kernel",
+  "source_file": "ReiserFS写锁调度时未完全释放导致死锁与数据丢失.txt",
+  "content": "内核版本：2.6.36, 2.6.37, 2.6.39, 3.0\n\n## 问题现象\n- 系统运行一段时间后，访问 ReiserFS 文件系统的进程进入不可中断睡眠状态（D 状态），内核日志报错 \"INFO: task blocked for more than 120 seconds\"。\n- 进程堆栈显示阻塞在 `queue_log_writer`、`do_journal_begin_r` 或 `xattr_lookup` 等函数中。\n- Lockdep 检测到锁状态不一致：\"{IN-RECLAIM_FS-R} -> {RECLAIM_FS-ON-W} usage\"。\n- 故障可能导致系统挂起，重启后可能出现文件系统数据丢失。\n- 使用 `acl` 或 `user_xattr` 挂载选项时更容易触发该问题。\n\n## 问题根因\nBKL（Big Kernel Lock）移除相关的补丁引入了回归问题。ReiserFS 的写锁支持嵌套，但在发生调度（`schedule`）时，代码仅释放了一层锁引用计数，而非完全释放锁。当锁被嵌套持有（例如在使用 ACL 或扩展属性触发事务嵌套时）且发生调度，锁实际上并未被释放，导致其他等待该锁的线程发生死锁。\n\n## 解决方案\n该问题已在内核 3.12-rc1 中修复，相关补丁包括 `reiserfs: locking, handle nested locks properly` 和 `reiserfs: locking, release lock around quota operations` 等。建议升级内核至 3.12 或更高版本。作为规避措施，可在挂载 ReiserFS 文件系统时避免使用 `acl` 和 `user_xattr` 选项。"
+}

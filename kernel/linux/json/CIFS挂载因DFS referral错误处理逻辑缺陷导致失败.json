@@ -1,0 +1,10 @@
+{
+  "title": "CIFS挂载因DFS referral错误处理逻辑缺陷导致失败",
+  "kernel_version": "6.3.8",
+  "phenomenon": "- 升级至内核 6.3 后，挂载特定 SMB 共享失败，dmesg 显示 \"smb2_get_dfs_refer: ioctl error: rc=-22\" 以及 \"cifs_mount failed w/return code = -22\"。\n- 在内核 6.2 中同样遇到该警告但挂载可以继续进行，6.3 版本中行为变为直接中止挂载，属于回归问题。\n- 使用 `nodfs` 挂载选项可以成功挂载。",
+  "root_cause": "服务端对 DFS referral 请求返回了 STATUS_INVALID_PARAMETER，客户端将其映射为错误码 -EINVAL (-22)。在 `fs/smb/client/dfs.c` 的 `dfs_mount_share` 函数中，原代码逻辑判断 `dfs_get_referral` 返回值时，仅允许 -ENOENT、-EOPNOTSUPP、-EIO 继续执行，而将 -EINVAL 视为致命错误直接跳转至 `goto out` 退出流程。实际上该错误应被视为不支持 DFS，进而设置 `nodfs=true` 并继续尝试非 DFS 方式挂载。",
+  "solution": "该问题已在内核版本 v6.4.5 中修复。临时规避方法是在挂载参数中添加 `nodfs` 选项。",
+  "category": "kernel",
+  "source_file": "CIFS挂载因DFS referral错误处理逻辑缺陷导致失败.txt",
+  "content": "内核版本：6.3.8\n\n## 问题现象\n- 升级至内核 6.3 后，挂载特定 SMB 共享失败，dmesg 显示 \"smb2_get_dfs_refer: ioctl error: rc=-22\" 以及 \"cifs_mount failed w/return code = -22\"。\n- 在内核 6.2 中同样遇到该警告但挂载可以继续进行，6.3 版本中行为变为直接中止挂载，属于回归问题。\n- 使用 `nodfs` 挂载选项可以成功挂载。\n\n## 问题根因\n服务端对 DFS referral 请求返回了 STATUS_INVALID_PARAMETER，客户端将其映射为错误码 -EINVAL (-22)。在 `fs/smb/client/dfs.c` 的 `dfs_mount_share` 函数中，原代码逻辑判断 `dfs_get_referral` 返回值时，仅允许 -ENOENT、-EOPNOTSUPP、-EIO 继续执行，而将 -EINVAL 视为致命错误直接跳转至 `goto out` 退出流程。实际上该错误应被视为不支持 DFS，进而设置 `nodfs=true` 并继续尝试非 DFS 方式挂载。\n\n## 解决方案\n该问题已在内核版本 v6.4.5 中修复。临时规避方法是在挂载参数中添加 `nodfs` 选项。"
+}

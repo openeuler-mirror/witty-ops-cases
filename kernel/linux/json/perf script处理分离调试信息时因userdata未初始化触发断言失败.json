@@ -1,0 +1,10 @@
+{
+  "title": "perf script处理分离调试信息时因userdata未初始化触发断言失败",
+  "kernel_version": "perf version 5.11.0-1.el7.elrepo.x86_64",
+  "phenomenon": "- 执行 `perf script` 分析包含分离调试信息的库（如 libcouchstore.so）的 dwarf call-graph 数据时，perf 工具异常终止。\n- 终端输出错误：`perf: util/unwind-libdw.c:30: __find_debuginfo: Assertion 'dso' failed.`\n- GDB 调试显示崩溃发生在 `__find_debuginfo` 函数中，堆栈回溯指向 `frame_callback` -> `unwind__get_entries`。",
+  "root_cause": "回归问题，由 commit bf53fc6b5f415cddc7118091cb8fd6a211b2320d (\"perf unwind: Fix separate debug info files when using elfutils' libdw…\") 引入。\n在 `util/unwind-libdw.c` 的 `__report_module` 函数中，`*userdatap` 指针仅在 `dwfl_addrmodule` 返回非空模块时被初始化为 `dso`。当 `dwfl_addrmodule` 查找失败，但后续通过 `dwfl_report_elf` 成功加载模块时，`*userdatap` 未被初始化（保持 NULL）。随后在 `__find_debuginfo` 中访问该指针时触发断言 `Assertion 'dso' failed`。",
+  "solution": "修改 `__report_module` 函数逻辑，确保在 `dwfl_report_elf` 成功返回模块时，同样初始化 `*userdatap` 指针。相关补丁已提交并经维护者确认有效。",
+  "category": "kernel",
+  "source_file": "perf script处理分离调试信息时因userdata未初始化触发断言失败.txt",
+  "content": "内核版本：perf version 5.11.0-1.el7.elrepo.x86_64\n\n## 问题现象\n- 执行 `perf script` 分析包含分离调试信息的库（如 libcouchstore.so）的 dwarf call-graph 数据时，perf 工具异常终止。\n- 终端输出错误：`perf: util/unwind-libdw.c:30: __find_debuginfo: Assertion 'dso' failed.`\n- GDB 调试显示崩溃发生在 `__find_debuginfo` 函数中，堆栈回溯指向 `frame_callback` -> `unwind__get_entries`。\n\n## 问题根因\n回归问题，由 commit bf53fc6b5f415cddc7118091cb8fd6a211b2320d (\"perf unwind: Fix separate debug info files when using elfutils' libdw…\") 引入。\n在 `util/unwind-libdw.c` 的 `__report_module` 函数中，`*userdatap` 指针仅在 `dwfl_addrmodule` 返回非空模块时被初始化为 `dso`。当 `dwfl_addrmodule` 查找失败，但后续通过 `dwfl_report_elf` 成功加载模块时，`*userdatap` 未被初始化（保持 NULL）。随后在 `__find_debuginfo` 中访问该指针时触发断言 `Assertion 'dso' failed`。\n\n## 解决方案\n修改 `__report_module` 函数逻辑，确保在 `dwfl_report_elf` 成功返回模块时，同样初始化 `*userdatap` 指针。相关补丁已提交并经维护者确认有效。"
+}

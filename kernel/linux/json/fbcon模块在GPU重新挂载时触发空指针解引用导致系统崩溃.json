@@ -1,0 +1,10 @@
+{
+  "title": "fbcon模块在GPU重新挂载时触发空指针解引用导致系统崩溃",
+  "kernel_version": "5.19.7（回归版本，此前 5.18.16 正常）",
+  "phenomenon": "- 在 VFIO 单 GPU 直通场景下，虚拟机关机后将 GPU 重新挂载回主机时失败，显示器黑屏无信号。\n- dmesg 日志显示内核告警与崩溃：\n  - WARNING: CPU: 30 PID: 12528 at drivers/video/fbdev/core/fbcon.c:999 fbcon_init+0x5ce/0x670\n  - BUG: kernel NULL pointer dereference, address: 0000000000000330\n- 问题在使用 NVIDIA 闭源驱动或无 DRM 驱动（nomodeset）的环境下复现，使用 Nouveau 或 bochs-drm 时未出现。",
+  "root_cause": "经二分查找定位到引入问题的提交为 `3647d6d3dbdafc55f8c4ca8225966963252abe7b` (\"fbcon: Move more code into fbcon_release\")。\n该提交调整了 fbcon 释放逻辑，导致在特定驱动（如 nvidia）下，若先执行 vtconsole 绑定操作，后执行 efi-framebuffer 绑定，会触发 `fbcon_init` 函数内的空指针解引用。",
+  "solution": "暂无官方修复补丁。\n规避方法：调整重新挂载脚本的执行顺序，先绑定 efi-framebuffer，再绑定 vtconsole。例如：\n1. 执行 `echo \"efi-framebuffer.0\" > /sys/bus/platform/drivers/efi-framebuffer/bind`\n2. 再执行 `echo 1 > /sys/class/vtconsole/vtcon0/bind`",
+  "category": "kernel",
+  "source_file": "fbcon模块在GPU重新挂载时触发空指针解引用导致系统崩溃.txt",
+  "content": "内核版本：5.19.7（回归版本，此前 5.18.16 正常）\n\n## 问题现象\n- 在 VFIO 单 GPU 直通场景下，虚拟机关机后将 GPU 重新挂载回主机时失败，显示器黑屏无信号。\n- dmesg 日志显示内核告警与崩溃：\n  - WARNING: CPU: 30 PID: 12528 at drivers/video/fbdev/core/fbcon.c:999 fbcon_init+0x5ce/0x670\n  - BUG: kernel NULL pointer dereference, address: 0000000000000330\n- 问题在使用 NVIDIA 闭源驱动或无 DRM 驱动（nomodeset）的环境下复现，使用 Nouveau 或 bochs-drm 时未出现。\n\n## 问题根因\n经二分查找定位到引入问题的提交为 `3647d6d3dbdafc55f8c4ca8225966963252abe7b` (\"fbcon: Move more code into fbcon_release\")。\n该提交调整了 fbcon 释放逻辑，导致在特定驱动（如 nvidia）下，若先执行 vtconsole 绑定操作，后执行 efi-framebuffer 绑定，会触发 `fbcon_init` 函数内的空指针解引用。\n\n## 解决方案\n暂无官方修复补丁。\n规避方法：调整重新挂载脚本的执行顺序，先绑定 efi-framebuffer，再绑定 vtconsole。例如：\n1. 执行 `echo \"efi-framebuffer.0\" > /sys/bus/platform/drivers/efi-framebuffer/bind`\n2. 再执行 `echo 1 > /sys/class/vtconsole/vtcon0/bind`"
+}

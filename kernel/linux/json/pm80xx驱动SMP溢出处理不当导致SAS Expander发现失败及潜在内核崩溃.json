@@ -1,0 +1,10 @@
+{
+  "title": "pm80xx驱动SMP溢出处理不当导致SAS Expander发现失败及潜在内核崩溃",
+  "kernel_version": "3.17",
+  "phenomenon": "- 加载 pm80xx 驱动模块后，连接 HP SAS Expander 时发现过程失败，`lsscsi -g` 无法识别挂载的磁盘设备。\n- dmesg 日志显示 SMP 通信错误：`mpi_smp_completion 2604:smp IO status 0x2`，随后报错 `sas: expander ... discovery failed(0xffffffa6)` 以及 `smp_execute_task: ... status 0x8a`。\n- 在连接两个 Expander 的场景下，可能触发内核 NULL 指针解引用崩溃：`BUG: unable to handle kernel NULL pointer dereference at 0000000000000290`，调用栈位于 `pm8001_dev_gone_notify`。",
+  "root_cause": "驱动在处理 SMP（Serial Management Protocol）请求完成时发生 SMP overflow。在函数 `mpi_smp_completion` 中，针对 `IO_OVERFLOW` 状态的处理逻辑有误，错误地将任务状态设置为 `SAS_DATA_OVERRUN`，导致 SAS 发现流程被终止。",
+  "solution": "修改 `drivers/scsi/pm8001/pm80xx_hwi.c` 中的 `mpi_smp_completion` 函数：在 `IO_OVERFLOW` 分支中，将 `ts->stat` 设置为 `SAM_STAT_GOOD` 以允许发现流程继续，并增加调试日志。该补丁已在 Bugzilla 附件中提供，经测试可修复单 Expander 场景下的发现失败问题。",
+  "category": "kernel",
+  "source_file": "pm80xx驱动SMP溢出处理不当导致SAS Expander发现失败及潜在内核崩溃.txt",
+  "content": "内核版本：3.17\n\n## 问题现象\n- 加载 pm80xx 驱动模块后，连接 HP SAS Expander 时发现过程失败，`lsscsi -g` 无法识别挂载的磁盘设备。\n- dmesg 日志显示 SMP 通信错误：`mpi_smp_completion 2604:smp IO status 0x2`，随后报错 `sas: expander ... discovery failed(0xffffffa6)` 以及 `smp_execute_task: ... status 0x8a`。\n- 在连接两个 Expander 的场景下，可能触发内核 NULL 指针解引用崩溃：`BUG: unable to handle kernel NULL pointer dereference at 0000000000000290`，调用栈位于 `pm8001_dev_gone_notify`。\n\n## 问题根因\n驱动在处理 SMP（Serial Management Protocol）请求完成时发生 SMP overflow。在函数 `mpi_smp_completion` 中，针对 `IO_OVERFLOW` 状态的处理逻辑有误，错误地将任务状态设置为 `SAS_DATA_OVERRUN`，导致 SAS 发现流程被终止。\n\n## 解决方案\n修改 `drivers/scsi/pm8001/pm80xx_hwi.c` 中的 `mpi_smp_completion` 函数：在 `IO_OVERFLOW` 分支中，将 `ts->stat` 设置为 `SAM_STAT_GOOD` 以允许发现流程继续，并增加调试日志。该补丁已在 Bugzilla 附件中提供，经测试可修复单 Expander 场景下的发现失败问题。"
+}

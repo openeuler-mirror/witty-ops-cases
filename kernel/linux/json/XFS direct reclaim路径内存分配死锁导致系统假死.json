@@ -1,0 +1,10 @@
+{
+  "title": "XFS direct reclaim路径内存分配死锁导致系统假死",
+  "kernel_version": "4.9",
+  "phenomenon": "- 备份服务器（运行 rsync 和 rm）出现严重的页面分配延迟，内核日志显示 \"page allocation stalls for 2102516ms\"。\n- 多个进程（rsync, kswapd）阻塞超过 30 秒，系统响应极其缓慢。\n- 最终触发 Kernel panic：\"Out of memory and no killable processes...\"。",
+  "root_cause": "系统内存不足时，进程进入 direct reclaim 路径，在 `xfs_reclaim_inodes_nr()` 中持有 XFS mutex 锁。此时为了刷新脏 inode，需要调用 `xfs_imap_to_bp` -> `xfs_buf_allocate_memory` 分配内存。由于内存不足，该分配请求阻塞等待，导致进程持锁睡眠。其他进程尝试获取该锁时被阻塞，无法进行内存回收，最终导致系统无内存可用且无法杀死进程，触发 panic。这是一个典型的在 shrinker 回调中进行可能阻塞的内存分配导致的死锁/活锁问题。",
+  "solution": "临时规避方案：修改 `fs/xfs/xfs_icache.c` 中的 `xfs_reclaim_inodes_nr` 函数直接返回 0，禁用 direct reclaim 和 kswapd 的同步 inode 回收，仅依赖后台工作队列进行异步回收。\n调优建议：尝试调整 `/proc/sys/fs/xfs/xfssyncd_centisecs` 参数或减小日志大小以增加 AIL 推送压力。\n上游状态：该问题涉及 direct reclaim 并发控制的架构性难题，讨论中未给出最终合并的主线修复补丁。",
+  "category": "kernel",
+  "source_file": "XFS direct reclaim路径内存分配死锁导致系统假死.txt",
+  "content": "内核版本：4.9\n\n## 问题现象\n- 备份服务器（运行 rsync 和 rm）出现严重的页面分配延迟，内核日志显示 \"page allocation stalls for 2102516ms\"。\n- 多个进程（rsync, kswapd）阻塞超过 30 秒，系统响应极其缓慢。\n- 最终触发 Kernel panic：\"Out of memory and no killable processes...\"。\n\n## 问题根因\n系统内存不足时，进程进入 direct reclaim 路径，在 `xfs_reclaim_inodes_nr()` 中持有 XFS mutex 锁。此时为了刷新脏 inode，需要调用 `xfs_imap_to_bp` -> `xfs_buf_allocate_memory` 分配内存。由于内存不足，该分配请求阻塞等待，导致进程持锁睡眠。其他进程尝试获取该锁时被阻塞，无法进行内存回收，最终导致系统无内存可用且无法杀死进程，触发 panic。这是一个典型的在 shrinker 回调中进行可能阻塞的内存分配导致的死锁/活锁问题。\n\n## 解决方案\n临时规避方案：修改 `fs/xfs/xfs_icache.c` 中的 `xfs_reclaim_inodes_nr` 函数直接返回 0，禁用 direct reclaim 和 kswapd 的同步 inode 回收，仅依赖后台工作队列进行异步回收。\n调优建议：尝试调整 `/proc/sys/fs/xfs/xfssyncd_centisecs` 参数或减小日志大小以增加 AIL 推送压力。\n上游状态：该问题涉及 direct reclaim 并发控制的架构性难题，讨论中未给出最终合并的主线修复补丁。"
+}

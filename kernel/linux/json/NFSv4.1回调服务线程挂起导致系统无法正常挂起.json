@@ -1,0 +1,10 @@
+{
+  "title": "NFSv4.1回调服务线程挂起导致系统无法正常挂起",
+  "kernel_version": ">=3.19.2, >=3.14.36",
+  "phenomenon": "- 系统尝试挂起失败，日志显示 \"Freezing of tasks failed after 20.007 seconds\"，进程 `nfsv4.1-svc` 拒绝冻结。\n- 系统空闲时负载平均值异常升高至 1.00。\n- 进程 `[nfsv4.1-svc]` 长期处于 D 状态（不可中断睡眠）。\n- Call Trace 显示进程阻塞在 `nfs41_callback_svc` -> `schedule_timeout` 路径上。",
+  "root_cause": "问题由 commit `0c0f2544c2355899dcf62821ed0b230b60b79c22` 引入。该补丁修改了 `nfs41_callback_svc` 函数的等待逻辑，将 `schedule()` 替换为 `schedule_timeout(60 * HZ)` 并调整了 `finish_wait` 的位置。代码逻辑错误导致线程在 `finish_wait` 之前执行 `schedule_timeout` 时陷入不可中断的睡眠状态，无法响应系统的冻结任务请求，进而导致挂起流程阻塞。",
+  "solution": "- 潜在修复：开发者推测 commit `5d05e54af3cd` (\"nfs: fix high load average due to callback thread sleeping\") 可能修复了此问题（该补丁合入 4.1-rc1）。\n- 规避措施：\n  1. 降级 nfs-utils 至 1.3.1-1 版本。\n  2. 在 `/etc/nfsmount.conf` 中设置 `Defaultvers=4.0` 以避免触发 NFSv4.1 回调线程。\n  3. 回退引发问题的 commit `0c0f2544c2355899dcf62821ed0b230b60b79c22`。",
+  "category": "kernel",
+  "source_file": "NFSv4.1回调服务线程挂起导致系统无法正常挂起.txt",
+  "content": "内核版本：>=3.19.2, >=3.14.36\n\n## 问题现象\n- 系统尝试挂起失败，日志显示 \"Freezing of tasks failed after 20.007 seconds\"，进程 `nfsv4.1-svc` 拒绝冻结。\n- 系统空闲时负载平均值异常升高至 1.00。\n- 进程 `[nfsv4.1-svc]` 长期处于 D 状态（不可中断睡眠）。\n- Call Trace 显示进程阻塞在 `nfs41_callback_svc` -> `schedule_timeout` 路径上。\n\n## 问题根因\n问题由 commit `0c0f2544c2355899dcf62821ed0b230b60b79c22` 引入。该补丁修改了 `nfs41_callback_svc` 函数的等待逻辑，将 `schedule()` 替换为 `schedule_timeout(60 * HZ)` 并调整了 `finish_wait` 的位置。代码逻辑错误导致线程在 `finish_wait` 之前执行 `schedule_timeout` 时陷入不可中断的睡眠状态，无法响应系统的冻结任务请求，进而导致挂起流程阻塞。\n\n## 解决方案\n- 潜在修复：开发者推测 commit `5d05e54af3cd` (\"nfs: fix high load average due to callback thread sleeping\") 可能修复了此问题（该补丁合入 4.1-rc1）。\n- 规避措施：\n  1. 降级 nfs-utils 至 1.3.1-1 版本。\n  2. 在 `/etc/nfsmount.conf` 中设置 `Defaultvers=4.0` 以避免触发 NFSv4.1 回调线程。\n  3. 回退引发问题的 commit `0c0f2544c2355899dcf62821ed0b230b60b79c22`。"
+}

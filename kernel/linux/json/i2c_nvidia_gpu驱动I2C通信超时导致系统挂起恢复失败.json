@@ -1,0 +1,10 @@
+{
+  "title": "i2c_nvidia_gpu驱动I2C通信超时导致系统挂起恢复失败",
+  "kernel_version": "5.6-rc2",
+  "phenomenon": "- 系统挂起耗时极长（超过50秒），日志显示 \"Freezing of tasks failed after 20.007 seconds\"。\n- 系统恢复失败或出现错误，日志显示 \"PM: Device 0-0008 failed to resume: error -110\"。\n- 内核日志中出现 \"nvidia-gpu 0000:01:00.3: i2c timeout error e0000000\" 及 \"ucsi_ccg: probe of 0-0008 failed with error -110\"。\n- 问题出现在 NVIDIA GTX 1660 等无 USB Type-C 接口的显卡上。",
+  "root_cause": "`i2c-nvidia-gpu` 驱动基于通用的 PCI 类代码匹配设备，导致其在不支持 USB Type-C 的 NVIDIA 显卡（如 GTX 1660）上加载。驱动尝试通过 I2C 总线与 UCSI 控制器通信，但由于硬件不存在，I2C 事务无法完成，状态寄存器 `I2C_MST_CNTL` 显示总线忙（`I2C_MST_CNTL_STATUS_BUS_BUSY`）且触发位保持置位。函数 `gpu_i2c_check_status` 在轮询状态时陷入长达 1 秒的超时等待，多次调用导致系统在挂起过程中任务冻结超时。",
+  "solution": "1. 应用补丁 commit d944b27df121 (\"i2c: nvidia-gpu: Handle timeout correctly in gpu_i2c_check_status()\")，修正超时处理逻辑，使其正确返回 -ETIMEDOUT。\n2. 应用补丁增加对 `I2C_MST_CNTL_STATUS_BUS_BUSY` 状态的处理，返回 -EBUSY。\n3. 将相关错误日志级别从 `dev_err` 降级为 `dev_info`，以避免在无 Type-C 接口的显卡上刷屏错误信息影响用户体验（如破坏 Plymouth 启动画面）。",
+  "category": "kernel",
+  "source_file": "i2c_nvidia_gpu驱动I2C通信超时导致系统挂起恢复失败.txt",
+  "content": "内核版本：5.6-rc2\n\n## 问题现象\n- 系统挂起耗时极长（超过50秒），日志显示 \"Freezing of tasks failed after 20.007 seconds\"。\n- 系统恢复失败或出现错误，日志显示 \"PM: Device 0-0008 failed to resume: error -110\"。\n- 内核日志中出现 \"nvidia-gpu 0000:01:00.3: i2c timeout error e0000000\" 及 \"ucsi_ccg: probe of 0-0008 failed with error -110\"。\n- 问题出现在 NVIDIA GTX 1660 等无 USB Type-C 接口的显卡上。\n\n## 问题根因\n`i2c-nvidia-gpu` 驱动基于通用的 PCI 类代码匹配设备，导致其在不支持 USB Type-C 的 NVIDIA 显卡（如 GTX 1660）上加载。驱动尝试通过 I2C 总线与 UCSI 控制器通信，但由于硬件不存在，I2C 事务无法完成，状态寄存器 `I2C_MST_CNTL` 显示总线忙（`I2C_MST_CNTL_STATUS_BUS_BUSY`）且触发位保持置位。函数 `gpu_i2c_check_status` 在轮询状态时陷入长达 1 秒的超时等待，多次调用导致系统在挂起过程中任务冻结超时。\n\n## 解决方案\n1. 应用补丁 commit d944b27df121 (\"i2c: nvidia-gpu: Handle timeout correctly in gpu_i2c_check_status()\")，修正超时处理逻辑，使其正确返回 -ETIMEDOUT。\n2. 应用补丁增加对 `I2C_MST_CNTL_STATUS_BUS_BUSY` 状态的处理，返回 -EBUSY。\n3. 将相关错误日志级别从 `dev_err` 降级为 `dev_info`，以避免在无 Type-C 接口的显卡上刷屏错误信息影响用户体验（如破坏 Plymouth 启动画面）。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "uinput驱动混合使用新旧API导致空指针解引用引发内核崩溃",
+  "kernel_version": "4.8",
+  "phenomenon": "- 系统日志报错：BUG: unable to handle kernel NULL pointer dereference at 0000000000000024\n- 触发内核 Oops，RIP 寄存器指向 input_handle_event+0x344/0x510\n- 调用栈显示：uinput_write -> input_event -> input_handle_event",
+  "root_cause": "用户程序混合使用了 uinput 接口的新旧 API（使用 UI_DEV_SETUP 初始化设备，却使用旧接口 UI_SET_ABSBIT 设置轴属性）。在 uinput.c 中，UI_SET_ABSBIT 仅设置了 input_dev->absbit 位图，未调用 input_alloc_absinfo() 分配 input_dev->absinfo 内存。当后续发送绝对值事件时，input_handle_event 函数假设 absbit 置位则 absinfo 指针有效，直接访问该指针导致空指针解引用。",
+  "solution": "- 临时规避：应用层统一 API 风格，使用 UI_ABS_SETUP 替代 UI_SET_ABSBIT 进行配置。\n- 内核修复：在 drivers/input/misc/uinput.c 的 UI_SET_ABSBIT 处理分支中增加 input_alloc_absinfo() 调用，确保内存分配成功后再设置 bit 位。",
+  "category": "kernel",
+  "source_file": "uinput驱动混合使用新旧API导致空指针解引用引发内核崩溃.txt",
+  "content": "内核版本：4.8\n\n## 问题现象\n- 系统日志报错：BUG: unable to handle kernel NULL pointer dereference at 0000000000000024\n- 触发内核 Oops，RIP 寄存器指向 input_handle_event+0x344/0x510\n- 调用栈显示：uinput_write -> input_event -> input_handle_event\n\n## 问题根因\n用户程序混合使用了 uinput 接口的新旧 API（使用 UI_DEV_SETUP 初始化设备，却使用旧接口 UI_SET_ABSBIT 设置轴属性）。在 uinput.c 中，UI_SET_ABSBIT 仅设置了 input_dev->absbit 位图，未调用 input_alloc_absinfo() 分配 input_dev->absinfo 内存。当后续发送绝对值事件时，input_handle_event 函数假设 absbit 置位则 absinfo 指针有效，直接访问该指针导致空指针解引用。\n\n## 解决方案\n- 临时规避：应用层统一 API 风格，使用 UI_ABS_SETUP 替代 UI_SET_ABSBIT 进行配置。\n- 内核修复：在 drivers/input/misc/uinput.c 的 UI_SET_ABSBIT 处理分支中增加 input_alloc_absinfo() 调用，确保内存分配成功后再设置 bit 位。"
+}

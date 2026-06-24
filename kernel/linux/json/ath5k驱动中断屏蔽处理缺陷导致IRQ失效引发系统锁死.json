@@ -1,0 +1,10 @@
+{
+  "title": "ath5k驱动中断屏蔽处理缺陷导致IRQ失效引发系统锁死",
+  "kernel_version": "3.6.5",
+  "phenomenon": "- 系统启动后，ath5k 驱动精确在第 200001 次中断时触发锁死，导致桌面环境严重卡顿甚至无响应。\n- 内核日志显示 \"irq 17: nobody cared\"，调用栈指向 `ath5k_intr`，随后系统禁用 IRQ #17。\n- 随后 i915 驱动（IRQ 16）也报 \"nobody cared\" 错误并被禁用。\n- 日志中显示 `ath5k_hw_get_isr: ISR: 0x... IMR: 0x00000000`，表明中断屏蔽寄存器（IMR）为零但仍有中断状态。",
+  "root_cause": "ath5k 驱动在中断处理逻辑中存在缺陷：\n- 当 `ah->imr` 为零（即所有中断被屏蔽）时，驱动未能正确处理或清除硬件产生的剩余中断。\n- `dma.c` 中的代码逻辑 `pisr_clear = pisr & ~AR5K_ISR_BITS_FROM_SISRS` 在 IMR 为零时导致中断未被正确清除。\n- 变量 `imask` 与 `imr` 状态不同步，导致中断处理流程混乱，最终触发内核 IRQ 监控机制报错并禁用中断线。",
+  "solution": "- 临时规避：在内核启动参数中添加 `irqpoll`。\n- 代码修复建议：修改 `drivers/net/wireless/ath/ath5k/dma.c` 中的中断清除逻辑，增加对 `ah->imr` 的判断：\n  若 `ah->imr` 为零，则直接清除 `pisr`，否则执行原有掩码操作。\n  示例逻辑：\n  if(ah->imr)\n    pisr_clear = pisr & ~AR5K_ISR_BITS_FROM_SISRS;\n  else\n    pisr_clear = pisr;",
+  "category": "kernel",
+  "source_file": "ath5k驱动中断屏蔽处理缺陷导致IRQ失效引发系统锁死.txt",
+  "content": "内核版本：3.6.5\n\n## 问题现象\n- 系统启动后，ath5k 驱动精确在第 200001 次中断时触发锁死，导致桌面环境严重卡顿甚至无响应。\n- 内核日志显示 \"irq 17: nobody cared\"，调用栈指向 `ath5k_intr`，随后系统禁用 IRQ #17。\n- 随后 i915 驱动（IRQ 16）也报 \"nobody cared\" 错误并被禁用。\n- 日志中显示 `ath5k_hw_get_isr: ISR: 0x... IMR: 0x00000000`，表明中断屏蔽寄存器（IMR）为零但仍有中断状态。\n\n## 问题根因\nath5k 驱动在中断处理逻辑中存在缺陷：\n- 当 `ah->imr` 为零（即所有中断被屏蔽）时，驱动未能正确处理或清除硬件产生的剩余中断。\n- `dma.c` 中的代码逻辑 `pisr_clear = pisr & ~AR5K_ISR_BITS_FROM_SISRS` 在 IMR 为零时导致中断未被正确清除。\n- 变量 `imask` 与 `imr` 状态不同步，导致中断处理流程混乱，最终触发内核 IRQ 监控机制报错并禁用中断线。\n\n## 解决方案\n- 临时规避：在内核启动参数中添加 `irqpoll`。\n- 代码修复建议：修改 `drivers/net/wireless/ath/ath5k/dma.c` 中的中断清除逻辑，增加对 `ah->imr` 的判断：\n  若 `ah->imr` 为零，则直接清除 `pisr`，否则执行原有掩码操作。\n  示例逻辑：\n  if(ah->imr)\n    pisr_clear = pisr & ~AR5K_ISR_BITS_FROM_SISRS;\n  else\n    pisr_clear = pisr;"
+}

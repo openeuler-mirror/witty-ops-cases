@@ -1,0 +1,10 @@
+{
+  "title": "ext4文件系统jbd2日志提交卡死导致进程D状态挂起",
+  "kernel_version": "6.5.7-custom",
+  "phenomenon": "- 服务器在运行一段时间后，访问 ext4 根文件系统的进程出现挂起，处于 D 状态。\n- 内核日志报告多个任务 blocked for more than 122 seconds，涉及进程包括 `jbd2/nvme0n1p2-`、`vhost`、`CPU X/KVM` 以及 `kworker`。\n- 核心调用栈显示 `jbd2_journal_commit_transaction` 阻塞在 `folio_wait_bit_common` 等待 I/O 完成，其他进程阻塞在 `jbd2_log_wait_commit` 等待日志提交。",
+  "root_cause": "在 ext4 使用 `data=ordered` 模式下，jbd2 执行日志提交事务时，调用 `ext4_journalled_submit_inode_data_buffers` -> `write_cache_pages` 刷新数据块。在此过程中，`write_cache_pages` 调用 `folio_wait_bit_common` 等待某个正在进行回写的内存页完成 I/O。由于底层块设备层或 NVMe 驱动可能发生了 I/O 完成中断丢失或其他异常，导致该 I/O 请求始终无法完成，进而导致 jbd2 提交事务阻塞。所有试图修改文件系统的其他进程随后在 `jbd2_log_wait_commit` 处等待该事务提交，最终导致系统挂起。",
+  "solution": "暂无有效修复方案。用户反馈重新编译开启调试信息（CONFIG_DEBUG_INFO=y）的内核后问题未复现，推测可能与特定编译环境或时序有关，但未确认根本解决方法。",
+  "category": "kernel",
+  "source_file": "ext4文件系统jbd2日志提交卡死导致进程D状态挂起.txt",
+  "content": "内核版本：6.5.7-custom\n\n## 问题现象\n- 服务器在运行一段时间后，访问 ext4 根文件系统的进程出现挂起，处于 D 状态。\n- 内核日志报告多个任务 blocked for more than 122 seconds，涉及进程包括 `jbd2/nvme0n1p2-`、`vhost`、`CPU X/KVM` 以及 `kworker`。\n- 核心调用栈显示 `jbd2_journal_commit_transaction` 阻塞在 `folio_wait_bit_common` 等待 I/O 完成，其他进程阻塞在 `jbd2_log_wait_commit` 等待日志提交。\n\n## 问题根因\n在 ext4 使用 `data=ordered` 模式下，jbd2 执行日志提交事务时，调用 `ext4_journalled_submit_inode_data_buffers` -> `write_cache_pages` 刷新数据块。在此过程中，`write_cache_pages` 调用 `folio_wait_bit_common` 等待某个正在进行回写的内存页完成 I/O。由于底层块设备层或 NVMe 驱动可能发生了 I/O 完成中断丢失或其他异常，导致该 I/O 请求始终无法完成，进而导致 jbd2 提交事务阻塞。所有试图修改文件系统的其他进程随后在 `jbd2_log_wait_commit` 处等待该事务提交，最终导致系统挂起。\n\n## 解决方案\n暂无有效修复方案。用户反馈重新编译开启调试信息（CONFIG_DEBUG_INFO=y）的内核后问题未复现，推测可能与特定编译环境或时序有关，但未确认根本解决方法。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "iSCSI target 模块回归导致 DataOut 超时及系统死锁",
+  "kernel_version": "5.13.12（受影响），5.12（正常）",
+  "phenomenon": "- iSCSI 连接在运行一段时间后中断，内核日志报错 \"Unable to recover from DataOut timeout while in ERL=0\"。\n- 系统出现 hung task，`kworker` 线程在 `target_tmr_work [target_core_mod]` 处阻塞超过 122 秒，Call Trace 显示阻塞在 `target_put_cmd_and_wait`。\n- 系统完全无响应，无法通过常规命令重启，只能通过 IPMI 电源重置恢复。\n- 在仅使用 NFS over RDMA 的场景下，也观察到 `txg_sync` 线程长时间阻塞（超过 245 秒）。",
+  "root_cause": "该问题为 5.13 版本引入的回归问题。开发者分析认为 5.12 到 5.13 之间引入的 target patches（主要用于 batch cmds）可能是诱因。具体故障机制为：iSCSI DataOut 阶段发生超时，导致 LUN reset 处理流程在 `core_tmr_lun_reset` 中调用 `target_put_cmd_and_wait` 时阻塞，iSCSI 层因存在未完成的 cmds/tmfs 而无法重新登录，最终导致系统死锁。",
+  "solution": "暂无正式修复补丁。开发者建议回退 5.13 中的 core target patches 进行测试验证。临时规避方案为降级内核至 5.12 版本。",
+  "category": "kernel",
+  "source_file": "iSCSI target 模块回归导致 DataOut 超时及系统死锁.txt",
+  "content": "内核版本：5.13.12（受影响），5.12（正常）\n\n## 问题现象\n- iSCSI 连接在运行一段时间后中断，内核日志报错 \"Unable to recover from DataOut timeout while in ERL=0\"。\n- 系统出现 hung task，`kworker` 线程在 `target_tmr_work [target_core_mod]` 处阻塞超过 122 秒，Call Trace 显示阻塞在 `target_put_cmd_and_wait`。\n- 系统完全无响应，无法通过常规命令重启，只能通过 IPMI 电源重置恢复。\n- 在仅使用 NFS over RDMA 的场景下，也观察到 `txg_sync` 线程长时间阻塞（超过 245 秒）。\n\n## 问题根因\n该问题为 5.13 版本引入的回归问题。开发者分析认为 5.12 到 5.13 之间引入的 target patches（主要用于 batch cmds）可能是诱因。具体故障机制为：iSCSI DataOut 阶段发生超时，导致 LUN reset 处理流程在 `core_tmr_lun_reset` 中调用 `target_put_cmd_and_wait` 时阻塞，iSCSI 层因存在未完成的 cmds/tmfs 而无法重新登录，最终导致系统死锁。\n\n## 解决方案\n暂无正式修复补丁。开发者建议回退 5.13 中的 core target patches 进行测试验证。临时规避方案为降级内核至 5.12 版本。"
+}

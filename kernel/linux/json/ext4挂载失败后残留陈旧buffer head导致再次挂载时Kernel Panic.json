@@ -1,0 +1,10 @@
+{
+  "title": "ext4挂载失败后残留陈旧buffer head导致再次挂载时Kernel Panic",
+  "kernel_version": "6.3.0-rc1",
+  "phenomenon": "- 系统在挂载 ext4 文件系统时触发 Kernel panic。\n- 日志显示 \"Kernel panic - not syncing: not verified\" 以及 \"found stale bh\"。\n- Call Trace 指向 `journal_get_superblock` -> `load_superblock` -> `jbd2_journal_wipe`。",
+  "root_cause": "上一次挂载操作因 EIO 错误失败后，清理流程存在缺陷：\n1. 因 `sb->s_root` 未初始化，跳过了 `ext4_put_super` 调用。\n2. 因 `bd_openers` 计数非零（被 systemd-udev 打开），跳过了 `kill_bdev` 调用。\n这导致 buffer head 未被释放并残留在内存中。第二次挂载时，`__find_get_block` 获取到了残留的陈旧 buffer head，其 `buffer_verified(bh)` 标志位仍为真，导致跳过了 `journal->j_format_version` 的初始化（值为 0）。这进而导致日志重放逻辑（`do_one_pass`）计算出错误的日志块位置，最终触发 panic。",
+  "solution": "暂无",
+  "category": "kernel",
+  "source_file": "ext4挂载失败后残留陈旧buffer head导致再次挂载时Kernel Panic.txt",
+  "content": "内核版本：6.3.0-rc1\n\n## 问题现象\n- 系统在挂载 ext4 文件系统时触发 Kernel panic。\n- 日志显示 \"Kernel panic - not syncing: not verified\" 以及 \"found stale bh\"。\n- Call Trace 指向 `journal_get_superblock` -> `load_superblock` -> `jbd2_journal_wipe`。\n\n## 问题根因\n上一次挂载操作因 EIO 错误失败后，清理流程存在缺陷：\n1. 因 `sb->s_root` 未初始化，跳过了 `ext4_put_super` 调用。\n2. 因 `bd_openers` 计数非零（被 systemd-udev 打开），跳过了 `kill_bdev` 调用。\n这导致 buffer head 未被释放并残留在内存中。第二次挂载时，`__find_get_block` 获取到了残留的陈旧 buffer head，其 `buffer_verified(bh)` 标志位仍为真，导致跳过了 `journal->j_format_version` 的初始化（值为 0）。这进而导致日志重放逻辑（`do_one_pass`）计算出错误的日志块位置，最终触发 panic。\n\n## 解决方案\n暂无"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "KVM嵌套虚拟化环境下关闭L2客户机触发General Protection Fault导致L1内核崩溃",
+  "kernel_version": "4.13-4.15",
+  "phenomenon": "- 在嵌套虚拟化环境（如Google Compute Engine）中，L1宿主机关闭L2客户机或终止QEMU进程时，L1内核触发General Protection Fault并崩溃。\n- 控制台输出日志显示：`general protection fault: 0000 [#1] SMP PTI`。\n- 堆栈信息显示崩溃发生在 `native_write_cr4`，调用链为 `hardware_disable` -> `kvm_arch_hardware_disable` -> `hardware_disable_nolock`。\n- L2客户机启动过程可能出现卡顿或大量 `blk_update_request: I/O error` 报错。",
+  "root_cause": "L1内核在禁用KVM硬件虚拟化时调用 `cr4_clear_bits(X86_CR4_VMXE)` 尝试清除CR4寄存器中的VMXE位，触发了General Protection Fault。该问题与Linux 4.13版本引入的PCID（Process-Context Identifiers）特性支持有关，暴露了L0层Hypervisor（KVM）在处理嵌套虚拟化时对CR4寄存器访问模拟的缺陷。",
+  "solution": "- 临时规避：在L1层QEMU启动参数中禁用PCID特性。\n- 正式修复：应用补丁 https://patchwork.kernel.org/patch/9995145/ 修复嵌套VMX处理逻辑。Google Compute Engine平台已修复此底层问题。",
+  "category": "kernel",
+  "source_file": "KVM嵌套虚拟化环境下关闭L2客户机触发General Protection Fault导致L1内核崩溃.txt",
+  "content": "内核版本：4.13-4.15\n\n## 问题现象\n- 在嵌套虚拟化环境（如Google Compute Engine）中，L1宿主机关闭L2客户机或终止QEMU进程时，L1内核触发General Protection Fault并崩溃。\n- 控制台输出日志显示：`general protection fault: 0000 [#1] SMP PTI`。\n- 堆栈信息显示崩溃发生在 `native_write_cr4`，调用链为 `hardware_disable` -> `kvm_arch_hardware_disable` -> `hardware_disable_nolock`。\n- L2客户机启动过程可能出现卡顿或大量 `blk_update_request: I/O error` 报错。\n\n## 问题根因\nL1内核在禁用KVM硬件虚拟化时调用 `cr4_clear_bits(X86_CR4_VMXE)` 尝试清除CR4寄存器中的VMXE位，触发了General Protection Fault。该问题与Linux 4.13版本引入的PCID（Process-Context Identifiers）特性支持有关，暴露了L0层Hypervisor（KVM）在处理嵌套虚拟化时对CR4寄存器访问模拟的缺陷。\n\n## 解决方案\n- 临时规避：在L1层QEMU启动参数中禁用PCID特性。\n- 正式修复：应用补丁 https://patchwork.kernel.org/patch/9995145/ 修复嵌套VMX处理逻辑。Google Compute Engine平台已修复此底层问题。"
+}

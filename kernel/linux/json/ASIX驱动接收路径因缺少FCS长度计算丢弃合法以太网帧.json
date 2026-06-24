@@ -1,0 +1,10 @@
+{
+  "title": "ASIX驱动接收路径因缺少FCS长度计算丢弃合法以太网帧",
+  "kernel_version": "3.18.11-v7+",
+  "phenomenon": "- 使用ASIX芯片的USB网卡接收数据时，若以太网帧长度达到1522字节，数据流中断。\n- 系统日志显示错误信息：`asix_rx_fixup() Bad RX Length 1522`。\n- 网络接口统计信息中 `rx_length_errors` 计数增加。\n- 抓包显示被丢弃的帧为合法大小的TCP重传包，但被驱动判定为超长帧。",
+  "root_cause": "驱动程序 `drivers/net/usb/asix_common.c` 中的 `asix_rx_fixup_internal` 函数在执行接收帧长度合法性检查时存在计算错误。\n代码中的检查条件为 `if (size > dev->net->mtu + ETH_HLEN + VLAN_HLEN)`，该公式计算出的最大允许长度为 1518 字节（1500 + 14 + 4）。\n然而，标准的最大合法以太网帧长度应包含帧校验序列（FCS），即 `MTU(1500) + ETH_HLEN(14) + VLAN_HLEN(4) + ETH_FCS_LEN(4) = 1522` 字节。\n驱动在计算中遗漏了 `ETH_FCS_LEN`（4字节），导致将合法的 1522 字节帧误判为超长错误帧并直接丢弃，且未更新相关丢包统计，同时可能影响 URB 缓冲区后续数据的处理同步。",
+  "solution": "需修改 `asix_rx_fixup_internal` 函数中的长度检查逻辑，在计算公式中加入 `ETH_FCS_LEN`。截止报告时间，问题仍在分析中，暂无已合并的修复补丁信息。",
+  "category": "kernel",
+  "source_file": "ASIX驱动接收路径因缺少FCS长度计算丢弃合法以太网帧.txt",
+  "content": "内核版本：3.18.11-v7+\n\n## 问题现象\n- 使用ASIX芯片的USB网卡接收数据时，若以太网帧长度达到1522字节，数据流中断。\n- 系统日志显示错误信息：`asix_rx_fixup() Bad RX Length 1522`。\n- 网络接口统计信息中 `rx_length_errors` 计数增加。\n- 抓包显示被丢弃的帧为合法大小的TCP重传包，但被驱动判定为超长帧。\n\n## 问题根因\n驱动程序 `drivers/net/usb/asix_common.c` 中的 `asix_rx_fixup_internal` 函数在执行接收帧长度合法性检查时存在计算错误。\n代码中的检查条件为 `if (size > dev->net->mtu + ETH_HLEN + VLAN_HLEN)`，该公式计算出的最大允许长度为 1518 字节（1500 + 14 + 4）。\n然而，标准的最大合法以太网帧长度应包含帧校验序列（FCS），即 `MTU(1500) + ETH_HLEN(14) + VLAN_HLEN(4) + ETH_FCS_LEN(4) = 1522` 字节。\n驱动在计算中遗漏了 `ETH_FCS_LEN`（4字节），导致将合法的 1522 字节帧误判为超长错误帧并直接丢弃，且未更新相关丢包统计，同时可能影响 URB 缓冲区后续数据的处理同步。\n\n## 解决方案\n需修改 `asix_rx_fixup_internal` 函数中的长度检查逻辑，在计算公式中加入 `ETH_FCS_LEN`。截止报告时间，问题仍在分析中，暂无已合并的修复补丁信息。"
+}

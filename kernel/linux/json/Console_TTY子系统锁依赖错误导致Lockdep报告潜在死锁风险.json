@@ -1,0 +1,10 @@
+{
+  "title": "Console/TTY子系统锁依赖错误导致Lockdep报告潜在死锁风险",
+  "kernel_version": "3.9.0+ (git of may 2013)",
+  "phenomenon": "- 内核日志报告 Lockdep 警告：\"INFO: possible circular locking dependency detected\"。\n- 检测到锁链闭环：`console_lock` -> `buf->work` -> `ldata->output_lock` -> `console_lock`。\n- 涉及进程 `kworker/3:2` 在执行 `flush_to_ldisc` 工作队列时触发警告。",
+  "root_cause": "锁获取顺序冲突导致循环依赖：\n1. 路径一：`vt_ioctl()` 持有 `console_lock` 调用 `vc_deallocate()`，后者通过 `tty_port_destroy` 调用 `cancel_work_sync` 尝试获取 `buf->work` 锁。\n2. 路径二：工作队列 `flush_to_ldisc` 持有 `buf->work` 锁，调用 `process_echoes` 尝试获取 `ldata->output_lock` 锁。\n3. 路径三：`n_tty_write` 持有 `ldata->output_lock` 锁，调用 `con_write` 时尝试获取 `console_lock`。\n上述三条路径构成了 `console_lock` -> `buf->work` -> `output_lock` -> `console_lock` 的环形依赖，违反了锁的层级规则。",
+  "solution": "暂无有效修复方案。用户曾提交尝试性补丁（使用独立信号量处理 vc 分配/释放），但经测试该补丁存在问题，Bug 状态仍为 NEW。",
+  "category": "kernel",
+  "source_file": "Console_TTY子系统锁依赖错误导致Lockdep报告潜在死锁风险.txt",
+  "content": "内核版本：3.9.0+ (git of may 2013)\n\n## 问题现象\n- 内核日志报告 Lockdep 警告：\"INFO: possible circular locking dependency detected\"。\n- 检测到锁链闭环：`console_lock` -> `buf->work` -> `ldata->output_lock` -> `console_lock`。\n- 涉及进程 `kworker/3:2` 在执行 `flush_to_ldisc` 工作队列时触发警告。\n\n## 问题根因\n锁获取顺序冲突导致循环依赖：\n1. 路径一：`vt_ioctl()` 持有 `console_lock` 调用 `vc_deallocate()`，后者通过 `tty_port_destroy` 调用 `cancel_work_sync` 尝试获取 `buf->work` 锁。\n2. 路径二：工作队列 `flush_to_ldisc` 持有 `buf->work` 锁，调用 `process_echoes` 尝试获取 `ldata->output_lock` 锁。\n3. 路径三：`n_tty_write` 持有 `ldata->output_lock` 锁，调用 `con_write` 时尝试获取 `console_lock`。\n上述三条路径构成了 `console_lock` -> `buf->work` -> `output_lock` -> `console_lock` 的环形依赖，违反了锁的层级规则。\n\n## 解决方案\n暂无有效修复方案。用户曾提交尝试性补丁（使用独立信号量处理 vc 分配/释放），但经测试该补丁存在问题，Bug 状态仍为 NEW。"
+}

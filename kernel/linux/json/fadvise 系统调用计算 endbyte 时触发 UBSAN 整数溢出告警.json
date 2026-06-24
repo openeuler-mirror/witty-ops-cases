@@ -1,0 +1,10 @@
+{
+  "title": "fadvise 系统调用计算 endbyte 时触发 UBSAN 整数溢出告警",
+  "kernel_version": "4.16.0-rc4",
+  "phenomenon": "- 使用 syzkaller 工具测试时，内核触发 UBSAN（Undefined Behaviour Sanitizer）告警。\n- 日志显示：`UBSAN: Undefined behaviour in ../mm/fadvise.c:75:10`，具体为 `signed integer overflow: 9223372036854775806 + 65536 cannot be represented in type 'long long int'`。\n- 调用栈显示异常发生在 `SYSC_fadvise64_64` 函数中。",
+  "root_cause": "在 `mm/fadvise.c` 文件第 75 行，代码逻辑执行 `endbyte = offset + len`。当用户空间传入极大的 `offset` 和 `len` 参数时，相加结果超出有符号长整型范围，触发有符号整数溢出。\n原代码设计意图是利用该溢出特性（随后检查 `endbyte < len`）来判断数值范围是否越界。虽然内核编译时使用了 `-fno-strict-overflow` 选项使得该溢出行为是确定的，但 UBSAN 检查器基于 C 标准将其识别为未定义行为并报错，属于误报。",
+  "solution": "开发者确认该告警为误报，不影响内核功能正确性。为消除 UBSAN 噪音，建议重构代码逻辑，在执行加法前进行边界检查（例如判断 `len < INT64_MAX - offset`），避免直接触发溢出运算。截至报告时，具体修复补丁尚未合并。",
+  "category": "kernel",
+  "source_file": "fadvise 系统调用计算 endbyte 时触发 UBSAN 整数溢出告警.txt",
+  "content": "内核版本：4.16.0-rc4\n\n## 问题现象\n- 使用 syzkaller 工具测试时，内核触发 UBSAN（Undefined Behaviour Sanitizer）告警。\n- 日志显示：`UBSAN: Undefined behaviour in ../mm/fadvise.c:75:10`，具体为 `signed integer overflow: 9223372036854775806 + 65536 cannot be represented in type 'long long int'`。\n- 调用栈显示异常发生在 `SYSC_fadvise64_64` 函数中。\n\n## 问题根因\n在 `mm/fadvise.c` 文件第 75 行，代码逻辑执行 `endbyte = offset + len`。当用户空间传入极大的 `offset` 和 `len` 参数时，相加结果超出有符号长整型范围，触发有符号整数溢出。\n原代码设计意图是利用该溢出特性（随后检查 `endbyte < len`）来判断数值范围是否越界。虽然内核编译时使用了 `-fno-strict-overflow` 选项使得该溢出行为是确定的，但 UBSAN 检查器基于 C 标准将其识别为未定义行为并报错，属于误报。\n\n## 解决方案\n开发者确认该告警为误报，不影响内核功能正确性。为消除 UBSAN 噪音，建议重构代码逻辑，在执行加法前进行边界检查（例如判断 `len < INT64_MAX - offset`），避免直接触发溢出运算。截至报告时，具体修复补丁尚未合并。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "网络命名空间清理时nf_nat_cleanup_conntrack访问已释放内存导致内核崩溃",
+  "kernel_version": "3.10.17",
+  "phenomenon": "- 系统在清理网络命名空间（如关闭 LXC 容器）时发生 Kernel Panic。\n- 日志显示 \"BUG: unable to handle kernel paging request\"，错误码为 Oops: 0002。\n- 故障场景通常涉及 iptables NAT 端口映射及容器网络命名空间的销毁。\n- Call Trace 指向 `nf_nat_cleanup_conntrack` 函数，调用链为：`cleanup_net` -> `nf_ct_iterate_cleanup` -> `destroy_conntrack` -> `nf_conntrack_free` -> `__nf_ct_ext_destroy` -> `nf_nat_cleanup_conntrack`。",
+  "root_cause": "在网络命名空间销毁过程中，`nf_nat_net_exit` 先于 `ipv4_net_exit` 被调用。`nf_nat_net_exit` 释放了 `nat_bysource` 哈希表，但此时并未完全清理所有带有 NAT 上下文的 conntrack 条目。随后 `ipv4_net_exit` 触发清理这些残留条目时，`nf_nat_cleanup_conntrack` 尝试操作已释放的 `nat_bysource` 哈希表链表（访问其 prev 指针），导致访问非法内存地址引发 Oops。",
+  "solution": "开发者 Florian Westphal 提供了修复补丁（http://patchwork.ozlabs.org/patch/357147/raw/），经测试可解决此问题。此外，报告者提供的临时补丁（Attachment 138271）通过在网络命名空间退出时跳过 `hlist_del_rcu` 操作也可规避此崩溃。",
+  "category": "kernel",
+  "source_file": "网络命名空间清理时nf_nat_cleanup_conntrack访问已释放内存导致内核崩溃.txt",
+  "content": "内核版本：3.10.17\n\n## 问题现象\n- 系统在清理网络命名空间（如关闭 LXC 容器）时发生 Kernel Panic。\n- 日志显示 \"BUG: unable to handle kernel paging request\"，错误码为 Oops: 0002。\n- 故障场景通常涉及 iptables NAT 端口映射及容器网络命名空间的销毁。\n- Call Trace 指向 `nf_nat_cleanup_conntrack` 函数，调用链为：`cleanup_net` -> `nf_ct_iterate_cleanup` -> `destroy_conntrack` -> `nf_conntrack_free` -> `__nf_ct_ext_destroy` -> `nf_nat_cleanup_conntrack`。\n\n## 问题根因\n在网络命名空间销毁过程中，`nf_nat_net_exit` 先于 `ipv4_net_exit` 被调用。`nf_nat_net_exit` 释放了 `nat_bysource` 哈希表，但此时并未完全清理所有带有 NAT 上下文的 conntrack 条目。随后 `ipv4_net_exit` 触发清理这些残留条目时，`nf_nat_cleanup_conntrack` 尝试操作已释放的 `nat_bysource` 哈希表链表（访问其 prev 指针），导致访问非法内存地址引发 Oops。\n\n## 解决方案\n开发者 Florian Westphal 提供了修复补丁（http://patchwork.ozlabs.org/patch/357147/raw/），经测试可解决此问题。此外，报告者提供的临时补丁（Attachment 138271）通过在网络命名空间退出时跳过 `hlist_del_rcu` 操作也可规避此崩溃。"
+}

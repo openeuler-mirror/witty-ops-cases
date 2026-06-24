@@ -1,0 +1,10 @@
+{
+  "title": "pciehp驱动在系统唤醒时重复添加设备导致报错",
+  "kernel_version": "3.14 (问题在 4.5、4.6、4.8 版本仍复现)",
+  "phenomenon": "系统从挂起或休眠状态恢复时，内核日志中持续出现错误信息：\n- `pciehp 0000:xx:xx.x:pcieXX: Device 0000:xx:00.0 already exists at 0000:xx:00, cannot hot-add`\n- `pciehp 0000:xx:xx.x:pcieXX: Cannot add device at 0000:xx:00`\n该报错不影响设备后续使用，但属于非预期的日志噪音。",
+  "root_cause": "在 `pciehp_resume` 函数中，驱动调用 `pciehp_enable_slot()` 尝试添加插槽中的设备。如果设备在挂起前已经存在且未被移除，唤醒逻辑未能正确识别设备状态，导致驱动尝试对已注册的设备执行 hot-add 操作，从而触发 \"Device already exists\" 错误。",
+  "solution": "开发者在 Bugzilla 评论中提供了修复补丁（针对 `drivers/pci/hotplug/pciehp_core.c`）。修改方案是在 `pciehp_resume` 中调用 `pciehp_enable_slot` 之前，增加对 `pbus->devices` 链表的检查：若设备链表非空（即设备已存在），则跳过添加流程。该补丁经用户测试验证可消除报错，但截至报告时间尚未合入主线内核。",
+  "category": "kernel",
+  "source_file": "pciehp驱动在系统唤醒时重复添加设备导致报错.txt",
+  "content": "内核版本：3.14 (问题在 4.5、4.6、4.8 版本仍复现)\n\n## 问题现象\n系统从挂起或休眠状态恢复时，内核日志中持续出现错误信息：\n- `pciehp 0000:xx:xx.x:pcieXX: Device 0000:xx:00.0 already exists at 0000:xx:00, cannot hot-add`\n- `pciehp 0000:xx:xx.x:pcieXX: Cannot add device at 0000:xx:00`\n该报错不影响设备后续使用，但属于非预期的日志噪音。\n\n## 问题根因\n在 `pciehp_resume` 函数中，驱动调用 `pciehp_enable_slot()` 尝试添加插槽中的设备。如果设备在挂起前已经存在且未被移除，唤醒逻辑未能正确识别设备状态，导致驱动尝试对已注册的设备执行 hot-add 操作，从而触发 \"Device already exists\" 错误。\n\n## 解决方案\n开发者在 Bugzilla 评论中提供了修复补丁（针对 `drivers/pci/hotplug/pciehp_core.c`）。修改方案是在 `pciehp_resume` 中调用 `pciehp_enable_slot` 之前，增加对 `pbus->devices` 链表的检查：若设备链表非空（即设备已存在），则跳过添加流程。该补丁经用户测试验证可消除报错，但截至报告时间尚未合入主线内核。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "关机时禁用 MSI-X 导致 virtio 设备产生伪中断引发 soft lockup",
+  "kernel_version": "v4.0",
+  "phenomenon": "- 虚拟机关机过程中发生 soft lockup，导致无法正常关机；若配置了 softlockup_panic=1 则触发 panic。\n- 内核日志报错：\"irq X: nobody cared (try booting with the \\\"irqpoll\\\" option)\"。\n- Call Trace 指向中断处理路径：`note_interrupt` -> `handle_fasteoi_irq` -> `do_IRQ`。",
+  "root_cause": "在 PCI 设备关机流程 (`pci_device_shutdown`) 中，代码无条件调用 `pci_msi_shutdown` 和 `pci_msix_shutdown` 禁用了 MSI-X。\n此时 `virtio-pci` 驱动的 `shutdown` 回调为 NULL，设备并未真正停止工作。\nMSI-X 被禁用后，virtio 设备自动回退到传统 IRQ 模式发送中断通知，但驱动程序期望使用 MSI-X，未注册传统 IRQ 处理程序。\n这导致中断被触发但无人处理，内核检测到伪中断，进而引发 soft lockup。",
+  "solution": "评论中提议了修复补丁 \"Pci Fix Incorrect Msi/Msix Disabling if Shutdown Routine is Not Implemented\"（见附件 229441），旨在修正未实现 shutdown 回调时的 MSI/MSI-X 禁用逻辑。",
+  "category": "kernel",
+  "source_file": "关机时禁用 MSI-X 导致 virtio 设备产生伪中断引发 soft lockup.txt",
+  "content": "内核版本：v4.0\n\n## 问题现象\n- 虚拟机关机过程中发生 soft lockup，导致无法正常关机；若配置了 softlockup_panic=1 则触发 panic。\n- 内核日志报错：\"irq X: nobody cared (try booting with the \\\"irqpoll\\\" option)\"。\n- Call Trace 指向中断处理路径：`note_interrupt` -> `handle_fasteoi_irq` -> `do_IRQ`。\n\n## 问题根因\n在 PCI 设备关机流程 (`pci_device_shutdown`) 中，代码无条件调用 `pci_msi_shutdown` 和 `pci_msix_shutdown` 禁用了 MSI-X。\n此时 `virtio-pci` 驱动的 `shutdown` 回调为 NULL，设备并未真正停止工作。\nMSI-X 被禁用后，virtio 设备自动回退到传统 IRQ 模式发送中断通知，但驱动程序期望使用 MSI-X，未注册传统 IRQ 处理程序。\n这导致中断被触发但无人处理，内核检测到伪中断，进而引发 soft lockup。\n\n## 解决方案\n评论中提议了修复补丁 \"Pci Fix Incorrect Msi/Msix Disabling if Shutdown Routine is Not Implemented\"（见附件 229441），旨在修正未实现 shutdown 回调时的 MSI/MSI-X 禁用逻辑。"
+}

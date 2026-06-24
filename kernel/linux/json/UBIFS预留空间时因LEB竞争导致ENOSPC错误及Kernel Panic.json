@@ -1,0 +1,10 @@
+{
+  "title": "UBIFS预留空间时因LEB竞争导致ENOSPC错误及Kernel Panic",
+  "kernel_version": "5.10.0, 6.7.0-rc1",
+  "phenomenon": "- 系统日志报错：`UBIFS error ... cannot reserve XX bytes in jhead X, error -28` (ENOSPC)\n- 文件系统自动切换为只读模式：`switched to read-only mode`\n- 在压力测试复现过程中触发 `kernel BUG at fs/ubifs/journal.c:423!`，导致 Kernel Panic（invalid opcode）\n- 调用栈显示进程位于 `make_reservation` -> `ubifs_jnl_write_data` 或 `ubifs_jnl_truncate` 流程",
+  "root_cause": "在 `make_reservation` 过程中存在竞争条件。Dirty LEBs 可能被其他 writeback 线程抢占，导致当前线程的 GC（Garbage Collection）无法找到 dirty LEBs，进而导致空间预留失败返回 -ENOSPC。",
+  "solution": "修改 `make_reservation()` 函数逻辑，在遇到此类竞争导致的空间预留失败时，增加重试 GC 和 commit 的次数。相关修复补丁见附件 `diff_fix` 及 `diff_fix_v2`。",
+  "category": "kernel",
+  "source_file": "UBIFS预留空间时因LEB竞争导致ENOSPC错误及Kernel Panic.txt",
+  "content": "内核版本：5.10.0, 6.7.0-rc1\n\n## 问题现象\n- 系统日志报错：`UBIFS error ... cannot reserve XX bytes in jhead X, error -28` (ENOSPC)\n- 文件系统自动切换为只读模式：`switched to read-only mode`\n- 在压力测试复现过程中触发 `kernel BUG at fs/ubifs/journal.c:423!`，导致 Kernel Panic（invalid opcode）\n- 调用栈显示进程位于 `make_reservation` -> `ubifs_jnl_write_data` 或 `ubifs_jnl_truncate` 流程\n\n## 问题根因\n在 `make_reservation` 过程中存在竞争条件。Dirty LEBs 可能被其他 writeback 线程抢占，导致当前线程的 GC（Garbage Collection）无法找到 dirty LEBs，进而导致空间预留失败返回 -ENOSPC。\n\n## 解决方案\n修改 `make_reservation()` 函数逻辑，在遇到此类竞争导致的空间预留失败时，增加重试 GC 和 commit 的次数。相关修复补丁见附件 `diff_fix` 及 `diff_fix_v2`。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "F2FS回写过程中刷新quota工作队列触发依赖检查告警导致panic",
+  "kernel_version": "v6.12.36",
+  "phenomenon": "- 使用UFS设备测试应用时高概率触发kernel panic。\n- 内核日志打印警告：`workqueue: WQ_MEM_RECLAIM writeback:wb_workfn is flushing !WQ_MEM_RECLAIM events_unbound:quota_release_workfn`。\n- 触发点位于 `check_flush_dependency+0x160/0x16c`，堆栈显示调用链为 `wb_workfn` -> `f2fs_do_quota_sync` -> `flush_delayed_work`。",
+  "root_cause": "`writeback` 工作队列（`bdi_wq`）在创建时设置了 `WQ_MEM_RECLAIM` 标志，而 `quota_release_work` 使用的是系统默认的 `system_unbound_wq`，该队列未设置 `WQ_MEM_RECLAIM` 标志。\n当 `wb_workfn` 执行回写操作并调用 `flush_delayed_work` 刷新 `quota_release_work` 时，内核工作队列机制检测到具有内存回收属性（MEM_RECLAIM）的工作队列正在刷新一个不具备该属性的工作队列。为防止潜在的死锁风险，内核触发了依赖检查告警（WARNING），由于系统配置了 `panic_on_warn`，进而导致系统崩溃。",
+  "solution": "暂无正式合并的修复补丁。社区讨论中提出的解决方案包括：\n1. 为 dquot 创建专用的带有 `WQ_MEM_RECLAIM` 标志的工作队列。\n2. 修改刷新逻辑，例如将 `flush_delayed_work` 替换为 `cancel_work_sync` 或 `cancel_delayed_work_sync` 以规避依赖检查冲突。",
+  "category": "kernel",
+  "source_file": "F2FS回写过程中刷新quota工作队列触发依赖检查告警导致panic.txt",
+  "content": "内核版本：v6.12.36\n\n## 问题现象\n- 使用UFS设备测试应用时高概率触发kernel panic。\n- 内核日志打印警告：`workqueue: WQ_MEM_RECLAIM writeback:wb_workfn is flushing !WQ_MEM_RECLAIM events_unbound:quota_release_workfn`。\n- 触发点位于 `check_flush_dependency+0x160/0x16c`，堆栈显示调用链为 `wb_workfn` -> `f2fs_do_quota_sync` -> `flush_delayed_work`。\n\n## 问题根因\n`writeback` 工作队列（`bdi_wq`）在创建时设置了 `WQ_MEM_RECLAIM` 标志，而 `quota_release_work` 使用的是系统默认的 `system_unbound_wq`，该队列未设置 `WQ_MEM_RECLAIM` 标志。\n当 `wb_workfn` 执行回写操作并调用 `flush_delayed_work` 刷新 `quota_release_work` 时，内核工作队列机制检测到具有内存回收属性（MEM_RECLAIM）的工作队列正在刷新一个不具备该属性的工作队列。为防止潜在的死锁风险，内核触发了依赖检查告警（WARNING），由于系统配置了 `panic_on_warn`，进而导致系统崩溃。\n\n## 解决方案\n暂无正式合并的修复补丁。社区讨论中提出的解决方案包括：\n1. 为 dquot 创建专用的带有 `WQ_MEM_RECLAIM` 标志的工作队列。\n2. 修改刷新逻辑，例如将 `flush_delayed_work` 替换为 `cancel_work_sync` 或 `cancel_delayed_work_sync` 以规避依赖检查冲突。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "调试 printk 触发 journald 反馈循环导致 ext4_truncate 频繁调用",
+  "kernel_version": "未明确（JSON记录为2.5，实际应为较新版本）",
+  "phenomenon": "- 在 ext4_ext_truncate() 函数入口添加 printk 调试后，观察到该函数被高频连续调用。\n- 系统后台运行时出现不必要的 CPU 消耗。\n- 现象由调试行为触发，非正常业务流程下的典型故障，但揭示了内核日志与 systemd-journald 的交互机制。",
+  "root_cause": "- 直接原因：开发者在 ext4_truncate 调用链中插入 printk 引发了反馈循环。\n- 触发链条：printk 输出日志 -> systemd-journald 捕获日志 -> journald 对其日志文件 system.journal 调用 ftruncate(2) -> 触发内核函数 ext4_setattr() -> 调用 ext4_truncate() -> 再次触发 printk -> 形成死循环。\n- 背景因素：systemd-journald 在写入日志时会调用 ftruncate，且 ext4_setattr 即使在文件大小未变时也会调用 ext4_truncate 以清理预分配块，导致该路径被频繁执行。",
+  "solution": "- 移除 ext4_truncate 路径下的 printk 调试代码，打破反馈循环。\n- 建议使用 ftrace 或 tracepoints 替代 printk 进行高频内核路径追踪，避免因日志输出触发用户态日志守护进程（如 journald）的连锁反应。",
+  "category": "kernel",
+  "source_file": "调试 printk 触发 journald 反馈循环导致 ext4_truncate 频繁调用.txt",
+  "content": "内核版本：未明确（JSON记录为2.5，实际应为较新版本）\n\n## 问题现象\n- 在 ext4_ext_truncate() 函数入口添加 printk 调试后，观察到该函数被高频连续调用。\n- 系统后台运行时出现不必要的 CPU 消耗。\n- 现象由调试行为触发，非正常业务流程下的典型故障，但揭示了内核日志与 systemd-journald 的交互机制。\n\n## 问题根因\n- 直接原因：开发者在 ext4_truncate 调用链中插入 printk 引发了反馈循环。\n- 触发链条：printk 输出日志 -> systemd-journald 捕获日志 -> journald 对其日志文件 system.journal 调用 ftruncate(2) -> 触发内核函数 ext4_setattr() -> 调用 ext4_truncate() -> 再次触发 printk -> 形成死循环。\n- 背景因素：systemd-journald 在写入日志时会调用 ftruncate，且 ext4_setattr 即使在文件大小未变时也会调用 ext4_truncate 以清理预分配块，导致该路径被频繁执行。\n\n## 解决方案\n- 移除 ext4_truncate 路径下的 printk 调试代码，打破反馈循环。\n- 建议使用 ftrace 或 tracepoints 替代 printk 进行高频内核路径追踪，避免因日志输出触发用户态日志守护进程（如 journald）的连锁反应。"
+}

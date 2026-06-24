@@ -1,0 +1,10 @@
+{
+  "title": "NFSv4.2 READ_PLUS 操作引发 use-after-free 导致内核 panic",
+  "kernel_version": "v5.19-rc2+",
+  "phenomenon": "- 运行 xfstests generic/465 测试用例（NFSv4.2 over XFS）时触发 kernel panic。\n- KASAN 报告 \"BUG: KASAN: use-after-free in _copy_to_iter\"，显示在 _copy_to_iter 函数中发生了 Write of size 16 的释放后使用错误。\n- 调用栈显示崩溃路径涉及 nfsd4_encode_read_plus_data -> nfsd_readv -> xfs_file_buffered_read -> copy_page_to_iter。\n- 后续伴随 slab 内存损坏，系统报告 \"Unable to handle kernel write to read-only memory\" 或 \"Unable to handle kernel pointer dereference\"。",
+  "root_cause": "NFSv4.2 的 READ_PLUS 操作实现存在缺陷。在执行读操作时，_copy_to_iter 访问了已被释放的内存对象（KASAN 日志显示属于 lsm_file_cache 或 lsm_inode_cache）。虽然调用栈涉及 XFS，但分析表明 XFS 仅作为数据提供者，实际根因在于 NFSD/SUNRPC 层在处理 READ_PLUS 请求时，传递给底层文件系统的 iov_iter 结构或相关文件引用管理不当，导致内存被提前释放后又被访问。",
+  "solution": "- 该问题已通过 Commit a23dd544debc (\"SUNRPC: Fix READ_PLUS crasher\") 修复，该补丁合入内核版本 v5.19-rc5。\n- 临时规避方法：在内核配置中关闭 \"NFS: Enable support for the NFSv4.2 READ_PLUS operation\" (CONFIG_NFS_V4_2_READ_PLUS=n)。",
+  "category": "kernel",
+  "source_file": "NFSv4.2 READ_PLUS 操作引发 use-after-free 导致内核 panic.txt",
+  "content": "内核版本：v5.19-rc2+\n\n## 问题现象\n- 运行 xfstests generic/465 测试用例（NFSv4.2 over XFS）时触发 kernel panic。\n- KASAN 报告 \"BUG: KASAN: use-after-free in _copy_to_iter\"，显示在 _copy_to_iter 函数中发生了 Write of size 16 的释放后使用错误。\n- 调用栈显示崩溃路径涉及 nfsd4_encode_read_plus_data -> nfsd_readv -> xfs_file_buffered_read -> copy_page_to_iter。\n- 后续伴随 slab 内存损坏，系统报告 \"Unable to handle kernel write to read-only memory\" 或 \"Unable to handle kernel pointer dereference\"。\n\n## 问题根因\nNFSv4.2 的 READ_PLUS 操作实现存在缺陷。在执行读操作时，_copy_to_iter 访问了已被释放的内存对象（KASAN 日志显示属于 lsm_file_cache 或 lsm_inode_cache）。虽然调用栈涉及 XFS，但分析表明 XFS 仅作为数据提供者，实际根因在于 NFSD/SUNRPC 层在处理 READ_PLUS 请求时，传递给底层文件系统的 iov_iter 结构或相关文件引用管理不当，导致内存被提前释放后又被访问。\n\n## 解决方案\n- 该问题已通过 Commit a23dd544debc (\"SUNRPC: Fix READ_PLUS crasher\") 修复，该补丁合入内核版本 v5.19-rc5。\n- 临时规避方法：在内核配置中关闭 \"NFS: Enable support for the NFSv4.2 READ_PLUS operation\" (CONFIG_NFS_V4_2_READ_PLUS=n)。"
+}

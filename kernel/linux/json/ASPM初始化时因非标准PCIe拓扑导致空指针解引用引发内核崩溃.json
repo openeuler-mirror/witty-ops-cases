@@ -1,0 +1,10 @@
+{
+  "title": "ASPM初始化时因非标准PCIe拓扑导致空指针解引用引发内核崩溃",
+  "kernel_version": "3.10（复现版本包括 3.10-rc1, 3.19.12-cnccu）",
+  "phenomenon": "- 系统启动过程中发生内核崩溃，提示 \"BUG: unable to handle kernel NULL pointer dereference\"。\n- 故障地址通常为 0000000000000088 或 00000060，指令指针位于 `pcie_aspm_init_link_state` 函数。\n- 该问题在 QEMU 模拟的非标准拓扑环境或特定硬件（如 Baikal MIPS 系统）上触发。",
+  "root_cause": "位于 `drivers/pci/pcie/aspm.c` 文件的 `alloc_pcie_link_state` 函数中存在逻辑缺陷。代码在初始化 ASPM 链路状态时，假定 PCIe 设备的父总线存在对应的 PCI 设备结构（即存在 Root Port），直接执行 `parent = pdev->bus->parent->self->link_state`。\n在 \"Root-port-less\" 拓扑结构下（例如 Host-PCIe bridge 合并了 Root Complex 和 Root Port 功能，或 Switch Upstream Port 直连 Root Bus），`pdev->bus->parent->self` 指针为 NULL。代码未对该指针进行有效性检查即进行解引用操作，导致内核 panic。",
+  "solution": "- 临时规避：在内核启动参数中添加 `pcie_aspm=off` 以禁用 ASPM 功能。\n- 正式修复：截至报告最后更新，社区尚无正式合并的修复补丁；建议修改代码增加对 `pdev->bus->parent->self` 的非空检查，或判断父总线是否为 root bus，以优雅处理该拓扑结构。",
+  "category": "kernel",
+  "source_file": "ASPM初始化时因非标准PCIe拓扑导致空指针解引用引发内核崩溃.txt",
+  "content": "内核版本：3.10（复现版本包括 3.10-rc1, 3.19.12-cnccu）\n\n## 问题现象\n- 系统启动过程中发生内核崩溃，提示 \"BUG: unable to handle kernel NULL pointer dereference\"。\n- 故障地址通常为 0000000000000088 或 00000060，指令指针位于 `pcie_aspm_init_link_state` 函数。\n- 该问题在 QEMU 模拟的非标准拓扑环境或特定硬件（如 Baikal MIPS 系统）上触发。\n\n## 问题根因\n位于 `drivers/pci/pcie/aspm.c` 文件的 `alloc_pcie_link_state` 函数中存在逻辑缺陷。代码在初始化 ASPM 链路状态时，假定 PCIe 设备的父总线存在对应的 PCI 设备结构（即存在 Root Port），直接执行 `parent = pdev->bus->parent->self->link_state`。\n在 \"Root-port-less\" 拓扑结构下（例如 Host-PCIe bridge 合并了 Root Complex 和 Root Port 功能，或 Switch Upstream Port 直连 Root Bus），`pdev->bus->parent->self` 指针为 NULL。代码未对该指针进行有效性检查即进行解引用操作，导致内核 panic。\n\n## 解决方案\n- 临时规避：在内核启动参数中添加 `pcie_aspm=off` 以禁用 ASPM 功能。\n- 正式修复：截至报告最后更新，社区尚无正式合并的修复补丁；建议修改代码增加对 `pdev->bus->parent->self` 的非空检查，或判断父总线是否为 root bus，以优雅处理该拓扑结构。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "Nouveau驱动工作队列调度竞态导致访问无效内存触发kernel oops",
+  "kernel_version": "4.15.0-rc3",
+  "phenomenon": "- X Server停止响应，系统无反应。\n- 内核日志显示 \"BUG: unable to handle kernel paging request at 00000000000101f8\"。\n- 触发 Kernel Oops (0002 [#1])，RIP 位于 `queue_work_on+0x12/0x40`。\n- Call Trace 显示调用路径为 `nouveau_gem_object_close` -> `drm_gem_object_release_handle` -> `drm_gem_handle_delete` -> `drm_ioctl`。",
+  "root_cause": "`nouveau_cli_work_queue` 函数中存在竞态条件。在将 work 添加到 `cli->worker` 队列后、执行 `schedule_work(&work->cli->work)` 之前，`nouveau_cli_work` 可能被调度执行。此时 `nouveau_cli_work_fence` 会访问已释放的 work 内存，读取到垃圾数据（如 0x00010000），加上偏移量后形成无效指针（0x00000000000101f8）并传递给 `schedule_work()`，导致 paging request 错误。该问题由提交 814a23243bd2aaa9aafe03d85d0502a73be42b58 引入。",
+  "solution": "应用修复补丁：https://github.com/skeggsb/nouveau/commit/b372d7330c41be5b751187821ab81d91295c847d。用户确认该补丁已修复崩溃问题。",
+  "category": "kernel",
+  "source_file": "Nouveau驱动工作队列调度竞态导致访问无效内存触发kernel oops.txt",
+  "content": "内核版本：4.15.0-rc3\n\n## 问题现象\n- X Server停止响应，系统无反应。\n- 内核日志显示 \"BUG: unable to handle kernel paging request at 00000000000101f8\"。\n- 触发 Kernel Oops (0002 [#1])，RIP 位于 `queue_work_on+0x12/0x40`。\n- Call Trace 显示调用路径为 `nouveau_gem_object_close` -> `drm_gem_object_release_handle` -> `drm_gem_handle_delete` -> `drm_ioctl`。\n\n## 问题根因\n`nouveau_cli_work_queue` 函数中存在竞态条件。在将 work 添加到 `cli->worker` 队列后、执行 `schedule_work(&work->cli->work)` 之前，`nouveau_cli_work` 可能被调度执行。此时 `nouveau_cli_work_fence` 会访问已释放的 work 内存，读取到垃圾数据（如 0x00010000），加上偏移量后形成无效指针（0x00000000000101f8）并传递给 `schedule_work()`，导致 paging request 错误。该问题由提交 814a23243bd2aaa9aafe03d85d0502a73be42b58 引入。\n\n## 解决方案\n应用修复补丁：https://github.com/skeggsb/nouveau/commit/b372d7330c41be5b751187821ab81d91295c847d。用户确认该补丁已修复崩溃问题。"
+}

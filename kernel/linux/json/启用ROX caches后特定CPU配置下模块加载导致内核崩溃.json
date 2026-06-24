@@ -1,0 +1,10 @@
+{
+  "title": "启用ROX caches后特定CPU配置下模块加载导致内核崩溃",
+  "kernel_version": "6.13 (git snapshot: 9f16d5e6f220, e70140ba0d2b)",
+  "phenomenon": "- 在虚拟机中使用 Nehalem 等 CPU 配置进行 Fedora 安装时，执行 grub2-mkconfig 过程中触发内核崩溃\n- BIOS 模式下系统永久挂起\n- UEFI 模式下系统挂起一段时间后重启，安装无法完成\n- 故障发生率超过 50%，但非 100% 复现\n- 内核日志中的 trace 在不同场景下有所差异，提示可能存在内存损坏",
+  "root_cause": "commit 5185e7f9f3bd754ab60680814afd714e2673ef88 (\"x86/module: enable ROX caches for module text on 64 bit\") 引入回归。该补丁在 mm/execmem.c 的 execmem_cache_populate 函数中硬编码使用 PMD_SHIFT 作为页大小参数调用 vmap_pages_range_noflush，但实际分配的内存区域可能并非 PMD_SIZE 对齐，导致内存映射错误。问题在 CPU 配置与主机不完全匹配的虚拟机环境中触发，可能与不同 CPU 型号的页表特性差异有关。",
+  "solution": "Mike Rapoport 提出修复补丁：将 vmap_pages_range_noflush 调用中的硬编码 PMD_SHIFT 替换为动态计算的 page_shift（通过 get_vm_area_page_order(vm) + PAGE_SHIFT 获取实际页顺序）。测试表明该补丁有效，50 次安装测试均未再出现挂起。此外，commit a9bbe341333109465605e8733bab0b573cddcc8c 已禁用 execmem ROX 功能，可作为临时规避措施。",
+  "category": "kernel",
+  "source_file": "启用ROX caches后特定CPU配置下模块加载导致内核崩溃.txt",
+  "content": "内核版本：6.13 (git snapshot: 9f16d5e6f220, e70140ba0d2b)\n\n## 问题现象\n- 在虚拟机中使用 Nehalem 等 CPU 配置进行 Fedora 安装时，执行 grub2-mkconfig 过程中触发内核崩溃\n- BIOS 模式下系统永久挂起\n- UEFI 模式下系统挂起一段时间后重启，安装无法完成\n- 故障发生率超过 50%，但非 100% 复现\n- 内核日志中的 trace 在不同场景下有所差异，提示可能存在内存损坏\n\n## 问题根因\ncommit 5185e7f9f3bd754ab60680814afd714e2673ef88 (\"x86/module: enable ROX caches for module text on 64 bit\") 引入回归。该补丁在 mm/execmem.c 的 execmem_cache_populate 函数中硬编码使用 PMD_SHIFT 作为页大小参数调用 vmap_pages_range_noflush，但实际分配的内存区域可能并非 PMD_SIZE 对齐，导致内存映射错误。问题在 CPU 配置与主机不完全匹配的虚拟机环境中触发，可能与不同 CPU 型号的页表特性差异有关。\n\n## 解决方案\nMike Rapoport 提出修复补丁：将 vmap_pages_range_noflush 调用中的硬编码 PMD_SHIFT 替换为动态计算的 page_shift（通过 get_vm_area_page_order(vm) + PAGE_SHIFT 获取实际页顺序）。测试表明该补丁有效，50 次安装测试均未再出现挂起。此外，commit a9bbe341333109465605e8733bab0b573cddcc8c 已禁用 execmem ROX 功能，可作为临时规避措施。"
+}

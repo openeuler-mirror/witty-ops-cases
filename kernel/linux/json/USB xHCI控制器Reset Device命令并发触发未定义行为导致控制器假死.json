@@ -1,0 +1,10 @@
+{
+  "title": "USB xHCI控制器Reset Device命令并发触发未定义行为导致控制器假死",
+  "kernel_version": "6.13.9, 6.14.3",
+  "phenomenon": "- 系统运行过程中随机出现 xHCI 控制器失效，连接的 USB 设备全部断开。\n- 内核日志中出现 \"xHCI host controller not responding, assume dead\"、\"HC died; cleaning up\" 以及 \"Abort failed to stop command ring: -110\" 错误信息。\n- 故障发生前可能伴随 \"Event TRB for slot ... with no TDs queued\" 或 \"ERROR unknown event type 4\" 异常日志。\n- 故障期间系统可能出现数秒的冻结。",
+  "root_cause": "代码提交 2b66ef84d0d2 (\"usb: hub: lack of clearing xHC resource\") 引入的回归问题。在 `usb_reset_and_verify_device()` 函数中，调用 `hub_hc_release_resources(udev)` 发送 Reset Device 命令时，未持有 `hcd->address0_mutex` 互斥锁。Reset Device 命令会将设备 slot 置于 Default 状态，根据 xHCI 规范 4.5.3.4，同一时间只能有一个 slot 处于 Default 状态。由于缺乏互斥保护，导致多个 slot 同时进入 Default 状态，触发硬件未定义行为，致使控制器固件混乱或停止响应命令。",
+  "solution": "代码修复：在 drivers/usb/core/hub.c 的 usb_reset_and_verify_device() 函数中，将 hub_hc_release_resources(udev) 调用移动到 mutex_lock(hcd->address0_mutex) 之后执行，确保 Reset Device 命令序列化。\n临时规避：避免将触发此问题的特定设备组合（如特定的 Webcam 与 Hub）同时连接在同一个 xHCI 控制器上。",
+  "category": "kernel",
+  "source_file": "USB xHCI控制器Reset Device命令并发触发未定义行为导致控制器假死.txt",
+  "content": "内核版本：6.13.9, 6.14.3\n\n## 问题现象\n- 系统运行过程中随机出现 xHCI 控制器失效，连接的 USB 设备全部断开。\n- 内核日志中出现 \"xHCI host controller not responding, assume dead\"、\"HC died; cleaning up\" 以及 \"Abort failed to stop command ring: -110\" 错误信息。\n- 故障发生前可能伴随 \"Event TRB for slot ... with no TDs queued\" 或 \"ERROR unknown event type 4\" 异常日志。\n- 故障期间系统可能出现数秒的冻结。\n\n## 问题根因\n代码提交 2b66ef84d0d2 (\"usb: hub: lack of clearing xHC resource\") 引入的回归问题。在 `usb_reset_and_verify_device()` 函数中，调用 `hub_hc_release_resources(udev)` 发送 Reset Device 命令时，未持有 `hcd->address0_mutex` 互斥锁。Reset Device 命令会将设备 slot 置于 Default 状态，根据 xHCI 规范 4.5.3.4，同一时间只能有一个 slot 处于 Default 状态。由于缺乏互斥保护，导致多个 slot 同时进入 Default 状态，触发硬件未定义行为，致使控制器固件混乱或停止响应命令。\n\n## 解决方案\n代码修复：在 drivers/usb/core/hub.c 的 usb_reset_and_verify_device() 函数中，将 hub_hc_release_resources(udev) 调用移动到 mutex_lock(hcd->address0_mutex) 之后执行，确保 Reset Device 命令序列化。\n临时规避：避免将触发此问题的特定设备组合（如特定的 Webcam 与 Hub）同时连接在同一个 xHCI 控制器上。"
+}

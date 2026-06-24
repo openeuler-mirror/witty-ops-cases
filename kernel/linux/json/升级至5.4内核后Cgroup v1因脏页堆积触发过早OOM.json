@@ -1,0 +1,10 @@
+{
+  "title": "升级至5.4内核后Cgroup v1因脏页堆积触发过早OOM",
+  "kernel_version": "5.4.20",
+  "phenomenon": "- 数据库容器在执行备份恢复任务时频繁触发 OOM Killer，导致进程被终止。\n- 容器设置了 1.5GB 内存限制，实际 RSS 使用率很低（约 100MB），但 `file_dirty` 占用大量内存（约 1.4GB）。\n- 触发 OOM 的调用栈显示发生在 `write` 系统调用路径下（XFS 文件系统），涉及 `xfs_file_buffered_aio_write` -> `iomap_write_begin` -> `mem_cgroup_out_of_memory`。\n- 该问题为回归问题，在内核 4.14.146 和 4.19.75 上未出现，升级到 5.4 后复现。",
+  "root_cause": "内核 5.4 合入了提交 `f9c645621a28` (\"memcg, oom: don't require __GFP_FS when invoking memcg OOM killer\")，改变了 OOM 触发逻辑。在 Cgroup v1 环境下，脏页节流机制依赖于内存回收。当文件写入路径使用 `GFP_NOFS` 分配掩码时，内存回收无法进行文件系统相关的脏页节流。旧内核在受限分配上下文中会重试回收，而新内核为避免潜在死锁改为更早触发 OOM Killer。当 Cgroup 中大部分内存被脏页占用且受限于 `memory+swap` 限制无法交换时，系统过早触发 OOM。",
+  "solution": "暂无正式上游修复补丁，可通过以下方式规避：\n1. 迁移至 Cgroup v2，其具备更好的 memcg 感知脏页节流机制，可防止脏页过度堆积。\n2. 调整全局脏页参数，降低 `/proc/sys/vm/dirty_background_bytes` 和 `/proc/sys/vm/dirty_bytes` 的值（例如分别设为 500M 和 800M），限制系统脏页总量。",
+  "category": "kernel",
+  "source_file": "升级至5.4内核后Cgroup v1因脏页堆积触发过早OOM.txt",
+  "content": "内核版本：5.4.20\n\n## 问题现象\n- 数据库容器在执行备份恢复任务时频繁触发 OOM Killer，导致进程被终止。\n- 容器设置了 1.5GB 内存限制，实际 RSS 使用率很低（约 100MB），但 `file_dirty` 占用大量内存（约 1.4GB）。\n- 触发 OOM 的调用栈显示发生在 `write` 系统调用路径下（XFS 文件系统），涉及 `xfs_file_buffered_aio_write` -> `iomap_write_begin` -> `mem_cgroup_out_of_memory`。\n- 该问题为回归问题，在内核 4.14.146 和 4.19.75 上未出现，升级到 5.4 后复现。\n\n## 问题根因\n内核 5.4 合入了提交 `f9c645621a28` (\"memcg, oom: don't require __GFP_FS when invoking memcg OOM killer\")，改变了 OOM 触发逻辑。在 Cgroup v1 环境下，脏页节流机制依赖于内存回收。当文件写入路径使用 `GFP_NOFS` 分配掩码时，内存回收无法进行文件系统相关的脏页节流。旧内核在受限分配上下文中会重试回收，而新内核为避免潜在死锁改为更早触发 OOM Killer。当 Cgroup 中大部分内存被脏页占用且受限于 `memory+swap` 限制无法交换时，系统过早触发 OOM。\n\n## 解决方案\n暂无正式上游修复补丁，可通过以下方式规避：\n1. 迁移至 Cgroup v2，其具备更好的 memcg 感知脏页节流机制，可防止脏页过度堆积。\n2. 调整全局脏页参数，降低 `/proc/sys/vm/dirty_background_bytes` 和 `/proc/sys/vm/dirty_bytes` 的值（例如分别设为 500M 和 800M），限制系统脏页总量。"
+}

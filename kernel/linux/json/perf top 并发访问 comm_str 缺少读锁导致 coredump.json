@@ -1,0 +1,10 @@
+{
+  "title": "perf top 并发访问 comm_str 缺少读锁导致 coredump",
+  "kernel_version": "stable-5.10, stable-6.6",
+  "phenomenon": "- 执行 `perf top --fields overhead,cpu,com,symbol` 命令时低概率触发 coredump\n- GDB 回溯显示崩溃发生在 `__strcmp_evex` -> `sort.comm_collapse` -> `hist_entry__collapse` 调用链中\n- 寄存器 `rdi` (对应 `right->comm->comm_str->str`) 包含无效地址",
+  "root_cause": "`perf top` 工具存在并发访问问题。`display_thread` 线程在读取 `comm_str` 进行排序时缺少必要的读锁保护，而 `process_thread` 线程可能同时通过 `__thread__set_comm` -> `comm__override` 修改该数据，导致竞争条件引发内存访问错误或 use-after-free。",
+  "solution": "开发者 Ian Rogers 提交了修复补丁，为相关代码路径添加了缺失的读锁。\n补丁链接：https://lore.kernel.org/lkml/20250519224645.1810891-1-irogers@google.com/",
+  "category": "kernel",
+  "source_file": "perf top 并发访问 comm_str 缺少读锁导致 coredump.txt",
+  "content": "内核版本：stable-5.10, stable-6.6\n\n## 问题现象\n- 执行 `perf top --fields overhead,cpu,com,symbol` 命令时低概率触发 coredump\n- GDB 回溯显示崩溃发生在 `__strcmp_evex` -> `sort.comm_collapse` -> `hist_entry__collapse` 调用链中\n- 寄存器 `rdi` (对应 `right->comm->comm_str->str`) 包含无效地址\n\n## 问题根因\n`perf top` 工具存在并发访问问题。`display_thread` 线程在读取 `comm_str` 进行排序时缺少必要的读锁保护，而 `process_thread` 线程可能同时通过 `__thread__set_comm` -> `comm__override` 修改该数据，导致竞争条件引发内存访问错误或 use-after-free。\n\n## 解决方案\n开发者 Ian Rogers 提交了修复补丁，为相关代码路径添加了缺失的读锁。\n补丁链接：https://lore.kernel.org/lkml/20250519224645.1810891-1-irogers@google.com/"
+}

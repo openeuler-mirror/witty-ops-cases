@@ -1,0 +1,10 @@
+{
+  "title": "创建 kmem-limited memory cgroup 时因 kmem_cache->memcg_params 未初始化导致内核崩溃",
+  "kernel_version": "3.10.0",
+  "phenomenon": "- 系统触发 kernel panic，日志显示 \"BUG: unable to handle kernel NULL pointer dereference at 0000000000000008\"\n- Oops 发生在 `__memcg_kmem_get_cache+0xe4/0x220`\n- 问题在运行针对 kmem 限制的回归测试时触发，测试场景为设置非常严格的 kmem limit",
+  "root_cause": "在 3.x 内核中，`kmem_cache` 结构体的 `memcg_params` 是指针类型，需动态分配。\n1. 当 `kmem_cache` 在之前所有 memory cgroup 均处于非活动状态时创建，`memcg_kmem_enabled()` 返回 false，导致 `memcg_register_cache()` 未分配 `memcg_params`。\n2. 后续创建新的 kmem-limited memory cgroup 时，`memcg_update_cache_size()` 因判断条件 `num_groups > memcg_limited_groups_array_size` 为 false（ID 已预创建），也未执行分配逻辑。\n3. 最终在内存分配路径 `__memcg_kmem_get_cache` 中访问 `cachep->memcg_params` 时触发空指针解引用。",
+  "solution": "报告者指出该问题在 4.x 内核中已通过将 `memcg_params` 改为嵌入式结构体而修复。针对 3.x 内核，报告者提供了两种补丁方案：\n1. 在 `memcg_update_cache_size` 函数中增加判断条件 `|| !s->memcg_params` 以强制分配。\n2. 在 `memcg_register_cache` 函数中修改判断条件为 `!memcg_kmem_enabled() && memcg_limited_groups_array_size == 0`。\n\n（注：Bug 状态为 NEW，上游尚未合并修复补丁）",
+  "category": "kernel",
+  "source_file": "创建 kmem-limited memory cgroup 时因 kmem_cache-_memcg_params 未初始化导致内核崩溃.txt",
+  "content": "内核版本：3.10.0\n\n## 问题现象\n- 系统触发 kernel panic，日志显示 \"BUG: unable to handle kernel NULL pointer dereference at 0000000000000008\"\n- Oops 发生在 `__memcg_kmem_get_cache+0xe4/0x220`\n- 问题在运行针对 kmem 限制的回归测试时触发，测试场景为设置非常严格的 kmem limit\n\n## 问题根因\n在 3.x 内核中，`kmem_cache` 结构体的 `memcg_params` 是指针类型，需动态分配。\n1. 当 `kmem_cache` 在之前所有 memory cgroup 均处于非活动状态时创建，`memcg_kmem_enabled()` 返回 false，导致 `memcg_register_cache()` 未分配 `memcg_params`。\n2. 后续创建新的 kmem-limited memory cgroup 时，`memcg_update_cache_size()` 因判断条件 `num_groups > memcg_limited_groups_array_size` 为 false（ID 已预创建），也未执行分配逻辑。\n3. 最终在内存分配路径 `__memcg_kmem_get_cache` 中访问 `cachep->memcg_params` 时触发空指针解引用。\n\n## 解决方案\n报告者指出该问题在 4.x 内核中已通过将 `memcg_params` 改为嵌入式结构体而修复。针对 3.x 内核，报告者提供了两种补丁方案：\n1. 在 `memcg_update_cache_size` 函数中增加判断条件 `|| !s->memcg_params` 以强制分配。\n2. 在 `memcg_register_cache` 函数中修改判断条件为 `!memcg_kmem_enabled() && memcg_limited_groups_array_size == 0`。\n\n（注：Bug 状态为 NEW，上游尚未合并修复补丁）"
+}

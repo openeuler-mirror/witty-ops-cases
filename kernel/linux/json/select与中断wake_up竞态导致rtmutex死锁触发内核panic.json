@@ -1,0 +1,10 @@
+{
+  "title": "select与中断wake_up竞态导致rtmutex死锁触发内核panic",
+  "kernel_version": "3.0, 3.10.20-rt17",
+  "phenomenon": "- 系统触发 kernel panic，日志显示 \"kernel BUG at kernel/rtmutex.c:738!\"\n- 调用栈显示在 rt_spin_lock_slowlock 中触发 BUG_ON(rt_mutex_owner(lock) == self)\n- 故障场景涉及驱动中断调用 wake_up_interruptible() 与应用程序调用 select() 的并发操作",
+  "root_cause": "在 RT-Preempt 内核中，fs/select.c 的 select 逻辑在处理 poll 项时存在竞态条件。具体流程如下：\n1. select 系统调用获取等待队列的 rtmutex 锁。\n2. 在持有锁后、但尚未调用 remove_wait_queue() 移除任务前，CPU 收到硬件中断。\n3. 中断处理程序调用 wake_up_interruptible()，试图获取同一个等待队列的锁。\n4. 由于中断上下文继承了被中断任务的上下文，而该任务已持有该 rtmutex，导致中断处理程序尝试递归获取已持有的锁，触发 rtmutex 的死锁检测机制（BUG_ON）。",
+  "solution": "建议在 fs/select.c 的 free_poll_entry() 函数中，对 remove_wait_queue() 调用前后添加 local_irq_save() / local_irq_restore() 保护，防止在持有锁期间被中断打断。",
+  "category": "kernel",
+  "source_file": "select与中断wake_up竞态导致rtmutex死锁触发内核panic.txt",
+  "content": "内核版本：3.0, 3.10.20-rt17\n\n## 问题现象\n- 系统触发 kernel panic，日志显示 \"kernel BUG at kernel/rtmutex.c:738!\"\n- 调用栈显示在 rt_spin_lock_slowlock 中触发 BUG_ON(rt_mutex_owner(lock) == self)\n- 故障场景涉及驱动中断调用 wake_up_interruptible() 与应用程序调用 select() 的并发操作\n\n## 问题根因\n在 RT-Preempt 内核中，fs/select.c 的 select 逻辑在处理 poll 项时存在竞态条件。具体流程如下：\n1. select 系统调用获取等待队列的 rtmutex 锁。\n2. 在持有锁后、但尚未调用 remove_wait_queue() 移除任务前，CPU 收到硬件中断。\n3. 中断处理程序调用 wake_up_interruptible()，试图获取同一个等待队列的锁。\n4. 由于中断上下文继承了被中断任务的上下文，而该任务已持有该 rtmutex，导致中断处理程序尝试递归获取已持有的锁，触发 rtmutex 的死锁检测机制（BUG_ON）。\n\n## 解决方案\n建议在 fs/select.c 的 free_poll_entry() 函数中，对 remove_wait_queue() 调用前后添加 local_irq_save() / local_irq_restore() 保护，防止在持有锁期间被中断打断。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "XFS运行xfstests generic/475时xfs_bmapi_read空指针解引用触发GPF",
+  "kernel_version": "5.2.0-rc4+",
+  "phenomenon": "- 运行 xfstests generic/475 测试用例时触发内核崩溃。\n- 日志显示 \"general protection fault: 0000 [#1]\"，RIP 寄存器指向 `xfs_bmapi_read+0x311/0xb00 [xfs]`。\n- KASAN 提示 GPF 可能由空指针解引用引起。\n- 调用栈显示路径为 `xfs_attr_inactive` -> `xfs_da_read_buf` -> `xfs_dabuf_map` -> `xfs_bmapi_read`。",
+  "root_cause": "在 `xfs_bmapi_read` 函数中，代码直接解引用 `ifp` 指针而未进行非空检查。当 `xfs_iformat_fork` 在处理属性分支出错时，会释放 `ip->i_afp` 并将其置为 NULL。后续在处理损坏的 inode（如 bulkstat 触发 inactive 操作）时，调用链进入 `xfs_bmapi_read` 访问该 NULL 指针，导致 General Protection Fault。",
+  "solution": "在 `xfs_bmapi_read` 函数中增加对 `ifp` 指针的非空检查，若为 NULL 则返回 `-EFSCORRUPTED` 错误。经测试验证，应用该补丁后连续运行 3 天未再复现崩溃。",
+  "category": "kernel",
+  "source_file": "XFS运行xfstests generic_475时xfs_bmapi_read空指针解引用触发GPF.txt",
+  "content": "内核版本：5.2.0-rc4+\n\n## 问题现象\n- 运行 xfstests generic/475 测试用例时触发内核崩溃。\n- 日志显示 \"general protection fault: 0000 [#1]\"，RIP 寄存器指向 `xfs_bmapi_read+0x311/0xb00 [xfs]`。\n- KASAN 提示 GPF 可能由空指针解引用引起。\n- 调用栈显示路径为 `xfs_attr_inactive` -> `xfs_da_read_buf` -> `xfs_dabuf_map` -> `xfs_bmapi_read`。\n\n## 问题根因\n在 `xfs_bmapi_read` 函数中，代码直接解引用 `ifp` 指针而未进行非空检查。当 `xfs_iformat_fork` 在处理属性分支出错时，会释放 `ip->i_afp` 并将其置为 NULL。后续在处理损坏的 inode（如 bulkstat 触发 inactive 操作）时，调用链进入 `xfs_bmapi_read` 访问该 NULL 指针，导致 General Protection Fault。\n\n## 解决方案\n在 `xfs_bmapi_read` 函数中增加对 `ifp` 指针的非空检查，若为 NULL 则返回 `-EFSCORRUPTED` 错误。经测试验证，应用该补丁后连续运行 3 天未再复现崩溃。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "并发打开分区设备时因bd_contains状态不稳定触发kernel BUG",
+  "kernel_version": "3.0.0-15-generic（评论中提及 3.10.0 亦受影响）",
+  "phenomenon": "- 用户在使用 KDE partitionmanager 对 USB 驱动器执行分区操作（删除并创建 EXT4 分区）时系统崩溃，屏幕变黑。\n- 热插拔 SAS 磁盘后多次执行 lsblk 命令可复现崩溃。\n- 控制台输出日志：kernel BUG at fs/block_dev.c:1262!，伴随 invalid opcode: 0000 [#1] SMP 错误。\n- 堆栈信息显示崩溃发生在 blkdev_get 函数中。",
+  "root_cause": "在 block_dev 模块中，bdev->bd_contains 指针在调用 __blkdev_get() 之前状态不稳定。当 __blkdev_get() 首次打开一个分区（->bd_openers == 0）时，会暂时将 bdev->bd_contains 设置为 bdev 自身，这对分区而言是不正确的值。\n当两个线程竞相打开同一设备的分区时（一个使用 FMODE_EXCL，另一个不使用），不使用 FMODE_EXCL 的线程先获得互斥锁并暂时设置了错误的 bd_contains。随后使用 FMODE_EXCL 的线程在 bd_may_claim() 函数中依据此不稳定状态进行检查，导致声明逻辑误判。最终在 blkdev_get 函数的 BUG_ON(!bd_may_claim(bdev, whole, holder)) 检查中失败，触发 kernel BUG。",
+  "solution": "该问题已通过提交 bcc7f5b4bee8 (\"block_dev: don't test bdev->bd_contains when it is not stable\") 修复。修复方案是在 bd_may_claim() 函数中移除对不稳定的 bdev->bd_contains 成员的依赖检查，改为直接判断目标块设备是否为整个设备。",
+  "category": "kernel",
+  "source_file": "并发打开分区设备时因bd_contains状态不稳定触发kernel BUG.txt",
+  "content": "内核版本：3.0.0-15-generic（评论中提及 3.10.0 亦受影响）\n\n## 问题现象\n- 用户在使用 KDE partitionmanager 对 USB 驱动器执行分区操作（删除并创建 EXT4 分区）时系统崩溃，屏幕变黑。\n- 热插拔 SAS 磁盘后多次执行 lsblk 命令可复现崩溃。\n- 控制台输出日志：kernel BUG at fs/block_dev.c:1262!，伴随 invalid opcode: 0000 [#1] SMP 错误。\n- 堆栈信息显示崩溃发生在 blkdev_get 函数中。\n\n## 问题根因\n在 block_dev 模块中，bdev->bd_contains 指针在调用 __blkdev_get() 之前状态不稳定。当 __blkdev_get() 首次打开一个分区（->bd_openers == 0）时，会暂时将 bdev->bd_contains 设置为 bdev 自身，这对分区而言是不正确的值。\n当两个线程竞相打开同一设备的分区时（一个使用 FMODE_EXCL，另一个不使用），不使用 FMODE_EXCL 的线程先获得互斥锁并暂时设置了错误的 bd_contains。随后使用 FMODE_EXCL 的线程在 bd_may_claim() 函数中依据此不稳定状态进行检查，导致声明逻辑误判。最终在 blkdev_get 函数的 BUG_ON(!bd_may_claim(bdev, whole, holder)) 检查中失败，触发 kernel BUG。\n\n## 解决方案\n该问题已通过提交 bcc7f5b4bee8 (\"block_dev: don't test bdev->bd_contains when it is not stable\") 修复。修复方案是在 bd_may_claim() 函数中移除对不稳定的 bdev->bd_contains 成员的依赖检查，改为直接判断目标块设备是否为整个设备。"
+}

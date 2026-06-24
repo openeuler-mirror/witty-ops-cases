@@ -1,0 +1,10 @@
+{
+  "title": "xhci_hcd在AMD平台runtime PM恢复时控制器就绪超时导致系统死锁",
+  "kernel_version": "6.12 - 6.19 (and mainline)",
+  "phenomenon": "- 在 AMD Ryzen 7000/9000 系列（X670E/X870 主板）系统上，通过 usbfs 快速轮询 xHCI root hub 设备节点时系统完全冻结\n- CPU 负载下（如 stress-ng --cpu 0）更易触发，通常在数分钟内发生\n- 冻结时无任何内核日志输出，系统无响应\n- 故障前 netconsole 捕获到关键日志：\"Controller not ready at resume -19\"、\"PCI post-resume error -19!\"、\"HC died; cleaning up\"",
+  "root_cause": "问题与 USB runtime PM 机制相关。在 xhci_resume() 函数中调用 xhci_handshake() 读取 xHC mmio USBSTS 状态寄存器时返回 0xffffffff（-ENODEV），表明 PCI xHC 控制器在恢复时未正确上电或配置异常。该问题仅在 power/control 设为 auto（启用 runtime PM）时触发，且仅影响特定 xHCI 控制器（如 0000:7a:00.4）。整个系统冻结可能与 PCI 总线或控制器故障有关，而非单纯的 USB 子系统问题。",
+  "solution": "临时规避方案：\n1. 在内核启动参数中添加 usbcore.autosuspend=-1 禁用 USB runtime PM\n2. 或手动设置受影响设备的 power/control 为 on：echo 'on' > /sys/bus/pci/devices/0000:7a:00.4/power/control\n\n开发者已提供测试补丁（attachment 309444），在 xhci_resume() 中检测到状态寄存器返回 0xffffffff 时延迟 50ms 后重试。正式修复尚未合并。",
+  "category": "kernel",
+  "source_file": "xhci_hcd在AMD平台runtime PM恢复时控制器就绪超时导致系统死锁.txt",
+  "content": "内核版本：6.12 - 6.19 (and mainline)\n\n## 问题现象\n- 在 AMD Ryzen 7000/9000 系列（X670E/X870 主板）系统上，通过 usbfs 快速轮询 xHCI root hub 设备节点时系统完全冻结\n- CPU 负载下（如 stress-ng --cpu 0）更易触发，通常在数分钟内发生\n- 冻结时无任何内核日志输出，系统无响应\n- 故障前 netconsole 捕获到关键日志：\"Controller not ready at resume -19\"、\"PCI post-resume error -19!\"、\"HC died; cleaning up\"\n\n## 问题根因\n问题与 USB runtime PM 机制相关。在 xhci_resume() 函数中调用 xhci_handshake() 读取 xHC mmio USBSTS 状态寄存器时返回 0xffffffff（-ENODEV），表明 PCI xHC 控制器在恢复时未正确上电或配置异常。该问题仅在 power/control 设为 auto（启用 runtime PM）时触发，且仅影响特定 xHCI 控制器（如 0000:7a:00.4）。整个系统冻结可能与 PCI 总线或控制器故障有关，而非单纯的 USB 子系统问题。\n\n## 解决方案\n临时规避方案：\n1. 在内核启动参数中添加 usbcore.autosuspend=-1 禁用 USB runtime PM\n2. 或手动设置受影响设备的 power/control 为 on：echo 'on' > /sys/bus/pci/devices/0000:7a:00.4/power/control\n\n开发者已提供测试补丁（attachment 309444），在 xhci_resume() 中检测到状态寄存器返回 0xffffffff 时延迟 50ms 后重试。正式修复尚未合并。"
+}

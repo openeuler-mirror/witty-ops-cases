@@ -1,0 +1,10 @@
+{
+  "title": "从挂起恢复时hidp模块访问已释放socket导致空指针Oops",
+  "kernel_version": "3.5 (报告中提及 3.5.0-17-generic, 3.7.0-4-generic)",
+  "phenomenon": "- 系统从挂起状态恢复时，或插入蓝牙鼠标时触发内核 Oops。\n- 日志显示 \"BUG: unable to handle kernel NULL pointer dereference at (null)\"。\n- 崩溃发生在 `__ticket_spin_lock` 函数中，Call Trace 指向 `hidp_session` -> `finish_wait` -> `_raw_spin_lock_irqsave`。\n- 进程名为 `khidpd_05ac0256`。",
+  "root_cause": "存在竞态条件：`hidp_session` 线程在执行等待或清理逻辑时，l2cap 驱动代码并发地释放或 orphan 了 socket 结构（`ctrl_sk` / `intr_sk`）。\n当 socket 被 orphan 时，其 `sk_wq`（等待队列头）被设置为 NULL。\n`hidp_session` 随后尝试通过 socket 指针访问等待队列（例如在 `finish_wait` 或 `remove_wait_queue` 中），解引用了空指针，导致在获取自旋锁时触发 Oops。",
+  "solution": "报告者提出了修复补丁（见 Bugzilla 附件 90761），建议在 `hidp_session` 函数开始时将 `wait_queue_head` 指针存储在局部变量中，避免后续从可能已被置空的 socket 结构中查找等待队列头。截至报告最后更新，Bug 状态为 NEW，未提及已合并的上游补丁。",
+  "category": "kernel",
+  "source_file": "从挂起恢复时hidp模块访问已释放socket导致空指针Oops.txt",
+  "content": "内核版本：3.5 (报告中提及 3.5.0-17-generic, 3.7.0-4-generic)\n\n## 问题现象\n- 系统从挂起状态恢复时，或插入蓝牙鼠标时触发内核 Oops。\n- 日志显示 \"BUG: unable to handle kernel NULL pointer dereference at (null)\"。\n- 崩溃发生在 `__ticket_spin_lock` 函数中，Call Trace 指向 `hidp_session` -> `finish_wait` -> `_raw_spin_lock_irqsave`。\n- 进程名为 `khidpd_05ac0256`。\n\n## 问题根因\n存在竞态条件：`hidp_session` 线程在执行等待或清理逻辑时，l2cap 驱动代码并发地释放或 orphan 了 socket 结构（`ctrl_sk` / `intr_sk`）。\n当 socket 被 orphan 时，其 `sk_wq`（等待队列头）被设置为 NULL。\n`hidp_session` 随后尝试通过 socket 指针访问等待队列（例如在 `finish_wait` 或 `remove_wait_queue` 中），解引用了空指针，导致在获取自旋锁时触发 Oops。\n\n## 解决方案\n报告者提出了修复补丁（见 Bugzilla 附件 90761），建议在 `hidp_session` 函数开始时将 `wait_queue_head` 指针存储在局部变量中，避免后续从可能已被置空的 socket 结构中查找等待队列头。截至报告最后更新，Bug 状态为 NEW，未提及已合并的上游补丁。"
+}

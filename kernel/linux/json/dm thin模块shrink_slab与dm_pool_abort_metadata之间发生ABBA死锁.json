@@ -1,0 +1,10 @@
+{
+  "title": "dm thin模块shrink_slab与dm_pool_abort_metadata之间发生ABBA死锁",
+  "kernel_version": "6.1.0-rc4",
+  "phenomenon": "- 系统出现多个任务阻塞超过 15 秒，触发 hung_task 检测。\n- 日志显示 dm-thin 元数据操作失败：`metadata operation 'dm_pool_commit_metadata' failed: error = -22`，随后尝试中止当前元数据事务。\n- 进程 `kworker/u4:7` 处于 D 状态，调用链显示在 `unregister_shrinker` -> `down_write` 处阻塞。\n- 进程 `test.sh` 处于 D 状态，调用链显示在 `shrink_slab` -> `dm_thin_find_block` -> `down_read` 处阻塞。",
+  "root_cause": "这是一个典型的 ABBA 死锁问题：\n1. 进程 A（kworker）在 `dm_pool_abort_metadata` 流程中持有锁 `pmd->root_lock`，随后调用 `unregister_shrinker` 尝试获取 `shrinker_rwsem`（写锁）。\n2. 进程 B（test.sh/write）在 `shrink_slab` 流程中持有 `shrinker_rwsem`（读锁），随后调用 `dm_thin_find_block` 尝试获取 `pmd->root_lock`。\n两个锁的获取顺序不一致导致死锁。",
+  "solution": "暂无",
+  "category": "kernel",
+  "source_file": "dm thin模块shrink_slab与dm_pool_abort_metadata之间发生ABBA死锁.txt",
+  "content": "内核版本：6.1.0-rc4\n\n## 问题现象\n- 系统出现多个任务阻塞超过 15 秒，触发 hung_task 检测。\n- 日志显示 dm-thin 元数据操作失败：`metadata operation 'dm_pool_commit_metadata' failed: error = -22`，随后尝试中止当前元数据事务。\n- 进程 `kworker/u4:7` 处于 D 状态，调用链显示在 `unregister_shrinker` -> `down_write` 处阻塞。\n- 进程 `test.sh` 处于 D 状态，调用链显示在 `shrink_slab` -> `dm_thin_find_block` -> `down_read` 处阻塞。\n\n## 问题根因\n这是一个典型的 ABBA 死锁问题：\n1. 进程 A（kworker）在 `dm_pool_abort_metadata` 流程中持有锁 `pmd->root_lock`，随后调用 `unregister_shrinker` 尝试获取 `shrinker_rwsem`（写锁）。\n2. 进程 B（test.sh/write）在 `shrink_slab` 流程中持有 `shrinker_rwsem`（读锁），随后调用 `dm_thin_find_block` 尝试获取 `pmd->root_lock`。\n两个锁的获取顺序不一致导致死锁。\n\n## 解决方案\n暂无"
+}

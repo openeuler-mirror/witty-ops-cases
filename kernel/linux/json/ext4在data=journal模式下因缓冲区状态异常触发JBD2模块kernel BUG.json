@@ -1,0 +1,10 @@
+{
+  "title": "ext4在data=journal模式下因缓冲区状态异常触发JBD2模块kernel BUG",
+  "kernel_version": "Linux 3.10.27",
+  "phenomenon": "- 系统日志打印警告：\"JBD2: Spotted dirty metadata buffer (dev = sda1, blocknr = 1766784). There's a risk of filesystem corruption in case of system crash.\"\n- 随后触发 kernel BUG，位于 fs/jbd2/commit.c:1059。\n- 调用栈显示：jbd2_journal_commit_transaction -> kjournald2。\n- 故障发生在高内存压力环境下，挂载选项包含 data=journal。",
+  "root_cause": "在 ext4 的 data=journal 模式下，`ext4_write_begin()` 与 `ext4_journalled_write_end()` 之间存在竞态条件。JBD2 对于元数据缓冲区应使用 buffer_jbddirty 标记而非 buffer_dirty，但在该竞态条件下，buffer_head 的 dirty 位被意外置位。当 JBD2 提交事务执行断言 J_ASSERT_BH(bh, !buffer_dirty(bh)) 时失败，从而触发 BUG。",
+  "solution": "用户建议在 `write_end_fn` 函数中增加 `lock_buffer` 保护并清除 dirty 位。同时，用户发现上游提交 3b136499e906460919f0d21a49db1aaccf0ae963 包含了类似的修复逻辑，可参考该补丁进行修复。",
+  "category": "kernel",
+  "source_file": "ext4在data=journal模式下因缓冲区状态异常触发JBD2模块kernel BUG.txt",
+  "content": "内核版本：Linux 3.10.27\n\n## 问题现象\n- 系统日志打印警告：\"JBD2: Spotted dirty metadata buffer (dev = sda1, blocknr = 1766784). There's a risk of filesystem corruption in case of system crash.\"\n- 随后触发 kernel BUG，位于 fs/jbd2/commit.c:1059。\n- 调用栈显示：jbd2_journal_commit_transaction -> kjournald2。\n- 故障发生在高内存压力环境下，挂载选项包含 data=journal。\n\n## 问题根因\n在 ext4 的 data=journal 模式下，`ext4_write_begin()` 与 `ext4_journalled_write_end()` 之间存在竞态条件。JBD2 对于元数据缓冲区应使用 buffer_jbddirty 标记而非 buffer_dirty，但在该竞态条件下，buffer_head 的 dirty 位被意外置位。当 JBD2 提交事务执行断言 J_ASSERT_BH(bh, !buffer_dirty(bh)) 时失败，从而触发 BUG。\n\n## 解决方案\n用户建议在 `write_end_fn` 函数中增加 `lock_buffer` 保护并清除 dirty 位。同时，用户发现上游提交 3b136499e906460919f0d21a49db1aaccf0ae963 包含了类似的修复逻辑，可参考该补丁进行修复。"
+}

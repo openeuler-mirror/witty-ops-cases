@@ -1,0 +1,10 @@
+{
+  "title": "Block层blk_requeue_request函数中请求状态不一致触发BUG_ON",
+  "kernel_version": "3.17.4-1-ARCH, 3.10.0-123.el7.x86_64",
+  "phenomenon": "- 系统日志打印 \"kernel BUG at block/blk-core.c:1277!\"（或 1217 行），触发 invalid opcode 异常导致内核崩溃。\n- 故障现场调用栈显示：`blk_requeue_request` <- `__scsi_queue_insert` <- `scsi_softirq_done`。\n- 触发场景包括：操作有缺陷的 USB 硬盘导致挂起后强制终止进程，或 SCSI 设备发生 I/O 错误及命令中止。",
+  "root_cause": "在 `blk_requeue_request` 函数中，代码逻辑预期请求在重新入队前不应处于“已排队”状态，因此设置了 `BUG_ON(blk_queued_rq(rq))` 断言。故障发生时，请求已被错误地添加到了 `queue_head` 队列链表中（或相关状态标志位未正确清除），导致 `blk_queued_rq(rq)` 返回真，断言失败触发 panic。这表明在 SCSI 中断处理或错误恢复路径中，请求的状态管理出现了不一致。",
+  "solution": "该问题涉及的旧版单队列代码逻辑已在 Linux 内核 commit `a1ce35fa49852db60fc6e268038530be533c5b15`（\"block: remove dead elevator code\"）中被移除。建议升级至较新的内核版本以规避此问题。",
+  "category": "kernel",
+  "source_file": "Block层blk_requeue_request函数中请求状态不一致触发BUG_ON.txt",
+  "content": "内核版本：3.17.4-1-ARCH, 3.10.0-123.el7.x86_64\n\n## 问题现象\n- 系统日志打印 \"kernel BUG at block/blk-core.c:1277!\"（或 1217 行），触发 invalid opcode 异常导致内核崩溃。\n- 故障现场调用栈显示：`blk_requeue_request` <- `__scsi_queue_insert` <- `scsi_softirq_done`。\n- 触发场景包括：操作有缺陷的 USB 硬盘导致挂起后强制终止进程，或 SCSI 设备发生 I/O 错误及命令中止。\n\n## 问题根因\n在 `blk_requeue_request` 函数中，代码逻辑预期请求在重新入队前不应处于“已排队”状态，因此设置了 `BUG_ON(blk_queued_rq(rq))` 断言。故障发生时，请求已被错误地添加到了 `queue_head` 队列链表中（或相关状态标志位未正确清除），导致 `blk_queued_rq(rq)` 返回真，断言失败触发 panic。这表明在 SCSI 中断处理或错误恢复路径中，请求的状态管理出现了不一致。\n\n## 解决方案\n该问题涉及的旧版单队列代码逻辑已在 Linux 内核 commit `a1ce35fa49852db60fc6e268038530be533c5b15`（\"block: remove dead elevator code\"）中被移除。建议升级至较新的内核版本以规避此问题。"
+}

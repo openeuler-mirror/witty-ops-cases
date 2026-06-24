@@ -1,0 +1,10 @@
+{
+  "title": "pid_namespace 泄漏导致无法创建新命名空间",
+  "kernel_version": "4.9",
+  "phenomenon": "- 长期运行 Kubernetes 的服务器上执行 `unshare --pid` 命令失败，报错 \"No space left on device\"。\n- 检查 `/proc/slabinfo` 发现 `pid_namespace` 对象数量极大（约 60 万），占用大量内存。\n- 手动执行 `echo 3 > /proc/sys/vm/drop_caches` 清理缓存后，`pid_namespace` 对象数量下降，命令恢复正常。",
+  "root_cause": "进程退出后，`/proc/<pid>`、`/proc/<pid>/ns` 及 `/proc/<pid>/ns/pid` 相关的 dentry 仍持有 `pid` 结构体的引用。由于 `release_task` 与 `dput` 之间存在竞态条件，`proc_flush_task` 在执行时若 dentry 引用计数不为 0 则无法释放，导致 `pid` 结构体及其关联的 `pid_namespace` 无法回收。随着时间推移，`pid_namespace` 泄漏累积，最终达到系统限制上限。",
+  "solution": "临时规避：手动执行 `echo 3 > /proc/sys/vm/drop_caches` 清理 dentry 缓存。\n永久修复：需将以下补丁移植到内核（4.9 分支）：\n- `7bc3e6e55acf` (\"proc: Use a list of inodes to flush from proc\")\n- `26dbc60f385f` (\"proc: Generalize proc_sys_prune_dcache into proc_prune_siblings_dcache\")\n- `f90f3cafe8d5` (\"proc: Use d_invalidate in proc_prune_siblings_dcache\")",
+  "category": "kernel",
+  "source_file": "pid_namespace 泄漏导致无法创建新命名空间.txt",
+  "content": "内核版本：4.9\n\n## 问题现象\n- 长期运行 Kubernetes 的服务器上执行 `unshare --pid` 命令失败，报错 \"No space left on device\"。\n- 检查 `/proc/slabinfo` 发现 `pid_namespace` 对象数量极大（约 60 万），占用大量内存。\n- 手动执行 `echo 3 > /proc/sys/vm/drop_caches` 清理缓存后，`pid_namespace` 对象数量下降，命令恢复正常。\n\n## 问题根因\n进程退出后，`/proc/<pid>`、`/proc/<pid>/ns` 及 `/proc/<pid>/ns/pid` 相关的 dentry 仍持有 `pid` 结构体的引用。由于 `release_task` 与 `dput` 之间存在竞态条件，`proc_flush_task` 在执行时若 dentry 引用计数不为 0 则无法释放，导致 `pid` 结构体及其关联的 `pid_namespace` 无法回收。随着时间推移，`pid_namespace` 泄漏累积，最终达到系统限制上限。\n\n## 解决方案\n临时规避：手动执行 `echo 3 > /proc/sys/vm/drop_caches` 清理 dentry 缓存。\n永久修复：需将以下补丁移植到内核（4.9 分支）：\n- `7bc3e6e55acf` (\"proc: Use a list of inodes to flush from proc\")\n- `26dbc60f385f` (\"proc: Generalize proc_sys_prune_dcache into proc_prune_siblings_dcache\")\n- `f90f3cafe8d5` (\"proc: Use d_invalidate in proc_prune_siblings_dcache\")"
+}

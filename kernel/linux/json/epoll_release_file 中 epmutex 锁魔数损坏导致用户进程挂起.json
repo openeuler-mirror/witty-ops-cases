@@ -1,0 +1,10 @@
+{
+  "title": "epoll_release_file 中 epmutex 锁魔数损坏导致用户进程挂起",
+  "kernel_version": "3.13.5",
+  "phenomenon": "- 高负载 Nginx 进程（约 30K 连接）频繁调用 close() 时发生挂起，CPU 占用率极低\n- 内核日志打印 WARNING：`DEBUG_LOCKS_WARN_ON(l->magic != l)`\n- 堆栈信息显示调用路径为 `__mutex_lock_slowpath` -> `mutex_lock` -> `eventpoll_release_file` -> `__fput`\n- 故障进程的 wchan 指向 `epoll_release_file`\n- 测试程序复现：若在未从 epoll 移除 fd 的情况下直接 close()，也会触发相同挂起现象",
+  "root_cause": "怀疑发生内存损坏，导致全局锁 `epmutex` 结构体中的魔数被破坏。内核在 `eventpoll_release_file` 函数中尝试获取 `epmutex` 时，检测到锁魔数异常，触发 `DEBUG_LOCKS_WARN_ON` 告警并导致进程挂起。",
+  "solution": "暂无修复补丁。开发者建议通过开启内核调试选项（如 slab poisoning 和 lock validators）进一步定位内存损坏的具体来源。",
+  "category": "kernel",
+  "source_file": "epoll_release_file 中 epmutex 锁魔数损坏导致用户进程挂起.txt",
+  "content": "内核版本：3.13.5\n\n## 问题现象\n- 高负载 Nginx 进程（约 30K 连接）频繁调用 close() 时发生挂起，CPU 占用率极低\n- 内核日志打印 WARNING：`DEBUG_LOCKS_WARN_ON(l->magic != l)`\n- 堆栈信息显示调用路径为 `__mutex_lock_slowpath` -> `mutex_lock` -> `eventpoll_release_file` -> `__fput`\n- 故障进程的 wchan 指向 `epoll_release_file`\n- 测试程序复现：若在未从 epoll 移除 fd 的情况下直接 close()，也会触发相同挂起现象\n\n## 问题根因\n怀疑发生内存损坏，导致全局锁 `epmutex` 结构体中的魔数被破坏。内核在 `eventpoll_release_file` 函数中尝试获取 `epmutex` 时，检测到锁魔数异常，触发 `DEBUG_LOCKS_WARN_ON` 告警并导致进程挂起。\n\n## 解决方案\n暂无修复补丁。开发者建议通过开启内核调试选项（如 slab poisoning 和 lock validators）进一步定位内存损坏的具体来源。"
+}

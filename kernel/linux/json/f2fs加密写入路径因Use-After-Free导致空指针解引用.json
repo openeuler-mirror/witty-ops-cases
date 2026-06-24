@@ -1,0 +1,10 @@
+{
+  "title": "f2fs加密写入路径因Use-After-Free导致空指针解引用",
+  "kernel_version": "6.12.30-android16",
+  "phenomenon": "- 系统触发 Kernel Panic，日志显示 \"Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000\"。\n- 故障现场 Call trace 显示：`f2fs_is_cp_guaranteed+0x70/0x98` <- `f2fs_merge_page_bio+0x520/0x6d4` <- `wb_workfn`。\n- 故障发生在 f2fs 文件系统的回写工作队列处理过程中。",
+  "root_cause": "在 f2fs 软件加密写入路径中，`f2fs_merge_page_bio` 函数内部使用的 `page` 指针指向 `fio->encrypted_page`（bounce page）。由于逻辑错误，该 bounce page 在使用前可能已被释放（Use-After-Free）。当调用 `f2fs_is_cp_guaranteed` 时，通过 `fscrypt_pagecache_page(page)` 访问已释放的页面结构体导致返回 NULL，进而引发空指针解引用 Panic。",
+  "solution": "修改 `fs/f2fs/data.c` 文件，在 `f2fs_merge_page_bio` 或 `f2fs_submit_page_bio` 函数中，调用 `inc_page_count` 及 `WB_DATA_TYPE` 宏时，使用原始数据页指针（`fio->page` 或 `data_folio`）替代可能已失效的 bounce page 指针。\n参考 Patch：https://git.kernel.org/pub/scm/linux/kernel/git/chao/linux.git/commit/?h=bugfix/syzbot&id=1d024fd4c6fed3767f063db79746bcd2d0be49d1",
+  "category": "kernel",
+  "source_file": "f2fs加密写入路径因Use-After-Free导致空指针解引用.txt",
+  "content": "内核版本：6.12.30-android16\n\n## 问题现象\n- 系统触发 Kernel Panic，日志显示 \"Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000\"。\n- 故障现场 Call trace 显示：`f2fs_is_cp_guaranteed+0x70/0x98` <- `f2fs_merge_page_bio+0x520/0x6d4` <- `wb_workfn`。\n- 故障发生在 f2fs 文件系统的回写工作队列处理过程中。\n\n## 问题根因\n在 f2fs 软件加密写入路径中，`f2fs_merge_page_bio` 函数内部使用的 `page` 指针指向 `fio->encrypted_page`（bounce page）。由于逻辑错误，该 bounce page 在使用前可能已被释放（Use-After-Free）。当调用 `f2fs_is_cp_guaranteed` 时，通过 `fscrypt_pagecache_page(page)` 访问已释放的页面结构体导致返回 NULL，进而引发空指针解引用 Panic。\n\n## 解决方案\n修改 `fs/f2fs/data.c` 文件，在 `f2fs_merge_page_bio` 或 `f2fs_submit_page_bio` 函数中，调用 `inc_page_count` 及 `WB_DATA_TYPE` 宏时，使用原始数据页指针（`fio->page` 或 `data_folio`）替代可能已失效的 bounce page 指针。\n参考 Patch：https://git.kernel.org/pub/scm/linux/kernel/git/chao/linux.git/commit/?h=bugfix/syzbot&id=1d024fd4c6fed3767f063db79746bcd2d0be49d1"
+}

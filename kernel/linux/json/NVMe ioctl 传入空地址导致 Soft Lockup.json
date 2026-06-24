@@ -1,0 +1,10 @@
+{
+  "title": "NVMe ioctl 传入空地址导致 Soft Lockup",
+  "kernel_version": "4.19.90-vhulk2011.1.0.h352.eulerosv2r9.aarch64",
+  "phenomenon": "- 用户程序调用 `NVME_IOCTL_SUBMIT_IO` 接口时，传入参数 `io.addr` 为 0 (null) 且 `length` 为非零值。\n- 系统触发 soft lockup，日志显示 \"soft lockup - CPU#0 stuck for 12s!\"。\n- 伴随 `arm-smmu-v3` 报告 event 0x10 错误。",
+  "root_cause": "- 用户态程序传入了非法参数组合（空地址 + 非零长度），属于接口滥用。\n- NVMe 驱动函数 `nvme_submit_user_cmd` 的逻辑是：若 `ubuffer` 为 NULL，则跳过 `blk_rq_map_user` 映射，直接下发命令（假设无数据载荷）。\n- 硬件尝试访问地址 0 触发 SMMU 错误并导致系统 soft lockup。驱动开发者认为该行为符合设计预期，驱动无法也不应判断用户地址是否合法，需依赖用户正确使用接口。",
+  "solution": "修正用户态程序，确保调用 `NVME_IOCTL_SUBMIT_IO` 时传入有效的缓冲区地址，避免传入空地址。内核层面暂无修复计划。",
+  "category": "kernel",
+  "source_file": "NVMe ioctl 传入空地址导致 Soft Lockup.txt",
+  "content": "内核版本：4.19.90-vhulk2011.1.0.h352.eulerosv2r9.aarch64\n\n## 问题现象\n- 用户程序调用 `NVME_IOCTL_SUBMIT_IO` 接口时，传入参数 `io.addr` 为 0 (null) 且 `length` 为非零值。\n- 系统触发 soft lockup，日志显示 \"soft lockup - CPU#0 stuck for 12s!\"。\n- 伴随 `arm-smmu-v3` 报告 event 0x10 错误。\n\n## 问题根因\n- 用户态程序传入了非法参数组合（空地址 + 非零长度），属于接口滥用。\n- NVMe 驱动函数 `nvme_submit_user_cmd` 的逻辑是：若 `ubuffer` 为 NULL，则跳过 `blk_rq_map_user` 映射，直接下发命令（假设无数据载荷）。\n- 硬件尝试访问地址 0 触发 SMMU 错误并导致系统 soft lockup。驱动开发者认为该行为符合设计预期，驱动无法也不应判断用户地址是否合法，需依赖用户正确使用接口。\n\n## 解决方案\n修正用户态程序，确保调用 `NVME_IOCTL_SUBMIT_IO` 时传入有效的缓冲区地址，避免传入空地址。内核层面暂无修复计划。"
+}

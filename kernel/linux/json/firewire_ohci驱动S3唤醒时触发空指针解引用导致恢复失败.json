@@ -1,0 +1,10 @@
+{
+  "title": "firewire_ohci驱动S3唤醒时触发空指针解引用导致恢复失败",
+  "kernel_version": "6.1.0-9-amd64, 6.3.0-1-amd64, 6.4-rc7 (Debian testing)",
+  "phenomenon": "- 系统无法从 S3 挂起状态正常恢复\n- 内核日志报错：\"BUG: kernel NULL pointer dereference, address: 0000000000000000\"\n- 触发 Oops，Call Trace 指向 `ohci_enable+0x2c7/0x5c0 [firewire_ohci]`，调用链为 `pci_resume -> ohci_enable`",
+  "root_cause": "在 `firewire_ohci` 驱动的 S3 恢复流程中，`ohci_enable` 函数尝试读取 `ohci->config_rom` 指针指向的内容。该指针为 NULL，原因是中断处理程序 `irq_handler` 在恢复阶段获取到的 irq mask 为 0，导致未调用 `ar_context_init` 函数来初始化 `config_rom` 和 `config_rom_bus` 指针。访问未初始化的空指针导致内核崩溃。",
+  "solution": "暂无官方合并修复。\n临时规避方法：在系统挂起前执行 `rmmod firewire_ohci` 移除驱动。\n测试补丁方案：在 `ohci_enable` 函数中增加对 `ohci->config_rom` 和 `ohci->config_rom_bus` 的非空检查，若为空则返回 -EIO 并打印错误日志，可防止系统挂起。",
+  "category": "kernel",
+  "source_file": "firewire_ohci驱动S3唤醒时触发空指针解引用导致恢复失败.txt",
+  "content": "内核版本：6.1.0-9-amd64, 6.3.0-1-amd64, 6.4-rc7 (Debian testing)\n\n## 问题现象\n- 系统无法从 S3 挂起状态正常恢复\n- 内核日志报错：\"BUG: kernel NULL pointer dereference, address: 0000000000000000\"\n- 触发 Oops，Call Trace 指向 `ohci_enable+0x2c7/0x5c0 [firewire_ohci]`，调用链为 `pci_resume -> ohci_enable`\n\n## 问题根因\n在 `firewire_ohci` 驱动的 S3 恢复流程中，`ohci_enable` 函数尝试读取 `ohci->config_rom` 指针指向的内容。该指针为 NULL，原因是中断处理程序 `irq_handler` 在恢复阶段获取到的 irq mask 为 0，导致未调用 `ar_context_init` 函数来初始化 `config_rom` 和 `config_rom_bus` 指针。访问未初始化的空指针导致内核崩溃。\n\n## 解决方案\n暂无官方合并修复。\n临时规避方法：在系统挂起前执行 `rmmod firewire_ohci` 移除驱动。\n测试补丁方案：在 `ohci_enable` 函数中增加对 `ohci->config_rom` 和 `ohci->config_rom_bus` 的非空检查，若为空则返回 -EIO 并打印错误日志，可防止系统挂起。"
+}
