@@ -1,0 +1,10 @@
+{
+  "title": "RAID1 驱动 unplug 流程缺失 wake_up 导致 I/O 挂起",
+  "kernel_version": "3.7",
+  "phenomenon": "- 访问 RAID1 卷时进程进入不可中断睡眠（D 状态），导致系统挂起\n- 内核日志报错 \"INFO: task blocked for more than 120 seconds\"\n- 故障进程堆栈显示阻塞在 `md_write_start` 或 `raise_barrier` 函数中\n- 该问题为 3.7 内核引入的回归故障，在 3.3.6 版本中未出现",
+  "root_cause": "开发者 分析指出，`drivers/md/raid1.c` 中的 `raid1_unplug` 函数在处理 I/O 队列时，将 pending bio 列表合并后，未调用 `wake_up(&conf->wait_barrier)`。这导致等待屏障的线程无法被唤醒，`md_write_start` 在等待元数据更新（记录阵列 dirty 状态）时陷入无限等待，从而阻塞 I/O 路径。",
+  "solution": "开发者提供了修复补丁，在 `drivers/md/raid1.c` 的 `raid1_unplug` 函数中添加 `wake_up(&conf->wait_barrier);` 调用。用户反馈应用该补丁后仍有复发现象，Bug 状态为 ASSIGNED，暂无最终合并信息。",
+  "category": "kernel",
+  "source_file": "RAID1 驱动 unplug 流程缺失 wake_up 导致 I_O 挂起.txt",
+  "content": "内核版本：3.7\n\n## 问题现象\n- 访问 RAID1 卷时进程进入不可中断睡眠（D 状态），导致系统挂起\n- 内核日志报错 \"INFO: task blocked for more than 120 seconds\"\n- 故障进程堆栈显示阻塞在 `md_write_start` 或 `raise_barrier` 函数中\n- 该问题为 3.7 内核引入的回归故障，在 3.3.6 版本中未出现\n\n## 问题根因\n开发者 分析指出，`drivers/md/raid1.c` 中的 `raid1_unplug` 函数在处理 I/O 队列时，将 pending bio 列表合并后，未调用 `wake_up(&conf->wait_barrier)`。这导致等待屏障的线程无法被唤醒，`md_write_start` 在等待元数据更新（记录阵列 dirty 状态）时陷入无限等待，从而阻塞 I/O 路径。\n\n## 解决方案\n开发者提供了修复补丁，在 `drivers/md/raid1.c` 的 `raid1_unplug` 函数中添加 `wake_up(&conf->wait_barrier);` 调用。用户反馈应用该补丁后仍有复发现象，Bug 状态为 ASSIGNED，暂无最终合并信息。"
+}

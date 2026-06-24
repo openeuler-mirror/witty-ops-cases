@@ -1,0 +1,10 @@
+{
+  "title": "连续OOM Killer事件导致内核死锁",
+  "kernel_version": "3.10.53",
+  "phenomenon": "- 内核发生死锁\n- 系统在持有 tasklist_lock 锁的情况下陷入无限循环\n- 遍历 task_struct->thread_group 链表时，遇到成员 t->next = t 的异常状态",
+  "root_cause": "当连续发生 OOM Killer 事件时，内核选中一个进程进行 kill 并向其发送 SIGKILL 信号。若此时再次触发 OOM，内核可能选中同一进程中的其他线程。由于前一次 kill 操作尚未完成清理，thread_group 链表处于中间状态（如 t->next = t），导致在持有 tasklist_lock 锁的情况下遍历链表时陷入无限循环，从而引发内核死锁。",
+  "solution": "建议修改 mm/oom_kill.c 中的逻辑，在选中进程的所有线程上设置 TIF_MEMDIE 标志，而不仅仅是选中的那个线程，从而防止该进程被重复选中导致链表遍历异常。目前 Bug 状态为 NEW，暂无官方合并修复记录。",
+  "category": "kernel",
+  "source_file": "连续OOM Killer事件导致内核死锁.txt",
+  "content": "内核版本：3.10.53\n\n## 问题现象\n- 内核发生死锁\n- 系统在持有 tasklist_lock 锁的情况下陷入无限循环\n- 遍历 task_struct->thread_group 链表时，遇到成员 t->next = t 的异常状态\n\n## 问题根因\n当连续发生 OOM Killer 事件时，内核选中一个进程进行 kill 并向其发送 SIGKILL 信号。若此时再次触发 OOM，内核可能选中同一进程中的其他线程。由于前一次 kill 操作尚未完成清理，thread_group 链表处于中间状态（如 t->next = t），导致在持有 tasklist_lock 锁的情况下遍历链表时陷入无限循环，从而引发内核死锁。\n\n## 解决方案\n建议修改 mm/oom_kill.c 中的逻辑，在选中进程的所有线程上设置 TIF_MEMDIE 标志，而不仅仅是选中的那个线程，从而防止该进程被重复选中导致链表遍历异常。目前 Bug 状态为 NEW，暂无官方合并修复记录。"
+}

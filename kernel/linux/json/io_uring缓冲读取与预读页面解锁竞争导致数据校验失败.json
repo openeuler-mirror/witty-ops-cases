@@ -1,0 +1,10 @@
+{
+  "title": "io_uring缓冲读取与预读页面解锁竞争导致数据校验失败",
+  "kernel_version": "xfs-linux xfs-5.9-merge-7 + v5.8-rc4",
+  "phenomenon": "- 使用 fio 工具配合 io_uring 引擎进行读写校验测试时，频繁出现 CRC32c 校验失败。\n- 读取到的数据包含错误偏移量的陈旧数据，但磁盘上的数据本身是正确的，表明问题发生在 Page Cache 层面。\n- 该问题在 XFS 和 btrfs 文件系统上均可复现。",
+  "root_cause": "io_uring 在处理缓冲读取时存在竞争条件。当执行预读操作时，io_uring 的等待逻辑会在第一个页面解锁时被唤醒。然而，预读可能涉及多个页面，且可能分为多个 bio 提交，io_uring worker 被唤醒时，I/O 范围内的其他页面可能仍处于锁定状态或 I/O 未完成。此时 io_uring 重新运行 IOCB_NOWAIT|IOCB_WAITQ 类型的 I/O，导致读取到未更新的数据或发生短读。该问题引入于 commit f67676d160c6ee2ed82917fadfed6d29cab8237c。",
+  "solution": "暂无已合并的修复补丁。开发者讨论指出，io_uring 缓冲读取逻辑需改进，应等待 I/O 范围内所有页面均标记为 uptodate 并解锁后再进行读取，或在内部对短读情况进行重试。",
+  "category": "kernel",
+  "source_file": "io_uring缓冲读取与预读页面解锁竞争导致数据校验失败.txt",
+  "content": "内核版本：xfs-linux xfs-5.9-merge-7 + v5.8-rc4\n\n## 问题现象\n- 使用 fio 工具配合 io_uring 引擎进行读写校验测试时，频繁出现 CRC32c 校验失败。\n- 读取到的数据包含错误偏移量的陈旧数据，但磁盘上的数据本身是正确的，表明问题发生在 Page Cache 层面。\n- 该问题在 XFS 和 btrfs 文件系统上均可复现。\n\n## 问题根因\nio_uring 在处理缓冲读取时存在竞争条件。当执行预读操作时，io_uring 的等待逻辑会在第一个页面解锁时被唤醒。然而，预读可能涉及多个页面，且可能分为多个 bio 提交，io_uring worker 被唤醒时，I/O 范围内的其他页面可能仍处于锁定状态或 I/O 未完成。此时 io_uring 重新运行 IOCB_NOWAIT|IOCB_WAITQ 类型的 I/O，导致读取到未更新的数据或发生短读。该问题引入于 commit f67676d160c6ee2ed82917fadfed6d29cab8237c。\n\n## 解决方案\n暂无已合并的修复补丁。开发者讨论指出，io_uring 缓冲读取逻辑需改进，应等待 I/O 范围内所有页面均标记为 uptodate 并解锁后再进行读取，或在内部对短读情况进行重试。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "vhost_net零拷贝缺陷导致虚拟机关机时进程挂起",
+  "kernel_version": "4.14-rc8",
+  "phenomenon": "- 关闭 KVM 虚拟机时，qemu-system-x86 进程进入 D 状态（不可中断睡眠）超过 120 秒，导致虚拟机无法正常关机，只能通过重启宿主机恢复。\n- 内核日志报错：\"INFO: task qemu-system-x86 blocked for more than 120 seconds\"。\n- 进程堆栈显示阻塞在 `vhost_net_ubuf_put_and_wait` 函数。",
+  "root_cause": "引入 commit `3ece782693c4b` (\"sock: skb_copy_ubufs support for compound pages\") 后，`skb_copy_ubufs` 函数新增了对 `skb_shared` 和 `skb_unclone` 的前置检查。当检查失败时函数直接返回 `-EINVAL`，但该错误路径未正确处理缓冲区释放逻辑，导致 `vhost_net_ubuf_put_and_wait` 永远无法等到释放信号从而无限期阻塞。",
+  "solution": "- 临时规避：禁用 vhost_net 的零拷贝发送功能，在 modprobe 配置中添加 `options vhost_net experimental_zcopytx=0`。\n- 永久修复：应用补丁 \"skbuff: orphan frags before zerocopy clone\" (commit `268b790679422a89e9ab0685d9f291edae780c98`)，该修复已合入 Linux 4.15-rc5 并回移植至 4.14.11。",
+  "category": "kernel",
+  "source_file": "vhost_net零拷贝缺陷导致虚拟机关机时进程挂起.txt",
+  "content": "内核版本：4.14-rc8\n\n## 问题现象\n- 关闭 KVM 虚拟机时，qemu-system-x86 进程进入 D 状态（不可中断睡眠）超过 120 秒，导致虚拟机无法正常关机，只能通过重启宿主机恢复。\n- 内核日志报错：\"INFO: task qemu-system-x86 blocked for more than 120 seconds\"。\n- 进程堆栈显示阻塞在 `vhost_net_ubuf_put_and_wait` 函数。\n\n## 问题根因\n引入 commit `3ece782693c4b` (\"sock: skb_copy_ubufs support for compound pages\") 后，`skb_copy_ubufs` 函数新增了对 `skb_shared` 和 `skb_unclone` 的前置检查。当检查失败时函数直接返回 `-EINVAL`，但该错误路径未正确处理缓冲区释放逻辑，导致 `vhost_net_ubuf_put_and_wait` 永远无法等到释放信号从而无限期阻塞。\n\n## 解决方案\n- 临时规避：禁用 vhost_net 的零拷贝发送功能，在 modprobe 配置中添加 `options vhost_net experimental_zcopytx=0`。\n- 永久修复：应用补丁 \"skbuff: orphan frags before zerocopy clone\" (commit `268b790679422a89e9ab0685d9f291edae780c98`)，该修复已合入 Linux 4.15-rc5 并回移植至 4.14.11。"
+}

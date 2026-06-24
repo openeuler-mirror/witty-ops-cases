@@ -1,0 +1,10 @@
+{
+  "title": "RTL8411B读卡器访问SDXC卡时触发Intel IOMMU警告",
+  "kernel_version": "5.9.6",
+  "phenomenon": "- 插入 UHS-1 SDXC 卡时，dmesg 持续报错 \"mmc0: cannot verify signal voltage switch\"。\n- 内核触发 WARNING：`WARNING: CPU: 1 PID: 269 at drivers/iommu/intel/iommu.c:2370 __domain_mapping.cold+0x46/0x4d`。\n- DMAR 日志显示错误：`DMAR: ERROR: DMA PTE for vPFN 0xffed3 already set (to 331b2b002 not 331b2b002)`。\n- Call Trace 显示调用链为：`sdmmc_request` -> `dma_map_sg_attrs` -> `intel_map_sg` -> `domain_mapping`。\n- 故障循环重复直到拔出 SD 卡。",
+  "root_cause": "在 `drivers/iommu/intel/iommu.c` 的 `__domain_mapping` 函数中，代码使用 `cmpxchg64_local` 检查 DMA PTE 条目是否为 0。如果非 0（即已设置），则触发 WARN_ON。日志显示 PTE 已设置的值与新值相同（\"to X not X\"），表明是对已映射的地址进行了重复映射操作，或者警告逻辑在值相同时不应触发。",
+  "solution": "开发者建议临时规避方案：修改 `drivers/iommu/intel/iommu.c` 中的判断条件，将 `if (tmp)` 改为 `if (tmp && tmp != (uint64_t)pteval)`，以消除当旧值与新值相同时的无意义警告。目前尚无正式补丁合并。",
+  "category": "kernel",
+  "source_file": "RTL8411B读卡器访问SDXC卡时触发Intel IOMMU警告.txt",
+  "content": "内核版本：5.9.6\n\n## 问题现象\n- 插入 UHS-1 SDXC 卡时，dmesg 持续报错 \"mmc0: cannot verify signal voltage switch\"。\n- 内核触发 WARNING：`WARNING: CPU: 1 PID: 269 at drivers/iommu/intel/iommu.c:2370 __domain_mapping.cold+0x46/0x4d`。\n- DMAR 日志显示错误：`DMAR: ERROR: DMA PTE for vPFN 0xffed3 already set (to 331b2b002 not 331b2b002)`。\n- Call Trace 显示调用链为：`sdmmc_request` -> `dma_map_sg_attrs` -> `intel_map_sg` -> `domain_mapping`。\n- 故障循环重复直到拔出 SD 卡。\n\n## 问题根因\n在 `drivers/iommu/intel/iommu.c` 的 `__domain_mapping` 函数中，代码使用 `cmpxchg64_local` 检查 DMA PTE 条目是否为 0。如果非 0（即已设置），则触发 WARN_ON。日志显示 PTE 已设置的值与新值相同（\"to X not X\"），表明是对已映射的地址进行了重复映射操作，或者警告逻辑在值相同时不应触发。\n\n## 解决方案\n开发者建议临时规避方案：修改 `drivers/iommu/intel/iommu.c` 中的判断条件，将 `if (tmp)` 改为 `if (tmp && tmp != (uint64_t)pteval)`，以消除当旧值与新值相同时的无意义警告。目前尚无正式补丁合并。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "USB错误恢复期间sysfs read_descriptors阻塞导致应用挂起",
+  "kernel_version": "3.13 至 4.3.2",
+  "phenomenon": "- 读取 `/sys/bus/usb/devices/.../descriptors` 文件时，进程挂起长达 30 秒。\n- 嵌入式系统中，应用因读取 sysfs 线程阻塞无法在规定时间（如 25 秒）内完成初始化，导致系统触发受控重启。\n- dmesg 日志显示 `read_descriptors` 尝试获取锁时被阻塞，同时 `hub_event` 正在进行 USB 通信重试。",
+  "root_cause": "内核 3.13 引入的提交 `232275a` (\"USB: fix substandard locking for the sysfs files\") 在 `read_descriptors()` 中增加了 `usb_lock_device(udev)` 锁操作。当 USB 设备（如故障 U 盘）通信失败时，`hub_event()` 内的 `hub_port_init()` 会持有设备锁（`hdev`）进行长达 30 秒的错误恢复重试（最多 6 次）。若 `read_descriptors()` 访问的 `udev` 与 `hub_event()` 持有的 `hdev` 相同，则会发生锁竞争，导致 `read_descriptors()` 被阻塞直至错误恢复结束。",
+  "solution": "提议移除 `drivers/usb/core/sysfs.c` 中 `read_descriptors()` 函数内由提交 `232275a` 添加的 `usb_lock_device(udev)` 和 `usb_unlock_device(udev)` 调用。目前 Bug 状态为 NEW，暂无已合并的修复补丁，相关讨论在 linux-usb 邮件列表进行中。",
+  "category": "kernel",
+  "source_file": "USB错误恢复期间sysfs read_descriptors阻塞导致应用挂起.txt",
+  "content": "内核版本：3.13 至 4.3.2\n\n## 问题现象\n- 读取 `/sys/bus/usb/devices/.../descriptors` 文件时，进程挂起长达 30 秒。\n- 嵌入式系统中，应用因读取 sysfs 线程阻塞无法在规定时间（如 25 秒）内完成初始化，导致系统触发受控重启。\n- dmesg 日志显示 `read_descriptors` 尝试获取锁时被阻塞，同时 `hub_event` 正在进行 USB 通信重试。\n\n## 问题根因\n内核 3.13 引入的提交 `232275a` (\"USB: fix substandard locking for the sysfs files\") 在 `read_descriptors()` 中增加了 `usb_lock_device(udev)` 锁操作。当 USB 设备（如故障 U 盘）通信失败时，`hub_event()` 内的 `hub_port_init()` 会持有设备锁（`hdev`）进行长达 30 秒的错误恢复重试（最多 6 次）。若 `read_descriptors()` 访问的 `udev` 与 `hub_event()` 持有的 `hdev` 相同，则会发生锁竞争，导致 `read_descriptors()` 被阻塞直至错误恢复结束。\n\n## 解决方案\n提议移除 `drivers/usb/core/sysfs.c` 中 `read_descriptors()` 函数内由提交 `232275a` 添加的 `usb_lock_device(udev)` 和 `usb_unlock_device(udev)` 调用。目前 Bug 状态为 NEW，暂无已合并的修复补丁，相关讨论在 linux-usb 邮件列表进行中。"
+}

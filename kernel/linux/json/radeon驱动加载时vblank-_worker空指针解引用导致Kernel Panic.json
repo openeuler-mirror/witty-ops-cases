@@ -1,0 +1,10 @@
+{
+  "title": "radeon驱动加载时vblank->worker空指针解引用导致Kernel Panic",
+  "kernel_version": "6.4.3（回归引入于 5.19）",
+  "phenomenon": "- 在 32 位（i586）系统上加载 radeon.ko 模块时触发 Kernel Panic。\n- 日志显示 \"BUG: kernel NULL pointer dereference, address: 00000004\"。\n- Call Trace 指向 _raw_spin_lock_irqsave <- kthread_flush_worker <- drm_crtc_vblank_off <- radeon_crtc_dpms。\n- 在慢速机器上，若在 VGA tty1 登录提示出现后、KMS 控制台加载前登录，容易复现此问题。",
+  "root_cause": "回归提交 b39181f7c690 (\"ftrace: Add FTRACE_MCOUNT_MAX_OFFSET to avoid adding weak function\") 导致问题。\n在 drm_crtc_vblank_off 函数调用链中，vblank->worker 指针为 NULL。\n代码执行路径为：drm_crtc_vblank_off -> drm_vblank_flush_worker -> kthread_flush_worker -> kthread_queue_work。\nkthread_queue_work 函数试图对 NULL 指针解引用以获取锁：raw_spin_lock_irqsave(&worker->lock, flags)，由于 worker 为 NULL，访问偏移量 0x04 处的 lock 成员导致 Oops。",
+  "solution": "暂无官方修复。报告者尝试了补丁（附件 304625）在 5.18 版本有效，但在 6.4.3 无效；另一补丁（附件 304626）在 drm_vblank_flush_worker 中增加 NULL 检查可避免 Panic 但会产生警告，问题尚待社区进一步分析。",
+  "category": "kernel",
+  "source_file": "radeon驱动加载时vblank-_worker空指针解引用导致Kernel Panic.txt",
+  "content": "内核版本：6.4.3（回归引入于 5.19）\n\n## 问题现象\n- 在 32 位（i586）系统上加载 radeon.ko 模块时触发 Kernel Panic。\n- 日志显示 \"BUG: kernel NULL pointer dereference, address: 00000004\"。\n- Call Trace 指向 _raw_spin_lock_irqsave <- kthread_flush_worker <- drm_crtc_vblank_off <- radeon_crtc_dpms。\n- 在慢速机器上，若在 VGA tty1 登录提示出现后、KMS 控制台加载前登录，容易复现此问题。\n\n## 问题根因\n回归提交 b39181f7c690 (\"ftrace: Add FTRACE_MCOUNT_MAX_OFFSET to avoid adding weak function\") 导致问题。\n在 drm_crtc_vblank_off 函数调用链中，vblank->worker 指针为 NULL。\n代码执行路径为：drm_crtc_vblank_off -> drm_vblank_flush_worker -> kthread_flush_worker -> kthread_queue_work。\nkthread_queue_work 函数试图对 NULL 指针解引用以获取锁：raw_spin_lock_irqsave(&worker->lock, flags)，由于 worker 为 NULL，访问偏移量 0x04 处的 lock 成员导致 Oops。\n\n## 解决方案\n暂无官方修复。报告者尝试了补丁（附件 304625）在 5.18 版本有效，但在 6.4.3 无效；另一补丁（附件 304626）在 drm_vblank_flush_worker 中增加 NULL 检查可避免 Panic 但会产生警告，问题尚待社区进一步分析。"
+}

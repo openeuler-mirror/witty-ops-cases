@@ -1,0 +1,10 @@
+{
+  "title": "mpt2sas驱动setpci重置时因资源竞争导致内核Oops",
+  "kernel_version": "3.19.1",
+  "phenomenon": "- 在对 LSI/SEAGATE Nytro Warpdrive Flash 卡执行 setpci reset 操作时触发 kernel oops。\n- 并发场景包括：运行 ioctl 命令、访问 sysfs 路径下的 BRM_status 或执行 dd I/O。\n- 日志显示 \"BUG: unable to handle kernel paging request\"，调用栈指向 `mpt2sas_base_get_iocstate` 函数。",
+  "root_cause": "setpci reset 操作导致驱动检测到设备故障并调用 `_scsih_remove` 移除设备，该过程会通过 `mpt2sas_base_free_resources` 执行 `iounmap(ioc->chip)` 释放 PCI 资源。此时，ioctl 或 sysfs 访问路径未与设备移除过程同步，尝试访问已释放的内存地址（如调用 `mpt2sas_base_get_iocstate` 读取 Doorbell 寄存器），从而触发 kernel paging request 错误。",
+  "solution": "开发者提供了补丁，通过互斥锁和自旋锁保护控制器链表，实现了 CLI、BRM 状态显示与 PCI 资源移除路径之间的同步，防止资源竞争。",
+  "category": "kernel",
+  "source_file": "mpt2sas驱动setpci重置时因资源竞争导致内核Oops.txt",
+  "content": "内核版本：3.19.1\n\n## 问题现象\n- 在对 LSI/SEAGATE Nytro Warpdrive Flash 卡执行 setpci reset 操作时触发 kernel oops。\n- 并发场景包括：运行 ioctl 命令、访问 sysfs 路径下的 BRM_status 或执行 dd I/O。\n- 日志显示 \"BUG: unable to handle kernel paging request\"，调用栈指向 `mpt2sas_base_get_iocstate` 函数。\n\n## 问题根因\nsetpci reset 操作导致驱动检测到设备故障并调用 `_scsih_remove` 移除设备，该过程会通过 `mpt2sas_base_free_resources` 执行 `iounmap(ioc->chip)` 释放 PCI 资源。此时，ioctl 或 sysfs 访问路径未与设备移除过程同步，尝试访问已释放的内存地址（如调用 `mpt2sas_base_get_iocstate` 读取 Doorbell 寄存器），从而触发 kernel paging request 错误。\n\n## 解决方案\n开发者提供了补丁，通过互斥锁和自旋锁保护控制器链表，实现了 CLI、BRM 状态显示与 PCI 资源移除路径之间的同步，防止资源竞争。"
+}

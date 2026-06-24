@@ -1,0 +1,10 @@
+{
+  "title": "内存回收流程中mem_cgroup_node_nr_lru_pages空指针解引用导致系统崩溃",
+  "kernel_version": "4.8.10",
+  "phenomenon": "- 系统启动后偶发（约1/30概率）内核崩溃。\n- 控制台打印 \"BUG: unable to handle kernel NULL pointer dereference at 0000000000000400\"。\n- RIP 寄存器指向 `mem_cgroup_node_nr_lru_pages+0x20/0x40`。\n- Call Trace 显示调用链为：`count_shadow_nodes` -> `shrink_slab` -> `shrink_node` -> `kswapd`。\n- 故障发生后系统出现大量 soft lockups，变得不可用。",
+  "root_cause": "在 `mm/workingset.c` 的 `count_shadow_nodes` 函数中，代码仅检查 `memcg_kmem_enabled()` 即调用 `mem_cgroup_node_nr_lru_pages(sc->memcg, ...)`。在全局回收（global reclaim）场景下，`sc->memcg` 指针为 NULL。若存在竞态条件导致 kmem accounting 状态判断与实际执行时的上下文不一致，代码会向 `mem_cgroup_node_nr_lru_pages` 传入 NULL 指针，从而触发空指针解引用。",
+  "solution": "修改 `mm/workingset.c` 中的判断逻辑，增加对 `sc->memcg` 是否为空的检查。将条件 `if (memcg_kmem_enabled())` 修改为 `if (memcg_kmem_enabled() && sc->memcg)`，确保在全局回收场景下不访问空指针。该补丁经报告者测试验证可修复此问题。",
+  "category": "kernel",
+  "source_file": "内存回收流程中mem_cgroup_node_nr_lru_pages空指针解引用导致系统崩溃.txt",
+  "content": "内核版本：4.8.10\n\n## 问题现象\n- 系统启动后偶发（约1/30概率）内核崩溃。\n- 控制台打印 \"BUG: unable to handle kernel NULL pointer dereference at 0000000000000400\"。\n- RIP 寄存器指向 `mem_cgroup_node_nr_lru_pages+0x20/0x40`。\n- Call Trace 显示调用链为：`count_shadow_nodes` -> `shrink_slab` -> `shrink_node` -> `kswapd`。\n- 故障发生后系统出现大量 soft lockups，变得不可用。\n\n## 问题根因\n在 `mm/workingset.c` 的 `count_shadow_nodes` 函数中，代码仅检查 `memcg_kmem_enabled()` 即调用 `mem_cgroup_node_nr_lru_pages(sc->memcg, ...)`。在全局回收（global reclaim）场景下，`sc->memcg` 指针为 NULL。若存在竞态条件导致 kmem accounting 状态判断与实际执行时的上下文不一致，代码会向 `mem_cgroup_node_nr_lru_pages` 传入 NULL 指针，从而触发空指针解引用。\n\n## 解决方案\n修改 `mm/workingset.c` 中的判断逻辑，增加对 `sc->memcg` 是否为空的检查。将条件 `if (memcg_kmem_enabled())` 修改为 `if (memcg_kmem_enabled() && sc->memcg)`，确保在全局回收场景下不访问空指针。该补丁经报告者测试验证可修复此问题。"
+}

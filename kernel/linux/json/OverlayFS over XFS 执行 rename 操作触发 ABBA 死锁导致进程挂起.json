@@ -1,0 +1,10 @@
+{
+  "title": "OverlayFS over XFS 执行 rename 操作触发 ABBA 死锁导致进程挂起",
+  "kernel_version": "5.10.0（受影响版本包括 5.4, 5.5, 5.8, 5.9）",
+  "phenomenon": "在 XFS 文件系统上使用 OverlayFS 的容器环境中，并发执行文件 rename 操作（如 `mv` 命令）时，相关进程进入不可中断睡眠状态（D 状态），系统发生死锁。\n- 进程堆栈显示阻塞在 `xfs_buf_lock` -> `schedule_timeout`。\n- 调用链涉及 `xfs_iunlink` -> `xfs_droplink` -> `xfs_rename` -> `ovl_do_rename`。\n- 通过 crash 工具分析发现多个 `mv` 进程之间存在循环等待锁的情况（例如 PID 38029 等待 PID 38030 持有的锁，而 PID 38030 等待 PID 38029 持有的锁）。",
+  "root_cause": "在 OverlayFS 叠加 XFS 的场景下，rename 操作触发了 XFS 内部的 ABBA 死锁。具体原因为多个进程在执行 `xfs_iunlink_remove` 或 `xfs_iunlink` 时，对 AGI 缓冲区锁（`xfs_buf` lock）的获取顺序不一致，导致进程间互锁。",
+  "solution": "开发者已在邮件列表中定位根因并确认修复方案，待发布正式补丁。\n参考链接：https://lore.kernel.org/linux-xfs/20201217211117.GF38809@magnolia/",
+  "category": "kernel",
+  "source_file": "OverlayFS over XFS 执行 rename 操作触发 ABBA 死锁导致进程挂起.txt",
+  "content": "内核版本：5.10.0（受影响版本包括 5.4, 5.5, 5.8, 5.9）\n\n## 问题现象\n在 XFS 文件系统上使用 OverlayFS 的容器环境中，并发执行文件 rename 操作（如 `mv` 命令）时，相关进程进入不可中断睡眠状态（D 状态），系统发生死锁。\n- 进程堆栈显示阻塞在 `xfs_buf_lock` -> `schedule_timeout`。\n- 调用链涉及 `xfs_iunlink` -> `xfs_droplink` -> `xfs_rename` -> `ovl_do_rename`。\n- 通过 crash 工具分析发现多个 `mv` 进程之间存在循环等待锁的情况（例如 PID 38029 等待 PID 38030 持有的锁，而 PID 38030 等待 PID 38029 持有的锁）。\n\n## 问题根因\n在 OverlayFS 叠加 XFS 的场景下，rename 操作触发了 XFS 内部的 ABBA 死锁。具体原因为多个进程在执行 `xfs_iunlink_remove` 或 `xfs_iunlink` 时，对 AGI 缓冲区锁（`xfs_buf` lock）的获取顺序不一致，导致进程间互锁。\n\n## 解决方案\n开发者已在邮件列表中定位根因并确认修复方案，待发布正式补丁。\n参考链接：https://lore.kernel.org/linux-xfs/20201217211117.GF38809@magnolia/"
+}

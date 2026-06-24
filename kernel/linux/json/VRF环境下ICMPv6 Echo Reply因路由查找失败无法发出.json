@@ -1,0 +1,10 @@
+{
+  "title": "VRF环境下ICMPv6 Echo Reply因路由查找失败无法发出",
+  "kernel_version": "4.14.28",
+  "phenomenon": "在配置了VRF设备的网络环境中，当收到源地址为IPv6 Global、目的地址为IPv6 Link Local的ICMPv6 Echo Request报文时，内核生成的Echo Reply报文无法发出。路由查找函数 `ip6_dst_lookup` 失败，报文被丢弃。",
+  "root_cause": "当入接口被绑定到VRF设备时，`icmpv6_echo_reply` 函数将 `skb->dev`（即VRF设备）的索引赋值给 `flowi6_oif`。在后续路由查找流程 `ip6_dst_lookup` -> `vrf_link_scope_lookup` 中，代码检测到 `flowi6_oif` 为VRF设备索引，直接返回 `ip6_null_entry` 导致路由查找失败。该逻辑未正确区分源地址为Global、目的地址为Link Local的特殊场景，错误地拦截了本应发出的回显报文。",
+  "solution": "暂无已合并的修复补丁。讨论中提出的修复思路是在 `vrf_link_scope_lookup` 函数中增加 `rt6_need_strict` 检查条件，并在满足条件时设置 `FLOWI_FLAG_SKIP_NH_OIF` 标志，以跳过下一跳VRF接口限制，允许路由查找继续进行。",
+  "category": "kernel",
+  "source_file": "VRF环境下ICMPv6 Echo Reply因路由查找失败无法发出.txt",
+  "content": "内核版本：4.14.28\n\n## 问题现象\n在配置了VRF设备的网络环境中，当收到源地址为IPv6 Global、目的地址为IPv6 Link Local的ICMPv6 Echo Request报文时，内核生成的Echo Reply报文无法发出。路由查找函数 `ip6_dst_lookup` 失败，报文被丢弃。\n\n## 问题根因\n当入接口被绑定到VRF设备时，`icmpv6_echo_reply` 函数将 `skb->dev`（即VRF设备）的索引赋值给 `flowi6_oif`。在后续路由查找流程 `ip6_dst_lookup` -> `vrf_link_scope_lookup` 中，代码检测到 `flowi6_oif` 为VRF设备索引，直接返回 `ip6_null_entry` 导致路由查找失败。该逻辑未正确区分源地址为Global、目的地址为Link Local的特殊场景，错误地拦截了本应发出的回显报文。\n\n## 解决方案\n暂无已合并的修复补丁。讨论中提出的修复思路是在 `vrf_link_scope_lookup` 函数中增加 `rt6_need_strict` 检查条件，并在满足条件时设置 `FLOWI_FLAG_SKIP_NH_OIF` 标志，以跳过下一跳VRF接口限制，允许路由查找继续进行。"
+}

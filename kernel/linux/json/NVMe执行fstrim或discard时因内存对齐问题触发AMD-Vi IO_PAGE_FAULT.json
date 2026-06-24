@@ -1,0 +1,10 @@
+{
+  "title": "NVMe执行fstrim或discard时因内存对齐问题触发AMD-Vi IO_PAGE_FAULT",
+  "kernel_version": "4.20.12（受影响版本包括 5.0.x 至 5.3.x）",
+  "phenomenon": "- 系统日志中大量打印 `AMD-Vi: Event logged [IO_PAGE_FAULT device=XX:XX.X domain=0x0000 address=...]` 错误信息。\n- 在 AMD Ryzen/Threadripper 平台上，对特定型号 NVMe SSD（如 Corsair MP510, Intel 600p, Crucial P1 等）执行 `fstrim` 操作或挂载文件系统使用 `discard` 选项时触发故障。\n- `fstrim` 命令执行失败并报 I/O 错误。\n- 使用内核启动参数 `iommu=soft` 或 `iommu=pt` 可规避该问题。",
+  "root_cause": "NVMe 驱动在 `nvme_setup_discard` 函数中通过 `kmalloc_array` 为 Dataset Management 命令分配数据缓冲区时，未强制要求内存页对齐。部分 NVMe 控制器固件（如 Phison E12 控制器）存在缺陷，要求 PRP（Physical Region Page）列表中的数据缓冲区必须页对齐。当分配的内存未对齐时，控制器错误地解析 PRP1 中的偏移量并尝试访问无效的 PRP2 地址，导致 DMA 操作越界，从而在硬件 IOMMU（AMD-Vi）开启时触发 IO_PAGE_FAULT。",
+  "solution": "规避方案：在内核启动参数中添加 `iommu=pt` 或 `iommu=soft`。\n修复方案：修改 `drivers/nvme/host/core.c` 中的内存分配逻辑，将 `kmalloc_array` 的分配大小向上对齐到 `PAGE_SIZE`，确保缓冲区页对齐；或针对受影响的设备添加 `NVME_QUIRK_DISCARD_ALIGN_TO_PAGE_SIZE` quirk 标志。社区已提供相关补丁进行测试验证。",
+  "category": "kernel",
+  "source_file": "NVMe执行fstrim或discard时因内存对齐问题触发AMD-Vi IO_PAGE_FAULT.txt",
+  "content": "内核版本：4.20.12（受影响版本包括 5.0.x 至 5.3.x）\n\n## 问题现象\n- 系统日志中大量打印 `AMD-Vi: Event logged [IO_PAGE_FAULT device=XX:XX.X domain=0x0000 address=...]` 错误信息。\n- 在 AMD Ryzen/Threadripper 平台上，对特定型号 NVMe SSD（如 Corsair MP510, Intel 600p, Crucial P1 等）执行 `fstrim` 操作或挂载文件系统使用 `discard` 选项时触发故障。\n- `fstrim` 命令执行失败并报 I/O 错误。\n- 使用内核启动参数 `iommu=soft` 或 `iommu=pt` 可规避该问题。\n\n## 问题根因\nNVMe 驱动在 `nvme_setup_discard` 函数中通过 `kmalloc_array` 为 Dataset Management 命令分配数据缓冲区时，未强制要求内存页对齐。部分 NVMe 控制器固件（如 Phison E12 控制器）存在缺陷，要求 PRP（Physical Region Page）列表中的数据缓冲区必须页对齐。当分配的内存未对齐时，控制器错误地解析 PRP1 中的偏移量并尝试访问无效的 PRP2 地址，导致 DMA 操作越界，从而在硬件 IOMMU（AMD-Vi）开启时触发 IO_PAGE_FAULT。\n\n## 解决方案\n规避方案：在内核启动参数中添加 `iommu=pt` 或 `iommu=soft`。\n修复方案：修改 `drivers/nvme/host/core.c` 中的内存分配逻辑，将 `kmalloc_array` 的分配大小向上对齐到 `PAGE_SIZE`，确保缓冲区页对齐；或针对受影响的设备添加 `NVME_QUIRK_DISCARD_ALIGN_TO_PAGE_SIZE` quirk 标志。社区已提供相关补丁进行测试验证。"
+}

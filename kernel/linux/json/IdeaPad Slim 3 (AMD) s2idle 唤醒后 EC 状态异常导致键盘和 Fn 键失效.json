@@ -1,0 +1,10 @@
+{
+  "title": "IdeaPad Slim 3 (AMD) s2idle 唤醒后 EC 状态异常导致键盘和 Fn 键失效",
+  "kernel_version": "6.17.0-19-generic (upstream 6.17.13)",
+  "phenomenon": "- IdeaPad Slim 3 笔记本（AMD Ryzen 平台）从 s2idle 状态唤醒后，Fn 快捷键（音量、亮度、麦克风静音等）失效，`evtest` 显示 EC 停止将按键翻译为媒体键扫描码，仅发送原始 F 键扫描码。\n- 部分机型（如 16ABR8）唤醒后内置键盘完全无响应，合盖开关（lid switch）事件丢失。\n- `dmesg` 日志中出现 \"atkbd serio0: Failed to deactivate keyboard on isa0060/serio0\" 错误。\n- 对比正常与故障状态日志，故障时 EC 状态寄存器读取值为 `0x40` (SMI_EVT)，而正常状态为 `0x20` (SCI_EVT)，表明 EC 固件状态机异常。",
+  "root_cause": "AMD 平台在 s2idle 挂起流程中存在时序竞争问题。Linux 内核加载 `amd_pmc` 模块后会立即阻塞 EC 中断并进入硬件睡眠，而 EC 固件需要一定时间在轮询模式下完成事务处理并保存状态（如热键处理状态）。\n由于缺乏必要的延时，EC 固件在挂起前未能完成状态保存，导致唤醒后 EC 状态丢失或错乱，无法正确响应键盘事件。相比之下，Windows 在进入硬件睡眠前有较长的静默等待时间，故未触发此问题。",
+  "solution": "- 官方修复：为 `amd_pmc` 驱动添加 quirk 机制，针对受影响的 IdeaPad Slim 3 机型（DMI 匹配 \"82X\" 和 \"83K\" 产品名），在 `amd_pmc_s2idle_check()` 函数中挂起前引入 2.5 秒延时，确保 EC 有足够时间保存状态。相关补丁已提交审核。\n- 临时规避方案：\n  1. 使用 DKMS 模块应用补丁：https://github.com/DanielGibson/amd_pmc-ideapad\n  2. 卸载 `amd_pmc` 模块（会增加待机功耗，不推荐长期使用）。\n  3. 添加内核参数 `i8042.nopnp` 可部分恢复键盘基本功能，但 Fn 键仍失效。",
+  "category": "kernel",
+  "source_file": "IdeaPad Slim 3 (AMD) s2idle 唤醒后 EC 状态异常导致键盘和 Fn 键失效.txt",
+  "content": "内核版本：6.17.0-19-generic (upstream 6.17.13)\n\n## 问题现象\n- IdeaPad Slim 3 笔记本（AMD Ryzen 平台）从 s2idle 状态唤醒后，Fn 快捷键（音量、亮度、麦克风静音等）失效，`evtest` 显示 EC 停止将按键翻译为媒体键扫描码，仅发送原始 F 键扫描码。\n- 部分机型（如 16ABR8）唤醒后内置键盘完全无响应，合盖开关（lid switch）事件丢失。\n- `dmesg` 日志中出现 \"atkbd serio0: Failed to deactivate keyboard on isa0060/serio0\" 错误。\n- 对比正常与故障状态日志，故障时 EC 状态寄存器读取值为 `0x40` (SMI_EVT)，而正常状态为 `0x20` (SCI_EVT)，表明 EC 固件状态机异常。\n\n## 问题根因\nAMD 平台在 s2idle 挂起流程中存在时序竞争问题。Linux 内核加载 `amd_pmc` 模块后会立即阻塞 EC 中断并进入硬件睡眠，而 EC 固件需要一定时间在轮询模式下完成事务处理并保存状态（如热键处理状态）。\n由于缺乏必要的延时，EC 固件在挂起前未能完成状态保存，导致唤醒后 EC 状态丢失或错乱，无法正确响应键盘事件。相比之下，Windows 在进入硬件睡眠前有较长的静默等待时间，故未触发此问题。\n\n## 解决方案\n- 官方修复：为 `amd_pmc` 驱动添加 quirk 机制，针对受影响的 IdeaPad Slim 3 机型（DMI 匹配 \"82X\" 和 \"83K\" 产品名），在 `amd_pmc_s2idle_check()` 函数中挂起前引入 2.5 秒延时，确保 EC 有足够时间保存状态。相关补丁已提交审核。\n- 临时规避方案：\n  1. 使用 DKMS 模块应用补丁：https://github.com/DanielGibson/amd_pmc-ideapad\n  2. 卸载 `amd_pmc` 模块（会增加待机功耗，不推荐长期使用）。\n  3. 添加内核参数 `i8042.nopnp` 可部分恢复键盘基本功能，但 Fn 键仍失效。"
+}

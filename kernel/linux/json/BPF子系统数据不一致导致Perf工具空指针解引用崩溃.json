@@ -1,0 +1,10 @@
+{
+  "title": "BPF子系统数据不一致导致Perf工具空指针解引用崩溃",
+  "kernel_version": "5.15.35",
+  "phenomenon": "- 运行 `perf top` 命令数秒后触发 Segmentation fault。\n- 崩溃堆栈指向 `machine__process_bpf` 函数，具体在调用 `maps__find` 前准备参数阶段。\n- GDB 分析显示崩溃指令为 `mov (%rdx,%rax,8),%rsi`，此时寄存器 `%rdx`（对应 `addrs` 指针）为 0，导致空指针解引用。",
+  "root_cause": "内核 BPF 子系统在特定配置下向用户态返回了不一致的 `bpf_prog_info` 数据：\n1. 当内核未开启 `CONFIG_KALLSYMS` 时，`bpf_dump_raw_ok()` 返回 false，导致 `info.jited_ksyms` 被设置为 NULL。\n2. 同时，若 `prog->aux->func_cnt` 为 0，内核代码逻辑仍会将 `info.nr_jited_ksyms` 设置为 1。\n3. 这种组合导致用户态 Perf 工具认为存在 1 个 ksym 需要处理，但实际指针为空，从而在循环访问时触发崩溃。\n该逻辑缺陷由提交 ff1889fc531f582f902175c0acc80321af540b24 引入。",
+  "solution": "暂无",
+  "category": "kernel",
+  "source_file": "BPF子系统数据不一致导致Perf工具空指针解引用崩溃.txt",
+  "content": "内核版本：5.15.35\n\n## 问题现象\n- 运行 `perf top` 命令数秒后触发 Segmentation fault。\n- 崩溃堆栈指向 `machine__process_bpf` 函数，具体在调用 `maps__find` 前准备参数阶段。\n- GDB 分析显示崩溃指令为 `mov (%rdx,%rax,8),%rsi`，此时寄存器 `%rdx`（对应 `addrs` 指针）为 0，导致空指针解引用。\n\n## 问题根因\n内核 BPF 子系统在特定配置下向用户态返回了不一致的 `bpf_prog_info` 数据：\n1. 当内核未开启 `CONFIG_KALLSYMS` 时，`bpf_dump_raw_ok()` 返回 false，导致 `info.jited_ksyms` 被设置为 NULL。\n2. 同时，若 `prog->aux->func_cnt` 为 0，内核代码逻辑仍会将 `info.nr_jited_ksyms` 设置为 1。\n3. 这种组合导致用户态 Perf 工具认为存在 1 个 ksym 需要处理，但实际指针为空，从而在循环访问时触发崩溃。\n该逻辑缺陷由提交 ff1889fc531f582f902175c0acc80321af540b24 引入。\n\n## 解决方案\n暂无"
+}

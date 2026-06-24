@@ -1,0 +1,10 @@
+{
+  "title": "ext4在线扩容与写入并发导致Use-After-Free引发General Protection Fault",
+  "kernel_version": "5.5",
+  "phenomenon": "在对ext4文件系统分区执行在线扩容的同时进行写入操作时，内核触发general protection fault。故障现场Call Trace显示RIP位于 `ext4_get_group_desc` 函数，调用路径包含 `ext4_writepages` -> `ext4_map_blocks` -> `ext4_mb_new_blocks` 等。",
+  "root_cause": "这是一个并发竞态条件导致的Use-After-Free问题。在线扩容过程中，函数 `add_new_gdb` 会重新分配 `s_group_desc` 指针并释放旧的内存。与此同时，写入路径上的 `ext4_get_group_desc` 函数可能仍在访问已被释放的旧 `s_group_desc` 指针，从而触发general protection fault。类似问题也存在于 `sbi->s_flex_groups` 和 `sbi->s_group_info` 的重分配过程中。",
+  "solution": "提出通过引入RCU锁机制来保护 `s_group_desc`、`s_group_info` 以及 `s_flex_groups` 的访问，确保在扩容重分配期间读取操作的安全性。相关修复补丁已提交至Linux内核邮件列表进行讨论。",
+  "category": "kernel",
+  "source_file": "ext4在线扩容与写入并发导致Use-After-Free引发General Protection Fault.txt",
+  "content": "内核版本：5.5\n\n## 问题现象\n在对ext4文件系统分区执行在线扩容的同时进行写入操作时，内核触发general protection fault。故障现场Call Trace显示RIP位于 `ext4_get_group_desc` 函数，调用路径包含 `ext4_writepages` -> `ext4_map_blocks` -> `ext4_mb_new_blocks` 等。\n\n## 问题根因\n这是一个并发竞态条件导致的Use-After-Free问题。在线扩容过程中，函数 `add_new_gdb` 会重新分配 `s_group_desc` 指针并释放旧的内存。与此同时，写入路径上的 `ext4_get_group_desc` 函数可能仍在访问已被释放的旧 `s_group_desc` 指针，从而触发general protection fault。类似问题也存在于 `sbi->s_flex_groups` 和 `sbi->s_group_info` 的重分配过程中。\n\n## 解决方案\n提出通过引入RCU锁机制来保护 `s_group_desc`、`s_group_info` 以及 `s_flex_groups` 的访问，确保在扩容重分配期间读取操作的安全性。相关修复补丁已提交至Linux内核邮件列表进行讨论。"
+}

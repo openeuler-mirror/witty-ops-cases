@@ -1,0 +1,10 @@
+{
+  "title": "网络速率高于磁盘写入速率导致进程陷入不可中断睡眠",
+  "kernel_version": "6.6.32-production+truenas",
+  "phenomenon": "- 进程（如 smbd, vzdump）进入不可中断睡眠状态（D state），无法响应 SIGKILL 信号。\n- 内核日志报告任务阻塞超过 604 秒。\n- Call Trace 显示进程卡在 `io_wq_put_and_exit` -> `wait_for_completion` 或 `cifs_unlink` 处。\n- 在 NFS 场景下，虚拟机内部出现 RCU stall 和 soft lockup 现象。",
+  "root_cause": "当网络传输速率远高于磁盘写入速率时，I/O 请求堆积导致内核子系统处理阻塞。具体表现为：进程在退出阶段执行 `io_uring` 资源清理（`io_uring_cancel_generic` -> `io_wq_put_and_exit`）时等待 completion 超时，或在执行文件删除操作时卡在 CIFS 模块的 `cifs_unlink` 函数中，导致进程无法调度返回用户态。",
+  "solution": "暂无官方修复。针对 SMB 场景，可尝试在配置中设置 `aio write size = 0` 和 `oplocks = No` 以规避部分挂起问题。",
+  "category": "kernel",
+  "source_file": "网络速率高于磁盘写入速率导致进程陷入不可中断睡眠.txt",
+  "content": "内核版本：6.6.32-production+truenas\n\n## 问题现象\n- 进程（如 smbd, vzdump）进入不可中断睡眠状态（D state），无法响应 SIGKILL 信号。\n- 内核日志报告任务阻塞超过 604 秒。\n- Call Trace 显示进程卡在 `io_wq_put_and_exit` -> `wait_for_completion` 或 `cifs_unlink` 处。\n- 在 NFS 场景下，虚拟机内部出现 RCU stall 和 soft lockup 现象。\n\n## 问题根因\n当网络传输速率远高于磁盘写入速率时，I/O 请求堆积导致内核子系统处理阻塞。具体表现为：进程在退出阶段执行 `io_uring` 资源清理（`io_uring_cancel_generic` -> `io_wq_put_and_exit`）时等待 completion 超时，或在执行文件删除操作时卡在 CIFS 模块的 `cifs_unlink` 函数中，导致进程无法调度返回用户态。\n\n## 解决方案\n暂无官方修复。针对 SMB 场景，可尝试在配置中设置 `aio write size = 0` 和 `oplocks = No` 以规避部分挂起问题。"
+}

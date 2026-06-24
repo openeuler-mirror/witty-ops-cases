@@ -1,0 +1,10 @@
+{
+  "title": "r8169驱动加载时因缺失Realtek PHY模块导致空指针解引用",
+  "kernel_version": "5.3-rc1",
+  "phenomenon": "- 系统启动过程中触发 Kernel Oops，日志显示 \"BUG: kernel NULL pointer dereference, address: 0000000000000000\"。\n- RIP 寄存器指向无效地址 0x0，Call Trace 显示调用路径为：`phy_select_page+0x2f/0x60` -> `phy_read_paged` -> `rtl8168g_1_hw_phy_config` -> `rtl8169_init_phy`。\n- 网络接口不可用，dmesg 显示加载的是 \"Generic PHY\" 驱动而非 \"Realtek PHY\" 驱动。",
+  "root_cause": "r8169 驱动依赖特定的 Realtek PHY 驱动模块（`realtek.ko`）来处理 PHY 分页操作。如果 `r8169` 被包含在 initramfs 中，但 `realtek.ko` 未被包含或未被正确加载（例如 modprobe 忽略了 softdep），系统会回退绑定通用 PHY 驱动（`genphy`）。该通用驱动不支持 PHY 分页操作，导致相关函数指针为空，当驱动尝试调用 `phy_select_page` 时触发空指针解引用。",
+  "solution": "1. 确保 initramfs 中同时包含 `r8169.ko` 和 `realtek.ko` 模块。\n2. 在 `/etc/modprobe.d` 配置文件中添加 `softdep r8169 pre: realtek` 以强制加载顺序。\n3. 将内核配置选项 `CONFIG_REALTEK_PHY` 设置为 `=y`（内建）而非 `=m`（模块）。\n4. 上游提交 `f325937735498afb054a0195291bbf68d0b60be5` 增加了检查逻辑，若 Realtek PHY 驱动未加载则直接中止 probe 以避免 panic（但网络仍不可用，需配合上述步骤）。",
+  "category": "kernel",
+  "source_file": "r8169驱动加载时因缺失Realtek PHY模块导致空指针解引用.txt",
+  "content": "内核版本：5.3-rc1\n\n## 问题现象\n- 系统启动过程中触发 Kernel Oops，日志显示 \"BUG: kernel NULL pointer dereference, address: 0000000000000000\"。\n- RIP 寄存器指向无效地址 0x0，Call Trace 显示调用路径为：`phy_select_page+0x2f/0x60` -> `phy_read_paged` -> `rtl8168g_1_hw_phy_config` -> `rtl8169_init_phy`。\n- 网络接口不可用，dmesg 显示加载的是 \"Generic PHY\" 驱动而非 \"Realtek PHY\" 驱动。\n\n## 问题根因\nr8169 驱动依赖特定的 Realtek PHY 驱动模块（`realtek.ko`）来处理 PHY 分页操作。如果 `r8169` 被包含在 initramfs 中，但 `realtek.ko` 未被包含或未被正确加载（例如 modprobe 忽略了 softdep），系统会回退绑定通用 PHY 驱动（`genphy`）。该通用驱动不支持 PHY 分页操作，导致相关函数指针为空，当驱动尝试调用 `phy_select_page` 时触发空指针解引用。\n\n## 解决方案\n1. 确保 initramfs 中同时包含 `r8169.ko` 和 `realtek.ko` 模块。\n2. 在 `/etc/modprobe.d` 配置文件中添加 `softdep r8169 pre: realtek` 以强制加载顺序。\n3. 将内核配置选项 `CONFIG_REALTEK_PHY` 设置为 `=y`（内建）而非 `=m`（模块）。\n4. 上游提交 `f325937735498afb054a0195291bbf68d0b60be5` 增加了检查逻辑，若 Realtek PHY 驱动未加载则直接中止 probe 以避免 panic（但网络仍不可用，需配合上述步骤）。"
+}

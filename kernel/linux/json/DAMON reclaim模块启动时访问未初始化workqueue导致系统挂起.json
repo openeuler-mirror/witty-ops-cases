@@ -1,0 +1,10 @@
+{
+  "title": "DAMON reclaim模块启动时访问未初始化workqueue导致系统挂起",
+  "kernel_version": "5.19 pre-rc1",
+  "phenomenon": "- 当内核启动参数包含 `damon_reclaim.enabled=Y` 时，系统在启动阶段发生硬挂起\n- 屏幕无 printk 或 dmesg 输出，仅显示 EFI Stub 加载 initrd 的信息\n- 若在系统启动后通过 sysfs 接口启用 DAMON_RECLAIM，则不会触发挂起",
+  "root_cause": "引入问题的提交为 `059342d1dd4e01d634184793fa3f8437e62afaa1` (\"mm/damon/reclaim: fix the timer always stays active\")。\n在内核启动流程中，`parse_args()` 解析启动参数时调用 `enabled_store()` 回调函数，该函数内部调用 `schedule_delayed_work()` 并依赖 `system_wq`。然而，`system_wq` 是在 `workqueue_init_early()` 中初始化的，该函数在 `start_kernel()` 中的调用顺序位于 `parse_args()` 之后。因此，`schedule_delayed_work()` 访问了尚未初始化的 `system_wq`，触发内核空指针解引用，导致系统挂起。",
+  "solution": "开发者已提出修复补丁：在 `mm/damon/reclaim.c` 中增加 `damon_reclaim_initialized` 布尔标志位。在 `enabled_store()` 函数中检查该标志位，若模块未初始化完成则直接返回，避免调用 `schedule_delayed_work()`；在 `damon_reclaim_init()` 函数末尾将该标志位置为 true。",
+  "category": "kernel",
+  "source_file": "DAMON reclaim模块启动时访问未初始化workqueue导致系统挂起.txt",
+  "content": "内核版本：5.19 pre-rc1\n\n## 问题现象\n- 当内核启动参数包含 `damon_reclaim.enabled=Y` 时，系统在启动阶段发生硬挂起\n- 屏幕无 printk 或 dmesg 输出，仅显示 EFI Stub 加载 initrd 的信息\n- 若在系统启动后通过 sysfs 接口启用 DAMON_RECLAIM，则不会触发挂起\n\n## 问题根因\n引入问题的提交为 `059342d1dd4e01d634184793fa3f8437e62afaa1` (\"mm/damon/reclaim: fix the timer always stays active\")。\n在内核启动流程中，`parse_args()` 解析启动参数时调用 `enabled_store()` 回调函数，该函数内部调用 `schedule_delayed_work()` 并依赖 `system_wq`。然而，`system_wq` 是在 `workqueue_init_early()` 中初始化的，该函数在 `start_kernel()` 中的调用顺序位于 `parse_args()` 之后。因此，`schedule_delayed_work()` 访问了尚未初始化的 `system_wq`，触发内核空指针解引用，导致系统挂起。\n\n## 解决方案\n开发者已提出修复补丁：在 `mm/damon/reclaim.c` 中增加 `damon_reclaim_initialized` 布尔标志位。在 `enabled_store()` 函数中检查该标志位，若模块未初始化完成则直接返回，避免调用 `schedule_delayed_work()`；在 `damon_reclaim_init()` 函数末尾将该标志位置为 true。"
+}

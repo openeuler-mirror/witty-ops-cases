@@ -1,0 +1,10 @@
+{
+  "title": "卸载 ib_ipoib 模块触发 rtnl_mutex 与 s_active 循环锁依赖",
+  "kernel_version": "3.10（复现于 3.14、3.16、3.19、4.4-rc2）",
+  "phenomenon": "- 执行 rmmod 卸载 ib_ipoib 模块或相关操作时，内核日志报错：`[ INFO: possible circular locking dependency detected ]`\n- 系统检测到 `rtnl_mutex` 与 `s_active` 锁之间存在循环依赖风险，提示可能发生死锁。\n- 在内核 3.16.1 版本中，该问题被确认可能导致真实的死锁。\n- 涉及进程包括 rmmod、modprobe、libvirtd 或 ifup-ib。",
+  "root_cause": "存在 AB-BA 锁序冲突：\n1. 路径一：`ipoib_set_mode` 函数通过 sysfs 写操作先持有 `s_active` 锁，随后尝试获取 `rtnl_mutex`。\n2. 路径二：`ipoib_remove_one` 函数在卸载流程中先持有 `rtnl_mutex`，随后调用 `unregister_netdev` -> `sysfs_remove_dir` 尝试获取 `s_active` 锁。\n两个路径锁获取顺序相反，构成循环依赖。",
+  "solution": "暂无官方合并修复。评论中建议修改 `drivers/infiniband/ulp/ipoib/ipoib_main.c` 中的 `ipoib_remove_one` 函数，调整 `rtnl_lock` 的获取逻辑以规避锁冲突。",
+  "category": "kernel",
+  "source_file": "卸载 ib_ipoib 模块触发 rtnl_mutex 与 s_active 循环锁依赖.txt",
+  "content": "内核版本：3.10（复现于 3.14、3.16、3.19、4.4-rc2）\n\n## 问题现象\n- 执行 rmmod 卸载 ib_ipoib 模块或相关操作时，内核日志报错：`[ INFO: possible circular locking dependency detected ]`\n- 系统检测到 `rtnl_mutex` 与 `s_active` 锁之间存在循环依赖风险，提示可能发生死锁。\n- 在内核 3.16.1 版本中，该问题被确认可能导致真实的死锁。\n- 涉及进程包括 rmmod、modprobe、libvirtd 或 ifup-ib。\n\n## 问题根因\n存在 AB-BA 锁序冲突：\n1. 路径一：`ipoib_set_mode` 函数通过 sysfs 写操作先持有 `s_active` 锁，随后尝试获取 `rtnl_mutex`。\n2. 路径二：`ipoib_remove_one` 函数在卸载流程中先持有 `rtnl_mutex`，随后调用 `unregister_netdev` -> `sysfs_remove_dir` 尝试获取 `s_active` 锁。\n两个路径锁获取顺序相反，构成循环依赖。\n\n## 解决方案\n暂无官方合并修复。评论中建议修改 `drivers/infiniband/ulp/ipoib/ipoib_main.c` 中的 `ipoib_remove_one` 函数，调整 `rtnl_lock` 的获取逻辑以规避锁冲突。"
+}

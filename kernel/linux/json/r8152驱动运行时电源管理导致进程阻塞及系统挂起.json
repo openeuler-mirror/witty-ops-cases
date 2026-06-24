@@ -1,0 +1,10 @@
+{
+  "title": "r8152驱动运行时电源管理导致进程阻塞及系统挂起",
+  "kernel_version": "4.15.0-33-generic（报告涉及版本包括 4.18, 5.3, 5.6, 5.8, 5.9, 5.14 等）",
+  "phenomenon": "- 系统使用 RTL8153 芯片的 USB 网卡时，出现网络中断或系统无响应，必须重启恢复。\n- 内核日志频繁打印 \"INFO: task ... blocked for more than 120 seconds\"。\n- 多个进程（包括 kworker、NetworkManager、wpa_supplicant）处于 D 状态（不可中断睡眠）。\n- 堆栈信息显示阻塞发生在 `rpm_resume`、`usb_autopm_get_interface` 或 `rtnetlink_rcv_msg` 的 `mutex_lock` 处。",
+  "root_cause": "r8152 驱动在执行运行时电源管理恢复或处理网络控制消息时，调用链（如 `rtl_work_func_t` -> `usb_autopm_get_interface` -> `rpm_resume`）中出现锁竞争或资源等待异常，导致进程无法获取锁而长时间阻塞。",
+  "solution": "- 规避措施：通过 udev 规则禁用该设备的 USB 自动挂起，例如添加规则：\n  `ACTION==\"add\", SUBSYSTEM==\"usb\", ATTR{idVendor}==\"0bda\", ATTR{idProduct}==\"8153\", TEST==\"power/control\", ATTR{power/control}=\"on\"`\n- 或在内核启动参数中添加 `usbcore.autosuspend=-1` 禁用 USB 自动挂起。\n- 部分用户反馈内核版本 5.13.9 后问题得到修复，但亦有反馈在 5.14.10 版本仍复现问题。",
+  "category": "kernel",
+  "source_file": "r8152驱动运行时电源管理导致进程阻塞及系统挂起.txt",
+  "content": "内核版本：4.15.0-33-generic（报告涉及版本包括 4.18, 5.3, 5.6, 5.8, 5.9, 5.14 等）\n\n## 问题现象\n- 系统使用 RTL8153 芯片的 USB 网卡时，出现网络中断或系统无响应，必须重启恢复。\n- 内核日志频繁打印 \"INFO: task ... blocked for more than 120 seconds\"。\n- 多个进程（包括 kworker、NetworkManager、wpa_supplicant）处于 D 状态（不可中断睡眠）。\n- 堆栈信息显示阻塞发生在 `rpm_resume`、`usb_autopm_get_interface` 或 `rtnetlink_rcv_msg` 的 `mutex_lock` 处。\n\n## 问题根因\nr8152 驱动在执行运行时电源管理恢复或处理网络控制消息时，调用链（如 `rtl_work_func_t` -> `usb_autopm_get_interface` -> `rpm_resume`）中出现锁竞争或资源等待异常，导致进程无法获取锁而长时间阻塞。\n\n## 解决方案\n- 规避措施：通过 udev 规则禁用该设备的 USB 自动挂起，例如添加规则：\n  `ACTION==\"add\", SUBSYSTEM==\"usb\", ATTR{idVendor}==\"0bda\", ATTR{idProduct}==\"8153\", TEST==\"power/control\", ATTR{power/control}=\"on\"`\n- 或在内核启动参数中添加 `usbcore.autosuspend=-1` 禁用 USB 自动挂起。\n- 部分用户反馈内核版本 5.13.9 后问题得到修复，但亦有反馈在 5.14.10 版本仍复现问题。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "TCP timestamp随机化导致本地回环连接偶发超时",
+  "kernel_version": "4.10 (含 4.10.1, 4.10.2, 4.10.3)",
+  "phenomenon": "- 从内核 4.9 升级至 4.10 后，通过 IPv4 连接 localhost 时，约 50% 的概率连接失败并报 \"Connection timed out\"。\n- 使用 tcpdump 抓包发现，客户端发送了 SYN 包并多次重传，但服务端未回复 SYN-ACK，监听进程甚至未离开 select() 调用。\n- 问题在部分物理机上 100% 复现，但在虚拟机或部分其他硬件上可能无法复现。",
+  "root_cause": "Git bisect 定位到引入问题的 commit 为 `95a22caee396cef0bb2ca8fafdd82966a49367bb` (\"tcp: randomize tcp timestamp offsets for each connection\")。该补丁为每个连接随机化 TCP timestamp offset。当系统参数 `tcp_tw_recycle` 开启时，该机制依赖 timestamp 值来判断 TIME_WAIT 状态的过期。Timestamp 的随机化导致内核错误地丢弃了合法的 SYN 包，引发连接超时。",
+  "solution": "- 临时规避：执行命令 `echo 0 > /proc/sys/net/ipv4/tcp_tw_recycle` 禁用 TIME_WAIT 快速回收功能。\n- 永久修复：相关修复补丁已合入 linux-next 分支，需等待后续版本更新。",
+  "category": "kernel",
+  "source_file": "TCP timestamp随机化导致本地回环连接偶发超时.txt",
+  "content": "内核版本：4.10 (含 4.10.1, 4.10.2, 4.10.3)\n\n## 问题现象\n- 从内核 4.9 升级至 4.10 后，通过 IPv4 连接 localhost 时，约 50% 的概率连接失败并报 \"Connection timed out\"。\n- 使用 tcpdump 抓包发现，客户端发送了 SYN 包并多次重传，但服务端未回复 SYN-ACK，监听进程甚至未离开 select() 调用。\n- 问题在部分物理机上 100% 复现，但在虚拟机或部分其他硬件上可能无法复现。\n\n## 问题根因\nGit bisect 定位到引入问题的 commit 为 `95a22caee396cef0bb2ca8fafdd82966a49367bb` (\"tcp: randomize tcp timestamp offsets for each connection\")。该补丁为每个连接随机化 TCP timestamp offset。当系统参数 `tcp_tw_recycle` 开启时，该机制依赖 timestamp 值来判断 TIME_WAIT 状态的过期。Timestamp 的随机化导致内核错误地丢弃了合法的 SYN 包，引发连接超时。\n\n## 解决方案\n- 临时规避：执行命令 `echo 0 > /proc/sys/net/ipv4/tcp_tw_recycle` 禁用 TIME_WAIT 快速回收功能。\n- 永久修复：相关修复补丁已合入 linux-next 分支，需等待后续版本更新。"
+}

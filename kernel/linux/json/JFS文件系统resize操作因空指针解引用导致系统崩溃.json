@@ -1,0 +1,10 @@
+{
+  "title": "JFS文件系统resize操作因空指针解引用导致系统崩溃",
+  "kernel_version": "3.0.0-12-generic",
+  "phenomenon": "- 执行 `mount -o remount,resize /mountpoint` 命令调整 JFS 文件系统大小时触发系统崩溃。\n- 故障具有特定触发条件：当扩容幅度较小（例如 500 个 4096 字节块）时必现；若扩容幅度较大（例如 10000 个块）则运行正常。",
+  "root_cause": "JFS 模块在 `resize.c` 的 `jfs_extendfs` 函数中处理日志逻辑存在顺序错误。当扩容空间不足以使新的 inline log 避开旧 log 区域时，代码流程如下：\n1. 调用 `lmLogShutdown` 关闭旧日志。\n2. 调用 `lmLogFormat` 格式化新日志。\n3. 调用 `lmLogInit` 初始化新日志。\n\n问题在于，`lmLogFormat` 内部调用 `lbmStartIO` 时，代码试图访问 `bp->l_log` 指针（即 `struct jfs_log *log = bp->l_log`），随后使用 `log->l2bsize`。由于此时 `lmLogInit` 尚未执行，`bp->l_log` 处于未初始化状态，导致空指针解引用或访问无效内存，从而引发系统崩溃。",
+  "solution": "暂无（Bug 状态为 NEW，尚未合并修复补丁）",
+  "category": "kernel",
+  "source_file": "JFS文件系统resize操作因空指针解引用导致系统崩溃.txt",
+  "content": "内核版本：3.0.0-12-generic\n\n## 问题现象\n- 执行 `mount -o remount,resize /mountpoint` 命令调整 JFS 文件系统大小时触发系统崩溃。\n- 故障具有特定触发条件：当扩容幅度较小（例如 500 个 4096 字节块）时必现；若扩容幅度较大（例如 10000 个块）则运行正常。\n\n## 问题根因\nJFS 模块在 `resize.c` 的 `jfs_extendfs` 函数中处理日志逻辑存在顺序错误。当扩容空间不足以使新的 inline log 避开旧 log 区域时，代码流程如下：\n1. 调用 `lmLogShutdown` 关闭旧日志。\n2. 调用 `lmLogFormat` 格式化新日志。\n3. 调用 `lmLogInit` 初始化新日志。\n\n问题在于，`lmLogFormat` 内部调用 `lbmStartIO` 时，代码试图访问 `bp->l_log` 指针（即 `struct jfs_log *log = bp->l_log`），随后使用 `log->l2bsize`。由于此时 `lmLogInit` 尚未执行，`bp->l_log` 处于未初始化状态，导致空指针解引用或访问无效内存，从而引发系统崩溃。\n\n## 解决方案\n暂无（Bug 状态为 NEW，尚未合并修复补丁）"
+}

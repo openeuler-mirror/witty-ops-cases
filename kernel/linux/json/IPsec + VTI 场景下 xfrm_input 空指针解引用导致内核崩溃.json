@@ -1,0 +1,10 @@
+{
+  "title": "IPsec + VTI 场景下 xfrm_input 空指针解引用导致内核崩溃",
+  "kernel_version": "4.0-rc4, 3.16.7, 3.17.8, 3.18.9",
+  "phenomenon": "- 使用 VTI 隧道时，系统频繁（每天一两次）触发 Kernel Panic。\n- 日志显示 \"BUG: unable to handle kernel NULL pointer dereference at 0000000000000034\"。\n- 崩溃发生在中断上下文，调用栈显示：`xfrm_input+0x3c2/0x5a0`，具体位置在 `xfrm_tunnel_check` 函数中访问 `outer_mode` 成员时。",
+  "root_cause": "这是一个竞态条件问题。当用户空间发送 `XFRM_MSG_ALLOCSPI` 消息时，`xfrm_alloc_spi` 函数会将状态对象插入到 `state_byspi` 哈希表中，但此时 `outer_mode` 指针尚未初始化（该字段仅在处理 `XFRM_MSG_NEWSA` 时由 `__xfrm_init_state` 设置）。如果此时有数据包到达，`xfrm_input` 通过 `xfrm_state_lookup` 找到该状态对象，并调用 `xfrm_tunnel_check`，该函数尝试解引用未初始化的 `outer_mode`，从而触发空指针解引用导致系统崩溃。",
+  "solution": "该问题已通过 commit 68c11e98ef6748ddb63865799b12fc45abb3755d 修复。修复方案是延迟执行 `xfrm_tunnel_check()`，避免在状态对象未完全初始化时访问 `outer_mode`。",
+  "category": "kernel",
+  "source_file": "IPsec + VTI 场景下 xfrm_input 空指针解引用导致内核崩溃.txt",
+  "content": "内核版本：4.0-rc4, 3.16.7, 3.17.8, 3.18.9\n\n## 问题现象\n- 使用 VTI 隧道时，系统频繁（每天一两次）触发 Kernel Panic。\n- 日志显示 \"BUG: unable to handle kernel NULL pointer dereference at 0000000000000034\"。\n- 崩溃发生在中断上下文，调用栈显示：`xfrm_input+0x3c2/0x5a0`，具体位置在 `xfrm_tunnel_check` 函数中访问 `outer_mode` 成员时。\n\n## 问题根因\n这是一个竞态条件问题。当用户空间发送 `XFRM_MSG_ALLOCSPI` 消息时，`xfrm_alloc_spi` 函数会将状态对象插入到 `state_byspi` 哈希表中，但此时 `outer_mode` 指针尚未初始化（该字段仅在处理 `XFRM_MSG_NEWSA` 时由 `__xfrm_init_state` 设置）。如果此时有数据包到达，`xfrm_input` 通过 `xfrm_state_lookup` 找到该状态对象，并调用 `xfrm_tunnel_check`，该函数尝试解引用未初始化的 `outer_mode`，从而触发空指针解引用导致系统崩溃。\n\n## 解决方案\n该问题已通过 commit 68c11e98ef6748ddb63865799b12fc45abb3755d 修复。修复方案是延迟执行 `xfrm_tunnel_check()`，避免在状态对象未完全初始化时访问 `outer_mode`。"
+}

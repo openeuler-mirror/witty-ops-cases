@@ -1,0 +1,10 @@
+{
+  "title": "n_gsm驱动gsm0_receive函数越界写入触发KASAN报错",
+  "kernel_version": "6.8.0-rc5",
+  "phenomenon": "- KASAN 检测到 slab-out-of-bounds 错误：BUG: KASAN: slab-out-of-bounds in gsm0_receive+0xa4b/0xaf0 drivers/tty/n_gsm.c:2915\n- 故障发生时 Call Trace 指向 gsm0_receive -> gsmld_receive_buf -> flush_to_ldisc\n- 系统检测到非法内存写入，可能导致内核崩溃或内存破坏",
+  "root_cause": "问题源于 n_gsm 模块在处理数据接收时的并发竞态风险。虽然缓冲区 gsm->buf 分配大小为 mru + 1，但在 gsm0_receive 函数中，若 GSMIOC_SETCONF 配置修改操作与 flush_to_ldisc 数据接收处理并发执行，可能导致 gsm->len 或 gsm->count 状态不一致。这种状态混乱使得数据写入操作绕过了原有的长度检查（gsm->count == gsm->len），导致写入位置超出分配的内存区域边界。",
+  "solution": "临时修复方案：在 drivers/tty/n_gsm.c 的 gsm0_receive 函数中，将边界检查条件 if (gsm->count == gsm->len) 修改为 if (gsm->count >= gsm->len)，以防止越界写入。\n官方补丁：截至报告时间，相关修复补丁尚在讨论中，建议关注上游社区后续提交。",
+  "category": "kernel",
+  "source_file": "n_gsm驱动gsm0_receive函数越界写入触发KASAN报错.txt",
+  "content": "内核版本：6.8.0-rc5\n\n## 问题现象\n- KASAN 检测到 slab-out-of-bounds 错误：BUG: KASAN: slab-out-of-bounds in gsm0_receive+0xa4b/0xaf0 drivers/tty/n_gsm.c:2915\n- 故障发生时 Call Trace 指向 gsm0_receive -> gsmld_receive_buf -> flush_to_ldisc\n- 系统检测到非法内存写入，可能导致内核崩溃或内存破坏\n\n## 问题根因\n问题源于 n_gsm 模块在处理数据接收时的并发竞态风险。虽然缓冲区 gsm->buf 分配大小为 mru + 1，但在 gsm0_receive 函数中，若 GSMIOC_SETCONF 配置修改操作与 flush_to_ldisc 数据接收处理并发执行，可能导致 gsm->len 或 gsm->count 状态不一致。这种状态混乱使得数据写入操作绕过了原有的长度检查（gsm->count == gsm->len），导致写入位置超出分配的内存区域边界。\n\n## 解决方案\n临时修复方案：在 drivers/tty/n_gsm.c 的 gsm0_receive 函数中，将边界检查条件 if (gsm->count == gsm->len) 修改为 if (gsm->count >= gsm->len)，以防止越界写入。\n官方补丁：截至报告时间，相关修复补丁尚在讨论中，建议关注上游社区后续提交。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "挂载损坏镜像触发 ext4_read_inode_bitmap 空指针解引用导致 General Protection Fault",
+  "kernel_version": "5.15.71, 6.0-rc7",
+  "phenomenon": "- 挂载损坏的 ext4 镜像时触发 general protection fault\n- KASAN 报告在 `fs/ext4/ialloc.c` 的 `ext4_read_inode_bitmap()` 函数中发生空指针解引用\n- 内核日志显示 Call Trace：`ext4_free_inode` -> `ext4_evict_inode` -> `ext4_setup_system_zone` -> `ext4_fill_super`",
+  "root_cause": "损坏的镜像导致日志重放后超级块中的日志 inode 号变为 #32，且该 inode 的 `i_links_count` 为 0。在挂载过程中，`ext4_setup_system_zone` 调用 `ext4_protect_reserved_inode` 获取并释放该日志 inode 时，VFS 层因引用计数为 0 触发 `evict()` 流程。由于此时文件系统尚未完全初始化，无法正确处理 inode 释放，导致在 `ext4_free_inode` 调用 `ext4_read_inode_bitmap` 时发生空指针解引用。",
+  "solution": "开发者建议在 `ext4_iget()` 中增加校验，若获取特殊 inode 时 `i_links_count` 为 0，则返回 `-EFSCORRUPTED` 错误，防止内核尝试释放该 inode。截至报告时间，补丁尚未合并。",
+  "category": "kernel",
+  "source_file": "挂载损坏镜像触发 ext4_read_inode_bitmap 空指针解引用导致 General Protection Fault.txt",
+  "content": "内核版本：5.15.71, 6.0-rc7\n\n## 问题现象\n- 挂载损坏的 ext4 镜像时触发 general protection fault\n- KASAN 报告在 `fs/ext4/ialloc.c` 的 `ext4_read_inode_bitmap()` 函数中发生空指针解引用\n- 内核日志显示 Call Trace：`ext4_free_inode` -> `ext4_evict_inode` -> `ext4_setup_system_zone` -> `ext4_fill_super`\n\n## 问题根因\n损坏的镜像导致日志重放后超级块中的日志 inode 号变为 #32，且该 inode 的 `i_links_count` 为 0。在挂载过程中，`ext4_setup_system_zone` 调用 `ext4_protect_reserved_inode` 获取并释放该日志 inode 时，VFS 层因引用计数为 0 触发 `evict()` 流程。由于此时文件系统尚未完全初始化，无法正确处理 inode 释放，导致在 `ext4_free_inode` 调用 `ext4_read_inode_bitmap` 时发生空指针解引用。\n\n## 解决方案\n开发者建议在 `ext4_iget()` 中增加校验，若获取特殊 inode 时 `i_links_count` 为 0，则返回 `-EFSCORRUPTED` 错误，防止内核尝试释放该 inode。截至报告时间，补丁尚未合并。"
+}

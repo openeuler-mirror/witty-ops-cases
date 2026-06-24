@@ -1,0 +1,10 @@
+{
+  "title": "TTM驱动shrinker误用GFP_HIGHMEM标志触发Slab分配器BUG",
+  "kernel_version": "3.17.2, 3.18.1",
+  "phenomenon": "系统运行过程中触发 kernel BUG，日志显示 \"kernel BUG at mm/slab.c:2625!\"，伴随 \"invalid opcode: 0000 [#1]\" 错误。Call Trace 显示调用路径为：`do_huge_pmd_anonymous_page` -> `__alloc_pages_nodemask` -> `shrink_slab` -> `ttm_pool_shrink_scan` -> `ttm_page_pool_free` -> `__kmalloc` -> `cache_alloc_refill`。",
+  "root_cause": "透明大页（THP）分配使用的 `GFP_TRANSHUGE` 标志中包含 `__GFP_HIGHMEM`。当系统内存不足触发内存回收时，TTM 模块的 shrinker 函数 `ttm_page_pool_free` 直接使用了传入的 `gfp_mask`（包含 `__GFP_HIGHMEM`）调用 `kmalloc` 进行内存分配。Slab 分配器在 `cache_grow` 函数中检查到 `__GFP_HIGHMEM` 属于非法标志（Slab 分配器不直接处理高端内存映射），触发 `BUG_ON(flags & GFP_SLAB_BUG_MASK)` 导致系统崩溃。",
+  "solution": "讨论中提出的修复方向包括：\n1. 修改 `ttm_page_pool_free` 函数，避免在 shrinker 路径中调用 `kmalloc`，改用栈上的静态数组。\n2. 在 `shrink_slab` 入口处过滤掉 `__GFP_DMA32` 和 `__GFP_HIGHMEM` 等对 slab 分配器无效的标志。\n3. TTM shrinker 不应直接使用原始分配上下文的 gfp_mask，而应使用 GFP_KERNEL 或 GFP_ATOMIC。\nBug 状态为 NEW，暂无明确合并的主线修复补丁。",
+  "category": "kernel",
+  "source_file": "TTM驱动shrinker误用GFP_HIGHMEM标志触发Slab分配器BUG.txt",
+  "content": "内核版本：3.17.2, 3.18.1\n\n## 问题现象\n系统运行过程中触发 kernel BUG，日志显示 \"kernel BUG at mm/slab.c:2625!\"，伴随 \"invalid opcode: 0000 [#1]\" 错误。Call Trace 显示调用路径为：`do_huge_pmd_anonymous_page` -> `__alloc_pages_nodemask` -> `shrink_slab` -> `ttm_pool_shrink_scan` -> `ttm_page_pool_free` -> `__kmalloc` -> `cache_alloc_refill`。\n\n## 问题根因\n透明大页（THP）分配使用的 `GFP_TRANSHUGE` 标志中包含 `__GFP_HIGHMEM`。当系统内存不足触发内存回收时，TTM 模块的 shrinker 函数 `ttm_page_pool_free` 直接使用了传入的 `gfp_mask`（包含 `__GFP_HIGHMEM`）调用 `kmalloc` 进行内存分配。Slab 分配器在 `cache_grow` 函数中检查到 `__GFP_HIGHMEM` 属于非法标志（Slab 分配器不直接处理高端内存映射），触发 `BUG_ON(flags & GFP_SLAB_BUG_MASK)` 导致系统崩溃。\n\n## 解决方案\n讨论中提出的修复方向包括：\n1. 修改 `ttm_page_pool_free` 函数，避免在 shrinker 路径中调用 `kmalloc`，改用栈上的静态数组。\n2. 在 `shrink_slab` 入口处过滤掉 `__GFP_DMA32` 和 `__GFP_HIGHMEM` 等对 slab 分配器无效的标志。\n3. TTM shrinker 不应直接使用原始分配上下文的 gfp_mask，而应使用 GFP_KERNEL 或 GFP_ATOMIC。\nBug 状态为 NEW，暂无明确合并的主线修复补丁。"
+}

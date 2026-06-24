@@ -1,0 +1,10 @@
+{
+  "title": "UBIFS并发bulk-read与writepage导致死锁",
+  "kernel_version": "5.5-rc5",
+  "phenomenon": "- 系统出现 hung task，进程长时间处于 D 状态，日志打印 \"INFO: task aa blocked for more than 10 seconds\"\n- 存在两个进程相互阻塞：\n  1. 进程 7447 调用 fsync，在 ubifs_write_inode 中调用 mutex_lock 阻塞，等待 ui_mutex\n  2. 进程 7448 调用 read，在 ubifs_readpage -> pagecache_get_page 中调用 __lock_page 阻塞，等待 page lock",
+  "root_cause": "UBIFS 文件系统中 writepage 与 bulk-read 两个路径对 ui_mutex 和 page lock 的加锁顺序不一致，导致 AB-BA 死锁：\n- writepage 路径：先持有 page lock，再尝试获取 ui_mutex\n- bulk-read 路径：先持有 ui_mutex，再尝试获取 page lock（在 ubifs_do_bulk_read 中调用 pagecache_get_page 时）\n当并发执行时，写进程持有 page lock 等待 ui_mutex，读进程持有 ui_mutex 等待 page lock，形成死锁。",
+  "solution": "暂无",
+  "category": "kernel",
+  "source_file": "UBIFS并发bulk-read与writepage导致死锁.txt",
+  "content": "内核版本：5.5-rc5\n\n## 问题现象\n- 系统出现 hung task，进程长时间处于 D 状态，日志打印 \"INFO: task aa blocked for more than 10 seconds\"\n- 存在两个进程相互阻塞：\n  1. 进程 7447 调用 fsync，在 ubifs_write_inode 中调用 mutex_lock 阻塞，等待 ui_mutex\n  2. 进程 7448 调用 read，在 ubifs_readpage -> pagecache_get_page 中调用 __lock_page 阻塞，等待 page lock\n\n## 问题根因\nUBIFS 文件系统中 writepage 与 bulk-read 两个路径对 ui_mutex 和 page lock 的加锁顺序不一致，导致 AB-BA 死锁：\n- writepage 路径：先持有 page lock，再尝试获取 ui_mutex\n- bulk-read 路径：先持有 ui_mutex，再尝试获取 page lock（在 ubifs_do_bulk_read 中调用 pagecache_get_page 时）\n当并发执行时，写进程持有 page lock 等待 ui_mutex，读进程持有 ui_mutex 等待 page lock，形成死锁。\n\n## 解决方案\n暂无"
+}

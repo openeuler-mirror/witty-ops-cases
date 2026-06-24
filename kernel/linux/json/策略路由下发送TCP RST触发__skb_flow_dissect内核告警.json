@@ -1,0 +1,10 @@
+{
+  "title": "策略路由下发送TCP RST触发__skb_flow_dissect内核告警",
+  "kernel_version": "6.1.47, 6.4.11",
+  "phenomenon": "- 系统日志中出现内核 WARNING：`WARNING: CPU: 0 PID: 0 at net/core/flow_dissector.c:1016 __skb_flow_dissect+0xa91/0x1cd0`。\n- 触发条件：配置了使用 L4 选择器（如 dport）的策略路由规则，同时 nftables 或 iptables 配置了 reject with tcp reset 动作。\n- 当数据包匹配 reject 规则并发送 RST 报文时触发该告警。\n- Call Trace 指向：`nf_send_reset` -> `ip_route_me_harder` -> `__skb_flow_dissect`。\n- 业务流量未受影响，RST 报文正常发送。",
+  "root_cause": "在内核 6.1 中，`nf_send_reset` 函数构造 RST 报文时，调用 `ip_route_me_harder` 传入的是原始报文的 socket (`sk`)，而非新构造报文的 socket (`nskb->sk`)。在策略路由查找过程中，`__skb_flow_dissect` 被调用以解析流信息，此时传入的 `net` 指针为 NULL，且无法从 `skb->dev` 或 `skb->sk` 推导出网络命名空间，导致触发内核 WARNING。",
+  "solution": "应用补丁（Attachment 304984）：将正确的 netns 指针传递给 flow dissector 以避免告警。用户已验证该补丁有效。",
+  "category": "kernel",
+  "source_file": "策略路由下发送TCP RST触发__skb_flow_dissect内核告警.txt",
+  "content": "内核版本：6.1.47, 6.4.11\n\n## 问题现象\n- 系统日志中出现内核 WARNING：`WARNING: CPU: 0 PID: 0 at net/core/flow_dissector.c:1016 __skb_flow_dissect+0xa91/0x1cd0`。\n- 触发条件：配置了使用 L4 选择器（如 dport）的策略路由规则，同时 nftables 或 iptables 配置了 reject with tcp reset 动作。\n- 当数据包匹配 reject 规则并发送 RST 报文时触发该告警。\n- Call Trace 指向：`nf_send_reset` -> `ip_route_me_harder` -> `__skb_flow_dissect`。\n- 业务流量未受影响，RST 报文正常发送。\n\n## 问题根因\n在内核 6.1 中，`nf_send_reset` 函数构造 RST 报文时，调用 `ip_route_me_harder` 传入的是原始报文的 socket (`sk`)，而非新构造报文的 socket (`nskb->sk`)。在策略路由查找过程中，`__skb_flow_dissect` 被调用以解析流信息，此时传入的 `net` 指针为 NULL，且无法从 `skb->dev` 或 `skb->sk` 推导出网络命名空间，导致触发内核 WARNING。\n\n## 解决方案\n应用补丁（Attachment 304984）：将正确的 netns 指针传递给 flow dissector 以避免告警。用户已验证该补丁有效。"
+}

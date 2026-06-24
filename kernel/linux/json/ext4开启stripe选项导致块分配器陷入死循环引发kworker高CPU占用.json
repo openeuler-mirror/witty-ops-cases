@@ -1,0 +1,10 @@
+{
+  "title": "ext4开启stripe选项导致块分配器陷入死循环引发kworker高CPU占用",
+  "kernel_version": "6.5.x - 6.6.x（修复于 6.7）",
+  "phenomenon": "- 在 SATA HDD 或 RAID 设备上进行大量文件写操作（如编译 OpenWrt、解压 tar 包、rsync）时，系统响应缓慢或卡顿。\n- kworker 进程（如 kworker/u16:4+flush-8:16）长时间占用 100% CPU。\n- perf 采样显示 CPU 时间大量消耗在 ext4 分配器相关函数：ext4_mb_good_group、ext4_mb_find_good_group_avg_frag_lists、mb_find_order_for_block。",
+  "root_cause": "内核 6.5 引入的 ext4 多块分配器优化（commit 7e170922f06bf，引入 CR_BEST_AVAIL_LEN 逻辑）存在缺陷。当文件系统挂载时启用了 stripe 选项（常见于 RAID 环境自动检测或手动设置），分配器会尝试寻找 stripe 对齐的块。在特定碎片化场景下，分配器难以找到满足条件的对齐块，且未能有效回退到非对齐分配，导致在 ext4_mb_find_good_group_avg_frag_lists 和 ext4_mb_good_group 函数中陷入长时间的循环查找，引发 CPU 软锁或高负载。",
+  "solution": "- 临时规避：通过 remount 命令禁用 stripe 选项：`mount -o remount,stripe=0 <dev>`；或使用 `tune2fs -f -E stride=0 <dev>` 清除文件系统的 stripe/stride 设置。\n- 根本修复：升级内核至 6.7 或更高版本，该版本已合入修复补丁。",
+  "category": "kernel",
+  "source_file": "ext4开启stripe选项导致块分配器陷入死循环引发kworker高CPU占用.txt",
+  "content": "内核版本：6.5.x - 6.6.x（修复于 6.7）\n\n## 问题现象\n- 在 SATA HDD 或 RAID 设备上进行大量文件写操作（如编译 OpenWrt、解压 tar 包、rsync）时，系统响应缓慢或卡顿。\n- kworker 进程（如 kworker/u16:4+flush-8:16）长时间占用 100% CPU。\n- perf 采样显示 CPU 时间大量消耗在 ext4 分配器相关函数：ext4_mb_good_group、ext4_mb_find_good_group_avg_frag_lists、mb_find_order_for_block。\n\n## 问题根因\n内核 6.5 引入的 ext4 多块分配器优化（commit 7e170922f06bf，引入 CR_BEST_AVAIL_LEN 逻辑）存在缺陷。当文件系统挂载时启用了 stripe 选项（常见于 RAID 环境自动检测或手动设置），分配器会尝试寻找 stripe 对齐的块。在特定碎片化场景下，分配器难以找到满足条件的对齐块，且未能有效回退到非对齐分配，导致在 ext4_mb_find_good_group_avg_frag_lists 和 ext4_mb_good_group 函数中陷入长时间的循环查找，引发 CPU 软锁或高负载。\n\n## 解决方案\n- 临时规避：通过 remount 命令禁用 stripe 选项：`mount -o remount,stripe=0 <dev>`；或使用 `tune2fs -f -E stride=0 <dev>` 清除文件系统的 stripe/stride 设置。\n- 根本修复：升级内核至 6.7 或更高版本，该版本已合入修复补丁。"
+}

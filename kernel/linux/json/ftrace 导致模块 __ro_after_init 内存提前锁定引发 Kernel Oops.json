@@ -1,0 +1,10 @@
+{
+  "title": "ftrace 导致模块 __ro_after_init 内存提前锁定引发 Kernel Oops",
+  "kernel_version": "4.19.90",
+  "phenomenon": "- 使用 Syzkaller 测试或手动加载模块（如 l2tp_netlink、devlink）时触发 Kernel Panic。\n- 日志显示 \"Unable to handle kernel write to read-only memory\" 及 \"Internal error: Oops: 9600004f\"。\n- 堆栈信息指向 `genl_register_family` 函数试图写入只读内存区域。",
+  "root_cause": "在 ARM64 架构的内核 4.19 中，当开启 ftrace function tracer 并对特定模块设置过滤器时，ftrace 机制会在模块初始化阶段调用 `ftrace_make_call`。该函数内部逻辑（处理跳转偏移量超限情况）会调用 `module_enable_ro` 将内存段标记为只读。\n由于此操作发生在模块初始化函数（`do_init_module`）执行之前，导致被 `__ro_after_init` 修饰的结构体（如 `genl_family`）过早变为只读。随后模块初始化代码调用 `genl_register_family` 尝试修改该结构体成员时，触发写入只读内存的异常。",
+  "solution": "暂无官方修复补丁。临时规避方法为移除相关模块结构体（如 `l2tp_nl_family`、`devlink_nl_family`）定义中的 `__ro_after_init` 属性。",
+  "category": "kernel",
+  "source_file": "ftrace 导致模块 __ro_after_init 内存提前锁定引发 Kernel Oops.txt",
+  "content": "内核版本：4.19.90\n\n## 问题现象\n- 使用 Syzkaller 测试或手动加载模块（如 l2tp_netlink、devlink）时触发 Kernel Panic。\n- 日志显示 \"Unable to handle kernel write to read-only memory\" 及 \"Internal error: Oops: 9600004f\"。\n- 堆栈信息指向 `genl_register_family` 函数试图写入只读内存区域。\n\n## 问题根因\n在 ARM64 架构的内核 4.19 中，当开启 ftrace function tracer 并对特定模块设置过滤器时，ftrace 机制会在模块初始化阶段调用 `ftrace_make_call`。该函数内部逻辑（处理跳转偏移量超限情况）会调用 `module_enable_ro` 将内存段标记为只读。\n由于此操作发生在模块初始化函数（`do_init_module`）执行之前，导致被 `__ro_after_init` 修饰的结构体（如 `genl_family`）过早变为只读。随后模块初始化代码调用 `genl_register_family` 尝试修改该结构体成员时，触发写入只读内存的异常。\n\n## 解决方案\n暂无官方修复补丁。临时规避方法为移除相关模块结构体（如 `l2tp_nl_family`、`devlink_nl_family`）定义中的 `__ro_after_init` 属性。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "CIFS模块cifs_oplock_break函数触发Use-After-Free导致内核崩溃",
+  "kernel_version": "6.6.0+",
+  "phenomenon": "- 内核日志报告 KASAN 检测到 slab-use-after-free 错误。\n- 故障发生在 `_raw_spin_lock` 函数中，调用栈显示位于 `cifs_oplock_break` 工作队列处理函数内。\n- 触发错误的进程为 `kworker/2:3`。\n- KASAN 日志显示，被释放的对象属于 `cifs_inode_cache`，且由同一任务（Task 452）在 `cifs_oplock_break` -> `_cifsFileInfo_put` -> `cifs_kill_sb` -> `deactivate_locked_super` 路径中释放，随后在 `cifs_oplock_break` 后续代码中再次被访问。",
+  "root_cause": "在 CIFS 模块的 `cifs_oplock_break` 函数中存在竞态条件。当该函数调用 `_cifsFileInfo_put` 时，可能导致 `cifs_sb` 的引用计数降为零，进而触发 `cifs_kill_sb` 和 `deactivate_locked_super`，导致 inode 被释放（通过 RCU 机制）。然而，`cifs_oplock_break` 函数在 `_cifsFileInfo_put` 返回后继续执行，试图访问已释放的 inode 或 superblock 结构体中的自旋锁，从而引发 Use-After-Free。",
+  "solution": "暂无",
+  "category": "kernel",
+  "source_file": "CIFS模块cifs_oplock_break函数触发Use-After-Free导致内核崩溃.txt",
+  "content": "内核版本：6.6.0+\n\n## 问题现象\n- 内核日志报告 KASAN 检测到 slab-use-after-free 错误。\n- 故障发生在 `_raw_spin_lock` 函数中，调用栈显示位于 `cifs_oplock_break` 工作队列处理函数内。\n- 触发错误的进程为 `kworker/2:3`。\n- KASAN 日志显示，被释放的对象属于 `cifs_inode_cache`，且由同一任务（Task 452）在 `cifs_oplock_break` -> `_cifsFileInfo_put` -> `cifs_kill_sb` -> `deactivate_locked_super` 路径中释放，随后在 `cifs_oplock_break` 后续代码中再次被访问。\n\n## 问题根因\n在 CIFS 模块的 `cifs_oplock_break` 函数中存在竞态条件。当该函数调用 `_cifsFileInfo_put` 时，可能导致 `cifs_sb` 的引用计数降为零，进而触发 `cifs_kill_sb` 和 `deactivate_locked_super`，导致 inode 被释放（通过 RCU 机制）。然而，`cifs_oplock_break` 函数在 `_cifsFileInfo_put` 返回后继续执行，试图访问已释放的 inode 或 superblock 结构体中的自旋锁，从而引发 Use-After-Free。\n\n## 解决方案\n暂无"
+}

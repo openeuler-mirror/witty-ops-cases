@@ -1,0 +1,10 @@
+{
+  "title": "uvcvideo驱动设备断开时因竞态条件触发空指针解引用",
+  "kernel_version": "5.4.26",
+  "phenomenon": "- USB3 uvcvideo 设备断开连接时，内核触发 NULL pointer dereference Oops。\n- 日志显示：`BUG: kernel NULL pointer dereference, address: 0000000000000000`。\n- 故障调用栈：`usb_ifnum_to_if` -> `usb_hcd_alloc_bandwidth` -> `usb_set_interface` -> `uvc_video_stop_streaming` -> `uvc_stop_streaming` -> `vb2_core_streamoff`。\n- 故障发生在 V4L2CaptureThre 线程上下文中。",
+  "root_cause": "uvcvideo 驱动存在竞态条件。当 USB 设备断开时，`uvc_disconnect` 回调函数执行并清理资源，但未等待正在进行的 videobuf2 流传输操作停止。导致 V4L2 捕获线程在驱动 remove routine 返回后，仍尝试调用 `usb_set_interface` 配置已断开的设备，此时 `config->interface[i]` 已为 NULL，从而触发空指针解引用。",
+  "solution": "暂无。讨论指出 `uvc_disconnect` 或 `uvc_unregister_video` 应等待 videobufs 停止操作完成后再返回，以避免竞态。",
+  "category": "kernel",
+  "source_file": "uvcvideo驱动设备断开时因竞态条件触发空指针解引用.txt",
+  "content": "内核版本：5.4.26\n\n## 问题现象\n- USB3 uvcvideo 设备断开连接时，内核触发 NULL pointer dereference Oops。\n- 日志显示：`BUG: kernel NULL pointer dereference, address: 0000000000000000`。\n- 故障调用栈：`usb_ifnum_to_if` -> `usb_hcd_alloc_bandwidth` -> `usb_set_interface` -> `uvc_video_stop_streaming` -> `uvc_stop_streaming` -> `vb2_core_streamoff`。\n- 故障发生在 V4L2CaptureThre 线程上下文中。\n\n## 问题根因\nuvcvideo 驱动存在竞态条件。当 USB 设备断开时，`uvc_disconnect` 回调函数执行并清理资源，但未等待正在进行的 videobuf2 流传输操作停止。导致 V4L2 捕获线程在驱动 remove routine 返回后，仍尝试调用 `usb_set_interface` 配置已断开的设备，此时 `config->interface[i]` 已为 NULL，从而触发空指针解引用。\n\n## 解决方案\n暂无。讨论指出 `uvc_disconnect` 或 `uvc_unregister_video` 应等待 videobufs 停止操作完成后再返回，以避免竞态。"
+}

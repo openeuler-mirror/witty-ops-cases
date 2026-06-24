@@ -1,0 +1,10 @@
+{
+  "title": "L2CAP ERTM通道关闭时因锁竞争导致hung task死锁",
+  "kernel_version": "3.8 至 4.0.4 及 bluetooth-next",
+  "phenomenon": "- 系统触发 hung task，dmesg 显示 \"INFO: task kworker/... blocked for more than 120 seconds\"。\n- 使用 l2test 工具测试 L2CAP ERTM 时，若在发送数据后立即关闭 socket（不等待 ACK），必现死锁。\n- 进程堆栈显示 `l2cap_retrans_timeout` 和 `hci_rx_work` 均阻塞在 `mutex_lock`。",
+  "root_cause": "在 L2CAP ERTM 通道关闭流程中，`__l2cap_wait_ack()` 函数在持有锁的情况下进入循环等待未确认的 S 帧或 I 帧 ACK。由于该函数在持有锁期间睡眠（每 200ms），导致接收路径 `l2cap_recv_frame` 无法获取锁来处理接收到的 ACK 帧，同时也阻塞了 L2CAP 定时器，从而形成死锁。",
+  "solution": "已有开发者提出修复补丁集（v2 版本发布于邮件列表），通过调整锁机制解决该问题，但截至报告时补丁尚未合并。",
+  "category": "kernel",
+  "source_file": "L2CAP ERTM通道关闭时因锁竞争导致hung task死锁.txt",
+  "content": "内核版本：3.8 至 4.0.4 及 bluetooth-next\n\n## 问题现象\n- 系统触发 hung task，dmesg 显示 \"INFO: task kworker/... blocked for more than 120 seconds\"。\n- 使用 l2test 工具测试 L2CAP ERTM 时，若在发送数据后立即关闭 socket（不等待 ACK），必现死锁。\n- 进程堆栈显示 `l2cap_retrans_timeout` 和 `hci_rx_work` 均阻塞在 `mutex_lock`。\n\n## 问题根因\n在 L2CAP ERTM 通道关闭流程中，`__l2cap_wait_ack()` 函数在持有锁的情况下进入循环等待未确认的 S 帧或 I 帧 ACK。由于该函数在持有锁期间睡眠（每 200ms），导致接收路径 `l2cap_recv_frame` 无法获取锁来处理接收到的 ACK 帧，同时也阻塞了 L2CAP 定时器，从而形成死锁。\n\n## 解决方案\n已有开发者提出修复补丁集（v2 版本发布于邮件列表），通过调整锁机制解决该问题，但截至报告时补丁尚未合并。"
+}

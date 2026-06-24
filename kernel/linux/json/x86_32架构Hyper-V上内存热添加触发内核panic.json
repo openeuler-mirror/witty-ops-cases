@@ -1,0 +1,10 @@
+{
+  "title": "x86_32架构Hyper-V上内存热添加触发内核panic",
+  "kernel_version": "4.19.95",
+  "phenomenon": "- 在 Hyper-V 虚拟机中运行 x86_32 架构内核时触发 Kernel Panic，提示 \"Fatal exception\"。\n- 故障通常由 systemd-udevd 或执行 `udevadm trigger --type=devices --action=add` 触发，也与 Hyper-V 动态内存压力报告延迟（pressure_report_delay）相关。\n- 日志显示 \"BUG: unable to handle kernel paging request\"，Call Trace 指向 `wp_page_copy`（写时复制路径）或 `sparse_add_one_section`（内存热添加路径）。\n- 寄存器 CR2 指向无效的高位地址（如 `ebfff000` 或 `eb800000`），触发 Oops 0002。",
+  "root_cause": "Hyper-V 动态内存驱动 `hv_balloon` 在处理内存热添加（memory hot-add）请求时存在逻辑错误。驱动在将内存上线后错误地调用了 `__online_page_free(pg)` 函数。该操作导致刚热添加的内存页面结构被错误释放或状态异常，当后续代码（如 `wp_page_copy` 或 `sparse_add_one_section`）尝试访问这些内存区域时触发缺页异常导致 panic。",
+  "solution": "- 临时规避：通过内核启动参数 `hv_balloon.hot_add=0` 禁用内存热添加功能，或使用 `module_blacklist=hv_balloon` 禁用该驱动。\n- 修复方案：提交者提供了补丁，移除 `drivers/hv/hv_balloon.c` 中热添加路径下对 `__online_page_free()` 的调用，测试验证可修复 panic 并正常识别热添加内存。",
+  "category": "kernel",
+  "source_file": "x86_32架构Hyper-V上内存热添加触发内核panic.txt",
+  "content": "内核版本：4.19.95\n\n## 问题现象\n- 在 Hyper-V 虚拟机中运行 x86_32 架构内核时触发 Kernel Panic，提示 \"Fatal exception\"。\n- 故障通常由 systemd-udevd 或执行 `udevadm trigger --type=devices --action=add` 触发，也与 Hyper-V 动态内存压力报告延迟（pressure_report_delay）相关。\n- 日志显示 \"BUG: unable to handle kernel paging request\"，Call Trace 指向 `wp_page_copy`（写时复制路径）或 `sparse_add_one_section`（内存热添加路径）。\n- 寄存器 CR2 指向无效的高位地址（如 `ebfff000` 或 `eb800000`），触发 Oops 0002。\n\n## 问题根因\nHyper-V 动态内存驱动 `hv_balloon` 在处理内存热添加（memory hot-add）请求时存在逻辑错误。驱动在将内存上线后错误地调用了 `__online_page_free(pg)` 函数。该操作导致刚热添加的内存页面结构被错误释放或状态异常，当后续代码（如 `wp_page_copy` 或 `sparse_add_one_section`）尝试访问这些内存区域时触发缺页异常导致 panic。\n\n## 解决方案\n- 临时规避：通过内核启动参数 `hv_balloon.hot_add=0` 禁用内存热添加功能，或使用 `module_blacklist=hv_balloon` 禁用该驱动。\n- 修复方案：提交者提供了补丁，移除 `drivers/hv/hv_balloon.c` 中热添加路径下对 `__online_page_free()` 的调用，测试验证可修复 panic 并正常识别热添加内存。"
+}

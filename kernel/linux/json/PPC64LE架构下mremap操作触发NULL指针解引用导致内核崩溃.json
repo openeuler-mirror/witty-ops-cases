@@ -1,0 +1,10 @@
+{
+  "title": "PPC64LE架构下mremap操作触发NULL指针解引用导致内核崩溃",
+  "kernel_version": "4.19.13",
+  "phenomenon": "- 系统日志报错：\"Unable to handle kernel paging request for data at address 0x00000000\"\n- 触发 Kernel Oops，信号为 11 (SIGSEGV)，错误类型为 \"Kernel access of bad area\"\n- 调用栈显示崩溃发生在 `radix__pgtable_trans_huge_withdraw+0x94/0x160`，调用链为 `sys_mremap` -> `move_vma` -> `move_page_tables` -> `__split_huge_pmd`\n- 故障环境为 PPC64LE 架构，配置使用 4K 页面大小（非默认 64K）",
+  "root_cause": "在支持 split pmd lock 的配置中，`pmd_move_must_withdraw` 函数针对 Radix MMU 错误地返回了 false。这导致在执行 `mremap` 移动页表时，未将存储在 `pmd_huge_pte` 指针中的 deposited page table 正确转移到目标 pmd 页面。后续代码在 `__split_huge_pmd` 流程中调用 `pgtable_trans_huge_withdraw` 尝试提取该页表时，发现 `pmd_huge_pte` 为 NULL，从而触发空指针解引用。",
+  "solution": "上游已合并修复补丁：commit 579b9239c1f3 (\"powerpc/radix: Fix kernel crash with mremap()\")。\n修复方法为修改 `arch/powerpc/include/asm/book3s/64/pgtable.h`，移除 `pmd_move_must_withdraw` 函数中针对 `radix_enabled()` 的特殊返回逻辑，确保在移动页表时正确处理 deposited page table 的迁移。",
+  "category": "kernel",
+  "source_file": "PPC64LE架构下mremap操作触发NULL指针解引用导致内核崩溃.txt",
+  "content": "内核版本：4.19.13\n\n## 问题现象\n- 系统日志报错：\"Unable to handle kernel paging request for data at address 0x00000000\"\n- 触发 Kernel Oops，信号为 11 (SIGSEGV)，错误类型为 \"Kernel access of bad area\"\n- 调用栈显示崩溃发生在 `radix__pgtable_trans_huge_withdraw+0x94/0x160`，调用链为 `sys_mremap` -> `move_vma` -> `move_page_tables` -> `__split_huge_pmd`\n- 故障环境为 PPC64LE 架构，配置使用 4K 页面大小（非默认 64K）\n\n## 问题根因\n在支持 split pmd lock 的配置中，`pmd_move_must_withdraw` 函数针对 Radix MMU 错误地返回了 false。这导致在执行 `mremap` 移动页表时，未将存储在 `pmd_huge_pte` 指针中的 deposited page table 正确转移到目标 pmd 页面。后续代码在 `__split_huge_pmd` 流程中调用 `pgtable_trans_huge_withdraw` 尝试提取该页表时，发现 `pmd_huge_pte` 为 NULL，从而触发空指针解引用。\n\n## 解决方案\n上游已合并修复补丁：commit 579b9239c1f3 (\"powerpc/radix: Fix kernel crash with mremap()\")。\n修复方法为修改 `arch/powerpc/include/asm/book3s/64/pgtable.h`，移除 `pmd_move_must_withdraw` 函数中针对 `radix_enabled()` 的特殊返回逻辑，确保在移动页表时正确处理 deposited page table 的迁移。"
+}

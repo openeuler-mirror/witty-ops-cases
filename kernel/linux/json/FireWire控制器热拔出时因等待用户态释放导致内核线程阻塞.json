@@ -1,0 +1,10 @@
+{
+  "title": "FireWire控制器热拔出时因等待用户态释放导致内核线程阻塞",
+  "kernel_version": "5.14.2-rt-rt21",
+  "phenomenon": "- FireWire控制器在繁忙状态下从PCIe总线拔出（如Thunderbolt适配器热拔出）时，内核线程发生阻塞。\n- 系统日志报错：\"INFO: task irq/35-pciehp:937 blocked for more than 122 seconds.\"\n- 进程状态为 D (Uninterruptible Sleep)，调用栈显示阻塞发生在 `fw_core_remove_card` 函数中的 `wait_for_completion` 处。\n- 复现方法：执行 `cat > /dev/fw0` 占用设备后拔出控制器，pciehp线程会一直挂起，直到手动终止 `cat` 进程。",
+  "root_cause": "当FireWire控制器被拔出时，内核模块 `firewire_core` 在 `fw_core_remove_card` 函数中调用 `wait_for_completion`，等待持有设备文件描述符的用户态进程释放资源。由于内核未在热拔出时主动断开用户态连接（orphaning file descriptors），导致移除流程必须等待用户态应用响应，从而阻塞了 PCIe 热插拔中断线程 (`irq/35-pciehp`)。",
+  "solution": "暂无官方修复补丁。用户建议修改内核逻辑，在热拔出时将打开的文件描述符孤立（后续操作返回 -ENODEV），使内核能完成关闭流程而无需等待用户态响应。",
+  "category": "kernel",
+  "source_file": "FireWire控制器热拔出时因等待用户态释放导致内核线程阻塞.txt",
+  "content": "内核版本：5.14.2-rt-rt21\n\n## 问题现象\n- FireWire控制器在繁忙状态下从PCIe总线拔出（如Thunderbolt适配器热拔出）时，内核线程发生阻塞。\n- 系统日志报错：\"INFO: task irq/35-pciehp:937 blocked for more than 122 seconds.\"\n- 进程状态为 D (Uninterruptible Sleep)，调用栈显示阻塞发生在 `fw_core_remove_card` 函数中的 `wait_for_completion` 处。\n- 复现方法：执行 `cat > /dev/fw0` 占用设备后拔出控制器，pciehp线程会一直挂起，直到手动终止 `cat` 进程。\n\n## 问题根因\n当FireWire控制器被拔出时，内核模块 `firewire_core` 在 `fw_core_remove_card` 函数中调用 `wait_for_completion`，等待持有设备文件描述符的用户态进程释放资源。由于内核未在热拔出时主动断开用户态连接（orphaning file descriptors），导致移除流程必须等待用户态应用响应，从而阻塞了 PCIe 热插拔中断线程 (`irq/35-pciehp`)。\n\n## 解决方案\n暂无官方修复补丁。用户建议修改内核逻辑，在热拔出时将打开的文件描述符孤立（后续操作返回 -ENODEV），使内核能完成关闭流程而无需等待用户态响应。"
+}

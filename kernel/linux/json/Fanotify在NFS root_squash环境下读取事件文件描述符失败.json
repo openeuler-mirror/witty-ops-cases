@@ -1,0 +1,10 @@
+{
+  "title": "Fanotify在NFS root_squash环境下读取事件文件描述符失败",
+  "kernel_version": "3.X (测试涉及 3.2.0-23, 3.5.0-34, 3.8.0-26)",
+  "phenomenon": "- 在开启了 root_squash 的 NFS 挂载文件系统上，root 用户调用 fanotify_mark 标记目录失败，返回 EACCES 错误。\n- 即使通过降权子进程成功标记，root 权限的监控进程读取 fanotify 事件返回的文件描述符时失败。\n- NFSv3 环境下，读取事件文件描述符返回 EIO 错误。\n- NFSv4 环境下，读取 fanotify 文件描述符返回 ENOTDIR 或 EACCES 错误。",
+  "root_cause": "1. Fanotify 机制在 fs/notify/fanotify/fanotify_user.c 的 create_fd() 函数中直接调用 dentry_open()，该操作使用监控进程（通常为 root）的凭证发起文件打开请求。\n2. NFS 服务器配置了 root_squash，将 root 用户映射为匿名用户，导致其无权访问其他用户拥有的文件，RPC 调用在服务端鉴权失败。\n3. 针对 NFSv4 的 ENOTDIR 错误，经二分排查，由 commit 1788ea6e3b2a58cf4fb00206e362d9caff8d86a7 引入，该提交改变了处理目录打开的逻辑。",
+  "solution": "暂无正式修复。NFS 维护者指出 Fanotify 直接调用 VFS 辅助函数 dentry_open() 的做法不被支持，建议实现正确的文件系统回调机制。临时规避方案包括：在 NFS 导出配置中设置 anon_uid 匹配文件所有者，或在客户端通过 fork 子进程并降权至相应 UID 的方式处理文件访问。",
+  "category": "kernel",
+  "source_file": "Fanotify在NFS root_squash环境下读取事件文件描述符失败.txt",
+  "content": "内核版本：3.X (测试涉及 3.2.0-23, 3.5.0-34, 3.8.0-26)\n\n## 问题现象\n- 在开启了 root_squash 的 NFS 挂载文件系统上，root 用户调用 fanotify_mark 标记目录失败，返回 EACCES 错误。\n- 即使通过降权子进程成功标记，root 权限的监控进程读取 fanotify 事件返回的文件描述符时失败。\n- NFSv3 环境下，读取事件文件描述符返回 EIO 错误。\n- NFSv4 环境下，读取 fanotify 文件描述符返回 ENOTDIR 或 EACCES 错误。\n\n## 问题根因\n1. Fanotify 机制在 fs/notify/fanotify/fanotify_user.c 的 create_fd() 函数中直接调用 dentry_open()，该操作使用监控进程（通常为 root）的凭证发起文件打开请求。\n2. NFS 服务器配置了 root_squash，将 root 用户映射为匿名用户，导致其无权访问其他用户拥有的文件，RPC 调用在服务端鉴权失败。\n3. 针对 NFSv4 的 ENOTDIR 错误，经二分排查，由 commit 1788ea6e3b2a58cf4fb00206e362d9caff8d86a7 引入，该提交改变了处理目录打开的逻辑。\n\n## 解决方案\n暂无正式修复。NFS 维护者指出 Fanotify 直接调用 VFS 辅助函数 dentry_open() 的做法不被支持，建议实现正确的文件系统回调机制。临时规避方案包括：在 NFS 导出配置中设置 anon_uid 匹配文件所有者，或在客户端通过 fork 子进程并降权至相应 UID 的方式处理文件访问。"
+}

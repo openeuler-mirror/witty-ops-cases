@@ -1,0 +1,10 @@
+{
+  "title": "蓝牙连接过程中因递归锁定及原子上下文睡眠触发内核警告",
+  "kernel_version": "4.21.0-0.rc0.git1.1.fc30.x86_64",
+  "phenomenon": "- 连接蓝牙耳机时，dmesg 报告 \"BUG: sleeping function called from invalid context at net/core/sock.c:2771\"。\n- 内核日志显示 `in_atomic(): 1`，且进程 `krfcommd` 持有锁。\n- 报告 \"WARNING: possible recursive locking detected\"，提示 `krfcommd` 试图获取已持有的 socket 锁 `slock-AF_BLUETOOTH-BTPROTO_RFCOMM`。\n- Call Trace: `lock_sock_nested` <- `bt_accept_enqueue` <- `rfcomm_connect_ind` <- `rfcomm_run`。\n- 功能上耳机可正常使用，但产生内核警告。",
+  "root_cause": "`krfcommd` 内核线程在处理 RFCOMM 连接指示（`rfcomm_connect_ind`）时，调用 `bt_accept_enqueue` 函数。该函数内部调用 `lock_sock_nested` 试图获取 socket 锁，但此时线程已持有该锁，导致递归锁定；同时由于处于原子上下文（`in_atomic()` 为真），调用可能睡眠的锁函数触发了 \"sleeping function called from invalid context\" 错误。日志提示可能是缺少锁嵌套标记。",
+  "solution": "暂无",
+  "category": "kernel",
+  "source_file": "蓝牙连接过程中因递归锁定及原子上下文睡眠触发内核警告.txt",
+  "content": "内核版本：4.21.0-0.rc0.git1.1.fc30.x86_64\n\n## 问题现象\n- 连接蓝牙耳机时，dmesg 报告 \"BUG: sleeping function called from invalid context at net/core/sock.c:2771\"。\n- 内核日志显示 `in_atomic(): 1`，且进程 `krfcommd` 持有锁。\n- 报告 \"WARNING: possible recursive locking detected\"，提示 `krfcommd` 试图获取已持有的 socket 锁 `slock-AF_BLUETOOTH-BTPROTO_RFCOMM`。\n- Call Trace: `lock_sock_nested` <- `bt_accept_enqueue` <- `rfcomm_connect_ind` <- `rfcomm_run`。\n- 功能上耳机可正常使用，但产生内核警告。\n\n## 问题根因\n`krfcommd` 内核线程在处理 RFCOMM 连接指示（`rfcomm_connect_ind`）时，调用 `bt_accept_enqueue` 函数。该函数内部调用 `lock_sock_nested` 试图获取 socket 锁，但此时线程已持有该锁，导致递归锁定；同时由于处于原子上下文（`in_atomic()` 为真），调用可能睡眠的锁函数触发了 \"sleeping function called from invalid context\" 错误。日志提示可能是缺少锁嵌套标记。\n\n## 解决方案\n暂无"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "cgroup/cpuset与cpuhotplug并发操作导致内核死锁",
+  "kernel_version": "4.14（评论提及5.0-rc8仍存在）",
+  "phenomenon": "- 系统发生死锁，UI挂起无响应。\n- 多个进程/线程形成循环依赖链：PID 2053 持有 cgroup_threadgroup_mutex 等待 cpuset_mutex；PID 29073 持有 cpuset_mutex 等待 cpuhotplug_lock；PID 30152 持有 cpuhotplug_lock 等待 cpuhp/4 线程；PID 32 等待 sugov/4 线程；PID 1196 等待 cgroup_threadgroup_mutex。",
+  "root_cause": "CPU热插拔与cgroup任务附加操作并发时，锁的获取顺序不一致导致死锁。具体触发路径如下：\n1. cpu_down 流程持有 cpu_hotplug_lock，唤醒 cpuset_hotplug_workfn，该线程持有 cpuset_mutex 后阻塞等待 cpu_hotplug_lock 释放。\n2. cpu_down 流程继续执行 cpuhp_cpufreq_offline -> sugov_kthread_stop -> kthread_stop，唤醒 sugov 线程执行退出操作，sugov 线程在 do_exit 中尝试获取 cgroup_threadgroup_mutex。\n3. 此时用户侧执行 cgroup 任务附加操作（echo pid > /dev/cpuset/tasks），已持有 cgroup_threadgroup_mutex，并尝试获取 cpuset_mutex。\n4. 三组锁互相等待，形成死锁闭环。",
+  "solution": "暂无（Bug状态为NEW，未提及修复补丁）。",
+  "category": "kernel",
+  "source_file": "cgroup_cpuset与cpuhotplug并发操作导致内核死锁.txt",
+  "content": "内核版本：4.14（评论提及5.0-rc8仍存在）\n\n## 问题现象\n- 系统发生死锁，UI挂起无响应。\n- 多个进程/线程形成循环依赖链：PID 2053 持有 cgroup_threadgroup_mutex 等待 cpuset_mutex；PID 29073 持有 cpuset_mutex 等待 cpuhotplug_lock；PID 30152 持有 cpuhotplug_lock 等待 cpuhp/4 线程；PID 32 等待 sugov/4 线程；PID 1196 等待 cgroup_threadgroup_mutex。\n\n## 问题根因\nCPU热插拔与cgroup任务附加操作并发时，锁的获取顺序不一致导致死锁。具体触发路径如下：\n1. cpu_down 流程持有 cpu_hotplug_lock，唤醒 cpuset_hotplug_workfn，该线程持有 cpuset_mutex 后阻塞等待 cpu_hotplug_lock 释放。\n2. cpu_down 流程继续执行 cpuhp_cpufreq_offline -> sugov_kthread_stop -> kthread_stop，唤醒 sugov 线程执行退出操作，sugov 线程在 do_exit 中尝试获取 cgroup_threadgroup_mutex。\n3. 此时用户侧执行 cgroup 任务附加操作（echo pid > /dev/cpuset/tasks），已持有 cgroup_threadgroup_mutex，并尝试获取 cpuset_mutex。\n4. 三组锁互相等待，形成死锁闭环。\n\n## 解决方案\n暂无（Bug状态为NEW，未提及修复补丁）。"
+}

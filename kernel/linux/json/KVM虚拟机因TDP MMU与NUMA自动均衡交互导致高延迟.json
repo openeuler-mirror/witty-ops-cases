@@ -1,0 +1,10 @@
+{
+  "title": "KVM虚拟机因TDP MMU与NUMA自动均衡交互导致高延迟",
+  "kernel_version": "5.17-rc3 及之后版本（测试涉及 6.1、6.5、6.7-rc5）",
+  "phenomenon": "- KVM 虚拟机内部出现严重延迟，SSH 会话经常卡顿数秒。\n- 网络延迟异常，Ping 响应时间可达数秒。\n- 简单的系统调用如 `sleep(1)` 实际执行时间可能长达数秒。\n- 应用程序因小超时频繁报错。\n- 故障通常在负载较高或 NUMA 自动均衡触发时集中出现。",
+  "root_cause": "Git bisect 定位到提交 `f47e5bbbc92f` 引入了该问题。该提交修改了 TDP MMU 逻辑，在取消映射（unmapping）或清除（zapping） guest 内存范围时保留非叶子 SPTEs（即上层页表结构），旨在减少后续重填充（repopulation）的工作量。然而，这导致后续处理无效化（invalidations，如由 NUMA 自动均衡触发的 mmu_notifier）时，KVM 需要遍历更深的页表才能发现需要处理的工作，增加了开销。当 Host 开启 NUMA 自动均衡（`numa_balancing`）时，频繁的内存页迁移与 TDP MMU 的上述行为产生交互，加剧了 `mmu_lock` 的争用。此外，动态抢占（PREEMPT_DYNAMIC）内核中的一个 bug 导致自愿抢占（Voluntary preemption）模型下也意外允许了锁争用时的让出（yield）操作，进一步恶化了延迟。",
+  "solution": "- 临时规避：在 Host 上禁用 NUMA 自动均衡，执行 `echo 0 > /proc/sys/kernel/numa_balancing`。\n- 临时规避：禁用 KVM 的 TDP MMU 功能，执行 `echo N > /sys/module/kvm/parameters/tdp_mmu` 并重启虚拟机。\n- 代码修复：应用补丁系列 https://lore.kernel.org/all/20230825020733.2849862-1-seanjc@google.com。",
+  "category": "kernel",
+  "source_file": "KVM虚拟机因TDP MMU与NUMA自动均衡交互导致高延迟.txt",
+  "content": "内核版本：5.17-rc3 及之后版本（测试涉及 6.1、6.5、6.7-rc5）\n\n## 问题现象\n- KVM 虚拟机内部出现严重延迟，SSH 会话经常卡顿数秒。\n- 网络延迟异常，Ping 响应时间可达数秒。\n- 简单的系统调用如 `sleep(1)` 实际执行时间可能长达数秒。\n- 应用程序因小超时频繁报错。\n- 故障通常在负载较高或 NUMA 自动均衡触发时集中出现。\n\n## 问题根因\nGit bisect 定位到提交 `f47e5bbbc92f` 引入了该问题。该提交修改了 TDP MMU 逻辑，在取消映射（unmapping）或清除（zapping） guest 内存范围时保留非叶子 SPTEs（即上层页表结构），旨在减少后续重填充（repopulation）的工作量。然而，这导致后续处理无效化（invalidations，如由 NUMA 自动均衡触发的 mmu_notifier）时，KVM 需要遍历更深的页表才能发现需要处理的工作，增加了开销。当 Host 开启 NUMA 自动均衡（`numa_balancing`）时，频繁的内存页迁移与 TDP MMU 的上述行为产生交互，加剧了 `mmu_lock` 的争用。此外，动态抢占（PREEMPT_DYNAMIC）内核中的一个 bug 导致自愿抢占（Voluntary preemption）模型下也意外允许了锁争用时的让出（yield）操作，进一步恶化了延迟。\n\n## 解决方案\n- 临时规避：在 Host 上禁用 NUMA 自动均衡，执行 `echo 0 > /proc/sys/kernel/numa_balancing`。\n- 临时规避：禁用 KVM 的 TDP MMU 功能，执行 `echo N > /sys/module/kvm/parameters/tdp_mmu` 并重启虚拟机。\n- 代码修复：应用补丁系列 https://lore.kernel.org/all/20230825020733.2849862-1-seanjc@google.com。"
+}

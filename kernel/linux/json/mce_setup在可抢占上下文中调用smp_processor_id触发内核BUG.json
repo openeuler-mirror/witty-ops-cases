@@ -1,0 +1,10 @@
+{
+  "title": "mce_setup在可抢占上下文中调用smp_processor_id触发内核BUG",
+  "kernel_version": "5.14.2",
+  "phenomenon": "- 系统启动处理 BERT（Boot Error Record Table）错误记录时，内核日志打印 \"BUG: using smp_processor_id() in preemptible [00000000] code: swapper/0/1\"。\n- Call Trace 显示调用链为 `bert_init` -> `cper_estatus_print` -> `apei_smca_report_x86_error` -> `mce_setup`。\n- 导致硬件错误寄存器阵列信息未能正常打印。",
+  "root_cause": "函数 `mce_setup`（位于 `arch/x86/kernel/cpu/mce/core.c`）在初始化 `struct mce` 结构体时直接调用了 `smp_processor_id()`。该函数被 `apei_smca_report_x86_error` 调用时处于可抢占上下文，而 `smp_processor_id()` 要求禁用抢占或在中断上下文中调用，因此触发了内核的抢占合法性检查失败。",
+  "solution": "用户验证本地修改有效：将 `mce_setup` 中的 `smp_processor_id()` 替换为 `get_cpu()` 和 `put_cpu()` 组合，以在获取 CPU ID 期间禁用抢占。上游尚未合并正式修复补丁。",
+  "category": "kernel",
+  "source_file": "mce_setup在可抢占上下文中调用smp_processor_id触发内核BUG.txt",
+  "content": "内核版本：5.14.2\n\n## 问题现象\n- 系统启动处理 BERT（Boot Error Record Table）错误记录时，内核日志打印 \"BUG: using smp_processor_id() in preemptible [00000000] code: swapper/0/1\"。\n- Call Trace 显示调用链为 `bert_init` -> `cper_estatus_print` -> `apei_smca_report_x86_error` -> `mce_setup`。\n- 导致硬件错误寄存器阵列信息未能正常打印。\n\n## 问题根因\n函数 `mce_setup`（位于 `arch/x86/kernel/cpu/mce/core.c`）在初始化 `struct mce` 结构体时直接调用了 `smp_processor_id()`。该函数被 `apei_smca_report_x86_error` 调用时处于可抢占上下文，而 `smp_processor_id()` 要求禁用抢占或在中断上下文中调用，因此触发了内核的抢占合法性检查失败。\n\n## 解决方案\n用户验证本地修改有效：将 `mce_setup` 中的 `smp_processor_id()` 替换为 `get_cpu()` 和 `put_cpu()` 组合，以在获取 CPU ID 期间禁用抢占。上游尚未合并正式修复补丁。"
+}

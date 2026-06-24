@@ -1,0 +1,10 @@
+{
+  "title": "AF_SMC 套接字关闭时检测到循环锁定依赖导致潜在死锁",
+  "kernel_version": "6.12.x（日志显示具体版本为 6.12.34 和 6.12.42）",
+  "phenomenon": "- 内核日志报错 \"WARNING: possible circular locking dependency detected\"\n- 报错提示 \"*** DEADLOCK ***\"，涉及锁 `sk_lock-AF_SMC/1` 和 `(work_completion)(&new_smc->smc_listen_work)`\n- 触发路径为 `__sock_release` -> `smc_release` -> `__smc_release` -> `smc_clcsock_release` -> `__cancel_work_sync` -> `__flush_work`",
+  "root_cause": "存在循环锁定依赖：\n1. 关闭路径（CPU0）：进程持有 `sk_lock-AF_SMC/1`（在 `smc_release` 中），试图获取 `(work_completion)(&new_smc->smc_listen_work)`（在 `__flush_work` 中）。\n2. 工作队列路径（CPU1）：进程持有 `(work_completion)(&new_smc->smc_listen_work)`（在 `smc_listen_work` 执行中），试图获取 `sk_lock-AF_SMC/1`（在 `smc_listen_out` -> `lock_sock_nested` 中）。\n这种锁获取顺序的冲突导致了潜在的死锁风险。",
+  "solution": "暂无",
+  "category": "kernel",
+  "source_file": "AF_SMC 套接字关闭时检测到循环锁定依赖导致潜在死锁.txt",
+  "content": "内核版本：6.12.x（日志显示具体版本为 6.12.34 和 6.12.42）\n\n## 问题现象\n- 内核日志报错 \"WARNING: possible circular locking dependency detected\"\n- 报错提示 \"*** DEADLOCK ***\"，涉及锁 `sk_lock-AF_SMC/1` 和 `(work_completion)(&new_smc->smc_listen_work)`\n- 触发路径为 `__sock_release` -> `smc_release` -> `__smc_release` -> `smc_clcsock_release` -> `__cancel_work_sync` -> `__flush_work`\n\n## 问题根因\n存在循环锁定依赖：\n1. 关闭路径（CPU0）：进程持有 `sk_lock-AF_SMC/1`（在 `smc_release` 中），试图获取 `(work_completion)(&new_smc->smc_listen_work)`（在 `__flush_work` 中）。\n2. 工作队列路径（CPU1）：进程持有 `(work_completion)(&new_smc->smc_listen_work)`（在 `smc_listen_work` 执行中），试图获取 `sk_lock-AF_SMC/1`（在 `smc_listen_out` -> `lock_sock_nested` 中）。\n这种锁获取顺序的冲突导致了潜在的死锁风险。\n\n## 解决方案\n暂无"
+}

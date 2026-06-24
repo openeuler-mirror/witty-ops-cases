@@ -1,0 +1,10 @@
+{
+  "title": "AMDGPU驱动因Cursor更新与Page Flip竞争导致Use-After-Free",
+  "kernel_version": "4.17-rc1（受影响版本包括 4.14 至 4.18.0）",
+  "phenomenon": "- KASAN 检测到 use-after-free 错误，发生在 `drm_atomic_helper_wait_for_flip_done+0x247/0x260`。\n- 故障现场堆栈显示 `kworker/u8` 进程在执行 `commit_work` 时访问了已释放的内存地址。\n- 内存分配源头为 `dm_crtc_duplicate_state`（由 `page_flip_common` 调用），释放源头为 `drm_atomic_state_default_clear`（由 `drm_mode_cursor_ioctl` -> `drm_atomic_helper_update_plane` 调用）。\n- 系统日志打印 \"BUG: KASAN: use-after-free in drm_atomic_helper_wait_for_flip_done\"。",
+  "root_cause": "光标更新操作与原子提交工作队列之间存在竞争条件。当用户空间发起光标更新（cursor update）时，`drm_atomic_helper_update_plane` 流程会调用 `drm_atomic_state_default_clear` 释放 `drm_atomic_state` 结构体。与此同时，异步的 commit work（处理之前的 page flip）仍在 `drm_atomic_helper_wait_for_flip_done` 中尝试访问 `new_crtc_state->commit` 成员，导致访问已释放内存。",
+  "solution": "开发者 Mikita Lipski 提供的补丁（用于复用或复制现有的 crtc state 以避免竞争）经用户验证可修复该问题。报告中提及的其他补丁（如 Daniel Vetter 或 Lyude Paul 的补丁）未能解决此特定 use-after-free 问题。",
+  "category": "kernel",
+  "source_file": "AMDGPU驱动因Cursor更新与Page Flip竞争导致Use-After-Free.txt",
+  "content": "内核版本：4.17-rc1（受影响版本包括 4.14 至 4.18.0）\n\n## 问题现象\n- KASAN 检测到 use-after-free 错误，发生在 `drm_atomic_helper_wait_for_flip_done+0x247/0x260`。\n- 故障现场堆栈显示 `kworker/u8` 进程在执行 `commit_work` 时访问了已释放的内存地址。\n- 内存分配源头为 `dm_crtc_duplicate_state`（由 `page_flip_common` 调用），释放源头为 `drm_atomic_state_default_clear`（由 `drm_mode_cursor_ioctl` -> `drm_atomic_helper_update_plane` 调用）。\n- 系统日志打印 \"BUG: KASAN: use-after-free in drm_atomic_helper_wait_for_flip_done\"。\n\n## 问题根因\n光标更新操作与原子提交工作队列之间存在竞争条件。当用户空间发起光标更新（cursor update）时，`drm_atomic_helper_update_plane` 流程会调用 `drm_atomic_state_default_clear` 释放 `drm_atomic_state` 结构体。与此同时，异步的 commit work（处理之前的 page flip）仍在 `drm_atomic_helper_wait_for_flip_done` 中尝试访问 `new_crtc_state->commit` 成员，导致访问已释放内存。\n\n## 解决方案\n开发者 Mikita Lipski 提供的补丁（用于复用或复制现有的 crtc state 以避免竞争）经用户验证可修复该问题。报告中提及的其他补丁（如 Daniel Vetter 或 Lyude Paul 的补丁）未能解决此特定 use-after-free 问题。"
+}

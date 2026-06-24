@@ -1,0 +1,10 @@
+{
+  "title": "XFS writepages缓存extent map与外部变更竞争导致Assertion失败",
+  "kernel_version": "4.20-rc6 with xfs-4.21-merge-2",
+  "phenomenon": "- 运行 xfstests generic/464 测试用例时，报告文件系统不一致。\n- 卸载文件系统过程中触发内核 Assertion 失败：`XFS: Assertion failed: 0, file: fs/xfs/xfs_super.c, line: 985`。\n- 触发 WARNING，Call Trace 显示：`xfs_fs_destroy_inode+0x584/0x8e0 [xfs]` -> `dispose_list` -> `evict_inodes` -> `generic_shutdown_super`。\n- 开启 XFS_DEBUG 后，日志显示具体错误信息：`ino 28ff data fork has delalloc extent at [0x160:0x1]`。",
+  "root_cause": "XFS 的 writepages 机制在缓存 extent map (imap) 时与外部文件大小变更存在竞争条件。具体流程如下：\n1. writepages 正在处理一个具有较大 EOF 后推测预分配空间的文件，并缓存了包含该预分配空间的 imap。\n2. 此时文件被一个进程关闭，导致预分配空间被截断，随后立即被另一进程追加写入，导致文件大小增加。\n3. writepages 回到 `xfs_map_blocks()` 时根据当前文件大小对 imap 进行裁剪。\n4. 由于文件大小在 imap 缓存和裁剪操作之间发生了变化，裁剪后的 imap 仍包含了一个本应被释放的原始预分配块。\n这导致 inode 销毁时 `i_delayed_blks` 计数不为 0，从而触发 `xfs_fs_destroy_inode` 中的断言失败。",
+  "solution": "开发者提供了修复补丁，在 `xfs_map_blocks()` 函数中缓存新的 imap 后立即调用 `xfs_trim_extent_eof(&wpc->imap, ip)` 进行裁剪，从而缩小竞争窗口，避免缓存过时的 extent 信息。经测试验证，该补丁可有效修复此问题。",
+  "category": "kernel",
+  "source_file": "XFS writepages缓存extent map与外部变更竞争导致Assertion失败.txt",
+  "content": "内核版本：4.20-rc6 with xfs-4.21-merge-2\n\n## 问题现象\n- 运行 xfstests generic/464 测试用例时，报告文件系统不一致。\n- 卸载文件系统过程中触发内核 Assertion 失败：`XFS: Assertion failed: 0, file: fs/xfs/xfs_super.c, line: 985`。\n- 触发 WARNING，Call Trace 显示：`xfs_fs_destroy_inode+0x584/0x8e0 [xfs]` -> `dispose_list` -> `evict_inodes` -> `generic_shutdown_super`。\n- 开启 XFS_DEBUG 后，日志显示具体错误信息：`ino 28ff data fork has delalloc extent at [0x160:0x1]`。\n\n## 问题根因\nXFS 的 writepages 机制在缓存 extent map (imap) 时与外部文件大小变更存在竞争条件。具体流程如下：\n1. writepages 正在处理一个具有较大 EOF 后推测预分配空间的文件，并缓存了包含该预分配空间的 imap。\n2. 此时文件被一个进程关闭，导致预分配空间被截断，随后立即被另一进程追加写入，导致文件大小增加。\n3. writepages 回到 `xfs_map_blocks()` 时根据当前文件大小对 imap 进行裁剪。\n4. 由于文件大小在 imap 缓存和裁剪操作之间发生了变化，裁剪后的 imap 仍包含了一个本应被释放的原始预分配块。\n这导致 inode 销毁时 `i_delayed_blks` 计数不为 0，从而触发 `xfs_fs_destroy_inode` 中的断言失败。\n\n## 解决方案\n开发者提供了修复补丁，在 `xfs_map_blocks()` 函数中缓存新的 imap 后立即调用 `xfs_trim_extent_eof(&wpc->imap, ip)` 进行裁剪，从而缩小竞争窗口，避免缓存过时的 extent 信息。经测试验证，该补丁可有效修复此问题。"
+}

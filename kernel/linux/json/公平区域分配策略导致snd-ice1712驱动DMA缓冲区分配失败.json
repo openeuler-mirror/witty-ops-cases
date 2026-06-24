@@ -1,0 +1,10 @@
+{
+  "title": "公平区域分配策略导致snd-ice1712驱动DMA缓冲区分配失败",
+  "kernel_version": "3.12.x",
+  "phenomenon": "- snd-ice1712 驱动在内核 3.12.x 下无法正常工作，播放音频时报错 \"aplay: set_params:1297: Fehler beim Setzen der Hardware-Parameter\"。\n- 检查 `/proc/asound/card1/pcm0p` 发现 prealloc 参数为 0（正常应为 256）。\n- 尝试手动设置 prealloc 值时返回错误码 -12 (ENOMEM)，dmesg 显示 \"data write error to prealloc (-12)\"。",
+  "root_cause": "内核引入 commit `81c0a2bb515fd4daae8cab64352877480792b515` (\"mm: page_alloc: fair zone allocator policy\") 后改变了内存分配行为。snd-ice1712 驱动调用 `pci_set_dma_mask(DMA_BIT_MASK(28))` 设置了 28 位 DMA 地址限制。在 `CONFIG_ZONE_DMA=n` 的配置下，系统依赖 `ZONE_DMA32` 进行分配，`dma_generic_alloc_coherent` 仅进行简单分配并检查地址是否符合掩码。公平区域分配策略导致 `ZONE_DMA32` 被均匀填充，使得在其中找到符合 28 位地址限制的连续物理内存（高阶页面）的概率大幅降低，从而导致 DMA 缓冲区分配失败。",
+  "solution": "- 规避方法：在内核配置中启用 `CONFIG_ZONE_DMA=y`。\n- 官方修复：开发者提交了补丁（attachment 121531）强制该驱动选择 `CONFIG_ZONE_DMA`，修复计划合入 3.14-rc1 版本。用户反馈在 4.9.0-rc4 版本中问题已解决。",
+  "category": "kernel",
+  "source_file": "公平区域分配策略导致snd-ice1712驱动DMA缓冲区分配失败.txt",
+  "content": "内核版本：3.12.x\n\n## 问题现象\n- snd-ice1712 驱动在内核 3.12.x 下无法正常工作，播放音频时报错 \"aplay: set_params:1297: Fehler beim Setzen der Hardware-Parameter\"。\n- 检查 `/proc/asound/card1/pcm0p` 发现 prealloc 参数为 0（正常应为 256）。\n- 尝试手动设置 prealloc 值时返回错误码 -12 (ENOMEM)，dmesg 显示 \"data write error to prealloc (-12)\"。\n\n## 问题根因\n内核引入 commit `81c0a2bb515fd4daae8cab64352877480792b515` (\"mm: page_alloc: fair zone allocator policy\") 后改变了内存分配行为。snd-ice1712 驱动调用 `pci_set_dma_mask(DMA_BIT_MASK(28))` 设置了 28 位 DMA 地址限制。在 `CONFIG_ZONE_DMA=n` 的配置下，系统依赖 `ZONE_DMA32` 进行分配，`dma_generic_alloc_coherent` 仅进行简单分配并检查地址是否符合掩码。公平区域分配策略导致 `ZONE_DMA32` 被均匀填充，使得在其中找到符合 28 位地址限制的连续物理内存（高阶页面）的概率大幅降低，从而导致 DMA 缓冲区分配失败。\n\n## 解决方案\n- 规避方法：在内核配置中启用 `CONFIG_ZONE_DMA=y`。\n- 官方修复：开发者提交了补丁（attachment 121531）强制该驱动选择 `CONFIG_ZONE_DMA`，修复计划合入 3.14-rc1 版本。用户反馈在 4.9.0-rc4 版本中问题已解决。"
+}

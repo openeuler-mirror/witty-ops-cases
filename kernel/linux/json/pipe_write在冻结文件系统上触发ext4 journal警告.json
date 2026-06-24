@@ -1,0 +1,10 @@
+{
+  "title": "pipe_write在冻结文件系统上触发ext4 journal警告",
+  "kernel_version": "3.11.9-gentoo",
+  "phenomenon": "- 内核日志打印 WARNING：`WARNING: CPU: 3 PID: 4273 at fs/ext4/ext4_jbd2.c:48 ext4_journal_check_start+0x24/0x67()`\n- Call Trace 显示调用链为 `pipe_write` -> `file_update_time` -> `ext4_dirty_inode` -> `__ext4_journal_start_sb`。\n- 复现路径：创建 fifo，后台写入，执行 `fsfreeze -f` 冻结文件系统，然后读取 fifo。",
+  "root_cause": "`pipe_write()` 函数在写入管道时会尝试更新文件时间，但未获取 `sb_start_write()` 锁。当文件系统处于冻结状态时，`ext4_journal_check_start` 检测到非法的事务启动请求，从而触发警告。",
+  "solution": "开发者已提交修复补丁，修改 `pipe_write` 逻辑，使其调用 `sb_start_write_try()`：若文件系统已冻结则跳过时间更新，避免触发 journal 检查警告。",
+  "category": "kernel",
+  "source_file": "pipe_write在冻结文件系统上触发ext4 journal警告.txt",
+  "content": "内核版本：3.11.9-gentoo\n\n## 问题现象\n- 内核日志打印 WARNING：`WARNING: CPU: 3 PID: 4273 at fs/ext4/ext4_jbd2.c:48 ext4_journal_check_start+0x24/0x67()`\n- Call Trace 显示调用链为 `pipe_write` -> `file_update_time` -> `ext4_dirty_inode` -> `__ext4_journal_start_sb`。\n- 复现路径：创建 fifo，后台写入，执行 `fsfreeze -f` 冻结文件系统，然后读取 fifo。\n\n## 问题根因\n`pipe_write()` 函数在写入管道时会尝试更新文件时间，但未获取 `sb_start_write()` 锁。当文件系统处于冻结状态时，`ext4_journal_check_start` 检测到非法的事务启动请求，从而触发警告。\n\n## 解决方案\n开发者已提交修复补丁，修改 `pipe_write` 逻辑，使其调用 `sb_start_write_try()`：若文件系统已冻结则跳过时间更新，避免触发 journal 检查警告。"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "find_vmap_area 在中断上下文调用引发自旋锁死锁导致系统冻结",
+  "kernel_version": "5.19.8",
+  "phenomenon": "- 系统在运行过程中发生完全冻结，虚拟环境和物理机均受影响。\n- 通过持续性能分析捕获到 kworker 线程占用大量资源，堆栈显示卡在 native_queued_spin_lock_slowpath。\n- 调用栈显示死锁路径为：_raw_spin_lock -> find_vmap_area -> find_vm_area -> __vunmap -> free_work。\n- 另一路径显示 check_heap_object 在 strncpy_from_user 过程中被调用。",
+  "root_cause": "5.19 版本引入的 commit 993d0b287e2ef7bee2e8b13b0ce4d2b5066f278e 修改了 find_vmap_area()。问题在于 check_heap_object() 函数在检查 vmalloc 地址时调用了 find_vmap_area()，该函数会请求 vmap_area_lock 自旋锁。\n由于 check_heap_object() 可能在 IRQ 或 NMI 上下文中被调用，而 vmap_area_lock 并非 NMI-safe 锁。当 free_work() 等路径持有该锁时，若发生中断并在中断处理中调用 check_heap_object() 尝试获取同一把锁，将导致自旋锁死锁，进而引发系统冻结。",
+  "solution": "暂无已合并的主线修复。\n讨论中的修复方案包括：\n1. 短期方案：引入 find_vmap_area_try() 函数，使用 spin_trylock 尝试获取锁；若处于中断上下文且获取失败则直接返回，避免死锁。\n2. 长期方案：使用 RCU 机制保护 vmap_area_root 的遍历，实现无锁访问。",
+  "category": "kernel",
+  "source_file": "find_vmap_area 在中断上下文调用引发自旋锁死锁导致系统冻结.txt",
+  "content": "内核版本：5.19.8\n\n## 问题现象\n- 系统在运行过程中发生完全冻结，虚拟环境和物理机均受影响。\n- 通过持续性能分析捕获到 kworker 线程占用大量资源，堆栈显示卡在 native_queued_spin_lock_slowpath。\n- 调用栈显示死锁路径为：_raw_spin_lock -> find_vmap_area -> find_vm_area -> __vunmap -> free_work。\n- 另一路径显示 check_heap_object 在 strncpy_from_user 过程中被调用。\n\n## 问题根因\n5.19 版本引入的 commit 993d0b287e2ef7bee2e8b13b0ce4d2b5066f278e 修改了 find_vmap_area()。问题在于 check_heap_object() 函数在检查 vmalloc 地址时调用了 find_vmap_area()，该函数会请求 vmap_area_lock 自旋锁。\n由于 check_heap_object() 可能在 IRQ 或 NMI 上下文中被调用，而 vmap_area_lock 并非 NMI-safe 锁。当 free_work() 等路径持有该锁时，若发生中断并在中断处理中调用 check_heap_object() 尝试获取同一把锁，将导致自旋锁死锁，进而引发系统冻结。\n\n## 解决方案\n暂无已合并的主线修复。\n讨论中的修复方案包括：\n1. 短期方案：引入 find_vmap_area_try() 函数，使用 spin_trylock 尝试获取锁；若处于中断上下文且获取失败则直接返回，避免死锁。\n2. 长期方案：使用 RCU 机制保护 vmap_area_root 的遍历，实现无锁访问。"
+}

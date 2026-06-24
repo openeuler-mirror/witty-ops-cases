@@ -1,0 +1,10 @@
+{
+  "title": "mwifiex驱动固件初始化与设备移除竞态导致空指针崩溃",
+  "kernel_version": "4.1.x（具体为 4.1.27）",
+  "phenomenon": "- 系统在固件初始化过程中执行重启操作时触发内核崩溃。\n- 故障表现为 NULL pointer dereference，发生在 `flush_workqueue` 函数中。\n- Call trace 路径：`SyS_reboot` -> `kernel_power_off` -> `device_shutdown` -> `mwifiex_pcie_shutdown` -> `mwifiex_pcie_remove` -> `mwifiex_remove_card` -> `mwifiex_terminate_workqueue` -> `flush_workqueue`。",
+  "root_cause": "mwifiex 驱动存在异步固件初始化失败与设备移除之间的竞态条件。\n当系统重启时，设备移除流程（`mwifiex_pcie_shutdown`）调用 `mwifiex_remove_card` 并等待信号量；同时，固件初始化流程（`mwifiex_fw_dpc`）因检测到“FW in reset state”而失败，进入错误处理路径，释放 adapter 资源（将 `adapter->workqueue` 置为 NULL）并释放信号量。随后，设备移除流程获得信号量继续执行，试图访问已置空的 `adapter->workqueue`，导致空指针解引用。",
+  "solution": "参考 4.11 内核补丁（commit id: 4a79aa17d53ea8d5fa4acdaed487a786a185936a）进行修复，需针对 pcie 接口进行适配映射。该补丁解决了初始化与移除流程间的竞态问题，单纯的 NULL 指针检查无法解决后续 `wiphy_unregister` 等操作的崩溃风险。",
+  "category": "kernel",
+  "source_file": "mwifiex驱动固件初始化与设备移除竞态导致空指针崩溃.txt",
+  "content": "内核版本：4.1.x（具体为 4.1.27）\n\n## 问题现象\n- 系统在固件初始化过程中执行重启操作时触发内核崩溃。\n- 故障表现为 NULL pointer dereference，发生在 `flush_workqueue` 函数中。\n- Call trace 路径：`SyS_reboot` -> `kernel_power_off` -> `device_shutdown` -> `mwifiex_pcie_shutdown` -> `mwifiex_pcie_remove` -> `mwifiex_remove_card` -> `mwifiex_terminate_workqueue` -> `flush_workqueue`。\n\n## 问题根因\nmwifiex 驱动存在异步固件初始化失败与设备移除之间的竞态条件。\n当系统重启时，设备移除流程（`mwifiex_pcie_shutdown`）调用 `mwifiex_remove_card` 并等待信号量；同时，固件初始化流程（`mwifiex_fw_dpc`）因检测到“FW in reset state”而失败，进入错误处理路径，释放 adapter 资源（将 `adapter->workqueue` 置为 NULL）并释放信号量。随后，设备移除流程获得信号量继续执行，试图访问已置空的 `adapter->workqueue`，导致空指针解引用。\n\n## 解决方案\n参考 4.11 内核补丁（commit id: 4a79aa17d53ea8d5fa4acdaed487a786a185936a）进行修复，需针对 pcie 接口进行适配映射。该补丁解决了初始化与移除流程间的竞态问题，单纯的 NULL 指针检查无法解决后续 `wiphy_unregister` 等操作的崩溃风险。"
+}

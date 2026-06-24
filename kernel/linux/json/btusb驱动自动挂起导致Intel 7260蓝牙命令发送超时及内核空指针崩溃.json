@@ -1,0 +1,10 @@
+{
+  "title": "btusb驱动自动挂起导致Intel 7260蓝牙命令发送超时及内核空指针崩溃",
+  "kernel_version": "5.5.13（问题复现于 4.9 至 6.2.7 多个版本）",
+  "phenomenon": "- 在 A2DP 模式下暂停或播放音频时，蓝牙协议栈停滞，设备无响应。\n- 内核日志频繁报错：`Bluetooth: hci0: command 0x... tx timeout`。\n- 尝试重置蓝牙设备失败，日志显示：`Bluetooth: hci0: HCI reset during shutdown failed` 以及 `urb failed to resubmit (113)`。\n- 严重情况下触发内核 NULL pointer dereference，导致 Oops。Call Trace 显示：`klist_next` -> `device_find_child` -> `hci_conn_del_sysfs` -> `hci_conn_cleanup` -> `hci_rx_work`。",
+  "root_cause": "btusb 驱动的 USB 自动挂起（autosuspend）机制导致设备在 A2DP 音频传输过程中进入异常状态，无法正常响应 HCI 命令。Intel 芯片的 `cmd_timeout` 处理函数 `btusb_intel_cmd_timeout` 依赖 reset GPIO 进行硬件复位，但部分设备在 ACPI/DeviceTree 中未定义该 GPIO，导致驱动无法执行硬件复位恢复，仅打印 \"No way to reset\" 并继续运行，最终引发通信超时或内核崩溃。",
+  "solution": "临时规避方案：禁用 btusb 模块的自动挂起功能。执行命令 `echo 'options btusb enable_autosuspend=0' | sudo tee /etc/modprobe.d/bluetooth.conf` 并重启系统。\n代码修复建议：修改 `btusb_intel_cmd_timeout` 函数，在检测不到 reset GPIO 时，仿照 QCA 芯片实现调用 `btusb_qca_cmd_timeout` 进行 USB 端口重置。",
+  "category": "kernel",
+  "source_file": "btusb驱动自动挂起导致Intel 7260蓝牙命令发送超时及内核空指针崩溃.txt",
+  "content": "内核版本：5.5.13（问题复现于 4.9 至 6.2.7 多个版本）\n\n## 问题现象\n- 在 A2DP 模式下暂停或播放音频时，蓝牙协议栈停滞，设备无响应。\n- 内核日志频繁报错：`Bluetooth: hci0: command 0x... tx timeout`。\n- 尝试重置蓝牙设备失败，日志显示：`Bluetooth: hci0: HCI reset during shutdown failed` 以及 `urb failed to resubmit (113)`。\n- 严重情况下触发内核 NULL pointer dereference，导致 Oops。Call Trace 显示：`klist_next` -> `device_find_child` -> `hci_conn_del_sysfs` -> `hci_conn_cleanup` -> `hci_rx_work`。\n\n## 问题根因\nbtusb 驱动的 USB 自动挂起（autosuspend）机制导致设备在 A2DP 音频传输过程中进入异常状态，无法正常响应 HCI 命令。Intel 芯片的 `cmd_timeout` 处理函数 `btusb_intel_cmd_timeout` 依赖 reset GPIO 进行硬件复位，但部分设备在 ACPI/DeviceTree 中未定义该 GPIO，导致驱动无法执行硬件复位恢复，仅打印 \"No way to reset\" 并继续运行，最终引发通信超时或内核崩溃。\n\n## 解决方案\n临时规避方案：禁用 btusb 模块的自动挂起功能。执行命令 `echo 'options btusb enable_autosuspend=0' | sudo tee /etc/modprobe.d/bluetooth.conf` 并重启系统。\n代码修复建议：修改 `btusb_intel_cmd_timeout` 函数，在检测不到 reset GPIO 时，仿照 QCA 芯片实现调用 `btusb_qca_cmd_timeout` 进行 USB 端口重置。"
+}
