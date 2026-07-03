@@ -1,0 +1,64 @@
+# 标题
+utshell执行ulimit命令时触发 UTF-8 编码解析错误，导致程序 panic 崩溃
+
+# 基本信息
+- 测试用例: oe_test_utshell_ulimit_01、oe_test_utshell_ulimit_02
+- 系统版本: openEuler-24.03-LTS-SP4
+- 是否问题: 是
+- 关联issue: https://gitcode.com/src-openeuler/utshell/issues/28
+
+# 问题现象
+utshell 内部 ulimit 模块解析输出时，遇到非 UTF-8 字符 / 特殊字符，未做异常处理，触发 UTF-8 编码解析错误，导致 Rust panic 崩溃；命令执行报错
+
+# 错误日志
+Mon Apr 20 10:17:10 2026 - INFO  - Start testing...
++ utshell -c 'ulimit -H | grep unlimited'
+thread '<unnamed>' (6731) panicked at builtins_rust/ulimit/src/lib.rs:916:54:
+called `Result::unwrap()` on an `Err` value: Utf8Error { valid_up_to: 14, error_len: Some(1) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread '<unnamed>' (6731) panicked at library/core/src/panicking.rs:225:5:
+panic in a function that cannot unwind
+
+stack backtrace:
+   0: 0xaaaaabb488c4 - <std::sys::backtrace::BacktraceLock::print::DisplayBacktrace as core::fmt::Display>::fmt::h7531352e2b2fda38
+   1: 0xaaaaabb75538 - core::fmt::write::ha5d8db4671c84e63
+   2: 0xaaaaabb06010 - <unknown>
+   3: 0xaaaaabb21b18 - <unknown>
+   4: 0xaaaaabb219d4 - std::panicking::default_hook::h8377f6de32fd7ed2
+   5: 0xaaaaabb21db8 - std::panicking::panic_with_hook::h6eb4bef448593509
+   6: 0xaaaaabb21bf4 - <unknown>
+   7: 0xaaaaabb1a334 - std::sys::backtrace::__rust_end_short_backtrace::hce0e46d47ece4301
+   8: 0xaaaaabafa714 - _rustc[43118a2d0b2012dd]::rust_begin_unwind
+   9: 0xaaaaab9c0548 - core::panicking::panic_nounwind_fmt::hab50a36a989aaecd
+  10: 0xaaaaab9c0494 - core::panicking::panic_nounwind::he30db31ac090260f
+  11: 0xaaaaab9c0628 - core::panicking::panic_cannot_unwind::hcbb0bfa5e74c6472
+  12: 0xaaaaabbc5ee0 - r_ulimit_builtin
+  13: 0xaaaaababc5829c - <rexec_cmd::UlimitCommand as rexec_cmd::CommandExec>::execute::hd5356ac60aa1b73f
+  14: 0xaaaaababc58eec - r_exec_cmd
+  15: 0xaaaaababc58fd18 - <unknown>
+  16: 0xaaaaababc4ae44 - <unknown>
+  17: 0xaaaaababc470c0 - <unknown>
+  18: 0xaaaaababc51ed4 - execute_command_internal
+  19: 0xaaaaababc3318c - <unknown>
+  20: 0xaaaaababc3759c - <unknown>
+  21: 0xaaaaababc51940 - execute_command_internal
+  22: 0xaaaaabab9e6218 - parse_and_execute
+  23: 0xaaaaababc0bd88 - <unknown>
+  24: 0xaaaaababc13a78 - <unknown>
+  25: 0xaaaaababc16178 - r_main
+  26: 0xaaaaab9c072c - main
+  27: 0xfffffb87a76c4 - <unknown>
+  28: 0xfffffb87a77a8 - __libc_start_main
+  29: 0xaaaaab9c0830 - _start
+  30:        0x0 - <unknown>
+thread caused non-unwinding panic. aborting.
++ CHECK_RESULT 1 0 0 'ulimit -H fail'.
+
+
+# 问题根因
+1. utshell 内置 Rust 实现的 ulimit 命令内部构造 C 字符串后强制转换 UTF-8，字节流中存在非法 UTF-8 字符时触发 Utf8Error，代码未捕获异常直接 unwrap 导致程序 panic 崩溃，命令返回非 0 码使测试用例校验失败。
+
+# 解决方案
+1. 修改 utshell 内置 ulimit 命令源码src/builtins/ulimit.rs，移除存在 C 字符串指针转换、unwrap()编码强解析的风险代码，改用 Rust 原生静态字符串字面量直接打印unlimited文本；消除底层字节流转 UTF-8 时因非法字符触发Utf8Error、进程 panic 崩溃的问题，保证 ulimit 命令执行稳定返回 0，测试用例校验正常。
+pr：https://gitcode.com/src-openeuler/utshell/pull/81

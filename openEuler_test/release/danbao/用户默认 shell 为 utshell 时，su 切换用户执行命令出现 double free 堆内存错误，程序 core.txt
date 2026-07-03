@@ -1,0 +1,112 @@
+# 标题
+用户默认 shell 为 utshell 时，su 切换用户执行命令出现 double free 堆内存错误，程序 core 崩溃。
+
+# 基本信息
+- 测试用例: oe_test_utshell_mapfile_03、oe_test_utshell_readarray_01、oe_test_utshell_compgen_03、oe_test_utshell_readarray_02、oe_test_utshell_compgen_02、oe_test_utshell_compgen_01、oe_test_utshell_test_01、oe_test_utshell_readonly
+- 系统版本: openEuler-24.03-LTS-SP4
+- 是否问题: 是
+- 关联issue: https://gitcode.com/src-openeuler/utshell/issues/30
+
+# 问题现象
+将用户默认 shell 设置为 /bin/utshell 后，执行su - 用户名 -c 任意命令切换登录用户时，utshell 进程初始化加载用户配置文件过程中触发内存异常，统一输出报错free(): double free detected in tcache 2，程序收到终止信号 Aborted 并生成 core 转储文件，数组操作、命令补全 compgen、test 内置判断、readonly 只读变量等所有内置命令执行均会复现该崩溃，命令无法正常执行。
+
+# 错误日志
+[root@localhost mugen]# useradd -m -s /bin/utshell test
+[root@localhost mugen]# su - test -c "echo \$0" |grep -i utshell
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c 'echo {a..z} | tr " " "\n" >alpha.log'
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "mapfile myarr <alpha.log && echo \${myarr[@]}" |grep '^a.*z$'
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "mapfile -n 6 myarr <alpha.log && echo \${myarr[@]}" | grep '^a.*f$'
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "mapfile -s 10 myarr <alpha.log && echo \${myarr[@]}" |grep '^k.*z$'
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "readarray -0 7 myarr <test.log && echo \${#myarr[@]}" |grep 26
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "readarray -s 10 myarr <test.log && echo \${myarr[@]}" | grep '^k.*z$'
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "readarray -n 6 myarr <test.log && echo \${myarr[@]}" | grep '^a.*f$'
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# cp ./testread.sh /home/test
+[root@localhost mugen]# script_file="/home/test/testread.sh"
+[root@localhost mugen]# chmod 755 "$script_file"
+[root@localhost mugen]# chown test:test "$script_file"
+[root@localhost mugen]# su - test -c "echo 'test' >alpha.log"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "readarray < alpha.log -d '\\t' target_array"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "bash ${script_file} |grep -i test"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "compgen --help |grep -i compgen"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "compgen -c"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "compgen -a |grep -i egrep"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "compgen -b |grep -i wait"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "compgen -abckA function | grep -E 'tail|grep'"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "compgen -W "aa ab bb cc" -- \"a\" |grep -E 'aa|ab'"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "complete -o default watch"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "complete -P abc watch"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "complete -S abc watch"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "complete -W 'aa bb cc dd' ee && complete -p |grep -i ee"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "complete -r && complete -p |grep -i ee"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c 'help test' |grep -i test
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c 'test -e test.txt'
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c 'test -c /dev/null'
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "readonly --help |grep -i readonly"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "readonly -p |grep -i declare"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+[root@localhost mugen]# su - test -c "readonly -a |grep 'BASH_VERSINFO'"
+free(): double free detected in tcache 2
+Aborted (core dumped)
+
+
+# 问题根因
+1. utshell 0.5 版本底层内存释放逻辑存在缺陷，切换登录用户加载.utshell_profile/.utshellrc初始化配置时，对同一块堆内存重复执行 free 释放操作，触发 glibc tcache 内存缓存检测double free，直接终止进程并生成 core 转储。
+2.该内存漏洞具备普适性：只要将用户默认 shell 指定为/bin/utshell，通过su -切换用户执行数组操作、补全命令、内置判断、变量只读等任意命令均会复现崩溃。
+
+# 解决方案
+1. 将 utshell 源码包从 0.5 版本升级至 1.0.0 版本，新版上游源码重构了用户登录初始化、各类内置命令的内存分配释放逻辑，修复重复释放内存的底层漏洞；
+2. 删除旧版本零散修复补丁，依托 1.0.0 完整源码统一修复该 double free 内存缺陷，升级后su -切换用户执行各类命令不再触发内存崩溃。
+pr：https://gitcode.com/src-openeuler/utshell/pull/72
