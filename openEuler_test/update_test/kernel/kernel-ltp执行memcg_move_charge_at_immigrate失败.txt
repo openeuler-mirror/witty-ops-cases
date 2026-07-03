@@ -1,0 +1,165 @@
+# 标题
+kernel “ltp执行memcg_move_charge_at_immigrate失败”
+
+# 基本信息
+- 测试用例: memcg_move_charge_at_immigrate
+- 系统版本: openEuler-24.03-LTS-SP3、openEuler-24.03-LTS-SP1(aarch64)
+- 是否问题：否
+- 关联issue: 无
+
+# 问题现象
+ltp测试执行过程,测试用例memcg_move_charge_at_immigrate执行时间歇性失败
+
+# 错误日志
+```
+<<<test_start>>>
+tag=memcg_move_charge_at_immigrate stime=1783743824
+cmdline="memcg_move_charge_at_immigrate_test.sh"
+contacts=""
+analysis=exit
+<<<test_output>>>
+incrementing stop
+memcg_move_charge_at_immigrate_test 1 TINFO: Running: memcg_move_charge_at_immigrate_test.sh 
+memcg_move_charge_at_immigrate_test 1 TINFO: Tested kernel: Linux localhost.localdomain 6.6.0-145.3.18.151.oe2403sp3.aarch64 #1 SMP Mon Jul  6 22:23:10 CST 2026 aarch64 aarch64 aarch64 GNU/Linux
+memcg_move_charge_at_immigrate_test 1 TINFO: Using /tmp/ltp-kubLWCuOcQ/LTP_memcg_move_charge_at_immigrate_test.RDgHLjzuTN as tmpdir (tmpfs filesystem)
+memcg_move_charge_at_immigrate_test 1 TINFO: timeout per run is 0h 5m 0s
+memcg_move_charge_at_immigrate_test 1 TINFO: set /sys/fs/cgroup/memory/memory.use_hierarchy to 0 failed
+memcg_move_charge_at_immigrate_test 1 TINFO: Test disable moving charges
+memcg_move_charge_at_immigrate_test 1 TINFO: Running memcg_process --mmap-anon -s 266240
+memcg_move_charge_at_immigrate_test 1 TINFO: Warming up pid: 1501340
+memcg_move_charge_at_immigrate_test 1 TINFO: Process is still here after warm up: 1501340
+memcg_move_charge_at_immigrate_test 1 TPASS: rss is 0 as expected
+memcg_move_charge_at_immigrate_test 1 TPASS: cache is 0 as expected
+memcg_move_charge_at_immigrate_test 1 TPASS: rss is 266240 as expected
+memcg_move_charge_at_immigrate_test 1 TPASS: cache is 0 as expected
+memcg_move_charge_at_immigrate_test 2 TINFO: Test move anon
+memcg_move_charge_at_immigrate_test 2 TINFO: Running memcg_process --mmap-anon --shm --mmap-file -s 266240
+memcg_move_charge_at_immigrate_test 2 TINFO: Warming up pid: 1501383
+memcg_move_charge_at_immigrate_test 2 TINFO: Process is still here after warm up: 1501383
+memcg_move_charge_at_immigrate_test 2 TFAIL: rss is 0, 266240 expected
+memcg_move_charge_at_immigrate_test 2 TPASS: cache is 0 as expected
+memcg_move_charge_at_immigrate_test 2 TFAIL: rss is 266240, 0 expected
+memcg_move_charge_at_immigrate_test 2 TPASS: cache is 532480 as expected
+memcg_move_charge_at_immigrate_test 3 TINFO: Test move file
+memcg_move_charge_at_immigrate_test 3 TINFO: Running memcg_process --mmap-anon --shm --mmap-file -s 266240
+memcg_move_charge_at_immigrate_test 3 TINFO: Warming up pid: 1501414
+memcg_move_charge_at_immigrate_test 3 TINFO: Process is still here after warm up: 1501414
+memcg_move_charge_at_immigrate_test 3 TPASS: rss is 0 as expected
+memcg_move_charge_at_immigrate_test 3 TFAIL: cache is 0, 532480 expected
+memcg_move_charge_at_immigrate_test 3 TPASS: rss is 266240 as expected
+memcg_move_charge_at_immigrate_test 3 TPASS: cache is 0 as expected
+memcg_move_charge_at_immigrate_test 4 TINFO: Test move anon and file
+memcg_move_charge_at_immigrate_test 4 TINFO: Running memcg_process --mmap-anon --shm -s 266240
+memcg_move_charge_at_immigrate_test 4 TINFO: Warming up pid: 1501450
+memcg_move_charge_at_immigrate_test 4 TINFO: Process is still here after warm up: 1501450
+memcg_move_charge_at_immigrate_test 4 TFAIL: rss is 0, 266240 expected
+memcg_move_charge_at_immigrate_test 4 TFAIL: cache is 0, 266240 expected
+memcg_move_charge_at_immigrate_test 4 TFAIL: rss is 266240, 0 expected
+memcg_move_charge_at_immigrate_test 4 TPASS: cache is 0 as expected
+memcg_move_charge_at_immigrate_test 5 TINFO: SELinux enabled in enforcing mode, this may affect test results
+memcg_move_charge_at_immigrate_test 5 TINFO: it can be disabled with TST_DISABLE_SELINUX=1 (requires super/root)
+memcg_move_charge_at_immigrate_test 5 TINFO: install seinfo to find used SELinux profiles
+memcg_move_charge_at_immigrate_test 5 TINFO: loaded SELinux profiles: none
+```
+
+# 问题根因
+1. 内核6.x+的异步统计更新机制:从Linux内核6.1开始（commit 1813e51eece0ad6 ）， MEMCG_CHARGE_BATCH 从32增加到64，导致 memory.stat 中的内存统计信息更新方式发生变化：
+- memory.usage_in_bytes ：实时同步更新
+- memory.stat (rss/cache字段) ：异步批量更新，存在延迟
+执行过程如下：
+1. 进程在 subgroup_a 中分配内存
+2. signal_memcg_process() 等待内存分配完成
+3. 创建 subgroup_b 并设置 move_charge_at_immigrate
+4. echo $PID > subgroup_b/tasks 将进程移动到 subgroup_b
+5.  内存统计信息需要时间从 subgroup_a 转移到 subgroup_b（异步更新延迟）
+6. check_mem_stat() 读取到旧值，测试失败
+
+# 解决方案
+修改：memcg_move_charge_at_immigrate_test.sh - test_move_charge
+在进程移动到 subgroup_b 后，添加等待循环确保内存统计信息稳定：
+test_move_charge()
+{
+    local memtypes="$1"
+    local size=$2
+    local total_size=$3
+    local move_charge_mask=$4
+    local b_rss=$5
+    local b_cache=$6
+    local a_rss=$7
+    local a_cache=$8
+
+    mkdir subgroup_a
+
+    start_memcg_process $memtypes -s $size
+
+    warmup
+    if [ $? -ne 0 ]; then
+        rmdir subgroup_a
+        return
+    fi
+
+    ROD echo $MEMCG_PROCESS_PID > subgroup_a/tasks
+    signal_memcg_process $total_size "subgroup_a/"
+
+    ROD mkdir subgroup_b
+    echo $move_charge_mask > subgroup_b/memory.move_charge_at_immigrate
+    echo $MEMCG_PROCESS_PID > subgroup_b/tasks
+
+    # Kernel 6.x async stat update: wait for stats to stabilize after move
+    local stat_wait=0
+    local max_stat_wait=50
+    while [ $stat_wait -lt $max_stat_wait ]; do
+        local rss_b=$(grep -w rss subgroup_b/memory.stat | cut -d " " -f 2)
+        [ -z "$rss_b" ] && rss_b=0
+        local cache_b=$(grep -w cache subgroup_b/memory.stat | cut -d " " -f 2)
+        [ -z "$cache_b" ] && cache_b=0
+        local rss_a=$(grep -w rss subgroup_a/memory.stat | cut -d " " -f 2)
+        [ -z "$rss_a" ] && rss_a=0
+        local cache_a=$(grep -w cache subgroup_a/memory.stat | cut -d " " -f 2)
+        [ -z "$cache_a" ] && cache_a=0
+
+        # Check if stats match expected values
+        local match=1
+        if [ "$b_rss" -gt 0 ] && [ "$rss_b" -eq 0 ]; then
+            match=0
+        fi
+        if [ "$b_cache" -gt 0 ] && [ "$cache_b" -eq 0 ]; then
+            match=0
+        fi
+        if [ "$a_rss" -gt 0 ] && [ "$rss_a" -eq 0 ]; then
+            match=0
+        fi
+        if [ "$a_cache" -gt 0 ] && [ "$cache_a" -eq 0 ]; then
+            match=0
+        fi
+        if [ "$b_rss" -eq 0 ] && [ "$rss_b" -gt 0 ] && [ "$a_rss" -gt 0 ]; then
+            match=0
+        fi
+        if [ "$b_cache" -eq 0 ] && [ "$cache_b" -gt 0 ] && [ "$a_cache" -gt 0 ]; then
+            match=0
+        fi
+        if [ "$a_rss" -eq 0 ] && [ "$rss_a" -gt 0 ] && [ "$b_rss" -gt 0 ]; then
+            match=0
+        fi
+        if [ "$a_cache" -eq 0 ] && [ "$cache_a" -gt 0 ] && [ "$b_cache" -gt 0 ]; then
+            match=0
+        fi
+
+        if [ $match -eq 1 ]; then
+            break
+        fi
+
+        tst_sleep 100ms
+        stat_wait=$((stat_wait + 1))
+    done
+
+    cd subgroup_b
+    check_mem_stat "rss" $b_rss
+    check_mem_stat "cache" $b_cache
+    cd ../subgroup_a
+    check_mem_stat "rss" $a_rss
+    check_mem_stat "cache" $a_cache
+    cd ..
+    stop_memcg_process
+    rmdir subgroup_a subgroup_b
+}
