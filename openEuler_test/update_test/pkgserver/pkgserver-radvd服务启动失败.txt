@@ -1,0 +1,54 @@
+# 标题
+pkgserver “radvd服务启动失败”
+
+# 基本信息
+- 测试用例: oe_test_service_radvd
+- 系统版本: openEuler-24.03-LTS-SP3(aarch64/x86_64)
+- 是否问题: 否
+- 关联issue: 无
+
+# 问题现象
+测试执行过程中，检查到radvd服务启动失败，且日志报错/etc/radvd.conf配置文件出现语法错误
+
+# 错误日志
+```
++ eth_name='enp0s2
+enp0s3'
++ cp /etc/radvd.conf /etc/radvd.bak
++ echo 'interface enp0s2
+enp0s3
+{
+        AdvSendAdvert on;
+        MinRtrAdvInterval 3;
+        MaxRtrAdvInterval 10;
+        prefix 2001:db8:0:f101::1/64
+        {
+                AdvOnLink on;
+                AdvAutonomous on;
+                AdvRouterAddr on;
+        };
+
+};'
+```
+```
++ journalctl --since '2026-07-03 15:54:23' -u radvd.service
++ grep -i 'fail\|error'
++ grep -v -i 'DEBUG\|INFO\|WARNING'
+Jul 03 15:54:23 vm-16p64g radvd[17720]: /etc/radvd.conf:20 error: syntax error
+Jul 03 15:54:23 vm-16p64g radvd[17720]: exiting, failed to read config file
+Jul 03 15:54:23 vm-16p64g systemd[1]: radvd.service: Control process exited, code=exited, status=1/FAILURE
+Jul 03 15:54:23 vm-16p64g systemd[1]: radvd.service: Failed with result 'exit-code'.
+Jul 03 15:54:23 vm-16p64g systemd[1]: Failed to start Router advertisement daemon for IPv6.
+Jul 03 15:54:34 vm-16p64g radvd[17757]: exiting, failed to read config file
+Jul 03 15:54:34 vm-16p64g radvd[17757]: /etc/radvd.conf:20 error: syntax error
+Jul 03 15:54:34 vm-16p64g systemd[1]: radvd.service: Control process exited, code=exited, status=1/FAILURE
+Jul 03 15:54:34 vm-16p64g systemd[1]: radvd.service: Failed with result 'exit-code'.
+Jul 03 15:54:34 vm-16p64g systemd[1]: Failed to start Router advertisement daemon for IPv6.
++ CHECK_RESULT 0 0 1 'There is an error message for the log of radvd.service'
+```
+
+# 问题根因
+1. 根因在于流水线平台生成的环境中，两张网卡配置了相同的 IPv4 地址，破坏了网络标识的唯一性，导致用例在通过IP反查网卡名称时出现“一对多”映射，无法锁定目标网卡。
+
+# 解决方案
+1. 修正环境网络配置，确保各网卡 IPv4 地址唯一。
