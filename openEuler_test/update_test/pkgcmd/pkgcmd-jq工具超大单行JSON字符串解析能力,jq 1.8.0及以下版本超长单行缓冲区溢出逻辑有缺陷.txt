@@ -1,0 +1,94 @@
+# 标题
+pkgcmd “验证 jq 工具超大单行 JSON 字符串解析能力,jq 1.8.0及以下版本超长单行缓冲区溢出/行号计数逻辑有缺陷”
+
+# 基本信息
+- 测试用例: oe_test_jq_inputline_4095
+- 系统版本: openEuler-24.03-LTS-SP3\openEuler-24.03-LTS-SP1\openEuler-22.03-LTS-SP4\openEuler-20.03-LTS-SP4(arm、x86_64)
+- 是否问题: 否
+- 关联issue: 无
+- 关联pr: https://atomgit.com/openeuler/mugen/pull/5321
+
+# 问题现象
+diff /tmp/diff_result /tmp/jq_4095_result 命令执行失败
+diff /tmp/diff_result /tmp/jq_16380_result 命令执行失败
+
+# 错误日志
+```
++ echo '1
+1
+3'
++ python3 -c 'print('\''0\n"'\'' + '\''a'\''*4093 + '\''"\n0'\'');'
++ jq input_line_number
++ diff /tmp/diff_result /tmp/jq_4095_result
+2c2
+< 1
+---
+> 2
++ CHECK_RESULT 1
++ actual_result=1
++ expect_result=0
++ mode=0
++ error_log=
++ exit_mode=0
++ '[' -z 1 ']'
++ '[' 0 -eq 0 ']'
++ test 1x '!=' 0x
++ test -n ''
++ (( exec_result++ ))
++ LOG_ERROR 'oe_test_jq_inputline_4095.sh line 36'
++ message='oe_test_jq_inputline_4095.sh line 36'
++ python3 /root/mugen/libs/locallibs/mugen_log.py --level error --message 'oe_test_jq_inputline_4095.sh line 36'
+Wed Jul  1 11:00:22 2026 - ERROR - oe_test_jq_inputline_4095.sh line 36
++ '[' 0 -eq 1 ']'
++ return 0
++ python3 -c 'print('\''0\n"'\'' + '\''a'\''*16378 + '\''"\n0'\'');'
++ jq input_line_number
++ diff /tmp/diff_result /tmp/jq_16380_result
+2c2
+< 1
+---
+> 2
++ CHECK_RESULT 1
++ actual_result=1
++ expect_result=0
++ mode=0
++ error_log=
++ exit_mode=0
++ '[' -z 1 ']'
++ '[' 0 -eq 0 ']'
++ test 1x '!=' 0x
++ test -n ''
++ (( exec_result++ ))
++ LOG_ERROR 'oe_test_jq_inputline_4095.sh line 39'
++ message='oe_test_jq_inputline_4095.sh line 39'
++ python3 /root/mugen/libs/locallibs/mugen_log.py --level error --message 'oe_test_jq_inputline_4095.sh line 39'
+Wed Jul  1 11:00:22 2026 - ERROR - oe_test_jq_inputline_4095.sh line 39
++ '[' 0 -eq 1 ']'
++ return 0
++ CASE_RESULT 0
++ case_re=0
++ test -z 2
++ test 2 -gt 0
++ LOG_ERROR 'failed to execute the case.'
++ message='failed to execute the case.'
+```
+
+# 问题根因
+1、 jq 1.8.0 及 1.8.0以下版本存在的缺陷：
+    jq 1.8.0 的词法扫描器（lexer）有固定长度输入缓冲区，存在两个关键问题：
+        a、超长单行缓冲区截断：单行文本超过内部缓冲阈值（4096/16384 字节）时，词法分析器会拆分多行读取，但行号计数器不会同步自增，超长字符串整行被错误识别为和上一行同行号。
+        b、input_line_number 行号计数逻辑漏洞：仅在读取到 \n 换行符时才增加行号；超长单行被缓冲区切分多次读取，但中间无换行，行号保持不变。
+    测试用例构造 4095、16380 字节超长字符串，刚好触发该漏洞，第二行行号仍输出1，和脚本写死的基准文件匹配，测试 “假通过”。
+
+2、 1.8.1~1.8.2 修复的核心补丁（导致用例失败）
+    从 1.8.1 开始官方修复输入缓冲区与行号统计逻辑，1.8.2 稳定落地：
+        a、动态扩容输入缓冲区：不再使用固定大小 buffer，任意长度单行完整读取，不会截断拆分。
+        b、行号计数逻辑标准化：严格按照物理换行分隔行，只要是独立一行，无论单行多长，input_line_number 都会输出正确递增行号；只要输入存在\n换行，行号 + 1，不受单行内容长度影响。
+        c、同步修复多起安全漏洞（CVE 缓冲区截断、空字节解析缺陷），解析行为严格遵循 JSON 文本分行标准，不再存在超长行号错乱问题。
+
+# 解决方案
+1、随着jq软件包更新到1.8.2版本，input_line_number 行号计数逻辑漏洞被修复，需要更新测试用例基准/tmp/diff_result内容为：1 1 3 ——> 1 2 3
+
+# 备注
+1、jq 有一个特性：当输入行长度正好是 4095 的倍数 时，行号计算可能出错。
+2、jq input_line_number 作用：打印当前处理行的行号，常用于定位 JSON 语法错误所在行数。
