@@ -1,0 +1,68 @@
+# 标题
+Gazelle lstack 用例未过滤 e1000 网卡，DPDK 网卡匹配初始化失败
+
+# 基本信息
+- 测试用例: oe_test_gazelle_gazellectl
+- 系统版本: openEuler-24.03-LTS-SP4
+- 是否问题: 否
+- 关联issue: 无
+
+# 问题现象
+测试用例获取测试网卡时未过滤 e1000 仿真网卡；将 e1000 网卡绑定 igb_uio 并写入 lstack.conf 配置后，启动 redis+lstack，DPDK 无法完成 e1000 网卡 PCI 初始化，日志输出No NIC is matched，gazelle 网络栈初始化失败，redis 进程异常退出，gazellectl 查询无输出，校验结果失败。
+
+# 错误日志
+ python3 /root/mugen/libs/locallibs/sleep_wait.py --time 10 --cmd '' --mode 1
++ LD_PRELOAD=/usr/lib64/liblstack.so
++ GAZELLE_BIND_PROCNAME=redis-server
++ redis-server redis.conf
+LSTACK[179554]: LD_PRELOAD ok
+dpdk argv: --socket-mem 2048 --huge-dir /mnt/hugepages-lstack --proc-type primary -l 0
+LSTACK[179554]: cfg_init success
+LSTACK[179554]: open failed, errno 2
+EAL: Detected CPU lcores: 1
+EAL: Detected NUMA nodes: 1
+EAL: Detected shared linkage of DPDK
+EAL: Multi-process socket /var/run/dpdk/rte/mp_socket
+EAL: Selected IOVA mode 'PA'
+EAL: Probe PCI driver: net_virtio (1af4:1000) device: 0000:00:03.0 (socket -1)
+eth_virtio_pci_init(): Failed to init PCI device
+EAL: Requested device 0000:00:03.0 cannot be used
+TELEMETRY: No legacy callbacks, legacy socket not created
+LSTACK: create_control_thread:183 create control_easy_thread success
+LSTACK: control_init_server:747 unlink failed, just skip it
+LSTACK: stack_group_init_mempool:582 config::num_cpu=1 num_process=1
+LSTACK: pkgmbuf_create:454 name mbuf_pool_0, n 270360, cache_size 512, priv_size 192, data_room_size 1664, socket_id 0, ops_name ring_mt_rts
+LSTACK: mempool_create:429 name rpc_pool_0, n 52704, cache_size 32, priv_size 0, data_room_size 80, socket_id 0, ops_name ring_mt_rts
+LSTACK: ethdev_port_id:245 No NIC is matched
+EAL: Error - exiting with code: 1
+  Cause: gazelle_network_init:318 init_dpdk_ethdev failed
++ gazellectl lstack show 192.168.1.10 -c
++ grep 'Local Address'
++ CHECK_RESULT 1 0 0 'gazellectl lstack show 192.168.1.10 -c failed'
++ actual_result=1
++ expect_result=0
++ mode=0
++ error_log='gazellectl lstack show 192.168.1.10 -c failed'
++ exit_mode=0
++ '[' -z '1 0 0 gazellectl lstack show 192.168.1.10 -c failed' ']'
++ '[' 0 -eq 0 ']'
++ test 1x '!=' 0x
++ test -n 'gazellectl lstack show 192.168.1.10 -c failed'
++ LOG_ERROR 'gazellectl lstack show 192.168.1.10 -c failed'
++ message='gazellectl lstack show 192.168.1.10 -c failed'                                                                                                
++ python3 /root/mugen/libs/locallibs/mugen_log.py --level error --message 'gazellectl lstack show 192.168.1.10 -c failed'
+Mon Jul  6 19:33:22 2026 - ERROR - gazellectl lstack show 192.168.1.10 -c failed
++ (( exec_result++ ))
++ LOG_ERROR 'oe_test_gazelle_gazellectl.sh line 65'
++ message='oe_test_gazelle_gazellectl.sh line 65'
++ python3 /root/mugen/libs/locallibs/mugen_log.py --level error --message 'oe_test_gazelle_gazellectl.sh line 65'
+Mon Jul  6 19:33:22 2026 - ERROR - oe_test_gazelle_gazellectl.sh line 65
+
+
+# 问题根因
+1. e1000 虚拟网卡硬件与 DPDK igb_uio 驱动不兼容，即便完成驱动绑定，DPDK 仍无法识别并初始化该网卡；原有网卡获取逻辑未做硬件类型过滤，会选中不兼容网卡执行测试，导致用例失败。
+
+
+# 解决方案
+1. 修改网卡筛选逻辑，遍历全部测试网卡，自动过滤 82540EM (e1000) 类型网卡，仅选取 virtio 兼容网卡；
+pr：https://gitcode.com/openeuler/mugen/pull/5326

@@ -1,0 +1,77 @@
+# 标题
+OpenVPN 用例两端 ping 互通校验失败，由浮动地址限制与 DH 参数长度不足导致
+
+# 基本信息
+- 测试用例: oe_test_openvpn
+- 系统版本: openEuler-24.03-LTS-SP4
+- 是否问题: 否
+- 关联issue: 否
+
+# 问题现象
+OpenVPN 服务启动后，本节点 ping 对端 10.4.0.2、远程节点 2 分别 ping 10.4.0.1/10.4.0.2 均返回非 0 退出码，连通性校验CHECK_RESULT失败，脚本打印对应行号 ERROR 日志，OpenVPN 互通测试不通过。
+
+
+# 错误日志
+ ping -c 3 10.4.0.2
++ CHECK_RESULT 1
++ actual_result=1
++ expect_result=0
++ mode=0
++ error_log=
++ exit_mode=0
++ '[' -z 1 ']'
++ '[' 0 -eq 0 ']'
++ test 1x '!=' 0x
++ test -n ''
++ (( exec_result++ ))
++ LOG_ERROR 'oe_test_openvpn.sh line 90'
++ message='oe_test_openvpn.sh line 90'
++ python3 /root/mugen/libs/locallibs/mugen_log.py --level error --message 'oe_test_openvpn.sh line 90'
+Fri Jul 10 13:40:28 2026 - ERROR - oe_test_openvpn.sh line 90
+P_SSH_CMD --node 2 --cmd 'ping -c 3 10.4.0.1 >/dev/null'
++ python3 /root/mugen/libs/locallibs/ssh_cmd.py --node 2 --cmd 'ping -c 3 10.4.0.1 >/dev/null'
+
++ CHECK_RESULT 1
++ actual_result=1
++ expect_result=0
++ mode=0
++ error_log=
++ exit_mode=0
++ '[' -z 1 ']'
++ '[' 0 -eq 0 ']'
++ test 1x '!=' 0x
++ test -n ''
++ (( exec_result++ ))
++ LOG_ERROR 'oe_test_openvpn.sh line 92'
++ message='oe_test_openvpn.sh line 92'
++ python3 /root/mugen/libs/locallibs/mugen_log.py --level error --message 'oe_test_openvpn.sh line 92'
+Fri Jul 10 13:40:41 2026 - ERROR - oe_test_openvpn.sh line 92
+ P_SSH_CMD --node 2 --cmd 'ping -c 3 10.4.0.2 >/dev/null'
++ python3 /root/mugen/libs/locallibs/ssh_cmd.py --node 2 --cmd 'ping -c 3 10.4.0.2 >/dev/null'
+
++ CHECK_RESULT 1
++ actual_result=1
++ expect_result=0
++ mode=0
++ error_log=
++ exit_mode=0
++ '[' -z 1 ']'
++ '[' 0 -eq 0 ']'
++ test 1x '!=' 0x
++ test -n ''
++ (( exec_result++ ))
++ LOG_ERROR 'oe_test_openvpn.sh line 212'
++ message='oe_test_openvpn.sh line 212'
++ python3 /root/mugen/libs/locallibs/mugen_log.py --level error --message 'oe_test_openvpn.sh line 212'
+Fri Jul 10 13:42:47 2026 - ERROR - oe_test_openvpn.sh line 212
++ '[' 0 -eq 1 ']'
+                                                                                                                 
+
+# 问题根因
+1. OpenVPN 配置未添加--float参数，P2P 模式下两端浮动 IP 互相访问时连接被拦截，网络不通；
+配置 dhparam 使用 1024 位密钥，OpenVPN 2.6 及以上版本强制要求 DH 密钥最低 2048 位，短密钥导致服务异常、隧道无法正常建立，两端网络不通。
+
+# 解决方案
+1. OpenVPN 启动参数增加--float，支持对端浮动地址、端口接入，放行双向 P2P 连接；
+2. 将 dhparam 密钥生成长度从 1024 修改为 2048，适配新版 OpenVPN 密钥长度强制规范，保证 VPN 隧道正常拉起，两端网络可 ping 通。
+pr：https://gitcode.com/openeuler/mugen/pull/5270
