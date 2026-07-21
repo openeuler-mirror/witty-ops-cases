@@ -1,0 +1,36 @@
+# 标题
+kernel “ltp执行proc01报错对/proc/self/smart_grid_level无操作权限”
+
+# 基本信息
+- 测试用例: proc01
+- 系统版本: openEuler-24.03-LTS-SP3、openEuler-24.03-LTS-SP1(aarch64)
+- 是否问题：否
+- 关联issue: https://atomgit.com/openeuler/kernel/issues/1084
+
+# 问题现象
+ltp测试执行过程中，报错：proc01.c:400: read failed: /proc/self/smart_grid_level: errno=EPERM(1): Operation not permitted
+
+# 错误日志
+```
+proc01      1  TFAIL  :  proc01.c:400: read failed: /proc/self/smart_grid_level: errno=EPERM(1): Operation not permitted
+proc01      0  TINFO  :  /proc/self/mem: known issue: errno=EIO(5): Input/output error
+proc01      0  TINFO  :  /proc/self/clear_refs: is write-only.
+proc01      0  TINFO  :  /proc/self/pagemap: reached maxmbytes (-m)
+proc01      0  TINFO  :  /proc/self/swap_pages: is write-only.
+proc01      0  TINFO  :  /proc/self/attr/apparmor/current: known issue: errno=EINVAL(22): Invalid argument
+proc01      0  TINFO  :  /proc/self/attr/apparmor/prev: known issue: errno=EINVAL(22): Invalid argument
+proc01      0  TINFO  :  /proc/self/attr/apparmor/exec: known issue: errno=EINVAL(22): Invalid argument
+proc01      2  TFAIL  :  proc01.c:470: readproc() failed with 1 errors.
+```
+
+# 问题根因
+1.openEuler ARM64内核编译了CONFIG_QOS_SCHED_SMART_GRID，但运行时smart_grid_enabled()需要dynamic_affinity=enable作为前置条件，否则/proc/self/smart_grid_level返回EPERM 
+
+# 解决方案
+1. GRUB启动参数同时添加smart_grid dynamic_affinity=enable，重新生成 grub 配置并重启:
+(1) 在/etc/default/grub的GRUB_CMDLINE_LINUX中添加：smart_grid dynamic_affinity=enable
+(2) sudo grub2-mkconfig -o /boot/efi/EFI/openEuler/grub.cfg
+(3) sudo reboot
+(4) cat /proc/cmdline        # 确认包含 smart_grid dynamic_affinity=enable
+(5) cat /proc/self/smart_grid_level   # 输出数字（如 7），不再 EPERM
+(6) ./runltp -s proc01       # TPASS

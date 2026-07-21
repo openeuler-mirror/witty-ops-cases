@@ -1,0 +1,146 @@
+# 标题
+kernel “ltp执行memcg_subgroup_charge失败”
+
+# 基本信息
+- 测试用例: memcg_subgroup_charge
+- 系统版本: openEuler-24.03-LTS-SP3、openEuler-24.03-LTS-SP2、openEuler-24.03-LTS-SP1、openEuler-24.03-LTS(aarch64、x86_64)
+- 是否问题：否
+- 关联issue: 无
+
+# 问题现象
+ltp测试执行过程中，报错：memcg_subgroup_charge 2 TFAIL: rss is 0, 532478-532480 expected
+
+# 错误日志
+```
+<<<test_start>>>
+tag=memcg_subgroup_charge stime=1783739708
+cmdline="memcg_subgroup_charge.sh"
+contacts=""
+analysis=exit
+<<<test_output>>>
+incrementing stop
+memcg_subgroup_charge 1 TINFO: Running: memcg_subgroup_charge.sh 
+memcg_subgroup_charge 1 TINFO: Tested kernel: Linux localhost.localdomain 6.6.0-145.3.18.151.oe2403sp3.aarch64 #1 SMP Mon Jul  6 22:23:10 CST 2026 aarch64 aarch64 aarch64 GNU/Linux
+memcg_subgroup_charge 1 TINFO: Using /tmp/ltp-2c0uLZjYdi/LTP_memcg_subgroup_charge.zuP4LKOTKL as tmpdir (tmpfs filesystem)
+memcg_subgroup_charge 1 TINFO: timeout per run is 0h 5m 0s
+memcg_subgroup_charge 1 TINFO: set /sys/fs/cgroup/memory/memory.use_hierarchy to 0 failed
+memcg_subgroup_charge 1 TINFO: Test that group and subgroup have no relationship
+memcg_subgroup_charge 1 TPASS: echo 3178496 > subgroup/memory.limit_in_bytes passed as expected
+memcg_subgroup_charge 1 TINFO: Running memcg_process --mmap-anon -s 532480
+memcg_subgroup_charge 1 TINFO: Warming up pid: 1400756
+memcg_subgroup_charge 1 TINFO: Process is still here after warm up: 1400756
+memcg_subgroup_charge 1 TPASS: rss is 532478-532480 as expected
+memcg_subgroup_charge 1 TPASS: rss is 0 as expected
+memcg_subgroup_charge 2 TPASS: echo 2646016 > subgroup/memory.limit_in_bytes passed as expected
+memcg_subgroup_charge 2 TINFO: Running memcg_process --mmap-anon -s 532480
+memcg_subgroup_charge 2 TINFO: Warming up pid: 1400785
+memcg_subgroup_charge 2 TINFO: Process is still here after warm up: 1400785
+memcg_subgroup_charge 2 TFAIL: rss is 0, 532478-532480 expected
+```
+
+# 问题根因
+1. 内核6.x+的异步统计更新机制:从Linux内核6.1开始（commit 1813e51eece0ad6 ）, MEMCG_CHARGE_BATCH从32增加到64，导致 memory.stat 中的内存统计信息更新方式发生变化：
+- memory.usage_in_bytes ：实时同步更新
+- memory.stat (rss字段) ：异步批量更新，存在延迟
+测试步骤：
+1. signal_memcg_process() 发送 USR1 信号给进程
+2. 进程开始分配内存
+3. memory.usage_in_bytes 立即更新
+4. signal_memcg_process() 检测到变化后返回
+5. check_mem_stat() 读取 memory.stat 中的 rss， rss 可能还未更新（异步延迟），读取到旧值
+# 解决方案
+修改1：memcg_lib.sh - signal_memcg_process：
+在函数末尾添加 Phase 2 等待逻辑，确保 memory.stat 中的 rss 字段更新完成后再返回：
+signal_memcg_process()
+{
+    local size=$1
+    local path=$2
+    local usage_start=$(cat ${path}memory.usage_in_bytes)
+
+    kill -s USR1 $MEMCG_PROCESS_PID 2> /dev/null
+
+    if [ -z "$size" ]; then
+        return
+    fi
+
+    local loops=100
+
+    # Phase 1: wait for memory.usage_in_bytes change
+    while kill -0 $MEMCG_PROCESS_PID 2> /dev/null; do
+        local usage=$(cat ${path}memory.usage_in_bytes)
+        local diff_a=$((usage_start - usage))
+        local diff_b=$((usage - usage_start))
+
+        if [ "$diff_a" -ge "$size" -o "$diff_b" -ge "$size" ]; then
+            break
+        fi
+
+        tst_sleep 100ms
+        loops=$((loops - 1))
+        if [ $loops -le 0 ]; then
+            tst_brk TBROK "timed out on memory.usage_in_bytes" $usage $usage_start $size
+        fi
+    done
+
+    # Phase 2: kernel 6.x+ updates memory.stat rss asynchronously in batches
+    # Wait for rss to be reflected in memory.stat to avoid raciness
+    if [ "$size" -gt 0 ]; then
+        local rss_wait=0
+        local max_rss_wait=50  # 5 seconds max
+        while [ $rss_wait -lt $max_rss_wait ]; do
+            local rss=$(grep -w rss ${path}memory.stat 2>/dev/null | cut -d " " -f 2)
+            [ -z "$rss" ] && rss=0
+            if [ "$rss" -gt 0 ]; then
+                break
+            fi
+            tst_sleep 100ms
+            rss_wait=$((rss_wait + 1))
+        done
+    fi
+}
+修改2：memcg_subgroup_charge.sh - test_subgroup：
+在进程移动到子cgroup后，添加等待循环确保 rss 稳定为0：
+test_subgroup()
+{
+    local limit_subgroup=$1
+
+    if [ $limit_subgroup -ne 0 ]; then
+        limit_subgroup=$(memcg_adjust_limit_for_kmem $limit_subgroup)
+    fi
+
+    ROD mkdir subgroup
+    EXPECT_PASS echo $limit_subgroup > subgroup/memory.limit_in_bytes
+
+    start_memcg_process --mmap-anon -s $MEM_TO_ALLOC
+
+    warmup
+    if [ $? -ne 0 ]; then
+        return
+    fi
+
+    echo $MEMCG_PROCESS_PID > tasks
+    signal_memcg_process $MIN_CHARGED
+    check_mem_stat "rss" $MIN_CHARGED $MEM_TO_ALLOC
+
+    cd subgroup
+    echo $MEMCG_PROCESS_PID > tasks
+
+    # Kernel 6.x async stat update: wait for rss to stabilize at 0
+    # after moving process to subgroup (existing pages stay in parent cgroup)
+    local rss_zero_wait=0
+    while [ $rss_zero_wait -lt 30 ]; do
+        local rss=$(grep -w rss memory.stat | cut -d " " -f 2)
+        [ -z "$rss" ] && rss=0
+        if [ "$rss" -eq 0 ]; then
+            break
+        fi
+        tst_sleep 100ms
+        rss_zero_wait=$((rss_zero_wait + 1))
+    done
+
+    check_mem_stat "rss" 0
+
+    cd ..
+    stop_memcg_process
+    rmdir subgroup
+}

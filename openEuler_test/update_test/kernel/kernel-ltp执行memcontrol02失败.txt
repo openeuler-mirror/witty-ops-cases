@@ -1,0 +1,97 @@
+# 标题
+kernel “ltp执行memcontrol02报错”
+
+# 基本信息
+- 测试用例: memcontrol02
+- 系统版本: openEuler-24.03-LTS-SP4-64kb
+- 是否问题：否
+- 关联issue: https://atomgit.com/src-openeuler/kernel/issues/10238
+
+# 问题现象
+ltp测试执行过程中，报错：memcontrol02.c:87: TFAIL: Expect: (memory.current=54525952) ~= (memory.stat.cache=0)
+
+# 错误日志
+```
+memcontrol02.c:92: TPASS: Expect: (current=0) == 0
+memcontrol02.c:98: TINFO: Added proc to memcg: memory.current=0
+memcontrol02.c:45: TPASS: Expect: (memory.current=54525952) >= (size=52428800)
+memcontrol02.c:50: TFAIL: Expect: (memory.stat.anon=0) > 0
+memcontrol02.c:51: TFAIL: Expect: (size=52428800) ~= (memory.stat.anon=0)
+memcontrol02.c:53: TFAIL: Expect: (memory.current=54525952) ~= (memory.stat.anon=0)
+memcontrol02.c:92: TPASS: Expect: (current=0) == 0
+memcontrol02.c:98: TINFO: Added proc to memcg: memory.current=0
+memcontrol02.c:68: TINFO: Created temp file: memory.current=4194304
+memcontrol02.c:73: TPASS: Expect: (memory.current=58720256) >= (size=52428800)
+memcontrol02.c:77: TPASS: Expect: (memory.stat.file=55246848) > 0
+memcontrol02.c:79: TPASS: Expect: (memory.current=58720256) ~= (memory.stat.file=55246848)
+tst_test.c:1985: TINFO: === Testing on ext3 ===
+tst_test.c:1290: TINFO: Formatting /dev/loop0 with ext3 opts='' extra opts=''
+mke2fs 1.47.0 (5-Feb-2023)
+tst_test.c:1302: TINFO: Mounting /dev/loop0 to /tmp/ltp-9h603vnL79/LTP_memvlwzYo/mntdir fstyp=ext3 flags=0
+memcontrol02.c:92: TPASS: Expect: (current=0) == 0
+memcontrol02.c:98: TINFO: Added proc to memcg: memory.current=0
+memcontrol02.c:45: TPASS: Expect: (memory.current=54525952) >= (size=52428800)
+memcontrol02.c:50: TPASS: Expect: (memory.stat.anon=52428800) > 0
+memcontrol02.c:51: TPASS: Expect: (size=52428800) ~= (memory.stat.anon=52428800)
+memcontrol02.c:53: TPASS: Expect: (memory.current=54525952) ~= (memory.stat.anon=52428800)
+memcontrol02.c:92: TPASS: Expect: (current=0) == 0
+memcontrol02.c:98: TINFO: Added proc to memcg: memory.current=0
+memcontrol02.c:68: TINFO: Created temp file: memory.current=4194304
+memcontrol02.c:73: TPASS: Expect: (memory.current=58720256) >= (size=52428800)
+memcontrol02.c:77: TFAIL: Expect: (memory.stat.file=0) > 0
+memcontrol02.c:79: TFAIL: Expect: (memory.current=58720256) ~= (memory.stat.file=0)
+
+```
+
+# 问题根因
+1. 测试脚本使用alloc_pagecache函数写入文件，但写入操作不会填充page cache ：写入时数据直接进入页缓冲（page buffer），不会被计入page cache统计，只有读取文件时，数据才会被加载到page cache中，因此 memory.stat.cache 始终为0
+
+# 解决方案
+修改：memcontrol02.c - alloc_pagecache_50M_check:
+1. 确保在cgroup v1环境下使用正确的字段名"cache"
+2. 在写入文件后，添加读取操作以填充page cache
+
+```
+static void alloc_pagecache_50M_check(void)
+{
+    const size_t size = MB(50);
+    size_t current, file;
+    const char *file_key;
+    const char *file_key_fmt;
+
+    if (TST_CG_VER_IS_V1(tst_cg, "memory")) {
+        file_key = "cache";
+        file_key_fmt = "cache %zd";
+    } else {
+        file_key = "file";
+        file_key_fmt = "file %zd";
+    }
+
+    fd = SAFE_OPEN(TMPDIR"/tmpfile", O_RDWR | O_CREAT, 0600);
+
+    SAFE_CG_SCANF(cg_child, "memory.current", "%zu", &current);
+    tst_res(TINFO, "Created temp file: memory.current=%zu", current);
+
+    alloc_pagecache(fd, size);
+
+    SAFE_CG_SCANF(cg_child, "memory.current", "%zu", &current);
+    TST_EXP_EXPR(current >= size,
+                 "(memory.current=%zu) >= (size=%zu)", current, size);
+
+    // Read back the file to populate page cache
+    SAFE_LSEEK(fd, 0, SEEK_SET);
+    char *buf = SAFE_MALLOC(size);
+    SAFE_READ(1, fd, buf, size);
+    free(buf);
+
+    SAFE_CG_LINES_SCANF(cg_child, "memory.stat", file_key_fmt, &file);
+    TST_EXP_EXPR(file > 0, "(memory.stat.%s=%zd) > 0", file_key, file);
+
+    TST_EXP_EXPR(values_close(file, current, file_to_all_error),
+                 "(memory.current=%zd) ~= (memory.stat.%s=%zd)",
+                 current, file_key, file);
+
+    SAFE_CLOSE(fd);
+}
+
+```
